@@ -8,11 +8,15 @@
 import http from 'node:http';
 import net from 'node:net';
 import { readFile } from 'node:fs/promises';
+import { mkdirSync, writeFileSync, existsSync, createReadStream } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const CAPTURES = join(__dirname, '..', '..', 'captures');
+mkdirSync(CAPTURES, { recursive: true });
 
 const HTTP_PORT = Number(process.env.IDH_HTTP_PORT ?? 8760);
 const AGENT_PORT = Number(process.env.IDH_AGENT_PORT ?? 8761);
@@ -48,7 +52,13 @@ type AgentMsg =
 
 // ---- registry -------------------------------------------------------------
 
+interface DumpMeta {
+  sha256: string; size: number; source: string; addr: string;
+  tag: string; sessionId: string; package: string; capturedAt: number;
+  path: string; kind: string;   // dex|so|region|... inferred from magic
+}
 const sessions = new Map<string, AgentSession>();
+const dumps = new Map<string, DumpMeta>();                        // sha256 -> meta (dedup)
 const agentSockets = new Map<string, net.Socket>();               // sessionId -> live socket
 const pending = new Map<string, { resolve: (v: any) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }>();
 let seq = 0;
@@ -157,6 +167,51 @@ const agentServer = net.createServer((sock) => {
   sock.on('error', (e) => log('agent sock error:', (e as Error).message));
 });
 
+// ---- dump engine ----------------------------------------------------------
+
+function inferKind(b: Buffer): string {
+  if (b.length >= 4 && b[0] === 0x64 && b[1] === 0x65 && b[2] === 0x78 && b[3] === 0x0a) return 'dex';
+  if (b.length >= 4 && b[0] === 0x63 && b[1] === 0x64 && b[2] === 0x65 && b[3] === 0x78) return 'cdex';
+  if (b.length >= 4 && b[0] === 0x7f && b[1] === 0x45 && b[2] === 0x4c && b[3] === 0x46) return 'so';
+  if (b.length >= 2 && b[0] === 0x50 && b[1] === 0x4b) return 'zip';
+  if (b.length >= 4 && b[0] === 0x76 && b[1] === 0x64 && b[2] === 0x65 && b[3] === 0x78) return 'vdex';
+  if (b.length >= 4 && b[0] === 0x6f && b[1] === 0x61 && b[2] === 0x74 && b[3] === 0x0a) return 'oat';
+  return 'region';
+}
+
+// Dump [addr, addr+size) by orchestrating chunked agent reads, then sha256 + dedup + persist.
+async function dumpRegion(sid: string, addrHex: string, size: number, tag: string): Promise<{ meta: DumpMeta; dedup: boolean }> {
+  const CHUNK = 1 << 20;                          // matches agent per-read cap
+  let addr = BigInt('0x' + addrHex);
+  const parts: Buffer[] = [];
+  let remaining = size;
+  while (remaining > 0) {
+    const want = Math.min(CHUNK, remaining);
+    const r = await sendCmd(sid, 'read', { addr: addr.toString(16), size: want }, 20_000);
+    if (!r.ok) { if (parts.length) break; throw new Error(`read failed @0x${addr.toString(16)}: ${r.error}`); }
+    const b = Buffer.from(r.b64, 'base64');
+    parts.push(b);
+    addr += BigInt(b.length);
+    remaining -= b.length;
+    if (b.length < want) break;                   // short read (unreadable tail)
+  }
+  const buf = Buffer.concat(parts);
+  const sha = createHash('sha256').update(buf).digest('hex');
+  const existing = dumps.get(sha);
+  if (existing) return { meta: existing, dedup: true };
+  const s = sessions.get(sid);
+  const kind = inferKind(buf);
+  const path = join(CAPTURES, `${sha.slice(0, 16)}.${kind}.bin`);
+  if (!existsSync(path)) writeFileSync(path, buf);
+  const meta: DumpMeta = {
+    sha256: sha, size: buf.length, source: 'region', addr: addrHex, tag,
+    sessionId: sid, package: s?.package ?? '?', capturedAt: Date.now(), path, kind,
+  };
+  dumps.set(sha, meta);
+  broadcast('dump.new', meta);
+  return { meta, dedup: false };
+}
+
 // ---- HTTP + WebSocket -----------------------------------------------------
 
 const httpServer = http.createServer(async (req, res) => {
@@ -206,6 +261,38 @@ const httpServer = http.createServer(async (req, res) => {
       const r = await sendCmd(sid, 'read', { addr: String(addr), size: Number(size) });
       return send(r.ok ? 200 : 502, r);
     } catch (e) { return send(504, { error: (e as Error).message }); }
+  }
+  // Memory search: POST /api/memory/search {session, hex?|text?, limit?}
+  if (url.pathname === '/api/memory/search' && req.method === 'POST') {
+    const body = await readBody(req);
+    const { session, hex, text, limit } = JSON.parse(body || '{}');
+    const sid = session ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    const pat = hex ?? (text ? Buffer.from(String(text), 'utf8').toString('hex') : '');
+    if (!sid || !pat) return send(400, { error: 'need session and hex|text' });
+    try {
+      const r = await sendCmd(sid, 'search', { pat, limit: Number(limit) || 256 }, 90_000);
+      return send(r.ok ? 200 : 502, r);
+    } catch (e) { return send(504, { error: (e as Error).message }); }
+  }
+  // Region dump: POST /api/memory/dump {session, addr, size, tag?}
+  if (url.pathname === '/api/memory/dump' && req.method === 'POST') {
+    const body = await readBody(req);
+    const { session, addr, size, tag } = JSON.parse(body || '{}');
+    const sid = session ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    if (!sid || !addr || !size) return send(400, { error: 'need session, addr(hex), size' });
+    try {
+      const { meta, dedup } = await dumpRegion(sid, String(addr).replace(/^0x/, ''), Number(size), String(tag ?? ''));
+      return send(200, { ...meta, dedup });
+    } catch (e) { return send(502, { error: (e as Error).message }); }
+  }
+  // Dumps registry
+  if (url.pathname === '/api/dumps') return send(200, [...dumps.values()]);
+  if (url.pathname === '/api/dumps/download') {
+    const sha = url.searchParams.get('sha') ?? '';
+    const m = dumps.get(sha);
+    if (!m) return send(404, { error: 'no such dump' });
+    res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-disposition': `attachment; filename="${sha.slice(0, 16)}.${m.kind}.bin"` });
+    return createReadStream(m.path).pipe(res);
   }
   if (url.pathname === '/' || url.pathname === '/index.html') {
     try {
