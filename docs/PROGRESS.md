@@ -40,7 +40,27 @@
 
 ## 进行中
 
+- [ ] v0.4 Java Hook + Crypto — **静态通道已完成并验证**；动态通道（method hook 抓运行时 key/iv/明文）待做
 - [ ] v0.3 ART 结构级捕获 — **核心已完成并验证**（tools/verify_v03.sh），剩恢复状态标记/多 resolver 为后续
+
+### v0.4 已完成并验证（verify_all.sh 7/7 PASS）
+
+- [x] **DEX 解析器** `daemon/src/dex.ts`（header/string_ids/type_ids/method_ids/class_defs、uleb128、MUTF-8）——同时是 v0.5 基础
+- [x] **crypto 静态扫描（H.2）** `POST /api/dex/parse` + `/api/dex/crypto_scan`：找 javax/crypto 方法引用 + 算法字符串
+- [x] sandbox JavaCrypto（AES/CBC + HmacSHA256，已知 key/iv/明文）——静态引用 + 未来动态 hook 目标
+- [x] verify_v04_dexparse（host-only，多 dex 聚合）：probe dex 解析正确；app 中命中 Cipher.doFinal/Mac/AES-CBC/HmacSHA256
+
+### v0.4 待做 —— 动态 crypto 通道（#1 卖点，明文边界）
+
+**为什么推迟**：Java method hook 需要稳健的 hook 引擎。LSPlant 需内联 hook 后端 + backup method 重建（版本相关、易崩），不适合无人值守一把梭。
+
+**更安全的计划（下一个增量）——原生 BoringSSL EVP 的 PLT/GOT hook（E.8.1）**：
+- Android JCE 默认走 Conscrypt → BoringSSL `libcrypto.so` 的 `EVP_CipherUpdate/EVP_EncryptUpdate/EVP_DecryptUpdate` 等。
+- GOT hook = 只改函数指针（安全，可 trampoline 调原函数），无需内联/指令重定位/backup method。
+- agent：枚举已加载模块，解析各自 .dynamic→DT_JMPREL/DT_SYMTAB/DT_STRTAB，匹配 EVP_* 符号的 GOT 槽，mprotect 可写→换指针→我方 wrapper 记录 in/inlen（明文）后调原函数。
+- 先在**受控目标**验证 GOT hook 机制（hook agent 自己对某 libc 函数的调用，断言 wrapper 命中），再上 EVP。
+- 验证：sandbox JavaCrypto.run() 跑 AES，hook 抓到的明文 == "IDH_CRYPTO_PLAINTEXT_v1"。
+- 备选/补充：Java 层 hook（LSPlant）留待引擎稳定后，用于纯 Java 自实现加密（不走 BoringSSL）的场景。
 
 ### v0.3 已完成并验证（verify_all.sh 6/6 PASS）
 
@@ -72,12 +92,10 @@
 
 ## 下一步
 
-→ **v0.4 Java Hook + Crypto 明文边界观测（主武器）**
-- agent 侧集成 LSPlant（ART method hook），第三方依赖，需 git submodule + CMake 接入。
-- 若 LSPlant 接入复杂，先做一个最小 ArtMethod hook 或用 JNI 反射注册 Cipher/Mac hook 的替代路径验证明文边界。
-- 内置 Crypto 模板：Cipher.doFinal/init、Mac、MessageDigest、Base64；抓 key/iv/明文/密文。
-- 验证：sandbox 加 JavaCryptoActivity（AES/CBC + HMAC，确定 key/iv/明文），hook 后断言抓到的 key/iv/明文与预期一致。
-- 注意：JNI 反射基础已就绪（v0.3(1)），attach/PushLocalFrame 模式可复用。
+→ **v0.4 动态通道：原生 EVP 的 PLT/GOT hook**（见上「v0.4 待做」详细计划）
+1. 先实现通用 GOT hook 引擎（agent：解析模块 .dynamic 重定位，换 GOT 指针），用受控 libc 目标验证机制。
+2. 再 hook libcrypto EVP_*Update，wrapper 记录明文，调原函数；sandbox JavaCrypto 跑 AES，断言抓到明文。
+- JNI 反射基础（v0.3(1)）+ ELF 解析（idhd 已有，可移植思路到 agent）可复用。
 
 ## 下一步（v0.2 Dump Engine）
 
@@ -99,6 +117,7 @@
 
 ## 会话日志（倒序，简短）
 
+- 2026-07-10 (loop#4)：v0.4 静态 crypto 通道——DEX 解析器(dex.ts) + crypto 静态扫描，host 验证（probe dex 解析 + 多 dex 命中 Cipher/Mac/AES/HmacSHA256）。sandbox 加 JavaCrypto。动态 hook 通道有意推迟到专门回合（改走更安全的原生 EVP GOT hook，计划已记录）。suite 7/7。1 次提交。
 - 2026-07-10 (loop#3)：v0.3 ART 结构级 dex 捕获完成——JNI 反射基础 + ClassLoader cookie→art::DexFile*→begin_ 枚举（untag tagged pointer）+ 结构级 dump 对已知 InMemoryDex 字节级 sha256 校验。现场 root-cause 两个 bug（tagged pointer pread EFAULT、响应缓冲截断丢 newline）。2 次提交，suite 6/6。
 - 2026-07-10 (loop#2)：v0.2 完成——so 重组（SoFixer-lite，重建 libidh_agent.so 有效）+ dex header 修复（真实 5MB dex 字节级还原）+ 主回归 verify_all.sh 5/5。3 次提交。
 - 2026-07-10 (loop#1)：v0.2 Dump Engine 核心完成——命令通道 + maps/read/scan_magic/search/dump+dedup，全部真机验证（dump 对 mock dex 字节级 sha256 校验）。3 次提交。
