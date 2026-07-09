@@ -393,6 +393,16 @@ const httpServer = http.createServer(async (req, res) => {
     try { const r = await sendCmd(sid, 'crypto_probe', {}, 20_000); return send(r.ok ? 200 : 502, r); }
     catch (e) { return send(504, { error: (e as Error).message }); }
   }
+  // Network TLS-plaintext capture test: GET /api/net/hook_test?session=ID
+  if (url.pathname === '/api/net/hook_test') {
+    const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    if (!sid) return send(400, { error: 'no session' });
+    try {
+      const r = await sendCmd(sid, 'net_hook_test', {}, 25_000);
+      if (r.captures) r.captures = r.captures.map((c: any) => ({ ...c, ascii: Buffer.from(c.hex, 'hex').toString('latin1').replace(/[^\x20-\x7e]/g, '.') }));
+      return send(r.ok ? 200 : 502, r);
+    } catch (e) { return send(504, { error: (e as Error).message }); }
+  }
   // Crypto plaintext-boundary hook test: GET /api/crypto/hook_test?session=ID
   if (url.pathname === '/api/crypto/hook_test') {
     const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;

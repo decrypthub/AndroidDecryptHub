@@ -24,7 +24,8 @@ echo ">> configuring agent ($ABI)"
   -DCMAKE_BUILD_TYPE=Release >/dev/null
 
 echo ">> building"
-"$CMAKE" --build "$ROOT/agent/build" >/dev/null
+# Do NOT hide build output — a hidden compile error once shipped a stale .so.
+if ! "$CMAKE" --build "$ROOT/agent/build"; then echo "!! AGENT BUILD FAILED"; exit 1; fi
 
 SO="$ROOT/agent/build/libidh_agent.so"
 DEST="$ROOT/sandbox-app/app/src/main/jniLibs/$ABI"

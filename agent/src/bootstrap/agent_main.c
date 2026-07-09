@@ -54,6 +54,9 @@ static JNIEnv *attach_env(int *did_attach) {
 }
 static void detach_env(int did_attach) { if (did_attach && g_vm) (*g_vm)->DetachCurrentThread(g_vm); }
 
+// forward decl: defined later, used by several commands
+static jclass load_app_class(JNIEnv *env, const char *dotname);
+
 // ---- small utils ----------------------------------------------------------
 
 static void prop(const char *key, char *out, size_t n) {
@@ -518,7 +521,7 @@ static void *resolve_sym(const char *mod_substr, const char *symbol) {
 
 // ---- crypto plaintext capture (thread-safe; wrapper runs on the app's crypto thread) ----
 #define CAP_MAX 64
-#define CAP_BYTES 256
+#define CAP_BYTES 2048
 struct CapRec { char func[24]; int inl; int n; unsigned char data[CAP_BYTES]; };
 static struct CapRec g_caps[CAP_MAX];
 static int g_ncaps = 0;
@@ -546,13 +549,15 @@ static int my_EVP_CipherUpdate(void *ctx, unsigned char *out, int *outl, const u
 // pointer (candidate hook sites) and how many slots. Guides where to install hooks.
 static void cmd_crypto_probe(int fd, const char *id) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
-    const char *names[] = { "EVP_CipherUpdate", "EVP_EncryptUpdate", "EVP_DecryptUpdate", "EVP_DigestUpdate", "HMAC_Update" };
-    const int NF = 5;
-    void *addrs[5];
-    for (int i = 0; i < NF; i++) addrs[i] = resolve_sym("libcrypto.so", names[i]);
+    const char *names[] = { "EVP_CipherUpdate", "EVP_EncryptUpdate", "EVP_DecryptUpdate", "EVP_DigestUpdate", "HMAC_Update", "SSL_read", "SSL_write" };
+    const int NF = 7;
+    void *addrs[7];
+    for (int i = 0; i < 5; i++) addrs[i] = resolve_sym("libcrypto.so", names[i]);
+    addrs[5] = resolve_sym("libssl.so", "SSL_read");
+    addrs[6] = resolve_sym("libssl.so", "SSL_write");
 
     // aggregate per-module match counts
-    struct Mod { char name[128]; int cnt[5]; };
+    struct Mod { char name[128]; int cnt[7]; };
     struct Mod mods[96]; int nmods = 0;
     FILE *m = fopen("/proc/self/maps", "r");
     char line[512];
@@ -566,7 +571,7 @@ static void cmd_crypto_probe(int fd, const char *id) {
         const char *base = strrchr(pp, '/'); base = base ? base + 1 : pp;
         unsigned long long s = strtoull(sa, NULL, 16), e = strtoull(ea, NULL, 16);
         if (e <= s || e - s > (64u << 20)) continue;
-        int hit[5] = {0,0,0,0,0}, any = 0;
+        int hit[7] = {0,0,0,0,0,0,0}, any = 0;
         for (unsigned long long a = s; a + 8 <= e; a += 8) {
             void *v = *(void **)a;
             for (int i = 0; i < NF; i++) if (addrs[i] && v == addrs[i]) { hit[i]++; any = 1; }
@@ -594,6 +599,66 @@ static void cmd_crypto_probe(int fd, const char *id) {
     send_line(fd, out);
     free(out);
     LOGI("crypto_probe: %d modules with EVP/HMAC GOT refs", nmods);
+}
+
+// ---- network TLS-plaintext capture (SSL_read/SSL_write in libjavacrypto/Conscrypt) ----
+typedef int (*SSL_rw_t)(void *, void *, int);
+static SSL_rw_t g_orig_ssl_write = NULL, g_orig_ssl_read = NULL;
+static int my_SSL_write(void *ssl, void *buf, int num) {
+    if (num > 0) capture("SSL_write", (const unsigned char *)buf, num);   // outgoing plaintext
+    return g_orig_ssl_write(ssl, buf, num);
+}
+static int my_SSL_read(void *ssl, void *buf, int num) {
+    int ret = g_orig_ssl_read(ssl, buf, num);
+    if (ret > 0) capture("SSL_read", (const unsigned char *)buf, ret);    // incoming plaintext
+    return ret;
+}
+
+// Hook SSL_write/SSL_read in Conscrypt, trigger an HTTPS request via JNI reflection,
+// and report the captured TLS plaintext (request + response).
+static void cmd_net_hook_test(int fd, const char *id) {
+    char idj[64]; json_escape(id, idj, sizeof(idj));
+    void *ow = resolve_sym("libssl.so", "SSL_write");
+    void *orr = resolve_sym("libssl.so", "SSL_read");
+    g_orig_ssl_write = (SSL_rw_t)ow; g_orig_ssl_read = (SSL_rw_t)orr;
+    int rw = ow ? got_replace("libjavacrypto.so", ow, (void *)my_SSL_write) : -1;
+    int rr = orr ? got_replace("libjavacrypto.so", orr, (void *)my_SSL_read) : -1;
+    pthread_mutex_lock(&g_cap_lock); g_ncaps = 0; pthread_mutex_unlock(&g_cap_lock);
+
+    int did = 0, triggered = 0; char result[128] = "";
+    JNIEnv *env = attach_env(&did);
+    if (env) {
+        (*env)->PushLocalFrame(env, 32);
+        jclass jc = load_app_class(env, "com.idh.sandbox.Network");
+        if (jc) {
+            jmethodID run = (*env)->GetStaticMethodID(env, jc, "run", "()Ljava/lang/String;");
+            if (run) {
+                jstring rs = (jstring)(*env)->CallStaticObjectMethod(env, jc, run);
+                triggered = 1;
+                if (rs) { const char *s = (*env)->GetStringUTFChars(env, rs, NULL); if (s) { strncpy(result, s, sizeof(result)-1); (*env)->ReleaseStringUTFChars(env, rs, s); } }
+            }
+        }
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        (*env)->PopLocalFrame(env, NULL);
+        detach_env(did);
+    }
+    if (rw > 0) got_replace("libjavacrypto.so", (void *)my_SSL_write, ow);
+    if (rr > 0) got_replace("libjavacrypto.so", (void *)my_SSL_read, orr);
+
+    size_t cap = 1 << 16, len = 0; char *out = malloc(cap); if (!out) return;
+    char rj[200]; json_escape(result, rj, sizeof(rj));
+    len += snprintf(out + len, cap - len, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"net_hook_test\",\"ok\":true,\"hooked\":{\"write\":%d,\"read\":%d},\"triggered\":%s,\"result\":\"%s\",\"captures\":[", idj, rw, rr, triggered ? "true" : "false", rj);
+    pthread_mutex_lock(&g_cap_lock);
+    for (int k = 0; k < g_ncaps; k++) { struct CapRec *r = &g_caps[k];
+        len += snprintf(out + len, cap - len, "%s{\"func\":\"%s\",\"inl\":%d,\"hex\":\"", k ? "," : "", r->func, r->inl);
+        for (int b = 0; b < r->n && len + 3 < cap; b++) len += snprintf(out + len, cap - len, "%02x", r->data[b]);
+        len += snprintf(out + len, cap - len, "\"}"); }
+    int n = g_ncaps;
+    pthread_mutex_unlock(&g_cap_lock);
+    snprintf(out + len, cap - len, "],\"count\":%d}\n", n);
+    send_line(fd, out);
+    free(out);
+    LOGI("net_hook_test: hooked w=%d r=%d triggered=%d result=%s captures=%d", rw, rr, triggered, result, n);
 }
 
 // Install EVP_CipherUpdate GOT hook in libjavacrypto (Conscrypt), trigger the
@@ -1175,6 +1240,8 @@ static void command_loop(int fd) {
                     cmd_crypto_probe(fd, id);
                 } else if (strcmp(op, "crypto_hook_test") == 0) {
                     cmd_crypto_hook_test(fd, id);
+                } else if (strcmp(op, "net_hook_test") == 0) {
+                    cmd_net_hook_test(fd, id);
                 } else if (strcmp(op, "detect_watch") == 0) {
                     cmd_detect_watch(fd, id);
                 } else if (strcmp(op, "compat_probe") == 0) {

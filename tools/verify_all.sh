@@ -21,6 +21,7 @@ SCRIPTS=(
   "verify_v04_crypto.sh:device"
   "verify_v05_detect.sh:device"
   "verify_v06.sh:device"
+  "verify_v07.sh:device"
 )
 
 pass=0; fail=0; skip=0; FAILED=""
