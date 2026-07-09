@@ -602,6 +602,15 @@ const httpServer = http.createServer(async (req, res) => {
     try { const r = await sendCmd(sid, 'compat_probe'); return send(r.ok ? 200 : 502, r); }
     catch (e) { return send(504, { error: (e as Error).message }); }
   }
+  // QBDI instruction-level trace (I.3): GET /api/trace/qbdi?session=ID&symLib=&symbol=
+  if (url.pathname === '/api/trace/qbdi') {
+    const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    if (!sid) return send(400, { error: 'no session' });
+    const symLib = url.searchParams.get('symLib') ?? 'libidhdetect.so';
+    const symbol = url.searchParams.get('symbol') ?? 'idh_trace_target';
+    try { const r = await sendCmd(sid, 'qbdi_trace', { symLib, symbol }, 30_000); return send(r.ok ? 200 : 502, r); }
+    catch (e) { return send(504, { error: (e as Error).message }); }
+  }
   // Generic native function trace (I.2): GET /api/trace/run?session=ID&symLib=&symbol=&hookModule=
   if (url.pathname === '/api/trace/run') {
     const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;

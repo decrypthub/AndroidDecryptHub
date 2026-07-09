@@ -45,6 +45,14 @@ long idh_direct_gettid(void) {
     return ret;
 }
 
+// Deterministic target for QBDI instruction trace: sum i*3 for i in 0..4 -> 30.
+// (volatile prevents constant-folding so QBDI sees real loop instructions.)
+int idh_trace_target(void) {
+    volatile int s = 0;
+    for (volatile int i = 0; i < 5; i++) s += i * 3;
+    return s;   // 0+3+6+9+12 = 30
+}
+
 JNIEXPORT jint JNICALL Java_com_idh_sandbox_Detection_run(JNIEnv *env, jclass clazz) {
     (void)env; (void)clazz;
     int flags = 0;

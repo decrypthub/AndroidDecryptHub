@@ -57,6 +57,8 @@ static void detach_env(int did_attach) { if (did_attach && g_vm) (*g_vm)->Detach
 
 // forward decl: defined later, used by several commands
 static jclass load_app_class(JNIEnv *env, const char *dotname);
+// QBDI instruction trace (src/trace/qbdi_trace.c) — loads libQBDI.so at runtime.
+extern int idh_qbdi_trace(void *func, char *out, int outsz);
 
 // ---- small utils ----------------------------------------------------------
 
@@ -1370,6 +1372,17 @@ static void command_loop(int fd) {
                     cmd_flow_watch(fd, id);
                 } else if (strcmp(op, "detect_watch") == 0) {
                     cmd_detect_watch(fd, id);
+                } else if (strcmp(op, "qbdi_trace") == 0) {
+                    char sl[64] = "", sy[80] = "";
+                    json_get_str(line, "symLib", sl, sizeof(sl));
+                    json_get_str(line, "symbol", sy, sizeof(sy));
+                    void *fn = resolve_sym(sl[0] ? sl : "libidhdetect.so", sy[0] ? sy : "idh_trace_target");
+                    char idj[64]; json_escape(id, idj, sizeof(idj));
+                    if (!fn) { char e[160]; snprintf(e, sizeof(e), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"qbdi_trace\",\"ok\":false,\"error\":\"symbol not found\"}\n", idj); send_line(fd, e); }
+                    else { char *ob = malloc(1 << 18); if (ob) { ob[0] = 0; idh_qbdi_trace(fn, ob, (1 << 18) - 64);
+                        char *msg = malloc((1 << 18) + 128);
+                        if (msg) { snprintf(msg, (1 << 18) + 128, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"qbdi_trace\",%s}\n", idj, ob); send_line(fd, msg); free(msg); }
+                        free(ob); LOGI("qbdi_trace %s -> done", sy); } }
                 } else if (strcmp(op, "trace_run") == 0) {
                     char sl[64] = "", sy[64] = "", hm[80] = "";
                     json_get_str(line, "symLib", sl, sizeof(sl));

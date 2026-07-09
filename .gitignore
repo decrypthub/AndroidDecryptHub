@@ -50,3 +50,6 @@ Thumbs.db
 
 # Staged agent build artifact (produced by tools/build_agent.sh)
 sandbox-app/app/src/main/jniLibs/*/*.so
+
+# harness/session state
+.claude/
