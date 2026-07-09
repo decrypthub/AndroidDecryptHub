@@ -40,9 +40,24 @@
 
 ## 进行中
 
-- [ ] v0.9 — **native crypto 常量扫描已完成并验证**；方法体恢复 + direct syscall 待做
-- [ ] v0.8 Dex 索引 + Native Browser — **完成并验证**（搜索+xref+disasm+analyze），剩 Web UI（并入 v1.0）
+- [ ] v1.0 — **MCP Server 已完成并验证**（19 tools）；QBDI trace + Web UI + Method Body Recovery 待做
+- [ ] v0.9 — **native 常量扫描 + direct syscall 已完成并验证**；Method Body Recovery(L.7) 待做
+- [ ] v0.8 Dex 索引 + Native Browser — **完成并验证**（搜索+xref+disasm+analyze）
 - [ ] v0.3 ART 结构级捕获 — **核心已完成并验证**，剩恢复状态标记/多 resolver 为后续
+
+### v0.9 完成补充：direct syscall
+
+- [x] **Direct syscall 扫描**（E.9 L1）：解析 ELF program header，扫 PF_X 段找 `svc #0`(0xd4000001) 热点。`POST /api/native/syscall_scan`。sandbox-native 加内联 svc 直连 gettid
+
+### v1.0 进展
+
+- [x] **MCP Server**（Streamable HTTP / JSON-RPC）：`POST /mcp` — initialize/tools/list/tools/call，**19 个 tool** 包装 Service 层（进程/内存/ART/crypto/net/detect/object/dex/native 全套）。AI 客户端可编程操控。host 验证
+
+### v1.0 待做
+
+- [ ] QBDI trace（agent，按需加载 QBDI 库；较大 native 依赖，复杂——最后做，风险最高）
+- [ ] Web UI 页面（Dex/Native/Crypto/Network Browser；REST+MCP API 已齐，页面是展示层）
+- [ ] Method Body Recovery（L.7）：sandbox PackerMock + 执行前后 code_item 对比
 
 ### v0.8 完成补充：invoke-xref
 
@@ -191,13 +206,13 @@
 
 - [ ] Web：Memory Explorer / Dump Center 页面（并入 v1.0 Web 收尾，或 v0.3 后穿插）
 
-## 下一步
+## 下一步（收官 v1.0）
 
-→ **v0.9 收尾**
-1. Method Body Recovery（L.7）：sandbox 加 PackerMock（运行时才填 code_item 的方法）；agent 在方法执行前后 dump code_item 对比，标记恢复状态。
-2. Direct syscall coverage（E.9）：idhd 侧扫 dump 的 .so 可执行段找 `svc #0`(0xd4000001) 指令热点，输出疑似绕过 libc 的函数。
-→ **v1.0**：QBDI trace（agent，按需加载，重）、MCP Server（idhd，复用 service 层）、Web UI 页面完善、device test 全绿。
-   - MCP 是把现有 30+ REST 端点包一层 MCP tool，工作量适中，价值高（AI 可编程操控）。可优先。
+功能核心（模块 A–V 的 agent 侧能力 + idhd 分析）已基本完成并逐项真机/host 验证（suite 20/20）。剩下三块：
+1. **Web UI 页面**（低风险、纯展示层）：Dashboard 已有；加 Dex/Native/Crypto/Network Browser，调现成 REST API。可先做，稳。
+2. **Method Body Recovery（L.7）**（中）：sandbox PackerMock（运行时填 code_item）；agent hook 执行点，前后 dump code_item 对比。
+3. **QBDI trace**（高风险、最后做）：agent 集成 QBDI 库（git submodule + CMake），指定函数/范围指令级 trace。若集成受阻，记 Blocked，用 llvm-objdump 静态反汇编 + GOT/inline hook 观测作为替代覆盖。
+- 全部完成后：在 PROGRESS 标注 v0.2–v1.0 完成，可考虑停循环。
 
 ## 下一步（v0.2 Dump Engine）
 
@@ -219,6 +234,7 @@
 
 ## 会话日志（倒序，简短）
 
+- 2026-07-10 (loop#13)：v0.9 收尾——direct syscall 扫描(E.9，svc #0 热点)。v1.0 大件——**MCP Server（19 tools，JSON-RPC，AI 可编程操控）**。suite 20/20，3 次提交。剩 Web UI + Method Body Recovery + QBDI。
 - 2026-07-10 (loop#12)：v0.8 收尾——dex invoke-xref（指令宽度表，21820 方法 0% desync，Cipher.doFinal←JavaCrypto.run）。v0.9 起步——native crypto 常量扫描(H.4：AES S-box/Base64/SHA/MD5/TEA)。suite 18/18，2 次提交。
 - 2026-07-10 (loop#11)：v0.8 核心完成——原生反汇编(llvm-objdump)+ 原生二进制分析(llvm-readelf: exports/imports/NEEDED/strings)。NDK 自带工具，无额外依赖。suite 16/16，2 次提交。invoke-xref + Web UI 待做。
 - 2026-07-10 (loop#10)：v0.7 完成——网络↔crypto 关联（取证闭环：明文 IDH_CORRELATE_v1 关联到承载其密文的 TLS 请求，同线程 Δ~33ms）。v0.8 起步——dex 搜索索引(string/class/method)。suite 14/14，2 次提交。
