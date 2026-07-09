@@ -467,6 +467,12 @@ const MCP_TOOLS: { name: string; description: string; inputSchema: any; handler:
   { name: 'native_analyze', description: 'Exports/imports/NEEDED/strings of an ELF .so (b64|sha)', inputSchema: { type: 'object', properties: { b64: S, sha: S } }, handler: async (a) => { const t = join(tmpdir(), `mcp_${Date.now()}.so`); writeFileSync(t, await dumpBuf(a)); try { return await analyzeSo(t); } finally { try { unlinkSync(t); } catch {} } } },
   { name: 'native_crypto_const', description: 'Locate crypto by constant signatures in a stripped .so (b64|sha)', inputSchema: { type: 'object', properties: { b64: S, sha: S } }, handler: async (a) => cryptoConstScan(await dumpBuf(a)) },
   { name: 'native_syscall_scan', description: 'Find direct svc #0 syscalls in a .so (b64|sha)', inputSchema: { type: 'object', properties: { b64: S, sha: S } }, handler: async (a) => svcScan(await dumpBuf(a)) },
+  { name: 'memory_dump', description: 'Dump target memory [addr,addr+size) to a capture artifact (sha256 dedup)', inputSchema: { type: 'object', properties: { session: S, addr: S, size: N }, required: ['addr', 'size'] }, handler: async (a) => { const sid = pickSid(a.session); if (!sid) throw new Error('no session'); const { meta, dedup } = await dumpRegion(sid, String(a.addr).replace(/^0x/, ''), Number(a.size), 'mcp'); return { ...meta, dedup }; } },
+  { name: 'flow_correlate', description: 'Hook EVP+SSL_write, trigger encrypt-then-send, capture plaintext+request (tid/ts)', inputSchema: { type: 'object', properties: { session: S } }, handler: (a) => agentCmd(a.session, 'flow_watch', {}, 25_000) },
+  { name: 'object_invoke', description: 'Call a no-arg method on a live object (via static field path)', inputSchema: { type: 'object', properties: { session: S, className: S, field: S, method: S }, required: ['className', 'field', 'method'] }, handler: (a) => agentCmd(a.session, 'object_invoke', { className: a.className, field: a.field, method: a.method }) },
+  { name: 'trace_function', description: 'Trace calls to a native symbol (args+tid+ts) during Detection.run()', inputSchema: { type: 'object', properties: { session: S, symLib: S, symbol: S, hookModule: S }, required: ['symbol', 'hookModule'] }, handler: (a) => agentCmd(a.session, 'trace_run', { symLib: a.symLib ?? 'libc.so', symbol: a.symbol, hookModule: a.hookModule }, 20_000) },
+  { name: 'dex_method_code', description: 'Extract a method’s runtime code_item bytecode from a dex (b64|sha)', inputSchema: { type: 'object', properties: { b64: S, sha: S, class: S, method: S }, required: ['class'] }, handler: async (a) => { const buf = await dumpBuf(a); return extractMethodCode(buf, parseDex(buf), String(a.class), a.method); } },
+  { name: 'dex_repair', description: 'Repair a dumped dex header (file_size/checksum/signature)', inputSchema: { type: 'object', properties: { b64: S, sha: S } }, handler: async (a) => { const buf = await dumpBuf(a); const info = repairDexHeader(buf); return { ...info, repairedB64: buf.toString('base64') }; } },
 ];
 const MCP_MAP = new Map(MCP_TOOLS.map(t => [t.name, t]));
 
@@ -508,6 +514,23 @@ const httpServer = http.createServer(async (req, res) => {
   // MCP Streamable HTTP endpoint (JSON-RPC)
   if (url.pathname === '/mcp' && req.method === 'POST') {
     return handleMcp(await readBody(req), res);
+  }
+  // Diagnostic report / export (P/R) — metadata only, no captured keys/plaintext.
+  if (url.pathname === '/api/export/report') {
+    return send(200, {
+      report: 'idh-diagnostic', version: '0.1.0', generatedAt: new Date().toISOString(), uptime: process.uptime(),
+      agents: [...sessions.values()].map(s => ({ sessionId: s.sessionId, package: s.package, pid: s.pid, abi: s.abi, android: s.android, sdk: s.sdk, entry: s.entry, online: s.online, mapsCount: s.mapsCount })),
+      dumps: [...dumps.values()].map(d => ({ sha256: d.sha256, kind: d.kind, size: d.size, source: d.source, tag: d.tag, capturedAt: d.capturedAt })),
+      capabilities: { rest: true, websocket: true, mcp: true, mcpTools: MCP_TOOLS.length },
+      note: 'metadata only — captured key/plaintext content is never in diagnostic reports',
+    });
+  }
+  // MCP tool inventory as markdown (for docs/mcp-tools.md)
+  if (url.pathname === '/api/mcp/doc') {
+    const md = ['# IDH MCP Tools', '', `Generated from the live idhd registry (${MCP_TOOLS.length} tools). Endpoint: \`POST /mcp\` (JSON-RPC 2.0).`, '',
+      '| Tool | Description | Args |', '|---|---|---|',
+      ...MCP_TOOLS.map(t => `| \`${t.name}\` | ${t.description} | ${Object.keys(t.inputSchema.properties ?? {}).join(', ') || '—'} |`), ''].join('\n');
+    res.writeHead(200, { 'content-type': 'text/markdown; charset=utf-8' }); return res.end(md);
   }
   if (url.pathname === '/api/agents') {
     return send(200, [...sessions.values()]);
