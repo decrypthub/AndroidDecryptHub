@@ -54,6 +54,30 @@ async function analyzeSo(path: string): Promise<any> {
     counts: { exports: exports.length, imports: imports.length, needed: needed.length, strings: strings.length } };
 }
 
+// Known crypto constant signatures (byte patterns) — locate algorithms in stripped
+// native libs where symbols are gone (H.4). Little-endian where applicable.
+const CRYPTO_CONSTS: { name: string; hex: string }[] = [
+  { name: 'AES-Sbox', hex: '637c777bf26b6fc53001672bfed7ab76' },
+  { name: 'AES-InvSbox', hex: '52096ad53036a538bf40a39e81f3d7fb' },
+  { name: 'Base64-std', hex: Buffer.from('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/').toString('hex') },
+  { name: 'Base64-url', hex: Buffer.from('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_').toString('hex') },
+  { name: 'SHA256-init', hex: '67e6096a85ae67bb' },   // H0,H1 LE
+  { name: 'SHA256-K', hex: '982f8a4291443771' },       // K0,K1 LE
+  { name: 'MD5-init', hex: '0123456789abcdef' },        // A,B LE (0x67452301,0xefcdab89)
+  { name: 'SHA1-init', hex: '01234567' + '89abcdef' },  // A,B LE
+  { name: 'TEA-delta', hex: 'b979379e' },               // 0x9e3779b9 LE
+];
+function cryptoConstScan(buf: Buffer): { name: string; offset: string; hexLen: number }[] {
+  const hits: { name: string; offset: string; hexLen: number }[] = [];
+  for (const c of CRYPTO_CONSTS) {
+    const pat = Buffer.from(c.hex, 'hex');
+    let idx = buf.indexOf(pat);
+    let n = 0;
+    while (idx >= 0 && n < 8) { hits.push({ name: c.name, offset: '0x' + idx.toString(16), hexLen: pat.length }); n++; idx = buf.indexOf(pat, idx + 1); }
+  }
+  return hits;
+}
+
 interface Insn { addr: string; bytes: string; mnemonic: string; text: string; }
 // Disassemble an ELF .so on disk (llvm-objdump). By symbol, or an address range.
 async function disasmSo(path: string, opts: { symbol?: string; start?: string; stop?: string }): Promise<Insn[]> {
@@ -569,6 +593,19 @@ const httpServer = http.createServer(async (req, res) => {
       const { meta, dedup } = await dumpRegion(sid, String(addr).replace(/^0x/, ''), Number(size), String(tag ?? ''));
       return send(200, { ...meta, dedup });
     } catch (e) { return send(502, { error: (e as Error).message }); }
+  }
+  // Native crypto-constant scan (H.4): POST /api/native/crypto_const {b64|sha}
+  if (url.pathname === '/api/native/crypto_const' && req.method === 'POST') {
+    const body = await readBody(req);
+    const { b64, sha } = JSON.parse(body || '{}');
+    let buf: Buffer;
+    if (b64) buf = Buffer.from(b64, 'base64');
+    else if (sha && dumps.get(sha)) { try { buf = await readFile(dumps.get(sha)!.path); } catch { return send(404, { error: 'dump missing' }); } }
+    else return send(400, { error: 'need b64 or known sha' });
+    const hits = cryptoConstScan(buf);
+    const byName: Record<string, number> = {};
+    for (const h of hits) byName[h.name] = (byName[h.name] ?? 0) + 1;
+    return send(200, { size: buf.length, hits, byName, algorithms: Object.keys(byName) });
   }
   // Native binary analysis (Native Browser): POST /api/native/analyze {b64|sha, q?}
   if (url.pathname === '/api/native/analyze' && req.method === 'POST') {
