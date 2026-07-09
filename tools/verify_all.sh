@@ -17,6 +17,7 @@ SCRIPTS=(
   "verify_v02_dexrepair.sh:host"
   "verify_v03.sh:device"
   "verify_v04_dexparse.sh:host"
+  "verify_v04_gothook.sh:device"
 )
 
 pass=0; fail=0; skip=0; FAILED=""

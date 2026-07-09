@@ -354,6 +354,13 @@ const httpServer = http.createServer(async (req, res) => {
       return send(r.ok ? 200 : 502, r);
     } catch (e) { return send(504, { error: (e as Error).message }); }
   }
+  // GOT hook engine self-test: GET /api/hook/selftest?session=ID
+  if (url.pathname === '/api/hook/selftest') {
+    const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    if (!sid) return send(400, { error: 'no session' });
+    try { const r = await sendCmd(sid, 'gothook_selftest'); return send(r.ok ? 200 : 502, r); }
+    catch (e) { return send(504, { error: (e as Error).message }); }
+  }
   // ART structural DexFile enumeration: GET /api/art/dexfiles?session=ID
   if (url.pathname === '/api/art/dexfiles') {
     const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;

@@ -395,6 +395,74 @@ static void cmd_search(int fd, const char *id, const char *pat_hex, int limit) {
     free(hits);
 }
 
+// ---- GOT/PLT hook engine (E.8.1) -----------------------------------------
+// Replace the GOT slot that holds `orig` with `wrapper` in modules matching name.
+// Linear scan over non-exec segments (incl. RELRO). Hooks EXACTLY the first match
+// (lowest address = the real .got.plt/RELRO slot); replacing duplicate copies in
+// other data segments corrupts the original's own call path, so we stop at one.
+#include <sys/mman.h>
+
+static int got_replace(const char *module_substr, void *orig, void *wrapper) {
+    FILE *m = fopen("/proc/self/maps", "r");
+    if (!m) return -1;
+    char line[512];
+    int replaced = 0;
+    long pagesz = sysconf(_SC_PAGESIZE);
+    while (replaced == 0 && fgets(line, sizeof(line), m)) {
+        char sa[32], ea[32], perms[8], off[32], dev[16], path[400] = "";
+        unsigned long long inode = 0;
+        int nf = sscanf(line, "%31[0-9a-f]-%31[0-9a-f] %7s %31s %15s %llu %399[^\n]", sa, ea, perms, off, dev, &inode, path);
+        if (nf < 6 || perms[0] != 'r') continue;
+        char *pp = path; while (*pp == ' ') pp++;
+        if (!strstr(pp, module_substr)) continue;
+        if (strstr(perms, "x")) continue;                 // GOT lives in data/RELRO, not exec
+        unsigned long long start = strtoull(sa, NULL, 16), end = strtoull(ea, NULL, 16);
+        if (end <= start) continue;
+        for (unsigned long long a = start; a + sizeof(void *) <= end; a += sizeof(void *)) {
+            void **slot = (void **)a;
+            if (*slot == orig) {
+                void *page = (void *)(a & ~((unsigned long long)pagesz - 1));
+                if (mprotect(page, pagesz, PROT_READ | PROT_WRITE) == 0) {
+                    *slot = wrapper;
+                    replaced++;
+                    break;   // exactly one slot
+                }
+            }
+        }
+    }
+    fclose(m);
+    return replaced;
+}
+
+// --- self-test target: hook the agent's own close() (plain syscall wrapper) ---
+static void *g_orig_close = NULL;
+static volatile int g_close_hits = 0;
+static int my_close(int fd) {
+    __atomic_add_fetch(&g_close_hits, 1, __ATOMIC_RELAXED);
+    typedef int (*close_t)(int);
+    return ((close_t)g_orig_close)(fd);
+}
+
+static void cmd_gothook_selftest(int fd, const char *id) {
+    char idj[64]; json_escape(id, idj, sizeof(idj));
+    void *libc = dlopen("libc.so", RTLD_NOW);
+    void *orig = libc ? dlsym(libc, "close") : NULL;
+    g_orig_close = orig;
+    int replaced = orig ? got_replace("libidh_agent.so", orig, (void *)my_close) : -1;
+    int before = g_close_hits;
+    // trigger a controlled close() from agent code -> routes through the hooked GOT slot
+    int tfd = open("/proc/self/stat", O_RDONLY);
+    if (tfd >= 0) close(tfd);
+    int after = g_close_hits;
+    if (replaced > 0 && orig) got_replace("libidh_agent.so", (void *)my_close, orig);  // restore
+    char out[256];
+    snprintf(out, sizeof(out),
+        "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"gothook_selftest\",\"ok\":true,\"replaced\":%d,\"hitsBefore\":%d,\"hitsAfter\":%d,\"fired\":%s}\n",
+        idj, replaced, before, after, (after > before) ? "true" : "false");
+    send_line(fd, out);
+    LOGI("gothook_selftest: replaced=%d hits=%d fired=%d", replaced, after - before, after > before);
+}
+
 // Prove JNI reflection works from the agent's native thread: read Build.VERSION.
 static void cmd_jni_probe(int fd, const char *id) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
@@ -658,6 +726,8 @@ static void command_loop(int fd) {
                     cmd_read(fd, id, addr, size);
                 } else if (strcmp(op, "jni_probe") == 0) {
                     cmd_jni_probe(fd, id);
+                } else if (strcmp(op, "gothook_selftest") == 0) {
+                    cmd_gothook_selftest(fd, id);
                 } else if (strcmp(op, "art_dexfiles") == 0) {
                     cmd_art_dexfiles(fd, id);
                 } else if (strcmp(op, "scan_magic") == 0) {
