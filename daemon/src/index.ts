@@ -264,6 +264,31 @@ async function reconstructSo(sid: string, baseHex: string): Promise<Buffer> {
   return image;
 }
 
+// ---- dex header repair ----------------------------------------------------
+
+function adler32(buf: Buffer, start = 0): number {
+  let a = 1, b = 0; const MOD = 65521;
+  for (let i = start; i < buf.length; i++) {
+    a = (a + buf[i]) % MOD;
+    b = (b + a) % MOD;
+  }
+  return ((b << 16) | a) >>> 0;
+}
+
+// Repair a dumped dex's self-describing header fields (mutates buf):
+//   file_size@32 = length ; signature@12(20) = SHA-1(bytes[32..]) ; checksum@8 = adler32(bytes[12..])
+// Order matters: file_size is covered by signature & checksum; signature is covered by checksum.
+function repairDexHeader(buf: Buffer): { fileSize: number; checksum: string; signature: string; magicOk: boolean } {
+  const magicOk = buf.length >= 40 && buf[0] === 0x64 && buf[1] === 0x65 && buf[2] === 0x78 && buf[3] === 0x0a;
+  const fileSize = buf.length;
+  buf.writeUInt32LE(fileSize, 32);
+  const sig = createHash('sha1').update(buf.subarray(32)).digest();
+  sig.copy(buf, 12);
+  const checksum = adler32(buf, 12);
+  buf.writeUInt32LE(checksum, 8);
+  return { fileSize, checksum: checksum.toString(16).padStart(8, '0'), signature: sig.toString('hex'), magicOk };
+}
+
 // Dump [addr, addr+size) by orchestrating chunked agent reads, then sha256 + dedup + persist.
 async function dumpRegion(sid: string, addrHex: string, size: number, tag: string): Promise<{ meta: DumpMeta; dedup: boolean }> {
   const CHUNK = 1 << 20;                          // matches agent per-read cap
@@ -402,6 +427,17 @@ const httpServer = http.createServer(async (req, res) => {
       broadcast('dump.new', meta);
       return send(200, { ...meta, dedup: false, module: mod.name, segments: mod.segs });
     } catch (e) { return send(502, { error: (e as Error).message }); }
+  }
+  // Dex header repair: POST /api/dex/repair {b64} | {sha}
+  if (url.pathname === '/api/dex/repair' && req.method === 'POST') {
+    const body = await readBody(req);
+    const { b64, sha } = JSON.parse(body || '{}');
+    let buf: Buffer;
+    if (b64) buf = Buffer.from(b64, 'base64');
+    else if (sha && dumps.get(sha)) { try { buf = await readFile(dumps.get(sha)!.path); } catch { return send(404, { error: 'dump file missing' }); } }
+    else return send(400, { error: 'need b64 or known sha' });
+    const info = repairDexHeader(buf);
+    return send(200, { ...info, size: buf.length, repairedB64: buf.toString('base64') });
   }
   // Dumps registry
   if (url.pathname === '/api/dumps') return send(200, [...dumps.values()]);
