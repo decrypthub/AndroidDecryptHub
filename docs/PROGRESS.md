@@ -40,7 +40,7 @@
 
 ## 进行中
 
-- [ ] v0.8 Dex 索引 + Capstone — **dex 搜索已完成并验证**；invoke-xref + Capstone 反汇编待做
+- [ ] v0.8 Dex 索引 + Native Browser — **核心已完成并验证**；invoke-xref + Web UI 待做
 - [ ] v0.3 ART 结构级捕获 — **核心已完成并验证**，剩恢复状态标记/多 resolver 为后续
 
 ### v0.7 完成并全部验证（网络监控 + 关联）
@@ -50,15 +50,17 @@
       触发"加密→发送"流；idhd 按同线程+时间窗关联，输出"明文 IDH_CORRELATE_v1 → 承载其密文的请求"。
       `GET /api/flow/watch`，Δ~33ms 命中
 
-### v0.8 进展
+### v0.8 已完成并验证（verify_all.sh 16/16 PASS）
 
-- [x] **Dex 搜索索引**（K.2/K.3）：searchDex() 搜 string/class/method；`POST /api/dex/search`（host 验证）
+- [x] **Dex 搜索索引**（K.2/K.3）：searchDex() 搜 string/class/method；`POST /api/dex/search`
+- [x] **原生反汇编**：llvm-objdump -d（NDK 自带，无额外依赖）按符号/地址范围反汇编 ELF .so → 结构化 {addr,bytes,mnemonic,text}；`POST /api/native/disasm`
+- [x] **原生二进制分析**：llvm-readelf dyn-syms(exports/imports)+NEEDED + 字符串提取；`POST /api/native/analyze {q?}`
+- 说明：llvm-mc 未随 NDK；无 section 的内存镜像 raw-binary 反汇编留作增强（objdump -d 需 section/symbol，对拉取的文件型 .so 完美工作）
 
 ### v0.8 待做
 
-- [ ] invoke-xref：解析 code_item/字节码，method→callers/callees（需 dex 指令解析）
-- [ ] Capstone 反汇编：对 dump 的 so 做 arm64 反汇编（Capstone via WASM 或 native addon；较大依赖，单独起）
-- [ ] Native Browser：symbol/imports/exports/strings/disasm
+- [ ] invoke-xref：解析 code_item 字节码（需 Dalvik 指令宽度表 + payload 处理），method→callers
+- [ ] Web Native Browser / Dex Browser UI（并入 v1.0 Web 收尾）
 
 ### v0.7 已完成并验证（verify_all.sh 12/12 PASS）
 
@@ -201,6 +203,7 @@
 
 ## 会话日志（倒序，简短）
 
+- 2026-07-10 (loop#11)：v0.8 核心完成——原生反汇编(llvm-objdump)+ 原生二进制分析(llvm-readelf: exports/imports/NEEDED/strings)。NDK 自带工具，无额外依赖。suite 16/16，2 次提交。invoke-xref + Web UI 待做。
 - 2026-07-10 (loop#10)：v0.7 完成——网络↔crypto 关联（取证闭环：明文 IDH_CORRELATE_v1 关联到承载其密文的 TLS 请求，同线程 Δ~33ms）。v0.8 起步——dex 搜索索引(string/class/method)。suite 14/14，2 次提交。
 - 2026-07-10 (loop#9)：v0.7 网络 TLS 明文捕获完成——GOT-hook Conscrypt SSL_write/SSL_read，抓到请求(X-Idh-Marker)+响应明文，绕过 TLS。自建本地 HTTPS 测试栈(selfsigned v5 async cert 坑)。**修复 build_agent 吞编译错误导致跑旧 .so 的严重隐患**。suite 12/12，1 次提交。关联(network↔crypto)待做。
 - 2026-07-10 (loop#8)：v0.6 完成——Runtime Object Inspector（反射读活体对象字段 + 无参方法调用）。经静态字段到达对象，读到 token/count/note，getToken() 调用成功。完整 Java.choose 堆枚举推迟（需 JVMTI/ART 堆遍历）。suite 11/11，2 次提交。
