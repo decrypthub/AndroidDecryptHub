@@ -51,6 +51,9 @@ class MainActivity : Activity() {
         // Load a known dex via InMemoryDexClassLoader (ground truth for v0.3 ART capture).
         DynamicDex.load()
 
+        // Run deterministic crypto (static-scan refs + future dynamic-hook target).
+        JavaCrypto.run()
+
         val loadStatus: String = try {
             System.loadLibrary("idh_agent")
             Log.i(TAG, "idh_agent loaded")

@@ -13,6 +13,7 @@ import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
+import { parseDex, cryptoScan } from './dex.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CAPTURES = join(__dirname, '..', '..', 'captures');
@@ -453,6 +454,28 @@ const httpServer = http.createServer(async (req, res) => {
       broadcast('dump.new', meta);
       return send(200, { ...meta, dedup: false, module: mod.name, segments: mod.segs });
     } catch (e) { return send(502, { error: (e as Error).message }); }
+  }
+  // Dex parse: POST /api/dex/parse {b64|sha} -> structure summary (+ optional full arrays)
+  if ((url.pathname === '/api/dex/parse' || url.pathname === '/api/dex/crypto_scan') && req.method === 'POST') {
+    const body = await readBody(req);
+    const { b64, sha, full } = JSON.parse(body || '{}');
+    let buf: Buffer;
+    if (b64) buf = Buffer.from(b64, 'base64');
+    else if (sha && dumps.get(sha)) { try { buf = await readFile(dumps.get(sha)!.path); } catch { return send(404, { error: 'dump file missing' }); } }
+    else return send(400, { error: 'need b64 or known sha' });
+    let parsed;
+    try { parsed = parseDex(buf); } catch (e) { return send(422, { error: (e as Error).message }); }
+    if (url.pathname === '/api/dex/crypto_scan') {
+      return send(200, { magic: parsed.magic, counts: parsed.counts, ...cryptoScan(parsed) });
+    }
+    // parse: counts + samples (or full arrays when full=true)
+    const cap = full ? Infinity : 200;
+    return send(200, {
+      magic: parsed.magic, counts: parsed.counts,
+      classes: parsed.classes.slice(0, cap).map(c => c.name),
+      methods: parsed.methods.slice(0, cap),
+      strings: parsed.strings.slice(0, cap),
+    });
   }
   // Dex header repair: POST /api/dex/repair {b64} | {sha}
   if (url.pathname === '/api/dex/repair' && req.method === 'POST') {
