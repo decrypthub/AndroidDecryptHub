@@ -134,6 +134,46 @@ function walkCode(buf: Buffer, codeOff: number, methods: DexMethod[]): string[] 
   return pc === insnsSize ? callees : null;   // sanity: must land exactly on the boundary
 }
 
+export interface MethodCode { method: string; access: number; registers: number; ins: number; outs: number; insnsSize: number; insnsHex: string; }
+// Extract the runtime code_item bytes of methods matching class(substring)+name.
+// This is L.7 passive recovery: after a packer decrypts the in-memory dex, dump it
+// (art_dexfiles) and pull the target method's bytecode here.
+export function extractMethodCode(buf: Buffer, d: ParsedDex, classPat: string, methodName?: string): MethodCode[] {
+  const u32 = (o: number) => buf.readUInt32LE(o);
+  const classDefsSize = u32(96), classDefsOff = u32(100);
+  const methods = d.methods;
+  const cp = classPat.toLowerCase();
+  const out: MethodCode[] = [];
+  for (let i = 0; i < classDefsSize; i++) {
+    const cdOff = u32(classDefsOff + i * 32 + 24);
+    if (!cdOff) continue;
+    let p = cdOff;
+    let sf, inf, dm, vm;
+    [sf, p] = readUleb128(buf, p); [inf, p] = readUleb128(buf, p);
+    [dm, p] = readUleb128(buf, p); [vm, p] = readUleb128(buf, p);
+    for (let k = 0; k < sf + inf; k++) { [, p] = readUleb128(buf, p); [, p] = readUleb128(buf, p); }
+    for (const count of [dm, vm]) {
+      let midx = 0;
+      for (let k = 0; k < count; k++) {
+        let diff, af, co;
+        [diff, p] = readUleb128(buf, p); midx += diff;
+        [af, p] = readUleb128(buf, p);
+        [co, p] = readUleb128(buf, p);
+        const m = methods[midx];
+        if (!m) continue;
+        if (!m.cls.toLowerCase().includes(cp)) continue;
+        if (methodName && m.name !== methodName) continue;
+        if (!co) { out.push({ method: m.cls + '->' + m.name, access: af, registers: 0, ins: 0, outs: 0, insnsSize: 0, insnsHex: '' }); continue; }
+        const registers = buf.readUInt16LE(co), ins = buf.readUInt16LE(co + 2), outs = buf.readUInt16LE(co + 4);
+        const insnsSize = buf.readUInt32LE(co + 12);
+        const insnsHex = buf.subarray(co + 16, co + 16 + insnsSize * 2).toString('hex');
+        out.push({ method: m.cls + '->' + m.name, access: af, registers, ins, outs, insnsSize, insnsHex });
+      }
+    }
+  }
+  return out;
+}
+
 export interface XrefResult { xref: Map<string, string[]>; methodsWithCode: number; skipped: number; }
 // Build the invoke cross-reference: callee "cls->name" -> [caller "cls->name"].
 export function invokeXref(buf: Buffer, d: ParsedDex): XrefResult {

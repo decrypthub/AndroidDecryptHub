@@ -122,7 +122,7 @@ async function disasmSo(path: string, opts: { symbol?: string; start?: string; s
   return insns;
 }
 import { WebSocketServer, WebSocket } from 'ws';
-import { parseDex, cryptoScan, searchDex, invokeXref } from './dex.ts';
+import { parseDex, cryptoScan, searchDex, invokeXref, extractMethodCode } from './dex.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CAPTURES = join(__dirname, '..', '..', 'captures');
@@ -775,6 +775,20 @@ const httpServer = http.createServer(async (req, res) => {
     } catch (e) { return send(502, { error: (e as Error).message }); }
   }
   // Dex parse: POST /api/dex/parse {b64|sha} -> structure summary (+ optional full arrays)
+  // Method body recovery (L.7): POST /api/dex/method_code {b64|sha, class, method?}
+  if (url.pathname === '/api/dex/method_code' && req.method === 'POST') {
+    const body = await readBody(req);
+    const { b64, sha, class: cls, method } = JSON.parse(body || '{}');
+    let buf: Buffer;
+    if (b64) buf = Buffer.from(b64, 'base64');
+    else if (sha && dumps.get(sha)) { try { buf = await readFile(dumps.get(sha)!.path); } catch { return send(404, { error: 'dump missing' }); } }
+    else return send(400, { error: 'need b64 or known sha' });
+    if (!cls) return send(400, { error: 'need class' });
+    let parsed; try { parsed = parseDex(buf); } catch (e) { return send(422, { error: (e as Error).message }); }
+    const codes = extractMethodCode(buf, parsed, String(cls), method ? String(method) : undefined);
+    const recovered = codes.filter(c => c.insnsSize > 0).length;
+    return send(200, { class: cls, method: method ?? null, count: codes.length, recovered, empty: codes.length - recovered, methods: codes.slice(0, 200) });
+  }
   // Dex invoke-xref: POST /api/dex/xref {b64|sha, method} -> callers of matching methods
   if (url.pathname === '/api/dex/xref' && req.method === 'POST') {
     const body = await readBody(req);

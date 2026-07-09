@@ -29,6 +29,7 @@ SCRIPTS=(
   "verify_v08_xref.sh:host"
   "verify_v09_cryptoconst.sh:host"
   "verify_v09_syscall.sh:host"
+  "verify_v09_methodcode.sh:host"
   "verify_v10_mcp.sh:host"
 )
 
