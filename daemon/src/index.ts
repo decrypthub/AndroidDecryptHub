@@ -17,8 +17,42 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const execFileP = promisify(execFile);
-const OBJDUMP = process.env.IDH_OBJDUMP ??
-  join(homedir(), 'AppData/Local/Android/Sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-objdump.exe');
+const LLVM_BIN = process.env.IDH_LLVM_BIN ??
+  join(homedir(), 'AppData/Local/Android/Sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/windows-x86_64/bin');
+const OBJDUMP = process.env.IDH_OBJDUMP ?? join(LLVM_BIN, 'llvm-objdump.exe');
+const READELF = process.env.IDH_READELF ?? join(LLVM_BIN, 'llvm-readelf.exe');
+
+// Static binary analysis of an ELF .so: dynamic symbols (exports/imports),
+// NEEDED libs, and printable strings.
+async function analyzeSo(path: string): Promise<any> {
+  const exports: string[] = [], imports: string[] = [];
+  try {
+    const { stdout } = await execFileP(READELF, ['--dyn-syms', path], { maxBuffer: 32 * 1024 * 1024 });
+    for (const line of stdout.split('\n')) {
+      // Num: Value Size Type Bind Vis Ndx Name
+      const m = line.match(/^\s*\d+:\s+([0-9a-f]+)\s+\d+\s+(FUNC|OBJECT|NOTYPE)\s+\S+\s+\S+\s+(\S+)\s+(\S+)/i);
+      if (!m) continue;
+      const [, , , ndx, name] = m;
+      if (!name || name === '') continue;
+      if (ndx === 'UND') imports.push(name); else exports.push(name);
+    }
+  } catch { /* readelf missing */ }
+  const needed: string[] = [];
+  try {
+    const { stdout } = await execFileP(READELF, ['-d', path], { maxBuffer: 8 * 1024 * 1024 });
+    for (const line of stdout.split('\n')) { const m = line.match(/\(NEEDED\).*\[(.+?)\]/); if (m) needed.push(m[1]); }
+  } catch { /* */ }
+  // printable string runs (>=4)
+  const buf = await readFile(path);
+  const strings: string[] = []; let cur = '';
+  for (let i = 0; i < buf.length && strings.length < 5000; i++) {
+    const b = buf[i];
+    if (b >= 0x20 && b < 0x7f) cur += String.fromCharCode(b);
+    else { if (cur.length >= 4) strings.push(cur); cur = ''; }
+  }
+  return { exports: [...new Set(exports)], imports: [...new Set(imports)], needed, strings: [...new Set(strings)],
+    counts: { exports: exports.length, imports: imports.length, needed: needed.length, strings: strings.length } };
+}
 
 interface Insn { addr: string; bytes: string; mnemonic: string; text: string; }
 // Disassemble an ELF .so on disk (llvm-objdump). By symbol, or an address range.
@@ -535,6 +569,25 @@ const httpServer = http.createServer(async (req, res) => {
       const { meta, dedup } = await dumpRegion(sid, String(addr).replace(/^0x/, ''), Number(size), String(tag ?? ''));
       return send(200, { ...meta, dedup });
     } catch (e) { return send(502, { error: (e as Error).message }); }
+  }
+  // Native binary analysis (Native Browser): POST /api/native/analyze {b64|sha, q?}
+  if (url.pathname === '/api/native/analyze' && req.method === 'POST') {
+    const body = await readBody(req);
+    const { b64, sha, q } = JSON.parse(body || '{}');
+    let path: string | null = null, tmp: string | null = null;
+    if (sha && dumps.get(sha)) path = dumps.get(sha)!.path;
+    else if (b64) { tmp = join(tmpdir(), `idh_an_${Date.now()}.so`); writeFileSync(tmp, Buffer.from(b64, 'base64')); path = tmp; }
+    else return send(400, { error: 'need b64 or known sha' });
+    try {
+      const a = await analyzeSo(path);
+      if (q) { const rx = new RegExp(String(q), 'i');
+        a.exports = a.exports.filter((s: string) => rx.test(s)); a.imports = a.imports.filter((s: string) => rx.test(s));
+        a.strings = a.strings.filter((s: string) => rx.test(s)); }
+      // cap payload
+      a.exports = a.exports.slice(0, 500); a.imports = a.imports.slice(0, 500); a.strings = a.strings.slice(0, 1000);
+      return send(200, a);
+    } catch (e) { return send(502, { error: (e as Error).message }); }
+    finally { if (tmp) { try { unlinkSync(tmp); } catch {} } }
   }
   // Native disassembly (Native Browser): POST /api/native/disasm {b64|sha, symbol?|start?+stop?}
   if (url.pathname === '/api/native/disasm' && req.method === 'POST') {
