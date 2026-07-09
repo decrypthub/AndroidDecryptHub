@@ -746,6 +746,81 @@ static void cmd_detect_watch(int fd, const char *id) {
     LOGI("detect_watch: hooked p=%d a=%d g=%d triggered=%d detections=%d", r1, r2, r3, triggered, n);
 }
 
+// Module T: Runtime Object Inspector — read a live object's fields via reflection.
+// Reaches the object through a static field of `className`, then enumerates the
+// object's declared fields (name + String.valueOf(value)). Foundation for full
+// heap-instance enumeration. All-reflection => no field-signature strings needed.
+static void cmd_object_inspect(int fd, const char *id, const char *className, const char *fieldName) {
+    char idj[64]; json_escape(id, idj, sizeof(idj));
+    int did = 0;
+    JNIEnv *env = attach_env(&did);
+    if (!env) { char e[160]; snprintf(e, sizeof(e), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"object_inspect\",\"ok\":false,\"error\":\"no JavaVM\"}\n", idj); send_line(fd, e); return; }
+    (*env)->PushLocalFrame(env, 256);
+
+    size_t cap = 1 << 14, len = 0; char *out = malloc(cap);
+    int ok = 0; char err[128] = ""; char objClass[160] = ""; int nfields = 0;
+    char *recs = malloc(1 << 13); if (recs) recs[0] = 0; size_t rlen = 0, rcap = 1 << 13;
+
+    jclass clsClass = (*env)->FindClass(env, "java/lang/Class");
+    jclass fieldClass = (*env)->FindClass(env, "java/lang/reflect/Field");
+    jclass strClass = (*env)->FindClass(env, "java/lang/String");
+    jmethodID mGetField = (*env)->GetMethodID(env, clsClass, "getDeclaredField", "(Ljava/lang/String;)Ljava/lang/reflect/Field;");
+    jmethodID mGetFields = (*env)->GetMethodID(env, clsClass, "getDeclaredFields", "()[Ljava/lang/reflect/Field;");
+    jmethodID mGetName = (*env)->GetMethodID(env, clsClass, "getName", "()Ljava/lang/String;");
+    jmethodID mSetAcc = (*env)->GetMethodID(env, fieldClass, "setAccessible", "(Z)V");
+    jmethodID mFieldGet = (*env)->GetMethodID(env, fieldClass, "get", "(Ljava/lang/Object;)Ljava/lang/Object;");
+    jmethodID mFieldName = (*env)->GetMethodID(env, fieldClass, "getName", "()Ljava/lang/String;");
+    jmethodID mValueOf = (*env)->GetStaticMethodID(env, strClass, "valueOf", "(Ljava/lang/Object;)Ljava/lang/String;");
+
+    jclass target = load_app_class(env, className);
+    if (!target) { strncpy(err, "class not found", sizeof(err)-1); goto done; }
+
+    jstring fn = (*env)->NewStringUTF(env, fieldName);
+    jobject fieldObj = (*env)->CallObjectMethod(env, target, mGetField, fn);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); strncpy(err, "field not found", sizeof(err)-1); goto done; }
+    (*env)->CallVoidMethod(env, fieldObj, mSetAcc, JNI_TRUE);
+    jobject obj = (*env)->CallObjectMethod(env, fieldObj, mFieldGet, NULL);   // static field -> null
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); strncpy(err, "field.get failed (not static?)", sizeof(err)-1); goto done; }
+    if (!obj) { strncpy(err, "field value is null", sizeof(err)-1); goto done; }
+
+    jclass ocls = (*env)->GetObjectClass(env, obj);
+    jstring ocn = (jstring)(*env)->CallObjectMethod(env, ocls, mGetName);
+    if (ocn) { const char *s = (*env)->GetStringUTFChars(env, ocn, NULL); if (s) { strncpy(objClass, s, sizeof(objClass)-1); (*env)->ReleaseStringUTFChars(env, ocn, s); } }
+
+    jobjectArray fields = (jobjectArray)(*env)->CallObjectMethod(env, ocls, mGetFields);
+    jsize nf = fields ? (*env)->GetArrayLength(env, fields) : 0;
+    for (jsize i = 0; i < nf && recs; i++) {
+        jobject f = (*env)->GetObjectArrayElement(env, fields, i);
+        (*env)->CallVoidMethod(env, f, mSetAcc, JNI_TRUE);
+        jstring nm = (jstring)(*env)->CallObjectMethod(env, f, mFieldName);
+        jobject val = (*env)->CallObjectMethod(env, f, mFieldGet, obj);
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        jstring vs = (jstring)(*env)->CallStaticObjectMethod(env, strClass, mValueOf, val);
+        char nbuf[96] = "", vbuf[300] = "";
+        if (nm) { const char *s = (*env)->GetStringUTFChars(env, nm, NULL); if (s) { strncpy(nbuf, s, sizeof(nbuf)-1); (*env)->ReleaseStringUTFChars(env, nm, s); } }
+        if (vs) { const char *s = (*env)->GetStringUTFChars(env, vs, NULL); if (s) { strncpy(vbuf, s, sizeof(vbuf)-1); (*env)->ReleaseStringUTFChars(env, vs, s); } }
+        char nj[120], vj[600]; json_escape(nbuf, nj, sizeof(nj)); json_escape(vbuf, vj, sizeof(vj));
+        char rec[760]; int w = snprintf(rec, sizeof(rec), "%s{\"name\":\"%s\",\"value\":\"%s\"}", nfields ? "," : "", nj, vj);
+        if (w > 0 && rlen + (size_t)w + 1 < rcap) { memcpy(recs + rlen, rec, w); rlen += w; recs[rlen] = 0; nfields++; }
+        (*env)->DeleteLocalRef(env, f);
+    }
+    ok = 1;
+
+done:
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    (*env)->PopLocalFrame(env, NULL);
+    detach_env(did);
+    if (out) {
+        char cj[160], ecj[160]; json_escape(objClass, cj, sizeof(cj)); json_escape(err, ecj, sizeof(ecj));
+        if (ok) snprintf(out, cap, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"object_inspect\",\"ok\":true,\"objectClass\":\"%s\",\"fieldCount\":%d,\"fields\":[%s]}\n", idj, cj, nfields, recs ? recs : "");
+        else snprintf(out, cap, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"object_inspect\",\"ok\":false,\"error\":\"%s\"}\n", idj, ecj);
+        send_line(fd, out);
+        free(out);
+    }
+    free(recs);
+    LOGI("object_inspect: %s.%s -> %s fields=%d ok=%d", className, fieldName, objClass, nfields, ok);
+}
+
 // Module S: self-assess the runtime environment / hook-backend availability so the
 // operator knows what's usable and whether the target is interfering (授权抗干扰诊断).
 static void cmd_compat_probe(int fd, const char *id) {
@@ -1054,6 +1129,11 @@ static void command_loop(int fd) {
                     cmd_detect_watch(fd, id);
                 } else if (strcmp(op, "compat_probe") == 0) {
                     cmd_compat_probe(fd, id);
+                } else if (strcmp(op, "object_inspect") == 0) {
+                    char cls[160] = "", fld[64] = "";
+                    json_get_str(line, "className", cls, sizeof(cls));
+                    json_get_str(line, "field", fld, sizeof(fld));
+                    cmd_object_inspect(fd, id, cls, fld);
                 } else if (strcmp(op, "art_dexfiles") == 0) {
                     cmd_art_dexfiles(fd, id);
                 } else if (strcmp(op, "scan_magic") == 0) {

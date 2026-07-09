@@ -57,6 +57,9 @@ class MainActivity : Activity() {
         // Load the mock native detection lib (agent hooks + triggers run() later).
         Detection.load()
 
+        // Seed a live object with known fields for the Runtime Object Inspector.
+        HeapProbe.init()
+
         val loadStatus: String = try {
             System.loadLibrary("idh_agent")
             Log.i(TAG, "idh_agent loaded")
