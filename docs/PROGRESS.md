@@ -40,8 +40,22 @@
 
 ## 进行中
 
-- [ ] （无）v0.6 完成，下一步 v0.7
+- [ ] v0.7 网络监控 — **TLS 明文捕获已完成并验证**；网络↔crypto 关联待做
 - [ ] v0.3 ART 结构级捕获 — **核心已完成并验证**，剩恢复状态标记/多 resolver 为后续
+
+### v0.7 已完成并验证（verify_all.sh 12/12 PASS）
+
+- [x] **网络 TLS 明文捕获**：GOT-hook Conscrypt(libjavacrypto) 的 SSL_write/SSL_read，
+      在 TLS 边界读明文——请求(含 X-Idh-Marker)在 SSL_write、响应(IDH_NET_RESPONSE_v1)在 SSL_read。
+      **绕过 TLS 与 pinning**。`GET /api/net/hook_test`
+- [x] 自包含测试栈：`daemon/tls_test_server.mjs`（本地 HTTPS 自签名，经 adb reverse，无需外网）+ sandbox Network.kt（全信任客户端）
+- [x] **修复严重构建隐患**：build_agent.sh 曾用 >/dev/null 吞掉编译错误 → 本轮多次跑的是**旧 .so**。
+      现已 forward-declare load_app_class + build_agent 编译失败即报错退出
+
+### v0.7 待做 —— 网络↔crypto 关联（取证闭环第二半）
+
+- [ ] 给捕获事件加 thread id + 时间戳，把网络明文与 crypto 明文按线程/时间窗关联（correlate_request）
+- [ ] 当前 capture buffer 是 pull 式；关联需要统一事件流（可先在 idhd 侧按序聚合 net+crypto 捕获）
 
 ### v0.6 完成并全部验证（verify_all.sh 11/11 PASS）
 
@@ -144,13 +158,12 @@
 
 ## 下一步
 
-→ **v0.7 网络监控 + 网络↔crypto 关联（取证闭环）**
-- Java 网络（OkHttp/HttpURLConnection）或 native SSL_read/SSL_write 明文捕获。
-- 复用 GOT hook 引擎：hook libssl.so 的 SSL_read/SSL_write（明文边界，绕过 TLS/pinning）——
-  已确认 libssl.so 加载且 EVP GOT 可 hook，SSL_read/write 应同理。
-- 关联：把捕获的网络明文与 crypto 明文按线程/时间窗关联 → 取证闭环。
-- sandbox 加 NetworkActivity（HTTPS 请求已知 URL/body），断言捕获到明文请求/响应。
-- 复用：resolve_sym、got_replace、capture buffer、JNI 触发模式。
+→ **v0.7 收尾（网络↔crypto 关联）后进入 v0.8**
+- 关联：capture 记录加 tid+ts，idhd 侧把 net 明文与 crypto 明文按线程/时间窗聚合。
+→ **v0.8 Dex 索引搜索 + Capstone / Native Browser**
+- Dex 解析器(dex.ts, v0.4 已有)扩展为可搜索索引：string/class/method/invoke-xref。
+- Capstone 反汇编：idhd 侧对 dump 的 so 做 arm64 反汇编（Capstone via wasm 或 native）。
+- 验证：对已知 dex 搜字符串/方法命中；对已知 so 反汇编出已知指令。
 
 ## 下一步（v0.2 Dump Engine）
 
@@ -172,6 +185,7 @@
 
 ## 会话日志（倒序，简短）
 
+- 2026-07-10 (loop#9)：v0.7 网络 TLS 明文捕获完成——GOT-hook Conscrypt SSL_write/SSL_read，抓到请求(X-Idh-Marker)+响应明文，绕过 TLS。自建本地 HTTPS 测试栈(selfsigned v5 async cert 坑)。**修复 build_agent 吞编译错误导致跑旧 .so 的严重隐患**。suite 12/12，1 次提交。关联(network↔crypto)待做。
 - 2026-07-10 (loop#8)：v0.6 完成——Runtime Object Inspector（反射读活体对象字段 + 无参方法调用）。经静态字段到达对象，读到 token/count/note，getToken() 调用成功。完整 Java.choose 堆枚举推迟（需 JVMTI/ART 堆遍历）。suite 11/11，2 次提交。
 - 2026-07-10 (loop#7)：v0.5 完成——V 反分析行为观测（GOT-hook 目标原生 ptrace/access/prop 检测，抓到防御地图 + 中和 TRACEME）+ S 抗干扰诊断（compat_probe）。sandbox 加 libidhdetect.so。suite 10/10，3 次提交。
 - 2026-07-10 (loop#6)：**v0.4 完成——#1 卖点明文边界 crypto 捕获验证通过**。原生 EVP GOT hook 在 libjavacrypto(Conscrypt) 抓到 AES 明文 "IDH_CRYPTO_PLAINTEXT_v1"（加密前）。含 resolve_sym 内存 dynsym 解析、crypto_probe 定位、JNI 反射触发。suite 9/9。2 次提交。
