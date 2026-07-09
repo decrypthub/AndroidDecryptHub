@@ -5,7 +5,17 @@
 
 ## 当前阶段
 
-**v0.1 完成并在真机验证。** 下一步 v0.2 Dump Engine。
+**功能完成。v0.2–v1.0 已全部实现并逐项验证（`tools/verify_all.sh` 25/25 绿），唯一例外是 QBDI 指令级动态 trace（Blocked，需用户）。**
+
+已实现并验证的完整取证流水线（模块 A–V + idhd 分析 + MCP + Web）：
+模拟注入 → maps/内存 dump（含 so 重组、dex 修复）→ **ART 结构级真实 dex 捕获** →
+**明文边界 AES 捕获 + TLS 明文捕获 + 网络↔crypto 关联** → 反分析观测(+中和) + 抗干扰诊断 →
+活体对象自省 → dex 搜索/xref/方法体恢复 → 原生反汇编/分析/常量扫描/svc 扫描 →
+函数级 trace → 25 个 MCP tool（AI 可编程操控）+ Web 控制台（含 Events 会话时间线）+
+会话录制/回放 + 诊断导出 + 文档。
+
+**唯一剩余 = QBDI 指令级动态 trace（见下 Blocked）。除此之外无实质待办。**
+若要停循环：删除 durable cron（见「自动续跑循环」）。QBDI 需用户提供 arm64 Android 预编译或放开网络后再做。
 
 ## 技术栈（已定）
 
@@ -229,13 +239,11 @@
 - [x] **诊断导出** `GET /api/export/report`（仅元数据，无 key/明文）+ `GET /api/mcp/doc`
 - [x] **文档**：docs/architecture.md（as-built）、docs/threat-model.md、docs/mcp-tools.md（自动生成）
 
-## 下一步（剩余 v1.0 打磨；QBDI 仍 Blocked）
+## 下一步
 
-功能核心 + MCP + Web + 导出 + 文档全部完成并验证（suite 24/24）。剩余低优先打磨：
-1. **Session 录制/回放**：idhd 把 AUDIT/dump 事件追加落盘（JSONL/SQLite），端点回读 —— 可离线复盘。
-2. **Web UI 打磨**：Native tab 加"列模块→一键 module_dump→拿 sha 分析"流程。
-- 这两项 + QBDI（Blocked，需用户提供预编译或放开网络）做完则 v0.2–v1.0 全绿。
-- **状态**：除 QBDI 指令级动态 trace（Blocked）外，产品功能已完整实现并逐项验证。
+**无实质自动化待办**——功能全部完成并验证（25/25）。唯一剩余是 QBDI 指令级动态 trace，
+已 Blocked（需用户提供 arm64 Android 预编译库或放开网络）。可选的极低优先 cosmetic：
+Native tab 一键 module_dump 流程（REST 已可用）。建议：用户醒来后决定是否停循环 / 提供 QBDI 依赖。
 
 ## 下一步（v0.2 Dump Engine）
 
@@ -257,6 +265,7 @@
 
 ## 会话日志（倒序，简短）
 
+- 2026-07-10 (loop#17)：v1.0 会话录制/回放（事件持久化到 idhd-data/events.jsonl，重启 idhd 后回放验证）+ Web Events tab。suite 25/25，3 次提交。**功能完成，仅剩 QBDI(Blocked)；无实质自动化待办。**
 - 2026-07-10 (loop#16)：v1.0 打磨——MCP 补齐到 25 tools + 诊断导出(/api/export/report, 仅元数据) + 生成 docs（architecture/threat-model/mcp-tools）。suite 24/24，3 次提交。除 QBDI(Blocked) 外功能全部完成并验证。
 - 2026-07-10 (loop#15)：v1.0 函数级 trace 第一公民（通用 trace_run，任意原生符号，args+tid+ts+指针→字符串预览，access("/system/xbin/su")）。suite 23/23，4 次提交。**QBDI 指令级 trace 记为 Blocked**（网络受限拉不到预编译 + 重集成风险）；剩 v1.0 打磨项（导出/回放/文档/MCP 补齐）。
 - 2026-07-10 (loop#14)：v0.9 完成——Method Body Recovery(L.7 被动，提取方法 code_item)。v1.0——**Web 控制台**（多面板，调全套 API）。suite 22/22，4 次提交。**功能核心全部完成，仅剩 QBDI 指令级 trace**（高风险，最后做）。
