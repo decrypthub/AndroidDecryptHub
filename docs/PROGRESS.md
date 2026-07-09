@@ -40,8 +40,8 @@
 
 ## 进行中
 
-- [ ] v1.0 — **MCP Server 已完成并验证**（19 tools）；QBDI trace + Web UI + Method Body Recovery 待做
-- [ ] v0.9 — **native 常量扫描 + direct syscall 已完成并验证**；Method Body Recovery(L.7) 待做
+- [ ] v1.0 — **MCP Server + Web 控制台已完成并验证**；仅剩 QBDI 指令级 trace（高风险，最后）
+- [x] v0.9 — 完成并验证：native 常量扫描 + direct syscall + **Method Body Recovery(L.7)**
 - [ ] v0.8 Dex 索引 + Native Browser — **完成并验证**（搜索+xref+disasm+analyze）
 - [ ] v0.3 ART 结构级捕获 — **核心已完成并验证**，剩恢复状态标记/多 resolver 为后续
 
@@ -53,11 +53,18 @@
 
 - [x] **MCP Server**（Streamable HTTP / JSON-RPC）：`POST /mcp` — initialize/tools/list/tools/call，**19 个 tool** 包装 Service 层（进程/内存/ART/crypto/net/detect/object/dex/native 全套）。AI 客户端可编程操控。host 验证
 
-### v1.0 待做
+### v1.0 已完成并验证（verify_all.sh 22/22 PASS）
 
-- [ ] QBDI trace（agent，按需加载 QBDI 库；较大 native 依赖，复杂——最后做，风险最高）
-- [ ] Web UI 页面（Dex/Native/Crypto/Network Browser；REST+MCP API 已齐，页面是展示层）
-- [ ] Method Body Recovery（L.7）：sandbox PackerMock + 执行前后 code_item 对比
+- [x] **MCP Server**（19 tools，JSON-RPC，AI 可编程操控）
+- [x] **Web 控制台**（daemon/public/index.html）：Dashboard/Capture/Dumps/Dex/Native/MCP 多面板，
+      WS 实时 agent + session 选择器，一键跑各捕获/分析，调现成 REST/MCP API
+- [x] Method Body Recovery(L.7 被动)：`POST /api/dex/method_code` 提取方法运行时 code_item
+
+### v1.0 唯一剩余
+
+- [ ] **QBDI 指令级 trace**（模块 I.3，高级 DBI）：agent 集成 QBDI 库（arm64 Android，git submodule + CMake，重）。
+      风险最高、依赖最大——留到最后。**函数级 trace 已由 GOT hook 引擎覆盖**（crypto/net/detect 都是 hook-then-log）；
+      QBDI 独有价值是逐指令 trace。若集成受阻记 Blocked，用 GOT/inline hook + llvm-objdump 静态反汇编作为替代覆盖。
 
 ### v0.8 完成补充：invoke-xref
 
@@ -234,6 +241,7 @@
 
 ## 会话日志（倒序，简短）
 
+- 2026-07-10 (loop#14)：v0.9 完成——Method Body Recovery(L.7 被动，提取方法 code_item)。v1.0——**Web 控制台**（多面板，调全套 API）。suite 22/22，4 次提交。**功能核心全部完成，仅剩 QBDI 指令级 trace**（高风险，最后做）。
 - 2026-07-10 (loop#13)：v0.9 收尾——direct syscall 扫描(E.9，svc #0 热点)。v1.0 大件——**MCP Server（19 tools，JSON-RPC，AI 可编程操控）**。suite 20/20，3 次提交。剩 Web UI + Method Body Recovery + QBDI。
 - 2026-07-10 (loop#12)：v0.8 收尾——dex invoke-xref（指令宽度表，21820 方法 0% desync，Cipher.doFinal←JavaCrypto.run）。v0.9 起步——native crypto 常量扫描(H.4：AES S-box/Base64/SHA/MD5/TEA)。suite 18/18，2 次提交。
 - 2026-07-10 (loop#11)：v0.8 核心完成——原生反汇编(llvm-objdump)+ 原生二进制分析(llvm-readelf: exports/imports/NEEDED/strings)。NDK 自带工具，无额外依赖。suite 16/16，2 次提交。invoke-xref + Web UI 待做。
