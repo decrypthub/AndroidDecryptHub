@@ -179,6 +179,91 @@ function inferKind(b: Buffer): string {
   return 'region';
 }
 
+// Read [addr, addr+size) from the target via chunked agent reads. Stops on short read.
+async function readMem(sid: string, addr: bigint, size: number): Promise<Buffer> {
+  const CHUNK = 1 << 20;
+  const parts: Buffer[] = [];
+  let a = addr, remaining = size;
+  while (remaining > 0) {
+    const want = Math.min(CHUNK, remaining);
+    const r = await sendCmd(sid, 'read', { addr: a.toString(16), size: want }, 20_000);
+    if (!r.ok) break;
+    const b = Buffer.from(r.b64, 'base64');
+    parts.push(b);
+    a += BigInt(b.length);
+    remaining -= b.length;
+    if (b.length < want) break;
+  }
+  return Buffer.concat(parts);
+}
+
+interface ModuleInfo { name: string; path: string; base: string; end: string; size: number; segs: number; }
+function modulesFromMaps(regions: MapsRegion[]): ModuleInfo[] {
+  const by = new Map<string, MapsRegion[]>();
+  for (const r of regions) {
+    if (!r.path || !/\.(so|apk|jar|oat|odex|vdex|dex)$/.test(r.path)) continue;
+    (by.get(r.path) ?? by.set(r.path, []).get(r.path)!).push(r);
+  }
+  const out: ModuleInfo[] = [];
+  for (const [path, regs] of by) {
+    const starts = regs.map(r => BigInt('0x' + r.start));
+    const ends = regs.map(r => BigInt('0x' + r.end));
+    const base = starts.reduce((m, v) => (v < m ? v : m));
+    const end = ends.reduce((m, v) => (v > m ? v : m));
+    out.push({ name: path.split('/').pop()!, path, base: base.toString(16), end: end.toString(16), size: Number(end - base), segs: regs.length });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+// Reconstruct a loaded .so from memory into a valid ELF (SoFixer-lite):
+// file offsets are laid out == virtual addresses, section headers dropped,
+// program headers preserved so PT_DYNAMIC (dynsym/dynstr) resolves for analysis.
+async function reconstructSo(sid: string, baseHex: string): Promise<Buffer> {
+  const base = BigInt('0x' + baseHex);
+  const ehdr = await readMem(sid, base, 64);
+  if (ehdr.length < 64 || ehdr.readUInt32LE(0) !== 0x464c457f) throw new Error('no ELF header at base');
+  if (ehdr[4] !== 2) throw new Error('only ELF64 supported in v0.2');
+  const phoff = ehdr.readBigUInt64LE(32);
+  const phentsize = ehdr.readUInt16LE(54);
+  const phnum = ehdr.readUInt16LE(56);
+  if (phnum === 0 || phentsize < 56) throw new Error('bad program headers');
+  const phBuf = await readMem(sid, base + phoff, phnum * phentsize);
+
+  // pass 1: image size = max(p_vaddr + p_memsz) over PT_LOAD
+  let imgSize = 0n;
+  const loads: { vaddr: bigint; memsz: bigint }[] = [];
+  for (let i = 0; i < phnum; i++) {
+    const p = phBuf.subarray(i * phentsize);
+    if (p.readUInt32LE(0) !== 1) continue;              // PT_LOAD
+    const vaddr = p.readBigUInt64LE(16), memsz = p.readBigUInt64LE(40);
+    loads.push({ vaddr, memsz });
+    if (vaddr + memsz > imgSize) imgSize = vaddr + memsz;
+  }
+  if (imgSize === 0n || imgSize > 512n * 1024n * 1024n) throw new Error('implausible image size');
+  const image = Buffer.alloc(Number(imgSize));
+
+  // pass 2: copy each PT_LOAD's memory to file offset == vaddr
+  for (const { vaddr, memsz } of loads) {
+    const seg = await readMem(sid, base + vaddr, Number(memsz));
+    seg.copy(image, Number(vaddr));
+  }
+  // rewrite ehdr in image: drop section headers
+  ehdr.copy(image, 0, 0, 64);
+  image.writeBigUInt64LE(0n, 40);   // e_shoff = 0
+  image.writeUInt16LE(0, 60);       // e_shnum = 0
+  image.writeUInt16LE(0, 62);       // e_shstrndx = 0
+  // rewrite each phdr: p_offset = p_vaddr, p_filesz = p_memsz
+  for (let i = 0; i < phnum; i++) {
+    const off = Number(phoff) + i * phentsize;
+    if (off + 56 > image.length) break;
+    const vaddr = image.readBigUInt64LE(off + 16);
+    const memsz = image.readBigUInt64LE(off + 40);
+    image.writeBigUInt64LE(vaddr, off + 8);   // p_offset = p_vaddr
+    image.writeBigUInt64LE(memsz, off + 32);  // p_filesz = p_memsz
+  }
+  return image;
+}
+
 // Dump [addr, addr+size) by orchestrating chunked agent reads, then sha256 + dedup + persist.
 async function dumpRegion(sid: string, addrHex: string, size: number, tag: string): Promise<{ meta: DumpMeta; dedup: boolean }> {
   const CHUNK = 1 << 20;                          // matches agent per-read cap
@@ -283,6 +368,39 @@ const httpServer = http.createServer(async (req, res) => {
     try {
       const { meta, dedup } = await dumpRegion(sid, String(addr).replace(/^0x/, ''), Number(size), String(tag ?? ''));
       return send(200, { ...meta, dedup });
+    } catch (e) { return send(502, { error: (e as Error).message }); }
+  }
+  // Module list (grouped from maps): GET /api/modules?session=ID
+  if (url.pathname === '/api/modules') {
+    const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    if (!sid) return send(400, { error: 'no session' });
+    try {
+      const r = await sendCmd(sid, 'maps');
+      if (!r.ok) return send(502, r);
+      return send(200, modulesFromMaps(r.regions ?? []));
+    } catch (e) { return send(504, { error: (e as Error).message }); }
+  }
+  // Reconstruct + dump a loaded .so from memory: POST /api/module/dump {session, name}
+  if (url.pathname === '/api/module/dump' && req.method === 'POST') {
+    const body = await readBody(req);
+    const { session, name } = JSON.parse(body || '{}');
+    const sid = session ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    if (!sid || !name) return send(400, { error: 'need session, name' });
+    try {
+      const maps = await sendCmd(sid, 'maps');
+      const mod = modulesFromMaps(maps.regions ?? []).find(m => m.name === name || m.path.includes(name));
+      if (!mod) return send(404, { error: `module not found: ${name}` });
+      const buf = await reconstructSo(sid, mod.base);
+      const sha = createHash('sha256').update(buf).digest('hex');
+      const existing = dumps.get(sha);
+      if (existing) return send(200, { ...existing, dedup: true, module: mod.name });
+      const s = sessions.get(sid);
+      const path = join(CAPTURES, `${sha.slice(0, 16)}.so`);
+      if (!existsSync(path)) writeFileSync(path, buf);
+      const meta: DumpMeta = { sha256: sha, size: buf.length, source: 'so-reassembly', addr: mod.base, tag: mod.name, sessionId: sid, package: s?.package ?? '?', capturedAt: Date.now(), path, kind: 'so' };
+      dumps.set(sha, meta);
+      broadcast('dump.new', meta);
+      return send(200, { ...meta, dedup: false, module: mod.name, segments: mod.segs });
     } catch (e) { return send(502, { error: (e as Error).message }); }
   }
   // Dumps registry
