@@ -40,7 +40,28 @@
 
 ## 进行中
 
-- [ ] v0.2 Dump Engine（下一个增量：协议 idhd→agent 命令通道 + 按需全量 maps）
+- [ ] v0.2 Dump Engine — **核心已完成并验证**，剩 so 重组 + dex header 修复
+
+### v0.2 已完成并验证（tools/verify_v02.sh + verify_v02_dump.sh，均 exit 0）
+
+- [x] idhd↔agent 命令通道（`cmd`/`cmdResult`，pending-promise + 超时；每 session socket）
+- [x] 按需全量 maps `GET /api/process/maps`（2599 段，前 40 与内核 verbatim 一致）
+- [x] `memory.read` `POST /api/memory/read`（/proc/self/mem pread + base64；读到真实 ELF 头）
+- [x] dex/ELF magic 扫描 `GET /api/memory/scan_magic`（dex/cdex/elf/zip/oat/vdex 全命中；分块重叠、边界跨块、/dev 跳过、上限）
+- [x] `memory.search` `POST /api/memory/search`（hex/text 模式）
+- [x] region dump + sha256 去重 `POST /api/memory/dump` + `/api/dumps[/download]`（对 mock dex **字节级 sha256 校验通过**，kind 按 magic 推断，重复 dedup）
+- [x] sandbox 增 mock dex（direct ByteBuffer，确定性内容，AntiDumpMock 雏形）
+
+### v0.2 剩余
+
+- [ ] so 重组：按 ELF program header 从内存段重建可用 .so（文件型直接复制 / 内存型拼接修 header）
+- [ ] dex header 修复（file_size/checksum/signature）——为 v0.3 ART 抽取铺路
+- [ ] Web：Memory Explorer / Dump Center 最小页
+
+## 下一步
+
+1. v0.2 收尾：so 重组 + dex header 修复（+ 各自 verify 脚本）
+2. → v0.3 ART 结构级 Dex 捕获（ClassLinker/DexCache 遍历，SDK 36 resolver）
 
 ## 下一步（v0.2 Dump Engine）
 
@@ -62,4 +83,5 @@
 
 ## 会话日志（倒序，简短）
 
-- 2026-07-10：需求定稿、通用化、注入方案敲定（Zygisk root 版 + gadget/重打包 非 root 版）、加入"反分析行为观测(V)"、基建搭建。
+- 2026-07-10 (loop#1)：v0.2 Dump Engine 核心完成——命令通道 + maps/read/scan_magic/search/dump+dedup，全部真机验证（dump 对 mock dex 字节级 sha256 校验）。3 次提交。
+- 2026-07-10：需求定稿、通用化、注入方案敲定（Zygisk root 版 + gadget/重打包 非 root 版）、加入"反分析行为观测(V)"、基建搭建。v0.1 端到端验证。
