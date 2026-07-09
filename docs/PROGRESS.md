@@ -40,8 +40,24 @@
 
 ## 进行中
 
-- [ ] v0.8 Dex 索引 + Native Browser — **核心已完成并验证**；invoke-xref + Web UI 待做
+- [ ] v0.9 — **native crypto 常量扫描已完成并验证**；方法体恢复 + direct syscall 待做
+- [ ] v0.8 Dex 索引 + Native Browser — **完成并验证**（搜索+xref+disasm+analyze），剩 Web UI（并入 v1.0）
 - [ ] v0.3 ART 结构级捕获 — **核心已完成并验证**，剩恢复状态标记/多 resolver 为后续
+
+### v0.8 完成补充：invoke-xref
+
+- [x] **Dex invoke-xref**（K.2）：Dalvik 指令宽度表 + payload 处理 + 一致性校验（walk 必须精确落在 insns_size）。
+      21820 个真实方法 0.00% desync。`POST /api/dex/xref`——查"谁调用了某加密 API"（Cipher.doFinal ← JavaCrypto.run）
+
+### v0.9 进展
+
+- [x] **native crypto 常量扫描**（H.4）：AES S-box/inv、Base64 表、SHA-256 init+K、MD5/SHA-1 init、TEA delta 字节签名。
+      `POST /api/native/crypto_const`。对付静态链接+strip 符号的原生加密（EVP 符号 hook 落空时用常量定位）
+
+### v0.9 待做
+
+- [ ] Method Body Recovery（L.7）：被动恢复（执行前后 code_item 对比）+ 受控触发；需 ART 抽取壳 mock
+- [ ] Direct syscall coverage（E.9）：扫可执行段 svc 指令热点 + DBI 观测
 
 ### v0.7 完成并全部验证（网络监控 + 关联）
 
@@ -177,11 +193,11 @@
 
 ## 下一步
 
-→ **v0.8 收尾：invoke-xref + Capstone 反汇编**
-1. invoke-xref：dex.ts 解析 class_data_item→code_item→invoke 指令，建 method→callers 索引。验证：probe dex 中 hello 的调用关系 / 已知 xref。
-2. Capstone：选型（推荐 WASM 版 capstone，npm 有 `@types`/wasm 构建；或用 llvm-objdump 已在 NDK 里做 disasm 兜底）。验证：反汇编 dump 的 libidh_agent.so 某函数，命中已知指令。
-   - 备选：NDK 自带 llvm-objdump/llvm-mc 可直接反汇编，先用它做 Native Browser disasm，Capstone 可后置。
-→ 之后 v0.9（Method Body Recovery + native 常量扫描 + direct syscall）、v1.0（QBDI + MCP + Web UI 完善）。
+→ **v0.9 收尾**
+1. Method Body Recovery（L.7）：sandbox 加 PackerMock（运行时才填 code_item 的方法）；agent 在方法执行前后 dump code_item 对比，标记恢复状态。
+2. Direct syscall coverage（E.9）：idhd 侧扫 dump 的 .so 可执行段找 `svc #0`(0xd4000001) 指令热点，输出疑似绕过 libc 的函数。
+→ **v1.0**：QBDI trace（agent，按需加载，重）、MCP Server（idhd，复用 service 层）、Web UI 页面完善、device test 全绿。
+   - MCP 是把现有 30+ REST 端点包一层 MCP tool，工作量适中，价值高（AI 可编程操控）。可优先。
 
 ## 下一步（v0.2 Dump Engine）
 
@@ -203,6 +219,7 @@
 
 ## 会话日志（倒序，简短）
 
+- 2026-07-10 (loop#12)：v0.8 收尾——dex invoke-xref（指令宽度表，21820 方法 0% desync，Cipher.doFinal←JavaCrypto.run）。v0.9 起步——native crypto 常量扫描(H.4：AES S-box/Base64/SHA/MD5/TEA)。suite 18/18，2 次提交。
 - 2026-07-10 (loop#11)：v0.8 核心完成——原生反汇编(llvm-objdump)+ 原生二进制分析(llvm-readelf: exports/imports/NEEDED/strings)。NDK 自带工具，无额外依赖。suite 16/16，2 次提交。invoke-xref + Web UI 待做。
 - 2026-07-10 (loop#10)：v0.7 完成——网络↔crypto 关联（取证闭环：明文 IDH_CORRELATE_v1 关联到承载其密文的 TLS 请求，同线程 Δ~33ms）。v0.8 起步——dex 搜索索引(string/class/method)。suite 14/14，2 次提交。
 - 2026-07-10 (loop#9)：v0.7 网络 TLS 明文捕获完成——GOT-hook Conscrypt SSL_write/SSL_read，抓到请求(X-Idh-Marker)+响应明文，绕过 TLS。自建本地 HTTPS 测试栈(selfsigned v5 async cert 坑)。**修复 build_agent 吞编译错误导致跑旧 .so 的严重隐患**。suite 12/12，1 次提交。关联(network↔crypto)待做。
