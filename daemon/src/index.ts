@@ -551,6 +551,16 @@ const httpServer = http.createServer(async (req, res) => {
     try { const r = await sendCmd(sid, 'compat_probe'); return send(r.ok ? 200 : 502, r); }
     catch (e) { return send(504, { error: (e as Error).message }); }
   }
+  // Generic native function trace (I.2): GET /api/trace/run?session=ID&symLib=&symbol=&hookModule=
+  if (url.pathname === '/api/trace/run') {
+    const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    if (!sid) return send(400, { error: 'no session' });
+    const symLib = url.searchParams.get('symLib') ?? 'libc.so';
+    const symbol = url.searchParams.get('symbol') ?? 'access';
+    const hookModule = url.searchParams.get('hookModule') ?? 'libidhdetect.so';
+    try { const r = await sendCmd(sid, 'trace_run', { symLib, symbol, hookModule }, 20_000); return send(r.ok ? 200 : 502, r); }
+    catch (e) { return send(504, { error: (e as Error).message }); }
+  }
   // Anti-analysis behavior observation (module V): GET /api/detect/watch?session=ID
   if (url.pathname === '/api/detect/watch') {
     const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;

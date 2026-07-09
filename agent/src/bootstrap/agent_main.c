@@ -774,6 +774,23 @@ static void cmd_crypto_hook_test(int fd, const char *id) {
     LOGI("crypto_hook_test: replaced=%d triggered=%d captures=%d", replaced, triggered, ncaps);
 }
 
+// ---- generic native function-call tracer (module I.2, function level) ----
+struct TraceRec { long a0, a1, a2, a3; int tid; long long ts; };
+static struct TraceRec g_trace[256];
+static int g_ntrace = 0;
+static pthread_mutex_t g_trace_lock = PTHREAD_MUTEX_INITIALIZER;
+typedef long (*fn4_t)(long, long, long, long);
+static fn4_t g_trace_orig = NULL;
+static char g_trace_mod[80] = "";
+// Generic 4-arg wrapper: logs args (covers most libc/native fns) then trampolines.
+static long idh_trace_wrapper(long a0, long a1, long a2, long a3) {
+    int tid = (int)gettid(); long long ts = now_ns();
+    pthread_mutex_lock(&g_trace_lock);
+    if (g_ntrace < 256) { struct TraceRec *r = &g_trace[g_ntrace++]; r->a0 = a0; r->a1 = a1; r->a2 = a2; r->a3 = a3; r->tid = tid; r->ts = ts; }
+    pthread_mutex_unlock(&g_trace_lock);
+    return g_trace_orig ? g_trace_orig(a0, a1, a2, a3) : 0;
+}
+
 // ---- anti-analysis behavior observation (module V) ----
 // GOT-hook the target's own detection calls to see WHAT it checks for.
 struct DetRec { char cat[16]; char detail[160]; };
@@ -866,6 +883,43 @@ static void cmd_detect_watch(int fd, const char *id) {
     send_line(fd, out);
     free(out);
     LOGI("detect_watch: hooked p=%d a=%d g=%d triggered=%d detections=%d", r1, r2, r3, triggered, n);
+}
+
+// Generic function trace: hook `symbol` (exported by symLib) in hookModule's GOT,
+// trigger the sandbox's Detection.run() (which calls libc detection fns), and return
+// the recorded calls (args + tid + ts). Demonstrates tracing an arbitrary native fn.
+static void cmd_trace_run(int fd, const char *id, const char *symLib, const char *symbol, const char *hookMod) {
+    char idj[64]; json_escape(id, idj, sizeof(idj));
+    void *orig = resolve_sym(symLib, symbol);
+    g_trace_orig = (fn4_t)orig;
+    strncpy(g_trace_mod, hookMod, sizeof(g_trace_mod) - 1); g_trace_mod[sizeof(g_trace_mod)-1] = 0;
+    int replaced = orig ? got_replace(hookMod, orig, (void *)idh_trace_wrapper) : -1;
+    pthread_mutex_lock(&g_trace_lock); g_ntrace = 0; pthread_mutex_unlock(&g_trace_lock);
+
+    int did = 0, triggered = 0;
+    JNIEnv *env = attach_env(&did);
+    if (env) {
+        (*env)->PushLocalFrame(env, 32);
+        jclass jc = load_app_class(env, "com.idh.sandbox.Detection");
+        if (jc) { jmethodID run = (*env)->GetStaticMethodID(env, jc, "run", "()I");
+            if (run) { (*env)->CallStaticIntMethod(env, jc, run); triggered = 1; } }
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        (*env)->PopLocalFrame(env, NULL);
+        detach_env(did);
+    }
+    if (replaced > 0 && orig) got_replace(hookMod, (void *)idh_trace_wrapper, orig);   // restore
+
+    char sj[80]; json_escape(symbol, sj, sizeof(sj));
+    size_t cap = 1 << 14, len = 0; char *out = malloc(cap); if (!out) return;
+    len += snprintf(out + len, cap - len, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"trace_run\",\"ok\":true,\"symbol\":\"%s\",\"replaced\":%d,\"triggered\":%s,\"calls\":[", idj, sj, replaced, triggered ? "true" : "false");
+    pthread_mutex_lock(&g_trace_lock);
+    for (int k = 0; k < g_ntrace; k++) { struct TraceRec *r = &g_trace[k];
+        len += snprintf(out + len, cap - len, "%s{\"a0\":\"%lx\",\"a1\":\"%lx\",\"a2\":\"%lx\",\"a3\":\"%lx\",\"tid\":%d,\"tsNs\":%lld}", k ? "," : "", (unsigned long)r->a0, (unsigned long)r->a1, (unsigned long)r->a2, (unsigned long)r->a3, r->tid, r->ts); }
+    int n = g_ntrace;
+    pthread_mutex_unlock(&g_trace_lock);
+    snprintf(out + len, cap - len, "],\"count\":%d}\n", n);
+    send_line(fd, out); free(out);
+    LOGI("trace_run: sym=%s replaced=%d triggered=%d calls=%d", symbol, replaced, triggered, n);
 }
 
 // Module T: Runtime Object Inspector — read a live object's fields via reflection.
@@ -1303,6 +1357,12 @@ static void command_loop(int fd) {
                     cmd_flow_watch(fd, id);
                 } else if (strcmp(op, "detect_watch") == 0) {
                     cmd_detect_watch(fd, id);
+                } else if (strcmp(op, "trace_run") == 0) {
+                    char sl[64] = "", sy[64] = "", hm[80] = "";
+                    json_get_str(line, "symLib", sl, sizeof(sl));
+                    json_get_str(line, "symbol", sy, sizeof(sy));
+                    json_get_str(line, "hookModule", hm, sizeof(hm));
+                    cmd_trace_run(fd, id, sl, sy, hm);
                 } else if (strcmp(op, "compat_probe") == 0) {
                     cmd_compat_probe(fd, id);
                 } else if (strcmp(op, "object_inspect") == 0) {
