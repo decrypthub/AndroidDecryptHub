@@ -71,6 +71,25 @@ export function parseDex(buf: Buffer): ParsedDex {
   };
 }
 
+// Searchable index over a parsed dex: strings / classes / methods (K.2/K.3).
+// Case-insensitive substring; invoke-xref (bytecode) is a later enhancement.
+export function searchDex(d: ParsedDex, query: string, kinds: string[] = ['string', 'class', 'method'], limit = 200): {
+  query: string; strings: string[]; classes: string[]; methods: DexMethod[]; counts: Record<string, number>;
+} {
+  const q = query.toLowerCase();
+  const wantS = kinds.includes('string'), wantC = kinds.includes('class'), wantM = kinds.includes('method');
+  const strings = wantS ? d.strings.filter(s => s.toLowerCase().includes(q)) : [];
+  const classes = wantC ? d.classes.map(c => c.name).filter(n => n.toLowerCase().includes(q)) : [];
+  const methods = wantM ? d.methods.filter(m => (m.cls + '->' + m.name).toLowerCase().includes(q)) : [];
+  return {
+    query,
+    strings: strings.slice(0, limit),
+    classes: classes.slice(0, limit),
+    methods: methods.slice(0, limit),
+    counts: { strings: strings.length, classes: classes.length, methods: methods.length },
+  };
+}
+
 const CRYPTO_CLASS_RE = /^L(javax\/crypto\/|java\/security\/(MessageDigest|Signature|KeyPairGenerator|KeyFactory)|android\/util\/Base64)/;
 const ALGO_STRING_RE = /(AES|DESede|DES|RSA|Blowfish|ChaCha|HmacSHA?\d*|HmacMD5|SHA-?(1|224|256|384|512)|MD5|PBKDF2|PKCS[157]|\/(CBC|GCM|ECB|CTR|CFB)\/|GCM|Base64)/;
 

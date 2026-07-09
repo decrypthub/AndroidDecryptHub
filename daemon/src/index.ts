@@ -13,7 +13,7 @@ import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
-import { parseDex, cryptoScan } from './dex.ts';
+import { parseDex, cryptoScan, searchDex } from './dex.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CAPTURES = join(__dirname, '..', '..', 'captures');
@@ -546,7 +546,7 @@ const httpServer = http.createServer(async (req, res) => {
     } catch (e) { return send(502, { error: (e as Error).message }); }
   }
   // Dex parse: POST /api/dex/parse {b64|sha} -> structure summary (+ optional full arrays)
-  if ((url.pathname === '/api/dex/parse' || url.pathname === '/api/dex/crypto_scan') && req.method === 'POST') {
+  if ((url.pathname === '/api/dex/parse' || url.pathname === '/api/dex/crypto_scan' || url.pathname === '/api/dex/search') && req.method === 'POST') {
     const body = await readBody(req);
     const { b64, sha, full } = JSON.parse(body || '{}');
     let buf: Buffer;
@@ -557,6 +557,11 @@ const httpServer = http.createServer(async (req, res) => {
     try { parsed = parseDex(buf); } catch (e) { return send(422, { error: (e as Error).message }); }
     if (url.pathname === '/api/dex/crypto_scan') {
       return send(200, { magic: parsed.magic, counts: parsed.counts, ...cryptoScan(parsed) });
+    }
+    if (url.pathname === '/api/dex/search') {
+      const { query, kinds } = JSON.parse(body || '{}');
+      if (!query) return send(400, { error: 'need query' });
+      return send(200, { magic: parsed.magic, counts: parsed.counts, ...searchDex(parsed, String(query), kinds) });
     }
     // parse: counts + samples (or full arrays when full=true)
     const cap = full ? Infinity : 200;
