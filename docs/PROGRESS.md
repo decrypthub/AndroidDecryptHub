@@ -40,7 +40,19 @@
 
 ## 进行中
 
-- [ ] （无）v0.2 已全部完成，下一步 v0.3
+- [ ] v0.3 ART 结构级捕获 — **核心已完成并验证**（tools/verify_v03.sh），剩恢复状态标记/多 resolver 为后续
+
+### v0.3 已完成并验证（verify_all.sh 6/6 PASS）
+
+- [x] agent JNI 反射基础（cache JavaVM + attach 原生线程 + Build.VERSION 读取）`GET /api/jni/probe`
+- [x] **ART 结构级 dex 枚举** `GET /api/art/dexfiles`：ClassLoader→pathList→dexElements→dexFile→mCookie(long[])→art::DexFile*→scavenge begin_（指向 dex/cdex magic 的成员）→自描述 header 读 size。**不做 magic 扫描、不硬编码 ART 偏移**。关键：Android tagged pointer（top-byte TBI）需 untag 后再 pread。
+- [x] **结构级 dump** `POST /api/art/dump`：对 InMemoryDexClassLoader 的已知 728B dex，sha256 与 d8 原始输出**字节级一致**；正确归属 ClassLoader 类型
+- [x] sandbox 增 DynamicDex（InMemoryDexClassLoader 加载已知 dex + 设为 context loader）
+
+### v0.3 剩余（推迟，非阻塞）
+
+- [ ] 恢复状态标记（已恢复/仍为空）、多 Android API level resolver 兜底、与 magic scan 交叉校验、失败时结构探测报告
+- [ ] 抽取壳场景（方法体运行时解密）——属 v0.9 Method Body Recovery
 
 ### v0.2 Dump Engine — 完成并全部验证（tools/verify_all.sh 5/5 PASS）
 
@@ -60,11 +72,12 @@
 
 ## 下一步
 
-→ **v0.3 ART 结构级 Dex 捕获**（模块 L.6）：agent 侧从 ART 运行时结构（ClassLinker/DexCache/DexFile）
-定位真实 DexFile 的 begin/size 并 dump，不依赖 magic 扫描；按 SDK 36 维护 resolver。
-- agent 侧：需要 ART 内部结构偏移（Android 16 / SDK 36）。先做"从已加载 class 反查 DexFile"或遍历 cookie。
-- 验证：sandbox 用 InMemoryDexClassLoader 加载一个已知 dex，agent 结构级 dump 出来 sha256 与原 dex 对照。
-- 需要给 sandbox 加 DynamicDexActivity（InMemoryDexClassLoader + 已知 dex 资源）。
+→ **v0.4 Java Hook + Crypto 明文边界观测（主武器）**
+- agent 侧集成 LSPlant（ART method hook），第三方依赖，需 git submodule + CMake 接入。
+- 若 LSPlant 接入复杂，先做一个最小 ArtMethod hook 或用 JNI 反射注册 Cipher/Mac hook 的替代路径验证明文边界。
+- 内置 Crypto 模板：Cipher.doFinal/init、Mac、MessageDigest、Base64；抓 key/iv/明文/密文。
+- 验证：sandbox 加 JavaCryptoActivity（AES/CBC + HMAC，确定 key/iv/明文），hook 后断言抓到的 key/iv/明文与预期一致。
+- 注意：JNI 反射基础已就绪（v0.3(1)），attach/PushLocalFrame 模式可复用。
 
 ## 下一步（v0.2 Dump Engine）
 
@@ -86,6 +99,7 @@
 
 ## 会话日志（倒序，简短）
 
+- 2026-07-10 (loop#3)：v0.3 ART 结构级 dex 捕获完成——JNI 反射基础 + ClassLoader cookie→art::DexFile*→begin_ 枚举（untag tagged pointer）+ 结构级 dump 对已知 InMemoryDex 字节级 sha256 校验。现场 root-cause 两个 bug（tagged pointer pread EFAULT、响应缓冲截断丢 newline）。2 次提交，suite 6/6。
 - 2026-07-10 (loop#2)：v0.2 完成——so 重组（SoFixer-lite，重建 libidh_agent.so 有效）+ dex header 修复（真实 5MB dex 字节级还原）+ 主回归 verify_all.sh 5/5。3 次提交。
 - 2026-07-10 (loop#1)：v0.2 Dump Engine 核心完成——命令通道 + maps/read/scan_magic/search/dump+dedup，全部真机验证（dump 对 mock dex 字节级 sha256 校验）。3 次提交。
 - 2026-07-10：需求定稿、通用化、注入方案敲定（Zygisk root 版 + gadget/重打包 非 root 版）、加入"反分析行为观测(V)"、基建搭建。v0.1 端到端验证。
