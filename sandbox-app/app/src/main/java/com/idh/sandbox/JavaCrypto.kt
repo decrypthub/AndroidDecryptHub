@@ -20,6 +20,7 @@ object JavaCrypto {
     const val AES_TRANSFORM = "AES/CBC/PKCS5Padding"
     const val HMAC_ALG = "HmacSHA256"
 
+    @JvmStatic
     fun run() {
         try {
             val cipher = Cipher.getInstance(AES_TRANSFORM)

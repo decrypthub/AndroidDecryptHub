@@ -463,6 +463,195 @@ static void cmd_gothook_selftest(int fd, const char *id) {
     LOGI("gothook_selftest: replaced=%d hits=%d fired=%d", replaced, after - before, after > before);
 }
 
+// Resolve an exported symbol in an already-loaded module by parsing its in-memory
+// dynamic symbol table (namespace-independent; works when dlopen is blocked).
+static void *resolve_sym(const char *mod_substr, const char *symbol) {
+    unsigned long long base = 0;
+    FILE *m = fopen("/proc/self/maps", "r");
+    if (!m) return NULL;
+    char line[512];
+    while (fgets(line, sizeof(line), m)) {
+        char sa[32], ea[32], perms[8], off[32], dev[16], path[400] = "";
+        unsigned long long inode = 0;
+        if (sscanf(line, "%31[0-9a-f]-%31[0-9a-f] %7s %31s %15s %llu %399[^\n]", sa, ea, perms, off, dev, &inode, path) < 6) continue;
+        char *pp = path; while (*pp == ' ') pp++;
+        const char *bn = strrchr(pp, '/'); bn = bn ? bn + 1 : pp;
+        if (strcmp(bn, mod_substr) != 0) continue;                   // exact basename match
+        if (strcmp(off, "0") && strcmp(off, "00000000")) continue;   // want the mapping at file offset 0 (ELF header)
+        unsigned long long s = strtoull(sa, NULL, 16);
+        if (base == 0 || s < base) base = s;
+    }
+    fclose(m);
+    if (!base) return NULL;
+    unsigned char *p = (unsigned char *)base;
+    if (memcmp(p, "\x7f""ELF", 4) != 0) return NULL;
+    unsigned long long phoff = *(unsigned long long *)(p + 32);
+    unsigned short phentsize = *(unsigned short *)(p + 54);
+    unsigned short phnum = *(unsigned short *)(p + 56);
+    unsigned long long dyn_vaddr = 0;
+    for (int i = 0; i < phnum; i++) {
+        unsigned char *ph = p + phoff + (unsigned long long)i * phentsize;
+        if (*(unsigned int *)ph == 2) { dyn_vaddr = *(unsigned long long *)(ph + 16); break; }  // PT_DYNAMIC
+    }
+    if (!dyn_vaddr) return NULL;
+    unsigned long long symtab = 0, strtab = 0;
+    unsigned long long *d = (unsigned long long *)(base + dyn_vaddr);
+    for (; d[0] != 0; d += 2) {           // Elf64_Dyn: {d_tag, d_val}
+        if (d[0] == 6) symtab = d[1];     // DT_SYMTAB
+        else if (d[0] == 5) strtab = d[1];// DT_STRTAB
+    }
+    if (!symtab || !strtab) return NULL;
+    if (symtab < base) symtab += base;    // link-time vaddr -> runtime
+    if (strtab < base) strtab += base;
+    if (strtab <= symtab) return NULL;
+    long count = (long)((strtab - symtab) / 24);  // .dynstr follows .dynsym (common layout)
+    if (count <= 0 || count > 300000) return NULL;
+    for (long i = 0; i < count; i++) {
+        unsigned char *sym = (unsigned char *)(symtab + (unsigned long long)i * 24);
+        unsigned int st_name = *(unsigned int *)sym;
+        unsigned long long st_value = *(unsigned long long *)(sym + 8);
+        const char *name = (const char *)(strtab + st_name);
+        if (st_value && strcmp(name, symbol) == 0) return (void *)(base + st_value);
+    }
+    return NULL;
+}
+
+// ---- crypto plaintext capture (thread-safe; wrapper runs on the app's crypto thread) ----
+#define CAP_MAX 64
+#define CAP_BYTES 256
+struct CapRec { char func[24]; int inl; int n; unsigned char data[CAP_BYTES]; };
+static struct CapRec g_caps[CAP_MAX];
+static int g_ncaps = 0;
+static pthread_mutex_t g_cap_lock = PTHREAD_MUTEX_INITIALIZER;
+static void capture(const char *func, const unsigned char *in, int inl) {
+    if (inl <= 0 || !in) return;
+    pthread_mutex_lock(&g_cap_lock);
+    if (g_ncaps < CAP_MAX) {
+        struct CapRec *r = &g_caps[g_ncaps++];
+        strncpy(r->func, func, sizeof(r->func) - 1); r->func[sizeof(r->func)-1]=0;
+        r->inl = inl; r->n = inl < CAP_BYTES ? inl : CAP_BYTES;
+        memcpy(r->data, in, r->n);
+    }
+    pthread_mutex_unlock(&g_cap_lock);
+}
+
+typedef int (*EVP_CipherUpdate_t)(void *, unsigned char *, int *, const unsigned char *, int);
+static EVP_CipherUpdate_t g_evp_cipher_orig = NULL;
+static int my_EVP_CipherUpdate(void *ctx, unsigned char *out, int *outl, const unsigned char *in, int inl) {
+    capture("EVP_CipherUpdate", in, inl);
+    return g_evp_cipher_orig(ctx, out, outl, in, inl);
+}
+
+// Recon: for each EVP/HMAC function, report which loaded modules' GOT holds its
+// pointer (candidate hook sites) and how many slots. Guides where to install hooks.
+static void cmd_crypto_probe(int fd, const char *id) {
+    char idj[64]; json_escape(id, idj, sizeof(idj));
+    const char *names[] = { "EVP_CipherUpdate", "EVP_EncryptUpdate", "EVP_DecryptUpdate", "EVP_DigestUpdate", "HMAC_Update" };
+    const int NF = 5;
+    void *addrs[5];
+    for (int i = 0; i < NF; i++) addrs[i] = resolve_sym("libcrypto.so", names[i]);
+
+    // aggregate per-module match counts
+    struct Mod { char name[128]; int cnt[5]; };
+    struct Mod mods[96]; int nmods = 0;
+    FILE *m = fopen("/proc/self/maps", "r");
+    char line[512];
+    while (m && fgets(line, sizeof(line), m)) {
+        char sa[32], ea[32], perms[8], off[32], dev[16], path[400] = "";
+        unsigned long long inode = 0;
+        int nf = sscanf(line, "%31[0-9a-f]-%31[0-9a-f] %7s %31s %15s %llu %399[^\n]", sa, ea, perms, off, dev, &inode, path);
+        if (nf < 6 || perms[0] != 'r' || strstr(perms, "x")) continue;
+        char *pp = path; while (*pp == ' ') pp++;
+        if (!strstr(pp, ".so")) continue;
+        const char *base = strrchr(pp, '/'); base = base ? base + 1 : pp;
+        unsigned long long s = strtoull(sa, NULL, 16), e = strtoull(ea, NULL, 16);
+        if (e <= s || e - s > (64u << 20)) continue;
+        int hit[5] = {0,0,0,0,0}, any = 0;
+        for (unsigned long long a = s; a + 8 <= e; a += 8) {
+            void *v = *(void **)a;
+            for (int i = 0; i < NF; i++) if (addrs[i] && v == addrs[i]) { hit[i]++; any = 1; }
+        }
+        if (!any) continue;
+        // find/create module entry
+        int mi = -1;
+        for (int k = 0; k < nmods; k++) if (strcmp(mods[k].name, base) == 0) { mi = k; break; }
+        if (mi < 0 && nmods < 96) { mi = nmods++; strncpy(mods[mi].name, base, sizeof(mods[mi].name) - 1); mods[mi].name[sizeof(mods[mi].name)-1]=0; for (int i=0;i<NF;i++) mods[mi].cnt[i]=0; }
+        if (mi >= 0) for (int i = 0; i < NF; i++) mods[mi].cnt[i] += hit[i];
+    }
+    if (m) fclose(m);
+
+    // build JSON
+    size_t cap = 1 << 14, len = 0; char *out = malloc(cap); if (!out) { detach_env(0); return; }
+    len += snprintf(out + len, cap - len, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"crypto_probe\",\"ok\":true,\"fns\":{", idj);
+    for (int i = 0; i < NF; i++) len += snprintf(out + len, cap - len, "%s\"%s\":\"%llx\"", i?",":"", names[i], (unsigned long long)addrs[i]);
+    len += snprintf(out + len, cap - len, "},\"modules\":[");
+    for (int k = 0; k < nmods; k++) {
+        len += snprintf(out + len, cap - len, "%s{\"name\":\"%s\"", k?",":"", mods[k].name);
+        for (int i = 0; i < NF; i++) if (mods[k].cnt[i]) len += snprintf(out + len, cap - len, ",\"%s\":%d", names[i], mods[k].cnt[i]);
+        len += snprintf(out + len, cap - len, "}");
+    }
+    snprintf(out + len, cap - len, "]}\n");
+    send_line(fd, out);
+    free(out);
+    LOGI("crypto_probe: %d modules with EVP/HMAC GOT refs", nmods);
+}
+
+// Install EVP_CipherUpdate GOT hook in libjavacrypto (Conscrypt), trigger the
+// sandbox's AES via JNI reflection, and return what plaintext the wrapper captured.
+static void cmd_crypto_hook_test(int fd, const char *id) {
+    char idj[64]; json_escape(id, idj, sizeof(idj));
+    void *orig = resolve_sym("libcrypto.so", "EVP_CipherUpdate");
+    g_evp_cipher_orig = (EVP_CipherUpdate_t)orig;
+    int replaced = orig ? got_replace("libjavacrypto.so", orig, (void *)my_EVP_CipherUpdate) : -1;
+    pthread_mutex_lock(&g_cap_lock); g_ncaps = 0; pthread_mutex_unlock(&g_cap_lock);
+
+    // trigger com.idh.sandbox.JavaCrypto.run() via JNI reflection (app classloader)
+    int did = 0, triggered = 0;
+    JNIEnv *env = attach_env(&did);
+    if (env) {
+        (*env)->PushLocalFrame(env, 64);
+        jclass at = (*env)->FindClass(env, "android/app/ActivityThread");
+        jmethodID cur = at ? (*env)->GetStaticMethodID(env, at, "currentApplication", "()Landroid/app/Application;") : NULL;
+        jobject app = cur ? (*env)->CallStaticObjectMethod(env, at, cur) : NULL;
+        if (app) {
+            jclass ctx = (*env)->FindClass(env, "android/content/Context");
+            jmethodID gcl = (*env)->GetMethodID(env, ctx, "getClassLoader", "()Ljava/lang/ClassLoader;");
+            jobject loader = (*env)->CallObjectMethod(env, app, gcl);
+            jclass clc = (*env)->FindClass(env, "java/lang/ClassLoader");
+            jmethodID load = (*env)->GetMethodID(env, clc, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;");
+            jstring cn = (*env)->NewStringUTF(env, "com.idh.sandbox.JavaCrypto");
+            jclass jc = loader ? (jclass)(*env)->CallObjectMethod(env, loader, load, cn) : NULL;
+            if (jc) {
+                jmethodID run = (*env)->GetStaticMethodID(env, jc, "run", "()V");
+                if (run) { (*env)->CallStaticVoidMethod(env, jc, run); triggered = 1; }
+            }
+        }
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        (*env)->PopLocalFrame(env, NULL);
+        detach_env(did);
+    }
+
+    // unhook (restore) before building reply
+    if (replaced > 0 && orig) got_replace("libjavacrypto.so", (void *)my_EVP_CipherUpdate, orig);
+
+    // build reply with captured records (hex)
+    size_t cap = 1 << 15, len = 0; char *out = malloc(cap); if (!out) return;
+    len += snprintf(out + len, cap - len, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"crypto_hook_test\",\"ok\":true,\"replaced\":%d,\"triggered\":%s,\"captures\":[", idj, replaced, triggered ? "true" : "false");
+    pthread_mutex_lock(&g_cap_lock);
+    for (int k = 0; k < g_ncaps; k++) {
+        struct CapRec *r = &g_caps[k];
+        len += snprintf(out + len, cap - len, "%s{\"func\":\"%s\",\"inl\":%d,\"hex\":\"", k ? "," : "", r->func, r->inl);
+        for (int b = 0; b < r->n && len + 3 < cap; b++) len += snprintf(out + len, cap - len, "%02x", r->data[b]);
+        len += snprintf(out + len, cap - len, "\"}");
+    }
+    int ncaps = g_ncaps;
+    pthread_mutex_unlock(&g_cap_lock);
+    snprintf(out + len, cap - len, "],\"count\":%d}\n", ncaps);
+    send_line(fd, out);
+    free(out);
+    LOGI("crypto_hook_test: replaced=%d triggered=%d captures=%d", replaced, triggered, ncaps);
+}
+
 // Prove JNI reflection works from the agent's native thread: read Build.VERSION.
 static void cmd_jni_probe(int fd, const char *id) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
@@ -728,6 +917,10 @@ static void command_loop(int fd) {
                     cmd_jni_probe(fd, id);
                 } else if (strcmp(op, "gothook_selftest") == 0) {
                     cmd_gothook_selftest(fd, id);
+                } else if (strcmp(op, "crypto_probe") == 0) {
+                    cmd_crypto_probe(fd, id);
+                } else if (strcmp(op, "crypto_hook_test") == 0) {
+                    cmd_crypto_hook_test(fd, id);
                 } else if (strcmp(op, "art_dexfiles") == 0) {
                     cmd_art_dexfiles(fd, id);
                 } else if (strcmp(op, "scan_magic") == 0) {
