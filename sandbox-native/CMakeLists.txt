@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.22)
+project(idhdetect C)
+set(CMAKE_C_STANDARD 11)
+add_library(idhdetect SHARED detect.c)
+find_library(log-lib log)
+target_link_libraries(idhdetect ${log-lib})
+target_compile_options(idhdetect PRIVATE -Wall -O2)

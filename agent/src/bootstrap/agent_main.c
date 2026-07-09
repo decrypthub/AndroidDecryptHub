@@ -652,6 +652,100 @@ static void cmd_crypto_hook_test(int fd, const char *id) {
     LOGI("crypto_hook_test: replaced=%d triggered=%d captures=%d", replaced, triggered, ncaps);
 }
 
+// ---- anti-analysis behavior observation (module V) ----
+// GOT-hook the target's own detection calls to see WHAT it checks for.
+struct DetRec { char cat[16]; char detail[160]; };
+static struct DetRec g_dets[64];
+static int g_ndets = 0;
+static pthread_mutex_t g_det_lock = PTHREAD_MUTEX_INITIALIZER;
+static void det_record(const char *cat, const char *detail) {
+    pthread_mutex_lock(&g_det_lock);
+    if (g_ndets < 64) { struct DetRec *r = &g_dets[g_ndets++];
+        strncpy(r->cat, cat, sizeof(r->cat) - 1); r->cat[sizeof(r->cat)-1]=0;
+        strncpy(r->detail, detail, sizeof(r->detail) - 1); r->detail[sizeof(r->detail)-1]=0; }
+    pthread_mutex_unlock(&g_det_lock);
+}
+
+typedef long (*ptrace_t)(int, void *, void *, void *);
+static ptrace_t g_orig_ptrace = NULL;
+static long my_ptrace(int req, void *a, void *b, void *c) {
+    char d[64]; snprintf(d, sizeof(d), "ptrace(request=%d%s)", req, req == 0 ? " PTRACE_TRACEME" : "");
+    det_record("debug", d);
+    if (req == 0) return 0;                 // neutralize TRACEME: observe (V) + defeat (S)
+    return g_orig_ptrace(req, a, b, c);
+}
+typedef int (*access_t)(const char *, int);
+static access_t g_orig_access = NULL;
+static int my_access(const char *p, int m) {
+    if (p) det_record(strstr(p, "su") ? "root" : "file", p);
+    return g_orig_access(p, m);
+}
+typedef int (*prop_t)(const char *, char *);
+static prop_t g_orig_prop = NULL;
+static int my_prop(const char *name, char *value) {
+    det_record("prop", name ? name : "?");
+    return g_orig_prop(name, value);
+}
+
+// Load an app class from the native thread via ActivityThread.currentApplication()'s loader.
+static jclass load_app_class(JNIEnv *env, const char *dotname) {
+    jclass at = (*env)->FindClass(env, "android/app/ActivityThread");
+    jmethodID cur = at ? (*env)->GetStaticMethodID(env, at, "currentApplication", "()Landroid/app/Application;") : NULL;
+    jobject app = cur ? (*env)->CallStaticObjectMethod(env, at, cur) : NULL;
+    if (!app) return NULL;
+    jclass ctx = (*env)->FindClass(env, "android/content/Context");
+    jmethodID gcl = (*env)->GetMethodID(env, ctx, "getClassLoader", "()Ljava/lang/ClassLoader;");
+    jobject loader = (*env)->CallObjectMethod(env, app, gcl);
+    jclass clc = (*env)->FindClass(env, "java/lang/ClassLoader");
+    jmethodID load = (*env)->GetMethodID(env, clc, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;");
+    jstring cn = (*env)->NewStringUTF(env, dotname);
+    return loader ? (jclass)(*env)->CallObjectMethod(env, loader, load, cn) : NULL;
+}
+
+// Install GOT hooks on libidhdetect's detection calls, trigger Detection.run(),
+// report what the target checked.
+static void cmd_detect_watch(int fd, const char *id) {
+    char idj[64]; json_escape(id, idj, sizeof(idj));
+    void *op = resolve_sym("libc.so", "ptrace");
+    void *oa = resolve_sym("libc.so", "access");
+    void *og = resolve_sym("libc.so", "__system_property_get");
+    g_orig_ptrace = (ptrace_t)op; g_orig_access = (access_t)oa; g_orig_prop = (prop_t)og;
+    int r1 = op ? got_replace("libidhdetect.so", op, (void *)my_ptrace) : -1;
+    int r2 = oa ? got_replace("libidhdetect.so", oa, (void *)my_access) : -1;
+    int r3 = og ? got_replace("libidhdetect.so", og, (void *)my_prop) : -1;
+    pthread_mutex_lock(&g_det_lock); g_ndets = 0; pthread_mutex_unlock(&g_det_lock);
+
+    int did = 0, triggered = 0, rc = -999;
+    JNIEnv *env = attach_env(&did);
+    if (env) {
+        (*env)->PushLocalFrame(env, 32);
+        jclass jc = load_app_class(env, "com.idh.sandbox.Detection");
+        if (jc) {
+            jmethodID run = (*env)->GetStaticMethodID(env, jc, "run", "()I");
+            if (run) { rc = (*env)->CallStaticIntMethod(env, jc, run); triggered = 1; }
+        }
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        (*env)->PopLocalFrame(env, NULL);
+        detach_env(did);
+    }
+    // restore
+    if (r1 > 0) got_replace("libidhdetect.so", (void *)my_ptrace, op);
+    if (r2 > 0) got_replace("libidhdetect.so", (void *)my_access, oa);
+    if (r3 > 0) got_replace("libidhdetect.so", (void *)my_prop, og);
+
+    size_t cap = 1 << 13, len = 0; char *out = malloc(cap); if (!out) return;
+    len += snprintf(out + len, cap - len, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"detect_watch\",\"ok\":true,\"hooked\":{\"ptrace\":%d,\"access\":%d,\"prop\":%d},\"triggered\":%s,\"detectRc\":%d,\"detections\":[", idj, r1, r2, r3, triggered ? "true" : "false", rc);
+    pthread_mutex_lock(&g_det_lock);
+    for (int k = 0; k < g_ndets; k++) { char dj[200]; json_escape(g_dets[k].detail, dj, sizeof(dj));
+        len += snprintf(out + len, cap - len, "%s{\"category\":\"%s\",\"detail\":\"%s\"}", k ? "," : "", g_dets[k].cat, dj); }
+    int n = g_ndets;
+    pthread_mutex_unlock(&g_det_lock);
+    snprintf(out + len, cap - len, "],\"count\":%d}\n", n);
+    send_line(fd, out);
+    free(out);
+    LOGI("detect_watch: hooked p=%d a=%d g=%d triggered=%d detections=%d", r1, r2, r3, triggered, n);
+}
+
 // Prove JNI reflection works from the agent's native thread: read Build.VERSION.
 static void cmd_jni_probe(int fd, const char *id) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
@@ -921,6 +1015,8 @@ static void command_loop(int fd) {
                     cmd_crypto_probe(fd, id);
                 } else if (strcmp(op, "crypto_hook_test") == 0) {
                     cmd_crypto_hook_test(fd, id);
+                } else if (strcmp(op, "detect_watch") == 0) {
+                    cmd_detect_watch(fd, id);
                 } else if (strcmp(op, "art_dexfiles") == 0) {
                     cmd_art_dexfiles(fd, id);
                 } else if (strcmp(op, "scan_magic") == 0) {

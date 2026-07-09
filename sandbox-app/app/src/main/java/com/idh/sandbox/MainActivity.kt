@@ -54,6 +54,9 @@ class MainActivity : Activity() {
         // Run deterministic crypto (static-scan refs + future dynamic-hook target).
         JavaCrypto.run()
 
+        // Load the mock native detection lib (agent hooks + triggers run() later).
+        Detection.load()
+
         val loadStatus: String = try {
             System.loadLibrary("idh_agent")
             Log.i(TAG, "idh_agent loaded")
