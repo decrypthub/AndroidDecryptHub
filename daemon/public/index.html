@@ -98,6 +98,12 @@
     <pre id="out-native" class="muted">Provide a .so dump sha (module_dump to create one).</pre>
   </div>
 
+  <div class="panel" id="p-events">
+    <h2>Session events (persisted · replayable)</h2>
+    <div class="row"><button class="act" onclick="loadEvents()">Refresh</button><span class="muted">live via WebSocket; survives idhd restart</span></div>
+    <table id="events"><thead><tr><th>seq</th><th>time</th><th>type</th><th>detail</th></tr></thead><tbody id="ev-rows"></tbody></table>
+  </div>
+
   <div class="panel" id="p-mcp">
     <h2>MCP tools</h2>
     <div class="row"><button class="act" onclick="loadMcp()">List tools</button></div>
@@ -105,7 +111,7 @@
   </div>
 </main>
 <script>
-const TABS = [['p-dash','Dashboard'],['p-capture','Capture'],['p-dumps','Dumps'],['p-dex','Dex'],['p-native','Native'],['p-mcp','MCP']];
+const TABS = [['p-dash','Dashboard'],['p-capture','Capture'],['p-dumps','Dumps'],['p-dex','Dex'],['p-native','Native'],['p-events','Events'],['p-mcp','MCP']];
 const nav = document.getElementById('nav');
 TABS.forEach(([id,label],i)=>{ const b=document.createElement('button'); b.textContent=label; if(i===0)b.className='active';
   b.onclick=()=>{ document.querySelectorAll('nav button').forEach(x=>x.classList.remove('active')); b.classList.add('active');
@@ -123,6 +129,8 @@ async function nat(path,extra){ const el=document.getElementById('out-native'); 
   try{ const r=await fetch(path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sha,...extra})}); el.textContent=JSON.stringify(await r.json(),null,2);}catch(e){el.textContent='error: '+e;} }
 async function loadDumps(){ const r=await (await fetch('/api/dumps')).json(); const tb=document.getElementById('dumps-rows');
   tb.innerHTML=r.map(d=>`<tr><td>${d.kind}</td><td>${d.size}</td><td class="muted">${d.sha256.slice(0,20)}…</td><td>${d.source}</td><td>${d.tag||''}</td><td><a href="/api/dumps/download?sha=${d.sha256}">↓</a></td></tr>`).join('')||'<tr><td class="muted" colspan=6>no dumps</td></tr>'; }
+async function loadEvents(){ const r=await (await fetch('/api/events?limit=200')).json(); const tb=document.getElementById('ev-rows');
+  tb.innerHTML=(r.events||[]).slice().reverse().map(e=>`<tr><td class="muted">${e.seq}</td><td class="muted">${new Date(e.ts).toLocaleTimeString()}</td><td>${e.type}</td><td class="muted">${JSON.stringify(e.data).slice(0,90)}</td></tr>`).join('')||'<tr><td class="muted" colspan=4>no events</td></tr>'; }
 async function loadMcp(){ const el=document.getElementById('out-mcp'); el.className='';
   const r=await (await fetch('/mcp',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/list',params:{}})})).json();
   el.textContent=(r.result?.tools||[]).map(t=>`${t.name.padEnd(22)} ${t.description}`).join('\n'); }
@@ -141,6 +149,7 @@ function connect(){ const ws=new WebSocket(`ws://${location.host}/ws`); const co
     else if(m.event==='agent.maps'){const a=agents.get(m.data.sessionId);if(a){a.mapsCount=m.data.count;upsert(a);}}
     else if(m.event==='agent.close'){const a=agents.get(m.data.sessionId);if(a){a.online=false;upsert(a);}}
     else if(m.event==='dump.new'){ if(document.getElementById('p-dumps').classList.contains('active'))loadDumps(); }
+    if(document.getElementById('p-events').classList.contains('active'))loadEvents();
   }; }
 connect();
 </script>
