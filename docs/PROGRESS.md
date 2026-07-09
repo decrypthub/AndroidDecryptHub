@@ -60,11 +60,21 @@
       WS 实时 agent + session 选择器，一键跑各捕获/分析，调现成 REST/MCP API
 - [x] Method Body Recovery(L.7 被动)：`POST /api/dex/method_code` 提取方法运行时 code_item
 
-### v1.0 唯一剩余
+### v1.0 Trace 层已完成并验证
 
-- [ ] **QBDI 指令级 trace**（模块 I.3，高级 DBI）：agent 集成 QBDI 库（arm64 Android，git submodule + CMake，重）。
-      风险最高、依赖最大——留到最后。**函数级 trace 已由 GOT hook 引擎覆盖**（crypto/net/detect 都是 hook-then-log）；
-      QBDI 独有价值是逐指令 trace。若集成受阻记 Blocked，用 GOT/inline hook + llvm-objdump 静态反汇编作为替代覆盖。
+- [x] **函数级 trace（I.2）第一公民**：`GET /api/trace/run` — 通用 4 参 wrapper hook 任意原生符号，
+      记录 args+tid+ts，**并把指针参数解析成字符串预览**（如 access("/system/xbin/su")）。suite 覆盖
+- [x] 静态反汇编（llvm-objdump）+ 二进制分析（v0.8）作为静态指令视图
+
+## Blocked
+
+- [ ] **QBDI 指令级动态 trace（I.3，高级 DBI）**——**阻塞**：
+  - 需 QBDI arm64 Android 预编译库；本环境 `api.github.com` releases 拉取返回空（网络受限），
+    且把大型 C++ DBI 库集成进 C agent + 正确用 vm.call() 指令回调，无人值守风险高、可能耗多轮。
+  - **现有覆盖**：函数级 trace（已验证）+ 静态反汇编（已验证）已满足绝大多数取证需求；
+    QBDI 独有价值 = 逐指令动态 trace（算法逆向时看每条指令+寄存器）。
+  - **解除计划**：用户提供 QBDI-<ver>-android-AARCH64 预编译包（或放开网络）→ 放入 agent/third_party →
+    CMake 链接 → 实现 vm.call() + INSTRUCTION cb 记录 pc/regs → sandbox 加已知热循环函数，断言 trace 到已知指令序列。
 
 ### v0.8 完成补充：invoke-xref
 
@@ -213,13 +223,16 @@
 
 - [ ] Web：Memory Explorer / Dump Center 页面（并入 v1.0 Web 收尾，或 v0.3 后穿插）
 
-## 下一步（收官 v1.0）
+## 下一步（v1.0 收尾打磨，QBDI 已 Blocked）
 
-功能核心（模块 A–V 的 agent 侧能力 + idhd 分析）已基本完成并逐项真机/host 验证（suite 20/20）。剩下三块：
-1. **Web UI 页面**（低风险、纯展示层）：Dashboard 已有；加 Dex/Native/Crypto/Network Browser，调现成 REST API。可先做，稳。
-2. **Method Body Recovery（L.7）**（中）：sandbox PackerMock（运行时填 code_item）；agent hook 执行点，前后 dump code_item 对比。
-3. **QBDI trace**（高风险、最后做）：agent 集成 QBDI 库（git submodule + CMake），指定函数/范围指令级 trace。若集成受阻，记 Blocked，用 llvm-objdump 静态反汇编 + GOT/inline hook 观测作为替代覆盖。
-- 全部完成后：在 PROGRESS 标注 v0.2–v1.0 完成，可考虑停循环。
+功能核心全部完成并验证（suite 23/23）。QBDI 指令级 trace 已 Blocked（见上，需用户/网络）。
+剩余 v1.0 打磨项（低风险、可继续自动推进）：
+1. **数据导出**（R 章）：事件/dump/trace 导出 JSON/zip 端点。
+2. **Session 录制/回放**：把捕获事件持久化到 SQLite，可离线回看。
+3. **更多 MCP tools**：module_dump / memory_dump / dex_method_code 等补齐进 MCP。
+4. **文档**：docs/architecture.md、mcp-tools.md、threat-model.md。
+5. **Web UI 打磨**：给 Native tab 加 module_dump 一键流程；事件流实时视图。
+- 这些做完 + QBDI 若解除，则 v0.2–v1.0 全绿，可停循环。
 
 ## 下一步（v0.2 Dump Engine）
 
@@ -241,6 +254,7 @@
 
 ## 会话日志（倒序，简短）
 
+- 2026-07-10 (loop#15)：v1.0 函数级 trace 第一公民（通用 trace_run，任意原生符号，args+tid+ts+指针→字符串预览，access("/system/xbin/su")）。suite 23/23，4 次提交。**QBDI 指令级 trace 记为 Blocked**（网络受限拉不到预编译 + 重集成风险）；剩 v1.0 打磨项（导出/回放/文档/MCP 补齐）。
 - 2026-07-10 (loop#14)：v0.9 完成——Method Body Recovery(L.7 被动，提取方法 code_item)。v1.0——**Web 控制台**（多面板，调全套 API）。suite 22/22，4 次提交。**功能核心全部完成，仅剩 QBDI 指令级 trace**（高风险，最后做）。
 - 2026-07-10 (loop#13)：v0.9 收尾——direct syscall 扫描(E.9，svc #0 热点)。v1.0 大件——**MCP Server（19 tools，JSON-RPC，AI 可编程操控）**。suite 20/20，3 次提交。剩 Web UI + Method Body Recovery + QBDI。
 - 2026-07-10 (loop#12)：v0.8 收尾——dex invoke-xref（指令宽度表，21820 方法 0% desync，Cipher.doFinal←JavaCrypto.run）。v0.9 起步——native crypto 常量扫描(H.4：AES S-box/Base64/SHA/MD5/TEA)。suite 18/18，2 次提交。
