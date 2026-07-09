@@ -24,9 +24,16 @@
       agent 注册 + maps 采样全部与内核 `/proc/<pid>/maps` verbatim 一致
 - [x] 可复现验收脚本 `tools/build_agent.sh` + `tools/verify_v01.sh`（exit 0 = PASS）
 
+## 自动续跑循环（已启用）
+
+- 已启用 durable cron `4b2458ac`（每 ~10 分钟空闲时唤醒），指令：读本文件 → `bash tools/dev_up.sh` → 做下一个可验证增量 → 构建 → 验证 → 仅验证通过才 commit → 更新本文件。
+- 每次迭代先跑 `tools/dev_up.sh`（幂等拉起 idhd + adb reverse + 检测设备）。
+- 设备离线时只做 host 侧工作（idhd/web/dex 解析/协议/sandbox 代码），设备验证标 PENDING，不伪造验证。
+- 停止：删除该 cron（CronDelete 4b2458ac）或在本文件写明 v0.2–v1.0 全部完成。
+
 ## 进行中
 
-- [ ] v0.2 Dump Engine
+- [ ] v0.2 Dump Engine（下一个增量：协议 idhd→agent 命令通道 + 按需全量 maps）
 
 ## 下一步（v0.2 Dump Engine）
 
