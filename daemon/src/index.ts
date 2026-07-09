@@ -150,6 +150,7 @@ const agentServer = net.createServer((sock) => {
       sock.write(JSON.stringify({ t: 'pong' }) + '\n');
     } else if (msg.t === 'cmdResult') {
       const p = pending.get(msg.id);
+      log(`cmdResult op=${msg.op} id=${msg.id} matched=${!!p} bytes=${JSON.stringify(msg).length}`);
       if (p) { clearTimeout(p.timer); pending.delete(msg.id); p.resolve(msg); }
       if (session) session.lastSeen = Date.now();
     }
@@ -351,6 +352,24 @@ const httpServer = http.createServer(async (req, res) => {
       if (r.ok) { const s = sessions.get(sid); if (s) s.mapsCount = r.count; }
       return send(r.ok ? 200 : 502, r);
     } catch (e) { return send(504, { error: (e as Error).message }); }
+  }
+  // ART structural DexFile enumeration: GET /api/art/dexfiles?session=ID
+  if (url.pathname === '/api/art/dexfiles') {
+    const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    if (!sid) return send(400, { error: 'no session' });
+    try { const r = await sendCmd(sid, 'art_dexfiles', {}, 30_000); return send(r.ok ? 200 : 502, r); }
+    catch (e) { return send(504, { error: (e as Error).message }); }
+  }
+  // Structural dex dump: POST /api/art/dump {session, begin, size} -> dump the exact DexFile
+  if (url.pathname === '/api/art/dump' && req.method === 'POST') {
+    const body = await readBody(req);
+    const { session, begin, size } = JSON.parse(body || '{}');
+    const sid = session ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    if (!sid || !begin || !size) return send(400, { error: 'need session, begin(hex), size' });
+    try {
+      const { meta, dedup } = await dumpRegion(sid, String(begin).replace(/^0x/, ''), Number(size), 'art_dexfile');
+      return send(200, { ...meta, dedup });
+    } catch (e) { return send(502, { error: (e as Error).message }); }
   }
   // JNI reflection probe (foundation for ART/Java work): GET /api/jni/probe?session=ID
   if (url.pathname === '/api/jni/probe') {

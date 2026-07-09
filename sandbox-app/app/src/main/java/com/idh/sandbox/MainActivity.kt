@@ -48,6 +48,9 @@ class MainActivity : Activity() {
         seedMockDex()
         Log.i(TAG, "mock dex seeded: $MOCK_SIZE bytes direct, magic=dex\\n035 marker=$MOCK_MARKER")
 
+        // Load a known dex via InMemoryDexClassLoader (ground truth for v0.3 ART capture).
+        DynamicDex.load()
+
         val loadStatus: String = try {
             System.loadLibrary("idh_agent")
             Log.i(TAG, "idh_agent loaded")

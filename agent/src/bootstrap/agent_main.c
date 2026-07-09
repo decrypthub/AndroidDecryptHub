@@ -431,6 +431,154 @@ static void cmd_jni_probe(int fd, const char *id) {
     LOGI("jni_probe: sdk=%d release=%s", sdk, rel);
 }
 
+// Android tags heap pointers in the top byte (TBI). The CPU ignores it on deref,
+// but pread(/proc/self/mem) treats the address literally — strip the tag first.
+#define UNTAG(x) ((unsigned long long)(x) & 0x00FFFFFFFFFFFFFFULL)
+
+// Read n bytes at addr from /proc/self/mem into buf; returns bytes read (0 on fault).
+static ssize_t safe_read_at(int memfd, unsigned long long addr, void *buf, size_t n) {
+    addr = UNTAG(addr);
+    if (addr < 0x1000) return 0;
+    ssize_t r = pread(memfd, buf, n, (off_t)addr);
+    return r > 0 ? r : 0;
+}
+
+// Given an art::DexFile* candidate, scavenge its first words for the member that
+// points to dex/cdex magic (begin_), then read file_size from the dex header.
+// Version-robust: no hardcoded struct offsets. Returns 1 on success.
+static int resolve_dexfile(int memfd, unsigned long long dexfile_ptr,
+                           unsigned long long *begin_out, unsigned int *size_out, const char **magic_out) {
+    unsigned long long words[24];
+    ssize_t got = safe_read_at(memfd, dexfile_ptr, words, sizeof(words));
+    int nwords = (int)(got / 8);
+    for (int i = 0; i < nwords; i++) {
+        unsigned long long b = words[i];
+        unsigned char hdr[40];
+        if (safe_read_at(memfd, b, hdr, sizeof(hdr)) < 40) continue;
+        const char *magic = NULL;
+        if (hdr[0] == 'd' && hdr[1] == 'e' && hdr[2] == 'x' && hdr[3] == '\n') magic = "dex";
+        else if (hdr[0] == 'c' && hdr[1] == 'd' && hdr[2] == 'e' && hdr[3] == 'x') magic = "cdex";
+        if (!magic) continue;
+        unsigned int fsz = (unsigned int)hdr[32] | ((unsigned int)hdr[33] << 8) | ((unsigned int)hdr[34] << 16) | ((unsigned int)hdr[35] << 24);
+        if (fsz < 0x70 || fsz > (200u << 20)) continue;   // sane dex size
+        *begin_out = UNTAG(b); *size_out = fsz; *magic_out = magic;   // untagged so idhd can read it
+        return 1;
+    }
+    return 0;
+}
+
+// Enumerate ART DexFiles structurally via ClassLoader cookies (no magic scan of RAM,
+// no hardcoded ART offsets). Walks live threads' context loaders + parents.
+static void cmd_art_dexfiles(int fd, const char *id) {
+    char idj[64]; json_escape(id, idj, sizeof(idj));
+    int did = 0;
+    JNIEnv *env = attach_env(&did);
+    if (!env) { char e[160]; snprintf(e, sizeof(e), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"art_dexfiles\",\"ok\":false,\"error\":\"no JavaVM\"}\n", idj); send_line(fd, e); return; }
+    (*env)->PushLocalFrame(env, 512);
+
+    // classes + fields
+    jclass cThread = (*env)->FindClass(env, "java/lang/Thread");
+    jclass cMap = (*env)->FindClass(env, "java/util/Map");
+    jclass cSet = (*env)->FindClass(env, "java/util/Set");
+    jclass cIter = (*env)->FindClass(env, "java/util/Iterator");
+    jclass cCL = (*env)->FindClass(env, "java/lang/ClassLoader");
+    jclass cBDCL = (*env)->FindClass(env, "dalvik/system/BaseDexClassLoader");
+    jclass cDPL = (*env)->FindClass(env, "dalvik/system/DexPathList");
+    jclass cElem = (*env)->FindClass(env, "dalvik/system/DexPathList$Element");
+    jclass cDexFile = (*env)->FindClass(env, "dalvik/system/DexFile");
+    jclass cClass = (*env)->FindClass(env, "java/lang/Class");
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+
+    jmethodID mGetAll = cThread ? (*env)->GetStaticMethodID(env, cThread, "getAllStackTraces", "()Ljava/util/Map;") : NULL;
+    jmethodID mKeySet = cMap ? (*env)->GetMethodID(env, cMap, "keySet", "()Ljava/util/Set;") : NULL;
+    jmethodID mIterator = cSet ? (*env)->GetMethodID(env, cSet, "iterator", "()Ljava/util/Iterator;") : NULL;
+    jmethodID mHasNext = cIter ? (*env)->GetMethodID(env, cIter, "hasNext", "()Z") : NULL;
+    jmethodID mNext = cIter ? (*env)->GetMethodID(env, cIter, "next", "()Ljava/lang/Object;") : NULL;
+    jmethodID mGetCtx = cThread ? (*env)->GetMethodID(env, cThread, "getContextClassLoader", "()Ljava/lang/ClassLoader;") : NULL;
+    jmethodID mGetParent = cCL ? (*env)->GetMethodID(env, cCL, "getParent", "()Ljava/lang/ClassLoader;") : NULL;
+    jmethodID mGetName = cClass ? (*env)->GetMethodID(env, cClass, "getName", "()Ljava/lang/String;") : NULL;
+    jfieldID fPathList = cBDCL ? (*env)->GetFieldID(env, cBDCL, "pathList", "Ldalvik/system/DexPathList;") : NULL;
+    jfieldID fDexElements = cDPL ? (*env)->GetFieldID(env, cDPL, "dexElements", "[Ldalvik/system/DexPathList$Element;") : NULL;
+    jfieldID fDexFileFld = cElem ? (*env)->GetFieldID(env, cElem, "dexFile", "Ldalvik/system/DexFile;") : NULL;
+    jfieldID fCookie = cDexFile ? (*env)->GetFieldID(env, cDexFile, "mCookie", "Ljava/lang/Object;") : NULL;
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+
+    int memfd = open("/proc/self/mem", O_RDONLY);
+    size_t cap = 1 << 14, len = 0; char *recs = (char *)malloc(cap); if (recs) recs[0] = 0;
+    int nrec = 0, nloaders = 0;
+    unsigned long long seen[512]; int nseen = 0;
+
+    if (mGetAll && mKeySet && mIterator && fPathList && fDexElements && fDexFileFld && fCookie && memfd >= 0 && recs) {
+        jobject map = (*env)->CallStaticObjectMethod(env, cThread, mGetAll);
+        jobject set = map ? (*env)->CallObjectMethod(env, map, mKeySet) : NULL;
+        jobject it = set ? (*env)->CallObjectMethod(env, set, mIterator) : NULL;
+        while (it && (*env)->CallBooleanMethod(env, it, mHasNext)) {
+            jobject th = (*env)->CallObjectMethod(env, it, mNext);
+            jobject loader = th ? (*env)->CallObjectMethod(env, th, mGetCtx) : NULL;
+            // walk loader + parent chain
+            int depth = 0;
+            while (loader && depth++ < 16) {
+                if ((*env)->IsInstanceOf(env, loader, cBDCL)) {
+                    nloaders++;
+                    // loader class name
+                    char lname[128] = "";
+                    jobject lcls = (*env)->GetObjectClass(env, loader);
+                    if (lcls && mGetName) { jstring nm = (jstring)(*env)->CallObjectMethod(env, lcls, mGetName);
+                        if (nm) { const char *s = (*env)->GetStringUTFChars(env, nm, NULL); if (s) { strncpy(lname, s, sizeof(lname) - 1); (*env)->ReleaseStringUTFChars(env, nm, s); } } }
+                    jobject pathList = (*env)->GetObjectField(env, loader, fPathList);
+                    jobjectArray elems = pathList ? (jobjectArray)(*env)->GetObjectField(env, pathList, fDexElements) : NULL;
+                    jsize ne = elems ? (*env)->GetArrayLength(env, elems) : 0;
+                    jclass cLongArr = (*env)->FindClass(env, "[J");
+                    for (jsize e = 0; e < ne; e++) {
+                        jobject elem = (*env)->GetObjectArrayElement(env, elems, e);
+                        jobject dexFile = elem ? (*env)->GetObjectField(env, elem, fDexFileFld) : NULL;
+                        jobject cookie = dexFile ? (*env)->GetObjectField(env, dexFile, fCookie) : NULL;
+                        if (cookie && (*env)->IsInstanceOf(env, cookie, cLongArr)) {
+                            jlongArray arr = (jlongArray)cookie;
+                            jsize cl = (*env)->GetArrayLength(env, arr);
+                            jlong *vals = (*env)->GetLongArrayElements(env, arr, NULL);
+                            for (jsize c = 0; c < cl && nrec < 256; c++) {
+                                unsigned long long p = (unsigned long long)vals[c];
+                                if (p < 0x10000) continue;
+                                unsigned long long begin = 0; unsigned int sz = 0; const char *mg = NULL;
+                                if (resolve_dexfile(memfd, p, &begin, &sz, &mg)) {
+                                    int dup = 0; for (int k = 0; k < nseen; k++) if (seen[k] == begin) { dup = 1; break; }
+                                    if (dup) continue;
+                                    if (nseen < 512) seen[nseen++] = begin;
+                                    char lj[160]; json_escape(lname, lj, sizeof(lj));
+                                    char rec[420];
+                                    int w = snprintf(rec, sizeof(rec), "%s{\"dexFilePtr\":\"%llx\",\"begin\":\"%llx\",\"size\":%u,\"magic\":\"%s\",\"loader\":\"%s\"}",
+                                                     nrec ? "," : "", p, begin, sz, mg, lj);
+                                    if (w > 0) { if (len + (size_t)w + 1 >= cap) { while (len + (size_t)w + 1 >= cap) cap *= 2; char *nb = realloc(recs, cap); if (nb) recs = nb; }
+                                        memcpy(recs + len, rec, (size_t)w); len += (size_t)w; recs[len] = 0; nrec++; }
+                                }
+                            }
+                            (*env)->ReleaseLongArrayElements(env, arr, vals, JNI_ABORT);
+                        }
+                        if (elem) (*env)->DeleteLocalRef(env, elem);
+                        if (dexFile) (*env)->DeleteLocalRef(env, dexFile);
+                        if (cookie) (*env)->DeleteLocalRef(env, cookie);
+                    }
+                }
+                jobject parent = (*env)->CallObjectMethod(env, loader, mGetParent);
+                (*env)->DeleteLocalRef(env, loader);
+                loader = parent;
+            }
+            if (th) (*env)->DeleteLocalRef(env, th);
+        }
+    }
+    if (memfd >= 0) close(memfd);
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    (*env)->PopLocalFrame(env, NULL);
+    detach_env(did);
+
+    size_t hlen = (recs ? strlen(recs) : 0) + 200;
+    char *out = (char *)malloc(hlen);
+    if (out) { snprintf(out, hlen, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"art_dexfiles\",\"ok\":true,\"loaders\":%d,\"count\":%d,\"dexfiles\":[%s]}\n", idj, nloaders, nrec, recs ? recs : ""); send_line(fd, out); free(out); }
+    free(recs);
+    LOGI("art_dexfiles: loaders=%d dexfiles=%d", nloaders, nrec);
+}
+
 static void cmd_maps(int fd, const char *id) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
     int total = 0;
@@ -510,6 +658,8 @@ static void command_loop(int fd) {
                     cmd_read(fd, id, addr, size);
                 } else if (strcmp(op, "jni_probe") == 0) {
                     cmd_jni_probe(fd, id);
+                } else if (strcmp(op, "art_dexfiles") == 0) {
+                    cmd_art_dexfiles(fd, id);
                 } else if (strcmp(op, "scan_magic") == 0) {
                     cmd_scan_magic(fd, id);
                 } else if (strcmp(op, "search") == 0) {
