@@ -31,6 +31,7 @@ SCRIPTS=(
   "verify_v09_syscall.sh:host"
   "verify_v09_methodcode.sh:host"
   "verify_v10_mcp.sh:host"
+  "verify_v10_webui.sh:host"
 )
 
 pass=0; fail=0; skip=0; FAILED=""

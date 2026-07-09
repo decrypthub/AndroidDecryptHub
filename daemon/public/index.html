@@ -3,73 +3,145 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>IDH Workbench — Dashboard</title>
+<title>IDH Runtime Workbench</title>
 <style>
   :root { color-scheme: dark; }
-  body { margin: 0; font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: #0b0e14; color: #cdd6f4; }
-  header { padding: 14px 20px; border-bottom: 1px solid #1e2233; display: flex; align-items: center; gap: 12px; }
-  header h1 { font-size: 15px; margin: 0; font-weight: 600; letter-spacing: .5px; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: #0b0e14; color: #cdd6f4; }
+  header { padding: 12px 18px; border-bottom: 1px solid #1e2233; display: flex; align-items: center; gap: 12px; }
+  header h1 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: .5px; }
   .dot { width: 9px; height: 9px; border-radius: 50%; background: #f38ba8; }
   .dot.up { background: #a6e3a1; }
-  main { padding: 20px; }
-  .empty { color: #6c7086; padding: 40px; text-align: center; }
-  table { border-collapse: collapse; width: 100%; }
-  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid #1e2233; }
-  th { color: #89b4fa; font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .5px; }
-  tr.off td { opacity: .45; }
-  .pill { padding: 1px 8px; border-radius: 10px; font-size: 12px; }
-  .on { background: #1e3a2a; color: #a6e3a1; }
-  .no { background: #3a1e26; color: #f38ba8; }
   .muted { color: #6c7086; }
+  nav { display: flex; gap: 4px; padding: 8px 18px; border-bottom: 1px solid #1e2233; flex-wrap: wrap; }
+  nav button { background: #11151f; color: #cdd6f4; border: 1px solid #1e2233; padding: 5px 12px; border-radius: 6px; cursor: pointer; font: inherit; }
+  nav button.active { background: #1e3a5f; border-color: #89b4fa; color: #cfe1ff; }
+  main { padding: 16px 18px; }
+  .panel { display: none; } .panel.active { display: block; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #1e2233; vertical-align: top; }
+  th { color: #89b4fa; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
+  tr.off td { opacity: .45; }
+  .pill { padding: 1px 8px; border-radius: 10px; font-size: 11px; }
+  .on { background: #1e3a2a; color: #a6e3a1; } .no { background: #3a1e26; color: #f38ba8; }
+  button.act { background: #182338; color: #cfe1ff; border: 1px solid #2a3a55; padding: 5px 10px; border-radius: 6px; cursor: pointer; font: inherit; margin: 2px; }
+  button.act:hover { border-color: #89b4fa; }
+  input, textarea, select { background: #0e131d; color: #cdd6f4; border: 1px solid #1e2233; border-radius: 6px; padding: 5px 8px; font: inherit; }
+  textarea { width: 100%; height: 70px; }
+  pre { background: #0e131d; border: 1px solid #1e2233; border-radius: 8px; padding: 12px; overflow: auto; max-height: 60vh; white-space: pre-wrap; word-break: break-all; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+  h2 { font-size: 13px; color: #89b4fa; margin: 4px 0 10px; }
 </style>
 </head>
 <body>
 <header>
   <span class="dot" id="conn"></span>
-  <h1>IDH Android Runtime Workbench</h1>
+  <h1>IDH Runtime Workbench</h1>
   <span class="muted" id="status">connecting…</span>
+  <span style="flex:1"></span>
+  <span class="muted">session:</span>
+  <select id="sess"><option value="">(newest online)</option></select>
 </header>
+<nav id="nav"></nav>
 <main>
-  <div id="empty" class="empty">No agents connected. Launch a target with the agent injected (or the sandbox 模拟注入).</div>
-  <table id="tbl" style="display:none">
-    <thead><tr><th>Session</th><th>Package</th><th>PID</th><th>ABI</th><th>Android</th><th>Entry</th><th>Maps</th><th>State</th></tr></thead>
-    <tbody id="rows"></tbody>
-  </table>
+  <div class="panel active" id="p-dash">
+    <h2>Agents</h2>
+    <div id="empty" class="muted">No agents connected. Launch a target with 模拟注入.</div>
+    <table id="tbl" style="display:none"><thead><tr><th>Session</th><th>Package</th><th>PID</th><th>ABI</th><th>Android</th><th>Entry</th><th>Maps</th><th>State</th></tr></thead><tbody id="rows"></tbody></table>
+  </div>
+
+  <div class="panel" id="p-capture">
+    <h2>Runtime capture (device)</h2>
+    <div class="row">
+      <button class="act" onclick="run('GET','/api/crypto/hook_test','Crypto plaintext (AES @ EVP_CipherUpdate)')">Crypto plaintext</button>
+      <button class="act" onclick="run('GET','/api/net/hook_test','TLS plaintext (SSL_read/SSL_write)')">TLS plaintext</button>
+      <button class="act" onclick="run('GET','/api/flow/watch','Network↔crypto correlation')">Correlate flow</button>
+      <button class="act" onclick="run('GET','/api/detect/watch','Anti-analysis radar')">Detect radar</button>
+      <button class="act" onclick="run('GET','/api/compat/probe','Compatibility diagnostic')">Compat probe</button>
+      <button class="act" onclick="run('GET','/api/art/dexfiles','ART structural dexfiles')">ART dexfiles</button>
+      <button class="act" onclick="run('GET','/api/process/maps','Process maps')">Maps</button>
+    </div>
+    <pre id="out-capture" class="muted">Pick a capture. Requires an online agent session.</pre>
+  </div>
+
+  <div class="panel" id="p-dumps">
+    <h2>Dumps</h2>
+    <div class="row"><button class="act" onclick="loadDumps()">Refresh</button></div>
+    <table id="dumps"><thead><tr><th>kind</th><th>size</th><th>sha256</th><th>source</th><th>tag</th><th></th></tr></thead><tbody id="dumps-rows"></tbody></table>
+  </div>
+
+  <div class="panel" id="p-dex">
+    <h2>Dex analysis</h2>
+    <div class="muted">Paste base64 dex, or use a dump sha (from Dumps tab).</div>
+    <textarea id="dex-b64" placeholder="base64 dex…"></textarea>
+    <div class="row">
+      <input id="dex-sha" placeholder="or dump sha256" size="30" />
+      <input id="dex-q" placeholder="query / method" size="24" value="Cipher" />
+      <button class="act" onclick="dex('/api/dex/search',{query:val('dex-q'),kinds:['string','class','method']})">Search</button>
+      <button class="act" onclick="dex('/api/dex/xref',{method:val('dex-q')})">Xref (callers)</button>
+      <button class="act" onclick="dex('/api/dex/crypto_scan',{})">Crypto scan</button>
+      <button class="act" onclick="dex('/api/dex/method_code',{class:val('dex-q')})">Method code</button>
+    </div>
+    <pre id="out-dex" class="muted">…</pre>
+  </div>
+
+  <div class="panel" id="p-native">
+    <h2>Native (.so) analysis</h2>
+    <div class="row">
+      <input id="nat-sha" placeholder="dump sha256 (from Dumps)" size="30" />
+      <input id="nat-sym" placeholder="symbol (disasm)" size="20" value="idh_agent_start" />
+      <button class="act" onclick="nat('/api/native/analyze',{})">Analyze</button>
+      <button class="act" onclick="nat('/api/native/disasm',{symbol:val('nat-sym')})">Disasm</button>
+      <button class="act" onclick="nat('/api/native/crypto_const',{})">Crypto consts</button>
+      <button class="act" onclick="nat('/api/native/syscall_scan',{})">svc scan</button>
+    </div>
+    <pre id="out-native" class="muted">Provide a .so dump sha (module_dump to create one).</pre>
+  </div>
+
+  <div class="panel" id="p-mcp">
+    <h2>MCP tools</h2>
+    <div class="row"><button class="act" onclick="loadMcp()">List tools</button></div>
+    <pre id="out-mcp" class="muted">…</pre>
+  </div>
 </main>
 <script>
-const rows = document.getElementById('rows');
-const tbl = document.getElementById('tbl');
-const empty = document.getElementById('empty');
-const conn = document.getElementById('conn');
-const status = document.getElementById('status');
-const agents = new Map();
+const TABS = [['p-dash','Dashboard'],['p-capture','Capture'],['p-dumps','Dumps'],['p-dex','Dex'],['p-native','Native'],['p-mcp','MCP']];
+const nav = document.getElementById('nav');
+TABS.forEach(([id,label],i)=>{ const b=document.createElement('button'); b.textContent=label; if(i===0)b.className='active';
+  b.onclick=()=>{ document.querySelectorAll('nav button').forEach(x=>x.classList.remove('active')); b.classList.add('active');
+    document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active')); document.getElementById(id).classList.add('active'); };
+  nav.appendChild(b); });
+const val = id => document.getElementById(id).value.trim();
+const sessParam = () => { const s=val('sess'); return s?`?session=${s}`:''; };
+async function run(method,path,label){ const el=document.getElementById('out-capture'); el.textContent=`${label}…`; el.className='';
+  try{ const r=await fetch(path+sessParam(),{method}); el.textContent=label+'\n'+JSON.stringify(await r.json(),null,2);}catch(e){el.textContent='error: '+e;} }
+async function dex(path,extra){ const el=document.getElementById('out-dex'); el.textContent='…'; el.className='';
+  const body={...extra}; const b64=val('dex-b64'), sha=val('dex-sha'); if(b64)body.b64=b64; else if(sha)body.sha=sha; else {el.textContent='provide base64 dex or sha';return;}
+  try{ const r=await fetch(path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)}); el.textContent=JSON.stringify(await r.json(),null,2);}catch(e){el.textContent='error: '+e;} }
+async function nat(path,extra){ const el=document.getElementById('out-native'); el.textContent='…'; el.className='';
+  const sha=val('nat-sha'); if(!sha){el.textContent='provide a dump sha';return;}
+  try{ const r=await fetch(path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sha,...extra})}); el.textContent=JSON.stringify(await r.json(),null,2);}catch(e){el.textContent='error: '+e;} }
+async function loadDumps(){ const r=await (await fetch('/api/dumps')).json(); const tb=document.getElementById('dumps-rows');
+  tb.innerHTML=r.map(d=>`<tr><td>${d.kind}</td><td>${d.size}</td><td class="muted">${d.sha256.slice(0,20)}…</td><td>${d.source}</td><td>${d.tag||''}</td><td><a href="/api/dumps/download?sha=${d.sha256}">↓</a></td></tr>`).join('')||'<tr><td class="muted" colspan=6>no dumps</td></tr>'; }
+async function loadMcp(){ const el=document.getElementById('out-mcp'); el.className='';
+  const r=await (await fetch('/mcp',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/list',params:{}})})).json();
+  el.textContent=(r.result?.tools||[]).map(t=>`${t.name.padEnd(22)} ${t.description}`).join('\n'); }
 
-function render() {
-  const list = [...agents.values()].sort((a,b)=>a.connectedAt-b.connectedAt);
-  if (!list.length) { tbl.style.display='none'; empty.style.display='block'; return; }
-  tbl.style.display=''; empty.style.display='none';
-  rows.innerHTML = list.map(a => `
-    <tr class="${a.online?'':'off'}">
-      <td class="muted">${a.sessionId}</td><td>${a.package}</td><td>${a.pid}</td>
-      <td>${a.abi}</td><td>${a.android} (sdk ${a.sdk})</td><td>${a.entry}</td>
-      <td>${a.mapsCount||'—'}</td>
-      <td><span class="pill ${a.online?'on':'no'}">${a.online?'online':'offline'}</span></td>
-    </tr>`).join('');
-}
-function upsert(a){ agents.set(a.sessionId, {...agents.get(a.sessionId), ...a}); render(); }
-
-function connect(){
-  const ws = new WebSocket(`ws://${location.host}/ws`);
-  ws.onopen = ()=>{ conn.classList.add('up'); status.textContent='live'; };
-  ws.onclose = ()=>{ conn.classList.remove('up'); status.textContent='disconnected — retrying'; setTimeout(connect, 1500); };
-  ws.onmessage = (e)=>{
-    const m = JSON.parse(e.data);
-    if (m.event==='snapshot') { agents.clear(); (m.data||[]).forEach(upsert); }
-    else if (m.event==='agent.hello') upsert(m.data);
-    else if (m.event==='agent.maps') { const a=agents.get(m.data.sessionId); if(a){a.mapsCount=m.data.count; upsert(a);} }
-    else if (m.event==='agent.close') { const a=agents.get(m.data.sessionId); if(a){a.online=false; upsert(a);} }
-  };
-}
+const agents=new Map(); const rows=document.getElementById('rows'), tbl=document.getElementById('tbl'), empty=document.getElementById('empty'), sess=document.getElementById('sess');
+function render(){ const list=[...agents.values()].sort((a,b)=>a.connectedAt-b.connectedAt);
+  if(!list.length){tbl.style.display='none';empty.style.display='block';} else {tbl.style.display='';empty.style.display='none';
+    rows.innerHTML=list.map(a=>`<tr class="${a.online?'':'off'}"><td class="muted">${a.sessionId}</td><td>${a.package}</td><td>${a.pid}</td><td>${a.abi}</td><td>${a.android}</td><td>${a.entry}</td><td>${a.mapsCount||'—'}</td><td><span class="pill ${a.online?'on':'no'}">${a.online?'online':'offline'}</span></td></tr>`).join(''); }
+  const cur=sess.value; sess.innerHTML='<option value="">(newest online)</option>'+list.filter(a=>a.online).map(a=>`<option value="${a.sessionId}">${a.package} · ${a.pid}</option>`).join(''); sess.value=cur; }
+function upsert(a){ agents.set(a.sessionId,{...agents.get(a.sessionId),...a}); render(); }
+function connect(){ const ws=new WebSocket(`ws://${location.host}/ws`); const conn=document.getElementById('conn'), st=document.getElementById('status');
+  ws.onopen=()=>{conn.classList.add('up');st.textContent='live';}; ws.onclose=()=>{conn.classList.remove('up');st.textContent='disconnected — retrying';setTimeout(connect,1500);};
+  ws.onmessage=e=>{const m=JSON.parse(e.data);
+    if(m.event==='snapshot'){agents.clear();(m.data||[]).forEach(upsert);}
+    else if(m.event==='agent.hello')upsert(m.data);
+    else if(m.event==='agent.maps'){const a=agents.get(m.data.sessionId);if(a){a.mapsCount=m.data.count;upsert(a);}}
+    else if(m.event==='agent.close'){const a=agents.get(m.data.sessionId);if(a){a.online=false;upsert(a);}}
+    else if(m.event==='dump.new'){ if(document.getElementById('p-dumps').classList.contains('active'))loadDumps(); }
+  }; }
 connect();
 </script>
 </body>
