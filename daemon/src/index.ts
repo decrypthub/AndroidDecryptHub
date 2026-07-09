@@ -57,12 +57,12 @@ const nextId = () => `s_${(++seq).toString(36)}${Date.now().toString(36).slice(-
 const nextCmdId = () => `c${(++cmdSeq).toString(36)}`;
 
 // Issue a command to an agent and await its cmdResult (10s timeout).
-function sendCmd(sessionId: string, op: string, args: Record<string, unknown> = {}): Promise<any> {
+function sendCmd(sessionId: string, op: string, args: Record<string, unknown> = {}, timeoutMs = 10_000): Promise<any> {
   return new Promise((resolve, reject) => {
     const sock = agentSockets.get(sessionId);
     if (!sock || sock.destroyed) return reject(new Error('agent not connected'));
     const id = nextCmdId();
-    const timer = setTimeout(() => { pending.delete(id); reject(new Error('command timeout')); }, 10_000);
+    const timer = setTimeout(() => { pending.delete(id); reject(new Error('command timeout')); }, timeoutMs);
     pending.set(id, { resolve, reject, timer });
     sock.write(JSON.stringify({ t: 'cmd', id, op, ...args }) + '\n');
   });
@@ -184,6 +184,15 @@ const httpServer = http.createServer(async (req, res) => {
     try {
       const r = await sendCmd(sid, 'maps');
       if (r.ok) { const s = sessions.get(sid); if (s) s.mapsCount = r.count; }
+      return send(r.ok ? 200 : 502, r);
+    } catch (e) { return send(504, { error: (e as Error).message }); }
+  }
+  // Magic scan across process memory: GET /api/memory/scan_magic?session=ID
+  if (url.pathname === '/api/memory/scan_magic') {
+    const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    if (!sid) return send(400, { error: 'no session' });
+    try {
+      const r = await sendCmd(sid, 'scan_magic', {}, 90_000);
       return send(r.ok ? 200 : 502, r);
     } catch (e) { return send(504, { error: (e as Error).message }); }
   }

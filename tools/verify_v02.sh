@@ -57,8 +57,15 @@ if(so){
   } else console.log('read: FAILED', rd.error);
 } else console.log('read: no suitable .so region found');
 
-const pass = mapsPass && readPass;
-console.log(pass ? '✅ v0.2 command-channel PASS (on-demand maps + real memory.read)' : '❌ v0.2 FAIL');
+// 3) magic scan -> must detect a DEX-family container (dex/cdex/vdex) in live memory
+const scan = await (await fetch(`${base}/api/memory/scan_magic?session=${a.sessionId}`)).json();
+const by={}; (scan.hits||[]).forEach(h=>by[h.magic]=(by[h.magic]||0)+1);
+const dexFam = (by.dex||0)+(by.cdex||0)+(by.vdex||0);
+console.log(`scan: ok=${scan.ok} count=${scan.count} scanned=${(scan.scanned/1048576|0)}MB byMagic=${JSON.stringify(by)}`);
+const scanPass = scan.ok && dexFam>0 && (by.elf>0 || scan.truncated);
+
+const pass = mapsPass && readPass && scanPass;
+console.log(pass ? '✅ v0.2 command-channel PASS (on-demand maps + memory.read + magic scan)' : '❌ v0.2 FAIL');
 console.log(pass ? 'RESULT:PASS' : 'RESULT:FAIL');
 EOF
 )"
