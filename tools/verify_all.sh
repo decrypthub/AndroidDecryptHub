@@ -22,6 +22,7 @@ SCRIPTS=(
   "verify_v05_detect.sh:device"
   "verify_v06.sh:device"
   "verify_v07.sh:device"
+  "verify_v07_flow.sh:device"
 )
 
 pass=0; fail=0; skip=0; FAILED=""

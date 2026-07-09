@@ -14,6 +14,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <dlfcn.h>
+#include <time.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -522,17 +523,24 @@ static void *resolve_sym(const char *mod_substr, const char *symbol) {
 // ---- crypto plaintext capture (thread-safe; wrapper runs on the app's crypto thread) ----
 #define CAP_MAX 64
 #define CAP_BYTES 2048
-struct CapRec { char func[24]; int inl; int n; unsigned char data[CAP_BYTES]; };
+struct CapRec { char func[24]; int inl; int n; int tid; long long ts_ns; unsigned char data[CAP_BYTES]; };
 static struct CapRec g_caps[CAP_MAX];
 static int g_ncaps = 0;
 static pthread_mutex_t g_cap_lock = PTHREAD_MUTEX_INITIALIZER;
+static long long now_ns(void) {
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+}
 static void capture(const char *func, const unsigned char *in, int inl) {
     if (inl <= 0 || !in) return;
+    int tid = (int)gettid();
+    long long ts = now_ns();
     pthread_mutex_lock(&g_cap_lock);
     if (g_ncaps < CAP_MAX) {
         struct CapRec *r = &g_caps[g_ncaps++];
         strncpy(r->func, func, sizeof(r->func) - 1); r->func[sizeof(r->func)-1]=0;
         r->inl = inl; r->n = inl < CAP_BYTES ? inl : CAP_BYTES;
+        r->tid = tid; r->ts_ns = ts;
         memcpy(r->data, in, r->n);
     }
     pthread_mutex_unlock(&g_cap_lock);
@@ -650,7 +658,7 @@ static void cmd_net_hook_test(int fd, const char *id) {
     len += snprintf(out + len, cap - len, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"net_hook_test\",\"ok\":true,\"hooked\":{\"write\":%d,\"read\":%d},\"triggered\":%s,\"result\":\"%s\",\"captures\":[", idj, rw, rr, triggered ? "true" : "false", rj);
     pthread_mutex_lock(&g_cap_lock);
     for (int k = 0; k < g_ncaps; k++) { struct CapRec *r = &g_caps[k];
-        len += snprintf(out + len, cap - len, "%s{\"func\":\"%s\",\"inl\":%d,\"hex\":\"", k ? "," : "", r->func, r->inl);
+        len += snprintf(out + len, cap - len, "%s{\"func\":\"%s\",\"inl\":%d,\"tid\":%d,\"tsNs\":%lld,\"hex\":\"", k ? "," : "", r->func, r->inl, r->tid, r->ts_ns);
         for (int b = 0; b < r->n && len + 3 < cap; b++) len += snprintf(out + len, cap - len, "%02x", r->data[b]);
         len += snprintf(out + len, cap - len, "\"}"); }
     int n = g_ncaps;
@@ -659,6 +667,55 @@ static void cmd_net_hook_test(int fd, const char *id) {
     send_line(fd, out);
     free(out);
     LOGI("net_hook_test: hooked w=%d r=%d triggered=%d result=%s captures=%d", rw, rr, triggered, result, n);
+}
+
+// Correlation flow: hook BOTH EVP_CipherUpdate (encrypt) and SSL_write (send) at
+// once, trigger an encrypt-then-send flow, and return all captures with tid+ts so
+// idhd can correlate "this plaintext was encrypted then sent" (取证闭环).
+static void cmd_flow_watch(int fd, const char *id) {
+    char idj[64]; json_escape(id, idj, sizeof(idj));
+    void *oe = resolve_sym("libcrypto.so", "EVP_CipherUpdate");
+    void *ow = resolve_sym("libssl.so", "SSL_write");
+    g_evp_cipher_orig = (EVP_CipherUpdate_t)oe;
+    g_orig_ssl_write = (SSL_rw_t)ow;
+    int re = oe ? got_replace("libjavacrypto.so", oe, (void *)my_EVP_CipherUpdate) : -1;
+    int rw = ow ? got_replace("libjavacrypto.so", ow, (void *)my_SSL_write) : -1;
+    pthread_mutex_lock(&g_cap_lock); g_ncaps = 0; pthread_mutex_unlock(&g_cap_lock);
+
+    int did = 0, triggered = 0; char result[128] = "";
+    JNIEnv *env = attach_env(&did);
+    if (env) {
+        (*env)->PushLocalFrame(env, 32);
+        jclass jc = load_app_class(env, "com.idh.sandbox.CorrelatedFlow");
+        if (jc) {
+            jmethodID run = (*env)->GetStaticMethodID(env, jc, "run", "()Ljava/lang/String;");
+            if (run) {
+                jstring rs = (jstring)(*env)->CallStaticObjectMethod(env, jc, run);
+                triggered = 1;
+                if (rs) { const char *s = (*env)->GetStringUTFChars(env, rs, NULL); if (s) { strncpy(result, s, sizeof(result)-1); (*env)->ReleaseStringUTFChars(env, rs, s); } }
+            }
+        }
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        (*env)->PopLocalFrame(env, NULL);
+        detach_env(did);
+    }
+    if (re > 0) got_replace("libjavacrypto.so", (void *)my_EVP_CipherUpdate, oe);
+    if (rw > 0) got_replace("libjavacrypto.so", (void *)my_SSL_write, ow);
+
+    size_t cap = 1 << 16, len = 0; char *out = malloc(cap); if (!out) return;
+    char rj[200]; json_escape(result, rj, sizeof(rj));
+    len += snprintf(out + len, cap - len, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"flow_watch\",\"ok\":true,\"hooked\":{\"evp\":%d,\"sslWrite\":%d},\"triggered\":%s,\"result\":\"%s\",\"captures\":[", idj, re, rw, triggered ? "true" : "false", rj);
+    pthread_mutex_lock(&g_cap_lock);
+    for (int k = 0; k < g_ncaps; k++) { struct CapRec *r = &g_caps[k];
+        len += snprintf(out + len, cap - len, "%s{\"func\":\"%s\",\"inl\":%d,\"tid\":%d,\"tsNs\":%lld,\"hex\":\"", k ? "," : "", r->func, r->inl, r->tid, r->ts_ns);
+        for (int b = 0; b < r->n && len + 3 < cap; b++) len += snprintf(out + len, cap - len, "%02x", r->data[b]);
+        len += snprintf(out + len, cap - len, "\"}"); }
+    int n = g_ncaps;
+    pthread_mutex_unlock(&g_cap_lock);
+    snprintf(out + len, cap - len, "],\"count\":%d}\n", n);
+    send_line(fd, out);
+    free(out);
+    LOGI("flow_watch: hooked evp=%d ssl=%d triggered=%d captures=%d", re, rw, triggered, n);
 }
 
 // Install EVP_CipherUpdate GOT hook in libjavacrypto (Conscrypt), trigger the
@@ -705,7 +762,7 @@ static void cmd_crypto_hook_test(int fd, const char *id) {
     pthread_mutex_lock(&g_cap_lock);
     for (int k = 0; k < g_ncaps; k++) {
         struct CapRec *r = &g_caps[k];
-        len += snprintf(out + len, cap - len, "%s{\"func\":\"%s\",\"inl\":%d,\"hex\":\"", k ? "," : "", r->func, r->inl);
+        len += snprintf(out + len, cap - len, "%s{\"func\":\"%s\",\"inl\":%d,\"tid\":%d,\"tsNs\":%lld,\"hex\":\"", k ? "," : "", r->func, r->inl, r->tid, r->ts_ns);
         for (int b = 0; b < r->n && len + 3 < cap; b++) len += snprintf(out + len, cap - len, "%02x", r->data[b]);
         len += snprintf(out + len, cap - len, "\"}");
     }
@@ -1242,6 +1299,8 @@ static void command_loop(int fd) {
                     cmd_crypto_hook_test(fd, id);
                 } else if (strcmp(op, "net_hook_test") == 0) {
                     cmd_net_hook_test(fd, id);
+                } else if (strcmp(op, "flow_watch") == 0) {
+                    cmd_flow_watch(fd, id);
                 } else if (strcmp(op, "detect_watch") == 0) {
                     cmd_detect_watch(fd, id);
                 } else if (strcmp(op, "compat_probe") == 0) {

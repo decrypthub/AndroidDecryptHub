@@ -393,6 +393,29 @@ const httpServer = http.createServer(async (req, res) => {
     try { const r = await sendCmd(sid, 'crypto_probe', {}, 20_000); return send(r.ok ? 200 : 502, r); }
     catch (e) { return send(504, { error: (e as Error).message }); }
   }
+  // Network<->crypto correlation flow (取证闭环): GET /api/flow/watch?session=ID
+  if (url.pathname === '/api/flow/watch') {
+    const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    if (!sid) return send(400, { error: 'no session' });
+    try {
+      const r = await sendCmd(sid, 'flow_watch', {}, 25_000);
+      const caps = (r.captures ?? []).map((c: any) => ({ ...c, ascii: Buffer.from(c.hex, 'hex').toString('latin1').replace(/[^\x20-\x7e]/g, '.') }));
+      // correlate: pair each crypto capture with a network capture on the SAME thread
+      // within a 200ms window (same tid, |Δts| <= 200ms).
+      const WINDOW_NS = 200_000_000;
+      const crypto = caps.filter((c: any) => c.func.startsWith('EVP_') || c.func === 'HMAC_Update');
+      const net = caps.filter((c: any) => c.func.startsWith('SSL_'));
+      const correlations = [];
+      for (const cr of crypto) for (const nw of net) {
+        if (cr.tid === nw.tid && Math.abs(cr.tsNs - nw.tsNs) <= WINDOW_NS) {
+          correlations.push({ tid: cr.tid, deltaMs: Math.abs(cr.tsNs - nw.tsNs) / 1e6,
+            plaintext: cr.ascii, cryptoFunc: cr.func, netFunc: nw.func, request: nw.ascii.slice(0, 120) });
+        }
+      }
+      r.captures = caps;
+      return send(r.ok ? 200 : 502, { ...r, correlations });
+    } catch (e) { return send(504, { error: (e as Error).message }); }
+  }
   // Network TLS-plaintext capture test: GET /api/net/hook_test?session=ID
   if (url.pathname === '/api/net/hook_test') {
     const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
