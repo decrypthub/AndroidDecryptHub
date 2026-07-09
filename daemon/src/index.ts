@@ -8,7 +8,7 @@
 import http from 'node:http';
 import net from 'node:net';
 import { readFile } from 'node:fs/promises';
-import { mkdirSync, writeFileSync, existsSync, createReadStream, unlinkSync } from 'node:fs';
+import { mkdirSync, writeFileSync, existsSync, createReadStream, unlinkSync, appendFileSync, readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -188,10 +188,30 @@ function sendCmd(sessionId: string, op: string, args: Record<string, unknown> = 
   });
 }
 
+// ---- event store (session record/replay) ---------------------------------
+const DATA_DIR = join(__dirname, '..', '..', 'idhd-data');
+mkdirSync(DATA_DIR, { recursive: true });
+const EVENTS_FILE = join(DATA_DIR, 'events.jsonl');
+interface Ev { seq: number; ts: number; type: string; data: any }
+const events: Ev[] = [];
+let evSeq = 0;
+try {   // replay: load persisted events on startup so a session survives restarts
+  if (existsSync(EVENTS_FILE)) {
+    const lines = readFileSync(EVENTS_FILE, 'utf8').split('\n').filter(Boolean).slice(-5000);
+    for (const l of lines) { try { const e = JSON.parse(l); events.push(e); if (e.seq > evSeq) evSeq = e.seq; } catch {} }
+  }
+} catch {}
+function recordEvent(type: string, data: any) {
+  const e: Ev = { seq: ++evSeq, ts: Date.now(), type, data };
+  events.push(e); if (events.length > 5000) events.shift();
+  try { appendFileSync(EVENTS_FILE, JSON.stringify(e) + '\n'); } catch {}
+}
+
 const wss = new WebSocketServer({ noServer: true });
 function broadcast(event: string, data: unknown) {
   const msg = JSON.stringify({ event, data, ts: Date.now() });
   for (const c of wss.clients) if (c.readyState === WebSocket.OPEN) c.send(msg);
+  if (event !== 'snapshot') recordEvent(event, data);   // persist for record/replay
 }
 function log(...a: unknown[]) {
   console.log(`[idhd ${new Date().toISOString()}]`, ...a);
@@ -514,6 +534,14 @@ const httpServer = http.createServer(async (req, res) => {
   // MCP Streamable HTTP endpoint (JSON-RPC)
   if (url.pathname === '/mcp' && req.method === 'POST') {
     return handleMcp(await readBody(req), res);
+  }
+  // Session events (record/replay): GET /api/events?type=&limit=&since=
+  if (url.pathname === '/api/events') {
+    const type = url.searchParams.get('type');
+    const since = Number(url.searchParams.get('since') ?? 0);
+    const limit = Math.min(Number(url.searchParams.get('limit') ?? 500), 5000);
+    let list = events.filter(e => e.seq > since && (!type || e.type === type));
+    return send(200, { total: events.length, returned: Math.min(list.length, limit), events: list.slice(-limit) });
   }
   // Diagnostic report / export (P/R) — metadata only, no captured keys/plaintext.
   if (url.pathname === '/api/export/report') {

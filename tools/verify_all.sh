@@ -34,6 +34,7 @@ SCRIPTS=(
   "verify_v10_webui.sh:host"
   "verify_v10_trace.sh:device"
   "verify_v10_export.sh:host"
+  "verify_v10_events.sh:device"
 )
 
 pass=0; fail=0; skip=0; FAILED=""
