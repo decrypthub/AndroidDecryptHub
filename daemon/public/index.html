@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>IDH Workbench — Dashboard</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: #0b0e14; color: #cdd6f4; }
+  header { padding: 14px 20px; border-bottom: 1px solid #1e2233; display: flex; align-items: center; gap: 12px; }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; letter-spacing: .5px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: #f38ba8; }
+  .dot.up { background: #a6e3a1; }
+  main { padding: 20px; }
+  .empty { color: #6c7086; padding: 40px; text-align: center; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid #1e2233; }
+  th { color: #89b4fa; font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .5px; }
+  tr.off td { opacity: .45; }
+  .pill { padding: 1px 8px; border-radius: 10px; font-size: 12px; }
+  .on { background: #1e3a2a; color: #a6e3a1; }
+  .no { background: #3a1e26; color: #f38ba8; }
+  .muted { color: #6c7086; }
+</style>
+</head>
+<body>
+<header>
+  <span class="dot" id="conn"></span>
+  <h1>IDH Android Runtime Workbench</h1>
+  <span class="muted" id="status">connecting…</span>
+</header>
+<main>
+  <div id="empty" class="empty">No agents connected. Launch a target with the agent injected (or the sandbox 模拟注入).</div>
+  <table id="tbl" style="display:none">
+    <thead><tr><th>Session</th><th>Package</th><th>PID</th><th>ABI</th><th>Android</th><th>Entry</th><th>Maps</th><th>State</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+</main>
+<script>
+const rows = document.getElementById('rows');
+const tbl = document.getElementById('tbl');
+const empty = document.getElementById('empty');
+const conn = document.getElementById('conn');
+const status = document.getElementById('status');
+const agents = new Map();
+
+function render() {
+  const list = [...agents.values()].sort((a,b)=>a.connectedAt-b.connectedAt);
+  if (!list.length) { tbl.style.display='none'; empty.style.display='block'; return; }
+  tbl.style.display=''; empty.style.display='none';
+  rows.innerHTML = list.map(a => `
+    <tr class="${a.online?'':'off'}">
+      <td class="muted">${a.sessionId}</td><td>${a.package}</td><td>${a.pid}</td>
+      <td>${a.abi}</td><td>${a.android} (sdk ${a.sdk})</td><td>${a.entry}</td>
+      <td>${a.mapsCount||'—'}</td>
+      <td><span class="pill ${a.online?'on':'no'}">${a.online?'online':'offline'}</span></td>
+    </tr>`).join('');
+}
+function upsert(a){ agents.set(a.sessionId, {...agents.get(a.sessionId), ...a}); render(); }
+
+function connect(){
+  const ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen = ()=>{ conn.classList.add('up'); status.textContent='live'; };
+  ws.onclose = ()=>{ conn.classList.remove('up'); status.textContent='disconnected — retrying'; setTimeout(connect, 1500); };
+  ws.onmessage = (e)=>{
+    const m = JSON.parse(e.data);
+    if (m.event==='snapshot') { agents.clear(); (m.data||[]).forEach(upsert); }
+    else if (m.event==='agent.hello') upsert(m.data);
+    else if (m.event==='agent.maps') { const a=agents.get(m.data.sessionId); if(a){a.mapsCount=m.data.count; upsert(a);} }
+    else if (m.event==='agent.close') { const a=agents.get(m.data.sessionId); if(a){a.online=false; upsert(a);} }
+  };
+}
+connect();
+</script>
+</body>
+</html>

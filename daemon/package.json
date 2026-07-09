@@ -1,0 +1,15 @@
+{
+  "name": "idhd",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "IDH daemon — HTTP/WebSocket/MCP/agent registry for the Android runtime reverse-analysis workbench",
+  "scripts": {
+    "start": "node src/index.ts",
+    "dev": "node --watch src/index.ts",
+    "smoke": "node test/smoke.ts"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
