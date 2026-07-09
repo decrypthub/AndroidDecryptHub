@@ -78,6 +78,33 @@ function cryptoConstScan(buf: Buffer): { name: string; offset: string; hexLen: n
   return hits;
 }
 
+// Scan an ELF .so's executable segments for arm64 `svc #0` (0xd4000001) — direct
+// syscalls that bypass libc/PLT (and thus GOT hooks). E.9 L1: locate hotspots.
+function svcScan(buf: Buffer): { hits: { fileOff: string; vaddr: string }[]; execSegs: number; scanned: number } {
+  const hits: { fileOff: string; vaddr: string }[] = [];
+  let execSegs = 0, scanned = 0;
+  if (buf.length < 64 || buf.readUInt32LE(0) !== 0x464c457f || buf[4] !== 2) return { hits, execSegs, scanned };
+  const phoff = Number(buf.readBigUInt64LE(32));
+  const phentsize = buf.readUInt16LE(54), phnum = buf.readUInt16LE(56);
+  for (let i = 0; i < phnum; i++) {
+    const o = phoff + i * phentsize;
+    if (o + 56 > buf.length) break;
+    if (buf.readUInt32LE(o) !== 1) continue;                 // PT_LOAD
+    if (!(buf.readUInt32LE(o + 4) & 1)) continue;            // PF_X
+    execSegs++;
+    const off = Number(buf.readBigUInt64LE(o + 8));
+    const vaddr = Number(buf.readBigUInt64LE(o + 16));
+    const filesz = Number(buf.readBigUInt64LE(o + 32));
+    const end = Math.min(off + filesz, buf.length);
+    for (let a = off; a + 4 <= end; a += 4) {
+      scanned += 4;
+      if (buf.readUInt32LE(a) === 0xd4000001) hits.push({ fileOff: '0x' + a.toString(16), vaddr: '0x' + (vaddr + (a - off)).toString(16) });
+      if (hits.length >= 4096) return { hits, execSegs, scanned };
+    }
+  }
+  return { hits, execSegs, scanned };
+}
+
 interface Insn { addr: string; bytes: string; mnemonic: string; text: string; }
 // Disassemble an ELF .so on disk (llvm-objdump). By symbol, or an address range.
 async function disasmSo(path: string, opts: { symbol?: string; start?: string; stop?: string }): Promise<Insn[]> {
@@ -593,6 +620,17 @@ const httpServer = http.createServer(async (req, res) => {
       const { meta, dedup } = await dumpRegion(sid, String(addr).replace(/^0x/, ''), Number(size), String(tag ?? ''));
       return send(200, { ...meta, dedup });
     } catch (e) { return send(502, { error: (e as Error).message }); }
+  }
+  // Direct-syscall scan (E.9): POST /api/native/syscall_scan {b64|sha}
+  if (url.pathname === '/api/native/syscall_scan' && req.method === 'POST') {
+    const body = await readBody(req);
+    const { b64, sha } = JSON.parse(body || '{}');
+    let buf: Buffer;
+    if (b64) buf = Buffer.from(b64, 'base64');
+    else if (sha && dumps.get(sha)) { try { buf = await readFile(dumps.get(sha)!.path); } catch { return send(404, { error: 'dump missing' }); } }
+    else return send(400, { error: 'need b64 or known sha' });
+    const r = svcScan(buf);
+    return send(200, { execSegs: r.execSegs, scannedBytes: r.scanned, svcCount: r.hits.length, hits: r.hits.slice(0, 200) });
   }
   // Native crypto-constant scan (H.4): POST /api/native/crypto_const {b64|sha}
   if (url.pathname === '/api/native/crypto_const' && req.method === 'POST') {

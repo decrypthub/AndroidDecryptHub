@@ -37,6 +37,14 @@ const unsigned char IDH_AES_SBOX[256] = {
 };
 const char IDH_B64_ALPHABET[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
+// A DIRECT syscall (gettid, nr 178) via `svc #0`, bypassing libc — the exact
+// evasion the E.9 scanner locates. Not marked static so it isn't inlined away.
+long idh_direct_gettid(void) {
+    long ret;
+    __asm__ volatile("mov x8, #178\n\t svc #0\n\t mov %0, x0" : "=r"(ret) : : "x8", "x0", "memory");
+    return ret;
+}
+
 JNIEXPORT jint JNICALL Java_com_idh_sandbox_Detection_run(JNIEnv *env, jclass clazz) {
     (void)env; (void)clazz;
     int flags = 0;
@@ -62,9 +70,10 @@ JNIEXPORT jint JNICALL Java_com_idh_sandbox_Detection_run(JNIEnv *env, jclass cl
     __system_property_get("ro.debuggable", prop);
     if (prop[0] == '1') flags |= 16;
 
-    // keep the crypto-constant tables from being stripped (volatile use)
+    // keep the crypto-constant tables + direct-syscall from being stripped
     volatile unsigned int sink = IDH_AES_SBOX[flags & 0xff] ^ (unsigned char)IDH_B64_ALPHABET[flags & 0x3f];
     flags |= (sink & 0);
+    if (idh_direct_gettid() < 0) flags |= 0x100;   // reference the svc site
 
     __android_log_print(ANDROID_LOG_INFO, TAG, "detections ran: ptrace=%ld debuggable=%s flags=0x%x", pr, prop, flags);
     return flags;

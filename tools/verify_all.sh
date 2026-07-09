@@ -28,6 +28,7 @@ SCRIPTS=(
   "verify_v08_analyze.sh:host"
   "verify_v08_xref.sh:host"
   "verify_v09_cryptoconst.sh:host"
+  "verify_v09_syscall.sh:host"
 )
 
 pass=0; fail=0; skip=0; FAILED=""
