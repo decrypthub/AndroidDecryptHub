@@ -40,8 +40,21 @@
 
 ## 进行中
 
-- [ ] （无）v0.5 完成，下一步 v0.6
+- [ ] （无）v0.6 完成，下一步 v0.7
 - [ ] v0.3 ART 结构级捕获 — **核心已完成并验证**，剩恢复状态标记/多 resolver 为后续
+
+### v0.6 完成并全部验证（verify_all.sh 11/11 PASS）
+
+- [x] **T 活体对象字段读取**：反射经静态字段到达对象，枚举其声明字段（name + String.valueOf）。
+      `POST /api/object/inspect {className,field}` — 验证读到 HeapProbe.sConfig 的 token/count/note
+- [x] **T 低风险方法调用**：无参 getter/toString 反射调用。`POST /api/object/invoke {className,field,method}`
+      — getToken() → IDH_TOKEN_abc123
+- [x] sandbox 增 HeapProbe（已知字段值的 Config 对象）
+
+### v0.6 后续增强（推迟，非阻塞）
+
+- [ ] **完整堆实例枚举（Java.choose）**：需 JVMTI（jvmti.h 不在 NDK，要 vendor 头或声明结构）或 ART 堆遍历（art::gc::Heap::VisitObjects，偏移相关）。当前经静态字段/hook 引用到达对象。
+- [ ] byte[]/数组/集合字段的 hex/摘要展示；堆内 String/byte[] 搜索；与 hook 事件联动展开参数对象
 
 ### v0.5 完成并全部验证（verify_all.sh 10/10 PASS）
 
@@ -131,12 +144,13 @@
 
 ## 下一步
 
-→ **v0.6 Runtime Object Inspector（活体对象自省，模块 T）**
-- Java.choose 式：枚举 ART 堆中某 class 的存活实例、读字段、低风险 getter 调用、堆内搜索 String/byte[]。
-- 实现路径：JNI 反射基础已就绪。枚举实例可用 JVMTI（debuggable app 可用）或 ART 堆遍历；
-  先做保守版——用已知对象（sandbox 持有的单例/静态字段）验证字段读取，再扩展到实例枚举。
-- sandbox 加 HeapObjectActivity/单例，持有已知字段值对象，断言 agent 读到的字段值正确。
-- 复用：attach_env/PushLocalFrame/load_app_class、capture buffer 模式。
+→ **v0.7 网络监控 + 网络↔crypto 关联（取证闭环）**
+- Java 网络（OkHttp/HttpURLConnection）或 native SSL_read/SSL_write 明文捕获。
+- 复用 GOT hook 引擎：hook libssl.so 的 SSL_read/SSL_write（明文边界，绕过 TLS/pinning）——
+  已确认 libssl.so 加载且 EVP GOT 可 hook，SSL_read/write 应同理。
+- 关联：把捕获的网络明文与 crypto 明文按线程/时间窗关联 → 取证闭环。
+- sandbox 加 NetworkActivity（HTTPS 请求已知 URL/body），断言捕获到明文请求/响应。
+- 复用：resolve_sym、got_replace、capture buffer、JNI 触发模式。
 
 ## 下一步（v0.2 Dump Engine）
 
@@ -158,6 +172,7 @@
 
 ## 会话日志（倒序，简短）
 
+- 2026-07-10 (loop#8)：v0.6 完成——Runtime Object Inspector（反射读活体对象字段 + 无参方法调用）。经静态字段到达对象，读到 token/count/note，getToken() 调用成功。完整 Java.choose 堆枚举推迟（需 JVMTI/ART 堆遍历）。suite 11/11，2 次提交。
 - 2026-07-10 (loop#7)：v0.5 完成——V 反分析行为观测（GOT-hook 目标原生 ptrace/access/prop 检测，抓到防御地图 + 中和 TRACEME）+ S 抗干扰诊断（compat_probe）。sandbox 加 libidhdetect.so。suite 10/10，3 次提交。
 - 2026-07-10 (loop#6)：**v0.4 完成——#1 卖点明文边界 crypto 捕获验证通过**。原生 EVP GOT hook 在 libjavacrypto(Conscrypt) 抓到 AES 明文 "IDH_CRYPTO_PLAINTEXT_v1"（加密前）。含 resolve_sym 内存 dynsym 解析、crypto_probe 定位、JNI 反射触发。suite 9/9。2 次提交。
 - 2026-07-10 (loop#5)：v0.4 动态通道地基——原生 GOT/PLT hook 引擎(E.8.1)完成并真机验证（hook agent 自身 close，intercept+trampoline 不崩）。深挖两个 bug：RELRO 槽定位、单槽 hook（多槽 trampoline 死锁）。suite 8/8，1 次提交。下一步用引擎 hook EVP 抓明文。
