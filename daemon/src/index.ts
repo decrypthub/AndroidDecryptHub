@@ -43,13 +43,30 @@ interface AgentSession {
 type AgentMsg =
   | ({ t: 'hello' } & Partial<AgentSession>)
   | { t: 'maps'; count: number; regions?: MapsRegion[] }
-  | { t: 'ping'; ts?: number };
+  | { t: 'ping'; ts?: number }
+  | { t: 'cmdResult'; id: string; op: string; ok: boolean; [k: string]: unknown };
 
 // ---- registry -------------------------------------------------------------
 
 const sessions = new Map<string, AgentSession>();
+const agentSockets = new Map<string, net.Socket>();               // sessionId -> live socket
+const pending = new Map<string, { resolve: (v: any) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }>();
 let seq = 0;
+let cmdSeq = 0;
 const nextId = () => `s_${(++seq).toString(36)}${Date.now().toString(36).slice(-3)}`;
+const nextCmdId = () => `c${(++cmdSeq).toString(36)}`;
+
+// Issue a command to an agent and await its cmdResult (10s timeout).
+function sendCmd(sessionId: string, op: string, args: Record<string, unknown> = {}): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const sock = agentSockets.get(sessionId);
+    if (!sock || sock.destroyed) return reject(new Error('agent not connected'));
+    const id = nextCmdId();
+    const timer = setTimeout(() => { pending.delete(id); reject(new Error('command timeout')); }, 10_000);
+    pending.set(id, { resolve, reject, timer });
+    sock.write(JSON.stringify({ t: 'cmd', id, op, ...args }) + '\n');
+  });
+}
 
 const wss = new WebSocketServer({ noServer: true });
 function broadcast(event: string, data: unknown) {
@@ -58,6 +75,13 @@ function broadcast(event: string, data: unknown) {
 }
 function log(...a: unknown[]) {
   console.log(`[idhd ${new Date().toISOString()}]`, ...a);
+}
+function readBody(req: http.IncomingMessage): Promise<string> {
+  return new Promise((resolve) => {
+    let b = '';
+    req.on('data', (c) => (b += c));
+    req.on('end', () => resolve(b));
+  });
 }
 
 // ---- Agent TCP server (NDJSON) -------------------------------------------
@@ -101,6 +125,7 @@ const agentServer = net.createServer((sock) => {
         regionsSample: [],
       };
       sessions.set(id, session);
+      agentSockets.set(id, sock);
       log(`agent HELLO ${session.package} pid=${session.pid} abi=${session.abi} entry=${session.entry} -> ${id}`);
       sock.write(JSON.stringify({ t: 'ack', sessionId: id }) + '\n');
       broadcast('agent.hello', session);
@@ -113,6 +138,10 @@ const agentServer = net.createServer((sock) => {
     } else if (msg.t === 'ping' && session) {
       session.lastSeen = Date.now();
       sock.write(JSON.stringify({ t: 'pong' }) + '\n');
+    } else if (msg.t === 'cmdResult') {
+      const p = pending.get(msg.id);
+      if (p) { clearTimeout(p.timer); pending.delete(msg.id); p.resolve(msg); }
+      if (session) session.lastSeen = Date.now();
     }
   }
 
@@ -120,6 +149,7 @@ const agentServer = net.createServer((sock) => {
     if (session) {
       session.online = false;
       session.lastSeen = Date.now();
+      agentSockets.delete(session.sessionId);
       log(`agent CLOSE ${session.package} ${session.sessionId}`);
       broadcast('agent.close', { sessionId: session.sessionId });
     }
@@ -146,6 +176,27 @@ const httpServer = http.createServer(async (req, res) => {
   if (url.pathname.startsWith('/api/agents/')) {
     const s = sessions.get(url.pathname.split('/')[3]);
     return s ? send(200, s) : send(404, { error: 'no such session' });
+  }
+  // On-demand full maps from the agent: GET /api/process/maps?session=ID
+  if (url.pathname === '/api/process/maps') {
+    const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    if (!sid) return send(400, { error: 'no session' });
+    try {
+      const r = await sendCmd(sid, 'maps');
+      if (r.ok) { const s = sessions.get(sid); if (s) s.mapsCount = r.count; }
+      return send(r.ok ? 200 : 502, r);
+    } catch (e) { return send(504, { error: (e as Error).message }); }
+  }
+  // Memory read: POST /api/memory/read {session, addr, size}
+  if (url.pathname === '/api/memory/read' && req.method === 'POST') {
+    const body = await readBody(req);
+    const { session, addr, size } = JSON.parse(body || '{}');
+    const sid = session ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    if (!sid || !addr || !size) return send(400, { error: 'need session, addr(hex), size' });
+    try {
+      const r = await sendCmd(sid, 'read', { addr: String(addr), size: Number(size) });
+      return send(r.ok ? 200 : 502, r);
+    } catch (e) { return send(504, { error: (e as Error).message }); }
   }
   if (url.pathname === '/' || url.pathname === '/index.html') {
     try {
