@@ -3,19 +3,26 @@
 > 这是"我们现在在哪"的唯一真相。每个会话开始先读它，结束前更新它。
 > 详细规格见 `REQUIREMENTS.md`，路线与架构见 `DEVELOPMENT_PLAN.md`。
 
-## 当前阶段
+## 当前阶段 —— ✅ 项目完成
 
-**功能完成。v0.2–v1.0 已全部实现并逐项验证（`tools/verify_all.sh` 25/25 绿），唯一例外是 QBDI 指令级动态 trace（Blocked，需用户）。**
+**v0.2 – v1.0 全部实现并逐项验证：`tools/verify_all.sh` = 26/26 PASS（真机 Pixel 6 Pro / host）。无 Blocked。循环已停（cron 已删）。**
 
-已实现并验证的完整取证流水线（模块 A–V + idhd 分析 + MCP + Web）：
-模拟注入 → maps/内存 dump（含 so 重组、dex 修复）→ **ART 结构级真实 dex 捕获** →
+完整取证流水线（模块 A–V + idhd 分析 + MCP + Web），全部真机/host 验证：
+模拟注入 → maps/内存 dump（so 重组、dex 修复）→ **ART 结构级真实 dex 捕获** →
 **明文边界 AES 捕获 + TLS 明文捕获 + 网络↔crypto 关联** → 反分析观测(+中和) + 抗干扰诊断 →
 活体对象自省 → dex 搜索/xref/方法体恢复 → 原生反汇编/分析/常量扫描/svc 扫描 →
-函数级 trace → 25 个 MCP tool（AI 可编程操控）+ Web 控制台（含 Events 会话时间线）+
-会话录制/回放 + 诊断导出 + 文档。
+**函数级 trace + QBDI 指令级动态 trace** → 25 MCP tool（AI 可编程操控）+ Web 控制台（含 Events）+
+会话录制/回放 + 诊断导出 + 文档（architecture/threat-model/mcp-tools）。
 
-**唯一剩余 = QBDI 指令级动态 trace（见下 Blocked）。除此之外无实质待办。**
-若要停循环：删除 durable cron（见「自动续跑循环」）。QBDI 需用户提供 arm64 Android 预编译或放开网络后再做。
+**QBDI 已解除并完成**：GitHub API 被墙但 release 直链可下；`tools/fetch_qbdi.sh` 拉 v0.12.1
+arm64 预编译，agent 运行时 dlopen libQBDI.so，指令级 trace idh_trace_target 得 retval=30 + 64 条指令。
+
+### 交付物（可复现）
+
+- `libidh_agent.so`（C/NDK，双入口，纯采集）、`idhd`（Node/TS，REST+WS+MCP+分析）、
+  Web 控制台、`sandbox-app`（模拟注入 + 各 mock 目标）、26 个验收脚本、`fetch_qbdi.sh`。
+- QBDI 依赖非 git（third_party/qbdi + libQBDI.so 已 gitignore）；`bash tools/fetch_qbdi.sh` 重新拉取。
+- 新机复现：fetch_qbdi → build_agent → build_detect → dev_up → verify_all。
 
 ## 技术栈（已定）
 
@@ -78,13 +85,7 @@
 
 ## Blocked
 
-- [ ] **QBDI 指令级动态 trace（I.3，高级 DBI）**——**阻塞**：
-  - 需 QBDI arm64 Android 预编译库；本环境 `api.github.com` releases 拉取返回空（网络受限），
-    且把大型 C++ DBI 库集成进 C agent + 正确用 vm.call() 指令回调，无人值守风险高、可能耗多轮。
-  - **现有覆盖**：函数级 trace（已验证）+ 静态反汇编（已验证）已满足绝大多数取证需求；
-    QBDI 独有价值 = 逐指令动态 trace（算法逆向时看每条指令+寄存器）。
-  - **解除计划**：用户提供 QBDI-<ver>-android-AARCH64 预编译包（或放开网络）→ 放入 agent/third_party →
-    CMake 链接 → 实现 vm.call() + INSTRUCTION cb 记录 pc/regs → sandbox 加已知热循环函数，断言 trace 到已知指令序列。
+- （无）—— QBDI 已解除并完成（见「当前阶段」）。
 
 ### v0.8 完成补充：invoke-xref
 
@@ -241,9 +242,9 @@
 
 ## 下一步
 
-**无实质自动化待办**——功能全部完成并验证（25/25）。唯一剩余是 QBDI 指令级动态 trace，
-已 Blocked（需用户提供 arm64 Android 预编译库或放开网络）。可选的极低优先 cosmetic：
-Native tab 一键 module_dump 流程（REST 已可用）。建议：用户醒来后决定是否停循环 / 提供 QBDI 依赖。
+**无。项目按路线图完成（v0.2–v1.0 全绿，26/26）。自动续跑循环已停（durable cron 已删除）。**
+后续若要扩展：模块 U 非标运行时识别（Flutter/Unity/RN）、真实 Zygisk/gadget 注入器（模块 W，用户手测）、
+更多 sandbox 对抗场景。均为增强，非路线图必需。
 
 ## 下一步（v0.2 Dump Engine）
 
@@ -265,6 +266,7 @@ Native tab 一键 module_dump 流程（REST 已可用）。建议：用户醒来
 
 ## 会话日志（倒序，简短）
 
+- 2026-07-10 (loop#18)：**QBDI 指令级动态 trace 完成——项目收官**。release 直链绕过 API 封锁拉到 v0.12.1 arm64 预编译；agent dlopen libQBDI.so，trace idh_trace_target 得 retval=30 + 64 条指令。**verify_all 26/26，v0.2–v1.0 全部完成。循环停止（删 cron）。** 2 次提交。
 - 2026-07-10 (loop#17)：v1.0 会话录制/回放（事件持久化到 idhd-data/events.jsonl，重启 idhd 后回放验证）+ Web Events tab。suite 25/25，3 次提交。**功能完成，仅剩 QBDI(Blocked)；无实质自动化待办。**
 - 2026-07-10 (loop#16)：v1.0 打磨——MCP 补齐到 25 tools + 诊断导出(/api/export/report, 仅元数据) + 生成 docs（architecture/threat-model/mcp-tools）。suite 24/24，3 次提交。除 QBDI(Blocked) 外功能全部完成并验证。
 - 2026-07-10 (loop#15)：v1.0 函数级 trace 第一公民（通用 trace_run，任意原生符号，args+tid+ts+指针→字符串预览，access("/system/xbin/su")）。suite 23/23，4 次提交。**QBDI 指令级 trace 记为 Blocked**（网络受限拉不到预编译 + 重集成风险）；剩 v1.0 打磨项（导出/回放/文档/MCP 补齐）。
