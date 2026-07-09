@@ -26,6 +26,7 @@ SCRIPTS=(
   "verify_v08_dexsearch.sh:host"
   "verify_v08_disasm.sh:host"
   "verify_v08_analyze.sh:host"
+  "verify_v08_xref.sh:host"
 )
 
 pass=0; fail=0; skip=0; FAILED=""

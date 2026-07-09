@@ -71,7 +71,7 @@ async function disasmSo(path: string, opts: { symbol?: string; start?: string; s
   return insns;
 }
 import { WebSocketServer, WebSocket } from 'ws';
-import { parseDex, cryptoScan, searchDex } from './dex.ts';
+import { parseDex, cryptoScan, searchDex, invokeXref } from './dex.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CAPTURES = join(__dirname, '..', '..', 'captures');
@@ -637,6 +637,22 @@ const httpServer = http.createServer(async (req, res) => {
     } catch (e) { return send(502, { error: (e as Error).message }); }
   }
   // Dex parse: POST /api/dex/parse {b64|sha} -> structure summary (+ optional full arrays)
+  // Dex invoke-xref: POST /api/dex/xref {b64|sha, method} -> callers of matching methods
+  if (url.pathname === '/api/dex/xref' && req.method === 'POST') {
+    const body = await readBody(req);
+    const { b64, sha, method } = JSON.parse(body || '{}');
+    let buf: Buffer;
+    if (b64) buf = Buffer.from(b64, 'base64');
+    else if (sha && dumps.get(sha)) { try { buf = await readFile(dumps.get(sha)!.path); } catch { return send(404, { error: 'dump missing' }); } }
+    else return send(400, { error: 'need b64 or known sha' });
+    if (!method) return send(400, { error: 'need method (substring of callee cls->name)' });
+    let parsed; try { parsed = parseDex(buf); } catch (e) { return send(422, { error: (e as Error).message }); }
+    const { xref, methodsWithCode, skipped } = invokeXref(buf, parsed);
+    const q = String(method).toLowerCase();
+    const results: Record<string, string[]> = {};
+    for (const [callee, callers] of xref) if (callee.toLowerCase().includes(q)) results[callee] = callers.slice(0, 200);
+    return send(200, { method, methodsWithCode, skipped, matches: Object.keys(results).length, callers: results });
+  }
   if ((url.pathname === '/api/dex/parse' || url.pathname === '/api/dex/crypto_scan' || url.pathname === '/api/dex/search') && req.method === 'POST') {
     const body = await readBody(req);
     const { b64, sha, full } = JSON.parse(body || '{}');
