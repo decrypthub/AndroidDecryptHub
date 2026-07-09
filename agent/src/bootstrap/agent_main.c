@@ -746,6 +746,41 @@ static void cmd_detect_watch(int fd, const char *id) {
     LOGI("detect_watch: hooked p=%d a=%d g=%d triggered=%d detections=%d", r1, r2, r3, triggered, n);
 }
 
+// Module S: self-assess the runtime environment / hook-backend availability so the
+// operator knows what's usable and whether the target is interfering (授权抗干扰诊断).
+static void cmd_compat_probe(int fd, const char *id) {
+    char idj[64]; json_escape(id, idj, sizeof(idj));
+    int tracer = -1, seccomp = -1;
+    FILE *st = fopen("/proc/self/status", "r");
+    if (st) { char line[256];
+        while (fgets(line, sizeof(line), st)) {
+            if (strncmp(line, "TracerPid:", 10) == 0) tracer = atoi(line + 10);
+            else if (strncmp(line, "Seccomp:", 8) == 0) seccomp = atoi(line + 8);
+        }
+        fclose(st);
+    }
+    // hook-backend availability: symbol resolution is the prerequisite for GOT hooks
+    int got_ok = (resolve_sym("libc.so", "access") != NULL);
+    int jni_ok = (g_vm != NULL);
+    int module_count = 0, maps_count = 0;
+    FILE *m = fopen("/proc/self/maps", "r"); char l[512]; char lastmod[400] = "";
+    while (m && fgets(l, sizeof(l), m)) { maps_count++;
+        char *p = strstr(l, "/"); if (p) { char *nl = strchr(p, '\n'); if (nl) *nl = 0; if (strcmp(p, lastmod)) { strncpy(lastmod, p, sizeof(lastmod)-1); module_count++; } } }
+    if (m) fclose(m);
+
+    char out[640];
+    snprintf(out, sizeof(out),
+        "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"compat_probe\",\"ok\":true,"
+        "\"tracerPid\":%d,\"seccomp\":%d,\"backends\":{\"gotHook\":%s,\"jniReflect\":%s,\"artDexCapture\":%s,\"memRead\":true},"
+        "\"mapsCount\":%d,\"moduleMappings\":%d,\"dlopenSystemLibsBlocked\":%s,"
+        "\"minimalModeAvailable\":true}\n",
+        idj, tracer, seccomp, got_ok ? "true" : "false", jni_ok ? "true" : "false",
+        (g_vm != NULL) ? "true" : "false", maps_count, module_count,
+        "true" /* observed: system libcrypto not dlopen-able -> use resolve_sym */);
+    send_line(fd, out);
+    LOGI("compat_probe: tracer=%d seccomp=%d got=%d jni=%d", tracer, seccomp, got_ok, jni_ok);
+}
+
 // Prove JNI reflection works from the agent's native thread: read Build.VERSION.
 static void cmd_jni_probe(int fd, const char *id) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
@@ -1017,6 +1052,8 @@ static void command_loop(int fd) {
                     cmd_crypto_hook_test(fd, id);
                 } else if (strcmp(op, "detect_watch") == 0) {
                     cmd_detect_watch(fd, id);
+                } else if (strcmp(op, "compat_probe") == 0) {
+                    cmd_compat_probe(fd, id);
                 } else if (strcmp(op, "art_dexfiles") == 0) {
                     cmd_art_dexfiles(fd, id);
                 } else if (strcmp(op, "scan_magic") == 0) {

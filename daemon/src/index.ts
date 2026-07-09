@@ -354,6 +354,13 @@ const httpServer = http.createServer(async (req, res) => {
       return send(r.ok ? 200 : 502, r);
     } catch (e) { return send(504, { error: (e as Error).message }); }
   }
+  // Compatibility / anti-interference diagnostic (module S): GET /api/compat/probe?session=ID
+  if (url.pathname === '/api/compat/probe') {
+    const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    if (!sid) return send(400, { error: 'no session' });
+    try { const r = await sendCmd(sid, 'compat_probe'); return send(r.ok ? 200 : 502, r); }
+    catch (e) { return send(504, { error: (e as Error).message }); }
+  }
   // Anti-analysis behavior observation (module V): GET /api/detect/watch?session=ID
   if (url.pathname === '/api/detect/watch') {
     const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;

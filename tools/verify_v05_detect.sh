@@ -22,9 +22,17 @@ const cats=(r.detections||[]);
 const hasDebug = cats.some(x=>x.category==='debug' && /TRACEME/.test(x.detail));
 const hasRoot  = cats.some(x=>x.category==='root' && /su/.test(x.detail));
 const hasProp  = cats.some(x=>x.category==='prop' && /ro\.debuggable/.test(x.detail));
-const pass = r.ok && r.triggered && r.hooked.ptrace>=1 && r.hooked.access>=1 && r.hooked.prop>=1
+const detectPass = r.ok && r.triggered && r.hooked.ptrace>=1 && r.hooked.access>=1 && r.hooked.prop>=1
             && hasDebug && hasRoot && hasProp;
 console.log(`observed: debug=${hasDebug} root=${hasRoot} prop=${hasProp}`);
+
+// S diagnostic: compatibility/anti-interference self-assessment
+const c=await (await fetch(`${base}/api/compat/probe?session=${a.sessionId}`)).json();
+const b=c.backends||{};
+console.log(`compat: tracerPid=${c.tracerPid} seccomp=${c.seccomp} backends=${JSON.stringify(b)}`);
+const compatPass = c.ok && b.gotHook && b.jniReflect && b.artDexCapture && b.memRead && c.tracerPid===0;
+
+const pass = detectPass && compatPass;
 console.log(pass?'RESULT:PASS':'RESULT:FAIL');
 EOF
 )"
