@@ -40,8 +40,22 @@
 
 ## 进行中
 
-- [ ] （无）v0.4 完成，下一步 v0.5
+- [ ] （无）v0.5 完成，下一步 v0.6
 - [ ] v0.3 ART 结构级捕获 — **核心已完成并验证**，剩恢复状态标记/多 resolver 为后续
+
+### v0.5 完成并全部验证（verify_all.sh 10/10 PASS）
+
+- [x] **V 反分析行为观测**：GOT-hook 目标原生检测调用（libidhdetect：ptrace/access/__system_property_get），
+      观测到目标"用了哪些检测"——debug(ptrace TRACEME) + root(su 路径) + prop(ro.debuggable)，
+      并**中和 PTRACE_TRACEME**（观测 V + 抗调试 S 附赠）。`GET /api/detect/watch`
+- [x] **S 抗干扰诊断**：`compat_probe` 自评——TracerPid、seccomp、后端可用性(gotHook/jniReflect/artDexCapture/memRead)、
+      maps/module 计数、dlopen 受限标记。`GET /api/compat/probe`
+- [x] sandbox 增 libidhdetect.so（原生检测 mock）+ Detection.kt；tools/build_detect.sh
+
+### v0.5 后续增强（推迟）
+
+- [ ] 更多检测类别：签名检测(PackageManager，需 Java hook)、模拟器检测、frida/xposed 痕迹扫描
+- [ ] 行为分叉标注（检测命中后目标是否改走分支）；Anti-Analysis Radar Web 页
 
 ### v0.4 完成并全部验证（verify_all.sh 9/9 PASS）
 
@@ -117,14 +131,12 @@
 
 ## 下一步
 
-→ **v0.5 抗干扰采集(S) + 反分析行为观测(V)**（路线图重排后的下一版）
-- **V 反分析行为观测**（灰产刚需，复用已验证的 GOT hook 引擎）：hook 目标自身的检测点——
-  - 调试检测：`ptrace`（GOT）、读 `/proc/self/status` TracerPid（hook open/read 或 fopen）
-  - root 检测：`access`/`stat` 查 su 路径、`__system_property_get` 查 ro.debuggable
-  - 记录目标"用了哪些检测、什么时机" → DETECTION 事件 → Anti-Analysis Radar
-  - sandbox 加 DetectionActivity（显式跑各类检测），断言 agent 命中检测清单
-- **S 抗干扰诊断**：hook 后端可用性探测、maps 自扫描/ptrace 占用检测、兼容性报告
-- 复用：GOT 引擎、resolve_sym、JNI 反射、capture buffer 模式均就绪。
+→ **v0.6 Runtime Object Inspector（活体对象自省，模块 T）**
+- Java.choose 式：枚举 ART 堆中某 class 的存活实例、读字段、低风险 getter 调用、堆内搜索 String/byte[]。
+- 实现路径：JNI 反射基础已就绪。枚举实例可用 JVMTI（debuggable app 可用）或 ART 堆遍历；
+  先做保守版——用已知对象（sandbox 持有的单例/静态字段）验证字段读取，再扩展到实例枚举。
+- sandbox 加 HeapObjectActivity/单例，持有已知字段值对象，断言 agent 读到的字段值正确。
+- 复用：attach_env/PushLocalFrame/load_app_class、capture buffer 模式。
 
 ## 下一步（v0.2 Dump Engine）
 
@@ -146,6 +158,7 @@
 
 ## 会话日志（倒序，简短）
 
+- 2026-07-10 (loop#7)：v0.5 完成——V 反分析行为观测（GOT-hook 目标原生 ptrace/access/prop 检测，抓到防御地图 + 中和 TRACEME）+ S 抗干扰诊断（compat_probe）。sandbox 加 libidhdetect.so。suite 10/10，3 次提交。
 - 2026-07-10 (loop#6)：**v0.4 完成——#1 卖点明文边界 crypto 捕获验证通过**。原生 EVP GOT hook 在 libjavacrypto(Conscrypt) 抓到 AES 明文 "IDH_CRYPTO_PLAINTEXT_v1"（加密前）。含 resolve_sym 内存 dynsym 解析、crypto_probe 定位、JNI 反射触发。suite 9/9。2 次提交。
 - 2026-07-10 (loop#5)：v0.4 动态通道地基——原生 GOT/PLT hook 引擎(E.8.1)完成并真机验证（hook agent 自身 close，intercept+trampoline 不崩）。深挖两个 bug：RELRO 槽定位、单槽 hook（多槽 trampoline 死锁）。suite 8/8，1 次提交。下一步用引擎 hook EVP 抓明文。
 - 2026-07-10 (loop#4)：v0.4 静态 crypto 通道——DEX 解析器(dex.ts) + crypto 静态扫描，host 验证（probe dex 解析 + 多 dex 命中 Cipher/Mac/AES/HmacSHA256）。sandbox 加 JavaCrypto。动态 hook 通道有意推迟到专门回合（改走更安全的原生 EVP GOT hook，计划已记录）。suite 7/7。1 次提交。
