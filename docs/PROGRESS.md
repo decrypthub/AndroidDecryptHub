@@ -40,28 +40,31 @@
 
 ## 进行中
 
-- [ ] v0.2 Dump Engine — **核心已完成并验证**，剩 so 重组 + dex header 修复
+- [ ] （无）v0.2 已全部完成，下一步 v0.3
 
-### v0.2 已完成并验证（tools/verify_v02.sh + verify_v02_dump.sh，均 exit 0）
+### v0.2 Dump Engine — 完成并全部验证（tools/verify_all.sh 5/5 PASS）
 
 - [x] idhd↔agent 命令通道（`cmd`/`cmdResult`，pending-promise + 超时；每 session socket）
-- [x] 按需全量 maps `GET /api/process/maps`（2599 段，前 40 与内核 verbatim 一致）
+- [x] 按需全量 maps `GET /api/process/maps`（前 40 与内核 verbatim 一致）
 - [x] `memory.read` `POST /api/memory/read`（/proc/self/mem pread + base64；读到真实 ELF 头）
-- [x] dex/ELF magic 扫描 `GET /api/memory/scan_magic`（dex/cdex/elf/zip/oat/vdex 全命中；分块重叠、边界跨块、/dev 跳过、上限）
-- [x] `memory.search` `POST /api/memory/search`（hex/text 模式）
-- [x] region dump + sha256 去重 `POST /api/memory/dump` + `/api/dumps[/download]`（对 mock dex **字节级 sha256 校验通过**，kind 按 magic 推断，重复 dedup）
-- [x] sandbox 增 mock dex（direct ByteBuffer，确定性内容，AntiDumpMock 雏形）
+- [x] dex/ELF magic 扫描 `GET /api/memory/scan_magic`（dex/cdex/elf/zip/oat/vdex 全命中）
+- [x] `memory.search` `POST /api/memory/search`（hex/text）
+- [x] region dump + sha256 去重 `POST /api/memory/dump` + `/api/dumps[/download]`（mock dex 字节级 sha256 校验）
+- [x] **so 重组** `GET /api/modules` + `POST /api/module/dump`（SoFixer-lite：PT_LOAD 按 vaddr 重排，保留 PT_DYNAMIC；重建 libidh_agent.so 有效可分析）
+- [x] **dex header 修复** `POST /api/dex/repair`（file_size/checksum/signature；对真实 5MB dex 字节级还原）
+- [x] 主回归脚本 `tools/verify_all.sh`（设备缺席时 device 脚本 SKIP 不 FAIL）
 
-### v0.2 剩余
+### v0.2 未做（推迟，非阻塞）
 
-- [ ] so 重组：按 ELF program header 从内存段重建可用 .so（文件型直接复制 / 内存型拼接修 header）
-- [ ] dex header 修复（file_size/checksum/signature）——为 v0.3 ART 抽取铺路
-- [ ] Web：Memory Explorer / Dump Center 最小页
+- [ ] Web：Memory Explorer / Dump Center 页面（并入 v1.0 Web 收尾，或 v0.3 后穿插）
 
 ## 下一步
 
-1. v0.2 收尾：so 重组 + dex header 修复（+ 各自 verify 脚本）
-2. → v0.3 ART 结构级 Dex 捕获（ClassLinker/DexCache 遍历，SDK 36 resolver）
+→ **v0.3 ART 结构级 Dex 捕获**（模块 L.6）：agent 侧从 ART 运行时结构（ClassLinker/DexCache/DexFile）
+定位真实 DexFile 的 begin/size 并 dump，不依赖 magic 扫描；按 SDK 36 维护 resolver。
+- agent 侧：需要 ART 内部结构偏移（Android 16 / SDK 36）。先做"从已加载 class 反查 DexFile"或遍历 cookie。
+- 验证：sandbox 用 InMemoryDexClassLoader 加载一个已知 dex，agent 结构级 dump 出来 sha256 与原 dex 对照。
+- 需要给 sandbox 加 DynamicDexActivity（InMemoryDexClassLoader + 已知 dex 资源）。
 
 ## 下一步（v0.2 Dump Engine）
 
@@ -83,5 +86,6 @@
 
 ## 会话日志（倒序，简短）
 
+- 2026-07-10 (loop#2)：v0.2 完成——so 重组（SoFixer-lite，重建 libidh_agent.so 有效）+ dex header 修复（真实 5MB dex 字节级还原）+ 主回归 verify_all.sh 5/5。3 次提交。
 - 2026-07-10 (loop#1)：v0.2 Dump Engine 核心完成——命令通道 + maps/read/scan_magic/search/dump+dedup，全部真机验证（dump 对 mock dex 字节级 sha256 校验）。3 次提交。
 - 2026-07-10：需求定稿、通用化、注入方案敲定（Zygisk root 版 + gadget/重打包 非 root 版）、加入"反分析行为观测(V)"、基建搭建。v0.1 端到端验证。
