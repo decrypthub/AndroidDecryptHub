@@ -15,6 +15,7 @@ SCRIPTS=(
   "verify_v02_dump.sh:device"
   "verify_v02_so.sh:device"
   "verify_v02_dexrepair.sh:host"
+  "verify_v03.sh:device"
 )
 
 pass=0; fail=0; skip=0; FAILED=""

@@ -13,6 +13,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <dlfcn.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -29,6 +30,29 @@
 
 static pthread_once_t g_once = PTHREAD_ONCE_INIT;
 static char g_entry[16] = "start";
+static JavaVM *g_vm = NULL;   // cached in JNI_OnLoad (also recoverable via JNI_GetCreatedJavaVMs)
+
+// Attach the calling (native) thread to the VM and return a JNIEnv.
+// *did_attach set to 1 if we attached (caller must Detach when done).
+static JNIEnv *attach_env(int *did_attach) {
+    *did_attach = 0;
+    if (!g_vm) {
+        // Fallback for injector-loaded (non JNI_OnLoad) case.
+        typedef jint (*GetVMs)(JavaVM **, jsize, jsize *);
+        void *lib = dlopen("libart.so", RTLD_NOW);
+        GetVMs f = lib ? (GetVMs)dlsym(lib, "JNI_GetCreatedJavaVMs") : NULL;
+        if (f) { JavaVM *vm = NULL; jsize n = 0; if (f(&vm, 1, &n) == 0 && n > 0) g_vm = vm; }
+        if (!g_vm) return NULL;
+    }
+    JNIEnv *env = NULL;
+    jint st = (*g_vm)->GetEnv(g_vm, (void **)&env, JNI_VERSION_1_6);
+    if (st == JNI_EDETACHED) {
+        if ((*g_vm)->AttachCurrentThread(g_vm, &env, NULL) != 0) return NULL;
+        *did_attach = 1;
+    } else if (st != JNI_OK) return NULL;
+    return env;
+}
+static void detach_env(int did_attach) { if (did_attach && g_vm) (*g_vm)->DetachCurrentThread(g_vm); }
 
 // ---- small utils ----------------------------------------------------------
 
@@ -371,6 +395,42 @@ static void cmd_search(int fd, const char *id, const char *pat_hex, int limit) {
     free(hits);
 }
 
+// Prove JNI reflection works from the agent's native thread: read Build.VERSION.
+static void cmd_jni_probe(int fd, const char *id) {
+    char idj[64]; json_escape(id, idj, sizeof(idj));
+    int did = 0;
+    JNIEnv *env = attach_env(&did);
+    if (!env) {
+        char e[160]; snprintf(e, sizeof(e), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"jni_probe\",\"ok\":false,\"error\":\"no JavaVM\"}\n", idj);
+        send_line(fd, e); return;
+    }
+    jint sdk = -1; char rel[64] = "";
+    jclass ver = (*env)->FindClass(env, "android/os/Build$VERSION");
+    if (ver) {
+        jfieldID fi = (*env)->GetStaticFieldID(env, ver, "SDK_INT", "I");
+        if (fi) sdk = (*env)->GetStaticIntField(env, ver, fi);
+        jfieldID rf = (*env)->GetStaticFieldID(env, ver, "RELEASE", "Ljava/lang/String;");
+        if (rf) {
+            jstring js = (jstring)(*env)->GetStaticObjectField(env, ver, rf);
+            if (js) {
+                const char *s = (*env)->GetStringUTFChars(env, js, NULL);
+                if (s) { strncpy(rel, s, sizeof(rel) - 1); (*env)->ReleaseStringUTFChars(env, js, s); }
+                (*env)->DeleteLocalRef(env, js);
+            }
+        }
+        (*env)->DeleteLocalRef(env, ver);
+    }
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    detach_env(did);
+
+    char out[256], relj[128]; json_escape(rel, relj, sizeof(relj));
+    snprintf(out, sizeof(out),
+        "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"jni_probe\",\"ok\":true,\"sdk_int\":%d,\"release\":\"%s\",\"attached\":%d}\n",
+        idj, sdk, relj, did);
+    send_line(fd, out);
+    LOGI("jni_probe: sdk=%d release=%s", sdk, rel);
+}
+
 static void cmd_maps(int fd, const char *id) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
     int total = 0;
@@ -448,6 +508,8 @@ static void command_loop(int fd) {
                     char addr[40] = ""; json_get_str(line, "addr", addr, sizeof(addr));
                     long long size = json_get_num(line, "size");
                     cmd_read(fd, id, addr, size);
+                } else if (strcmp(op, "jni_probe") == 0) {
+                    cmd_jni_probe(fd, id);
                 } else if (strcmp(op, "scan_magic") == 0) {
                     cmd_scan_magic(fd, id);
                 } else if (strcmp(op, "search") == 0) {
@@ -501,7 +563,8 @@ void idh_agent_start(void) {
 }
 
 JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *reserved) {
-    (void)vm; (void)reserved;
+    (void)reserved;
+    g_vm = vm;
     strncpy(g_entry, "jni_onload", sizeof(g_entry) - 1);
     LOGI("JNI_OnLoad — agent " AGENT_VER " starting");
     pthread_once(&g_once, do_start);

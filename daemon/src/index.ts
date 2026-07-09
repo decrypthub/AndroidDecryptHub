@@ -352,6 +352,13 @@ const httpServer = http.createServer(async (req, res) => {
       return send(r.ok ? 200 : 502, r);
     } catch (e) { return send(504, { error: (e as Error).message }); }
   }
+  // JNI reflection probe (foundation for ART/Java work): GET /api/jni/probe?session=ID
+  if (url.pathname === '/api/jni/probe') {
+    const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    if (!sid) return send(400, { error: 'no session' });
+    try { const r = await sendCmd(sid, 'jni_probe'); return send(r.ok ? 200 : 502, r); }
+    catch (e) { return send(504, { error: (e as Error).message }); }
+  }
   // Magic scan across process memory: GET /api/memory/scan_magic?session=ID
   if (url.pathname === '/api/memory/scan_magic') {
     const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
