@@ -40,8 +40,25 @@
 
 ## 进行中
 
-- [ ] v0.7 网络监控 — **TLS 明文捕获已完成并验证**；网络↔crypto 关联待做
+- [ ] v0.8 Dex 索引 + Capstone — **dex 搜索已完成并验证**；invoke-xref + Capstone 反汇编待做
 - [ ] v0.3 ART 结构级捕获 — **核心已完成并验证**，剩恢复状态标记/多 resolver 为后续
+
+### v0.7 完成并全部验证（网络监控 + 关联）
+
+- [x] TLS 明文捕获（SSL_write/SSL_read GOT hook，绕过 TLS/pinning）
+- [x] **网络↔crypto 关联（取证闭环）**：capture 加 tid+ts_ns；flow_watch 同时 hook EVP+SSL_write，
+      触发"加密→发送"流；idhd 按同线程+时间窗关联，输出"明文 IDH_CORRELATE_v1 → 承载其密文的请求"。
+      `GET /api/flow/watch`，Δ~33ms 命中
+
+### v0.8 进展
+
+- [x] **Dex 搜索索引**（K.2/K.3）：searchDex() 搜 string/class/method；`POST /api/dex/search`（host 验证）
+
+### v0.8 待做
+
+- [ ] invoke-xref：解析 code_item/字节码，method→callers/callees（需 dex 指令解析）
+- [ ] Capstone 反汇编：对 dump 的 so 做 arm64 反汇编（Capstone via WASM 或 native addon；较大依赖，单独起）
+- [ ] Native Browser：symbol/imports/exports/strings/disasm
 
 ### v0.7 已完成并验证（verify_all.sh 12/12 PASS）
 
@@ -158,12 +175,11 @@
 
 ## 下一步
 
-→ **v0.7 收尾（网络↔crypto 关联）后进入 v0.8**
-- 关联：capture 记录加 tid+ts，idhd 侧把 net 明文与 crypto 明文按线程/时间窗聚合。
-→ **v0.8 Dex 索引搜索 + Capstone / Native Browser**
-- Dex 解析器(dex.ts, v0.4 已有)扩展为可搜索索引：string/class/method/invoke-xref。
-- Capstone 反汇编：idhd 侧对 dump 的 so 做 arm64 反汇编（Capstone via wasm 或 native）。
-- 验证：对已知 dex 搜字符串/方法命中；对已知 so 反汇编出已知指令。
+→ **v0.8 收尾：invoke-xref + Capstone 反汇编**
+1. invoke-xref：dex.ts 解析 class_data_item→code_item→invoke 指令，建 method→callers 索引。验证：probe dex 中 hello 的调用关系 / 已知 xref。
+2. Capstone：选型（推荐 WASM 版 capstone，npm 有 `@types`/wasm 构建；或用 llvm-objdump 已在 NDK 里做 disasm 兜底）。验证：反汇编 dump 的 libidh_agent.so 某函数，命中已知指令。
+   - 备选：NDK 自带 llvm-objdump/llvm-mc 可直接反汇编，先用它做 Native Browser disasm，Capstone 可后置。
+→ 之后 v0.9（Method Body Recovery + native 常量扫描 + direct syscall）、v1.0（QBDI + MCP + Web UI 完善）。
 
 ## 下一步（v0.2 Dump Engine）
 
@@ -185,6 +201,7 @@
 
 ## 会话日志（倒序，简短）
 
+- 2026-07-10 (loop#10)：v0.7 完成——网络↔crypto 关联（取证闭环：明文 IDH_CORRELATE_v1 关联到承载其密文的 TLS 请求，同线程 Δ~33ms）。v0.8 起步——dex 搜索索引(string/class/method)。suite 14/14，2 次提交。
 - 2026-07-10 (loop#9)：v0.7 网络 TLS 明文捕获完成——GOT-hook Conscrypt SSL_write/SSL_read，抓到请求(X-Idh-Marker)+响应明文，绕过 TLS。自建本地 HTTPS 测试栈(selfsigned v5 async cert 坑)。**修复 build_agent 吞编译错误导致跑旧 .so 的严重隐患**。suite 12/12，1 次提交。关联(network↔crypto)待做。
 - 2026-07-10 (loop#8)：v0.6 完成——Runtime Object Inspector（反射读活体对象字段 + 无参方法调用）。经静态字段到达对象，读到 token/count/note，getToken() 调用成功。完整 Java.choose 堆枚举推迟（需 JVMTI/ART 堆遍历）。suite 11/11，2 次提交。
 - 2026-07-10 (loop#7)：v0.5 完成——V 反分析行为观测（GOT-hook 目标原生 ptrace/access/prop 检测，抓到防御地图 + 中和 TRACEME）+ S 抗干扰诊断（compat_probe）。sandbox 加 libidhdetect.so。suite 10/10，3 次提交。
