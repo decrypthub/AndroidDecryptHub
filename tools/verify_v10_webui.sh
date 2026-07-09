@@ -15,8 +15,8 @@ chk "wires capture api"     'echo "$HTML" | grep -q "/api/crypto/hook_test" && e
 chk "wires dex api"         'echo "$HTML" | grep -q "/api/dex/search" && echo "$HTML" | grep -q "/api/dex/xref"'
 chk "wires native api"      'echo "$HTML" | grep -q "/api/native/analyze" && echo "$HTML" | grep -q "/api/native/syscall_scan"'
 chk "wires mcp"             'echo "$HTML" | grep -q "/mcp"'
-# backing endpoints respond
-chk "/api/dumps responds"   'curl -s "$BASE/api/dumps" | grep -q "\[" '
-chk "/api/agents responds"  'curl -s "$BASE/api/agents" | grep -q "\[" '
-chk "/mcp tools/list responds" 'curl -s -X POST "$BASE/mcp" -H "content-type: application/json" -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}" | grep -q "tools"'
+# backing endpoints respond (HTTP 200; -F avoids treating [ as a regex)
+chk "/api/dumps responds"   '[ "$(curl -s -o /dev/null -w %{http_code} "$BASE/api/dumps")" = 200 ]'
+chk "/api/agents responds"  '[ "$(curl -s -o /dev/null -w %{http_code} "$BASE/api/agents")" = 200 ]'
+chk "/mcp tools/list responds" 'curl -s -X POST "$BASE/mcp" -H "content-type: application/json" -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}" | grep -qF "tools"'
 [ "$fail" -eq 0 ] && { echo "✅ v1.0 Web console PASS"; exit 0; } || { echo "❌ FAIL"; exit 1; }
