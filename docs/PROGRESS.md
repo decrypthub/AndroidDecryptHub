@@ -223,16 +223,19 @@
 
 - [ ] Web：Memory Explorer / Dump Center 页面（并入 v1.0 Web 收尾，或 v0.3 后穿插）
 
-## 下一步（v1.0 收尾打磨，QBDI 已 Blocked）
+## v1.0 打磨已完成（本轮）
 
-功能核心全部完成并验证（suite 23/23）。QBDI 指令级 trace 已 Blocked（见上，需用户/网络）。
-剩余 v1.0 打磨项（低风险、可继续自动推进）：
-1. **数据导出**（R 章）：事件/dump/trace 导出 JSON/zip 端点。
-2. **Session 录制/回放**：把捕获事件持久化到 SQLite，可离线回看。
-3. **更多 MCP tools**：module_dump / memory_dump / dex_method_code 等补齐进 MCP。
-4. **文档**：docs/architecture.md、mcp-tools.md、threat-model.md。
-5. **Web UI 打磨**：给 Native tab 加 module_dump 一键流程；事件流实时视图。
-- 这些做完 + QBDI 若解除，则 v0.2–v1.0 全绿，可停循环。
+- [x] **MCP 工具补齐到 25**（+memory_dump/flow_correlate/object_invoke/trace_function/dex_method_code/dex_repair）——每个能力都可被 AI 调用
+- [x] **诊断导出** `GET /api/export/report`（仅元数据，无 key/明文）+ `GET /api/mcp/doc`
+- [x] **文档**：docs/architecture.md（as-built）、docs/threat-model.md、docs/mcp-tools.md（自动生成）
+
+## 下一步（剩余 v1.0 打磨；QBDI 仍 Blocked）
+
+功能核心 + MCP + Web + 导出 + 文档全部完成并验证（suite 24/24）。剩余低优先打磨：
+1. **Session 录制/回放**：idhd 把 AUDIT/dump 事件追加落盘（JSONL/SQLite），端点回读 —— 可离线复盘。
+2. **Web UI 打磨**：Native tab 加"列模块→一键 module_dump→拿 sha 分析"流程。
+- 这两项 + QBDI（Blocked，需用户提供预编译或放开网络）做完则 v0.2–v1.0 全绿。
+- **状态**：除 QBDI 指令级动态 trace（Blocked）外，产品功能已完整实现并逐项验证。
 
 ## 下一步（v0.2 Dump Engine）
 
@@ -254,6 +257,7 @@
 
 ## 会话日志（倒序，简短）
 
+- 2026-07-10 (loop#16)：v1.0 打磨——MCP 补齐到 25 tools + 诊断导出(/api/export/report, 仅元数据) + 生成 docs（architecture/threat-model/mcp-tools）。suite 24/24，3 次提交。除 QBDI(Blocked) 外功能全部完成并验证。
 - 2026-07-10 (loop#15)：v1.0 函数级 trace 第一公民（通用 trace_run，任意原生符号，args+tid+ts+指针→字符串预览，access("/system/xbin/su")）。suite 23/23，4 次提交。**QBDI 指令级 trace 记为 Blocked**（网络受限拉不到预编译 + 重集成风险）；剩 v1.0 打磨项（导出/回放/文档/MCP 补齐）。
 - 2026-07-10 (loop#14)：v0.9 完成——Method Body Recovery(L.7 被动，提取方法 code_item)。v1.0——**Web 控制台**（多面板，调全套 API）。suite 22/22，4 次提交。**功能核心全部完成，仅剩 QBDI 指令级 trace**（高风险，最后做）。
 - 2026-07-10 (loop#13)：v0.9 收尾——direct syscall 扫描(E.9，svc #0 热点)。v1.0 大件——**MCP Server（19 tools，JSON-RPC，AI 可编程操控）**。suite 20/20，3 次提交。剩 Web UI + Method Body Recovery + QBDI。
