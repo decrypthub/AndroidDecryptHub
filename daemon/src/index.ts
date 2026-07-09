@@ -363,6 +363,15 @@ const httpServer = http.createServer(async (req, res) => {
     try { const r = await sendCmd(sid, 'object_inspect', { className, field }); return send(r.ok ? 200 : 502, r); }
     catch (e) { return send(504, { error: (e as Error).message }); }
   }
+  // Object method invocation (module T, low-risk): POST /api/object/invoke {session, className, field, method}
+  if (url.pathname === '/api/object/invoke' && req.method === 'POST') {
+    const body = await readBody(req);
+    const { session, className, field, method } = JSON.parse(body || '{}');
+    const sid = session ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    if (!sid || !className || !field || !method) return send(400, { error: 'need session, className, field, method' });
+    try { const r = await sendCmd(sid, 'object_invoke', { className, field, method }); return send(r.ok ? 200 : 502, r); }
+    catch (e) { return send(504, { error: (e as Error).message }); }
+  }
   // Compatibility / anti-interference diagnostic (module S): GET /api/compat/probe?session=ID
   if (url.pathname === '/api/compat/probe') {
     const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;

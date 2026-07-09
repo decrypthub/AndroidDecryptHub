@@ -821,6 +821,56 @@ done:
     LOGI("object_inspect: %s.%s -> %s fields=%d ok=%d", className, fieldName, objClass, nfields, ok);
 }
 
+// Module T: invoke a no-arg (low-risk) method on the object reached via a static
+// field, returning String.valueOf(result). For getters/toString/size/length.
+static void cmd_object_invoke(int fd, const char *id, const char *className, const char *fieldName, const char *methodName) {
+    char idj[64]; json_escape(id, idj, sizeof(idj));
+    int did = 0;
+    JNIEnv *env = attach_env(&did);
+    if (!env) { char e[160]; snprintf(e, sizeof(e), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"object_invoke\",\"ok\":false,\"error\":\"no JavaVM\"}\n", idj); send_line(fd, e); return; }
+    (*env)->PushLocalFrame(env, 128);
+    int ok = 0; char err[128] = "", result[400] = "";
+
+    jclass clsClass = (*env)->FindClass(env, "java/lang/Class");
+    jclass fieldClass = (*env)->FindClass(env, "java/lang/reflect/Field");
+    jclass methodClass = (*env)->FindClass(env, "java/lang/reflect/Method");
+    jclass strClass = (*env)->FindClass(env, "java/lang/String");
+    jmethodID mGetField = (*env)->GetMethodID(env, clsClass, "getDeclaredField", "(Ljava/lang/String;)Ljava/lang/reflect/Field;");
+    jmethodID mGetMethod = (*env)->GetMethodID(env, clsClass, "getMethod", "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;");
+    jmethodID mSetAccF = (*env)->GetMethodID(env, fieldClass, "setAccessible", "(Z)V");
+    jmethodID mFieldGet = (*env)->GetMethodID(env, fieldClass, "get", "(Ljava/lang/Object;)Ljava/lang/Object;");
+    jmethodID mInvoke = (*env)->GetMethodID(env, methodClass, "invoke", "(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;");
+    jmethodID mValueOf = (*env)->GetStaticMethodID(env, strClass, "valueOf", "(Ljava/lang/Object;)Ljava/lang/String;");
+
+    jclass target = load_app_class(env, className);
+    if (!target) { strncpy(err, "class not found", sizeof(err)-1); goto done; }
+    jobject fieldObj = (*env)->CallObjectMethod(env, target, mGetField, (*env)->NewStringUTF(env, fieldName));
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); strncpy(err, "field not found", sizeof(err)-1); goto done; }
+    (*env)->CallVoidMethod(env, fieldObj, mSetAccF, JNI_TRUE);
+    jobject obj = (*env)->CallObjectMethod(env, fieldObj, mFieldGet, NULL);
+    if (!obj || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); strncpy(err, "field value null", sizeof(err)-1); goto done; }
+
+    jclass ocls = (*env)->GetObjectClass(env, obj);
+    jobject method = (*env)->CallObjectMethod(env, ocls, mGetMethod, (*env)->NewStringUTF(env, methodName), NULL);  // no-arg
+    if (!method || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); strncpy(err, "method not found (no-arg only)", sizeof(err)-1); goto done; }
+    jobject ret = (*env)->CallObjectMethod(env, method, mInvoke, obj, NULL);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); strncpy(err, "invoke threw", sizeof(err)-1); goto done; }
+    jstring vs = (jstring)(*env)->CallStaticObjectMethod(env, strClass, mValueOf, ret);
+    if (vs) { const char *s = (*env)->GetStringUTFChars(env, vs, NULL); if (s) { strncpy(result, s, sizeof(result)-1); (*env)->ReleaseStringUTFChars(env, vs, s); } }
+    ok = 1;
+
+done:
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    (*env)->PopLocalFrame(env, NULL);
+    detach_env(did);
+    char rj[500], ej[160]; json_escape(result, rj, sizeof(rj)); json_escape(err, ej, sizeof(ej));
+    char out[800];
+    if (ok) snprintf(out, sizeof(out), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"object_invoke\",\"ok\":true,\"result\":\"%s\"}\n", idj, rj);
+    else snprintf(out, sizeof(out), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"object_invoke\",\"ok\":false,\"error\":\"%s\"}\n", idj, ej);
+    send_line(fd, out);
+    LOGI("object_invoke: %s.%s.%s() -> %s ok=%d", className, fieldName, methodName, result, ok);
+}
+
 // Module S: self-assess the runtime environment / hook-backend availability so the
 // operator knows what's usable and whether the target is interfering (授权抗干扰诊断).
 static void cmd_compat_probe(int fd, const char *id) {
@@ -1134,6 +1184,12 @@ static void command_loop(int fd) {
                     json_get_str(line, "className", cls, sizeof(cls));
                     json_get_str(line, "field", fld, sizeof(fld));
                     cmd_object_inspect(fd, id, cls, fld);
+                } else if (strcmp(op, "object_invoke") == 0) {
+                    char cls[160] = "", fld[64] = "", mth[64] = "";
+                    json_get_str(line, "className", cls, sizeof(cls));
+                    json_get_str(line, "field", fld, sizeof(fld));
+                    json_get_str(line, "method", mth, sizeof(mth));
+                    cmd_object_invoke(fd, id, cls, fld, mth);
                 } else if (strcmp(op, "art_dexfiles") == 0) {
                     cmd_art_dexfiles(fd, id);
                 } else if (strcmp(op, "scan_magic") == 0) {

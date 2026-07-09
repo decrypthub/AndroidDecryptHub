@@ -18,8 +18,15 @@ if(r.error){console.log('ERR',r.error);console.log('RESULT:FAIL');process.exit(0
 console.log(`objectClass=${r.objectClass} fields=${r.fieldCount}`);
 (r.fields||[]).forEach(f=>console.log(`  ${f.name} = ${f.value}`));
 const fv=Object.fromEntries((r.fields||[]).map(f=>[f.name,f.value]));
-const pass = r.ok && /HeapProbe\$Config/.test(r.objectClass)
+const readPass = r.ok && /HeapProbe\$Config/.test(r.objectClass)
   && fv.token==='IDH_TOKEN_abc123' && fv.count==='42' && fv.note==='live-object';
+
+// low-risk method invocation
+const inv=await POST('/api/object/invoke',{session:a.sessionId,className:'com.idh.sandbox.HeapProbe',field:'sConfig',method:'getToken'});
+console.log(`invoke getToken() -> ${inv.result||inv.error}`);
+const invPass = inv.ok && inv.result==='IDH_TOKEN_abc123';
+
+const pass = readPass && invPass;
 console.log(pass?'RESULT:PASS':'RESULT:FAIL');
 EOF
 )"
