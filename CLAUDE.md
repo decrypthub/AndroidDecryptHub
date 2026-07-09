@@ -35,6 +35,10 @@ Loop: **Explore → Plan → Implement → Verify**, then iterate on the result.
 4. Update `docs/PROGRESS.md` and `git commit` at each meaningful milestone.
 5. For independent parallel work use worktrees / subagents; keep the agent `.so` changes isolated from `idhd`/web when possible.
 
+## Scope priority (current)
+
+Build **all `libidh_agent.so` functionality first** and self-test it via 模拟注入 (sandbox `dlopen`) — that exercises the same agent code paths, so no real injection is needed to verify features. **Defer the Zygisk/gadget/repackage injectors (module W)** entirely; the user tests real injection manually. Do not block feature verification on real injection.
+
 ## Verification (give yourself a real signal)
 
 - Primary loop uses **`sandbox-test-app` with 模拟注入** (the app `dlopen`s the agent itself) — no root needed, deterministic, CI-friendly. Iterate here first.
