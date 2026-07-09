@@ -433,6 +433,65 @@ async function dumpRegion(sid: string, addrHex: string, size: number, tag: strin
   return { meta, dedup: false };
 }
 
+// ---- MCP Server (Streamable HTTP / JSON-RPC) ------------------------------
+// Exposes the workbench Service Layer as MCP tools for AI clients. Shares the
+// same logic as the REST API (no duplicate business logic).
+const pickSid = (sid?: string) => sid ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+async function agentCmd(sid: string | undefined, op: string, args: Record<string, unknown> = {}, timeout = 15_000) {
+  const s = pickSid(sid); if (!s) throw new Error('no online agent session');
+  return sendCmd(s, op, args, timeout);
+}
+async function dumpBuf(a: any): Promise<Buffer> {
+  if (a.b64) return Buffer.from(a.b64, 'base64');
+  if (a.sha && dumps.get(a.sha)) return readFile(dumps.get(a.sha)!.path);
+  throw new Error('need b64 or known sha');
+}
+const S = { type: 'string' }, N = { type: 'number' };
+const MCP_TOOLS: { name: string; description: string; inputSchema: any; handler: (a: any) => Promise<any> }[] = [
+  { name: 'process_list', description: 'List connected target agent sessions', inputSchema: { type: 'object', properties: {} }, handler: async () => [...sessions.values()] },
+  { name: 'dumps_list', description: 'List captured dump artifacts (dex/so/region)', inputSchema: { type: 'object', properties: {} }, handler: async () => [...dumps.values()] },
+  { name: 'compat_probe', description: 'Self-assess agent env: tracer/seccomp/hook-backend availability', inputSchema: { type: 'object', properties: { session: S } }, handler: (a) => agentCmd(a.session, 'compat_probe') },
+  { name: 'memory_maps', description: 'On-demand full /proc/self/maps of the target', inputSchema: { type: 'object', properties: { session: S } }, handler: (a) => agentCmd(a.session, 'maps') },
+  { name: 'memory_read', description: 'Read target memory at hex addr for size bytes (base64 out)', inputSchema: { type: 'object', properties: { session: S, addr: S, size: N }, required: ['addr', 'size'] }, handler: (a) => agentCmd(a.session, 'read', { addr: a.addr, size: a.size }) },
+  { name: 'memory_search', description: 'Search target memory for hex or text pattern', inputSchema: { type: 'object', properties: { session: S, hex: S, text: S, limit: N } }, handler: (a) => agentCmd(a.session, 'search', { pat: a.hex ?? Buffer.from(String(a.text ?? ''), 'utf8').toString('hex'), limit: a.limit ?? 256 }, 90_000) },
+  { name: 'memory_scan_magic', description: 'Scan target memory for dex/elf/oat/vdex/zip magics', inputSchema: { type: 'object', properties: { session: S } }, handler: (a) => agentCmd(a.session, 'scan_magic', {}, 90_000) },
+  { name: 'art_dexfiles', description: 'Enumerate loaded DexFiles via ART ClassLoader structures (no magic scan)', inputSchema: { type: 'object', properties: { session: S } }, handler: (a) => agentCmd(a.session, 'art_dexfiles', {}, 30_000) },
+  { name: 'crypto_capture', description: 'Hook EVP_CipherUpdate + trigger sandbox AES; return captured plaintext', inputSchema: { type: 'object', properties: { session: S } }, handler: (a) => agentCmd(a.session, 'crypto_hook_test', {}, 20_000) },
+  { name: 'net_capture', description: 'Hook SSL_write/SSL_read + trigger HTTPS; return captured TLS plaintext', inputSchema: { type: 'object', properties: { session: S } }, handler: (a) => agentCmd(a.session, 'net_hook_test', {}, 25_000) },
+  { name: 'detect_watch', description: 'Observe the target’s own anti-analysis checks (debug/root/prop)', inputSchema: { type: 'object', properties: { session: S } }, handler: (a) => agentCmd(a.session, 'detect_watch', {}, 20_000) },
+  { name: 'object_inspect', description: 'Read a live Java object’s fields via reflection (static field path)', inputSchema: { type: 'object', properties: { session: S, className: S, field: S }, required: ['className', 'field'] }, handler: (a) => agentCmd(a.session, 'object_inspect', { className: a.className, field: a.field }) },
+  { name: 'dex_search', description: 'Search a dex (b64|sha) for strings/classes/methods', inputSchema: { type: 'object', properties: { b64: S, sha: S, query: S, kinds: { type: 'array', items: S } }, required: ['query'] }, handler: async (a) => searchDex(parseDex(await dumpBuf(a)), a.query, a.kinds) },
+  { name: 'dex_xref', description: 'Find callers of a method in a dex (b64|sha)', inputSchema: { type: 'object', properties: { b64: S, sha: S, method: S }, required: ['method'] }, handler: async (a) => { const buf = await dumpBuf(a); const { xref } = invokeXref(buf, parseDex(buf)); const q = String(a.method).toLowerCase(); const out: Record<string, string[]> = {}; for (const [c, cs] of xref) if (c.toLowerCase().includes(q)) out[c] = cs.slice(0, 200); return out; } },
+  { name: 'dex_crypto_scan', description: 'Static crypto scan of a dex (API refs + algorithm strings)', inputSchema: { type: 'object', properties: { b64: S, sha: S } }, handler: async (a) => cryptoScan(parseDex(await dumpBuf(a))) },
+  { name: 'native_disasm', description: 'Disassemble an ELF .so (b64|sha) by symbol', inputSchema: { type: 'object', properties: { b64: S, sha: S, symbol: S }, required: ['symbol'] }, handler: async (a) => { const t = join(tmpdir(), `mcp_${Date.now()}.so`); writeFileSync(t, await dumpBuf(a)); try { return await disasmSo(t, { symbol: a.symbol }); } finally { try { unlinkSync(t); } catch {} } } },
+  { name: 'native_analyze', description: 'Exports/imports/NEEDED/strings of an ELF .so (b64|sha)', inputSchema: { type: 'object', properties: { b64: S, sha: S } }, handler: async (a) => { const t = join(tmpdir(), `mcp_${Date.now()}.so`); writeFileSync(t, await dumpBuf(a)); try { return await analyzeSo(t); } finally { try { unlinkSync(t); } catch {} } } },
+  { name: 'native_crypto_const', description: 'Locate crypto by constant signatures in a stripped .so (b64|sha)', inputSchema: { type: 'object', properties: { b64: S, sha: S } }, handler: async (a) => cryptoConstScan(await dumpBuf(a)) },
+  { name: 'native_syscall_scan', description: 'Find direct svc #0 syscalls in a .so (b64|sha)', inputSchema: { type: 'object', properties: { b64: S, sha: S } }, handler: async (a) => svcScan(await dumpBuf(a)) },
+];
+const MCP_MAP = new Map(MCP_TOOLS.map(t => [t.name, t]));
+
+async function handleMcp(reqBody: string, res: http.ServerResponse) {
+  let msg: any;
+  try { msg = JSON.parse(reqBody); } catch { res.writeHead(400).end('bad json'); return; }
+  const reply = (result?: unknown, error?: unknown) => {
+    const body = JSON.stringify({ jsonrpc: '2.0', id: msg.id, ...(error ? { error } : { result }) });
+    res.writeHead(200, { 'content-type': 'application/json' }); res.end(body);
+  };
+  if (msg.method === 'initialize') return reply({ protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'idhd', version: '0.1.0' } });
+  if (msg.method === 'notifications/initialized' || msg.method === 'notifications/cancelled') { res.writeHead(202).end(); return; }
+  if (msg.method === 'ping') return reply({});
+  if (msg.method === 'tools/list') return reply({ tools: MCP_TOOLS.map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })) });
+  if (msg.method === 'tools/call') {
+    const t = MCP_MAP.get(msg.params?.name);
+    if (!t) return reply(undefined, { code: -32602, message: `unknown tool: ${msg.params?.name}` });
+    try {
+      const out = await t.handler(msg.params?.arguments ?? {});
+      return reply({ content: [{ type: 'text', text: JSON.stringify(out, null, 2) }] });
+    } catch (e) { return reply({ content: [{ type: 'text', text: 'error: ' + (e as Error).message }], isError: true }); }
+  }
+  return reply(undefined, { code: -32601, message: `method not found: ${msg.method}` });
+}
+
 // ---- HTTP + WebSocket -----------------------------------------------------
 
 const httpServer = http.createServer(async (req, res) => {
@@ -444,7 +503,11 @@ const httpServer = http.createServer(async (req, res) => {
   };
 
   if (url.pathname === '/health') {
-    return send(200, { ok: true, service: 'idhd', version: '0.1.0', agents: sessions.size, uptime: process.uptime() });
+    return send(200, { ok: true, service: 'idhd', version: '0.1.0', agents: sessions.size, uptime: process.uptime(), mcpTools: MCP_TOOLS.length });
+  }
+  // MCP Streamable HTTP endpoint (JSON-RPC)
+  if (url.pathname === '/mcp' && req.method === 'POST') {
+    return handleMcp(await readBody(req), res);
   }
   if (url.pathname === '/api/agents') {
     return send(200, [...sessions.values()]);
