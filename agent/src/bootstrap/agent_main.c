@@ -775,18 +775,31 @@ static void cmd_crypto_hook_test(int fd, const char *id) {
 }
 
 // ---- generic native function-call tracer (module I.2, function level) ----
-struct TraceRec { long a0, a1, a2, a3; int tid; long long ts; };
+struct TraceRec { long a0, a1, a2, a3; int tid; long long ts; char s0[48]; };
 static struct TraceRec g_trace[256];
 static int g_ntrace = 0;
 static pthread_mutex_t g_trace_lock = PTHREAD_MUTEX_INITIALIZER;
 typedef long (*fn4_t)(long, long, long, long);
 static fn4_t g_trace_orig = NULL;
 static char g_trace_mod[80] = "";
-// Generic 4-arg wrapper: logs args (covers most libc/native fns) then trampolines.
+// If addr points to a readable ASCII string, copy a short printable preview (for
+// path/string args). Self-contained (untag + /proc/self/mem read).
+static void trace_preview(long addr, char *out, int n) {
+    out[0] = 0;
+    unsigned long long a = (unsigned long long)addr & 0x00FFFFFFFFFFFFFFULL;
+    if (a < 0x1000) return;
+    int fd = open("/proc/self/mem", O_RDONLY); if (fd < 0) return;
+    unsigned char buf[64]; ssize_t r = pread(fd, buf, sizeof(buf), (off_t)a); close(fd);
+    if (r <= 0) return;
+    int o = 0; for (int i = 0; i < r && o < n - 1; i++) { unsigned char c = buf[i]; if (c == 0) break; if (c < 0x20 || c >= 0x7f) break; out[o++] = c; }
+    out[o] = 0;
+}
+// Generic 4-arg wrapper: logs args (+ a0 string preview) + tid + ts, then trampolines.
 static long idh_trace_wrapper(long a0, long a1, long a2, long a3) {
     int tid = (int)gettid(); long long ts = now_ns();
+    char s0[48]; trace_preview(a0, s0, sizeof(s0));
     pthread_mutex_lock(&g_trace_lock);
-    if (g_ntrace < 256) { struct TraceRec *r = &g_trace[g_ntrace++]; r->a0 = a0; r->a1 = a1; r->a2 = a2; r->a3 = a3; r->tid = tid; r->ts = ts; }
+    if (g_ntrace < 256) { struct TraceRec *r = &g_trace[g_ntrace++]; r->a0 = a0; r->a1 = a1; r->a2 = a2; r->a3 = a3; r->tid = tid; r->ts = ts; strncpy(r->s0, s0, sizeof(r->s0) - 1); r->s0[sizeof(r->s0)-1] = 0; }
     pthread_mutex_unlock(&g_trace_lock);
     return g_trace_orig ? g_trace_orig(a0, a1, a2, a3) : 0;
 }
@@ -913,8 +926,8 @@ static void cmd_trace_run(int fd, const char *id, const char *symLib, const char
     size_t cap = 1 << 14, len = 0; char *out = malloc(cap); if (!out) return;
     len += snprintf(out + len, cap - len, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"trace_run\",\"ok\":true,\"symbol\":\"%s\",\"replaced\":%d,\"triggered\":%s,\"calls\":[", idj, sj, replaced, triggered ? "true" : "false");
     pthread_mutex_lock(&g_trace_lock);
-    for (int k = 0; k < g_ntrace; k++) { struct TraceRec *r = &g_trace[k];
-        len += snprintf(out + len, cap - len, "%s{\"a0\":\"%lx\",\"a1\":\"%lx\",\"a2\":\"%lx\",\"a3\":\"%lx\",\"tid\":%d,\"tsNs\":%lld}", k ? "," : "", (unsigned long)r->a0, (unsigned long)r->a1, (unsigned long)r->a2, (unsigned long)r->a3, r->tid, r->ts); }
+    for (int k = 0; k < g_ntrace; k++) { struct TraceRec *r = &g_trace[k]; char s0j[100]; json_escape(r->s0, s0j, sizeof(s0j));
+        len += snprintf(out + len, cap - len, "%s{\"a0\":\"%lx\",\"a0str\":\"%s\",\"a1\":\"%lx\",\"a2\":\"%lx\",\"a3\":\"%lx\",\"tid\":%d,\"tsNs\":%lld}", k ? "," : "", (unsigned long)r->a0, s0j, (unsigned long)r->a1, (unsigned long)r->a2, (unsigned long)r->a3, r->tid, r->ts); }
     int n = g_ntrace;
     pthread_mutex_unlock(&g_trace_lock);
     snprintf(out + len, cap - len, "],\"count\":%d}\n", n);

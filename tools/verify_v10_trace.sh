@@ -16,10 +16,11 @@ if(!a){console.log('NO_AGENT');console.log('RESULT:FAIL');process.exit(0);}
 const r=await (await fetch(`${base}/api/trace/run?session=${a.sessionId}&symLib=libc.so&symbol=access&hookModule=libidhdetect.so`)).json();
 if(r.error){console.log('ERR',r.error);console.log('RESULT:FAIL');process.exit(0);}
 console.log(`symbol=${r.symbol} replaced=${r.replaced} triggered=${r.triggered} calls=${r.count}`);
-(r.calls||[]).forEach(c=>console.log(`  access(a0=0x${c.a0}) tid=${c.tid}`));
+(r.calls||[]).forEach(c=>console.log(`  access("${c.a0str}") tid=${c.tid}`));
 const tids=new Set((r.calls||[]).map(c=>c.tid));
 const argsOk=(r.calls||[]).every(c=>c.a0 && c.tid && c.tsNs);
-const pass = r.ok && r.replaced>=1 && r.triggered && r.count===2 && tids.size===1 && argsOk;
+const suPaths=(r.calls||[]).filter(c=>/su$/.test(c.a0str||'')).length;   // arg string resolved
+const pass = r.ok && r.replaced>=1 && r.triggered && r.count===2 && tids.size===1 && argsOk && suPaths===2;
 console.log(pass?'RESULT:PASS':'RESULT:FAIL');
 EOF
 )"
