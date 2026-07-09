@@ -8,10 +8,34 @@
 import http from 'node:http';
 import net from 'node:net';
 import { readFile } from 'node:fs/promises';
-import { mkdirSync, writeFileSync, existsSync, createReadStream } from 'node:fs';
+import { mkdirSync, writeFileSync, existsSync, createReadStream, unlinkSync } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { homedir, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+
+const execFileP = promisify(execFile);
+const OBJDUMP = process.env.IDH_OBJDUMP ??
+  join(homedir(), 'AppData/Local/Android/Sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-objdump.exe');
+
+interface Insn { addr: string; bytes: string; mnemonic: string; text: string; }
+// Disassemble an ELF .so on disk (llvm-objdump). By symbol, or an address range.
+async function disasmSo(path: string, opts: { symbol?: string; start?: string; stop?: string }): Promise<Insn[]> {
+  const args = ['-d'];
+  if (opts.symbol) args.push(`--disassemble-symbols=${opts.symbol}`);
+  if (opts.start) args.push(`--start-address=0x${opts.start.replace(/^0x/, '')}`);
+  if (opts.stop) args.push(`--stop-address=0x${opts.stop.replace(/^0x/, '')}`);
+  args.push(path);
+  const { stdout } = await execFileP(OBJDUMP, args, { maxBuffer: 32 * 1024 * 1024 });
+  const insns: Insn[] = [];
+  for (const line of stdout.split('\n')) {
+    const m = line.match(/^\s*([0-9a-f]+):\s+([0-9a-f]{2}(?: ?[0-9a-f]{2})*)\s+(.+?)\s*$/i);
+    if (m) insns.push({ addr: m[1], bytes: m[2].replace(/\s+/g, ''), mnemonic: m[3].trim().split(/\s+/)[0], text: m[3].trim() });
+  }
+  return insns;
+}
 import { WebSocketServer, WebSocket } from 'ws';
 import { parseDex, cryptoScan, searchDex } from './dex.ts';
 
@@ -511,6 +535,20 @@ const httpServer = http.createServer(async (req, res) => {
       const { meta, dedup } = await dumpRegion(sid, String(addr).replace(/^0x/, ''), Number(size), String(tag ?? ''));
       return send(200, { ...meta, dedup });
     } catch (e) { return send(502, { error: (e as Error).message }); }
+  }
+  // Native disassembly (Native Browser): POST /api/native/disasm {b64|sha, symbol?|start?+stop?}
+  if (url.pathname === '/api/native/disasm' && req.method === 'POST') {
+    const body = await readBody(req);
+    const { b64, sha, symbol, start, stop } = JSON.parse(body || '{}');
+    let path: string | null = null, tmp: string | null = null;
+    if (sha && dumps.get(sha)) path = dumps.get(sha)!.path;
+    else if (b64) { tmp = join(tmpdir(), `idh_disasm_${Date.now()}.so`); writeFileSync(tmp, Buffer.from(b64, 'base64')); path = tmp; }
+    else return send(400, { error: 'need b64 or known sha' });
+    try {
+      const insns = await disasmSo(path, { symbol, start, stop });
+      return send(200, { symbol: symbol ?? null, count: insns.length, instructions: insns.slice(0, 2000) });
+    } catch (e) { return send(502, { error: (e as Error).message, objdump: OBJDUMP }); }
+    finally { if (tmp) { try { unlinkSync(tmp); } catch {} } }
   }
   // Module list (grouped from maps): GET /api/modules?session=ID
   if (url.pathname === '/api/modules') {

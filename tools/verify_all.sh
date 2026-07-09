@@ -24,6 +24,7 @@ SCRIPTS=(
   "verify_v07.sh:device"
   "verify_v07_flow.sh:device"
   "verify_v08_dexsearch.sh:host"
+  "verify_v08_disasm.sh:host"
 )
 
 pass=0; fail=0; skip=0; FAILED=""
