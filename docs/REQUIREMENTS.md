@@ -1,0 +1,1531 @@
+# IDH Android Runtime Workbench — 功能需求说明
+
+> **产品定位**：**通用 Android 运行时逆向分析工具** — 不是 demo，也不是「手机版 jadx」。
+> 适用于任意 App 的运行时观测/dump/hook/trace，并**对高对抗目标（反调试、root/签名检测、代码混淆、加密传输）具备实战能力**。
+> **使用范围**：授权范围内的逆向调查与运行时分析；非法律取证，亦非面向未授权目标的规避工具。
+> **参考项目**：[taisuii/ios-decrypt-helper](https://github.com/taisuii/ios-decrypt-helper)（IOSDecryptHub）
+> **本文档范围**：本文档是**唯一权威功能规格**（模块 A–W）。开发步骤与排期见 `DEVELOPMENT_PLAN.md`。
+
+---
+
+## 0. 与 iOS 参考项目的关系
+
+[ios-decrypt-helper](https://github.com/taisuii/ios-decrypt-helper) 是一个注入目标 App 的 dylib + 内嵌 Web 面板的 iOS 行为监控平台。它的能力边界受 iOS 平台限制，但产品形态和工程思路值得继承。
+
+### 0.1 iOS 参考项目已具备的能力（我们要继承并超越）
+
+| 能力域 | iOS 参考项目做了什么 |
+|--------|---------------------|
+| 加解密审计 | hook CommonCrypto / Security / OpenSSL EVP，记录算法、Key、IV、明文、密文、调用栈；流式分片拼回完整数据 |
+| 文件监控 | hook open/write/unlink/rename，记录沙盒文件操作 |
+| 系统监控 | hook dlopen/dlsym，记录动态库加载与符号解析；dlsym 重定向使函数指针调用也能被捕获 |
+| 网络监控 | NSURLSession 请求/响应配对；SSL_read/SSL_write 明文捕获 |
+| 二进制 dump | FairPlay 脱壳：导出解密 Mach-O / 重打包 IPA |
+| 反汇编 | Capstone：按字节/地址/函数反汇编 |
+| Web 面板 | 多 tab、master-detail、实时列表、搜索、过滤、暂停、导出 |
+| MCP Server | Streamable HTTP，30+ tools（disassemble、query_events、correlate_request 等） |
+| 健康监控 | fail-loud：hook 失败、服务异常、落盘失败三处可见 |
+| 测试宿主 | 交互式测试 App + URL scheme 自动化触发 |
+| 悬浮窗 | 进程内毛玻璃浮窗 + 全屏日志查看器 |
+
+### 0.2 iOS 参考项目的局限（Android 不受此限）
+
+| iOS 局限 | Android 可充分发挥的空间 |
+|----------|--------------------------|
+| 无 DEX / ART 运行时结构暴露 | 完整 Dex 捕获、索引、smali、xref、按需反编译 |
+| Mach-O 脱壳仅限已加载且 cryptid=1 的镜像 | dex/so/内存/oat/vdex 多源 dump + 脱壳辅助 + 方法体恢复 |
+| fishhook 仅覆盖 import slot | PLT/GOT + inline hook + LSPlant Java hook + QBDI DBI |
+| 无法做 Java 层方法 hook | LSPlant 完整 ART method hook（before/after/replace） |
+| 扩展进程（appex）无法在主进程砸壳 | 多 ClassLoader、InMemoryDex、动态加载全链路可观测 |
+| 沙盒文件路径受限 | /proc/self/maps 全内存枚举、任意 region dump、magic 扫描 |
+| 难以做指令级 trace | QBDI 指定函数/地址范围 instruction trace |
+| HTTP/MCP/分析全在目标进程 | **三层架构**：Agent 轻量采集，idhd 守护进程承担重活 |
+
+### 0.3 架构升级（相对 iOS 参考项目的核心差异）
+
+iOS 参考项目把 HTTP、MCP、Capstone、日志存储全部放在注入的 dylib 里。Android 项目采用三层分离：
+
+```text
+目标 App 进程          libidh_agent.so     hook / trace / dump / 采集 / 轻量 RPC
+独立守护进程           idhd                HTTP / WebSocket / MCP / DB / 索引 / 缓存 / 调度
+浏览器                 Web UI              观测台、搜索、配置、可视化、导出
+```
+
+**记住这条红线**：目标进程内只做采集、拦截、定位；分析、索引、反编译、展示、持久化全部在 idhd。
+
+---
+
+## 1. 产品定义
+
+### 1.1 一句话
+
+一个运行在 Android 目标进程内的高能力 native agent，配合本机 daemon（idhd）、Web UI 和 MCP Server，实现：
+
+- 运行时 dex/so/memory dump
+- Java / native hook 与算法观测
+- 函数级与指令级 trace
+- Capstone 反汇编与二进制分析
+- Dex 搜索、xref、smali / 伪 Java
+- 脱壳辅助与算法逆向工作流
+
+### 1.2 核心卖点（用户真正关心的）
+
+```text
+当前进程实际加载了什么 dex？
+哪个 ClassLoader 加载的？
+哪个方法用了这个字符串？
+哪个方法调用了这个加密 API？
+运行时 key/iv 的真实值是什么？          ← 明文边界观测，天然绕过加密与 pinning
+这个 dex 是文件加载还是内存加载？
+native 函数在 libxxx.so 的哪个偏移？
+能否一键生成 Hook 点？
+网络请求与加密调用能否关联？             ← 把密文对应到明文与调用方
+这个 App 用了哪些反调试 / root / 签名 / 模拟器检测？   ← 反分析行为观测（模块 V）
+检测到分析环境后它的行为如何分叉？
+堆里当前活着的 token / key / 配置对象是什么？          ← 活体对象自省（模块 T）
+```
+
+> **第一卖点**：在**明文边界** hook（`Cipher.doFinal` / `Mac` / `SSL_write` / `EVP_*`），
+> 无论目标用什么加密、是否加固、是否 pinning，都在数据变成密文之前拿到明文，
+> 并回答「这段密文里装的是什么、key 是什么、谁发的」。
+
+### 1.3 不是什么
+
+- 不是全量 jadx 替代品
+- 不是「万能脱壳器」
+- 不是全进程无差别 instruction trace 工具
+- 不是把重分析引擎塞进目标 App 的单体 so
+
+---
+
+## 2. 系统组成
+
+程序由四个可交付物组成：
+
+| 组件 | 名称 | 职责 |
+|------|------|------|
+| Agent | `libidh_agent.so` | 注入目标进程，执行 hook/trace/dump/采集 |
+| Daemon | `idhd` | 守护进程，HTTP/MCP/存储/索引/调度 |
+| Web UI | 嵌入式前端 | 浏览器访问的实时观测台 |
+| Sandbox | `sandbox-test-app` | 覆盖全模块的自动化验证宿主 |
+
+辅助交付物：注入脚本、配置工具、proto 协议、文档。
+
+---
+
+## 3. 功能需求总览
+
+```text
+IDH Android Runtime Workbench
+│
+├── A. 进程接入与会话管理
+├── B. Runtime Dex 管理
+├── C. Dump Engine（dex / so / memory）
+├── D. Java Hook Engine
+├── E. Native Hook / libc / linker 监控
+├── F. 文件与系统 API 监控
+├── G. 网络监控
+├── H. 加密算法观测与分析
+├── I. Trace Engine（Java / JNI / Native）
+├── J. 反汇编与二进制分析
+├── K. Dex 索引、搜索与反汇编
+├── L. 脱壳辅助（含 ART 结构级捕获、方法体恢复）
+├── M. 事件中心与关联分析
+├── N. Web 观测台
+├── O. MCP Server
+├── P. 自观测与审查日志
+├── Q. 安全与访问控制
+├── R. 数据存储与导出
+├── S. 目标兼容性与抗干扰采集（诊断 + 韧性）
+├── T. Runtime Object Inspector（活体对象自省）
+├── U. 非标准运行时识别与扩展点（Flutter / Unity / RN）
+├── V. 反分析行为观测（调试 / root / 签名 / 模拟器 / 完整性检测）
+└── W. 注入后端与打包（Zygisk root 版 + Gadget/重打包 非 root 版 + 模拟注入）
+```
+
+以下逐模块描述「做什么」「看到什么」「边界在哪」。
+
+---
+
+## 4. A — 进程接入与会话管理
+
+### 4.1 Agent 注入
+
+**功能**：将 `libidh_agent.so` 加载到目标 App 进程。详细的后端与打包见**模块 W**。
+
+**注入方式**（覆盖 root 与非 root 两条路径，用户按环境选择）：
+
+- **Root 路径 — Zygisk 插件**（主线，early inject）：随 Zygisk 模块在 zygote fork 后早期加载，抢在目标反调试布防之前。
+- **非 root 路径 — Frida Gadget / 重打包**：把 `libidh_agent.so`（可选携带 gadget so）打进目标 APK 重打包，或以 gadget 方式加载，无需 root。
+- `ptrace` 手动注入（root 环境按需）。
+- LSPosed / Xposed 桥接加载（有框架时）。
+- **模拟注入**（开发/CI 主路径）：`sandbox-test-app` 自身 `dlopen` 加载 agent，无需真机对抗即可验证全部模块。
+
+Agent 必须支持两种 bootstrap 入口且行为一致：被注入器加载（`JNI_OnLoad`/构造函数）与被宿主主动加载（导出 `idh_agent_start()`）。
+
+**功能要求**：
+
+- 注入后自动连接 `idhd` 守护进程
+- 上报进程身份：`pid`、`uid`、`packageName`、`processName`、`ABI`、`Android 版本`、`启动时间`
+- 支持多进程 App：每个进程独立 session，idhd 统一管理
+- 支持 attach / detach：用户从 Web UI 选择目标进程
+- Agent 崩溃不影响 idhd；Agent 重启后自动重连并恢复 session 元数据
+
+### 4.2 会话（Session）
+
+**功能**：一次「观测任务」的完整上下文。
+
+**Session 包含**：
+
+- 目标进程信息
+- 已捕获的 dex 列表
+- 已加载 module 列表
+- 活跃 hook 规则
+- trace 任务状态
+- 事件流游标
+- dump 产物索引
+
+**功能要求**：
+
+- 支持 session 录制与回放（事件时间线可离线查看）
+- 支持多 session 并行（多 App / 多进程）
+- session 数据持久化在 idhd，Agent 断开不丢已采集数据
+
+---
+
+## 5. B — Runtime Dex 管理
+
+**功能**：回答「当前进程实际加载了哪些 dex、从哪来、谁加载的」。
+
+### 5.1 Dex 来源类型
+
+| 来源 | 说明 |
+|------|------|
+| `BASE_APK` | 安装包内 classes.dex / classesN.dex |
+| `SPLIT` | split APK 中的 dex |
+| `DEX_CLASS_LOADER` | `DexClassLoader` / `PathClassLoader` 加载的外部 dex/jar/apk |
+| `IN_MEMORY` | `InMemoryDexClassLoader` 从 `ByteBuffer` 加载 |
+| `MEMORY_SCAN` | `/proc/self/maps` 或堆扫描发现的 dex magic |
+| `ART_DEXFILE` | 通过 ART 内部结构关联定位（进阶） |
+
+### 5.2 ClassLoader 追踪
+
+**功能**：
+
+- 记录完整 ClassLoader 树（parent 链、创建时机、关联 dex）
+- 每个 dex 绑定 `class_loader_id`
+- 类加载事件：`loadClass` 命中时记录 class 名、ClassLoader、dex 来源
+- Web UI 展示 ClassLoader 拓扑图
+
+### 5.3 Dex 身份与去重
+
+**功能**：
+
+- 每个 dex 计算 `sha256` 作为唯一身份
+- 相同内容不同来源的 dex 合并展示，保留多来源标注
+- 记录：`size`、`captured_at`、`load_path`（若有）、`source` 类型
+
+### 5.4 Dex 列表展示
+
+Web UI「Dex Browser」需展示：
+
+- dex 名称 / hash / 大小 / 来源 / ClassLoader / 捕获时间
+- 含多少个 class / method / string
+- 索引状态（未索引 / 索引中 / 已索引）
+- 操作：查看 / dump 下载 / 建立索引 / 搜索
+
+---
+
+## 6. C — Dump Engine
+
+**功能**：从运行时获取真实二进制内容，不限于磁盘文件。
+
+### 6.1 内存 Maps 管理
+
+**功能**：统一抽象 `/proc/self/maps`。
+
+```text
+MemoryRegion {
+  start, end, perms, offset, dev, inode, pathname
+  type: heap | stack | anon | dalvik | dex | oat | vdex | cdex | so | apk | ashmem
+  tags: []
+}
+```
+
+**能力**：
+
+- 枚举全部内存段
+- 按权限过滤：r-- / rw- / r-x / rwx
+- 按类型过滤：heap / so / dex / anon 等
+- 按路径关键词搜索
+- 读取指定地址范围（带权限检查）
+- 导出 maps 快照
+
+### 6.2 Magic 扫描
+
+**功能**：在指定 region 或全进程扫描特征 magic。
+
+| Magic | 识别对象 |
+|-------|----------|
+| `dex\n035` ~ `dex\n039` | DEX |
+| `cdex` | Compact DEX |
+| `ELF` | 可执行 / 共享库 |
+| `PK\x03\x04` | ZIP / APK / JAR |
+| `oat\n` | OAT |
+| `vdex` | VDEX |
+
+**输出**：命中地址列表、所属 region、上下文预览（前后 N 字节）
+
+### 6.3 Dex Dump
+
+**触发方式**：
+
+- 手动：用户在 Web UI 指定 dex 或地址 dump
+- 自动：`DexClassLoader` / `InMemoryDexClassLoader` 加载时
+- 事件：命中加密 API / 目标方法时联动 dump
+- 扫描：magic 扫描命中后一键 dump
+
+**Dump 后处理**（在 idhd 执行）：
+
+- sha256 去重
+- dex header 修复（`file_size` / `checksum` / `signature`）
+- 有效性检查（`code_item` 是否可读）
+- 自动进入索引队列
+
+### 6.4 SO Dump
+
+**类型**：
+
+| 类型 | 策略 |
+|------|------|
+| 文件型 | maps 有 pathname → 直接复制源文件 |
+| 内存型 | 按 ELF program header 重组 segment |
+| 修复型 | 多段拼接 r-x / r-- / rw-，修复 ELF header |
+
+**元数据输出**：
+
+- module name / base address / load bias
+- segments 列表
+- dynamic symbols / imports / exports
+- strings 段提取
+- 可执行段 hash
+
+### 6.5 通用内存 Dump
+
+**功能**：
+
+- 指定 `start + size` dump 任意 region
+- 按字符串附近 dump（命中地址 ± N 字节）
+- 按对象地址附近 dump（Java 对象 / native 指针）
+- 调用栈命中时自动 dump 当前线程栈附近内存
+- heap / anon region 关键词搜索后 dump
+
+### 6.6 Dump 产物管理
+
+**功能**：
+
+- 产物列表：类型（dex/so/region/maps）、大小、hash、时间、触发原因
+- 下载 / 删除 / 重新索引
+- 与 session 关联
+- 批量导出 zip
+
+---
+
+## 7. D — Java Hook Engine
+
+**功能**：基于 LSPlant 的 ART 层 Java 方法 hook，是算法逆向的核心模块。
+
+### 7.1 基础 Hook 能力
+
+- 按 `class + method + signature` hook
+- hook 构造函数
+- hook 重载方法（精确匹配 descriptor）
+- 回调类型：`before` / `after` / `replace`
+- 打印参数 / 返回值 / 异常
+- 打印调用栈（可过滤系统帧）
+- dump 参数：`byte[]` / `ByteBuffer` / `String` / 数组
+- 条件 hook：满足表达式才记录
+- one-shot hook：命中 N 次后自动卸载
+- 批量 hook：按包名前缀 / 类名通配
+
+### 7.2 内置模板 — Crypto
+
+| 目标 | 记录内容 |
+|------|----------|
+| `MessageDigest.getInstance` | 算法名 |
+| `MessageDigest.update` | 输入分片（流式拼接） |
+| `MessageDigest.digest` | 输出 hash |
+| `Mac.getInstance/init/update/doFinal` | 算法、key、输入、输出 |
+| `Cipher.getInstance` | 转换字符串（如 AES/CBC/PKCS5Padding） |
+| `Cipher.init` | mode、key、iv、algorithmParameterSpec |
+| `Cipher.update` | 输入/输出分片 |
+| `Cipher.doFinal` | 最终输入/输出 |
+| `SecretKeySpec.<init>` | key 字节、算法 |
+| `IvParameterSpec.<init>` | iv 字节 |
+| `Base64.encode/decode` | 输入/输出 |
+| `KeyGenerator.generateKey` | 生成的 key |
+| `Signature.sign/verify` | 算法、数据、签名 |
+
+**输出 — Algorithm Session**：
+
+```text
+Session #1024
+├── algorithm: AES/CBC/PKCS5Padding
+├── mode: ENCRYPT
+├── key: 16 bytes (hex/base64)
+├── iv: 16 bytes
+├── input: 明文
+├── output: 密文
+├── thread: main-1
+├── java stacktrace
+├── caller: com.xxx.LoginActivity.submit
+├── dex: sha256:abc... / method_idx: 1234
+└── timestamp
+```
+
+流式调用自动拼回完整明文/密文（继承 iOS 参考项目思路）。
+
+### 7.3 内置模板 — File I/O
+
+| 目标 | 记录内容 |
+|------|----------|
+| `File` 构造 / exists / delete / rename | 路径 |
+| `FileInputStream` / `FileOutputStream` | 路径、读写长度 |
+| `RandomAccessFile` | 路径、mode、offset |
+| `Files.read/write` (NIO) | 路径、数据摘要 |
+| `SharedPreferences` get/put | key、value 类型与值 |
+| `SQLiteDatabase` execSQL/query | SQL 语句 |
+
+### 7.4 内置模板 — Device / System Info
+
+| 目标 | 记录内容 |
+|------|----------|
+| `TelephonyManager` | IMEI/AndroidId/运营商等 |
+| `Settings.Secure/Global` | 读取的 key/value |
+| `Build.*` | 设备信息字段 |
+| `SystemProperties.get` | 属性名与值 |
+| `WifiInfo` / `BluetoothAdapter` | MAC 等 |
+
+### 7.5 内置模板 — 动态加载
+
+| 目标 | 记录内容 |
+|------|----------|
+| `DexClassLoader.<init>` | dex/jar 路径、optimizedDirectory |
+| `InMemoryDexClassLoader.<init>` | ByteBuffer 内容摘要 → 触发 dex dump |
+| `PathClassLoader.<init>` | dex 路径 |
+| `ClassLoader.loadClass` | 类名、ClassLoader |
+
+### 7.6 自定义 Hook
+
+**功能**（继承 iOS Self_Hook 思路）：
+
+- Web UI 或配置文件下发 hook 规则
+- 规则格式：`class`、`method`、`signature`、`callback_type`、`arg_print`、`enabled`
+- 规则持久化，进程重启后可恢复
+- 一键生成 Hook 代码片段（LSPosed / Xposed / Frida 格式）
+
+### 7.7 Hook 管理
+
+- 已安装 hook 列表：目标、类型、命中次数、状态
+- 启用 / 禁用 / 卸载
+- hook 健康检查：哪些方法 hook 失败及原因
+
+---
+
+## 8. E — Native Hook / libc / linker 监控
+
+**功能**：观测 native 层行为，并明确标注事件来源与覆盖边界。
+
+### 8.1 Hook Backend 抽象
+
+```text
+HookBackend
+├── PLT/GOT hook          — 导入表调用
+├── inline hook           — 任意地址
+├── linker monitor        — dlopen/android_dlopen_ext
+├── dlsym monitor         — 符号解析（含重定向）
+├── syscall trace         — 系统调用级（可选）
+└── QBDI instrumentation  — DBI 级
+```
+
+**UI 必须标注来源**：`Java API` / `libc` / `syscall` / `DBI` / `可能漏检 direct syscall`
+
+### 8.2 libc / bionic 监控
+
+| 函数 | 记录内容 |
+|------|----------|
+| `open` / `openat` | path、flags、fd、返回值 |
+| `read` / `write` | fd、长度、数据摘要 |
+| `pread` / `pwrite` | fd、offset、长度 |
+| `close` | fd |
+| `fopen` / `fread` / `fwrite` / `fclose` | 路径、模式 |
+| `access` / `stat` / `lstat` / `fstat` | 路径 / fd |
+| `mmap` / `munmap` / `mprotect` | 地址、大小、权限 |
+| `connect` / `send` / `recv` / `sendto` / `recvfrom` | fd、地址、数据摘要 |
+
+### 8.3 linker 监控
+
+| 函数 | 记录内容 |
+|------|----------|
+| `dlopen` / `android_dlopen_ext` | path、flags、handle |
+| `dlsym` | handle、symbol、resolved address |
+| `dlclose` | handle |
+
+**dlsym 重定向**（继承 iOS 思路）：
+
+- 对已 hook 的 native 符号，`dlsym` 返回 wrapper 地址
+- 使通过函数指针的间接调用也能被捕获
+- 边界：目标在 Agent 注入前已缓存函数指针则无法重定向
+
+### 8.4 Native 加密库监控
+
+**OpenSSL / BoringSSL**（若目标链接）：
+
+```text
+EVP_EncryptInit_ex / EVP_DecryptInit_ex / EVP_CipherInit_ex
+EVP_EncryptUpdate / EVP_DecryptUpdate / EVP_CipherUpdate
+EVP_EncryptFinal_ex / EVP_DecryptFinal_ex / EVP_CipherFinal_ex
+EVP_CIPHER_CTX_ctrl
+EVP_DigestInit/Update/Final
+HMAC_Init/Update/Final
+```
+
+**其他**：
+
+```text
+AES_encrypt / AES_decrypt
+MD5_Update / SHA1_Update / SHA256_Update
+RSA_public_encrypt / RSA_private_decrypt
+```
+
+### 8.5 JNI 监控
+
+| 监控点 | 记录内容 |
+|--------|----------|
+| `RegisterNatives` | class、methods 表（name/signature/fnPtr） |
+| `Call*Method` 系列 | class、method、参数 |
+| `NewStringUTF` / `GetStringUTFChars` | 字符串内容 |
+| `GetByteArrayElements` / `SetByteArrayRegion` | 数组数据摘要 |
+| `FindClass` | class 名 |
+
+### 8.6 Direct Syscall 覆盖（分级）
+
+灰产/加固常用直接 `svc` 指令绕过 libc/PLT hook。不承诺完全拦截，按级别收口：
+
+| 级别 | 能力 | 边界 |
+|------|------|------|
+| L0 声明 | libc/PLT/inline hook 可能漏 direct syscall；UI 明确标注事件来源 | 默认 |
+| L1 检测 | 扫描可执行段中 `svc #0` 指令热点，识别高频 syscall wrapper，输出疑似绕过 libc 的函数列表 | 静态，安全 |
+| L2 观测 | 对指定函数/地址范围用 DBI 记录 syscall 前后寄存器，与文件/网络事件弱关联 | 需指定范围 |
+| L3 高风险实验 | SVC patch / seccomp-unotify / PTRACE_SYSEMU | 仅 sandbox/授权环境，非默认产品能力 |
+
+---
+
+## 9. F — 文件与系统 API 监控
+
+本节是 **Java 层**文件/系统监控的独立视图（与 D.7.3、D.7.4 配合），侧重 Web UI 展示。
+
+### 9.1 事件记录格式
+
+```text
+FileEvent {
+  event_type: READ | WRITE | DELETE | RENAME | MKDIR | ...
+  timestamp, thread_id
+  path, fd
+  size, data_preview
+  source: JAVA | LIBC | SYSCALL
+  stacktrace
+  class_name, method_name  (若来自 Java)
+}
+```
+
+### 9.2 噪点过滤
+
+继承 iOS 噪点过滤思路：
+
+- 系统路径白名单/黑名单
+- 高频无用路径自动降噪
+- 「查看噪声」模式：展示被过滤的事件
+- 用户可标记「非噪声」反馈给规则
+
+### 9.3 文件浏览（可选进阶）
+
+- 列出 App 可访问目录（data/data/包名/...）
+- 读取 / 下载沙盒内文件（需权限声明与二次确认）
+- 与文件事件联动：点击路径查看相关事件
+
+---
+
+## 10. G — 网络监控
+
+**功能**：捕获网络请求与响应，并与加密事件关联。
+
+### 10.1 Java 层网络
+
+| 框架 | 监控方式 |
+|------|----------|
+| `HttpURLConnection` | hook 输入/输出流 |
+| `OkHttp` | hook `RealCall.execute/enqueue`、`Request/Response` |
+| `Retrofit` | hook ServiceMethod 层 |
+| `WebView` | hook `loadUrl`、`shouldInterceptRequest` |
+| `SSLSocket` | 握手与读写 |
+| `HttpsURLConnection` | 同 HttpURLConnection |
+
+**记录内容**：
+
+- URL、method、request headers、request body
+- response status、response headers、response body
+- 耗时、线程、调用栈
+- 请求与响应**配对**为一条记录（继承 iOS 配对思路）
+
+### 10.2 Native 层网络
+
+| 函数 | 记录内容 |
+|------|----------|
+| `SSL_write` / `SSL_read` | 明文数据（App 自带 TLS 栈时） |
+| `connect` | 目标地址 |
+| Cronet / 自研协议 | 按 module 定制 hook |
+
+**边界**：系统 TLS 若不经 App import slot，可能不命中，UI 需说明。
+
+### 10.3 关联分析
+
+**功能**（继承 iOS `correlate_request`）：
+
+- 给定一条网络事件，在时间窗 + 线程维度查找相关的加密事件
+- 输出：该请求前/后发生了哪些 Cipher/MessageDigest/Mac 调用
+- 可视化：时间线上网络请求与加密调用的叠图
+
+---
+
+## 11. H — 加密算法观测与分析
+
+### 11.1 动态通道（主力）
+
+汇总 D.7.2 与 E.8.4 的 hook 输出，提供统一「算法观测台」：
+
+- 实时事件流
+- 按算法分类：Digest / HMAC / Symmetric / Asymmetric / KDF / Base64
+- 按操作分类：Init / Update / Final / Encrypt / Decrypt / Sign / Verify
+- 详情：Key / IV / 明文 / 密文 / Hex / HexDump / 调用栈
+- 流式拼包：多次 update 合并为完整输入输出
+
+### 11.2 静态通道
+
+**DEX 扫描**（在 idhd 对已索引 dex 执行）：
+
+- 引用 `javax.crypto.Cipher`、`java.security.MessageDigest` 等类的方法
+- `const-string` 中的算法名字符串（AES、RSA、MD5、HmacSHA256 等）
+- `invoke` 链：从入口方法到加密 API 的调用路径
+
+**Native 扫描**（对已 dump 的 so）：
+
+- 导入符号：EVP_*、AES_*、MD5_*、SHA*_*
+- 字符串：算法名、密钥相关常量
+- 输出「疑似算法函数」列表
+
+### 11.3 静态 + 动态联立
+
+```text
+静态定位疑似 sign() 方法
+    ↓
+动态 hook 该方法 + Cipher.init
+    ↓
+一次登录流程后输出完整算法链路
+    ↓
+点击跳转 smali / native disasm
+```
+
+### 11.4 Stripped Native Crypto 常量签名扫描
+
+灰产常把加密放 native、静态链接 + strip 符号，`EVP_*`/`AES_*` 符号 hook 落空。对 dump 出的 so 扫描**算法特征常量**定位疑似算法函数，再 inline hook 定点：
+
+| 特征常量 | 识别对象 |
+|----------|----------|
+| AES S-box / 逆 S-box、Rcon | AES |
+| `0x6a09e667…`（8 个初值） | SHA-256 |
+| MD5 init `0x67452301…`、T 表 | MD5 |
+| SHA-1 init `0x67452301…0xC3D2E1F0` | SHA-1 |
+| Base64 字母表 `ABC…/+` | Base64 |
+| TEA/XTEA delta `0x9E3779B9` | TEA 系 |
+| CRC32 多项式表 | CRC |
+
+**输出**：疑似算法函数候选列表（module + offset + 命中常量），可一键 inline hook。
+
+### 11.5 字符串解密例程观测
+
+混淆器把常量字符串加密、运行时解密。能力：
+
+- 识别/hook 字符串解密函数（Java 静态方法或 native），记录输入密文 → 输出明文。
+- 或对解密后内存 dump，重建**明文字符串表**。
+- 与 dex 索引联动：把解密后的明文回填到方法上下文，抵消字符串混淆。
+
+---
+
+## 12. I — Trace Engine
+
+**功能**：观测真实执行路径。分三种，不混用。
+
+### 12.1 Java 方法级 Trace（主线）
+
+**记录**：
+
+- 方法进入 / 退出
+- 参数 / 返回值 / 异常
+- 线程、调用栈、耗时
+
+**过滤**（必须支持，默认开启过滤）：
+
+- 按包名 / 类名 / 方法名
+- 按关键词命中
+- 按 API 类型：加密 / 网络 / 文件 / 设备信息
+- 按线程
+- 按时间窗口（只 trace N 秒）
+- 按命中次数上限
+
+**输出**：
+
+- 调用树
+- 线程时间线
+- 与 smali 对照跳转
+
+### 12.2 DEX 指令级 Trace（调试模式）
+
+**边界**：ART 可能 JIT/AOT，不一定逐条执行 dex opcode。
+
+**定位**：小范围、指定方法、调试模式。
+
+**能力**：
+
+- 指定 method_idx 的 opcode 级执行记录
+- 必要时强制解释执行 / 插桩
+- 与 smali 行号对照
+
+**禁止作为默认功能**：不做全进程 DEX 指令 trace。
+
+### 12.3 Native Trace（QBDI）
+
+**过滤维度**：
+
+```text
+scope: module | address range | function | thread | duration | hit count | condition
+event: call | ret | basic block | instruction | mem read | mem write | register snapshot
+```
+
+**模式**：
+
+| 模式 | 用途 |
+|------|------|
+| 函数级 trace | 默认，看调用关系 |
+| 基本块 trace | 分支分析 |
+| 指令级 trace | 算法逆向，指定地址范围 |
+
+**输出 — TraceEvent**：
+
+```text
+timestamp, pid, tid, module, pc, symbol, event_type
+asm, regs, mem_access, call_depth, correlation_id
+```
+
+**Web UI**：
+
+- 函数调用树
+- 线程时间线
+- 基本块图
+- 指令列表 + 反汇编
+- 寄存器变化
+- 内存读写热点
+
+---
+
+## 13. J — 反汇编与二进制分析
+
+**功能**：基于 Capstone，在 idhd 中做主要分析，Agent 仅提供轻量即时反汇编。
+
+### 13.1 地址模型
+
+```text
+Runtime Address = module_base + offset
+File Offset     = ELF segment mapping
+Display         = libcrypto.so + 0x345678
+```
+
+Web UI 优先显示 `module + offset` 或 `symbol + offset`，不仅显示裸绝对地址。
+
+### 13.2 反汇编能力
+
+- 按地址反汇编 N 条指令
+- 按字节 hex 反汇编
+- 按函数范围反汇编（已知起止地址）
+- 按 module 枚举可执行段并反汇编
+- 架构：ARM32 / ARM64（主线），可扩展 x86
+
+### 13.3 二进制分析
+
+```text
+BinaryAnalyzer
+├── module 列表
+├── 可执行段枚举
+├── 符号表 / 动态符号
+├── imports / exports
+├── strings 提取
+├── 函数候选（entry / prologue 识别）
+├── branch targets / call targets
+├── xref（谁调用了谁）
+└── 搜索索引
+```
+
+### 13.4 搜索能力
+
+- 字符串搜索
+- 符号名搜索
+- 地址搜索
+- 汇编助记符搜索
+- 立即数搜索
+- call / jump 目标搜索
+- 函数交叉引用
+
+### 13.5 与 Trace 联动
+
+- trace 命中 PC → 一键反汇编该地址
+- 反汇编 call 指令 → 跳转目标函数
+- 函数级 trace 树节点 → 展开为指令列表
+
+---
+
+## 14. K — Dex 索引、搜索与反汇编
+
+**功能**：按需反编译，不是全量 jadx。
+
+### 14.1 Dex 解析
+
+解析标准 dex 结构：
+
+```text
+string_ids / type_ids / proto_ids / field_ids / method_ids / class_defs / code_item
+```
+
+支持：标准 dex、多 dex、修复后的内存 dex。
+
+### 14.2 索引
+
+| 索引 | 内容 |
+|------|------|
+| string index | 全部字符串 |
+| class index | 类名、父类、接口、access flags |
+| method index | 类名、方法名、descriptor、access |
+| field index | 类名、字段名、类型 |
+| invoke xref | method → callers / callees |
+| string xref | string → used_by_methods |
+| field xref | field → readers / writers |
+
+### 14.3 搜索（优先级高于全量反编译）
+
+| 搜索类型 | DEX 指令特征 |
+|----------|-------------|
+| 字符串 | `const-string`, `const-string-jumbo` |
+| API 调用 | `invoke-virtual/static/direct/interface` |
+| 字段 | `iget/iput/sget/sput` |
+| 类引用 | `new-instance`, `check-cast`, `instance-of`, `const-class` |
+| 加密特征 | Cipher, MessageDigest, Mac, SecretKeySpec, Base64 |
+| 网络特征 | OkHttp, Retrofit, WebView, HttpURLConnection |
+
+**典型工作流**：
+
+```text
+搜 "/api/login"
+  → 哪些方法用了这个字符串
+  → 这些方法调用了谁 / 谁调用了它们
+  → 一键看 smali
+  → 一键生成 Hook 模板
+  → 一键启动 crypto trace
+```
+
+### 14.4 反汇编输出
+
+- **smali**：`dex_sha256 + method_idx → smali`（按需生成，缓存）
+- **伪 Java**：按需 method 级生成，非全量 decompile
+- **CFG**：基本块 + 分支可视化（进阶）
+
+### 14.5 缓存策略
+
+```text
+dex_sha256 + method_idx  -> smali
+dex_sha256 + method_idx  -> pseudo_java
+dex_sha256 + string_idx  -> used_by_methods[]
+dex_sha256 + method_idx  -> callers[] / callees[]
+```
+
+不缓存全量反编译结果，避免内存爆炸。
+
+---
+
+## 15. L — 脱壳辅助
+
+**功能定位**：运行时 dex 捕获 / dump / 修复辅助，不是「万能脱壳」。
+
+### 15.1 一代整体加固
+
+壳把真实 dex 解密后加载。
+
+**工具能力**：
+
+- hook `DexClassLoader` path → 复制 dex
+- maps 扫描 dex magic → dump
+- classloader 监控 → 自动捕获
+- dex header 修复
+- 自动建索引
+
+### 15.2 二代抽取壳
+
+方法体运行时才解密。
+
+**工具能力**：
+
+- 类加载后 dump
+- 方法首次执行后 dump
+- 执行前后 `code_item` 对比
+- 指定 class/method 定点 dump
+- 有效性检查：哪些方法已恢复、哪些仍为空
+
+### 15.3 内存 dex 型
+
+`InMemoryDexClassLoader` + `ByteBuffer`。
+
+**工具能力**：
+
+- hook 构造 → dump ByteBuffer 全内容
+- 修 header → 索引 → 搜索
+
+### 15.4 VMP 虚拟化壳
+
+**工具能力**（辅助，不承诺还原 Java）：
+
+- trace VM dispatch
+- 识别 opcode handler
+- dump vm bytecode
+- 记录输入输出
+- 定位关键 API 调用
+
+### 15.5 产品描述边界
+
+```text
+支持：运行时 dex 捕获、内存 dex dump、方法体恢复辅助、抽取壳分析辅助
+不支持承诺：所有壳还原成可读的 Java 源码、VMP 完整语义还原
+```
+
+### 15.6 ART 结构级 Dex 捕获（主力，优先级高）
+
+不依赖 dex magic、不依赖磁盘路径、不依赖 ClassLoader 构造参数，直接从 ART 运行时结构关联真实 DexFile。混淆/加固改不了已加载的字节码，这是最鲁棒的捕获路径。
+
+**能力**：
+
+- 遍历 `ClassLinker` / `DexCache` / `ClassLoader`，枚举已加载 Class ↔ DexFile 关系
+- 记录映射：`ClassLoader → DexFile → begin/size`
+- 从 ART DexFile 内存地址 dump（支持 CompactDex → 展开为标准 dex）
+- 与 maps magic scan 结果**交叉校验**
+- 按 Android API level 维护 resolver（ART 内部结构随版本变动；**优先覆盖测试设备 SDK 36**）
+- 失败时输出**结构探测报告**，不静默失败
+
+**输出**：`DexIdentity.source = ART_DEXFILE`、`art_location`、`class_loader_id`、`begin`、`size`、`api_level`
+
+### 15.7 Method Body Recovery 辅助
+
+针对二代抽取壳（方法体运行时才解密）。分两模式，**不做无脑全量主动 invoke**（避免触发风控/网络/删数据/自毁）：
+
+**模式一 · 被动恢复**：
+
+- 方法真实执行前后对比 `code_item`
+- 命中 hook/trace 时自动 snapshot code_item
+- 标记每个方法的 body 恢复状态（已恢复 / 仍为空 / 未触发）
+
+**模式二 · 受控触发**：
+
+- 仅对 sandbox 或用户**显式选择**的方法启用
+- 默认跳过：构造函数、native 方法、同步方法、调用链含危险 API 的方法
+- 支持 dry-run 风险分析、one-shot、超时、线程隔离、异常捕获
+- 触发前后记录 `code_item` 差异
+
+**边界**：不承诺无副作用；不默认全量 invoke；不对未知业务方法自动执行。
+
+---
+
+## 16. M — 事件中心与关联分析
+
+**功能**：所有模块产生的数据统一进入事件中心。
+
+### 16.1 事件类型
+
+```text
+CRYPTO      — 加密 API 调用
+FILE        — 文件读写
+NETWORK     — 网络请求/响应
+SYSTEM      — dlopen/dlsym/mmap 等
+JAVA_HOOK   — 自定义 Java hook 命中
+JNI         — JNI 调用
+NATIVE      — native hook 命中
+DEX         — dex 加载/捕获
+DUMP        — dump 完成
+TRACE       — trace 事件
+CLASS_LOAD  — 类加载
+DETECTION   — 目标的反分析检测（调试/root/签名/模拟器/完整性）
+AUDIT       — 工具自审计（hook 安装/RPC/错误，独立于目标事件流）
+```
+
+### 16.2 事件记录格式
+
+```text
+Event {
+  seq: u64                    — 全局递增序号
+  type, category, timestamp_ns
+  pid, tid
+  source: JAVA | LIBC | SYSCALL | DBI
+  summary: string             — 列表展示用
+  detail: object              — 详情页完整数据
+  stacktrace: string[]
+  correlation_id: optional     — 关联组
+  related_dex: optional
+  related_method: optional
+  noise: bool                  — 是否被噪点过滤
+}
+```
+
+### 16.3 事件浏览
+
+- 实时事件流（WebSocket 推送）
+- 按类型 / 时间 / 关键词 / 大小过滤
+- 暂停 / 恢复采集
+- 清空（内存 + 可选文件）
+- 单条详情展开
+- 批量导出
+
+### 16.4 关联分析
+
+- 网络请求 ↔ 加密调用（时间窗 + 线程）
+- dex 加载 ↔ 类加载 ↔ 方法 hook 命中
+- native dlopen ↔ 符号调用 ↔ crypto
+- 用户自定义：事件 A 后 N 秒内的事件 B
+
+---
+
+## 17. N — Web 观测台
+
+**功能**：浏览器访问的实时控制台，不是简单文件下载页。
+
+### 17.1 页面结构
+
+| 页面 | 功能 |
+|------|------|
+| **Dashboard** | 当前 session、进程信息、dex/so/hook/trace/dump 计数、健康状态 |
+| **Dex Browser** | dex 列表、class/method/string/API 搜索、xref、smali/伪 Java |
+| **Native Browser** | module 列表、symbols、imports/exports、strings、disasm、xref |
+| **Hook Center** | 安装/管理 Java/native hook、模板库、自定义规则 |
+| **Crypto Lab** | 算法观测台、Algorithm Session 详情、静态扫描报告 |
+| **Network** | 请求/响应列表、详情、与 crypto 关联 |
+| **File Monitor** | 文件事件流、路径搜索、噪点模式 |
+| **Trace Viewer** | 调用树、时间线、指令列表、寄存器、过滤配置 |
+| **Dump Center** | dump 任务、产物列表、下载、索引状态 |
+| **Memory Explorer** | maps 浏览、region 读取、magic 扫描、dump |
+| **Object Inspector** | 活体实例枚举、字段读取、堆内 String/byte[] 搜索、低风险 getter 调用（模块 T） |
+| **Anti-Analysis Radar** | 目标的调试/root/签名/模拟器/完整性检测事件、检测手段清单、行为分叉标注（模块 V） |
+| **Injection Center** | 注入后端选择、Zygisk/gadget/重打包/模拟注入、agent 打包状态（模块 W） |
+| **Compatibility & Health** | 抗干扰诊断报告、hook 后端可用性、自审计日志、诊断包导出（模块 S + P） |
+| **MCP Center** | tool 列表、schema、调用历史、token 管理 |
+| **Settings** | 访问控制、过滤规则、导出、诊断 |
+
+### 17.2 通用 UI 能力
+
+- 多 tab 架构
+- 左右分栏 master-detail（列表 + 详情）
+- 实时刷新 + 「N 条新事件」提示
+- 关键字搜索、分类过滤、大小过滤
+- 详情：Hex / HexDump / 调用栈 / 关联跳转
+- 暂停 / 清空 / 导出
+- 进程信息栏：包名、PID、UID、Android 版本、设备型号、内存
+- 健康状态横幅（红色 = 有 hook 失败或服务异常）
+- 离线断连提示
+
+### 17.3 进程内浮层（可选）
+
+继承 iOS 悬浮窗思路，Android 可选实现：
+
+- 系统 overlay 浮窗 / 通知栏常驻
+- 显示各分类事件计数
+- 显示 idhd 连接状态与服务地址
+- 点击跳转 Web 或展开简化日志
+
+### 17.4 诊断与反馈
+
+继承 iOS「审查日志」思路：
+
+- 一键生成诊断报告：版本、目标 App、hook 健康、事件统计
+- 复制 / 导出报告
+- 不含业务敏感数据（key/明文）的默认报告
+- 可选附带最近 N 条非敏感事件摘要
+
+---
+
+## 18. O — MCP Server
+
+**功能**：供 AI 客户端（Cursor、Claude 等）程序化操控工作台。  
+**部署位置**：只在 `idhd`，不在目标进程。
+
+### 18.1 传输
+
+- MCP Streamable HTTP（POST/GET + SSE 流式）
+- 与 HTTP API 共享 Service Layer
+- Token 认证
+
+### 18.2 Tool 列表
+
+**进程管理**：
+
+```text
+process.list / attach / detach / info
+```
+
+**内存**：
+
+```text
+memory.maps / read / search / dump / scan_magic
+```
+
+**Dex**：
+
+```text
+dex.list / dump / search_string / search_method / search_api
+dex.disassemble_method / xref / class_info
+```
+
+**Java Hook**：
+
+```text
+java.hook / unhook / list_hooks
+java.trace_method / crypto_watch
+```
+
+**Native**：
+
+```text
+native.modules / symbols / disasm / disasm_function
+native.trace_function / trace_range / trace_stop
+```
+
+**文件与系统**：
+
+```text
+file.watch_enable / events
+syscall.watch_enable / events
+```
+
+**Dump**：
+
+```text
+dump.list / download / status
+```
+
+**Trace**：
+
+```text
+trace.start / stop / query / export
+```
+
+**事件**：
+
+```text
+events.query / get / correlate
+stats.get / health.get
+```
+
+**反汇编**：
+
+```text
+disassemble.bytes / address / function
+binary.search_string / search_symbol / imports / exports
+```
+
+**活体对象自省（T）**：
+
+```text
+object.find_instances / read_fields / search_heap / invoke_getter / get
+```
+
+**反分析行为观测（V）**：
+
+```text
+detect.watch_enable / events / summary
+```
+
+**抗干扰与注入（S / W）**：
+
+```text
+compat.probe / report
+inject.backends / attach_zygisk / pack_gadget / status
+```
+
+### 18.3 与 iOS 参考项目 MCP 的对照
+
+iOS 已有：disassemble、analyze_function、list_imports、get_macho_info、query_events、correlate_request、get_event、get_stats、get_diag、dump_status 等。
+
+Android 在此基础上增加：全套 dex 操作、Java hook、native trace、memory maps、classloader 信息等。
+
+---
+
+## 19. P — 自观测与审查日志
+
+**功能**：fail-loud，失效必须可见（继承 iOS 思路）；工具能长期自维护、可复现、可反馈。
+
+### 19.0 两条独立事件流（关键）
+
+- **目标事件流**：采集到的目标 App 行为（crypto/network/file/dex/detection…）。
+- **工具自审计流（AUDIT）**：Agent/idhd 自己干了什么。两套 ring buffer、两个视图、互不淹没。
+
+**自审计内容**：每个 hook 安装成功/失败/跳过（原因，形成 hook 台账）、每次 dump 触发源与结果、每条 RPC、每次 Agent↔idhd 重连、ring buffer 溢出、流式 crypto 上下文丢失、trace 异常退出。
+
+**一键诊断包**：版本 + 目标 App 指纹 + hook 健康台账 + 最近 N 条自审计（默认脱敏，不含 key/明文），用于维护、复盘、issue 复现。
+
+### 19.1 监控项
+
+- 每个 hook 模块安装结果：成功 / 失败 / 跳过（及原因）
+- Agent ↔ idhd 连接状态
+- ring buffer 溢出次数
+- 事件落盘失败
+- trace 任务异常退出
+- idhd HTTP/MCP 服务状态
+- 流式加密上下文丢失（update 无对应 init）
+
+### 19.2 展示位置
+
+- Web Dashboard 健康横幅
+- 进程内浮层（若启用）
+- Agent 日志 `[IDH/ERR]`
+- `GET /api/health` / MCP `health.get`
+
+### 19.3 行为原则
+
+- 失效可见，但**不崩溃宿主 App**
+- 废弃/不可用的 hook 目标（如已移除的 API）单独标记，不淹没真正告警
+- 递归保护：hook 回调内不再触发同类 hook
+
+---
+
+## 20. Q — 安全与访问控制
+
+**功能**：工具能 dump 内存、读文件、hook 任意 API，必须防止未授权访问。
+
+### 20.1 网络监听
+
+- 默认只监听 `127.0.0.1`
+- 用户手动开启 LAN 访问
+- 开启 LAN 后**必须**设置 token
+- 可选：一次性访问码、IP 白名单
+
+### 20.2 危险操作
+
+以下操作需二次确认：
+
+- dump 全进程内存
+- 开启 instruction 级 trace
+- 读取其他 App 数据目录
+- 导出含 key/明文的事件日志
+- 关闭访问认证
+
+### 20.3 敏感数据
+
+- 事件详情含 key/明文时，Web UI 默认遮罩，点击才显示
+- 导出可选脱敏模式
+- MCP 默认不返回完整明文，需显式参数
+
+### 20.4 授权声明
+
+- 仅限授权安全测试与自有 App
+- 脱壳/分发受版权保护的应用可能违法
+- 文档与 UI 中明确提示
+
+---
+
+## 21. R — 数据存储与导出
+
+### 21.1 存储（idhd）
+
+| 数据 | 存储方式 |
+|------|----------|
+| 事件流 | SQLite + 滚动文件归档 |
+| dex 产物 | 文件系统 + sha256 索引 |
+| so 产物 | 文件系统 + module 索引 |
+| 索引 | SQLite / RocksDB |
+| smali/伪Java 缓存 | 文件 + LRU |
+| Capstone 反汇编缓存 | 文件 + LRU |
+| trace 数据 | 分段文件 + 索引 |
+| session 元数据 | SQLite |
+
+### 21.2 Agent 内存策略
+
+- ring buffer 保留最近 N 条事件
+- 单条 blob 上限（如 64KB），防 OOM
+- 大 payload 走共享内存 fd 直传 idhd，不在 Agent 堆积
+
+### 21.3 导出
+
+- 事件日志：JSON / JSONL / CSV
+- 审查/诊断报告：文本 / JSON
+- dump 产物：单文件 / zip 批量
+- trace：JSON / 自定义格式
+- dex 索引：可导出为独立数据库
+
+---
+
+## 22. 沙盒测试 App 需求
+
+**功能**：不是 Hello World，而是覆盖全部模块的确定性测试宿主。
+
+### 22.1 Activity 划分
+
+| Activity | 覆盖模块 |
+|----------|----------|
+| `JavaCryptoActivity` | MD5, SHA-256, HMAC-SHA256, AES/CBC, AES/GCM, RSA sign/verify |
+| `FileIOActivity` | FileInputStream, FileOutputStream, RandomAccessFile, SharedPreferences, SQLite |
+| `DynamicDexActivity` | DexClassLoader, PathClassLoader, InMemoryDexClassLoader |
+| `NativeActivity` | dlopen, dlsym, native AES mock, native file R/W, call chain |
+| `NetworkActivity` | HttpURLConnection, OkHttp, HTTPS 请求 |
+| `DeviceInfoActivity` | TelephonyManager, Settings, Build 字段读取 |
+| `AntiDumpMockActivity` | mmap dex-like buffer, fake header, runtime restore mock |
+| `TraceActivity` | hot loop, branch, nested calls, memory R/W |
+| `AntiDebugMockActivity` | ptrace 自附加、/proc/self/status TracerPid、maps 自扫描、hook 序言校验 — 验证模块 S 存活 + 模块 V 观测 |
+| `PackerMockActivity` | 一/二代抽取壳、InMemoryDex、字符串解密 — 验证 L.6/L.7 |
+| `NativeCryptoStrippedActivity` | strip 符号的 native AES — 验证 H.4 常量扫描 + inline hook |
+| `ObfuscatedFlowActivity` | 混淆 + 加密 + 网络全链路 — 端到端验收 H+G+M |
+| `HeapObjectActivity` | 已知字段值的活体对象 — 验证 T 实例枚举与字段读取 |
+| `DetectionActivity` | 显式执行 root/签名/模拟器/完整性检测 — 验证 V 检测清单命中 |
+
+### 22.2 自动化触发
+
+- ADB intent 触发各 Activity 的指定操作
+- 每个操作有**预期输出**（如 AES key、密文 hash）
+- CI device test 可自动断言 hook 命中与数据正确性
+
+### 22.3 验证标准
+
+```text
+每个 hook 模板        → 可自动验证命中
+每个 dump 类型        → hash 可对照
+每个 trace 模式       → 可回放调用树
+每个搜索类型          → 可命中已知样本
+每个 MCP tool         → 有对应测试用例
+```
+
+---
+
+## 23. 能力边界总表
+
+### 23.1 能稳定做到
+
+- 枚举 `/proc/self/maps`
+- dex / so / memory dump
+- Java API hook（LSPlant）
+- 加密 API 运行时观测（Java + OpenSSL）
+- 文件读写观测（Java + libc，带来源标注）
+- 网络请求/响应捕获（主流框架）
+- 指定范围 native trace（QBDI）
+- Capstone 反汇编与二进制搜索
+- dex 索引、字符串/API 搜索、smali、xref
+- Web + MCP 远程控制
+- 运行时 dex 捕获与脱壳辅助
+- ART 结构级 dex 捕获（不依赖 magic/路径）
+- 活体 Java 对象枚举与字段读取（模块 T）
+- 目标反分析检测的观测（调试/root/签名/模拟器，模块 V）
+- Zygisk（root）+ Gadget/重打包（非 root）+ 模拟注入（模块 W）
+- 明文边界加密观测（绕过加密与 pinning）
+
+### 23.2 不能承诺 100%
+
+- 所有加固壳还原成 Java 源码
+- 所有 native 函数都能 hook（direct syscall、静态链接、内联封装）
+- 全进程 instruction trace 不影响性能
+- stripped so 的函数边界全部准确
+- VMP 壳语义还原
+- 所有 Android 版本 ART 内部结构一致
+- 所有 HTTPS 明文（系统 TLS 栈不一定命中）
+- 目标在 Agent 注入前已缓存的函数指针
+
+- 对抗所有商用加固的注入存活（S 尽力而为，先诊断后韧性，不赌全胜）
+
+### 23.3 推荐产品描述
+
+```text
+通用 Android 运行时逆向分析工具：运行时观测、按需 trace、
+dex/so/memory dump、ART 结构级脱壳辅助、活体对象自省、
+明文边界加密观测、反分析行为观测、Java/native 分析工作流；
+root（Zygisk）与非 root（Gadget/重打包）双注入路径。
+```
+
+---
+
+## 24. 功能原则复述
+
+```text
+按需反编译  →  看懂代码（搜什么看什么）
+trace       →  看真实执行（过滤后观测）
+dump        →  拿运行时真实内容
+脱壳辅助    →  把隐藏代码变成可索引 dex
+关联分析    →  把网络/加密/加载串成链路
+```
+
+```text
+libidh_agent.so  →  采集与执行，越轻越好
+idhd             →  分析与服务，越强越好
+Web UI           →  观测与交互，实时可见
+MCP              →  AI 可编程操控，与 HTTP 同源
+```
+
+---
+
+## 25. 参考项目速查
+
+| 项目 | 地址 | 关系 |
+|------|------|------|
+| ios-decrypt-helper | https://github.com/taisuii/ios-decrypt-helper | 产品形态与工程思路参考；Android 版全面扩展 |
+| LSPlant | https://github.com/LSPosed/LSPlant | Java Hook 后端 |
+| Capstone | https://github.com/capstone-engine/capstone | 反汇编引擎 |
+| QBDI | https://github.com/QBDI/QBDI | Native DBI trace |
+| MCP | https://modelcontextprotocol.io | AI 操控协议 |
+| Frida Gadget | https://frida.re | 非 root 注入 so |
+| Zygisk (Magisk) | https://github.com/topjohnwu/Magisk | root early-inject 后端 |
+
+---
+
+## 26. S — 目标兼容性与抗干扰采集
+
+**目标**：授权取证环境中，提高 Agent 在主动反调试/反注入运行时下的**存活能力、采集稳定性与故障定位能力**。
+
+### 26.1 诊断层
+
+- 检测目标是否存在：hook 冲突、maps 自扫描、ptrace 占用、seccomp 限制、linker namespace 限制、inline-hook 序言校验、Zygisk/框架痕迹检测
+- 对每个 hook 后端给出可用性检测结果
+- 发现目标行为分叉（注入后闪退/走不同分支）时生成诊断事件
+- 生成**兼容性报告**：哪些能力可用、哪些被限制、哪些可能触发崩溃
+
+### 26.2 韧性层（授权环境，默认关闭）
+
+- **early-inject**：抢在目标反调试布防之前完成加载与关键 hook（配合 W 的 Zygisk 后端）
+- **与目标 ptrace 自附加共存**：目标 `PTRACE_TRACEME` 占位时的采集策略
+- **最小侵入模式**：只启用 maps/dex/classloader/crypto 等低痕迹模块，关闭高痕迹 hook
+- **hook 自校验对抗**：应对目标周期性校验函数序言字节、检测 GOT 改写
+
+### 26.3 边界
+
+- 不承诺绕过所有反调试/反注入
+- 默认不自我隐藏
+- 不提供面向未授权目标的通用规避能力
+- 韧性能力默认关闭，需在会话中显式开启并二次确认
+- 验证：sandbox `AntiDebugMockActivity` 作为工具自身稳定性回归
+
+---
+
+## 27. T — Runtime Object Inspector（活体对象自省）
+
+**目标**：对当前 ART 堆中的活体 Java 对象做授权范围内的运行时自省。回答 Hook 无法回答的「当前活着的对象里有什么」。
+
+### 27.1 能力
+
+- 按 class name 枚举存活实例（`Java.choose` 式）
+- 读取对象字段：基本类型 / String / 数组 / `byte[]` / 集合摘要
+- 为对象生成 `object_id`，支持后续继续查看、跨事件引用
+- 堆内搜索：String / `byte[]` / Map key-value 命中（如「含 token 的 String」）
+- 对选中对象调用低风险方法（getter/toString/size/length）
+- 展示对象所属 ClassLoader / Dex / 创建线程线索
+- 与 Hook 事件联动：命中事件里的参数对象可一键展开字段
+
+### 27.2 安全边界
+
+- 默认只读；方法调用必须显式确认，默认仅允许无副作用调用
+- 禁止默认递归全堆深扫
+- 上限：对象数量、字段深度、字符串长度、超时
+
+**取证价值**：加密混淆目标里 key/token/配置常以活体对象存在于堆中，Hook 抓不到静止状态，Object Inspector 直接捞出。
+
+---
+
+## 28. U — 非标准运行时识别与扩展点
+
+**目标**：识别非 Java 主线运行时，先给观测入口，不承诺语义还原。
+
+### 28.1 第一阶段（仅识别）
+
+- Flutter：`libflutter.so`、Dart snapshot、资源布局；BoringSSL 静态链接边界
+- Unity：`libil2cpp.so`、`global-metadata.dat`、mono runtime
+- React Native / Hermes：Hermes bytecode、JS bundle、SoLoader
+- Cronet / 自研 TLS 栈识别
+
+### 28.2 第二阶段（观测入口）
+
+- 记录模块加载、关键符号、字符串、网络/crypto 边界
+- 允许用户对识别出的 runtime 下发专用 hook/trace 模板
+
+### 28.3 边界
+
+- 不承诺还原 Dart/IL2CPP/Hermes 高级语义；第一版不做成 Flutter/Unity 逆向平台
+- **不进 MVP**
+
+---
+
+## 29. V — 反分析行为观测
+
+**目标**：观测**目标 App 自身**为检测分析环境所做的行为（与模块 S 互为镜像：S 让我们活下来，V 让我们看清对方的防御）。
+
+### 29.1 检测类别与观测点
+
+| 类别 | 目标常用手段（hook / 观测点） |
+|------|------------------------------|
+| 调试检测 | `ptrace(PTRACE_TRACEME)`、`/proc/self/status` TracerPid、`Debug.isDebuggerConnected`、JDWP 检查、fork+ptrace、时间差检测 |
+| Root 检测 | `su` 路径 `access/stat`、Magisk 痕迹、`Build.TAGS` test-keys、RootBeer、PackageManager 查已知 root 包、`getprop ro.debuggable/ro.secure` |
+| 签名检测 | `PackageManager.getPackageInfo(GET_SIGNATURES / GET_SIGNING_CERTIFICATES)`、`checkSignatures`、签名哈希比对 |
+| 模拟器检测 | `Build.*` 字段、`/proc/cpuinfo`、传感器、telephony、`qemu` 属性 |
+| 完整性/注入检测 | 读自身 maps、扫 frida/xposed、`.so` 哈希校验、GOT/序言校验 |
+
+### 29.2 输出
+
+- `DETECTION` 事件：类别、手段、目标读到的值/结果、调用方、调用栈
+- **检测手段清单**：该 App 一共用了哪些检测、各触发几次、在什么时机（启动/登录/关键操作）
+- **行为分叉标注**：检测命中后目标是否改走分支（配合 S 的分叉诊断）
+
+### 29.3 价值
+
+给调查员一张对方防御地图：「这个 App 启动时用 3 种方式查 root、登录前查签名」，据此决定用哪种注入路径与最小侵入配置。
+
+---
+
+## 30. W — 注入后端与打包
+
+**目标**：把「能否注入真实目标」这个高风险变量，与「每个功能模块是否正确」解耦，覆盖 root 与非 root，并保证 CI 可持续验证。
+
+### 30.1 注入后端
+
+| 后端 | 环境 | 说明 |
+|------|------|------|
+| **Zygisk 插件** | root（Magisk） | 主线，zygote fork 后 early-inject，配合 S 韧性 |
+| **Frida Gadget** | 非 root | gadget so 随 APK 加载，或独立 gadget 模式 |
+| **重打包注入** | 非 root | 把 `libidh_agent.so`（+可选 gadget）打进目标 APK 重签名 |
+| ptrace 注入器 | root | 按需附加已运行进程 |
+| LSPosed/Xposed 桥接 | 有框架 | 复用框架加载 |
+| **模拟注入** | 无需 root | sandbox 自身 `dlopen` 加载 agent（开发/CI 主路径） |
+
+### 30.2 打包交付物
+
+- `libidh_agent.so`（arm64-v8a 主线，设备 ABI）
+- Zygisk 模块包（root 版）
+- Gadget 打包工具：把 agent + gadget so 注入并重签目标 APK（非 root 版）
+- 双 bootstrap 入口：`JNI_OnLoad`/构造函数（被加载）与 `idh_agent_start()`（被宿主主动调用），行为一致
+
+### 30.3 模拟注入回路（CI 主路径）
+
+```text
+sandbox-app 启动 → System.loadLibrary("idh_agent") → idh_agent_start()
+  → 连 idhd → 跑通全部模块断言 → 再打真实目标
+```
+
+无需 root、确定性、可回归。真机注入只在联调/实战启用。
+
+---
+
+*本文档是唯一权威功能规格（模块 A–W）。开发步骤与排期见 `DEVELOPMENT_PLAN.md`，跨会话进度见 `PROGRESS.md`。*

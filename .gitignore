@@ -1,0 +1,49 @@
+# Build outputs
+build/
+out/
+*.o
+*.so.debug
+*.apk
+*.aab
+*.dex.out
+.cxx/
+
+# Native / CMake
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+
+# Gradle / Android
+.gradle/
+local.properties
+*.iml
+
+# Node / Web
+node_modules/
+dist/
+.vite/
+
+# Rust (if daemon uses it)
+target/
+
+# Captured artifacts / runtime data (never commit target data)
+captures/
+dumps/
+*.dexdump
+*.trace
+idhd-data/
+*.sqlite
+*.sqlite-*
+
+# Third-party checkouts (use submodules)
+agent/third_party/*/
+!agent/third_party/.gitkeep
+
+# Reference clone (kept local only)
+.ref/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
