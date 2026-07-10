@@ -266,6 +266,12 @@ arm64 预编译，agent 运行时 dlopen libQBDI.so，指令级 trace idh_trace_
 
 ## 会话日志（倒序，简短）
 
+- 2026-07-10 (加密面铺开轮)：只抓 AES 太单薄——按 IDH 覆盖完整加密面。
+  ① **agent 常驻 hook 扩到全套**：EVP_CipherUpdate(对称) + EVP_DigestUpdate(摘要) + HMAC_Update/EVP_DigestSignUpdate(HMAC) + SSL_read/write(TLS)；capture_stop 对称还原。
+  ② **demo 跑全套算法**（每 2s 轮转）：AES-CBC/CTR/GCM、DESede、MD5/SHA-1/SHA-256/SHA-512、HmacSHA256/HmacSHA1。
+  ③ **面板分类**：对称/摘要/HMAC/TLS 四类 pill；明文 UTF-8 解码（中文可读）。
+  ④ 新验收 `verify_v11_capture.sh`（对称+摘要+HMAC 三类都自动捕获 + 明文含 IDH_LIVE_ + DEX 可下载）。
+  硬信号：`cats=对称加解密|摘要 Digest|HMAC`，明文 `IDH_LIVE_0009_HmacSHA1_订单金额=163.00元`。**verify_all 27/27**。
 - 2026-07-10 (面板产品化轮·参考 iOS 数据流)：把 Web 从"接口调试器"改成**可操作观测面板**。
   参考 `.ref/ios-decrypt-helper`（hook 常驻→log store→Web 轮询主从列表；dump 面板直接下载）。
   ① **agent 常驻采集**：`capture_start`（常驻装 EVP+SSL hook，不还原）/`capture_drain`（返回并清空累积）/`capture_stop`（还原）。

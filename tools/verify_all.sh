@@ -36,6 +36,7 @@ SCRIPTS=(
   "verify_v10_export.sh:host"
   "verify_v10_events.sh:device"
   "verify_v10_qbdi.sh:device"
+  "verify_v11_capture.sh:device"
 )
 
 pass=0; fail=0; skip=0; FAILED=""

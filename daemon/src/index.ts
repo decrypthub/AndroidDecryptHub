@@ -265,8 +265,9 @@ function hexToPreview(hex: string, max = 80): string {
 }
 function classify(func: string): { algo: string; op: string } {
   if (func.startsWith('EVP_Cipher') || func.startsWith('EVP_Encrypt') || func.startsWith('EVP_Decrypt'))
-    return { algo: 'AES / EVP', op: '对称加解密' };
-  if (func.startsWith('EVP_Digest') || func.startsWith('HMAC')) return { algo: 'HMAC / Digest', op: '摘要' };
+    return { algo: '对称加解密', op: '明文' };
+  if (func === 'HMAC_Update' || func === 'EVP_DigestSignUpdate') return { algo: 'HMAC', op: '消息' };
+  if (func.startsWith('EVP_Digest')) return { algo: '摘要 Digest', op: '输入' };
   if (func === 'SSL_write') return { algo: 'TLS', op: '发送明文' };
   if (func === 'SSL_read') return { algo: 'TLS', op: '接收明文' };
   return { algo: func, op: '捕获' };

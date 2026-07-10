@@ -637,6 +637,24 @@ static int my_EVP_CipherUpdate(void *ctx, unsigned char *out, int *outl, const u
     return g_evp_cipher_orig(ctx, out, outl, in, inl);
 }
 
+// Digest (MD5/SHA-1/SHA-256/SHA-512 via MessageDigest) and HMAC (via Mac) both route
+// through BoringSSL update functions with the same (ctx, data, len) shape — the message
+// being hashed/authenticated is the forensic payload.
+typedef int (*update3_t)(void *, const void *, size_t);
+static update3_t g_orig_evp_digest = NULL, g_orig_hmac = NULL, g_orig_digest_sign = NULL;
+static int my_EVP_DigestUpdate(void *ctx, const void *data, size_t len) {
+    capture("EVP_DigestUpdate", (const unsigned char *)data, (int)len);
+    return g_orig_evp_digest(ctx, data, len);
+}
+static int my_HMAC_Update(void *ctx, const void *data, size_t len) {
+    capture("HMAC_Update", (const unsigned char *)data, (int)len);
+    return g_orig_hmac(ctx, data, len);
+}
+static int my_EVP_DigestSignUpdate(void *ctx, const void *data, size_t len) {
+    capture("EVP_DigestSignUpdate", (const unsigned char *)data, (int)len);
+    return g_orig_digest_sign(ctx, data, len);
+}
+
 // Recon: for each EVP/HMAC function, report which loaded modules' GOT holds its
 // pointer (candidate hook sites) and how many slots. Guides where to install hooks.
 static void cmd_crypto_probe(int fd, const char *id) {
@@ -865,22 +883,33 @@ static int g_capture_on = 0;
 static void cmd_capture_start(int fd, const char *id) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
     void *evp = resolve_sym("libcrypto.so", "EVP_CipherUpdate");
+    void *dig = resolve_sym("libcrypto.so", "EVP_DigestUpdate");
+    void *hm  = resolve_sym("libcrypto.so", "HMAC_Update");
+    void *dsu = resolve_sym("libcrypto.so", "EVP_DigestSignUpdate");
     void *ow  = resolve_sym("libssl.so", "SSL_write");
     void *orr = resolve_sym("libssl.so", "SSL_read");
     if (evp) g_evp_cipher_orig = (EVP_CipherUpdate_t)evp;
+    if (dig) g_orig_evp_digest = (update3_t)dig;
+    if (hm)  g_orig_hmac       = (update3_t)hm;
+    if (dsu) g_orig_digest_sign= (update3_t)dsu;
     if (ow)  g_orig_ssl_write  = (SSL_rw_t)ow;
     if (orr) g_orig_ssl_read   = (SSL_rw_t)orr;
     // Persistent hooks in Conscrypt's GOT (not restored — that's what makes it "live").
+    // Covers symmetric (EVP_CipherUpdate), digest (EVP_DigestUpdate), HMAC (HMAC_Update
+    // and the EVP_PKEY HMAC path EVP_DigestSignUpdate), and TLS (SSL_read/write).
     int re = evp ? got_replace("libjavacrypto.so", evp, (void *)my_EVP_CipherUpdate) : -1;
+    int rd = dig ? got_replace("libjavacrypto.so", dig, (void *)my_EVP_DigestUpdate) : -1;
+    int rh = hm  ? got_replace("libjavacrypto.so", hm,  (void *)my_HMAC_Update) : -1;
+    int rs = dsu ? got_replace("libjavacrypto.so", dsu, (void *)my_EVP_DigestSignUpdate) : -1;
     int rw = ow  ? got_replace("libjavacrypto.so", ow,  (void *)my_SSL_write) : -1;
     int rr = orr ? got_replace("libjavacrypto.so", orr, (void *)my_SSL_read) : -1;
     g_capture_on = 1;
-    char out[256];
+    char out[320];
     snprintf(out, sizeof(out),
-        "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"capture_start\",\"ok\":true,\"evp\":%d,\"sslWrite\":%d,\"sslRead\":%d,\"on\":true}\n",
-        idj, re, rw, rr);
+        "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"capture_start\",\"ok\":true,\"evp\":%d,\"digest\":%d,\"hmac\":%d,\"digestSign\":%d,\"sslWrite\":%d,\"sslRead\":%d,\"on\":true}\n",
+        idj, re, rd, rh, rs, rw, rr);
     send_line(fd, out);
-    LOGI("capture_start: evp=%d sslw=%d sslr=%d", re, rw, rr);
+    LOGI("capture_start: evp=%d dig=%d hmac=%d dsu=%d sslw=%d sslr=%d", re, rd, rh, rs, rw, rr);
 }
 
 // Uninstall the persistent capture hooks and restore the original GOT pointers, so the
@@ -889,14 +918,17 @@ static void cmd_capture_start(int fd, const char *id) {
 // those probes, then calls capture_start again.
 static void cmd_capture_stop(int fd, const char *id) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
-    int e = 0, w = 0, r = 0;
-    if (g_evp_cipher_orig) e = got_replace("libjavacrypto.so", (void *)my_EVP_CipherUpdate, (void *)g_evp_cipher_orig);
-    if (g_orig_ssl_write)  w = got_replace("libjavacrypto.so", (void *)my_SSL_write, (void *)g_orig_ssl_write);
-    if (g_orig_ssl_read)   r = got_replace("libjavacrypto.so", (void *)my_SSL_read, (void *)g_orig_ssl_read);
+    int e = 0, w = 0, r = 0, dg = 0, hm = 0, ds = 0;
+    if (g_evp_cipher_orig) e  = got_replace("libjavacrypto.so", (void *)my_EVP_CipherUpdate, (void *)g_evp_cipher_orig);
+    if (g_orig_evp_digest) dg = got_replace("libjavacrypto.so", (void *)my_EVP_DigestUpdate, (void *)g_orig_evp_digest);
+    if (g_orig_hmac)       hm = got_replace("libjavacrypto.so", (void *)my_HMAC_Update, (void *)g_orig_hmac);
+    if (g_orig_digest_sign)ds = got_replace("libjavacrypto.so", (void *)my_EVP_DigestSignUpdate, (void *)g_orig_digest_sign);
+    if (g_orig_ssl_write)  w  = got_replace("libjavacrypto.so", (void *)my_SSL_write, (void *)g_orig_ssl_write);
+    if (g_orig_ssl_read)   r  = got_replace("libjavacrypto.so", (void *)my_SSL_read, (void *)g_orig_ssl_read);
     g_capture_on = 0;
     pthread_mutex_lock(&g_cap_lock); g_ncaps = 0; pthread_mutex_unlock(&g_cap_lock);
-    char out[200];
-    snprintf(out, sizeof(out), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"capture_stop\",\"ok\":true,\"restored\":{\"evp\":%d,\"sslWrite\":%d,\"sslRead\":%d}}\n", idj, e, w, r);
+    char out[256];
+    snprintf(out, sizeof(out), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"capture_stop\",\"ok\":true,\"restored\":{\"evp\":%d,\"digest\":%d,\"hmac\":%d,\"digestSign\":%d,\"sslWrite\":%d,\"sslRead\":%d}}\n", idj, e, dg, hm, ds, w, r);
     send_line(fd, out);
     LOGI("capture_stop: restored evp=%d sslw=%d sslr=%d", e, w, r);
 }
