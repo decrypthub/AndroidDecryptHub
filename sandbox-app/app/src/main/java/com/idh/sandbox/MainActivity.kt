@@ -75,6 +75,10 @@ class MainActivity : Activity() {
             Log.w(TAG, "idh_agent not loaded: ${t.message}"); "agent: 未加载 — ${t.message}"
         }
 
+        // Drive a live crypto stream so the console's 加解密 panel fills itself once the
+        // agent installs its persistent EVP hook (idhd sends capture_start on connect).
+        JavaCrypto.startLiveDriver()
+
         setContentView(buildUi(pid, loadStatus))
         startHealthPolling()
     }

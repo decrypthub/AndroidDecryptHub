@@ -234,6 +234,87 @@ function recordEvent(type: string, data: any) {
   try { appendFileSync(EVENTS_FILE, JSON.stringify(e) + '\n'); } catch {}
 }
 
+// ---- live capture store: what the agent's persistent hooks stream in (the panel's
+//      加解密 list reads this; it auto-populates without any button click) -------------
+interface Capture {
+  id: number; sessionId: string; func: string; algo: string; op: string;
+  inl: number; tid: number; tsNs: number; ts: number; hex: string; preview: string;
+}
+const captures: Capture[] = [];
+let capSeq = 0;
+const captureTimers = new Map<string, ReturnType<typeof setInterval>>();
+const capturePaused = new Set<string>();   // sessions with continuous capture suspended
+
+// The one-shot probe endpoints install-and-restore their OWN hooks on the same GOT slot
+// the continuous capture uses. Suspend continuous capture around them (pause the drain +
+// uninstall the persistent hooks) so the probe sees a clean slot, then resume.
+async function withCaptureSuspended<T>(sid: string, fn: () => Promise<T>): Promise<T> {
+  const wasOn = captureTimers.has(sid);
+  if (wasOn) { capturePaused.add(sid); try { await sendCmd(sid, 'capture_stop', {}, 8_000); } catch {} }
+  try { return await fn(); }
+  finally { if (wasOn) { try { await sendCmd(sid, 'capture_start', {}, 8_000); } catch {} capturePaused.delete(sid); } }
+}
+
+function hexToPreview(hex: string, max = 80): string {
+  let s = '';
+  for (let i = 0; i + 1 < hex.length && s.length < max; i += 2) {
+    const b = parseInt(hex.slice(i, i + 2), 16);
+    s += b >= 0x20 && b < 0x7f ? String.fromCharCode(b) : '.';
+  }
+  return s;
+}
+function classify(func: string): { algo: string; op: string } {
+  if (func.startsWith('EVP_Cipher') || func.startsWith('EVP_Encrypt') || func.startsWith('EVP_Decrypt'))
+    return { algo: 'AES / EVP', op: '对称加解密' };
+  if (func.startsWith('EVP_Digest') || func.startsWith('HMAC')) return { algo: 'HMAC / Digest', op: '摘要' };
+  if (func === 'SSL_write') return { algo: 'TLS', op: '发送明文' };
+  if (func === 'SSL_read') return { algo: 'TLS', op: '接收明文' };
+  return { algo: func, op: '捕获' };
+}
+
+// Install persistent hooks on connect, then poll capture_drain and stream each new record
+// into the store + over WS. Also auto-dump the app's DEX files so the panel can download
+// them. Mirrors the ios-decrypt-helper flow (hooks stay live, events fill the panel).
+function startCaptureLoop(sid: string) {
+  setTimeout(async () => {
+    try { await sendCmd(sid, 'capture_start', {}, 15_000); log(`capture_start ${sid}`); } catch (e) { log('capture_start failed', (e as Error).message); }
+    autoDumpDex(sid).catch(() => {});
+    if (captureTimers.has(sid)) return;
+    let busy = false;
+    const timer = setInterval(async () => {
+      if (busy || capturePaused.has(sid) || !sessions.get(sid)?.online) return;
+      busy = true;
+      try {
+        const r = await sendCmd(sid, 'capture_drain', {}, 8_000);
+        for (const c of (r.captures ?? [])) {
+          const { algo, op } = classify(c.func);
+          const entry: Capture = {
+            id: ++capSeq, sessionId: sid, func: c.func, algo, op,
+            inl: c.inl, tid: c.tid, tsNs: c.tsNs, ts: Date.now(),
+            hex: c.hex, preview: hexToPreview(c.hex),
+          };
+          captures.push(entry); if (captures.length > 1000) captures.shift();
+          broadcast('capture.new', { id: entry.id, sessionId: sid, algo, op, preview: entry.preview, inl: entry.inl, ts: entry.ts });
+        }
+      } catch {} finally { busy = false; }
+    }, 1500);
+    captureTimers.set(sid, timer);
+  }, 1200);
+}
+
+// Enumerate the app's DEX files and dump each so it's downloadable from the panel.
+async function autoDumpDex(sid: string) {
+  try {
+    const r = await sendCmd(sid, 'art_dexfiles', {}, 30_000);
+    for (const d of (r.dexfiles ?? r.dex ?? [])) {
+      const begin = d.begin ?? d.beginHex ?? d.addr;
+      const size = Number(d.size ?? d.fileSize ?? 0);
+      if (!begin || !size || size > (64 << 20)) continue;
+      try { await dumpRegion(sid, String(begin).replace(/^0x/, ''), size, 'dex-auto'); } catch {}
+    }
+  } catch {}
+}
+
 const wss = new WebSocketServer({ noServer: true });
 function broadcast(event: string, data: unknown) {
   const msg = JSON.stringify({ event, data, ts: Date.now() });
@@ -296,6 +377,7 @@ const agentServer = net.createServer((sock) => {
       log(`agent HELLO ${session.package} pid=${session.pid} abi=${session.abi} entry=${session.entry} -> ${id}`);
       sock.write(JSON.stringify({ t: 'ack', sessionId: id }) + '\n');
       broadcast('agent.hello', session);
+      startCaptureLoop(id);   // install persistent hooks + stream captures to the panel
     } else if (msg.t === 'maps' && session) {
       session.mapsCount = msg.count;
       session.regionsSample = (msg.regions ?? []).slice(0, 50);
@@ -318,6 +400,8 @@ const agentServer = net.createServer((sock) => {
       session.online = false;
       session.lastSeen = Date.now();
       agentSockets.delete(session.sessionId);
+      const t = captureTimers.get(session.sessionId);
+      if (t) { clearInterval(t); captureTimers.delete(session.sessionId); }
       log(`agent CLOSE ${session.package} ${session.sessionId}`);
       broadcast('agent.close', { sessionId: session.sessionId });
     }
@@ -562,6 +646,26 @@ const httpServer = http.createServer(async (req, res) => {
   if (url.pathname === '/mcp' && req.method === 'POST') {
     return handleMcp(await readBody(req), res);
   }
+  // Live captures (auto-populated by the persistent hooks): GET /api/captures?since=&limit=
+  if (url.pathname === '/api/captures') {
+    const since = Number(url.searchParams.get('since') ?? 0);
+    const limit = Math.min(Number(url.searchParams.get('limit') ?? 200), 1000);
+    const list = captures.filter(c => c.id > since);
+    // list view omits full hex; detail view (/api/captures/:id) carries it
+    return send(200, {
+      total: captures.length, on: captureTimers.size > 0,
+      captures: list.slice(-limit).map(c => ({ id: c.id, algo: c.algo, op: c.op, func: c.func, inl: c.inl, tid: c.tid, ts: c.ts, preview: c.preview })),
+    });
+  }
+  if (url.pathname.startsWith('/api/captures/')) {
+    const id = Number(url.pathname.slice('/api/captures/'.length));
+    const c = captures.find(x => x.id === id);
+    if (!c) return send(404, { error: 'not found' });
+    // decode as UTF-8 so Chinese plaintext (gray-market payloads) is readable, not dotted
+    let text = '';
+    try { text = Buffer.from(c.hex, 'hex').toString('utf8'); } catch { text = hexToPreview(c.hex, 4096); }
+    return send(200, { ...c, text });
+  }
   // Session events (record/replay): GET /api/events?type=&limit=&since=
   if (url.pathname === '/api/events') {
     const type = url.searchParams.get('type');
@@ -667,7 +771,7 @@ const httpServer = http.createServer(async (req, res) => {
     const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
     if (!sid) return send(400, { error: 'no session' });
     try {
-      const r = await sendCmd(sid, 'flow_watch', {}, 25_000);
+      const r = await withCaptureSuspended(sid, () => sendCmd(sid, 'flow_watch', {}, 25_000));
       const caps = (r.captures ?? []).map((c: any) => ({ ...c, ascii: Buffer.from(c.hex, 'hex').toString('latin1').replace(/[^\x20-\x7e]/g, '.') }));
       // correlate: pair each crypto capture with a network capture on the SAME thread
       // within a 200ms window (same tid, |Δts| <= 200ms).
@@ -690,7 +794,7 @@ const httpServer = http.createServer(async (req, res) => {
     const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
     if (!sid) return send(400, { error: 'no session' });
     try {
-      const r = await sendCmd(sid, 'net_hook_test', {}, 25_000);
+      const r = await withCaptureSuspended(sid, () => sendCmd(sid, 'net_hook_test', {}, 25_000));
       if (r.captures) r.captures = r.captures.map((c: any) => ({ ...c, ascii: Buffer.from(c.hex, 'hex').toString('latin1').replace(/[^\x20-\x7e]/g, '.') }));
       return send(r.ok ? 200 : 502, r);
     } catch (e) { return send(504, { error: (e as Error).message }); }
@@ -700,7 +804,7 @@ const httpServer = http.createServer(async (req, res) => {
     const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
     if (!sid) return send(400, { error: 'no session' });
     try {
-      const r = await sendCmd(sid, 'crypto_hook_test', {}, 20_000);
+      const r = await withCaptureSuspended(sid, () => sendCmd(sid, 'crypto_hook_test', {}, 20_000));
       // decode captures to ascii preview for convenience
       if (r.captures) r.captures = r.captures.map((c: any) => ({ ...c, ascii: Buffer.from(c.hex, 'hex').toString('latin1').replace(/[^\x20-\x7e]/g, '.') }));
       return send(r.ok ? 200 : 502, r);

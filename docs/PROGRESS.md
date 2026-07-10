@@ -266,6 +266,15 @@ arm64 预编译，agent 运行时 dlopen libQBDI.so，指令级 trace idh_trace_
 
 ## 会话日志（倒序，简短）
 
+- 2026-07-10 (面板产品化轮·参考 iOS 数据流)：把 Web 从"接口调试器"改成**可操作观测面板**。
+  参考 `.ref/ios-decrypt-helper`（hook 常驻→log store→Web 轮询主从列表；dump 面板直接下载）。
+  ① **agent 常驻采集**：`capture_start`（常驻装 EVP+SSL hook，不还原）/`capture_drain`（返回并清空累积）/`capture_stop`（还原）。
+  ② **idhd 自动流水线**：agent 连上即 `capture_start` + 每 1.5s `capture_drain` 入库/广播；自动 `art_dexfiles`→逐个 dump（可下载）。
+  新端点 `/api/captures`(列表)/`/api/captures/:id`(明文 UTF-8 解码，中文可读)。
+  ③ **sandbox App 加实时加解密驱动**（每 2.5s 滚动明文"订单金额=…元"），面板打开即自动填充。
+  ④ **Web 重写为中文面板**：默认「加解密」主从实时列表（自动填充、点开看明文/密文/线程/时间）、「脱壳(DEX)」一键 Dump+下载、进程信息栏、其余功能中文化；调试台保留。
+  ⑤ **冲突修复**：常驻 hook/drain 与一次性 probe 端点(crypto/net/flow)争用同一 GOT 槽+缓冲 → idhd `withCaptureSuspended` 在这三端点期间挂起常驻采集（暂停 drain+capture_stop→跑→capture_start）。
+  硬信号：`/api/captures total>0 on=true`，明文 `IDH_LIVE_0003_订单金额=121.00元`；`/api/dumps` 4 个 dex-auto。**verify_all 26/26**。
 - 2026-07-10 (可用性闭环轮·参考 iOS)：把"怎么打开观测控制台"按产品做闭环，参考 `.ref/ios-decrypt-helper`
   （其 `http_server.m` getifaddrs 取局域网 IP、fail-loud 明示"仅本地可访问"、悬浮窗 URL 点击复制）。
   ① **idhd 探测宿主机局域网 IP**（`os.networkInterfaces`，过滤 vEthernet/WSL/docker 等虚拟网卡，优先 192.168./10./172.16-31.），

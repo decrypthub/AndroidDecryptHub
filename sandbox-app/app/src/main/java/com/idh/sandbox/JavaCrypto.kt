@@ -21,19 +21,39 @@ object JavaCrypto {
     const val HMAC_ALG = "HmacSHA256"
 
     @JvmStatic
-    fun run() {
+    fun run() = runWith(PLAINTEXT)
+
+    // AES-CBC encrypt + HMAC of an arbitrary plaintext. Used both for the fixed-vector
+    // self-test (run) and the live driver (rotating plaintext), so the agent's persistent
+    // EVP hook captures a steady stream of distinct plaintexts into the panel.
+    @JvmStatic
+    fun runWith(plaintext: String) {
         try {
             val cipher = Cipher.getInstance(AES_TRANSFORM)
             cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(KEY, "AES"), IvParameterSpec(IV))
-            val ct = cipher.doFinal(PLAINTEXT.toByteArray(Charsets.UTF_8))
+            val ct = cipher.doFinal(plaintext.toByteArray(Charsets.UTF_8))
             Log.i(TAG, "AES ct(b64)=" + Base64.encodeToString(ct, Base64.NO_WRAP))
 
             val mac = Mac.getInstance(HMAC_ALG)
             mac.init(SecretKeySpec(KEY, HMAC_ALG))
-            val m = mac.doFinal(PLAINTEXT.toByteArray(Charsets.UTF_8))
+            val m = mac.doFinal(plaintext.toByteArray(Charsets.UTF_8))
             Log.i(TAG, "HMAC(b64)=" + Base64.encodeToString(m, Base64.NO_WRAP))
         } catch (t: Throwable) {
             Log.w(TAG, "crypto failed: ${t.message}")
         }
+    }
+
+    // Background driver: every ~2.5s encrypt a rotating plaintext so the console shows a
+    // live, growing 加解密 stream (the agent installs a persistent EVP hook on connect).
+    @JvmStatic
+    fun startLiveDriver() {
+        Thread {
+            var i = 0
+            while (true) {
+                runWith("IDH_LIVE_%04d_订单金额=%d.00元".format(i, 100 + i * 7))
+                i++
+                try { Thread.sleep(2500) } catch (e: InterruptedException) { break }
+            }
+        }.apply { isDaemon = true; name = "idh-live-crypto" }.start()
     }
 }

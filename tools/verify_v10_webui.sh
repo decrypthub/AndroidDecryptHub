@@ -10,13 +10,16 @@ chk(){ if eval "$2"; then echo "PASS  $1"; else echo "FAIL  $1"; fail=1; fi; }
 HTML="$(curl -s "$BASE/")"
 chk "page serves"            '[ -n "$HTML" ]'
 chk "title present"         'echo "$HTML" | grep -q "Android DecryptHub"'
-chk "tabs present"          'echo "$HTML" | grep -q "Capture" && echo "$HTML" | grep -q "Dumps" && echo "$HTML" | grep -q "Dex" && echo "$HTML" | grep -q "Native" && echo "$HTML" | grep -q "MCP"'
+chk "tabs present (中文面板)" 'echo "$HTML" | grep -q "加解密" && echo "$HTML" | grep -q "脱壳" && echo "$HTML" | grep -q "内存" && echo "$HTML" | grep -q "原生" && echo "$HTML" | grep -q "MCP"'
+chk "live capture panel"    'echo "$HTML" | grep -q "/api/captures" && echo "$HTML" | grep -q "capLoad"'
 chk "wires capture api"     'echo "$HTML" | grep -q "/api/crypto/hook_test" && echo "$HTML" | grep -q "/api/flow/watch" && echo "$HTML" | grep -q "/api/detect/watch"'
+chk "wires dex dump+download" 'echo "$HTML" | grep -q "/api/art/dump" && echo "$HTML" | grep -q "/api/dumps/download"'
 chk "wires dex api"         'echo "$HTML" | grep -q "/api/dex/search" && echo "$HTML" | grep -q "/api/dex/xref"'
 chk "wires native api"      'echo "$HTML" | grep -q "/api/native/analyze" && echo "$HTML" | grep -q "/api/native/syscall_scan"'
 chk "wires mcp"             'echo "$HTML" | grep -q "/mcp"'
-chk "events tab + api"      'echo "$HTML" | grep -q ">Events<" ; echo "$HTML" | grep -q "/api/events"'
+chk "events tab + api"      'echo "$HTML" | grep -q "事件" && echo "$HTML" | grep -q "/api/events"'
 # backing endpoints respond (HTTP 200; -F avoids treating [ as a regex)
+chk "/api/captures responds" '[ "$(curl -s -o /dev/null -w %{http_code} "$BASE/api/captures")" = 200 ]'
 chk "/api/dumps responds"   '[ "$(curl -s -o /dev/null -w %{http_code} "$BASE/api/dumps")" = 200 ]'
 chk "/api/agents responds"  '[ "$(curl -s -o /dev/null -w %{http_code} "$BASE/api/agents")" = 200 ]'
 chk "/mcp tools/list responds" 'curl -s -X POST "$BASE/mcp" -H "content-type: application/json" -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}" | grep -qF "tools"'

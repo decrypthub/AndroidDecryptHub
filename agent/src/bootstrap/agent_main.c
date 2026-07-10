@@ -858,6 +858,72 @@ static void cmd_crypto_hook_test(int fd, const char *id) {
     LOGI("crypto_hook_test: replaced=%d triggered=%d captures=%d", replaced, triggered, ncaps);
 }
 
+// ---- continuous capture: install persistent EVP+SSL hooks, drain accumulated records
+//      periodically from idhd (mirrors the ios-decrypt-helper log-store model: hooks
+//      stay installed and events stream to the panel, instead of one-shot triggers) ----
+static int g_capture_on = 0;
+static void cmd_capture_start(int fd, const char *id) {
+    char idj[64]; json_escape(id, idj, sizeof(idj));
+    void *evp = resolve_sym("libcrypto.so", "EVP_CipherUpdate");
+    void *ow  = resolve_sym("libssl.so", "SSL_write");
+    void *orr = resolve_sym("libssl.so", "SSL_read");
+    if (evp) g_evp_cipher_orig = (EVP_CipherUpdate_t)evp;
+    if (ow)  g_orig_ssl_write  = (SSL_rw_t)ow;
+    if (orr) g_orig_ssl_read   = (SSL_rw_t)orr;
+    // Persistent hooks in Conscrypt's GOT (not restored — that's what makes it "live").
+    int re = evp ? got_replace("libjavacrypto.so", evp, (void *)my_EVP_CipherUpdate) : -1;
+    int rw = ow  ? got_replace("libjavacrypto.so", ow,  (void *)my_SSL_write) : -1;
+    int rr = orr ? got_replace("libjavacrypto.so", orr, (void *)my_SSL_read) : -1;
+    g_capture_on = 1;
+    char out[256];
+    snprintf(out, sizeof(out),
+        "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"capture_start\",\"ok\":true,\"evp\":%d,\"sslWrite\":%d,\"sslRead\":%d,\"on\":true}\n",
+        idj, re, rw, rr);
+    send_line(fd, out);
+    LOGI("capture_start: evp=%d sslw=%d sslr=%d", re, rw, rr);
+}
+
+// Uninstall the persistent capture hooks and restore the original GOT pointers, so the
+// one-shot probe endpoints (crypto_hook_test / net_hook_test / flow_watch) get a clean
+// slot to install-and-restore their own hook. idhd suspends continuous capture around
+// those probes, then calls capture_start again.
+static void cmd_capture_stop(int fd, const char *id) {
+    char idj[64]; json_escape(id, idj, sizeof(idj));
+    int e = 0, w = 0, r = 0;
+    if (g_evp_cipher_orig) e = got_replace("libjavacrypto.so", (void *)my_EVP_CipherUpdate, (void *)g_evp_cipher_orig);
+    if (g_orig_ssl_write)  w = got_replace("libjavacrypto.so", (void *)my_SSL_write, (void *)g_orig_ssl_write);
+    if (g_orig_ssl_read)   r = got_replace("libjavacrypto.so", (void *)my_SSL_read, (void *)g_orig_ssl_read);
+    g_capture_on = 0;
+    pthread_mutex_lock(&g_cap_lock); g_ncaps = 0; pthread_mutex_unlock(&g_cap_lock);
+    char out[200];
+    snprintf(out, sizeof(out), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"capture_stop\",\"ok\":true,\"restored\":{\"evp\":%d,\"sslWrite\":%d,\"sslRead\":%d}}\n", idj, e, w, r);
+    send_line(fd, out);
+    LOGI("capture_stop: restored evp=%d sslw=%d sslr=%d", e, w, r);
+}
+
+// Return all records captured since the last drain, then clear the buffer so the next
+// drain only sees new ones (idhd polls this and streams each new record to the panel).
+static void cmd_capture_drain(int fd, const char *id) {
+    char idj[64]; json_escape(id, idj, sizeof(idj));
+    size_t cap = 1 << 16, len = 0; char *out = malloc(cap); if (!out) return;
+    len += snprintf(out + len, cap - len,
+        "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"capture_drain\",\"ok\":true,\"on\":%s,\"captures\":[",
+        idj, g_capture_on ? "true" : "false");
+    pthread_mutex_lock(&g_cap_lock);
+    for (int k = 0; k < g_ncaps; k++) {
+        struct CapRec *r = &g_caps[k];
+        len += snprintf(out + len, cap - len, "%s{\"func\":\"%s\",\"inl\":%d,\"tid\":%d,\"tsNs\":%lld,\"hex\":\"", k ? "," : "", r->func, r->inl, r->tid, r->ts_ns);
+        for (int b = 0; b < r->n && len + 3 < cap; b++) len += snprintf(out + len, cap - len, "%02x", r->data[b]);
+        len += snprintf(out + len, cap - len, "\"}");
+    }
+    int ncaps = g_ncaps;
+    g_ncaps = 0;                                  // clear after draining
+    pthread_mutex_unlock(&g_cap_lock);
+    snprintf(out + len, cap - len, "],\"count\":%d}\n", ncaps);
+    send_line(fd, out);
+    free(out);
+}
+
 // ---- generic native function-call tracer (module I.2, function level) ----
 struct TraceRec { long a0, a1, a2, a3; int tid; long long ts; char s0[48]; };
 static struct TraceRec g_trace[256];
@@ -1448,6 +1514,12 @@ static void command_loop(int fd) {
                     cmd_crypto_probe(fd, id);
                 } else if (strcmp(op, "crypto_hook_test") == 0) {
                     cmd_crypto_hook_test(fd, id);
+                } else if (strcmp(op, "capture_start") == 0) {
+                    cmd_capture_start(fd, id);
+                } else if (strcmp(op, "capture_drain") == 0) {
+                    cmd_capture_drain(fd, id);
+                } else if (strcmp(op, "capture_stop") == 0) {
+                    cmd_capture_stop(fd, id);
                 } else if (strcmp(op, "net_hook_test") == 0) {
                     cmd_net_hook_test(fd, id);
                 } else if (strcmp(op, "flow_watch") == 0) {
