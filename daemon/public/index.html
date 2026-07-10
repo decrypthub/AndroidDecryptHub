@@ -98,9 +98,11 @@
       <h2>脱壳 · DEX（结构级捕获 + 一键下载）</h2>
       <div class="row2">
         <button class="act primary" onclick="rescanDex()">扫描并 Dump 当前 App 的 DEX</button>
+        <button class="act primary" onclick="unpackRun()">一键脱壳会话（T0→触发→T1→恢复）</button>
         <button class="act" onclick="loadDumps()">刷新列表</button>
         <span id="dex-stat" class="muted"></span>
       </div>
+      <pre id="out-session" class="muted"></pre>
       <table><thead><tr><th>类型</th><th>大小</th><th>sha256</th><th>来源</th><th>标签</th><th>下载</th><th>分析</th></tr></thead><tbody id="dumps-rows"></tbody></table>
       <pre id="out-cov" class="muted" style="margin-top:12px">点某个 dex 的「覆盖率」查看方法恢复率报告（诚实统计：具体 Java 方法中有多少已带方法体）。</pre>
       <h2 style="margin-top:16px">快照恢复（抽取壳·回填型）</h2>
@@ -246,6 +248,19 @@ async function coverage(sha){ const el=document.getElementById('out-cov'); el.te
       `有方法体 ${c.basePresent} · 缺失(被抽取?) ${c.baseEmpty}\n恢复率 ${c.recoveryPct}%  ${'█'.repeat(Math.round(c.recoveryPct/5))}${'░'.repeat(20-Math.round(c.recoveryPct/5))}\n`+
       (c.baseEmpty?`\n缺失方法（前${(c.missing||[]).length}）：\n`+(c.missing||[]).map(m=>'  '+m.method).join('\n'):'\n✓ 无缺失方法（未抽取，或已全部恢复）');
   }catch(e){el.textContent='错误: '+e;} }
+async function unpackRun(){ const el=document.getElementById('out-session'), st=document.getElementById('dex-stat');
+  st.textContent='脱壳会话运行中（快照→触发→再快照→恢复）…'; el.textContent='';
+  try{ const r=await (await fetch('/api/unpack/run',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session:val('sess')||undefined,triggerClasses:['com.idh.sandbox.TriggerProbe'],triggerMethod:'safeCompute',level:3})})).json();
+    if(r.error){el.textContent='错误: '+r.error;st.textContent='';return;}
+    st.textContent=`会话完成：T0 ${r.t0Count} dex / 触发 ${r.triggered.length} 类`;
+    let s=`阶段: ${r.phases.join(' → ')}\nT0 快照 ${r.t0Count} 个 DexFile · T1 快照 ${r.t1Count}\n触发 ${r.triggered.length} 类（`+
+      r.triggered.slice(0,4).map(t=>t.class.split('.').pop()+(t.invoked?'✓调用':t.skipped?'⃠跳过':'加载')).join(' ')+`）\n\n`;
+    for(const d of r.dexes){ if(d.error){s+=`  ✗ ${(d.sha0||'').slice(0,12)} ${d.error}\n`;continue;}
+      s+=`[${d.format}] ${d.size}B  具体Java方法 ${d.concreteJava} · 有体 ${d.presentBefore}\n`+
+         `  恢复率 ${d.recoveryBeforePct}% → ${d.recoveryAfterPct}%  (本轮恢复 ${d.recovered} · 仍缺 ${d.stillMissing})\n`+
+         `  重建 ${d.parseOk?'✓可解析':'✗'}  下载 /api/dumps/download?sha=${d.rebuiltSha}\n`; }
+    el.textContent=s; loadDumps();
+  }catch(e){el.textContent='错误: '+e;st.textContent='';} }
 async function recover(){ const el=document.getElementById('out-rec'), st=document.getElementById('rec-stat');
   const baseSha=val('rec-base'), restoredSha=val('rec-rest'); if(!baseSha||!restoredSha){el.textContent='需要 base 和 restored 两个 dump sha';return;}
   st.textContent='恢复中…'; el.textContent='';

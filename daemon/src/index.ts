@@ -883,6 +883,77 @@ const httpServer = http.createServer(async (req, res) => {
       return send(r.ok ? 200 : 502, r);
     } catch (e) { return send(504, { error: (e as Error).message }); }
   }
+  // Full unpack session (P3 capstone): POST /api/unpack/run {session, triggerClasses?[],
+  // triggerMethod?, level?}. Orchestrates the whole pipeline:
+  //   T0 snapshot(每个 DexFile) → coverage → active trigger → T1 snapshot → recover+rebuild
+  // Returns a per-dex recovery report (before/after) + downloadable rebuilt dex. Ties P0-P2
+  // together as one operation, matching the reviewed design's UnpackSession.
+  if (url.pathname === '/api/unpack/run' && req.method === 'POST') {
+    const body = JSON.parse((await readBody(req)) || '{}');
+    const sid = body.session ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    if (!sid) return send(400, { error: 'no session' });
+    const level = Number(body.level ?? 3);
+    const snapshot = async (tag: string) => {
+      const r = await sendCmd(sid, 'art_dexfiles', {}, 30_000);
+      const out: { begin: string; size: number; format: string; sha: string }[] = [];
+      for (const d of (r.dexfiles ?? r.dex ?? [])) {
+        const begin = String(d.begin ?? d.addr ?? ''); const size = Number(d.size ?? 0);
+        if (!begin || !size || size > (64 << 20)) continue;
+        try { const { meta } = await dumpRegion(sid, begin.replace(/^0x/, ''), size, tag); out.push({ begin, size, format: d.format ?? 'dex', sha: meta.sha256 }); } catch {}
+      }
+      return out;
+    };
+    try {
+      // Phase 1: T0 base snapshot
+      const t0 = await snapshot('unpack-t0');
+      // Phase 2: coverage + collect classes with missing methods (targeted triggers)
+      const targeted = new Set<string>();
+      for (const s of t0) {
+        try {
+          const buf = await readFile(dumps.get(s.sha)!.path); const pd = parseDex(buf);
+          for (const m of analyzeCoverage(buf, pd).missing) {
+            const dot = m.method.split('->')[0].replace(/^L/, '').replace(/;$/, '').replace(/\//g, '.');
+            if (dot) targeted.add(dot);
+          }
+        } catch {}
+      }
+      // Phase 3: active trigger (explicit classes ∪ classes with gaps), capped
+      const classes = [...new Set([...(body.triggerClasses ?? []), ...targeted])].slice(0, Number(body.maxClasses ?? 50));
+      const triggered: any[] = [];
+      for (const c of classes) {
+        try { const r = await sendCmd(sid, 'trigger', { className: c, method: body.triggerMethod ?? '', level }, 15_000);
+              triggered.push({ class: c, loaded: r.loaded, invoked: r.invoked, skipped: r.skipped, reason: r.reason }); } catch { triggered.push({ class: c, error: 'timeout' }); }
+      }
+      // Phase 4: T1 restored snapshot
+      const t1 = await snapshot('unpack-t1');
+      const t1ByBegin = new Map(t1.map(x => [x.begin, x]));
+      // Phase 5: recover per dex (match by begin address) + rebuild
+      const dexes: any[] = [];
+      for (const b of t0) {
+        const rest = t1ByBegin.get(b.begin) ?? b;
+        try {
+          const baseBuf = await readFile(dumps.get(b.sha)!.path);
+          const restBuf = await readFile(dumps.get(rest.sha)!.path);
+          const pd = parseDex(baseBuf); const before = analyzeCoverage(baseBuf, pd);
+          const { captures, report } = recoverFromSnapshots(baseBuf, restBuf, pd);
+          const rb = rebuildStandardDex(baseBuf, captures);
+          let parseOk = true; try { parseDex(rb.dex); } catch { parseOk = false; }
+          const outSha = createHash('sha256').update(rb.dex).digest('hex');
+          const path = join(CAPTURES, `${outSha.slice(0, 16)}.dex`);
+          if (!existsSync(path)) writeFileSync(path, rb.dex);
+          const meta: DumpMeta = { sha256: outSha, size: rb.dex.length, source: 'unpack-session', addr: b.begin, tag: 'rebuilt', sessionId: sid, package: sessions.get(sid)?.package ?? '', capturedAt: Date.now(), path, kind: 'dex' };
+          dumps.set(outSha, meta); broadcast('dump.new', meta);
+          const afterPresent = before.basePresent + report.recovered;
+          dexes.push({ format: b.format, size: b.size, sha0: b.sha, sha1: rest.sha, rebuiltSha: outSha, parseOk,
+            concreteJava: before.concreteJava, presentBefore: before.basePresent, recovered: report.recovered, stillMissing: report.stillMissing,
+            recoveryBeforePct: +(before.recoveryRate * 100).toFixed(2),
+            recoveryAfterPct: before.concreteJava ? +((afterPresent / before.concreteJava) * 100).toFixed(2) : 100 });
+        } catch (e) { dexes.push({ sha0: b.sha, error: (e as Error).message }); }
+      }
+      return send(200, { ok: true, session: sid, phases: ['snapshot-t0', 'coverage', 'trigger', 'snapshot-t1', 'recover'],
+        t0Count: t0.length, t1Count: t1.length, triggered, dexes });
+    } catch (e) { return send(504, { error: (e as Error).message }); }
+  }
   // Active trigger (P2): GET /api/unpack/trigger?session=&class=&method=&level=
   // Level 1 loads the class; level 3 also invokes a SAFE static no-arg method. A trigger
   // source for the captor — pair with a dex re-snapshot + /api/dex/recover afterwards.

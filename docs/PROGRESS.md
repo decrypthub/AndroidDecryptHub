@@ -266,6 +266,12 @@ arm64 预编译，agent 运行时 dlopen libQBDI.so，指令级 trace idh_trace_
 
 ## 会话日志（倒序，简短）
 
+- 2026-07-10 (P3 会话编排收官)：把 P0–P2 串成一次操作。`POST /api/unpack/run`：
+  **T0 快照(每 DexFile)→coverage→主动触发→T1 快照→按 begin 配对 recover+重建**，输出每 dex 前后恢复率 + 可下载重建 dex。
+  面板「一键脱壳会话」；`verify_v15_session`（device）：五阶段贯通、T0/T1 各 4 dex、触发 safeCompute 生效、前后覆盖率、重建可解析。**verify_all 31/31。**
+  **诚实边界（未做，非潦草）**：① cdex→标准dex、② DEX 041 逻辑拆分——设备是 dex-038，无真实 cdex/041 样本，
+  041 容器"取全范围"已修(P0)但逻辑切分需样本；③ 分离缓冲/擦除型抽取壳需 backend C(壳恢复函数 hook)/D(ArtMethod，版本敏感)。
+  这三项要么依赖真实样本、要么依赖脆弱 ART 内部结构，**不verify 就不发**。脱壳主线（一级整体 + 二级回填型 + 触发 + 会话）已闭环。
 - 2026-07-10 (P2 主动分级触发)：invoke 只是"给捕获器制造触发机会"的触发源，不是恢复本身（触发→再快照→recover）。
   ① **agent `cmd_trigger`**：Level 1 加载类（壳可能在 class-load 时恢复）、Level 3 反射调用**安全 static 无参**方法；
      安全策略黑名单（exit/exec/delete/pay/lifecycle…），异常隔离，单类单方法（批次/进度由 idhd 编排）。
