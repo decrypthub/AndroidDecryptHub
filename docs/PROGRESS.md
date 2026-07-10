@@ -266,6 +266,14 @@ arm64 预编译，agent 运行时 dlopen libQBDI.so，指令级 trace idh_trace_
 
 ## 会话日志（倒序，简短）
 
+- 2026-07-10 (P2 主动分级触发)：invoke 只是"给捕获器制造触发机会"的触发源，不是恢复本身（触发→再快照→recover）。
+  ① **agent `cmd_trigger`**：Level 1 加载类（壳可能在 class-load 时恢复）、Level 3 反射调用**安全 static 无参**方法；
+     安全策略黑名单（exit/exec/delete/pay/lifecycle…），异常隔离，单类单方法（批次/进度由 idhd 编排）。
+  ② `/api/unpack/trigger?session&class&method&level`。
+  ③ sandbox `TriggerProbe`：safeCompute()(安全)/deleteAll()(黑名单)。
+  ④ `verify_v14_trigger`：safeCompute 被调用(IDH_TRIGGER_OK) + deleteAll 按黑名单跳过 + 类可加载。**verify_all 30/30。**
+  ⚠️ 排障记录：30+ 次 app 重启把 **adb reverse 返回路径(host→device)搞卡死**（hello 通、命令不通，HEAD 代码也复现）——
+     `adb reboot` 复位后恢复。属环境问题，非代码。教训：频繁重启 app 时留意 adb reverse 退化，必要时重启 adb/设备。
 - 2026-07-10 (P1 第二代恢复闭环)：按评审 P1 做"被动恢复"——**从恢复镜像捕获 CodeItem，不假设执行回填原 DEX**。
   ① `codeItemOf/recoverFromSnapshots`（dex.ts）：对 base 的 BASE_EMPTY 方法，从 restored 快照提取 code_item 生成 captures，再 `rebuildStandardDex`。
   ② `stripMethodCode`：同长度冗余-uleb 把 code_off 置 0，模拟抽取（不移位）。

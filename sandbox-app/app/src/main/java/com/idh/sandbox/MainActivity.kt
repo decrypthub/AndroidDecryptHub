@@ -68,6 +68,7 @@ class MainActivity : Activity() {
         JavaCrypto.run()
         Detection.load()
         HeapProbe.init()
+        TriggerProbe.reset()
 
         val loadStatus: String = try {
             System.loadLibrary("idh_agent"); "agent: libidh_agent 已加载（模拟注入）"

@@ -883,6 +883,20 @@ const httpServer = http.createServer(async (req, res) => {
       return send(r.ok ? 200 : 502, r);
     } catch (e) { return send(504, { error: (e as Error).message }); }
   }
+  // Active trigger (P2): GET /api/unpack/trigger?session=&class=&method=&level=
+  // Level 1 loads the class; level 3 also invokes a SAFE static no-arg method. A trigger
+  // source for the captor — pair with a dex re-snapshot + /api/dex/recover afterwards.
+  if (url.pathname === '/api/unpack/trigger') {
+    const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    const className = url.searchParams.get('class');
+    const method = url.searchParams.get('method') ?? '';
+    const level = Number(url.searchParams.get('level') ?? 1);
+    if (!sid || !className) return send(400, { error: 'need session + class' });
+    try {
+      const r = await sendCmd(sid, 'trigger', { className, method, level }, 20_000);
+      return send(r.ok ? 200 : 502, r);
+    } catch (e) { return send(504, { error: (e as Error).message }); }
+  }
   // Memory search: POST /api/memory/search {session, hex?|text?, limit?}
   if (url.pathname === '/api/memory/search' && req.method === 'POST') {
     const body = await readBody(req);

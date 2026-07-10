@@ -1021,6 +1021,88 @@ static void cmd_capture_drain(int fd, const char *id) {
     free(out);
 }
 
+// ---- active triggering (P2): a TRIGGER SOURCE for the CodeItem captor, not recovery
+//      itself. Level 1 loads a class (packer may restore on class-load); Level 3 invokes
+//      a SAFE no-arg static method (so a refill-type shell fills its code_item, which the
+//      next dex snapshot then captures). Strict safety policy; exceptions isolated. --------
+static int name_blacklisted(const char *s) {
+    // dangerous verbs — skip auto-invoke (payments, deletion, exec, lifecycle, exit, ...)
+    static const char *bad[] = { "exit","exec","delete","remove","clear","drop","format","kill",
+        "finish","destroy","close","clinit","init","finalize","write","send","post","pay",
+        "transfer","order","logout","reset","wipe","shutdown","reboot","uninstall", NULL };
+    for (int i = 0; bad[i]; i++) if (strstr(s, bad[i])) return 1;
+    return 0;
+}
+static int class_is_lifecycle(const char *s) {
+    static const char *lc[] = { "Activity","Service","Application","Receiver","Provider", NULL };
+    for (int i = 0; lc[i]; i++) if (strstr(s, lc[i])) return 1;
+    return 0;
+}
+// Trigger one class/method. level: 1=load only, 3=load + safe static no-arg invoke.
+static void cmd_trigger(int fd, const char *id, const char *className, const char *method, int level) {
+    char idj[64]; json_escape(id, idj, sizeof(idj));
+    int loaded = 0, invoked = 0, skipped = 0; const char *reason = "";
+    char result[160] = "";
+    int did = 0;
+    JNIEnv *env = attach_env(&did);
+    if (env) {
+        (*env)->PushLocalFrame(env, 64);
+        jclass jc = load_app_class(env, className);
+        if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); reason = "loadClass threw"; }
+        else if (jc) {
+            loaded = 1;
+            if (level >= 3 && method && method[0]) {
+                if (name_blacklisted(method)) { skipped = 1; reason = "method on safety blacklist"; }
+                else if (class_is_lifecycle(className)) { skipped = 1; reason = "lifecycle class"; }
+                else {
+                    // reflect: Method m = jc.getMethod(name); check static & !native & !abstract; invoke(null)
+                    jclass cClass = (*env)->FindClass(env, "java/lang/Class");
+                    jmethodID mGetMethod = (*env)->GetMethodID(env, cClass, "getMethod", "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;");
+                    jobjectArray empty = (*env)->NewObjectArray(env, 0, cClass, NULL);
+                    jstring mn = (*env)->NewStringUTF(env, method);
+                    jobject m = (*env)->CallObjectMethod(env, jc, mGetMethod, mn, empty);
+                    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); skipped = 1; reason = "no such no-arg method"; }
+                    else if (m) {
+                        jclass cMethod = (*env)->FindClass(env, "java/lang/reflect/Method");
+                        jmethodID mGetMod = (*env)->GetMethodID(env, cMethod, "getModifiers", "()I");
+                        jint mods = (*env)->CallIntMethod(env, m, mGetMod);
+                        int is_static = (mods & 0x0008), is_native = (mods & 0x0100), is_abstract = (mods & 0x0400);
+                        if (!is_static) { skipped = 1; reason = "not static (needs receiver, level>=4)"; }
+                        else if (is_native || is_abstract) { skipped = 1; reason = "native/abstract"; }
+                        else {
+                            jmethodID mSetAcc = (*env)->GetMethodID(env, cMethod, "setAccessible", "(Z)V");
+                            (*env)->CallVoidMethod(env, m, mSetAcc, JNI_TRUE);
+                            jclass cObj = (*env)->FindClass(env, "java/lang/Object");
+                            jobjectArray args = (*env)->NewObjectArray(env, 0, cObj, NULL);
+                            jmethodID mInvoke = (*env)->GetMethodID(env, cMethod, "invoke", "(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;");
+                            jobject ret = (*env)->CallObjectMethod(env, m, mInvoke, NULL, args);   // static → receiver null
+                            if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); reason = "invocation threw (isolated)"; }
+                            else {
+                                invoked = 1;
+                                jclass cStr = (*env)->FindClass(env, "java/lang/String");
+                                jmethodID mValueOf = (*env)->GetStaticMethodID(env, cStr, "valueOf", "(Ljava/lang/Object;)Ljava/lang/String;");
+                                jstring sv = (jstring)(*env)->CallStaticObjectMethod(env, cStr, mValueOf, ret);
+                                if (sv) { const char *cs = (*env)->GetStringUTFChars(env, sv, NULL); if (cs) { strncpy(result, cs, sizeof(result)-1); (*env)->ReleaseStringUTFChars(env, sv, cs); } }
+                            }
+                        }
+                    } else { skipped = 1; reason = "method not found"; }
+                }
+            }
+        } else { reason = "class not found"; }
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        (*env)->PopLocalFrame(env, NULL);
+        detach_env(did);
+    } else { reason = "no JNI env"; }
+    char cj[200], rj[200], rej[160];
+    json_escape(className, cj, sizeof(cj)); json_escape(result, rj, sizeof(rj)); json_escape(reason, rej, sizeof(rej));
+    char out[720];
+    snprintf(out, sizeof(out),
+        "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"trigger\",\"ok\":true,\"class\":\"%s\",\"level\":%d,\"loaded\":%s,\"invoked\":%s,\"skipped\":%s,\"reason\":\"%s\",\"result\":\"%s\"}\n",
+        idj, cj, level, loaded?"true":"false", invoked?"true":"false", skipped?"true":"false", rej, rj);
+    send_line(fd, out);
+    LOGI("trigger %s method=%s level=%d loaded=%d invoked=%d skipped=%d (%s)", className, method?method:"", level, loaded, invoked, skipped, reason);
+}
+
 // ---- generic native function-call tracer (module I.2, function level) ----
 struct TraceRec { long a0, a1, a2, a3; int tid; long long ts; char s0[48]; };
 static struct TraceRec g_trace[256];
@@ -1665,6 +1747,12 @@ static void command_loop(int fd) {
                     cmd_capture_drain(fd, id);
                 } else if (strcmp(op, "capture_stop") == 0) {
                     cmd_capture_stop(fd, id);
+                } else if (strcmp(op, "trigger") == 0) {
+                    char tcls[200] = "", tm[80] = "";
+                    json_get_str(line, "className", tcls, sizeof(tcls));
+                    json_get_str(line, "method", tm, sizeof(tm));
+                    long long lv = json_get_num(line, "level");
+                    cmd_trigger(fd, id, tcls, tm, lv > 0 ? (int)lv : 1);
                 } else if (strcmp(op, "net_hook_test") == 0) {
                     cmd_net_hook_test(fd, id);
                 } else if (strcmp(op, "flow_watch") == 0) {

@@ -39,6 +39,7 @@ SCRIPTS=(
   "verify_v11_capture.sh:device"
   "verify_v12_rebuild.sh:host"
   "verify_v13_recover.sh:host"
+  "verify_v14_trigger.sh:device"
 )
 
 pass=0; fail=0; skip=0; FAILED=""
