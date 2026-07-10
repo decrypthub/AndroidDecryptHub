@@ -408,31 +408,79 @@ static void cmd_search(int fd, const char *id, const char *pat_hex, int limit) {
 // other data segments corrupts the original's own call path, so we stop at one.
 #include <sys/mman.h>
 
+// Parse a maps perms string ("r--p"/"rw-p") into an mprotect flag set.
+static int perms_to_prot(const char *perms) {
+    int prot = 0;
+    if (perms[0] == 'r') prot |= PROT_READ;
+    if (perms[1] == 'w') prot |= PROT_WRITE;
+    if (perms[2] == 'x') prot |= PROT_EXEC;
+    return prot;
+}
+
+// Swap one slot: temporarily make its page writable, publish the new pointer with a
+// full barrier, then RESTORE the page's original protection. RELRO (r--) is put back
+// read-only so we neither weaken the linker's RELRO hardening nor leave a rw-flipped
+// page that an integrity self-check could flag. Returns 1 on success, 0 if not writable.
+static int got_write_slot(void **slot, void *newval, int orig_prot, long pagesz) {
+    void *page = (void *)((unsigned long long)slot & ~((unsigned long long)pagesz - 1));
+    if (mprotect(page, pagesz, PROT_READ | PROT_WRITE) != 0) return 0;
+    *slot = newval;
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);   // publish before restoring protection
+    mprotect(page, pagesz, orig_prot);         // RELRO r-- goes back to r--
+    return 1;
+}
+
+// Debug/verification: last successfully-hooked slot + its original maps perms, so a
+// self-test can confirm the page protection was restored (RELRO r-- stays r--).
+static unsigned long long g_dbg_slot = 0;
+static char g_dbg_orig_perms[8] = "";
+
+// Read the maps perms string ("r--p") of the mapping containing `addr`. "?" if unmapped.
+static void perms_of_addr(unsigned long long addr, char *out, int outsz) {
+    snprintf(out, outsz, "?");
+    FILE *m = fopen("/proc/self/maps", "r");
+    if (!m) return;
+    char line[512];
+    while (fgets(line, sizeof(line), m)) {
+        char sa[32], ea[32], perms[8];
+        if (sscanf(line, "%31[0-9a-f]-%31[0-9a-f] %7s", sa, ea, perms) < 3) continue;
+        unsigned long long s = strtoull(sa, NULL, 16), e = strtoull(ea, NULL, 16);
+        if (addr >= s && addr < e) { snprintf(out, outsz, "%s", perms); break; }
+    }
+    fclose(m);
+}
+
+// Hook the real slot in EVERY matching caller module (not just the first). Exactly one
+// slot PER module (lowest-address RELRO/.got.plt slot) — hooking duplicate copies in a
+// module's other data segments would corrupt that module's own call path and deadlock
+// the trampoline. Returns total slots replaced. Generalizes over multiple callers; for
+// a filter that matches a single module it reduces to hooking that one slot.
 static int got_replace(const char *module_substr, void *orig, void *wrapper) {
     FILE *m = fopen("/proc/self/maps", "r");
     if (!m) return -1;
     char line[512];
     int replaced = 0;
     long pagesz = sysconf(_SC_PAGESIZE);
-    while (replaced == 0 && fgets(line, sizeof(line), m)) {
+    char cur_mod[400] = "";
+    int hooked_this_mod = 0;
+    while (fgets(line, sizeof(line), m)) {
         char sa[32], ea[32], perms[8], off[32], dev[16], path[400] = "";
         unsigned long long inode = 0;
         int nf = sscanf(line, "%31[0-9a-f]-%31[0-9a-f] %7s %31s %15s %llu %399[^\n]", sa, ea, perms, off, dev, &inode, path);
         if (nf < 6 || perms[0] != 'r') continue;
         char *pp = path; while (*pp == ' ') pp++;
         if (!strstr(pp, module_substr)) continue;
-        if (strstr(perms, "x")) continue;                 // GOT lives in data/RELRO, not exec
+        if (strcmp(pp, cur_mod) != 0) { snprintf(cur_mod, sizeof(cur_mod), "%s", pp); hooked_this_mod = 0; }
+        if (hooked_this_mod) continue;                    // one slot per module already done
+        if (strstr(perms, "x")) continue;
+        int orig_prot = perms_to_prot(perms);
         unsigned long long start = strtoull(sa, NULL, 16), end = strtoull(ea, NULL, 16);
         if (end <= start) continue;
-        for (unsigned long long a = start; a + sizeof(void *) <= end; a += sizeof(void *)) {
+        for (unsigned long long a = start; a + sizeof(void *) <= end && !hooked_this_mod; a += sizeof(void *)) {
             void **slot = (void **)a;
-            if (*slot == orig) {
-                void *page = (void *)(a & ~((unsigned long long)pagesz - 1));
-                if (mprotect(page, pagesz, PROT_READ | PROT_WRITE) == 0) {
-                    *slot = wrapper;
-                    replaced++;
-                    break;   // exactly one slot
-                }
+            if (*slot == orig && got_write_slot(slot, wrapper, orig_prot, pagesz)) {
+                replaced++; hooked_this_mod = 1;
+                g_dbg_slot = a; snprintf(g_dbg_orig_perms, sizeof(g_dbg_orig_perms), "%s", perms);
             }
         }
     }
@@ -454,17 +502,23 @@ static void cmd_gothook_selftest(int fd, const char *id) {
     void *libc = dlopen("libc.so", RTLD_NOW);
     void *orig = libc ? dlsym(libc, "close") : NULL;
     g_orig_close = orig;
+    g_dbg_slot = 0; g_dbg_orig_perms[0] = 0;
     int replaced = orig ? got_replace("libidh_agent.so", orig, (void *)my_close) : -1;
+    // While still hooked: read the hooked slot's page perms. got_write_slot restores the
+    // page's original protection after publishing, so RELRO (r--) must read back r-- —
+    // proving we don't leave the page rw-flipped (weakened RELRO / integrity-check bait).
+    char slotPerms[8] = "?"; if (g_dbg_slot) perms_of_addr(g_dbg_slot, slotPerms, sizeof(slotPerms));
+    int restored = (g_dbg_orig_perms[0] && strncmp(slotPerms, g_dbg_orig_perms, 3) == 0) ? 1 : 0;
     int before = g_close_hits;
     // trigger a controlled close() from agent code -> routes through the hooked GOT slot
     int tfd = open("/proc/self/stat", O_RDONLY);
     if (tfd >= 0) close(tfd);
     int after = g_close_hits;
     if (replaced > 0 && orig) got_replace("libidh_agent.so", (void *)my_close, orig);  // restore
-    char out[256];
+    char out[320];
     snprintf(out, sizeof(out),
-        "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"gothook_selftest\",\"ok\":true,\"replaced\":%d,\"hitsBefore\":%d,\"hitsAfter\":%d,\"fired\":%s}\n",
-        idj, replaced, before, after, (after > before) ? "true" : "false");
+        "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"gothook_selftest\",\"ok\":true,\"replaced\":%d,\"hitsBefore\":%d,\"hitsAfter\":%d,\"fired\":%s,\"origPerms\":\"%s\",\"slotPerms\":\"%s\",\"protRestored\":%s}\n",
+        idj, replaced, before, after, (after > before) ? "true" : "false", g_dbg_orig_perms, slotPerms, restored ? "true" : "false");
     send_line(fd, out);
     LOGI("gothook_selftest: replaced=%d hits=%d fired=%d", replaced, after - before, after > before);
 }
@@ -500,18 +554,46 @@ static void *resolve_sym(const char *mod_substr, const char *symbol) {
         if (*(unsigned int *)ph == 2) { dyn_vaddr = *(unsigned long long *)(ph + 16); break; }  // PT_DYNAMIC
     }
     if (!dyn_vaddr) return NULL;
-    unsigned long long symtab = 0, strtab = 0;
+    unsigned long long symtab = 0, strtab = 0, hash = 0, gnuhash = 0;
     unsigned long long *d = (unsigned long long *)(base + dyn_vaddr);
-    for (; d[0] != 0; d += 2) {           // Elf64_Dyn: {d_tag, d_val}
-        if (d[0] == 6) symtab = d[1];     // DT_SYMTAB
-        else if (d[0] == 5) strtab = d[1];// DT_STRTAB
+    for (; d[0] != 0; d += 2) {                // Elf64_Dyn: {d_tag, d_val}
+        if (d[0] == 6) symtab = d[1];          // DT_SYMTAB
+        else if (d[0] == 5) strtab = d[1];     // DT_STRTAB
+        else if (d[0] == 4) hash = d[1];       // DT_HASH
+        else if (d[0] == 0x6ffffef5ULL) gnuhash = d[1]; // DT_GNU_HASH
     }
     if (!symtab || !strtab) return NULL;
-    if (symtab < base) symtab += base;    // link-time vaddr -> runtime
+    if (symtab < base) symtab += base;         // link-time vaddr -> runtime
     if (strtab < base) strtab += base;
-    if (strtab <= symtab) return NULL;
-    long count = (long)((strtab - symtab) / 24);  // .dynstr follows .dynsym (common layout)
-    if (count <= 0 || count > 300000) return NULL;
+    if (hash && hash < base) hash += base;
+    if (gnuhash && gnuhash < base) gnuhash += base;
+
+    // Dynsym count, preferred sources in order of rigor:
+    //  1) DT_HASH: nchain (= number of dynsym entries) is the 2nd word.
+    //  2) DT_GNU_HASH: walk the last bucket's chain until the terminator bit.
+    //  3) fallback: (strtab - symtab)/sizeof(Elf64_Sym) — assumes .dynstr abuts .dynsym.
+    long count = 0;
+    if (hash) {
+        count = (long)((unsigned int *)hash)[1];         // nchain
+    } else if (gnuhash) {
+        unsigned int *gh = (unsigned int *)gnuhash;
+        unsigned int nbuckets = gh[0], symoffset = gh[1], bloom_size = gh[2];
+        unsigned long long *bloom = (unsigned long long *)&gh[4];   // ELF64: 8-byte bloom words
+        unsigned int *buckets = (unsigned int *)&bloom[bloom_size];
+        unsigned int *chain = &buckets[nbuckets];
+        unsigned int last = 0;
+        for (unsigned int i = 0; i < nbuckets; i++) if (buckets[i] > last) last = buckets[i];
+        if (last < symoffset) count = symoffset;
+        else { while (!(chain[last - symoffset] & 1)) last++; count = (long)last + 1; }
+    } else {
+        if (strtab <= symtab) return NULL;
+        count = (long)((strtab - symtab) / 24);
+    }
+    if (count <= 0 || count > 300000) {
+        if (strtab <= symtab) return NULL;               // last-resort sanity fallback
+        count = (long)((strtab - symtab) / 24);
+        if (count <= 0 || count > 300000) return NULL;
+    }
     for (long i = 0; i < count; i++) {
         unsigned char *sym = (unsigned char *)(symtab + (unsigned long long)i * 24);
         unsigned int st_name = *(unsigned int *)sym;

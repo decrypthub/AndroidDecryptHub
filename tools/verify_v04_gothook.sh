@@ -18,7 +18,11 @@ if(!a){console.log('NO_AGENT');console.log('RESULT:FAIL');process.exit(0);}
 const r=await (await fetch(`${base}/api/hook/selftest?session=${a.sessionId}`)).json();
 if(r.error){console.log('ERR',r.error);console.log('RESULT:FAIL');process.exit(0);}
 console.log(`gothook: replaced=${r.replaced} fired=${r.fired} hits=${r.hitsAfter-r.hitsBefore}`);
-const pass = r.ok && r.replaced>=1 && r.fired===true;
+console.log(`page prot: orig=${r.origPerms} afterHook=${r.slotPerms} restored=${r.protRestored}`);
+// protRestored proves the page protection was put back after the swap (RELRO r-- stays
+// r--) — no rw-flipped page left behind. Also assert the hooked slot is NOT writable now.
+const notWritable = typeof r.slotPerms==='string' && r.slotPerms[1]==='-';
+const pass = r.ok && r.replaced>=1 && r.fired===true && r.protRestored===true && notWritable;
 console.log(pass?'RESULT:PASS':'RESULT:FAIL');
 EOF
 )"

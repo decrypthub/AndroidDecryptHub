@@ -266,6 +266,10 @@ arm64 预编译，agent 运行时 dlopen libQBDI.so，指令级 trace idh_trace_
 
 ## 会话日志（倒序，简短）
 
+- 2026-07-10 (评审硬化轮)：应大佬评审，修 agent 侧 3 处正确性/隐蔽性缺陷并各自加验证——
+  ① **`got_replace` hook 后恢复原页保护 + 写屏障**：RELRO(r--) 槽改写后 `__atomic_thread_fence` 发布再 `mprotect` 回 r--，不再残留 rw-（削弱 RELRO / 完整性自检诱饵）。selftest 实测 `origPerms=r--p slotPerms=r--p protRestored=true`，验证脚本纳入通过条件。
+  ② **`resolve_sym` 用 DT_HASH(nchain)/DT_GNU_HASH 求 dynsym 数**，节区相邻反推降为兜底——不再依赖 `.dynstr` 紧邻 `.dynsym` 的非标准布局。
+  ③ **`got_replace` 泛化为跨全部 caller 模块**（每模块仍只改第一个真实 RELRO 槽，避免 trampoline 死锁），单 caller 场景行为不变。**verify_all 仍 26/26**，1 次提交。
 - 2026-07-10 (loop#18)：**QBDI 指令级动态 trace 完成——项目收官**。release 直链绕过 API 封锁拉到 v0.12.1 arm64 预编译；agent dlopen libQBDI.so，trace idh_trace_target 得 retval=30 + 64 条指令。**verify_all 26/26，v0.2–v1.0 全部完成。循环停止（删 cron）。** 2 次提交。
 - 2026-07-10 (loop#17)：v1.0 会话录制/回放（事件持久化到 idhd-data/events.jsonl，重启 idhd 后回放验证）+ Web Events tab。suite 25/25，3 次提交。**功能完成，仅剩 QBDI(Blocked)；无实质自动化待办。**
 - 2026-07-10 (loop#16)：v1.0 打磨——MCP 补齐到 25 tools + 诊断导出(/api/export/report, 仅元数据) + 生成 docs（architecture/threat-model/mcp-tools）。suite 24/24，3 次提交。除 QBDI(Blocked) 外功能全部完成并验证。
