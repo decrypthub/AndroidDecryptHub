@@ -266,6 +266,14 @@ arm64 预编译，agent 运行时 dlopen libQBDI.so，指令级 trace idh_trace_
 
 ## 会话日志（倒序，简短）
 
+- 2026-07-10 (脱壳架构轮·采纳评审设计)：按评审给的正确设计做**脱壳地基**（先 CodeItem 捕获器+方法索引+重建器，不做 invoke-all）。
+  纠正两个判断：① 第二代核心是"在壳恢复方法体的瞬间抓完整 CodeItem"，不能假设执行会回填原 DEX；② `begin+file_size` 对 DEX 041 container/cdex 会截断。
+  ① **agent resolver 升级**（修 SDK36 截断 bug）：识别 035–041 + cdex，DEX 041 按 `container_size` 取全物理容器（begin=container_begin），严格校验 endian/header_size/越界，返回富视图 format/version/logical/dataBegin/dataSize/confidence。
+  ② **方法索引 + 恢复率报告**（`analyzeCoverage`，`/api/dex/coverage`）：per-method 状态（native/abstract/BASE_PRESENT/BASE_EMPTY），恢复率只按具体 Java 方法算。真机 app dex：total=22586 concreteJava=21740 present=21740 recovery=100%（未加固→100%，诚实）。
+  ③ **结构化标准 DEX 重建器**（`rebuildStandardDex`，`/api/dex/rebuild`）：按 method_idx 追加 CodeItem + 重写受影响类的 class_data + patch class_data_off（不做 uleb 原位改写）+ 修 file_size/data_size/SHA-1/Adler32。
+  ④ 面板「脱壳」页加覆盖率报告（恢复率进度条 + 缺失方法清单）。
+  ⑤ `verify_v12_rebuild`（host）：真实 classes.dex → 覆盖率 → 注入一个 code_item 重建 → **重建 dex 可解析 + 该方法字节码字节级一致（26B MATCH）**。**verify_all 28/28。**
+  下一轮（P1）：运行时 CodeItem 捕获后端（解释器/自然执行捕获点）+ 抽取壳模拟场景做硬信号；再 P2 主动分级触发。
 - 2026-07-10 (Java 层 hook 轮·参考 iOS 数据模型)：把加解密从"只有类别"升级到 iOS 级富审计。
   参考 iOS log_store 记录模型（algorithm/operation/key/iv/input/output/callstack/分类），做 **Android 自己的方案**：
   ① **Java 层拦截 Provider `IdhSecurity`**：插到最高优先级的 JCE Provider，包住 Cipher/Mac/MessageDigest 的 SPI，

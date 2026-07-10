@@ -101,7 +101,8 @@
         <button class="act" onclick="loadDumps()">刷新列表</button>
         <span id="dex-stat" class="muted"></span>
       </div>
-      <table><thead><tr><th>类型</th><th>大小</th><th>sha256</th><th>来源</th><th>标签</th><th>下载</th></tr></thead><tbody id="dumps-rows"></tbody></table>
+      <table><thead><tr><th>类型</th><th>大小</th><th>sha256</th><th>来源</th><th>标签</th><th>下载</th><th>分析</th></tr></thead><tbody id="dumps-rows"></tbody></table>
+      <pre id="out-cov" class="muted" style="margin-top:12px">点某个 dex 的「覆盖率」查看方法恢复率报告（诚实统计：具体 Java 方法中有多少已带方法体）。</pre>
     </div>
   </div>
 
@@ -228,7 +229,14 @@ async function nat(path,extra){ const el=document.getElementById('out-native'); 
 
 // ---- 脱壳 / DEX ----
 async function loadDumps(){ const r=await (await fetch('/api/dumps')).json(); const tb=document.getElementById('dumps-rows');
-  tb.innerHTML=r.map(d=>`<tr><td>${d.kind}</td><td>${d.size}</td><td class="muted">${d.sha256.slice(0,20)}…</td><td>${d.source}</td><td>${d.tag||''}</td><td><a class="dl" href="/api/dumps/download?sha=${d.sha256}">⬇ 下载</a></td></tr>`).join('')||'<tr><td class="muted" colspan=6>暂无 dump（点上方「扫描并 Dump」）</td></tr>'; }
+  tb.innerHTML=r.map(d=>`<tr><td>${d.kind}</td><td>${d.size}</td><td class="muted">${d.sha256.slice(0,20)}…</td><td>${d.source}</td><td>${d.tag||''}</td><td><a class="dl" href="/api/dumps/download?sha=${d.sha256}">⬇ 下载</a></td><td>${d.kind==='dex'?`<a class="dl" href="#" onclick="coverage('${d.sha256}');return false">覆盖率</a>`:''}</td></tr>`).join('')||'<tr><td class="muted" colspan=7>暂无 dump（点上方「扫描并 Dump」）</td></tr>'; }
+async function coverage(sha){ const el=document.getElementById('out-cov'); el.textContent='分析中…';
+  try{ const c=await (await fetch('/api/dex/coverage',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sha,limitMissing:20})})).json();
+    if(c.error){el.textContent='错误: '+c.error;return;}
+    el.textContent=`格式 ${c.magic}\n方法总数 ${c.total} · 具体Java方法 ${c.concreteJava}（native ${c.native} / abstract ${c.abstract}）\n`+
+      `有方法体 ${c.basePresent} · 缺失(被抽取?) ${c.baseEmpty}\n恢复率 ${c.recoveryPct}%  ${'█'.repeat(Math.round(c.recoveryPct/5))}${'░'.repeat(20-Math.round(c.recoveryPct/5))}\n`+
+      (c.baseEmpty?`\n缺失方法（前${(c.missing||[]).length}）：\n`+(c.missing||[]).map(m=>'  '+m.method).join('\n'):'\n✓ 无缺失方法（未抽取，或已全部恢复）');
+  }catch(e){el.textContent='错误: '+e;} }
 async function rescanDex(){ const st=document.getElementById('dex-stat'); st.textContent='扫描中…';
   try{ const en=await (await fetch('/api/art/dexfiles'+sessParam())).json();
     const list=en.dexfiles||en.dex||[]; let n=0;

@@ -122,7 +122,7 @@ async function disasmSo(path: string, opts: { symbol?: string; start?: string; s
   return insns;
 }
 import { WebSocketServer, WebSocket } from 'ws';
-import { parseDex, cryptoScan, searchDex, invokeXref, extractMethodCode } from './dex.ts';
+import { parseDex, cryptoScan, searchDex, invokeXref, extractMethodCode, analyzeCoverage, rebuildStandardDex } from './dex.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CAPTURES = join(__dirname, '..', '..', 'captures');
@@ -1026,6 +1026,38 @@ const httpServer = http.createServer(async (req, res) => {
     const results: Record<string, string[]> = {};
     for (const [callee, callers] of xref) if (callee.toLowerCase().includes(q)) results[callee] = callers.slice(0, 200);
     return send(200, { method, methodsWithCode, skipped, matches: Object.keys(results).length, callers: results });
+  }
+  // Method-gap / recovery-rate report over a dumped dex: POST /api/dex/coverage {b64|sha}
+  if (url.pathname === '/api/dex/coverage' && req.method === 'POST') {
+    const { b64, sha, limitMissing } = JSON.parse((await readBody(req)) || '{}');
+    let buf: Buffer;
+    if (b64) buf = Buffer.from(b64, 'base64');
+    else if (sha && dumps.get(sha)) { try { buf = await readFile(dumps.get(sha)!.path); } catch { return send(404, { error: 'dump missing' }); } }
+    else return send(400, { error: 'need b64 or known sha' });
+    let parsed; try { parsed = parseDex(buf); } catch (e) { return send(422, { error: (e as Error).message }); }
+    const cov = analyzeCoverage(buf, parsed);
+    const lm = Number(limitMissing ?? 100);
+    return send(200, { magic: parsed.magic, counts: parsed.counts, ...cov,
+      recoveryPct: +(cov.recoveryRate * 100).toFixed(2), missing: cov.missing.slice(0, lm), missingTotal: cov.missing.length });
+  }
+  // Structural rebuild: POST /api/dex/rebuild {b64|sha, captures:[{midx,codeItemHex}]} ->
+  // merge captured CodeItems into the base dex, store as a downloadable dump.
+  if (url.pathname === '/api/dex/rebuild' && req.method === 'POST') {
+    const { b64, sha, captures } = JSON.parse((await readBody(req)) || '{}');
+    let buf: Buffer;
+    if (b64) buf = Buffer.from(b64, 'base64');
+    else if (sha && dumps.get(sha)) { try { buf = await readFile(dumps.get(sha)!.path); } catch { return send(404, { error: 'dump missing' }); } }
+    else return send(400, { error: 'need b64 or known sha' });
+    if (!Array.isArray(captures)) return send(400, { error: 'need captures[]' });
+    let res; try { res = rebuildStandardDex(buf, captures); } catch (e) { return send(422, { error: (e as Error).message }); }
+    let parseOk = true, methods = 0;
+    try { const pd = parseDex(res.dex); methods = pd.counts.methods; } catch { parseOk = false; }
+    const outSha = createHash('sha256').update(res.dex).digest('hex');
+    const path = join(CAPTURES, `${outSha.slice(0, 16)}.dex`);
+    if (!existsSync(path)) writeFileSync(path, res.dex);
+    const meta: DumpMeta = { sha256: outSha, size: res.dex.length, source: 'dex-rebuild', addr: '0', tag: 'rebuilt', sessionId: '', package: '', capturedAt: Date.now(), path, kind: 'dex' };
+    dumps.set(outSha, meta); broadcast('dump.new', meta);
+    return send(200, { ok: true, injected: res.injected, classesRewritten: res.classesRewritten, parseOk, methods, sha256: outSha, size: res.dex.length });
   }
   if ((url.pathname === '/api/dex/parse' || url.pathname === '/api/dex/crypto_scan' || url.pathname === '/api/dex/search') && req.method === 'POST') {
     const body = await readBody(req);

@@ -1390,25 +1390,72 @@ static ssize_t safe_read_at(int memfd, unsigned long long addr, void *buf, size_
     return r > 0 ? r : 0;
 }
 
-// Given an art::DexFile* candidate, scavenge its first words for the member that
-// points to dex/cdex magic (begin_), then read file_size from the dex header.
-// Version-robust: no hardcoded struct offsets. Returns 1 on success.
-static int resolve_dexfile(int memfd, unsigned long long dexfile_ptr,
-                           unsigned long long *begin_out, unsigned int *size_out, const char **magic_out) {
+// Rich view of an in-memory dex — enough to snapshot it WITHOUT truncating (DEX 041
+// containers reference shared data past file_size; cdex has a separate data range).
+struct DexView {
+    unsigned long long begin;      // start of the bytes to snapshot (container for 041)
+    unsigned int size;             // bytes to snapshot
+    unsigned long long logical;    // logical dex header (== begin for 035-040)
+    unsigned long long data_begin; // shared/data section start (0 if within [begin,size))
+    unsigned int data_size;
+    char format[8];                // "dex" | "dex041" | "cdex"
+    unsigned int version;          // 35..41
+    int confidence;                // 0..100
+};
+
+static unsigned int rd_u32(const unsigned char *p, int o) {
+    return (unsigned int)p[o] | ((unsigned int)p[o+1] << 8) | ((unsigned int)p[o+2] << 16) | ((unsigned int)p[o+3] << 24);
+}
+
+// Given an art::DexFile* candidate, scavenge its first words for the member pointing to
+// dex/cdex magic (begin_), validate the header, and compute the FULL snapshot range:
+//  - standard dex 035-040 : [begin, begin+file_size)
+//  - dex 041 container     : [container_begin, +container_size)  (covers shared data)
+//  - cdex                  : [begin, +file_size) + separate data range flagged (P3: reassemble)
+// No hardcoded ART struct offsets. Returns 1 on success.
+static int resolve_dexfile(int memfd, unsigned long long dexfile_ptr, struct DexView *v) {
     unsigned long long words[24];
     ssize_t got = safe_read_at(memfd, dexfile_ptr, words, sizeof(words));
     int nwords = (int)(got / 8);
     for (int i = 0; i < nwords; i++) {
-        unsigned long long b = words[i];
-        unsigned char hdr[40];
-        if (safe_read_at(memfd, b, hdr, sizeof(hdr)) < 40) continue;
-        const char *magic = NULL;
-        if (hdr[0] == 'd' && hdr[1] == 'e' && hdr[2] == 'x' && hdr[3] == '\n') magic = "dex";
-        else if (hdr[0] == 'c' && hdr[1] == 'd' && hdr[2] == 'e' && hdr[3] == 'x') magic = "cdex";
-        if (!magic) continue;
-        unsigned int fsz = (unsigned int)hdr[32] | ((unsigned int)hdr[33] << 8) | ((unsigned int)hdr[34] << 16) | ((unsigned int)hdr[35] << 24);
-        if (fsz < 0x70 || fsz > (200u << 20)) continue;   // sane dex size
-        *begin_out = UNTAG(b); *size_out = fsz; *magic_out = magic;   // untagged so idhd can read it
+        unsigned long long b = UNTAG(words[i]);
+        unsigned char hdr[120];
+        if (safe_read_at(memfd, b, hdr, sizeof(hdr)) < 120) continue;
+        int compact = 0;
+        if (hdr[0] == 'd' && hdr[1] == 'e' && hdr[2] == 'x' && hdr[3] == '\n') compact = 0;
+        else if (hdr[0] == 'c' && hdr[1] == 'd' && hdr[2] == 'e' && hdr[3] == 'x') compact = 1;
+        else continue;
+        // version = ascii digits at [4..6], e.g. "035".."041"
+        if (hdr[4] < '0' || hdr[4] > '9' || hdr[5] < '0' || hdr[5] > '9' || hdr[6] < '0' || hdr[6] > '9') continue;
+        unsigned int ver = (hdr[4]-'0')*100 + (hdr[5]-'0')*10 + (hdr[6]-'0');
+        unsigned int fsz = rd_u32(hdr, 32);
+        unsigned int header_size = rd_u32(hdr, 36);
+        unsigned int endian = rd_u32(hdr, 40);
+        if (fsz < 0x70 || fsz > (256u << 20)) continue;                 // sane logical size
+        if (!compact && endian != 0x12345678u) continue;               // standard dex endian tag
+        memset(v, 0, sizeof(*v));
+        v->logical = b; v->version = ver; v->confidence = compact ? 60 : 95;
+        if (compact) {
+            // cdex: snapshot the logical unit; shared data range lives elsewhere (reassembly = P3)
+            snprintf(v->format, sizeof(v->format), "cdex");
+            v->begin = b; v->size = fsz;
+            v->data_begin = 0; v->data_size = 0;
+        } else if (ver >= 41 && header_size >= 0x78) {
+            // DEX 041 container: header+112 = container_size, header+116 = header_offset.
+            unsigned int container_size = rd_u32(hdr, 112);
+            unsigned int header_offset  = rd_u32(hdr, 116);
+            snprintf(v->format, sizeof(v->format), "dex041");
+            if (container_size >= fsz && container_size <= (256u << 20) && header_offset <= container_size) {
+                v->begin = b - header_offset;      // physical container start
+                v->size = container_size;          // full container — never truncate shared data
+                v->confidence = 100;
+            } else { v->begin = b; v->size = fsz; v->confidence = 70; }   // fall back, mark uncertain
+            v->data_begin = b + rd_u32(hdr, 108); v->data_size = rd_u32(hdr, 104);
+        } else {
+            snprintf(v->format, sizeof(v->format), "dex");
+            v->begin = b; v->size = fsz; v->confidence = 100;
+            v->data_begin = b + rd_u32(hdr, 108); v->data_size = rd_u32(hdr, 104);   // data section
+        }
         return 1;
     }
     return 0;
@@ -1487,15 +1534,16 @@ static void cmd_art_dexfiles(int fd, const char *id) {
                             for (jsize c = 0; c < cl && nrec < 256; c++) {
                                 unsigned long long p = (unsigned long long)vals[c];
                                 if (p < 0x10000) continue;
-                                unsigned long long begin = 0; unsigned int sz = 0; const char *mg = NULL;
-                                if (resolve_dexfile(memfd, p, &begin, &sz, &mg)) {
-                                    int dup = 0; for (int k = 0; k < nseen; k++) if (seen[k] == begin) { dup = 1; break; }
+                                struct DexView dv;
+                                if (resolve_dexfile(memfd, p, &dv)) {
+                                    int dup = 0; for (int k = 0; k < nseen; k++) if (seen[k] == dv.begin) { dup = 1; break; }
                                     if (dup) continue;
-                                    if (nseen < 512) seen[nseen++] = begin;
+                                    if (nseen < 512) seen[nseen++] = dv.begin;
                                     char lj[160]; json_escape(lname, lj, sizeof(lj));
-                                    char rec[420];
-                                    int w = snprintf(rec, sizeof(rec), "%s{\"dexFilePtr\":\"%llx\",\"begin\":\"%llx\",\"size\":%u,\"magic\":\"%s\",\"loader\":\"%s\"}",
-                                                     nrec ? "," : "", p, begin, sz, mg, lj);
+                                    char rec[520];
+                                    int w = snprintf(rec, sizeof(rec),
+                                        "%s{\"dexFilePtr\":\"%llx\",\"begin\":\"%llx\",\"size\":%u,\"magic\":\"%s\",\"format\":\"%s\",\"version\":%u,\"logical\":\"%llx\",\"dataBegin\":\"%llx\",\"dataSize\":%u,\"confidence\":%d,\"loader\":\"%s\"}",
+                                        nrec ? "," : "", p, dv.begin, dv.size, dv.format, dv.format, dv.version, dv.logical, dv.data_begin, dv.data_size, dv.confidence, lj);
                                     if (w > 0) { if (len + (size_t)w + 1 >= cap) { while (len + (size_t)w + 1 >= cap) cap *= 2; char *nb = realloc(recs, cap); if (nb) recs = nb; }
                                         memcpy(recs + len, rec, (size_t)w); len += (size_t)w; recs[len] = 0; nrec++; }
                                 }

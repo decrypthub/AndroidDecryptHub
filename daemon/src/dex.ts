@@ -1,5 +1,6 @@
 // Minimal DEX parser — enough for search/index + crypto static scan (v0.4/v0.5).
 // Parses header, string_ids, type_ids, method_ids, class_defs. Not a full verifier.
+import { createHash } from 'node:crypto';
 
 export interface DexMethod { cls: string; name: string; }
 export interface DexClass { name: string; superName: string; access: number; }
@@ -134,7 +135,7 @@ function walkCode(buf: Buffer, codeOff: number, methods: DexMethod[]): string[] 
   return pc === insnsSize ? callees : null;   // sanity: must land exactly on the boundary
 }
 
-export interface MethodCode { method: string; access: number; registers: number; ins: number; outs: number; insnsSize: number; insnsHex: string; }
+export interface MethodCode { method: string; midx: number; access: number; registers: number; ins: number; outs: number; tries: number; insnsSize: number; insnsHex: string; codeItemHex: string; }
 // Extract the runtime code_item bytes of methods matching class(substring)+name.
 // This is L.7 passive recovery: after a packer decrypts the in-memory dex, dump it
 // (art_dexfiles) and pull the target method's bytecode here.
@@ -163,11 +164,15 @@ export function extractMethodCode(buf: Buffer, d: ParsedDex, classPat: string, m
         if (!m) continue;
         if (!m.cls.toLowerCase().includes(cp)) continue;
         if (methodName && m.name !== methodName) continue;
-        if (!co) { out.push({ method: m.cls + '->' + m.name, access: af, registers: 0, ins: 0, outs: 0, insnsSize: 0, insnsHex: '' }); continue; }
+        if (!co) { out.push({ method: m.cls + '->' + m.name, midx, access: af, registers: 0, ins: 0, outs: 0, tries: 0, insnsSize: 0, insnsHex: '', codeItemHex: '' }); continue; }
         const registers = buf.readUInt16LE(co), ins = buf.readUInt16LE(co + 2), outs = buf.readUInt16LE(co + 4);
+        const tries = buf.readUInt16LE(co + 6);
         const insnsSize = buf.readUInt32LE(co + 12);
         const insnsHex = buf.subarray(co + 16, co + 16 + insnsSize * 2).toString('hex');
-        out.push({ method: m.cls + '->' + m.name, access: af, registers, ins, outs, insnsSize, insnsHex });
+        // full code_item bytes when there are no try/catch blocks (16B header + insns);
+        // with tries the item extends past insns (padding+tries+handlers) — leave to P3.
+        const codeItemHex = tries === 0 ? buf.subarray(co, co + 16 + insnsSize * 2).toString('hex') : '';
+        out.push({ method: m.cls + '->' + m.name, midx, access: af, registers, ins, outs, tries, insnsSize, insnsHex, codeItemHex });
       }
     }
   }
@@ -227,4 +232,102 @@ export function cryptoScan(d: ParsedDex): {
     summary[k] = (summary[k] ?? 0) + 1;
   }
   return { cryptoApis, algoStrings, summary };
+}
+
+// ---- unpack support: method-gap analysis + structural standard-DEX rebuild ------------
+
+function writeUleb128(v: number): Buffer {
+  const b: number[] = [];
+  do { let x = v & 0x7f; v >>>= 7; if (v) x |= 0x80; b.push(x); } while (v);
+  return Buffer.from(b);
+}
+function adler32(buf: Buffer): number {
+  let a = 1, b = 0; const MOD = 65521;
+  for (let i = 0; i < buf.length; i++) { a = (a + buf[i]) % MOD; b = (b + a) % MOD; }
+  return ((b << 16) | a) >>> 0;
+}
+
+export interface Coverage {
+  total: number; concreteJava: number; native: number; abstract: number;
+  basePresent: number; baseEmpty: number; recoveryRate: number;
+  missing: { midx: number; method: string }[];
+}
+// Honest per-method state over the BASE (dumped) dex. Recovery rate is computed over
+// concrete Java methods only (native/abstract have no code_item by definition).
+export function analyzeCoverage(buf: Buffer, d: ParsedDex): Coverage {
+  const u32 = (o: number) => buf.readUInt32LE(o);
+  const classDefsSize = u32(96), classDefsOff = u32(100);
+  const methods = d.methods;
+  let total = 0, nat = 0, abs = 0, present = 0, empty = 0;
+  const missing: { midx: number; method: string }[] = [];
+  for (let i = 0; i < classDefsSize; i++) {
+    const cdOff = u32(classDefsOff + i * 32 + 24); if (!cdOff) continue;
+    let p = cdOff; let sf, inf, dm, vm;
+    [sf, p] = readUleb128(buf, p); [inf, p] = readUleb128(buf, p);
+    [dm, p] = readUleb128(buf, p); [vm, p] = readUleb128(buf, p);
+    for (let k = 0; k < sf + inf; k++) { [, p] = readUleb128(buf, p); [, p] = readUleb128(buf, p); }
+    for (const count of [dm, vm]) {
+      let midx = 0;
+      for (let k = 0; k < count; k++) {
+        let diff, af, co; [diff, p] = readUleb128(buf, p); midx += diff; [af, p] = readUleb128(buf, p); [co, p] = readUleb128(buf, p);
+        total++;
+        if (af & 0x0100) { nat++; continue; }       // native
+        if (af & 0x0400) { abs++; continue; }        // abstract
+        if (co) present++;
+        else { empty++; if (missing.length < 5000) { const m = methods[midx]; missing.push({ midx, method: m ? m.cls + '->' + m.name : '#' + midx }); } }
+      }
+    }
+  }
+  const concreteJava = total - nat - abs;
+  return { total, concreteJava, native: nat, abstract: abs, basePresent: present, baseEmpty: empty,
+           recoveryRate: concreteJava ? present / concreteJava : 1, missing };
+}
+
+// Structurally merge captured CodeItems (keyed by method_idx) into the base dex WITHOUT
+// in-place uleb resizing: append each new code_item (4-aligned) + a fresh class_data_item
+// (for each affected class) to the file, then patch that class_def's class_data_off (a
+// fixed u32 field). Fix file_size / data_size / signature (SHA-1) / checksum (Adler-32).
+// map_list is not rebuilt (appended items live past it) — jadx/IDA parse via class_defs.
+export function rebuildStandardDex(base: Buffer, captures: { midx: number; codeItemHex: string }[]):
+    { dex: Buffer; injected: number; classesRewritten: number } {
+  const capMap = new Map<number, Buffer>();
+  for (const c of captures) if (c.codeItemHex) capMap.set(c.midx, Buffer.from(c.codeItemHex, 'hex'));
+  const u32 = (o: number) => base.readUInt32LE(o);
+  const classDefsSize = u32(96), classDefsOff = u32(100);
+  const chunks: Buffer[] = [base]; let len = base.length;
+  const pad = (align: number) => { const r = len % align; if (r) { const q = Buffer.alloc(align - r); chunks.push(q); len += q.length; } };
+  const patches: { off: number; val: number }[] = [];
+  let injected = 0, classesRewritten = 0;
+
+  for (let i = 0; i < classDefsSize; i++) {
+    const cdOff = u32(classDefsOff + i * 32 + 24); if (!cdOff) continue;
+    let p = cdOff; let sf, inf, dm, vm;
+    [sf, p] = readUleb128(base, p); [inf, p] = readUleb128(base, p);
+    [dm, p] = readUleb128(base, p); [vm, p] = readUleb128(base, p);
+    const pairs = (n: number) => { const a: [number, number][] = []; for (let k = 0; k < n; k++) { let x, y; [x, p] = readUleb128(base, p); [y, p] = readUleb128(base, p); a.push([x, y]); } return a; };
+    const staticF = pairs(sf), instF = pairs(inf);
+    const meths = (n: number) => { const a: { diff: number; af: number; co: number; midx: number }[] = []; let midx = 0; for (let k = 0; k < n; k++) { let diff, af, co; [diff, p] = readUleb128(base, p); midx += diff; [af, p] = readUleb128(base, p); [co, p] = readUleb128(base, p); a.push({ diff, af, co, midx }); } return a; };
+    const direct = meths(dm), virt = meths(vm);
+    if (![...direct, ...virt].some(m => capMap.has(m.midx))) continue;   // class unaffected
+    classesRewritten++;
+    const newCo = new Map<number, number>();
+    for (const m of [...direct, ...virt]) if (capMap.has(m.midx) && !newCo.has(m.midx)) {
+      pad(4); newCo.set(m.midx, len); const ci = capMap.get(m.midx)!; chunks.push(ci); len += ci.length; injected++;
+    }
+    const parts: Buffer[] = [writeUleb128(sf), writeUleb128(inf), writeUleb128(dm), writeUleb128(vm)];
+    for (const [x, y] of [...staticF, ...instF]) parts.push(writeUleb128(x), writeUleb128(y));
+    const emit = (arr: typeof direct) => { for (const m of arr) parts.push(writeUleb128(m.diff), writeUleb128(m.af), writeUleb128(newCo.has(m.midx) ? newCo.get(m.midx)! : m.co)); };
+    emit(direct); emit(virt);
+    const cd = Buffer.concat(parts); const newCdOff = len; chunks.push(cd); len += cd.length;
+    patches.push({ off: classDefsOff + i * 32 + 24, val: newCdOff });
+  }
+
+  const out = Buffer.concat(chunks);
+  for (const pt of patches) out.writeUInt32LE(pt.val, pt.off);
+  out.writeUInt32LE(out.length, 32);                                  // file_size
+  const dataOff = out.readUInt32LE(108);
+  if (dataOff && dataOff < out.length) out.writeUInt32LE(out.length - dataOff, 104);  // data_size
+  createHash('sha1').update(out.subarray(32)).digest().copy(out, 12); // signature
+  out.writeUInt32LE(adler32(out.subarray(12)), 8);                    // checksum
+  return { dex: out, injected, classesRewritten };
 }
