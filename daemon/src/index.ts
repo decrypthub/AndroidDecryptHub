@@ -122,7 +122,7 @@ async function disasmSo(path: string, opts: { symbol?: string; start?: string; s
   return insns;
 }
 import { WebSocketServer, WebSocket } from 'ws';
-import { parseDex, cryptoScan, searchDex, invokeXref, extractMethodCode, analyzeCoverage, rebuildStandardDex } from './dex.ts';
+import { parseDex, cryptoScan, searchDex, invokeXref, extractMethodCode, analyzeCoverage, rebuildStandardDex, recoverFromSnapshots, stripMethodCode } from './dex.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CAPTURES = join(__dirname, '..', '..', 'captures');
@@ -1039,6 +1039,41 @@ const httpServer = http.createServer(async (req, res) => {
     const lm = Number(limitMissing ?? 100);
     return send(200, { magic: parsed.magic, counts: parsed.counts, ...cov,
       recoveryPct: +(cov.recoveryRate * 100).toFixed(2), missing: cov.missing.slice(0, lm), missingTotal: cov.missing.length });
+  }
+  // Passive gen-2 recovery: POST /api/dex/recover {baseB64|baseSha, restoredB64|restoredSha}
+  // Lifts CodeItems for the base's extracted (empty) methods out of a RESTORED snapshot,
+  // rebuilds a standard dex, and stores it. Returns recovery counts + rebuilt sha.
+  if (url.pathname === '/api/dex/recover' && req.method === 'POST') {
+    const body = JSON.parse((await readBody(req)) || '{}');
+    const load = async (b64?: string, sha?: string): Promise<Buffer | null> => {
+      if (b64) return Buffer.from(b64, 'base64');
+      if (sha && dumps.get(sha)) { try { return await readFile(dumps.get(sha)!.path); } catch { return null; } }
+      return null;
+    };
+    const base = await load(body.baseB64, body.baseSha);
+    const restored = await load(body.restoredB64, body.restoredSha);
+    if (!base || !restored) return send(400, { error: 'need base + restored (b64 or known sha)' });
+    let parsed; try { parsed = parseDex(base); } catch (e) { return send(422, { error: (e as Error).message }); }
+    const { captures, report } = recoverFromSnapshots(base, restored, parsed);
+    const rb = rebuildStandardDex(base, captures);
+    let parseOk = true; try { parseDex(rb.dex); } catch { parseOk = false; }
+    const outSha = createHash('sha256').update(rb.dex).digest('hex');
+    const path = join(CAPTURES, `${outSha.slice(0, 16)}.dex`);
+    if (!existsSync(path)) writeFileSync(path, rb.dex);
+    const meta: DumpMeta = { sha256: outSha, size: rb.dex.length, source: 'dex-recover', addr: '0', tag: 'recovered', sessionId: '', package: '', capturedAt: Date.now(), path, kind: 'dex' };
+    dumps.set(outSha, meta); broadcast('dump.new', meta);
+    return send(200, { ok: true, ...report, injected: rb.injected, classesRewritten: rb.classesRewritten, parseOk, sha256: outSha, size: rb.dex.length });
+  }
+  // Test util — simulate extraction: POST /api/dex/strip {b64|sha, midx} -> dex with that
+  // method's code_off zeroed (same-length redundant uleb). Returns b64 + its original code.
+  if (url.pathname === '/api/dex/strip' && req.method === 'POST') {
+    const { b64, sha, midx } = JSON.parse((await readBody(req)) || '{}');
+    let buf: Buffer;
+    if (b64) buf = Buffer.from(b64, 'base64');
+    else if (sha && dumps.get(sha)) { try { buf = await readFile(dumps.get(sha)!.path); } catch { return send(404, { error: 'dump missing' }); } }
+    else return send(400, { error: 'need b64 or known sha' });
+    const stripped = stripMethodCode(buf, Number(midx));
+    return send(200, { ok: true, midx: Number(midx), b64: stripped.toString('base64') });
   }
   // Structural rebuild: POST /api/dex/rebuild {b64|sha, captures:[{midx,codeItemHex}]} ->
   // merge captured CodeItems into the base dex, store as a downloadable dump.

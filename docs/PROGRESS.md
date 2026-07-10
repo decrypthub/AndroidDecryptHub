@@ -266,6 +266,13 @@ arm64 预编译，agent 运行时 dlopen libQBDI.so，指令级 trace idh_trace_
 
 ## 会话日志（倒序，简短）
 
+- 2026-07-10 (P1 第二代恢复闭环)：按评审 P1 做"被动恢复"——**从恢复镜像捕获 CodeItem，不假设执行回填原 DEX**。
+  ① `codeItemOf/recoverFromSnapshots`（dex.ts）：对 base 的 BASE_EMPTY 方法，从 restored 快照提取 code_item 生成 captures，再 `rebuildStandardDex`。
+  ② `stripMethodCode`：同长度冗余-uleb 把 code_off 置 0，模拟抽取（不移位）。
+  ③ `/api/dex/recover {baseSha,restoredSha}`（+ `/api/dex/strip` 测试工具）：真实设备流程=对同一 dex 先后 dump 两次(T0 抽取态/T1 运行后)做差异恢复，**无需新 agent 代码**（快照就是 art dump）。
+  ④ 面板「脱壳」加"快照恢复"入口（base/restored sha → 恢复重建 + 下载）。
+  ⑤ `verify_v13_recover`（host）：真实 classes.dex 抽取一个方法→从恢复镜像捕获→重建→**字节码字节级一致**。**verify_all 29/29。**
+  覆盖范围诚实：处理"回填型"抽取壳；分离缓冲/执行后擦除型需 backend C(壳恢复函数 hook)/D(ArtMethod)，属下一档。P2=主动分级触发（类加载/初始化/安全调用）。
 - 2026-07-10 (脱壳架构轮·采纳评审设计)：按评审给的正确设计做**脱壳地基**（先 CodeItem 捕获器+方法索引+重建器，不做 invoke-all）。
   纠正两个判断：① 第二代核心是"在壳恢复方法体的瞬间抓完整 CodeItem"，不能假设执行会回填原 DEX；② `begin+file_size` 对 DEX 041 container/cdex 会截断。
   ① **agent resolver 升级**（修 SDK36 截断 bug）：识别 035–041 + cdex，DEX 041 按 `container_size` 取全物理容器（begin=container_begin），严格校验 endian/header_size/越界，返回富视图 format/version/logical/dataBegin/dataSize/confidence。

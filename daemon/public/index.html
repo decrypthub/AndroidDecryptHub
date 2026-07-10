@@ -103,6 +103,15 @@
       </div>
       <table><thead><tr><th>类型</th><th>大小</th><th>sha256</th><th>来源</th><th>标签</th><th>下载</th><th>分析</th></tr></thead><tbody id="dumps-rows"></tbody></table>
       <pre id="out-cov" class="muted" style="margin-top:12px">点某个 dex 的「覆盖率」查看方法恢复率报告（诚实统计：具体 Java 方法中有多少已带方法体）。</pre>
+      <h2 style="margin-top:16px">快照恢复（抽取壳·回填型）</h2>
+      <div class="muted">对同一 dex 先后 dump 两次（T0 抽取态 / T1 运行后恢复态），从恢复镜像捕获缺失方法的 CodeItem 并重建为标准 DEX。</div>
+      <div class="row2" style="margin-top:8px">
+        <input id="rec-base" placeholder="base(T0) dump sha256" size="26" />
+        <input id="rec-rest" placeholder="restored(T1) dump sha256" size="26" />
+        <button class="act primary" onclick="recover()">恢复并重建</button>
+        <span id="rec-stat" class="muted"></span>
+      </div>
+      <pre id="out-rec" class="muted"></pre>
     </div>
   </div>
 
@@ -237,6 +246,17 @@ async function coverage(sha){ const el=document.getElementById('out-cov'); el.te
       `有方法体 ${c.basePresent} · 缺失(被抽取?) ${c.baseEmpty}\n恢复率 ${c.recoveryPct}%  ${'█'.repeat(Math.round(c.recoveryPct/5))}${'░'.repeat(20-Math.round(c.recoveryPct/5))}\n`+
       (c.baseEmpty?`\n缺失方法（前${(c.missing||[]).length}）：\n`+(c.missing||[]).map(m=>'  '+m.method).join('\n'):'\n✓ 无缺失方法（未抽取，或已全部恢复）');
   }catch(e){el.textContent='错误: '+e;} }
+async function recover(){ const el=document.getElementById('out-rec'), st=document.getElementById('rec-stat');
+  const baseSha=val('rec-base'), restoredSha=val('rec-rest'); if(!baseSha||!restoredSha){el.textContent='需要 base 和 restored 两个 dump sha';return;}
+  st.textContent='恢复中…'; el.textContent='';
+  try{ const r=await (await fetch('/api/dex/recover',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({baseSha,restoredSha})})).json();
+    if(r.error){el.textContent='错误: '+r.error;st.textContent='';return;}
+    st.textContent=`恢复 ${r.recovered} 个方法`;
+    el.textContent=`恢复方法 ${r.recovered} · 仍缺失 ${r.stillMissing} · 注入 ${r.injected} · 重写类 ${r.classesRewritten}\n可解析 ${r.parseOk} · 重建 dex sha ${r.sha256}\n`+
+      (r.captured||[]).slice(0,30).map(m=>'  ✓ '+m.method).join('\n')+
+      `\n\n<a>下载：/api/dumps/download?sha=${r.sha256}</a>`;
+    loadDumps();
+  }catch(e){el.textContent='错误: '+e;st.textContent='';} }
 async function rescanDex(){ const st=document.getElementById('dex-stat'); st.textContent='扫描中…';
   try{ const en=await (await fetch('/api/art/dexfiles'+sessParam())).json();
     const list=en.dexfiles||en.dex||[]; let n=0;

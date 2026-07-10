@@ -331,3 +331,79 @@ export function rebuildStandardDex(base: Buffer, captures: { midx: number; codeI
   out.writeUInt32LE(adler32(out.subarray(12)), 8);                    // checksum
   return { dex: out, injected, classesRewritten };
 }
+
+// Return the full code_item bytes for a given method_idx (tries==0), or '' if the method
+// has no code_item in this image (extracted). Used to lift a CodeItem out of a RESTORED
+// snapshot without assuming anything about the base image.
+export function codeItemOf(buf: Buffer, midx: number): string {
+  const u32 = (o: number) => buf.readUInt32LE(o);
+  const classDefsSize = u32(96), classDefsOff = u32(100);
+  for (let i = 0; i < classDefsSize; i++) {
+    const cdOff = u32(classDefsOff + i * 32 + 24); if (!cdOff) continue;
+    let p = cdOff; let sf, inf, dm, vm;
+    [sf, p] = readUleb128(buf, p); [inf, p] = readUleb128(buf, p);
+    [dm, p] = readUleb128(buf, p); [vm, p] = readUleb128(buf, p);
+    for (let k = 0; k < sf + inf; k++) { [, p] = readUleb128(buf, p); [, p] = readUleb128(buf, p); }
+    for (const count of [dm, vm]) {
+      let mi = 0;
+      for (let k = 0; k < count; k++) {
+        let diff, af, co; [diff, p] = readUleb128(buf, p); mi += diff; [af, p] = readUleb128(buf, p); [co, p] = readUleb128(buf, p);
+        if (mi === midx) {
+          if (!co) return '';
+          const tries = buf.readUInt16LE(co + 6);
+          if (tries !== 0) return '';   // P3: item extends past insns
+          const insnsSize = buf.readUInt32LE(co + 12);
+          return buf.subarray(co, co + 16 + insnsSize * 2).toString('hex');
+        }
+      }
+    }
+  }
+  return '';
+}
+
+// Zero a method's code_off IN PLACE (redundant-uleb of the SAME byte length, so class_data
+// doesn't shift) — simulates a gen-2 "extracted" method for testing the recovery loop.
+export function stripMethodCode(buf: Buffer, midx: number): Buffer {
+  const out = Buffer.from(buf);
+  const u32 = (o: number) => out.readUInt32LE(o);
+  const classDefsSize = u32(96), classDefsOff = u32(100);
+  for (let i = 0; i < classDefsSize; i++) {
+    const cdOff = u32(classDefsOff + i * 32 + 24); if (!cdOff) continue;
+    let p = cdOff; let sf, inf, dm, vm;
+    [sf, p] = readUleb128(out, p); [inf, p] = readUleb128(out, p);
+    [dm, p] = readUleb128(out, p); [vm, p] = readUleb128(out, p);
+    for (let k = 0; k < sf + inf; k++) { [, p] = readUleb128(out, p); [, p] = readUleb128(out, p); }
+    for (const count of [dm, vm]) {
+      let mi = 0;
+      for (let k = 0; k < count; k++) {
+        let diff, af; [diff, p] = readUleb128(out, p); mi += diff; [af, p] = readUleb128(out, p);
+        const coStart = p; let co; [co, p] = readUleb128(out, p);
+        if (mi === midx && co) {
+          const len = p - coStart;                        // keep byte count identical
+          for (let b = 0; b < len - 1; b++) out[coStart + b] = 0x80;
+          out[coStart + len - 1] = 0x00;                  // redundant-zero uleb
+          createHash('sha1').update(out.subarray(32)).digest().copy(out, 12);
+          out.writeUInt32LE(adler32(out.subarray(12)), 8);
+          return out;
+        }
+      }
+    }
+  }
+  return out;
+}
+
+export interface RecoverResult { recovered: number; stillMissing: number; captured: { midx: number; method: string }[]; }
+// Passive gen-2 recovery: lift CodeItems for BASE_EMPTY methods out of a RESTORED snapshot
+// (the runtime-captured image) and merge them into the base — never assumes the base itself
+// was refilled. Returns the captures ready for rebuildStandardDex.
+export function recoverFromSnapshots(base: Buffer, restored: Buffer, d: ParsedDex):
+    { captures: { midx: number; codeItemHex: string }[]; report: RecoverResult } {
+  const cov = analyzeCoverage(base, d);
+  const captures: { midx: number; codeItemHex: string }[] = [];
+  const captured: { midx: number; method: string }[] = [];
+  for (const m of cov.missing) {
+    const ci = codeItemOf(restored, m.midx);
+    if (ci) { captures.push({ midx: m.midx, codeItemHex: ci }); captured.push(m); }
+  }
+  return { captures, report: { recovered: captures.length, stillMissing: cov.missing.length - captures.length, captured } };
+}
