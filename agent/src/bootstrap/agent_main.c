@@ -876,6 +876,54 @@ static void cmd_crypto_hook_test(int fd, const char *id) {
     LOGI("crypto_hook_test: replaced=%d triggered=%d captures=%d", replaced, triggered, ncaps);
 }
 
+// ---- Java-layer rich capture: the interposing JCE provider (IdhSecurity) reports every
+//      Cipher/Mac/MessageDigest op here with algorithm+op+key+iv+input+output. Bound by
+//      JNI name to com.idh.sandbox.IdhReport.nReport (no RegisterNatives needed). ---------
+#define JCAP_MAX 96
+#define JCAP_KEY 64
+#define JCAP_IV 32
+#define JCAP_DATA 1024
+struct JCapRec {
+    char algo[56], op[16]; int tid; long long ts_ns;
+    int nkey, niv, nin, nout;
+    unsigned char key[JCAP_KEY], iv[JCAP_IV], in[JCAP_DATA], out[JCAP_DATA];
+};
+static struct JCapRec g_jcaps[JCAP_MAX];
+static int g_njcaps = 0;
+static volatile int g_java_active = 0;
+
+static int copy_jba(JNIEnv *env, jbyteArray a, unsigned char *dst, int cap) {
+    if (!a) return 0;
+    jsize n = (*env)->GetArrayLength(env, a);
+    if (n <= 0) return 0;
+    if (n > cap) n = cap;
+    (*env)->GetByteArrayRegion(env, a, 0, n, (jbyte *)dst);
+    return (int)n;
+}
+
+JNIEXPORT void JNICALL Java_com_idh_sandbox_IdhReport_nReport(
+        JNIEnv *env, jclass cls, jstring jalgo, jstring jop,
+        jbyteArray jkey, jbyteArray jiv, jbyteArray jin, jbyteArray jout) {
+    (void)cls;
+    g_java_active = 1;
+    pthread_mutex_lock(&g_cap_lock);
+    if (g_njcaps < JCAP_MAX) {
+        struct JCapRec *r = &g_jcaps[g_njcaps++];
+        memset(r, 0, sizeof(*r));
+        const char *a = jalgo ? (*env)->GetStringUTFChars(env, jalgo, NULL) : NULL;
+        const char *o = jop ? (*env)->GetStringUTFChars(env, jop, NULL) : NULL;
+        if (a) { strncpy(r->algo, a, sizeof(r->algo) - 1); (*env)->ReleaseStringUTFChars(env, jalgo, a); }
+        if (o) { strncpy(r->op, o, sizeof(r->op) - 1); (*env)->ReleaseStringUTFChars(env, jop, o); }
+        r->tid = (int)gettid();
+        r->ts_ns = now_ns();
+        r->nkey = copy_jba(env, jkey, r->key, JCAP_KEY);
+        r->niv  = copy_jba(env, jiv,  r->iv,  JCAP_IV);
+        r->nin  = copy_jba(env, jin,  r->in,  JCAP_DATA);
+        r->nout = copy_jba(env, jout, r->out, JCAP_DATA);
+    }
+    pthread_mutex_unlock(&g_cap_lock);
+}
+
 // ---- continuous capture: install persistent EVP+SSL hooks, drain accumulated records
 //      periodically from idhd (mirrors the ios-decrypt-helper log-store model: hooks
 //      stay installed and events stream to the panel, instead of one-shot triggers) ----
@@ -950,8 +998,25 @@ static void cmd_capture_drain(int fd, const char *id) {
     }
     int ncaps = g_ncaps;
     g_ncaps = 0;                                  // clear after draining
+    // rich Java-layer records: algorithm + op + key + iv + input + output
+    len += snprintf(out + len, cap - len, "],\"jcaptures\":[");
+    for (int k = 0; k < g_njcaps; k++) {
+        struct JCapRec *r = &g_jcaps[k];
+        len += snprintf(out + len, cap - len,
+            "%s{\"algo\":\"%s\",\"op\":\"%s\",\"tid\":%d,\"tsNs\":%lld,\"key\":\"", k ? "," : "", r->algo, r->op, r->tid, r->ts_ns);
+        for (int b = 0; b < r->nkey && len + 3 < cap; b++) len += snprintf(out + len, cap - len, "%02x", r->key[b]);
+        len += snprintf(out + len, cap - len, "\",\"iv\":\"");
+        for (int b = 0; b < r->niv && len + 3 < cap; b++) len += snprintf(out + len, cap - len, "%02x", r->iv[b]);
+        len += snprintf(out + len, cap - len, "\",\"in\":\"");
+        for (int b = 0; b < r->nin && len + 3 < cap; b++) len += snprintf(out + len, cap - len, "%02x", r->in[b]);
+        len += snprintf(out + len, cap - len, "\",\"out\":\"");
+        for (int b = 0; b < r->nout && len + 3 < cap; b++) len += snprintf(out + len, cap - len, "%02x", r->out[b]);
+        len += snprintf(out + len, cap - len, "\",\"inl\":%d,\"outl\":%d}", r->nin, r->nout);
+    }
+    int njcaps = g_njcaps;
+    g_njcaps = 0;
     pthread_mutex_unlock(&g_cap_lock);
-    snprintf(out + len, cap - len, "],\"count\":%d}\n", ncaps);
+    snprintf(out + len, cap - len, "],\"count\":%d,\"jcount\":%d,\"javaActive\":%s}\n", ncaps, njcaps, g_java_active ? "true" : "false");
     send_line(fd, out);
     free(out);
 }

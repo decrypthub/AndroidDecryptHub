@@ -237,11 +237,13 @@ function recordEvent(type: string, data: any) {
 // ---- live capture store: what the agent's persistent hooks stream in (the panel's
 //      加解密 list reads this; it auto-populates without any button click) -------------
 interface Capture {
-  id: number; sessionId: string; func: string; algo: string; op: string;
+  id: number; sessionId: string; source: 'java' | 'native'; func: string; algo: string; op: string;
   inl: number; tid: number; tsNs: number; ts: number; hex: string; preview: string;
+  keyHex?: string; ivHex?: string; outHex?: string;
 }
 const captures: Capture[] = [];
 let capSeq = 0;
+const recentJavaIn = new Map<string, number>();   // input-hex -> ts, to dedup native echoes
 const captureTimers = new Map<string, ReturnType<typeof setInterval>>();
 const capturePaused = new Set<string>();   // sessions with continuous capture suspended
 
@@ -287,15 +289,33 @@ function startCaptureLoop(sid: string) {
       busy = true;
       try {
         const r = await sendCmd(sid, 'capture_drain', {}, 8_000);
+        const now = Date.now();
+        // Java-layer rich records first (algorithm + key + iv + input + output). Remember
+        // their input so we can drop the redundant native echo of the same operation.
+        for (const c of (r.jcaptures ?? [])) {
+          if (c.in) recentJavaIn.set(c.in, now);
+          const cat = classify('EVP_' + (c.op === 'digest' ? 'Digest' : c.op === 'hmac' ? 'HMAC' : 'Cipher'));
+          const entry: Capture = {
+            id: ++capSeq, sessionId: sid, source: 'java', func: c.op, algo: c.algo, op: c.op,
+            inl: c.inl, tid: c.tid, tsNs: c.tsNs, ts: now,
+            hex: c.in, preview: hexToPreview(c.in),
+            keyHex: c.key || '', ivHex: c.iv || '', outHex: c.out || '',
+          };
+          captures.push(entry); if (captures.length > 1000) captures.shift();
+          broadcast('capture.new', { id: entry.id, sessionId: sid, source: 'java', algo: entry.algo, op: entry.op, preview: entry.preview, inl: entry.inl, ts: entry.ts });
+        }
+        // prune the dedup memory (>2s old)
+        for (const [k, t] of recentJavaIn) if (now - t > 2000) recentJavaIn.delete(k);
         for (const c of (r.captures ?? [])) {
+          if (c.hex && recentJavaIn.has(c.hex)) continue;   // already captured richly at the Java layer
           const { algo, op } = classify(c.func);
           const entry: Capture = {
-            id: ++capSeq, sessionId: sid, func: c.func, algo, op,
-            inl: c.inl, tid: c.tid, tsNs: c.tsNs, ts: Date.now(),
+            id: ++capSeq, sessionId: sid, source: 'native', func: c.func, algo, op,
+            inl: c.inl, tid: c.tid, tsNs: c.tsNs, ts: now,
             hex: c.hex, preview: hexToPreview(c.hex),
           };
           captures.push(entry); if (captures.length > 1000) captures.shift();
-          broadcast('capture.new', { id: entry.id, sessionId: sid, algo, op, preview: entry.preview, inl: entry.inl, ts: entry.ts });
+          broadcast('capture.new', { id: entry.id, sessionId: sid, source: 'native', algo, op, preview: entry.preview, inl: entry.inl, ts: entry.ts });
         }
       } catch {} finally { busy = false; }
     }, 1500);
@@ -655,7 +675,7 @@ const httpServer = http.createServer(async (req, res) => {
     // list view omits full hex; detail view (/api/captures/:id) carries it
     return send(200, {
       total: captures.length, on: captureTimers.size > 0,
-      captures: list.slice(-limit).map(c => ({ id: c.id, algo: c.algo, op: c.op, func: c.func, inl: c.inl, tid: c.tid, ts: c.ts, preview: c.preview })),
+      captures: list.slice(-limit).map(c => ({ id: c.id, source: c.source, algo: c.algo, op: c.op, func: c.func, inl: c.inl, tid: c.tid, ts: c.ts, preview: c.preview })),
     });
   }
   if (url.pathname.startsWith('/api/captures/')) {

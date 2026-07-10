@@ -15,27 +15,30 @@ set +e
 OUT="$(node - "$HTTP" <<'EOF'
 const http=process.argv[2]; const base=`http://127.0.0.1:${http}`;
 const j=await (await fetch(`${base}/api/captures?limit=60`)).json();
-const cats=new Set((j.captures||[]).map(c=>c.algo));
+const caps=j.captures||[];
+const cats=new Set(caps.map(c=>c.algo));
 console.log('on=',j.on,'total=',j.total,'cats=',[...cats].join(' | '));
-const hasSym = [...cats].some(c=>/对称/.test(c));
-const hasDig = [...cats].some(c=>/摘要/.test(c));
-const hasHmac= [...cats].some(c=>/HMAC/.test(c));
-// detail of the last capture must carry decoded plaintext
-let plain='';
-const last=(j.captures||[]).slice(-1)[0];
-if(last){ const d=await (await fetch(`${base}/api/captures/${last.id}`)).json(); plain=d.text||''; }
-console.log('last plaintext =', JSON.stringify(plain).slice(0,60));
+const hasSym = [...cats].some(c=>/AES|DES/.test(c));
+const hasDig = [...cats].some(c=>/^(MD5|SHA-)/.test(c));
+const hasHmac= [...cats].some(c=>/Hmac/i.test(c));
+const hasJava= caps.some(c=>c.source==='java');
+// a cipher detail must carry the full Java-layer model: algorithm + key + iv + plaintext + ciphertext
+const cipher=caps.filter(c=>/AES|DES/.test(c.algo)).slice(-1)[0];
+let rich=false, plain='';
+if(cipher){ const d=await (await fetch(`${base}/api/captures/${cipher.id}`)).json();
+  plain=d.text||''; rich = !!(d.keyHex && d.ivHex && d.hex && d.outHex);
+  console.log(`cipher #${d.id} ${d.algo} key=${(d.keyHex||'').length/2}B iv=${(d.ivHex||'').length/2}B ct=${(d.outHex||'').length/2}B plain=${JSON.stringify(plain).slice(0,40)}`); }
 // DEX auto-dumped + downloadable
 const dumps=await (await fetch(`${base}/api/dumps`)).json();
 const dex=dumps.filter(d=>d.kind==='dex');
 console.log('dex dumps =', dex.length);
 let dl=false;
 if(dex.length){ const r=await fetch(`${base}/api/dumps/download?sha=${dex[0].sha256}`); dl=r.ok; }
-const pass = j.on===true && hasSym && hasDig && hasHmac && plain.includes('IDH_LIVE_') && dex.length>=1 && dl;
+const pass = j.on===true && hasJava && hasSym && hasDig && hasHmac && rich && plain.includes('IDH_LIVE_') && dex.length>=1 && dl;
 console.log(pass?'RESULT:PASS':'RESULT:FAIL');
 EOF
 )"
 echo "$OUT"
 if echo "$OUT" | grep -q 'RESULT:PASS'; then
-  echo "✅ v1.1 live capture surface PASS (对称+摘要+HMAC 自动捕获 · 明文解码 · DEX 可下载)"; exit 0
+  echo "✅ v1.1 live capture PASS (Java 层富采集: 算法+Key+IV+明文+密文 · 对称/摘要/HMAC · DEX 可下载)"; exit 0
 else echo "❌ v1.1 live capture FAIL"; exit 1; fi

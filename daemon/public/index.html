@@ -239,7 +239,7 @@ async function rescanDex(){ const st=document.getElementById('dex-stat'); st.tex
 
 // ---- 加解密实时列表 ----
 const capItems=[]; let capMaxId=0, capSel=0;
-function capTag(algo){ if(/TLS/.test(algo)) return 'tls'; if(/HMAC/.test(algo)) return 'hmac'; if(/摘要|Digest/.test(algo)) return 'dig'; return 'sym'; }
+function capTag(algo){ if(/TLS/.test(algo)) return 'tls'; if(/Hmac|HMAC/i.test(algo)) return 'hmac'; if(/MD5|SHA|摘要|Digest/i.test(algo)) return 'dig'; return 'sym'; }
 function capRender(){ const box=document.getElementById('cap-list');
   box.innerHTML=capItems.map(c=>`<div class="caprow ${c.id===capSel?'sel':''}" onclick="capSelect(${c.id})">
       <div class="l1"><span class="tag ${capTag(c.algo)}">${c.algo}</span><span class="op">${c.op}</span><span class="ts">${new Date(c.ts).toLocaleTimeString()}</span></div>
@@ -249,12 +249,18 @@ function capRender(){ const box=document.getElementById('cap-list');
   if(document.getElementById('cap-auto')?.checked) box.scrollTop=box.scrollHeight; }
 function capPush(c){ capItems.push(c); if(capItems.length>800) capItems.shift(); if(c.id>capMaxId)capMaxId=c.id; }
 function capClear(){ capItems.length=0; capSel=0; capRender(); document.getElementById('cap-detail').innerHTML='<div class="empty">已清空。</div>'; }
+const hexFmt=h=>(h||'').replace(/(.{64})/g,'$1\n');
 async function capSelect(id){ capSel=id; capRender();
   const c=await (await fetch('/api/captures/'+id)).json(); const d=document.getElementById('cap-detail');
+  const src=c.source==='java'?'Java 层 · JCE (algorithm/key/iv 绑定)':'Native · BoringSSL EVP';
+  const kv=(label,hex,color)=> hex?`<h3 style="color:${color};margin:14px 0 4px">${label}（${hex.length/2}B）</h3><pre>${hexFmt(hex)}</pre>`:'';
   d.innerHTML=`<h2>#${c.id} · ${c.algo} · ${c.op}</h2>
-    <div class="muted">函数 ${c.func} · 线程 tid=${c.tid} · 长度 ${c.inl}B · ${new Date(c.ts).toLocaleString()}</div>
-    <h3 style="color:#a6e3a1;margin:14px 0 4px">明文（文本）</h3><pre>${escapeHtml(c.text||'')}</pre>
-    <h3 style="color:#89b4fa;margin:14px 0 4px">十六进制</h3><pre>${(c.hex||'').replace(/(.{64})/g,'$1\n')}</pre>`; }
+    <div class="muted">来源 ${src} · 线程 tid=${c.tid} · ${new Date(c.ts).toLocaleString()}</div>
+    ${kv('🔑 Key',c.keyHex,'#f0a35c')}
+    ${kv('IV',c.ivHex,'#f0a35c')}
+    <h3 style="color:#a6e3a1;margin:14px 0 4px">明文 / 输入（文本 · UTF-8）</h3><pre>${escapeHtml(c.text||'')}</pre>
+    <h3 style="color:#89b4fa;margin:14px 0 4px">明文 / 输入（Hex · ${c.inl}B）</h3><pre>${hexFmt(c.hex)}</pre>
+    ${kv('🔒 密文 / 输出',c.outHex,'#b89aff')}`; }
 async function capLoad(){ try{ const r=await (await fetch('/api/captures?since='+capMaxId)).json();
     (r.captures||[]).forEach(capPush); capRender(); }catch(e){} }
 

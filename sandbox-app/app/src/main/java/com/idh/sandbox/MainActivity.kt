@@ -75,8 +75,12 @@ class MainActivity : Activity() {
             Log.w(TAG, "idh_agent not loaded: ${t.message}"); "agent: 未加载 — ${t.message}"
         }
 
-        // Drive a live crypto stream so the console's 加解密 panel fills itself once the
-        // agent installs its persistent EVP hook (idhd sends capture_start on connect).
+        // Java-layer crypto interception: interposing JCE provider captures algorithm/key/
+        // IV/plaintext/ciphertext at the Cipher/Mac/MessageDigest API boundary (richer than
+        // the native EVP hook). Install AFTER the agent so IdhReport's native is bound.
+        IdhSecurity.install()
+
+        // Drive a live crypto stream so the console's 加解密 panel fills itself.
         JavaCrypto.startLiveDriver()
 
         setContentView(buildUi(pid, loadStatus))

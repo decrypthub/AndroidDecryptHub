@@ -266,6 +266,17 @@ arm64 预编译，agent 运行时 dlopen libQBDI.so，指令级 trace idh_trace_
 
 ## 会话日志（倒序，简短）
 
+- 2026-07-10 (Java 层 hook 轮·参考 iOS 数据模型)：把加解密从"只有类别"升级到 iOS 级富审计。
+  参考 iOS log_store 记录模型（algorithm/operation/key/iv/input/output/callstack/分类），做 **Android 自己的方案**：
+  ① **Java 层拦截 Provider `IdhSecurity`**：插到最高优先级的 JCE Provider，包住 Cipher/Mac/MessageDigest 的 SPI，
+     委托真实 AndroidOpenSSL 计算、在 Java API 边界采集 **算法全名 + Key + IV + 明文 + 密文**，覆盖纯 Java 加密。
+  ② **agent JNI 富采集**：`Java_com_idh_sandbox_IdhReport_nReport`（JNI 名字绑定，无需 RegisterNatives）→ g_jcaps 富缓冲；
+     capture_drain 增 `jcaptures`（algo/op/key/iv/in/out）。native EVP 层保留作显式指定 provider 绕过时的兜底。
+  ③ **idhd 去重**：Java 富记录为准，按输入明文丢弃 native 回声（同明文 2s 窗）；`/api/captures` 带 source+key/iv/out。
+  ④ **面板主从详情**：来源(Java/Native) + 算法 + 操作 + 🔑Key + IV + 明文(UTF-8) + 🔒密文。
+  硬信号：`DESede/CBC/PKCS5Padding encrypt key=24B iv=8B ct=48B 明文=IDH_LIVE_..订单金额=191.00元`；10 个精确算法名全覆盖。
+  **verify_v11 升级为富字段断言（算法+Key+IV+明文+密文），verify_all 27/27。**
+  （下一步：把 IdhSecurity 从 sandbox 挪到 agent 注入的 dex，做到任意目标；或上 LSPlant 做不可绕过的方法级 hook。）
 - 2026-07-10 (加密面铺开轮)：只抓 AES 太单薄——按 IDH 覆盖完整加密面。
   ① **agent 常驻 hook 扩到全套**：EVP_CipherUpdate(对称) + EVP_DigestUpdate(摘要) + HMAC_Update/EVP_DigestSignUpdate(HMAC) + SSL_read/write(TLS)；capture_stop 对称还原。
   ② **demo 跑全套算法**（每 2s 轮转）：AES-CBC/CTR/GCM、DESede、MD5/SHA-1/SHA-256/SHA-512、HmacSHA256/HmacSHA1。
