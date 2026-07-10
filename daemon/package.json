@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "IDH daemon — HTTP/WebSocket/MCP/agent registry for the Android runtime reverse-analysis workbench",
+  "description": "ADH daemon (adhd) — HTTP/WebSocket/MCP/agent registry for Android DecryptHub",
   "scripts": {
     "start": "node src/index.ts",
     "dev": "node --watch src/index.ts",

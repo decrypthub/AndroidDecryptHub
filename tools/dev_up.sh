@@ -17,11 +17,17 @@ else
 fi
 
 # 2) device + adb reverse
+#    - AGENT (8761): agent in the target process dials host idhd
+#    - HTTP  (8760): so the phone's own browser can reach the host web console at
+#      127.0.0.1:8760 through the reverse tunnel (same URL works on the PC browser too)
 STATE="$(adb get-state 2>/dev/null | tr -d '\r')"
 if [ "$STATE" = "device" ]; then
   SERIAL="$(adb devices | awk 'NR==2{print $1}')"
-  adb -s "$SERIAL" reverse tcp:$AGENT tcp:$AGENT >/dev/null 2>&1 && echo "adb reverse: set ($SERIAL)"
+  adb -s "$SERIAL" reverse tcp:$AGENT tcp:$AGENT >/dev/null 2>&1
+  adb -s "$SERIAL" reverse tcp:$HTTP tcp:$HTTP >/dev/null 2>&1
+  echo "adb reverse: set ($SERIAL) agent:$AGENT web:$HTTP"
   echo "device: online ($SERIAL)"
+  echo "web console: http://127.0.0.1:$HTTP  (open on PC, or in the phone browser via the demo app)"
 else
   echo "device: OFFLINE (state='$STATE') — device-only verification must be marked PENDING"
 fi

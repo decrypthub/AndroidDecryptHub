@@ -12,7 +12,7 @@ REP="$(curl -s "$BASE/api/export/report")"
 chk "report shape"      'echo "$REP" | grep -q "idh-diagnostic" && echo "$REP" | grep -q "capabilities"'
 chk "report no-secrets note" 'echo "$REP" | grep -q "metadata only"'
 DOC="$(curl -s "$BASE/api/mcp/doc")"
-chk "mcp doc header"    'echo "$DOC" | grep -q "# IDH MCP Tools"'
+chk "mcp doc header"    'echo "$DOC" | grep -q "MCP Tools"'
 chk "mcp doc has tools" 'echo "$DOC" | grep -q "process_list" && echo "$DOC" | grep -q "trace_function"'
 
 TOOLS="$(curl -s -X POST "$BASE/mcp" -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')"

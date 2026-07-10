@@ -1,4 +1,4 @@
-# IDH Runtime Workbench — As-Built Architecture
+# ADH (Android DecryptHub) — As-Built Architecture
 
 > This documents what is **implemented and verified** (see `tools/verify_all.sh`, 24 checks),
 > not the aspirational spec. Spec: `REQUIREMENTS.md`. Progress: `PROGRESS.md`.

@@ -1,4 +1,4 @@
-// idhd — IDH daemon (v0.1)
+// idhd — ADH (Android DecryptHub) daemon (v0.1)
 // Three surfaces:
 //   - Agent TCP server (NDJSON)         : device agents connect here (via `adb reverse`)
 //   - HTTP server (REST + static)       : /health, /api/agents, dashboard
@@ -12,7 +12,7 @@ import { mkdirSync, writeFileSync, existsSync, createReadStream, unlinkSync, app
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { homedir, tmpdir } from 'node:os';
+import { homedir, tmpdir, networkInterfaces } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -130,6 +130,33 @@ mkdirSync(CAPTURES, { recursive: true });
 
 const HTTP_PORT = Number(process.env.IDH_HTTP_PORT ?? 8760);
 const AGENT_PORT = Number(process.env.IDH_AGENT_PORT ?? 8761);
+
+// ---- access URLs (mirrors ios-decrypt-helper: surface the LAN address so the console
+//      is reachable from the phone / any device on the network, fail-loud if none) -----
+// idhd (the web console) runs on the HOST, so the relevant LAN IP is this machine's,
+// not the phone's. The phone reaches it via `adb reverse` (127.0.0.1) OR directly over
+// Wi-Fi at the LAN IP. Prefer private ranges (192.168./10./172.16-31.) and stable NICs.
+function lanIPv4s(): string[] {
+  const nics = networkInterfaces();
+  const priv: string[] = [];
+  const other: string[] = [];
+  for (const [name, addrs] of Object.entries(nics)) {
+    for (const a of addrs ?? []) {
+      if (a.family !== 'IPv4' || a.internal) continue;
+      // skip virtual/container/adb NICs that aren't the real LAN
+      if (/^(vEthernet|Loopback|WSL|Hyper-V|docker|veth|utun|tun|tap)/i.test(name)) continue;
+      const ip = a.address;
+      if (/^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(ip)) priv.push(ip);
+      else other.push(ip);
+    }
+  }
+  return [...priv, ...other];
+}
+function webUrls() {
+  const port = HTTP_PORT;
+  const lan = lanIPv4s().map((ip) => `http://${ip}:${port}`);
+  return { port, local: `http://127.0.0.1:${port}`, lan };
+}
 
 // ---- types (erased at runtime) -------------------------------------------
 
@@ -529,7 +556,7 @@ const httpServer = http.createServer(async (req, res) => {
   };
 
   if (url.pathname === '/health') {
-    return send(200, { ok: true, service: 'idhd', version: '0.1.0', agents: sessions.size, uptime: process.uptime(), mcpTools: MCP_TOOLS.length });
+    return send(200, { ok: true, service: 'idhd', version: '0.1.0', agents: sessions.size, uptime: process.uptime(), mcpTools: MCP_TOOLS.length, web: webUrls() });
   }
   // MCP Streamable HTTP endpoint (JSON-RPC)
   if (url.pathname === '/mcp' && req.method === 'POST') {
@@ -555,7 +582,7 @@ const httpServer = http.createServer(async (req, res) => {
   }
   // MCP tool inventory as markdown (for docs/mcp-tools.md)
   if (url.pathname === '/api/mcp/doc') {
-    const md = ['# IDH MCP Tools', '', `Generated from the live idhd registry (${MCP_TOOLS.length} tools). Endpoint: \`POST /mcp\` (JSON-RPC 2.0).`, '',
+    const md = ['# ADH MCP Tools', '', `Generated from the live idhd registry (${MCP_TOOLS.length} tools). Endpoint: \`POST /mcp\` (JSON-RPC 2.0).`, '',
       '| Tool | Description | Args |', '|---|---|---|',
       ...MCP_TOOLS.map(t => `| \`${t.name}\` | ${t.description} | ${Object.keys(t.inputSchema.properties ?? {}).join(', ') || '—'} |`), ''].join('\n');
     res.writeHead(200, { 'content-type': 'text/markdown; charset=utf-8' }); return res.end(md);
@@ -943,8 +970,19 @@ httpServer.on('upgrade', (req, socket, head) => {
 
 agentServer.listen(AGENT_PORT, '0.0.0.0', () => log(`agent TCP listening on :${AGENT_PORT}`));
 httpServer.listen(HTTP_PORT, '0.0.0.0', () => {
-  log(`HTTP + WS listening on http://127.0.0.1:${HTTP_PORT}`);
-  log(`dashboard: http://127.0.0.1:${HTTP_PORT}/  | run 'adb reverse tcp:${AGENT_PORT} tcp:${AGENT_PORT}' before launching the target`);
+  const w = webUrls();
+  log(`HTTP + WS listening on 0.0.0.0:${HTTP_PORT}`);
+  log('┌─ ADH web console ───────────────────────────────────────────');
+  log(`│  local : ${w.local}   (this PC's browser)`);
+  if (w.lan.length) {
+    for (const u of w.lan) log(`│  LAN   : ${u}   (phone / any device on the same network)`);
+  } else {
+    // fail-loud, like the iOS ref: don't pretend LAN access works when it can't
+    log('│  LAN   : (no LAN IPv4 found — console reachable locally only;');
+    log('│          the phone can still open it via `adb reverse tcp:8760`)');
+  }
+  log(`│  phone : also run 'adb reverse tcp:${AGENT_PORT} tcp:${AGENT_PORT}' + 'adb reverse tcp:${HTTP_PORT} tcp:${HTTP_PORT}'`);
+  log('└─────────────────────────────────────────────────────────────');
 });
 
 process.on('SIGINT', () => { log('shutting down'); process.exit(0); });

@@ -1,4 +1,4 @@
-# IDH Android Runtime Workbench — 功能需求说明
+# ADH (Android DecryptHub) — 功能需求说明
 
 > **产品定位**：**通用 Android 运行时逆向分析工具** — 不是 demo，也不是「手机版 jadx」。
 > 适用于任意 App 的运行时观测/dump/hook/trace，并**对高对抗目标（反调试、root/签名检测、代码混淆、加密传输）具备实战能力**。
@@ -116,7 +116,7 @@ native 函数在 libxxx.so 的哪个偏移？
 ## 3. 功能需求总览
 
 ```text
-IDH Android Runtime Workbench
+ADH (Android DecryptHub)
 │
 ├── A. 进程接入与会话管理
 ├── B. Runtime Dex 管理
@@ -1198,7 +1198,7 @@ Android 在此基础上增加：全套 dex 操作、Java hook、native trace、m
 
 - Web Dashboard 健康横幅
 - 进程内浮层（若启用）
-- Agent 日志 `[IDH/ERR]`
+- Agent 日志 `[ADH/ERR]`
 - `GET /api/health` / MCP `health.get`
 
 ### 19.3 行为原则

@@ -266,6 +266,16 @@ arm64 预编译，agent 运行时 dlopen libQBDI.so，指令级 trace idh_trace_
 
 ## 会话日志（倒序，简短）
 
+- 2026-07-10 (可用性闭环轮·参考 iOS)：把"怎么打开观测控制台"按产品做闭环，参考 `.ref/ios-decrypt-helper`
+  （其 `http_server.m` getifaddrs 取局域网 IP、fail-loud 明示"仅本地可访问"、悬浮窗 URL 点击复制）。
+  ① **idhd 探测宿主机局域网 IP**（`os.networkInterfaces`，过滤 vEthernet/WSL/docker 等虚拟网卡，优先 192.168./10./172.16-31.），
+  `/health` 增 `web:{port,local,lan[]}`，启动横幅打印 local/LAN（无 LAN 则 fail-loud）。实测 `http://192.168.100.11:8760`。
+  ② **Web 顶栏显示访问地址**（LAN 优先，点击复制）。
+  ③ **`dev_up.sh` 增 `adb reverse tcp:8760`**——手机浏览器与电脑用同一个 `127.0.0.1:8760`（经隧道）。
+  ④ **sandbox App 主界面重做**：显示可复制的局域网地址 + 本机地址 + "在手机浏览器打开"按钮 + **活体在线指示**
+  （轮询 idhd `/health`：绿=控制台在线并显示 agents 数，红=提示去电脑 `dev_up.sh`）。
+  ⑤ **Web 控制台加 Debug 面板**：monkeypatch fetch 统一记录每个 REST/MCP 请求 + WS 事件（方法/状态/耗时）。
+  闭环硬信号：设备侧 App 经反向隧道读到 `health: ok=true agents=2 lan='http://192.168.100.11:8760'`。**verify_all 仍 26/26。**
 - 2026-07-10 (评审硬化轮)：应大佬评审，修 agent 侧 3 处正确性/隐蔽性缺陷并各自加验证——
   ① **`got_replace` hook 后恢复原页保护 + 写屏障**：RELRO(r--) 槽改写后 `__atomic_thread_fence` 发布再 `mprotect` 回 r--，不再残留 rw-（削弱 RELRO / 完整性自检诱饵）。selftest 实测 `origPerms=r--p slotPerms=r--p protRestored=true`，验证脚本纳入通过条件。
   ② **`resolve_sym` 用 DT_HASH(nchain)/DT_GNU_HASH 求 dynsym 数**，节区相邻反推降为兜底——不再依赖 `.dynstr` 紧邻 `.dynsym` 的非标准布局。

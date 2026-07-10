@@ -1,4 +1,4 @@
-# IDH Android Runtime Workbench — 开发计划
+# ADH (Android DecryptHub) — 开发计划
 
 > **定位**：**通用 Android 运行时逆向分析工具** — 对高对抗目标（反调试/root/签名检测/混淆/加密传输）具备实战能力。
 > **功能需求**：见 [`REQUIREMENTS.md`](REQUIREMENTS.md)（唯一权威规格，模块 A–W；本文档只管架构与排期）。
@@ -105,7 +105,7 @@ HTTP API 与 MCP tools **不重复实现业务逻辑**，共享同一 Service La
 ## 2. 八大核心模块
 
 ```text
-IDH Android Runtime Workbench
+ADH (Android DecryptHub)
 ├── 1. Agent 注入层          — Zygisk(root) / Gadget·重打包(非 root) / 模拟注入(CI) / 手动 inject
 ├── 2. Dump Engine           — dex / so / memory / maps / magic scan / ART 结构级捕获(L.6)
 ├── 3. Syscall / libc / File Monitor — Java + native 文件/系统观测；direct syscall 分级(E.9)
@@ -481,7 +481,7 @@ Event {
 ## 6. 工程目录
 
 ```text
-android-decrpthub/          # 仓库名；产品名 IDH Workbench
+android-decrpthub/          # 仓库名；产品名 ADH (Android DecryptHub)
 ├── agent/                  # libidh_agent.so
 │   ├── CMakeLists.txt
 │   ├── src/
@@ -812,4 +812,4 @@ idhd             — 分析与服务，越强越好
 Web UI           — 观测与交互，实时可见
 ```
 
-这就是 **IDH Android Runtime Workbench** 与 demo / 手机 jadx 的本质区别。
+这就是 **ADH (Android DecryptHub)** 与 demo / 手机 jadx 的本质区别。

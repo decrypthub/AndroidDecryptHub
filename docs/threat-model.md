@@ -1,10 +1,10 @@
-# IDH Runtime Workbench — Threat Model & Use Policy
+# ADH (Android DecryptHub) — Threat Model & Use Policy
 
 > Scope of use, access control, and sensitive-data handling for the workbench.
 
 ## Authorized use only
 
-IDH is a **general-purpose Android runtime reverse-analysis** tool intended for
+ADH is a **general-purpose Android runtime reverse-analysis** tool intended for
 **authorized reverse investigation** — analyzing apps you own or are authorized to
 examine (e.g., investigating evasive gray-market apps). It is **not** for:
 

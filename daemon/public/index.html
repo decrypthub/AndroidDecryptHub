@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>IDH Runtime Workbench</title>
+<title>ADH — Android DecryptHub</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -36,8 +36,9 @@
 <body>
 <header>
   <span class="dot" id="conn"></span>
-  <h1>IDH Runtime Workbench</h1>
+  <h1>ADH — Android DecryptHub</h1>
   <span class="muted" id="status">connecting…</span>
+  <span class="muted" id="access" title="click to copy — open on the phone or any device on this network"></span>
   <span style="flex:1"></span>
   <span class="muted">session:</span>
   <select id="sess"><option value="">(newest online)</option></select>
@@ -109,9 +110,50 @@
     <div class="row"><button class="act" onclick="loadMcp()">List tools</button></div>
     <pre id="out-mcp" class="muted">…</pre>
   </div>
+
+  <div class="panel" id="p-debug">
+    <h2>Debug console</h2>
+    <div class="row">
+      <span id="dbg-ws" class="pill no">ws: —</span>
+      <span id="dbg-stat" class="muted">requests: 0 · errors: 0 · agents: 0</span>
+      <span style="flex:1"></span>
+      <label class="muted"><input type="checkbox" id="dbg-auto" checked style="vertical-align:middle"> autoscroll</label>
+      <label class="muted"><input type="checkbox" id="dbg-ws-on" checked style="vertical-align:middle"> log ws</label>
+      <button class="act" onclick="dbgClear()">Clear</button>
+    </div>
+    <pre id="dbg-log" class="muted">debug log — every REST/MCP request and WebSocket event is traced here.</pre>
+  </div>
 </main>
 <script>
-const TABS = [['p-dash','Dashboard'],['p-capture','Capture'],['p-dumps','Dumps'],['p-dex','Dex'],['p-native','Native'],['p-events','Events'],['p-mcp','MCP']];
+const TABS = [['p-dash','Dashboard'],['p-capture','Capture'],['p-dumps','Dumps'],['p-dex','Dex'],['p-native','Native'],['p-events','Events'],['p-mcp','MCP'],['p-debug','Debug']];
+
+// ---- debug console: trace every REST/MCP request + WebSocket event live ----
+let dbgReqs=0, dbgErrs=0;
+const dbgLines=[];
+function dbgStat(){ const s=document.getElementById('dbg-stat'); if(s) s.textContent=`requests: ${dbgReqs} · errors: ${dbgErrs} · agents: ${agents.size}`; }
+function dbg(kind,msg){
+  const t=new Date().toISOString().slice(11,23);
+  dbgLines.push(`${t}  ${kind.padEnd(7)} ${msg}`);
+  if(dbgLines.length>400) dbgLines.splice(0,dbgLines.length-400);
+  const el=document.getElementById('dbg-log'); if(!el) return;
+  el.className=''; el.textContent=dbgLines.join('\n');
+  if(document.getElementById('dbg-auto')?.checked) el.scrollTop=el.scrollHeight;
+}
+function dbgClear(){ dbgLines.length=0; const el=document.getElementById('dbg-log'); if(el) el.textContent=''; }
+// Monkeypatch fetch so all UI-issued REST/MCP calls are logged uniformly (method, path,
+// status, latency) without touching each caller. Errors are counted + traced.
+const _fetch=window.fetch;
+window.fetch=async function(input,init){
+  const method=(init&&init.method)||'GET';
+  const url=typeof input==='string'?input:(input&&input.url)||String(input);
+  const path=url.replace(location.origin,''); const t0=performance.now();
+  dbg('REQ',`${method} ${path}`);
+  try{
+    const r=await _fetch(input,init); const ms=(performance.now()-t0).toFixed(0);
+    dbgReqs++; dbg(r.ok?'RES':'RES!',`${r.status} ${method} ${path} (${ms}ms)`); dbgStat();
+    return r;
+  }catch(e){ dbgErrs++; dbg('ERR',`${method} ${path} — ${e}`); dbgStat(); throw e; }
+};
 const nav = document.getElementById('nav');
 TABS.forEach(([id,label],i)=>{ const b=document.createElement('button'); b.textContent=label; if(i===0)b.className='active';
   b.onclick=()=>{ document.querySelectorAll('nav button').forEach(x=>x.classList.remove('active')); b.classList.add('active');
@@ -141,17 +183,43 @@ function render(){ const list=[...agents.values()].sort((a,b)=>a.connectedAt-b.c
     rows.innerHTML=list.map(a=>`<tr class="${a.online?'':'off'}"><td class="muted">${a.sessionId}</td><td>${a.package}</td><td>${a.pid}</td><td>${a.abi}</td><td>${a.android}</td><td>${a.entry}</td><td>${a.mapsCount||'—'}</td><td><span class="pill ${a.online?'on':'no'}">${a.online?'online':'offline'}</span></td></tr>`).join(''); }
   const cur=sess.value; sess.innerHTML='<option value="">(newest online)</option>'+list.filter(a=>a.online).map(a=>`<option value="${a.sessionId}">${a.package} · ${a.pid}</option>`).join(''); sess.value=cur; }
 function upsert(a){ agents.set(a.sessionId,{...agents.get(a.sessionId),...a}); render(); }
+function setWsPill(state,cls){ const p=document.getElementById('dbg-ws'); if(p){p.textContent='ws: '+state;p.className='pill '+cls;} }
 function connect(){ const ws=new WebSocket(`ws://${location.host}/ws`); const conn=document.getElementById('conn'), st=document.getElementById('status');
-  ws.onopen=()=>{conn.classList.add('up');st.textContent='live';}; ws.onclose=()=>{conn.classList.remove('up');st.textContent='disconnected — retrying';setTimeout(connect,1500);};
+  ws.onopen=()=>{conn.classList.add('up');st.textContent='live';setWsPill('live','on');dbg('WS','open '+ws.url);};
+  ws.onerror=()=>{dbg('WS!','socket error');};
+  ws.onclose=()=>{conn.classList.remove('up');st.textContent='disconnected — retrying';setWsPill('down · retrying','no');dbg('WS','close — retrying in 1.5s');setTimeout(connect,1500);};
   ws.onmessage=e=>{const m=JSON.parse(e.data);
+    if(document.getElementById('dbg-ws-on')?.checked){
+      const tag=m.event||'?'; const sid=m.data&&m.data.sessionId?` ${m.data.sessionId}`:'';
+      let extra=''; if(m.event==='agent.hello')extra=` ${m.data.package} pid=${m.data.pid} ${m.data.entry}`;
+      else if(m.event==='agent.maps')extra=` count=${m.data.count}`;
+      else if(m.event==='snapshot')extra=` agents=${(m.data||[]).length}`;
+      else if(m.event==='dump.new')extra=` ${m.data.kind||''} ${(m.data.sha256||'').slice(0,12)}`;
+      dbg('WS←',`${tag}${sid}${extra}`);
+    }
     if(m.event==='snapshot'){agents.clear();(m.data||[]).forEach(upsert);}
     else if(m.event==='agent.hello')upsert(m.data);
     else if(m.event==='agent.maps'){const a=agents.get(m.data.sessionId);if(a){a.mapsCount=m.data.count;upsert(a);}}
     else if(m.event==='agent.close'){const a=agents.get(m.data.sessionId);if(a){a.online=false;upsert(a);}}
     else if(m.event==='dump.new'){ if(document.getElementById('p-dumps').classList.contains('active'))loadDumps(); }
+    dbgStat();
     if(document.getElementById('p-events').classList.contains('active'))loadEvents();
   }; }
 connect();
+
+// Show the access URLs in the header (LAN preferred), click to copy — so you can open
+// the console from the phone or any device on the same network (mirrors the iOS ref).
+(async function showAccess(){
+  const el=document.getElementById('access'); if(!el) return;
+  try{
+    const h=await (await fetch('/health')).json();
+    const lan=(h.web&&h.web.lan&&h.web.lan[0])||''; const local=(h.web&&h.web.local)||location.origin;
+    const primary=lan||local;
+    el.innerHTML=`🔗 <b style="color:#89b4fa">${primary}</b>`+(lan?` <span class="muted">· local ${local}</span>`:'');
+    el.style.cursor='pointer';
+    el.onclick=()=>{ navigator.clipboard?.writeText(primary); const o=el.innerHTML; el.innerHTML='✓ copied '+primary; setTimeout(()=>el.innerHTML=o,1200); };
+  }catch(e){ el.textContent=''; }
+})();
 </script>
 </body>
 </html>

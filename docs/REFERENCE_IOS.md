@@ -5,7 +5,7 @@
 
 ## 是什么
 
-IOSDecryptHub — 基于 fishhook 注入目标 iOS App 的**行为监控平台**。
+IOSDecryptHub (**IDH**, iOS DecryptHub) — 基于 fishhook 注入目标 iOS App 的**行为监控平台**。本仓库产品名为 **ADH**（Android DecryptHub），勿与 IDH 混用。
 
 - 注入物：`decrypt_helper.dylib`
 - 内置 HTTP 服务（默认 `:8088`）+ 嵌入式 Web 面板

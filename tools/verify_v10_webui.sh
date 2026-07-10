@@ -9,7 +9,7 @@ chk(){ if eval "$2"; then echo "PASS  $1"; else echo "FAIL  $1"; fail=1; fi; }
 
 HTML="$(curl -s "$BASE/")"
 chk "page serves"            '[ -n "$HTML" ]'
-chk "title present"         'echo "$HTML" | grep -q "IDH Runtime Workbench"'
+chk "title present"         'echo "$HTML" | grep -q "Android DecryptHub"'
 chk "tabs present"          'echo "$HTML" | grep -q "Capture" && echo "$HTML" | grep -q "Dumps" && echo "$HTML" | grep -q "Dex" && echo "$HTML" | grep -q "Native" && echo "$HTML" | grep -q "MCP"'
 chk "wires capture api"     'echo "$HTML" | grep -q "/api/crypto/hook_test" && echo "$HTML" | grep -q "/api/flow/watch" && echo "$HTML" | grep -q "/api/detect/watch"'
 chk "wires dex api"         'echo "$HTML" | grep -q "/api/dex/search" && echo "$HTML" | grep -q "/api/dex/xref"'

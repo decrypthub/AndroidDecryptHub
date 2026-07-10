@@ -4,7 +4,7 @@ Guidance for Claude working in this repo. Keep this file short. Only rules that 
 
 ## What this is
 
-**IDH Android Runtime Workbench** — a general-purpose **Android runtime reverse-analysis** tool. Injects a native agent into a target app, observes/dumps/hooks/traces at runtime, controlled from a browser + MCP. Targets are frequently **evasive** (anti-debug, root/signature detection, code obfuscation, encrypted traffic) — the design assumes hostile runtimes. Scope is **authorized reverse investigation**, not legal forensics and not evasion tooling for malicious use.
+**ADH (Android DecryptHub)** — a general-purpose **Android runtime reverse-analysis** tool. **IDH** is the iOS counterpart ([ios-decrypt-helper](https://github.com/taisuii/ios-decrypt-helper)); do not use IDH as this project's product name. Injects a native agent into a target app, observes/dumps/hooks/traces at runtime, controlled from a browser + MCP. Targets are frequently **evasive** (anti-debug, root/signature detection, code obfuscation, encrypted traffic) — the design assumes hostile runtimes. Scope is **authorized reverse investigation**, not legal forensics and not evasion tooling for malicious use.
 
 ## Source of truth (read before changing scope)
 
@@ -14,6 +14,14 @@ Guidance for Claude working in this repo. Keep this file short. Only rules that 
 - `docs/REFERENCE_IOS.md` + `.ref/ios-decrypt-helper/` — the iOS project we inherit ideas from.
 
 There is one plan. If something contradicts these docs, fix the docs in the same change — do not leave a divergent second plan.
+
+## Naming
+
+| 名称 | 含义 |
+|------|------|
+| **ADH** | 本产品（Android DecryptHub） |
+| **IDH** | iOS 参考项目（IOSDecryptHub / ios-decrypt-helper），仅作对照 |
+| `libidh_agent.so` / `idhd` / `idh_*` | 早期脚手架遗留的内部标识符；产品对外统一称 ADH |
 
 ## Architecture red line (do not cross)
 

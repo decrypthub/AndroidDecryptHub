@@ -1,4 +1,4 @@
-# IDH MCP Tools
+# ADH MCP Tools
 
 Generated from the live idhd registry (25 tools). Endpoint: `POST /mcp` (JSON-RPC 2.0).
 
