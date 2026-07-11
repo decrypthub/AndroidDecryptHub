@@ -266,6 +266,11 @@ arm64 预编译，agent 运行时 dlopen libQBDI.so，指令级 trace idh_trace_
 
 ## 会话日志（倒序，简短）
 
+- 2026-07-11 (加载任意 so / frida-gadget)：agent 是目标进程内原生码 → 可 `dlopen` 任意 .so。
+  `cmd_load_so(path, symbol?)` + `POST /api/agent/load_so` + MCP `load_library`。frida-gadget script 模式 dlopen 后自动跑 js。
+  `tools/load_frida_gadget.sh`（root 推 gadget+config+js 到 code_cache、chcon、触发 load_so）。
+  `verify_v18`（真机按绝对路径 dlopen libidhdetect.so + 符号解析）。**verify_all 34/34。**
+  坑记录：app 进程默认只能从 nativeLibraryDir 执行 .so，任意路径受 SELinux exec 限制；设备 root 可 chcon/setenforce 绕过（内网测试可接受）。
 - 2026-07-11 (逆向能力三轴延伸)：按重心定案——只做逆向能力，不做鉴权/防检测（内网测试）。
   **轴1 通用性**：`crypto_identify`（`/api/crypto/identify` + MCP）把捕获聚合成"App 用了哪些算法/密钥/IV"的白话报告，
   覆盖对称/**非对称RSA**/摘要/HMAC；Java 拦截 Provider + demo 加 RSA-2048。`verify_v16`（真机报告 11 算法 7 带密钥）。

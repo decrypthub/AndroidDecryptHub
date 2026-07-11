@@ -1103,6 +1103,23 @@ static void cmd_trigger(int fd, const char *id, const char *className, const cha
     LOGI("trigger %s method=%s level=%d loaded=%d invoked=%d skipped=%d (%s)", className, method?method:"", level, loaded, invoked, skipped, reason);
 }
 
+// Load an arbitrary .so into the target process (e.g. frida-gadget, a helper lib). The
+// agent is native code inside the target, so dlopen() just works — gadget in script mode
+// then auto-runs its JS. Reports the handle + whether an optional probe symbol resolved.
+static void cmd_load_so(int fd, const char *id, const char *path, const char *symbol) {
+    char idj[64]; json_escape(id, idj, sizeof(idj));
+    void *h = dlopen(path, RTLD_NOW | RTLD_GLOBAL);
+    const char *err = h ? "" : dlerror();
+    void *sym = (h && symbol && symbol[0]) ? dlsym(h, symbol) : NULL;
+    char pj[300], ej[300]; json_escape(path, pj, sizeof(pj)); json_escape(err ? err : "", ej, sizeof(ej));
+    char out[900];
+    snprintf(out, sizeof(out),
+        "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"load_so\",\"ok\":%s,\"path\":\"%s\",\"handle\":\"%llx\",\"symbol\":\"%s\",\"symbolFound\":%s,\"error\":\"%s\"}\n",
+        idj, h ? "true" : "false", pj, (unsigned long long)(uintptr_t)h, symbol ? symbol : "", sym ? "true" : "false", ej);
+    send_line(fd, out);
+    LOGI("load_so path=%s ok=%d symFound=%d err=%s", path, h != NULL, sym != NULL, err ? err : "");
+}
+
 // ---- generic native function-call tracer (module I.2, function level) ----
 struct TraceRec { long a0, a1, a2, a3; int tid; long long ts; char s0[48]; };
 static struct TraceRec g_trace[256];
@@ -1753,6 +1770,11 @@ static void command_loop(int fd) {
                     json_get_str(line, "method", tm, sizeof(tm));
                     long long lv = json_get_num(line, "level");
                     cmd_trigger(fd, id, tcls, tm, lv > 0 ? (int)lv : 1);
+                } else if (strcmp(op, "load_so") == 0) {
+                    char lpath[400] = "", lsym[96] = "";
+                    json_get_str(line, "path", lpath, sizeof(lpath));
+                    json_get_str(line, "symbol", lsym, sizeof(lsym));
+                    cmd_load_so(fd, id, lpath, lsym);
                 } else if (strcmp(op, "net_hook_test") == 0) {
                     cmd_net_hook_test(fd, id);
                 } else if (strcmp(op, "flow_watch") == 0) {

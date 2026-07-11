@@ -732,6 +732,7 @@ const MCP_TOOLS: { name: string; description: string; inputSchema: any; handler:
   { name: 'trigger', description: 'Actively load a class (level 1) and invoke a safe static no-arg method (level 3) to force code paths — a trigger source for unpacking', inputSchema: { type: 'object', properties: { session: S, class: S, method: S, level: N }, required: ['class'] }, handler: (a) => agentCmd(a.session, 'trigger', { className: a.class, method: a.method ?? '', level: Number(a.level ?? 1) }, 20_000) },
   { name: 'qbdi_trace', description: 'QBDI instruction-level dynamic trace of a native function (per-instruction disassembly + return value)', inputSchema: { type: 'object', properties: { session: S, symLib: S, symbol: S }, required: ['symbol'] }, handler: (a) => agentCmd(a.session, 'qbdi_trace', { symLib: a.symLib ?? 'libidhdetect.so', symbol: a.symbol }, 30_000) },
   { name: 'net_correlate', description: 'Network↔crypto correlation: pair plaintext with the TLS request carrying its ciphertext (same thread + time window)', inputSchema: { type: 'object', properties: { session: S } }, handler: (a) => agentCmd(a.session, 'flow_watch', {}, 25_000) },
+  { name: 'load_library', description: '把任意 .so 加载进目标进程（如 frida-gadget，随后 gadget 会按 script 模式自动跑你的 frida 脚本）。可选 symbol 探测。dlopen from inside the target.', inputSchema: { type: 'object', properties: { session: S, path: S, symbol: S }, required: ['path'] }, handler: (a) => agentCmd(a.session, 'load_so', { path: a.path, symbol: a.symbol ?? '' }, 30_000) },
 ];
 const MCP_MAP = new Map(MCP_TOOLS.map(t => [t.name, t]));
 
@@ -1020,6 +1021,15 @@ const httpServer = http.createServer(async (req, res) => {
     const sid = body.session ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
     if (!sid) return send(400, { error: 'no session' });
     try { return send(200, await runUnpackSession(sid, body)); }
+    catch (e) { return send(504, { error: (e as Error).message }); }
+  }
+  // Load an arbitrary .so into the target (frida-gadget / helper lib): POST /api/agent/load_so
+  // {session, path, symbol?}. Gadget in script mode auto-runs its JS after this.
+  if (url.pathname === '/api/agent/load_so' && req.method === 'POST') {
+    const { session, path: soPath, symbol } = JSON.parse((await readBody(req)) || '{}');
+    const sid = session ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    if (!sid || !soPath) return send(400, { error: 'need session + path' });
+    try { const r = await sendCmd(sid, 'load_so', { path: soPath, symbol: symbol ?? '' }, 30_000); return send(r.ok ? 200 : 502, r); }
     catch (e) { return send(504, { error: (e as Error).message }); }
   }
   // Active trigger (P2): GET /api/unpack/trigger?session=&class=&method=&level=

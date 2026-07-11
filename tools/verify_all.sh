@@ -43,6 +43,7 @@ SCRIPTS=(
   "verify_v15_session.sh:device"
   "verify_v16_identify.sh:device"
   "verify_v17_deepunpack.sh:device"
+  "verify_v18_loadso.sh:device"
 )
 
 pass=0; fail=0; skip=0; FAILED=""
