@@ -250,7 +250,7 @@ async function coverage(sha){ const el=document.getElementById('out-cov'); el.te
   }catch(e){el.textContent='错误: '+e;} }
 async function unpackRun(){ const el=document.getElementById('out-session'), st=document.getElementById('dex-stat');
   st.textContent='脱壳会话运行中（快照→触发→再快照→恢复）…'; el.textContent='';
-  try{ const r=await (await fetch('/api/unpack/run',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session:val('sess')||undefined,triggerClasses:['com.idh.sandbox.TriggerProbe'],triggerMethod:'safeCompute',level:3})})).json();
+  try{ const r=await (await fetch('/api/unpack/run',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session:val('sess')||undefined,triggerAllPrefix:'com.idh.sandbox.',triggerClasses:['com.idh.sandbox.TriggerProbe'],triggerMethod:'safeCompute',level:3})})).json();
     if(r.error){el.textContent='错误: '+r.error;st.textContent='';return;}
     st.textContent=`会话完成：T0 ${r.t0Count} dex / 触发 ${r.triggered.length} 类`;
     let s=`阶段: ${r.phases.join(' → ')}\nT0 快照 ${r.t0Count} 个 DexFile · T1 快照 ${r.t1Count}\n触发 ${r.triggered.length} 类（`+

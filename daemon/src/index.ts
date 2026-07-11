@@ -368,16 +368,24 @@ async function runUnpackSession(sid: string, body: any) {
   };
   const t0 = await snapshot('unpack-t0');
   const targeted = new Set<string>();
+  const prefix = body.triggerAllPrefix ? String(body.triggerAllPrefix) : '';   // e.g. "com.target."
   for (const s of t0) {
     try {
       const buf = await readFile(dumps.get(s.sha)!.path); const pd = parseDex(buf);
+      // classes with extracted methods (targeted, highest priority)
       for (const m of analyzeCoverage(buf, pd).missing) {
         const dot = m.method.split('->')[0].replace(/^L/, '').replace(/;$/, '').replace(/\//g, '.');
         if (dot) targeted.add(dot);
       }
+      // aggressive mode: enumerate ALL classes under a package prefix to force resolution
+      // (a refill-type shell restores each method's code_item when its class is linked)
+      if (prefix) for (const c of pd.classes) {
+        const dot = c.name.replace(/^L/, '').replace(/;$/, '').replace(/\//g, '.');
+        if (dot.startsWith(prefix) && !dot.includes('$$')) targeted.add(dot);
+      }
     } catch {}
   }
-  const classes = [...new Set([...(body.triggerClasses ?? []), ...targeted])].slice(0, Number(body.maxClasses ?? 50));
+  const classes = [...new Set([...(body.triggerClasses ?? []), ...targeted])].slice(0, Number(body.maxClasses ?? (prefix ? 500 : 50)));
   const triggered: any[] = [];
   for (const c of classes) {
     try { const r = await sendCmd(sid, 'trigger', { className: c, method: body.triggerMethod ?? '', level }, 15_000);
@@ -718,7 +726,7 @@ const MCP_TOOLS: { name: string; description: string; inputSchema: any; handler:
   { name: 'capture_detail', description: 'Full detail of one capture by id: algorithm, key(hex), iv(hex), plaintext(utf8+hex), ciphertext(hex)', inputSchema: { type: 'object', properties: { id: N }, required: ['id'] }, handler: async (a) => { const c = captures.find(x => x.id === Number(a.id)); if (!c) throw new Error('not found'); let text = ''; try { text = Buffer.from(c.hex, 'hex').toString('utf8'); } catch { text = hexToPreview(c.hex, 4096); } return { ...c, text }; } },
   // ---- axis 2: one-click unpack (no AOSP flashing needed) ----
   { name: 'dex_coverage', description: '方法恢复率报告 — per-method state (native/abstract/present/extracted) + recovery rate over a dumped dex', inputSchema: { type: 'object', properties: { b64: S, sha: S }, required: [] }, handler: async (a) => { const buf = await dumpBuf(a); return analyzeCoverage(buf, parseDex(buf)); } },
-  { name: 'unpack_run', description: '一键脱壳 — run the full unpack session (T0 snapshot → coverage → active trigger → T1 snapshot → recover+rebuild). No AOSP mods. Returns per-dex before/after recovery + rebuilt dex sha', inputSchema: { type: 'object', properties: { session: S, triggerClasses: { type: 'array', items: S }, triggerMethod: S, level: N, maxClasses: N } }, handler: async (a) => { const sid = pickSid(a.session); if (!sid) throw new Error('no session'); return runUnpackSession(sid, a); } },
+  { name: 'unpack_run', description: '一键脱壳（无需刷 AOSP）— full unpack session: T0 snapshot → coverage → active trigger → T1 snapshot → recover+rebuild. Set triggerAllPrefix (e.g. "com.target.") to aggressively load ALL of the app\'s classes so a refill-type shell restores every method. Returns per-dex before/after recovery + rebuilt dex sha', inputSchema: { type: 'object', properties: { session: S, triggerAllPrefix: S, triggerClasses: { type: 'array', items: S }, triggerMethod: S, level: N, maxClasses: N } }, handler: async (a) => { const sid = pickSid(a.session); if (!sid) throw new Error('no session'); return runUnpackSession(sid, a); } },
   { name: 'dex_recover', description: 'Recover extracted CodeItems from a restored snapshot into a base dex + rebuild (baseSha/baseB64 + restoredSha/restoredB64)', inputSchema: { type: 'object', properties: { baseB64: S, baseSha: S, restoredB64: S, restoredSha: S } }, handler: async (a) => { const base = await dumpBuf({ b64: a.baseB64, sha: a.baseSha }); const restored = await dumpBuf({ b64: a.restoredB64, sha: a.restoredSha }); const pd = parseDex(base); const { captures: caps, report } = recoverFromSnapshots(base, restored, pd); const rb = rebuildStandardDex(base, caps); const outSha = createHash('sha256').update(rb.dex).digest('hex'); const path = join(CAPTURES, `${outSha.slice(0, 16)}.dex`); if (!existsSync(path)) writeFileSync(path, rb.dex); dumps.set(outSha, { sha256: outSha, size: rb.dex.length, source: 'dex-recover', addr: '0', tag: 'recovered', sessionId: '', package: '', capturedAt: Date.now(), path, kind: 'dex' }); return { ...report, injected: rb.injected, sha256: outSha }; } },
   // ---- axis 3: everything the AI needs to drive a reversing session ----
   { name: 'trigger', description: 'Actively load a class (level 1) and invoke a safe static no-arg method (level 3) to force code paths — a trigger source for unpacking', inputSchema: { type: 'object', properties: { session: S, class: S, method: S, level: N }, required: ['class'] }, handler: (a) => agentCmd(a.session, 'trigger', { className: a.class, method: a.method ?? '', level: Number(a.level ?? 1) }, 20_000) },

@@ -266,6 +266,14 @@ arm64 预编译，agent 运行时 dlopen libQBDI.so，指令级 trace idh_trace_
 
 ## 会话日志（倒序，简短）
 
+- 2026-07-11 (逆向能力三轴延伸)：按重心定案——只做逆向能力，不做鉴权/防检测（内网测试）。
+  **轴1 通用性**：`crypto_identify`（`/api/crypto/identify` + MCP）把捕获聚合成"App 用了哪些算法/密钥/IV"的白话报告，
+  覆盖对称/**非对称RSA**/摘要/HMAC；Java 拦截 Provider + demo 加 RSA-2048。`verify_v16`（真机报告 11 算法 7 带密钥）。
+  **轴3 灵活性**：MCP **25→34 工具**（crypto_identify/live_captures/capture_detail/dex_coverage/unpack_run/dex_recover/trigger/qbdi_trace/net_correlate），
+  `/api/mcp/config` 一键配置（粘进 Claude/Cursor 即用）+ quickAsks 给不会逆向的同事。unpack 抽成 `runUnpackSession` REST/MCP 共用。
+  **轴2 便捷性**：`unpack_run` 加 `triggerAllPrefix` —— 按包名从 dump 的 dex 枚举**全部类**主动加载(Level 1)，
+  最大化回填型抽取壳的恢复机会，**无需刷 AOSP**。`verify_v17`（真机枚举加载 23 类 + 恢复重建）。
+  **verify_all 33/33。** 排障：设备多次 offline，`adb reconnect` 恢复。
 - 2026-07-10 (P3 会话编排收官)：把 P0–P2 串成一次操作。`POST /api/unpack/run`：
   **T0 快照(每 DexFile)→coverage→主动触发→T1 快照→按 begin 配对 recover+重建**，输出每 dex 前后恢复率 + 可下载重建 dex。
   面板「一键脱壳会话」；`verify_v15_session`（device）：五阶段贯通、T0/T1 各 4 dex、触发 safeCompute 生效、前后覆盖率、重建可解析。**verify_all 31/31。**
