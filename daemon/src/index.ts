@@ -275,6 +275,34 @@ function classify(func: string): { algo: string; op: string } {
   return { algo: func, op: '捕获' };
 }
 
+// Plain-language crypto identification — turns raw captures into "this app uses X" so a
+// colleague who can't reverse can read off the algorithms/keys/IVs at a glance (axis 1).
+function cryptoIdentify() {
+  const byAlgo = new Map<string, { algo: string; op: string; count: number; source: string; keyHex?: string; ivHex?: string; sampleId?: number; samplePlain?: string }>();
+  for (const c of captures) {
+    const key = c.algo + '|' + c.op;
+    const e = byAlgo.get(key) ?? { algo: c.algo, op: c.op, count: 0, source: c.source };
+    e.count++;
+    if (c.keyHex && !e.keyHex) e.keyHex = c.keyHex;
+    if (c.ivHex && !e.ivHex) e.ivHex = c.ivHex;
+    if (!e.sampleId) { e.sampleId = c.id; e.samplePlain = hexToPreview(c.hex, 48); }
+    byAlgo.set(key, e);
+  }
+  const algorithms = [...byAlgo.values()].sort((a, b) => b.count - a.count);
+  const families = { symmetric: 0, asymmetric: 0, digest: 0, hmac: 0, tls: 0 };
+  for (const a of algorithms) {
+    if (/TLS/.test(a.algo)) families.tls += a.count;
+    else if (/RSA|(^|[^m])EC[^B]|ECDSA|DSA/i.test(a.algo)) families.asymmetric += a.count;
+    else if (/Hmac|HMAC/i.test(a.algo)) families.hmac += a.count;
+    else if (/MD5|SHA|摘要|Digest/i.test(a.algo)) families.digest += a.count;
+    else families.symmetric += a.count;
+  }
+  const withKey = algorithms.filter(a => a.keyHex).length;
+  const summary = `捕获 ${captures.length} 次加密操作，涉及 ${algorithms.length} 种算法/用途；` +
+    `其中 ${withKey} 种拿到了密钥。对称 ${families.symmetric} · 非对称 ${families.asymmetric} · 摘要 ${families.digest} · HMAC ${families.hmac} · TLS ${families.tls}。`;
+  return { total: captures.length, families, algorithms, summary };
+}
+
 // Install persistent hooks on connect, then poll capture_drain and stream each new record
 // into the store + over WS. Also auto-dump the app's DEX files so the panel can download
 // them. Mirrors the ios-decrypt-helper flow (hooks stay live, events fill the panel).
@@ -324,6 +352,65 @@ function startCaptureLoop(sid: string) {
 }
 
 // Enumerate the app's DEX files and dump each so it's downloadable from the panel.
+// Full unpack session (P3): T0 snapshot → coverage → active trigger → T1 snapshot →
+// recover+rebuild per dex. Shared by REST (/api/unpack/run) and MCP (unpack_run).
+async function runUnpackSession(sid: string, body: any) {
+  const level = Number(body.level ?? 3);
+  const snapshot = async (tag: string) => {
+    const r = await sendCmd(sid, 'art_dexfiles', {}, 30_000);
+    const out: { begin: string; size: number; format: string; sha: string }[] = [];
+    for (const d of (r.dexfiles ?? r.dex ?? [])) {
+      const begin = String(d.begin ?? d.addr ?? ''); const size = Number(d.size ?? 0);
+      if (!begin || !size || size > (64 << 20)) continue;
+      try { const { meta } = await dumpRegion(sid, begin.replace(/^0x/, ''), size, tag); out.push({ begin, size, format: d.format ?? 'dex', sha: meta.sha256 }); } catch {}
+    }
+    return out;
+  };
+  const t0 = await snapshot('unpack-t0');
+  const targeted = new Set<string>();
+  for (const s of t0) {
+    try {
+      const buf = await readFile(dumps.get(s.sha)!.path); const pd = parseDex(buf);
+      for (const m of analyzeCoverage(buf, pd).missing) {
+        const dot = m.method.split('->')[0].replace(/^L/, '').replace(/;$/, '').replace(/\//g, '.');
+        if (dot) targeted.add(dot);
+      }
+    } catch {}
+  }
+  const classes = [...new Set([...(body.triggerClasses ?? []), ...targeted])].slice(0, Number(body.maxClasses ?? 50));
+  const triggered: any[] = [];
+  for (const c of classes) {
+    try { const r = await sendCmd(sid, 'trigger', { className: c, method: body.triggerMethod ?? '', level }, 15_000);
+          triggered.push({ class: c, loaded: r.loaded, invoked: r.invoked, skipped: r.skipped, reason: r.reason }); } catch { triggered.push({ class: c, error: 'timeout' }); }
+  }
+  const t1 = await snapshot('unpack-t1');
+  const t1ByBegin = new Map(t1.map(x => [x.begin, x]));
+  const dexes: any[] = [];
+  for (const b of t0) {
+    const rest = t1ByBegin.get(b.begin) ?? b;
+    try {
+      const baseBuf = await readFile(dumps.get(b.sha)!.path);
+      const restBuf = await readFile(dumps.get(rest.sha)!.path);
+      const pd = parseDex(baseBuf); const before = analyzeCoverage(baseBuf, pd);
+      const { captures: caps, report } = recoverFromSnapshots(baseBuf, restBuf, pd);
+      const rb = rebuildStandardDex(baseBuf, caps);
+      let parseOk = true; try { parseDex(rb.dex); } catch { parseOk = false; }
+      const outSha = createHash('sha256').update(rb.dex).digest('hex');
+      const path = join(CAPTURES, `${outSha.slice(0, 16)}.dex`);
+      if (!existsSync(path)) writeFileSync(path, rb.dex);
+      const meta: DumpMeta = { sha256: outSha, size: rb.dex.length, source: 'unpack-session', addr: b.begin, tag: 'rebuilt', sessionId: sid, package: sessions.get(sid)?.package ?? '', capturedAt: Date.now(), path, kind: 'dex' };
+      dumps.set(outSha, meta); broadcast('dump.new', meta);
+      const afterPresent = before.basePresent + report.recovered;
+      dexes.push({ format: b.format, size: b.size, sha0: b.sha, sha1: rest.sha, rebuiltSha: outSha, parseOk,
+        concreteJava: before.concreteJava, presentBefore: before.basePresent, recovered: report.recovered, stillMissing: report.stillMissing,
+        recoveryBeforePct: +(before.recoveryRate * 100).toFixed(2),
+        recoveryAfterPct: before.concreteJava ? +((afterPresent / before.concreteJava) * 100).toFixed(2) : 100 });
+    } catch (e) { dexes.push({ sha0: b.sha, error: (e as Error).message }); }
+  }
+  return { ok: true, session: sid, phases: ['snapshot-t0', 'coverage', 'trigger', 'snapshot-t1', 'recover'],
+    t0Count: t0.length, t1Count: t1.length, triggered, dexes };
+}
+
 async function autoDumpDex(sid: string) {
   try {
     const r = await sendCmd(sid, 'art_dexfiles', {}, 30_000);
@@ -625,6 +712,18 @@ const MCP_TOOLS: { name: string; description: string; inputSchema: any; handler:
   { name: 'trace_function', description: 'Trace calls to a native symbol (args+tid+ts) during Detection.run()', inputSchema: { type: 'object', properties: { session: S, symLib: S, symbol: S, hookModule: S }, required: ['symbol', 'hookModule'] }, handler: (a) => agentCmd(a.session, 'trace_run', { symLib: a.symLib ?? 'libc.so', symbol: a.symbol, hookModule: a.hookModule }, 20_000) },
   { name: 'dex_method_code', description: 'Extract a method’s runtime code_item bytecode from a dex (b64|sha)', inputSchema: { type: 'object', properties: { b64: S, sha: S, class: S, method: S }, required: ['class'] }, handler: async (a) => { const buf = await dumpBuf(a); return extractMethodCode(buf, parseDex(buf), String(a.class), a.method); } },
   { name: 'dex_repair', description: 'Repair a dumped dex header (file_size/checksum/signature)', inputSchema: { type: 'object', properties: { b64: S, sha: S } }, handler: async (a) => { const buf = await dumpBuf(a); const info = repairDexHeader(buf); return { ...info, repairedB64: buf.toString('base64') }; } },
+  // ---- axis 1: one-glance crypto algorithm identification ----
+  { name: 'crypto_identify', description: '一眼看清目标 App 用了哪些加密算法/密钥/IV — summarize all captured crypto (algorithm, key, iv, plaintext) into a plain-language report for non-experts', inputSchema: { type: 'object', properties: {} }, handler: async () => cryptoIdentify() },
+  { name: 'live_captures', description: 'List the live crypto/TLS captures streamed by the persistent hooks (algorithm+op+preview, newest last)', inputSchema: { type: 'object', properties: { limit: N } }, handler: async (a) => ({ total: captures.length, on: captureTimers.size > 0, captures: captures.slice(-(Number(a.limit) || 50)).map(c => ({ id: c.id, source: c.source, algo: c.algo, op: c.op, inl: c.inl, tid: c.tid, ts: c.ts, preview: c.preview })) }) },
+  { name: 'capture_detail', description: 'Full detail of one capture by id: algorithm, key(hex), iv(hex), plaintext(utf8+hex), ciphertext(hex)', inputSchema: { type: 'object', properties: { id: N }, required: ['id'] }, handler: async (a) => { const c = captures.find(x => x.id === Number(a.id)); if (!c) throw new Error('not found'); let text = ''; try { text = Buffer.from(c.hex, 'hex').toString('utf8'); } catch { text = hexToPreview(c.hex, 4096); } return { ...c, text }; } },
+  // ---- axis 2: one-click unpack (no AOSP flashing needed) ----
+  { name: 'dex_coverage', description: '方法恢复率报告 — per-method state (native/abstract/present/extracted) + recovery rate over a dumped dex', inputSchema: { type: 'object', properties: { b64: S, sha: S }, required: [] }, handler: async (a) => { const buf = await dumpBuf(a); return analyzeCoverage(buf, parseDex(buf)); } },
+  { name: 'unpack_run', description: '一键脱壳 — run the full unpack session (T0 snapshot → coverage → active trigger → T1 snapshot → recover+rebuild). No AOSP mods. Returns per-dex before/after recovery + rebuilt dex sha', inputSchema: { type: 'object', properties: { session: S, triggerClasses: { type: 'array', items: S }, triggerMethod: S, level: N, maxClasses: N } }, handler: async (a) => { const sid = pickSid(a.session); if (!sid) throw new Error('no session'); return runUnpackSession(sid, a); } },
+  { name: 'dex_recover', description: 'Recover extracted CodeItems from a restored snapshot into a base dex + rebuild (baseSha/baseB64 + restoredSha/restoredB64)', inputSchema: { type: 'object', properties: { baseB64: S, baseSha: S, restoredB64: S, restoredSha: S } }, handler: async (a) => { const base = await dumpBuf({ b64: a.baseB64, sha: a.baseSha }); const restored = await dumpBuf({ b64: a.restoredB64, sha: a.restoredSha }); const pd = parseDex(base); const { captures: caps, report } = recoverFromSnapshots(base, restored, pd); const rb = rebuildStandardDex(base, caps); const outSha = createHash('sha256').update(rb.dex).digest('hex'); const path = join(CAPTURES, `${outSha.slice(0, 16)}.dex`); if (!existsSync(path)) writeFileSync(path, rb.dex); dumps.set(outSha, { sha256: outSha, size: rb.dex.length, source: 'dex-recover', addr: '0', tag: 'recovered', sessionId: '', package: '', capturedAt: Date.now(), path, kind: 'dex' }); return { ...report, injected: rb.injected, sha256: outSha }; } },
+  // ---- axis 3: everything the AI needs to drive a reversing session ----
+  { name: 'trigger', description: 'Actively load a class (level 1) and invoke a safe static no-arg method (level 3) to force code paths — a trigger source for unpacking', inputSchema: { type: 'object', properties: { session: S, class: S, method: S, level: N }, required: ['class'] }, handler: (a) => agentCmd(a.session, 'trigger', { className: a.class, method: a.method ?? '', level: Number(a.level ?? 1) }, 20_000) },
+  { name: 'qbdi_trace', description: 'QBDI instruction-level dynamic trace of a native function (per-instruction disassembly + return value)', inputSchema: { type: 'object', properties: { session: S, symLib: S, symbol: S }, required: ['symbol'] }, handler: (a) => agentCmd(a.session, 'qbdi_trace', { symLib: a.symLib ?? 'libidhdetect.so', symbol: a.symbol }, 30_000) },
+  { name: 'net_correlate', description: 'Network↔crypto correlation: pair plaintext with the TLS request carrying its ciphertext (same thread + time window)', inputSchema: { type: 'object', properties: { session: S } }, handler: (a) => agentCmd(a.session, 'flow_watch', {}, 25_000) },
 ];
 const MCP_MAP = new Map(MCP_TOOLS.map(t => [t.name, t]));
 
@@ -711,6 +810,26 @@ const httpServer = http.createServer(async (req, res) => {
       '| Tool | Description | Args |', '|---|---|---|',
       ...MCP_TOOLS.map(t => `| \`${t.name}\` | ${t.description} | ${Object.keys(t.inputSchema.properties ?? {}).join(', ') || '—'} |`), ''].join('\n');
     res.writeHead(200, { 'content-type': 'text/markdown; charset=utf-8' }); return res.end(md);
+  }
+  // Plain-language crypto identification (axis 1): GET /api/crypto/identify
+  if (url.pathname === '/api/crypto/identify') return send(200, cryptoIdentify());
+  // One-click MCP config (axis 3): GET /api/mcp/config — paste into Claude/Cursor, then ask the AI
+  if (url.pathname === '/api/mcp/config') {
+    const w = webUrls(); const lan = (w.lan[0] ?? w.local).replace(/^http/, 'http');
+    const mcpUrl = `${lan}/mcp`;
+    const cfg = {
+      note: '把 mcpServers 这段粘进 Claude Desktop / Cursor 的 MCP 配置，重启后即可让 AI 调用 ADH 的全部逆向工具（分析内存/指令/hook/trace/事件搜索/抓包/脱壳/算法识别）',
+      mcpServers: { adh: { type: 'http', url: mcpUrl } },
+      endpoint: mcpUrl, tools: MCP_TOOLS.length,
+      quickAsks: [
+        '用 crypto_identify 看看这个 App 用了哪些加密算法和密钥',
+        '用 unpack_run 一键脱壳，然后 dumps_list 给我下载链接',
+        '用 live_captures 看实时加解密，挑一条用 capture_detail 展开明文',
+        '用 trace_function hook 一下 access，看它检测了哪些 root 路径',
+        '用 qbdi_trace 逐指令跟踪这个 native 函数',
+      ],
+    };
+    return send(200, cfg);
   }
   if (url.pathname === '/api/agents') {
     return send(200, [...sessions.values()]);
@@ -892,67 +1011,8 @@ const httpServer = http.createServer(async (req, res) => {
     const body = JSON.parse((await readBody(req)) || '{}');
     const sid = body.session ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
     if (!sid) return send(400, { error: 'no session' });
-    const level = Number(body.level ?? 3);
-    const snapshot = async (tag: string) => {
-      const r = await sendCmd(sid, 'art_dexfiles', {}, 30_000);
-      const out: { begin: string; size: number; format: string; sha: string }[] = [];
-      for (const d of (r.dexfiles ?? r.dex ?? [])) {
-        const begin = String(d.begin ?? d.addr ?? ''); const size = Number(d.size ?? 0);
-        if (!begin || !size || size > (64 << 20)) continue;
-        try { const { meta } = await dumpRegion(sid, begin.replace(/^0x/, ''), size, tag); out.push({ begin, size, format: d.format ?? 'dex', sha: meta.sha256 }); } catch {}
-      }
-      return out;
-    };
-    try {
-      // Phase 1: T0 base snapshot
-      const t0 = await snapshot('unpack-t0');
-      // Phase 2: coverage + collect classes with missing methods (targeted triggers)
-      const targeted = new Set<string>();
-      for (const s of t0) {
-        try {
-          const buf = await readFile(dumps.get(s.sha)!.path); const pd = parseDex(buf);
-          for (const m of analyzeCoverage(buf, pd).missing) {
-            const dot = m.method.split('->')[0].replace(/^L/, '').replace(/;$/, '').replace(/\//g, '.');
-            if (dot) targeted.add(dot);
-          }
-        } catch {}
-      }
-      // Phase 3: active trigger (explicit classes ∪ classes with gaps), capped
-      const classes = [...new Set([...(body.triggerClasses ?? []), ...targeted])].slice(0, Number(body.maxClasses ?? 50));
-      const triggered: any[] = [];
-      for (const c of classes) {
-        try { const r = await sendCmd(sid, 'trigger', { className: c, method: body.triggerMethod ?? '', level }, 15_000);
-              triggered.push({ class: c, loaded: r.loaded, invoked: r.invoked, skipped: r.skipped, reason: r.reason }); } catch { triggered.push({ class: c, error: 'timeout' }); }
-      }
-      // Phase 4: T1 restored snapshot
-      const t1 = await snapshot('unpack-t1');
-      const t1ByBegin = new Map(t1.map(x => [x.begin, x]));
-      // Phase 5: recover per dex (match by begin address) + rebuild
-      const dexes: any[] = [];
-      for (const b of t0) {
-        const rest = t1ByBegin.get(b.begin) ?? b;
-        try {
-          const baseBuf = await readFile(dumps.get(b.sha)!.path);
-          const restBuf = await readFile(dumps.get(rest.sha)!.path);
-          const pd = parseDex(baseBuf); const before = analyzeCoverage(baseBuf, pd);
-          const { captures, report } = recoverFromSnapshots(baseBuf, restBuf, pd);
-          const rb = rebuildStandardDex(baseBuf, captures);
-          let parseOk = true; try { parseDex(rb.dex); } catch { parseOk = false; }
-          const outSha = createHash('sha256').update(rb.dex).digest('hex');
-          const path = join(CAPTURES, `${outSha.slice(0, 16)}.dex`);
-          if (!existsSync(path)) writeFileSync(path, rb.dex);
-          const meta: DumpMeta = { sha256: outSha, size: rb.dex.length, source: 'unpack-session', addr: b.begin, tag: 'rebuilt', sessionId: sid, package: sessions.get(sid)?.package ?? '', capturedAt: Date.now(), path, kind: 'dex' };
-          dumps.set(outSha, meta); broadcast('dump.new', meta);
-          const afterPresent = before.basePresent + report.recovered;
-          dexes.push({ format: b.format, size: b.size, sha0: b.sha, sha1: rest.sha, rebuiltSha: outSha, parseOk,
-            concreteJava: before.concreteJava, presentBefore: before.basePresent, recovered: report.recovered, stillMissing: report.stillMissing,
-            recoveryBeforePct: +(before.recoveryRate * 100).toFixed(2),
-            recoveryAfterPct: before.concreteJava ? +((afterPresent / before.concreteJava) * 100).toFixed(2) : 100 });
-        } catch (e) { dexes.push({ sha0: b.sha, error: (e as Error).message }); }
-      }
-      return send(200, { ok: true, session: sid, phases: ['snapshot-t0', 'coverage', 'trigger', 'snapshot-t1', 'recover'],
-        t0Count: t0.length, t1Count: t1.length, triggered, dexes });
-    } catch (e) { return send(504, { error: (e as Error).message }); }
+    try { return send(200, await runUnpackSession(sid, body)); }
+    catch (e) { return send(504, { error: (e as Error).message }); }
   }
   // Active trigger (P2): GET /api/unpack/trigger?session=&class=&method=&level=
   // Level 1 loads the class; level 3 also invokes a SAFE static no-arg method. A trigger

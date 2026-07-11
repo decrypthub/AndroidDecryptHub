@@ -39,6 +39,7 @@ public final class IdhSecurity {
     private static final String[] CIPHERS = {
         "AES/CBC/PKCS5Padding", "AES/CTR/NoPadding", "AES/GCM/NoPadding",
         "AES/ECB/PKCS5Padding", "DESede/CBC/PKCS5Padding", "DES/CBC/PKCS5Padding",
+        "RSA/ECB/PKCS1Padding",   // 非对称：也走 Cipher，包住即可拿到公钥/明文/密文
     };
     private static final String[] DIGESTS = { "MD5", "SHA-1", "SHA-256", "SHA-384", "SHA-512" };
     private static final String[] MACS = { "HmacSHA1", "HmacSHA256", "HmacSHA512", "HmacMD5" };

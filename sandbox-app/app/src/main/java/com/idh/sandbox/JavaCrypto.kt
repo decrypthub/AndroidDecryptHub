@@ -2,7 +2,9 @@ package com.idh.sandbox
 
 import android.util.Base64
 import android.util.Log
+import java.security.KeyPairGenerator
 import java.security.MessageDigest
+import java.security.PublicKey
 import javax.crypto.Cipher
 import javax.crypto.Mac
 import javax.crypto.spec.GCMParameterSpec
@@ -63,6 +65,10 @@ object JavaCrypto {
     }
     private fun digest(alg: String, data: ByteArray) { MessageDigest.getInstance(alg).digest(data) }
     private fun hmac(alg: String, data: ByteArray) { val m = Mac.getInstance(alg); m.init(SecretKeySpec(KEY, alg)); m.doFinal(data) }
+    private val rsaPub: PublicKey by lazy { KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair().public }
+    private fun rsa(data: ByteArray) {
+        val c = Cipher.getInstance("RSA/ECB/PKCS1Padding"); c.init(Cipher.ENCRYPT_MODE, rsaPub); c.doFinal(data.copyOf(minOf(data.size, 200)))
+    }
 
     // Background driver: every ~2s run ONE op from the rotating menu so the console fills
     // with a varied, live crypto stream (the agent's persistent hooks capture each).
@@ -79,6 +85,7 @@ object JavaCrypto {
             "SHA-512"     to { pt -> digest("SHA-512", pt) },
             "HmacSHA256"  to { pt -> hmac("HmacSHA256", pt) },
             "HmacSHA1"    to { pt -> hmac("HmacSHA1", pt) },
+            "RSA-2048"    to { pt -> rsa(pt) },
         )
         Thread {
             var i = 0
