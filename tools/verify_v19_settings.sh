@@ -20,6 +20,7 @@ chk "config has stats"             '[ "$(echo "$CFG" | jget stats.captures)" != 
 # 2) POST /api/config {capture:{retain:2000}} → persist + readback
 POST="$(curl -s -X POST "$BASE/api/config" -H 'content-type: application/json' -d '{"capture":{"retain":2000}}')"
 chk "POST applies capture"          '[ "$(echo "$POST" | jget applied)" = "[\"capture\"]" ]'
+chk "POST reports persisted (honest)" '[ "$(echo "$POST" | jget persisted)" = "true" ]'  # fail-loud: success must be disk-confirmed, not assumed
 chk "readback retain == 2000"       '[ "$(curl -s "$BASE/api/config" | jget settings.capture.retain)" = "2000" ]'
 chk "persisted to settings.json"    '[ "$(cat "$ROOT/idhd-data/settings.json" | jget capture.retain)" = "2000" ]'
 

@@ -266,8 +266,15 @@ function mergeSettings(patch: any): string[] {
   }
   return applied;
 }
-try { if (existsSync(SETTINGS_FILE)) mergeSettings(JSON.parse(readFileSync(SETTINGS_FILE, 'utf8'))); } catch {}
-function saveSettings() { try { writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2)); } catch {} }
+// Load persisted settings. Fail LOUD: if the file is present but corrupt/unreadable we must not
+// silently run on defaults (that masks lost config as "working"). Absent file is normal (defaults).
+try {
+  if (existsSync(SETTINGS_FILE)) mergeSettings(JSON.parse(readFileSync(SETTINGS_FILE, 'utf8')));
+} catch (e) {
+  log(`[settings] ${SETTINGS_FILE} 载入失败，已回退默认值 — 磁盘上的配置未生效:`, (e as Error).message);
+}
+// Persist. Throws on failure — callers MUST surface it so the UI never claims "已保存" on a failed write.
+function saveSettings() { writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2)); }
 function configStats() { return { captures: captures.length, dumps: dumps.size, events: events.length, on: captureTimers.size > 0, agents: sessions.size }; }
 // Which crypto family a capture belongs to (mirrors cryptoIdentify's buckets) — used by the
 // idhd-side family filter (panel-level; the agent still hooks everything).
@@ -289,7 +296,10 @@ function pushCapture(entry: Capture): boolean {
 async function applyCaptureEnabled() {
   for (const s of sessions.values()) {
     if (!s.online) continue;
-    try { await sendCmd(s.sessionId, settings.capture.enabled ? 'capture_start' : 'capture_stop', {}, 8_000); } catch {}
+    const cmd = settings.capture.enabled ? 'capture_start' : 'capture_stop';
+    // Fail loud: a live session that rejects the toggle means the panel and the target disagree.
+    try { await sendCmd(s.sessionId, cmd, {}, 8_000); }
+    catch (e) { log(`[settings] ${cmd} 会话 ${s.sessionId} 失败:`, (e as Error).message); }
   }
 }
 
@@ -882,10 +892,12 @@ const httpServer = http.createServer(async (req, res) => {
       let patch: any = {};
       try { patch = JSON.parse((await readBody(req)) || '{}'); } catch { return send(400, { error: 'bad json' }); }
       const applied = mergeSettings(patch);
-      saveSettings();
       while (captures.length > settings.capture.retain) captures.shift();
-      applyCaptureEnabled().catch(() => {});
-      return send(200, { ok: true, applied, settings, stats: configStats() });
+      applyCaptureEnabled().catch((e) => log('[settings] applyCaptureEnabled:', (e as Error).message));
+      // Persist last, and tell the truth: a failed write must NOT return ok — the UI would lie "已保存".
+      try { saveSettings(); }
+      catch (e) { return send(500, { error: '设置已在内存生效，但写入磁盘失败(重启后丢失): ' + (e as Error).message, applied, settings, persisted: false }); }
+      return send(200, { ok: true, applied, settings, stats: configStats(), persisted: true });
     }
     return send(200, { settings, stats: configStats() });
   }
@@ -898,23 +910,32 @@ const httpServer = http.createServer(async (req, res) => {
     if (typeof obj !== 'object' || Array.isArray(obj)) return send(400, { error: '顶层必须是对象' });
     const applied = mergeSettings(obj);
     if (!applied.length) return send(400, { error: '没有可应用的板块(capture/ui)' });
-    saveSettings();
     while (captures.length > settings.capture.retain) captures.shift();
-    applyCaptureEnabled().catch(() => {});
-    return send(200, { ok: true, applied, settings });
+    applyCaptureEnabled().catch((e) => log('[settings] applyCaptureEnabled:', (e as Error).message));
+    try { saveSettings(); }
+    catch (e) { return send(500, { error: '导入已在内存生效，但写入磁盘失败(重启后丢失): ' + (e as Error).message, applied, settings, persisted: false }); }
+    return send(200, { ok: true, applied, settings, persisted: true });
   }
   // POST /api/data/clear { what: 'captures'|'events'|'dumps' } → 危险操作，清空对应存储
   if (url.pathname === '/api/data/clear' && req.method === 'POST') {
     let body: any = {};
     try { body = JSON.parse((await readBody(req)) || '{}'); } catch {}
     const what = String(body.what || '');
+    const errors: string[] = [];
     if (what === 'captures') { captures.length = 0; recentJavaIn.clear(); }
-    else if (what === 'events') { events.length = 0; try { writeFileSync(EVENTS_FILE, ''); } catch {} }
+    else if (what === 'events') {
+      events.length = 0;
+      try { writeFileSync(EVENTS_FILE, ''); } catch (e) { errors.push(`events 回放文件: ${(e as Error).message}`); }
+    }
     else if (what === 'dumps') {
-      for (const d of dumps.values()) { try { if (existsSync(d.path)) unlinkSync(d.path); } catch {} }
+      for (const d of dumps.values()) {
+        try { if (existsSync(d.path)) unlinkSync(d.path); } catch (e) { errors.push(`${d.path}: ${(e as Error).message}`); }
+      }
       dumps.clear();
     } else return send(400, { error: 'what 必须是 captures|events|dumps' });
     broadcast('data.cleared', { what });
+    // Fail loud: if any on-disk delete failed, the memory index is cleared but files remain — say so.
+    if (errors.length) { log(`[data/clear] ${what} 部分磁盘删除失败:`, errors.join('; ')); return send(500, { error: `内存索引已清，但磁盘删除失败(${errors.length}项)`, cleared: what, errors, stats: configStats() }); }
     return send(200, { ok: true, cleared: what, stats: configStats() });
   }
   // MCP tool inventory as markdown (for docs/mcp-tools.md)
