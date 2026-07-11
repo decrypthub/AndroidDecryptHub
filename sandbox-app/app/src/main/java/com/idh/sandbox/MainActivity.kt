@@ -56,6 +56,10 @@ class MainActivity : Activity() {
     private var lanUrl: String = ""            // host LAN URL, discovered from idhd /health
     private lateinit var urlLan: TextView
     private lateinit var reach: TextView
+    private lateinit var logView: TextView
+    private lateinit var liveBtn: Button
+    private val logLines = ArrayDeque<String>()
+    private val seq = java.util.concurrent.atomic.AtomicInteger(1)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -116,10 +120,17 @@ class MainActivity : Activity() {
     }
 
     private fun actbutton(text: String, onTap: () -> Unit) = Button(this).apply {
-        this.text = text; isAllCaps = false
+        this.text = text; isAllCaps = false; textSize = 13f
         setOnClickListener { onTap() }
         layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             .apply { marginEnd = dp(8) }
+    }
+
+    // A row of equal-width buttons.
+    private fun btnRow(vararg b: Button) = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        setPadding(0, dp(3), 0, dp(3))
+        b.forEach { addView(it) }
     }
 
     private fun buildUi(pid: Int, loadStatus: String): View {
@@ -131,46 +142,97 @@ class MainActivity : Activity() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.parseColor("#0b0e14"))
-            setPadding(dp(20), dp(28), dp(20), dp(28))
+            setPadding(dp(18), dp(24), dp(18), dp(24))
         }
-        root.addView(label("ADH · Android DecryptHub", 22f, fg, bold = true))
-        root.addView(label("运行时逆向分析 · 沙盒宿主（模拟注入）", 13f, muted))
-        root.addView(spacer(18))
-        root.addView(label("pid=$pid   ·   $loadStatus", 12f, muted))
-        root.addView(spacer(22))
 
-        root.addView(label("🔎 在浏览器打开观测控制台", 16f, blue, bold = true))
-        root.addView(spacer(10))
-
-        root.addView(label("局域网地址（电脑 / 手机 / 同网任意设备）— 点击复制", 12f, muted))
-        urlLan = urlView("检测中…", green) { copy(if (lanUrl.isNotEmpty()) lanUrl else LOCAL_URL) }
-        root.addView(urlLan)
-        root.addView(spacer(12))
-
-        root.addView(label("本机浏览器（经 adb reverse）— 点击复制", 12f, muted))
-        root.addView(urlView(LOCAL_URL, fg) { copy(LOCAL_URL) })
-        root.addView(spacer(18))
-
-        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        row.addView(actbutton("复制局域网地址") { copy(if (lanUrl.isNotEmpty()) lanUrl else LOCAL_URL) })
-        row.addView(actbutton("在手机浏览器打开") { openBrowser(LOCAL_URL) })
-        root.addView(row)
-        root.addView(spacer(18))
-
-        reach = label("● 正在检测控制台…", 13f, muted)
-        root.addView(reach)
+        // --- header: one title + one status line ---
+        root.addView(label("ADH · Android DecryptHub", 21f, fg, bold = true))
+        root.addView(label("运行时逆向分析 · 沙盒宿主（模拟注入）  ·  pid=$pid", 12f, muted))
         root.addView(spacer(16))
 
-        root.addView(label(
-            "用法：电脑上先跑  bash tools/dev_up.sh  启动 idhd 并建立 adb reverse，\n" +
-            "然后浏览器打开上面的地址即可实时观测（脱壳 / 明文捕获 / hook / trace）。\n" +
-            "局域网地址由控制台自动上报；手机与电脑需在同一 Wi-Fi。",
-            12f, muted))
+        // --- console access: ONE best URL + reach dot + two actions (no duplication) ---
+        root.addView(label("观测控制台（浏览器打开）— 点击地址复制", 13f, blue, bold = true))
+        urlLan = urlView("检测中…", green) { copy(bestUrl()) }
+        root.addView(urlLan)
+        reach = label("● 正在检测控制台…", 12f, muted)
+        root.addView(reach)
+        root.addView(spacer(6))
+        root.addView(btnRow(
+            actbutton("复制地址") { copy(bestUrl()) },
+            actbutton("手机浏览器打开") { openBrowser(bestUrl()) },
+        ))
+        root.addView(label("本机 adb reverse：$LOCAL_URL", 11f, muted))
+        root.addView(spacer(18))
+
+        // --- manual test triggers ---
+        root.addView(label("手动触发测试（结果见下方日志 / 控制台面板）", 13f, blue, bold = true))
+        root.addView(spacer(4))
+        liveBtn = actbutton(liveLabel()) { toggleLive() }
+        root.addView(btnRow(
+            actbutton("全部加密算法") { trigger("全部算法") { JavaCrypto.runAllOnce(pt("ALL")) } },
+            liveBtn,
+        ))
+        root.addView(btnRow(
+            actbutton("AES-CBC") { trigger("AES-CBC") { JavaCrypto.oneAes(pt("AES")) } },
+            actbutton("RSA-2048") { trigger("RSA-2048") { JavaCrypto.oneRsa(pt("RSA")) } },
+        ))
+        root.addView(btnRow(
+            actbutton("SHA-256") { trigger("SHA-256") { JavaCrypto.oneSha256(pt("SHA")) } },
+            actbutton("HmacSHA256") { trigger("HMAC") { JavaCrypto.oneHmac(pt("HMAC")) } },
+        ))
+        root.addView(btnRow(
+            actbutton("加载内存 DEX") { trigger("加载DEX") { DynamicDex.load(); "已触发内存 DEX 加载（脱壳面板可见）" } },
+            actbutton("触发脱壳类") { trigger("脱壳触发") { TriggerProbe.reset(); TriggerProbe.safeCompute() } },
+        ))
+        root.addView(btnRow(
+            actbutton("HTTPS 明文边界") { trigger("HTTPS") { Network.run() } },
+            actbutton("加密+上送(关联)") { trigger("关联流") { CorrelatedFlow.run() } },
+        ))
+        root.addView(spacer(14))
+
+        // --- on-device result log ---
+        root.addView(label("测试日志", 13f, blue, bold = true))
+        logView = TextView(this).apply {
+            text = "（点击上面的按钮开始测试）"
+            textSize = 12f; setTextColor(fg)
+            setTypeface(android.graphics.Typeface.MONOSPACE)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            setBackgroundColor(Color.parseColor("#11151f"))
+        }
+        root.addView(logView)
 
         return ScrollView(this).apply {
             setBackgroundColor(Color.parseColor("#0b0e14"))
             addView(root)
         }
+    }
+
+    private fun bestUrl(): String = if (lanUrl.isNotEmpty()) lanUrl else LOCAL_URL
+
+    private fun pt(tag: String): ByteArray =
+        "ADH手动_${tag}_#${seq.getAndIncrement()}_订单金额=99.00元".toByteArray(Charsets.UTF_8)
+
+    private fun liveLabel(): String = if (JavaCrypto.liveRunning()) "停止自动流" else "开启自动流"
+
+    private fun toggleLive() {
+        if (JavaCrypto.liveRunning()) { JavaCrypto.stopLive(); logLine("自动加密流已停止") }
+        else { JavaCrypto.startLiveDriver(); logLine("自动加密流已启动（每2秒一种算法）") }
+        liveBtn.text = liveLabel()
+    }
+
+    // Run a trigger off the UI thread; append start + result to the on-device log.
+    private fun trigger(name: String, block: () -> String) {
+        logLine("运行 $name …")
+        Thread {
+            val r = try { block() } catch (t: Throwable) { "失败 ${t.message}" }
+            runOnUiThread { logLine("  $name = $r") }
+        }.apply { isDaemon = true }.start()
+    }
+
+    private fun logLine(s: String) {
+        logLines.addLast(s)
+        while (logLines.size > 10) logLines.removeFirst()
+        logView.text = logLines.joinToString("\n")
     }
 
     // ---- actions ----------------------------------------------------------

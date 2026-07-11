@@ -18,6 +18,7 @@ chk "wires dex api"         'echo "$HTML" | grep -q "/api/dex/search" && echo "$
 chk "wires native api"      'echo "$HTML" | grep -q "/api/native/analyze" && echo "$HTML" | grep -q "/api/native/syscall_scan"'
 chk "wires mcp"             'echo "$HTML" | grep -q "/mcp"'
 chk "events tab + api"      'echo "$HTML" | grep -q "事件" && echo "$HTML" | grep -q "/api/events"'
+chk "settings + mcp modals"  'echo "$HTML" | grep -q "设置" && echo "$HTML" | grep -q "MCP 接入配置" && echo "$HTML" | grep -q "set-shell"'
 # backing endpoints respond (HTTP 200; -F avoids treating [ as a regex)
 chk "/api/captures responds" '[ "$(curl -s -o /dev/null -w %{http_code} "$BASE/api/captures")" = 200 ]'
 chk "/api/dumps responds"   '[ "$(curl -s -o /dev/null -w %{http_code} "$BASE/api/dumps")" = 200 ]'

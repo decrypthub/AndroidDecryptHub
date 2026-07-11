@@ -70,32 +70,62 @@ object JavaCrypto {
         val c = Cipher.getInstance("RSA/ECB/PKCS1Padding"); c.init(Cipher.ENCRYPT_MODE, rsaPub); c.doFinal(data.copyOf(minOf(data.size, 200)))
     }
 
+    // The full rotating menu (name → op). Shared by the live driver and the "全部算法" button.
+    private val MENU: List<Pair<String, (ByteArray) -> Unit>> = listOf(
+        "AES-128-CBC" to { pt -> sym("AES/CBC/PKCS5Padding", AES_KEY16, 16, pt) },
+        "AES-256-CTR" to { pt -> sym("AES/CTR/NoPadding", AES_KEY32, 16, pt) },
+        "AES-128-GCM" to { pt -> sym("AES/GCM/NoPadding", AES_KEY16, 12, pt) },
+        "DESede-CBC"  to { pt -> sym("DESede/CBC/PKCS5Padding", DES3_KEY24, 8, pt) },
+        "MD5"         to { pt -> digest("MD5", pt) },
+        "SHA-1"       to { pt -> digest("SHA-1", pt) },
+        "SHA-256"     to { pt -> digest("SHA-256", pt) },
+        "SHA-512"     to { pt -> digest("SHA-512", pt) },
+        "HmacSHA256"  to { pt -> hmac("HmacSHA256", pt) },
+        "HmacSHA1"    to { pt -> hmac("HmacSHA1", pt) },
+        "RSA-2048"    to { pt -> rsa(pt) },
+    )
+
+    @JvmStatic @Volatile private var liveThread: Thread? = null
+
+    @JvmStatic fun liveRunning(): Boolean = liveThread?.isAlive == true
+
+    @JvmStatic
+    fun stopLive() { liveThread?.interrupt(); liveThread = null }
+
     // Background driver: every ~2s run ONE op from the rotating menu so the console fills
     // with a varied, live crypto stream (the agent's persistent hooks capture each).
+    // Idempotent — a second call while running is a no-op.
     @JvmStatic
     fun startLiveDriver() {
-        val menu: List<Pair<String, (ByteArray) -> Unit>> = listOf(
-            "AES-128-CBC" to { pt -> sym("AES/CBC/PKCS5Padding", AES_KEY16, 16, pt) },
-            "AES-256-CTR" to { pt -> sym("AES/CTR/NoPadding", AES_KEY32, 16, pt) },
-            "AES-128-GCM" to { pt -> sym("AES/GCM/NoPadding", AES_KEY16, 12, pt) },
-            "DESede-CBC"  to { pt -> sym("DESede/CBC/PKCS5Padding", DES3_KEY24, 8, pt) },
-            "MD5"         to { pt -> digest("MD5", pt) },
-            "SHA-1"       to { pt -> digest("SHA-1", pt) },
-            "SHA-256"     to { pt -> digest("SHA-256", pt) },
-            "SHA-512"     to { pt -> digest("SHA-512", pt) },
-            "HmacSHA256"  to { pt -> hmac("HmacSHA256", pt) },
-            "HmacSHA1"    to { pt -> hmac("HmacSHA1", pt) },
-            "RSA-2048"    to { pt -> rsa(pt) },
-        )
-        Thread {
+        if (liveRunning()) return
+        val t = Thread {
             var i = 0
-            while (true) {
-                val (name, op) = menu[i % menu.size]
+            while (!Thread.currentThread().isInterrupted) {
+                val (name, op) = MENU[i % MENU.size]
                 val pt = "IDH_LIVE_%04d_%s_订单金额=%d.00元".format(i, name, 100 + i * 7).toByteArray(Charsets.UTF_8)
                 try { op(pt); Log.i(TAG, "live[$name] ${pt.size}B") } catch (t: Throwable) { Log.w(TAG, "live[$name] fail: ${t.message}") }
                 i++
                 try { Thread.sleep(2000) } catch (e: InterruptedException) { break }
             }
-        }.apply { isDaemon = true; name = "idh-live-crypto" }.start()
+        }.apply { isDaemon = true; name = "idh-live-crypto" }
+        liveThread = t
+        t.start()
+    }
+
+    // ---- one-shot manual triggers (each returns a short summary for the on-device log) ----
+
+    @JvmStatic fun oneAes(pt: ByteArray): String { sym("AES/CBC/PKCS5Padding", AES_KEY16, 16, pt); return "AES-128-CBC 明文 ${pt.size}B" }
+    @JvmStatic fun oneRsa(pt: ByteArray): String { rsa(pt); return "RSA-2048 明文 ${minOf(pt.size, 200)}B" }
+    @JvmStatic fun oneSha256(pt: ByteArray): String { digest("SHA-256", pt); return "SHA-256 明文 ${pt.size}B" }
+    @JvmStatic fun oneHmac(pt: ByteArray): String { hmac("HmacSHA256", pt); return "HmacSHA256 明文 ${pt.size}B" }
+
+    // Fire ONE round of every algorithm in the menu.
+    @JvmStatic
+    fun runAllOnce(pt: ByteArray): String {
+        var ok = 0
+        for ((name, op) in MENU) {
+            try { op(pt); ok++ } catch (t: Throwable) { Log.w(TAG, "once[$name] fail: ${t.message}") }
+        }
+        return "全部算法 $ok/${MENU.size} 已触发"
     }
 }

@@ -5,59 +5,130 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>ADH — Android DecryptHub 运行时观测台</title>
 <style>
+  /* 视觉语言对齐 IDH：系统无衬线正文（等宽仅用于代码/hex）+ GitHub 暗色配色 */
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; }
+  html, body { margin: 0; padding: 0; height: 100%; }
   body { display:flex; flex-direction:column; height:100vh; overflow:hidden;
-    font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background:#0b0e14; color:#cdd6f4; }
+    background:#0d1117; color:#c9d1d9; line-height:1.5; font-size:13px;
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,'PingFang SC','Microsoft YaHei',sans-serif; }
   header, .procbar, nav { flex-shrink:0; }
-  header { display:flex; align-items:center; gap:12px; padding:10px 16px; background:#11151f; border-bottom:1px solid #1e2233; }
-  header h1 { font-size:15px; margin:0; font-weight:700; color:#a6e3a1; letter-spacing:.3px; }
-  .dot { width:9px; height:9px; border-radius:50%; background:#f38ba8; flex-shrink:0; }
-  .dot.up { background:#a6e3a1; }
-  .muted { color:#6c7086; }
+  header { display:flex; align-items:center; gap:12px; padding:10px 14px; background:#161b22; border-bottom:1px solid #30363d; }
+  header h1 { font-size:16px; margin:0; font-weight:700; color:#7ee787; letter-spacing:.02em; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; }
+  .dot { width:8px; height:8px; border-radius:50%; background:#f85149; flex-shrink:0; }
+  .dot.up { background:#3fb950; }
+  .muted { color:#8b949e; }
   .spacer { flex:1; }
-  select, input, textarea, button { font: inherit; }
-  select, input, textarea { background:#0e131d; color:#cdd6f4; border:1px solid #1e2233; border-radius:6px; padding:5px 8px; }
-  .procbar { display:flex; align-items:center; gap:16px; padding:6px 16px; background:#0d1117; border-bottom:1px solid #1a1f2e; font-size:12px; color:#6c7086; flex-wrap:wrap; }
-  .procbar b { color:#89b4fa; font-weight:600; }
-  nav { display:flex; gap:2px; padding:0 10px; background:#11151f; border-bottom:1px solid #1e2233; overflow-x:auto; }
-  nav button { background:none; border:none; color:#6c7086; padding:9px 15px; cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; white-space:nowrap; }
-  nav button:hover { color:#cdd6f4; }
-  nav button.active { color:#cfe1ff; border-bottom-color:#89b4fa; font-weight:600; }
-  nav button .n { color:#89b4fa; font-size:11px; margin-left:5px; }
+  select, input, textarea, button { font:inherit; }
+  select, input, textarea { background:#0d1117; color:#c9d1d9; border:1px solid #30363d; border-radius:6px; padding:5px 8px; font-size:12px; }
+  .procbar { display:flex; align-items:center; gap:14px; padding:6px 14px; background:#0d1117; border-bottom:1px solid #21262d; font-size:12px; color:#6e7681; flex-wrap:wrap; }
+  .procbar b { color:#8b949e; font-weight:600; }
+  nav { display:flex; gap:2px; padding:0 10px; background:#161b22; border-bottom:1px solid #30363d; overflow-x:auto; }
+  nav button { background:none; border:none; color:#8b949e; padding:10px 16px; font-size:13px; cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; white-space:nowrap; }
+  nav button:hover { color:#c9d1d9; }
+  nav button.active { color:#c9d1d9; border-bottom-color:#f78166; font-weight:600; }
+  nav button .n { color:#6e7681; font-size:11px; margin-left:5px; }
   main { flex:1; min-height:0; display:flex; }
   .panel { display:none; flex:1; min-height:0; } .panel.active { display:flex; }
-  .pad { padding:14px 16px; overflow:auto; flex:1; }
-  h2 { font-size:13px; color:#89b4fa; margin:2px 0 10px; }
-  table { border-collapse:collapse; width:100%; }
-  th, td { text-align:left; padding:6px 10px; border-bottom:1px solid #1e2233; vertical-align:top; }
-  th { color:#89b4fa; font-size:11px; letter-spacing:.5px; }
+  .pad { padding:16px 18px; overflow:auto; flex:1; }
+  h2 { font-size:15px; color:#c9d1d9; margin:2px 0 10px; font-weight:600; }
+  h3 { font-size:11px; color:#8b949e; margin:12px 0 5px; font-weight:500; text-transform:uppercase; letter-spacing:.05em; }
+  table { border-collapse:collapse; width:100%; font-size:12px; }
+  th, td { text-align:left; padding:6px 10px; border-bottom:1px solid #21262d; vertical-align:top; }
+  th { color:#8b949e; font-size:11px; font-weight:600; }
   tr.off td { opacity:.45; }
-  .pill { padding:1px 8px; border-radius:10px; font-size:11px; }
-  .on { background:#1e3a2a; color:#a6e3a1; } .no { background:#3a1e26; color:#f38ba8; }
-  button.act { background:#182338; color:#cfe1ff; border:1px solid #2a3a55; padding:5px 10px; border-radius:6px; cursor:pointer; margin:2px; }
-  button.act:hover { border-color:#89b4fa; }
+  .pill { display:inline-block; padding:1px 8px; border-radius:10px; font-size:11px; font-weight:600; }
+  .on { background:#12261a; color:#3fb950; } .no { background:#3d1417; color:#ffa198; }
+  button.act { background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:6px 12px; border-radius:6px; cursor:pointer; margin:2px; font-size:12px; }
+  button.act:hover { background:#30363d; }
   button.act.primary { background:#1f6feb; border-color:#1f6feb; color:#fff; }
-  pre { background:#0e131d; border:1px solid #1e2233; border-radius:8px; padding:12px; overflow:auto; white-space:pre-wrap; word-break:break-all; }
+  button.act.primary:hover { background:#388bfd; }
+  pre { background:#161b22; border:1px solid #21262d; border-radius:6px; padding:10px 12px; overflow:auto; white-space:pre-wrap; word-break:break-all;
+    font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:11px; line-height:1.55; }
+  pre.hex { white-space:pre; word-break:normal; }
   .row2 { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:10px; }
   a.dl { color:#58a6ff; text-decoration:none; } a.dl:hover { text-decoration:underline; }
+  details summary { cursor:pointer; }
   /* master-detail for 加解密 */
-  .master { width:44%; min-width:280px; border-right:1px solid #1e2233; overflow:auto; }
-  .detail { flex:1; overflow:auto; padding:14px 18px; }
-  .caprow { border-bottom:1px solid #1a1f2e; padding:7px 12px; cursor:pointer; }
-  .caprow:hover { background:#11151f; }
-  .caprow.sel { background:#161d2e; box-shadow: inset 3px 0 0 #89b4fa; }
-  .caprow .l1 { display:flex; gap:8px; align-items:center; }
-  .caprow .algo { font-weight:600; color:#cdd6f4; }
-  .caprow .op { color:#6c7086; font-size:11px; }
-  .caprow .ts { margin-left:auto; color:#6c7086; font-size:11px; }
-  .caprow .pv { color:#7d8590; font-size:11px; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .tag { display:inline-block; padding:1px 7px; border-radius:6px; font-size:11px; }
+  .master { width:42%; min-width:240px; border-right:1px solid #21262d; overflow:auto; display:flex; flex-direction:column; }
+  .detail { flex:1; overflow:auto; padding:0 18px 24px; }
+  .caprow { border-bottom:1px solid #21262d; padding:7px 14px; cursor:pointer; }
+  .caprow:hover { background:#161b22; }
+  .caprow.sel { background:#1b2231; box-shadow: inset 3px 0 0 #58a6ff; }
+  .caprow .l1 { display:flex; gap:9px; align-items:center; }
+  .caprow .algo { font-weight:600; color:#c9d1d9; }
+  .caprow .op { color:#8b949e; font-size:11px; }
+  .caprow .ts { margin-left:auto; color:#6e7681; font-size:11px; font-variant-numeric:tabular-nums; }
+  .caprow .pv { color:#6e7681; font-size:11px; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; }
+  .tag { display:inline-block; padding:1px 8px; border-radius:10px; font-size:11px; font-weight:600; }
   .tag.sym { background:#3c2410; color:#f0a35c; } .tag.tls { background:#0c2e4a; color:#58a6ff; }
-  .tag.dig { background:#0d3a1f; color:#56d364; } .tag.hmac { background:#241a3a; color:#b89aff; }
-  .empty { color:#6c7086; text-align:center; padding:48px 20px; line-height:1.8; }
-  label.ck { color:#6c7086; }
+  .tag.dig { background:#0d3a1f; color:#56d364; } .tag.hmac { background:#3a1140; color:#d2a8ff; }
+  .empty { color:#6e7681; text-align:center; padding:60px 20px; line-height:1.7; }
+  label.ck { color:#8b949e; }
+  /* 明文/密文 IO 卡片（对齐 IDH 详情样式） */
+  .detail-head { position:sticky; top:0; background:#0d1117; padding:14px 0 10px; border-bottom:1px solid #21262d; z-index:1; }
+  .detail-head h2 { margin:0; font-size:15px; word-break:break-all; }
+  .detail-head .sub { color:#8b949e; font-size:12px; margin-top:4px; word-break:break-all; }
+  .io { margin-top:14px; border-radius:8px; padding:12px 14px; }
+  .io.kv  { background:#11151b; border:1px solid #21262d; }
+  .io.in  { background:#0c1c12; border:1px solid #1f4a2b; }
+  .io.out { background:#0b1826; border:1px solid #1a3d61; }
+  .io-label { font-size:13px; font-weight:700; letter-spacing:.04em; padding:5px 12px; border-radius:6px; display:inline-block; margin-bottom:6px; }
+  .io-label.in  { background:#10301c; color:#56d364; }
+  .io-label.out { background:#11243d; color:#58a6ff; }
+  .io-label.kv  { background:#21262d; color:#c9d1d9; }
+  /* 头部动作按钮（对齐 IDH） */
+  .hbtn { background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:5px 12px; border-radius:6px; font-size:12px; cursor:pointer; }
+  .hbtn:hover { background:#30363d; }
+  /* 模态框 + 设置壳（对齐 IDH set-shell） */
+  .modal-mask { display:none; position:fixed; inset:0; background:rgba(1,4,9,0.7); z-index:100; align-items:center; justify-content:center; }
+  .modal-mask.show { display:flex; }
+  .modal { width:min(900px,92vw); height:min(80vh,720px); background:#0d1117; border:1px solid #30363d; border-radius:10px; display:flex; flex-direction:column; box-shadow:0 8px 40px rgba(0,0,0,0.55); }
+  .modal h3 { margin:0; padding:12px 16px; border-bottom:1px solid #21262d; font-size:14px; color:#c9d1d9; display:flex; align-items:center; gap:8px; }
+  .modal h3 .spacer { flex:1; }
+  .modal h3 button { background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:4px 10px; border-radius:6px; font-size:12px; cursor:pointer; }
+  .modal h3 button:hover { background:#30363d; }
+  .modal pre { flex:1; overflow:auto; margin:0; border:none; border-radius:0; }
+  .diag-hint { padding:10px 16px; border-bottom:1px solid #21262d; background:#161b22; color:#8b949e; font-size:12px; line-height:1.55; }
+  .diag-hint code { background:#0d1117; border:1px solid #30363d; border-radius:4px; padding:1px 5px; color:#c9d1d9; }
+  .set-shell { width:min(760px,94vw); height:min(84vh,660px); padding:0; position:relative; }
+  .set-close-x { position:absolute; top:8px; right:12px; z-index:2; width:28px; height:28px; border:none; background:transparent; color:#8b949e; font-size:20px; line-height:1; cursor:pointer; border-radius:6px; }
+  .set-close-x:hover { background:#21262d; color:#c9d1d9; }
+  .set-layout { display:flex; flex:1; min-height:0; }
+  .set-nav { width:150px; flex-shrink:0; border-right:1px solid #21262d; padding:36px 8px 12px; display:flex; flex-direction:column; gap:2px; }
+  .set-nav button { display:block; width:100%; text-align:left; padding:8px 12px; border:none; background:transparent; color:#8b949e; border-radius:8px; font-size:13px; cursor:pointer; }
+  .set-nav button:hover { background:#161b22; color:#c9d1d9; }
+  .set-nav button.active { background:#21262d; color:#c9d1d9; font-weight:600; }
+  .set-main { flex:1; min-width:0; overflow-y:auto; padding:34px 26px 24px; }
+  .set-page { display:none; } .set-page.active { display:block; }
+  .set-page h4 { margin:0 0 6px; font-size:18px; font-weight:600; color:#c9d1d9; }
+  .set-lead { margin:0 0 18px; font-size:12px; color:#8b949e; line-height:1.6; }
+  .set-section-title { color:#8b949e; font-size:11px; text-transform:uppercase; letter-spacing:.06em; margin:20px 0 8px; padding-top:4px; border-top:1px solid #21262d; }
+  .set-toggle-row { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding:12px 0; border-bottom:1px solid #21262d; }
+  .set-toggle-row .lab { flex:1; min-width:0; }
+  .set-toggle-row .lab b { display:block; font-size:13px; font-weight:600; color:#c9d1d9; }
+  .set-toggle-row .lab span { display:block; font-size:11px; color:#6e7681; margin-top:4px; line-height:1.55; }
+  .set-switch { position:relative; display:inline-block; width:44px; height:24px; flex-shrink:0; margin-top:2px; }
+  .set-switch input { opacity:0; width:0; height:0; position:absolute; }
+  .set-switch .slider { position:absolute; inset:0; background:#30363d; border-radius:12px; cursor:pointer; transition:background .2s; }
+  .set-switch .slider:before { content:''; position:absolute; width:18px; height:18px; left:3px; top:3px; background:#c9d1d9; border-radius:50%; transition:transform .2s; }
+  .set-switch input:checked + .slider { background:#1f6feb; }
+  .set-switch input:checked + .slider:before { transform:translateX(20px); }
+  .set-row { display:flex; align-items:center; gap:12px; padding:11px 0; border-bottom:1px solid #21262d; }
+  .set-row .lab { flex:1; }
+  .set-row .lab b { display:block; color:#c9d1d9; font-size:13px; font-weight:600; }
+  .set-row .lab span { display:block; color:#8b949e; font-size:11px; margin-top:2px; line-height:1.5; }
+  .set-row select { background:#0d1117; color:#c9d1d9; border:1px solid #30363d; padding:6px 9px; border-radius:6px; font-size:12px; min-width:120px; }
+  .set-row .val { color:#8b949e; font-size:12px; font-variant-numeric:tabular-nums; }
+  .set-actions { display:flex; gap:10px; flex-wrap:wrap; padding-top:14px; align-items:center; }
+  .set-actions button, .set-actions label.filebtn { background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:7px 14px; border-radius:6px; font-size:12px; cursor:pointer; }
+  .set-actions button:hover, .set-actions label.filebtn:hover { background:#30363d; }
+  .set-actions button.danger { background:#3d1417; border-color:#5a1d1d; color:#ffa198; }
+  .set-actions button.save { background:#238636; border-color:#2ea043; color:#fff; }
+  .set-actions button.save:hover { background:#2ea043; }
+  #rawCfgText { width:100%; box-sizing:border-box; height:320px; margin-top:10px; background:#0d1117; color:#c9d1d9; border:1px solid #30363d; padding:12px; border-radius:6px; font-size:12px; line-height:1.5; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; resize:vertical; white-space:pre; }
+  .toast { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:#21262d; border:1px solid #30363d; padding:8px 14px; border-radius:6px; font-size:12px; box-shadow:0 4px 16px rgba(0,0,0,0.4); opacity:0; transition:opacity .2s; pointer-events:none; z-index:200; }
+  .toast.show { opacity:1; }
 </style>
 </head>
 <body>
@@ -67,6 +138,8 @@
   <span class="muted" id="status">连接中…</span>
   <span class="muted" id="access" title="点击复制 — 手机 / 同网设备浏览器可开"></span>
   <span class="spacer"></span>
+  <button class="hbtn" id="mcpBtn" title="MCP 接入配置 — 让 AI 客户端经 HTTP 调用 ADH 的逆向工具">MCP</button>
+  <button class="hbtn" id="setBtn" title="捕获 / 数据 / 配置导入导出">设置</button>
   <span class="muted">会话</span>
   <select id="sess"><option value="">（最新在线）</option></select>
 </header>
@@ -88,32 +161,38 @@
       <div id="cap-list"></div>
     </div>
     <div class="detail" id="cap-detail">
-      <div class="empty">左侧为**实时**加解密捕获（App 一跑加密就自动出现，无需点按钮）。<br>点任意一条查看 明文 / 密文 / 算法 / 线程 / 时间。</div>
+      <div class="empty">左侧为实时加解密捕获（App 一跑加密就自动出现，无需点按钮）。<br>点任意一条查看 明文 / 密文 / 算法 / 线程 / 时间。</div>
     </div>
   </div>
 
   <!-- 脱壳 / DEX -->
   <div class="panel" id="p-dex">
     <div class="pad">
-      <h2>脱壳 · DEX（结构级捕获 + 一键下载）</h2>
+      <h2>一键脱壳 — 装上插件即可，无需改 AOSP 刷机</h2>
       <div class="row2">
-        <button class="act primary" onclick="rescanDex()">扫描并 Dump 当前 App 的 DEX</button>
-        <button class="act primary" onclick="unpackRun()">一键脱壳会话（T0→触发→T1→恢复）</button>
-        <button class="act" onclick="loadDumps()">刷新列表</button>
+        <button class="act primary" style="font-size:14px;padding:8px 16px" onclick="unpackRun()">一键脱壳（快照→触发→再快照→恢复重建）</button>
         <span id="dex-stat" class="muted"></span>
       </div>
+      <div class="muted" style="margin:-4px 0 10px">点一下即可：自动 dump DEX → 触发代码路径 → 捕获被抽取的方法体 → 重建标准 DEX，下面直接下载。</div>
       <pre id="out-session" class="muted"></pre>
       <table><thead><tr><th>类型</th><th>大小</th><th>sha256</th><th>来源</th><th>标签</th><th>下载</th><th>分析</th></tr></thead><tbody id="dumps-rows"></tbody></table>
       <pre id="out-cov" class="muted" style="margin-top:12px">点某个 dex 的「覆盖率」查看方法恢复率报告（诚实统计：具体 Java 方法中有多少已带方法体）。</pre>
-      <h2 style="margin-top:16px">快照恢复（抽取壳·回填型）</h2>
-      <div class="muted">对同一 dex 先后 dump 两次（T0 抽取态 / T1 运行后恢复态），从恢复镜像捕获缺失方法的 CodeItem 并重建为标准 DEX。</div>
-      <div class="row2" style="margin-top:8px">
-        <input id="rec-base" placeholder="base(T0) dump sha256" size="26" />
-        <input id="rec-rest" placeholder="restored(T1) dump sha256" size="26" />
-        <button class="act primary" onclick="recover()">恢复并重建</button>
-        <span id="rec-stat" class="muted"></span>
-      </div>
-      <pre id="out-rec" class="muted"></pre>
+
+      <details style="margin-top:16px">
+        <summary class="muted" style="cursor:pointer">高级：手动 Dump / 快照恢复（一般用不到）</summary>
+        <div class="row2" style="margin-top:10px">
+          <button class="act" onclick="rescanDex()">仅扫描并 Dump DEX</button>
+          <button class="act" onclick="loadDumps()">刷新列表</button>
+        </div>
+        <div class="muted">对同一 dex 先后 dump 两次（T0 抽取态 / T1 运行后恢复态），从恢复镜像捕获缺失方法的 CodeItem 并重建为标准 DEX。</div>
+        <div class="row2" style="margin-top:8px">
+          <input id="rec-base" placeholder="base(T0) dump sha256" size="26" />
+          <input id="rec-rest" placeholder="restored(T1) dump sha256" size="26" />
+          <button class="act primary" onclick="recover()">恢复并重建</button>
+          <span id="rec-stat" class="muted"></span>
+        </div>
+        <pre id="out-rec" class="muted"></pre>
+      </details>
     </div>
   </div>
 
@@ -177,15 +256,6 @@
     </div>
   </div>
 
-  <!-- MCP -->
-  <div class="panel" id="p-mcp">
-    <div class="pad">
-      <h2>MCP 工具（AI 可编程操控）</h2>
-      <div class="row2"><button class="act" onclick="loadMcp()">列出工具</button></div>
-      <pre id="out-mcp" class="muted">…</pre>
-    </div>
-  </div>
-
   <!-- 调试 -->
   <div class="panel" id="p-debug">
     <div class="pad">
@@ -202,8 +272,98 @@
   </div>
 </main>
 
+<!-- MCP 模态 -->
+<div class="modal-mask" id="mcpMask">
+  <div class="modal">
+    <h3>MCP 接入配置<span class="spacer"></span>
+      <button id="mcpCopy">复制</button><button onclick="closeModal('mcpMask')">关闭</button></h3>
+    <div class="diag-hint" id="mcpHint">加载中…</div>
+    <pre id="mcpBody">加载中…</pre>
+  </div>
+</div>
+
+<!-- 设置 模态 -->
+<div class="modal-mask" id="setMask">
+  <div class="modal set-shell">
+    <button class="set-close-x" onclick="closeModal('setMask')" title="关闭">×</button>
+    <div class="set-layout">
+      <nav class="set-nav" id="setNav">
+        <button data-setpage="capture" class="active">捕获</button>
+        <button data-setpage="data">数据</button>
+        <button data-setpage="rawcfg">配置 JSON</button>
+      </nav>
+      <div class="set-main">
+        <div id="setPageCapture" class="set-page active">
+          <h4>捕获</h4>
+          <p class="set-lead">控制实时加解密捕获的行为。家族过滤在控制台侧生效（决定保留/展示哪些家族），agent 仍照常 hook。</p>
+          <div class="set-toggle-row">
+            <div class="lab"><b>实时捕获</b><span>关闭后停止在目标进程内的持久 hook（EVP/Digest/HMAC/SSL），不再有新捕获</span></div>
+            <label class="set-switch"><input type="checkbox" id="setCapEnabled"><span class="slider"></span></label>
+          </div>
+          <div class="set-toggle-row">
+            <div class="lab"><b>连接时自动 dump DEX</b><span>App 一连上就结构级 dump 全部 DEX，脱壳面板可直接下载</span></div>
+            <label class="set-switch"><input type="checkbox" id="setAutoDump"><span class="slider"></span></label>
+          </div>
+          <div class="set-section-title">家族过滤</div>
+          <div id="setFamilies"></div>
+          <div class="set-section-title">容量</div>
+          <div class="set-row">
+            <div class="lab"><b>内存保留条数</b><span>捕获列表最多保留多少条（超出丢最旧），改小立即裁剪</span></div>
+            <select id="setRetain">
+              <option value="500">500 条</option><option value="1000">1000 条</option>
+              <option value="2000">2000 条</option><option value="5000">5000 条</option>
+            </select>
+          </div>
+          <div class="set-row">
+            <div class="lab"><b>列表展示条数</b><span>左侧列表最多渲染多少行（仅影响显示）</span></div>
+            <select id="setDisplayCap">
+              <option value="100">100 行</option><option value="150">150 行</option>
+              <option value="300">300 行</option><option value="500">500 行</option>
+            </select>
+          </div>
+        </div>
+        <div id="setPageData" class="set-page">
+          <h4>数据</h4>
+          <p class="set-lead">当前存储与清理。清空不可恢复；dumps 会连磁盘文件一起删。</p>
+          <div class="set-row"><div class="lab"><b>实时捕获</b></div><span class="val" id="statCaptures">—</span></div>
+          <div class="set-row"><div class="lab"><b>DEX/so dump</b></div><span class="val" id="statDumps">—</span></div>
+          <div class="set-row"><div class="lab"><b>会话事件</b></div><span class="val" id="statEvents">—</span></div>
+          <div class="set-actions">
+            <button class="danger" onclick="clearData('captures')">清空捕获</button>
+            <button class="danger" onclick="clearData('dumps')">清空 dump</button>
+            <button class="danger" onclick="clearData('events')">清空事件</button>
+          </div>
+          <div class="set-section-title">导出</div>
+          <div class="set-actions">
+            <a class="filebtn" href="/api/export/report" target="_blank">下载诊断报告（仅元数据）</a>
+          </div>
+        </div>
+        <div id="setPageRawcfg" class="set-page">
+          <h4>配置 JSON</h4>
+          <p class="set-lead">直接编辑全部配置并按板块合并保存 —— JSON 里有哪段(capture/ui)就应用哪段，删掉某段则保持不变。可下载/从文件载入，在多台机器间搬运配置。</p>
+          <div class="set-actions">
+            <button onclick="loadRawCfg(true)">重新载入</button>
+            <button onclick="copyText(document.getElementById('rawCfgText').value)">复制</button>
+            <button onclick="downloadRawCfg()">下载</button>
+            <label class="filebtn">从文件载入<input id="rawFile" type="file" accept=".json,application/json" style="display:none"></label>
+          </div>
+          <textarea id="rawCfgText" spellcheck="false"></textarea>
+          <div class="set-actions">
+            <button class="save" onclick="saveRawCfg()">保存并应用</button>
+            <span id="rawHint" class="muted"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
 <script>
-const TABS = [['p-crypto','加解密','cap'],['p-dex','脱壳(DEX)'],['p-mem','内存/进程'],['p-native','原生'],['p-dexana','DEX分析'],['p-events','事件'],['p-mcp','MCP'],['p-debug','调试']];
+// 主导航只留两条核心轴（加解密/脱壳）；MCP 与设置改到头部按钮→模态；专家工具收进「高级」折叠。
+const TABS_MAIN=[['p-crypto','加解密·实时','cap'],['p-dex','一键脱壳']];
+const TABS_ADV=[['p-mem','内存/进程'],['p-native','原生 .so'],['p-dexana','DEX 分析'],['p-events','事件'],['p-debug','调试']];
 
 // ---- 调试台：统一记录请求/WS ----
 let dbgReqs=0, dbgErrs=0; const dbgLines=[];
@@ -219,12 +379,19 @@ window.fetch=async function(input,init){ const method=(init&&init.method)||'GET'
   try{ const r=await _fetch(input,init); dbgReqs++; dbg(r.ok?'RES':'RES!',`${r.status} ${method} ${path} (${(performance.now()-t0).toFixed(0)}ms)`); dbgStat(); return r; }
   catch(e){ dbgErrs++; dbg('ERR',`${method} ${path} — ${e}`); dbgStat(); throw e; } };
 
-const nav=document.getElementById('nav'); const tabN={};
-TABS.forEach(([id,label,key],i)=>{ const b=document.createElement('button'); b.innerHTML=label+(key?` <span class="n" id="n-${key}"></span>`:''); if(i===0)b.className='active';
+const nav=document.getElementById('nav');
+function mkTab([id,label,key],active){ const b=document.createElement('button'); b.innerHTML=label+(key?` <span class="n" id="n-${key}"></span>`:''); if(active)b.className='active';
   b.onclick=()=>{ document.querySelectorAll('nav button').forEach(x=>x.classList.remove('active')); b.classList.add('active');
     document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active')); document.getElementById(id).classList.add('active');
     if(id==='p-dex') loadDumps(); if(id==='p-events') loadEvents(); };
-  nav.appendChild(b); });
+  return b; }
+TABS_MAIN.forEach((t,i)=>nav.appendChild(mkTab(t,i===0)));
+// 高级折叠：一个开关按钮 + 一个默认隐藏的容器
+const advToggle=document.createElement('button'); advToggle.textContent='高级';
+const advWrap=document.createElement('span'); advWrap.style.display='none';
+TABS_ADV.forEach(t=>advWrap.appendChild(mkTab(t,false)));
+advToggle.onclick=()=>{ advWrap.style.display=advWrap.style.display==='none'?'inline':'none'; };
+nav.appendChild(advToggle); nav.appendChild(advWrap);
 const val=id=>document.getElementById(id).value.trim();
 const sessParam=()=>{ const s=val('sess'); return s?`?session=${s}`:''; };
 
@@ -240,7 +407,7 @@ async function nat(path,extra){ const el=document.getElementById('out-native'); 
 
 // ---- 脱壳 / DEX ----
 async function loadDumps(){ const r=await (await fetch('/api/dumps')).json(); const tb=document.getElementById('dumps-rows');
-  tb.innerHTML=r.map(d=>`<tr><td>${d.kind}</td><td>${d.size}</td><td class="muted">${d.sha256.slice(0,20)}…</td><td>${d.source}</td><td>${d.tag||''}</td><td><a class="dl" href="/api/dumps/download?sha=${d.sha256}">⬇ 下载</a></td><td>${d.kind==='dex'?`<a class="dl" href="#" onclick="coverage('${d.sha256}');return false">覆盖率</a>`:''}</td></tr>`).join('')||'<tr><td class="muted" colspan=7>暂无 dump（点上方「扫描并 Dump」）</td></tr>'; }
+  tb.innerHTML=r.map(d=>`<tr><td>${d.kind}</td><td>${d.size}</td><td class="muted">${d.sha256.slice(0,20)}…</td><td>${d.source}</td><td>${d.tag||''}</td><td><a class="dl" href="/api/dumps/download?sha=${d.sha256}">下载</a></td><td>${d.kind==='dex'?`<a class="dl" href="#" onclick="coverage('${d.sha256}');return false">覆盖率</a>`:''}</td></tr>`).join('')||'<tr><td class="muted" colspan=7>暂无 dump（点上方「扫描并 Dump」）</td></tr>'; }
 async function coverage(sha){ const el=document.getElementById('out-cov'); el.textContent='分析中…';
   try{ const c=await (await fetch('/api/dex/coverage',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sha,limitMissing:20})})).json();
     if(c.error){el.textContent='错误: '+c.error;return;}
@@ -281,10 +448,11 @@ async function rescanDex(){ const st=document.getElementById('dex-stat'); st.tex
   }catch(e){ st.textContent='错误: '+e; } }
 
 // ---- 加解密实时列表 ----
-const capItems=[]; let capMaxId=0, capSel=0;
+const capItems=[]; let capMaxId=0, capSel=0, capDisplayCap=300;
 function capTag(algo){ if(/TLS/.test(algo)) return 'tls'; if(/Hmac|HMAC/i.test(algo)) return 'hmac'; if(/MD5|SHA|摘要|Digest/i.test(algo)) return 'dig'; return 'sym'; }
 function capRender(){ const box=document.getElementById('cap-list');
-  box.innerHTML=capItems.map(c=>`<div class="caprow ${c.id===capSel?'sel':''}" onclick="capSelect(${c.id})">
+  const shown=capItems.slice(-capDisplayCap);
+  box.innerHTML=shown.map(c=>`<div class="caprow ${c.id===capSel?'sel':''}" onclick="capSelect(${c.id})">
       <div class="l1"><span class="tag ${capTag(c.algo)}">${c.algo}</span><span class="op">${c.op}</span><span class="ts">${new Date(c.ts).toLocaleTimeString()}</span></div>
       <div class="pv">#${c.id} · ${c.inl}B · ${escapeHtml(c.preview)}</div></div>`).join('');
   document.getElementById('cap-stat').textContent=`共 ${capItems.length} 条`;
@@ -296,22 +464,114 @@ const hexFmt=h=>(h||'').replace(/(.{64})/g,'$1\n');
 async function capSelect(id){ capSel=id; capRender();
   const c=await (await fetch('/api/captures/'+id)).json(); const d=document.getElementById('cap-detail');
   const src=c.source==='java'?'Java 层 · JCE (algorithm/key/iv 绑定)':'Native · BoringSSL EVP';
-  const kv=(label,hex,color)=> hex?`<h3 style="color:${color};margin:14px 0 4px">${label}（${hex.length/2}B）</h3><pre>${hexFmt(hex)}</pre>`:'';
-  d.innerHTML=`<h2>#${c.id} · ${c.algo} · ${c.op}</h2>
-    <div class="muted">来源 ${src} · 线程 tid=${c.tid} · ${new Date(c.ts).toLocaleString()}</div>
-    ${kv('🔑 Key',c.keyHex,'#f0a35c')}
-    ${kv('IV',c.ivHex,'#f0a35c')}
-    <h3 style="color:#a6e3a1;margin:14px 0 4px">明文 / 输入（文本 · UTF-8）</h3><pre>${escapeHtml(c.text||'')}</pre>
-    <h3 style="color:#89b4fa;margin:14px 0 4px">明文 / 输入（Hex · ${c.inl}B）</h3><pre>${hexFmt(c.hex)}</pre>
-    ${kv('🔒 密文 / 输出',c.outHex,'#b89aff')}`; }
+  const kvrow=(label,hex)=> hex?`<h3>${label} · ${hex.length/2}B</h3><pre class="hex">${hexFmt(hex)}</pre>`:'';
+  const kvCard=(c.keyHex||c.ivHex)?`<div class="io kv"><span class="io-label kv">密钥参数</span>${kvrow('Key',c.keyHex)}${kvrow('IV',c.ivHex)}</div>`:'';
+  const outCard=c.outHex?`<div class="io out"><span class="io-label out">密文 / 输出</span><h3>Hex · ${c.outHex.length/2}B</h3><pre class="hex">${hexFmt(c.outHex)}</pre></div>`:'';
+  d.innerHTML=`<div class="detail-head"><h2>#${c.id} · ${c.algo} · ${c.op}</h2>
+      <div class="sub">来源 ${src} · 线程 tid=${c.tid} · ${new Date(c.ts).toLocaleString()}</div></div>
+    ${kvCard}
+    <div class="io in"><span class="io-label in">明文 / 输入</span>
+      <h3>文本 · UTF-8</h3><pre>${escapeHtml(c.text||'')}</pre>
+      <h3>Hex · ${c.inl}B</h3><pre class="hex">${hexFmt(c.hex)}</pre></div>
+    ${outCard}`; }
 async function capLoad(){ try{ const r=await (await fetch('/api/captures?since='+capMaxId)).json();
     (r.captures||[]).forEach(capPush); capRender(); }catch(e){} }
 
 async function loadEvents(){ const r=await (await fetch('/api/events?limit=200')).json(); const tb=document.getElementById('ev-rows');
   tb.innerHTML=(r.events||[]).slice().reverse().map(e=>`<tr><td class="muted">${e.seq}</td><td class="muted">${new Date(e.ts).toLocaleTimeString()}</td><td>${e.type}</td><td class="muted">${escapeHtml(JSON.stringify(e.data).slice(0,90))}</td></tr>`).join('')||'<tr><td class="muted" colspan=4>暂无事件</td></tr>'; }
-async function loadMcp(){ const el=document.getElementById('out-mcp');
-  const r=await (await fetch('/mcp',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/list',params:{}})})).json();
-  el.textContent=(r.result?.tools||[]).map(t=>`${t.name.padEnd(22)} ${t.description}`).join('\n'); }
+// ---- 通用：toast / 复制 / 模态开关 ----
+let toastTimer;
+function toast(msg){ const t=document.getElementById('toast'); if(!t) return; t.textContent=msg; t.classList.add('show');
+  clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.classList.remove('show'),1600); }
+function copyText(s){ navigator.clipboard?.writeText(s||''); toast('已复制'); }
+function closeModal(id){ document.getElementById(id).classList.remove('show'); }
+
+// ---- MCP 模态（头部按钮）----
+let mcpCfgText='';
+async function openMcp(){
+  try{ const c=await (await fetch('/api/mcp/config')).json();
+    mcpCfgText=JSON.stringify({mcpServers:c.mcpServers},null,2);
+    document.getElementById('mcpBody').textContent=mcpCfgText;
+    document.getElementById('mcpHint').innerHTML=
+      `把下面配置加入 MCP 客户端（Claude Desktop / Cursor / Claude Code）。端点 <code>${c.endpoint}</code> · 共 ${c.tools} 个工具。`+
+      `<br>命令行等价：<code>${escapeHtml(c.cli||'')}</code>`+
+      `<br>配好后可直接问 AI：${(c.quickAsks||[]).slice(0,3).map(q=>'“'+q+'”').join('、')}`;
+  }catch(e){ document.getElementById('mcpBody').textContent='加载失败：'+e; }
+  document.getElementById('mcpMask').classList.add('show');
+}
+
+// ---- 设置 模态 ----
+const FAMILIES=[['digest','摘要 Digest'],['hmac','HMAC'],['symmetric','对称'],['asymmetric','非对称'],['tls','TLS']];
+function setSettingsPage(name){
+  document.querySelectorAll('#setNav button').forEach(b=>b.classList.toggle('active',b.dataset.setpage===name));
+  document.querySelectorAll('#setMask .set-page').forEach(p=>p.classList.remove('active'));
+  document.getElementById('setPage'+name.charAt(0).toUpperCase()+name.slice(1)).classList.add('active');
+  if(name==='rawcfg') loadRawCfg(true);
+}
+function renderFamilies(fam){
+  document.getElementById('setFamilies').innerHTML=FAMILIES.map(([k,label])=>
+    `<div class="set-toggle-row"><div class="lab"><b>${label}</b></div>`+
+    `<label class="set-switch"><input type="checkbox" data-fam="${k}" ${fam[k]!==false?'checked':''}><span class="slider"></span></label></div>`).join('');
+  document.querySelectorAll('#setFamilies input[data-fam]').forEach(inp=>
+    inp.addEventListener('change',()=>postConfig({capture:{families:{[inp.dataset.fam]:inp.checked}}})));
+}
+async function openSettings(){
+  await loadConfig();
+  setSettingsPage('capture');
+  document.getElementById('setMask').classList.add('show');
+}
+async function loadConfig(){
+  try{ const r=await (await fetch('/api/config')).json(); const s=r.settings, st=r.stats;
+    document.getElementById('setCapEnabled').checked=s.capture.enabled;
+    document.getElementById('setAutoDump').checked=s.capture.autoDumpDex;
+    document.getElementById('setRetain').value=String(s.capture.retain);
+    document.getElementById('setDisplayCap').value=String(s.ui.displayCap);
+    renderFamilies(s.capture.families);
+    document.getElementById('statCaptures').textContent=`${st.captures} 条`+(st.on?' · 捕获中':'');
+    document.getElementById('statDumps').textContent=`${st.dumps} 个`;
+    document.getElementById('statEvents').textContent=`${st.events} 条`;
+  }catch(e){ toast('读取配置失败: '+e); }
+}
+async function postConfig(patch){
+  try{ const r=await (await fetch('/api/config',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(patch)})).json();
+    if(r.error){ toast('保存失败: '+r.error); return; }
+    if(r.stats){ document.getElementById('statCaptures').textContent=`${r.stats.captures} 条`+(r.stats.on?' · 捕获中':''); }
+    if(patch.ui&&patch.ui.displayCap) capDisplayCap=r.settings.ui.displayCap;
+    toast('已保存');
+  }catch(e){ toast('保存失败: '+e); }
+}
+async function clearData(what){
+  const names={captures:'实时捕获',dumps:'DEX/so dump',events:'会话事件'};
+  if(!confirm(`确定清空「${names[what]}」？不可恢复。`)) return;
+  try{ const r=await (await fetch('/api/data/clear',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({what})})).json();
+    if(r.error){ toast('失败: '+r.error); return; }
+    toast('已清空 '+names[what]); loadConfig();
+    if(what==='captures'){ capItems.length=0; capSel=0; capMaxId=0; capRender(); }
+    if(what==='dumps') loadDumps(); if(what==='events') loadEvents();
+  }catch(e){ toast('失败: '+e); }
+}
+// 配置 JSON 编辑器（export/import 按板块合并）
+async function loadRawCfg(force){
+  const ta=document.getElementById('rawCfgText');
+  if(!force && ta.value.trim()) return;
+  try{ const j=await (await fetch('/api/settings/export')).json(); ta.value=JSON.stringify(j,null,2); document.getElementById('rawHint').textContent=''; }
+  catch(e){ document.getElementById('rawHint').textContent='载入失败: '+e; }
+}
+function downloadRawCfg(){
+  const blob=new Blob([document.getElementById('rawCfgText').value],{type:'application/json'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='adh-settings.json';
+  document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href); toast('已下载 adh-settings.json');
+}
+async function saveRawCfg(){
+  const raw=document.getElementById('rawCfgText').value.trim(); const hint=document.getElementById('rawHint');
+  if(!raw){ toast('配置为空'); return; }
+  let obj; try{ obj=JSON.parse(raw); }catch(e){ hint.textContent='JSON 错误: '+e.message; toast('JSON 格式错误'); return; }
+  try{ const r=await (await fetch('/api/settings/import',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(obj)})).json();
+    if(r.error){ hint.textContent='应用失败: '+r.error; toast('应用失败'); return; }
+    hint.textContent='已应用: '+((r.applied||[]).join(' / ')||'无'); toast('已保存并应用');
+    loadConfig(); loadRawCfg(true);
+  }catch(e){ hint.textContent='应用失败: '+e; toast('应用失败'); }
+}
 
 function escapeHtml(s){ return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
@@ -339,10 +599,26 @@ function connect(){ const ws=new WebSocket(`ws://${location.host}/ws`); const co
 connect();
 capLoad(); setInterval(capLoad, 2000);   // 拉取实时捕获（WS + 轮询双保险）
 
+// ---- 头部按钮 / 模态 / 设置 事件绑定 ----
+document.getElementById('mcpBtn').addEventListener('click', openMcp);
+document.getElementById('mcpCopy').addEventListener('click', ()=>copyText(mcpCfgText));
+document.getElementById('setBtn').addEventListener('click', openSettings);
+document.getElementById('setNav').addEventListener('click', e=>{ const p=e.target.dataset&&e.target.dataset.setpage; if(p) setSettingsPage(p); });
+document.getElementById('setCapEnabled').addEventListener('change', e=>postConfig({capture:{enabled:e.target.checked}}));
+document.getElementById('setAutoDump').addEventListener('change', e=>postConfig({capture:{autoDumpDex:e.target.checked}}));
+document.getElementById('setRetain').addEventListener('change', e=>postConfig({capture:{retain:Number(e.target.value)}}));
+document.getElementById('setDisplayCap').addEventListener('change', e=>postConfig({ui:{displayCap:Number(e.target.value)}}));
+document.getElementById('rawFile').addEventListener('change', ev=>{ const f=ev.target.files&&ev.target.files[0]; if(!f) return;
+  const rd=new FileReader(); rd.onload=()=>{ document.getElementById('rawCfgText').value=rd.result; document.getElementById('rawHint').textContent='已载入文件，检查后点保存并应用'; }; rd.readAsText(f); ev.target.value=''; });
+// 点遮罩空白处关闭模态
+for(const id of ['mcpMask','setMask']) document.getElementById(id).addEventListener('click', e=>{ if(e.target.id===id) closeModal(id); });
+// 初始化 displayCap（不打开设置也让列表按配置渲染）
+fetch('/api/config').then(r=>r.json()).then(r=>{ if(r.settings?.ui?.displayCap) capDisplayCap=r.settings.ui.displayCap; }).catch(()=>{});
+
 // 顶栏访问地址（局域网优先，点击复制）
 (async function showAccess(){ const el=document.getElementById('access'); if(!el) return;
   try{ const h=await (await fetch('/health')).json(); const lan=(h.web&&h.web.lan&&h.web.lan[0])||''; const local=(h.web&&h.web.local)||location.origin; const primary=lan||local;
-    el.innerHTML=`🔗 <b style="color:#89b4fa">${primary}</b>`+(lan?` <span class="muted">· 本机 ${local}</span>`:''); el.style.cursor='pointer';
+    el.innerHTML=`<b style="color:#58a6ff">${primary}</b>`+(lan?` <span class="muted">· 本机 ${local}</span>`:''); el.style.cursor='pointer';
     el.onclick=()=>{ navigator.clipboard?.writeText(primary); const o=el.innerHTML; el.innerHTML='✓ 已复制 '+primary; setTimeout(()=>el.innerHTML=o,1200); };
   }catch(e){} })();
 </script>

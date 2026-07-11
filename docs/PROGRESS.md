@@ -266,6 +266,26 @@ arm64 预编译，agent 运行时 dlopen libQBDI.so，指令级 trace idh_trace_
 
 ## 会话日志（倒序，简短）
 
+- 2026-07-11 (设置/MCP/配置导入导出，对齐 IDH 交互)：**把 IDH 的「头部按钮→模态」范式引入 ADH**。
+  熟读 `.ref/ios-decrypt-helper/web/index.html` 的 set-shell/set-switch/配置JSON编辑器/openMcp。
+  后端 `daemon/src/index.ts`：新增 `settings`（持久化 `idhd-data/settings.json`）+ `mergeSettings` 板块合并；
+  端点 `GET/POST /api/config`、`GET /api/settings/export`、`POST /api/settings/import`、`POST /api/data/clear`；
+  `/api/mcp/config` 加 `cli`(claude mcp add 等价命令)；captures 用 `pushCapture`（家族过滤 idhd 侧 + retain 上限）替换硬编码 1000；
+  autoDumpDex/capture_start 受 settings 控制。前端：头部 `MCP`/`设置` 按钮→两个模态；设置三页(捕获开关+家族过滤+容量 / 数据统计+清空+导出 / 配置JSON 重载·复制·下载·从文件载入·保存并应用)；toast；
+  主 tab 精简为 加解密/一键脱壳（MCP 移入模态，去掉 p-mcp tab）。**刻意不做** IDH 的伪装/绕过页（反检测，超范围）。
+  真机验证：捕获经新路径正常流入、**家族过滤 live 生效**（关 digest 后新捕获无 digest）、config 回读+落盘。
+  新增 `verify_v19_settings.sh`(15 检查) 入 verify_all，扩 verify_v10_webui。**verify_all 35/35。**
+- 2026-07-11 (UI 简化：便捷性)：**沙盒 App 屏 + Web 面板双双简化，去冗余、可手动触发测试。**
+  App(`MainActivity`)：删掉重复的两块 URL + 长段用法说明，收成 1 个最优地址(局域网优先·点按复制)+连通点；
+  新增手动触发区（全部算法/AES/RSA/SHA-256/HMAC/加载DEX/触发脱壳类/HTTPS/关联流）+ 自动加密流开关 + 屏内测试日志；
+  `JavaCrypto` 抽出 `MENU`/`oneAes/oneRsa/oneSha256/oneHmac/runAllOnce` + 可停的 `startLiveDriver/stopLive/liveRunning`。
+  Web(`index.html`)：8 tab → 3 主 tab（🔓加解密·实时 / 📦一键脱壳 / 🤖AI·MCP）对齐三轴，专家 5 工具收进「⋯ 高级」折叠默认隐藏；
+  脱壳页「🚀 一键脱壳」为唯一主操作、手动 Dump/快照恢复进 `<details>`；MCP 页加「📋 复制 MCP 配置」(读 `/api/mcp/config`)+quickAsks。
+  真机验证：APK 装上无崩溃、live 流转、health ok=true agents=7、captures=130 流入面板。**verify_all 34/34。**
+  **补：去掉全部 emoji 图标**（硬性规则，见记忆 no-emoji-icons）——App/Web 所有标题/按钮/tab/日志改纯文字。
+  **补：Web 视觉重做成 IDH 样式**——正文改系统无衬线字体（等宽仅留代码/hex），换 GitHub 暗色配色
+  (#0d1117/#161b22/#30363d，绿色 monospace 标题、橙色激活 tab、蓝色强调)，明文/密文详情用 IDH 的 io-card
+  (kv/in/out 三色卡片)。参考 `.ref/ios-decrypt-helper/web/index.html`。旧 catppuccin 配色清空。
 - 2026-07-11 (加载任意 so / frida-gadget)：agent 是目标进程内原生码 → 可 `dlopen` 任意 .so。
   `cmd_load_so(path, symbol?)` + `POST /api/agent/load_so` + MCP `load_library`。frida-gadget script 模式 dlopen 后自动跑 js。
   `tools/load_frida_gadget.sh`（root 推 gadget+config+js 到 code_cache、chcon、触发 load_so）。

@@ -234,6 +234,65 @@ function recordEvent(type: string, data: any) {
   try { appendFileSync(EVENTS_FILE, JSON.stringify(e) + '\n'); } catch {}
 }
 
+// ---- user settings (persisted; tunable from the web 设置 panel; IDH-style) --------
+// Only touches the idhd/web layer — the agent .so is never reconfigured from here.
+const SETTINGS_FILE = join(DATA_DIR, 'settings.json');
+interface Settings {
+  capture: { enabled: boolean; autoDumpDex: boolean; retain: number; families: Record<string, boolean> };
+  ui: { displayCap: number };
+}
+const DEFAULT_SETTINGS: Settings = {
+  capture: { enabled: true, autoDumpDex: true, retain: 1000, families: { digest: true, hmac: true, symmetric: true, asymmetric: true, tls: true } },
+  ui: { displayCap: 300 },
+};
+let settings: Settings = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
+// section-merge (like IDH /api/settings/import): only the segments present in `patch` apply.
+function mergeSettings(patch: any): string[] {
+  const applied: string[] = [];
+  if (!patch || typeof patch !== 'object') return applied;
+  if (patch.capture && typeof patch.capture === 'object') {
+    const c = patch.capture;
+    if (typeof c.enabled === 'boolean') settings.capture.enabled = c.enabled;
+    if (typeof c.autoDumpDex === 'boolean') settings.capture.autoDumpDex = c.autoDumpDex;
+    if (Number.isFinite(c.retain)) settings.capture.retain = Math.max(50, Math.min(100000, Math.floor(c.retain)));
+    if (c.families && typeof c.families === 'object')
+      for (const k of Object.keys(settings.capture.families))
+        if (typeof c.families[k] === 'boolean') settings.capture.families[k] = c.families[k];
+    applied.push('capture');
+  }
+  if (patch.ui && typeof patch.ui === 'object') {
+    if (Number.isFinite(patch.ui.displayCap)) settings.ui.displayCap = Math.max(50, Math.min(5000, Math.floor(patch.ui.displayCap)));
+    applied.push('ui');
+  }
+  return applied;
+}
+try { if (existsSync(SETTINGS_FILE)) mergeSettings(JSON.parse(readFileSync(SETTINGS_FILE, 'utf8'))); } catch {}
+function saveSettings() { try { writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2)); } catch {} }
+function configStats() { return { captures: captures.length, dumps: dumps.size, events: events.length, on: captureTimers.size > 0, agents: sessions.size }; }
+// Which crypto family a capture belongs to (mirrors cryptoIdentify's buckets) — used by the
+// idhd-side family filter (panel-level; the agent still hooks everything).
+function familyOf(algo: string): 'tls' | 'asymmetric' | 'hmac' | 'digest' | 'symmetric' {
+  if (/TLS/.test(algo)) return 'tls';
+  if (/RSA|(^|[^m])EC[^B]|ECDSA|DSA/i.test(algo)) return 'asymmetric';
+  if (/Hmac|HMAC/i.test(algo)) return 'hmac';
+  if (/MD5|SHA|摘要|Digest/i.test(algo)) return 'digest';
+  return 'symmetric';
+}
+// Store a capture honoring the family filter + retention cap. Returns false if filtered out.
+function pushCapture(entry: Capture): boolean {
+  if (settings.capture.families[familyOf(entry.algo)] === false) return false;
+  captures.push(entry);
+  while (captures.length > settings.capture.retain) captures.shift();
+  return true;
+}
+// Apply the capture.enabled toggle to already-connected sessions (start/stop the hooks).
+async function applyCaptureEnabled() {
+  for (const s of sessions.values()) {
+    if (!s.online) continue;
+    try { await sendCmd(s.sessionId, settings.capture.enabled ? 'capture_start' : 'capture_stop', {}, 8_000); } catch {}
+  }
+}
+
 // ---- live capture store: what the agent's persistent hooks stream in (the panel's
 //      加解密 list reads this; it auto-populates without any button click) -------------
 interface Capture {
@@ -308,8 +367,10 @@ function cryptoIdentify() {
 // them. Mirrors the ios-decrypt-helper flow (hooks stay live, events fill the panel).
 function startCaptureLoop(sid: string) {
   setTimeout(async () => {
-    try { await sendCmd(sid, 'capture_start', {}, 15_000); log(`capture_start ${sid}`); } catch (e) { log('capture_start failed', (e as Error).message); }
-    autoDumpDex(sid).catch(() => {});
+    if (settings.capture.enabled) {
+      try { await sendCmd(sid, 'capture_start', {}, 15_000); log(`capture_start ${sid}`); } catch (e) { log('capture_start failed', (e as Error).message); }
+    }
+    if (settings.capture.autoDumpDex) autoDumpDex(sid).catch(() => {});
     if (captureTimers.has(sid)) return;
     let busy = false;
     const timer = setInterval(async () => {
@@ -329,8 +390,8 @@ function startCaptureLoop(sid: string) {
             hex: c.in, preview: hexToPreview(c.in),
             keyHex: c.key || '', ivHex: c.iv || '', outHex: c.out || '',
           };
-          captures.push(entry); if (captures.length > 1000) captures.shift();
-          broadcast('capture.new', { id: entry.id, sessionId: sid, source: 'java', algo: entry.algo, op: entry.op, preview: entry.preview, inl: entry.inl, ts: entry.ts });
+          if (pushCapture(entry))
+            broadcast('capture.new', { id: entry.id, sessionId: sid, source: 'java', algo: entry.algo, op: entry.op, preview: entry.preview, inl: entry.inl, ts: entry.ts });
         }
         // prune the dedup memory (>2s old)
         for (const [k, t] of recentJavaIn) if (now - t > 2000) recentJavaIn.delete(k);
@@ -342,8 +403,8 @@ function startCaptureLoop(sid: string) {
             inl: c.inl, tid: c.tid, tsNs: c.tsNs, ts: now,
             hex: c.hex, preview: hexToPreview(c.hex),
           };
-          captures.push(entry); if (captures.length > 1000) captures.shift();
-          broadcast('capture.new', { id: entry.id, sessionId: sid, source: 'native', algo, op, preview: entry.preview, inl: entry.inl, ts: entry.ts });
+          if (pushCapture(entry))
+            broadcast('capture.new', { id: entry.id, sessionId: sid, source: 'native', algo, op, preview: entry.preview, inl: entry.inl, ts: entry.ts });
         }
       } catch {} finally { busy = false; }
     }, 1500);
@@ -813,6 +874,49 @@ const httpServer = http.createServer(async (req, res) => {
       note: 'metadata only — captured key/plaintext content is never in diagnostic reports',
     });
   }
+  // ---- settings / config (web 设置面板；IDH 交互) ----
+  // GET  /api/config          → { settings, stats }
+  // POST /api/config          → section-merge patch, persist, apply live
+  if (url.pathname === '/api/config') {
+    if (req.method === 'POST') {
+      let patch: any = {};
+      try { patch = JSON.parse((await readBody(req)) || '{}'); } catch { return send(400, { error: 'bad json' }); }
+      const applied = mergeSettings(patch);
+      saveSettings();
+      while (captures.length > settings.capture.retain) captures.shift();
+      applyCaptureEnabled().catch(() => {});
+      return send(200, { ok: true, applied, settings, stats: configStats() });
+    }
+    return send(200, { settings, stats: configStats() });
+  }
+  // GET /api/settings/export → the raw settings object (for the 配置 JSON editor / download)
+  if (url.pathname === '/api/settings/export') return send(200, settings);
+  // POST /api/settings/import → section-merge (capture/ui), like IDH; returns { applied }
+  if (url.pathname === '/api/settings/import' && req.method === 'POST') {
+    let obj: any;
+    try { obj = JSON.parse((await readBody(req)) || '{}'); } catch { return send(400, { error: 'JSON 格式错误' }); }
+    if (typeof obj !== 'object' || Array.isArray(obj)) return send(400, { error: '顶层必须是对象' });
+    const applied = mergeSettings(obj);
+    if (!applied.length) return send(400, { error: '没有可应用的板块(capture/ui)' });
+    saveSettings();
+    while (captures.length > settings.capture.retain) captures.shift();
+    applyCaptureEnabled().catch(() => {});
+    return send(200, { ok: true, applied, settings });
+  }
+  // POST /api/data/clear { what: 'captures'|'events'|'dumps' } → 危险操作，清空对应存储
+  if (url.pathname === '/api/data/clear' && req.method === 'POST') {
+    let body: any = {};
+    try { body = JSON.parse((await readBody(req)) || '{}'); } catch {}
+    const what = String(body.what || '');
+    if (what === 'captures') { captures.length = 0; recentJavaIn.clear(); }
+    else if (what === 'events') { events.length = 0; try { writeFileSync(EVENTS_FILE, ''); } catch {} }
+    else if (what === 'dumps') {
+      for (const d of dumps.values()) { try { if (existsSync(d.path)) unlinkSync(d.path); } catch {} }
+      dumps.clear();
+    } else return send(400, { error: 'what 必须是 captures|events|dumps' });
+    broadcast('data.cleared', { what });
+    return send(200, { ok: true, cleared: what, stats: configStats() });
+  }
   // MCP tool inventory as markdown (for docs/mcp-tools.md)
   if (url.pathname === '/api/mcp/doc') {
     const md = ['# ADH MCP Tools', '', `Generated from the live idhd registry (${MCP_TOOLS.length} tools). Endpoint: \`POST /mcp\` (JSON-RPC 2.0).`, '',
@@ -830,6 +934,7 @@ const httpServer = http.createServer(async (req, res) => {
       note: '把 mcpServers 这段粘进 Claude Desktop / Cursor 的 MCP 配置，重启后即可让 AI 调用 ADH 的全部逆向工具（分析内存/指令/hook/trace/事件搜索/抓包/脱壳/算法识别）',
       mcpServers: { adh: { type: 'http', url: mcpUrl } },
       endpoint: mcpUrl, tools: MCP_TOOLS.length,
+      cli: `claude mcp add --transport http adh "${mcpUrl}"`,
       quickAsks: [
         '用 crypto_identify 看看这个 App 用了哪些加密算法和密钥',
         '用 unpack_run 一键脱壳，然后 dumps_list 给我下载链接',
