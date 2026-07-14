@@ -3,7 +3,31 @@
 > 这是"我们现在在哪"的唯一真相。每个会话开始先读它，结束前更新它。
 > 详细规格见 `REQUIREMENTS.md`，路线与架构见 `DEVELOPMENT_PLAN.md`。
 
-## 当前阶段 —— ✅ 项目完成
+## 当前阶段 —— 🔧 v2.0+ 加固与重构（进行中）
+
+**v0.1–v1.0 全部实现并逐项验证（`tools/verify_all.sh` 35/35，真机 + host）——那一轮证明"每条能力路径可跑通"。**
+现进入 **v2.0+ 加固重构轮**：针对评审锐评的 14 点，把每条路径从"能演示"做到"能在对抗、并发、无样本、
+无 sandbox 耦合下不骗人"。权威路线见 `DEVELOPMENT_PLAN.md §6.9`（WS-A…WS-K + v2.0–v2.6 排期 + 门禁清单）。
+旧 v0.2–v1.0 路线归档于 `DEVELOPMENT_PLAN.md §7`。
+
+**三条总原则（门禁）**：① 不为过测而耦合（agent 内 `com.idh.sandbox` 常量 = 0，目标模块名不硬编码，
+全来自命令参数）；② 不胡乱兜底 / fail-loud（hook 装不上、缓冲溢出、解不动一律显式报错 + 计数上报，
+绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 idhd，hook/采集在 agent）。
+
+### v2.0+ 进度
+
+- [ ] **v2.0** WS-D 协议重写（length-framed `[u32 len][u8 type][payload]`，去 8192 上限）+ WS-C 环形缓冲/落盘/如实 dropped 上报 — **进行中**
+- [ ] v2.1 WS-A Java 后端(LSPlant) + WS-B 去 sandbox 耦合
+- [ ] v2.2 WS-A inline 后端(ShadowHook)
+- [ ] v2.3 WS-F 持久索引 + 深解析 + 反射
+- [ ] v2.4 WS-E 脱壳二代 + try/catch + cdex/041（需样本，否则 PENDING）
+- [ ] v2.5 WS-G Capstone + WS-H QBDI 通用化
+- [ ] v2.6 WS-I 确定性关联 + WS-J 反检测动态面
+- [ ] 贯穿 WS-K 架构拆分 + 多架构/多进程
+
+---
+
+## 历史阶段 —— ✅ v0.2 – v1.0 全部实现并逐项验证（归档）
 
 **v0.2 – v1.0 全部实现并逐项验证：`tools/verify_all.sh` = 26/26 PASS（真机 Pixel 6 Pro / host）。无 Blocked。循环已停（cron 已删）。**
 
@@ -265,6 +289,16 @@ arm64 预编译，agent 运行时 dlopen libQBDI.so，指令级 trace idh_trace_
 - ART 结构 resolver 需覆盖 SDK 36（设备版本）优先
 
 ## 会话日志（倒序，简短）
+
+- 2026-07-14 (v2.0+ 加固重构立项 · 折叠一份计划)：应用户"锐评 14 点 + 重构方案"，把 **WS-A…WS-K
+  工作流 + v2.0–v2.6 排期 + 三条总原则 + 不胡乱兜底门禁清单**折叠进 `DEVELOPMENT_PLAN.md §6.9`
+  （当前权威路线），旧 v0.1–v1.0 路线归档到 §7（标注已完成 35/35，不再续写）。本文件"当前阶段"从
+  "项目完成"改为"v2.0+ 加固重构进行中"。**核心转向**：从"每条路径能演示"→"能在对抗/并发/无样本/
+  无 sandbox 耦合下不骗人"。三门禁：① agent 零 sandbox 耦合（`grep com.idh.sandbox agent/`=0、
+  目标模块名不硬编码、全走命令参数）；② fail-loud（装不上/溢出/解不动显式报错+计数，禁止
+  `ok:true replaced:0`/虚高恢复率）；③ 红线不动（重分析 idhd、hook/采集 agent）。
+  先开 **v2.0**（WS-D length-framed 协议去 8192 上限 + WS-C 环形缓冲/落盘/如实 dropped 上报）——
+  风险最低、是后面所有采集能力的地基。
 
 - 2026-07-14 (sandbox App Material Design 重构 + 真实文件 I/O hook)：应用户要求"完全重构为 Material Design，
   加 HTTPS 请求发送、文件读写，作插件功能全测试 demo"。范围二选一经用户确认：**只改 sandbox-app，daemon Web UI 不动**；

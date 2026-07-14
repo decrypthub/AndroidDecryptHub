@@ -550,7 +550,73 @@ android-decrpthub/          # 仓库名；产品名 ADH (Android DecryptHub)
 
 ---
 
-## 7. 版本路线图
+## 6.9 v2.0+ 加固与重构总纲（**当前权威路线，最高优先**）
+
+> v0.1–v1.0（下面 §7）已全部实现并逐项验证（`verify_all` 35/35，真机 + host）。
+> 那一轮证明了"每条能力路径可跑通"；本轮（v2.0+）针对评审锐评的 14 点，把每条路径
+> **从"能演示"做到"能在对抗、并发、无样本、无 sandbox 耦合下不骗人"**。旧路线归档于 §7，不再是当前工作面。
+
+### 6.9.0 总原则（贯穿全案，评审门禁）
+
+1. **不为过测而耦合**：agent 里**不允许**出现任何 `com.idh.sandbox.*` 常量、**不允许**硬编码
+   `libjavacrypto.so` 之类目标模块名。所有 hook / trigger 目标一律来自 idhd 命令参数。
+   sandbox 降级为"被 verify 脚本从**进程外**（UI / `am broadcast` / `am instrument`）驱动的真实目标"，
+   **agent 对它零知识**。`grep com.idh.sandbox agent/` = 0 是 CI 硬门禁。
+2. **不胡乱兜底（fail-loud）**：符号找不到、hook 装不上、缓冲溢出、方法体带 `try` 解不了、
+   cdex/041 拆不动——一律**显式报错**并把原因/计数上报 UI，**绝不**返回 `ok:true replaced:0`
+   或虚高恢复率。删除所有乐观硬编码标志（如 `minimalModeAvailable:true`、
+   `dlopenSystemLibsBlocked:"true"` 常量）。
+3. **红线不动**：重分析（Capstone / 索引 DB / IR）留在 idhd；Java hook / inline hook / 采集
+   属"执行"，留在 agent。见 §0 架构红线。
+
+### 6.9.1 工作流（WS-A … WS-K）
+
+| WS | 名称 | 核心缺陷 → 改造 | 归属层 |
+|----|------|----------------|--------|
+| **A** | Hook 引擎第二条腿 | 只有 GOT hook，纯 Java / 静态内联 native / 自实现 TLS 全抓不到 → 抽象 `hook_backend_t{AUTO,GOT,INLINE,JAVA}` 统一接口；inline 后端接 ShadowHook/Dobby；Java 后端接 LSPlant（含框架级 `CipherSpi/MacSpi/MessageDigestSpi.engine*` 与目标类名无关的拦截）。**fail-loud 区分**：符号未解析 / 页不可写 / 重定位失败 / LSPlant backup 失败。 | Agent |
+| **B** | 彻底去 sandbox 耦合 | `net_hook_test/flow_watch/detect_watch/trace_run/crypto_hook_test` 全写死调 sandbox 类、hook 写死 libjavacrypto → 删"一次性 probe + 写死触发类"命令族；`crypto_probe` 枚举出的**每个**持有 EVP 指针的模块都装 hook；触发两条路径：被动（真实 app 自然命中）+ 主动（operator/MCP 下发 `{class,method,args}` 反射，**类名来自命令**）。sandbox 触发改由 verify 脚本 `am broadcast`/`am instrument` 进程外驱动。 | Agent + Daemon |
+| **C** | 采集管线：环形缓冲 | `g_caps[64]/g_jcaps[96]/g_trace[256]` 定长满即**静默丢** → MPSC 环形缓冲 + drain 线程持续推 idhd 落盘；有界阻塞背压；溢出**如实上报** `dropped` 计数 + 首末丢弃时间戳，UI 红字；`dropped>0` → `/api/captures` 与导出报告带 `complete:false`。 | Agent + Daemon |
+| **D** | 协议重写：length-framed | NDJSON + `strstr("\"key\":\"")` 提取 + 8192 命令单行上限 → 帧 `[u32 len][u8 type][payload]`；控制帧 payload 仍为 JSON；取消 8192 上限与超长丢弃；大 dump 走分片帧或 memfd/ashmem 共享内存。**fail-loud**：帧长非法 / 类型未知 → 关连接并上报。`proto/PROTOCOL.md` 同步重写。 | Agent + Daemon |
+| **E** | 脱壳：二代 + try/catch + cdex/041 + map_list | 只做回填型；`tries!=0` 方法**静默跳过**（恢复率虚高）；cdex/041 没做；rebuild 不建 map_list → 完整解析 `code_item`（`tries[]`/`encoded_catch_handler_list`），解不动的显式标 `unresolvable` 计入分母；cdex→标准 dex（共享区去共享 + 偏移重写）；DEX 041 container 逻辑拆分；rebuild 真正重建 `map_list`；gen-2 后端用 WS-A hook 在方法体解密瞬间抓完整 CodeItem。**fail-loud**：定位不到共享区 → 报 `format unsupported:<reason>`，不截断假装成功。**无真实 cdex/041 样本则标 PENDING，不伪造。** | Daemon（+ Agent gen-2 hook） |
+| **F** | 分析层：持久化索引 + 深解析 + IR | 每请求全量 reparse + 线性 filter；只解析到 method/class；xref 只连直接调用 → SQLite 持久倒排索引（string→使用点 / field→读写点 / method→callers）；深解析 proto/参数/debug_info；**反射解析**（`const-string + Class.forName/getMethod/invoke` 静态回填）；虚/接口调用经 class hierarchy 解析候选实现集；`analysis/ir.ts` 结构化指令 IR。**fail-loud**：index 与 dex sha/大小不一致 → 强制重建 + 告警。 | Daemon |
+| **G** | native 动态分析：Capstone + 内存镜像反汇编 | 只 shell `llvm-objdump`，无 section 的 raw/strip .so 反汇编不了 → idhd 引入 Capstone，对加载地址直接反汇编（无需 section/symbol）；结合 WS-F 做 native 函数边界识别（prologue 扫描）。 | Daemon |
+| **H** | QBDI 通用化：带参 + 真实调用点 | `idh_qbdi_trace` 只能 trace 无参、凭空 call 的 `idh_trace_target`（测试桩） → 两模式：就地插桩（WS-A hook 命中真实调用时对该地址范围下 `addInstrumentedRange` + PRE/POST，用真实寄存器/栈上下文跑）+ 重放（hook 抓入参后按 arg spec `qbdi_call` 重跑）；目标地址/符号来自命令。**fail-loud**：需参数却没给 spec → 拒绝。 | Agent |
+| **I** | 关联：确定性数据流 | crypto↔network 靠"同线程 + 33ms 窗"，并发会错配 → EVP/SSL hook 记录缓冲区指针 + 长度 + 内容哈希；`SSL_write` 的 buf 等于/包含某条 EVP 输出密文（按 content hash）时**确定性**关联；时间窗仅作兜底。 | Daemon（数据）+ Agent（采集字段） |
+| **J** | 反检测：动态面扩展（授权、默认 off） | 只 hook 自己 mock 的 `libidhdetect`，只中和 TRACEME → inline hook 目标自身 native so 内检测调用 + svc 热点观测；Java 后端 hook `PackageManager.getPackageInfo(签名)` / root 路径 `File.exists`；中和从单一 TRACEME 扩为可配置策略集，**默认全关，危险中和需 idhd 显式确认**。 | Agent |
+| **K** | 架构拆分 + 多架构/多进程 | 随各片落地：agent 拆 `hook/ capture/ dex/ trigger/ inspect/`，`agent_main.c` 只留 bootstrap + 分发；daemon 拆 `routes/ ws/ mcp/ db/ analysis/ dex/ native/`；CMake 产出 arm64 + armeabi-v7a（偏移/指针宽度参数化）；idhd 注册表支持一包多 agent（`:remote` 路由）。 | 全层 |
+
+### 6.9.2 v2.0+ 版本排期（每片有独立 pass/fail；无样本标 PENDING，不伪造）
+
+| 版本 | 内容 | 验收信号（pass/fail） |
+|------|------|----------------------|
+| **v2.0** | WS-D 协议重写 + WS-C 环形缓冲/落盘/如实上报 | dump 16MB region 字节级 sha256 一致；超长命令完整解析；高频驱动 1000/s×10s，`produced` + `dropped` 如实上报（旧实现静默丢 ~9900 却显示成功） |
+| **v2.1** | WS-A Java 后端(LSPlant) + WS-B 去耦合 | 纯 Java AES（不走 Conscrypt/BoringSSL）被捕获；`grep com.idh.sandbox agent/` = 0；换一个非 sandbox 授权样本跑通 crypto 捕获 |
+| **v2.2** | WS-A inline 后端(ShadowHook) | 目标自带静态链接 BoringSSL 的 native crypto 被 inline hook 捕获 |
+| **v2.3** | WS-F 持久索引 + 深解析 + 反射 | 21820 方法建索引后 string→callers < 阈值；一条 `Class.forName` 反射链被静态连出 |
+| **v2.4** | WS-E 脱壳二代 + try/catch + cdex/041 | 带 `try` 方法字节级重建一致；cdex→标准 dex 过 dexdump/verifier（**需样本，否则 PENDING**） |
+| **v2.5** | WS-G Capstone + WS-H QBDI 通用化 | strip 内存镜像 .so 反汇编出正确指令序列；带 2 指针参数的 native 函数 trace 读到入参字符串 |
+| **v2.6** | WS-I 确定性关联 + WS-J 反检测动态面 | 8 条并发订单流零错配关联；svc 直连 + Java 验签双检测都被观测 |
+| 贯穿 | WS-K 拆分随各片落地；`docs/*` 同步（一份计划） | — |
+
+**依赖**：LSPlant / ShadowHook / Capstone / QBDI 均非 git，走 `tools/fetch_*.sh` 拉取（沿用 QBDI 模式），`third_party/` gitignore。
+
+### 6.9.3 "不胡乱兜底"检查清单（评审门禁，每片过关前逐条核对）
+
+- [ ] hook 装不上 → 返回具体原因，**禁止** `ok:true replaced:0`
+- [ ] 缓冲溢出 → `dropped` 上报 + `complete:false`，**禁止**静默丢
+- [ ] 带 `try` 方法 → 解析或显式 `unresolvable`，**禁止**跳过
+- [ ] cdex/041 解不动 → 报 `unsupported+reason`，**禁止**截断假装成功
+- [ ] 符号/参数缺失 → 拒绝执行，**禁止**用 0/猜测硬跑
+- [ ] 索引陈旧 → 重建 + 告警，**禁止**返回旧结果
+- [ ] 删除所有乐观硬编码常量标志
+- [ ] `agent/` 内 `com.idh.sandbox` 常量 = 0，`libjavacrypto` 等目标模块名不硬编码
+
+---
+
+## 7. 版本路线图（v0.1–v1.0，**已完成并归档** — 当前路线见 §6.9）
+
+> **归档说明**：以下 v0.1–v1.0 全部实现并逐项验证（`verify_all` 35/35）。保留作历史与能力清单；
+> 当前工作面是 §6.9 的 v2.0+ 加固重构。新增能力请在 §6.9 排期内推进，勿在此续写。
 
 按版本迭代，不一口气全写。
 
