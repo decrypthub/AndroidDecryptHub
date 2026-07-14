@@ -29,7 +29,22 @@ else
       submodule update --init --depth 1 external/parallel_hashmap
   [ -f "$LSP/lsplant/src/main/jni/lsplant.cc" ] || { echo "!! lsplant.cc missing after clone"; exit 1; }
   [ -f "$LSP/lsplant/src/main/jni/external/dex_builder/dex_builder.cc" ] || { echo "!! dex_builder.cc missing"; exit 1; }
-  echo ">> LSPlant sources ready"
+  # Patch: some ROMs (ColorOS/Android 15+) strip the internal-linkage art::GetMethodShorty from
+  # libart.so dynsym, so LSPlant's symbol resolution fails and Init returns false. Make it fall
+  # back to computing the shorty via JNI reflection (idh_compute_shorty, in our shim) and not
+  # fail Init when the symbol is absent. Reproducible so re-fetch stays consistent.
+  AM="$LSP/lsplant/src/main/jni/art/runtime/art_method.hpp"
+  perl -0777 -pi -e 's/namespace lsplant::art \{/namespace lsplant::art {\nextern "C" const char *idh_compute_shorty(JNIEnv *env, jobject method);/' "$AM"
+  perl -0777 -pi -e 's/return GetMethodShorty\(env, env->FromReflectedMethod\(method\)\);/if (GetMethodShortySym) return GetMethodShorty(env, env->FromReflectedMethod(method));\n        return idh_compute_shorty(env, method);/' "$AM"
+  perl -0777 -pi -e 's/LOGE\("Failed to find GetMethodShorty"\);\s*\n\s*return false;/LOGW("art::GetMethodShorty absent - computing shorty via JNI reflection");/' "$AM"
+  grep -q "idh_compute_shorty" "$AM" || { echo "!! LSPlant GetMethodShorty patch did not apply"; exit 1; }
+  # Patch 2: this ROM also strips SetEntryPointsToInterpreter + art_quick_*_bridge/trampoline
+  # (deopt entrypoints). They're only used by the optional Deoptimize() API, never by Hook, so
+  # make ClassLinker::Init not fail when they're absent (basic hooking still works).
+  CL="$LSP/lsplant/src/main/jni/art/runtime/class_linker.hpp"
+  perl -0777 -pi -e 's/if \(!RETRIEVE_FUNC_SYMBOL\(art_quick_to_interpreter_bridge,\s*"art_quick_to_interpreter_bridge"\)\)\s*\[\[unlikely\]\]\s*\{\s*return false;\s*\}/RETRIEVE_FUNC_SYMBOL(art_quick_to_interpreter_bridge, "art_quick_to_interpreter_bridge");/s' "$CL"
+  perl -0777 -pi -e 's/if \(!RETRIEVE_FUNC_SYMBOL\(art_quick_generic_jni_trampoline,\s*"art_quick_generic_jni_trampoline"\)\)\s*\[\[unlikely\]\]\s*\{\s*return false;\s*\}/RETRIEVE_FUNC_SYMBOL(art_quick_generic_jni_trampoline, "art_quick_generic_jni_trampoline");/s' "$CL"
+  echo ">> LSPlant sources ready (patched GetMethodShorty + deopt-entrypoint fallbacks)"
 fi
 
 # ---- Dobby prebuilt STATIC lib (arm64) — the exact backend LSPlant's own tests use ------

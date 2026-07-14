@@ -308,6 +308,15 @@ arm64 预编译，agent 运行时 dlopen libQBDI.so，指令级 trace idh_trace_
   LSPlant 的无符号 shorty 解析进 v6.4；② 换能导出该符号的 ROM/设备（如 CLAUDE.md 记录的 Pixel 6 Pro）验证；
   ③ 用 JNI 反射（getParameterTypes/getReturnType）在 C++ 侧自算 shorty 替换 LSPlant 的 GetMethodShorty 依赖。
   `verify_v23` **暂不入 verify_all**（已知阻塞，避免把套件染红），待解阻塞后纳入。
+  **续（同日深挖，确认是 ROM 问题非集成缺陷）**：按"改成不依赖该符号"落地——`idh_compute_shorty`（JNI 反射
+  从 reflect Method 自算 shorty：返回类型+参数类型→V/Z/B/C/S/I/J/F/D/L）替换 `GetMethodShorty`，patch 进
+  `art_method.hpp`（fetch 脚本可复现）；**GetMethodShorty 已解**（log 实测"computing shorty via JNI reflection"）。
+  又把 `SetEntryPointsToInterpreter`+`art_quick_*` 反优化入口改为非致命（只 `Deoptimize()` 用、Hook 不用），
+  越过 ClassLinker::Init。**但继续撞墙**：`JitCodeCache::GarbageCollectCache` 等也被 strip。**量化定论**：
+  本机 `libart.so` dynsym 里 **LSPlant 需要的 44 个 mangled ART 符号有 30 个被 strip 掉**（ColorOS/A15 激进裁剪，
+  68% 缺失），JIT code cache / 真正的方法替换 trampoline 无符号无解。**结论：集成正确（编译/加载/shorty 回退均通），
+  但此 ROM 从根本上不兼容 LSPlant v6.4**——LSPlant 在 Pixel/AOSP（导出完整符号集）上开发验证。**下一步：换
+  CLAUDE.md 记录的 Pixel 6 Pro(SDK36) 验证**（stock 导出这些符号），或继续 30 符号的逐个无符号化（高成本、部分无解）。
 
 - 2026-07-14 (二轮审计 P1 · got_replace 交叉验证重定位槽)：审计的内存损坏隐患——`got_replace` 旧逻辑
   在模块非 exec 段扫任一 `*word==orig` 就改（大混淆 so 里巧合等值的数据字会被写成 wrapper → 崩）。修复：

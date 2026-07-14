@@ -8,6 +8,7 @@
 #include "dobby.h"
 
 #include <string>
+#include <cstring>
 #include <pthread.h>
 #include <android/log.h>
 
@@ -66,4 +67,55 @@ extern "C" int idh_javahook_unhook(JNIEnv *env, jobject target_method) {
 
 extern "C" int idh_javahook_is_hooked(JNIEnv *env, jobject method) {
     return lsplant::IsHooked(env, method) ? 1 : 0;
+}
+
+// Compute a Dalvik method shorty (return-type char + param-type chars) from a reflected
+// Method/Constructor via JNI. Used when the ROM's libart.so does not export
+// art::GetMethodShorty (ColorOS/Android 15+ strips that internal-linkage symbol) — LSPlant's
+// patched art_method.hpp calls this fallback. Shorty chars: V/Z/B/C/S/I/J/F/D for primitives,
+// L for any reference/array. Returns a pointer valid until the next call on the same thread.
+static char idh_shorty_char(JNIEnv *env, jclass cls) {
+    jclass cClass = env->FindClass("java/lang/Class");
+    jmethodID isPrim = env->GetMethodID(cClass, "isPrimitive", "()Z");
+    char r = 'L';
+    if (env->CallBooleanMethod(cls, isPrim)) {
+        jmethodID getName = env->GetMethodID(cClass, "getName", "()Ljava/lang/String;");
+        jstring nm = (jstring)env->CallObjectMethod(cls, getName);
+        const char *s = nm ? env->GetStringUTFChars(nm, nullptr) : nullptr;
+        if (s) {
+            if (!strcmp(s, "int")) r = 'I';        else if (!strcmp(s, "boolean")) r = 'Z';
+            else if (!strcmp(s, "byte")) r = 'B';  else if (!strcmp(s, "char")) r = 'C';
+            else if (!strcmp(s, "short")) r = 'S'; else if (!strcmp(s, "long")) r = 'J';
+            else if (!strcmp(s, "float")) r = 'F'; else if (!strcmp(s, "double")) r = 'D';
+            else if (!strcmp(s, "void")) r = 'V';
+            env->ReleaseStringUTFChars(nm, s);
+        }
+        if (nm) env->DeleteLocalRef(nm);
+    }
+    env->DeleteLocalRef(cClass);
+    return r;
+}
+extern "C" const char *idh_compute_shorty(JNIEnv *env, jobject method) {
+    static thread_local std::string shorty;
+    shorty.clear();
+    jclass cMethod = env->FindClass("java/lang/reflect/Method");
+    jclass cExec   = env->FindClass("java/lang/reflect/Executable");
+    char rc = 'V';                                   // constructors: void return
+    if (env->IsInstanceOf(method, cMethod)) {
+        jmethodID getRet = env->GetMethodID(cMethod, "getReturnType", "()Ljava/lang/Class;");
+        jobject rt = env->CallObjectMethod(method, getRet);
+        if (rt) { rc = idh_shorty_char(env, (jclass)rt); env->DeleteLocalRef(rt); }
+    }
+    shorty.push_back(rc);
+    jmethodID getParams = env->GetMethodID(cExec, "getParameterTypes", "()[Ljava/lang/Class;");
+    jobjectArray params = (jobjectArray)env->CallObjectMethod(method, getParams);
+    jsize n = params ? env->GetArrayLength(params) : 0;
+    for (jsize i = 0; i < n; i++) {
+        jobject p = env->GetObjectArrayElement(params, i);
+        if (p) { shorty.push_back(idh_shorty_char(env, (jclass)p)); env->DeleteLocalRef(p); }
+    }
+    if (params) env->DeleteLocalRef(params);
+    env->DeleteLocalRef(cMethod); env->DeleteLocalRef(cExec);
+    LLOGI("computed shorty via reflection: \"%s\"", shorty.c_str());
+    return shorty.c_str();
 }
