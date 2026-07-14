@@ -1,13 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.IdhSandbox" parent="Theme.Material3.Dark.NoActionBar">
-        <item name="colorPrimary">@color/idh_primary</item>
-        <item name="colorOnPrimary">@color/idh_on_primary</item>
-        <item name="colorSecondary">@color/idh_secondary</item>
-        <item name="colorSurface">@color/idh_surface</item>
-        <item name="colorOnSurface">@color/idh_fg</item>
-        <item name="android:colorBackground">@color/idh_bg</item>
-        <item name="android:statusBarColor">@color/idh_bg</item>
-        <item name="android:navigationBarColor">@color/idh_bg</item>
-    </style>
+    <!-- Stock Material 3 (DayNight follows the system; no hand-picked palette). -->
+    <style name="Theme.IdhSandbox" parent="Theme.Material3.DayNight.NoActionBar" />
 </resources>
