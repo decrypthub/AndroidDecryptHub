@@ -46,6 +46,7 @@ SCRIPTS=(
   "verify_v18_loadso.sh:device"
   "verify_v19_settings.sh:host"
   "verify_v20_file.sh:device"
+  "verify_v21_frame.sh:device"
 )
 
 pass=0; fail=0; skip=0; FAILED=""

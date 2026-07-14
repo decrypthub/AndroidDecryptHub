@@ -204,6 +204,19 @@ const nextId = () => `s_${(++seq).toString(36)}${Date.now().toString(36).slice(-
 const nextCmdId = () => `c${(++cmdSeq).toString(36)}`;
 
 // Issue a command to an agent and await its cmdResult (10s timeout).
+// ---- wire framing (v2.0, WS-D): [u32 len BE][u8 type][payload] -------------
+// Replaces NDJSON. Control/cmd/cmdResult ride as FRAME_JSON; binary/bulk types
+// reserved for later (capture batch, chunked dump). Fail-loud on oversized/unknown.
+const FRAME_JSON = 0x01;
+const FRAME_MAX = 64 * 1024 * 1024;   // inbound payload cap; beyond → close (corrupt stream)
+function frameJson(obj: unknown): Buffer {
+  const payload = Buffer.from(JSON.stringify(obj), 'utf8');
+  const hdr = Buffer.allocUnsafe(5);
+  hdr.writeUInt32BE(payload.length, 0);
+  hdr.writeUInt8(FRAME_JSON, 4);
+  return Buffer.concat([hdr, payload]);
+}
+
 function sendCmd(sessionId: string, op: string, args: Record<string, unknown> = {}, timeoutMs = 10_000): Promise<any> {
   return new Promise((resolve, reject) => {
     const sock = agentSockets.get(sessionId);
@@ -211,7 +224,7 @@ function sendCmd(sessionId: string, op: string, args: Record<string, unknown> = 
     const id = nextCmdId();
     const timer = setTimeout(() => { pending.delete(id); reject(new Error('command timeout')); }, timeoutMs);
     pending.set(id, { resolve, reject, timer });
-    sock.write(JSON.stringify({ t: 'cmd', id, op, ...args }) + '\n');
+    sock.write(frameJson({ t: 'cmd', id, op, ...args }));
   });
 }
 
@@ -523,18 +536,22 @@ function readBody(req: http.IncomingMessage): Promise<string> {
 
 const agentServer = net.createServer((sock) => {
   let session: AgentSession | null = null;
-  let buf = '';
+  let acc: Buffer = Buffer.alloc(0);
   sock.setNoDelay(true);
 
-  sock.on('data', (chunk) => {
-    buf += chunk.toString('utf8');
-    let nl: number;
-    while ((nl = buf.indexOf('\n')) >= 0) {
-      const line = buf.slice(0, nl).trim();
-      buf = buf.slice(nl + 1);
-      if (!line) continue;
+  sock.on('data', (chunk: Buffer) => {
+    acc = acc.length ? Buffer.concat([acc, chunk]) : chunk;
+    for (;;) {
+      if (acc.length < 5) break;
+      const len = acc.readUInt32BE(0);
+      const type = acc.readUInt8(4);
+      if (len > FRAME_MAX) { log(`agent frame too large ${len} type=${type} — closing`); sock.destroy(); return; }
+      if (acc.length < 5 + len) break;                 // wait for the rest of the frame
+      const payload = acc.subarray(5, 5 + len);
+      acc = acc.subarray(5 + len);
+      if (type !== FRAME_JSON) { log(`agent unknown frame type ${type} — skipping`); continue; }
       let msg: AgentMsg;
-      try { msg = JSON.parse(line); } catch { log('bad json from agent:', line.slice(0, 120)); continue; }
+      try { msg = JSON.parse(payload.toString('utf8')); } catch { log('bad json frame from agent, bytes=', len); continue; }
       handle(msg);
     }
   });
@@ -562,7 +579,7 @@ const agentServer = net.createServer((sock) => {
       sessions.set(id, session);
       agentSockets.set(id, sock);
       log(`agent HELLO ${session.package} pid=${session.pid} abi=${session.abi} entry=${session.entry} -> ${id}`);
-      sock.write(JSON.stringify({ t: 'ack', sessionId: id }) + '\n');
+      sock.write(frameJson({ t: 'ack', sessionId: id }));
       broadcast('agent.hello', session);
       startCaptureLoop(id);   // install persistent hooks + stream captures to the panel
     } else if (msg.t === 'maps' && session) {
@@ -573,7 +590,7 @@ const agentServer = net.createServer((sock) => {
       broadcast('agent.maps', { sessionId: session.sessionId, count: msg.count });
     } else if (msg.t === 'ping' && session) {
       session.lastSeen = Date.now();
-      sock.write(JSON.stringify({ t: 'pong' }) + '\n');
+      sock.write(frameJson({ t: 'pong' }));
     } else if (msg.t === 'cmdResult') {
       const p = pending.get(msg.id);
       log(`cmdResult op=${msg.op} id=${msg.id} matched=${!!p} bytes=${JSON.stringify(msg).length}`);
@@ -976,6 +993,22 @@ const httpServer = http.createServer(async (req, res) => {
     return s ? send(200, s) : send(404, { error: 'no such session' });
   }
   // On-demand full maps from the agent: GET /api/process/maps?session=ID
+  // WS-D protocol self-test: GET /api/debug/frame_echo?session=ID&kb=N — send a command
+  // frame with an N-KB `pad` field and a `tail` sentinel placed AFTER it; the agent echoes
+  // back how many bytes it received and the tail. Proves the inbound command path carries
+  // frames far past the old 8192 single-line cap without truncation.
+  if (url.pathname === '/api/debug/frame_echo') {
+    const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    if (!sid) return send(400, { error: 'no session' });
+    const kb = Math.max(1, Math.min(4096, Number(url.searchParams.get('kb') ?? 64)));
+    const padLen = kb * 1024;
+    const pad = 'A'.repeat(padLen);            // JSON-safe ASCII; sits before `tail`
+    const tail = 'IDH_FRAME_TAIL_v1';
+    try {
+      const r = await sendCmd(sid, 'frame_echo', { pad, tail, padLen }, 20_000);
+      return send(r.ok ? 200 : 502, { ...r, sentPadLen: padLen, tailOk: r.tail === tail, notTruncated: (r.recvBytes ?? 0) > padLen });
+    } catch (e) { return send(504, { error: (e as Error).message }); }
+  }
   if (url.pathname === '/api/process/maps') {
     const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
     if (!sid) return send(400, { error: 'no session' });

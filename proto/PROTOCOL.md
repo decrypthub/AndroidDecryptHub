@@ -1,18 +1,47 @@
-# IDH Agent ↔ idhd 协议 v0
+# ADH Agent ↔ idhd 协议 v2（length-framed）
 
-传输：TCP，换行分隔 JSON（NDJSON）。设备侧 agent 经 `adb reverse tcp:8761 tcp:8761` 连 host `127.0.0.1:8761`。
-后续大 payload（dex/so/region）改走独立二进制通道；v0 只走控制/事件 JSON。
+传输：TCP。设备侧 agent 经 `adb reverse tcp:8761 tcp:8761` 连 host `127.0.0.1:8761`。
+**v2.0 (WS-D) 起：所有消息一律 length-framed**，取代 v0 的 NDJSON。控制/事件/命令/结果均为
+`FRAME_JSON`（payload 为一个 JSON 对象）；二进制/批量帧类型保留给后续（WS-C 采集批、分片 dump）。
+
+## 帧格式
+
+```text
+┌────────────┬────────┬───────────────────────┐
+│ u32 len BE │ u8 type│  payload （len 字节）  │
+└────────────┴────────┴───────────────────────┘
+```
+
+- `len`：**payload 字节数**（不含 5 字节头）。大端序（网络序）。
+- `type`：帧类型。
+- payload：`type` 决定其含义。
+
+### 帧类型
+
+| 值 | 名称 | payload | 方向 |
+|----|------|---------|------|
+| `0x01` | `FRAME_JSON` | 一个 UTF-8 JSON 对象（下方所有 `t` 消息） | 双向 |
+| `0x02` | `FRAME_CAPTURE` | 采集批（WS-C，保留） | agent → idhd |
+
+### 上限与 fail-loud（不胡乱兜底）
+
+- agent 入站（命令）payload 上限 `FRAME_MAX_IN = 16 MiB`；超出 → **关连接并上报**，不尝试重同步一条已损坏的流。
+- idhd 入站（响应）payload 上限 `FRAME_MAX = 64 MiB`；超出 → **destroy socket 并 log**。
+- 未知 `type` → 跳过该帧并 log（不静默）。
+- **取消** v0 的 8192 字节单行命令上限与"超长行丢弃"——命令/响应按 `len` 精确读取，任意大小完整送达。
+- 大 payload（dump/read）当前走多帧分片（`read` 每帧 ≤ 1 MiB base64）；后续大 region dump 走
+  memfd/ashmem 共享内存（PROGRESS 里一直说的"后续 shm"落地位）。
 
 ## 端口
 
 - idhd HTTP + WebSocket：`8760`
 - idhd Agent TCP：`8761`
 
-## agent → idhd
+## agent → idhd（均为 `FRAME_JSON`）
 
 ```jsonc
-// 注册（连接后第一条）
-{"t":"hello","agentVer":"0.1.0","pid":1234,"uid":10234,
+// 注册（连接后第一帧）
+{"t":"hello","agentVer":"0.2.0","pid":1234,"uid":10234,
  "package":"com.idh.sandbox","process":"com.idh.sandbox",
  "abi":"arm64-v8a","android":"16","sdk":36,"entry":"jni_onload|start"}
 
@@ -23,17 +52,30 @@
 
 // 心跳
 {"t":"ping","ts":170...}
+
+// 命令结果（对每个 idhd 下发的 cmd）
+{"t":"cmdResult","id":"c_ab12","op":"read","ok":true, ...}
 ```
 
-## idhd → agent
+## idhd → agent（均为 `FRAME_JSON`）
 
 ```jsonc
 {"t":"ack","sessionId":"s_ab12"}   // 收到 hello 后回
-{"t":"pong"}
-// v0.2+ 追加命令：dump/read/hook...
+{"t":"pong"}                        // 回 ping
+{"t":"cmd","id":"c_ab12","op":"maps", ...}   // 命令；op 决定其余字段
 ```
+
+命令 `op` 一览见 `agent_main.c` 的 `command_loop` 分发表（maps/read/scan_magic/search/
+crypto_*/capture_*/net_hook_test/flow_watch/detect_watch/trace_run/trigger/art_dexfiles/
+file_probe/file_hook_test/load_so/qbdi_trace/object_*/compat_probe/frame_echo/ping…）。
+
+### `frame_echo`（WS-D 协议自测，无目标知识）
+
+idhd `GET /api/debug/frame_echo?session=&kb=N` → 下发一个带 `pad`(N KiB)+`tail` 哨兵的命令帧；
+agent 回 `{recvBytes, tail, padLen}`。`tail` 置于 `pad` 之后（越过旧 8192 位），只有当入站
+framing 完整送达整帧时 `tail` 才非空。验收：`tools/verify_v21_frame.sh`。
 
 ## 会话身份
 
 - idhd 为每个连接分配 `sessionId`；同 pid 重连视为同一逻辑目标，保留历史。
-- v0.1 内存态；v0.2 起持久化到 SQLite。
+- 事件持久化到 `idhd-data/events.jsonl`（会话录制/回放）。

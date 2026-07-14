@@ -16,7 +16,8 @@
 
 ### v2.0+ 进度
 
-- [ ] **v2.0** WS-D 协议重写（length-framed `[u32 len][u8 type][payload]`，去 8192 上限）+ WS-C 环形缓冲/落盘/如实 dropped 上报 — **进行中**
+- [ ] **v2.0** WS-D 协议重写（length-framed `[u32 len][u8 type][payload]`，去 8192 上限）**✅ 完成并验证**
+      + WS-C 环形缓冲/落盘/如实 dropped 上报 — **进行中**
 - [ ] v2.1 WS-A Java 后端(LSPlant) + WS-B 去 sandbox 耦合
 - [ ] v2.2 WS-A inline 后端(ShadowHook)
 - [ ] v2.3 WS-F 持久索引 + 深解析 + 反射
@@ -289,6 +290,20 @@ arm64 预编译，agent 运行时 dlopen libQBDI.so，指令级 trace idh_trace_
 - ART 结构 resolver 需覆盖 SDK 36（设备版本）优先
 
 ## 会话日志（倒序，简短）
+
+- 2026-07-14 (v2.0 WS-D · length-framed 协议)：把 agent↔idhd 线协议从 NDJSON 换成
+  **`[u32 len BE][u8 type][payload]`**（`FRAME_JSON=0x01`；`0x02` 采集批留给 WS-C）。
+  agent：`send_frame`/`send_line`（加 `g_send_lock` 为 WS-C drain 线程前置）+ `read_full` 按长读整帧，
+  `command_loop` **去掉 8192 单行缓冲 + memchr 分行**，改按 `len` malloc 读整帧；帧长 > `FRAME_MAX_IN`(16MiB)
+  或未知 type → **关连接/跳过并 log（fail-loud，不重同步损坏流）**。daemon：`frameJson()` + `sock.on('data')`
+  改 Buffer 帧解析（`FRAME_MAX`=64MiB 超限 destroy），`sendCmd`/ack/pong 全走帧。`proto/PROTOCOL.md` 重写为帧规范。
+  **验收 `verify_v21_frame.sh`（真机 PASS）**：A) 1MB `pad` 命令帧 + `tail` 哨兵置于第 8192 位之后，
+  `recvBytes=1048669 tailOk notTruncated`——证明命令方向越过旧 8192 上限完整送达；B) 16MB region dump
+  字节级 sha256 一致（1MB 分片 dump vs 256KB 分片重读 = `2ec725abde…` 完全相同）——证明响应方向多 MB
+  跨不同帧边界零截断/零损坏。回归：**旧 35 脚本中除 verify_v03 全 PASS**，协议改动零回归。
+  **注**：`verify_v03` 唯一失败项是它硬编码 `sdk_int===36`，而本轮设备 `13f54a46`=PGP110=**SDK 35**
+  （非 CLAUDE.md 记录的 Pixel 6 Pro/SDK36）；其 ART 结构 dump 本身**字节级 PASS**（sha 命中 + probe 找到），
+  纯属设备版本断言不匹配，与 WS-D 无关——**待用户确认换回 Pixel 6 Pro 或放宽该断言**。下一步 WS-C 环形缓冲。
 
 - 2026-07-14 (v2.0+ 加固重构立项 · 折叠一份计划)：应用户"锐评 14 点 + 重构方案"，把 **WS-A…WS-K
   工作流 + v2.0–v2.6 排期 + 三条总原则 + 不胡乱兜底门禁清单**折叠进 `DEVELOPMENT_PLAN.md §6.9`

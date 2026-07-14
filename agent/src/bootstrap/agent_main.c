@@ -147,7 +147,43 @@ static int send_all(int fd, const char *s, size_t len) {
     }
     return 0;
 }
-static int send_line(int fd, const char *s) { return send_all(fd, s, strlen(s)); }
+
+// ---- wire framing (v2.0, WS-D) --------------------------------------------
+// Every message is [u32 len BE][u8 type][payload of len bytes]. Replaces the old
+// NDJSON + 8192-byte single-line reader. Control/events/cmd/cmdResult all ride as
+// FRAME_JSON (payload = one JSON object). Binary/bulk types are reserved for later
+// (WS-C capture batch, chunked dump). One send lock so a future drain thread and the
+// command-response path never interleave bytes on the same fd.
+#define FRAME_JSON     0x01
+#define FRAME_CAPTURE  0x02          // reserved (WS-C)
+#define FRAME_MAX_IN   (16u << 20)   // inbound (command) payload cap — fail-loud beyond
+static pthread_mutex_t g_send_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static int send_frame(int fd, unsigned char type, const char *payload, size_t len) {
+    unsigned char hdr[5];
+    hdr[0] = (unsigned char)(len >> 24); hdr[1] = (unsigned char)(len >> 16);
+    hdr[2] = (unsigned char)(len >> 8);  hdr[3] = (unsigned char)(len & 0xff);
+    hdr[4] = type;
+    pthread_mutex_lock(&g_send_lock);
+    int rc = send_all(fd, (const char *)hdr, 5);
+    if (rc == 0 && len) rc = send_all(fd, payload, len);
+    pthread_mutex_unlock(&g_send_lock);
+    return rc;
+}
+// Unchanged call sites: callers still pass a NUL-terminated JSON string (some end in
+// '\n' — harmless inside a framed payload, the daemon's JSON.parse ignores it).
+static int send_line(int fd, const char *s) { return send_frame(fd, FRAME_JSON, s, strlen(s)); }
+
+// Read exactly n bytes into buf; 0 = ok, -1 = EOF/error.
+static int read_full(int fd, unsigned char *buf, size_t n) {
+    size_t off = 0;
+    while (off < n) {
+        ssize_t r = read(fd, buf + off, n - off);
+        if (r <= 0) return -1;
+        off += (size_t)r;
+    }
+    return 0;
+}
 
 // ---- maps -----------------------------------------------------------------
 
@@ -1962,20 +1998,41 @@ static void report(int fd) {
     LOGI("reported: pkg=%s pid=%d maps=%d entry=%s", cmd, getpid(), total, g_entry);
 }
 
-// Read newline-delimited commands from idhd and dispatch.
+// Protocol self-test (WS-D): echo how many bytes of the inbound command frame the
+// agent actually received, plus a `tail` sentinel that the daemon places AFTER a large
+// `pad` field. If inbound framing still had the old 8192 single-line cap, a >8192-byte
+// command would be truncated and `tail` (which sits past byte 8192) would come back
+// empty. Pure protocol diagnostic — carries no target knowledge, no sandbox coupling.
+static void cmd_frame_echo(int fd, const char *id, const char *line) {
+    char idj[64]; json_escape(id, idj, sizeof(idj));
+    char tail[64] = ""; json_get_str(line, "tail", tail, sizeof(tail));
+    char tailj[80]; json_escape(tail, tailj, sizeof(tailj));
+    long long padLen = json_get_num(line, "padLen");
+    size_t recv = strlen(line);   // whole inbound frame payload the reader delivered
+    char out[256];
+    snprintf(out, sizeof(out),
+        "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"frame_echo\",\"ok\":true,"
+        "\"recvBytes\":%zu,\"tail\":\"%s\",\"padLen\":%lld}\n",
+        idj, recv, tailj, padLen);
+    send_line(fd, out);
+    LOGI("frame_echo: recvBytes=%zu tail=%s padLen=%lld", recv, tail, padLen);
+}
+
+// Read framed commands from idhd and dispatch.
 static void command_loop(int fd) {
-    char buf[8192];
-    size_t len = 0;
     for (;;) {
-        ssize_t r = read(fd, buf + len, sizeof(buf) - len - 1);
-        if (r <= 0) break;
-        len += (size_t)r;
-        buf[len] = 0;
-        char *nl;
-        while ((nl = memchr(buf, '\n', len)) != NULL) {
-            *nl = 0;
-            char *line = buf;
-            size_t linelen = (size_t)(nl - buf);
+        unsigned char hdr[5];
+        if (read_full(fd, hdr, 5) != 0) break;
+        size_t len = ((size_t)hdr[0] << 24) | ((size_t)hdr[1] << 16) |
+                     ((size_t)hdr[2] << 8)  |  (size_t)hdr[3];
+        unsigned char ftype = hdr[4];
+        if (len > FRAME_MAX_IN) { LOGE("inbound frame too large: %zu type=%u — closing", len, ftype); break; }
+        char *line = (char *)malloc(len + 1);
+        if (!line) { LOGE("inbound frame alloc failed (%zu)", len); break; }
+        if (len && read_full(fd, (unsigned char *)line, len) != 0) { free(line); break; }
+        line[len] = 0;
+        if (ftype != FRAME_JSON) { LOGE("unknown inbound frame type %u — skipping", ftype); free(line); continue; }
+        {
             if (strstr(line, "\"t\":\"cmd\"")) {
                 char id[64] = "", op[32] = "";
                 json_get_str(line, "id", id, sizeof(id));
@@ -2060,6 +2117,8 @@ static void command_loop(int fd) {
                     char pat[520] = ""; json_get_str(line, "pat", pat, sizeof(pat));
                     long long lim = json_get_num(line, "limit");
                     cmd_search(fd, id, pat, (int)lim);
+                } else if (strcmp(op, "frame_echo") == 0) {
+                    cmd_frame_echo(fd, id, line);
                 } else if (strcmp(op, "ping") == 0) {
                     char idj[64]; json_escape(id, idj, sizeof(idj));
                     char pong[128];
@@ -2067,12 +2126,8 @@ static void command_loop(int fd) {
                     send_line(fd, pong);
                 }
             }
-            size_t consumed = linelen + 1;
-            memmove(buf, buf + consumed, len - consumed);
-            len -= consumed;
-            buf[len] = 0;
         }
-        if (len >= sizeof(buf) - 1) len = 0;  // overflow guard: drop partial giant line
+        free(line);
     }
 }
 
