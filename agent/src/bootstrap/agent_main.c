@@ -643,22 +643,21 @@ static void *resolve_sym(const char *mod_substr, const char *symbol) {
 
 // ---- crypto plaintext capture (thread-safe; wrapper runs on the app's crypto thread) ----
 // v2.0 WS-C: bounded ring buffer with HONEST accounting. The old fixed g_caps[64] silently
-// dropped everything past 64 records — forensic completeness collapsed under load. The ring
-// applies bounded-blocking backpressure (producer waits up to CAP_BP_SPINS*CAP_BP_US) to let
-// the drain catch up, and only then drops — incrementing g_cap_dropped + first/last drop ts.
-// Nothing vanishes silently: g_cap_seq counts every capture() attempt, so the invariant
+// dropped everything past 64 records — forensic completeness collapsed under load. The
+// producer path (capture(), on the target's own crypto/TLS thread) is NON-BLOCKING: it never
+// sleeps and never waits on the lock (pthread_mutex_trylock) — a full ring or a busy lock
+// just increments g_cap_dropped. Nothing vanishes silently: g_cap_seq counts every capture()
+// attempt (atomic), so the invariant
 //   g_cap_seq == (records ever drained) + (records still in ring) + g_cap_dropped
 // always holds, and idhd surfaces dropped>0 as complete:false.
 #define CAP_BYTES 2048
 #define CAP_RING  1024          // ~2 MiB; bounded agent memory (architecture red line)
-#define CAP_BP_SPINS 3          // backpressure: up to 3 waits...
-#define CAP_BP_US    150        // ...of 150us each (~450us) before dropping
 struct CapRec { char func[24]; int inl; int n; int tid; long long ts_ns; unsigned char data[CAP_BYTES]; };
 static struct CapRec g_ring[CAP_RING];
-static int g_ring_head = 0, g_ring_tail = 0, g_ring_count = 0;   // MPSC ring; head=write, tail=read
-static unsigned long long g_cap_seq = 0;       // total capture() attempts (honest accounting)
-static unsigned long long g_cap_dropped = 0;   // total dropped (ring full after backpressure)
-static long long g_cap_first_drop_ns = 0, g_cap_last_drop_ns = 0;
+static int g_ring_head = 0, g_ring_tail = 0, g_ring_count = 0;   // ring: head=write, tail=read (under g_cap_lock)
+static unsigned long long g_cap_seq = 0;       // total capture() attempts — ATOMIC (read/written off-lock)
+static unsigned long long g_cap_dropped = 0;   // total dropped (ring full or lock busy) — ATOMIC
+static long long g_cap_first_drop_ns = 0, g_cap_last_drop_ns = 0;   // best-effort diagnostic ts
 static pthread_mutex_t g_cap_lock = PTHREAD_MUTEX_INITIALIZER;
 static long long now_ns(void) {
     struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -666,31 +665,31 @@ static long long now_ns(void) {
 }
 static void capture(const char *func, const unsigned char *in, int inl) {
     if (inl <= 0 || !in) return;
-    int tid = (int)gettid();
+    // Runs on the target's own crypto/TLS thread — must NEVER block or sleep here (any
+    // injected latency is an ANR risk and a timing-based anti-debug surface). Count every
+    // attempt atomically, then TRY the lock without waiting: if a drain or another producer
+    // holds it, account a drop and return immediately instead of stalling the target.
+    __atomic_add_fetch(&g_cap_seq, 1, __ATOMIC_RELAXED);
     long long ts = now_ns();
-    pthread_mutex_lock(&g_cap_lock);
-    g_cap_seq++;                                // count the attempt exactly once
-    pthread_mutex_unlock(&g_cap_lock);
-    for (int spins = 0; spins <= CAP_BP_SPINS; spins++) {
-        pthread_mutex_lock(&g_cap_lock);
-        if (g_ring_count < CAP_RING) {
-            struct CapRec *r = &g_ring[g_ring_head];
-            strncpy(r->func, func, sizeof(r->func) - 1); r->func[sizeof(r->func)-1]=0;
-            r->inl = inl; r->n = inl < CAP_BYTES ? inl : CAP_BYTES;
-            r->tid = tid; r->ts_ns = ts;
-            memcpy(r->data, in, r->n);
-            g_ring_head = (g_ring_head + 1) % CAP_RING;
-            g_ring_count++;
-            pthread_mutex_unlock(&g_cap_lock);
-            return;
-        }
-        pthread_mutex_unlock(&g_cap_lock);
-        if (spins < CAP_BP_SPINS) usleep(CAP_BP_US);   // give the drain a chance, then drop
+    if (pthread_mutex_trylock(&g_cap_lock) != 0) {
+        __atomic_add_fetch(&g_cap_dropped, 1, __ATOMIC_RELAXED);
+        if (!g_cap_first_drop_ns) g_cap_first_drop_ns = ts;   // best-effort diagnostic ts
+        g_cap_last_drop_ns = ts;
+        return;
     }
-    pthread_mutex_lock(&g_cap_lock);
-    g_cap_dropped++;
-    if (!g_cap_first_drop_ns) g_cap_first_drop_ns = ts;
-    g_cap_last_drop_ns = now_ns();
+    if (g_ring_count < CAP_RING) {
+        struct CapRec *r = &g_ring[g_ring_head];
+        strncpy(r->func, func, sizeof(r->func) - 1); r->func[sizeof(r->func)-1]=0;
+        r->inl = inl; r->n = inl < CAP_BYTES ? inl : CAP_BYTES;
+        r->tid = (int)gettid(); r->ts_ns = ts;
+        memcpy(r->data, in, r->n);
+        g_ring_head = (g_ring_head + 1) % CAP_RING;
+        g_ring_count++;
+    } else {
+        __atomic_add_fetch(&g_cap_dropped, 1, __ATOMIC_RELAXED);
+        if (!g_cap_first_drop_ns) g_cap_first_drop_ns = ts;
+        g_cap_last_drop_ns = ts;
+    }
     pthread_mutex_unlock(&g_cap_lock);
 }
 
@@ -1211,7 +1210,12 @@ JNIEXPORT void JNICALL Java_com_idh_sandbox_IdhReport_nReport(
         jbyteArray jkey, jbyteArray jiv, jbyteArray jin, jbyteArray jout) {
     (void)cls;
     g_java_active = 1;
-    pthread_mutex_lock(&g_cap_lock);
+    // Runs on the target's crypto thread — non-blocking like capture(): try the lock, and on
+    // contention account a drop instead of stalling the target.
+    if (pthread_mutex_trylock(&g_cap_lock) != 0) {
+        __atomic_add_fetch(&g_jcap_dropped, 1, __ATOMIC_RELAXED);
+        return;
+    }
     if (g_njcaps < JCAP_MAX) {
         struct JCapRec *r = &g_jcaps[g_njcaps++];
         memset(r, 0, sizeof(*r));
@@ -1226,7 +1230,7 @@ JNIEXPORT void JNICALL Java_com_idh_sandbox_IdhReport_nReport(
         r->nin  = copy_jba(env, jin,  r->in,  JCAP_DATA);
         r->nout = copy_jba(env, jout, r->out, JCAP_DATA);
     } else {
-        g_jcap_dropped++;   // fail-loud: don't silently swallow — reported via capture_drain
+        __atomic_add_fetch(&g_jcap_dropped, 1, __ATOMIC_RELAXED);   // fail-loud, reported via drain
     }
     pthread_mutex_unlock(&g_cap_lock);
 }
@@ -1309,7 +1313,9 @@ static void cmd_capture_drain(int fd, const char *id) {
         g_ring_count--; ncaps++;
     }
     int backlog = g_ring_count;
-    unsigned long long seq = g_cap_seq, dropped = g_cap_dropped, jdropped = g_jcap_dropped;
+    unsigned long long seq = __atomic_load_n(&g_cap_seq, __ATOMIC_RELAXED);
+    unsigned long long dropped = __atomic_load_n(&g_cap_dropped, __ATOMIC_RELAXED);
+    unsigned long long jdropped = __atomic_load_n(&g_jcap_dropped, __ATOMIC_RELAXED);
     long long fdrop = g_cap_first_drop_ns, ldrop = g_cap_last_drop_ns;
     // rich Java-layer records: algorithm + op + key + iv + input + output
     len += snprintf(out + len, cap > len ? cap - len : 0, "],\"jcaptures\":[");
@@ -1448,12 +1454,27 @@ static fn4_t g_trace_orig = NULL;
 static char g_trace_mod[80] = "";
 // If addr points to a readable ASCII string, copy a short printable preview (for
 // path/string args). Self-contained (untag + /proc/self/mem read).
+// Cached read-only /proc/self/mem fd — opened once, never closed. trace_preview() runs in a
+// hook wrapper's hot path; opening+closing a fd on every call is fd churn + syscall overhead.
+static int g_mem_fd = -1;
+static int mem_fd(void) {
+    int fd = __atomic_load_n(&g_mem_fd, __ATOMIC_ACQUIRE);
+    if (fd >= 0) return fd;
+    int nfd = open("/proc/self/mem", O_RDONLY);
+    if (nfd < 0) return -1;
+    int expected = -1;
+    if (!__atomic_compare_exchange_n(&g_mem_fd, &expected, nfd, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+        close(nfd);                 // lost the race; use the winner's fd
+        return expected;
+    }
+    return nfd;
+}
 static void trace_preview(long addr, char *out, int n) {
     out[0] = 0;
     unsigned long long a = (unsigned long long)addr & 0x00FFFFFFFFFFFFFFULL;
     if (a < 0x1000) return;
-    int fd = open("/proc/self/mem", O_RDONLY); if (fd < 0) return;
-    unsigned char buf[64]; ssize_t r = pread(fd, buf, sizeof(buf), (off_t)a); close(fd);
+    int fd = mem_fd(); if (fd < 0) return;
+    unsigned char buf[64]; ssize_t r = pread(fd, buf, sizeof(buf), (off_t)a);   // cached fd, no close
     if (r <= 0) return;
     int o = 0; for (int i = 0; i < r && o < n - 1; i++) { unsigned char c = buf[i]; if (c == 0) break; if (c < 0x20 || c >= 0x7f) break; out[o++] = c; }
     out[o] = 0;

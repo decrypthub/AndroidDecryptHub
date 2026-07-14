@@ -291,6 +291,19 @@ arm64 预编译，agent 运行时 dlopen libQBDI.so，指令级 trace idh_trace_
 
 ## 会话日志（倒序，简短）
 
+- 2026-07-14 (二轮审计 P0/P1 · 采集热路径不阻塞目标线程)：把二轮审计（四维 + P0/P1/P2）折进
+  `DEVELOPMENT_PLAN §6.9.4`（三大欠账：国密/非对称/KDF、隐私分析 0→1、前端去 sandbox 化）。
+  本轮落地两处 agent 热路径安全修复（自包含、真机验证）：
+  ① **`capture()` 改非阻塞**——**移除目标加密/TLS 线程里的 `usleep` 背压**（旧：ring 满等 3×150µs 再丢，
+  给目标注入可测延迟 = 时序反调试面 + ANR），改为 `pthread_mutex_trylock`：锁忙/环满即原子计数丢弃、
+  **绝不阻塞/睡眠目标线程**；`g_cap_seq`/`g_cap_dropped` 全部 `__atomic_*`；`nReport`（Java 富采集，同在目标线程）
+  同样改 trylock。② **`trace_preview` 缓存 `/proc/self/mem` fd**（旧：wrapper 热路径每次 open/close，fd 压力），
+  一次性 CAS 打开、不再关闭。硬信号：`verify_v22` 不变式 `emitted+backlog+dropped==seq` 仍恒成立，且
+  **`seq=41289`（比旧 20017 更高）——正因目标线程不再被 usleep 拖住、burst 跑得更快**，dropped=21063 如实上报；
+  `verify_v10_trace` 缓存 fd 后仍解析出 `access("/system/xbin/su")`。回归：v04_crypto/v07/v07_flow/v11/v20 全 PASS
+  （v20 批量里偶发 flake，单跑 PASS：open 路径 + write/read marker + 校验OK）。
+  **未做（大件，下一步）**：got_replace 交叉验证重定位槽、SIGSEGV 隔离；国密/Signature/KDF 与隐私面板需 LSPlant（WS-A，v2.1）；
+  前端"一键脱壳"去 sandbox 硬编码（P0，触及 Web UI）。
 - 2026-07-14 (v2.0 WS-C · 采集环形缓冲 + 如实 dropped)：把 native 采集从定长 `g_caps[64]`
   （满即**静默丢**）换成 **`CAP_RING=1024` 环形缓冲 + 有界阻塞背压**（producer 最多等
   `3×150µs` 再丢）+ **诚实计数**：`g_cap_seq`(每次 capture 尝试)、`g_cap_dropped`+首/末丢弃时间戳，
