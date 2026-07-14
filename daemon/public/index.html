@@ -171,9 +171,10 @@
       <h2>一键脱壳 — 装上插件即可，无需改 AOSP 刷机</h2>
       <div class="row2">
         <button class="act primary" style="font-size:14px;padding:8px 16px" onclick="unpackRun()">一键脱壳（快照→触发→再快照→恢复重建）</button>
+        <input id="unpack-pkg" placeholder="目标包名前缀（留空=自动用连上的目标包名）" size="34" />
         <span id="dex-stat" class="muted"></span>
       </div>
-      <div class="muted" style="margin:-4px 0 10px">点一下即可：自动 dump DEX → 触发代码路径 → 捕获被抽取的方法体 → 重建标准 DEX，下面直接下载。</div>
+      <div class="muted" style="margin:-4px 0 10px">点一下即可：自动 dump DEX → 按目标包名枚举加载全部类（触发回填型抽取壳恢复）→ 捕获被抽取的方法体 → 重建标准 DEX，下面直接下载。包名默认取连上来的目标进程包名。</div>
       <pre id="out-session" class="muted"></pre>
       <table><thead><tr><th>类型</th><th>大小</th><th>sha256</th><th>来源</th><th>标签</th><th>下载</th><th>分析</th></tr></thead><tbody id="dumps-rows"></tbody></table>
       <pre id="out-cov" class="muted" style="margin-top:12px">点某个 dex 的「覆盖率」查看方法恢复率报告（诚实统计：具体 Java 方法中有多少已带方法体）。</pre>
@@ -203,12 +204,13 @@
       <div class="row2">
         <button class="act" onclick="run('GET','/api/process/maps','进程 maps')">进程 maps</button>
         <button class="act" onclick="run('GET','/api/art/dexfiles','ART 结构级 DexFile')">ART DexFile</button>
-        <button class="act" onclick="run('GET','/api/net/hook_test','TLS 明文抓取')">TLS 明文</button>
-        <button class="act" onclick="run('GET','/api/flow/watch','网络↔加密关联')">关联取证</button>
-        <button class="act" onclick="run('GET','/api/detect/watch','反分析雷达')">反分析雷达</button>
+        <button class="act" onclick="run('GET','/api/net/hook_test','TLS 明文抓取（沙盒自测）')">TLS 明文(沙盒)</button>
+        <button class="act" onclick="run('GET','/api/flow/watch','网络↔加密关联（沙盒自测）')">关联取证(沙盒)</button>
+        <button class="act" onclick="run('GET','/api/detect/watch','反分析雷达（沙盒自测）')">反分析雷达(沙盒)</button>
         <button class="act" onclick="run('GET','/api/compat/probe','兼容性自检')">兼容自检</button>
-        <button class="act" onclick="run('GET','/api/crypto/hook_test','一次性明文抓取')">一次性抓明文</button>
+        <button class="act" onclick="run('GET','/api/crypto/hook_test','一次性明文抓取（沙盒自测）')">一次性抓明文(沙盒)</button>
       </div>
+      <div class="muted" style="margin:6px 0">标「沙盒」的按钮是<b>沙盒自测</b>——它们经 agent 反射触发 sandbox 里的 <code>Network/CorrelatedFlow/Detection/JavaCrypto</code> 测试类，对真实目标不会触发任何东西。真实目标上，TLS/加密明文由「加解密·实时」里的常驻 hook 被动采集。</div>
       <pre id="out-mem" class="muted">选择一个操作（需目标在线）。</pre>
     </div>
   </div>
@@ -417,7 +419,7 @@ async function coverage(sha){ const el=document.getElementById('out-cov'); el.te
   }catch(e){el.textContent='错误: '+e;} }
 async function unpackRun(){ const el=document.getElementById('out-session'), st=document.getElementById('dex-stat');
   st.textContent='脱壳会话运行中（快照→触发→再快照→恢复）…'; el.textContent='';
-  try{ const r=await (await fetch('/api/unpack/run',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session:val('sess')||undefined,triggerAllPrefix:'com.idh.sandbox.',triggerClasses:['com.idh.sandbox.TriggerProbe'],triggerMethod:'safeCompute',level:3})})).json();
+  try{ const r=await (await fetch('/api/unpack/run',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session:val('sess')||undefined,triggerAllPrefix:val('unpack-pkg')||undefined,level:3})})).json();
     if(r.error){el.textContent='错误: '+r.error;st.textContent='';return;}
     st.textContent=`会话完成：T0 ${r.t0Count} dex / 触发 ${r.triggered.length} 类`;
     let s=`阶段: ${r.phases.join(' → ')}\nT0 快照 ${r.t0Count} 个 DexFile · T1 快照 ${r.t1Count}\n触发 ${r.triggered.length} 类（`+

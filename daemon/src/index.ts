@@ -479,7 +479,10 @@ async function runUnpackSession(sid: string, body: any) {
   };
   const t0 = await snapshot('unpack-t0');
   const targeted = new Set<string>();
-  const prefix = body.triggerAllPrefix ? String(body.triggerAllPrefix) : '';   // e.g. "com.target."
+  // Default the aggressive-enumeration prefix to the CONNECTED TARGET'S OWN package (from the
+  // agent hello) — so "one-click unpack" works on whatever is attached, not a hardcoded
+  // sandbox class. Caller may override (custom sub-package) or pass '' to disable enumeration.
+  const prefix = body.triggerAllPrefix !== undefined ? String(body.triggerAllPrefix) : (sessions.get(sid)?.package ?? '');
   for (const s of t0) {
     try {
       const buf = await readFile(dumps.get(s.sha)!.path); const pd = parseDex(buf);

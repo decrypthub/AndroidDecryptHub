@@ -291,6 +291,17 @@ arm64 预编译，agent 运行时 dlopen libQBDI.so，指令级 trace idh_trace_
 
 ## 会话日志（倒序，简短）
 
+- 2026-07-14 (二轮审计 P0 · 前端主操作去 sandbox 硬编码)：审计最坑新手的一处——"一键脱壳"前端写死
+  `triggerAllPrefix:'com.idh.sandbox.'` + `triggerClasses:['com.idh.sandbox.TriggerProbe']`，对真实 App 点它
+  **静默空转还显示"会话完成"**。修复：① 后端 `runUnpackSession` 的 `triggerAllPrefix` **缺省改为连上来的目标进程
+  包名**（`sessions.get(sid).package`，agent hello 已知）——沙盒/真实目标都自动生效；② 前端 `unpackRun` 去掉写死的
+  sandbox 前缀/类/方法（改为 `triggerAllPrefix:val('unpack-pkg')||undefined`，级别 3 无 method = 只加载类、对真实目标安全），
+  加"目标包名前缀"输入框（留空=自动）；③ TLS 明文/关联取证/反分析雷达/一次性抓明文四个按钮**明确标注"(沙盒)"**
+  并加说明（它们经 agent 反射触发 sandbox 测试类，真实目标由「加解密·实时」常驻 hook 被动采集）。硬信号：
+  served HTML 里 **`com.idh.sandbox` 计数归 0**；不传前缀直接调 `/api/unpack/run` 自动用 `com.idh.sandbox`
+  枚举触发 28 类、4 dex；回归 verify_v10_webui/v15_session/v17_deepunpack 全 PASS。
+  **未做（下一步大件）**：agent 侧 `net_hook_test/flow_watch/detect_watch/crypto_hook_test` 仍写死 sandbox 类
+  （属 WS-B agent 去耦合）；国密/Signature/KDF 与隐私面板需 LSPlant（WS-A，v2.1）。
 - 2026-07-14 (二轮审计 P0/P1 · 采集热路径不阻塞目标线程)：把二轮审计（四维 + P0/P1/P2）折进
   `DEVELOPMENT_PLAN §6.9.4`（三大欠账：国密/非对称/KDF、隐私分析 0→1、前端去 sandbox 化）。
   本轮落地两处 agent 热路径安全修复（自包含、真机验证）：
