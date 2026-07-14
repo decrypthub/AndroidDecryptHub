@@ -288,7 +288,7 @@ try {
 }
 // Persist. Throws on failure — callers MUST surface it so the UI never claims "已保存" on a failed write.
 function saveSettings() { writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2)); }
-function configStats() { return { captures: captures.length, dumps: dumps.size, events: events.length, on: captureTimers.size > 0, agents: sessions.size }; }
+function configStats() { return { captures: captures.length, dumps: dumps.size, events: events.length, on: captureTimers.size > 0, agents: sessions.size, capture: captureHealth() }; }
 // Which crypto family a capture belongs to (mirrors cryptoIdentify's buckets) — used by the
 // idhd-side family filter (panel-level; the agent still hooks everything).
 function familyOf(algo: string): 'tls' | 'asymmetric' | 'hmac' | 'digest' | 'symmetric' {
@@ -328,6 +328,16 @@ let capSeq = 0;
 const recentJavaIn = new Map<string, number>();   // input-hex -> ts, to dedup native echoes
 const captureTimers = new Map<string, ReturnType<typeof setInterval>>();
 const capturePaused = new Set<string>();   // sessions with continuous capture suspended
+// WS-C: per-session honest capture accounting from the agent ring's capture_drain stats.
+interface CapStat { seq: number; emitted: number; dropped: number; jdropped: number; backlog: number; firstDropNs: number; lastDropNs: number; complete: boolean; ring: number; ts: number; }
+const capStats = new Map<string, CapStat>();
+// Aggregate drop accounting across sessions — complete:false the moment anything dropped.
+// The invariant emitted + backlog + dropped === seq holds per session (nothing silent).
+function captureHealth() {
+  let seq = 0, emitted = 0, dropped = 0, jdropped = 0, backlog = 0; let complete = true;
+  for (const s of capStats.values()) { seq += s.seq; emitted += s.emitted; dropped += s.dropped; jdropped += s.jdropped; backlog += s.backlog; if (!s.complete) complete = false; }
+  return { seq, emitted, dropped, jdropped, backlog, complete, accountedFor: emitted + backlog + dropped, sessions: capStats.size };
+}
 
 // The one-shot probe endpoints install-and-restore their OWN hooks on the same GOT slot
 // the continuous capture uses. Suspend continuous capture around them (pause the drain +
@@ -396,38 +406,55 @@ function startCaptureLoop(sid: string) {
     if (settings.capture.autoDumpDex) autoDumpDex(sid).catch(() => {});
     if (captureTimers.has(sid)) return;
     let busy = false;
+    const processDrain = (r: any, now: number) => {
+      for (const c of (r.jcaptures ?? [])) {
+        if (c.in) recentJavaIn.set(c.in, now);
+        const cat = classify('EVP_' + (c.op === 'digest' ? 'Digest' : c.op === 'hmac' ? 'HMAC' : 'Cipher'));
+        const entry: Capture = {
+          id: ++capSeq, sessionId: sid, source: 'java', func: c.op, algo: c.algo, op: c.op,
+          inl: c.inl, tid: c.tid, tsNs: c.tsNs, ts: now,
+          hex: c.in, preview: hexToPreview(c.in),
+          keyHex: c.key || '', ivHex: c.iv || '', outHex: c.out || '',
+        };
+        if (pushCapture(entry))
+          broadcast('capture.new', { id: entry.id, sessionId: sid, source: 'java', algo: entry.algo, op: entry.op, preview: entry.preview, inl: entry.inl, ts: entry.ts });
+      }
+      for (const [k, t] of recentJavaIn) if (now - t > 2000) recentJavaIn.delete(k);
+      for (const c of (r.captures ?? [])) {
+        if (c.hex && recentJavaIn.has(c.hex)) continue;   // already captured richly at the Java layer
+        const { algo, op } = classify(c.func);
+        const entry: Capture = {
+          id: ++capSeq, sessionId: sid, source: 'native', func: c.func, algo, op,
+          inl: c.inl, tid: c.tid, tsNs: c.tsNs, ts: now,
+          hex: c.hex, preview: hexToPreview(c.hex),
+        };
+        if (pushCapture(entry))
+          broadcast('capture.new', { id: entry.id, sessionId: sid, source: 'native', algo, op, preview: entry.preview, inl: entry.inl, ts: entry.ts });
+      }
+    };
     const timer = setInterval(async () => {
       if (busy || capturePaused.has(sid) || !sessions.get(sid)?.online) return;
       busy = true;
       try {
-        const r = await sendCmd(sid, 'capture_drain', {}, 8_000);
-        const now = Date.now();
-        // Java-layer rich records first (algorithm + key + iv + input + output). Remember
-        // their input so we can drop the redundant native echo of the same operation.
-        for (const c of (r.jcaptures ?? [])) {
-          if (c.in) recentJavaIn.set(c.in, now);
-          const cat = classify('EVP_' + (c.op === 'digest' ? 'Digest' : c.op === 'hmac' ? 'HMAC' : 'Cipher'));
-          const entry: Capture = {
-            id: ++capSeq, sessionId: sid, source: 'java', func: c.op, algo: c.algo, op: c.op,
-            inl: c.inl, tid: c.tid, tsNs: c.tsNs, ts: now,
-            hex: c.in, preview: hexToPreview(c.in),
-            keyHex: c.key || '', ivHex: c.iv || '', outHex: c.out || '',
-          };
-          if (pushCapture(entry))
-            broadcast('capture.new', { id: entry.id, sessionId: sid, source: 'java', algo: entry.algo, op: entry.op, preview: entry.preview, inl: entry.inl, ts: entry.ts });
-        }
-        // prune the dedup memory (>2s old)
-        for (const [k, t] of recentJavaIn) if (now - t > 2000) recentJavaIn.delete(k);
-        for (const c of (r.captures ?? [])) {
-          if (c.hex && recentJavaIn.has(c.hex)) continue;   // already captured richly at the Java layer
-          const { algo, op } = classify(c.func);
-          const entry: Capture = {
-            id: ++capSeq, sessionId: sid, source: 'native', func: c.func, algo, op,
-            inl: c.inl, tid: c.tid, tsNs: c.tsNs, ts: now,
-            hex: c.hex, preview: hexToPreview(c.hex),
-          };
-          if (pushCapture(entry))
-            broadcast('capture.new', { id: entry.id, sessionId: sid, source: 'native', algo, op, preview: entry.preview, inl: entry.inl, ts: entry.ts });
+        // Drain repeatedly while the agent ring has a backlog, so a burst is pulled out
+        // fast (WS-C: keeps drops near zero when the pipeline can keep up). Bounded so one
+        // tick can't monopolise the session.
+        let r: any, drains = 0, emittedTick = 0;
+        do {
+          r = await sendCmd(sid, 'capture_drain', {}, 8_000);
+          emittedTick += (r?.count ?? 0);
+          processDrain(r, Date.now());
+          drains++;
+        } while (r && r.backlog > 0 && drains < 60);
+        if (r) {
+          const prev = capStats.get(sid);
+          capStats.set(sid, { seq: r.seq ?? 0, emitted: (prev?.emitted ?? 0) + emittedTick,
+            dropped: r.dropped ?? 0, jdropped: r.jdropped ?? 0,
+            backlog: r.backlog ?? 0, firstDropNs: r.firstDropNs ?? 0, lastDropNs: r.lastDropNs ?? 0,
+            complete: r.complete !== false, ring: r.ring ?? 0, ts: Date.now() });
+          // fail-loud: announce the first time this session starts dropping
+          if ((r.dropped ?? 0) > 0 && (!prev || prev.dropped === 0))
+            log(`[capture] session ${sid} DROPPING — ring full: dropped=${r.dropped} seq=${r.seq} (complete:false)`);
         }
       } catch {} finally { busy = false; }
     }, 1500);
@@ -870,9 +897,14 @@ const httpServer = http.createServer(async (req, res) => {
     const since = Number(url.searchParams.get('since') ?? 0);
     const limit = Math.min(Number(url.searchParams.get('limit') ?? 200), 1000);
     const list = captures.filter(c => c.id > since);
-    // list view omits full hex; detail view (/api/captures/:id) carries it
+    // list view omits full hex; detail view (/api/captures/:id) carries it.
+    // WS-C: `health` carries honest ring accounting — complete:false + dropped>0 when the
+    // agent ring overflowed (no silent loss; the panel should show this in red).
+    const health = captureHealth();
     return send(200, {
       total: captures.length, on: captureTimers.size > 0,
+      complete: health.complete, dropped: health.dropped, jdropped: health.jdropped,
+      seq: health.seq, backlog: health.backlog, health,
       captures: list.slice(-limit).map(c => ({ id: c.id, source: c.source, algo: c.algo, op: c.op, func: c.func, inl: c.inl, tid: c.tid, ts: c.ts, preview: c.preview })),
     });
   }

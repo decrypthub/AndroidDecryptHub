@@ -642,11 +642,23 @@ static void *resolve_sym(const char *mod_substr, const char *symbol) {
 }
 
 // ---- crypto plaintext capture (thread-safe; wrapper runs on the app's crypto thread) ----
-#define CAP_MAX 64
+// v2.0 WS-C: bounded ring buffer with HONEST accounting. The old fixed g_caps[64] silently
+// dropped everything past 64 records — forensic completeness collapsed under load. The ring
+// applies bounded-blocking backpressure (producer waits up to CAP_BP_SPINS*CAP_BP_US) to let
+// the drain catch up, and only then drops — incrementing g_cap_dropped + first/last drop ts.
+// Nothing vanishes silently: g_cap_seq counts every capture() attempt, so the invariant
+//   g_cap_seq == (records ever drained) + (records still in ring) + g_cap_dropped
+// always holds, and idhd surfaces dropped>0 as complete:false.
 #define CAP_BYTES 2048
+#define CAP_RING  1024          // ~2 MiB; bounded agent memory (architecture red line)
+#define CAP_BP_SPINS 3          // backpressure: up to 3 waits...
+#define CAP_BP_US    150        // ...of 150us each (~450us) before dropping
 struct CapRec { char func[24]; int inl; int n; int tid; long long ts_ns; unsigned char data[CAP_BYTES]; };
-static struct CapRec g_caps[CAP_MAX];
-static int g_ncaps = 0;
+static struct CapRec g_ring[CAP_RING];
+static int g_ring_head = 0, g_ring_tail = 0, g_ring_count = 0;   // MPSC ring; head=write, tail=read
+static unsigned long long g_cap_seq = 0;       // total capture() attempts (honest accounting)
+static unsigned long long g_cap_dropped = 0;   // total dropped (ring full after backpressure)
+static long long g_cap_first_drop_ns = 0, g_cap_last_drop_ns = 0;
 static pthread_mutex_t g_cap_lock = PTHREAD_MUTEX_INITIALIZER;
 static long long now_ns(void) {
     struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -657,14 +669,60 @@ static void capture(const char *func, const unsigned char *in, int inl) {
     int tid = (int)gettid();
     long long ts = now_ns();
     pthread_mutex_lock(&g_cap_lock);
-    if (g_ncaps < CAP_MAX) {
-        struct CapRec *r = &g_caps[g_ncaps++];
-        strncpy(r->func, func, sizeof(r->func) - 1); r->func[sizeof(r->func)-1]=0;
-        r->inl = inl; r->n = inl < CAP_BYTES ? inl : CAP_BYTES;
-        r->tid = tid; r->ts_ns = ts;
-        memcpy(r->data, in, r->n);
+    g_cap_seq++;                                // count the attempt exactly once
+    pthread_mutex_unlock(&g_cap_lock);
+    for (int spins = 0; spins <= CAP_BP_SPINS; spins++) {
+        pthread_mutex_lock(&g_cap_lock);
+        if (g_ring_count < CAP_RING) {
+            struct CapRec *r = &g_ring[g_ring_head];
+            strncpy(r->func, func, sizeof(r->func) - 1); r->func[sizeof(r->func)-1]=0;
+            r->inl = inl; r->n = inl < CAP_BYTES ? inl : CAP_BYTES;
+            r->tid = tid; r->ts_ns = ts;
+            memcpy(r->data, in, r->n);
+            g_ring_head = (g_ring_head + 1) % CAP_RING;
+            g_ring_count++;
+            pthread_mutex_unlock(&g_cap_lock);
+            return;
+        }
+        pthread_mutex_unlock(&g_cap_lock);
+        if (spins < CAP_BP_SPINS) usleep(CAP_BP_US);   // give the drain a chance, then drop
+    }
+    pthread_mutex_lock(&g_cap_lock);
+    g_cap_dropped++;
+    if (!g_cap_first_drop_ns) g_cap_first_drop_ns = ts;
+    g_cap_last_drop_ns = now_ns();
+    pthread_mutex_unlock(&g_cap_lock);
+}
+
+// Empty the ring (used by the one-shot probes in place of the old `g_ncaps = 0`). Does not
+// touch cumulative seq/dropped — those are session lifetime stats.
+static void cap_reset(void) {
+    pthread_mutex_lock(&g_cap_lock);
+    g_ring_head = g_ring_tail = g_ring_count = 0;
+    pthread_mutex_unlock(&g_cap_lock);
+}
+// Emit one record as a JSON object into (out,len,cap); returns new len. Underflow-safe
+// (cap>len?cap-len:0 guards snprintf's would-be-length return that the old loops mishandled).
+static size_t emit_caprec(char *out, size_t len, size_t cap, const struct CapRec *r, int first) {
+    len += snprintf(out + len, cap > len ? cap - len : 0,
+        "%s{\"func\":\"%s\",\"inl\":%d,\"tid\":%d,\"tsNs\":%lld,\"hex\":\"", first ? "" : ",", r->func, r->inl, r->tid, r->ts_ns);
+    for (int b = 0; b < r->n && len + 3 < cap; b++) len += snprintf(out + len, cap > len ? cap - len : 0, "%02x", r->data[b]);
+    len += snprintf(out + len, cap > len ? cap - len : 0, "\"}");
+    return len;
+}
+// Serialize (without popping) every record currently in the ring, tail→head. Used by the
+// one-shot probes, which reset → trigger → serialize, producing far fewer than CAP_RING.
+// Returns count emitted; *lenp updated. Caller holds no lock (we take it).
+static int cap_emit_all(char *out, size_t *lenp, size_t cap) {
+    pthread_mutex_lock(&g_cap_lock);
+    int n = 0;
+    for (int i = 0; i < g_ring_count; i++) {
+        struct CapRec *r = &g_ring[(g_ring_tail + i) % CAP_RING];
+        *lenp = emit_caprec(out, *lenp, cap, r, n == 0);
+        n++;
     }
     pthread_mutex_unlock(&g_cap_lock);
+    return n;
 }
 
 typedef int (*EVP_CipherUpdate_t)(void *, unsigned char *, int *, const unsigned char *, int);
@@ -770,7 +828,7 @@ static void cmd_net_hook_test(int fd, const char *id) {
     g_orig_ssl_write = (SSL_rw_t)ow; g_orig_ssl_read = (SSL_rw_t)orr;
     int rw = ow ? got_replace("libjavacrypto.so", ow, (void *)my_SSL_write) : -1;
     int rr = orr ? got_replace("libjavacrypto.so", orr, (void *)my_SSL_read) : -1;
-    pthread_mutex_lock(&g_cap_lock); g_ncaps = 0; pthread_mutex_unlock(&g_cap_lock);
+    cap_reset();
 
     int did = 0, triggered = 0; char result[128] = "";
     JNIEnv *env = attach_env(&did);
@@ -795,13 +853,7 @@ static void cmd_net_hook_test(int fd, const char *id) {
     size_t cap = 1 << 16, len = 0; char *out = malloc(cap); if (!out) return;
     char rj[200]; json_escape(result, rj, sizeof(rj));
     len += snprintf(out + len, cap - len, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"net_hook_test\",\"ok\":true,\"hooked\":{\"write\":%d,\"read\":%d},\"triggered\":%s,\"result\":\"%s\",\"captures\":[", idj, rw, rr, triggered ? "true" : "false", rj);
-    pthread_mutex_lock(&g_cap_lock);
-    for (int k = 0; k < g_ncaps; k++) { struct CapRec *r = &g_caps[k];
-        len += snprintf(out + len, cap - len, "%s{\"func\":\"%s\",\"inl\":%d,\"tid\":%d,\"tsNs\":%lld,\"hex\":\"", k ? "," : "", r->func, r->inl, r->tid, r->ts_ns);
-        for (int b = 0; b < r->n && len + 3 < cap; b++) len += snprintf(out + len, cap - len, "%02x", r->data[b]);
-        len += snprintf(out + len, cap - len, "\"}"); }
-    int n = g_ncaps;
-    pthread_mutex_unlock(&g_cap_lock);
+    int n = cap_emit_all(out, &len, cap);
     snprintf(out + len, cap - len, "],\"count\":%d}\n", n);
     send_line(fd, out);
     free(out);
@@ -992,7 +1044,7 @@ static void cmd_file_hook_test(int fd, const char *id, const char *module) {
     int rsc = osc ? got_replace(mod, osc, (void *)my_syscall) : -1;
     int rrc = orc ? got_replace(mod, orc, (void *)my_read_chk) : -1;
     int rwv = owv ? got_replace(mod, owv, (void *)my_write_chk) : -1;
-    pthread_mutex_lock(&g_cap_lock); g_ncaps = 0; pthread_mutex_unlock(&g_cap_lock);
+    cap_reset();
     g_file_close_hits = 0;
 
     int did = 0, triggered = 0; char result[160] = "";
@@ -1030,13 +1082,7 @@ static void cmd_file_hook_test(int fd, const char *id, const char *module) {
         "\"hooked\":{\"open\":%d,\"openat\":%d,\"read\":%d,\"write\":%d,\"close\":%d,\"syscall\":%d,\"readChk\":%d,\"writeChk\":%d},"
         "\"triggered\":%s,\"result\":\"%s\",\"closeHits\":%d,\"captures\":[",
         idj, modj, ro, roa, rr, rw, rc, rsc, rrc, rwv, triggered ? "true" : "false", rj, g_file_close_hits);
-    pthread_mutex_lock(&g_cap_lock);
-    for (int k = 0; k < g_ncaps; k++) { struct CapRec *r = &g_caps[k];
-        len += snprintf(out + len, cap - len, "%s{\"func\":\"%s\",\"inl\":%d,\"tid\":%d,\"tsNs\":%lld,\"hex\":\"", k ? "," : "", r->func, r->inl, r->tid, r->ts_ns);
-        for (int b = 0; b < r->n && len + 3 < cap; b++) len += snprintf(out + len, cap - len, "%02x", r->data[b]);
-        len += snprintf(out + len, cap - len, "\"}"); }
-    int n = g_ncaps;
-    pthread_mutex_unlock(&g_cap_lock);
+    int n = cap_emit_all(out, &len, cap);
     snprintf(out + len, cap - len, "],\"count\":%d}\n", n);
     send_line(fd, out);
     free(out);
@@ -1054,7 +1100,7 @@ static void cmd_flow_watch(int fd, const char *id) {
     g_orig_ssl_write = (SSL_rw_t)ow;
     int re = oe ? got_replace("libjavacrypto.so", oe, (void *)my_EVP_CipherUpdate) : -1;
     int rw = ow ? got_replace("libjavacrypto.so", ow, (void *)my_SSL_write) : -1;
-    pthread_mutex_lock(&g_cap_lock); g_ncaps = 0; pthread_mutex_unlock(&g_cap_lock);
+    cap_reset();
 
     int did = 0, triggered = 0; char result[128] = "";
     JNIEnv *env = attach_env(&did);
@@ -1079,13 +1125,7 @@ static void cmd_flow_watch(int fd, const char *id) {
     size_t cap = 1 << 16, len = 0; char *out = malloc(cap); if (!out) return;
     char rj[200]; json_escape(result, rj, sizeof(rj));
     len += snprintf(out + len, cap - len, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"flow_watch\",\"ok\":true,\"hooked\":{\"evp\":%d,\"sslWrite\":%d},\"triggered\":%s,\"result\":\"%s\",\"captures\":[", idj, re, rw, triggered ? "true" : "false", rj);
-    pthread_mutex_lock(&g_cap_lock);
-    for (int k = 0; k < g_ncaps; k++) { struct CapRec *r = &g_caps[k];
-        len += snprintf(out + len, cap - len, "%s{\"func\":\"%s\",\"inl\":%d,\"tid\":%d,\"tsNs\":%lld,\"hex\":\"", k ? "," : "", r->func, r->inl, r->tid, r->ts_ns);
-        for (int b = 0; b < r->n && len + 3 < cap; b++) len += snprintf(out + len, cap - len, "%02x", r->data[b]);
-        len += snprintf(out + len, cap - len, "\"}"); }
-    int n = g_ncaps;
-    pthread_mutex_unlock(&g_cap_lock);
+    int n = cap_emit_all(out, &len, cap);
     snprintf(out + len, cap - len, "],\"count\":%d}\n", n);
     send_line(fd, out);
     free(out);
@@ -1099,7 +1139,7 @@ static void cmd_crypto_hook_test(int fd, const char *id) {
     void *orig = resolve_sym("libcrypto.so", "EVP_CipherUpdate");
     g_evp_cipher_orig = (EVP_CipherUpdate_t)orig;
     int replaced = orig ? got_replace("libjavacrypto.so", orig, (void *)my_EVP_CipherUpdate) : -1;
-    pthread_mutex_lock(&g_cap_lock); g_ncaps = 0; pthread_mutex_unlock(&g_cap_lock);
+    cap_reset();
 
     // trigger com.idh.sandbox.JavaCrypto.run() via JNI reflection (app classloader)
     int did = 0, triggered = 0;
@@ -1133,15 +1173,7 @@ static void cmd_crypto_hook_test(int fd, const char *id) {
     // build reply with captured records (hex)
     size_t cap = 1 << 15, len = 0; char *out = malloc(cap); if (!out) return;
     len += snprintf(out + len, cap - len, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"crypto_hook_test\",\"ok\":true,\"replaced\":%d,\"triggered\":%s,\"captures\":[", idj, replaced, triggered ? "true" : "false");
-    pthread_mutex_lock(&g_cap_lock);
-    for (int k = 0; k < g_ncaps; k++) {
-        struct CapRec *r = &g_caps[k];
-        len += snprintf(out + len, cap - len, "%s{\"func\":\"%s\",\"inl\":%d,\"tid\":%d,\"tsNs\":%lld,\"hex\":\"", k ? "," : "", r->func, r->inl, r->tid, r->ts_ns);
-        for (int b = 0; b < r->n && len + 3 < cap; b++) len += snprintf(out + len, cap - len, "%02x", r->data[b]);
-        len += snprintf(out + len, cap - len, "\"}");
-    }
-    int ncaps = g_ncaps;
-    pthread_mutex_unlock(&g_cap_lock);
+    int ncaps = cap_emit_all(out, &len, cap);
     snprintf(out + len, cap - len, "],\"count\":%d}\n", ncaps);
     send_line(fd, out);
     free(out);
@@ -1162,6 +1194,7 @@ struct JCapRec {
 };
 static struct JCapRec g_jcaps[JCAP_MAX];
 static int g_njcaps = 0;
+static unsigned long long g_jcap_dropped = 0;   // WS-C: honest drop accounting (Java rich path)
 static volatile int g_java_active = 0;
 
 static int copy_jba(JNIEnv *env, jbyteArray a, unsigned char *dst, int cap) {
@@ -1192,6 +1225,8 @@ JNIEXPORT void JNICALL Java_com_idh_sandbox_IdhReport_nReport(
         r->niv  = copy_jba(env, jiv,  r->iv,  JCAP_IV);
         r->nin  = copy_jba(env, jin,  r->in,  JCAP_DATA);
         r->nout = copy_jba(env, jout, r->out, JCAP_DATA);
+    } else {
+        g_jcap_dropped++;   // fail-loud: don't silently swallow — reported via capture_drain
     }
     pthread_mutex_unlock(&g_cap_lock);
 }
@@ -1246,49 +1281,60 @@ static void cmd_capture_stop(int fd, const char *id) {
     if (g_orig_ssl_write)  w  = got_replace("libjavacrypto.so", (void *)my_SSL_write, (void *)g_orig_ssl_write);
     if (g_orig_ssl_read)   r  = got_replace("libjavacrypto.so", (void *)my_SSL_read, (void *)g_orig_ssl_read);
     g_capture_on = 0;
-    pthread_mutex_lock(&g_cap_lock); g_ncaps = 0; pthread_mutex_unlock(&g_cap_lock);
+    cap_reset();
     char out[256];
     snprintf(out, sizeof(out), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"capture_stop\",\"ok\":true,\"restored\":{\"evp\":%d,\"digest\":%d,\"hmac\":%d,\"digestSign\":%d,\"sslWrite\":%d,\"sslRead\":%d}}\n", idj, e, dg, hm, ds, w, r);
     send_line(fd, out);
     LOGI("capture_stop: restored evp=%d sslw=%d sslr=%d", e, w, r);
 }
 
-// Return all records captured since the last drain, then clear the buffer so the next
-// drain only sees new ones (idhd polls this and streams each new record to the panel).
+// Drain (pop) up to a batch of ring records + rich Java records, and report HONEST WS-C
+// stats: seq (total capture attempts), dropped/jdropped (never silent), backlog (still in
+// ring), first/last drop ts. idhd streams the records and surfaces dropped>0 as
+// complete:false. Buffer grows as needed (the old fixed 64KB could overflow with a full ring).
 static void cmd_capture_drain(int fd, const char *id) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
     size_t cap = 1 << 16, len = 0; char *out = malloc(cap); if (!out) return;
     len += snprintf(out + len, cap - len,
         "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"capture_drain\",\"ok\":true,\"on\":%s,\"captures\":[",
         idj, g_capture_on ? "true" : "false");
+    const int DRAIN_BATCH = 512;   // bound one response; idhd polls again to clear the backlog
     pthread_mutex_lock(&g_cap_lock);
-    for (int k = 0; k < g_ncaps; k++) {
-        struct CapRec *r = &g_caps[k];
-        len += snprintf(out + len, cap - len, "%s{\"func\":\"%s\",\"inl\":%d,\"tid\":%d,\"tsNs\":%lld,\"hex\":\"", k ? "," : "", r->func, r->inl, r->tid, r->ts_ns);
-        for (int b = 0; b < r->n && len + 3 < cap; b++) len += snprintf(out + len, cap - len, "%02x", r->data[b]);
-        len += snprintf(out + len, cap - len, "\"}");
+    int ncaps = 0;
+    while (g_ring_count > 0 && ncaps < DRAIN_BATCH) {
+        if (len + 4200 > cap) { size_t nc = cap * 2; char *no = realloc(out, nc); if (!no) break; out = no; cap = nc; }
+        struct CapRec *r = &g_ring[g_ring_tail];
+        len = emit_caprec(out, len, cap, r, ncaps == 0);
+        g_ring_tail = (g_ring_tail + 1) % CAP_RING;
+        g_ring_count--; ncaps++;
     }
-    int ncaps = g_ncaps;
-    g_ncaps = 0;                                  // clear after draining
+    int backlog = g_ring_count;
+    unsigned long long seq = g_cap_seq, dropped = g_cap_dropped, jdropped = g_jcap_dropped;
+    long long fdrop = g_cap_first_drop_ns, ldrop = g_cap_last_drop_ns;
     // rich Java-layer records: algorithm + op + key + iv + input + output
-    len += snprintf(out + len, cap - len, "],\"jcaptures\":[");
+    len += snprintf(out + len, cap > len ? cap - len : 0, "],\"jcaptures\":[");
     for (int k = 0; k < g_njcaps; k++) {
+        if (len + 9000 > cap) { size_t nc = cap * 2; char *no = realloc(out, nc); if (!no) break; out = no; cap = nc; }
         struct JCapRec *r = &g_jcaps[k];
-        len += snprintf(out + len, cap - len,
+        len += snprintf(out + len, cap > len ? cap - len : 0,
             "%s{\"algo\":\"%s\",\"op\":\"%s\",\"tid\":%d,\"tsNs\":%lld,\"key\":\"", k ? "," : "", r->algo, r->op, r->tid, r->ts_ns);
-        for (int b = 0; b < r->nkey && len + 3 < cap; b++) len += snprintf(out + len, cap - len, "%02x", r->key[b]);
-        len += snprintf(out + len, cap - len, "\",\"iv\":\"");
-        for (int b = 0; b < r->niv && len + 3 < cap; b++) len += snprintf(out + len, cap - len, "%02x", r->iv[b]);
-        len += snprintf(out + len, cap - len, "\",\"in\":\"");
-        for (int b = 0; b < r->nin && len + 3 < cap; b++) len += snprintf(out + len, cap - len, "%02x", r->in[b]);
-        len += snprintf(out + len, cap - len, "\",\"out\":\"");
-        for (int b = 0; b < r->nout && len + 3 < cap; b++) len += snprintf(out + len, cap - len, "%02x", r->out[b]);
-        len += snprintf(out + len, cap - len, "\",\"inl\":%d,\"outl\":%d}", r->nin, r->nout);
+        for (int b = 0; b < r->nkey && len + 3 < cap; b++) len += snprintf(out + len, cap > len ? cap - len : 0, "%02x", r->key[b]);
+        len += snprintf(out + len, cap > len ? cap - len : 0, "\",\"iv\":\"");
+        for (int b = 0; b < r->niv && len + 3 < cap; b++) len += snprintf(out + len, cap > len ? cap - len : 0, "%02x", r->iv[b]);
+        len += snprintf(out + len, cap > len ? cap - len : 0, "\",\"in\":\"");
+        for (int b = 0; b < r->nin && len + 3 < cap; b++) len += snprintf(out + len, cap > len ? cap - len : 0, "%02x", r->in[b]);
+        len += snprintf(out + len, cap > len ? cap - len : 0, "\",\"out\":\"");
+        for (int b = 0; b < r->nout && len + 3 < cap; b++) len += snprintf(out + len, cap > len ? cap - len : 0, "%02x", r->out[b]);
+        len += snprintf(out + len, cap > len ? cap - len : 0, "\",\"inl\":%d,\"outl\":%d}", r->nin, r->nout);
     }
     int njcaps = g_njcaps;
     g_njcaps = 0;
     pthread_mutex_unlock(&g_cap_lock);
-    snprintf(out + len, cap - len, "],\"count\":%d,\"jcount\":%d,\"javaActive\":%s}\n", ncaps, njcaps, g_java_active ? "true" : "false");
+    snprintf(out + len, cap > len ? cap - len : 0,
+        "],\"count\":%d,\"jcount\":%d,\"backlog\":%d,\"seq\":%llu,\"dropped\":%llu,\"jdropped\":%llu,"
+        "\"firstDropNs\":%lld,\"lastDropNs\":%lld,\"ring\":%d,\"complete\":%s,\"javaActive\":%s}\n",
+        ncaps, njcaps, backlog, seq, dropped, jdropped, fdrop, ldrop, CAP_RING,
+        (dropped == 0 && jdropped == 0) ? "true" : "false", g_java_active ? "true" : "false");
     send_line(fd, out);
     free(out);
 }

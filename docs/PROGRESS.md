@@ -16,8 +16,8 @@
 
 ### v2.0+ 进度
 
-- [ ] **v2.0** WS-D 协议重写（length-framed `[u32 len][u8 type][payload]`，去 8192 上限）**✅ 完成并验证**
-      + WS-C 环形缓冲/落盘/如实 dropped 上报 — **进行中**
+- [x] **v2.0** WS-D 协议重写（length-framed `[u32 len][u8 type][payload]`，去 8192 上限）**✅**
+      + WS-C 环形缓冲/如实 dropped 上报 **✅ 完成并验证**（连续 push-drain 线程作为 WS-C 优化后续再上，见日志）
 - [ ] v2.1 WS-A Java 后端(LSPlant) + WS-B 去 sandbox 耦合
 - [ ] v2.2 WS-A inline 后端(ShadowHook)
 - [ ] v2.3 WS-F 持久索引 + 深解析 + 反射
@@ -291,6 +291,21 @@ arm64 预编译，agent 运行时 dlopen libQBDI.so，指令级 trace idh_trace_
 
 ## 会话日志（倒序，简短）
 
+- 2026-07-14 (v2.0 WS-C · 采集环形缓冲 + 如实 dropped)：把 native 采集从定长 `g_caps[64]`
+  （满即**静默丢**）换成 **`CAP_RING=1024` 环形缓冲 + 有界阻塞背压**（producer 最多等
+  `3×150µs` 再丢）+ **诚实计数**：`g_cap_seq`(每次 capture 尝试)、`g_cap_dropped`+首/末丢弃时间戳，
+  Java 富路径 `g_jcaps[96]` 加 `g_jcap_dropped`。不变式 **`emitted + backlog + dropped == seq`** 恒成立
+  （没有任何一条静默消失）。`capture_drain` 改为按批 pop（可增长缓冲，顺带修掉旧固定 64KB 缓冲对满环的
+  潜在溢出），带回 seq/dropped/backlog/complete。daemon：`capStats`/`captureHealth` 聚合，
+  drain tick 循环把 backlog 拉空，`/api/captures` 与 `configStats` 带 `complete/dropped/seq/backlog/accountedFor`，
+  首次丢弃 log 红字（fail-loud）。**验收 `verify_v22_capture.sh`（真机 PASS）**：外部触发
+  `BurstProbe.run()`（20000 次 AES，**类名由 idhd 传参、agent 零知识 = WS-B 干净**）→ 观测
+  `seq=20017 emitted=14775 dropped=5242 jdropped=17126 complete=false`，**每个采样点 accountedFor==seq**——
+  旧实现只会显示 ~64 条、dropped=0 却静默丢 ~19936。app 未崩。回归：**verify_all 全绿**（除已知
+  verify_v03 的 SDK35≠36 设备断言，与本改动无关）。
+  **诚实边界（未做，非潦草）**：WS-C 计划里的"drain 线程经 `FRAME_CAPTURE`(0x02) 连续 push + idhd 落盘"
+  本轮**未做**——保留 pull-drain（idhd 轮询 `capture_drain`，命中 backlog 时连拉直到清空）以最小化对既有
+  35 脚本采集路径的回归风险；帧类型 `0x02` 与 `g_send_lock` 已就位。连续 push + 落盘直通留作 WS-C 下一步。
 - 2026-07-14 (v2.0 WS-D · length-framed 协议)：把 agent↔idhd 线协议从 NDJSON 换成
   **`[u32 len BE][u8 type][payload]`**（`FRAME_JSON=0x01`；`0x02` 采集批留给 WS-C）。
   agent：`send_frame`/`send_line`（加 `g_send_lock` 为 WS-C drain 线程前置）+ `read_full` 按长读整帧，
