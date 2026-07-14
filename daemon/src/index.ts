@@ -776,6 +776,8 @@ const MCP_TOOLS: { name: string; description: string; inputSchema: any; handler:
   { name: 'art_dexfiles', description: 'Enumerate loaded DexFiles via ART ClassLoader structures (no magic scan)', inputSchema: { type: 'object', properties: { session: S } }, handler: (a) => agentCmd(a.session, 'art_dexfiles', {}, 30_000) },
   { name: 'crypto_capture', description: 'Hook EVP_CipherUpdate + trigger sandbox AES; return captured plaintext', inputSchema: { type: 'object', properties: { session: S } }, handler: (a) => agentCmd(a.session, 'crypto_hook_test', {}, 20_000) },
   { name: 'net_capture', description: 'Hook SSL_write/SSL_read + trigger HTTPS; return captured TLS plaintext', inputSchema: { type: 'object', properties: { session: S } }, handler: (a) => agentCmd(a.session, 'net_hook_test', {}, 25_000) },
+  { name: 'file_probe', description: 'Recon which loaded module’s GOT holds open/openat/read/write/close pointers (guides file_capture’s module arg)', inputSchema: { type: 'object', properties: { session: S } }, handler: (a) => agentCmd(a.session, 'file_probe', {}, 20_000) },
+  { name: 'file_capture', description: 'Hook open/openat/read/write/close + trigger sandbox file I/O; return captured paths + read/write bytes', inputSchema: { type: 'object', properties: { session: S, module: S } }, handler: (a) => agentCmd(a.session, 'file_hook_test', { module: a.module ?? '' }, 25_000) },
   { name: 'detect_watch', description: 'Observe the target’s own anti-analysis checks (debug/root/prop)', inputSchema: { type: 'object', properties: { session: S } }, handler: (a) => agentCmd(a.session, 'detect_watch', {}, 20_000) },
   { name: 'object_inspect', description: 'Read a live Java object’s fields via reflection (static field path)', inputSchema: { type: 'object', properties: { session: S, className: S, field: S }, required: ['className', 'field'] }, handler: (a) => agentCmd(a.session, 'object_inspect', { className: a.className, field: a.field }) },
   { name: 'dex_search', description: 'Search a dex (b64|sha) for strings/classes/methods', inputSchema: { type: 'object', properties: { b64: S, sha: S, query: S, kinds: { type: 'array', items: S } }, required: ['query'] }, handler: async (a) => searchDex(parseDex(await dumpBuf(a)), a.query, a.kinds) },
@@ -1070,6 +1072,24 @@ const httpServer = http.createServer(async (req, res) => {
     if (!sid) return send(400, { error: 'no session' });
     try {
       const r = await withCaptureSuspended(sid, () => sendCmd(sid, 'net_hook_test', {}, 25_000));
+      if (r.captures) r.captures = r.captures.map((c: any) => ({ ...c, ascii: Buffer.from(c.hex, 'hex').toString('latin1').replace(/[^\x20-\x7e]/g, '.') }));
+      return send(r.ok ? 200 : 502, r);
+    } catch (e) { return send(504, { error: (e as Error).message }); }
+  }
+  // File I/O hook recon: GET /api/file/probe?session=ID
+  if (url.pathname === '/api/file/probe') {
+    const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    if (!sid) return send(400, { error: 'no session' });
+    try { const r = await sendCmd(sid, 'file_probe', {}, 20_000); return send(r.ok ? 200 : 502, r); }
+    catch (e) { return send(504, { error: (e as Error).message }); }
+  }
+  // File I/O plaintext-path capture test: GET /api/file/hook_test?session=ID&module=
+  if (url.pathname === '/api/file/hook_test') {
+    const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    if (!sid) return send(400, { error: 'no session' });
+    const module = url.searchParams.get('module') ?? '';
+    try {
+      const r = await withCaptureSuspended(sid, () => sendCmd(sid, 'file_hook_test', { module }, 25_000));
       if (r.captures) r.captures = r.captures.map((c: any) => ({ ...c, ascii: Buffer.from(c.hex, 'hex').toString('latin1').replace(/[^\x20-\x7e]/g, '.') }));
       return send(r.ok ? 200 : 502, r);
     } catch (e) { return send(504, { error: (e as Error).message }); }

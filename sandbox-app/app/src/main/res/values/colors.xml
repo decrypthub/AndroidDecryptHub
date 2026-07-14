@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="idh_bg">#0F1116</color>
+    <color name="idh_surface">#1A1D26</color>
+    <color name="idh_surface_alt">#20242F</color>
+    <color name="idh_primary">#8AB4FF</color>
+    <color name="idh_on_primary">#0B1220</color>
+    <color name="idh_secondary">#8AE6B0</color>
+    <color name="idh_fg">#E6E9F2</color>
+    <color name="idh_muted">#8890A6</color>
+    <color name="idh_danger">#FF8FA3</color>
+</resources>

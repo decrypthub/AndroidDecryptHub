@@ -9,6 +9,7 @@
     <application
         android:allowBackup="true"
         android:label="@string/app_name"
+        android:theme="@style/Theme.IdhSandbox"
         android:supportsRtl="true"
         android:usesCleartextTraffic="true"
         android:extractNativeLibs="true">

@@ -266,6 +266,26 @@ arm64 预编译，agent 运行时 dlopen libQBDI.so，指令级 trace idh_trace_
 
 ## 会话日志（倒序，简短）
 
+- 2026-07-14 (sandbox App Material Design 重构 + 真实文件 I/O hook)：应用户要求"完全重构为 Material Design，
+  加 HTTPS 请求发送、文件读写，作插件功能全测试 demo"。范围二选一经用户确认：**只改 sandbox-app，daemon Web UI 不动**；
+  文件 I/O 能力必须是**真实 agent 侧原生 hook**，不是装饰性按钮。
+  ① **sandbox-app 全量 Material Components 重写**（`MainActivity.kt`：Material3 Dark 主题、`MaterialCardView`/`MaterialButton`，
+  中文分区卡片：控制台/加解密测试/网络文件I/O/脱壳触发/测试日志），新增 `themes.xml`/`colors.xml`。
+  ② **`Network.kt`/`CorrelatedFlow.kt` HTTPS 发送 + `FileIO.kt` 真实文件读写**（写 `IDH_FILE_MARKER_v1` 到
+  app 私有路径、读回校验），供 agent hook 触发对象。
+  ③ **agent 文件 I/O GOT hook**（`cmd_file_probe` 扫描 open/openat/read/write/close 落在哪个模块的 GOT；
+  `cmd_file_hook_test` 装 hook→JNI 反射触发 `FileIO.run()`→还原→报告捕获）。
+  **关键坑（现场真机诊断，非猜测）**：libopenjdk.so 虽然静态导入 open/read/write/close/syscall（`readelf --dyn-syms` 证实），
+  但真实 `java.io.FileInputStream/FileOutputStream` 走的是 **libjavacore.so**（libcore Linux.cpp JNI 层），且该模块对
+  read/write 分别导入的是 bionic FORTIFY_SOURCE 变体 `__read_chk(fd,buf,count,buflen)` 和 `__write_chk`（不同版本节
+  `LIBC_N` vs `LIBC`，`readelf -sW` 才能看全名，截断输出会把它当成 `writev`/`syscall` 误诊）——挂 `open`/`close`（明符号）
+  + `__read_chk`/`__write_chk` 才是正确 hook 点；曾错误尝试 `syscall()` 级 hook（因怀疑 libcore 走 raw syscall）和
+  `writev` hook，两者都装得上但零捕获，静态 dynsym 比对后定位到真正符号才修好。
+  硬信号：`open` 捕获真实路径 `/data/data/com.idh.sandbox/files/idh_file_test.txt`，`write`/`read` 各捕获
+  55B `IDH_FILE_MARKER_v1 订单号=... 金额=...` 明文，四条捕获顺序 open→write→open→read 与代码逻辑完全对应。
+  新增 `verify_v20_file.sh`（真机断言 open 路径 + write/read marker 字节），已入 `verify_all.sh`。
+  遗留小问题（非阻塞）：`close` hook 装上但 `closeHits` 恒为 0（IoBridge 的 close 路径未進一步深挖，不影响已确认的
+  open/write/read 核心取证信号）。设备侧本轮用 `13f54a46`(PGP110/SDK35)，非 CLAUDE.md 记录的 Pixel 6 Pro——待与用户确认。
 - 2026-07-11 (设置/MCP/配置导入导出，对齐 IDH 交互)：**把 IDH 的「头部按钮→模态」范式引入 ADH**。
   熟读 `.ref/ios-decrypt-helper/web/index.html` 的 set-shell/set-switch/配置JSON编辑器/openMcp。
   后端 `daemon/src/index.ts`：新增 `settings`（持久化 `idhd-data/settings.json`）+ `mergeSettings` 板块合并；

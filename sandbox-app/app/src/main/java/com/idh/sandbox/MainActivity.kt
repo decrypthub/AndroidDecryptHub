@@ -11,11 +11,12 @@ import android.os.Bundle
 import android.util.Log
 import android.view.View
 import android.view.ViewGroup
-import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import com.google.android.material.button.MaterialButton
+import com.google.android.material.card.MaterialCardView
 import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.ByteBuffer
@@ -52,12 +53,22 @@ class MainActivity : Activity() {
         }
     }
 
+    // ---- Material dark palette (kept in code, mirrors res/values/colors.xml) ----
+    private val cBg = Color.parseColor("#0F1116")
+    private val cSurface = Color.parseColor("#1A1D26")
+    private val cSurfaceAlt = Color.parseColor("#20242F")
+    private val cPrimary = Color.parseColor("#8AB4FF")
+    private val cSecondary = Color.parseColor("#8AE6B0")
+    private val cFg = Color.parseColor("#E6E9F2")
+    private val cMuted = Color.parseColor("#8890A6")
+    private val cDanger = Color.parseColor("#FF8FA3")
+
     @Volatile private var polling = true
     private var lanUrl: String = ""            // host LAN URL, discovered from idhd /health
     private lateinit var urlLan: TextView
     private lateinit var reach: TextView
     private lateinit var logView: TextView
-    private lateinit var liveBtn: Button
+    private lateinit var liveBtn: MaterialButton
     private val logLines = ArrayDeque<String>()
     private val seq = java.util.concurrent.atomic.AtomicInteger(1)
 
@@ -94,7 +105,7 @@ class MainActivity : Activity() {
 
     override fun onDestroy() { polling = false; super.onDestroy() }
 
-    // ---- UI ---------------------------------------------------------------
+    // ---- UI building blocks (Material Components, built programmatically) -------------
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
@@ -105,12 +116,14 @@ class MainActivity : Activity() {
             setPadding(0, dp(2), 0, dp(2))
         }
 
+    private fun sectionTitle(text: String): TextView = label(text, 13f, cPrimary, bold = true)
+
     private fun urlView(text: String, color: Int, onTap: () -> Unit): TextView =
         TextView(this).apply {
-            this.text = text; textSize = 17f; setTextColor(color)
+            this.text = text; textSize = 16f; setTextColor(color)
             setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD)
             setPadding(dp(12), dp(10), dp(12), dp(10))
-            setBackgroundColor(Color.parseColor("#11151f"))
+            setBackgroundColor(cSurfaceAlt)
             isClickable = true
             setOnClickListener { onTap() }
         }
@@ -119,90 +132,130 @@ class MainActivity : Activity() {
         layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(h))
     }
 
-    private fun actbutton(text: String, onTap: () -> Unit) = Button(this).apply {
+    // Material filled button, equal-width within its row, rounded + ripple out of the box.
+    private fun mbutton(text: String, danger: Boolean = false, onTap: () -> Unit) = MaterialButton(this).apply {
         this.text = text; isAllCaps = false; textSize = 13f
+        cornerRadius = dp(10)
+        insetTop = 0; insetBottom = 0
+        setPadding(dp(4), dp(8), dp(4), dp(8))
+        backgroundTintList = android.content.res.ColorStateList.valueOf(if (danger) cDanger else cPrimary)
+        setTextColor(if (danger) Color.parseColor("#2A0A12") else Color.parseColor("#0B1220"))
         setOnClickListener { onTap() }
         layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             .apply { marginEnd = dp(8) }
     }
 
     // A row of equal-width buttons.
-    private fun btnRow(vararg b: Button) = LinearLayout(this).apply {
+    private fun btnRow(vararg b: MaterialButton) = LinearLayout(this).apply {
         orientation = LinearLayout.HORIZONTAL
-        setPadding(0, dp(3), 0, dp(3))
+        setPadding(0, dp(4), 0, dp(4))
         b.forEach { addView(it) }
     }
 
-    private fun buildUi(pid: Int, loadStatus: String): View {
-        val muted = Color.parseColor("#6c7086")
-        val fg = Color.parseColor("#cdd6f4")
-        val blue = Color.parseColor("#89b4fa")
-        val green = Color.parseColor("#a6e3a1")
+    // A Material card wrapping a vertical section — the base unit of the new layout.
+    private fun card(build: LinearLayout.() -> Unit): MaterialCardView {
+        val inner = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), dp(14), dp(14), dp(14))
+        }
+        inner.build()
+        return MaterialCardView(this).apply {
+            radius = dp(16).toFloat()
+            cardElevation = dp(2).toFloat()
+            setCardBackgroundColor(cSurface)
+            strokeColor = Color.parseColor("#2A2F3D")
+            strokeWidth = dp(1)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                .apply { bottomMargin = dp(14) }
+            addView(inner)
+        }
+    }
 
+    private fun buildUi(pid: Int, loadStatus: String): View {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#0b0e14"))
-            setPadding(dp(18), dp(24), dp(18), dp(24))
+            setBackgroundColor(cBg)
+            setPadding(dp(16), dp(22), dp(16), dp(24))
         }
 
-        // --- header: one title + one status line ---
-        root.addView(label("ADH · Android DecryptHub", 21f, fg, bold = true))
-        root.addView(label("运行时逆向分析 · 沙盒宿主（模拟注入）  ·  pid=$pid", 12f, muted))
+        // --- header ---
+        root.addView(label("ADH · Android DecryptHub", 22f, cFg, bold = true))
+        root.addView(label("运行时逆向分析 · 沙盒宿主（模拟注入）  ·  pid=$pid", 12f, cMuted))
         root.addView(spacer(16))
 
-        // --- console access: ONE best URL + reach dot + two actions (no duplication) ---
-        root.addView(label("观测控制台（浏览器打开）— 点击地址复制", 13f, blue, bold = true))
-        urlLan = urlView("检测中…", green) { copy(bestUrl()) }
-        root.addView(urlLan)
-        reach = label("● 正在检测控制台…", 12f, muted)
-        root.addView(reach)
-        root.addView(spacer(6))
-        root.addView(btnRow(
-            actbutton("复制地址") { copy(bestUrl()) },
-            actbutton("手机浏览器打开") { openBrowser(bestUrl()) },
-        ))
-        root.addView(label("本机 adb reverse：$LOCAL_URL", 11f, muted))
-        root.addView(spacer(18))
+        // --- console access card ---
+        root.addView(card {
+            addView(sectionTitle("观测控制台（浏览器打开）— 点击地址复制"))
+            urlLan = urlView("检测中…", cSecondary) { copy(bestUrl()) }
+            addView(urlLan)
+            reach = label("● 正在检测控制台…", 12f, cMuted)
+            addView(reach)
+            addView(spacer(6))
+            addView(btnRow(
+                mbutton("复制地址") { copy(bestUrl()) },
+                mbutton("手机浏览器打开") { openBrowser(bestUrl()) },
+            ))
+            addView(label("本机 adb reverse：$LOCAL_URL", 11f, cMuted))
+        })
 
-        // --- manual test triggers ---
-        root.addView(label("手动触发测试（结果见下方日志 / 控制台面板）", 13f, blue, bold = true))
-        root.addView(spacer(4))
-        liveBtn = actbutton(liveLabel()) { toggleLive() }
-        root.addView(btnRow(
-            actbutton("全部加密算法") { trigger("全部算法") { JavaCrypto.runAllOnce(pt("ALL")) } },
-            liveBtn,
-        ))
-        root.addView(btnRow(
-            actbutton("AES-CBC") { trigger("AES-CBC") { JavaCrypto.oneAes(pt("AES")) } },
-            actbutton("RSA-2048") { trigger("RSA-2048") { JavaCrypto.oneRsa(pt("RSA")) } },
-        ))
-        root.addView(btnRow(
-            actbutton("SHA-256") { trigger("SHA-256") { JavaCrypto.oneSha256(pt("SHA")) } },
-            actbutton("HmacSHA256") { trigger("HMAC") { JavaCrypto.oneHmac(pt("HMAC")) } },
-        ))
-        root.addView(btnRow(
-            actbutton("加载内存 DEX") { trigger("加载DEX") { DynamicDex.load(); "已触发内存 DEX 加载（脱壳面板可见）" } },
-            actbutton("触发脱壳类") { trigger("脱壳触发") { TriggerProbe.reset(); TriggerProbe.safeCompute() } },
-        ))
-        root.addView(btnRow(
-            actbutton("HTTPS 明文边界") { trigger("HTTPS") { Network.run() } },
-            actbutton("加密+上送(关联)") { trigger("关联流") { CorrelatedFlow.run() } },
-        ))
-        root.addView(spacer(14))
+        // --- crypto triggers card ---
+        root.addView(card {
+            addView(sectionTitle("加解密测试"))
+            addView(spacer(4))
+            liveBtn = mbutton(liveLabel()) { toggleLive() }
+            addView(btnRow(
+                mbutton("全部加密算法") { trigger("全部算法") { JavaCrypto.runAllOnce(pt("ALL")) } },
+                liveBtn,
+            ))
+            addView(btnRow(
+                mbutton("AES-CBC") { trigger("AES-CBC") { JavaCrypto.oneAes(pt("AES")) } },
+                mbutton("RSA-2048") { trigger("RSA-2048") { JavaCrypto.oneRsa(pt("RSA")) } },
+            ))
+            addView(btnRow(
+                mbutton("SHA-256") { trigger("SHA-256") { JavaCrypto.oneSha256(pt("SHA")) } },
+                mbutton("HmacSHA256") { trigger("HMAC") { JavaCrypto.oneHmac(pt("HMAC")) } },
+            ))
+        })
 
-        // --- on-device result log ---
-        root.addView(label("测试日志", 13f, blue, bold = true))
-        logView = TextView(this).apply {
-            text = "（点击上面的按钮开始测试）"
-            textSize = 12f; setTextColor(fg)
-            setTypeface(android.graphics.Typeface.MONOSPACE)
-            setPadding(dp(12), dp(10), dp(12), dp(10))
-            setBackgroundColor(Color.parseColor("#11151f"))
-        }
-        root.addView(logView)
+        // --- network + file I/O card (agent hook surface) ---
+        root.addView(card {
+            addView(sectionTitle("网络 / 文件 I/O 测试（Agent Hook）"))
+            addView(spacer(4))
+            addView(btnRow(
+                mbutton("HTTPS 明文边界") { trigger("HTTPS") { Network.run() } },
+                mbutton("加密+上送(关联)") { trigger("关联流") { CorrelatedFlow.run() } },
+            ))
+            addView(btnRow(
+                mbutton("文件读写(Hook)") { trigger("文件读写") { FileIO.run() } },
+            ))
+        })
+
+        // --- dex / trigger card ---
+        root.addView(card {
+            addView(sectionTitle("脱壳 / 触发"))
+            addView(spacer(4))
+            addView(btnRow(
+                mbutton("加载内存 DEX") { trigger("加载DEX") { DynamicDex.load(); "已触发内存 DEX 加载（脱壳面板可见）" } },
+                mbutton("触发脱壳类") { trigger("脱壳触发") { TriggerProbe.reset(); TriggerProbe.safeCompute() } },
+            ))
+        })
+
+        // --- on-device result log card ---
+        root.addView(card {
+            addView(sectionTitle("测试日志"))
+            addView(spacer(4))
+            logView = TextView(this@MainActivity).apply {
+                text = "（点击上面的按钮开始测试）"
+                textSize = 12f; setTextColor(cFg)
+                setTypeface(android.graphics.Typeface.MONOSPACE)
+                setPadding(dp(12), dp(10), dp(12), dp(10))
+                setBackgroundColor(cSurfaceAlt)
+            }
+            addView(logView)
+        })
 
         return ScrollView(this).apply {
-            setBackgroundColor(Color.parseColor("#0b0e14"))
+            setBackgroundColor(cBg)
             addView(root)
         }
     }
@@ -291,11 +344,11 @@ class MainActivity : Activity() {
         if (h.ok) {
             if (h.lan.isNotEmpty()) { lanUrl = h.lan; urlLan.text = h.lan }
             else { urlLan.text = "$LOCAL_URL  （控制台未上报局域网 IP，仅本地可访问）" }
-            reach.setTextColor(Color.parseColor("#a6e3a1"))
+            reach.setTextColor(cSecondary)
             reach.text = "● 控制台在线" + (if (h.agents >= 0) "  ·  已连接 agents = ${h.agents}" else "")
         } else {
             urlLan.text = if (lanUrl.isNotEmpty()) lanUrl else "（等待控制台…）"
-            reach.setTextColor(Color.parseColor("#f38ba8"))
+            reach.setTextColor(cDanger)
             reach.text = "● 未连接 —— 在电脑运行  bash tools/dev_up.sh  启动 idhd（并 adb reverse tcp:$WEB_PORT）"
         }
     }

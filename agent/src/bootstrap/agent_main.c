@@ -14,6 +14,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <dlfcn.h>
+#include <stdarg.h>
 #include <time.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -769,6 +770,241 @@ static void cmd_net_hook_test(int fd, const char *id) {
     send_line(fd, out);
     free(out);
     LOGI("net_hook_test: hooked w=%d r=%d triggered=%d result=%s captures=%d", rw, rr, triggered, result, n);
+}
+
+// ---- file I/O capture (open/openat/read/write/close via a caller module's GOT) ----
+// Which module's GOT actually holds these libc pointers for Java FileInputStream/
+// FileOutputStream varies by ART/API level (libopenjdk.so on modern Android) — use
+// cmd_file_probe to discover it empirically rather than hardcoding a guess.
+typedef int (*open_t)(const char *, int, mode_t);
+typedef int (*openat_t)(int, const char *, int, mode_t);
+typedef ssize_t (*rw_t)(int, void *, size_t);
+typedef int (*fclose_t)(int);
+static open_t g_orig_open = NULL;
+static openat_t g_orig_openat = NULL;
+static rw_t g_orig_read = NULL;
+static rw_t g_orig_fwrite_sys = NULL;
+static fclose_t g_orig_fclose = NULL;
+static volatile int g_file_close_hits = 0;
+
+// arm64 ABI always passes a 3rd arg in a register even when the call site omits it
+// (open()/openat() only read it when O_CREAT/O_TMPFILE is set) — always read+forward it.
+static int my_open(const char *pathname, int flags, ...) {
+    va_list ap; va_start(ap, flags); mode_t mode = (mode_t)va_arg(ap, int); va_end(ap);
+    if (pathname) capture("open", (const unsigned char *)pathname, (int)strlen(pathname));
+    return g_orig_open(pathname, flags, mode);
+}
+static int my_openat(int dirfd, const char *pathname, int flags, ...) {
+    va_list ap; va_start(ap, flags); mode_t mode = (mode_t)va_arg(ap, int); va_end(ap);
+    if (pathname) capture("openat", (const unsigned char *)pathname, (int)strlen(pathname));
+    return g_orig_openat(dirfd, pathname, flags, mode);
+}
+static ssize_t my_read(int fd, void *buf, size_t count) {
+    ssize_t ret = g_orig_read(fd, buf, count);
+    if (ret > 0) capture("read", (const unsigned char *)buf, (int)ret);
+    return ret;
+}
+static ssize_t my_write(int fd, const void *buf, size_t count) {
+    if (count > 0) capture("write", (const unsigned char *)buf, (int)count);
+    return g_orig_fwrite_sys(fd, (void *)buf, count);
+}
+static int my_file_close(int fd) {
+    __atomic_add_fetch(&g_file_close_hits, 1, __ATOMIC_RELAXED);
+    return g_orig_fclose(fd);
+}
+
+// libopenjdk.so imports open/openat/read/write/close (confirmed via dynsym), but Android
+// libcore's IoBridge/Posix native layer (the actual path behind java.io.FileInputStream/
+// FileOutputStream) issues raw syscall(2) directly instead of calling those named symbols
+// — verified empirically (named hooks install cleanly but capture nothing) and statically
+// (libopenjdk.so also imports "syscall"). Hook syscall() itself and decode the syscall
+// number/args to catch what the named-symbol hooks above structurally cannot.
+typedef long (*syscall_t)(long, long, long, long, long, long, long);
+static syscall_t g_orig_syscall = NULL;
+#ifndef __NR_openat
+#define __NR_openat 56
+#endif
+#ifndef __NR_close
+#define __NR_close 57
+#endif
+#ifndef __NR_read
+#define __NR_read 63
+#endif
+#ifndef __NR_write
+#define __NR_write 64
+#endif
+
+static long my_syscall(long number, ...) {
+    va_list ap; va_start(ap, number);
+    long a1 = va_arg(ap, long), a2 = va_arg(ap, long), a3 = va_arg(ap, long);
+    long a4 = va_arg(ap, long), a5 = va_arg(ap, long), a6 = va_arg(ap, long);
+    va_end(ap);
+    if (number == __NR_openat) {
+        const char *path = (const char *)a2;
+        if (path) capture("openat", (const unsigned char *)path, (int)strlen(path));
+    } else if (number == __NR_write) {
+        if (a3 > 0) capture("write", (const unsigned char *)a2, (int)a3);
+    }
+    long ret = g_orig_syscall(number, a1, a2, a3, a4, a5, a6);
+    if (number == __NR_read && ret > 0) {
+        capture("read", (const unsigned char *)a2, (int)ret);
+    } else if (number == __NR_close) {
+        __atomic_add_fetch(&g_file_close_hits, 1, __ATOMIC_RELAXED);
+    }
+    return ret;
+}
+
+// The module that actually backs java.io.FileInputStream/FileOutputStream on this device
+// is libjavacore.so (libcore's Linux.cpp JNI layer), NOT libopenjdk.so — confirmed via
+// readelf --dyn-syms on the pulled libjavacore.so: it imports plain open/close (already
+// hooked above, and "open" captures the real path when hooked here), but for read/write it
+// imports bionic's FORTIFY_SOURCE-wrapped __read_chk(fd,buf,count,buflen) and
+// __write_chk(fd,buf,count,buflen) (a differently-versioned symbol, LIBC_N vs read_chk's
+// LIBC) instead of plain read()/write() — confirmed live: __read_chk captures real bytes,
+// while plain write/writev (also imported, presumably for some other internal use) never
+// fire for FileOutputStream.write().
+typedef ssize_t (*read_chk_t)(int, void *, size_t, size_t);
+typedef ssize_t (*write_chk_t)(int, const void *, size_t, size_t);
+static read_chk_t g_orig_read_chk = NULL;
+static write_chk_t g_orig_write_chk = NULL;
+
+static ssize_t my_read_chk(int fd, void *buf, size_t count, size_t buflen) {
+    ssize_t ret = g_orig_read_chk(fd, buf, count, buflen);
+    if (ret > 0) capture("read", (const unsigned char *)buf, (int)ret);
+    return ret;
+}
+static ssize_t my_write_chk(int fd, const void *buf, size_t count, size_t buflen) {
+    if (count > 0) capture("write", (const unsigned char *)buf, (int)count);
+    return g_orig_write_chk(fd, buf, count, buflen);
+}
+
+// Recon: for open/openat/read/write/close (libc.so), report which loaded modules'
+// GOT holds each pointer (candidate hook sites) — mirrors cmd_crypto_probe.
+static void cmd_file_probe(int fd, const char *id) {
+    char idj[64]; json_escape(id, idj, sizeof(idj));
+    const char *names[] = { "open", "openat", "read", "write", "close" };
+    const int NF = 5;
+    void *addrs[5];
+    for (int i = 0; i < NF; i++) addrs[i] = resolve_sym("libc.so", names[i]);
+
+    struct Mod { char name[128]; int cnt[5]; };
+    struct Mod mods[96]; int nmods = 0;
+    FILE *m = fopen("/proc/self/maps", "r");
+    char line[512];
+    while (m && fgets(line, sizeof(line), m)) {
+        char sa[32], ea[32], perms[8], off[32], dev[16], path[400] = "";
+        unsigned long long inode = 0;
+        int nf = sscanf(line, "%31[0-9a-f]-%31[0-9a-f] %7s %31s %15s %llu %399[^\n]", sa, ea, perms, off, dev, &inode, path);
+        if (nf < 6 || perms[0] != 'r' || strstr(perms, "x")) continue;
+        char *pp = path; while (*pp == ' ') pp++;
+        if (!strstr(pp, ".so")) continue;
+        const char *base = strrchr(pp, '/'); base = base ? base + 1 : pp;
+        unsigned long long s = strtoull(sa, NULL, 16), e = strtoull(ea, NULL, 16);
+        if (e <= s || e - s > (64u << 20)) continue;
+        int hit[5] = {0,0,0,0,0}, any = 0;
+        for (unsigned long long a = s; a + 8 <= e; a += 8) {
+            void *v = *(void **)a;
+            for (int i = 0; i < NF; i++) if (addrs[i] && v == addrs[i]) { hit[i]++; any = 1; }
+        }
+        if (!any) continue;
+        int mi = -1;
+        for (int k = 0; k < nmods; k++) if (strcmp(mods[k].name, base) == 0) { mi = k; break; }
+        if (mi < 0 && nmods < 96) { mi = nmods++; strncpy(mods[mi].name, base, sizeof(mods[mi].name) - 1); mods[mi].name[sizeof(mods[mi].name)-1]=0; for (int i=0;i<NF;i++) mods[mi].cnt[i]=0; }
+        if (mi >= 0) for (int i = 0; i < NF; i++) mods[mi].cnt[i] += hit[i];
+    }
+    if (m) fclose(m);
+
+    size_t cap = 1 << 14, len = 0; char *out = malloc(cap); if (!out) { detach_env(0); return; }
+    len += snprintf(out + len, cap - len, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"file_probe\",\"ok\":true,\"fns\":{", idj);
+    for (int i = 0; i < NF; i++) len += snprintf(out + len, cap - len, "%s\"%s\":\"%llx\"", i?",":"", names[i], (unsigned long long)addrs[i]);
+    len += snprintf(out + len, cap - len, "},\"modules\":[");
+    for (int k = 0; k < nmods; k++) {
+        len += snprintf(out + len, cap - len, "%s{\"name\":\"%s\"", k?",":"", mods[k].name);
+        for (int i = 0; i < NF; i++) if (mods[k].cnt[i]) len += snprintf(out + len, cap - len, ",\"%s\":%d", names[i], mods[k].cnt[i]);
+        len += snprintf(out + len, cap - len, "}");
+    }
+    snprintf(out + len, cap - len, "]}\n");
+    send_line(fd, out);
+    free(out);
+    LOGI("file_probe: %d modules with open/openat/read/write/close GOT refs", nmods);
+}
+
+// Hook open/openat/read/write/close in `module` (default libopenjdk.so; override with
+// whatever cmd_file_probe found), trigger com.idh.sandbox.FileIO.run() via JNI
+// reflection, and report captured paths + read/write buffer bytes.
+static void cmd_file_hook_test(int fd, const char *id, const char *module) {
+    char idj[64]; json_escape(id, idj, sizeof(idj));
+    const char *mod = (module && module[0]) ? module : "libjavacore.so";
+    void *oo  = resolve_sym("libc.so", "open");
+    void *ooa = resolve_sym("libc.so", "openat");
+    void *ord = resolve_sym("libc.so", "read");
+    void *owr = resolve_sym("libc.so", "write");
+    void *ocl = resolve_sym("libc.so", "close");
+    void *osc = resolve_sym("libc.so", "syscall");
+    void *orc = resolve_sym("libc.so", "__read_chk");
+    void *owv = resolve_sym("libc.so", "__write_chk");
+    g_orig_open = (open_t)oo; g_orig_openat = (openat_t)ooa;
+    g_orig_read = (rw_t)ord; g_orig_fwrite_sys = (rw_t)owr; g_orig_fclose = (fclose_t)ocl;
+    g_orig_syscall = (syscall_t)osc;
+    g_orig_read_chk = (read_chk_t)orc; g_orig_write_chk = (write_chk_t)owv;
+
+    int ro  = oo  ? got_replace(mod, oo,  (void *)my_open)  : -1;
+    int roa = ooa ? got_replace(mod, ooa, (void *)my_openat) : -1;
+    int rr  = ord ? got_replace(mod, ord, (void *)my_read)  : -1;
+    int rw  = owr ? got_replace(mod, owr, (void *)my_write) : -1;
+    int rc  = ocl ? got_replace(mod, ocl, (void *)my_file_close) : -1;
+    int rsc = osc ? got_replace(mod, osc, (void *)my_syscall) : -1;
+    int rrc = orc ? got_replace(mod, orc, (void *)my_read_chk) : -1;
+    int rwv = owv ? got_replace(mod, owv, (void *)my_write_chk) : -1;
+    pthread_mutex_lock(&g_cap_lock); g_ncaps = 0; pthread_mutex_unlock(&g_cap_lock);
+    g_file_close_hits = 0;
+
+    int did = 0, triggered = 0; char result[160] = "";
+    JNIEnv *env = attach_env(&did);
+    if (env) {
+        (*env)->PushLocalFrame(env, 32);
+        jclass jc = load_app_class(env, "com.idh.sandbox.FileIO");
+        if (jc) {
+            jmethodID run = (*env)->GetStaticMethodID(env, jc, "run", "()Ljava/lang/String;");
+            if (run) {
+                jstring rs = (jstring)(*env)->CallStaticObjectMethod(env, jc, run);
+                triggered = 1;
+                if (rs) { const char *s = (*env)->GetStringUTFChars(env, rs, NULL); if (s) { strncpy(result, s, sizeof(result)-1); (*env)->ReleaseStringUTFChars(env, rs, s); } }
+            }
+        }
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        (*env)->PopLocalFrame(env, NULL);
+        detach_env(did);
+    }
+
+    if (ro  > 0) got_replace(mod, (void *)my_open,       oo);
+    if (roa > 0) got_replace(mod, (void *)my_openat,     ooa);
+    if (rr  > 0) got_replace(mod, (void *)my_read,       ord);
+    if (rw  > 0) got_replace(mod, (void *)my_write,      owr);
+    if (rc  > 0) got_replace(mod, (void *)my_file_close, ocl);
+    if (rsc > 0) got_replace(mod, (void *)my_syscall,    osc);
+    if (rrc > 0) got_replace(mod, (void *)my_read_chk,   orc);
+    if (rwv > 0) got_replace(mod, (void *)my_write_chk,  owv);
+
+    size_t cap = 1 << 16, len = 0; char *out = malloc(cap); if (!out) return;
+    char modj[64]; json_escape(mod, modj, sizeof(modj));
+    char rj[220]; json_escape(result, rj, sizeof(rj));
+    len += snprintf(out + len, cap - len,
+        "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"file_hook_test\",\"ok\":true,\"module\":\"%s\","
+        "\"hooked\":{\"open\":%d,\"openat\":%d,\"read\":%d,\"write\":%d,\"close\":%d,\"syscall\":%d,\"readChk\":%d,\"writeChk\":%d},"
+        "\"triggered\":%s,\"result\":\"%s\",\"closeHits\":%d,\"captures\":[",
+        idj, modj, ro, roa, rr, rw, rc, rsc, rrc, rwv, triggered ? "true" : "false", rj, g_file_close_hits);
+    pthread_mutex_lock(&g_cap_lock);
+    for (int k = 0; k < g_ncaps; k++) { struct CapRec *r = &g_caps[k];
+        len += snprintf(out + len, cap - len, "%s{\"func\":\"%s\",\"inl\":%d,\"tid\":%d,\"tsNs\":%lld,\"hex\":\"", k ? "," : "", r->func, r->inl, r->tid, r->ts_ns);
+        for (int b = 0; b < r->n && len + 3 < cap; b++) len += snprintf(out + len, cap - len, "%02x", r->data[b]);
+        len += snprintf(out + len, cap - len, "\"}"); }
+    int n = g_ncaps;
+    pthread_mutex_unlock(&g_cap_lock);
+    snprintf(out + len, cap - len, "],\"count\":%d}\n", n);
+    send_line(fd, out);
+    free(out);
+    LOGI("file_hook_test: mod=%s hooked o=%d oa=%d r=%d w=%d c=%d sc=%d triggered=%d captures=%d", mod, ro, roa, rr, rw, rc, rsc, triggered, n);
 }
 
 // Correlation flow: hook BOTH EVP_CipherUpdate (encrypt) and SSL_write (send) at
@@ -1777,6 +2013,11 @@ static void command_loop(int fd) {
                     cmd_load_so(fd, id, lpath, lsym);
                 } else if (strcmp(op, "net_hook_test") == 0) {
                     cmd_net_hook_test(fd, id);
+                } else if (strcmp(op, "file_probe") == 0) {
+                    cmd_file_probe(fd, id);
+                } else if (strcmp(op, "file_hook_test") == 0) {
+                    char fmod[64] = ""; json_get_str(line, "module", fmod, sizeof(fmod));
+                    cmd_file_hook_test(fd, id, fmod);
                 } else if (strcmp(op, "flow_watch") == 0) {
                     cmd_flow_watch(fd, id);
                 } else if (strcmp(op, "detect_watch") == 0) {

@@ -45,6 +45,7 @@ SCRIPTS=(
   "verify_v17_deepunpack.sh:device"
   "verify_v18_loadso.sh:device"
   "verify_v19_settings.sh:host"
+  "verify_v20_file.sh:device"
 )
 
 pass=0; fail=0; skip=0; FAILED=""
