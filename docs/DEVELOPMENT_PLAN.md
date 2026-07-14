@@ -613,6 +613,53 @@ android-decrpthub/          # 仓库名；产品名 ADH (Android DecryptHub)
 
 ---
 
+### 6.9.4 第二轮审计增补（真机安全 + 能力覆盖，插进 v2.x）
+
+> v2.0 补上了"诚实记账 + framed 地基 + 主从详情 UI"，但对照目标用户（中文逆向 / 隐私分析 /
+> 反调试 / 抓包）仍有硬缺口。四维审计 → 下列 P0/P1/P2，按对目标用户杀伤力排序。
+
+**维度 1 加密覆盖**：够 demo 不够实战。缺 ① **国密 SM2/SM3/SM4**（国内 App 大量使用，最该补）；
+② **非对称真实抓取**（native 无 `EVP_PKEY_sign/verify/encrypt/decrypt`、`RSA_*`、`EC_POINT_mul`；
+Java `IdhSecurity` 只包 Cipher/Mac/MessageDigest，**没包 `Signature`** → RSA 签名/ECDSA 的 key+待签数据抓不到）；
+③ **KDF**（PBKDF2/HKDF/scrypt/bcrypt/Argon2——"key 从哪来"）；④ **AEAD**（GCM tag / ChaCha20-Poly1305 / `EVP_AEAD_*`）；
+⑤ 流/老算法（RC4/Blowfish/独立 DES/ChaCha 常量）；⑥ 白盒（大查找表特征）。
+`IdhSecurity` 是**定长算法数组 + 在 sandbox 而非 agent**，不在列表就漏、可被显式 provider 绕过、真实目标里根本没这个 provider。
+
+**维度 2 真机崩溃/闪退**：① **`capture()` 在目标加密/TLS 线程里 `usleep` 背压**（ring 满等 3×150µs 再丢）+ 每次两次
+mutex 往返 → 给目标注入可测延迟（时序反调试面 + 高频 ANR），**应改无锁/非阻塞写入、满即计数、绝不阻塞目标线程**；
+② **`got_replace` 仅比对指针值**（`*slot==orig`）不验证是重定位槽 → 大混淆 so 里巧合等值的数据字会被误改成 wrapper → 崩，
+**应交叉 `.rela.plt/.rela.dyn`**；③ 常驻 hook 永不还原 + `SSL_write` 签名硬假设（非 Conscrypt ABI 越界读）；
+④ `trigger` 反射只 catch Java 异常（catch 不住 native 崩/死锁），黑名单是 `strstr` 子串（误杀/漏杀）；
+⑤ **`trace_preview` 每次 `open("/proc/self/mem")`**（wrapper 热路径 fd 压力）→ 应缓存 fd；⑥ 无信号隔离（wrapper segfault 带崩目标，应装 SIGSEGV handler 记录出事 hook）。
+
+**维度 3 能力面**：① **隐私分析 = 0**（目标场景，缺 TelephonyManager/Settings.Secure ANDROID_ID/Build/Sensor/Camera/
+Location/Clipboard/ContentResolver/WifiInfo/PackageManager 的 **LSPlant Java hook 隐私时间线**）；② 反调试只静态 svc 扫描（缺
+inline hook 目标自身检测函数 + svc 命中时刻/寄存器/参数 + Java 层 `isDebuggerConnected`/验签/时序）；③ 抓包：明文是散条，缺
+**按连接/host/线程组包成"请求-响应"** + HTTP 头/body 解析 + 非 Conscrypt 栈（OkHttp/cronet/Flutter BoringSSL）；④ 指令级：
+disasm 只 `llvm-objdump`（文件型 so），缺 **Capstone 内存镜像反汇编** + 函数边界 + 带参 QBDI；⑤ 内存：缺结构化导航/两次快照 diff/堆枚举/受控 patch；
+⑥ MCP：分析类偏弱——AI 要"分析内存指令/trace"只能拿裸字节 + 文件 so，**链条断在内存指令这一环**。
+
+**维度 4 控制台新手友好**：详情好，但主操作有硬编码坑。① **"一键脱壳"前端写死 sandbox 包名**
+（`index.html` `triggerAllPrefix:['com.idh.sandbox.TriggerProbe']`）→ 新手对真实 App 点它**静默空转还显示"会话完成"**（最坑）；
+② 隐私/反调试/抓包无一等公民面板；③ "雷达/关联/TLS 明文"三按钮调的专用端点内部写死 `com.idh.sandbox.*`；
+④ 内存/原生/DEX 面板"填参 → 裸 JSON"，缺"目标接入/注入"引导。
+
+**优先级清单（插进 v2.x）**：
+
+| 级别 | 事项 | 为什么现在做 | 归属 |
+|------|------|-------------|------|
+| **P0** | 前端"一键脱壳/TLS/雷达"去 sandbox 硬编码 + 加目标包名输入；demo 端点标注或删 | 主操作真实目标空转，误导新手 | Web + Daemon |
+| **P0** | `capture()` 背压改无锁/非阻塞，**不在目标线程 sleep** | 真机高频卡顿/ANR/时序暴露 | Agent (WS-C) |
+| **P0** | 国密 SM2/SM3/SM4 + `Signature` + KDF 覆盖（Java 走 LSPlant 直 hook 实例方法） | 中文逆向核心，现在基本抓不到 | Agent (WS-A) + Daemon |
+| **P1** | 隐私分析面板（设备/传感器/摄像头/位置/剪贴板时间线，LSPlant Java hook） | 点名场景，当前 0 | Agent (WS-A/WS-J) + Web |
+| **P1** | `got_replace` 交叉验证重定位槽；`trace_preview` 缓存 fd | 大目标内存损坏 / fd 压力 | Agent |
+| **P1** | Capstone 内存反汇编 + MCP 指令/内存导航工具 | AI"分析指令/内存"断点；QBDI demo 化 | Daemon (WS-G/WS-H) |
+| **P2** | 抓包按连接/host 组包成请求-响应；反调 inline+SVC 动态观测 | 协议逆向/反调实战完整度 | Agent + Daemon (WS-I/WS-J) |
+
+**三大欠账（一句话）**：国密/非对称/KDF 的真实覆盖、隐私分析从 0 到 1、前端主操作与 demo 端点去 sandbox 化。
+
+---
+
 ## 7. 版本路线图（v0.1–v1.0，**已完成并归档** — 当前路线见 §6.9）
 
 > **归档说明**：以下 v0.1–v1.0 全部实现并逐项验证（`verify_all` 35/35）。保留作历史与能力清单；
