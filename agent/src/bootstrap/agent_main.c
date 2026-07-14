@@ -487,6 +487,79 @@ static void perms_of_addr(unsigned long long addr, char *out, int outsz) {
     fclose(m);
 }
 
+// ---- relocation-slot cross-verification (v2.x audit P1) --------------------
+// got_replace used to patch ANY readable non-exec word equal to `orig`. On a large obfuscated
+// .so a coincidental data word == the function address would be clobbered into a wrapper ->
+// memory corruption / crash. These helpers enumerate the module's REAL GOT/PLT relocation
+// slots (.rela.plt + .rela.dyn) so we only ever patch genuine relocation entries.
+#define RSET_MAX 262144   // per-module reloc-slot cap (~2 MiB transient); truncation -> fallback
+
+static unsigned long long module_base_of(const char *basename) {
+    unsigned long long base = 0;
+    FILE *m = fopen("/proc/self/maps", "r");
+    if (!m) return 0;
+    char line[512];
+    while (fgets(line, sizeof(line), m)) {
+        char sa[32], ea[32], perms[8], off[32], dev[16], path[400] = "";
+        unsigned long long inode = 0;
+        if (sscanf(line, "%31[0-9a-f]-%31[0-9a-f] %7s %31s %15s %llu %399[^\n]", sa, ea, perms, off, dev, &inode, path) < 6) continue;
+        char *pp = path; while (*pp == ' ') pp++;
+        const char *bn = strrchr(pp, '/'); bn = bn ? bn + 1 : pp;
+        if (strcmp(bn, basename) != 0) continue;
+        if (strcmp(off, "0") && strcmp(off, "00000000")) continue;   // mapping at file offset 0
+        unsigned long long s = strtoull(sa, NULL, 16);
+        if (base == 0 || s < base) base = s;
+    }
+    fclose(m);
+    return base;
+}
+
+// Fill out[] with absolute reloc-slot addresses of the module based at `base`. Returns count,
+// -1 if ELF/dynamic unparsable, or RSET_MAX on truncation (caller treats as untrusted).
+// Elf64_Rela = { r_offset(8), r_info(8), r_addend(8) } = 24 bytes.
+static int reloc_slots(unsigned long long base, unsigned long long *out, int max) {
+    if (!base) return -1;
+    unsigned char *p = (unsigned char *)base;
+    if (memcmp(p, "\x7f""ELF", 4) != 0) return -1;
+    unsigned long long phoff = *(unsigned long long *)(p + 32);
+    unsigned short phentsize = *(unsigned short *)(p + 54);
+    unsigned short phnum = *(unsigned short *)(p + 56);
+    unsigned long long dyn_vaddr = 0;
+    for (int i = 0; i < phnum; i++) {
+        unsigned char *ph = p + phoff + (unsigned long long)i * phentsize;
+        if (*(unsigned int *)ph == 2) { dyn_vaddr = *(unsigned long long *)(ph + 16); break; }  // PT_DYNAMIC
+    }
+    if (!dyn_vaddr) return -1;
+    unsigned long long jmprel = 0, pltrelsz = 0, rela = 0, relasz = 0, relaent = 24;
+    unsigned long long *d = (unsigned long long *)(base + dyn_vaddr);
+    for (; d[0] != 0; d += 2) {                 // Elf64_Dyn: {d_tag, d_val}
+        if (d[0] == 23) jmprel = d[1];          // DT_JMPREL   (.rela.plt)
+        else if (d[0] == 2)  pltrelsz = d[1];   // DT_PLTRELSZ
+        else if (d[0] == 7)  rela = d[1];       // DT_RELA     (.rela.dyn)
+        else if (d[0] == 8)  relasz = d[1];     // DT_RELASZ
+        else if (d[0] == 9)  relaent = d[1];    // DT_RELAENT
+    }
+    if (relaent == 0) relaent = 24;
+    int n = 0;
+    unsigned long long regions[2][2] = { { jmprel, pltrelsz }, { rela, relasz } };
+    for (int r = 0; r < 2; r++) {
+        unsigned long long off = regions[r][0], sz = regions[r][1];
+        if (!off || !sz) continue;
+        if (off < base) off += base;                 // link-time vaddr -> runtime
+        for (unsigned long long e = off; e + relaent <= off + sz; e += relaent) {
+            if (n >= max) return RSET_MAX;           // truncated -> untrusted
+            unsigned long long r_offset = *(unsigned long long *)e;
+            out[n++] = r_offset < base ? base + r_offset : r_offset;
+        }
+    }
+    return n;
+}
+
+static int slot_in_set(unsigned long long a, const unsigned long long *set, int n) {
+    for (int i = 0; i < n; i++) if (set[i] == a) return 1;
+    return 0;
+}
+
 // Hook the real slot in EVERY matching caller module (not just the first). Exactly one
 // slot PER module (lowest-address RELRO/.got.plt slot) — hooking duplicate copies in a
 // module's other data segments would corrupt that module's own call path and deadlock
@@ -500,6 +573,7 @@ static int got_replace(const char *module_substr, void *orig, void *wrapper) {
     long pagesz = sysconf(_SC_PAGESIZE);
     char cur_mod[400] = "";
     int hooked_this_mod = 0;
+    unsigned long long *rset = NULL; int nrset = -1;   // cur_mod reloc slots (-1 = unavailable)
     while (fgets(line, sizeof(line), m)) {
         char sa[32], ea[32], perms[8], off[32], dev[16], path[400] = "";
         unsigned long long inode = 0;
@@ -507,7 +581,22 @@ static int got_replace(const char *module_substr, void *orig, void *wrapper) {
         if (nf < 6 || perms[0] != 'r') continue;
         char *pp = path; while (*pp == ' ') pp++;
         if (!strstr(pp, module_substr)) continue;
-        if (strcmp(pp, cur_mod) != 0) { snprintf(cur_mod, sizeof(cur_mod), "%s", pp); hooked_this_mod = 0; }
+        if (strcmp(pp, cur_mod) != 0) {
+            snprintf(cur_mod, sizeof(cur_mod), "%s", pp); hooked_this_mod = 0;
+            // (re)compute this module's real relocation slots, so we never clobber a
+            // coincidental data word == orig. If unparsable/truncated, fall back (logged).
+            free(rset); rset = NULL; nrset = -1;
+            const char *bn = strrchr(cur_mod, '/'); bn = bn ? bn + 1 : cur_mod;
+            unsigned long long mb = module_base_of(bn);
+            if (mb) {
+                rset = (unsigned long long *)malloc(sizeof(unsigned long long) * RSET_MAX);
+                if (rset) {
+                    nrset = reloc_slots(mb, rset, RSET_MAX);
+                    if (nrset < 0 || nrset >= RSET_MAX) { free(rset); rset = NULL; nrset = -1; }
+                }
+            }
+            if (nrset < 0) LOGI("got_replace: reloc validation unavailable for %s — value-match fallback", bn);
+        }
         if (hooked_this_mod) continue;                    // one slot per module already done
         if (strstr(perms, "x")) continue;
         int orig_prot = perms_to_prot(perms);
@@ -515,12 +604,17 @@ static int got_replace(const char *module_substr, void *orig, void *wrapper) {
         if (end <= start) continue;
         for (unsigned long long a = start; a + sizeof(void *) <= end && !hooked_this_mod; a += sizeof(void *)) {
             void **slot = (void **)a;
-            if (*slot == orig && got_write_slot(slot, wrapper, orig_prot, pagesz)) {
+            if (*slot != orig) continue;
+            // cross-verify this is a genuine relocation slot (skip coincidental data words).
+            // When reloc parsing was unavailable (nrset<0) we accept the value match as before.
+            if (nrset >= 0 && !slot_in_set(a, rset, nrset)) continue;
+            if (got_write_slot(slot, wrapper, orig_prot, pagesz)) {
                 replaced++; hooked_this_mod = 1;
                 g_dbg_slot = a; snprintf(g_dbg_orig_perms, sizeof(g_dbg_orig_perms), "%s", perms);
             }
         }
     }
+    free(rset);
     fclose(m);
     return replaced;
 }

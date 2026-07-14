@@ -291,6 +291,14 @@ arm64 预编译，agent 运行时 dlopen libQBDI.so，指令级 trace idh_trace_
 
 ## 会话日志（倒序，简短）
 
+- 2026-07-14 (二轮审计 P1 · got_replace 交叉验证重定位槽)：审计的内存损坏隐患——`got_replace` 旧逻辑
+  在模块非 exec 段扫任一 `*word==orig` 就改（大混淆 so 里巧合等值的数据字会被写成 wrapper → 崩）。修复：
+  新增 `module_base_of`/`reloc_slots`（解析模块 `.rela.plt`(DT_JMPREL/DT_PLTRELSZ) + `.rela.dyn`(DT_RELA/DT_RELASZ)
+  的 `Elf64_Rela.r_offset` → 绝对 GOT 槽地址集）+ `slot_in_set`。`got_replace` 现只改**确属重定位槽**的匹配
+  （`*slot==orig` 且地址在 reloc 集内）；reloc 解析失败/截断时**回退到旧的值匹配并 log 告警**（不破坏现有能力）。
+  硬信号：v04_gothook(自测 close)/v04_crypto(EVP)/v07(SSL_rw)/v20_file(open/__read_chk/__write_chk) **全 PASS**——
+  证明交叉验证能找到真实槽（所有 hook 照常命中），同时对巧合数据字免疫。
+  **未做（下一步）**：wrapper SIGSEGV 隔离 handler；国密/Signature/KDF 与隐私面板需 LSPlant（WS-A，v2.1）。
 - 2026-07-14 (二轮审计 P0 · 前端主操作去 sandbox 硬编码)：审计最坑新手的一处——"一键脱壳"前端写死
   `triggerAllPrefix:'com.idh.sandbox.'` + `triggerClasses:['com.idh.sandbox.TriggerProbe']`，对真实 App 点它
   **静默空转还显示"会话完成"**。修复：① 后端 `runUnpackSession` 的 `triggerAllPrefix` **缺省改为连上来的目标进程
