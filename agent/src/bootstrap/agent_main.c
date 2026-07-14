@@ -23,6 +23,10 @@
 #include <sys/system_properties.h>
 #include <android/log.h>
 
+#ifdef IDH_HAVE_LSPLANT
+#include "../hook/java_lsplant.h"   // C-ABI shim over LSPlant (Java method hook, WS-A)
+#endif
+
 #define AGENT_VER   "0.2.0"
 #define IDH_HOST    "127.0.0.1"
 #define IDH_PORT    8761
@@ -656,7 +660,7 @@ static void cmd_gothook_selftest(int fd, const char *id) {
 
 // Resolve an exported symbol in an already-loaded module by parsing its in-memory
 // dynamic symbol table (namespace-independent; works when dlopen is blocked).
-static void *resolve_sym(const char *mod_substr, const char *symbol) {
+static void *resolve_sym_ex(const char *mod_substr, const char *symbol, int prefix) {
     unsigned long long base = 0;
     FILE *m = fopen("/proc/self/maps", "r");
     if (!m) return NULL;
@@ -730,10 +734,17 @@ static void *resolve_sym(const char *mod_substr, const char *symbol) {
         unsigned int st_name = *(unsigned int *)sym;
         unsigned long long st_value = *(unsigned long long *)(sym + 8);
         const char *name = (const char *)(strtab + st_name);
-        if (st_value && strcmp(name, symbol) == 0) return (void *)(base + st_value);
+        if (st_value && (prefix ? strncmp(name, symbol, strlen(symbol)) == 0 : strcmp(name, symbol) == 0))
+            return (void *)(base + st_value);
     }
     return NULL;
 }
+// Exact-match resolver (original behavior) + a prefix variant, plus C-ABI wrappers used by
+// the C++ LSPlant shim (java_lsplant.cpp) for ART symbol resolution (some ART symbols must be
+// matched by prefix because the mangled std::__1 allocator spelling varies across ROMs).
+static void *resolve_sym(const char *mod_substr, const char *symbol) { return resolve_sym_ex(mod_substr, symbol, 0); }
+void *idh_resolve_sym(const char *mod, const char *sym) { return resolve_sym_ex(mod, sym, 0); }
+void *idh_resolve_sym_prefix(const char *mod, const char *pre) { return resolve_sym_ex(mod, pre, 1); }
 
 // ---- crypto plaintext capture (thread-safe; wrapper runs on the app's crypto thread) ----
 // v2.0 WS-C: bounded ring buffer with HONEST accounting. The old fixed g_caps[64] silently
@@ -2179,6 +2190,78 @@ static void cmd_frame_echo(int fd, const char *id, const char *line) {
     LOGI("frame_echo: recvBytes=%zu tail=%s padLen=%lld", recv, tail, padLen);
 }
 
+// ---- Java method hook (WS-A, LSPlant) deterministic self-test -------------------------
+#ifdef IDH_HAVE_LSPLANT
+// Init LSPlant, hook com.idh.sandbox.HookTarget.secret(String) via a com.idh.agent.MethodHook
+// callback, call it, and assert: init ok, hook installed, callback fired capturing the real
+// arg, and the original still returned its real value (backup.invoke worked, no recursion/crash).
+static void cmd_java_hook_test(int fd, const char *id) {
+    char idj[64]; json_escape(id, idj, sizeof(idj));
+    int did = 0; JNIEnv *env = attach_env(&did);
+    if (!env) { char e[160]; snprintf(e, sizeof(e), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"java_hook_test\",\"ok\":false,\"error\":\"no JNIEnv\"}\n", idj); send_line(fd, e); return; }
+    (*env)->PushLocalFrame(env, 128);
+    int initOk = idh_javahook_init(env);
+    int hooked = 0, fired = 0, origOk = 0, hits = -1;
+    char lastArg[128] = "", ret[128] = "";
+
+    jclass clsCls = (*env)->FindClass(env, "java/lang/Class");
+    jclass strCls = (*env)->FindClass(env, "java/lang/String");
+    jclass htCls  = load_app_class(env, "com.idh.sandbox.HookTarget");
+    jclass mhCls  = load_app_class(env, "com.idh.agent.MethodHook");
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    if (initOk && htCls && mhCls && clsCls && strCls) {
+        jmethodID gdm = (*env)->GetMethodID(env, clsCls, "getDeclaredMethod", "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;");
+        jobjectArray p1 = (*env)->NewObjectArray(env, 1, clsCls, strCls);
+        jobject targetMethod = (*env)->CallObjectMethod(env, htCls, gdm, (*env)->NewStringUTF(env, "secret"), p1);
+        jclass objArrCls = (*env)->FindClass(env, "[Ljava/lang/Object;");
+        jobjectArray p2 = (*env)->NewObjectArray(env, 1, clsCls, objArrCls);
+        jobject cbMethod = (*env)->CallObjectMethod(env, mhCls, gdm, (*env)->NewStringUTF(env, "callback"), p2);
+        jmethodID ctor = (*env)->GetMethodID(env, mhCls, "<init>", "()V");
+        jobject hooker = ctor ? (*env)->NewObject(env, mhCls, ctor) : NULL;
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        if (targetMethod && cbMethod && hooker) {
+            jobject backup = idh_javahook_hook(env, targetMethod, hooker, cbMethod);
+            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+            if (backup) {
+                hooked = 1;
+                (*env)->SetObjectField(env, hooker, (*env)->GetFieldID(env, mhCls, "backup", "Ljava/lang/reflect/Method;"), backup);
+                (*env)->SetBooleanField(env, hooker, (*env)->GetFieldID(env, mhCls, "isStatic", "Z"), JNI_TRUE);
+                jmethodID secret = (*env)->GetStaticMethodID(env, htCls, "secret", "(Ljava/lang/String;)Ljava/lang/String;");
+                jstring rs = secret ? (jstring)(*env)->CallStaticObjectMethod(env, htCls, secret, (*env)->NewStringUTF(env, "IDH_HOOK_PING")) : NULL;
+                if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+                if (rs) { const char *s = (*env)->GetStringUTFChars(env, rs, NULL); if (s) { strncpy(ret, s, sizeof(ret)-1); (*env)->ReleaseStringUTFChars(env, rs, s); } }
+                jfieldID fHits = (*env)->GetStaticFieldID(env, mhCls, "hits", "I");
+                jfieldID fLast = (*env)->GetStaticFieldID(env, mhCls, "lastArg", "Ljava/lang/String;");
+                if (fHits) hits = (*env)->GetStaticIntField(env, mhCls, fHits);
+                jstring la = fLast ? (jstring)(*env)->GetStaticObjectField(env, mhCls, fLast) : NULL;
+                if (la) { const char *s = (*env)->GetStringUTFChars(env, la, NULL); if (s) { strncpy(lastArg, s, sizeof(lastArg)-1); (*env)->ReleaseStringUTFChars(env, la, s); } }
+                fired = (hits >= 1 && strcmp(lastArg, "IDH_HOOK_PING") == 0) ? 1 : 0;
+                origOk = (strcmp(ret, "REAL_SECRET:IDH_HOOK_PING") == 0) ? 1 : 0;
+                idh_javahook_unhook(env, targetMethod);
+            }
+        }
+    }
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    (*env)->PopLocalFrame(env, NULL);
+    detach_env(did);
+    char laj[160], rj[160]; json_escape(lastArg, laj, sizeof(laj)); json_escape(ret, rj, sizeof(rj));
+    int ok = initOk && hooked && fired && origOk;
+    char out[512];
+    snprintf(out, sizeof(out),
+        "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"java_hook_test\",\"ok\":%s,\"initOk\":%s,\"hooked\":%s,\"fired\":%s,\"origOk\":%s,\"hits\":%d,\"lastArg\":\"%s\",\"ret\":\"%s\"}\n",
+        idj, ok?"true":"false", initOk?"true":"false", hooked?"true":"false", fired?"true":"false", origOk?"true":"false", hits, laj, rj);
+    send_line(fd, out);
+    LOGI("java_hook_test: init=%d hooked=%d fired=%d origOk=%d hits=%d arg=%s ret=%s", initOk, hooked, fired, origOk, hits, lastArg, ret);
+}
+#else
+static void cmd_java_hook_test(int fd, const char *id) {
+    char idj[64]; json_escape(id, idj, sizeof(idj));
+    char out[220];
+    snprintf(out, sizeof(out), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"java_hook_test\",\"ok\":false,\"error\":\"lsplant not built — run tools/fetch_lsplant.sh\"}\n", idj);
+    send_line(fd, out);
+}
+#endif
+
 // Read framed commands from idhd and dispatch.
 static void command_loop(int fd) {
     for (;;) {
@@ -2278,6 +2361,8 @@ static void command_loop(int fd) {
                     char pat[520] = ""; json_get_str(line, "pat", pat, sizeof(pat));
                     long long lim = json_get_num(line, "limit");
                     cmd_search(fd, id, pat, (int)lim);
+                } else if (strcmp(op, "java_hook_test") == 0) {
+                    cmd_java_hook_test(fd, id);
                 } else if (strcmp(op, "frame_echo") == 0) {
                     cmd_frame_echo(fd, id, line);
                 } else if (strcmp(op, "ping") == 0) {

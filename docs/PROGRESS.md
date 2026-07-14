@@ -291,6 +291,24 @@ arm64 预编译，agent 运行时 dlopen libQBDI.so，指令级 trace idh_trace_
 
 ## 会话日志（倒序，简短）
 
+- 2026-07-14 (v2.1 WS-A · LSPlant 集成——**编译通过 + 后端加载，卡在 ROM ART 符号**)：为国密/Signature/KDF
+  + 隐私面板铺 ART 方法级 hook 地基。三个侦察 subagent 产出（LSPlant 配方 / 加密 hook 表 / 隐私 hook 表）后落地
+  **完整集成**：`tools/fetch_lsplant.sh`（LSPlant **v6.4** + DexBuilder + parallel_hashmap；master 用 C++23 modules
+  需 CMake 3.28 不兼容我们的 3.22.1）；inline hooker 选型踩坑记录——**ShadowHook** 预编译 .so 装上但
+  `shadowhook_init` 报 `INIT_LINKER`(errno12)、其引擎在本 ColorOS ROM 不可用；**Dobby master** 源码腐烂编不过
+  （`ProcessRuntime.cc` 引用已删字段 + .asm/头缺失）；最终用 **Dobby 预编译静态库** `io.github.vvb2060.ndk:dobby:1.2`
+  （正是 LSPlant 自测用的后端，`libdobby.a` 静态链入、自包含、按地址 hook、无 .so/JNI_OnLoad/linker 监控）。
+  CMake 扩 `C→C CXX`+C++20+`-DANDROID_STL=c++_static`；新增 `java_lsplant.cpp/.h`（C-ABI 壳，`lsplant::Init/Hook/UnHook`）；
+  `resolve_sym` 重构出 `resolve_sym_ex`+`idh_resolve_sym[_prefix]` C 包装供 ART 符号解析；agent 加 `java_hook_test` 命令、
+  daemon `/api/java/hook_test`、沙盒 `HookTarget.kt`+`com.idh.agent.MethodHook.java`（LSPlant 回调）、`verify_v23_javahook.sh`。
+  **agent 编译通过（13.4MB 自包含 .so），Dobby 后端加载不崩，既有能力零回归**（v04_crypto/v11/v20 全 PASS）。
+  **硬阻塞（fail-loud，未伪装通过）**：`lsplant::Init` 失败——LSPlant 需 ART 符号 `GetMethodShorty`
+  （内部链接 `_ZN3artL15GetMethodShorty...`），本机 `libart.so` **dynsym 2822 个符号里 0 个含 Shorty**（ColorOS/
+  Android15 stripped 掉了）。v6.4 无兜底；支持 A15/16 的新 LSPlant 又要 C++23。**下一步（择一）**：① cherry-pick 新
+  LSPlant 的无符号 shorty 解析进 v6.4；② 换能导出该符号的 ROM/设备（如 CLAUDE.md 记录的 Pixel 6 Pro）验证；
+  ③ 用 JNI 反射（getParameterTypes/getReturnType）在 C++ 侧自算 shorty 替换 LSPlant 的 GetMethodShorty 依赖。
+  `verify_v23` **暂不入 verify_all**（已知阻塞，避免把套件染红），待解阻塞后纳入。
+
 - 2026-07-14 (二轮审计 P1 · got_replace 交叉验证重定位槽)：审计的内存损坏隐患——`got_replace` 旧逻辑
   在模块非 exec 段扫任一 `*word==orig` 就改（大混淆 so 里巧合等值的数据字会被写成 wrapper → 崩）。修复：
   新增 `module_base_of`/`reloc_slots`（解析模块 `.rela.plt`(DT_JMPREL/DT_PLTRELSZ) + `.rela.dyn`(DT_RELA/DT_RELASZ)

@@ -1,25 +1,69 @@
 cmake_minimum_required(VERSION 3.22)
-project(idh_agent C)
+project(idh_agent C CXX)
 
 set(CMAKE_C_STANDARD 11)
+set(CMAKE_CXX_STANDARD 20)          # LSPlant v6.4 needs C++20
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_C_VISIBILITY_PRESET hidden)
 
-add_library(idh_agent SHARED
+set(AGENT_SOURCES
     src/bootstrap/agent_main.c
     src/trace/qbdi_trace.c
 )
 
 # QBDI headers (loaded at runtime via dlopen — NOT linked, keeps agent independent).
 # Present only if tools/fetch_qbdi.sh has run; guard so the build works without it.
+set(QBDI_INC "")
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/qbdi/include")
-    target_include_directories(idh_agent PRIVATE third_party/qbdi/include)
+    set(QBDI_INC third_party/qbdi/include)
 else()
     message(WARNING "QBDI headers absent — run tools/fetch_qbdi.sh for instruction trace")
 endif()
 
+# LSPlant (ART Java-method hook, WS-A) — present only if tools/fetch_lsplant.sh has run.
+# Guarded so the agent still builds without it (like QBDI). When present we compile the
+# C++ shim + LSPlant + DexBuilder and define IDH_HAVE_LSPLANT for agent_main.c.
+set(LSP "${CMAKE_CURRENT_SOURCE_DIR}/third_party/lsplant/lsplant/src/main/jni")
+set(DXB "${LSP}/external/dex_builder")
+set(DOB "${CMAKE_CURRENT_SOURCE_DIR}/third_party/dobby")
+set(LSPLANT_LIBS "")
+set(LSPLANT_INC "")
+if(EXISTS "${LSP}/lsplant.cc" AND EXISTS "${DOB}/lib/arm64-v8a/libdobby.a")
+    message(STATUS "LSPlant present — enabling Java-method hook backend (Dobby prebuilt static)")
+    add_subdirectory("${DXB}/external/parallel_hashmap" phmap_build EXCLUDE_FROM_ALL)
+    list(APPEND AGENT_SOURCES
+        src/hook/java_lsplant.cpp
+        ${LSP}/lsplant.cc
+        ${DXB}/dex_builder.cc
+        ${DXB}/dex_helper.cc
+        ${DXB}/slicer/reader.cc  ${DXB}/slicer/writer.cc
+        ${DXB}/slicer/dex_ir.cc  ${DXB}/slicer/common.cc
+        ${DXB}/slicer/dex_format.cc ${DXB}/slicer/dex_utf8.cc
+        ${DXB}/slicer/dex_bytecode.cc ${DXB}/slicer/sha1.cpp
+    )
+    set(LSPLANT_INC ${LSP} ${LSP}/include ${DXB}/include ${DXB} ${DOB}/include)
+    set(LSPLANT_LIBS z phmap "${DOB}/lib/arm64-v8a/libdobby.a")
+    add_compile_definitions(IDH_HAVE_LSPLANT=1)
+    # LSPlant/DexBuilder upstream warnings are not ours — don't fail on them.
+    set_source_files_properties(
+        ${LSP}/lsplant.cc ${DXB}/dex_builder.cc ${DXB}/dex_helper.cc
+        ${DXB}/slicer/reader.cc ${DXB}/slicer/writer.cc ${DXB}/slicer/dex_ir.cc
+        ${DXB}/slicer/common.cc ${DXB}/slicer/dex_format.cc ${DXB}/slicer/dex_utf8.cc
+        ${DXB}/slicer/dex_bytecode.cc ${DXB}/slicer/sha1.cpp
+        PROPERTIES COMPILE_FLAGS "-Wno-everything")
+else()
+    message(WARNING "LSPlant absent — run tools/fetch_lsplant.sh for Java-method hooking")
+endif()
+
+add_library(idh_agent SHARED ${AGENT_SOURCES})
+
+target_include_directories(idh_agent PRIVATE ${QBDI_INC} ${LSPLANT_INC})
+
 # Android system libs: log (android/log.h), plus libc/pthread (implicit).
 find_library(log-lib log)
-target_link_libraries(idh_agent ${log-lib} dl)
+target_link_libraries(idh_agent ${log-lib} dl ${LSPLANT_LIBS})
 
-# Keep the .so small and stripped in release.
-target_compile_options(idh_agent PRIVATE -Wall -Wextra -O2 -fvisibility=hidden)
+# Keep our own code small + hidden; -Wall/-Wextra apply to C agent sources only
+# (LSPlant/DexBuilder sources get -Wno-everything above).
+target_compile_options(idh_agent PRIVATE -O2 -fvisibility=hidden)
+target_compile_options(idh_agent PRIVATE $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra>)

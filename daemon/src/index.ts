@@ -1044,6 +1044,13 @@ const httpServer = http.createServer(async (req, res) => {
       return send(r.ok ? 200 : 502, { ...r, sentPadLen: padLen, tailOk: r.tail === tail, notTruncated: (r.recvBytes ?? 0) > padLen });
     } catch (e) { return send(504, { error: (e as Error).message }); }
   }
+  // Java method-hook self-test (WS-A / LSPlant): GET /api/java/hook_test?session=ID
+  if (url.pathname === '/api/java/hook_test') {
+    const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    if (!sid) return send(400, { error: 'no session' });
+    try { const r = await withCaptureSuspended(sid, () => sendCmd(sid, 'java_hook_test', {}, 25_000)); return send(r.ok ? 200 : 502, r); }
+    catch (e) { return send(504, { error: (e as Error).message }); }
+  }
   if (url.pathname === '/api/process/maps') {
     const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
     if (!sid) return send(400, { error: 'no session' });

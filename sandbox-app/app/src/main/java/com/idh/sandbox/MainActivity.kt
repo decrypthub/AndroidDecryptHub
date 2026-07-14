@@ -79,6 +79,8 @@ class MainActivity : Activity() {
         TriggerProbe.reset()
 
         val loadStatus: String = try {
+            // Dobby (LSPlant's inline-hook backend) is statically linked into libidh_agent.so —
+            // no separate .so to load.
             System.loadLibrary("idh_agent"); "agent: libidh_agent 已加载（模拟注入）"
         } catch (t: Throwable) {
             Log.w(TAG, "idh_agent not loaded: ${t.message}"); "agent: 未加载 — ${t.message}"

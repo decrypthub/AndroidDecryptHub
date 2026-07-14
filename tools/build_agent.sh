@@ -21,6 +21,7 @@ echo ">> configuring agent ($ABI)"
   -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN" \
   -DANDROID_ABI="$ABI" \
   -DANDROID_PLATFORM=android-26 \
+  -DANDROID_STL=c++_static \
   -DCMAKE_BUILD_TYPE=Release >/dev/null
 
 echo ">> building"
