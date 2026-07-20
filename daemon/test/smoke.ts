@@ -1,9 +1,20 @@
-// Host-only smoke test for idhd v0.1: boots nothing itself; assumes idhd already running.
-// Simulates an agent over TCP, then checks HTTP /health and /api/agents reflect it.
+// Host-only smoke test for idhd: boots nothing itself; assumes idhd already running.
+// Simulates an agent over TCP using the WS-D length-framed protocol
+// ([u32 len BE][u8 type][JSON payload] — see proto/PROTOCOL.md), then checks HTTP /health
+// and /api/agents reflect it.
 import net from 'node:net';
 
 const HTTP = Number(process.env.IDH_HTTP_PORT ?? 8760);
 const AGENT = Number(process.env.IDH_AGENT_PORT ?? 8761);
+
+const FRAME_JSON = 0x01;
+function frame(obj: unknown): Buffer {
+  const payload = Buffer.from(JSON.stringify(obj), 'utf8');
+  const hdr = Buffer.alloc(5);
+  hdr.writeUInt32BE(payload.length, 0);
+  hdr.writeUInt8(FRAME_JSON, 4);
+  return Buffer.concat([hdr, payload]);
+}
 
 function agentConnect(): Promise<net.Socket> {
   return new Promise((resolve, reject) => {
@@ -27,14 +38,14 @@ const health = await getJson('/health');
 check('health.ok', health.ok === true, health);
 
 const sock = await agentConnect();
-sock.write(JSON.stringify({
+sock.write(frame({
   t: 'hello', agentVer: '0.1.0-smoke', pid: 4242, uid: 10999,
   package: 'com.smoke.test', process: 'com.smoke.test',
   abi: 'arm64-v8a', android: '16', sdk: 36, entry: 'smoke',
-}) + '\n');
-sock.write(JSON.stringify({ t: 'maps', count: 777, regions: [
+}));
+sock.write(frame({ t: 'maps', count: 777, regions: [
   { start: '7f00', end: '7f10', perms: 'r-xp', offset: '0', dev: 'fd:00', inode: 1, path: '/system/lib64/libc.so' },
-]}) + '\n');
+]}));
 
 await sleep(300);
 const agents = await getJson('/api/agents');

@@ -26,6 +26,7 @@ const READELF = process.env.IDH_READELF ?? join(LLVM_BIN, 'llvm-readelf.exe');
 // NEEDED libs, and printable strings.
 async function analyzeSo(path: string): Promise<any> {
   const exports: string[] = [], imports: string[] = [];
+  let readelfError = '';   // fail-loud: an absent/failing readelf must not masquerade as "no symbols"
   try {
     const { stdout } = await execFileP(READELF, ['--dyn-syms', path], { maxBuffer: 32 * 1024 * 1024 });
     for (const line of stdout.split('\n')) {
@@ -36,12 +37,12 @@ async function analyzeSo(path: string): Promise<any> {
       if (!name || name === '') continue;
       if (ndx === 'UND') imports.push(name); else exports.push(name);
     }
-  } catch { /* readelf missing */ }
+  } catch (e) { readelfError = `readelf --dyn-syms failed: ${(e as Error).message}`; }
   const needed: string[] = [];
   try {
     const { stdout } = await execFileP(READELF, ['-d', path], { maxBuffer: 8 * 1024 * 1024 });
     for (const line of stdout.split('\n')) { const m = line.match(/\(NEEDED\).*\[(.+?)\]/); if (m) needed.push(m[1]); }
-  } catch { /* */ }
+  } catch (e) { if (!readelfError) readelfError = `readelf -d failed: ${(e as Error).message}`; }
   // printable string runs (>=4)
   const buf = await readFile(path);
   const strings: string[] = []; let cur = '';
@@ -51,6 +52,7 @@ async function analyzeSo(path: string): Promise<any> {
     else { if (cur.length >= 4) strings.push(cur); cur = ''; }
   }
   return { exports: [...new Set(exports)], imports: [...new Set(imports)], needed, strings: [...new Set(strings)],
+    ...(readelfError ? { readelfError } : {}),
     counts: { exports: exports.length, imports: imports.length, needed: needed.length, strings: strings.length } };
 }
 
@@ -238,13 +240,16 @@ let evSeq = 0;
 try {   // replay: load persisted events on startup so a session survives restarts
   if (existsSync(EVENTS_FILE)) {
     const lines = readFileSync(EVENTS_FILE, 'utf8').split('\n').filter(Boolean).slice(-5000);
-    for (const l of lines) { try { const e = JSON.parse(l); events.push(e); if (e.seq > evSeq) evSeq = e.seq; } catch {} }
+    let corrupt = 0;
+    for (const l of lines) { try { const e = JSON.parse(l); events.push(e); if (e.seq > evSeq) evSeq = e.seq; } catch { corrupt++; } }
+    if (corrupt) log(`[events] replay: ${corrupt}/${lines.length} 行损坏已跳过 (${EVENTS_FILE})`);
   }
-} catch {}
+} catch (e) { log(`[events] replay 失败 (${EVENTS_FILE}) — 从空事件起步:`, (e as Error).message); }
 function recordEvent(type: string, data: any) {
   const e: Ev = { seq: ++evSeq, ts: Date.now(), type, data };
   events.push(e); if (events.length > 5000) events.shift();
-  try { appendFileSync(EVENTS_FILE, JSON.stringify(e) + '\n'); } catch {}
+  try { appendFileSync(EVENTS_FILE, JSON.stringify(e) + '\n'); }
+  catch (err) { log(`[events] 持久化失败 (${EVENTS_FILE}):`, (err as Error).message); }
 }
 
 // ---- user settings (persisted; tunable from the web 设置 panel; IDH-style) --------
@@ -357,9 +362,21 @@ function captureHealth() {
 // uninstall the persistent hooks) so the probe sees a clean slot, then resume.
 async function withCaptureSuspended<T>(sid: string, fn: () => Promise<T>): Promise<T> {
   const wasOn = captureTimers.has(sid);
-  if (wasOn) { capturePaused.add(sid); try { await sendCmd(sid, 'capture_stop', {}, 8_000); } catch {} }
+  if (wasOn) {
+    capturePaused.add(sid);
+    // fail-loud: if stop fails the probe patches a slot the persistent hook still holds — visible, not silent
+    try { await sendCmd(sid, 'capture_stop', {}, 8_000); }
+    catch (e) { log(`[capture] suspend: capture_stop ${sid} 失败 — 探针将在持久 hook 仍占的槽上安装:`, (e as Error).message); }
+  }
   try { return await fn(); }
-  finally { if (wasOn) { try { await sendCmd(sid, 'capture_start', captureModules(), 8_000); } catch {} capturePaused.delete(sid); } }
+  finally {
+    if (wasOn) {
+      // fail-loud: a failed resume leaves continuous capture dead — must not vanish silently
+      try { await sendCmd(sid, 'capture_start', captureModules(), 8_000); }
+      catch (e) { log(`[capture] resume: capture_start ${sid} 失败 — 持续捕获已停，需手动重启:`, (e as Error).message); }
+      capturePaused.delete(sid);
+    }
+  }
 }
 
 function hexToPreview(hex: string, max = 80): string {
@@ -433,9 +450,10 @@ function startCaptureLoop(sid: string) {
     if (settings.capture.enabled) {
       try { await sendCmd(sid, 'capture_start', captureModules(), 15_000); log(`capture_start ${sid}`); } catch (e) { log('capture_start failed', (e as Error).message); }
     }
-    if (settings.capture.autoDumpDex) autoDumpDex(sid).catch(() => {});
+    if (settings.capture.autoDumpDex) autoDumpDex(sid).catch((e) => log(`[capture] autoDumpDex ${sid} 失败:`, (e as Error).message));
     if (captureTimers.has(sid)) return;
     let busy = false;
+    let drainErrLogged = false;   // fail-loud once per wedged-drain episode, not every 1.5s tick
     const processDrain = (r: any, now: number) => {
       for (const c of (r.jcaptures ?? [])) {
         if (c.in) recentJavaIn.set(c.in, now);
@@ -478,17 +496,20 @@ function startCaptureLoop(sid: string) {
           processDrain(r, Date.now());
           drains++;
         } while (r && r.backlog > 0 && drains < 60);
+        drainErrLogged = false;   // a drain succeeded — clear the failure episode
         if (r) {
           const prev = capStats.get(sid);
           capStats.set(sid, { seq: r.seq ?? 0, emitted: (prev?.emitted ?? 0) + emittedTick,
             dropped: r.dropped ?? 0, jdropped: r.jdropped ?? 0,
             backlog: r.backlog ?? 0, firstDropNs: r.firstDropNs ?? 0, lastDropNs: r.lastDropNs ?? 0,
-            complete: r.complete !== false, ring: r.ring ?? 0, ts: Date.now() });
+            complete: r.complete === true, ring: r.ring ?? 0, ts: Date.now() });
           // fail-loud: announce the first time this session starts dropping
           if ((r.dropped ?? 0) > 0 && (!prev || prev.dropped === 0))
             log(`[capture] session ${sid} DROPPING — ring full: dropped=${r.dropped} seq=${r.seq} (complete:false)`);
         }
-      } catch {} finally { busy = false; }
+      } catch (e) {
+        if (!drainErrLogged) { drainErrLogged = true; log(`[capture] drain ${sid} 失败 (静默重试直至恢复):`, (e as Error).message); }
+      } finally { busy = false; }
     }, 1500);
     captureTimers.set(sid, timer);
   }, 1200);
@@ -502,10 +523,11 @@ async function runUnpackSession(sid: string, body: any) {
   const snapshot = async (tag: string) => {
     const r = await sendCmd(sid, 'art_dexfiles', {}, 30_000);
     const out: { begin: string; size: number; format: string; sha: string }[] = [];
-    for (const d of (r.dexfiles ?? r.dex ?? [])) {
-      const begin = String(d.begin ?? d.addr ?? ''); const size = Number(d.size ?? 0);
+    for (const d of (r.dexfiles ?? [])) {
+      const begin = String(d.begin ?? ''); const size = Number(d.size ?? 0);
       if (!begin || !size || size > (64 << 20)) continue;
-      try { const { meta } = await dumpRegion(sid, begin.replace(/^0x/, ''), size, tag); out.push({ begin, size, format: d.format ?? 'dex', sha: meta.sha256 }); } catch {}
+      try { const { meta } = await dumpRegion(sid, begin.replace(/^0x/, ''), size, tag); out.push({ begin, size, format: d.format ?? 'dex', sha: meta.sha256 }); }
+      catch (e) { log(`[unpack] ${tag} dump 失败 @0x${begin} (${size}B):`, (e as Error).message); }
     }
     return out;
   };
@@ -529,7 +551,7 @@ async function runUnpackSession(sid: string, body: any) {
         const dot = c.name.replace(/^L/, '').replace(/;$/, '').replace(/\//g, '.');
         if (dot.startsWith(prefix) && !dot.includes('$$')) targeted.add(dot);
       }
-    } catch {}
+    } catch (e) { log(`[unpack] coverage 目标枚举失败 sha=${s.sha}:`, (e as Error).message); }
   }
   const classes = [...new Set([...(body.triggerClasses ?? []), ...targeted])].slice(0, Number(body.maxClasses ?? (prefix ? 500 : 50)));
   const triggered: any[] = [];
@@ -566,15 +588,15 @@ async function runUnpackSession(sid: string, body: any) {
 }
 
 async function autoDumpDex(sid: string) {
-  try {
-    const r = await sendCmd(sid, 'art_dexfiles', {}, 30_000);
-    for (const d of (r.dexfiles ?? r.dex ?? [])) {
-      const begin = d.begin ?? d.beginHex ?? d.addr;
-      const size = Number(d.size ?? d.fileSize ?? 0);
-      if (!begin || !size || size > (64 << 20)) continue;
-      try { await dumpRegion(sid, String(begin).replace(/^0x/, ''), size, 'dex-auto'); } catch {}
-    }
-  } catch {}
+  // art_dexfiles failure propagates to the caller's .catch(log); per-dex dump failures logged inline
+  const r = await sendCmd(sid, 'art_dexfiles', {}, 30_000);
+  for (const d of (r.dexfiles ?? [])) {
+    const begin = d.begin;
+    const size = Number(d.size ?? 0);
+    if (!begin || !size || size > (64 << 20)) continue;
+    try { await dumpRegion(sid, String(begin).replace(/^0x/, ''), size, 'dex-auto'); }
+    catch (e) { log(`[capture] autoDumpDex ${sid} dump 失败 @0x${begin}:`, (e as Error).message); }
+  }
 }
 
 const wss = new WebSocketServer({ noServer: true });
@@ -840,8 +862,19 @@ async function agentCmd(sid: string | undefined, op: string, args: Record<string
 }
 async function dumpBuf(a: any): Promise<Buffer> {
   if (a.b64) return Buffer.from(a.b64, 'base64');
-  if (a.sha && dumps.get(a.sha)) return readFile(dumps.get(a.sha)!.path);
-  throw new Error('need b64 or known sha');
+  if (a.sha && dumps.get(a.sha)) {
+    try { return await readFile(dumps.get(a.sha)!.path); }
+    catch { const e: any = new Error('dump missing'); e.status = 404; throw e; }   // registry knows it, disk lost it
+  }
+  const e: any = new Error('need b64 or known sha'); e.status = 400; throw e;
+}
+// File-path variant for the shell-out analyzers (llvm-objdump/readelf need a path, not a
+// Buffer). Known sha → its stored path (no copy); b64 → a unique temp file the caller unlinks.
+let tmpSeq = 0;
+async function dumpBufPath(a: any): Promise<{ path: string; tmp: string | null }> {
+  if (a.sha && dumps.get(a.sha)) return { path: dumps.get(a.sha)!.path, tmp: null };
+  if (a.b64) { const tmp = join(tmpdir(), `idh_so_${Date.now()}_${++tmpSeq}.so`); writeFileSync(tmp, Buffer.from(a.b64, 'base64')); return { path: tmp, tmp }; }
+  const e: any = new Error('need b64 or known sha'); e.status = 400; throw e;
 }
 const S = { type: 'string' }, N = { type: 'number' };
 const MCP_TOOLS: { name: string; description: string; inputSchema: any; handler: (a: any) => Promise<any> }[] = [
@@ -875,7 +908,7 @@ const MCP_TOOLS: { name: string; description: string; inputSchema: any; handler:
   // ---- axis 1: one-glance crypto algorithm identification ----
   { name: 'crypto_identify', description: '一眼看清目标 App 用了哪些加密算法/密钥/IV — summarize all captured crypto (algorithm, key, iv, plaintext) into a plain-language report for non-experts', inputSchema: { type: 'object', properties: {} }, handler: async () => cryptoIdentify() },
   { name: 'live_captures', description: 'List the live captures streamed by the persistent hooks — crypto / net(TLS) / file / system, filterable by category (algorithm+op+preview, newest last)', inputSchema: { type: 'object', properties: { limit: N, category: S } }, handler: async (a) => { const cat = a.category ? String(a.category) : ''; const list = cat ? captures.filter(c => c.category === cat) : captures; return { total: list.length, on: captureTimers.size > 0, captures: list.slice(-(Number(a.limit) || 50)).map(c => ({ id: c.id, source: c.source, category: c.category, algo: c.algo, op: c.op, inl: c.inl, tid: c.tid, ts: c.ts, preview: c.preview })) }; } },
-  { name: 'capture_detail', description: 'Full detail of one capture by id: algorithm, key(hex), iv(hex), plaintext(utf8+hex), ciphertext(hex)', inputSchema: { type: 'object', properties: { id: N }, required: ['id'] }, handler: async (a) => { const c = captures.find(x => x.id === Number(a.id)); if (!c) throw new Error('not found'); let text = ''; try { text = Buffer.from(c.hex, 'hex').toString('utf8'); } catch { text = hexToPreview(c.hex, 4096); } return { ...c, text }; } },
+  { name: 'capture_detail', description: 'Full detail of one capture by id: algorithm, key(hex), iv(hex), plaintext(utf8+hex), ciphertext(hex)', inputSchema: { type: 'object', properties: { id: N }, required: ['id'] }, handler: async (a) => { const c = captures.find(x => x.id === Number(a.id)); if (!c) throw new Error('not found'); const text = Buffer.from(c.hex, 'hex').toString('utf8'); return { ...c, text }; } },
   // ---- axis 2: one-click unpack (no AOSP flashing needed) ----
   { name: 'dex_coverage', description: '方法恢复率报告 — per-method state (native/abstract/present/extracted) + recovery rate over a dumped dex', inputSchema: { type: 'object', properties: { b64: S, sha: S }, required: [] }, handler: async (a) => { const buf = await dumpBuf(a); return analyzeCoverage(buf, parseDex(buf)); } },
   { name: 'unpack_run', description: '一键脱壳（无需刷 AOSP）— full unpack session: T0 snapshot → coverage → active trigger → T1 snapshot → recover+rebuild. Set triggerAllPrefix (e.g. "com.target.") to aggressively load ALL of the app\'s classes so a refill-type shell restores every method. Returns per-dex before/after recovery + rebuilt dex sha', inputSchema: { type: 'object', properties: { session: S, triggerAllPrefix: S, triggerClasses: { type: 'array', items: S }, triggerMethod: S, level: N, maxClasses: N } }, handler: async (a) => { const sid = pickSid(a.session); if (!sid) throw new Error('no session'); return runUnpackSession(sid, a); } },
@@ -912,7 +945,7 @@ async function handleMcp(reqBody: string, res: http.ServerResponse) {
 
 // ---- HTTP + WebSocket -----------------------------------------------------
 
-const httpServer = http.createServer(async (req, res) => {
+async function handleHttp(req: http.IncomingMessage, res: http.ServerResponse) {
   const url = new URL(req.url ?? '/', `http://localhost`);
   const send = (code: number, body: unknown, type = 'application/json') => {
     const s = typeof body === 'string' ? body : JSON.stringify(body, null, 2);
@@ -1004,8 +1037,8 @@ const httpServer = http.createServer(async (req, res) => {
   }
   // POST /api/data/clear { what: 'captures'|'events'|'dumps' } → 危险操作，清空对应存储
   if (url.pathname === '/api/data/clear' && req.method === 'POST') {
-    let body: any = {};
-    try { body = JSON.parse((await readBody(req)) || '{}'); } catch {}
+    let body: any;
+    try { body = JSON.parse((await readBody(req)) || '{}'); } catch { return send(400, { error: 'bad json' }); }
     const what = String(body.what || '');
     const errors: string[] = [];
     if (what === 'captures') { captures.length = 0; recentJavaIn.clear(); }
@@ -1065,7 +1098,7 @@ const httpServer = http.createServer(async (req, res) => {
   // back how many bytes it received and the tail. Proves the inbound command path carries
   // frames far past the old 8192 single-line cap without truncation.
   if (url.pathname === '/api/debug/frame_echo') {
-    const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    const sid = pickSid(url.searchParams.get('session'));
     if (!sid) return send(400, { error: 'no session' });
     const kb = Math.max(1, Math.min(4096, Number(url.searchParams.get('kb') ?? 64)));
     const padLen = kb * 1024;
@@ -1078,13 +1111,13 @@ const httpServer = http.createServer(async (req, res) => {
   }
   // Java method-hook self-test (WS-A / LSPlant): GET /api/java/hook_test?session=ID
   if (url.pathname === '/api/java/hook_test') {
-    const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    const sid = pickSid(url.searchParams.get('session'));
     if (!sid) return send(400, { error: 'no session' });
     try { const r = await withCaptureSuspended(sid, () => sendCmd(sid, 'java_hook_test', {}, 25_000)); return send(r.ok ? 200 : 502, r); }
     catch (e) { return send(504, { error: (e as Error).message }); }
   }
   if (url.pathname === '/api/process/maps') {
-    const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    const sid = pickSid(url.searchParams.get('session'));
     if (!sid) return send(400, { error: 'no session' });
     try {
       const r = await sendCmd(sid, 'maps');
@@ -1096,7 +1129,7 @@ const httpServer = http.createServer(async (req, res) => {
   if (url.pathname === '/api/object/inspect' && req.method === 'POST') {
     const body = await readBody(req);
     const { session, className, field } = JSON.parse(body || '{}');
-    const sid = session ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    const sid = pickSid(session);
     if (!sid || !className || !field) return send(400, { error: 'need session, className, field' });
     try { const r = await sendCmd(sid, 'object_inspect', { className, field }); return send(r.ok ? 200 : 502, r); }
     catch (e) { return send(504, { error: (e as Error).message }); }
@@ -1105,21 +1138,21 @@ const httpServer = http.createServer(async (req, res) => {
   if (url.pathname === '/api/object/invoke' && req.method === 'POST') {
     const body = await readBody(req);
     const { session, className, field, method } = JSON.parse(body || '{}');
-    const sid = session ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    const sid = pickSid(session);
     if (!sid || !className || !field || !method) return send(400, { error: 'need session, className, field, method' });
     try { const r = await sendCmd(sid, 'object_invoke', { className, field, method }); return send(r.ok ? 200 : 502, r); }
     catch (e) { return send(504, { error: (e as Error).message }); }
   }
   // Compatibility / anti-interference diagnostic (module S): GET /api/compat/probe?session=ID
   if (url.pathname === '/api/compat/probe') {
-    const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    const sid = pickSid(url.searchParams.get('session'));
     if (!sid) return send(400, { error: 'no session' });
     try { const r = await sendCmd(sid, 'compat_probe'); return send(r.ok ? 200 : 502, r); }
     catch (e) { return send(504, { error: (e as Error).message }); }
   }
   // QBDI instruction-level trace (I.3): GET /api/trace/qbdi?session=ID&symLib=&symbol=
   if (url.pathname === '/api/trace/qbdi') {
-    const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    const sid = pickSid(url.searchParams.get('session'));
     if (!sid) return send(400, { error: 'no session' });
     const symLib = url.searchParams.get('symLib') ?? 'libidhdetect.so';
     const symbol = url.searchParams.get('symbol') ?? 'idh_trace_target';
@@ -1128,7 +1161,7 @@ const httpServer = http.createServer(async (req, res) => {
   }
   // Generic native function trace (I.2): GET /api/trace/run?session=ID&symLib=&symbol=&hookModule=
   if (url.pathname === '/api/trace/run') {
-    const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    const sid = pickSid(url.searchParams.get('session'));
     if (!sid) return send(400, { error: 'no session' });
     const symLib = url.searchParams.get('symLib') ?? 'libc.so';
     const symbol = url.searchParams.get('symbol') ?? 'access';
@@ -1138,7 +1171,7 @@ const httpServer = http.createServer(async (req, res) => {
   }
   // Anti-analysis behavior observation (module V): GET /api/detect/watch?session=ID
   if (url.pathname === '/api/detect/watch') {
-    const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    const sid = pickSid(url.searchParams.get('session'));
     if (!sid) return send(400, { error: 'no session' });
     // Suspend continuous capture: detect_watch installs+restores its own ptrace/access/prop
     // hooks on the same GOT slots the persistent system hooks now use.
@@ -1147,14 +1180,14 @@ const httpServer = http.createServer(async (req, res) => {
   }
   // Crypto hook recon: GET /api/crypto/probe?session=ID
   if (url.pathname === '/api/crypto/probe') {
-    const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    const sid = pickSid(url.searchParams.get('session'));
     if (!sid) return send(400, { error: 'no session' });
     try { const r = await sendCmd(sid, 'crypto_probe', {}, 20_000); return send(r.ok ? 200 : 502, r); }
     catch (e) { return send(504, { error: (e as Error).message }); }
   }
   // Network<->crypto correlation flow (取证闭环): GET /api/flow/watch?session=ID
   if (url.pathname === '/api/flow/watch') {
-    const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    const sid = pickSid(url.searchParams.get('session'));
     if (!sid) return send(400, { error: 'no session' });
     try {
       const r = await withCaptureSuspended(sid, () => sendCmd(sid, 'flow_watch', {}, 25_000));
@@ -1177,7 +1210,7 @@ const httpServer = http.createServer(async (req, res) => {
   }
   // Network TLS-plaintext capture test: GET /api/net/hook_test?session=ID
   if (url.pathname === '/api/net/hook_test') {
-    const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    const sid = pickSid(url.searchParams.get('session'));
     if (!sid) return send(400, { error: 'no session' });
     try {
       const r = await withCaptureSuspended(sid, () => sendCmd(sid, 'net_hook_test', {}, 25_000));
@@ -1187,14 +1220,14 @@ const httpServer = http.createServer(async (req, res) => {
   }
   // File I/O hook recon: GET /api/file/probe?session=ID
   if (url.pathname === '/api/file/probe') {
-    const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    const sid = pickSid(url.searchParams.get('session'));
     if (!sid) return send(400, { error: 'no session' });
     try { const r = await sendCmd(sid, 'file_probe', {}, 20_000); return send(r.ok ? 200 : 502, r); }
     catch (e) { return send(504, { error: (e as Error).message }); }
   }
   // File I/O plaintext-path capture test: GET /api/file/hook_test?session=ID&module=
   if (url.pathname === '/api/file/hook_test') {
-    const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    const sid = pickSid(url.searchParams.get('session'));
     if (!sid) return send(400, { error: 'no session' });
     const module = url.searchParams.get('module') ?? '';
     try {
@@ -1205,7 +1238,7 @@ const httpServer = http.createServer(async (req, res) => {
   }
   // Crypto plaintext-boundary hook test: GET /api/crypto/hook_test?session=ID
   if (url.pathname === '/api/crypto/hook_test') {
-    const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    const sid = pickSid(url.searchParams.get('session'));
     if (!sid) return send(400, { error: 'no session' });
     try {
       const r = await withCaptureSuspended(sid, () => sendCmd(sid, 'crypto_hook_test', {}, 20_000));
@@ -1216,14 +1249,14 @@ const httpServer = http.createServer(async (req, res) => {
   }
   // GOT hook engine self-test: GET /api/hook/selftest?session=ID
   if (url.pathname === '/api/hook/selftest') {
-    const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    const sid = pickSid(url.searchParams.get('session'));
     if (!sid) return send(400, { error: 'no session' });
     try { const r = await sendCmd(sid, 'gothook_selftest'); return send(r.ok ? 200 : 502, r); }
     catch (e) { return send(504, { error: (e as Error).message }); }
   }
   // ART structural DexFile enumeration: GET /api/art/dexfiles?session=ID
   if (url.pathname === '/api/art/dexfiles') {
-    const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    const sid = pickSid(url.searchParams.get('session'));
     if (!sid) return send(400, { error: 'no session' });
     try { const r = await sendCmd(sid, 'art_dexfiles', {}, 30_000); return send(r.ok ? 200 : 502, r); }
     catch (e) { return send(504, { error: (e as Error).message }); }
@@ -1232,7 +1265,7 @@ const httpServer = http.createServer(async (req, res) => {
   if (url.pathname === '/api/art/dump' && req.method === 'POST') {
     const body = await readBody(req);
     const { session, begin, size } = JSON.parse(body || '{}');
-    const sid = session ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    const sid = pickSid(session);
     if (!sid || !begin || !size) return send(400, { error: 'need session, begin(hex), size' });
     try {
       const { meta, dedup } = await dumpRegion(sid, String(begin).replace(/^0x/, ''), Number(size), 'art_dexfile');
@@ -1241,14 +1274,14 @@ const httpServer = http.createServer(async (req, res) => {
   }
   // JNI reflection probe (foundation for ART/Java work): GET /api/jni/probe?session=ID
   if (url.pathname === '/api/jni/probe') {
-    const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    const sid = pickSid(url.searchParams.get('session'));
     if (!sid) return send(400, { error: 'no session' });
     try { const r = await sendCmd(sid, 'jni_probe'); return send(r.ok ? 200 : 502, r); }
     catch (e) { return send(504, { error: (e as Error).message }); }
   }
   // Magic scan across process memory: GET /api/memory/scan_magic?session=ID
   if (url.pathname === '/api/memory/scan_magic') {
-    const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    const sid = pickSid(url.searchParams.get('session'));
     if (!sid) return send(400, { error: 'no session' });
     try {
       const r = await sendCmd(sid, 'scan_magic', {}, 90_000);
@@ -1259,7 +1292,7 @@ const httpServer = http.createServer(async (req, res) => {
   if (url.pathname === '/api/memory/read' && req.method === 'POST') {
     const body = await readBody(req);
     const { session, addr, size } = JSON.parse(body || '{}');
-    const sid = session ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    const sid = pickSid(session);
     if (!sid || !addr || !size) return send(400, { error: 'need session, addr(hex), size' });
     try {
       const r = await sendCmd(sid, 'read', { addr: String(addr), size: Number(size) });
@@ -1273,7 +1306,7 @@ const httpServer = http.createServer(async (req, res) => {
   // together as one operation, matching the reviewed design's UnpackSession.
   if (url.pathname === '/api/unpack/run' && req.method === 'POST') {
     const body = JSON.parse((await readBody(req)) || '{}');
-    const sid = body.session ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    const sid = pickSid(body.session);
     if (!sid) return send(400, { error: 'no session' });
     try { return send(200, await runUnpackSession(sid, body)); }
     catch (e) { return send(504, { error: (e as Error).message }); }
@@ -1282,7 +1315,7 @@ const httpServer = http.createServer(async (req, res) => {
   // {session, path, symbol?}. Gadget in script mode auto-runs its JS after this.
   if (url.pathname === '/api/agent/load_so' && req.method === 'POST') {
     const { session, path: soPath, symbol } = JSON.parse((await readBody(req)) || '{}');
-    const sid = session ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    const sid = pickSid(session);
     if (!sid || !soPath) return send(400, { error: 'need session + path' });
     try { const r = await sendCmd(sid, 'load_so', { path: soPath, symbol: symbol ?? '' }, 30_000); return send(r.ok ? 200 : 502, r); }
     catch (e) { return send(504, { error: (e as Error).message }); }
@@ -1291,7 +1324,7 @@ const httpServer = http.createServer(async (req, res) => {
   // Level 1 loads the class; level 3 also invokes a SAFE static no-arg method. A trigger
   // source for the captor — pair with a dex re-snapshot + /api/dex/recover afterwards.
   if (url.pathname === '/api/unpack/trigger') {
-    const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    const sid = pickSid(url.searchParams.get('session'));
     const className = url.searchParams.get('class');
     const method = url.searchParams.get('method') ?? '';
     const level = Number(url.searchParams.get('level') ?? 1);
@@ -1305,7 +1338,7 @@ const httpServer = http.createServer(async (req, res) => {
   if (url.pathname === '/api/memory/search' && req.method === 'POST') {
     const body = await readBody(req);
     const { session, hex, text, limit } = JSON.parse(body || '{}');
-    const sid = session ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    const sid = pickSid(session);
     const pat = hex ?? (text ? Buffer.from(String(text), 'utf8').toString('hex') : '');
     if (!sid || !pat) return send(400, { error: 'need session and hex|text' });
     try {
@@ -1317,7 +1350,7 @@ const httpServer = http.createServer(async (req, res) => {
   if (url.pathname === '/api/memory/dump' && req.method === 'POST') {
     const body = await readBody(req);
     const { session, addr, size, tag } = JSON.parse(body || '{}');
-    const sid = session ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    const sid = pickSid(session);
     if (!sid || !addr || !size) return send(400, { error: 'need session, addr(hex), size' });
     try {
       const { meta, dedup } = await dumpRegion(sid, String(addr).replace(/^0x/, ''), Number(size), String(tag ?? ''));
@@ -1329,9 +1362,7 @@ const httpServer = http.createServer(async (req, res) => {
     const body = await readBody(req);
     const { b64, sha } = JSON.parse(body || '{}');
     let buf: Buffer;
-    if (b64) buf = Buffer.from(b64, 'base64');
-    else if (sha && dumps.get(sha)) { try { buf = await readFile(dumps.get(sha)!.path); } catch { return send(404, { error: 'dump missing' }); } }
-    else return send(400, { error: 'need b64 or known sha' });
+    try { buf = await dumpBuf({ b64, sha }); } catch (e: any) { return send(e.status ?? 400, { error: e.message }); }
     const r = svcScan(buf);
     return send(200, { execSegs: r.execSegs, scannedBytes: r.scanned, svcCount: r.hits.length, hits: r.hits.slice(0, 200) });
   }
@@ -1340,9 +1371,7 @@ const httpServer = http.createServer(async (req, res) => {
     const body = await readBody(req);
     const { b64, sha } = JSON.parse(body || '{}');
     let buf: Buffer;
-    if (b64) buf = Buffer.from(b64, 'base64');
-    else if (sha && dumps.get(sha)) { try { buf = await readFile(dumps.get(sha)!.path); } catch { return send(404, { error: 'dump missing' }); } }
-    else return send(400, { error: 'need b64 or known sha' });
+    try { buf = await dumpBuf({ b64, sha }); } catch (e: any) { return send(e.status ?? 400, { error: e.message }); }
     const hits = cryptoConstScan(buf);
     const byName: Record<string, number> = {};
     for (const h of hits) byName[h.name] = (byName[h.name] ?? 0) + 1;
@@ -1352,10 +1381,8 @@ const httpServer = http.createServer(async (req, res) => {
   if (url.pathname === '/api/native/analyze' && req.method === 'POST') {
     const body = await readBody(req);
     const { b64, sha, q } = JSON.parse(body || '{}');
-    let path: string | null = null, tmp: string | null = null;
-    if (sha && dumps.get(sha)) path = dumps.get(sha)!.path;
-    else if (b64) { tmp = join(tmpdir(), `idh_an_${Date.now()}.so`); writeFileSync(tmp, Buffer.from(b64, 'base64')); path = tmp; }
-    else return send(400, { error: 'need b64 or known sha' });
+    let path: string, tmp: string | null;
+    try { ({ path, tmp } = await dumpBufPath({ b64, sha })); } catch (e: any) { return send(e.status ?? 400, { error: e.message }); }
     try {
       const a = await analyzeSo(path);
       if (q) { const rx = new RegExp(String(q), 'i');
@@ -1371,10 +1398,8 @@ const httpServer = http.createServer(async (req, res) => {
   if (url.pathname === '/api/native/disasm' && req.method === 'POST') {
     const body = await readBody(req);
     const { b64, sha, symbol, start, stop } = JSON.parse(body || '{}');
-    let path: string | null = null, tmp: string | null = null;
-    if (sha && dumps.get(sha)) path = dumps.get(sha)!.path;
-    else if (b64) { tmp = join(tmpdir(), `idh_disasm_${Date.now()}.so`); writeFileSync(tmp, Buffer.from(b64, 'base64')); path = tmp; }
-    else return send(400, { error: 'need b64 or known sha' });
+    let path: string, tmp: string | null;
+    try { ({ path, tmp } = await dumpBufPath({ b64, sha })); } catch (e: any) { return send(e.status ?? 400, { error: e.message }); }
     try {
       const insns = await disasmSo(path, { symbol, start, stop });
       return send(200, { symbol: symbol ?? null, count: insns.length, instructions: insns.slice(0, 2000) });
@@ -1383,7 +1408,7 @@ const httpServer = http.createServer(async (req, res) => {
   }
   // Module list (grouped from maps): GET /api/modules?session=ID
   if (url.pathname === '/api/modules') {
-    const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    const sid = pickSid(url.searchParams.get('session'));
     if (!sid) return send(400, { error: 'no session' });
     try {
       const r = await sendCmd(sid, 'maps');
@@ -1395,7 +1420,7 @@ const httpServer = http.createServer(async (req, res) => {
   if (url.pathname === '/api/module/dump' && req.method === 'POST') {
     const body = await readBody(req);
     const { session, name } = JSON.parse(body || '{}');
-    const sid = session ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+    const sid = pickSid(session);
     if (!sid || !name) return send(400, { error: 'need session, name' });
     try {
       const maps = await sendCmd(sid, 'maps');
@@ -1420,9 +1445,7 @@ const httpServer = http.createServer(async (req, res) => {
     const body = await readBody(req);
     const { b64, sha, class: cls, method } = JSON.parse(body || '{}');
     let buf: Buffer;
-    if (b64) buf = Buffer.from(b64, 'base64');
-    else if (sha && dumps.get(sha)) { try { buf = await readFile(dumps.get(sha)!.path); } catch { return send(404, { error: 'dump missing' }); } }
-    else return send(400, { error: 'need b64 or known sha' });
+    try { buf = await dumpBuf({ b64, sha }); } catch (e: any) { return send(e.status ?? 400, { error: e.message }); }
     if (!cls) return send(400, { error: 'need class' });
     let parsed; try { parsed = parseDex(buf); } catch (e) { return send(422, { error: (e as Error).message }); }
     const codes = extractMethodCode(buf, parsed, String(cls), method ? String(method) : undefined);
@@ -1434,9 +1457,7 @@ const httpServer = http.createServer(async (req, res) => {
     const body = await readBody(req);
     const { b64, sha, method } = JSON.parse(body || '{}');
     let buf: Buffer;
-    if (b64) buf = Buffer.from(b64, 'base64');
-    else if (sha && dumps.get(sha)) { try { buf = await readFile(dumps.get(sha)!.path); } catch { return send(404, { error: 'dump missing' }); } }
-    else return send(400, { error: 'need b64 or known sha' });
+    try { buf = await dumpBuf({ b64, sha }); } catch (e: any) { return send(e.status ?? 400, { error: e.message }); }
     if (!method) return send(400, { error: 'need method (substring of callee cls->name)' });
     let parsed; try { parsed = parseDex(buf); } catch (e) { return send(422, { error: (e as Error).message }); }
     const { xref, methodsWithCode, skipped } = invokeXref(buf, parsed);
@@ -1449,9 +1470,7 @@ const httpServer = http.createServer(async (req, res) => {
   if (url.pathname === '/api/dex/coverage' && req.method === 'POST') {
     const { b64, sha, limitMissing } = JSON.parse((await readBody(req)) || '{}');
     let buf: Buffer;
-    if (b64) buf = Buffer.from(b64, 'base64');
-    else if (sha && dumps.get(sha)) { try { buf = await readFile(dumps.get(sha)!.path); } catch { return send(404, { error: 'dump missing' }); } }
-    else return send(400, { error: 'need b64 or known sha' });
+    try { buf = await dumpBuf({ b64, sha }); } catch (e: any) { return send(e.status ?? 400, { error: e.message }); }
     let parsed; try { parsed = parseDex(buf); } catch (e) { return send(422, { error: (e as Error).message }); }
     const cov = analyzeCoverage(buf, parsed);
     const lm = Number(limitMissing ?? 100);
@@ -1463,13 +1482,12 @@ const httpServer = http.createServer(async (req, res) => {
   // rebuilds a standard dex, and stores it. Returns recovery counts + rebuilt sha.
   if (url.pathname === '/api/dex/recover' && req.method === 'POST') {
     const body = JSON.parse((await readBody(req)) || '{}');
-    const load = async (b64?: string, sha?: string): Promise<Buffer | null> => {
-      if (b64) return Buffer.from(b64, 'base64');
-      if (sha && dumps.get(sha)) { try { return await readFile(dumps.get(sha)!.path); } catch { return null; } }
-      return null;
-    };
-    const base = await load(body.baseB64, body.baseSha);
-    const restored = await load(body.restoredB64, body.restoredSha);
+    // no input -> null (=> 400 below); registered-but-file-gone -> dumpBuf throws 404 (fail-loud,
+    // not the old silent null that mislabeled a disk failure as "missing input")
+    const load = (b64?: string, sha?: string) => (b64 || (sha && dumps.get(sha))) ? dumpBuf({ b64, sha }) : Promise.resolve(null);
+    let base: Buffer | null, restored: Buffer | null;
+    try { base = await load(body.baseB64, body.baseSha); restored = await load(body.restoredB64, body.restoredSha); }
+    catch (e: any) { return send(e.status ?? 500, { error: e.message }); }
     if (!base || !restored) return send(400, { error: 'need base + restored (b64 or known sha)' });
     let parsed; try { parsed = parseDex(base); } catch (e) { return send(422, { error: (e as Error).message }); }
     const { captures, report } = recoverFromSnapshots(base, restored, parsed);
@@ -1487,9 +1505,7 @@ const httpServer = http.createServer(async (req, res) => {
   if (url.pathname === '/api/dex/strip' && req.method === 'POST') {
     const { b64, sha, midx } = JSON.parse((await readBody(req)) || '{}');
     let buf: Buffer;
-    if (b64) buf = Buffer.from(b64, 'base64');
-    else if (sha && dumps.get(sha)) { try { buf = await readFile(dumps.get(sha)!.path); } catch { return send(404, { error: 'dump missing' }); } }
-    else return send(400, { error: 'need b64 or known sha' });
+    try { buf = await dumpBuf({ b64, sha }); } catch (e: any) { return send(e.status ?? 400, { error: e.message }); }
     const stripped = stripMethodCode(buf, Number(midx));
     return send(200, { ok: true, midx: Number(midx), b64: stripped.toString('base64') });
   }
@@ -1498,9 +1514,7 @@ const httpServer = http.createServer(async (req, res) => {
   if (url.pathname === '/api/dex/rebuild' && req.method === 'POST') {
     const { b64, sha, captures } = JSON.parse((await readBody(req)) || '{}');
     let buf: Buffer;
-    if (b64) buf = Buffer.from(b64, 'base64');
-    else if (sha && dumps.get(sha)) { try { buf = await readFile(dumps.get(sha)!.path); } catch { return send(404, { error: 'dump missing' }); } }
-    else return send(400, { error: 'need b64 or known sha' });
+    try { buf = await dumpBuf({ b64, sha }); } catch (e: any) { return send(e.status ?? 400, { error: e.message }); }
     if (!Array.isArray(captures)) return send(400, { error: 'need captures[]' });
     let res; try { res = rebuildStandardDex(buf, captures); } catch (e) { return send(422, { error: (e as Error).message }); }
     let parseOk = true, methods = 0;
@@ -1516,9 +1530,7 @@ const httpServer = http.createServer(async (req, res) => {
     const body = await readBody(req);
     const { b64, sha, full } = JSON.parse(body || '{}');
     let buf: Buffer;
-    if (b64) buf = Buffer.from(b64, 'base64');
-    else if (sha && dumps.get(sha)) { try { buf = await readFile(dumps.get(sha)!.path); } catch { return send(404, { error: 'dump file missing' }); } }
-    else return send(400, { error: 'need b64 or known sha' });
+    try { buf = await dumpBuf({ b64, sha }); } catch (e: any) { return send(e.status ?? 400, { error: e.message }); }
     let parsed;
     try { parsed = parseDex(buf); } catch (e) { return send(422, { error: (e as Error).message }); }
     if (url.pathname === '/api/dex/crypto_scan') {
@@ -1543,9 +1555,7 @@ const httpServer = http.createServer(async (req, res) => {
     const body = await readBody(req);
     const { b64, sha } = JSON.parse(body || '{}');
     let buf: Buffer;
-    if (b64) buf = Buffer.from(b64, 'base64');
-    else if (sha && dumps.get(sha)) { try { buf = await readFile(dumps.get(sha)!.path); } catch { return send(404, { error: 'dump file missing' }); } }
-    else return send(400, { error: 'need b64 or known sha' });
+    try { buf = await dumpBuf({ b64, sha }); } catch (e: any) { return send(e.status ?? 400, { error: e.message }); }
     const info = repairDexHeader(buf);
     return send(200, { ...info, size: buf.length, repairedB64: buf.toString('base64') });
   }
@@ -1565,6 +1575,15 @@ const httpServer = http.createServer(async (req, res) => {
     } catch { return send(500, { error: 'dashboard missing' }); }
   }
   send(404, { error: 'not found' });
+}
+// Top-level error net: no request may crash the daemon. An uncaught JSON.parse throws SyntaxError
+// -> 400; typed errors carry their own status (e.g. dumpBuf 404/400); anything else -> 500.
+const httpServer = http.createServer((req, res) => {
+  handleHttp(req, res).catch((e: any) => {
+    if (res.writableEnded) return;
+    const status = e?.status ?? (e instanceof SyntaxError ? 400 : 500);
+    try { res.writeHead(status, { 'content-type': 'application/json', 'access-control-allow-origin': '*' }); res.end(JSON.stringify({ error: e?.message ?? 'internal error' })); } catch {}
+  });
 });
 
 httpServer.on('upgrade', (req, socket, head) => {
