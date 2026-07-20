@@ -178,6 +178,13 @@ static int send_frame(int fd, unsigned char type, const char *payload, size_t le
 // '\n' — harmless inside a framed payload, the daemon's JSON.parse ignores it).
 static int send_line(int fd, const char *s) { return send_frame(fd, FRAME_JSON, s, strlen(s)); }
 
+// Fail-loud OOM reply: a command that can't allocate its response buffer must tell the
+// daemon (ok:false) instead of vanishing — a silent return looks like a 10s timeout there.
+static void send_oom(int fd, const char *idj, const char *op) {
+    char e[160]; snprintf(e, sizeof(e), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"%s\",\"ok\":false,\"error\":\"oom\"}\n", idj, op);
+    send_line(fd, e);
+}
+
 // Read exactly n bytes into buf; 0 = ok, -1 = EOF/error.
 static int read_full(int fd, unsigned char *buf, size_t n) {
     size_t off = 0;
@@ -192,15 +199,16 @@ static int read_full(int fd, unsigned char *buf, size_t n) {
 // ---- maps -----------------------------------------------------------------
 
 // Build a JSON array of maps regions. limit<=0 = all. *total set to line count.
-// Returns malloc'd string (caller frees) or NULL.
-static char *build_maps_json(int limit, int *total) {
+// *truncated set to 1 iff the buffer could not grow (OOM data-loss) — distinct from the
+// intentional `limit` cap. Returns malloc'd string (caller frees) or NULL.
+static char *build_maps_json(int limit, int *total, int *truncated) {
     FILE *m = fopen("/proc/self/maps", "r");
-    if (!m) { *total = 0; return NULL; }
+    if (!m) { *total = 0; if (truncated) *truncated = 0; return NULL; }
     size_t cap = 1 << 16, len = 0;
     char *buf = (char *)malloc(cap);
-    if (!buf) { fclose(m); *total = 0; return NULL; }
+    if (!buf) { fclose(m); *total = 0; if (truncated) *truncated = 1; return NULL; }
     buf[0] = 0;
-    int count = 0, emitted = 0;
+    int count = 0, emitted = 0, trunc = 0;
     char line[1024];
     while (fgets(line, sizeof(line), m)) {
         count++;
@@ -220,7 +228,7 @@ static char *build_maps_json(int limit, int *total) {
         if (len + (size_t)w + 1 >= cap) {
             while (len + (size_t)w + 1 >= cap) cap *= 2;
             char *nb = (char *)realloc(buf, cap);
-            if (!nb) break;
+            if (!nb) { trunc = 1; break; }   // OOM: stop, but report it — don't silently under-report
             buf = nb;
         }
         memcpy(buf + len, rec, (size_t)w);
@@ -229,6 +237,7 @@ static char *build_maps_json(int limit, int *total) {
     }
     fclose(m);
     *total = count;
+    if (truncated) *truncated = trunc;
     return buf;
 }
 
@@ -261,7 +270,7 @@ static void cmd_read(int fd, const char *id, const char *addr_hex, long long siz
         send_line(fd, err); return;
     }
     char *b64 = (char *)malloc((size_t)got * 4 / 3 + 8);
-    if (!b64) { free(raw); return; }
+    if (!b64) { free(raw); send_oom(fd, idj, "read"); return; }
     b64_encode(raw, (size_t)got, b64);
     free(raw);
     size_t hlen = strlen(b64) + 200;
@@ -438,7 +447,7 @@ static void cmd_search(int fd, const char *id, const char *pat_hex, int limit) {
     }
     fclose(m); close(mem); free(cbuf);
     size_t hlen = (hits ? strlen(hits) : 0) + 160; char *out = (char *)malloc(hlen);
-    if (out) { snprintf(out, hlen, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"search\",\"ok\":true,\"count\":%d,\"hits\":[%s]}\n", idj, nhits, hits ? hits : ""); send_line(fd, out); free(out); }
+    if (out) { snprintf(out, hlen, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"search\",\"ok\":true,\"count\":%d,\"truncated\":%s,\"hits\":[%s]}\n", idj, nhits, nhits >= limit ? "true" : "false", hits ? hits : ""); send_line(fd, out); free(out); }
     free(hits);
 }
 
@@ -854,19 +863,14 @@ static int my_EVP_DigestSignUpdate(void *ctx, const void *data, size_t len) {
     return g_orig_digest_sign(ctx, data, len);
 }
 
-// Recon: for each EVP/HMAC function, report which loaded modules' GOT holds its
-// pointer (candidate hook sites) and how many slots. Guides where to install hooks.
-static void cmd_crypto_probe(int fd, const char *id) {
+// Generic GOT recon: scan every readable non-exec .so region for pointers matching the given
+// resolved symbol addresses, report per-module hit counts (candidate hook sites). Shared by the
+// crypto and file probes — they differ only in which symbols/libs they resolve. `opname` labels
+// the reply. (Replaces two ~95%-identical copies.)
+#define GOT_PROBE_MAXFN 8
+static void got_probe(int fd, const char *id, const char *opname, const char *names[], void *addrs[], int NF) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
-    const char *names[] = { "EVP_CipherUpdate", "EVP_EncryptUpdate", "EVP_DecryptUpdate", "EVP_DigestUpdate", "HMAC_Update", "SSL_read", "SSL_write" };
-    const int NF = 7;
-    void *addrs[7];
-    for (int i = 0; i < 5; i++) addrs[i] = resolve_sym("libcrypto.so", names[i]);
-    addrs[5] = resolve_sym("libssl.so", "SSL_read");
-    addrs[6] = resolve_sym("libssl.so", "SSL_write");
-
-    // aggregate per-module match counts
-    struct Mod { char name[128]; int cnt[7]; };
+    struct Mod { char name[128]; int cnt[GOT_PROBE_MAXFN]; };
     struct Mod mods[96]; int nmods = 0;
     FILE *m = fopen("/proc/self/maps", "r");
     char line[512];
@@ -880,13 +884,12 @@ static void cmd_crypto_probe(int fd, const char *id) {
         const char *base = strrchr(pp, '/'); base = base ? base + 1 : pp;
         unsigned long long s = strtoull(sa, NULL, 16), e = strtoull(ea, NULL, 16);
         if (e <= s || e - s > (64u << 20)) continue;
-        int hit[7] = {0,0,0,0,0,0,0}, any = 0;
+        int hit[GOT_PROBE_MAXFN] = {0}, any = 0;
         for (unsigned long long a = s; a + 8 <= e; a += 8) {
             void *v = *(void **)a;
             for (int i = 0; i < NF; i++) if (addrs[i] && v == addrs[i]) { hit[i]++; any = 1; }
         }
         if (!any) continue;
-        // find/create module entry
         int mi = -1;
         for (int k = 0; k < nmods; k++) if (strcmp(mods[k].name, base) == 0) { mi = k; break; }
         if (mi < 0 && nmods < 96) { mi = nmods++; strncpy(mods[mi].name, base, sizeof(mods[mi].name) - 1); mods[mi].name[sizeof(mods[mi].name)-1]=0; for (int i=0;i<NF;i++) mods[mi].cnt[i]=0; }
@@ -894,9 +897,8 @@ static void cmd_crypto_probe(int fd, const char *id) {
     }
     if (m) fclose(m);
 
-    // build JSON
-    size_t cap = 1 << 14, len = 0; char *out = malloc(cap); if (!out) { detach_env(0); return; }
-    len += snprintf(out + len, cap - len, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"crypto_probe\",\"ok\":true,\"fns\":{", idj);
+    size_t cap = 1 << 14, len = 0; char *out = malloc(cap); if (!out) { send_oom(fd, idj, opname); return; }
+    len += snprintf(out + len, cap - len, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"%s\",\"ok\":true,\"fns\":{", idj, opname);
     for (int i = 0; i < NF; i++) len += snprintf(out + len, cap - len, "%s\"%s\":\"%llx\"", i?",":"", names[i], (unsigned long long)addrs[i]);
     len += snprintf(out + len, cap - len, "},\"modules\":[");
     for (int k = 0; k < nmods; k++) {
@@ -907,7 +909,17 @@ static void cmd_crypto_probe(int fd, const char *id) {
     snprintf(out + len, cap - len, "]}\n");
     send_line(fd, out);
     free(out);
-    LOGI("crypto_probe: %d modules with EVP/HMAC GOT refs", nmods);
+    LOGI("%s: %d modules with GOT refs", opname, nmods);
+}
+
+// Recon: which modules' GOT holds the EVP/HMAC/SSL pointers (candidate crypto hook sites).
+static void cmd_crypto_probe(int fd, const char *id) {
+    const char *names[] = { "EVP_CipherUpdate", "EVP_EncryptUpdate", "EVP_DecryptUpdate", "EVP_DigestUpdate", "HMAC_Update", "SSL_read", "SSL_write" };
+    void *addrs[7];
+    for (int i = 0; i < 5; i++) addrs[i] = resolve_sym("libcrypto.so", names[i]);
+    addrs[5] = resolve_sym("libssl.so", "SSL_read");
+    addrs[6] = resolve_sym("libssl.so", "SSL_write");
+    got_probe(fd, id, "crypto_probe", names, addrs, 7);
 }
 
 // ---- network TLS-plaintext capture (SSL_read/SSL_write in libjavacrypto/Conscrypt) ----
@@ -925,7 +937,7 @@ static int my_SSL_read(void *ssl, void *buf, int num) {
 
 // Hook SSL_write/SSL_read in Conscrypt, trigger an HTTPS request via JNI reflection,
 // and report the captured TLS plaintext (request + response).
-static void cmd_net_hook_test(int fd, const char *id) {
+static void cmd_net_hook_test(int fd, const char *id, const char *className) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
     void *ow = resolve_sym("libssl.so", "SSL_write");
     void *orr = resolve_sym("libssl.so", "SSL_read");
@@ -938,7 +950,7 @@ static void cmd_net_hook_test(int fd, const char *id) {
     JNIEnv *env = attach_env(&did);
     if (env) {
         (*env)->PushLocalFrame(env, 32);
-        jclass jc = load_app_class(env, "com.idh.sandbox.Network");
+        jclass jc = className[0] ? load_app_class(env, className) : NULL;
         if (jc) {
             jmethodID run = (*env)->GetStaticMethodID(env, jc, "run", "()Ljava/lang/String;");
             if (run) {
@@ -954,7 +966,7 @@ static void cmd_net_hook_test(int fd, const char *id) {
     if (rw > 0) got_replace("libjavacrypto.so", (void *)my_SSL_write, ow);
     if (rr > 0) got_replace("libjavacrypto.so", (void *)my_SSL_read, orr);
 
-    size_t cap = 1 << 16, len = 0; char *out = malloc(cap); if (!out) return;
+    size_t cap = 1 << 16, len = 0; char *out = malloc(cap); if (!out) { send_oom(fd, idj, "net_hook_test"); return; }
     char rj[200]; json_escape(result, rj, sizeof(rj));
     len += snprintf(out + len, cap - len, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"net_hook_test\",\"ok\":true,\"hooked\":{\"write\":%d,\"read\":%d},\"triggered\":%s,\"result\":\"%s\",\"captures\":[", idj, rw, rr, triggered ? "true" : "false", rj);
     int n = cap_emit_all(out, &len, cap);
@@ -1072,61 +1084,23 @@ static ssize_t my_write_chk(int fd, const void *buf, size_t count, size_t buflen
 
 // Recon: for open/openat/read/write/close (libc.so), report which loaded modules'
 // GOT holds each pointer (candidate hook sites) — mirrors cmd_crypto_probe.
+// Recon: which modules' GOT holds the libc file-I/O pointers (candidate file hook sites).
 static void cmd_file_probe(int fd, const char *id) {
-    char idj[64]; json_escape(id, idj, sizeof(idj));
     const char *names[] = { "open", "openat", "read", "write", "close" };
-    const int NF = 5;
     void *addrs[5];
-    for (int i = 0; i < NF; i++) addrs[i] = resolve_sym("libc.so", names[i]);
-
-    struct Mod { char name[128]; int cnt[5]; };
-    struct Mod mods[96]; int nmods = 0;
-    FILE *m = fopen("/proc/self/maps", "r");
-    char line[512];
-    while (m && fgets(line, sizeof(line), m)) {
-        char sa[32], ea[32], perms[8], off[32], dev[16], path[400] = "";
-        unsigned long long inode = 0;
-        int nf = sscanf(line, "%31[0-9a-f]-%31[0-9a-f] %7s %31s %15s %llu %399[^\n]", sa, ea, perms, off, dev, &inode, path);
-        if (nf < 6 || perms[0] != 'r' || strstr(perms, "x")) continue;
-        char *pp = path; while (*pp == ' ') pp++;
-        if (!strstr(pp, ".so")) continue;
-        const char *base = strrchr(pp, '/'); base = base ? base + 1 : pp;
-        unsigned long long s = strtoull(sa, NULL, 16), e = strtoull(ea, NULL, 16);
-        if (e <= s || e - s > (64u << 20)) continue;
-        int hit[5] = {0,0,0,0,0}, any = 0;
-        for (unsigned long long a = s; a + 8 <= e; a += 8) {
-            void *v = *(void **)a;
-            for (int i = 0; i < NF; i++) if (addrs[i] && v == addrs[i]) { hit[i]++; any = 1; }
-        }
-        if (!any) continue;
-        int mi = -1;
-        for (int k = 0; k < nmods; k++) if (strcmp(mods[k].name, base) == 0) { mi = k; break; }
-        if (mi < 0 && nmods < 96) { mi = nmods++; strncpy(mods[mi].name, base, sizeof(mods[mi].name) - 1); mods[mi].name[sizeof(mods[mi].name)-1]=0; for (int i=0;i<NF;i++) mods[mi].cnt[i]=0; }
-        if (mi >= 0) for (int i = 0; i < NF; i++) mods[mi].cnt[i] += hit[i];
-    }
-    if (m) fclose(m);
-
-    size_t cap = 1 << 14, len = 0; char *out = malloc(cap); if (!out) { detach_env(0); return; }
-    len += snprintf(out + len, cap - len, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"file_probe\",\"ok\":true,\"fns\":{", idj);
-    for (int i = 0; i < NF; i++) len += snprintf(out + len, cap - len, "%s\"%s\":\"%llx\"", i?",":"", names[i], (unsigned long long)addrs[i]);
-    len += snprintf(out + len, cap - len, "},\"modules\":[");
-    for (int k = 0; k < nmods; k++) {
-        len += snprintf(out + len, cap - len, "%s{\"name\":\"%s\"", k?",":"", mods[k].name);
-        for (int i = 0; i < NF; i++) if (mods[k].cnt[i]) len += snprintf(out + len, cap - len, ",\"%s\":%d", names[i], mods[k].cnt[i]);
-        len += snprintf(out + len, cap - len, "}");
-    }
-    snprintf(out + len, cap - len, "]}\n");
-    send_line(fd, out);
-    free(out);
-    LOGI("file_probe: %d modules with open/openat/read/write/close GOT refs", nmods);
+    for (int i = 0; i < 5; i++) addrs[i] = resolve_sym("libc.so", names[i]);
+    got_probe(fd, id, "file_probe", names, addrs, 5);
 }
 
-// Hook open/openat/read/write/close in `module` (default libopenjdk.so; override with
-// whatever cmd_file_probe found), trigger com.idh.sandbox.FileIO.run() via JNI
-// reflection, and report captured paths + read/write buffer bytes.
-static void cmd_file_hook_test(int fd, const char *id, const char *module) {
+// Hook open/openat/read/write/close in `module` (from idhd; discover it via cmd_file_probe —
+// no default, the agent never guesses a target module), trigger the target's file workload
+// class (className, from idhd) via JNI reflection, and report captured paths + read/write bytes.
+static void cmd_file_hook_test(int fd, const char *id, const char *module, const char *className) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
-    const char *mod = (module && module[0]) ? module : "libjavacore.so";
+    // No hardcoded target module: idhd passes which loaded module's GOT backs java.io
+    // (discover it via file_probe). Empty -> fail-loud rather than guess a device-specific lib.
+    if (!module || !module[0]) { char e[220]; snprintf(e, sizeof(e), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"file_hook_test\",\"ok\":false,\"error\":\"need module (which loaded module backs java.io; discover via file_probe)\"}\n", idj); send_line(fd, e); return; }
+    const char *mod = module;
     void *oo  = resolve_sym("libc.so", "open");
     void *ooa = resolve_sym("libc.so", "openat");
     void *ord = resolve_sym("libc.so", "read");
@@ -1155,7 +1129,7 @@ static void cmd_file_hook_test(int fd, const char *id, const char *module) {
     JNIEnv *env = attach_env(&did);
     if (env) {
         (*env)->PushLocalFrame(env, 32);
-        jclass jc = load_app_class(env, "com.idh.sandbox.FileIO");
+        jclass jc = className[0] ? load_app_class(env, className) : NULL;
         if (jc) {
             jmethodID run = (*env)->GetStaticMethodID(env, jc, "run", "()Ljava/lang/String;");
             if (run) {
@@ -1178,7 +1152,7 @@ static void cmd_file_hook_test(int fd, const char *id, const char *module) {
     if (rrc > 0) got_replace(mod, (void *)my_read_chk,   orc);
     if (rwv > 0) got_replace(mod, (void *)my_write_chk,  owv);
 
-    size_t cap = 1 << 16, len = 0; char *out = malloc(cap); if (!out) return;
+    size_t cap = 1 << 16, len = 0; char *out = malloc(cap); if (!out) { send_oom(fd, idj, "file_hook_test"); return; }
     char modj[64]; json_escape(mod, modj, sizeof(modj));
     char rj[220]; json_escape(result, rj, sizeof(rj));
     len += snprintf(out + len, cap - len,
@@ -1196,7 +1170,7 @@ static void cmd_file_hook_test(int fd, const char *id, const char *module) {
 // Correlation flow: hook BOTH EVP_CipherUpdate (encrypt) and SSL_write (send) at
 // once, trigger an encrypt-then-send flow, and return all captures with tid+ts so
 // idhd can correlate "this plaintext was encrypted then sent" (取证闭环).
-static void cmd_flow_watch(int fd, const char *id) {
+static void cmd_flow_watch(int fd, const char *id, const char *className) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
     void *oe = resolve_sym("libcrypto.so", "EVP_CipherUpdate");
     void *ow = resolve_sym("libssl.so", "SSL_write");
@@ -1210,7 +1184,7 @@ static void cmd_flow_watch(int fd, const char *id) {
     JNIEnv *env = attach_env(&did);
     if (env) {
         (*env)->PushLocalFrame(env, 32);
-        jclass jc = load_app_class(env, "com.idh.sandbox.CorrelatedFlow");
+        jclass jc = className[0] ? load_app_class(env, className) : NULL;
         if (jc) {
             jmethodID run = (*env)->GetStaticMethodID(env, jc, "run", "()Ljava/lang/String;");
             if (run) {
@@ -1226,7 +1200,7 @@ static void cmd_flow_watch(int fd, const char *id) {
     if (re > 0) got_replace("libjavacrypto.so", (void *)my_EVP_CipherUpdate, oe);
     if (rw > 0) got_replace("libjavacrypto.so", (void *)my_SSL_write, ow);
 
-    size_t cap = 1 << 16, len = 0; char *out = malloc(cap); if (!out) return;
+    size_t cap = 1 << 16, len = 0; char *out = malloc(cap); if (!out) { send_oom(fd, idj, "flow_watch"); return; }
     char rj[200]; json_escape(result, rj, sizeof(rj));
     len += snprintf(out + len, cap - len, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"flow_watch\",\"ok\":true,\"hooked\":{\"evp\":%d,\"sslWrite\":%d},\"triggered\":%s,\"result\":\"%s\",\"captures\":[", idj, re, rw, triggered ? "true" : "false", rj);
     int n = cap_emit_all(out, &len, cap);
@@ -1238,33 +1212,22 @@ static void cmd_flow_watch(int fd, const char *id) {
 
 // Install EVP_CipherUpdate GOT hook in libjavacrypto (Conscrypt), trigger the
 // sandbox's AES via JNI reflection, and return what plaintext the wrapper captured.
-static void cmd_crypto_hook_test(int fd, const char *id) {
+static void cmd_crypto_hook_test(int fd, const char *id, const char *className) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
     void *orig = resolve_sym("libcrypto.so", "EVP_CipherUpdate");
     g_evp_cipher_orig = (EVP_CipherUpdate_t)orig;
     int replaced = orig ? got_replace("libjavacrypto.so", orig, (void *)my_EVP_CipherUpdate) : -1;
     cap_reset();
 
-    // trigger com.idh.sandbox.JavaCrypto.run() via JNI reflection (app classloader)
+    // trigger the target's crypto workload class (className, from idhd) via the app classloader
     int did = 0, triggered = 0;
     JNIEnv *env = attach_env(&did);
     if (env) {
         (*env)->PushLocalFrame(env, 64);
-        jclass at = (*env)->FindClass(env, "android/app/ActivityThread");
-        jmethodID cur = at ? (*env)->GetStaticMethodID(env, at, "currentApplication", "()Landroid/app/Application;") : NULL;
-        jobject app = cur ? (*env)->CallStaticObjectMethod(env, at, cur) : NULL;
-        if (app) {
-            jclass ctx = (*env)->FindClass(env, "android/content/Context");
-            jmethodID gcl = (*env)->GetMethodID(env, ctx, "getClassLoader", "()Ljava/lang/ClassLoader;");
-            jobject loader = (*env)->CallObjectMethod(env, app, gcl);
-            jclass clc = (*env)->FindClass(env, "java/lang/ClassLoader");
-            jmethodID load = (*env)->GetMethodID(env, clc, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;");
-            jstring cn = (*env)->NewStringUTF(env, "com.idh.sandbox.JavaCrypto");
-            jclass jc = loader ? (jclass)(*env)->CallObjectMethod(env, loader, load, cn) : NULL;
-            if (jc) {
-                jmethodID run = (*env)->GetStaticMethodID(env, jc, "run", "()V");
-                if (run) { (*env)->CallStaticVoidMethod(env, jc, run); triggered = 1; }
-            }
+        jclass jc = className[0] ? load_app_class(env, className) : NULL;
+        if (jc) {
+            jmethodID run = (*env)->GetStaticMethodID(env, jc, "run", "()V");
+            if (run) { (*env)->CallStaticVoidMethod(env, jc, run); triggered = 1; }
         }
         if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
         (*env)->PopLocalFrame(env, NULL);
@@ -1275,7 +1238,7 @@ static void cmd_crypto_hook_test(int fd, const char *id) {
     if (replaced > 0 && orig) got_replace("libjavacrypto.so", (void *)my_EVP_CipherUpdate, orig);
 
     // build reply with captured records (hex)
-    size_t cap = 1 << 15, len = 0; char *out = malloc(cap); if (!out) return;
+    size_t cap = 1 << 15, len = 0; char *out = malloc(cap); if (!out) { send_oom(fd, idj, "crypto_hook_test"); return; }
     len += snprintf(out + len, cap - len, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"crypto_hook_test\",\"ok\":true,\"replaced\":%d,\"triggered\":%s,\"captures\":[", idj, replaced, triggered ? "true" : "false");
     int ncaps = cap_emit_all(out, &len, cap);
     snprintf(out + len, cap - len, "],\"count\":%d}\n", ncaps);
@@ -1284,9 +1247,10 @@ static void cmd_crypto_hook_test(int fd, const char *id) {
     LOGI("crypto_hook_test: replaced=%d triggered=%d captures=%d", replaced, triggered, ncaps);
 }
 
-// ---- Java-layer rich capture: the interposing JCE provider (IdhSecurity) reports every
-//      Cipher/Mac/MessageDigest op here with algorithm+op+key+iv+input+output. Bound by
-//      JNI name to com.idh.sandbox.IdhReport.nReport (no RegisterNatives needed). ---------
+// ---- Java-layer rich capture: an interposing JCE provider (installed by the target/self-test
+//      app) reports every Cipher/Mac/MessageDigest op here with algorithm+op+key+iv+input+output.
+//      Bound at capture_start via RegisterNatives to the reporter class idhd names (target-agnostic;
+//      no sandbox-specific JNI symbol). ----------------------------------------------------------
 #define JCAP_MAX 96
 #define JCAP_KEY 64
 #define JCAP_IV 32
@@ -1310,7 +1274,9 @@ static int copy_jba(JNIEnv *env, jbyteArray a, unsigned char *dst, int cap) {
     return (int)n;
 }
 
-JNIEXPORT void JNICALL Java_com_idh_sandbox_IdhReport_nReport(
+// nReport implementation. Registered onto the target's reporter class at capture_start
+// (idh_register_reporter) — no hardcoded JNI symbol ties the agent to any package.
+static void idh_nreport_impl(
         JNIEnv *env, jclass cls, jstring jalgo, jstring jop,
         jbyteArray jkey, jbyteArray jiv, jbyteArray jin, jbyteArray jout) {
     (void)cls;
@@ -1338,6 +1304,19 @@ JNIEXPORT void JNICALL Java_com_idh_sandbox_IdhReport_nReport(
         __atomic_add_fetch(&g_jcap_dropped, 1, __ATOMIC_RELAXED);   // fail-loud, reported via drain
     }
     pthread_mutex_unlock(&g_cap_lock);
+}
+
+// Register idh_nreport_impl as the target reporter class's `nReport`. Called at capture_start
+// with the class name idhd supplies (target-agnostic). Returns 1 on success, 0 if the class is
+// absent or registration fails (fail-loud: reported in the capture_start reply, not silent).
+static int idh_register_reporter(JNIEnv *env, const char *reportClass) {
+    if (!reportClass || !reportClass[0]) return 0;
+    jclass rc = load_app_class(env, reportClass);
+    if (!rc) return 0;
+    JNINativeMethod m = { (char *)"nReport", (char *)"(Ljava/lang/String;Ljava/lang/String;[B[B[B[B)V", (void *)idh_nreport_impl };
+    int r = (*env)->RegisterNatives(env, rc, &m, 1);
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    return (r == 0) ? 1 : 0;
 }
 
 // ---- anti-analysis / system-info hooks (module V) — defined here (above capture_start)
@@ -1510,7 +1489,7 @@ static void cmd_capture_stop(int fd, const char *id) {
 // complete:false. Buffer grows as needed (the old fixed 64KB could overflow with a full ring).
 static void cmd_capture_drain(int fd, const char *id) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
-    size_t cap = 1 << 16, len = 0; char *out = malloc(cap); if (!out) return;
+    size_t cap = 1 << 16, len = 0; char *out = malloc(cap); if (!out) { send_oom(fd, idj, "capture_drain"); return; }
     len += snprintf(out + len, cap - len,
         "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"capture_drain\",\"ok\":true,\"on\":%s,\"captures\":[",
         idj, g_capture_on ? "true" : "false");
@@ -1663,7 +1642,6 @@ static int g_ntrace = 0;
 static pthread_mutex_t g_trace_lock = PTHREAD_MUTEX_INITIALIZER;
 typedef long (*fn4_t)(long, long, long, long);
 static fn4_t g_trace_orig = NULL;
-static char g_trace_mod[80] = "";
 // If addr points to a readable ASCII string, copy a short printable preview (for
 // path/string args). Self-contained (untag + /proc/self/mem read).
 // Cached read-only /proc/self/mem fd — opened once, never closed. trace_preview() runs in a
@@ -1722,15 +1700,18 @@ static jclass load_app_class(JNIEnv *env, const char *dotname) {
 
 // Install GOT hooks on libidhdetect's detection calls, trigger Detection.run(),
 // report what the target checked.
-static void cmd_detect_watch(int fd, const char *id) {
+static void cmd_detect_watch(int fd, const char *id, const char *module, const char *className) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
+    // No hardcoded target module: idhd passes the module whose GOT holds the detection calls.
+    if (!module || !module[0]) { char e[200]; snprintf(e, sizeof(e), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"detect_watch\",\"ok\":false,\"error\":\"need module (which loaded module makes the detection calls)\"}\n", idj); send_line(fd, e); return; }
+    const char *mod = module;
     void *op = resolve_sym("libc.so", "ptrace");
     void *oa = resolve_sym("libc.so", "access");
     void *og = resolve_sym("libc.so", "__system_property_get");
     g_orig_ptrace = (ptrace_t)op; g_orig_access = (access_t)oa; g_orig_prop = (prop_t)og;
-    int r1 = op ? got_replace("libidhdetect.so", op, (void *)my_ptrace) : -1;
-    int r2 = oa ? got_replace("libidhdetect.so", oa, (void *)my_access) : -1;
-    int r3 = og ? got_replace("libidhdetect.so", og, (void *)my_prop) : -1;
+    int r1 = op ? got_replace(mod, op, (void *)my_ptrace) : -1;
+    int r2 = oa ? got_replace(mod, oa, (void *)my_access) : -1;
+    int r3 = og ? got_replace(mod, og, (void *)my_prop) : -1;
     g_defeat_ptrace = 1;   // this one-shot probe defeats TRACEME (original behavior); reset after
     pthread_mutex_lock(&g_det_lock); g_ndets = 0; pthread_mutex_unlock(&g_det_lock);
 
@@ -1738,7 +1719,7 @@ static void cmd_detect_watch(int fd, const char *id) {
     JNIEnv *env = attach_env(&did);
     if (env) {
         (*env)->PushLocalFrame(env, 32);
-        jclass jc = load_app_class(env, "com.idh.sandbox.Detection");
+        jclass jc = className[0] ? load_app_class(env, className) : NULL;
         if (jc) {
             jmethodID run = (*env)->GetStaticMethodID(env, jc, "run", "()I");
             if (run) { rc = (*env)->CallStaticIntMethod(env, jc, run); triggered = 1; }
@@ -1748,12 +1729,12 @@ static void cmd_detect_watch(int fd, const char *id) {
         detach_env(did);
     }
     // restore
-    if (r1 > 0) got_replace("libidhdetect.so", (void *)my_ptrace, op);
-    if (r2 > 0) got_replace("libidhdetect.so", (void *)my_access, oa);
-    if (r3 > 0) got_replace("libidhdetect.so", (void *)my_prop, og);
+    if (r1 > 0) got_replace(mod, (void *)my_ptrace, op);
+    if (r2 > 0) got_replace(mod, (void *)my_access, oa);
+    if (r3 > 0) got_replace(mod, (void *)my_prop, og);
     g_defeat_ptrace = 0;
 
-    size_t cap = 1 << 13, len = 0; char *out = malloc(cap); if (!out) return;
+    size_t cap = 1 << 13, len = 0; char *out = malloc(cap); if (!out) { send_oom(fd, idj, "detect_watch"); return; }
     len += snprintf(out + len, cap - len, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"detect_watch\",\"ok\":true,\"hooked\":{\"ptrace\":%d,\"access\":%d,\"prop\":%d},\"triggered\":%s,\"detectRc\":%d,\"detections\":[", idj, r1, r2, r3, triggered ? "true" : "false", rc);
     pthread_mutex_lock(&g_det_lock);
     for (int k = 0; k < g_ndets; k++) { char dj[200]; json_escape(g_dets[k].detail, dj, sizeof(dj));
@@ -1769,11 +1750,10 @@ static void cmd_detect_watch(int fd, const char *id) {
 // Generic function trace: hook `symbol` (exported by symLib) in hookModule's GOT,
 // trigger the sandbox's Detection.run() (which calls libc detection fns), and return
 // the recorded calls (args + tid + ts). Demonstrates tracing an arbitrary native fn.
-static void cmd_trace_run(int fd, const char *id, const char *symLib, const char *symbol, const char *hookMod) {
+static void cmd_trace_run(int fd, const char *id, const char *symLib, const char *symbol, const char *hookMod, const char *className) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
     void *orig = resolve_sym(symLib, symbol);
     g_trace_orig = (fn4_t)orig;
-    strncpy(g_trace_mod, hookMod, sizeof(g_trace_mod) - 1); g_trace_mod[sizeof(g_trace_mod)-1] = 0;
     int replaced = orig ? got_replace(hookMod, orig, (void *)idh_trace_wrapper) : -1;
     pthread_mutex_lock(&g_trace_lock); g_ntrace = 0; pthread_mutex_unlock(&g_trace_lock);
 
@@ -1781,7 +1761,7 @@ static void cmd_trace_run(int fd, const char *id, const char *symLib, const char
     JNIEnv *env = attach_env(&did);
     if (env) {
         (*env)->PushLocalFrame(env, 32);
-        jclass jc = load_app_class(env, "com.idh.sandbox.Detection");
+        jclass jc = className[0] ? load_app_class(env, className) : NULL;
         if (jc) { jmethodID run = (*env)->GetStaticMethodID(env, jc, "run", "()I");
             if (run) { (*env)->CallStaticIntMethod(env, jc, run); triggered = 1; } }
         if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
@@ -1791,7 +1771,7 @@ static void cmd_trace_run(int fd, const char *id, const char *symLib, const char
     if (replaced > 0 && orig) got_replace(hookMod, (void *)idh_trace_wrapper, orig);   // restore
 
     char sj[80]; json_escape(symbol, sj, sizeof(sj));
-    size_t cap = 1 << 14, len = 0; char *out = malloc(cap); if (!out) return;
+    size_t cap = 1 << 14, len = 0; char *out = malloc(cap); if (!out) { send_oom(fd, idj, "trace_run"); return; }
     len += snprintf(out + len, cap - len, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"trace_run\",\"ok\":true,\"symbol\":\"%s\",\"replaced\":%d,\"triggered\":%s,\"calls\":[", idj, sj, replaced, triggered ? "true" : "false");
     pthread_mutex_lock(&g_trace_lock);
     for (int k = 0; k < g_ntrace; k++) { struct TraceRec *r = &g_trace[k]; char s0j[100]; json_escape(r->s0, s0j, sizeof(s0j));
@@ -1814,7 +1794,7 @@ static void cmd_object_inspect(int fd, const char *id, const char *className, co
     if (!env) { char e[160]; snprintf(e, sizeof(e), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"object_inspect\",\"ok\":false,\"error\":\"no JavaVM\"}\n", idj); send_line(fd, e); return; }
     (*env)->PushLocalFrame(env, 256);
 
-    size_t cap = 1 << 14, len = 0; char *out = malloc(cap);
+    size_t cap = 1 << 14; char *out = malloc(cap);
     int ok = 0; char err[128] = ""; char objClass[160] = ""; int nfields = 0;
     char *recs = malloc(1 << 13); if (recs) recs[0] = 0; size_t rlen = 0, rcap = 1 << 13;
 
@@ -1950,15 +1930,24 @@ static void cmd_compat_probe(int fd, const char *id) {
         char *p = strstr(l, "/"); if (p) { char *nl = strchr(p, '\n'); if (nl) *nl = 0; if (strcmp(p, lastmod)) { strncpy(lastmod, p, sizeof(lastmod)-1); module_count++; } } }
     if (m) fclose(m);
 
+    // memRead: exercise the real read path (/proc/self/mem pread) on our own code — confirms
+    // the mechanism works rather than asserting a hardcoded "true". dlopenSystemLibsBlocked:
+    // actually try to dlopen a system lib instead of freezing a one-time observation into code.
+    int memread_ok = 0;
+    { int mf = open("/proc/self/mem", O_RDONLY);
+      if (mf >= 0) { unsigned char mb[4]; memread_ok = (pread(mf, mb, 4, (off_t)(uintptr_t)&cmd_compat_probe) == 4); close(mf); } }
+    void *dlprobe = dlopen("libcrypto.so", RTLD_NOW);
+    int dlopen_blocked = (dlprobe == NULL);
+    if (dlprobe) dlclose(dlprobe);
+
     char out[640];
     snprintf(out, sizeof(out),
         "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"compat_probe\",\"ok\":true,"
-        "\"tracerPid\":%d,\"seccomp\":%d,\"backends\":{\"gotHook\":%s,\"jniReflect\":%s,\"artDexCapture\":%s,\"memRead\":true},"
-        "\"mapsCount\":%d,\"moduleMappings\":%d,\"dlopenSystemLibsBlocked\":%s,"
-        "\"minimalModeAvailable\":true}\n",
+        "\"tracerPid\":%d,\"seccomp\":%d,\"backends\":{\"gotHook\":%s,\"jniReflect\":%s,\"artDexCapture\":%s,\"memRead\":%s},"
+        "\"mapsCount\":%d,\"moduleMappings\":%d,\"dlopenSystemLibsBlocked\":%s}\n",
         idj, tracer, seccomp, got_ok ? "true" : "false", jni_ok ? "true" : "false",
-        (g_vm != NULL) ? "true" : "false", maps_count, module_count,
-        "true" /* observed: system libcrypto not dlopen-able -> use resolve_sym */);
+        (g_vm != NULL) ? "true" : "false", memread_ok ? "true" : "false",
+        maps_count, module_count, dlopen_blocked ? "true" : "false");
     send_line(fd, out);
     LOGI("compat_probe: tracer=%d seccomp=%d got=%d jni=%d", tracer, seccomp, got_ok, jni_ok);
 }
@@ -2165,8 +2154,15 @@ static void cmd_art_dexfiles(int fd, const char *id) {
                                     int w = snprintf(rec, sizeof(rec),
                                         "%s{\"dexFilePtr\":\"%llx\",\"begin\":\"%llx\",\"size\":%u,\"magic\":\"%s\",\"format\":\"%s\",\"version\":%u,\"logical\":\"%llx\",\"dataBegin\":\"%llx\",\"dataSize\":%u,\"confidence\":%d,\"loader\":\"%s\"}",
                                         nrec ? "," : "", p, dv.begin, dv.size, dv.format, dv.format, dv.version, dv.logical, dv.data_begin, dv.data_size, dv.confidence, lj);
-                                    if (w > 0) { if (len + (size_t)w + 1 >= cap) { while (len + (size_t)w + 1 >= cap) cap *= 2; char *nb = realloc(recs, cap); if (nb) recs = nb; }
-                                        memcpy(recs + len, rec, (size_t)w); len += (size_t)w; recs[len] = 0; nrec++; }
+                                    if (w > 0) {
+                                        if (len + (size_t)w + 1 >= cap) {
+                                            size_t ncap = cap; while (len + (size_t)w + 1 >= ncap) ncap *= 2;
+                                            char *nb = realloc(recs, ncap);
+                                            if (!nb) continue;   // OOM: skip this record — recs/cap unchanged (no overflow)
+                                            recs = nb; cap = ncap;
+                                        }
+                                        memcpy(recs + len, rec, (size_t)w); len += (size_t)w; recs[len] = 0; nrec++;
+                                    }
                                 }
                             }
                             (*env)->ReleaseLongArrayElements(env, arr, vals, JNI_ABORT);
@@ -2197,8 +2193,8 @@ static void cmd_art_dexfiles(int fd, const char *id) {
 
 static void cmd_maps(int fd, const char *id) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
-    int total = 0;
-    char *regions = build_maps_json(0, &total);
+    int total = 0, trunc = 0;
+    char *regions = build_maps_json(0, &total, &trunc);
     if (!regions) {
         char err[160];
         snprintf(err, sizeof(err), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"maps\",\"ok\":false,\"error\":\"read maps\"}\n", idj);
@@ -2208,8 +2204,8 @@ static void cmd_maps(int fd, const char *id) {
     char *out = (char *)malloc(hlen);
     if (out) {
         snprintf(out, hlen,
-            "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"maps\",\"ok\":true,\"count\":%d,\"regions\":[%s]}\n",
-            idj, total, regions);
+            "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"maps\",\"ok\":true,\"count\":%d,\"truncated\":%s,\"regions\":[%s]}\n",
+            idj, total, trunc ? "true" : "false", regions);
         send_line(fd, out);
         free(out);
     }
@@ -2230,11 +2226,11 @@ static void report(int fd) {
         "{\"t\":\"hello\",\"agentVer\":\"%s\",\"pid\":%d,\"uid\":%d,"
         "\"package\":\"%s\",\"process\":\"%s\",\"abi\":\"%s\",\"android\":\"%s\",\"sdk\":%s,\"entry\":\"%s\"}\n",
         AGENT_VER, getpid(), getuid(), pkg, pkg,
-        abi[0] ? abi : "arm64-v8a", rel[0] ? rel : "?", sdk[0] ? sdk : "0", g_entry);
+        abi[0] ? abi : "?", rel[0] ? rel : "?", sdk[0] ? sdk : "0", g_entry);
     if (send_line(fd, hello) != 0) { LOGE("send hello failed"); return; }
 
     int total = 0;
-    char *sample = build_maps_json(40, &total);
+    char *sample = build_maps_json(40, &total, NULL);
     if (sample) {
         size_t hlen = strlen(sample) + 128;
         char *msg = (char *)malloc(hlen);
@@ -2270,10 +2266,11 @@ static void cmd_frame_echo(int fd, const char *id, const char *line) {
 
 // ---- Java method hook (WS-A, LSPlant) deterministic self-test -------------------------
 #ifdef IDH_HAVE_LSPLANT
-// Init LSPlant, hook com.idh.sandbox.HookTarget.secret(String) via a com.idh.agent.MethodHook
-// callback, call it, and assert: init ok, hook installed, callback fired capturing the real
-// arg, and the original still returned its real value (backup.invoke worked, no recursion/crash).
-static void cmd_java_hook_test(int fd, const char *id) {
+// Init LSPlant, hook the target's `secret(String)` method (className from idhd) via a
+// com.idh.agent.MethodHook callback, call it, and assert: init ok, hook installed, callback
+// fired capturing the real arg, and the original still returned its real value (backup.invoke
+// worked, no recursion/crash).
+static void cmd_java_hook_test(int fd, const char *id, const char *className) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
     int did = 0; JNIEnv *env = attach_env(&did);
     if (!env) { char e[160]; snprintf(e, sizeof(e), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"java_hook_test\",\"ok\":false,\"error\":\"no JNIEnv\"}\n", idj); send_line(fd, e); return; }
@@ -2284,7 +2281,7 @@ static void cmd_java_hook_test(int fd, const char *id) {
 
     jclass clsCls = (*env)->FindClass(env, "java/lang/Class");
     jclass strCls = (*env)->FindClass(env, "java/lang/String");
-    jclass htCls  = load_app_class(env, "com.idh.sandbox.HookTarget");
+    jclass htCls  = className[0] ? load_app_class(env, className) : NULL;
     jclass mhCls  = load_app_class(env, "com.idh.agent.MethodHook");
     if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
     if (initOk && htCls && mhCls && clsCls && strCls) {
@@ -2332,7 +2329,8 @@ static void cmd_java_hook_test(int fd, const char *id) {
     LOGI("java_hook_test: init=%d hooked=%d fired=%d origOk=%d hits=%d arg=%s ret=%s", initOk, hooked, fired, origOk, hits, lastArg, ret);
 }
 #else
-static void cmd_java_hook_test(int fd, const char *id) {
+static void cmd_java_hook_test(int fd, const char *id, const char *className) {
+    (void)className;
     char idj[64]; json_escape(id, idj, sizeof(idj));
     char out[220];
     snprintf(out, sizeof(out), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"java_hook_test\",\"ok\":false,\"error\":\"lsplant not built — run tools/fetch_lsplant.sh\"}\n", idj);
@@ -2372,7 +2370,8 @@ static void command_loop(int fd) {
                 } else if (strcmp(op, "crypto_probe") == 0) {
                     cmd_crypto_probe(fd, id);
                 } else if (strcmp(op, "crypto_hook_test") == 0) {
-                    cmd_crypto_hook_test(fd, id);
+                    char tcls[200] = ""; json_get_str(line, "className", tcls, sizeof(tcls));
+                    cmd_crypto_hook_test(fd, id, tcls);
                 } else if (strcmp(op, "capture_start") == 0) {
                     char fmod[64] = "", smod[64] = "";
                     json_get_str(line, "fileModule", fmod, sizeof(fmod));
@@ -2394,16 +2393,23 @@ static void command_loop(int fd) {
                     json_get_str(line, "symbol", lsym, sizeof(lsym));
                     cmd_load_so(fd, id, lpath, lsym);
                 } else if (strcmp(op, "net_hook_test") == 0) {
-                    cmd_net_hook_test(fd, id);
+                    char tcls[200] = ""; json_get_str(line, "className", tcls, sizeof(tcls));
+                    cmd_net_hook_test(fd, id, tcls);
                 } else if (strcmp(op, "file_probe") == 0) {
                     cmd_file_probe(fd, id);
                 } else if (strcmp(op, "file_hook_test") == 0) {
-                    char fmod[64] = ""; json_get_str(line, "module", fmod, sizeof(fmod));
-                    cmd_file_hook_test(fd, id, fmod);
+                    char fmod[64] = "", tcls[200] = "";
+                    json_get_str(line, "module", fmod, sizeof(fmod));
+                    json_get_str(line, "className", tcls, sizeof(tcls));
+                    cmd_file_hook_test(fd, id, fmod, tcls);
                 } else if (strcmp(op, "flow_watch") == 0) {
-                    cmd_flow_watch(fd, id);
+                    char tcls[200] = ""; json_get_str(line, "className", tcls, sizeof(tcls));
+                    cmd_flow_watch(fd, id, tcls);
                 } else if (strcmp(op, "detect_watch") == 0) {
-                    cmd_detect_watch(fd, id);
+                    char dmod[64] = "", tcls[200] = "";
+                    json_get_str(line, "module", dmod, sizeof(dmod));
+                    json_get_str(line, "className", tcls, sizeof(tcls));
+                    cmd_detect_watch(fd, id, dmod, tcls);
                 } else if (strcmp(op, "qbdi_trace") == 0) {
                     char sl[64] = "", sy[80] = "";
                     json_get_str(line, "symLib", sl, sizeof(sl));
@@ -2416,11 +2422,12 @@ static void command_loop(int fd) {
                         if (msg) { snprintf(msg, (1 << 18) + 128, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"qbdi_trace\",%s}\n", idj, ob); send_line(fd, msg); free(msg); }
                         free(ob); LOGI("qbdi_trace %s -> done", sy); } }
                 } else if (strcmp(op, "trace_run") == 0) {
-                    char sl[64] = "", sy[64] = "", hm[80] = "";
+                    char sl[64] = "", sy[64] = "", hm[80] = "", tcls[200] = "";
                     json_get_str(line, "symLib", sl, sizeof(sl));
                     json_get_str(line, "symbol", sy, sizeof(sy));
                     json_get_str(line, "hookModule", hm, sizeof(hm));
-                    cmd_trace_run(fd, id, sl, sy, hm);
+                    json_get_str(line, "className", tcls, sizeof(tcls));
+                    cmd_trace_run(fd, id, sl, sy, hm, tcls);
                 } else if (strcmp(op, "compat_probe") == 0) {
                     cmd_compat_probe(fd, id);
                 } else if (strcmp(op, "object_inspect") == 0) {
@@ -2443,7 +2450,8 @@ static void command_loop(int fd) {
                     long long lim = json_get_num(line, "limit");
                     cmd_search(fd, id, pat, (int)lim);
                 } else if (strcmp(op, "java_hook_test") == 0) {
-                    cmd_java_hook_test(fd, id);
+                    char tcls[200] = ""; json_get_str(line, "className", tcls, sizeof(tcls));
+                    cmd_java_hook_test(fd, id, tcls);
                 } else if (strcmp(op, "frame_echo") == 0) {
                     cmd_frame_echo(fd, id, line);
                 } else if (strcmp(op, "ping") == 0) {
@@ -2488,11 +2496,33 @@ void idh_agent_start(void) {
     pthread_once(&g_once, do_start);
 }
 
+// If the target published its Java rich-capture reporter class via the "idh.reporter.class"
+// system property, bind idh_nreport_impl onto its nReport method (RegisterNatives). Target-
+// agnostic: the agent knows no class name — the target opts in by setting the property.
+static void bind_reporter_from_prop(JNIEnv *env) {
+    jclass sysCls = (*env)->FindClass(env, "java/lang/System");
+    jmethodID getProp = sysCls ? (*env)->GetStaticMethodID(env, sysCls, "getProperty", "(Ljava/lang/String;)Ljava/lang/String;") : NULL;
+    if (!getProp) { if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); return; }
+    jstring jkey = (*env)->NewStringUTF(env, "idh.reporter.class");
+    jstring jval = jkey ? (jstring)(*env)->CallStaticObjectMethod(env, sysCls, getProp, jkey) : NULL;
+    if (jval) {
+        const char *cls = (*env)->GetStringUTFChars(env, jval, NULL);
+        if (cls && cls[0]) { int ok = idh_register_reporter(env, cls); LOGI("rich-capture reporter '%s' bind %s", cls, ok ? "ok" : "FAILED"); }
+        if (cls) (*env)->ReleaseStringUTFChars(env, jval, cls);
+    }
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+}
+
 JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *reserved) {
     (void)reserved;
     g_vm = vm;
     strncpy(g_entry, "jni_onload", sizeof(g_entry) - 1);
     LOGI("JNI_OnLoad — agent " AGENT_VER " starting");
+    // Bind the Java rich-capture reporter (if the target opted in via idh.reporter.class) HERE —
+    // before the target installs its JCE provider — so the binding is in place before any report
+    // fires (a later bind would race the target's first crypto op and lose).
+    JNIEnv *env = NULL;
+    if ((*vm)->GetEnv(vm, (void **)&env, JNI_VERSION_1_6) == JNI_OK && env) bind_reporter_from_prop(env);
     pthread_once(&g_once, do_start);
     return JNI_VERSION_1_6;
 }

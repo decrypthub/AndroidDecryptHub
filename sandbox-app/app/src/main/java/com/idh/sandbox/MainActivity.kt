@@ -79,6 +79,10 @@ class MainActivity : Activity() {
         TriggerProbe.reset()
 
         val loadStatus: String = try {
+            // Publish our Java rich-capture reporter class so the agent (which knows no sandbox
+            // class name) can bind IdhReport.nReport via RegisterNatives at JNI_OnLoad — before
+            // we install the JCE provider below, so no report can race the binding.
+            System.setProperty("idh.reporter.class", "com.idh.sandbox.IdhReport")
             // Dobby (LSPlant's inline-hook backend) is statically linked into libidh_agent.so —
             // no separate .so to load.
             System.loadLibrary("idh_agent"); "agent: libidh_agent 已加载（模拟注入）"
