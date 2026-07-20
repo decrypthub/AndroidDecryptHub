@@ -1340,11 +1340,59 @@ JNIEXPORT void JNICALL Java_com_idh_sandbox_IdhReport_nReport(
     pthread_mutex_unlock(&g_cap_lock);
 }
 
+// ---- anti-analysis / system-info hooks (module V) — defined here (above capture_start)
+//      so the persistent capture path can install them. GOT-hook the target's own
+//      detection / system-query calls to see WHAT it checks for, and stream each event into
+//      the unified capture() ring so the 系统 panel fills live (not just one-shot
+//      detect_watch). Defeating (returning fake values) is opt-in via g_defeat_ptrace —
+//      default off = pure observation (CLAUDE.md: no self-hiding by default). ----
+struct DetRec { char cat[16]; char detail[160]; };
+static struct DetRec g_dets[64];
+static int g_ndets = 0;
+static pthread_mutex_t g_det_lock = PTHREAD_MUTEX_INITIALIZER;
+static void det_record(const char *cat, const char *detail) {
+    pthread_mutex_lock(&g_det_lock);
+    if (g_ndets < 64) { struct DetRec *r = &g_dets[g_ndets++];
+        strncpy(r->cat, cat, sizeof(r->cat) - 1); r->cat[sizeof(r->cat)-1]=0;
+        strncpy(r->detail, detail, sizeof(r->detail) - 1); r->detail[sizeof(r->detail)-1]=0; }
+    pthread_mutex_unlock(&g_det_lock);
+}
+static int g_defeat_ptrace = 0;   // 0 = observe only; 1 = neutralize TRACEME (opt-in resilience)
+
+typedef long (*ptrace_t)(int, void *, void *, void *);
+static ptrace_t g_orig_ptrace = NULL;
+static long my_ptrace(int req, void *a, void *b, void *c) {
+    char d[64]; snprintf(d, sizeof(d), "ptrace(request=%d%s)", req, req == 0 ? " PTRACE_TRACEME" : "");
+    det_record("debug", d);
+    capture("ptrace", (const unsigned char *)d, (int)strlen(d));
+    if (req == 0 && g_defeat_ptrace) return 0;   // neutralize TRACEME only when defeat opt-in
+    return g_orig_ptrace(req, a, b, c);
+}
+typedef int (*access_t)(const char *, int);
+static access_t g_orig_access = NULL;
+static int my_access(const char *p, int m) {
+    if (p) { det_record(strstr(p, "su") ? "root" : "file", p);
+             capture("access", (const unsigned char *)p, (int)strlen(p)); }
+    return g_orig_access(p, m);
+}
+typedef int (*prop_t)(const char *, char *);
+static prop_t g_orig_prop = NULL;
+static int my_prop(const char *name, char *value) {
+    det_record("prop", name ? name : "?");
+    if (name) capture("sysprop", (const unsigned char *)name, (int)strlen(name));  // 读手机信息 ro.*
+    return g_orig_prop(name, value);
+}
+
+// Persistent-hook target modules (from idhd's capture_start params) — remembered so
+// capture_stop restores the exact GOT it patched. Empty = that category not installed.
+static char g_file_mod[64] = "";
+static char g_sys_mod[64] = "";
+
 // ---- continuous capture: install persistent EVP+SSL hooks, drain accumulated records
 //      periodically from idhd (mirrors the ios-decrypt-helper log-store model: hooks
 //      stay installed and events stream to the panel, instead of one-shot triggers) ----
 static int g_capture_on = 0;
-static void cmd_capture_start(int fd, const char *id) {
+static void cmd_capture_start(int fd, const char *id, const char *fileModule, const char *sysModule) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
     void *evp = resolve_sym("libcrypto.so", "EVP_CipherUpdate");
     void *dig = resolve_sym("libcrypto.so", "EVP_DigestUpdate");
@@ -1367,13 +1415,54 @@ static void cmd_capture_start(int fd, const char *id) {
     int rs = dsu ? got_replace("libjavacrypto.so", dsu, (void *)my_EVP_DigestSignUpdate) : -1;
     int rw = ow  ? got_replace("libjavacrypto.so", ow,  (void *)my_SSL_write) : -1;
     int rr = orr ? got_replace("libjavacrypto.so", orr, (void *)my_SSL_read) : -1;
+
+    // -- 文件: persistent file-I/O hooks in the module backing java.io (fileModule, from idhd;
+    //    empty = skip so the agent never hardcodes a target module). Streams openat paths +
+    //    read/write bytes into the same capture() ring (category=file on idhd). --
+    int fo=-1, foa=-1, frd=-1, fwr=-1, fsc=-1, frc=-1, fwc=-1;
+    if (fileModule && fileModule[0]) {
+        strncpy(g_file_mod, fileModule, sizeof(g_file_mod)-1); g_file_mod[sizeof(g_file_mod)-1]=0;
+        void *oo=resolve_sym("libc.so","open"),   *ooa=resolve_sym("libc.so","openat");
+        void *ord=resolve_sym("libc.so","read"),  *owr=resolve_sym("libc.so","write");
+        void *osc=resolve_sym("libc.so","syscall");
+        void *orc=resolve_sym("libc.so","__read_chk"), *owv=resolve_sym("libc.so","__write_chk");
+        if (oo)  g_orig_open       = (open_t)oo;    if (ooa) g_orig_openat = (openat_t)ooa;
+        if (ord) g_orig_read       = (rw_t)ord;     if (owr) g_orig_fwrite_sys = (rw_t)owr;
+        if (osc) g_orig_syscall    = (syscall_t)osc;
+        if (orc) g_orig_read_chk   = (read_chk_t)orc; if (owv) g_orig_write_chk = (write_chk_t)owv;
+        fo  = oo  ? got_replace(g_file_mod, oo,  (void *)my_open)     : -1;
+        foa = ooa ? got_replace(g_file_mod, ooa, (void *)my_openat)   : -1;
+        frd = ord ? got_replace(g_file_mod, ord, (void *)my_read)     : -1;
+        fwr = owr ? got_replace(g_file_mod, owr, (void *)my_write)    : -1;
+        fsc = osc ? got_replace(g_file_mod, osc, (void *)my_syscall)  : -1;
+        frc = orc ? got_replace(g_file_mod, orc, (void *)my_read_chk) : -1;
+        fwc = owv ? got_replace(g_file_mod, owv, (void *)my_write_chk): -1;
+    }
+    // -- 系统: persistent detection/system-query hooks (ptrace/access/__system_property_get)
+    //    in sysModule. Observe-only (g_defeat_ptrace stays 0). Streams category=system. --
+    int sp=-1, sa=-1, sg=-1;
+    if (sysModule && sysModule[0]) {
+        strncpy(g_sys_mod, sysModule, sizeof(g_sys_mod)-1); g_sys_mod[sizeof(g_sys_mod)-1]=0;
+        void *op=resolve_sym("libc.so","ptrace"), *oa=resolve_sym("libc.so","access");
+        void *og=resolve_sym("libc.so","__system_property_get");
+        if (op) g_orig_ptrace = (ptrace_t)op; if (oa) g_orig_access = (access_t)oa; if (og) g_orig_prop = (prop_t)og;
+        sp = op ? got_replace(g_sys_mod, op, (void *)my_ptrace) : -1;
+        sa = oa ? got_replace(g_sys_mod, oa, (void *)my_access) : -1;
+        sg = og ? got_replace(g_sys_mod, og, (void *)my_prop)   : -1;
+    }
     g_capture_on = 1;
-    char out[320];
+    char fmj[80], smj[80];
+    json_escape(fileModule ? fileModule : "", fmj, sizeof(fmj));
+    json_escape(sysModule ? sysModule : "", smj, sizeof(smj));
+    char out[640];
     snprintf(out, sizeof(out),
-        "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"capture_start\",\"ok\":true,\"evp\":%d,\"digest\":%d,\"hmac\":%d,\"digestSign\":%d,\"sslWrite\":%d,\"sslRead\":%d,\"on\":true}\n",
-        idj, re, rd, rh, rs, rw, rr);
+        "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"capture_start\",\"ok\":true,\"evp\":%d,\"digest\":%d,\"hmac\":%d,\"digestSign\":%d,\"sslWrite\":%d,\"sslRead\":%d,"
+        "\"fileModule\":\"%s\",\"file\":{\"open\":%d,\"openat\":%d,\"read\":%d,\"write\":%d,\"syscall\":%d,\"readChk\":%d,\"writeChk\":%d},"
+        "\"sysModule\":\"%s\",\"sys\":{\"ptrace\":%d,\"access\":%d,\"prop\":%d},\"on\":true}\n",
+        idj, re, rd, rh, rs, rw, rr, fmj, fo, foa, frd, fwr, fsc, frc, fwc, smj, sp, sa, sg);
     send_line(fd, out);
-    LOGI("capture_start: evp=%d dig=%d hmac=%d dsu=%d sslw=%d sslr=%d", re, rd, rh, rs, rw, rr);
+    LOGI("capture_start: evp=%d dig=%d hmac=%d dsu=%d sslw=%d sslr=%d | file[%s] oa=%d sc=%d rc=%d wc=%d | sys[%s] p=%d a=%d g=%d",
+         re, rd, rh, rs, rw, rr, g_file_mod, foa, fsc, frc, fwc, g_sys_mod, sp, sa, sg);
 }
 
 // Uninstall the persistent capture hooks and restore the original GOT pointers, so the
@@ -1389,6 +1478,24 @@ static void cmd_capture_stop(int fd, const char *id) {
     if (g_orig_digest_sign)ds = got_replace("libjavacrypto.so", (void *)my_EVP_DigestSignUpdate, (void *)g_orig_digest_sign);
     if (g_orig_ssl_write)  w  = got_replace("libjavacrypto.so", (void *)my_SSL_write, (void *)g_orig_ssl_write);
     if (g_orig_ssl_read)   r  = got_replace("libjavacrypto.so", (void *)my_SSL_read, (void *)g_orig_ssl_read);
+    // restore persistent file hooks in the module capture_start patched
+    if (g_file_mod[0]) {
+        if (g_orig_open)       got_replace(g_file_mod, (void *)my_open,       (void *)g_orig_open);
+        if (g_orig_openat)     got_replace(g_file_mod, (void *)my_openat,     (void *)g_orig_openat);
+        if (g_orig_read)       got_replace(g_file_mod, (void *)my_read,       (void *)g_orig_read);
+        if (g_orig_fwrite_sys) got_replace(g_file_mod, (void *)my_write,      (void *)g_orig_fwrite_sys);
+        if (g_orig_syscall)    got_replace(g_file_mod, (void *)my_syscall,    (void *)g_orig_syscall);
+        if (g_orig_read_chk)   got_replace(g_file_mod, (void *)my_read_chk,   (void *)g_orig_read_chk);
+        if (g_orig_write_chk)  got_replace(g_file_mod, (void *)my_write_chk,  (void *)g_orig_write_chk);
+        g_file_mod[0] = 0;
+    }
+    // restore persistent system/detection hooks
+    if (g_sys_mod[0]) {
+        if (g_orig_ptrace) got_replace(g_sys_mod, (void *)my_ptrace, (void *)g_orig_ptrace);
+        if (g_orig_access) got_replace(g_sys_mod, (void *)my_access, (void *)g_orig_access);
+        if (g_orig_prop)   got_replace(g_sys_mod, (void *)my_prop,   (void *)g_orig_prop);
+        g_sys_mod[0] = 0;
+    }
     g_capture_on = 0;
     cap_reset();
     char out[256];
@@ -1595,39 +1702,8 @@ static long idh_trace_wrapper(long a0, long a1, long a2, long a3) {
 }
 
 // ---- anti-analysis behavior observation (module V) ----
-// GOT-hook the target's own detection calls to see WHAT it checks for.
-struct DetRec { char cat[16]; char detail[160]; };
-static struct DetRec g_dets[64];
-static int g_ndets = 0;
-static pthread_mutex_t g_det_lock = PTHREAD_MUTEX_INITIALIZER;
-static void det_record(const char *cat, const char *detail) {
-    pthread_mutex_lock(&g_det_lock);
-    if (g_ndets < 64) { struct DetRec *r = &g_dets[g_ndets++];
-        strncpy(r->cat, cat, sizeof(r->cat) - 1); r->cat[sizeof(r->cat)-1]=0;
-        strncpy(r->detail, detail, sizeof(r->detail) - 1); r->detail[sizeof(r->detail)-1]=0; }
-    pthread_mutex_unlock(&g_det_lock);
-}
-
-typedef long (*ptrace_t)(int, void *, void *, void *);
-static ptrace_t g_orig_ptrace = NULL;
-static long my_ptrace(int req, void *a, void *b, void *c) {
-    char d[64]; snprintf(d, sizeof(d), "ptrace(request=%d%s)", req, req == 0 ? " PTRACE_TRACEME" : "");
-    det_record("debug", d);
-    if (req == 0) return 0;                 // neutralize TRACEME: observe (V) + defeat (S)
-    return g_orig_ptrace(req, a, b, c);
-}
-typedef int (*access_t)(const char *, int);
-static access_t g_orig_access = NULL;
-static int my_access(const char *p, int m) {
-    if (p) det_record(strstr(p, "su") ? "root" : "file", p);
-    return g_orig_access(p, m);
-}
-typedef int (*prop_t)(const char *, char *);
-static prop_t g_orig_prop = NULL;
-static int my_prop(const char *name, char *value) {
-    det_record("prop", name ? name : "?");
-    return g_orig_prop(name, value);
-}
+// Detection primitives (det_record + my_ptrace/my_access/my_prop) are defined above, near
+// cmd_capture_start, so the persistent capture path can install them too.
 
 // Load an app class from the native thread via ActivityThread.currentApplication()'s loader.
 static jclass load_app_class(JNIEnv *env, const char *dotname) {
@@ -1655,6 +1731,7 @@ static void cmd_detect_watch(int fd, const char *id) {
     int r1 = op ? got_replace("libidhdetect.so", op, (void *)my_ptrace) : -1;
     int r2 = oa ? got_replace("libidhdetect.so", oa, (void *)my_access) : -1;
     int r3 = og ? got_replace("libidhdetect.so", og, (void *)my_prop) : -1;
+    g_defeat_ptrace = 1;   // this one-shot probe defeats TRACEME (original behavior); reset after
     pthread_mutex_lock(&g_det_lock); g_ndets = 0; pthread_mutex_unlock(&g_det_lock);
 
     int did = 0, triggered = 0, rc = -999;
@@ -1674,6 +1751,7 @@ static void cmd_detect_watch(int fd, const char *id) {
     if (r1 > 0) got_replace("libidhdetect.so", (void *)my_ptrace, op);
     if (r2 > 0) got_replace("libidhdetect.so", (void *)my_access, oa);
     if (r3 > 0) got_replace("libidhdetect.so", (void *)my_prop, og);
+    g_defeat_ptrace = 0;
 
     size_t cap = 1 << 13, len = 0; char *out = malloc(cap); if (!out) return;
     len += snprintf(out + len, cap - len, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"detect_watch\",\"ok\":true,\"hooked\":{\"ptrace\":%d,\"access\":%d,\"prop\":%d},\"triggered\":%s,\"detectRc\":%d,\"detections\":[", idj, r1, r2, r3, triggered ? "true" : "false", rc);
@@ -2296,7 +2374,10 @@ static void command_loop(int fd) {
                 } else if (strcmp(op, "crypto_hook_test") == 0) {
                     cmd_crypto_hook_test(fd, id);
                 } else if (strcmp(op, "capture_start") == 0) {
-                    cmd_capture_start(fd, id);
+                    char fmod[64] = "", smod[64] = "";
+                    json_get_str(line, "fileModule", fmod, sizeof(fmod));
+                    json_get_str(line, "sysModule", smod, sizeof(smod));
+                    cmd_capture_start(fd, id, fmod, smod);
                 } else if (strcmp(op, "capture_drain") == 0) {
                     cmd_capture_drain(fd, id);
                 } else if (strcmp(op, "capture_stop") == 0) {

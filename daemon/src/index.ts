@@ -251,11 +251,14 @@ function recordEvent(type: string, data: any) {
 // Only touches the idhd/web layer — the agent .so is never reconfigured from here.
 const SETTINGS_FILE = join(DATA_DIR, 'settings.json');
 interface Settings {
-  capture: { enabled: boolean; autoDumpDex: boolean; retain: number; families: Record<string, boolean> };
+  capture: { enabled: boolean; autoDumpDex: boolean; retain: number; families: Record<string, boolean>; fileModule: string; sysModule: string };
   ui: { displayCap: number };
 }
 const DEFAULT_SETTINGS: Settings = {
-  capture: { enabled: true, autoDumpDex: true, retain: 1000, families: { digest: true, hmac: true, symmetric: true, asymmetric: true, tls: true } },
+  // fileModule/sysModule: which loaded module's GOT the persistent file(open/read/…) and
+  // system(ptrace/access/getprop) hooks patch. Defaults are the sandbox-backing modules for
+  // self-test; override per real target (empty string = don't install that category's hooks).
+  capture: { enabled: true, autoDumpDex: true, retain: 1000, families: { digest: true, hmac: true, symmetric: true, asymmetric: true, tls: true }, fileModule: 'libjavacore.so', sysModule: 'libidhdetect.so' },
   ui: { displayCap: 300 },
 };
 let settings: Settings = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
@@ -268,6 +271,8 @@ function mergeSettings(patch: any): string[] {
     if (typeof c.enabled === 'boolean') settings.capture.enabled = c.enabled;
     if (typeof c.autoDumpDex === 'boolean') settings.capture.autoDumpDex = c.autoDumpDex;
     if (Number.isFinite(c.retain)) settings.capture.retain = Math.max(50, Math.min(100000, Math.floor(c.retain)));
+    if (typeof c.fileModule === 'string') settings.capture.fileModule = c.fileModule.trim();
+    if (typeof c.sysModule === 'string') settings.capture.sysModule = c.sysModule.trim();
     if (c.families && typeof c.families === 'object')
       for (const k of Object.keys(settings.capture.families))
         if (typeof c.families[k] === 'boolean') settings.capture.families[k] = c.families[k];
@@ -299,27 +304,35 @@ function familyOf(algo: string): 'tls' | 'asymmetric' | 'hmac' | 'digest' | 'sym
   return 'symmetric';
 }
 // Store a capture honoring the family filter + retention cap. Returns false if filtered out.
+// The family filter is a crypto-panel control only — net/file/system captures bypass it
+// (their algo doesn't map to a crypto family, so familyOf would misclassify them).
 function pushCapture(entry: Capture): boolean {
-  if (settings.capture.families[familyOf(entry.algo)] === false) return false;
+  if (entry.category === 'crypto' && settings.capture.families[familyOf(entry.algo)] === false) return false;
   captures.push(entry);
   while (captures.length > settings.capture.retain) captures.shift();
   return true;
 }
+// The persistent-hook target modules the agent should patch (file + system GOT sites).
+// Sent with every capture_start so the agent stays target-agnostic (no hardcoded modules).
+function captureModules() { return { fileModule: settings.capture.fileModule, sysModule: settings.capture.sysModule }; }
 // Apply the capture.enabled toggle to already-connected sessions (start/stop the hooks).
 async function applyCaptureEnabled() {
   for (const s of sessions.values()) {
     if (!s.online) continue;
     const cmd = settings.capture.enabled ? 'capture_start' : 'capture_stop';
+    const args = settings.capture.enabled ? captureModules() : {};
     // Fail loud: a live session that rejects the toggle means the panel and the target disagree.
-    try { await sendCmd(s.sessionId, cmd, {}, 8_000); }
+    try { await sendCmd(s.sessionId, cmd, args, 8_000); }
     catch (e) { log(`[settings] ${cmd} 会话 ${s.sessionId} 失败:`, (e as Error).message); }
   }
 }
 
 // ---- live capture store: what the agent's persistent hooks stream in (the panel's
 //      加解密 list reads this; it auto-populates without any button click) -------------
+type CapCategory = 'crypto' | 'net' | 'file' | 'system';
 interface Capture {
   id: number; sessionId: string; source: 'java' | 'native'; func: string; algo: string; op: string;
+  category: CapCategory;
   inl: number; tid: number; tsNs: number; ts: number; hex: string; preview: string;
   keyHex?: string; ivHex?: string; outHex?: string;
 }
@@ -346,7 +359,7 @@ async function withCaptureSuspended<T>(sid: string, fn: () => Promise<T>): Promi
   const wasOn = captureTimers.has(sid);
   if (wasOn) { capturePaused.add(sid); try { await sendCmd(sid, 'capture_stop', {}, 8_000); } catch {} }
   try { return await fn(); }
-  finally { if (wasOn) { try { await sendCmd(sid, 'capture_start', {}, 8_000); } catch {} capturePaused.delete(sid); } }
+  finally { if (wasOn) { try { await sendCmd(sid, 'capture_start', captureModules(), 8_000); } catch {} capturePaused.delete(sid); } }
 }
 
 function hexToPreview(hex: string, max = 80): string {
@@ -357,6 +370,16 @@ function hexToPreview(hex: string, max = 80): string {
   }
   return s;
 }
+// Which UI axis a capture belongs to. Derived from the agent's func tag so the web can
+// split the single stream into 加解密 / 网络 / 文件 / 系统 master-detail panels. The agent
+// stamps func: EVP_*/HMAC_* (crypto), SSL_read/write (net), open*/read/write/close (file),
+// ptrace/access/sysprop (system) — see cmd_capture_start.
+function categoryOf(func: string): CapCategory {
+  if (func === 'SSL_write' || func === 'SSL_read') return 'net';
+  if (/^(open|openat|read|write|close)$/.test(func)) return 'file';
+  if (/^(ptrace|access|sysprop|__system_property_get|getprop)$/.test(func)) return 'system';
+  return 'crypto';
+}
 function classify(func: string): { algo: string; op: string } {
   if (func.startsWith('EVP_Cipher') || func.startsWith('EVP_Encrypt') || func.startsWith('EVP_Decrypt'))
     return { algo: '对称加解密', op: '明文' };
@@ -364,6 +387,13 @@ function classify(func: string): { algo: string; op: string } {
   if (func.startsWith('EVP_Digest')) return { algo: '摘要 Digest', op: '输入' };
   if (func === 'SSL_write') return { algo: 'TLS', op: '发送明文' };
   if (func === 'SSL_read') return { algo: 'TLS', op: '接收明文' };
+  if (func === 'openat' || func === 'open') return { algo: '文件', op: '打开' };
+  if (func === 'read') return { algo: '文件', op: '读取' };
+  if (func === 'write') return { algo: '文件', op: '写入' };
+  if (func === 'close') return { algo: '文件', op: '关闭' };
+  if (func === 'ptrace') return { algo: 'ptrace', op: '反调试检测' };
+  if (func === 'access') return { algo: 'access', op: '路径探测' };
+  if (func === 'sysprop' || func === '__system_property_get') return { algo: '系统属性', op: '读取手机信息' };
   return { algo: func, op: '捕获' };
 }
 
@@ -401,7 +431,7 @@ function cryptoIdentify() {
 function startCaptureLoop(sid: string) {
   setTimeout(async () => {
     if (settings.capture.enabled) {
-      try { await sendCmd(sid, 'capture_start', {}, 15_000); log(`capture_start ${sid}`); } catch (e) { log('capture_start failed', (e as Error).message); }
+      try { await sendCmd(sid, 'capture_start', captureModules(), 15_000); log(`capture_start ${sid}`); } catch (e) { log('capture_start failed', (e as Error).message); }
     }
     if (settings.capture.autoDumpDex) autoDumpDex(sid).catch(() => {});
     if (captureTimers.has(sid)) return;
@@ -409,27 +439,29 @@ function startCaptureLoop(sid: string) {
     const processDrain = (r: any, now: number) => {
       for (const c of (r.jcaptures ?? [])) {
         if (c.in) recentJavaIn.set(c.in, now);
-        const cat = classify('EVP_' + (c.op === 'digest' ? 'Digest' : c.op === 'hmac' ? 'HMAC' : 'Cipher'));
         const entry: Capture = {
           id: ++capSeq, sessionId: sid, source: 'java', func: c.op, algo: c.algo, op: c.op,
+          category: 'crypto',
           inl: c.inl, tid: c.tid, tsNs: c.tsNs, ts: now,
           hex: c.in, preview: hexToPreview(c.in),
           keyHex: c.key || '', ivHex: c.iv || '', outHex: c.out || '',
         };
         if (pushCapture(entry))
-          broadcast('capture.new', { id: entry.id, sessionId: sid, source: 'java', algo: entry.algo, op: entry.op, preview: entry.preview, inl: entry.inl, ts: entry.ts });
+          broadcast('capture.new', { id: entry.id, sessionId: sid, source: 'java', category: entry.category, algo: entry.algo, op: entry.op, preview: entry.preview, inl: entry.inl, ts: entry.ts });
       }
       for (const [k, t] of recentJavaIn) if (now - t > 2000) recentJavaIn.delete(k);
       for (const c of (r.captures ?? [])) {
         if (c.hex && recentJavaIn.has(c.hex)) continue;   // already captured richly at the Java layer
         const { algo, op } = classify(c.func);
+        const category = categoryOf(c.func);
         const entry: Capture = {
           id: ++capSeq, sessionId: sid, source: 'native', func: c.func, algo, op,
+          category,
           inl: c.inl, tid: c.tid, tsNs: c.tsNs, ts: now,
           hex: c.hex, preview: hexToPreview(c.hex),
         };
         if (pushCapture(entry))
-          broadcast('capture.new', { id: entry.id, sessionId: sid, source: 'native', algo, op, preview: entry.preview, inl: entry.inl, ts: entry.ts });
+          broadcast('capture.new', { id: entry.id, sessionId: sid, source: 'native', category, algo, op, preview: entry.preview, inl: entry.inl, ts: entry.ts });
       }
     };
     const timer = setInterval(async () => {
@@ -842,7 +874,7 @@ const MCP_TOOLS: { name: string; description: string; inputSchema: any; handler:
   { name: 'dex_repair', description: 'Repair a dumped dex header (file_size/checksum/signature)', inputSchema: { type: 'object', properties: { b64: S, sha: S } }, handler: async (a) => { const buf = await dumpBuf(a); const info = repairDexHeader(buf); return { ...info, repairedB64: buf.toString('base64') }; } },
   // ---- axis 1: one-glance crypto algorithm identification ----
   { name: 'crypto_identify', description: '一眼看清目标 App 用了哪些加密算法/密钥/IV — summarize all captured crypto (algorithm, key, iv, plaintext) into a plain-language report for non-experts', inputSchema: { type: 'object', properties: {} }, handler: async () => cryptoIdentify() },
-  { name: 'live_captures', description: 'List the live crypto/TLS captures streamed by the persistent hooks (algorithm+op+preview, newest last)', inputSchema: { type: 'object', properties: { limit: N } }, handler: async (a) => ({ total: captures.length, on: captureTimers.size > 0, captures: captures.slice(-(Number(a.limit) || 50)).map(c => ({ id: c.id, source: c.source, algo: c.algo, op: c.op, inl: c.inl, tid: c.tid, ts: c.ts, preview: c.preview })) }) },
+  { name: 'live_captures', description: 'List the live captures streamed by the persistent hooks — crypto / net(TLS) / file / system, filterable by category (algorithm+op+preview, newest last)', inputSchema: { type: 'object', properties: { limit: N, category: S } }, handler: async (a) => { const cat = a.category ? String(a.category) : ''; const list = cat ? captures.filter(c => c.category === cat) : captures; return { total: list.length, on: captureTimers.size > 0, captures: list.slice(-(Number(a.limit) || 50)).map(c => ({ id: c.id, source: c.source, category: c.category, algo: c.algo, op: c.op, inl: c.inl, tid: c.tid, ts: c.ts, preview: c.preview })) }; } },
   { name: 'capture_detail', description: 'Full detail of one capture by id: algorithm, key(hex), iv(hex), plaintext(utf8+hex), ciphertext(hex)', inputSchema: { type: 'object', properties: { id: N }, required: ['id'] }, handler: async (a) => { const c = captures.find(x => x.id === Number(a.id)); if (!c) throw new Error('not found'); let text = ''; try { text = Buffer.from(c.hex, 'hex').toString('utf8'); } catch { text = hexToPreview(c.hex, 4096); } return { ...c, text }; } },
   // ---- axis 2: one-click unpack (no AOSP flashing needed) ----
   { name: 'dex_coverage', description: '方法恢复率报告 — per-method state (native/abstract/present/extracted) + recovery rate over a dumped dex', inputSchema: { type: 'object', properties: { b64: S, sha: S }, required: [] }, handler: async (a) => { const buf = await dumpBuf(a); return analyzeCoverage(buf, parseDex(buf)); } },
@@ -908,7 +940,7 @@ const httpServer = http.createServer(async (req, res) => {
       total: captures.length, on: captureTimers.size > 0,
       complete: health.complete, dropped: health.dropped, jdropped: health.jdropped,
       seq: health.seq, backlog: health.backlog, health,
-      captures: list.slice(-limit).map(c => ({ id: c.id, source: c.source, algo: c.algo, op: c.op, func: c.func, inl: c.inl, tid: c.tid, ts: c.ts, preview: c.preview })),
+      captures: list.slice(-limit).map(c => ({ id: c.id, source: c.source, category: c.category, algo: c.algo, op: c.op, func: c.func, inl: c.inl, tid: c.tid, ts: c.ts, preview: c.preview })),
     });
   }
   if (url.pathname.startsWith('/api/captures/')) {
@@ -1108,7 +1140,9 @@ const httpServer = http.createServer(async (req, res) => {
   if (url.pathname === '/api/detect/watch') {
     const sid = url.searchParams.get('session') ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
     if (!sid) return send(400, { error: 'no session' });
-    try { const r = await sendCmd(sid, 'detect_watch', {}, 20_000); return send(r.ok ? 200 : 502, r); }
+    // Suspend continuous capture: detect_watch installs+restores its own ptrace/access/prop
+    // hooks on the same GOT slots the persistent system hooks now use.
+    try { const r = await withCaptureSuspended(sid, () => sendCmd(sid, 'detect_watch', {}, 20_000)); return send(r.ok ? 200 : 502, r); }
     catch (e) { return send(504, { error: (e as Error).message }); }
   }
   // Crypto hook recon: GET /api/crypto/probe?session=ID
