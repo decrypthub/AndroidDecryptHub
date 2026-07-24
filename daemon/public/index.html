@@ -149,41 +149,110 @@
 <nav id="nav"></nav>
 
 <main>
-  <!-- 加解密（自动实时） -->
+  <!-- 加解密（category=crypto，自动实时） -->
   <div class="panel active" id="p-crypto">
     <div class="master">
       <div class="row2" style="padding:10px 12px 0">
-        <span id="cap-stat" class="muted">等待捕获…</span>
+        <span id="cc-stat" class="muted">等待捕获…</span>
         <span class="spacer"></span>
-        <label class="ck"><input type="checkbox" id="cap-auto" checked> 自动滚动</label>
-        <button class="act" onclick="capClear()">清空</button>
+        <label class="ck"><input type="checkbox" id="cc-auto" checked> 自动滚动</label>
+        <button class="act" onclick="capClearP('cc')">清空</button>
       </div>
-      <div id="cap-list"></div>
+      <div id="cc-list"></div>
     </div>
-    <div class="detail" id="cap-detail">
-      <div class="empty">左侧为实时加解密捕获（App 一跑加密就自动出现，无需点按钮）。<br>点任意一条查看 明文 / 密文 / 算法 / 线程 / 时间。</div>
+    <div class="detail" id="cc-detail">
+      <div class="empty">实时加解密捕获（EVP/Digest/HMAC）。App 一跑加密就自动出现。<br>点任意一条查看 明文 / 密文 / 算法 / 线程 / 时间。</div>
     </div>
   </div>
 
-  <!-- 脱壳 / DEX -->
-  <div class="panel" id="p-dex">
+  <!-- 系统（category=system + file：ptrace/access/属性 + 文件读写 hook） -->
+  <div class="panel" id="p-system">
+    <div class="master">
+      <div class="row2" style="padding:10px 12px 0">
+        <span id="sy-stat" class="muted">等待捕获…</span>
+        <span class="spacer"></span>
+        <label class="ck"><input type="checkbox" id="sy-auto" checked> 自动滚动</label>
+        <button class="act" onclick="capClearP('sy')">清空</button>
+      </div>
+      <div id="sy-list"></div>
+    </div>
+    <div class="detail" id="sy-detail">
+      <div class="empty">系统函数调用行为：反调试(ptrace)、路径探测(access)、读取手机信息(系统属性)，以及<b>文件读写</b>(open/read/write/close) 的常驻 hook 被动采集。</div>
+    </div>
+  </div>
+
+  <!-- 网络（category=net：SSL_read / SSL_write 明文） -->
+  <div class="panel" id="p-net">
+    <div class="master">
+      <div class="row2" style="padding:10px 12px 0">
+        <span id="nt-stat" class="muted">等待捕获…</span>
+        <span class="spacer"></span>
+        <label class="ck"><input type="checkbox" id="nt-auto" checked> 自动滚动</label>
+        <button class="act" onclick="capClearP('nt')">清空</button>
+      </div>
+      <div id="nt-list"></div>
+    </div>
+    <div class="detail" id="nt-detail">
+      <div class="empty">TLS 明文：常驻 hook <code>SSL_write</code>(发送) / <code>SSL_read</code>(接收)，在加密前/解密后拿到明文。</div>
+    </div>
+  </div>
+
+  <!-- 文件（目录浏览器：读取私有目录 + app 可读目录） -->
+  <div class="panel" id="p-files">
     <div class="pad">
-      <h2>一键脱壳 — 装上插件即可，无需改 AOSP 刷机</h2>
+      <h2>文件浏览 — 目标可读目录</h2>
       <div class="row2">
-        <button class="act primary" style="font-size:14px;padding:8px 16px" onclick="unpackRun()">一键脱壳（快照→触发→再快照→恢复重建）</button>
-        <input id="unpack-pkg" placeholder="目标包名前缀（留空=自动用连上的目标包名）" size="34" />
+        <button class="act" onclick="filesUp()">⬆ 上级</button>
+        <input id="files-path" placeholder="/data/data/<pkg>" size="54" onkeydown="if(event.key==='Enter')filesGo()">
+        <button class="act primary" onclick="filesGo()">进入</button>
+        <span id="files-stat" class="muted"></span>
+      </div>
+      <div class="row2" id="files-quick"></div>
+      <table><thead><tr><th>名称</th><th>类型</th><th>大小</th><th>权限</th><th>修改时间</th></tr></thead><tbody id="files-rows"></tbody></table>
+      <div id="files-view-head" class="muted" style="margin-top:12px"></div>
+      <pre id="files-view" class="muted">点文件查看内容（UTF-8 预览 + 下载）。私有目录读取需目标进程有权限（模拟注入即目标自身权限）。</pre>
+    </div>
+  </div>
+
+  <!-- Dump（maps 映射 / 内存重组 .so / 区段 dump / 一键脱壳全部 dex） -->
+  <div class="panel" id="p-dump">
+    <div class="pad">
+      <h2>Dump — 内存映射 / 模块 / 脱壳</h2>
+
+      <h3>加载的模块（maps 映射）</h3>
+      <div class="row2">
+        <button class="act" onclick="loadModules()">刷新模块</button>
+        <span id="mod-stat" class="muted"></span>
+      </div>
+      <table><thead><tr><th>模块</th><th>基址</th><th>段</th><th>大小</th><th>路径</th><th>操作</th></tr></thead><tbody id="mod-rows"></tbody></table>
+
+      <h3>手动 Dump 内存区段</h3>
+      <div class="row2">
+        <input id="rg-addr" placeholder="起始地址 hex (如 7b1234000)" size="26">
+        <input id="rg-size" placeholder="大小 bytes" size="12">
+        <input id="rg-tag" placeholder="标签(可选)" size="14">
+        <button class="act" onclick="regionDump()">Dump 区段</button>
+        <span id="rg-stat" class="muted"></span>
+      </div>
+
+      <h3>一键脱壳（下载全部 DEX）</h3>
+      <div class="row2">
+        <button class="act primary" onclick="unpackRun()">一键脱壳（快照→触发→再快照→恢复重建）</button>
+        <input id="unpack-pkg" placeholder="目标包名前缀（留空=自动用连上的目标包名）" size="30">
         <span id="dex-stat" class="muted"></span>
       </div>
-      <div class="muted" style="margin:-4px 0 10px">点一下即可：自动 dump DEX → 按目标包名枚举加载全部类（触发回填型抽取壳恢复）→ 捕获被抽取的方法体 → 重建标准 DEX，下面直接下载。包名默认取连上来的目标进程包名。</div>
+      <div class="muted" style="margin:-4px 0 10px">点一下即可：自动 dump DEX → 按包名枚举加载全部类（触发回填型抽取壳恢复）→ 捕获被抽取的方法体 → 重建标准 DEX，下面直接下载。</div>
       <pre id="out-session" class="muted"></pre>
+
+      <h3>Dump 列表（点即下载）</h3>
+      <div class="row2"><button class="act" onclick="loadDumps()">刷新列表</button></div>
       <table><thead><tr><th>类型</th><th>大小</th><th>sha256</th><th>来源</th><th>标签</th><th>下载</th><th>分析</th></tr></thead><tbody id="dumps-rows"></tbody></table>
       <pre id="out-cov" class="muted" style="margin-top:12px">点某个 dex 的「覆盖率」查看方法恢复率报告（诚实统计：具体 Java 方法中有多少已带方法体）。</pre>
 
       <details style="margin-top:16px">
-        <summary class="muted" style="cursor:pointer">高级：手动 Dump / 快照恢复（一般用不到）</summary>
+        <summary class="muted" style="cursor:pointer">高级：手动扫描 Dump DEX / 快照恢复（一般用不到）</summary>
         <div class="row2" style="margin-top:10px">
           <button class="act" onclick="rescanDex()">仅扫描并 Dump DEX</button>
-          <button class="act" onclick="loadDumps()">刷新列表</button>
         </div>
         <div class="muted">对同一 dex 先后 dump 两次（T0 抽取态 / T1 运行后恢复态），从恢复镜像捕获缺失方法的 CodeItem 并重建为标准 DEX。</div>
         <div class="row2" style="margin-top:8px">
@@ -196,6 +265,7 @@
       </details>
     </div>
   </div>
+
 
   <!-- 内存/进程（手动操作） -->
   <div class="panel" id="p-mem">
@@ -363,8 +433,8 @@
 <div class="toast" id="toast"></div>
 
 <script>
-// 主导航只留两条核心轴（加解密/脱壳）；MCP 与设置改到头部按钮→模态；专家工具收进「高级」折叠。
-const TABS_MAIN=[['p-crypto','加解密·实时','cap'],['p-dex','一键脱壳']];
+// 顶栏五条主轴：加解密/系统/网络/文件/Dump。专家工具收进「高级」折叠。
+const TABS_MAIN=[['p-crypto','加解密','cc'],['p-system','系统','sy'],['p-net','网络','nt'],['p-files','文件'],['p-dump','Dump']];
 const TABS_ADV=[['p-mem','内存/进程'],['p-native','原生 .so'],['p-dexana','DEX 分析'],['p-events','事件'],['p-debug','调试']];
 
 // ---- 调试台：统一记录请求/WS ----
@@ -385,7 +455,7 @@ const nav=document.getElementById('nav');
 function mkTab([id,label,key],active){ const b=document.createElement('button'); b.innerHTML=label+(key?` <span class="n" id="n-${key}"></span>`:''); if(active)b.className='active';
   b.onclick=()=>{ document.querySelectorAll('nav button').forEach(x=>x.classList.remove('active')); b.classList.add('active');
     document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active')); document.getElementById(id).classList.add('active');
-    if(id==='p-dex') loadDumps(); if(id==='p-events') loadEvents(); };
+    if(id==='p-dump'){ loadDumps(); loadModules(); } if(id==='p-files') filesInit(); if(id==='p-events') loadEvents(); };
   return b; }
 TABS_MAIN.forEach((t,i)=>nav.appendChild(mkTab(t,i===0)));
 // 高级折叠：一个开关按钮 + 一个默认隐藏的容器
@@ -449,27 +519,42 @@ async function rescanDex(){ const st=document.getElementById('dex-stat'); st.tex
     st.textContent=`已 Dump ${n} 个 DexFile`; loadDumps();
   }catch(e){ st.textContent='错误: '+e; } }
 
-// ---- 加解密实时列表 ----
-const capItems=[]; let capMaxId=0, capSel=0, capDisplayCap=300;
-function capTag(algo){ if(/TLS/.test(algo)) return 'tls'; if(/Hmac|HMAC/i.test(algo)) return 'hmac'; if(/MD5|SHA|摘要|Digest/i.test(algo)) return 'dig'; return 'sym'; }
-function capRender(){ const box=document.getElementById('cap-list');
-  const shown=capItems.slice(-capDisplayCap);
-  box.innerHTML=shown.map(c=>`<div class="caprow ${c.id===capSel?'sel':''}" onclick="capSelect(${c.id})">
-      <div class="l1"><span class="tag ${capTag(c.algo)}">${c.algo}</span><span class="op">${c.op}</span><span class="ts">${new Date(c.ts).toLocaleTimeString()}</span></div>
-      <div class="pv">#${c.id} · ${c.inl}B · ${escapeHtml(c.preview)}</div></div>`).join('');
-  document.getElementById('cap-stat').textContent=`共 ${capItems.length} 条`;
-  const el=document.getElementById('n-cap'); if(el) el.textContent=capItems.length||'';
-  if(document.getElementById('cap-auto')?.checked) box.scrollTop=box.scrollHeight; }
-function capPush(c){ capItems.push(c); if(capItems.length>800) capItems.shift(); if(c.id>capMaxId)capMaxId=c.id; }
-function capClear(){ capItems.length=0; capSel=0; capRender(); document.getElementById('cap-detail').innerHTML='<div class="empty">已清空。</div>'; }
+// ---- 实时捕获：单一 capItems，多面板按 category 分流（加解密 crypto / 系统 system+file / 网络 net） ----
+const capItems=[]; let capMaxId=0, capDisplayCap=300;
 const hexFmt=h=>(h||'').replace(/(.{64})/g,'$1\n');
-async function capSelect(id){ capSel=id; capRender();
-  const c=await (await fetch('/api/captures/'+id)).json(); const d=document.getElementById('cap-detail');
-  const src=c.source==='java'?'Java 层 · JCE (algorithm/key/iv 绑定)':'Native · BoringSSL EVP';
+function capTag(algo){ if(/TLS/.test(algo)) return 'tls'; if(/Hmac|HMAC/i.test(algo)) return 'hmac'; if(/MD5|SHA|摘要|Digest/i.test(algo)) return 'dig'; return 'sym'; }
+const CAPPANELS={};
+function makeCapPanel(key,cats){
+  const p={key,cats,sel:0};
+  p.render=function(){ const box=document.getElementById(key+'-list'); if(!box) return;
+    const items=capItems.filter(c=>cats.includes(c.category));
+    const shown=items.slice(-capDisplayCap);
+    box.innerHTML=shown.map(c=>`<div class="caprow ${c.id===p.sel?'sel':''}" onclick="capSelectP('${key}',${c.id})">
+        <div class="l1"><span class="tag ${capTag(c.algo)}">${escapeHtml(c.algo)}</span><span class="op">${escapeHtml(c.op)}</span><span class="ts">${new Date(c.ts).toLocaleTimeString()}</span></div>
+        <div class="pv">#${c.id} · ${c.inl}B · ${escapeHtml(c.preview)}</div></div>`).join('');
+    const stat=document.getElementById(key+'-stat'); if(stat) stat.textContent=`共 ${items.length} 条`;
+    const badge=document.getElementById('n-'+key); if(badge) badge.textContent=items.length||'';
+    if(document.getElementById(key+'-auto')?.checked) box.scrollTop=box.scrollHeight; };
+  p.select=async function(id){ p.sel=id; p.render();
+    const c=await (await fetch('/api/captures/'+id)).json(); renderCaptureDetail(key+'-detail',c); };
+  CAPPANELS[key]=p; return p;
+}
+makeCapPanel('cc',['crypto']);
+makeCapPanel('sy',['system','file']);
+makeCapPanel('nt',['net']);
+function capRenderAll(){ for(const k in CAPPANELS) CAPPANELS[k].render(); }
+function capSelectP(key,id){ CAPPANELS[key].select(id); }
+function capPush(c){ capItems.push(c); if(capItems.length>800) capItems.shift(); if(c.id>capMaxId)capMaxId=c.id; }
+function capClearP(key){ const cats=CAPPANELS[key].cats;
+  for(let i=capItems.length-1;i>=0;i--) if(cats.includes(capItems[i].category)) capItems.splice(i,1);
+  CAPPANELS[key].sel=0; capRenderAll();
+  const d=document.getElementById(key+'-detail'); if(d) d.innerHTML='<div class="empty">已清空。</div>'; }
+function renderCaptureDetail(detailId,c){ const d=document.getElementById(detailId); if(!d) return;
+  const src=c.source==='java'?'Java 层 · JCE (algorithm/key/iv 绑定)':'Native · 常驻 hook';
   const kvrow=(label,hex)=> hex?`<h3>${label} · ${hex.length/2}B</h3><pre class="hex">${hexFmt(hex)}</pre>`:'';
   const kvCard=(c.keyHex||c.ivHex)?`<div class="io kv"><span class="io-label kv">密钥参数</span>${kvrow('Key',c.keyHex)}${kvrow('IV',c.ivHex)}</div>`:'';
   const outCard=c.outHex?`<div class="io out"><span class="io-label out">密文 / 输出</span><h3>Hex · ${c.outHex.length/2}B</h3><pre class="hex">${hexFmt(c.outHex)}</pre></div>`:'';
-  d.innerHTML=`<div class="detail-head"><h2>#${c.id} · ${c.algo} · ${c.op}</h2>
+  d.innerHTML=`<div class="detail-head"><h2>#${c.id} · ${escapeHtml(c.algo)} · ${escapeHtml(c.op)}</h2>
       <div class="sub">来源 ${src} · 线程 tid=${c.tid} · ${new Date(c.ts).toLocaleString()}</div></div>
     ${kvCard}
     <div class="io in"><span class="io-label in">明文 / 输入</span>
@@ -477,7 +562,72 @@ async function capSelect(id){ capSel=id; capRender();
       <h3>Hex · ${c.inl}B</h3><pre class="hex">${hexFmt(c.hex)}</pre></div>
     ${outCard}`; }
 async function capLoad(){ try{ const r=await (await fetch('/api/captures?since='+capMaxId)).json();
-    (r.captures||[]).forEach(capPush); capRender(); }catch(e){} }
+    (r.captures||[]).forEach(capPush); capRenderAll(); }catch(e){} }
+
+// ---- 会话辅助 ----
+function sidQ(){ const s=val('sess'); return s?'&session='+encodeURIComponent(s):''; }
+function curPkg(){ const a=[...agents.values()].filter(x=>x.online).slice(-1)[0]; return a?a.package:''; }
+
+// ---- 文件浏览器（目录浏览：私有目录 + app 可读目录） ----
+let filesPath='';
+function filesInit(){ if(!filesPath){ const pkg=curPkg(); const p=document.getElementById('files-path');
+    if(pkg && !p.value) p.value='/data/data/'+pkg;
+    filesPath=p.value||''; if(filesPath) filesList(filesPath); } }
+function filesGo(){ const p=val('files-path'); if(p) filesList(p); }
+function filesUp(){ if(!filesPath) return; const parent=filesPath.replace(/\/+$/,'').replace(/\/[^/]*$/,'')||'/'; filesList(parent); }
+function filesQuick(){ const pkg=curPkg(); const dd='/data/data/'+pkg; const box=document.getElementById('files-quick');
+  const links=[['app 数据',dd],['files',dd+'/files'],['cache',dd+'/cache'],['shared_prefs',dd+'/shared_prefs'],['databases',dd+'/databases'],['外部',pkg?'/sdcard/Android/data/'+pkg:'/sdcard']];
+  box.innerHTML=links.map(([l,p])=>`<button class="act" onclick="filesList('${p}')">${l}</button>`).join(''); }
+async function filesList(path){ const st=document.getElementById('files-stat'), tb=document.getElementById('files-rows');
+  filesPath=path; document.getElementById('files-path').value=path; filesQuick(); st.textContent='读取中…';
+  try{ const r=await (await fetch('/api/fs/list?path='+encodeURIComponent(path)+sidQ())).json();
+    if(!r.ok){ st.textContent='✗ '+(r.error||'失败'); tb.innerHTML=`<tr><td class="muted" colspan=5>${escapeHtml(r.error||'读取失败')}</td></tr>`; return; }
+    const ents=(r.entries||[]).slice().sort((a,b)=>(a.type==='d'?0:1)-(b.type==='d'?0:1)||a.name.localeCompare(b.name));
+    st.textContent=`${r.count} 项`+(r.truncated?' · 已截断':'');
+    tb.innerHTML=ents.map(e=>{ const child=path.replace(/\/+$/,'')+'/'+e.name;
+      const ic=e.type==='d'?'📁':e.type==='l'?'🔗':'📄'; const sz=e.size<0?'—':fmtSize(e.size);
+      const act=e.type==='d'?`filesList('${child.replace(/'/g,"\\'")}')`:`filesRead('${child.replace(/'/g,"\\'")}')`;
+      return `<tr class="caprow" style="cursor:pointer" onclick="${act}"><td>${ic} ${escapeHtml(e.name)}</td><td class="muted">${e.type}</td><td class="muted">${sz}</td><td class="muted">${(e.mode).toString(8).padStart(4,'0')}</td><td class="muted">${e.mtime?new Date(e.mtime*1000).toLocaleString():''}</td></tr>`;
+    }).join('')||'<tr><td class="muted" colspan=5>空目录</td></tr>';
+  }catch(e){ st.textContent='✗ '+e; } }
+function fmtSize(n){ if(n<1024)return n+'B'; if(n<1048576)return (n/1024).toFixed(1)+'K'; return (n/1048576).toFixed(1)+'M'; }
+async function filesRead(path){ const head=document.getElementById('files-view-head'), view=document.getElementById('files-view');
+  head.textContent='读取中… '+path; view.textContent='';
+  try{ const r=await (await fetch('/api/fs/read',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session:val('sess')||undefined,path})})).json();
+    if(!r.ok){ head.textContent='✗ '+path; view.textContent=r.error||'读取失败'; return; }
+    const dl=`<a class="dl" href="#" onclick="filesDownload('${path.replace(/'/g,"\\'")}');return false">下载</a>`;
+    head.innerHTML=`<b>${escapeHtml(path.split('/').pop())}</b> · ${r.size}B${r.truncated?` / 共 ${r.fsize}B（已截断到 1MB）`:''} · ${dl}`;
+    view.textContent=(r.text&&r.text.length)?r.text.slice(0,20000):'（二进制或空；点「下载」取原文件）';
+  }catch(e){ head.textContent='✗ '+e; } }
+async function filesDownload(path){
+  try{ const r=await (await fetch('/api/fs/read',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session:val('sess')||undefined,path})})).json();
+    if(!r.ok||!r.b64){ toast('下载失败: '+(r.error||'空')); return; }
+    const bin=atob(r.b64); const arr=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++)arr[i]=bin.charCodeAt(i);
+    const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([arr])); a.download=path.split('/').pop()||'file';
+    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href); toast('已下载 '+a.download);
+  }catch(e){ toast('下载失败: '+e); } }
+
+// ---- Dump 面板：模块表 + 区段 dump（脱壳/dumps 复用下方 unpackRun/loadDumps）----
+async function loadModules(){ const st=document.getElementById('mod-stat'), tb=document.getElementById('mod-rows'); st.textContent='读取 maps…';
+  try{ const r=await (await fetch('/api/modules?'+sidQ().slice(1))).json();
+    if(r.error){ st.textContent='✗ '+r.error; tb.innerHTML=`<tr><td class="muted" colspan=6>${escapeHtml(r.error)}</td></tr>`; return; }
+    const mods=Array.isArray(r)?r:[]; st.textContent=`${mods.length} 个模块`;
+    tb.innerHTML=mods.map(m=>{ const isSo=/\.so$/.test(m.name);
+      const act=isSo?`<button class="act" onclick="moduleDump('${m.name.replace(/'/g,"\\'")}')">从内存 dump .so</button>`:'';
+      return `<tr><td>${escapeHtml(m.name)}</td><td class="muted">${m.base}</td><td class="muted">${m.segs}</td><td class="muted">${fmtSize(m.size)}</td><td class="muted" style="max-width:280px;overflow:hidden;text-overflow:ellipsis">${escapeHtml(m.path)}</td><td>${act}</td></tr>`;
+    }).join('')||'<tr><td class="muted" colspan=6>无模块（需目标在线）</td></tr>';
+  }catch(e){ st.textContent='✗ '+e; } }
+async function moduleDump(name){ const st=document.getElementById('mod-stat'); st.textContent=`从内存重组 ${name}…`;
+  try{ const r=await (await fetch('/api/module/dump',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session:val('sess')||undefined,name})})).json();
+    if(r.error){ st.textContent='✗ '+r.error; return; }
+    st.textContent=`✓ ${name} → ${r.size}B${r.dedup?'（已存在）':''}`; toast('已 dump '+name); loadDumps();
+  }catch(e){ st.textContent='✗ '+e; } }
+async function regionDump(){ const st=document.getElementById('rg-stat'); const addr=val('rg-addr'), size=val('rg-size'), tag=val('rg-tag');
+  if(!addr||!size){ st.textContent='需要地址和大小'; return; } st.textContent='dump 中…';
+  try{ const r=await (await fetch('/api/memory/dump',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session:val('sess')||undefined,addr,size:Number(size),tag:tag||undefined})})).json();
+    if(r.error){ st.textContent='✗ '+r.error; return; }
+    st.textContent=`✓ ${r.size}B → sha ${(r.sha256||'').slice(0,16)}…${r.dedup?'（已存在）':''}`; toast('区段已 dump'); loadDumps();
+  }catch(e){ st.textContent='✗ '+e; } }
 
 async function loadEvents(){ const r=await (await fetch('/api/events?limit=200')).json(); const tb=document.getElementById('ev-rows');
   tb.innerHTML=(r.events||[]).slice().reverse().map(e=>`<tr><td class="muted">${e.seq}</td><td class="muted">${new Date(e.ts).toLocaleTimeString()}</td><td>${e.type}</td><td class="muted">${escapeHtml(JSON.stringify(e.data).slice(0,90))}</td></tr>`).join('')||'<tr><td class="muted" colspan=4>暂无事件</td></tr>'; }
@@ -548,7 +698,7 @@ async function clearData(what){
   try{ const r=await (await fetch('/api/data/clear',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({what})})).json();
     if(r.error){ toast('失败: '+r.error); return; }
     toast('已清空 '+names[what]); loadConfig();
-    if(what==='captures'){ capItems.length=0; capSel=0; capMaxId=0; capRender(); }
+    if(what==='captures'){ capItems.length=0; capMaxId=0; for(const k in CAPPANELS) CAPPANELS[k].sel=0; capRenderAll(); }
     if(what==='dumps') loadDumps(); if(what==='events') loadEvents();
   }catch(e){ toast('失败: '+e); }
 }
@@ -594,8 +744,8 @@ function connect(){ const ws=new WebSocket(`ws://${location.host}/ws`); const co
     else if(m.event==='agent.hello')upsert(m.data);
     else if(m.event==='agent.maps'){const a=agents.get(m.data.sessionId);if(a){a.mapsCount=m.data.count;upsert(a);}}
     else if(m.event==='agent.close'){const a=agents.get(m.data.sessionId);if(a){a.online=false;upsert(a);}}
-    else if(m.event==='capture.new'){ capPush(m.data); capRender(); }
-    else if(m.event==='dump.new'){ if(document.getElementById('p-dex').classList.contains('active'))loadDumps(); }
+    else if(m.event==='capture.new'){ capPush(m.data); capRenderAll(); }
+    else if(m.event==='dump.new'){ if(document.getElementById('p-dump').classList.contains('active'))loadDumps(); }
     dbg('WS←', m.event||'?');
   }; }
 connect();

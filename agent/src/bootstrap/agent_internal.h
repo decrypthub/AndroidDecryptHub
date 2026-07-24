@@ -55,4 +55,8 @@ void cmd_scan_magic(int fd, const char *id);
 void cmd_search(int fd, const char *id, const char *pat_hex, int limit);
 void cmd_maps(int fd, const char *id);
 
+// ---- fs.c ----
+void cmd_list_dir(int fd, const char *id, const char *path);
+void cmd_read_file(int fd, const char *id, const char *path);
+
 #endif

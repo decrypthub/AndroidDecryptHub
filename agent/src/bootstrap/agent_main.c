@@ -2053,6 +2053,12 @@ static void command_loop(int fd) {
                     cmd_object_invoke(fd, id, cls, fld, mth);
                 } else if (strcmp(op, "art_dexfiles") == 0) {
                     cmd_art_dexfiles(fd, id);
+                } else if (strcmp(op, "list_dir") == 0) {
+                    char path[2048] = ""; json_get_str(line, "path", path, sizeof(path));
+                    cmd_list_dir(fd, id, path);
+                } else if (strcmp(op, "read_file") == 0) {
+                    char path[2048] = ""; json_get_str(line, "path", path, sizeof(path));
+                    cmd_read_file(fd, id, path);
                 } else if (strcmp(op, "scan_magic") == 0) {
                     cmd_scan_magic(fd, id);
                 } else if (strcmp(op, "search") == 0) {

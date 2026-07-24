@@ -49,6 +49,7 @@ SCRIPTS=(
   "verify_v21_frame.sh:device"
   "verify_v22_capture.sh:device"
   "verify_v24_javacap.sh:device"
+  "verify_v25_fsbrowser.sh:device"
 )
 
 pass=0; fail=0; skip=0; FAILED=""

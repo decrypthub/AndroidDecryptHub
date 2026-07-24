@@ -1151,9 +1151,31 @@ async function handleHttp(req: http.IncomingMessage, res: http.ServerResponse) {
       return send(r.ok ? 200 : 502, r);
     } catch (e) { return send(504, { error: (e as Error).message }); }
   }
-  // Crypto plaintext-boundary hook test: GET /api/crypto/hook_test?session=ID
-  if (url.pathname === '/api/crypto/hook_test') {
+  // Filesystem browse (「文件」panel): list a directory / read a file in the target's
+  // accessible dirs (its private /data/data/<pkg>, sdcard, etc). Agent-side collect-only.
+  // GET /api/fs/list?session=ID&path=/data/data/pkg
+  if (url.pathname === '/api/fs/list') {
     const sid = pickSid(url.searchParams.get('session'));
+    if (!sid) return send(400, { error: 'no session' });
+    const path = url.searchParams.get('path') || '';
+    if (!path) return send(400, { error: 'need path' });
+    try { const r = await sendCmd(sid, 'list_dir', { path }, 20_000); return send(r.ok ? 200 : 502, r); }
+    catch (e) { return send(504, { error: (e as Error).message }); }
+  }
+  // POST /api/fs/read {session, path} → base64 content + a decoded utf8 text preview.
+  if (url.pathname === '/api/fs/read' && req.method === 'POST') {
+    const body = await readBody(req);
+    const { session, path } = JSON.parse(body || '{}');
+    const sid = pickSid(session);
+    if (!sid || !path) return send(400, { error: 'need session, path' });
+    try {
+      const r = await sendCmd(sid, 'read_file', { path: String(path) }, 25_000);
+      if (r.ok && r.b64) { try { r.text = Buffer.from(r.b64, 'base64').toString('utf8'); } catch { r.text = ''; } }
+      return send(r.ok ? 200 : 502, r);
+    } catch (e) { return send(504, { error: (e as Error).message }); }
+  }
+  // Crypto plaintext-boundary hook test: GET /api/crypto/hook_test?session=ID
+  if (url.pathname === '/api/crypto/hook_test') {    const sid = pickSid(url.searchParams.get('session'));
     if (!sid) return send(400, { error: 'no session' });
     try {
       const r = await withCaptureSuspended(sid, () => sendCmd(sid, 'crypto_hook_test', { className: url.searchParams.get('class') ?? SANDBOX.crypto }, 20_000));

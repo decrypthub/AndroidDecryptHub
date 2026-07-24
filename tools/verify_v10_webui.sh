@@ -10,7 +10,11 @@ chk(){ if eval "$2"; then echo "PASS  $1"; else echo "FAIL  $1"; fail=1; fi; }
 HTML="$(curl -s "$BASE/")"
 chk "page serves"            '[ -n "$HTML" ]'
 chk "title present"         'echo "$HTML" | grep -q "Android DecryptHub"'
-chk "tabs present (中文面板)" 'echo "$HTML" | grep -q "加解密" && echo "$HTML" | grep -q "脱壳" && echo "$HTML" | grep -q "内存" && echo "$HTML" | grep -q "原生" && echo "$HTML" | grep -q "MCP"'
+chk "tabs present (中文面板)" 'echo "$HTML" | grep -q "加解密" && echo "$HTML" | grep -q "系统" && echo "$HTML" | grep -q "网络" && echo "$HTML" | grep -q "文件" && echo "$HTML" | grep -q "Dump" && echo "$HTML" | grep -q "MCP"'
+chk "advanced tools retained" 'echo "$HTML" | grep -q "脱壳" && echo "$HTML" | grep -q "内存" && echo "$HTML" | grep -q "原生"'
+chk "category-split panels"  'echo "$HTML" | grep -q "makeCapPanel" && echo "$HTML" | grep -q "p-system" && echo "$HTML" | grep -q "p-net"'
+chk "file browser wired"     'echo "$HTML" | grep -q "/api/fs/list" && echo "$HTML" | grep -q "/api/fs/read"'
+chk "dump modules wired"     'echo "$HTML" | grep -q "/api/modules" && echo "$HTML" | grep -q "/api/module/dump" && echo "$HTML" | grep -q "/api/memory/dump"'
 chk "live capture panel"    'echo "$HTML" | grep -q "/api/captures" && echo "$HTML" | grep -q "capLoad"'
 chk "wires capture api"     'echo "$HTML" | grep -q "/api/crypto/hook_test" && echo "$HTML" | grep -q "/api/flow/watch" && echo "$HTML" | grep -q "/api/detect/watch"'
 chk "wires dex dump+download" 'echo "$HTML" | grep -q "/api/art/dump" && echo "$HTML" | grep -q "/api/dumps/download"'

@@ -16,6 +16,12 @@
 
 ### v2.0+ 进度
 
+- [x] **Web UI 顶栏重构（2026-07-24）**：五条主 tab **加解密 / 系统 / 网络 / 文件 / Dump**（对齐 IDH 参考界面）。
+      · 加解密/系统/网络 = 同一条实时捕获流按 `category`（crypto / system+file / net）前端分流（后端 `categoryOf` 早已打标，零后端改动）；捕获面板抽成 `makeCapPanel(key,cats)` 工厂。
+      · **文件** = 目录浏览器（新能力）：agent 新增纯采集命令 `list_dir`/`read_file`（`agent/src/bootstrap/fs.c`），daemon `GET /api/fs/list` + `POST /api/fs/read`；浏览私有目录/app 可读目录、预览 + 下载。
+      · **Dump** = maps 模块表（`/api/modules` + 从内存重组 `.so` `/api/module/dump`）+ 手动区段 dump（`/api/memory/dump`）+ 一键脱壳下载全部 DEX（`/api/unpack/run`）+ dumps 列表。
+      · 专家工具（原生 .so / DEX 静态分析 / 事件 / 调试台）保留在「高级」折叠。
+      · 验证：`verify_v10_webui.sh`（新 tab + fs/modules 接线）+ 新增 `verify_v25_fsbrowser.sh`（真机：list_dir 私有目录 + read_file /proc/self/cmdline + 坏路径 fail-loud）**✅ PASS**（真机 13f54a46，重装 APK 后）。
 - [x] **v2.0** WS-D 协议重写（length-framed `[u32 len][u8 type][payload]`，去 8192 上限）**✅**
       + WS-C 环形缓冲/如实 dropped 上报 **✅ 完成并验证**（连续 push-drain 线程作为 WS-C 优化后续再上，见日志）
       + WS-C `cap_reset` 记账修复（丢弃环内记录计入 dropped，`emitted+backlog+dropped==seq` 恒成立）**✅**
