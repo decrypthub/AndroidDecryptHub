@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # v0.3 acceptance — ART structural dex capture. Prereq: idhd running, device attached, sandbox running.
-#   (1) jni_probe: agent JNI reflection from native thread -> SDK_INT==36
+#   (1) jni_probe: agent JNI reflection from native thread -> SDK_INT == device's actual SDK
 #   (2) art_dexfiles: structural enumeration (ClassLoader cookie -> art::DexFile* -> begin_),
 #       no magic scan; must find the 728-byte probe dex under InMemoryDexClassLoader
 #   (3) art dump: dump the probe dex from begin -> sha256 == known d8 output (byte-exact)
@@ -9,20 +9,22 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HTTP="${IDH_HTTP_PORT:-8760}"
 KNOWN_SHA="b10aea0308a7e7ccaa100a5cb53a0bfdec74c1f2dfe9184c256edd673339df6b"
+# Expected SDK = whatever the target device reports (works on SDK 35 / 36 / any). Override with IDH_SDK.
+SDK_EXP="${IDH_SDK:-$(adb shell getprop ro.build.version.sdk 2>/dev/null | tr -d '\r')}"
 
 set +e
-OUT="$(node - "$HTTP" "$KNOWN_SHA" <<'EOF'
-const [http, knownSha] = process.argv.slice(2);
+OUT="$(node - "$HTTP" "$KNOWN_SHA" "$SDK_EXP" <<'EOF'
+const [http, knownSha, sdkExp] = process.argv.slice(2);
 const base=`http://127.0.0.1:${http}`;
 const P=(o)=>fetch(`${base}${o.path}`,o.body?{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(o.body)}:{}).then(r=>r.json());
 const agents=await P({path:'/api/agents'});
 const a=agents.filter(x=>x.package==='com.idh.sandbox'&&x.online).sort((x,y)=>y.connectedAt-x.connectedAt)[0];
 if(!a){console.log('NO_AGENT');console.log('RESULT:FAIL');process.exit(0);}
 
-// (1) JNI foundation
+// (1) JNI foundation — agent-reflected SDK must equal the OS-reported SDK for this device
 const j=await P({path:`/api/jni/probe?session=${a.sessionId}`});
-console.log(`jni_probe: ok=${j.ok} sdk_int=${j.sdk_int}`);
-const jniPass = j.ok && j.sdk_int===36;
+console.log(`jni_probe: ok=${j.ok} sdk_int=${j.sdk_int} (device reports ${sdkExp})`);
+const jniPass = j.ok && !!sdkExp && j.sdk_int===Number(sdkExp);
 
 // (2) ART structural enumeration
 const r=await P({path:`/api/art/dexfiles?session=${a.sessionId}`});

@@ -1071,7 +1071,10 @@ async function handleHttp(req: http.IncomingMessage, res: http.ServerResponse) {
     const symLib = url.searchParams.get('symLib') ?? 'libc.so';
     const symbol = url.searchParams.get('symbol') ?? 'access';
     const hookModule = url.searchParams.get('hookModule') ?? 'libidhdetect.so';
-    try { const r = await sendCmd(sid, 'trace_run', { symLib, symbol, hookModule, className: url.searchParams.get('class') ?? SANDBOX.detect }, 20_000); return send(r.ok ? 200 : 502, r); }
+    // Suspend persistent capture first: capture_start may already hold a GOT hook on the same
+    // symbol/module (e.g. access in sysModule), which would leave trace_run's got_replace with
+    // replaced=0. Every other one-shot probe below wraps withCaptureSuspended for this reason.
+    try { const r = await withCaptureSuspended(sid, () => sendCmd(sid, 'trace_run', { symLib, symbol, hookModule, className: url.searchParams.get('class') ?? SANDBOX.detect }, 20_000)); return send(r.ok ? 200 : 502, r); }
     catch (e) { return send(504, { error: (e as Error).message }); }
   }
   // Anti-analysis behavior observation (module V): GET /api/detect/watch?session=ID
@@ -1293,8 +1296,12 @@ async function handleHttp(req: http.IncomingMessage, res: http.ServerResponse) {
       if (q) { const rx = new RegExp(String(q), 'i');
         a.exports = a.exports.filter((s: string) => rx.test(s)); a.imports = a.imports.filter((s: string) => rx.test(s));
         a.strings = a.strings.filter((s: string) => rx.test(s)); }
-      // cap payload
-      a.exports = a.exports.slice(0, 500); a.imports = a.imports.slice(0, 500); a.strings = a.strings.slice(0, 1000);
+      // cap payload — symbol tables of bloated .so (e.g. LSPlant-linked agent = 756 exports)
+      // must not be silently truncated below a real entry point; 500 was too small and dropped
+      // idh_agent_start (dynsym #702). Cap high enough for real dynsym tables; flag if exceeded.
+      const CAP_SYM = 20000, CAP_STR = 1000;
+      a.truncated = { exports: a.exports.length > CAP_SYM, imports: a.imports.length > CAP_SYM, strings: a.strings.length > CAP_STR };
+      a.exports = a.exports.slice(0, CAP_SYM); a.imports = a.imports.slice(0, CAP_SYM); a.strings = a.strings.slice(0, CAP_STR);
       return send(200, a);
     } catch (e) { return send(502, { error: (e as Error).message }); }
     finally { if (tmp) { try { unlinkSync(tmp); } catch {} } }

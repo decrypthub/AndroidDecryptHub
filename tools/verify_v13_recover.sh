@@ -11,8 +11,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HTTP="${IDH_HTTP_PORT:-8760}"
 APK="$ROOT/sandbox-app/app/build/outputs/apk/debug/app-debug.apk"
 DEX="/tmp/base.dex"
-[ -f "$DEX" ] || unzip -p "$APK" classes.dex > "$DEX" 2>/dev/null
-[ -f "$DEX" ] || { echo "no base dex"; echo "RESULT:FAIL"; exit 1; }
+[ -s "$DEX" ] || unzip -p "$APK" classes.dex > "$DEX" 2>/dev/null
+[ -s "$DEX" ] || { echo "no base dex"; echo "RESULT:FAIL"; exit 1; }
 
 set +e
 OUT="$(node - "$HTTP" "$DEX" <<'EOF'

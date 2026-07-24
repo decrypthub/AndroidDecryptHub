@@ -52,13 +52,43 @@ Build **all `libidh_agent.so` functionality first** and self-test it via 模拟�
 - Primary loop uses **`sandbox-test-app` with 模拟注入** (the app `dlopen`s the agent itself) — no root needed, deterministic, CI-friendly. Iterate here first.
 - Real-target integration uses the attached device (see below) via Zygisk / gadget injection.
 - Every module must have a deterministic **input → expected-output** check (sandbox activity + acceptance script). Prefer running the check and reading its output over eyeballing.
-- Build / test / lint commands: _TBD — fill in here once the build exists (e.g. `cmake`, `gradlew`, `npm`, verify scripts under `tests/`)._
+
+## Commands
+
+Bash (Git Bash / WSL) — the `tools/*.sh` scripts assume it. `node 24` runs `.ts` directly (no build/transpile step). Agent build needs `ANDROID_SDK_ROOT` + NDK `28.2.13676358` + SDK `cmake/3.22.1` (scripts default `ANDROID_SDK_ROOT=$HOME/AppData/Local/Android/Sdk`).
+
+```bash
+# --- agent .so (C/NDK, arm64-v8a) — fails loud on compile error, stages into sandbox jniLibs
+bash tools/build_agent.sh          # -> agent/build/libidh_agent.so
+bash tools/build_detect.sh         # sandbox mock native lib libidhdetect.so
+bash tools/fetch_qbdi.sh           # one-time: QBDI headers/.so (instruction trace); gitignored
+bash tools/fetch_lsplant.sh        # one-time: LSPlant + Dobby (Java-method hook, WS-A)
+
+# --- daemon (idhd) — from daemon/
+node src/index.ts                  # start (HTTP/WS 8760, agent TCP 8761); or: npm start
+node --watch src/index.ts          # dev; or: npm run dev
+node test/smoke.ts                 # smoke; or: npm run smoke
+
+# --- sandbox app (Kotlin, AGP 8.7.3 / Gradle 8.9 / compileSdk 36) — from sandbox-app/
+./gradlew :app:assembleDebug       # build APK; install with adb install
+
+# --- run + verify (this is the real pass/fail signal)
+bash tools/dev_up.sh               # idempotent: start idhd + set adb reverse (run first each loop)
+bash tools/verify_all.sh           # full regression; device checks auto-SKIP (not FAIL) if offline
+bash tools/verify_v04_crypto.sh    # a single acceptance check (exit 0 = PASS). one per capability slice
+```
+
+Ports: idhd HTTP/WS `8760`, agent TCP `8761` (override via `IDH_HTTP_PORT` / `IDH_AGENT_PORT`). Agent dials host through `adb reverse`; `dev_up.sh` sets both tunnels. New-machine repro order: `fetch_qbdi` → `build_agent` → `build_detect` → `dev_up` → `verify_all`.
+
+There is no separate lint step. `AGENTS.md` (for Codex) is kept in sync with this file apart from the header line — mirror any change into both.
 
 ## Test device (available now)
 
-- `adb` serial `1A281FDEE003ZV` — Pixel 6 Pro, **Android 16 / SDK 36**, `arm64-v8a`, **rooted** (`su` present), `ro.debuggable=0`.
-- This is a recent ART version — the ART-structure dex resolver (L.6) must target SDK 36; keep per-API-level resolvers.
+- `adb` serial `13f54a46` — OnePlus PGP110, **Android 15 / SDK 35**, `arm64-v8a`, **rooted** (`su` → uid=0), `ro.debuggable=0`.
+- **Multiple identical PGP110 units are attached** (`13f54a46` + others). adb commands without `-s` fail with "more than one device" — `export ANDROID_SERIAL=13f54a46` so every adb call (incl. the `tools/*.sh` scripts) targets the right unit.
+- Keep **per-API-level ART resolvers**; the ART-structure dex resolver (L.6) must handle **SDK 35** (this device). SDK 36 (Pixel 6 Pro) is a secondary target, not attached now.
 - Primary agent ABI is `arm64-v8a`.
+- This OnePlus/ColorOS ROM ships a **heavily stripped `libart.so`** (~68% of LSPlant's required ART symbols removed) — **LSPlant Java-method hooking (WS-A) is blocked on this device**; verify it on a stock/AOSP device (Pixel) instead. Non-LSPlant capabilities are unaffected.
 
 ## Boundaries
 

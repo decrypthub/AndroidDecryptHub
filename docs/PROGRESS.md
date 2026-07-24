@@ -291,6 +291,26 @@ arm64 预编译，agent 运行时 dlopen libQBDI.so，指令级 trace idh_trace_
 
 ## 会话日志（倒序，简短）
 
+- 2026-07-24 (测试机切到 13f54a46 + 恢复 verify_all 39/39 全绿 + 修 2 个真 bug)：用户指定测试机为
+  **`13f54a46`（OnePlus PGP110，Android 15 / SDK 35，arm64-v8a，root）**，非旧记录的 Pixel 6 Pro。
+  项目已从 `…/Desktop/ADH` 迁到 `…/桌面文件备份3/ADH`（非 ASCII 路径），新机首跑基线 **10/39 红**——
+  逐条 root-cause，**6 个纯环境**（① `agent/build` 的 CMakeCache 指向旧 Desktop 路径→`rm -rf` 重配；
+  ② sandbox APK 从未在本机构建，7 个 host dex 测试报 "APK missing"→`gradlew assembleDebug`；③ AGP 因
+  非 ASCII 路径拒构建→`gradle.properties` 加 `android.overridePathCheck=true`；④ `/tmp/base.dex` 在 APK 缺席
+  时被建成 0 字节空文件、`[ -f ]` 判存在跳过重解压→v12/v13 一直吃空 dex）；**2 个真代码修复**：
+  (a) **`/api/trace/run` 漏了 `withCaptureSuspended`**——常驻采集已 hook 住 `access` 的 GOT 槽，一次性
+  `trace_run` 再找原始 `access` 得 `replaced=0`；其余 6 个一次性探针都包了挂起，唯独它没有→补上，v10_trace
+  转绿（`replaced=1 calls=2` 两条 su 路径同线程）。(b) **`/api/native/analyze` 导出列表 cap=500 太小**——
+  LSPlant 把 agent .so 撑到 **756 个导出**，`idh_agent_start`(dynsym #702) 被截在 500 之后丢失，v08_analyze
+  假失败；cap 提到 20000 + 加 `truncated` 标记（fail-loud）。**脚本健壮性**：v12/v13 `[ -f ]`→`[ -s ]`（判非空
+  才复用缓存）；**v03 去掉硬编码 `sdk_int===36`**，改成对齐设备 `getprop ro.build.version.sdk`（SDK 35/36 通用）。
+  **CLAUDE.md/AGENTS.md**：填了此前 TBD 的 Commands 段（build/test/lint 全量命令）；测试机段改为 13f54a46 +
+  **多台同型号 PGP110 在线须 `export ANDROID_SERIAL=13f54a46`** + **本 ColorOS ROM 的 libart.so 重度 strip
+  →LSPlant(WS-A) 在此机根本性阻塞,需 stock/Pixel 验证**。硬信号：**`tools/verify_all.sh` = 39/39 PASS
+  fail=0 skip=0**（真机 13f54a46 + host 全绿）。下一步：crypto/TLS 常驻 hook 去 `libjavacrypto.so` 硬编码
+  （加 `cryptoModule` 参数,默认扫全部文件型模块,覆盖 cronet/改名 BoringSSL）。
+
+
 - 2026-07-14 (v2.1 WS-A · LSPlant 集成——**编译通过 + 后端加载，卡在 ROM ART 符号**)：为国密/Signature/KDF
   + 隐私面板铺 ART 方法级 hook 地基。三个侦察 subagent 产出（LSPlant 配方 / 加密 hook 表 / 隐私 hook 表）后落地
   **完整集成**：`tools/fetch_lsplant.sh`（LSPlant **v6.4** + DexBuilder + parallel_hashmap；master 用 C++23 modules
