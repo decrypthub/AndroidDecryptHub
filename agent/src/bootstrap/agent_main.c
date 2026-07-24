@@ -205,6 +205,12 @@ static int got_replace(const char *module_substr, void *orig, void *wrapper) {
         int nf = sscanf(line, "%31[0-9a-f]-%31[0-9a-f] %7s %31s %15s %llu %399[^\n]", sa, ea, perms, off, dev, &inode, path);
         if (nf < 6 || perms[0] != 'r') continue;
         char *pp = path; while (*pp == ' ') pp++;
+        // Only file-backed ELF modules (absolute path) hold GOT/reloc slots. Skip anonymous
+        // / [stack] / [anon:*] / JIT regions — matters when module_substr=="" (scan all
+        // modules): reloc validation is unavailable for pathless regions, so the value-match
+        // fallback could clobber a coincidental data word == orig. Named-module callers are
+        // unaffected (their matches were already absolute paths).
+        if (pp[0] != '/') continue;
         if (!strstr(pp, module_substr)) continue;
         if (strcmp(pp, cur_mod) != 0) {
             snprintf(cur_mod, sizeof(cur_mod), "%s", pp); hooked_this_mod = 0;
@@ -415,10 +421,16 @@ static void capture(const char *func, const unsigned char *in, int inl) {
     pthread_mutex_unlock(&g_cap_lock);
 }
 
-// Empty the ring (used by the one-shot probes in place of the old `g_ncaps = 0`). Does not
-// touch cumulative seq/dropped — those are session lifetime stats.
+// Empty the ring (used by the one-shot probes in place of the old `g_ncaps = 0`). Discarded
+// in-ring records are rolled into g_cap_dropped (see below); cumulative seq is never touched.
 static void cap_reset(void) {
     pthread_mutex_lock(&g_cap_lock);
+    // Records still in the ring are being discarded (a one-shot probe / capture_stop clears
+    // stale captures before re-arming). They were counted in g_cap_seq but will never be
+    // emitted — account them as dropped so the invariant emitted+backlog+dropped==seq holds
+    // (WS-C: nothing vanishes silently). Without this, each reset-with-backlog leaks the
+    // in-ring count from the accounting permanently (verify_v22 caught a stable off-by-N).
+    if (g_ring_count > 0) __atomic_add_fetch(&g_cap_dropped, (unsigned long long)g_ring_count, __ATOMIC_RELAXED);
     g_ring_head = g_ring_tail = g_ring_count = 0;
     pthread_mutex_unlock(&g_cap_lock);
 }
@@ -974,12 +986,16 @@ static int my_prop(const char *name, char *value) {
 // capture_stop restores the exact GOT it patched. Empty = that category not installed.
 static char g_file_mod[64] = "";
 static char g_sys_mod[64] = "";
+// crypto/TLS caller module whose GOT holds the EVP/SSL pointers. Empty = scan ALL file-backed
+// modules (default): catches Conscrypt (libjavacrypto) AND non-Conscrypt BoringSSL callers
+// (cronet's bundled copy, renamed/statically-linked libs). idhd may pass a specific module.
+static char g_crypto_mod[64] = "";
 
 // ---- continuous capture: install persistent EVP+SSL hooks, drain accumulated records
 //      periodically from idhd (mirrors the ios-decrypt-helper log-store model: hooks
 //      stay installed and events stream to the panel, instead of one-shot triggers) ----
 static int g_capture_on = 0;
-static void cmd_capture_start(int fd, const char *id, const char *fileModule, const char *sysModule) {
+static void cmd_capture_start(int fd, const char *id, const char *cryptoModule, const char *fileModule, const char *sysModule) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
     void *evp = resolve_sym("libcrypto.so", "EVP_CipherUpdate");
     void *dig = resolve_sym("libcrypto.so", "EVP_DigestUpdate");
@@ -993,15 +1009,19 @@ static void cmd_capture_start(int fd, const char *id, const char *fileModule, co
     if (dsu) g_orig_digest_sign= (update3_t)dsu;
     if (ow)  g_orig_ssl_write  = (SSL_rw_t)ow;
     if (orr) g_orig_ssl_read   = (SSL_rw_t)orr;
-    // Persistent hooks in Conscrypt's GOT (not restored — that's what makes it "live").
+    // Persistent hooks in the crypto/TLS caller module's GOT (not restored — that's what makes
+    // it "live"). g_crypto_mod from idhd; empty = scan ALL file-backed modules so we catch
+    // whatever routes crypto (Conscrypt, cronet's BoringSSL, renamed libs), not just libjavacrypto.
     // Covers symmetric (EVP_CipherUpdate), digest (EVP_DigestUpdate), HMAC (HMAC_Update
     // and the EVP_PKEY HMAC path EVP_DigestSignUpdate), and TLS (SSL_read/write).
-    int re = evp ? got_replace("libjavacrypto.so", evp, (void *)my_EVP_CipherUpdate) : -1;
-    int rd = dig ? got_replace("libjavacrypto.so", dig, (void *)my_EVP_DigestUpdate) : -1;
-    int rh = hm  ? got_replace("libjavacrypto.so", hm,  (void *)my_HMAC_Update) : -1;
-    int rs = dsu ? got_replace("libjavacrypto.so", dsu, (void *)my_EVP_DigestSignUpdate) : -1;
-    int rw = ow  ? got_replace("libjavacrypto.so", ow,  (void *)my_SSL_write) : -1;
-    int rr = orr ? got_replace("libjavacrypto.so", orr, (void *)my_SSL_read) : -1;
+    strncpy(g_crypto_mod, (cryptoModule && cryptoModule[0]) ? cryptoModule : "", sizeof(g_crypto_mod)-1);
+    g_crypto_mod[sizeof(g_crypto_mod)-1]=0;
+    int re = evp ? got_replace(g_crypto_mod, evp, (void *)my_EVP_CipherUpdate) : -1;
+    int rd = dig ? got_replace(g_crypto_mod, dig, (void *)my_EVP_DigestUpdate) : -1;
+    int rh = hm  ? got_replace(g_crypto_mod, hm,  (void *)my_HMAC_Update) : -1;
+    int rs = dsu ? got_replace(g_crypto_mod, dsu, (void *)my_EVP_DigestSignUpdate) : -1;
+    int rw = ow  ? got_replace(g_crypto_mod, ow,  (void *)my_SSL_write) : -1;
+    int rr = orr ? got_replace(g_crypto_mod, orr, (void *)my_SSL_read) : -1;
 
     // -- 文件: persistent file-I/O hooks in the module backing java.io (fileModule, from idhd;
     //    empty = skip so the agent never hardcodes a target module). Streams openat paths +
@@ -1038,18 +1058,19 @@ static void cmd_capture_start(int fd, const char *id, const char *fileModule, co
         sg = og ? got_replace(g_sys_mod, og, (void *)my_prop)   : -1;
     }
     g_capture_on = 1;
-    char fmj[80], smj[80];
+    char cmj[80], fmj[80], smj[80];
+    json_escape(g_crypto_mod, cmj, sizeof(cmj));
     json_escape(fileModule ? fileModule : "", fmj, sizeof(fmj));
     json_escape(sysModule ? sysModule : "", smj, sizeof(smj));
-    char out[640];
+    char out[720];
     snprintf(out, sizeof(out),
-        "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"capture_start\",\"ok\":true,\"evp\":%d,\"digest\":%d,\"hmac\":%d,\"digestSign\":%d,\"sslWrite\":%d,\"sslRead\":%d,"
+        "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"capture_start\",\"ok\":true,\"cryptoModule\":\"%s\",\"evp\":%d,\"digest\":%d,\"hmac\":%d,\"digestSign\":%d,\"sslWrite\":%d,\"sslRead\":%d,"
         "\"fileModule\":\"%s\",\"file\":{\"open\":%d,\"openat\":%d,\"read\":%d,\"write\":%d,\"syscall\":%d,\"readChk\":%d,\"writeChk\":%d},"
         "\"sysModule\":\"%s\",\"sys\":{\"ptrace\":%d,\"access\":%d,\"prop\":%d},\"on\":true}\n",
-        idj, re, rd, rh, rs, rw, rr, fmj, fo, foa, frd, fwr, fsc, frc, fwc, smj, sp, sa, sg);
+        idj, cmj, re, rd, rh, rs, rw, rr, fmj, fo, foa, frd, fwr, fsc, frc, fwc, smj, sp, sa, sg);
     send_line(fd, out);
-    LOGI("capture_start: evp=%d dig=%d hmac=%d dsu=%d sslw=%d sslr=%d | file[%s] oa=%d sc=%d rc=%d wc=%d | sys[%s] p=%d a=%d g=%d",
-         re, rd, rh, rs, rw, rr, g_file_mod, foa, fsc, frc, fwc, g_sys_mod, sp, sa, sg);
+    LOGI("capture_start: crypto[%s] evp=%d dig=%d hmac=%d dsu=%d sslw=%d sslr=%d | file[%s] oa=%d sc=%d rc=%d wc=%d | sys[%s] p=%d a=%d g=%d",
+         g_crypto_mod, re, rd, rh, rs, rw, rr, g_file_mod, foa, fsc, frc, fwc, g_sys_mod, sp, sa, sg);
 }
 
 // Uninstall the persistent capture hooks and restore the original GOT pointers, so the
@@ -1059,12 +1080,12 @@ static void cmd_capture_start(int fd, const char *id, const char *fileModule, co
 static void cmd_capture_stop(int fd, const char *id) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
     int e = 0, w = 0, r = 0, dg = 0, hm = 0, ds = 0;
-    if (g_evp_cipher_orig) e  = got_replace("libjavacrypto.so", (void *)my_EVP_CipherUpdate, (void *)g_evp_cipher_orig);
-    if (g_orig_evp_digest) dg = got_replace("libjavacrypto.so", (void *)my_EVP_DigestUpdate, (void *)g_orig_evp_digest);
-    if (g_orig_hmac)       hm = got_replace("libjavacrypto.so", (void *)my_HMAC_Update, (void *)g_orig_hmac);
-    if (g_orig_digest_sign)ds = got_replace("libjavacrypto.so", (void *)my_EVP_DigestSignUpdate, (void *)g_orig_digest_sign);
-    if (g_orig_ssl_write)  w  = got_replace("libjavacrypto.so", (void *)my_SSL_write, (void *)g_orig_ssl_write);
-    if (g_orig_ssl_read)   r  = got_replace("libjavacrypto.so", (void *)my_SSL_read, (void *)g_orig_ssl_read);
+    if (g_evp_cipher_orig) e  = got_replace(g_crypto_mod, (void *)my_EVP_CipherUpdate, (void *)g_evp_cipher_orig);
+    if (g_orig_evp_digest) dg = got_replace(g_crypto_mod, (void *)my_EVP_DigestUpdate, (void *)g_orig_evp_digest);
+    if (g_orig_hmac)       hm = got_replace(g_crypto_mod, (void *)my_HMAC_Update, (void *)g_orig_hmac);
+    if (g_orig_digest_sign)ds = got_replace(g_crypto_mod, (void *)my_EVP_DigestSignUpdate, (void *)g_orig_digest_sign);
+    if (g_orig_ssl_write)  w  = got_replace(g_crypto_mod, (void *)my_SSL_write, (void *)g_orig_ssl_write);
+    if (g_orig_ssl_read)   r  = got_replace(g_crypto_mod, (void *)my_SSL_read, (void *)g_orig_ssl_read);
     // restore persistent file hooks in the module capture_start patched
     if (g_file_mod[0]) {
         if (g_orig_open)       got_replace(g_file_mod, (void *)my_open,       (void *)g_orig_open);
@@ -1961,10 +1982,11 @@ static void command_loop(int fd) {
                     char tcls[200] = ""; json_get_str(line, "className", tcls, sizeof(tcls));
                     cmd_crypto_hook_test(fd, id, tcls);
                 } else if (strcmp(op, "capture_start") == 0) {
-                    char fmod[64] = "", smod[64] = "";
+                    char cmod[64] = "", fmod[64] = "", smod[64] = "";
+                    json_get_str(line, "cryptoModule", cmod, sizeof(cmod));
                     json_get_str(line, "fileModule", fmod, sizeof(fmod));
                     json_get_str(line, "sysModule", smod, sizeof(smod));
-                    cmd_capture_start(fd, id, fmod, smod);
+                    cmd_capture_start(fd, id, cmod, fmod, smod);
                 } else if (strcmp(op, "capture_drain") == 0) {
                     cmd_capture_drain(fd, id);
                 } else if (strcmp(op, "capture_stop") == 0) {

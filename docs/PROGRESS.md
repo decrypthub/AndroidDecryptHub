@@ -18,7 +18,10 @@
 
 - [x] **v2.0** WS-D 协议重写（length-framed `[u32 len][u8 type][payload]`，去 8192 上限）**✅**
       + WS-C 环形缓冲/如实 dropped 上报 **✅ 完成并验证**（连续 push-drain 线程作为 WS-C 优化后续再上，见日志）
+      + WS-C `cap_reset` 记账修复（丢弃环内记录计入 dropped，`emitted+backlog+dropped==seq` 恒成立）**✅**
 - [ ] v2.1 WS-A Java 后端(LSPlant) + WS-B 去 sandbox 耦合
+      · **WS-B 部分完成**：agent 常驻采集三类(crypto/file/sys)目标模块**全部参数化**、agent 零硬编码目标模块 **✅**；
+        LSPlant 在测试机 13f54a46(ColorOS/A15 stripped libart) **根本性阻塞**，需 stock/Pixel 验证
 - [ ] v2.2 WS-A inline 后端(ShadowHook)
 - [ ] v2.3 WS-F 持久索引 + 深解析 + 反射
 - [ ] v2.4 WS-E 脱壳二代 + try/catch + cdex/041（需样本，否则 PENDING）
@@ -290,6 +293,26 @@ arm64 预编译，agent 运行时 dlopen libQBDI.so，指令级 trace idh_trace_
 - ART 结构 resolver 需覆盖 SDK 36（设备版本）优先
 
 ## 会话日志（倒序，简短）
+
+- 2026-07-24 (WS-B crypto 去硬编码 + WS-C cap_reset 记账修复，agent 零硬编码目标模块)：接上一条 39/39
+  绿基线，做真正的功能增量。**WS-B**：agent 的 crypto/TLS 常驻 hook 此前把模块名写死成 `"libjavacrypto.so"`
+  （安装 6 处 + 还原 6 处）——这是常驻采集路径上**最后一处硬编码目标模块**（file/sys 类早已参数化）。改成
+  `capture_start` 新增 `cryptoModule` 参数→`g_crypto_mod`，安装/还原全用它；**agent 内不再 bake 任何模块名**
+  （门禁① 对 crypto 类达成）。默认值放 idhd `settings.capture.cryptoModule`，随 `captureModules()` 下发。
+  **踩坑（真机诊断）**：先把默认设为 `''`＝扫全部文件型模块（想覆盖 cronet 自带 BoringSSL / 改名库），结果
+  **app 一收 capture_start 就崩**（HELLO→MAPS→2s 后 CLOSE）——`""` 广扫会 hook 到 framework/boot 模块里
+  **app 启动期就在主线程跑的 crypto 调用**，破坏系统内部路径。改回安全默认 `libjavacrypto.so`（Conscrypt，
+  每个 App 的 JCE/TLS 路径、与框架隔离）；`''` 广扫**降级为高级 opt-in**并注明会拖垮启动。真正的通用性收益是
+  **operator 可按目标把 crypto hook 指到任意单模块**（`libcronet.so`/改名库，稳定，一次一个），而非焊死 Conscrypt。
+  配套加固 `got_replace`：广扫时**跳过非文件型映射**（路径非 `/` 开头的匿名/`[stack]`/JIT 区——那里没有 GOT/reloc
+  槽，避免 `""` 误改巧合数据字）；具名调用零影响。**WS-C**：诊断 v22 时揪出一个既有 latent bug——`cap_reset()`
+  清空环形缓冲时**丢弃环内未 drain 的记录却不计入 dropped**，导致某次 capture_stop/probe 撞上非空环后
+  `emitted+backlog+dropped==seq` **永久漏 N**（真机稳定复现 off-by-1，30 个采样全差 1）。修：cap_reset 把丢弃的
+  `g_ring_count` 计入 `g_cap_dropped`（WS-C“没有一条静默消失”）。硬信号：v22 稳定态 `accountedFor==seq`
+  （20030==20030）、`accounted=true`；crypto 明文照常（v04 `replaced=1 ascii="IDH_CRYPTO_PLAINTEXT_v1"`）；
+  **`verify_all` = 39/39 PASS**（agent 重建+重装真机 13f54a46 + host 全绿）。
+  **未做（诚实边界）**：`''` 全模块广扫在本 ROM 不稳（框架 crypto 主线程），未验证可用——留作需要时按单模块指定；
+  非 Conscrypt 目标的实测需真实样本（sandbox 只走 Conscrypt）。
 
 - 2026-07-24 (测试机切到 13f54a46 + 恢复 verify_all 39/39 全绿 + 修 2 个真 bug)：用户指定测试机为
   **`13f54a46`（OnePlus PGP110，Android 15 / SDK 35，arm64-v8a，root）**，非旧记录的 Pixel 6 Pro。

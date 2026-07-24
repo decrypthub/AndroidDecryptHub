@@ -149,14 +149,20 @@ function recordEvent(type: string, data: any) {
 // Only touches the idhd/web layer — the agent .so is never reconfigured from here.
 const SETTINGS_FILE = join(DATA_DIR, 'settings.json');
 interface Settings {
-  capture: { enabled: boolean; autoDumpDex: boolean; retain: number; families: Record<string, boolean>; fileModule: string; sysModule: string };
+  capture: { enabled: boolean; autoDumpDex: boolean; retain: number; families: Record<string, boolean>; cryptoModule: string; fileModule: string; sysModule: string };
   ui: { displayCap: number };
 }
 const DEFAULT_SETTINGS: Settings = {
+  // cryptoModule: which module's GOT holds the EVP/SSL calls the agent hooks. The agent bakes
+  // in NO module name (target-agnostic); this value drives it. Default 'libjavacrypto.so' =
+  // Conscrypt, the app-level JCE/TLS path present in every app — safe and isolated from
+  // framework internals. Set '' to scan ALL file-backed modules (advanced: catches cronet's
+  // bundled BoringSSL / renamed libs, but also hooks framework crypto on the main thread during
+  // init and can destabilize startup — opt in per target, don't use as the default).
   // fileModule/sysModule: which loaded module's GOT the persistent file(open/read/…) and
   // system(ptrace/access/getprop) hooks patch. Defaults are the sandbox-backing modules for
   // self-test; override per real target (empty string = don't install that category's hooks).
-  capture: { enabled: true, autoDumpDex: true, retain: 1000, families: { digest: true, hmac: true, symmetric: true, asymmetric: true, tls: true }, fileModule: 'libjavacore.so', sysModule: 'libidhdetect.so' },
+  capture: { enabled: true, autoDumpDex: true, retain: 1000, families: { digest: true, hmac: true, symmetric: true, asymmetric: true, tls: true }, cryptoModule: 'libjavacrypto.so', fileModule: 'libjavacore.so', sysModule: 'libidhdetect.so' },
   ui: { displayCap: 300 },
 };
 let settings: Settings = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
@@ -169,6 +175,7 @@ function mergeSettings(patch: any): string[] {
     if (typeof c.enabled === 'boolean') settings.capture.enabled = c.enabled;
     if (typeof c.autoDumpDex === 'boolean') settings.capture.autoDumpDex = c.autoDumpDex;
     if (Number.isFinite(c.retain)) settings.capture.retain = Math.max(50, Math.min(100000, Math.floor(c.retain)));
+    if (typeof c.cryptoModule === 'string') settings.capture.cryptoModule = c.cryptoModule.trim();
     if (typeof c.fileModule === 'string') settings.capture.fileModule = c.fileModule.trim();
     if (typeof c.sysModule === 'string') settings.capture.sysModule = c.sysModule.trim();
     if (c.families && typeof c.families === 'object')
@@ -224,7 +231,7 @@ const SANDBOX = {
 // the agent stays target-agnostic (no hardcoded modules). The Java rich-capture reporter class
 // is published by the TARGET via the "idh.reporter.class" system property (bound at JNI_OnLoad),
 // not passed here — it must be bound before the target's JCE provider fires, i.e. before connect.
-function captureModules() { return { fileModule: settings.capture.fileModule, sysModule: settings.capture.sysModule }; }
+function captureModules() { return { cryptoModule: settings.capture.cryptoModule, fileModule: settings.capture.fileModule, sysModule: settings.capture.sysModule }; }
 // Apply the capture.enabled toggle to already-connected sessions (start/stop the hooks).
 async function applyCaptureEnabled() {
   for (const s of sessions.values()) {
