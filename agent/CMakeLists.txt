@@ -8,6 +8,9 @@ set(CMAKE_C_VISIBILITY_PRESET hidden)
 
 set(AGENT_SOURCES
     src/bootstrap/agent_main.c
+    src/bootstrap/util.c
+    src/bootstrap/io.c
+    src/bootstrap/mem.c
     src/trace/qbdi_trace.c
 )
 

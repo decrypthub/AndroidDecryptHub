@@ -42,6 +42,9 @@ agent/third_party/*/
 # Reference clone (kept local only)
 .ref/
 
+# Local tool cache (portable node etc.) — not source, machine-specific paths
+.tools/
+
 # OS / editor
 .DS_Store
 Thumbs.db
