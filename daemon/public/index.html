@@ -3,201 +3,307 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="theme-color" content="#06070a" />
 <title>ADH — Android DecryptHub 运行时观测台</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-  /* 视觉语言对齐 IDH：系统无衬线正文（等宽仅用于代码/hex）+ GitHub 暗色配色 */
-  :root { color-scheme: dark; }
-  * { box-sizing: border-box; }
-  html, body { margin: 0; padding: 0; height: 100%; }
-  body { display:flex; flex-direction:column; height:100vh; overflow:hidden;
-    background:#0d1117; color:#c9d1d9; line-height:1.5; font-size:13px;
-    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,'PingFang SC','Microsoft YaHei',sans-serif; }
-  header, .procbar, nav { flex-shrink:0; }
-  header { display:flex; align-items:center; gap:12px; padding:10px 14px; background:#161b22; border-bottom:1px solid #30363d; }
-  header h1 { font-size:16px; margin:0; font-weight:700; color:#7ee787; letter-spacing:.02em; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; }
-  .dot { width:8px; height:8px; border-radius:50%; background:#f85149; flex-shrink:0; }
-  .dot.up { background:#3fb950; }
-  .muted { color:#8b949e; }
+  /* ===== ADH 观测台 · 移植 IDH「2026 workbench」深墨蓝设计系统 ===== */
+  :root {
+    --bg:#06070a; --chrome:#090b0f; --surface:#0f1218; --surface-2:#151922;
+    --surface-3:#1b202a; --line:#343b48; --line-soft:#20252e;
+    --ink:#ffffff; --ink-2:#e5e8ee; --muted:#aeb5c0;
+    --blue:#78a9ff; --coral:#ff8b7b; --amber:#ffc85c; --lilac:#c7a6ff;
+    --cyan:#79d6e8; --pink:#ff9fbc; --green:#8bd6a8; --danger:#ff788c;
+    color-scheme: dark;
+  }
+  * { box-sizing:border-box; }
+  html, body { margin:0; padding:0; height:100%; }
+  body { display:flex; flex-direction:column; height:100vh; overflow:hidden; min-width:320px;
+    background:var(--bg); color:var(--ink); line-height:1.5; font-size:13px; letter-spacing:0;
+    font-family:Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,'PingFang SC','Microsoft YaHei',sans-serif; }
+  header, .procbar, nav, .filters { flex-shrink:0; }
+  .muted { color:var(--muted); }
   .spacer { flex:1; }
-  select, input, textarea, button { font:inherit; }
-  select, input, textarea { background:#0d1117; color:#c9d1d9; border:1px solid #30363d; border-radius:6px; padding:5px 8px; font-size:12px; }
-  .procbar { display:flex; align-items:center; gap:14px; padding:6px 14px; background:#0d1117; border-bottom:1px solid #21262d; font-size:12px; color:#6e7681; flex-wrap:wrap; }
-  .procbar b { color:#8b949e; font-weight:600; }
-  nav { display:flex; gap:2px; padding:0 10px; background:#161b22; border-bottom:1px solid #30363d; overflow-x:auto; }
-  nav button { background:none; border:none; color:#8b949e; padding:10px 16px; font-size:13px; cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; white-space:nowrap; }
-  nav button:hover { color:#c9d1d9; }
-  nav button.active { color:#c9d1d9; border-bottom-color:#f78166; font-weight:600; }
-  nav button .n { color:#6e7681; font-size:11px; margin-left:5px; }
+  a.dl { color:var(--blue); text-decoration:none; } a.dl:hover { text-decoration:underline; }
+  code { background:var(--surface-2); border:1px solid var(--line); border-radius:4px; padding:1px 5px; color:var(--ink-2); font-family:ui-monospace,SFMono-Regular,Consolas,monospace; }
+
+  /* ---- header / brand ---- */
+  header { display:flex; align-items:center; gap:14px; min-height:60px; padding:9px 16px; background:var(--chrome); border-bottom:1px solid var(--line); }
+  .brand-lockup { display:flex; align-items:center; gap:11px; flex-shrink:0; }
+  header h1 { display:flex; align-items:center; margin:0; font-size:16px; font-weight:700; color:var(--ink); letter-spacing:0; }
+  .hdr-mark { width:24px; height:24px; margin-right:9px; border-radius:5px; background:var(--ink); color:#06070a; display:grid; place-items:center;
+    font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-weight:800; font-size:13px; }
+  .ver { margin-left:8px; color:var(--blue); font-size:11px; font-weight:400; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; }
+  .workspace-name { padding-left:11px; color:var(--muted); border-left:1px solid var(--line); font-size:11px; font-weight:500; text-transform:uppercase; letter-spacing:.04em; }
+  .stats { display:flex; align-items:center; gap:8px; padding:5px 9px; font-size:12px; color:var(--muted); background:var(--surface); border:1px solid var(--line-soft); border-radius:4px; }
+  .stats b { color:var(--ink); font-weight:600; }
+  .status-dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--danger); flex-shrink:0; }
+  .status-dot.ok { background:var(--green); animation:dh-pulse 2.4s ease-in-out infinite; }
+  @keyframes dh-pulse { 0%,100%{opacity:1;} 50%{opacity:.5;} }
+  .header-actions { display:flex; align-items:center; gap:7px; margin-left:auto; flex-wrap:wrap; }
+  .header-actions .lbl { color:var(--muted); font-size:12px; white-space:nowrap; }
+  select, input, textarea, button { font:inherit; letter-spacing:0; }
+  select, input, textarea { min-height:32px; background:var(--bg); color:var(--ink); border:1px solid var(--line); border-radius:4px; padding:5px 8px; font-size:12px; }
+  select:focus, input:focus, textarea:focus { outline:2px solid rgba(120,169,255,.22); outline-offset:0; border-color:var(--blue); }
+  header button, .hbtn { min-height:32px; padding:0 11px; color:var(--ink-2); background:var(--surface); border:1px solid var(--line); border-radius:4px; font-size:12px; cursor:pointer; transition:background .15s,border-color .15s,color .15s; }
+  header button:hover, .hbtn:hover { color:var(--ink); background:var(--surface-2); border-color:#646e7d; }
+  #setBtn { color:#06070a; background:var(--ink); border-color:var(--ink); font-weight:650; }
+  #setBtn:hover { background:var(--blue); border-color:var(--blue); }
+
+  /* ---- procbar ---- */
+  .procbar { display:flex; align-items:center; gap:18px; min-height:44px; padding:7px 16px; background:var(--surface); border-bottom:1px solid var(--line); font-size:12px; color:var(--muted); flex-wrap:wrap; }
+  .procbar b { color:var(--ink-2); font-weight:600; }
+  .procbar .pill.on { background:#12251b; color:var(--green); }
+
+  /* ---- tabbar ---- */
+  nav { display:flex; gap:0; min-height:48px; padding:0 12px; background:var(--chrome); border-bottom:1px solid var(--line); overflow-x:auto; }
+  nav button { position:relative; background:none; border:none; color:var(--muted); min-height:48px; padding:0 16px; font-size:12px; cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; white-space:nowrap; transition:color .15s,background .15s; }
+  nav button:hover { color:var(--ink); background:var(--surface); }
+  nav button.active { color:var(--ink); background:#101725; border-bottom-color:var(--blue); font-weight:600; }
+  nav button .n { display:inline-grid; min-width:19px; height:19px; margin-left:7px; place-items:center; color:var(--muted); background:var(--surface-3); border-radius:3px; font-size:10px; font-weight:600; }
+  nav button .n:empty { display:none; }
+  nav button.active .n { color:#07101f; background:var(--blue); }
+
+  /* ---- filter toolbar ---- */
+  .filters { display:none; align-items:center; gap:9px; min-height:52px; padding:8px 14px; background:var(--surface); border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  .filters.show { display:flex; }
+  .toolbar-filters { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .toolbar-actions { display:flex; gap:7px; align-items:center; flex-wrap:wrap; margin-left:auto; }
+  .filters label { color:var(--muted); font-size:12px; }
+  .filters input[type=search], .filters select { width:auto; }
+  .filters input[type=search] { width:260px; }
+  .size-filter { display:flex; align-items:center; gap:7px; flex-wrap:wrap; }
+  .size-filter input[type=number] { width:70px; }
+  .size-filter .sep, .size-filter .unit { color:var(--muted); }
+  .filters button { min-height:32px; padding:0 11px; color:var(--ink-2); background:var(--surface); border:1px solid var(--line); border-radius:4px; font-size:12px; cursor:pointer; }
+  .filters button:hover { color:var(--ink); background:var(--surface-2); border-color:#646e7d; }
+  .filters button.warn { color:var(--amber); background:#1d180e; border-color:#67522a; }
+  .filters button.warn.on { color:#190d04; background:var(--amber); border-color:var(--amber); }
+  .filters button.danger { color:var(--danger); background:#1d1015; border-color:#6d2f3d; }
+  .filters button.danger:hover { color:#17090c; background:var(--danger); border-color:var(--danger); }
+  #count { color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; }
+
+  /* ---- workspace / panels ---- */
   main { flex:1; min-height:0; display:flex; }
   .panel { display:none; flex:1; min-height:0; } .panel.active { display:flex; }
-  .pad { padding:16px 18px; overflow:auto; flex:1; }
-  h2 { font-size:15px; color:#c9d1d9; margin:2px 0 10px; font-weight:600; }
-  h3 { font-size:11px; color:#8b949e; margin:12px 0 5px; font-weight:500; text-transform:uppercase; letter-spacing:.05em; }
+  .workspace { flex:1; display:flex; min-height:0; background:var(--bg); }
+  .list-pane { width:42%; min-width:220px; flex-shrink:0; display:flex; flex-direction:column; min-height:0; background:#090b0f; }
+  .list-pane > div { flex:1; overflow-y:auto; min-height:0; }
+  .splitter { width:5px; flex-shrink:0; background:var(--surface-2); border-left:1px solid var(--line); border-right:1px solid var(--line); cursor:col-resize; transition:background .15s; }
+  .splitter:hover, .splitter.dragging { background:var(--blue); }
+  .detail-pane { flex:1; min-width:240px; overflow-y:auto; padding:0 20px 30px; background:#0c0e13; }
+  .pad { padding:18px 20px; overflow:auto; flex:1; background:#0c0e13; }
+
+  h2 { font-size:18px; color:var(--ink); margin:2px 0 12px; font-weight:600; }
+  h3 { font-size:11px; color:var(--muted); margin:12px 0 5px; font-weight:500; text-transform:uppercase; letter-spacing:.05em; }
   table { border-collapse:collapse; width:100%; font-size:12px; }
-  th, td { text-align:left; padding:6px 10px; border-bottom:1px solid #21262d; vertical-align:top; }
-  th { color:#8b949e; font-size:11px; font-weight:600; }
-  tr.off td { opacity:.45; }
-  .pill { display:inline-block; padding:1px 8px; border-radius:10px; font-size:11px; font-weight:600; }
-  .on { background:#12261a; color:#3fb950; } .no { background:#3d1417; color:#ffa198; }
-  button.act { background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:6px 12px; border-radius:6px; cursor:pointer; margin:2px; font-size:12px; }
-  button.act:hover { background:#30363d; }
-  button.act.primary { background:#1f6feb; border-color:#1f6feb; color:#fff; }
-  button.act.primary:hover { background:#388bfd; }
-  pre { background:#161b22; border:1px solid #21262d; border-radius:6px; padding:10px 12px; overflow:auto; white-space:pre-wrap; word-break:break-all;
-    font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:11px; line-height:1.55; }
-  pre.hex { white-space:pre; word-break:normal; }
+  th, td { text-align:left; padding:9px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-size:11px; font-weight:600; background:var(--surface); }
   .row2 { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:10px; }
-  a.dl { color:#58a6ff; text-decoration:none; } a.dl:hover { text-decoration:underline; }
   details summary { cursor:pointer; }
-  /* master-detail for 加解密 */
-  .master { width:42%; min-width:240px; border-right:1px solid #21262d; overflow:auto; display:flex; flex-direction:column; }
-  .detail { flex:1; overflow:auto; padding:0 18px 24px; }
-  .caprow { border-bottom:1px solid #21262d; padding:7px 14px; cursor:pointer; }
-  .caprow:hover { background:#161b22; }
-  .caprow.sel { background:#1b2231; box-shadow: inset 3px 0 0 #58a6ff; }
-  .caprow .l1 { display:flex; gap:9px; align-items:center; }
-  .caprow .algo { font-weight:600; color:#c9d1d9; }
-  .caprow .op { color:#8b949e; font-size:11px; }
-  .caprow .ts { margin-left:auto; color:#6e7681; font-size:11px; font-variant-numeric:tabular-nums; }
-  .caprow .pv { color:#6e7681; font-size:11px; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; }
-  .tag { display:inline-block; padding:1px 8px; border-radius:10px; font-size:11px; font-weight:600; }
-  .tag.sym { background:#3c2410; color:#f0a35c; } .tag.tls { background:#0c2e4a; color:#58a6ff; }
-  .tag.dig { background:#0d3a1f; color:#56d364; } .tag.hmac { background:#3a1140; color:#d2a8ff; }
-  .empty { color:#6e7681; text-align:center; padding:60px 20px; line-height:1.7; }
-  label.ck { color:#8b949e; }
-  /* 明文/密文 IO 卡片（对齐 IDH 详情样式） */
-  .detail-head { position:sticky; top:0; background:#0d1117; padding:14px 0 10px; border-bottom:1px solid #21262d; z-index:1; }
-  .detail-head h2 { margin:0; font-size:15px; word-break:break-all; }
-  .detail-head .sub { color:#8b949e; font-size:12px; margin-top:4px; word-break:break-all; }
-  .io { margin-top:14px; border-radius:8px; padding:12px 14px; }
-  .io.kv  { background:#11151b; border:1px solid #21262d; }
-  .io.in  { background:#0c1c12; border:1px solid #1f4a2b; }
-  .io.out { background:#0b1826; border:1px solid #1a3d61; }
-  .io-label { font-size:13px; font-weight:700; letter-spacing:.04em; padding:5px 12px; border-radius:6px; display:inline-block; margin-bottom:6px; }
-  .io-label.in  { background:#10301c; color:#56d364; }
-  .io-label.out { background:#11243d; color:#58a6ff; }
-  .io-label.kv  { background:#21262d; color:#c9d1d9; }
-  /* 头部动作按钮（对齐 IDH） */
-  .hbtn { background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:5px 12px; border-radius:6px; font-size:12px; cursor:pointer; }
-  .hbtn:hover { background:#30363d; }
-  /* 模态框 + 设置壳（对齐 IDH set-shell） */
-  .modal-mask { display:none; position:fixed; inset:0; background:rgba(1,4,9,0.7); z-index:100; align-items:center; justify-content:center; }
+  pre { background:#08090c; border:1px solid var(--line); border-radius:4px; padding:11px 12px; overflow:auto; white-space:pre-wrap; word-break:break-all;
+    color:#f1f3f7; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:11px; line-height:1.6; margin:0; }
+  pre.hex { white-space:pre; word-break:normal; }
+
+  /* buttons in body */
+  button.act { min-height:32px; background:var(--surface); color:var(--ink-2); border:1px solid var(--line); padding:0 12px; border-radius:4px; cursor:pointer; margin:2px 0; font-size:12px; transition:background .15s,border-color .15s; }
+  button.act:hover { background:var(--surface-2); border-color:#646e7d; color:var(--ink); }
+  button.act.primary { background:var(--blue); border-color:var(--blue); color:#07101f; font-weight:600; }
+  button.act.primary:hover { background:#93bcff; }
+  .pill { display:inline-block; padding:2px 8px; border-radius:6px; font-size:11px; font-weight:600; }
+  .pill.on { background:#12251b; color:var(--green); } .pill.no { background:#2a1116; color:var(--danger); }
+
+  /* ---- capture rows ---- */
+  .row { min-height:64px; padding:10px 14px; background:#090b0f; border-bottom:1px solid var(--line-soft); border-left:3px solid transparent; cursor:pointer; transition:background .12s,border-color .12s; }
+  .row:hover { background:var(--surface); }
+  .row.selected { background:#172136; border-left-color:var(--blue); box-shadow:inset 0 0 0 1px rgba(120,169,255,.08); }
+  .row .top { display:flex; gap:10px; align-items:center; font-size:12px; }
+  .row .seq { color:var(--muted); min-width:44px; font-variant-numeric:tabular-nums; }
+  .row .algo { font-weight:650; color:var(--ink); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .row .op { color:var(--muted); font-size:11px; flex-shrink:0; }
+  .row .ts { color:var(--muted); font-size:11px; margin-left:auto; flex-shrink:0; font-variant-numeric:tabular-nums; }
+  .row .preview { color:#c7ccd5; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:11px; margin-top:4px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+  .row.cat-digest { border-left-color:var(--green); } .row.cat-hmac { border-left-color:var(--blue); }
+  .row.cat-sym { border-left-color:var(--amber); }    .row.cat-asym { border-left-color:var(--lilac); }
+  .row.cat-file { border-left-color:var(--coral); }   .row.cat-sys { border-left-color:var(--lilac); }
+  .row.cat-net { border-left-color:var(--cyan); }     .row.cat-other { border-left-color:#3a3a3a; }
+  .caprow { cursor:pointer; } .caprow:hover { background:var(--surface); }
+  .pill.digest { color:var(--green); background:#13251a; } .pill.hmac { color:var(--blue); background:#14213a; }
+  .pill.sym { color:var(--amber); background:#2b2110; }    .pill.asym { color:var(--lilac); background:#21172f; }
+  .pill.file { color:var(--coral); background:#2c1816; }   .pill.sys { color:var(--lilac); background:#21172f; }
+  .pill.net { color:var(--cyan); background:#10252b; }     .pill.other { color:var(--muted); background:var(--surface-2); }
+  .cat-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:8px; vertical-align:middle; }
+  .cat-dot.digest { background:var(--green); } .cat-dot.hmac { background:var(--blue); }
+  .cat-dot.sym { background:var(--amber); } .cat-dot.asym { background:var(--lilac); }
+  .cat-dot.file { background:var(--coral); } .cat-dot.sys { background:var(--lilac); }
+  .cat-dot.net { background:var(--cyan); } .cat-dot.other { background:var(--muted); }
+  .empty, .detail-empty { color:var(--muted); text-align:center; padding:60px 20px; line-height:1.7; }
+
+  /* ---- detail ---- */
+  .detail-head { position:sticky; top:0; background:#0c0e13; padding:17px 0 13px; border-bottom:1px solid var(--line); z-index:1; }
+  .detail-head h2 { margin:0; font-size:17px; color:var(--ink); word-break:break-all; }
+  .detail-head .sub { color:var(--muted); font-size:12px; margin-top:5px; word-break:break-all; }
+  .detail-actions { display:flex; gap:6px; flex-wrap:wrap; margin-top:9px; }
+  .detail-pane button { min-height:28px; color:var(--ink-2); background:var(--surface); border:1px solid var(--line); padding:0 10px; border-radius:4px; font-size:11px; cursor:pointer; }
+  .detail-pane button:hover { background:var(--surface-2); border-color:#646e7d; color:var(--ink); }
+  .io-section { margin-top:16px; padding:14px 15px; background:var(--surface); border:1px solid var(--line); border-radius:5px; }
+  .io-section.in-card { border-top:2px solid var(--blue); }
+  .io-section.out-card { border-top:2px solid var(--coral); }
+  .io-label { display:inline-block; font-size:13px; font-weight:700; letter-spacing:0; padding:4px 8px; border-radius:3px; margin-bottom:10px; }
+  .io-label.in  { color:#07101f; background:var(--blue); }
+  .io-label.out { color:#180c09; background:var(--coral); }
+  .io-label.kv  { color:var(--ink); background:var(--surface-3); border:1px solid var(--line); }
+  .io-meta { color:var(--muted); font-size:11px; margin-bottom:6px; }
+
+  /* ---- toast ---- */
+  .toast { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:var(--blue); border:1px solid var(--blue); color:#07101f; padding:8px 14px; border-radius:4px; font-size:12px; box-shadow:0 12px 40px rgba(0,0,0,.5); opacity:0; transition:opacity .2s; pointer-events:none; z-index:200; }
+  .toast.show { opacity:1; }
+
+  /* ---- modal + settings shell ---- */
+  .modal-mask { display:none; position:fixed; inset:0; background:rgba(0,0,0,.76); backdrop-filter:blur(6px); z-index:100; align-items:center; justify-content:center; }
   .modal-mask.show { display:flex; }
-  .modal { width:min(900px,92vw); height:min(80vh,720px); background:#0d1117; border:1px solid #30363d; border-radius:10px; display:flex; flex-direction:column; box-shadow:0 8px 40px rgba(0,0,0,0.55); }
-  .modal h3 { margin:0; padding:12px 16px; border-bottom:1px solid #21262d; font-size:14px; color:#c9d1d9; display:flex; align-items:center; gap:8px; }
+  .modal { width:min(900px,92vw); height:min(80vh,720px); background:#0c0e13; border:1px solid #4a5260; border-radius:6px; display:flex; flex-direction:column; box-shadow:0 28px 90px rgba(0,0,0,.65); }
+  .modal h3 { margin:0; min-height:52px; padding:10px 14px; border-bottom:1px solid var(--line); font-size:14px; color:var(--ink); background:var(--surface); display:flex; align-items:center; gap:8px; }
   .modal h3 .spacer { flex:1; }
-  .modal h3 button { background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:4px 10px; border-radius:6px; font-size:12px; cursor:pointer; }
-  .modal h3 button:hover { background:#30363d; }
-  .modal pre { flex:1; overflow:auto; margin:0; border:none; border-radius:0; }
-  .diag-hint { padding:10px 16px; border-bottom:1px solid #21262d; background:#161b22; color:#8b949e; font-size:12px; line-height:1.55; }
-  .diag-hint code { background:#0d1117; border:1px solid #30363d; border-radius:4px; padding:1px 5px; color:#c9d1d9; }
-  .set-shell { width:min(760px,94vw); height:min(84vh,660px); padding:0; position:relative; }
-  .set-close-x { position:absolute; top:8px; right:12px; z-index:2; width:28px; height:28px; border:none; background:transparent; color:#8b949e; font-size:20px; line-height:1; cursor:pointer; border-radius:6px; }
-  .set-close-x:hover { background:#21262d; color:#c9d1d9; }
+  .modal h3 button { min-height:30px; color:var(--ink-2); background:var(--bg); border:1px solid var(--line); padding:0 11px; border-radius:4px; font-size:12px; cursor:pointer; }
+  .modal h3 button:hover { background:var(--surface-2); border-color:#646e7d; }
+  .modal pre { flex:1; overflow:auto; margin:0; border:none; border-radius:0; background:transparent; padding:14px 16px; color:var(--ink-2); }
+  .diag-hint { padding:10px 16px; border-bottom:1px solid var(--line); background:#11151c; color:var(--muted); font-size:12px; line-height:1.55; }
+  .set-shell { width:min(980px,95vw); height:min(88vh,760px); padding:0; position:relative; }
+  .set-close-x { position:absolute; top:10px; right:12px; z-index:2; width:28px; height:28px; border:none; background:transparent; color:var(--muted); font-size:20px; line-height:1; cursor:pointer; border-radius:4px; }
+  .set-close-x:hover { background:var(--surface-3); color:var(--ink); }
   .set-layout { display:flex; flex:1; min-height:0; }
-  .set-nav { width:150px; flex-shrink:0; border-right:1px solid #21262d; padding:36px 8px 12px; display:flex; flex-direction:column; gap:2px; }
-  .set-nav button { display:block; width:100%; text-align:left; padding:8px 12px; border:none; background:transparent; color:#8b949e; border-radius:8px; font-size:13px; cursor:pointer; }
-  .set-nav button:hover { background:#161b22; color:#c9d1d9; }
-  .set-nav button.active { background:#21262d; color:#c9d1d9; font-weight:600; }
-  .set-main { flex:1; min-width:0; overflow-y:auto; padding:34px 26px 24px; }
+  .set-nav { width:190px; flex-shrink:0; border-right:1px solid var(--line); padding:48px 10px 14px; display:flex; flex-direction:column; gap:2px; background:#090b0f; }
+  .set-nav button { display:block; width:100%; text-align:left; min-height:38px; padding:8px 12px; border:none; border-left:3px solid transparent; background:transparent; color:var(--muted); border-radius:3px; font-size:13px; cursor:pointer; }
+  .set-nav button:hover { background:var(--surface); color:var(--ink); }
+  .set-nav button.active { background:#172136; color:var(--ink); border-left-color:var(--blue); font-weight:600; }
+  .set-main { flex:1; min-width:0; overflow-y:auto; padding:44px 32px 28px; }
   .set-page { display:none; } .set-page.active { display:block; }
-  .set-page h4 { margin:0 0 6px; font-size:18px; font-weight:600; color:#c9d1d9; }
-  .set-lead { margin:0 0 18px; font-size:12px; color:#8b949e; line-height:1.6; }
-  .set-section-title { color:#8b949e; font-size:11px; text-transform:uppercase; letter-spacing:.06em; margin:20px 0 8px; padding-top:4px; border-top:1px solid #21262d; }
-  .set-toggle-row { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding:12px 0; border-bottom:1px solid #21262d; }
+  .set-page h4 { margin:0 0 6px; font-size:18px; font-weight:600; color:var(--ink); }
+  .set-lead { margin:0 0 18px; font-size:12px; color:var(--muted); line-height:1.6; }
+  .set-section-title { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.06em; margin:20px 0 8px; padding-top:4px; border-top:1px solid var(--line); }
+  .set-toggle-row { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding:12px 0; border-bottom:1px solid var(--line); }
   .set-toggle-row .lab { flex:1; min-width:0; }
-  .set-toggle-row .lab b { display:block; font-size:13px; font-weight:600; color:#c9d1d9; }
-  .set-toggle-row .lab span { display:block; font-size:11px; color:#6e7681; margin-top:4px; line-height:1.55; }
+  .set-toggle-row .lab b { display:block; font-size:13px; font-weight:600; color:var(--ink); }
+  .set-toggle-row .lab span { display:block; font-size:11px; color:var(--muted); margin-top:4px; line-height:1.55; }
   .set-switch { position:relative; display:inline-block; width:44px; height:24px; flex-shrink:0; margin-top:2px; }
   .set-switch input { opacity:0; width:0; height:0; position:absolute; }
-  .set-switch .slider { position:absolute; inset:0; background:#30363d; border-radius:12px; cursor:pointer; transition:background .2s; }
-  .set-switch .slider:before { content:''; position:absolute; width:18px; height:18px; left:3px; top:3px; background:#c9d1d9; border-radius:50%; transition:transform .2s; }
-  .set-switch input:checked + .slider { background:#1f6feb; }
+  .set-switch .slider { position:absolute; inset:0; background:#414958; border-radius:12px; cursor:pointer; transition:background .2s; }
+  .set-switch .slider:before { content:''; position:absolute; width:18px; height:18px; left:3px; top:3px; background:var(--ink); border-radius:50%; transition:transform .2s; box-shadow:0 1px 2px rgba(0,0,0,.25); }
+  .set-switch input:checked + .slider { background:var(--blue); }
   .set-switch input:checked + .slider:before { transform:translateX(20px); }
-  .set-row { display:flex; align-items:center; gap:12px; padding:11px 0; border-bottom:1px solid #21262d; }
+  .set-row { display:flex; align-items:center; gap:12px; padding:11px 0; border-bottom:1px solid var(--line); }
   .set-row .lab { flex:1; }
-  .set-row .lab b { display:block; color:#c9d1d9; font-size:13px; font-weight:600; }
-  .set-row .lab span { display:block; color:#8b949e; font-size:11px; margin-top:2px; line-height:1.5; }
-  .set-row select { background:#0d1117; color:#c9d1d9; border:1px solid #30363d; padding:6px 9px; border-radius:6px; font-size:12px; min-width:120px; }
-  .set-row .val { color:#8b949e; font-size:12px; font-variant-numeric:tabular-nums; }
+  .set-row .lab b { display:block; color:var(--ink); font-size:13px; font-weight:600; }
+  .set-row .lab span { display:block; color:var(--muted); font-size:11px; margin-top:2px; line-height:1.5; }
+  .set-row select { min-width:120px; }
+  .set-row .val { color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; }
   .set-actions { display:flex; gap:10px; flex-wrap:wrap; padding-top:14px; align-items:center; }
-  .set-actions button, .set-actions label.filebtn { background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:7px 14px; border-radius:6px; font-size:12px; cursor:pointer; }
-  .set-actions button:hover, .set-actions label.filebtn:hover { background:#30363d; }
-  .set-actions button.danger { background:#3d1417; border-color:#5a1d1d; color:#ffa198; }
-  .set-actions button.save { background:#238636; border-color:#2ea043; color:#fff; }
-  .set-actions button.save:hover { background:#2ea043; }
-  #rawCfgText { width:100%; box-sizing:border-box; height:320px; margin-top:10px; background:#0d1117; color:#c9d1d9; border:1px solid #30363d; padding:12px; border-radius:6px; font-size:12px; line-height:1.5; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; resize:vertical; white-space:pre; }
-  .toast { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:#21262d; border:1px solid #30363d; padding:8px 14px; border-radius:6px; font-size:12px; box-shadow:0 4px 16px rgba(0,0,0,0.4); opacity:0; transition:opacity .2s; pointer-events:none; z-index:200; }
-  .toast.show { opacity:1; }
+  .set-actions button, .set-actions label.filebtn, .set-actions a.filebtn { min-height:34px; color:var(--ink-2); background:var(--surface); border:1px solid var(--line); padding:7px 14px; border-radius:4px; font-size:12px; cursor:pointer; text-decoration:none; }
+  .set-actions button:hover, .set-actions label.filebtn:hover, .set-actions a.filebtn:hover { background:var(--surface-2); border-color:#646e7d; }
+  .set-actions button.danger { color:var(--danger); background:#1d1015; border-color:#6d2f3d; }
+  .set-actions button.danger:hover { color:#17090c; background:var(--danger); }
+  .set-actions button.save { color:#07101f; background:var(--blue); border-color:var(--blue); font-weight:600; }
+  .set-actions button.save:hover { background:#93bcff; }
+  #rawCfgText { width:100%; box-sizing:border-box; height:320px; margin-top:10px; font-size:12px; line-height:1.5; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; resize:vertical; white-space:pre; }
+  label.ck { color:var(--muted); display:inline-flex; align-items:center; gap:5px; }
+
+  @media (max-width:980px) {
+    header { flex-wrap:wrap; } .stats { order:3; }
+    .workspace-name { display:none; }
+  }
+  @media (max-width:760px) {
+    .workspace { flex-direction:column; }
+    .list-pane { width:100% !important; height:42%; border-bottom:1px solid var(--line); }
+    .splitter { display:none; }
+    .filters input[type=search] { flex:1; width:auto; }
+  }
 </style>
 </head>
 <body>
 <header>
-  <span class="dot" id="conn"></span>
-  <h1>ADH 运行时观测台</h1>
-  <span class="muted" id="status">连接中…</span>
-  <span class="muted" id="access" title="点击复制 — 手机 / 同网设备浏览器可开"></span>
-  <span class="spacer"></span>
-  <button class="hbtn" id="mcpBtn" title="MCP 接入配置 — 让 AI 客户端经 HTTP 调用 ADH 的逆向工具">MCP</button>
-  <button class="hbtn" id="setBtn" title="捕获 / 数据 / 配置导入导出">设置</button>
-  <span class="muted">会话</span>
-  <select id="sess"><option value="">（最新在线）</option></select>
+  <div class="brand-lockup">
+    <h1><span class="hdr-mark">A</span>ADH<span class="ver">Android DecryptHub</span></h1>
+    <span class="workspace-name">Runtime Console</span>
+  </div>
+  <div class="stats" id="stats"><span class="status-dot" id="conn"></span><span id="status">连接中…</span></div>
+  <div class="header-actions">
+    <span class="muted" id="access" title="点击复制 — 手机 / 同网设备浏览器可开"></span>
+    <span class="lbl">会话</span>
+    <select id="sess"><option value="">（最新在线）</option></select>
+    <button class="hbtn" id="mcpBtn" title="MCP 接入配置 — 让 AI 客户端经 HTTP 调用 ADH 的逆向工具">MCP</button>
+    <button class="hbtn" id="setBtn" title="捕获 / 数据 / 配置导入导出">⚙ 设置</button>
+  </div>
 </header>
 
 <div class="procbar" id="procbar"><span class="muted">未连接目标 —— 在设备启动 App（模拟注入）后自动出现</span></div>
 
 <nav id="nav"></nav>
 
+<!-- 加解密/系统/网络 三个实时捕获 tab 共用这条过滤工具栏 -->
+<div class="filters" id="toolbar">
+  <div class="toolbar-filters">
+    <span id="catWrap"><label>分类</label>
+      <select id="tb-cat">
+        <option value="-2">全部</option>
+        <option value="0">摘要</option>
+        <option value="1">HMAC</option>
+        <option value="2">对称</option>
+        <option value="3">非对称</option>
+      </select></span>
+    <input id="tb-q" type="search" placeholder="搜索本类: 算法/操作/明文/预览…">
+    <span class="size-filter">
+      <label>输入大小</label>
+      <input id="tb-min" type="number" min="0" step="1" placeholder="0" title="最小字节">
+      <span class="sep">—</span>
+      <input id="tb-max" type="number" min="0" step="1" placeholder="不限" title="最大字节（留空不限）">
+      <span class="unit">B</span>
+      <button id="tb-clear" title="清除过滤">清除</button>
+    </span>
+  </div>
+  <div class="toolbar-actions">
+    <span id="count"></span>
+    <button id="tb-pause" class="warn">暂停</button>
+    <button id="tb-download">下载本类</button>
+    <button id="tb-clearcat" class="danger">清空本类</button>
+  </div>
+</div>
+
 <main>
-  <!-- 加解密（category=crypto，自动实时） -->
+  <!-- 加解密（category=crypto） -->
   <div class="panel active" id="p-crypto">
-    <div class="master">
-      <div class="row2" style="padding:10px 12px 0">
-        <span id="cc-stat" class="muted">等待捕获…</span>
-        <span class="spacer"></span>
-        <label class="ck"><input type="checkbox" id="cc-auto" checked> 自动滚动</label>
-        <button class="act" onclick="capClearP('cc')">清空</button>
+    <div class="workspace">
+      <div class="list-pane"><div id="cc-list"></div></div>
+      <div class="splitter"></div>
+      <div class="detail-pane" id="cc-detail">
+        <div class="detail-empty">实时加解密捕获（EVP/Digest/HMAC）。App 一跑加密就自动出现。<br>点任意一条查看 明文 / 密文 / 算法 / 线程 / 时间。</div>
       </div>
-      <div id="cc-list"></div>
-    </div>
-    <div class="detail" id="cc-detail">
-      <div class="empty">实时加解密捕获（EVP/Digest/HMAC）。App 一跑加密就自动出现。<br>点任意一条查看 明文 / 密文 / 算法 / 线程 / 时间。</div>
     </div>
   </div>
 
-  <!-- 系统（category=system + file：ptrace/access/属性 + 文件读写 hook） -->
+  <!-- 系统（category=system + file） -->
   <div class="panel" id="p-system">
-    <div class="master">
-      <div class="row2" style="padding:10px 12px 0">
-        <span id="sy-stat" class="muted">等待捕获…</span>
-        <span class="spacer"></span>
-        <label class="ck"><input type="checkbox" id="sy-auto" checked> 自动滚动</label>
-        <button class="act" onclick="capClearP('sy')">清空</button>
+    <div class="workspace">
+      <div class="list-pane"><div id="sy-list"></div></div>
+      <div class="splitter"></div>
+      <div class="detail-pane" id="sy-detail">
+        <div class="detail-empty">系统函数调用行为：反调试(ptrace)、路径探测(access)、读取手机信息(系统属性)，以及<b>文件读写</b>(open/read/write/close) 的常驻 hook 被动采集。</div>
       </div>
-      <div id="sy-list"></div>
-    </div>
-    <div class="detail" id="sy-detail">
-      <div class="empty">系统函数调用行为：反调试(ptrace)、路径探测(access)、读取手机信息(系统属性)，以及<b>文件读写</b>(open/read/write/close) 的常驻 hook 被动采集。</div>
     </div>
   </div>
 
-  <!-- 网络（category=net：SSL_read / SSL_write 明文） -->
+  <!-- 网络（category=net） -->
   <div class="panel" id="p-net">
-    <div class="master">
-      <div class="row2" style="padding:10px 12px 0">
-        <span id="nt-stat" class="muted">等待捕获…</span>
-        <span class="spacer"></span>
-        <label class="ck"><input type="checkbox" id="nt-auto" checked> 自动滚动</label>
-        <button class="act" onclick="capClearP('nt')">清空</button>
+    <div class="workspace">
+      <div class="list-pane"><div id="nt-list"></div></div>
+      <div class="splitter"></div>
+      <div class="detail-pane" id="nt-detail">
+        <div class="detail-empty">TLS 明文：常驻 hook <code>SSL_write</code>(发送) / <code>SSL_read</code>(接收)，在加密前/解密后拿到明文。</div>
       </div>
-      <div id="nt-list"></div>
-    </div>
-    <div class="detail" id="nt-detail">
-      <div class="empty">TLS 明文：常驻 hook <code>SSL_write</code>(发送) / <code>SSL_read</code>(接收)，在加密前/解密后拿到明文。</div>
     </div>
   </div>
 
-  <!-- 文件（目录浏览器：读取私有目录 + app 可读目录） -->
+  <!-- 文件（目录浏览器） -->
   <div class="panel" id="p-files">
     <div class="pad">
       <h2>文件浏览 — 目标可读目录</h2>
@@ -214,7 +320,7 @@
     </div>
   </div>
 
-  <!-- Dump（maps 映射 / 内存重组 .so / 区段 dump / 一键脱壳全部 dex） -->
+  <!-- Dump -->
   <div class="panel" id="p-dump">
     <div class="pad">
       <h2>Dump — 内存映射 / 模块 / 脱壳</h2>
@@ -266,7 +372,6 @@
     </div>
   </div>
 
-
   <!-- 内存/进程（手动操作） -->
   <div class="panel" id="p-mem">
     <div class="pad">
@@ -280,7 +385,7 @@
         <button class="act" onclick="run('GET','/api/compat/probe','兼容性自检')">兼容自检</button>
         <button class="act" onclick="run('GET','/api/crypto/hook_test','一次性明文抓取（沙盒自测）')">一次性抓明文(沙盒)</button>
       </div>
-      <div class="muted" style="margin:6px 0">标「沙盒」的按钮是<b>沙盒自测</b>——它们经 agent 反射触发 sandbox 里的 <code>Network/CorrelatedFlow/Detection/JavaCrypto</code> 测试类，对真实目标不会触发任何东西。真实目标上，TLS/加密明文由「加解密·实时」里的常驻 hook 被动采集。</div>
+      <div class="muted" style="margin:6px 0">标「沙盒」的按钮是<b>沙盒自测</b>——它们经 agent 反射触发 sandbox 里的 <code>Network/CorrelatedFlow/Detection/JavaCrypto</code> 测试类，对真实目标不会触发任何东西。真实目标上，TLS/加密明文由「加解密」里的常驻 hook 被动采集。</div>
       <pre id="out-mem" class="muted">选择一个操作（需目标在线）。</pre>
     </div>
   </div>
@@ -436,6 +541,7 @@
 // 顶栏五条主轴：加解密/系统/网络/文件/Dump。专家工具收进「高级」折叠。
 const TABS_MAIN=[['p-crypto','加解密','cc'],['p-system','系统','sy'],['p-net','网络','nt'],['p-files','文件'],['p-dump','Dump']];
 const TABS_ADV=[['p-mem','内存/进程'],['p-native','原生 .so'],['p-dexana','DEX 分析'],['p-events','事件'],['p-debug','调试']];
+const CAP_TABS={'p-crypto':'cc','p-system':'sy','p-net':'nt'};
 
 // ---- 调试台：统一记录请求/WS ----
 let dbgReqs=0, dbgErrs=0; const dbgLines=[];
@@ -455,6 +561,7 @@ const nav=document.getElementById('nav');
 function mkTab([id,label,key],active){ const b=document.createElement('button'); b.innerHTML=label+(key?` <span class="n" id="n-${key}"></span>`:''); if(active)b.className='active';
   b.onclick=()=>{ document.querySelectorAll('nav button').forEach(x=>x.classList.remove('active')); b.classList.add('active');
     document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active')); document.getElementById(id).classList.add('active');
+    onTabSwitch(id);
     if(id==='p-dump'){ loadDumps(); loadModules(); } if(id==='p-files') filesInit(); if(id==='p-events') loadEvents(); };
   return b; }
 TABS_MAIN.forEach((t,i)=>nav.appendChild(mkTab(t,i===0)));
@@ -522,19 +629,45 @@ async function rescanDex(){ const st=document.getElementById('dex-stat'); st.tex
 // ---- 实时捕获：单一 capItems，多面板按 category 分流（加解密 crypto / 系统 system+file / 网络 net） ----
 const capItems=[]; let capMaxId=0, capDisplayCap=300;
 const hexFmt=h=>(h||'').replace(/(.{64})/g,'$1\n');
-function capTag(algo){ if(/TLS/.test(algo)) return 'tls'; if(/Hmac|HMAC/i.test(algo)) return 'hmac'; if(/MD5|SHA|摘要|Digest/i.test(algo)) return 'dig'; return 'sym'; }
+// 分类色（对齐 IDH）：crypto 再按算法细分 digest/hmac/sym/asym；net/file/system 直接映射。
+function catClass(c){ if(!c) return 'other';
+  if(c.category==='net') return 'net'; if(c.category==='file') return 'file'; if(c.category==='system') return 'sys';
+  const a=c.algo||''; if(/Hmac|HMAC/i.test(a)) return 'hmac'; if(/MD5|SHA|摘要|Digest/i.test(a)) return 'digest';
+  if(/RSA|EC|DSA|非对称/i.test(a)) return 'asym'; return 'sym'; }
+const CATLABEL={digest:'摘要',hmac:'HMAC',sym:'对称',asym:'非对称',file:'文件',sys:'系统',net:'网络',other:'其它'};
+const CAT_BY_SEL={0:'digest',1:'hmac',2:'sym',3:'asym'};   // 分类下拉 → catClass
+// HexDump：16 字节/行  偏移: 十六进制  |ascii|
+function hexdump(hex){ hex=hex||''; let out='';
+  for(let i=0;i<hex.length;i+=32){ const rowHex=hex.slice(i,i+32); const off=(i/2).toString(16).padStart(8,'0');
+    let hp='',ascii='';
+    for(let j=0;j<rowHex.length;j+=2){ const b=parseInt(rowHex.slice(j,j+2),16); hp+=rowHex.slice(j,j+2)+' '; if((j/2)===7)hp+=' ';
+      ascii+=(b>=0x20&&b<0x7f)?String.fromCharCode(b):'.'; }
+    out+=off+': '+hp.padEnd(50)+' |'+ascii+'|\n'; }
+  return out; }
+
 const CAPPANELS={};
+let activeCapKey='cc';
+function applyFilter(p){ let items=capItems.filter(c=>p.cats.includes(c.category)); const f=p.filter;
+  if(f.q){ const q=f.q.toLowerCase(); items=items.filter(c=>((c.algo||'')+' '+(c.op||'')+' '+(c.preview||'')).toLowerCase().includes(q)); }
+  if(f.min!=null) items=items.filter(c=>c.inl>=f.min);
+  if(f.max!=null) items=items.filter(c=>c.inl<=f.max);
+  if(p.key==='cc'&&f.cat>=0){ const want=CAT_BY_SEL[f.cat]; items=items.filter(c=>catClass(c)===want); }
+  return items; }
+function rowHtml(key,sel,c){ const cc=catClass(c);
+  return `<div class="row cat-${cc} ${c.id===sel?'selected':''}" onclick="capSelectP('${key}',${c.id})">
+    <div class="top"><span class="seq">#${c.id}</span><span class="pill ${cc}">${CATLABEL[cc]}</span><span class="algo">${escapeHtml(c.algo)}</span><span class="op">${escapeHtml(c.op)}</span><span class="ts">${new Date(c.ts).toLocaleTimeString()}</span></div>
+    <div class="preview">${c.inl}B · ${escapeHtml(c.preview)}</div></div>`; }
 function makeCapPanel(key,cats){
-  const p={key,cats,sel:0};
+  const p={key,cats,sel:0,filter:{q:'',min:null,max:null,cat:-2,paused:false},lastShown:0};
   p.render=function(){ const box=document.getElementById(key+'-list'); if(!box) return;
-    const items=capItems.filter(c=>cats.includes(c.category));
+    const total=capItems.filter(c=>cats.includes(c.category)).length;
+    const badge=document.getElementById('n-'+key); if(badge) badge.textContent=total||'';
+    if(p.filter.paused){ if(activeCapKey===key) updateCount(p.lastShown,total); return; }
+    const items=applyFilter(p); p.lastShown=items.length;
     const shown=items.slice(-capDisplayCap);
-    box.innerHTML=shown.map(c=>`<div class="caprow ${c.id===p.sel?'sel':''}" onclick="capSelectP('${key}',${c.id})">
-        <div class="l1"><span class="tag ${capTag(c.algo)}">${escapeHtml(c.algo)}</span><span class="op">${escapeHtml(c.op)}</span><span class="ts">${new Date(c.ts).toLocaleTimeString()}</span></div>
-        <div class="pv">#${c.id} · ${c.inl}B · ${escapeHtml(c.preview)}</div></div>`).join('');
-    const stat=document.getElementById(key+'-stat'); if(stat) stat.textContent=`共 ${items.length} 条`;
-    const badge=document.getElementById('n-'+key); if(badge) badge.textContent=items.length||'';
-    if(document.getElementById(key+'-auto')?.checked) box.scrollTop=box.scrollHeight; };
+    box.innerHTML=shown.map(c=>rowHtml(key,p.sel,c)).join('')||'<div class="empty">暂无捕获</div>';
+    if(activeCapKey===key) updateCount(items.length,total);
+    box.scrollTop=box.scrollHeight; };
   p.select=async function(id){ p.sel=id; p.render();
     const c=await (await fetch('/api/captures/'+id)).json(); renderCaptureDetail(key+'-detail',c); };
   CAPPANELS[key]=p; return p;
@@ -545,24 +678,67 @@ makeCapPanel('nt',['net']);
 function capRenderAll(){ for(const k in CAPPANELS) CAPPANELS[k].render(); }
 function capSelectP(key,id){ CAPPANELS[key].select(id); }
 function capPush(c){ capItems.push(c); if(capItems.length>800) capItems.shift(); if(c.id>capMaxId)capMaxId=c.id; }
-function capClearP(key){ const cats=CAPPANELS[key].cats;
+function capClearP(key){ const p=CAPPANELS[key]; const cats=p.cats;
   for(let i=capItems.length-1;i>=0;i--) if(cats.includes(capItems[i].category)) capItems.splice(i,1);
-  CAPPANELS[key].sel=0; capRenderAll();
-  const d=document.getElementById(key+'-detail'); if(d) d.innerHTML='<div class="empty">已清空。</div>'; }
+  p.sel=0; capRenderAll();
+  const d=document.getElementById(key+'-detail'); if(d) d.innerHTML='<div class="detail-empty">已清空。</div>'; }
+const capDetailCache={};
+function copyCap(id,what){ const c=capDetailCache[id]; if(!c) return;
+  if(what==='all') copyText(JSON.stringify(c,null,2));
+  else if(what==='plain') copyText(c.text||'');
+  else if(what==='hex') copyText(c.hex||''); }
+function ioBody(hex,bytes,text){ let h='<div class="io-meta">'+bytes+' bytes</div>';
+  if(text!==undefined) h+='<h3>UTF-8</h3><pre>'+escapeHtml(text||'')+'</pre>';
+  if(hex){ h+='<h3>HEX</h3><pre class="hex">'+hexFmt(hex)+'</pre><h3>HexDump</h3><pre class="hex">'+escapeHtml(hexdump(hex))+'</pre>'; }
+  return h; }
 function renderCaptureDetail(detailId,c){ const d=document.getElementById(detailId); if(!d) return;
+  capDetailCache[c.id]=c; const cc=catClass(c);
   const src=c.source==='java'?'Java 层 · JCE (algorithm/key/iv 绑定)':'Native · 常驻 hook';
+  const acts='<div class="detail-actions">'+
+    `<button onclick="copyCap(${c.id},'all')">复制整条</button>`+
+    (c.text?`<button onclick="copyCap(${c.id},'plain')">复制明文</button>`:'')+
+    (c.hex?`<button onclick="copyCap(${c.id},'hex')">复制 Hex</button>`:'')+'</div>';
   const kvrow=(label,hex)=> hex?`<h3>${label} · ${hex.length/2}B</h3><pre class="hex">${hexFmt(hex)}</pre>`:'';
-  const kvCard=(c.keyHex||c.ivHex)?`<div class="io kv"><span class="io-label kv">密钥参数</span>${kvrow('Key',c.keyHex)}${kvrow('IV',c.ivHex)}</div>`:'';
-  const outCard=c.outHex?`<div class="io out"><span class="io-label out">密文 / 输出</span><h3>Hex · ${c.outHex.length/2}B</h3><pre class="hex">${hexFmt(c.outHex)}</pre></div>`:'';
-  d.innerHTML=`<div class="detail-head"><h2>#${c.id} · ${escapeHtml(c.algo)} · ${escapeHtml(c.op)}</h2>
-      <div class="sub">来源 ${src} · 线程 tid=${c.tid} · ${new Date(c.ts).toLocaleString()}</div></div>
+  const kvCard=(c.keyHex||c.ivHex)?`<div class="io-section kv-card"><span class="io-label kv">密钥参数</span>${kvrow('Key',c.keyHex)}${kvrow('IV',c.ivHex)}</div>`:'';
+  const outCard=c.outHex?`<div class="io-section out-card"><span class="io-label out">输出 / OUTPUT</span>${ioBody(c.outHex,c.outHex.length/2)}</div>`:'';
+  d.innerHTML=`<div class="detail-head"><h2><span class="cat-dot ${cc}"></span>#${c.id}  ${escapeHtml(c.algo)}</h2>
+      <div class="sub">${escapeHtml(c.op)} · 来源 ${src} · 线程 tid=${c.tid} · ${new Date(c.ts).toLocaleString()}</div>${acts}</div>
     ${kvCard}
-    <div class="io in"><span class="io-label in">明文 / 输入</span>
-      <h3>文本 · UTF-8</h3><pre>${escapeHtml(c.text||'')}</pre>
-      <h3>Hex · ${c.inl}B</h3><pre class="hex">${hexFmt(c.hex)}</pre></div>
+    <div class="io-section in-card"><span class="io-label in">输入 / INPUT</span>${ioBody(c.hex,c.inl,c.text||'')}</div>
     ${outCard}`; }
 async function capLoad(){ try{ const r=await (await fetch('/api/captures?since='+capMaxId)).json();
     (r.captures||[]).forEach(capPush); capRenderAll(); }catch(e){} }
+
+// ---- 过滤工具栏（加解密/系统/网络共用，作用于当前活动的捕获面板）----
+function updateCount(shown,total){ const el=document.getElementById('count'); if(el) el.textContent=`${shown} / ${total}`; }
+function updatePauseBtn(){ const b=document.getElementById('tb-pause'); const p=CAPPANELS[activeCapKey]; if(!b||!p) return;
+  b.textContent=p.filter.paused?'继续':'暂停'; b.classList.toggle('on',p.filter.paused); }
+function onTabSwitch(id){ const tb=document.getElementById('toolbar');
+  if(CAP_TABS[id]){ activeCapKey=CAP_TABS[id]; tb.classList.add('show'); const f=CAPPANELS[activeCapKey].filter;
+    document.getElementById('tb-q').value=f.q||'';
+    document.getElementById('tb-min').value=f.min==null?'':f.min;
+    document.getElementById('tb-max').value=f.max==null?'':f.max;
+    document.getElementById('tb-cat').value=String(f.cat);
+    document.getElementById('catWrap').style.display=(activeCapKey==='cc')?'':'none';
+    updatePauseBtn(); CAPPANELS[activeCapKey].render();
+  } else tb.classList.remove('show'); }
+function bindToolbar(){
+  const q=document.getElementById('tb-q'), mn=document.getElementById('tb-min'), mx=document.getElementById('tb-max'), cs=document.getElementById('tb-cat');
+  const num=v=>{ v=String(v).trim(); return v===''?null:(Number.isFinite(+v)?+v:null); };
+  q.addEventListener('input',()=>{ CAPPANELS[activeCapKey].filter.q=q.value; CAPPANELS[activeCapKey].render(); });
+  mn.addEventListener('input',()=>{ CAPPANELS[activeCapKey].filter.min=num(mn.value); CAPPANELS[activeCapKey].render(); });
+  mx.addEventListener('input',()=>{ CAPPANELS[activeCapKey].filter.max=num(mx.value); CAPPANELS[activeCapKey].render(); });
+  cs.addEventListener('change',()=>{ CAPPANELS[activeCapKey].filter.cat=Number(cs.value); CAPPANELS[activeCapKey].render(); });
+  document.getElementById('tb-clear').addEventListener('click',()=>{ const f=CAPPANELS[activeCapKey].filter;
+    f.q='';f.min=null;f.max=null;f.cat=-2; q.value='';mn.value='';mx.value='';cs.value='-2'; CAPPANELS[activeCapKey].render(); });
+  document.getElementById('tb-pause').addEventListener('click',()=>{ const p=CAPPANELS[activeCapKey];
+    p.filter.paused=!p.filter.paused; updatePauseBtn(); p.render(); });
+  document.getElementById('tb-clearcat').addEventListener('click',()=>capClearP(activeCapKey));
+  document.getElementById('tb-download').addEventListener('click',()=>{ const p=CAPPANELS[activeCapKey]; const items=applyFilter(p);
+    const blob=new Blob([JSON.stringify(items,null,2)],{type:'application/json'});
+    const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`adh-${activeCapKey}-captures.json`;
+    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href); toast(`已下载 ${items.length} 条`); });
+}
 
 // ---- 会话辅助 ----
 function sidQ(){ const s=val('sess'); return s?'&session='+encodeURIComponent(s):''; }
@@ -737,8 +913,8 @@ function render(){ const list=[...agents.values()].sort((a,b)=>a.connectedAt-b.c
 function upsert(a){ agents.set(a.sessionId,{...agents.get(a.sessionId),...a}); render(); }
 function setWsPill(s,cls){ const p=document.getElementById('dbg-ws'); if(p){p.textContent='ws: '+s;p.className='pill '+cls;} }
 function connect(){ const ws=new WebSocket(`ws://${location.host}/ws`); const conn=document.getElementById('conn'), st=document.getElementById('status');
-  ws.onopen=()=>{conn.classList.add('up');st.textContent='实时';setWsPill('live','on');dbg('WS','open');};
-  ws.onclose=()=>{conn.classList.remove('up');st.textContent='断开 — 重连中';setWsPill('down','no');dbg('WS','close');setTimeout(connect,1500);};
+  ws.onopen=()=>{conn.className='status-dot ok';st.textContent='实时';setWsPill('live','on');dbg('WS','open');};
+  ws.onclose=()=>{conn.className='status-dot';st.textContent='断开 — 重连中';setWsPill('down','no');dbg('WS','close');setTimeout(connect,1500);};
   ws.onmessage=e=>{const m=JSON.parse(e.data);
     if(m.event==='snapshot'){agents.clear();(m.data||[]).forEach(upsert);}
     else if(m.event==='agent.hello')upsert(m.data);
@@ -749,7 +925,17 @@ function connect(){ const ws=new WebSocket(`ws://${location.host}/ws`); const co
     dbg('WS←', m.event||'?');
   }; }
 connect();
+bindToolbar();
+onTabSwitch('p-crypto');
 capLoad(); setInterval(capLoad, 2000);   // 拉取实时捕获（WS + 轮询双保险）
+
+// ---- 分栏拖动（list-pane 宽度）----
+document.querySelectorAll('.splitter').forEach(sp=>{
+  sp.addEventListener('mousedown',e=>{ e.preventDefault(); const pane=sp.previousElementSibling; const ws=sp.parentElement;
+    const move=ev=>{ const rect=ws.getBoundingClientRect(); let w=ev.clientX-rect.left; w=Math.max(220,Math.min(rect.width-260,w)); pane.style.width=w+'px'; sp.classList.add('dragging'); };
+    const up=()=>{ document.removeEventListener('mousemove',move); document.removeEventListener('mouseup',up); sp.classList.remove('dragging'); };
+    document.addEventListener('mousemove',move); document.addEventListener('mouseup',up); });
+});
 
 // ---- 头部按钮 / 模态 / 设置 事件绑定 ----
 document.getElementById('mcpBtn').addEventListener('click', openMcp);
@@ -770,7 +956,7 @@ fetch('/api/config').then(r=>r.json()).then(r=>{ if(r.settings?.ui?.displayCap) 
 // 顶栏访问地址（局域网优先，点击复制）
 (async function showAccess(){ const el=document.getElementById('access'); if(!el) return;
   try{ const h=await (await fetch('/health')).json(); const lan=(h.web&&h.web.lan&&h.web.lan[0])||''; const local=(h.web&&h.web.local)||location.origin; const primary=lan||local;
-    el.innerHTML=`<b style="color:#58a6ff">${primary}</b>`+(lan?` <span class="muted">· 本机 ${local}</span>`:''); el.style.cursor='pointer';
+    el.innerHTML=`<b style="color:var(--blue)">${primary}</b>`+(lan?` <span class="muted">· 本机 ${local}</span>`:''); el.style.cursor='pointer';
     el.onclick=()=>{ navigator.clipboard?.writeText(primary); const o=el.innerHTML; el.innerHTML='✓ 已复制 '+primary; setTimeout(()=>el.innerHTML=o,1200); };
   }catch(e){} })();
 </script>

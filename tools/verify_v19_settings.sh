@@ -27,7 +27,7 @@ chk "persisted to settings.json"    '[ "$(cat "$ROOT/idhd-data/settings.json" | 
 # 3) settings export / import (section-merge on ui)
 chk "GET /api/settings/export 200"  '[ "$(curl -s "$BASE/api/settings/export" | jget ui.displayCap)" != "ERR" ]'
 IMP="$(curl -s -X POST "$BASE/api/settings/import" -H 'content-type: application/json' -d '{"ui":{"displayCap":150}}')"
-chk "import applied ui"             'echo "$IMP" | grep -q "\"ui\""'
+chk "import applied ui"             'grep -q "\"ui\"" <<<"$IMP"'
 chk "import readback displayCap"    '[ "$(curl -s "$BASE/api/config" | jget settings.ui.displayCap)" = "150" ]'
 chk "import rejects empty segs"     '[ "$(curl -s -o /dev/null -w %{http_code} -X POST "$BASE/api/settings/import" -H "content-type: application/json" -d "{\"nope\":1}")" = "400" ]'
 
@@ -37,11 +37,12 @@ chk "mcp config has cli equiv"      'curl -s "$BASE/api/mcp/config" | grep -q "c
 # 5) data clear endpoint validates input
 chk "/api/data/clear bad what=400"  '[ "$(curl -s -o /dev/null -w %{http_code} -X POST "$BASE/api/data/clear" -H "content-type: application/json" -d "{\"what\":\"bogus\"}")" = "400" ]'
 
-# 6) web wires the modals
+# 6) web wires the modals — use here-strings (grep <<<"$HTML"), NOT `echo "$HTML" | grep -q`:
+# under `pipefail` a >64KB page makes grep -q exit early on match → echo SIGPIPE(141) → false FAIL.
 HTML="$(curl -s "$BASE/")"
-chk "web has settings modal"        'echo "$HTML" | grep -q "set-shell" && echo "$HTML" | grep -q "set-switch"'
-chk "web has mcp modal"             'echo "$HTML" | grep -q "mcpMask"'
-chk "web wires import/export"        'echo "$HTML" | grep -q "settings/export" && echo "$HTML" | grep -q "settings/import"'
+chk "web has settings modal"        'grep -q "set-shell" <<<"$HTML" && grep -q "set-switch" <<<"$HTML"'
+chk "web has mcp modal"             'grep -q "mcpMask" <<<"$HTML"'
+chk "web wires import/export"        'grep -q "settings/export" <<<"$HTML" && grep -q "settings/import" <<<"$HTML"'
 
 # reset to defaults so downstream/repeat runs are stable
 curl -s -X POST "$BASE/api/config" -H 'content-type: application/json' -d '{"capture":{"retain":1000},"ui":{"displayCap":300}}' >/dev/null

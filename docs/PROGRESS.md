@@ -16,12 +16,13 @@
 
 ### v2.0+ 进度
 
-- [x] **Web UI 顶栏重构（2026-07-24）**：五条主 tab **加解密 / 系统 / 网络 / 文件 / Dump**（对齐 IDH 参考界面）。
-      · 加解密/系统/网络 = 同一条实时捕获流按 `category`（crypto / system+file / net）前端分流（后端 `categoryOf` 早已打标，零后端改动）；捕获面板抽成 `makeCapPanel(key,cats)` 工厂。
-      · **文件** = 目录浏览器（新能力）：agent 新增纯采集命令 `list_dir`/`read_file`（`agent/src/bootstrap/fs.c`），daemon `GET /api/fs/list` + `POST /api/fs/read`；浏览私有目录/app 可读目录、预览 + 下载。
-      · **Dump** = maps 模块表（`/api/modules` + 从内存重组 `.so` `/api/module/dump`）+ 手动区段 dump（`/api/memory/dump`）+ 一键脱壳下载全部 DEX（`/api/unpack/run`）+ dumps 列表。
-      · 专家工具（原生 .so / DEX 静态分析 / 事件 / 调试台）保留在「高级」折叠。
-      · 验证：`verify_v10_webui.sh`（新 tab + fs/modules 接线）+ 新增 `verify_v25_fsbrowser.sh`（真机：list_dir 私有目录 + read_file /proc/self/cmdline + 坏路径 fail-loud）**✅ PASS**（真机 13f54a46，重装 APK 后）。
+- [x] **Web UI 重皮 —— 移植 IDH「2026 workbench」设计语言（2026-07-24）**：`daemon/public/index.html` 整体重设，对齐 IDH 参考界面。
+      · 深墨蓝 token 体系（`--bg:#06070a`/`--surface`/`--blue:#78a9ff` + 分类色）+ Inter 字体；品牌头 brand-lockup + `Runtime Console` + 状态 pill；tabbar 计数胶囊（active 蓝底）。
+      · 三实时 tab（加解密/系统/网络）共用**过滤工具栏**：分类/搜索/输入大小 min-max/清除 + 暂停(冻结)/下载本类(导出 JSON)/清空本类；`makeCapPanel` 接入 per-panel 过滤态。
+      · 捕获行**分类色左边框**（digest 绿/hmac 蓝/对称 琥珀/非对称 紫/net 青/file 珊瑚）+ 分类胶囊；详情面板 cat-dot 标题 + 复制按钮 + IO 卡片（INPUT 蓝顶边 / OUTPUT 珊瑚顶边）+ **UTF-8/HEX/HexDump 三视图**（新增 `hexdump()` 偏移·十六进制·ascii）。
+      · 文件/Dump/模态/设置全部套新样式；list-pane 可拖动分栏。**零后端/agent 改动**，所有 fetch/函数/面板 id/WS 处理不变。
+      · 验证：headless(Playwright) 渲染**零 JS 错误** + 目视比对参考图一致；`verify_v10_webui.sh` 20/20 PASS（并修复该脚本一个潜伏 bug：`echo "$HTML"|grep -q` 在 `pipefail` 下遇 >64KB 页面因 grep 早退触发 echo SIGPIPE 误判 FAIL → 改 here-string `grep -q <<<"$HTML"`）。
+- [x] **顶栏五 tab 重构 + agent 目录浏览（2026-07-24，commit 125f286）**：加解密/系统/网络/文件/Dump。
 - [x] **v2.0** WS-D 协议重写（length-framed `[u32 len][u8 type][payload]`，去 8192 上限）**✅**
       + WS-C 环形缓冲/如实 dropped 上报 **✅ 完成并验证**（连续 push-drain 线程作为 WS-C 优化后续再上，见日志）
       + WS-C `cap_reset` 记账修复（丢弃环内记录计入 dropped，`emitted+backlog+dropped==seq` 恒成立）**✅**
