@@ -6,9 +6,8 @@
 # recursion, no crash). This is the foundation for algorithm-agnostic crypto/privacy hooks.
 # Exit 0 = PASS. Prereq: idhd running, device, sandbox running, tools/fetch_lsplant.sh ran.
 set -uo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-HTTP="${IDH_HTTP_PORT:-8760}"
-SERIAL="${IDH_SERIAL:-$(adb devices | awk 'NR==2{print $1}')}"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
+verify_resolve_env
 
 set +e
 OUT="$(node - "$HTTP" <<'EOF'
@@ -25,8 +24,5 @@ console.log(pass?'RESULT:PASS':'RESULT:FAIL');
 EOF
 )"
 echo "$OUT"
-ALIVE=$(adb -s "$SERIAL" shell pidof com.idh.sandbox 2>/dev/null | tr -d '\r ')
-echo "sandbox alive: ${ALIVE:-NO}"
-if echo "$OUT" | grep -q 'RESULT:PASS' && [ -n "$ALIVE" ]; then
-  echo "✅ v2.1 WS-A LSPlant Java-method hook PASS (init + hook + callback captured arg + original ran, no crash)"; exit 0
-else echo "❌ v2.1 WS-A FAIL"; exit 1; fi
+verify_sandbox_alive
+verify_gate "v2.1 WS-A LSPlant Java-method hook (init + hook + callback captured arg + original ran, no crash)" 1 && exit 0 || exit 1

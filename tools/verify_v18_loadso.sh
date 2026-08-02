@@ -4,7 +4,8 @@
 # inside the target and resolves its symbols. Uses the app's own libidhdetect.so (path
 # discovered from /proc/<pid>/maps) + a known symbol. Exit 0 = PASS.
 set -uo pipefail
-HTTP="${IDH_HTTP_PORT:-8760}"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
+verify_resolve_env_host
 
 set +e
 OUT="$(node - "$HTTP" <<'EOF'
@@ -26,6 +27,4 @@ console.log(pass?'RESULT:PASS':'RESULT:FAIL');
 EOF
 )"
 echo "$OUT" | grep -vE "Assertion failed|async\.c"
-if echo "$OUT" | grep -q 'RESULT:PASS'; then
-  echo "✅ v1.8 load_so PASS (从目标进程内按路径 dlopen 任意 .so + 符号解析 — frida-gadget 同理)"; exit 0
-else echo "❌ v1.8 load_so FAIL"; exit 1; fi
+verify_gate "v1.8 load_so (从目标进程内按路径 dlopen 任意 .so + 符号解析 — frida-gadget 同理)" 0 && exit 0 || exit 1

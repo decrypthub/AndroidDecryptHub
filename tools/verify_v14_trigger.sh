@@ -5,8 +5,8 @@
 # that gives a refill-type shell a chance to restore CodeItems (then re-snapshot + recover).
 # Exit 0 = PASS. Prereq: idhd + device + sandbox running.
 set -uo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-HTTP="${IDH_HTTP_PORT:-8760}"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
+verify_resolve_env_host
 
 set +e
 OUT="$(node - "$HTTP" <<'EOF'
@@ -31,6 +31,4 @@ console.log(pass?'RESULT:PASS':'RESULT:FAIL');
 EOF
 )"
 echo "$OUT"
-if echo "$OUT" | grep -q 'RESULT:PASS'; then
-  echo "✅ v1.4 active-trigger PASS (安全 static 方法被调用 · 危险方法按策略跳过 · 类可加载)"; exit 0
-else echo "❌ v1.4 trigger FAIL"; exit 1; fi
+verify_gate "v1.4 active-trigger (安全 static 方法被调用 · 危险方法按策略跳过 · 类可加载)" 0 && exit 0 || exit 1

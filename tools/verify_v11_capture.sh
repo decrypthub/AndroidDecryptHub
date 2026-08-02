@@ -5,8 +5,8 @@
 # decodes the (Chinese) plaintext. Also checks DEX was auto-dumped + is downloadable.
 # Exit 0 = PASS. Prereq: idhd + device + sandbox running (verify_all relaunches it).
 set -uo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-HTTP="${IDH_HTTP_PORT:-8760}"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
+verify_resolve_env_host
 
 # give the live driver (one op / ~2s) time to rotate through symmetric+digest+hmac
 sleep 16
@@ -39,6 +39,4 @@ console.log(pass?'RESULT:PASS':'RESULT:FAIL');
 EOF
 )"
 echo "$OUT"
-if echo "$OUT" | grep -q 'RESULT:PASS'; then
-  echo "✅ v1.1 live capture PASS (Java 层富采集: 算法+Key+IV+明文+密文 · 对称/摘要/HMAC · DEX 可下载)"; exit 0
-else echo "❌ v1.1 live capture FAIL"; exit 1; fi
+verify_gate "v1.1 live capture (Java 层富采集: 算法+Key+IV+明文+密文 · 对称/摘要/HMAC · DEX 可下载)" 0 && exit 0 || exit 1
