@@ -7,8 +7,8 @@
 #   4) dump again -> dedup=true (same sha, not rewritten)
 # Exit 0 = PASS. Prereq: idhd running, device attached, sandbox deployed+running.
 set -uo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-HTTP="${IDH_HTTP_PORT:-8760}"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
+verify_resolve_env_host
 
 set +e
 OUT="$(node - "$HTTP" <<'EOF'
@@ -62,4 +62,4 @@ console.log(pass?'RESULT:PASS':'RESULT:FAIL');
 EOF
 )"
 echo "$OUT"
-echo "$OUT" | grep -q 'RESULT:PASS' && exit 0 || exit 1
+verify_gate "v0.2 dump (search + dump + sha256 verified vs known content + dedup)" 0 && exit 0 || exit 1

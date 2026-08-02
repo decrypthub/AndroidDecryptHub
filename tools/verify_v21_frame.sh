@@ -11,9 +11,8 @@
 #      corruption/truncation (old 8192 single-line limit is gone).
 # Exit 0 = PASS. Prereq: idhd running, device, sandbox running.
 set -uo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-HTTP="${IDH_HTTP_PORT:-8760}"
-SERIAL="${IDH_SERIAL:-$(adb devices | awk 'NR==2{print $1}')}"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
+verify_resolve_env
 
 set +e
 OUT="$(node - "$HTTP" <<'EOF'
@@ -65,8 +64,5 @@ console.log(pass?'RESULT:PASS':'RESULT:FAIL');
 EOF
 )"
 echo "$OUT"
-ALIVE=$(adb -s "$SERIAL" shell pidof com.idh.sandbox 2>/dev/null | tr -d '\r ')
-echo "sandbox alive: ${ALIVE:-NO}"
-if echo "$OUT" | grep -q 'RESULT:PASS' && [ -n "$ALIVE" ]; then
-  echo "✅ v2.0 WS-D length-framed protocol PASS (1MB command frame past 8192 cap + 16MB dump byte-exact across 1MB/256KB frame sizes)"; exit 0
-else echo "❌ v2.0 WS-D FAIL"; exit 1; fi
+verify_sandbox_alive
+verify_gate "v2.0 WS-D length-framed protocol (1MB command frame past 8192 cap + 16MB dump byte-exact across 1MB/256KB frame sizes)" 1 && exit 0 || exit 1

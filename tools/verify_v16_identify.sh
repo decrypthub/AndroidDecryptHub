@@ -4,7 +4,8 @@
 # ASYMMETRIC(RSA) + digest + HMAC, with keys bound — so a non-expert can read off what the
 # app uses. Also checks the MCP crypto_identify tool returns the same. Exit 0 = PASS.
 set -uo pipefail
-HTTP="${IDH_HTTP_PORT:-8760}"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
+verify_resolve_env_host
 sleep 24   # let the live driver rotate through the full menu (incl RSA)
 
 set +e
@@ -29,6 +30,4 @@ console.log(pass?'RESULT:PASS':'RESULT:FAIL');
 EOF
 )"
 echo "$OUT" | grep -vE "Assertion failed|async\.c"
-if echo "$OUT" | grep -q 'RESULT:PASS'; then
-  echo "✅ v1.6 crypto identify PASS (对称+非对称+摘要+HMAC 自动识别 · 绑定密钥 · MCP 可调)"; exit 0
-else echo "❌ v1.6 identify FAIL"; exit 1; fi
+verify_gate "v1.6 crypto identify (对称+非对称+摘要+HMAC 自动识别 · 绑定密钥 · MCP 可调)" 0 && exit 0 || exit 1

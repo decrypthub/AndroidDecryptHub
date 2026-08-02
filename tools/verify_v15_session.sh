@@ -6,7 +6,8 @@
 # (unpacked) sandbox recovered=0 by design — this verifies the ORCHESTRATION end-to-end
 # (recovery correctness itself is proven byte-identical in v13). Exit 0 = PASS.
 set -uo pipefail
-HTTP="${IDH_HTTP_PORT:-8760}"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
+verify_resolve_env_host
 
 set +e
 OUT="$(node - "$HTTP" <<'EOF'
@@ -29,6 +30,4 @@ console.log(pass?'RESULT:PASS':'RESULT:FAIL');
 EOF
 )"
 echo "$OUT" | grep -vE "Assertion failed|async\.c"
-if echo "$OUT" | grep -q 'RESULT:PASS'; then
-  echo "✅ v1.5 unpack session PASS (T0→触发→T1→恢复 五阶段贯通 · 前后覆盖率 · 重建可解析)"; exit 0
-else echo "❌ v1.5 session FAIL"; exit 1; fi
+verify_gate "v1.5 unpack session (T0→触发→T1→恢复 五阶段贯通 · 前后覆盖率 · 重建可解析)" 0 && exit 0 || exit 1

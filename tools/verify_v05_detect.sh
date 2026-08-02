@@ -4,9 +4,8 @@
 # the agent observed the target's defense map: debug (ptrace TRACEME), root (su paths),
 # prop (ro.debuggable). Also neutralizes TRACEME (S). Target survives. Exit 0 = PASS.
 set -uo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-HTTP="${IDH_HTTP_PORT:-8760}"
-SERIAL="${IDH_SERIAL:-$(adb devices | awk 'NR==2{print $1}')}"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
+verify_resolve_env
 
 set +e
 OUT="$(node - "$HTTP" <<'EOF'
@@ -37,8 +36,5 @@ console.log(pass?'RESULT:PASS':'RESULT:FAIL');
 EOF
 )"
 echo "$OUT"
-ALIVE=$(adb -s "$SERIAL" shell pidof com.idh.sandbox 2>/dev/null | tr -d '\r ')
-echo "sandbox alive: ${ALIVE:-NO}"
-if echo "$OUT" | grep -q 'RESULT:PASS' && [ -n "$ALIVE" ]; then
-  echo "✅ v0.5 anti-analysis observation PASS (defense map captured, TRACEME neutralized)"; exit 0
-else echo "❌ v0.5 FAIL"; exit 1; fi
+verify_sandbox_alive
+verify_gate "v0.5 anti-analysis observation (defense map captured, TRACEME neutralized)" 1 && exit 0 || exit 1

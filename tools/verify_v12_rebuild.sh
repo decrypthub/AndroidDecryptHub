@@ -6,8 +6,8 @@
 #     the injected method's bytecode round-trips byte-identical (structural correctness).
 # This is the "index + rebuilder" foundation (no live packer needed). Exit 0 = PASS.
 set -uo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-HTTP="${IDH_HTTP_PORT:-8760}"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
+verify_resolve_env_host
 APK="$ROOT/sandbox-app/app/build/outputs/apk/debug/app-debug.apk"
 DEX="/tmp/base.dex"
 [ -s "$DEX" ] || unzip -p "$APK" classes.dex > "$DEX" 2>/dev/null
@@ -50,6 +50,4 @@ console.log((covOk&&rebuildOk&&rtOk)?'RESULT:PASS':'RESULT:FAIL');
 EOF
 )"
 echo "$OUT"
-if echo "$OUT" | grep -q 'RESULT:PASS'; then
-  echo "✅ v1.2 unpack foundation PASS (覆盖率报告 + 结构化重建器: 注入 CodeItem → 可解析 → 字节码一致)"; exit 0
-else echo "❌ v1.2 unpack FAIL"; exit 1; fi
+verify_gate "v1.2 unpack foundation (覆盖率报告 + 结构化重建器: 注入 CodeItem → 可解析 → 字节码一致)" 0 && exit 0 || exit 1

@@ -5,9 +5,9 @@
 #   2) POST /api/memory/read at a mapped .so's base -> bytes start with ELF magic 7f454c46
 # Exit 0 = PASS. Prereq: idhd running, device attached.
 set -uo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SERIAL="${IDH_SERIAL:-$(adb devices | awk 'NR==2{print $1}')}"
-HTTP="${IDH_HTTP_PORT:-8760}"; AGENT="${IDH_AGENT_PORT:-8761}"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
+verify_resolve_env
+AGENT="${IDH_AGENT_PORT:-8761}"
 JAVA_HOME="${JAVA_HOME:-C:\\Program Files\\Android\\Android Studio\\jbr}"; export JAVA_HOME
 PKG=com.idh.sandbox
 
@@ -71,4 +71,4 @@ EOF
 )"
 echo "$OUT"
 rm -f "$ROOT/_kmaps.txt"
-echo "$OUT" | grep -q 'RESULT:PASS' && exit 0 || exit 1
+verify_gate "v0.2 command-channel (on-demand maps + memory.read + magic scan)" 0 && exit 0 || exit 1

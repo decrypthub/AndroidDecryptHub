@@ -33,9 +33,8 @@
 # check, not "some record appeared". Exit 0 = PASS.
 # Prereq: idhd + device + sandbox running (verify_all relaunches it), capture enabled.
 set -uo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-HTTP="${IDH_HTTP_PORT:-8760}"
-SERIAL="${IDH_SERIAL:-$(adb devices | awk 'NR==2{print $1}')}"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
+verify_resolve_env
 
 set +e
 OUT="$(node - "$HTTP" <<'EOF'
@@ -126,8 +125,5 @@ console.log(pass?'RESULT:PASS':'RESULT:FAIL');
 EOF
 )"
 echo "$OUT"
-ALIVE=$(adb -s "$SERIAL" shell pidof com.idh.sandbox 2>/dev/null | tr -d '\r ')
-echo "sandbox alive: ${ALIVE:-NO}"
-if echo "$OUT" | grep -q 'RESULT:PASS' && [ -n "$ALIVE" ]; then
-  echo "✅ v2.1 native Signature/AEAD coverage PASS (ECDSA_sign/verify + EVP_AEAD_CTX_seal/open hooked and capturing via GOT + APS2-packed reloc scan, no LSPlant; KDF native one-shot capture PENDING — see script header)"; exit 0
-else echo "❌ v2.1 native crypto coverage FAIL"; exit 1; fi
+verify_sandbox_alive
+verify_gate "v2.1 native Signature/AEAD coverage (ECDSA_sign/verify + EVP_AEAD_CTX_seal/open hooked and capturing via GOT + APS2-packed reloc scan, no LSPlant; KDF native one-shot capture PENDING — see script header)" 1 && exit 0 || exit 1

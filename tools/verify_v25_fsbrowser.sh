@@ -3,7 +3,8 @@
 # back the web「文件」panel: list_dir a real directory + read_file a real file, both from
 # inside the target with the target's own permissions. Exit 0 = PASS.
 set -uo pipefail
-HTTP="${IDH_HTTP_PORT:-8760}"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
+verify_resolve_env_host
 
 set +e
 OUT="$(node - "$HTTP" <<'EOF'
@@ -28,6 +29,4 @@ console.log(pass?'RESULT:PASS':'RESULT:FAIL');
 EOF
 )"
 echo "$OUT" | grep -vE "Assertion failed|async\.c"
-if echo "$OUT" | grep -q 'RESULT:PASS'; then
-  echo "✅ v2.5 fs browser PASS (list_dir 私有目录 + read_file 真实文件 + 坏路径 fail-loud)"; exit 0
-else echo "❌ v2.5 fs browser FAIL"; exit 1; fi
+verify_gate "v2.5 fs browser (list_dir 私有目录 + read_file 真实文件 + 坏路径 fail-loud)" 0 && exit 0 || exit 1

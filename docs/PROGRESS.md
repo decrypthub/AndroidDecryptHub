@@ -36,6 +36,7 @@
       · **KDF（PBKDF2/HKDF/scrypt）原生一次性捕获仍是 PENDING**：`PKCS5_PBKDF2_HMAC`/`HKDF` 根本不被 `libjavacrypto.so` 导入（`llvm-readelf --dyn-syms` 确认），`EVP_PBE_scrypt` 虽可 hook 但无 Android JCA provider 调用它——Android 自己的 `PBKDF2WithHmacSHA256` 是纯 Java 迭代 `Mac.doFinal`，无原生一次性 KDF 调用可拦截；不伪造覆盖，诚实标 PENDING
       · 验证：`tools/verify_v26_cryptocoverage.sh`（新增）连续多次 fresh-restart 测试 PASS；`tools/verify_all.sh` 41/41 全绿
       · 修了一个验收脚本自身的竞态：`aeadDemo` 一次触发产出 3 条相关捕获（原生 GCM 密文/原生 ChaCha 密文/沙盒自带 IdhReport Java 富捕获），轮询一见到第一条就提前返回，导致偶发 `aeadMarker=false`——加 `settleTicks` 让轮询在断言满足后再多等几拍
+- [x] **结构重构 Phase 1 — tools 测试库（2026-08-03）**：抽出 `tools/lib/verify_common.sh`（resolve_env/sandbox_alive/gate/grep_q/host_begin+chk+finish，here-string grep 修 SIGPIPE 假 FAIL）+ `tools/lib/env.sh`（SDK/NDK/CMAKE/NINJA/TOOLCHAIN/READELF/ROOT/ABI，build_agent+build_detect 共享）；33 个 verify 脚本转 source 库（node heredoc 全 verbatim，只换 shell boilerplate），三种 idiom（device-alive / device-host node-heredoc / host-chk）各保其形；`tools/MAP.md` 导航 + 加脚本配方。**verify_all 41/41 全绿**（两轮：首轮 v08_disasm/analyze 瞬时 flake，次轮 41/41）。v23 故意排除（LSPlant 在本 ROM 阻断）——把静默排除显式化注释而非加回（fail-loud，避免未来 AI 误"修"致每次红）。已知预存 flake：v08 .so 重建路径 `readMem` short-read 早退（index.ts:663）→ Phase 2 dump.ts 抽取时处理。
 - [ ] v2.2 WS-A inline 后端(ShadowHook)
 - [ ] v2.3 WS-F 持久索引 + 深解析 + 反射
 - [ ] v2.4 WS-E 脱壳二代 + try/catch + cdex/041（需样本，否则 PENDING）

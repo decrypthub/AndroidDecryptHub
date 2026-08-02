@@ -7,8 +7,8 @@
 #   4) assert repaired checksum/signature/file_size EXACTLY match the original good dex
 # Exit 0 = PASS. Prereq: idhd running; sandbox APK built.
 set -uo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-HTTP="${IDH_HTTP_PORT:-8760}"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
+verify_resolve_env_host
 APK="$ROOT/sandbox-app/app/build/outputs/apk/debug/app-debug.apk"
 [ -f "$APK" ] || { echo "❌ APK missing (build sandbox first)"; echo "RESULT:FAIL"; exit 1; }
 
@@ -43,4 +43,4 @@ EOF
 )"
 echo "$OUT"
 rm -f "$TMP"
-echo "$OUT" | grep -q 'RESULT:PASS' && exit 0 || exit 1
+verify_gate "v0.2 dex-repair (corrupted header restored to match real dex byte-for-byte)" 0 && exit 0 || exit 1

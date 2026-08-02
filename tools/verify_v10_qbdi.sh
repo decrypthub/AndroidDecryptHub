@@ -5,8 +5,8 @@
 # Requires libQBDI.so bundled (tools/fetch_qbdi.sh). SKIPs cleanly if QBDI unavailable.
 # Exit 0 = PASS (or SKIP). Prereq: idhd, device, sandbox running with libQBDI bundled.
 set -uo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-HTTP="${IDH_HTTP_PORT:-8760}"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
+verify_resolve_env_host
 
 set +e
 OUT="$(node - "$HTTP" <<'EOF'

@@ -5,7 +5,8 @@
 # re-snapshots and recovers. No AOSP flashing. Asserts many classes were enumerated+loaded,
 # the safe method still invoked, and per-dex recovery reported + rebuilt parses. Exit 0=PASS.
 set -uo pipefail
-HTTP="${IDH_HTTP_PORT:-8760}"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
+verify_resolve_env_host
 
 set +e
 OUT="$(node - "$HTTP" <<'EOF'
@@ -28,6 +29,4 @@ console.log(pass?'RESULT:PASS':'RESULT:FAIL');
 EOF
 )"
 echo "$OUT" | grep -vE "Assertion failed|async\.c"
-if echo "$OUT" | grep -q 'RESULT:PASS'; then
-  echo "✅ v1.7 deep unpack PASS (按包名枚举全类主动加载 · 安全调用 · 恢复+重建，无需刷 AOSP)"; exit 0
-else echo "❌ v1.7 deep unpack FAIL"; exit 1; fi
+verify_gate "v1.7 deep unpack (按包名枚举全类主动加载 · 安全调用 · 恢复+重建，无需刷 AOSP)" 0 && exit 0 || exit 1

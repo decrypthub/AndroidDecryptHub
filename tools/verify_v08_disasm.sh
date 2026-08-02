@@ -3,8 +3,8 @@
 # by symbol and returns structured instructions. Verifies the agent's own
 # idh_agent_start disassembles to valid arm64 (prologue stp + a ret). Exit 0 = PASS.
 set -uo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-HTTP="${IDH_HTTP_PORT:-8760}"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
+verify_resolve_env_host
 SO="$ROOT/agent/build/libidh_agent.so"
 [ -f "$SO" ] || { echo "❌ agent .so missing (build first)"; echo "RESULT:FAIL"; exit 1; }
 
@@ -27,4 +27,4 @@ console.log(pass?'RESULT:PASS':'RESULT:FAIL');
 EOF
 )"
 echo "$OUT"
-echo "$OUT" | grep -q 'RESULT:PASS' && exit 0 || exit 1
+verify_gate "v0.8 native disassembly (idh_agent_start -> valid arm64)" 0 && exit 0 || exit 1

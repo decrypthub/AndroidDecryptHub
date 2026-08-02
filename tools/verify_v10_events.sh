@@ -4,9 +4,8 @@
 # confirm it's in /api/events, RESTART idhd, and confirm it STILL appears (replayed
 # from disk). Exit 0 = PASS. Prereq: device + sandbox.
 set -uo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-HTTP="${IDH_HTTP_PORT:-8760}"
-SERIAL="${IDH_SERIAL:-$(adb devices | awk 'NR==2{print $1}')}"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
+verify_resolve_env
 
 # ensure a fresh agent.hello is recorded
 adb -s "$SERIAL" reverse tcp:8761 tcp:8761 >/dev/null 2>&1 || true

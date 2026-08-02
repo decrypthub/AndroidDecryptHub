@@ -3,8 +3,8 @@
 # stripped native lib by constant signatures (no symbols). libidhdetect.so embeds the
 # real AES S-box + Base64 alphabet; the scan must find both. Exit 0 = PASS.
 set -uo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-HTTP="${IDH_HTTP_PORT:-8760}"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
+verify_resolve_env_host
 bash "$ROOT/tools/build_detect.sh" >/dev/null 2>&1
 SO="$ROOT/sandbox-app/app/src/main/jniLibs/arm64-v8a/libidhdetect.so"
 [ -f "$SO" ] || { echo "❌ libidhdetect.so missing"; echo "RESULT:FAIL"; exit 1; }
@@ -22,4 +22,4 @@ console.log(pass?'RESULT:PASS':'RESULT:FAIL');
 EOF
 )"
 echo "$OUT"
-echo "$OUT" | grep -q 'RESULT:PASS' && exit 0 || exit 1
+verify_gate "v0.9 native crypto-constant scan (AES S-box + Base64 alphabet found)" 0 && exit 0 || exit 1

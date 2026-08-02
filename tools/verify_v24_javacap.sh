@@ -8,8 +8,8 @@
 # proving the target-agnostic RegisterNatives binding actually works. Exit 0 = PASS.
 # Prereq: idhd + device + sandbox running (verify_all relaunches it).
 set -uo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-HTTP="${IDH_HTTP_PORT:-8760}"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
+verify_resolve_env_host
 
 # let the live driver (one op / ~2s) push a few JCE ops through the reporter
 sleep 8
@@ -33,6 +33,4 @@ console.log(pass?'RESULT:PASS':'RESULT:FAIL');
 EOF
 )"
 echo "$OUT"
-if echo "$OUT" | grep -q 'RESULT:PASS'; then
-  echo "✅ v2.x Java rich-capture PASS (decoupled RegisterNatives: 算法+Key+IV+明文+密文)"; exit 0
-else echo "❌ v2.x Java rich-capture FAIL"; exit 1; fi
+verify_gate "v2.x Java rich-capture (decoupled RegisterNatives: 算法+Key+IV+明文+密文)" 0 && exit 0 || exit 1

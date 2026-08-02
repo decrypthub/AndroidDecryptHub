@@ -4,8 +4,8 @@
 # access() in libidhdetect during Detection.run() -> expects 2 calls (su-path
 # checks) on one thread. Exit 0 = PASS. Prereq: idhd, device, sandbox running.
 set -uo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-HTTP="${IDH_HTTP_PORT:-8760}"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
+verify_resolve_env_host
 
 set +e
 OUT="$(node - "$HTTP" <<'EOF'
@@ -25,4 +25,4 @@ console.log(pass?'RESULT:PASS':'RESULT:FAIL');
 EOF
 )"
 echo "$OUT"
-echo "$OUT" | grep -q 'RESULT:PASS' && exit 0 || exit 1
+verify_gate "v1.0 native function tracer (access() args + tid + ts captured)" 0 && exit 0 || exit 1

@@ -4,8 +4,8 @@
 # symbols survive). Target = libidh_agent.so itself (guaranteed loaded, known exports).
 # Exit 0 = PASS. Prereq: idhd running, device attached, sandbox running.
 set -uo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-HTTP="${IDH_HTTP_PORT:-8760}"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
+verify_resolve_env_host
 NDK="${ANDROID_NDK_HOME:-$HOME/AppData/Local/Android/Sdk/ndk/28.2.13676358}"
 READELF="$NDK/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-readelf.exe"
 

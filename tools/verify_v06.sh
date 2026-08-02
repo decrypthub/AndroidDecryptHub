@@ -3,8 +3,8 @@
 # Reads HeapProbe.sConfig (a Config with known values) and asserts token/count/note.
 # Exit 0 = PASS. Prereq: idhd running, device, sandbox running.
 set -uo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-HTTP="${IDH_HTTP_PORT:-8760}"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
+verify_resolve_env_host
 
 set +e
 OUT="$(node - "$HTTP" <<'EOF'
@@ -31,4 +31,4 @@ console.log(pass?'RESULT:PASS':'RESULT:FAIL');
 EOF
 )"
 echo "$OUT"
-echo "$OUT" | grep -q 'RESULT:PASS' && exit 0 || exit 1
+verify_gate "v0.6 runtime object inspector (live object field read + method invoke)" 0 && exit 0 || exit 1

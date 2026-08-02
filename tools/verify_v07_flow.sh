@@ -4,9 +4,8 @@
 # plaintext (IDH_CORRELATE_v1) with the TLS request carrying its ciphertext, by
 # same thread + time window. Exit 0 = PASS.
 set -uo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-HTTP="${IDH_HTTP_PORT:-8760}"
-SERIAL="${IDH_SERIAL:-$(adb devices | awk 'NR==2{print $1}')}"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
+verify_resolve_env
 TLS_PORT="${IDH_TLS_PORT:-8762}"
 PT="IDH_CORRELATE_v1"
 
@@ -32,6 +31,4 @@ console.log(pass?'RESULT:PASS':'RESULT:FAIL');
 EOF
 )"
 echo "$OUT"
-if echo "$OUT" | grep -q 'RESULT:PASS'; then
-  echo "✅ v0.7 network<->crypto correlation PASS (plaintext linked to its encrypted request)"; exit 0
-else echo "❌ v0.7 correlation FAIL"; exit 1; fi
+verify_gate "v0.7 network<->crypto correlation (plaintext linked to its encrypted request)" 0 && exit 0 || exit 1

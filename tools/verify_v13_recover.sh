@@ -7,8 +7,8 @@
 # pipeline (the design's P1) with a deterministic signal — no live packer needed.
 # Exit 0 = PASS.
 set -uo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-HTTP="${IDH_HTTP_PORT:-8760}"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
+verify_resolve_env_host
 APK="$ROOT/sandbox-app/app/build/outputs/apk/debug/app-debug.apk"
 DEX="/tmp/base.dex"
 [ -s "$DEX" ] || unzip -p "$APK" classes.dex > "$DEX" 2>/dev/null
@@ -54,6 +54,4 @@ console.log(pass?'RESULT:PASS':'RESULT:FAIL');
 EOF
 )"
 echo "$OUT" | grep -vE "Assertion failed|async\.c"
-if echo "$OUT" | grep -q 'RESULT:PASS'; then
-  echo "✅ v1.3 gen-2 recovery PASS (抽取→从恢复镜像捕获 CodeItem→重建→字节码一致)"; exit 0
-else echo "❌ v1.3 recovery FAIL"; exit 1; fi
+verify_gate "v1.3 gen-2 recovery (抽取→从恢复镜像捕获 CodeItem→重建→字节码一致)" 0 && exit 0 || exit 1
