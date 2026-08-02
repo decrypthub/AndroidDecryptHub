@@ -5,10 +5,13 @@ import android.util.Log
 import java.security.KeyPairGenerator
 import java.security.MessageDigest
 import java.security.PublicKey
+import java.security.Signature
 import javax.crypto.Cipher
 import javax.crypto.Mac
+import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.IvParameterSpec
+import javax.crypto.spec.PBEKeySpec
 import javax.crypto.spec.SecretKeySpec
 
 // Deterministic crypto with known key/iv/plaintext. Two roles:
@@ -127,5 +130,50 @@ object JavaCrypto {
             try { op(pt); ok++ } catch (t: Throwable) { Log.w(TAG, "once[$name] fail: ${t.message}") }
         }
         return "全部算法 $ok/${MENU.size} 已触发"
+    }
+
+    // ---- v2.1: RSA/ECDSA Signature + KDF(PBKDF2) + AEAD(GCM/ChaCha20-Poly1305) demos ----
+    // These hit native EVP_PKEY_sign/verify, PKCS5_PBKDF2_HMAC and EVP_AEAD_CTX_seal/open
+    // (see agent_main.c) — the previously-unhookable BoringSSL one-shot AEAD path.
+
+    private val ecKeyPair by lazy { KeyPairGenerator.getInstance("EC").apply { initialize(256) }.generateKeyPair() }
+    const val SIGN_TBS = "IDH_SIGN_TBS_v1"
+
+    @JvmStatic
+    fun sigDemo(): String {
+        val msg = SIGN_TBS.toByteArray(Charsets.UTF_8)
+        val s = Signature.getInstance("SHA256withECDSA"); s.initSign(ecKeyPair.private); s.update(msg)
+        val sig = s.sign()
+        val v = Signature.getInstance("SHA256withECDSA"); v.initVerify(ecKeyPair.public); v.update(msg)
+        val ok = v.verify(sig)
+        Log.i(TAG, "ECDSA sig(b64)=" + Base64.encodeToString(sig, Base64.NO_WRAP) + " verify=$ok")
+        return "ECDSA sign+verify ok=$ok"
+    }
+
+    const val KDF_PASS = "IDH_KDF_PASSWORD_v1"
+    private val KDF_SALT = "IDH_KDF_SALT_16B".toByteArray(Charsets.US_ASCII)
+
+    @JvmStatic
+    fun kdfDemo(): String {
+        val f = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
+        val key = f.generateSecret(PBEKeySpec(KDF_PASS.toCharArray(), KDF_SALT, 10000, 256)).encoded
+        Log.i(TAG, "PBKDF2 key(b64)=" + Base64.encodeToString(key, Base64.NO_WRAP))
+        return "PBKDF2 key derived ${key.size}B"
+    }
+
+    const val AEAD_PLAINTEXT = "IDH_AEAD_PLAINTEXT_v1"
+
+    @JvmStatic
+    fun aeadDemo(): String {
+        val c = Cipher.getInstance("AES/GCM/NoPadding")
+        c.init(Cipher.ENCRYPT_MODE, SecretKeySpec(AES_KEY16, "AES"), GCMParameterSpec(128, IV.copyOf(12)))
+        c.doFinal(AEAD_PLAINTEXT.toByteArray(Charsets.UTF_8))
+        var chacha = false
+        try {
+            val cc = Cipher.getInstance("ChaCha20-Poly1305")
+            cc.init(Cipher.ENCRYPT_MODE, SecretKeySpec(AES_KEY32, "ChaCha20"), IvParameterSpec(IV.copyOf(12)))
+            cc.doFinal(AEAD_PLAINTEXT.toByteArray(Charsets.UTF_8)); chacha = true
+        } catch (t: Throwable) { Log.w(TAG, "ChaCha20-Poly1305 unavailable: ${t.message}") }
+        return "AEAD ops fired chacha=$chacha"
     }
 }

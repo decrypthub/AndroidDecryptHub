@@ -162,7 +162,7 @@ const DEFAULT_SETTINGS: Settings = {
   // fileModule/sysModule: which loaded module's GOT the persistent file(open/read/…) and
   // system(ptrace/access/getprop) hooks patch. Defaults are the sandbox-backing modules for
   // self-test; override per real target (empty string = don't install that category's hooks).
-  capture: { enabled: true, autoDumpDex: true, retain: 1000, families: { digest: true, hmac: true, symmetric: true, asymmetric: true, tls: true }, cryptoModule: 'libjavacrypto.so', fileModule: 'libjavacore.so', sysModule: 'libidhdetect.so' },
+  capture: { enabled: true, autoDumpDex: true, retain: 1000, families: { digest: true, hmac: true, symmetric: true, asymmetric: true, tls: true, kdf: true, aead: true }, cryptoModule: 'libjavacrypto.so', fileModule: 'libjavacore.so', sysModule: 'libidhdetect.so' },
   ui: { displayCap: 300 },
 };
 let settings: Settings = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
@@ -201,8 +201,10 @@ function saveSettings() { writeFileSync(SETTINGS_FILE, JSON.stringify(settings, 
 function configStats() { return { captures: captures.length, dumps: dumps.size, events: events.length, on: captureTimers.size > 0, agents: sessions.size, capture: captureHealth() }; }
 // Which crypto family a capture belongs to (mirrors cryptoIdentify's buckets) — used by the
 // idhd-side family filter (panel-level; the agent still hooks everything).
-function familyOf(algo: string): 'tls' | 'asymmetric' | 'hmac' | 'digest' | 'symmetric' {
+function familyOf(algo: string): 'tls' | 'asymmetric' | 'hmac' | 'digest' | 'symmetric' | 'kdf' | 'aead' {
   if (/TLS/.test(algo)) return 'tls';
+  if (/KDF/i.test(algo)) return 'kdf';
+  if (/AEAD/i.test(algo)) return 'aead';
   if (/RSA|(^|[^m])EC[^B]|ECDSA|DSA/i.test(algo)) return 'asymmetric';
   if (/Hmac|HMAC/i.test(algo)) return 'hmac';
   if (/MD5|SHA|摘要|Digest/i.test(algo)) return 'digest';
@@ -312,7 +314,14 @@ function categoryOf(func: string): CapCategory {
 function classify(func: string): { algo: string; op: string } {
   if (func.startsWith('EVP_Cipher') || func.startsWith('EVP_Encrypt') || func.startsWith('EVP_Decrypt'))
     return { algo: '对称加解密', op: '明文' };
-  if (func === 'HMAC_Update' || func === 'EVP_DigestSignUpdate') return { algo: 'HMAC', op: '消息' };
+  if (func === 'HMAC_Update' || func === 'EVP_DigestSignUpdate' || func === 'EVP_DigestVerifyUpdate') return { algo: 'HMAC', op: '消息' };
+  // EVP_DigestSign/VerifyUpdate+Final also serve JCA Signature (RSA/EC) on this BoringSSL build —
+  // the agent disambiguates via EVP_PKEY_id() at Init time and tags the asymmetric case distinctly
+  // (see agent_main.c dsign_ctx_* — real call path for Conscrypt's SHA256withECDSA, not ECDSA_sign).
+  if (func === 'EVP_DSignUpdate_asym')   return { algo: 'RSA/EC 签名', op: '待签名数据' };
+  if (func === 'EVP_DSignFinal_sig')     return { algo: 'RSA/EC 签名', op: '签名结果' };
+  if (func === 'EVP_DVerifyUpdate_asym') return { algo: 'RSA/EC 验签', op: '待验签数据' };
+  if (func === 'EVP_DVerifyFinal_sig')   return { algo: 'RSA/EC 验签', op: '签名值' };
   if (func.startsWith('EVP_Digest')) return { algo: '摘要 Digest', op: '输入' };
   if (func === 'SSL_write') return { algo: 'TLS', op: '发送明文' };
   if (func === 'SSL_read') return { algo: 'TLS', op: '接收明文' };
@@ -323,6 +332,21 @@ function classify(func: string): { algo: string; op: string } {
   if (func === 'ptrace') return { algo: 'ptrace', op: '反调试检测' };
   if (func === 'access') return { algo: 'access', op: '路径探测' };
   if (func === 'sysprop' || func === '__system_property_get') return { algo: '系统属性', op: '读取手机信息' };
+  if (func === 'ECDSA_sign_digest')    return { algo: 'RSA/EC 签名', op: '待签名数据' };
+  if (func === 'ECDSA_sign_sig')       return { algo: 'RSA/EC 签名', op: '签名结果' };
+  if (func === 'ECDSA_verify_digest')  return { algo: 'RSA/EC 验签', op: '待验签数据' };
+  if (func === 'ECDSA_verify_sig')     return { algo: 'RSA/EC 验签', op: '签名值' };
+  if (func === 'EVP_PKEY_encrypt_in')  return { algo: 'RSA 非对称加密', op: '明文输入' };
+  if (func === 'EVP_PKEY_encrypt_out') return { algo: 'RSA 非对称加密', op: '密文输出' };
+  if (func === 'EVP_PKEY_decrypt_in')  return { algo: 'RSA 非对称解密', op: '密文输入' };
+  if (func === 'EVP_PKEY_decrypt_out') return { algo: 'RSA 非对称解密', op: '明文输出' };
+  if (func.startsWith('PBKDF2_')) return { algo: 'PBKDF2 KDF', op: func === 'PBKDF2_key' ? '派生密钥' : func === 'PBKDF2_salt' ? '盐值' : '口令' };
+  if (func.startsWith('HKDF_'))   return { algo: 'HKDF KDF', op: func === 'HKDF_key' ? '派生密钥' : func === 'HKDF_salt' ? '盐值' : '输入密钥材料' };
+  if (func.startsWith('scrypt_')) return { algo: 'scrypt KDF', op: func === 'scrypt_key' ? '派生密钥' : func === 'scrypt_salt' ? '盐值' : '口令' };
+  if (func === 'EVP_AEAD_seal_pt' || func === 'EVP_AEAD_seal_ct')
+    return { algo: 'AEAD 加密(GCM/ChaCha20-Poly1305)', op: func === 'EVP_AEAD_seal_pt' ? '明文' : '密文+Tag' };
+  if (func === 'EVP_AEAD_open_ct' || func === 'EVP_AEAD_open_pt')
+    return { algo: 'AEAD 解密(GCM/ChaCha20-Poly1305)', op: func === 'EVP_AEAD_open_ct' ? '密文+Tag' : '明文' };
   return { algo: func, op: '捕获' };
 }
 
@@ -340,9 +364,11 @@ function cryptoIdentify() {
     byAlgo.set(key, e);
   }
   const algorithms = [...byAlgo.values()].sort((a, b) => b.count - a.count);
-  const families = { symmetric: 0, asymmetric: 0, digest: 0, hmac: 0, tls: 0 };
+  const families = { symmetric: 0, asymmetric: 0, digest: 0, hmac: 0, tls: 0, kdf: 0, aead: 0 };
   for (const a of algorithms) {
     if (/TLS/.test(a.algo)) families.tls += a.count;
+    else if (/KDF/i.test(a.algo)) families.kdf += a.count;
+    else if (/AEAD/i.test(a.algo)) families.aead += a.count;
     else if (/RSA|(^|[^m])EC[^B]|ECDSA|DSA/i.test(a.algo)) families.asymmetric += a.count;
     else if (/Hmac|HMAC/i.test(a.algo)) families.hmac += a.count;
     else if (/MD5|SHA|摘要|Digest/i.test(a.algo)) families.digest += a.count;
@@ -350,7 +376,7 @@ function cryptoIdentify() {
   }
   const withKey = algorithms.filter(a => a.keyHex).length;
   const summary = `捕获 ${captures.length} 次加密操作，涉及 ${algorithms.length} 种算法/用途；` +
-    `其中 ${withKey} 种拿到了密钥。对称 ${families.symmetric} · 非对称 ${families.asymmetric} · 摘要 ${families.digest} · HMAC ${families.hmac} · TLS ${families.tls}。`;
+    `其中 ${withKey} 种拿到了密钥。对称 ${families.symmetric} · 非对称 ${families.asymmetric} · 摘要 ${families.digest} · HMAC ${families.hmac} · TLS ${families.tls} · KDF ${families.kdf} · AEAD ${families.aead}。`;
   return { total: captures.length, families, algorithms, summary };
 }
 

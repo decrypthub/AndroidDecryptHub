@@ -50,6 +50,7 @@ SCRIPTS=(
   "verify_v22_capture.sh:device"
   "verify_v24_javacap.sh:device"
   "verify_v25_fsbrowser.sh:device"
+  "verify_v26_cryptocoverage.sh:device"
 )
 
 pass=0; fail=0; skip=0; FAILED=""

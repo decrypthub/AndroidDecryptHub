@@ -7,6 +7,7 @@
 
 #include <jni.h>
 #include <pthread.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -250,6 +251,174 @@ static int got_replace(const char *module_substr, void *orig, void *wrapper) {
     return replaced;
 }
 
+// got_replace matches a reloc slot by its CURRENTLY-BOUND VALUE (slot == orig). That only
+// works once the dynamic linker has lazily bound the slot, i.e. after the app has already
+// called that symbol at least once — for rarely-invoked entry points (RSA/AEAD one-shot
+// APIs vs. the streaming Update() calls that fire constantly) capture_start typically runs
+// BEFORE any such call, so the slot still points at the PLT resolver stub and value-match
+// finds nothing even though the symbol is genuinely imported. Fix: resolve the slot from the
+// module's OWN relocation table by symbol NAME (r_info -> that module's .dynsym/.dynstr),
+// which is correct whether or not the slot has been bound yet.
+static long long sleb128_decode(unsigned char **pp, unsigned char *end) {
+    unsigned char *p = *pp;
+    unsigned long long result = 0;
+    int shift = 0;
+    unsigned char byte;
+    do {
+        if (p >= end) { *pp = p; return 0; }
+        byte = *p++;
+        result |= ((unsigned long long)(byte & 0x7f)) << shift;
+        shift += 7;
+    } while (byte & 0x80);
+    if (shift < 64 && (byte & 0x40)) result |= (~0ULL << shift);
+    *pp = p;
+    return (long long)result;
+}
+
+// AOSP system libs (incl. libjavacrypto.so) pack .rela.dyn (GLOB_DAT-relocated symbols, e.g.
+// EVP_PKEY_encrypt/EVP_AEAD_CTX_seal) via DT_ANDROID_RELA in bionic's "APS2" SLEB128
+// group-delta format instead of a plain Elf64_Rela array — that's the default for every
+// modern NDK-built .so, not a device quirk, so it has to be handled for broad coverage.
+// Mirrors bionic/linker/linker_reloc_iterator.h's packed_reloc_iterator.
+static void *find_packed_reloc_slot(unsigned long long base, unsigned long long android_rela,
+                                     unsigned long long android_relasz,
+                                     unsigned long long symtab, unsigned long long strtab,
+                                     const char *sym_name) {
+    if (!android_rela || android_relasz < 4) return NULL;
+    unsigned char *p = (unsigned char *)android_rela;
+    unsigned char *end = p + android_relasz;
+    if (memcmp(p, "APS2", 4) != 0) return NULL;
+    p += 4;
+    long long relocation_count = sleb128_decode(&p, end);
+    unsigned long long r_offset = (unsigned long long)sleb128_decode(&p, end);
+    long long group_size = 0, group_flags = 0, group_index = 0;
+    unsigned long long group_r_offset_delta = 0, group_r_info = 0;
+    unsigned long long r_info = 0;
+    for (long long i = 0; i < relocation_count && p <= end; i++) {
+        if (group_index == group_size) {
+            group_size = sleb128_decode(&p, end);
+            group_flags = sleb128_decode(&p, end);
+            group_r_offset_delta = 0;
+            if (group_flags & 2) group_r_offset_delta = (unsigned long long)sleb128_decode(&p, end);
+            if (group_flags & 1) group_r_info = (unsigned long long)sleb128_decode(&p, end);
+            if ((group_flags & 8) && (group_flags & 4)) sleb128_decode(&p, end);  // group addend delta, unused
+            group_index = 0;
+        }
+        if (group_flags & 2) r_offset += group_r_offset_delta;
+        else r_offset += (unsigned long long)sleb128_decode(&p, end);
+        if (group_flags & 1) r_info = group_r_info;
+        else r_info = (unsigned long long)sleb128_decode(&p, end);
+        if ((group_flags & 8) && !(group_flags & 4)) sleb128_decode(&p, end);  // per-element addend delta, unused
+        group_index++;
+        unsigned int sym_idx = (unsigned int)(r_info >> 32);   // ELF64_R_SYM
+        if (sym_idx != 0) {
+            unsigned char *symrec = (unsigned char *)(symtab + (unsigned long long)sym_idx * 24);  // Elf64_Sym
+            unsigned int st_name = *(unsigned int *)symrec;
+            const char *name = (const char *)(strtab + st_name);
+            if (strcmp(name, sym_name) == 0) {
+                unsigned long long slot_addr = r_offset < base ? base + r_offset : r_offset;
+                return (void *)slot_addr;
+            }
+        }
+    }
+    return NULL;
+}
+
+static void *find_reloc_slot_by_symbol(unsigned long long base, const char *sym_name) {
+    if (!base) return NULL;
+    unsigned char *p = (unsigned char *)base;
+    if (memcmp(p, "\x7f""ELF", 4) != 0) return NULL;
+    unsigned long long phoff = *(unsigned long long *)(p + 32);
+    unsigned short phentsize = *(unsigned short *)(p + 54);
+    unsigned short phnum = *(unsigned short *)(p + 56);
+    unsigned long long dyn_vaddr = 0;
+    for (int i = 0; i < phnum; i++) {
+        unsigned char *ph = p + phoff + (unsigned long long)i * phentsize;
+        if (*(unsigned int *)ph == 2) { dyn_vaddr = *(unsigned long long *)(ph + 16); break; }  // PT_DYNAMIC
+    }
+    if (!dyn_vaddr) return NULL;
+    unsigned long long jmprel = 0, pltrelsz = 0, rela = 0, relasz = 0, relaent = 24, symtab = 0, strtab = 0;
+    unsigned long long android_rela = 0, android_relasz = 0;
+    unsigned long long *d = (unsigned long long *)(base + dyn_vaddr);
+    for (; d[0] != 0; d += 2) {
+        if (d[0] == 23) jmprel = d[1];        // DT_JMPREL
+        else if (d[0] == 2)  pltrelsz = d[1]; // DT_PLTRELSZ
+        else if (d[0] == 7)  rela = d[1];     // DT_RELA
+        else if (d[0] == 8)  relasz = d[1];   // DT_RELASZ
+        else if (d[0] == 9)  relaent = d[1];  // DT_RELAENT
+        else if (d[0] == 6)  symtab = d[1];   // DT_SYMTAB
+        else if (d[0] == 5)  strtab = d[1];   // DT_STRTAB
+        else if (d[0] == 0x60000011ULL) android_rela = d[1];    // DT_ANDROID_RELA
+        else if (d[0] == 0x60000012ULL) android_relasz = d[1];  // DT_ANDROID_RELASZ
+    }
+    if (relaent == 0) relaent = 24;
+    if (!symtab || !strtab) return NULL;
+    if (symtab < base) symtab += base;
+    if (strtab < base) strtab += base;
+    unsigned long long regions[2][2] = { { jmprel, pltrelsz }, { rela, relasz } };
+    for (int r = 0; r < 2; r++) {
+        unsigned long long off = regions[r][0], sz = regions[r][1];
+        if (!off || !sz) continue;
+        if (off < base) off += base;
+        for (unsigned long long e = off; e + relaent <= off + sz; e += relaent) {
+            unsigned long long r_offset = *(unsigned long long *)e;
+            unsigned long long r_info   = *(unsigned long long *)(e + 8);
+            unsigned int sym_idx = (unsigned int)(r_info >> 32);   // ELF64_R_SYM
+            if (sym_idx == 0) continue;
+            unsigned char *symrec = (unsigned char *)(symtab + (unsigned long long)sym_idx * 24);  // Elf64_Sym
+            unsigned int st_name = *(unsigned int *)symrec;
+            const char *name = (const char *)(strtab + st_name);
+            if (strcmp(name, sym_name) != 0) continue;
+            unsigned long long slot_addr = r_offset < base ? base + r_offset : r_offset;
+            return (void *)slot_addr;
+        }
+    }
+    if (android_rela) {
+        if (android_rela < base) android_rela += base;
+        void *slot = find_packed_reloc_slot(base, android_rela, android_relasz, symtab, strtab, sym_name);
+        if (slot) return slot;
+    }
+    return NULL;
+}
+
+// Same module-scan shape as got_replace, but resolves the slot by symbol name instead of by
+// value — works for symbols whose PLT slot hasn't been lazily bound yet. One slot per
+// matching module (mirrors got_replace's one-slot-per-module rule).
+static int got_replace_by_name(const char *module_substr, const char *sym_name, void *wrapper) {
+    FILE *m = fopen("/proc/self/maps", "r");
+    if (!m) return -1;
+    char line[512];
+    int replaced = 0;
+    long pagesz = sysconf(_SC_PAGESIZE);
+    char cur_mod[400] = "";
+    while (fgets(line, sizeof(line), m)) {
+        char sa[32], ea[32], perms[8], off[32], dev[16], path[400] = "";
+        unsigned long long inode = 0;
+        int nf = sscanf(line, "%31[0-9a-f]-%31[0-9a-f] %7s %31s %15s %llu %399[^\n]", sa, ea, perms, off, dev, &inode, path);
+        if (nf < 6) continue;
+        char *pp = path; while (*pp == ' ') pp++;
+        if (pp[0] != '/') continue;
+        if (!strstr(pp, module_substr)) continue;
+        if (strcmp(pp, cur_mod) == 0) continue;   // already handled this module (multiple mappings per .so)
+        snprintf(cur_mod, sizeof(cur_mod), "%s", pp);
+        const char *bn = strrchr(cur_mod, '/'); bn = bn ? bn + 1 : cur_mod;
+        unsigned long long mb = module_base_of(bn);
+        if (!mb) continue;
+        void *slot_addr = find_reloc_slot_by_symbol(mb, sym_name);
+        if (!slot_addr) continue;
+        char permsOf[8]; perms_of_addr((unsigned long long)slot_addr, permsOf, sizeof(permsOf));
+        if (permsOf[0] == '?') continue;   // slot address not actually mapped — refuse to touch it
+        int orig_prot = perms_to_prot(permsOf);
+        if (got_write_slot((void **)slot_addr, wrapper, orig_prot, pagesz)) {
+            replaced++;
+            g_dbg_slot = (unsigned long long)slot_addr;
+            snprintf(g_dbg_orig_perms, sizeof(g_dbg_orig_perms), "%s", permsOf);
+        }
+    }
+    fclose(m);
+    return replaced;
+}
+
 // --- self-test target: hook the agent's own close() (plain syscall wrapper) ---
 static void *g_orig_close = NULL;
 static volatile int g_close_hits = 0;
@@ -478,9 +647,174 @@ static int my_HMAC_Update(void *ctx, const void *data, size_t len) {
     capture("HMAC_Update", (const unsigned char *)data, (int)len);
     return g_orig_hmac(ctx, data, len);
 }
+// Conscrypt's SHA256withECDSA/RSA Signature.sign/verify route through BoringSSL's generic
+// EVP_DigestSign*/EVP_DigestVerify* API (NOT the raw ECDSA_sign/ECDSA_verify entry points
+// hooked above — confirmed via capture_drain showing only EVP_DigestSignUpdate firing for
+// sigDemo() on this device). But EVP_DigestSignUpdate/Final ALSO serve the JCA Mac (HMAC)
+// provider on the same BoringSSL build, so a bare Update/Final hook can't tell "HMAC message"
+// apart from "data to be signed". Disambiguate at Init time via the long-exported, ABI-stable
+// EVP_PKEY_id() accessor (NID of the bound key: HMAC vs RSA/EC) rather than reverse-engineering
+// EVP_MD_CTX/EVP_PKEY internal struct layout, which is fragile and version-specific — see
+// CLAUDE.md's broad cross-device compatibility mandate. Result is cached in a small bounded
+// ctx-pointer table (same round-robin-eviction convention as CAP_RING); a lookup miss just
+// falls back to the pre-existing generic HMAC label, never blocks capture().
+#define IDH_NID_HMAC 855   // OpenSSL/BoringSSL NID_hmac — stable OID-registry constant, not a struct offset
+#define DSIGN_CTX_MAX 32
+typedef struct { void *ctx; int is_asym; } dsign_ctx_ent_t;
+static dsign_ctx_ent_t g_dsign_ctx[DSIGN_CTX_MAX];
+static int g_dsign_ctx_next = 0;
+static pthread_mutex_t g_dsign_ctx_lock = PTHREAD_MUTEX_INITIALIZER;
+static void dsign_ctx_set(void *ctx, int is_asym) {
+    if (pthread_mutex_trylock(&g_dsign_ctx_lock) != 0) return;
+    for (int i = 0; i < DSIGN_CTX_MAX; i++) {
+        if (g_dsign_ctx[i].ctx == ctx) { g_dsign_ctx[i].is_asym = is_asym; pthread_mutex_unlock(&g_dsign_ctx_lock); return; }
+    }
+    g_dsign_ctx[g_dsign_ctx_next].ctx = ctx;
+    g_dsign_ctx[g_dsign_ctx_next].is_asym = is_asym;
+    g_dsign_ctx_next = (g_dsign_ctx_next + 1) % DSIGN_CTX_MAX;
+    pthread_mutex_unlock(&g_dsign_ctx_lock);
+}
+static int dsign_ctx_get(void *ctx) {
+    int r = 0;
+    if (pthread_mutex_trylock(&g_dsign_ctx_lock) != 0) return 0;
+    for (int i = 0; i < DSIGN_CTX_MAX; i++) if (g_dsign_ctx[i].ctx == ctx) { r = g_dsign_ctx[i].is_asym; break; }
+    pthread_mutex_unlock(&g_dsign_ctx_lock);
+    return r;
+}
+
+typedef int (*EVP_PKEY_id_t)(const void *pkey);
+static EVP_PKEY_id_t g_evp_pkey_id_fn = NULL;   // resolved but never hooked — just a direct accessor call
+
+typedef int (*digest_sign_init_t)(void *ctx, void **pctx, const void *type, void *e, void *pkey);
+static digest_sign_init_t g_orig_dsign_init = NULL, g_orig_dverify_init = NULL;
+static int my_EVP_DigestSignInit(void *ctx, void **pctx, const void *type, void *e, void *pkey) {
+    int rc = g_orig_dsign_init(ctx, pctx, type, e, pkey);
+    if (rc == 1 && pkey && g_evp_pkey_id_fn) dsign_ctx_set(ctx, g_evp_pkey_id_fn(pkey) != IDH_NID_HMAC);
+    return rc;
+}
+static int my_EVP_DigestVerifyInit(void *ctx, void **pctx, const void *type, void *e, void *pkey) {
+    int rc = g_orig_dverify_init(ctx, pctx, type, e, pkey);
+    if (rc == 1 && pkey && g_evp_pkey_id_fn) dsign_ctx_set(ctx, g_evp_pkey_id_fn(pkey) != IDH_NID_HMAC);
+    return rc;
+}
+
 static int my_EVP_DigestSignUpdate(void *ctx, const void *data, size_t len) {
-    capture("EVP_DigestSignUpdate", (const unsigned char *)data, (int)len);
+    capture(dsign_ctx_get(ctx) ? "EVP_DSignUpdate_asym" : "EVP_DigestSignUpdate", (const unsigned char *)data, (int)len);
     return g_orig_digest_sign(ctx, data, len);
+}
+
+typedef int (*digest_sign_final_t)(void *ctx, unsigned char *sig, size_t *sig_len);
+static digest_sign_final_t g_orig_dsign_final = NULL;
+static int my_EVP_DigestSignFinal(void *ctx, unsigned char *sig, size_t *sig_len) {
+    int rc = g_orig_dsign_final(ctx, sig, sig_len);
+    if (rc == 1 && sig && sig_len && dsign_ctx_get(ctx)) capture("EVP_DSignFinal_sig", sig, (int)*sig_len);  // skip the sig==NULL length-query call
+    return rc;
+}
+
+static update3_t g_orig_digest_verify = NULL;
+static int my_EVP_DigestVerifyUpdate(void *ctx, const void *data, size_t len) {
+    capture(dsign_ctx_get(ctx) ? "EVP_DVerifyUpdate_asym" : "EVP_DigestVerifyUpdate", (const unsigned char *)data, (int)len);
+    return g_orig_digest_verify(ctx, data, len);
+}
+
+typedef int (*digest_verify_final_t)(void *ctx, const unsigned char *sig, size_t sig_len);
+static digest_verify_final_t g_orig_dverify_final = NULL;
+static int my_EVP_DigestVerifyFinal(void *ctx, const unsigned char *sig, size_t sig_len) {
+    if (dsign_ctx_get(ctx) && sig) capture("EVP_DVerifyFinal_sig", sig, (int)sig_len);   // presented signature, captured regardless of pass/fail
+    return g_orig_dverify_final(ctx, sig, sig_len);
+}
+
+// ---- Signature (RSA/ECDSA) + KDF (PBKDF2/HKDF/scrypt) + AEAD (GCM/ChaCha20-Poly1305) ----
+// 原生 GOT hook，标准 BoringSSL 导出符号 —— 刻意不用 LSPlant（见 DEVELOPMENT_PLAN §6.9.1
+// WS-A 备注：Java 方法级 hook 在主流 stripped-libart ROM 上设备级阻塞；这 9 个符号是
+// 目前能跨设备工作的原生可 hook 子集）。
+
+// EVP_PKEY_sign/verify are NOT imported by libjavacrypto.so at all (confirmed via
+// `llvm-readelf --dyn-syms` against the on-device Conscrypt native lib) — Android's
+// Signature.sign/verify for both RSA and ECDSA route through the legacy one-shot
+// RSA_sign/RSA_verify and ECDSA_sign/ECDSA_verify entry points instead. Hooking
+// ECDSA_sign/verify here (the ones our sigDemo/SHA256withECDSA path actually calls).
+typedef int (*ECDSA_sign_t)(int type, const unsigned char *digest, size_t digest_len, unsigned char *sig, unsigned int *sig_len, const void *eckey);
+static ECDSA_sign_t g_ecdsa_sign_orig = NULL;
+static int my_ECDSA_sign(int type, const unsigned char *digest, size_t digest_len, unsigned char *sig, unsigned int *sig_len, const void *eckey) {
+    capture("ECDSA_sign_digest", digest, (int)digest_len);
+    int rc = g_ecdsa_sign_orig(type, digest, digest_len, sig, sig_len, eckey);
+    if (rc == 1 && sig && sig_len) capture("ECDSA_sign_sig", sig, (int)*sig_len);
+    return rc;
+}
+
+typedef int (*ECDSA_verify_t)(int type, const unsigned char *digest, size_t digest_len, const unsigned char *sig, size_t sig_len, const void *eckey);
+static ECDSA_verify_t g_ecdsa_verify_orig = NULL;
+static int my_ECDSA_verify(int type, const unsigned char *digest, size_t digest_len, const unsigned char *sig, size_t sig_len, const void *eckey) {
+    capture("ECDSA_verify_digest", digest, (int)digest_len);
+    capture("ECDSA_verify_sig", sig, (int)sig_len);
+    return g_ecdsa_verify_orig(type, digest, digest_len, sig, sig_len, eckey);
+}
+
+typedef int (*EVP_PKEY_crypt_t)(void *ctx, unsigned char *out, size_t *outlen, const unsigned char *in, size_t inlen);
+static EVP_PKEY_crypt_t g_pkey_encrypt_orig = NULL, g_pkey_decrypt_orig = NULL;
+static int my_EVP_PKEY_encrypt(void *ctx, unsigned char *out, size_t *outlen, const unsigned char *in, size_t inlen) {
+    capture("EVP_PKEY_encrypt_in", in, (int)inlen);
+    int rc = g_pkey_encrypt_orig(ctx, out, outlen, in, inlen);
+    if (rc == 1 && out && outlen) capture("EVP_PKEY_encrypt_out", out, (int)*outlen);
+    return rc;
+}
+static int my_EVP_PKEY_decrypt(void *ctx, unsigned char *out, size_t *outlen, const unsigned char *in, size_t inlen) {
+    capture("EVP_PKEY_decrypt_in", in, (int)inlen);
+    int rc = g_pkey_decrypt_orig(ctx, out, outlen, in, inlen);
+    if (rc == 1 && out && outlen) capture("EVP_PKEY_decrypt_out", out, (int)*outlen);
+    return rc;
+}
+
+typedef int (*PBKDF2_t)(const char *pass, int passlen, const unsigned char *salt, int saltlen, unsigned iter, const void *digest, int keylen, unsigned char *out);
+static PBKDF2_t g_pbkdf2_orig = NULL;
+static int my_PKCS5_PBKDF2_HMAC(const char *pass, int passlen, const unsigned char *salt, int saltlen, unsigned iter, const void *digest, int keylen, unsigned char *out) {
+    if (pass) capture("PBKDF2_pass", (const unsigned char *)pass, passlen);
+    if (salt) capture("PBKDF2_salt", salt, saltlen);
+    int rc = g_pbkdf2_orig(pass, passlen, salt, saltlen, iter, digest, keylen, out);
+    if (rc == 1 && out) capture("PBKDF2_key", out, keylen);
+    return rc;
+}
+
+typedef int (*HKDF_t)(unsigned char *out_key, size_t out_len, const void *digest, const unsigned char *secret, size_t secret_len, const unsigned char *salt, size_t salt_len, const unsigned char *info, size_t info_len);
+static HKDF_t g_hkdf_orig = NULL;
+static int my_HKDF(unsigned char *out_key, size_t out_len, const void *digest, const unsigned char *secret, size_t secret_len, const unsigned char *salt, size_t salt_len, const unsigned char *info, size_t info_len) {
+    if (secret) capture("HKDF_secret", secret, (int)secret_len);
+    if (salt)   capture("HKDF_salt", salt, (int)salt_len);
+    int rc = g_hkdf_orig(out_key, out_len, digest, secret, secret_len, salt, salt_len, info, info_len);
+    if (rc == 1 && out_key) capture("HKDF_key", out_key, (int)out_len);
+    return rc;
+}
+
+typedef int (*scrypt_t)(const char *pass, size_t passlen, const unsigned char *salt, size_t saltlen, uint64_t N, uint64_t r, uint64_t p, uint64_t maxmem, unsigned char *key, size_t keylen);
+static scrypt_t g_scrypt_orig = NULL;
+static int my_EVP_PBE_scrypt(const char *pass, size_t passlen, const unsigned char *salt, size_t saltlen, uint64_t N, uint64_t r, uint64_t p, uint64_t maxmem, unsigned char *key, size_t keylen) {
+    if (pass) capture("scrypt_pass", (const unsigned char *)pass, (int)passlen);
+    if (salt) capture("scrypt_salt", salt, (int)saltlen);
+    int rc = g_scrypt_orig(pass, passlen, salt, saltlen, N, r, p, maxmem, key, keylen);
+    if (rc == 1 && key) capture("scrypt_key", key, (int)keylen);
+    return rc;
+}
+
+typedef int (*aead_crypt_t)(const void *ctx, unsigned char *out, size_t *out_len, size_t max_out_len,
+                             const unsigned char *nonce, size_t nonce_len, const unsigned char *in, size_t in_len,
+                             const unsigned char *ad, size_t ad_len);
+static aead_crypt_t g_aead_seal_orig = NULL, g_aead_open_orig = NULL;
+static int my_EVP_AEAD_CTX_seal(const void *ctx, unsigned char *out, size_t *out_len, size_t max_out_len,
+                                 const unsigned char *nonce, size_t nonce_len, const unsigned char *in, size_t in_len,
+                                 const unsigned char *ad, size_t ad_len) {
+    if (in && in_len) capture("EVP_AEAD_seal_pt", in, (int)in_len);
+    int rc = g_aead_seal_orig(ctx, out, out_len, max_out_len, nonce, nonce_len, in, in_len, ad, ad_len);
+    if (rc == 1 && out && out_len) capture("EVP_AEAD_seal_ct", out, (int)*out_len);
+    return rc;
+}
+static int my_EVP_AEAD_CTX_open(const void *ctx, unsigned char *out, size_t *out_len, size_t max_out_len,
+                                 const unsigned char *nonce, size_t nonce_len, const unsigned char *in, size_t in_len,
+                                 const unsigned char *ad, size_t ad_len) {
+    if (in && in_len) capture("EVP_AEAD_open_ct", in, (int)in_len);
+    int rc = g_aead_open_orig(ctx, out, out_len, max_out_len, nonce, nonce_len, in, in_len, ad, ad_len);
+    if (rc == 1 && out && out_len) capture("EVP_AEAD_open_pt", out, (int)*out_len);
+    return rc;
 }
 
 // Generic GOT recon: scan every readable non-exec .so region for pointers matching the given
@@ -1009,6 +1343,39 @@ static void cmd_capture_start(int fd, const char *id, const char *cryptoModule, 
     if (dsu) g_orig_digest_sign= (update3_t)dsu;
     if (ow)  g_orig_ssl_write  = (SSL_rw_t)ow;
     if (orr) g_orig_ssl_read   = (SSL_rw_t)orr;
+    // Signature/KDF/AEAD (WS-A P0 replacement, native GOT hook, no LSPlant — see DEVELOPMENT_PLAN §6.9.1)
+    void *pks = resolve_sym("libcrypto.so", "ECDSA_sign");
+    void *pkv = resolve_sym("libcrypto.so", "ECDSA_verify");
+    void *pke = resolve_sym("libcrypto.so", "EVP_PKEY_encrypt");
+    void *pkd = resolve_sym("libcrypto.so", "EVP_PKEY_decrypt");
+    void *kp5 = resolve_sym("libcrypto.so", "PKCS5_PBKDF2_HMAC");
+    void *khk = resolve_sym("libcrypto.so", "HKDF");
+    void *ksc = resolve_sym("libcrypto.so", "EVP_PBE_scrypt");
+    void *aes = resolve_sym("libcrypto.so", "EVP_AEAD_CTX_seal");
+    void *aeo = resolve_sym("libcrypto.so", "EVP_AEAD_CTX_open");
+    // EVP_DigestSign/VerifyInit+Final (the actual Conscrypt SHA256withECDSA/RSA call path on
+    // this device — see the dsign_ctx_* comment above); EVP_PKEY_id is a plain accessor, never hooked.
+    void *dsi = resolve_sym("libcrypto.so", "EVP_DigestSignInit");
+    void *dvi = resolve_sym("libcrypto.so", "EVP_DigestVerifyInit");
+    void *dsf = resolve_sym("libcrypto.so", "EVP_DigestSignFinal");
+    void *dvu = resolve_sym("libcrypto.so", "EVP_DigestVerifyUpdate");
+    void *dvf = resolve_sym("libcrypto.so", "EVP_DigestVerifyFinal");
+    void *pid = resolve_sym("libcrypto.so", "EVP_PKEY_id");
+    if (pks) g_ecdsa_sign_orig   = (ECDSA_sign_t)pks;
+    if (pkv) g_ecdsa_verify_orig = (ECDSA_verify_t)pkv;
+    if (pke) g_pkey_encrypt_orig = (EVP_PKEY_crypt_t)pke;
+    if (pkd) g_pkey_decrypt_orig = (EVP_PKEY_crypt_t)pkd;
+    if (kp5) g_pbkdf2_orig = (PBKDF2_t)kp5;
+    if (khk) g_hkdf_orig   = (HKDF_t)khk;
+    if (ksc) g_scrypt_orig = (scrypt_t)ksc;
+    if (aes) g_aead_seal_orig = (aead_crypt_t)aes;
+    if (aeo) g_aead_open_orig = (aead_crypt_t)aeo;
+    if (dsi) g_orig_dsign_init   = (digest_sign_init_t)dsi;
+    if (dvi) g_orig_dverify_init = (digest_sign_init_t)dvi;
+    if (dsf) g_orig_dsign_final  = (digest_sign_final_t)dsf;
+    if (dvu) g_orig_digest_verify= (update3_t)dvu;
+    if (dvf) g_orig_dverify_final= (digest_verify_final_t)dvf;
+    if (pid) g_evp_pkey_id_fn    = (EVP_PKEY_id_t)pid;
     // Persistent hooks in the crypto/TLS caller module's GOT (not restored — that's what makes
     // it "live"). g_crypto_mod from idhd; empty = scan ALL file-backed modules so we catch
     // whatever routes crypto (Conscrypt, cronet's BoringSSL, renamed libs), not just libjavacrypto.
@@ -1022,6 +1389,25 @@ static void cmd_capture_start(int fd, const char *id, const char *cryptoModule, 
     int rs = dsu ? got_replace(g_crypto_mod, dsu, (void *)my_EVP_DigestSignUpdate) : -1;
     int rw = ow  ? got_replace(g_crypto_mod, ow,  (void *)my_SSL_write) : -1;
     int rr = orr ? got_replace(g_crypto_mod, orr, (void *)my_SSL_read) : -1;
+    // Name-based install (see got_replace_by_name): these 7 are one-shot BoringSSL APIs the
+    // app may never have called before capture_start runs, so their PLT slot is typically
+    // still unbound — value-match (got_replace) would silently find 0 matching slots even
+    // though the symbol is genuinely imported. Matching by the reloc entry's own symbol name
+    // works regardless of bind state.
+    int rpks = pks ? got_replace_by_name(g_crypto_mod, "ECDSA_sign", (void*)my_ECDSA_sign) : -1;
+    int rpkv = pkv ? got_replace_by_name(g_crypto_mod, "ECDSA_verify", (void*)my_ECDSA_verify) : -1;
+    int rpke = pke ? got_replace_by_name(g_crypto_mod, "EVP_PKEY_encrypt", (void*)my_EVP_PKEY_encrypt) : -1;
+    int rpkd = pkd ? got_replace_by_name(g_crypto_mod, "EVP_PKEY_decrypt", (void*)my_EVP_PKEY_decrypt) : -1;
+    int rkp5 = kp5 ? got_replace_by_name(g_crypto_mod, "PKCS5_PBKDF2_HMAC", (void*)my_PKCS5_PBKDF2_HMAC) : -1;
+    int rkhk = khk ? got_replace_by_name(g_crypto_mod, "HKDF", (void*)my_HKDF) : -1;
+    int rksc = ksc ? got_replace_by_name(g_crypto_mod, "EVP_PBE_scrypt", (void*)my_EVP_PBE_scrypt) : -1;
+    int raes = aes ? got_replace_by_name(g_crypto_mod, "EVP_AEAD_CTX_seal", (void*)my_EVP_AEAD_CTX_seal) : -1;
+    int raeo = aeo ? got_replace_by_name(g_crypto_mod, "EVP_AEAD_CTX_open", (void*)my_EVP_AEAD_CTX_open) : -1;
+    int rdsi = dsi ? got_replace_by_name(g_crypto_mod, "EVP_DigestSignInit", (void*)my_EVP_DigestSignInit) : -1;
+    int rdvi = dvi ? got_replace_by_name(g_crypto_mod, "EVP_DigestVerifyInit", (void*)my_EVP_DigestVerifyInit) : -1;
+    int rdsf = dsf ? got_replace_by_name(g_crypto_mod, "EVP_DigestSignFinal", (void*)my_EVP_DigestSignFinal) : -1;
+    int rdvu = dvu ? got_replace_by_name(g_crypto_mod, "EVP_DigestVerifyUpdate", (void*)my_EVP_DigestVerifyUpdate) : -1;
+    int rdvf = dvf ? got_replace_by_name(g_crypto_mod, "EVP_DigestVerifyFinal", (void*)my_EVP_DigestVerifyFinal) : -1;
 
     // -- 文件: persistent file-I/O hooks in the module backing java.io (fileModule, from idhd;
     //    empty = skip so the agent never hardcodes a target module). Streams openat paths +
@@ -1062,15 +1448,22 @@ static void cmd_capture_start(int fd, const char *id, const char *cryptoModule, 
     json_escape(g_crypto_mod, cmj, sizeof(cmj));
     json_escape(fileModule ? fileModule : "", fmj, sizeof(fmj));
     json_escape(sysModule ? sysModule : "", smj, sizeof(smj));
-    char out[720];
+    char out[1400];
     snprintf(out, sizeof(out),
         "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"capture_start\",\"ok\":true,\"cryptoModule\":\"%s\",\"evp\":%d,\"digest\":%d,\"hmac\":%d,\"digestSign\":%d,\"sslWrite\":%d,\"sslRead\":%d,"
+        "\"pkey\":{\"sign\":%d,\"verify\":%d,\"encrypt\":%d,\"decrypt\":%d},"
+        "\"kdf\":{\"pbkdf2\":%d,\"hkdf\":%d,\"scrypt\":%d},"
+        "\"aead\":{\"seal\":%d,\"open\":%d},"
+        "\"digestSignVerify\":{\"signInit\":%d,\"verifyInit\":%d,\"signFinal\":%d,\"verifyUpdate\":%d,\"verifyFinal\":%d},"
         "\"fileModule\":\"%s\",\"file\":{\"open\":%d,\"openat\":%d,\"read\":%d,\"write\":%d,\"syscall\":%d,\"readChk\":%d,\"writeChk\":%d},"
         "\"sysModule\":\"%s\",\"sys\":{\"ptrace\":%d,\"access\":%d,\"prop\":%d},\"on\":true}\n",
-        idj, cmj, re, rd, rh, rs, rw, rr, fmj, fo, foa, frd, fwr, fsc, frc, fwc, smj, sp, sa, sg);
+        idj, cmj, re, rd, rh, rs, rw, rr,
+        rpks, rpkv, rpke, rpkd, rkp5, rkhk, rksc, raes, raeo,
+        rdsi, rdvi, rdsf, rdvu, rdvf,
+        fmj, fo, foa, frd, fwr, fsc, frc, fwc, smj, sp, sa, sg);
     send_line(fd, out);
-    LOGI("capture_start: crypto[%s] evp=%d dig=%d hmac=%d dsu=%d sslw=%d sslr=%d | file[%s] oa=%d sc=%d rc=%d wc=%d | sys[%s] p=%d a=%d g=%d",
-         g_crypto_mod, re, rd, rh, rs, rw, rr, g_file_mod, foa, fsc, frc, fwc, g_sys_mod, sp, sa, sg);
+    LOGI("capture_start: crypto[%s] evp=%d dig=%d hmac=%d dsu=%d sslw=%d sslr=%d dsi=%d dvi=%d dsf=%d dvu=%d dvf=%d | file[%s] oa=%d sc=%d rc=%d wc=%d | sys[%s] p=%d a=%d g=%d",
+         g_crypto_mod, re, rd, rh, rs, rw, rr, rdsi, rdvi, rdsf, rdvu, rdvf, g_file_mod, foa, fsc, frc, fwc, g_sys_mod, sp, sa, sg);
 }
 
 // Uninstall the persistent capture hooks and restore the original GOT pointers, so the
@@ -1080,12 +1473,28 @@ static void cmd_capture_start(int fd, const char *id, const char *cryptoModule, 
 static void cmd_capture_stop(int fd, const char *id) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
     int e = 0, w = 0, r = 0, dg = 0, hm = 0, ds = 0;
+    int pks = 0, pkv = 0, pke = 0, pkd = 0, kp5 = 0, khk = 0, ksc = 0, aes = 0, aeo = 0;
+    int dsi = 0, dvi = 0, dsf = 0, dvu = 0, dvf = 0;
     if (g_evp_cipher_orig) e  = got_replace(g_crypto_mod, (void *)my_EVP_CipherUpdate, (void *)g_evp_cipher_orig);
     if (g_orig_evp_digest) dg = got_replace(g_crypto_mod, (void *)my_EVP_DigestUpdate, (void *)g_orig_evp_digest);
     if (g_orig_hmac)       hm = got_replace(g_crypto_mod, (void *)my_HMAC_Update, (void *)g_orig_hmac);
     if (g_orig_digest_sign)ds = got_replace(g_crypto_mod, (void *)my_EVP_DigestSignUpdate, (void *)g_orig_digest_sign);
     if (g_orig_ssl_write)  w  = got_replace(g_crypto_mod, (void *)my_SSL_write, (void *)g_orig_ssl_write);
     if (g_orig_ssl_read)   r  = got_replace(g_crypto_mod, (void *)my_SSL_read, (void *)g_orig_ssl_read);
+    if (g_ecdsa_sign_orig)   pks = got_replace_by_name(g_crypto_mod, "ECDSA_sign", (void *)g_ecdsa_sign_orig);
+    if (g_ecdsa_verify_orig) pkv = got_replace_by_name(g_crypto_mod, "ECDSA_verify", (void *)g_ecdsa_verify_orig);
+    if (g_pkey_encrypt_orig) pke = got_replace_by_name(g_crypto_mod, "EVP_PKEY_encrypt", (void *)g_pkey_encrypt_orig);
+    if (g_pkey_decrypt_orig) pkd = got_replace_by_name(g_crypto_mod, "EVP_PKEY_decrypt", (void *)g_pkey_decrypt_orig);
+    if (g_pbkdf2_orig)       kp5 = got_replace_by_name(g_crypto_mod, "PKCS5_PBKDF2_HMAC", (void *)g_pbkdf2_orig);
+    if (g_hkdf_orig)         khk = got_replace_by_name(g_crypto_mod, "HKDF", (void *)g_hkdf_orig);
+    if (g_scrypt_orig)       ksc = got_replace_by_name(g_crypto_mod, "EVP_PBE_scrypt", (void *)g_scrypt_orig);
+    if (g_aead_seal_orig)    aes = got_replace_by_name(g_crypto_mod, "EVP_AEAD_CTX_seal", (void *)g_aead_seal_orig);
+    if (g_aead_open_orig)    aeo = got_replace_by_name(g_crypto_mod, "EVP_AEAD_CTX_open", (void *)g_aead_open_orig);
+    if (g_orig_dsign_init)   dsi = got_replace_by_name(g_crypto_mod, "EVP_DigestSignInit", (void *)g_orig_dsign_init);
+    if (g_orig_dverify_init) dvi = got_replace_by_name(g_crypto_mod, "EVP_DigestVerifyInit", (void *)g_orig_dverify_init);
+    if (g_orig_dsign_final)  dsf = got_replace_by_name(g_crypto_mod, "EVP_DigestSignFinal", (void *)g_orig_dsign_final);
+    if (g_orig_digest_verify)dvu = got_replace_by_name(g_crypto_mod, "EVP_DigestVerifyUpdate", (void *)g_orig_digest_verify);
+    if (g_orig_dverify_final)dvf = got_replace_by_name(g_crypto_mod, "EVP_DigestVerifyFinal", (void *)g_orig_dverify_final);
     // restore persistent file hooks in the module capture_start patched
     if (g_file_mod[0]) {
         if (g_orig_open)       got_replace(g_file_mod, (void *)my_open,       (void *)g_orig_open);
@@ -1106,8 +1515,11 @@ static void cmd_capture_stop(int fd, const char *id) {
     }
     g_capture_on = 0;
     cap_reset();
-    char out[256];
-    snprintf(out, sizeof(out), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"capture_stop\",\"ok\":true,\"restored\":{\"evp\":%d,\"digest\":%d,\"hmac\":%d,\"digestSign\":%d,\"sslWrite\":%d,\"sslRead\":%d}}\n", idj, e, dg, hm, ds, w, r);
+    char out[700];
+    snprintf(out, sizeof(out), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"capture_stop\",\"ok\":true,\"restored\":{\"evp\":%d,\"digest\":%d,\"hmac\":%d,\"digestSign\":%d,\"sslWrite\":%d,\"sslRead\":%d,"
+        "\"pkeySign\":%d,\"pkeyVerify\":%d,\"pkeyEncrypt\":%d,\"pkeyDecrypt\":%d,\"pbkdf2\":%d,\"hkdf\":%d,\"scrypt\":%d,\"aeadSeal\":%d,\"aeadOpen\":%d,"
+        "\"digestSignInit\":%d,\"digestVerifyInit\":%d,\"digestSignFinal\":%d,\"digestVerifyUpdate\":%d,\"digestVerifyFinal\":%d}}\n",
+        idj, e, dg, hm, ds, w, r, pks, pkv, pke, pkd, kp5, khk, ksc, aes, aeo, dsi, dvi, dsf, dvu, dvf);
     send_line(fd, out);
     LOGI("capture_stop: restored evp=%d sslw=%d sslr=%d", e, w, r);
 }

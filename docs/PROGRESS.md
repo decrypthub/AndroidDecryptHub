@@ -26,9 +26,16 @@
 - [x] **v2.0** WS-D 协议重写（length-framed `[u32 len][u8 type][payload]`，去 8192 上限）**✅**
       + WS-C 环形缓冲/如实 dropped 上报 **✅ 完成并验证**（连续 push-drain 线程作为 WS-C 优化后续再上，见日志）
       + WS-C `cap_reset` 记账修复（丢弃环内记录计入 dropped，`emitted+backlog+dropped==seq` 恒成立）**✅**
-- [ ] v2.1 WS-A Java 后端(LSPlant) + WS-B 去 sandbox 耦合
+- [x] **v2.1 原生 Signature/KDF/AEAD 覆盖扩展（GOT hook，替代原 LSPlant 路线的 P0 缺口）+ WS-B 去 sandbox 耦合（2026-07-27）**
       · **WS-B 部分完成**：agent 常驻采集三类(crypto/file/sys)目标模块**全部参数化**、agent 零硬编码目标模块 **✅**；
-        LSPlant 在测试机 13f54a46(ColorOS/A15 stripped libart) **根本性阻塞**，需 stock/Pixel 验证
+        LSPlant 在测试机 13f54a46(ColorOS/A15 stripped libart) **根本性阻塞**（44 个所需 ART 符号缺 30 个/68%），
+        同 ROM 上 ShadowHook inline 后端 `shadowhook_init` 同样失败（INIT_LINKER/errno12）——系统性 ROM 限制，需 stock/Pixel 验证；
+        按 C 端产品方向（2026-07-27 决策）LSPlant 降级为非当前路线，国密 SM2/SM3/SM4 与隐私分析面板标 PENDING
+      · **AEAD（GCM/ChaCha20-Poly1305）**：`EVP_AEAD_CTX_seal/open` 原生 hook 补上此前完全抓不到明文/密文的真实漏洞（Conscrypt 走一次性 API，不走 `EVP_CipherUpdate`）
+      · **Signature（RSA/ECDSA）关键发现**：Conscrypt 的 `SHA256withECDSA` 实际不走 `ECDSA_sign/verify`，而是走 BoringSSL 通用的 `EVP_DigestSignInit/Update/Final` + `EVP_DigestVerifyInit/Update/Final`——这套 API 同时服务 JCA `Mac`(HMAC)，靠 `EVP_PKEY_id()`（稳定导出访问器，非内部结构体偏移）在 Init 时判定 HMAC vs 非对称密钥，结果缓存进有界 ctx→kind 表
+      · **KDF（PBKDF2/HKDF/scrypt）原生一次性捕获仍是 PENDING**：`PKCS5_PBKDF2_HMAC`/`HKDF` 根本不被 `libjavacrypto.so` 导入（`llvm-readelf --dyn-syms` 确认），`EVP_PBE_scrypt` 虽可 hook 但无 Android JCA provider 调用它——Android 自己的 `PBKDF2WithHmacSHA256` 是纯 Java 迭代 `Mac.doFinal`，无原生一次性 KDF 调用可拦截；不伪造覆盖，诚实标 PENDING
+      · 验证：`tools/verify_v26_cryptocoverage.sh`（新增）连续多次 fresh-restart 测试 PASS；`tools/verify_all.sh` 41/41 全绿
+      · 修了一个验收脚本自身的竞态：`aeadDemo` 一次触发产出 3 条相关捕获（原生 GCM 密文/原生 ChaCha 密文/沙盒自带 IdhReport Java 富捕获），轮询一见到第一条就提前返回，导致偶发 `aeadMarker=false`——加 `settleTicks` 让轮询在断言满足后再多等几拍
 - [ ] v2.2 WS-A inline 后端(ShadowHook)
 - [ ] v2.3 WS-F 持久索引 + 深解析 + 反射
 - [ ] v2.4 WS-E 脱壳二代 + try/catch + cdex/041（需样本，否则 PENDING）
@@ -300,6 +307,23 @@ arm64 预编译，agent 运行时 dlopen libQBDI.so，指令级 trace idh_trace_
 - ART 结构 resolver 需覆盖 SDK 36（设备版本）优先
 
 ## 会话日志（倒序，简短）
+
+- 2026-07-27（产品方向决策 + v2.1 重新定scope：LSPlant 降级，原生 Signature/KDF/AEAD 覆盖扩展）：
+  用户明确产品方向——ADH 是 **C 端产品**，"不兼容就不要做，必须大部分设备都可用，不做小众功能"。
+  据此重新审视 §6.9.4 P0（国密+Signature+KDF，原计划整体绑 LSPlant）：LSPlant 在测试机 13f54a46
+  （OnePlus PGP110/ColorOS/A15，代表性消费级 ROM）上因 `libart.so` 缺失 44 个所需 ART 符号中的
+  30 个（68%）根本性阻塞，同 ROM ShadowHook inline 后端同样失败——系统性 ROM 限制，非集成 bug，
+  正是"不兼容就不做"的典型例子。**决策**：把 P0 里能靠原生 GOT hook 解决的部分（RSA/ECDSA
+  Signature、PBKDF2/HKDF/scrypt、GCM/ChaCha20-Poly1305 AEAD）与 LSPlant 依赖切割，用已证明
+  ROM-independent 的 GOT hook 引擎补齐（9 个新符号：EVP_PKEY_sign/verify/encrypt/decrypt、
+  PKCS5_PBKDF2_HMAC/HKDF/EVP_PBE_scrypt、EVP_AEAD_CTX_seal/open）；国密 SM2/SM3/SM4（无原生
+  BoringSSL 等价物，走 BouncyCastle 纯 Java 或厂商私有原生库，两条路都到不了 LSPlant 之外的方案）
+  与隐私分析面板（纯 Java-only API，同样只能靠 LSPlant）明确标 **PENDING**，不伪造覆盖、不再占用
+  当前验收门禁。**意外发现**：Conscrypt 的 AES/GCM、ChaCha20-Poly1305 走 BoringSSL 独立的
+  `EVP_AEAD_CTX_seal/open` 一次性 API，完全不经过既有 `EVP_CipherUpdate` hook——即现有对称 hook
+  此前**完全抓不到 GCM/ChaCha20-Poly1305 的明文/密文**，此增量顺带修复。`EC_POINT_mul` 明确排除
+  （ECDSA 内部多次调用，非一次性 API 边界，高频噪音无取证价值）。详见
+  `docs/DEVELOPMENT_PLAN.md` §6.9.1/§6.9.2/§6.9.4 与执行计划。
 
 - 2026-07-24 (WS-B crypto 去硬编码 + WS-C cap_reset 记账修复，agent 零硬编码目标模块)：接上一条 39/39
   绿基线，做真正的功能增量。**WS-B**：agent 的 crypto/TLS 常驻 hook 此前把模块名写死成 `"libjavacrypto.so"`

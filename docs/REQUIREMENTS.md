@@ -374,6 +374,8 @@ MemoryRegion {
 | `KeyGenerator.generateKey` | 生成的 key |
 | `Signature.sign/verify` | 算法、数据、签名 |
 
+注：Conscrypt-backed 目标上，RSA/ECDSA 的 Signature.sign/verify 可通过原生 `EVP_PKEY_sign/verify`（GOT hook，见 DEVELOPMENT_PLAN §6.9.4）拿到，不需要 LSPlant；本节 Java 层模板仍是覆盖非 Conscrypt/自定义 Provider 场景的通用方案，但当前优先级以 DEVELOPMENT_PLAN §6.9.4 为准。
+
 **输出 — Algorithm Session**：
 
 ```text

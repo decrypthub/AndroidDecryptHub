@@ -1,0 +1,14 @@
+kotlin version: 2.0.21
+error message: The daemon has terminated unexpectedly on startup attempt #1 with error code: 1. The daemon process output:
+    ... (51 more lines)
+    52. Caused by: java.net.BindException: Address already in use: bind
+    53. 	at java.base/sun.nio.ch.Net.bind0(Native Method)
+    54. 	at java.base/sun.nio.ch.Net.bind(Unknown Source)
+    55. 	at java.base/sun.nio.ch.Net.bind(Unknown Source)
+    56. 	at java.base/sun.nio.ch.NioSocketImpl.bind(Unknown Source)
+    57. 	at java.base/java.net.ServerSocket.bind(Unknown Source)
+    58. 	at java.base/java.net.ServerSocket.<init>(Unknown Source)
+    59. 	at org.jetbrains.kotlin.daemon.common.LoopbackNetworkInterface$ServerLoopbackSocketFactory.createServerSocket(NetworkUtils.kt:69)
+    60. 	at java.rmi/sun.rmi.transport.tcp.TCPEndpoint.newServerSocket(Unknown Source)
+    61. 	... 15 more
+

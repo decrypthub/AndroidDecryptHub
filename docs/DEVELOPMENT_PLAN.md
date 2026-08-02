@@ -573,7 +573,7 @@ android-decrpthub/          # 仓库名；产品名 ADH (Android DecryptHub)
 
 | WS | 名称 | 核心缺陷 → 改造 | 归属层 |
 |----|------|----------------|--------|
-| **A** | Hook 引擎第二条腿 | 只有 GOT hook，纯 Java / 静态内联 native / 自实现 TLS 全抓不到 → 抽象 `hook_backend_t{AUTO,GOT,INLINE,JAVA}` 统一接口；inline 后端接 ShadowHook/Dobby；Java 后端接 LSPlant（含框架级 `CipherSpi/MacSpi/MessageDigestSpi.engine*` 与目标类名无关的拦截）。**fail-loud 区分**：符号未解析 / 页不可写 / 重定位失败 / LSPlant backup 失败。 | Agent |
+| **A** | Hook 引擎第二条腿 | 只有 GOT hook，纯 Java / 静态内联 native / 自实现 TLS 全抓不到 → 抽象 `hook_backend_t{AUTO,GOT,INLINE,JAVA}` 统一接口；inline 后端接 ShadowHook/Dobby；Java 后端接 LSPlant（含框架级 `CipherSpi/MacSpi/MessageDigestSpi.engine*` 与目标类名无关的拦截）。**fail-loud 区分**：符号未解析 / 页不可写 / 重定位失败 / LSPlant backup 失败。**Java 后端现状**：代表性消费级 ROM（OnePlus PGP110/ColorOS/Android15/SDK35，测试机 `13f54a46`）上 `libart.so` 缺失 LSPlant 所需 44 个 ART 内部符号中的 30 个（68%），根本性阻塞；同 ROM 上 ShadowHook inline 后端 `shadowhook_init` 同样失败（`INIT_LINKER`/errno12）——系统性 ROM 限制，非集成缺陷。按产品方向（C 端，不追求小众设备兼容）**Java 后端（LSPlant）降级为非当前路线**，不再是任何 P0/P1 验收门禁的依赖；GOT/PLT hook 后端在同一 ROM 上验证 ROM-independent，新增能力一律走这条腿。 | Agent |
 | **B** | 彻底去 sandbox 耦合 | `net_hook_test/flow_watch/detect_watch/trace_run/crypto_hook_test` 全写死调 sandbox 类、hook 写死 libjavacrypto → 删"一次性 probe + 写死触发类"命令族；`crypto_probe` 枚举出的**每个**持有 EVP 指针的模块都装 hook；触发两条路径：被动（真实 app 自然命中）+ 主动（operator/MCP 下发 `{class,method,args}` 反射，**类名来自命令**）。sandbox 触发改由 verify 脚本 `am broadcast`/`am instrument` 进程外驱动。 | Agent + Daemon |
 | **C** | 采集管线：环形缓冲 | `g_caps[64]/g_jcaps[96]/g_trace[256]` 定长满即**静默丢** → MPSC 环形缓冲 + drain 线程持续推 idhd 落盘；有界阻塞背压；溢出**如实上报** `dropped` 计数 + 首末丢弃时间戳，UI 红字；`dropped>0` → `/api/captures` 与导出报告带 `complete:false`。 | Agent + Daemon |
 | **D** | 协议重写：length-framed | NDJSON + `strstr("\"key\":\"")` 提取 + 8192 命令单行上限 → 帧 `[u32 len][u8 type][payload]`；控制帧 payload 仍为 JSON；取消 8192 上限与超长丢弃；大 dump 走分片帧或 memfd/ashmem 共享内存。**fail-loud**：帧长非法 / 类型未知 → 关连接并上报。`proto/PROTOCOL.md` 同步重写。 | Agent + Daemon |
@@ -590,7 +590,7 @@ android-decrpthub/          # 仓库名；产品名 ADH (Android DecryptHub)
 | 版本 | 内容 | 验收信号（pass/fail） |
 |------|------|----------------------|
 | **v2.0** | WS-D 协议重写 + WS-C 环形缓冲/落盘/如实上报 | dump 16MB region 字节级 sha256 一致；超长命令完整解析；高频驱动 1000/s×10s，`produced` + `dropped` 如实上报（旧实现静默丢 ~9900 却显示成功） |
-| **v2.1** | WS-A Java 后端(LSPlant) + WS-B 去耦合 | 纯 Java AES（不走 Conscrypt/BoringSSL）被捕获；`grep com.idh.sandbox agent/` = 0；换一个非 sandbox 授权样本跑通 crypto 捕获 |
+| **v2.1** | WS-B 去耦合（已基本完成）+ 原生 Signature/KDF/AEAD 覆盖扩展（GOT hook，不依赖 LSPlant） | `grep com.idh.sandbox agent/` = 0；EVP_PKEY_sign/verify/encrypt/decrypt、PKCS5_PBKDF2_HMAC/HKDF/EVP_PBE_scrypt、EVP_AEAD_CTX_seal/open 全部装上并在 sandbox 触发中各命中 ≥1 次；capture_start 回包对每个新符号如实报告装上/未装上（非 ok:true replaced:0） |
 | **v2.2** | WS-A inline 后端(ShadowHook) | 目标自带静态链接 BoringSSL 的 native crypto 被 inline hook 捕获 |
 | **v2.3** | WS-F 持久索引 + 深解析 + 反射 | 21820 方法建索引后 string→callers < 阈值；一条 `Class.forName` 反射链被静态连出 |
 | **v2.4** | WS-E 脱壳二代 + try/catch + cdex/041 | 带 `try` 方法字节级重建一致；cdex→标准 dex 过 dexdump/verifier（**需样本，否则 PENDING**） |
@@ -598,7 +598,7 @@ android-decrpthub/          # 仓库名；产品名 ADH (Android DecryptHub)
 | **v2.6** | WS-I 确定性关联 + WS-J 反检测动态面 | 8 条并发订单流零错配关联；svc 直连 + Java 验签双检测都被观测 |
 | 贯穿 | WS-K 拆分随各片落地；`docs/*` 同步（一份计划） | — |
 
-**依赖**：LSPlant / ShadowHook / Capstone / QBDI 均非 git，走 `tools/fetch_*.sh` 拉取（沿用 QBDI 模式），`third_party/` gitignore。
+**依赖**：LSPlant / ShadowHook / Capstone / QBDI 均非 git，走 `tools/fetch_*.sh` 拉取（沿用 QBDI 模式），`third_party/` gitignore。LSPlant Java 后端（原 v2.1 内容）不再纳入本排期验收门禁，见 §6.9.1 WS-A 备注；若后续拿到 stock/AOSP 设备，作为独立探索性任务重新评估，不占用 v2.x 主线版本号。
 
 ### 6.9.3 "不胡乱兜底"检查清单（评审门禁，每片过关前逐条核对）
 
@@ -650,13 +650,14 @@ disasm 只 `llvm-objdump`（文件型 so），缺 **Capstone 内存镜像反汇�
 |------|------|-------------|------|
 | **P0** | 前端"一键脱壳/TLS/雷达"去 sandbox 硬编码 + 加目标包名输入；demo 端点标注或删 | 主操作真实目标空转，误导新手 | Web + Daemon |
 | **P0** | `capture()` 背压改无锁/非阻塞，**不在目标线程 sleep** | 真机高频卡顿/ANR/时序暴露 | Agent (WS-C) |
-| **P0** | 国密 SM2/SM3/SM4 + `Signature` + KDF 覆盖（Java 走 LSPlant 直 hook 实例方法） | 中文逆向核心，现在基本抓不到 | Agent (WS-A) + Daemon |
-| **P1** | 隐私分析面板（设备/传感器/摄像头/位置/剪贴板时间线，LSPlant Java hook） | 点名场景，当前 0 | Agent (WS-A/WS-J) + Web |
+| **P0** | RSA/ECDSA Signature + KDF(PBKDF2/HKDF/scrypt) + AEAD(GCM/ChaCha20-Poly1305) 原生覆盖（GOT hook：EVP_PKEY_sign/verify/encrypt/decrypt + 3 个 KDF + EVP_AEAD_CTX_seal/open，不依赖 LSPlant） | 中文逆向/隐私分析核心缺口，且该路径在所有测过的设备上可行，不依赖 ROM 特性；另修复一个此前未记录的真实漏洞——Conscrypt 的 GCM/ChaCha20-Poly1305 之前完全没被 EVP_CipherUpdate hook 抓到 | Agent（原生 hook 引擎扩展，非 WS-A）+ Daemon |
+| **PENDING（诚实标注，非本轮范围）** | 国密 SM2/SM3/SM4 | 目标若走 BouncyCastle（纯 Java，无原生调用）则唯一手段是 LSPlant（本机型阻塞）；若走厂商自有原生库则符号名无通用 ABI，需硬编码目标符号，违反架构红线。不伪造覆盖，明确标记待办，待 stock/AOSP 设备验证 LSPlant 可行或出现通用 Java 层拦截替代方案后再排期 | — |
+| **P1** | 隐私分析面板（设备/传感器/摄像头/位置/剪贴板时间线，LSPlant Java hook）（同样依赖 LSPlant Java hook 拦截 Java-only API，没有对应原生 GOT hook 替代路径，不像 crypto 有 BoringSSL 共享层——**同样降级为 PENDING，不在本次实现范围**） | 点名场景，当前 0 | Agent (WS-A/WS-J) + Web |
 | **P1** | `got_replace` 交叉验证重定位槽；`trace_preview` 缓存 fd | 大目标内存损坏 / fd 压力 | Agent |
 | **P1** | Capstone 内存反汇编 + MCP 指令/内存导航工具 | AI"分析指令/内存"断点；QBDI demo 化 | Daemon (WS-G/WS-H) |
 | **P2** | 抓包按连接/host 组包成请求-响应；反调 inline+SVC 动态观测 | 协议逆向/反调实战完整度 | Agent + Daemon (WS-I/WS-J) |
 
-**三大欠账（一句话）**：国密/非对称/KDF 的真实覆盖、隐私分析从 0 到 1、前端主操作与 demo 端点去 sandbox 化。
+**三大欠账（一句话）**：非对称 Signature/KDF/AEAD 的真实覆盖（v2.1 原生 GOT hook 已解决，见上表 P0）、国密与隐私分析面板明确标 PENDING（LSPlant 依赖，设备级阻塞，非本轮范围）、前端主操作与 demo 端点去 sandbox 化。
 
 ---
 

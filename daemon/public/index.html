@@ -13,7 +13,7 @@
     --surface-3:#1b202a; --line:#343b48; --line-soft:#20252e;
     --ink:#ffffff; --ink-2:#e5e8ee; --muted:#aeb5c0;
     --blue:#78a9ff; --coral:#ff8b7b; --amber:#ffc85c; --lilac:#c7a6ff;
-    --cyan:#79d6e8; --pink:#ff9fbc; --green:#8bd6a8; --danger:#ff788c;
+    --cyan:#79d6e8; --pink:#ff9fbc; --green:#8bd6a8; --danger:#ff788c; --teal:#5ce1c9;
     color-scheme: dark;
   }
   * { box-sizing:border-box; }
@@ -125,16 +125,19 @@
   .row .preview { color:#c7ccd5; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:11px; margin-top:4px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
   .row.cat-digest { border-left-color:var(--green); } .row.cat-hmac { border-left-color:var(--blue); }
   .row.cat-sym { border-left-color:var(--amber); }    .row.cat-asym { border-left-color:var(--lilac); }
+  .row.cat-kdf { border-left-color:var(--pink); }     .row.cat-aead { border-left-color:var(--teal); }
   .row.cat-file { border-left-color:var(--coral); }   .row.cat-sys { border-left-color:var(--lilac); }
   .row.cat-net { border-left-color:var(--cyan); }     .row.cat-other { border-left-color:#3a3a3a; }
   .caprow { cursor:pointer; } .caprow:hover { background:var(--surface); }
   .pill.digest { color:var(--green); background:#13251a; } .pill.hmac { color:var(--blue); background:#14213a; }
   .pill.sym { color:var(--amber); background:#2b2110; }    .pill.asym { color:var(--lilac); background:#21172f; }
+  .pill.kdf { color:var(--pink); background:#2b1420; }     .pill.aead { color:var(--teal); background:#0f2723; }
   .pill.file { color:var(--coral); background:#2c1816; }   .pill.sys { color:var(--lilac); background:#21172f; }
   .pill.net { color:var(--cyan); background:#10252b; }     .pill.other { color:var(--muted); background:var(--surface-2); }
   .cat-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:8px; vertical-align:middle; }
   .cat-dot.digest { background:var(--green); } .cat-dot.hmac { background:var(--blue); }
   .cat-dot.sym { background:var(--amber); } .cat-dot.asym { background:var(--lilac); }
+  .cat-dot.kdf { background:var(--pink); } .cat-dot.aead { background:var(--teal); }
   .cat-dot.file { background:var(--coral); } .cat-dot.sys { background:var(--lilac); }
   .cat-dot.net { background:var(--cyan); } .cat-dot.other { background:var(--muted); }
   .empty, .detail-empty { color:var(--muted); text-align:center; padding:60px 20px; line-height:1.7; }
@@ -250,6 +253,8 @@
         <option value="1">HMAC</option>
         <option value="2">对称</option>
         <option value="3">非对称</option>
+        <option value="4">KDF</option>
+        <option value="5">AEAD</option>
       </select></span>
     <input id="tb-q" type="search" placeholder="搜索本类: 算法/操作/明文/预览…">
     <span class="size-filter">
@@ -632,10 +637,11 @@ const hexFmt=h=>(h||'').replace(/(.{64})/g,'$1\n');
 // 分类色（对齐 IDH）：crypto 再按算法细分 digest/hmac/sym/asym；net/file/system 直接映射。
 function catClass(c){ if(!c) return 'other';
   if(c.category==='net') return 'net'; if(c.category==='file') return 'file'; if(c.category==='system') return 'sys';
-  const a=c.algo||''; if(/Hmac|HMAC/i.test(a)) return 'hmac'; if(/MD5|SHA|摘要|Digest/i.test(a)) return 'digest';
+  const a=c.algo||''; if(/KDF/i.test(a)) return 'kdf'; if(/AEAD/i.test(a)) return 'aead';
+  if(/Hmac|HMAC/i.test(a)) return 'hmac'; if(/MD5|SHA|摘要|Digest/i.test(a)) return 'digest';
   if(/RSA|EC|DSA|非对称/i.test(a)) return 'asym'; return 'sym'; }
-const CATLABEL={digest:'摘要',hmac:'HMAC',sym:'对称',asym:'非对称',file:'文件',sys:'系统',net:'网络',other:'其它'};
-const CAT_BY_SEL={0:'digest',1:'hmac',2:'sym',3:'asym'};   // 分类下拉 → catClass
+const CATLABEL={digest:'摘要',hmac:'HMAC',sym:'对称',asym:'非对称',kdf:'KDF',aead:'AEAD',file:'文件',sys:'系统',net:'网络',other:'其它'};
+const CAT_BY_SEL={0:'digest',1:'hmac',2:'sym',3:'asym',4:'kdf',5:'aead'};   // 分类下拉 → catClass
 // HexDump：16 字节/行  偏移: 十六进制  |ascii|
 function hexdump(hex){ hex=hex||''; let out='';
   for(let i=0;i<hex.length;i+=32){ const rowHex=hex.slice(i,i+32); const off=(i/2).toString(16).padStart(8,'0');
@@ -829,7 +835,7 @@ async function openMcp(){
 }
 
 // ---- 设置 模态 ----
-const FAMILIES=[['digest','摘要 Digest'],['hmac','HMAC'],['symmetric','对称'],['asymmetric','非对称'],['tls','TLS']];
+const FAMILIES=[['digest','摘要 Digest'],['hmac','HMAC'],['symmetric','对称'],['asymmetric','非对称'],['tls','TLS'],['kdf','KDF 密钥派生'],['aead','AEAD(GCM/ChaCha20-Poly1305)']];
 function setSettingsPage(name){
   document.querySelectorAll('#setNav button').forEach(b=>b.classList.toggle('active',b.dataset.setpage===name));
   document.querySelectorAll('#setMask .set-page').forEach(p=>p.classList.remove('active'));
