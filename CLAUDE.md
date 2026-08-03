@@ -20,15 +20,16 @@ There is one plan. If something contradicts these docs, fix the docs in the same
 | 名称 | 含义 |
 |------|------|
 | **ADH** | 本产品（Android DecryptHub） |
+| **ADH Daemon** / `adhd` | 本机守护进程（HTTP/WS/MCP/分析）；对外统一此称 |
 | **IDH** | iOS 参考项目（IOSDecryptHub / ios-decrypt-helper），仅作对照 |
-| `libidh_agent.so` / `idhd` / `idh_*` | 早期脚手架遗留的内部标识符；产品对外统一称 ADH |
+| `libidh_agent.so` / `idhd` / `idh_*` / `IDH_*` | 早期脚手架遗留的内部标识符；代码符号与环境变量别名仍可用，产品对外不称 IDH |
 
 ## Architecture red line (do not cross)
 
 Three layers. Never merge them.
 
 - `libidh_agent.so` (in target process) — **collect / execute only**: hook, trace, dump, maps scan, light RPC. Keep it minimal, low-memory, non-blocking.
-- `idhd` (host daemon) — HTTP / WebSocket / MCP / DB / index / disasm cache / analysis.
+- **ADH Daemon** (`daemon/`, npm `adhd`) — HTTP / WebSocket / MCP / DB / index / disasm cache / analysis.
 - Web UI (browser) — observe / search / configure.
 
 **Never** put HTTP, MCP, a database, the dex indexer, or Capstone/QBDI heavy analysis inside the agent `.so`. That causes target OOM/ANR and is easy to detect.
@@ -41,11 +42,11 @@ Loop: **Explore → Plan → Implement → Verify**, then iterate on the result.
 2. Implement one roadmap slice at a time (see the version roadmap in DEVELOPMENT_PLAN).
 3. **Verify against a pass/fail signal** — never call something done on "looks right".
 4. Update `docs/PROGRESS.md` and `git commit` at each meaningful milestone.
-5. For independent parallel work use worktrees / subagents; keep the agent `.so` changes isolated from `idhd`/web when possible.
+5. For independent parallel work use worktrees / subagents; keep the agent `.so` changes isolated from ADH Daemon / web when possible.
 
 ## Scope priority (current)
 
-Build **all `libidh_agent.so` functionality first** and self-test it via 模拟注入 (sandbox `dlopen`) — that exercises the same agent code paths, so no real injection is needed to verify features. **Defer the Zygisk/gadget/repackage injectors (module W)** entirely; the user tests real injection manually. Do not block feature verification on real injection.
+Build **`libidh_agent.so` functionality** and self-test via 模拟注入 (sandbox `dlopen`). **Module W Zygisk + Manager** is in progress (`injector/`); Gadget/repackage remain deferred. Do not block feature verification on real injection — CI stays on 模拟注入.
 
 ## Verification (give yourself a real signal)
 
@@ -64,7 +65,7 @@ bash tools/build_detect.sh         # sandbox mock native lib libidhdetect.so
 bash tools/fetch_qbdi.sh           # one-time: QBDI headers/.so (instruction trace); gitignored
 bash tools/fetch_lsplant.sh        # one-time: LSPlant + Dobby (Java-method hook, WS-A)
 
-# --- daemon (idhd) — from daemon/
+# --- ADH Daemon (daemon/, npm adhd) — from daemon/
 node src/index.ts                  # start (HTTP/WS 8760, agent TCP 8761); or: npm start
 node --watch src/index.ts          # dev; or: npm run dev
 node test/smoke.ts                 # smoke; or: npm run smoke
@@ -72,13 +73,17 @@ node test/smoke.ts                 # smoke; or: npm run smoke
 # --- sandbox app (Kotlin, AGP 8.7.3 / Gradle 8.9 / compileSdk 36) — from sandbox-app/
 ./gradlew :app:assembleDebug       # build APK; install with adb install
 
+# --- Zygisk + Manager (module W) — from repo root
+bash tools/build_zygisk.sh         # -> injector/zygisk/dist/adh-zygisk.zip
+# Manager: injector/manager/ ./gradlew :app:assembleDebug
+
 # --- run + verify (this is the real pass/fail signal)
-bash tools/dev_up.sh               # idempotent: start idhd + set adb reverse (run first each loop)
+bash tools/dev_up.sh               # idempotent: start ADH Daemon + set adb reverse (run first each loop)
 bash tools/verify_all.sh           # full regression; device checks auto-SKIP (not FAIL) if offline
 bash tools/verify_v04_crypto.sh    # a single acceptance check (exit 0 = PASS). one per capability slice
 ```
 
-Ports: idhd HTTP/WS `8760`, agent TCP `8761` (override via `IDH_HTTP_PORT` / `IDH_AGENT_PORT`). Agent dials host through `adb reverse`; `dev_up.sh` sets both tunnels. New-machine repro order: `fetch_qbdi` → `build_agent` → `build_detect` → `dev_up` → `verify_all`.
+Ports: ADH Daemon HTTP/WS `8760`, agent TCP `8761` (override via `ADH_HTTP_PORT` / `ADH_AGENT_PORT`; legacy `IDH_*` aliases work). Agent dials host through `adb reverse`; `dev_up.sh` sets both tunnels. New-machine repro order: `fetch_qbdi` → `build_agent` → `build_detect` → `dev_up` → `verify_all`.
 
 There is no separate lint step. `AGENTS.md` (for Codex) is kept in sync with this file apart from the header line — mirror any change into both.
 
@@ -87,7 +92,8 @@ There is no separate lint step. `AGENTS.md` (for Codex) is kept in sync with thi
 Each layer has a `MAP.md` — read it before editing that layer:
 
 - `tools/MAP.md` — `tools/lib/verify_common.sh` (env resolve / alive probe / `RESULT:PASS` gate / chk accumulator) + `tools/lib/env.sh` (SDK/NDK paths) shared by the verify + build scripts. **Add a verify script = source the lib + one node heredoc** (see MAP recipe). `verify_v23_javahook` is deliberately excluded from `verify_all.sh` (LSPlant blocked on this ROM — comment in the SCRIPTS array).
-- `daemon/src/MAP.md` — `idhd` split: `state.ts` (shared state + leaf helpers) ← `service.ts` (agent transport + dump engine + capture ops) ← `mcp.ts` (MCP_TOOLS registry) + `index.ts` (boot + agent TCP + REST `ROUTES` table). **Add a REST route = one `ROUTES` entry in `index.ts`; add an MCP tool = one `MCP_TOOLS` entry in `mcp.ts`.** Import graph is one-directional (no cycles).
+- `daemon/src/MAP.md` — ADH Daemon split: `state.ts` ← `service.ts` ← `mcp.ts` / `index.ts`. **Add a REST route = one `ROUTES` entry; add an MCP tool = one `MCP_TOOLS` entry.**
+- `injector/` — Zygisk module (`injector/zygisk/`) + Manager APK (`injector/manager/`); scope file `/data/adb/adh/scope.json`.
 - `agent/src/MAP.md` — pending (Phase 3, agent `.so` split of the 2557-line `agent_main.c` + command-dispatch table). Until then, `agent_main.c` is the single TU; `agent_internal.h` prototypes the bootstrap helpers.
 
 
@@ -103,4 +109,4 @@ Each layer has a `MAP.md` — read it before editing that layer:
 ## Boundaries
 
 - Authorized targets only. Anti-anti-debug "resilience" (module S) is diagnostic + survival for authorized analysis; default off, no self-hiding by default, dangerous ops need confirmation.
-- Never commit captured target data (keys, plaintext, dumps). `.gitignore` excludes `captures/`, `dumps/`, `idhd-data/`.
+- Never commit captured target data (keys, plaintext, dumps). `.gitignore` excludes `captures/`, `dumps/`, `idhd-data/`, `adhd-data/`.

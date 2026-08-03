@@ -76,7 +76,7 @@ Web UI（浏览器）：
 | 层级 | 组件 | 做什么 | 不做什么 |
 |---|---|---|---|
 | L1 | `libidh_agent.so` | hook、trace、dump、maps 扫描、事件推送、执行 RPC 命令 | HTTP/MCP、DB、索引、smali 生成、大量反汇编缓存 |
-| L2 | `idhd` | Web/MCP 服务、会话、调度、存储、索引、分析、缓存 | 注入目标进程、直接读目标内存 |
+| L2 | ADH Daemon (`adhd`) | Web/MCP 服务、会话、调度、存储、索引、分析、缓存 | 注入目标进程、直接读目标内存 |
 | L3 | Web UI | 观测、搜索、配置、可视化、导出 | 业务逻辑、直连 Agent |
 
 ### 1.2 外部依赖
@@ -499,11 +499,12 @@ android-decrpthub/          # 仓库名；产品名 ADH (Android DecryptHub)
 │   └── third_party/        # capstone, qbdi, lsplant (git submodule)
 │
 ├── injector/               # W 注入后端
-│   ├── zygisk/             # root early-inject 模块
-│   ├── gadget-pack/        # 非 root：agent+gadget 打进 APK 重签
-│   └── ptrace/             # 手动注入器
+│   ├── zygisk/             # Magisk Zygisk early-inject + dist/adh-zygisk.zip
+│   ├── manager/            # ADH Manager APK（作用域白名单 UI）
+│   ├── gadget-pack/        # 非 root：agent+gadget 打进 APK 重签（延后）
+│   └── ptrace/             # 手动注入器（延后）
 │
-├── daemon/                 # idhd
+├── daemon/                 # ADH Daemon (npm adhd; legacy idhd)
 │   ├── src/
 │   │   ├── http/
 │   │   ├── mcp/

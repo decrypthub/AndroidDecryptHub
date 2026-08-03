@@ -66,7 +66,7 @@ export async function handleMcp(reqBody: string, res: ServerResponse) {
     const body = JSON.stringify({ jsonrpc: '2.0', id: msg.id, ...(error ? { error } : { result }) });
     res.writeHead(200, { 'content-type': 'application/json' }); res.end(body);
   };
-  if (msg.method === 'initialize') return reply({ protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'idhd', version: '0.1.0' } });
+  if (msg.method === 'initialize') return reply({ protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'adhd', version: '0.1.0' } });
   if (msg.method === 'notifications/initialized' || msg.method === 'notifications/cancelled') { res.writeHead(202).end(); return; }
   if (msg.method === 'ping') return reply({});
   if (msg.method === 'tools/list') return reply({ tools: MCP_TOOLS.map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })) });

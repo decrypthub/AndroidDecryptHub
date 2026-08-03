@@ -60,7 +60,8 @@ touch shell options; the caller's `set -e/-u/-o pipefail` stands. WSL builds use
 - `build_agent.sh` — `libidh_agent.so` (arm64-v8a, NDK+SDK cmake), stages into `sandbox-app/…/jniLibs/$ABI`, prints `idh_agent_start`+`JNI_OnLoad` exports (fail-loud on compile error — do NOT hide build output).
 - `build_detect.sh` — `libidhdetect.so` (sandbox's mock detection target), same cmake pattern.
 - `fetch_qbdi.sh` / `fetch_lsplant.sh` — one-time third-party fetch (gitignored under `agent/third_party/`).
-- `dev_up.sh` — idempotent: start idhd (if down) + `adb reverse` for 8760/8761.
+- `build_zygisk.sh` — Magisk Zygisk 模块 zip（依赖 `build_agent.sh`）→ `injector/zygisk/dist/adh-zygisk.zip`
+- `dev_up.sh` — idempotent: start ADH Daemon (if down) + `adb reverse` for 8760/8761.
 - `load_frida_gadget.sh` — manual real-injection helper (module W, deferred).
 
 ## Known flakes (pre-existing, not introduced by the lib refactor)

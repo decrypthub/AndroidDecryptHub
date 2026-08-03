@@ -9,16 +9,17 @@
 Target app process            libidh_agent.so     collect / execute only
   (device, arm64)             ── NDJSON/TCP ──►    hook · trace · dump · maps · JNI reflect
                               (via adb reverse)
-Host daemon                   idhd (Node/TS)       analysis · storage · HTTP · WS · MCP
+Host daemon                   ADH Daemon (adhd)    analysis · storage · HTTP · WS · MCP
 Browser / AI client           Web console / MCP    observe · search · drive
 ```
 
-- **Agent** (`agent/`, C + NDK): loaded via `System.loadLibrary` (模拟注入) or an injector.
-  Dual entry `JNI_OnLoad` / `idh_agent_start`. Connects to idhd over TCP `127.0.0.1:8761`
+- **Agent** (`agent/`, C + NDK): loaded via `System.loadLibrary` (模拟注入) or Zygisk injector.
+  Dual entry `JNI_OnLoad` / `idh_agent_start`. Connects to ADH Daemon over TCP `127.0.0.1:8761`
   (reachable from device via `adb reverse`). Executes commands, streams results. No HTTP/DB.
-- **idhd** (`daemon/`, Node 24 + TypeScript, no build step): agent registry, HTTP+WS `8760`,
-  REST API, MCP server, dex parser/indexer, ELF analysis (llvm-objdump/readelf), dump storage.
-- **Web/MCP**: `daemon/public/index.html` console; `POST /mcp` for AI clients (25 tools).
+- **ADH Daemon** (`daemon/`, npm `adhd`, Node 24 + TypeScript, no build step; legacy name `idhd`):
+  agent registry, HTTP+WS `8760`, REST API, MCP server, dex parser/indexer, ELF analysis, dump storage.
+- **Web/MCP**: `daemon/public/index.html` console; `POST /mcp` for AI clients.
+- **Injector** (`injector/`): Magisk Zygisk module + ADH Manager (scope allowlist).
 
 ## Wire protocol (agent ↔ idhd), NDJSON
 

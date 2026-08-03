@@ -37,8 +37,13 @@
       · 验证：`tools/verify_v26_cryptocoverage.sh`（新增）连续多次 fresh-restart 测试 PASS；`tools/verify_all.sh` 41/41 全绿
       · 修了一个验收脚本自身的竞态：`aeadDemo` 一次触发产出 3 条相关捕获（原生 GCM 密文/原生 ChaCha 密文/沙盒自带 IdhReport Java 富捕获），轮询一见到第一条就提前返回，导致偶发 `aeadMarker=false`——加 `settleTicks` 让轮询在断言满足后再多等几拍
 - [x] **结构重构 Phase 1 — tools 测试库（2026-08-03）**：抽出 `tools/lib/verify_common.sh`（resolve_env/sandbox_alive/gate/grep_q/host_begin+chk+finish，here-string grep 修 SIGPIPE 假 FAIL）+ `tools/lib/env.sh`（SDK/NDK/CMAKE/NINJA/TOOLCHAIN/READELF/ROOT/ABI，build_agent+build_detect 共享）；33 个 verify 脚本转 source 库（node heredoc 全 verbatim，只换 shell boilerplate），三种 idiom（device-alive / device-host node-heredoc / host-chk）各保其形；`tools/MAP.md` 导航 + 加脚本配方。**verify_all 41/41 全绿**（两轮：首轮 v08_disasm/analyze 瞬时 flake，次轮 41/41）。v23 故意排除（LSPlant 在本 ROM 阻断）——把静默排除显式化注释而非加回（fail-loud，避免未来 AI 误"修"致每次红）。已知预存 flake：v08 .so 重建路径 `readMem` short-read 早退（index.ts:663）→ Phase 2 dump.ts 抽取时处理。
-- [x] **结构重构 Phase 2 — daemon 拆分（2026-08-03）**：`daemon/src/index.ts` 1585 行 → 拆成 `state.ts`(共享态+叶子：registries/events/settings/capture store/分类/wss/broadcast/log/frameJson) + `service.ts`(transport+dump 引擎+capture ops：sendCmd/dumpRegion/reconstructSo/repairDexHeader/withCaptureSuspended/runUnpackSession/startCaptureLoop) + `mcp.ts`(MCP_TOOLS/handleMcp) + `index.ts`(839 行：boot+agent TCP+REST routing)。单向 import 图 `state ← service ← mcp/index`，零循环。`handleHttp`+agent TCP+boot 用 sed 字节级抽取（非手敲）降转录风险。**verify_all 41/41 全绿**。`daemon/src/MAP.md`。ESM 陷阱已处理：`capSeq` 放 service.ts 局部（导入 binding 只读，不能从外部 `++`）。
-      · **REST 路由表化（2026-08-03 续）**：`handleHttp` 660 行 if-chain → 64 entry `ROUTES` 表（`{method?, path, handler, prefix?}` + 首匹配派发循环 + 404 fallback）。加新 REST 路由 = 加一行表项，不再改 660 行 if 链。handler 体逐字搬自原 if-block（含每路由的 try/catch + 状态码 + 错误文案），3 个组合路由（`/api/dex/parse|crypto_scan|search` 共享 `dexParseScanSearch`、`/` + `/index.html` 共享 `dashboardHtml`）。`index.ts` 现 772 行（原 1585）。**verify_all 41/41 全绿**。
+- [x] **结构重构 Phase 2 — daemon 拆分（2026-08-03）**：`daemon/src/index.ts` 1585 行 → 拆成 `state.ts`/`service.ts`/`mcp.ts`/`index.ts`。**verify_all 41/41 全绿**。
+- [x] **ADH Daemon 品牌化 + 模块 W Zygisk/Manager 首版（2026-08-03）**：
+      · 对外统一称 **ADH Daemon**（npm `adhd`）；`ADH_*` env 别名；遗留 `idhd`/`idh_*`/`IDH_*` 保留。
+      · `injector/zygisk/` Magisk Zygisk 模块：按 `/data/adb/adh/scope.json` 白名单 `dlopen` + `idh_agent_start`；`tools/build_zygisk.sh` → `adh-zygisk.zip`。
+      · `injector/manager/` ADH Manager APK（LSPosed 风格作用域 UI）。
+      · `tools/verify_v27_zygisk.sh`：无 Magisk/未刷模块 → SKIP；有模块则 scope 往返 PASS。
+      · Gadget/重打包仍延后。
 - [ ] v2.2 WS-A inline 后端(ShadowHook)
 - [ ] v2.3 WS-F 持久索引 + 深解析 + 反射
 - [ ] v2.4 WS-E 脱壳二代 + try/catch + cdex/041（需样本，否则 PENDING）
@@ -90,7 +95,7 @@ arm64 预编译，agent 运行时 dlopen libQBDI.so，指令级 trace idh_trace_
 
 - **目标：先把 `libidh_agent.so` 的全部功能实现并自测通过**（模块 A–V 的 agent 侧能力）。
 - **验证一律走模拟注入**（sandbox `dlopen` 加载 agent）—— 它执行的就是 agent 的同一套代码路径，`.so` 全功能都能在此自测，无需真实注入。
-- **Zygisk / gadget / 重打包注入器（模块 W）整体延后**，由用户自己手动测试注入；循环**不要**在注入器上花时间，也不要因为"没有真实注入"而阻塞任何功能验证。
+- **Zygisk + Manager（模块 W 主线）已开建**（`injector/`）；Gadget/重打包仍延后。功能验证仍以 sandbox 模拟注入为主；`verify_v27_zygisk` 在未刷模块时 SKIP。
 - 因此 v0.1 已建立的 sandbox 模拟注入回路 = 后续所有版本的验证台。缺哪个测试 Activity 就往 sandbox-app 里加。
 
 ## 自动续跑循环（已启用）

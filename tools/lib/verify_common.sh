@@ -3,12 +3,11 @@
 # do not execute it directly.
 #
 # What this dedups (previously hand-copied into ~26 scripts, ~60-75% of each):
-#   - env resolution (ROOT/HTTP/SERIAL/BASE, honoring IDH_HTTP_PORT/IDH_SERIAL)
+#   - env resolution (ROOT/HTTP/SERIAL/BASE; ADH_* preferred, IDH_* aliases)
 #   - sandbox liveness probe (adb pidof com.idh.sandbox)
 #   - result gate (RESULT:PASS sentinel grep + optional alive check)
 #   - host-only chk accumulator + finish gate
-#   - SIGPIPE-safe here-string grep (the >64KB-page false-FAIL documented in
-#     verify_v10_webui.sh:11-13 — `echo "$X"|grep -q` hits SIGPIPE under pipefail)
+#   - SIGPIPE-safe here-string grep
 #
 # Behavior contract preserved: each verify script still exits 0 on PASS / 1 on FAIL.
 # The node heredoc payload (the unique per-test code) stays verbatim in each script;
@@ -23,15 +22,16 @@
 #
 # BASH_SOURCE[0] here is THIS file (tools/lib/verify_common.sh) — two levels up
 # is the repo root, so ROOT is correct regardless of which script sourced us.
+# ADH_* preferred; IDH_* kept as legacy aliases. ANDROID_SERIAL also honored.
 verify_resolve_env() {
   ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-  HTTP="${IDH_HTTP_PORT:-8760}"
+  HTTP="${ADH_HTTP_PORT:-${IDH_HTTP_PORT:-8760}}"
   BASE="http://127.0.0.1:$HTTP"
-  SERIAL="${IDH_SERIAL:-$(adb devices 2>/dev/null | awk 'NR==2{print $1}')}"
+  SERIAL="${ANDROID_SERIAL:-${ADH_SERIAL:-${IDH_SERIAL:-$(adb devices 2>/dev/null | awk 'NR==2{print $1}')}}}"
 }
 verify_resolve_env_host() {
   ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-  HTTP="${IDH_HTTP_PORT:-8760}"
+  HTTP="${ADH_HTTP_PORT:-${IDH_HTTP_PORT:-8760}}"
   BASE="http://127.0.0.1:$HTTP"
 }
 

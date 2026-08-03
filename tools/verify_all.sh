@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Master regression runner — runs every version acceptance script and reports a summary.
-# Ensures idhd + adb reverse are up first. Device-only scripts are skipped (not failed)
+# Ensures ADH Daemon + adb reverse are up first. Device-only scripts are skipped (not failed)
 # when no device is attached. Exit 0 only if all RUN scripts passed.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -56,6 +56,7 @@ SCRIPTS=(
   "verify_v24_javacap.sh:device"
   "verify_v25_fsbrowser.sh:device"
   "verify_v26_cryptocoverage.sh:device"
+  "verify_v27_zygisk.sh:device"
 )
 
 pass=0; fail=0; skip=0; FAILED=""

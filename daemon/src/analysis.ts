@@ -8,10 +8,10 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 const execFileP = promisify(execFile);
-const LLVM_BIN = process.env.IDH_LLVM_BIN ??
+const LLVM_BIN = process.env.ADH_LLVM_BIN ?? process.env.IDH_LLVM_BIN ??
   join(homedir(), 'AppData/Local/Android/Sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/windows-x86_64/bin');
-export const OBJDUMP = process.env.IDH_OBJDUMP ?? join(LLVM_BIN, 'llvm-objdump.exe');
-const READELF = process.env.IDH_READELF ?? join(LLVM_BIN, 'llvm-readelf.exe');
+export const OBJDUMP = process.env.ADH_OBJDUMP ?? process.env.IDH_OBJDUMP ?? join(LLVM_BIN, 'llvm-objdump.exe');
+const READELF = process.env.ADH_READELF ?? process.env.IDH_READELF ?? join(LLVM_BIN, 'llvm-readelf.exe');
 
 // Dynamic symbols (exports/imports), NEEDED libs, and printable strings of an ELF .so.
 export async function analyzeSo(path: string): Promise<any> {

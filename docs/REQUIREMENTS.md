@@ -55,11 +55,11 @@ iOS 参考项目把 HTTP、MCP、Capstone、日志存储全部放在注入的 dy
 
 ```text
 目标 App 进程          libidh_agent.so     hook / trace / dump / 采集 / 轻量 RPC
-独立守护进程           idhd                HTTP / WebSocket / MCP / DB / 索引 / 缓存 / 调度
+独立守护进程           ADH Daemon (adhd)   HTTP / WebSocket / MCP / DB / 索引 / 缓存 / 调度
 浏览器                 Web UI              观测台、搜索、配置、可视化、导出
 ```
 
-**记住这条红线**：目标进程内只做采集、拦截、定位；分析、索引、反编译、展示、持久化全部在 idhd。
+**记住这条红线**：目标进程内只做采集、拦截、定位；分析、索引、反编译、展示、持久化全部在 ADH Daemon。
 
 ---
 
@@ -67,7 +67,7 @@ iOS 参考项目把 HTTP、MCP、Capstone、日志存储全部放在注入的 dy
 
 ### 1.1 一句话
 
-一个运行在 Android 目标进程内的高能力 native agent，配合本机 daemon（idhd）、Web UI 和 MCP Server，实现：
+一个运行在 Android 目标进程内的高能力 native agent，配合本机守护进程（ADH Daemon）、Web UI 和 MCP Server，实现：
 
 - 运行时 dex/so/memory dump
 - Java / native hook 与算法观测
@@ -1513,7 +1513,7 @@ MCP              →  AI 可编程操控，与 HTTP 同源
 
 | 后端 | 环境 | 说明 |
 |------|------|------|
-| **Zygisk 插件** | root（Magisk） | 主线，zygote fork 后 early-inject，配合 S 韧性 |
+| **Zygisk 插件** | root（Magisk） | 主线，zygote fork 后 early-inject，配合 S 韧性；配套 **ADH Manager** 管理作用域白名单（`/data/adb/adh/scope.json`） |
 | **Frida Gadget** | 非 root | gadget so 随 APK 加载，或独立 gadget 模式 |
 | **重打包注入** | 非 root | 把 `libidh_agent.so`（+可选 gadget）打进目标 APK 重签名 |
 | ptrace 注入器 | root | 按需附加已运行进程 |
@@ -1523,7 +1523,7 @@ MCP              →  AI 可编程操控，与 HTTP 同源
 ### 30.2 打包交付物
 
 - `libidh_agent.so`（arm64-v8a 主线，设备 ABI）
-- Zygisk 模块包（root 版）
+- Zygisk 模块包（root 版）+ ADH Manager APK（作用域：选哪些 App 注入）
 - Gadget 打包工具：把 agent + gadget so 注入并重签目标 APK（非 root 版）
 - 双 bootstrap 入口：`JNI_OnLoad`/构造函数（被加载）与 `idh_agent_start()`（被宿主主动调用），行为一致
 
@@ -1531,10 +1531,20 @@ MCP              →  AI 可编程操控，与 HTTP 同源
 
 ```text
 sandbox-app 启动 → System.loadLibrary("idh_agent") → idh_agent_start()
-  → 连 idhd → 跑通全部模块断言 → 再打真实目标
+  → 连 ADH Daemon → 跑通全部模块断言 → 再打真实目标
 ```
 
 无需 root、确定性、可回归。真机注入只在联调/实战启用。
+
+### 30.4 Zygisk + Manager（设备侧作用域）
+
+```text
+ADH Manager → 写 /data/adb/adh/scope.json（allowlist）
+Zygisk 模块 (id=adh) → preAppSpecialize 读 scope → postAppSpecialize dlopen libidh_agent.so
+Agent → TCP 8761 → ADH Daemon（host，经 adb reverse）
+```
+
+交付物：`injector/zygisk/dist/adh-zygisk.zip`、`injector/manager` APK。Gadget/重打包仍为后续项。
 
 ---
 

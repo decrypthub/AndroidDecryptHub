@@ -1,4 +1,4 @@
-# ADH Agent ↔ idhd 协议 v2（length-framed）
+# ADH Agent ↔ ADH Daemon 协议 v2（length-framed）
 
 传输：TCP。设备侧 agent 经 `adb reverse tcp:8761 tcp:8761` 连 host `127.0.0.1:8761`。
 **v2.0 (WS-D) 起：所有消息一律 length-framed**，取代 v0 的 NDJSON。控制/事件/命令/结果均为
@@ -34,8 +34,8 @@
 
 ## 端口
 
-- idhd HTTP + WebSocket：`8760`
-- idhd Agent TCP：`8761`
+- idhd HTTP + WebSocket：`8760`（对外称 **ADH Daemon**；npm 包名 `adhd`）
+- ADH Daemon Agent TCP：`8761`
 
 ## agent → idhd（均为 `FRAME_JSON`）
 

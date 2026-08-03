@@ -1,4 +1,4 @@
-// service.ts — idhd service layer: agent-command transport + dump engine + capture ops.
+// service.ts — ADH Daemon service layer: agent-command transport + dump engine + capture ops.
 // Imported by mcp.ts (MCP handlers) and index.ts (REST routes + agent TCP + boot).
 // Imports ONLY from state.ts (+ dex.ts pure layer + node builtins) — no circular refs.
 import { readFile } from 'node:fs/promises';

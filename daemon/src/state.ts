@@ -1,4 +1,4 @@
-// state.ts — idhd shared state + leaf mutators.
+// state.ts — ADH Daemon shared state + leaf mutators.
 // Pure state holder: imports NOTHING from service.ts/mcp.ts/index.ts (no circular refs).
 // Imported by everyone. Everything that holds runtime state or is a leaf helper lives here;
 // functions that issue agent commands (sendCmd/capture loop/unpack/dump) live in service.ts.
@@ -73,7 +73,11 @@ export const nextId = () => `s_${(++seq).toString(36)}${Date.now().toString(36).
 export const nextCmdId = () => `c${(++cmdSeq).toString(36)}`;
 
 // ---- event store (session record/replay) ---------------------------------
-export const DATA_DIR = join(__dirname, '..', '..', 'idhd-data');
+// Prefer existing legacy idhd-data (compat with verify scripts); else adhd-data.
+const _dataRoot = join(__dirname, '..', '..');
+const _adhData = join(_dataRoot, 'adhd-data');
+const _idhData = join(_dataRoot, 'idhd-data');
+export const DATA_DIR = existsSync(_idhData) ? _idhData : _adhData;
 mkdirSync(DATA_DIR, { recursive: true });
 export const EVENTS_FILE = join(DATA_DIR, 'events.jsonl');
 interface Ev { seq: number; ts: number; type: string; data: any }
@@ -95,7 +99,7 @@ export function recordEvent(type: string, data: any) {
 }
 
 // ---- user settings (persisted; tunable from the web 设置 panel; IDH-style) --------
-// Only touches the idhd/web layer — the agent .so is never reconfigured from here.
+// Only touches the ADH Daemon / web layer — the agent .so is never reconfigured from here.
 export const SETTINGS_FILE = join(DATA_DIR, 'settings.json');
 export interface Settings {
   capture: { enabled: boolean; autoDumpDex: boolean; retain: number; families: Record<string, boolean>; cryptoModule: string; fileModule: string; sysModule: string };
@@ -149,7 +153,7 @@ try {
 export function saveSettings() { writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2)); }
 export function configStats() { return { captures: captures.length, dumps: dumps.size, events: events.length, on: captureTimers.size > 0, agents: sessions.size, capture: captureHealth() }; }
 // Which crypto family a capture belongs to (mirrors cryptoIdentify's buckets) — used by the
-// idhd-side family filter (panel-level; the agent still hooks everything).
+// Daemon-side family filter (panel-level; the agent still hooks everything).
 export function familyOf(algo: string): 'tls' | 'asymmetric' | 'hmac' | 'digest' | 'symmetric' | 'kdf' | 'aead' {
   if (/TLS/.test(algo)) return 'tls';
   if (/KDF/i.test(algo)) return 'kdf';
@@ -170,8 +174,8 @@ export function pushCapture(entry: Capture): boolean {
 }
 // Self-test workload classes the one-shot probe ops drive. The AGENT is target-agnostic —
 // it reads className/module/reportClass from each command and knows nothing about the target;
-// idhd supplies these sandbox defaults so its self-test endpoints work out of the box. A real
-// investigation overrides via ?class= / className. (This is the idhd side of the red line: the
+// ADH Daemon supplies these sandbox defaults so its self-test endpoints work out of the box. A real
+// investigation overrides via ?class= / className. (This is the daemon side of the red line: the
 // grep-com.idh.sandbox-agent/=0 gate is about the .so, which stays clean.)
 export const SANDBOX = {
   net: 'com.idh.sandbox.Network', flow: 'com.idh.sandbox.CorrelatedFlow',
@@ -306,7 +310,7 @@ export function broadcast(event: string, data: unknown) {
   if (event !== 'snapshot') recordEvent(event, data);   // persist for record/replay
 }
 export function log(...a: unknown[]) {
-  console.log(`[idhd ${new Date().toISOString()}]`, ...a);
+  console.log(`[adhd ${new Date().toISOString()}]`, ...a);
 }
 export function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve) => {

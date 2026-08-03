@@ -1,6 +1,6 @@
-# daemon/src/ — MAP
+# ADH Daemon (daemon/src/) — MAP
 
-idhd (Node 24 + TypeScript, runs `.ts` directly, no build step). HTTP/WS `8760`, agent TCP `8761`.
+ADH Daemon / `adhd` (Node 24 + TypeScript, runs `.ts` directly, no build step). Legacy internal name: `idhd`. HTTP/WS `8760`, agent TCP `8761`.
 
 ## Module layout (post-split)
 

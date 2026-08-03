@@ -1,4 +1,4 @@
-// idhd — ADH (Android DecryptHub) daemon (v0.1).
+// ADH Daemon — Android DecryptHub host daemon (legacy internal name: idhd).
 // Boot + agent-TCP frame decode + REST routing live HERE. State + leaf helpers → state.ts;
 // agent-command transport + dump engine + capture ops → service.ts; MCP JSON-RPC → mcp.ts.
 // (Earlier: all of the above inlined in this one 1585-line file. Split bottom-up to keep the
@@ -28,12 +28,13 @@ import {
 import type { AgentSession, AgentMsg, DumpMeta } from './state.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const HTTP_PORT = Number(process.env.IDH_HTTP_PORT ?? 8760);
-const AGENT_PORT = Number(process.env.IDH_AGENT_PORT ?? 8761);
+// ADH_* preferred; IDH_* kept as legacy aliases.
+const HTTP_PORT = Number(process.env.ADH_HTTP_PORT ?? process.env.IDH_HTTP_PORT ?? 8760);
+const AGENT_PORT = Number(process.env.ADH_AGENT_PORT ?? process.env.IDH_AGENT_PORT ?? 8761);
 
 // ---- access URLs (mirrors ios-decrypt-helper: surface the LAN address so the console
 //      is reachable from the phone / any device on the network, fail-loud if none) -----
-// idhd (the web console) runs on the HOST, so the relevant LAN IP is this machine's,
+// ADH Daemon (the web console) runs on the HOST, so the relevant LAN IP is this machine's,
 // not the phone's. The phone reaches it via `adb reverse` (127.0.0.1) OR directly over
 // Wi-Fi at the LAN IP. Prefer private ranges (192.168./10./172.16-31.) and stable NICs.
 function lanIPv4s(): string[] {
@@ -152,7 +153,7 @@ async function handleHttp(req: http.IncomingMessage, res: http.ServerResponse) {
 
   type Route = { method?: string; path: string; prefix?: boolean; handler: () => any };
   const routes: Route[] = [
-    { path: '/health', handler: () => send(200, { ok: true, service: 'idhd', version: '0.1.0', agents: sessions.size, uptime: process.uptime(), mcpTools: MCP_TOOLS.length, web: webUrls() }) },
+    { path: '/health', handler: () => send(200, { ok: true, service: 'adhd', name: 'ADH Daemon', version: '0.1.0', agents: sessions.size, uptime: process.uptime(), mcpTools: MCP_TOOLS.length, web: webUrls() }) },
     // MCP Streamable HTTP endpoint (JSON-RPC)
     { method: 'POST', path: '/mcp', handler: async () => handleMcp(await readBody(req), res) },
     // Live captures (auto-populated by the persistent hooks): GET /api/captures?since=&limit=
@@ -243,7 +244,7 @@ async function handleHttp(req: http.IncomingMessage, res: http.ServerResponse) {
       return send(200, { ok: true, cleared: what, stats: configStats() });
     } },
     { path: '/api/mcp/doc', handler: () => {
-      const md = ['# ADH MCP Tools', '', `Generated from the live idhd registry (${MCP_TOOLS.length} tools). Endpoint: \`POST /mcp\` (JSON-RPC 2.0).`, '',
+      const md = ['# ADH MCP Tools', '', `Generated from the live ADH Daemon registry (${MCP_TOOLS.length} tools). Endpoint: \`POST /mcp\` (JSON-RPC 2.0).`, '',
         '| Tool | Description | Args |', '|---|---|---|',
         ...MCP_TOOLS.map(t => `| \`${t.name}\` | ${t.description} | ${Object.keys(t.inputSchema.properties ?? {}).join(', ') || '—'} |`), ''].join('\n');
       res.writeHead(200, { 'content-type': 'text/markdown; charset=utf-8' }); return res.end(md);
@@ -752,11 +753,11 @@ httpServer.on('upgrade', (req, socket, head) => {
 
 // ---- boot -----------------------------------------------------------------
 
-agentServer.listen(AGENT_PORT, '0.0.0.0', () => log(`agent TCP listening on :${AGENT_PORT}`));
+agentServer.listen(AGENT_PORT, '0.0.0.0', () => log(`ADH Daemon agent TCP listening on :${AGENT_PORT}`));
 httpServer.listen(HTTP_PORT, '0.0.0.0', () => {
   const w = webUrls();
-  log(`HTTP + WS listening on 0.0.0.0:${HTTP_PORT}`);
-  log('┌─ ADH web console ───────────────────────────────────────────');
+  log(`ADH Daemon HTTP + WS listening on 0.0.0.0:${HTTP_PORT}`);
+  log('┌─ ADH Daemon web console ────────────────────────────────────');
   log(`│  local : ${w.local}   (this PC's browser)`);
   if (w.lan.length) {
     for (const u of w.lan) log(`│  LAN   : ${u}   (phone / any device on the same network)`);
