@@ -82,6 +82,16 @@ Ports: idhd HTTP/WS `8760`, agent TCP `8761` (override via `IDH_HTTP_PORT` / `ID
 
 There is no separate lint step. `AGENTS.md` (for Codex) is kept in sync with this file apart from the header line — mirror any change into both.
 
+## Module layout (navigation)
+
+Each layer has a `MAP.md` — read it before editing that layer:
+
+- `tools/MAP.md` — `tools/lib/verify_common.sh` (env resolve / alive probe / `RESULT:PASS` gate / chk accumulator) + `tools/lib/env.sh` (SDK/NDK paths) shared by the verify + build scripts. **Add a verify script = source the lib + one node heredoc** (see MAP recipe). `verify_v23_javahook` is deliberately excluded from `verify_all.sh` (LSPlant blocked on this ROM — comment in the SCRIPTS array).
+- `daemon/src/MAP.md` — `idhd` split: `state.ts` (shared state + leaf helpers) ← `service.ts` (agent transport + dump engine + capture ops) ← `mcp.ts` (MCP_TOOLS registry) + `index.ts` (boot + agent TCP + REST `ROUTES` table). **Add a REST route = one `ROUTES` entry in `index.ts`; add an MCP tool = one `MCP_TOOLS` entry in `mcp.ts`.** Import graph is one-directional (no cycles).
+- `agent/src/MAP.md` — pending (Phase 3, agent `.so` split of the 2557-line `agent_main.c` + command-dispatch table). Until then, `agent_main.c` is the single TU; `agent_internal.h` prototypes the bootstrap helpers.
+
+
+
 ## Test device (available now)
 
 - `adb` serial `13f54a46` — OnePlus PGP110, **Android 15 / SDK 35**, `arm64-v8a`, **rooted** (`su` → uid=0), `ro.debuggable=0`.
