@@ -138,6 +138,10 @@ const agentServer = net.createServer((sock) => {
   });
   sock.on('error', (e) => log('agent sock error:', (e as Error).message));
 });
+// ---- HTTP routing (table-driven; was a 660-line if-chain) ----------------
+// Each route: { method?, path, handler, prefix? }. method omitted = any method.
+// prefix=true → startsWith match (for /:id path-param routes). First match wins;
+// no match → 404. Handler bodies are byte-for-byte the original if-block bodies.
 async function handleHttp(req: http.IncomingMessage, res: http.ServerResponse) {
   const url = new URL(req.url ?? '/', `http://localhost`);
   const send = (code: number, body: unknown, type = 'application/json') => {
@@ -146,609 +150,549 @@ async function handleHttp(req: http.IncomingMessage, res: http.ServerResponse) {
     res.end(s);
   };
 
-  if (url.pathname === '/health') {
-    return send(200, { ok: true, service: 'idhd', version: '0.1.0', agents: sessions.size, uptime: process.uptime(), mcpTools: MCP_TOOLS.length, web: webUrls() });
-  }
-  // MCP Streamable HTTP endpoint (JSON-RPC)
-  if (url.pathname === '/mcp' && req.method === 'POST') {
-    return handleMcp(await readBody(req), res);
-  }
-  // Live captures (auto-populated by the persistent hooks): GET /api/captures?since=&limit=
-  if (url.pathname === '/api/captures') {
-    const since = Number(url.searchParams.get('since') ?? 0);
-    const limit = Math.min(Number(url.searchParams.get('limit') ?? 200), 1000);
-    const list = captures.filter(c => c.id > since);
-    // list view omits full hex; detail view (/api/captures/:id) carries it.
-    // WS-C: `health` carries honest ring accounting — complete:false + dropped>0 when the
-    // agent ring overflowed (no silent loss; the panel should show this in red).
-    const health = captureHealth();
-    return send(200, {
-      total: captures.length, on: captureTimers.size > 0,
-      complete: health.complete, dropped: health.dropped, jdropped: health.jdropped,
-      seq: health.seq, backlog: health.backlog, health,
-      captures: list.slice(-limit).map(c => ({ id: c.id, source: c.source, category: c.category, algo: c.algo, op: c.op, func: c.func, inl: c.inl, tid: c.tid, ts: c.ts, preview: c.preview })),
-    });
-  }
-  if (url.pathname.startsWith('/api/captures/')) {
-    const id = Number(url.pathname.slice('/api/captures/'.length));
-    const c = captures.find(x => x.id === id);
-    if (!c) return send(404, { error: 'not found' });
-    // decode as UTF-8 so Chinese plaintext (gray-market payloads) is readable, not dotted
-    let text = '';
-    try { text = Buffer.from(c.hex, 'hex').toString('utf8'); } catch { text = hexToPreview(c.hex, 4096); }
-    return send(200, { ...c, text });
-  }
-  // Session events (record/replay): GET /api/events?type=&limit=&since=
-  if (url.pathname === '/api/events') {
-    const type = url.searchParams.get('type');
-    const since = Number(url.searchParams.get('since') ?? 0);
-    const limit = Math.min(Number(url.searchParams.get('limit') ?? 500), 5000);
-    let list = events.filter(e => e.seq > since && (!type || e.type === type));
-    return send(200, { total: events.length, returned: Math.min(list.length, limit), events: list.slice(-limit) });
-  }
-  // Diagnostic report / export (P/R) — metadata only, no captured keys/plaintext.
-  if (url.pathname === '/api/export/report') {
-    return send(200, {
+  type Route = { method?: string; path: string; prefix?: boolean; handler: () => any };
+  const routes: Route[] = [
+    { path: '/health', handler: () => send(200, { ok: true, service: 'idhd', version: '0.1.0', agents: sessions.size, uptime: process.uptime(), mcpTools: MCP_TOOLS.length, web: webUrls() }) },
+    // MCP Streamable HTTP endpoint (JSON-RPC)
+    { method: 'POST', path: '/mcp', handler: async () => handleMcp(await readBody(req), res) },
+    // Live captures (auto-populated by the persistent hooks): GET /api/captures?since=&limit=
+    { path: '/api/captures', handler: () => {
+      const since = Number(url.searchParams.get('since') ?? 0);
+      const limit = Math.min(Number(url.searchParams.get('limit') ?? 200), 1000);
+      const list = captures.filter(c => c.id > since);
+      // WS-C: `health` carries honest ring accounting — complete:false + dropped>0 when the
+      // agent ring overflowed (no silent loss; the panel should show this in red).
+      const health = captureHealth();
+      return send(200, {
+        total: captures.length, on: captureTimers.size > 0,
+        complete: health.complete, dropped: health.dropped, jdropped: health.jdropped,
+        seq: health.seq, backlog: health.backlog, health,
+        captures: list.slice(-limit).map(c => ({ id: c.id, source: c.source, category: c.category, algo: c.algo, op: c.op, func: c.func, inl: c.inl, tid: c.tid, ts: c.ts, preview: c.preview })),
+      });
+    } },
+    { path: '/api/captures/', prefix: true, handler: () => {
+      const id = Number(url.pathname.slice('/api/captures/'.length));
+      const c = captures.find(x => x.id === id);
+      if (!c) return send(404, { error: 'not found' });
+      // decode as UTF-8 so Chinese plaintext (gray-market payloads) is readable, not dotted
+      let text = '';
+      try { text = Buffer.from(c.hex, 'hex').toString('utf8'); } catch { text = hexToPreview(c.hex, 4096); }
+      return send(200, { ...c, text });
+    } },
+    // Session events (record/replay): GET /api/events?type=&limit=&since=
+    { path: '/api/events', handler: () => {
+      const type = url.searchParams.get('type');
+      const since = Number(url.searchParams.get('since') ?? 0);
+      const limit = Math.min(Number(url.searchParams.get('limit') ?? 500), 5000);
+      let list = events.filter(e => e.seq > since && (!type || e.type === type));
+      return send(200, { total: events.length, returned: Math.min(list.length, limit), events: list.slice(-limit) });
+    } },
+    // Diagnostic report / export (P/R) — metadata only, no captured keys/plaintext.
+    { path: '/api/export/report', handler: () => send(200, {
       report: 'idh-diagnostic', version: '0.1.0', generatedAt: new Date().toISOString(), uptime: process.uptime(),
       agents: [...sessions.values()].map(s => ({ sessionId: s.sessionId, package: s.package, pid: s.pid, abi: s.abi, android: s.android, sdk: s.sdk, entry: s.entry, online: s.online, mapsCount: s.mapsCount })),
       dumps: [...dumps.values()].map(d => ({ sha256: d.sha256, kind: d.kind, size: d.size, source: d.source, tag: d.tag, capturedAt: d.capturedAt })),
       capabilities: { rest: true, websocket: true, mcp: true, mcpTools: MCP_TOOLS.length },
       note: 'metadata only — captured key/plaintext content is never in diagnostic reports',
-    });
-  }
-  // ---- settings / config (web 设置面板；IDH 交互) ----
-  // GET  /api/config          → { settings, stats }
-  // POST /api/config          → section-merge patch, persist, apply live
-  if (url.pathname === '/api/config') {
-    if (req.method === 'POST') {
-      let patch: any = {};
-      try { patch = JSON.parse((await readBody(req)) || '{}'); } catch { return send(400, { error: 'bad json' }); }
-      const applied = mergeSettings(patch);
+    }) },
+    // ---- settings / config (web 设置面板；IDH 交互) ----
+    { path: '/api/config', handler: async () => {
+      if (req.method === 'POST') {
+        let patch: any = {};
+        try { patch = JSON.parse((await readBody(req)) || '{}'); } catch { return send(400, { error: 'bad json' }); }
+        const applied = mergeSettings(patch);
+        while (captures.length > settings.capture.retain) captures.shift();
+        applyCaptureEnabled().catch((e) => log('[settings] applyCaptureEnabled:', (e as Error).message));
+        try { saveSettings(); }
+        catch (e) { return send(500, { error: '设置已在内存生效，但写入磁盘失败(重启后丢失): ' + (e as Error).message, applied, settings, persisted: false }); }
+        return send(200, { ok: true, applied, settings, stats: configStats(), persisted: true });
+      }
+      return send(200, { settings, stats: configStats() });
+    } },
+    { path: '/api/settings/export', handler: () => send(200, settings) },
+    { method: 'POST', path: '/api/settings/import', handler: async () => {
+      let obj: any;
+      try { obj = JSON.parse((await readBody(req)) || '{}'); } catch { return send(400, { error: 'JSON 格式错误' }); }
+      if (typeof obj !== 'object' || Array.isArray(obj)) return send(400, { error: '顶层必须是对象' });
+      const applied = mergeSettings(obj);
+      if (!applied.length) return send(400, { error: '没有可应用的板块(capture/ui)' });
       while (captures.length > settings.capture.retain) captures.shift();
       applyCaptureEnabled().catch((e) => log('[settings] applyCaptureEnabled:', (e as Error).message));
-      // Persist last, and tell the truth: a failed write must NOT return ok — the UI would lie "已保存".
       try { saveSettings(); }
-      catch (e) { return send(500, { error: '设置已在内存生效，但写入磁盘失败(重启后丢失): ' + (e as Error).message, applied, settings, persisted: false }); }
-      return send(200, { ok: true, applied, settings, stats: configStats(), persisted: true });
-    }
-    return send(200, { settings, stats: configStats() });
-  }
-  // GET /api/settings/export → the raw settings object (for the 配置 JSON editor / download)
-  if (url.pathname === '/api/settings/export') return send(200, settings);
-  // POST /api/settings/import → section-merge (capture/ui), like IDH; returns { applied }
-  if (url.pathname === '/api/settings/import' && req.method === 'POST') {
-    let obj: any;
-    try { obj = JSON.parse((await readBody(req)) || '{}'); } catch { return send(400, { error: 'JSON 格式错误' }); }
-    if (typeof obj !== 'object' || Array.isArray(obj)) return send(400, { error: '顶层必须是对象' });
-    const applied = mergeSettings(obj);
-    if (!applied.length) return send(400, { error: '没有可应用的板块(capture/ui)' });
-    while (captures.length > settings.capture.retain) captures.shift();
-    applyCaptureEnabled().catch((e) => log('[settings] applyCaptureEnabled:', (e as Error).message));
-    try { saveSettings(); }
-    catch (e) { return send(500, { error: '导入已在内存生效，但写入磁盘失败(重启后丢失): ' + (e as Error).message, applied, settings, persisted: false }); }
-    return send(200, { ok: true, applied, settings, persisted: true });
-  }
-  // POST /api/data/clear { what: 'captures'|'events'|'dumps' } → 危险操作，清空对应存储
-  if (url.pathname === '/api/data/clear' && req.method === 'POST') {
-    let body: any;
-    try { body = JSON.parse((await readBody(req)) || '{}'); } catch { return send(400, { error: 'bad json' }); }
-    const what = String(body.what || '');
-    const errors: string[] = [];
-    if (what === 'captures') { captures.length = 0; recentJavaIn.clear(); }
-    else if (what === 'events') {
-      events.length = 0;
-      try { writeFileSync(EVENTS_FILE, ''); } catch (e) { errors.push(`events 回放文件: ${(e as Error).message}`); }
-    }
-    else if (what === 'dumps') {
-      for (const d of dumps.values()) {
-        try { if (existsSync(d.path)) unlinkSync(d.path); } catch (e) { errors.push(`${d.path}: ${(e as Error).message}`); }
+      catch (e) { return send(500, { error: '导入已在内存生效，但写入磁盘失败(重启后丢失): ' + (e as Error).message, applied, settings, persisted: false }); }
+      return send(200, { ok: true, applied, settings, persisted: true });
+    } },
+    { method: 'POST', path: '/api/data/clear', handler: async () => {
+      let body: any;
+      try { body = JSON.parse((await readBody(req)) || '{}'); } catch { return send(400, { error: 'bad json' }); }
+      const what = String(body.what || '');
+      const errors: string[] = [];
+      if (what === 'captures') { captures.length = 0; recentJavaIn.clear(); }
+      else if (what === 'events') {
+        events.length = 0;
+        try { writeFileSync(EVENTS_FILE, ''); } catch (e) { errors.push(`events 回放文件: ${(e as Error).message}`); }
       }
-      dumps.clear();
-    } else return send(400, { error: 'what 必须是 captures|events|dumps' });
-    broadcast('data.cleared', { what });
-    // Fail loud: if any on-disk delete failed, the memory index is cleared but files remain — say so.
-    if (errors.length) { log(`[data/clear] ${what} 部分磁盘删除失败:`, errors.join('; ')); return send(500, { error: `内存索引已清，但磁盘删除失败(${errors.length}项)`, cleared: what, errors, stats: configStats() }); }
-    return send(200, { ok: true, cleared: what, stats: configStats() });
-  }
-  // MCP tool inventory as markdown (for docs/mcp-tools.md)
-  if (url.pathname === '/api/mcp/doc') {
-    const md = ['# ADH MCP Tools', '', `Generated from the live idhd registry (${MCP_TOOLS.length} tools). Endpoint: \`POST /mcp\` (JSON-RPC 2.0).`, '',
-      '| Tool | Description | Args |', '|---|---|---|',
-      ...MCP_TOOLS.map(t => `| \`${t.name}\` | ${t.description} | ${Object.keys(t.inputSchema.properties ?? {}).join(', ') || '—'} |`), ''].join('\n');
-    res.writeHead(200, { 'content-type': 'text/markdown; charset=utf-8' }); return res.end(md);
-  }
-  // Plain-language crypto identification (axis 1): GET /api/crypto/identify
-  if (url.pathname === '/api/crypto/identify') return send(200, cryptoIdentify());
-  // One-click MCP config (axis 3): GET /api/mcp/config — paste into Claude/Cursor, then ask the AI
-  if (url.pathname === '/api/mcp/config') {
-    const w = webUrls(); const lan = (w.lan[0] ?? w.local).replace(/^http/, 'http');
-    const mcpUrl = `${lan}/mcp`;
-    const cfg = {
-      note: '把 mcpServers 这段粘进 Claude Desktop / Cursor 的 MCP 配置，重启后即可让 AI 调用 ADH 的全部逆向工具（分析内存/指令/hook/trace/事件搜索/抓包/脱壳/算法识别）',
-      mcpServers: { adh: { type: 'http', url: mcpUrl } },
-      endpoint: mcpUrl, tools: MCP_TOOLS.length,
-      cli: `claude mcp add --transport http adh "${mcpUrl}"`,
-      quickAsks: [
-        '用 crypto_identify 看看这个 App 用了哪些加密算法和密钥',
-        '用 unpack_run 一键脱壳，然后 dumps_list 给我下载链接',
-        '用 live_captures 看实时加解密，挑一条用 capture_detail 展开明文',
-        '用 trace_function hook 一下 access，看它检测了哪些 root 路径',
-        '用 qbdi_trace 逐指令跟踪这个 native 函数',
-      ],
-    };
-    return send(200, cfg);
-  }
-  if (url.pathname === '/api/agents') {
-    return send(200, [...sessions.values()]);
-  }
-  if (url.pathname.startsWith('/api/agents/')) {
-    const s = sessions.get(url.pathname.split('/')[3]);
-    return s ? send(200, s) : send(404, { error: 'no such session' });
-  }
-  // On-demand full maps from the agent: GET /api/process/maps?session=ID
-  // WS-D protocol self-test: GET /api/debug/frame_echo?session=ID&kb=N — send a command
-  // frame with an N-KB `pad` field and a `tail` sentinel placed AFTER it; the agent echoes
-  // back how many bytes it received and the tail. Proves the inbound command path carries
-  // frames far past the old 8192 single-line cap without truncation.
-  if (url.pathname === '/api/debug/frame_echo') {
-    const sid = pickSid(url.searchParams.get('session'));
-    if (!sid) return send(400, { error: 'no session' });
-    const kb = Math.max(1, Math.min(4096, Number(url.searchParams.get('kb') ?? 64)));
-    const padLen = kb * 1024;
-    const pad = 'A'.repeat(padLen);            // JSON-safe ASCII; sits before `tail`
-    const tail = 'IDH_FRAME_TAIL_v1';
-    try {
-      const r = await sendCmd(sid, 'frame_echo', { pad, tail, padLen }, 20_000);
-      return send(r.ok ? 200 : 502, { ...r, sentPadLen: padLen, tailOk: r.tail === tail, notTruncated: (r.recvBytes ?? 0) > padLen });
-    } catch (e) { return send(504, { error: (e as Error).message }); }
-  }
-  // Java method-hook self-test (WS-A / LSPlant): GET /api/java/hook_test?session=ID
-  if (url.pathname === '/api/java/hook_test') {
-    const sid = pickSid(url.searchParams.get('session'));
-    if (!sid) return send(400, { error: 'no session' });
-    try { const r = await withCaptureSuspended(sid, () => sendCmd(sid, 'java_hook_test', { className: url.searchParams.get('class') ?? SANDBOX.javaHook }, 25_000)); return send(r.ok ? 200 : 502, r); }
-    catch (e) { return send(504, { error: (e as Error).message }); }
-  }
-  if (url.pathname === '/api/process/maps') {
-    const sid = pickSid(url.searchParams.get('session'));
-    if (!sid) return send(400, { error: 'no session' });
-    try {
-      const r = await sendCmd(sid, 'maps');
-      if (r.ok) { const s = sessions.get(sid); if (s) s.mapsCount = r.count; }
-      return send(r.ok ? 200 : 502, r);
-    } catch (e) { return send(504, { error: (e as Error).message }); }
-  }
-  // Runtime Object Inspector (module T): POST /api/object/inspect {session, className, field}
-  if (url.pathname === '/api/object/inspect' && req.method === 'POST') {
-    const body = await readBody(req);
-    const { session, className, field } = JSON.parse(body || '{}');
-    const sid = pickSid(session);
-    if (!sid || !className || !field) return send(400, { error: 'need session, className, field' });
-    try { const r = await sendCmd(sid, 'object_inspect', { className, field }); return send(r.ok ? 200 : 502, r); }
-    catch (e) { return send(504, { error: (e as Error).message }); }
-  }
-  // Object method invocation (module T, low-risk): POST /api/object/invoke {session, className, field, method}
-  if (url.pathname === '/api/object/invoke' && req.method === 'POST') {
-    const body = await readBody(req);
-    const { session, className, field, method } = JSON.parse(body || '{}');
-    const sid = pickSid(session);
-    if (!sid || !className || !field || !method) return send(400, { error: 'need session, className, field, method' });
-    try { const r = await sendCmd(sid, 'object_invoke', { className, field, method }); return send(r.ok ? 200 : 502, r); }
-    catch (e) { return send(504, { error: (e as Error).message }); }
-  }
-  // Compatibility / anti-interference diagnostic (module S): GET /api/compat/probe?session=ID
-  if (url.pathname === '/api/compat/probe') {
-    const sid = pickSid(url.searchParams.get('session'));
-    if (!sid) return send(400, { error: 'no session' });
-    try { const r = await sendCmd(sid, 'compat_probe'); return send(r.ok ? 200 : 502, r); }
-    catch (e) { return send(504, { error: (e as Error).message }); }
-  }
-  // QBDI instruction-level trace (I.3): GET /api/trace/qbdi?session=ID&symLib=&symbol=
-  if (url.pathname === '/api/trace/qbdi') {
-    const sid = pickSid(url.searchParams.get('session'));
-    if (!sid) return send(400, { error: 'no session' });
-    const symLib = url.searchParams.get('symLib') ?? 'libidhdetect.so';
-    const symbol = url.searchParams.get('symbol') ?? 'idh_trace_target';
-    try { const r = await sendCmd(sid, 'qbdi_trace', { symLib, symbol }, 30_000); return send(r.ok ? 200 : 502, r); }
-    catch (e) { return send(504, { error: (e as Error).message }); }
-  }
-  // Generic native function trace (I.2): GET /api/trace/run?session=ID&symLib=&symbol=&hookModule=
-  if (url.pathname === '/api/trace/run') {
-    const sid = pickSid(url.searchParams.get('session'));
-    if (!sid) return send(400, { error: 'no session' });
-    const symLib = url.searchParams.get('symLib') ?? 'libc.so';
-    const symbol = url.searchParams.get('symbol') ?? 'access';
-    const hookModule = url.searchParams.get('hookModule') ?? 'libidhdetect.so';
-    // Suspend persistent capture first: capture_start may already hold a GOT hook on the same
-    // symbol/module (e.g. access in sysModule), which would leave trace_run's got_replace with
-    // replaced=0. Every other one-shot probe below wraps withCaptureSuspended for this reason.
-    try { const r = await withCaptureSuspended(sid, () => sendCmd(sid, 'trace_run', { symLib, symbol, hookModule, className: url.searchParams.get('class') ?? SANDBOX.detect }, 20_000)); return send(r.ok ? 200 : 502, r); }
-    catch (e) { return send(504, { error: (e as Error).message }); }
-  }
-  // Anti-analysis behavior observation (module V): GET /api/detect/watch?session=ID
-  if (url.pathname === '/api/detect/watch') {
-    const sid = pickSid(url.searchParams.get('session'));
-    if (!sid) return send(400, { error: 'no session' });
-    // Suspend continuous capture: detect_watch installs+restores its own ptrace/access/prop
-    // hooks on the same GOT slots the persistent system hooks now use.
-    try { const r = await withCaptureSuspended(sid, () => sendCmd(sid, 'detect_watch', { module: url.searchParams.get('module') ?? settings.capture.sysModule, className: url.searchParams.get('class') ?? SANDBOX.detect }, 20_000)); return send(r.ok ? 200 : 502, r); }
-    catch (e) { return send(504, { error: (e as Error).message }); }
-  }
-  // Crypto hook recon: GET /api/crypto/probe?session=ID
-  if (url.pathname === '/api/crypto/probe') {
-    const sid = pickSid(url.searchParams.get('session'));
-    if (!sid) return send(400, { error: 'no session' });
-    try { const r = await sendCmd(sid, 'crypto_probe', {}, 20_000); return send(r.ok ? 200 : 502, r); }
-    catch (e) { return send(504, { error: (e as Error).message }); }
-  }
-  // Network<->crypto correlation flow (取证闭环): GET /api/flow/watch?session=ID
-  if (url.pathname === '/api/flow/watch') {
-    const sid = pickSid(url.searchParams.get('session'));
-    if (!sid) return send(400, { error: 'no session' });
-    try {
-      const r = await withCaptureSuspended(sid, () => sendCmd(sid, 'flow_watch', { className: url.searchParams.get('class') ?? SANDBOX.flow }, 25_000));
-      const caps = (r.captures ?? []).map((c: any) => ({ ...c, ascii: Buffer.from(c.hex, 'hex').toString('latin1').replace(/[^\x20-\x7e]/g, '.') }));
-      // correlate: pair each crypto capture with a network capture on the SAME thread
-      // within a 200ms window (same tid, |Δts| <= 200ms).
-      const WINDOW_NS = 200_000_000;
-      const crypto = caps.filter((c: any) => c.func.startsWith('EVP_') || c.func === 'HMAC_Update');
-      const net = caps.filter((c: any) => c.func.startsWith('SSL_'));
-      const correlations = [];
-      for (const cr of crypto) for (const nw of net) {
-        if (cr.tid === nw.tid && Math.abs(cr.tsNs - nw.tsNs) <= WINDOW_NS) {
-          correlations.push({ tid: cr.tid, deltaMs: Math.abs(cr.tsNs - nw.tsNs) / 1e6,
-            plaintext: cr.ascii, cryptoFunc: cr.func, netFunc: nw.func, request: nw.ascii.slice(0, 120) });
+      else if (what === 'dumps') {
+        for (const d of dumps.values()) {
+          try { if (existsSync(d.path)) unlinkSync(d.path); } catch (e) { errors.push(`${d.path}: ${(e as Error).message}`); }
         }
-      }
-      r.captures = caps;
-      return send(r.ok ? 200 : 502, { ...r, correlations });
-    } catch (e) { return send(504, { error: (e as Error).message }); }
-  }
-  // Network TLS-plaintext capture test: GET /api/net/hook_test?session=ID
-  if (url.pathname === '/api/net/hook_test') {
-    const sid = pickSid(url.searchParams.get('session'));
-    if (!sid) return send(400, { error: 'no session' });
-    try {
-      const r = await withCaptureSuspended(sid, () => sendCmd(sid, 'net_hook_test', { className: url.searchParams.get('class') ?? SANDBOX.net }, 25_000));
-      if (r.captures) r.captures = r.captures.map((c: any) => ({ ...c, ascii: Buffer.from(c.hex, 'hex').toString('latin1').replace(/[^\x20-\x7e]/g, '.') }));
-      return send(r.ok ? 200 : 502, r);
-    } catch (e) { return send(504, { error: (e as Error).message }); }
-  }
-  // File I/O hook recon: GET /api/file/probe?session=ID
-  if (url.pathname === '/api/file/probe') {
-    const sid = pickSid(url.searchParams.get('session'));
-    if (!sid) return send(400, { error: 'no session' });
-    try { const r = await sendCmd(sid, 'file_probe', {}, 20_000); return send(r.ok ? 200 : 502, r); }
-    catch (e) { return send(504, { error: (e as Error).message }); }
-  }
-  // File I/O plaintext-path capture test: GET /api/file/hook_test?session=ID&module=
-  if (url.pathname === '/api/file/hook_test') {
-    const sid = pickSid(url.searchParams.get('session'));
-    if (!sid) return send(400, { error: 'no session' });
-    const module = url.searchParams.get('module') ?? settings.capture.fileModule;
-    try {
-      const r = await withCaptureSuspended(sid, () => sendCmd(sid, 'file_hook_test', { module, className: url.searchParams.get('class') ?? SANDBOX.file }, 25_000));
-      if (r.captures) r.captures = r.captures.map((c: any) => ({ ...c, ascii: Buffer.from(c.hex, 'hex').toString('latin1').replace(/[^\x20-\x7e]/g, '.') }));
-      return send(r.ok ? 200 : 502, r);
-    } catch (e) { return send(504, { error: (e as Error).message }); }
-  }
-  // Filesystem browse (「文件」panel): list a directory / read a file in the target's
-  // accessible dirs (its private /data/data/<pkg>, sdcard, etc). Agent-side collect-only.
-  // GET /api/fs/list?session=ID&path=/data/data/pkg
-  if (url.pathname === '/api/fs/list') {
-    const sid = pickSid(url.searchParams.get('session'));
-    if (!sid) return send(400, { error: 'no session' });
-    const path = url.searchParams.get('path') || '';
-    if (!path) return send(400, { error: 'need path' });
-    try { const r = await sendCmd(sid, 'list_dir', { path }, 20_000); return send(r.ok ? 200 : 502, r); }
-    catch (e) { return send(504, { error: (e as Error).message }); }
-  }
-  // POST /api/fs/read {session, path} → base64 content + a decoded utf8 text preview.
-  if (url.pathname === '/api/fs/read' && req.method === 'POST') {
-    const body = await readBody(req);
-    const { session, path } = JSON.parse(body || '{}');
-    const sid = pickSid(session);
-    if (!sid || !path) return send(400, { error: 'need session, path' });
-    try {
-      const r = await sendCmd(sid, 'read_file', { path: String(path) }, 25_000);
-      if (r.ok && r.b64) { try { r.text = Buffer.from(r.b64, 'base64').toString('utf8'); } catch { r.text = ''; } }
-      return send(r.ok ? 200 : 502, r);
-    } catch (e) { return send(504, { error: (e as Error).message }); }
-  }
-  // Crypto plaintext-boundary hook test: GET /api/crypto/hook_test?session=ID
-  if (url.pathname === '/api/crypto/hook_test') {    const sid = pickSid(url.searchParams.get('session'));
-    if (!sid) return send(400, { error: 'no session' });
-    try {
-      const r = await withCaptureSuspended(sid, () => sendCmd(sid, 'crypto_hook_test', { className: url.searchParams.get('class') ?? SANDBOX.crypto }, 20_000));
-      // decode captures to ascii preview for convenience
-      if (r.captures) r.captures = r.captures.map((c: any) => ({ ...c, ascii: Buffer.from(c.hex, 'hex').toString('latin1').replace(/[^\x20-\x7e]/g, '.') }));
-      return send(r.ok ? 200 : 502, r);
-    } catch (e) { return send(504, { error: (e as Error).message }); }
-  }
-  // GOT hook engine self-test: GET /api/hook/selftest?session=ID
-  if (url.pathname === '/api/hook/selftest') {
-    const sid = pickSid(url.searchParams.get('session'));
-    if (!sid) return send(400, { error: 'no session' });
-    try { const r = await sendCmd(sid, 'gothook_selftest'); return send(r.ok ? 200 : 502, r); }
-    catch (e) { return send(504, { error: (e as Error).message }); }
-  }
-  // ART structural DexFile enumeration: GET /api/art/dexfiles?session=ID
-  if (url.pathname === '/api/art/dexfiles') {
-    const sid = pickSid(url.searchParams.get('session'));
-    if (!sid) return send(400, { error: 'no session' });
-    try { const r = await sendCmd(sid, 'art_dexfiles', {}, 30_000); return send(r.ok ? 200 : 502, r); }
-    catch (e) { return send(504, { error: (e as Error).message }); }
-  }
-  // Structural dex dump: POST /api/art/dump {session, begin, size} -> dump the exact DexFile
-  if (url.pathname === '/api/art/dump' && req.method === 'POST') {
-    const body = await readBody(req);
-    const { session, begin, size } = JSON.parse(body || '{}');
-    const sid = pickSid(session);
-    if (!sid || !begin || !size) return send(400, { error: 'need session, begin(hex), size' });
-    try {
-      const { meta, dedup } = await dumpRegion(sid, String(begin).replace(/^0x/, ''), Number(size), 'art_dexfile');
-      return send(200, { ...meta, dedup });
-    } catch (e) { return send(502, { error: (e as Error).message }); }
-  }
-  // JNI reflection probe (foundation for ART/Java work): GET /api/jni/probe?session=ID
-  if (url.pathname === '/api/jni/probe') {
-    const sid = pickSid(url.searchParams.get('session'));
-    if (!sid) return send(400, { error: 'no session' });
-    try { const r = await sendCmd(sid, 'jni_probe'); return send(r.ok ? 200 : 502, r); }
-    catch (e) { return send(504, { error: (e as Error).message }); }
-  }
-  // Magic scan across process memory: GET /api/memory/scan_magic?session=ID
-  if (url.pathname === '/api/memory/scan_magic') {
-    const sid = pickSid(url.searchParams.get('session'));
-    if (!sid) return send(400, { error: 'no session' });
-    try {
-      const r = await sendCmd(sid, 'scan_magic', {}, 90_000);
-      return send(r.ok ? 200 : 502, r);
-    } catch (e) { return send(504, { error: (e as Error).message }); }
-  }
-  // Memory read: POST /api/memory/read {session, addr, size}
-  if (url.pathname === '/api/memory/read' && req.method === 'POST') {
-    const body = await readBody(req);
-    const { session, addr, size } = JSON.parse(body || '{}');
-    const sid = pickSid(session);
-    if (!sid || !addr || !size) return send(400, { error: 'need session, addr(hex), size' });
-    try {
-      const r = await sendCmd(sid, 'read', { addr: String(addr), size: Number(size) });
-      return send(r.ok ? 200 : 502, r);
-    } catch (e) { return send(504, { error: (e as Error).message }); }
-  }
-  // Full unpack session (P3 capstone): POST /api/unpack/run {session, triggerClasses?[],
-  // triggerMethod?, level?}. Orchestrates the whole pipeline:
-  //   T0 snapshot(每个 DexFile) → coverage → active trigger → T1 snapshot → recover+rebuild
-  // Returns a per-dex recovery report (before/after) + downloadable rebuilt dex. Ties P0-P2
-  // together as one operation, matching the reviewed design's UnpackSession.
-  if (url.pathname === '/api/unpack/run' && req.method === 'POST') {
-    const body = JSON.parse((await readBody(req)) || '{}');
-    const sid = pickSid(body.session);
-    if (!sid) return send(400, { error: 'no session' });
-    try { return send(200, await runUnpackSession(sid, body)); }
-    catch (e) { return send(504, { error: (e as Error).message }); }
-  }
-  // Load an arbitrary .so into the target (frida-gadget / helper lib): POST /api/agent/load_so
-  // {session, path, symbol?}. Gadget in script mode auto-runs its JS after this.
-  if (url.pathname === '/api/agent/load_so' && req.method === 'POST') {
-    const { session, path: soPath, symbol } = JSON.parse((await readBody(req)) || '{}');
-    const sid = pickSid(session);
-    if (!sid || !soPath) return send(400, { error: 'need session + path' });
-    try { const r = await sendCmd(sid, 'load_so', { path: soPath, symbol: symbol ?? '' }, 30_000); return send(r.ok ? 200 : 502, r); }
-    catch (e) { return send(504, { error: (e as Error).message }); }
-  }
-  // Active trigger (P2): GET /api/unpack/trigger?session=&class=&method=&level=
-  // Level 1 loads the class; level 3 also invokes a SAFE static no-arg method. A trigger
-  // source for the captor — pair with a dex re-snapshot + /api/dex/recover afterwards.
-  if (url.pathname === '/api/unpack/trigger') {
-    const sid = pickSid(url.searchParams.get('session'));
-    const className = url.searchParams.get('class');
-    const method = url.searchParams.get('method') ?? '';
-    const level = Number(url.searchParams.get('level') ?? 1);
-    if (!sid || !className) return send(400, { error: 'need session + class' });
-    try {
-      const r = await sendCmd(sid, 'trigger', { className, method, level }, 20_000);
-      return send(r.ok ? 200 : 502, r);
-    } catch (e) { return send(504, { error: (e as Error).message }); }
-  }
-  // Memory search: POST /api/memory/search {session, hex?|text?, limit?}
-  if (url.pathname === '/api/memory/search' && req.method === 'POST') {
-    const body = await readBody(req);
-    const { session, hex, text, limit } = JSON.parse(body || '{}');
-    const sid = pickSid(session);
-    const pat = hex ?? (text ? Buffer.from(String(text), 'utf8').toString('hex') : '');
-    if (!sid || !pat) return send(400, { error: 'need session and hex|text' });
-    try {
-      const r = await sendCmd(sid, 'search', { pat, limit: Number(limit) || 256 }, 90_000);
-      return send(r.ok ? 200 : 502, r);
-    } catch (e) { return send(504, { error: (e as Error).message }); }
-  }
-  // Region dump: POST /api/memory/dump {session, addr, size, tag?}
-  if (url.pathname === '/api/memory/dump' && req.method === 'POST') {
-    const body = await readBody(req);
-    const { session, addr, size, tag } = JSON.parse(body || '{}');
-    const sid = pickSid(session);
-    if (!sid || !addr || !size) return send(400, { error: 'need session, addr(hex), size' });
-    try {
-      const { meta, dedup } = await dumpRegion(sid, String(addr).replace(/^0x/, ''), Number(size), String(tag ?? ''));
-      return send(200, { ...meta, dedup });
-    } catch (e) { return send(502, { error: (e as Error).message }); }
-  }
-  // Direct-syscall scan (E.9): POST /api/native/syscall_scan {b64|sha}
-  if (url.pathname === '/api/native/syscall_scan' && req.method === 'POST') {
-    const body = await readBody(req);
-    const { b64, sha } = JSON.parse(body || '{}');
-    let buf: Buffer;
-    try { buf = await dumpBuf({ b64, sha }); } catch (e: any) { return send(e.status ?? 400, { error: e.message }); }
-    const r = svcScan(buf);
-    return send(200, { execSegs: r.execSegs, scannedBytes: r.scanned, svcCount: r.hits.length, hits: r.hits.slice(0, 200) });
-  }
-  // Native crypto-constant scan (H.4): POST /api/native/crypto_const {b64|sha}
-  if (url.pathname === '/api/native/crypto_const' && req.method === 'POST') {
-    const body = await readBody(req);
-    const { b64, sha } = JSON.parse(body || '{}');
-    let buf: Buffer;
-    try { buf = await dumpBuf({ b64, sha }); } catch (e: any) { return send(e.status ?? 400, { error: e.message }); }
-    const hits = cryptoConstScan(buf);
-    const byName: Record<string, number> = {};
-    for (const h of hits) byName[h.name] = (byName[h.name] ?? 0) + 1;
-    return send(200, { size: buf.length, hits, byName, algorithms: Object.keys(byName) });
-  }
-  // Native binary analysis (Native Browser): POST /api/native/analyze {b64|sha, q?}
-  if (url.pathname === '/api/native/analyze' && req.method === 'POST') {
-    const body = await readBody(req);
-    const { b64, sha, q } = JSON.parse(body || '{}');
-    let path: string, tmp: string | null;
-    try { ({ path, tmp } = await dumpBufPath({ b64, sha })); } catch (e: any) { return send(e.status ?? 400, { error: e.message }); }
-    try {
-      const a = await analyzeSo(path);
-      if (q) { const rx = new RegExp(String(q), 'i');
-        a.exports = a.exports.filter((s: string) => rx.test(s)); a.imports = a.imports.filter((s: string) => rx.test(s));
-        a.strings = a.strings.filter((s: string) => rx.test(s)); }
-      // cap payload — symbol tables of bloated .so (e.g. LSPlant-linked agent = 756 exports)
-      // must not be silently truncated below a real entry point; 500 was too small and dropped
-      // idh_agent_start (dynsym #702). Cap high enough for real dynsym tables; flag if exceeded.
-      const CAP_SYM = 20000, CAP_STR = 1000;
-      a.truncated = { exports: a.exports.length > CAP_SYM, imports: a.imports.length > CAP_SYM, strings: a.strings.length > CAP_STR };
-      a.exports = a.exports.slice(0, CAP_SYM); a.imports = a.imports.slice(0, CAP_SYM); a.strings = a.strings.slice(0, CAP_STR);
-      return send(200, a);
-    } catch (e) { return send(502, { error: (e as Error).message }); }
-    finally { if (tmp) { try { unlinkSync(tmp); } catch {} } }
-  }
-  // Native disassembly (Native Browser): POST /api/native/disasm {b64|sha, symbol?|start?+stop?}
-  if (url.pathname === '/api/native/disasm' && req.method === 'POST') {
-    const body = await readBody(req);
-    const { b64, sha, symbol, start, stop } = JSON.parse(body || '{}');
-    let path: string, tmp: string | null;
-    try { ({ path, tmp } = await dumpBufPath({ b64, sha })); } catch (e: any) { return send(e.status ?? 400, { error: e.message }); }
-    try {
-      const insns = await disasmSo(path, { symbol, start, stop });
-      return send(200, { symbol: symbol ?? null, count: insns.length, instructions: insns.slice(0, 2000) });
-    } catch (e) { return send(502, { error: (e as Error).message, objdump: OBJDUMP }); }
-    finally { if (tmp) { try { unlinkSync(tmp); } catch {} } }
-  }
-  // Module list (grouped from maps): GET /api/modules?session=ID
-  if (url.pathname === '/api/modules') {
-    const sid = pickSid(url.searchParams.get('session'));
-    if (!sid) return send(400, { error: 'no session' });
-    try {
-      const r = await sendCmd(sid, 'maps');
-      if (!r.ok) return send(502, r);
-      return send(200, modulesFromMaps(r.regions ?? []));
-    } catch (e) { return send(504, { error: (e as Error).message }); }
-  }
-  // Reconstruct + dump a loaded .so from memory: POST /api/module/dump {session, name}
-  if (url.pathname === '/api/module/dump' && req.method === 'POST') {
-    const body = await readBody(req);
-    const { session, name } = JSON.parse(body || '{}');
-    const sid = pickSid(session);
-    if (!sid || !name) return send(400, { error: 'need session, name' });
-    try {
-      const maps = await sendCmd(sid, 'maps');
-      const mod = modulesFromMaps(maps.regions ?? []).find(m => m.name === name || m.path.includes(name));
-      if (!mod) return send(404, { error: `module not found: ${name}` });
-      const buf = await reconstructSo(sid, mod.base);
-      const sha = createHash('sha256').update(buf).digest('hex');
-      const existing = dumps.get(sha);
-      if (existing) return send(200, { ...existing, dedup: true, module: mod.name });
-      const s = sessions.get(sid);
-      const path = join(CAPTURES, `${sha.slice(0, 16)}.so`);
-      if (!existsSync(path)) writeFileSync(path, buf);
-      const meta: DumpMeta = { sha256: sha, size: buf.length, source: 'so-reassembly', addr: mod.base, tag: mod.name, sessionId: sid, package: s?.package ?? '?', capturedAt: Date.now(), path, kind: 'so' };
-      dumps.set(sha, meta);
-      broadcast('dump.new', meta);
-      return send(200, { ...meta, dedup: false, module: mod.name, segments: mod.segs });
-    } catch (e) { return send(502, { error: (e as Error).message }); }
-  }
-  // Dex parse: POST /api/dex/parse {b64|sha} -> structure summary (+ optional full arrays)
-  // Method body recovery (L.7): POST /api/dex/method_code {b64|sha, class, method?}
-  if (url.pathname === '/api/dex/method_code' && req.method === 'POST') {
-    const body = await readBody(req);
-    const { b64, sha, class: cls, method } = JSON.parse(body || '{}');
-    let buf: Buffer;
-    try { buf = await dumpBuf({ b64, sha }); } catch (e: any) { return send(e.status ?? 400, { error: e.message }); }
-    if (!cls) return send(400, { error: 'need class' });
-    let parsed; try { parsed = parseDex(buf); } catch (e) { return send(422, { error: (e as Error).message }); }
-    const codes = extractMethodCode(buf, parsed, String(cls), method ? String(method) : undefined);
-    const recovered = codes.filter(c => c.insnsSize > 0).length;
-    return send(200, { class: cls, method: method ?? null, count: codes.length, recovered, empty: codes.length - recovered, methods: codes.slice(0, 200) });
-  }
-  // Dex invoke-xref: POST /api/dex/xref {b64|sha, method} -> callers of matching methods
-  if (url.pathname === '/api/dex/xref' && req.method === 'POST') {
-    const body = await readBody(req);
-    const { b64, sha, method } = JSON.parse(body || '{}');
-    let buf: Buffer;
-    try { buf = await dumpBuf({ b64, sha }); } catch (e: any) { return send(e.status ?? 400, { error: e.message }); }
-    if (!method) return send(400, { error: 'need method (substring of callee cls->name)' });
-    let parsed; try { parsed = parseDex(buf); } catch (e) { return send(422, { error: (e as Error).message }); }
-    const { xref, methodsWithCode, skipped } = invokeXref(buf, parsed);
-    const q = String(method).toLowerCase();
-    const results: Record<string, string[]> = {};
-    for (const [callee, callers] of xref) if (callee.toLowerCase().includes(q)) results[callee] = callers.slice(0, 200);
-    return send(200, { method, methodsWithCode, skipped, matches: Object.keys(results).length, callers: results });
-  }
-  // Method-gap / recovery-rate report over a dumped dex: POST /api/dex/coverage {b64|sha}
-  if (url.pathname === '/api/dex/coverage' && req.method === 'POST') {
-    const { b64, sha, limitMissing } = JSON.parse((await readBody(req)) || '{}');
-    let buf: Buffer;
-    try { buf = await dumpBuf({ b64, sha }); } catch (e: any) { return send(e.status ?? 400, { error: e.message }); }
-    let parsed; try { parsed = parseDex(buf); } catch (e) { return send(422, { error: (e as Error).message }); }
-    const cov = analyzeCoverage(buf, parsed);
-    const lm = Number(limitMissing ?? 100);
-    return send(200, { magic: parsed.magic, counts: parsed.counts, ...cov,
-      recoveryPct: +(cov.recoveryRate * 100).toFixed(2), missing: cov.missing.slice(0, lm), missingTotal: cov.missing.length });
-  }
-  // Passive gen-2 recovery: POST /api/dex/recover {baseB64|baseSha, restoredB64|restoredSha}
-  // Lifts CodeItems for the base's extracted (empty) methods out of a RESTORED snapshot,
-  // rebuilds a standard dex, and stores it. Returns recovery counts + rebuilt sha.
-  if (url.pathname === '/api/dex/recover' && req.method === 'POST') {
-    const body = JSON.parse((await readBody(req)) || '{}');
-    // no input -> null (=> 400 below); registered-but-file-gone -> dumpBuf throws 404 (fail-loud,
-    // not the old silent null that mislabeled a disk failure as "missing input")
-    const load = (b64?: string, sha?: string) => (b64 || (sha && dumps.get(sha))) ? dumpBuf({ b64, sha }) : Promise.resolve(null);
-    let base: Buffer | null, restored: Buffer | null;
-    try { base = await load(body.baseB64, body.baseSha); restored = await load(body.restoredB64, body.restoredSha); }
-    catch (e: any) { return send(e.status ?? 500, { error: e.message }); }
-    if (!base || !restored) return send(400, { error: 'need base + restored (b64 or known sha)' });
-    let parsed; try { parsed = parseDex(base); } catch (e) { return send(422, { error: (e as Error).message }); }
-    const { captures, report } = recoverFromSnapshots(base, restored, parsed);
-    const rb = rebuildStandardDex(base, captures);
-    let parseOk = true; try { parseDex(rb.dex); } catch { parseOk = false; }
-    const outSha = createHash('sha256').update(rb.dex).digest('hex');
-    const path = join(CAPTURES, `${outSha.slice(0, 16)}.dex`);
-    if (!existsSync(path)) writeFileSync(path, rb.dex);
-    const meta: DumpMeta = { sha256: outSha, size: rb.dex.length, source: 'dex-recover', addr: '0', tag: 'recovered', sessionId: '', package: '', capturedAt: Date.now(), path, kind: 'dex' };
-    dumps.set(outSha, meta); broadcast('dump.new', meta);
-    return send(200, { ok: true, ...report, injected: rb.injected, classesRewritten: rb.classesRewritten, parseOk, sha256: outSha, size: rb.dex.length });
-  }
-  // Test util — simulate extraction: POST /api/dex/strip {b64|sha, midx} -> dex with that
-  // method's code_off zeroed (same-length redundant uleb). Returns b64 + its original code.
-  if (url.pathname === '/api/dex/strip' && req.method === 'POST') {
-    const { b64, sha, midx } = JSON.parse((await readBody(req)) || '{}');
-    let buf: Buffer;
-    try { buf = await dumpBuf({ b64, sha }); } catch (e: any) { return send(e.status ?? 400, { error: e.message }); }
-    const stripped = stripMethodCode(buf, Number(midx));
-    return send(200, { ok: true, midx: Number(midx), b64: stripped.toString('base64') });
-  }
-  // Structural rebuild: POST /api/dex/rebuild {b64|sha, captures:[{midx,codeItemHex}]} ->
-  // merge captured CodeItems into the base dex, store as a downloadable dump.
-  if (url.pathname === '/api/dex/rebuild' && req.method === 'POST') {
-    const { b64, sha, captures } = JSON.parse((await readBody(req)) || '{}');
-    let buf: Buffer;
-    try { buf = await dumpBuf({ b64, sha }); } catch (e: any) { return send(e.status ?? 400, { error: e.message }); }
-    if (!Array.isArray(captures)) return send(400, { error: 'need captures[]' });
-    let res; try { res = rebuildStandardDex(buf, captures); } catch (e) { return send(422, { error: (e as Error).message }); }
-    let parseOk = true, methods = 0;
-    try { const pd = parseDex(res.dex); methods = pd.counts.methods; } catch { parseOk = false; }
-    const outSha = createHash('sha256').update(res.dex).digest('hex');
-    const path = join(CAPTURES, `${outSha.slice(0, 16)}.dex`);
-    if (!existsSync(path)) writeFileSync(path, res.dex);
-    const meta: DumpMeta = { sha256: outSha, size: res.dex.length, source: 'dex-rebuild', addr: '0', tag: 'rebuilt', sessionId: '', package: '', capturedAt: Date.now(), path, kind: 'dex' };
-    dumps.set(outSha, meta); broadcast('dump.new', meta);
-    return send(200, { ok: true, injected: res.injected, classesRewritten: res.classesRewritten, parseOk, methods, sha256: outSha, size: res.dex.length });
-  }
-  if ((url.pathname === '/api/dex/parse' || url.pathname === '/api/dex/crypto_scan' || url.pathname === '/api/dex/search') && req.method === 'POST') {
+        dumps.clear();
+      } else return send(400, { error: 'what 必须是 captures|events|dumps' });
+      broadcast('data.cleared', { what });
+      if (errors.length) { log(`[data/clear] ${what} 部分磁盘删除失败:`, errors.join('; ')); return send(500, { error: `内存索引已清，但磁盘删除失败(${errors.length}项)`, cleared: what, errors, stats: configStats() }); }
+      return send(200, { ok: true, cleared: what, stats: configStats() });
+    } },
+    { path: '/api/mcp/doc', handler: () => {
+      const md = ['# ADH MCP Tools', '', `Generated from the live idhd registry (${MCP_TOOLS.length} tools). Endpoint: \`POST /mcp\` (JSON-RPC 2.0).`, '',
+        '| Tool | Description | Args |', '|---|---|---|',
+        ...MCP_TOOLS.map(t => `| \`${t.name}\` | ${t.description} | ${Object.keys(t.inputSchema.properties ?? {}).join(', ') || '—'} |`), ''].join('\n');
+      res.writeHead(200, { 'content-type': 'text/markdown; charset=utf-8' }); return res.end(md);
+    } },
+    { path: '/api/crypto/identify', handler: () => send(200, cryptoIdentify()) },
+    { path: '/api/mcp/config', handler: () => {
+      const w = webUrls(); const lan = (w.lan[0] ?? w.local).replace(/^http/, 'http');
+      const mcpUrl = `${lan}/mcp`;
+      const cfg = {
+        note: '把 mcpServers 这段粘进 Claude Desktop / Cursor 的 MCP 配置，重启后即可让 AI 调用 ADH 的全部逆向工具（分析内存/指令/hook/trace/事件搜索/抓包/脱壳/算法识别）',
+        mcpServers: { adh: { type: 'http', url: mcpUrl } },
+        endpoint: mcpUrl, tools: MCP_TOOLS.length,
+        cli: `claude mcp add --transport http adh "${mcpUrl}"`,
+        quickAsks: [
+          '用 crypto_identify 看看这个 App 用了哪些加密算法和密钥',
+          '用 unpack_run 一键脱壳，然后 dumps_list 给我下载链接',
+          '用 live_captures 看实时加解密，挑一条用 capture_detail 展开明文',
+          '用 trace_function hook 一下 access，看它检测了哪些 root 路径',
+          '用 qbdi_trace 逐指令跟踪这个 native 函数',
+        ],
+      };
+      return send(200, cfg);
+    } },
+    { path: '/api/agents', handler: () => send(200, [...sessions.values()]) },
+    { path: '/api/agents/', prefix: true, handler: () => {
+      const s = sessions.get(url.pathname.split('/')[3]);
+      return s ? send(200, s) : send(404, { error: 'no such session' });
+    } },
+    // WS-D protocol self-test: GET /api/debug/frame_echo?session=ID&kb=N
+    { path: '/api/debug/frame_echo', handler: async () => {
+      const sid = pickSid(url.searchParams.get('session'));
+      if (!sid) return send(400, { error: 'no session' });
+      const kb = Math.max(1, Math.min(4096, Number(url.searchParams.get('kb') ?? 64)));
+      const padLen = kb * 1024;
+      const pad = 'A'.repeat(padLen);
+      const tail = 'IDH_FRAME_TAIL_v1';
+      try {
+        const r = await sendCmd(sid, 'frame_echo', { pad, tail, padLen }, 20_000);
+        return send(r.ok ? 200 : 502, { ...r, sentPadLen: padLen, tailOk: r.tail === tail, notTruncated: (r.recvBytes ?? 0) > padLen });
+      } catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
+    // Java method-hook self-test (WS-A / LSPlant): GET /api/java/hook_test?session=ID
+    { path: '/api/java/hook_test', handler: async () => {
+      const sid = pickSid(url.searchParams.get('session'));
+      if (!sid) return send(400, { error: 'no session' });
+      try { const r = await withCaptureSuspended(sid, () => sendCmd(sid, 'java_hook_test', { className: url.searchParams.get('class') ?? SANDBOX.javaHook }, 25_000)); return send(r.ok ? 200 : 502, r); }
+      catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
+    { path: '/api/process/maps', handler: async () => {
+      const sid = pickSid(url.searchParams.get('session'));
+      if (!sid) return send(400, { error: 'no session' });
+      try {
+        const r = await sendCmd(sid, 'maps');
+        if (r.ok) { const s = sessions.get(sid); if (s) s.mapsCount = r.count; }
+        return send(r.ok ? 200 : 502, r);
+      } catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
+    { method: 'POST', path: '/api/object/inspect', handler: async () => {
+      const body = await readBody(req);
+      const { session, className, field } = JSON.parse(body || '{}');
+      const sid = pickSid(session);
+      if (!sid || !className || !field) return send(400, { error: 'need session, className, field' });
+      try { const r = await sendCmd(sid, 'object_inspect', { className, field }); return send(r.ok ? 200 : 502, r); }
+      catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
+    { method: 'POST', path: '/api/object/invoke', handler: async () => {
+      const body = await readBody(req);
+      const { session, className, field, method } = JSON.parse(body || '{}');
+      const sid = pickSid(session);
+      if (!sid || !className || !field || !method) return send(400, { error: 'need session, className, field, method' });
+      try { const r = await sendCmd(sid, 'object_invoke', { className, field, method }); return send(r.ok ? 200 : 502, r); }
+      catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
+    { path: '/api/compat/probe', handler: async () => {
+      const sid = pickSid(url.searchParams.get('session'));
+      if (!sid) return send(400, { error: 'no session' });
+      try { const r = await sendCmd(sid, 'compat_probe'); return send(r.ok ? 200 : 502, r); }
+      catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
+    { path: '/api/trace/qbdi', handler: async () => {
+      const sid = pickSid(url.searchParams.get('session'));
+      if (!sid) return send(400, { error: 'no session' });
+      const symLib = url.searchParams.get('symLib') ?? 'libidhdetect.so';
+      const symbol = url.searchParams.get('symbol') ?? 'idh_trace_target';
+      try { const r = await sendCmd(sid, 'qbdi_trace', { symLib, symbol }, 30_000); return send(r.ok ? 200 : 502, r); }
+      catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
+    { path: '/api/trace/run', handler: async () => {
+      const sid = pickSid(url.searchParams.get('session'));
+      if (!sid) return send(400, { error: 'no session' });
+      const symLib = url.searchParams.get('symLib') ?? 'libc.so';
+      const symbol = url.searchParams.get('symbol') ?? 'access';
+      const hookModule = url.searchParams.get('hookModule') ?? 'libidhdetect.so';
+      try { const r = await withCaptureSuspended(sid, () => sendCmd(sid, 'trace_run', { symLib, symbol, hookModule, className: url.searchParams.get('class') ?? SANDBOX.detect }, 20_000)); return send(r.ok ? 200 : 502, r); }
+      catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
+    { path: '/api/detect/watch', handler: async () => {
+      const sid = pickSid(url.searchParams.get('session'));
+      if (!sid) return send(400, { error: 'no session' });
+      try { const r = await withCaptureSuspended(sid, () => sendCmd(sid, 'detect_watch', { module: url.searchParams.get('module') ?? settings.capture.sysModule, className: url.searchParams.get('class') ?? SANDBOX.detect }, 20_000)); return send(r.ok ? 200 : 502, r); }
+      catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
+    { path: '/api/crypto/probe', handler: async () => {
+      const sid = pickSid(url.searchParams.get('session'));
+      if (!sid) return send(400, { error: 'no session' });
+      try { const r = await sendCmd(sid, 'crypto_probe', {}, 20_000); return send(r.ok ? 200 : 502, r); }
+      catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
+    { path: '/api/flow/watch', handler: async () => {
+      const sid = pickSid(url.searchParams.get('session'));
+      if (!sid) return send(400, { error: 'no session' });
+      try {
+        const r = await withCaptureSuspended(sid, () => sendCmd(sid, 'flow_watch', { className: url.searchParams.get('class') ?? SANDBOX.flow }, 25_000));
+        const caps = (r.captures ?? []).map((c: any) => ({ ...c, ascii: Buffer.from(c.hex, 'hex').toString('latin1').replace(/[^\x20-\x7e]/g, '.') }));
+        const WINDOW_NS = 200_000_000;
+        const crypto = caps.filter((c: any) => c.func.startsWith('EVP_') || c.func === 'HMAC_Update');
+        const net = caps.filter((c: any) => c.func.startsWith('SSL_'));
+        const correlations = [];
+        for (const cr of crypto) for (const nw of net) {
+          if (cr.tid === nw.tid && Math.abs(cr.tsNs - nw.tsNs) <= WINDOW_NS) {
+            correlations.push({ tid: cr.tid, deltaMs: Math.abs(cr.tsNs - nw.tsNs) / 1e6,
+              plaintext: cr.ascii, cryptoFunc: cr.func, netFunc: nw.func, request: nw.ascii.slice(0, 120) });
+          }
+        }
+        r.captures = caps;
+        return send(r.ok ? 200 : 502, { ...r, correlations });
+      } catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
+    { path: '/api/net/hook_test', handler: async () => {
+      const sid = pickSid(url.searchParams.get('session'));
+      if (!sid) return send(400, { error: 'no session' });
+      try {
+        const r = await withCaptureSuspended(sid, () => sendCmd(sid, 'net_hook_test', { className: url.searchParams.get('class') ?? SANDBOX.net }, 25_000));
+        if (r.captures) r.captures = r.captures.map((c: any) => ({ ...c, ascii: Buffer.from(c.hex, 'hex').toString('latin1').replace(/[^\x20-\x7e]/g, '.') }));
+        return send(r.ok ? 200 : 502, r);
+      } catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
+    { path: '/api/file/probe', handler: async () => {
+      const sid = pickSid(url.searchParams.get('session'));
+      if (!sid) return send(400, { error: 'no session' });
+      try { const r = await sendCmd(sid, 'file_probe', {}, 20_000); return send(r.ok ? 200 : 502, r); }
+      catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
+    { path: '/api/file/hook_test', handler: async () => {
+      const sid = pickSid(url.searchParams.get('session'));
+      if (!sid) return send(400, { error: 'no session' });
+      const module = url.searchParams.get('module') ?? settings.capture.fileModule;
+      try {
+        const r = await withCaptureSuspended(sid, () => sendCmd(sid, 'file_hook_test', { module, className: url.searchParams.get('class') ?? SANDBOX.file }, 25_000));
+        if (r.captures) r.captures = r.captures.map((c: any) => ({ ...c, ascii: Buffer.from(c.hex, 'hex').toString('latin1').replace(/[^\x20-\x7e]/g, '.') }));
+        return send(r.ok ? 200 : 502, r);
+      } catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
+    { path: '/api/fs/list', handler: async () => {
+      const sid = pickSid(url.searchParams.get('session'));
+      if (!sid) return send(400, { error: 'no session' });
+      const path = url.searchParams.get('path') || '';
+      if (!path) return send(400, { error: 'need path' });
+      try { const r = await sendCmd(sid, 'list_dir', { path }, 20_000); return send(r.ok ? 200 : 502, r); }
+      catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
+    { method: 'POST', path: '/api/fs/read', handler: async () => {
+      const body = await readBody(req);
+      const { session, path } = JSON.parse(body || '{}');
+      const sid = pickSid(session);
+      if (!sid || !path) return send(400, { error: 'need session, path' });
+      try {
+        const r = await sendCmd(sid, 'read_file', { path: String(path) }, 25_000);
+        if (r.ok && r.b64) { try { r.text = Buffer.from(r.b64, 'base64').toString('utf8'); } catch { r.text = ''; } }
+        return send(r.ok ? 200 : 502, r);
+      } catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
+    { path: '/api/crypto/hook_test', handler: async () => {
+      const sid = pickSid(url.searchParams.get('session'));
+      if (!sid) return send(400, { error: 'no session' });
+      try {
+        const r = await withCaptureSuspended(sid, () => sendCmd(sid, 'crypto_hook_test', { className: url.searchParams.get('class') ?? SANDBOX.crypto }, 20_000));
+        if (r.captures) r.captures = r.captures.map((c: any) => ({ ...c, ascii: Buffer.from(c.hex, 'hex').toString('latin1').replace(/[^\x20-\x7e]/g, '.') }));
+        return send(r.ok ? 200 : 502, r);
+      } catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
+    { path: '/api/hook/selftest', handler: async () => {
+      const sid = pickSid(url.searchParams.get('session'));
+      if (!sid) return send(400, { error: 'no session' });
+      try { const r = await sendCmd(sid, 'gothook_selftest'); return send(r.ok ? 200 : 502, r); }
+      catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
+    { path: '/api/art/dexfiles', handler: async () => {
+      const sid = pickSid(url.searchParams.get('session'));
+      if (!sid) return send(400, { error: 'no session' });
+      try { const r = await sendCmd(sid, 'art_dexfiles', {}, 30_000); return send(r.ok ? 200 : 502, r); }
+      catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
+    { method: 'POST', path: '/api/art/dump', handler: async () => {
+      const body = await readBody(req);
+      const { session, begin, size } = JSON.parse(body || '{}');
+      const sid = pickSid(session);
+      if (!sid || !begin || !size) return send(400, { error: 'need session, begin(hex), size' });
+      try {
+        const { meta, dedup } = await dumpRegion(sid, String(begin).replace(/^0x/, ''), Number(size), 'art_dexfile');
+        return send(200, { ...meta, dedup });
+      } catch (e) { return send(502, { error: (e as Error).message }); }
+    } },
+    { path: '/api/jni/probe', handler: async () => {
+      const sid = pickSid(url.searchParams.get('session'));
+      if (!sid) return send(400, { error: 'no session' });
+      try { const r = await sendCmd(sid, 'jni_probe'); return send(r.ok ? 200 : 502, r); }
+      catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
+    { path: '/api/memory/scan_magic', handler: async () => {
+      const sid = pickSid(url.searchParams.get('session'));
+      if (!sid) return send(400, { error: 'no session' });
+      try {
+        const r = await sendCmd(sid, 'scan_magic', {}, 90_000);
+        return send(r.ok ? 200 : 502, r);
+      } catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
+    { method: 'POST', path: '/api/memory/read', handler: async () => {
+      const body = await readBody(req);
+      const { session, addr, size } = JSON.parse(body || '{}');
+      const sid = pickSid(session);
+      if (!sid || !addr || !size) return send(400, { error: 'need session, addr(hex), size' });
+      try {
+        const r = await sendCmd(sid, 'read', { addr: String(addr), size: Number(size) });
+        return send(r.ok ? 200 : 502, r);
+      } catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
+    { method: 'POST', path: '/api/unpack/run', handler: async () => {
+      const body = JSON.parse((await readBody(req)) || '{}');
+      const sid = pickSid(body.session);
+      if (!sid) return send(400, { error: 'no session' });
+      try { return send(200, await runUnpackSession(sid, body)); }
+      catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
+    { method: 'POST', path: '/api/agent/load_so', handler: async () => {
+      const { session, path: soPath, symbol } = JSON.parse((await readBody(req)) || '{}');
+      const sid = pickSid(session);
+      if (!sid || !soPath) return send(400, { error: 'need session + path' });
+      try { const r = await sendCmd(sid, 'load_so', { path: soPath, symbol: symbol ?? '' }, 30_000); return send(r.ok ? 200 : 502, r); }
+      catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
+    { path: '/api/unpack/trigger', handler: async () => {
+      const sid = pickSid(url.searchParams.get('session'));
+      const className = url.searchParams.get('class');
+      const method = url.searchParams.get('method') ?? '';
+      const level = Number(url.searchParams.get('level') ?? 1);
+      if (!sid || !className) return send(400, { error: 'need session + class' });
+      try {
+        const r = await sendCmd(sid, 'trigger', { className, method, level }, 20_000);
+        return send(r.ok ? 200 : 502, r);
+      } catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
+    { method: 'POST', path: '/api/memory/search', handler: async () => {
+      const body = await readBody(req);
+      const { session, hex, text, limit } = JSON.parse(body || '{}');
+      const sid = pickSid(session);
+      const pat = hex ?? (text ? Buffer.from(String(text), 'utf8').toString('hex') : '');
+      if (!sid || !pat) return send(400, { error: 'need session and hex|text' });
+      try {
+        const r = await sendCmd(sid, 'search', { pat, limit: Number(limit) || 256 }, 90_000);
+        return send(r.ok ? 200 : 502, r);
+      } catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
+    { method: 'POST', path: '/api/memory/dump', handler: async () => {
+      const body = await readBody(req);
+      const { session, addr, size, tag } = JSON.parse(body || '{}');
+      const sid = pickSid(session);
+      if (!sid || !addr || !size) return send(400, { error: 'need session, addr(hex), size' });
+      try {
+        const { meta, dedup } = await dumpRegion(sid, String(addr).replace(/^0x/, ''), Number(size), String(tag ?? ''));
+        return send(200, { ...meta, dedup });
+      } catch (e) { return send(502, { error: (e as Error).message }); }
+    } },
+    { method: 'POST', path: '/api/native/syscall_scan', handler: async () => {
+      const body = await readBody(req);
+      const { b64, sha } = JSON.parse(body || '{}');
+      let buf: Buffer;
+      try { buf = await dumpBuf({ b64, sha }); } catch (e: any) { return send(e.status ?? 400, { error: e.message }); }
+      const r = svcScan(buf);
+      return send(200, { execSegs: r.execSegs, scannedBytes: r.scanned, svcCount: r.hits.length, hits: r.hits.slice(0, 200) });
+    } },
+    { method: 'POST', path: '/api/native/crypto_const', handler: async () => {
+      const body = await readBody(req);
+      const { b64, sha } = JSON.parse(body || '{}');
+      let buf: Buffer;
+      try { buf = await dumpBuf({ b64, sha }); } catch (e: any) { return send(e.status ?? 400, { error: e.message }); }
+      const hits = cryptoConstScan(buf);
+      const byName: Record<string, number> = {};
+      for (const h of hits) byName[h.name] = (byName[h.name] ?? 0) + 1;
+      return send(200, { size: buf.length, hits, byName, algorithms: Object.keys(byName) });
+    } },
+    { method: 'POST', path: '/api/native/analyze', handler: async () => {
+      const body = await readBody(req);
+      const { b64, sha, q } = JSON.parse(body || '{}');
+      let path: string, tmp: string | null;
+      try { ({ path, tmp } = await dumpBufPath({ b64, sha })); } catch (e: any) { return send(e.status ?? 400, { error: e.message }); }
+      try {
+        const a = await analyzeSo(path);
+        if (q) { const rx = new RegExp(String(q), 'i');
+          a.exports = a.exports.filter((s: string) => rx.test(s)); a.imports = a.imports.filter((s: string) => rx.test(s));
+          a.strings = a.strings.filter((s: string) => rx.test(s)); }
+        const CAP_SYM = 20000, CAP_STR = 1000;
+        a.truncated = { exports: a.exports.length > CAP_SYM, imports: a.imports.length > CAP_SYM, strings: a.strings.length > CAP_STR };
+        a.exports = a.exports.slice(0, CAP_SYM); a.imports = a.imports.slice(0, CAP_SYM); a.strings = a.strings.slice(0, CAP_STR);
+        return send(200, a);
+      } catch (e) { return send(502, { error: (e as Error).message }); }
+      finally { if (tmp) { try { unlinkSync(tmp); } catch {} } }
+    } },
+    { method: 'POST', path: '/api/native/disasm', handler: async () => {
+      const body = await readBody(req);
+      const { b64, sha, symbol, start, stop } = JSON.parse(body || '{}');
+      let path: string, tmp: string | null;
+      try { ({ path, tmp } = await dumpBufPath({ b64, sha })); } catch (e: any) { return send(e.status ?? 400, { error: e.message }); }
+      try {
+        const insns = await disasmSo(path, { symbol, start, stop });
+        return send(200, { symbol: symbol ?? null, count: insns.length, instructions: insns.slice(0, 2000) });
+      } catch (e) { return send(502, { error: (e as Error).message, objdump: OBJDUMP }); }
+      finally { if (tmp) { try { unlinkSync(tmp); } catch {} } }
+    } },
+    { path: '/api/modules', handler: async () => {
+      const sid = pickSid(url.searchParams.get('session'));
+      if (!sid) return send(400, { error: 'no session' });
+      try {
+        const r = await sendCmd(sid, 'maps');
+        if (!r.ok) return send(502, r);
+        return send(200, modulesFromMaps(r.regions ?? []));
+      } catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
+    { method: 'POST', path: '/api/module/dump', handler: async () => {
+      const body = await readBody(req);
+      const { session, name } = JSON.parse(body || '{}');
+      const sid = pickSid(session);
+      if (!sid || !name) return send(400, { error: 'need session, name' });
+      try {
+        const maps = await sendCmd(sid, 'maps');
+        const mod = modulesFromMaps(maps.regions ?? []).find(m => m.name === name || m.path.includes(name));
+        if (!mod) return send(404, { error: `module not found: ${name}` });
+        const buf = await reconstructSo(sid, mod.base);
+        const sha = createHash('sha256').update(buf).digest('hex');
+        const existing = dumps.get(sha);
+        if (existing) return send(200, { ...existing, dedup: true, module: mod.name });
+        const s = sessions.get(sid);
+        const path = join(CAPTURES, `${sha.slice(0, 16)}.so`);
+        if (!existsSync(path)) writeFileSync(path, buf);
+        const meta: DumpMeta = { sha256: sha, size: buf.length, source: 'so-reassembly', addr: mod.base, tag: mod.name, sessionId: sid, package: s?.package ?? '?', capturedAt: Date.now(), path, kind: 'so' };
+        dumps.set(sha, meta);
+        broadcast('dump.new', meta);
+        return send(200, { ...meta, dedup: false, module: mod.name, segments: mod.segs });
+      } catch (e) { return send(502, { error: (e as Error).message }); }
+    } },
+    { method: 'POST', path: '/api/dex/method_code', handler: async () => {
+      const body = await readBody(req);
+      const { b64, sha, class: cls, method } = JSON.parse(body || '{}');
+      let buf: Buffer;
+      try { buf = await dumpBuf({ b64, sha }); } catch (e: any) { return send(e.status ?? 400, { error: e.message }); }
+      if (!cls) return send(400, { error: 'need class' });
+      let parsed; try { parsed = parseDex(buf); } catch (e) { return send(422, { error: (e as Error).message }); }
+      const codes = extractMethodCode(buf, parsed, String(cls), method ? String(method) : undefined);
+      const recovered = codes.filter(c => c.insnsSize > 0).length;
+      return send(200, { class: cls, method: method ?? null, count: codes.length, recovered, empty: codes.length - recovered, methods: codes.slice(0, 200) });
+    } },
+    { method: 'POST', path: '/api/dex/xref', handler: async () => {
+      const body = await readBody(req);
+      const { b64, sha, method } = JSON.parse(body || '{}');
+      let buf: Buffer;
+      try { buf = await dumpBuf({ b64, sha }); } catch (e: any) { return send(e.status ?? 400, { error: e.message }); }
+      if (!method) return send(400, { error: 'need method (substring of callee cls->name)' });
+      let parsed; try { parsed = parseDex(buf); } catch (e) { return send(422, { error: (e as Error).message }); }
+      const { xref, methodsWithCode, skipped } = invokeXref(buf, parsed);
+      const q = String(method).toLowerCase();
+      const results: Record<string, string[]> = {};
+      for (const [callee, callers] of xref) if (callee.toLowerCase().includes(q)) results[callee] = callers.slice(0, 200);
+      return send(200, { method, methodsWithCode, skipped, matches: Object.keys(results).length, callers: results });
+    } },
+    { method: 'POST', path: '/api/dex/coverage', handler: async () => {
+      const { b64, sha, limitMissing } = JSON.parse((await readBody(req)) || '{}');
+      let buf: Buffer;
+      try { buf = await dumpBuf({ b64, sha }); } catch (e: any) { return send(e.status ?? 400, { error: e.message }); }
+      let parsed; try { parsed = parseDex(buf); } catch (e) { return send(422, { error: (e as Error).message }); }
+      const cov = analyzeCoverage(buf, parsed);
+      const lm = Number(limitMissing ?? 100);
+      return send(200, { magic: parsed.magic, counts: parsed.counts, ...cov,
+        recoveryPct: +(cov.recoveryRate * 100).toFixed(2), missing: cov.missing.slice(0, lm), missingTotal: cov.missing.length });
+    } },
+    { method: 'POST', path: '/api/dex/recover', handler: async () => {
+      const body = JSON.parse((await readBody(req)) || '{}');
+      const load = (b64?: string, sha?: string) => (b64 || (sha && dumps.get(sha))) ? dumpBuf({ b64, sha }) : Promise.resolve(null);
+      let base: Buffer | null, restored: Buffer | null;
+      try { base = await load(body.baseB64, body.baseSha); restored = await load(body.restoredB64, body.restoredSha); }
+      catch (e: any) { return send(e.status ?? 500, { error: e.message }); }
+      if (!base || !restored) return send(400, { error: 'need base + restored (b64 or known sha)' });
+      let parsed; try { parsed = parseDex(base); } catch (e) { return send(422, { error: (e as Error).message }); }
+      const { captures, report } = recoverFromSnapshots(base, restored, parsed);
+      const rb = rebuildStandardDex(base, captures);
+      let parseOk = true; try { parseDex(rb.dex); } catch { parseOk = false; }
+      const outSha = createHash('sha256').update(rb.dex).digest('hex');
+      const path = join(CAPTURES, `${outSha.slice(0, 16)}.dex`);
+      if (!existsSync(path)) writeFileSync(path, rb.dex);
+      const meta: DumpMeta = { sha256: outSha, size: rb.dex.length, source: 'dex-recover', addr: '0', tag: 'recovered', sessionId: '', package: '', capturedAt: Date.now(), path, kind: 'dex' };
+      dumps.set(outSha, meta); broadcast('dump.new', meta);
+      return send(200, { ok: true, ...report, injected: rb.injected, classesRewritten: rb.classesRewritten, parseOk, sha256: outSha, size: rb.dex.length });
+    } },
+    { method: 'POST', path: '/api/dex/strip', handler: async () => {
+      const { b64, sha, midx } = JSON.parse((await readBody(req)) || '{}');
+      let buf: Buffer;
+      try { buf = await dumpBuf({ b64, sha }); } catch (e: any) { return send(e.status ?? 400, { error: e.message }); }
+      const stripped = stripMethodCode(buf, Number(midx));
+      return send(200, { ok: true, midx: Number(midx), b64: stripped.toString('base64') });
+    } },
+    { method: 'POST', path: '/api/dex/rebuild', handler: async () => {
+      const { b64, sha, captures } = JSON.parse((await readBody(req)) || '{}');
+      let buf: Buffer;
+      try { buf = await dumpBuf({ b64, sha }); } catch (e: any) { return send(e.status ?? 400, { error: e.message }); }
+      if (!Array.isArray(captures)) return send(400, { error: 'need captures[]' });
+      let res; try { res = rebuildStandardDex(buf, captures); } catch (e) { return send(422, { error: (e as Error).message }); }
+      let parseOk = true, methods = 0;
+      try { const pd = parseDex(res.dex); methods = pd.counts.methods; } catch { parseOk = false; }
+      const outSha = createHash('sha256').update(res.dex).digest('hex');
+      const path = join(CAPTURES, `${outSha.slice(0, 16)}.dex`);
+      if (!existsSync(path)) writeFileSync(path, res.dex);
+      const meta: DumpMeta = { sha256: outSha, size: res.dex.length, source: 'dex-rebuild', addr: '0', tag: 'rebuilt', sessionId: '', package: '', capturedAt: Date.now(), path, kind: 'dex' };
+      dumps.set(outSha, meta); broadcast('dump.new', meta);
+      return send(200, { ok: true, injected: res.injected, classesRewritten: res.classesRewritten, parseOk, methods, sha256: outSha, size: res.dex.length });
+    } },
+    // Combined: /api/dex/parse | /api/dex/crypto_scan | /api/dex/search — one body, branches on path.
+    { method: 'POST', path: '/api/dex/parse', handler: dexParseScanSearch },
+    { method: 'POST', path: '/api/dex/crypto_scan', handler: dexParseScanSearch },
+    { method: 'POST', path: '/api/dex/search', handler: dexParseScanSearch },
+    { method: 'POST', path: '/api/dex/repair', handler: async () => {
+      const body = await readBody(req);
+      const { b64, sha } = JSON.parse(body || '{}');
+      let buf: Buffer;
+      try { buf = await dumpBuf({ b64, sha }); } catch (e: any) { return send(e.status ?? 400, { error: e.message }); }
+      const info = repairDexHeader(buf);
+      return send(200, { ...info, size: buf.length, repairedB64: buf.toString('base64') });
+    } },
+    { path: '/api/dumps', handler: () => send(200, [...dumps.values()]) },
+    { path: '/api/dumps/download', handler: () => {
+      const sha = url.searchParams.get('sha') ?? '';
+      const m = dumps.get(sha);
+      if (!m) return send(404, { error: 'no such dump' });
+      res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-disposition': `attachment; filename="${sha.slice(0, 16)}.${m.kind}.bin"` });
+      return createReadStream(m.path).pipe(res);
+    } },
+    { path: '/', handler: dashboardHtml },
+    { path: '/index.html', handler: dashboardHtml },
+  ];
+
+  async function dexParseScanSearch() {
     const body = await readBody(req);
     const { b64, sha, full } = JSON.parse(body || '{}');
     let buf: Buffer;
@@ -772,29 +716,18 @@ async function handleHttp(req: http.IncomingMessage, res: http.ServerResponse) {
       strings: parsed.strings.slice(0, cap),
     });
   }
-  // Dex header repair: POST /api/dex/repair {b64} | {sha}
-  if (url.pathname === '/api/dex/repair' && req.method === 'POST') {
-    const body = await readBody(req);
-    const { b64, sha } = JSON.parse(body || '{}');
-    let buf: Buffer;
-    try { buf = await dumpBuf({ b64, sha }); } catch (e: any) { return send(e.status ?? 400, { error: e.message }); }
-    const info = repairDexHeader(buf);
-    return send(200, { ...info, size: buf.length, repairedB64: buf.toString('base64') });
-  }
-  // Dumps registry
-  if (url.pathname === '/api/dumps') return send(200, [...dumps.values()]);
-  if (url.pathname === '/api/dumps/download') {
-    const sha = url.searchParams.get('sha') ?? '';
-    const m = dumps.get(sha);
-    if (!m) return send(404, { error: 'no such dump' });
-    res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-disposition': `attachment; filename="${sha.slice(0, 16)}.${m.kind}.bin"` });
-    return createReadStream(m.path).pipe(res);
-  }
-  if (url.pathname === '/' || url.pathname === '/index.html') {
+  async function dashboardHtml() {
     try {
       const html = await readFile(join(__dirname, '..', 'public', 'index.html'), 'utf8');
       return send(200, html, 'text/html; charset=utf-8');
     } catch { return send(500, { error: 'dashboard missing' }); }
+  }
+
+  for (const r of routes) {
+    if (r.method && req.method !== r.method) continue;
+    if (r.prefix ? url.pathname.startsWith(r.path) : url.pathname === r.path) {
+      return await r.handler();
+    }
   }
   send(404, { error: 'not found' });
 }
