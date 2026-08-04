@@ -2,6 +2,7 @@
 <resources>
     <string name="app_name">ADH 管理器</string>
     <string name="section_configuration">配置</string>
+    <string name="section_web_ui">Web UI</string>
     <string name="section_versions">版本</string>
     <string name="scope_title">注入范围</string>
     <string name="scope_count">已选择 %1$d 个应用</string>
@@ -22,6 +23,16 @@
     <string name="status_not_installed_detail">请在 root 管理器中安装 ADH 模块</string>
     <string name="back">返回</string>
     <string name="refresh_status">刷新状态</string>
+    <string name="web_ui_checking">正在检查 Web UI</string>
+    <string name="web_ui_online">Web UI 在线</string>
+    <string name="web_ui_offline">Web UI 未连接</string>
+    <string name="web_ui_checking_detail">正在读取 Host ADH Daemon 地址</string>
+    <string name="web_ui_lan_detail">优先使用局域网地址，手机浏览器可直接打开</string>
+    <string name="web_ui_local_detail">仅本机可访问，请确认已执行 adb reverse</string>
+    <string name="web_ui_unavailable_detail">电脑端 Web UI 未连接，显示本机回退地址</string>
+    <string name="web_ui_local_address">ADB 反向地址：%1$s</string>
+    <string name="copy_web_ui_url">复制 Web UI 地址</string>
+    <string name="open_web_ui">打开 Web UI</string>
     <string name="search_apps">搜索应用</string>
     <string name="clear_search">清除搜索</string>
     <string name="show_system_apps">显示系统应用</string>

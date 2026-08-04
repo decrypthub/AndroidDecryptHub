@@ -1,8 +1,15 @@
 package com.adh.manager.ui.home
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,7 +29,9 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.rounded.Apps
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.OpenInBrowser
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -39,6 +48,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -47,16 +57,21 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import com.adh.manager.BuildConfig
 import com.adh.manager.R
 import com.adh.manager.data.ModuleStatus
+import com.adh.manager.data.HostWebUiRepository
 import com.adh.manager.data.ScopeRepository
+import com.adh.manager.data.WebUiRepository
+import com.adh.manager.data.WebUiStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 @Composable
 fun HomeScreen(
     repository: ScopeRepository,
+    webUiRepository: WebUiRepository,
     onOpenScope: () -> Unit,
 ) {
     var status by remember { mutableStateOf(ModuleStatus()) }
+    var webStatus by remember { mutableStateOf<WebUiStatus?>(null) }
     var count by remember { mutableIntStateOf(0) }
     var refreshVersion by remember { mutableIntStateOf(0) }
 
@@ -76,6 +91,10 @@ fun HomeScreen(
         count = result.second
     }
 
+    LaunchedEffect(webUiRepository, refreshVersion) {
+        webStatus = withContext(Dispatchers.IO) { webUiRepository.probe() }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -85,9 +104,12 @@ fun HomeScreen(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .weight(1f)
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp, vertical = 20.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
+            WebUiSection(status = webStatus)
             SectionLabel(text = stringResource(R.string.section_configuration))
             Surface(
                 color = MaterialTheme.colorScheme.surfaceContainer,
@@ -142,6 +164,71 @@ fun HomeScreen(
                         value = BuildConfig.VERSION_NAME,
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun WebUiSection(status: WebUiStatus?) {
+    val context = LocalContext.current
+    val url = status?.primaryUrl ?: HostWebUiRepository.LOCAL_URL
+    val stateText = when {
+        status == null -> stringResource(R.string.web_ui_checking)
+        status.reachable -> stringResource(R.string.web_ui_online)
+        else -> stringResource(R.string.web_ui_offline)
+    }
+    val detailText = when {
+        status == null -> stringResource(R.string.web_ui_checking_detail)
+        !status.reachable -> stringResource(R.string.web_ui_unavailable_detail)
+        status.lanUrl != null -> stringResource(R.string.web_ui_lan_detail)
+        status.reachable -> stringResource(R.string.web_ui_local_detail)
+        else -> stringResource(R.string.web_ui_unavailable_detail)
+    }
+
+    SectionLabel(text = stringResource(R.string.section_web_ui))
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(modifier = Modifier.padding(start = 16.dp, top = 12.dp, end = 8.dp, bottom = 12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stateText,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = url,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+                IconButton(onClick = {
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    clipboard.setPrimaryClip(ClipData.newPlainText("ADH Web UI", url))
+                }) {
+                    Icon(Icons.Rounded.ContentCopy, contentDescription = stringResource(R.string.copy_web_ui_url))
+                }
+                IconButton(onClick = {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                }) {
+                    Icon(Icons.Rounded.OpenInBrowser, contentDescription = stringResource(R.string.open_web_ui))
+                }
+            }
+            Text(
+                text = detailText,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (status?.reachable == true && status.lanUrl != null && status.localUrl != status.lanUrl) {
+                Text(
+                    text = stringResource(R.string.web_ui_local_address, status.localUrl),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }

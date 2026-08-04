@@ -2,6 +2,7 @@
 <resources>
     <string name="app_name">ADH Manager</string>
     <string name="section_configuration">Configuration</string>
+    <string name="section_web_ui">Web UI</string>
     <string name="section_versions">Versions</string>
     <string name="scope_title">Injection scope</string>
     <string name="scope_count">%1$d selected apps</string>
@@ -22,6 +23,16 @@
     <string name="status_not_installed_detail">Install the ADH module in your root manager</string>
     <string name="back">Back</string>
     <string name="refresh_status">Refresh status</string>
+    <string name="web_ui_checking">Checking Web UI</string>
+    <string name="web_ui_online">Web UI online</string>
+    <string name="web_ui_offline">Web UI unavailable</string>
+    <string name="web_ui_checking_detail">Reading the Host ADH Daemon address</string>
+    <string name="web_ui_lan_detail">Using the LAN address so the phone browser can open it</string>
+    <string name="web_ui_local_detail">Local access only; confirm adb reverse is active</string>
+    <string name="web_ui_unavailable_detail">The desktop Web UI is unavailable; showing the local fallback</string>
+    <string name="web_ui_local_address">ADB reverse address: %1$s</string>
+    <string name="copy_web_ui_url">Copy Web UI address</string>
+    <string name="open_web_ui">Open Web UI</string>
     <string name="search_apps">Search apps</string>
     <string name="clear_search">Clear search</string>
     <string name="show_system_apps">Show system apps</string>

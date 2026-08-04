@@ -508,7 +508,7 @@ android-decrpthub/          # 仓库名；产品名 ADH (Android DecryptHub)
 ├── device/                 # 设备侧多模块（独立于 Host daemon，非 Xposed）
 │   ├── core/               # ScopeConfig / AdhPaths / ScopeJson + AIDL contract
 │   ├── daemon/             # root app_process Device Daemon（作用域/模块状态）
-│   └── manager/            # 普通 Compose Manager（仅 Binder 客户端，无 su）
+│   └── manager/            # 普通 Compose Manager（Binder 作用域客户端 + Host Web UI 地址探测，无 su）
 │
 ├── daemon/                 # Host ADH Daemon（npm adhd；legacy idhd）
 │   ├── src/

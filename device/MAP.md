@@ -10,18 +10,21 @@ Magisk 打包仍在 `injector/zygisk/`。
 |---|---|---|
 | `:core` | `com.adh.core` | Scope 契约单一真相：路径常量、JSON 编解码、`IAdhScopeService` AIDL |
 | `:daemon` | `com.adh.daemon` | 模块以 root `app_process` 启动的 APK；只读写 scope/模块状态 |
-| `:manager` | `com.adh.manager` | 普通 Compose APK；只经受认证 Binder 读/写 scope，不调用 `su` |
+| `:manager` | `com.adh.manager` | 普通 Compose APK；经受认证 Binder 读/写 scope，并直接探测 Host Web UI 地址；不调用 `su` |
 
 ## Boundaries (red line)
 
 ```text
 Target App  →  agent/libidh_agent.so     collect only
 Zygisk      →  injector/zygisk           early inject by scope
-Device      →  device/:daemon+:manager   scope + module status only
+Device      →  device/:daemon+:manager   scope + module status + Host console link
 Host PC     →  daemon/ (ADH Daemon)      HTTP/WS/MCP/analysis
 ```
 
-Never put HTTP, MCP, dex indexer, or heavy analysis into device daemon or manager.
+Never host HTTP/MCP services, a dex indexer, or heavy analysis in the Device Daemon
+or Manager. The Manager may only act as a bounded HTTP client for Host `/health`
+so it can display and open the Web UI address; that request never passes through
+the privileged Device Daemon.
 
 ## Scope contract (shared)
 
@@ -62,6 +65,7 @@ Manager signing certificate pinned during the build.
 The Manager also adopts Vector's compact status-first information hierarchy while
 remaining a standalone ADH app. Default resources are Simplified Chinese, `values-en`
 follows English system locales, and Material You/light-dark colors follow the system.
-User-facing text is limited to module status, scope actions, errors, and versions.
+User-facing text is limited to module status, the Host Web UI address, scope actions,
+errors, and versions.
 Module status distinguishes an unavailable Device Daemon from an absent or unloaded
 module. Both Home and Scope re-check when returning to the foreground.
