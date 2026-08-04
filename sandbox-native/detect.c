@@ -45,6 +45,27 @@ long idh_direct_gettid(void) {
     return ret;
 }
 
+// Static-linked crypto-shaped target for the WS-A inline-hook acceptance path. It is
+// deliberately not a PLT call: the JNI entry below calls this function directly, so a GOT
+// replacement cannot observe it. A real target may replace this with a statically linked
+// BoringSSL update routine using the same five-argument ABI.
+__attribute__((noinline, visibility("default")))
+int idh_static_EVP_CipherUpdate(void *ctx, unsigned char *out, int *outl,
+                                const unsigned char *in, int inl) {
+    (void)ctx;
+    if (!out || !outl || !in || inl < 0) return 0;
+    for (int i = 0; i < inl; i++) out[i] = (unsigned char)(in[i] ^ 0x5a);
+    *outl = inl;
+    return 1;
+}
+
+JNIEXPORT jint JNICALL Java_com_idh_sandbox_Detection_staticCrypto(JNIEnv *env, jclass clazz) {
+    (void)env; (void)clazz;
+    static const unsigned char marker[] = "IDH_INLINE_CRYPTO_v1";
+    unsigned char out[sizeof(marker)]; int outl = 0;
+    return idh_static_EVP_CipherUpdate(NULL, out, &outl, marker, (int)sizeof(marker) - 1);
+}
+
 // Deterministic target for QBDI instruction trace: sum i*3 for i in 0..4 -> 30.
 // (volatile prevents constant-folding so QBDI sees real loop instructions.)
 int idh_trace_target(void) {

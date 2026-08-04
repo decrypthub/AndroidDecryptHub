@@ -27,6 +27,9 @@
 #ifdef IDH_HAVE_LSPLANT
 #include "../hook/java_lsplant.h"   // C-ABI shim over LSPlant (Java method hook, WS-A)
 #endif
+#ifdef IDH_HAVE_INLINE_HOOK
+#include "../hook/native_inline.h"   // Dobby-backed arm64 function-entry hook
+#endif
 
 // Common macros (AGENT_VER/IDH_HOST/IDH_PORT/TAG/LOGI/LOGE/FRAME_*) + cross-module prototypes
 // (util/io/mem) live in agent_internal.h, shared with util.c / io.c / mem.c.
@@ -1659,6 +1662,95 @@ static void cmd_trigger(int fd, const char *id, const char *className, const cha
     LOGI("trigger %s method=%s level=%d loaded=%d invoked=%d skipped=%d (%s)", className, method?method:"", level, loaded, invoked, skipped, reason);
 }
 
+#ifdef IDH_HAVE_INLINE_HOOK
+// v2.2 WS-A native inline self-test. The target supplies the module, symbol and a safe
+// no-arg static trigger; the agent only supplies the ABI-specific wrapper and Dobby backend.
+typedef int (*inline_crypto_update_t)(void *, unsigned char *, int *, const unsigned char *, int);
+static inline_crypto_update_t g_inline_crypto_orig = NULL;
+static void *g_inline_crypto_target = NULL;
+static int g_inline_crypto_active = 0;
+static int my_inline_crypto_update(void *ctx, unsigned char *out, int *outl,
+                                   const unsigned char *in, int inl) {
+    if (__atomic_load_n(&g_inline_crypto_active, __ATOMIC_RELAXED))
+        capture("INLINE_EVP_CipherUpdate", in, inl);
+    return g_inline_crypto_orig ? g_inline_crypto_orig(ctx, out, outl, in, inl) : 0;
+}
+
+static void cmd_inline_crypto_test(int fd, const char *id, const char *module,
+                                   const char *symbol, const char *className, const char *method) {
+    char idj[64]; json_escape(id, idj, sizeof(idj));
+    char mj[96], sj[96], cj[220], errj[180];
+    json_escape(module ? module : "", mj, sizeof(mj));
+    json_escape(symbol ? symbol : "", sj, sizeof(sj));
+    json_escape(className ? className : "", cj, sizeof(cj));
+    const char *error = "";
+    void *target = (module && symbol) ? resolve_sym(module, symbol) : NULL;
+    void *original = NULL;
+    int installed = 0, hooked = 0;
+    if (target && g_inline_crypto_target == target && g_inline_crypto_orig) hooked = 1;
+    else if (target && g_inline_crypto_target) error = "inline slot already owns another target";
+    else if (target) {
+        hooked = idh_inline_hook(target, (void *)my_inline_crypto_update, &original);
+        if (hooked) {
+            g_inline_crypto_orig = (inline_crypto_update_t)original;
+            g_inline_crypto_target = target;
+            installed = 1;
+        }
+    }
+    int triggered = 0, value = 0, did = 0;
+    cap_reset();
+
+    if (!target) error = "symbol not found";
+    else if (!hooked) { if (!error[0]) error = "inline backend rejected hook"; }
+    else {
+        __atomic_store_n(&g_inline_crypto_active, 1, __ATOMIC_RELAXED);
+        JNIEnv *env = attach_env(&did);
+        if (!env) error = "no JNI env";
+        else {
+            (*env)->PushLocalFrame(env, 48);
+            jclass jc = load_app_class(env, className ? className : "");
+            jmethodID mid = jc ? (*env)->GetStaticMethodID(env, jc, method ? method : "", "()I") : NULL;
+            if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); mid = NULL; }
+            if (!mid) error = "static int trigger not found";
+            else {
+                value = (*env)->CallStaticIntMethod(env, jc, mid);
+                if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); error = "trigger threw"; }
+                else triggered = 1;
+            }
+            (*env)->PopLocalFrame(env, NULL);
+            detach_env(did);
+        }
+        __atomic_store_n(&g_inline_crypto_active, 0, __ATOMIC_RELAXED);
+    }
+    json_escape(error, errj, sizeof(errj));
+    size_t cap = 1 << 15, len = 0; char *out = malloc(cap);
+    if (!out) { send_oom(fd, idj, "inline_crypto_test"); return; }
+    len += snprintf(out + len, cap - len,
+        "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"inline_crypto_test\","
+        "\"ok\":%s,\"module\":\"%s\",\"symbol\":\"%s\",\"hooked\":%s,\"installed\":%s,"
+        "\"triggered\":%s,\"result\":%d,\"error\":\"%s\",\"captures\":[",
+        idj, (hooked && triggered && !error[0]) ? "true" : "false", mj, sj,
+        hooked ? "true" : "false", installed ? "true" : "false", triggered ? "true" : "false", value, errj);
+    int n = cap_emit_all(out, &len, cap);
+    len += snprintf(out + len, cap > len ? cap - len : 0, "],\"captureCount\":%d}\n", n);
+    send_line(fd, out); free(out);
+    LOGI("inline_crypto_test module=%s symbol=%s hooked=%d triggered=%d captures=%d error=%s",
+         module ? module : "", symbol ? symbol : "", hooked, triggered, n, error);
+}
+#else
+static void cmd_inline_crypto_test(int fd, const char *id, const char *module,
+                                   const char *symbol, const char *className, const char *method) {
+    (void)module; (void)symbol; (void)className; (void)method;
+    char idj[64]; json_escape(id, idj, sizeof(idj));
+    char out[240];
+    snprintf(out, sizeof(out),
+        "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"inline_crypto_test\","
+        "\"ok\":false,\"hooked\":false,\"error\":\"inline backend not built - run tools/fetch_lsplant.sh\"}\n",
+        idj);
+    send_line(fd, out);
+}
+#endif
+
 // Load an arbitrary .so into the target process (e.g. frida-gadget, a helper lib). The
 // agent is native code inside the target, so dlopen() just works — gadget in script mode
 // then auto-runs its JS. Reports the handle + whether an optional probe symbol resolved.
@@ -2409,6 +2501,13 @@ static void command_loop(int fd) {
                     json_get_str(line, "method", tm, sizeof(tm));
                     long long lv = json_get_num(line, "level");
                     cmd_trigger(fd, id, tcls, tm, lv > 0 ? (int)lv : 1);
+                } else if (strcmp(op, "inline_crypto_test") == 0) {
+                    char im[96] = "", is[96] = "", ic[220] = "", it[80] = "";
+                    json_get_str(line, "module", im, sizeof(im));
+                    json_get_str(line, "symbol", is, sizeof(is));
+                    json_get_str(line, "className", ic, sizeof(ic));
+                    json_get_str(line, "method", it, sizeof(it));
+                    cmd_inline_crypto_test(fd, id, im, is, ic, it);
                 } else if (strcmp(op, "load_so") == 0) {
                     char lpath[400] = "", lsym[96] = "";
                     json_get_str(line, "path", lpath, sizeof(lpath));

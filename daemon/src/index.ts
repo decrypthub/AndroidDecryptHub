@@ -426,6 +426,21 @@ async function handleHttp(req: http.IncomingMessage, res: http.ServerResponse) {
         return send(r.ok ? 200 : 502, r);
       } catch (e) { return send(504, { error: (e as Error).message }); }
     } },
+    { path: '/api/native/inline_hook_test', handler: async () => {
+      const sid = pickSid(url.searchParams.get('session'));
+      if (!sid) return send(400, { error: 'no session' });
+      const args = {
+        module: url.searchParams.get('module') ?? SANDBOX.inlineModule,
+        symbol: url.searchParams.get('symbol') ?? SANDBOX.inlineSymbol,
+        className: url.searchParams.get('class') ?? SANDBOX.detect,
+        method: url.searchParams.get('method') ?? SANDBOX.inlineMethod,
+      };
+      try {
+        const r = await withCaptureSuspended(sid, () => sendCmd(sid, 'inline_crypto_test', args, 20_000));
+        if (r.captures) r.captures = r.captures.map((c: any) => ({ ...c, ascii: Buffer.from(c.hex, 'hex').toString('latin1').replace(/[^\x20-\x7e]/g, '.') }));
+        return send(r.ok ? 200 : 502, r);
+      } catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
     { path: '/api/hook/selftest', handler: async () => {
       const sid = pickSid(url.searchParams.get('session'));
       if (!sid) return send(400, { error: 'no session' });

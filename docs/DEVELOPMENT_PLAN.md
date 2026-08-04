@@ -574,7 +574,7 @@ android-decrpthub/          # 仓库名；产品名 ADH (Android DecryptHub)
 
 | WS | 名称 | 核心缺陷 → 改造 | 归属层 |
 |----|------|----------------|--------|
-| **A** | Hook 引擎第二条腿 | 只有 GOT hook，纯 Java / 静态内联 native / 自实现 TLS 全抓不到 → 抽象 `hook_backend_t{AUTO,GOT,INLINE,JAVA}` 统一接口；inline 后端接 ShadowHook/Dobby；Java 后端接 LSPlant（含框架级 `CipherSpi/MacSpi/MessageDigestSpi.engine*` 与目标类名无关的拦截）。**fail-loud 区分**：符号未解析 / 页不可写 / 重定位失败 / LSPlant backup 失败。**Java 后端现状**：代表性消费级 ROM（OnePlus PGP110/ColorOS/Android15/SDK35，测试机 `13f54a46`）上 `libart.so` 缺失 LSPlant 所需 44 个 ART 内部符号中的 30 个（68%），根本性阻塞；同 ROM 上 ShadowHook inline 后端 `shadowhook_init` 同样失败（`INIT_LINKER`/errno12）——系统性 ROM 限制，非集成缺陷。按产品方向（C 端，不追求小众设备兼容）**Java 后端（LSPlant）降级为非当前路线**，不再是任何 P0/P1 验收门禁的依赖；GOT/PLT hook 后端在同一 ROM 上验证 ROM-independent，新增能力一律走这条腿。 | Agent |
+| **A** | Hook 引擎第二条腿 | 只有 GOT hook，纯 Java / 静态内联 native / 自实现 TLS 全抓不到 → `GOT / INLINE / JAVA` 三后端；native inline 采用静态链接 Dobby 按地址改函数入口，Java 后端接 LSPlant。**fail-loud 区分**：符号未解析 / backend 拒绝 / trigger 失败 / LSPlant backup 失败。**当前结论**：代表性消费级 ROM（OnePlus PGP110/ColorOS/Android15/SDK35）上 `libart.so` 缺失 LSPlant 所需 44 个 ART 内部符号中的 30 个（68%），Java 后端根本性阻塞；ShadowHook 因 linker monitor 初始化失败（`INIT_LINKER`/errno12），改用不依赖 linker monitor 的 Dobby by-address 后端，同 ROM 真机连续调用验证通过。LSPlant 降级为非当前门禁；GOT 与 Dobby inline 为当前 native 主线。 | Agent |
 | **B** | 彻底去 sandbox 耦合 | `net_hook_test/flow_watch/detect_watch/trace_run/crypto_hook_test` 全写死调 sandbox 类、hook 写死 libjavacrypto → 删"一次性 probe + 写死触发类"命令族；`crypto_probe` 枚举出的**每个**持有 EVP 指针的模块都装 hook；触发两条路径：被动（真实 app 自然命中）+ 主动（operator/MCP 下发 `{class,method,args}` 反射，**类名来自命令**）。sandbox 触发改由 verify 脚本 `am broadcast`/`am instrument` 进程外驱动。 | Agent + Daemon |
 | **C** | 采集管线：环形缓冲 | `g_caps[64]/g_jcaps[96]/g_trace[256]` 定长满即**静默丢** → MPSC 环形缓冲 + drain 线程持续推 idhd 落盘；有界阻塞背压；溢出**如实上报** `dropped` 计数 + 首末丢弃时间戳，UI 红字；`dropped>0` → `/api/captures` 与导出报告带 `complete:false`。 | Agent + Daemon |
 | **D** | 协议重写：length-framed | NDJSON + `strstr("\"key\":\"")` 提取 + 8192 命令单行上限 → 帧 `[u32 len][u8 type][payload]`；控制帧 payload 仍为 JSON；取消 8192 上限与超长丢弃；大 dump 走分片帧或 memfd/ashmem 共享内存。**fail-loud**：帧长非法 / 类型未知 → 关连接并上报。`proto/PROTOCOL.md` 同步重写。 | Agent + Daemon |
@@ -592,7 +592,7 @@ android-decrpthub/          # 仓库名；产品名 ADH (Android DecryptHub)
 |------|------|----------------------|
 | **v2.0** | WS-D 协议重写 + WS-C 环形缓冲/落盘/如实上报 | dump 16MB region 字节级 sha256 一致；超长命令完整解析；高频驱动 1000/s×10s，`produced` + `dropped` 如实上报（旧实现静默丢 ~9900 却显示成功） |
 | **v2.1** | WS-B 去耦合（已基本完成）+ 原生 Signature/KDF/AEAD 覆盖扩展（GOT hook，不依赖 LSPlant） | `grep com.idh.sandbox agent/` = 0；EVP_PKEY_sign/verify/encrypt/decrypt、PKCS5_PBKDF2_HMAC/HKDF/EVP_PBE_scrypt、EVP_AEAD_CTX_seal/open 全部装上并在 sandbox 触发中各命中 ≥1 次；capture_start 回包对每个新符号如实报告装上/未装上（非 ok:true replaced:0） |
-| **v2.2** | WS-A inline 后端(ShadowHook) | 目标自带静态链接 BoringSSL 的 native crypto 被 inline hook 捕获 |
+| **v2.2** | WS-A native inline 后端（Dobby by-address） | sandbox 静态链接的 BoringSSL ABI-shaped native crypto 直接调用（无 GOT slot）被函数入口 hook 捕获；同进程连续两次调用均命中且原 trampoline 返回正确结果 |
 | **v2.3** | WS-F 持久索引 + 深解析 + 反射 | 21820 方法建索引后 string→callers < 阈值；一条 `Class.forName` 反射链被静态连出 |
 | **v2.4** | WS-E 脱壳二代 + try/catch + cdex/041 | 带 `try` 方法字节级重建一致；cdex→标准 dex 过 dexdump/verifier（**需样本，否则 PENDING**） |
 | **v2.5** | WS-G Capstone + WS-H QBDI 通用化 | strip 内存镜像 .so 反汇编出正确指令序列；带 2 指针参数的 native 函数 trace 读到入参字符串 |

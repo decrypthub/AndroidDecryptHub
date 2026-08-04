@@ -7,6 +7,7 @@ import android.util.Log
 object Detection {
     private const val TAG = "IDH_SANDBOX"
     @JvmStatic external fun run(): Int
+    @JvmStatic external fun staticCrypto(): Int
 
     fun load() {
         try {

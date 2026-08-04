@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
-# Fetch LSPlant (ART Java-method hook, WS-A) + ShadowHook (arm64 inline hook backend).
+# Fetch LSPlant (ART Java-method hook, WS-A) + Dobby (arm64 inline hook backend).
 # LSPlant is pinned to v6.4 — master migrated to C++23 modules + CMake 3.28 which our
 # CMake 3.22.1 cannot build; v6.4 is plain C++20 single-source. Sources land in
-# agent/third_party/ (gitignored); ShadowHook's .so is staged into sandbox jniLibs so the
-# app carries it. Idempotent, fail-loud.
+# agent/third_party/ (gitignored). Dobby is linked statically into the agent. Idempotent,
+# fail-loud.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TP="$ROOT/agent/third_party"
 JNILIBS="$ROOT/sandbox-app/app/src/main/jniLibs/arm64-v8a"
 LSP_VER="${LSPLANT_VERSION:-v6.4}"
-SH_VER="${SHADOWHOOK_VERSION:-2.0.1}"
 mkdir -p "$TP" "$JNILIBS"
 
 # ---- LSPlant v6.4 + dex_builder + parallel_hashmap (HTTPS submodules only) ------------

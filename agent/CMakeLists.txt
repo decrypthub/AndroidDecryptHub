@@ -32,7 +32,17 @@ set(DXB "${LSP}/external/dex_builder")
 set(DOB "${CMAKE_CURRENT_SOURCE_DIR}/third_party/dobby")
 set(LSPLANT_LIBS "")
 set(LSPLANT_INC "")
-if(EXISTS "${LSP}/lsplant.cc" AND EXISTS "${DOB}/lib/arm64-v8a/libdobby.a")
+set(DOBBY_AVAILABLE FALSE)
+if(EXISTS "${DOB}/lib/arm64-v8a/libdobby.a" AND EXISTS "${DOB}/include/dobby.h")
+    message(STATUS "Dobby present — enabling native inline-hook backend")
+    list(APPEND AGENT_SOURCES src/hook/native_inline_dobby.cpp)
+    list(APPEND LSPLANT_INC ${DOB}/include)
+    list(APPEND LSPLANT_LIBS "${DOB}/lib/arm64-v8a/libdobby.a")
+    set(DOBBY_AVAILABLE TRUE)
+    add_compile_definitions(IDH_HAVE_INLINE_HOOK=1)
+endif()
+
+if(EXISTS "${LSP}/lsplant.cc" AND DOBBY_AVAILABLE)
     message(STATUS "LSPlant present — enabling Java-method hook backend (Dobby prebuilt static)")
     add_subdirectory("${DXB}/external/parallel_hashmap" phmap_build EXCLUDE_FROM_ALL)
     list(APPEND AGENT_SOURCES
@@ -45,8 +55,8 @@ if(EXISTS "${LSP}/lsplant.cc" AND EXISTS "${DOB}/lib/arm64-v8a/libdobby.a")
         ${DXB}/slicer/dex_format.cc ${DXB}/slicer/dex_utf8.cc
         ${DXB}/slicer/dex_bytecode.cc ${DXB}/slicer/sha1.cpp
     )
-    set(LSPLANT_INC ${LSP} ${LSP}/include ${DXB}/include ${DXB} ${DOB}/include)
-    set(LSPLANT_LIBS z phmap "${DOB}/lib/arm64-v8a/libdobby.a")
+    list(APPEND LSPLANT_INC ${LSP} ${LSP}/include ${DXB}/include ${DXB})
+    list(APPEND LSPLANT_LIBS z phmap)
     add_compile_definitions(IDH_HAVE_LSPLANT=1)
     # LSPlant/DexBuilder upstream warnings are not ours — don't fail on them.
     set_source_files_properties(
@@ -56,7 +66,11 @@ if(EXISTS "${LSP}/lsplant.cc" AND EXISTS "${DOB}/lib/arm64-v8a/libdobby.a")
         ${DXB}/slicer/dex_bytecode.cc ${DXB}/slicer/sha1.cpp
         PROPERTIES COMPILE_FLAGS "-Wno-everything")
 else()
-    message(WARNING "LSPlant absent — run tools/fetch_lsplant.sh for Java-method hooking")
+    if(NOT DOBBY_AVAILABLE)
+        message(WARNING "Dobby absent — run tools/fetch_lsplant.sh for native inline hooking")
+    else()
+        message(WARNING "LSPlant absent — run tools/fetch_lsplant.sh for Java-method hooking")
+    endif()
 endif()
 
 add_library(idh_agent SHARED ${AGENT_SOURCES})

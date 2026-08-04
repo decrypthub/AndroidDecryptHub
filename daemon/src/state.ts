@@ -181,6 +181,8 @@ export const SANDBOX = {
   net: 'com.idh.sandbox.Network', flow: 'com.idh.sandbox.CorrelatedFlow',
   crypto: 'com.idh.sandbox.JavaCrypto', file: 'com.idh.sandbox.FileIO',
   detect: 'com.idh.sandbox.Detection', javaHook: 'com.idh.sandbox.HookTarget',
+  inlineModule: 'libidhdetect.so', inlineSymbol: 'idh_static_EVP_CipherUpdate',
+  inlineMethod: 'staticCrypto',
 };
 // The persistent-hook target modules the agent should use. Sent with every capture_start so
 // the agent stays target-agnostic (no hardcoded modules). The Java rich-capture reporter class
