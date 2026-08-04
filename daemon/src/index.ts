@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { analyzeSo, cryptoConstScan, svcScan, disasmSo, OBJDUMP } from './analysis.ts';
 import { parseDex, cryptoScan, searchDex, invokeXref, extractMethodCode, analyzeCoverage, rebuildStandardDex, recoverFromSnapshots, stripMethodCode } from './dex.ts';
+import { ensureDexIndex, searchDexIndex, listDexReflections } from './dex_index.ts';
 import { handleMcp, MCP_TOOLS, MCP_MAP } from './mcp.ts';
 import {
   sendCmd, pickSid, dumpBuf, dumpBufPath, dumpRegion, modulesFromMaps, reconstructSo,
@@ -620,6 +621,25 @@ async function handleHttp(req: http.IncomingMessage, res: http.ServerResponse) {
       const codes = extractMethodCode(buf, parsed, String(cls), method ? String(method) : undefined);
       const recovered = codes.filter(c => c.insnsSize > 0).length;
       return send(200, { class: cls, method: method ?? null, count: codes.length, recovered, empty: codes.length - recovered, methods: codes.slice(0, 200) });
+    } },
+    { method: 'POST', path: '/api/dex/index', handler: async () => {
+      const body = JSON.parse((await readBody(req)) || '{}');
+      let buf: Buffer;
+      try { buf = await dumpBuf(body); } catch (e: any) { return send(e.status ?? 400, { error: e.message }); }
+      try { return send(200, ensureDexIndex(buf)); }
+      catch (e) { return send(422, { error: (e as Error).message }); }
+    } },
+    { method: 'POST', path: '/api/dex/index/search', handler: async () => {
+      const { sha, query, limit } = JSON.parse((await readBody(req)) || '{}');
+      if (!sha || query === undefined) return send(400, { error: 'need indexed dex sha and query' });
+      try { return send(200, searchDexIndex(String(sha), String(query), limit)); }
+      catch (e: any) { return send(e.status ?? 500, { error: e.message }); }
+    } },
+    { method: 'POST', path: '/api/dex/index/reflections', handler: async () => {
+      const { sha, limit } = JSON.parse((await readBody(req)) || '{}');
+      if (!sha) return send(400, { error: 'need indexed dex sha' });
+      try { return send(200, { sha, reflections: listDexReflections(String(sha), limit) }); }
+      catch (e: any) { return send(e.status ?? 500, { error: e.message }); }
     } },
     { method: 'POST', path: '/api/dex/xref', handler: async () => {
       const body = await readBody(req);

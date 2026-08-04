@@ -58,6 +58,7 @@ SCRIPTS=(
   "verify_v26_cryptocoverage.sh:device"
   "verify_v27_zygisk.sh:device"
   "verify_v28_inlinehook.sh:device"
+  "verify_v29_dexindex.sh:host"
 )
 
 pass=0; fail=0; skip=0; FAILED=""

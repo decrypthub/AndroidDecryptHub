@@ -8,12 +8,13 @@ ADH Daemon / `adhd` (Node 24 + TypeScript, runs `.ts` directly, no build step). 
 |---|---|---|
 | `state.ts` | **Shared state + leaf helpers.** All registries (`sessions`/`dumps`/`agentSockets`/`pending`), `events`+`recordEvent`, `settings`+`mergeSettings`/`saveSettings`/`configStats`, capture store (`captures`/`captureTimers`/`capStats`/`captureHealth`), classification (`hexToPreview`/`categoryOf`/`classify`/`cryptoIdentify`), `SANDBOX`/`captureModules`, infra (`wss`/`broadcast`/`log`/`readBody`), framing (`frameJson`/`FRAME_JSON`/`FRAME_MAX`). **Imports nothing from service/mcp/index** (no cycles). | node + ws only |
 | `service.ts` | **Service layer.** Agent-command transport (`sendCmd`/`agentCmd`/`pickSid`), dump engine (`readMem`/`reconstructSo`/`repairDexHeader`/`dumpRegion`/`dumpBuf`/`dumpBufPath`/`modulesFromMaps`), capture ops (`withCaptureSuspended`/`startCaptureLoop`/`autoDumpDex`/`runUnpackSession`/`applyCaptureEnabled`). `capSeq` is service-local (`++`'d in `startCaptureLoop` — can't reassign an imported binding in ESM). | `state.ts`, `dex.ts`, node |
-| `mcp.ts` | **MCP Server (JSON-RPC).** `MCP_TOOLS` registry (single array — **add a tool = add one entry**) + `handleMcp`. Handlers delegate to `service.ts` primitives + `state.ts` reads + `dex.ts`/`analysis.ts` pure layer. | `state.ts`, `service.ts`, `dex.ts`, `analysis.ts` |
-| `index.ts` | **Boot + agent-TCP frame decode + REST routing (table-driven `handleHttp`).** `lanIPv4s`/`webUrls`, `httpServer`/`agentServer`/`ws upgrade`/`SIGINT`. `ROUTES` table: `{method?, path, handler, prefix?}` + first-match loop + 404 fallback. **Add a REST route = add one table entry.** | `state.ts`, `service.ts`, `mcp.ts`, `dex.ts`, `analysis.ts` |
-| `dex.ts` | Pure DEX parser/rebuilder (`parseDex`/`searchDex`/`extractMethodCode`/`invokeXref`/`cryptoScan`/`analyzeCoverage`/`rebuildStandardDex`/`recoverFromSnapshots`/`stripMethodCode`). No daemon state. | — |
+| `mcp.ts` | **MCP Server (JSON-RPC).** `MCP_TOOLS` registry (single array — **add a tool = add one entry**) + `handleMcp`. Handlers delegate to `service.ts` primitives + `state.ts` reads + DEX/index/analysis layers. | `state.ts`, `service.ts`, `dex.ts`, `dex_index.ts`, `analysis.ts` |
+| `index.ts` | **Boot + agent-TCP frame decode + REST routing (table-driven `handleHttp`).** `lanIPv4s`/`webUrls`, `httpServer`/`agentServer`/`ws upgrade`/`SIGINT`. `ROUTES` table: `{method?, path, handler, prefix?}` + first-match loop + 404 fallback. **Add a REST route = add one table entry.** | `state.ts`, `service.ts`, `mcp.ts`, `dex.ts`, `dex_index.ts`, `analysis.ts` |
+| `dex.ts` | Pure DEX parser/rebuilder plus proto/field/code analysis (`parseDex`/`analyzeDexCode`/`searchDex`/`extractMethodCode`/`invokeXref`/`cryptoScan`/`analyzeCoverage`/`rebuildStandardDex`/`recoverFromSnapshots`/`stripMethodCode`). No daemon state. | — |
+| `dex_index.ts` | WS-F persistent SQLite index keyed by DEX SHA/size/parser version: strings and callers, fields and read/write sites, methods, call edges, and `Class.forName` targets. | `state.ts`, `dex.ts`, node:sqlite |
 | `analysis.ts` | Host-side ELF analysis shelling out to NDK llvm tools (`analyzeSo`/`cryptoConstScan`/`svcScan`/`disasmSo`/`OBJDUMP`). | — |
 
-**Import graph is one-directional**: `state ← service ← mcp/index`, plus `dex`/`analysis` as pure leaves. No circular refs.
+**Import graph is one-directional**: `state ← service ← mcp/index`; `dex_index` depends only on `state` + pure `dex`; `analysis` stays pure. No circular refs.
 
 ## Why the split (was: one 1585-line `index.ts`)
 
@@ -22,7 +23,7 @@ Adding a crypto hook meant reading the whole file; the REST surface was inline `
 ## Adding a new capability
 
 - **MCP tool**: add one `{ name, description, inputSchema, handler }` to `MCP_TOOLS` in `mcp.ts`. Handler calls `agentCmd`/`dumpBuf`/`dumpRegion`/… from `service.ts`. Done — `tools/list` + `tools/call` pick it up automatically.
-- **REST route**: currently add an `if (url.pathname === …)` block in `handleHttp` (`index.ts`). (Route-table conversion pending.)
+- **REST route**: add one table entry in `handleHttp` (`index.ts`).
 - **Agent command op**: handled in the agent C `command_loop` (Phase 3 — table-driven after refactor).
 
 ## Known flake (pre-existing, in `service.ts` reconstructSo path)

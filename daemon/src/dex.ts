@@ -2,13 +2,17 @@
 // Parses header, string_ids, type_ids, method_ids, class_defs. Not a full verifier.
 import { createHash } from 'node:crypto';
 
-export interface DexMethod { cls: string; name: string; }
+export interface DexProto { shorty: string; returnType: string; params: string[]; descriptor: string; }
+export interface DexField { cls: string; type: string; name: string; }
+export interface DexMethod { cls: string; name: string; proto: string; returnType: string; params: string[]; }
 export interface DexClass { name: string; superName: string; access: number; }
 export interface ParsedDex {
   magic: string;
   counts: { strings: number; types: number; protos: number; fields: number; methods: number; classes: number };
   strings: string[];
   types: string[];
+  protos: DexProto[];
+  fields: DexField[];
   methods: DexMethod[];
   classes: DexClass[];
 }
@@ -35,8 +39,8 @@ export function parseDex(buf: Buffer): ParsedDex {
 
   const stringIdsSize = u32(56), stringIdsOff = u32(60);
   const typeIdsSize = u32(64), typeIdsOff = u32(68);
-  const protoIdsSize = u32(72);
-  const fieldIdsSize = u32(80);
+  const protoIdsSize = u32(72), protoIdsOff = u32(76);
+  const fieldIdsSize = u32(80), fieldIdsOff = u32(84);
   const methodIdsSize = u32(88), methodIdsOff = u32(92);
   const classDefsSize = u32(96), classDefsOff = u32(100);
 
@@ -50,12 +54,37 @@ export function parseDex(buf: Buffer): ParsedDex {
     const sidx = u32(typeIdsOff + i * 4);
     types[i] = strings[sidx] ?? '';
   }
+  const protos: DexProto[] = new Array(protoIdsSize);
+  for (let i = 0; i < protoIdsSize; i++) {
+    const o = protoIdsOff + i * 12;
+    const shorty = strings[u32(o)] ?? '';
+    const returnType = types[u32(o + 4)] ?? '';
+    const paramsOff = u32(o + 8);
+    const params: string[] = [];
+    if (paramsOff && paramsOff + 4 <= buf.length) {
+      const n = u32(paramsOff);
+      for (let j = 0; j < n && paramsOff + 6 + j * 2 <= buf.length; j++)
+        params.push(types[buf.readUInt16LE(paramsOff + 4 + j * 2)] ?? '');
+    }
+    protos[i] = { shorty, returnType, params, descriptor: `(${params.join('')})${returnType}` };
+  }
+  const fields: DexField[] = new Array(fieldIdsSize);
+  for (let i = 0; i < fieldIdsSize; i++) {
+    const o = fieldIdsOff + i * 8;
+    fields[i] = {
+      cls: types[buf.readUInt16LE(o)] ?? '',
+      type: types[buf.readUInt16LE(o + 2)] ?? '',
+      name: strings[u32(o + 4)] ?? '',
+    };
+  }
   const methods: DexMethod[] = new Array(methodIdsSize);
   for (let i = 0; i < methodIdsSize; i++) {
     const o = methodIdsOff + i * 8;
     const classIdx = buf.readUInt16LE(o);
+    const protoIdx = buf.readUInt16LE(o + 2);
     const nameIdx = u32(o + 4);
-    methods[i] = { cls: types[classIdx] ?? '', name: strings[nameIdx] ?? '' };
+    const proto = protos[protoIdx] ?? { descriptor: '', returnType: '', params: [] };
+    methods[i] = { cls: types[classIdx] ?? '', name: strings[nameIdx] ?? '', proto: proto.descriptor, returnType: proto.returnType, params: proto.params };
   }
   const classes: DexClass[] = new Array(classDefsSize);
   for (let i = 0; i < classDefsSize; i++) {
@@ -68,7 +97,7 @@ export function parseDex(buf: Buffer): ParsedDex {
   return {
     magic,
     counts: { strings: stringIdsSize, types: typeIdsSize, protos: protoIdsSize, fields: fieldIdsSize, methods: methodIdsSize, classes: classDefsSize },
-    strings, types, methods, classes,
+    strings, types, protos, fields, methods, classes,
   };
 }
 
@@ -133,6 +162,163 @@ function walkCode(buf: Buffer, codeOff: number, methods: DexMethod[]): string[] 
     pc += w;
   }
   return pc === insnsSize ? callees : null;   // sanity: must land exactly on the boundary
+}
+
+export interface DexCallEdge { callerIdx: number; caller: string; calleeIdx: number; callee: string; }
+export interface DexStringUse { callerIdx: number; caller: string; stringIdx: number; value: string; }
+export interface DexReflectionEdge { callerIdx: number; caller: string; api: string; targetClass: string; targetDescriptor: string; }
+export interface DexFieldAccess { callerIdx: number; caller: string; fieldIdx: number; field: string; access: 'read' | 'write'; }
+export interface DexCodeAnalysis {
+  calls: DexCallEdge[];
+  stringUses: DexStringUse[];
+  fieldAccesses: DexFieldAccess[];
+  reflections: DexReflectionEdge[];
+  methodsWithCode: number;
+  skipped: number;
+}
+
+function methodLabel(m: DexMethod | undefined, idx: number): string {
+  return m ? `${m.cls}->${m.name}${m.proto}` : `?#${idx}`;
+}
+
+function invokeRegisters(buf: Buffer, start: number, pc: number, op: number): number[] {
+  const unit = buf.readUInt16LE(start + pc * 2);
+  if (op >= 0x6e && op <= 0x72) { // format 35c: C,D,E,F in word 3; G in word 1
+    const count = (unit >>> 12) & 0x0f;
+    const g = (unit >>> 8) & 0x0f;
+    const packed = buf.readUInt16LE(start + (pc + 2) * 2);
+    const regs = [packed & 0xf, (packed >>> 4) & 0xf, (packed >>> 8) & 0xf, (packed >>> 12) & 0xf, g];
+    return regs.slice(0, count);
+  }
+  if (op >= 0x74 && op <= 0x78) { // format 3rc: contiguous register range
+    const count = (unit >>> 8) & 0xff;
+    const first = buf.readUInt16LE(start + (pc + 2) * 2);
+    return Array.from({ length: Math.min(count, 32) }, (_, i) => first + i);
+  }
+  return [];
+}
+
+function writtenRegister(buf: Buffer, start: number, pc: number, op: number): number | undefined {
+  const unit = buf.readUInt16LE(start + pc * 2);
+  if (op === 0x01 || op === 0x04 || op === 0x07 || (op >= 0xb0 && op <= 0xcf)) return (unit >>> 8) & 0x0f;
+  if (op === 0x02 || op === 0x05 || op === 0x08 || (op >= 0x0a && op <= 0x0d) ||
+      (op >= 0x12 && op <= 0x1c) || (op >= 0x1f && op <= 0x23) ||
+      (op >= 0x2d && op <= 0x31) || (op >= 0x44 && op <= 0x4a) ||
+      (op >= 0x52 && op <= 0x58) || (op >= 0x60 && op <= 0x66) ||
+      (op >= 0x7b && op <= 0xaf) || (op >= 0xd0 && op <= 0xe2)) return unit >>> 8;
+  if (op === 0x03 || op === 0x06 || op === 0x09) return buf.readUInt16LE(start + (pc + 1) * 2);
+  return undefined;
+}
+
+function movedStringRegister(buf: Buffer, start: number, pc: number, op: number): { dst: number; src: number } | null {
+  const unit = buf.readUInt16LE(start + pc * 2);
+  if (op === 0x01 || op === 0x07)
+    return { dst: (unit >>> 8) & 0x0f, src: (unit >>> 12) & 0x0f };
+  if (op === 0x02 || op === 0x08)
+    return { dst: unit >>> 8, src: buf.readUInt16LE(start + (pc + 1) * 2) };
+  if (op === 0x03 || op === 0x09)
+    return { dst: buf.readUInt16LE(start + (pc + 1) * 2), src: buf.readUInt16LE(start + (pc + 2) * 2) };
+  return null;
+}
+
+function analyzeCodeItem(buf: Buffer, codeOff: number, d: ParsedDex, callerIdx: number):
+    { calls: DexCallEdge[]; stringUses: DexStringUse[]; fieldAccesses: DexFieldAccess[]; reflections: DexReflectionEdge[] } | null {
+  if (codeOff + 16 > buf.length) return null;
+  const insnsSize = buf.readUInt32LE(codeOff + 12);
+  const start = codeOff + 16;
+  if (start + insnsSize * 2 > buf.length) return null;
+  const caller = methodLabel(d.methods[callerIdx], callerIdx);
+  const calls: DexCallEdge[] = [], stringUses: DexStringUse[] = [], fieldAccesses: DexFieldAccess[] = [], reflections: DexReflectionEdge[] = [];
+  const registerStrings = new Map<number, number>();
+  let pc = 0;
+  while (pc < insnsSize) {
+    const unit = buf.readUInt16LE(start + pc * 2);
+    if (unit === 0x0100) { const n = buf.readUInt16LE(start + (pc + 1) * 2); pc += n * 2 + 4; continue; }
+    if (unit === 0x0200) { const n = buf.readUInt16LE(start + (pc + 1) * 2); pc += n * 4 + 2; continue; }
+    if (unit === 0x0300) { const ew = buf.readUInt16LE(start + (pc + 1) * 2); const n = buf.readUInt32LE(start + (pc + 2) * 2); pc += Math.ceil((n * ew) / 2) + 4; continue; }
+    const op = unit & 0xff;
+    const width = INSN_W[op];
+    if (!width || pc + width > insnsSize) return null;
+    const move = movedStringRegister(buf, start, pc, op);
+    if (move) {
+      const source = registerStrings.get(move.src);
+      if (source === undefined) registerStrings.delete(move.dst); else registerStrings.set(move.dst, source);
+    } else if (op === 0x1a) { // const-string vAA, string@BBBB
+      const reg = unit >>> 8;
+      const stringIdx = buf.readUInt16LE(start + (pc + 1) * 2);
+      registerStrings.set(reg, stringIdx);
+      stringUses.push({ callerIdx, caller, stringIdx, value: d.strings[stringIdx] ?? '' });
+    } else if (op === 0x1b) { // const-string/jumbo vAA, string@BBBBBBBB
+      const reg = unit >>> 8;
+      const stringIdx = buf.readUInt32LE(start + (pc + 1) * 2);
+      registerStrings.set(reg, stringIdx);
+      stringUses.push({ callerIdx, caller, stringIdx, value: d.strings[stringIdx] ?? '' });
+    } else if ((op >= 0x52 && op <= 0x5f) || (op >= 0x60 && op <= 0x6d)) {
+      const fieldIdx = buf.readUInt16LE(start + (pc + 1) * 2);
+      const f = d.fields[fieldIdx];
+      if (f) fieldAccesses.push({
+        callerIdx, caller, fieldIdx, field: `${f.cls}->${f.name}:${f.type}`,
+        access: ((op >= 0x52 && op <= 0x58) || (op >= 0x60 && op <= 0x66)) ? 'read' : 'write',
+      });
+      const dst = writtenRegister(buf, start, pc, op);
+      if (dst !== undefined) registerStrings.delete(dst);
+    } else if ((op >= 0x6e && op <= 0x72) || (op >= 0x74 && op <= 0x78)) {
+      const calleeIdx = buf.readUInt16LE(start + (pc + 1) * 2);
+      const calleeMethod = d.methods[calleeIdx];
+      const callee = methodLabel(calleeMethod, calleeIdx);
+      calls.push({ callerIdx, caller, calleeIdx, callee });
+      if (calleeMethod?.cls === 'Ljava/lang/Class;' && calleeMethod.name === 'forName') {
+        const argReg = invokeRegisters(buf, start, pc, op)[0];
+        const stringIdx = argReg === undefined ? undefined : registerStrings.get(argReg);
+        if (stringIdx !== undefined) {
+          const targetClass = d.strings[stringIdx] ?? '';
+          if (targetClass) reflections.push({
+            callerIdx, caller, api: callee,
+            targetClass,
+            targetDescriptor: targetClass.startsWith('L') ? targetClass : `L${targetClass.replace(/\./g, '/')};`,
+          });
+        }
+      }
+    } else {
+      const dst = writtenRegister(buf, start, pc, op);
+      if (dst !== undefined) registerStrings.delete(dst);
+    }
+    pc += width;
+  }
+  return pc === insnsSize ? { calls, stringUses, fieldAccesses, reflections } : null;
+}
+
+// One pass over encoded class_data/code_item structures for the persistent WS-F index.
+// It records concrete caller ids, const-string use sites, invoke edges and resolvable
+// Class.forName targets. Malformed code_items are counted and excluded, never guessed.
+export function analyzeDexCode(buf: Buffer, d: ParsedDex): DexCodeAnalysis {
+  const u32 = (o: number) => buf.readUInt32LE(o);
+  const classDefsSize = u32(96), classDefsOff = u32(100);
+  const calls: DexCallEdge[] = [], stringUses: DexStringUse[] = [], fieldAccesses: DexFieldAccess[] = [], reflections: DexReflectionEdge[] = [];
+  let methodsWithCode = 0, skipped = 0;
+  for (let i = 0; i < classDefsSize; i++) {
+    const cdOff = u32(classDefsOff + i * 32 + 24);
+    if (!cdOff) continue;
+    let p = cdOff; let sf, inf, dm, vm;
+    [sf, p] = readUleb128(buf, p); [inf, p] = readUleb128(buf, p);
+    [dm, p] = readUleb128(buf, p); [vm, p] = readUleb128(buf, p);
+    for (let k = 0; k < sf + inf; k++) { [, p] = readUleb128(buf, p); [, p] = readUleb128(buf, p); }
+    for (const count of [dm, vm]) {
+      let methodIdx = 0;
+      for (let k = 0; k < count; k++) {
+        let diff, access, codeOff;
+        [diff, p] = readUleb128(buf, p); methodIdx += diff;
+        [access, p] = readUleb128(buf, p); void access;
+        [codeOff, p] = readUleb128(buf, p);
+        if (!codeOff) continue;
+        methodsWithCode++;
+        const refs = analyzeCodeItem(buf, codeOff, d, methodIdx);
+        if (!refs) { skipped++; continue; }
+        calls.push(...refs.calls); stringUses.push(...refs.stringUses); fieldAccesses.push(...refs.fieldAccesses); reflections.push(...refs.reflections);
+      }
+    }
+  }
+  return { calls, stringUses, fieldAccesses, reflections, methodsWithCode, skipped };
 }
 
 export interface MethodCode { method: string; midx: number; access: number; registers: number; ins: number; outs: number; tries: number; insnsSize: number; insnsHex: string; codeItemHex: string; }

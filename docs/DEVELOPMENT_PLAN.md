@@ -593,7 +593,7 @@ android-decrpthub/          # 仓库名；产品名 ADH (Android DecryptHub)
 | **v2.0** | WS-D 协议重写 + WS-C 环形缓冲/落盘/如实上报 | dump 16MB region 字节级 sha256 一致；超长命令完整解析；高频驱动 1000/s×10s，`produced` + `dropped` 如实上报（旧实现静默丢 ~9900 却显示成功） |
 | **v2.1** | WS-B 去耦合（已基本完成）+ 原生 Signature/KDF/AEAD 覆盖扩展（GOT hook，不依赖 LSPlant） | `grep com.idh.sandbox agent/` = 0；EVP_PKEY_sign/verify/encrypt/decrypt、PKCS5_PBKDF2_HMAC/HKDF/EVP_PBE_scrypt、EVP_AEAD_CTX_seal/open 全部装上并在 sandbox 触发中各命中 ≥1 次；capture_start 回包对每个新符号如实报告装上/未装上（非 ok:true replaced:0） |
 | **v2.2** | WS-A native inline 后端（Dobby by-address） | sandbox 静态链接的 BoringSSL ABI-shaped native crypto 直接调用（无 GOT slot）被函数入口 hook 捕获；同进程连续两次调用均命中且原 trampoline 返回正确结果 |
-| **v2.3** | WS-F 持久索引 + 深解析 + 反射 | 21820 方法建索引后 string→callers < 阈值；一条 `Class.forName` 反射链被静态连出 |
+| **v2.3** | WS-F 持久索引 + 深解析 + 反射 | 多 dex 建 SQLite 索引后 string/field/method→callers < 250ms；重复 SHA 命中缓存；一条 `Class.forName` 反射链被静态连出，并可由 REST/MCP 查询 |
 | **v2.4** | WS-E 脱壳二代 + try/catch + cdex/041 | 带 `try` 方法字节级重建一致；cdex→标准 dex 过 dexdump/verifier（**需样本，否则 PENDING**） |
 | **v2.5** | WS-G Capstone + WS-H QBDI 通用化 | strip 内存镜像 .so 反汇编出正确指令序列；带 2 指针参数的 native 函数 trace 读到入参字符串 |
 | **v2.6** | WS-I 确定性关联 + WS-J 反检测动态面 | 8 条并发订单流零错配关联；svc 直连 + Java 验签双检测都被观测 |
