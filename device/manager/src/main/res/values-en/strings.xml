@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ADH Manager</string>
+    <string name="section_configuration">Configuration</string>
+    <string name="section_versions">Versions</string>
+    <string name="scope_title">Injection scope</string>
+    <string name="scope_count">%1$d selected apps</string>
+    <string name="scope_selected">%1$d selected apps</string>
+    <string name="open_scope">Manage injection scope</string>
+    <string name="module_version">Module</string>
+    <string name="manager_version">Manager</string>
+    <string name="unknown">Unknown</string>
+    <string name="status_running">Running</string>
+    <string name="status_checking">Checking</string>
+    <string name="status_daemon_unavailable">Device service unavailable</string>
+    <string name="status_not_loaded">Waiting to load</string>
+    <string name="status_not_installed">Not installed</string>
+    <string name="status_running_detail">ADH is loaded by Zygisk</string>
+    <string name="status_checking_detail">Reading module status</string>
+    <string name="status_daemon_unavailable_detail">Ensure the ADH module is enabled, then reboot the device</string>
+    <string name="status_not_loaded_detail">The load status is checked after reboot</string>
+    <string name="status_not_installed_detail">Install the ADH module in your root manager</string>
+    <string name="back">Back</string>
+    <string name="refresh_status">Refresh status</string>
+    <string name="search_apps">Search apps</string>
+    <string name="clear_search">Clear search</string>
+    <string name="show_system_apps">Show system apps</string>
+    <string name="hide_system_apps">Hide system apps</string>
+    <string name="save">Save</string>
+    <string name="saving">Saving</string>
+    <string name="scope_saved">Saved. Restart target apps to apply changes.</string>
+    <string name="scope_save_failed">Unable to save. Confirm the ADH device service is running.</string>
+    <string name="apps_load_failed">Unable to read the app list</string>
+    <string name="apps_load_failed_detail">Reopen Manager and try again.</string>
+    <string name="apps_empty">No matching apps</string>
+    <string name="apps_empty_detail">Adjust your search or show system apps.</string>
+</resources>

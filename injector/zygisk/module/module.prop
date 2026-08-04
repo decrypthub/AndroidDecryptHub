@@ -1,6 +1,6 @@
 id=adh
 name=ADH
-version=v0.1.0
-versionCode=1
-author=ADH
-description=Android DecryptHub Zygisk injector — loads libidh_agent.so into Manager-selected apps. Pair with ADH Manager + ADH Daemon.
+version=v0.3.0
+versionCode=7
+author=decrypthub.com
+description=状态：等待重启

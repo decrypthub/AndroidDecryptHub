@@ -1523,7 +1523,7 @@ MCP              →  AI 可编程操控，与 HTTP 同源
 ### 30.2 打包交付物
 
 - `libidh_agent.so`（arm64-v8a 主线，设备 ABI）
-- Zygisk 模块包（root 版）+ ADH Manager APK（作用域：选哪些 App 注入）
+- Zygisk 模块包（root 版）+ ADH Manager APK（作用域：选哪些 App 注入）；另提供 Magisk 可直接安装、自动安装 Manager 的组合包
 - Gadget 打包工具：把 agent + gadget so 注入并重签目标 APK（非 root 版）
 - 双 bootstrap 入口：`JNI_OnLoad`/构造函数（被加载）与 `idh_agent_start()`（被宿主主动调用），行为一致
 
@@ -1539,12 +1539,20 @@ sandbox-app 启动 → System.loadLibrary("idh_agent") → idh_agent_start()
 ### 30.4 Zygisk + Manager（设备侧作用域）
 
 ```text
-ADH Manager → 写 /data/adb/adh/scope.json（allowlist）
+ADH Manager（普通 APK、无 Root）→ 受认证 AIDL Binder
+Root Device Daemon（模块随 boot 启动）→ 读写 /data/adb/adh/scope.json（allowlist）
 Zygisk 模块 (id=adh) → preAppSpecialize 读 scope → postAppSpecialize dlopen libidh_agent.so
 Agent → TCP 8761 → ADH Daemon（host，经 adb reverse）
 ```
 
-交付物：`injector/zygisk/dist/adh-zygisk.zip`、`injector/manager` APK。Gadget/重打包仍为后续项。
+交付物：`injector/zygisk/dist/adh-zygisk.zip`、`device/manager` APK，以及二者合一且可由 Magisk 直接安装的版本化 `injector/zygisk/dist/adh-bundle-vX.Y.Z.zip`。Gadget/重打包仍为后续项。
+
+- Zygisk `.so` 必须导出未改名且默认可见的 C 符号 `zygisk_module_entry`；有 root companion 时同样要求 `zygisk_companion_entry`，打包阶段必须自动验证。
+- 模块作者固定为 `decrypthub.com`；root 管理器中的模块描述只显示“等待重启 / 运行中 / 未加载”这类简洁工作状态，不展示内部路径、架构说明或开发备注。
+- ADH Manager 只管理注入作用域和模块状态；界面默认中文，已有系统语言资源时跟随系统语言，并跟随系统深浅色主题。首页只保留运行状态、作用域入口和版本信息。
+- “运行中”必须来自本次启动中 Zygisk 实际加载模块的标记，不能仅以模块目录存在作为成功依据；标记由 root companion 写入，启动时先清除旧状态。
+- Manager 不得直接调用 `su` 或访问 `/data/adb`。模块以 root `app_process` 启动 Device Daemon，Manager 仅通过 AIDL Binder 读取状态和作用域；daemon 必须校验调用 UID、`com.adh.manager` 包归属和构建时固定的 APK 签名证书。
+- Binder 交接入口只接受 UID 0 发布，并核对 AIDL descriptor；Manager 必须区分 Device Daemon 未连接、模块未安装、模块已安装但未加载、运行中四种状态。服务未连接时不得用空配置冒充真实作用域，也不得显示“模块未安装”。
 
 ---
 

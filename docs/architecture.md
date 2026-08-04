@@ -1,26 +1,33 @@
 # ADH (Android DecryptHub) — As-Built Architecture
 
-> This documents what is **implemented and verified** (see `tools/verify_all.sh`, 24 checks),
+> This documents what is **implemented and verified** (see `tools/verify_all.sh`),
 > not the aspirational spec. Spec: `REQUIREMENTS.md`. Progress: `PROGRESS.md`.
 
-## Three layers (red line honored)
+## Layers (red line honored)
 
 ```
 Target app process            libidh_agent.so     collect / execute only
-  (device, arm64)             ── NDJSON/TCP ──►    hook · trace · dump · maps · JNI reflect
+  (device, arm64)             ── framed TCP ──►   hook · trace · dump · maps · JNI reflect
                               (via adb reverse)
-Host daemon                   ADH Daemon (adhd)    analysis · storage · HTTP · WS · MCP
-Browser / AI client           Web console / MCP    observe · search · drive
+Device (phone)                device/             scope Manager (Compose) + Device Daemon (AIDL)
+                              injector/zygisk     Magisk early-inject by allowlist
+Host daemon                   ADH Daemon (adhd)   analysis · storage · HTTP · WS · MCP
+Browser / AI client           Web console / MCP   observe · search · drive
 ```
 
 - **Agent** (`agent/`, C + NDK): loaded via `System.loadLibrary` (模拟注入) or Zygisk injector.
-  Dual entry `JNI_OnLoad` / `idh_agent_start`. Connects to ADH Daemon over TCP `127.0.0.1:8761`
+  Dual entry `JNI_OnLoad` / `idh_agent_start`. Connects to **Host** ADH Daemon over TCP `127.0.0.1:8761`
   (reachable from device via `adb reverse`). Executes commands, streams results. No HTTP/DB.
-- **ADH Daemon** (`daemon/`, npm `adhd`, Node 24 + TypeScript, no build step; legacy name `idhd`):
+- **Host ADH Daemon** (`daemon/`, npm `adhd`, Node 24 + TypeScript, no build step; legacy name `idhd`):
   agent registry, HTTP+WS `8760`, REST API, MCP server, dex parser/indexer, ELF analysis, dump storage.
+- **Device surface** (`device/` multi-module, Gradle 8.9 / AGP 8.7.3 / Compose):
+  - `:core` — `AdhPaths` / `ScopeConfig` / `ScopeJson` + shared `IAdhScopeService` contract
+  - `:daemon` — module-launched root `app_process` APK; scope/module-state Binder only (**not** Host analysis)
+  - `:manager` — ordinary Compose APK; receives the daemon Binder through a root-only provider handshake and never invokes `su`
 - **Web/MCP**: `daemon/public/index.html` console; `POST /mcp` for AI clients.
-- **Injector** (`injector/`): Magisk Zygisk module + ADH Manager (scope allowlist).
+- **Injector** (`injector/zygisk/`): Magisk module zip; starts Device Daemon at boot and packages its APK; path constants must stay in sync with `device/:core`.
 
+Do **not** confuse **Host ADH Daemon** (`daemon/` on PC) with **Device Daemon** (`device/:daemon` on phone).
 ## Wire protocol (agent ↔ idhd), NDJSON
 
 - agent→idhd: `hello` (identity), `maps` (sample), `cmdResult` (per command).

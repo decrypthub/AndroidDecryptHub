@@ -39,11 +39,32 @@
 - [x] **结构重构 Phase 1 — tools 测试库（2026-08-03）**：抽出 `tools/lib/verify_common.sh`（resolve_env/sandbox_alive/gate/grep_q/host_begin+chk+finish，here-string grep 修 SIGPIPE 假 FAIL）+ `tools/lib/env.sh`（SDK/NDK/CMAKE/NINJA/TOOLCHAIN/READELF/ROOT/ABI，build_agent+build_detect 共享）；33 个 verify 脚本转 source 库（node heredoc 全 verbatim，只换 shell boilerplate），三种 idiom（device-alive / device-host node-heredoc / host-chk）各保其形；`tools/MAP.md` 导航 + 加脚本配方。**verify_all 41/41 全绿**（两轮：首轮 v08_disasm/analyze 瞬时 flake，次轮 41/41）。v23 故意排除（LSPlant 在本 ROM 阻断）——把静默排除显式化注释而非加回（fail-loud，避免未来 AI 误"修"致每次红）。已知预存 flake：v08 .so 重建路径 `readMem` short-read 早退（index.ts:663）→ Phase 2 dump.ts 抽取时处理。
 - [x] **结构重构 Phase 2 — daemon 拆分（2026-08-03）**：`daemon/src/index.ts` 1585 行 → 拆成 `state.ts`/`service.ts`/`mcp.ts`/`index.ts`。**verify_all 41/41 全绿**。
 - [x] **ADH Daemon 品牌化 + 模块 W Zygisk/Manager 首版（2026-08-03）**：
-      · 对外统一称 **ADH Daemon**（npm `adhd`）；`ADH_*` env 别名；遗留 `idhd`/`idh_*`/`IDH_*` 保留。
+      · 对外统一称 **Host ADH Daemon**（npm `adhd`）；`ADH_*` env 别名；遗留 `idhd`/`idh_*`/`IDH_*` 保留。
       · `injector/zygisk/` Magisk Zygisk 模块：按 `/data/adb/adh/scope.json` 白名单 `dlopen` + `idh_agent_start`；`tools/build_zygisk.sh` → `adh-zygisk.zip`。
-      · `injector/manager/` ADH Manager APK（LSPosed 风格作用域 UI）。
       · `tools/verify_v27_zygisk.sh`：无 Magisk/未刷模块 → SKIP；有模块则 scope 往返 PASS。
       · Gadget/重打包仍延后。
+- [x] **设备侧架构奠基（对标 Vector 形态，2026-08-03）**：
+      · 新建 `device/` 多模块：`:core`（ScopeConfig/AdhPaths/ScopeJson 单一真相 + 单测）+ `:daemon`（`IAdhScopeService` AIDL + ScopeService 骨架）+ `:manager`（Jetpack Compose 壳，FileScopeRepository / DaemonScopeRepository 预留）。
+      · 工具链锁定 Gradle 8.9 + AGP 8.7.3 + Kotlin 2.0.21 + Compose BOM（与 sandbox 同级；不追 AGP 9）。
+      · 旧 `injector/manager` ViewBinding 工程退役为 DEPRECATED stub。
+      · 验收：`device/gradlew :core:test :daemon:assembleDebug :manager:assembleDebug` BUILD SUCCESSFUL。
+- [x] **组合安装包 + Zygisk Next ABI/Manager 状态修复 v0.2.2（2026-08-04，参考 Vector）**：
+      · `tools/build_bundle.sh` 生成 Magisk 可直接安装的版本化 `adh-bundle-vX.Y.Z.zip`；内含 Zygisk 模块与同版本 `manager.apk`，安装前验证 `manager.apk.sha256`，boot mode 自动安装。Magisk `action.sh` 可直接打开 Manager，未安装时用模块内 APK 修复安装。
+      · 截图所示 Zygisk Next “ADH 无法加载”的根因已定位：旧 `zygisk.hpp` 把入口导出成 C++ 符号 `_Z19zygisk_module_entry...`，而加载器要求原始 C 符号 `zygisk_module_entry`。注册宏现使用 `extern "C"` + default visibility；构建同时强制验证 `zygisk_module_entry` 与 `zygisk_companion_entry`，缺失即失败。
+      · 模块真实加载状态改由 Zygisk root companion 写 `/data/adb/adh/zygisk_loaded`，避开模块回调的 SELinux 权限限制；`post-fs-data.sh` 每次启动清理旧标记，`service.sh` 只把 `module.prop` 描述更新为“运行中”或“未加载，请检查 Zygisk”。作者固定为 `decrypthub.com`，不再把内部路径和开发说明放进用户可见描述。
+      · Manager 采用 Vector 同类的紧凑 Compose 信息层级，但保持 ADH 独立 APK/作用域边界：首页只显示模块运行状态、注入范围和版本；默认中文，英文系统使用 `values-en`，主题跟随系统深浅色与 Material You。
+      · `v0.2.1` 真机重启后，KernelSU 模块页已显示 ADH“状态：运行中”，且 `/data/adb/adh/zygisk_loaded` 存在，证明 Zygisk ABI/companion 修复生效。Manager 仍显示“未安装”的根因是 `com.adh.manager` 未获 KernelSU 超级用户授权：应用命名空间中 `/system/bin/su` 不可见；旧 UI 把该失败吞掉并错误映射为模块不存在。
+      · `v0.2.2` 将 Root 可用性纳入 `ModuleStatus`，明确显示“需要 Root 权限”，作用域页在未授权时不再加载空配置；首页和作用域页返回前台自动重检，首页另有刷新按钮。新增 Manager 单测覆盖“无 Root”和“已安装且已加载”两条确定性路径。
+      · 模块与 Manager 同步为 `v0.2.2 / versionCode=6`。最终 ZIP 完整性、Manager SHA-256、APK v2 签名、APK 版本及两个 Zygisk C 导出均验证通过；已只推送到 Pixel 6 Pro `1A281FDEE003ZV:/sdcard/adh-bundle-v0.2.2.zip`（SHA-256 `76577c323a3cfc4f105f29d4913285f2a194459a30b2e6dd3a2679c6f97cd5fb`），未安装、未刷入、未重启。
+      · 只采用 Vector 的版本化打包、完整性校验、Action 入口和 UI 信息层级，不采用其依赖 system_server hook/root daemon 的 `com.android.shell` 寄生 Manager。
+- [x] **v0.3.0 Root Device Daemon 权限边界（2026-08-04）**：
+      · `device/:daemon` 从同进程 Service 骨架改为模块以 root `app_process` 启动的独立 APK；只提供 scope 读写与模块状态 AIDL，不含 HTTP/MCP/DB/分析。
+      · `IAdhScopeService` 契约移至 `:core`；Manager 删除 `FileScopeRepository` 和全部 `su`/`/data/adb` 访问，只使用 `DaemonScopeRepository`。UI 状态由“需要 Root 授权”改为“Device Daemon 未连接”。
+      · Binder 由 daemon 通过 Manager 的 ContentProvider 交接；Provider 只接受 UID 0 且校验 descriptor。daemon 每次事务校验调用 UID、`com.adh.manager` 包归属及构建时固定的 Manager SHA-256 签名证书，作用域写入使用 fsync + 原子替换。
+      · `build_zygisk.sh` 先构建 Manager、用 `apksigner` 提取并严格校验 64 位证书摘要，再编入 `daemon.apk`；模块打包 `daemon.apk` + `device-daemon`，`service.sh` 在私有 mount namespace 启动它。
+      · 验收：`:core:test`、`:daemon:testDebugUnitTest`、`:daemon:assembleDebug`、`:manager:testDebugUnitTest`、`:manager:assembleDebug` 全绿；`adh-bundle-v0.3.0.zip` 构建成功，含 14 个预期文件，Manager `versionCode=7/versionName=0.3.0`、APK v2 签名有效，daemon 内嵌证书摘要与 Manager 实际证书一致。
+      · 已推送到原对话同一台 Pixel 6 Pro `1A281FDEE003ZV:/sdcard/adh-bundle-v0.3.0.zip`，本机与设备 SHA-256 均为 `7bcc9783696d14a15ababb6b71f57f9fd8d1198b6c1caa0b1be18a49ca937be8`；设备上的旧 `v0.2.2` 包已删除，只保留 `v0.3.0`。
+      · **真机运行时 PENDING**：按本轮约束未安装、未启动、未重启设备，因此尚未声称 `app_process → Binder 交接 → scope 往返` 在 ColorOS/KernelSU 上通过；首次安装测试必须读取 `device_daemon.log`、ready marker 并做确定性 scope 往返。
 - [x] **v2.2 WS-A native inline 后端（Dobby by-address，2026-08-04）**：
       · Dobby 从 LSPlant 条件中解耦，独立提供 arm64 函数入口 hook；模块名/符号名/触发类与方法均由 Host ADH Daemon 命令传入，agent 零 sandbox 硬编码。
       · sandbox `libidhdetect.so` 增加 BoringSSL `EVP_CipherUpdate` 同 ABI 的静态链接 mock，JNI 直接调用、没有可替换 GOT slot；agent inline wrapper 捕获 `IDH_INLINE_CRYPTO_v1` 并通过 original trampoline 返回 `1`。
@@ -103,7 +124,7 @@ arm64 预编译，agent 运行时 dlopen libQBDI.so，指令级 trace idh_trace_
 
 - **目标：先把 `libidh_agent.so` 的全部功能实现并自测通过**（模块 A–V 的 agent 侧能力）。
 - **验证一律走模拟注入**（sandbox `dlopen` 加载 agent）—— 它执行的就是 agent 的同一套代码路径，`.so` 全功能都能在此自测，无需真实注入。
-- **Zygisk + Manager（模块 W 主线）已开建**（`injector/`）；Gadget/重打包仍延后。功能验证仍以 sandbox 模拟注入为主；`verify_v27_zygisk` 在未刷模块时 SKIP。
+- **Zygisk + 设备多模块底座（模块 W）已落地**：`injector/zygisk` + `device/`（`:core`/`:daemon`/`:manager` Compose）。Gadget/重打包仍延后。功能验证仍以 sandbox 模拟注入为主；`verify_v27_zygisk` 在未刷模块时 SKIP。
 - 因此 v0.1 已建立的 sandbox 模拟注入回路 = 后续所有版本的验证台。缺哪个测试 Activity 就往 sandbox-app 里加。
 
 ## 自动续跑循环（已启用）

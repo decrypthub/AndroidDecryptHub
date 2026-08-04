@@ -15,9 +15,20 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
-static constexpr const char *kScopePath = "/data/adb/adh/scope.json";
-static constexpr const char *kManagerPkg = "com.adh.manager";
-static constexpr const char *kAgentName = "libidh_agent.so";
+static constexpr const char *kScopePath = "/data/adb/adh/scope.json"; // == com.adh.core.AdhPaths.SCOPE_PATH
+static constexpr const char *kLoaderMarker = "/data/adb/adh/zygisk_loaded"; // == com.adh.core.AdhPaths.LOADER_MARKER
+static constexpr const char *kManagerPkg = "com.adh.manager";         // == com.adh.core.AdhPaths.MANAGER_PKG
+static constexpr const char *kAgentName = "libidh_agent.so";          // == com.adh.core.AdhPaths.AGENT_SO_NAME
+
+static void mark_loader_active(int client) {
+    int fd = open(kLoaderMarker, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644);
+    if (fd >= 0) {
+        static constexpr char kActive[] = "active\n";
+        (void)write(fd, kActive, sizeof(kActive) - 1);
+        close(fd);
+    }
+    close(client);
+}
 
 static bool is_hard_exclude(const char *pkg) {
     if (!pkg || !pkg[0]) return true;
@@ -87,6 +98,11 @@ public:
     void preAppSpecialize(zygisk::AppSpecializeArgs *args) override {
         should_inject = false;
         agent_path.clear();
+        if (!marker_requested) {
+            marker_requested = true;
+            int client = api->connectCompanion();
+            if (client >= 0) close(client);
+        }
         if (!args || !args->nice_name) return;
 
         const char *pkg = env->GetStringUTFChars(args->nice_name, nullptr);
@@ -134,7 +150,9 @@ private:
     zygisk::Api *api = nullptr;
     JNIEnv *env = nullptr;
     bool should_inject = false;
+    bool marker_requested = false;
     std::string agent_path;
 };
 
 REGISTER_ZYGISK_MODULE(AdhModule)
+REGISTER_ZYGISK_COMPANION(mark_loader_active)

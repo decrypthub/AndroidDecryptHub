@@ -9,12 +9,39 @@ JNI="$ZY/jni"
 MOD="$ZY/module"
 DIST="$ZY/dist"
 AGENT_SO="$ROOT/agent/build/libidh_agent.so"
+MANAGER_APK="$ROOT/device/manager/build/outputs/apk/debug/manager-debug.apk"
+DAEMON_APK="$ROOT/device/daemon/build/outputs/apk/debug/daemon-debug.apk"
 
 [ -f "$AGENT_SO" ] || {
   echo ">> libidh_agent.so missing — building agent first"
   bash "$ROOT/tools/build_agent.sh"
 }
 [ -f "$AGENT_SO" ] || { echo "!! agent .so still missing"; exit 1; }
+
+echo ">> building ADH Manager for daemon caller authentication"
+(
+  cd "$ROOT/device"
+  ./gradlew :manager:assembleDebug --console=plain
+)
+[ -f "$MANAGER_APK" ] || { echo "!! Manager APK missing: $MANAGER_APK"; exit 1; }
+
+APKSIGNER="$(find "$SDK/build-tools" -type f \( -name apksigner -o -name apksigner.bat \) 2>/dev/null | sort -V | tail -n 1)"
+[ -n "$APKSIGNER" ] && [ -f "$APKSIGNER" ] || { echo "!! apksigner not found under $SDK/build-tools"; exit 1; }
+MANAGER_CERT_SHA256="$("$APKSIGNER" verify --print-certs "$MANAGER_APK" \
+  | awk -F': ' '/certificate SHA-256 digest/ { print $NF; exit }' \
+  | tr -d '\r[:space:]')"
+if [[ ! "$MANAGER_CERT_SHA256" =~ ^[0-9a-fA-F]{64}$ ]]; then
+  echo "!! invalid Manager signing certificate digest: $MANAGER_CERT_SHA256"
+  exit 1
+fi
+echo ">> building Root Device Daemon (Manager signer $MANAGER_CERT_SHA256)"
+(
+  cd "$ROOT/device"
+  ./gradlew :daemon:assembleDebug \
+    -PadhManagerCertSha256="$MANAGER_CERT_SHA256" \
+    --console=plain
+)
+[ -f "$DAEMON_APK" ] || { echo "!! Device Daemon APK missing: $DAEMON_APK"; exit 1; }
 
 NDK_BUILD="$NDK/ndk-build.cmd"
 [ -f "$NDK_BUILD" ] || NDK_BUILD="$NDK/ndk-build"
@@ -28,16 +55,31 @@ rm -rf "$ZY/libs" "$ZY/obj"
 
 COMPANION="$ZY/libs/$ABI/libadh.so"
 [ -f "$COMPANION" ] || { echo "!! companion missing: $COMPANION"; exit 1; }
+if ! "$READELF" --dyn-syms --wide "$COMPANION" | awk '$NF == "zygisk_module_entry" { found=1 } END { exit !found }'; then
+  echo "!! companion does not export the required C symbol: zygisk_module_entry"
+  exit 1
+fi
+echo ">> verified export: zygisk_module_entry"
+if ! "$READELF" --dyn-syms --wide "$COMPANION" | awk '$NF == "zygisk_companion_entry" { found=1 } END { exit !found }'; then
+  echo "!! companion does not export the required C symbol: zygisk_companion_entry"
+  exit 1
+fi
+echo ">> verified export: zygisk_companion_entry"
 
 STAGE="$ZY/.stage"
 rm -rf "$STAGE"
 mkdir -p "$STAGE/zygisk" "$STAGE/META-INF/com/google/android"
 cp "$MOD/module.prop" "$STAGE/"
 cp "$MOD/customize.sh" "$STAGE/"
+cp "$MOD/action.sh" "$STAGE/"
+cp "$MOD/post-fs-data.sh" "$STAGE/"
+cp "$MOD/service.sh" "$STAGE/"
+cp "$MOD/device-daemon" "$STAGE/"
 cp "$MOD/META-INF/com/google/android/update-binary" "$STAGE/META-INF/com/google/android/"
 cp "$MOD/META-INF/com/google/android/updater-script" "$STAGE/META-INF/com/google/android/"
 cp "$COMPANION" "$STAGE/zygisk/$ABI.so"
 cp "$AGENT_SO" "$STAGE/libidh_agent.so"
+cp "$DAEMON_APK" "$STAGE/daemon.apk"
 
 mkdir -p "$DIST"
 ZIP="$DIST/adh-zygisk.zip"
@@ -138,4 +180,4 @@ NODE
 [ -f "$ZIP" ] || { echo "!! zip failed"; exit 1; }
 echo ">> Magisk module: $ZIP ($(wc -c <"$ZIP" | tr -d ' ') bytes)"
 echo "   flash via Magisk → Modules → Install from storage"
-echo "   scope file on device: /data/adb/adh/scope.json (ADH Manager writes it)"
+echo "   scope file on device: /data/adb/adh/scope.json (Root Device Daemon writes it)"

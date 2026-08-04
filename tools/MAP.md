@@ -60,8 +60,10 @@ touch shell options; the caller's `set -e/-u/-o pipefail` stands. WSL builds use
 - `build_agent.sh` — `libidh_agent.so` (arm64-v8a, NDK+SDK cmake), stages into `sandbox-app/…/jniLibs/$ABI`, prints `idh_agent_start`+`JNI_OnLoad` exports (fail-loud on compile error — do NOT hide build output).
 - `build_detect.sh` — `libidhdetect.so` (sandbox's mock detection target), same cmake pattern.
 - `fetch_qbdi.sh` / `fetch_lsplant.sh` — one-time third-party fetch (gitignored under `agent/third_party/`).
-- `build_zygisk.sh` — Magisk Zygisk 模块 zip（依赖 `build_agent.sh`）→ `injector/zygisk/dist/adh-zygisk.zip`
-- `dev_up.sh` — idempotent: start ADH Daemon (if down) + `adb reverse` for 8760/8761.
+- `build_zygisk.sh` — 构建 Manager 证书固定的 Root Device Daemon + Zygisk 模块 → `injector/zygisk/dist/adh-zygisk.zip`
+- `build_bundle.sh` — Magisk 可直接安装的版本化组合包（Zygisk + Device Daemon + Manager）→ `injector/zygisk/dist/adh-bundle-vX.Y.Z.zip`
+- Device surface: `cd device && ./gradlew :core:test :daemon:testDebugUnitTest :daemon:assembleDebug :manager:testDebugUnitTest :manager:assembleDebug`
+- `dev_up.sh` — idempotent: start Host ADH Daemon (if down) + `adb reverse` for 8760/8761.
 - `load_frida_gadget.sh` — manual real-injection helper (module W, deferred).
 
 ## Known flakes (pre-existing, not introduced by the lib refactor)
