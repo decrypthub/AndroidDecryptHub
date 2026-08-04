@@ -1,8 +1,8 @@
 package com.adh.manager.ui.scope
 
 import android.content.pm.ApplicationInfo
-import android.content.pm.PackageManager
 import android.graphics.drawable.Drawable
+import android.util.Log
 import android.widget.ImageView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -109,12 +109,21 @@ fun ScopeScreen(
             loading = false
             return@LaunchedEffect
         }
-        runCatching {
-            val loaded = withContext(Dispatchers.IO) { repository.load() }
-            selected = loaded.packages
-            val pm = context.packageManager
-            rows = withContext(Dispatchers.IO) {
-                pm.getInstalledApplications(PackageManager.GET_META_DATA)
+        val loaded = runCatching {
+            withContext(Dispatchers.IO) { repository.load() }
+        }.onFailure {
+            Log.e(TAG, "scope read failed", it)
+        }.getOrElse {
+            loadFailed = true
+            loading = false
+            return@LaunchedEffect
+        }
+        selected = loaded.packages
+
+        val pm = context.packageManager
+        rows = runCatching {
+            withContext(Dispatchers.IO) {
+                pm.getInstalledApplications(0)
                     .asSequence()
                     .filter { it.packageName != AdhPaths.MANAGER_PKG }
                     .map { info ->
@@ -129,7 +138,12 @@ fun ScopeScreen(
                     )
                     .toList()
             }
-        }.onFailure { loadFailed = true }
+        }.onFailure {
+            Log.e(TAG, "installed application query failed", it)
+        }.getOrElse {
+            loadFailed = true
+            emptyList()
+        }
         loading = false
     }
 
@@ -244,6 +258,8 @@ fun ScopeScreen(
         }
     }
 }
+
+private const val TAG = "AdhScopeScreen"
 
 @Composable
 private fun SearchField(

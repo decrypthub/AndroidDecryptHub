@@ -11,8 +11,8 @@ android {
         applicationId = "com.adh.daemon"
         minSdk = 26
         targetSdk = 34
-        versionCode = 7
-        versionName = "0.3.0"
+        versionCode = 8
+        versionName = "0.3.1"
         buildConfigField(
             "String",
             "MANAGER_CERT_SHA256",

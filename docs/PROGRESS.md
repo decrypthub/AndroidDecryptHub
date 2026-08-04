@@ -65,6 +65,10 @@
       · 验收：`:core:test`、`:daemon:testDebugUnitTest`、`:daemon:assembleDebug`、`:manager:testDebugUnitTest`、`:manager:assembleDebug` 全绿；`adh-bundle-v0.3.0.zip` 构建成功，含 14 个预期文件，Manager `versionCode=7/versionName=0.3.0`、APK v2 签名有效，daemon 内嵌证书摘要与 Manager 实际证书一致。
       · 已推送到原对话同一台 Pixel 6 Pro `1A281FDEE003ZV:/sdcard/adh-bundle-v0.3.0.zip`，本机与设备 SHA-256 均为 `7bcc9783696d14a15ababb6b71f57f9fd8d1198b6c1caa0b1be18a49ca937be8`；设备上的旧 `v0.2.2` 包已删除，只保留 `v0.3.0`。
       · **真机运行时 PENDING**：按本轮约束未安装、未启动、未重启设备，因此尚未声称 `app_process → Binder 交接 → scope 往返` 在 ColorOS/KernelSU 上通过；首次安装测试必须读取 `device_daemon.log`、ready marker 并做确定性 scope 往返。
+- [x] **v0.3.1 Device Daemon / Manager Android 16 修复（2026-08-04）**：Pixel 6 Pro `1A281FDEE003ZV` 首次运行抓到 daemon 在开机早期调用 `ActivityManager.getRunningAppProcesses()` 时，系统 `IActivityManager` 尚未就绪并抛 NPE（PID 1460）；Manager 的全量应用查询又因不必要的 `GET_META_DATA` 产生超大 `ParceledListSlice` 并显示“无法读取应用列表”。daemon 改为直接扫描 root 可读的 `/proc/*/cmdline`，以 `getContentProviderExternal()` + Android 12+ `IContentProvider.call(AttributionSource, authority, method, arg, extras)` 向独立 Manager 安全交接 Binder；Manager 使用 flags=0 枚举应用，并分别记录 scope 与 package query 异常。
+      · 热验证：临时 v0.3.1 daemon 以 root/su 域持续运行（PID 11579），ready/PID marker 存在；Manager v0.3.1 显示“ADH 运行中 / Zygisk 已加载 ADH”，应用列表可见。
+      · 确定性 scope 往返：只选 `com.idh.sandbox` 保存后 `/data/adb/adh/scope.json` 精确包含该单包；立即取消并再次保存后 packages 恢复为空。
+      · 回归与交付：`:core:test`、`:daemon:testDebugUnitTest`、`:daemon:assembleDebug`、`:manager:testDebugUnitTest`、`:manager:assembleDebug` 全绿；`adh-bundle-v0.3.1.zip` 含 14 个预期文件，Manager `versionCode=8/versionName=0.3.1`、APK v2 签名、内置 SHA 与 daemon 固定证书摘要均通过。已推送到 `1A281FDEE003ZV:/sdcard/adh-bundle-v0.3.1.zip`，本机与设备 SHA-256 均为 `3c72f8e1bc77cfa11a4d18c1b759d6ab3ba58a0f369e98f2b9c230bc928ff4bf`；旧 v0.3.0 包已删除。
 - [x] **v2.2 WS-A native inline 后端（Dobby by-address，2026-08-04）**：
       · Dobby 从 LSPlant 条件中解耦，独立提供 arm64 函数入口 hook；模块名/符号名/触发类与方法均由 Host ADH Daemon 命令传入，agent 零 sandbox 硬编码。
       · sandbox `libidhdetect.so` 增加 BoringSSL `EVP_CipherUpdate` 同 ABI 的静态链接 mock，JNI 直接调用、没有可替换 GOT slot；agent inline wrapper 捕获 `IDH_INLINE_CRYPTO_v1` 并通过 original trampoline 返回 `1`。

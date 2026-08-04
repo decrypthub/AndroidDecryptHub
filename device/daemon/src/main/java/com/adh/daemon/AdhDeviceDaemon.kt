@@ -1,9 +1,6 @@
 package com.adh.daemon
 
-import android.app.ActivityManager
 import android.content.Context
-import android.net.Uri
-import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.Process
@@ -13,9 +10,6 @@ import java.io.File
 
 object AdhDeviceDaemon {
     private const val TAG = "AdhDeviceDaemon"
-    private const val BRIDGE_AUTHORITY = "com.adh.manager.daemon-bridge"
-    private const val METHOD_PUBLISH = "publishDaemonBinder"
-    private const val EXTRA_BINDER = "daemonBinder"
     private const val PUBLISH_INTERVAL_MS = 1_000L
 
     @JvmStatic
@@ -39,17 +33,9 @@ object AdhDeviceDaemon {
         var publishedPid = -1
         val publisher = object : Runnable {
             override fun run() {
-                val managerPid = findManagerPid(context)
+                val managerPid = findManagerPid()
                 if (managerPid > 0 && managerPid != publishedPid) {
-                    val extras = Bundle().apply { putBinder(EXTRA_BINDER, service) }
-                    val published = runCatching {
-                        context.contentResolver.call(
-                            Uri.parse("content://$BRIDGE_AUTHORITY"),
-                            METHOD_PUBLISH,
-                            null,
-                            extras,
-                        )?.getBoolean("accepted") == true
-                    }.onFailure { Log.w(TAG, "binder publish failed", it) }.getOrDefault(false)
+                    val published = ExternalProviderPublisher.publish(service)
                     if (published) publishedPid = managerPid
                 } else if (managerPid <= 0) {
                     publishedPid = -1
@@ -62,20 +48,13 @@ object AdhDeviceDaemon {
         Looper.loop()
     }
 
-    private fun findManagerPid(context: Context): Int {
-        val activityManager = context.getSystemService(ActivityManager::class.java) ?: return -1
-        val reported = activityManager.runningAppProcesses
-            ?.firstOrNull { it.processName == AdhPaths.MANAGER_PKG }
-            ?.pid ?: -1
-        if (reported > 0) return reported
-        return File("/proc").listFiles()
-            ?.asSequence()
-            ?.filter { it.name.all(Char::isDigit) }
-            ?.firstOrNull { processDir ->
-                runCatching {
-                    File(processDir, "cmdline").readText().trimEnd('\u0000') == AdhPaths.MANAGER_PKG
-                }.getOrDefault(false)
-            }
-            ?.name?.toIntOrNull() ?: -1
-    }
+    private fun findManagerPid(): Int = File("/proc").listFiles()
+        ?.asSequence()
+        ?.filter { it.name.all(Char::isDigit) }
+        ?.firstOrNull { processDir ->
+            runCatching {
+                File(processDir, "cmdline").readText().trimEnd('\u0000') == AdhPaths.MANAGER_PKG
+            }.getOrDefault(false)
+        }
+        ?.name?.toIntOrNull() ?: -1
 }

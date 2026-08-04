@@ -15,7 +15,16 @@ internal object SystemContext {
             val vmRuntime = Class.forName("dalvik.system.VMRuntime")
             val runtime = vmRuntime.getDeclaredMethod("getRuntime").invoke(null)
             vmRuntime.getDeclaredMethod("setHiddenApiExemptions", Array<String>::class.java)
-                .invoke(runtime, arrayOf("Landroid/app/ActivityThread;"))
+                .invoke(
+                    runtime,
+                    arrayOf(
+                        "Landroid/app/ActivityManager;",
+                        "Landroid/app/ActivityThread;",
+                        "Landroid/app/ContentProviderHolder;",
+                        "Landroid/app/IActivityManager;",
+                        "Landroid/content/IContentProvider;",
+                    ),
+                )
         }
     }
 }
