@@ -7,7 +7,7 @@
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
 verify_resolve_env
-AGENT="${IDH_AGENT_PORT:-8761}"
+AGENT="${ADH_AGENT_PORT:-${IDH_AGENT_PORT:-8761}}"
 JAVA_HOME="${JAVA_HOME:-C:\\Program Files\\Android\\Android Studio\\jbr}"; export JAVA_HOME
 PKG=com.adh.sandbox
 

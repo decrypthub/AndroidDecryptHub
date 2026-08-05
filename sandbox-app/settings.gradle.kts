@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "IDH Sandbox"
+rootProject.name = "ADH Sandbox"
 include(":app")

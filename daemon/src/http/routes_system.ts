@@ -134,4 +134,3 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
     } },
   ];
 }
-

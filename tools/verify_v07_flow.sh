@@ -6,7 +6,7 @@
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
 verify_resolve_env
-TLS_PORT="${IDH_TLS_PORT:-8762}"
+TLS_PORT="${ADH_TLS_PORT:-${IDH_TLS_PORT:-8762}}"
 PT="IDH_CORRELATE_v1"
 
 for p in $(powershell.exe -NoProfile -Command "(Get-NetTCPConnection -LocalPort $TLS_PORT -State Listen -ErrorAction SilentlyContinue).OwningProcess" 2>/dev/null | tr -d '\r'); do taskkill //F //PID "$p" >/dev/null 2>&1; done

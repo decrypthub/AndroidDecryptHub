@@ -248,4 +248,3 @@ export function analysisRoutes({ req, res, url, send }: RouteContext): Route[] {
   }
   return routes;
 }
-

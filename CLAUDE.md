@@ -11,6 +11,7 @@ Guidance for Claude working in this repo. Keep this file short. Only rules that 
 - `docs/REQUIREMENTS.md` — the single authoritative spec of **what** we build (modules A–W).
 - `docs/DEVELOPMENT_PLAN.md` — **how / architecture / roadmap**.
 - `docs/PROGRESS.md` — **where we are right now**; update it every session. This is how work survives across sessions.
+- `docs/archive/` — non-authoritative historical snapshots; never restore stale TODOs from them.
 - `docs/REFERENCE_IOS.md` + `.ref/ios-decrypt-helper/` — the iOS project we inherit ideas from.
 
 There is one plan. If something contradicts these docs, fix the docs in the same change — do not leave a divergent second plan.

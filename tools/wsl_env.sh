@@ -43,11 +43,13 @@ if [ "$WSL_BUILD" = 1 ] && [ -x "/mnt/c/Users/charm/AppData/Local/Android/Sdk/pl
   export ADB_SERVER_SOCKET="tcp:127.0.0.1:5037"
   adb() { "$ADB" "$@"; }
   export -f adb
-  _idh_serial="$(adb devices | awk '/\tdevice$/{print $1; exit}')"
-  if [ -n "$_idh_serial" ]; then
-    export IDH_SERIAL="${IDH_SERIAL:-$_idh_serial}"
+  _adh_serial="$(adb devices | awk '/\tdevice$/{print $1; exit}')"
+  if [ -n "$_adh_serial" ]; then
+    export ADH_SERIAL="${ADH_SERIAL:-${IDH_SERIAL:-$_adh_serial}}"
+    export IDH_SERIAL="${IDH_SERIAL:-$ADH_SERIAL}"
   fi
-  export IDH_LLVM_BIN="/mnt/c/Users/charm/AppData/Local/Android/Sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/windows-x86_64/bin"
+  export ADH_LLVM_BIN="${ADH_LLVM_BIN:-${IDH_LLVM_BIN:-/mnt/c/Users/charm/AppData/Local/Android/Sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/windows-x86_64/bin}}"
+  export IDH_LLVM_BIN="${IDH_LLVM_BIN:-$ADH_LLVM_BIN}"
 fi
 
 # Gradle in WSL: use Linux JDK (Windows Studio JBR is not a Linux JVM).

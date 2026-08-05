@@ -7,9 +7,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SERIAL="${IDH_SERIAL:-$(adb devices | awk 'NR==2{print $1}')}"
-HTTP="${IDH_HTTP_PORT:-8760}"
-AGENT="${IDH_AGENT_PORT:-8761}"
+SERIAL="${ANDROID_SERIAL:-${ADH_SERIAL:-${IDH_SERIAL:-$(adb devices | awk 'NR==2{print $1}')}}}"
+HTTP="${ADH_HTTP_PORT:-${IDH_HTTP_PORT:-8760}}"
+AGENT="${ADH_AGENT_PORT:-${IDH_AGENT_PORT:-8761}}"
 JAVA_HOME="${JAVA_HOME:-C:\\Program Files\\Android\\Android Studio\\jbr}"; export JAVA_HOME
 PKG=com.adh.sandbox
 

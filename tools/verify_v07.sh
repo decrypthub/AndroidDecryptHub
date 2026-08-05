@@ -8,7 +8,7 @@
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
 verify_resolve_env
-TLS_PORT="${IDH_TLS_PORT:-8762}"
+TLS_PORT="${ADH_TLS_PORT:-${IDH_TLS_PORT:-8762}}"
 MARKER="IDH_NET_MARKER_v1"; RESP="IDH_NET_RESPONSE_v1"
 
 # start a fresh local HTTPS server (kill any stale one holding the port)

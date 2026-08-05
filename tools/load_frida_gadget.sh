@@ -15,7 +15,7 @@ set -euo pipefail
 GADGET="${1:?need path to frida-gadget arm64 .so}"
 SCRIPT="${2:?need path to a frida .js}"
 PKG="${3:-com.adh.sandbox}"
-HTTP="${IDH_HTTP_PORT:-8760}"
+HTTP="${ADH_HTTP_PORT:-${IDH_HTTP_PORT:-8760}}"
 [ -f "$GADGET" ] || { echo "no gadget: $GADGET"; exit 1; }
 [ -f "$SCRIPT" ] || { echo "no script: $SCRIPT"; exit 1; }
 

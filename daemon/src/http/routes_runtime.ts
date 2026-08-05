@@ -268,4 +268,3 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
     } },
   ];
 }
-
