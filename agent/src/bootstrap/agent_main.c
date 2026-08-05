@@ -30,7 +30,9 @@
 #endif
 #include "../hook/got.h"
 #include "../capture/capture.h"
+#include "../runtime/actions.h"
 #include "../runtime/jni.h"
+#include "../trace/commands.h"
 
 // Common macros (AGENT_VER/IDH_HOST/IDH_PORT/TAG/LOGI/LOGE/FRAME_*) + cross-module prototypes
 // Shared bootstrap helpers live in agent_internal.h.
@@ -38,196 +40,6 @@
 
 static pthread_once_t g_once = PTHREAD_ONCE_INIT;
 static char g_entry[16] = "start";
-// QBDI instruction trace (src/trace/qbdi_trace.c) — loads libQBDI.so at runtime.
-extern int idh_qbdi_trace(void *func, char *out, int outsz);
-
-
-
-
-// ---- active triggering (P2): a TRIGGER SOURCE for the CodeItem captor, not recovery
-//      itself. Level 1 loads a class (packer may restore on class-load); Level 3 invokes
-//      a SAFE no-arg static method (so a refill-type shell fills its code_item, which the
-//      next dex snapshot then captures). Strict safety policy; exceptions isolated. --------
-static int name_blacklisted(const char *s) {
-    // dangerous verbs — skip auto-invoke (payments, deletion, exec, lifecycle, exit, ...)
-    static const char *bad[] = { "exit","exec","delete","remove","clear","drop","format","kill",
-        "finish","destroy","close","clinit","init","finalize","write","send","post","pay",
-        "transfer","order","logout","reset","wipe","shutdown","reboot","uninstall", NULL };
-    for (int i = 0; bad[i]; i++) if (strstr(s, bad[i])) return 1;
-    return 0;
-}
-static int class_is_lifecycle(const char *s) {
-    static const char *lc[] = { "Activity","Service","Application","Receiver","Provider", NULL };
-    for (int i = 0; lc[i]; i++) if (strstr(s, lc[i])) return 1;
-    return 0;
-}
-// Trigger one class/method. level: 1=load only, 3=load + safe static no-arg invoke.
-static void cmd_trigger(int fd, const char *id, const char *className, const char *method, int level) {
-    char idj[64]; json_escape(id, idj, sizeof(idj));
-    int loaded = 0, invoked = 0, skipped = 0; const char *reason = "";
-    char result[160] = "";
-    int did = 0;
-    JNIEnv *env = idh_jni_attach(&did);
-    if (env) {
-        (*env)->PushLocalFrame(env, 64);
-        jclass jc = idh_jni_load_app_class(env, className);
-        if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); reason = "loadClass threw"; }
-        else if (jc) {
-            loaded = 1;
-            if (level >= 3 && method && method[0]) {
-                if (name_blacklisted(method)) { skipped = 1; reason = "method on safety blacklist"; }
-                else if (class_is_lifecycle(className)) { skipped = 1; reason = "lifecycle class"; }
-                else {
-                    // reflect: Method m = jc.getMethod(name); check static & !native & !abstract; invoke(null)
-                    jclass cClass = (*env)->FindClass(env, "java/lang/Class");
-                    jmethodID mGetMethod = (*env)->GetMethodID(env, cClass, "getMethod", "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;");
-                    jobjectArray empty = (*env)->NewObjectArray(env, 0, cClass, NULL);
-                    jstring mn = (*env)->NewStringUTF(env, method);
-                    jobject m = (*env)->CallObjectMethod(env, jc, mGetMethod, mn, empty);
-                    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); skipped = 1; reason = "no such no-arg method"; }
-                    else if (m) {
-                        jclass cMethod = (*env)->FindClass(env, "java/lang/reflect/Method");
-                        jmethodID mGetMod = (*env)->GetMethodID(env, cMethod, "getModifiers", "()I");
-                        jint mods = (*env)->CallIntMethod(env, m, mGetMod);
-                        int is_static = (mods & 0x0008), is_native = (mods & 0x0100), is_abstract = (mods & 0x0400);
-                        if (!is_static) { skipped = 1; reason = "not static (needs receiver, level>=4)"; }
-                        else if (is_native || is_abstract) { skipped = 1; reason = "native/abstract"; }
-                        else {
-                            jmethodID mSetAcc = (*env)->GetMethodID(env, cMethod, "setAccessible", "(Z)V");
-                            (*env)->CallVoidMethod(env, m, mSetAcc, JNI_TRUE);
-                            jclass cObj = (*env)->FindClass(env, "java/lang/Object");
-                            jobjectArray args = (*env)->NewObjectArray(env, 0, cObj, NULL);
-                            jmethodID mInvoke = (*env)->GetMethodID(env, cMethod, "invoke", "(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;");
-                            jobject ret = (*env)->CallObjectMethod(env, m, mInvoke, NULL, args);   // static → receiver null
-                            if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); reason = "invocation threw (isolated)"; }
-                            else {
-                                invoked = 1;
-                                jclass cStr = (*env)->FindClass(env, "java/lang/String");
-                                jmethodID mValueOf = (*env)->GetStaticMethodID(env, cStr, "valueOf", "(Ljava/lang/Object;)Ljava/lang/String;");
-                                jstring sv = (jstring)(*env)->CallStaticObjectMethod(env, cStr, mValueOf, ret);
-                                if (sv) { const char *cs = (*env)->GetStringUTFChars(env, sv, NULL); if (cs) { strncpy(result, cs, sizeof(result)-1); (*env)->ReleaseStringUTFChars(env, sv, cs); } }
-                            }
-                        }
-                    } else { skipped = 1; reason = "method not found"; }
-                }
-            }
-        } else { reason = "class not found"; }
-        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-        (*env)->PopLocalFrame(env, NULL);
-        idh_jni_detach(did);
-    } else { reason = "no JNI env"; }
-    char cj[200], rj[200], rej[160];
-    json_escape(className, cj, sizeof(cj)); json_escape(result, rj, sizeof(rj)); json_escape(reason, rej, sizeof(rej));
-    char out[720];
-    snprintf(out, sizeof(out),
-        "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"trigger\",\"ok\":true,\"class\":\"%s\",\"level\":%d,\"loaded\":%s,\"invoked\":%s,\"skipped\":%s,\"reason\":\"%s\",\"result\":\"%s\"}\n",
-        idj, cj, level, loaded?"true":"false", invoked?"true":"false", skipped?"true":"false", rej, rj);
-    send_line(fd, out);
-    LOGI("trigger %s method=%s level=%d loaded=%d invoked=%d skipped=%d (%s)", className, method?method:"", level, loaded, invoked, skipped, reason);
-}
-
-
-// Load an arbitrary .so into the target process (e.g. frida-gadget, a helper lib). The
-// agent is native code inside the target, so dlopen() just works — gadget in script mode
-// then auto-runs its JS. Reports the handle + whether an optional probe symbol resolved.
-static void cmd_load_so(int fd, const char *id, const char *path, const char *symbol) {
-    char idj[64]; json_escape(id, idj, sizeof(idj));
-    void *h = dlopen(path, RTLD_NOW | RTLD_GLOBAL);
-    const char *err = h ? "" : dlerror();
-    void *sym = (h && symbol && symbol[0]) ? dlsym(h, symbol) : NULL;
-    char pj[300], ej[300]; json_escape(path, pj, sizeof(pj)); json_escape(err ? err : "", ej, sizeof(ej));
-    char out[900];
-    snprintf(out, sizeof(out),
-        "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"load_so\",\"ok\":%s,\"path\":\"%s\",\"handle\":\"%llx\",\"symbol\":\"%s\",\"symbolFound\":%s,\"error\":\"%s\"}\n",
-        idj, h ? "true" : "false", pj, (unsigned long long)(uintptr_t)h, symbol ? symbol : "", sym ? "true" : "false", ej);
-    send_line(fd, out);
-    LOGI("load_so path=%s ok=%d symFound=%d err=%s", path, h != NULL, sym != NULL, err ? err : "");
-}
-
-// ---- generic native function-call tracer (module I.2, function level) ----
-struct TraceRec { long a0, a1, a2, a3; int tid; long long ts; char s0[48]; };
-static struct TraceRec g_trace[256];
-static int g_ntrace = 0;
-static pthread_mutex_t g_trace_lock = PTHREAD_MUTEX_INITIALIZER;
-typedef long (*fn4_t)(long, long, long, long);
-static fn4_t g_trace_orig = NULL;
-// If addr points to a readable ASCII string, copy a short printable preview (for
-// path/string args). Self-contained (untag + /proc/self/mem read).
-// Cached read-only /proc/self/mem fd — opened once, never closed. trace_preview() runs in a
-// hook wrapper's hot path; opening+closing a fd on every call is fd churn + syscall overhead.
-static int g_mem_fd = -1;
-static int mem_fd(void) {
-    int fd = __atomic_load_n(&g_mem_fd, __ATOMIC_ACQUIRE);
-    if (fd >= 0) return fd;
-    int nfd = open("/proc/self/mem", O_RDONLY);
-    if (nfd < 0) return -1;
-    int expected = -1;
-    if (!__atomic_compare_exchange_n(&g_mem_fd, &expected, nfd, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
-        close(nfd);                 // lost the race; use the winner's fd
-        return expected;
-    }
-    return nfd;
-}
-static void trace_preview(long addr, char *out, int n) {
-    out[0] = 0;
-    unsigned long long a = (unsigned long long)addr & 0x00FFFFFFFFFFFFFFULL;
-    if (a < 0x1000) return;
-    int fd = mem_fd(); if (fd < 0) return;
-    unsigned char buf[64]; ssize_t r = pread(fd, buf, sizeof(buf), (off_t)a);   // cached fd, no close
-    if (r <= 0) return;
-    int o = 0; for (int i = 0; i < r && o < n - 1; i++) { unsigned char c = buf[i]; if (c == 0) break; if (c < 0x20 || c >= 0x7f) break; out[o++] = c; }
-    out[o] = 0;
-}
-// Generic 4-arg wrapper: logs args (+ a0 string preview) + tid + ts, then trampolines.
-static long idh_trace_wrapper(long a0, long a1, long a2, long a3) {
-    int tid = (int)gettid(); long long ts = now_ns();
-    char s0[48]; trace_preview(a0, s0, sizeof(s0));
-    pthread_mutex_lock(&g_trace_lock);
-    if (g_ntrace < 256) { struct TraceRec *r = &g_trace[g_ntrace++]; r->a0 = a0; r->a1 = a1; r->a2 = a2; r->a3 = a3; r->tid = tid; r->ts = ts; strncpy(r->s0, s0, sizeof(r->s0) - 1); r->s0[sizeof(r->s0)-1] = 0; }
-    pthread_mutex_unlock(&g_trace_lock);
-    return g_trace_orig ? g_trace_orig(a0, a1, a2, a3) : 0;
-}
-
-// ---- anti-analysis behavior observation (module V) ----
-// Detection primitives (det_record + my_ptrace/my_access/my_prop) are defined above, near
-// idh_cmd_capture_start, so the persistent capture path can install them too.
-
-
-// Generic function trace: hook `symbol` (exported by symLib) in hookModule's GOT,
-// trigger the sandbox's Detection.run() (which calls libc detection fns), and return
-// the recorded calls (args + tid + ts). Demonstrates tracing an arbitrary native fn.
-static void cmd_trace_run(int fd, const char *id, const char *symLib, const char *symbol, const char *hookMod, const char *className) {
-    char idj[64]; json_escape(id, idj, sizeof(idj));
-    void *orig = idh_resolve_sym(symLib, symbol);
-    g_trace_orig = (fn4_t)orig;
-    int replaced = orig ? idh_got_replace(hookMod, orig, (void *)idh_trace_wrapper) : -1;
-    pthread_mutex_lock(&g_trace_lock); g_ntrace = 0; pthread_mutex_unlock(&g_trace_lock);
-
-    int did = 0, triggered = 0;
-    JNIEnv *env = idh_jni_attach(&did);
-    if (env) {
-        (*env)->PushLocalFrame(env, 32);
-        jclass jc = className[0] ? idh_jni_load_app_class(env, className) : NULL;
-        if (jc) { jmethodID run = (*env)->GetStaticMethodID(env, jc, "run", "()I");
-            if (run) { (*env)->CallStaticIntMethod(env, jc, run); triggered = 1; } }
-        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-        (*env)->PopLocalFrame(env, NULL);
-        idh_jni_detach(did);
-    }
-    if (replaced > 0 && orig) idh_got_replace(hookMod, (void *)idh_trace_wrapper, orig);   // restore
-
-    char sj[80]; json_escape(symbol, sj, sizeof(sj));
-    size_t cap = 1 << 14, len = 0; char *out = malloc(cap); if (!out) { send_oom(fd, idj, "trace_run"); return; }
-    len += snprintf(out + len, cap - len, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"trace_run\",\"ok\":true,\"symbol\":\"%s\",\"replaced\":%d,\"triggered\":%s,\"calls\":[", idj, sj, replaced, triggered ? "true" : "false");
-    pthread_mutex_lock(&g_trace_lock);
-    for (int k = 0; k < g_ntrace; k++) { struct TraceRec *r = &g_trace[k]; char s0j[100]; json_escape(r->s0, s0j, sizeof(s0j));
-        len += snprintf(out + len, cap - len, "%s{\"a0\":\"%lx\",\"a0str\":\"%s\",\"a1\":\"%lx\",\"a2\":\"%lx\",\"a3\":\"%lx\",\"tid\":%d,\"tsNs\":%lld}", k ? "," : "", (unsigned long)r->a0, s0j, (unsigned long)r->a1, (unsigned long)r->a2, (unsigned long)r->a3, r->tid, r->ts); }
-    int n = g_ntrace;
-    pthread_mutex_unlock(&g_trace_lock);
-    snprintf(out + len, cap - len, "],\"count\":%d}\n", n);
-    send_line(fd, out); free(out);
-    LOGI("trace_run: sym=%s replaced=%d triggered=%d calls=%d", symbol, replaced, triggered, n);
-}
 
 // Module T: Runtime Object Inspector — read a live object's fields via reflection.
 // Reaches the object through a static field of `className`, then enumerates the
@@ -813,7 +625,7 @@ static void command_loop(int fd) {
                     json_get_str(line, "className", tcls, sizeof(tcls));
                     json_get_str(line, "method", tm, sizeof(tm));
                     long long lv = json_get_num(line, "level");
-                    cmd_trigger(fd, id, tcls, tm, lv > 0 ? (int)lv : 1);
+                    idh_cmd_trigger(fd, id, tcls, tm, lv > 0 ? (int)lv : 1);
                 } else if (strcmp(op, "inline_crypto_test") == 0) {
                     char im[96] = "", is[96] = "", ic[220] = "", it[80] = "";
                     json_get_str(line, "module", im, sizeof(im));
@@ -825,7 +637,7 @@ static void command_loop(int fd) {
                     char lpath[400] = "", lsym[96] = "";
                     json_get_str(line, "path", lpath, sizeof(lpath));
                     json_get_str(line, "symbol", lsym, sizeof(lsym));
-                    cmd_load_so(fd, id, lpath, lsym);
+                    idh_cmd_load_so(fd, id, lpath, lsym);
                 } else if (strcmp(op, "net_hook_test") == 0) {
                     char tcls[200] = ""; json_get_str(line, "className", tcls, sizeof(tcls));
                     idh_cmd_net_hook_test(fd, id, tcls);
@@ -848,20 +660,14 @@ static void command_loop(int fd) {
                     char sl[64] = "", sy[80] = "";
                     json_get_str(line, "symLib", sl, sizeof(sl));
                     json_get_str(line, "symbol", sy, sizeof(sy));
-                    void *fn = idh_resolve_sym(sl[0] ? sl : "libidhdetect.so", sy[0] ? sy : "idh_trace_target");
-                    char idj[64]; json_escape(id, idj, sizeof(idj));
-                    if (!fn) { char e[160]; snprintf(e, sizeof(e), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"qbdi_trace\",\"ok\":false,\"error\":\"symbol not found\"}\n", idj); send_line(fd, e); }
-                    else { char *ob = malloc(1 << 18); if (ob) { ob[0] = 0; idh_qbdi_trace(fn, ob, (1 << 18) - 64);
-                        char *msg = malloc((1 << 18) + 128);
-                        if (msg) { snprintf(msg, (1 << 18) + 128, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"qbdi_trace\",%s}\n", idj, ob); send_line(fd, msg); free(msg); }
-                        free(ob); LOGI("qbdi_trace %s -> done", sy); } }
+                    idh_cmd_qbdi_trace(fd, id, sl, sy);
                 } else if (strcmp(op, "trace_run") == 0) {
                     char sl[64] = "", sy[64] = "", hm[80] = "", tcls[200] = "";
                     json_get_str(line, "symLib", sl, sizeof(sl));
                     json_get_str(line, "symbol", sy, sizeof(sy));
                     json_get_str(line, "hookModule", hm, sizeof(hm));
                     json_get_str(line, "className", tcls, sizeof(tcls));
-                    cmd_trace_run(fd, id, sl, sy, hm, tcls);
+                    idh_cmd_trace_run(fd, id, sl, sy, hm, tcls);
                 } else if (strcmp(op, "compat_probe") == 0) {
                     cmd_compat_probe(fd, id);
                 } else if (strcmp(op, "object_inspect") == 0) {

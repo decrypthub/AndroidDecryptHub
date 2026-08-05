@@ -1,6 +1,8 @@
 // QBDI instruction-level dynamic trace (module I.3). QBDI is loaded at RUNTIME via
 // dlopen (keeps the base agent independent of the 6.5MB libQBDI.so — trace works if
 // it's bundled, degrades gracefully if not). Headers used for types only.
+#include "qbdi_trace.h"
+
 #include <dlfcn.h>
 #include <string.h>
 #include <stdio.h>

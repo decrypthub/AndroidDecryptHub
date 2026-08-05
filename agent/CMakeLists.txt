@@ -14,7 +14,9 @@ set(AGENT_SOURCES
     src/bootstrap/mem.c
     src/bootstrap/fs.c
     src/hook/got.c
+    src/runtime/actions.c
     src/runtime/jni.c
+    src/trace/commands.c
     src/trace/qbdi_trace.c
 )
 
