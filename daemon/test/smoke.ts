@@ -4,8 +4,8 @@
 // and /api/agents reflect it.
 import net from 'node:net';
 
-const HTTP = Number(process.env.IDH_HTTP_PORT ?? 8760);
-const AGENT = Number(process.env.IDH_AGENT_PORT ?? 8761);
+const HTTP = Number(process.env.ADH_HTTP_PORT ?? process.env.IDH_HTTP_PORT ?? 8760);
+const AGENT = Number(process.env.ADH_AGENT_PORT ?? process.env.IDH_AGENT_PORT ?? 8761);
 
 const FRAME_JSON = 0x01;
 function frame(obj: unknown): Buffer {
