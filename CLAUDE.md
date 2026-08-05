@@ -98,7 +98,7 @@ Each layer has a `MAP.md` — read it before editing that layer:
 - `daemon/src/MAP.md` — Host ADH Daemon: `state.ts` ← `service.ts` ← `mcp.ts` / `index.ts`.
 - `device/MAP.md` — device multi-module: `:core` (scope contract) + `:daemon` (AIDL) + `:manager` (Compose).
 - `injector/` — Zygisk Magisk zip (`injector/zygisk/`); old `injector/manager` is DEPRECATED stub.
-- `agent/src/MAP.md` — pending (Phase 3). Until then, `agent_main.c` is the single TU.
+- `agent/src/MAP.md` — Agent source ownership and Phase 3 extraction rules; read it before moving capabilities out of bootstrap.
 
 
 

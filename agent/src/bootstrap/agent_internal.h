@@ -1,10 +1,6 @@
 // agent_internal.h — shared declarations across the agent's compilation units.
 //
-// The agent is split into focused modules:
-//   util.c  — JSON/base64/property/time helpers (no state)
-//   io.c    — socket connect + WS-D length-framed send/recv
-//   mem.c   — memory read / magic scan / pattern search / maps commands
-//   (hook engine, capture ring + wrappers, and the command dispatch stay in agent_main.c)
+// Shared declarations for bootstrap helpers used across focused agent modules.
 //
 // This header carries the common macros + the cross-module function prototypes. No target
 // knowledge lives anywhere in the agent (architecture red line): every class/module name the
@@ -16,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <stddef.h>
 #include <android/log.h>
 
 #define AGENT_VER   "0.2.0"
