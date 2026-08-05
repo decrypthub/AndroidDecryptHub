@@ -6,7 +6,7 @@
 
 | Path | Responsibility |
 |---|---|
-| `bootstrap/agent_main.c` | Dual entry, lifecycle, command dispatch, and capabilities not yet extracted |
+| `bootstrap/agent_main.c` | Dual entry, hello/report, LSPlant self-test, command dispatch, and lifecycle |
 | `bootstrap/agent_internal.h` | Shared bootstrap utility, transport, memory, and filesystem declarations |
 | `bootstrap/util.c` | JSON, base64, property, process, and time helpers |
 | `bootstrap/io.c` | Host connection and length-framed transport |
@@ -17,6 +17,8 @@
 | `hook/native_inline_dobby.cpp` | Dobby native inline-hook backend |
 | `hook/java_lsplant.cpp` | Optional LSPlant Java-method hook backend |
 | `runtime/actions.c` | Safety-gated Java trigger and explicit in-process `.so` loading commands |
+| `runtime/art.c` | ClassLoader-cookie enumeration and per-API ART DexFile structural resolution |
+| `runtime/inspection.c` | Live-object reflection plus JNI/runtime compatibility probes |
 | `runtime/jni.c` | JavaVM discovery, native-thread attach/detach, and app ClassLoader access |
 | `trace/commands.c` | Function-call trace state, GOT trace orchestration, and QBDI command response handling |
 | `trace/qbdi_trace.c` | Optional runtime-loaded QBDI instruction trace |
@@ -25,4 +27,4 @@
 
 Move one capability domain at a time and preserve command names and response schemas. A new module exposes a narrow header, is added to `agent/CMakeLists.txt`, and must pass `tools/build_agent.sh` plus its focused acceptance script before the next domain moves.
 
-Remaining large domains in `bootstrap/agent_main.c`: object/ART commands and RPC dispatch/lifecycle.
+Phase 3 domain extraction is complete. Further bootstrap work should focus on table-driven RPC dispatch, not moving isolated helper functions solely to reduce line count.

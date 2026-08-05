@@ -8,22 +8,11 @@
 
 #include <jni.h>
 #include <pthread.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <fcntl.h>
-#include <errno.h>
-#include <dlfcn.h>
-#include <stdarg.h>
-#include <time.h>
-#include <arpa/inet.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
 #include <sys/system_properties.h>
-#include <android/log.h>
 
 #ifdef IDH_HAVE_LSPLANT
 #include "../hook/java_lsplant.h"   // C-ABI shim over LSPlant (Java method hook, WS-A)
@@ -31,6 +20,8 @@
 #include "../hook/got.h"
 #include "../capture/capture.h"
 #include "../runtime/actions.h"
+#include "../runtime/art.h"
+#include "../runtime/inspection.h"
 #include "../runtime/jni.h"
 #include "../trace/commands.h"
 
@@ -40,415 +31,6 @@
 
 static pthread_once_t g_once = PTHREAD_ONCE_INIT;
 static char g_entry[16] = "start";
-
-// Module T: Runtime Object Inspector — read a live object's fields via reflection.
-// Reaches the object through a static field of `className`, then enumerates the
-// object's declared fields (name + String.valueOf(value)). Foundation for full
-// heap-instance enumeration. All-reflection => no field-signature strings needed.
-static void cmd_object_inspect(int fd, const char *id, const char *className, const char *fieldName) {
-    char idj[64]; json_escape(id, idj, sizeof(idj));
-    int did = 0;
-    JNIEnv *env = idh_jni_attach(&did);
-    if (!env) { char e[160]; snprintf(e, sizeof(e), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"object_inspect\",\"ok\":false,\"error\":\"no JavaVM\"}\n", idj); send_line(fd, e); return; }
-    (*env)->PushLocalFrame(env, 256);
-
-    size_t cap = 1 << 14; char *out = malloc(cap);
-    int ok = 0; char err[128] = ""; char objClass[160] = ""; int nfields = 0;
-    char *recs = malloc(1 << 13); if (recs) recs[0] = 0; size_t rlen = 0, rcap = 1 << 13;
-
-    jclass clsClass = (*env)->FindClass(env, "java/lang/Class");
-    jclass fieldClass = (*env)->FindClass(env, "java/lang/reflect/Field");
-    jclass strClass = (*env)->FindClass(env, "java/lang/String");
-    jmethodID mGetField = (*env)->GetMethodID(env, clsClass, "getDeclaredField", "(Ljava/lang/String;)Ljava/lang/reflect/Field;");
-    jmethodID mGetFields = (*env)->GetMethodID(env, clsClass, "getDeclaredFields", "()[Ljava/lang/reflect/Field;");
-    jmethodID mGetName = (*env)->GetMethodID(env, clsClass, "getName", "()Ljava/lang/String;");
-    jmethodID mSetAcc = (*env)->GetMethodID(env, fieldClass, "setAccessible", "(Z)V");
-    jmethodID mFieldGet = (*env)->GetMethodID(env, fieldClass, "get", "(Ljava/lang/Object;)Ljava/lang/Object;");
-    jmethodID mFieldName = (*env)->GetMethodID(env, fieldClass, "getName", "()Ljava/lang/String;");
-    jmethodID mValueOf = (*env)->GetStaticMethodID(env, strClass, "valueOf", "(Ljava/lang/Object;)Ljava/lang/String;");
-
-    jclass target = idh_jni_load_app_class(env, className);
-    if (!target) { strncpy(err, "class not found", sizeof(err)-1); goto done; }
-
-    jstring fn = (*env)->NewStringUTF(env, fieldName);
-    jobject fieldObj = (*env)->CallObjectMethod(env, target, mGetField, fn);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); strncpy(err, "field not found", sizeof(err)-1); goto done; }
-    (*env)->CallVoidMethod(env, fieldObj, mSetAcc, JNI_TRUE);
-    jobject obj = (*env)->CallObjectMethod(env, fieldObj, mFieldGet, NULL);   // static field -> null
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); strncpy(err, "field.get failed (not static?)", sizeof(err)-1); goto done; }
-    if (!obj) { strncpy(err, "field value is null", sizeof(err)-1); goto done; }
-
-    jclass ocls = (*env)->GetObjectClass(env, obj);
-    jstring ocn = (jstring)(*env)->CallObjectMethod(env, ocls, mGetName);
-    if (ocn) { const char *s = (*env)->GetStringUTFChars(env, ocn, NULL); if (s) { strncpy(objClass, s, sizeof(objClass)-1); (*env)->ReleaseStringUTFChars(env, ocn, s); } }
-
-    jobjectArray fields = (jobjectArray)(*env)->CallObjectMethod(env, ocls, mGetFields);
-    jsize nf = fields ? (*env)->GetArrayLength(env, fields) : 0;
-    for (jsize i = 0; i < nf && recs; i++) {
-        jobject f = (*env)->GetObjectArrayElement(env, fields, i);
-        (*env)->CallVoidMethod(env, f, mSetAcc, JNI_TRUE);
-        jstring nm = (jstring)(*env)->CallObjectMethod(env, f, mFieldName);
-        jobject val = (*env)->CallObjectMethod(env, f, mFieldGet, obj);
-        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-        jstring vs = (jstring)(*env)->CallStaticObjectMethod(env, strClass, mValueOf, val);
-        char nbuf[96] = "", vbuf[300] = "";
-        if (nm) { const char *s = (*env)->GetStringUTFChars(env, nm, NULL); if (s) { strncpy(nbuf, s, sizeof(nbuf)-1); (*env)->ReleaseStringUTFChars(env, nm, s); } }
-        if (vs) { const char *s = (*env)->GetStringUTFChars(env, vs, NULL); if (s) { strncpy(vbuf, s, sizeof(vbuf)-1); (*env)->ReleaseStringUTFChars(env, vs, s); } }
-        char nj[120], vj[600]; json_escape(nbuf, nj, sizeof(nj)); json_escape(vbuf, vj, sizeof(vj));
-        char rec[760]; int w = snprintf(rec, sizeof(rec), "%s{\"name\":\"%s\",\"value\":\"%s\"}", nfields ? "," : "", nj, vj);
-        if (w > 0 && rlen + (size_t)w + 1 < rcap) { memcpy(recs + rlen, rec, w); rlen += w; recs[rlen] = 0; nfields++; }
-        (*env)->DeleteLocalRef(env, f);
-    }
-    ok = 1;
-
-done:
-    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-    (*env)->PopLocalFrame(env, NULL);
-    idh_jni_detach(did);
-    if (out) {
-        char cj[160], ecj[160]; json_escape(objClass, cj, sizeof(cj)); json_escape(err, ecj, sizeof(ecj));
-        if (ok) snprintf(out, cap, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"object_inspect\",\"ok\":true,\"objectClass\":\"%s\",\"fieldCount\":%d,\"fields\":[%s]}\n", idj, cj, nfields, recs ? recs : "");
-        else snprintf(out, cap, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"object_inspect\",\"ok\":false,\"error\":\"%s\"}\n", idj, ecj);
-        send_line(fd, out);
-        free(out);
-    }
-    free(recs);
-    LOGI("object_inspect: %s.%s -> %s fields=%d ok=%d", className, fieldName, objClass, nfields, ok);
-}
-
-// Module T: invoke a no-arg (low-risk) method on the object reached via a static
-// field, returning String.valueOf(result). For getters/toString/size/length.
-static void cmd_object_invoke(int fd, const char *id, const char *className, const char *fieldName, const char *methodName) {
-    char idj[64]; json_escape(id, idj, sizeof(idj));
-    int did = 0;
-    JNIEnv *env = idh_jni_attach(&did);
-    if (!env) { char e[160]; snprintf(e, sizeof(e), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"object_invoke\",\"ok\":false,\"error\":\"no JavaVM\"}\n", idj); send_line(fd, e); return; }
-    (*env)->PushLocalFrame(env, 128);
-    int ok = 0; char err[128] = "", result[400] = "";
-
-    jclass clsClass = (*env)->FindClass(env, "java/lang/Class");
-    jclass fieldClass = (*env)->FindClass(env, "java/lang/reflect/Field");
-    jclass methodClass = (*env)->FindClass(env, "java/lang/reflect/Method");
-    jclass strClass = (*env)->FindClass(env, "java/lang/String");
-    jmethodID mGetField = (*env)->GetMethodID(env, clsClass, "getDeclaredField", "(Ljava/lang/String;)Ljava/lang/reflect/Field;");
-    jmethodID mGetMethod = (*env)->GetMethodID(env, clsClass, "getMethod", "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;");
-    jmethodID mSetAccF = (*env)->GetMethodID(env, fieldClass, "setAccessible", "(Z)V");
-    jmethodID mFieldGet = (*env)->GetMethodID(env, fieldClass, "get", "(Ljava/lang/Object;)Ljava/lang/Object;");
-    jmethodID mInvoke = (*env)->GetMethodID(env, methodClass, "invoke", "(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;");
-    jmethodID mValueOf = (*env)->GetStaticMethodID(env, strClass, "valueOf", "(Ljava/lang/Object;)Ljava/lang/String;");
-
-    jclass target = idh_jni_load_app_class(env, className);
-    if (!target) { strncpy(err, "class not found", sizeof(err)-1); goto done; }
-    jobject fieldObj = (*env)->CallObjectMethod(env, target, mGetField, (*env)->NewStringUTF(env, fieldName));
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); strncpy(err, "field not found", sizeof(err)-1); goto done; }
-    (*env)->CallVoidMethod(env, fieldObj, mSetAccF, JNI_TRUE);
-    jobject obj = (*env)->CallObjectMethod(env, fieldObj, mFieldGet, NULL);
-    if (!obj || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); strncpy(err, "field value null", sizeof(err)-1); goto done; }
-
-    jclass ocls = (*env)->GetObjectClass(env, obj);
-    jobject method = (*env)->CallObjectMethod(env, ocls, mGetMethod, (*env)->NewStringUTF(env, methodName), NULL);  // no-arg
-    if (!method || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); strncpy(err, "method not found (no-arg only)", sizeof(err)-1); goto done; }
-    jobject ret = (*env)->CallObjectMethod(env, method, mInvoke, obj, NULL);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); strncpy(err, "invoke threw", sizeof(err)-1); goto done; }
-    jstring vs = (jstring)(*env)->CallStaticObjectMethod(env, strClass, mValueOf, ret);
-    if (vs) { const char *s = (*env)->GetStringUTFChars(env, vs, NULL); if (s) { strncpy(result, s, sizeof(result)-1); (*env)->ReleaseStringUTFChars(env, vs, s); } }
-    ok = 1;
-
-done:
-    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-    (*env)->PopLocalFrame(env, NULL);
-    idh_jni_detach(did);
-    char rj[500], ej[160]; json_escape(result, rj, sizeof(rj)); json_escape(err, ej, sizeof(ej));
-    char out[800];
-    if (ok) snprintf(out, sizeof(out), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"object_invoke\",\"ok\":true,\"result\":\"%s\"}\n", idj, rj);
-    else snprintf(out, sizeof(out), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"object_invoke\",\"ok\":false,\"error\":\"%s\"}\n", idj, ej);
-    send_line(fd, out);
-    LOGI("object_invoke: %s.%s.%s() -> %s ok=%d", className, fieldName, methodName, result, ok);
-}
-
-// Module S: self-assess the runtime environment / hook-backend availability so the
-// operator knows what's usable and whether the target is interfering (授权抗干扰诊断).
-static void cmd_compat_probe(int fd, const char *id) {
-    char idj[64]; json_escape(id, idj, sizeof(idj));
-    int tracer = -1, seccomp = -1;
-    FILE *st = fopen("/proc/self/status", "r");
-    if (st) { char line[256];
-        while (fgets(line, sizeof(line), st)) {
-            if (strncmp(line, "TracerPid:", 10) == 0) tracer = atoi(line + 10);
-            else if (strncmp(line, "Seccomp:", 8) == 0) seccomp = atoi(line + 8);
-        }
-        fclose(st);
-    }
-    // hook-backend availability: symbol resolution is the prerequisite for GOT hooks
-    int got_ok = (idh_resolve_sym("libc.so", "access") != NULL);
-    int jni_ok = idh_jni_vm_available();
-    int module_count = 0, maps_count = 0;
-    FILE *m = fopen("/proc/self/maps", "r"); char l[512]; char lastmod[400] = "";
-    while (m && fgets(l, sizeof(l), m)) { maps_count++;
-        char *p = strstr(l, "/"); if (p) { char *nl = strchr(p, '\n'); if (nl) *nl = 0; if (strcmp(p, lastmod)) { strncpy(lastmod, p, sizeof(lastmod)-1); module_count++; } } }
-    if (m) fclose(m);
-
-    // memRead: exercise the real read path (/proc/self/mem pread) on our own code — confirms
-    // the mechanism works rather than asserting a hardcoded "true". dlopenSystemLibsBlocked:
-    // actually try to dlopen a system lib instead of freezing a one-time observation into code.
-    int memread_ok = 0;
-    { int mf = open("/proc/self/mem", O_RDONLY);
-      if (mf >= 0) { unsigned char mb[4]; memread_ok = (pread(mf, mb, 4, (off_t)(uintptr_t)&cmd_compat_probe) == 4); close(mf); } }
-    void *dlprobe = dlopen("libcrypto.so", RTLD_NOW);
-    int dlopen_blocked = (dlprobe == NULL);
-    if (dlprobe) dlclose(dlprobe);
-
-    char out[640];
-    snprintf(out, sizeof(out),
-        "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"compat_probe\",\"ok\":true,"
-        "\"tracerPid\":%d,\"seccomp\":%d,\"backends\":{\"gotHook\":%s,\"jniReflect\":%s,\"artDexCapture\":%s,\"memRead\":%s},"
-        "\"mapsCount\":%d,\"moduleMappings\":%d,\"dlopenSystemLibsBlocked\":%s}\n",
-        idj, tracer, seccomp, got_ok ? "true" : "false", jni_ok ? "true" : "false",
-        idh_jni_vm_available() ? "true" : "false", memread_ok ? "true" : "false",
-        maps_count, module_count, dlopen_blocked ? "true" : "false");
-    send_line(fd, out);
-    LOGI("compat_probe: tracer=%d seccomp=%d got=%d jni=%d", tracer, seccomp, got_ok, jni_ok);
-}
-
-// Prove JNI reflection works from the agent's native thread: read Build.VERSION.
-static void cmd_jni_probe(int fd, const char *id) {
-    char idj[64]; json_escape(id, idj, sizeof(idj));
-    int did = 0;
-    JNIEnv *env = idh_jni_attach(&did);
-    if (!env) {
-        char e[160]; snprintf(e, sizeof(e), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"jni_probe\",\"ok\":false,\"error\":\"no JavaVM\"}\n", idj);
-        send_line(fd, e); return;
-    }
-    jint sdk = -1; char rel[64] = "";
-    jclass ver = (*env)->FindClass(env, "android/os/Build$VERSION");
-    if (ver) {
-        jfieldID fi = (*env)->GetStaticFieldID(env, ver, "SDK_INT", "I");
-        if (fi) sdk = (*env)->GetStaticIntField(env, ver, fi);
-        jfieldID rf = (*env)->GetStaticFieldID(env, ver, "RELEASE", "Ljava/lang/String;");
-        if (rf) {
-            jstring js = (jstring)(*env)->GetStaticObjectField(env, ver, rf);
-            if (js) {
-                const char *s = (*env)->GetStringUTFChars(env, js, NULL);
-                if (s) { strncpy(rel, s, sizeof(rel) - 1); (*env)->ReleaseStringUTFChars(env, js, s); }
-                (*env)->DeleteLocalRef(env, js);
-            }
-        }
-        (*env)->DeleteLocalRef(env, ver);
-    }
-    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-    idh_jni_detach(did);
-
-    char out[256], relj[128]; json_escape(rel, relj, sizeof(relj));
-    snprintf(out, sizeof(out),
-        "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"jni_probe\",\"ok\":true,\"sdk_int\":%d,\"release\":\"%s\",\"attached\":%d}\n",
-        idj, sdk, relj, did);
-    send_line(fd, out);
-    LOGI("jni_probe: sdk=%d release=%s", sdk, rel);
-}
-
-// Android tags heap pointers in the top byte (TBI). The CPU ignores it on deref,
-// but pread(/proc/self/mem) treats the address literally — strip the tag first.
-#define UNTAG(x) ((unsigned long long)(x) & 0x00FFFFFFFFFFFFFFULL)
-
-// Read n bytes at addr from /proc/self/mem into buf; returns bytes read (0 on fault).
-static ssize_t safe_read_at(int memfd, unsigned long long addr, void *buf, size_t n) {
-    addr = UNTAG(addr);
-    if (addr < 0x1000) return 0;
-    ssize_t r = pread(memfd, buf, n, (off_t)addr);
-    return r > 0 ? r : 0;
-}
-
-// Rich view of an in-memory dex — enough to snapshot it WITHOUT truncating (DEX 041
-// containers reference shared data past file_size; cdex has a separate data range).
-struct DexView {
-    unsigned long long begin;      // start of the bytes to snapshot (container for 041)
-    unsigned int size;             // bytes to snapshot
-    unsigned long long logical;    // logical dex header (== begin for 035-040)
-    unsigned long long data_begin; // shared/data section start (0 if within [begin,size))
-    unsigned int data_size;
-    char format[8];                // "dex" | "dex041" | "cdex"
-    unsigned int version;          // 35..41
-    int confidence;                // 0..100
-};
-
-static unsigned int rd_u32(const unsigned char *p, int o) {
-    return (unsigned int)p[o] | ((unsigned int)p[o+1] << 8) | ((unsigned int)p[o+2] << 16) | ((unsigned int)p[o+3] << 24);
-}
-
-// Given an art::DexFile* candidate, scavenge its first words for the member pointing to
-// dex/cdex magic (begin_), validate the header, and compute the FULL snapshot range:
-//  - standard dex 035-040 : [begin, begin+file_size)
-//  - dex 041 container     : [container_begin, +container_size)  (covers shared data)
-//  - cdex                  : [begin, +file_size) + separate data range flagged (P3: reassemble)
-// No hardcoded ART struct offsets. Returns 1 on success.
-static int resolve_dexfile(int memfd, unsigned long long dexfile_ptr, struct DexView *v) {
-    unsigned long long words[24];
-    ssize_t got = safe_read_at(memfd, dexfile_ptr, words, sizeof(words));
-    int nwords = (int)(got / 8);
-    for (int i = 0; i < nwords; i++) {
-        unsigned long long b = UNTAG(words[i]);
-        unsigned char hdr[120];
-        if (safe_read_at(memfd, b, hdr, sizeof(hdr)) < 120) continue;
-        int compact = 0;
-        if (hdr[0] == 'd' && hdr[1] == 'e' && hdr[2] == 'x' && hdr[3] == '\n') compact = 0;
-        else if (hdr[0] == 'c' && hdr[1] == 'd' && hdr[2] == 'e' && hdr[3] == 'x') compact = 1;
-        else continue;
-        // version = ascii digits at [4..6], e.g. "035".."041"
-        if (hdr[4] < '0' || hdr[4] > '9' || hdr[5] < '0' || hdr[5] > '9' || hdr[6] < '0' || hdr[6] > '9') continue;
-        unsigned int ver = (hdr[4]-'0')*100 + (hdr[5]-'0')*10 + (hdr[6]-'0');
-        unsigned int fsz = rd_u32(hdr, 32);
-        unsigned int header_size = rd_u32(hdr, 36);
-        unsigned int endian = rd_u32(hdr, 40);
-        if (fsz < 0x70 || fsz > (256u << 20)) continue;                 // sane logical size
-        if (!compact && endian != 0x12345678u) continue;               // standard dex endian tag
-        memset(v, 0, sizeof(*v));
-        v->logical = b; v->version = ver; v->confidence = compact ? 60 : 95;
-        if (compact) {
-            // cdex: snapshot the logical unit; shared data range lives elsewhere (reassembly = P3)
-            snprintf(v->format, sizeof(v->format), "cdex");
-            v->begin = b; v->size = fsz;
-            v->data_begin = 0; v->data_size = 0;
-        } else if (ver >= 41 && header_size >= 0x78) {
-            // DEX 041 container: header+112 = container_size, header+116 = header_offset.
-            unsigned int container_size = rd_u32(hdr, 112);
-            unsigned int header_offset  = rd_u32(hdr, 116);
-            snprintf(v->format, sizeof(v->format), "dex041");
-            if (container_size >= fsz && container_size <= (256u << 20) && header_offset <= container_size) {
-                v->begin = b - header_offset;      // physical container start
-                v->size = container_size;          // full container — never truncate shared data
-                v->confidence = 100;
-            } else { v->begin = b; v->size = fsz; v->confidence = 70; }   // fall back, mark uncertain
-            v->data_begin = b + rd_u32(hdr, 108); v->data_size = rd_u32(hdr, 104);
-        } else {
-            snprintf(v->format, sizeof(v->format), "dex");
-            v->begin = b; v->size = fsz; v->confidence = 100;
-            v->data_begin = b + rd_u32(hdr, 108); v->data_size = rd_u32(hdr, 104);   // data section
-        }
-        return 1;
-    }
-    return 0;
-}
-
-// Enumerate ART DexFiles structurally via ClassLoader cookies (no magic scan of RAM,
-// no hardcoded ART offsets). Walks live threads' context loaders + parents.
-static void cmd_art_dexfiles(int fd, const char *id) {
-    char idj[64]; json_escape(id, idj, sizeof(idj));
-    int did = 0;
-    JNIEnv *env = idh_jni_attach(&did);
-    if (!env) { char e[160]; snprintf(e, sizeof(e), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"art_dexfiles\",\"ok\":false,\"error\":\"no JavaVM\"}\n", idj); send_line(fd, e); return; }
-    (*env)->PushLocalFrame(env, 512);
-
-    // classes + fields
-    jclass cThread = (*env)->FindClass(env, "java/lang/Thread");
-    jclass cMap = (*env)->FindClass(env, "java/util/Map");
-    jclass cSet = (*env)->FindClass(env, "java/util/Set");
-    jclass cIter = (*env)->FindClass(env, "java/util/Iterator");
-    jclass cCL = (*env)->FindClass(env, "java/lang/ClassLoader");
-    jclass cBDCL = (*env)->FindClass(env, "dalvik/system/BaseDexClassLoader");
-    jclass cDPL = (*env)->FindClass(env, "dalvik/system/DexPathList");
-    jclass cElem = (*env)->FindClass(env, "dalvik/system/DexPathList$Element");
-    jclass cDexFile = (*env)->FindClass(env, "dalvik/system/DexFile");
-    jclass cClass = (*env)->FindClass(env, "java/lang/Class");
-    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-
-    jmethodID mGetAll = cThread ? (*env)->GetStaticMethodID(env, cThread, "getAllStackTraces", "()Ljava/util/Map;") : NULL;
-    jmethodID mKeySet = cMap ? (*env)->GetMethodID(env, cMap, "keySet", "()Ljava/util/Set;") : NULL;
-    jmethodID mIterator = cSet ? (*env)->GetMethodID(env, cSet, "iterator", "()Ljava/util/Iterator;") : NULL;
-    jmethodID mHasNext = cIter ? (*env)->GetMethodID(env, cIter, "hasNext", "()Z") : NULL;
-    jmethodID mNext = cIter ? (*env)->GetMethodID(env, cIter, "next", "()Ljava/lang/Object;") : NULL;
-    jmethodID mGetCtx = cThread ? (*env)->GetMethodID(env, cThread, "getContextClassLoader", "()Ljava/lang/ClassLoader;") : NULL;
-    jmethodID mGetParent = cCL ? (*env)->GetMethodID(env, cCL, "getParent", "()Ljava/lang/ClassLoader;") : NULL;
-    jmethodID mGetName = cClass ? (*env)->GetMethodID(env, cClass, "getName", "()Ljava/lang/String;") : NULL;
-    jfieldID fPathList = cBDCL ? (*env)->GetFieldID(env, cBDCL, "pathList", "Ldalvik/system/DexPathList;") : NULL;
-    jfieldID fDexElements = cDPL ? (*env)->GetFieldID(env, cDPL, "dexElements", "[Ldalvik/system/DexPathList$Element;") : NULL;
-    jfieldID fDexFileFld = cElem ? (*env)->GetFieldID(env, cElem, "dexFile", "Ldalvik/system/DexFile;") : NULL;
-    jfieldID fCookie = cDexFile ? (*env)->GetFieldID(env, cDexFile, "mCookie", "Ljava/lang/Object;") : NULL;
-    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-
-    int memfd = open("/proc/self/mem", O_RDONLY);
-    size_t cap = 1 << 14, len = 0; char *recs = (char *)malloc(cap); if (recs) recs[0] = 0;
-    int nrec = 0, nloaders = 0;
-    unsigned long long seen[512]; int nseen = 0;
-
-    if (mGetAll && mKeySet && mIterator && fPathList && fDexElements && fDexFileFld && fCookie && memfd >= 0 && recs) {
-        jobject map = (*env)->CallStaticObjectMethod(env, cThread, mGetAll);
-        jobject set = map ? (*env)->CallObjectMethod(env, map, mKeySet) : NULL;
-        jobject it = set ? (*env)->CallObjectMethod(env, set, mIterator) : NULL;
-        while (it && (*env)->CallBooleanMethod(env, it, mHasNext)) {
-            jobject th = (*env)->CallObjectMethod(env, it, mNext);
-            jobject loader = th ? (*env)->CallObjectMethod(env, th, mGetCtx) : NULL;
-            // walk loader + parent chain
-            int depth = 0;
-            while (loader && depth++ < 16) {
-                if ((*env)->IsInstanceOf(env, loader, cBDCL)) {
-                    nloaders++;
-                    // loader class name
-                    char lname[128] = "";
-                    jobject lcls = (*env)->GetObjectClass(env, loader);
-                    if (lcls && mGetName) { jstring nm = (jstring)(*env)->CallObjectMethod(env, lcls, mGetName);
-                        if (nm) { const char *s = (*env)->GetStringUTFChars(env, nm, NULL); if (s) { strncpy(lname, s, sizeof(lname) - 1); (*env)->ReleaseStringUTFChars(env, nm, s); } } }
-                    jobject pathList = (*env)->GetObjectField(env, loader, fPathList);
-                    jobjectArray elems = pathList ? (jobjectArray)(*env)->GetObjectField(env, pathList, fDexElements) : NULL;
-                    jsize ne = elems ? (*env)->GetArrayLength(env, elems) : 0;
-                    jclass cLongArr = (*env)->FindClass(env, "[J");
-                    for (jsize e = 0; e < ne; e++) {
-                        jobject elem = (*env)->GetObjectArrayElement(env, elems, e);
-                        jobject dexFile = elem ? (*env)->GetObjectField(env, elem, fDexFileFld) : NULL;
-                        jobject cookie = dexFile ? (*env)->GetObjectField(env, dexFile, fCookie) : NULL;
-                        if (cookie && (*env)->IsInstanceOf(env, cookie, cLongArr)) {
-                            jlongArray arr = (jlongArray)cookie;
-                            jsize cl = (*env)->GetArrayLength(env, arr);
-                            jlong *vals = (*env)->GetLongArrayElements(env, arr, NULL);
-                            for (jsize c = 0; c < cl && nrec < 256; c++) {
-                                unsigned long long p = (unsigned long long)vals[c];
-                                if (p < 0x10000) continue;
-                                struct DexView dv;
-                                if (resolve_dexfile(memfd, p, &dv)) {
-                                    int dup = 0; for (int k = 0; k < nseen; k++) if (seen[k] == dv.begin) { dup = 1; break; }
-                                    if (dup) continue;
-                                    if (nseen < 512) seen[nseen++] = dv.begin;
-                                    char lj[160]; json_escape(lname, lj, sizeof(lj));
-                                    char rec[520];
-                                    int w = snprintf(rec, sizeof(rec),
-                                        "%s{\"dexFilePtr\":\"%llx\",\"begin\":\"%llx\",\"size\":%u,\"magic\":\"%s\",\"format\":\"%s\",\"version\":%u,\"logical\":\"%llx\",\"dataBegin\":\"%llx\",\"dataSize\":%u,\"confidence\":%d,\"loader\":\"%s\"}",
-                                        nrec ? "," : "", p, dv.begin, dv.size, dv.format, dv.format, dv.version, dv.logical, dv.data_begin, dv.data_size, dv.confidence, lj);
-                                    if (w > 0) {
-                                        if (len + (size_t)w + 1 >= cap) {
-                                            size_t ncap = cap; while (len + (size_t)w + 1 >= ncap) ncap *= 2;
-                                            char *nb = realloc(recs, ncap);
-                                            if (!nb) continue;   // OOM: skip this record — recs/cap unchanged (no overflow)
-                                            recs = nb; cap = ncap;
-                                        }
-                                        memcpy(recs + len, rec, (size_t)w); len += (size_t)w; recs[len] = 0; nrec++;
-                                    }
-                                }
-                            }
-                            (*env)->ReleaseLongArrayElements(env, arr, vals, JNI_ABORT);
-                        }
-                        if (elem) (*env)->DeleteLocalRef(env, elem);
-                        if (dexFile) (*env)->DeleteLocalRef(env, dexFile);
-                        if (cookie) (*env)->DeleteLocalRef(env, cookie);
-                    }
-                }
-                jobject parent = (*env)->CallObjectMethod(env, loader, mGetParent);
-                (*env)->DeleteLocalRef(env, loader);
-                loader = parent;
-            }
-            if (th) (*env)->DeleteLocalRef(env, th);
-        }
-    }
-    if (memfd >= 0) close(memfd);
-    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-    (*env)->PopLocalFrame(env, NULL);
-    idh_jni_detach(did);
-
-    size_t hlen = (recs ? strlen(recs) : 0) + 200;
-    char *out = (char *)malloc(hlen);
-    if (out) { snprintf(out, hlen, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"art_dexfiles\",\"ok\":true,\"loaders\":%d,\"count\":%d,\"dexfiles\":[%s]}\n", idj, nloaders, nrec, recs ? recs : ""); send_line(fd, out); free(out); }
-    free(recs);
-    LOGI("art_dexfiles: loaders=%d dexfiles=%d", nloaders, nrec);
-}
-
 
 // ---- report + command loop ------------------------------------------------
 
@@ -602,7 +184,7 @@ static void command_loop(int fd) {
                     long long size = json_get_num(line, "size");
                     cmd_read(fd, id, addr, size);
                 } else if (strcmp(op, "jni_probe") == 0) {
-                    cmd_jni_probe(fd, id);
+                    idh_cmd_jni_probe(fd, id);
                 } else if (strcmp(op, "gothook_selftest") == 0) {
                     idh_cmd_gothook_selftest(fd, id);
                 } else if (strcmp(op, "crypto_probe") == 0) {
@@ -669,20 +251,20 @@ static void command_loop(int fd) {
                     json_get_str(line, "className", tcls, sizeof(tcls));
                     idh_cmd_trace_run(fd, id, sl, sy, hm, tcls);
                 } else if (strcmp(op, "compat_probe") == 0) {
-                    cmd_compat_probe(fd, id);
+                    idh_cmd_compat_probe(fd, id);
                 } else if (strcmp(op, "object_inspect") == 0) {
                     char cls[160] = "", fld[64] = "";
                     json_get_str(line, "className", cls, sizeof(cls));
                     json_get_str(line, "field", fld, sizeof(fld));
-                    cmd_object_inspect(fd, id, cls, fld);
+                    idh_cmd_object_inspect(fd, id, cls, fld);
                 } else if (strcmp(op, "object_invoke") == 0) {
                     char cls[160] = "", fld[64] = "", mth[64] = "";
                     json_get_str(line, "className", cls, sizeof(cls));
                     json_get_str(line, "field", fld, sizeof(fld));
                     json_get_str(line, "method", mth, sizeof(mth));
-                    cmd_object_invoke(fd, id, cls, fld, mth);
+                    idh_cmd_object_invoke(fd, id, cls, fld, mth);
                 } else if (strcmp(op, "art_dexfiles") == 0) {
-                    cmd_art_dexfiles(fd, id);
+                    idh_cmd_art_dexfiles(fd, id);
                 } else if (strcmp(op, "list_dir") == 0) {
                     char path[2048] = ""; json_get_str(line, "path", path, sizeof(path));
                     cmd_list_dir(fd, id, path);
