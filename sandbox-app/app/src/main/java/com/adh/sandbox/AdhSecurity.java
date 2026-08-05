@@ -1,4 +1,4 @@
-package com.idh.sandbox;
+package com.adh.sandbox;
 
 import android.util.Log;
 
@@ -31,9 +31,9 @@ import javax.crypto.spec.IvParameterSpec;
  * GOT hook remains the bypass-proof backstop. Designed to be relocatable into an
  * agent-injected dex for arbitrary targets (here it lives in the sandbox for verification).
  */
-public final class IdhSecurity {
-    private static final String TAG = "IDH_SANDBOX";
-    private static final String NAME = "IDH-Intercept";
+public final class AdhSecurity {
+    private static final String TAG = "ADH_SANDBOX";
+    private static final String NAME = "ADH-Intercept";
 
     // transforms/algorithms we interpose (the common surface; extendable)
     private static final String[] CIPHERS = {
@@ -49,12 +49,12 @@ public final class IdhSecurity {
     public static synchronized void install() {
         if (installed) return;
         try {
-            Provider p = new IdhProvider();
+            Provider p = new AdhProvider();
             Security.insertProviderAt(p, 1);   // priority 1 → default getInstance picks us
             installed = true;
-            Log.i(TAG, "IdhSecurity installed (Java-layer crypto interception)");
+            Log.i(TAG, "AdhSecurity installed (Java-layer crypto interception)");
         } catch (Throwable t) {
-            Log.w(TAG, "IdhSecurity install failed: " + t);
+            Log.w(TAG, "AdhSecurity install failed: " + t);
         }
     }
 
@@ -77,9 +77,9 @@ public final class IdhSecurity {
     }
 
     // ------------------------------------------------------------------ provider
-    static final class IdhProvider extends Provider {
-        IdhProvider() {
-            super(NAME, 1.0, "IDH Java-layer crypto interceptor");
+    static final class AdhProvider extends Provider {
+        AdhProvider() {
+            super(NAME, 1.0, "ADH Java-layer crypto interceptor");
             for (String t : CIPHERS) putService(new Svc(this, "Cipher", t));
             for (String d : DIGESTS) putService(new Svc(this, "MessageDigest", d));
             for (String m : MACS)    putService(new Svc(this, "Mac", m));
@@ -88,7 +88,7 @@ public final class IdhSecurity {
 
     // Custom Service so the SPI knows the exact transform it was requested for.
     static final class Svc extends Provider.Service {
-        Svc(Provider p, String type, String algo) { super(p, type, algo, "com.idh.sandbox.IdhSecurity$Spi", null, null); }
+        Svc(Provider p, String type, String algo) { super(p, type, algo, "com.adh.sandbox.AdhSecurity$Spi", null, null); }
         @Override public Object newInstance(Object ctorParam) {
             String type = getType();
             String algo = getAlgorithm();
@@ -162,7 +162,7 @@ public final class IdhSecurity {
         }
         private void emit(byte[] out) {
             String op = (opmode == Cipher.ENCRYPT_MODE) ? "encrypt" : (opmode == Cipher.DECRYPT_MODE) ? "decrypt" : "cipher";
-            IdhReport.report(transform, op, key, iv, acc.toByteArray(), out);
+            AdhReport.report(transform, op, key, iv, acc.toByteArray(), out);
             acc.reset();
         }
     }
@@ -181,7 +181,7 @@ public final class IdhSecurity {
         @Override protected void engineUpdate(byte[] input, int off, int len) { if (len > 0) acc.write(input, off, len); delegate.update(input, off, len); }
         @Override protected byte[] engineDigest() {
             byte[] out = delegate.digest();
-            IdhReport.report(algo, "digest", null, null, acc.toByteArray(), out);
+            AdhReport.report(algo, "digest", null, null, acc.toByteArray(), out);
             acc.reset();
             return out;
         }
@@ -206,12 +206,12 @@ public final class IdhSecurity {
         @Override protected void engineUpdate(byte[] input, int off, int len) { if (len > 0) acc.write(input, off, len); delegate.update(input, off, len); }
         @Override protected byte[] engineDoFinal() {
             byte[] out = delegate.doFinal();
-            IdhReport.report(algo, "hmac", key, null, acc.toByteArray(), out);
+            AdhReport.report(algo, "hmac", key, null, acc.toByteArray(), out);
             acc.reset();
             return out;
         }
         @Override protected void engineReset() { acc.reset(); if (delegate != null) delegate.reset(); }
     }
 
-    private IdhSecurity() {}
+    private AdhSecurity() {}
 }

@@ -1,4 +1,4 @@
-package com.idh.sandbox
+package com.adh.sandbox
 
 import android.util.Base64
 import android.util.Log
@@ -20,7 +20,7 @@ import javax.crypto.spec.SecretKeySpec
 //  2) dynamic channel (later): a real runtime AES/HMAC to capture at the plaintext
 //     boundary once the hook engine lands. Expected outputs are logged for asserts.
 object JavaCrypto {
-    private const val TAG = "IDH_SANDBOX"
+    private const val TAG = "ADH_SANDBOX"
     val KEY = "0123456789abcdef".toByteArray(Charsets.US_ASCII)   // AES-128 / HMAC key
     val IV = "abcdef9876543210".toByteArray(Charsets.US_ASCII)
     const val PLAINTEXT = "IDH_CRYPTO_PLAINTEXT_v1"

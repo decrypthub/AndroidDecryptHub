@@ -11,13 +11,13 @@ class ScopeJsonTest {
         val cfg = ScopeConfig(
             version = 1,
             mode = ScopeConfig.MODE_ALLOWLIST,
-            packages = setOf("com.idh.sandbox", "com.example.target"),
+            packages = setOf("com.adh.sandbox", "com.example.target"),
         )
         val json = ScopeJson.encode(cfg)
         val back = ScopeJson.decode(json)
         assertEquals(1, back.version)
         assertEquals(ScopeConfig.MODE_ALLOWLIST, back.mode)
-        assertTrue(back.contains("com.idh.sandbox"))
+        assertTrue(back.contains("com.adh.sandbox"))
         assertTrue(back.contains("com.example.target"))
         assertEquals(2, back.packages.size)
     }
@@ -54,6 +54,6 @@ class ScopeJsonTest {
         assertEquals("com.adh.manager", AdhPaths.MANAGER_PKG)
         assertTrue(HardExcludes.isExcluded("system_server"))
         assertTrue(HardExcludes.isExcluded(AdhPaths.MANAGER_PKG))
-        assertFalse(HardExcludes.isExcluded("com.idh.sandbox"))
+        assertFalse(HardExcludes.isExcluded("com.adh.sandbox"))
     }
 }

@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.idh.sandbox"
+    namespace = "com.adh.sandbox"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.idh.sandbox"
+        applicationId = "com.adh.sandbox"
         minSdk = 26
         targetSdk = 34
         versionCode = 1

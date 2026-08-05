@@ -4,7 +4,7 @@
 #
 # What this dedups (previously hand-copied into ~26 scripts, ~60-75% of each):
 #   - env resolution (ROOT/HTTP/SERIAL/BASE; ADH_* preferred, IDH_* aliases)
-#   - sandbox liveness probe (adb pidof com.idh.sandbox)
+#   - sandbox liveness probe (adb pidof com.adh.sandbox)
 #   - result gate (RESULT:PASS sentinel grep + optional alive check)
 #   - host-only chk accumulator + finish gate
 #   - SIGPIPE-safe here-string grep
@@ -41,7 +41,7 @@ verify_resolve_env_host() {
 
 # Sets ALIVE to the sandbox pid (or empty). Prints the alive line.
 verify_sandbox_alive() {
-  ALIVE="$(adb -s "$SERIAL" shell pidof com.idh.sandbox 2>/dev/null | tr -d '\r ')"
+  ALIVE="$(adb -s "$SERIAL" shell pidof com.adh.sandbox 2>/dev/null | tr -d '\r ')"
   echo "sandbox alive: ${ALIVE:-NO}"
 }
 

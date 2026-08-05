@@ -15,7 +15,7 @@ const [http, root] = process.argv.slice(2);
 const base=`http://127.0.0.1:${http}`;
 const P=(o)=>fetch(`${base}${o.path}`,o.body?{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(o.body)}:{}).then(r=>r.json());
 const agents=await P({path:'/api/agents'});
-const a=agents.filter(x=>x.package==='com.idh.sandbox'&&x.online).pop();
+const a=agents.filter(x=>x.package==='com.adh.sandbox'&&x.online).pop();
 if(!a){console.log('NO_AGENT');process.exit(0);}
 const mods=await P({path:`/api/modules?session=${a.sessionId}`});
 const mine=mods.find(m=>m.name==='libidh_agent.so');
@@ -48,10 +48,10 @@ HAS_DYNAMIC=$(echo "$PHDR" | grep -c "DYNAMIC")
 HAS_SONAME=$(echo "$DYN" | grep -c "libidh_agent.so")
 HAS_SYMTAB=$(echo "$DYN" | grep -c "SYMTAB")
 HAS_STRTAB=$(echo "$DYN" | grep -c "STRTAB")
-STR_START=$(grep -c "idh_agent_start" "$DUMP_PATH" 2>/dev/null)
+STR_START=$(grep -c "adh_agent_start" "$DUMP_PATH" 2>/dev/null)
 STR_JNI=$(grep -c "JNI_OnLoad" "$DUMP_PATH" 2>/dev/null)
 echo "  elf64=$IS_ELF64 aarch64=$IS_AARCH64 dyn=$IS_DYN LOAD=$HAS_LOAD DYNAMIC=$HAS_DYNAMIC"
-echo "  dyn: soname=$HAS_SONAME symtab=$HAS_SYMTAB strtab=$HAS_STRTAB ; dynstr has idh_agent_start=$STR_START JNI_OnLoad=$STR_JNI"
+echo "  dyn: soname=$HAS_SONAME symtab=$HAS_SYMTAB strtab=$HAS_STRTAB ; dynstr has adh_agent_start=$STR_START JNI_OnLoad=$STR_JNI"
 
 if [ "$IS_ELF64" -ge 1 ] && [ "$IS_AARCH64" -ge 1 ] && [ "$IS_DYN" -ge 1 ] \
    && [ "$HAS_LOAD" -ge 1 ] && [ "$HAS_DYNAMIC" -ge 1 ] \

@@ -16,7 +16,7 @@ Browser / AI client           Web console / MCP   observe · search · drive
 ```
 
 - **Agent** (`agent/`, C + NDK): loaded via `System.loadLibrary` (模拟注入) or Zygisk injector.
-  Dual entry `JNI_OnLoad` / `idh_agent_start`. Connects to **Host** ADH Daemon over TCP `127.0.0.1:8761`
+  Dual entry `JNI_OnLoad` / `adh_agent_start` (`idh_agent_start` legacy alias). Connects to **Host** ADH Daemon over TCP `127.0.0.1:8761`
   (reachable from device via `adb reverse`). Executes commands, streams results. No HTTP/DB.
 - **Host ADH Daemon** (`daemon/`, npm `adhd`, Node 24 + TypeScript, no build step; legacy name `idhd`):
   agent registry, HTTP+WS `8760`, REST API, MCP server, dex parser/indexer, ELF analysis, dump storage.

@@ -11,7 +11,7 @@ SERIAL="${IDH_SERIAL:-$(adb devices | awk 'NR==2{print $1}')}"
 HTTP="${IDH_HTTP_PORT:-8760}"
 AGENT="${IDH_AGENT_PORT:-8761}"
 JAVA_HOME="${JAVA_HOME:-C:\\Program Files\\Android\\Android Studio\\jbr}"; export JAVA_HOME
-PKG=com.idh.sandbox
+PKG=com.adh.sandbox
 
 echo ">> device: $SERIAL"
 bash "$ROOT/tools/build_agent.sh"
@@ -36,7 +36,7 @@ import fs from 'node:fs';
 const [file, http] = process.argv.slice(2);
 const kmaps = fs.readFileSync(file,'utf8').split('\n');
 const list = await (await fetch(`http://127.0.0.1:${http}/api/agents`)).json();
-const a = list.filter(x=>x.package==='com.idh.sandbox'&&x.online).pop();
+const a = list.filter(x=>x.package==='com.adh.sandbox'&&x.online).pop();
 if(!a){ console.log('❌ agent not registered in idhd'); process.exit(1); }
 const s = a.regionsSample||[];
 const ok = s.filter(r=>kmaps.some(l=>l.startsWith(`${r.start}-${r.end} ${r.perms}`))).length;

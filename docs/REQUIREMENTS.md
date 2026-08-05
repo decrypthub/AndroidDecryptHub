@@ -169,7 +169,7 @@ ADH (Android DecryptHub)
 - LSPosed / Xposed 桥接加载（有框架时）。
 - **模拟注入**（开发/CI 主路径）：`sandbox-test-app` 自身 `dlopen` 加载 agent，无需真机对抗即可验证全部模块。
 
-Agent 必须支持两种 bootstrap 入口且行为一致：被注入器加载（`JNI_OnLoad`/构造函数）与被宿主主动加载（导出 `idh_agent_start()`）。
+Agent 必须支持两种 bootstrap 入口且行为一致：被注入器加载（`JNI_OnLoad`/构造函数）与被宿主主动加载（导出 `adh_agent_start()`；保留 `idh_agent_start()` ABI 别名）。
 
 **功能要求**：
 
@@ -1525,12 +1525,12 @@ MCP              →  AI 可编程操控，与 HTTP 同源
 - `libidh_agent.so`（arm64-v8a 主线，设备 ABI）
 - Zygisk 模块包（root 版）+ ADH Manager APK（作用域：选哪些 App 注入）；另提供 Magisk 可直接安装、自动安装 Manager 的组合包
 - Gadget 打包工具：把 agent + gadget so 注入并重签目标 APK（非 root 版）
-- 双 bootstrap 入口：`JNI_OnLoad`/构造函数（被加载）与 `idh_agent_start()`（被宿主主动调用），行为一致
+- 双 bootstrap 入口：`JNI_OnLoad`/构造函数（被加载）与 `adh_agent_start()`（被宿主主动调用；`idh_agent_start()` 为兼容别名），行为一致
 
 ### 30.3 模拟注入回路（CI 主路径）
 
 ```text
-sandbox-app 启动 → System.loadLibrary("idh_agent") → idh_agent_start()
+sandbox-app 启动 → System.loadLibrary("idh_agent") → JNI_OnLoad；注入器 → adh_agent_start()
   → 连 ADH Daemon → 跑通全部模块断言 → 再打真实目标
 ```
 

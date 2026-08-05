@@ -401,7 +401,7 @@
       <h2>原生 .so 分析</h2>
       <div class="row2">
         <input id="nat-sha" placeholder="dump sha256（脱壳/内存里得到）" size="30" />
-        <input id="nat-sym" placeholder="符号（反汇编）" size="20" value="idh_agent_start" />
+        <input id="nat-sym" placeholder="符号（反汇编）" size="20" value="adh_agent_start" />
         <button class="act" onclick="nat('/api/native/analyze',{})">分析</button>
         <button class="act" onclick="nat('/api/native/disasm',{symbol:val('nat-sym')})">反汇编</button>
         <button class="act" onclick="nat('/api/native/crypto_const',{})">加密常量扫描</button>

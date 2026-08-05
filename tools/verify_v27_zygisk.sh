@@ -2,7 +2,7 @@
 # v2.7 — Zygisk module + scope file presence (module W).
 # SKIP (not FAIL) when no device, no Magisk, or module not flashed yet.
 # PASS when: Magisk present, /data/adb/modules/adh exists, scope.json writable,
-#            writing com.idh.sandbox into allowlist round-trips.
+#            writing com.adh.sandbox into allowlist round-trips.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
 verify_resolve_env
@@ -28,7 +28,7 @@ if [ "$MOD" != "YES" ]; then
 fi
 
 # Round-trip scope write (does not require cold-start inject for this check).
-SCOPE_JSON='{"version":1,"mode":"allowlist","packages":["com.idh.sandbox"]}'
+SCOPE_JSON='{"version":1,"mode":"allowlist","packages":["com.adh.sandbox"]}'
 B64="$(printf '%s' "$SCOPE_JSON" | base64 | tr -d '\n\r')"
 adb -s "$SERIAL" shell "su -c \"mkdir -p /data/adb/adh && echo $B64 | base64 -d > /data/adb/adh/scope.json && chmod 644 /data/adb/adh/scope.json\"" >/dev/null
 GOT="$(adb -s "$SERIAL" shell 'su -c "cat /data/adb/adh/scope.json"' 2>/dev/null | tr -d '\r' || true)"
@@ -36,7 +36,7 @@ GOT="$(adb -s "$SERIAL" shell 'su -c "cat /data/adb/adh/scope.json"' 2>/dev/null
 set +e
 OUT="$(node - "$GOT" <<'EOF'
 const got = process.argv[2] || '';
-const ok = got.includes('com.idh.sandbox') && got.includes('allowlist');
+const ok = got.includes('com.adh.sandbox') && got.includes('allowlist');
 console.log(ok ? 'RESULT:PASS' : 'RESULT:FAIL');
 if (!ok) { console.error('scope round-trip failed, got:', got.slice(0, 200)); process.exit(1); }
 EOF

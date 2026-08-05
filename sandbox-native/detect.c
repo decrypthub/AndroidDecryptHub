@@ -59,7 +59,7 @@ int idh_static_EVP_CipherUpdate(void *ctx, unsigned char *out, int *outl,
     return 1;
 }
 
-JNIEXPORT jint JNICALL Java_com_idh_sandbox_Detection_staticCrypto(JNIEnv *env, jclass clazz) {
+JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_staticCrypto(JNIEnv *env, jclass clazz) {
     (void)env; (void)clazz;
     static const unsigned char marker[] = "IDH_INLINE_CRYPTO_v1";
     unsigned char out[sizeof(marker)]; int outl = 0;
@@ -74,7 +74,7 @@ int idh_trace_target(void) {
     return s;   // 0+3+6+9+12 = 30
 }
 
-JNIEXPORT jint JNICALL Java_com_idh_sandbox_Detection_run(JNIEnv *env, jclass clazz) {
+JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_run(JNIEnv *env, jclass clazz) {
     (void)env; (void)clazz;
     int flags = 0;
 

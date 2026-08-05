@@ -50,14 +50,14 @@ touch shell options; the caller's `set -e/-u/-o pipefail` stands. WSL builds use
 
 ## `verify_all.sh` — the regression runner
 
-- Runs `dev_up.sh` first, then each script in `SCRIPTS` (sequential; `:device` scripts force-stop + relaunch `com.idh.sandbox/.MainActivity` + sleep 4 first).
+- Runs `dev_up.sh` first, then each script in `SCRIPTS` (sequential; `:device` scripts force-stop + relaunch `com.adh.sandbox/.MainActivity` + sleep 4 first).
 - `:device` scripts SKIP (not FAIL) when no device attached.
 - Exit 0 iff all RUN scripts pass. Prints `pass=N fail=N skip=N [failed:…]`.
 - **`verify_v23_javahook.sh` is deliberately EXCLUDED** — LSPlant WS-A is blocked on this ROM (libart stripped). See the comment in the SCRIPTS array. Re-add only on a stock/AOSP device.
 
 ## Build scripts
 
-- `build_agent.sh` — `libidh_agent.so` (arm64-v8a, NDK+SDK cmake), stages into `sandbox-app/…/jniLibs/$ABI`, prints `idh_agent_start`+`JNI_OnLoad` exports (fail-loud on compile error — do NOT hide build output).
+- `build_agent.sh` — `libidh_agent.so` (arm64-v8a, NDK+SDK cmake), stages into `sandbox-app/…/jniLibs/$ABI`, prints `adh_agent_start` + legacy `idh_agent_start` + `JNI_OnLoad` exports (fail-loud on compile error — do NOT hide build output).
 - `build_detect.sh` — `libidhdetect.so` (sandbox's mock detection target), same cmake pattern.
 - `fetch_qbdi.sh` / `fetch_lsplant.sh` — one-time third-party fetch (gitignored under `agent/third_party/`).
 - `build_zygisk.sh` — 构建 Manager 证书固定的 Root Device Daemon + Zygisk 模块 → `injector/zygisk/dist/adh-zygisk.zip`

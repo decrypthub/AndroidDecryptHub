@@ -9,7 +9,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
 verify_resolve_env
 AGENT="${IDH_AGENT_PORT:-8761}"
 JAVA_HOME="${JAVA_HOME:-C:\\Program Files\\Android\\Android Studio\\jbr}"; export JAVA_HOME
-PKG=com.idh.sandbox
+PKG=com.adh.sandbox
 
 bash "$ROOT/tools/build_agent.sh" >/dev/null
 ( cd "$ROOT/sandbox-app" && ./gradlew :app:assembleDebug --console=plain >/dev/null )
@@ -32,7 +32,7 @@ const [file, http] = process.argv.slice(2);
 const kmaps = fs.readFileSync(file,'utf8').split('\n');
 const base = `http://127.0.0.1:${http}`;
 const agents = await (await fetch(`${base}/api/agents`)).json();
-const a = agents.filter(x=>x.package==='com.idh.sandbox'&&x.online).pop();
+const a = agents.filter(x=>x.package==='com.adh.sandbox'&&x.online).pop();
 if(!a){ console.log('❌ no agent'); process.exit(1); }
 
 // 1) on-demand full maps

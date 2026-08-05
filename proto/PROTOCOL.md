@@ -21,12 +21,12 @@
 | 值 | 名称 | payload | 方向 |
 |----|------|---------|------|
 | `0x01` | `FRAME_JSON` | 一个 UTF-8 JSON 对象（下方所有 `t` 消息） | 双向 |
-| `0x02` | `FRAME_CAPTURE` | 采集批（WS-C，保留） | agent → idhd |
+| `0x02` | `FRAME_CAPTURE` | 采集批（WS-C，保留） | agent → Host ADH Daemon |
 
 ### 上限与 fail-loud（不胡乱兜底）
 
 - agent 入站（命令）payload 上限 `FRAME_MAX_IN = 16 MiB`；超出 → **关连接并上报**，不尝试重同步一条已损坏的流。
-- idhd 入站（响应）payload 上限 `FRAME_MAX = 64 MiB`；超出 → **destroy socket 并 log**。
+- Host ADH Daemon 入站（响应）payload 上限 `FRAME_MAX = 64 MiB`；超出 → **destroy socket 并 log**。
 - 未知 `type` → 跳过该帧并 log（不静默）。
 - **取消** v0 的 8192 字节单行命令上限与"超长行丢弃"——命令/响应按 `len` 精确读取，任意大小完整送达。
 - 大 payload（dump/read）当前走多帧分片（`read` 每帧 ≤ 1 MiB base64）；后续大 region dump 走
@@ -37,12 +37,12 @@
 - idhd HTTP + WebSocket：`8760`（对外称 **ADH Daemon**；npm 包名 `adhd`）
 - ADH Daemon Agent TCP：`8761`
 
-## agent → idhd（均为 `FRAME_JSON`）
+## agent → Host ADH Daemon（均为 `FRAME_JSON`）
 
 ```jsonc
 // 注册（连接后第一帧）
 {"t":"hello","agentVer":"0.2.0","pid":1234,"uid":10234,
- "package":"com.idh.sandbox","process":"com.idh.sandbox",
+ "package":"com.adh.sandbox","process":"com.adh.sandbox",
  "abi":"arm64-v8a","android":"16","sdk":36,"entry":"jni_onload|start"}
 
 // maps 快照
@@ -53,11 +53,11 @@
 // 心跳
 {"t":"ping","ts":170...}
 
-// 命令结果（对每个 idhd 下发的 cmd）
+// 命令结果（对每个 Host ADH Daemon 下发的 cmd）
 {"t":"cmdResult","id":"c_ab12","op":"read","ok":true, ...}
 ```
 
-## idhd → agent（均为 `FRAME_JSON`）
+## Host ADH Daemon → agent（均为 `FRAME_JSON`）
 
 ```jsonc
 {"t":"ack","sessionId":"s_ab12"}   // 收到 hello 后回
@@ -71,11 +71,11 @@ file_probe/file_hook_test/load_so/qbdi_trace/object_*/compat_probe/frame_echo/pi
 
 ### `frame_echo`（WS-D 协议自测，无目标知识）
 
-idhd `GET /api/debug/frame_echo?session=&kb=N` → 下发一个带 `pad`(N KiB)+`tail` 哨兵的命令帧；
+Host ADH Daemon `GET /api/debug/frame_echo?session=&kb=N` → 下发一个带 `pad`(N KiB)+`tail` 哨兵的命令帧；
 agent 回 `{recvBytes, tail, padLen}`。`tail` 置于 `pad` 之后（越过旧 8192 位），只有当入站
 framing 完整送达整帧时 `tail` 才非空。验收：`tools/verify_v21_frame.sh`。
 
 ## 会话身份
 
-- idhd 为每个连接分配 `sessionId`；同 pid 重连视为同一逻辑目标，保留历史。
-- 事件持久化到 `idhd-data/events.jsonl`（会话录制/回放）。
+- Host ADH Daemon 为每个连接分配 `sessionId`；同 pid 重连视为同一逻辑目标，保留历史。
+- 事件持久化到 `adhd-data/events.jsonl`；若已有 legacy `idhd-data/`，继续兼容读取。

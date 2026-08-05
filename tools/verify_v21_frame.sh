@@ -20,7 +20,7 @@ const [http]=process.argv.slice(2); const base=`http://127.0.0.1:${http}`;
 const J=(p,b)=>fetch(`${base}${p}`,b?{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)}:{}).then(r=>r.json());
 const sha256=async(u8)=>Buffer.from(await crypto.subtle.digest('SHA-256',u8)).toString('hex');
 const agents=await J('/api/agents');
-const a=agents.filter(x=>x.package==='com.idh.sandbox'&&x.online).sort((x,y)=>y.connectedAt-x.connectedAt)[0];
+const a=agents.filter(x=>x.package==='com.adh.sandbox'&&x.online).sort((x,y)=>y.connectedAt-x.connectedAt)[0];
 if(!a){console.log('NO_AGENT');console.log('RESULT:FAIL');process.exit(0);}
 const sid=a.sessionId;
 

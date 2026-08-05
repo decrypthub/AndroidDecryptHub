@@ -3,7 +3,7 @@
 | Path | Role |
 |---|---|
 | `zygisk/` | Magisk Zygisk module source + packager |
-| `zygisk/jni/` | Companion `.so` (`main.cpp`) — reads `/data/adb/adh/scope.json`, `dlopen`s `libidh_agent.so`, calls `idh_agent_start` |
+| `zygisk/jni/` | Companion `.so` (`main.cpp`) — reads `/data/adb/adh/scope.json`, `dlopen`s `libidh_agent.so`, calls `adh_agent_start` with legacy `idh_agent_start` fallback |
 | `zygisk/module/` | Magisk module skeleton (`module.prop`, installer/action scripts, boot status scripts, META-INF) |
 | `zygisk/dist/adh-zygisk.zip` | Build output (`bash tools/build_zygisk.sh`) |
 | `zygisk/dist/adh-bundle-vX.Y.Z.zip` | Versioned module + verified `manager.apk` + root Device Daemon APK |

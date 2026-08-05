@@ -18,7 +18,7 @@ const [http, knownSha, sdkExp] = process.argv.slice(2);
 const base=`http://127.0.0.1:${http}`;
 const P=(o)=>fetch(`${base}${o.path}`,o.body?{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(o.body)}:{}).then(r=>r.json());
 const agents=await P({path:'/api/agents'});
-const a=agents.filter(x=>x.package==='com.idh.sandbox'&&x.online).sort((x,y)=>y.connectedAt-x.connectedAt)[0];
+const a=agents.filter(x=>x.package==='com.adh.sandbox'&&x.online).sort((x,y)=>y.connectedAt-x.connectedAt)[0];
 if(!a){console.log('NO_AGENT');console.log('RESULT:FAIL');process.exit(0);}
 
 // (1) JNI foundation — agent-reflected SDK must equal the OS-reported SDK for this device

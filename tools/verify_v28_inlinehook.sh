@@ -12,7 +12,7 @@ OUT="$(node - "$HTTP" <<'EOF'
 const http=process.argv[2]; const base=`http://127.0.0.1:${http}`;
 const J=(p)=>fetch(`${base}${p}`).then(async r=>({status:r.status,body:await r.json()}));
 const agents=(await J('/api/agents')).body;
-const a=agents.filter(x=>x.package==='com.idh.sandbox'&&x.online).sort((x,y)=>y.connectedAt-x.connectedAt)[0];
+const a=agents.filter(x=>x.package==='com.adh.sandbox'&&x.online).sort((x,y)=>y.connectedAt-x.connectedAt)[0];
 if(!a){console.log('NO_AGENT');console.log('RESULT:FAIL');process.exit(0);}
 const results=[];
 for(let i=0;i<2;i++) results.push(await J(`/api/native/inline_hook_test?session=${encodeURIComponent(a.sessionId)}`));

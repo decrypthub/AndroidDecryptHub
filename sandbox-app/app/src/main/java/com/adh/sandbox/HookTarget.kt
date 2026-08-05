@@ -1,4 +1,4 @@
-package com.idh.sandbox
+package com.adh.sandbox
 
 // Victim class for the LSPlant Java-method-hook self-test (WS-A). A static method with a
 // known input→output so the hook test can assert both that the callback fired (captured

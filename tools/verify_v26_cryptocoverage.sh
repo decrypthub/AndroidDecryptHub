@@ -43,7 +43,7 @@ const J=(p)=>fetch(`${base}${p}`).then(r=>r.json());
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 
 const agents=await J('/api/agents');
-const a=agents.filter(x=>x.package==='com.idh.sandbox'&&x.online).sort((x,y)=>y.connectedAt-x.connectedAt)[0];
+const a=agents.filter(x=>x.package==='com.adh.sandbox'&&x.online).sort((x,y)=>y.connectedAt-x.connectedAt)[0];
 if(!a){console.log('NO_AGENT');console.log('RESULT:FAIL');process.exit(0);}
 const sid=a.sessionId;
 
@@ -52,7 +52,7 @@ console.log(`baseline: on=${base0.on} total=${base0.total}`);
 if(base0.on!==true){console.log('RESULT:FAIL (capture not on)');process.exit(0);}
 const since=(base0.captures&&base0.captures.length)?base0.captures[base0.captures.length-1].id:0;
 
-const C='com.idh.sandbox.JavaCrypto';
+const C='com.adh.sandbox.JavaCrypto';
 const trig=async(method)=>J(`/api/unpack/trigger?session=${sid}&class=${encodeURIComponent(C)}&method=${method}&level=3`);
 
 // MainActivity.onCreate auto-starts JavaCrypto's live driver (1 random-algo op every 2s,
@@ -64,7 +64,7 @@ await trig('stopLive');
 
 // poll (short, per-demo) for a predicate to go true before the NEXT demo's captures can
 // evict this one's records out of the bounded capture ring. aeadDemo fires THREE related
-// captures per call (native GCM ct, native ChaCha ct, and the Java-layer IdhReport capture)
+// captures per call (native GCM ct, native ChaCha ct, and the Java-layer AdhReport capture)
 // that can land across different ~800ms drain ticks — returning the instant the FIRST one
 // satisfies the predicate is a real race (observed: aead=1 with the plaintext marker missing
 // on some runs, aead=2/3 with the marker present on others, same code). settleTicks keeps
@@ -109,7 +109,7 @@ async function hasMarker(hits, marker){
 const sigTbsHit = sigList.filter(x=>x.algo==='RSA/EC 签名'&&x.op==='待签名数据');
 // AEAD plaintext can legitimately surface via either capture channel: the native
 // EVP_AEAD_seal_pt GOT hook (op==='明文'), or the sandbox's own interposing JCE provider
-// (IdhReport/IdhSecurity, source==='java') which auto-reports every Cipher op it sees. The
+// (AdhReport/AdhSecurity, source==='java') which auto-reports every Cipher op it sees. The
 // daemon (index.ts ~line 410) intentionally dedupes the native capture when a Java capture
 // already reported the identical plaintext bytes within 2s — real, desired anti-duplicate
 // behavior, not a bug — so aeadDemo's native 明文 tag is expected to be suppressed here.

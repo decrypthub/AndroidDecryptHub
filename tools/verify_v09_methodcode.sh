@@ -29,7 +29,7 @@ const probePass = p.empty===0 && hello && hello.insnsSize===3 && /^1a/.test(hell
 let appHit=false;
 for(const f of fs.readdirSync(dexDir).filter(x=>x.endsWith('.dex'))){
   const b64=fs.readFileSync(`${dexDir}/${f}`).toString('base64');
-  const r=await POST('/api/dex/method_code',{b64,class:'com/idh/sandbox/JavaCrypto',method:'run'});
+  const r=await POST('/api/dex/method_code',{b64,class:'com/adh/sandbox/JavaCrypto',method:'run'});
   const run=(r.methods||[]).find(m=>/->run$/.test(m.method));
   if(run && run.insnsSize>0){ appHit=true; console.log(`  app JavaCrypto.run insnsSize=${run.insnsSize} regs=${run.registers}`); }
 }

@@ -1,4 +1,4 @@
-package com.idh.sandbox
+package com.adh.sandbox
 
 import android.util.Log
 import java.io.File
@@ -10,8 +10,8 @@ import java.io.FileOutputStream
 // libcore's native layer into libc open/openat/read/write/close, which is exactly where
 // the agent's GOT hook (see cmd_file_probe / cmd_file_hook_test) intercepts them.
 object FileIO {
-    private const val TAG = "IDH_SANDBOX"
-    private const val FILE_NAME = "idh_file_test.txt"
+    private const val TAG = "ADH_SANDBOX"
+    private const val FILE_NAME = "adh_file_test.txt"
     const val MARKER = "IDH_FILE_MARKER_v1"
 
     @JvmStatic
@@ -44,7 +44,7 @@ object FileIO {
     }
 
     private fun filePath(): String {
-        val dir = File("/data/data/com.idh.sandbox/files")
+        val dir = File("/data/data/com.adh.sandbox/files")
         if (!dir.exists()) dir.mkdirs()
         return File(dir, FILE_NAME).absolutePath
     }

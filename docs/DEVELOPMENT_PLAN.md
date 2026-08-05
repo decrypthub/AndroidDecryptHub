@@ -486,7 +486,7 @@ android-decrpthub/          # 仓库名；产品名 ADH (Android DecryptHub)
 ├── agent/                  # libidh_agent.so
 │   ├── CMakeLists.txt
 │   ├── src/
-│   │   ├── bootstrap/       # 双入口：JNI_OnLoad + idh_agent_start()
+│   │   ├── bootstrap/       # 双入口：JNI_OnLoad + adh_agent_start()（legacy idh_agent_start alias）
 │   │   ├── rpc/
 │   │   ├── hooks/          # java / native / libc
 │   │   ├── dump/           # + art_dexfile/ (L.6 结构级捕获)
@@ -565,10 +565,10 @@ android-decrpthub/          # 仓库名；产品名 ADH (Android DecryptHub)
 
 ### 6.9.0 总原则（贯穿全案，评审门禁）
 
-1. **不为过测而耦合**：agent 里**不允许**出现任何 `com.idh.sandbox.*` 常量、**不允许**硬编码
+1. **不为过测而耦合**：agent 里**不允许**出现任何 `com.adh.sandbox.*` 常量、**不允许**硬编码
    `libjavacrypto.so` 之类目标模块名。所有 hook / trigger 目标一律来自 idhd 命令参数。
    sandbox 降级为"被 verify 脚本从**进程外**（UI / `am broadcast` / `am instrument`）驱动的真实目标"，
-   **agent 对它零知识**。`grep com.idh.sandbox agent/` = 0 是 CI 硬门禁。
+   **agent 对它零知识**。`grep com.adh.sandbox agent/` = 0 是 CI 硬门禁。
 2. **不胡乱兜底（fail-loud）**：符号找不到、hook 装不上、缓冲溢出、方法体带 `try` 解不了、
    cdex/041 拆不动——一律**显式报错**并把原因/计数上报 UI，**绝不**返回 `ok:true replaced:0`
    或虚高恢复率。删除所有乐观硬编码标志（如 `minimalModeAvailable:true`、
@@ -597,7 +597,7 @@ android-decrpthub/          # 仓库名；产品名 ADH (Android DecryptHub)
 | 版本 | 内容 | 验收信号（pass/fail） |
 |------|------|----------------------|
 | **v2.0** | WS-D 协议重写 + WS-C 环形缓冲/落盘/如实上报 | dump 16MB region 字节级 sha256 一致；超长命令完整解析；高频驱动 1000/s×10s，`produced` + `dropped` 如实上报（旧实现静默丢 ~9900 却显示成功） |
-| **v2.1** | WS-B 去耦合（已基本完成）+ 原生 Signature/KDF/AEAD 覆盖扩展（GOT hook，不依赖 LSPlant） | `grep com.idh.sandbox agent/` = 0；EVP_PKEY_sign/verify/encrypt/decrypt、PKCS5_PBKDF2_HMAC/HKDF/EVP_PBE_scrypt、EVP_AEAD_CTX_seal/open 全部装上并在 sandbox 触发中各命中 ≥1 次；capture_start 回包对每个新符号如实报告装上/未装上（非 ok:true replaced:0） |
+| **v2.1** | WS-B 去耦合（已基本完成）+ 原生 Signature/KDF/AEAD 覆盖扩展（GOT hook，不依赖 LSPlant） | `grep com.adh.sandbox agent/` = 0；EVP_PKEY_sign/verify/encrypt/decrypt、PKCS5_PBKDF2_HMAC/HKDF/EVP_PBE_scrypt、EVP_AEAD_CTX_seal/open 全部装上并在 sandbox 触发中各命中 ≥1 次；capture_start 回包对每个新符号如实报告装上/未装上（非 ok:true replaced:0） |
 | **v2.2** | WS-A native inline 后端（Dobby by-address） | sandbox 静态链接的 BoringSSL ABI-shaped native crypto 直接调用（无 GOT slot）被函数入口 hook 捕获；同进程连续两次调用均命中且原 trampoline 返回正确结果 |
 | **v2.3** | WS-F 持久索引 + 深解析 + 反射 | 多 dex 建 SQLite 索引后 string/field/method→callers < 250ms；重复 SHA 命中缓存；一条 `Class.forName` 反射链被静态连出，并可由 REST/MCP 查询 |
 | **v2.4** | WS-E 脱壳二代 + try/catch + cdex/041 | 带 `try` 方法字节级重建一致；cdex→标准 dex 过 dexdump/verifier（**需样本，否则 PENDING**） |
@@ -616,7 +616,7 @@ android-decrpthub/          # 仓库名；产品名 ADH (Android DecryptHub)
 - [ ] 符号/参数缺失 → 拒绝执行，**禁止**用 0/猜测硬跑
 - [ ] 索引陈旧 → 重建 + 告警，**禁止**返回旧结果
 - [ ] 删除所有乐观硬编码常量标志
-- [ ] `agent/` 内 `com.idh.sandbox` 常量 = 0，`libjavacrypto` 等目标模块名不硬编码
+- [ ] `agent/` 内 `com.adh.sandbox` 常量 = 0，`libjavacrypto` 等目标模块名不硬编码
 
 ---
 
@@ -627,10 +627,10 @@ android-decrpthub/          # 仓库名；产品名 ADH (Android DecryptHub)
 
 **维度 1 加密覆盖**：够 demo 不够实战。缺 ① **国密 SM2/SM3/SM4**（国内 App 大量使用，最该补）；
 ② **非对称真实抓取**（native 无 `EVP_PKEY_sign/verify/encrypt/decrypt`、`RSA_*`、`EC_POINT_mul`；
-Java `IdhSecurity` 只包 Cipher/Mac/MessageDigest，**没包 `Signature`** → RSA 签名/ECDSA 的 key+待签数据抓不到）；
+Java `AdhSecurity` 只包 Cipher/Mac/MessageDigest，**没包 `Signature`** → RSA 签名/ECDSA 的 key+待签数据抓不到）；
 ③ **KDF**（PBKDF2/HKDF/scrypt/bcrypt/Argon2——"key 从哪来"）；④ **AEAD**（GCM tag / ChaCha20-Poly1305 / `EVP_AEAD_*`）；
 ⑤ 流/老算法（RC4/Blowfish/独立 DES/ChaCha 常量）；⑥ 白盒（大查找表特征）。
-`IdhSecurity` 是**定长算法数组 + 在 sandbox 而非 agent**，不在列表就漏、可被显式 provider 绕过、真实目标里根本没这个 provider。
+`AdhSecurity` 是**定长算法数组 + 在 sandbox 而非 agent**，不在列表就漏、可被显式 provider 绕过、真实目标里根本没这个 provider。
 
 **维度 2 真机崩溃/闪退**：① **`capture()` 在目标加密/TLS 线程里 `usleep` 背压**（ring 满等 3×150µs 再丢）+ 每次两次
 mutex 往返 → 给目标注入可测延迟（时序反调试面 + 高频 ANR），**应改无锁/非阻塞写入、满即计数、绝不阻塞目标线程**；
@@ -647,8 +647,8 @@ disasm 只 `llvm-objdump`（文件型 so），缺 **Capstone 内存镜像反汇�
 ⑥ MCP：分析类偏弱——AI 要"分析内存指令/trace"只能拿裸字节 + 文件 so，**链条断在内存指令这一环**。
 
 **维度 4 控制台新手友好**：详情好，但主操作有硬编码坑。① **"一键脱壳"前端写死 sandbox 包名**
-（`index.html` `triggerAllPrefix:['com.idh.sandbox.TriggerProbe']`）→ 新手对真实 App 点它**静默空转还显示"会话完成"**（最坑）；
-② 隐私/反调试/抓包无一等公民面板；③ "雷达/关联/TLS 明文"三按钮调的专用端点内部写死 `com.idh.sandbox.*`；
+（`index.html` `triggerAllPrefix:['com.adh.sandbox.TriggerProbe']`）→ 新手对真实 App 点它**静默空转还显示"会话完成"**（最坑）；
+② 隐私/反调试/抓包无一等公民面板；③ "雷达/关联/TLS 明文"三按钮调的专用端点内部写死 `com.adh.sandbox.*`；
 ④ 内存/原生/DEX 面板"填参 → 裸 JSON"，缺"目标接入/注入"引导。
 
 **优先级清单（插进 v2.x）**：

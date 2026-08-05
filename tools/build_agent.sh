@@ -27,4 +27,4 @@ mkdir -p "$DEST"
 cp "$SO" "$DEST/libidh_agent.so"
 echo ">> built $(ls -la "$SO" | awk '{print $5}') bytes -> $DEST/libidh_agent.so"
 "$READELF" --dyn-syms "$SO" \
-  | grep -iE "idh_agent_start|JNI_OnLoad" | awk '{print "   export:", $8}'
+  | grep -iE "adh_agent_start|idh_agent_start|JNI_OnLoad" | awk '{print "   export:", $8}'

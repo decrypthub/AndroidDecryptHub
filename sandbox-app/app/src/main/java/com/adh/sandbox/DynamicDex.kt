@@ -1,4 +1,4 @@
-package com.idh.sandbox
+package com.adh.sandbox
 
 import android.util.Base64
 import android.util.Log
@@ -11,7 +11,7 @@ import java.nio.ByteBuffer
 // discover it generically (by walking live threads' loaders), then dump the dex
 // straight from ART's DexFile and match its sha256 to this known content.
 object DynamicDex {
-    private const val TAG = "IDH_SANDBOX"
+    private const val TAG = "ADH_SANDBOX"
 
     // 728-byte dex from com.idh.probe.Probe (d8 --release --min-api 26)
     private const val PROBE_DEX_B64 =

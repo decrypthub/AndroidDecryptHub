@@ -13,10 +13,10 @@ set +e
 OUT="$(node - "$HTTP" <<'EOF'
 const http=process.argv[2]; const base=`http://127.0.0.1:${http}`;
 const agents=await (await fetch(`${base}/api/agents`)).json();
-const a=agents.filter(x=>x.package==='com.idh.sandbox'&&x.online).sort((x,y)=>y.connectedAt-x.connectedAt)[0];
+const a=agents.filter(x=>x.package==='com.adh.sandbox'&&x.online).sort((x,y)=>y.connectedAt-x.connectedAt)[0];
 if(!a){console.log('NO_AGENT');console.log('RESULT:FAIL');process.exit(0);}
 const r=await (await fetch(`${base}/api/unpack/run`,{method:'POST',headers:{'content-type':'application/json'},
-  body:JSON.stringify({session:a.sessionId,triggerClasses:['com.idh.sandbox.TriggerProbe'],triggerMethod:'safeCompute',level:3})})).json();
+  body:JSON.stringify({session:a.sessionId,triggerClasses:['com.adh.sandbox.TriggerProbe'],triggerMethod:'safeCompute',level:3})})).json();
 if(r.error){console.log('ERR',r.error);console.log('RESULT:FAIL');process.exit(0);}
 console.log(`phases=${(r.phases||[]).join('>')} t0=${r.t0Count} t1=${r.t1Count} triggered=${(r.triggered||[]).length} dexes=${(r.dexes||[]).length}`);
 const tp=(r.triggered||[]).find(t=>String(t.class).includes('TriggerProbe'));

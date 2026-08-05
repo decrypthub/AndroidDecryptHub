@@ -33,17 +33,17 @@ for (const file of fs.readdirSync(dexDir).filter(x => /^classes\d*\.dex$/.test(x
   const b64 = fs.readFileSync(path.join(dexDir, file)).toString('base64');
   const first = await post('/api/dex/index', { b64 });
   const second = await post('/api/dex/index', { b64 });
-  const search = await post('/api/dex/index/search', { sha: first.sha, query: 'com.idh.sandbox.JavaCrypto' });
+  const search = await post('/api/dex/index/search', { sha: first.sha, query: 'com.adh.sandbox.JavaCrypto' });
   const symbols = await post('/api/dex/index/search', { sha: first.sha, query: 'JavaCrypto' });
   const invoke = await post('/api/dex/index/search', { sha: first.sha, query: 'forName' });
   const refs = await post('/api/dex/index/reflections', { sha: first.sha });
   totalMethods += first.counts.methods || 0;
   totalSkipped += first.counts.skipped || 0;
   maxCachedMs = Math.max(maxCachedMs, second.elapsedMs || 0);
-  const reflection = (refs.reflections || []).find(x => x.targetDescriptor === 'Lcom/idh/sandbox/JavaCrypto;' && x.cls === 'Lcom/idh/sandbox/ReflectionProbe;' && x.name === 'load');
-  const caller = (search.stringCallers || []).find(x => x.cls === 'Lcom/idh/sandbox/ReflectionProbe;' && x.name === 'load');
+  const reflection = (refs.reflections || []).find(x => x.targetDescriptor === 'Lcom/adh/sandbox/JavaCrypto;' && x.cls === 'Lcom/adh/sandbox/ReflectionProbe;' && x.name === 'load');
+  const caller = (search.stringCallers || []).find(x => x.cls === 'Lcom/adh/sandbox/ReflectionProbe;' && x.name === 'load');
   const fieldAccess = (symbols.fields || []).find(x => /JavaCrypto/.test(x.cls) && x.access && x.callerClass);
-  const invokeCaller = (invoke.callers || []).find(x => x.calleeName === 'forName' && x.callerClass === 'Lcom/idh/sandbox/ReflectionProbe;' && x.callerName === 'load');
+  const invokeCaller = (invoke.callers || []).find(x => x.calleeName === 'forName' && x.callerClass === 'Lcom/adh/sandbox/ReflectionProbe;' && x.callerName === 'load');
   if (reflection && caller && fieldAccess && invokeCaller) hit = { file, sha: first.sha, reflection, queryMs: Math.max(search.elapsedMs, symbols.elapsedMs, invoke.elapsedMs), cached: second.cached };
   console.log(`${file}: methods=${first.counts.methods} skipped=${first.counts.skipped} cached=${second.cached} cachedMs=${second.elapsedMs}`);
 }
@@ -53,9 +53,9 @@ if (hit) {
   const listed = await rpc('tools/list', {});
   const names = (listed.result?.tools || []).map(x => x.name);
   mcpTools = ['dex_index', 'dex_index_search', 'dex_reflections'].every(x => names.includes(x));
-  const called = await rpc('tools/call', { name: 'dex_index_search', arguments: { sha: hit.sha, query: 'com.idh.sandbox.JavaCrypto' } });
+  const called = await rpc('tools/call', { name: 'dex_index_search', arguments: { sha: hit.sha, query: 'com.adh.sandbox.JavaCrypto' } });
   const text = called.result?.content?.[0]?.text || '';
-  mcpHit = /Lcom\/idh\/sandbox\/ReflectionProbe;/.test(text) && /Lcom\/idh\/sandbox\/JavaCrypto;/.test(text);
+  mcpHit = /Lcom\/adh\/sandbox\/ReflectionProbe;/.test(text) && /Lcom\/adh\/sandbox\/JavaCrypto;/.test(text);
 }
 const skipRate = totalMethods ? totalSkipped / totalMethods : 1;
 console.log(`totalMethods=${totalMethods} skipped=${totalSkipped} skipRate=${(skipRate * 100).toFixed(3)}% maxCachedMs=${maxCachedMs}`);

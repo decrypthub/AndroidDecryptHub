@@ -70,8 +70,8 @@ for entry in "${SCRIPTS[@]}"; do
   fi
   # device scripts need the sandbox running + agent connected; (re)launch first
   if [ "$needs" = "device" ]; then
-    adb shell am force-stop com.idh.sandbox >/dev/null 2>&1
-    adb shell am start -n com.idh.sandbox/.MainActivity >/dev/null 2>&1; sleep 4
+    adb shell am force-stop com.adh.sandbox >/dev/null 2>&1
+    adb shell am start -n com.adh.sandbox/.MainActivity >/dev/null 2>&1; sleep 4
   fi
   if bash "tools/$name" >/tmp/vr.log 2>&1; then
     echo "PASS  $name"; pass=$((pass+1))

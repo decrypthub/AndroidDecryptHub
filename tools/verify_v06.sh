@@ -11,9 +11,9 @@ OUT="$(node - "$HTTP" <<'EOF'
 const http=process.argv[2]; const base=`http://127.0.0.1:${http}`;
 const POST=(p,b)=>fetch(`${base}${p}`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)}).then(r=>r.json());
 const agents=await (await fetch(`${base}/api/agents`)).json();
-const a=agents.filter(x=>x.package==='com.idh.sandbox'&&x.online).sort((x,y)=>y.connectedAt-x.connectedAt)[0];
+const a=agents.filter(x=>x.package==='com.adh.sandbox'&&x.online).sort((x,y)=>y.connectedAt-x.connectedAt)[0];
 if(!a){console.log('NO_AGENT');console.log('RESULT:FAIL');process.exit(0);}
-const r=await POST('/api/object/inspect',{session:a.sessionId,className:'com.idh.sandbox.HeapProbe',field:'sConfig'});
+const r=await POST('/api/object/inspect',{session:a.sessionId,className:'com.adh.sandbox.HeapProbe',field:'sConfig'});
 if(r.error){console.log('ERR',r.error);console.log('RESULT:FAIL');process.exit(0);}
 console.log(`objectClass=${r.objectClass} fields=${r.fieldCount}`);
 (r.fields||[]).forEach(f=>console.log(`  ${f.name} = ${f.value}`));
@@ -22,7 +22,7 @@ const readPass = r.ok && /HeapProbe\$Config/.test(r.objectClass)
   && fv.token==='IDH_TOKEN_abc123' && fv.count==='42' && fv.note==='live-object';
 
 // low-risk method invocation
-const inv=await POST('/api/object/invoke',{session:a.sessionId,className:'com.idh.sandbox.HeapProbe',field:'sConfig',method:'getToken'});
+const inv=await POST('/api/object/invoke',{session:a.sessionId,className:'com.adh.sandbox.HeapProbe',field:'sConfig',method:'getToken'});
 console.log(`invoke getToken() -> ${inv.result||inv.error}`);
 const invPass = inv.ok && inv.result==='IDH_TOKEN_abc123';
 

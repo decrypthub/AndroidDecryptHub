@@ -137,13 +137,17 @@ public:
             return;
         }
         using start_fn = void (*)();
-        auto start = reinterpret_cast<start_fn>(dlsym(handle, "idh_agent_start"));
+        auto start = reinterpret_cast<start_fn>(dlsym(handle, "adh_agent_start"));
         if (!start) {
-            LOGE("dlsym(idh_agent_start) failed: %s", dlerror());
-            return;
+            dlerror();
+            start = reinterpret_cast<start_fn>(dlsym(handle, "idh_agent_start"));
+            if (!start) {
+                LOGE("dlsym(adh_agent_start/idh_agent_start) failed: %s", dlerror());
+                return;
+            }
         }
         start();
-        LOGI("idh_agent_start() called");
+        LOGI("ADH agent start called");
     }
 
 private:

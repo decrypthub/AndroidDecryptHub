@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # v2.1 WS-A — LSPlant Java-method hook, deterministic smoke test.
 # Proves the ART method-hook backend works end-to-end: init LSPlant, hook a real Java method
-# (com.idh.sandbox.HookTarget.secret), call it, and assert the callback fired capturing the
+# (com.adh.sandbox.HookTarget.secret), call it, and assert the callback fired capturing the
 # real argument AND the original still returned its real value (backup.invoke worked — no
 # recursion, no crash). This is the foundation for algorithm-agnostic crypto/privacy hooks.
 # Exit 0 = PASS. Prereq: idhd running, device, sandbox running, tools/fetch_lsplant.sh ran.
@@ -13,7 +13,7 @@ set +e
 OUT="$(node - "$HTTP" <<'EOF'
 const [http]=process.argv.slice(2); const base=`http://127.0.0.1:${http}`;
 const agents=await (await fetch(`${base}/api/agents`)).json();
-const a=agents.filter(x=>x.package==='com.idh.sandbox'&&x.online).sort((x,y)=>y.connectedAt-x.connectedAt)[0];
+const a=agents.filter(x=>x.package==='com.adh.sandbox'&&x.online).sort((x,y)=>y.connectedAt-x.connectedAt)[0];
 if(!a){console.log('NO_AGENT');console.log('RESULT:FAIL');process.exit(0);}
 const r=await (await fetch(`${base}/api/java/hook_test?session=${a.sessionId}`)).json();
 if(r.error){console.log('ERR',r.error);console.log('RESULT:FAIL');process.exit(0);}

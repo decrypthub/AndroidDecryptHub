@@ -1,8 +1,9 @@
 // libidh_agent.so — bootstrap + command loop (v0.2)
 // Dual entry:
 //   - JNI_OnLoad()      : fires when a host loads us via System.loadLibrary (模拟注入 / gadget)
-//   - idh_agent_start() : exported C symbol for injector-driven load
-// Both connect to idhd over TCP (127.0.0.1:8761, via `adb reverse`), report identity +
+//   - adh_agent_start() : exported C symbol for injector-driven load
+//   - idh_agent_start() : legacy ABI alias
+// Both connect to the Host ADH Daemon over TCP (127.0.0.1:8761, via `adb reverse`), report identity +
 // an initial maps sample, then serve commands: maps / read (memory). Collect-only.
 
 #include <jni.h>
@@ -691,8 +692,8 @@ static void cmd_frame_echo(int fd, const char *id, const char *line) {
 
 // ---- Java method hook (WS-A, LSPlant) deterministic self-test -------------------------
 #ifdef IDH_HAVE_LSPLANT
-// Init LSPlant, hook the target's `secret(String)` method (className from idhd) via a
-// com.idh.agent.MethodHook callback, call it, and assert: init ok, hook installed, callback
+// Init LSPlant, hook the target's `secret(String)` method (className from the Host ADH Daemon) via a
+// com.adh.agent.MethodHook callback, call it, and assert: init ok, hook installed, callback
 // fired capturing the real arg, and the original still returned its real value (backup.invoke
 // worked, no recursion/crash).
 static void cmd_java_hook_test(int fd, const char *id, const char *className) {
@@ -707,7 +708,7 @@ static void cmd_java_hook_test(int fd, const char *id, const char *className) {
     jclass clsCls = (*env)->FindClass(env, "java/lang/Class");
     jclass strCls = (*env)->FindClass(env, "java/lang/String");
     jclass htCls  = className[0] ? idh_jni_load_app_class(env, className) : NULL;
-    jclass mhCls  = idh_jni_load_app_class(env, "com.idh.agent.MethodHook");
+    jclass mhCls  = idh_jni_load_app_class(env, "com.adh.agent.MethodHook");
     if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
     if (initOk && htCls && mhCls && clsCls && strCls) {
         jmethodID gdm = (*env)->GetMethodID(env, clsCls, "getDeclaredMethod", "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;");
@@ -763,7 +764,7 @@ static void cmd_java_hook_test(int fd, const char *id, const char *className) {
 }
 #endif
 
-// Read framed commands from idhd and dispatch.
+// Read framed commands from the Host ADH Daemon and dispatch.
 static void command_loop(int fd) {
     for (;;) {
         unsigned char hdr[5];
@@ -910,16 +911,16 @@ static void *agent_thread(void *arg) {
     for (int attempt = 0; attempt < 30; attempt++) {
         int fd = connect_idhd();
         if (fd >= 0) {
-            LOGI("connected to idhd %s:%d", IDH_HOST, IDH_PORT);
+            LOGI("connected to Host ADH Daemon %s:%d", IDH_HOST, IDH_PORT);
             report(fd);
             command_loop(fd);
             close(fd);
-            LOGI("idhd connection closed");
+            LOGI("Host ADH Daemon connection closed");
             return NULL;
         }
         usleep(500 * 1000);
     }
-    LOGE("could not reach idhd after retries (need: adb reverse tcp:%d tcp:%d)", IDH_PORT, IDH_PORT);
+    LOGE("could not reach Host ADH Daemon after retries (need: adb reverse tcp:%d tcp:%d)", IDH_PORT, IDH_PORT);
     return NULL;
 }
 
@@ -930,20 +931,30 @@ static void do_start(void) {
 }
 
 __attribute__((visibility("default")))
-void idh_agent_start(void) {
+void adh_agent_start(void) {
     strncpy(g_entry, "start", sizeof(g_entry) - 1);
     pthread_once(&g_once, do_start);
 }
 
-// If the target published its Java rich-capture reporter class via the "idh.reporter.class"
+__attribute__((visibility("default")))
+void idh_agent_start(void) {
+    adh_agent_start();
+}
+
+// If the target published its Java rich-capture reporter class via the "adh.reporter.class"
 // system property, bind idh_nreport_impl onto its nReport method (RegisterNatives). Target-
-// agnostic: the agent knows no class name — the target opts in by setting the property.
+// agnostic: the agent knows no class name. The IDH key remains a compatibility fallback.
 static void bind_reporter_from_prop(JNIEnv *env) {
     jclass sysCls = (*env)->FindClass(env, "java/lang/System");
     jmethodID getProp = sysCls ? (*env)->GetStaticMethodID(env, sysCls, "getProperty", "(Ljava/lang/String;)Ljava/lang/String;") : NULL;
     if (!getProp) { if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); return; }
-    jstring jkey = (*env)->NewStringUTF(env, "idh.reporter.class");
+    jstring jkey = (*env)->NewStringUTF(env, "adh.reporter.class");
     jstring jval = jkey ? (jstring)(*env)->CallStaticObjectMethod(env, sysCls, getProp, jkey) : NULL;
+    if (!jval) {
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        jkey = (*env)->NewStringUTF(env, "idh.reporter.class");
+        jval = jkey ? (jstring)(*env)->CallStaticObjectMethod(env, sysCls, getProp, jkey) : NULL;
+    }
     if (jval) {
         const char *cls = (*env)->GetStringUTFChars(env, jval, NULL);
         if (cls && cls[0]) { int ok = idh_capture_register_reporter(env, cls); LOGI("rich-capture reporter '%s' bind %s", cls, ok ? "ok" : "FAILED"); }
@@ -957,7 +968,7 @@ JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *reserved) {
     idh_jni_set_vm(vm);
     strncpy(g_entry, "jni_onload", sizeof(g_entry) - 1);
     LOGI("JNI_OnLoad — agent " AGENT_VER " starting");
-    // Bind the Java rich-capture reporter (if the target opted in via idh.reporter.class) HERE —
+    // Bind the Java rich-capture reporter (if the target opted in via adh.reporter.class) HERE —
     // before the target installs its JCE provider — so the binding is in place before any report
     // fires (a later bind would race the target's first crypto op and lose).
     JNIEnv *env = NULL;

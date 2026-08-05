@@ -1,4 +1,4 @@
-package com.idh.sandbox
+package com.adh.sandbox
 
 import android.app.Activity
 import android.content.ClipData
@@ -28,11 +28,11 @@ import org.json.JSONObject
 class MainActivity : Activity() {
 
     companion object {
-        private const val TAG = "IDH_SANDBOX"
+        private const val TAG = "ADH_SANDBOX"
         const val MOCK_MARKER = "IDH_MOCK_DEX_v1"
         const val MOCK_SIZE = 4096
 
-        // Web console (idhd) port. idhd runs on the HOST; the phone reaches it either via
+        // Web console port. Host ADH Daemon runs on the PC; the phone reaches it either via
         // `adb reverse tcp:8760` (127.0.0.1) or directly over Wi-Fi at the host's LAN IP.
         const val WEB_PORT = 8760
         const val LOCAL_URL = "http://127.0.0.1:$WEB_PORT"
@@ -57,7 +57,7 @@ class MainActivity : Activity() {
     }
 
     @Volatile private var polling = true
-    private var lanUrl: String = ""            // host LAN URL, discovered from idhd /health
+    private var lanUrl: String = ""            // host LAN URL, discovered from Host ADH Daemon /health
     private lateinit var urlLan: TextView
     private lateinit var reach: TextView
     private lateinit var logView: TextView
@@ -80,9 +80,9 @@ class MainActivity : Activity() {
 
         val loadStatus: String = try {
             // Publish our Java rich-capture reporter class so the agent (which knows no sandbox
-            // class name) can bind IdhReport.nReport via RegisterNatives at JNI_OnLoad — before
+            // class name) can bind AdhReport.nReport via RegisterNatives at JNI_OnLoad — before
             // we install the JCE provider below, so no report can race the binding.
-            System.setProperty("idh.reporter.class", "com.idh.sandbox.IdhReport")
+            System.setProperty("adh.reporter.class", "com.adh.sandbox.AdhReport")
             // Dobby (LSPlant's inline-hook backend) is statically linked into libidh_agent.so —
             // no separate .so to load.
             System.loadLibrary("idh_agent"); "agent: libidh_agent 已加载（模拟注入）"
@@ -92,8 +92,8 @@ class MainActivity : Activity() {
 
         // Java-layer crypto interception: interposing JCE provider captures algorithm/key/
         // IV/plaintext/ciphertext at the Cipher/Mac/MessageDigest API boundary (richer than
-        // the native EVP hook). Install AFTER the agent so IdhReport's native is bound.
-        IdhSecurity.install()
+        // the native EVP hook). Install AFTER the agent so AdhReport's native is bound.
+        AdhSecurity.install()
 
         // Drive a live crypto stream so the console's 加解密 panel fills itself.
         JavaCrypto.startLiveDriver()
@@ -343,7 +343,7 @@ class MainActivity : Activity() {
         }
     }
 
-    // ---- live reachability: poll idhd /health via the reverse tunnel ------
+    // ---- live reachability: poll Host ADH Daemon /health via the reverse tunnel ------
 
     private fun startHealthPolling() {
         Thread {
@@ -389,7 +389,7 @@ class MainActivity : Activity() {
         } else {
             urlLan.text = if (lanUrl.isNotEmpty()) lanUrl else "（等待控制台…）"
             reach.setTextColor(themeColor(com.google.android.material.R.attr.colorError))
-            reach.text = "● 未连接 —— 在电脑运行  bash tools/dev_up.sh  启动 idhd（并 adb reverse tcp:$WEB_PORT）"
+            reach.text = "● 未连接 —— 在电脑运行  bash tools/dev_up.sh  启动 Host ADH Daemon（并 adb reverse tcp:$WEB_PORT）"
         }
     }
 }

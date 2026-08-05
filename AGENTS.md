@@ -23,8 +23,9 @@ There is one plan. If something contradicts these docs, fix the docs in the same
 | **Host ADH Daemon** / `adhd` | 本机守护进程（`daemon/`，HTTP/WS/MCP/分析）；对外统一此称 |
 | **Device Daemon** | 手机侧作用域服务（`device/:daemon`，AIDL）；**不是** Host 分析进程 |
 | **ADH Manager** | 手机侧 Compose UI（`device/:manager`）；只管注入作用域 |
+| **ADH Sandbox** / `com.adh.sandbox` | 模拟注入与确定性验收宿主；不是产品目标包 |
 | **IDH** | iOS 参考项目（IOSDecryptHub / ios-decrypt-helper），仅作对照 |
-| `libidh_agent.so` / `idhd` / `idh_*` / `IDH_*` | 早期脚手架遗留的内部标识符；代码符号与环境变量别名仍可用，产品对外不称 IDH |
+| `libidh_agent.so` / `idhd` / `idh_*` / `IDH_*` | 早期脚手架遗留的兼容标识符；新入口用 `adh_agent_start`，旧代码符号与环境变量别名仍可用，产品对外不称 IDH |
 
 ## Architecture red line (do not cross)
 

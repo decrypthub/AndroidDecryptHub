@@ -25,7 +25,7 @@ Buffer.from(MARKER,'ascii').copy(exp,8);
 const expSha=crypto.createHash('sha256').update(exp).digest('hex');
 
 const agents=await P({path:'/api/agents'});
-const a=agents.filter(x=>x.package==='com.idh.sandbox'&&x.online).pop();
+const a=agents.filter(x=>x.package==='com.adh.sandbox'&&x.online).pop();
 if(!a){console.log('❌ no agent');console.log('RESULT:FAIL');process.exit(0);}
 
 // 1) search for the UNIQUE magic+marker sequence so the hit is exactly the buffer base

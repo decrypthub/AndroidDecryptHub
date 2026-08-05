@@ -9,11 +9,11 @@ verify_resolve_env
 
 # ensure a fresh agent.hello is recorded
 adb -s "$SERIAL" reverse tcp:8761 tcp:8761 >/dev/null 2>&1 || true
-adb -s "$SERIAL" shell am force-stop com.idh.sandbox >/dev/null 2>&1
-adb -s "$SERIAL" shell am start -n com.idh.sandbox/.MainActivity >/dev/null 2>&1; sleep 3
+adb -s "$SERIAL" shell am force-stop com.adh.sandbox >/dev/null 2>&1
+adb -s "$SERIAL" shell am start -n com.adh.sandbox/.MainActivity >/dev/null 2>&1; sleep 3
 
 before=$(curl -s "http://127.0.0.1:$HTTP/api/events?type=agent.hello")
-BEFORE_HAS=$(echo "$before" | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{try{const r=JSON.parse(d);process.stdout.write(String(r.events.filter(e=>e.data&&e.data.package==='com.idh.sandbox').length))}catch(e){process.stdout.write('0')}})")
+BEFORE_HAS=$(echo "$before" | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{try{const r=JSON.parse(d);process.stdout.write(String(r.events.filter(e=>e.data&&e.data.package==='com.adh.sandbox').length))}catch(e){process.stdout.write('0')}})")
 echo "agent.hello (sandbox) before restart: $BEFORE_HAS"
 
 # restart idhd -> must reload events from disk
@@ -22,7 +22,7 @@ PID=$(powershell.exe -NoProfile -Command "(Get-NetTCPConnection -LocalPort $HTTP
 sleep 1; ( cd "$ROOT/daemon" && node src/index.ts > /tmp/idhd.log 2>&1 & ); sleep 2
 
 after=$(curl -s "http://127.0.0.1:$HTTP/api/events?type=agent.hello")
-AFTER_HAS=$(echo "$after" | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{try{const r=JSON.parse(d);process.stdout.write(String(r.events.filter(e=>e.data&&e.data.package==='com.idh.sandbox').length))}catch(e){process.stdout.write('0')}})")
+AFTER_HAS=$(echo "$after" | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{try{const r=JSON.parse(d);process.stdout.write(String(r.events.filter(e=>e.data&&e.data.package==='com.adh.sandbox').length))}catch(e){process.stdout.write('0')}})")
 echo "agent.hello (sandbox) after restart (replayed from disk): $AFTER_HAS"
 
 # also confirm the jsonl file exists

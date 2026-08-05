@@ -176,17 +176,17 @@ export function pushCapture(entry: Capture): boolean {
 // it reads className/module/reportClass from each command and knows nothing about the target;
 // ADH Daemon supplies these sandbox defaults so its self-test endpoints work out of the box. A real
 // investigation overrides via ?class= / className. (This is the daemon side of the red line: the
-// grep-com.idh.sandbox-agent/=0 gate is about the .so, which stays clean.)
+// grep-com.adh.sandbox-agent/=0 gate is about the .so, which stays clean.)
 export const SANDBOX = {
-  net: 'com.idh.sandbox.Network', flow: 'com.idh.sandbox.CorrelatedFlow',
-  crypto: 'com.idh.sandbox.JavaCrypto', file: 'com.idh.sandbox.FileIO',
-  detect: 'com.idh.sandbox.Detection', javaHook: 'com.idh.sandbox.HookTarget',
+  net: 'com.adh.sandbox.Network', flow: 'com.adh.sandbox.CorrelatedFlow',
+  crypto: 'com.adh.sandbox.JavaCrypto', file: 'com.adh.sandbox.FileIO',
+  detect: 'com.adh.sandbox.Detection', javaHook: 'com.adh.sandbox.HookTarget',
   inlineModule: 'libidhdetect.so', inlineSymbol: 'idh_static_EVP_CipherUpdate',
   inlineMethod: 'staticCrypto',
 };
 // The persistent-hook target modules the agent should use. Sent with every capture_start so
 // the agent stays target-agnostic (no hardcoded modules). The Java rich-capture reporter class
-// is published by the TARGET via the "idh.reporter.class" system property (bound at JNI_OnLoad),
+// is published by the TARGET via the "adh.reporter.class" system property (bound at JNI_OnLoad),
 // not passed here — it must be bound before the target's JCE provider fires, i.e. before connect.
 export function captureModules() { return { cryptoModule: settings.capture.cryptoModule, fileModule: settings.capture.fileModule, sysModule: settings.capture.sysModule }; }
 

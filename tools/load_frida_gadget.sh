@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Load frida-gadget into the target (com.idh.sandbox) and auto-run a frida script — via the
+# Load frida-gadget into the target (com.adh.sandbox) and auto-run a frida script — via the
 # agent's load_so, no repackaging. Uses root (su) to place the files in an exec-allowed
 # path and fix the SELinux label. Internal test only.
 #
@@ -14,7 +14,7 @@
 set -euo pipefail
 GADGET="${1:?need path to frida-gadget arm64 .so}"
 SCRIPT="${2:?need path to a frida .js}"
-PKG="${3:-com.idh.sandbox}"
+PKG="${3:-com.adh.sandbox}"
 HTTP="${IDH_HTTP_PORT:-8760}"
 [ -f "$GADGET" ] || { echo "no gadget: $GADGET"; exit 1; }
 [ -f "$SCRIPT" ] || { echo "no script: $SCRIPT"; exit 1; }

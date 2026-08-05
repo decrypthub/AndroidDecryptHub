@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # v2.x Java rich-capture (decoupled JNI binding). The agent binds the target's reporter
-# (IdhReport.nReport) at JNI_OnLoad via RegisterNatives, using the class name the TARGET
-# publishes through the "idh.reporter.class" system property — the agent hardcodes no class
+# (AdhReport.nReport) at JNI_OnLoad via RegisterNatives, using the class name the TARGET
+# publishes through the "adh.reporter.class" system property — the agent hardcodes no class
 # name and carries no sandbox-specific JNI symbol. This test lets the sandbox's live crypto
 # driver run a few ops through the interposing JCE provider, then asserts rich Java-layer
 # captures (source=java carrying algorithm+key+iv+plaintext+ciphertext) reach /api/captures —

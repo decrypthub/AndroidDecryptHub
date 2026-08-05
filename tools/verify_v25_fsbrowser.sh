@@ -10,7 +10,7 @@ set +e
 OUT="$(node - "$HTTP" <<'EOF'
 const http=process.argv[2]; const base=`http://127.0.0.1:${http}`;
 const agents=await (await fetch(`${base}/api/agents`)).json();
-const a=agents.filter(x=>x.package==='com.idh.sandbox'&&x.online).sort((x,y)=>y.connectedAt-x.connectedAt)[0];
+const a=agents.filter(x=>x.package==='com.adh.sandbox'&&x.online).sort((x,y)=>y.connectedAt-x.connectedAt)[0];
 if(!a){console.log('NO_AGENT');console.log('RESULT:FAIL');process.exit(0);}
 // 1) list the app's own private data dir — it can always stat its home
 const dd=`/data/data/${a.package}`;

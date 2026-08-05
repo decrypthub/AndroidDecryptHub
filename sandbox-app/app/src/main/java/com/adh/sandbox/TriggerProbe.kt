@@ -1,4 +1,4 @@
-package com.idh.sandbox
+package com.adh.sandbox
 
 // Target for the active-trigger scheduler (P2). safeCompute() is a safe static no-arg
 // method the agent may invoke to force code paths (a refill-type shell would restore its
