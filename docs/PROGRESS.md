@@ -22,12 +22,13 @@
       · 策略（slice 1）：只进 scope 内应用主进程；永不进 `android`/`com.android.*`/`com.google.android.gms`/模块自身；**只对 ADH 自己的测试宿主**（sandbox / Manager）写 marker，第三方目标不留文件。
       · 验收：`tools/verify_v31_xposed.sh` 真机 PASS（靶子 `com.adh.manager`，非自加载 agent 的 sandbox）：marker `ADH_XPOSED_OK ... agent=1`、框架日志 `Loading legacy module com.adh.xposed` → `Loading class com.adh.xposed.AdhXposedEntry`、Host daemon 拿到 `entry=jni_onload` 会话并真的能执行命令（模块枚举 533 条）；脚本结束**恢复测试前状态**（本机现为 disabled + 空 scope）。
       · 待办：ADH Manager/Device Daemon 驱动框架 scope、多进程目标、注入中心里的后端选择。
+- [x] **修复：`verify_v27_zygisk.sh` 泄漏 Zygisk scope → 双 agent 抢 GOT 槽（2026-09-15）**：v27 把 `scope.json` 写成 `["com.adh.sandbox"]` 做 round-trip 后**不还原**，
+      于是后续每个 device 脚本的 sandbox 里都同时存在**两份 agent**：`/data/app/.../lib/arm64/libidh_agent.so`（应用自己 `System.loadLibrary`，新构建，tag `ADH_AGENT`）
+      + `/data/adb/modules/adh/libidh_agent.so`（Zygisk 注入，旧构建，tag `IDH_AGENT`），两份抢同一批 GOT 槽。日志实锤：`IDH_AGENT capture_start: evp=1 dig=1 …` 之后
+      `ADH_AGENT capture_start: evp=0 …`，紧接 `crypto_hook_test: replaced=0 triggered=1 captures=0`。
+      证据/验证：把 scope 清成空 allowlist 后进程里只剩 1 份 agent（maps 3 段而非 6 段），v04_crypto / v07 / v07_flow / v20_file / v26_cryptocoverage **全部转绿**。
+      修法：v27 现在快照原 scope 并在退出时还原（`trap restore_scope EXIT`；原本无文件则留空 allowlist），不再把 sandbox 永久留在 Zygisk 注入里。
 - [x] **模块 W 可选后端：Frida Gadget 直载 + 官方版本切换（2026-09-15，真机 aa165071）**：把"能不能加载 Frida JS hook"做成可选、可验收的独立路径 ——
-- [ ] **已知红：`verify_v05_detect.sh` FAIL（2026-09-15 回归，非本轮改动引入）**：`/api/detect/watch` 返回
-      `hooked={"ptrace":0,"access":0,"prop":0} triggered=true count=0` —— agent 在 `libadhdetect.so` 的 GOT 里一个槽都没替换掉，
-      但同一模块确实 import 这三个符号（`llvm-readelf --dyn-syms` 确认 ptrace/access/__system_property_get 均在 UND）。
-      设备上 `libadhdetect.so`/`libidh_agent.so` 的 sha256 与本地构建逐字节一致，故非部署过期；怀疑方向：`got.c` 只认"当前值 == 原始地址"的槽，
-      而这三个调用在触发前尚未解析（lazy binding，GOT 槽仍指向 PLT stub），于是 0 命中；v10_trace 走的另一条路径仍绿。
       下一步：读 `agent/src/hook/got.c` 的匹配逻辑 + 在真机上确认槽在 patch 时刻的实际值（本轮未修，避免与 gadget 改动混在一起）。
       `tools/fetch_frida_gadget.sh`（只走官方 release，版本/ABI 可切换，压缩包 sha256 固定在 `tools/frida_gadget_versions.json`）
       + `tools/compile_frida_script.sh`（**Frida 17 起 Java/ObjC 语言桥不再内置在 runtime**：用 esbuild 把 hook 与 `frida-java-bridge` 打成单文件；
@@ -40,8 +41,13 @@
         ④ 只等"线程起来"会假绿 —— 线程在配置解析之前就创建，必须用 `--marker` 这类端到端断言。
       · 验收：`tools/verify_v30_fridagadget.sh` 真机 PASS（官方 Gadget 17.18.0 arm64 → dlopen → 打包后的 Java hook 写 marker `ADH_FRIDA_GADGET_OK android=15`，目标进程存活）；
         实测开销：so 25,220,848 B、目标进程 +9 行 maps、+2 线程 —— 高开销后端，**默认关闭**，只有显式调用才启用。
-      · LSPosed/Xposed（下一片，未开工）：测试机已具备 **Vector v2.2 (3080)**（`/data/adb/lspd` 在位，可直接验收），设计见 `REQUIREMENTS.md §30.5` / `DEVELOPMENT_PLAN.md §6.10` —— 薄模块、不 vendor GPL 代码、作用域仍归 Manager/Device Daemon。
 
+- [ ] **已知红：`verify_v05_detect.sh` FAIL（机制已确认，不是随机 flake）**：`/api/detect/watch` 返回 `hooked={"ptrace":0,"access":0,"prop":0} triggered=true count=0`。
+      机制：`idh_got_replace` 只在模块可读段里找"当前值 == 原函数地址"的词，而这三个符号是 **lazy binding**（`.rela.plt` JUMP_SLOT，`llvm-readelf -r` 可见）；
+      sandbox 启动只做 `Detection.load()`（`MainActivity.kt:77`），真正调用 `ptrace/access/__system_property_get` 的 `Detection.run()` 只由 agent 触发 ——
+      即"先装 hook 再触发"，装 hook 时槽里还是 PLT stub → 匹配不到 → 0 命中 → detections=0。
+      候选修法：① 按**符号名**经 `.rela.plt` 的 r_info→dynsym 定位槽并替换（槽解析与否都成立，真机遇 lazy binding 的真实目标同样受益）；
+      ② 先触发一次预热再装 hook（会先真的执行一次 TRACEME，破坏"中和"语义）。倾向 ①：属于 agent `.so` 改动，需重编 + 重装 sandbox 后再验证。
 - [x] **Web UI 重皮 —— 移植 IDH「2026 workbench」设计语言（2026-07-24）**：`daemon/public/index.html` 整体重设，对齐 IDH 参考界面。
       · 深墨蓝 token 体系（`--bg:#06070a`/`--surface`/`--blue:#78a9ff` + 分类色）+ Inter 字体；品牌头 brand-lockup + `Runtime Console` + 状态 pill；tabbar 计数胶囊（active 蓝底）。
       · 三实时 tab（加解密/系统/网络）共用**过滤工具栏**：分类/搜索/输入大小 min-max/清除 + 暂停(冻结)/下载本类(导出 JSON)/清空本类；`makeCapPanel` 接入 per-panel 过滤态。
