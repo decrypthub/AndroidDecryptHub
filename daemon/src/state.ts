@@ -131,6 +131,12 @@ export function mergeSettings(patch: any): string[] {
     if (typeof c.cryptoModule === 'string') settings.capture.cryptoModule = c.cryptoModule.trim();
     if (typeof c.fileModule === 'string') settings.capture.fileModule = c.fileModule.trim();
     if (typeof c.sysModule === 'string') settings.capture.sysModule = c.sysModule.trim();
+    // Legacy rename compat: the sandbox detection lib is libadhdetect.so. A settings file
+    // written before the ADH naming pass (or a restored old config) still names
+    // libidhdetect.so, which matches no loaded module — the sys/detection hooks then install
+    // 0 slots and fail silently (that is exactly why v0.5 detect turned red). Upgrade only
+    // that exact legacy value; any other module name stays operator-controlled.
+    if (settings.capture.sysModule === 'libidhdetect.so') settings.capture.sysModule = 'libadhdetect.so';
     if (c.families && typeof c.families === 'object')
       for (const k of Object.keys(settings.capture.families))
         if (typeof c.families[k] === 'boolean') settings.capture.families[k] = c.families[k];

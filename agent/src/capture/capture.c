@@ -914,9 +914,13 @@ void idh_cmd_capture_start(int fd, const char *id, const char *cryptoModule, con
         void *op=idh_resolve_sym("libc.so","ptrace"), *oa=idh_resolve_sym("libc.so","access");
         void *og=idh_resolve_sym("libc.so","__system_property_get");
         if (op) g_orig_ptrace = (ptrace_t)op; if (oa) g_orig_access = (access_t)oa; if (og) g_orig_prop = (prop_t)og;
-        sp = op ? idh_got_replace(g_sys_mod, op, (void *)my_ptrace) : -1;
-        sa = oa ? idh_got_replace(g_sys_mod, oa, (void *)my_access) : -1;
-        sg = og ? idh_got_replace(g_sys_mod, og, (void *)my_prop)   : -1;
+        // Name-based install: the detection trio is exactly what a target may not have called
+        // yet, so its PLT slot can still be unbound and value-match finds nothing (measured on
+        // the sandbox: capture_start reported sys p=0 a=0 g=0 while libadhdetect.so genuinely
+        // imports all three). Resolve the slot from the module's own relocations instead.
+        sp = op ? idh_got_replace_by_name(g_sys_mod, "ptrace", (void *)my_ptrace) : -1;
+        sa = oa ? idh_got_replace_by_name(g_sys_mod, "access", (void *)my_access) : -1;
+        sg = og ? idh_got_replace_by_name(g_sys_mod, "__system_property_get", (void *)my_prop) : -1;
     }
     g_capture_on = 1;
     char cmj[80], fmj[80], smj[80];
@@ -983,9 +987,9 @@ void idh_cmd_capture_stop(int fd, const char *id) {
     }
     // restore persistent system/detection hooks
     if (g_sys_mod[0]) {
-        if (g_orig_ptrace) idh_got_replace(g_sys_mod, (void *)my_ptrace, (void *)g_orig_ptrace);
-        if (g_orig_access) idh_got_replace(g_sys_mod, (void *)my_access, (void *)g_orig_access);
-        if (g_orig_prop)   idh_got_replace(g_sys_mod, (void *)my_prop,   (void *)g_orig_prop);
+        if (g_orig_ptrace) idh_got_replace_by_name(g_sys_mod, "ptrace", (void *)g_orig_ptrace);
+        if (g_orig_access) idh_got_replace_by_name(g_sys_mod, "access", (void *)g_orig_access);
+        if (g_orig_prop)   idh_got_replace_by_name(g_sys_mod, "__system_property_get", (void *)g_orig_prop);
         g_sys_mod[0] = 0;
     }
     g_capture_on = 0;
@@ -1063,9 +1067,11 @@ void idh_cmd_detect_watch(int fd, const char *id, const char *module, const char
     void *oa = idh_resolve_sym("libc.so", "access");
     void *og = idh_resolve_sym("libc.so", "__system_property_get");
     g_orig_ptrace = (ptrace_t)op; g_orig_access = (access_t)oa; g_orig_prop = (prop_t)og;
-    int r1 = op ? idh_got_replace(mod, op, (void *)my_ptrace) : -1;
-    int r2 = oa ? idh_got_replace(mod, oa, (void *)my_access) : -1;
-    int r3 = og ? idh_got_replace(mod, og, (void *)my_prop) : -1;
+    // Name-based: the probe runs BEFORE the target has ever called these (that is the point —
+    // install then trigger), so a value-match on the still-lazily-bound PLT slot finds nothing.
+    int r1 = op ? idh_got_replace_by_name(mod, "ptrace", (void *)my_ptrace) : -1;
+    int r2 = oa ? idh_got_replace_by_name(mod, "access", (void *)my_access) : -1;
+    int r3 = og ? idh_got_replace_by_name(mod, "__system_property_get", (void *)my_prop) : -1;
     g_defeat_ptrace = 1;   // this one-shot probe defeats TRACEME (original behavior); reset after
     pthread_mutex_lock(&g_det_lock); g_ndets = 0; pthread_mutex_unlock(&g_det_lock);
 
@@ -1083,9 +1089,9 @@ void idh_cmd_detect_watch(int fd, const char *id, const char *module, const char
         idh_jni_detach(did);
     }
     // restore
-    if (r1 > 0) idh_got_replace(mod, (void *)my_ptrace, op);
-    if (r2 > 0) idh_got_replace(mod, (void *)my_access, oa);
-    if (r3 > 0) idh_got_replace(mod, (void *)my_prop, og);
+    if (r1 > 0) idh_got_replace_by_name(mod, "ptrace", op);
+    if (r2 > 0) idh_got_replace_by_name(mod, "access", oa);
+    if (r3 > 0) idh_got_replace_by_name(mod, "__system_property_get", og);
     g_defeat_ptrace = 0;
 
     size_t cap = 1 << 13, len = 0; char *out = malloc(cap); if (!out) { send_oom(fd, idj, "detect_watch"); return; }

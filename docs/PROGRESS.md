@@ -42,12 +42,15 @@
       · 验收：`tools/verify_v30_fridagadget.sh` 真机 PASS（官方 Gadget 17.18.0 arm64 → dlopen → 打包后的 Java hook 写 marker `ADH_FRIDA_GADGET_OK android=15`，目标进程存活）；
         实测开销：so 25,220,848 B、目标进程 +9 行 maps、+2 线程 —— 高开销后端，**默认关闭**，只有显式调用才启用。
 
-- [ ] **已知红：`verify_v05_detect.sh` FAIL（机制已确认，不是随机 flake）**：`/api/detect/watch` 返回 `hooked={"ptrace":0,"access":0,"prop":0} triggered=true count=0`。
-      机制：`idh_got_replace` 只在模块可读段里找"当前值 == 原函数地址"的词，而这三个符号是 **lazy binding**（`.rela.plt` JUMP_SLOT，`llvm-readelf -r` 可见）；
-      sandbox 启动只做 `Detection.load()`（`MainActivity.kt:77`），真正调用 `ptrace/access/__system_property_get` 的 `Detection.run()` 只由 agent 触发 ——
-      即"先装 hook 再触发"，装 hook 时槽里还是 PLT stub → 匹配不到 → 0 命中 → detections=0。
-      候选修法：① 按**符号名**经 `.rela.plt` 的 r_info→dynsym 定位槽并替换（槽解析与否都成立，真机遇 lazy binding 的真实目标同样受益）；
-      ② 先触发一次预热再装 hook（会先真的执行一次 TRACEME，破坏"中和"语义）。倾向 ①：属于 agent `.so` 改动，需重编 + 重装 sandbox 后再验证。
+- [x] **修复：`verify_v05_detect.sh` 转绿（2026-09-15）——两个独立缺陷叠加**：症状是 `/api/detect/watch` 恒返回 `hooked={"ptrace":0,"access":0,"prop":0} count=0`。
+      缺陷 ①（真凶）：daemon 持久化的 `idhd-data/settings.json` 里还是旧名 `sysModule: "libidhdetect.so"`，而设备上的库早就是 `libadhdetect.so` ——
+      agent 拿到的模块子串匹配不到任何已加载模块，**静默** 0 命中（`capture_start: sys[…] p=0 a=0 g=0`，日志里那个 `sys[libidhdetect.so]` 就是线索）。
+      修法：`state.ts::mergeSettings` 加 legacy 迁移，只把这一段的确切旧值升级为 `libadhdetect.so`（其余模块名仍归操作者配置）。代码默认值本来就对，是持久化设置把它盖住了。
+      缺陷 ②（即使模块名对了也不生效）：这三个符号在被 hook 时**还没被调用过**（sandbox 启动只做 `Detection.load()`，`Detection.run()` 由 agent 触发），
+      PLT 槽仍是 resolver stub，而 `idh_got_replace` 只认"槽值 == 原函数地址" → 仍旧 0 命中。修法：把检测三件套的安装/还原（`capture_start` 的 sys 段、
+      `capture_stop`、`idh_cmd_detect_watch` 安装+还原）改用现成的 `idh_got_replace_by_name`——从模块自己的 `.rela.plt`/`.rela.dyn`（含 APS2 打包 reloc）按符号名定位槽，槽解析与否都成立。
+      证据：修复后 `hooked={"ptrace":1,"access":1,"prop":1}`、`count=4`（debug/root×2/prop 全部观测到），agent 日志 `detect_watch: hooked p=1 a=1 g=1 triggered=1 detections=4`；
+      `tools/verify_v05_detect.sh` PASS，全量 `verify_all` 47/47。
 - [x] **Web UI 重皮 —— 移植 IDH「2026 workbench」设计语言（2026-07-24）**：`daemon/public/index.html` 整体重设，对齐 IDH 参考界面。
       · 深墨蓝 token 体系（`--bg:#06070a`/`--surface`/`--blue:#78a9ff` + 分类色）+ Inter 字体；品牌头 brand-lockup + `Runtime Console` + 状态 pill；tabbar 计数胶囊（active 蓝底）。
       · 三实时 tab（加解密/系统/网络）共用**过滤工具栏**：分类/搜索/输入大小 min-max/清除 + 暂停(冻结)/下载本类(导出 JSON)/清空本类；`makeCapPanel` 接入 per-panel 过滤态。
