@@ -1,7 +1,7 @@
 // C-ABI shim over LSPlant (ART Java-method hook). agent_main.c (pure C) calls these;
 // all C++ / LSPlant / JNI-object work lives in java_lsplant.cpp. See tools/fetch_lsplant.sh.
-#ifndef IDH_JAVA_LSPLANT_H
-#define IDH_JAVA_LSPLANT_H
+#ifndef ADH_JAVA_LSPLANT_H
+#define ADH_JAVA_LSPLANT_H
 #include <jni.h>
 #ifdef __cplusplus
 extern "C" {

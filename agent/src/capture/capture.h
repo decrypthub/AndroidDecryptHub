@@ -1,5 +1,5 @@
-#ifndef IDH_AGENT_CAPTURE_H
-#define IDH_AGENT_CAPTURE_H
+#ifndef ADH_AGENT_CAPTURE_H
+#define ADH_AGENT_CAPTURE_H
 
 #include <jni.h>
 

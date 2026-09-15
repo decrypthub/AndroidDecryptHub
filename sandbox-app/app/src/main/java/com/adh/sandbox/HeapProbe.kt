@@ -14,7 +14,7 @@ object HeapProbe {
 
     @JvmStatic
     fun init() {
-        sConfig = Config("IDH_TOKEN_abc123", 42, "live-object")
+        sConfig = Config("ADH_TOKEN_abc123", 42, "live-object")
         Log.i(TAG, "HeapProbe.sConfig initialized")
     }
 }

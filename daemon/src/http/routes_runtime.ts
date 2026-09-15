@@ -13,7 +13,7 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
       const kb = Math.max(1, Math.min(4096, Number(url.searchParams.get('kb') ?? 64)));
       const padLen = kb * 1024;
       const pad = 'A'.repeat(padLen);
-      const tail = 'IDH_FRAME_TAIL_v1';
+      const tail = 'ADH_FRAME_TAIL_v1';
       try {
         const r = await sendCmd(sid, 'frame_echo', { pad, tail, padLen }, 20_000);
         return send(r.ok ? 200 : 502, { ...r, sentPadLen: padLen, tailOk: r.tail === tail, notTruncated: (r.recvBytes ?? 0) > padLen });
@@ -60,8 +60,8 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
     { path: '/api/trace/qbdi', handler: async () => {
       const sid = pickSid(url.searchParams.get('session'));
       if (!sid) return send(400, { error: 'no session' });
-      const symLib = url.searchParams.get('symLib') ?? 'libidhdetect.so';
-      const symbol = url.searchParams.get('symbol') ?? 'idh_trace_target';
+      const symLib = url.searchParams.get('symLib') ?? 'libadhdetect.so';
+      const symbol = url.searchParams.get('symbol') ?? 'adh_trace_target';
       try { const r = await sendCmd(sid, 'qbdi_trace', { symLib, symbol }, 30_000); return send(r.ok ? 200 : 502, r); }
       catch (e) { return send(504, { error: (e as Error).message }); }
     } },
@@ -70,7 +70,7 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
       if (!sid) return send(400, { error: 'no session' });
       const symLib = url.searchParams.get('symLib') ?? 'libc.so';
       const symbol = url.searchParams.get('symbol') ?? 'access';
-      const hookModule = url.searchParams.get('hookModule') ?? 'libidhdetect.so';
+      const hookModule = url.searchParams.get('hookModule') ?? 'libadhdetect.so';
       try { const r = await withCaptureSuspended(sid, () => sendCmd(sid, 'trace_run', { symLib, symbol, hookModule, className: url.searchParams.get('class') ?? SANDBOX.detect }, 20_000)); return send(r.ok ? 200 : 502, r); }
       catch (e) { return send(504, { error: (e as Error).message }); }
     } },

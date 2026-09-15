@@ -27,6 +27,7 @@ There is one plan. If something contradicts these docs, fix the docs in the same
 | **ADH Sandbox** / `com.adh.sandbox` | 模拟注入与确定性验收宿主；不是产品目标包 |
 | **IDH** | iOS 参考项目（IOSDecryptHub / ios-decrypt-helper），仅作对照 |
 | `libidh_agent.so` / `idhd` / `idh_*` / `IDH_*` | 早期脚手架遗留的兼容标识符；新入口用 `adh_agent_start`，旧代码符号与环境变量别名仍可用，产品对外不称 IDH |
+- 新代码/新文案使用 `ADH` / `Host ADH Daemon` / `adhd` / `adh_*`。`libidh_agent.so`、`idh_agent_start`、`idh_*` 旧符号、`IDH_*` 环境变量和 `idhd` 仅作 legacy 兼容层，不得作为新产品名、新接口名或新日志 tag；IDH 仅指 iOS 参考项目。`com.idh.probe` / `IDH_PROBE_OK` 是 hash 绑定的固定 probe dex 例外。
 
 ## Architecture red line (do not cross)
 
@@ -66,7 +67,7 @@ Bash (Git Bash / WSL) — the `tools/*.sh` scripts assume it. `node 24` runs `.t
 ```bash
 # --- agent .so (C/NDK, arm64-v8a) — fails loud on compile error, stages into sandbox jniLibs
 bash tools/build_agent.sh          # -> agent/build/libidh_agent.so
-bash tools/build_detect.sh         # sandbox mock native lib libidhdetect.so
+bash tools/build_detect.sh         # sandbox mock native lib libadhdetect.so
 bash tools/fetch_qbdi.sh           # one-time: QBDI headers/.so (instruction trace); gitignored
 bash tools/fetch_lsplant.sh        # one-time: LSPlant + Dobby (Java-method hook, WS-A)
 

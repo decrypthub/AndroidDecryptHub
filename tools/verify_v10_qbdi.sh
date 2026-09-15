@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # v1.0 QBDI instruction-level dynamic trace (I.3). Traces the sandbox's known native
-# function idh_trace_target (sum i*3, i=0..4 -> 30) under QBDI's VM and asserts the
+# function adh_trace_target (sum i*3, i=0..4 -> 30) under QBDI's VM and asserts the
 # correct return value + a real per-instruction trace (>=10 insns with arm64 mnemonics).
 # Requires libQBDI.so bundled (tools/fetch_qbdi.sh). SKIPs cleanly if QBDI unavailable.
 # Exit 0 = PASS (or SKIP). Prereq: idhd, device, sandbox running with libQBDI bundled.

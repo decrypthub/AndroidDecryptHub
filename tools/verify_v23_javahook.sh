@@ -19,7 +19,7 @@ const r=await (await fetch(`${base}/api/java/hook_test?session=${a.sessionId}`))
 if(r.error){console.log('ERR',r.error);console.log('RESULT:FAIL');process.exit(0);}
 console.log(`initOk=${r.initOk} hooked=${r.hooked} fired=${r.fired} origOk=${r.origOk} hits=${r.hits} lastArg=${r.lastArg} ret=${r.ret}`);
 const pass = r.initOk===true && r.hooked===true && r.fired===true && r.origOk===true
-  && r.lastArg==='IDH_HOOK_PING' && r.ret==='REAL_SECRET:IDH_HOOK_PING';
+  && r.lastArg==='ADH_HOOK_PING' && r.ret==='REAL_SECRET:ADH_HOOK_PING';
 console.log(pass?'RESULT:PASS':'RESULT:FAIL');
 EOF
 )"

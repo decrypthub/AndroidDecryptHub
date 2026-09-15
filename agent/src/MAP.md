@@ -24,6 +24,10 @@
 | `trace/qbdi_trace.c` | Optional runtime-loaded QBDI instruction trace |
 
 ## Phase 3 extraction rule
+## Naming
+
+`libidh_agent.so` and `idh_agent_start` are legacy on-disk/ABI names kept for compatibility. New code, commands, logs, and UI copy use `ADH` / `adh_*`; do not add new `idh_*` identifiers. The fixed `com.idh.probe` / `IDH_PROBE_OK` fixture is intentionally hash-bound.
+
 
 Move one capability domain at a time and preserve command names and response schemas. A new module exposes a narrow header, is added to `agent/CMakeLists.txt`, and must pass `tools/build_agent.sh` plus its focused acceptance script before the next domain moves.
 

@@ -216,7 +216,7 @@ static void footprint_capture_baseline_once(void) {
     g_footprint_baseline_valid = footprint_scan(&g_footprint_baseline, NULL);
 }
 
-void idh_footprint_capture_baseline(void) {
+void adh_footprint_capture_baseline(void) {
     pthread_once(&g_footprint_once, footprint_capture_baseline_once);
 }
 
@@ -227,7 +227,7 @@ void idh_footprint_capture_baseline(void) {
 // Dobby/QBDI are known producers, ART JIT/other runtimes may also add one).
 void idh_cmd_compat_probe(int fd, const char *id) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
-    idh_footprint_capture_baseline();
+    adh_footprint_capture_baseline();
 
     int tracer = -1, seccomp = -1;
     FILE *status = fopen("/proc/self/status", "r");

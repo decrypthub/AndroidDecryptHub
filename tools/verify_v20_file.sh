@@ -10,7 +10,7 @@
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
 verify_resolve_env
-MARKER="IDH_FILE_MARKER_v1"; FNAME="adh_file_test.txt"
+MARKER="ADH_FILE_MARKER_v1"; FNAME="adh_file_test.txt"
 
 set +e
 OUT="$(node - "$HTTP" "$MARKER" "$FNAME" <<'EOF'

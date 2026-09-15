@@ -1,5 +1,5 @@
-#ifndef IDH_AGENT_GOT_H
-#define IDH_AGENT_GOT_H
+#ifndef ADH_AGENT_GOT_H
+#define ADH_AGENT_GOT_H
 
 #ifdef __cplusplus
 extern "C" {

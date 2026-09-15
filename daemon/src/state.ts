@@ -98,7 +98,7 @@ export function recordEvent(type: string, data: any) {
   catch (err) { log(`[events] 持久化失败 (${EVENTS_FILE}):`, (err as Error).message); }
 }
 
-// ---- user settings (persisted; tunable from the web 设置 panel; IDH-style) --------
+// ---- user settings (persisted; tunable from the web 设置 panel; ADH-style) --------
 // Only touches the ADH Daemon / web layer — the agent .so is never reconfigured from here.
 export const SETTINGS_FILE = join(DATA_DIR, 'settings.json');
 export interface Settings {
@@ -115,7 +115,7 @@ export const DEFAULT_SETTINGS: Settings = {
   // fileModule/sysModule: which loaded module's GOT the persistent file(open/read/…) and
   // system(ptrace/access/getprop) hooks patch. Defaults are the sandbox-backing modules for
   // self-test; override per real target (empty string = don't install that category's hooks).
-  capture: { enabled: true, autoDumpDex: true, retain: 1000, families: { digest: true, hmac: true, symmetric: true, asymmetric: true, tls: true, kdf: true, aead: true }, cryptoModule: 'libjavacrypto.so', fileModule: 'libjavacore.so', sysModule: 'libidhdetect.so' },
+  capture: { enabled: true, autoDumpDex: true, retain: 1000, families: { digest: true, hmac: true, symmetric: true, asymmetric: true, tls: true, kdf: true, aead: true }, cryptoModule: 'libjavacrypto.so', fileModule: 'libjavacore.so', sysModule: 'libadhdetect.so' },
   ui: { displayCap: 300 },
 };
 export let settings: Settings = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
@@ -181,7 +181,7 @@ export const SANDBOX = {
   net: 'com.adh.sandbox.Network', flow: 'com.adh.sandbox.CorrelatedFlow',
   crypto: 'com.adh.sandbox.JavaCrypto', file: 'com.adh.sandbox.FileIO',
   detect: 'com.adh.sandbox.Detection', javaHook: 'com.adh.sandbox.HookTarget',
-  inlineModule: 'libidhdetect.so', inlineSymbol: 'idh_static_EVP_CipherUpdate',
+  inlineModule: 'libadhdetect.so', inlineSymbol: 'adh_static_EVP_CipherUpdate',
   inlineMethod: 'staticCrypto',
 };
 // The persistent-hook target modules the agent should use. Sent with every capture_start so

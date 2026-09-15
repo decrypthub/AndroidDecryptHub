@@ -12,7 +12,7 @@
 #include <pthread.h>
 #include <android/log.h>
 
-#define LTAG "IDH_LSP"
+#define LTAG "ADH_LSP"
 #define LLOGI(...) __android_log_print(ANDROID_LOG_INFO,  LTAG, __VA_ARGS__)
 #define LLOGE(...) __android_log_print(ANDROID_LOG_ERROR, LTAG, __VA_ARGS__)
 

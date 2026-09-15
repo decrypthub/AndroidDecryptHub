@@ -29,7 +29,7 @@ class MainActivity : Activity() {
 
     companion object {
         private const val TAG = "ADH_SANDBOX"
-        const val MOCK_MARKER = "IDH_MOCK_DEX_v1"
+        const val MOCK_MARKER = "ADH_MOCK_DEX_v1"
         const val MOCK_SIZE = 4096
 
         // Web console port. Host ADH Daemon runs on the PC; the phone reaches it either via

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# v1.9 Settings / config / import-export (HOST-ONLY). Verifies the IDH-style 设置 surface:
+# v1.9 Settings / config / import-export (HOST-ONLY). Verifies the ADH-style 设置 surface:
 # /api/config roundtrip + disk persist, /api/settings export→import section-merge, /api/data/clear,
 # and the web page wires the modals. Exit 0 = PASS.
 set -uo pipefail

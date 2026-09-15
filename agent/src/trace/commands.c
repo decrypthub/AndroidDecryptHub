@@ -148,8 +148,8 @@ void idh_cmd_trace_run(int fd, const char *id, const char *symbol_library,
 
 void idh_cmd_qbdi_trace(int fd, const char *id, const char *symbol_library,
                         const char *symbol) {
-    const char *library = symbol_library[0] ? symbol_library : "libidhdetect.so";
-    const char *target_symbol = symbol[0] ? symbol : "idh_trace_target";
+    const char *library = symbol_library[0] ? symbol_library : "libadhdetect.so";
+    const char *target_symbol = symbol[0] ? symbol : "adh_trace_target";
     void *function = idh_resolve_sym(library, target_symbol);
     char idj[64];
     json_escape(id, idj, sizeof(idj));

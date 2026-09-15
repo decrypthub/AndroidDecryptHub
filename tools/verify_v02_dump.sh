@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # v0.2 dump acceptance: memory.search + region dump + sha256 dedup, verified against
 # the sandbox's deterministic mock dex (known content -> known sha256).
-#   1) search for marker "IDH_MOCK_DEX_v1" -> address
+#   1) search for marker "ADH_MOCK_DEX_v1" -> address
 #   2) dump 4096 bytes from (markerAddr - 8) [buffer base] -> file + sha256
 #   3) recompute expected sha256 of buildMockDexBytes() and assert equal
 #   4) dump again -> dedup=true (same sha, not rewritten)
@@ -18,7 +18,7 @@ const base = `http://127.0.0.1:${http}`;
 const P = (o)=>fetch(`${base}${o.path}`, o.body?{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(o.body)}:{}).then(r=>r.json());
 
 // Expected mock dex bytes (mirror of MainActivity.buildMockDexBytes)
-const MOCK=4096, MARKER='IDH_MOCK_DEX_v1';
+const MOCK=4096, MARKER='ADH_MOCK_DEX_v1';
 const exp=Buffer.alloc(MOCK); for(let i=0;i<MOCK;i++) exp[i]=i&0xff;
 Buffer.from([0x64,0x65,0x78,0x0a,0x30,0x33,0x35,0x00]).copy(exp,0);
 Buffer.from(MARKER,'ascii').copy(exp,8);

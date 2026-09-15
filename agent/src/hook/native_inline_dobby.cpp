@@ -4,7 +4,7 @@
 #include <pthread.h>
 #include <android/log.h>
 
-#define ITAG "IDH_INLINE"
+#define ITAG "ADH_INLINE"
 #define ILOGE(...) __android_log_print(ANDROID_LOG_ERROR, ITAG, __VA_ARGS__)
 
 static pthread_once_t g_dobby_once = PTHREAD_ONCE_INIT;

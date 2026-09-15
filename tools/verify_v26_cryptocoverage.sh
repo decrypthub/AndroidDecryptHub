@@ -116,9 +116,9 @@ const sigTbsHit = sigList.filter(x=>x.algo==='RSA/EC 签名'&&x.op==='待签名�
 // Assert on "the product captured the plaintext, via whichever channel actually fired".
 const aeadPtHit = aeadList.filter(x=>(x.algo==='AEAD 加密(GCM/ChaCha20-Poly1305)'&&x.op==='明文')||x.source==='java');
 
-const sigMarker  = await hasMarker(sigTbsHit, 'IDH_SIGN_TBS_v1');
-const aeadMarker = await hasMarker(aeadPtHit, 'IDH_AEAD_PLAINTEXT_v1');
-console.log(`markers: sigTbs(IDH_SIGN_TBS_v1)=${sigMarker} aeadPt(IDH_AEAD_PLAINTEXT_v1)=${aeadMarker}`);
+const sigMarker  = await hasMarker(sigTbsHit, 'ADH_SIGN_TBS_v1');
+const aeadMarker = await hasMarker(aeadPtHit, 'ADH_AEAD_PLAINTEXT_v1');
+console.log(`markers: sigTbs(ADH_SIGN_TBS_v1)=${sigMarker} aeadPt(ADH_AEAD_PLAINTEXT_v1)=${aeadMarker}`);
 
 const pass = sigHit.length>=1 && aeadHit.length>=1 && sigMarker && aeadMarker;
 console.log(pass?'RESULT:PASS':'RESULT:FAIL');

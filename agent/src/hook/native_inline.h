@@ -1,5 +1,5 @@
-#ifndef IDH_NATIVE_INLINE_H
-#define IDH_NATIVE_INLINE_H
+#ifndef ADH_NATIVE_INLINE_H
+#define ADH_NATIVE_INLINE_H
 
 #ifdef __cplusplus
 extern "C" {

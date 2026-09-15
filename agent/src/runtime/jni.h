@@ -1,5 +1,5 @@
-#ifndef IDH_AGENT_RUNTIME_JNI_H
-#define IDH_AGENT_RUNTIME_JNI_H
+#ifndef ADH_AGENT_RUNTIME_JNI_H
+#define ADH_AGENT_RUNTIME_JNI_H
 
 #include <jni.h>
 

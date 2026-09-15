@@ -1,5 +1,5 @@
-#ifndef IDH_AGENT_TRACE_COMMANDS_H
-#define IDH_AGENT_TRACE_COMMANDS_H
+#ifndef ADH_AGENT_TRACE_COMMANDS_H
+#define ADH_AGENT_TRACE_COMMANDS_H
 
 #ifdef __cplusplus
 extern "C" {

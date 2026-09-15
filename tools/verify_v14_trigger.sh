@@ -25,7 +25,7 @@ const danger=await trig('deleteAll',3);
 console.log(`danger invoke: invoked=${danger.invoked} skipped=${danger.skipped} reason=${JSON.stringify(danger.reason)}`);
 
 const pass = load.loaded===true
-  && safe.invoked===true && String(safe.result).includes('IDH_TRIGGER_OK')
+  && safe.invoked===true && String(safe.result).includes('ADH_TRIGGER_OK')
   && danger.invoked===false && danger.skipped===true;
 console.log(pass?'RESULT:PASS':'RESULT:FAIL');
 EOF

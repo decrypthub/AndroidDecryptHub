@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the sandbox's mock native detection lib (libidhdetect.so) and stage it
+# Build the sandbox's mock native detection lib (libadhdetect.so) and stage it
 # into the sandbox jniLibs. Separate from the agent; a target-side native lib.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/env.sh"
@@ -10,5 +10,5 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/env.sh"
 "$CMAKE" --build "$ROOT/sandbox-native/build" >/dev/null
 DEST="$ROOT/sandbox-app/app/src/main/jniLibs/$ABI"
 mkdir -p "$DEST"
-cp "$ROOT/sandbox-native/build/libidhdetect.so" "$DEST/libidhdetect.so"
-echo ">> built libidhdetect.so -> $DEST"
+cp "$ROOT/sandbox-native/build/libadhdetect.so" "$DEST/libadhdetect.so"
+echo ">> built libadhdetect.so -> $DEST"

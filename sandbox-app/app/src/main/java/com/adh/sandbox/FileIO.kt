@@ -12,7 +12,7 @@ import java.io.FileOutputStream
 object FileIO {
     private const val TAG = "ADH_SANDBOX"
     private const val FILE_NAME = "adh_file_test.txt"
-    const val MARKER = "IDH_FILE_MARKER_v1"
+    const val MARKER = "ADH_FILE_MARKER_v1"
 
     @JvmStatic
     fun run(): String = runWith("$MARKER 订单号=A20260714 金额=199.00元")

@@ -1,4 +1,4 @@
-// libidhdetect.so — a mock "anti-analysis" native lib for the sandbox.
+// libadhdetect.so — a mock "anti-analysis" native lib for the sandbox.
 // Mimics what evasive/gray-market apps do in native code (to dodge Java hooks):
 // debugger detection (ptrace TRACEME + /proc TracerPid), root detection (su paths),
 // and property checks (ro.debuggable). The IDH agent GOT-hooks these libc calls to
@@ -12,12 +12,12 @@
 #include <sys/system_properties.h>
 #include <android/log.h>
 
-#define TAG "IDH_DETECT"
+#define TAG "ADH_DETECT"
 
 // A "stripped native crypto" signature target for the H.4 constant scan: the real
 // AES forward S-box + a Base64 alphabet. Marked volatile-used in run() so the
 // linker keeps them (mimics an app that does crypto in native without symbols).
-const unsigned char IDH_AES_SBOX[256] = {
+const unsigned char ADH_AES_SBOX[256] = {
   0x63,0x7c,0x77,0x7b,0xf2,0x6b,0x6f,0xc5,0x30,0x01,0x67,0x2b,0xfe,0xd7,0xab,0x76,
   0xca,0x82,0xc9,0x7d,0xfa,0x59,0x47,0xf0,0xad,0xd4,0xa2,0xaf,0x9c,0xa4,0x72,0xc0,
   0xb7,0xfd,0x93,0x26,0x36,0x3f,0xf7,0xcc,0x34,0xa5,0xe5,0xf1,0x71,0xd8,0x31,0x15,
@@ -35,11 +35,11 @@ const unsigned char IDH_AES_SBOX[256] = {
   0xe1,0xf8,0x98,0x11,0x69,0xd9,0x8e,0x94,0x9b,0x1e,0x87,0xe9,0xce,0x55,0x28,0xdf,
   0x8c,0xa1,0x89,0x0d,0xbf,0xe6,0x42,0x68,0x41,0x99,0x2d,0x0f,0xb0,0x54,0xbb,0x16,
 };
-const char IDH_B64_ALPHABET[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const char ADH_B64_ALPHABET[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 // A DIRECT syscall (gettid, nr 178) via `svc #0`, bypassing libc — the exact
 // evasion the E.9 scanner locates. Not marked static so it isn't inlined away.
-long idh_direct_gettid(void) {
+long adh_direct_gettid(void) {
     long ret;
     __asm__ volatile("mov x8, #178\n\t svc #0\n\t mov %0, x0" : "=r"(ret) : : "x8", "x0", "memory");
     return ret;
@@ -50,7 +50,7 @@ long idh_direct_gettid(void) {
 // replacement cannot observe it. A real target may replace this with a statically linked
 // BoringSSL update routine using the same five-argument ABI.
 __attribute__((noinline, visibility("default")))
-int idh_static_EVP_CipherUpdate(void *ctx, unsigned char *out, int *outl,
+int adh_static_EVP_CipherUpdate(void *ctx, unsigned char *out, int *outl,
                                 const unsigned char *in, int inl) {
     (void)ctx;
     if (!out || !outl || !in || inl < 0) return 0;
@@ -61,14 +61,14 @@ int idh_static_EVP_CipherUpdate(void *ctx, unsigned char *out, int *outl,
 
 JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_staticCrypto(JNIEnv *env, jclass clazz) {
     (void)env; (void)clazz;
-    static const unsigned char marker[] = "IDH_INLINE_CRYPTO_v1";
+    static const unsigned char marker[] = "ADH_INLINE_CRYPTO_v1";
     unsigned char out[sizeof(marker)]; int outl = 0;
-    return idh_static_EVP_CipherUpdate(NULL, out, &outl, marker, (int)sizeof(marker) - 1);
+    return adh_static_EVP_CipherUpdate(NULL, out, &outl, marker, (int)sizeof(marker) - 1);
 }
 
 // Deterministic target for QBDI instruction trace: sum i*3 for i in 0..4 -> 30.
 // (volatile prevents constant-folding so QBDI sees real loop instructions.)
-int idh_trace_target(void) {
+int adh_trace_target(void) {
     volatile int s = 0;
     for (volatile int i = 0; i < 5; i++) s += i * 3;
     return s;   // 0+3+6+9+12 = 30
@@ -100,9 +100,9 @@ JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_run(JNIEnv *env, jclass cl
     if (prop[0] == '1') flags |= 16;
 
     // keep the crypto-constant tables + direct-syscall from being stripped
-    volatile unsigned int sink = IDH_AES_SBOX[flags & 0xff] ^ (unsigned char)IDH_B64_ALPHABET[flags & 0x3f];
+    volatile unsigned int sink = ADH_AES_SBOX[flags & 0xff] ^ (unsigned char)ADH_B64_ALPHABET[flags & 0x3f];
     flags |= (sink & 0);
-    if (idh_direct_gettid() < 0) flags |= 0x100;   // reference the svc site
+    if (adh_direct_gettid() < 0) flags |= 0x100;   // reference the svc site
 
     __android_log_print(ANDROID_LOG_INFO, TAG, "detections ran: ptrace=%ld debuggable=%s flags=0x%x", pr, prop, flags);
     return flags;

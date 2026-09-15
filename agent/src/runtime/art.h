@@ -1,5 +1,5 @@
-#ifndef IDH_AGENT_RUNTIME_ART_H
-#define IDH_AGENT_RUNTIME_ART_H
+#ifndef ADH_AGENT_RUNTIME_ART_H
+#define ADH_AGENT_RUNTIME_ART_H
 
 #ifdef __cplusplus
 extern "C" {

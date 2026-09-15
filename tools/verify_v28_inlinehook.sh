@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # v2.2 WS-A native inline hook acceptance. The sandbox JNI bridge calls the target function
-# directly inside libidhdetect.so, so there is no imported GOT slot to replace. Dobby must
+# directly inside libadhdetect.so, so there is no imported GOT slot to replace. Dobby must
 # patch the function entry, preserve the original trampoline, capture the known plaintext,
 # and remain stable across an idempotent second call in the same process. Exit 0 = PASS.
 set -uo pipefail
@@ -20,7 +20,7 @@ let pass=true;
 for(const [i,r] of results.entries()){
   const b=r.body;
   const hits=(b.captures||[]).filter(x=>x.func==='INLINE_EVP_CipherUpdate');
-  const marker=hits.some(x=>(x.ascii||'').includes('IDH_INLINE_CRYPTO_v1'));
+  const marker=hits.some(x=>(x.ascii||'').includes('ADH_INLINE_CRYPTO_v1'));
   console.log(`run=${i+1} status=${r.status} ok=${b.ok} hooked=${b.hooked} installed=${b.installed} triggered=${b.triggered} result=${b.result} captures=${b.captureCount} marker=${marker} error=${JSON.stringify(b.error)}`);
   pass&&=r.status===200&&b.ok===true&&b.hooked===true&&b.triggered===true&&b.result===1&&hits.length===1&&marker;
 }

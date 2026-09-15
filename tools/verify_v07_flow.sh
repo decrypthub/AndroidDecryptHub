@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # v0.7 network<->crypto correlation (取证闭环). Hooks EVP_CipherUpdate + SSL_write,
 # triggers an encrypt-then-send flow, and asserts idhd correlated the captured
-# plaintext (IDH_CORRELATE_v1) with the TLS request carrying its ciphertext, by
+# plaintext (ADH_CORRELATE_v1) with the TLS request carrying its ciphertext, by
 # same thread + time window. Exit 0 = PASS.
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
 verify_resolve_env
 TLS_PORT="${ADH_TLS_PORT:-${IDH_TLS_PORT:-8762}}"
-PT="IDH_CORRELATE_v1"
+PT="ADH_CORRELATE_v1"
 
 for p in $(powershell.exe -NoProfile -Command "(Get-NetTCPConnection -LocalPort $TLS_PORT -State Listen -ErrorAction SilentlyContinue).OwningProcess" 2>/dev/null | tr -d '\r'); do taskkill //F //PID "$p" >/dev/null 2>&1; done
 ( node "$ROOT/daemon/tls_test_server.mjs" > /tmp/idh_tls.log 2>&1 & )

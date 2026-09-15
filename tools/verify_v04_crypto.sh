@@ -2,12 +2,12 @@
 # v0.4 dynamic crypto channel (THE #1 selling point): plaintext-boundary capture.
 # Installs a GOT hook on BoringSSL EVP_CipherUpdate in libjavacrypto (Conscrypt),
 # triggers the sandbox's AES/CBC via JNI reflection, asserts the wrapper captured
-# the known plaintext "IDH_CRYPTO_PLAINTEXT_v1" (i.e. we read it BEFORE encryption),
+# the known plaintext "ADH_CRYPTO_PLAINTEXT_v1" (i.e. we read it BEFORE encryption),
 # and the target survived (trampoline-through worked). Exit 0 = PASS.
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
 verify_resolve_env
-EXPECT="IDH_CRYPTO_PLAINTEXT_v1"
+EXPECT="ADH_CRYPTO_PLAINTEXT_v1"
 
 set +e
 OUT="$(node - "$HTTP" "$EXPECT" <<'EOF'

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # v0.9 native crypto-constant scan (H.4, HOST-ONLY). Locates crypto algorithms in a
-# stripped native lib by constant signatures (no symbols). libidhdetect.so embeds the
+# stripped native lib by constant signatures (no symbols). libadhdetect.so embeds the
 # real AES S-box + Base64 alphabet; the scan must find both. Exit 0 = PASS.
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
 verify_resolve_env_host
 bash "$ROOT/tools/build_detect.sh" >/dev/null 2>&1
-SO="$ROOT/sandbox-app/app/src/main/jniLibs/arm64-v8a/libidhdetect.so"
-[ -f "$SO" ] || { echo "❌ libidhdetect.so missing"; echo "RESULT:FAIL"; exit 1; }
+SO="$ROOT/sandbox-app/app/src/main/jniLibs/arm64-v8a/libadhdetect.so"
+[ -f "$SO" ] || { echo "❌ libadhdetect.so missing"; echo "RESULT:FAIL"; exit 1; }
 
 set +e
 OUT="$(node - "$HTTP" "$SO" <<'EOF'

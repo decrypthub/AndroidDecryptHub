@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # v0.9 direct-syscall scan (E.9, HOST-ONLY). Locates `svc #0` in a .so's exec
-# segments (direct syscalls bypass libc/PLT hooks). libidhdetect.so has one direct
+# segments (direct syscalls bypass libc/PLT hooks). libadhdetect.so has one direct
 # gettid via inline svc; the scan must find >=1 svc site. Exit 0 = PASS.
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
 verify_resolve_env_host
 bash "$ROOT/tools/build_detect.sh" >/dev/null 2>&1
-SO="$ROOT/sandbox-app/app/src/main/jniLibs/arm64-v8a/libidhdetect.so"
-[ -f "$SO" ] || { echo "❌ libidhdetect.so missing"; echo "RESULT:FAIL"; exit 1; }
+SO="$ROOT/sandbox-app/app/src/main/jniLibs/arm64-v8a/libadhdetect.so"
+[ -f "$SO" ] || { echo "❌ libadhdetect.so missing"; echo "RESULT:FAIL"; exit 1; }
 
 set +e
 OUT="$(node - "$HTTP" "$SO" <<'EOF'

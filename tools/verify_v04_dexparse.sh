@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # v0.4 dex parse + crypto static scan (HOST-ONLY — no device needed).
 #   1) parse the 728B probe dex (b64) -> finds type Lcom/idh/probe/Probe;, method hello, string IDH_PROBE_OK
+#      (hash-bound legacy probe fixture; do not rename without regenerating the fixed dex hash)
 #   2) crypto_scan the app's classes.dex -> finds javax/crypto method refs + algorithm strings
 #      (AES/CBC/PKCS5Padding, HmacSHA256) proving the static crypto channel works
 # Exit 0 = PASS. Prereq: idhd running; sandbox APK built.

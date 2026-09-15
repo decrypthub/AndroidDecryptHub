@@ -18,7 +18,7 @@ import javax.net.ssl.X509TrustManager
 // point is to exercise SSL_write/SSL_read, which the agent hooks to read plaintext.
 object Network {
     private const val TAG = "ADH_SANDBOX"
-    const val MARKER = "IDH_NET_MARKER_v1"
+    const val MARKER = "ADH_NET_MARKER_v1"
     private const val PORT = 8762
 
     @JvmStatic
@@ -38,7 +38,7 @@ object Network {
             conn.connectTimeout = 5000
             conn.readTimeout = 5000
             conn.requestMethod = "POST"
-            conn.setRequestProperty("X-Idh-Marker", MARKER)
+            conn.setRequestProperty("X-Adh-Marker", MARKER)
             conn.doOutput = true
             conn.outputStream.use { it.write(MARKER.toByteArray()) }
             val code = conn.responseCode

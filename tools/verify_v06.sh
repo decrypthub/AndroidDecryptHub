@@ -19,12 +19,12 @@ console.log(`objectClass=${r.objectClass} fields=${r.fieldCount}`);
 (r.fields||[]).forEach(f=>console.log(`  ${f.name} = ${f.value}`));
 const fv=Object.fromEntries((r.fields||[]).map(f=>[f.name,f.value]));
 const readPass = r.ok && /HeapProbe\$Config/.test(r.objectClass)
-  && fv.token==='IDH_TOKEN_abc123' && fv.count==='42' && fv.note==='live-object';
+  && fv.token==='ADH_TOKEN_abc123' && fv.count==='42' && fv.note==='live-object';
 
 // low-risk method invocation
 const inv=await POST('/api/object/invoke',{session:a.sessionId,className:'com.adh.sandbox.HeapProbe',field:'sConfig',method:'getToken'});
 console.log(`invoke getToken() -> ${inv.result||inv.error}`);
-const invPass = inv.ok && inv.result==='IDH_TOKEN_abc123';
+const invPass = inv.ok && inv.result==='ADH_TOKEN_abc123';
 
 const pass = readPass && invPass;
 console.log(pass?'RESULT:PASS':'RESULT:FAIL');

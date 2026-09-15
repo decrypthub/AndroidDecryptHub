@@ -23,7 +23,7 @@ object JavaCrypto {
     private const val TAG = "ADH_SANDBOX"
     val KEY = "0123456789abcdef".toByteArray(Charsets.US_ASCII)   // AES-128 / HMAC key
     val IV = "abcdef9876543210".toByteArray(Charsets.US_ASCII)
-    const val PLAINTEXT = "IDH_CRYPTO_PLAINTEXT_v1"
+    const val PLAINTEXT = "ADH_CRYPTO_PLAINTEXT_v1"
     const val AES_TRANSFORM = "AES/CBC/PKCS5Padding"
     const val HMAC_ALG = "HmacSHA256"
 
@@ -105,12 +105,12 @@ object JavaCrypto {
             var i = 0
             while (!Thread.currentThread().isInterrupted) {
                 val (name, op) = MENU[i % MENU.size]
-                val pt = "IDH_LIVE_%04d_%s_订单金额=%d.00元".format(i, name, 100 + i * 7).toByteArray(Charsets.UTF_8)
+                val pt = "ADH_LIVE_%04d_%s_订单金额=%d.00元".format(i, name, 100 + i * 7).toByteArray(Charsets.UTF_8)
                 try { op(pt); Log.i(TAG, "live[$name] ${pt.size}B") } catch (t: Throwable) { Log.w(TAG, "live[$name] fail: ${t.message}") }
                 i++
                 try { Thread.sleep(2000) } catch (e: InterruptedException) { break }
             }
-        }.apply { isDaemon = true; name = "idh-live-crypto" }
+        }.apply { isDaemon = true; name = "adh-live-crypto" }
         liveThread = t
         t.start()
     }
@@ -137,7 +137,7 @@ object JavaCrypto {
     // (see agent_main.c) — the previously-unhookable BoringSSL one-shot AEAD path.
 
     private val ecKeyPair by lazy { KeyPairGenerator.getInstance("EC").apply { initialize(256) }.generateKeyPair() }
-    const val SIGN_TBS = "IDH_SIGN_TBS_v1"
+    const val SIGN_TBS = "ADH_SIGN_TBS_v1"
 
     @JvmStatic
     fun sigDemo(): String {
@@ -150,8 +150,8 @@ object JavaCrypto {
         return "ECDSA sign+verify ok=$ok"
     }
 
-    const val KDF_PASS = "IDH_KDF_PASSWORD_v1"
-    private val KDF_SALT = "IDH_KDF_SALT_16B".toByteArray(Charsets.US_ASCII)
+    const val KDF_PASS = "ADH_KDF_PASSWORD_v1"
+    private val KDF_SALT = "ADH_KDF_SALT_16B".toByteArray(Charsets.US_ASCII)
 
     @JvmStatic
     fun kdfDemo(): String {
@@ -161,7 +161,7 @@ object JavaCrypto {
         return "PBKDF2 key derived ${key.size}B"
     }
 
-    const val AEAD_PLAINTEXT = "IDH_AEAD_PLAINTEXT_v1"
+    const val AEAD_PLAINTEXT = "ADH_AEAD_PLAINTEXT_v1"
 
     @JvmStatic
     fun aeadDemo(): String {

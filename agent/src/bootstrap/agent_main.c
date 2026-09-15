@@ -14,7 +14,7 @@
 #include <unistd.h>
 #include <sys/system_properties.h>
 
-#ifdef IDH_HAVE_LSPLANT
+#ifdef ADH_HAVE_LSPLANT
 #include "../hook/java_lsplant.h"   // C-ABI shim over LSPlant (Java method hook, WS-A)
 #endif
 #include "../hook/got.h"
@@ -25,7 +25,7 @@
 #include "../runtime/jni.h"
 #include "../trace/commands.h"
 
-// Common macros (AGENT_VER/IDH_HOST/IDH_PORT/TAG/LOGI/LOGE/FRAME_*) + cross-module prototypes
+// Common macros (AGENT_VER/ADH_HOST/ADH_PORT/TAG/LOGI/LOGE/FRAME_*) + cross-module prototypes
 // Shared bootstrap helpers live in agent_internal.h.
 #include "agent_internal.h"
 
@@ -88,7 +88,7 @@ static void cmd_frame_echo(int fd, const char *id, const char *line) {
 }
 
 // ---- Java method hook (WS-A, LSPlant) deterministic self-test -------------------------
-#ifdef IDH_HAVE_LSPLANT
+#ifdef ADH_HAVE_LSPLANT
 // Init LSPlant, hook the target's `secret(String)` method (className from the Host ADH Daemon) via a
 // com.adh.agent.MethodHook callback, call it, and assert: init ok, hook installed, callback
 // fired capturing the real arg, and the original still returned its real value (backup.invoke
@@ -125,7 +125,7 @@ static void cmd_java_hook_test(int fd, const char *id, const char *className) {
                 (*env)->SetObjectField(env, hooker, (*env)->GetFieldID(env, mhCls, "backup", "Ljava/lang/reflect/Method;"), backup);
                 (*env)->SetBooleanField(env, hooker, (*env)->GetFieldID(env, mhCls, "isStatic", "Z"), JNI_TRUE);
                 jmethodID secret = (*env)->GetStaticMethodID(env, htCls, "secret", "(Ljava/lang/String;)Ljava/lang/String;");
-                jstring rs = secret ? (jstring)(*env)->CallStaticObjectMethod(env, htCls, secret, (*env)->NewStringUTF(env, "IDH_HOOK_PING")) : NULL;
+                jstring rs = secret ? (jstring)(*env)->CallStaticObjectMethod(env, htCls, secret, (*env)->NewStringUTF(env, "ADH_HOOK_PING")) : NULL;
                 if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
                 if (rs) { const char *s = (*env)->GetStringUTFChars(env, rs, NULL); if (s) { strncpy(ret, s, sizeof(ret)-1); (*env)->ReleaseStringUTFChars(env, rs, s); } }
                 jfieldID fHits = (*env)->GetStaticFieldID(env, mhCls, "hits", "I");
@@ -133,8 +133,8 @@ static void cmd_java_hook_test(int fd, const char *id, const char *className) {
                 if (fHits) hits = (*env)->GetStaticIntField(env, mhCls, fHits);
                 jstring la = fLast ? (jstring)(*env)->GetStaticObjectField(env, mhCls, fLast) : NULL;
                 if (la) { const char *s = (*env)->GetStringUTFChars(env, la, NULL); if (s) { strncpy(lastArg, s, sizeof(lastArg)-1); (*env)->ReleaseStringUTFChars(env, la, s); } }
-                fired = (hits >= 1 && strcmp(lastArg, "IDH_HOOK_PING") == 0) ? 1 : 0;
-                origOk = (strcmp(ret, "REAL_SECRET:IDH_HOOK_PING") == 0) ? 1 : 0;
+                fired = (hits >= 1 && strcmp(lastArg, "ADH_HOOK_PING") == 0) ? 1 : 0;
+                origOk = (strcmp(ret, "REAL_SECRET:ADH_HOOK_PING") == 0) ? 1 : 0;
                 idh_javahook_unhook(env, targetMethod);
             }
         }
@@ -302,7 +302,7 @@ static void *agent_thread(void *arg) {
     for (int attempt = 0; attempt < 30; attempt++) {
         int fd = connect_idhd();
         if (fd >= 0) {
-            LOGI("connected to Host ADH Daemon %s:%d", IDH_HOST, IDH_PORT);
+            LOGI("connected to Host ADH Daemon %s:%d", ADH_HOST, ADH_PORT);
             report(fd);
             command_loop(fd);
             close(fd);
@@ -311,7 +311,7 @@ static void *agent_thread(void *arg) {
         }
         usleep(500 * 1000);
     }
-    LOGE("could not reach Host ADH Daemon after retries (need: adb reverse tcp:%d tcp:%d)", IDH_PORT, IDH_PORT);
+    LOGE("could not reach Host ADH Daemon after retries (need: adb reverse tcp:%d tcp:%d)", ADH_PORT, ADH_PORT);
     return NULL;
 }
 
@@ -331,7 +331,7 @@ void adh_agent_set_package(const char *pkg) {
 
 __attribute__((visibility("default")))
 void adh_agent_start(void) {
-    idh_footprint_capture_baseline();
+    adh_footprint_capture_baseline();
     strncpy(g_entry, "start", sizeof(g_entry) - 1);
     pthread_once(&g_once, do_start);
 }
@@ -365,7 +365,7 @@ static void bind_reporter_from_prop(JNIEnv *env) {
 
 JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *reserved) {
     (void)reserved;
-    idh_footprint_capture_baseline();
+    adh_footprint_capture_baseline();
     idh_jni_set_vm(vm);
     strncpy(g_entry, "jni_onload", sizeof(g_entry) - 1);
     LOGI("JNI_OnLoad — agent " AGENT_VER " starting");

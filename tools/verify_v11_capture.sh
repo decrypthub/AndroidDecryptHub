@@ -34,7 +34,7 @@ const dex=dumps.filter(d=>d.kind==='dex');
 console.log('dex dumps =', dex.length);
 let dl=false;
 if(dex.length){ const r=await fetch(`${base}/api/dumps/download?sha=${dex[0].sha256}`); dl=r.ok; }
-const pass = j.on===true && hasJava && hasSym && hasDig && hasHmac && rich && plain.includes('IDH_LIVE_') && dex.length>=1 && dl;
+const pass = j.on===true && hasJava && hasSym && hasDig && hasHmac && rich && plain.includes('ADH_LIVE_') && dex.length>=1 && dl;
 console.log(pass?'RESULT:PASS':'RESULT:FAIL');
 EOF
 )"

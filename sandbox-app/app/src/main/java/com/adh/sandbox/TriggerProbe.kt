@@ -9,7 +9,7 @@ object TriggerProbe {
     @JvmStatic @Volatile var invokedDanger = false
 
     @JvmStatic
-    fun safeCompute(): String { invokedSafe = true; return "IDH_TRIGGER_OK" }
+    fun safeCompute(): String { invokedSafe = true; return "ADH_TRIGGER_OK" }
 
     // Dangerous by name ("delete") — must never be auto-invoked by the scheduler.
     @JvmStatic

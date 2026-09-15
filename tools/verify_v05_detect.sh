@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # v0.5 anti-analysis behavior observation (module V). GOT-hooks the target's native
-# detection calls (in libidhdetect.so), triggers them via JNI reflection, and asserts
+# detection calls (in libadhdetect.so), triggers them via JNI reflection, and asserts
 # the agent observed the target's defense map: debug (ptrace TRACEME), root (su paths),
 # prop (ro.debuggable). Also neutralizes TRACEME (S). Target survives. Exit 0 = PASS.
 set -uo pipefail

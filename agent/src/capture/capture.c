@@ -4,7 +4,7 @@
 #include "../bootstrap/agent_internal.h"
 #include "../hook/got.h"
 #include "../runtime/jni.h"
-#ifdef IDH_HAVE_INLINE_HOOK
+#ifdef ADH_HAVE_INLINE_HOOK
 #include "../hook/native_inline.h"
 #endif
 
@@ -133,7 +133,7 @@ static int my_HMAC_Update(void *ctx, const void *data, size_t len) {
 // CLAUDE.md's broad cross-device compatibility mandate. Result is cached in a small bounded
 // ctx-pointer table (same round-robin-eviction convention as CAP_RING); a lookup miss just
 // falls back to the pre-existing generic HMAC label, never blocks capture().
-#define IDH_NID_HMAC 855   // OpenSSL/BoringSSL NID_hmac — stable OID-registry constant, not a struct offset
+#define ADH_NID_HMAC 855   // OpenSSL/BoringSSL NID_hmac — stable OID-registry constant, not a struct offset
 #define DSIGN_CTX_MAX 32
 typedef struct { void *ctx; int is_asym; } dsign_ctx_ent_t;
 static dsign_ctx_ent_t g_dsign_ctx[DSIGN_CTX_MAX];
@@ -164,12 +164,12 @@ typedef int (*digest_sign_init_t)(void *ctx, void **pctx, const void *type, void
 static digest_sign_init_t g_orig_dsign_init = NULL, g_orig_dverify_init = NULL;
 static int my_EVP_DigestSignInit(void *ctx, void **pctx, const void *type, void *e, void *pkey) {
     int rc = g_orig_dsign_init(ctx, pctx, type, e, pkey);
-    if (rc == 1 && pkey && g_evp_pkey_id_fn) dsign_ctx_set(ctx, g_evp_pkey_id_fn(pkey) != IDH_NID_HMAC);
+    if (rc == 1 && pkey && g_evp_pkey_id_fn) dsign_ctx_set(ctx, g_evp_pkey_id_fn(pkey) != ADH_NID_HMAC);
     return rc;
 }
 static int my_EVP_DigestVerifyInit(void *ctx, void **pctx, const void *type, void *e, void *pkey) {
     int rc = g_orig_dverify_init(ctx, pctx, type, e, pkey);
-    if (rc == 1 && pkey && g_evp_pkey_id_fn) dsign_ctx_set(ctx, g_evp_pkey_id_fn(pkey) != IDH_NID_HMAC);
+    if (rc == 1 && pkey && g_evp_pkey_id_fn) dsign_ctx_set(ctx, g_evp_pkey_id_fn(pkey) != ADH_NID_HMAC);
     return rc;
 }
 
@@ -1052,7 +1052,7 @@ void idh_cmd_capture_drain(int fd, const char *id) {
     free(out);
 }
 
-// Install GOT hooks on libidhdetect's detection calls, trigger Detection.run(),
+// Install GOT hooks on libadhdetect's detection calls, trigger Detection.run(),
 // report what the target checked.
 void idh_cmd_detect_watch(int fd, const char *id, const char *module, const char *className) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
@@ -1101,7 +1101,7 @@ void idh_cmd_detect_watch(int fd, const char *id, const char *module, const char
     LOGI("detect_watch: hooked p=%d a=%d g=%d triggered=%d detections=%d", r1, r2, r3, triggered, n);
 }
 
-#ifdef IDH_HAVE_INLINE_HOOK
+#ifdef ADH_HAVE_INLINE_HOOK
 // v2.2 WS-A native inline self-test. The target supplies the module, symbol and a safe
 // no-arg static trigger; the agent only supplies the ABI-specific wrapper and Dobby backend.
 typedef int (*inline_crypto_update_t)(void *, unsigned char *, int *, const unsigned char *, int);

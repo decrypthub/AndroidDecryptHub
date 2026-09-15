@@ -23,7 +23,7 @@ import javax.net.ssl.X509TrustManager
 // thread+time to prove "this plaintext was encrypted and sent in this request".
 object CorrelatedFlow {
     private const val TAG = "ADH_SANDBOX"
-    const val PLAINTEXT = "IDH_CORRELATE_v1"
+    const val PLAINTEXT = "ADH_CORRELATE_v1"
     private const val PORT = 8762
 
     @JvmStatic

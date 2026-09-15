@@ -25,9 +25,9 @@ let rich=0, plainOk=false;
 for(const c of java.slice(-5)){
   const d=await (await fetch(`${base}/api/captures/${c.id}`)).json();
   if(d.keyHex && d.ivHex && d.hex && d.outHex) rich++;
-  if((d.text||'').includes('IDH_LIVE_')) plainOk=true;
+  if((d.text||'').includes('ADH_LIVE_')) plainOk=true;
 }
-console.log('richJava(key+iv+in+out)=',rich,'plaintextIDH_LIVE=',plainOk);
+console.log('richJava(key+iv+in+out)=',rich,'plaintextADH_LIVE=',plainOk);
 const pass = j.on===true && java.length>=1 && rich>=1 && plainOk;
 console.log(pass?'RESULT:PASS':'RESULT:FAIL');
 EOF

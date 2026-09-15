@@ -2,7 +2,7 @@ package com.adh.sandbox
 
 import android.util.Log
 
-// Bridge to libidhdetect.so — the mock native anti-analysis lib. Loaded at startup
+// Bridge to libadhdetect.so — the mock native anti-analysis lib. Loaded at startup
 // so its GOT exists; the agent installs GOT hooks then invokes run() reflectively.
 object Detection {
     private const val TAG = "ADH_SANDBOX"
@@ -11,10 +11,10 @@ object Detection {
 
     fun load() {
         try {
-            System.loadLibrary("idhdetect")
-            Log.i(TAG, "idhdetect loaded")
+            System.loadLibrary("adhdetect")
+            Log.i(TAG, "adhdetect loaded")
         } catch (t: Throwable) {
-            Log.w(TAG, "idhdetect not loaded: ${t.message}")
+            Log.w(TAG, "adhdetect not loaded: ${t.message}")
         }
     }
 }

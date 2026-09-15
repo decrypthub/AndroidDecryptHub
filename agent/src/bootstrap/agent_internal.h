@@ -5,8 +5,8 @@
 // This header carries the common macros + the cross-module function prototypes. No target
 // knowledge lives anywhere in the agent (architecture red line): every class/module name the
 // one-shot ops drive is supplied by idhd at runtime.
-#ifndef IDH_AGENT_INTERNAL_H
-#define IDH_AGENT_INTERNAL_H
+#ifndef ADH_AGENT_INTERNAL_H
+#define ADH_AGENT_INTERNAL_H
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,9 +16,9 @@
 #include <android/log.h>
 
 #define AGENT_VER   "0.2.0"
-#define IDH_HOST    "127.0.0.1"
-#define IDH_PORT    8761
-#define TAG         "IDH_AGENT"
+#define ADH_HOST    "127.0.0.1"
+#define ADH_PORT    8761
+#define TAG         "ADH_AGENT"
 #define LOGI(...)   __android_log_print(ANDROID_LOG_INFO,  TAG, __VA_ARGS__)
 #define LOGE(...)   __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 

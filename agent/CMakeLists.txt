@@ -33,7 +33,7 @@ endif()
 
 # LSPlant (ART Java-method hook, WS-A) — present only if tools/fetch_lsplant.sh has run.
 # Guarded so the agent still builds without it (like QBDI). When present we compile the
-# C++ shim + LSPlant + DexBuilder and define IDH_HAVE_LSPLANT for agent_main.c.
+# C++ shim + LSPlant + DexBuilder and define ADH_HAVE_LSPLANT for agent_main.c.
 set(LSP "${CMAKE_CURRENT_SOURCE_DIR}/third_party/lsplant/lsplant/src/main/jni")
 set(DXB "${LSP}/external/dex_builder")
 set(DOB "${CMAKE_CURRENT_SOURCE_DIR}/third_party/dobby")
@@ -46,7 +46,7 @@ if(EXISTS "${DOB}/lib/arm64-v8a/libdobby.a" AND EXISTS "${DOB}/include/dobby.h")
     list(APPEND LSPLANT_INC ${DOB}/include)
     list(APPEND LSPLANT_LIBS "${DOB}/lib/arm64-v8a/libdobby.a")
     set(DOBBY_AVAILABLE TRUE)
-    add_compile_definitions(IDH_HAVE_INLINE_HOOK=1)
+    add_compile_definitions(ADH_HAVE_INLINE_HOOK=1)
 endif()
 
 if(EXISTS "${LSP}/lsplant.cc" AND DOBBY_AVAILABLE)
@@ -64,7 +64,7 @@ if(EXISTS "${LSP}/lsplant.cc" AND DOBBY_AVAILABLE)
     )
     list(APPEND LSPLANT_INC ${LSP} ${LSP}/include ${DXB}/include ${DXB})
     list(APPEND LSPLANT_LIBS z phmap)
-    add_compile_definitions(IDH_HAVE_LSPLANT=1)
+    add_compile_definitions(ADH_HAVE_LSPLANT=1)
     # LSPlant/DexBuilder upstream warnings are not ours — don't fail on them.
     set_source_files_properties(
         ${LSP}/lsplant.cc ${DXB}/dex_builder.cc ${DXB}/dex_helper.cc

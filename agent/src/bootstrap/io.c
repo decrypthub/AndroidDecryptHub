@@ -14,8 +14,8 @@ int connect_idhd(void) {
     if (fd < 0) return -1;
     struct sockaddr_in a; memset(&a, 0, sizeof(a));
     a.sin_family = AF_INET;
-    a.sin_port = htons(IDH_PORT);
-    inet_pton(AF_INET, IDH_HOST, &a.sin_addr);
+    a.sin_port = htons(ADH_PORT);
+    inet_pton(AF_INET, ADH_HOST, &a.sin_addr);
     if (connect(fd, (struct sockaddr *)&a, sizeof(a)) != 0) { close(fd); return -1; }
     int one = 1; setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
     return fd;
