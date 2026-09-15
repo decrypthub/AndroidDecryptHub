@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <jni.h>
 #include <stdint.h>
+#include <pthread.h>
 
 #include "../bootstrap/agent_internal.h"
 #include "../hook/got.h"
@@ -134,10 +135,100 @@ done:
     LOGI("object_invoke: %s.%s.%s() -> %s ok=%d", class_name, field_name, method_name, result, ok);
 }
 
+// Runtime footprint. These are observation counters only: no hiding, no fake VMA
+// names, no policy decisions. The baseline is captured when the agent is first
+// entered (JNI_OnLoad or adh_agent_start), before any hook/trace command runs.
+struct footprint_counts {
+    int maps;
+    int exec;
+    int file_exec;
+    int memfd_exec;
+    int anon_exec;
+    int anon_named_exec;
+    int rwx;
+    int agent_exec;
+    int zygisk_exec;
+    unsigned long long exec_bytes;
+    unsigned long long memfd_exec_bytes;
+    unsigned long long anon_exec_bytes;
+    unsigned long long anon_named_exec_bytes;
+};
+
+static int footprint_scan(struct footprint_counts *c, int *module_count) {
+    memset(c, 0, sizeof(*c));
+    if (module_count) *module_count = 0;
+    FILE *maps = fopen("/proc/self/maps", "r");
+    if (!maps) return 0;
+
+    char line[1024];
+    char last_module[600] = "";
+    while (fgets(line, sizeof(line), maps)) {
+        c->maps++;
+        unsigned long long start = 0, end = 0, offset = 0, inode = 0;
+        char perms[5] = {0}, dev[8] = {0}, path[600] = {0};
+        int n = sscanf(line, "%llx-%llx %4s %llx %7s %llu %599[^\n]",
+                       &start, &end, perms, &offset, dev, &inode, path);
+        if (n < 6) continue;
+
+        char *pth = path;
+        while (*pth == ' ' || *pth == '\t') pth++;
+
+        if (module_count && pth[0] == '/' && strcmp(pth, last_module) != 0) {
+            strncpy(last_module, pth, sizeof(last_module) - 1);
+            last_module[sizeof(last_module) - 1] = 0;
+            (*module_count)++;
+        }
+        if (strlen(perms) < 4 || perms[2] != 'x') continue;
+
+        unsigned long long bytes = end > start ? end - start : 0;
+        c->exec++;
+        c->exec_bytes += bytes;
+        if (perms[1] == 'w') c->rwx++;
+
+        if (pth[0] == '/') {
+            if (strstr(pth, "/memfd:")) {
+                c->memfd_exec++;
+                c->memfd_exec_bytes += bytes;
+            } else {
+                c->file_exec++;
+            }
+        } else if (strncmp(pth, "[anon:", 6) == 0) {
+            c->anon_named_exec++;
+            c->anon_named_exec_bytes += bytes;
+        } else if (pth[0] == 0 && strcmp(dev, "00:00") == 0 && inode == 0) {
+            c->anon_exec++;
+            c->anon_exec_bytes += bytes;
+        }
+
+        if (strstr(pth, "libidh_agent.so")) c->agent_exec++;
+        if (strstr(pth, "/zygisk/") || strstr(pth, "libzygisk.so") || strstr(pth, "zygisk_"))
+            c->zygisk_exec++;
+    }
+    fclose(maps);
+    return 1;
+}
+
+static struct footprint_counts g_footprint_baseline;
+static int g_footprint_baseline_valid = 0;
+static pthread_once_t g_footprint_once = PTHREAD_ONCE_INIT;
+
+static void footprint_capture_baseline_once(void) {
+    g_footprint_baseline_valid = footprint_scan(&g_footprint_baseline, NULL);
+}
+
+void idh_footprint_capture_baseline(void) {
+    pthread_once(&g_footprint_once, footprint_capture_baseline_once);
+}
+
 // Report observed runtime constraints instead of claiming a backend is available from
-// compile-time configuration alone.
+// compile-time configuration alone. The footprint block exposes both the bootstrap
+// baseline and the current counts; a positive anonExec delta means the process gained a
+// true anonymous executable mapping after bootstrap (correlate with the command that ran;
+// Dobby/QBDI are known producers, ART JIT/other runtimes may also add one).
 void idh_cmd_compat_probe(int fd, const char *id) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
+    idh_footprint_capture_baseline();
+
     int tracer = -1, seccomp = -1;
     FILE *status = fopen("/proc/self/status", "r");
     if (status) { char line[256];
@@ -149,11 +240,12 @@ void idh_cmd_compat_probe(int fd, const char *id) {
     }
     int got_ok = (idh_resolve_sym("libc.so", "access") != NULL);
     int jni_ok = idh_jni_vm_available();
-    int module_count = 0, maps_count = 0;
-    FILE *maps = fopen("/proc/self/maps", "r"); char line[512]; char last_module[400] = "";
-    while (maps && fgets(line, sizeof(line), maps)) { maps_count++;
-        char *path = strstr(line, "/"); if (path) { char *newline = strchr(path, '\n'); if (newline) *newline = 0; if (strcmp(path, last_module)) { strncpy(last_module, path, sizeof(last_module)-1); module_count++; } } }
-    if (maps) fclose(maps);
+
+    struct footprint_counts cur;
+    int module_count = 0;
+    int maps_read_ok = footprint_scan(&cur, &module_count);
+    int bv = g_footprint_baseline_valid;
+    const struct footprint_counts *base = bv ? &g_footprint_baseline : NULL;
 
     int memread_ok = 0;
     { int mem_fd = open("/proc/self/mem", O_RDONLY);
@@ -162,16 +254,41 @@ void idh_cmd_compat_probe(int fd, const char *id) {
     int dlopen_blocked = (dlprobe == NULL);
     if (dlprobe) dlclose(dlprobe);
 
-    char out[640];
+    char out[3072];
     snprintf(out, sizeof(out),
         "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"compat_probe\",\"ok\":true,"
         "\"tracerPid\":%d,\"seccomp\":%d,\"backends\":{\"gotHook\":%s,\"jniReflect\":%s,\"artDexCapture\":%s,\"memRead\":%s},"
-        "\"mapsCount\":%d,\"moduleMappings\":%d,\"dlopenSystemLibsBlocked\":%s}\n",
+        "\"mapsReadOk\":%s,\"mapsCount\":%d,\"moduleMappings\":%d,"
+        "\"execMappings\":%d,\"fileExecMappings\":%d,\"memfdExecMappings\":%d,"
+        "\"anonExecMappings\":%d,\"anonNamedExecMappings\":%d,\"rwxMappings\":%d,"
+        "\"execKiB\":%llu,\"memfdExecKiB\":%llu,\"anonExecKiB\":%llu,\"anonNamedExecKiB\":%llu,"
+        "\"agentExecMappings\":%d,\"zygiskExecMappings\":%d,"
+        "\"baselineValid\":%s,"
+        "\"baseline\":{\"execMappings\":%d,\"anonExecMappings\":%d,\"anonNamedExecMappings\":%d,\"memfdExecMappings\":%d,\"rwxMappings\":%d,\"agentExecMappings\":%d,\"zygiskExecMappings\":%d},"
+        "\"delta\":{\"execMappings\":%d,\"anonExecMappings\":%d,\"anonNamedExecMappings\":%d,\"memfdExecMappings\":%d,\"rwxMappings\":%d},"
+        "\"dlopenSystemLibsBlocked\":%s}\n",
         idj, tracer, seccomp, got_ok ? "true" : "false", jni_ok ? "true" : "false",
         idh_jni_vm_available() ? "true" : "false", memread_ok ? "true" : "false",
-        maps_count, module_count, dlopen_blocked ? "true" : "false");
+        maps_read_ok ? "true" : "false", cur.maps, module_count,
+        cur.exec, cur.file_exec, cur.memfd_exec, cur.anon_exec, cur.anon_named_exec, cur.rwx,
+        (unsigned long long)(cur.exec_bytes / 1024),
+        (unsigned long long)(cur.memfd_exec_bytes / 1024),
+        (unsigned long long)(cur.anon_exec_bytes / 1024),
+        (unsigned long long)(cur.anon_named_exec_bytes / 1024),
+        cur.agent_exec, cur.zygisk_exec,
+        bv ? "true" : "false",
+        bv ? base->exec : -1, bv ? base->anon_exec : -1, bv ? base->anon_named_exec : -1,
+        bv ? base->memfd_exec : -1, bv ? base->rwx : -1,
+        bv ? base->agent_exec : -1, bv ? base->zygisk_exec : -1,
+        bv ? (cur.exec - base->exec) : 0,
+        bv ? (cur.anon_exec - base->anon_exec) : 0,
+        bv ? (cur.anon_named_exec - base->anon_named_exec) : 0,
+        bv ? (cur.memfd_exec - base->memfd_exec) : 0,
+        bv ? (cur.rwx - base->rwx) : 0,
+        dlopen_blocked ? "true" : "false");
     send_line(fd, out);
-    LOGI("compat_probe: tracer=%d seccomp=%d got=%d jni=%d", tracer, seccomp, got_ok, jni_ok);
+    LOGI("compat_probe: tracer=%d seccomp=%d got=%d jni=%d exec=%d anon=%d rwx=%d",
+         tracer, seccomp, got_ok, jni_ok, cur.exec, cur.anon_exec, cur.rwx);
 }
 
 void idh_cmd_jni_probe(int fd, const char *id) {

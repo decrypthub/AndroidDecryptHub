@@ -22,9 +22,25 @@ echo ">> building"
 if ! "$CMAKE" --build "$ROOT/agent/build"; then echo "!! AGENT BUILD FAILED"; exit 1; fi
 
 SO="$ROOT/agent/build/libidh_agent.so"
+DEBUG_SO="$ROOT/agent/build/libidh_agent.so.debug"
 DEST="$ROOT/sandbox-app/app/src/main/jniLibs/$ABI"
+STRIP="$NDK/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-strip.exe"
+[ -f "$STRIP" ] || { echo "missing strip tool: $STRIP"; exit 1; }
+
+# Keep debug info locally (gitignored) for crash symbolication, but ship a
+# stripped .so: an unstripped agent carries thousands of internal names and
+# debug strings into every target process.
+if "$READELF" -SW "$SO" | grep -qE '\.debug_info|\.symtab'; then
+  cp "$SO" "$DEBUG_SO"
+fi
+"$STRIP" --strip-unneeded "$SO"
+if "$READELF" -SW "$SO" | grep -qE '\.debug_|\.symtab'; then
+  echo "!! release agent still contains debug/symbol sections"; exit 1
+fi
+
 mkdir -p "$DEST"
 cp "$SO" "$DEST/libidh_agent.so"
 echo ">> built $(ls -la "$SO" | awk '{print $5}') bytes -> $DEST/libidh_agent.so"
+if [ -f "$DEBUG_SO" ]; then echo ">> unstripped debug copy -> $DEBUG_SO"; fi
 "$READELF" --dyn-syms "$SO" \
-  | grep -iE "adh_agent_start|idh_agent_start|JNI_OnLoad" | awk '{print "   export:", $8}'
+  | grep -iE "adh_agent_set_package|adh_agent_start|idh_agent_start|JNI_OnLoad" | awk '{print "   export:", $8}'

@@ -60,7 +60,10 @@ int idh_qbdi_trace(void *func, char *out, int outsz) {
     p_alignedFree_t f_free = (p_alignedFree_t)dlsym(h, "qbdi_alignedFree");
     f_getInstAnalysis = (p_getInstAnalysis_t)dlsym(h, "qbdi_getInstAnalysis");
     if (!f_init || !f_gpr || !f_alloc || !f_addmod || !f_addcb || !f_call || !f_getInstAnalysis) {
-        snprintf(out, outsz, "\"ok\":false,\"error\":\"qbdi symbols missing\""); return -1;
+        snprintf(out, outsz, "\"ok\":false,\"error\":\"qbdi symbols missing\"");
+        f_getInstAnalysis = NULL;
+        dlclose(h);
+        return -1;
     }
 
     g_nqtrace = 0;
@@ -76,6 +79,8 @@ int idh_qbdi_trace(void *func, char *out, int outsz) {
     int n = g_nqtrace;
     if (f_free && stack) f_free(stack);
     if (f_term) f_term(vm);
+    f_getInstAnalysis = NULL;
+    (void)dlclose(h);
 
     int o = snprintf(out, outsz, "\"ok\":true,\"retval\":%llu,\"count\":%d,\"insns\":[", (unsigned long long)ret, n);
     for (int i = 0; i < n && o < outsz - 100; i++)

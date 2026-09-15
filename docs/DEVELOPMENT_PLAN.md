@@ -77,7 +77,7 @@ Web UI（浏览器）：
 |---|---|---|---|
 | L1 | `libidh_agent.so` | hook、trace、dump、maps 扫描、事件推送、执行 RPC 命令 | HTTP/MCP、DB、索引、smali 生成、大量反汇编缓存 |
 | L2a | Host ADH Daemon (`adhd`，PC) | Web/MCP 服务、会话、调度、存储、索引、分析、缓存 | 注入目标进程、直接读目标内存 |
-| L2b | Device surface (`device/`) | Manager Compose + Device Daemon 作用域/模块状态 | 分析、HTTP、MCP、hook |
+| L2b | Device surface (`device/`) | Manager Compose + Device Daemon 作用域/模块状态/目标进程启停 | 分析、HTTP、MCP、hook |
 | L3 | Web UI | 观测、搜索、配置、可视化、导出 | 业务逻辑、直连 Agent |
 
 ### 1.2 外部依赖
@@ -507,8 +507,8 @@ android-decrpthub/          # 仓库名；产品名 ADH (Android DecryptHub)
 │
 ├── device/                 # 设备侧多模块（独立于 Host daemon，非 Xposed）
 │   ├── core/               # ScopeConfig / AdhPaths / ScopeJson + AIDL contract
-│   ├── daemon/             # root app_process Device Daemon（作用域/模块状态）
-│   └── manager/            # 普通 Compose Manager（Binder 作用域客户端 + Host Web UI 地址探测，无 su）
+│   ├── daemon/             # root app_process Device Daemon（作用域/模块状态/目标进程启停）
+│   └── manager/            # 普通 Compose Manager（Binder 作用域与进程控制 + Host Web UI 地址探测，无 su）
 │
 ├── daemon/                 # Host ADH Daemon（npm adhd；legacy idhd）
 │   ├── src/
@@ -589,7 +589,7 @@ android-decrpthub/          # 仓库名；产品名 ADH (Android DecryptHub)
 | **G** | native 动态分析：Capstone + 内存镜像反汇编 | 只 shell `llvm-objdump`，无 section 的 raw/strip .so 反汇编不了 → idhd 引入 Capstone，对加载地址直接反汇编（无需 section/symbol）；结合 WS-F 做 native 函数边界识别（prologue 扫描）。 | Daemon |
 | **H** | QBDI 通用化：带参 + 真实调用点 | `idh_qbdi_trace` 只能 trace 无参、凭空 call 的 `idh_trace_target`（测试桩） → 两模式：就地插桩（WS-A hook 命中真实调用时对该地址范围下 `addInstrumentedRange` + PRE/POST，用真实寄存器/栈上下文跑）+ 重放（hook 抓入参后按 arg spec `qbdi_call` 重跑）；目标地址/符号来自命令。**fail-loud**：需参数却没给 spec → 拒绝。 | Agent |
 | **I** | 关联：确定性数据流 | crypto↔network 靠"同线程 + 33ms 窗"，并发会错配 → EVP/SSL hook 记录缓冲区指针 + 长度 + 内容哈希；`SSL_write` 的 buf 等于/包含某条 EVP 输出密文（按 content hash）时**确定性**关联；时间窗仅作兜底。 | Daemon（数据）+ Agent（采集字段） |
-| **J** | 反检测：动态面扩展（授权、默认 off） | 只 hook 自己 mock 的 `libidhdetect`，只中和 TRACEME → inline hook 目标自身 native so 内检测调用 + svc 热点观测；Java 后端 hook `PackageManager.getPackageInfo(签名)` / root 路径 `File.exists`；中和从单一 TRACEME 扩为可配置策略集，**默认全关，危险中和需 idhd 显式确认**。 | Agent |
+| **J** | 反检测：动态面扩展（授权、默认 off；首个可验证切片：`compat_probe` 输出注入足迹基线/当前差值；release agent strip + 三入口导出收敛；基础注入/GOT hook 不新增匿名可执行段，Dobby/QBDI 为已知匿名 `x` 生产者；真机 Sentry 3/3 冷启动 agent online、companion maps=0，Sentry Maps/Memory 检测 clean） | 只 hook 自己 mock 的 `libidhdetect`，只中和 TRACEME → inline hook 目标自身 native so 内检测调用 + svc 热点观测；Java 后端 hook `PackageManager.getPackageInfo(签名)` / root 路径 `File.exists`；中和从单一 TRACEME 扩为可配置策略集，**默认全关，危险中和需 idhd 显式确认**。 | Agent |
 | **K** | 架构拆分 + 多架构/多进程 | 随各片落地：agent 拆 `hook/ capture/ dex/ trigger/ inspect/`，`agent_main.c` 只留 bootstrap + 分发；daemon 拆 `routes/ ws/ mcp/ db/ analysis/ dex/ native/`；CMake 产出 arm64 + armeabi-v7a（偏移/指针宽度参数化）；idhd 注册表支持一包多 agent（`:remote` 路由）。 | 全层 |
 
 ### 6.9.2 v2.0+ 版本排期（每片有独立 pass/fail；无样本标 PENDING，不伪造）
@@ -602,7 +602,7 @@ android-decrpthub/          # 仓库名；产品名 ADH (Android DecryptHub)
 | **v2.3** | WS-F 持久索引 + 深解析 + 反射 | 多 dex 建 SQLite 索引后 string/field/method→callers < 250ms；重复 SHA 命中缓存；一条 `Class.forName` 反射链被静态连出，并可由 REST/MCP 查询 |
 | **v2.4** | WS-E 脱壳二代 + try/catch + cdex/041 | 带 `try` 方法字节级重建一致；cdex→标准 dex 过 dexdump/verifier（**需样本，否则 PENDING**） |
 | **v2.5** | WS-G Capstone + WS-H QBDI 通用化 | strip 内存镜像 .so 反汇编出正确指令序列；带 2 指针参数的 native 函数 trace 读到入参字符串 |
-| **v2.6** | WS-I 确定性关联 + WS-J 反检测动态面 | 8 条并发订单流零错配关联；svc 直连 + Java 验签双检测都被观测 |
+| **v2.6** | WS-I 确定性关联 + WS-J 反检测动态面 | 8 条并发订单流零错配关联；svc 直连 + Java 验签双检测都被观测；`compat_probe` footprint 可读且基础注入/GOT 路径 `anonExec` delta 不增长 |
 | 贯穿 | WS-K 拆分随各片落地；`docs/*` 同步（一份计划） | — |
 
 **依赖**：LSPlant / ShadowHook / Capstone / QBDI 均非 git，走 `tools/fetch_*.sh` 拉取（沿用 QBDI 模式），`third_party/` gitignore。LSPlant Java 后端（原 v2.1 内容）不再纳入本排期验收门禁，见 §6.9.1 WS-A 备注；若后续拿到 stock/AOSP 设备，作为独立探索性任务重新评估，不占用 v2.x 主线版本号。

@@ -1541,15 +1541,19 @@ sandbox-app 启动 → System.loadLibrary("idh_agent") → JNI_OnLoad；注入�
 ```text
 ADH Manager（普通 APK、无 Root）→ 受认证 AIDL Binder
 Root Device Daemon（模块随 boot 启动）→ 读写 /data/adb/adh/scope.json（allowlist）
-Zygisk 模块 (id=adh) → preAppSpecialize 读 scope → postAppSpecialize dlopen libidh_agent.so
+Zygisk 模块 (id=adh) → preAppSpecialize 读 scope/open agent fd/set package → postAppSpecialize android_dlopen_ext → DLCLOSE companion
 Agent → TCP 8761 → ADH Daemon（host，经 adb reverse）
 ```
 
 交付物：`injector/zygisk/dist/adh-zygisk.zip`、`device/manager` APK，以及二者合一且可由 Magisk 直接安装的版本化 `injector/zygisk/dist/adh-bundle-vX.Y.Z.zip`。Gadget/重打包仍为后续项。
 
 - Zygisk `.so` 必须导出未改名且默认可见的 C 符号 `zygisk_module_entry`；有 root companion 时同样要求 `zygisk_companion_entry`，打包阶段必须自动验证。
+- Agent 必须在 `preAppSpecialize` 内用 `getModuleDir()` + `openat` 打开 `libidh_agent.so`；`postAppSpecialize` 只用 `android_dlopen_ext(ANDROID_DLEXT_USE_LIBRARY_FD)` 加载，禁止在 post 阶段调 `getModuleDir()`（Zygisk Next 会死锁）。
+- Companion 必须在 `adh_agent_start()` 前调用 `adh_agent_set_package()` 传真实包名；early inject 不得把 `zygote64` 当目标包名上报。
+- scope 读取失败必须 fail-loud/no-inject；KernelSU 由 `post-fs-data.sh` 应用 `allow zygote adb_data_file` 的最小规则，Magisk 使用模块根 `sepolicy.rule`。
+- Companion 应设置 `DLCLOSE_MODULE_LIBRARY`，post-specialize 后卸载自身映射；agent `.so` 保持加载服务会话。
 - 模块作者固定为 `decrypthub.com`；root 管理器中的模块描述只显示“等待重启 / 运行中 / 未加载”这类简洁工作状态，不展示内部路径、架构说明或开发备注。
-- ADH Manager 的设备控制能力只限注入作用域和模块状态；界面默认中文，已有系统语言资源时跟随系统语言，并跟随系统深浅色主题。首页保留运行状态、Web UI 访问地址、作用域入口和版本信息。Manager 可直接探测 Host ADH Daemon `/health` 来显示并打开局域网优先的 Web UI 地址，但不得把该请求转交 Device Daemon，也不得在设备侧承载 HTTP 服务或分析逻辑。
+- ADH Manager 的设备控制能力只限注入作用域、模块状态，以及经 Device Daemon 终止/重启目标应用进程；界面默认中文，已有系统语言资源时跟随系统语言，并跟随系统深浅色主题。首页保留运行状态、Web UI 访问地址、作用域入口和版本信息。Manager 可直接探测 Host ADH Daemon `/health` 来显示并打开局域网优先的 Web UI 地址，但不得把该请求转交 Device Daemon，也不得在设备侧承载 HTTP 服务或分析逻辑。目标进程启停必须走受认证 AIDL（`controlPackage`），Manager 不得自己调用 `am`/`su`。不得对 Manager、Device Daemon、`system_server`、System UI 或 `android` 执行终止/重启。
 - “运行中”必须来自本次启动中 Zygisk 实际加载模块的标记，不能仅以模块目录存在作为成功依据；标记由 root companion 写入，启动时先清除旧状态。
 - Manager 不得直接调用 `su` 或访问 `/data/adb`。模块以 root `app_process` 启动 Device Daemon，Manager 仅通过 AIDL Binder 读取状态和作用域；daemon 必须校验调用 UID、`com.adh.manager` 包归属和构建时固定的 APK 签名证书。
 - Binder 交接入口只接受 UID 0 发布，并核对 AIDL descriptor；Manager 必须区分 Device Daemon 未连接、模块未安装、模块已安装但未加载、运行中四种状态。服务未连接时不得用空配置冒充真实作用域，也不得显示“模块未安装”。

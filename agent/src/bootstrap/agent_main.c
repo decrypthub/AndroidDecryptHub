@@ -31,12 +31,15 @@
 
 static pthread_once_t g_once = PTHREAD_ONCE_INIT;
 static char g_entry[16] = "start";
+static char g_package[512] = "";
 
 // ---- report + command loop ------------------------------------------------
 
 static void report(int fd) {
-    char cmd[256]; read_cmdline(cmd, sizeof(cmd));
-    char pkg[512]; json_escape(cmd, pkg, sizeof(pkg));
+    char cmd[512];
+    if (g_package[0]) { strncpy(cmd, g_package, sizeof(cmd) - 1); cmd[sizeof(cmd) - 1] = 0; }
+    else read_cmdline(cmd, sizeof(cmd));
+    char pkg[1024]; json_escape(cmd, pkg, sizeof(pkg));
     char rel[PROP_VALUE_MAX]; prop("ro.build.version.release", rel, sizeof(rel));
     char sdk[PROP_VALUE_MAX]; prop("ro.build.version.sdk", sdk, sizeof(sdk));
     char abi[PROP_VALUE_MAX]; prop("ro.product.cpu.abi", abi, sizeof(abi));
@@ -319,7 +322,16 @@ static void do_start(void) {
 }
 
 __attribute__((visibility("default")))
+void adh_agent_set_package(const char *pkg) {
+    if (pkg && pkg[0]) {
+        strncpy(g_package, pkg, sizeof(g_package) - 1);
+        g_package[sizeof(g_package) - 1] = 0;
+    }
+}
+
+__attribute__((visibility("default")))
 void adh_agent_start(void) {
+    idh_footprint_capture_baseline();
     strncpy(g_entry, "start", sizeof(g_entry) - 1);
     pthread_once(&g_once, do_start);
 }
@@ -353,6 +365,7 @@ static void bind_reporter_from_prop(JNIEnv *env) {
 
 JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *reserved) {
     (void)reserved;
+    idh_footprint_capture_baseline();
     idh_jni_set_vm(vm);
     strncpy(g_entry, "jni_onload", sizeof(g_entry) - 1);
     LOGI("JNI_OnLoad — agent " AGENT_VER " starting");

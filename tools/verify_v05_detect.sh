@@ -29,7 +29,13 @@ console.log(`observed: debug=${hasDebug} root=${hasRoot} prop=${hasProp}`);
 const c=await (await fetch(`${base}/api/compat/probe?session=${a.sessionId}`)).json();
 const b=c.backends||{};
 console.log(`compat: tracerPid=${c.tracerPid} seccomp=${c.seccomp} backends=${JSON.stringify(b)}`);
-const compatPass = c.ok && b.gotHook && b.jniReflect && b.artDexCapture && b.memRead && c.tracerPid===0;
+const fpShape = c.mapsReadOk===true && c.baselineValid===true && c.baseline && c.delta
+  && Number.isInteger(c.execMappings) && Number.isInteger(c.anonExecMappings)
+  && Number.isInteger(c.anonNamedExecMappings) && Number.isInteger(c.memfdExecMappings)
+  && Number.isInteger(c.rwxMappings);
+const fpOk = fpShape && c.agentExecMappings>=1 && c.rwxMappings===0;
+console.log(`footprint: exec=${c.execMappings} anon=${c.anonExecMappings} anonNamed=${c.anonNamedExecMappings} memfd=${c.memfdExecMappings} rwx=${c.rwxMappings} agent=${c.agentExecMappings} zygisk=${c.zygiskExecMappings} baselineAnon=${c.baseline?.anonExecMappings} deltaAnon=${c.delta?.anonExecMappings}`);
+const compatPass = c.ok && b.gotHook && b.jniReflect && b.artDexCapture && b.memRead && c.tracerPid===0 && fpOk;
 
 const pass = detectPass && compatPass;
 console.log(pass?'RESULT:PASS':'RESULT:FAIL');

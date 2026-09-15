@@ -88,6 +88,25 @@
       · `dex.ts` 增加 proto/descriptor/参数解析、字段访问点和保守的寄存器常量传播；寄存器被覆盖或 code_item 越界时不猜测，统计 `skipped` 并 fail-loud。
       · REST：`POST /api/dex/index`、`/api/dex/index/search`、`/api/dex/index/reflections`；MCP：`dex_index`、`dex_index_search`、`dex_reflections`。
       · sandbox 新增 `ReflectionProbe.load()`，多 dex 验收 `tools/verify_v29_dexindex.sh`：四个 dex 共 59,719 个方法、0 skipped；重复索引缓存最大 3.9ms；`ReflectionProbe.load → Class.forName → Lcom/adh/sandbox/JavaCrypto;` caller/descriptor 经 REST + MCP 均 PASS。已加入 `verify_all.sh`。
+- [x] **真机刷入通道 `tools/flash_device.sh`（2026-09-14）**：KernelSU (`ksud module install`) / Magisk 自动识别。当前连接机 OnePlus PGP110 `aa165071`（SukiSU Ultra + Zygisk Next 1.4.2）已刷入 **ADH v0.3.1** 并重启：模块描述「状态：运行中」，`zygisk_loaded` 与 `device_daemon_ready` 均在，`com.adh.manager` 已安装。后续代码更新重复 `bash tools/flash_device.sh --reboot`。`verify_v27_zygisk` 同步认 KernelSU。
+- [x] **Web UI 顶栏访问地址只显示一条；品牌改为乌鸦 logo（2026-09-14）**：`#access` 局域网优先，不再并排「LAN · 本机 127.0.0.1」。顶栏去掉字母 A / 双行产品名，只留乌鸦标 + `ADH`；`/raven.svg` 同时作 favicon。
+- [x] **应用列表改由 root Device Daemon 枚举 + Web UI 公众号/MCP + `android-decrypt-hub` 网关（2026-09-14）**：
+      · 根因：Manager 自己 `getInstalledApplications` 在 Android 11+/ColorOS 上对侧载包不可见，且可能 TransactionTooLarge →「无法读取应用列表」。LSPosed 形态下列表由特权守护进程提供，注入范围仍是 `/data/adb/adh/scope.json`。
+      · AIDL protocol v2 增加 `listApplications()`（compact JSON `[{p,l,s}]`）；Device Daemon 用 uid=0 `ActivityThread.systemMain()` 系统上下文枚举，失败则 `cmd package list packages`。Manager 删除 `QUERY_ALL_PACKAGES`，目录失败时仍展示 scope.json 已选包。
+      · Web UI 对齐 iOS：顶栏「公众号」+ `/wechat-follow.png`；MCP 模态改为 `pip install android-decrypt-hub` → `adh connect <host>` → Cursor `"command":"adh","args":["mcp"]`。`/api/mcp/config` 同步。
+      · 新增 `python/` PyPI 包 **android-decrypt-hub**（入口 `adh`）：connect/devices/mcp stdio 代理 Host `POST /mcp`，配置 `~/.config/adh/connections.json`。
+- [x] **Host 对外 8088 + 按包名切 App（2026-09-14）**：用户可见 HTTP/WS/MCP 默认 **8088**（对齐 iOS `idh`），agent TCP 仍 **8761**。`adh connect` 不再默认 `127.0.0.1`，走局域网；`http://<LAN>:8088/<package>` 钉该 App 的 Web / `POST /<package>/mcp`。HTTP 仍只在 Host，不进 agent / Device Daemon。Manager 探测 `127.0.0.1:8088/health`（adb reverse），展示优先 LAN。真机 `aa165071` 沙盒 `com.adh.sandbox` 模拟注入在线：加解密 / 系统观测 / TLS 抓包 / 文件管理器 / 文件 I/O hook 均 PASS。
+- [x] **注入范围显示 App 图标（2026-09-14）**：Manager 进程没有包可见性，`getApplicationIcon` 全是空占位。协议 v3 增加 `getApplicationIconPng`，由 uid=0 Device Daemon 按包返回 PNG；列表仍用 compact catalog，图标按可见行懒加载。
+- [x] **Web UI 对齐 iOS workbench 整页（2026-09-14）**：进程收进顶栏下拉（去掉第二进程条）；tab 计数不再用胶囊；筛选默认折叠；捕获最新在上，滚离顶部时出「跳到最新」；详情左侧色条 + 悬停复制；Dump 默认只列本应用模块、下载在右列。MCP / 设置 / 公众号保留。续扫：Dump 始终隐藏 APK/JAR（不再被 `/data/app` 误放进本应用列表）；主 tab 选择器不再误伤设置侧栏；加解密列表补第三行 preview；覆盖率/配置 JSON 去掉填色框。
+- [x] **Manager 终止/重启目标应用（2026-09-14）**：注入范围每行溢出菜单「终止进程 / 重新启动」。协议 v4 `controlPackage` 由 uid=0 Device Daemon 调 `ActivityManager.forceStopPackage`（失败则 `cmd activity force-stop` / `start`），供 Zygisk 改 scope 后冷启动再注入。Manager 不调用 `su`/`am`。拒绝 Manager / Device Daemon / System UI / `android` / HardExcludes。模块与 Manager `v0.3.2 / versionCode=9`。
+- [x] **真机 Zygisk 注入链路修复 v0.3.3 + Sentry 验收（2026-09-15）**：
+      · 根因：`postAppSpecialize` 调 `getModuleDir()` 死锁；KernelSU 未自动应用模块 `sepolicy.rule`，zygote 读不了 `adb_data_file` 上的 scope；early inject 时 `/proc/self/cmdline` 仍是 `zygote64`。
+      · 修复：`preAppSpecialize` 用 `getModuleDir()` + `openat` 取 agent fd、post 只做 `android_dlopen_ext`；新增 `adh_agent_set_package` 由 companion 注入真实包名；模块加 `sepolicy.rule` + `post-fs-data.sh` ksud live patch；`onLoad` 设 `DLCLOSE_MODULE_LIBRARY` 卸载 companion。
+      · 真机 Sentry `anti.rusda` v1.7.1 冷启动 3/3：agent online `entry=start`；agent maps=3、companion maps=0、anonExec=0、anonNamed=0、memfd=2（ART JIT）、rwx=0。
+      · Sentry 自身检测 3/3：Memory Signatures clean、Maps detection clean；Frida threads/ports、Ptrace、Debugger 全过；安全分数 96，与未注入基线一致。
+- [x] **注入足迹基线 + release 收口（2026-09-15，WS-J 首切片）**：`compat_probe` 新增 bootstrap 基线/当前 `execMappings`、`anonExecMappings`、`anonNamedExecMappings`、`memfdExecMappings`、`rwxMappings`、`agentExecMappings`、`zygiskExecMappings` 与 delta；`verify_v05_detect` 校验字段形状、agent 映射存在且 `rwx=0`。
+      · release `libidh_agent.so` strip（debug copy 留本地），`.dynsym` 经 version script 只保留 `JNI_OnLoad` / `adh_agent_set_package` / `adh_agent_start` / `idh_agent_start`；debug 13.34MB → release 590KB。
+      · 静态结论：基础注入与 GOT hook 不分配匿名可执行段；已知匿名 `x` 生产者是 Dobby inline trampoline（Dobby 自身缓存，`DobbyDestroy` 不释放）与 QBDI trace code cache。QBDI 结束已 `dlclose`。真机 Sentry 验收见上。
 - [ ] v2.4 WS-E 脱壳二代 + try/catch + cdex/041（需样本，否则 PENDING）
 - [ ] v2.5 WS-G Capstone + WS-H QBDI 通用化
 - [ ] v2.6 WS-I 确定性关联 + WS-J 反检测动态面

@@ -18,7 +18,7 @@
 | `hook/java_lsplant.cpp` | Optional LSPlant Java-method hook backend |
 | `runtime/actions.c` | Safety-gated Java trigger and explicit in-process `.so` loading commands |
 | `runtime/art.c` | ClassLoader-cookie enumeration and per-API ART DexFile structural resolution |
-| `runtime/inspection.c` | Live-object reflection plus JNI/runtime compatibility probes |
+| `runtime/inspection.c` | Live-object reflection, JNI/runtime compatibility probes, and the bootstrap/current injection-footprint counters |
 | `runtime/jni.c` | JavaVM discovery, native-thread attach/detach, and app ClassLoader access |
 | `trace/commands.c` | Function-call trace state, GOT trace orchestration, and QBDI command response handling |
 | `trace/qbdi_trace.c` | Optional runtime-loaded QBDI instruction trace |
@@ -28,3 +28,9 @@
 Move one capability domain at a time and preserve command names and response schemas. A new module exposes a narrow header, is added to `agent/CMakeLists.txt`, and must pass `tools/build_agent.sh` plus its focused acceptance script before the next domain moves.
 
 Phase 3 domain extraction is complete. Further bootstrap work should focus on table-driven RPC dispatch, not moving isolated helper functions solely to reduce line count.
+
+## Release footprint
+
+- `tools/build_agent.sh` keeps `libidh_agent.so.debug` locally and stages only a stripped `.so`.
+- `exports.map` restricts `.dynsym` to `JNI_OnLoad`, `adh_agent_set_package`, `adh_agent_start`, and `idh_agent_start`.
+- `compat_probe` reports bootstrap vs current exec/anon-exec/RWX counters; base injection and GOT hooks must not add true anonymous executable pages.

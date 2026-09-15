@@ -56,6 +56,7 @@ SCRIPTS=(
   "verify_v24_javacap.sh:device"
   "verify_v25_fsbrowser.sh:device"
   "verify_v26_cryptocoverage.sh:device"
+  "verify_v26_footprint.sh:host"
   "verify_v27_zygisk.sh:device"
   "verify_v28_inlinehook.sh:device"
   "verify_v29_dexindex.sh:host"

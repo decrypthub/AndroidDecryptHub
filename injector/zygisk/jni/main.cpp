@@ -2,7 +2,9 @@
 // Scope file: /data/adb/adh/scope.json  ({"version":1,"mode":"allowlist","packages":["…"]})
 // Never injects zygote / system_server / com.adh.manager.
 #include <android/log.h>
+#include <android/dlext.h>
 #include <dlfcn.h>
+#include <cerrno>
 #include <fcntl.h>
 #include <unistd.h>
 #include <cstdio>
@@ -73,19 +75,41 @@ static bool package_in_scope(const char *pkg) {
     return strstr(buf, needle) != nullptr;
 }
 
-static std::string module_agent_path(zygisk::Api *api) {
+static int open_agent_fd(zygisk::Api *api, std::string *where) {
+    // Open the agent while we are still in the pre-specialize window. Calling
+    // getModuleDir() from postAppSpecialize deadlocks on Zygisk Next, so keep
+    // the daemon interaction here and pass only the plain fd to the linker.
     int dirfd = api->getModuleDir();
-    if (dirfd < 0) return {};
-    // Resolve /proc/self/fd/<dirfd>/libidh_agent.so
-    char link[64];
-    snprintf(link, sizeof(link), "/proc/self/fd/%d", dirfd);
-    char dir[512];
-    ssize_t len = readlink(link, dir, sizeof(dir) - 1);
-    close(dirfd);
-    if (len <= 0) return {};
-    dir[len] = '\0';
-    std::string path = std::string(dir) + "/" + kAgentName;
-    return path;
+    if (dirfd >= 0) {
+        int fd = openat(dirfd, kAgentName, O_RDONLY | O_CLOEXEC);
+        close(dirfd);
+        if (fd >= 0) {
+            if (where) *where = "module-dir fd";
+            return fd;
+        }
+        LOGE("openat(module dir fd=%d, %s) failed: %s", dirfd, kAgentName, strerror(errno));
+    } else {
+        LOGE("getModuleDir failed");
+    }
+
+    // Fallback: the file is normally visible in the pre-specialize namespace.
+    const char *fallback = "/data/adb/modules/adh/libidh_agent.so";
+    int fd = open(fallback, O_RDONLY | O_CLOEXEC);
+    if (fd >= 0 && where) *where = fallback;
+    else LOGE("open(%s) failed: %s", fallback, strerror(errno));
+    return fd;
+}
+
+static void *dlopen_agent_fd(int fd, const std::string &where) {
+    if (fd < 0) return nullptr;
+    android_dlextinfo extinfo{};
+    extinfo.flags = ANDROID_DLEXT_USE_LIBRARY_FD;
+    extinfo.library_fd = fd;
+    char proc_path[64];
+    snprintf(proc_path, sizeof(proc_path), "/proc/self/fd/%d", fd);
+    void *handle = android_dlopen_ext(proc_path, RTLD_NOW, &extinfo);
+    if (!handle) LOGE("android_dlopen_ext(%s, fd=%d) failed: %s", where.c_str(), fd, dlerror());
+    return handle;
 }
 
 class AdhModule : public zygisk::ModuleBase {
@@ -93,6 +117,10 @@ public:
     void onLoad(zygisk::Api *api, JNIEnv *env) override {
         this->api = api;
         this->env = env;
+        // The companion is not needed after postAppSpecialize; ask Zygisk Next
+        // to dlclose it so /data/adb/modules/adh/zygisk/*.so does not linger in
+        // the target maps. The agent .so stays loaded for the session.
+        if (api) api->setOption(zygisk::Api::DLCLOSE_MODULE_LIBRARY);
     }
 
     void preAppSpecialize(zygisk::AppSpecializeArgs *args) override {
@@ -108,6 +136,7 @@ public:
         const char *pkg = env->GetStringUTFChars(args->nice_name, nullptr);
         if (!pkg) return;
         std::string package(pkg);
+        package_name = package;
         env->ReleaseStringUTFChars(args->nice_name, pkg);
 
         if (is_hard_exclude(package.c_str())) {
@@ -118,24 +147,28 @@ public:
             return;
         }
 
-        agent_path = module_agent_path(api);
-        if (agent_path.empty()) {
-            // Fallback fixed module path (Magisk module id = adh).
-            agent_path = std::string("/data/adb/modules/adh/") + kAgentName;
-        }
         should_inject = true;
-        LOGI("will inject %s via %s", package.c_str(), agent_path.c_str());
+        agent_fd = open_agent_fd(api, &agent_path);
+        if (agent_fd < 0) {
+            should_inject = false;
+            return;
+        }
+        LOGI("will inject %s via %s (fd=%d)", package.c_str(), agent_path.c_str(), agent_fd);
     }
 
     void postAppSpecialize(const zygisk::AppSpecializeArgs *args) override {
         (void)args;
         if (!should_inject || agent_path.empty()) return;
 
-        void *handle = dlopen(agent_path.c_str(), RTLD_NOW);
-        if (!handle) {
-            LOGE("dlopen(%s) failed: %s", agent_path.c_str(), dlerror());
-            return;
-        }
+        void *handle = dlopen_agent_fd(agent_fd, agent_path);
+        close(agent_fd);
+        agent_fd = -1;
+        if (!handle) return;
+        LOGI("ADH agent loaded via %s", agent_path.c_str());
+        using set_pkg_fn = void (*)(const char *);
+        auto set_pkg = reinterpret_cast<set_pkg_fn>(dlsym(handle, "adh_agent_set_package"));
+        if (set_pkg && !package_name.empty()) set_pkg(package_name.c_str());
+        else LOGE("adh_agent_set_package not found; agent will infer package from cmdline");
         using start_fn = void (*)();
         auto start = reinterpret_cast<start_fn>(dlsym(handle, "adh_agent_start"));
         if (!start) {
@@ -155,7 +188,9 @@ private:
     JNIEnv *env = nullptr;
     bool should_inject = false;
     bool marker_requested = false;
+    int agent_fd = -1;
     std::string agent_path;
+    std::string package_name;
 };
 
 REGISTER_ZYGISK_MODULE(AdhModule)

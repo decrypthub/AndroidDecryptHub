@@ -6,7 +6,7 @@ Generated from the live idhd registry (25 tools). Endpoint: `POST /mcp` (JSON-RP
 |---|---|---|
 | `process_list` | List connected target agent sessions | — |
 | `dumps_list` | List captured dump artifacts (dex/so/region) | — |
-| `compat_probe` | Self-assess agent env: tracer/seccomp/hook-backend availability | session |
+| `compat_probe` | Self-assess agent env + injection footprint: tracer/seccomp/backends/exec/anon/rwx | session |
 | `memory_maps` | On-demand full /proc/self/maps of the target | session |
 | `memory_read` | Read target memory at hex addr for size bytes (base64 out) | session, addr, size |
 | `memory_search` | Search target memory for hex or text pattern | session, hex, text, limit |

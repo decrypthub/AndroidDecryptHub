@@ -82,6 +82,15 @@ endif()
 
 add_library(idh_agent SHARED ${AGENT_SOURCES})
 
+# Release footprint: keep only the three bootstrap entry points in .dynsym.
+# Dobby/LSPlant/libc++ internals stay local to this DSO; Zygisk resolves only
+# adh_agent_start/idh_agent_start and System.loadLibrary resolves JNI_OnLoad.
+set(AGENT_EXPORT_MAP "${CMAKE_CURRENT_SOURCE_DIR}/exports.map")
+if(NOT EXISTS "${AGENT_EXPORT_MAP}")
+  message(FATAL_ERROR "missing agent export map: ${AGENT_EXPORT_MAP}")
+endif()
+target_link_options(idh_agent PRIVATE "-Wl,--version-script=${AGENT_EXPORT_MAP}")
+
 target_include_directories(idh_agent PRIVATE ${QBDI_INC} ${LSPLANT_INC})
 
 # Android system libs: log (android/log.h), plus libc/pthread (implicit).

@@ -19,6 +19,7 @@ API:
 | `verify_gate "<label>" <0\|1>` | Reads `$OUT` for `RESULT:PASS`. Returns 0 on pass; if arg2=1, also requires non-empty `$ALIVE`. Prints the ✅/❌ line. Uses here-string grep (SIGPIPE-safe — the `echo\|grep -q` pattern false-fails on >64KB payloads under `pipefail`). |
 | `verify_grep_q <haystack> <pattern>` | SIGPIPE-safe `grep -q` for host scripts grepping large HTML. |
 | `verify_host_begin` / `verify_chk "<label>" '<expr>'` / `verify_host_finish "<label>"` | The chk-accumulator idiom for host scripts with many assertions (replaces the inline `fail=0; chk(){…}` redefinition). |
+| `install_apk_root <apk> [remote] [serial]` | Root `push` + `pm install -r -t` (from `env.sh`). Never `adb install` — ColorOS waits on USB confirm. |
 
 **Contract preserved**: each verify script still exits 0 on PASS / 1 on FAIL, and the
 node heredoc payload (the unique per-test code) stays byte-for-byte verbatim in the
@@ -27,8 +28,10 @@ script — the lib only factors the shell boilerplate around it.
 ### `lib/env.sh` — build-path env
 SDK/NDK/CMake/Ninja/toolchain/READELF/ROOT/ABI resolution, sourced by `build_agent.sh`
 and `build_detect.sh` (was inlined verbatim in both). Pure var assignment — does NOT
-touch shell options; the caller's `set -e/-u/-o pipefail` stands. WSL builds use
-`wsl_env.sh` instead (different SDK discovery + path translation — kept separate).
+touch shell options; the caller's `set -e/-u/-o pipefail` stands. Git Bash `pwd` is
+`/x/Project/...`; `ROOT` is converted with `cygpath -m` so Windows `apksigner`/NDK
+see `X:/...`. WSL builds use `wsl_env.sh` instead (different SDK discovery + path
+translation — kept separate).
 
 ## Script shapes (three coexist by design)
 
@@ -53,17 +56,20 @@ touch shell options; the caller's `set -e/-u/-o pipefail` stands. WSL builds use
 - Runs `dev_up.sh` first, then each script in `SCRIPTS` (sequential; `:device` scripts force-stop + relaunch `com.adh.sandbox/.MainActivity` + sleep 4 first).
 - `:device` scripts SKIP (not FAIL) when no device attached.
 - Exit 0 iff all RUN scripts pass. Prints `pass=N fail=N skip=N [failed:…]`.
+- `verify_v26_footprint.sh` — host-only static guard: stripped agent `.so`, exactly three dynamic exports, no RWX `LOAD`; runs in `verify_all.sh` without a device.
 - **`verify_v23_javahook.sh` is deliberately EXCLUDED** — LSPlant WS-A is blocked on this ROM (libart stripped). See the comment in the SCRIPTS array. Re-add only on a stock/AOSP device.
 
 ## Build scripts
 
-- `build_agent.sh` — `libidh_agent.so` (arm64-v8a, NDK+SDK cmake), stages into `sandbox-app/…/jniLibs/$ABI`, prints `adh_agent_start` + legacy `idh_agent_start` + `JNI_OnLoad` exports (fail-loud on compile error — do NOT hide build output).
+- `build_agent.sh` — `libidh_agent.so` (arm64-v8a, NDK+SDK cmake), stages into `sandbox-app/…/jniLibs/$ABI`, prints `adh_agent_set_package` + `adh_agent_start` + legacy `idh_agent_start` + `JNI_OnLoad` exports (fail-loud on compile error — do NOT hide build output).
 - `build_detect.sh` — `libidhdetect.so` (sandbox's mock detection target), same cmake pattern.
 - `fetch_qbdi.sh` / `fetch_lsplant.sh` — one-time third-party fetch (gitignored under `agent/third_party/`).
 - `build_zygisk.sh` — 构建 Manager 证书固定的 Root Device Daemon + Zygisk 模块 → `injector/zygisk/dist/adh-zygisk.zip`
-- `build_bundle.sh` — Magisk 可直接安装的版本化组合包（Zygisk + Device Daemon + Manager）→ `injector/zygisk/dist/adh-bundle-vX.Y.Z.zip`
+- `build_bundle.sh` — Magisk/KernelSU 可直接安装的版本化组合包（Zygisk + Device Daemon + Manager）→ `injector/zygisk/dist/adh-bundle-vX.Y.Z.zip`
+- `flash_device.sh` — 把组合包推到当前手机并刷入（自动识别 KernelSU `ksud` / Magisk）。`--no-build` 跳过重建；`--reboot` 刷完重启让 Zygisk + Device Daemon 加载。多设备时必须设 `ANDROID_SERIAL`。
 - Device surface: `cd device && ./gradlew :core:test :daemon:testDebugUnitTest :daemon:assembleDebug :manager:testDebugUnitTest :manager:assembleDebug`
-- `dev_up.sh` — idempotent: start Host ADH Daemon (if down) + `adb reverse` for 8760/8761.
+- `python/` — PyPI `android-decrypt-hub`（脚本 `adh`）：`cd python && PYTHONPATH=src python -m unittest`
+- `dev_up.sh` — idempotent: start Host ADH Daemon (if down) + `adb reverse` for 8088/8761.
 - `load_frida_gadget.sh` — manual real-injection helper (module W, deferred).
 
 ## Known flakes (pre-existing, not introduced by the lib refactor)
