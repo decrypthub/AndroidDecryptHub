@@ -60,6 +60,9 @@ SCRIPTS=(
   "verify_v27_zygisk.sh:device"
   "verify_v28_inlinehook.sh:device"
   "verify_v29_dexindex.sh:host"
+  # Optional Frida Gadget backend (module W): official gadget → dlopen → bundled Java hook.
+  # SKIPs (exit 0) when the gadget asset / bundler deps are absent — both are gitignored caches.
+  "verify_v30_fridagadget.sh:device"
 )
 
 pass=0; fail=0; skip=0; FAILED=""

@@ -1,0 +1,6 @@
+# Install cache — `npm install --ignore-scripts` (esbuild ships a prebuilt binary;
+# the native `frida` binding that frida-compile needs is NOT required here).
+node_modules/
+# Scratch space for generated bundle entries.
+tmp/
+*.bundle.js

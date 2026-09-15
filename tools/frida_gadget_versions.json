@@ -1,0 +1,13 @@
+{
+  "default": "17.18.0",
+  "versions": {
+    "17.18.0": {
+      "arm64": {
+        "asset": "frida-gadget-17.18.0-android-arm64.so.xz",
+        "url": "https://github.com/frida/frida/releases/download/17.18.0/frida-gadget-17.18.0-android-arm64.so.xz",
+        "sha256": "c176650121a70b4345ce3d47c422df295fc8d931fb14f75887dddc0230c79e81",
+        "source": "official-frida-release"
+      }
+    }
+  }
+}

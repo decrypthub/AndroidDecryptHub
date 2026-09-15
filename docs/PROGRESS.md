@@ -15,6 +15,25 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 idhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [x] **模块 W 可选后端：Frida Gadget 直载 + 官方版本切换（2026-09-15，真机 aa165071）**：把"能不能加载 Frida JS hook"做成可选、可验收的独立路径 ——
+- [ ] **已知红：`verify_v05_detect.sh` FAIL（2026-09-15 回归，非本轮改动引入）**：`/api/detect/watch` 返回
+      `hooked={"ptrace":0,"access":0,"prop":0} triggered=true count=0` —— agent 在 `libadhdetect.so` 的 GOT 里一个槽都没替换掉，
+      但同一模块确实 import 这三个符号（`llvm-readelf --dyn-syms` 确认 ptrace/access/__system_property_get 均在 UND）。
+      设备上 `libadhdetect.so`/`libidh_agent.so` 的 sha256 与本地构建逐字节一致，故非部署过期；怀疑方向：`got.c` 只认"当前值 == 原始地址"的槽，
+      而这三个调用在触发前尚未解析（lazy binding，GOT 槽仍指向 PLT stub），于是 0 命中；v10_trace 走的另一条路径仍绿。
+      下一步：读 `agent/src/hook/got.c` 的匹配逻辑 + 在真机上确认槽在 patch 时刻的实际值（本轮未修，避免与 gadget 改动混在一起）。
+      `tools/fetch_frida_gadget.sh`（只走官方 release，版本/ABI 可切换，压缩包 sha256 固定在 `tools/frida_gadget_versions.json`）
+      + `tools/compile_frida_script.sh`（**Frida 17 起 Java/ObjC 语言桥不再内置在 runtime**：用 esbuild 把 hook 与 `frida-java-bridge` 打成单文件；
+      经典 `Java.perform(...)` 自动注入 `globalThis.Java`，module 写法原样打包，已打包文件幂等直通；不用 `frida-compile` —— 其 CLI 依赖原生 `frida` 绑定，Windows 上需 MSVC）
+      + `tools/load_frida_gadget.sh`（官方 so → 按需打包 → 落进 `<pkg>/code_cache`（app uid + selinux ctx）→ `/api/agent/load_so` dlopen →
+      轮询 `/proc/<pid>/task` 等 `frida-gadget` 线程 → 可选 `--marker` 断言脚本真的跑了；`--watch` 用 `on_change: reload`，改脚本即热重载无需重启目标）。
+      · 排掉的 4 个坑（均有证据）：① Gadget 由构造函数自启动、**没有入口符号**，`symbolFound:false` 是正常的（loader 现在只认 dlopen 成功）；
+        ② 配置文件名必须是 `<soname>.config.so` 且与 so 同目录，否则静默回退默认 listen（无 listener、无脚本、无报错）；
+        ③ `Java is not defined` = Frida 17 语言桥不在 runtime（官方 Gadget 文档明示），必须打包，否则脚本能跑但 Java hook 部分永远不执行；
+        ④ 只等"线程起来"会假绿 —— 线程在配置解析之前就创建，必须用 `--marker` 这类端到端断言。
+      · 验收：`tools/verify_v30_fridagadget.sh` 真机 PASS（官方 Gadget 17.18.0 arm64 → dlopen → 打包后的 Java hook 写 marker `ADH_FRIDA_GADGET_OK android=15`，目标进程存活）；
+        实测开销：so 25,220,848 B、目标进程 +9 行 maps、+2 线程 —— 高开销后端，**默认关闭**，只有显式调用才启用。
+      · LSPosed/Xposed（下一片，未开工）：测试机已具备 **Vector v2.2 (3080)**（`/data/adb/lspd` 在位，可直接验收），设计见 `REQUIREMENTS.md §30.5` / `DEVELOPMENT_PLAN.md §6.10` —— 薄模块、不 vendor GPL 代码、作用域仍归 Manager/Device Daemon。
 
 - [x] **Web UI 重皮 —— 移植 IDH「2026 workbench」设计语言（2026-07-24）**：`daemon/public/index.html` 整体重设，对齐 IDH 参考界面。
       · 深墨蓝 token 体系（`--bg:#06070a`/`--surface`/`--blue:#78a9ff` + 分类色）+ Inter 字体；品牌头 brand-lockup + `Runtime Console` + 状态 pill；tabbar 计数胶囊（active 蓝底）。

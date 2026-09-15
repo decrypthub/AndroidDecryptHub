@@ -87,7 +87,7 @@ Web UI（浏览器）：
 | [LSPlant](https://github.com/LSPosed/LSPlant) | ART Java method hook/unhook、inline deoptimization | Agent |
 | [Capstone](https://github.com/capstone-engine/capstone) | 反汇编引擎 | Daemon 为主；Agent 可选轻量 wrapper |
 | [QBDI](https://github.com/QBDI/QBDI) | DBI 框架，指定范围 instruction trace | Agent（按需加载） |
-| [Frida Gadget](https://frida.re) | 非 root 注入 so（随 APK 加载 / 重打包） | 打包进目标 APK |
+| [Frida Gadget](https://frida.re) | 可选注入后端：官方 so 由 agent `dlopen` 进目标（也可随 APK 加载 / 重打包）；Frida 17 起 Java/ObjC 语言桥需自行打包 | `tools/load_frida_gadget.sh`（已落地）+ 重打包打包器（延后，见 §6.10） |
 | Zygisk (Magisk) | root early-inject 后端 | 注入器（root） |
 | MCP Streamable HTTP | 独立进程 HTTP POST/GET + SSE 流式 | Daemon |
 
@@ -502,7 +502,7 @@ android-decrpthub/          # 仓库名；产品名 ADH (Android DecryptHub)
 ├── injector/               # W 注入后端（Magisk / 设备侧打包）
 │   ├── zygisk/             # Magisk Zygisk early-inject + dist/adh-zygisk.zip / adh-bundle-vX.Y.Z.zip
 │   ├── manager/            # DEPRECATED stub，见 device/manager
-│   ├── gadget-pack/        # 非 root：agent+gadget 打进 APK 重签（延后）
+│   ├── gadget-pack/        # 非 root：agent+gadget 打进 APK 重签（延后；直载路径见 tools/load_frida_gadget.sh + §6.10）
 │   └── ptrace/             # 手动注入器（延后）
 │
 ├── device/                 # 设备侧多模块（独立于 Host daemon，非 Xposed）
@@ -665,6 +665,19 @@ disasm 只 `llvm-objdump`（文件型 so），缺 **Capstone 内存镜像反汇�
 | **P2** | 抓包按连接/host 组包成请求-响应；反调 inline+SVC 动态观测 | 协议逆向/反调实战完整度 | Agent + Daemon (WS-I/WS-J) |
 
 **三大欠账（一句话）**：非对称 Signature/KDF/AEAD 的真实覆盖（v2.1 原生 GOT hook 已解决，见上表 P0）、国密与隐私分析面板明确标 PENDING（LSPlant 依赖，设备级阻塞，非本轮范围）、前端主操作与 demo 端点去 sandbox 化。
+
+## 6.10 可选注入后端（Gadget / LSPosed，非默认）
+
+> 与 §6.9 的关系：§6.9 是"把已有能力做扎实"的主线；本节只扩**加载机制**，不新增分析能力，也不占 v2.x 版本号。
+> 判定与验收细则见 `REQUIREMENTS.md §30.5`。
+
+- **Frida Gadget（已落地，2026-09-15 真机验证）**：`tools/fetch_frida_gadget.sh`（官方 release、版本/ABI 可切、sha256 固定）
+  + `tools/compile_frida_script.sh`（Frida 17 起语言桥移出 runtime → esbuild + `frida-java-bridge` 打包）
+  + `tools/load_frida_gadget.sh`（落盘 `<pkg>/code_cache` → `load_so` dlopen → 等 `frida-gadget` 线程 → `--marker` 断言脚本真的跑通）。
+  验收脚本：`tools/verify_v30_fridagadget.sh`。
+- **LSPosed/Xposed（下一片，未开工）**：`injector/xposed/` 薄模块 + 复用框架加载；作用域仍归 ADH Manager / Device Daemon。
+  设备侧已具备 Vector v2.2 (3080)（`/data/adb/lspd`），可直接验收，不需要再刷机。
+- 红线：可选后端只在**显式调用**时启用（默认注入路径不变）；目标进程内不得承载 HTTP/DB/分析；不 vendor 上游 GPL 代码。
 
 ---
 

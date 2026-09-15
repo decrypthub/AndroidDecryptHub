@@ -1514,17 +1514,18 @@ MCP              →  AI 可编程操控，与 HTTP 同源
 | 后端 | 环境 | 说明 |
 |------|------|------|
 | **Zygisk 插件** | root（Magisk） | 主线，zygote fork 后 early-inject，配合 S 韧性；配套 **ADH Manager** 管理作用域白名单（`/data/adb/adh/scope.json`） |
-| **Frida Gadget** | 非 root | gadget so 随 APK 加载，或独立 gadget 模式 |
+| **Frida Gadget**（可选，默认关） | 非 root / root | 官方 Gadget so 由 agent `dlopen` 进目标进程，运行 Frida JS hook；按版本/ABI 下载 + sha256 固定；高开销（~25 MB so、额外 maps 与线程），只有显式调用才启用 |
 | **重打包注入** | 非 root | 把 `libidh_agent.so`（+可选 gadget）打进目标 APK 重签名 |
 | ptrace 注入器 | root | 按需附加已运行进程 |
-| LSPosed/Xposed 桥接 | 有框架 | 复用框架加载 |
+| LSPosed/Xposed 桥接（可选，默认关） | 有框架（Vector/LSPosed） | 薄 Xposed 模块复用框架加载，不 vendor GPL 代码 |
 | **模拟注入** | 无需 root | sandbox 自身 `dlopen` 加载 agent（开发/CI 主路径） |
 
 ### 30.2 打包交付物
 
 - `libidh_agent.so`（arm64-v8a 主线，设备 ABI）
 - Zygisk 模块包（root 版）+ ADH Manager APK（作用域：选哪些 App 注入）；另提供 Magisk 可直接安装、自动安装 Manager 的组合包
-- Gadget 打包工具：把 agent + gadget so 注入并重签目标 APK（非 root 版）
+- Gadget 工具链：`tools/fetch_frida_gadget.sh`（官方 release，按版本/ABI + sha256，`--list`/`--print-url`）、`tools/compile_frida_script.sh`（Frida 17 起语言桥移出 runtime，用 esbuild + `frida-java-bridge` 打包）、`tools/load_frida_gadget.sh`（落盘 → `load_so` dlopen → 等 `frida-gadget` 线程 → 可选 `--marker` 断言脚本真的跑通）
+- Gadget 打包工具（重打包路径，延后）：把 agent + gadget so 注入并重签目标 APK（非 root 版）
 - 双 bootstrap 入口：`JNI_OnLoad`/构造函数（被加载）与 `adh_agent_start()`（被宿主主动调用；`idh_agent_start()` 为兼容别名），行为一致
 
 ### 30.3 模拟注入回路（CI 主路径）
@@ -1545,7 +1546,7 @@ Zygisk 模块 (id=adh) → preAppSpecialize 读 scope/open agent fd/set package 
 Agent → TCP 8761 → ADH Daemon（host，经 adb reverse）
 ```
 
-交付物：`injector/zygisk/dist/adh-zygisk.zip`、`device/manager` APK，以及二者合一且可由 Magisk 直接安装的版本化 `injector/zygisk/dist/adh-bundle-vX.Y.Z.zip`。Gadget/重打包仍为后续项。
+交付物：`injector/zygisk/dist/adh-zygisk.zip`、`device/manager` APK，以及二者合一且可由 Magisk 直接安装的版本化 `injector/zygisk/dist/adh-bundle-vX.Y.Z.zip`。Gadget 直载路径已落地（见 §30.5）；重打包（`injector/gadget-pack`）仍为后续项。
 
 - Zygisk `.so` 必须导出未改名且默认可见的 C 符号 `zygisk_module_entry`；有 root companion 时同样要求 `zygisk_companion_entry`，打包阶段必须自动验证。
 - Agent 必须在 `preAppSpecialize` 内用 `getModuleDir()` + `openat` 打开 `libidh_agent.so`；`postAppSpecialize` 只用 `android_dlopen_ext(ANDROID_DLEXT_USE_LIBRARY_FD)` 加载，禁止在 post 阶段调 `getModuleDir()`（Zygisk Next 会死锁）。
@@ -1557,6 +1558,24 @@ Agent → TCP 8761 → ADH Daemon（host，经 adb reverse）
 - “运行中”必须来自本次启动中 Zygisk 实际加载模块的标记，不能仅以模块目录存在作为成功依据；标记由 root companion 写入，启动时先清除旧状态。
 - Manager 不得直接调用 `su` 或访问 `/data/adb`。模块以 root `app_process` 启动 Device Daemon，Manager 仅通过 AIDL Binder 读取状态和作用域；daemon 必须校验调用 UID、`com.adh.manager` 包归属和构建时固定的 APK 签名证书。
 - Binder 交接入口只接受 UID 0 发布，并核对 AIDL descriptor；Manager 必须区分 Device Daemon 未连接、模块未安装、模块已安装但未加载、运行中四种状态。服务未连接时不得用空配置冒充真实作用域，也不得显示“模块未安装”。
+
+### 30.5 可选注入后端（Gadget / LSPosed）— 默认关闭
+
+两个后端都**不是默认路径**，必须显式调用；默认注入仍是 Zygisk（root）与模拟注入（CI）。两者都是开源生态里现成的加载机制，ADH 只借它把 agent/JS hook 送进目标，不把分析与存储搬进目标进程（架构红线不变）。
+
+**Frida Gadget（已落地并真机验证，2026-09-15）**
+
+- 只走官方 release：`tools/fetch_frida_gadget.sh <version|latest> [--abi arm64] [--list] [--print-url]`，缓存到 gitignore 的 `agent/third_party/frida/<version>/<abi>/`；压缩包 sha256 固定在 `tools/frida_gadget_versions.json`（离线可复现，切换版本只换参数）。
+- **Frida 17 起语言桥不再内置在 Gadget runtime**：`Java.perform()` 这类 hook 必须先打包。`tools/compile_frida_script.sh` 用 esbuild 把 hook 与 `frida-java-bridge` 打成单文件（经典写法自动注入 `globalThis.Java`；已是 module 写法则原样打包；已打包文件幂等直通）。**不用 `frida-compile`**：其 CLI 依赖原生 `frida` 绑定，Windows 上要 MSVC。
+- `tools/load_frida_gadget.sh <hook.js> [...]`：官方 so → 按需打包 → 落进 `<pkg>/code_cache`（app uid + selinux ctx；配置名必须是 `<soname>.config.so`，否则 Gadget 静默回退默认 listen）→ `POST /api/agent/load_so` dlopen。**Gadget 由构造函数自启动，没有入口符号可调**，`symbolFound` 仅信息性；随后轮询 `/proc/<pid>/task` 等 `frida-gadget` 线程，可选 `--marker` 断言脚本真的跑到（只有"线程起来"不等于脚本跑通）。
+- `--watch` 写 `on_change: reload`：改 `code_cache/adh_hook.js` 即热重载，无需重启目标进程。
+- 验收：`tools/verify_v30_fridagadget.sh`（真机：官方 gadget → dlopen → 打包后的 Java hook 写 marker；gadget 或打包依赖缺失时 SKIP，因为两者都在 gitignore 缓存里）。实测开销：so 25,220,848 B、目标进程 +9 行 maps、+2 个线程。
+
+**LSPosed/Xposed 模块（设计已定，尚未开工）**
+
+- 形态：`injector/xposed/` 一个**薄** Xposed 模块（只 `compileOnly` 公共 Xposed API，不 vendor 任何上游代码），职责只有"框架已加载的前提下拿到目标进程入口"，把事件交给 ADH agent / Device Daemon，而不是在里面重写分析能力。
+- 作用域仍由 ADH Manager / Device Daemon 侧维护，不重造第二套开关；Host 侧不因为"有框架"就把 HTTP/DB/分析搬进目标进程。
+- 测试设备已具备框架：KernelSU + Zygisk Next 上 `zygisk_vector` = **Vector v2.2 (3080)**，`/data/adb/lspd/`（cli/config/log）在位，可用其 CLI 启用模块并验证，无需额外刷机。
 
 ---
 
