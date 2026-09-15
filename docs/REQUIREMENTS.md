@@ -1571,12 +1571,16 @@ Agent → TCP 8761 → ADH Daemon（host，经 adb reverse）
 - `--watch` 写 `on_change: reload`：改 `code_cache/adh_hook.js` 即热重载，无需重启目标进程。
 - 验收：`tools/verify_v30_fridagadget.sh`（真机：官方 gadget → dlopen → 打包后的 Java hook 写 marker；gadget 或打包依赖缺失时 SKIP，因为两者都在 gitignore 缓存里）。实测开销：so 25,220,848 B、目标进程 +9 行 maps、+2 个线程。
 
-**LSPosed/Xposed 模块（设计已定，尚未开工）**
+**LSPosed/Xposed 模块（slice 1 已落地并真机验证，2026-09-15）**
 
-- 形态：`injector/xposed/` 一个**薄** Xposed 模块（只 `compileOnly` 公共 Xposed API，不 vendor 任何上游代码），职责只有"框架已加载的前提下拿到目标进程入口"，把事件交给 ADH agent / Device Daemon，而不是在里面重写分析能力。
-- 作用域仍由 ADH Manager / Device Daemon 侧维护，不重造第二套开关；Host 侧不因为"有框架"就把 HTTP/DB/分析搬进目标进程。
-- 测试设备已具备框架：KernelSU + Zygisk Next 上 `zygisk_vector` = **Vector v2.2 (3080)**，`/data/adb/lspd/`（cli/config/log）在位，可用其 CLI 启用模块并验证，无需额外刷机。
-
+- 形态：`injector/xposed/` 薄加载器 APK（`com.adh.xposed`）。职责只有"框架已加载的前提下把 agent 送进目标进程"，**不含任何分析能力**；hook/trace/dump/索引/HTTP/MCP/DB 仍在 Host ADH Daemon。
+- **不 vendor 上游代码**：`injector/xposed/api-stub/` 是自己写的 compile-only ABI 声明（`IXposedHookLoadPackage` / `XC_LoadPackage.LoadPackageParam` / `XposedBridge.log`），`compileOnly` 依赖，运行时由框架提供真类。静态验证过产物 dex 里**只有** `Lcom/adh/xposed/AdhXposedEntry;` 一个类定义。
+- 载入方式：`System.loadLibrary("idh_agent")`，失败再按模块 APK 路径 `System.load(<abs>)`；之后 agent 自己连 Host ADH Daemon（`adb reverse` → 8761）。
+- 关键设备事实（决定打包布局）：Vector 给模块的 `nativeLibraryDirectories` 是 **`base.apk!/lib/arm64-v8a`**，所以 agent `.so` 必须以**未压缩**形式留在 APK 里（`useLegacyPackaging=false` + `extractNativeLibs=false`）；"安装时解压"的旧布局下 `System.loadLibrary` 必然 `UnsatisfiedLinkError`（真机日志已确认）。模块 dex 由 `InMemoryDexFile` 载入、APK 不进 maps，所以 `maps` 兜底只对解压式布局有意义。
+- 策略（slice 1）：只进 scope 内应用的**主进程**；永不进 `android` / `com.android.*` / `com.google.android.gms` / 模块自身；**只对 ADH 自己的测试宿主**（sandbox / Manager）写验收 marker，绝不在第三方目标里留文件。
+- 工具链：`tools/build_xposed.sh`（把 agent `.so` 打进模块 → `injector/xposed/dist/adh-xposed.apk`）、`tools/install_xposed.sh`（root 安装 + `vector-cli modules enable` + `scope set`；`--disable` 逐条 `scope rm` 再关模块 —— 空参数的 `scope set` 在 Vector 2.2 会抛 NPE 且不清空）、`tools/verify_v31_xposed.sh`（真机验收，并**恢复测试前状态**，默认回到关闭）。
+- 真机证据（靶子 `com.adh.manager`，不是会自加载 agent 的 sandbox）：marker `ADH_XPOSED_OK pkg=com.adh.manager ... agent=1`；框架日志 `Loading legacy module com.adh.xposed` → `Loading class com.adh.xposed.AdhXposedEntry`；Host daemon 侧出现 `entry=jni_onload` 在线会话且能真的执行命令（模块枚举 533 条）。
+- 待办：由 ADH Manager/Device Daemon 驱动框架 scope（现在 scope 由框架管理器/CLI 决定）；多进程目标；把"可选后端选择"接进 Web/Manager 注入中心。
 ---
 
 *本文档是唯一权威功能规格（模块 A–W）。开发步骤与排期见 `DEVELOPMENT_PLAN.md`，跨会话进度见 `PROGRESS.md`。*

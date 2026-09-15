@@ -73,7 +73,9 @@ translation — kept separate).
 - `load_frida_gadget.sh` — manual Frida Gadget loader (module W **optional** backend, off by default): official Gadget (version/ABI selectable, sha256-pinned) → bundle the hook if it needs a language bridge → stage into `<pkg>/code_cache` (app uid + selinux ctx) → `POST /api/agent/load_so` dlopen (constructor-driven: **no entry symbol**) → wait for `frida-gadget` threads in `/proc/<pid>/task` → optional `--marker` end-to-end assert. `--watch` writes `on_change: reload` (edit the staged hook → hot reload).
 - `compile_frida_script.sh` — bundle a hook with the Frida language bridges via esbuild (`tools/frida/`, gitignored deps). Needed because **Frida 17+ no longer ships Java/ObjC bridges inside the Gadget runtime**; `frida-compile` is NOT used (its CLI needs the native `frida` binding → MSVC on Windows).
 - `verify_v30_fridagadget.sh` — v3.0 Gadget acceptance (device): official gadget → dlopen → bundled Java hook writes a marker; prints RESULT:SKIP when the gadget asset or bundler deps are missing (both are gitignored caches).
-
+- `build_xposed.sh` — 构建可选 LSPosed/Xposed 薄模块（`injector/xposed/`）：把 `libidh_agent.so` 打进模块 APK（未压缩），产出 `injector/xposed/dist/adh-xposed.apk`。
+- `install_xposed.sh` — root 安装 + 用 `/data/adb/lspd/cli`（LSPosed/Vector）启用模块并设 scope；`--disable` 先逐条 `scope rm` 再关模块（空参数 `scope set` 会 NPE）。
+- `verify_v31_xposed.sh` — v3.1 可选 Xposed 后端验收（device）：框架 → 薄模块 → 框架注入 `com.adh.manager` → agent 上线并被 Host 驱动；结束恢复测试前状态；无框架/构建不了时 SKIP。
 ## Known flakes (pre-existing, not introduced by the lib refactor)
 
 - **`verify_v08_disasm.sh` / `verify_v08_analyze.sh`** intermittently report `exports=0` on the memory-reconstructed `.so`. Root cause is in `daemon reconstructSo` (index.ts:686) — `readMem` breaks early on a short first chunk (line 663), which can truncate a PT_LOAD and drop the dynamic segment. Both pass on re-run. Tracked for the daemon `dump.ts` extraction (Phase 2).

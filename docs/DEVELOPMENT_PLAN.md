@@ -675,8 +675,10 @@ disasm 只 `llvm-objdump`（文件型 so），缺 **Capstone 内存镜像反汇�
   + `tools/compile_frida_script.sh`（Frida 17 起语言桥移出 runtime → esbuild + `frida-java-bridge` 打包）
   + `tools/load_frida_gadget.sh`（落盘 `<pkg>/code_cache` → `load_so` dlopen → 等 `frida-gadget` 线程 → `--marker` 断言脚本真的跑通）。
   验收脚本：`tools/verify_v30_fridagadget.sh`。
-- **LSPosed/Xposed（下一片，未开工）**：`injector/xposed/` 薄模块 + 复用框架加载；作用域仍归 ADH Manager / Device Daemon。
-  设备侧已具备 Vector v2.2 (3080)（`/data/adb/lspd`），可直接验收，不需要再刷机。
+- **LSPosed/Xposed（slice 1 已落地，2026-09-15 真机验证）**：`injector/xposed/` 薄加载器 APK（`api-stub/` 只有自己写的 compile-only ABI 声明，不 vendor 上游代码）
+  + `tools/build_xposed.sh`（把 agent `.so` 打进模块）/ `tools/install_xposed.sh`（`vector-cli` 启用 + scope，`--disable` 逐条 `scope rm`）/ `tools/verify_v31_xposed.sh`（真机验收，自动恢复测试前状态）。
+  设备事实：Vector 给模块的 `nativeLibraryDirectories` 指向 `base.apk!/lib/arm64-v8a` → agent `.so` 必须**未压缩**打包（`useLegacyPackaging=false`）；空参数 `scope set` 在 Vector 2.2 抛 NPE，清 scope 必须逐条 `scope rm`。
+  待办：ADH Manager/Device Daemon 驱动框架 scope；多进程目标；注入中心里的可选后端选择。
 - 红线：可选后端只在**显式调用**时启用（默认注入路径不变）；目标进程内不得承载 HTTP/DB/分析；不 vendor 上游 GPL 代码。
 
 ---

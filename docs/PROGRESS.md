@@ -15,6 +15,13 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 idhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [x] **模块 W 可选后端：LSPosed/Xposed 薄模块（2026-09-15，真机 aa165071 / Vector v2.2 3080）**：`injector/xposed/` 一个**薄加载器 APK**（`com.adh.xposed`），框架已加载进目标进程后把自带 `libidh_agent.so` 送进去；分析能力一行没搬进目标（红线不变），也**不 vendor 上游代码**（`api-stub/` 是自己写的 compile-only ABI 声明，dex 静态验证只有 `Lcom/adh/xposed/AdhXposedEntry;` 一个类定义）。
+      · 设备事实 ①：Vector 给模块的 `nativeLibraryDirectories` 是 `base.apk!/lib/arm64-v8a` —— 所以 agent `.so` 必须**未压缩**留在 APK（`useLegacyPackaging=false` + `extractNativeLibs=false`）；先前用"安装时解压"布局时 `System.loadLibrary` 直接 `UnsatisfiedLinkError`（日志已留证），改成未压缩后一次通过。
+      · 设备事实 ②：模块 dex 走 `InMemoryDexFile`，APK 不进 maps → APK 路径兜底只在解压式布局下有意义。
+      · 设备事实 ③：`vector-cli scope set <module>` 空参数会抛 NPE 且不清 scope，清 scope 必须逐条 `scope rm`（`install_xposed.sh --disable` / 验收脚本都按这个来）。
+      · 策略（slice 1）：只进 scope 内应用主进程；永不进 `android`/`com.android.*`/`com.google.android.gms`/模块自身；**只对 ADH 自己的测试宿主**（sandbox / Manager）写 marker，第三方目标不留文件。
+      · 验收：`tools/verify_v31_xposed.sh` 真机 PASS（靶子 `com.adh.manager`，非自加载 agent 的 sandbox）：marker `ADH_XPOSED_OK ... agent=1`、框架日志 `Loading legacy module com.adh.xposed` → `Loading class com.adh.xposed.AdhXposedEntry`、Host daemon 拿到 `entry=jni_onload` 会话并真的能执行命令（模块枚举 533 条）；脚本结束**恢复测试前状态**（本机现为 disabled + 空 scope）。
+      · 待办：ADH Manager/Device Daemon 驱动框架 scope、多进程目标、注入中心里的后端选择。
 - [x] **模块 W 可选后端：Frida Gadget 直载 + 官方版本切换（2026-09-15，真机 aa165071）**：把"能不能加载 Frida JS hook"做成可选、可验收的独立路径 ——
 - [ ] **已知红：`verify_v05_detect.sh` FAIL（2026-09-15 回归，非本轮改动引入）**：`/api/detect/watch` 返回
       `hooked={"ptrace":0,"access":0,"prop":0} triggered=true count=0` —— agent 在 `libadhdetect.so` 的 GOT 里一个槽都没替换掉，

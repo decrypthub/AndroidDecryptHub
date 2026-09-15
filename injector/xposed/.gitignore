@@ -1,0 +1,9 @@
+# Local SDK pointer + build output (same convention as sandbox-app/ and device/).
+local.properties
+.gradle/
+build/
+*/build/
+# The agent .so is staged here by tools/build_xposed.sh (like sandbox-app jniLibs).
+module/src/main/jniLibs/
+# Built module APK published by tools/build_xposed.sh
+dist/

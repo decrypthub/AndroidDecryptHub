@@ -63,6 +63,9 @@ SCRIPTS=(
   # Optional Frida Gadget backend (module W): official gadget → dlopen → bundled Java hook.
   # SKIPs (exit 0) when the gadget asset / bundler deps are absent — both are gitignored caches.
   "verify_v30_fridagadget.sh:device"
+  # Optional LSPosed/Xposed backend (module W): framework → thin module → agent. Restores the
+  # pre-test scope/module state; SKIPs when no framework CLI or the module cannot be built.
+  "verify_v31_xposed.sh:device"
 )
 
 pass=0; fail=0; skip=0; FAILED=""
