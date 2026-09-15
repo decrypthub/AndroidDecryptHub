@@ -66,6 +66,9 @@ SCRIPTS=(
   # Optional LSPosed/Xposed backend (module W): framework → thin module → agent. Restores the
   # pre-test scope/module state; SKIPs when no framework CLI or the module cannot be built.
   "verify_v31_xposed.sh:device"
+  # Optional backend CONTROL path (module W): Device Daemon drives the framework scope/module
+  # state; restores the pre-test state. SKIPs when there is no framework/module.
+  "verify_v32_backend_control.sh:device"
 )
 
 pass=0; fail=0; skip=0; FAILED=""

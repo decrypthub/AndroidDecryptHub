@@ -47,11 +47,49 @@ class ScopeJsonTest {
     }
 
     @Test
+    fun installedAppsRoundTripAndDropsExcluded() {
+        val json = InstalledAppsJson.encode(
+            listOf(
+                InstalledApp("com.example.target", "Target", false),
+                InstalledApp(AdhPaths.MANAGER_PKG, "Manager", false),
+                InstalledApp("com.android.settings", "Settings", true),
+            ),
+        )
+        val apps = InstalledAppsJson.decode(json)
+        assertEquals(2, apps.size)
+        assertEquals("com.example.target", apps[0].packageName)
+        assertEquals("Target", apps[0].label)
+        assertFalse(apps[0].system)
+        assertEquals("com.android.settings", apps[1].packageName)
+        assertTrue(apps[1].system)
+        assertEquals(AdhProtocol.VERSION, 5)
+        assertEquals(AdhProtocol.MIN_PROCESS_VERSION, 4)
+        assertEquals(AdhProtocol.MIN_XPOSED_VERSION, 5)
+    }
+
+    @Test
+    fun packageControlAllowsTargetsAndBlocksCriticalPackages() {
+        assertTrue(PackageControl.mayControl("com.adh.sandbox"))
+        assertTrue(PackageControl.mayControl("com.example.target"))
+        assertFalse(PackageControl.mayControl(""))
+        assertFalse(PackageControl.mayControl("not a package"))
+        assertFalse(PackageControl.mayControl("system_server"))
+        assertFalse(PackageControl.mayControl(AdhPaths.MANAGER_PKG))
+        assertFalse(PackageControl.mayControl(AdhPaths.DAEMON_PKG))
+        assertFalse(PackageControl.mayControl("android"))
+        assertFalse(PackageControl.mayControl("com.android.systemui"))
+        assertTrue(PackageControl.isAction(PackageControl.ACTION_STOP))
+        assertTrue(PackageControl.isAction(PackageControl.ACTION_RESTART))
+        assertFalse(PackageControl.isAction("kill"))
+    }
+
+    @Test
     fun pathsAreStableContract() {
         assertEquals("/data/adb/adh/scope.json", AdhPaths.SCOPE_PATH)
         assertEquals("/data/adb/adh/zygisk_loaded", AdhPaths.LOADER_MARKER)
         assertEquals("/data/adb/modules/adh", AdhPaths.MODULE_DIR)
         assertEquals("com.adh.manager", AdhPaths.MANAGER_PKG)
+        assertEquals("com.adh.daemon", AdhPaths.DAEMON_PKG)
         assertTrue(HardExcludes.isExcluded("system_server"))
         assertTrue(HardExcludes.isExcluded(AdhPaths.MANAGER_PKG))
         assertFalse(HardExcludes.isExcluded("com.adh.sandbox"))

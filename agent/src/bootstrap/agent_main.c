@@ -329,16 +329,54 @@ void adh_agent_set_package(const char *pkg) {
     }
 }
 
+static int claim_single_instance(JNIEnv *env);   // defined below; used by both bootstrap entries
+
 __attribute__((visibility("default")))
 void adh_agent_start(void) {
+    // Same single-instance rule as JNI_OnLoad: a second copy in this process must stay inert.
+    int did = 0;
+    JNIEnv *env = idh_jni_attach(&did);
+    if (env && !claim_single_instance(env)) { idh_jni_detach(did); return; }
     adh_footprint_capture_baseline();
     strncpy(g_entry, "start", sizeof(g_entry) - 1);
     pthread_once(&g_once, do_start);
+    if (did) idh_jni_detach(did);
 }
 
 __attribute__((visibility("default")))
 void idh_agent_start(void) {
     adh_agent_start();
+}
+
+// Mixed backends can bring MORE THAN ONE copy of this .so into the same process: the Zygisk
+// companion (/data/adb/modules/adh/libidh_agent.so), the optional Xposed module (mapped from its
+// own APK) and the host app's System.loadLibrary. Each copy has its own pthread_once, so without
+// a process-wide guard the second copy opens a duplicate session and the two fight over the same
+// GOT slots (on device: crypto_hook_test reported replaced=0 because the first copy held them).
+// A System property is process-global and independent of the dlopen flags each loader used.
+// Returns 1 when this copy may bootstrap, 0 when another copy already did.
+static int claim_single_instance(JNIEnv *env) {
+    jclass sysCls = (*env)->FindClass(env, "java/lang/System");
+    if (!sysCls) { if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); LOGI("single-instance guard unavailable (System class)"); return 1; }
+    jmethodID getProp = (*env)->GetStaticMethodID(env, sysCls, "getProperty", "(Ljava/lang/String;)Ljava/lang/String;");
+    jmethodID setProp = (*env)->GetStaticMethodID(env, sysCls, "setProperty", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+    if (!getProp || !setProp) { if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); LOGI("single-instance guard unavailable (property accessors)"); return 1; }
+    jstring key = (*env)->NewStringUTF(env, "adh.agent.instance");
+    jstring existing = key ? (jstring)(*env)->CallStaticObjectMethod(env, sysCls, getProp, key) : NULL;
+    if (existing) {
+        const char *who = (*env)->GetStringUTFChars(env, existing, NULL);
+        LOGI("another agent copy is already active in this process (owner pid=%s) — skipping bootstrap", who ? who : "?");
+        if (who) (*env)->ReleaseStringUTFChars(env, existing, who);
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        return 0;
+    }
+    char owner[24];
+    snprintf(owner, sizeof(owner), "%d", getpid());
+    jstring jowner = (*env)->NewStringUTF(env, owner);
+    if (jowner) (*env)->CallStaticObjectMethod(env, sysCls, setProp, key, jowner);
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    LOGI("agent instance claimed for this process (pid=%s)", owner);
+    return 1;
 }
 
 // If the target published its Java rich-capture reporter class via the "adh.reporter.class"
@@ -373,7 +411,9 @@ JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *reserved) {
     // before the target installs its JCE provider — so the binding is in place before any report
     // fires (a later bind would race the target's first crypto op and lose).
     JNIEnv *env = NULL;
-    if ((*vm)->GetEnv(vm, (void **)&env, JNI_VERSION_1_6) == JNI_OK && env) bind_reporter_from_prop(env);
+    int have_env = ((*vm)->GetEnv(vm, (void **)&env, JNI_VERSION_1_6) == JNI_OK && env);
+    if (have_env && !claim_single_instance(env)) return JNI_VERSION_1_6;   // another copy owns this process
+    if (have_env) bind_reporter_from_prop(env);
     pthread_once(&g_once, do_start);
     return JNI_VERSION_1_6;
 }

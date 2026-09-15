@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">ADH Manager</string>
+    <string name="app_name">AndroidDecryptHub</string>
     <string name="section_configuration">Configuration</string>
     <string name="section_web_ui">Web UI</string>
     <string name="section_versions">Versions</string>
@@ -9,7 +9,7 @@
     <string name="scope_selected">%1$d selected apps</string>
     <string name="open_scope">Manage injection scope</string>
     <string name="module_version">Module</string>
-    <string name="manager_version">Manager</string>
+    <string name="manager_version">App</string>
     <string name="unknown">Unknown</string>
     <string name="status_running">Running</string>
     <string name="status_checking">Checking</string>
@@ -41,8 +41,28 @@
     <string name="saving">Saving</string>
     <string name="scope_saved">Saved. Restart target apps to apply changes.</string>
     <string name="scope_save_failed">Unable to save. Confirm the ADH device service is running.</string>
-    <string name="apps_load_failed">Unable to read the app list</string>
-    <string name="apps_load_failed_detail">Reopen Manager and try again.</string>
+    <string name="apps_load_failed">Unable to read injection scope</string>
+    <string name="apps_load_failed_detail">Confirm the ADH device service is running, then retry.</string>
+    <string name="apps_catalog_unavailable">Could not enumerate every installed app. Showing packages already in the injection scope.</string>
+    <string name="apps_catalog_empty">Could not enumerate installed apps</string>
+    <string name="apps_catalog_empty_detail">Injection scope is still the config file. Flash the latest ADH module and reboot.</string>
     <string name="apps_empty">No matching apps</string>
     <string name="apps_empty_detail">Adjust your search or show system apps.</string>
+    <string name="app_actions">App actions</string>
+    <string name="app_force_stop">Force stop</string>
+    <string name="app_restart">Restart</string>
+    <string name="app_stopped">Stopped %1$s</string>
+    <string name="app_restarted">Restarted %1$s</string>
+    <string name="app_no_launcher">Stopped %1$s, but it has no launchable activity</string>
+    <string name="app_control_denied">This app cannot be stopped or restarted</string>
+    <string name="app_control_failed">Unable to control %1$s</string>
+    <string name="xposed_backend_title">Xposed backend (optional)</string>
+    <string name="xposed_framework_absent">No Xposed/LSPosed framework detected</string>
+    <string name="xposed_module_absent">Framework ready; ADH Xposed module is not installed</string>
+    <string name="xposed_enabled_summary">Enabled · %1$d app(s) scoped</string>
+    <string name="xposed_disabled_summary">Installed, disabled</string>
+    <string name="xposed_state_saved">Xposed backend updated</string>
+    <string name="xposed_state_failed">Xposed backend operation failed</string>
+    <string name="xposed_sync_scope">Sync current selection to Xposed</string>
+    <string name="xposed_scope_synced">Scope synced to Xposed</string>
 </resources>

@@ -1580,7 +1580,11 @@ Agent → TCP 8761 → ADH Daemon（host，经 adb reverse）
 - 策略（slice 1）：只进 scope 内应用的**主进程**；永不进 `android` / `com.android.*` / `com.google.android.gms` / 模块自身；**只对 ADH 自己的测试宿主**（sandbox / Manager）写验收 marker，绝不在第三方目标里留文件。
 - 工具链：`tools/build_xposed.sh`（把 agent `.so` 打进模块 → `injector/xposed/dist/adh-xposed.apk`）、`tools/install_xposed.sh`（root 安装 + `vector-cli modules enable` + `scope set`；`--disable` 逐条 `scope rm` 再关模块 —— 空参数的 `scope set` 在 Vector 2.2 会抛 NPE 且不清空）、`tools/verify_v31_xposed.sh`（真机验收，并**恢复测试前状态**，默认回到关闭）。
 - 真机证据（靶子 `com.adh.manager`，不是会自加载 agent 的 sandbox）：marker `ADH_XPOSED_OK pkg=com.adh.manager ... agent=1`；框架日志 `Loading legacy module com.adh.xposed` → `Loading class com.adh.xposed.AdhXposedEntry`；Host daemon 侧出现 `entry=jni_onload` 在线会话且能真的执行命令（模块枚举 533 条）。
-- 待办：由 ADH Manager/Device Daemon 驱动框架 scope（现在 scope 由框架管理器/CLI 决定）；多进程目标；把"可选后端选择"接进 Web/Manager 注入中心。
+- **控制面（已落地，2026-09-15）**：框架状态与开关由 **Device Daemon** 独占驱动（`XposedBackend.kt`），只调框架自己的 CLI（`/data/adb/lspd/cli`），不碰它的 sqlite：
+  AIDL 协议 v5 新增 `getXposedStatus` / `setXposedEnabled` / `setXposedScope`，Manager 的 Scope 页有对应卡片；ADH 允许名单在保存时镜像进框架 scope（启用状态下），所以"哪些应用"仍然只在 Manager 一处配置。
+  同一个代码路径还导出了 root-only 一次性 CLI（`--xposed-status|--xposed-enable|--xposed-disable|--xposed-scope`），供运维与 `tools/verify_v32_backend_control.sh` 使用（无需 Manager UI、无需重启）。
+  两个框架怪癖已写进实现：`scope set <module>` 不带应用会抛 NPE（清 scope 必须逐条 `scope rm`）；`scope set` 会**隐式启用**模块，所以调用方若要保持"关闭"必须显式再关一次。
+- 待办：多进程目标；把 Gadget/Xposed 的后端选择接进 Web 注入中心（Manager 侧已有 Xposed 卡片）。
 ---
 
 *本文档是唯一权威功能规格（模块 A–W）。开发步骤与排期见 `DEVELOPMENT_PLAN.md`，跨会话进度见 `PROGRESS.md`。*

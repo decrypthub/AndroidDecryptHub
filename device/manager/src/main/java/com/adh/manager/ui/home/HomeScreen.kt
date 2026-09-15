@@ -302,19 +302,18 @@ private fun StatusHeader(status: ModuleStatus, onRefresh: () -> Unit) {
                     )
                 }
                 Column(modifier = Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.Bottom) {
-                        Text(
-                            text = "ADH",
-                            style = MaterialTheme.typography.headlineSmall,
-                            color = content.copy(alpha = 0.62f),
-                        )
-                        Text(
-                            text = "  $stateText",
-                            style = MaterialTheme.typography.headlineSmall,
-                            fontWeight = FontWeight.SemiBold,
-                            color = content,
-                        )
-                    }
+                    Text(
+                        text = stringResource(R.string.app_name),
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        color = content,
+                    )
+                    Text(
+                        text = stateText,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = content.copy(alpha = 0.92f),
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
                     Text(
                         text = detailText,
                         style = MaterialTheme.typography.bodyMedium,

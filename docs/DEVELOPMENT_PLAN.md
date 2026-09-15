@@ -678,7 +678,7 @@ disasm 只 `llvm-objdump`（文件型 so），缺 **Capstone 内存镜像反汇�
 - **LSPosed/Xposed（slice 1 已落地，2026-09-15 真机验证）**：`injector/xposed/` 薄加载器 APK（`api-stub/` 只有自己写的 compile-only ABI 声明，不 vendor 上游代码）
   + `tools/build_xposed.sh`（把 agent `.so` 打进模块）/ `tools/install_xposed.sh`（`vector-cli` 启用 + scope，`--disable` 逐条 `scope rm`）/ `tools/verify_v31_xposed.sh`（真机验收，自动恢复测试前状态）。
   设备事实：Vector 给模块的 `nativeLibraryDirectories` 指向 `base.apk!/lib/arm64-v8a` → agent `.so` 必须**未压缩**打包（`useLegacyPackaging=false`）；空参数 `scope set` 在 Vector 2.2 抛 NPE，清 scope 必须逐条 `scope rm`。
-  待办：ADH Manager/Device Daemon 驱动框架 scope；多进程目标；注入中心里的可选后端选择。
+  **控制面已落地（2026-09-15）**：Device Daemon 的 `XposedBackend` 独占驱动框架（只调 `/data/adb/lspd/cli`），AIDL v5 暴露 status/enable/scope，Manager Scope 页有卡片并把 ADH 允许名单镜像进框架 scope；另有 root-only 一次性 CLI 供运维与 `tools/verify_v32_backend_control.sh`。待办：多进程目标、Web 注入中心里的后端选择。
 - 红线：可选后端只在**显式调用**时启用（默认注入路径不变）；目标进程内不得承载 HTTP/DB/分析；不 vendor 上游 GPL 代码。
 
 ---

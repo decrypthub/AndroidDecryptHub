@@ -15,6 +15,13 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 idhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [x] **模块 W：可选后端的控制面 —— ADH Manager/Device Daemon 驱动 Xposed（2026-09-15）**：框架状态与开关从"只能靠框架 CLI"变成 ADH 自己管 ——
+      `device/daemon/.../XposedBackend.kt` 只调框架自己的 `/data/adb/lspd/cli`（不碰它的 sqlite 库），AIDL 协议 **v5** 新增 `getXposedStatus`/`setXposedEnabled`/`setXposedScope`；
+      Manager 的 Scope 页新增卡片：启用/停用 + "把当前选择同步到 Xposed"，且保存作用域时若后端已启用会自动镜像 —— "哪些应用"仍然只在 Manager 一处配置。
+      · 同一代码路径导出 root-only 一次性 CLI（`--xposed-status|--xposed-enable|--xposed-disable|--xposed-scope`）：运维/CI 不必开 UI、不必重启（把新 daemon APK 推进模块目录即可立即生效）。
+      · 框架怪癖（已写进实现）：`scope set <module>` 不带参会抛 NPE（清 scope 必须逐条 `scope rm`）；`scope set` 会**隐式启用**模块，想保持关闭必须显式再关一次。
+      · 验收：`tools/verify_v32_backend_control.sh` 真机 PASS（构建+推送 daemon APK → 设/清 scope、关/开模块，每步与框架 CLI 交叉核对，最后恢复测试前状态）；单元测试覆盖 v5 门槛、启用即镜像、保存即镜像、停用不镜像。
+      · 注：该提交同时带上设备侧此前未提交的多模块工作（应用目录/图标/进程启停/Web UI 地址/启动图标）—— 它们与本次改动在 `RootScopeBinder`、`ScopeScreen`、`DaemonScopeRepository` 里交织，无法单独切开。
 - [x] **模块 W 可选后端：LSPosed/Xposed 薄模块（2026-09-15，真机 aa165071 / Vector v2.2 3080）**：`injector/xposed/` 一个**薄加载器 APK**（`com.adh.xposed`），框架已加载进目标进程后把自带 `libidh_agent.so` 送进去；分析能力一行没搬进目标（红线不变），也**不 vendor 上游代码**（`api-stub/` 是自己写的 compile-only ABI 声明，dex 静态验证只有 `Lcom/adh/xposed/AdhXposedEntry;` 一个类定义）。
       · 设备事实 ①：Vector 给模块的 `nativeLibraryDirectories` 是 `base.apk!/lib/arm64-v8a` —— 所以 agent `.so` 必须**未压缩**留在 APK（`useLegacyPackaging=false` + `extractNativeLibs=false`）；先前用"安装时解压"布局时 `System.loadLibrary` 直接 `UnsatisfiedLinkError`（日志已留证），改成未压缩后一次通过。
       · 设备事实 ②：模块 dex 走 `InMemoryDexFile`，APK 不进 maps → APK 路径兜底只在解压式布局下有意义。

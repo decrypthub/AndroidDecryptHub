@@ -39,7 +39,7 @@ class HostWebUiRepository : WebUiRepository {
     }
 
     companion object {
-        const val LOCAL_URL = "http://127.0.0.1:8760"
+        const val LOCAL_URL = "http://127.0.0.1:8088"
     }
 }
 

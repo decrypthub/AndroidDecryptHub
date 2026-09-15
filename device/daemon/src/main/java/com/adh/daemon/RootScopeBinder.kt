@@ -1,7 +1,9 @@
 package com.adh.daemon
 
+import android.content.Context
 import android.system.Os
 import com.adh.core.AdhPaths
+import com.adh.core.AdhProtocol
 import com.adh.core.ScopeConfig
 import com.adh.core.ScopeJson
 import java.io.File
@@ -13,10 +15,11 @@ import java.util.Properties
 
 internal class RootScopeBinder(
     private val verifier: ManagerCallerVerifier,
+    private val context: Context,
 ) : IAdhScopeService.Stub() {
     override fun getProtocolVersion(): Int {
         verifier.enforce()
-        return PROTOCOL_VERSION
+        return AdhProtocol.VERSION
     }
 
     override fun getScopeJson(): String {
@@ -53,6 +56,36 @@ internal class RootScopeBinder(
         }.getOrDefault("")
     }
 
+    override fun listApplications(): String {
+        verifier.enforce()
+        return PackageCatalog.listJson(context)
+    }
+
+    override fun getApplicationIconPng(packageName: String?): ByteArray {
+        verifier.enforce()
+        return PackageCatalog.iconPng(context, packageName)
+    }
+
+    override fun controlPackage(packageName: String?, action: String?): String {
+        verifier.enforce()
+        return AppProcessControl.run(context, packageName, action)
+    }
+
+    override fun getXposedStatus(): String {
+        verifier.enforce()
+        return XposedBackend.statusJson()
+    }
+
+    override fun setXposedEnabled(enabled: Boolean): Boolean {
+        verifier.enforce()
+        return XposedBackend.setEnabled(enabled)
+    }
+
+    override fun setXposedScope(packages: MutableList<String>?): Boolean {
+        verifier.enforce()
+        return XposedBackend.setScope(packages ?: emptyList())
+    }
+
     private fun atomicWrite(target: File, content: String) {
         target.parentFile?.mkdirs()
         val temp = File(target.parentFile, ".${target.name}.${android.os.Process.myPid()}.tmp")
@@ -77,7 +110,4 @@ internal class RootScopeBinder(
         }
     }
 
-    companion object {
-        const val PROTOCOL_VERSION = 1
-    }
 }

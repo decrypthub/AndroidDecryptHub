@@ -76,6 +76,6 @@ translation — kept separate).
 - `build_xposed.sh` — 构建可选 LSPosed/Xposed 薄模块（`injector/xposed/`）：把 `libidh_agent.so` 打进模块 APK（未压缩），产出 `injector/xposed/dist/adh-xposed.apk`。
 - `install_xposed.sh` — root 安装 + 用 `/data/adb/lspd/cli`（LSPosed/Vector）启用模块并设 scope；`--disable` 先逐条 `scope rm` 再关模块（空参数 `scope set` 会 NPE）。
 - `verify_v31_xposed.sh` — v3.1 可选 Xposed 后端验收（device）：框架 → 薄模块 → 框架注入 `com.adh.manager` → agent 上线并被 Host 驱动；结束恢复测试前状态；无框架/构建不了时 SKIP。
-## Known flakes (pre-existing, not introduced by the lib refactor)
+- `verify_v32_backend_control.sh` — v3.2 可选后端**控制面**验收（device）：构建并推送 Device Daemon → 用它的 root-only 一次性 CLI 设/清框架 scope、开关模块，每步都与框架 CLI 交叉核对，最后恢复原状态；无框架/无模块时 SKIP。## Known flakes (pre-existing, not introduced by the lib refactor)
 
 - **`verify_v08_disasm.sh` / `verify_v08_analyze.sh`** intermittently report `exports=0` on the memory-reconstructed `.so`. Root cause is in `daemon reconstructSo` (index.ts:686) — `readMem` breaks early on a short first chunk (line 663), which can truncate a PT_LOAD and drop the dynamic segment. Both pass on re-run. Tracked for the daemon `dump.ts` extraction (Phase 2).

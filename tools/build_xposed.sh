@@ -55,6 +55,21 @@ cd "$ROOT/injector/xposed"
 APK="$(ls -t "$ROOT"/injector/xposed/module/build/outputs/apk/*/*.apk 2>/dev/null | head -1)"
 [ -n "$APK" ] && [ -f "$APK" ] || die "gradle produced no APK"
 
+# Fail-loud on a stale payload: AGP can judge the packaging up-to-date after we swapped the
+# staged .so, and the module APK is what injects the agent into targets — shipping the previous
+# build silently is exactly the kind of thing that wastes a debugging session.
+staged_sha() { sha256sum "$JNI_DIR/libidh_agent.so" | awk '{print $1}'; }
+apk_sha() { unzip -p "$1" lib/arm64-v8a/libidh_agent.so 2>/dev/null | sha256sum | awk '{print $1}'; }
+if command -v unzip >/dev/null 2>&1; then
+  if [ "$(staged_sha)" != "$(apk_sha "$APK")" ]; then
+    echo ">> packaged agent .so is stale — re-running the packaging tasks" >&2
+    sh ./gradlew --console=plain --rerun-tasks ":module:$TASK" >&2
+    APK="$(ls -t "$ROOT"/injector/xposed/module/build/outputs/apk/*/*.apk 2>/dev/null | head -1)"
+    [ -n "$APK" ] && [ -f "$APK" ] || die "gradle produced no APK after rerun"
+    [ "$(staged_sha)" = "$(apk_sha "$APK")" ] || die "module APK still carries a stale libidh_agent.so"
+  fi
+fi
+
 DIST="$ROOT/injector/xposed/dist"
 mkdir -p "$DIST"
 if [ "$VARIANT" = "release" ]; then OUT="$DIST/adh-xposed-release.apk"; else OUT="$DIST/adh-xposed.apk"; fi
