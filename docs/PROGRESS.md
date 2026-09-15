@@ -15,6 +15,11 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 idhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [x] **模块 W：注入中心收口 —— 可选后端矩阵进 Web 控制台（2026-09-15）**：主机侧新增只读 `GET /api/backends`：会话按 `entry` 分类（`start` = 注入器路径、`jni_onload` = 自加载/Gadget/Xposed），
+      并给出**主机侧真实**的 Frida Gadget 状态（固定版本清单 + 本地缓存版本/ABI/字节数 + 加载命令模板）；Zygisk/Xposed 两项如实标注"设备侧由 ADH Manager → Device Daemon 驱动"。
+      Web 控制台设置里新增"注入后端"页：会话列表 + 每个会话的"检测注入方式"按钮（拉 `/api/modules` 按 agent/Gadget 的实际映射路径判别 Zygisk / Xposed 模块 / Gadget / 应用自加载），Gadget 命令一键复制。
+      · 验收：`tools/verify_v33_backends.sh`（host，17 项断言：接口形状、**缓存条目与磁盘逐字节核对**、固定版本与 manifest 一致、面板标记、内联脚本 `node --check` 全通过）；连同 `verify_v10_webui`/`verify_v10_mcp` 一起绿。
+      · 说明：该提交同时带上 Web 控制台与 `routes_system.ts` 此前未提交的界面改动（与本次面板同一批文件交织）。
 - [x] **模块 W：可选后端的控制面 —— ADH Manager/Device Daemon 驱动 Xposed（2026-09-15）**：框架状态与开关从"只能靠框架 CLI"变成 ADH 自己管 ——
       `device/daemon/.../XposedBackend.kt` 只调框架自己的 `/data/adb/lspd/cli`（不碰它的 sqlite 库），AIDL 协议 **v5** 新增 `getXposedStatus`/`setXposedEnabled`/`setXposedScope`；
       Manager 的 Scope 页新增卡片：启用/停用 + "把当前选择同步到 Xposed"，且保存作用域时若后端已启用会自动镜像 —— "哪些应用"仍然只在 Manager 一处配置。

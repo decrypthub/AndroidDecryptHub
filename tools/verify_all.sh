@@ -32,6 +32,7 @@ SCRIPTS=(
   "verify_v09_methodcode.sh:host"
   "verify_v10_mcp.sh:host"
   "verify_v10_webui.sh:host"
+  "verify_v33_backends.sh:host"
   "verify_v10_trace.sh:device"
   "verify_v10_export.sh:host"
   "verify_v10_events.sh:device"

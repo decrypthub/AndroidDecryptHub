@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <meta name="theme-color" content="#06070a" />
 <title>ADH — Android DecryptHub 运行时观测台</title>
+<link rel="icon" href="/raven.svg" type="image/svg+xml">
+<link rel="icon" href="/raven.png" type="image/png">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   /* ===== ADH 观测台 · 移植 IDH「2026 workbench」深墨蓝设计系统 ===== */
@@ -21,84 +23,108 @@
   body { display:flex; flex-direction:column; height:100vh; overflow:hidden; min-width:320px;
     background:var(--bg); color:var(--ink); line-height:1.5; font-size:13px; letter-spacing:0;
     font-family:Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,'PingFang SC','Microsoft YaHei',sans-serif; }
-  header, .procbar, nav, .filters { flex-shrink:0; }
+  header, #nav, .filters { flex-shrink:0; }
   .muted { color:var(--muted); }
   .spacer { flex:1; }
   a.dl { color:var(--blue); text-decoration:none; } a.dl:hover { text-decoration:underline; }
   code { background:var(--surface-2); border:1px solid var(--line); border-radius:4px; padding:1px 5px; color:var(--ink-2); font-family:ui-monospace,SFMono-Regular,Consolas,monospace; }
 
-  /* ---- header / brand ---- */
-  header { display:flex; align-items:center; gap:14px; min-height:60px; padding:9px 16px; background:var(--chrome); border-bottom:1px solid var(--line); }
+  /* ---- header / brand（对齐 iOS workbench：无第二进程条、按钮透明） ---- */
+  header { display:flex; align-items:center; gap:14px; min-height:60px; padding:9px 16px; background:var(--bg); border-bottom:1px solid var(--line-soft); }
   .brand-lockup { display:flex; align-items:center; gap:11px; flex-shrink:0; }
   header h1 { display:flex; align-items:center; margin:0; font-size:16px; font-weight:700; color:var(--ink); letter-spacing:0; }
-  .hdr-mark { width:24px; height:24px; margin-right:9px; border-radius:5px; background:var(--ink); color:#06070a; display:grid; place-items:center;
-    font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-weight:800; font-size:13px; }
-  .ver { margin-left:8px; color:var(--blue); font-size:11px; font-weight:400; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; }
-  .workspace-name { padding-left:11px; color:var(--muted); border-left:1px solid var(--line); font-size:11px; font-weight:500; text-transform:uppercase; letter-spacing:.04em; }
-  .stats { display:flex; align-items:center; gap:8px; padding:5px 9px; font-size:12px; color:var(--muted); background:var(--surface); border:1px solid var(--line-soft); border-radius:4px; }
+  .hdr-mark { width:28px; height:28px; margin-right:9px; border-radius:5px; background:var(--ink); overflow:hidden; flex-shrink:0; }
+  .hdr-mark img { display:block; width:100%; height:100%; }
+  .workspace-name { display:none; }
+  .stats { display:flex; align-items:center; gap:7px; padding:0; font-size:12px; color:var(--green); background:transparent; border:0; white-space:nowrap; }
   .stats b { color:var(--ink); font-weight:600; }
   .status-dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--danger); flex-shrink:0; }
   .status-dot.ok { background:var(--green); animation:dh-pulse 2.4s ease-in-out infinite; }
   @keyframes dh-pulse { 0%,100%{opacity:1;} 50%{opacity:.5;} }
-  .header-actions { display:flex; align-items:center; gap:7px; margin-left:auto; flex-wrap:wrap; }
-  .header-actions .lbl { color:var(--muted); font-size:12px; white-space:nowrap; }
+  .header-process { position:relative; min-width:0; margin-left:auto; }
+  .process-trigger { display:grid; grid-template-columns:minmax(0,1fr) auto; grid-template-rows:auto auto; column-gap:10px; min-width:180px; max-width:300px; min-height:38px; padding:4px 10px; text-align:left; color:var(--ink-2); background:transparent; border:1px solid transparent; border-radius:4px; cursor:pointer; }
+  .process-trigger:hover { border-color:transparent; background:rgba(255,255,255,.04); color:var(--ink); }
+  .process-trigger .proc-primary { overflow:hidden; color:var(--ink); font-size:11px; font-weight:650; text-overflow:ellipsis; white-space:nowrap; }
+  .process-trigger .proc-secondary { grid-column:1; overflow:hidden; color:var(--muted); font:10px/1.3 ui-monospace,SFMono-Regular,Consolas,monospace; text-overflow:ellipsis; white-space:nowrap; }
+  .process-trigger .menu-chevron { grid-column:2; grid-row:1 / 3; align-self:center; color:var(--muted); }
+  .process-popover { width:290px; padding:12px 14px; left:auto; right:0; }
+  .process-popover .proc-title { margin-bottom:10px; color:var(--ink); font-size:12px; font-weight:650; }
+  .procinfo { display:grid; grid-template-columns:auto minmax(0,1fr); gap:8px 14px; margin:0; font:11px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace; }
+  .procinfo dt { color:var(--muted); }
+  .procinfo dd { min-width:0; margin:0; overflow-wrap:anywhere; color:var(--ink-2); text-align:right; }
+  .sess-lab { display:flex; align-items:center; gap:8px; margin-top:12px; padding-top:10px; border-top:1px solid var(--line-soft); color:var(--muted); font-size:11px; }
+  .sess-lab select { flex:1; min-width:0; }
+  .header-actions { display:flex; align-items:center; gap:7px; margin-left:0; flex-wrap:wrap; }
+  .menu-wrap { position:relative; }
+  .popover { display:none; position:absolute; top:calc(100% + 7px); right:0; z-index:80; min-width:210px; padding:6px; color:var(--ink-2); background:#11151c; border:1px solid #4a5260; border-radius:5px; box-shadow:0 18px 50px rgba(0,0,0,.58); }
+  .popover.show { display:block; }
+  .popover::before { content:''; position:absolute; top:-5px; right:14px; width:8px; height:8px; background:#11151c; border-top:1px solid #4a5260; border-left:1px solid #4a5260; transform:rotate(45deg); }
+  .menu-popover a,.menu-popover button { box-sizing:border-box; display:flex; width:100%; min-height:35px; align-items:center; gap:9px; padding:0 10px; color:var(--ink-2); background:transparent; border:0; border-radius:3px; text-align:left; text-decoration:none; white-space:nowrap; cursor:pointer; }
+  .menu-popover a:hover,.menu-popover button:hover { color:var(--ink); background:var(--surface-3); }
+  .menu-popover .menu-danger { color:var(--danger); }
+  .wechat-popover { width:min(360px, calc(100vw - 28px)); padding:8px; }
+  .wechat-copy { display:block; width:100%; padding:0 !important; min-height:0 !important; border:0 !important; background:transparent !important; cursor:pointer; border-radius:4px; }
+  .wechat-copy:hover { background:transparent !important; border:0 !important; }
+  .wechat-copy img { display:block; width:100%; height:auto; }
   select, input, textarea, button { font:inherit; letter-spacing:0; }
-  select, input, textarea { min-height:32px; background:var(--bg); color:var(--ink); border:1px solid var(--line); border-radius:4px; padding:5px 8px; font-size:12px; }
+  select, input, textarea { min-height:32px; background:transparent; color:var(--ink); border:1px solid var(--line); border-radius:4px; padding:5px 8px; font-size:12px; }
   select:focus, input:focus, textarea:focus { outline:2px solid rgba(120,169,255,.22); outline-offset:0; border-color:var(--blue); }
-  header button, .hbtn { min-height:32px; padding:0 11px; color:var(--ink-2); background:var(--surface); border:1px solid var(--line); border-radius:4px; font-size:12px; cursor:pointer; transition:background .15s,border-color .15s,color .15s; }
-  header button:hover, .hbtn:hover { color:var(--ink); background:var(--surface-2); border-color:#646e7d; }
-  #setBtn { color:#06070a; background:var(--ink); border-color:var(--ink); font-weight:650; }
-  #setBtn:hover { background:var(--blue); border-color:var(--blue); }
+  header button, .hbtn, .compact-action { min-height:32px; padding:0 11px; color:var(--ink-2); background:transparent; border:1px solid var(--line); border-radius:4px; font-size:12px; cursor:pointer; transition:background .15s,border-color .15s,color .15s; }
+  header button:hover, .hbtn:hover, .compact-action:hover { color:var(--ink); background:rgba(255,255,255,.04); border-color:#646e7d; }
+  .icon-button { display:inline-grid; width:34px; min-width:34px; padding:0; place-items:center; font-size:18px; line-height:1; }
 
-  /* ---- procbar ---- */
-  .procbar { display:flex; align-items:center; gap:18px; min-height:44px; padding:7px 16px; background:var(--surface); border-bottom:1px solid var(--line); font-size:12px; color:var(--muted); flex-wrap:wrap; }
-  .procbar b { color:var(--ink-2); font-weight:600; }
-  .procbar .pill.on { background:#12251b; color:var(--green); }
-
-  /* ---- tabbar ---- */
-  nav { display:flex; gap:0; min-height:48px; padding:0 12px; background:var(--chrome); border-bottom:1px solid var(--line); overflow-x:auto; }
-  nav button { position:relative; background:none; border:none; color:var(--muted); min-height:48px; padding:0 16px; font-size:12px; cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; white-space:nowrap; transition:color .15s,background .15s; }
-  nav button:hover { color:var(--ink); background:var(--surface); }
-  nav button.active { color:var(--ink); background:#101725; border-bottom-color:var(--blue); font-weight:600; }
-  nav button .n { display:inline-grid; min-width:19px; height:19px; margin-left:7px; place-items:center; color:var(--muted); background:var(--surface-3); border-radius:3px; font-size:10px; font-weight:600; }
-  nav button .n:empty { display:none; }
-  nav button.active .n { color:#07101f; background:var(--blue); }
+  /* ---- tabbar（只绑 #nav，避免误伤设置里的 <nav class="set-nav">） ---- */
+  #nav { display:flex; gap:0; min-height:48px; padding:0 12px; background:var(--bg); border-bottom:1px solid var(--line-soft); overflow-x:auto; }
+  #nav button { position:relative; background:none; border:none; color:var(--muted); min-height:48px; padding:0 16px; font-size:12px; cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; white-space:nowrap; }
+  #nav button:hover { color:var(--ink); background:transparent; }
+  #nav button.active { color:var(--ink); background:transparent; border-bottom-color:var(--blue); font-weight:600; }
+  #nav button .n { display:inline; min-width:0; height:auto; margin-left:6px; color:var(--muted); background:transparent; font-size:11px; font-variant-numeric:tabular-nums; }
+  #nav button .n:empty { display:none; }
+  #nav button.active .n { color:var(--blue); background:transparent; }
 
   /* ---- filter toolbar ---- */
-  .filters { display:none; align-items:center; gap:9px; min-height:52px; padding:8px 14px; background:var(--surface); border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  .filters { display:none; flex-direction:column; align-items:stretch; gap:8px; min-height:52px; padding:8px 14px; background:var(--bg); border-bottom:1px solid var(--line-soft); }
   .filters.show { display:flex; }
-  .toolbar-filters { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .toolbar-main { display:flex; width:100%; align-items:center; gap:8px; }
   .toolbar-actions { display:flex; gap:7px; align-items:center; flex-wrap:wrap; margin-left:auto; }
   .filters label { color:var(--muted); font-size:12px; }
-  .filters input[type=search], .filters select { width:auto; }
-  .filters input[type=search] { width:260px; }
+  .filters input[type=search], .filters select { min-height:32px; color:var(--ink); background:transparent; border-color:var(--line); border-radius:4px; }
+  .filters input[type=search] { width:280px; }
+  .filter-toggle { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
+  .filter-badge { display:inline-grid; min-width:17px; height:17px; padding:0 4px; place-items:center; color:#07101f; background:var(--blue); border-radius:3px; font-size:10px; }
+  .filter-badge:empty { display:none; }
+  .filter-toggle[aria-expanded='true'] .menu-chevron { display:inline-block; transform:rotate(180deg); }
+  .advanced-filters { display:flex; align-items:center; gap:12px; min-height:39px; padding-top:8px; border-top:1px solid var(--line-soft); flex-wrap:wrap; }
+  .advanced-filters[hidden] { display:none; }
+  .filter-field { display:inline-flex; align-items:center; gap:7px; }
   .size-filter { display:flex; align-items:center; gap:7px; flex-wrap:wrap; }
   .size-filter input[type=number] { width:70px; }
   .size-filter .sep, .size-filter .unit { color:var(--muted); }
-  .filters button { min-height:32px; padding:0 11px; color:var(--ink-2); background:var(--surface); border:1px solid var(--line); border-radius:4px; font-size:12px; cursor:pointer; }
-  .filters button:hover { color:var(--ink); background:var(--surface-2); border-color:#646e7d; }
-  .filters button.warn { color:var(--amber); background:#1d180e; border-color:#67522a; }
-  .filters button.warn.on { color:#190d04; background:var(--amber); border-color:var(--amber); }
-  .filters button.danger { color:var(--danger); background:#1d1015; border-color:#6d2f3d; }
-  .filters button.danger:hover { color:#17090c; background:var(--danger); border-color:var(--danger); }
+  .filters button { min-height:32px; padding:0 11px; color:var(--ink-2); background:transparent; border:1px solid var(--line); border-radius:4px; font-size:12px; cursor:pointer; }
+  .filters button:hover { color:var(--ink); background:rgba(255,255,255,.04); border-color:#646e7d; }
+  .pause-btn.is-paused { color:#171007; background:var(--amber); border-color:var(--amber); font-weight:650; }
+  .pause-btn.is-paused:hover { color:#171007; background:#ffd57d; border-color:#ffd57d; }
   #count { color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; }
+  .new-banner { display:none; align-items:center; justify-content:space-between; gap:10px; padding:8px 14px; background:#15223b; border-bottom:1px solid var(--blue); color:var(--ink); font-size:12px; position:sticky; top:0; z-index:2; }
+  .new-banner.show { display:flex; }
+  .new-banner button { background:var(--blue); color:#07101f; border:1px solid var(--blue); padding:3px 10px; border-radius:4px; font-size:12px; cursor:pointer; }
 
   /* ---- workspace / panels ---- */
-  main { flex:1; min-height:0; display:flex; }
-  .panel { display:none; flex:1; min-height:0; } .panel.active { display:flex; }
-  .workspace { flex:1; display:flex; min-height:0; background:var(--bg); }
-  .list-pane { width:42%; min-width:220px; flex-shrink:0; display:flex; flex-direction:column; min-height:0; background:#090b0f; }
+  main { flex:1; min-height:0; min-width:0; display:flex; overflow:hidden; }
+  .panel { display:none; flex:1; min-height:0; min-width:0; } .panel.active { display:flex; overflow:hidden; }
+  .workspace { flex:1; display:flex; min-height:0; min-width:0; overflow:hidden; background:var(--bg); }
+  .list-pane { width:42%; min-width:220px; max-width:70%; flex-shrink:0; display:flex; flex-direction:column; min-height:0; background:var(--bg); }
   .list-pane > div { flex:1; overflow-y:auto; min-height:0; }
-  .splitter { width:5px; flex-shrink:0; background:var(--surface-2); border-left:1px solid var(--line); border-right:1px solid var(--line); cursor:col-resize; transition:background .15s; }
+  .list-pane > .new-banner { flex:0 0 auto; overflow:visible; }
+  .splitter { width:5px; flex-shrink:0; background:transparent; border-left:1px solid var(--line-soft); border-right:1px solid var(--line-soft); cursor:col-resize; transition:background .15s; }
   .splitter:hover, .splitter.dragging { background:var(--blue); }
-  .detail-pane { flex:1; min-width:240px; overflow-y:auto; padding:0 20px 30px; background:#0c0e13; }
-  .pad { padding:18px 20px; overflow:auto; flex:1; background:#0c0e13; }
+  .detail-pane { flex:1; min-width:240px; overflow-y:auto; padding:0 20px 30px; background:var(--bg); }
 
   h2 { font-size:18px; color:var(--ink); margin:2px 0 12px; font-weight:600; }
   h3 { font-size:11px; color:var(--muted); margin:12px 0 5px; font-weight:500; text-transform:uppercase; letter-spacing:.05em; }
   table { border-collapse:collapse; width:100%; font-size:12px; }
-  th, td { text-align:left; padding:9px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
-  th { color:var(--muted); font-size:11px; font-weight:600; background:var(--surface); }
+  th, td { text-align:left; padding:9px 10px; border-bottom:1px solid var(--line-soft); vertical-align:top; }
+  th { color:var(--muted); font-size:11px; font-weight:600; background:transparent; }
   .row2 { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:10px; }
   details summary { cursor:pointer; }
   pre { background:#08090c; border:1px solid var(--line); border-radius:4px; padding:11px 12px; overflow:auto; white-space:pre-wrap; word-break:break-all;
@@ -113,27 +139,36 @@
   .pill { display:inline-block; padding:2px 8px; border-radius:6px; font-size:11px; font-weight:600; }
   .pill.on { background:#12251b; color:var(--green); } .pill.no { background:#2a1116; color:var(--danger); }
 
-  /* ---- capture rows ---- */
-  .row { min-height:64px; padding:10px 14px; background:#090b0f; border-bottom:1px solid var(--line-soft); border-left:3px solid transparent; cursor:pointer; transition:background .12s,border-color .12s; }
-  .row:hover { background:var(--surface); }
-  .row.selected { background:#172136; border-left-color:var(--blue); box-shadow:inset 0 0 0 1px rgba(120,169,255,.08); }
+  /* ---- capture rows（对齐 iOS workbench：左色条 + 透明胶囊，最新在上） ---- */
+  .row { min-height:70px; padding:10px 14px; background:transparent; border-bottom:1px solid var(--line-soft); border-left:3px solid transparent; cursor:pointer; }
+  .row:hover { background:rgba(255,255,255,.035); }
+  .row.selected { background:rgba(120,169,255,.08); border-left-color:var(--blue); box-shadow:none; }
   .row .top { display:flex; gap:10px; align-items:center; font-size:12px; }
-  .row .seq { color:var(--muted); min-width:44px; font-variant-numeric:tabular-nums; }
+  .row .seq { color:var(--muted); min-width:42px; font-variant-numeric:tabular-nums; }
   .row .algo { font-weight:650; color:var(--ink); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .row .op { color:var(--muted); font-size:11px; flex-shrink:0; }
   .row .ts { color:var(--muted); font-size:11px; margin-left:auto; flex-shrink:0; font-variant-numeric:tabular-nums; }
-  .row .preview { color:#c7ccd5; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:11px; margin-top:4px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+  .row .lens { color:var(--muted); font-size:11px; margin-top:2px; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .row .preview { margin-top:4px; color:#c7ccd5; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .row .lens-out { color:var(--cyan); }
+  .io-section.raw-card { padding:0 0 2px 12px; background:transparent; border:0; border-radius:0; border-left:2px solid var(--cyan); }
+  .io-label.raw { color:var(--cyan); background:transparent; }
+  details.callstack { margin-top:18px; }
+  details.callstack summary { cursor:pointer; color:var(--muted); font-size:11px; font-weight:500; text-transform:uppercase; letter-spacing:.05em; user-select:none; }
+  details.callstack .io-block-body { margin-top:8px; }
   .row.cat-digest { border-left-color:var(--green); } .row.cat-hmac { border-left-color:var(--blue); }
   .row.cat-sym { border-left-color:var(--amber); }    .row.cat-asym { border-left-color:var(--lilac); }
   .row.cat-kdf { border-left-color:var(--pink); }     .row.cat-aead { border-left-color:var(--teal); }
   .row.cat-file { border-left-color:var(--coral); }   .row.cat-sys { border-left-color:var(--lilac); }
   .row.cat-net { border-left-color:var(--cyan); }     .row.cat-other { border-left-color:#3a3a3a; }
-  .caprow { cursor:pointer; } .caprow:hover { background:var(--surface); }
-  .pill.digest { color:var(--green); background:#13251a; } .pill.hmac { color:var(--blue); background:#14213a; }
-  .pill.sym { color:var(--amber); background:#2b2110; }    .pill.asym { color:var(--lilac); background:#21172f; }
-  .pill.kdf { color:var(--pink); background:#2b1420; }     .pill.aead { color:var(--teal); background:#0f2723; }
-  .pill.file { color:var(--coral); background:#2c1816; }   .pill.sys { color:var(--lilac); background:#21172f; }
-  .pill.net { color:var(--cyan); background:#10252b; }     .pill.other { color:var(--muted); background:var(--surface-2); }
+  .row.selected { border-left-color:var(--blue); }
+  .caprow { cursor:pointer; }
+  .row .pill { padding:0 2px; border:0; border-radius:0; background:transparent; font-size:11px; font-weight:600; }
+  .row .pill.digest { color:var(--green); } .row .pill.hmac { color:var(--blue); }
+  .row .pill.sym { color:var(--amber); }    .row .pill.asym { color:var(--lilac); }
+  .row .pill.kdf { color:var(--pink); }     .row .pill.aead { color:var(--teal); }
+  .row .pill.file { color:var(--coral); }   .row .pill.sys { color:var(--lilac); }
+  .row .pill.net { color:var(--cyan); }     .row .pill.other { color:var(--muted); }
   .cat-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:8px; vertical-align:middle; }
   .cat-dot.digest { background:var(--green); } .cat-dot.hmac { background:var(--blue); }
   .cat-dot.sym { background:var(--amber); } .cat-dot.asym { background:var(--lilac); }
@@ -142,21 +177,86 @@
   .cat-dot.net { background:var(--cyan); } .cat-dot.other { background:var(--muted); }
   .empty, .detail-empty { color:var(--muted); text-align:center; padding:60px 20px; line-height:1.7; }
 
-  /* ---- detail ---- */
-  .detail-head { position:sticky; top:0; background:#0c0e13; padding:17px 0 13px; border-bottom:1px solid var(--line); z-index:1; }
+  /* ---- detail（对齐 iOS workbench：左侧色条点缀，悬停复制） ---- */
+  .detail-head { position:sticky; top:0; background:var(--bg); padding:17px 0 13px; border-bottom:1px solid var(--line-soft); z-index:1; }
   .detail-head h2 { margin:0; font-size:17px; color:var(--ink); word-break:break-all; }
-  .detail-head .sub { color:var(--muted); font-size:12px; margin-top:5px; word-break:break-all; }
-  .detail-actions { display:flex; gap:6px; flex-wrap:wrap; margin-top:9px; }
-  .detail-pane button { min-height:28px; color:var(--ink-2); background:var(--surface); border:1px solid var(--line); padding:0 10px; border-radius:4px; font-size:11px; cursor:pointer; }
-  .detail-pane button:hover { background:var(--surface-2); border-color:#646e7d; color:var(--ink); }
-  .io-section { margin-top:16px; padding:14px 15px; background:var(--surface); border:1px solid var(--line); border-radius:5px; }
-  .io-section.in-card { border-top:2px solid var(--blue); }
-  .io-section.out-card { border-top:2px solid var(--coral); }
-  .io-label { display:inline-block; font-size:13px; font-weight:700; letter-spacing:0; padding:4px 8px; border-radius:3px; margin-bottom:10px; }
-  .io-label.in  { color:#07101f; background:var(--blue); }
-  .io-label.out { color:#180c09; background:var(--coral); }
-  .io-label.kv  { color:var(--ink); background:var(--surface-3); border:1px solid var(--line); }
+  .detail-head .sub { color:var(--muted); font-size:12px; margin-top:4px; word-break:break-all; }
+  .detail-actions { display:flex; gap:6px; flex-wrap:wrap; margin-top:10px; }
+  .detail-pane button { min-height:28px; color:var(--ink-2); background:transparent; border:1px solid var(--line); padding:4px 10px; border-radius:4px; font-size:11px; cursor:pointer; }
+  .detail-pane button:hover { background:rgba(255,255,255,.04); border-color:#646e7d; color:var(--ink); }
+  .io-section { margin-top:18px; }
+  .io-section.kv-card,.io-section.in-card,.io-section.out-card { padding:0 0 2px 12px; background:transparent; border:0; border-radius:0; border-left:2px solid var(--line); }
+  .io-section.in-card { border-left-color:var(--blue); }
+  .io-section.out-card { border-left-color:var(--coral); }
+  .io-card-head { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
+  .io-card-head .io-label { margin-bottom:0; }
+  .io-card-head .io-meta { margin-bottom:0; margin-left:2px; }
+  .io-block { margin-top:2px; }
+  .io-block-body { position:relative; }
+  .io-block-body:hover pre, .io-block-body:focus-within pre { border-color:transparent; }
+  .block-copy { position:absolute; top:4px; right:0; width:26px; height:26px; padding:0; min-height:0; display:grid; place-items:center; opacity:0; pointer-events:none; color:var(--muted); background:transparent; border:0; border-radius:4px; cursor:pointer; transition:opacity .12s, color .15s, background .15s; }
+  .io-block-body:hover .block-copy, .io-block-body:focus-within .block-copy { opacity:1; pointer-events:auto; }
+  .block-copy:hover { color:var(--ink); background:rgba(255,255,255,.06); border-color:transparent; }
+  .block-copy svg { width:13px; height:13px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; pointer-events:none; }
+  .io-label { display:inline-block; padding:0; border:0; border-radius:0; letter-spacing:.04em; text-transform:uppercase; font-size:11px; font-weight:650; margin-bottom:10px; }
+  .io-label.in { color:var(--blue); background:transparent; }
+  .io-label.out { color:var(--coral); background:transparent; }
+  .io-label.kv { color:var(--muted); background:transparent; }
   .io-meta { color:var(--muted); font-size:11px; margin-bottom:6px; }
+  .detail-pane h3 { font-size:11px; color:var(--muted); margin:12px 0 5px; font-weight:500; text-transform:uppercase; letter-spacing:.05em; }
+  .detail-pane pre { background:transparent; border:0; border-radius:0; padding:8px 28px 8px 0; margin:0; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:11px; line-height:1.65; max-height:300px; overflow:auto; white-space:pre-wrap; word-break:break-all; color:#f1f3f7; }
+  .detail-pane pre.hex { white-space:pre; word-break:normal; }
+
+  /* ---- 文件管理器（对齐 iOS 左右分栏 + 面包屑） ---- */
+  .files-workspace { flex:1; display:flex; min-height:0; width:100%; }
+  .files-list-pane { display:flex; flex-direction:column; overflow:hidden; }
+  .files-list-pane > .files-head { flex:0 0 auto; overflow:visible; }
+  .files-list-pane > .files-list { flex:1; min-height:0; overflow-y:auto; }
+  .files-head { display:flex; align-items:center; gap:10px; padding:10px 14px; border-bottom:1px solid var(--line-soft); flex-shrink:0; flex-wrap:wrap; background:transparent; min-height:50px; }
+  .files-head button { min-height:32px; padding:0 10px; color:var(--ink-2); background:transparent; border:1px solid var(--line); border-radius:4px; font-size:11px; cursor:pointer; flex-shrink:0; }
+  .files-head button:hover { color:var(--ink); background:rgba(255,255,255,.04); border-color:#646e7d; }
+  .files-breadcrumb { flex:1; min-width:0; font-size:12px; color:var(--muted); word-break:break-all; }
+  .files-breadcrumb a { color:var(--blue); text-decoration:none; }
+  .files-breadcrumb a:hover { text-decoration:underline; }
+  .files-breadcrumb .sep { color:#484f58; }
+  .files-list { overflow-y:auto; flex:1; }
+  .files-row { min-height:0; }
+  .files-row .top { display:flex; gap:8px; align-items:center; font-size:12px; }
+  .files-row .files-icon { color:var(--muted); font-size:11px; flex-shrink:0; width:28px; font-variant:all-small-caps; letter-spacing:.04em; }
+  .files-row .files-icon.dir { color:#d4c95a; }
+  .files-row .name { font-weight:500; color:var(--ink-2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
+  .files-row .files-actions { display:flex; gap:6px; flex-shrink:0; }
+  .files-row .files-actions button, .files-row .files-actions a { min-height:24px; padding:2px 8px; color:var(--muted); background:transparent; border:1px solid var(--line); border-radius:3px; font-size:11px; cursor:pointer; text-decoration:none; display:inline-flex; align-items:center; }
+  .files-row .files-actions button:hover, .files-row .files-actions a:hover { color:var(--ink); background:rgba(255,255,255,.04); }
+  .files-row .n { color:var(--muted); font-size:11px; margin-top:2px; padding-left:36px; }
+  .files-preview-head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:14px 0 10px; position:sticky; top:0; background:var(--bg); z-index:1; border-bottom:1px solid var(--line-soft); margin-bottom:10px; }
+  .files-preview-head .path { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:12px; color:var(--ink-2); word-break:break-all; flex:1; }
+  #filesPreviewWrap { position:relative; }
+  #filesPreviewBody { margin:0; max-height:none; padding:8px 28px 8px 0; background:transparent; border:0; }
+
+  /* ---- Dump（对齐 iOS dumppane：说明 + 两个主按钮 + 一张表） ---- */
+  .dumppane { flex:1; overflow-y:auto; padding:24px; background:var(--bg); }
+  .dumpwrap { max-width:1080px; }
+  .dumpwrap h2 { font-size:18px; margin:2px 0 10px; color:var(--ink); }
+  .dumpwrap h3 { font-size:13px; color:var(--ink-2); margin:22px 0 8px; font-weight:600; text-transform:none; letter-spacing:0; }
+  .dumpwrap .note { color:var(--muted); font-size:12px; line-height:1.7; margin-bottom:14px; }
+  .dumpwrap .note b { color:var(--ink); }
+  .dumpwrap .warn-note { color:var(--amber); }
+  .dump-done { margin:6px 0 14px; font-size:13px; color:var(--ink-2); white-space:pre-wrap; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; background:transparent; border:0; padding:0; }
+  .dump-done:empty { display:none; }
+  .dump-check { display:inline-flex; align-items:center; gap:6px; color:var(--muted); font-size:12px; }
+  .dump-actions { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:14px; }
+  .dump-actions button { min-height:32px; color:var(--ink-2); background:transparent; border:1px solid var(--line); border-radius:4px; padding:0 12px; cursor:pointer; font-size:12px; }
+  .dump-actions button:hover { color:var(--ink); background:rgba(255,255,255,.04); border-color:#646e7d; }
+  .dump-actions button.primary { color:#07101f; background:var(--blue); border-color:var(--blue); font-weight:600; }
+  .dump-actions button.primary:hover { background:#93bcff; }
+  .dump-table { width:100%; border-collapse:collapse; font-size:12px; margin-top:6px; }
+  .dump-table th, .dump-table td { text-align:left; padding:9px 10px; border-bottom:1px solid var(--line-soft); background:transparent; }
+  .dump-table th { color:var(--muted); font-weight:600; }
+  .dump-table td.symname { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; color:var(--ink); word-break:break-all; }
+  .dump-table th:last-child, .dump-table td:last-child { text-align:right; white-space:nowrap; }
+  .dl-link { display:inline-block; color:var(--blue); text-decoration:none; }
+  .dl-link:hover { text-decoration:underline; }
 
   /* ---- toast ---- */
   .toast { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:var(--blue); border:1px solid var(--blue); color:#07101f; padding:8px 14px; border-radius:4px; font-size:12px; box-shadow:0 12px 40px rgba(0,0,0,.5); opacity:0; transition:opacity .2s; pointer-events:none; z-index:200; }
@@ -165,21 +265,35 @@
   /* ---- modal + settings shell ---- */
   .modal-mask { display:none; position:fixed; inset:0; background:rgba(0,0,0,.76); backdrop-filter:blur(6px); z-index:100; align-items:center; justify-content:center; }
   .modal-mask.show { display:flex; }
-  .modal { width:min(900px,92vw); height:min(80vh,720px); background:#0c0e13; border:1px solid #4a5260; border-radius:6px; display:flex; flex-direction:column; box-shadow:0 28px 90px rgba(0,0,0,.65); }
-  .modal h3 { margin:0; min-height:52px; padding:10px 14px; border-bottom:1px solid var(--line); font-size:14px; color:var(--ink); background:var(--surface); display:flex; align-items:center; gap:8px; }
+  .modal { width:min(900px,92vw); height:min(80vh,720px); background:var(--bg); border:1px solid var(--line); border-radius:6px; display:flex; flex-direction:column; box-shadow:0 28px 90px rgba(0,0,0,.65); }
+  .modal h3 { margin:0; min-height:52px; padding:10px 14px; border-bottom:1px solid var(--line-soft); font-size:14px; color:var(--ink); background:transparent; display:flex; align-items:center; gap:8px; }
   .modal h3 .spacer { flex:1; }
   .modal h3 button { min-height:30px; color:var(--ink-2); background:var(--bg); border:1px solid var(--line); padding:0 11px; border-radius:4px; font-size:12px; cursor:pointer; }
   .modal h3 button:hover { background:var(--surface-2); border-color:#646e7d; }
   .modal pre { flex:1; overflow:auto; margin:0; border:none; border-radius:0; background:transparent; padding:14px 16px; color:var(--ink-2); }
-  .diag-hint { padding:10px 16px; border-bottom:1px solid var(--line); background:#11151c; color:var(--muted); font-size:12px; line-height:1.55; }
+  .diag-hint { padding:10px 16px; border-bottom:1px solid var(--line-soft); background:transparent; color:var(--muted); font-size:12px; line-height:1.55; }
+  #mcpMask .modal { height:auto; max-height:min(80vh,640px); width:min(520px,92vw); }
+  .mcp-shell { display:flex; flex-direction:column; }
+  .mcp-body { padding:4px 20px 22px; overflow-y:auto; }
+  .mcp-step { margin-top:18px; }
+  .mcp-step:first-child { margin-top:10px; }
+  .mcp-step h4 { margin:0 0 8px; color:var(--muted); font-size:11px; font-weight:650; letter-spacing:.06em; text-transform:uppercase; }
+  .mcp-fence { position:relative; display:flex; align-items:flex-start; gap:8px; padding:10px 52px 10px 12px; border-left:2px solid var(--line); }
+  .mcp-prompt { flex:0 0 auto; color:var(--muted); font:12px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace; user-select:none; }
+  .mcp-fence code, .mcp-fence pre { flex:1; min-width:0; margin:0; padding:0; color:var(--ink); background:transparent; border:0; border-radius:0; font:12px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace; white-space:pre-wrap; word-break:break-all; }
+  .mcp-fence--json pre { white-space:pre; word-break:normal; overflow-x:auto; }
+  .mcp-copy { position:absolute; top:8px; right:0; min-height:26px !important; padding:0 8px !important; color:var(--muted) !important; background:transparent !important; border:0 !important; font-size:11px !important; }
+  .mcp-copy:hover { color:var(--ink) !important; }
+  .mcp-copy.is-copied { color:var(--green) !important; }
+  .mcp-note { margin:18px 0 0; color:var(--muted); font-size:11px; }
   .set-shell { width:min(980px,95vw); height:min(88vh,760px); padding:0; position:relative; }
   .set-close-x { position:absolute; top:10px; right:12px; z-index:2; width:28px; height:28px; border:none; background:transparent; color:var(--muted); font-size:20px; line-height:1; cursor:pointer; border-radius:4px; }
   .set-close-x:hover { background:var(--surface-3); color:var(--ink); }
   .set-layout { display:flex; flex:1; min-height:0; }
-  .set-nav { width:190px; flex-shrink:0; border-right:1px solid var(--line); padding:48px 10px 14px; display:flex; flex-direction:column; gap:2px; background:#090b0f; }
+  .set-nav { width:190px; flex-shrink:0; border-right:1px solid var(--line-soft); padding:48px 10px 14px; display:flex; flex-direction:column; gap:2px; background:transparent; }
   .set-nav button { display:block; width:100%; text-align:left; min-height:38px; padding:8px 12px; border:none; border-left:3px solid transparent; background:transparent; color:var(--muted); border-radius:3px; font-size:13px; cursor:pointer; }
-  .set-nav button:hover { background:var(--surface); color:var(--ink); }
-  .set-nav button.active { background:#172136; color:var(--ink); border-left-color:var(--blue); font-weight:600; }
+  .set-nav button:hover { background:rgba(255,255,255,.04); color:var(--ink); }
+  .set-nav button.active { background:transparent; color:var(--ink); border-left-color:var(--blue); font-weight:600; }
   .set-main { flex:1; min-width:0; overflow-y:auto; padding:44px 32px 28px; }
   .set-page { display:none; } .set-page.active { display:block; }
   .set-page h4 { margin:0 0 6px; font-size:18px; font-weight:600; color:var(--ink); }
@@ -202,13 +316,13 @@
   .set-row select { min-width:120px; }
   .set-row .val { color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; }
   .set-actions { display:flex; gap:10px; flex-wrap:wrap; padding-top:14px; align-items:center; }
-  .set-actions button, .set-actions label.filebtn, .set-actions a.filebtn { min-height:34px; color:var(--ink-2); background:var(--surface); border:1px solid var(--line); padding:7px 14px; border-radius:4px; font-size:12px; cursor:pointer; text-decoration:none; }
-  .set-actions button:hover, .set-actions label.filebtn:hover, .set-actions a.filebtn:hover { background:var(--surface-2); border-color:#646e7d; }
-  .set-actions button.danger { color:var(--danger); background:#1d1015; border-color:#6d2f3d; }
+  .set-actions button, .set-actions label.filebtn, .set-actions a.filebtn { min-height:34px; color:var(--ink-2); background:transparent; border:1px solid var(--line); padding:7px 14px; border-radius:4px; font-size:12px; cursor:pointer; text-decoration:none; }
+  .set-actions button:hover, .set-actions label.filebtn:hover, .set-actions a.filebtn:hover { background:rgba(255,255,255,.04); border-color:#646e7d; }
+  .set-actions button.danger { color:var(--danger); background:transparent; border-color:#6d2f3d; }
   .set-actions button.danger:hover { color:#17090c; background:var(--danger); }
   .set-actions button.save { color:#07101f; background:var(--blue); border-color:var(--blue); font-weight:600; }
   .set-actions button.save:hover { background:#93bcff; }
-  #rawCfgText { width:100%; box-sizing:border-box; height:320px; margin-top:10px; font-size:12px; line-height:1.5; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; resize:vertical; white-space:pre; }
+  #rawCfgText { width:100%; box-sizing:border-box; height:320px; margin-top:10px; padding:10px 12px; font-size:12px; line-height:1.5; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; resize:vertical; white-space:pre; background:transparent; border:0; border-left:2px solid var(--line); border-radius:0; }
   label.ck { color:var(--muted); display:inline-flex; align-items:center; gap:5px; }
 
   @media (max-width:980px) {
@@ -220,33 +334,69 @@
     .list-pane { width:100% !important; height:42%; border-bottom:1px solid var(--line); }
     .splitter { display:none; }
     .filters input[type=search] { flex:1; width:auto; }
+    .set-layout { display:block; }
+    .set-nav { width:100%; padding:46px 8px 8px; flex-direction:row; overflow-x:auto; border-right:0; border-bottom:1px solid var(--line); }
+    .set-nav button { width:auto; min-width:max-content; border-left:0; border-bottom:2px solid transparent; }
+    .set-nav button.active { border-bottom-color:var(--blue); border-left-color:transparent; }
+    .set-main { padding:24px 18px; }
   }
 </style>
 </head>
 <body>
 <header>
   <div class="brand-lockup">
-    <h1><span class="hdr-mark">A</span>ADH<span class="ver">Android DecryptHub</span></h1>
-    <span class="workspace-name">Runtime Console</span>
+    <h1><span class="hdr-mark"><img src="/raven.svg" alt=""></span>ADH</h1>
   </div>
   <div class="stats" id="stats"><span class="status-dot" id="conn"></span><span id="status">连接中…</span></div>
+  <div class="header-process">
+    <button type="button" class="process-trigger" id="processBtn" aria-expanded="false" aria-controls="processPopover" title="当前进程">
+      <span class="proc-primary" id="procPrimary">未连接目标</span>
+      <span class="proc-secondary" id="procSecondary">启动 App 后自动出现</span>
+      <span class="menu-chevron" aria-hidden="true">⌄</span>
+    </button>
+    <div class="popover process-popover" id="processPopover">
+      <div class="proc-title">当前进程</div>
+      <dl class="procinfo" id="procinfo"></dl>
+      <label class="sess-lab">会话
+        <select id="sess"><option value="">（最新在线）</option></select>
+      </label>
+    </div>
+  </div>
   <div class="header-actions">
-    <span class="muted" id="access" title="点击复制 — 手机 / 同网设备浏览器可开"></span>
-    <span class="lbl">会话</span>
-    <select id="sess"><option value="">（最新在线）</option></select>
-    <button class="hbtn" id="mcpBtn" title="MCP 接入配置 — 让 AI 客户端经 HTTP 调用 ADH 的逆向工具">MCP</button>
-    <button class="hbtn" id="setBtn" title="捕获 / 数据 / 配置导入导出">⚙ 设置</button>
+    <div class="menu-wrap">
+      <button type="button" class="compact-action" id="wechatBtn" aria-expanded="false" aria-controls="wechatPopover" title="微信搜一搜 DecryptHub">公众号</button>
+      <div class="popover wechat-popover" id="wechatPopover">
+        <button type="button" class="wechat-copy" id="wechatCopy" title="复制公众号名称 DecryptHub">
+          <img src="/wechat-follow.png" alt="微信搜一搜 DecryptHub" width="1000" height="308">
+        </button>
+      </div>
+    </div>
+    <button type="button" class="compact-action" id="mcpBtn" title="MCP 接入配置 — 经 android-decrypt-hub / adh mcp 调用 ADH 逆向工具">MCP</button>
+    <button type="button" class="compact-action" id="setBtn" title="捕获 / 数据 / 配置导入导出">设置</button>
   </div>
 </header>
-
-<div class="procbar" id="procbar"><span class="muted">未连接目标 —— 在设备启动 App（模拟注入）后自动出现</span></div>
 
 <nav id="nav"></nav>
 
 <!-- 加解密/系统/网络 三个实时捕获 tab 共用这条过滤工具栏 -->
 <div class="filters" id="toolbar">
-  <div class="toolbar-filters">
-    <span id="catWrap"><label>分类</label>
+  <div class="toolbar-main">
+    <input id="tb-q" type="search" placeholder="搜索本类: 算法/操作/明文/预览…">
+    <button type="button" class="filter-toggle" id="filterToggleBtn" aria-expanded="false" aria-controls="advancedFilters">筛选<span class="filter-badge" id="filterBadge"></span><span class="menu-chevron" aria-hidden="true">⌄</span></button>
+    <div class="toolbar-actions">
+      <span id="count"></span>
+      <button type="button" id="tb-pause" class="pause-btn">暂停</button>
+      <div class="menu-wrap">
+        <button type="button" class="icon-button" id="toolbarMoreBtn" aria-label="当前板块更多操作" aria-expanded="false" aria-controls="toolbarMenu" title="更多">⋯</button>
+        <div class="popover menu-popover" id="toolbarMenu">
+          <button type="button" id="tb-download">下载本类</button>
+          <button type="button" id="tb-clearcat" class="menu-danger">清空本类</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="advanced-filters" id="advancedFilters" hidden>
+    <span id="catWrap" class="filter-field"><label>分类</label>
       <select id="tb-cat">
         <option value="-2">全部</option>
         <option value="0">摘要</option>
@@ -256,21 +406,14 @@
         <option value="4">KDF</option>
         <option value="5">AEAD</option>
       </select></span>
-    <input id="tb-q" type="search" placeholder="搜索本类: 算法/操作/明文/预览…">
     <span class="size-filter">
       <label>输入大小</label>
       <input id="tb-min" type="number" min="0" step="1" placeholder="0" title="最小字节">
       <span class="sep">—</span>
       <input id="tb-max" type="number" min="0" step="1" placeholder="不限" title="最大字节（留空不限）">
       <span class="unit">B</span>
-      <button id="tb-clear" title="清除过滤">清除</button>
+      <button type="button" id="tb-clear" title="清除过滤">清除</button>
     </span>
-  </div>
-  <div class="toolbar-actions">
-    <span id="count"></span>
-    <button id="tb-pause" class="warn">暂停</button>
-    <button id="tb-download">下载本类</button>
-    <button id="tb-clearcat" class="danger">清空本类</button>
   </div>
 </div>
 
@@ -278,7 +421,10 @@
   <!-- 加解密（category=crypto） -->
   <div class="panel active" id="p-crypto">
     <div class="workspace">
-      <div class="list-pane"><div id="cc-list"></div></div>
+      <div class="list-pane">
+        <div class="new-banner" id="cc-banner"><span id="cc-banner-text"></span><button type="button" onclick="jumpLatest('cc')">跳到最新</button></div>
+        <div id="cc-list"></div>
+      </div>
       <div class="splitter"></div>
       <div class="detail-pane" id="cc-detail">
         <div class="detail-empty">实时加解密捕获（EVP/Digest/HMAC）。App 一跑加密就自动出现。<br>点任意一条查看 明文 / 密文 / 算法 / 线程 / 时间。</div>
@@ -289,7 +435,10 @@
   <!-- 系统（category=system + file） -->
   <div class="panel" id="p-system">
     <div class="workspace">
-      <div class="list-pane"><div id="sy-list"></div></div>
+      <div class="list-pane">
+        <div class="new-banner" id="sy-banner"><span id="sy-banner-text"></span><button type="button" onclick="jumpLatest('sy')">跳到最新</button></div>
+        <div id="sy-list"></div>
+      </div>
       <div class="splitter"></div>
       <div class="detail-pane" id="sy-detail">
         <div class="detail-empty">系统函数调用行为：反调试(ptrace)、路径探测(access)、读取手机信息(系统属性)，以及<b>文件读写</b>(open/read/write/close) 的常驻 hook 被动采集。</div>
@@ -300,7 +449,10 @@
   <!-- 网络（category=net） -->
   <div class="panel" id="p-net">
     <div class="workspace">
-      <div class="list-pane"><div id="nt-list"></div></div>
+      <div class="list-pane">
+        <div class="new-banner" id="nt-banner"><span id="nt-banner-text"></span><button type="button" onclick="jumpLatest('nt')">跳到最新</button></div>
+        <div id="nt-list"></div>
+      </div>
       <div class="splitter"></div>
       <div class="detail-pane" id="nt-detail">
         <div class="detail-empty">TLS 明文：常驻 hook <code>SSL_write</code>(发送) / <code>SSL_read</code>(接收)，在加密前/解密后拿到明文。</div>
@@ -308,159 +460,94 @@
     </div>
   </div>
 
-  <!-- 文件（目录浏览器） -->
+  <!-- 文件（对齐 iOS：左列表 + 面包屑，右预览） -->
   <div class="panel" id="p-files">
-    <div class="pad">
-      <h2>文件浏览 — 目标可读目录</h2>
-      <div class="row2">
-        <button class="act" onclick="filesUp()">⬆ 上级</button>
-        <input id="files-path" placeholder="/data/data/<pkg>" size="54" onkeydown="if(event.key==='Enter')filesGo()">
-        <button class="act primary" onclick="filesGo()">进入</button>
-        <span id="files-stat" class="muted"></span>
+    <div class="files-workspace">
+      <aside class="list-pane files-list-pane">
+        <div class="files-head">
+          <nav class="files-breadcrumb" id="filesBreadcrumb"><a href="#" data-files-nav="">沙盒根</a></nav>
+          <button type="button" id="filesUp" title="上一级">↑</button>
+          <button type="button" id="filesRefresh">刷新</button>
+        </div>
+        <div id="filesList" class="files-list"><div class="empty">选择会话后浏览目标私有目录</div></div>
+      </aside>
+      <div class="splitter"></div>
+      <div class="detail-pane">
+        <div class="files-preview-head" id="filesPreviewHead">
+          <span class="path">← 选择文件预览，或点击「下载」</span>
+        </div>
+        <div class="io-block-body" id="filesPreviewWrap">
+          <pre id="filesPreviewBody"></pre>
+          <button type="button" class="block-copy" title="复制"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5"/></svg></button>
+        </div>
       </div>
-      <div class="row2" id="files-quick"></div>
-      <table><thead><tr><th>名称</th><th>类型</th><th>大小</th><th>权限</th><th>修改时间</th></tr></thead><tbody id="files-rows"></tbody></table>
-      <div id="files-view-head" class="muted" style="margin-top:12px"></div>
-      <pre id="files-view" class="muted">点文件查看内容（UTF-8 预览 + 下载）。私有目录读取需目标进程有权限（模拟注入即目标自身权限）。</pre>
     </div>
   </div>
 
-  <!-- Dump -->
+  <!-- Dump（对齐 iOS：说明 + 刷新/一键脱壳 + 模块表 + 已保存 dump） -->
   <div class="panel" id="p-dump">
-    <div class="pad">
-      <h2>Dump — 内存映射 / 模块 / 脱壳</h2>
-
-      <h3>加载的模块（maps 映射）</h3>
-      <div class="row2">
-        <button class="act" onclick="loadModules()">刷新模块</button>
-        <span id="mod-stat" class="muted"></span>
-      </div>
-      <table><thead><tr><th>模块</th><th>基址</th><th>段</th><th>大小</th><th>路径</th><th>操作</th></tr></thead><tbody id="mod-rows"></tbody></table>
-
-      <h3>手动 Dump 内存区段</h3>
-      <div class="row2">
-        <input id="rg-addr" placeholder="起始地址 hex (如 7b1234000)" size="26">
-        <input id="rg-size" placeholder="大小 bytes" size="12">
-        <input id="rg-tag" placeholder="标签(可选)" size="14">
-        <button class="act" onclick="regionDump()">Dump 区段</button>
-        <span id="rg-stat" class="muted"></span>
-      </div>
-
-      <h3>一键脱壳（下载全部 DEX）</h3>
-      <div class="row2">
-        <button class="act primary" onclick="unpackRun()">一键脱壳（快照→触发→再快照→恢复重建）</button>
-        <input id="unpack-pkg" placeholder="目标包名前缀（留空=自动用连上的目标包名）" size="30">
-        <span id="dex-stat" class="muted"></span>
-      </div>
-      <div class="muted" style="margin:-4px 0 10px">点一下即可：自动 dump DEX → 按包名枚举加载全部类（触发回填型抽取壳恢复）→ 捕获被抽取的方法体 → 重建标准 DEX，下面直接下载。</div>
-      <pre id="out-session" class="muted"></pre>
-
-      <h3>Dump 列表（点即下载）</h3>
-      <div class="row2"><button class="act" onclick="loadDumps()">刷新列表</button></div>
-      <table><thead><tr><th>类型</th><th>大小</th><th>sha256</th><th>来源</th><th>标签</th><th>下载</th><th>分析</th></tr></thead><tbody id="dumps-rows"></tbody></table>
-      <pre id="out-cov" class="muted" style="margin-top:12px">点某个 dex 的「覆盖率」查看方法恢复率报告（诚实统计：具体 Java 方法中有多少已带方法体）。</pre>
-
-      <details style="margin-top:16px">
-        <summary class="muted" style="cursor:pointer">高级：手动扫描 Dump DEX / 快照恢复（一般用不到）</summary>
-        <div class="row2" style="margin-top:10px">
-          <button class="act" onclick="rescanDex()">仅扫描并 Dump DEX</button>
+    <div class="dumppane">
+      <div class="dumpwrap">
+        <h2>应用脱壳 (Dump)</h2>
+        <div class="note">在目标进程内 dump 已加载的 DEX / 模块。只能砸<b>当前进程已映射</b>的镜像。<br><span class="warn-note">⚠ 仅限授权安全测试与自有 App。</span></div>
+        <div class="dump-actions">
+          <button type="button" onclick="loadModules()">刷新模块</button>
+          <button type="button" class="primary" onclick="unpackRun()">一键脱壳</button>
+          <label class="dump-check"><input type="checkbox" id="dumpShowSys"> 显示系统模块</label>
+          <span id="mod-stat" class="muted"></span>
         </div>
-        <div class="muted">对同一 dex 先后 dump 两次（T0 抽取态 / T1 运行后恢复态），从恢复镜像捕获缺失方法的 CodeItem 并重建为标准 DEX。</div>
-        <div class="row2" style="margin-top:8px">
-          <input id="rec-base" placeholder="base(T0) dump sha256" size="26" />
-          <input id="rec-rest" placeholder="restored(T1) dump sha256" size="26" />
-          <button class="act primary" onclick="recover()">恢复并重建</button>
-          <span id="rec-stat" class="muted"></span>
-        </div>
-        <pre id="out-rec" class="muted"></pre>
-      </details>
-    </div>
-  </div>
-
-  <!-- 内存/进程（手动操作） -->
-  <div class="panel" id="p-mem">
-    <div class="pad">
-      <h2>内存 / 进程（手动操作）</h2>
-      <div class="row2">
-        <button class="act" onclick="run('GET','/api/process/maps','进程 maps')">进程 maps</button>
-        <button class="act" onclick="run('GET','/api/art/dexfiles','ART 结构级 DexFile')">ART DexFile</button>
-        <button class="act" onclick="run('GET','/api/net/hook_test','TLS 明文抓取（沙盒自测）')">TLS 明文(沙盒)</button>
-        <button class="act" onclick="run('GET','/api/flow/watch','网络↔加密关联（沙盒自测）')">关联取证(沙盒)</button>
-        <button class="act" onclick="run('GET','/api/detect/watch','反分析雷达（沙盒自测）')">反分析雷达(沙盒)</button>
-        <button class="act" onclick="run('GET','/api/compat/probe','兼容性自检')">兼容自检</button>
-        <button class="act" onclick="run('GET','/api/crypto/hook_test','一次性明文抓取（沙盒自测）')">一次性抓明文(沙盒)</button>
+        <div id="dumpDone" class="dump-done"></div>
+        <table class="dump-table"><thead><tr><th>模块</th><th>类型</th><th>大小</th><th>操作</th></tr></thead>
+          <tbody id="mod-rows"><tr><td colspan="4" class="muted">点击「刷新模块」加载…</td></tr></tbody></table>
+        <h3>已保存的 dump</h3>
+        <div class="dump-actions"><button type="button" onclick="loadDumps()">刷新列表</button></div>
+        <table class="dump-table"><thead><tr><th>类型</th><th>大小</th><th>来源</th><th>操作</th></tr></thead>
+          <tbody id="dumps-rows"></tbody></table>
+        <div id="out-cov" class="dump-done muted">点某个 dex 的「覆盖率」查看方法恢复率报告。</div>
+        <input id="unpack-pkg" type="hidden" value="">
       </div>
-      <div class="muted" style="margin:6px 0">标「沙盒」的按钮是<b>沙盒自测</b>——它们经 agent 反射触发 sandbox 里的 <code>Network/CorrelatedFlow/Detection/JavaCrypto</code> 测试类，对真实目标不会触发任何东西。真实目标上，TLS/加密明文由「加解密」里的常驻 hook 被动采集。</div>
-      <pre id="out-mem" class="muted">选择一个操作（需目标在线）。</pre>
-    </div>
-  </div>
-
-  <!-- 原生 .so -->
-  <div class="panel" id="p-native">
-    <div class="pad">
-      <h2>原生 .so 分析</h2>
-      <div class="row2">
-        <input id="nat-sha" placeholder="dump sha256（脱壳/内存里得到）" size="30" />
-        <input id="nat-sym" placeholder="符号（反汇编）" size="20" value="adh_agent_start" />
-        <button class="act" onclick="nat('/api/native/analyze',{})">分析</button>
-        <button class="act" onclick="nat('/api/native/disasm',{symbol:val('nat-sym')})">反汇编</button>
-        <button class="act" onclick="nat('/api/native/crypto_const',{})">加密常量扫描</button>
-        <button class="act" onclick="nat('/api/native/syscall_scan',{})">svc 扫描</button>
-      </div>
-      <pre id="out-native" class="muted">先在「脱壳」或「内存」里 dump 一个 .so 得到 sha。</pre>
-    </div>
-  </div>
-
-  <!-- Dex 静态分析 -->
-  <div class="panel" id="p-dexana">
-    <div class="pad">
-      <h2>DEX 静态分析（搜索 / xref / 方法体）</h2>
-      <div class="muted">粘贴 base64 dex，或用脱壳里的 dump sha。</div>
-      <textarea id="dex-b64" placeholder="base64 dex…" style="width:100%;height:64px"></textarea>
-      <div class="row2">
-        <input id="dex-sha" placeholder="或 dump sha256" size="30" />
-        <input id="dex-q" placeholder="查询 / 方法名" size="24" value="Cipher" />
-        <button class="act" onclick="dex('/api/dex/search',{query:val('dex-q'),kinds:['string','class','method']})">搜索</button>
-        <button class="act" onclick="dex('/api/dex/xref',{method:val('dex-q')})">xref（谁调用）</button>
-        <button class="act" onclick="dex('/api/dex/crypto_scan',{})">加密扫描</button>
-        <button class="act" onclick="dex('/api/dex/method_code',{class:val('dex-q')})">方法体</button>
-      </div>
-      <pre id="out-dex" class="muted">…</pre>
-    </div>
-  </div>
-
-  <!-- 事件 -->
-  <div class="panel" id="p-events">
-    <div class="pad">
-      <h2>会话事件（持久化 · 可回放）</h2>
-      <div class="row2"><button class="act" onclick="loadEvents()">刷新</button><span class="muted">WebSocket 实时；ADH Daemon 重启后回放</span></div>
-      <table><thead><tr><th>seq</th><th>时间</th><th>类型</th><th>详情</th></tr></thead><tbody id="ev-rows"></tbody></table>
-    </div>
-  </div>
-
-  <!-- 调试 -->
-  <div class="panel" id="p-debug">
-    <div class="pad">
-      <h2>调试台</h2>
-      <div class="row2">
-        <span id="dbg-ws" class="pill no">ws: —</span>
-        <span id="dbg-stat" class="muted">请求 0 · 错误 0</span>
-        <span class="spacer"></span>
-        <label class="ck"><input type="checkbox" id="dbg-auto" checked> 自动滚动</label>
-        <button class="act" onclick="dbgClear()">清空</button>
-      </div>
-      <pre id="dbg-log" class="muted">调试日志 —— 每个 REST/MCP 请求与 WebSocket 事件都记录在此。</pre>
     </div>
   </div>
 </main>
 
 <!-- MCP 模态 -->
 <div class="modal-mask" id="mcpMask">
-  <div class="modal">
-    <h3>MCP 接入配置<span class="spacer"></span>
-      <button id="mcpCopy">复制</button><button onclick="closeModal('mcpMask')">关闭</button></h3>
-    <div class="diag-hint" id="mcpHint">加载中…</div>
-    <pre id="mcpBody">加载中…</pre>
+  <div class="modal mcp-shell">
+    <h3>MCP<span class="spacer"></span>
+      <button type="button" onclick="closeModal('mcpMask')">关闭</button></h3>
+    <div class="mcp-body">
+      <section class="mcp-step">
+        <h4>安装</h4>
+        <div class="mcp-fence">
+          <span class="mcp-prompt" aria-hidden="true">$</span>
+          <code id="mcpInstall">pip install android-decrypt-hub</code>
+          <button type="button" class="mcp-copy" data-mcp-copy="install" title="复制">复制</button>
+        </div>
+      </section>
+      <section class="mcp-step">
+        <h4>连接</h4>
+        <div class="mcp-fence">
+          <span class="mcp-prompt" aria-hidden="true">$</span>
+          <code id="mcpConnect">adh connect</code>
+          <button type="button" class="mcp-copy" data-mcp-copy="connect" title="复制">复制</button>
+        </div>
+      </section>
+      <section class="mcp-step">
+        <h4>配置</h4>
+        <div class="mcp-fence mcp-fence--json">
+          <pre id="mcpConfig">{
+  "mcpServers": {
+    "adh": {
+      "command": "adh",
+      "args": ["mcp"]
+    }
+  }
+}</pre>
+          <button type="button" class="mcp-copy" data-mcp-copy="config" title="复制">复制</button>
+        </div>
+      </section>
+      <p class="mcp-note">仅限可信网络 · 经 <code>adh mcp</code> 转发到 Host ADH Daemon 的 <code>POST /mcp</code></p>
+    </div>
   </div>
 </div>
 
@@ -473,6 +560,7 @@
         <button data-setpage="capture" class="active">捕获</button>
         <button data-setpage="data">数据</button>
         <button data-setpage="rawcfg">配置 JSON</button>
+        <button data-setpage="backends">注入后端</button>
       </nav>
       <div class="set-main">
         <div id="setPageCapture" class="set-page active">
@@ -535,6 +623,17 @@
             <span id="rawHint" class="muted"></span>
           </div>
         </div>
+        <div id="setPageBackends" class="set-page">
+          <h4>注入后端</h4>
+          <p class="set-lead">ADH 的注入后端现状与可选后端入口。Zygisk 与 Xposed 的作用域由手机侧 <b>ADH Manager → Device Daemon</b> 管理；Frida Gadget 是主机侧可选后端（本守护进程没有 adb，只显示缓存与命令）。</p>
+          <div class="set-section-title">当前 agent 会话</div>
+          <div id="backendsAgents" class="muted">加载中…</div>
+          <div class="set-section-title">Frida Gadget（可选，高开销）</div>
+          <div id="backendsGadget" class="muted">加载中…</div>
+          <div class="set-section-title">设备侧后端</div>
+          <div id="backendsDevice" class="muted">加载中…</div>
+          <div class="set-actions"><button onclick="renderBackends()">刷新</button></div>
+        </div>
       </div>
     </div>
   </div>
@@ -543,9 +642,8 @@
 <div class="toast" id="toast"></div>
 
 <script>
-// 顶栏五条主轴：加解密/系统/网络/文件/Dump。专家工具收进「高级」折叠。
+// 顶栏五条主轴：加解密 / 系统 / 网络 / 文件 / Dump（对齐 iOS，不藏专家折叠）。
 const TABS_MAIN=[['p-crypto','加解密','cc'],['p-system','系统','sy'],['p-net','网络','nt'],['p-files','文件'],['p-dump','Dump']];
-const TABS_ADV=[['p-mem','内存/进程'],['p-native','原生 .so'],['p-dexana','DEX 分析'],['p-events','事件'],['p-debug','调试']];
 const CAP_TABS={'p-crypto':'cc','p-system':'sy','p-net':'nt'};
 
 // ---- 调试台：统一记录请求/WS ----
@@ -564,34 +662,19 @@ window.fetch=async function(input,init){ const method=(init&&init.method)||'GET'
 
 const nav=document.getElementById('nav');
 function mkTab([id,label,key],active){ const b=document.createElement('button'); b.innerHTML=label+(key?` <span class="n" id="n-${key}"></span>`:''); if(active)b.className='active';
-  b.onclick=()=>{ document.querySelectorAll('nav button').forEach(x=>x.classList.remove('active')); b.classList.add('active');
+  b.onclick=()=>{ document.querySelectorAll('#nav button').forEach(x=>x.classList.remove('active')); b.classList.add('active');
     document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active')); document.getElementById(id).classList.add('active');
     onTabSwitch(id);
-    if(id==='p-dump'){ loadDumps(); loadModules(); } if(id==='p-files') filesInit(); if(id==='p-events') loadEvents(); };
+    if(id==='p-dump'){ loadDumps(); loadModules(); } if(id==='p-files') filesInit(); };
   return b; }
 TABS_MAIN.forEach((t,i)=>nav.appendChild(mkTab(t,i===0)));
-// 高级折叠：一个开关按钮 + 一个默认隐藏的容器
-const advToggle=document.createElement('button'); advToggle.textContent='高级';
-const advWrap=document.createElement('span'); advWrap.style.display='none';
-TABS_ADV.forEach(t=>advWrap.appendChild(mkTab(t,false)));
-advToggle.onclick=()=>{ advWrap.style.display=advWrap.style.display==='none'?'inline':'none'; };
-nav.appendChild(advToggle); nav.appendChild(advWrap);
 const val=id=>document.getElementById(id).value.trim();
 const sessParam=()=>{ const s=val('sess'); return s?`?session=${s}`:''; };
 
-// ---- 手动操作面板 ----
-async function run(method,path,label){ const el=document.getElementById('out-mem'); el.textContent=`${label}…`;
-  try{ const r=await fetch(path+sessParam(),{method}); el.textContent=label+'\n'+JSON.stringify(await r.json(),null,2);}catch(e){el.textContent='错误: '+e;} }
-async function dex(path,extra){ const el=document.getElementById('out-dex'); el.textContent='…';
-  const body={...extra}; const b64=val('dex-b64'), sha=val('dex-sha'); if(b64)body.b64=b64; else if(sha)body.sha=sha; else {el.textContent='请提供 base64 dex 或 sha';return;}
-  try{ const r=await fetch(path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)}); el.textContent=JSON.stringify(await r.json(),null,2);}catch(e){el.textContent='错误: '+e;} }
-async function nat(path,extra){ const el=document.getElementById('out-native'); el.textContent='…';
-  const sha=val('nat-sha'); if(!sha){el.textContent='请提供 dump sha';return;}
-  try{ const r=await fetch(path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sha,...extra})}); el.textContent=JSON.stringify(await r.json(),null,2);}catch(e){el.textContent='错误: '+e;} }
-
 // ---- 脱壳 / DEX ----
 async function loadDumps(){ const r=await (await fetch('/api/dumps')).json(); const tb=document.getElementById('dumps-rows');
-  tb.innerHTML=r.map(d=>`<tr><td>${d.kind}</td><td>${d.size}</td><td class="muted">${d.sha256.slice(0,20)}…</td><td>${d.source}</td><td>${d.tag||''}</td><td><a class="dl" href="/api/dumps/download?sha=${d.sha256}">下载</a></td><td>${d.kind==='dex'?`<a class="dl" href="#" onclick="coverage('${d.sha256}');return false">覆盖率</a>`:''}</td></tr>`).join('')||'<tr><td class="muted" colspan=7>暂无 dump（点上方「扫描并 Dump」）</td></tr>'; }
+  const list=(Array.isArray(r)?r:[]).slice().reverse();
+  tb.innerHTML=list.map(d=>`<tr><td>${escapeHtml(d.kind)}</td><td>${fmtSize(d.size)}</td><td class="muted">${escapeHtml(d.source||'')}</td><td><a class="dl-link" href="/api/dumps/download?sha=${d.sha256}">⬇ 下载</a>${d.kind==='dex'?` <a class="dl-link" href="#" onclick="coverage('${d.sha256}');return false">覆盖率</a>`:''}</td></tr>`).join('')||'<tr><td class="muted" colspan=4>暂无 dump（点上方「一键脱壳」）</td></tr>'; }
 async function coverage(sha){ const el=document.getElementById('out-cov'); el.textContent='分析中…';
   try{ const c=await (await fetch('/api/dex/coverage',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sha,limitMissing:20})})).json();
     if(c.error){el.textContent='错误: '+c.error;return;}
@@ -599,41 +682,21 @@ async function coverage(sha){ const el=document.getElementById('out-cov'); el.te
       `有方法体 ${c.basePresent} · 缺失(被抽取?) ${c.baseEmpty}\n恢复率 ${c.recoveryPct}%  ${'█'.repeat(Math.round(c.recoveryPct/5))}${'░'.repeat(20-Math.round(c.recoveryPct/5))}\n`+
       (c.baseEmpty?`\n缺失方法（前${(c.missing||[]).length}）：\n`+(c.missing||[]).map(m=>'  '+m.method).join('\n'):'\n✓ 无缺失方法（未抽取，或已全部恢复）');
   }catch(e){el.textContent='错误: '+e;} }
-async function unpackRun(){ const el=document.getElementById('out-session'), st=document.getElementById('dex-stat');
-  st.textContent='脱壳会话运行中（快照→触发→再快照→恢复）…'; el.textContent='';
+async function unpackRun(){ const el=document.getElementById('dumpDone'), st=document.getElementById('mod-stat');
+  st.textContent='脱壳会话运行中…'; el.textContent='发起中…';
   try{ const r=await (await fetch('/api/unpack/run',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session:val('sess')||undefined,triggerAllPrefix:val('unpack-pkg')||undefined,level:3})})).json();
     if(r.error){el.textContent='错误: '+r.error;st.textContent='';return;}
-    st.textContent=`会话完成：T0 ${r.t0Count} dex / 触发 ${r.triggered.length} 类`;
+    st.textContent=`完成：T0 ${r.t0Count} dex / 触发 ${r.triggered.length} 类`;
     let s=`阶段: ${r.phases.join(' → ')}\nT0 快照 ${r.t0Count} 个 DexFile · T1 快照 ${r.t1Count}\n触发 ${r.triggered.length} 类（`+
       r.triggered.slice(0,4).map(t=>t.class.split('.').pop()+(t.invoked?'✓调用':t.skipped?'⃠跳过':'加载')).join(' ')+`）\n\n`;
     for(const d of r.dexes){ if(d.error){s+=`  ✗ ${(d.sha0||'').slice(0,12)} ${d.error}\n`;continue;}
       s+=`[${d.format}] ${d.size}B  具体Java方法 ${d.concreteJava} · 有体 ${d.presentBefore}\n`+
-         `  恢复率 ${d.recoveryBeforePct}% → ${d.recoveryAfterPct}%  (本轮恢复 ${d.recovered} · 仍缺 ${d.stillMissing})\n`+
-         `  重建 ${d.parseOk?'✓可解析':'✗'}  下载 /api/dumps/download?sha=${d.rebuiltSha}\n`; }
+         `  恢复率 ${d.recoveryBeforePct}% → ${d.recoveryAfterPct}%  (本轮恢复 ${d.recovered} · 仍缺 ${d.stillMissing})\n`; }
     el.textContent=s; loadDumps();
   }catch(e){el.textContent='错误: '+e;st.textContent='';} }
-async function recover(){ const el=document.getElementById('out-rec'), st=document.getElementById('rec-stat');
-  const baseSha=val('rec-base'), restoredSha=val('rec-rest'); if(!baseSha||!restoredSha){el.textContent='需要 base 和 restored 两个 dump sha';return;}
-  st.textContent='恢复中…'; el.textContent='';
-  try{ const r=await (await fetch('/api/dex/recover',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({baseSha,restoredSha})})).json();
-    if(r.error){el.textContent='错误: '+r.error;st.textContent='';return;}
-    st.textContent=`恢复 ${r.recovered} 个方法`;
-    el.textContent=`恢复方法 ${r.recovered} · 仍缺失 ${r.stillMissing} · 注入 ${r.injected} · 重写类 ${r.classesRewritten}\n可解析 ${r.parseOk} · 重建 dex sha ${r.sha256}\n`+
-      (r.captured||[]).slice(0,30).map(m=>'  ✓ '+m.method).join('\n')+
-      `\n\n<a>下载：/api/dumps/download?sha=${r.sha256}</a>`;
-    loadDumps();
-  }catch(e){el.textContent='错误: '+e;st.textContent='';} }
-async function rescanDex(){ const st=document.getElementById('dex-stat'); st.textContent='扫描中…';
-  try{ const en=await (await fetch('/api/art/dexfiles'+sessParam())).json();
-    const list=en.dexfiles||en.dex||[]; let n=0;
-    for(const d of list){ const begin=d.begin||d.beginHex||d.addr, size=d.size||d.fileSize; if(!begin||!size) continue;
-      await fetch('/api/art/dump',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session:val('sess')||undefined,begin,size})}); n++; }
-    st.textContent=`已 Dump ${n} 个 DexFile`; loadDumps();
-  }catch(e){ st.textContent='错误: '+e; } }
 
 // ---- 实时捕获：单一 capItems，多面板按 category 分流（加解密 crypto / 系统 system+file / 网络 net） ----
 const capItems=[]; let capMaxId=0, capDisplayCap=300;
-const hexFmt=h=>(h||'').replace(/(.{64})/g,'$1\n');
 // 分类色（对齐 IDH）：crypto 再按算法细分 digest/hmac/sym/asym；net/file/system 直接映射。
 function catClass(c){ if(!c) return 'other';
   if(c.category==='net') return 'net'; if(c.category==='file') return 'file'; if(c.category==='system') return 'sys';
@@ -653,28 +716,46 @@ function hexdump(hex){ hex=hex||''; let out='';
 
 const CAPPANELS={};
 let activeCapKey='cc';
-function applyFilter(p){ let items=capItems.filter(c=>p.cats.includes(c.category)); const f=p.filter;
+function applyFilter(p){ let items=capItems.filter(c=>p.cats.includes(c.category));
+  const sid=val('sess'); if(sid) items=items.filter(c=>!c.sessionId||c.sessionId===sid);
+  const f=p.filter;
   if(f.q){ const q=f.q.toLowerCase(); items=items.filter(c=>((c.algo||'')+' '+(c.op||'')+' '+(c.preview||'')).toLowerCase().includes(q)); }
   if(f.min!=null) items=items.filter(c=>c.inl>=f.min);
   if(f.max!=null) items=items.filter(c=>c.inl<=f.max);
   if(p.key==='cc'&&f.cat>=0){ const want=CAT_BY_SEL[f.cat]; items=items.filter(c=>catClass(c)===want); }
   return items; }
+function rowLens(c){
+  if(c.category==='net'||c.category==='file'||c.category==='system')
+    return escapeHtml(c.preview||('in:'+(c.inl||0)+'B'));
+  let meta='in:'+(c.inl||0)+'B';
+  if(c.outl) meta+=' · out:'+c.outl+'B';
+  return meta; }
 function rowHtml(key,sel,c){ const cc=catClass(c);
-  return `<div class="row cat-${cc} ${c.id===sel?'selected':''}" onclick="capSelectP('${key}',${c.id})">
+  const isIo=c.category==='net'||c.category==='file'||c.category==='system';
+  const preview=(!isIo && c.preview)?'<div class="preview">'+escapeHtml(c.preview)+'</div>':'';
+  return `<div class="row cat-${cc}${c.id===sel?' selected':''}" onclick="capSelectP('${key}',${c.id})">
     <div class="top"><span class="seq">#${c.id}</span><span class="pill ${cc}">${CATLABEL[cc]}</span><span class="algo">${escapeHtml(c.algo)}</span><span class="op">${escapeHtml(c.op)}</span><span class="ts">${new Date(c.ts).toLocaleTimeString()}</span></div>
-    <div class="preview">${c.inl}B · ${escapeHtml(c.preview)}</div></div>`; }
+    <div class="lens">${rowLens(c)}</div>${preview}</div>`; }
+function showBanner(key,n){ const b=document.getElementById(key+'-banner'), t=document.getElementById(key+'-banner-text');
+  if(!b) return; if(n>0){ t.textContent=n+' 条新记录'; b.classList.add('show'); } else b.classList.remove('show'); }
+function jumpLatest(key){ const p=CAPPANELS[key]; if(!p) return;
+  p.filter.paused=false; updatePauseBtn(); p.render(true);
+  const box=document.getElementById(key+'-list'); if(box) box.scrollTop=0; }
 function makeCapPanel(key,cats){
   const p={key,cats,sel:0,filter:{q:'',min:null,max:null,cat:-2,paused:false},lastShown:0};
-  p.render=function(){ const box=document.getElementById(key+'-list'); if(!box) return;
-    const total=capItems.filter(c=>cats.includes(c.category)).length;
+  p.render=function(force){ const box=document.getElementById(key+'-list'); if(!box) return;
+    const sid=val('sess');
+    const total=capItems.filter(c=>cats.includes(c.category)&&(!sid||!c.sessionId||c.sessionId===sid)).length;
     const badge=document.getElementById('n-'+key); if(badge) badge.textContent=total||'';
-    if(p.filter.paused){ if(activeCapKey===key) updateCount(p.lastShown,total); return; }
-    const items=applyFilter(p); p.lastShown=items.length;
-    const shown=items.slice(-capDisplayCap);
-    box.innerHTML=shown.map(c=>rowHtml(key,p.sel,c)).join('')||'<div class="empty">暂无捕获</div>';
-    if(activeCapKey===key) updateCount(items.length,total);
-    box.scrollTop=box.scrollHeight; };
-  p.select=async function(id){ p.sel=id; p.render();
+    const items=applyFilter(p);
+    if(!force && (p.filter.paused || box.scrollTop>48)){
+      const n=Math.max(0, items.length-p.lastShown);
+      showBanner(key,n); if(activeCapKey===key) updateCount(p.lastShown,total); return; }
+    p.lastShown=items.length; showBanner(key,0);
+    const shown=items.slice(-capDisplayCap).slice().reverse();
+    box.innerHTML=shown.map(c=>rowHtml(key,p.sel,c)).join('')||'<div class="empty">该分类还没有记录…<br>在 App 里触发对应操作看看?</div>';
+    if(activeCapKey===key) updateCount(items.length,total); };
+  p.select=async function(id){ p.sel=id; p.render(true);
     const c=await (await fetch('/api/captures/'+id)).json(); renderCaptureDetail(key+'-detail',c); };
   CAPPANELS[key]=p; return p;
 }
@@ -683,7 +764,8 @@ makeCapPanel('sy',['system','file']);
 makeCapPanel('nt',['net']);
 function capRenderAll(){ for(const k in CAPPANELS) CAPPANELS[k].render(); }
 function capSelectP(key,id){ CAPPANELS[key].select(id); }
-function capPush(c){ capItems.push(c); if(capItems.length>800) capItems.shift(); if(c.id>capMaxId)capMaxId=c.id; }
+function capPush(c){ const sid=val('sess'); if(sid && c.sessionId && c.sessionId!==sid) { if(c.id>capMaxId)capMaxId=c.id; return; }
+  capItems.push(c); if(capItems.length>800) capItems.shift(); if(c.id>capMaxId)capMaxId=c.id; }
 function capClearP(key){ const p=CAPPANELS[key]; const cats=p.cats;
   for(let i=capItems.length-1;i>=0;i--) if(cats.includes(capItems[i].category)) capItems.splice(i,1);
   p.sel=0; capRenderAll();
@@ -693,32 +775,53 @@ function copyCap(id,what){ const c=capDetailCache[id]; if(!c) return;
   if(what==='all') copyText(JSON.stringify(c,null,2));
   else if(what==='plain') copyText(c.text||'');
   else if(what==='hex') copyText(c.hex||''); }
-function ioBody(hex,bytes,text){ let h='<div class="io-meta">'+bytes+' bytes</div>';
-  if(text!==undefined) h+='<h3>UTF-8</h3><pre>'+escapeHtml(text||'')+'</pre>';
-  if(hex){ h+='<h3>HEX</h3><pre class="hex">'+hexFmt(hex)+'</pre><h3>HexDump</h3><pre class="hex">'+escapeHtml(hexdump(hex))+'</pre>'; }
-  return h; }
+const COPY_ICON='<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5"/></svg>';
+function blockCopy(){ return '<button type="button" class="block-copy" title="复制">'+COPY_ICON+'</button>'; }
+function ioBlock(cls,text){
+  return '<div class="io-block-body"><pre class="'+(cls||'')+'">'+escapeHtml(text||'')+'</pre>'+blockCopy()+'</div>'; }
+function ioKV(label,byteLen,hex){ if(!hex && !byteLen) return '';
+  return '<div class="io-section kv-card"><div class="io-card-head"><div class="io-label kv">'+label+' ('+(byteLen||(hex||'').length/2)+' bytes)</div></div>'+ioBlock('hex',hex)+'</div>'; }
+function utf8FromHex(hex){
+  if(!hex) return '';
+  try{
+    const bytes=new Uint8Array(hex.length/2);
+    for(let i=0;i<bytes.length;i++) bytes[i]=parseInt(hex.substr(i*2,2),16);
+    const t=new TextDecoder('utf-8').decode(bytes);
+    return filesLooksBinary(t)?'':t;
+  }catch{ return ''; }
+}
+function ioBody(hex,utf8){ let b='';
+  if(utf8) b+='<div class="io-block"><h3>UTF-8</h3>'+ioBlock('',utf8)+'</div>';
+  b+='<div class="io-block"><h3>Hex</h3>'+ioBlock('hex',hex||'')+'</div>';
+  if(hex) b+='<div class="io-block"><h3>HexDump</h3>'+ioBlock('hex',hexdump(hex))+'</div>';
+  return b; }
 function renderCaptureDetail(detailId,c){ const d=document.getElementById(detailId); if(!d) return;
-  capDetailCache[c.id]=c; const cc=catClass(c);
-  const src=c.source==='java'?'Java 层 · JCE (algorithm/key/iv 绑定)':'Native · 常驻 hook';
-  const acts='<div class="detail-actions">'+
-    `<button onclick="copyCap(${c.id},'all')">复制整条</button>`+
-    (c.text?`<button onclick="copyCap(${c.id},'plain')">复制明文</button>`:'')+
-    (c.hex?`<button onclick="copyCap(${c.id},'hex')">复制 Hex</button>`:'')+'</div>';
-  const kvrow=(label,hex)=> hex?`<h3>${label} · ${hex.length/2}B</h3><pre class="hex">${hexFmt(hex)}</pre>`:'';
-  const kvCard=(c.keyHex||c.ivHex)?`<div class="io-section kv-card"><span class="io-label kv">密钥参数</span>${kvrow('Key',c.keyHex)}${kvrow('IV',c.ivHex)}</div>`:'';
-  const outCard=c.outHex?`<div class="io-section out-card"><span class="io-label out">输出 / OUTPUT</span>${ioBody(c.outHex,c.outHex.length/2)}</div>`:'';
-  d.innerHTML=`<div class="detail-head"><h2><span class="cat-dot ${cc}"></span>#${c.id}  ${escapeHtml(c.algo)}</h2>
-      <div class="sub">${escapeHtml(c.op)} · 来源 ${src} · 线程 tid=${c.tid} · ${new Date(c.ts).toLocaleString()}</div>${acts}</div>
-    ${kvCard}
-    <div class="io-section in-card"><span class="io-label in">输入 / INPUT</span>${ioBody(c.hex,c.inl,c.text||'')}</div>
-    ${outCard}`; }
-async function capLoad(){ try{ const r=await (await fetch('/api/captures?since='+capMaxId)).json();
+  capDetailCache[c.id]=c;
+  const cc=catClass(c);
+  const isNet=c.category==='net';
+  const isFile=c.category==='file'||c.category==='system';
+  const acts='<div class="detail-actions"><button type="button" onclick="copyCap('+c.id+',\'all\')">复制整条</button></div>';
+  let h='<div class="detail-head"><h2><span class="cat-dot '+cc+'"></span>#'+c.id+'  '+escapeHtml(c.algo||c.func||'')+'</h2>'+
+    '<div class="sub">'+escapeHtml(c.op||c.func||'')+' · '+escapeHtml(new Date(c.ts).toLocaleString())+(c.tid?' · tid '+c.tid:'')+'</div>'+acts+'</div>';
+  if(isFile && (c.text||c.preview||c.func))
+    h+='<div class="io-section kv-card"><div class="io-label kv">详情</div>'+ioBlock('',[c.func,c.op,c.preview||c.text].filter(Boolean).join('\n'))+'</div>';
+  if(c.keyHex) h+=ioKV('KEY',c.keyHex.length/2,c.keyHex);
+  if(c.ivHex) h+=ioKV('IV',c.ivHex.length/2,c.ivHex);
+  const inLabel=isNet?((/write/i.test(c.func||c.op||'')?'发送 / WRITE':'接收 / READ')):'输入 / INPUT';
+  const outLabel=isNet?'响应 / RESPONSE':'输出 / OUTPUT';
+  if(c.hex||c.text) h+='<div class="io-section in-card"><div class="io-card-head"><div class="io-label in">'+inLabel+'</div><div class="io-meta">'+(c.inl||0)+' bytes</div></div>'+ioBody(c.hex,isFile?null:c.text)+'</div>';
+  if(c.outHex) h+='<div class="io-section out-card"><div class="io-card-head"><div class="io-label out">'+outLabel+'</div><div class="io-meta">'+(c.outHex.length/2)+' bytes</div></div>'+ioBody(c.outHex,utf8FromHex(c.outHex))+'</div>';
+  if(c.callStack) h+='<details class="callstack"><summary>调用栈 ('+String(c.callStack).split('\n').length+' 帧)</summary>'+ioBlock('',c.callStack)+'</details>';
+  d.innerHTML=h; }
+async function capLoad(){ try{ const r=await (await fetch('/api/captures?since='+capMaxId+sidQ())).json();
     (r.captures||[]).forEach(capPush); capRenderAll(); }catch(e){} }
 
 // ---- 过滤工具栏（加解密/系统/网络共用，作用于当前活动的捕获面板）----
-function updateCount(shown,total){ const el=document.getElementById('count'); if(el) el.textContent=`${shown} / ${total}`; }
+function updateCount(shown,total){ const el=document.getElementById('count'); if(el) el.textContent=`${shown} / ${total} 条`; }
 function updatePauseBtn(){ const b=document.getElementById('tb-pause'); const p=CAPPANELS[activeCapKey]; if(!b||!p) return;
-  b.textContent=p.filter.paused?'继续':'暂停'; b.classList.toggle('on',p.filter.paused); }
+  b.textContent=p.filter.paused?'继续':'暂停'; b.classList.toggle('is-paused',p.filter.paused); }
+function updateFilterBadge(){ const p=CAPPANELS[activeCapKey]; const b=document.getElementById('filterBadge'); if(!p||!b) return;
+  const f=p.filter; let n=0; if(f.q) n++; if(f.min!=null||f.max!=null) n++; if(p.key==='cc'&&f.cat>=0) n++; b.textContent=n||''; }
 function onTabSwitch(id){ const tb=document.getElementById('toolbar');
   if(CAP_TABS[id]){ activeCapKey=CAP_TABS[id]; tb.classList.add('show'); const f=CAPPANELS[activeCapKey].filter;
     document.getElementById('tb-q').value=f.q||'';
@@ -726,61 +829,121 @@ function onTabSwitch(id){ const tb=document.getElementById('toolbar');
     document.getElementById('tb-max').value=f.max==null?'':f.max;
     document.getElementById('tb-cat').value=String(f.cat);
     document.getElementById('catWrap').style.display=(activeCapKey==='cc')?'':'none';
-    updatePauseBtn(); CAPPANELS[activeCapKey].render();
+    updatePauseBtn(); updateFilterBadge(); CAPPANELS[activeCapKey].render(true);
   } else tb.classList.remove('show'); }
 function bindToolbar(){
   const q=document.getElementById('tb-q'), mn=document.getElementById('tb-min'), mx=document.getElementById('tb-max'), cs=document.getElementById('tb-cat');
   const num=v=>{ v=String(v).trim(); return v===''?null:(Number.isFinite(+v)?+v:null); };
-  q.addEventListener('input',()=>{ CAPPANELS[activeCapKey].filter.q=q.value; CAPPANELS[activeCapKey].render(); });
-  mn.addEventListener('input',()=>{ CAPPANELS[activeCapKey].filter.min=num(mn.value); CAPPANELS[activeCapKey].render(); });
-  mx.addEventListener('input',()=>{ CAPPANELS[activeCapKey].filter.max=num(mx.value); CAPPANELS[activeCapKey].render(); });
-  cs.addEventListener('change',()=>{ CAPPANELS[activeCapKey].filter.cat=Number(cs.value); CAPPANELS[activeCapKey].render(); });
+  const rerender=()=>{ updateFilterBadge(); CAPPANELS[activeCapKey].render(true); };
+  q.addEventListener('input',()=>{ CAPPANELS[activeCapKey].filter.q=q.value; rerender(); });
+  mn.addEventListener('input',()=>{ CAPPANELS[activeCapKey].filter.min=num(mn.value); rerender(); });
+  mx.addEventListener('input',()=>{ CAPPANELS[activeCapKey].filter.max=num(mx.value); rerender(); });
+  cs.addEventListener('change',()=>{ CAPPANELS[activeCapKey].filter.cat=Number(cs.value); rerender(); });
   document.getElementById('tb-clear').addEventListener('click',()=>{ const f=CAPPANELS[activeCapKey].filter;
-    f.q='';f.min=null;f.max=null;f.cat=-2; q.value='';mn.value='';mx.value='';cs.value='-2'; CAPPANELS[activeCapKey].render(); });
+    f.q='';f.min=null;f.max=null;f.cat=-2; q.value='';mn.value='';mx.value='';cs.value='-2'; rerender(); });
   document.getElementById('tb-pause').addEventListener('click',()=>{ const p=CAPPANELS[activeCapKey];
-    p.filter.paused=!p.filter.paused; updatePauseBtn(); p.render(); });
+    p.filter.paused=!p.filter.paused; updatePauseBtn(); p.render(true); });
   document.getElementById('tb-clearcat').addEventListener('click',()=>capClearP(activeCapKey));
   document.getElementById('tb-download').addEventListener('click',()=>{ const p=CAPPANELS[activeCapKey]; const items=applyFilter(p);
     const blob=new Blob([JSON.stringify(items,null,2)],{type:'application/json'});
     const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`adh-${activeCapKey}-captures.json`;
     document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href); toast(`已下载 ${items.length} 条`); });
+  document.getElementById('filterToggleBtn').addEventListener('click',()=>{
+    const adv=document.getElementById('advancedFilters'); const open=adv.hasAttribute('hidden');
+    if(open) adv.removeAttribute('hidden'); else adv.setAttribute('hidden','');
+    document.getElementById('filterToggleBtn').setAttribute('aria-expanded', open?'true':'false');
+  });
+  document.getElementById('toolbarMoreBtn').addEventListener('click', e=>{ e.stopPropagation(); togglePopover('toolbarMenu','toolbarMoreBtn'); });
 }
 
 // ---- 会话辅助 ----
+function pinnedPackage(){ const seg=decodeURIComponent(location.pathname.replace(/^\//,'').split('/')[0]||''); return (seg && seg.indexOf('.')>=0) ? seg : ''; }
+function selectedAgent(){ const s=val('sess'); if(s && agents.get(s)) return agents.get(s);
+  const pin=pinnedPackage(); const all=[...agents.values()];
+  if(pin){
+    const on=all.filter(a=>a.online&&a.package===pin).pop(); if(on) return on;
+    const off=all.filter(a=>a.package===pin).pop(); if(off) return off;
+  }
+  return all.filter(x=>x.online).slice(-1)[0] || all.slice(-1)[0]; }
 function sidQ(){ const s=val('sess'); return s?'&session='+encodeURIComponent(s):''; }
-function curPkg(){ const a=[...agents.values()].filter(x=>x.online).slice(-1)[0]; return a?a.package:''; }
+function curPkg(){ return selectedAgent()?.package||''; }
+function agentOfflineHint(err){
+  const s=String(err||'');
+  if(/no (online )?agent session|no session/i.test(s)) return '目标已断开，重新打开 App 后再试';
+  return s; }
+function capReset(){ capItems.length=0; capMaxId=0; capLoad(); }
 
-// ---- 文件浏览器（目录浏览：私有目录 + app 可读目录） ----
+// ---- 文件浏览器（对齐 iOS：filesPath 相对沙盒根，空 path = GET 真实目录） ----
 let filesPath='';
-function filesInit(){ if(!filesPath){ const pkg=curPkg(); const p=document.getElementById('files-path');
-    if(pkg && !p.value) p.value='/data/data/'+pkg;
-    filesPath=p.value||''; if(filesPath) filesList(filesPath); } }
-function filesGo(){ const p=val('files-path'); if(p) filesList(p); }
-function filesUp(){ if(!filesPath) return; const parent=filesPath.replace(/\/+$/,'').replace(/\/[^/]*$/,'')||'/'; filesList(parent); }
-function filesQuick(){ const pkg=curPkg(); const dd='/data/data/'+pkg; const box=document.getElementById('files-quick');
-  const links=[['app 数据',dd],['files',dd+'/files'],['cache',dd+'/cache'],['shared_prefs',dd+'/shared_prefs'],['databases',dd+'/databases'],['外部',pkg?'/sdcard/Android/data/'+pkg:'/sdcard']];
-  box.innerHTML=links.map(([l,p])=>`<button class="act" onclick="filesList('${p}')">${l}</button>`).join(''); }
-async function filesList(path){ const st=document.getElementById('files-stat'), tb=document.getElementById('files-rows');
-  filesPath=path; document.getElementById('files-path').value=path; filesQuick(); st.textContent='读取中…';
-  try{ const r=await (await fetch('/api/fs/list?path='+encodeURIComponent(path)+sidQ())).json();
-    if(!r.ok){ st.textContent='✗ '+(r.error||'失败'); tb.innerHTML=`<tr><td class="muted" colspan=5>${escapeHtml(r.error||'读取失败')}</td></tr>`; return; }
-    const ents=(r.entries||[]).slice().sort((a,b)=>(a.type==='d'?0:1)-(b.type==='d'?0:1)||a.name.localeCompare(b.name));
-    st.textContent=`${r.count} 项`+(r.truncated?' · 已截断':'');
-    tb.innerHTML=ents.map(e=>{ const child=path.replace(/\/+$/,'')+'/'+e.name;
-      const ic=e.type==='d'?'📁':e.type==='l'?'🔗':'📄'; const sz=e.size<0?'—':fmtSize(e.size);
-      const act=e.type==='d'?`filesList('${child.replace(/'/g,"\\'")}')`:`filesRead('${child.replace(/'/g,"\\'")}')`;
-      return `<tr class="caprow" style="cursor:pointer" onclick="${act}"><td>${ic} ${escapeHtml(e.name)}</td><td class="muted">${e.type}</td><td class="muted">${sz}</td><td class="muted">${(e.mode).toString(8).padStart(4,'0')}</td><td class="muted">${e.mtime?new Date(e.mtime*1000).toLocaleString():''}</td></tr>`;
-    }).join('')||'<tr><td class="muted" colspan=5>空目录</td></tr>';
-  }catch(e){ st.textContent='✗ '+e; } }
-function fmtSize(n){ if(n<1024)return n+'B'; if(n<1048576)return (n/1024).toFixed(1)+'K'; return (n/1048576).toFixed(1)+'M'; }
-async function filesRead(path){ const head=document.getElementById('files-view-head'), view=document.getElementById('files-view');
-  head.textContent='读取中… '+path; view.textContent='';
+let filesSelected=null;
+function sandboxHome(){ const pkg=curPkg(); return pkg?'/data/data/'+pkg:''; }
+function filesAbs(rel){ const home=sandboxHome(); if(!home) return '';
+  if(!rel) return home; return home.replace(/\/+$/,'')+'/'+String(rel).replace(/^\/+/,''); }
+function filesParentOf(rel){ if(!rel) return ''; const i=String(rel).replace(/\/+$/,'').lastIndexOf('/'); return i<0?'':rel.slice(0,i); }
+function renderFilesBreadcrumb(rel){
+  const el=document.getElementById('filesBreadcrumb'); if(!el) return;
+  let html='<a href="#" data-files-nav="">沙盒根</a>';
+  const parts=rel?String(rel).split('/').filter(Boolean):[];
+  let acc='';
+  for(const p of parts){ acc=acc?acc+'/'+p:p;
+    html+=' <span class="sep">/</span> <a href="#" data-files-nav="'+escapeHtml(acc)+'">'+escapeHtml(p)+'</a>'; }
+  el.innerHTML=html; }
+function filesResetPreview(){ filesSelected=null;
+  const head=document.getElementById('filesPreviewHead'), body=document.getElementById('filesPreviewBody');
+  if(head) head.innerHTML='<span class="path">← 选择文件预览, 或点击「下载」</span>';
+  if(body) body.textContent=''; }
+function filesRowHtml(name, rel, isDir, meta){
+  const abs=filesAbs(rel);
+  const actions=isDir?'':
+    '<span class="files-actions"><button type="button" data-files-preview="'+escapeHtml(abs)+'">预览</button>'
+    +'<a class="dl-link" href="#" data-files-download="'+escapeHtml(abs)+'">下载</a></span>';
+  return '<div class="row files-row'+(abs===filesSelected?' selected':'')+'" data-files-rel="'+escapeHtml(rel)+'" data-files-path="'+escapeHtml(abs)+'" data-files-type="'+(isDir?'dir':'file')+'">'
+    +'<div class="top"><span class="files-icon'+(isDir?' dir':'')+'">'+(isDir?'DIR':'FILE')+'</span>'
+    +'<span class="name">'+escapeHtml(name)+'</span>'+actions+'</div>'
+    +'<div class="n">'+escapeHtml(meta)+'</div></div>'; }
+function filesInit(){ filesPath=filesPath||''; loadFilesBrowser(); }
+function filesUpNav(){ navigateFiles(filesParentOf(filesPath)); }
+function navigateFiles(rel){ filesPath=rel||''; filesResetPreview(); loadFilesBrowser(); }
+async function loadFilesBrowser(){
+  const list=document.getElementById('filesList'); if(!list) return;
+  const home=sandboxHome();
+  renderFilesBreadcrumb(filesPath);
+  if(!home){ list.innerHTML='<div class="empty">未连接目标 —— 启动 App 后浏览私有目录</div>'; return; }
+  list.innerHTML='<div class="empty">加载中…</div>';
+  try{ const r=await (await fetch('/api/fs/list?path='+encodeURIComponent(filesAbs(filesPath))+sidQ())).json();
+    if(!r.ok){ list.innerHTML='<div class="empty">'+escapeHtml(agentOfflineHint(r.error||'读取失败'))+'</div>'; return; }
+    const ents=(r.entries||[]).slice().sort((a,b)=>(a.type==='d'?0:1)-(b.type==='d'?0:1)||String(a.name).localeCompare(String(b.name)));
+    if(!ents.length){ list.innerHTML='<div class="empty">空目录</div>'; return; }
+    list.innerHTML=ents.map(e=>{
+      const isDir=e.type==='d';
+      const rel=filesPath?filesPath+'/'+e.name:e.name;
+      const meta=isDir?'目录':(e.type==='l'?'链接 · '+fmtSize(e.size||0):'文件 · '+fmtSize(e.size||0));
+      return filesRowHtml(e.name, rel, isDir, meta);
+    }).join('');
+  }catch(e){ list.innerHTML='<div class="empty">'+escapeHtml(String(e))+'</div>'; } }
+function filesLooksBinary(text){ if(!text) return true;
+  let bad=0; const n=Math.min(text.length,4000);
+  for(let i=0;i<n;i++){ const c=text.charCodeAt(i); if(c===0||(c<32&&c!==9&&c!==10&&c!==13)) bad++; }
+  return bad>n*0.08; }
+async function previewFile(path){
+  filesSelected=path;
+  document.querySelectorAll('#filesList .files-row').forEach(r=>r.classList.toggle('selected', r.dataset.filesPath===path));
+  const head=document.getElementById('filesPreviewHead'), body=document.getElementById('filesPreviewBody');
+  head.innerHTML='<span class="path">'+escapeHtml(path)+'</span><a class="dl-link" href="#" data-files-download="'+escapeHtml(path)+'">下载</a>';
+  body.textContent='加载中…';
   try{ const r=await (await fetch('/api/fs/read',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session:val('sess')||undefined,path})})).json();
-    if(!r.ok){ head.textContent='✗ '+path; view.textContent=r.error||'读取失败'; return; }
-    const dl=`<a class="dl" href="#" onclick="filesDownload('${path.replace(/'/g,"\\'")}');return false">下载</a>`;
-    head.innerHTML=`<b>${escapeHtml(path.split('/').pop())}</b> · ${r.size}B${r.truncated?` / 共 ${r.fsize}B（已截断到 1MB）`:''} · ${dl}`;
-    view.textContent=(r.text&&r.text.length)?r.text.slice(0,20000):'（二进制或空；点「下载」取原文件）';
-  }catch(e){ head.textContent='✗ '+e; } }
+    if(!r.ok){ body.textContent=''; head.innerHTML='<span class="path">'+escapeHtml(path)+'</span>'; body.innerHTML='<div class="detail-empty">'+escapeHtml(r.error||'读取失败')+'</div>'; return; }
+    const sz=r.size||0, extra=r.truncated?` / 共 ${r.fsize}B（已截断）`:'';
+    const text=r.text||'';
+    const binary=filesLooksBinary(text);
+    const tail=(text.length>20000||r.truncated)?'\n\n… (已截断, 完整内容请下载)':'';
+    head.innerHTML='<span class="path">'+escapeHtml(path)+(binary?' <span class="muted" style="font-size:11px;">(Hex)</span>':'')+' · '+fmtSize(sz)+extra+'</span>'
+      +'<a class="dl-link" href="#" data-files-download="'+escapeHtml(path)+'">下载</a>';
+    if(!binary && text.length) body.textContent=text.slice(0,20000)+tail;
+    else if(r.b64){ const bin=atob(r.b64); let hex=''; for(let i=0;i<Math.min(bin.length,65536);i++) hex+=bin.charCodeAt(i).toString(16).padStart(2,'0');
+      body.textContent=hexdump(hex)+((bin.length>65536||r.truncated)?'\n\n… (已截断, 完整内容请下载)':''); }
+    else body.textContent='（空文件）';
+  }catch(e){ body.textContent=''; head.innerHTML='<span class="path">'+escapeHtml(path)+'</span>'; body.innerHTML='<div class="detail-empty">'+escapeHtml(String(e))+'</div>'; } }
 async function filesDownload(path){
   try{ const r=await (await fetch('/api/fs/read',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session:val('sess')||undefined,path})})).json();
     if(!r.ok||!r.b64){ toast('下载失败: '+(r.error||'空')); return; }
@@ -788,50 +951,98 @@ async function filesDownload(path){
     const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([arr])); a.download=path.split('/').pop()||'file';
     document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href); toast('已下载 '+a.download);
   }catch(e){ toast('下载失败: '+e); } }
+document.getElementById('p-files').addEventListener('click', ev=>{
+  const nav=ev.target.closest('[data-files-nav]');
+  if(nav){ ev.preventDefault(); navigateFiles(nav.getAttribute('data-files-nav')||''); return; }
+  const dl=ev.target.closest('[data-files-download]');
+  if(dl){ ev.preventDefault(); filesDownload(dl.getAttribute('data-files-download')||''); return; }
+  const prev=ev.target.closest('[data-files-preview]');
+  if(prev){ ev.preventDefault(); previewFile(prev.getAttribute('data-files-preview')||''); return; }
+  const row=ev.target.closest('.files-row');
+  if(row){ if(row.dataset.filesType==='dir') navigateFiles(row.dataset.filesRel||''); else previewFile(row.dataset.filesPath||''); }
+});
+document.getElementById('filesUp').addEventListener('click', filesUpNav);
+document.getElementById('filesRefresh').addEventListener('click', ()=>loadFilesBrowser());
+function fmtSize(n){ n=Number(n)||0; if(n<1024)return n+'B'; if(n<1048576)return (n/1024).toFixed(1)+'K'; return (n/1048576).toFixed(1)+'M'; }
 
 // ---- Dump 面板：模块表 + 区段 dump（脱壳/dumps 复用下方 unpackRun/loadDumps）----
+function isMappedPackage(m){ return /\.(apk|jar|oat)$/i.test(m.name||''); }
+function isDumpableModule(m){ return /\.so$/i.test(m.name||'') || /\.(dex|odex|vdex)$/i.test(m.name||''); }
+function isAppModule(m, pkg){
+  if(isMappedPackage(m)) return false;
+  const p=m.path||'', n=m.name||'';
+  if(pkg && (p.indexOf(pkg)>=0 || n.indexOf(pkg)>=0)) return true;
+  if(/\/data\/(app|data|user)\//.test(p)) return true;
+  if(isDumpableModule(m) && !/\/(system|apex|vendor|framework)\//.test(p)) return true;
+  return false; }
 async function loadModules(){ const st=document.getElementById('mod-stat'), tb=document.getElementById('mod-rows'); st.textContent='读取 maps…';
   try{ const r=await (await fetch('/api/modules?'+sidQ().slice(1))).json();
-    if(r.error){ st.textContent='✗ '+r.error; tb.innerHTML=`<tr><td class="muted" colspan=6>${escapeHtml(r.error)}</td></tr>`; return; }
-    const mods=Array.isArray(r)?r:[]; st.textContent=`${mods.length} 个模块`;
-    tb.innerHTML=mods.map(m=>{ const isSo=/\.so$/.test(m.name);
-      const act=isSo?`<button class="act" onclick="moduleDump('${m.name.replace(/'/g,"\\'")}')">从内存 dump .so</button>`:'';
-      return `<tr><td>${escapeHtml(m.name)}</td><td class="muted">${m.base}</td><td class="muted">${m.segs}</td><td class="muted">${fmtSize(m.size)}</td><td class="muted" style="max-width:280px;overflow:hidden;text-overflow:ellipsis">${escapeHtml(m.path)}</td><td>${act}</td></tr>`;
-    }).join('')||'<tr><td class="muted" colspan=6>无模块（需目标在线）</td></tr>';
+    if(r.error){ st.textContent='✗ '+agentOfflineHint(r.error); tb.innerHTML=`<tr><td class="muted" colspan=4>${escapeHtml(agentOfflineHint(r.error))}</td></tr>`; return; }
+    const all=(Array.isArray(r)?r:[]).filter(m=>!isMappedPackage(m)); const pkg=curPkg();
+    const showSys=document.getElementById('dumpShowSys')?.checked;
+    const mods=showSys?all:all.filter(m=>isAppModule(m,pkg));
+    const hidden=(Array.isArray(r)?r:[]).length-mods.length;
+    st.textContent=showSys?`${mods.length} 个模块`: `${mods.length} 个本应用模块`+(hidden>0?` · 已隐藏 ${hidden} 个系统/APK`:'');
+    tb.innerHTML=mods.map(m=>{ const isSo=/\.so$/i.test(m.name);
+      const kind=isSo?'native .so':(/\.(dex|odex|vdex)$/i.test(m.name)?'DEX':'映射');
+      const act=isDumpableModule(m)?`<a class="dl-link" href="#" onclick="moduleDump('${m.name.replace(/'/g,"\\'")}');return false">⬇ 下载</a>`:'';
+      return `<tr><td class="symname" title="${escapeHtml(m.path||'')}">${escapeHtml(m.name)}</td><td class="muted">${kind}</td><td>${fmtSize(m.size)}</td><td>${act}</td></tr>`;
+    }).join('')||'<tr><td class="muted" colspan=4>'+(all.length?'没有本应用模块，可勾选「显示系统模块」':'无模块（需目标在线）')+'</td></tr>';
   }catch(e){ st.textContent='✗ '+e; } }
 async function moduleDump(name){ const st=document.getElementById('mod-stat'); st.textContent=`从内存重组 ${name}…`;
   try{ const r=await (await fetch('/api/module/dump',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session:val('sess')||undefined,name})})).json();
     if(r.error){ st.textContent='✗ '+r.error; return; }
     st.textContent=`✓ ${name} → ${r.size}B${r.dedup?'（已存在）':''}`; toast('已 dump '+name); loadDumps();
   }catch(e){ st.textContent='✗ '+e; } }
-async function regionDump(){ const st=document.getElementById('rg-stat'); const addr=val('rg-addr'), size=val('rg-size'), tag=val('rg-tag');
-  if(!addr||!size){ st.textContent='需要地址和大小'; return; } st.textContent='dump 中…';
-  try{ const r=await (await fetch('/api/memory/dump',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session:val('sess')||undefined,addr,size:Number(size),tag:tag||undefined})})).json();
-    if(r.error){ st.textContent='✗ '+r.error; return; }
-    st.textContent=`✓ ${r.size}B → sha ${(r.sha256||'').slice(0,16)}…${r.dedup?'（已存在）':''}`; toast('区段已 dump'); loadDumps();
-  }catch(e){ st.textContent='✗ '+e; } }
 
-async function loadEvents(){ const r=await (await fetch('/api/events?limit=200')).json(); const tb=document.getElementById('ev-rows');
-  tb.innerHTML=(r.events||[]).slice().reverse().map(e=>`<tr><td class="muted">${e.seq}</td><td class="muted">${new Date(e.ts).toLocaleTimeString()}</td><td>${e.type}</td><td class="muted">${escapeHtml(JSON.stringify(e.data).slice(0,90))}</td></tr>`).join('')||'<tr><td class="muted" colspan=4>暂无事件</td></tr>'; }
 // ---- 通用：toast / 复制 / 模态开关 ----
 let toastTimer;
 function toast(msg){ const t=document.getElementById('toast'); if(!t) return; t.textContent=msg; t.classList.add('show');
   clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.classList.remove('show'),1600); }
-function copyText(s){ navigator.clipboard?.writeText(s||''); toast('已复制'); }
+function copyText(s){ const t=s||''; navigator.clipboard?.writeText(t).then(()=>toast('已复制 '+t.length+' 字符')).catch(()=>{
+    const ta=document.createElement('textarea'); ta.value=t; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); toast('已复制'); }); }
+document.addEventListener('click', ev=>{
+  const btn=ev.target.closest('.block-copy'); if(!btn) return;
+  ev.preventDefault(); ev.stopPropagation();
+  const pre=btn.parentElement&&btn.parentElement.querySelector('pre');
+  copyText(pre?pre.textContent:'');
+});
 function closeModal(id){ document.getElementById(id).classList.remove('show'); }
 
 // ---- MCP 模态（头部按钮）----
-let mcpCfgText='';
-async function openMcp(){
-  try{ const c=await (await fetch('/api/mcp/config')).json();
-    mcpCfgText=JSON.stringify({mcpServers:c.mcpServers},null,2);
-    document.getElementById('mcpBody').textContent=mcpCfgText;
-    document.getElementById('mcpHint').innerHTML=
-      `把下面配置加入 MCP 客户端（Claude Desktop / Cursor / Claude Code）。端点 <code>${c.endpoint}</code> · 共 ${c.tools} 个工具。`+
-      `<br>命令行等价：<code>${escapeHtml(c.cli||'')}</code>`+
-      `<br>配好后可直接问 AI：${(c.quickAsks||[]).slice(0,3).map(q=>'“'+q+'”').join('、')}`;
-  }catch(e){ document.getElementById('mcpBody').textContent='加载失败：'+e; }
+const MCP_INSTALL = 'pip install android-decrypt-hub';
+const MCP_CONFIG = '{\n  "mcpServers": {\n    "adh": {\n      "command": "adh",\n      "args": ["mcp"]\n    }\n  }\n}';
+function mcpConnectCmd(){ const pin=pinnedPackage(); return 'adh connect ' + location.host + (pin ? '/'+pin : ''); }
+function openMcp(){
+  document.getElementById('mcpConnect').textContent = mcpConnectCmd();
+  document.getElementById('mcpConfig').textContent = MCP_CONFIG;
   document.getElementById('mcpMask').classList.add('show');
+}
+function copyMcp(kind, btn){
+  const text = kind==='install' ? MCP_INSTALL : kind==='connect' ? mcpConnectCmd() : MCP_CONFIG;
+  const done = ()=>{
+    if(!btn){ toast('已复制'); return; }
+    const prev = btn.textContent;
+    btn.textContent = '已复制';
+    btn.classList.add('is-copied');
+    setTimeout(()=>{ btn.textContent = prev; btn.classList.remove('is-copied'); }, 1200);
+  };
+  const fallback = ()=>{
+    const ta=document.createElement('textarea'); ta.value=text; document.body.appendChild(ta); ta.select();
+    document.execCommand('copy'); ta.remove(); done();
+  };
+  if(navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done).catch(fallback);
+  else fallback();
+}
+function closePopovers(){
+  document.querySelectorAll('.popover.show').forEach(el=>el.classList.remove('show'));
+  document.querySelectorAll('[aria-expanded="true"]').forEach(b=>b.setAttribute('aria-expanded','false'));
+}
+function togglePopover(id, btnId){
+  const pop=document.getElementById(id); const btn=document.getElementById(btnId);
+  const open = pop && !pop.classList.contains('show');
+  closePopovers();
+  if(open && pop){ pop.classList.add('show'); btn?.setAttribute('aria-expanded','true'); }
 }
 
 // ---- 设置 模态 ----
@@ -841,6 +1052,7 @@ function setSettingsPage(name){
   document.querySelectorAll('#setMask .set-page').forEach(p=>p.classList.remove('active'));
   document.getElementById('setPage'+name.charAt(0).toUpperCase()+name.slice(1)).classList.add('active');
   if(name==='rawcfg') loadRawCfg(true);
+  if(name==='backends') renderBackends();
 }
 function renderFamilies(fam){
   document.getElementById('setFamilies').innerHTML=FAMILIES.map(([k,label])=>
@@ -848,6 +1060,44 @@ function renderFamilies(fam){
     `<label class="set-switch"><input type="checkbox" data-fam="${k}" ${fam[k]!==false?'checked':''}><span class="slider"></span></label></div>`).join('');
   document.querySelectorAll('#setFamilies input[data-fam]').forEach(inp=>
     inp.addEventListener('change',()=>postConfig({capture:{families:{[inp.dataset.fam]:inp.checked}}})));
+}
+async function renderBackends(){
+  const aEl=document.getElementById('backendsAgents'), gEl=document.getElementById('backendsGadget'), dEl=document.getElementById('backendsDevice');
+  if(!aEl) return;
+  aEl.textContent='加载中…'; gEl.textContent='加载中…'; dEl.textContent='加载中…';
+  let data; try{ data=await (await fetch('/api/backends')).json(); }catch(e){ aEl.textContent='读取失败: '+e; return; }
+  const list=data.agents||[];
+  aEl.innerHTML = list.length ? list.map(a=>
+    `<div style="display:flex;gap:8px;align-items:center;justify-content:space-between;padding:3px 0">`
+    + `<span><b>${a.package}</b> <span class="muted">pid=${a.pid} · ${a.online?'在线':'离线'} · entry=${a.entry}</span></span>`
+    + `<button onclick="probeBackend('${a.session}','${a.package}')">检测注入方式</button></div>`).join('')
+    : '<div class="muted">没有会话（先注入一个目标）</div>';
+  const g=data.gadget||{};
+  const cached=(g.cached||[]).map(c=>`${c.version}/${c.abi} · ${(c.bytes/1048576).toFixed(1)} MB`).join('<br>')||'（本机没有已下载的 Gadget）';
+  const pkg=(list.find(a=>a.online)||{}).package||'<目标包名>';
+  const ver=(g.pinned||[]).slice(-1)[0]||'latest';
+  const cmd=`bash ${g.loader||'tools/load_frida_gadget.sh'} hook.js --version ${ver} --package ${pkg} --marker /data/data/${pkg}/files/adh_frida_gadget_ok`;
+  gEl.innerHTML=`<div>固定版本：${(g.pinned||[]).join(', ')||'—'}</div><div style="margin-top:4px">已缓存：<br>${cached}</div>`
+    + `<div class="muted" style="margin-top:6px">加载命令（仓库根目录执行）：</div>`
+    + `<div style="display:flex;gap:8px;align-items:center;margin-top:4px"><code id="gadgetCmd" style="flex:1;overflow:auto">${cmd}</code>`
+    + `<button onclick="copyText(document.getElementById('gadgetCmd').textContent)">复制</button></div>`
+    + `<div class="muted" style="margin-top:4px">${g.note||''}</div>`;
+  const x=data.xposed||{}, z=data.zygisk||{};
+  dEl.innerHTML=`<div><b>Zygisk</b> · ${z.module||''} — ${z.control||''}</div>`
+    + `<div style="margin-top:4px"><b>Xposed/LSPosed</b> · ${x.module||''} — ${x.control||''}</div>`
+    + `<div class="muted" style="margin-top:4px">验证：${[...(z.verify||[]),...(x.verify||[])].join(' · ')}</div>`;
+}
+async function probeBackend(session,pkg){
+  try{
+    const mods=await (await fetch('/api/modules?session='+encodeURIComponent(session))).json();
+    const paths=(mods||[]).map(m=>String(m.path||m.name||''));
+    const hit=[];
+    if(paths.some(s=>s.includes('/data/adb/modules/adh/'))) hit.push('Zygisk 模块');
+    if(paths.some(s=>s.includes('com.adh.xposed'))) hit.push('Xposed 模块（agent 随模块 APK 映射）');
+    if(paths.some(s=>s.includes('libgadget.so')||s.toLowerCase().includes('frida'))) hit.push('Frida Gadget');
+    hit.unshift('agent 本体');
+    toast(pkg+' → '+hit.join(' + '));
+  }catch(e){ toast('检测失败: '+e); }
 }
 async function openSettings(){
   await loadConfig();
@@ -881,7 +1131,7 @@ async function clearData(what){
     if(r.error){ toast('失败: '+r.error); return; }
     toast('已清空 '+names[what]); loadConfig();
     if(what==='captures'){ capItems.length=0; capMaxId=0; for(const k in CAPPANELS) CAPPANELS[k].sel=0; capRenderAll(); }
-    if(what==='dumps') loadDumps(); if(what==='events') loadEvents();
+    if(what==='dumps') loadDumps();
   }catch(e){ toast('失败: '+e); }
 }
 // 配置 JSON 编辑器（export/import 按板块合并）
@@ -911,11 +1161,25 @@ function escapeHtml(s){ return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':
 
 // ---- agents / 进程栏 / WS ----
 const agents=new Map(); const sess=document.getElementById('sess');
+let lastFilterSid='';
 function render(){ const list=[...agents.values()].sort((a,b)=>a.connectedAt-b.connectedAt);
-  const cur=sess.value; sess.innerHTML='<option value="">（最新在线）</option>'+list.filter(a=>a.online).map(a=>`<option value="${a.sessionId}">${a.package} · ${a.pid}</option>`).join(''); sess.value=cur;
-  const a=list.filter(x=>x.online).slice(-1)[0]; const bar=document.getElementById('procbar');
-  bar.innerHTML=a?`<b>${a.package}</b> · PID ${a.pid} · ${a.abi} · Android ${a.android} · 入口 ${a.entry} · <span class="pill on">在线</span> · maps ${a.mapsCount||'—'}`
-    :'<span class="muted">未连接目标 —— 在设备启动 App（模拟注入）后自动出现</span>'; }
+  const pin=pinnedPackage(); const cur=sess.value;
+  sess.innerHTML='<option value="">（最新在线）</option>'+list.map(a=>`<option value="${a.sessionId}">${escapeHtml(a.package)} · ${a.pid}${a.online?'':' · 离线'}</option>`).join('');
+  if(pin){ const m=list.filter(a=>a.online&&a.package===pin).pop()||list.filter(a=>a.package===pin).pop(); sess.value=m?m.sessionId:cur; }
+  else sess.value=cur;
+  if(sess.value!==lastFilterSid){ lastFilterSid=sess.value; capReset(); }
+  const a=selectedAgent();
+  const primary=document.getElementById('procPrimary'), secondary=document.getElementById('procSecondary'), info=document.getElementById('procinfo');
+  if(a){
+    primary.textContent=a.package;
+    secondary.textContent=(a.online?'PID ':'已断开 · PID ')+a.pid+(a.abi?' · '+a.abi:'');
+    const rows=[['包名',a.package],['PID',String(a.pid)],['ABI',a.abi||'—'],['Android',a.android||'—'],['入口',a.entry||'—'],['maps',String(a.mapsCount||'—')],['状态',a.online?'在线':'已断开']];
+    info.innerHTML=rows.map(([k,v])=>'<dt>'+escapeHtml(k)+'</dt><dd>'+escapeHtml(v)+'</dd>').join('');
+  } else {
+    primary.textContent='未连接目标';
+    secondary.textContent='启动 App 后自动出现';
+    info.innerHTML='<dt>状态</dt><dd>进程信息不可用</dd>';
+  } }
 function upsert(a){ agents.set(a.sessionId,{...agents.get(a.sessionId),...a}); render(); }
 function setWsPill(s,cls){ const p=document.getElementById('dbg-ws'); if(p){p.textContent='ws: '+s;p.className='pill '+cls;} }
 function connect(){ const ws=new WebSocket(`ws://${location.host}/ws`); const conn=document.getElementById('conn'), st=document.getElementById('status');
@@ -931,6 +1195,15 @@ function connect(){ const ws=new WebSocket(`ws://${location.host}/ws`); const co
     dbg('WS←', m.event||'?');
   }; }
 connect();
+sess.addEventListener('change', ()=>{
+  const a=agents.get(sess.value);
+  const next=a&&a.package ? '/'+encodeURIComponent(a.package) : '/';
+  if(location.pathname!==next) history.pushState(null,'',next);
+  capReset(); render();
+  filesPath=''; filesResetPreview();
+  if(document.getElementById('p-files').classList.contains('active')) filesInit();
+});
+window.addEventListener('popstate', ()=>{ capReset(); render(); });
 bindToolbar();
 onTabSwitch('p-crypto');
 capLoad(); setInterval(capLoad, 2000);   // 拉取实时捕获（WS + 轮询双保险）
@@ -938,14 +1211,33 @@ capLoad(); setInterval(capLoad, 2000);   // 拉取实时捕获（WS + 轮询双�
 // ---- 分栏拖动（list-pane 宽度）----
 document.querySelectorAll('.splitter').forEach(sp=>{
   sp.addEventListener('mousedown',e=>{ e.preventDefault(); const pane=sp.previousElementSibling; const ws=sp.parentElement;
-    const move=ev=>{ const rect=ws.getBoundingClientRect(); let w=ev.clientX-rect.left; w=Math.max(220,Math.min(rect.width-260,w)); pane.style.width=w+'px'; sp.classList.add('dragging'); };
+    const move=ev=>{ const rect=ws.getBoundingClientRect(); let w=ev.clientX-rect.left; w=Math.max(220,Math.min(Math.floor(rect.width*0.7),rect.width-260,w)); pane.style.width=w+'px'; sp.classList.add('dragging'); };
     const up=()=>{ document.removeEventListener('mousemove',move); document.removeEventListener('mouseup',up); sp.classList.remove('dragging'); };
     document.addEventListener('mousemove',move); document.addEventListener('mouseup',up); });
 });
 
 // ---- 头部按钮 / 模态 / 设置 事件绑定 ----
 document.getElementById('mcpBtn').addEventListener('click', openMcp);
-document.getElementById('mcpCopy').addEventListener('click', ()=>copyText(mcpCfgText));
+document.querySelectorAll('[data-mcp-copy]').forEach(btn=>{
+  btn.addEventListener('click', ()=>copyMcp(btn.getAttribute('data-mcp-copy'), btn));
+});
+document.getElementById('wechatBtn').addEventListener('click', e=>{ e.stopPropagation(); togglePopover('wechatPopover','wechatBtn'); });
+document.getElementById('processBtn').addEventListener('click', e=>{ e.stopPropagation(); togglePopover('processPopover','processBtn'); });
+document.getElementById('dumpShowSys').addEventListener('change', ()=>loadModules());
+document.getElementById('wechatCopy').addEventListener('click', async ()=>{
+  const name='DecryptHub';
+  try{ await navigator.clipboard.writeText(name); }catch(_){
+    const ta=document.createElement('textarea'); ta.value=name; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();
+  }
+  toast('已复制公众号名称 DecryptHub');
+  closePopovers();
+});
+document.addEventListener('click', e=>{
+  if(!e.target.closest('.menu-wrap') && !e.target.closest('.header-process')) closePopovers();
+});
+document.addEventListener('keydown', e=>{
+  if(e.key==='Escape') closePopovers();
+});
 document.getElementById('setBtn').addEventListener('click', openSettings);
 document.getElementById('setNav').addEventListener('click', e=>{ const p=e.target.dataset&&e.target.dataset.setpage; if(p) setSettingsPage(p); });
 document.getElementById('setCapEnabled').addEventListener('change', e=>postConfig({capture:{enabled:e.target.checked}}));
@@ -958,13 +1250,6 @@ document.getElementById('rawFile').addEventListener('change', ev=>{ const f=ev.t
 for(const id of ['mcpMask','setMask']) document.getElementById(id).addEventListener('click', e=>{ if(e.target.id===id) closeModal(id); });
 // 初始化 displayCap（不打开设置也让列表按配置渲染）
 fetch('/api/config').then(r=>r.json()).then(r=>{ if(r.settings?.ui?.displayCap) capDisplayCap=r.settings.ui.displayCap; }).catch(()=>{});
-
-// 顶栏访问地址（局域网优先，点击复制）
-(async function showAccess(){ const el=document.getElementById('access'); if(!el) return;
-  try{ const h=await (await fetch('/health')).json(); const lan=(h.web&&h.web.lan&&h.web.lan[0])||''; const local=(h.web&&h.web.local)||location.origin; const primary=lan||local;
-    el.innerHTML=`<b style="color:var(--blue)">${primary}</b>`+(lan?` <span class="muted">· 本机 ${local}</span>`:''); el.style.cursor='pointer';
-    el.onclick=()=>{ navigator.clipboard?.writeText(primary); const o=el.innerHTML; el.innerHTML='✓ 已复制 '+primary; setTimeout(()=>el.innerHTML=o,1200); };
-  }catch(e){} })();
 </script>
 </body>
 </html>

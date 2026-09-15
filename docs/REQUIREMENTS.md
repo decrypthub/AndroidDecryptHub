@@ -1584,7 +1584,8 @@ Agent → TCP 8761 → ADH Daemon（host，经 adb reverse）
   AIDL 协议 v5 新增 `getXposedStatus` / `setXposedEnabled` / `setXposedScope`，Manager 的 Scope 页有对应卡片；ADH 允许名单在保存时镜像进框架 scope（启用状态下），所以"哪些应用"仍然只在 Manager 一处配置。
   同一个代码路径还导出了 root-only 一次性 CLI（`--xposed-status|--xposed-enable|--xposed-disable|--xposed-scope`），供运维与 `tools/verify_v32_backend_control.sh` 使用（无需 Manager UI、无需重启）。
   两个框架怪癖已写进实现：`scope set <module>` 不带应用会抛 NPE（清 scope 必须逐条 `scope rm`）；`scope set` 会**隐式启用**模块，所以调用方若要保持"关闭"必须显式再关一次。
-- 待办：多进程目标；把 Gadget/Xposed 的后端选择接进 Web 注入中心（Manager 侧已有 Xposed 卡片）。
+- 注入中心（已落地，2026-09-15）：主机侧 `GET /api/backends` + Web 控制台"注入后端"页给出会话分类、Gadget 缓存/命令与设备侧后端入口（每个会话可一键判定 Zygisk/Xposed/Gadget/自加载）；验收 `tools/verify_v33_backends.sh`。
+- 待办：多进程目标；Gadget 在控制台里只做"命令模板 + 检测"，一键下发仍走主机工具（daemon 无 adb）。
 ---
 
 *本文档是唯一权威功能规格（模块 A–W）。开发步骤与排期见 `DEVELOPMENT_PLAN.md`，跨会话进度见 `PROGRESS.md`。*

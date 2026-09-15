@@ -1,4 +1,7 @@
-import { existsSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { webUrls } from '../config.ts';
 import { handleMcp, MCP_TOOLS } from '../mcp.ts';
@@ -10,16 +13,104 @@ import {
 } from '../state.ts';
 import type { Route, RouteContext } from './types.ts';
 
+const publicDir = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'public');
+// Repo root, so the backend panel reports host-side artefacts (Frida Gadget cache) truthfully.
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+
+/**
+ * Injection-backend matrix for the Web console. Read-only: the Host ADH Daemon has no adb, so for
+ * Frida Gadget it reports what is actually cached plus the command to run; the device-side backends
+ * (Zygisk scope, Xposed module) are driven through ADH Manager -> Device Daemon, and `entry` is the
+ * host-side observable of how each agent got into its target.
+ */
+function backendMatrix() {
+  const cacheRoot = join(repoRoot, 'agent', 'third_party', 'frida');
+  const manifestFile = join(repoRoot, 'tools', 'frida_gadget_versions.json');
+  let pinned: string[] = [];
+  try {
+    const parsed = JSON.parse(readFileSync(manifestFile, 'utf8'));
+    pinned = Object.keys(parsed?.versions ?? {}).sort();
+  } catch { pinned = []; }
+  const cached: Array<{ version: string; abi: string; bytes: number; path: string }> = [];
+  if (existsSync(cacheRoot)) {
+    for (const version of readdirSync(cacheRoot)) {
+      const versionDir = join(cacheRoot, version);
+      if (!statSync(versionDir).isDirectory()) continue;
+      for (const abi of readdirSync(versionDir)) {
+        const so = join(versionDir, abi, 'libfrida-gadget.so');
+        if (!existsSync(so)) continue;
+        cached.push({ version, abi, bytes: statSync(so).size, path: so });
+      }
+    }
+  }
+  return {
+    agents: [...sessions.values()].map((s) => ({
+      session: s.sessionId,
+      package: s.package,
+      pid: s.pid,
+      online: s.online,
+      entry: s.entry,
+      entryKind: s.entry === 'start' ? 'injected (adh_agent_start)' : 'jni_onload (self-load / gadget / xposed)',
+    })),
+    gadget: {
+      pinned,
+      cached,
+      loader: 'tools/load_frida_gadget.sh',
+      note: 'optional high-footprint backend: the host tool stages it into <pkg>/code_cache and triggers load_so; the daemon itself has no adb.',
+    },
+    xposed: {
+      module: 'com.adh.xposed',
+      source: 'injector/xposed',
+      control: 'device-side: ADH Manager (Scope screen) -> Device Daemon, AIDL v5',
+      verify: ['tools/verify_v31_xposed.sh', 'tools/verify_v32_backend_control.sh'],
+    },
+    zygisk: {
+      module: 'injector/zygisk',
+      control: 'device-side: ADH Manager -> Device Daemon (scope.json allowlist)',
+      verify: ['tools/verify_v27_zygisk.sh'],
+    },
+    updatedAt: Date.now(),
+  };
+}
+
 export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
+  const servePublic = (name: string, contentType: string) => async () => {
+    const file = join(publicDir, name);
+    if (!existsSync(file)) return send(404, { error: 'missing' });
+    const buf = await readFile(file);
+    res.writeHead(200, {
+      'content-type': contentType,
+      'cache-control': 'public, max-age=86400',
+      'access-control-allow-origin': '*',
+    });
+    res.end(buf);
+  };
   return [
-    { path: '/health', handler: () => send(200, { ok: true, service: 'adhd', name: 'ADH Daemon', version: '0.1.0', agents: sessions.size, uptime: process.uptime(), mcpTools: MCP_TOOLS.length, web: webUrls() }) },
+    { path: '/health', handler: () => send(200, {
+      ok: true, service: 'adhd', name: 'ADH Daemon', version: '0.1.0',
+      agents: sessions.size, uptime: process.uptime(), mcpTools: MCP_TOOLS.length, web: webUrls(),
+      apps: [...sessions.values()].map(s => ({
+        package: s.package, pid: s.pid, sessionId: s.sessionId, online: s.online,
+      })),
+    }) },
     // MCP Streamable HTTP endpoint (JSON-RPC)
     { method: 'POST', path: '/mcp', handler: async () => handleMcp(await readBody(req), res) },
+    { path: '/wechat-follow.png', handler: servePublic('wechat-follow.png', 'image/png') },
+    { path: '/raven.svg', handler: servePublic('raven.svg', 'image/svg+xml') },
+    { path: '/raven.png', handler: servePublic('raven.png', 'image/png') },
+    { path: '/favicon.ico', handler: servePublic('raven.png', 'image/png') },
     // Live captures (auto-populated by the persistent hooks): GET /api/captures?since=&limit=
     { path: '/api/captures', handler: () => {
       const since = Number(url.searchParams.get('since') ?? 0);
       const limit = Math.min(Number(url.searchParams.get('limit') ?? 200), 1000);
-      const list = captures.filter(c => c.id > since);
+      const session = url.searchParams.get('session');
+      const pkg = url.searchParams.get('package');
+      let list = captures.filter(c => c.id > since);
+      if (session) list = list.filter(c => c.sessionId === session);
+      if (pkg) {
+        const sids = new Set([...sessions.values()].filter(s => s.package === pkg).map(s => s.sessionId));
+        list = list.filter(c => sids.has(c.sessionId));
+      }
       // WS-C: `health` carries honest ring accounting — complete:false + dropped>0 when the
       // agent ring overflowed (no silent loss; the panel should show this in red).
       const health = captureHealth();
@@ -27,7 +118,7 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
         total: captures.length, on: captureTimers.size > 0,
         complete: health.complete, dropped: health.dropped, jdropped: health.jdropped,
         seq: health.seq, backlog: health.backlog, health,
-        captures: list.slice(-limit).map(c => ({ id: c.id, source: c.source, category: c.category, algo: c.algo, op: c.op, func: c.func, inl: c.inl, tid: c.tid, ts: c.ts, preview: c.preview })),
+        captures: list.slice(-limit).map(c => ({ id: c.id, source: c.source, category: c.category, algo: c.algo, op: c.op, func: c.func, inl: c.inl, outl: c.outHex ? c.outHex.length / 2 : 0, tid: c.tid, ts: c.ts, preview: c.preview })),
       });
     } },
     { path: '/api/captures/', prefix: true, handler: () => {
@@ -112,11 +203,14 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
     { path: '/api/mcp/config', handler: () => {
       const w = webUrls(); const lan = (w.lan[0] ?? w.local).replace(/^http/, 'http');
       const mcpUrl = `${lan}/mcp`;
+      const host = new URL(lan).host;
       const cfg = {
-        note: '把 mcpServers 这段粘进 Claude Desktop / Cursor 的 MCP 配置，重启后即可让 AI 调用 ADH 的全部逆向工具（分析内存/指令/hook/trace/事件搜索/抓包/脱壳/算法识别）',
-        mcpServers: { adh: { type: 'http', url: mcpUrl } },
+        note: '先 pip install android-decrypt-hub，再用 adh connect 连上本机 Host，最后把 stdio MCP 配进 Cursor / Claude Desktop。不要把 HTTP /mcp 端点直接配进客户端。',
+        mcpServers: { adh: { command: 'adh', args: ['mcp'] } },
         endpoint: mcpUrl, tools: MCP_TOOLS.length,
-        cli: `claude mcp add --transport http adh "${mcpUrl}"`,
+        install: 'pip install android-decrypt-hub',
+        connect: `adh connect ${host}`,
+        cli: `pip install android-decrypt-hub && adh connect ${host}`,
         quickAsks: [
           '用 crypto_identify 看看这个 App 用了哪些加密算法和密钥',
           '用 unpack_run 一键脱壳，然后 dumps_list 给我下载链接',
@@ -128,6 +222,7 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       return send(200, cfg);
     } },
     { path: '/api/agents', handler: () => send(200, [...sessions.values()]) },
+    { path: '/api/backends', handler: () => send(200, backendMatrix()) },
     { path: '/api/agents/', prefix: true, handler: () => {
       const s = sessions.get(url.pathname.split('/')[3]);
       return s ? send(200, s) : send(404, { error: 'no such session' });
