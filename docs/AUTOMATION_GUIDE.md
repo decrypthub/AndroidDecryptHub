@@ -113,7 +113,7 @@ Android 15 不再把通知正文放进无障碍事件，所以这一项走独立
 | `no automation device connected` | 无障碍服务被系统关掉，或 `adb reverse tcp:8763` 断了；先看 `/api/automation/status` 的 `bridge` |
 | `command_timeout: device did not answer …` | 目标窗口被冻结/无响应（设备侧 10s 硬截止）。**通道仍然可用**：重试，或对该 App 执行 `phone_app {action:"restart"}` |
 | `selector_not_found` / `stale_ref` | 报错里已附**当前屏幕**的紧凑文本视图，照着改选择器或重新 `phone_find` |
-| `phone_app open` 报了 `verified:false` 且 `warning` 指向某个系统包 | OEM 跨应用确认框拦住了启动：手动确认、把该包加入 allowlist、或刷入 v0.3.7+ 走 root `open` |
+| `phone_app open` 报了 `verified:false` 且 `warning` 指向某个系统包 | OEM 跨应用确认框拦住了启动：手动确认、把该包加入 allowlist、或刷入含协议 v6+ 的新模块包（当前为 v0.3.8）走 root `open` |
 | `blocked_package: … is not in the automation allowlist` | 目标包不在 allowlist（前台包或要打开的目标包） |
 
 诊断入口（验收用，不进产品 MCP 面）：`POST /api/automation/selftest?op=status`，以及设备侧故障注入 `POST /api/automation/selftest?op=selftest_sleep&ms=20000`。
