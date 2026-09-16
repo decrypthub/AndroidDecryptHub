@@ -23,6 +23,7 @@ import com.adh.core.AdhProtocol
 import com.adh.core.PackageControl
 import com.adh.manager.ipc.DaemonBinderProvider
 import org.json.JSONArray
+import com.adh.manager.notify.AdhNotificationListener
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.util.ArrayDeque
@@ -94,6 +95,7 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
         "app" -> app(args)
         "device" -> device(args)
         "status" -> status()
+        "notifications" -> notifications(args)
         // Fault injection for the watchdog acceptance (tools/verify_v38_automation_watchdog.sh):
         // it deliberately occupies a command slot past the bridge deadline. Inert otherwise —
         // it touches no window and is only reachable over the host bridge.
@@ -105,12 +107,26 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
         else -> throw AutomationException("unsupported_op", "unsupported automation op: $op")
     }
 
+    // Reads what the opt-in NotificationListenerService buffered. Items exist only after the user
+    // granted notification access; the host still decides whether an AI may ask for them.
+    private fun notifications(args: JSONObject): JSONObject {
+        val limit = args.optInt("limit", 10).coerceIn(1, 30)
+        val sinceMs = args.optLong("sinceMs", 0L)
+        val clear = args.optBoolean("clear", false)
+        val cleared = if (clear) AdhNotificationListener.clear() else 0
+        return AdhNotificationListener.snapshot(limit, sinceMs)
+            .put("granted", AdhNotificationListener.isGranted(this))
+            .put("listener", AdhNotificationListener.stats())
+            .put("cleared", cleared)
+    }
+
     private fun status(): JSONObject = JSONObject()
         .put("activePackage", activePackage())
         .put("activity", lastActivity)
         .put("sdk", Build.VERSION.SDK_INT)
         .put("screenshot", Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
         .put("snapshots", snapshots.size)
+        .put("notifications", AdhNotificationListener.stats().put("granted", AdhNotificationListener.isGranted(this)))
         .put("bridge", bridge?.stats() ?: JSONObject())
 
     private fun observe(args: JSONObject): JSONObject {

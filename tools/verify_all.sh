@@ -19,6 +19,8 @@ SCRIPTS=(
   "verify_v37_agent_reconnect.sh:device"
   # Watchdog: a stuck device command must answer command_timeout and leave the channel usable.
   "verify_v38_automation_watchdog.sh:device"
+  # Notifications: the opt-in listener (borrows the grant for the run, releases it afterwards).
+  "verify_v39_notifications.sh:device"
   "verify_v02_dump.sh:device"
   "verify_v02_so.sh:device"
   "verify_v02_dexrepair.sh:host"

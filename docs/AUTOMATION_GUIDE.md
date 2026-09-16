@@ -68,7 +68,28 @@ phone_observe {mode:"text"}         # 省上下文的紧凑屏幕视图（含 sn
 - **输入**：`phone_act {action:"set_text", resourceId|ref|editable, text}`；`submit:true` 会再按一次键盘动作键（搜索/发送/完成），回 `submitted:true`。
 - **看图**：`phone_observe {mode:"text", includeScreenshot:true}` 一次给文本 + JPEG。
 
-## 5. 安全边界（默认值，别改错）
+## 5. 读通知（可选，需要你在系统里授权一次）
+
+Android 15 不再把通知正文放进无障碍事件，所以这一项走独立的 `NotificationListenerService`：
+
+1. 手机 **ADH Manager → 首页 → 通知读取** 卡片点右侧齿轮 → 在系统"通知使用权"里打开 **ADH Manager**（卡片会显示当前是否已授权）。
+2. Host 侧打开开关（默认关，属于独立隐私开关）：
+
+   ```bash
+   curl -s -X POST http://127.0.0.1:8088/api/config -H 'content-type: application/json' \
+     -d '{"automation":{"notifications":true}}'
+   ```
+
+3. 之后：
+
+   ```json
+   {"name":"phone_notifications","arguments":{"limit":10}}
+   {"name":"phone_notifications","arguments":{"limit":10,"sinceMs":1750000000000}}
+   ```
+
+设备侧缓冲只在内存、最多 30 条、不落盘；未授权时工具报 `notification_access_not_granted`，开关关闭时报 `notifications_disabled`。通知栏本身仍可用 `phone_act {action:"global", key:"notifications"}` + `phone_observe` 读取（会扰动屏幕）。
+
+## 6. 安全边界（默认值，别改错）
 
 - 自动化**默认关闭**；关闭时 `phone_*` 工具根本不暴露。
 - **双层 allowlist**：Host 设置 + 设备侧再次校验，MCP 参数绕不过去。
@@ -76,7 +97,7 @@ phone_observe {mode:"text"}         # 省上下文的紧凑屏幕视图（含 sn
 - skills 不新增任何权限，不携带 shell，不进版本库；文件被篡改时丢弃条目而不是执行。
 - 不复用注入 scope；自动化面与"注入/分析"面相互独立。
 
-## 6. 排障速查
+## 7. 排障速查
 
 | 现象 | 含义与处理 |
 |---|---|
@@ -89,11 +110,12 @@ phone_observe {mode:"text"}         # 省上下文的紧凑屏幕视图（含 sn
 
 诊断入口（验收用，不进产品 MCP 面）：`POST /api/automation/selftest?op=status`，以及设备侧故障注入 `POST /api/automation/selftest?op=selftest_sleep&ms=20000`。
 
-## 7. 验收脚本
+## 8. 验收脚本
 
 ```bash
 bash tools/verify_v36_automation.sh        # 控件树/文本视图/动作/等待/技能/提交/通知栏…
 bash tools/verify_v37_agent_reconnect.sh   # Host 重启后 agent 自行重连（同进程新会话）
 bash tools/verify_v38_automation_watchdog.sh  # 命令卡死 → 10s 回 command_timeout，通道存活
+bash tools/verify_v39_notifications.sh     # 通知读取（脚本借用授权并在结束时还原）
 bash tools/verify_all.sh                   # 全量回归（设备/沙盒缺席时对应项 SKIP）
 ```

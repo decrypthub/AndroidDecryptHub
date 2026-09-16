@@ -1,6 +1,11 @@
 package com.adh.sandbox
 
 import android.app.Activity
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.util.TypedValue
@@ -193,6 +198,7 @@ class MainActivity : Activity() {
             }
             addView(input)
             addView(echo)
+            addView(btnRow(mbutton("发测试通知") { postTestNotification() }))
         })
     }
 
@@ -283,6 +289,38 @@ class MainActivity : Activity() {
             addView(tabs, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
             addView(content, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         }
+    }
+
+    private var notifSeq = 0
+
+    // Fixture for the notification acceptance: post a real notification the accessibility
+    // connection can observe and the AI can read back through phone_notifications.
+    private fun postTestNotification() {
+        val manager = getSystemService(NotificationManager::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            manager.createNotificationChannel(
+                NotificationChannel("adh-test", "ADH 验收", NotificationManager.IMPORTANCE_DEFAULT),
+            )
+        }
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1001)
+            logLine("需要通知权限：授权后再点一次")
+            return
+        }
+        val seq = ++notifSeq
+        val text = "ADH_NOTIFY_v1 #$seq 验收通知"
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) Notification.Builder(this, "adh-test") else Notification.Builder(this)
+        manager.notify(
+            9000 + seq,
+            builder.setSmallIcon(android.R.drawable.stat_notify_chat)
+                .setContentTitle("ADH 验收")
+                .setContentText(text)
+                .setStyle(Notification.BigTextStyle().bigText(text))
+                .build(),
+        )
+        logLine("已发送测试通知：$text")
     }
 
     private fun pt(tag: String): ByteArray =

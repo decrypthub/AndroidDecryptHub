@@ -29,6 +29,18 @@
             </intent-filter>
         </activity>
 
+        <!-- Opt-in notification reader. Android 15 strips notification bodies out of
+             accessibility events, so titles/text can only come from a listener the user grants in
+             system settings ("notification access"). -->
+        <service
+            android:name=".notify.AdhNotificationListener"
+            android:exported="true"
+            android:label="@string/notification_service_label"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
         <service
             android:name=".automation.AdhAutomationAccessibilityService"
             android:exported="true"

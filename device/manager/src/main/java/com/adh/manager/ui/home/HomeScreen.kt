@@ -33,6 +33,7 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.OpenInBrowser
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Settings
@@ -62,6 +63,7 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import com.adh.manager.BuildConfig
 import com.adh.manager.R
 import com.adh.manager.data.AutomationStatus
+import com.adh.manager.notify.AdhNotificationListener
 import com.adh.manager.data.ModuleStatus
 import com.adh.manager.data.HostWebUiRepository
 import com.adh.manager.data.ScopeRepository
@@ -83,6 +85,7 @@ fun HomeScreen(
     var refreshVersion by remember { mutableIntStateOf(0) }
     var automationEnabled by remember { mutableStateOf(false) }
     var automationBusy by remember { mutableStateOf(false) }
+    var notificationGranted by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -110,6 +113,7 @@ fun HomeScreen(
         automationEnabled = withContext(Dispatchers.IO) {
             repository.isAutomationEnabled() ?: AutomationStatus.isServiceEnabled(context)
         }
+        notificationGranted = withContext(Dispatchers.IO) { AdhNotificationListener.isGranted(context) }
     }
 
     Column(
@@ -145,6 +149,13 @@ fun HomeScreen(
                     }
                 },
                 onOpenSettings = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) },
+            )
+            NotificationAccessSection(
+                granted = notificationGranted,
+                onOpenSettings = {
+                    runCatching { context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }
+                        .onFailure { Toast.makeText(context, R.string.notification_open_settings, Toast.LENGTH_LONG).show() }
+                },
             )
             SectionLabel(text = stringResource(R.string.section_configuration))
             Surface(
@@ -250,6 +261,51 @@ private fun AutomationSection(
         }
     }
 }
+@Composable
+private fun NotificationAccessSection(granted: Boolean, onOpenSettings: () -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 18.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Icon(
+                Icons.Rounded.Notifications,
+                contentDescription = null,
+                tint = if (granted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.notification_section_title),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = stringResource(if (granted) R.string.notification_section_granted else R.string.notification_section_missing),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = stringResource(R.string.notification_section_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            IconButton(onClick = onOpenSettings) {
+                Icon(
+                    Icons.Rounded.Settings,
+                    contentDescription = stringResource(R.string.notification_open_settings),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun WebUiSection(status: WebUiStatus?) {
     val context = LocalContext.current

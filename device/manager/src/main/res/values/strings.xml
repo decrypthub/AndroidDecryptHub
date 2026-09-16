@@ -73,4 +73,10 @@
     <string name="automation_disabled_summary">已关闭；打开后 AI 才能使用 phone_* 工具。</string>
     <string name="automation_system_settings">系统无障碍设置</string>
     <string name="automation_enable_failed">无法通过 Device Daemon 修改自动化服务，请在系统无障碍设置中手动启用。</string>
+    <string name="notification_service_label">ADH 通知读取</string>
+    <string name="notification_section_title">通知读取（可选）</string>
+    <string name="notification_section_granted">已授权：AI 可读取最近通知</string>
+    <string name="notification_section_missing">未授权：点击右侧按钮在系统设置里开启"通知使用权"</string>
+    <string name="notification_section_hint">Android 15 起通知正文不再随无障碍事件下发，读取通知需要这一步显式授权；缓冲区仅在内存、最多 30 条。</string>
+    <string name="notification_open_settings">打开通知使用权设置</string>
 </resources>
