@@ -15,6 +15,12 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 idhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [x] **发布前功能状态梳理（2026-09-16）**：新增 `docs/FEATURE_STATUS.md`，按四类列清第一版有什么 ——
+      ①**没通过测试（不要了）**：LSPlant Java 方法 hook（已删除，agent -45% 体积）、ShadowHook（从未入库）；
+      ②**测过的**：51 项验收（`verify_all` 51/51）按能力分组的清单与每项"证明什么"；
+      ③**没测的**：KDF 原生一次性捕获、eCapture 的 pcap/keylog 模式、Xposed 多进程、国密、隐私面板、重打包/ptrace、`python/` 网关、Manager 真机 UI；
+      ④**开发到一半的**：KDF hook（无触发源）、`python/` 网关（未入库）、多进程作用域、可选后端"一键下发"。
+      · 同时明确"发布物"清单（agent .so + Zygisk/Manager + 三个可选后端）与"开发用、不随交付"的部分（sandbox/tools/daemon/docs）。
 - [x] **v1 范围收敛：剔除写了但没跑通的功能（2026-09-16）**：发布前清理，只保留"能验证 / 能发布"的部分 ——
       · **删除 LSPlant Java 方法 hook 全链路**：该后端在测试机（ColorOS/Android 15，libart 裁剪）**无法初始化**，v23 验收长期排除在 `verify_all` 之外（既不可验证也不可发布）。删除 `agent/src/hook/java_lsplant.{cpp,h}`、沙盒回调 `MethodHook.java` / `HookTarget.kt`、agent 命令 `java_hook_test`、daemon 路由 `/api/java/hook_test`、`tools/fetch_lsplant.sh`、`tools/verify_v23_javahook.sh`、CMake 的 LSPlant/DexBuilder 分支。
         效果：agent `.so` **591,752 → 323,424 字节（-45%）**，`llvm-strings` 里 LSPlant 痕迹归零。
