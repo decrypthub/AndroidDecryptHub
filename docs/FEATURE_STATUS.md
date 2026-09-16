@@ -15,6 +15,29 @@
 | 可选后端：eCapture | `tools/fetch_ecapture.sh` + `ecapture_capture.sh` | ✅ 已验收（v34），默认关闭 |
 | 开发用（不随发布物交付） | `sandbox-app/`（测试宿主）、`tools/`、`docs/`、`daemon/` | — |
 
+## 0.5 能力分布：什么在 .so、什么在主机、什么在设备侧
+
+> 一句话：**`libadh_agent.so` 是"运行时唯一入口"（目标进程里的眼睛和手），但不是全部能力的载体。**
+> 分析/索引/存储/编排/呈现都在主机；"给谁注入、何时注入"在设备侧；可选后端是另一种进入/观测方式。
+
+| 层 | 位置 | 承担什么 | 规模 |
+|---|---|---|---|
+| **Agent**（目标进程内） | `agent/` → `libadh_agent.so` | **29 个命令**：GOT/inline hook、函数与 QBDI trace、dex/so/内存 dump、maps 与内存读写搜、ART 结构枚举、活体对象自省、主动触发、`load_so`、轻量 RPC —— 只**采集/执行** | 13 个 C 文件（≈190 KB 源码）→ 产物 323,752 B |
+| **Host ADH Daemon**（主机） | `daemon/` | **63 个 HTTP 路由 + 42 个 MCP 工具**：dex 解析/索引(SQLite)/搜索/xref、Capstone 反汇编、原生常量与 syscall 扫描、脱壳编排与重建、捕获与工件存储、Web UI、MCP server | TypeScript |
+| **Device**（手机侧） | `device/`（`:core` AIDL + `:daemon` root + `:manager` Compose） | **12 个 AIDL 方法**：作用域读写、模块状态、应用目录/图标、目标进程启停、可选后端（Xposed）状态/开关/作用域 —— **不做分析** | Kotlin |
+| **注入器** | `injector/zygisk`、`injector/xposed` | 唯一职责：把 `.so` 送进目标进程 + 传真实包名 | C++ / Java |
+| **可选后端** | `tools/`（Gadget/eCapture）+ `injector/xposed` | 另一种"进入/观测"方式，默认关闭 | 脚本 / 薄 APK |
+
+### 依赖关系（发布视角）
+
+- **必须注入 `.so`**：42 个 MCP 工具里的 **21 个** —— 明文捕获（加解密/TLS/文件/反检测）、hook、trace、dump、活体对象自省、主动触发（runtime 面）。
+- **不需要 `.so`**：另外 **21 个**（静态/工件面）—— `dex_search`/`dex_index`/`dex_xref`/`dex_repair`/`dex_recover`、`native_disasm`/`native_analyze`/`native_crypto_const`/`native_syscall_scan`、`crypto_identify`、`live_captures`/`capture_detail` 等；其中静态分析可以直接喂 `b64`/`sha` 工件（`dumpBuf` 支持），**完全不注入也能用**。
+- **完全不看 `.so`**：eCapture（eBPF 在设备侧读 `SSL_write/SSL_read` 明文）；Frida Gadget 的 JS hook 也不依赖我们的 `.so`（我们只是用它当载体/用 `load_library` 触发）。
+
+### ADH Manager 到底管什么
+
+12 个 AIDL 方法里 **10 个与"注入/后端/作用域"相关**（作用域读写 2、应用目录与图标 2、模块状态 3、Xposed 状态/开关/作用域 3），另 1 个目标进程启停、1 个协议版本。
+它**从不接触 `.so`**：不 `dlopen`、不做分析 —— "注入动作"由 Zygisk / Xposed / 沙盒完成，"决定给谁注入、后端开不开、目标进程要不要重启"才归 Manager。
 ## 1. 没通过测试的功能（不要了）
 
 | 功能 | 证据 | 处置 |
