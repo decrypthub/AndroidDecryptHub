@@ -8,6 +8,7 @@ import { implicitSelectorFor, selectorFrom } from '../src/phone_selectors.ts';
 import { PhoneSkillStore, resolveSkillInputs, validateSkillName, validateSkillParams, validateSkillSteps } from '../src/phone_skills.ts';
 import { renderScreenText } from '../src/phone_text.ts';
 import { readPath, resolveTemplates } from '../src/phone_templates.ts';
+import { normalizeAxis, swipePath } from '../src/phone_gestures.ts';
 import { blockedPackageFromError, openOutcomeHint } from '../src/phone_foreground.ts';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -361,4 +362,22 @@ test('a saved recipe keeps its param contract', () => {
   assert.deepEqual(listed[0].params, ['tab']);
   assert.deepEqual(listed[0].defaults, { tab: '状态' });
   assert.throws(() => store.save('bad', 'x', [{ type: 'observe' }], false, ['tab'], { nope: 1 }), /default for unknown param/);
+});
+
+test('gesture scroll geometry moves content the requested way', () => {
+  const verticalForward = swipePath('vertical', true);
+  assert.ok(verticalForward.y > verticalForward.y2, 'forward on a vertical list swipes up');
+  const verticalBack = swipePath('vertical', false);
+  assert.ok(verticalBack.y < verticalBack.y2, 'backward swipes down');
+  const horizontalForward = swipePath('horizontal', true);
+  assert.ok(horizontalForward.x > horizontalForward.x2, 'forward on a pager swipes left');
+  const horizontalBack = swipePath('horizontal', false);
+  assert.ok(horizontalBack.x < horizontalBack.x2, 'backward swipes right');
+  for (const path of [verticalForward, verticalBack, horizontalForward, horizontalBack]) {
+    for (const value of Object.values(path)) assert.ok(value > 0 && value < 1, 'fractions stay on screen');
+  }
+  assert.equal(normalizeAxis('horizontal'), 'horizontal');
+  assert.equal(normalizeAxis('HORIZONTAL'), 'horizontal');
+  assert.equal(normalizeAxis(undefined), 'vertical');
+  assert.equal(normalizeAxis('nonsense'), 'vertical');
 });

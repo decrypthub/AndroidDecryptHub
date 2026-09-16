@@ -398,6 +398,39 @@ try {
     await postJson('/api/config', { automation: { ...scope.settings.automation, packages: basePackages } });
   }
 
+  // (b) gesture-driven scroll-until-found: ACTION_SCROLL is rejected by pagers and custom
+  // lists, a real swipe is not. Guarded on the launcher being allowlisted on this host.
+  if ((original?.packages ?? []).includes('com.android.launcher')) {
+    await postJson('/api/config', { automation: { ...scope.settings.automation, packages: [...new Set([...basePackages, 'com.android.launcher', 'com.android.systemui'])] } });
+    try {
+      await callTool('phone_act', { action: 'global', key: 'home' });
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      const beforeHome = await callTool('phone_observe', { mode: 'text', maxNodes: 60 });
+      const labelsOf = (text) => (text.split('\n').map((line) => /TextView "([^"]*)"/.exec(line)?.[1]).filter(Boolean).slice(0, 6).join('/'));
+      const beforeLabels = labelsOf(beforeHome.content?.find((item) => item.type === 'text')?.text ?? '');
+      const swept = parseTree(await callTool('phone_wait', {
+        activePackage: 'com.android.launcher',
+        textContains: '__ADH_NO_SUCH_LABEL__',
+        scroll: true,
+        scrollMode: 'gesture',
+        axis: 'horizontal',
+        maxScrolls: 2,
+        timeoutMs: 2500,
+        intervalMs: 250,
+        maxNodes: 120,
+      }));
+      const afterHome = await callTool('phone_observe', { mode: 'text', maxNodes: 60 });
+      const afterLabels = labelsOf(afterHome.content?.find((item) => item.type === 'text')?.text ?? '');
+      chk('phone_wait gesture scroll dispatches swipes where ACTION_SCROLL is rejected', swept.timedOut === true && swept.scrolls >= 1, `scrolls=${swept.scrolls} pageChanged=${beforeLabels !== afterLabels} before=${beforeLabels} after=${afterLabels}`);
+    } catch (error) {
+      chk('gesture scroll acceptance path completed', false, error.message || String(error));
+    } finally {
+      await postJson('/api/config', { automation: { ...scope.settings.automation, packages: basePackages } });
+    }
+  } else {
+    console.log('SKIP: gesture scroll — com.android.launcher is not in the automation allowlist');
+  }
+
 } catch (error) {
   chk('automation acceptance path completed', false, error.message || String(error));
 } finally {

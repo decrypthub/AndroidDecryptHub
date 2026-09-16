@@ -1516,7 +1516,7 @@ Host ADH Daemon / MCP  →  自动化 TCP 8763（loopback + adb reverse）  → 
 | `automation_status` | 只读状态：Host 开关、桥接连接、设备能力、允许包名；不能开启自动化 |
 | `phone_observe` | 优先返回控件树；树为空或非语义时返回压缩截图；支持 `maxDepth`、`interactiveOnly`、truncation 标记；`mode=text` 把同一棵树渲染成紧凑纯文本（含 `snapshotId` 与 ref，可直接用于 `phone_act`），用于节省 AI 上下文 |
 | `phone_find` | 按 text/resourceId/contentDescription/交互标志返回紧凑节点列表，不传整棵树 |
-| `phone_wait` | 等待三类条件竞速命中：控件/状态、agent 事件、进程内捕获；可对虚拟列表执行 scroll-until-found；`afterCaptureId`/`afterEventSeq` 游标或 `lookbackMs` 消除两次调用间的信号丢失 |
+| `phone_wait` | 等待三类条件竞速命中：控件/状态、agent 事件、进程内捕获；可对虚拟列表执行 scroll-until-found（`scrollMode=gesture` 用真滑动代替 `ACTION_SCROLL`，用于翻页器/自绘列表，`axis` 选纵向或横向）；`afterCaptureId`/`afterEventSeq` 游标或 `lookbackMs` 消除两次调用间的信号丢失 |
 | `phone_act` | `tap` / `long_press` / `swipe` / `scroll` / `set_text` / `global back/home/recents`；优先 selector 或 `snapshotId+ref`，兜底归一化坐标；`set_text` 的 `text` 是输入内容而非目标过滤条件 |
 | `phone_app` | 通过包名 `open` / `stop` / `restart` 授权应用；新 daemon 走 root Device Daemon，旧 daemon 保留 Accessibility fallback。`open`/`restart` 必须**验证前台**：未到达时返回 `verified:false` + 实际前台包 + 处理提示（OEM 确认框吞掉启动时必须点名该包） |
 | `phone_device` | `status` / `wake` / `unlock` / `lock`；安全锁屏凭据不绕过 |
@@ -1544,7 +1544,7 @@ Host ADH Daemon / MCP  →  自动化 TCP 8763（loopback + adb reverse）  → 
 
 ### 31.5 验收
 
-`tools/verify_v36_automation.sh`：MCP 工具可见性、控件树、`phone_find`、selector/ref 点击、`phone_wait`、agent 信号等待（游标 + 明文解码 + fail-loud 超时）、视觉截图兜底、归一化坐标点击、滑动、系统通知栏读取、`set_text` 真输入并读回（后两项仅在设备装了对应启动器/搜索组件时执行，否则 SKIP）、`phone_skill` 存/列/跑/删与非法步骤拒绝、`phone_observe mode=text` 紧凑视图及其 ref 可直接驱动动作、`phone_app restart` 前台验证、agent 在 Host 重启后自行重连（`tools/verify_v37_agent_reconnect.sh`，同 pid 新会话 + 命令可达）、`phone_task` 步骤链式引用（`{{id.path}}` 命中与未知名 fail-loud）；桥接未启用（或没有在线 agent 会话）时对应段落 SKIP。注意 `verify_v31_xposed.sh` 为让框架重新注入会 `force-stop com.adh.manager`，而 force-stop 会连带给 Manager 的无障碍服务摘牌 —— 该脚本必须记录并在收尾时还原它，否则回归本身会关掉手机自动化。真机证据见 `docs/PROGRESS.md`。
+`tools/verify_v36_automation.sh`：MCP 工具可见性、控件树、`phone_find`、selector/ref 点击、`phone_wait`、agent 信号等待（游标 + 明文解码 + fail-loud 超时）、视觉截图兜底、归一化坐标点击、滑动、系统通知栏读取、`set_text` 真输入并读回（后两项仅在设备装了对应启动器/搜索组件时执行，否则 SKIP）、`phone_skill` 存/列/跑/删与非法步骤拒绝、`phone_observe mode=text` 紧凑视图及其 ref 可直接驱动动作、`phone_app restart` 前台验证、agent 在 Host 重启后自行重连（`tools/verify_v37_agent_reconnect.sh`，同 pid 新会话 + 命令可达）、`phone_task` 步骤链式引用（`{{id.path}}` 命中与未知名 fail-loud）、`phone_wait` 手势滚动（启动器翻页实测生效）；桥接未启用（或没有在线 agent 会话）时对应段落 SKIP。注意 `verify_v31_xposed.sh` 为让框架重新注入会 `force-stop com.adh.manager`，而 force-stop 会连带给 Manager 的无障碍服务摘牌 —— 该脚本必须记录并在收尾时还原它，否则回归本身会关掉手机自动化。真机证据见 `docs/PROGRESS.md`。
 
 ---
 
