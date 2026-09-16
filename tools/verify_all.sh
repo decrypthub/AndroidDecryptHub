@@ -14,6 +14,9 @@ SCRIPTS=(
   "verify_v02.sh:device"
   # Optional phone automation first, before device scripts that may stop Manager.
   "verify_v36_automation.sh:device"
+  # Agent reconnect: the injected agent must survive a Host ADH Daemon restart (kills + restarts
+  # the daemon inside the script; SKIPs when it cannot find the process to restart).
+  "verify_v37_agent_reconnect.sh:device"
   "verify_v02_dump.sh:device"
   "verify_v02_so.sh:device"
   "verify_v02_dexrepair.sh:host"

@@ -1528,7 +1528,7 @@ Host ADH Daemon / MCP  →  自动化 TCP 8763（loopback + adb reverse）  → 
 2. 控件树为空、不可操作或目标页面为自绘内容时，截图作为第二感知层返回（JPEG，默认最长边 1280；MCP 通过 image content 返回，不持久化原图）。
 3. 视觉动作只能使用归一化坐标或显式像素坐标；ref 只能用于对应 snapshotId，动作完成后 ref 失效。
 4. `FLAG_SECURE` 等受保护窗口截图失败必须 fail-loud 返回 `screenshot_failed` / `screenshot_unsupported`，不得伪造画面。
-5. 进程内信号等待与控件条件竞速，命中即返回；同一类过滤为 AND。事件用 `agentEvent`（精确 type）/ `agentEventContains`（JSON 子串），捕获用 `captureCategory`（crypto/net/file/system）/ `captureContains`（在解码后的 UTF-8 文本 + 元数据上做子串匹配）。`phone_observe`/`phone_find`/`phone_act` 返回 `cursor`（`phone_act` 另有动作派发前的 `cursorBefore`）；把游标传给 `afterCaptureId`/`afterEventSeq` 只匹配更新的记录（不看时间戳），避免信号在两次 MCP 调用之间到达而丢失。纯信号等待不依赖无障碍服务。信号等待超时时必须带回窗口内的实际信号摘要（`saw.captures`/`saw.events` + `totals`）与当时的 `cursor`，让 AI 能改写过滤条件而不是盲猜。
+5. 进程内信号等待与控件条件竞速，命中即返回；同一类过滤为 AND。事件用 `agentEvent`（精确 type）/ `agentEventContains`（JSON 子串），捕获用 `captureCategory`（crypto/net/file/system）/ `captureContains`（在解码后的 UTF-8 文本 + 元数据上做子串匹配）。`phone_observe`/`phone_find`/`phone_act` 返回 `cursor`（`phone_act` 另有动作派发前的 `cursorBefore`）；把游标传给 `afterCaptureId`/`afterEventSeq` 只匹配更新的记录（不看时间戳），避免信号在两次 MCP 调用之间到达而丢失。agent 与 Host 的连接由 agent 自己维持：Host 重启（每次升级都会发生）后 agent 必须自行重连，目标进程不得失联；纯信号等待不依赖无障碍服务。信号等待超时时必须带回窗口内的实际信号摘要（`saw.captures`/`saw.events` + `totals`）与当时的 `cursor`，让 AI 能改写过滤条件而不是盲猜。
 6. 同一个 JSON 字段既可能是目标也可能是负载：`set_text` 的 `text` 是"要写入的值"，不得当作选择器（否则要求控件当前文本已等于待写入值，永远选不中）——隐式选择器按动作剔除该键，显式 `selector:{text:...}` 仍然有效。选择器解析允许有界重试（≤3 次 / ~500ms），以吸收动画与列表滚动造成的瞬时抖动。
 
 ### 31.4 开关与安全
@@ -1541,7 +1541,7 @@ Host ADH Daemon / MCP  →  自动化 TCP 8763（loopback + adb reverse）  → 
 
 ### 31.5 验收
 
-`tools/verify_v36_automation.sh`：MCP 工具可见性、控件树、`phone_find`、selector/ref 点击、`phone_wait`、agent 信号等待（游标 + 明文解码 + fail-loud 超时）、视觉截图兜底、归一化坐标点击、滑动、系统通知栏读取、`set_text` 真输入并读回（后两项仅在设备装了对应启动器/搜索组件时执行，否则 SKIP）、`phone_skill` 存/列/跑/删与非法步骤拒绝、`phone_observe mode=text` 紧凑视图及其 ref 可直接驱动动作、`phone_app restart` 前台验证；桥接未启用（或没有在线 agent 会话）时对应段落 SKIP。注意 `verify_v31_xposed.sh` 为让框架重新注入会 `force-stop com.adh.manager`，而 force-stop 会连带给 Manager 的无障碍服务摘牌 —— 该脚本必须记录并在收尾时还原它，否则回归本身会关掉手机自动化。真机证据见 `docs/PROGRESS.md`。
+`tools/verify_v36_automation.sh`：MCP 工具可见性、控件树、`phone_find`、selector/ref 点击、`phone_wait`、agent 信号等待（游标 + 明文解码 + fail-loud 超时）、视觉截图兜底、归一化坐标点击、滑动、系统通知栏读取、`set_text` 真输入并读回（后两项仅在设备装了对应启动器/搜索组件时执行，否则 SKIP）、`phone_skill` 存/列/跑/删与非法步骤拒绝、`phone_observe mode=text` 紧凑视图及其 ref 可直接驱动动作、`phone_app restart` 前台验证、agent 在 Host 重启后自行重连（`tools/verify_v37_agent_reconnect.sh`，同 pid 新会话 + 命令可达）；桥接未启用（或没有在线 agent 会话）时对应段落 SKIP。注意 `verify_v31_xposed.sh` 为让框架重新注入会 `force-stop com.adh.manager`，而 force-stop 会连带给 Manager 的无障碍服务摘牌 —— 该脚本必须记录并在收尾时还原它，否则回归本身会关掉手机自动化。真机证据见 `docs/PROGRESS.md`。
 
 ---
 

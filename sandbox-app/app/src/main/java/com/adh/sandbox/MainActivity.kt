@@ -6,6 +6,7 @@ import android.util.Log
 import android.util.TypedValue
 import android.view.View
 import android.view.ViewGroup
+import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -168,6 +169,19 @@ class MainActivity : Activity() {
             addView(body(loadStatus, muted = true))
             addView(space(4))
             addView(body("手动点击各标签页即可触发对应能力；控制台请看 Web UI / ADH Manager。", muted = true))
+        })
+        addView(card {
+            addView(sectionTitle("AI 输入测试"))
+            addView(body("留给自动化验收的确定性输入框（phone_act set_text → phone_find 读回）。", muted = true))
+            addView(EditText(this@MainActivity).apply {
+                id = R.id.adh_input_probe
+                hint = "在这里输入…"
+                isSingleLine = true
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                )
+            })
         })
     }
 

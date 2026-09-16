@@ -219,21 +219,32 @@ static void command_loop(int fd) {
     }
 }
 
+// The agent owns the connection and must outlive a host restart: the daemon is restarted on
+// every upgrade, and dropping the socket used to orphan the target forever (no captures, no
+// commands until the app itself was restarted). Reconnect forever with a mild backoff. The
+// first failure and then every ~10s are logged, so a missing `adb reverse` stays visible
+// without spamming logcat. Kept deliberately small: one sleeping thread, no queues.
 static void *agent_thread(void *arg) {
     (void)arg;
-    for (int attempt = 0; attempt < 30; attempt++) {
+    int failed = 0;
+    for (;;) {
         int fd = connect_adhd();
         if (fd >= 0) {
-            LOGI("connected to Host ADH Daemon %s:%d", ADH_HOST, ADH_PORT);
+            if (failed) LOGI("reconnected to Host ADH Daemon %s:%d after %d failed attempts", ADH_HOST, ADH_PORT, failed);
+            else LOGI("connected to Host ADH Daemon %s:%d", ADH_HOST, ADH_PORT);
+            failed = 0;
             report(fd);
             command_loop(fd);
             close(fd);
-            LOGI("Host ADH Daemon connection closed");
-            return NULL;
+            LOGI("Host ADH Daemon connection closed; reconnecting");
+            usleep(1000 * 1000);   // give a restarting daemon time to bind before re-dialling
+            continue;
         }
+        if (failed == 0 || failed % 20 == 0)
+            LOGE("Host ADH Daemon unreachable (attempt %d, need: adb reverse tcp:%d tcp:%d)", failed + 1, ADH_PORT, ADH_PORT);
+        failed++;
         usleep(500 * 1000);
     }
-    LOGE("could not reach Host ADH Daemon after retries (need: adb reverse tcp:%d tcp:%d)", ADH_PORT, ADH_PORT);
     return NULL;
 }
 

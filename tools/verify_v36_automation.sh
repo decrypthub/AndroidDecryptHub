@@ -43,17 +43,6 @@ if [[ "$ENABLED" != *"$SERVICE"* ]]; then
   exit 0
 fi
 
-# Optional surfaces exercised only when the device ships them, so the script stays portable:
-# the launcher + its search box are how an AI opens apps on ROMs where the accessibility
-# `open` fallback is intercepted by an OEM confirm dialog.
-SEARCH_PKG="com.heytap.quicksearchbox"
-LAUNCHER_PKG="com.android.launcher"
-ADH_V36_SEARCH=""
-if adb -s "$SERIAL" shell pm list packages 2>/dev/null | tr -d '\r' | grep -qx "package:$SEARCH_PKG"; then
-  ADH_V36_SEARCH="$SEARCH_PKG"
-fi
-export ADH_V36_SEARCH ADH_V36_LAUNCHER="$LAUNCHER_PKG"
-
 OUT="$(node - "$BASE" <<'EOF'
 const base = process.argv[2];
 const checks = [];
@@ -326,48 +315,53 @@ try {
   });
   const swipeText = swipe.content?.[0]?.text;
   chk('normalized swipe is accepted', JSON.parse(swipeText).action === 'swipe');
-  // ---- text input + system shade: core "AI drives a phone" surfaces -------------------
-  if (!process.env.ADH_V36_SEARCH) {
-    console.log('SKIP: set_text / notification shade — launcher search package not present');
-  } else {
-    const scope = await getJson('/api/config');
-    const basePackages = scope.settings.automation.packages;
-    const widen = Array.from(new Set([...basePackages, process.env.ADH_V36_LAUNCHER, process.env.ADH_V36_SEARCH, 'com.android.systemui']));
-    await postJson('/api/config', { automation: { ...scope.settings.automation, packages: widen } });
-    try {
-      await callTool('phone_act', { action: 'global', key: 'notifications' });
-      await new Promise((resolve) => setTimeout(resolve, 600));
-      const shade = parseTree(await callTool('phone_observe', { mode: 'tree', includeScreenshot: false, maxNodes: 200 }));
-      const readable = (shade.nodes ?? []).filter((node) => ((node.text ?? '') + (node.contentDescription ?? '')).length > 0).length;
-      chk('notification shade is readable through the tree', shade.activePackage === 'com.android.systemui' && readable > 0, `active=${shade.activePackage} nodes=${shade.nodes?.length ?? 0} readable=${readable}`);
-      await callTool('phone_act', { action: 'global', key: 'back' });
+  // ---- system shade + text input: two surfaces an AI driver needs ------------------------
 
-      await callTool('phone_act', { action: 'global', key: 'home' });
-      await new Promise((resolve) => setTimeout(resolve, 700));
-      await callTool('phone_act', { action: 'swipe', x: 0.5, y: 0.86, x2: 0.5, y2: 0.3, durationMs: 280, coordinateSpace: 'normalized' });
-      await new Promise((resolve) => setTimeout(resolve, 700));
-      await callTool('phone_act', { action: 'tap', contentDescription: '搜索', maxNodes: 120 });
-      await new Promise((resolve) => setTimeout(resolve, 1200));
-      const field = parseTree(await callTool('phone_find', { editable: true, maxNodes: 150, limit: 4 }));
-      const target = (field.nodes ?? []).find((node) => String(node.resourceId ?? '').includes('search_box'));
-      chk('launcher search exposes an editable field', !!target, `count=${field.count} ids=${(field.nodes ?? []).map((n) => String(n.resourceId ?? '').split('/').pop()).join(',')}`);
-      if (target) {
-        const marker = 'ADH_SET_TEXT_v1';
-        const typed = parseTree(await callTool('phone_act', { action: 'set_text', resourceId: target.resourceId, text: marker, maxNodes: 150 }));
-        chk('set_text resolves the field by id and dispatches', typed.target === 'ref', `target=${typed.target} ref=${typed.ref}`);
-        await new Promise((resolve) => setTimeout(resolve, 700));
-        const after = parseTree(await callTool('phone_find', { editable: true, maxNodes: 150, limit: 4 }));
-        const value = (after.nodes ?? []).map((node) => node.text ?? '').find((text) => text.includes(marker));
-        chk('set_text value is readable back from the field', value === marker, `value=${JSON.stringify(value ?? null)}`);
-      }
-    } catch (error) {
-      chk('text input / shade acceptance path completed', false, error.message || String(error));
-    } finally {
-      await postJson('/api/config', { automation: { ...scope.settings.automation, packages: basePackages } });
-      await callTool('phone_act', { action: 'global', key: 'back' }).catch(() => {});
-      await callTool('phone_act', { action: 'global', key: 'home' }).catch(() => {});
+  // ---- system shade + text input: two surfaces an AI driver needs ------------------------
+  const scope = await getJson('/api/config');
+  const basePackages = scope.settings.automation.packages;
+
+  // (b) set_text against the sandbox's own probe field. It is our fixture on purpose: the
+  // launcher-search detour (and the module-manager search box) both depend on foreign UI that
+  // shifts between ROM builds, which made the acceptance flaky rather than the feature.
+  const probeField = 'com.adh.sandbox:id/adh_input_probe';
+  try {
+    const locate = async () => parseTree(await callTool('phone_find', { resourceId: probeField, maxNodes: 150, limit: 4 }));
+    let field = await locate();
+    if (!(field.nodes ?? []).length && field.activePackage === 'com.adh.sandbox') {
+      await callTool('phone_act', { action: 'tap', contentDescription: '状态', maxNodes: 150 });
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      field = await locate();
     }
+    chk('sandbox exposes the text-input probe field', (field.nodes ?? []).length > 0, `count=${field.count} active=${field.activePackage}`);
+    if ((field.nodes ?? []).length) {
+      const marker = 'ADH_SET_TEXT_v1';
+      const typed = parseTree(await callTool('phone_act', { action: 'set_text', resourceId: probeField, text: marker, maxNodes: 150 }));
+      chk('set_text resolves the field by id and dispatches', typed.target === 'ref', `target=${typed.target} ref=${typed.ref}`);
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      const after = await locate();
+      const value = (after.nodes ?? [])[0]?.text;
+      chk('set_text value is readable back from the field', value === marker, `value=${JSON.stringify(value ?? null)}`);
+    }
+  } catch (error) {
+    chk('text input acceptance path completed', false, error.message || String(error));
   }
+  // (a) the notification shade has to be readable through the tree
+  await postJson('/api/config', { automation: { ...scope.settings.automation, packages: [...new Set([...basePackages, 'com.android.systemui'])] } });
+  try {
+    await callTool('phone_act', { action: 'global', key: 'notifications' });
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    const shade = parseTree(await callTool('phone_observe', { mode: 'tree', includeScreenshot: false, maxNodes: 200 }));
+    const readable = (shade.nodes ?? []).filter((node) => ((node.text ?? '') + (node.contentDescription ?? '')).length > 0).length;
+    chk('notification shade is readable through the tree', shade.activePackage === 'com.android.systemui' && readable > 0, `active=${shade.activePackage} nodes=${shade.nodes?.length ?? 0} readable=${readable}`);
+    await callTool('phone_act', { action: 'global', key: 'back' });
+  } catch (error) {
+    chk('notification shade acceptance path completed', false, error.message || String(error));
+    await callTool('phone_act', { action: 'global', key: 'back' }).catch(() => {});
+  } finally {
+    await postJson('/api/config', { automation: { ...scope.settings.automation, packages: basePackages } });
+  }
+
 } catch (error) {
   chk('automation acceptance path completed', false, error.message || String(error));
 } finally {
