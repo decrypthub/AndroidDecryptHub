@@ -1534,6 +1534,8 @@ Host ADH Daemon / MCP  →  自动化 TCP 8763（loopback + adb reverse）  → 
 
 7. `phone_task`/`phone_skill` 的步骤可引用**前序步骤**的结果：`{{stepId}}` 取整份结果，`{{stepId.path.to.0}}` 取深层值（数组用数字下标）；整串是模板时保留原类型，字符串内嵌则转字符串。只能引用带 `id` 且已完成的前序步骤——未知名与缺失路径必须 fail-loud（`template_unknown_step` / `template_path_missing`），不允许静默替换成空值。它让"find 得到 ref → 立刻 act"在一次调用内完成，避免 ref 在两次调用之间过期。保留命名空间 `input`：`phone_skill` 的配方用 `params` 声明参数，运行时 `inputs` 传值（`defaults` 可兜底），缺失时返回 `skill_missing_input` 且不执行任何步骤。
 
+8. 动作失败必须**自带现场**：`phone_act` 的选择器解析失败、ref 过期、手势被窗口拒绝等错误都要附上当前屏幕的紧凑文本视图（`--- current screen ---`）与前台包；若现场本身读不到（例如前台是不在 allowlist 的系统弹窗），则附上"读不到的原因"，不得掩盖原始错误。等待类失败另有 `saw` 摘要（见规则 5）。
+
 ### 31.4 开关与安全
 
 - Host `settings.automation.enabled` 默认 `false`；关闭时 MCP `tools/list` 不返回 `phone_*`。

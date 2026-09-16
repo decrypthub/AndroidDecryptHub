@@ -382,6 +382,15 @@ try {
   } catch (error) {
     chk('text input acceptance path completed', false, error.message || String(error));
   }
+  // (b) a failed action must teach: the error carries the current screen so the AI can retarget
+  let taught = '';
+  try {
+    await callTool('phone_act', { action: 'tap', text: '__ADH_NO_SUCH_NODE_v1__' });
+  } catch (error) {
+    taught = error.message || String(error);
+  }
+  chk('a failed action hands back the current screen', /selector_not_found/.test(taught) && taught.includes('--- current screen ---') && taught.includes('com.adh.sandbox'), (taught.split('\n')[1] ?? taught).slice(0, 90));
+
   // (a) the notification shade has to be readable through the tree
   await postJson('/api/config', { automation: { ...scope.settings.automation, packages: [...new Set([...basePackages, 'com.android.systemui'])] } });
   try {
