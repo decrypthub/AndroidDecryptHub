@@ -182,6 +182,7 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
 
     private fun tap(args: JSONObject, snapshot: Snapshot?, ref: String?): JSONObject {
         val node = ref?.let { snapshot?.nodes?.get(it) }
+        if (ref != null && node == null) throw AutomationException("stale_ref", "unknown or expired node ref: $ref")
         if (node != null) {
             refreshOrThrow(node)
             val clickable = clickableAncestor(node)
@@ -202,6 +203,7 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
 
     private fun longPress(args: JSONObject, snapshot: Snapshot?, ref: String?): JSONObject {
         val node = ref?.let { snapshot?.nodes?.get(it) }
+        if (ref != null && node == null) throw AutomationException("stale_ref", "unknown or expired node ref: $ref")
         if (node != null) {
             refreshOrThrow(node)
             if (node.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)) {
@@ -341,6 +343,7 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
 
     private fun scroll(args: JSONObject, snapshot: Snapshot?, ref: String?): JSONObject {
         val refNode = ref?.let { snapshot?.nodes?.get(it) }
+        if (ref != null && refNode == null) throw AutomationException("stale_ref", "unknown or expired node ref: $ref")
         val node = refNode?.let { scrollableAncestor(it) ?: it } ?: rootInActiveWindow
             ?: throw AutomationException("no_scroll_target", "no active scrollable window")
         if (refNode != null) refreshOrThrow(node)
@@ -681,7 +684,7 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val TAG = "AdhAutomationService"
-        private const val MAX_SNAPSHOTS = 4
+        private const val MAX_SNAPSHOTS = 16
         private const val OBSERVE_BUDGET_MS = 4_000L
         private const val QUEUE_LIMIT = 20_000
     }

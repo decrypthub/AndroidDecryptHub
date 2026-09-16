@@ -85,6 +85,7 @@ MCP_TOOLS.push(
   { name: 'phone_act', description: 'Act on the active phone screen. Prefer a selector or snapshotId+ref from phone_observe; use normalized coordinates only as the visual fallback. Supports tap, long_press, swipe, scroll, set_text and global back/home/recents/notifications/quick_settings/power/lock/screenshot.', inputSchema: { type: 'object', properties: { ...SEL, snapshotId: S, action: { type: 'string', enum: ['tap', 'long_press', 'swipe', 'scroll', 'set_text', 'global'] }, ref: S, x: N, y: N, x2: N, y2: N, coordinateSpace: { type: 'string', enum: ['normalized', 'pixel'] }, text: S, key: { type: 'string', enum: ['back', 'home', 'recents', 'notifications', 'quick_settings', 'power', 'lock', 'screenshot'] }, direction: { type: 'string', enum: ['forward', 'backward'] }, durationMs: N, observeAfter: { type: 'boolean' }, package: S }, required: ['action'] }, raw: true, handler: async (a) => actPhone(a) },
   { name: 'phone_app', description: 'Open, stop or restart an allowlisted app by package name. Open uses the root Device Daemon when protocol v6+ is available, with a compatibility fallback for older daemons; stop/restart delegate to the same authenticated daemon.', inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['open', 'stop', 'restart'] }, package: S }, required: ['action', 'package'] }, handler: async (a) => appPhone(a) },
   { name: 'phone_device', description: 'Read or control device power state: status, wake, unlock a non-secure keyguard, or lock the screen. Secure credentials are never bypassed.', inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['status', 'wake', 'unlock', 'lock'] } }, required: ['action'] }, handler: async (a) => devicePhone(a) },
+  { name: 'phone_task', description: 'Run a bounded sequence of phone primitives in one MCP call. Steps may observe, find, wait, act, control an app, or control device power; each step supports retries and structured failure output.', inputSchema: { type: 'object', properties: { stopOnError: { type: 'boolean' }, steps: { type: 'array', minItems: 1, maxItems: 30, items: { type: 'object', properties: { id: S, type: { type: 'string', enum: ['observe', 'find', 'wait', 'act', 'app', 'device'] }, args: { type: 'object' }, retries: N, retryDelayMs: N }, required: ['type'] } } }, required: ['steps'] }, handler: async (a) => taskPhone(a) },
 );
 
 const SELECTOR_KEYS = ['text', 'textContains', 'resourceId', 'contentDescription', 'contentDescriptionContains', 'clickable', 'editable', 'scrollable'];
@@ -203,6 +204,70 @@ async function waitPhone(args: any) {
       }
     }
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+}
+
+
+async function taskPhone(args: any) {
+  assertAutomationReady();
+  const steps = Array.isArray(args.steps) ? args.steps : [];
+  if (!steps.length) throw new Error('phone_task requires at least one step');
+  if (steps.length > 30) throw new Error('phone_task supports at most 30 steps');
+  const stopOnError = args.stopOnError !== false;
+  const results: any[] = [];
+  for (let index = 0; index < steps.length; index++) {
+    const step = steps[index] ?? {};
+    const type = String(step.type ?? '');
+    const stepArgs = step.args && typeof step.args === 'object' ? step.args : {};
+    const retries = Math.max(0, Math.min(3, Number(step.retries ?? 0)));
+    const retryDelayMs = Math.max(50, Math.min(3_000, Number(step.retryDelayMs ?? 300)));
+    let attempt = 0;
+    for (;;) {
+      try {
+        const value = await runTaskStep(type, stepArgs);
+        results.push({ index, id: step.id, type, ok: true, result: value });
+        break;
+      } catch (error) {
+        const message = (error as Error).message || String(error);
+        if (attempt >= retries) {
+          results.push({ index, id: step.id, type, ok: false, error: message });
+          if (stopOnError) return { ok: false, failedStep: index, steps: results };
+          break;
+        }
+        attempt++;
+        await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+      }
+    }
+  }
+  return { ok: results.every((step) => step.ok), steps: results };
+}
+
+async function runTaskStep(type: string, args: any): Promise<any> {
+  switch (type) {
+    case 'observe':
+      return contentToValue(await observePhone(args));
+    case 'find':
+      return await findPhone(args);
+    case 'wait':
+      return await waitPhone(args);
+    case 'act':
+      return contentToValue(await actPhone(args));
+    case 'app':
+      return await appPhone(args);
+    case 'device':
+      return await devicePhone(args);
+    default:
+      throw new Error('unsupported phone_task step: ' + type);
+  }
+}
+
+function contentToValue(result: any): any {
+  const text = result?.content?.find((item: any) => item.type === 'text')?.text;
+  if (text == null) return result;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { text };
   }
 }
 
