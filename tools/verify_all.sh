@@ -12,6 +12,8 @@ STATE="$(adb get-state 2>/dev/null | tr -d '\r')"
 SCRIPTS=(
   "verify_v01.sh:device"
   "verify_v02.sh:device"
+  # Optional phone automation first, before device scripts that may stop Manager.
+  "verify_v36_automation.sh:device"
   "verify_v02_dump.sh:device"
   "verify_v02_so.sh:device"
   "verify_v02_dexrepair.sh:host"
@@ -34,8 +36,6 @@ SCRIPTS=(
   "verify_v10_webui.sh:host"
   "verify_v33_backends.sh:host"
   "verify_v35_sessions.sh:host"
-  # Optional phone automation (AccessibilityService bridge; user-enabled, SKIPs when unavailable).
-  "verify_v36_automation.sh:device"
   "verify_v10_trace.sh:device"
   "verify_v10_export.sh:host"
   "verify_v10_events.sh:device"

@@ -31,6 +31,13 @@ if [ "$BRIDGE" != "connected" ]; then
   exit 0
 fi
 
+SERVICE="com.adh.manager/com.adh.manager.automation.AdhAutomationAccessibilityService"
+ENABLED="$(adb -s "$SERIAL" shell settings get secure enabled_accessibility_services 2>/dev/null | tr -d '\r')"
+if [[ "$ENABLED" != *"$SERVICE"* ]]; then
+  echo "SKIP  v3.6 automation — AccessibilityService is not enabled (optional feature)"
+  exit 0
+fi
+
 OUT="$(node - "$BASE" <<'EOF'
 const base = process.argv[2];
 const checks = [];
