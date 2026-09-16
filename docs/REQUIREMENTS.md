@@ -339,9 +339,9 @@ MemoryRegion {
 
 ---
 
-## 7. D — Java Hook Engine
+## 7. D — Java Hook Engine（**不在 v1 范围**）
 
-**功能**：基于 LSPlant 的 ART 层 Java 方法 hook，是算法逆向的核心模块。
+**v1 状态：未实现（已移除）**。LSPlant 后端在测试机（ColorOS / Android 15，`libart.so` 被裁剪）无法初始化，既不可验证也不可发布，因此 v1 移除了该后端及其命令/接口（agent `java_hook_test`、`/api/java/hook_test`、`tools/fetch_lsplant.sh`、`verify_v23_javahook.sh`、CMake 中的 LSPlant/DexBuilder 分支）与回调脚手架；下面各小节保留为后续版本的设计参考。native 层 inline hook（Dobby）不受影响。
 
 ### 7.1 基础 Hook 能力
 
@@ -1332,7 +1332,7 @@ Android 在此基础上增加：全套 dex 操作、Java hook、native trace、m
 
 - 枚举 `/proc/self/maps`
 - dex / so / memory dump
-- Java API hook（LSPlant）
+- ~~Java API hook（LSPlant）~~ —— v1 已移除（见 §7）
 - 加密 API 运行时观测（Java + OpenSSL）
 - 文件读写观测（Java + libc，带来源标注）
 - 网络请求/响应捕获（主流框架）
@@ -1395,7 +1395,7 @@ MCP              →  AI 可编程操控，与 HTTP 同源
 | 项目 | 地址 | 关系 |
 |------|------|------|
 | ios-decrypt-helper | https://github.com/taisuii/ios-decrypt-helper | 产品形态与工程思路参考；Android 版全面扩展 |
-| LSPlant | https://github.com/LSPosed/LSPlant | Java Hook 后端 |
+| ~~LSPlant~~ | https://github.com/LSPosed/LSPlant | **v1 已移除**（Java 方法 hook 不在 v1；native inline hook 用 Dobby） |
 | Capstone | https://github.com/capstone-engine/capstone | 反汇编引擎 |
 | QBDI | https://github.com/QBDI/QBDI | Native DBI trace |
 | MCP | https://modelcontextprotocol.io | AI 操控协议 |

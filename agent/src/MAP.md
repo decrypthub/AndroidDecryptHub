@@ -6,7 +6,7 @@
 
 | Path | Responsibility |
 |---|---|
-| `bootstrap/agent_main.c` | Dual entry, hello/report, LSPlant self-test, command dispatch, and lifecycle |
+| `bootstrap/agent_main.c` | Dual entry, hello/report, command dispatch, and lifecycle |
 | `bootstrap/agent_internal.h` | Shared bootstrap utility, transport, memory, and filesystem declarations |
 | `bootstrap/util.c` | JSON, base64, property, process, and time helpers |
 | `bootstrap/io.c` | Host connection and length-framed transport |
@@ -15,7 +15,6 @@
 | `capture/capture.c` | Crypto/TLS/file/system wrappers, bounded capture buffers, Java reporter, and capture/probe commands |
 | `hook/got.c` | ELF relocation parsing, GOT slot replacement, in-memory symbol lookup, and GOT self-test |
 | `hook/native_inline_dobby.cpp` | Dobby native inline-hook backend |
-| `hook/java_lsplant.cpp` | Optional LSPlant Java-method hook backend |
 | `runtime/actions.c` | Safety-gated Java trigger and explicit in-process `.so` loading commands |
 | `runtime/art.c` | ClassLoader-cookie enumeration and per-API ART DexFile structural resolution |
 | `runtime/inspection.c` | Live-object reflection, JNI/runtime compatibility probes, and the bootstrap/current injection-footprint counters |
@@ -23,11 +22,11 @@
 | `trace/commands.c` | Function-call trace state, GOT trace orchestration, and QBDI command response handling |
 | `trace/qbdi_trace.c` | Optional runtime-loaded QBDI instruction trace |
 
-## Phase 3 extraction rule
 ## Naming
 
 `libidh_agent.so` and `idh_agent_start` are legacy on-disk/ABI names kept for compatibility. New code, commands, logs, and UI copy use `ADH` / `adh_*`; do not add new `idh_*` identifiers. The fixed `com.idh.probe` / `IDH_PROBE_OK` fixture is intentionally hash-bound.
 
+## Phase 3 extraction rule
 
 Move one capability domain at a time and preserve command names and response schemas. A new module exposes a narrow header, is added to `agent/CMakeLists.txt`, and must pass `tools/build_agent.sh` plus its focused acceptance script before the next domain moves.
 

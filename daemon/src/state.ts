@@ -214,7 +214,7 @@ export function pushCapture(entry: Capture): boolean {
 export const SANDBOX = {
   net: 'com.adh.sandbox.Network', flow: 'com.adh.sandbox.CorrelatedFlow',
   crypto: 'com.adh.sandbox.JavaCrypto', file: 'com.adh.sandbox.FileIO',
-  detect: 'com.adh.sandbox.Detection', javaHook: 'com.adh.sandbox.HookTarget',
+  detect: 'com.adh.sandbox.Detection',
   inlineModule: 'libadhdetect.so', inlineSymbol: 'adh_static_EVP_CipherUpdate',
   inlineMethod: 'staticCrypto',
 };

@@ -15,6 +15,14 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 idhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [x] **v1 范围收敛：剔除写了但没跑通的功能（2026-09-16）**：发布前清理，只保留"能验证 / 能发布"的部分 ——
+      · **删除 LSPlant Java 方法 hook 全链路**：该后端在测试机（ColorOS/Android 15，libart 裁剪）**无法初始化**，v23 验收长期排除在 `verify_all` 之外（既不可验证也不可发布）。删除 `agent/src/hook/java_lsplant.{cpp,h}`、沙盒回调 `MethodHook.java` / `HookTarget.kt`、agent 命令 `java_hook_test`、daemon 路由 `/api/java/hook_test`、`tools/fetch_lsplant.sh`、`tools/verify_v23_javahook.sh`、CMake 的 LSPlant/DexBuilder 分支。
+        效果：agent `.so` **591,752 → 323,424 字节（-45%）**，`llvm-strings` 里 LSPlant 痕迹归零。
+      · **Dobby（native inline hook）独立成 `tools/fetch_dobby.sh`**（Maven AAR 里的静态 `libdobby.a`）：它是**已验证**能力（v2.2 / `verify_v28_inlinehook.sh` 仍绿），不再和 LSPlant 绑在一个脚本里。
+      · **删除废弃脚手架** `injector/manager/`（DEPRECATED stub，早已迁到 `device/manager`）。
+      · 文档同步：REQUIREMENTS §7 标注"**不在 v1 范围 / 已移除**"、依赖表用 Dobby 换掉 LSPlant、`AGENTS.md`/`CLAUDE.md` 命令与测试机说明更新、各 MAP 去掉 v23 特例。
+      · 保留但**明确标 PENDING（未在 v1 宣传为完成）**：KDF 原生一次性捕获（PBKDF2/HKDF/scrypt —— Android JCA 不走原生一次性 API，对 native 目标仍可能命中）、国密 SM2/SM3/SM4、隐私分析面板；重打包（`injector/gadget-pack`）与 ptrace 注入器仍是"未开工"，仓库里没有代码。
+      · 验证：agent / 沙盒 APK / Xposed 模块重新构建 + 安装，全量 `verify_all` **51/51 全绿**。
 - [x] **Web UI 会话模块修复：会话无限堆积 + 选择器"白屏"（2026-09-16）**：两个独立缺陷 ——
       ① **daemon 从不清理 `sessions`**：每次 App 重启都新增一条，一个下午的测试留下 20 条死会话（列表里全是历史会话）。
       修法：`state.ts` 新增 `pruneSessions()`（每包最多保留 `OFFLINE_KEEP_PER_PACKAGE=2` 条离线 + 超过 `OFFLINE_RETENTION_MS=10min` 一律丢弃，**绝不动在线会话**），并在 `agent hello`、`agent close` 与 60s 定时清扫里调用；实测重启 4 次后稳定在 `total=3 (1 online + 2 offline)`。

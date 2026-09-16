@@ -19,13 +19,6 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
         return send(r.ok ? 200 : 502, { ...r, sentPadLen: padLen, tailOk: r.tail === tail, notTruncated: (r.recvBytes ?? 0) > padLen });
       } catch (e) { return send(504, { error: (e as Error).message }); }
     } },
-    // Java method-hook self-test (WS-A / LSPlant): GET /api/java/hook_test?session=ID
-    { path: '/api/java/hook_test', handler: async () => {
-      const sid = pickSid(url.searchParams.get('session'));
-      if (!sid) return send(400, { error: 'no session' });
-      try { const r = await withCaptureSuspended(sid, () => sendCmd(sid, 'java_hook_test', { className: url.searchParams.get('class') ?? SANDBOX.javaHook }, 25_000)); return send(r.ok ? 200 : 502, r); }
-      catch (e) { return send(504, { error: (e as Error).message }); }
-    } },
     { path: '/api/process/maps', handler: async () => {
       const sid = pickSid(url.searchParams.get('session'));
       if (!sid) return send(400, { error: 'no session' });

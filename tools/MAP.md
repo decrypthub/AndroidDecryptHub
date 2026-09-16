@@ -57,13 +57,12 @@ translation — kept separate).
 - `:device` scripts SKIP (not FAIL) when no device attached.
 - Exit 0 iff all RUN scripts pass. Prints `pass=N fail=N skip=N [failed:…]`.
 - `verify_v26_footprint.sh` — host-only static guard: stripped agent `.so`, exactly three dynamic exports, no RWX `LOAD`; runs in `verify_all.sh` without a device.
-- **`verify_v23_javahook.sh` is deliberately EXCLUDED** — LSPlant WS-A is blocked on this ROM (libart stripped). See the comment in the SCRIPTS array. Re-add only on a stock/AOSP device.
 
 ## Build scripts
 
 - `build_agent.sh` — `libidh_agent.so` (arm64-v8a, NDK+SDK cmake), stages into `sandbox-app/…/jniLibs/$ABI`, prints `adh_agent_set_package` + `adh_agent_start` + legacy `idh_agent_start` + `JNI_OnLoad` exports (fail-loud on compile error — do NOT hide build output).
 - `build_detect.sh` — `libadhdetect.so` (sandbox's mock detection target), same cmake pattern.
-- `fetch_qbdi.sh` / `fetch_lsplant.sh` — one-time third-party fetch (gitignored under `agent/third_party/`).
+- `fetch_qbdi.sh` / `fetch_dobby.sh` — one-time third-party fetch (gitignored under `agent/third_party/`). Dobby is the inline-hook backend (Java method hook / LSPlant is out of the v1 scope).
 - `build_zygisk.sh` — 构建 Manager 证书固定的 Root Device Daemon + Zygisk 模块 → `injector/zygisk/dist/adh-zygisk.zip`
 - `build_bundle.sh` — Magisk/KernelSU 可直接安装的版本化组合包（Zygisk + Device Daemon + Manager）→ `injector/zygisk/dist/adh-bundle-vX.Y.Z.zip`
 - `flash_device.sh` — 把组合包推到当前手机并刷入（自动识别 KernelSU `ksud` / Magisk）。`--no-build` 跳过重建；`--reboot` 刷完重启让 Zygisk + Device Daemon 加载。多设备时必须设 `ANDROID_SERIAL`。

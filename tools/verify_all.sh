@@ -50,11 +50,6 @@ SCRIPTS=(
   "verify_v20_file.sh:device"
   "verify_v21_frame.sh:device"
   "verify_v22_capture.sh:device"
-  # verify_v23_javahook.sh deliberately EXCLUDED — LSPlant Java-method hooking (WS-A) is
-  # blocked on this test device (OnePlus/ColorOS A15: libart stripped, 30/44 ART symbols
-  # LSPlant needs are missing — see docs/PROGRESS.md v2.1 + CLAUDE.md "Test device").
-  # Adding it here would make verify_all red on every run on this ROM. Run it manually
-  # on a stock/AOSP device (Pixel) where LSPlant inits; re-add to SCRIPTS only there.
   "verify_v24_javacap.sh:device"
   "verify_v25_fsbrowser.sh:device"
   "verify_v26_cryptocoverage.sh:device"

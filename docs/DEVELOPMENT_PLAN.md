@@ -84,7 +84,7 @@ Web UI（浏览器）：
 
 | 库 | 角色 | 部署位置 |
 |---|---|---|
-| [LSPlant](https://github.com/LSPosed/LSPlant) | ART Java method hook/unhook、inline deoptimization | Agent |
+| [Dobby](https://github.com/jmpews/Dobby) | arm64 native inline hook（by address；静态链接） | Agent（`tools/fetch_dobby.sh`，已验证 v2.2/v28） |
 | [Capstone](https://github.com/capstone-engine/capstone) | 反汇编引擎 | Daemon 为主；Agent 可选轻量 wrapper |
 | [QBDI](https://github.com/QBDI/QBDI) | DBI 框架，指定范围 instruction trace | Agent（按需加载） |
 | [Frida Gadget](https://frida.re) | 可选注入后端：官方 so 由 agent `dlopen` 进目标（也可随 APK 加载 / 重打包）；Frida 17 起 Java/ObjC 语言桥需自行打包 | `tools/load_frida_gadget.sh`（已落地）+ 重打包打包器（延后，见 §6.10） |
@@ -287,7 +287,7 @@ Web UI **必须标注事件来源**：`Java API` / `libc` / `syscall/DBI` / `可
 
 ---
 
-### 4.3 Java Hook Engine（LSPlant）
+### 4.3 Java Hook Engine（LSPlant）—— **不在 v1**（代码已移除；见 REQUIREMENTS §7）
 
 ```text
 JavaHookEngine

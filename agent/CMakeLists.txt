@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.22)
 project(idh_agent C CXX)
 
 set(CMAKE_C_STANDARD 11)
-set(CMAKE_CXX_STANDARD 20)          # LSPlant v6.4 needs C++20
+set(CMAKE_CXX_STANDARD 20)          # C++ hook shims (Dobby)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_C_VISIBILITY_PRESET hidden)
 
@@ -31,59 +31,27 @@ else()
     message(WARNING "QBDI headers absent — run tools/fetch_qbdi.sh for instruction trace")
 endif()
 
-# LSPlant (ART Java-method hook, WS-A) — present only if tools/fetch_lsplant.sh has run.
-# Guarded so the agent still builds without it (like QBDI). When present we compile the
-# C++ shim + LSPlant + DexBuilder and define ADH_HAVE_LSPLANT for agent_main.c.
-set(LSP "${CMAKE_CURRENT_SOURCE_DIR}/third_party/lsplant/lsplant/src/main/jni")
-set(DXB "${LSP}/external/dex_builder")
+# Native inline-hook backend (Dobby, arm64). Present only after tools/fetch_dobby.sh has run;
+# without it the agent still builds and adh_inline_crypto_test reports "inline backend not built".
+# (LSPlant Java-method hooking was removed from the v1 scope — it cannot initialise on stripped
+#  libart ROMs, so it was neither shippable nor verifiable; see docs/PROGRESS.md.)
 set(DOB "${CMAKE_CURRENT_SOURCE_DIR}/third_party/dobby")
-set(LSPLANT_LIBS "")
-set(LSPLANT_INC "")
-set(DOBBY_AVAILABLE FALSE)
+set(HOOK_LIBS "")
+set(HOOK_INC "")
 if(EXISTS "${DOB}/lib/arm64-v8a/libdobby.a" AND EXISTS "${DOB}/include/dobby.h")
     message(STATUS "Dobby present — enabling native inline-hook backend")
     list(APPEND AGENT_SOURCES src/hook/native_inline_dobby.cpp)
-    list(APPEND LSPLANT_INC ${DOB}/include)
-    list(APPEND LSPLANT_LIBS "${DOB}/lib/arm64-v8a/libdobby.a")
-    set(DOBBY_AVAILABLE TRUE)
+    list(APPEND HOOK_INC ${DOB}/include)
+    list(APPEND HOOK_LIBS "${DOB}/lib/arm64-v8a/libdobby.a")
     add_compile_definitions(ADH_HAVE_INLINE_HOOK=1)
-endif()
-
-if(EXISTS "${LSP}/lsplant.cc" AND DOBBY_AVAILABLE)
-    message(STATUS "LSPlant present — enabling Java-method hook backend (Dobby prebuilt static)")
-    add_subdirectory("${DXB}/external/parallel_hashmap" phmap_build EXCLUDE_FROM_ALL)
-    list(APPEND AGENT_SOURCES
-        src/hook/java_lsplant.cpp
-        ${LSP}/lsplant.cc
-        ${DXB}/dex_builder.cc
-        ${DXB}/dex_helper.cc
-        ${DXB}/slicer/reader.cc  ${DXB}/slicer/writer.cc
-        ${DXB}/slicer/dex_ir.cc  ${DXB}/slicer/common.cc
-        ${DXB}/slicer/dex_format.cc ${DXB}/slicer/dex_utf8.cc
-        ${DXB}/slicer/dex_bytecode.cc ${DXB}/slicer/sha1.cpp
-    )
-    list(APPEND LSPLANT_INC ${LSP} ${LSP}/include ${DXB}/include ${DXB})
-    list(APPEND LSPLANT_LIBS z phmap)
-    add_compile_definitions(ADH_HAVE_LSPLANT=1)
-    # LSPlant/DexBuilder upstream warnings are not ours — don't fail on them.
-    set_source_files_properties(
-        ${LSP}/lsplant.cc ${DXB}/dex_builder.cc ${DXB}/dex_helper.cc
-        ${DXB}/slicer/reader.cc ${DXB}/slicer/writer.cc ${DXB}/slicer/dex_ir.cc
-        ${DXB}/slicer/common.cc ${DXB}/slicer/dex_format.cc ${DXB}/slicer/dex_utf8.cc
-        ${DXB}/slicer/dex_bytecode.cc ${DXB}/slicer/sha1.cpp
-        PROPERTIES COMPILE_FLAGS "-Wno-everything")
 else()
-    if(NOT DOBBY_AVAILABLE)
-        message(WARNING "Dobby absent — run tools/fetch_lsplant.sh for native inline hooking")
-    else()
-        message(WARNING "LSPlant absent — run tools/fetch_lsplant.sh for Java-method hooking")
-    endif()
+    message(WARNING "Dobby absent — run tools/fetch_dobby.sh for native inline hooking")
 endif()
 
 add_library(idh_agent SHARED ${AGENT_SOURCES})
 
 # Release footprint: keep only the three bootstrap entry points in .dynsym.
-# Dobby/LSPlant/libc++ internals stay local to this DSO; Zygisk resolves only
+# Dobby/libc++ internals stay local to this DSO; Zygisk resolves only
 # adh_agent_start/idh_agent_start and System.loadLibrary resolves JNI_OnLoad.
 set(AGENT_EXPORT_MAP "${CMAKE_CURRENT_SOURCE_DIR}/exports.map")
 if(NOT EXISTS "${AGENT_EXPORT_MAP}")
@@ -91,13 +59,13 @@ if(NOT EXISTS "${AGENT_EXPORT_MAP}")
 endif()
 target_link_options(idh_agent PRIVATE "-Wl,--version-script=${AGENT_EXPORT_MAP}")
 
-target_include_directories(idh_agent PRIVATE ${QBDI_INC} ${LSPLANT_INC})
+target_include_directories(idh_agent PRIVATE ${QBDI_INC} ${HOOK_INC})
 
 # Android system libs: log (android/log.h), plus libc/pthread (implicit).
 find_library(log-lib log)
-target_link_libraries(idh_agent ${log-lib} dl ${LSPLANT_LIBS})
+target_link_libraries(idh_agent ${log-lib} dl ${HOOK_LIBS})
 
 # Keep our own code small + hidden; -Wall/-Wextra apply to C agent sources only
-# (LSPlant/DexBuilder sources get -Wno-everything above).
+# (Third-party hook sources get -Wno-everything above.)
 target_compile_options(idh_agent PRIVATE -O2 -fvisibility=hidden)
 target_compile_options(idh_agent PRIVATE $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra>)
