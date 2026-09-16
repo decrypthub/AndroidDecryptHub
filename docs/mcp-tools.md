@@ -1,6 +1,6 @@
 # ADH MCP Tools
 
-Generated from the live ADH Daemon registry (47 tools). Endpoint: `POST /mcp` (JSON-RPC 2.0).
+Generated from the live ADH Daemon registry (48 tools). Endpoint: `POST /mcp` (JSON-RPC 2.0).
 
 | Tool | Description | Args |
 |---|---|---|
@@ -51,3 +51,4 @@ Generated from the live ADH Daemon registry (47 tools). Endpoint: `POST /mcp` (J
 | `phone_wait` | Wait for screen state or a selector to appear/disappear, optionally scrolling a virtualized list until it appears. | text, textContains, resourceId, contentDescription, contentDescriptionContains, clickable, editable, scrollable, index, activePackage, activityContains, gone, timeoutMs, intervalMs, scroll, direction, maxScrolls, maxNodes, interactiveOnly, package |
 | `phone_act` | Act on the active phone screen. Prefer a selector or snapshotId+ref from phone_observe; use normalized coordinates only as the visual fallback. Supports tap, long_press, swipe, scroll, set_text and global back/home/recents/notifications/quick_settings/power/lock/screenshot. | text, textContains, resourceId, contentDescription, contentDescriptionContains, clickable, editable, scrollable, index, snapshotId, action, ref, x, y, x2, y2, coordinateSpace, key, direction, durationMs, observeAfter, package |
 | `phone_app` | Open, stop or restart an allowlisted app by package name. Open uses the root Device Daemon when protocol v6+ is available, with a compatibility fallback for older daemons; stop/restart delegate to the same authenticated daemon. | action, package |
+| `phone_device` | Read or control device power state: status, wake, unlock a non-secure keyguard, or lock the screen. Secure credentials are never bypassed. | action |

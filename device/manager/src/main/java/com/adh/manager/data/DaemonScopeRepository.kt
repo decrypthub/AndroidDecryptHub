@@ -25,6 +25,8 @@ interface DaemonClient {
     fun setXposedScope(packages: List<String>): Boolean
     val automationEnabled: Boolean
     fun setAutomationEnabled(enabled: Boolean): Boolean
+    fun wakeScreen(): Boolean
+    fun dismissKeyguard(): Boolean
 }
 
 class DaemonScopeRepository(

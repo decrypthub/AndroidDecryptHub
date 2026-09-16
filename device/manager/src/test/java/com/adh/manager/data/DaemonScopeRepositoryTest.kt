@@ -217,5 +217,7 @@ class DaemonScopeRepositoryTest {
             automationState = enabled
             return true
         }
+        override fun wakeScreen(): Boolean = protocolVersion >= AdhProtocol.MIN_DEVICE_POWER_VERSION
+        override fun dismissKeyguard(): Boolean = protocolVersion >= AdhProtocol.MIN_DEVICE_POWER_VERSION
     }
 }

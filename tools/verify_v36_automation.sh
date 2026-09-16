@@ -94,6 +94,7 @@ try {
   chk('phone_find is exposed when automation is enabled', names.has('phone_find'));
   chk('phone_wait is exposed when automation is enabled', names.has('phone_wait'));
   chk('phone_app is exposed when automation is enabled', names.has('phone_app'));
+  chk('phone_device is exposed when automation is enabled', names.has('phone_device'));
   chk('phone_act is exposed when automation is enabled', names.has('phone_act'));
 
   const observe = await callTool('phone_observe', { mode: 'tree', includeScreenshot: false, maxNodes: 80 });
@@ -102,6 +103,10 @@ try {
   chk('observe is pinned to the sandbox package', tree.activePackage === 'com.adh.sandbox', `active=${tree.activePackage}`);
   chk('tree contains actionable nodes', Array.isArray(tree.nodes) && tree.nodes.length > 0, `nodes=${tree.nodes?.length ?? 0}`);
   chk('observe reports truncation state', tree.truncated === false, `truncated=${tree.truncated}`);
+
+  const power = await callTool('phone_device', { action: 'status' });
+  const powerData = JSON.parse(power.content?.find((item) => item.type === 'text')?.text);
+  chk('phone_device reports a boolean screen state', typeof powerData.interactive === 'boolean' && typeof powerData.locked === 'boolean', `interactive=${powerData.interactive} locked=${powerData.locked}`);
 
   const activeWait = await callTool('phone_wait', { activePackage: 'com.adh.sandbox', timeoutMs: 5000, intervalMs: 150, maxNodes: 120 });
   const activeWaitData = JSON.parse(activeWait.content?.find((item) => item.type === 'text')?.text);

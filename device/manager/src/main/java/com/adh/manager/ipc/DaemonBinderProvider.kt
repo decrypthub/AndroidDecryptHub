@@ -83,6 +83,8 @@ class DaemonBinderProvider : ContentProvider() {
                 override val automationEnabled: Boolean get() = service.isAutomationEnabled
                 override fun setAutomationEnabled(enabled: Boolean): Boolean =
                     service.setAutomationEnabled(enabled)
+                override fun wakeScreen(): Boolean = service.wakeScreen()
+                override fun dismissKeyguard(): Boolean = service.dismissKeyguard()
             }
             runCatching {
                 binder.linkToDeath({

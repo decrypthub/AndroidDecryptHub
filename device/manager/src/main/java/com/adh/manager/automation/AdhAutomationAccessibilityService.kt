@@ -1,6 +1,7 @@
 package com.adh.manager.automation
 
 import android.accessibilityservice.AccessibilityService
+import android.app.KeyguardManager
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.accessibilityservice.GestureDescription
 import android.content.Intent
@@ -9,6 +10,7 @@ import android.graphics.Path
 import android.graphics.Rect
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.os.SystemClock
 import android.provider.Settings
 import android.util.Base64
@@ -90,6 +92,7 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
         "observe" -> observe(args)
         "act" -> act(args)
         "app" -> app(args)
+        "device" -> device(args)
         "status" -> status()
         else -> throw AutomationException("unsupported_op", "unsupported automation op: $op")
     }
@@ -235,6 +238,51 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
     }
 
 
+
+
+    private fun device(args: JSONObject): JSONObject {
+        val action = args.optString("action", "status")
+        return when (action) {
+            "status" -> powerStatus()
+            "wake" -> {
+                requireDeviceDaemon().wakeScreen()
+                powerStatus()
+            }
+            "unlock" -> {
+                val daemon = requireDeviceDaemon()
+                daemon.wakeScreen()
+                val dismissed = daemon.dismissKeyguard()
+                powerStatus().put("dismissed", dismissed)
+            }
+            "lock" -> {
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+                    throw AutomationException("device_unsupported", "lock action requires Android 9 or newer")
+                }
+                if (!performGlobalAction(GLOBAL_ACTION_LOCK_SCREEN)) {
+                    throw AutomationException("device_rejected", "system rejected lock action")
+                }
+                JSONObject().put("action", "lock").put("result", "ok")
+            }
+            else -> throw AutomationException("bad_device_action", "device action must be status, wake, unlock or lock")
+        }
+    }
+
+    private fun powerStatus(): JSONObject {
+        val power = getSystemService(PowerManager::class.java)
+        val keyguard = getSystemService(KeyguardManager::class.java)
+        return JSONObject()
+            .put("interactive", power?.isInteractive ?: false)
+            .put("locked", keyguard?.isKeyguardLocked ?: false)
+    }
+
+    private fun requireDeviceDaemon(): com.adh.manager.data.DaemonClient {
+        val client = DaemonBinderProvider.awaitClient(3_000)
+            ?: throw AutomationException("device_daemon_unavailable", "ADH Device Daemon is unavailable")
+        if (client.protocolVersion < AdhProtocol.MIN_DEVICE_POWER_VERSION) {
+            throw AutomationException("device_daemon_old", "Device Daemon protocol ${client.protocolVersion} has no power control")
+        }
+        return client
+    }
 
     private fun app(args: JSONObject): JSONObject {
         val action = args.optString("action")

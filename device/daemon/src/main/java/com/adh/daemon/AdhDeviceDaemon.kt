@@ -50,6 +50,22 @@ object AdhDeviceDaemon {
                 val context = SystemContext.create()
                 exitProcess(if (AutomationServiceControl.ensureEnabled(context)) 0 else 1)
             }
+            "--device-status" -> {
+                requireRoot()
+                Looper.prepareMainLooper()
+                println(DevicePowerControl.statusJson(SystemContext.create()))
+                return
+            }
+            "--device-wake" -> {
+                requireRoot()
+                Looper.prepareMainLooper()
+                exitProcess(if (DevicePowerControl.wake(SystemContext.create())) 0 else 1)
+            }
+            "--device-dismiss-keyguard" -> {
+                requireRoot()
+                Looper.prepareMainLooper()
+                exitProcess(if (DevicePowerControl.dismissKeyguard(SystemContext.create())) 0 else 1)
+            }
         }
         Thread.setDefaultUncaughtExceptionHandler { _, error ->
             Log.e(TAG, "fatal daemon error", error)

@@ -96,6 +96,21 @@ internal class RootScopeBinder(
         return AutomationServiceControl.setEnabled(context, enabled)
     }
 
+    override fun getDevicePowerStatus(): String {
+        verifier.enforce()
+        return DevicePowerControl.statusJson(context)
+    }
+
+    override fun wakeScreen(): Boolean {
+        verifier.enforce()
+        return DevicePowerControl.wake(context)
+    }
+
+    override fun dismissKeyguard(): Boolean {
+        verifier.enforce()
+        return DevicePowerControl.dismissKeyguard(context)
+    }
+
     private fun atomicWrite(target: File, content: String) {
         target.parentFile?.mkdirs()
         val temp = File(target.parentFile, ".${target.name}.${android.os.Process.myPid()}.tmp")

@@ -30,4 +30,10 @@ interface IAdhScopeService {
     boolean isAutomationEnabled();
     /** Protocol v7: enable/disable ADH's automation AccessibilityService after an explicit user action. */
     boolean setAutomationEnabled(boolean enabled);
+    /** Protocol v8: compact JSON state: interactive, locked. */
+    String getDevicePowerStatus();
+    /** Protocol v8: wake the display if it is off. */
+    boolean wakeScreen();
+    /** Protocol v8: dismiss a non-secure keyguard; secure credentials are never bypassed. */
+    boolean dismissKeyguard();
 }

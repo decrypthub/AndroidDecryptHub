@@ -84,6 +84,7 @@ MCP_TOOLS.push(
   { name: 'phone_wait', description: 'Wait for screen state or a selector to appear/disappear, optionally scrolling a virtualized list until it appears.', inputSchema: { type: 'object', properties: { ...SEL, activePackage: S, activityContains: S, gone: { type: 'boolean' }, timeoutMs: N, intervalMs: N, scroll: { type: 'boolean' }, direction: { type: 'string', enum: ['forward', 'backward'] }, maxScrolls: N, maxNodes: N, interactiveOnly: { type: 'boolean' }, package: S } }, handler: async (a) => waitPhone(a) },
   { name: 'phone_act', description: 'Act on the active phone screen. Prefer a selector or snapshotId+ref from phone_observe; use normalized coordinates only as the visual fallback. Supports tap, long_press, swipe, scroll, set_text and global back/home/recents/notifications/quick_settings/power/lock/screenshot.', inputSchema: { type: 'object', properties: { ...SEL, snapshotId: S, action: { type: 'string', enum: ['tap', 'long_press', 'swipe', 'scroll', 'set_text', 'global'] }, ref: S, x: N, y: N, x2: N, y2: N, coordinateSpace: { type: 'string', enum: ['normalized', 'pixel'] }, text: S, key: { type: 'string', enum: ['back', 'home', 'recents', 'notifications', 'quick_settings', 'power', 'lock', 'screenshot'] }, direction: { type: 'string', enum: ['forward', 'backward'] }, durationMs: N, observeAfter: { type: 'boolean' }, package: S }, required: ['action'] }, raw: true, handler: async (a) => actPhone(a) },
   { name: 'phone_app', description: 'Open, stop or restart an allowlisted app by package name. Open uses the root Device Daemon when protocol v6+ is available, with a compatibility fallback for older daemons; stop/restart delegate to the same authenticated daemon.', inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['open', 'stop', 'restart'] }, package: S }, required: ['action', 'package'] }, handler: async (a) => appPhone(a) },
+  { name: 'phone_device', description: 'Read or control device power state: status, wake, unlock a non-secure keyguard, or lock the screen. Secure credentials are never bypassed.', inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['status', 'wake', 'unlock', 'lock'] } }, required: ['action'] }, handler: async (a) => devicePhone(a) },
 );
 
 const SELECTOR_KEYS = ['text', 'textContains', 'resourceId', 'contentDescription', 'contentDescriptionContains', 'clickable', 'editable', 'scrollable'];
@@ -203,6 +204,11 @@ async function waitPhone(args: any) {
     }
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
+}
+
+async function devicePhone(args: any) {
+  assertAutomationReady();
+  return await automation.cmd('device', { action: args.action }, 20_000);
 }
 
 async function appPhone(args: any) {

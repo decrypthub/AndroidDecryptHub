@@ -19,7 +19,7 @@ framework. It shells out to `/data/adb/lspd/cli` (the framework's own surface â€
 
 | Surface | Purpose |
 |---|---|
-| `IAdhScopeService.getXposedStatus/setXposedEnabled/setXposedScope` (protocol **v5+**; current protocol **v7**) | Manager UI: card in the Scope screen; the ADH allowlist is mirrored into the framework scope whenever it is saved while the backend is enabled |
+| `IAdhScopeService.getXposedStatus/setXposedEnabled/setXposedScope` (protocol **v5+**; current protocol **v8**) | Manager UI: card in the Scope screen; the ADH allowlist is mirrored into the framework scope whenever it is saved while the backend is enabled |
 | `app_process â€¦ com.adh.daemon.AdhDeviceDaemon --xposed-status\|--xposed-enable\|--xposed-disable\|--xposed-scope <pkgs>` | root-only one-shot CLI (same code paths as AIDL) for operators and `tools/verify_v32_backend_control.sh` |
 
 Framework quirks encoded here: `scope set <module>` with **no** apps throws (so clearing removes
