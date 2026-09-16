@@ -1,0 +1,18 @@
+{
+  "default": "2.6.0",
+  "comment": "Pinned eCapture releases — official GitHub releases only. sha256 values are taken from the release's own checksum-<version>.txt. aarch64 needs kernel >= 5.5 AND BTF (CONFIG_DEBUG_INFO_BTF / /sys/kernel/btf/vmlinux); without BTF the CO-RE eBPF programs cannot load (see tools/ecapture_capture.sh --preflight-only).",
+  "versions": {
+    "2.6.0": {
+      "arm64": {
+        "asset": "ecapture-v2.6.0-android-arm64.tar.gz",
+        "url": "https://github.com/gojue/ecapture/releases/download/v2.6.0/ecapture-v2.6.0-android-arm64.tar.gz",
+        "sha256": "ed784508e5d00484dc5f94df8e5dc5a94cdce5228deee747a298c967a12e2c2e",
+        "archive": "tar.gz",
+        "binary": "ecapture",
+        "minKernel": "5.5",
+        "needsBtf": true,
+        "source": "official-ecapture-release"
+      }
+    }
+  }
+}

@@ -70,6 +70,9 @@ SCRIPTS=(
   # Optional backend CONTROL path (module W): Device Daemon drives the framework scope/module
   # state; restores the pre-test state. SKIPs when there is no framework/module.
   "verify_v32_backend_control.sh:device"
+  # Optional eCapture backend (module W): eBPF TLS plaintext capture. Needs root + eBPF kernel;
+  # SKIPs with an explicit reason when the kernel cannot load eBPF programs.
+  "verify_v34_ecapture.sh:device"
 )
 
 pass=0; fail=0; skip=0; FAILED=""

@@ -679,6 +679,7 @@ disasm 只 `llvm-objdump`（文件型 so），缺 **Capstone 内存镜像反汇�
   + `tools/build_xposed.sh`（把 agent `.so` 打进模块）/ `tools/install_xposed.sh`（`vector-cli` 启用 + scope，`--disable` 逐条 `scope rm`）/ `tools/verify_v31_xposed.sh`（真机验收，自动恢复测试前状态）。
   设备事实：Vector 给模块的 `nativeLibraryDirectories` 指向 `base.apk!/lib/arm64-v8a` → agent `.so` 必须**未压缩**打包（`useLegacyPackaging=false`）；空参数 `scope set` 在 Vector 2.2 抛 NPE，清 scope 必须逐条 `scope rm`。
   **控制面已落地（2026-09-15）**：Device Daemon 的 `XposedBackend` 独占驱动框架（只调 `/data/adb/lspd/cli`），AIDL v5 暴露 status/enable/scope，Manager Scope 页有卡片并把 ADH 允许名单镜像进框架 scope；另有 root-only 一次性 CLI 供运维与 `tools/verify_v32_backend_control.sh`。注入中心亦已收口：主机 `GET /api/backends` + Web 控制台"注入后端"页（`tools/verify_v33_backends.sh`）。待办：多进程目标、Gadget 的一键下发（daemon 无 adb，当前只给命令模板）。
+- **eCapture（可选，root + eBPF，2026-09-16 真机验证）**：`tools/fetch_ecapture.sh`（官方发布、版本固定、sha256 取自官方 checksum 文件） / `tools/ecapture_capture.sh`（`--preflight-only` 给 root/内核/BPF/BTF 判定，运行后按 `probe started successfully` 给结论） / `tools/verify_v34_ecapture.sh`（MCP 驱动真实 HTTPS，断言 eCapture 抓到请求与响应明文）。门槛：root + aarch64 内核 ≥5.5 + eBPF；**BTF 非必需**（本机 5.10 / BTF=n 实测可用），故只作提示。
 - 红线：可选后端只在**显式调用**时启用（默认注入路径不变）；目标进程内不得承载 HTTP/DB/分析；不 vendor 上游 GPL 代码。
 
 ---

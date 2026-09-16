@@ -15,6 +15,12 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 idhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [x] **模块 W 可选后端：eCapture（eBPF 抓 TLS 明文，2026-09-16 真机验证）**：官方发布固定版本 + 官方 checksum 里的 sha256（`tools/ecapture_versions.json` / `tools/fetch_ecapture.sh`），
+      运行器 `tools/ecapture_capture.sh`：`--preflight-only` 打印 root/内核/`CONFIG_BPF_SYSCALL`/`CONFIG_UPROBES`/BTF 能力并给判定，运行后按输出里的 `probe started successfully` 给结论（失败打印首条错误），产出落 `captures/ecapture/`。
+      · 关键更正：**内核 BTF 不是必需**（本机 5.10 / `CONFIG_DEBUG_INFO_BTF=n`，初版预检把 BTF 当硬门槛 → 实测 OpenSSL probe 正常启动后改为"提示"），真正的能力信号是 probe 是否启动。
+      · 验收 `tools/verify_v34_ecapture.sh` 真机 PASS：官方二进制 → 预检 supported → 对 sandbox 起 TLS probe → **用 MCP `net_capture` 驱动一次真实 HTTPS** → eCapture 抓到请求明文 `ADH_NET_MARKER_v1` + 响应明文 `ADH_NET_RESPONSE_v1`。
+        对比证据：同一次请求里 agent 自己的 GOT hook 是 `hooked={"write":0,"read":0}`，eCapture 仍抓到两者 —— 两者是**互补边界**（uprobe vs GOT）。
+      · 门槛：root + aarch64 内核 ≥5.5 + eBPF；内核不支持时验收 SKIP 并给出确切原因。
 - [x] **沙盒定位澄清：只做"可手动点击的插件测试宿主"（2026-09-16）**：删掉了沙盒 App 里的"观测控制台"（LAN 地址探测 / `/health` 轮询 / 剪贴板与浏览器动作）—— 控制台是 Web UI 与 ADH Manager 的职责；
       保留并明确「状态 / 加解密 / 网络·文件 / 脱壳 / 日志」五个**可点击**标签页，用于手动点测各能力切片；启动初始化（mock dex、模拟注入 `System.loadLibrary`、AdhSecurity 提供者、低频加密流）不变。
       · 中途试过把它改写成"正常小店 App"（商品→下单→支付→订单→我的），经确认**回退**：手动点测更方便，测试宿主形态更合适；插件按类名触发的入口（JavaCrypto/Network/CorrelatedFlow/FileIO/Detection/HookTarget）保持原样。
