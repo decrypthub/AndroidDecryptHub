@@ -129,6 +129,7 @@ export const SETTINGS_FILE = join(DATA_DIR, 'settings.json');
 export interface Settings {
   capture: { enabled: boolean; autoDumpDex: boolean; retain: number; families: Record<string, boolean>; cryptoModule: string; fileModule: string; sysModule: string };
   ui: { displayCap: number };
+  automation: { enabled: boolean; screenshot: boolean; packages: string[]; maxNodes: number; screenshotMaxDimension: number };
 }
 export const DEFAULT_SETTINGS: Settings = {
   // cryptoModule: which module's GOT holds the EVP/SSL calls the agent hooks. The agent bakes
@@ -142,6 +143,7 @@ export const DEFAULT_SETTINGS: Settings = {
   // self-test; override per real target (empty string = don't install that category's hooks).
   capture: { enabled: true, autoDumpDex: true, retain: 1000, families: { digest: true, hmac: true, symmetric: true, asymmetric: true, tls: true, aead: true }, cryptoModule: 'libjavacrypto.so', fileModule: 'libjavacore.so', sysModule: 'libadhdetect.so' },
   ui: { displayCap: 300 },
+  automation: { enabled: false, screenshot: true, packages: [], maxNodes: 300, screenshotMaxDimension: 1280 },
 };
 export let settings: Settings = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
 // section-merge (like IDH /api/settings/import): only the segments present in `patch` apply.
@@ -164,6 +166,16 @@ export function mergeSettings(patch: any): string[] {
   if (patch.ui && typeof patch.ui === 'object') {
     if (Number.isFinite(patch.ui.displayCap)) settings.ui.displayCap = Math.max(50, Math.min(5000, Math.floor(patch.ui.displayCap)));
     applied.push('ui');
+  }
+  if (patch.automation && typeof patch.automation === 'object') {
+    const a = patch.automation;
+    if (typeof a.enabled === 'boolean') settings.automation.enabled = a.enabled;
+    if (typeof a.screenshot === 'boolean') settings.automation.screenshot = a.screenshot;
+    if (Array.isArray(a.packages))
+      settings.automation.packages = [...new Set(a.packages.map((v: unknown) => String(v).trim()).filter(Boolean))].sort();
+    if (Number.isFinite(a.maxNodes)) settings.automation.maxNodes = Math.max(20, Math.min(2000, Math.floor(a.maxNodes)));
+    if (Number.isFinite(a.screenshotMaxDimension)) settings.automation.screenshotMaxDimension = Math.max(480, Math.min(2400, Math.floor(a.screenshotMaxDimension)));
+    applied.push('automation');
   }
   return applied;
 }

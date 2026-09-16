@@ -29,6 +29,18 @@
             </intent-filter>
         </activity>
 
+        <service
+            android:name=".automation.AdhAutomationAccessibilityService"
+            android:exported="true"
+            android:label="@string/automation_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/adh_automation_accessibility_service" />
+        </service>
         <provider
             android:name=".ipc.DaemonBinderProvider"
             android:authorities="com.adh.manager.daemon-bridge"

@@ -65,4 +65,10 @@
     <string name="xposed_state_failed">Xposed 后端操作失败</string>
     <string name="xposed_sync_scope">把当前选择同步到 Xposed</string>
     <string name="xposed_scope_synced">已同步作用域到 Xposed</string>
+    <string name="section_automation">自动化</string>
+    <string name="automation_title">手机自动化（可选）</string>
+    <string name="automation_enabled_summary">已开启。点击打开系统无障碍设置。</string>
+    <string name="automation_disabled_summary">未开启。点击前往系统无障碍设置。</string>
+    <string name="automation_service_label">ADH 手机自动化</string>
+    <string name="automation_service_description">允许 Host ADH Daemon 在用户明确开启后读取控件树或截图，并执行授权应用内的点击、输入和滑动。</string>
 </resources>

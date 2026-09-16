@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { backendMatrix } from '../backends.ts';
+import { automation } from '../automation.ts';
 import { webUrls } from '../config.ts';
 import { handleMcp, MCP_TOOLS } from '../mcp.ts';
 import { applyCaptureEnabled } from '../service.ts';
@@ -102,13 +103,14 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       }
       return send(200, { settings, stats: configStats() });
     } },
+    { path: '/api/automation/status', handler: () => send(200, { ok: true, enabled: settings.automation.enabled, settings: settings.automation, bridge: automation.status() }) },
     { path: '/api/settings/export', handler: () => send(200, settings) },
     { method: 'POST', path: '/api/settings/import', handler: async () => {
       let obj: any;
       try { obj = JSON.parse((await readBody(req)) || '{}'); } catch { return send(400, { error: 'JSON 格式错误' }); }
       if (typeof obj !== 'object' || Array.isArray(obj)) return send(400, { error: '顶层必须是对象' });
       const applied = mergeSettings(obj);
-      if (!applied.length) return send(400, { error: '没有可应用的板块(capture/ui)' });
+      if (!applied.length) return send(400, { error: '没有可应用的板块(capture/ui/automation)' });
       while (captures.length > settings.capture.retain) captures.shift();
       applyCaptureEnabled().catch((e) => log('[settings] applyCaptureEnabled:', (e as Error).message));
       try { saveSettings(); }

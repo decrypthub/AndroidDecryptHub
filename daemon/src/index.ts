@@ -2,7 +2,8 @@
 // Boot + agent-TCP frame decode live here. REST route domains live under src/http/.
 import http from 'node:http';
 import net from 'node:net';
-import { AGENT_PORT, HTTP_PORT, webUrls } from './config.ts';
+import { AGENT_PORT, AUTOMATION_HOST, AUTOMATION_PORT, HTTP_PORT, webUrls } from './config.ts';
+import { automation } from './automation.ts';
 import { handleHttp } from './http/router.ts';
 import { startCaptureLoop } from './service.ts';
 import {
@@ -115,6 +116,10 @@ httpServer.on('upgrade', (req, socket, head) => {
 
 // ---- boot -----------------------------------------------------------------
 
+automation.listen(AUTOMATION_PORT, AUTOMATION_HOST)
+  .then((port) => log(`ADH automation bridge listening on ${AUTOMATION_HOST}:${port}`))
+  .catch((e) => log('automation bridge failed to start:', (e as Error).message));
+
 agentServer.listen(AGENT_PORT, '0.0.0.0', () => log(`ADH Daemon agent TCP listening on :${AGENT_PORT}`));
 httpServer.listen(HTTP_PORT, '0.0.0.0', () => {
   const w = webUrls();
@@ -128,11 +133,11 @@ httpServer.listen(HTTP_PORT, '0.0.0.0', () => {
     log('│  LAN   : (no LAN IPv4 found — console reachable locally only;');
     log(`│          the phone can still open it via \`adb reverse tcp:${HTTP_PORT}\`)`);
   }
-  log(`│  phone : also run 'adb reverse tcp:${AGENT_PORT} tcp:${AGENT_PORT}' + 'adb reverse tcp:${HTTP_PORT} tcp:${HTTP_PORT}'`);
+  log(`│  phone : also run 'adb reverse tcp:${AGENT_PORT} tcp:${AGENT_PORT}' + 'adb reverse tcp:${HTTP_PORT} tcp:${HTTP_PORT}' + 'adb reverse tcp:${AUTOMATION_PORT} tcp:${AUTOMATION_PORT}'`);
   log('└─────────────────────────────────────────────────────────────');
 });
 
-process.on('SIGINT', () => { log('shutting down'); process.exit(0); });
+process.on('SIGINT', () => { log('shutting down'); automation.close().finally(() => process.exit(0)); });
 
 // Periodic session sweep: closes can be missed (kill -9, lost sockets), so bound the map anyway.
 setInterval(() => {

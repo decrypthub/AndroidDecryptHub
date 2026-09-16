@@ -5,6 +5,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HTTP="${ADH_HTTP_PORT:-8088}"
 AGENT="${ADH_AGENT_PORT:-8761}"
+AUTOMATION="${ADH_AUTOMATION_PORT:-8763}"
 
 # 1) ADH Daemon up?
 if curl -s -m 2 "http://127.0.0.1:$HTTP/health" >/dev/null 2>&1; then
@@ -24,8 +25,9 @@ STATE="$(adb get-state 2>/dev/null | tr -d '\r')"
 if [ "$STATE" = "device" ]; then
   SERIAL="${ANDROID_SERIAL:-$(adb devices | awk 'NR==2{print $1}')}"
   adb -s "$SERIAL" reverse tcp:$AGENT tcp:$AGENT >/dev/null 2>&1
+  adb -s "$SERIAL" reverse tcp:$AUTOMATION tcp:$AUTOMATION >/dev/null 2>&1
   adb -s "$SERIAL" reverse tcp:$HTTP tcp:$HTTP >/dev/null 2>&1
-  echo "adb reverse: set ($SERIAL) agent:$AGENT web:$HTTP"
+  echo "adb reverse: set ($SERIAL) agent:$AGENT web:$HTTP automation:$AUTOMATION"
   echo "device: online ($SERIAL)"
   echo "web console: http://127.0.0.1:$HTTP  (open on PC, or in the phone browser via the demo app)"
 else

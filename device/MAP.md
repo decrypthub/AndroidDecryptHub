@@ -26,17 +26,28 @@ Framework quirks encoded here: `scope set <module>` with **no** apps throws (so 
 entries one by one), and `scope set` implicitly enables the module — callers that care about the
 enabled flag must set it explicitly.
 
+## Optional phone automation (module X)
+
+The Manager may host one user-enabled AccessibilityService (`com.adh.manager.automation.AdhAutomationAccessibilityService`). It is off by default, appears only after the user enables it in Android accessibility settings, and only acts on packages in the Host automation allowlist.
+
+- The device is always the client: it dials Host ADH Daemon automation TCP **8763** through `adb reverse`; there is no listener, HTTP server, MCP server, indexer, or analysis in the service.
+- Observation is tree-first. If the active window has no usable nodes, the service may return a compressed screenshot when the Host setting allows it.
+- Actions prefer snapshot-bound node refs; coordinate fallback uses normalized coordinates. `tap`, `long_press`, `swipe`, `set_text`, and `global back/home/recents` are bounded actions.
+- Host MCP hides `phone_*` tools unless `settings.automation.enabled` is true; the device independently enforces the package allowlist.
+
 ## Boundaries (red line)
 
 ```text
 Target App  →  agent/libadh_agent.so     collect only
 Zygisk      →  injector/zygisk           early inject by scope
-Device      →  device/:daemon+:manager   scope + module status + target process control + Host console link
+Device      →  device/:daemon+:manager   scope + module status + target process control + Host console link + optional automation executor
 Host PC     →  daemon/ (ADH Daemon)      HTTP/WS/MCP/analysis
 ```
 
 Never host HTTP/MCP services, a dex indexer, or heavy analysis in the Device Daemon
-or Manager. The Manager may only act as a bounded HTTP client for Host `/health`
+or Manager. The only automation exception is the user-enabled AccessibilityService
+connecting outward to Host automation TCP 8763; it never listens and never analyzes.
+The Manager may still act as a bounded HTTP client for Host `/health`
 so it can display and open the Web UI address; that request never passes through
 the privileged Device Daemon.
 

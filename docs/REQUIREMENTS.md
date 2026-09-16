@@ -4,11 +4,11 @@
 > 适用于任意 App 的运行时观测/dump/hook/trace，并**对高对抗目标（反调试、root/签名检测、代码混淆、加密传输）具备实战能力**。
 > **使用范围**：授权范围内的逆向调查与运行时分析；非法律取证，亦非面向未授权目标的规避工具。
 > **参考项目**：[taisuii/ios-decrypt-helper](https://github.com/taisuii/ios-decrypt-helper)（IOSDecryptHub）
-> **本文档范围**：本文档是**唯一权威功能规格**（模块 A–W）。开发步骤与排期见 `DEVELOPMENT_PLAN.md`。
+> **本文档范围**：本文档是**唯一权威功能规格**（模块 A–X）。开发步骤与排期见 `DEVELOPMENT_PLAN.md`。
 
 ---
 
-> **⚠️ v2.0+ 加固重构（当前工作面）**：模块 A–W 的能力在 v0.1–v1.0 已全部"跑通一遍"。
+> **⚠️ v2.0+ 加固重构（当前工作面）**：模块 A–W 的能力在 v0.1–v1.0 已全部"跑通一遍"，X 为新增的可选手机自动化面。
 > 当前轮（v2.0+）不是加新模块，而是**把既有每条路径做到不骗人**——真实 hook 覆盖面（Java/inline）、
 > 去 sandbox 耦合、环形缓冲如实上报、length-framed 协议、持久索引、脱壳二代、确定性关联等。
 > 权威工作流与排期见 `DEVELOPMENT_PLAN.md §6.9`（WS-A…WS-K / v2.0–v2.6）。三条门禁：不为过测而耦合、
@@ -1493,4 +1493,48 @@ Agent → TCP 8761 → ADH Daemon（host，经 adb reverse）
 - Gadget 在控制台里只做"命令模板 + 检测"，一键下发仍走主机工具（daemon 无 adb）。
 ---
 
-*本文档是唯一权威功能规格（模块 A–W）。开发步骤与排期见 `DEVELOPMENT_PLAN.md`，跨会话进度见 `PROGRESS.md`。*
+
+## 31. X — 可选手机自动化（UI 观测与执行）
+
+**目标**：在用户明确开启后，让 Host ADH Daemon / MCP 能观察并操作授权 App 的界面，为 AI 手机控制提供稳定、可审计的执行面。默认关闭。
+
+### 31.1 分层
+
+```text
+Host ADH Daemon / MCP  →  自动化 TCP 8763（loopback + adb reverse）  →  Manager AccessibilityService
+                                                                    ├─ 控件树
+                                                                    └─ 截图 + 归一化坐标动作
+```
+
+- 设备侧只允许 `:manager` 中用户启用的 `AdhAutomationAccessibilityService` 作为客户端拨入 Host，不监听端口、不承载 HTTP/MCP/索引/分析。
+- agent `.so` 第一版不参与 UI 自动化；后续只允许以事件/单步调用方式补充目标进程内部状态。
+
+### 31.2 MCP 面
+
+| 工具 | 说明 |
+|---|---|
+| `automation_status` | 只读状态：Host 开关、桥接连接、设备能力、允许包名；不能开启自动化 |
+| `phone_observe` | 优先返回控件树；树为空或非语义时返回压缩截图；tree/visual/auto 三种模式 |
+| `phone_act` | `tap` / `long_press` / `swipe` / `set_text` / `global back/home/recents`；优先 `snapshotId+ref`，兜底归一化坐标 |
+
+### 31.3 兜底规则
+
+1. 控件树包含文本、contentDescription、resourceId、bounds、可执行动作和 snapshot-bound ref。
+2. 控件树为空、不可操作或目标页面为自绘内容时，截图作为第二感知层返回（JPEG，默认最长边 1280；MCP 通过 image content 返回，不持久化原图）。
+3. 视觉动作只能使用归一化坐标或显式像素坐标；ref 只能用于对应 snapshotId，动作完成后 ref 失效。
+4. `FLAG_SECURE` 等受保护窗口截图失败必须 fail-loud 返回 `screenshot_failed` / `screenshot_unsupported`，不得伪造画面。
+
+### 31.4 开关与安全
+
+- Host `settings.automation.enabled` 默认 `false`；关闭时 MCP `tools/list` 不返回 `phone_*`。
+- 自动化必须同时满足：用户在 Android 无障碍设置中启用服务、Host 开关打开、当前前台包在独立 allowlist 内。
+- 不复用注入 scope；不提供任意 shell；系统弹窗/权限页/支付页默认不自动授权。
+- 截图可单独关闭；设备侧再次校验 allowlist，不能靠 MCP 参数绕过。
+
+### 31.5 验收
+
+`tools/verify_v36_automation.sh`：MCP 工具可见性、控件树、语义 ref 点击、视觉截图兜底、归一化坐标点击、滑动；桥接未启用时 SKIP。真机证据见 `docs/PROGRESS.md`。
+
+---
+
+*本文档是唯一权威功能规格（模块 A–X）。开发步骤与排期见 `DEVELOPMENT_PLAN.md`，跨会话进度见 `PROGRESS.md`。*

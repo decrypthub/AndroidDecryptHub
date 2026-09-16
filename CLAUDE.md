@@ -8,7 +8,7 @@ Guidance for Claude working in this repo. Keep this file short. Only rules that 
 
 ## Source of truth (read before changing scope)
 
-- `docs/REQUIREMENTS.md` — the single authoritative spec of **what** we build (modules A–W).
+- `docs/REQUIREMENTS.md` — the single authoritative spec of **what** we build (modules A–X).
 - `docs/DEVELOPMENT_PLAN.md` — **how / architecture / roadmap**.
 - `docs/PROGRESS.md` — **where we are right now**; update it every session. This is how work survives across sessions.
 - `docs/FEATURE_STATUS.md` — **发布范围与功能状态**（测过 / 没测 / 没通过 / 半成品四类）；发版或对外承诺前先看这里。
@@ -53,7 +53,7 @@ Loop: **Explore → Plan → Implement → Verify**, then iterate on the result.
 
 ## Scope priority (current)
 
-Build **`libadh_agent.so` functionality** and self-test via 模拟注入 (sandbox `dlopen`). **Module W**: Zygisk (`injector/zygisk`) + device multi-module (`device/` Compose Manager + root Device Daemon). Frida Gadget is available as an **optional, off-by-default** backend (`tools/load_frida_gadget.sh`, verified by `tools/verify_v30_fridagadget.sh`; Frida 17+ hooks using `Java.perform()` must be bundled with `tools/compile_frida_script.sh`). An optional LSPosed/Xposed thin module is also available (`injector/xposed/`, built by `tools/build_xposed.sh`, verified by `tools/verify_v31_xposed.sh`) — it only loads the agent, never analysis code. Do not block feature verification on real injection — CI stays on 模拟注入.
+Build **`libadh_agent.so` functionality** and self-test via 模拟注入 (sandbox `dlopen`). **Module W**: Zygisk (`injector/zygisk`) + device multi-module (`device/` Compose Manager + root Device Daemon). Optional module X (phone automation) is off by default: the user enables the Manager AccessibilityService, Host MCP exposes `phone_observe`/`phone_act` only while `settings.automation.enabled` is true, and the device bridge is execution-only over TCP `8763` with a package allowlist. Never add HTTP/MCP/analysis to that device service. Frida Gadget is available as an **optional, off-by-default** backend (`tools/load_frida_gadget.sh`, verified by `tools/verify_v30_fridagadget.sh`; Frida 17+ hooks using `Java.perform()` must be bundled with `tools/compile_frida_script.sh`). An optional LSPosed/Xposed thin module is also available (`injector/xposed/`, built by `tools/build_xposed.sh`, verified by `tools/verify_v31_xposed.sh`) — it only loads the agent, never analysis code. Do not block feature verification on real injection — CI stays on 模拟注入.
 
 ## Verification (give yourself a real signal)
 
@@ -93,7 +93,7 @@ bash tools/verify_v04_crypto.sh    # a single acceptance check (exit 0 = PASS). 
 
 ```
 
-Ports: Host ADH Daemon HTTP/WS `8088` (LAN, same as iOS `idh`), agent TCP `8761` (override via `ADH_HTTP_PORT` / `ADH_AGENT_PORT`). Prefer `http://<LAN>:8088/<package>` to pin an app; do not default to `127.0.0.1`. Agent dials host through `adb reverse`; `dev_up.sh` sets both tunnels. New-machine repro order: `fetch_qbdi` → `build_agent` → `build_detect` → `dev_up` → `verify_all`.
+Ports: Host ADH Daemon HTTP/WS `8088` (LAN, same as iOS `idh`), agent TCP `8761`, automation TCP `8763` (loopback + `adb reverse`; Host-side AccessibilityService bridge). Override via `ADH_HTTP_PORT` / `ADH_AGENT_PORT` / `ADH_AUTOMATION_PORT`. Prefer `http://<LAN>:8088/<package>` to pin an app; do not default to `127.0.0.1`. Agent and the optional user-enabled Manager automation bridge dial host through `adb reverse`; `dev_up.sh` sets all tunnels. New-machine repro order: `fetch_qbdi` → `build_agent` → `build_detect` → `dev_up` → `verify_all`.
 
 There is no separate lint step. `AGENTS.md` (for Codex) is kept in sync with this file apart from the header line — mirror any change into both.
 
@@ -101,7 +101,7 @@ There is no separate lint step. `AGENTS.md` (for Codex) is kept in sync with thi
 
 Each layer has a `MAP.md` — read it before editing that layer:
 
-- `tools/MAP.md` — `tools/lib/verify_common.sh` + `tools/lib/env.sh`. **Add a verify script = source the lib + one node heredoc**. 
+- `tools/MAP.md` — `tools/lib/verify_common.sh` + `tools/lib/env.sh`. **Add a verify script = source the lib + one node heredoc**.
 - `daemon/src/MAP.md` — Host ADH Daemon: `state.ts` ← `service.ts` ← `mcp.ts` / `index.ts`.
 - `device/MAP.md` — device multi-module: `:core` (scope contract) + `:daemon` (AIDL) + `:manager` (Compose).
 - `injector/` — Zygisk Magisk zip (`injector/zygisk/`); optional LSPosed/Xposed thin loader (`injector/xposed/`).

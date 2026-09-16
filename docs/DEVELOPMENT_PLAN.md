@@ -594,6 +594,15 @@ v1 只对 `docs/FEATURE_STATUS.md §2` 的已验收能力做加固：捕获背�
 - **eCapture（可选，root + eBPF，2026-09-16 真机验证）**：`tools/fetch_ecapture.sh`（官方发布、版本固定、sha256 取自官方 checksum 文件） / `tools/ecapture_capture.sh`（`--preflight-only` 给 root/内核/BPF/BTF 判定，运行后按 `probe started successfully` 给结论） / `tools/verify_v34_ecapture.sh`（MCP 驱动真实 HTTPS，断言 eCapture 抓到请求与响应明文）。门槛：root + aarch64 内核 ≥5.5 + eBPF；**BTF 非必需**（本机 5.10 / BTF=n 实测可用），故只作提示。
 - 红线：可选后端只在**显式调用**时启用（默认注入路径不变）；目标进程内不得承载 HTTP/DB/分析；不 vendor 上游 GPL 代码。
 
+### 6.11 可选手机自动化（模块 X，v3.6）
+
+> 与 §6.9 的关系：这是独立的可选执行面，不改变 agent hook/采集主线，也不把分析放进设备服务。规格见 `REQUIREMENTS.md §31`。
+
+- 已完成：Host `automation.ts`（loopback NDJSON 桥，TCP 8763）、MCP `automation_status/phone_observe/phone_act`、Manager 用户启用型 AccessibilityService、控件树优先/截图兜底、ref 与归一化坐标动作、Host/设备双层包名 allowlist。
+- 默认关闭：Host `settings.automation.enabled=false`；关闭时 `phone_*` 从 `tools/list` 隐藏；设备侧服务必须由用户手动启用。
+- 验证：`tools/verify_v36_automation.sh` 真机 PASS（树 16–17 节点、语义 ref 点击、JPEG 兜底、归一化点击、滑动）；桥接不可用时 SKIP，不影响无设备 CI。
+- 后续增量：`phone_wait`（节点/文本/包名稳定）、agent 事件订阅、更多无 UI 的业务状态同步；仍禁止在 agent 内跑流程循环或分析。
+
 ---
 
 ## 7. 版本路线图（v0.1–v1.0，**已完成并归档** — 当前路线见 §6.9）

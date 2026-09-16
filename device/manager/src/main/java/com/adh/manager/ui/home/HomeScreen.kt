@@ -5,6 +5,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.provider.Settings
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -56,6 +57,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.adh.manager.BuildConfig
 import com.adh.manager.R
+import com.adh.manager.data.AutomationStatus
 import com.adh.manager.data.ModuleStatus
 import com.adh.manager.data.HostWebUiRepository
 import com.adh.manager.data.ScopeRepository
@@ -74,6 +76,8 @@ fun HomeScreen(
     var webStatus by remember { mutableStateOf<WebUiStatus?>(null) }
     var count by remember { mutableIntStateOf(0) }
     var refreshVersion by remember { mutableIntStateOf(0) }
+    var automationEnabled by remember { mutableStateOf(false) }
+    val context = LocalContext.current
 
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { refreshVersion++ }
 
@@ -95,6 +99,10 @@ fun HomeScreen(
         webStatus = withContext(Dispatchers.IO) { webUiRepository.probe() }
     }
 
+    LaunchedEffect(refreshVersion) {
+        automationEnabled = withContext(Dispatchers.IO) { AutomationStatus.isServiceEnabled(context) }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -110,6 +118,7 @@ fun HomeScreen(
             verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
             WebUiSection(status = webStatus)
+            AutomationSection(enabled = automationEnabled, onClick = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) })
             SectionLabel(text = stringResource(R.string.section_configuration))
             Surface(
                 color = MaterialTheme.colorScheme.surfaceContainer,
@@ -169,6 +178,45 @@ fun HomeScreen(
     }
 }
 
+@Composable
+private fun AutomationSection(enabled: Boolean, onClick: () -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 18.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Icon(
+                Icons.Rounded.Apps,
+                contentDescription = null,
+                tint = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.automation_title),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = stringResource(if (enabled) R.string.automation_enabled_summary else R.string.automation_disabled_summary),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Icon(
+                Icons.AutoMirrored.Rounded.ArrowForward,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
 @Composable
 private fun WebUiSection(status: WebUiStatus?) {
     val context = LocalContext.current

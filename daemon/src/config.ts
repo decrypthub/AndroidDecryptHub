@@ -2,6 +2,8 @@ import { networkInterfaces } from 'node:os';
 
 export const HTTP_PORT = Number(process.env.ADH_HTTP_PORT ?? 8088);
 export const AGENT_PORT = Number(process.env.ADH_AGENT_PORT ?? 8761);
+export const AUTOMATION_PORT = Number(process.env.ADH_AUTOMATION_PORT ?? 8763);
+export const AUTOMATION_HOST = process.env.ADH_AUTOMATION_HOST ?? '127.0.0.1';
 
 function lanIPv4s(): string[] {
   const nics = networkInterfaces();

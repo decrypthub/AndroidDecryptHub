@@ -1,7 +1,7 @@
 # ADH 功能状态（发布前梳理，2026-09-16）
 
 > 这份文件回答一个问题：**第一版里到底有什么、什么是验证过的、什么是没验证的、什么还没做完。**
-> 判定只认 `tools/verify_all.sh` 的 pass/fail（当前 **51/51 全绿**，设备 + host），不认"看起来能跑"。
+> 判定只认 `tools/verify_all.sh` 的 pass/fail（当前 **52/52 全绿**，设备 + host），不认"看起来能跑"。
 > 规格见 `REQUIREMENTS.md`，架构与排期见 `DEVELOPMENT_PLAN.md`，跨会话进度见 `PROGRESS.md`。
 
 ## 0. 第一版发布物
@@ -44,7 +44,7 @@
 
 当前 `verify_all` 没有任何“跑不过却还留着”的检查：fail=0。
 
-## 2. 测过的功能（51/51 全绿）
+## 2. 测过的功能（52/52 全绿）
 
 | 能力 | 覆盖脚本 | 验收要点 |
 |---|---|---|
@@ -64,12 +64,13 @@
 | 进程内 dlopen | v18_loadso | 目标进程内加载任意 `.so` 并解析符号（Gadget 依赖此能力） |
 | 设备侧后端（Zygisk/Manager） | v27_zygisk, verify_v32_backend_control | scope 往返；Device Daemon 驱动框架状态/作用域并**恢复测试前状态** |
 | 可选后端（Gadget/Xposed/eCapture） | v30, v31, v32, v34 | 官方二进制 + sha256 固定；Java bridge hook 真跑通；eCapture 抓到请求+响应明文 |
-| 控制面 / MCP / Web | v10_mcp, v10_webui, v10_export, v10_events, v19_settings, v33_backends, v35_sessions | MCP 40+ 工具可调、Web UI 可用、后端矩阵、会话清理与选择器修复 |
+| 控制面 / MCP / Web | v10_mcp, v10_webui, v10_export, v10_events, v19_settings, v33_backends, v35_sessions | MCP 44 工具可调（自动化关闭时隐藏 phone_*）、Web UI 可用、后端矩阵、会话清理与选择器修复 |
+| 可选手机自动化（模块 X） | v36_automation | 默认关闭；控件树优先、截图兜底、ref/归一化坐标动作、双层包名 allowlist；桥接不可用时 SKIP |
 | 注入足迹 | v26_footprint | release agent 剥离 + 仅 3 个动态导出 + 无 RWX LOAD |
 | 注入单实例收敛 | 真机混态手工验证（Zygisk + self-load） | `dl_iterate_phdr` 首载 copy 独占 bootstrap；同 PID 不再出现第二个 `jni_onload` 会话；winner copy 迟绑定 reporter，v24 rich Java 仍 PASS |
 
 ## 3. 发布结论
 
 - 可以发布：`libadh_agent.so` + Zygisk 包/Manager + 三个可选后端（Gadget/Xposed/eCapture，均默认关闭）。
-- 当前验收入口：`tools/verify_all.sh`，51/51 全绿。
+- 当前验收入口：`tools/verify_all.sh`，52/52 全绿。
 - 发布口径只认本文件 §2 和 `verify_all`；不再宣传或暴露未验收/半成品能力。

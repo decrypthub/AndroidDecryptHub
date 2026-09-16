@@ -13,11 +13,12 @@ import { parseDex, cryptoScan, searchDex, invokeXref, extractMethodCode, analyze
 import { ensureDexIndex, searchDexIndex, listDexReflections } from './dex_index.ts';
 import { agentCmd, dumpAllDex, dumpBuf, dumpBufPath, dumpRegion, pickSid, repairDexHeader, sessionForPackage } from './service.ts';
 import { backendMatrix, classifySession } from './backends.ts';
+import { automation } from './automation.ts';
 import { sessions, dumps, captures, captureTimers, SANDBOX, settings, CAPTURES, cryptoIdentify } from './state.ts';
 import type { DumpMeta } from './state.ts';
 
 const S = { type: 'string' }, N = { type: 'number' };
-export const MCP_TOOLS: { name: string; description: string; inputSchema: any; handler: (a: any) => Promise<any> }[] = [
+export const MCP_TOOLS: { name: string; description: string; inputSchema: any; handler: (a: any) => Promise<any>; raw?: boolean }[] = [
   { name: 'process_list', description: 'List connected target agent sessions', inputSchema: { type: 'object', properties: {} }, handler: async () => [...sessions.values()] },
   { name: 'backends', description: 'Injection-backend matrix: sessions by entry, host-side Frida Gadget cache + loader command, device-side backend pointers. Pass session to classify which injection paths are really loaded in that process (zygisk / xposed_module / frida_gadget / self_load).', inputSchema: { type: 'object', properties: { session: S } }, handler: async (a) => { const m = backendMatrix(); return a.session ? { ...m, sessionBackends: await classifySession(a.session) } : m; } },
   { name: 'dumps_list', description: 'List captured dump artifacts (dex/so/region)', inputSchema: { type: 'object', properties: {} }, handler: async () => [...dumps.values()] },
@@ -63,6 +64,80 @@ export const MCP_TOOLS: { name: string; description: string; inputSchema: any; h
   { name: 'net_correlate', description: 'Network↔crypto correlation: pair plaintext with the TLS request carrying its ciphertext (same thread + time window)', inputSchema: { type: 'object', properties: { session: S } }, handler: (a) => agentCmd(a.session, 'flow_watch', { className: a.class ?? SANDBOX.flow }, 25_000) },
   { name: 'load_library', description: '把任意 .so 加载进目标进程（如 frida-gadget，随后 gadget 会按 script 模式自动跑你的 frida 脚本）。可选 symbol 探测。dlopen from inside the target.', inputSchema: { type: 'object', properties: { session: S, path: S, symbol: S }, required: ['path'] }, handler: (a) => agentCmd(a.session, 'load_so', { path: a.path, symbol: a.symbol ?? '' }, 30_000) },
 ];
+
+MCP_TOOLS.push(
+  { name: 'automation_status', description: 'Read-only phone automation status: user toggle, bridge connection, connected device capabilities and package allowlist. This tool never enables automation.', inputSchema: { type: 'object', properties: {} }, handler: async () => ({ enabled: settings.automation.enabled, packages: settings.automation.packages, bridge: automation.status() }) },
+  { name: 'phone_observe', description: 'Observe the active phone screen. Prefer the AccessibilityService node tree; when it is empty or non-semantic, fall back to a screenshot that the AI can inspect. Returns snapshotId plus nodes or an image.', inputSchema: { type: 'object', properties: { mode: { type: 'string', enum: ['auto', 'tree', 'visual'] }, includeScreenshot: { type: 'boolean' }, maxNodes: N, package: S } }, raw: true, handler: async (a) => observePhone(a) },
+  { name: 'phone_act', description: 'Act on the active phone screen. Prefer snapshotId+ref from phone_observe; use normalized x/y coordinates only when no usable node exists. Supports tap, long_press, swipe, set_text and global back/home/recents.', inputSchema: { type: 'object', properties: { snapshotId: S, action: { type: 'string', enum: ['tap', 'long_press', 'swipe', 'set_text', 'global'] }, ref: S, x: N, y: N, x2: N, y2: N, coordinateSpace: { type: 'string', enum: ['normalized', 'pixel'] }, text: S, key: { type: 'string', enum: ['back', 'home', 'recents'] }, durationMs: N, observeAfter: { type: 'boolean' }, package: S }, required: ['action'] }, raw: true, handler: async (a) => actPhone(a) },
+);
+
+async function observePhone(args: any) {
+  assertAutomationReady();
+  const result = await automation.cmd('observe', normalizeObserveArgs(args), 25_000);
+  return observationContent(result);
+}
+
+async function actPhone(args: any) {
+  assertAutomationReady();
+  const result = await automation.cmd('act', normalizeActArgs(args), 25_000);
+  const parts: any[] = [{ type: 'text', text: JSON.stringify(result, null, 2) }];
+  if (args.observeAfter) {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    parts.push(...observationContent(await automation.cmd('observe', normalizeObserveArgs(args), 25_000)).content);
+  }
+  return { content: parts };
+}
+
+function assertAutomationReady() {
+  if (!settings.automation.enabled) throw new Error('automation_disabled: enable it in ADH settings on the host');
+  if (!settings.automation.packages.length) throw new Error('automation_package_allowlist_empty: add at least one package in ADH settings');
+}
+
+function normalizeObserveArgs(args: any) {
+  return {
+    mode: args.mode ?? 'auto',
+    includeScreenshot: args.includeScreenshot ?? 'auto',
+    maxNodes: args.maxNodes ?? settings.automation.maxNodes,
+    screenshot: settings.automation.screenshot,
+    screenshotMaxDimension: settings.automation.screenshotMaxDimension,
+    allowedPackages: settings.automation.packages,
+    package: args.package,
+  };
+}
+
+function normalizeActArgs(args: any) {
+  return {
+    snapshotId: args.snapshotId,
+    action: args.action,
+    ref: args.ref,
+    x: args.x,
+    y: args.y,
+    x2: args.x2,
+    y2: args.y2,
+    coordinateSpace: args.coordinateSpace ?? 'normalized',
+    text: args.text,
+    key: args.key,
+    durationMs: args.durationMs,
+    allowedPackages: settings.automation.packages,
+    package: args.package,
+  };
+}
+
+function observationContent(result: any) {
+  const screenshot = result?.screenshot;
+  const meta = { ...(result ?? {}) };
+  if (screenshot) {
+    const { base64, ...rest } = screenshot;
+    meta.screenshot = rest;
+  }
+  const content: any[] = [{ type: 'text', text: JSON.stringify(meta, null, 2) }];
+  if (screenshot?.base64) content.push({ type: 'image', data: screenshot.base64, mimeType: screenshot.mimeType ?? 'image/jpeg' });
+  return { content };
+}
+
+function visibleMcpTools() {
+  return MCP_TOOLS.filter((tool) => !tool.name.startsWith('phone_') || settings.automation.enabled);
+}
 export const MCP_MAP = new Map(MCP_TOOLS.map(t => [t.name, t]));
 
 export async function handleMcp(reqBody: string, res: ServerResponse, opts?: { package?: string }) {
@@ -76,11 +151,12 @@ export async function handleMcp(reqBody: string, res: ServerResponse, opts?: { p
   if (msg.method === 'initialize') return reply({ protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'adhd', version: '0.1.0' } });
   if (msg.method === 'notifications/initialized' || msg.method === 'notifications/cancelled') { res.writeHead(202).end(); return; }
   if (msg.method === 'ping') return reply({});
-  if (msg.method === 'tools/list') return reply({ tools: MCP_TOOLS.map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })) });
+  if (msg.method === 'tools/list') return reply({ tools: visibleMcpTools().map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })) });
   if (msg.method === 'tools/call') {
     const name = msg.params?.name;
     const t = MCP_MAP.get(name);
     if (!t) return reply(undefined, { code: -32602, message: `unknown tool: ${name}` });
+    if (name.startsWith('phone_') && !settings.automation.enabled) return reply(undefined, { code: -32000, message: 'automation_disabled: user has not enabled phone automation' });
     let args = { ...(msg.params?.arguments ?? {}) };
     if (pin && name === 'process_list') {
       const out = [...sessions.values()].filter(s => s.package === pin);
@@ -92,6 +168,7 @@ export async function handleMcp(reqBody: string, res: ServerResponse, opts?: { p
     }
     try {
       const out = await t.handler(args);
+      if (t.raw) return reply(out);
       return reply({ content: [{ type: 'text', text: JSON.stringify(out, null, 2) }] });
     } catch (e) { return reply({ content: [{ type: 'text', text: 'error: ' + (e as Error).message }], isError: true }); }
   }

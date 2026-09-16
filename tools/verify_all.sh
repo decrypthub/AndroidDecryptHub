@@ -34,6 +34,8 @@ SCRIPTS=(
   "verify_v10_webui.sh:host"
   "verify_v33_backends.sh:host"
   "verify_v35_sessions.sh:host"
+  # Optional phone automation (AccessibilityService bridge; user-enabled, SKIPs when unavailable).
+  "verify_v36_automation.sh:device"
   "verify_v10_trace.sh:device"
   "verify_v10_export.sh:host"
   "verify_v10_events.sh:device"
