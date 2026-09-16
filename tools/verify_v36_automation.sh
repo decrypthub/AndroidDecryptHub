@@ -187,6 +187,11 @@ try {
     chk('phone_wait matches a visible selector', waitData.matched === true, `matched=${waitData.matched}`);
   }
 
+  const textShot = await callTool('phone_observe', { mode: 'text', includeScreenshot: true, maxNodes: 30 });
+  const textShotText = textShot.content?.find((item) => item.type === 'text')?.text ?? '';
+  const textShotImage = textShot.content?.find((item) => item.type === 'image');
+  chk('mode=text can return the screenshot alongside the text view', textShotText.startsWith('screen:') && textShotImage?.mimeType === 'image/jpeg' && (textShotImage?.data?.length ?? 0) > 1000, `text=${textShotText.length}B image=${textShotImage?.data?.length ?? 0}`);
+
   // ---- stability wait: settle first, then act on the refs it hands back -------------------
   const settled = parseTree(await callTool('phone_wait', { stable: true, stableMs: 600, timeoutMs: 8000, intervalMs: 250, maxNodes: 120 }));
   chk('phone_wait stable mode settles before returning', settled.matched === true && settled.stable === true && settled.waitedMs >= 600, `waitedMs=${settled.waitedMs} signature=${settled.signature}`);
