@@ -27,14 +27,14 @@ There is one plan. If something contradicts these docs, fix the docs in the same
 | **ADH Manager** | 手机侧 Compose UI（`device/:manager`）；注入作用域与目标进程启停 |
 | **ADH Sandbox** / `com.adh.sandbox` | 模拟注入与确定性验收宿主；不是产品目标包 |
 | **IDH** | iOS 参考项目（IOSDecryptHub / ios-decrypt-helper），仅作对照 |
-| `libidh_agent.so` / `idhd` / `idh_*` / `IDH_*` | 早期脚手架遗留的兼容标识符；新入口用 `adh_agent_start`，旧代码符号与环境变量别名仍可用，产品对外不称 IDH |
-- 新代码/新文案使用 `ADH` / `Host ADH Daemon` / `adhd` / `adh_*`。`libidh_agent.so`、`idh_agent_start`、`idh_*` 旧符号、`IDH_*` 环境变量和 `idhd` 仅作 legacy 兼容层，不得作为新产品名、新接口名或新日志 tag；IDH 仅指 iOS 参考项目。`com.idh.probe` / `IDH_PROBE_OK` 是 hash 绑定的固定 probe dex 例外。
+| `libadh_agent.so` | 本产品 agent `.so`（交付物名，随 Zygisk/Xposed 模块与沙盒打包）；`libidh_agent.so` 仅作为**已刷入旧模块的回退名**被 loader/companion 接受 |
+- 新代码/新文案使用 `ADH` / `Host ADH Daemon` / `adhd` / `adh_*`。**不再产出** `libidh_agent.so`（仅 loader 兼容回退）；`idh_agent_start` 旧符号、`IDH_*` 环境变量、`idhd` npm 别名与 `idh_*` 内部符号同样只作 legacy 兼容层，不得作为新产品名、新接口名或新日志 tag；IDH 仅指 iOS 参考项目。`com.idh.probe` / `IDH_PROBE_OK` 是 hash 绑定的固定 probe dex 例外。
 
 ## Architecture red line (do not cross)
 
 Never merge these layers.
 
-- `libidh_agent.so` (in target process) — **collect / execute only**: hook, trace, dump, maps scan, light RPC. Keep it minimal, low-memory, non-blocking.
+- `libadh_agent.so` (in target process) — **collect / execute only**: hook, trace, dump, maps scan, light RPC. Keep it minimal, low-memory, non-blocking.
 - **Host ADH Daemon** (`daemon/`, npm `adhd`) — HTTP / WebSocket / MCP / DB / index / disasm cache / analysis.
 - **Device** (`device/`: `:core` + `:daemon` + `:manager`) — injection scope + module status + target process stop/restart. No analysis.
 - Web UI (browser) — observe / search / configure.
@@ -53,7 +53,7 @@ Loop: **Explore → Plan → Implement → Verify**, then iterate on the result.
 
 ## Scope priority (current)
 
-Build **`libidh_agent.so` functionality** and self-test via 模拟注入 (sandbox `dlopen`). **Module W**: Zygisk (`injector/zygisk`) + device multi-module (`device/` Compose Manager + root Device Daemon). Frida Gadget is available as an **optional, off-by-default** backend (`tools/load_frida_gadget.sh`, verified by `tools/verify_v30_fridagadget.sh`; Frida 17+ hooks using `Java.perform()` must be bundled with `tools/compile_frida_script.sh`); repackage (`injector/gadget-pack`) remains deferred. An optional LSPosed/Xposed thin module is also available (`injector/xposed/`, built by `tools/build_xposed.sh`, verified by `tools/verify_v31_xposed.sh`) — it only loads the agent, never analysis code. Do not block feature verification on real injection — CI stays on 模拟注入.
+Build **`libadh_agent.so` functionality** and self-test via 模拟注入 (sandbox `dlopen`). **Module W**: Zygisk (`injector/zygisk`) + device multi-module (`device/` Compose Manager + root Device Daemon). Frida Gadget is available as an **optional, off-by-default** backend (`tools/load_frida_gadget.sh`, verified by `tools/verify_v30_fridagadget.sh`; Frida 17+ hooks using `Java.perform()` must be bundled with `tools/compile_frida_script.sh`); repackage (`injector/gadget-pack`) remains deferred. An optional LSPosed/Xposed thin module is also available (`injector/xposed/`, built by `tools/build_xposed.sh`, verified by `tools/verify_v31_xposed.sh`) — it only loads the agent, never analysis code. Do not block feature verification on real injection — CI stays on 模拟注入.
 
 ## Verification (give yourself a real signal)
 
@@ -67,7 +67,7 @@ Bash (Git Bash / WSL) — the `tools/*.sh` scripts assume it. `node 24` runs `.t
 
 ```bash
 # --- agent .so (C/NDK, arm64-v8a) — fails loud on compile error, stages into sandbox jniLibs
-bash tools/build_agent.sh          # -> agent/build/libidh_agent.so
+bash tools/build_agent.sh          # -> agent/build/libadh_agent.so
 bash tools/build_detect.sh         # sandbox mock native lib libidhdetect.so
 bash tools/fetch_qbdi.sh           # one-time: QBDI headers/.so (instruction trace); gitignored
 bash tools/fetch_dobby.sh          # one-time: Dobby (native inline hook; the only hook backend in v1)

@@ -3,7 +3,7 @@ plugins {
 }
 
 // Optional LSPosed/Xposed backend: a THIN loader APK. It has no activity, no AndroidX and no
-// analysis code — it only brings libidh_agent.so into a scoped target process and lets the
+// analysis code — it only brings libadh_agent.so into a scoped target process and lets the
 // agent talk to the Host ADH Daemon like every other injection path.
 android {
     namespace = "com.adh.xposed"

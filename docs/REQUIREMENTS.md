@@ -54,7 +54,7 @@
 iOS 参考项目把 HTTP、MCP、Capstone、日志存储全部放在注入的 dylib 里。Android 项目采用三层分离：
 
 ```text
-目标 App 进程          libidh_agent.so     hook / trace / dump / 采集 / 轻量 RPC
+目标 App 进程          libadh_agent.so     hook / trace / dump / 采集 / 轻量 RPC
 独立守护进程           ADH Daemon (adhd)   HTTP / WebSocket / MCP / DB / 索引 / 缓存 / 调度
 浏览器                 Web UI              观测台、搜索、配置、可视化、导出
 ```
@@ -112,7 +112,7 @@ native 函数在 libxxx.so 的哪个偏移？
 
 | 组件 | 名称 | 职责 |
 |------|------|------|
-| Agent | `libidh_agent.so` | 注入目标进程，执行 hook/trace/dump/采集 |
+| Agent | `libadh_agent.so` | 注入目标进程，执行 hook/trace/dump/采集 |
 | Daemon | `idhd` | 守护进程，HTTP/MCP/存储/索引/调度 |
 | Web UI | 嵌入式前端 | 浏览器访问的实时观测台 |
 | Sandbox | `sandbox-test-app` | 覆盖全模块的自动化验证宿主 |
@@ -159,12 +159,12 @@ ADH (Android DecryptHub)
 
 ### 4.1 Agent 注入
 
-**功能**：将 `libidh_agent.so` 加载到目标 App 进程。详细的后端与打包见**模块 W**。
+**功能**：将 `libadh_agent.so` 加载到目标 App 进程。详细的后端与打包见**模块 W**。
 
 **注入方式**（覆盖 root 与非 root 两条路径，用户按环境选择）：
 
 - **Root 路径 — Zygisk 插件**（主线，early inject）：随 Zygisk 模块在 zygote fork 后早期加载，抢在目标反调试布防之前。
-- **非 root 路径 — Frida Gadget / 重打包**：把 `libidh_agent.so`（可选携带 gadget so）打进目标 APK 重打包，或以 gadget 方式加载，无需 root。
+- **非 root 路径 — Frida Gadget / 重打包**：把 `libadh_agent.so`（可选携带 gadget so）打进目标 APK 重打包，或以 gadget 方式加载，无需 root。
 - `ptrace` 手动注入（root 环境按需）。
 - LSPosed / Xposed 桥接加载（有框架时）。
 - **模拟注入**（开发/CI 主路径）：`sandbox-test-app` 自身 `dlopen` 加载 agent，无需真机对抗即可验证全部模块。
@@ -1382,7 +1382,7 @@ dump        →  拿运行时真实内容
 ```
 
 ```text
-libidh_agent.so  →  采集与执行，越轻越好
+libadh_agent.so  →  采集与执行，越轻越好
 idhd             →  分析与服务，越强越好
 Web UI           →  观测与交互，实时可见
 MCP              →  AI 可编程操控，与 HTTP 同源
@@ -1515,14 +1515,14 @@ MCP              →  AI 可编程操控，与 HTTP 同源
 |------|------|------|
 | **Zygisk 插件** | root（Magisk） | 主线，zygote fork 后 early-inject，配合 S 韧性；配套 **ADH Manager** 管理作用域白名单（`/data/adb/adh/scope.json`） |
 | **Frida Gadget**（可选，默认关） | 非 root / root | 官方 Gadget so 由 agent `dlopen` 进目标进程，运行 Frida JS hook；按版本/ABI 下载 + sha256 固定；高开销（~25 MB so、额外 maps 与线程），只有显式调用才启用 |
-| **重打包注入** | 非 root | 把 `libidh_agent.so`（+可选 gadget）打进目标 APK 重签名 |
+| **重打包注入** | 非 root | 把 `libadh_agent.so`（+可选 gadget）打进目标 APK 重签名 |
 | ptrace 注入器 | root | 按需附加已运行进程 |
 | LSPosed/Xposed 桥接（可选，默认关） | 有框架（Vector/LSPosed） | 薄 Xposed 模块复用框架加载，不 vendor GPL 代码 |
 | **模拟注入** | 无需 root | sandbox 自身 `dlopen` 加载 agent（开发/CI 主路径） |
 
 ### 30.2 打包交付物
 
-- `libidh_agent.so`（arm64-v8a 主线，设备 ABI）
+- `libadh_agent.so`（arm64-v8a 主线，设备 ABI）
 - Zygisk 模块包（root 版）+ ADH Manager APK（作用域：选哪些 App 注入）；另提供 Magisk 可直接安装、自动安装 Manager 的组合包
 - Gadget 工具链：`tools/fetch_frida_gadget.sh`（官方 release，按版本/ABI + sha256，`--list`/`--print-url`）、`tools/compile_frida_script.sh`（Frida 17 起语言桥移出 runtime，用 esbuild + `frida-java-bridge` 打包）、`tools/load_frida_gadget.sh`（落盘 → `load_so` dlopen → 等 `frida-gadget` 线程 → 可选 `--marker` 断言脚本真的跑通）
 - Gadget 打包工具（重打包路径，延后）：把 agent + gadget so 注入并重签目标 APK（非 root 版）
@@ -1549,7 +1549,7 @@ Agent → TCP 8761 → ADH Daemon（host，经 adb reverse）
 交付物：`injector/zygisk/dist/adh-zygisk.zip`、`device/manager` APK，以及二者合一且可由 Magisk 直接安装的版本化 `injector/zygisk/dist/adh-bundle-vX.Y.Z.zip`。Gadget 直载路径已落地（见 §30.5）；重打包（`injector/gadget-pack`）仍为后续项。
 
 - Zygisk `.so` 必须导出未改名且默认可见的 C 符号 `zygisk_module_entry`；有 root companion 时同样要求 `zygisk_companion_entry`，打包阶段必须自动验证。
-- Agent 必须在 `preAppSpecialize` 内用 `getModuleDir()` + `openat` 打开 `libidh_agent.so`；`postAppSpecialize` 只用 `android_dlopen_ext(ANDROID_DLEXT_USE_LIBRARY_FD)` 加载，禁止在 post 阶段调 `getModuleDir()`（Zygisk Next 会死锁）。
+- Agent 必须在 `preAppSpecialize` 内用 `getModuleDir()` + `openat` 打开 `libadh_agent.so`；`postAppSpecialize` 只用 `android_dlopen_ext(ANDROID_DLEXT_USE_LIBRARY_FD)` 加载，禁止在 post 阶段调 `getModuleDir()`（Zygisk Next 会死锁）。
 - Companion 必须在 `adh_agent_start()` 前调用 `adh_agent_set_package()` 传真实包名；early inject 不得把 `zygote64` 当目标包名上报。
 - scope 读取失败必须 fail-loud/no-inject；KernelSU 由 `post-fs-data.sh` 应用 `allow zygote adb_data_file` 的最小规则，Magisk 使用模块根 `sepolicy.rule`。
 - Companion 应设置 `DLCLOSE_MODULE_LIBRARY`，post-specialize 后卸载自身映射；agent `.so` 保持加载服务会话。

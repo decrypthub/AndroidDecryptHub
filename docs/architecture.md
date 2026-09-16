@@ -6,7 +6,7 @@
 ## Layers (red line honored)
 
 ```
-Target app process            libidh_agent.so     collect / execute only
+Target app process            libadh_agent.so     collect / execute only
   (device, arm64)             ── framed TCP ──►   hook · trace · dump · maps · JNI reflect
                               (via adb reverse)
 Device (phone)                device/             scope Manager (Compose) + Device Daemon (AIDL)
@@ -19,10 +19,10 @@ Browser / AI client           Web console / MCP   observe · search · drive
   Dual entry `JNI_OnLoad` / `adh_agent_start` (`idh_agent_start` legacy alias). Connects to **Host** ADH Daemon over TCP `127.0.0.1:8761`
   (reachable from device via `adb reverse`). Executes commands, streams results. No HTTP/DB.
 - **Host ADH Daemon** (`daemon/`, npm `adhd`, Node 24 + TypeScript, no build step; legacy name `idhd`):
-  agent registry, HTTP+WS `8760`, REST API, MCP server, dex parser/indexer, ELF analysis, dump storage.
+  agent registry, HTTP+WS `8088`, REST API, MCP server, dex parser/indexer, ELF analysis, dump storage. App console: `http://<LAN>:8088/<package>`.
 - **Device surface** (`device/` multi-module, Gradle 8.9 / AGP 8.7.3 / Compose):
   - `:core` — `AdhPaths` / `ScopeConfig` / `ScopeJson` + shared `IAdhScopeService` contract
-  - `:daemon` — module-launched root `app_process` APK; scope/module-state Binder only (**not** Host analysis)
+  - `:daemon` — module-launched root `app_process` APK; scope/module-state/process-control Binder only (**not** Host analysis)
   - `:manager` — ordinary Compose APK; receives the daemon Binder through a root-only provider handshake and never invokes `su`
 - **Web/MCP**: `daemon/public/index.html` console; `POST /mcp` for AI clients.
 - **Injector** (`injector/zygisk/`): Magisk module zip; starts Device Daemon at boot and packages its APK; path constants must stay in sync with `device/:core`.
@@ -73,7 +73,7 @@ tagged-pointer untagging for `pread(/proc/self/mem)`.
 ## Build & verify
 
 ```
-tools/build_agent.sh     # NDK cmake -> libidh_agent.so (fails loudly on error)
+tools/build_agent.sh     # NDK cmake -> libadh_agent.so (fails loudly on error)
 tools/build_detect.sh    # sandbox native mock lib
 tools/dev_up.sh          # ensure idhd + adb reverse
 tools/verify_all.sh      # run every acceptance (device checks auto-skip if offline)

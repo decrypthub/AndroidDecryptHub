@@ -5,7 +5,7 @@
 
 ## 它做什么 / 不做什么
 
-- **做**：在框架已加载进目标进程后（`handleLoadPackage`），把本 APK 里自带的 `libidh_agent.so`
+- **做**：在框架已加载进目标进程后（`handleLoadPackage`），把本 APK 里自带的 `libadh_agent.so`
   加载进该进程（`System.loadLibrary("idh_agent")`，失败再按 `/proc/self/maps` 里的模块 APK 路径
   `System.load(<abs path>)`）。之后 agent 像其他注入路径一样自己连 Host ADH Daemon（`adb reverse` → 8761）。
 - **不做**：不实现任何分析能力。hook/trace/dump/索引/HTTP/MCP/DB 全部仍在 Host ADH Daemon —— 架构红线不变。
@@ -40,5 +40,5 @@ bash tools/verify_v31_xposed.sh            # 真机验收（安装→启用→�
 injector/xposed/
 ├── api-stub/     # compile-only Xposed ABI 声明（不进 APK）
 └── module/       # 薄加载器 APK（assets/xposed_init → com.adh.xposed.AdhXposedEntry）
-    └── src/main/jniLibs/arm64-v8a/libidh_agent.so   # 由 tools/build_xposed.sh 临时投放（gitignore）
+    └── src/main/jniLibs/arm64-v8a/libadh_agent.so   # 由 tools/build_xposed.sh 临时投放（gitignore）
 ```

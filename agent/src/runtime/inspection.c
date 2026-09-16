@@ -200,7 +200,8 @@ static int footprint_scan(struct footprint_counts *c, int *module_count) {
             c->anon_exec_bytes += bytes;
         }
 
-        if (strstr(pth, "libidh_agent.so")) c->agent_exec++;
+        // Either file name: the shipped lib is libadh_agent.so, a not-yet-reflashed module dir still has libidh_agent.so.
+        if (strstr(pth, "libadh_agent.so") || strstr(pth, "libidh_agent.so")) c->agent_exec++;
         if (strstr(pth, "/zygisk/") || strstr(pth, "libzygisk.so") || strstr(pth, "zygisk_"))
             c->zygisk_exec++;
     }

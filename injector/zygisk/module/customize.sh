@@ -4,7 +4,7 @@ SKIPUNZIP=1
 ui_print "- Installing ADH Zygisk module"
 unzip -o "$ZIPFILE" 'module.prop' -d "$MODPATH" >&2
 unzip -o "$ZIPFILE" 'zygisk/*' -d "$MODPATH" >&2
-unzip -o "$ZIPFILE" 'libidh_agent.so' -d "$MODPATH" >&2
+unzip -o "$ZIPFILE" 'libadh_agent.so' -d "$MODPATH" >&2
 unzip -o "$ZIPFILE" 'daemon.apk' -d "$MODPATH" >&2
 unzip -o "$ZIPFILE" 'device-daemon' -d "$MODPATH" >&2
 unzip -o "$ZIPFILE" 'action.sh' -d "$MODPATH" >&2

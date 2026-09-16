@@ -11,7 +11,7 @@
 ## 0. 核心原则（架构红线）
 
 ```text
-目标 App 进程（libidh_agent.so）：
+目标 App 进程（libadh_agent.so）：
   最小侵入、低内存、低阻塞 —— hook / trace / dump / 事件采集 / 轻量 RPC
 
 独立守护进程（idhd）：
@@ -58,7 +58,7 @@ Web UI（浏览器）：
                       │ Shared Memory RingBuffer
                       │ Binder 可选
 ┌─────────────────────┴──────────────────────┐
-│         目标 App 进程：libidh_agent.so      │
+│         目标 App 进程：libadh_agent.so      │
 │  - JavaVM / JNIEnv 管理                    │
 │  - ClassLoader 记录                          │
 │  - Java Hook Backend (LSPlant)             │
@@ -75,7 +75,7 @@ Web UI（浏览器）：
 
 | 层级 | 组件 | 做什么 | 不做什么 |
 |---|---|---|---|
-| L1 | `libidh_agent.so` | hook、trace、dump、maps 扫描、事件推送、执行 RPC 命令 | HTTP/MCP、DB、索引、smali 生成、大量反汇编缓存 |
+| L1 | `libadh_agent.so` | hook、trace、dump、maps 扫描、事件推送、执行 RPC 命令 | HTTP/MCP、DB、索引、smali 生成、大量反汇编缓存 |
 | L2a | Host ADH Daemon (`adhd`，PC) | Web/MCP 服务、会话、调度、存储、索引、分析、缓存 | 注入目标进程、直接读目标内存 |
 | L2b | Device surface (`device/`) | Manager Compose + Device Daemon 作用域/模块状态/目标进程启停 | 分析、HTTP、MCP、hook |
 | L3 | Web UI | 观测、搜索、配置、可视化、导出 | 业务逻辑、直连 Agent |
@@ -124,12 +124,12 @@ ADH (Android DecryptHub)
 
 ---
 
-## 3. libidh_agent.so — Runtime Agent 职责
+## 3. libadh_agent.so — Runtime Agent 职责
 
 so 不是单纯 hook 库，而是 **执行端 Runtime Agent**。数据最终存储在 idhd，不在 so 内堆积。
 
 ```text
-libidh_agent.so
+libadh_agent.so
 ├── bootstrap
 │   ├── 初始化日志
 │   ├── 初始化 Unix socket → idhd
@@ -483,7 +483,7 @@ Event {
 
 ```text
 android-decrpthub/          # 仓库名；产品名 ADH (Android DecryptHub)
-├── agent/                  # libidh_agent.so
+├── agent/                  # libadh_agent.so
 │   ├── CMakeLists.txt
 │   ├── src/
 │   │   ├── bootstrap/       # 双入口：JNI_OnLoad + adh_agent_start()（legacy idh_agent_start alias）
@@ -696,7 +696,7 @@ disasm 只 `llvm-objdump`（文件型 so），缺 **Capstone 内存镜像反汇�
 ### v0.1 — Agent + idhd + Web 骨架 + 模拟注入 + 自审计
 
 ```text
-- libidh_agent.so 双入口（被注入 / 宿主 dlopen 主动加载）
+- libadh_agent.so 双入口（被注入 / 宿主 dlopen 主动加载）
 - package / pid / uid 获取；Unix socket 连接 idhd
 - /proc/self/maps 枚举 + module 列表
 - crash guard + 自审计日志(P) 骨架（目标流/AUDIT 流分离）
@@ -926,7 +926,7 @@ root（Zygisk）与非 root（Gadget/重打包）双注入路径。
 1. **初始化 monorepo**：`agent/`、`injector/`、`daemon/`、`web/`、`proto/`、`sandbox-app/`、`tests/`
 2. **proto v0**：`Ping`、`ProcessInfo`、`MapsRegion`、`Event` 骨架
 3. **idhd 最小可运行**：HTTP `/health` + WebSocket + Agent 注册
-4. **libidh_agent bootstrap**：**双入口**、连接 idhd、上报 pid/package、maps 枚举
+4. **libadh_agent bootstrap**：**双入口**、连接 idhd、上报 pid/package、maps 枚举
 5. **sandbox-app + 模拟注入**：dlopen 加载 agent，建立可验证回路（v0.1 验收信号）
 6. **Web Dashboard 空壳**：显示已连接 Agent 列表
 7. **敲定构建工具链**（NDK/CMake；idhd 语言）并回填 `CLAUDE.md` 的 build/verify 命令
@@ -944,7 +944,7 @@ dump 负责「拿到运行时真实内容」；
 ```
 
 ```text
-libidh_agent.so  — 采集与执行，越轻越好
+libadh_agent.so  — 采集与执行，越轻越好
 idhd             — 分析与服务，越强越好
 Web UI           — 观测与交互，实时可见
 ```

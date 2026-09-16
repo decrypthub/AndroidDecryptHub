@@ -15,5 +15,5 @@ object AdhPaths {
     const val MODULE_PROP = "/data/adb/modules/adh/module.prop"
     const val MANAGER_PKG = "com.adh.manager"
     const val DAEMON_PKG = "com.adh.daemon"
-    const val AGENT_SO_NAME = "libidh_agent.so"
+    const val AGENT_SO_NAME = "libadh_agent.so"
 }

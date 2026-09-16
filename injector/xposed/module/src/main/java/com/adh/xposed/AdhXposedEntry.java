@@ -22,7 +22,7 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
  *
  * <p>Contract (docs/REQUIREMENTS.md §30.5, docs/DEVELOPMENT_PLAN.md §6.10): with the
  * framework already loaded into a scoped target process, this module hands that process
- * over to the ADH agent ({@code libidh_agent.so}). Every analysis feature stays in the
+ * over to the ADH agent ({@code libadh_agent.so}). Every analysis feature stays in the
  * Host ADH Daemon; the target process only gets the same minimal agent the Zygisk path
  * injects.
  *
@@ -37,8 +37,8 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
 public class AdhXposedEntry implements IXposedHookLoadPackage {
 
     private static final String TAG = "ADH_XPOSED";
-    /** Legacy ABI name on purpose: the agent .so is still libidh_agent.so (AGENTS.md naming policy). */
-    private static final String AGENT_LIB = "idh_agent";
+    /** Legacy ABI name on purpose: the agent .so is still libadh_agent.so (AGENTS.md naming policy). */
+    private static final String AGENT_LIB = "adh_agent";
     private static final String SELF_PKG = "com.adh.xposed";
 
     private static final Set<String> NEVER = new HashSet<>(Arrays.asList(
@@ -89,7 +89,7 @@ public class AdhXposedEntry implements IXposedHookLoadPackage {
      *
      * <p>Preferred path: the framework puts the module's own {@code lib/<abi>} directory on
      * the module classloader's native search path, so {@link System#loadLibrary} resolves the
-     * bundled {@code libidh_agent.so}. Fallback: locate the module APK in
+     * bundled {@code libadh_agent.so}. Fallback: locate the module APK in
      * {@code /proc/self/maps} and load the extracted .so by absolute path.
      */
     private boolean loadAgent() {

@@ -5,7 +5,7 @@
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
 verify_resolve_env_host
-SO="$ROOT/agent/build/libidh_agent.so"
+SO="$ROOT/agent/build/libadh_agent.so"
 [ -f "$SO" ] || { echo "❌ agent .so missing (build first)"; echo "RESULT:FAIL"; exit 1; }
 
 set +e

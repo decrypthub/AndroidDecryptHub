@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(idh_agent C CXX)
+project(adh_agent C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 20)          # C++ hook shims (Dobby)
@@ -48,7 +48,7 @@ else()
     message(WARNING "Dobby absent — run tools/fetch_dobby.sh for native inline hooking")
 endif()
 
-add_library(idh_agent SHARED ${AGENT_SOURCES})
+add_library(adh_agent SHARED ${AGENT_SOURCES})
 
 # Release footprint: keep only the three bootstrap entry points in .dynsym.
 # Dobby/libc++ internals stay local to this DSO; Zygisk resolves only
@@ -57,15 +57,15 @@ set(AGENT_EXPORT_MAP "${CMAKE_CURRENT_SOURCE_DIR}/exports.map")
 if(NOT EXISTS "${AGENT_EXPORT_MAP}")
   message(FATAL_ERROR "missing agent export map: ${AGENT_EXPORT_MAP}")
 endif()
-target_link_options(idh_agent PRIVATE "-Wl,--version-script=${AGENT_EXPORT_MAP}")
+target_link_options(adh_agent PRIVATE "-Wl,--version-script=${AGENT_EXPORT_MAP}")
 
-target_include_directories(idh_agent PRIVATE ${QBDI_INC} ${HOOK_INC})
+target_include_directories(adh_agent PRIVATE ${QBDI_INC} ${HOOK_INC})
 
 # Android system libs: log (android/log.h), plus libc/pthread (implicit).
 find_library(log-lib log)
-target_link_libraries(idh_agent ${log-lib} dl ${HOOK_LIBS})
+target_link_libraries(adh_agent ${log-lib} dl ${HOOK_LIBS})
 
 # Keep our own code small + hidden; -Wall/-Wextra apply to C agent sources only
 # (Third-party hook sources get -Wno-everything above.)
-target_compile_options(idh_agent PRIVATE -O2 -fvisibility=hidden)
-target_compile_options(idh_agent PRIVATE $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra>)
+target_compile_options(adh_agent PRIVATE -O2 -fvisibility=hidden)
+target_compile_options(adh_agent PRIVATE $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra>)

@@ -1,6 +1,6 @@
 # Agent source map
 
-`libidh_agent.so` stays collect/execute-only. HTTP, MCP, storage, indexing, and heavy analysis belong to the Host ADH Daemon.
+`libadh_agent.so` stays collect/execute-only. HTTP, MCP, storage, indexing, and heavy analysis belong to the Host ADH Daemon.
 
 ## Layout
 
@@ -24,7 +24,7 @@
 
 ## Naming
 
-`libidh_agent.so` and `idh_agent_start` are legacy on-disk/ABI names kept for compatibility. New code, commands, logs, and UI copy use `ADH` / `adh_*`; do not add new `idh_*` identifiers. The fixed `com.idh.probe` / `IDH_PROBE_OK` fixture is intentionally hash-bound.
+`libadh_agent.so` and `idh_agent_start` are legacy on-disk/ABI names kept for compatibility. New code, commands, logs, and UI copy use `ADH` / `adh_*`; do not add new `idh_*` identifiers. The fixed `com.idh.probe` / `IDH_PROBE_OK` fixture is intentionally hash-bound.
 
 ## Phase 3 extraction rule
 
@@ -34,6 +34,6 @@ Phase 3 domain extraction is complete. Further bootstrap work should focus on ta
 
 ## Release footprint
 
-- `tools/build_agent.sh` keeps `libidh_agent.so.debug` locally and stages only a stripped `.so`.
+- `tools/build_agent.sh` keeps `libadh_agent.so.debug` locally and stages only a stripped `.so`.
 - `exports.map` restricts `.dynsym` to `JNI_OnLoad`, `adh_agent_set_package`, `adh_agent_start`, and `idh_agent_start`.
 - `compat_probe` reports bootstrap vs current exec/anon-exec/RWX counters; base injection and GOT hooks must not add true anonymous executable pages.

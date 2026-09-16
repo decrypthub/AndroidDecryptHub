@@ -5,7 +5,7 @@
 #   installed framework (LSPosed / Vector) →
 #   thin module APK installed + enabled + scoped to com.adh.manager →
 #   framework instantiates com.adh.xposed.AdhXposedEntry inside that app process →
-#   entry loads libidh_agent.so (uncompressed lib inside the module APK) →
+#   entry loads libadh_agent.so (uncompressed lib inside the module APK) →
 #   agent dials the Host ADH Daemon (entry=jni_onload) →
 #   host can actually drive that session (module list answers).
 #

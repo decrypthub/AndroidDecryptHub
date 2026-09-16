@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # v0.2 SO-reassembly acceptance: reconstruct a loaded .so from target memory and
 # confirm the rebuilt ELF is valid + analyzable (llvm-readelf reads it; exported
-# symbols survive). Target = libidh_agent.so itself (guaranteed loaded, known exports).
+# symbols survive). Target = libadh_agent.so itself (guaranteed loaded, known exports).
 # Exit 0 = PASS. Prereq: idhd running, device attached, sandbox running.
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
@@ -18,10 +18,10 @@ const agents=await P({path:'/api/agents'});
 const a=agents.filter(x=>x.package==='com.adh.sandbox'&&x.online).pop();
 if(!a){console.log('NO_AGENT');process.exit(0);}
 const mods=await P({path:`/api/modules?session=${a.sessionId}`});
-const mine=mods.find(m=>m.name==='libidh_agent.so');
+const mine=mods.find(m=>m.name==='libadh_agent.so');
 console.log('modules total='+mods.length+' target='+(mine?`${mine.name} base=${mine.base} segs=${mine.segs} size=${mine.size}`:'MISSING'));
 if(!mine){console.log('NO_MODULE');process.exit(0);}
-const d=await P({path:'/api/module/dump',body:{session:a.sessionId,name:'libidh_agent.so'}});
+const d=await P({path:'/api/module/dump',body:{session:a.sessionId,name:'libadh_agent.so'}});
 if(d.error){console.log('DUMP_ERR '+d.error);process.exit(0);}
 console.log(`reassembled: kind=${d.kind} size=${d.size} sha=${(d.sha256||'').slice(0,16)}… path=${d.path}`);
 console.log('DUMP_PATH='+d.path);
@@ -45,7 +45,7 @@ IS_AARCH64=$(echo "$HDR" | grep -c "AArch64")
 IS_DYN=$(echo "$HDR" | grep -Ec "Type:.*DYN")
 HAS_LOAD=$(echo "$PHDR" | grep -c "LOAD")
 HAS_DYNAMIC=$(echo "$PHDR" | grep -c "DYNAMIC")
-HAS_SONAME=$(echo "$DYN" | grep -c "libidh_agent.so")
+HAS_SONAME=$(echo "$DYN" | grep -c "libadh_agent.so")
 HAS_SYMTAB=$(echo "$DYN" | grep -c "SYMTAB")
 HAS_STRTAB=$(echo "$DYN" | grep -c "STRTAB")
 STR_START=$(grep -c "adh_agent_start" "$DUMP_PATH" 2>/dev/null)

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build ADH Zygisk companion .so + Magisk module zip (adh-zygisk.zip).
-# Depends on libidh_agent.so (runs build_agent.sh if missing).
+# Depends on libadh_agent.so (runs build_agent.sh if missing).
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/env.sh"
 
@@ -8,12 +8,12 @@ ZY="$ROOT/injector/zygisk"
 JNI="$ZY/jni"
 MOD="$ZY/module"
 DIST="$ZY/dist"
-AGENT_SO="$ROOT/agent/build/libidh_agent.so"
+AGENT_SO="$ROOT/agent/build/libadh_agent.so"
 MANAGER_APK="$ROOT/device/manager/build/outputs/apk/debug/manager-debug.apk"
 DAEMON_APK="$ROOT/device/daemon/build/outputs/apk/debug/daemon-debug.apk"
 
 [ -f "$AGENT_SO" ] || {
-  echo ">> libidh_agent.so missing — building agent first"
+  echo ">> libadh_agent.so missing — building agent first"
   bash "$ROOT/tools/build_agent.sh"
 }
 [ -f "$AGENT_SO" ] || { echo "!! agent .so still missing"; exit 1; }
@@ -79,7 +79,7 @@ cp "$MOD/device-daemon" "$STAGE/"
 cp "$MOD/META-INF/com/google/android/update-binary" "$STAGE/META-INF/com/google/android/"
 cp "$MOD/META-INF/com/google/android/updater-script" "$STAGE/META-INF/com/google/android/"
 cp "$COMPANION" "$STAGE/zygisk/$ABI.so"
-cp "$AGENT_SO" "$STAGE/libidh_agent.so"
+cp "$AGENT_SO" "$STAGE/libadh_agent.so"
 cp "$DAEMON_APK" "$STAGE/daemon.apk"
 
 mkdir -p "$DIST"

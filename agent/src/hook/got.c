@@ -370,13 +370,26 @@ static int my_close(int fd) {
     return ((close_t)g_orig_close)(fd);
 }
 
+// The agent ships as libadh_agent.so, but a module dir flashed before that rename still carries
+// libidh_agent.so (and the Zygisk companion accepts both). The self-test must therefore never
+// hardcode its own file name — derive the basename from dladdr().
+static const char *self_module_name(void) {
+    Dl_info info;
+    if (dladdr((void *)(uintptr_t)self_module_name, &info) && info.dli_fname) {
+        const char *base = strrchr(info.dli_fname, '/');
+        return base ? base + 1 : info.dli_fname;
+    }
+    return "libadh_agent.so";
+}
+
 void idh_cmd_gothook_selftest(int fd, const char *id) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
+    const char *self_lib = self_module_name();
     void *libc = dlopen("libc.so", RTLD_NOW);
     void *orig = libc ? dlsym(libc, "close") : NULL;
     g_orig_close = orig;
     g_dbg_slot = 0; g_dbg_orig_perms[0] = 0;
-    int replaced = orig ? idh_got_replace("libidh_agent.so", orig, (void *)my_close) : -1;
+    int replaced = orig ? idh_got_replace(self_lib, orig, (void *)my_close) : -1;
     // While still hooked: read the hooked slot's page perms. got_write_slot restores the
     // page's original protection after publishing, so RELRO (r--) must read back r-- —
     // proving we don't leave the page rw-flipped (weakened RELRO / integrity-check bait).
@@ -387,7 +400,7 @@ void idh_cmd_gothook_selftest(int fd, const char *id) {
     int tfd = open("/proc/self/stat", O_RDONLY);
     if (tfd >= 0) close(tfd);
     int after = g_close_hits;
-    if (replaced > 0 && orig) idh_got_replace("libidh_agent.so", (void *)my_close, orig);  // restore
+    if (replaced > 0 && orig) idh_got_replace(self_lib, (void *)my_close, orig);  // restore
     char out[320];
     snprintf(out, sizeof(out),
         "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"gothook_selftest\",\"ok\":true,\"replaced\":%d,\"hitsBefore\":%d,\"hitsAfter\":%d,\"fired\":%s,\"origPerms\":\"%s\",\"slotPerms\":\"%s\",\"protRestored\":%s}\n",

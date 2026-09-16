@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# v0.8 native binary analysis (HOST-ONLY). idhd returns exports/imports/needed/strings
+# v0.8 native binary analysis (HOST-ONLY). Host ADH Daemon returns exports/imports/needed/strings
 # for an ELF .so. Verifies the agent's own .so: exports ADH primary + legacy start and JNI_OnLoad,
 # NEEDED includes liblog, imports include a hooked libc/crypto symbol, strings has ADH (legacy IDH accepted).
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
 verify_resolve_env_host
-SO="$ROOT/agent/build/libidh_agent.so"
+SO="$ROOT/agent/build/libadh_agent.so"
 [ -f "$SO" ] || { echo "❌ agent .so missing"; echo "RESULT:FAIL"; exit 1; }
 
 set +e

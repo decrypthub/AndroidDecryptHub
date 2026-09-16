@@ -60,7 +60,7 @@ translation — kept separate).
 
 ## Build scripts
 
-- `build_agent.sh` — `libidh_agent.so` (arm64-v8a, NDK+SDK cmake), stages into `sandbox-app/…/jniLibs/$ABI`, prints `adh_agent_set_package` + `adh_agent_start` + legacy `idh_agent_start` + `JNI_OnLoad` exports (fail-loud on compile error — do NOT hide build output).
+- `build_agent.sh` — `libadh_agent.so` (arm64-v8a, NDK+SDK cmake), stages into `sandbox-app/…/jniLibs/$ABI`, prints `adh_agent_set_package` + `adh_agent_start` + legacy `idh_agent_start` + `JNI_OnLoad` exports (fail-loud on compile error — do NOT hide build output).
 - `build_detect.sh` — `libadhdetect.so` (sandbox's mock detection target), same cmake pattern.
 - `fetch_qbdi.sh` / `fetch_dobby.sh` — one-time third-party fetch (gitignored under `agent/third_party/`). Dobby is the inline-hook backend (Java method hook / LSPlant is out of the v1 scope).
 - `build_zygisk.sh` — 构建 Manager 证书固定的 Root Device Daemon + Zygisk 模块 → `injector/zygisk/dist/adh-zygisk.zip`
@@ -72,7 +72,7 @@ translation — kept separate).
 - `load_frida_gadget.sh` — manual Frida Gadget loader (module W **optional** backend, off by default): official Gadget (version/ABI selectable, sha256-pinned) → bundle the hook if it needs a language bridge → stage into `<pkg>/code_cache` (app uid + selinux ctx) → `POST /api/agent/load_so` dlopen (constructor-driven: **no entry symbol**) → wait for `frida-gadget` threads in `/proc/<pid>/task` → optional `--marker` end-to-end assert. `--watch` writes `on_change: reload` (edit the staged hook → hot reload).
 - `compile_frida_script.sh` — bundle a hook with the Frida language bridges via esbuild (`tools/frida/`, gitignored deps). Needed because **Frida 17+ no longer ships Java/ObjC bridges inside the Gadget runtime**; `frida-compile` is NOT used (its CLI needs the native `frida` binding → MSVC on Windows).
 - `verify_v30_fridagadget.sh` — v3.0 Gadget acceptance (device): official gadget → dlopen → bundled Java hook writes a marker; prints RESULT:SKIP when the gadget asset or bundler deps are missing (both are gitignored caches).
-- `build_xposed.sh` — 构建可选 LSPosed/Xposed 薄模块（`injector/xposed/`）：把 `libidh_agent.so` 打进模块 APK（未压缩），产出 `injector/xposed/dist/adh-xposed.apk`。
+- `build_xposed.sh` — 构建可选 LSPosed/Xposed 薄模块（`injector/xposed/`）：把 `libadh_agent.so` 打进模块 APK（未压缩），产出 `injector/xposed/dist/adh-xposed.apk`。
 - `install_xposed.sh` — root 安装 + 用 `/data/adb/lspd/cli`（LSPosed/Vector）启用模块并设 scope；`--disable` 先逐条 `scope rm` 再关模块（空参数 `scope set` 会 NPE）。
 - `verify_v31_xposed.sh` — v3.1 可选 Xposed 后端验收（device）：框架 → 薄模块 → 框架注入 `com.adh.manager` → agent 上线并被 Host 驱动；结束恢复测试前状态；无框架/构建不了时 SKIP。
 - `verify_v32_backend_control.sh` — v3.2 可选后端**控制面**验收（device）：构建并推送 Device Daemon → 用它的 root-only 一次性 CLI 设/清框架 scope、开关模块，每步都与框架 CLI 交叉核对，最后恢复原状态；无框架/无模块时 SKIP。## Known flakes (pre-existing, not introduced by the lib refactor)

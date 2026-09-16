@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build libidh_agent.so (arm64-v8a) with the NDK + SDK cmake, then stage it into
+# Build libadh_agent.so (arm64-v8a) with the NDK + SDK cmake, then stage it into
 # the sandbox app's jniLibs. Reproducible build step — run from anywhere.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/env.sh"
@@ -21,8 +21,8 @@ echo ">> building"
 # Do NOT hide build output — a hidden compile error once shipped a stale .so.
 if ! "$CMAKE" --build "$ROOT/agent/build"; then echo "!! AGENT BUILD FAILED"; exit 1; fi
 
-SO="$ROOT/agent/build/libidh_agent.so"
-DEBUG_SO="$ROOT/agent/build/libidh_agent.so.debug"
+SO="$ROOT/agent/build/libadh_agent.so"
+DEBUG_SO="$ROOT/agent/build/libadh_agent.so.debug"
 DEST="$ROOT/sandbox-app/app/src/main/jniLibs/$ABI"
 STRIP="$NDK/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-strip.exe"
 [ -f "$STRIP" ] || { echo "missing strip tool: $STRIP"; exit 1; }
@@ -39,8 +39,8 @@ if "$READELF" -SW "$SO" | grep -qE '\.debug_|\.symtab'; then
 fi
 
 mkdir -p "$DEST"
-cp "$SO" "$DEST/libidh_agent.so"
-echo ">> built $(ls -la "$SO" | awk '{print $5}') bytes -> $DEST/libidh_agent.so"
+cp "$SO" "$DEST/libadh_agent.so"
+echo ">> built $(ls -la "$SO" | awk '{print $5}') bytes -> $DEST/libadh_agent.so"
 if [ -f "$DEBUG_SO" ]; then echo ">> unstripped debug copy -> $DEBUG_SO"; fi
 "$READELF" --dyn-syms "$SO" \
   | grep -iE "adh_agent_set_package|adh_agent_start|idh_agent_start|JNI_OnLoad" | awk '{print "   export:", $8}'

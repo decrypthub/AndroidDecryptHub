@@ -1,4 +1,4 @@
-// libidh_agent.so — bootstrap + command loop (v0.2)
+// libadh_agent.so — bootstrap + command loop (v0.2)
 // Dual entry:
 //   - JNI_OnLoad()      : fires when a host loads us via System.loadLibrary (模拟注入 / gadget)
 //   - adh_agent_start() : exported C symbol for injector-driven load
@@ -269,7 +269,7 @@ void idh_agent_start(void) {
 }
 
 // Mixed backends can bring MORE THAN ONE copy of this .so into the same process: the Zygisk
-// companion (/data/adb/modules/adh/libidh_agent.so), the optional Xposed module (mapped from its
+// companion (/data/adb/modules/adh/libadh_agent.so), the optional Xposed module (mapped from its
 // own APK) and the host app's System.loadLibrary. Each copy has its own pthread_once, so without
 // a process-wide guard the second copy opens a duplicate session and the two fight over the same
 // GOT slots (on device: crypto_hook_test reported replaced=0 because the first copy held them).

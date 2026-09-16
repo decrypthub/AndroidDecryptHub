@@ -15,6 +15,11 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 idhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [x] **交付物改名：`libidh_agent.so` → `libadh_agent.so`（2026-09-16，发布口径）**：按 `AGENTS.md` 命名规则，`idh_*` 只是 legacy 兼容层，交付物不该挂 IDH 名 ——
+      agent 的 CMake project/target 改为 `adh_agent`（产物 `libadh_agent.so`）；沙盒 `System.loadLibrary("adh_agent")`、Xposed 模块 `AGENT_LIB="adh_agent"`、Zygisk companion `kAgentName="libadh_agent.so"`、`AdhPaths.AGENT_SO_NAME`、全部 build/verify 脚本与文档同步。
+      · **兼容层刻意保留**：导出符号 `idh_agent_start`、`IDH_*` 环境变量、`idhd` npm 别名照旧；且 **loader 同时接受旧文件名** —— Zygisk companion 先试 `libadh_agent.so` 再回退 `libidh_agent.so`（module-dir 与文件系统回退路径都试），agent 的 GOT 自测改用 `dladdr()` 取自身 basename（不再硬编码），footprint 统计与 daemon 的 `self_load` 判定都同时认两名 ⇒ "新代码 + 早先刷入的旧模块"这种混态不会坏。
+      · 验证：agent 重建 323,752 B（三个导出不变）；沙盒 APK / Xposed 模块 APK / zygisk zip / bundle 全部重出（zip 内为 `libadh_agent.so`）；全量 `verify_all` **51/51 全绿**。
+      · 提醒：测试机上**已刷入**的 Zygisk 模块仍是旧文件名；要让设备也切成新名需重刷 `injector/zygisk/dist/adh-bundle-v0.3.3.zip` 并重启（不刷不影响功能，companion 两者都认）。
 - [x] **发布前功能状态梳理（2026-09-16）**：新增 `docs/FEATURE_STATUS.md`，按四类列清第一版有什么 ——
       ①**没通过测试（不要了）**：LSPlant Java 方法 hook（已删除，agent -45% 体积）、ShadowHook（从未入库）；
       ②**测过的**：51 项验收（`verify_all` 51/51）按能力分组的清单与每项"证明什么"；

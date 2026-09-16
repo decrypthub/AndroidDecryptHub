@@ -8,7 +8,7 @@
 
 | 交付物 | 来源 | 状态 |
 |---|---|---|
-| `libidh_agent.so`（arm64-v8a，323,424 B，release 剥离） | `tools/build_agent.sh` | ✅ 已验收 |
+| `libadh_agent.so`（arm64-v8a，323,424 B，release 剥离） | `tools/build_agent.sh` | ✅ 已验收 |
 | Zygisk 模块 zip + ADH Manager APK + 组合包 | `tools/build_zygisk.sh` / `build_bundle.sh` / `flash_device.sh` | ✅ 已验收（v27）+ 真机刷入 |
 | 可选后端：Xposed 薄模块 APK | `injector/xposed/` + `tools/build_xposed.sh` | ✅ 已验收（v31/v32），默认关闭 |
 | 可选后端：Frida Gadget | `tools/fetch_frida_gadget.sh` + `load_frida_gadget.sh` | ✅ 已验收（v30），默认关闭 |
@@ -72,6 +72,6 @@
 
 ## 5. 结论
 
-- **可以发布**：`libidh_agent.so` + Zygisk 包/Manager + 三个可选后端（Gadget/Xposed/eCapture），全部有独立验收入口（`tools/verify_all.sh` 51/51）。
+- **可以发布**：`libadh_agent.so` + Zygisk 包/Manager + 三个可选后端（Gadget/Xposed/eCapture），全部有独立验收入口（`tools/verify_all.sh` 51/51）。
 - **不要宣传**：Java 方法 hook（已删除）、KDF 原生捕获、国密、隐私面板、重打包、ptrace 注入。
 - **发版前若还想再砍一刀**：把 KDF 家族从设置/前端摘掉（让 UI 不再出现永远填不满的分类），并把 `python/` 明确为"未发布"。

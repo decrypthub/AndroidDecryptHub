@@ -2,7 +2,7 @@
 # Fetch the Dobby arm64 static library — the agent's native inline-hook backend (module B/WS-A).
 #
 # Dobby patches a function's entry (by address) so targets that never go through a GOT slot can
-# still be hooked; it links statically into libidh_agent.so (no extra .so, no JNI_OnLoad).
+# still be hooked; it links statically into libadh_agent.so (no extra .so, no JNI_OnLoad).
 # Verified by tools/verify_v28_inlinehook.sh. Idempotent, gitignored under agent/third_party/dobby/.
 #
 # Usage: tools/fetch_dobby.sh [--force]

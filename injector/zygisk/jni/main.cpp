@@ -1,4 +1,4 @@
-// ADH Zygisk module — early-inject libidh_agent.so into allowlisted packages.
+// ADH Zygisk module — early-inject libadh_agent.so into allowlisted packages.
 // Scope file: /data/adb/adh/scope.json  ({"version":1,"mode":"allowlist","packages":["…"]})
 // Never injects zygote / system_server / com.adh.manager.
 #include <android/log.h>
@@ -20,7 +20,10 @@
 static constexpr const char *kScopePath = "/data/adb/adh/scope.json"; // == com.adh.core.AdhPaths.SCOPE_PATH
 static constexpr const char *kLoaderMarker = "/data/adb/adh/zygisk_loaded"; // == com.adh.core.AdhPaths.LOADER_MARKER
 static constexpr const char *kManagerPkg = "com.adh.manager";         // == com.adh.core.AdhPaths.MANAGER_PKG
-static constexpr const char *kAgentName = "libidh_agent.so";          // == com.adh.core.AdhPaths.AGENT_SO_NAME
+static constexpr const char *kAgentName = "libadh_agent.so";          // == com.adh.core.AdhPaths.AGENT_SO_NAME
+// Legacy on-disk name: a module dir flashed before the ADH rename still carries this file, and
+// the companion stays compatible with it (the payload file itself is not ABI-bound).
+static constexpr const char *kLegacyAgentName = "libidh_agent.so";
 
 static void mark_loader_active(int client) {
     int fd = open(kLoaderMarker, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644);
@@ -82,6 +85,7 @@ static int open_agent_fd(zygisk::Api *api, std::string *where) {
     int dirfd = api->getModuleDir();
     if (dirfd >= 0) {
         int fd = openat(dirfd, kAgentName, O_RDONLY | O_CLOEXEC);
+        if (fd < 0) fd = openat(dirfd, kLegacyAgentName, O_RDONLY | O_CLOEXEC);   // legacy on-disk name
         close(dirfd);
         if (fd >= 0) {
             if (where) *where = "module-dir fd";
@@ -92,12 +96,21 @@ static int open_agent_fd(zygisk::Api *api, std::string *where) {
         LOGE("getModuleDir failed");
     }
 
-    // Fallback: the file is normally visible in the pre-specialize namespace.
-    const char *fallback = "/data/adb/modules/adh/libidh_agent.so";
-    int fd = open(fallback, O_RDONLY | O_CLOEXEC);
-    if (fd >= 0 && where) *where = fallback;
-    else LOGE("open(%s) failed: %s", fallback, strerror(errno));
-    return fd;
+    // Fallback: the file is normally visible in the pre-specialize namespace. Try the current
+    // name first, then the legacy one (see kLegacyAgentName).
+    const char *candidates[] = {
+        "/data/adb/modules/adh/libadh_agent.so",
+        "/data/adb/modules/adh/libidh_agent.so",
+    };
+    for (const char *cand : candidates) {
+        int fd = open(cand, O_RDONLY | O_CLOEXEC);
+        if (fd >= 0) {
+            if (where) *where = cand;
+            return fd;
+        }
+        LOGE("open(%s) failed: %s", cand, strerror(errno));
+    }
+    return -1;
 }
 
 static void *dlopen_agent_fd(int fd, const std::string &where) {

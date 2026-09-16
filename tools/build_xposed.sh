@@ -5,7 +5,7 @@
 #   tools/build_xposed.sh [--no-agent] [--release]
 #
 # Steps:
-#   1. ensure agent/build/libidh_agent.so (built on demand via tools/build_agent.sh)
+#   1. ensure agent/build/libadh_agent.so (built on demand via tools/build_agent.sh)
 #   2. stage it into injector/xposed/module/src/main/jniLibs/arm64-v8a/ (gitignored)
 #   3. write injector/xposed/local.properties from $SDK (gitignored, same as sandbox-app)
 #   4. gradle :module:assembleDebug|assembleRelease
@@ -29,7 +29,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-AGENT_SO="$ROOT/agent/build/libidh_agent.so"
+AGENT_SO="$ROOT/agent/build/libadh_agent.so"
 if [ "$WITH_AGENT" = "1" ] && [ ! -f "$AGENT_SO" ]; then
   echo ">> agent .so missing — building it first (tools/build_agent.sh)" >&2
   bash "$ROOT/tools/build_agent.sh" >&2
@@ -38,8 +38,8 @@ fi
 
 JNI_DIR="$ROOT/injector/xposed/module/src/main/jniLibs/arm64-v8a"
 mkdir -p "$JNI_DIR"
-cp "$AGENT_SO" "$JNI_DIR/libidh_agent.so"
-echo ">> staged libidh_agent.so ($(stat -c %s "$AGENT_SO") bytes) into the module APK" >&2
+cp "$AGENT_SO" "$JNI_DIR/libadh_agent.so"
+echo ">> staged libadh_agent.so ($(stat -c %s "$AGENT_SO") bytes) into the module APK" >&2
 
 # Gradle reads the SDK location from local.properties (gitignored). The JVM is a Windows
 # process, so translate the Git-Bash /c/... path (cygpath -m keeps forward slashes).
@@ -58,15 +58,15 @@ APK="$(ls -t "$ROOT"/injector/xposed/module/build/outputs/apk/*/*.apk 2>/dev/nul
 # Fail-loud on a stale payload: AGP can judge the packaging up-to-date after we swapped the
 # staged .so, and the module APK is what injects the agent into targets — shipping the previous
 # build silently is exactly the kind of thing that wastes a debugging session.
-staged_sha() { sha256sum "$JNI_DIR/libidh_agent.so" | awk '{print $1}'; }
-apk_sha() { unzip -p "$1" lib/arm64-v8a/libidh_agent.so 2>/dev/null | sha256sum | awk '{print $1}'; }
+staged_sha() { sha256sum "$JNI_DIR/libadh_agent.so" | awk '{print $1}'; }
+apk_sha() { unzip -p "$1" lib/arm64-v8a/libadh_agent.so 2>/dev/null | sha256sum | awk '{print $1}'; }
 if command -v unzip >/dev/null 2>&1; then
   if [ "$(staged_sha)" != "$(apk_sha "$APK")" ]; then
     echo ">> packaged agent .so is stale — re-running the packaging tasks" >&2
     sh ./gradlew --console=plain --rerun-tasks ":module:$TASK" >&2
     APK="$(ls -t "$ROOT"/injector/xposed/module/build/outputs/apk/*/*.apk 2>/dev/null | head -1)"
     [ -n "$APK" ] && [ -f "$APK" ] || die "gradle produced no APK after rerun"
-    [ "$(staged_sha)" = "$(apk_sha "$APK")" ] || die "module APK still carries a stale libidh_agent.so"
+    [ "$(staged_sha)" = "$(apk_sha "$APK")" ] || die "module APK still carries a stale libadh_agent.so"
   fi
 fi
 

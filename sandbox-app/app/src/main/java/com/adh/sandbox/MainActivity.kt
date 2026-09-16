@@ -66,9 +66,9 @@ class MainActivity : Activity() {
             // class name) can bind AdhReport.nReport via RegisterNatives at JNI_OnLoad — before
             // we install the JCE provider below, so no report can race the binding.
             System.setProperty("adh.reporter.class", "com.adh.sandbox.AdhReport")
-            // Dobby (LSPlant's inline-hook backend) is statically linked into libidh_agent.so —
+            // Dobby (the native inline-hook backend) is statically linked into libadh_agent.so —
             // no separate .so to load.
-            System.loadLibrary("idh_agent"); "agent: libidh_agent 已加载（模拟注入）"
+            System.loadLibrary("adh_agent"); "agent: libadh_agent 已加载（模拟注入）"
         } catch (t: Throwable) {
             Log.w(TAG, "idh_agent not loaded: ${t.message}"); "agent: 未加载 — ${t.message}"
         }

@@ -31,8 +31,8 @@ fi
 #
 # Snapshot the operator's scope first and restore it on exit: leaving com.adh.sandbox in the
 # Zygisk allowlist makes every later device check run with TWO agent copies in the sandbox
-# process — its own System.loadLibrary copy (/data/app/.../libidh_agent.so) plus the Zygisk
-# module's /data/adb/modules/adh/libidh_agent.so — and the two race for the same GOT slots,
+# process — its own System.loadLibrary copy (/data/app/.../libadh_agent.so) plus the Zygisk
+# module's /data/adb/modules/adh/libadh_agent.so — and the two race for the same GOT slots,
 # so "replaced=0" shows up nondeterministically in v04/v05/v07/v20/v26.
 PRIOR_B64="$(adb -s "$SERIAL" shell 'su -c "test -f /data/adb/adh/scope.json && base64 /data/adb/adh/scope.json || true"' 2>/dev/null | tr -d '\r\n' || true)"
 restore_scope() {
