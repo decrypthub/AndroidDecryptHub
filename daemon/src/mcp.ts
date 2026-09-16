@@ -16,7 +16,7 @@ import { backendMatrix, classifySession } from './backends.ts';
 import { automation } from './automation.ts';
 import { agentWaitSightings, findAgentWaitMatch, hasAgentWaitFilters } from './agent_events.ts';
 import { implicitSelectorFor, selectorFrom } from './phone_selectors.ts';
-import { PhoneSkillStore } from './phone_skills.ts';
+import { PhoneSkillStore, resolveSkillInputs } from './phone_skills.ts';
 import { resolveTemplates } from './phone_templates.ts';
 import { renderScreenText } from './phone_text.ts';
 import { blockedPackageFromError, openOutcomeHint } from './phone_foreground.ts';
@@ -91,7 +91,7 @@ MCP_TOOLS.push(
   { name: 'phone_act', description: 'Act on the active phone screen. Prefer a selector or snapshotId+ref from phone_observe; use normalized coordinates only as the visual fallback. Supports tap, long_press, swipe, scroll, set_text and global back/home/recents/notifications/quick_settings/power/lock/screenshot. For set_text the text argument is the payload to write, not a filter (target the field with ref, resourceId, editable or selector); the value can be read back with phone_find.', inputSchema: { type: 'object', properties: { ...SEL, snapshotId: S, action: { type: 'string', enum: ['tap', 'long_press', 'swipe', 'scroll', 'set_text', 'global'] }, ref: S, x: N, y: N, x2: N, y2: N, coordinateSpace: { type: 'string', enum: ['normalized', 'pixel'] }, text: S, key: { type: 'string', enum: ['back', 'home', 'recents', 'notifications', 'quick_settings', 'power', 'lock', 'screenshot'] }, direction: { type: 'string', enum: ['forward', 'backward'] }, durationMs: N, observeAfter: { type: 'boolean' }, package: S }, required: ['action'] }, raw: true, handler: async (a) => actPhone(a) },
   { name: 'phone_app', description: 'Open, stop or restart an allowlisted app by package name. open verifies that the app really reached the foreground and reports verified/foreground/warning when an OEM dialog swallowed the launch (with a hint on how to unblock). Open uses the root Device Daemon when protocol v6+ is available, with a compatibility fallback for older daemons; stop/restart delegate to the same authenticated daemon.', inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['open', 'stop', 'restart'] }, package: S }, required: ['action', 'package'] }, handler: async (a) => appPhone(a) },
   { name: 'phone_device', description: 'Read or control device power state: status, wake, unlock a non-secure keyguard, or lock the screen. Secure credentials are never bypassed.', inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['status', 'wake', 'unlock', 'lock'] } }, required: ['action'] }, handler: async (a) => devicePhone(a) },
-  { name: 'phone_skill', description: 'Save, list, run or delete named phone recipes (skills). A skill is a validated, bounded list of phone_task steps kept on the host, so a flow the AI worked out once replays in one call. Skills run through the same primitives, allowlist and retry semantics as phone_task; they cannot nest skills or reach a shell.', inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['list', 'save', 'run', 'delete'] }, name: S, description: S, overwrite: { type: 'boolean' }, stopOnError: { type: 'boolean' }, steps: { type: 'array', minItems: 1, maxItems: 30, items: { type: 'object' } } }, required: ['action'] }, handler: async (a) => skillPhone(a) },
+  { name: 'phone_skill', description: 'Save, list, run or delete named phone recipes (skills). A skill is a validated, bounded list of phone_task steps kept on the host, so a flow the AI worked out once replays in one call. Recipes can take params (declared on save) that steps read as {{input.<name>}} and runs pass as inputs; defaults fill the optional ones. Skills run through the same primitives, allowlist and retry semantics as phone_task; they cannot nest skills or reach a shell.', inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['list', 'save', 'run', 'delete'] }, name: S, description: S, overwrite: { type: 'boolean' }, stopOnError: { type: 'boolean' }, steps: { type: 'array', minItems: 1, maxItems: 30, items: { type: 'object' } }, params: { type: 'array', maxItems: 10, items: { type: 'string' } }, defaults: { type: 'object' }, inputs: { type: 'object' } }, required: ['action'] }, handler: async (a) => skillPhone(a) },
   { name: 'phone_task', description: 'Run a bounded sequence of phone primitives in one MCP call. Steps may observe, find, wait (UI state or agent signal), act, control an app, or control device power; each step supports retries and structured failure output. Steps with an id can be referenced by later steps as {{id.path}} (e.g. take the ref and snapshotId a find discovered straight into act), which avoids ref-expiry between separate calls.', inputSchema: { type: 'object', properties: { stopOnError: { type: 'boolean' }, steps: { type: 'array', minItems: 1, maxItems: 30, items: { type: 'object', properties: { id: S, type: { type: 'string', enum: ['observe', 'find', 'wait', 'act', 'app', 'device'] }, args: { type: 'object' }, retries: N, retryDelayMs: N }, required: ['type'] } } }, required: ['steps'] }, handler: async (a) => taskPhone(a) },
 );
 
@@ -242,16 +242,17 @@ async function skillPhone(args: any) {
     return { name, deleted: phoneSkills.remove(name) };
   }
   if (action === 'save') {
-    const skill = phoneSkills.save(args.name, args.description, args.steps, args.overwrite === true);
-    return { name: skill.name, description: skill.description ?? '', steps: skill.steps.length, saved: true };
+    const skill = phoneSkills.save(args.name, args.description, args.steps, args.overwrite === true, args.params, args.defaults);
+    return { name: skill.name, description: skill.description ?? '', steps: skill.steps.length, params: skill.params ?? [], saved: true };
   }
   if (action === 'run') {
     const name = String(args.name ?? '');
     const skill = phoneSkills.get(name);
     if (!skill) throw new Error(`skill_not_found: '${name}' is not saved on this host`);
-    const result = await taskPhone({ ...args, steps: skill.steps });
+    const inputs = resolveSkillInputs(skill, args.inputs);
+    const result = await taskPhone({ ...args, steps: skill.steps, inputs });
     phoneSkills.noteRun(name);
-    return { name, ...result };
+    return { name, inputs, ...result };
   }
   throw new Error('phone_skill requires action: list | save | run | delete');
 }
@@ -263,7 +264,8 @@ async function taskPhone(args: any) {
   if (steps.length > 30) throw new Error('phone_task supports at most 30 steps');
   const stopOnError = args.stopOnError !== false;
   const results: any[] = [];
-  const outputs: Record<string, any> = {};   // step id -> result, for {{id.path}} templating
+  const outputs: Record<string, any> = {};   // step id -> result, plus the reserved `input` namespace
+  if (args.inputs && typeof args.inputs === 'object' && !Array.isArray(args.inputs)) outputs.input = args.inputs;
   for (let index = 0; index < steps.length; index++) {
     const step = steps[index] ?? {};
     const type = String(step.type ?? '');

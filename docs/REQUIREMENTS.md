@@ -1521,7 +1521,7 @@ Host ADH Daemon / MCP  →  自动化 TCP 8763（loopback + adb reverse）  → 
 | `phone_app` | 通过包名 `open` / `stop` / `restart` 授权应用；新 daemon 走 root Device Daemon，旧 daemon 保留 Accessibility fallback。`open`/`restart` 必须**验证前台**：未到达时返回 `verified:false` + 实际前台包 + 处理提示（OEM 确认框吞掉启动时必须点名该包） |
 | `phone_device` | `status` / `wake` / `unlock` / `lock`；安全锁屏凭据不绕过 |
 | `phone_task` | 单次 MCP 调用内执行有界步骤序列（≤30 步），步骤间可用 `{{id.path}}` 引用前序步骤的结果（如把 `find` 得到的 `snapshotId`/`ref` 直接喂给 `act`）；每步支持 `retries` 与结构化失败输出 |
-| `phone_skill` | 保存 / 列出 / 运行 / 删除命名手机配方（skills）：步骤受校验（仅 observe/find/wait/act/app/device，≤30 步）、不可嵌套、无 shell；运行复用 `phone_task` 的执行器、allowlist 与重试语义 |
+| `phone_skill` | 保存 / 列出 / 运行 / 删除命名手机配方（skills）：步骤受校验（仅 observe/find/wait/act/app/device，≤30 步）、不可嵌套、无 shell；配方可声明 `params`（≤10）并由步骤以 `{{input.<name>}}` 引用，运行时用 `inputs` 传值、`defaults` 兜底，缺参数 fail-loud；运行复用 `phone_task` 的执行器、allowlist 与重试语义 |
 
 ### 31.3 兜底规则
 
@@ -1532,7 +1532,7 @@ Host ADH Daemon / MCP  →  自动化 TCP 8763（loopback + adb reverse）  → 
 5. 进程内信号等待与控件条件竞速，命中即返回；同一类过滤为 AND。事件用 `agentEvent`（精确 type）/ `agentEventContains`（JSON 子串），捕获用 `captureCategory`（crypto/net/file/system）/ `captureContains`（在解码后的 UTF-8 文本 + 元数据上做子串匹配）。`phone_observe`/`phone_find`/`phone_act` 返回 `cursor`（`phone_act` 另有动作派发前的 `cursorBefore`）；把游标传给 `afterCaptureId`/`afterEventSeq` 只匹配更新的记录（不看时间戳），避免信号在两次 MCP 调用之间到达而丢失。agent 与 Host 的连接由 agent 自己维持：Host 重启（每次升级都会发生）后 agent 必须自行重连，目标进程不得失联；纯信号等待不依赖无障碍服务。信号等待超时时必须带回窗口内的实际信号摘要（`saw.captures`/`saw.events` + `totals`）与当时的 `cursor`，让 AI 能改写过滤条件而不是盲猜。
 6. 同一个 JSON 字段既可能是目标也可能是负载：`set_text` 的 `text` 是"要写入的值"，不得当作选择器（否则要求控件当前文本已等于待写入值，永远选不中）——隐式选择器按动作剔除该键，显式 `selector:{text:...}` 仍然有效。选择器解析允许有界重试（≤3 次 / ~500ms），以吸收动画与列表滚动造成的瞬时抖动。
 
-7. `phone_task`/`phone_skill` 的步骤可引用**前序步骤**的结果：`{{stepId}}` 取整份结果，`{{stepId.path.to.0}}` 取深层值（数组用数字下标）；整串是模板时保留原类型，字符串内嵌则转字符串。只能引用带 `id` 且已完成的前序步骤——未知名与缺失路径必须 fail-loud（`template_unknown_step` / `template_path_missing`），不允许静默替换成空值。它让"find 得到 ref → 立刻 act"在一次调用内完成，避免 ref 在两次调用之间过期。
+7. `phone_task`/`phone_skill` 的步骤可引用**前序步骤**的结果：`{{stepId}}` 取整份结果，`{{stepId.path.to.0}}` 取深层值（数组用数字下标）；整串是模板时保留原类型，字符串内嵌则转字符串。只能引用带 `id` 且已完成的前序步骤——未知名与缺失路径必须 fail-loud（`template_unknown_step` / `template_path_missing`），不允许静默替换成空值。它让"find 得到 ref → 立刻 act"在一次调用内完成，避免 ref 在两次调用之间过期。保留命名空间 `input`：`phone_skill` 的配方用 `params` 声明参数，运行时 `inputs` 传值（`defaults` 可兜底），缺失时返回 `skill_missing_input` 且不执行任何步骤。
 
 ### 31.4 开关与安全
 

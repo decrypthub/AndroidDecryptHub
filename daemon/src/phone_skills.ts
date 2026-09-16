@@ -11,6 +11,8 @@ export interface PhoneSkill {
   name: string;
   description?: string;
   steps: any[];
+  params?: string[];                       // names the recipe expects, referenced as {{input.<name>}}
+  defaults?: Record<string, any>;          // optional values for those names
   createdAt?: number;
   updatedAt?: number;
   runs?: number;
@@ -20,6 +22,31 @@ export interface PhoneSkill {
 export const SKILL_STEP_TYPES = ['observe', 'find', 'wait', 'act', 'app', 'device'];
 const SKILL_NAME = /^[a-z0-9][a-z0-9_.-]{0,39}$/i;
 const MAX_STEPS = 30;
+
+const PARAM = /^[A-Za-z_][A-Za-z0-9_-]{0,30}$/;
+
+export function validateSkillParams(params: unknown): string[] {
+  if (params == null) return [];
+  if (!Array.isArray(params)) throw new Error('invalid_skill_params: params must be an array of names');
+  if (params.length > 10) throw new Error('invalid_skill_params: at most 10 params');
+  const names = params.map((value) => String(value ?? '').trim());
+  for (const name of names) {
+    if (!PARAM.test(name)) throw new Error(`invalid_skill_params: '${name}' is not a usable name (letters/digits/_/- , starting with a letter or _)`);
+    if (name === 'input') throw new Error("invalid_skill_params: 'input' is reserved (steps read it as {{input.<name>}})");
+  }
+  if (new Set(names).size !== names.length) throw new Error('invalid_skill_params: duplicate names');
+  return names;
+}
+
+// Merge caller inputs with the recipe defaults and fail loudly when something required is absent,
+// so a run never silently proceeds with an empty value baked into an action.
+export function resolveSkillInputs(skill: { params?: string[]; defaults?: Record<string, any> }, provided: unknown): Record<string, any> {
+  const given = provided && typeof provided === 'object' && !Array.isArray(provided) ? { ...(provided as Record<string, any>) } : {};
+  const merged: Record<string, any> = { ...(skill.defaults ?? {}), ...given };
+  const missing = (skill.params ?? []).filter((name) => merged[name] === undefined || merged[name] === null);
+  if (missing.length) throw new Error(`skill_missing_input: ${missing.join(', ')} (pass inputs: { ${missing.map((n) => `${n}: ...`).join(', ')} })`);
+  return merged;
+}
 
 export function validateSkillName(name: unknown): string {
   const value = String(name ?? '').trim();
@@ -71,16 +98,30 @@ export class PhoneSkillStore {
   list(): any[] {
     return [...this.skills.values()]
       .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
-      .map((skill) => ({ name: skill.name, description: skill.description ?? '', steps: skill.steps.length, runs: skill.runs ?? 0, updatedAt: skill.updatedAt ?? 0, lastRunAt: skill.lastRunAt ?? 0 }));
+      .map((skill) => ({
+        name: skill.name,
+        description: skill.description ?? '',
+        steps: skill.steps.length,
+        params: skill.params ?? [],
+        defaults: skill.defaults ?? {},
+        runs: skill.runs ?? 0,
+        updatedAt: skill.updatedAt ?? 0,
+        lastRunAt: skill.lastRunAt ?? 0,
+      }));
   }
 
   get(name: string): PhoneSkill | undefined {
     return this.skills.get(name);
   }
 
-  save(name: string, description: string | undefined, steps: unknown, overwrite: boolean): PhoneSkill {
+  save(name: string, description: string | undefined, steps: unknown, overwrite: boolean, params?: unknown, defaults?: unknown): PhoneSkill {
     const key = validateSkillName(name);
     const valid = validateSkillSteps(steps);
+    const validParams = validateSkillParams(params);
+    const validDefaults = defaults && typeof defaults === 'object' && !Array.isArray(defaults) ? { ...(defaults as Record<string, any>) } : {};
+    for (const name of Object.keys(validDefaults)) {
+      if (!validParams.includes(name)) throw new Error(`invalid_skill_params: default for unknown param '${name}'`);
+    }
     const existing = this.skills.get(key);
     if (existing && !overwrite) throw new Error(`skill_exists: '${key}' already exists (pass overwrite:true to replace)`);
     const now = Date.now();
@@ -88,6 +129,8 @@ export class PhoneSkillStore {
       name: key,
       description: description ? String(description).slice(0, 200) : undefined,
       steps: valid,
+      params: validParams,
+      defaults: validDefaults,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
       runs: existing?.runs ?? 0,

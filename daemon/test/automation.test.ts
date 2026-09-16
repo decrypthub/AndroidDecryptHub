@@ -5,7 +5,7 @@ import { AutomationHub } from '../src/automation.ts';
 import { mergeSettings, settings } from '../src/state.ts';
 import { agentWaitSightings, findAgentWaitMatch, hasAgentWaitFilters } from '../src/agent_events.ts';
 import { implicitSelectorFor, selectorFrom } from '../src/phone_selectors.ts';
-import { PhoneSkillStore, validateSkillName, validateSkillSteps } from '../src/phone_skills.ts';
+import { PhoneSkillStore, resolveSkillInputs, validateSkillName, validateSkillParams, validateSkillSteps } from '../src/phone_skills.ts';
 import { renderScreenText } from '../src/phone_text.ts';
 import { readPath, resolveTemplates } from '../src/phone_templates.ts';
 import { blockedPackageFromError, openOutcomeHint } from '../src/phone_foreground.ts';
@@ -334,4 +334,31 @@ test('step templates fail loudly on unknown steps and missing paths', () => {
   assert.throws(() => resolveTemplates({ x: '{{known.missing}}' }, { known: { ref: 'n1' } }), /template_path_missing/);
   // a step cannot reference itself, because its own result is not in the map yet
   assert.throws(() => resolveTemplates('{{self.ref}}', {}), /template_unknown_step/);
+});
+
+test('skill params validate and inputs resolve with defaults, failing loudly when missing', () => {
+  assert.deepEqual(validateSkillParams(undefined), []);
+  assert.deepEqual(validateSkillParams(['tab', 'text-1']), ['tab', 'text-1']);
+  assert.throws(() => validateSkillParams('tab'), /must be an array/);
+  assert.throws(() => validateSkillParams(['input']), /reserved/);
+  assert.throws(() => validateSkillParams(['ok', 'ok']), /duplicate/);
+  assert.throws(() => validateSkillParams(['1bad']), /not a usable name/);
+  assert.throws(() => validateSkillParams(Array.from({ length: 11 }, (_, i) => 'p' + i)), /at most 10/);
+
+  const skill = { params: ['tab', 'text'], defaults: { text: 'hello' } };
+  assert.deepEqual(resolveSkillInputs(skill, { tab: '加解密' }), { text: 'hello', tab: '加解密' });
+  assert.deepEqual(resolveSkillInputs(skill, { tab: 'x', text: 'y' }), { text: 'y', tab: 'x' });
+  assert.throws(() => resolveSkillInputs(skill, {}), /skill_missing_input: tab/);
+  assert.throws(() => resolveSkillInputs(skill, 'nope'), /skill_missing_input: tab/);
+  assert.deepEqual(resolveSkillInputs({ params: [] }, undefined), {});
+});
+
+test('a saved recipe keeps its param contract', () => {
+  const file = join(mkdtempSync(join(tmpdir(), 'adh-skills-')), 'skills.json');
+  const store = new PhoneSkillStore(file);
+  store.save('open-tab', 'parametrised', [{ type: 'find', args: { contentDescription: '{{input.tab}}' } }], false, ['tab'], { tab: '状态' });
+  const listed = new PhoneSkillStore(file).list();
+  assert.deepEqual(listed[0].params, ['tab']);
+  assert.deepEqual(listed[0].defaults, { tab: '状态' });
+  assert.throws(() => store.save('bad', 'x', [{ type: 'observe' }], false, ['tab'], { nope: 1 }), /default for unknown param/);
 });

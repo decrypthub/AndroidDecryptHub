@@ -258,6 +258,30 @@ try {
   const removedRecipe = parseTree(await callTool('phone_skill', { action: 'delete', name: 'v36-crypto-tab' }));
   chk('phone_skill deletes the recipe', removedRecipe.deleted === true);
 
+  const paramRecipe = parseTree(await callTool('phone_skill', {
+    action: 'save',
+    name: 'v36-open-tab',
+    description: 'parametrised tab opener',
+    overwrite: true,
+    params: ['tab'],
+    steps: [
+      { id: 'find_tab', type: 'find', args: { contentDescription: '{{input.tab}}', maxNodes: 120, limit: 3 } },
+      { type: 'act', args: { action: 'tap', snapshotId: '{{find_tab.snapshotId}}', ref: '{{find_tab.nodes.0.ref}}', maxNodes: 80 } },
+      { type: 'wait', args: { contentDescription: '{{input.tab}}', timeoutMs: 3000, intervalMs: 200, maxNodes: 120 } },
+    ],
+  }));
+  chk('phone_skill saves a parameterised recipe', paramRecipe.saved === true && (paramRecipe.params ?? []).includes('tab'), `params=${JSON.stringify(paramRecipe.params)}`);
+  const paramRun = parseTree(await callTool('phone_skill', { action: 'run', name: 'v36-open-tab', inputs: { tab: '脱壳' } }));
+  chk('phone_skill feeds inputs into the step templates', paramRun.ok === true, `ok=${paramRun.ok} inputs=${JSON.stringify(paramRun.inputs)}`);
+  let paramMissing = '';
+  try {
+    await callTool('phone_skill', { action: 'run', name: 'v36-open-tab' });
+  } catch (error) {
+    paramMissing = error.message || String(error);
+  }
+  chk('phone_skill refuses to run without a required input', /skill_missing_input/.test(paramMissing), paramMissing);
+  await callTool('phone_skill', { action: 'delete', name: 'v36-open-tab' });
+
   // ---- step templating: a find result feeds the next step without another round trip -----
   const chained = parseTree(await callTool('phone_task', { steps: [
     { id: 'find_tab', type: 'find', args: { contentDescription: '状态', maxNodes: 120, limit: 3 } },
