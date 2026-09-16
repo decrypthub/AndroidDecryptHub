@@ -26,6 +26,19 @@ APP="app_process -Djava.class.path=$MODULE_DIR/daemon.apk /system/bin com.adh.da
 
 skip() { echo "$1"; echo "⏭ backend control SKIP ($2)"; exit 0; }
 
+# The payload we push below is a CLI build: it has no Manager certificate digest, so it can run the
+# one-shot commands but must never stay as the resident daemon (it would die with "manager
+# certificate digest is missing" on the next boot). Keep the module's own payload and put it back.
+ORIG_PAYLOAD_BACKUP="/data/local/tmp/adh-daemon-original.apk"
+ORIG_PAYLOAD_PRESENT=0
+restore_payload() {
+  if [ "$ORIG_PAYLOAD_PRESENT" = "1" ]; then
+    adb -s "$SERIAL" shell "su -c 'cp $ORIG_PAYLOAD_BACKUP $MODULE_DIR/daemon.apk && chmod 644 $MODULE_DIR/daemon.apk'" >/dev/null 2>&1
+    echo ">> restored the module's own daemon payload"
+  fi
+}
+trap restore_payload EXIT
+
 [ -n "${SERIAL:-}" ] || skip "RESULT:SKIP no device" "no serial"
 adb -s "$SERIAL" get-state >/dev/null 2>&1 || skip "RESULT:SKIP no device" "adb offline"
 [ "$(adb -s "$SERIAL" shell "su -c 'test -x $CLI && echo yes'" 2>/dev/null | tr -d '\r')" = "yes" ] ||
@@ -47,6 +60,13 @@ fi
 # the one-shot CLI runs the new code immediately, the resident daemon picks it up on restart).
 adb -s "$SERIAL" push "$(cygpath -w "$DAEMON_APK" 2>/dev/null || echo "$DAEMON_APK")" /data/local/tmp/adh-daemon.apk >/dev/null 2>&1 ||
   skip "RESULT:SKIP daemon push failed" "adb push"
+if [ "$(adb -s "$SERIAL" shell "su -c 'test -f $MODULE_DIR/daemon.apk && echo yes'" 2>/dev/null | tr -d '\r')" = "yes" ]; then
+  adb -s "$SERIAL" shell "su -c 'cp $MODULE_DIR/daemon.apk $ORIG_PAYLOAD_BACKUP'" >/dev/null 2>&1
+  if [ "$(adb -s "$SERIAL" shell "su -c 'test -f $ORIG_PAYLOAD_BACKUP && echo yes'" 2>/dev/null | tr -d '\r')" = "yes" ]; then ORIG_PAYLOAD_PRESENT=1; fi
+fi
+if [ "$ORIG_PAYLOAD_PRESENT" != "1" ]; then
+  skip "RESULT:SKIP daemon payload not backed up" "refusing to overwrite $MODULE_DIR/daemon.apk without a restorable copy"
+fi
 adb -s "$SERIAL" shell "su -c 'cp /data/local/tmp/adh-daemon.apk $MODULE_DIR/daemon.apk && chmod 644 $MODULE_DIR/daemon.apk'" >/dev/null 2>&1
 
 cli() { adb -s "$SERIAL" shell "su -c '$APP $1'" 2>/dev/null | tr -d '\r'; }
@@ -65,6 +85,7 @@ PRIOR_SCOPE="$(node -e "try{console.log((JSON.parse(process.argv[1]).scope||[]).
 restore() {
   cli "--xposed-scope $PRIOR_SCOPE" >/dev/null 2>&1
   if [ "$PRIOR_ENABLED" = "true" ]; then cli --xposed-enable >/dev/null 2>&1; else cli --xposed-disable >/dev/null 2>&1; fi
+  restore_payload
 }
 trap restore EXIT
 
