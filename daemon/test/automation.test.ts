@@ -4,6 +4,7 @@ import test from 'node:test';
 import { AutomationHub } from '../src/automation.ts';
 import { mergeSettings, settings } from '../src/state.ts';
 import { agentWaitSightings, findAgentWaitMatch, hasAgentWaitFilters } from '../src/agent_events.ts';
+import { implicitSelectorFor, selectorFrom } from '../src/phone_selectors.ts';
 
 function connect(port: number): Promise<net.Socket> {
   return new Promise((resolve, reject) => {
@@ -196,4 +197,20 @@ test('agent wait sightings keep everything counted but bounded in size', () => {
   const sightings = agentWaitSightings({ since: T0 }, [], captures, 2);
   assert.equal(sightings.captures.length, 2);
   assert.equal(sightings.totals.captures, 3);
+});
+
+test('set_text payload is never read as a selector', () => {
+  // The field is targeted by id; `text` is what we are about to type, not a filter.
+  assert.deepEqual(implicitSelectorFor('set_text', { action: 'set_text', text: 'LSPosed', resourceId: 'com.x:id/box' }), { resourceId: 'com.x:id/box' });
+  assert.deepEqual(implicitSelectorFor('set_text', { action: 'set_text', text: 'LSPosed', editable: true }), { editable: true });
+  assert.deepEqual(implicitSelectorFor('set_text', { action: 'set_text', text: 'LSPosed' }), {});
+  // An explicit selector still wins, including targeting a field by its, current text.
+  assert.deepEqual(implicitSelectorFor('set_text', { action: 'set_text', text: 'new', selector: { text: 'old' } }), { text: 'old' });
+});
+
+test('other actions keep text as a selector and false stays a real filter', () => {
+  assert.deepEqual(implicitSelectorFor('tap', { text: '搜索' }), { text: '搜索' });
+  assert.deepEqual(implicitSelectorFor(undefined, { contentDescription: '搜索' }), { contentDescription: '搜索' });
+  assert.deepEqual(selectorFrom({ text: 'a', clickable: false }), { text: 'a', clickable: false });
+  assert.deepEqual(selectorFrom({ text: null, clickable: undefined }), {});
 });

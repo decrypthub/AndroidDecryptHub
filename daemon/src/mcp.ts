@@ -15,6 +15,7 @@ import { agentCmd, dumpAllDex, dumpBuf, dumpBufPath, dumpRegion, pickSid, repair
 import { backendMatrix, classifySession } from './backends.ts';
 import { automation } from './automation.ts';
 import { agentWaitSightings, findAgentWaitMatch, hasAgentWaitFilters } from './agent_events.ts';
+import { implicitSelectorFor, selectorFrom } from './phone_selectors.ts';
 import { sessions, dumps, captures, captureTimers, events, agentCursor, SANDBOX, settings, CAPTURES, cryptoIdentify } from './state.ts';
 import type { DumpMeta } from './state.ts';
 
@@ -83,23 +84,12 @@ MCP_TOOLS.push(
   { name: 'phone_observe', description: 'Observe the active phone screen. Prefer the AccessibilityService node tree; when it is empty or non-semantic, fall back to a screenshot that the AI can inspect. Returns snapshotId plus nodes or an image.', inputSchema: { type: 'object', properties: { mode: { type: 'string', enum: ['auto', 'tree', 'visual'] }, includeScreenshot: { type: 'boolean' }, maxNodes: N, maxDepth: N, interactiveOnly: { type: 'boolean' }, package: S } }, raw: true, handler: async (a) => observePhone(a) },
   { name: 'phone_find', description: 'Find compact, actionable nodes without transferring the whole tree. Supports text/resourceId/contentDescription and interaction flags; returns refs valid for snapshotId.', inputSchema: { type: 'object', properties: { ...SEL, limit: N, maxNodes: N, interactiveOnly: { type: 'boolean' }, package: S } }, handler: async (a) => findPhone(a) },
   { name: 'phone_wait', description: 'Wait until a screen state / selector matches or the injected agent reports a signal. Agent filters: agentEvent (exact event type), agentEventContains (substring of the event JSON), captureCategory (crypto/net/file/system), captureContains (substring of the decoded capture text + metadata). Same-kind filters are ANDed; the two kinds race and whichever fires first wins. Race-free pattern: take the cursor from the preceding observe/act response and pass it as afterCaptureId / afterEventSeq; lookbackMs is the coarse alternative (bounded 0..300000). On an agent-signal timeout the reply carries saw (recent captures/events from the window plus totals) and the live cursor, so the filter can be retargeted.', inputSchema: { type: 'object', properties: { ...SEL, activePackage: S, activityContains: S, gone: { type: 'boolean' }, agentEvent: S, agentEventContains: S, captureCategory: { type: 'string', enum: ['crypto', 'net', 'file', 'system'] }, captureContains: S, afterEventSeq: N, afterCaptureId: N, lookbackMs: N, timeoutMs: N, intervalMs: N, scroll: { type: 'boolean' }, direction: { type: 'string', enum: ['forward', 'backward'] }, maxScrolls: N, maxNodes: N, interactiveOnly: { type: 'boolean' }, package: S } }, handler: async (a) => waitPhone(a) },
-  { name: 'phone_act', description: 'Act on the active phone screen. Prefer a selector or snapshotId+ref from phone_observe; use normalized coordinates only as the visual fallback. Supports tap, long_press, swipe, scroll, set_text and global back/home/recents/notifications/quick_settings/power/lock/screenshot.', inputSchema: { type: 'object', properties: { ...SEL, snapshotId: S, action: { type: 'string', enum: ['tap', 'long_press', 'swipe', 'scroll', 'set_text', 'global'] }, ref: S, x: N, y: N, x2: N, y2: N, coordinateSpace: { type: 'string', enum: ['normalized', 'pixel'] }, text: S, key: { type: 'string', enum: ['back', 'home', 'recents', 'notifications', 'quick_settings', 'power', 'lock', 'screenshot'] }, direction: { type: 'string', enum: ['forward', 'backward'] }, durationMs: N, observeAfter: { type: 'boolean' }, package: S }, required: ['action'] }, raw: true, handler: async (a) => actPhone(a) },
+  { name: 'phone_act', description: 'Act on the active phone screen. Prefer a selector or snapshotId+ref from phone_observe; use normalized coordinates only as the visual fallback. Supports tap, long_press, swipe, scroll, set_text and global back/home/recents/notifications/quick_settings/power/lock/screenshot. For set_text the text argument is the payload to write, not a filter (target the field with ref, resourceId, editable or selector); the value can be read back with phone_find.', inputSchema: { type: 'object', properties: { ...SEL, snapshotId: S, action: { type: 'string', enum: ['tap', 'long_press', 'swipe', 'scroll', 'set_text', 'global'] }, ref: S, x: N, y: N, x2: N, y2: N, coordinateSpace: { type: 'string', enum: ['normalized', 'pixel'] }, text: S, key: { type: 'string', enum: ['back', 'home', 'recents', 'notifications', 'quick_settings', 'power', 'lock', 'screenshot'] }, direction: { type: 'string', enum: ['forward', 'backward'] }, durationMs: N, observeAfter: { type: 'boolean' }, package: S }, required: ['action'] }, raw: true, handler: async (a) => actPhone(a) },
   { name: 'phone_app', description: 'Open, stop or restart an allowlisted app by package name. Open uses the root Device Daemon when protocol v6+ is available, with a compatibility fallback for older daemons; stop/restart delegate to the same authenticated daemon.', inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['open', 'stop', 'restart'] }, package: S }, required: ['action', 'package'] }, handler: async (a) => appPhone(a) },
   { name: 'phone_device', description: 'Read or control device power state: status, wake, unlock a non-secure keyguard, or lock the screen. Secure credentials are never bypassed.', inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['status', 'wake', 'unlock', 'lock'] } }, required: ['action'] }, handler: async (a) => devicePhone(a) },
   { name: 'phone_task', description: 'Run a bounded sequence of phone primitives in one MCP call. Steps may observe, find, wait (UI state or agent signal), act, control an app, or control device power; each step supports retries and structured failure output.', inputSchema: { type: 'object', properties: { stopOnError: { type: 'boolean' }, steps: { type: 'array', minItems: 1, maxItems: 30, items: { type: 'object', properties: { id: S, type: { type: 'string', enum: ['observe', 'find', 'wait', 'act', 'app', 'device'] }, args: { type: 'object' }, retries: N, retryDelayMs: N }, required: ['type'] } } }, required: ['steps'] }, handler: async (a) => taskPhone(a) },
 );
 
-const SELECTOR_KEYS = ['text', 'textContains', 'resourceId', 'contentDescription', 'contentDescriptionContains', 'clickable', 'editable', 'scrollable'];
-
-function selectorFrom(args: any) {
-  const selector: any = { ...(args.selector ?? {}) };
-  for (const key of SELECTOR_KEYS) if (args[key] !== undefined && args[key] !== null) selector[key] = args[key];
-  return selector;
-}
-
-function hasSelector(args: any): boolean {
-  return !!args.selector || SELECTOR_KEYS.some((key) => args[key] !== undefined && args[key] !== null);
-}
 
 function matchesSelector(node: any, selector: any): boolean {
   if (selector.text != null && node.text !== selector.text) return false;
@@ -328,11 +318,22 @@ async function actPhone(args: any) {
   assertAutomationReady();
   const cursorBefore = agentCursor();   // taken before dispatch: wait on it to catch this action's signals
   let effective = { ...args };
-  if (!effective.ref && hasSelector(effective)) {
-    const result = await observeTree(effective);
-    const match = findNodes(result.nodes ?? [], selectorFrom(effective), 1)[0];
+  // set_text carries its payload in `text`. Reading that same argument as a selector would demand a
+  // node whose CURRENT text already equals the value we are about to write, so the field could
+  // never be resolved. Exclude it from the implicit selector; selector:{text:...} still works.
+  const implicitSelector = implicitSelectorFor(effective.action, effective);
+  if (!effective.ref && Object.keys(implicitSelector).length) {
+    // Bounded retry: the node tree churns while animations/list items settle, and a single miss
+    // used to surface as a spurious selector_not_found. 3 attempts ≈ 500ms worst case.
+    let match: any = null;
+    let observed: any = null;
+    for (let attempt = 0; attempt < 3 && !match; attempt++) {
+      if (attempt) await new Promise((resolve) => setTimeout(resolve, 250));
+      observed = await observeTree(effective);
+      match = findNodes(observed.nodes ?? [], implicitSelector, 1)[0];
+    }
     if (!match) throw new Error('selector_not_found: no node matched the selector in the current screen');
-    effective = { ...effective, snapshotId: result.snapshotId, ref: match.ref };
+    effective = { ...effective, snapshotId: observed.snapshotId, ref: match.ref };
   }
   const result = await automation.cmd('act', normalizeActArgs(effective), 25_000);
   const parts: any[] = [{ type: 'text', text: JSON.stringify({ ...result, cursorBefore }, null, 2) }];
