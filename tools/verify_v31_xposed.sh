@@ -66,6 +66,12 @@ if [ "$INSTALL_RC" != "0" ]; then
 fi
 
 # 4. restart the target so the framework injects into a fresh process ---------------
+# Force-stopping a package also drops its AccessibilityServices (Android behaviour), and the
+# target here is the ADH Manager — the app that hosts the optional phone-automation service.
+# Remember the state so step 6 can put it back: a regression run must not silently switch
+# phone automation off.
+A11Y_SERVICES_BEFORE="$(adb -s "$SERIAL" shell settings get secure enabled_accessibility_services 2>/dev/null | tr -d '\r')"
+A11Y_ENABLED_BEFORE="$(adb -s "$SERIAL" shell settings get secure accessibility_enabled 2>/dev/null | tr -d '\r')"
 adb -s "$SERIAL" shell "su -c 'am force-stop $TARGET'" >/dev/null 2>&1
 sleep 1
 adb -s "$SERIAL" shell "su -c 'am start -n $TARGET/.MainActivity'" >/dev/null 2>&1
@@ -112,6 +118,19 @@ else
   restore_scope "$PRIOR_SCOPE"
   cli_q "modules disable $MODULE_PKG"
   echo ">> restored prior state: status=$PRIOR_STATUS, scope='${PRIOR_SCOPE:-<empty>}'"
+fi
+
+# Put the automation AccessibilityService entry back if the force-stop dropped it.
+if grep -q 'AdhAutomationAccessibilityService' <<<"${A11Y_SERVICES_BEFORE:-}"; then
+  A11Y_NOW="$(adb -s "$SERIAL" shell settings get secure enabled_accessibility_services 2>/dev/null | tr -d '\r')"
+  if ! grep -q 'AdhAutomationAccessibilityService' <<<"${A11Y_NOW:-}"; then
+    adb -s "$SERIAL" shell "su -c 'settings put secure enabled_accessibility_services $A11Y_SERVICES_BEFORE'" >/dev/null 2>&1
+    if [ "${A11Y_ENABLED_BEFORE:-1}" = "1" ]; then
+      adb -s "$SERIAL" shell "su -c 'settings put secure accessibility_enabled 1'" >/dev/null 2>&1
+    fi
+    sleep 1
+    echo ">> restored the automation accessibility service the force-stop had dropped"
+  fi
 fi
 
 if grep -q 'agent=1' <<<"$MARKER_VAL" && grep -q 'RESULT:PASS' <<<"$OUT"; then
