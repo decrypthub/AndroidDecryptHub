@@ -23,6 +23,8 @@ interface DaemonClient {
     val xposedStatusJson: String
     fun setXposedEnabled(enabled: Boolean): Boolean
     fun setXposedScope(packages: List<String>): Boolean
+    val automationEnabled: Boolean
+    fun setAutomationEnabled(enabled: Boolean): Boolean
 }
 
 class DaemonScopeRepository(
@@ -57,6 +59,20 @@ class DaemonScopeRepository(
         if (enabled) {
             check(client.setXposedScope(load().packages.sorted())) { "xposed scope sync failed" }
         }
+    }
+
+    override fun isAutomationEnabled(): Boolean? {
+        val client = clientProvider(CONNECT_TIMEOUT_MS) ?: return null
+        if (client.protocolVersion < AdhProtocol.MIN_AUTOMATION_CONTROL_VERSION) return null
+        return runCatching { client.automationEnabled }.getOrNull()
+    }
+
+    override fun setAutomationEnabled(enabled: Boolean): Result<Unit> = runCatching {
+        val client = requireClient()
+        check(client.protocolVersion >= AdhProtocol.MIN_AUTOMATION_CONTROL_VERSION) {
+            "daemon protocol ${client.protocolVersion} has no automation service control"
+        }
+        check(client.setAutomationEnabled(enabled)) { "daemon rejected automation service state" }
     }
 
     override fun setXposedScope(packages: List<String>): Result<Unit> = runCatching {

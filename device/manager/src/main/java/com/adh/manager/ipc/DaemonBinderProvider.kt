@@ -80,6 +80,9 @@ class DaemonBinderProvider : ContentProvider() {
                     service.setXposedEnabled(enabled)
                 override fun setXposedScope(packages: List<String>): Boolean =
                     service.setXposedScope(packages)
+                override val automationEnabled: Boolean get() = service.isAutomationEnabled
+                override fun setAutomationEnabled(enabled: Boolean): Boolean =
+                    service.setAutomationEnabled(enabled)
             }
             runCatching {
                 binder.linkToDeath({

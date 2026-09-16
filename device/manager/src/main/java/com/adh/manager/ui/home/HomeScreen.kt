@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
+import android.widget.Toast
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -34,10 +35,12 @@ import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.OpenInBrowser
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -45,6 +48,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -64,6 +68,7 @@ import com.adh.manager.data.ScopeRepository
 import com.adh.manager.data.WebUiRepository
 import com.adh.manager.data.WebUiStatus
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @Composable
@@ -77,7 +82,9 @@ fun HomeScreen(
     var count by remember { mutableIntStateOf(0) }
     var refreshVersion by remember { mutableIntStateOf(0) }
     var automationEnabled by remember { mutableStateOf(false) }
+    var automationBusy by remember { mutableStateOf(false) }
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { refreshVersion++ }
 
@@ -99,8 +106,10 @@ fun HomeScreen(
         webStatus = withContext(Dispatchers.IO) { webUiRepository.probe() }
     }
 
-    LaunchedEffect(refreshVersion) {
-        automationEnabled = withContext(Dispatchers.IO) { AutomationStatus.isServiceEnabled(context) }
+    LaunchedEffect(repository, refreshVersion) {
+        automationEnabled = withContext(Dispatchers.IO) {
+            repository.isAutomationEnabled() ?: AutomationStatus.isServiceEnabled(context)
+        }
     }
 
     Column(
@@ -118,7 +127,25 @@ fun HomeScreen(
             verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
             WebUiSection(status = webStatus)
-            AutomationSection(enabled = automationEnabled, onClick = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) })
+            AutomationSection(
+                enabled = automationEnabled,
+                busy = automationBusy,
+                onToggle = { checked ->
+                    if (!automationBusy) {
+                        automationBusy = true
+                        scope.launch {
+                            val result = withContext(Dispatchers.IO) { repository.setAutomationEnabled(checked) }
+                            if (result.isSuccess) {
+                                automationEnabled = checked
+                            } else {
+                                Toast.makeText(context, context.getString(R.string.automation_enable_failed), Toast.LENGTH_LONG).show()
+                            }
+                            automationBusy = false
+                        }
+                    }
+                },
+                onOpenSettings = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) },
+            )
             SectionLabel(text = stringResource(R.string.section_configuration))
             Surface(
                 color = MaterialTheme.colorScheme.surfaceContainer,
@@ -179,13 +206,16 @@ fun HomeScreen(
 }
 
 @Composable
-private fun AutomationSection(enabled: Boolean, onClick: () -> Unit) {
+private fun AutomationSection(
+    enabled: Boolean,
+    busy: Boolean,
+    onToggle: (Boolean) -> Unit,
+    onOpenSettings: () -> Unit,
+) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainer,
         shape = RoundedCornerShape(8.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
+        modifier = Modifier.fillMaxWidth(),
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 18.dp),
@@ -209,11 +239,14 @@ private fun AutomationSection(enabled: Boolean, onClick: () -> Unit) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Icon(
-                Icons.AutoMirrored.Rounded.ArrowForward,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Switch(checked = enabled, onCheckedChange = onToggle, enabled = !busy)
+            IconButton(onClick = onOpenSettings, enabled = !busy) {
+                Icon(
+                    Icons.Rounded.Settings,
+                    contentDescription = stringResource(R.string.automation_system_settings),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }

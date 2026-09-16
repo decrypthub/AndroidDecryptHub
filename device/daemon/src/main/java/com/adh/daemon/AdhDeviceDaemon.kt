@@ -23,6 +23,25 @@ object AdhDeviceDaemon {
             "--xposed-enable" -> { requireRoot(); exitProcess(if (XposedBackend.setEnabled(true)) 0 else 1) }
             "--xposed-disable" -> { requireRoot(); exitProcess(if (XposedBackend.setEnabled(false)) 0 else 1) }
             "--xposed-scope" -> { requireRoot(); exitProcess(if (XposedBackend.setScope(args.drop(1))) 0 else 1) }
+            "--automation-status" -> {
+                requireRoot()
+                Looper.prepareMainLooper()
+                val context = SystemContext.create()
+                println(if (AutomationServiceControl.isEnabled(context)) "enabled" else "disabled")
+                return
+            }
+            "--automation-enable" -> {
+                requireRoot()
+                Looper.prepareMainLooper()
+                val context = SystemContext.create()
+                exitProcess(if (AutomationServiceControl.setEnabled(context, true)) 0 else 1)
+            }
+            "--automation-disable" -> {
+                requireRoot()
+                Looper.prepareMainLooper()
+                val context = SystemContext.create()
+                exitProcess(if (AutomationServiceControl.setEnabled(context, false)) 0 else 1)
+            }
         }
         Thread.setDefaultUncaughtExceptionHandler { _, error ->
             Log.e(TAG, "fatal daemon error", error)

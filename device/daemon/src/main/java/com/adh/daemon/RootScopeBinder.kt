@@ -86,6 +86,16 @@ internal class RootScopeBinder(
         return XposedBackend.setScope(packages ?: emptyList())
     }
 
+    override fun isAutomationEnabled(): Boolean {
+        verifier.enforce()
+        return AutomationServiceControl.isEnabled(context)
+    }
+
+    override fun setAutomationEnabled(enabled: Boolean): Boolean {
+        verifier.enforce()
+        return AutomationServiceControl.setEnabled(context, enabled)
+    }
+
     private fun atomicWrite(target: File, content: String) {
         target.parentFile?.mkdirs()
         val temp = File(target.parentFile, ".${target.name}.${android.os.Process.myPid()}.tmp")

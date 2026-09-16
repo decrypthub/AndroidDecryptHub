@@ -26,4 +26,8 @@ interface IAdhScopeService {
     boolean setXposedEnabled(boolean enabled);
     /** Replace the ADH Xposed module's framework scope with these packages (user 0). */
     boolean setXposedScope(in List<String> packages);
+    /** Protocol v7: read whether ADH's optional automation AccessibilityService is enabled. */
+    boolean isAutomationEnabled();
+    /** Protocol v7: enable/disable ADH's automation AccessibilityService after an explicit user action. */
+    boolean setAutomationEnabled(boolean enabled);
 }

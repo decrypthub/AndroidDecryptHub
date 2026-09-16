@@ -131,6 +131,21 @@ class DaemonScopeRepositoryTest {
     }
 
     @Test
+    fun automationControlRequiresProtocolV7() {
+        val v6 = DaemonScopeRepository { FakeDaemonClient(protocol = 6) }
+        assertEquals(null, v6.isAutomationEnabled())
+        assertTrue(v6.setAutomationEnabled(true).isFailure)
+
+        val client = FakeDaemonClient()
+        val v7 = DaemonScopeRepository { client }
+        assertFalse(v7.isAutomationEnabled() ?: true)
+        assertTrue(v7.setAutomationEnabled(true).isSuccess)
+        assertEquals(true, v7.isAutomationEnabled())
+        assertTrue(v7.setAutomationEnabled(false).isSuccess)
+        assertEquals(false, v7.isAutomationEnabled())
+    }
+
+    @Test
     fun disabledXposedBackendIsNotMirrored() {
         val client = FakeDaemonClient()
         val repository = DaemonScopeRepository { client }
@@ -192,6 +207,14 @@ class DaemonScopeRepositoryTest {
         override fun setXposedScope(packages: List<String>): Boolean {
             if (protocolVersion < AdhProtocol.MIN_XPOSED_VERSION || rejectXposedScope) return false
             xposedScope = packages.sorted()
+            return true
+        }
+        private var automationState = false
+        override val automationEnabled: Boolean
+            get() = protocolVersion >= AdhProtocol.MIN_AUTOMATION_CONTROL_VERSION && automationState
+        override fun setAutomationEnabled(enabled: Boolean): Boolean {
+            if (protocolVersion < AdhProtocol.MIN_AUTOMATION_CONTROL_VERSION) return false
+            automationState = enabled
             return true
         }
     }

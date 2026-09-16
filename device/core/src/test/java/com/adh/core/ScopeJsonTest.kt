@@ -62,10 +62,23 @@ class ScopeJsonTest {
         assertFalse(apps[0].system)
         assertEquals("com.android.settings", apps[1].packageName)
         assertTrue(apps[1].system)
-        assertEquals(AdhProtocol.VERSION, 6)
+        assertEquals(AdhProtocol.VERSION, 7)
         assertEquals(AdhProtocol.MIN_PROCESS_VERSION, 4)
         assertEquals(AdhProtocol.MIN_XPOSED_VERSION, 5)
         assertEquals(AdhProtocol.MIN_APP_OPEN_VERSION, 6)
+        assertEquals(AdhProtocol.MIN_AUTOMATION_CONTROL_VERSION, 7)
+    }
+
+    @Test
+    fun automationServiceListIsUpdatedWithoutDroppingOtherServices() {
+        val existing = "com.example.other/com.example.other.Service"
+        val enabled = AutomationServiceSettings.update(existing, true)
+        assertTrue(AutomationServiceSettings.contains(enabled))
+        assertTrue(enabled.contains(existing))
+
+        val disabled = AutomationServiceSettings.update(enabled, false)
+        assertFalse(AutomationServiceSettings.contains(disabled))
+        assertTrue(disabled.contains(existing))
     }
 
     @Test

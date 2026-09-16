@@ -65,7 +65,7 @@
 | 设备侧后端（Zygisk/Manager） | v27_zygisk, verify_v32_backend_control | scope 往返；Device Daemon 驱动框架状态/作用域并**恢复测试前状态** |
 | 可选后端（Gadget/Xposed/eCapture） | v30, v31, v32, v34 | 官方二进制 + sha256 固定；Java bridge hook 真跑通；eCapture 抓到请求+响应明文 |
 | 控制面 / MCP / Web | v10_mcp, v10_webui, v10_export, v10_events, v19_settings, v33_backends, v35_sessions | MCP 44 工具可调（自动化关闭时隐藏 phone_*）、Web UI 可用、后端矩阵、会话清理与选择器修复 |
-| 可选手机自动化（模块 X） | v36_automation | 默认关闭；控件树/截图兜底、find/wait/selector/ref/坐标/scroll/app/global 动作、双层包名 allowlist；root open 随协议 v6 模块部署 |
+| 可选手机自动化（模块 X） | v36_automation | 默认关闭；控件树/截图兜底、find/wait/selector/ref/坐标/scroll/app/global 动作、双层包名 allowlist；协议 v7 支持 Manager 一键启停自动化服务；root open 随新模块部署 |
 | 注入足迹 | v26_footprint | release agent 剥离 + 仅 3 个动态导出 + 无 RWX LOAD |
 | 注入单实例收敛 | 真机混态手工验证（Zygisk + self-load） | `dl_iterate_phdr` 首载 copy 独占 bootstrap；同 PID 不再出现第二个 `jni_onload` 会话；winner copy 迟绑定 reporter，v24 rich Java 仍 PASS |
 

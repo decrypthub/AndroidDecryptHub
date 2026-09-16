@@ -67,8 +67,10 @@
     <string name="xposed_scope_synced">Scope synced to Xposed</string>
     <string name="section_automation">Automation</string>
     <string name="automation_title">Phone automation (optional)</string>
-    <string name="automation_enabled_summary">Enabled. Tap to open Android accessibility settings.</string>
-    <string name="automation_disabled_summary">Disabled. Tap to open Android accessibility settings.</string>
     <string name="automation_service_label">ADH phone automation</string>
     <string name="automation_service_description">Allows Host ADH Daemon, after explicit user enablement, to read the node tree or screenshots and act on explicitly allowed apps.</string>
+    <string name="automation_enabled_summary">Enabled. Host MCP can operate explicitly allowed apps through the ADH automation service.</string>
+    <string name="automation_disabled_summary">Disabled. Enable it before AI can use the phone_* tools.</string>
+    <string name="automation_system_settings">Android accessibility settings</string>
+    <string name="automation_enable_failed">The Device Daemon could not change the automation service. Enable it in Android accessibility settings.</string>
 </resources>
