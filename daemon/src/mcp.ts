@@ -17,6 +17,7 @@ import { automation } from './automation.ts';
 import { agentWaitSightings, findAgentWaitMatch, hasAgentWaitFilters } from './agent_events.ts';
 import { implicitSelectorFor, selectorFrom } from './phone_selectors.ts';
 import { PhoneSkillStore } from './phone_skills.ts';
+import { resolveTemplates } from './phone_templates.ts';
 import { renderScreenText } from './phone_text.ts';
 import { blockedPackageFromError, openOutcomeHint } from './phone_foreground.ts';
 import { sessions, dumps, captures, captureTimers, events, agentCursor, DATA_DIR, SANDBOX, settings, CAPTURES, cryptoIdentify } from './state.ts';
@@ -91,7 +92,7 @@ MCP_TOOLS.push(
   { name: 'phone_app', description: 'Open, stop or restart an allowlisted app by package name. open verifies that the app really reached the foreground and reports verified/foreground/warning when an OEM dialog swallowed the launch (with a hint on how to unblock). Open uses the root Device Daemon when protocol v6+ is available, with a compatibility fallback for older daemons; stop/restart delegate to the same authenticated daemon.', inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['open', 'stop', 'restart'] }, package: S }, required: ['action', 'package'] }, handler: async (a) => appPhone(a) },
   { name: 'phone_device', description: 'Read or control device power state: status, wake, unlock a non-secure keyguard, or lock the screen. Secure credentials are never bypassed.', inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['status', 'wake', 'unlock', 'lock'] } }, required: ['action'] }, handler: async (a) => devicePhone(a) },
   { name: 'phone_skill', description: 'Save, list, run or delete named phone recipes (skills). A skill is a validated, bounded list of phone_task steps kept on the host, so a flow the AI worked out once replays in one call. Skills run through the same primitives, allowlist and retry semantics as phone_task; they cannot nest skills or reach a shell.', inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['list', 'save', 'run', 'delete'] }, name: S, description: S, overwrite: { type: 'boolean' }, stopOnError: { type: 'boolean' }, steps: { type: 'array', minItems: 1, maxItems: 30, items: { type: 'object' } } }, required: ['action'] }, handler: async (a) => skillPhone(a) },
-  { name: 'phone_task', description: 'Run a bounded sequence of phone primitives in one MCP call. Steps may observe, find, wait (UI state or agent signal), act, control an app, or control device power; each step supports retries and structured failure output.', inputSchema: { type: 'object', properties: { stopOnError: { type: 'boolean' }, steps: { type: 'array', minItems: 1, maxItems: 30, items: { type: 'object', properties: { id: S, type: { type: 'string', enum: ['observe', 'find', 'wait', 'act', 'app', 'device'] }, args: { type: 'object' }, retries: N, retryDelayMs: N }, required: ['type'] } } }, required: ['steps'] }, handler: async (a) => taskPhone(a) },
+  { name: 'phone_task', description: 'Run a bounded sequence of phone primitives in one MCP call. Steps may observe, find, wait (UI state or agent signal), act, control an app, or control device power; each step supports retries and structured failure output. Steps with an id can be referenced by later steps as {{id.path}} (e.g. take the ref and snapshotId a find discovered straight into act), which avoids ref-expiry between separate calls.', inputSchema: { type: 'object', properties: { stopOnError: { type: 'boolean' }, steps: { type: 'array', minItems: 1, maxItems: 30, items: { type: 'object', properties: { id: S, type: { type: 'string', enum: ['observe', 'find', 'wait', 'act', 'app', 'device'] }, args: { type: 'object' }, retries: N, retryDelayMs: N }, required: ['type'] } } }, required: ['steps'] }, handler: async (a) => taskPhone(a) },
 );
 
 
@@ -262,6 +263,7 @@ async function taskPhone(args: any) {
   if (steps.length > 30) throw new Error('phone_task supports at most 30 steps');
   const stopOnError = args.stopOnError !== false;
   const results: any[] = [];
+  const outputs: Record<string, any> = {};   // step id -> result, for {{id.path}} templating
   for (let index = 0; index < steps.length; index++) {
     const step = steps[index] ?? {};
     const type = String(step.type ?? '');
@@ -271,8 +273,9 @@ async function taskPhone(args: any) {
     let attempt = 0;
     for (;;) {
       try {
-        const value = await runTaskStep(type, stepArgs);
+        const value = await runTaskStep(type, resolveTemplates(stepArgs, outputs));
         results.push({ index, id: step.id, type, ok: true, result: value });
+        if (step.id) outputs[String(step.id)] = value;
         break;
       } catch (error) {
         const message = (error as Error).message || String(error);

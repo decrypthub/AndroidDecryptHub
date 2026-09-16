@@ -7,6 +7,7 @@ import { agentWaitSightings, findAgentWaitMatch, hasAgentWaitFilters } from '../
 import { implicitSelectorFor, selectorFrom } from '../src/phone_selectors.ts';
 import { PhoneSkillStore, validateSkillName, validateSkillSteps } from '../src/phone_skills.ts';
 import { renderScreenText } from '../src/phone_text.ts';
+import { readPath, resolveTemplates } from '../src/phone_templates.ts';
 import { blockedPackageFromError, openOutcomeHint } from '../src/phone_foreground.ts';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -308,4 +309,29 @@ test('open verification names the package that swallowed the launch', () => {
   assert.match(blocked, /v0\.3\.7/);
   assert.match(openOutcomeHint('com.x', 'com.y', false), /open_unverified: foreground is 'com\.y'/);
   assert.match(openOutcomeHint('com.x', null, false), /open_unverified: the foreground package could not be read/);
+});
+
+test('step templates resolve paths, keep raw types and stringify when embedded', () => {
+  const outputs = {
+    find_tab: {
+      snapshotId: 's-42',
+      count: 1,
+      nodes: [{ ref: 'n7', text: '加解密', bounds: [1, 2, 3, 4] }],
+    },
+  };
+  assert.deepEqual(resolveTemplates({ snapshotId: '{{find_tab.snapshotId}}', ref: '{{find_tab.nodes.0.ref}}' }, outputs), { snapshotId: 's-42', ref: 'n7' });
+  assert.deepEqual(resolveTemplates({ nested: [{ value: '{{find_tab.count}}' }] }, outputs), { nested: [{ value: 1 }] });   // whole-string keeps the number
+  assert.equal(resolveTemplates('tap {{find_tab.nodes.0.text}} now', outputs), 'tap 加解密 now');
+  assert.equal(resolveTemplates({ plain: 'no templates' }, outputs).plain, 'no templates');
+  assert.deepEqual(resolveTemplates({ whole: '{{find_tab}}' }, outputs).whole, outputs.find_tab);
+  assert.equal(readPath(outputs.find_tab, 'nodes.0.bounds.3').value, 4);
+  assert.equal(readPath(outputs.find_tab, 'nodes.9').found, false);
+  assert.equal(readPath(outputs.find_tab, 'nope').found, false);
+});
+
+test('step templates fail loudly on unknown steps and missing paths', () => {
+  assert.throws(() => resolveTemplates('{{later.ref}}', {}), /template_unknown_step/);
+  assert.throws(() => resolveTemplates({ x: '{{known.missing}}' }, { known: { ref: 'n1' } }), /template_path_missing/);
+  // a step cannot reference itself, because its own result is not in the map yet
+  assert.throws(() => resolveTemplates('{{self.ref}}', {}), /template_unknown_step/);
 });

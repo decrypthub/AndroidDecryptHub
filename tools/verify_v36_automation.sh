@@ -258,6 +258,18 @@ try {
   const removedRecipe = parseTree(await callTool('phone_skill', { action: 'delete', name: 'v36-crypto-tab' }));
   chk('phone_skill deletes the recipe', removedRecipe.deleted === true);
 
+  // ---- step templating: a find result feeds the next step without another round trip -----
+  const chained = parseTree(await callTool('phone_task', { steps: [
+    { id: 'find_tab', type: 'find', args: { contentDescription: '状态', maxNodes: 120, limit: 3 } },
+    { id: 'tap_tab', type: 'act', args: { action: 'tap', snapshotId: '{{find_tab.snapshotId}}', ref: '{{find_tab.nodes.0.ref}}', maxNodes: 80 } },
+    { type: 'wait', args: { contentDescription: '状态', timeoutMs: 3000, intervalMs: 200, maxNodes: 120 } },
+  ] }));
+  chk('phone_task chains a find result into act via {{id.path}}', chained.ok === true && chained.steps?.length === 3, `ok=${chained.ok} steps=${chained.steps?.length ?? 0}`);
+  const chainedFail = parseTree(await callTool('phone_task', { steps: [
+    { type: 'act', args: { action: 'tap', snapshotId: '{{missing.snapshotId}}', ref: '{{missing.ref}}' } },
+  ] }));
+  chk('an unknown template reference fails the step loudly', chainedFail.ok === false && /template_unknown_step/.test(chainedFail.steps?.[0]?.error ?? ''), `ok=${chainedFail.ok} error=${chainedFail.steps?.[0]?.error}`);
+
   // ---- compact text view: same tree, far fewer tokens, refs stay actionable -------------
   const textView = await callTool('phone_observe', { mode: 'text', maxNodes: 40 });
   const textPayload = textView.content?.find((item) => item.type === 'text')?.text ?? '';
