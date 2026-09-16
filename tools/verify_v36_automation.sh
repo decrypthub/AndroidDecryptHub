@@ -379,6 +379,13 @@ try {
       const value = (after.nodes ?? [])[0]?.text;
       chk('set_text value is readable back from the field', value === marker, `value=${JSON.stringify(value ?? null)}`);
     }
+    const submitMarker = 'ADH_SUBMIT_v1';
+    const submitted = parseTree(await callTool('phone_act', { action: 'set_text', resourceId: probeField, text: submitMarker, submit: true, maxNodes: 150 }));
+    chk('set_text can submit through the keyboard action button', submitted.submitted === true, `submitted=${submitted.submitted} ref=${submitted.ref}`);
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    const echoed = parseTree(await callTool('phone_find', { textContains: '提交回显', maxNodes: 150, limit: 3 }));
+    const echoText = (echoed.nodes ?? []).map((node) => node.text ?? '').find((text) => text.includes(submitMarker));
+    chk('the app reacted to the submitted text', !!echoText, `echo=${JSON.stringify(echoText ?? null)}`);
   } catch (error) {
     chk('text input acceptance path completed', false, error.message || String(error));
   }

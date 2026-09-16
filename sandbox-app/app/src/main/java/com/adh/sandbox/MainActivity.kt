@@ -172,16 +172,27 @@ class MainActivity : Activity() {
         })
         addView(card {
             addView(sectionTitle("AI 输入测试"))
-            addView(body("留给自动化验收的确定性输入框（phone_act set_text → phone_find 读回）。", muted = true))
-            addView(EditText(this@MainActivity).apply {
+            addView(body("留给自动化验收的确定性输入框（phone_act set_text → phone_find 读回；submit=true 时按键盘动作键）。", muted = true))
+            val echo = TextView(this@MainActivity).apply {
+                id = R.id.adh_input_echo
+                text = "提交回显：—"
+            }
+            val input = EditText(this@MainActivity).apply {
                 id = R.id.adh_input_probe
                 hint = "在这里输入…"
                 isSingleLine = true
+                imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT,
                 )
-            })
+            }
+            input.setOnEditorActionListener { _, actionId, _ ->
+                echo.text = "提交回显：${input.text}（action=$actionId）"
+                true
+            }
+            addView(input)
+            addView(echo)
         })
     }
 

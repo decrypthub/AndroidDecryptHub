@@ -383,7 +383,21 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
         if (!editable.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, bundle)) {
             throw AutomationException("set_text_rejected", "node rejected ACTION_SET_TEXT")
         }
-        return JSONObject().put("action", "set_text").put("target", "ref").put("ref", ref)
+        val result = JSONObject().put("action", "set_text").put("target", "ref").put("ref", ref)
+        if (args.optBoolean("submit", false)) {
+            // The keyboard's action button (search / send / done). ACTION_IME_ENTER needs API 30;
+            // without it we fail loudly rather than pretending the form was submitted.
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+                throw AutomationException("ime_enter_unsupported", "submit requires Android 11 or newer")
+            }
+            // Only the AccessibilityAction form exists (there is no plain int constant).
+            val imeEnterAction = AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id
+            if (!editable.performAction(imeEnterAction)) {
+                throw AutomationException("ime_enter_rejected", "the field rejected ACTION_IME_ENTER")
+            }
+            result.put("submitted", true)
+        }
+        return result
     }
 
     private fun global(args: JSONObject): JSONObject {

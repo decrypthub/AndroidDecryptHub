@@ -64,6 +64,10 @@
   · 可验证性：设备侧新增惰性故障注入 op `selftest_sleep`（只睡在桥接命令线程里，不碰窗口），主机侧新增验收/诊断入口 `POST /api/automation/selftest?op=...`（把原始 op 转发给设备，不进产品 MCP 面）。新验收 `tools/verify_v38_automation_watchdog.sh`（已并入 verify_all）：注入 20s 睡眠 → 断言 10.0s 收到 `command_timeout`、**下一条命令仍被服务**（不是超时/掉线）、设备自报 `timeouts>=1`。
   · 真机结果：故障注入 PASS（elapsed=10041ms，follow-up 得到策略级回答而非超时）；同一套耐力流程从 0/3、1/3 提升到 **3/3**；全量 `verify_all.sh` **54/54**。本轮按用户此前"可以装自编译 Manager"的口径安装了 `manager-debug.apk`（同包名同签名，v0.3.7 刷入会覆盖；安装后系统自动拉起新进程并重连 bridge）。
 
+- [x] **输入后提交（键盘动作键）（2026-09-17，真机 PASS）**：只会"打字"不会"提交"等于搜索/登录/发消息都做不完。`phone_act {action:set_text, ...}` 新增 `submit:true`：写完 `ACTION_SET_TEXT` 后对同一控件下发 `ACTION_IME_ENTER`，成功回 `submitted:true`，控件拒绝则 fail-loud（`ime_enter_rejected` / `ime_enter_unsupported`），不假装已提交。实现细节记一笔：`ACTION_IME_ENTER` **只有 `AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER` 形式**，没有 int 常量（编译期 unresolved）。
+  · 可验证性：沙盒宿主 `adh_input_probe` 旁新增 `adh_input_echo`（`OnEditorActionListener` 回显"提交回显：<文本>（action=N）"）。真机：`set_text {resourceId:adh_input_probe, text:ADH_SUBMIT_v1, submit:true}` → `submitted=true`，随后 `phone_find {textContains:提交回显}` 读到 `提交回显：ADH_SUBMIT_v1（action=0）`，即应用真的收到了键盘动作。Manager APK 随本轮改动重新编译安装（同包名同签名）。
+  · 全量 `verify_all.sh` 54/54。
+
 - [x] **未发布口径：删除 IDH 兼容/兜底（2026-09-16）**：只保留 `libadh_agent.so` 单交付名、`adh_agent_start` 单导出入口。Zygisk 只从 module dir 打开新文件名，不再尝试旧文件名、绝对路径或旧 dlsym；Xposed 只走 `System.loadLibrary("adh_agent")`，删除了 `/proc/self/maps` 二次路径扫描；agent 内部 `idh_*` helper 全部改为 `adh_*`，reporter 只认 `adh.reporter.class`；daemon/tools 不再读取 `IDH_*`，数据目录固定 `adhd-data/`，也不再迁移 `libidhdetect.so`。历史段落里的 IDH 事件/日志证据仅用于说明当时现象，当前代码不包含这些兼容路径。Zygisk + app `System.loadLibrary` 的混态由 native 首载 copy owner guard（`dl_iterate_phdr` link-map order）收敛为单会话；Zygisk 早于 app 设置 `adh.reporter.class` 时，winner copy 的 reporter watcher 会迟绑定，v24 Java rich capture 仍 PASS。两轮真机 `verify_all.sh` 均 51/51。
 - [x] **v1 范围收敛（2026-09-16）**：发布面只保留 `docs/FEATURE_STATUS.md §2` 的 51 项已验收能力。未验收、半成品或没有真实触发源的能力，已从 agent / daemon / Web UI / MCP / tools / 发布文档中删除；历史细节只留在 `docs/archive/`，不再作为产品入口或发布说明。`tools/verify_all.sh` 51/51。
 - [x] **Web UI 会话模块修复：会话无限堆积 + 选择器"白屏"（2026-09-16）**：两个独立缺陷 ——
