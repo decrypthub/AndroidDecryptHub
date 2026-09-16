@@ -1,6 +1,6 @@
 # ADH MCP Tools
 
-Generated from the live ADH Daemon registry (44 tools). Endpoint: `POST /mcp` (JSON-RPC 2.0).
+Generated from the live ADH Daemon registry (47 tools). Endpoint: `POST /mcp` (JSON-RPC 2.0).
 
 | Tool | Description | Args |
 |---|---|---|
@@ -46,5 +46,8 @@ Generated from the live ADH Daemon registry (44 tools). Endpoint: `POST /mcp` (J
 | `net_correlate` | Network↔crypto correlation: pair plaintext with the TLS request carrying its ciphertext (same thread + time window) | session |
 | `load_library` | 把任意 .so 加载进目标进程（如 frida-gadget，随后 gadget 会按 script 模式自动跑你的 frida 脚本）。可选 symbol 探测。dlopen from inside the target. | session, path, symbol |
 | `automation_status` | Read-only phone automation status: user toggle, bridge connection, connected device capabilities and package allowlist. This tool never enables automation. | — |
-| `phone_observe` | Observe the active phone screen. Prefer the AccessibilityService node tree; when it is empty or non-semantic, fall back to a screenshot that the AI can inspect. Returns snapshotId plus nodes or an image. | mode, includeScreenshot, maxNodes, package |
-| `phone_act` | Act on the active phone screen. Prefer snapshotId+ref from phone_observe; use normalized x/y coordinates only when no usable node exists. Supports tap, long_press, swipe, scroll, set_text and global back/home/recents. | snapshotId, action, ref, x, y, x2, y2, coordinateSpace, text, key, direction, durationMs, observeAfter, package |
+| `phone_observe` | Observe the active phone screen. Prefer the AccessibilityService node tree; when it is empty or non-semantic, fall back to a screenshot that the AI can inspect. Returns snapshotId plus nodes or an image. | mode, includeScreenshot, maxNodes, maxDepth, interactiveOnly, package |
+| `phone_find` | Find compact, actionable nodes without transferring the whole tree. Supports text/resourceId/contentDescription and interaction flags; returns refs valid for snapshotId. | text, textContains, resourceId, contentDescription, contentDescriptionContains, clickable, editable, scrollable, index, limit, maxNodes, interactiveOnly, package |
+| `phone_wait` | Wait for a selector to appear or disappear, optionally scrolling a virtualized list until it appears. | text, textContains, resourceId, contentDescription, contentDescriptionContains, clickable, editable, scrollable, index, gone, timeoutMs, intervalMs, scroll, direction, maxScrolls, maxNodes, interactiveOnly, package |
+| `phone_act` | Act on the active phone screen. Prefer a selector or snapshotId+ref from phone_observe; use normalized coordinates only as the visual fallback. Supports tap, long_press, swipe, scroll, set_text and global back/home/recents. | text, textContains, resourceId, contentDescription, contentDescriptionContains, clickable, editable, scrollable, index, snapshotId, action, ref, x, y, x2, y2, coordinateSpace, key, direction, durationMs, observeAfter, package |
+| `phone_app` | Open, stop or restart an allowlisted app by package name. Open uses the launch intent; stop/restart delegate to the authenticated root Device Daemon. | action, package |

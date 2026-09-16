@@ -3,17 +3,22 @@ package com.adh.manager.automation
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.accessibilityservice.GestureDescription
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Path
 import android.graphics.Rect
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.provider.Settings
 import android.util.Base64
 import android.util.Log
 import android.view.Display
+import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import com.adh.core.PackageControl
+import com.adh.manager.ipc.DaemonBinderProvider
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -78,6 +83,7 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
     private fun handleCommand(op: String, args: JSONObject): JSONObject = when (op) {
         "observe" -> observe(args)
         "act" -> act(args)
+        "app" -> app(args)
         "status" -> status()
         else -> throw AutomationException("unsupported_op", "unsupported automation op: $op")
     }
@@ -94,6 +100,8 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
         val requestedPackage = args.optString("package").takeIf { it.isNotBlank() }
         val screenshotEnabled = args.optBoolean("screenshot", true)
         val maxNodes = args.optInt("maxNodes", 300).coerceIn(20, 2000)
+        val maxDepth = args.optInt("maxDepth", 50).coerceIn(1, 100)
+        val interactiveOnly = args.optBoolean("interactiveOnly", false)
         val screenshotMaxDimension = args.optInt("screenshotMaxDimension", 1280).coerceIn(480, 2400)
         val includeScreenshot = args.opt("includeScreenshot")
 
@@ -102,7 +110,7 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
         ensurePackageAllowed(active, allowedPackages, requestedPackage)
 
         val screen = screenJson()
-        val tree = if (mode == "visual") null else buildTree(root, maxNodes)
+        val tree = if (mode == "visual") null else buildTree(root, maxNodes, maxDepth, interactiveOnly)
         if (tree != null && tree.nodes.isNotEmpty()) {
             val snapshotId = storeSnapshot(active, screen, tree.nodes)
             return JSONObject()
@@ -111,6 +119,7 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
                 .put("activePackage", active)
                 .put("screen", screen)
                 .put("nodes", tree.json)
+                .put("truncated", tree.truncated)
                 .put("screenshot", screenshotForMode(includeScreenshot, screenshotEnabled, false, screenshotMaxDimension))
         }
 
@@ -127,6 +136,7 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
             .put("activePackage", active)
             .put("screen", screen)
             .put("nodes", JSONArray())
+            .put("truncated", false)
             .put("screenshot", captureScreenshot(screenshotMaxDimension))
     }
 
@@ -215,6 +225,46 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
         return JSONObject().put("action", "swipe")
     }
 
+
+
+    private fun app(args: JSONObject): JSONObject {
+        val action = args.optString("action")
+        val packageName = args.optString("package").trim()
+        val allowedPackages = stringSet(args.optJSONArray("allowedPackages"))
+        if (packageName.isEmpty()) throw AutomationException("missing_package", "app action requires a package")
+        if (allowedPackages.isEmpty() || packageName !in allowedPackages) {
+            throw AutomationException("blocked_package", "package $packageName is not in the automation allowlist")
+        }
+        return when (action) {
+            "open" -> openApp(packageName)
+            "stop" -> controlApp(packageName, restart = false)
+            "restart" -> controlApp(packageName, restart = true)
+            else -> throw AutomationException("bad_app_action", "app action must be open, stop or restart")
+        }
+    }
+
+    private fun openApp(packageName: String): JSONObject {
+        val intent = packageManager.getLaunchIntentForPackage(packageName)
+            ?: throw AutomationException("no_launcher", "package $packageName has no launcher activity")
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+        startActivity(intent)
+        return JSONObject().put("action", "open").put("package", packageName).put("result", "ok")
+    }
+
+    private fun controlApp(packageName: String, restart: Boolean): JSONObject {
+        if (!PackageControl.mayControl(packageName)) {
+            throw AutomationException("app_control_denied", "package $packageName cannot be controlled")
+        }
+        val client = DaemonBinderProvider.awaitClient(3_000)
+            ?: throw AutomationException("device_daemon_unavailable", "ADH Device Daemon is unavailable")
+        val action = if (restart) PackageControl.ACTION_RESTART else PackageControl.ACTION_STOP
+        val result = client.controlPackage(packageName, action)
+        if (result != PackageControl.RESULT_OK) {
+            throw AutomationException("app_control_failed", "device daemon returned $result")
+        }
+        return JSONObject().put("action", action).put("package", packageName).put("result", result)
+    }
+
     private fun scroll(args: JSONObject, snapshot: Snapshot?, ref: String?): JSONObject {
         val refNode = ref?.let { snapshot?.nodes?.get(it) }
         val node = refNode?.let { scrollableAncestor(it) ?: it } ?: rootInActiveWindow
@@ -262,17 +312,28 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
         return JSONObject().put("action", "global").put("key", key)
     }
 
-    private fun buildTree(root: AccessibilityNodeInfo?, maxNodes: Int): TreeResult? {
+    private fun buildTree(
+        root: AccessibilityNodeInfo?,
+        maxNodes: Int,
+        maxDepth: Int,
+        interactiveOnly: Boolean,
+    ): TreeResult? {
         if (root == null) return null
         val json = JSONArray()
         val nodes = LinkedHashMap<String, AccessibilityNodeInfo>()
         val queue = ArrayDeque<Pair<AccessibilityNodeInfo, Int>>()
         queue.add(root to 0)
         var refSeq = 0
+        var truncated = false
+        val deadline = SystemClock.uptimeMillis() + OBSERVE_BUDGET_MS
         while (queue.isNotEmpty() && nodes.size < maxNodes) {
+            if (SystemClock.uptimeMillis() > deadline) {
+                truncated = true
+                break
+            }
             val (node, depth) = queue.removeFirst()
             if (node.isVisibleToUser) {
-                val useful = isUseful(node)
+                val useful = isUseful(node, interactiveOnly)
                 val bounds = rectOf(node)
                 if (useful && bounds.width() > 0 && bounds.height() > 0) {
                     val ref = "n${refSeq++}"
@@ -280,11 +341,19 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
                     json.put(nodeJson(ref, node, bounds, depth))
                 }
             }
+            if (depth >= maxDepth) {
+                if (node.childCount > 0) truncated = true
+                continue
+            }
             for (index in 0 until node.childCount) {
+                if (queue.size >= QUEUE_LIMIT) {
+                    truncated = true
+                    break
+                }
                 node.getChild(index)?.let { queue.add(it to depth + 1) }
             }
         }
-        return TreeResult(json, nodes)
+        return TreeResult(json, nodes, truncated || nodes.size >= maxNodes)
     }
 
     private fun nodeJson(ref: String, node: AccessibilityNodeInfo, bounds: Rect, depth: Int): JSONObject {
@@ -313,16 +382,18 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
         return result
     }
 
-    private fun isUseful(node: AccessibilityNodeInfo): Boolean {
-        if (!node.text.isNullOrBlank()) return true
-        if (!node.contentDescription.isNullOrBlank()) return true
-        if (!node.hintText.isNullOrBlank()) return true
-        if (node.isClickable || node.isEditable || node.isScrollable || node.isCheckable) return true
-        return hasAction(node, AccessibilityNodeInfo.ACTION_CLICK) ||
+    private fun isUseful(node: AccessibilityNodeInfo, interactiveOnly: Boolean): Boolean {
+        val interactive = node.isClickable || node.isEditable || node.isScrollable || node.isCheckable ||
+            hasAction(node, AccessibilityNodeInfo.ACTION_CLICK) ||
             hasAction(node, AccessibilityNodeInfo.ACTION_LONG_CLICK) ||
             hasAction(node, AccessibilityNodeInfo.ACTION_SET_TEXT) ||
             hasAction(node, AccessibilityNodeInfo.ACTION_SCROLL_FORWARD) ||
             hasAction(node, AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)
+        if (interactiveOnly) return interactive
+        if (!node.text.isNullOrBlank()) return true
+        if (!node.contentDescription.isNullOrBlank()) return true
+        if (!node.hintText.isNullOrBlank()) return true
+        return interactive
     }
 
     private fun hasAction(node: AccessibilityNodeInfo, actionId: Int): Boolean =
@@ -490,11 +561,24 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
         .put("height", screenHeight())
         .put("rotation", resources.configuration.orientation)
 
-    private fun screenWidth(): Int = resources.displayMetrics.widthPixels
+    private fun screenWidth(): Int = screenBounds().width()
 
-    private fun screenHeight(): Int = resources.displayMetrics.heightPixels
+    private fun screenHeight(): Int = screenBounds().height()
 
-    private data class TreeResult(val json: JSONArray, val nodes: Map<String, AccessibilityNodeInfo>)
+    private fun screenBounds(): Rect {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val manager = getSystemService(WindowManager::class.java)
+            if (manager != null) return Rect(manager.maximumWindowMetrics.bounds)
+        }
+        val metrics = resources.displayMetrics
+        return Rect(0, 0, metrics.widthPixels, metrics.heightPixels)
+    }
+
+    private data class TreeResult(
+        val json: JSONArray,
+        val nodes: Map<String, AccessibilityNodeInfo>,
+        val truncated: Boolean,
+    )
 
     private data class Snapshot(
         val id: String,
@@ -506,5 +590,7 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
     companion object {
         private const val TAG = "AdhAutomationService"
         private const val MAX_SNAPSHOTS = 4
+        private const val OBSERVE_BUDGET_MS = 4_000L
+        private const val QUEUE_LIMIT = 20_000
     }
 }

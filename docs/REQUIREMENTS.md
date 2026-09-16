@@ -1514,8 +1514,11 @@ Host ADH Daemon / MCP  →  自动化 TCP 8763（loopback + adb reverse）  → 
 | 工具 | 说明 |
 |---|---|
 | `automation_status` | 只读状态：Host 开关、桥接连接、设备能力、允许包名；不能开启自动化 |
-| `phone_observe` | 优先返回控件树；树为空或非语义时返回压缩截图；tree/visual/auto 三种模式 |
-| `phone_act` | `tap` / `long_press` / `swipe` / `scroll` / `set_text` / `global back/home/recents`；优先 `snapshotId+ref`，兜底归一化坐标 |
+| `phone_observe` | 优先返回控件树；树为空或非语义时返回压缩截图；支持 `maxDepth`、`interactiveOnly`、truncation 标记 |
+| `phone_find` | 按 text/resourceId/contentDescription/交互标志返回紧凑节点列表，不传整棵树 |
+| `phone_wait` | 等待选择器出现/消失；可对虚拟列表执行 scroll-until-found |
+| `phone_act` | `tap` / `long_press` / `swipe` / `scroll` / `set_text` / `global back/home/recents`；优先 selector 或 `snapshotId+ref`，兜底归一化坐标 |
+| `phone_app` | 通过包名 `open` / `stop` / `restart` 授权应用；stop/restart 走 root Device Daemon |
 
 ### 31.3 兜底规则
 
@@ -1533,7 +1536,7 @@ Host ADH Daemon / MCP  →  自动化 TCP 8763（loopback + adb reverse）  → 
 
 ### 31.5 验收
 
-`tools/verify_v36_automation.sh`：MCP 工具可见性、控件树、语义 ref 点击、视觉截图兜底、归一化坐标点击、滑动；桥接未启用时 SKIP。真机证据见 `docs/PROGRESS.md`。
+`tools/verify_v36_automation.sh`：MCP 工具可见性、控件树、`phone_find`、selector/ref 点击、`phone_wait`、视觉截图兜底、归一化坐标点击、滑动；桥接未启用时 SKIP。真机证据见 `docs/PROGRESS.md`。
 
 ---
 

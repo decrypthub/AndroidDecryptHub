@@ -91,6 +91,9 @@ try {
   const list = await rpc('tools/list', {});
   const names = new Set((list.tools || []).map((tool) => tool.name));
   chk('phone_observe is exposed when automation is enabled', names.has('phone_observe'));
+  chk('phone_find is exposed when automation is enabled', names.has('phone_find'));
+  chk('phone_wait is exposed when automation is enabled', names.has('phone_wait'));
+  chk('phone_app is exposed when automation is enabled', names.has('phone_app'));
   chk('phone_act is exposed when automation is enabled', names.has('phone_act'));
 
   const observe = await callTool('phone_observe', { mode: 'tree', includeScreenshot: false, maxNodes: 80 });
@@ -98,6 +101,11 @@ try {
   chk('observe returns the AccessibilityService tree', tree.mode === 'tree', `mode=${tree.mode}`);
   chk('observe is pinned to the sandbox package', tree.activePackage === 'com.adh.sandbox', `active=${tree.activePackage}`);
   chk('tree contains actionable nodes', Array.isArray(tree.nodes) && tree.nodes.length > 0, `nodes=${tree.nodes?.length ?? 0}`);
+  chk('observe reports truncation state', tree.truncated === false, `truncated=${tree.truncated}`);
+
+  const found = await callTool('phone_find', { contentDescription: '加解密', limit: 5, maxNodes: 120 });
+  const foundData = JSON.parse(found.content?.find((item) => item.type === 'text')?.text);
+  chk('phone_find returns a compact selector match', foundData.count > 0, `count=${foundData.count}`);
 
   const current = selectedTab(tree);
   const targetLabel = ['状态', '加解密', '网络·文件', '脱壳', '日志'].find((label) => label !== current && tabNode(tree, label));
@@ -119,6 +127,23 @@ try {
     const afterText = action.content?.filter((item) => item.type === 'text')[1]?.text;
     const after = afterText ? JSON.parse(afterText) : null;
     chk('semantic ref changes the selected tab', selectedTab(after) === targetLabel, `selected=${selectedTab(after)}`);
+  }
+
+  const selectorObserve = await callTool('phone_observe', { mode: 'tree', includeScreenshot: false, maxNodes: 80 });
+  const selectorTree = parseTree(selectorObserve);
+  const selectorCurrent = selectedTab(selectorTree);
+  const selectorTarget = ['状态', '加解密', '网络·文件', '脱壳', '日志'].find((label) => label !== selectorCurrent && tabNode(selectorTree, label));
+  chk('sandbox exposes a selector action target', !!selectorTarget, `current=${selectorCurrent || '(none)'} target=${selectorTarget || '(none)'}`);
+  if (selectorTarget) {
+    const selectorActionResult = await callTool('phone_act', { action: 'tap', contentDescription: selectorTarget, observeAfter: true, includeScreenshot: false, maxNodes: 80 });
+    const selectorResult = JSON.parse(selectorActionResult.content?.find((item) => item.type === 'text')?.text);
+    chk('selector action resolves to a ref', selectorResult.target === 'ref', `target=${selectorResult.target}`);
+    const selectorAfterText = selectorActionResult.content?.filter((item) => item.type === 'text')[1]?.text;
+    const selectorAfter = selectorAfterText ? JSON.parse(selectorAfterText) : null;
+    chk('selector action changes the selected tab', selectedTab(selectorAfter) === selectorTarget, `selected=${selectedTab(selectorAfter)}`);
+    const wait = await callTool('phone_wait', { contentDescription: selectorTarget, timeoutMs: 5000, intervalMs: 150, maxNodes: 120 });
+    const waitData = JSON.parse(wait.content?.find((item) => item.type === 'text')?.text);
+    chk('phone_wait matches a visible selector', waitData.matched === true, `matched=${waitData.matched}`);
   }
 
   const visual = await callTool('phone_observe', { mode: 'visual', maxNodes: 20 });
