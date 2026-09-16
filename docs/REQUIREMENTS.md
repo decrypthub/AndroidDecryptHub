@@ -1527,7 +1527,7 @@ Host ADH Daemon / MCP  →  自动化 TCP 8763（loopback + adb reverse）  → 
 2. 控件树为空、不可操作或目标页面为自绘内容时，截图作为第二感知层返回（JPEG，默认最长边 1280；MCP 通过 image content 返回，不持久化原图）。
 3. 视觉动作只能使用归一化坐标或显式像素坐标；ref 只能用于对应 snapshotId，动作完成后 ref 失效。
 4. `FLAG_SECURE` 等受保护窗口截图失败必须 fail-loud 返回 `screenshot_failed` / `screenshot_unsupported`，不得伪造画面。
-5. 进程内信号等待与控件条件竞速，命中即返回；同一类过滤为 AND。事件用 `agentEvent`（精确 type）/ `agentEventContains`（JSON 子串），捕获用 `captureCategory`（crypto/net/file/system）/ `captureContains`（在解码后的 UTF-8 文本 + 元数据上做子串匹配）。`phone_observe`/`phone_find`/`phone_act` 返回 `cursor`（`phone_act` 另有动作派发前的 `cursorBefore`）；把游标传给 `afterCaptureId`/`afterEventSeq` 只匹配更新的记录（不看时间戳），避免信号在两次 MCP 调用之间到达而丢失。纯信号等待不依赖无障碍服务。
+5. 进程内信号等待与控件条件竞速，命中即返回；同一类过滤为 AND。事件用 `agentEvent`（精确 type）/ `agentEventContains`（JSON 子串），捕获用 `captureCategory`（crypto/net/file/system）/ `captureContains`（在解码后的 UTF-8 文本 + 元数据上做子串匹配）。`phone_observe`/`phone_find`/`phone_act` 返回 `cursor`（`phone_act` 另有动作派发前的 `cursorBefore`）；把游标传给 `afterCaptureId`/`afterEventSeq` 只匹配更新的记录（不看时间戳），避免信号在两次 MCP 调用之间到达而丢失。纯信号等待不依赖无障碍服务。信号等待超时时必须带回窗口内的实际信号摘要（`saw.captures`/`saw.events` + `totals`）与当时的 `cursor`，让 AI 能改写过滤条件而不是盲猜。
 
 ### 31.4 开关与安全
 

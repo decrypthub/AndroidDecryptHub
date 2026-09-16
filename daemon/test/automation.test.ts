@@ -3,7 +3,7 @@ import net from 'node:net';
 import test from 'node:test';
 import { AutomationHub } from '../src/automation.ts';
 import { mergeSettings, settings } from '../src/state.ts';
-import { findAgentWaitMatch, hasAgentWaitFilters } from '../src/agent_events.ts';
+import { agentWaitSightings, findAgentWaitMatch, hasAgentWaitFilters } from '../src/agent_events.ts';
 
 function connect(port: number): Promise<net.Socket> {
   return new Promise((resolve, reject) => {
@@ -175,4 +175,25 @@ test('capture filters and payloads decode UTF-8 text out of the hex bytes', () =
   assert.equal(hit?.item.text, marker);
   const binary = waitCapture(61, T0 + 6, 'crypto', { hex: '00010203ff' });
   assert.equal(findAgentWaitMatch({ captureCategory: 'crypto' }, { since: T0 }, [], [binary])?.item.text, undefined);
+});
+
+test('a timed-out agent wait reports what actually arrived in the window', () => {
+  const captures = [waitCapture(70, T0 + 100, 'net', { preview: 'GET /x' }), waitCapture(71, T0 + 200, 'crypto', { algo: 'MD5' })];
+  const events = [waitEvent(10, T0 - 5_000, 'agent.hello', {}), waitEvent(11, T0 + 50, 'agent.maps', { count: 3 })];   // append order: oldest first
+  const sightings = agentWaitSightings({ since: T0 }, events, captures, 2);
+  assert.equal(sightings.totals.captures, 2);
+  assert.equal(sightings.totals.events, 1);
+  assert.deepEqual(sightings.captures.map((item: any) => item.id), [71, 70]);
+  assert.equal(sightings.events[0].type, 'agent.maps');
+
+  const cursorView = agentWaitSightings({ afterCaptureId: 70 }, [], captures, 2);
+  assert.equal(cursorView.totals.captures, 1);
+  assert.equal(cursorView.captures[0].id, 71);
+});
+
+test('agent wait sightings keep everything counted but bounded in size', () => {
+  const captures = [waitCapture(80, T0 + 1, 'crypto'), waitCapture(81, T0 + 2, 'crypto'), waitCapture(82, T0 + 3, 'crypto')];
+  const sightings = agentWaitSightings({ since: T0 }, [], captures, 2);
+  assert.equal(sightings.captures.length, 2);
+  assert.equal(sightings.totals.captures, 3);
 });

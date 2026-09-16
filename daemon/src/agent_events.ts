@@ -96,6 +96,31 @@ function inWindow(record: WaitEvent | WaitCapture, cursor: number | undefined, s
   return Number(record.ts) >= since;
 }
 
+// A wait that times out should still teach the AI something: what actually arrived inside the
+// window while the filter did not match. Compact and bounded — this rides along the timeout reply.
+export function agentWaitSightings(window: AgentWaitWindow, events: WaitEvent[], captures: WaitCapture[], limit = 3) {
+  const sinceTs = Number.isFinite(Number(window?.since)) ? Number(window.since) : 0;
+  const seenCaptures: any[] = [];
+  const seenEvents: any[] = [];
+  let captureTotal = 0;
+  let eventTotal = 0;
+  for (let i = captures.length - 1; i >= 0; i--) {
+    const capture = captures[i];
+    if (!capture) continue;
+    if (!inWindow(capture, window?.afterCaptureId, sinceTs)) break;
+    captureTotal++;
+    if (seenCaptures.length < limit) seenCaptures.push(compactCapture(capture));
+  }
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i];
+    if (!event) continue;
+    if (!inWindow(event, window?.afterEventSeq, sinceTs)) break;
+    eventTotal++;
+    if (seenEvents.length < limit) seenEvents.push(compactEvent(event));
+  }
+  return { captures: seenCaptures, events: seenEvents, totals: { captures: captureTotal, events: eventTotal } };
+}
+
 export function findAgentWaitMatch(args: any, window: AgentWaitWindow, events: WaitEvent[], captures: WaitCapture[]): AgentWaitMatch | null {
   if (!hasAgentWaitFilters(args)) return null;
   const sinceTs = Number.isFinite(Number(window?.since)) ? Number(window.since) : 0;

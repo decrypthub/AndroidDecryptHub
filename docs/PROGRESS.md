@@ -25,6 +25,9 @@
   · 验收同时覆盖 `phone_task` 的 fail-loud：一个等不到控件的 `wait` 步现在返回 `ok=false` + `failedStep=0` + `wait_timeout`，不再静默继续（真机 PASS）。
   · ColorOS 反复清理：本轮内无障碍服务被系统关掉两次（`accessibility_enabled=0`、`Enabled services:{}`，而 opt-in marker 一直在），每次都用 root CLI `--automation-ensure` 一键修复并重连 bridge —— 这正是 v0.3.7 设备侧 5s 自愈循环要覆盖的场景；未刷入 v0.3.7 前，长时间无人值守会静默失去自动化能力。已知缺口（下一个模块包之前不会自愈）：Host daemon 重启会让已注入目标失联（agent 只在 `JNI_OnLoad` 拨号一次，无重连），本轮靠 `phone_app restart` 重新拉起沙盒；无障碍 bridge 侧不受影响（设备侧自带 2s 重连）。
 
+- [x] **phone_wait 超时诊断（2026-09-17，真机 PASS）**：按"自己操控"时踩到的坑打磨 —— 等待超时后 AI 只能再去翻 `/api/captures` 才知道"其实收到了什么"。现在信号等待超时会带回窗口内实际出现的记录摘要 `saw`（`captures`/`events` 各最多 3 条 + `totals` 计数，按游标或时间窗计算）与当时的 `cursor`，AI 可直接改写过滤条件重试。真机验收新增一条确定性检查：先点「AES-CBC」拿到 `cursorBefore`，再用一个不存在的标记等待 → 4s 超时，断言 `saw.totals.captures >= 1` 且看到的捕获里确有 AES 算法（即超时摘要不是空壳）。
+  · 复现到的稳定性事实：本轮内 ColorOS 三次把已启用的无障碍服务清掉（`accessibility_enabled=0`、`Enabled services:{}`，Manager 进程仍在跑），每次都靠 root CLI `--automation-ensure` + opt-in marker 恢复。结论：**未刷入 v0.3.7 前，长时间无人值守必然掉线**；刷入后设备侧 5s 自愈循环才会兜住这类系统级清理。
+
 - [x] **未发布口径：删除 IDH 兼容/兜底（2026-09-16）**：只保留 `libadh_agent.so` 单交付名、`adh_agent_start` 单导出入口。Zygisk 只从 module dir 打开新文件名，不再尝试旧文件名、绝对路径或旧 dlsym；Xposed 只走 `System.loadLibrary("adh_agent")`，删除了 `/proc/self/maps` 二次路径扫描；agent 内部 `idh_*` helper 全部改为 `adh_*`，reporter 只认 `adh.reporter.class`；daemon/tools 不再读取 `IDH_*`，数据目录固定 `adhd-data/`，也不再迁移 `libidhdetect.so`。历史段落里的 IDH 事件/日志证据仅用于说明当时现象，当前代码不包含这些兼容路径。Zygisk + app `System.loadLibrary` 的混态由 native 首载 copy owner guard（`dl_iterate_phdr` link-map order）收敛为单会话；Zygisk 早于 app 设置 `adh.reporter.class` 时，winner copy 的 reporter watcher 会迟绑定，v24 Java rich capture 仍 PASS。两轮真机 `verify_all.sh` 均 51/51。
 - [x] **v1 范围收敛（2026-09-16）**：发布面只保留 `docs/FEATURE_STATUS.md §2` 的 51 项已验收能力。未验收、半成品或没有真实触发源的能力，已从 agent / daemon / Web UI / MCP / tools / 发布文档中删除；历史细节只留在 `docs/archive/`，不再作为产品入口或发布说明。`tools/verify_all.sh` 51/51。
 - [x] **Web UI 会话模块修复：会话无限堆积 + 选择器"白屏"（2026-09-16）**：两个独立缺陷 ——

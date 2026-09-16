@@ -205,8 +205,16 @@ try {
       }));
       chk('phone_wait matches the crypto signal caused by the tap', signalWait.matched === true && signalWait.kind === 'capture' && /AES/.test(signalWait.item?.algo ?? ''), `algo=${signalWait.item?.algo} elapsed=${signalWait.elapsedMs}`);
       chk('agent wait decodes the captured plaintext', String(signalWait.item?.text ?? '').includes('ADH手动_AES_#'), `text=${JSON.stringify(signalWait.item?.text ?? null)}`);
-      const signalMiss = parseTree(await callTool('phone_wait', { captureCategory: 'crypto', captureContains: 'ADH_NO_SUCH_MARKER_v1', timeoutMs: 1500, intervalMs: 200 }));
+      const missTap = parseTree(await callTool('phone_act', { action: 'tap', text: 'AES-CBC' }));
+      const signalMiss = parseTree(await callTool('phone_wait', {
+        captureCategory: 'crypto',
+        captureContains: 'ADH_NO_SUCH_MARKER_v1',
+        afterCaptureId: missTap.cursorBefore?.captureId,
+        timeoutMs: 4000,
+        intervalMs: 200,
+      }));
       chk('agent wait times out loudly when the marker never arrives', signalMiss.matched === false && signalMiss.timedOut === true);
+      chk('agent wait timeout reports the signals it did see', (signalMiss.saw?.totals?.captures ?? 0) >= 1 && signalMiss.saw.captures.some((item) => /AES/.test(item.algo ?? '')) && typeof signalMiss.cursor?.captureId === 'number', `saw=${JSON.stringify(signalMiss.saw?.totals)} sample=${signalMiss.saw?.captures?.[0]?.algo}`);
     }
   }
 
