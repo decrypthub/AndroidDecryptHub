@@ -198,7 +198,10 @@ class MainActivity : Activity() {
             }
             addView(input)
             addView(echo)
-            addView(btnRow(mbutton("发测试通知") { postTestNotification() }))
+            addView(btnRow(
+                mbutton("发测试通知") { postTestNotification() },
+                mbutton(if (secureWindow) "关闭安全窗口" else "开启安全窗口") { toggleSecureWindow() }.also { secureToggleButton = it },
+            ))
         })
     }
 
@@ -289,6 +292,25 @@ class MainActivity : Activity() {
             addView(tabs, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
             addView(content, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         }
+    }
+
+    private var secureWindow = false
+    private var secureToggleButton: MaterialButton? = null
+
+    // Spec §31.3 rule 4: a protected window must make screenshot capture fail loudly instead of
+    // returning a blank frame. This toggle gives the acceptance a deterministic secure window.
+    private fun toggleSecureWindow() {
+        secureWindow = !secureWindow
+        if (secureWindow) {
+            window.setFlags(
+                android.view.WindowManager.LayoutParams.FLAG_SECURE,
+                android.view.WindowManager.LayoutParams.FLAG_SECURE,
+            )
+        } else {
+            window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+        }
+        secureToggleButton?.text = if (secureWindow) "关闭安全窗口" else "开启安全窗口"
+        logLine(if (secureWindow) "已开启 FLAG_SECURE（截图应失败）" else "已关闭 FLAG_SECURE")
     }
 
     private var notifSeq = 0

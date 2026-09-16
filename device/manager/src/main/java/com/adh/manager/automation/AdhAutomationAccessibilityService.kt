@@ -675,6 +675,14 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
         if (!latch.await(5, TimeUnit.SECONDS)) throw AutomationException("screenshot_timeout", "screenshot callback timed out")
         failure?.let { throw AutomationException("screenshot_failed", it) }
         val source = bitmap ?: throw AutomationException("screenshot_failed", "device returned no bitmap")
+        // A FLAG_SECURE window (or a screen that is off) captures as a uniform black frame. Handing
+        // that to the AI would be inventing a screen: spec §31.3 rule 4 says fail loudly instead.
+        if (looksBlank(source)) {
+            throw AutomationException(
+                "screenshot_failed",
+                "captured frame is blank/black — the window is probably protected (FLAG_SECURE) or the screen is off",
+            )
+        }
         val scale = min(1.0, maxDimension.toDouble() / max(source.width, source.height).coerceAtLeast(1))
         val output = if (scale < 1.0) {
             Bitmap.createScaledBitmap(source, (source.width * scale).toInt().coerceAtLeast(1), (source.height * scale).toInt().coerceAtLeast(1), true)
@@ -693,6 +701,34 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
             if (output !== source) output.recycle()
             source.recycle()
         }
+    }
+
+    // Cheap "nothing was really drawn" check: sample a grid and treat an almost entirely black or
+    // perfectly uniform dark frame as blank.
+    private fun looksBlank(bitmap: Bitmap): Boolean {
+        val stepX = max(1, bitmap.width / 48)
+        val stepY = max(1, bitmap.height / 48)
+        var sampled = 0
+        var dark = 0
+        var first: Int? = null
+        var uniform = true
+        var y = 0
+        while (y < bitmap.height) {
+            var x = 0
+            while (x < bitmap.width) {
+                val pixel = bitmap.getPixel(x, y)
+                if (first == null) first = pixel else if (pixel != first) uniform = false
+                val red = (pixel shr 16) and 0xff
+                val green = (pixel shr 8) and 0xff
+                val blue = pixel and 0xff
+                if (red < 8 && green < 8 && blue < 8) dark++
+                sampled++
+                x += stepX
+            }
+            y += stepY
+        }
+        if (sampled == 0) return false
+        return dark.toDouble() / sampled >= 0.98 || (uniform && dark == sampled)
     }
 
     private fun screenJson(): JSONObject = JSONObject()

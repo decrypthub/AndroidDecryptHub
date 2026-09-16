@@ -192,6 +192,24 @@ try {
   const textShotImage = textShot.content?.find((item) => item.type === 'image');
   chk('mode=text can return the screenshot alongside the text view', textShotText.startsWith('screen:') && textShotImage?.mimeType === 'image/jpeg' && (textShotImage?.data?.length ?? 0) > 1000, `text=${textShotText.length}B image=${textShotImage?.data?.length ?? 0}`);
 
+  // ---- FLAG_SECURE: a protected window must fail loudly, never hand over a black frame -----
+  const secureOn = parseTree(await callTool('phone_act', { action: 'tap', text: '开启安全窗口', maxNodes: 150 }));
+  chk('the sandbox can enable a protected window', secureOn.target === 'ref', `target=${secureOn.target}`);
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  let secureError = '';
+  try {
+    await callTool('phone_observe', { mode: 'visual', maxNodes: 20 });
+  } catch (error) {
+    secureError = error.message || String(error);
+  }
+  chk('a FLAG_SECURE window fails the screenshot loudly instead of returning a black frame', /blank\/black|protected|screenshot_failed|screenshot_unsupported/.test(secureError), secureError.slice(0, 90));
+  const secureOff = parseTree(await callTool('phone_act', { action: 'tap', text: '关闭安全窗口', maxNodes: 150 }));
+  chk('the sandbox can turn the protected window off again', secureOff.target === 'ref', `target=${secureOff.target}`);
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  const recovered = await callTool('phone_observe', { mode: 'visual', maxNodes: 20 });
+  const recoveredImage = recovered.content?.find((item) => item.type === 'image');
+  chk('screenshots recover once the window is unprotected', recoveredImage?.mimeType === 'image/jpeg' && (recoveredImage?.data?.length ?? 0) > 1000, `bytes=${recoveredImage?.data?.length ?? 0}`);
+
   // ---- stability wait: settle first, then act on the refs it hands back -------------------
   const settled = parseTree(await callTool('phone_wait', { stable: true, stableMs: 600, timeoutMs: 8000, intervalMs: 250, maxNodes: 120 }));
   chk('phone_wait stable mode settles before returning', settled.matched === true && settled.stable === true && settled.waitedMs >= 600, `waitedMs=${settled.waitedMs} signature=${settled.signature}`);
