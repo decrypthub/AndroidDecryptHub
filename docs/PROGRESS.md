@@ -15,6 +15,11 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 idhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [x] **MCP 面收口：后端矩阵与"进程内真实注入路径"进 MCP（2026-09-16）**：新增 `backends` MCP 工具，与 REST `GET /api/backends` **同源**（共用 `daemon/src/backends.ts`，不做第二套逻辑）；
+      带 `session` 参数时按 agent 自己的 /proc/self/maps 判定该进程里**真实存在**的注入路径：`zygisk` / `xposed_module` / `frida_gadget` / `self_load`。
+      · 真机实测（MCP 驱动，非 HTTP 手测）：`compat_probe` 取足迹 → `load_library` 把 Frida Gadget dlopen 进 sandbox → `backends(session)` 从 `["adhd_agent","self_load"]` 变为 `["adhd_agent","frida_gadget","self_load"]`（模块数 533→535）。
+      · 验收：`tools/verify_v33_backends.sh` 增加 MCP 断言（`tools/list` 含 `backends`、MCP 矩阵与 HTTP 逐字节一致、在线会话分类含 `adhd_agent`）；host 三条（v10_webui / v10_mcp / v33）全绿。
+      · 说明：这类能力以前只能靠我手工 curl/HTTP 验证 —— 现在"AI 客户端看到的"和"控制台看到的"是同一份真相。
 - [x] **模块 W：注入中心收口 —— 可选后端矩阵进 Web 控制台（2026-09-15）**：主机侧新增只读 `GET /api/backends`：会话按 `entry` 分类（`start` = 注入器路径、`jni_onload` = 自加载/Gadget/Xposed），
       并给出**主机侧真实**的 Frida Gadget 状态（固定版本清单 + 本地缓存版本/ABI/字节数 + 加载命令模板）；Zygisk/Xposed 两项如实标注"设备侧由 ADH Manager → Device Daemon 驱动"。
       Web 控制台设置里新增"注入后端"页：会话列表 + 每个会话的"检测注入方式"按钮（拉 `/api/modules` 按 agent/Gadget 的实际映射路径判别 Zygisk / Xposed 模块 / Gadget / 应用自加载），Gadget 命令一键复制。

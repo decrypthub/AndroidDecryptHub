@@ -34,3 +34,7 @@ Adding a crypto hook once meant reading the whole file; the REST surface was inl
 ## Known flake (pre-existing, in `service.ts` reconstructSo path)
 
 `verify_v08_disasm`/`verify_v08_analyze` intermittently report `exports=0` on the memory-reconstructed `.so`: `readMem` breaks early on a short first chunk (`service.ts` `readMem`), truncating a PT_LOAD and dropping the dynamic segment. Passes on re-run. Fix candidate: read each PT_LOAD segment boundary precisely rather than assuming contiguous.
+
+### backends.ts (module W)
+
+Shared injection-backend matrix: ackendMatrix() (sessions by entry, host-side Frida Gadget cache, device-side backend pointers) and classifySession() (which paths are really loaded in one target, from the agent's own maps). Used by REST GET /api/backends AND the MCP tool ackends — one implementation, two surfaces.

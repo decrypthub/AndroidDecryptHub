@@ -71,6 +71,34 @@ blocks.forEach((code, i) => {
 });
 chk('inline scripts parse', syntaxOk);
 
+// MCP surface: the tool is built for AI clients, so the matrix must be reachable there too —
+// the same truth as the REST endpoint, plus per-session classification.
+const mcpCall = async (method, params) => (await (await fetch(`${base}/mcp`, {
+  method: 'POST', headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, ...(params ? { params } : {}) }),
+})).json());
+let mcpOk = true;
+try {
+  const tlist = await mcpCall('tools/list', {});
+  const names = (tlist.result?.tools ?? []).map((t) => t.name);
+  chk('MCP tools/list exposes backends', names.includes('backends'), `tools=${names.length}`);
+  const mcpMatrixCall = await mcpCall('tools/call', { name: 'backends', arguments: {} });
+  const mcpMatrix = JSON.parse(mcpMatrixCall.result?.content?.[0]?.text ?? '{}');
+  chk('MCP backends returns the matrix', !!mcpMatrix.gadget && Array.isArray(mcpMatrix.agents));
+  chk('MCP backends agrees with HTTP on the gadget cache',
+    JSON.stringify(mcpMatrix.gadget?.cached ?? []) === JSON.stringify(matrix?.gadget?.cached ?? []));
+  const onlineSession = (mcpMatrix.agents ?? []).find((a) => a.online);
+  if (onlineSession) {
+    const perSession = await mcpCall('tools/call', { name: 'backends', arguments: { session: onlineSession.session } });
+    const parsed = JSON.parse(perSession.result?.content?.[0]?.text ?? '{}');
+    const kinds = parsed.sessionBackends?.backends ?? [];
+    chk('MCP backends(session) classifies the live process', kinds.includes('adhd_agent'), kinds.join(' + '));
+  } else {
+    console.log('SKIP  MCP backends(session) — no online agent session right now');
+  }
+} catch (e) { mcpOk = false; chk('MCP surface', false, String(e)); }
+chk('MCP surface reachable', mcpOk);
+
 console.log(checks.every(([, ok]) => ok) ? 'RESULT:PASS' : 'RESULT:FAIL');
 EOF
 )"

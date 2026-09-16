@@ -1,8 +1,9 @@
-import { existsSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, unlinkSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { backendMatrix } from '../backends.ts';
 import { webUrls } from '../config.ts';
 import { handleMcp, MCP_TOOLS } from '../mcp.ts';
 import { applyCaptureEnabled } from '../service.ts';
@@ -14,65 +15,6 @@ import {
 import type { Route, RouteContext } from './types.ts';
 
 const publicDir = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'public');
-// Repo root, so the backend panel reports host-side artefacts (Frida Gadget cache) truthfully.
-const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-
-/**
- * Injection-backend matrix for the Web console. Read-only: the Host ADH Daemon has no adb, so for
- * Frida Gadget it reports what is actually cached plus the command to run; the device-side backends
- * (Zygisk scope, Xposed module) are driven through ADH Manager -> Device Daemon, and `entry` is the
- * host-side observable of how each agent got into its target.
- */
-function backendMatrix() {
-  const cacheRoot = join(repoRoot, 'agent', 'third_party', 'frida');
-  const manifestFile = join(repoRoot, 'tools', 'frida_gadget_versions.json');
-  let pinned: string[] = [];
-  try {
-    const parsed = JSON.parse(readFileSync(manifestFile, 'utf8'));
-    pinned = Object.keys(parsed?.versions ?? {}).sort();
-  } catch { pinned = []; }
-  const cached: Array<{ version: string; abi: string; bytes: number; path: string }> = [];
-  if (existsSync(cacheRoot)) {
-    for (const version of readdirSync(cacheRoot)) {
-      const versionDir = join(cacheRoot, version);
-      if (!statSync(versionDir).isDirectory()) continue;
-      for (const abi of readdirSync(versionDir)) {
-        const so = join(versionDir, abi, 'libfrida-gadget.so');
-        if (!existsSync(so)) continue;
-        cached.push({ version, abi, bytes: statSync(so).size, path: so });
-      }
-    }
-  }
-  return {
-    agents: [...sessions.values()].map((s) => ({
-      session: s.sessionId,
-      package: s.package,
-      pid: s.pid,
-      online: s.online,
-      entry: s.entry,
-      entryKind: s.entry === 'start' ? 'injected (adh_agent_start)' : 'jni_onload (self-load / gadget / xposed)',
-    })),
-    gadget: {
-      pinned,
-      cached,
-      loader: 'tools/load_frida_gadget.sh',
-      note: 'optional high-footprint backend: the host tool stages it into <pkg>/code_cache and triggers load_so; the daemon itself has no adb.',
-    },
-    xposed: {
-      module: 'com.adh.xposed',
-      source: 'injector/xposed',
-      control: 'device-side: ADH Manager (Scope screen) -> Device Daemon, AIDL v5',
-      verify: ['tools/verify_v31_xposed.sh', 'tools/verify_v32_backend_control.sh'],
-    },
-    zygisk: {
-      module: 'injector/zygisk',
-      control: 'device-side: ADH Manager -> Device Daemon (scope.json allowlist)',
-      verify: ['tools/verify_v27_zygisk.sh'],
-    },
-    updatedAt: Date.now(),
-  };
-}
-
 export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
   const servePublic = (name: string, contentType: string) => async () => {
     const file = join(publicDir, name);

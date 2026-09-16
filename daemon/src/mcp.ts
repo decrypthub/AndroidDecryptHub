@@ -11,13 +11,15 @@ import { join } from 'node:path';
 import { analyzeSo, cryptoConstScan, svcScan, disasmSo } from './analysis.ts';
 import { parseDex, cryptoScan, searchDex, invokeXref, extractMethodCode, analyzeCoverage, rebuildStandardDex, recoverFromSnapshots } from './dex.ts';
 import { ensureDexIndex, searchDexIndex, listDexReflections } from './dex_index.ts';
-import { agentCmd, dumpBuf, dumpBufPath, dumpRegion, pickSid, runUnpackSession, repairDexHeader } from './service.ts';
+import { agentCmd, dumpBuf, dumpBufPath, dumpRegion, pickSid, runUnpackSession, repairDexHeader, sessionForPackage } from './service.ts';
+import { backendMatrix, classifySession } from './backends.ts';
 import { sessions, dumps, captures, captureTimers, SANDBOX, settings, CAPTURES, cryptoIdentify } from './state.ts';
 import type { DumpMeta } from './state.ts';
 
 const S = { type: 'string' }, N = { type: 'number' };
 export const MCP_TOOLS: { name: string; description: string; inputSchema: any; handler: (a: any) => Promise<any> }[] = [
   { name: 'process_list', description: 'List connected target agent sessions', inputSchema: { type: 'object', properties: {} }, handler: async () => [...sessions.values()] },
+  { name: 'backends', description: 'Injection-backend matrix: sessions by entry, host-side Frida Gadget cache + loader command, device-side backend pointers. Pass session to classify which injection paths are really loaded in that process (zygisk / xposed_module / frida_gadget / self_load).', inputSchema: { type: 'object', properties: { session: S } }, handler: async (a) => { const m = backendMatrix(); return a.session ? { ...m, sessionBackends: await classifySession(a.session) } : m; } },
   { name: 'dumps_list', description: 'List captured dump artifacts (dex/so/region)', inputSchema: { type: 'object', properties: {} }, handler: async () => [...dumps.values()] },
   { name: 'compat_probe', description: 'Self-assess agent env + injection footprint: tracer/seccomp/backends/exec/anon/rwx', inputSchema: { type: 'object', properties: { session: S } }, handler: (a) => agentCmd(a.session, 'compat_probe') },
   { name: 'memory_maps', description: 'On-demand full /proc/self/maps of the target', inputSchema: { type: 'object', properties: { session: S } }, handler: (a) => agentCmd(a.session, 'maps') },
@@ -63,9 +65,10 @@ export const MCP_TOOLS: { name: string; description: string; inputSchema: any; h
 ];
 export const MCP_MAP = new Map(MCP_TOOLS.map(t => [t.name, t]));
 
-export async function handleMcp(reqBody: string, res: ServerResponse) {
+export async function handleMcp(reqBody: string, res: ServerResponse, opts?: { package?: string }) {
   let msg: any;
   try { msg = JSON.parse(reqBody); } catch { res.writeHead(400).end('bad json'); return; }
+  const pin = opts?.package;
   const reply = (result?: unknown, error?: unknown) => {
     const body = JSON.stringify({ jsonrpc: '2.0', id: msg.id, ...(error ? { error } : { result }) });
     res.writeHead(200, { 'content-type': 'application/json' }); res.end(body);
@@ -75,10 +78,20 @@ export async function handleMcp(reqBody: string, res: ServerResponse) {
   if (msg.method === 'ping') return reply({});
   if (msg.method === 'tools/list') return reply({ tools: MCP_TOOLS.map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })) });
   if (msg.method === 'tools/call') {
-    const t = MCP_MAP.get(msg.params?.name);
-    if (!t) return reply(undefined, { code: -32602, message: `unknown tool: ${msg.params?.name}` });
+    const name = msg.params?.name;
+    const t = MCP_MAP.get(name);
+    if (!t) return reply(undefined, { code: -32602, message: `unknown tool: ${name}` });
+    let args = { ...(msg.params?.arguments ?? {}) };
+    if (pin && name === 'process_list') {
+      const out = [...sessions.values()].filter(s => s.package === pin);
+      return reply({ content: [{ type: 'text', text: JSON.stringify(out, null, 2) }] });
+    }
+    if (pin && args.session == null) {
+      const sid = sessionForPackage(pin);
+      if (sid) args.session = sid;
+    }
     try {
-      const out = await t.handler(msg.params?.arguments ?? {});
+      const out = await t.handler(args);
       return reply({ content: [{ type: 'text', text: JSON.stringify(out, null, 2) }] });
     } catch (e) { return reply({ content: [{ type: 'text', text: 'error: ' + (e as Error).message }], isError: true }); }
   }
