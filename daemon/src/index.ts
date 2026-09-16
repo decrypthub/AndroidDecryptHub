@@ -7,8 +7,9 @@ import { handleHttp } from './http/router.ts';
 import { startCaptureLoop } from './service.ts';
 import {
   agentSockets, broadcast, captureTimers, frameJson, FRAME_JSON, FRAME_MAX,
-  log, nextId, pending, sessions, wss,
-} from './state.ts';
+  log, nextId, pending, pruneSessions, sessions, wss,
+}
+from './state.ts';
 import type { AgentMsg, AgentSession } from './state.ts';
 
 // ---- Agent TCP server (NDJSON) -------------------------------------------
@@ -56,6 +57,7 @@ const agentServer = net.createServer((sock) => {
         regionsSample: [],
       };
       sessions.set(id, session);
+      pruneSessions();   // a new dial-in is the natural moment to drop stale dead sessions
       agentSockets.set(id, sock);
       log(`agent HELLO ${session.package} pid=${session.pid} abi=${session.abi} entry=${session.entry} -> ${id}`);
       sock.write(frameJson({ t: 'ack', sessionId: id }));
@@ -87,6 +89,7 @@ const agentServer = net.createServer((sock) => {
       if (t) { clearInterval(t); captureTimers.delete(session.sessionId); }
       log(`agent CLOSE ${session.package} ${session.sessionId}`);
       broadcast('agent.close', { sessionId: session.sessionId });
+      pruneSessions();
     }
   });
   sock.on('error', (e) => log('agent sock error:', (e as Error).message));
@@ -123,10 +126,16 @@ httpServer.listen(HTTP_PORT, '0.0.0.0', () => {
   } else {
     // fail-loud, like the iOS ref: don't pretend LAN access works when it can't
     log('│  LAN   : (no LAN IPv4 found — console reachable locally only;');
-    log('│          the phone can still open it via `adb reverse tcp:8760`)');
+    log(`│          the phone can still open it via \`adb reverse tcp:${HTTP_PORT}\`)`);
   }
   log(`│  phone : also run 'adb reverse tcp:${AGENT_PORT} tcp:${AGENT_PORT}' + 'adb reverse tcp:${HTTP_PORT} tcp:${HTTP_PORT}'`);
   log('└─────────────────────────────────────────────────────────────');
 });
 
 process.on('SIGINT', () => { log('shutting down'); process.exit(0); });
+
+// Periodic session sweep: closes can be missed (kill -9, lost sockets), so bound the map anyway.
+setInterval(() => {
+  const dropped = pruneSessions();
+  if (dropped.length) log(`session prune: dropped ${dropped.length} stale offline session(s)`);
+}, 60_000).unref();

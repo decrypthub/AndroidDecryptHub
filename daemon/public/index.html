@@ -53,7 +53,14 @@
   .procinfo dt { color:var(--muted); }
   .procinfo dd { min-width:0; margin:0; overflow-wrap:anywhere; color:var(--ink-2); text-align:right; }
   .sess-lab { display:flex; align-items:center; gap:8px; margin-top:12px; padding-top:10px; border-top:1px solid var(--line-soft); color:var(--muted); font-size:11px; }
-  .sess-lab select { flex:1; min-width:0; }
+  .sess-lab select { flex:1; min-width:0; background:var(--surface-2); color:var(--ink); }
+  /* Native <option> popups do not reliably inherit the page palette: with a transparent control
+     the OS paints white and the option text (--ink #fff) becomes invisible — the picker looked
+     blank. Give the popup an explicit opaque background/foreground pair. */
+  select option { background:#11151c; color:var(--ink); }
+  select option:checked { background:var(--surface-3); color:var(--ink); }
+  .sess-offline { display:flex; align-items:center; gap:6px; margin-top:8px; color:var(--muted); font-size:11px; }
+  .sess-offline input { min-height:0; margin:0; }
   .header-actions { display:flex; align-items:center; gap:7px; margin-left:0; flex-wrap:wrap; }
   .menu-wrap { position:relative; }
   .popover { display:none; position:absolute; top:calc(100% + 7px); right:0; z-index:80; min-width:210px; padding:6px; color:var(--ink-2); background:#11151c; border:1px solid #4a5260; border-radius:5px; box-shadow:0 18px 50px rgba(0,0,0,.58); }
@@ -359,6 +366,9 @@
       <dl class="procinfo" id="procinfo"></dl>
       <label class="sess-lab">会话
         <select id="sess"><option value="">（最新在线）</option></select>
+      </label>
+      <label class="sess-offline">
+        <input type="checkbox" id="sessShowOffline"> 显示已断开的会话<span id="sessOfflineCount"></span>
       </label>
     </div>
   </div>
@@ -1162,11 +1172,19 @@ function escapeHtml(s){ return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':
 // ---- agents / 进程栏 / WS ----
 const agents=new Map(); const sess=document.getElementById('sess');
 let lastFilterSid='';
-function render(){ const list=[...agents.values()].sort((a,b)=>a.connectedAt-b.connectedAt);
+function render(){ const all=[...agents.values()].sort((a,b)=>a.connectedAt-b.connectedAt);
+  // Dead sessions pile up in the map between sweeps (and every restart adds one), so the picker
+  // lists ONLINE sessions by default and just reports how many offline ones it is hiding.
+  const showOffline=document.getElementById('sessShowOffline')?.checked===true;
+  const offline=all.filter(a=>!a.online);
+  const list=showOffline?all:all.filter(a=>a.online);
+  const offlineHint=document.getElementById('sessOfflineCount');
+  if(offlineHint) offlineHint.textContent=offline.length?`（已隐藏 ${offline.length} 个）`:'';
   const pin=pinnedPackage(); const cur=sess.value;
   sess.innerHTML='<option value="">（最新在线）</option>'+list.map(a=>`<option value="${a.sessionId}">${escapeHtml(a.package)} · ${a.pid}${a.online?'':' · 离线'}</option>`).join('');
   if(pin){ const m=list.filter(a=>a.online&&a.package===pin).pop()||list.filter(a=>a.package===pin).pop(); sess.value=m?m.sessionId:cur; }
   else sess.value=cur;
+  if(sess.selectedIndex<0) sess.value='';   // the selected session was hidden (offline) — fall back to the newest online
   if(sess.value!==lastFilterSid){ lastFilterSid=sess.value; capReset(); }
   const a=selectedAgent();
   const primary=document.getElementById('procPrimary'), secondary=document.getElementById('procSecondary'), info=document.getElementById('procinfo');
@@ -1195,6 +1213,7 @@ function connect(){ const ws=new WebSocket(`ws://${location.host}/ws`); const co
     dbg('WS←', m.event||'?');
   }; }
 connect();
+document.getElementById('sessShowOffline')?.addEventListener('change', render);
 sess.addEventListener('change', ()=>{
   const a=agents.get(sess.value);
   const next=a&&a.package ? '/'+encodeURIComponent(a.package) : '/';

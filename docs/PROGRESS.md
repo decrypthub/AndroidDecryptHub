@@ -15,6 +15,12 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 idhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [x] **Web UI 会话模块修复：会话无限堆积 + 选择器"白屏"（2026-09-16）**：两个独立缺陷 ——
+      ① **daemon 从不清理 `sessions`**：每次 App 重启都新增一条，一个下午的测试留下 20 条死会话（列表里全是历史会话）。
+      修法：`state.ts` 新增 `pruneSessions()`（每包最多保留 `OFFLINE_KEEP_PER_PACKAGE=2` 条离线 + 超过 `OFFLINE_RETENTION_MS=10min` 一律丢弃，**绝不动在线会话**），并在 `agent hello`、`agent close` 与 60s 定时清扫里调用；实测重启 4 次后稳定在 `total=3 (1 online + 2 offline)`。
+      ② **会话选择器"一片白色"**：`select` 是 `background:transparent`，浏览器给原生下拉浮层画白底，而选项文字继承 `--ink(#fff)` → 白底白字全看不见。
+      修法：给 `select option` 明确的 `background:#11151c; color:var(--ink)`（含 `:checked`），会话 `select` 本身改为不透明 `var(--surface-2)`；顺带把选择器改成**默认只列在线会话** + "显示已断开的会话"开关 + "（已隐藏 N 个）"提示，选中的会话被隐藏时自动回落到"最新在线"。
+      · 验证：`tools/verify_v35_sessions.sh`（pruner 单测 4 项 + 选择器标记/配色 5 项 + 实际离线会话上限）PASS；浏览器实测计算样式：`select` 背景 `rgb(21,25,34)`、`option` 背景 `rgb(27,32,42)`、文字白色，列表只剩「（最新在线）+ 1 条在线」并提示"已隐藏 2 个"。
 - [x] **模块 W 可选后端：eCapture（eBPF 抓 TLS 明文，2026-09-16 真机验证）**：官方发布固定版本 + 官方 checksum 里的 sha256（`tools/ecapture_versions.json` / `tools/fetch_ecapture.sh`），
       运行器 `tools/ecapture_capture.sh`：`--preflight-only` 打印 root/内核/`CONFIG_BPF_SYSCALL`/`CONFIG_UPROBES`/BTF 能力并给判定，运行后按输出里的 `probe started successfully` 给结论（失败打印首条错误），产出落 `captures/ecapture/`。
       · 关键更正：**内核 BTF 不是必需**（本机 5.10 / `CONFIG_DEBUG_INFO_BTF=n`，初版预检把 BTF 当硬门槛 → 实测 OpenSSL probe 正常启动后改为"提示"），真正的能力信号是 probe 是否启动。

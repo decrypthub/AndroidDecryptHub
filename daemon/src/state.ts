@@ -64,6 +64,34 @@ export interface DumpMeta {
 
 // ---- registry ------------------------------------------------------------
 export const sessions = new Map<string, AgentSession>();
+
+// Session hygiene. Every app restart dials in as a NEW session and the map was never pruned —
+// one afternoon of testing left 20 dead entries in the Web UI picker. Keep the recent past only:
+// per package at most OFFLINE_KEEP_PER_PACKAGE offline sessions, never anything older than
+// OFFLINE_RETENTION_MS. Online sessions are never touched here.
+export const OFFLINE_RETENTION_MS = 10 * 60_000;
+export const OFFLINE_KEEP_PER_PACKAGE = 2;
+
+/** Drops stale offline sessions; returns the sessionIds it removed (for logging/tests). */
+export function pruneSessions(now = Date.now()): string[] {
+  const byPackage = new Map<string, AgentSession[]>();
+  for (const s of sessions.values()) {
+    if (s.online) continue;
+    const list = byPackage.get(s.package) ?? [];
+    list.push(s);
+    byPackage.set(s.package, list);
+  }
+  const dropped: string[] = [];
+  for (const list of byPackage.values()) {
+    list.sort((a, b) => b.connectedAt - a.connectedAt);   // newest first
+    list.forEach((s, index) => {
+      const age = now - Math.max(s.lastSeen, s.connectedAt);
+      if (index >= OFFLINE_KEEP_PER_PACKAGE || age > OFFLINE_RETENTION_MS) dropped.push(s.sessionId);
+    });
+  }
+  for (const id of dropped) sessions.delete(id);
+  return dropped;
+}
 export const dumps = new Map<string, DumpMeta>();                        // sha256 -> meta (dedup)
 export const agentSockets = new Map<string, net.Socket>();               // sessionId -> live socket
 export const pending = new Map<string, { resolve: (v: any) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }>();
