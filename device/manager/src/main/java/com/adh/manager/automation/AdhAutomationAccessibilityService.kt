@@ -26,6 +26,7 @@ import org.json.JSONArray
 import com.adh.manager.notify.AdhNotificationListener
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
+import java.security.MessageDigest
 import java.util.ArrayDeque
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
@@ -192,14 +193,24 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
             throw AutomationException("stale_snapshot", "active package changed from ${snapshot.packageName} to $active")
         }
 
+        val before = windowSignature()
+
         val result = when (action) {
             "tap" -> tap(args, snapshot, ref)
             "long_press" -> longPress(args, snapshot, ref)
             "swipe" -> swipe(args)
+            "input" -> input(args)
             "scroll" -> scroll(args, snapshot, ref)
             "set_text" -> setText(args, snapshot, ref)
             "global" -> global(args)
             else -> throw AutomationException("unsupported_action", "unsupported action: $action")
+        }
+        if (action == "tap" || action == "swipe" || action == "input") {
+            // A few Compose UIs accept dispatchGesture and never act on it: the callback completes
+            // while the window stays identical. Report that instead of pretending the action worked.
+            Thread.sleep(320)
+            val after = windowSignature()
+            result.put("changed", before == null || after == null || before != after)
         }
         if (snapshotId != null) snapshots.remove(snapshotId)
         return result.put("activePackage", active)
@@ -309,6 +320,89 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
             throw AutomationException("device_daemon_old", "Device Daemon protocol ${client.protocolVersion} has no power control")
         }
         return client
+    }
+    /**
+     * Raw input injection through the root Device Daemon. Fallback for UIs that accept an
+     * AccessibilityService gesture but never act on it (observed on SukiSU Ultra and the
+     * Vector/LSPosed manager, both Compose): the gesture reports success, the screen never changes.
+     * `input tap|swipe` goes through the system input pipeline instead and does reach them.
+     * Coordinates are absolute display pixels, matching the space reported by observe.
+     */
+    private fun input(args: JSONObject): JSONObject {
+        val mode = args.optString("mode", "tap").ifBlank { "tap" }.lowercase()
+        val client = requireInputInjectionDaemon()
+        return when (mode) {
+            "tap" -> {
+                val point = pixelPoint(args)
+                if (!client.injectInputTap(point.first.toInt(), point.second.toInt())) {
+                    throw AutomationException("input_injection_rejected", "root input tap returned failure")
+                }
+                JSONObject().put("action", "input").put("mode", "tap")
+                    .put("x", point.first.toInt()).put("y", point.second.toInt())
+            }
+            "swipe" -> {
+                val start = pixelPoint(args)
+                val end = pixelPoint(args, "x2", "y2")
+                val duration = args.optInt("durationMs", 320).coerceIn(1, 3_000)
+                if (!client.injectInputSwipe(start.first.toInt(), start.second.toInt(), end.first.toInt(), end.second.toInt(), duration)) {
+                    throw AutomationException("input_injection_rejected", "root input swipe returned failure")
+                }
+                JSONObject().put("action", "input").put("mode", "swipe").put("durationMs", duration)
+            }
+            else -> throw AutomationException("bad_input_mode", "input mode must be tap or swipe")
+        }
+    }
+
+    private fun requireInputInjectionDaemon(): com.adh.manager.data.DaemonClient {
+        val client = DaemonBinderProvider.awaitClient(3_000)
+            ?: throw AutomationException("device_daemon_unavailable", "ADH Device Daemon is unavailable")
+        if (client.protocolVersion < AdhProtocol.MIN_INPUT_INJECTION_VERSION) {
+            throw AutomationException(
+                "device_daemon_old",
+                "Device Daemon protocol " + client.protocolVersion + " has no raw input injection (needs v9)",
+            )
+        }
+        return client
+    }
+
+    private fun pixelPoint(args: JSONObject, xKey: String = "x", yKey: String = "y"): Pair<Float, Float> {
+        val space = args.optString("coordinateSpace", "normalized")
+        val x = coordinate(args.optDouble(xKey, Double.NaN), screenWidth(), space)
+        val y = coordinate(args.optDouble(yKey, Double.NaN), screenHeight(), space)
+        if (x.isNaN() || y.isNaN()) throw AutomationException("bad_coordinates", "input requires x and y")
+        return x to y
+    }
+    /**
+     * Cheap fingerprint of the visible window content. Taps use it to notice the "gesture
+     * completed, nothing moved" case (a few Compose UIs swallow dispatchGesture). Only the
+     * text-bearing part of the first nodes is hashed, so this stays cheap next to a real observe.
+     */
+    private fun windowSignature(): String? {
+        val root = rootInActiveWindow ?: return null
+        return try {
+            val builder = StringBuilder(256)
+            var budget = 60
+            fun visit(node: AccessibilityNodeInfo) {
+                if (budget <= 0) return
+                budget--
+                builder.append(node.windowId).append(':')
+                node.text?.takeIf { it.isNotEmpty() }?.let { builder.append(it).append('\u0001') }
+                node.contentDescription?.takeIf { it.isNotEmpty() }?.let { builder.append(it).append('\u0002') }
+                for (index in 0 until node.childCount) {
+                    val child = node.getChild(index) ?: continue
+                    visit(child)
+                }
+            }
+            visit(root)
+            MessageDigest.getInstance("SHA-1")
+                .digest(builder.toString().toByteArray(Charsets.UTF_8))
+                .joinToString("") { "%02x".format(it) }
+        } catch (_: Throwable) {
+            null
+        } finally {
+            @Suppress("DEPRECATION")
+            root.recycle()
+        }
     }
 
     private fun app(args: JSONObject): JSONObject {

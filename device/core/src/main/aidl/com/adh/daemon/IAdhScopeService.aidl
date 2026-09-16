@@ -36,4 +36,11 @@ interface IAdhScopeService {
     boolean wakeScreen();
     /** Protocol v8: dismiss a non-secure keyguard; secure credentials are never bypassed. */
     boolean dismissKeyguard();
+    /**
+     * Protocol v9: inject one raw tap at absolute display pixels through the system input binary.
+     * Used when the AccessibilityService gesture silently does nothing on some Compose UIs.
+     */
+    boolean injectInputTap(int x, int y);
+    /** Protocol v9: inject one raw swipe (absolute display pixels). */
+    boolean injectInputSwipe(int x1, int y1, int x2, int y2, int durationMs);
 }

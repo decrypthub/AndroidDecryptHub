@@ -90,7 +90,7 @@ MCP_TOOLS.push(
   { name: 'phone_observe', description: 'Observe the active phone screen. Prefer the AccessibilityService node tree; when it is empty or non-semantic, fall back to a screenshot that the AI can inspect. Returns snapshotId plus nodes or an image. mode=text renders the same tree as terse plain-text lines (refs stay usable) to save context, and includeScreenshot:true adds a JPEG alongside that text.', inputSchema: { type: 'object', properties: { mode: { type: 'string', enum: ['auto', 'tree', 'visual', 'text'] }, includeScreenshot: { type: 'boolean' }, maxNodes: N, maxDepth: N, interactiveOnly: { type: 'boolean' }, package: S } }, raw: true, handler: async (a) => observePhone(a) },
   { name: 'phone_find', description: 'Find compact, actionable nodes without transferring the whole tree. Supports text/resourceId/contentDescription and interaction flags; returns refs valid for snapshotId.', inputSchema: { type: 'object', properties: { ...SEL, limit: N, maxNodes: N, interactiveOnly: { type: 'boolean' }, package: S } }, handler: async (a) => findPhone(a) },
   { name: 'phone_wait', description: 'Wait until a screen state / selector matches, until the screen settles (stable:true, stableMs holds still), or until the injected agent reports a signal. Agent filters: agentEvent (exact event type), agentEventContains (substring of the event JSON), captureCategory (crypto/net/file/system), captureContains (substring of the decoded capture text + metadata). Notification filters: notificationContains (substring of title/text, needs the opt-in notification listener) and notificationFrom (package). With scroll:true the wait scrolls a container until the target shows up — scrollMode=gesture swipes instead of sending ACTION_SCROLL, which is what pagers and custom lists (e.g. launcher pages) require, and axis picks vertical or horizontal. Same-kind filters are ANDed; the two kinds race and whichever fires first wins. Race-free pattern: take the cursor from the preceding observe/act response and pass it as afterCaptureId / afterEventSeq; lookbackMs is the coarse alternative (bounded 0..300000). On an agent-signal timeout the reply carries saw (recent captures/events from the window plus totals) and the live cursor, so the filter can be retargeted.', inputSchema: { type: 'object', properties: { ...SEL, activePackage: S, activityContains: S, gone: { type: 'boolean' }, agentEvent: S, agentEventContains: S, captureCategory: { type: 'string', enum: ['crypto', 'net', 'file', 'system'] }, captureContains: S, notificationContains: S, notificationFrom: S, afterEventSeq: N, afterCaptureId: N, lookbackMs: N, timeoutMs: N, intervalMs: N, scroll: { type: 'boolean' }, scrollMode: { type: 'string', enum: ['action', 'gesture'] }, stable: { type: 'boolean' }, stableMs: N, axis: { type: 'string', enum: ['vertical', 'horizontal'] }, direction: { type: 'string', enum: ['forward', 'backward'] }, maxScrolls: N, maxNodes: N, interactiveOnly: { type: 'boolean' }, package: S } }, handler: async (a) => waitPhone(a) },
-  { name: 'phone_act', description: 'Act on the active phone screen. Prefer a selector or snapshotId+ref from phone_observe; use normalized coordinates only as the visual fallback. Supports tap, long_press, swipe, scroll, set_text and global back/home/recents/notifications/quick_settings/power/lock/screenshot. For set_text the text argument is the payload to write, not a filter (target the field with ref, resourceId, editable or selector); the value can be read back with phone_find. set_text takes submit:true to press the field’s keyboard action button (search / send / done) afterwards, and reports submitted:true when the field accepted it. A failed action answers with the compact current screen so the target can be re-derived without another observe.', inputSchema: { type: 'object', properties: { ...SEL, snapshotId: S, action: { type: 'string', enum: ['tap', 'long_press', 'swipe', 'scroll', 'set_text', 'global'] }, ref: S, x: N, y: N, x2: N, y2: N, coordinateSpace: { type: 'string', enum: ['normalized', 'pixel'] }, text: S, submit: { type: 'boolean' }, key: { type: 'string', enum: ['back', 'home', 'recents', 'notifications', 'quick_settings', 'power', 'lock', 'screenshot'] }, direction: { type: 'string', enum: ['forward', 'backward'] }, durationMs: N, submit: { type: 'boolean' }, observeAfter: { type: 'boolean' }, package: S }, required: ['action'] }, raw: true, handler: async (a) => actPhone(a) },
+  { name: 'phone_act', description: 'Act on the active phone screen. Prefer a selector or snapshotId+ref from phone_observe; use normalized coordinates only as the visual fallback. Supports tap, long_press, swipe, input, scroll, set_text and global back/home/recents/notifications/quick_settings/power/lock/screenshot. Set inputMode:"root" when the accessibility gesture is accepted but the screen does not change (some Compose UIs, e.g. SukiSU Ultra or the LSPosed/Vector manager, swallow dispatchGesture): it injects the tap/swipe through the root Device Daemon instead, which needs protocol v9. For set_text the text argument is the payload to write, not a filter (target the field with ref, resourceId, editable or selector); the value can be read back with phone_find. set_text takes submit:true to press the field’s keyboard action button (search / send / done) afterwards, and reports submitted:true when the field accepted it. A failed action answers with the compact current screen so the target can be re-derived without another observe.', inputSchema: { type: 'object', properties: { ...SEL, snapshotId: S, action: { type: 'string', enum: ['tap', 'long_press', 'swipe', 'input', 'scroll', 'set_text', 'global'] }, ref: S, x: N, y: N, x2: N, y2: N, coordinateSpace: { type: 'string', enum: ['normalized', 'pixel'] }, inputMode: { type: 'string', enum: ['accessibility', 'root'] }, text: S, submit: { type: 'boolean' }, key: { type: 'string', enum: ['back', 'home', 'recents', 'notifications', 'quick_settings', 'power', 'lock', 'screenshot'] }, direction: { type: 'string', enum: ['forward', 'backward'] }, durationMs: N, submit: { type: 'boolean' }, observeAfter: { type: 'boolean' }, package: S }, required: ['action'] }, raw: true, handler: async (a) => actPhone(a) },
   { name: 'phone_app', description: 'Open, stop or restart an allowlisted app by package name. open verifies that the app really reached the foreground and reports verified/foreground/warning when an OEM dialog swallowed the launch (with a hint on how to unblock). Open uses the root Device Daemon when protocol v6+ is available, with a compatibility fallback for older daemons; stop/restart delegate to the same authenticated daemon.', inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['open', 'stop', 'restart'] }, package: S }, required: ['action', 'package'] }, handler: async (a) => appPhone(a) },
   { name: 'phone_notifications', description: 'Recent notifications the accessibility connection saw (newest first: package, text lines, time). Needs the operator to enable automation.notifications — reading notification text is a privacy step beyond UI control and stays opt-in. Keep the returned ts to poll incrementally with sinceMs.', inputSchema: { type: 'object', properties: { limit: N, sinceMs: N } }, handler: async (a) => notificationsPhone(a) },
   { name: 'phone_device', description: 'Read or control device power state: status, wake, unlock a non-secure keyguard, or lock the screen. Secure credentials are never bypassed.', inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['status', 'wake', 'unlock', 'lock'] } }, required: ['action'] }, handler: async (a) => devicePhone(a) },
@@ -535,12 +535,39 @@ async function actPhone(args: any) {
     if (!match) throw new Error('selector_not_found: no node matched the selector in the current screen' + (await screenContext()));
     effective = { ...effective, snapshotId: observed.snapshotId, ref: match.ref };
   }
+  // inputMode:"root" bypasses the accessibility gesture: same coordinates, injected through the
+  // root Device Daemon. Some Compose UIs accept dispatchGesture but never act on it.
+  if (effective.inputMode === 'root' && (effective.action === 'tap' || effective.action === 'swipe')) {
+    effective = { ...effective, action: 'input', mode: effective.action === 'swipe' ? 'swipe' : 'tap' };
+  }
   let result: any;
   try {
     result = await automation.cmd('act', normalizeActArgs(effective), 25_000);
   } catch (error) {
     // stale refs, rejected gestures and blocked windows all land here: hand back the screen.
     throw new Error(((error as Error)?.message ?? String(error)) + (await screenContext()));
+  }
+  // Self-healing fallback: some Compose UIs accept an accessibility gesture and never act on it
+  // (the device reports changed:false). Re-inject the same coordinates through the root Device
+  // Daemon once, so the caller does not have to know which app needs which path.
+  if (
+    result?.changed === false
+    && (effective.action === 'tap' || effective.action === 'swipe')
+    && effective.inputMode !== 'accessibility'
+  ) {
+    try {
+      const fallbackArgs = normalizeActArgs({
+        ...effective,
+        action: 'input',
+        mode: effective.action === 'swipe' ? 'swipe' : 'tap',
+        ref: undefined,
+        snapshotId: undefined,
+      });
+      const fallback = await automation.cmd('act', fallbackArgs, 25_000);
+      result = { ...result, fallback: 'root', injected: fallback.mode, changed: fallback.changed };
+    } catch (fallbackError) {
+      result = { ...result, fallback: 'root_failed', fallbackError: (fallbackError as Error)?.message ?? String(fallbackError) };
+    }
   }
   const parts: any[] = [{ type: 'text', text: JSON.stringify({ ...result, cursorBefore }, null, 2) }];
   if (args.observeAfter) {
@@ -579,6 +606,8 @@ function normalizeActArgs(args: any) {
     x2: args.x2,
     y2: args.y2,
     coordinateSpace: args.coordinateSpace ?? 'normalized',
+    inputMode: args.inputMode,
+    mode: args.mode,
     text: args.text,
     submit: args.submit,
     key: args.key,

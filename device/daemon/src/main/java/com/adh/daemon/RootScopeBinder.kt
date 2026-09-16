@@ -111,6 +111,16 @@ internal class RootScopeBinder(
         return DevicePowerControl.dismissKeyguard(context)
     }
 
+    override fun injectInputTap(x: Int, y: Int): Boolean {
+        verifier.enforce()
+        return DeviceInputControl.tap(x, y)
+    }
+
+    override fun injectInputSwipe(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Int): Boolean {
+        verifier.enforce()
+        return DeviceInputControl.swipe(x1, y1, x2, y2, durationMs)
+    }
+
     private fun atomicWrite(target: File, content: String) {
         target.parentFile?.mkdirs()
         val temp = File(target.parentFile, ".${target.name}.${android.os.Process.myPid()}.tmp")

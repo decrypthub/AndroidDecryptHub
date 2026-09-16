@@ -66,6 +66,18 @@ object AdhDeviceDaemon {
                 Looper.prepareMainLooper()
                 exitProcess(if (DevicePowerControl.dismissKeyguard(SystemContext.create())) 0 else 1)
             }
+            "--input-tap" -> {
+                requireRoot()
+                val x = args.getOrNull(1)?.toIntOrNull() ?: exitProcess(2)
+                val y = args.getOrNull(2)?.toIntOrNull() ?: exitProcess(2)
+                exitProcess(if (DeviceInputControl.tap(x, y)) 0 else 1)
+            }
+            "--input-swipe" -> {
+                requireRoot()
+                val values = args.drop(1).mapNotNull { it.toIntOrNull() }
+                if (values.size < 5) exitProcess(2)
+                exitProcess(if (DeviceInputControl.swipe(values[0], values[1], values[2], values[3], values[4])) 0 else 1)
+            }
         }
         Thread.setDefaultUncaughtExceptionHandler { _, error ->
             Log.e(TAG, "fatal daemon error", error)

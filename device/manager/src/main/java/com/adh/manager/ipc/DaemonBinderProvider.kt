@@ -85,6 +85,9 @@ class DaemonBinderProvider : ContentProvider() {
                     service.setAutomationEnabled(enabled)
                 override fun wakeScreen(): Boolean = service.wakeScreen()
                 override fun dismissKeyguard(): Boolean = service.dismissKeyguard()
+                override fun injectInputTap(x: Int, y: Int): Boolean = service.injectInputTap(x, y)
+                override fun injectInputSwipe(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Int): Boolean =
+                    service.injectInputSwipe(x1, y1, x2, y2, durationMs)
             }
             runCatching {
                 binder.linkToDeath({

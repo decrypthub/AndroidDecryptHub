@@ -27,6 +27,10 @@ interface DaemonClient {
     fun setAutomationEnabled(enabled: Boolean): Boolean
     fun wakeScreen(): Boolean
     fun dismissKeyguard(): Boolean
+
+    /** Protocol v9: raw input injection fallback (see the accessibility executor `input` action). */
+    fun injectInputTap(x: Int, y: Int): Boolean
+    fun injectInputSwipe(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Int): Boolean
 }
 
 class DaemonScopeRepository(
