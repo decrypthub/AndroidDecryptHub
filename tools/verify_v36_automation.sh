@@ -210,6 +210,22 @@ try {
   const recoveredImage = recovered.content?.find((item) => item.type === 'image');
   chk('screenshots recover once the window is unprotected', recoveredImage?.mimeType === 'image/jpeg' && (recoveredImage?.data?.length ?? 0) > 1000, `bytes=${recoveredImage?.data?.length ?? 0}`);
 
+  // ---- the screenshot toggle is independent: it must refuse, not silently capture ----------
+  const shotConfig = await getJson('/api/config');
+  const shotOriginal = shotConfig.settings.automation;
+  await postJson('/api/config', { automation: { ...shotOriginal, screenshot: false } });
+  let shotDisabled = '';
+  try {
+    await callTool('phone_observe', { mode: 'visual', maxNodes: 20 });
+  } catch (error) {
+    shotDisabled = error.message || String(error);
+  }
+  chk('screenshots can be disabled independently and then refuse to capture', /screenshot[_ ]?.*disabled/.test(shotDisabled), shotDisabled.slice(0, 80));
+  await postJson('/api/config', { automation: shotOriginal });
+  const shotBack = await callTool('phone_observe', { mode: 'visual', maxNodes: 20 });
+  const shotBackImage = shotBack.content?.find((item) => item.type === 'image');
+  chk('screenshots come back once re-enabled', shotBackImage?.mimeType === 'image/jpeg' && (shotBackImage?.data?.length ?? 0) > 1000, `chars=${shotBackImage?.data?.length ?? 0}`);
+
   // ---- stability wait: settle first, then act on the refs it hands back -------------------
   const settled = parseTree(await callTool('phone_wait', { stable: true, stableMs: 600, timeoutMs: 8000, intervalMs: 250, maxNodes: 120 }));
   chk('phone_wait stable mode settles before returning', settled.matched === true && settled.stable === true && settled.waitedMs >= 600, `waitedMs=${settled.waitedMs} signature=${settled.signature}`);

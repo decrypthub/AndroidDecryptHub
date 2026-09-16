@@ -650,6 +650,7 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
         val latch = CountDownLatch(1)
         var bitmap: Bitmap? = null
         var failure: String? = null
+        var failureCode = 0
         val callback = object : AccessibilityService.TakeScreenshotCallback {
             override fun onSuccess(result: AccessibilityService.ScreenshotResult) {
                 try {
@@ -667,12 +668,27 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
             }
 
             override fun onFailure(errorCode: Int) {
-                failure = "screenshot error code=$errorCode"
+                failure = when (errorCode) {
+                    1 -> "screenshot_internal_error (framework reported an internal error)"
+                    2 -> "screenshot_no_accessibility_access (the service lost its access)"
+                    3 -> "screenshot_rate_limited (another capture happened too recently)"
+                    4 -> "screenshot_invalid_display"
+                    5 -> "screenshot_invalid_window"
+                    6 -> "screenshot_secure_window (FLAG_SECURE window)"
+                    else -> "screenshot_failed (framework error code=$errorCode)"
+                }
+                failureCode = errorCode
                 latch.countDown()
             }
         }
         takeScreenshot(Display.DEFAULT_DISPLAY, executor, callback)
         if (!latch.await(5, TimeUnit.SECONDS)) throw AutomationException("screenshot_timeout", "screenshot callback timed out")
+        if (failureCode == 3) {
+            // The framework rate-limits captures; one short wait is usually enough and saves the AI
+            // a whole failed round trip.
+            Thread.sleep(400)
+            return captureScreenshot(maxDimension)
+        }
         failure?.let { throw AutomationException("screenshot_failed", it) }
         val source = bitmap ?: throw AutomationException("screenshot_failed", "device returned no bitmap")
         // A FLAG_SECURE window (or a screen that is off) captures as a uniform black frame. Handing
