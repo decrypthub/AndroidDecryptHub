@@ -6,7 +6,6 @@ import { writeFileSync, existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { parseDex, analyzeCoverage, recoverFromSnapshots, rebuildStandardDex } from './dex.ts';
 import {
   frameJson, agentSockets, pending, nextCmdId, sessions, dumps, log,
   capturePaused, captureTimers, captureModules, settings, recentJavaIn,
@@ -318,85 +317,35 @@ export function startCaptureLoop(sid: string) {
 }
 
 // Enumerate the app's DEX files and dump each so it's downloadable from the panel.
-export async function autoDumpDex(sid: string) {
-  // art_dexfiles failure propagates to the caller's .catch(log); per-dex dump failures logged inline
+export async function dumpAllDex(sid: string) {
   const r = await sendCmd(sid, 'art_dexfiles', {}, 30_000);
-  for (const d of (r.dexfiles ?? [])) {
-    const begin = d.begin;
+  const list = Array.isArray(r.dexfiles) ? r.dexfiles : [];
+  if (!list.length) throw new Error('no loaded DexFile found (target may not have Java dex loaded yet)');
+  const dexes: any[] = [];
+  let dumped = 0, deduped = 0, failed = 0;
+  for (const d of list) {
+    const begin = String(d.begin ?? '');
     const size = Number(d.size ?? 0);
-    if (!begin || !size || size > (64 << 20)) continue;
-    try { await dumpRegion(sid, String(begin).replace(/^0x/, ''), size, 'dex-auto'); }
-    catch (e) { log(`[capture] autoDumpDex ${sid} dump 失败 @0x${begin}:`, (e as Error).message); }
+    if (!begin || !size || size > (256 << 20)) {
+      failed++;
+      dexes.push({ begin, size, format: d.format ?? 'dex', error: 'invalid address/size' });
+      continue;
+    }
+    try {
+      const { meta, dedup } = await dumpRegion(sid, begin.replace(/^0x/, ''), size, 'dex-all');
+      dumped++; if (dedup) deduped++;
+      dexes.push({ begin, size, format: d.format ?? 'dex', version: d.version ?? 0, confidence: d.confidence ?? 0,
+        sha256: meta.sha256, bytes: meta.size, dedup, path: meta.path });
+    } catch (e) {
+      failed++;
+      dexes.push({ begin, size, format: d.format ?? 'dex', error: (e as Error).message });
+    }
   }
+  return { ok: true, session: sid, count: dexes.length, dumped, deduped, failed, dexes };
 }
 
-// Full unpack session (P3): T0 snapshot → coverage → active trigger → T1 snapshot →
-// recover+rebuild per dex. Shared by REST (/api/unpack/run) and MCP (unpack_run).
-export async function runUnpackSession(sid: string, body: any) {
-  const level = Number(body.level ?? 3);
-  const snapshot = async (tag: string) => {
-    const r = await sendCmd(sid, 'art_dexfiles', {}, 30_000);
-    const out: { begin: string; size: number; format: string; sha: string }[] = [];
-    for (const d of (r.dexfiles ?? [])) {
-      const begin = String(d.begin ?? ''); const size = Number(d.size ?? 0);
-      if (!begin || !size || size > (64 << 20)) continue;
-      try { const { meta } = await dumpRegion(sid, begin.replace(/^0x/, ''), size, tag); out.push({ begin, size, format: d.format ?? 'dex', sha: meta.sha256 }); }
-      catch (e) { log(`[unpack] ${tag} dump 失败 @0x${begin} (${size}B):`, (e as Error).message); }
-    }
-    return out;
-  };
-  const t0 = await snapshot('unpack-t0');
-  const targeted = new Set<string>();
-  // Default the aggressive-enumeration prefix to the CONNECTED TARGET'S OWN package (from the
-  // agent hello) — so "one-click unpack" works on whatever is attached, not a hardcoded
-  // sandbox class. Caller may override (custom sub-package) or pass '' to disable enumeration.
-  const prefix = body.triggerAllPrefix !== undefined ? String(body.triggerAllPrefix) : (sessions.get(sid)?.package ?? '');
-  for (const s of t0) {
-    try {
-      const buf = await readFile(dumps.get(s.sha)!.path); const pd = parseDex(buf);
-      // classes with extracted methods (targeted, highest priority)
-      for (const m of analyzeCoverage(buf, pd).missing) {
-        const dot = m.method.split('->')[0].replace(/^L/, '').replace(/;$/, '').replace(/\//g, '.');
-        if (dot) targeted.add(dot);
-      }
-      // aggressive mode: enumerate ALL classes under a package prefix to force resolution
-      // (a refill-type shell restores each method's code_item when its class is linked)
-      if (prefix) for (const c of pd.classes) {
-        const dot = c.name.replace(/^L/, '').replace(/;$/, '').replace(/\//g, '.');
-        if (dot.startsWith(prefix) && !dot.includes('$$')) targeted.add(dot);
-      }
-    } catch (e) { log(`[unpack] coverage 目标枚举失败 sha=${s.sha}:`, (e as Error).message); }
-  }
-  const classes = [...new Set([...(body.triggerClasses ?? []), ...targeted])].slice(0, Number(body.maxClasses ?? (prefix ? 500 : 50)));
-  const triggered: any[] = [];
-  for (const c of classes) {
-    try { const r = await sendCmd(sid, 'trigger', { className: c, method: body.triggerMethod ?? '', level }, 15_000);
-          triggered.push({ class: c, loaded: r.loaded, invoked: r.invoked, skipped: r.skipped, reason: r.reason }); } catch { triggered.push({ class: c, error: 'timeout' }); }
-  }
-  const t1 = await snapshot('unpack-t1');
-  const t1ByBegin = new Map(t1.map(x => [x.begin, x]));
-  const dexes: any[] = [];
-  for (const b of t0) {
-    const rest = t1ByBegin.get(b.begin) ?? b;
-    try {
-      const baseBuf = await readFile(dumps.get(b.sha)!.path);
-      const restBuf = await readFile(dumps.get(rest.sha)!.path);
-      const pd = parseDex(baseBuf); const before = analyzeCoverage(baseBuf, pd);
-      const { captures: caps, report } = recoverFromSnapshots(baseBuf, restBuf, pd);
-      const rb = rebuildStandardDex(baseBuf, caps);
-      let parseOk = true; try { parseDex(rb.dex); } catch { parseOk = false; }
-      const outSha = createHash('sha256').update(rb.dex).digest('hex');
-      const path = join(CAPTURES, `${outSha.slice(0, 16)}.dex`);
-      if (!existsSync(path)) writeFileSync(path, rb.dex);
-      const meta: DumpMeta = { sha256: outSha, size: rb.dex.length, source: 'unpack-session', addr: b.begin, tag: 'rebuilt', sessionId: sid, package: sessions.get(sid)?.package ?? '', capturedAt: Date.now(), path, kind: 'dex' };
-      dumps.set(outSha, meta); broadcast('dump.new', meta);
-      const afterPresent = before.basePresent + report.recovered;
-      dexes.push({ format: b.format, size: b.size, sha0: b.sha, sha1: rest.sha, rebuiltSha: outSha, parseOk,
-        concreteJava: before.concreteJava, presentBefore: before.basePresent, recovered: report.recovered, stillMissing: report.stillMissing,
-        recoveryBeforePct: +(before.recoveryRate * 100).toFixed(2),
-        recoveryAfterPct: before.concreteJava ? +((afterPresent / before.concreteJava) * 100).toFixed(2) : 100 });
-    } catch (e) { dexes.push({ sha0: b.sha, error: (e as Error).message }); }
-  }
-  return { ok: true, session: sid, phases: ['snapshot-t0', 'coverage', 'trigger', 'snapshot-t1', 'recover'],
-    t0Count: t0.length, t1Count: t1.length, triggered, dexes };
+// Auto-dump on connect uses the same one-click primitive; per-dex failures are summarized.
+export async function autoDumpDex(sid: string) {
+  const r = await dumpAllDex(sid);
+  log(`[capture] autoDumpDex ${sid}: ${r.dumped}/${r.count} dex (dedup ${r.deduped}, failed ${r.failed})`);
 }

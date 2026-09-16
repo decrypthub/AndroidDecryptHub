@@ -153,7 +153,7 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
         example: { jsonrpc: '2.0', id: 1, method: 'tools/list' },
         quickAsks: [
           '用 crypto_identify 看看这个 App 用了哪些加密算法和密钥',
-          '用 unpack_run 一键脱壳，然后 dumps_list 给我下载链接',
+          '用 dump_all_dex 一键 dump 所有 DEX，然后 dumps_list 给我下载链接',
           '用 live_captures 看实时加解密，挑一条用 capture_detail 展开明文',
           '用 trace_function hook 一下 access，看它检测了哪些 root 路径',
           '用 qbdi_trace 逐指令跟踪这个 native 函数',

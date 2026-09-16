@@ -58,9 +58,9 @@
 | TLS 明文 | v07, v07_flow | `SSL_write/SSL_read` 边界明文 + 明文↔密文同线程关联 |
 | 文件 I/O | v20_file, v25_fsbrowser | libc `open/read/write` 捕获；`list_dir`/`read_file` + 坏路径 fail-loud |
 | 反检测观测 | v05_detect | 目标自身 `ptrace/access/__system_property_get` 被观测（含 lazy-binding 修复） |
-| 活体对象 / 主动触发 | v06, v14_trigger, v16_identify, v17_deepunpack | 字段反射 + 方法调用、安全触发器、算法识别、按包名全类主动加载 |
+| 活体对象 / 主动触发 | v06, v14_trigger, v16_identify | 字段反射 + 方法调用、安全触发器、算法识别 |
 | 函数/指令 trace | v10_trace, v10_qbdi | 参数/tid/时间戳；QBDI 指令级 trace（用后 `dlclose`） |
-| 脱壳会话 | v15_session | T0→触发→T1→恢复 五阶段贯通 + 覆盖率 |
+| 一键 dump 所有 DEX | v15_dumpall, v17_dumpall_mcp | ART DexFile 枚举 → 逐 dex dump → SHA-256 去重 → 下载；REST + MCP 双入口 |
 | 进程内 dlopen | v18_loadso | 目标进程内加载任意 `.so` 并解析符号（Gadget 依赖此能力） |
 | 设备侧后端（Zygisk/Manager） | v27_zygisk, verify_v32_backend_control | scope 往返；Device Daemon 驱动框架状态/作用域并**恢复测试前状态** |
 | 可选后端（Gadget/Xposed/eCapture） | v30, v31, v32, v34 | 官方二进制 + sha256 固定；Java bridge hook 真跑通；eCapture 抓到请求+响应明文 |

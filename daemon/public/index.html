@@ -497,23 +497,17 @@
   <div class="panel" id="p-dump">
     <div class="dumppane">
       <div class="dumpwrap">
-        <h2>应用脱壳 (Dump)</h2>
-        <div class="note">在目标进程内 dump 已加载的 DEX / 模块。只能砸<b>当前进程已映射</b>的镜像。<br><span class="warn-note">⚠ 仅限授权安全测试与自有 App。</span></div>
+        <h2>一键 Dump 所有 DEX</h2>
+        <div class="note">枚举当前进程 ART 已加载的 DexFile，逐个 dump 并按 SHA-256 去重。只处理<b>当前进程已映射</b>的 DEX。<br><span class="warn-note">⚠ 仅限授权安全测试与自有 App。</span></div>
         <div class="dump-actions">
-          <button type="button" onclick="loadModules()">刷新模块</button>
-          <button type="button" class="primary" onclick="unpackRun()">一键脱壳</button>
-          <label class="dump-check"><input type="checkbox" id="dumpShowSys"> 显示系统模块</label>
-          <span id="mod-stat" class="muted"></span>
+          <button type="button" class="primary" onclick="dumpAllDex()">一键 Dump 所有 DEX</button>
+          <button type="button" onclick="loadDumps()">刷新已保存</button>
+          <span id="dumpStat" class="muted"></span>
         </div>
         <div id="dumpDone" class="dump-done"></div>
-        <table class="dump-table"><thead><tr><th>模块</th><th>类型</th><th>大小</th><th>操作</th></tr></thead>
-          <tbody id="mod-rows"><tr><td colspan="4" class="muted">点击「刷新模块」加载…</td></tr></tbody></table>
-        <h3>已保存的 dump</h3>
-        <div class="dump-actions"><button type="button" onclick="loadDumps()">刷新列表</button></div>
-        <table class="dump-table"><thead><tr><th>类型</th><th>大小</th><th>来源</th><th>操作</th></tr></thead>
+        <h3>已保存 DEX</h3>
+        <table class="dump-table"><thead><tr><th>大小</th><th>SHA-256</th><th>来源</th><th>操作</th></tr></thead>
           <tbody id="dumps-rows"></tbody></table>
-        <div id="out-cov" class="dump-done muted">点某个 dex 的「覆盖率」查看方法恢复率报告。</div>
-        <input id="unpack-pkg" type="hidden" value="">
       </div>
     </div>
   </div>
@@ -665,35 +659,24 @@ function mkTab([id,label,key],active){ const b=document.createElement('button');
   b.onclick=()=>{ document.querySelectorAll('#nav button').forEach(x=>x.classList.remove('active')); b.classList.add('active');
     document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active')); document.getElementById(id).classList.add('active');
     onTabSwitch(id);
-    if(id==='p-dump'){ loadDumps(); loadModules(); } if(id==='p-files') filesInit(); };
+    if(id==='p-dump'){ loadDumps(); } if(id==='p-files') filesInit(); };
   return b; }
 TABS_MAIN.forEach((t,i)=>nav.appendChild(mkTab(t,i===0)));
 const val=id=>document.getElementById(id).value.trim();
 const sessParam=()=>{ const s=val('sess'); return s?`?session=${s}`:''; };
 
-// ---- 脱壳 / DEX ----
+// ---- 一键 Dump 所有 DEX ----
 async function loadDumps(){ const r=await (await fetch('/api/dumps')).json(); const tb=document.getElementById('dumps-rows');
-  const list=(Array.isArray(r)?r:[]).slice().reverse();
-  tb.innerHTML=list.map(d=>`<tr><td>${escapeHtml(d.kind)}</td><td>${fmtSize(d.size)}</td><td class="muted">${escapeHtml(d.source||'')}</td><td><a class="dl-link" href="/api/dumps/download?sha=${d.sha256}">⬇ 下载</a>${d.kind==='dex'?` <a class="dl-link" href="#" onclick="coverage('${d.sha256}');return false">覆盖率</a>`:''}</td></tr>`).join('')||'<tr><td class="muted" colspan=4>暂无 dump（点上方「一键脱壳」）</td></tr>'; }
-async function coverage(sha){ const el=document.getElementById('out-cov'); el.textContent='分析中…';
-  try{ const c=await (await fetch('/api/dex/coverage',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sha,limitMissing:20})})).json();
-    if(c.error){el.textContent='错误: '+c.error;return;}
-    el.textContent=`格式 ${c.magic}\n方法总数 ${c.total} · 具体Java方法 ${c.concreteJava}（native ${c.native} / abstract ${c.abstract}）\n`+
-      `有方法体 ${c.basePresent} · 缺失(被抽取?) ${c.baseEmpty}\n恢复率 ${c.recoveryPct}%  ${'█'.repeat(Math.round(c.recoveryPct/5))}${'░'.repeat(20-Math.round(c.recoveryPct/5))}\n`+
-      (c.baseEmpty?`\n缺失方法（前${(c.missing||[]).length}）：\n`+(c.missing||[]).map(m=>'  '+m.method).join('\n'):'\n✓ 无缺失方法（未抽取，或已全部恢复）');
-  }catch(e){el.textContent='错误: '+e;} }
-async function unpackRun(){ const el=document.getElementById('dumpDone'), st=document.getElementById('mod-stat');
-  st.textContent='脱壳会话运行中…'; el.textContent='发起中…';
-  try{ const r=await (await fetch('/api/unpack/run',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session:val('sess')||undefined,triggerAllPrefix:val('unpack-pkg')||undefined,level:3})})).json();
-    if(r.error){el.textContent='错误: '+r.error;st.textContent='';return;}
-    st.textContent=`完成：T0 ${r.t0Count} dex / 触发 ${r.triggered.length} 类`;
-    let s=`阶段: ${r.phases.join(' → ')}\nT0 快照 ${r.t0Count} 个 DexFile · T1 快照 ${r.t1Count}\n触发 ${r.triggered.length} 类（`+
-      r.triggered.slice(0,4).map(t=>t.class.split('.').pop()+(t.invoked?'✓调用':t.skipped?'⃠跳过':'加载')).join(' ')+`）\n\n`;
-    for(const d of r.dexes){ if(d.error){s+=`  ✗ ${(d.sha0||'').slice(0,12)} ${d.error}\n`;continue;}
-      s+=`[${d.format}] ${d.size}B  具体Java方法 ${d.concreteJava} · 有体 ${d.presentBefore}\n`+
-         `  恢复率 ${d.recoveryBeforePct}% → ${d.recoveryAfterPct}%  (本轮恢复 ${d.recovered} · 仍缺 ${d.stillMissing})\n`; }
-    el.textContent=s; loadDumps();
-  }catch(e){el.textContent='错误: '+e;st.textContent='';} }
+  const list=(Array.isArray(r)?r:[]).filter(d=>d.kind==='dex').slice().reverse();
+  tb.innerHTML=list.map(d=>`<tr><td>${fmtSize(d.size)}</td><td class="symname">${escapeHtml((d.sha256||'').slice(0,16))}</td><td class="muted">${escapeHtml(d.source||'')}</td><td><a class="dl-link" href="/api/dumps/download?sha=${d.sha256}">⬇ 下载</a></td></tr>`).join('')||'<tr><td class="muted" colspan=4>暂无 DEX dump（点上方「一键 Dump 所有 DEX」）</td></tr>'; }
+async function dumpAllDex(){ const el=document.getElementById('dumpDone'), st=document.getElementById('dumpStat');
+  st.textContent='Dumping…'; el.textContent='';
+  try{ const r=await (await fetch('/api/unpack/dump-all',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session:val('sess')||undefined})})).json();
+    if(r.error){ st.textContent=''; el.textContent='错误: '+r.error; return; }
+    st.textContent=`完成：${r.dumped}/${r.count} 个 DEX（去重 ${r.deduped}，失败 ${r.failed}）`;
+    el.textContent=(r.dexes||[]).map(d=>d.error?`✗ ${d.begin||''} ${d.error}`:`✓ ${d.format||'dex'} ${fmtSize(d.size)} @ ${d.begin}  ${(d.sha256||'').slice(0,16)}${d.dedup?'（已存在）':''}`).join('\n');
+    loadDumps();
+  }catch(e){ st.textContent=''; el.textContent='错误: '+e; } }
 
 // ---- 实时捕获：单一 capItems，多面板按 category 分流（加解密 crypto / 系统 system+file / 网络 net） ----
 const capItems=[]; let capMaxId=0, capDisplayCap=300;
@@ -965,36 +948,6 @@ document.getElementById('filesUp').addEventListener('click', filesUpNav);
 document.getElementById('filesRefresh').addEventListener('click', ()=>loadFilesBrowser());
 function fmtSize(n){ n=Number(n)||0; if(n<1024)return n+'B'; if(n<1048576)return (n/1024).toFixed(1)+'K'; return (n/1048576).toFixed(1)+'M'; }
 
-// ---- Dump 面板：模块表 + 区段 dump（脱壳/dumps 复用下方 unpackRun/loadDumps）----
-function isMappedPackage(m){ return /\.(apk|jar|oat)$/i.test(m.name||''); }
-function isDumpableModule(m){ return /\.so$/i.test(m.name||'') || /\.(dex|odex|vdex)$/i.test(m.name||''); }
-function isAppModule(m, pkg){
-  if(isMappedPackage(m)) return false;
-  const p=m.path||'', n=m.name||'';
-  if(pkg && (p.indexOf(pkg)>=0 || n.indexOf(pkg)>=0)) return true;
-  if(/\/data\/(app|data|user)\//.test(p)) return true;
-  if(isDumpableModule(m) && !/\/(system|apex|vendor|framework)\//.test(p)) return true;
-  return false; }
-async function loadModules(){ const st=document.getElementById('mod-stat'), tb=document.getElementById('mod-rows'); st.textContent='读取 maps…';
-  try{ const r=await (await fetch('/api/modules?'+sidQ().slice(1))).json();
-    if(r.error){ st.textContent='✗ '+agentOfflineHint(r.error); tb.innerHTML=`<tr><td class="muted" colspan=4>${escapeHtml(agentOfflineHint(r.error))}</td></tr>`; return; }
-    const all=(Array.isArray(r)?r:[]).filter(m=>!isMappedPackage(m)); const pkg=curPkg();
-    const showSys=document.getElementById('dumpShowSys')?.checked;
-    const mods=showSys?all:all.filter(m=>isAppModule(m,pkg));
-    const hidden=(Array.isArray(r)?r:[]).length-mods.length;
-    st.textContent=showSys?`${mods.length} 个模块`: `${mods.length} 个本应用模块`+(hidden>0?` · 已隐藏 ${hidden} 个系统/APK`:'');
-    tb.innerHTML=mods.map(m=>{ const isSo=/\.so$/i.test(m.name);
-      const kind=isSo?'native .so':(/\.(dex|odex|vdex)$/i.test(m.name)?'DEX':'映射');
-      const act=isDumpableModule(m)?`<a class="dl-link" href="#" onclick="moduleDump('${m.name.replace(/'/g,"\\'")}');return false">⬇ 下载</a>`:'';
-      return `<tr><td class="symname" title="${escapeHtml(m.path||'')}">${escapeHtml(m.name)}</td><td class="muted">${kind}</td><td>${fmtSize(m.size)}</td><td>${act}</td></tr>`;
-    }).join('')||'<tr><td class="muted" colspan=4>'+(all.length?'没有本应用模块，可勾选「显示系统模块」':'无模块（需目标在线）')+'</td></tr>';
-  }catch(e){ st.textContent='✗ '+e; } }
-async function moduleDump(name){ const st=document.getElementById('mod-stat'); st.textContent=`从内存重组 ${name}…`;
-  try{ const r=await (await fetch('/api/module/dump',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session:val('sess')||undefined,name})})).json();
-    if(r.error){ st.textContent='✗ '+r.error; return; }
-    st.textContent=`✓ ${name} → ${r.size}B${r.dedup?'（已存在）':''}`; toast('已 dump '+name); loadDumps();
-  }catch(e){ st.textContent='✗ '+e; } }
-
 // ---- 通用：toast / 复制 / 模态开关 ----
 let toastTimer;
 function toast(msg){ const t=document.getElementById('toast'); if(!t) return; t.textContent=msg; t.classList.add('show');
@@ -1233,7 +1186,6 @@ document.querySelectorAll('[data-mcp-copy]').forEach(btn=>{
 });
 document.getElementById('wechatBtn').addEventListener('click', e=>{ e.stopPropagation(); togglePopover('wechatPopover','wechatBtn'); });
 document.getElementById('processBtn').addEventListener('click', e=>{ e.stopPropagation(); togglePopover('processPopover','processBtn'); });
-document.getElementById('dumpShowSys').addEventListener('change', ()=>loadModules());
 document.getElementById('wechatCopy').addEventListener('click', async ()=>{
   const name='DecryptHub';
   try{ await navigator.clipboard.writeText(name); }catch(_){

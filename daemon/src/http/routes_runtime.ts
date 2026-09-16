@@ -1,5 +1,5 @@
 import {
-  dumpRegion, pickSid, runUnpackSession, sendCmd, withCaptureSuspended,
+  dumpAllDex, dumpRegion, pickSid, sendCmd, withCaptureSuspended,
 } from '../service.ts';
 import { readBody, SANDBOX, sessions, settings } from '../state.ts';
 import type { Route, RouteContext } from './types.ts';
@@ -213,11 +213,11 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
         return send(r.ok ? 200 : 502, r);
       } catch (e) { return send(504, { error: (e as Error).message }); }
     } },
-    { method: 'POST', path: '/api/unpack/run', handler: async () => {
+    { method: 'POST', path: '/api/unpack/dump-all', handler: async () => {
       const body = JSON.parse((await readBody(req)) || '{}');
       const sid = pickSid(body.session);
       if (!sid) return send(400, { error: 'no session' });
-      try { return send(200, await runUnpackSession(sid, body)); }
+      try { return send(200, await dumpAllDex(sid)); }
       catch (e) { return send(504, { error: (e as Error).message }); }
     } },
     { method: 'POST', path: '/api/agent/load_so', handler: async () => {

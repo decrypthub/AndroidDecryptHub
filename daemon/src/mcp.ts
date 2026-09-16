@@ -1,7 +1,7 @@
 // mcp.ts — MCP Server (Streamable HTTP / JSON-RPC).
 // Exposes the workbench Service Layer as MCP tools for AI clients. Shares the same
 // logic as the REST API (no duplicate business logic) — handlers delegate to service.ts
-// primitives (agentCmd/dumpBuf/dumpRegion/runUnpackSession/...) + state.ts (captures/...).
+// primitives (agentCmd/dumpBuf/dumpRegion/dumpAllDex/...) + state.ts (captures/...).
 // Adding a tool = add one entry to MCP_TOOLS below.
 import type { ServerResponse } from 'node:http';
 import { createHash } from 'node:crypto';
@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { analyzeSo, cryptoConstScan, svcScan, disasmSo } from './analysis.ts';
 import { parseDex, cryptoScan, searchDex, invokeXref, extractMethodCode, analyzeCoverage, rebuildStandardDex, recoverFromSnapshots } from './dex.ts';
 import { ensureDexIndex, searchDexIndex, listDexReflections } from './dex_index.ts';
-import { agentCmd, dumpBuf, dumpBufPath, dumpRegion, pickSid, runUnpackSession, repairDexHeader, sessionForPackage } from './service.ts';
+import { agentCmd, dumpAllDex, dumpBuf, dumpBufPath, dumpRegion, pickSid, repairDexHeader, sessionForPackage } from './service.ts';
 import { backendMatrix, classifySession } from './backends.ts';
 import { sessions, dumps, captures, captureTimers, SANDBOX, settings, CAPTURES, cryptoIdentify } from './state.ts';
 import type { DumpMeta } from './state.ts';
@@ -55,7 +55,7 @@ export const MCP_TOOLS: { name: string; description: string; inputSchema: any; h
   { name: 'capture_detail', description: 'Full detail of one capture by id: algorithm, key(hex), iv(hex), plaintext(utf8+hex), ciphertext(hex)', inputSchema: { type: 'object', properties: { id: N }, required: ['id'] }, handler: async (a) => { const c = captures.find(x => x.id === Number(a.id)); if (!c) throw new Error('not found'); const text = Buffer.from(c.hex, 'hex').toString('utf8'); return { ...c, text }; } },
   // ---- axis 2: one-click unpack (no AOSP flashing needed) ----
   { name: 'dex_coverage', description: '方法恢复率报告 — per-method state (native/abstract/present/extracted) + recovery rate over a dumped dex', inputSchema: { type: 'object', properties: { b64: S, sha: S }, required: [] }, handler: async (a) => { const buf = await dumpBuf(a); return analyzeCoverage(buf, parseDex(buf)); } },
-  { name: 'unpack_run', description: '一键脱壳（无需刷 AOSP）— full unpack session: T0 snapshot → coverage → active trigger → T1 snapshot → recover+rebuild. Set triggerAllPrefix (e.g. "com.target.") to aggressively load ALL of the app\'s classes so a refill-type shell restores every method. Returns per-dex before/after recovery + rebuilt dex sha', inputSchema: { type: 'object', properties: { session: S, triggerAllPrefix: S, triggerClasses: { type: 'array', items: S }, triggerMethod: S, level: N, maxClasses: N } }, handler: async (a) => { const sid = pickSid(a.session); if (!sid) throw new Error('no session'); return runUnpackSession(sid, a); } },
+  { name: 'dump_all_dex', description: '一键 dump 当前目标进程所有已加载 DEX：ART DexFile 枚举 + 逐个 dump + SHA-256 去重', inputSchema: { type: 'object', properties: { session: S } }, handler: async (a) => { const sid = pickSid(a.session); if (!sid) throw new Error('no session'); return dumpAllDex(sid); } },
   { name: 'dex_recover', description: 'Recover extracted CodeItems from a restored snapshot into a base dex + rebuild (baseSha/baseB64 + restoredSha/restoredB64)', inputSchema: { type: 'object', properties: { baseB64: S, baseSha: S, restoredB64: S, restoredSha: S } }, handler: async (a) => { const base = await dumpBuf({ b64: a.baseB64, sha: a.baseSha }); const restored = await dumpBuf({ b64: a.restoredB64, sha: a.restoredSha }); const pd = parseDex(base); const { captures: caps, report } = recoverFromSnapshots(base, restored, pd); const rb = rebuildStandardDex(base, caps); const outSha = createHash('sha256').update(rb.dex).digest('hex'); const path = join(CAPTURES, `${outSha.slice(0, 16)}.dex`); if (!existsSync(path)) writeFileSync(path, rb.dex); const meta: DumpMeta = { sha256: outSha, size: rb.dex.length, source: 'dex-recover', addr: '0', tag: 'recovered', sessionId: '', package: '', capturedAt: Date.now(), path, kind: 'dex' }; dumps.set(outSha, meta); return { ...report, injected: rb.injected, sha256: outSha }; } },
   // ---- axis 3: everything the AI needs to drive a reversing session ----
   { name: 'trigger', description: 'Actively load a class (level 1) and invoke a safe static no-arg method (level 3) to force code paths — a trigger source for unpacking', inputSchema: { type: 'object', properties: { session: S, class: S, method: S, level: N }, required: ['class'] }, handler: (a) => agentCmd(a.session, 'trigger', { className: a.class, method: a.method ?? '', level: Number(a.level ?? 1) }, 20_000) },

@@ -18,6 +18,8 @@
 - [x] **未发布口径：删除 IDH 兼容/兜底（2026-09-16）**：只保留 `libadh_agent.so` 单交付名、`adh_agent_start` 单导出入口。Zygisk 只从 module dir 打开新文件名，不再尝试旧文件名、绝对路径或旧 dlsym；Xposed 只走 `System.loadLibrary("adh_agent")`，删除了 `/proc/self/maps` 二次路径扫描；agent 内部 `idh_*` helper 全部改为 `adh_*`，reporter 只认 `adh.reporter.class`；daemon/tools 不再读取 `IDH_*`，数据目录固定 `adhd-data/`，也不再迁移 `libidhdetect.so`。历史段落里的 IDH 事件/日志证据仅用于说明当时现象，当前代码不包含这些兼容路径。Zygisk + app `System.loadLibrary` 的混态由 native 首载 copy owner guard（`dl_iterate_phdr` link-map order）收敛为单会话；Zygisk 早于 app 设置 `adh.reporter.class` 时，winner copy 的 reporter watcher 会迟绑定，v24 Java rich capture 仍 PASS。两轮真机 `verify_all.sh` 均 51/51。
 - [x] **v1 范围收敛（2026-09-16）**：发布面只保留 `docs/FEATURE_STATUS.md §2` 的 51 项已验收能力。未验收、半成品或没有真实触发源的能力，已从 agent / daemon / Web UI / MCP / tools / 发布文档中删除；历史细节只留在 `docs/archive/`，不再作为产品入口或发布说明。`tools/verify_all.sh` 51/51。
 - [x] **Web UI 会话模块修复：会话无限堆积 + 选择器"白屏"（2026-09-16）**：两个独立缺陷 ——
+
+- [x] **脱壳主流程简化为一键 dump 所有 DEX（2026-09-16）**：删除 Web Dump 面板里的 T0/T1、覆盖率、主动枚举触发、恢复/重建会话；新增 `/api/unpack/dump-all` 与 MCP `dump_all_dex`：ART DexFile 枚举 → 逐个 dump → SHA-256 去重 → 下载。底层 dex 修复/索引等高级静态工具保留，但不再混入一键脱壳入口。验收改为 `tools/verify_v15_dumpall.sh`，真机 PASS。
       ① **daemon 从不清理 `sessions`**：每次 App 重启都新增一条，一个下午的测试留下 20 条死会话（列表里全是历史会话）。
       修法：`state.ts` 新增 `pruneSessions()`（每包最多保留 `OFFLINE_KEEP_PER_PACKAGE=2` 条离线 + 超过 `OFFLINE_RETENTION_MS=10min` 一律丢弃，**绝不动在线会话**），并在 `agent hello`、`agent close` 与 60s 定时清扫里调用；实测重启 4 次后稳定在 `total=3 (1 online + 2 offline)`。
       ② **会话选择器"一片白色"**：`select` 是 `background:transparent`，浏览器给原生下拉浮层画白底，而选项文字继承 `--ink(#fff)` → 白底白字全看不见。
