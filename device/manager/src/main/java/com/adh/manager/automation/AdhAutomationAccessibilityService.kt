@@ -149,6 +149,7 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
             "tap" -> tap(args, snapshot, ref)
             "long_press" -> longPress(args, snapshot, ref)
             "swipe" -> swipe(args)
+            "scroll" -> scroll(args, snapshot, ref)
             "set_text" -> setText(args, snapshot, ref)
             "global" -> global(args)
             else -> throw AutomationException("unsupported_action", "unsupported action: $action")
@@ -214,6 +215,25 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
         return JSONObject().put("action", "swipe")
     }
 
+    private fun scroll(args: JSONObject, snapshot: Snapshot?, ref: String?): JSONObject {
+        val refNode = ref?.let { snapshot?.nodes?.get(it) }
+        val node = refNode?.let { scrollableAncestor(it) ?: it } ?: rootInActiveWindow
+            ?: throw AutomationException("no_scroll_target", "no active scrollable window")
+        if (refNode != null) refreshOrThrow(node)
+        val direction = args.optString("direction", "forward")
+        val action = when (direction) {
+            "forward" -> AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+            "backward" -> AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+            else -> throw AutomationException("bad_direction", "scroll direction must be forward or backward")
+        }
+        if (!node.performAction(action)) {
+            throw AutomationException("scroll_rejected", "active window rejected scroll $direction")
+        }
+        return JSONObject()
+            .put("action", "scroll")
+            .put("direction", direction)
+            .put("target", if (ref != null) "ref" else "active-window")
+    }
     private fun setText(args: JSONObject, snapshot: Snapshot?, ref: String?): JSONObject {
         if (ref.isNullOrBlank()) throw AutomationException("missing_ref", "set_text requires a node ref")
         val node = snapshot?.nodes?.get(ref) ?: throw AutomationException("stale_ref", "unknown node ref: $ref")
@@ -311,6 +331,12 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
     private fun clickableAncestor(node: AccessibilityNodeInfo): AccessibilityNodeInfo? =
         ancestor(node, 8) { it.isClickable || hasAction(it, AccessibilityNodeInfo.ACTION_CLICK) }
 
+    private fun scrollableAncestor(node: AccessibilityNodeInfo): AccessibilityNodeInfo? =
+        ancestor(node, 8) {
+            it.isScrollable ||
+                hasAction(it, AccessibilityNodeInfo.ACTION_SCROLL_FORWARD) ||
+                hasAction(it, AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)
+        }
     private fun editableAncestor(node: AccessibilityNodeInfo): AccessibilityNodeInfo? =
         ancestor(node, 8) { it.isEditable || hasAction(it, AccessibilityNodeInfo.ACTION_SET_TEXT) }
 

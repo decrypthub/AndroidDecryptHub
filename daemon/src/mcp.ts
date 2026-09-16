@@ -68,7 +68,7 @@ export const MCP_TOOLS: { name: string; description: string; inputSchema: any; h
 MCP_TOOLS.push(
   { name: 'automation_status', description: 'Read-only phone automation status: user toggle, bridge connection, connected device capabilities and package allowlist. This tool never enables automation.', inputSchema: { type: 'object', properties: {} }, handler: async () => ({ enabled: settings.automation.enabled, packages: settings.automation.packages, bridge: automation.status() }) },
   { name: 'phone_observe', description: 'Observe the active phone screen. Prefer the AccessibilityService node tree; when it is empty or non-semantic, fall back to a screenshot that the AI can inspect. Returns snapshotId plus nodes or an image.', inputSchema: { type: 'object', properties: { mode: { type: 'string', enum: ['auto', 'tree', 'visual'] }, includeScreenshot: { type: 'boolean' }, maxNodes: N, package: S } }, raw: true, handler: async (a) => observePhone(a) },
-  { name: 'phone_act', description: 'Act on the active phone screen. Prefer snapshotId+ref from phone_observe; use normalized x/y coordinates only when no usable node exists. Supports tap, long_press, swipe, set_text and global back/home/recents.', inputSchema: { type: 'object', properties: { snapshotId: S, action: { type: 'string', enum: ['tap', 'long_press', 'swipe', 'set_text', 'global'] }, ref: S, x: N, y: N, x2: N, y2: N, coordinateSpace: { type: 'string', enum: ['normalized', 'pixel'] }, text: S, key: { type: 'string', enum: ['back', 'home', 'recents'] }, durationMs: N, observeAfter: { type: 'boolean' }, package: S }, required: ['action'] }, raw: true, handler: async (a) => actPhone(a) },
+  { name: 'phone_act', description: 'Act on the active phone screen. Prefer snapshotId+ref from phone_observe; use normalized x/y coordinates only when no usable node exists. Supports tap, long_press, swipe, scroll, set_text and global back/home/recents.', inputSchema: { type: 'object', properties: { snapshotId: S, action: { type: 'string', enum: ['tap', 'long_press', 'swipe', 'scroll', 'set_text', 'global'] }, ref: S, x: N, y: N, x2: N, y2: N, coordinateSpace: { type: 'string', enum: ['normalized', 'pixel'] }, text: S, key: { type: 'string', enum: ['back', 'home', 'recents'] }, direction: { type: 'string', enum: ['forward', 'backward'] }, durationMs: N, observeAfter: { type: 'boolean' }, package: S }, required: ['action'] }, raw: true, handler: async (a) => actPhone(a) },
 );
 
 async function observePhone(args: any) {
@@ -117,6 +117,7 @@ function normalizeActArgs(args: any) {
     coordinateSpace: args.coordinateSpace ?? 'normalized',
     text: args.text,
     key: args.key,
+    direction: args.direction,
     durationMs: args.durationMs,
     allowedPackages: settings.automation.packages,
     package: args.package,

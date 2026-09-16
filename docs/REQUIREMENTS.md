@@ -1515,7 +1515,7 @@ Host ADH Daemon / MCP  →  自动化 TCP 8763（loopback + adb reverse）  → 
 |---|---|
 | `automation_status` | 只读状态：Host 开关、桥接连接、设备能力、允许包名；不能开启自动化 |
 | `phone_observe` | 优先返回控件树；树为空或非语义时返回压缩截图；tree/visual/auto 三种模式 |
-| `phone_act` | `tap` / `long_press` / `swipe` / `set_text` / `global back/home/recents`；优先 `snapshotId+ref`，兜底归一化坐标 |
+| `phone_act` | `tap` / `long_press` / `swipe` / `scroll` / `set_text` / `global back/home/recents`；优先 `snapshotId+ref`，兜底归一化坐标 |
 
 ### 31.3 兜底规则
 
