@@ -68,6 +68,9 @@
   · 可验证性：沙盒宿主 `adh_input_probe` 旁新增 `adh_input_echo`（`OnEditorActionListener` 回显"提交回显：<文本>（action=N）"）。真机：`set_text {resourceId:adh_input_probe, text:ADH_SUBMIT_v1, submit:true}` → `submitted=true`，随后 `phone_find {textContains:提交回显}` 读到 `提交回显：ADH_SUBMIT_v1（action=0）`，即应用真的收到了键盘动作。Manager APK 随本轮改动重新编译安装（同包名同签名）。
   · 全量 `verify_all.sh` 54/54。
 
+- [x] **phone_wait 稳定等待（settle before read/act）（2026-09-17，真机 PASS）**：AI 在"刚启动/刚切页"的界面上读树或点击，最容易拿到半渲染结果（我的耐力脚本就因此连挂两轮）。新增 `phone_wait {stable:true, stableMs:600}`：对屏幕签名采样，**连续 stableMs 不变**才返回；签名 = 前台包 + 节点类名/文本/hint/描述/边界/checked/selected/enabled，**刻意忽略 snapshotId/cursor/ref**（这些每次快照都在抖，计入会让"稳定"永远不成立）。返回里带 `signature`、`waitedMs`、`snapshotId` 与**可直接动作的 refs**（上限 60 条），所以 settle 之后不必再多一次 observe；超时返回 `stable:false` + `changedAgoMs` 说明"最后变化距今多久"。纯函数在 `daemon/src/phone_stability.ts`（单测覆盖签名稳定性与 settle 判定）。
+  · 真机：沙盒上 `waitedMs=874ms` 后返回稳定快照并直接用其中的 ref 切到"加解密"标签；真实流程"重启管理器 → 等界面稳定"实测自动等 1869ms，返回快照里已含 4 个可点底部导航项（此前只能写死 sleep 1800ms）。全量 `verify_all.sh` 54/54。
+
 - [x] **未发布口径：删除 IDH 兼容/兜底（2026-09-16）**：只保留 `libadh_agent.so` 单交付名、`adh_agent_start` 单导出入口。Zygisk 只从 module dir 打开新文件名，不再尝试旧文件名、绝对路径或旧 dlsym；Xposed 只走 `System.loadLibrary("adh_agent")`，删除了 `/proc/self/maps` 二次路径扫描；agent 内部 `idh_*` helper 全部改为 `adh_*`，reporter 只认 `adh.reporter.class`；daemon/tools 不再读取 `IDH_*`，数据目录固定 `adhd-data/`，也不再迁移 `libidhdetect.so`。历史段落里的 IDH 事件/日志证据仅用于说明当时现象，当前代码不包含这些兼容路径。Zygisk + app `System.loadLibrary` 的混态由 native 首载 copy owner guard（`dl_iterate_phdr` link-map order）收敛为单会话；Zygisk 早于 app 设置 `adh.reporter.class` 时，winner copy 的 reporter watcher 会迟绑定，v24 Java rich capture 仍 PASS。两轮真机 `verify_all.sh` 均 51/51。
 - [x] **v1 范围收敛（2026-09-16）**：发布面只保留 `docs/FEATURE_STATUS.md §2` 的 51 项已验收能力。未验收、半成品或没有真实触发源的能力，已从 agent / daemon / Web UI / MCP / tools / 发布文档中删除；历史细节只留在 `docs/archive/`，不再作为产品入口或发布说明。`tools/verify_all.sh` 51/51。
 - [x] **Web UI 会话模块修复：会话无限堆积 + 选择器"白屏"（2026-09-16）**：两个独立缺陷 ——

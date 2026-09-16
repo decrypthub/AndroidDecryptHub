@@ -9,6 +9,7 @@ import { PhoneSkillStore, resolveSkillInputs, validateSkillName, validateSkillPa
 import { renderScreenText } from '../src/phone_text.ts';
 import { readPath, resolveTemplates } from '../src/phone_templates.ts';
 import { normalizeAxis, swipePath } from '../src/phone_gestures.ts';
+import { isSettled, noteSample, screenSignature } from '../src/phone_stability.ts';
 import { blockedPackageFromError, openOutcomeHint } from '../src/phone_foreground.ts';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -380,4 +381,35 @@ test('gesture scroll geometry moves content the requested way', () => {
   assert.equal(normalizeAxis('HORIZONTAL'), 'horizontal');
   assert.equal(normalizeAxis(undefined), 'vertical');
   assert.equal(normalizeAxis('nonsense'), 'vertical');
+});
+
+test('screen signature tracks visible changes and ignores volatile wrappers', () => {
+  const base = {
+    activePackage: 'com.adh.sandbox',
+    snapshotId: 's-1',
+    cursor: { eventSeq: 1, captureId: 1 },
+    nodes: [
+      { ref: 'n0', className: 'android.widget.TextView', text: 'ADH · Android DecryptHub', bounds: [1, 2, 3, 4], enabled: true },
+      { ref: 'n1', className: 'android.widget.EditText', hint: '在这里输入…', bounds: [1, 5, 3, 9], editable: true, enabled: true },
+    ],
+  };
+  const signature = screenSignature(base);
+  assert.equal(screenSignature({ ...base, snapshotId: 's-2', cursor: { eventSeq: 9, captureId: 9 } }), signature, 'cursor/snapshot churn must not count');
+  assert.equal(screenSignature({ ...base, nodes: [{ ...base.nodes[0], ref: 'nX' }, base.nodes[1]] }), signature, 'refs churn between snapshots and must not count');
+  assert.notEqual(screenSignature({ ...base, nodes: [{ ...base.nodes[0], hint: 'changed hint' }, base.nodes[1]] }), signature);
+  assert.notEqual(screenSignature({ ...base, nodes: [{ ...base.nodes[0], text: 'CHANGED' }, base.nodes[1]] }), signature);
+  assert.notEqual(screenSignature({ ...base, activePackage: 'com.other' }), signature);
+  assert.notEqual(screenSignature({ ...base, nodes: [base.nodes[0]] }), signature);
+  assert.equal(screenSignature({}), screenSignature({ nodes: [] }));
+});
+
+test('settling needs the signature to hold still for the whole window', () => {
+  const first = noteSample(null, 'sig-a', 1000);
+  const same = noteSample(first, 'sig-a', 1300);
+  assert.equal(same.changedAt, 1000, 'unchanged samples keep the original timestamp');
+  assert.equal(isSettled(same, 1600, 600), true);
+  assert.equal(isSettled(same, 1500, 600), false);
+  const changed = noteSample(same, 'sig-b', 1700);
+  assert.equal(changed.changedAt, 1700);
+  assert.equal(isSettled(changed, 1800, 600), false);
 });

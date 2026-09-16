@@ -187,6 +187,17 @@ try {
     chk('phone_wait matches a visible selector', waitData.matched === true, `matched=${waitData.matched}`);
   }
 
+  // ---- stability wait: settle first, then act on the refs it hands back -------------------
+  const settled = parseTree(await callTool('phone_wait', { stable: true, stableMs: 600, timeoutMs: 8000, intervalMs: 250, maxNodes: 120 }));
+  chk('phone_wait stable mode settles before returning', settled.matched === true && settled.stable === true && settled.waitedMs >= 600, `waitedMs=${settled.waitedMs} signature=${settled.signature}`);
+  const settledTab = (settled.nodes ?? []).find((node) => node.contentDescription === '加解密' && node.actions?.includes('click'));
+  chk('the settled snapshot carries actionable refs', !!settledTab, `nodes=${(settled.nodes ?? []).length}`);
+  if (settledTab) {
+    const settledTap = parseTree(await callTool('phone_act', { snapshotId: settled.snapshotId, action: 'tap', ref: settledTab.ref, includeScreenshot: false, maxNodes: 80 }));
+    const settledAfter = parseTree(await callTool('phone_observe', { mode: 'tree', includeScreenshot: false, maxNodes: 80 }));
+    chk('a ref from the settled snapshot is directly actionable', selectedTab(settledAfter) === '加解密', `target=${settledTap.target} selected=${selectedTab(settledAfter)}`);
+  }
+
   // ---- agent-signal waits: wait on process-internal ground truth, not just UI ------------
   const agents = await getJson('/api/agents');
   const liveSandbox = agents

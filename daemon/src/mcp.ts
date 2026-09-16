@@ -18,6 +18,7 @@ import { agentWaitSightings, findAgentWaitMatch, hasAgentWaitFilters } from './a
 import { implicitSelectorFor, selectorFrom } from './phone_selectors.ts';
 import { PhoneSkillStore, resolveSkillInputs } from './phone_skills.ts';
 import { normalizeAxis, swipePath } from './phone_gestures.ts';
+import { isSettled, noteSample, screenSignature } from './phone_stability.ts';
 import { resolveTemplates } from './phone_templates.ts';
 import { renderScreenText } from './phone_text.ts';
 import { blockedPackageFromError, openOutcomeHint } from './phone_foreground.ts';
@@ -88,7 +89,7 @@ MCP_TOOLS.push(
   { name: 'automation_status', description: 'Read-only phone automation status: user toggle, bridge connection, connected device capabilities and package allowlist. This tool never enables automation.', inputSchema: { type: 'object', properties: {} }, handler: async () => ({ enabled: settings.automation.enabled, packages: settings.automation.packages, bridge: automation.status() }) },
   { name: 'phone_observe', description: 'Observe the active phone screen. Prefer the AccessibilityService node tree; when it is empty or non-semantic, fall back to a screenshot that the AI can inspect. Returns snapshotId plus nodes or an image. mode=text renders the same tree as terse plain-text lines (refs stay usable) to save context.', inputSchema: { type: 'object', properties: { mode: { type: 'string', enum: ['auto', 'tree', 'visual', 'text'] }, includeScreenshot: { type: 'boolean' }, maxNodes: N, maxDepth: N, interactiveOnly: { type: 'boolean' }, package: S } }, raw: true, handler: async (a) => observePhone(a) },
   { name: 'phone_find', description: 'Find compact, actionable nodes without transferring the whole tree. Supports text/resourceId/contentDescription and interaction flags; returns refs valid for snapshotId.', inputSchema: { type: 'object', properties: { ...SEL, limit: N, maxNodes: N, interactiveOnly: { type: 'boolean' }, package: S } }, handler: async (a) => findPhone(a) },
-  { name: 'phone_wait', description: 'Wait until a screen state / selector matches or the injected agent reports a signal. Agent filters: agentEvent (exact event type), agentEventContains (substring of the event JSON), captureCategory (crypto/net/file/system), captureContains (substring of the decoded capture text + metadata). With scroll:true the wait scrolls a container until the target shows up — scrollMode=gesture swipes instead of sending ACTION_SCROLL, which is what pagers and custom lists (e.g. launcher pages) require, and axis picks vertical or horizontal. Same-kind filters are ANDed; the two kinds race and whichever fires first wins. Race-free pattern: take the cursor from the preceding observe/act response and pass it as afterCaptureId / afterEventSeq; lookbackMs is the coarse alternative (bounded 0..300000). On an agent-signal timeout the reply carries saw (recent captures/events from the window plus totals) and the live cursor, so the filter can be retargeted.', inputSchema: { type: 'object', properties: { ...SEL, activePackage: S, activityContains: S, gone: { type: 'boolean' }, agentEvent: S, agentEventContains: S, captureCategory: { type: 'string', enum: ['crypto', 'net', 'file', 'system'] }, captureContains: S, afterEventSeq: N, afterCaptureId: N, lookbackMs: N, timeoutMs: N, intervalMs: N, scroll: { type: 'boolean' }, scrollMode: { type: 'string', enum: ['action', 'gesture'] }, axis: { type: 'string', enum: ['vertical', 'horizontal'] }, direction: { type: 'string', enum: ['forward', 'backward'] }, maxScrolls: N, maxNodes: N, interactiveOnly: { type: 'boolean' }, package: S } }, handler: async (a) => waitPhone(a) },
+  { name: 'phone_wait', description: 'Wait until a screen state / selector matches, until the screen settles (stable:true, stableMs holds still), or until the injected agent reports a signal. Agent filters: agentEvent (exact event type), agentEventContains (substring of the event JSON), captureCategory (crypto/net/file/system), captureContains (substring of the decoded capture text + metadata). With scroll:true the wait scrolls a container until the target shows up — scrollMode=gesture swipes instead of sending ACTION_SCROLL, which is what pagers and custom lists (e.g. launcher pages) require, and axis picks vertical or horizontal. Same-kind filters are ANDed; the two kinds race and whichever fires first wins. Race-free pattern: take the cursor from the preceding observe/act response and pass it as afterCaptureId / afterEventSeq; lookbackMs is the coarse alternative (bounded 0..300000). On an agent-signal timeout the reply carries saw (recent captures/events from the window plus totals) and the live cursor, so the filter can be retargeted.', inputSchema: { type: 'object', properties: { ...SEL, activePackage: S, activityContains: S, gone: { type: 'boolean' }, agentEvent: S, agentEventContains: S, captureCategory: { type: 'string', enum: ['crypto', 'net', 'file', 'system'] }, captureContains: S, afterEventSeq: N, afterCaptureId: N, lookbackMs: N, timeoutMs: N, intervalMs: N, scroll: { type: 'boolean' }, scrollMode: { type: 'string', enum: ['action', 'gesture'] }, stable: { type: 'boolean' }, stableMs: N, axis: { type: 'string', enum: ['vertical', 'horizontal'] }, direction: { type: 'string', enum: ['forward', 'backward'] }, maxScrolls: N, maxNodes: N, interactiveOnly: { type: 'boolean' }, package: S } }, handler: async (a) => waitPhone(a) },
   { name: 'phone_act', description: 'Act on the active phone screen. Prefer a selector or snapshotId+ref from phone_observe; use normalized coordinates only as the visual fallback. Supports tap, long_press, swipe, scroll, set_text and global back/home/recents/notifications/quick_settings/power/lock/screenshot. For set_text the text argument is the payload to write, not a filter (target the field with ref, resourceId, editable or selector); the value can be read back with phone_find. set_text takes submit:true to press the field’s keyboard action button (search / send / done) afterwards, and reports submitted:true when the field accepted it. A failed action answers with the compact current screen so the target can be re-derived without another observe.', inputSchema: { type: 'object', properties: { ...SEL, snapshotId: S, action: { type: 'string', enum: ['tap', 'long_press', 'swipe', 'scroll', 'set_text', 'global'] }, ref: S, x: N, y: N, x2: N, y2: N, coordinateSpace: { type: 'string', enum: ['normalized', 'pixel'] }, text: S, submit: { type: 'boolean' }, key: { type: 'string', enum: ['back', 'home', 'recents', 'notifications', 'quick_settings', 'power', 'lock', 'screenshot'] }, direction: { type: 'string', enum: ['forward', 'backward'] }, durationMs: N, submit: { type: 'boolean' }, observeAfter: { type: 'boolean' }, package: S }, required: ['action'] }, raw: true, handler: async (a) => actPhone(a) },
   { name: 'phone_app', description: 'Open, stop or restart an allowlisted app by package name. open verifies that the app really reached the foreground and reports verified/foreground/warning when an OEM dialog swallowed the launch (with a hint on how to unblock). Open uses the root Device Daemon when protocol v6+ is available, with a compatibility fallback for older daemons; stop/restart delegate to the same authenticated daemon.', inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['open', 'stop', 'restart'] }, package: S }, required: ['action', 'package'] }, handler: async (a) => appPhone(a) },
   { name: 'phone_device', description: 'Read or control device power state: status, wake, unlock a non-secure keyguard, or lock the screen. Secure credentials are never bypassed.', inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['status', 'wake', 'unlock', 'lock'] } }, required: ['action'] }, handler: async (a) => devicePhone(a) },
@@ -148,7 +149,8 @@ async function waitPhone(args: any) {
   assertAutomationReady();
   const selector = selectorFrom(args);
   const hasState = args.activePackage != null || args.activityContains != null;
-  const needsUi = Object.keys(selector).length > 0 || hasState;
+  const wantsStable = args.stable === true;
+  const needsUi = Object.keys(selector).length > 0 || hasState || wantsStable;
   const wantsAgent = hasAgentWaitFilters(args);
   if (!needsUi && !wantsAgent)
     throw new Error('phone_wait requires a selector, activePackage, activityContains or an agent filter (agentEvent/agentEventContains/captureCategory/captureContains)');
@@ -160,6 +162,43 @@ async function waitPhone(args: any) {
   const agentWindow = { since: startedAt - lookbackMs, afterEventSeq: args.afterEventSeq, afterCaptureId: args.afterCaptureId };
   let scrolls = 0;
   let last: any = null;
+  if (wantsStable) {
+    const stableMs = Math.max(200, Math.min(5_000, Number(args.stableMs ?? 600)));
+    let sample: { signature: string; changedAt: number } | null = null;
+    for (;;) {
+      const result = await observeTree(args);
+      const now = Date.now();
+      sample = noteSample(sample, screenSignature(result), now);
+      if (isSettled(sample, now, stableMs)) {
+        // Refs from this snapshot stay valid for the caller, so a settled wait is directly actionable.
+        return {
+          matched: true,
+          stable: true,
+          signature: sample.signature,
+          waitedMs: now - startedAt,
+          activePackage: result.activePackage,
+          activity: result.activity,
+          snapshotId: result.snapshotId,
+          truncated: result.truncated,
+          nodes: (result.nodes ?? []).slice(0, 60).map(compactNode),
+        };
+      }
+      if (now - startedAt >= timeoutMs) {
+        return {
+          matched: false,
+          timedOut: true,
+          stable: false,
+          signature: sample.signature,
+          changedAgoMs: now - sample.changedAt,
+          elapsedMs: now - startedAt,
+          activePackage: result.activePackage,
+          activity: result.activity,
+          snapshotId: result.snapshotId,
+        };
+      }
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+  }
   for (;;) {
     // Agent signals need no node tree, so a pure signal wait never depends on the
     // AccessibilityService, and a mixed wait takes whichever condition fires first.
