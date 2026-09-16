@@ -31,6 +31,11 @@ if [ "$BRIDGE" != "connected" ]; then
   exit 0
 fi
 
+# The acceptance drives the sandbox UI, so put it in front first (same setup verify_all does).
+# No install and no force-stop: if the foreground is not the sandbox, later observe checks fail.
+adb -s "$SERIAL" shell am start -n com.adh.sandbox/.MainActivity >/dev/null 2>&1
+sleep 2
+
 SERVICE="com.adh.manager/com.adh.manager.automation.AdhAutomationAccessibilityService"
 ENABLED="$(adb -s "$SERIAL" shell settings get secure enabled_accessibility_services 2>/dev/null | tr -d '\r')"
 if [[ "$ENABLED" != *"$SERVICE"* ]]; then
@@ -254,6 +259,21 @@ try {
   chk('phone_skill rejects step types outside the primitive set', /unsupported type/.test(skillRejected), skillRejected);
   const removedRecipe = parseTree(await callTool('phone_skill', { action: 'delete', name: 'v36-crypto-tab' }));
   chk('phone_skill deletes the recipe', removedRecipe.deleted === true);
+
+  // ---- compact text view: same tree, far fewer tokens, refs stay actionable -------------
+  const textView = await callTool('phone_observe', { mode: 'text', maxNodes: 40 });
+  const textPayload = textView.content?.find((item) => item.type === 'text')?.text ?? '';
+  chk('phone_observe mode=text renders a compact screen view', textPayload.startsWith('screen: com.adh.sandbox') && /^\[n\d+\] /m.test(textPayload), `bytes=${textPayload.length}`);
+  const textSnapshot = /snapshot=([^ ]+)/.exec(textPayload)?.[1];
+  const textTabRef = /\[(n\d+)\] LinearLayout desc="加解密"/.exec(textPayload)?.[1];
+  chk('text view exposes a ref for the tab', !!textSnapshot && !!textTabRef, `snapshot=${textSnapshot ?? '-'} ref=${textTabRef ?? '-'}`);
+  if (textSnapshot && textTabRef) {
+    const textTap = parseTree(await callTool('phone_act', { snapshotId: textSnapshot, action: 'tap', ref: textTabRef, includeScreenshot: false, maxNodes: 60 }));
+    // A ref resolves to ACTION_CLICK when the node is clickable and to a node-center gesture
+    // otherwise, so assert the observable effect instead of the internal target label.
+    const afterTextTap = parseTree(await callTool('phone_observe', { mode: 'tree', includeScreenshot: false, maxNodes: 80 }));
+    chk('refs taken from the text view are directly actionable', selectedTab(afterTextTap) === '加解密', `target=${textTap.target} ref=${textTap.ref} selected=${selectedTab(afterTextTap)}`);
+  }
 
   const visual = await callTool('phone_observe', { mode: 'visual', maxNodes: 20 });
   const image = visual.content?.find((item) => item.type === 'image');

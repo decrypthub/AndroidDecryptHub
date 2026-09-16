@@ -6,6 +6,7 @@ import { mergeSettings, settings } from '../src/state.ts';
 import { agentWaitSightings, findAgentWaitMatch, hasAgentWaitFilters } from '../src/agent_events.ts';
 import { implicitSelectorFor, selectorFrom } from '../src/phone_selectors.ts';
 import { PhoneSkillStore, validateSkillName, validateSkillSteps } from '../src/phone_skills.ts';
+import { renderScreenText } from '../src/phone_text.ts';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -257,4 +258,38 @@ test('a tampered skill file is dropped on load instead of executed', () => {
   assert.deepEqual(new PhoneSkillStore(file).list(), []);
   writeFileSync(file, 'not json at all');
   assert.deepEqual(new PhoneSkillStore(file).list(), []);
+});
+
+test('screen text rendering keeps refs, trims noise and stays bounded', () => {
+  const tree = {
+    activePackage: 'com.adh.sandbox',
+    snapshotId: 's-1',
+    truncated: false,
+    screen: { width: 1080, height: 2412, rotation: 1 },
+    cursor: { eventSeq: 7, captureId: 3 },
+    nodes: [
+      { ref: 'n0', className: 'android.widget.TextView', text: 'ADH · Android DecryptHub', bounds: [48, 126, 852, 214], enabled: true, clickable: false, actions: [] },
+      { ref: 'n1', className: 'android.widget.EditText', hint: '搜索', resourceId: 'com.x:id/search_box', bounds: [1, 2, 3, 4], editable: true, clickable: true, enabled: true, actions: ['click', 'set_text'] },
+      { ref: 'n2', className: 'android.widget.Button', contentDescription: '很长的描述'.repeat(30), bounds: [0, 0, 1, 1], enabled: false, actions: [] },
+    ],
+  };
+  const text = renderScreenText(tree, { maxNodes: 2, maxTextLength: 20 });
+  const lines = text.split('\n');
+  assert.match(lines[0], /screen: com\.adh\.sandbox/);
+  assert.match(lines[0], /1080x2412/);
+  assert.match(lines[0], /cursor=7\/3/);
+  assert.match(lines[1], /^\[n0\] TextView "ADH · Android Decry/);   // clipped to maxTextLength
+  assert.match(lines[2], /\[n1\] EditText "搜索" id=search_box/);
+  assert.match(lines[2], /editable/);
+  assert.match(lines[2], /actions=set_text/);
+  assert.equal(lines.filter((line) => line.startsWith('[')).length, 2);        // maxNodes respected
+  assert.match(text, /1 more nodes/);
+  assert.doesNotMatch(text, /clickable/);                                       // default click/enabled noise dropped
+  assert.doesNotMatch(text, /\(enabled\)/);
+});
+
+test('screen text rendering survives an empty or malformed observation', () => {
+  assert.match(renderScreenText({}), /screen: \?/);
+  assert.match(renderScreenText({}), /\(no nodes\)/);
+  assert.match(renderScreenText({ nodes: [], screenshot: { mimeType: 'image/jpeg', bytes: 10 } }), /screenshot: image\/jpeg 10B/);
 });

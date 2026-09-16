@@ -36,6 +36,9 @@
 - [x] **phone_skill：把操控流程沉淀成可复用配方（2026-09-17，真机 PASS）**：目标里"AI 自己制定操控任务、驾轻就熟"缺的不是单个动作，而是**复用**——之前每轮都要重新推导"先等哪个界面、再点哪个控件"。新增 MCP `phone_skill`（save / list / run / delete）：主机侧 `adhd-data/skills.json` 保存命名配方，`run` 直接复用 `phone_task` 的执行器（同样的重试、`stopOnError`、agent 信号等待、allowlist 门槛）。安全上与 `phone_task` 同级、不多一分：步骤类型只允许 observe/find/wait/act/app/device（≤30 步）、不能嵌套 skills、无 shell；文件被篡改或损坏时丢弃条目而不是执行（单测覆盖）。
   · 真机验收：保存 `v36-crypto-tab`（等待沙盒前台 + 点"加解密"）→ list 可见 → run `ok=true` 两步全过 → 非法步骤 `shell` 被拒（`unsupported type 'shell'`）→ delete 生效；`daemon/test/automation.test.ts` 17/17。
 
+- [x] **phone_observe mode=text：省上下文的紧凑屏幕视图（2026-09-17，真机 PASS）**：AI 操控手机时真正稀缺的是上下文 —— 同屏控件树 JSON 实测 7488B，而 `mode=text` 渲染同一棵树只要 945B（约 **8×**）。输出一行标题（前台包/分辨率/rotation/snapshot/nodes/cursor）+ 每节点一行（`[ref] Class "文本" desc=… id=… @bounds (editable/selected/disabled) actions=…`），只打印非默认状态与除 `click` 之外的动作以去噪；`snapshotId` 与 ref 保留，可直接喂给 `phone_act`（真机验证：从文本视图取 ref 点击"加解密"标签，`selected=加解密`）。
+  · 实现为纯函数 `daemon/src/phone_text.ts`（单测覆盖裁剪、上限、空/异常输入、噪声剔除），host 侧渲染，设备侧不变。
+
 - [x] **未发布口径：删除 IDH 兼容/兜底（2026-09-16）**：只保留 `libadh_agent.so` 单交付名、`adh_agent_start` 单导出入口。Zygisk 只从 module dir 打开新文件名，不再尝试旧文件名、绝对路径或旧 dlsym；Xposed 只走 `System.loadLibrary("adh_agent")`，删除了 `/proc/self/maps` 二次路径扫描；agent 内部 `idh_*` helper 全部改为 `adh_*`，reporter 只认 `adh.reporter.class`；daemon/tools 不再读取 `IDH_*`，数据目录固定 `adhd-data/`，也不再迁移 `libidhdetect.so`。历史段落里的 IDH 事件/日志证据仅用于说明当时现象，当前代码不包含这些兼容路径。Zygisk + app `System.loadLibrary` 的混态由 native 首载 copy owner guard（`dl_iterate_phdr` link-map order）收敛为单会话；Zygisk 早于 app 设置 `adh.reporter.class` 时，winner copy 的 reporter watcher 会迟绑定，v24 Java rich capture 仍 PASS。两轮真机 `verify_all.sh` 均 51/51。
 - [x] **v1 范围收敛（2026-09-16）**：发布面只保留 `docs/FEATURE_STATUS.md §2` 的 51 项已验收能力。未验收、半成品或没有真实触发源的能力，已从 agent / daemon / Web UI / MCP / tools / 发布文档中删除；历史细节只留在 `docs/archive/`，不再作为产品入口或发布说明。`tools/verify_all.sh` 51/51。
 - [x] **Web UI 会话模块修复：会话无限堆积 + 选择器"白屏"（2026-09-16）**：两个独立缺陷 ——
