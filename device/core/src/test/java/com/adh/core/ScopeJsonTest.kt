@@ -102,6 +102,7 @@ class ScopeJsonTest {
     fun pathsAreStableContract() {
         assertEquals("/data/adb/adh/scope.json", AdhPaths.SCOPE_PATH)
         assertEquals("/data/adb/adh/zygisk_loaded", AdhPaths.LOADER_MARKER)
+        assertEquals("/data/adb/adh/automation.enabled", AdhPaths.AUTOMATION_ENABLED_MARKER)
         assertEquals("/data/adb/modules/adh", AdhPaths.MODULE_DIR)
         assertEquals("com.adh.manager", AdhPaths.MANAGER_PKG)
         assertEquals("com.adh.daemon", AdhPaths.DAEMON_PKG)

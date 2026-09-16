@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.os.Process
+import android.os.SystemClock
 import android.util.Log
 import com.adh.core.AdhPaths
 import java.io.File
@@ -12,6 +13,7 @@ import kotlin.system.exitProcess
 object AdhDeviceDaemon {
     private const val TAG = "AdhDeviceDaemon"
     private const val PUBLISH_INTERVAL_MS = 1_000L
+    private const val AUTOMATION_ENSURE_INTERVAL_MS = 5_000L
 
     @JvmStatic
     fun main(args: Array<String>) {
@@ -42,6 +44,12 @@ object AdhDeviceDaemon {
                 val context = SystemContext.create()
                 exitProcess(if (AutomationServiceControl.setEnabled(context, false)) 0 else 1)
             }
+            "--automation-ensure" -> {
+                requireRoot()
+                Looper.prepareMainLooper()
+                val context = SystemContext.create()
+                exitProcess(if (AutomationServiceControl.ensureEnabled(context)) 0 else 1)
+            }
         }
         Thread.setDefaultUncaughtExceptionHandler { _, error ->
             Log.e(TAG, "fatal daemon error", error)
@@ -57,11 +65,20 @@ object AdhDeviceDaemon {
         File(AdhPaths.SCOPE_DIR).mkdirs()
         File(AdhPaths.DAEMON_PID_PATH).writeText(Process.myPid().toString())
         File(AdhPaths.DAEMON_READY_MARKER).writeText("1\n")
+        runCatching { AutomationServiceControl.ensureEnabled(context) }
+            .onFailure { Log.w(TAG, "initial automation service ensure failed", it) }
 
         val handler = Handler(Looper.getMainLooper())
         var publishedPid = -1
+        var lastAutomationEnsure = 0L
         val publisher = object : Runnable {
             override fun run() {
+                val now = SystemClock.uptimeMillis()
+                if (now - lastAutomationEnsure >= AUTOMATION_ENSURE_INTERVAL_MS) {
+                    lastAutomationEnsure = now
+                    runCatching { AutomationServiceControl.ensureEnabled(context) }
+                        .onFailure { Log.w(TAG, "automation service ensure failed", it) }
+                }
                 val managerPid = findManagerPid()
                 if (managerPid > 0 && managerPid != publishedPid) {
                     val published = ExternalProviderPublisher.publish(service)

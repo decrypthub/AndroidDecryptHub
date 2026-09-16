@@ -2,7 +2,9 @@ package com.adh.daemon
 
 import android.content.Context
 import android.provider.Settings
+import android.system.Os
 import android.util.Log
+import com.adh.core.AdhPaths
 import com.adh.core.AutomationServiceSettings
 import java.io.File
 import java.util.concurrent.TimeUnit
@@ -10,9 +12,9 @@ import java.util.concurrent.TimeUnit
 /**
  * Root-only control of ADH's optional AccessibilityService.
  *
- * This is only called after the user explicitly flips the Manager automation switch. It preserves
- * every other enabled accessibility service and falls back to the platform `settings` binary if
- * direct secure-settings writes are rejected by the ROM.
+ * The Manager switch is the only thing that writes the durable opt-in marker. When the marker is
+ * present, the Device Daemon may repair the service after an OEM/OS cleanup without asking again.
+ * The user can always turn the switch off, which removes the marker and the service entry.
  */
 internal object AutomationServiceControl {
     private const val TAG = "AdhAutomationControl"
@@ -24,7 +26,21 @@ internal object AutomationServiceControl {
         return AutomationServiceSettings.contains(readBinary(ENABLED_SERVICES))
     }
 
+    fun desiredEnabled(): Boolean = runCatching { File(AdhPaths.AUTOMATION_ENABLED_MARKER).isFile }.getOrDefault(false)
+
     fun setEnabled(context: Context, enabled: Boolean): Boolean {
+        if (enabled) writeMarker() else deleteMarker()
+        if (!applyEnabled(context, enabled)) return false
+        return isEnabled(context) == enabled
+    }
+
+    fun ensureEnabled(context: Context): Boolean {
+        if (!desiredEnabled() || isEnabled(context)) return true
+        Log.i(TAG, "automation service missing but user opt-in is present; repairing")
+        return applyEnabled(context, true)
+    }
+
+    private fun applyEnabled(context: Context, enabled: Boolean): Boolean {
         val next = AutomationServiceSettings.update(readSetting(context, ENABLED_SERVICES), enabled)
         val direct = runCatching {
             Settings.Secure.putString(context.contentResolver, ENABLED_SERVICES, next)
@@ -38,6 +54,20 @@ internal object AutomationServiceControl {
             runCatching { Thread.sleep(150) }
         }
         return isEnabled(context) == enabled
+    }
+
+    private fun writeMarker() {
+        runCatching {
+            val marker = File(AdhPaths.AUTOMATION_ENABLED_MARKER)
+            marker.parentFile?.mkdirs()
+            marker.writeText("1\n")
+            Os.chmod(marker.path, 0b110100100)
+        }.onFailure { Log.w(TAG, "failed to persist automation opt-in marker", it) }
+    }
+
+    private fun deleteMarker() {
+        runCatching { File(AdhPaths.AUTOMATION_ENABLED_MARKER).delete() }
+            .onFailure { Log.w(TAG, "failed to delete automation opt-in marker", it) }
     }
 
     private fun readSetting(context: Context, key: String): String? =
