@@ -94,6 +94,14 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
         "app" -> app(args)
         "device" -> device(args)
         "status" -> status()
+        // Fault injection for the watchdog acceptance (tools/verify_v38_automation_watchdog.sh):
+        // it deliberately occupies a command slot past the bridge deadline. Inert otherwise —
+        // it touches no window and is only reachable over the host bridge.
+        "selftest_sleep" -> {
+            val ms = args.optInt("ms", 1_000).coerceIn(0, 60_000)
+            Thread.sleep(ms.toLong())
+            JSONObject().put("sleptMs", ms)
+        }
         else -> throw AutomationException("unsupported_op", "unsupported automation op: $op")
     }
 
@@ -103,6 +111,7 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
         .put("sdk", Build.VERSION.SDK_INT)
         .put("screenshot", Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
         .put("snapshots", snapshots.size)
+        .put("bridge", bridge?.stats() ?: JSONObject())
 
     private fun observe(args: JSONObject): JSONObject {
         val mode = args.optString("mode", "auto").ifBlank { "auto" }

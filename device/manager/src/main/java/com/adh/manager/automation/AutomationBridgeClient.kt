@@ -8,8 +8,12 @@ import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.util.concurrent.ExecutionException
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
 
@@ -32,6 +36,8 @@ class AutomationBridgeClient(
     private val running = AtomicBoolean(false)
     private val commandBusy = AtomicBoolean(false)
     private val commandSince = AtomicLong(0L)
+    private val inFlight = AtomicInteger(0)
+    private val timeouts = AtomicInteger(0)
     private val writeLock = Any()
     private val commandExecutor = Executors.newCachedThreadPool { runnable ->
         Thread(runnable, "adh-automation-command").apply { isDaemon = true }
@@ -83,17 +89,23 @@ class AutomationBridgeClient(
         }
     }
 
+    // A stuck command used to be "handled" by releasing the gate without ever answering the host:
+    // the host waited out its own timeout, and every later command hit the same blocked window.
+    // Instead, every command now runs with a hard deadline, always gets an answer, and a timed-out
+    // command also drops the socket so the host never stays half-attached to a suspect connection.
     private fun watchdogLoop() {
         while (running.get()) {
-            val started = commandSince.get()
-            if (commandBusy.get() && started > 0 && System.currentTimeMillis() - started > COMMAND_STUCK_MS) {
-                Log.w(TAG, "command exceeded ${COMMAND_STUCK_MS}ms; releasing command gate")
-                commandBusy.set(false)
-                commandSince.set(0L)
-            }
+            val stuck = commandBusy.get() && commandSince.get() > 0 &&
+                System.currentTimeMillis() - commandSince.get() > COMMAND_STUCK_MS
+            if (stuck) Log.w(TAG, "a command is still running after ${COMMAND_STUCK_MS}ms (in-flight=${inFlight.get()}, timeouts=${timeouts.get()})")
             runCatching { Thread.sleep(WATCHDOG_INTERVAL_MS) }
         }
     }
+
+    fun stats(): JSONObject = JSONObject()
+        .put("inFlight", inFlight.get())
+        .put("timeouts", timeouts.get())
+        .put("commandActive", commandBusy.get())
 
     private fun hello(): JSONObject = JSONObject()
         .put("t", "hello")
@@ -116,26 +128,51 @@ class AutomationBridgeClient(
         val id = message.optString("id")
         val op = message.optString("op")
         val args = message.optJSONObject("args") ?: JSONObject()
-        commandExecutor.execute {
+        inFlight.incrementAndGet()
+        val task = commandExecutor.submit<JSONObject> {
             if (!commandBusy.compareAndSet(false, true)) {
-                writeError(writer, id, "automation_busy", "previous automation command is still running")
-                return@execute
+                throw AutomationException("automation_busy", "previous automation command is still running")
             }
             commandSince.set(System.currentTimeMillis())
             try {
-                val result = handler(op, args)
-                writeResult(writer, id, result)
-            } catch (error: Throwable) {
-                writeError(
-                    writer,
-                    id,
-                    (error as? AutomationException)?.code ?: "automation_error",
-                    error.message ?: error.javaClass.simpleName,
-                )
+                handler(op, args)
             } finally {
                 commandSince.set(0L)
                 commandBusy.set(false)
             }
+        }
+        try {
+            writeResult(writer, id, task.get(COMMAND_DEADLINE_MS, TimeUnit.MILLISECONDS))
+        } catch (timeout: TimeoutException) {
+            timeouts.incrementAndGet()
+            commandBusy.set(false)          // the abandoned worker may never return; let others run
+            commandSince.set(0L)
+            task.cancel(true)
+            Log.w(TAG, "command '$op' exceeded ${COMMAND_DEADLINE_MS}ms — answering command_timeout (in-flight=${inFlight.get()})")
+            writeError(
+                writer,
+                id,
+                "command_timeout",
+                "device did not answer '$op' within ${COMMAND_DEADLINE_MS}ms; the target window is probably frozen — retry, or restart that app",
+            )
+            // One stuck command is not a reason to drop a healthy connection (the AI can retry and
+            // land on a fresh thread). Only a pile-up means the device itself is wedged.
+            if (inFlight.get() >= 3) {
+                Log.w(TAG, "${inFlight.get()} commands are in flight — recycling the bridge socket")
+                runCatching { socket?.close() }
+            }
+        } catch (failure: ExecutionException) {
+            val cause = failure.cause
+            writeError(
+                writer,
+                id,
+                (cause as? AutomationException)?.code ?: "automation_error",
+                cause?.message ?: cause?.javaClass?.simpleName ?: "automation failed",
+            )
+        } catch (error: Throwable) {
+            writeError(writer, id, "automation_error", error.message ?: error.javaClass.simpleName)
+        } finally {
+            inFlight.decrementAndGet()
         }
     }
 
@@ -171,6 +208,9 @@ class AutomationBridgeClient(
         private const val TAG = "AdhAutomationBridge"
         private const val CONNECT_TIMEOUT_MS = 2_000
         private const val RECONNECT_DELAY_MS = 2_000L
+        // The host's own per-op timeouts are 20-25s, so answering first at 10s keeps the host
+        // from treating a recoverable stall as an unanswerable command.
+        private const val COMMAND_DEADLINE_MS = 10_000L
         private const val COMMAND_STUCK_MS = 12_000L
         private const val WATCHDOG_INTERVAL_MS = 1_000L
     }

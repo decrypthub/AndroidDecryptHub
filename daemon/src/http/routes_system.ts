@@ -104,6 +104,23 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       return send(200, { settings, stats: configStats() });
     } },
     { path: '/api/automation/status', handler: () => send(200, { ok: true, enabled: settings.automation.enabled, settings: settings.automation, bridge: automation.status() }) },
+    // Acceptance/diagnostic path: forward a raw op to the device bridge, so fault-injection
+    // (selftest_sleep) and future low-level probes stay reachable without growing the MCP tool
+    // surface. The device only implements its fixed op set — unknown ops answer unsupported_op.
+    { method: 'POST', path: '/api/automation/selftest', handler: async () => {
+      const op = url.searchParams.get('op') ?? '';
+      if (!op) return send(400, { error: 'op 参数必填' });
+      const args: Record<string, any> = {};
+      for (const [key, value] of url.searchParams) {
+        if (key === 'op') continue;
+        args[key] = /^-?\d+$/.test(value) ? Number(value) : value;
+      }
+      try {
+        return send(200, { ok: true, op, result: await automation.cmd(op, args, 15_000) });
+      } catch (error) {
+        return send(200, { ok: false, op, code: (error as any)?.code ?? 'automation_error', error: (error as Error).message });
+      }
+    } },
     { path: '/api/settings/export', handler: () => send(200, settings) },
     { method: 'POST', path: '/api/settings/import', handler: async () => {
       let obj: any;

@@ -1536,6 +1536,8 @@ Host ADH Daemon / MCP  →  自动化 TCP 8763（loopback + adb reverse）  → 
 
 8. 动作失败必须**自带现场**：`phone_act` 的选择器解析失败、ref 过期、手势被窗口拒绝等错误都要附上当前屏幕的紧凑文本视图（`--- current screen ---`）与前台包；若现场本身读不到（例如前台是不在 allowlist 的系统弹窗），则附上"读不到的原因"，不得掩盖原始错误。等待类失败另有 `saw` 摘要（见规则 5）。
 
+9. 设备侧命令必须**有硬超时并必定回答主机**：无障碍节点访问在目标窗口被冻结/无响应时会无限阻塞，因此桥接层对每个命令设置硬截止（10s，早于主机各 op 的 20–25s），超时返回 `command_timeout`（附"重试或重启该应用"的提示）并释放命令闸门；只有多个命令同时堆积（≥3）才回收连接。**任何单次卡死都不得让整条自动化通道失效** —— 这是验收项，不是尽力而为。
+
 ### 31.4 开关与安全
 
 - Host `settings.automation.enabled` 默认 `false`；关闭时 MCP `tools/list` 不返回 `phone_*`。
@@ -1546,7 +1548,9 @@ Host ADH Daemon / MCP  →  自动化 TCP 8763（loopback + adb reverse）  → 
 
 ### 31.5 验收
 
-`tools/verify_v36_automation.sh`：MCP 工具可见性、控件树、`phone_find`、selector/ref 点击、`phone_wait`、agent 信号等待（游标 + 明文解码 + fail-loud 超时）、视觉截图兜底、归一化坐标点击、滑动、系统通知栏读取、`set_text` 真输入并读回（后两项仅在设备装了对应启动器/搜索组件时执行，否则 SKIP）、`phone_skill` 存/列/跑/删与非法步骤拒绝、`phone_observe mode=text` 紧凑视图及其 ref 可直接驱动动作、`phone_app restart` 前台验证、agent 在 Host 重启后自行重连（`tools/verify_v37_agent_reconnect.sh`，同 pid 新会话 + 命令可达）、`phone_task` 步骤链式引用（`{{id.path}}` 命中与未知名 fail-loud）、`phone_wait` 手势滚动（启动器翻页实测生效）；桥接未启用（或没有在线 agent 会话）时对应段落 SKIP。注意 `verify_v31_xposed.sh` 为让框架重新注入会 `force-stop com.adh.manager`，而 force-stop 会连带给 Manager 的无障碍服务摘牌 —— 该脚本必须记录并在收尾时还原它，否则回归本身会关掉手机自动化。真机证据见 `docs/PROGRESS.md`。
+> 验收/诊断专用入口：`POST /api/automation/selftest?op=<op>&<args>` 把原始 op 转发给设备桥（例如 `selftest_sleep`、`status`），用于故障注入与低层诊断，不进入产品 MCP 工具面；设备只实现自己固定的 op 集合，未知 op 报 `unsupported_op`。
+
+`tools/verify_v36_automation.sh`：MCP 工具可见性、控件树、`phone_find`、selector/ref 点击、`phone_wait`、agent 信号等待（游标 + 明文解码 + fail-loud 超时）、视觉截图兜底、归一化坐标点击、滑动、系统通知栏读取、`set_text` 真输入并读回（后两项仅在设备装了对应启动器/搜索组件时执行，否则 SKIP）、`phone_skill` 存/列/跑/删与非法步骤拒绝、`phone_observe mode=text` 紧凑视图及其 ref 可直接驱动动作、`phone_app restart` 前台验证、agent 在 Host 重启后自行重连（`tools/verify_v37_agent_reconnect.sh`，同 pid 新会话 + 命令可达）、`phone_task` 步骤链式引用（`{{id.path}}` 命中与未知名 fail-loud）、`phone_wait` 手势滚动（启动器翻页实测生效）、设备侧命令硬超时（`tools/verify_v38_automation_watchdog.sh`，用设备自带的 `selftest_sleep` 注入卡死，断言 `command_timeout` 且后续命令仍被服务）；桥接未启用（或没有在线 agent 会话）时对应段落 SKIP。注意 `verify_v31_xposed.sh` 为让框架重新注入会 `force-stop com.adh.manager`，而 force-stop 会连带给 Manager 的无障碍服务摘牌 —— 该脚本必须记录并在收尾时还原它，否则回归本身会关掉手机自动化。真机证据见 `docs/PROGRESS.md`。
 
 ---
 
