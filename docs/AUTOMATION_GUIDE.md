@@ -73,7 +73,7 @@ phone_observe {mode:"text"}         # 省上下文的紧凑屏幕视图（含 sn
 Android 15 不再把通知正文放进无障碍事件，所以这一项走独立的 `NotificationListenerService`：
 
 1. 手机 **ADH Manager → 首页 → 通知读取** 卡片点右侧齿轮 → 在系统"通知使用权"里打开 **ADH Manager**（卡片会显示当前是否已授权）。
-2. Host 侧打开开关（默认关，属于独立隐私开关）：
+2. Host 侧打开开关（默认关，属于独立隐私开关）——Web 控制台 **设置 → 手机自动化 → 「允许 AI 读取通知」**，或等价地：
 
    ```bash
    curl -s -X POST http://127.0.0.1:8088/api/config -H 'content-type: application/json' \

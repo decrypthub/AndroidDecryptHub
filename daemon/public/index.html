@@ -630,6 +630,10 @@
             <div class="lab"><b>允许截图兜底</b><span>控件树失败时返回压缩截图；关闭后只返回错误，不读取屏幕画面</span></div>
             <label class="set-switch"><input type="checkbox" id="setAutomationScreenshot"><span class="slider"></span></label>
           </div>
+          <div class="set-toggle-row">
+            <div class="lab"><b>允许 AI 读取通知</b><span>独立隐私开关。还需在手机「ADH Manager → 通知读取」里授予通知使用权；关闭时 phone_notifications 与"等通知"都会被明确拒绝</span></div>
+            <label class="set-switch"><input type="checkbox" id="setAutomationNotifications"><span class="slider"></span></label>
+          </div>
           <div class="set-row" style="align-items:flex-start">
             <div class="lab"><b>允许的包名</b><span>每行一个；为空时拒绝 phone_* 操作。建议只填授权目标。</span><textarea id="setAutomationPackages" spellcheck="false" placeholder="com.example.target"></textarea></div>
           </div>
@@ -1085,6 +1089,7 @@ async function loadConfig(){
     document.getElementById('setDisplayCap').value=String(s.ui.displayCap);
     document.getElementById('setAutomationEnabled').checked=s.automation.enabled;
     document.getElementById('setAutomationScreenshot').checked=s.automation.screenshot;
+    document.getElementById('setAutomationNotifications').checked=!!s.automation.notifications;
     document.getElementById('setAutomationPackages').value=(s.automation.packages||[]).join('\n');
     renderFamilies(s.capture.families);
     document.getElementById('statCaptures').textContent=`${st.captures} 条`+(st.on?' · 捕获中':'');
@@ -1242,6 +1247,7 @@ document.getElementById('setRetain').addEventListener('change', e=>postConfig({c
 document.getElementById('setDisplayCap').addEventListener('change', e=>postConfig({ui:{displayCap:Number(e.target.value)}}));
 document.getElementById('setAutomationEnabled').addEventListener('change', e=>postConfig({automation:{enabled:e.target.checked}}));
 document.getElementById('setAutomationScreenshot').addEventListener('change', e=>postConfig({automation:{screenshot:e.target.checked}}));
+document.getElementById('setAutomationNotifications').addEventListener('change', e=>postConfig({automation:{notifications:e.target.checked}}));
 document.getElementById('setAutomationPackages').addEventListener('change', e=>postConfig({automation:{packages:String(e.target.value||'').split(/[\n,;\s]+/).filter(Boolean)}}));
 document.getElementById('rawFile').addEventListener('change', ev=>{ const f=ev.target.files&&ev.target.files[0]; if(!f) return;
   const rd=new FileReader(); rd.onload=()=>{ document.getElementById('rawCfgText').value=rd.result; document.getElementById('rawHint').textContent='已载入文件，检查后点保存并应用'; }; rd.readAsText(f); ev.target.value=''; });
