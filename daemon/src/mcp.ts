@@ -81,9 +81,9 @@ MCP_TOOLS.push(
   { name: 'automation_status', description: 'Read-only phone automation status: user toggle, bridge connection, connected device capabilities and package allowlist. This tool never enables automation.', inputSchema: { type: 'object', properties: {} }, handler: async () => ({ enabled: settings.automation.enabled, packages: settings.automation.packages, bridge: automation.status() }) },
   { name: 'phone_observe', description: 'Observe the active phone screen. Prefer the AccessibilityService node tree; when it is empty or non-semantic, fall back to a screenshot that the AI can inspect. Returns snapshotId plus nodes or an image.', inputSchema: { type: 'object', properties: { mode: { type: 'string', enum: ['auto', 'tree', 'visual'] }, includeScreenshot: { type: 'boolean' }, maxNodes: N, maxDepth: N, interactiveOnly: { type: 'boolean' }, package: S } }, raw: true, handler: async (a) => observePhone(a) },
   { name: 'phone_find', description: 'Find compact, actionable nodes without transferring the whole tree. Supports text/resourceId/contentDescription and interaction flags; returns refs valid for snapshotId.', inputSchema: { type: 'object', properties: { ...SEL, limit: N, maxNodes: N, interactiveOnly: { type: 'boolean' }, package: S } }, handler: async (a) => findPhone(a) },
-  { name: 'phone_wait', description: 'Wait for a selector to appear or disappear, optionally scrolling a virtualized list until it appears.', inputSchema: { type: 'object', properties: { ...SEL, gone: { type: 'boolean' }, timeoutMs: N, intervalMs: N, scroll: { type: 'boolean' }, direction: { type: 'string', enum: ['forward', 'backward'] }, maxScrolls: N, maxNodes: N, interactiveOnly: { type: 'boolean' }, package: S } }, handler: async (a) => waitPhone(a) },
-  { name: 'phone_act', description: 'Act on the active phone screen. Prefer a selector or snapshotId+ref from phone_observe; use normalized coordinates only as the visual fallback. Supports tap, long_press, swipe, scroll, set_text and global back/home/recents.', inputSchema: { type: 'object', properties: { ...SEL, snapshotId: S, action: { type: 'string', enum: ['tap', 'long_press', 'swipe', 'scroll', 'set_text', 'global'] }, ref: S, x: N, y: N, x2: N, y2: N, coordinateSpace: { type: 'string', enum: ['normalized', 'pixel'] }, text: S, key: { type: 'string', enum: ['back', 'home', 'recents'] }, direction: { type: 'string', enum: ['forward', 'backward'] }, durationMs: N, observeAfter: { type: 'boolean' }, package: S }, required: ['action'] }, raw: true, handler: async (a) => actPhone(a) },
-  { name: 'phone_app', description: 'Open, stop or restart an allowlisted app by package name. Open uses the launch intent; stop/restart delegate to the authenticated root Device Daemon.', inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['open', 'stop', 'restart'] }, package: S }, required: ['action', 'package'] }, handler: async (a) => appPhone(a) },
+  { name: 'phone_wait', description: 'Wait for screen state or a selector to appear/disappear, optionally scrolling a virtualized list until it appears.', inputSchema: { type: 'object', properties: { ...SEL, activePackage: S, activityContains: S, gone: { type: 'boolean' }, timeoutMs: N, intervalMs: N, scroll: { type: 'boolean' }, direction: { type: 'string', enum: ['forward', 'backward'] }, maxScrolls: N, maxNodes: N, interactiveOnly: { type: 'boolean' }, package: S } }, handler: async (a) => waitPhone(a) },
+  { name: 'phone_act', description: 'Act on the active phone screen. Prefer a selector or snapshotId+ref from phone_observe; use normalized coordinates only as the visual fallback. Supports tap, long_press, swipe, scroll, set_text and global back/home/recents/notifications/quick_settings/power/lock/screenshot.', inputSchema: { type: 'object', properties: { ...SEL, snapshotId: S, action: { type: 'string', enum: ['tap', 'long_press', 'swipe', 'scroll', 'set_text', 'global'] }, ref: S, x: N, y: N, x2: N, y2: N, coordinateSpace: { type: 'string', enum: ['normalized', 'pixel'] }, text: S, key: { type: 'string', enum: ['back', 'home', 'recents', 'notifications', 'quick_settings', 'power', 'lock', 'screenshot'] }, direction: { type: 'string', enum: ['forward', 'backward'] }, durationMs: N, observeAfter: { type: 'boolean' }, package: S }, required: ['action'] }, raw: true, handler: async (a) => actPhone(a) },
+  { name: 'phone_app', description: 'Open, stop or restart an allowlisted app by package name. Open uses the root Device Daemon when protocol v6+ is available, with a compatibility fallback for older daemons; stop/restart delegate to the same authenticated daemon.', inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['open', 'stop', 'restart'] }, package: S }, required: ['action', 'package'] }, handler: async (a) => appPhone(a) },
 );
 
 const SELECTOR_KEYS = ['text', 'textContains', 'resourceId', 'contentDescription', 'contentDescriptionContains', 'clickable', 'editable', 'scrollable'];
@@ -147,7 +147,8 @@ async function findPhone(args: any) {
 async function waitPhone(args: any) {
   assertAutomationReady();
   const selector = selectorFrom(args);
-  if (!Object.keys(selector).length) throw new Error('phone_wait requires at least one selector field');
+  const hasState = args.activePackage != null || args.activityContains != null;
+  if (!Object.keys(selector).length && !hasState) throw new Error('phone_wait requires a selector, activePackage or activityContains');
   const timeoutMs = Math.max(500, Math.min(60_000, Number(args.timeoutMs ?? 8_000)));
   const intervalMs = Math.max(100, Math.min(2_000, Number(args.intervalMs ?? 350)));
   const maxScrolls = Math.max(0, Math.min(50, Number(args.maxScrolls ?? 10)));
@@ -157,14 +158,18 @@ async function waitPhone(args: any) {
   for (;;) {
     const result = await observeTree(args);
     last = result;
+    const stateMatches =
+      (args.activePackage == null || result.activePackage === args.activePackage) &&
+      (args.activityContains == null || String(result.activity ?? '').includes(String(args.activityContains)));
     const matches = findNodes(result.nodes ?? [], selector, 1);
-    const found = matches.length > 0;
+    const found = stateMatches && (Object.keys(selector).length === 0 || matches.length > 0);
     if (args.gone ? !found : found) {
       return {
         matched: true,
         gone: !!args.gone,
         elapsedMs: Date.now() - startedAt,
         activePackage: result.activePackage,
+        activity: result.activity,
         snapshotId: result.snapshotId,
         scrolls,
         node: found ? compactNode(matches[0]) : null,
@@ -176,6 +181,7 @@ async function waitPhone(args: any) {
         timedOut: true,
         elapsedMs: Date.now() - startedAt,
         activePackage: last?.activePackage,
+        activity: last?.activity,
         snapshotId: last?.snapshotId,
         truncated: last?.truncated,
         scrolls,

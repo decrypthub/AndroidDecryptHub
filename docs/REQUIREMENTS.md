@@ -1450,7 +1450,7 @@ Agent → TCP 8761 → ADH Daemon（host，经 adb reverse）
 - scope 读取失败必须 fail-loud/no-inject；KernelSU 由 `post-fs-data.sh` 应用 `allow zygote adb_data_file` 的最小规则，Magisk 使用模块根 `sepolicy.rule`。
 - Companion 应设置 `DLCLOSE_MODULE_LIBRARY`，post-specialize 后卸载自身映射；agent `.so` 保持加载服务会话。
 - 模块作者固定为 `decrypthub.com`；root 管理器中的模块描述只显示“等待重启 / 运行中 / 未加载”这类简洁工作状态，不展示内部路径、架构说明或开发备注。
-- ADH Manager 的设备控制能力只限注入作用域、模块状态，以及经 Device Daemon 终止/重启目标应用进程；界面默认中文，已有系统语言资源时跟随系统语言，并跟随系统深浅色主题。首页保留运行状态、Web UI 访问地址、作用域入口和版本信息。Manager 可直接探测 Host ADH Daemon `/health` 来显示并打开局域网优先的 Web UI 地址，但不得把该请求转交 Device Daemon，也不得在设备侧承载 HTTP 服务或分析逻辑。目标进程启停必须走受认证 AIDL（`controlPackage`），Manager 不得自己调用 `am`/`su`。不得对 Manager、Device Daemon、`system_server`、System UI 或 `android` 执行终止/重启。
+- ADH Manager 的设备控制能力只限注入作用域、模块状态，以及经 Device Daemon 终止/重启目标应用进程；界面默认中文，已有系统语言资源时跟随系统语言，并跟随系统深浅色主题。首页保留运行状态、Web UI 访问地址、作用域入口和版本信息。Manager 可直接探测 Host ADH Daemon `/health` 来显示并打开局域网优先的 Web UI 地址，但不得把该请求转交 Device Daemon，也不得在设备侧承载 HTTP 服务或分析逻辑。目标进程启停/打开必须走受认证 AIDL（`controlPackage`），协议 v6 增加 `open`；Manager 不得自己调用 `am`/`su`。不得对 Manager、Device Daemon、`system_server`、System UI 或 `android` 执行终止/重启。
 - “运行中”必须来自本次启动中 Zygisk 实际加载模块的标记，不能仅以模块目录存在作为成功依据；标记由 root companion 写入，启动时先清除旧状态。
 - Manager 不得直接调用 `su` 或访问 `/data/adb`。模块以 root `app_process` 启动 Device Daemon，Manager 仅通过 AIDL Binder 读取状态和作用域；daemon 必须校验调用 UID、`com.adh.manager` 包归属和构建时固定的 APK 签名证书。
 - Binder 交接入口只接受 UID 0 发布，并核对 AIDL descriptor；Manager 必须区分 Device Daemon 未连接、模块未安装、模块已安装但未加载、运行中四种状态。服务未连接时不得用空配置冒充真实作用域，也不得显示“模块未安装”。
@@ -1518,7 +1518,7 @@ Host ADH Daemon / MCP  →  自动化 TCP 8763（loopback + adb reverse）  → 
 | `phone_find` | 按 text/resourceId/contentDescription/交互标志返回紧凑节点列表，不传整棵树 |
 | `phone_wait` | 等待选择器出现/消失；可对虚拟列表执行 scroll-until-found |
 | `phone_act` | `tap` / `long_press` / `swipe` / `scroll` / `set_text` / `global back/home/recents`；优先 selector 或 `snapshotId+ref`，兜底归一化坐标 |
-| `phone_app` | 通过包名 `open` / `stop` / `restart` 授权应用；stop/restart 走 root Device Daemon |
+| `phone_app` | 通过包名 `open` / `stop` / `restart` 授权应用；新 daemon 走 root Device Daemon，旧 daemon 保留 Accessibility fallback |
 
 ### 31.3 兜底规则
 

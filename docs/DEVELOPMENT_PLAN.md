@@ -598,7 +598,7 @@ v1 只对 `docs/FEATURE_STATUS.md §2` 的已验收能力做加固：捕获背�
 
 > 与 §6.9 的关系：这是独立的可选执行面，不改变 agent hook/采集主线，也不把分析放进设备服务。规格见 `REQUIREMENTS.md §31`。
 
-- 已完成：Host `automation.ts`（loopback NDJSON 桥，TCP 8763）、MCP `automation_status/phone_observe/phone_find/phone_wait/phone_act/phone_app`、Manager 用户启用型 AccessibilityService、控件树优先/截图兜底、selector/ref 与归一化坐标动作、语义 scroll、Host/设备双层包名 allowlist。
+- 已完成：Host `automation.ts`（loopback NDJSON 桥，TCP 8763）、MCP `automation_status/phone_observe/phone_find/phone_wait/phone_act/phone_app`、Manager 用户启用型 AccessibilityService、控件树优先/截图兜底、selector/ref 与归一化坐标动作、语义 scroll、activePackage wait、扩展 global actions、Host/设备双层包名 allowlist。Device Daemon 协议 v6 已加入 root `open`，并保留旧 daemon 的 Accessibility fallback。
 - 默认关闭：Host `settings.automation.enabled=false`；关闭时 `phone_*` 从 `tools/list` 隐藏；设备侧服务必须由用户手动启用。
 - 验证：`tools/verify_v36_automation.sh` 真机 PASS（树 16–17 节点、`phone_find`、selector/ref 点击、`phone_wait`、JPEG 兜底、归一化点击、滑动）；`phone_app restart` 与 ColorOS 打开确认后的 `phone_wait` 处理也已人工验证；桥接不可用时 SKIP，不影响无设备 CI。
 - 后续增量：root Device Daemon 原生 `open`（绕过部分 OEM 的跨应用打开确认）、agent 事件订阅、更多无 UI 的业务状态同步；仍禁止在 agent 内跑流程循环或分析。

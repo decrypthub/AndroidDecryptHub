@@ -22,11 +22,18 @@ internal object AppProcessControl {
             return PackageControl.RESULT_DENIED
         }
         return when (action) {
+            PackageControl.ACTION_OPEN ->
+                if (open(context, pkg)) PackageControl.RESULT_OK else PackageControl.RESULT_NO_LAUNCHER
             PackageControl.ACTION_STOP ->
                 if (stop(context, pkg)) PackageControl.RESULT_OK else PackageControl.RESULT_FAILED
             PackageControl.ACTION_RESTART -> restart(context, pkg)
             else -> PackageControl.RESULT_DENIED
         }
+    }
+
+    private fun open(context: Context, pkg: String): Boolean {
+        val launch = launchIntent(context, pkg) ?: return false
+        return start(context, launch, pkg)
     }
 
     private fun restart(context: Context, pkg: String): String {

@@ -62,9 +62,10 @@ class ScopeJsonTest {
         assertFalse(apps[0].system)
         assertEquals("com.android.settings", apps[1].packageName)
         assertTrue(apps[1].system)
-        assertEquals(AdhProtocol.VERSION, 5)
+        assertEquals(AdhProtocol.VERSION, 6)
         assertEquals(AdhProtocol.MIN_PROCESS_VERSION, 4)
         assertEquals(AdhProtocol.MIN_XPOSED_VERSION, 5)
+        assertEquals(AdhProtocol.MIN_APP_OPEN_VERSION, 6)
     }
 
     @Test
@@ -78,6 +79,7 @@ class ScopeJsonTest {
         assertFalse(PackageControl.mayControl(AdhPaths.DAEMON_PKG))
         assertFalse(PackageControl.mayControl("android"))
         assertFalse(PackageControl.mayControl("com.android.systemui"))
+        assertTrue(PackageControl.isAction(PackageControl.ACTION_OPEN))
         assertTrue(PackageControl.isAction(PackageControl.ACTION_STOP))
         assertTrue(PackageControl.isAction(PackageControl.ACTION_RESTART))
         assertFalse(PackageControl.isAction("kill"))

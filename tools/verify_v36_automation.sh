@@ -103,6 +103,10 @@ try {
   chk('tree contains actionable nodes', Array.isArray(tree.nodes) && tree.nodes.length > 0, `nodes=${tree.nodes?.length ?? 0}`);
   chk('observe reports truncation state', tree.truncated === false, `truncated=${tree.truncated}`);
 
+  const activeWait = await callTool('phone_wait', { activePackage: 'com.adh.sandbox', timeoutMs: 5000, intervalMs: 150, maxNodes: 120 });
+  const activeWaitData = JSON.parse(activeWait.content?.find((item) => item.type === 'text')?.text);
+  chk('phone_wait matches the active package', activeWaitData.matched === true, `active=${activeWaitData.activePackage}`);
+
   const found = await callTool('phone_find', { contentDescription: '加解密', limit: 5, maxNodes: 120 });
   const foundData = JSON.parse(found.content?.find((item) => item.type === 'text')?.text);
   chk('phone_find returns a compact selector match', foundData.count > 0, `count=${foundData.count}`);

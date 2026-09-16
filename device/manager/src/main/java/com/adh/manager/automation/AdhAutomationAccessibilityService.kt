@@ -17,6 +17,7 @@ import android.view.Display
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import com.adh.core.AdhProtocol
 import com.adh.core.PackageControl
 import com.adh.manager.ipc.DaemonBinderProvider
 import org.json.JSONArray
@@ -49,6 +50,8 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
 
     @Volatile private var lastActivePackage: String = ""
 
+    @Volatile private var lastActivity: String = ""
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         serviceInfo = serviceInfo?.apply {
@@ -66,6 +69,9 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event?.packageName?.toString()?.takeIf { it.isNotBlank() }?.let { lastActivePackage = it }
+        if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            event.className?.toString()?.takeIf { it.isNotBlank() }?.let { lastActivity = it }
+        }
     }
 
     override fun onInterrupt() = Unit
@@ -90,6 +96,7 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
 
     private fun status(): JSONObject = JSONObject()
         .put("activePackage", activePackage())
+        .put("activity", lastActivity)
         .put("sdk", Build.VERSION.SDK_INT)
         .put("screenshot", Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
         .put("snapshots", snapshots.size)
@@ -117,6 +124,7 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
                 .put("snapshotId", snapshotId)
                 .put("mode", "tree")
                 .put("activePackage", active)
+                .put("activity", lastActivity)
                 .put("screen", screen)
                 .put("nodes", tree.json)
                 .put("truncated", tree.truncated)
@@ -134,6 +142,7 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
             .put("mode", "visual")
             .put("reason", "empty_or_non_semantic_tree")
             .put("activePackage", active)
+            .put("activity", lastActivity)
             .put("screen", screen)
             .put("nodes", JSONArray())
             .put("truncated", false)
@@ -244,11 +253,28 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
     }
 
     private fun openApp(packageName: String): JSONObject {
+        if (!PackageControl.mayControl(packageName)) {
+            throw AutomationException("app_control_denied", "package $packageName cannot be controlled")
+        }
+        val daemon = DaemonBinderProvider.awaitClient(1_500)
+        if (daemon != null && daemon.protocolVersion >= AdhProtocol.MIN_APP_OPEN_VERSION) {
+            val result = daemon.controlPackage(packageName, PackageControl.ACTION_OPEN)
+            if (result == PackageControl.RESULT_OK) {
+                return JSONObject()
+                    .put("action", "open")
+                    .put("package", packageName)
+                    .put("result", result)
+                    .put("via", "device-daemon")
+            }
+            if (result != PackageControl.RESULT_NO_LAUNCHER && result != PackageControl.RESULT_DENIED) {
+                throw AutomationException("app_control_failed", "device daemon returned $result")
+            }
+        }
         val intent = packageManager.getLaunchIntentForPackage(packageName)
             ?: throw AutomationException("no_launcher", "package $packageName has no launcher activity")
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
         startActivity(intent)
-        return JSONObject().put("action", "open").put("package", packageName).put("result", "ok")
+        return JSONObject().put("action", "open").put("package", packageName).put("result", "ok").put("via", "accessibility-fallback")
     }
 
     private fun controlApp(packageName: String, restart: Boolean): JSONObject {
@@ -306,7 +332,20 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
             "back" -> GLOBAL_ACTION_BACK
             "home" -> GLOBAL_ACTION_HOME
             "recents" -> GLOBAL_ACTION_RECENTS
-            else -> throw AutomationException("bad_key", "global key must be back, home or recents")
+            "notifications" -> GLOBAL_ACTION_NOTIFICATIONS
+            "quick_settings" -> GLOBAL_ACTION_QUICK_SETTINGS
+            "power" -> GLOBAL_ACTION_POWER_DIALOG
+            "lock" -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                GLOBAL_ACTION_LOCK_SCREEN
+            } else {
+                throw AutomationException("global_unsupported", "lock screen requires Android 9 or newer")
+            }
+            "screenshot" -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                GLOBAL_ACTION_TAKE_SCREENSHOT
+            } else {
+                throw AutomationException("global_unsupported", "screenshot requires Android 11 or newer")
+            }
+            else -> throw AutomationException("bad_key", "global key must be back, home, recents, notifications, quick_settings, power, lock or screenshot")
         }
         if (!performGlobalAction(action)) throw AutomationException("global_rejected", "system rejected global action: $key")
         return JSONObject().put("action", "global").put("key", key)
@@ -331,26 +370,31 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
                 truncated = true
                 break
             }
-            val (node, depth) = queue.removeFirst()
-            if (node.isVisibleToUser) {
-                val useful = isUseful(node, interactiveOnly)
-                val bounds = rectOf(node)
-                if (useful && bounds.width() > 0 && bounds.height() > 0) {
-                    val ref = "n${refSeq++}"
-                    nodes[ref] = node
-                    json.put(nodeJson(ref, node, bounds, depth))
+            try {
+                val (node, depth) = queue.removeFirst()
+                if (node.isVisibleToUser) {
+                    val useful = isUseful(node, interactiveOnly)
+                    val bounds = rectOf(node)
+                    if (useful && bounds.width() > 0 && bounds.height() > 0) {
+                        val ref = "n${refSeq++}"
+                        nodes[ref] = node
+                        json.put(nodeJson(ref, node, bounds, depth))
+                    }
                 }
-            }
-            if (depth >= maxDepth) {
-                if (node.childCount > 0) truncated = true
-                continue
-            }
-            for (index in 0 until node.childCount) {
-                if (queue.size >= QUEUE_LIMIT) {
-                    truncated = true
-                    break
+                if (depth >= maxDepth) {
+                    if (node.childCount > 0) truncated = true
+                    continue
                 }
-                node.getChild(index)?.let { queue.add(it to depth + 1) }
+                for (index in 0 until node.childCount) {
+                    if (queue.size >= QUEUE_LIMIT) {
+                        truncated = true
+                        break
+                    }
+                    node.getChild(index)?.let { queue.add(it to depth + 1) }
+                }
+            } catch (error: Throwable) {
+                truncated = true
+                Log.w(TAG, "tree traversal skipped stale node", error)
             }
         }
         return TreeResult(json, nodes, truncated || nodes.size >= maxNodes)

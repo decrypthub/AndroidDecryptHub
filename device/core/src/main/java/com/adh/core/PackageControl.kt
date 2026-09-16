@@ -5,6 +5,7 @@ package com.adh.core
  * Manager must not call `am`/`su`; the daemon still refuses critical packages.
  */
 object PackageControl {
+    const val ACTION_OPEN = "open"
     const val ACTION_STOP = "stop"
     const val ACTION_RESTART = "restart"
 
@@ -23,7 +24,7 @@ object PackageControl {
     )
 
     fun isAction(action: String?): Boolean =
-        action == ACTION_STOP || action == ACTION_RESTART
+        action == ACTION_OPEN || action == ACTION_STOP || action == ACTION_RESTART
 
     fun mayControl(packageName: String?): Boolean {
         val pkg = packageName?.trim().orEmpty()
