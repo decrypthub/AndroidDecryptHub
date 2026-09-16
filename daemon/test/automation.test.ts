@@ -7,6 +7,7 @@ import { agentWaitSightings, findAgentWaitMatch, hasAgentWaitFilters } from '../
 import { implicitSelectorFor, selectorFrom } from '../src/phone_selectors.ts';
 import { PhoneSkillStore, validateSkillName, validateSkillSteps } from '../src/phone_skills.ts';
 import { renderScreenText } from '../src/phone_text.ts';
+import { blockedPackageFromError, openOutcomeHint } from '../src/phone_foreground.ts';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -292,4 +293,19 @@ test('screen text rendering survives an empty or malformed observation', () => {
   assert.match(renderScreenText({}), /screen: \?/);
   assert.match(renderScreenText({}), /\(no nodes\)/);
   assert.match(renderScreenText({ nodes: [], screenshot: { mimeType: 'image/jpeg', bytes: 10 } }), /screenshot: image\/jpeg 10B/);
+});
+
+test('open verification names the package that swallowed the launch', () => {
+  const message = 'error: active package com.oplus.securitypermission is not in the automation allowlist';
+  assert.equal(blockedPackageFromError(message), 'com.oplus.securitypermission');
+  assert.equal(blockedPackageFromError('error: something else'), null);
+  assert.equal(blockedPackageFromError(undefined), null);
+
+  assert.equal(openOutcomeHint('com.adh.sandbox', 'com.adh.sandbox', false), '');
+  const blocked = openOutcomeHint('org.matrix.vector.manager', 'com.oplus.securitypermission', true);
+  assert.match(blocked, /open_blocked_by_system_dialog/);
+  assert.match(blocked, /com\.oplus\.securitypermission/);
+  assert.match(blocked, /v0\.3\.7/);
+  assert.match(openOutcomeHint('com.x', 'com.y', false), /open_unverified: foreground is 'com\.y'/);
+  assert.match(openOutcomeHint('com.x', null, false), /open_unverified: the foreground package could not be read/);
 });

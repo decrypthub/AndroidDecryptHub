@@ -121,6 +121,11 @@ try {
   chk('phone_task is exposed when automation is enabled', names.has('phone_task'));
   chk('phone_act is exposed when automation is enabled', names.has('phone_act'));
 
+  // Restarting the sandbox re-creates its process (and its agent session), so it must happen
+  // BEFORE the tree snapshot every later ref-based check depends on.
+  const reopened = parseTree(await callTool('phone_app', { action: 'restart', package: 'com.adh.sandbox' }));
+  chk('phone_app restart verifies the app really reached the foreground', reopened.verified === true && reopened.foreground === 'com.adh.sandbox', `verified=${reopened.verified} foreground=${reopened.foreground} warning=${reopened.warning ?? '-'}`);
+
   const observe = await callTool('phone_observe', { mode: 'tree', includeScreenshot: false, maxNodes: 80 });
   const tree = parseTree(observe);
   chk('observe returns the AccessibilityService tree', tree.mode === 'tree', `mode=${tree.mode}`);
@@ -230,7 +235,11 @@ try {
         intervalMs: 200,
       }));
       chk('agent wait times out loudly when the marker never arrives', signalMiss.matched === false && signalMiss.timedOut === true);
-      chk('agent wait timeout reports the signals it did see', (signalMiss.saw?.totals?.captures ?? 0) >= 1 && signalMiss.saw.captures.some((item) => /AES/.test(item.algo ?? '')) && typeof signalMiss.cursor?.captureId === 'number', `saw=${JSON.stringify(signalMiss.saw?.totals)} sample=${signalMiss.saw?.captures?.[0]?.algo}`);
+      // The sandbox keeps a live crypto driver running, so a 4s window can hold more captures
+      // than the (bounded) sample list. Assert the diagnosis itself: totals + shaped samples.
+      const sawShaped = Array.isArray(signalMiss.saw?.captures) && signalMiss.saw.captures.length > 0
+        && signalMiss.saw.captures.every((item) => typeof item.id === 'number' && typeof item.category === 'string' && typeof item.preview === 'string');
+      chk('agent wait timeout reports the signals it did see', (signalMiss.saw?.totals?.captures ?? 0) >= 1 && sawShaped && typeof signalMiss.cursor?.captureId === 'number', `saw=${JSON.stringify(signalMiss.saw?.totals)} sample=${signalMiss.saw?.captures?.[0]?.algo ?? '-'} events=${signalMiss.saw?.totals?.events ?? 0}`);
     }
   }
 

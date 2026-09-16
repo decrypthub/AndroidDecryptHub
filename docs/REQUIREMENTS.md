@@ -1518,7 +1518,7 @@ Host ADH Daemon / MCP  →  自动化 TCP 8763（loopback + adb reverse）  → 
 | `phone_find` | 按 text/resourceId/contentDescription/交互标志返回紧凑节点列表，不传整棵树 |
 | `phone_wait` | 等待三类条件竞速命中：控件/状态、agent 事件、进程内捕获；可对虚拟列表执行 scroll-until-found；`afterCaptureId`/`afterEventSeq` 游标或 `lookbackMs` 消除两次调用间的信号丢失 |
 | `phone_act` | `tap` / `long_press` / `swipe` / `scroll` / `set_text` / `global back/home/recents`；优先 selector 或 `snapshotId+ref`，兜底归一化坐标；`set_text` 的 `text` 是输入内容而非目标过滤条件 |
-| `phone_app` | 通过包名 `open` / `stop` / `restart` 授权应用；新 daemon 走 root Device Daemon，旧 daemon 保留 Accessibility fallback |
+| `phone_app` | 通过包名 `open` / `stop` / `restart` 授权应用；新 daemon 走 root Device Daemon，旧 daemon 保留 Accessibility fallback。`open`/`restart` 必须**验证前台**：未到达时返回 `verified:false` + 实际前台包 + 处理提示（OEM 确认框吞掉启动时必须点名该包） |
 | `phone_device` | `status` / `wake` / `unlock` / `lock`；安全锁屏凭据不绕过 |
 | `phone_skill` | 保存 / 列出 / 运行 / 删除命名手机配方（skills）：步骤受校验（仅 observe/find/wait/act/app/device，≤30 步）、不可嵌套、无 shell；运行复用 `phone_task` 的执行器、allowlist 与重试语义 |
 
@@ -1541,7 +1541,7 @@ Host ADH Daemon / MCP  →  自动化 TCP 8763（loopback + adb reverse）  → 
 
 ### 31.5 验收
 
-`tools/verify_v36_automation.sh`：MCP 工具可见性、控件树、`phone_find`、selector/ref 点击、`phone_wait`、agent 信号等待（游标 + 明文解码 + fail-loud 超时）、视觉截图兜底、归一化坐标点击、滑动、系统通知栏读取、`set_text` 真输入并读回（后两项仅在设备装了对应启动器/搜索组件时执行，否则 SKIP）、`phone_skill` 存/列/跑/删与非法步骤拒绝、`phone_observe mode=text` 紧凑视图及其 ref 可直接驱动动作；桥接未启用（或没有在线 agent 会话）时对应段落 SKIP。注意 `verify_v31_xposed.sh` 为让框架重新注入会 `force-stop com.adh.manager`，而 force-stop 会连带给 Manager 的无障碍服务摘牌 —— 该脚本必须记录并在收尾时还原它，否则回归本身会关掉手机自动化。真机证据见 `docs/PROGRESS.md`。
+`tools/verify_v36_automation.sh`：MCP 工具可见性、控件树、`phone_find`、selector/ref 点击、`phone_wait`、agent 信号等待（游标 + 明文解码 + fail-loud 超时）、视觉截图兜底、归一化坐标点击、滑动、系统通知栏读取、`set_text` 真输入并读回（后两项仅在设备装了对应启动器/搜索组件时执行，否则 SKIP）、`phone_skill` 存/列/跑/删与非法步骤拒绝、`phone_observe mode=text` 紧凑视图及其 ref 可直接驱动动作、`phone_app restart` 前台验证；桥接未启用（或没有在线 agent 会话）时对应段落 SKIP。注意 `verify_v31_xposed.sh` 为让框架重新注入会 `force-stop com.adh.manager`，而 force-stop 会连带给 Manager 的无障碍服务摘牌 —— 该脚本必须记录并在收尾时还原它，否则回归本身会关掉手机自动化。真机证据见 `docs/PROGRESS.md`。
 
 ---
 
