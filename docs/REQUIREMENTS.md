@@ -1546,6 +1546,7 @@ Host ADH Daemon / MCP  →  自动化 TCP 8763（loopback + adb reverse）  → 
 - Host `settings.automation.enabled` 默认 `false`；关闭时 MCP `tools/list` 不返回 `phone_*`。
 - 自动化必须同时满足：用户在 Android 无障碍设置中启用服务、Host 开关打开、当前前台包在独立 allowlist 内。
 - 不复用注入 scope；不提供任意 shell；系统弹窗/权限页/支付页默认不自动授权。
+- **不得控制自身与关键系统包**：设备侧 `PackageControl.mayControl` 硬拒绝 `com.adh.manager`（HardExcludes：system_server/zygote/zygote64/Manager）、`com.adh.daemon`、`android`、`com.android.systemui`，返回 `app_control_denied` —— 防止"用无障碍驱动承载无障碍的 App"形成自控环路，也避免误停系统界面。
 - skills 只是主机侧保存的配方：不新增权限、不能嵌套 skills、不能携带 shell，写入 `adhd-data/skills.json`（不进版本库）；文件被篡改或损坏时丢弃条目而不是执行。
 - 截图可单独关闭；设备侧再次校验 allowlist，不能靠 MCP 参数绕过。
 
