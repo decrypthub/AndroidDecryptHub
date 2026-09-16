@@ -3,6 +3,7 @@ import net from 'node:net';
 import test from 'node:test';
 import { AutomationHub } from '../src/automation.ts';
 import { mergeSettings, settings } from '../src/state.ts';
+import { findAgentWaitMatch, hasAgentWaitFilters } from '../src/agent_events.ts';
 
 function connect(port: number): Promise<net.Socket> {
   return new Promise((resolve, reject) => {
@@ -92,4 +93,86 @@ test('automation settings merge is opt-in and bounded', () => {
   assert.equal(settings.automation.maxNodes, 2000);
   assert.equal(settings.automation.screenshotMaxDimension, 480);
   Object.assign(settings.automation, JSON.parse(before));
+});
+
+
+function waitEvent(seq: number, ts: number, type: string, data: any = {}) {
+  return { seq, ts, type, data };
+}
+
+function waitCapture(id: number, ts: number, category: string, extra: any = {}) {
+  return {
+    id, ts, category, sessionId: 's_test', source: 'native', func: 'SSL_write', algo: 'tls', op: 'write',
+    preview: 'GET /l', inl: 128, tid: 42, tsNs: 1, hex: 'ab'.repeat(400), ...extra,
+  };
+}
+
+const T0 = 1_000_000;
+
+test('agent wait filters are opt-in', () => {
+  assert.equal(hasAgentWaitFilters({ textContains: 'Login' }), false);
+  assert.equal(hasAgentWaitFilters({}), false);
+  assert.equal(hasAgentWaitFilters({ captureCategory: 'crypto' }), true);
+  assert.equal(hasAgentWaitFilters({ agentEvent: 'hook.hit' }), true);
+});
+
+test('agent wait matches a capture by category only after the wait started', () => {
+  const old = waitCapture(1, T0 - 5_000, 'crypto');
+  const fresh = waitCapture(2, T0 + 120, 'crypto', { algo: 'AES', preview: 'hello-world' });
+  const hit = findAgentWaitMatch({ captureCategory: 'crypto' }, { since: T0 }, [], [old, fresh]);
+  assert.equal(hit?.kind, 'capture');
+  assert.equal(hit?.item.id, 2);
+  assert.equal(hit?.item.preview, 'hello-world');
+  assert.equal(hit?.item.hexLen, 800);
+  assert.equal(hit?.item.hex, undefined);                          // oversized hex stays out of the payload
+  assert.equal(findAgentWaitMatch({ captureCategory: 'net' }, { since: T0 }, [], [old, fresh]), null);
+  assert.equal(findAgentWaitMatch({ captureCategory: 'crypto' }, { since: T0 + 200 }, [], [old, fresh]), null);
+});
+
+test('agent wait ANDs same-kind filters and races event against capture', () => {
+  const events = [waitEvent(7, T0 + 400, 'agent.maps', { count: 12 }), waitEvent(8, T0 + 900, 'hook.hit', { symbol: 'SSL_read' })];
+  const captures = [waitCapture(3, T0 + 500, 'net', { func: 'SSL_write', preview: 'ADH_NET_MARKER_v1' })];
+  assert.equal(findAgentWaitMatch({ captureCategory: 'net', captureContains: 'ADH_NET_MARKER_v1' }, { since: T0 }, events, captures)?.item.id, 3);
+  assert.equal(findAgentWaitMatch({ captureCategory: 'net', captureContains: 'nope' }, { since: T0 }, events, captures), null);
+  const newest = findAgentWaitMatch({ agentEventContains: 'hook.hit', captureCategory: 'net' }, { since: T0 }, events, captures);
+  assert.equal(newest?.kind, 'event');
+  assert.equal(newest?.item.type, 'hook.hit');
+});
+
+test('agent wait takes the newest exact event and compacts oversized data', () => {
+  const big = { blob: 'x'.repeat(5_000) };
+  const events = [waitEvent(1, T0 + 10, 'hook.hit', { symbol: 'first' }), waitEvent(2, T0 + 20, 'hook.hit', big)];
+  const hit = findAgentWaitMatch({ agentEvent: 'hook.hit' }, { since: T0 }, events, []);
+  assert.equal(hit?.item.seq, 2);
+  assert.equal(hit?.item.data.truncated, true);
+  assert.equal(hit?.item.data.bytes > 4_000, true);
+  assert.equal(findAgentWaitMatch({ agentEvent: 'hook.miss' }, { since: T0 }, events, []), null);
+});
+
+test('agent wait cursor mode ignores the timestamp and only accepts newer records', () => {
+  const older = waitCapture(41, T0 - 60_000, 'crypto', { preview: 'ADH手动_AES_#7_x' });
+  const newer = waitCapture(42, T0 - 59_000, 'crypto', { preview: 'ADH手动_AES_#8_x' });
+  const cursor = { afterCaptureId: 41 };
+  const hit = findAgentWaitMatch({ captureCategory: 'crypto', captureContains: 'ADH手动_AES_#' }, cursor, [], [older, newer]);
+  assert.equal(hit?.item.id, 42);
+  const same = findAgentWaitMatch({ captureCategory: 'crypto' }, { afterCaptureId: 42 }, [], [older, newer]);
+  assert.equal(same, null);
+  const events = [waitEvent(9, T0 - 60_000, 'hook.hit', {}), waitEvent(10, T0 - 59_000, 'hook.hit', {})];
+  assert.equal(findAgentWaitMatch({ agentEvent: 'hook.hit' }, { afterEventSeq: 9 }, events, [])?.item.seq, 10);
+  assert.equal(findAgentWaitMatch({ agentEvent: 'hook.hit' }, { afterEventSeq: 10 }, events, []), null);
+});
+
+test('agent wait lookback still honours the timestamp window without a cursor', () => {
+  const capture = waitCapture(50, T0 - 1_500, 'crypto');
+  assert.equal(findAgentWaitMatch({ captureCategory: 'crypto' }, { since: T0 - 5_000 }, [], [capture])?.item.id, 50);
+  assert.equal(findAgentWaitMatch({ captureCategory: 'crypto' }, { since: T0 }, [], [capture]), null);
+});
+
+test('capture filters and payloads decode UTF-8 text out of the hex bytes', () => {
+  const marker = 'ADH手动_AES_#7_订单金额=99.00元';
+  const capture = waitCapture(60, T0 + 5, 'crypto', { hex: Buffer.from(marker, 'utf8').toString('hex'), preview: 'ADH......_AES_#7_............=99.00...' });
+  const hit = findAgentWaitMatch({ captureCategory: 'crypto', captureContains: 'ADH手动_AES_#' }, { since: T0 }, [], [capture]);
+  assert.equal(hit?.item.text, marker);
+  const binary = waitCapture(61, T0 + 6, 'crypto', { hex: '00010203ff' });
+  assert.equal(findAgentWaitMatch({ captureCategory: 'crypto' }, { since: T0 }, [], [binary])?.item.text, undefined);
 });

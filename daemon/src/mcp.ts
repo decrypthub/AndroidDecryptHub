@@ -14,7 +14,8 @@ import { ensureDexIndex, searchDexIndex, listDexReflections } from './dex_index.
 import { agentCmd, dumpAllDex, dumpBuf, dumpBufPath, dumpRegion, pickSid, repairDexHeader, sessionForPackage } from './service.ts';
 import { backendMatrix, classifySession } from './backends.ts';
 import { automation } from './automation.ts';
-import { sessions, dumps, captures, captureTimers, SANDBOX, settings, CAPTURES, cryptoIdentify } from './state.ts';
+import { findAgentWaitMatch, hasAgentWaitFilters } from './agent_events.ts';
+import { sessions, dumps, captures, captureTimers, events, agentCursor, SANDBOX, settings, CAPTURES, cryptoIdentify } from './state.ts';
 import type { DumpMeta } from './state.ts';
 
 const S = { type: 'string' }, N = { type: 'number' };
@@ -81,11 +82,11 @@ MCP_TOOLS.push(
   { name: 'automation_status', description: 'Read-only phone automation status: user toggle, bridge connection, connected device capabilities and package allowlist. This tool never enables automation.', inputSchema: { type: 'object', properties: {} }, handler: async () => ({ enabled: settings.automation.enabled, packages: settings.automation.packages, bridge: automation.status() }) },
   { name: 'phone_observe', description: 'Observe the active phone screen. Prefer the AccessibilityService node tree; when it is empty or non-semantic, fall back to a screenshot that the AI can inspect. Returns snapshotId plus nodes or an image.', inputSchema: { type: 'object', properties: { mode: { type: 'string', enum: ['auto', 'tree', 'visual'] }, includeScreenshot: { type: 'boolean' }, maxNodes: N, maxDepth: N, interactiveOnly: { type: 'boolean' }, package: S } }, raw: true, handler: async (a) => observePhone(a) },
   { name: 'phone_find', description: 'Find compact, actionable nodes without transferring the whole tree. Supports text/resourceId/contentDescription and interaction flags; returns refs valid for snapshotId.', inputSchema: { type: 'object', properties: { ...SEL, limit: N, maxNodes: N, interactiveOnly: { type: 'boolean' }, package: S } }, handler: async (a) => findPhone(a) },
-  { name: 'phone_wait', description: 'Wait for screen state or a selector to appear/disappear, optionally scrolling a virtualized list until it appears.', inputSchema: { type: 'object', properties: { ...SEL, activePackage: S, activityContains: S, gone: { type: 'boolean' }, timeoutMs: N, intervalMs: N, scroll: { type: 'boolean' }, direction: { type: 'string', enum: ['forward', 'backward'] }, maxScrolls: N, maxNodes: N, interactiveOnly: { type: 'boolean' }, package: S } }, handler: async (a) => waitPhone(a) },
+  { name: 'phone_wait', description: 'Wait until a screen state / selector matches or the injected agent reports a signal. Agent filters: agentEvent (exact event type), agentEventContains (substring of the event JSON), captureCategory (crypto/net/file/system), captureContains (substring of the decoded capture text + metadata). Same-kind filters are ANDed; the two kinds race and whichever fires first wins. Race-free pattern: take the cursor from the preceding observe/act response and pass it as afterCaptureId / afterEventSeq; lookbackMs is the coarse alternative (bounded 0..300000).', inputSchema: { type: 'object', properties: { ...SEL, activePackage: S, activityContains: S, gone: { type: 'boolean' }, agentEvent: S, agentEventContains: S, captureCategory: { type: 'string', enum: ['crypto', 'net', 'file', 'system'] }, captureContains: S, afterEventSeq: N, afterCaptureId: N, lookbackMs: N, timeoutMs: N, intervalMs: N, scroll: { type: 'boolean' }, direction: { type: 'string', enum: ['forward', 'backward'] }, maxScrolls: N, maxNodes: N, interactiveOnly: { type: 'boolean' }, package: S } }, handler: async (a) => waitPhone(a) },
   { name: 'phone_act', description: 'Act on the active phone screen. Prefer a selector or snapshotId+ref from phone_observe; use normalized coordinates only as the visual fallback. Supports tap, long_press, swipe, scroll, set_text and global back/home/recents/notifications/quick_settings/power/lock/screenshot.', inputSchema: { type: 'object', properties: { ...SEL, snapshotId: S, action: { type: 'string', enum: ['tap', 'long_press', 'swipe', 'scroll', 'set_text', 'global'] }, ref: S, x: N, y: N, x2: N, y2: N, coordinateSpace: { type: 'string', enum: ['normalized', 'pixel'] }, text: S, key: { type: 'string', enum: ['back', 'home', 'recents', 'notifications', 'quick_settings', 'power', 'lock', 'screenshot'] }, direction: { type: 'string', enum: ['forward', 'backward'] }, durationMs: N, observeAfter: { type: 'boolean' }, package: S }, required: ['action'] }, raw: true, handler: async (a) => actPhone(a) },
   { name: 'phone_app', description: 'Open, stop or restart an allowlisted app by package name. Open uses the root Device Daemon when protocol v6+ is available, with a compatibility fallback for older daemons; stop/restart delegate to the same authenticated daemon.', inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['open', 'stop', 'restart'] }, package: S }, required: ['action', 'package'] }, handler: async (a) => appPhone(a) },
   { name: 'phone_device', description: 'Read or control device power state: status, wake, unlock a non-secure keyguard, or lock the screen. Secure credentials are never bypassed.', inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['status', 'wake', 'unlock', 'lock'] } }, required: ['action'] }, handler: async (a) => devicePhone(a) },
-  { name: 'phone_task', description: 'Run a bounded sequence of phone primitives in one MCP call. Steps may observe, find, wait, act, control an app, or control device power; each step supports retries and structured failure output.', inputSchema: { type: 'object', properties: { stopOnError: { type: 'boolean' }, steps: { type: 'array', minItems: 1, maxItems: 30, items: { type: 'object', properties: { id: S, type: { type: 'string', enum: ['observe', 'find', 'wait', 'act', 'app', 'device'] }, args: { type: 'object' }, retries: N, retryDelayMs: N }, required: ['type'] } } }, required: ['steps'] }, handler: async (a) => taskPhone(a) },
+  { name: 'phone_task', description: 'Run a bounded sequence of phone primitives in one MCP call. Steps may observe, find, wait (UI state or agent signal), act, control an app, or control device power; each step supports retries and structured failure output.', inputSchema: { type: 'object', properties: { stopOnError: { type: 'boolean' }, steps: { type: 'array', minItems: 1, maxItems: 30, items: { type: 'object', properties: { id: S, type: { type: 'string', enum: ['observe', 'find', 'wait', 'act', 'app', 'device'] }, args: { type: 'object' }, retries: N, retryDelayMs: N }, required: ['type'] } } }, required: ['steps'] }, handler: async (a) => taskPhone(a) },
 );
 
 const SELECTOR_KEYS = ['text', 'textContains', 'resourceId', 'contentDescription', 'contentDescriptionContains', 'clickable', 'editable', 'scrollable'];
@@ -142,6 +143,7 @@ async function findPhone(args: any) {
     snapshotId: result.snapshotId,
     truncated: result.truncated,
     count: matches.length,
+    cursor: agentCursor(),
     nodes: matches.map(compactNode),
   };
 }
@@ -150,32 +152,56 @@ async function waitPhone(args: any) {
   assertAutomationReady();
   const selector = selectorFrom(args);
   const hasState = args.activePackage != null || args.activityContains != null;
-  if (!Object.keys(selector).length && !hasState) throw new Error('phone_wait requires a selector, activePackage or activityContains');
+  const needsUi = Object.keys(selector).length > 0 || hasState;
+  const wantsAgent = hasAgentWaitFilters(args);
+  if (!needsUi && !wantsAgent)
+    throw new Error('phone_wait requires a selector, activePackage, activityContains or an agent filter (agentEvent/agentEventContains/captureCategory/captureContains)');
   const timeoutMs = Math.max(500, Math.min(60_000, Number(args.timeoutMs ?? 8_000)));
   const intervalMs = Math.max(100, Math.min(2_000, Number(args.intervalMs ?? 350)));
   const maxScrolls = Math.max(0, Math.min(50, Number(args.maxScrolls ?? 10)));
   const startedAt = Date.now();
+  const lookbackMs = Math.max(0, Math.min(300_000, Number(args.lookbackMs ?? 0)));
+  const agentWindow = { since: startedAt - lookbackMs, afterEventSeq: args.afterEventSeq, afterCaptureId: args.afterCaptureId };
   let scrolls = 0;
   let last: any = null;
   for (;;) {
-    const result = await observeTree(args);
-    last = result;
-    const stateMatches =
-      (args.activePackage == null || result.activePackage === args.activePackage) &&
-      (args.activityContains == null || String(result.activity ?? '').includes(String(args.activityContains)));
-    const matches = findNodes(result.nodes ?? [], selector, 1);
-    const found = stateMatches && (Object.keys(selector).length === 0 || matches.length > 0);
-    if (args.gone ? !found : found) {
-      return {
-        matched: true,
-        gone: !!args.gone,
-        elapsedMs: Date.now() - startedAt,
-        activePackage: result.activePackage,
-        activity: result.activity,
-        snapshotId: result.snapshotId,
-        scrolls,
-        node: found ? compactNode(matches[0]) : null,
-      };
+    // Agent signals need no node tree, so a pure signal wait never depends on the
+    // AccessibilityService, and a mixed wait takes whichever condition fires first.
+    if (wantsAgent) {
+      const hit = findAgentWaitMatch(args, agentWindow, events, captures);
+      if (hit) {
+        return {
+          matched: true,
+          kind: hit.kind,
+          item: hit.item,
+          elapsedMs: Date.now() - startedAt,
+          activePackage: last?.activePackage,
+          activity: last?.activity,
+          snapshotId: last?.snapshotId,
+          scrolls,
+        };
+      }
+    }
+    if (needsUi) {
+      const result = await observeTree(args);
+      last = result;
+      const stateMatches =
+        (args.activePackage == null || result.activePackage === args.activePackage) &&
+        (args.activityContains == null || String(result.activity ?? '').includes(String(args.activityContains)));
+      const matches = findNodes(result.nodes ?? [], selector, 1);
+      const found = stateMatches && (Object.keys(selector).length === 0 || matches.length > 0);
+      if (args.gone ? !found : found) {
+        return {
+          matched: true,
+          gone: !!args.gone,
+          elapsedMs: Date.now() - startedAt,
+          activePackage: result.activePackage,
+          activity: result.activity,
+          snapshotId: result.snapshotId,
+          scrolls,
+          node: found ? compactNode(matches[0]) : null,
+        };
+      }
     }
     if (Date.now() - startedAt >= timeoutMs) {
       return {
@@ -189,11 +215,11 @@ async function waitPhone(args: any) {
         scrolls,
       };
     }
-    if (args.scroll && !args.gone && scrolls < maxScrolls) {
-      const scrollable = (result.nodes ?? []).find((node: any) => node.actions?.includes('scroll_forward'));
+    if (needsUi && args.scroll && !args.gone && scrolls < maxScrolls) {
+      const scrollable = (last?.nodes ?? []).find((node: any) => node.actions?.includes('scroll_forward'));
       if (scrollable) {
         await automation.cmd('act', {
-          snapshotId: result.snapshotId,
+          snapshotId: last.snapshotId,
           action: 'scroll',
           ref: scrollable.ref,
           direction: args.direction ?? 'forward',
@@ -206,7 +232,6 @@ async function waitPhone(args: any) {
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
 }
-
 
 async function taskPhone(args: any) {
   assertAutomationReady();
@@ -248,8 +273,13 @@ async function runTaskStep(type: string, args: any): Promise<any> {
       return contentToValue(await observePhone(args));
     case 'find':
       return await findPhone(args);
-    case 'wait':
-      return await waitPhone(args);
+    case 'wait': {
+      const value = await waitPhone(args);
+      // A timed-out wait must fail the step: otherwise the task continues as if the expected
+      // UI state / agent signal had arrived. Retries and stopOnError then apply as usual.
+      if (value?.timedOut) throw new Error('wait_timeout ' + JSON.stringify({ elapsedMs: value.elapsedMs, activePackage: value.activePackage, activity: value.activity, scrolls: value.scrolls }));
+      return value;
+    }
     case 'act':
       return contentToValue(await actPhone(args));
     case 'app':
@@ -293,6 +323,7 @@ async function observePhone(args: any) {
 
 async function actPhone(args: any) {
   assertAutomationReady();
+  const cursorBefore = agentCursor();   // taken before dispatch: wait on it to catch this action's signals
   let effective = { ...args };
   if (!effective.ref && hasSelector(effective)) {
     const result = await observeTree(effective);
@@ -301,7 +332,7 @@ async function actPhone(args: any) {
     effective = { ...effective, snapshotId: result.snapshotId, ref: match.ref };
   }
   const result = await automation.cmd('act', normalizeActArgs(effective), 25_000);
-  const parts: any[] = [{ type: 'text', text: JSON.stringify(result, null, 2) }];
+  const parts: any[] = [{ type: 'text', text: JSON.stringify({ ...result, cursorBefore }, null, 2) }];
   if (args.observeAfter) {
     await new Promise((resolve) => setTimeout(resolve, 250));
     parts.push(...observationContent(await automation.cmd('observe', normalizeObserveArgs(args), 25_000)).content);
@@ -349,7 +380,7 @@ function normalizeActArgs(args: any) {
 
 function observationContent(result: any) {
   const screenshot = result?.screenshot;
-  const meta = { ...(result ?? {}) };
+  const meta = { ...(result ?? {}), cursor: agentCursor() };
   if (screenshot) {
     const { base64, ...rest } = screenshot;
     meta.screenshot = rest;

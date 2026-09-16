@@ -1507,7 +1507,7 @@ Host ADH Daemon / MCP  →  自动化 TCP 8763（loopback + adb reverse）  → 
 ```
 
 - 设备侧只允许 `:manager` 中用户启用的 `AdhAutomationAccessibilityService` 作为客户端拨入 Host，不监听端口、不承载 HTTP/MCP/索引/分析。
-- agent `.so` 第一版不参与 UI 自动化；后续只允许以事件/单步调用方式补充目标进程内部状态。
+- agent `.so` 不参与 UI 自动化；它以事件/单步方式补充目标进程内部状态，匹配与等待逻辑在 Host 侧完成（见 §31.3 规则 5）。
 
 ### 31.2 MCP 面
 
@@ -1516,7 +1516,7 @@ Host ADH Daemon / MCP  →  自动化 TCP 8763（loopback + adb reverse）  → 
 | `automation_status` | 只读状态：Host 开关、桥接连接、设备能力、允许包名；不能开启自动化 |
 | `phone_observe` | 优先返回控件树；树为空或非语义时返回压缩截图；支持 `maxDepth`、`interactiveOnly`、truncation 标记 |
 | `phone_find` | 按 text/resourceId/contentDescription/交互标志返回紧凑节点列表，不传整棵树 |
-| `phone_wait` | 等待选择器出现/消失；可对虚拟列表执行 scroll-until-found |
+| `phone_wait` | 等待三类条件竞速命中：控件/状态、agent 事件、进程内捕获；可对虚拟列表执行 scroll-until-found；`afterCaptureId`/`afterEventSeq` 游标或 `lookbackMs` 消除两次调用间的信号丢失 |
 | `phone_act` | `tap` / `long_press` / `swipe` / `scroll` / `set_text` / `global back/home/recents`；优先 selector 或 `snapshotId+ref`，兜底归一化坐标 |
 | `phone_app` | 通过包名 `open` / `stop` / `restart` 授权应用；新 daemon 走 root Device Daemon，旧 daemon 保留 Accessibility fallback |
 | `phone_device` | `status` / `wake` / `unlock` / `lock`；安全锁屏凭据不绕过 |
@@ -1527,6 +1527,7 @@ Host ADH Daemon / MCP  →  自动化 TCP 8763（loopback + adb reverse）  → 
 2. 控件树为空、不可操作或目标页面为自绘内容时，截图作为第二感知层返回（JPEG，默认最长边 1280；MCP 通过 image content 返回，不持久化原图）。
 3. 视觉动作只能使用归一化坐标或显式像素坐标；ref 只能用于对应 snapshotId，动作完成后 ref 失效。
 4. `FLAG_SECURE` 等受保护窗口截图失败必须 fail-loud 返回 `screenshot_failed` / `screenshot_unsupported`，不得伪造画面。
+5. 进程内信号等待与控件条件竞速，命中即返回；同一类过滤为 AND。事件用 `agentEvent`（精确 type）/ `agentEventContains`（JSON 子串），捕获用 `captureCategory`（crypto/net/file/system）/ `captureContains`（在解码后的 UTF-8 文本 + 元数据上做子串匹配）。`phone_observe`/`phone_find`/`phone_act` 返回 `cursor`（`phone_act` 另有动作派发前的 `cursorBefore`）；把游标传给 `afterCaptureId`/`afterEventSeq` 只匹配更新的记录（不看时间戳），避免信号在两次 MCP 调用之间到达而丢失。纯信号等待不依赖无障碍服务。
 
 ### 31.4 开关与安全
 
@@ -1537,7 +1538,7 @@ Host ADH Daemon / MCP  →  自动化 TCP 8763（loopback + adb reverse）  → 
 
 ### 31.5 验收
 
-`tools/verify_v36_automation.sh`：MCP 工具可见性、控件树、`phone_find`、selector/ref 点击、`phone_wait`、视觉截图兜底、归一化坐标点击、滑动；桥接未启用时 SKIP。真机证据见 `docs/PROGRESS.md`。
+`tools/verify_v36_automation.sh`：MCP 工具可见性、控件树、`phone_find`、selector/ref 点击、`phone_wait`、agent 信号等待（游标 + 明文解码 + fail-loud 超时）、视觉截图兜底、归一化坐标点击、滑动；桥接未启用（或没有在线 agent 会话）时对应段落 SKIP。真机证据见 `docs/PROGRESS.md`。
 
 ---
 

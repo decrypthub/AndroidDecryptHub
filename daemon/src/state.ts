@@ -116,6 +116,13 @@ try {   // replay: load persisted events on startup so a session survives restar
     if (corrupt) log(`[events] replay: ${corrupt}/${lines.length} 行损坏已跳过 (${EVENTS_FILE})`);
   }
 } catch (e) { log(`[events] replay 失败 (${EVENTS_FILE}) — 从空事件起步:`, (e as Error).message); }
+// Live agent cursor: the newest event seq + capture id the host has stored so far. An AI takes
+// one of these before an action and passes it back to phone_wait, so a signal that lands between
+// two MCP calls is still caught (no race against the capture-drain tick).
+export function agentCursor() {
+  return { eventSeq: evSeq, captureId: captures.length ? captures[captures.length - 1].id : 0 };
+}
+
 export function recordEvent(type: string, data: any) {
   const e: Ev = { seq: ++evSeq, ts: Date.now(), type, data };
   events.push(e); if (events.length > 5000) events.shift();

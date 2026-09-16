@@ -600,8 +600,9 @@ v1 只对 `docs/FEATURE_STATUS.md §2` 的已验收能力做加固：捕获背�
 
 - 已完成：Host `automation.ts`（loopback NDJSON 桥，TCP 8763）、MCP `automation_status/phone_observe/phone_find/phone_wait/phone_act/phone_app`、Manager 用户启用型 AccessibilityService、控件树优先/截图兜底、selector/ref 与归一化坐标动作、语义 scroll、activePackage wait、扩展 global actions、Host/设备双层包名 allowlist。Device Daemon 协议 v6 已加入 root `open`，协议 v7 支持由 Manager 显式开关自动化 AccessibilityService，并以 `/data/adb/adh/automation.enabled` 记录用户意图、自动修复被系统清理的服务；协议 v8 增加 root 屏幕状态/唤醒/非安全锁屏解除。新 daemon 原生 open，旧 daemon 保留 Accessibility fallback。
 - 默认关闭：Host `settings.automation.enabled=false`；关闭时 `phone_*` 从 `tools/list` 隐藏；设备侧服务必须由用户手动启用。
-- 验证：`tools/verify_v36_automation.sh` 真机 PASS（树 16–17 节点、`phone_find`、selector/ref 点击、`phone_wait`、JPEG 兜底、归一化点击、滑动）；`phone_app restart` 与 ColorOS 打开确认后的 `phone_wait` 处理也已人工验证；桥接不可用时 SKIP，不影响无设备 CI。
-- 后续增量：root Device Daemon 原生 `open`（绕过部分 OEM 的跨应用打开确认）、agent 事件订阅、更多无 UI 的业务状态同步；仍禁止在 agent 内跑流程循环或分析。
+- 验证：`tools/verify_v36_automation.sh` 真机 PASS（树 16–17 节点、`phone_find`、selector/ref 点击、`phone_wait`、点击沙盒 AES-CBC 后按游标等待 crypto 捕获并取到 UTF-8 明文、agent 信号超时 fail-loud、JPEG 兜底、归一化点击、滑动）；`phone_app restart` 与 ColorOS 打开确认后的 `phone_wait` 处理也已人工验证；桥接不可用或没有在线 agent 会话时对应段落 SKIP，不影响无设备 CI。
+- 进程内信号等待（2026-09-17）：`phone_wait` 增加 agent 事件与捕获过滤（`agentEvent`/`agentEventContains`/`captureCategory`/`captureContains`），与控件条件竞速；匹配在 Host（`daemon/src/agent_events.ts`）完成，agent 仍只采集。动作前游标（`phone_act.cursorBefore`）与 `afterCaptureId`/`afterEventSeq` 消除 MCP 调用间的信号丢失，`lookbackMs` 为粗粒度回看；捕获明文按 UTF-8 解码后返回 `item.text`，CJK 可检索。`phone_task` 的 `wait` 步超时改为步骤失败（真机 PASS）。
+- 后续增量：root Device Daemon 原生 `open`（绕过部分 OEM 的跨应用打开确认）、通知监听/读取、可复用技能（录制回放任务）；仍禁止在 agent 内跑流程循环或分析。
 
 ---
 

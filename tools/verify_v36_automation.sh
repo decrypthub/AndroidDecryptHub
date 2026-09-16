@@ -124,6 +124,12 @@ try {
   const taskData = JSON.parse(task.content?.find((item) => item.type === 'text')?.text);
   chk('phone_task runs a multi-step sequence', taskData.ok === true && taskData.steps?.length === 3, `ok=${taskData.ok} steps=${taskData.steps?.length ?? 0}`);
 
+  const timeoutTask = await callTool('phone_task', { steps: [
+    { type: 'wait', args: { contentDescription: 'ADH_NO_SUCH_NODE_v1', timeoutMs: 900, intervalMs: 150, maxNodes: 60 } },
+  ] });
+  const timeoutTaskData = JSON.parse(timeoutTask.content?.find((item) => item.type === 'text')?.text);
+  chk('phone_task fails a timed-out wait step instead of continuing', timeoutTaskData.ok === false && timeoutTaskData.failedStep === 0 && /wait_timeout/.test(timeoutTaskData.steps?.[0]?.error ?? ''), `ok=${timeoutTaskData.ok} error=${timeoutTaskData.steps?.[0]?.error}`);
+
   const activeWait = await callTool('phone_wait', { activePackage: 'com.adh.sandbox', timeoutMs: 5000, intervalMs: 150, maxNodes: 120 });
   const activeWaitData = JSON.parse(activeWait.content?.find((item) => item.type === 'text')?.text);
   chk('phone_wait matches the active package', activeWaitData.matched === true, `active=${activeWaitData.activePackage}`);
@@ -169,6 +175,39 @@ try {
     const wait = await callTool('phone_wait', { contentDescription: selectorTarget, timeoutMs: 5000, intervalMs: 150, maxNodes: 120 });
     const waitData = JSON.parse(wait.content?.find((item) => item.type === 'text')?.text);
     chk('phone_wait matches a visible selector', waitData.matched === true, `matched=${waitData.matched}`);
+  }
+
+  // ---- agent-signal waits: wait on process-internal ground truth, not just UI ------------
+  const agents = await getJson('/api/agents');
+  const liveSandbox = agents
+    .filter((session) => session.package === 'com.adh.sandbox' && session.online)
+    .sort((a, b) => b.connectedAt - a.connectedAt)[0];
+  const captureEnabled = (await getJson('/api/config')).settings?.capture?.enabled === true;
+  if (!liveSandbox || !captureEnabled) {
+    console.log(`SKIP: agent-signal wait — ${!liveSandbox ? 'no live com.adh.sandbox agent session' : 'capture disabled'}`);
+  } else {
+    const signalTree = parseTree(await callTool('phone_observe', { mode: 'tree', includeScreenshot: false, maxNodes: 120 }));
+    if (selectedTab(signalTree) !== '加解密') {
+      await callTool('phone_act', { action: 'tap', contentDescription: '加解密', includeScreenshot: false, maxNodes: 80 });
+    }
+    const ready = parseTree(await callTool('phone_observe', { mode: 'tree', includeScreenshot: false, maxNodes: 120 }));
+    if (!ready.nodes?.some((node) => node.text === 'AES-CBC')) {
+      console.log('SKIP: agent-signal wait — sandbox 加解密 button is not on screen');
+    } else {
+      const signalTap = parseTree(await callTool('phone_act', { action: 'tap', text: 'AES-CBC' }));
+      chk('phone_act returns a pre-action agent cursor', typeof signalTap.cursorBefore?.captureId === 'number', `cursor=${JSON.stringify(signalTap.cursorBefore)}`);
+      const signalWait = parseTree(await callTool('phone_wait', {
+        captureCategory: 'crypto',
+        captureContains: 'ADH手动_AES_#',
+        afterCaptureId: signalTap.cursorBefore?.captureId,
+        timeoutMs: 8000,
+        intervalMs: 200,
+      }));
+      chk('phone_wait matches the crypto signal caused by the tap', signalWait.matched === true && signalWait.kind === 'capture' && /AES/.test(signalWait.item?.algo ?? ''), `algo=${signalWait.item?.algo} elapsed=${signalWait.elapsedMs}`);
+      chk('agent wait decodes the captured plaintext', String(signalWait.item?.text ?? '').includes('ADH手动_AES_#'), `text=${JSON.stringify(signalWait.item?.text ?? null)}`);
+      const signalMiss = parseTree(await callTool('phone_wait', { captureCategory: 'crypto', captureContains: 'ADH_NO_SUCH_MARKER_v1', timeoutMs: 1500, intervalMs: 200 }));
+      chk('agent wait times out loudly when the marker never arrives', signalMiss.matched === false && signalMiss.timedOut === true);
+    }
   }
 
   const visual = await callTool('phone_observe', { mode: 'visual', maxNodes: 20 });
