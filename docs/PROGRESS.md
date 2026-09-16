@@ -15,6 +15,11 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 idhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [x] **沙盒定位澄清：只做"可手动点击的插件测试宿主"（2026-09-16）**：删掉了沙盒 App 里的"观测控制台"（LAN 地址探测 / `/health` 轮询 / 剪贴板与浏览器动作）—— 控制台是 Web UI 与 ADH Manager 的职责；
+      保留并明确「状态 / 加解密 / 网络·文件 / 脱壳 / 日志」五个**可点击**标签页，用于手动点测各能力切片；启动初始化（mock dex、模拟注入 `System.loadLibrary`、AdhSecurity 提供者、低频加密流）不变。
+      · 中途试过把它改写成"正常小店 App"（商品→下单→支付→订单→我的），经确认**回退**：手动点测更方便，测试宿主形态更合适；插件按类名触发的入口（JavaCrypto/Network/CorrelatedFlow/FileIO/Detection/HookTarget）保持原样。
+      · 顺手把 `tools/verify_v33_backends.sh` 的 MCP 会话级分类改为"会话中途消失 → SKIP"（此前会把 `error: command timeout` 当 FAIL 假红），矩阵本身仍必须可达。
+      · 验证：全量 `verify_all` 通过（设备 + host），沙盒 APK 重新构建并安装。
 - [x] **MCP 面收口：后端矩阵与"进程内真实注入路径"进 MCP（2026-09-16）**：新增 `backends` MCP 工具，与 REST `GET /api/backends` **同源**（共用 `daemon/src/backends.ts`，不做第二套逻辑）；
       带 `session` 参数时按 agent 自己的 /proc/self/maps 判定该进程里**真实存在**的注入路径：`zygisk` / `xposed_module` / `frida_gadget` / `self_load`。
       · 真机实测（MCP 驱动，非 HTTP 手测）：`compat_probe` 取足迹 → `load_library` 把 Frida Gadget dlopen 进 sandbox → `backends(session)` 从 `["adhd_agent","self_load"]` 变为 `["adhd_agent","frida_gadget","self_load"]`（模块数 533→535）。

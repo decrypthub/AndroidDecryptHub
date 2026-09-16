@@ -1,11 +1,6 @@
 package com.adh.sandbox
 
 import android.app.Activity
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
-import android.content.Intent
-import android.net.Uri
 import android.os.Bundle
 import android.util.Log
 import android.util.TypedValue
@@ -15,15 +10,11 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import android.widget.Toast
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
 import com.google.android.material.tabs.TabLayout
-import java.net.HttpURLConnection
-import java.net.URL
 import java.nio.ByteBuffer
-import org.json.JSONObject
 
 class MainActivity : Activity() {
 
@@ -32,10 +23,6 @@ class MainActivity : Activity() {
         const val MOCK_MARKER = "ADH_MOCK_DEX_v1"
         const val MOCK_SIZE = 4096
 
-        // Web console port. Host ADH Daemon runs on the PC; the phone reaches it either via
-        // `adb reverse tcp:8760` (127.0.0.1) or directly over Wi-Fi at the host's LAN IP.
-        const val WEB_PORT = 8760
-        const val LOCAL_URL = "http://127.0.0.1:$WEB_PORT"
 
         @JvmStatic private var mockDex: ByteBuffer? = null
 
@@ -56,10 +43,6 @@ class MainActivity : Activity() {
         }
     }
 
-    @Volatile private var polling = true
-    private var lanUrl: String = ""            // host LAN URL, discovered from Host ADH Daemon /health
-    private lateinit var urlLan: TextView
-    private lateinit var reach: TextView
     private lateinit var logView: TextView
     private lateinit var liveBtn: MaterialButton
     private val logLines = ArrayDeque<String>()
@@ -95,14 +78,11 @@ class MainActivity : Activity() {
         // the native EVP hook). Install AFTER the agent so AdhReport's native is bound.
         AdhSecurity.install()
 
-        // Drive a live crypto stream so the console's 加解密 panel fills itself.
+        // 低频加解密流：让 hook/捕获始终有东西可看；需要安静目标时可在「加解密」页停掉。
         JavaCrypto.startLiveDriver()
 
         setContentView(buildRoot(pid, loadStatus))
-        startHealthPolling()
     }
-
-    override fun onDestroy() { polling = false; super.onDestroy() }
 
     // ---- UI building blocks (stock Material 3; the theme supplies all colors) ----------
 
@@ -130,15 +110,6 @@ class MainActivity : Activity() {
         setPadding(0, dp(2), 0, dp(2))
     }
 
-    // A monospace, tappable address/log box tinted with the theme's surface-variant role.
-    private fun monoBox(text: String, onTap: (() -> Unit)? = null): TextView = TextView(this).apply {
-        this.text = text
-        setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodyLarge)
-        typeface = android.graphics.Typeface.MONOSPACE
-        setPadding(dp(12), dp(10), dp(12), dp(10))
-        setBackgroundColor(themeColor(com.google.android.material.R.attr.colorSurfaceVariant))
-        if (onTap != null) { isClickable = true; setOnClickListener { onTap() } }
-    }
 
     private fun space(h: Int) = View(this).apply {
         layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(h))
@@ -188,25 +159,15 @@ class MainActivity : Activity() {
 
     // ---- tab pages ---------------------------------------------------------------------
 
-    private fun consolePage(pid: Int, loadStatus: String): View = page {
+    // 这个 App 只做"被插件观测/触发"的测试宿主：控制台在浏览器 Web UI 与手机侧 ADH Manager，
+    // 这里不重复实现；本页只显示宿主自身状态，其余标签页是可以手动点击的能力触发点。
+    private fun statusPage(pid: Int, loadStatus: String): View = page {
         addView(card {
-            addView(sectionTitle("观测控制台（浏览器打开）— 点击地址复制"))
-            urlLan = monoBox("检测中…") { copy(bestUrl()) }
-            addView(urlLan)
-            addView(space(4))
-            reach = body("● 正在检测控制台…")
-            addView(reach)
-            addView(space(8))
-            addView(btnRow(
-                mbutton("复制地址") { copy(bestUrl()) },
-                mbutton("手机浏览器打开") { openBrowser(bestUrl()) },
-            ))
-            addView(body("本机 adb reverse：$LOCAL_URL", muted = true))
-        })
-        addView(card {
-            addView(sectionTitle("Agent 状态"))
+            addView(sectionTitle("测试宿主状态"))
             addView(body("pid = $pid"))
             addView(body(loadStatus, muted = true))
+            addView(space(4))
+            addView(body("手动点击各标签页即可触发对应能力；控制台请看 Web UI / ADH Manager。", muted = true))
         })
     }
 
@@ -269,13 +230,13 @@ class MainActivity : Activity() {
     private fun buildRoot(pid: Int, loadStatus: String): View {
         val toolbar = MaterialToolbar(this).apply {
             title = "ADH · Android DecryptHub"
-            subtitle = "运行时逆向分析 · 沙盒宿主 · pid=$pid"
+            subtitle = "插件功能测试宿主 · pid=$pid"
         }
         val tabs = TabLayout(this).apply { tabMode = TabLayout.MODE_SCROLLABLE }
         val content = FrameLayout(this)
 
         val pages = listOf(
-            "控制台" to consolePage(pid, loadStatus),
+            "状态" to statusPage(pid, loadStatus),
             "加解密" to cryptoPage(),
             "网络·文件" to netFilePage(),
             "脱壳" to unpackPage(),
@@ -298,8 +259,6 @@ class MainActivity : Activity() {
             addView(content, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         }
     }
-
-    private fun bestUrl(): String = if (lanUrl.isNotEmpty()) lanUrl else LOCAL_URL
 
     private fun pt(tag: String): ByteArray =
         "ADH手动_${tag}_#${seq.getAndIncrement()}_订单金额=99.00元".toByteArray(Charsets.UTF_8)
@@ -327,69 +286,4 @@ class MainActivity : Activity() {
         if (::logView.isInitialized) logView.text = logLines.joinToString("\n")
     }
 
-    // ---- actions ----------------------------------------------------------
-
-    private fun copy(text: String) {
-        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        cm.setPrimaryClip(ClipData.newPlainText("adh-web", text))
-        Toast.makeText(this, "已复制：$text", Toast.LENGTH_SHORT).show()
-    }
-
-    private fun openBrowser(url: String) {
-        try {
-            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-        } catch (e: Exception) {
-            Toast.makeText(this, "无法打开浏览器：$e", Toast.LENGTH_LONG).show()
-        }
-    }
-
-    // ---- live reachability: poll Host ADH Daemon /health via the reverse tunnel ------
-
-    private fun startHealthPolling() {
-        Thread {
-            while (polling) {
-                val r = probeHealth()
-                runOnUiThread { applyHealth(r) }
-                try { Thread.sleep(3000) } catch (e: InterruptedException) { break }
-            }
-        }.apply { isDaemon = true }.start()
-    }
-
-    private data class Health(val ok: Boolean, val agents: Int, val lan: String, val local: String)
-
-    private fun probeHealth(): Health {
-        return try {
-            val c = (URL("$LOCAL_URL/health").openConnection() as HttpURLConnection).apply {
-                connectTimeout = 1200; readTimeout = 1200
-            }
-            val code = c.responseCode
-            val body = if (code == 200) c.inputStream.bufferedReader().use { it.readText() } else ""
-            c.disconnect()
-            if (code != 200) return Health(false, -1, "", "")
-            val j = JSONObject(body)
-            val agents = j.optInt("agents", -1)
-            val web = j.optJSONObject("web")
-            val lanArr = web?.optJSONArray("lan")
-            val lan = if (lanArr != null && lanArr.length() > 0) lanArr.getString(0) else ""
-            val local = web?.optString("local") ?: LOCAL_URL
-            Health(true, agents, lan, local)
-        } catch (e: Exception) {
-            Health(false, -1, "", "")
-        }
-    }
-
-    private fun applyHealth(h: Health) {
-        if (!::urlLan.isInitialized || !::reach.isInitialized) return
-        Log.i(TAG, "health: ok=${h.ok} agents=${h.agents} lan='${h.lan}' local='${h.local}'")
-        if (h.ok) {
-            if (h.lan.isNotEmpty()) { lanUrl = h.lan; urlLan.text = h.lan }
-            else { urlLan.text = "$LOCAL_URL  （控制台未上报局域网 IP，仅本地可访问）" }
-            reach.setTextColor(themeColor(com.google.android.material.R.attr.colorPrimary))
-            reach.text = "● 控制台在线" + (if (h.agents >= 0) "  ·  已连接 agents = ${h.agents}" else "")
-        } else {
-            urlLan.text = if (lanUrl.isNotEmpty()) lanUrl else "（等待控制台…）"
-            reach.setTextColor(themeColor(com.google.android.material.R.attr.colorError))
-            reach.text = "● 未连接 —— 在电脑运行  bash tools/dev_up.sh  启动 Host ADH Daemon（并 adb reverse tcp:$WEB_PORT）"
-        }
-    }
 }

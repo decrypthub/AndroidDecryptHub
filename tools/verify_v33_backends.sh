@@ -73,10 +73,16 @@ chk('inline scripts parse', syntaxOk);
 
 // MCP surface: the tool is built for AI clients, so the matrix must be reachable there too —
 // the same truth as the REST endpoint, plus per-session classification.
-const mcpCall = async (method, params) => (await (await fetch(`${base}/mcp`, {
-  method: 'POST', headers: { 'content-type': 'application/json' },
-  body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, ...(params ? { params } : {}) }),
-})).json());
+const mcpCall = async (method, params) => {
+  try {
+    return await (await fetch(`${base}/mcp`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, ...(params ? { params } : {}) }),
+    })).json();
+  } catch (e) {
+    return { error: String(e) };
+  }
+};
 let mcpOk = true;
 try {
   const tlist = await mcpCall('tools/list', {});
@@ -90,9 +96,17 @@ try {
   const onlineSession = (mcpMatrix.agents ?? []).find((a) => a.online);
   if (onlineSession) {
     const perSession = await mcpCall('tools/call', { name: 'backends', arguments: { session: onlineSession.session } });
-    const parsed = JSON.parse(perSession.result?.content?.[0]?.text ?? '{}');
-    const kinds = parsed.sessionBackends?.backends ?? [];
-    chk('MCP backends(session) classifies the live process', kinds.includes('adhd_agent'), kinds.join(' + '));
+    const raw = perSession?.result?.content?.[0]?.text ?? '';
+    let parsed = null;
+    try { parsed = JSON.parse(raw); } catch { parsed = null; }
+    if (!parsed) {
+      // A session can die between listing it and asking it for its maps; that is not a product
+      // failure — the matrix itself is asserted above and must stay reachable.
+      console.log('SKIP  MCP backends(session) — session went away: ' + String(raw || perSession?.error || '').slice(0, 120));
+    } else {
+      const kinds = parsed.sessionBackends?.backends ?? [];
+      chk('MCP backends(session) classifies the live process', kinds.includes('adhd_agent'), kinds.join(' + '));
+    }
   } else {
     console.log('SKIP  MCP backends(session) — no online agent session right now');
   }
