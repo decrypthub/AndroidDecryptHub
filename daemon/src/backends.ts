@@ -86,6 +86,6 @@ export async function classifySession(session: string) {
   if (paths.some((p) => p.includes('/data/adb/modules/adh/'))) backends.push('zygisk');
   if (paths.some((p) => p.includes('com.adh.xposed'))) backends.push('xposed_module');
   if (paths.some((p) => /libgadget\.so|frida/i.test(p))) backends.push('frida_gadget');
-  if (paths.some((p) => /\/lib\/arm64\/(libadh_agent|libidh_agent)\.so$/.test(p))) backends.push('self_load');
+  if (paths.some((p) => /\/lib\/arm64\/libadh_agent\.so$/.test(p))) backends.push('self_load');
   return { session, moduleCount: mods.length, backends };
 }

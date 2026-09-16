@@ -4,7 +4,7 @@
 #      (hash-bound legacy probe fixture; do not rename without regenerating the fixed dex hash)
 #   2) crypto_scan the app's classes.dex -> finds javax/crypto method refs + algorithm strings
 #      (AES/CBC/PKCS5Padding, HmacSHA256) proving the static crypto channel works
-# Exit 0 = PASS. Prereq: idhd running; sandbox APK built.
+# Exit 0 = PASS. Prereq: adhd running; sandbox APK built.
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
 verify_resolve_env_host

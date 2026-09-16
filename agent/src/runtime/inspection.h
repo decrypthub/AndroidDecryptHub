@@ -5,13 +5,13 @@
 extern "C" {
 #endif
 
-void idh_cmd_object_inspect(int fd, const char *id, const char *class_name,
+void adh_cmd_object_inspect(int fd, const char *id, const char *class_name,
                             const char *field_name);
-void idh_cmd_object_invoke(int fd, const char *id, const char *class_name,
+void adh_cmd_object_invoke(int fd, const char *id, const char *class_name,
                            const char *field_name, const char *method_name);
 void adh_footprint_capture_baseline(void);
-void idh_cmd_compat_probe(int fd, const char *id);
-void idh_cmd_jni_probe(int fd, const char *id);
+void adh_cmd_compat_probe(int fd, const char *id);
+void adh_cmd_jni_probe(int fd, const char *id);
 
 #ifdef __cplusplus
 }

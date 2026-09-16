@@ -1,4 +1,4 @@
-// io.c — connect to idhd over TCP and the WS-D length-framed send path. One send lock so a
+// io.c — connect to adhd over TCP and the WS-D length-framed send path. One send lock so a
 // future drain thread and the command-response path never interleave bytes on the same fd.
 #include "agent_internal.h"
 #include <pthread.h>
@@ -9,7 +9,7 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 
-int connect_idhd(void) {
+int connect_adhd(void) {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) return -1;
     struct sockaddr_in a; memset(&a, 0, sizeof(a));

@@ -9,7 +9,7 @@
 #      re-read the same 16MB in 256KB frames; assert byte-exact sha256 match + exact size.
 #      Proves multi-MB responses survive across differing frame boundaries with no
 #      corruption/truncation (old 8192 single-line limit is gone).
-# Exit 0 = PASS. Prereq: idhd running, device, sandbox running.
+# Exit 0 = PASS. Prereq: adhd running, device, sandbox running.
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
 verify_resolve_env

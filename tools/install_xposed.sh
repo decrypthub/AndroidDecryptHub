@@ -38,7 +38,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-SERIAL="${ANDROID_SERIAL:-${ADH_SERIAL:-${IDH_SERIAL:-}}}"
+SERIAL="${ANDROID_SERIAL:-${ADH_SERIAL:-}}"
 [ -n "$SERIAL" ] || die "no device serial; set ANDROID_SERIAL"
 ADB="${ADB:-adb}"
 CLI="/data/adb/lspd/cli"

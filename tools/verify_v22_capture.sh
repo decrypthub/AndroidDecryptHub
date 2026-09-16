@@ -4,7 +4,7 @@
 # The ring counts every capture() attempt (seq), applies bounded-blocking backpressure, and on
 # overflow increments dropped + first/last drop ts — nothing vanishes silently. This test:
 #   1) Drives a high-rate burst (20k AES ops) via BurstProbe.run(), triggered from OUTSIDE the
-#      agent (idhd passes the class name; the agent has no knowledge of it — WS-B-clean).
+#      agent (adhd passes the class name; the agent has no knowledge of it — WS-B-clean).
 #   2) Waits for the agent to finish counting, polling /api/captures `health`.
 #   3) Asserts HONEST accounting:
 #        - seq >> 64  (thousands of attempts COUNTED, not silently capped)
@@ -12,7 +12,7 @@
 #        - complete flag consistent with dropped (complete === dropped==0 && jdropped==0)
 #      The old impl exposed neither seq nor dropped, so their presence + a large honest seq is
 #      itself the proof the silent-drop bug is gone.
-# Exit 0 = PASS. Prereq: idhd running, device, sandbox running, capture enabled.
+# Exit 0 = PASS. Prereq: adhd running, device, sandbox running, capture enabled.
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
 verify_resolve_env

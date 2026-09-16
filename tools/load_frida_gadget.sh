@@ -37,8 +37,8 @@ if command -v cygpath >/dev/null 2>&1; then ROOT="$(cygpath -m "$ROOT")"; fi
 export MSYS_NO_PATHCONV=1
 export MSYS2_ARG_CONV_EXCL='*'
 
-HTTP="${ADH_HTTP_PORT:-${IDH_HTTP_PORT:-8088}}"
-SERIAL="${ANDROID_SERIAL:-${ADH_SERIAL:-${IDH_SERIAL:-}}}"
+HTTP="${ADH_HTTP_PORT:-8088}"
+SERIAL="${ANDROID_SERIAL:-${ADH_SERIAL:-}}"
 if [ -z "$SERIAL" ]; then
   SERIAL="$(adb devices 2>/dev/null | awk 'NR==2 && $2=="device" {print $1; exit}')"
 fi

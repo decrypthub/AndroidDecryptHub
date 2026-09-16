@@ -43,4 +43,4 @@ cp "$SO" "$DEST/libadh_agent.so"
 echo ">> built $(ls -la "$SO" | awk '{print $5}') bytes -> $DEST/libadh_agent.so"
 if [ -f "$DEBUG_SO" ]; then echo ">> unstripped debug copy -> $DEBUG_SO"; fi
 "$READELF" --dyn-syms "$SO" \
-  | grep -iE "adh_agent_set_package|adh_agent_start|idh_agent_start|JNI_OnLoad" | awk '{print "   export:", $8}'
+  | grep -iE "adh_agent_set_package|adh_agent_start|JNI_OnLoad" | awk '{print "   export:", $8}'

@@ -17,5 +17,32 @@ TOOLCHAIN="$NDK/build/cmake/android.toolchain.cmake"
 READELF="$NDK/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-readelf.exe"
 # BASH_SOURCE[0] is this file (tools/lib/env.sh) — two levels up = repo root.
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# Git Bash `pwd` is /x/Project/... ; Windows Java/NDK tools need a drive path.
+if command -v cygpath >/dev/null 2>&1; then
+  ROOT="$(cygpath -m "$ROOT")"
+fi
 ABI="${ABI:-arm64-v8a}"
 export SDK NDK CMAKE NINJA TOOLCHAIN READELF ROOT ABI
+
+# ColorOS / OEM `adb install` waits for an on-screen USB confirm. This device is
+# rooted — push + `pm install` as uid=0 and never sit on that prompt.
+install_apk_root() {
+  local apk="$1"
+  local remote="${2:-/data/local/tmp/adh-install.apk}"
+  local serial="${3:-${SERIAL:-${ANDROID_SERIAL:-}}}"
+  local adb_cmd="${ADB:-adb}"
+  [ -n "$serial" ] || { echo "!! install_apk_root: no serial" >&2; return 1; }
+  [ -f "$apk" ] || { echo "!! apk missing: $apk" >&2; return 1; }
+  local host="$apk"
+  if command -v cygpath >/dev/null 2>&1; then
+    host="$(cygpath -w "$apk")"
+  fi
+  local saved="${MSYS_NO_PATHCONV-}"
+  export MSYS_NO_PATHCONV=1
+  "$adb_cmd" -s "$serial" push "$host" "$remote" >/dev/null
+  local out
+  out="$("$adb_cmd" -s "$serial" shell "su -c 'pm install -r -t $remote'" | tr -d '\r')"
+  if [ -n "${saved}" ]; then export MSYS_NO_PATHCONV="$saved"; else unset MSYS_NO_PATHCONV; fi
+  printf '%s\n' "$out"
+  grep -q 'Success' <<<"$out"
+}

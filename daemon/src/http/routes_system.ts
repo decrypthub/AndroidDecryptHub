@@ -145,14 +145,12 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
     { path: '/api/mcp/config', handler: () => {
       const w = webUrls(); const lan = (w.lan[0] ?? w.local).replace(/^http/, 'http');
       const mcpUrl = `${lan}/mcp`;
-      const host = new URL(lan).host;
       const cfg = {
-        note: '先 pip install android-decrypt-hub，再用 adh connect 连上本机 Host，最后把 stdio MCP 配进 Cursor / Claude Desktop。不要把 HTTP /mcp 端点直接配进客户端。',
-        mcpServers: { adh: { command: 'adh', args: ['mcp'] } },
-        endpoint: mcpUrl, tools: MCP_TOOLS.length,
-        install: 'pip install android-decrypt-hub',
-        connect: `adh connect ${host}`,
-        cli: `pip install android-decrypt-hub && adh connect ${host}`,
+        note: '把 HTTP MCP 端点配置进支持 JSON-RPC 的客户端；仅限可信网络，不要暴露到公网。',
+        endpoint: mcpUrl,
+        pinnedEndpoint: `${lan}/<package>/mcp`,
+        tools: MCP_TOOLS.length,
+        example: { jsonrpc: '2.0', id: 1, method: 'tools/list' },
         quickAsks: [
           '用 crypto_identify 看看这个 App 用了哪些加密算法和密钥',
           '用 unpack_run 一键脱壳，然后 dumps_list 给我下载链接',

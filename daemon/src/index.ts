@@ -1,4 +1,4 @@
-// ADH Daemon — Android DecryptHub host daemon (legacy internal name: idhd).
+// ADH Daemon — Android DecryptHub host daemon.
 // Boot + agent-TCP frame decode live here. REST route domains live under src/http/.
 import http from 'node:http';
 import net from 'node:net';

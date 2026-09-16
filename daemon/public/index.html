@@ -165,7 +165,7 @@
   details.callstack .io-block-body { margin-top:8px; }
   .row.cat-digest { border-left-color:var(--green); } .row.cat-hmac { border-left-color:var(--blue); }
   .row.cat-sym { border-left-color:var(--amber); }    .row.cat-asym { border-left-color:var(--lilac); }
-  .row.cat-kdf { border-left-color:var(--pink); }     .row.cat-aead { border-left-color:var(--teal); }
+  .row.cat-aead { border-left-color:var(--teal); }
   .row.cat-file { border-left-color:var(--coral); }   .row.cat-sys { border-left-color:var(--lilac); }
   .row.cat-net { border-left-color:var(--cyan); }     .row.cat-other { border-left-color:#3a3a3a; }
   .row.selected { border-left-color:var(--blue); }
@@ -173,13 +173,13 @@
   .row .pill { padding:0 2px; border:0; border-radius:0; background:transparent; font-size:11px; font-weight:600; }
   .row .pill.digest { color:var(--green); } .row .pill.hmac { color:var(--blue); }
   .row .pill.sym { color:var(--amber); }    .row .pill.asym { color:var(--lilac); }
-  .row .pill.kdf { color:var(--pink); }     .row .pill.aead { color:var(--teal); }
+  .row .pill.aead { color:var(--teal); }
   .row .pill.file { color:var(--coral); }   .row .pill.sys { color:var(--lilac); }
   .row .pill.net { color:var(--cyan); }     .row .pill.other { color:var(--muted); }
   .cat-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:8px; vertical-align:middle; }
   .cat-dot.digest { background:var(--green); } .cat-dot.hmac { background:var(--blue); }
   .cat-dot.sym { background:var(--amber); } .cat-dot.asym { background:var(--lilac); }
-  .cat-dot.kdf { background:var(--pink); } .cat-dot.aead { background:var(--teal); }
+  .cat-dot.aead { background:var(--teal); }
   .cat-dot.file { background:var(--coral); } .cat-dot.sys { background:var(--lilac); }
   .cat-dot.net { background:var(--cyan); } .cat-dot.other { background:var(--muted); }
   .empty, .detail-empty { color:var(--muted); text-align:center; padding:60px 20px; line-height:1.7; }
@@ -381,7 +381,7 @@
         </button>
       </div>
     </div>
-    <button type="button" class="compact-action" id="mcpBtn" title="MCP 接入配置 — 经 android-decrypt-hub / adh mcp 调用 ADH 逆向工具">MCP</button>
+    <button type="button" class="compact-action" id="mcpBtn" title="MCP 接入配置 — 直接连接 Host ADH Daemon 的 HTTP MCP 端点">MCP</button>
     <button type="button" class="compact-action" id="setBtn" title="捕获 / 数据 / 配置导入导出">设置</button>
   </div>
 </header>
@@ -413,8 +413,7 @@
         <option value="1">HMAC</option>
         <option value="2">对称</option>
         <option value="3">非对称</option>
-        <option value="4">KDF</option>
-        <option value="5">AEAD</option>
+        <option value="4">AEAD</option>
       </select></span>
     <span class="size-filter">
       <label>输入大小</label>
@@ -527,36 +526,27 @@
       <button type="button" onclick="closeModal('mcpMask')">关闭</button></h3>
     <div class="mcp-body">
       <section class="mcp-step">
-        <h4>安装</h4>
+        <h4>MCP 端点</h4>
         <div class="mcp-fence">
-          <span class="mcp-prompt" aria-hidden="true">$</span>
-          <code id="mcpInstall">pip install android-decrypt-hub</code>
-          <button type="button" class="mcp-copy" data-mcp-copy="install" title="复制">复制</button>
+          <code id="mcpEndpoint">http://127.0.0.1:8088/mcp</code>
+          <button type="button" class="mcp-copy" data-mcp-copy="endpoint" title="复制">复制</button>
         </div>
       </section>
       <section class="mcp-step">
-        <h4>连接</h4>
+        <h4>按包固定</h4>
         <div class="mcp-fence">
-          <span class="mcp-prompt" aria-hidden="true">$</span>
-          <code id="mcpConnect">adh connect</code>
-          <button type="button" class="mcp-copy" data-mcp-copy="connect" title="复制">复制</button>
+          <code id="mcpPinned">http://127.0.0.1:8088/&lt;package&gt;/mcp</code>
+          <button type="button" class="mcp-copy" data-mcp-copy="pinned" title="复制">复制</button>
         </div>
       </section>
       <section class="mcp-step">
-        <h4>配置</h4>
+        <h4>JSON-RPC 示例</h4>
         <div class="mcp-fence mcp-fence--json">
-          <pre id="mcpConfig">{
-  "mcpServers": {
-    "adh": {
-      "command": "adh",
-      "args": ["mcp"]
-    }
-  }
-}</pre>
-          <button type="button" class="mcp-copy" data-mcp-copy="config" title="复制">复制</button>
+          <pre id="mcpExample">{"jsonrpc":"2.0","id":1,"method":"tools/list"}</pre>
+          <button type="button" class="mcp-copy" data-mcp-copy="example" title="复制">复制</button>
         </div>
       </section>
-      <p class="mcp-note">仅限可信网络 · 经 <code>adh mcp</code> 转发到 Host ADH Daemon 的 <code>POST /mcp</code></p>
+      <p class="mcp-note">仅限可信网络 · Host ADH Daemon 直接提供 MCP JSON-RPC；不需要额外 Python 网关。</p>
     </div>
   </div>
 </div>
@@ -710,11 +700,11 @@ const capItems=[]; let capMaxId=0, capDisplayCap=300;
 // 分类色（对齐 IDH）：crypto 再按算法细分 digest/hmac/sym/asym；net/file/system 直接映射。
 function catClass(c){ if(!c) return 'other';
   if(c.category==='net') return 'net'; if(c.category==='file') return 'file'; if(c.category==='system') return 'sys';
-  const a=c.algo||''; if(/KDF/i.test(a)) return 'kdf'; if(/AEAD/i.test(a)) return 'aead';
+  const a=c.algo||''; if(/AEAD/i.test(a)) return 'aead';
   if(/Hmac|HMAC/i.test(a)) return 'hmac'; if(/MD5|SHA|摘要|Digest/i.test(a)) return 'digest';
   if(/RSA|EC|DSA|非对称/i.test(a)) return 'asym'; return 'sym'; }
-const CATLABEL={digest:'摘要',hmac:'HMAC',sym:'对称',asym:'非对称',kdf:'KDF',aead:'AEAD',file:'文件',sys:'系统',net:'网络',other:'其它'};
-const CAT_BY_SEL={0:'digest',1:'hmac',2:'sym',3:'asym',4:'kdf',5:'aead'};   // 分类下拉 → catClass
+const CATLABEL={digest:'摘要',hmac:'HMAC',sym:'对称',asym:'非对称',aead:'AEAD',file:'文件',sys:'系统',net:'网络',other:'其它'};
+const CAT_BY_SEL={0:'digest',1:'hmac',2:'sym',3:'asym',4:'aead'};   // 分类下拉 → catClass
 // HexDump：16 字节/行  偏移: 十六进制  |ascii|
 function hexdump(hex){ hex=hex||''; let out='';
   for(let i=0;i<hex.length;i+=32){ const rowHex=hex.slice(i,i+32); const off=(i/2).toString(16).padStart(8,'0');
@@ -1020,16 +1010,17 @@ document.addEventListener('click', ev=>{
 function closeModal(id){ document.getElementById(id).classList.remove('show'); }
 
 // ---- MCP 模态（头部按钮）----
-const MCP_INSTALL = 'pip install android-decrypt-hub';
-const MCP_CONFIG = '{\n  "mcpServers": {\n    "adh": {\n      "command": "adh",\n      "args": ["mcp"]\n    }\n  }\n}';
-function mcpConnectCmd(){ const pin=pinnedPackage(); return 'adh connect ' + location.host + (pin ? '/'+pin : ''); }
+function mcpEndpoint(){ return `http://${location.host}/mcp`; }
+function mcpPinned(){ const pin=pinnedPackage(); return pin ? `http://${location.host}/${pin}/mcp` : mcpEndpoint(); }
+function mcpExample(){ return JSON.stringify({ jsonrpc:'2.0', id:1, method:'tools/list' }, null, 2); }
 function openMcp(){
-  document.getElementById('mcpConnect').textContent = mcpConnectCmd();
-  document.getElementById('mcpConfig').textContent = MCP_CONFIG;
+  document.getElementById('mcpEndpoint').textContent = mcpEndpoint();
+  document.getElementById('mcpPinned').textContent = mcpPinned();
+  document.getElementById('mcpExample').textContent = mcpExample();
   document.getElementById('mcpMask').classList.add('show');
 }
 function copyMcp(kind, btn){
-  const text = kind==='install' ? MCP_INSTALL : kind==='connect' ? mcpConnectCmd() : MCP_CONFIG;
+  const text = kind==='endpoint' ? mcpEndpoint() : kind==='pinned' ? mcpPinned() : mcpExample();
   const done = ()=>{
     if(!btn){ toast('已复制'); return; }
     const prev = btn.textContent;
@@ -1056,7 +1047,7 @@ function togglePopover(id, btnId){
 }
 
 // ---- 设置 模态 ----
-const FAMILIES=[['digest','摘要 Digest'],['hmac','HMAC'],['symmetric','对称'],['asymmetric','非对称'],['tls','TLS'],['kdf','KDF 密钥派生'],['aead','AEAD(GCM/ChaCha20-Poly1305)']];
+const FAMILIES=[['digest','摘要 Digest'],['hmac','HMAC'],['symmetric','对称'],['asymmetric','非对称'],['tls','TLS'],['aead','AEAD(GCM/ChaCha20-Poly1305)']];
 function setSettingsPage(name){
   document.querySelectorAll('#setNav button').forEach(b=>b.classList.toggle('active',b.dataset.setpage===name));
   document.querySelectorAll('#setMask .set-page').forEach(p=>p.classList.remove('active'));

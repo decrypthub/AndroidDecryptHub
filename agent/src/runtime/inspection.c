@@ -12,11 +12,11 @@
 
 // Resolve a live object through a caller-supplied static field and enumerate its
 // declared fields without embedding target class knowledge in the agent.
-void idh_cmd_object_inspect(int fd, const char *id, const char *class_name,
+void adh_cmd_object_inspect(int fd, const char *id, const char *class_name,
                             const char *field_name) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
     int did = 0;
-    JNIEnv *env = idh_jni_attach(&did);
+    JNIEnv *env = adh_jni_attach(&did);
     if (!env) { char e[160]; snprintf(e, sizeof(e), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"object_inspect\",\"ok\":false,\"error\":\"no JavaVM\"}\n", idj); send_line(fd, e); return; }
     (*env)->PushLocalFrame(env, 256);
 
@@ -35,7 +35,7 @@ void idh_cmd_object_inspect(int fd, const char *id, const char *class_name,
     jmethodID field_get_name = (*env)->GetMethodID(env, field_class, "getName", "()Ljava/lang/String;");
     jmethodID value_of = (*env)->GetStaticMethodID(env, str_class, "valueOf", "(Ljava/lang/Object;)Ljava/lang/String;");
 
-    jclass target = idh_jni_load_app_class(env, class_name);
+    jclass target = adh_jni_load_app_class(env, class_name);
     if (!target) { strncpy(err, "class not found", sizeof(err)-1); goto done; }
 
     jstring field_name_value = (*env)->NewStringUTF(env, field_name);
@@ -72,7 +72,7 @@ void idh_cmd_object_inspect(int fd, const char *id, const char *class_name,
 done:
     if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
     (*env)->PopLocalFrame(env, NULL);
-    idh_jni_detach(did);
+    adh_jni_detach(did);
     if (out) {
         char classj[160], errorj[160]; json_escape(obj_class, classj, sizeof(classj)); json_escape(err, errorj, sizeof(errorj));
         if (ok) snprintf(out, cap, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"object_inspect\",\"ok\":true,\"objectClass\":\"%s\",\"fieldCount\":%d,\"fields\":[%s]}\n", idj, classj, nfields, recs ? recs : "");
@@ -86,11 +86,11 @@ done:
 
 // Invoke only a caller-selected no-arg method on the object reached through the same
 // static-field path. Policy and confirmation stay with the Host ADH Daemon.
-void idh_cmd_object_invoke(int fd, const char *id, const char *class_name,
+void adh_cmd_object_invoke(int fd, const char *id, const char *class_name,
                            const char *field_name, const char *method_name) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
     int did = 0;
-    JNIEnv *env = idh_jni_attach(&did);
+    JNIEnv *env = adh_jni_attach(&did);
     if (!env) { char e[160]; snprintf(e, sizeof(e), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"object_invoke\",\"ok\":false,\"error\":\"no JavaVM\"}\n", idj); send_line(fd, e); return; }
     (*env)->PushLocalFrame(env, 128);
     int ok = 0; char err[128] = "", result[400] = "";
@@ -106,7 +106,7 @@ void idh_cmd_object_invoke(int fd, const char *id, const char *class_name,
     jmethodID invoke = (*env)->GetMethodID(env, method_class, "invoke", "(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;");
     jmethodID value_of = (*env)->GetStaticMethodID(env, str_class, "valueOf", "(Ljava/lang/Object;)Ljava/lang/String;");
 
-    jclass target = idh_jni_load_app_class(env, class_name);
+    jclass target = adh_jni_load_app_class(env, class_name);
     if (!target) { strncpy(err, "class not found", sizeof(err)-1); goto done; }
     jobject field_obj = (*env)->CallObjectMethod(env, target, get_field, (*env)->NewStringUTF(env, field_name));
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); strncpy(err, "field not found", sizeof(err)-1); goto done; }
@@ -126,7 +126,7 @@ void idh_cmd_object_invoke(int fd, const char *id, const char *class_name,
 done:
     if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
     (*env)->PopLocalFrame(env, NULL);
-    idh_jni_detach(did);
+    adh_jni_detach(did);
     char resultj[500], errorj[160]; json_escape(result, resultj, sizeof(resultj)); json_escape(err, errorj, sizeof(errorj));
     char out[800];
     if (ok) snprintf(out, sizeof(out), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"object_invoke\",\"ok\":true,\"result\":\"%s\"}\n", idj, resultj);
@@ -200,8 +200,7 @@ static int footprint_scan(struct footprint_counts *c, int *module_count) {
             c->anon_exec_bytes += bytes;
         }
 
-        // Either file name: the shipped lib is libadh_agent.so, a not-yet-reflashed module dir still has libidh_agent.so.
-        if (strstr(pth, "libadh_agent.so") || strstr(pth, "libidh_agent.so")) c->agent_exec++;
+        if (strstr(pth, "libadh_agent.so")) c->agent_exec++;
         if (strstr(pth, "/zygisk/") || strstr(pth, "libzygisk.so") || strstr(pth, "zygisk_"))
             c->zygisk_exec++;
     }
@@ -226,7 +225,7 @@ void adh_footprint_capture_baseline(void) {
 // baseline and the current counts; a positive anonExec delta means the process gained a
 // true anonymous executable mapping after bootstrap (correlate with the command that ran;
 // Dobby/QBDI are known producers, ART JIT/other runtimes may also add one).
-void idh_cmd_compat_probe(int fd, const char *id) {
+void adh_cmd_compat_probe(int fd, const char *id) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
     adh_footprint_capture_baseline();
 
@@ -239,8 +238,8 @@ void idh_cmd_compat_probe(int fd, const char *id) {
         }
         fclose(status);
     }
-    int got_ok = (idh_resolve_sym("libc.so", "access") != NULL);
-    int jni_ok = idh_jni_vm_available();
+    int got_ok = (adh_resolve_sym("libc.so", "access") != NULL);
+    int jni_ok = adh_jni_vm_available();
 
     struct footprint_counts cur;
     int module_count = 0;
@@ -250,7 +249,7 @@ void idh_cmd_compat_probe(int fd, const char *id) {
 
     int memread_ok = 0;
     { int mem_fd = open("/proc/self/mem", O_RDONLY);
-      if (mem_fd >= 0) { unsigned char bytes[4]; memread_ok = (pread(mem_fd, bytes, 4, (off_t)(uintptr_t)&idh_cmd_compat_probe) == 4); close(mem_fd); } }
+      if (mem_fd >= 0) { unsigned char bytes[4]; memread_ok = (pread(mem_fd, bytes, 4, (off_t)(uintptr_t)&adh_cmd_compat_probe) == 4); close(mem_fd); } }
     void *dlprobe = dlopen("libcrypto.so", RTLD_NOW);
     int dlopen_blocked = (dlprobe == NULL);
     if (dlprobe) dlclose(dlprobe);
@@ -269,7 +268,7 @@ void idh_cmd_compat_probe(int fd, const char *id) {
         "\"delta\":{\"execMappings\":%d,\"anonExecMappings\":%d,\"anonNamedExecMappings\":%d,\"memfdExecMappings\":%d,\"rwxMappings\":%d},"
         "\"dlopenSystemLibsBlocked\":%s}\n",
         idj, tracer, seccomp, got_ok ? "true" : "false", jni_ok ? "true" : "false",
-        idh_jni_vm_available() ? "true" : "false", memread_ok ? "true" : "false",
+        adh_jni_vm_available() ? "true" : "false", memread_ok ? "true" : "false",
         maps_read_ok ? "true" : "false", cur.maps, module_count,
         cur.exec, cur.file_exec, cur.memfd_exec, cur.anon_exec, cur.anon_named_exec, cur.rwx,
         (unsigned long long)(cur.exec_bytes / 1024),
@@ -292,10 +291,10 @@ void idh_cmd_compat_probe(int fd, const char *id) {
          tracer, seccomp, got_ok, jni_ok, cur.exec, cur.anon_exec, cur.rwx);
 }
 
-void idh_cmd_jni_probe(int fd, const char *id) {
+void adh_cmd_jni_probe(int fd, const char *id) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
     int did = 0;
-    JNIEnv *env = idh_jni_attach(&did);
+    JNIEnv *env = adh_jni_attach(&did);
     if (!env) {
         char error[160]; snprintf(error, sizeof(error), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"jni_probe\",\"ok\":false,\"error\":\"no JavaVM\"}\n", idj);
         send_line(fd, error); return;
@@ -317,7 +316,7 @@ void idh_cmd_jni_probe(int fd, const char *id) {
         (*env)->DeleteLocalRef(env, version);
     }
     if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-    idh_jni_detach(did);
+    adh_jni_detach(did);
 
     char out[256], releasej[128]; json_escape(release, releasej, sizeof(releasej));
     snprintf(out, sizeof(out),

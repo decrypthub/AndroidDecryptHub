@@ -3,11 +3,8 @@ package com.adh.xposed;
 import android.os.Build;
 import android.util.Log;
 
-import java.io.BufferedReader;
 import java.io.File;
-import java.io.FileReader;
 import java.io.FileWriter;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
@@ -37,7 +34,7 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
 public class AdhXposedEntry implements IXposedHookLoadPackage {
 
     private static final String TAG = "ADH_XPOSED";
-    /** Legacy ABI name on purpose: the agent .so is still libadh_agent.so (AGENTS.md naming policy). */
+    /** Shipped agent library name (AGENTS.md naming policy). */
     private static final String AGENT_LIB = "adh_agent";
     private static final String SELF_PKG = "com.adh.xposed";
 
@@ -85,12 +82,9 @@ public class AdhXposedEntry implements IXposedHookLoadPackage {
     }
 
     /**
-     * Bring the agent into this process.
-     *
-     * <p>Preferred path: the framework puts the module's own {@code lib/<abi>} directory on
-     * the module classloader's native search path, so {@link System#loadLibrary} resolves the
-     * bundled {@code libadh_agent.so}. Fallback: locate the module APK in
-     * {@code /proc/self/maps} and load the extracted .so by absolute path.
+     * Bring the agent into this process. The framework puts the module's own
+     * {@code lib/<abi>} directory on the module classloader's native search path,
+     * so {@link System#loadLibrary} resolves the bundled {@code libadh_agent.so}.
      */
     private boolean loadAgent() {
         try {
@@ -98,52 +92,8 @@ public class AdhXposedEntry implements IXposedHookLoadPackage {
             return true;
         } catch (Throwable t) {
             log("System.loadLibrary(" + AGENT_LIB + ") failed: " + t);
+            return false;
         }
-        for (String libDir : candidateLibDirs()) {
-            File so = new File(libDir, "lib" + AGENT_LIB + ".so");
-            if (!so.isFile()) continue;
-            try {
-                System.load(so.getAbsolutePath());
-                return true;
-            } catch (Throwable t) {
-                log("System.load(" + so + ") failed: " + t);
-            }
-        }
-        return false;
-    }
-
-    /** Candidate {@code lib/<abi>} dirs derived from this module's APK path in /proc/self/maps. */
-    private List<String> candidateLibDirs() {
-        List<String> out = new ArrayList<>();
-        BufferedReader r = null;
-        try {
-            r = new BufferedReader(new FileReader("/proc/self/maps"));
-            String line;
-            while ((line = r.readLine()) != null) {
-                int i = line.indexOf("/data/app/");
-                if (i < 0 || !line.contains(SELF_PKG) || !line.contains(".apk")) continue;
-                String apk = line.substring(i).trim();
-                int end = apk.indexOf(".apk");
-                if (end < 0) continue;
-                apk = apk.substring(0, end + 4);
-                File appDir = new File(apk).getParentFile();
-                if (appDir == null) continue;
-                for (String abi : new String[]{"arm64", "arm"}) {
-                    String lib = new File(appDir, "lib/" + abi).getAbsolutePath();
-                    if (!out.contains(lib)) out.add(lib);
-                }
-            }
-        } catch (Throwable t) {
-            log("maps scan failed: " + t);
-        } finally {
-            if (r != null) {
-                try {
-                    r.close();
-                } catch (Throwable ignored) {
-                }
-            }
-        }
-        return out;
     }
 
     /**

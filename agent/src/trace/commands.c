@@ -78,23 +78,23 @@ static long trace_wrapper(long a0, long a1, long a2, long a3) {
     return g_trace_original ? g_trace_original(a0, a1, a2, a3) : 0;
 }
 
-void idh_cmd_trace_run(int fd, const char *id, const char *symbol_library,
+void adh_cmd_trace_run(int fd, const char *id, const char *symbol_library,
                        const char *symbol, const char *hook_module,
                        const char *class_name) {
     char idj[64];
     json_escape(id, idj, sizeof(idj));
-    void *original = idh_resolve_sym(symbol_library, symbol);
+    void *original = adh_resolve_sym(symbol_library, symbol);
     g_trace_original = (fn4_t)original;
-    int replaced = original ? idh_got_replace(hook_module, original, (void *)trace_wrapper) : -1;
+    int replaced = original ? adh_got_replace(hook_module, original, (void *)trace_wrapper) : -1;
     pthread_mutex_lock(&g_trace_lock);
     g_trace_count = 0;
     pthread_mutex_unlock(&g_trace_lock);
 
     int did_attach = 0, triggered = 0;
-    JNIEnv *env = idh_jni_attach(&did_attach);
+    JNIEnv *env = adh_jni_attach(&did_attach);
     if (env) {
         (*env)->PushLocalFrame(env, 32);
-        jclass target = class_name[0] ? idh_jni_load_app_class(env, class_name) : NULL;
+        jclass target = class_name[0] ? adh_jni_load_app_class(env, class_name) : NULL;
         if (target) {
             jmethodID run = (*env)->GetStaticMethodID(env, target, "run", "()I");
             if (run) {
@@ -104,10 +104,10 @@ void idh_cmd_trace_run(int fd, const char *id, const char *symbol_library,
         }
         if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
         (*env)->PopLocalFrame(env, NULL);
-        idh_jni_detach(did_attach);
+        adh_jni_detach(did_attach);
     }
     if (replaced > 0 && original) {
-        idh_got_replace(hook_module, (void *)trace_wrapper, original);
+        adh_got_replace(hook_module, (void *)trace_wrapper, original);
     }
 
     char symbolj[80];
@@ -146,11 +146,11 @@ void idh_cmd_trace_run(int fd, const char *id, const char *symbol_library,
          triggered, count);
 }
 
-void idh_cmd_qbdi_trace(int fd, const char *id, const char *symbol_library,
+void adh_cmd_qbdi_trace(int fd, const char *id, const char *symbol_library,
                         const char *symbol) {
     const char *library = symbol_library[0] ? symbol_library : "libadhdetect.so";
     const char *target_symbol = symbol[0] ? symbol : "adh_trace_target";
-    void *function = idh_resolve_sym(library, target_symbol);
+    void *function = adh_resolve_sym(library, target_symbol);
     char idj[64];
     json_escape(id, idj, sizeof(idj));
     if (!function) {
@@ -169,7 +169,7 @@ void idh_cmd_qbdi_trace(int fd, const char *id, const char *symbol_library,
         return;
     }
     trace[0] = 0;
-    idh_qbdi_trace(function, trace, (1 << 18) - 64);
+    adh_qbdi_trace(function, trace, (1 << 18) - 64);
     char *message = malloc((1 << 18) + 128);
     if (!message) {
         free(trace);

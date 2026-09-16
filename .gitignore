@@ -32,7 +32,6 @@ captures/
 dumps/
 *.dexdump
 *.trace
-idhd-data/
 adhd-data/
 *.sqlite
 *.sqlite-*

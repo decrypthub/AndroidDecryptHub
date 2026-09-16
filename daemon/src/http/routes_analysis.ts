@@ -16,9 +16,16 @@ import {
 } from '../service.ts';
 import { broadcast, CAPTURES, dumps, readBody, sessions } from '../state.ts';
 import type { DumpMeta } from '../state.ts';
-import type { Route, RouteContext } from './types.ts';
+import type { Route, RouteContext, SendResponse } from './types.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+export async function serveDashboard(send: SendResponse) {
+  try {
+    const html = await readFile(join(__dirname, '..', '..', 'public', 'index.html'), 'utf8');
+    return send(200, html, 'text/html; charset=utf-8');
+  } catch { return send(500, { error: 'dashboard missing' }); }
+}
 
 export function analysisRoutes({ req, res, url, send }: RouteContext): Route[] {
   const routes: Route[] = [
@@ -212,8 +219,8 @@ export function analysisRoutes({ req, res, url, send }: RouteContext): Route[] {
       res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-disposition': `attachment; filename="${sha.slice(0, 16)}.${m.kind}.bin"` });
       return createReadStream(m.path).pipe(res);
     } },
-    { path: '/', handler: dashboardHtml },
-    { path: '/index.html', handler: dashboardHtml },
+    { path: '/', handler: () => serveDashboard(send) },
+    { path: '/index.html', handler: () => serveDashboard(send) },
   ];
 
   async function dexParseScanSearch() {
@@ -239,12 +246,6 @@ export function analysisRoutes({ req, res, url, send }: RouteContext): Route[] {
       methods: parsed.methods.slice(0, cap),
       strings: parsed.strings.slice(0, cap),
     });
-  }
-  async function dashboardHtml() {
-    try {
-      const html = await readFile(join(__dirname, '..', '..', 'public', 'index.html'), 'utf8');
-      return send(200, html, 'text/html; charset=utf-8');
-    } catch { return send(500, { error: 'dashboard missing' }); }
   }
   return routes;
 }

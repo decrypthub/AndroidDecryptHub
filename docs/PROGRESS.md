@@ -12,28 +12,11 @@
 
 **三条总原则（门禁）**：① 不为过测而耦合（agent 内 `com.adh.sandbox` 常量 = 0，目标模块名不硬编码，
 全来自命令参数）；② 不胡乱兜底 / fail-loud（hook 装不上、缓冲溢出、解不动一律显式报错 + 计数上报，
-绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 idhd，hook/采集在 agent）。
+绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
-- [x] **交付物改名：`libidh_agent.so` → `libadh_agent.so`（2026-09-16，发布口径）**：按 `AGENTS.md` 命名规则，`idh_*` 只是 legacy 兼容层，交付物不该挂 IDH 名 ——
-      agent 的 CMake project/target 改为 `adh_agent`（产物 `libadh_agent.so`）；沙盒 `System.loadLibrary("adh_agent")`、Xposed 模块 `AGENT_LIB="adh_agent"`、Zygisk companion `kAgentName="libadh_agent.so"`、`AdhPaths.AGENT_SO_NAME`、全部 build/verify 脚本与文档同步。
-      · **兼容层刻意保留**：导出符号 `idh_agent_start`、`IDH_*` 环境变量、`idhd` npm 别名照旧；且 **loader 同时接受旧文件名** —— Zygisk companion 先试 `libadh_agent.so` 再回退 `libidh_agent.so`（module-dir 与文件系统回退路径都试），agent 的 GOT 自测改用 `dladdr()` 取自身 basename（不再硬编码），footprint 统计与 daemon 的 `self_load` 判定都同时认两名 ⇒ "新代码 + 早先刷入的旧模块"这种混态不会坏。
-      · 验证：agent 重建 323,752 B（三个导出不变）；沙盒 APK / Xposed 模块 APK / zygisk zip / bundle 全部重出（zip 内为 `libadh_agent.so`）；全量 `verify_all` **51/51 全绿**。
-      · 提醒：测试机上**已刷入**的 Zygisk 模块仍是旧文件名；要让设备也切成新名需重刷 `injector/zygisk/dist/adh-bundle-v0.3.3.zip` 并重启（不刷不影响功能，companion 两者都认）。
-- [x] **发布前功能状态梳理（2026-09-16）**：新增 `docs/FEATURE_STATUS.md`，按四类列清第一版有什么 ——
-      ①**没通过测试（不要了）**：LSPlant Java 方法 hook（已删除，agent -45% 体积）、ShadowHook（从未入库）；
-      ②**测过的**：51 项验收（`verify_all` 51/51）按能力分组的清单与每项"证明什么"；
-      ③**没测的**：KDF 原生一次性捕获、eCapture 的 pcap/keylog 模式、Xposed 多进程、国密、隐私面板、重打包/ptrace、`python/` 网关、Manager 真机 UI；
-      ④**开发到一半的**：KDF hook（无触发源）、`python/` 网关（未入库）、多进程作用域、可选后端"一键下发"。
-      · 同时明确"发布物"清单（agent .so + Zygisk/Manager + 三个可选后端）与"开发用、不随交付"的部分（sandbox/tools/daemon/docs）。
-- [x] **v1 范围收敛：剔除写了但没跑通的功能（2026-09-16）**：发布前清理，只保留"能验证 / 能发布"的部分 ——
-      · **删除 LSPlant Java 方法 hook 全链路**：该后端在测试机（ColorOS/Android 15，libart 裁剪）**无法初始化**，v23 验收长期排除在 `verify_all` 之外（既不可验证也不可发布）。删除 `agent/src/hook/java_lsplant.{cpp,h}`、沙盒回调 `MethodHook.java` / `HookTarget.kt`、agent 命令 `java_hook_test`、daemon 路由 `/api/java/hook_test`、`tools/fetch_lsplant.sh`、`tools/verify_v23_javahook.sh`、CMake 的 LSPlant/DexBuilder 分支。
-        效果：agent `.so` **591,752 → 323,424 字节（-45%）**，`llvm-strings` 里 LSPlant 痕迹归零。
-      · **Dobby（native inline hook）独立成 `tools/fetch_dobby.sh`**（Maven AAR 里的静态 `libdobby.a`）：它是**已验证**能力（v2.2 / `verify_v28_inlinehook.sh` 仍绿），不再和 LSPlant 绑在一个脚本里。
-      · **删除废弃脚手架** `injector/manager/`（DEPRECATED stub，早已迁到 `device/manager`）。
-      · 文档同步：REQUIREMENTS §7 标注"**不在 v1 范围 / 已移除**"、依赖表用 Dobby 换掉 LSPlant、`AGENTS.md`/`CLAUDE.md` 命令与测试机说明更新、各 MAP 去掉 v23 特例。
-      · 保留但**明确标 PENDING（未在 v1 宣传为完成）**：KDF 原生一次性捕获（PBKDF2/HKDF/scrypt —— Android JCA 不走原生一次性 API，对 native 目标仍可能命中）、国密 SM2/SM3/SM4、隐私分析面板；重打包（`injector/gadget-pack`）与 ptrace 注入器仍是"未开工"，仓库里没有代码。
-      · 验证：agent / 沙盒 APK / Xposed 模块重新构建 + 安装，全量 `verify_all` **51/51 全绿**。
+- [x] **未发布口径：删除 IDH 兼容/兜底（2026-09-16）**：只保留 `libadh_agent.so` 单交付名、`adh_agent_start` 单导出入口。Zygisk 只从 module dir 打开新文件名，不再尝试旧文件名、绝对路径或旧 dlsym；Xposed 只走 `System.loadLibrary("adh_agent")`，删除了 `/proc/self/maps` 二次路径扫描；agent 内部 `idh_*` helper 全部改为 `adh_*`，reporter 只认 `adh.reporter.class`；daemon/tools 不再读取 `IDH_*`，数据目录固定 `adhd-data/`，也不再迁移 `libidhdetect.so`。历史段落里的 IDH 事件/日志证据仅用于说明当时现象，当前代码不包含这些兼容路径。Zygisk + app `System.loadLibrary` 的混态由 native 首载 copy owner guard（`dl_iterate_phdr` link-map order）收敛为单会话；Zygisk 早于 app 设置 `adh.reporter.class` 时，winner copy 的 reporter watcher 会迟绑定，v24 Java rich capture 仍 PASS。两轮真机 `verify_all.sh` 均 51/51。
+- [x] **v1 范围收敛（2026-09-16）**：发布面只保留 `docs/FEATURE_STATUS.md §2` 的 51 项已验收能力。未验收、半成品或没有真实触发源的能力，已从 agent / daemon / Web UI / MCP / tools / 发布文档中删除；历史细节只留在 `docs/archive/`，不再作为产品入口或发布说明。`tools/verify_all.sh` 51/51。
 - [x] **Web UI 会话模块修复：会话无限堆积 + 选择器"白屏"（2026-09-16）**：两个独立缺陷 ——
       ① **daemon 从不清理 `sessions`**：每次 App 重启都新增一条，一个下午的测试留下 20 条死会话（列表里全是历史会话）。
       修法：`state.ts` 新增 `pruneSessions()`（每包最多保留 `OFFLINE_KEEP_PER_PACKAGE=2` 条离线 + 超过 `OFFLINE_RETENTION_MS=10min` 一律丢弃，**绝不动在线会话**），并在 `agent hello`、`agent close` 与 60s 定时清扫里调用；实测重启 4 次后稳定在 `total=3 (1 online + 2 offline)`。
@@ -68,16 +51,16 @@
       · 框架怪癖（已写进实现）：`scope set <module>` 不带参会抛 NPE（清 scope 必须逐条 `scope rm`）；`scope set` 会**隐式启用**模块，想保持关闭必须显式再关一次。
       · 验收：`tools/verify_v32_backend_control.sh` 真机 PASS（构建+推送 daemon APK → 设/清 scope、关/开模块，每步与框架 CLI 交叉核对，最后恢复测试前状态）；单元测试覆盖 v5 门槛、启用即镜像、保存即镜像、停用不镜像。
       · 注：该提交同时带上设备侧此前未提交的多模块工作（应用目录/图标/进程启停/Web UI 地址/启动图标）—— 它们与本次改动在 `RootScopeBinder`、`ScopeScreen`、`DaemonScopeRepository` 里交织，无法单独切开。
-- [x] **模块 W 可选后端：LSPosed/Xposed 薄模块（2026-09-15，真机 aa165071 / Vector v2.2 3080）**：`injector/xposed/` 一个**薄加载器 APK**（`com.adh.xposed`），框架已加载进目标进程后把自带 `libidh_agent.so` 送进去；分析能力一行没搬进目标（红线不变），也**不 vendor 上游代码**（`api-stub/` 是自己写的 compile-only ABI 声明，dex 静态验证只有 `Lcom/adh/xposed/AdhXposedEntry;` 一个类定义）。
+- [x] **模块 W 可选后端：LSPosed/Xposed 薄模块（2026-09-15，真机 aa165071 / Vector v2.2 3080）**：`injector/xposed/` 一个**薄加载器 APK**（`com.adh.xposed`），框架已加载进目标进程后把自带 `libadh_agent.so` 送进去；分析能力一行没搬进目标（红线不变），也**不 vendor 上游代码**（`api-stub/` 是自己写的 compile-only ABI 声明，dex 静态验证只有 `Lcom/adh/xposed/AdhXposedEntry;` 一个类定义）。
       · 设备事实 ①：Vector 给模块的 `nativeLibraryDirectories` 是 `base.apk!/lib/arm64-v8a` —— 所以 agent `.so` 必须**未压缩**留在 APK（`useLegacyPackaging=false` + `extractNativeLibs=false`）；先前用"安装时解压"布局时 `System.loadLibrary` 直接 `UnsatisfiedLinkError`（日志已留证），改成未压缩后一次通过。
       · 设备事实 ②：模块 dex 走 `InMemoryDexFile`，APK 不进 maps → APK 路径兜底只在解压式布局下有意义。
       · 设备事实 ③：`vector-cli scope set <module>` 空参数会抛 NPE 且不清 scope，清 scope 必须逐条 `scope rm`（`install_xposed.sh --disable` / 验收脚本都按这个来）。
       · 策略（slice 1）：只进 scope 内应用主进程；永不进 `android`/`com.android.*`/`com.google.android.gms`/模块自身；**只对 ADH 自己的测试宿主**（sandbox / Manager）写 marker，第三方目标不留文件。
       · 验收：`tools/verify_v31_xposed.sh` 真机 PASS（靶子 `com.adh.manager`，非自加载 agent 的 sandbox）：marker `ADH_XPOSED_OK ... agent=1`、框架日志 `Loading legacy module com.adh.xposed` → `Loading class com.adh.xposed.AdhXposedEntry`、Host daemon 拿到 `entry=jni_onload` 会话并真的能执行命令（模块枚举 533 条）；脚本结束**恢复测试前状态**（本机现为 disabled + 空 scope）。
-      · 待办：ADH Manager/Device Daemon 驱动框架 scope、多进程目标、注入中心里的后端选择。
+      · 待办：ADH Manager/Device Daemon 驱动框架 scope、注入中心里的后端选择。
 - [x] **修复：`verify_v27_zygisk.sh` 泄漏 Zygisk scope → 双 agent 抢 GOT 槽（2026-09-15）**：v27 把 `scope.json` 写成 `["com.adh.sandbox"]` 做 round-trip 后**不还原**，
-      于是后续每个 device 脚本的 sandbox 里都同时存在**两份 agent**：`/data/app/.../lib/arm64/libidh_agent.so`（应用自己 `System.loadLibrary`，新构建，tag `ADH_AGENT`）
-      + `/data/adb/modules/adh/libidh_agent.so`（Zygisk 注入，旧构建，tag `IDH_AGENT`），两份抢同一批 GOT 槽。日志实锤：`IDH_AGENT capture_start: evp=1 dig=1 …` 之后
+      于是后续每个 device 脚本的 sandbox 里都同时存在**两份 agent**：`/data/app/.../lib/arm64/libadh_agent.so`（应用自己 `System.loadLibrary`，新构建，tag `ADH_AGENT`）
+      + `/data/adb/modules/adh/libadh_agent.so`（Zygisk 注入，旧构建，tag `ADH_AGENT`），两份抢同一批 GOT 槽。日志实锤：`ADH_AGENT capture_start: evp=1 dig=1 …` 之后
       `ADH_AGENT capture_start: evp=0 …`，紧接 `crypto_hook_test: replaced=0 triggered=1 captures=0`。
       证据/验证：把 scope 清成空 allowlist 后进程里只剩 1 份 agent（maps 3 段而非 6 段），v04_crypto / v07 / v07_flow / v20_file / v26_cryptocoverage **全部转绿**。
       修法：v27 现在快照原 scope 并在退出时还原（`trap restore_scope EXIT`；原本无文件则留空 allowlist），不再把 sandbox 永久留在 Zygisk 注入里。
@@ -96,12 +79,12 @@
         实测开销：so 25,220,848 B、目标进程 +9 行 maps、+2 线程 —— 高开销后端，**默认关闭**，只有显式调用才启用。
 
 - [x] **修复：`verify_v05_detect.sh` 转绿（2026-09-15）——两个独立缺陷叠加**：症状是 `/api/detect/watch` 恒返回 `hooked={"ptrace":0,"access":0,"prop":0} count=0`。
-      缺陷 ①（真凶）：daemon 持久化的 `idhd-data/settings.json` 里还是旧名 `sysModule: "libidhdetect.so"`，而设备上的库早就是 `libadhdetect.so` ——
-      agent 拿到的模块子串匹配不到任何已加载模块，**静默** 0 命中（`capture_start: sys[…] p=0 a=0 g=0`，日志里那个 `sys[libidhdetect.so]` 就是线索）。
+      缺陷 ①（真凶）：daemon 持久化的 `adhd-data/settings.json` 里还是旧名 `sysModule: "libadhdetect.so"`，而设备上的库早就是 `libadhdetect.so` ——
+      agent 拿到的模块子串匹配不到任何已加载模块，**静默** 0 命中（`capture_start: sys[…] p=0 a=0 g=0`，日志里那个 `sys[libadhdetect.so]` 就是线索）。
       修法：`state.ts::mergeSettings` 加 legacy 迁移，只把这一段的确切旧值升级为 `libadhdetect.so`（其余模块名仍归操作者配置）。代码默认值本来就对，是持久化设置把它盖住了。
       缺陷 ②（即使模块名对了也不生效）：这三个符号在被 hook 时**还没被调用过**（sandbox 启动只做 `Detection.load()`，`Detection.run()` 由 agent 触发），
-      PLT 槽仍是 resolver stub，而 `idh_got_replace` 只认"槽值 == 原函数地址" → 仍旧 0 命中。修法：把检测三件套的安装/还原（`capture_start` 的 sys 段、
-      `capture_stop`、`idh_cmd_detect_watch` 安装+还原）改用现成的 `idh_got_replace_by_name`——从模块自己的 `.rela.plt`/`.rela.dyn`（含 APS2 打包 reloc）按符号名定位槽，槽解析与否都成立。
+      PLT 槽仍是 resolver stub，而 `adh_got_replace` 只认"槽值 == 原函数地址" → 仍旧 0 命中。修法：把检测三件套的安装/还原（`capture_start` 的 sys 段、
+      `capture_stop`、`adh_cmd_detect_watch` 安装+还原）改用现成的 `adh_got_replace_by_name`——从模块自己的 `.rela.plt`/`.rela.dyn`（含 APS2 打包 reloc）按符号名定位槽，槽解析与否都成立。
       证据：修复后 `hooked={"ptrace":1,"access":1,"prop":1}`、`count=4`（debug/root×2/prop 全部观测到），agent 日志 `detect_watch: hooked p=1 a=1 g=1 triggered=1 detections=4`；
       `tools/verify_v05_detect.sh` PASS，全量 `verify_all` 47/47。
 - [x] **Web UI 重皮 —— 移植 IDH「2026 workbench」设计语言（2026-07-24）**：`daemon/public/index.html` 整体重设，对齐 IDH 参考界面。
@@ -114,31 +97,27 @@
 - [x] **v2.0** WS-D 协议重写（length-framed `[u32 len][u8 type][payload]`，去 8192 上限）**✅**
       + WS-C 环形缓冲/如实 dropped 上报 **✅ 完成并验证**（连续 push-drain 线程作为 WS-C 优化后续再上，见日志）
       + WS-C `cap_reset` 记账修复（丢弃环内记录计入 dropped，`emitted+backlog+dropped==seq` 恒成立）**✅**
-- [x] **v2.1 原生 Signature/KDF/AEAD 覆盖扩展（GOT hook，替代原 LSPlant 路线的 P0 缺口）+ WS-B 去 sandbox 耦合（2026-07-27）**
+- [x] **v2.1 原生 Signature/AEAD 覆盖扩展（GOT hook）+ WS-B 去 sandbox 耦合（2026-07-27）**
       · **WS-B 部分完成**：agent 常驻采集三类(crypto/file/sys)目标模块**全部参数化**、agent 零硬编码目标模块 **✅**；
-        LSPlant 在测试机 13f54a46(ColorOS/A15 stripped libart) **根本性阻塞**（44 个所需 ART 符号缺 30 个/68%），
-        同 ROM 上 ShadowHook inline 后端 `shadowhook_init` 同样失败（INIT_LINKER/errno12）——系统性 ROM 限制，需 stock/Pixel 验证；
-        按 C 端产品方向（2026-07-27 决策）LSPlant 降级为非当前路线，国密 SM2/SM3/SM4 与隐私分析面板标 PENDING
       · **AEAD（GCM/ChaCha20-Poly1305）**：`EVP_AEAD_CTX_seal/open` 原生 hook 补上此前完全抓不到明文/密文的真实漏洞（Conscrypt 走一次性 API，不走 `EVP_CipherUpdate`）
       · **Signature（RSA/ECDSA）关键发现**：Conscrypt 的 `SHA256withECDSA` 实际不走 `ECDSA_sign/verify`，而是走 BoringSSL 通用的 `EVP_DigestSignInit/Update/Final` + `EVP_DigestVerifyInit/Update/Final`——这套 API 同时服务 JCA `Mac`(HMAC)，靠 `EVP_PKEY_id()`（稳定导出访问器，非内部结构体偏移）在 Init 时判定 HMAC vs 非对称密钥，结果缓存进有界 ctx→kind 表
-      · **KDF（PBKDF2/HKDF/scrypt）原生一次性捕获仍是 PENDING**：`PKCS5_PBKDF2_HMAC`/`HKDF` 根本不被 `libjavacrypto.so` 导入（`llvm-readelf --dyn-syms` 确认），`EVP_PBE_scrypt` 虽可 hook 但无 Android JCA provider 调用它——Android 自己的 `PBKDF2WithHmacSHA256` 是纯 Java 迭代 `Mac.doFinal`，无原生一次性 KDF 调用可拦截；不伪造覆盖，诚实标 PENDING
       · 验证：`tools/verify_v26_cryptocoverage.sh`（新增）连续多次 fresh-restart 测试 PASS；`tools/verify_all.sh` 41/41 全绿
-      · 修了一个验收脚本自身的竞态：`aeadDemo` 一次触发产出 3 条相关捕获（原生 GCM 密文/原生 ChaCha 密文/沙盒自带 IdhReport Java 富捕获），轮询一见到第一条就提前返回，导致偶发 `aeadMarker=false`——加 `settleTicks` 让轮询在断言满足后再多等几拍
-- [x] **结构重构 Phase 1 — tools 测试库（2026-08-03）**：抽出 `tools/lib/verify_common.sh`（resolve_env/sandbox_alive/gate/grep_q/host_begin+chk+finish，here-string grep 修 SIGPIPE 假 FAIL）+ `tools/lib/env.sh`（SDK/NDK/CMAKE/NINJA/TOOLCHAIN/READELF/ROOT/ABI，build_agent+build_detect 共享）；33 个 verify 脚本转 source 库（node heredoc 全 verbatim，只换 shell boilerplate），三种 idiom（device-alive / device-host node-heredoc / host-chk）各保其形；`tools/MAP.md` 导航 + 加脚本配方。**verify_all 41/41 全绿**（两轮：首轮 v08_disasm/analyze 瞬时 flake，次轮 41/41）。v23 故意排除（LSPlant 在本 ROM 阻断）——把静默排除显式化注释而非加回（fail-loud，避免未来 AI 误"修"致每次红）。已知预存 flake：v08 .so 重建路径 `readMem` short-read 早退（index.ts:663）→ Phase 2 dump.ts 抽取时处理。
+      · 修了一个验收脚本自身的竞态：`aeadDemo` 一次触发产出 3 条相关捕获（原生 GCM 密文/原生 ChaCha 密文/沙盒自带 AdhReport Java 富捕获），轮询一见到第一条就提前返回，导致偶发 `aeadMarker=false`——加 `settleTicks` 让轮询在断言满足后再多等几拍
+- [x] **结构重构 Phase 1 — tools 测试库（2026-08-03）**：抽出 `tools/lib/verify_common.sh`（resolve_env/sandbox_alive/gate/grep_q/host_begin+chk+finish，here-string grep 修 SIGPIPE 假 FAIL）+ `tools/lib/env.sh`（SDK/NDK/CMAKE/NINJA/TOOLCHAIN/READELF/ROOT/ABI，build_agent+build_detect 共享）；33 个 verify 脚本转 source 库（node heredoc 全 verbatim，只换 shell boilerplate），三种 idiom（device-alive / device-host node-heredoc / host-chk）各保其形；`tools/MAP.md` 导航 + 加脚本配方。**verify_all 41/41 全绿**（两轮：首轮 v08_disasm/analyze 瞬时 flake，次轮 41/41）。v23 已从发布面移除，不再保留无法验证的静默排除项。已知预存 flake：v08 .so 重建路径 `readMem` short-read 早退（index.ts:663）→ Phase 2 dump.ts 抽取时处理。
 - [x] **结构重构 Phase 2 — daemon 拆分（2026-08-03）**：`daemon/src/index.ts` 1585 行 → 拆成 `state.ts`/`service.ts`/`mcp.ts`/`index.ts`。**verify_all 41/41 全绿**。
 - [x] **结构重构 Phase 3a — agent GOT/ELF hook 引擎拆分（2026-08-05）**：新增 `agent/src/hook/got.c` + `got.h`，把 ELF relocation/APS2 解析、GOT slot 替换、内存符号解析和 `gothook_selftest` 从 bootstrap 收口为内部窄接口；按 `wc -l`，`agent_main.c` 2655 → 2179 行。新增 `agent/src/MAP.md`，并修正 AGENTS/CLAUDE 中“MAP pending / single TU”的过期导航。**`tools/build_agent.sh` NDK 编译、链接、双导出检查通过；`verify_all.sh` 16 PASS / 0 FAIL / 28 SKIP（Host 全绿）**。指定测试机 `13f54a46` 当前未连接（仅出现两台未指定的同型号设备），故 `verify_v04_gothook.sh` 运行时验收诚实标 PENDING，未擅自安装到其他设备。
 - [x] **结构重构 Phase 3b — agent capture/JNI runtime 拆分（2026-08-05）**：新增 `capture/capture.c` + 窄命令接口，封装 crypto/TLS/file/system wrapper、bounded ring、Java reporter、persistent/one-shot/inline capture 与 detection watch；新增 `runtime/jni.c`，统一 JavaVM 发现、线程 attach/detach 和 app ClassLoader。`agent_main.c` 2179 → **967 行**，不再持有 capture 的锁、ring、trampoline 或 JavaVM 全局。**`tools/build_agent.sh` 通过；`verify_all.sh` 16 PASS / 0 FAIL / 28 SKIP（Host 全绿）**；device capture/inline/detection acceptance 仍因指定机离线 PENDING。
 - [x] **结构重构 Phase 3c — agent trigger/trace runtime 拆分（2026-08-05）**：新增 `runtime/actions.c`，收口安全黑名单触发与显式 `.so` 加载；新增 `trace/commands.c` + `qbdi_trace.h`，封装 GOT 函数调用记录、QBDI 命令响应和对应有界状态。命令名与 JSON schema 不变，`agent_main.c` **978 → 784 行**，只保留调用。拆分时修复既有 `trace_run` 16 KiB 缓冲无法容纳 256 条最坏记录的风险，改为可由固定上限证明足够的 128 KiB。**`tools/build_agent.sh` NDK 编译/链接/三入口导出通过；`verify_all.sh` 16 PASS / 0 FAIL / 28 SKIP**；v10/v14/v18 设备验收因指定机离线 PENDING。
-- [x] **结构重构 Phase 3d — agent object/ART inspection 拆分（2026-08-05）**：新增 `runtime/inspection.c`，收口 live-object 字段检查/无参调用、JNI probe 与兼容性实测；新增 `runtime/art.c`，保留 ClassLoader cookie 枚举、TBI untag、DEX 035–041/cdex 结构判定和完整容器范围计算。命令名、响应 schema 与 SDK 35/36 解析策略不变，`agent_main.c` **784 → 366 行**，现只负责 hello/report、LSPlant 自测、RPC 分发和 lifecycle；Phase 3 capability-domain 拆分完成，并清除拆分后遗留的 socket/`dlfcn`/`fcntl` 等无用头文件。**`tools/build_agent.sh` NDK 编译/链接/三入口导出通过；`verify_all.sh` 16 PASS / 0 FAIL / 28 SKIP**；`verify_v03.sh` 的设备侧 JNI/ART 验收因指定机离线 PENDING。
+- [x] **结构重构 Phase 3d — agent object/ART inspection 拆分（2026-08-05）**：新增 `runtime/inspection.c`，收口 live-object 字段检查/无参调用、JNI probe 与兼容性实测；新增 `runtime/art.c`，保留 ClassLoader cookie 枚举、TBI untag、DEX 035–041/cdex 结构判定和完整容器范围计算。命令名、响应 schema 与 SDK 35/36 解析策略不变，`agent_main.c` **784 → 366 行**，现只负责 hello/report、RPC 分发和 lifecycle；Phase 3 capability-domain 拆分完成，并清除拆分后遗留的 socket/`dlfcn`/`fcntl` 等无用头文件。**`tools/build_agent.sh` NDK 编译/链接/三入口导出通过；`verify_all.sh` 16 PASS / 0 FAIL / 28 SKIP**；`verify_v03.sh` 的设备侧 JNI/ART 验收因指定机离线 PENDING。
 - [x] **Daemon 依赖漂移核查（2026-08-05）**：`npm ls --depth=0` 无 extraneous；评审点名的 `pkijs`/`asn1js` 是已声明 devDependency `selfsigned` 的传递依赖，`tsyringe` 来自其 `@peculiar/x509` 链。`package-lock.json` 与安装树一致，**不是未声明遗留依赖，不做错误清理**。
-- [x] **ADH 命名收口（2026-08-05）**：模拟注入宿主 `com.idh.sandbox` → **`com.adh.sandbox`**，Java helper 同步为 `com.adh.agent`，`IdhSecurity/IdhReport` → `AdhSecurity/AdhReport`，native JNI 名、daemon sandbox defaults、device scope 单测、协议示例和 35 个 shell 验收脚本全部同步。新增对外主入口 **`adh_agent_start`**，Zygisk 优先解析它并回退 legacy `idh_agent_start`；rich reporter 主属性改为 `adh.reporter.class` 并保留旧 key 回退。门禁：除固定哈希历史 probe dex `com.idh.probe` 外，当前源码/脚本 `com.idh.sandbox|com.idh.agent` = 0。验证：agent + detect + sandbox APK 构建通过（APK=`com.adh.sandbox`），daemon smoke PASS，device `:core:test` PASS，Zygisk zip 重建成功，`verify_all.sh` **16 PASS / 0 FAIL / 28 SKIP**；指定设备仍离线，迁移后的 device acceptance 待补。
-- [x] **结构重构 Phase 4 — daemon HTTP 领域拆分（2026-08-05）**：新增 `config.ts`、`http/router.ts` 与 system/runtime/analysis 三个 route domain，保持原路由顺序、method/prefix 匹配和响应 schema；`index.ts` **808 → 132 行**，只剩 agent TCP frame decode、HTTP/WS server lifecycle 和 boot。`daemon/test/smoke.ts` 同步改为 `ADH_*` 主端口变量 + legacy `IDH_*` 回退。验证使用独立 `18760/18761` 启动本次源码，fresh smoke、dashboard、MCP doc 均 PASS；同一临时实例上 `verify_all.sh` **16 PASS / 0 FAIL / 28 SKIP**，测试后进程已终止。
-- [x] **结构维护 Phase 5 — 遗留债务收尾（2026-08-05）**：把 v0.2–v1.0 的 559 行旧状态/会话日志完整迁入非权威 `docs/archive/PROGRESS_V0.2_V1.0.md`，当前 `PROGRESS.md` 从 655 行降至约 100 行且只保留现状与路线；归档内容与迁移前 Git 版本逐行 diff 一致。剩余 shell/MJS 入口统一为 `ADH_HTTP_PORT`/`ADH_AGENT_PORT`/`ADH_TLS_PORT`/`ADH_SERIAL`/`ADH_SDK`/`ADH_LLVM_BIN` 主名、`IDH_*` 兼容回退，sandbox Gradle 展示名收口为 ADH；三份 HTTP route 文件末尾格式清理。依赖树复核仍无 extraneous，最终 `agent_main.c=366`、`daemon/src/index.ts=132`。验证：Node `--check`、Git Bash `bash -n`、`git diff --check`、sandbox `:app:assembleDebug`、`npm ls --depth=0` 全通过；独立端口实例执行 `verify_all.sh` **16 PASS / 0 FAIL / 28 SKIP**，SKIP 均因指定设备 `13f54a46` 离线，未使用其他设备。
+- [x] **ADH 命名收口（2026-08-05）**：模拟注入宿主 `com.idh.sandbox` → **`com.adh.sandbox`**，Java helper 同步为 `com.adh.agent`，`AdhSecurity/AdhReport`，native JNI 名、daemon sandbox defaults、device scope 单测、协议示例和 35 个 shell 验收脚本全部同步。新增对外主入口 **`adh_agent_start`**，Zygisk 只解析它；rich reporter 只认 `adh.reporter.class`。门禁：除固定哈希历史 probe dex `com.idh.probe` 外，当前源码/脚本 `com.idh.sandbox|com.idh.agent` = 0。验证：agent + detect + sandbox APK 构建通过（APK=`com.adh.sandbox`），daemon smoke PASS，device `:core:test` PASS，Zygisk zip 重建成功，`verify_all.sh` **16 PASS / 0 FAIL / 28 SKIP**；指定设备仍离线，迁移后的 device acceptance 待补。
+- [x] **结构重构 Phase 4 — daemon HTTP 领域拆分（2026-08-05）**：新增 `config.ts`、`http/router.ts` 与 system/runtime/analysis 三个 route domain，保持原路由顺序、method/prefix 匹配和响应 schema；`index.ts` **808 → 132 行**，只剩 agent TCP frame decode、HTTP/WS server lifecycle 和 boot。`daemon/test/smoke.ts` 同步改为 `ADH_*` 端口变量。验证使用独立 `18760/18761` 启动本次源码，fresh smoke、dashboard、MCP doc 均 PASS；同一临时实例上 `verify_all.sh` **16 PASS / 0 FAIL / 28 SKIP**，测试后进程已终止。
+- [x] **结构维护 Phase 5 — 遗留债务收尾（2026-08-05）**：把 v0.2–v1.0 的 559 行旧状态/会话日志完整迁入非权威 `docs/archive/PROGRESS_V0.2_V1.0.md`，当前 `PROGRESS.md` 从 655 行降至约 100 行且只保留现状与路线；归档内容与迁移前 Git 版本逐行 diff 一致。剩余 shell/MJS 入口统一为 `ADH_HTTP_PORT`/`ADH_AGENT_PORT`/`ADH_TLS_PORT`/`ADH_SERIAL`/`ADH_SDK`/`ADH_LLVM_BIN`，sandbox Gradle 展示名收口为 ADH；三份 HTTP route 文件末尾格式清理。依赖树复核仍无 extraneous，最终 `agent_main.c=366`、`daemon/src/index.ts=132`。验证：Node `--check`、Git Bash `bash -n`、`git diff --check`、sandbox `:app:assembleDebug`、`npm ls --depth=0` 全通过；独立端口实例执行 `verify_all.sh` **16 PASS / 0 FAIL / 28 SKIP**，SKIP 均因指定设备 `13f54a46` 离线，未使用其他设备。
 - [x] **ADH Daemon 品牌化 + 模块 W Zygisk/Manager 首版（2026-08-03）**：
-      · 对外统一称 **Host ADH Daemon**（npm `adhd`）；`ADH_*` 为主环境变量，遗留 `IDH_*` 仅作兼容回退；`idhd`/`idh_*` 保留。
-      · `injector/zygisk/` Magisk Zygisk 模块：按 `/data/adb/adh/scope.json` 白名单 `dlopen` + `idh_agent_start`；`tools/build_zygisk.sh` → `adh-zygisk.zip`。
+      · 对外统一称 **Host ADH Daemon**（npm `adhd`）；`ADH_*` 为唯一环境变量前缀；`adhd` 为唯一 daemon 名。
+      · `injector/zygisk/` Magisk Zygisk 模块：按 `/data/adb/adh/scope.json` 白名单 `dlopen` + `adh_agent_start`；`tools/build_zygisk.sh` → `adh-zygisk.zip`。
       · `tools/verify_v27_zygisk.sh`：无 Magisk/未刷模块 → SKIP；有模块则 scope 往返 PASS。
-      · Gadget/重打包仍延后。
+      · Gadget 等可选后端按需启用。
 - [x] **设备侧架构奠基（对标 Vector 形态，2026-08-03）**：
       · 新建 `device/` 多模块：`:core`（ScopeConfig/AdhPaths/ScopeJson 单一真相 + 单测）+ `:daemon`（`IAdhScopeService` AIDL + ScopeService 骨架）+ `:manager`（Jetpack Compose 壳，FileScopeRepository / DaemonScopeRepository 预留）。
       · 工具链锁定 Gradle 8.9 + AGP 8.7.3 + Kotlin 2.0.21 + Compose BOM（与 sandbox 同级；不追 AGP 9）。
@@ -167,23 +146,22 @@
       · 回归与交付：`:core:test`、`:daemon:testDebugUnitTest`、`:daemon:assembleDebug`、`:manager:testDebugUnitTest`、`:manager:assembleDebug` 全绿；`adh-bundle-v0.3.1.zip` 含 14 个预期文件，Manager `versionCode=8/versionName=0.3.1`、APK v2 签名、内置 SHA 与 daemon 固定证书摘要均通过。已推送到 `1A281FDEE003ZV:/sdcard/adh-bundle-v0.3.1.zip`，本机与设备 SHA-256 均为 `3c72f8e1bc77cfa11a4d18c1b759d6ab3ba58a0f369e98f2b9c230bc928ff4bf`；旧 v0.3.0 包已删除。
 - [x] **Manager 显示 Host Web UI 地址（2026-08-04）**：Manager 直接经 `http://127.0.0.1:8760/health`（adb reverse）读取 Host ADH Daemon 上报地址，首页优先显示 `web.lan[0]`、无 LAN 时回退 `web.local`，并提供复制与浏览器打开按钮；Device Daemon/AIDL 不承载 HTTP。新增 LAN 优先与 local 回退单测，`:manager:testDebugUnitTest :manager:assembleDebug --rerun-tasks` 全绿。Pixel 6 Pro `1A281FDEE003ZV` 真机显示 `Web UI 在线 / http://192.168.100.11:8760`，UIAutomator 确认全部文案与按钮可见；点击打开后 Chrome 收到精确 `ACTION_VIEW dat=http://192.168.100.11:8760`。
 - [x] **v2.2 WS-A native inline 后端（Dobby by-address，2026-08-04）**：
-      · Dobby 从 LSPlant 条件中解耦，独立提供 arm64 函数入口 hook；模块名/符号名/触发类与方法均由 Host ADH Daemon 命令传入，agent 零 sandbox 硬编码。
+      · Dobby 独立提供 arm64 函数入口 hook；模块名/符号名/触发类与方法均由 Host ADH Daemon 命令传入，agent 零 sandbox 硬编码。
       · sandbox `libadhdetect.so` 增加 BoringSSL `EVP_CipherUpdate` 同 ABI 的静态链接 mock，JNI 直接调用、没有可替换 GOT slot；agent inline wrapper 捕获 `ADH_INLINE_CRYPTO_v1` 并通过 original trampoline 返回 `1`。
       · Dobby 1.2 的 `Destroy → Hook` 重装路径在 ColorOS A15 触发 `CodePatch+84` SIGSEGV；改为产品实际需要的常驻 hook + 命令窗口 active gate，同目标幂等复用。`tools/verify_v28_inlinehook.sh` 同进程连续两次均 PASS（首轮 installed=true，次轮 false，均 1 条 marker）。
       · 真机：OnePlus PGP110 / Android 15 / SDK 35 / arm64，serial `aa165071`；agent、native mock、sandbox APK 构建成功；`tools/verify_all.sh` 全部 43 个条目退出 0（允许脚本定义的环境 SKIP）。
 - [x] **v2.3 WS-F 持久索引 + 深解析 + 反射（2026-08-04）**：
-      · Host ADH Daemon 新增 `daemon/src/dex_index.ts`，使用 Node 24 `node:sqlite` 将 dex 按 SHA/大小/parser version 持久化到 `idhd-data/dex-index.sqlite`；保存 strings/classes/methods/fields、invoke callers、string callers、field readers/writers 与 `Class.forName` reflection edges。
+      · Host ADH Daemon 新增 `daemon/src/dex_index.ts`，使用 Node 24 `node:sqlite` 将 dex 按 SHA/大小/parser version 持久化到 `adhd-data/dex-index.sqlite`；保存 strings/classes/methods/fields、invoke callers、string callers、field readers/writers 与 `Class.forName` reflection edges。
       · `dex.ts` 增加 proto/descriptor/参数解析、字段访问点和保守的寄存器常量传播；寄存器被覆盖或 code_item 越界时不猜测，统计 `skipped` 并 fail-loud。
       · REST：`POST /api/dex/index`、`/api/dex/index/search`、`/api/dex/index/reflections`；MCP：`dex_index`、`dex_index_search`、`dex_reflections`。
       · sandbox 新增 `ReflectionProbe.load()`，多 dex 验收 `tools/verify_v29_dexindex.sh`：四个 dex 共 59,719 个方法、0 skipped；重复索引缓存最大 3.9ms；`ReflectionProbe.load → Class.forName → Lcom/adh/sandbox/JavaCrypto;` caller/descriptor 经 REST + MCP 均 PASS。已加入 `verify_all.sh`。
 - [x] **真机刷入通道 `tools/flash_device.sh`（2026-09-14）**：KernelSU (`ksud module install`) / Magisk 自动识别。当前连接机 OnePlus PGP110 `aa165071`（SukiSU Ultra + Zygisk Next 1.4.2）已刷入 **ADH v0.3.1** 并重启：模块描述「状态：运行中」，`zygisk_loaded` 与 `device_daemon_ready` 均在，`com.adh.manager` 已安装。后续代码更新重复 `bash tools/flash_device.sh --reboot`。`verify_v27_zygisk` 同步认 KernelSU。
 - [x] **Web UI 顶栏访问地址只显示一条；品牌改为乌鸦 logo（2026-09-14）**：`#access` 局域网优先，不再并排「LAN · 本机 127.0.0.1」。顶栏去掉字母 A / 双行产品名，只留乌鸦标 + `ADH`；`/raven.svg` 同时作 favicon。
-- [x] **应用列表改由 root Device Daemon 枚举 + Web UI 公众号/MCP + `android-decrypt-hub` 网关（2026-09-14）**：
+- [x] **应用列表改由 root Device Daemon 枚举 + Web UI 公众号/MCP（2026-09-14）**：
       · 根因：Manager 自己 `getInstalledApplications` 在 Android 11+/ColorOS 上对侧载包不可见，且可能 TransactionTooLarge →「无法读取应用列表」。LSPosed 形态下列表由特权守护进程提供，注入范围仍是 `/data/adb/adh/scope.json`。
       · AIDL protocol v2 增加 `listApplications()`（compact JSON `[{p,l,s}]`）；Device Daemon 用 uid=0 `ActivityThread.systemMain()` 系统上下文枚举，失败则 `cmd package list packages`。Manager 删除 `QUERY_ALL_PACKAGES`，目录失败时仍展示 scope.json 已选包。
-      · Web UI 对齐 iOS：顶栏「公众号」+ `/wechat-follow.png`；MCP 模态改为 `pip install android-decrypt-hub` → `adh connect <host>` → Cursor `"command":"adh","args":["mcp"]`。`/api/mcp/config` 同步。
-      · 新增 `python/` PyPI 包 **android-decrypt-hub**（入口 `adh`）：connect/devices/mcp stdio 代理 Host `POST /mcp`，配置 `~/.config/adh/connections.json`。
-- [x] **Host 对外 8088 + 按包名切 App（2026-09-14）**：用户可见 HTTP/WS/MCP 默认 **8088**（对齐 iOS `idh`），agent TCP 仍 **8761**。`adh connect` 不再默认 `127.0.0.1`，走局域网；`http://<LAN>:8088/<package>` 钉该 App 的 Web / `POST /<package>/mcp`。HTTP 仍只在 Host，不进 agent / Device Daemon。Manager 探测 `127.0.0.1:8088/health`（adb reverse），展示优先 LAN。真机 `aa165071` 沙盒 `com.adh.sandbox` 模拟注入在线：加解密 / 系统观测 / TLS 抓包 / 文件管理器 / 文件 I/O hook 均 PASS。
+      · Web UI 对齐 iOS：顶栏「公众号」+ `/wechat-follow.png`；MCP 模态直接展示 Host ADH Daemon 的 HTTP MCP 端点与 JSON-RPC 示例，`/api/mcp/config` 同步。
+- [x] **Host 对外 8088 + 按包名切 App（2026-09-14）**：用户可见 HTTP/WS/MCP 默认 **8088**（对齐 iOS `idh`），agent TCP 仍 **8761**。`http://<LAN>:8088/<package>` 钉该 App 的 Web / `POST /<package>/mcp`。HTTP 仍只在 Host，不进 agent / Device Daemon。Manager 探测 `127.0.0.1:8088/health`（adb reverse），展示优先 LAN。真机 `aa165071` 沙盒 `com.adh.sandbox` 模拟注入在线：加解密 / 系统观测 / TLS 抓包 / 文件管理器 / 文件 I/O hook 均 PASS。
 - [x] **注入范围显示 App 图标（2026-09-14）**：Manager 进程没有包可见性，`getApplicationIcon` 全是空占位。协议 v3 增加 `getApplicationIconPng`，由 uid=0 Device Daemon 按包返回 PNG；列表仍用 compact catalog，图标按可见行懒加载。
 - [x] **Web UI 对齐 iOS workbench 整页（2026-09-14）**：进程收进顶栏下拉（去掉第二进程条）；tab 计数不再用胶囊；筛选默认折叠；捕获最新在上，滚离顶部时出「跳到最新」；详情左侧色条 + 悬停复制；Dump 默认只列本应用模块、下载在右列。MCP / 设置 / 公众号保留。续扫：Dump 始终隐藏 APK/JAR（不再被 `/data/app` 误放进本应用列表）；主 tab 选择器不再误伤设置侧栏；加解密列表补第三行 preview；覆盖率/配置 JSON 去掉填色框。
 - [x] **Manager 终止/重启目标应用（2026-09-14）**：注入范围每行溢出菜单「终止进程 / 重新启动」。协议 v4 `controlPackage` 由 uid=0 Device Daemon 调 `ActivityManager.forceStopPackage`（失败则 `cmd activity force-stop` / `start`），供 Zygisk 改 scope 后冷启动再注入。Manager 不调用 `su`/`am`。拒绝 Manager / Device Daemon / System UI / `android` / HardExcludes。模块与 Manager `v0.3.2 / versionCode=9`。
@@ -193,12 +171,12 @@
       · 真机 Sentry `anti.rusda` v1.7.1 冷启动 3/3：agent online `entry=start`；agent maps=3、companion maps=0、anonExec=0、anonNamed=0、memfd=2（ART JIT）、rwx=0。
       · Sentry 自身检测 3/3：Memory Signatures clean、Maps detection clean；Frida threads/ports、Ptrace、Debugger 全过；安全分数 96，与未注入基线一致。
 - [x] **注入足迹基线 + release 收口（2026-09-15，WS-J 首切片）**：`compat_probe` 新增 bootstrap 基线/当前 `execMappings`、`anonExecMappings`、`anonNamedExecMappings`、`memfdExecMappings`、`rwxMappings`、`agentExecMappings`、`zygiskExecMappings` 与 delta；`verify_v05_detect` 校验字段形状、agent 映射存在且 `rwx=0`。
-      · release `libidh_agent.so` strip（debug copy 留本地），`.dynsym` 经 version script 只保留 `JNI_OnLoad` / `adh_agent_set_package` / `adh_agent_start` / `idh_agent_start`；debug 13.34MB → release 590KB。
+      · release `libadh_agent.so` strip（debug copy 留本地），`.dynsym` 经 version script 只保留 `JNI_OnLoad` / `adh_agent_set_package` / `adh_agent_start` / `adh_agent_start`；debug 13.34MB → release 590KB。
       · 静态结论：基础注入与 GOT hook 不分配匿名可执行段；已知匿名 `x` 生产者是 Dobby inline trampoline（Dobby 自身缓存，`DobbyDestroy` 不释放）与 QBDI trace code cache。QBDI 结束已 `dlclose`。真机 Sentry 验收见上。
 - [ ] v2.4 WS-E 脱壳二代 + try/catch + cdex/041（需样本，否则 PENDING）
 - [ ] v2.5 WS-G Capstone + WS-H QBDI 通用化
 - [ ] v2.6 WS-I 确定性关联 + WS-J 反检测动态面
-- [ ] 贯穿 WS-K 架构拆分 + 多架构/多进程
+- [ ] 贯穿 WS-K 架构拆分 + 多架构
 
 ---
 

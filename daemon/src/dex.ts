@@ -404,7 +404,7 @@ export function invokeXref(buf: Buffer, d: ParsedDex): XrefResult {
 }
 
 const CRYPTO_CLASS_RE = /^L(javax\/crypto\/|java\/security\/(MessageDigest|Signature|KeyPairGenerator|KeyFactory)|android\/util\/Base64)/;
-const ALGO_STRING_RE = /(AES|DESede|DES|RSA|Blowfish|ChaCha|HmacSHA?\d*|HmacMD5|SHA-?(1|224|256|384|512)|MD5|PBKDF2|PKCS[157]|\/(CBC|GCM|ECB|CTR|CFB)\/|GCM|Base64)/;
+const ALGO_STRING_RE = /(AES|DESede|DES|RSA|Blowfish|ChaCha|HmacSHA?\d*|HmacMD5|SHA-?(1|224|256|384|512)|MD5|PKCS[157]|\/(CBC|GCM|ECB|CTR|CFB)\/|GCM|Base64)/;
 
 // Static crypto channel: crypto API method refs + algorithm-name strings.
 export function cryptoScan(d: ParsedDex): {

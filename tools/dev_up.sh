@@ -3,8 +3,8 @@
 # Safe to call at the start of every autonomous loop iteration.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-HTTP="${ADH_HTTP_PORT:-${IDH_HTTP_PORT:-8760}}"
-AGENT="${ADH_AGENT_PORT:-${IDH_AGENT_PORT:-8761}}"
+HTTP="${ADH_HTTP_PORT:-8088}"
+AGENT="${ADH_AGENT_PORT:-8761}"
 
 # 1) ADH Daemon up?
 if curl -s -m 2 "http://127.0.0.1:$HTTP/health" >/dev/null 2>&1; then
@@ -18,8 +18,8 @@ fi
 
 # 2) device + adb reverse
 #    - AGENT (8761): agent in the target process dials host ADH Daemon
-#    - HTTP  (8760): so the phone's own browser can reach the host web console at
-#      127.0.0.1:8760 through the reverse tunnel (same URL works on the PC browser too)
+#    - HTTP  (8088): so the phone's own browser can reach the host web console at
+#      127.0.0.1:8088 through the reverse tunnel; prefer the Host LAN IP on the same Wi-Fi
 STATE="$(adb get-state 2>/dev/null | tr -d '\r')"
 if [ "$STATE" = "device" ]; then
   SERIAL="${ANDROID_SERIAL:-$(adb devices | awk 'NR==2{print $1}')}"

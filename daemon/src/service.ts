@@ -28,6 +28,8 @@ export function sendCmd(sessionId: string, op: string, args: Record<string, unkn
 }
 
 export const pickSid = (sid?: string) => sid ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
+export const sessionForPackage = (pkg: string) =>
+  [...sessions.values()].filter(s => s.online && s.package === pkg).pop()?.sessionId;
 export async function agentCmd(sid: string | undefined, op: string, args: Record<string, unknown> = {}, timeout = 15_000) {
   const s = pickSid(sid); if (!s) throw new Error('no online agent session');
   return sendCmd(s, op, args, timeout);
@@ -47,7 +49,7 @@ export async function dumpBuf(a: any): Promise<Buffer> {
 let tmpSeq = 0;
 export async function dumpBufPath(a: any): Promise<{ path: string; tmp: string | null }> {
   if (a.sha && dumps.get(a.sha)) return { path: dumps.get(a.sha)!.path, tmp: null };
-  if (a.b64) { const tmp = join(tmpdir(), `idh_so_${Date.now()}_${++tmpSeq}.so`); writeFileSync(tmp, Buffer.from(a.b64, 'base64')); return { path: tmp, tmp }; }
+  if (a.b64) { const tmp = join(tmpdir(), `adh_so_${Date.now()}_${++tmpSeq}.so`); writeFileSync(tmp, Buffer.from(a.b64, 'base64')); return { path: tmp, tmp }; }
   const e: any = new Error('need b64 or known sha'); e.status = 400; throw e;
 }
 

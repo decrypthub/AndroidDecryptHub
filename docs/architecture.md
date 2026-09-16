@@ -16,9 +16,9 @@ Browser / AI client           Web console / MCP   observe · search · drive
 ```
 
 - **Agent** (`agent/`, C + NDK): loaded via `System.loadLibrary` (模拟注入) or Zygisk injector.
-  Dual entry `JNI_OnLoad` / `adh_agent_start` (`idh_agent_start` legacy alias). Connects to **Host** ADH Daemon over TCP `127.0.0.1:8761`
+  Dual entry `JNI_OnLoad` / `adh_agent_start` (single exported entry). The first loaded copy owns bootstrap; later copies stay inert. Connects to **Host** ADH Daemon over TCP `127.0.0.1:8761`
   (reachable from device via `adb reverse`). Executes commands, streams results. No HTTP/DB.
-- **Host ADH Daemon** (`daemon/`, npm `adhd`, Node 24 + TypeScript, no build step; legacy name `idhd`):
+- **Host ADH Daemon** (`daemon/`, npm `adhd`, Node 24 + TypeScript, no build step):
   agent registry, HTTP+WS `8088`, REST API, MCP server, dex parser/indexer, ELF analysis, dump storage. App console: `http://<LAN>:8088/<package>`.
 - **Device surface** (`device/` multi-module, Gradle 8.9 / AGP 8.7.3 / Compose):
   - `:core` — `AdhPaths` / `ScopeConfig` / `ScopeJson` + shared `IAdhScopeService` contract
@@ -28,11 +28,11 @@ Browser / AI client           Web console / MCP   observe · search · drive
 - **Injector** (`injector/zygisk/`): Magisk module zip; starts Device Daemon at boot and packages its APK; path constants must stay in sync with `device/:core`.
 
 Do **not** confuse **Host ADH Daemon** (`daemon/` on PC) with **Device Daemon** (`device/:daemon` on phone).
-## Wire protocol (agent ↔ idhd), NDJSON
+## Wire protocol (agent ↔ adhd), NDJSON
 
-- agent→idhd: `hello` (identity), `maps` (sample), `cmdResult` (per command).
-- idhd→agent: `ack`, `cmd {id, op, ...}`. idhd `sendCmd()` awaits the matching `cmdResult`.
-- Large payloads (dumps) are chunked via `read` and assembled + hashed in idhd.
+- agent→adhd: `hello` (identity), `maps` (sample), `cmdResult` (per command).
+- adhd→agent: `ack`, `cmd {id, op, ...}`. adhd `sendCmd()` awaits the matching `cmdResult`.
+- Large payloads (dumps) are chunked via `read` and assembled + hashed in adhd.
 
 ## Agent commands (collect/execute)
 
@@ -45,7 +45,7 @@ slot + trampoline), `resolve_sym()` (in-memory dynsym, namespace-independent),
 `load_app_class()` (app classloader reflection), `capture`/`trace` buffers (mutex, tid+ts),
 tagged-pointer untagging for `pread(/proc/self/mem)`.
 
-## idhd analysis (heavy work)
+## adhd analysis (heavy work)
 
 - **Dump engine**: maps, memory read/search/scan_magic, region dump + sha256 dedup,
   SO reassembly (SoFixer-lite), dex header repair.
@@ -75,7 +75,7 @@ tagged-pointer untagging for `pread(/proc/self/mem)`.
 ```
 tools/build_agent.sh     # NDK cmake -> libadh_agent.so (fails loudly on error)
 tools/build_detect.sh    # sandbox native mock lib
-tools/dev_up.sh          # ensure idhd + adb reverse
+tools/dev_up.sh          # ensure adhd + adb reverse
 tools/verify_all.sh      # run every acceptance (device checks auto-skip if offline)
 ```
 

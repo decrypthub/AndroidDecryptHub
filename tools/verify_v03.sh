@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# v0.3 acceptance — ART structural dex capture. Prereq: idhd running, device attached, sandbox running.
+# v0.3 acceptance — ART structural dex capture. Prereq: adhd running, device attached, sandbox running.
 #   (1) jni_probe: agent JNI reflection from native thread -> SDK_INT == device's actual SDK
 #   (2) art_dexfiles: structural enumeration (ClassLoader cookie -> art::DexFile* -> begin_),
 #       no magic scan; must find the 728-byte probe dex under InMemoryDexClassLoader
@@ -7,11 +7,10 @@
 # Exit 0 = PASS.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-HTTP="${ADH_HTTP_PORT:-${IDH_HTTP_PORT:-8760}}"
+HTTP="${ADH_HTTP_PORT:-8088}"
 KNOWN_SHA="b10aea0308a7e7ccaa100a5cb53a0bfdec74c1f2dfe9184c256edd673339df6b"
 # Expected SDK = whatever the target device reports (works on SDK 35 / 36 / any).
-# ADH_SDK is primary; IDH_SDK remains a compatibility alias.
-SDK_EXP="${ADH_SDK:-${IDH_SDK:-$(adb shell getprop ro.build.version.sdk 2>/dev/null | tr -d '\r')}}"
+SDK_EXP="${ADH_SDK:-$(adb shell getprop ro.build.version.sdk 2>/dev/null | tr -d '\r')}"
 
 set +e
 OUT="$(node - "$HTTP" "$KNOWN_SHA" "$SDK_EXP" <<'EOF'

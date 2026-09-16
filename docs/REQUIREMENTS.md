@@ -28,7 +28,7 @@
 | 文件监控 | hook open/write/unlink/rename，记录沙盒文件操作 |
 | 系统监控 | hook dlopen/dlsym，记录动态库加载与符号解析；dlsym 重定向使函数指针调用也能被捕获 |
 | 网络监控 | NSURLSession 请求/响应配对；SSL_read/SSL_write 明文捕获 |
-| 二进制 dump | FairPlay 脱壳：导出解密 Mach-O / 重打包 IPA |
+| 二进制 dump | FairPlay 脱壳：导出解密 Mach-O |
 | 反汇编 | Capstone：按字节/地址/函数反汇编 |
 | Web 面板 | 多 tab、master-detail、实时列表、搜索、过滤、暂停、导出 |
 | MCP Server | Streamable HTTP，30+ tools（disassemble、query_events、correlate_request 等） |
@@ -42,12 +42,11 @@
 |----------|--------------------------|
 | 无 DEX / ART 运行时结构暴露 | 完整 Dex 捕获、索引、smali、xref、按需反编译 |
 | Mach-O 脱壳仅限已加载且 cryptid=1 的镜像 | dex/so/内存/oat/vdex 多源 dump + 脱壳辅助 + 方法体恢复 |
-| fishhook 仅覆盖 import slot | PLT/GOT + inline hook + LSPlant Java hook + QBDI DBI |
-| 无法做 Java 层方法 hook | LSPlant 完整 ART method hook（before/after/replace） |
+| fishhook 仅覆盖 import slot | PLT/GOT + inline hook + QBDI DBI |
 | 扩展进程（appex）无法在主进程砸壳 | 多 ClassLoader、InMemoryDex、动态加载全链路可观测 |
 | 沙盒文件路径受限 | /proc/self/maps 全内存枚举、任意 region dump、magic 扫描 |
 | 难以做指令级 trace | QBDI 指定函数/地址范围 instruction trace |
-| HTTP/MCP/分析全在目标进程 | **三层架构**：Agent 轻量采集，idhd 守护进程承担重活 |
+| HTTP/MCP/分析全在目标进程 | **三层架构**：Agent 轻量采集，adhd 守护进程承担重活 |
 
 ### 0.3 架构升级（相对 iOS 参考项目的核心差异）
 
@@ -113,7 +112,7 @@ native 函数在 libxxx.so 的哪个偏移？
 | 组件 | 名称 | 职责 |
 |------|------|------|
 | Agent | `libadh_agent.so` | 注入目标进程，执行 hook/trace/dump/采集 |
-| Daemon | `idhd` | 守护进程，HTTP/MCP/存储/索引/调度 |
+| Daemon | `adhd` | 守护进程，HTTP/MCP/存储/索引/调度 |
 | Web UI | 嵌入式前端 | 浏览器访问的实时观测台 |
 | Sandbox | `sandbox-test-app` | 覆盖全模块的自动化验证宿主 |
 
@@ -148,7 +147,7 @@ ADH (Android DecryptHub)
 ├── T. Runtime Object Inspector（活体对象自省）
 ├── U. 非标准运行时识别与扩展点（Flutter / Unity / RN）
 ├── V. 反分析行为观测（调试 / root / 签名 / 模拟器 / 完整性检测）
-└── W. 注入后端与打包（Zygisk root 版 + Gadget/重打包 非 root 版 + 模拟注入）
+└── W. 注入后端（Zygisk + Gadget 直载 + Xposed 桥接 + 模拟注入）
 ```
 
 以下逐模块描述「做什么」「看到什么」「边界在哪」。
@@ -164,20 +163,19 @@ ADH (Android DecryptHub)
 **注入方式**（覆盖 root 与非 root 两条路径，用户按环境选择）：
 
 - **Root 路径 — Zygisk 插件**（主线，early inject）：随 Zygisk 模块在 zygote fork 后早期加载，抢在目标反调试布防之前。
-- **非 root 路径 — Frida Gadget / 重打包**：把 `libadh_agent.so`（可选携带 gadget so）打进目标 APK 重打包，或以 gadget 方式加载，无需 root。
-- `ptrace` 手动注入（root 环境按需）。
+- **Frida Gadget 直载**：通过目标进程内的 `load_library` 加载官方 Gadget，运行 Frida JS hook，无需改写目标 APK。
 - LSPosed / Xposed 桥接加载（有框架时）。
 - **模拟注入**（开发/CI 主路径）：`sandbox-test-app` 自身 `dlopen` 加载 agent，无需真机对抗即可验证全部模块。
 
-Agent 必须支持两种 bootstrap 入口且行为一致：被注入器加载（`JNI_OnLoad`/构造函数）与被宿主主动加载（导出 `adh_agent_start()`；保留 `idh_agent_start()` ABI 别名）。
+Agent 必须支持两种 bootstrap 入口且行为一致：被注入器加载（`JNI_OnLoad`/构造函数）与被宿主主动加载（导出唯一入口 `adh_agent_start()`）。
 
 **功能要求**：
 
-- 注入后自动连接 `idhd` 守护进程
+- 注入后自动连接 `adhd` 守护进程
 - 上报进程身份：`pid`、`uid`、`packageName`、`processName`、`ABI`、`Android 版本`、`启动时间`
-- 支持多进程 App：每个进程独立 session，idhd 统一管理
+- 支持多进程 App：每个进程独立 session，adhd 统一管理
 - 支持 attach / detach：用户从 Web UI 选择目标进程
-- Agent 崩溃不影响 idhd；Agent 重启后自动重连并恢复 session 元数据
+- Agent 崩溃不影响 adhd；Agent 重启后自动重连并恢复 session 元数据
 
 ### 4.2 会话（Session）
 
@@ -197,7 +195,7 @@ Agent 必须支持两种 bootstrap 入口且行为一致：被注入器加载（
 
 - 支持 session 录制与回放（事件时间线可离线查看）
 - 支持多 session 并行（多 App / 多进程）
-- session 数据持久化在 idhd，Agent 断开不丢已采集数据
+- session 数据持久化在 adhd，Agent 断开不丢已采集数据
 
 ---
 
@@ -293,7 +291,7 @@ MemoryRegion {
 - 事件：命中加密 API / 目标方法时联动 dump
 - 扫描：magic 扫描命中后一键 dump
 
-**Dump 后处理**（在 idhd 执行）：
+**Dump 后处理**（在 adhd 执行）：
 
 - sha256 去重
 - dex header 修复（`file_size` / `checksum` / `signature`）
@@ -339,106 +337,9 @@ MemoryRegion {
 
 ---
 
-## 7. D — Java Hook Engine（**不在 v1 范围**）
+## 7. D — 已移除
 
-**v1 状态：未实现（已移除）**。LSPlant 后端在测试机（ColorOS / Android 15，`libart.so` 被裁剪）无法初始化，既不可验证也不可发布，因此 v1 移除了该后端及其命令/接口（agent `java_hook_test`、`/api/java/hook_test`、`tools/fetch_lsplant.sh`、`verify_v23_javahook.sh`、CMake 中的 LSPlant/DexBuilder 分支）与回调脚手架；下面各小节保留为后续版本的设计参考。native 层 inline hook（Dobby）不受影响。
-
-### 7.1 基础 Hook 能力
-
-- 按 `class + method + signature` hook
-- hook 构造函数
-- hook 重载方法（精确匹配 descriptor）
-- 回调类型：`before` / `after` / `replace`
-- 打印参数 / 返回值 / 异常
-- 打印调用栈（可过滤系统帧）
-- dump 参数：`byte[]` / `ByteBuffer` / `String` / 数组
-- 条件 hook：满足表达式才记录
-- one-shot hook：命中 N 次后自动卸载
-- 批量 hook：按包名前缀 / 类名通配
-
-### 7.2 内置模板 — Crypto
-
-| 目标 | 记录内容 |
-|------|----------|
-| `MessageDigest.getInstance` | 算法名 |
-| `MessageDigest.update` | 输入分片（流式拼接） |
-| `MessageDigest.digest` | 输出 hash |
-| `Mac.getInstance/init/update/doFinal` | 算法、key、输入、输出 |
-| `Cipher.getInstance` | 转换字符串（如 AES/CBC/PKCS5Padding） |
-| `Cipher.init` | mode、key、iv、algorithmParameterSpec |
-| `Cipher.update` | 输入/输出分片 |
-| `Cipher.doFinal` | 最终输入/输出 |
-| `SecretKeySpec.<init>` | key 字节、算法 |
-| `IvParameterSpec.<init>` | iv 字节 |
-| `Base64.encode/decode` | 输入/输出 |
-| `KeyGenerator.generateKey` | 生成的 key |
-| `Signature.sign/verify` | 算法、数据、签名 |
-
-注：Conscrypt-backed 目标上，RSA/ECDSA 的 Signature.sign/verify 可通过原生 `EVP_PKEY_sign/verify`（GOT hook，见 DEVELOPMENT_PLAN §6.9.4）拿到，不需要 LSPlant；本节 Java 层模板仍是覆盖非 Conscrypt/自定义 Provider 场景的通用方案，但当前优先级以 DEVELOPMENT_PLAN §6.9.4 为准。
-
-**输出 — Algorithm Session**：
-
-```text
-Session #1024
-├── algorithm: AES/CBC/PKCS5Padding
-├── mode: ENCRYPT
-├── key: 16 bytes (hex/base64)
-├── iv: 16 bytes
-├── input: 明文
-├── output: 密文
-├── thread: main-1
-├── java stacktrace
-├── caller: com.xxx.LoginActivity.submit
-├── dex: sha256:abc... / method_idx: 1234
-└── timestamp
-```
-
-流式调用自动拼回完整明文/密文（继承 iOS 参考项目思路）。
-
-### 7.3 内置模板 — File I/O
-
-| 目标 | 记录内容 |
-|------|----------|
-| `File` 构造 / exists / delete / rename | 路径 |
-| `FileInputStream` / `FileOutputStream` | 路径、读写长度 |
-| `RandomAccessFile` | 路径、mode、offset |
-| `Files.read/write` (NIO) | 路径、数据摘要 |
-| `SharedPreferences` get/put | key、value 类型与值 |
-| `SQLiteDatabase` execSQL/query | SQL 语句 |
-
-### 7.4 内置模板 — Device / System Info
-
-| 目标 | 记录内容 |
-|------|----------|
-| `TelephonyManager` | IMEI/AndroidId/运营商等 |
-| `Settings.Secure/Global` | 读取的 key/value |
-| `Build.*` | 设备信息字段 |
-| `SystemProperties.get` | 属性名与值 |
-| `WifiInfo` / `BluetoothAdapter` | MAC 等 |
-
-### 7.5 内置模板 — 动态加载
-
-| 目标 | 记录内容 |
-|------|----------|
-| `DexClassLoader.<init>` | dex/jar 路径、optimizedDirectory |
-| `InMemoryDexClassLoader.<init>` | ByteBuffer 内容摘要 → 触发 dex dump |
-| `PathClassLoader.<init>` | dex 路径 |
-| `ClassLoader.loadClass` | 类名、ClassLoader |
-
-### 7.6 自定义 Hook
-
-**功能**（继承 iOS Self_Hook 思路）：
-
-- Web UI 或配置文件下发 hook 规则
-- 规则格式：`class`、`method`、`signature`、`callback_type`、`arg_print`、`enabled`
-- 规则持久化，进程重启后可恢复
-- 一键生成 Hook 代码片段（LSPosed / Xposed / Frida 格式）
-
-### 7.7 Hook 管理
-
-- 已安装 hook 列表：目标、类型、命中次数、状态
-- 启用 / 禁用 / 卸载
-- hook 健康检查：哪些方法 hook 失败及原因
+此模块不在 v1 产品面；历史设计只保留在 `docs/archive/`，不提供代码、Web UI、MCP 或工具入口。
 
 ---
 
@@ -615,14 +516,14 @@ FileEvent {
 汇总 D.7.2 与 E.8.4 的 hook 输出，提供统一「算法观测台」：
 
 - 实时事件流
-- 按算法分类：Digest / HMAC / Symmetric / Asymmetric / KDF / Base64
+- 按算法分类：Digest / HMAC / Symmetric / Asymmetric / Base64
 - 按操作分类：Init / Update / Final / Encrypt / Decrypt / Sign / Verify
 - 详情：Key / IV / 明文 / 密文 / Hex / HexDump / 调用栈
 - 流式拼包：多次 update 合并为完整输入输出
 
 ### 11.2 静态通道
 
-**DEX 扫描**（在 idhd 对已索引 dex 执行）：
+**DEX 扫描**（在 adhd 对已索引 dex 执行）：
 
 - 引用 `javax.crypto.Cipher`、`java.security.MessageDigest` 等类的方法
 - `const-string` 中的算法名字符串（AES、RSA、MD5、HmacSHA256 等）
@@ -750,7 +651,7 @@ asm, regs, mem_access, call_depth, correlation_id
 
 ## 13. J — 反汇编与二进制分析
 
-**功能**：基于 Capstone，在 idhd 中做主要分析，Agent 仅提供轻量即时反汇编。
+**功能**：基于 Capstone，在 adhd 中做主要分析，Agent 仅提供轻量即时反汇编。
 
 ### 13.1 地址模型
 
@@ -1038,7 +939,7 @@ Event {
 | **Memory Explorer** | maps 浏览、region 读取、magic 扫描、dump |
 | **Object Inspector** | 活体实例枚举、字段读取、堆内 String/byte[] 搜索、低风险 getter 调用（模块 T） |
 | **Anti-Analysis Radar** | 目标的调试/root/签名/模拟器/完整性检测事件、检测手段清单、行为分叉标注（模块 V） |
-| **Injection Center** | 注入后端选择、Zygisk/gadget/重打包/模拟注入、agent 打包状态（模块 W） |
+| **Injection Center** | 注入后端选择、Zygisk/Gadget/Xposed/模拟注入、agent 加载状态（模块 W） |
 | **Compatibility & Health** | 抗干扰诊断报告、hook 后端可用性、自审计日志、诊断包导出（模块 S + P） |
 | **MCP Center** | tool 列表、schema、调用历史、token 管理 |
 | **Settings** | 访问控制、过滤规则、导出、诊断 |
@@ -1061,7 +962,7 @@ Event {
 
 - 系统 overlay 浮窗 / 通知栏常驻
 - 显示各分类事件计数
-- 显示 idhd 连接状态与服务地址
+- 显示 adhd 连接状态与服务地址
 - 点击跳转 Web 或展开简化日志
 
 ### 17.4 诊断与反馈
@@ -1077,8 +978,8 @@ Event {
 
 ## 18. O — MCP Server
 
-**功能**：供 AI 客户端（Cursor、Claude 等）程序化操控工作台。  
-**部署位置**：只在 `idhd`，不在目标进程。
+**功能**：供 AI 客户端（Cursor、Claude 等）程序化操控工作台。
+**部署位置**：只在 `adhd`，不在目标进程。
 
 ### 18.1 传输
 
@@ -1188,20 +1089,20 @@ Android 在此基础上增加：全套 dex 操作、Java hook、native trace、m
 ### 19.0 两条独立事件流（关键）
 
 - **目标事件流**：采集到的目标 App 行为（crypto/network/file/dex/detection…）。
-- **工具自审计流（AUDIT）**：Agent/idhd 自己干了什么。两套 ring buffer、两个视图、互不淹没。
+- **工具自审计流（AUDIT）**：Agent/adhd 自己干了什么。两套 ring buffer、两个视图、互不淹没。
 
-**自审计内容**：每个 hook 安装成功/失败/跳过（原因，形成 hook 台账）、每次 dump 触发源与结果、每条 RPC、每次 Agent↔idhd 重连、ring buffer 溢出、流式 crypto 上下文丢失、trace 异常退出。
+**自审计内容**：每个 hook 安装成功/失败/跳过（原因，形成 hook 台账）、每次 dump 触发源与结果、每条 RPC、每次 Agent↔adhd 重连、ring buffer 溢出、流式 crypto 上下文丢失、trace 异常退出。
 
 **一键诊断包**：版本 + 目标 App 指纹 + hook 健康台账 + 最近 N 条自审计（默认脱敏，不含 key/明文），用于维护、复盘、issue 复现。
 
 ### 19.1 监控项
 
 - 每个 hook 模块安装结果：成功 / 失败 / 跳过（及原因）
-- Agent ↔ idhd 连接状态
+- Agent ↔ adhd 连接状态
 - ring buffer 溢出次数
 - 事件落盘失败
 - trace 任务异常退出
-- idhd HTTP/MCP 服务状态
+- adhd HTTP/MCP 服务状态
 - 流式加密上下文丢失（update 无对应 init）
 
 ### 19.2 展示位置
@@ -1256,7 +1157,7 @@ Android 在此基础上增加：全套 dex 操作、Java hook、native trace、m
 
 ## 21. R — 数据存储与导出
 
-### 21.1 存储（idhd）
+### 21.1 存储（adhd）
 
 | 数据 | 存储方式 |
 |------|----------|
@@ -1273,7 +1174,7 @@ Android 在此基础上增加：全套 dex 操作、Java hook、native trace、m
 
 - ring buffer 保留最近 N 条事件
 - 单条 blob 上限（如 64KB），防 OOM
-- 大 payload 走共享内存 fd 直传 idhd，不在 Agent 堆积
+- 大 payload 走共享内存 fd 直传 adhd，不在 Agent 堆积
 
 ### 21.3 导出
 
@@ -1332,7 +1233,6 @@ Android 在此基础上增加：全套 dex 操作、Java hook、native trace、m
 
 - 枚举 `/proc/self/maps`
 - dex / so / memory dump
-- ~~Java API hook（LSPlant）~~ —— v1 已移除（见 §7）
 - 加密 API 运行时观测（Java + OpenSSL）
 - 文件读写观测（Java + libc，带来源标注）
 - 网络请求/响应捕获（主流框架）
@@ -1344,7 +1244,7 @@ Android 在此基础上增加：全套 dex 操作、Java hook、native trace、m
 - ART 结构级 dex 捕获（不依赖 magic/路径）
 - 活体 Java 对象枚举与字段读取（模块 T）
 - 目标反分析检测的观测（调试/root/签名/模拟器，模块 V）
-- Zygisk（root）+ Gadget/重打包（非 root）+ 模拟注入（模块 W）
+- Zygisk + Gadget + Xposed + 模拟注入（模块 W）
 - 明文边界加密观测（绕过加密与 pinning）
 
 ### 23.2 不能承诺 100%
@@ -1366,7 +1266,7 @@ Android 在此基础上增加：全套 dex 操作、Java hook、native trace、m
 通用 Android 运行时逆向分析工具：运行时观测、按需 trace、
 dex/so/memory dump、ART 结构级脱壳辅助、活体对象自省、
 明文边界加密观测、反分析行为观测、Java/native 分析工作流；
-root（Zygisk）与非 root（Gadget/重打包）双注入路径。
+Zygisk / Gadget / Xposed 多注入路径。
 ```
 
 ---
@@ -1383,7 +1283,7 @@ dump        →  拿运行时真实内容
 
 ```text
 libadh_agent.so  →  采集与执行，越轻越好
-idhd             →  分析与服务，越强越好
+adhd             →  分析与服务，越强越好
 Web UI           →  观测与交互，实时可见
 MCP              →  AI 可编程操控，与 HTTP 同源
 ```
@@ -1395,7 +1295,6 @@ MCP              →  AI 可编程操控，与 HTTP 同源
 | 项目 | 地址 | 关系 |
 |------|------|------|
 | ios-decrypt-helper | https://github.com/taisuii/ios-decrypt-helper | 产品形态与工程思路参考；Android 版全面扩展 |
-| ~~LSPlant~~ | https://github.com/LSPosed/LSPlant | **v1 已移除**（Java 方法 hook 不在 v1；native inline hook 用 Dobby） |
 | Capstone | https://github.com/capstone-engine/capstone | 反汇编引擎 |
 | QBDI | https://github.com/QBDI/QBDI | Native DBI trace |
 | MCP | https://modelcontextprotocol.io | AI 操控协议 |
@@ -1515,8 +1414,6 @@ MCP              →  AI 可编程操控，与 HTTP 同源
 |------|------|------|
 | **Zygisk 插件** | root（Magisk） | 主线，zygote fork 后 early-inject，配合 S 韧性；配套 **ADH Manager** 管理作用域白名单（`/data/adb/adh/scope.json`） |
 | **Frida Gadget**（可选，默认关） | 非 root / root | 官方 Gadget so 由 agent `dlopen` 进目标进程，运行 Frida JS hook；按版本/ABI 下载 + sha256 固定；高开销（~25 MB so、额外 maps 与线程），只有显式调用才启用 |
-| **重打包注入** | 非 root | 把 `libadh_agent.so`（+可选 gadget）打进目标 APK 重签名 |
-| ptrace 注入器 | root | 按需附加已运行进程 |
 | LSPosed/Xposed 桥接（可选，默认关） | 有框架（Vector/LSPosed） | 薄 Xposed 模块复用框架加载，不 vendor GPL 代码 |
 | **模拟注入** | 无需 root | sandbox 自身 `dlopen` 加载 agent（开发/CI 主路径） |
 
@@ -1525,13 +1422,12 @@ MCP              →  AI 可编程操控，与 HTTP 同源
 - `libadh_agent.so`（arm64-v8a 主线，设备 ABI）
 - Zygisk 模块包（root 版）+ ADH Manager APK（作用域：选哪些 App 注入）；另提供 Magisk 可直接安装、自动安装 Manager 的组合包
 - Gadget 工具链：`tools/fetch_frida_gadget.sh`（官方 release，按版本/ABI + sha256，`--list`/`--print-url`）、`tools/compile_frida_script.sh`（Frida 17 起语言桥移出 runtime，用 esbuild + `frida-java-bridge` 打包）、`tools/load_frida_gadget.sh`（落盘 → `load_so` dlopen → 等 `frida-gadget` 线程 → 可选 `--marker` 断言脚本真的跑通）
-- Gadget 打包工具（重打包路径，延后）：把 agent + gadget so 注入并重签目标 APK（非 root 版）
-- 双 bootstrap 入口：`JNI_OnLoad`/构造函数（被加载）与 `adh_agent_start()`（被宿主主动调用；`idh_agent_start()` 为兼容别名），行为一致
+- 双 bootstrap 入口：`JNI_OnLoad`/构造函数（被加载）与 `adh_agent_start()`（被宿主主动调用，唯一对外入口），行为一致
 
 ### 30.3 模拟注入回路（CI 主路径）
 
 ```text
-sandbox-app 启动 → System.loadLibrary("idh_agent") → JNI_OnLoad；注入器 → adh_agent_start()
+sandbox-app 启动 → System.loadLibrary("adh_agent") → JNI_OnLoad；注入器 → adh_agent_start()
   → 连 ADH Daemon → 跑通全部模块断言 → 再打真实目标
 ```
 
@@ -1546,7 +1442,7 @@ Zygisk 模块 (id=adh) → preAppSpecialize 读 scope/open agent fd/set package 
 Agent → TCP 8761 → ADH Daemon（host，经 adb reverse）
 ```
 
-交付物：`injector/zygisk/dist/adh-zygisk.zip`、`device/manager` APK，以及二者合一且可由 Magisk 直接安装的版本化 `injector/zygisk/dist/adh-bundle-vX.Y.Z.zip`。Gadget 直载路径已落地（见 §30.5）；重打包（`injector/gadget-pack`）仍为后续项。
+交付物：`injector/zygisk/dist/adh-zygisk.zip`、`device/manager` APK，以及二者合一且可由 Magisk 直接安装的版本化 `injector/zygisk/dist/adh-bundle-vX.Y.Z.zip`。Gadget 直载路径已落地（见 §30.5）。
 
 - Zygisk `.so` 必须导出未改名且默认可见的 C 符号 `zygisk_module_entry`；有 root companion 时同样要求 `zygisk_companion_entry`，打包阶段必须自动验证。
 - Agent 必须在 `preAppSpecialize` 内用 `getModuleDir()` + `openat` 打开 `libadh_agent.so`；`postAppSpecialize` 只用 `android_dlopen_ext(ANDROID_DLEXT_USE_LIBRARY_FD)` 加载，禁止在 post 阶段调 `getModuleDir()`（Zygisk Next 会死锁）。
@@ -1575,7 +1471,7 @@ Agent → TCP 8761 → ADH Daemon（host，经 adb reverse）
 
 - 形态：`injector/xposed/` 薄加载器 APK（`com.adh.xposed`）。职责只有"框架已加载的前提下把 agent 送进目标进程"，**不含任何分析能力**；hook/trace/dump/索引/HTTP/MCP/DB 仍在 Host ADH Daemon。
 - **不 vendor 上游代码**：`injector/xposed/api-stub/` 是自己写的 compile-only ABI 声明（`IXposedHookLoadPackage` / `XC_LoadPackage.LoadPackageParam` / `XposedBridge.log`），`compileOnly` 依赖，运行时由框架提供真类。静态验证过产物 dex 里**只有** `Lcom/adh/xposed/AdhXposedEntry;` 一个类定义。
-- 载入方式：`System.loadLibrary("idh_agent")`，失败再按模块 APK 路径 `System.load(<abs>)`；之后 agent 自己连 Host ADH Daemon（`adb reverse` → 8761）。
+- 载入方式：`System.loadLibrary("adh_agent")`；加载失败即报错，不再做第二套路径扫描兜底。之后 agent 自己连 Host ADH Daemon（`adb reverse` → 8761）。
 - 关键设备事实（决定打包布局）：Vector 给模块的 `nativeLibraryDirectories` 是 **`base.apk!/lib/arm64-v8a`**，所以 agent `.so` 必须以**未压缩**形式留在 APK 里（`useLegacyPackaging=false` + `extractNativeLibs=false`）；"安装时解压"的旧布局下 `System.loadLibrary` 必然 `UnsatisfiedLinkError`（真机日志已确认）。模块 dex 由 `InMemoryDexFile` 载入、APK 不进 maps，所以 `maps` 兜底只对解压式布局有意义。
 - 策略（slice 1）：只进 scope 内应用的**主进程**；永不进 `android` / `com.android.*` / `com.google.android.gms` / 模块自身；**只对 ADH 自己的测试宿主**（sandbox / Manager）写验收 marker，绝不在第三方目标里留文件。
 - 工具链：`tools/build_xposed.sh`（把 agent `.so` 打进模块 → `injector/xposed/dist/adh-xposed.apk`）、`tools/install_xposed.sh`（root 安装 + `vector-cli modules enable` + `scope set`；`--disable` 逐条 `scope rm` 再关模块 —— 空参数的 `scope set` 在 Vector 2.2 会抛 NPE 且不清空）、`tools/verify_v31_xposed.sh`（真机验收，并**恢复测试前状态**，默认回到关闭）。
@@ -1584,7 +1480,7 @@ Agent → TCP 8761 → ADH Daemon（host，经 adb reverse）
 
 - 用途：eBPF uprobe 在 `SSL_write/SSL_read` 边界读明文，**不需要证书/代理**，与 agent 的 GOT hook 互补（同一次请求里 agent GOT hook 可能 0 命中，eCapture 仍抓到请求+响应明文）。
 - 只走官方发布：`tools/fetch_ecapture.sh`（版本固定在 `tools/ecapture_versions.json`，sha256 取自发布自带的 `checksum-<ver>.txt`），缓存于 gitignore 的 `agent/third_party/ecapture/<ver>/<abi>/`。
-- 运行：`tools/ecapture_capture.sh --package <pkg> | --pid N [--model text|pcap|keylog] [--seconds N]`；`--preflight-only` 输出 root/内核/`CONFIG_BPF_SYSCALL`/`CONFIG_UPROBES`/BTF 能力并给判定，运行后按输出里的 `probe started successfully` 给结论（失败打印首条错误）。
+- 运行：`tools/ecapture_capture.sh --package <pkg> | --pid N [--seconds N]`；固定使用已验证的 text 模式。`--preflight-only` 输出 root/内核/`CONFIG_BPF_SYSCALL`/`CONFIG_UPROBES`/BTF 能力并给判定，运行后按输出里的 `probe started successfully` 给结论（失败打印首条错误）。
 - 门槛：root + aarch64 内核 ≥ 5.5 + eBPF；**内核 BTF 不是必需**（本机 5.10 / `CONFIG_DEBUG_INFO_BTF=n` 实测 OpenSSL probe 正常启动），因此 BTF 只作为提示，真正的能力信号是 probe 是否启动。
 - 验收：`tools/verify_v34_ecapture.sh`（真机：官方二进制 → 预检 → 对 sandbox 起 probe → **用 MCP `net_capture` 驱动一次真实 HTTPS** → 断言抓到 `ADH_NET_MARKER_v1` 请求明文与 `ADH_NET_RESPONSE_v1` 响应明文）；内核不支持时 SKIP 并给出原因。
 
@@ -1594,7 +1490,7 @@ Agent → TCP 8761 → ADH Daemon（host，经 adb reverse）
   两个框架怪癖已写进实现：`scope set <module>` 不带应用会抛 NPE（清 scope 必须逐条 `scope rm`）；`scope set` 会**隐式启用**模块，所以调用方若要保持"关闭"必须显式再关一次。
 - 注入中心（已落地，2026-09-15）：主机侧 `GET /api/backends` + Web 控制台"注入后端"页给出会话分类、Gadget 缓存/命令与设备侧后端入口（每个会话可一键判定 Zygisk/Xposed/Gadget/自加载）；验收 `tools/verify_v33_backends.sh`。
 - MCP 面（2026-09-16）：`backends` 工具与 REST *同源*（`daemon/src/backends.ts`）；带 `session` 参数按 agent 自身 maps 判定该进程真实存在的注入路径（`zygisk`/`xposed_module`/`frida_gadget`/`self_load`）—— AI 客户端与控制台看到的是同一份真相；验收并入 `tools/verify_v33_backends.sh`。
-- 待办：多进程目标；Gadget 在控制台里只做"命令模板 + 检测"，一键下发仍走主机工具（daemon 无 adb）。
+- Gadget 在控制台里只做"命令模板 + 检测"，一键下发仍走主机工具（daemon 无 adb）。
 ---
 
 *本文档是唯一权威功能规格（模块 A–W）。开发步骤与排期见 `DEVELOPMENT_PLAN.md`，跨会话进度见 `PROGRESS.md`。*

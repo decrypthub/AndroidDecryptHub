@@ -6,7 +6,7 @@
 # this call path — confirmed empirically), triggers a real file write+read+verify
 # (via JNI reflection into FileIO.run()), and asserts the agent captured the real
 # file path at open and the real marker bytes at both write and read.
-# Exit 0 = PASS. Prereq: idhd running, device, sandbox running.
+# Exit 0 = PASS. Prereq: adhd running, device, sandbox running.
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
 verify_resolve_env

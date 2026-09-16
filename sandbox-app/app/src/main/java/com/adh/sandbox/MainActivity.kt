@@ -70,7 +70,7 @@ class MainActivity : Activity() {
             // no separate .so to load.
             System.loadLibrary("adh_agent"); "agent: libadh_agent 已加载（模拟注入）"
         } catch (t: Throwable) {
-            Log.w(TAG, "idh_agent not loaded: ${t.message}"); "agent: 未加载 — ${t.message}"
+            Log.w(TAG, "adh_agent not loaded: ${t.message}"); "agent: 未加载 — ${t.message}"
         }
 
         // Java-layer crypto interception: interposing JCE provider captures algorithm/key/

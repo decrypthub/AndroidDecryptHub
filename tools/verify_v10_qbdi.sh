@@ -3,7 +3,7 @@
 # function adh_trace_target (sum i*3, i=0..4 -> 30) under QBDI's VM and asserts the
 # correct return value + a real per-instruction trace (>=10 insns with arm64 mnemonics).
 # Requires libQBDI.so bundled (tools/fetch_qbdi.sh). SKIPs cleanly if QBDI unavailable.
-# Exit 0 = PASS (or SKIP). Prereq: idhd, device, sandbox running with libQBDI bundled.
+# Exit 0 = PASS (or SKIP). Prereq: adhd, device, sandbox running with libQBDI bundled.
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
 verify_resolve_env_host

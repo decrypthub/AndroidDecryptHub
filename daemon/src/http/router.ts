@@ -1,6 +1,9 @@
 import type http from 'node:http';
 
-import { analysisRoutes } from './routes_analysis.ts';
+import { handleMcp } from '../mcp.ts';
+import { readBody } from '../state.ts';
+import { packageFromPath } from './package_path.ts';
+import { analysisRoutes, serveDashboard } from './routes_analysis.ts';
 import { runtimeRoutes } from './routes_runtime.ts';
 import { systemRoutes } from './routes_system.ts';
 import type { RouteContext } from './types.ts';
@@ -25,6 +28,16 @@ export async function handleHttp(req: http.IncomingMessage, res: http.ServerResp
       ? url.pathname.startsWith(route.path)
       : url.pathname === route.path;
     if (matches) return await route.handler();
+  }
+
+  const pkg = packageFromPath(url.pathname);
+  if (pkg) {
+    if (req.method === 'POST' && url.pathname === `/${pkg}/mcp`) {
+      return await handleMcp(await readBody(req), res, { package: pkg });
+    }
+    if (url.pathname === `/${pkg}` || url.pathname === `/${pkg}/`) {
+      return await serveDashboard(send);
+    }
   }
   send(404, { error: 'not found' });
 }

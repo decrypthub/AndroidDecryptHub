@@ -33,8 +33,6 @@ endif()
 
 # Native inline-hook backend (Dobby, arm64). Present only after tools/fetch_dobby.sh has run;
 # without it the agent still builds and adh_inline_crypto_test reports "inline backend not built".
-# (LSPlant Java-method hooking was removed from the v1 scope — it cannot initialise on stripped
-#  libart ROMs, so it was neither shippable nor verifiable; see docs/PROGRESS.md.)
 set(DOB "${CMAKE_CURRENT_SOURCE_DIR}/third_party/dobby")
 set(HOOK_LIBS "")
 set(HOOK_INC "")
@@ -52,7 +50,7 @@ add_library(adh_agent SHARED ${AGENT_SOURCES})
 
 # Release footprint: keep only the three bootstrap entry points in .dynsym.
 # Dobby/libc++ internals stay local to this DSO; Zygisk resolves only
-# adh_agent_start/idh_agent_start and System.loadLibrary resolves JNI_OnLoad.
+# adh_agent_start and System.loadLibrary resolves JNI_OnLoad.
 set(AGENT_EXPORT_MAP "${CMAKE_CURRENT_SOURCE_DIR}/exports.map")
 if(NOT EXISTS "${AGENT_EXPORT_MAP}")
   message(FATAL_ERROR "missing agent export map: ${AGENT_EXPORT_MAP}")

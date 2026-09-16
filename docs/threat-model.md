@@ -18,16 +18,16 @@ default per-op and is not a general evasion product.
 
 ## Trust boundaries
 
-- **Agent ↔ idhd**: NDJSON over TCP `127.0.0.1:8761`, reached from the device via
+- **Agent ↔ adhd**: NDJSON over TCP `127.0.0.1:8761`, reached from the device via
   `adb reverse` (USB). Not exposed on the network by default.
-- **idhd HTTP/WS/MCP**: binds `0.0.0.0:8760` for `adb reverse` convenience but is intended
-  for **localhost / trusted USB** use. **Do not expose idhd to an untrusted network.**
+- **adhd HTTP/WS/MCP**: binds `0.0.0.0:8088` so phones and other PCs on a **trusted LAN**
+  can share one Host (same port as iOS `idh`). **Do not expose adhd to an untrusted network.**
   It can dump target memory, read files, and hook APIs — treat it as privileged.
 
 ## Recommended hardening (deployment)
 
-- Keep idhd bound to localhost / behind `adb reverse` only; do not port-forward to LAN.
-- If LAN access is ever needed: add a bearer token (env gate) + IP allowlist before enabling.
+- Keep the Host on a trusted LAN (or USB `adb reverse`); do not port-forward to the public internet.
+- If the LAN is not fully trusted: add a bearer token (env gate) + IP allowlist before enabling.
 - Dangerous operations (full-memory dump, instruction trace, cross-app reads) should be
   gated behind explicit confirmation in any multi-user deployment.
 

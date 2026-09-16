@@ -5,7 +5,7 @@
 #   2) dump 4096 bytes from (markerAddr - 8) [buffer base] -> file + sha256
 #   3) recompute expected sha256 of buildMockDexBytes() and assert equal
 #   4) dump again -> dedup=true (same sha, not rewritten)
-# Exit 0 = PASS. Prereq: idhd running, device attached, sandbox deployed+running.
+# Exit 0 = PASS. Prereq: adhd running, device attached, sandbox deployed+running.
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
 verify_resolve_env_host

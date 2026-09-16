@@ -6,7 +6,7 @@
 
 | Path | Responsibility |
 |---|---|
-| `bootstrap/agent_main.c` | Dual entry, hello/report, command dispatch, and lifecycle |
+| `bootstrap/agent_main.c` | Dual entry, first-loaded-copy owner guard, late reporter binding, hello/report, command dispatch, and lifecycle |
 | `bootstrap/agent_internal.h` | Shared bootstrap utility, transport, memory, and filesystem declarations |
 | `bootstrap/util.c` | JSON, base64, property, process, and time helpers |
 | `bootstrap/io.c` | Host connection and length-framed transport |
@@ -24,7 +24,7 @@
 
 ## Naming
 
-`libadh_agent.so` and `idh_agent_start` are legacy on-disk/ABI names kept for compatibility. New code, commands, logs, and UI copy use `ADH` / `adh_*`; do not add new `idh_*` identifiers. The fixed `com.idh.probe` / `IDH_PROBE_OK` fixture is intentionally hash-bound.
+`libadh_agent.so` is the single shipped agent name; the exported entry point is `adh_agent_start`. New code, commands, logs, and UI copy use `ADH` / `adh_*`. The fixed `com.idh.probe` / `IDH_PROBE_OK` fixture is intentionally hash-bound.
 
 ## Phase 3 extraction rule
 
@@ -35,5 +35,5 @@ Phase 3 domain extraction is complete. Further bootstrap work should focus on ta
 ## Release footprint
 
 - `tools/build_agent.sh` keeps `libadh_agent.so.debug` locally and stages only a stripped `.so`.
-- `exports.map` restricts `.dynsym` to `JNI_OnLoad`, `adh_agent_set_package`, `adh_agent_start`, and `idh_agent_start`.
+- `exports.map` restricts `.dynsym` to `JNI_OnLoad`, `adh_agent_set_package`, and `adh_agent_start`.
 - `compat_probe` reports bootstrap vs current exec/anon-exec/RWX counters; base injection and GOT hooks must not add true anonymous executable pages.

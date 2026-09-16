@@ -30,17 +30,17 @@ static int class_is_lifecycle(const char *s) {
     return 0;
 }
 
-void idh_cmd_trigger(int fd, const char *id, const char *class_name, const char *method, int level) {
+void adh_cmd_trigger(int fd, const char *id, const char *class_name, const char *method, int level) {
     char idj[64];
     json_escape(id, idj, sizeof(idj));
     int loaded = 0, invoked = 0, skipped = 0;
     const char *reason = "";
     char result[160] = "";
     int did_attach = 0;
-    JNIEnv *env = idh_jni_attach(&did_attach);
+    JNIEnv *env = adh_jni_attach(&did_attach);
     if (env) {
         (*env)->PushLocalFrame(env, 64);
-        jclass target = idh_jni_load_app_class(env, class_name);
+        jclass target = adh_jni_load_app_class(env, class_name);
         if ((*env)->ExceptionCheck(env)) {
             (*env)->ExceptionClear(env);
             reason = "loadClass threw";
@@ -116,7 +116,7 @@ void idh_cmd_trigger(int fd, const char *id, const char *class_name, const char 
         }
         if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
         (*env)->PopLocalFrame(env, NULL);
-        idh_jni_detach(did_attach);
+        adh_jni_detach(did_attach);
     } else {
         reason = "no JNI env";
     }
@@ -137,7 +137,7 @@ void idh_cmd_trigger(int fd, const char *id, const char *class_name, const char 
          class_name, method ? method : "", level, loaded, invoked, skipped, reason);
 }
 
-void idh_cmd_load_so(int fd, const char *id, const char *path, const char *symbol) {
+void adh_cmd_load_so(int fd, const char *id, const char *path, const char *symbol) {
     char idj[64];
     json_escape(id, idj, sizeof(idj));
     void *handle = dlopen(path, RTLD_NOW | RTLD_GLOBAL);

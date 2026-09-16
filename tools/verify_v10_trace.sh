@@ -2,7 +2,7 @@
 # v1.0 generic native function tracer (I.2 function-level). Traces calls to an
 # arbitrary native symbol (args + tid + ts) via the GOT hook engine. Traces
 # access() in libadhdetect during Detection.run() -> expects 2 calls (su-path
-# checks) on one thread. Exit 0 = PASS. Prereq: idhd, device, sandbox running.
+# checks) on one thread. Exit 0 = PASS. Prereq: adhd, device, sandbox running.
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
 verify_resolve_env_host

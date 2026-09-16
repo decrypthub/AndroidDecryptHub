@@ -6,7 +6,7 @@
 import https from 'node:https';
 import selfsigned from 'selfsigned';
 
-const PORT = Number(process.env.ADH_TLS_PORT ?? process.env.IDH_TLS_PORT ?? 8762);
+const PORT = Number(process.env.ADH_TLS_PORT ?? 8762);
 const RESPONSE = 'ADH_NET_RESPONSE_v1';
 // selfsigned v5 generate() is async (returns a Promise).
 const pems = await selfsigned.generate(

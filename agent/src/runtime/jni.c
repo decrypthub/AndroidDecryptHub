@@ -6,15 +6,15 @@
 
 static JavaVM *g_vm = NULL;
 
-void idh_jni_set_vm(JavaVM *vm) {
+void adh_jni_set_vm(JavaVM *vm) {
     g_vm = vm;
 }
 
-int idh_jni_vm_available(void) {
+int adh_jni_vm_available(void) {
     return g_vm != NULL;
 }
 
-JNIEnv *idh_jni_attach(int *did_attach) {
+JNIEnv *adh_jni_attach(int *did_attach) {
     *did_attach = 0;
     if (!g_vm) {
         typedef jint (*GetVMs)(JavaVM **, jsize, jsize *);
@@ -39,11 +39,11 @@ JNIEnv *idh_jni_attach(int *did_attach) {
     return env;
 }
 
-void idh_jni_detach(int did_attach) {
+void adh_jni_detach(int did_attach) {
     if (did_attach && g_vm) (*g_vm)->DetachCurrentThread(g_vm);
 }
 
-jclass idh_jni_load_app_class(JNIEnv *env, const char *dotname) {
+jclass adh_jni_load_app_class(JNIEnv *env, const char *dotname) {
     jclass at = (*env)->FindClass(env, "android/app/ActivityThread");
     jmethodID cur = at ? (*env)->GetStaticMethodID(env, at, "currentApplication", "()Landroid/app/Application;") : NULL;
     jobject app = cur ? (*env)->CallStaticObjectMethod(env, at, cur) : NULL;

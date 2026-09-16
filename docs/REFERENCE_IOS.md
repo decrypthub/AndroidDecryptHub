@@ -15,12 +15,12 @@ IOSDecryptHub (**IDH**, iOS DecryptHub) — 基于 fishhook 注入目标 iOS App
 
 | 模块 | 文件/目录 | 能力 |
 |------|-----------|------|
-| 加解密 hook | `src/hooks/crypto/` | digest / hmac / symmetric / asymmetric / kdf / evp |
+| 加解密 hook | `src/hooks/crypto/` | digest / hmac / symmetric / asymmetric / evp |
 | 文件 hook | `src/hooks/behavior/hook_file.m` | open / write / unlink / rename |
 | 系统 hook | `src/hooks/behavior/hook_system.m` | dlopen / dlsym + dlsym 重定向 |
 | 网络 hook | `src/hooks/behavior/hook_network.m` | NSURLSession 配对 + SSL_read/write |
 | 改机 hook | `src/hooks/behavior/hook_spoof_objc.m` | UIDevice 等（仅本进程） |
-| 脱壳 | `src/core/macho_dump.m` `dump_manager.m` | FairPlay Mach-O dump / IPA 重打包 |
+| 脱壳 | `src/core/macho_dump.m` `dump_manager.m` | FairPlay Mach-O dump |
 | 反汇编 | Capstone（内嵌） | 按 bytes / 地址 / 函数反汇编 |
 | HTTP | `src/server/http_server.m` | REST API + 内嵌前端 |
 | MCP | `src/server/mcp_server.m` | 30+ tools |
@@ -34,14 +34,14 @@ IOSDecryptHub (**IDH**, iOS DecryptHub) — 基于 fishhook 注入目标 iOS App
 
 | iOS 有 | Android 额外要做 |
 |--------|------------------|
-| CommonCrypto / EVP hook | + Java Cipher/MessageDigest/Mac（LSPlant） |
+| CommonCrypto / EVP hook | + Java Cipher/MessageDigest/Mac 观测 |
 | fishhook import hook | + inline hook + PLT/GOT + syscall + QBDI |
 | Mach-O dump | + dex dump + InMemoryDex + oat/vdex + ELF so 重组 |
 | 无 | Dex 索引 / smali / xref / 按需反编译 |
 | 无 | ClassLoader 追踪 |
 | 无 | Java 方法级 trace |
-| 无 | 三层架构（Agent / idhd / Web） |
-| HTTP 在 dylib 内 | HTTP/MCP/DB 移到 idhd 守护进程 |
+| 无 | 三层架构（Agent / adhd / Web） |
+| HTTP 在 dylib 内 | HTTP/MCP/DB 移到 adhd 守护进程 |
 
 ## 关键工程实践（建议移植）
 
@@ -57,6 +57,6 @@ IOSDecryptHub (**IDH**, iOS DecryptHub) — 基于 fishhook 注入目标 iOS App
 
 ## 不要照搬的部分
 
-- **不要把 HTTP/MCP/DB 放在 Agent so 里** — Android 版用 idhd 守护进程
+- **不要把 HTTP/MCP/DB 放在 Agent so 里** — Android 版用 adhd 守护进程
 - **不要假设 only import slot hook** — Android 需多 backend
 - **不要只做 Mach-O** — Android 主线是 DEX + ELF

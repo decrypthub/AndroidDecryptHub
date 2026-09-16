@@ -101,11 +101,8 @@ export const nextId = () => `s_${(++seq).toString(36)}${Date.now().toString(36).
 export const nextCmdId = () => `c${(++cmdSeq).toString(36)}`;
 
 // ---- event store (session record/replay) ---------------------------------
-// Prefer existing legacy idhd-data (compat with verify scripts); else adhd-data.
 const _dataRoot = join(__dirname, '..', '..');
-const _adhData = join(_dataRoot, 'adhd-data');
-const _idhData = join(_dataRoot, 'idhd-data');
-export const DATA_DIR = existsSync(_idhData) ? _idhData : _adhData;
+export const DATA_DIR = join(_dataRoot, 'adhd-data');
 mkdirSync(DATA_DIR, { recursive: true });
 export const EVENTS_FILE = join(DATA_DIR, 'events.jsonl');
 interface Ev { seq: number; ts: number; type: string; data: any }
@@ -143,7 +140,7 @@ export const DEFAULT_SETTINGS: Settings = {
   // fileModule/sysModule: which loaded module's GOT the persistent file(open/read/…) and
   // system(ptrace/access/getprop) hooks patch. Defaults are the sandbox-backing modules for
   // self-test; override per real target (empty string = don't install that category's hooks).
-  capture: { enabled: true, autoDumpDex: true, retain: 1000, families: { digest: true, hmac: true, symmetric: true, asymmetric: true, tls: true, kdf: true, aead: true }, cryptoModule: 'libjavacrypto.so', fileModule: 'libjavacore.so', sysModule: 'libadhdetect.so' },
+  capture: { enabled: true, autoDumpDex: true, retain: 1000, families: { digest: true, hmac: true, symmetric: true, asymmetric: true, tls: true, aead: true }, cryptoModule: 'libjavacrypto.so', fileModule: 'libjavacore.so', sysModule: 'libadhdetect.so' },
   ui: { displayCap: 300 },
 };
 export let settings: Settings = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
@@ -159,12 +156,6 @@ export function mergeSettings(patch: any): string[] {
     if (typeof c.cryptoModule === 'string') settings.capture.cryptoModule = c.cryptoModule.trim();
     if (typeof c.fileModule === 'string') settings.capture.fileModule = c.fileModule.trim();
     if (typeof c.sysModule === 'string') settings.capture.sysModule = c.sysModule.trim();
-    // Legacy rename compat: the sandbox detection lib is libadhdetect.so. A settings file
-    // written before the ADH naming pass (or a restored old config) still names
-    // libidhdetect.so, which matches no loaded module — the sys/detection hooks then install
-    // 0 slots and fail silently (that is exactly why v0.5 detect turned red). Upgrade only
-    // that exact legacy value; any other module name stays operator-controlled.
-    if (settings.capture.sysModule === 'libidhdetect.so') settings.capture.sysModule = 'libadhdetect.so';
     if (c.families && typeof c.families === 'object')
       for (const k of Object.keys(settings.capture.families))
         if (typeof c.families[k] === 'boolean') settings.capture.families[k] = c.families[k];
@@ -188,9 +179,8 @@ export function saveSettings() { writeFileSync(SETTINGS_FILE, JSON.stringify(set
 export function configStats() { return { captures: captures.length, dumps: dumps.size, events: events.length, on: captureTimers.size > 0, agents: sessions.size, capture: captureHealth() }; }
 // Which crypto family a capture belongs to (mirrors cryptoIdentify's buckets) — used by the
 // Daemon-side family filter (panel-level; the agent still hooks everything).
-export function familyOf(algo: string): 'tls' | 'asymmetric' | 'hmac' | 'digest' | 'symmetric' | 'kdf' | 'aead' {
+export function familyOf(algo: string): 'tls' | 'asymmetric' | 'hmac' | 'digest' | 'symmetric' | 'aead' {
   if (/TLS/.test(algo)) return 'tls';
-  if (/KDF/i.test(algo)) return 'kdf';
   if (/AEAD/i.test(algo)) return 'aead';
   if (/RSA|(^|[^m])EC[^B]|ECDSA|DSA/i.test(algo)) return 'asymmetric';
   if (/Hmac|HMAC/i.test(algo)) return 'hmac';
@@ -298,9 +288,6 @@ export function classify(func: string): { algo: string; op: string } {
   if (func === 'EVP_PKEY_encrypt_out') return { algo: 'RSA 非对称加密', op: '密文输出' };
   if (func === 'EVP_PKEY_decrypt_in')  return { algo: 'RSA 非对称解密', op: '密文输入' };
   if (func === 'EVP_PKEY_decrypt_out') return { algo: 'RSA 非对称解密', op: '明文输出' };
-  if (func.startsWith('PBKDF2_')) return { algo: 'PBKDF2 KDF', op: func === 'PBKDF2_key' ? '派生密钥' : func === 'PBKDF2_salt' ? '盐值' : '口令' };
-  if (func.startsWith('HKDF_'))   return { algo: 'HKDF KDF', op: func === 'HKDF_key' ? '派生密钥' : func === 'HKDF_salt' ? '盐值' : '输入密钥材料' };
-  if (func.startsWith('scrypt_')) return { algo: 'scrypt KDF', op: func === 'scrypt_key' ? '派生密钥' : func === 'scrypt_salt' ? '盐值' : '口令' };
   if (func === 'EVP_AEAD_seal_pt' || func === 'EVP_AEAD_seal_ct')
     return { algo: 'AEAD 加密(GCM/ChaCha20-Poly1305)', op: func === 'EVP_AEAD_seal_pt' ? '明文' : '密文+Tag' };
   if (func === 'EVP_AEAD_open_ct' || func === 'EVP_AEAD_open_pt')
@@ -322,10 +309,9 @@ export function cryptoIdentify() {
     byAlgo.set(key, e);
   }
   const algorithms = [...byAlgo.values()].sort((a, b) => b.count - a.count);
-  const families = { symmetric: 0, asymmetric: 0, digest: 0, hmac: 0, tls: 0, kdf: 0, aead: 0 };
+  const families = { symmetric: 0, asymmetric: 0, digest: 0, hmac: 0, tls: 0, aead: 0 };
   for (const a of algorithms) {
     if (/TLS/.test(a.algo)) families.tls += a.count;
-    else if (/KDF/i.test(a.algo)) families.kdf += a.count;
     else if (/AEAD/i.test(a.algo)) families.aead += a.count;
     else if (/RSA|(^|[^m])EC[^B]|ECDSA|DSA/i.test(a.algo)) families.asymmetric += a.count;
     else if (/Hmac|HMAC/i.test(a.algo)) families.hmac += a.count;
@@ -334,7 +320,7 @@ export function cryptoIdentify() {
   }
   const withKey = algorithms.filter(a => a.keyHex).length;
   const summary = `捕获 ${captures.length} 次加密操作，涉及 ${algorithms.length} 种算法/用途；` +
-    `其中 ${withKey} 种拿到了密钥。对称 ${families.symmetric} · 非对称 ${families.asymmetric} · 摘要 ${families.digest} · HMAC ${families.hmac} · TLS ${families.tls} · KDF ${families.kdf} · AEAD ${families.aead}。`;
+    `其中 ${withKey} 种拿到了密钥。对称 ${families.symmetric} · 非对称 ${families.asymmetric} · 摘要 ${families.digest} · HMAC ${families.hmac} · TLS ${families.tls} · AEAD ${families.aead}。`;
   return { total: captures.length, families, algorithms, summary };
 }
 

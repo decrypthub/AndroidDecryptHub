@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# v0.8 native disassembly (HOST-ONLY). idhd disassembles a real .so (llvm-objdump)
+# v0.8 native disassembly (HOST-ONLY). adhd disassembles a real .so (llvm-objdump)
 # by symbol and returns structured instructions. Verifies the agent's own
 # adh_agent_start disassembles to valid arm64 (prologue stp + a ret). Exit 0 = PASS.
 set -uo pipefail

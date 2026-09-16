@@ -4,7 +4,7 @@
     <!-- Agent connects to the Host ADH Daemon over TCP (via `adb reverse`); requires INTERNET. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
-    <!-- The app probes Host ADH Daemon /health over cleartext (127.0.0.1:8760 via adb reverse) to
+    <!-- The app probes Host ADH Daemon /health over cleartext (127.0.0.1:8088 via adb reverse) to
          show whether the console is up + discover the host LAN URL. -->
     <application
         android:allowBackup="true"

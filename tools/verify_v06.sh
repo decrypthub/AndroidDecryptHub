@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # v0.6 Runtime Object Inspector (module T). Reflectively reads a live object's fields.
 # Reads HeapProbe.sConfig (a Config with known values) and asserts token/count/note.
-# Exit 0 = PASS. Prereq: idhd running, device, sandbox running.
+# Exit 0 = PASS. Prereq: adhd running, device, sandbox running.
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
 verify_resolve_env_host

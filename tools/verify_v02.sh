@@ -3,11 +3,11 @@
 # Deploys, launches via 模拟注入, then:
 #   1) GET /api/process/maps -> full region list; first 40 match kernel verbatim
 #   2) POST /api/memory/read at a mapped .so's base -> bytes start with ELF magic 7f454c46
-# Exit 0 = PASS. Prereq: idhd running, device attached.
+# Exit 0 = PASS. Prereq: adhd running, device attached.
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
 verify_resolve_env
-AGENT="${ADH_AGENT_PORT:-${IDH_AGENT_PORT:-8761}}"
+AGENT="${ADH_AGENT_PORT:-8761}"
 JAVA_HOME="${JAVA_HOME:-C:\\Program Files\\Android\\Android Studio\\jbr}"; export JAVA_HOME
 PKG=com.adh.sandbox
 
@@ -15,7 +15,7 @@ bash "$ROOT/tools/build_agent.sh" >/dev/null
 ( cd "$ROOT/sandbox-app" && ./gradlew :app:assembleDebug --console=plain >/dev/null )
 APK="$ROOT/sandbox-app/app/build/outputs/apk/debug/app-debug.apk"
 adb -s "$SERIAL" reverse tcp:$AGENT tcp:$AGENT >/dev/null
-adb -s "$SERIAL" install -r "$APK" >/dev/null
+install_apk_root "$APK" /data/local/tmp/adh-sandbox.apk >/dev/null || exit 1
 adb -s "$SERIAL" shell am force-stop $PKG
 adb -s "$SERIAL" shell am start -n $PKG/.MainActivity >/dev/null
 sleep 4

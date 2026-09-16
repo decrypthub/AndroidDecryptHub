@@ -4,16 +4,16 @@
 # HTTPS server over `adb reverse`, and asserts the agent captured the request
 # plaintext (X-Adh-Marker) at SSL_write and the response (ADH_NET_RESPONSE_v1) at
 # SSL_read — i.e. TLS plaintext read at the boundary, bypassing encryption/pinning.
-# Exit 0 = PASS. Prereq: idhd running, device, sandbox running.
+# Exit 0 = PASS. Prereq: adhd running, device, sandbox running.
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
 verify_resolve_env
-TLS_PORT="${ADH_TLS_PORT:-${IDH_TLS_PORT:-8762}}"
+TLS_PORT="${ADH_TLS_PORT:-8762}"
 MARKER="ADH_NET_MARKER_v1"; RESP="ADH_NET_RESPONSE_v1"
 
 # start a fresh local HTTPS server (kill any stale one holding the port)
 for p in $(powershell.exe -NoProfile -Command "(Get-NetTCPConnection -LocalPort $TLS_PORT -State Listen -ErrorAction SilentlyContinue).OwningProcess" 2>/dev/null | tr -d '\r'); do taskkill //F //PID "$p" >/dev/null 2>&1; done
-( node "$ROOT/daemon/tls_test_server.mjs" > /tmp/idh_tls.log 2>&1 & )
+( node "$ROOT/daemon/tls_test_server.mjs" > /tmp/adh_tls.log 2>&1 & )
 sleep 2
 adb -s "$SERIAL" reverse tcp:$TLS_PORT tcp:$TLS_PORT >/dev/null
 

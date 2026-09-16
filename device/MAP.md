@@ -29,7 +29,7 @@ enabled flag must set it explicitly.
 ## Boundaries (red line)
 
 ```text
-Target App  →  agent/libidh_agent.so     collect only
+Target App  →  agent/libadh_agent.so     collect only
 Zygisk      →  injector/zygisk           early inject by scope
 Device      →  device/:daemon+:manager   scope + module status + target process control + Host console link
 Host PC     →  daemon/ (ADH Daemon)      HTTP/WS/MCP/analysis
@@ -75,7 +75,7 @@ Toolchain locked to Gradle 8.9 + AGP 8.7.3 + Kotlin 2.0.21 + Compose BOM (same c
 | manager Compose | `:manager` Compose |
 | on-device daemon | `:daemon` AIDL skeleton |
 | zygisk loader | `injector/zygisk` (Magisk zip) |
-| native / LSPlant framework | `agent/` collect agent (not an Xposed framework) |
+| native collect agent | `agent/` collect agent (not an Xposed framework) |
 | xposed/LSPosed framework | **not ours** — user-installed (LSPosed/Vector). ADH ships an optional thin loader module (injector/xposed/) and drives its enabled/scope state from the Device Daemon ([XposedBackend] below). |
 
 ADH adopts Vector's versioned module packaging, bundled Manager checksum, Magisk

@@ -6,8 +6,8 @@
 ## 它做什么 / 不做什么
 
 - **做**：在框架已加载进目标进程后（`handleLoadPackage`），把本 APK 里自带的 `libadh_agent.so`
-  加载进该进程（`System.loadLibrary("idh_agent")`，失败再按 `/proc/self/maps` 里的模块 APK 路径
-  `System.load(<abs path>)`）。之后 agent 像其他注入路径一样自己连 Host ADH Daemon（`adb reverse` → 8761）。
+  加载进该进程（`System.loadLibrary("adh_agent")`）。加载失败即视为该后端不可用，不再做
+  第二套路径扫描兜底。之后 agent 像其他注入路径一样自己连 Host ADH Daemon（`adb reverse` → 8761）。
 - **不做**：不实现任何分析能力。hook/trace/dump/索引/HTTP/MCP/DB 全部仍在 Host ADH Daemon —— 架构红线不变。
 - **不 vendor 上游代码**：`api-stub/` 只是我们自己写的 compile-only ABI 声明（`IXposedHookLoadPackage` /
   `XC_LoadPackage.LoadPackageParam` / `XposedBridge.log`），运行时由框架提供真类；APK 里不含这些类。

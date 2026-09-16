@@ -47,7 +47,7 @@ static VMAction qbdi_insn_cb(VMInstanceRef vm, GPRState *gpr, FPRState *fpr, voi
 
 // Trace `func` (invoked with no args) via QBDI. Writes JSON FIELDS (no outer braces)
 // into out — the caller wraps them in the cmdResult object. Returns insn count / -1.
-int idh_qbdi_trace(void *func, char *out, int outsz) {
+int adh_qbdi_trace(void *func, char *out, int outsz) {
     void *h = dlopen("libQBDI.so", RTLD_NOW);
     if (!h) { snprintf(out, outsz, "\"ok\":false,\"error\":\"libQBDI.so not available (dlopen)\""); return -1; }
     p_initVM_t f_init = (p_initVM_t)dlsym(h, "qbdi_initVM");

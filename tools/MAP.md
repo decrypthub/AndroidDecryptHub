@@ -13,7 +13,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
 API:
 | Function | Use |
 |---|---|
-| `verify_resolve_env` | Sets `ROOT`/`HTTP`/`SERIAL`/`BASE` (`ADH_HTTP_PORT`/`ADH_SERIAL` primary; legacy `IDH_*` fallback). For device scripts that gate on liveness OR set SERIAL. |
+| `verify_resolve_env` | Sets `ROOT`/`HTTP`/`SERIAL`/`BASE` (`ADH_HTTP_PORT`/`ADH_SERIAL`). For device scripts that gate on liveness OR set SERIAL. |
 | `verify_resolve_env_host` | Sets `ROOT`/`HTTP`/`BASE` only (no SERIAL, no `adb` call). For host-only scripts. |
 | `verify_sandbox_alive` | Sets `ALIVE` (sandbox pid or empty) + prints the alive line. Call before `verify_gate … 1`. |
 | `verify_gate "<label>" <0\|1>` | Reads `$OUT` for `RESULT:PASS`. Returns 0 on pass; if arg2=1, also requires non-empty `$ALIVE`. Prints the ✅/❌ line. Uses here-string grep (SIGPIPE-safe — the `echo\|grep -q` pattern false-fails on >64KB payloads under `pipefail`). |
@@ -48,7 +48,7 @@ translation — kept separate).
 2. Source `lib/verify_common.sh`, call `verify_resolve_env` (device) or `verify_resolve_env_host` (host).
 3. Write the unique test as a `node - "$HTTP" [args] <<'EOF' … EOF` heredoc that prints exactly one `RESULT:PASS` or `RESULT:FAIL` line (use `process.exit(0)` on the fail path so `set +e` isn't needed... but keep `set +e` before the `OUT=$(…)` capture anyway — node may throw).
 4. `echo "$OUT"` for diagnostics, then `verify_gate "<descriptive label>" <0|1> && exit 0 || exit 1`.
-5. `bash -n tools/verify_vXX.sh` (syntax), then run it standalone against a live idhd+device+sandbox to confirm green.
+5. `bash -n tools/verify_vXX.sh` (syntax), then run it standalone against a live adhd+device+sandbox to confirm green.
 6. **Add it to `verify_all.sh`'s `SCRIPTS` array** as `"verify_vXX.sh:device"` or `:host"`, in version order. Without this it never runs in regression.
 
 ## `verify_all.sh` — the regression runner
@@ -60,14 +60,13 @@ translation — kept separate).
 
 ## Build scripts
 
-- `build_agent.sh` — `libadh_agent.so` (arm64-v8a, NDK+SDK cmake), stages into `sandbox-app/…/jniLibs/$ABI`, prints `adh_agent_set_package` + `adh_agent_start` + legacy `idh_agent_start` + `JNI_OnLoad` exports (fail-loud on compile error — do NOT hide build output).
+- `build_agent.sh` — `libadh_agent.so` (arm64-v8a, NDK+SDK cmake), stages into `sandbox-app/…/jniLibs/$ABI`, prints `adh_agent_set_package` + `adh_agent_start` + `JNI_OnLoad` exports (fail-loud on compile error — do NOT hide build output).
 - `build_detect.sh` — `libadhdetect.so` (sandbox's mock detection target), same cmake pattern.
-- `fetch_qbdi.sh` / `fetch_dobby.sh` — one-time third-party fetch (gitignored under `agent/third_party/`). Dobby is the inline-hook backend (Java method hook / LSPlant is out of the v1 scope).
+- `fetch_qbdi.sh` / `fetch_dobby.sh` — one-time third-party fetch (gitignored under `agent/third_party/`). Dobby is the verified inline-hook backend.
 - `build_zygisk.sh` — 构建 Manager 证书固定的 Root Device Daemon + Zygisk 模块 → `injector/zygisk/dist/adh-zygisk.zip`
 - `build_bundle.sh` — Magisk/KernelSU 可直接安装的版本化组合包（Zygisk + Device Daemon + Manager）→ `injector/zygisk/dist/adh-bundle-vX.Y.Z.zip`
 - `flash_device.sh` — 把组合包推到当前手机并刷入（自动识别 KernelSU `ksud` / Magisk）。`--no-build` 跳过重建；`--reboot` 刷完重启让 Zygisk + Device Daemon 加载。多设备时必须设 `ANDROID_SERIAL`。
 - Device surface: `cd device && ./gradlew :core:test :daemon:testDebugUnitTest :daemon:assembleDebug :manager:testDebugUnitTest :manager:assembleDebug`
-- `python/` — PyPI `android-decrypt-hub`（脚本 `adh`）：`cd python && PYTHONPATH=src python -m unittest`
 - `dev_up.sh` — idempotent: start Host ADH Daemon (if down) + `adb reverse` for 8088/8761.
 - `load_frida_gadget.sh` — manual Frida Gadget loader (module W **optional** backend, off by default): official Gadget (version/ABI selectable, sha256-pinned) → bundle the hook if it needs a language bridge → stage into `<pkg>/code_cache` (app uid + selinux ctx) → `POST /api/agent/load_so` dlopen (constructor-driven: **no entry symbol**) → wait for `frida-gadget` threads in `/proc/<pid>/task` → optional `--marker` end-to-end assert. `--watch` writes `on_change: reload` (edit the staged hook → hot reload).
 - `compile_frida_script.sh` — bundle a hook with the Frida language bridges via esbuild (`tools/frida/`, gitignored deps). Needed because **Frida 17+ no longer ships Java/ObjC bridges inside the Gadget runtime**; `frida-compile` is NOT used (its CLI needs the native `frida` binding → MSVC on Windows).

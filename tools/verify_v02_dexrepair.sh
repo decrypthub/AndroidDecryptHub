@@ -5,7 +5,7 @@
 #   2) corrupt those header fields (zero them)
 #   3) POST /api/dex/repair -> repaired fields
 #   4) assert repaired checksum/signature/file_size EXACTLY match the original good dex
-# Exit 0 = PASS. Prereq: idhd running; sandbox APK built.
+# Exit 0 = PASS. Prereq: adhd running; sandbox APK built.
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
 verify_resolve_env_host

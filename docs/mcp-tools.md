@@ -1,6 +1,6 @@
 # ADH MCP Tools
 
-Generated from the live idhd registry (25 tools). Endpoint: `POST /mcp` (JSON-RPC 2.0).
+Generated from the live adhd registry (25 tools). Endpoint: `POST /mcp` (JSON-RPC 2.0).
 
 | Tool | Description | Args |
 |---|---|---|

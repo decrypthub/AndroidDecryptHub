@@ -8,15 +8,13 @@ import java.security.PublicKey
 import java.security.Signature
 import javax.crypto.Cipher
 import javax.crypto.Mac
-import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.IvParameterSpec
-import javax.crypto.spec.PBEKeySpec
 import javax.crypto.spec.SecretKeySpec
 
 // Deterministic crypto with known key/iv/plaintext. Two roles:
 //  1) static channel (v0.4): its references to javax.crypto.* + algorithm strings
-//     land in classes.dex, so the idhd dex crypto-scan can find them.
+//     land in classes.dex, so the adhd dex crypto-scan can find them.
 //  2) dynamic channel (later): a real runtime AES/HMAC to capture at the plaintext
 //     boundary once the hook engine lands. Expected outputs are logged for asserts.
 object JavaCrypto {
@@ -132,9 +130,8 @@ object JavaCrypto {
         return "全部算法 $ok/${MENU.size} 已触发"
     }
 
-    // ---- v2.1: RSA/ECDSA Signature + KDF(PBKDF2) + AEAD(GCM/ChaCha20-Poly1305) demos ----
-    // These hit native EVP_PKEY_sign/verify, PKCS5_PBKDF2_HMAC and EVP_AEAD_CTX_seal/open
-    // (see agent_main.c) — the previously-unhookable BoringSSL one-shot AEAD path.
+    // ---- v2.1: RSA/ECDSA Signature + AEAD(GCM/ChaCha20-Poly1305) demos ----
+    // These hit native EVP_PKEY_sign/verify and EVP_AEAD_CTX_seal/open (see agent_main.c).
 
     private val ecKeyPair by lazy { KeyPairGenerator.getInstance("EC").apply { initialize(256) }.generateKeyPair() }
     const val SIGN_TBS = "ADH_SIGN_TBS_v1"
@@ -148,17 +145,6 @@ object JavaCrypto {
         val ok = v.verify(sig)
         Log.i(TAG, "ECDSA sig(b64)=" + Base64.encodeToString(sig, Base64.NO_WRAP) + " verify=$ok")
         return "ECDSA sign+verify ok=$ok"
-    }
-
-    const val KDF_PASS = "ADH_KDF_PASSWORD_v1"
-    private val KDF_SALT = "ADH_KDF_SALT_16B".toByteArray(Charsets.US_ASCII)
-
-    @JvmStatic
-    fun kdfDemo(): String {
-        val f = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
-        val key = f.generateSecret(PBEKeySpec(KDF_PASS.toCharArray(), KDF_SALT, 10000, 256)).encoded
-        Log.i(TAG, "PBKDF2 key(b64)=" + Base64.encodeToString(key, Base64.NO_WRAP))
-        return "PBKDF2 key derived ${key.size}B"
     }
 
     const val AEAD_PLAINTEXT = "ADH_AEAD_PLAINTEXT_v1"

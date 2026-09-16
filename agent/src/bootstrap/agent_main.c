@@ -2,7 +2,6 @@
 // Dual entry:
 //   - JNI_OnLoad()      : fires when a host loads us via System.loadLibrary (模拟注入 / gadget)
 //   - adh_agent_start() : exported C symbol for injector-driven load
-//   - idh_agent_start() : legacy ABI alias
 // Both connect to the Host ADH Daemon over TCP (127.0.0.1:8761, via `adb reverse`), report identity +
 // an initial maps sample, then serve commands: maps / read (memory). Collect-only.
 
@@ -12,6 +11,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <dlfcn.h>
+#include <link.h>
+#include <stdint.h>
 #include <sys/system_properties.h>
 
 #include "../hook/got.h"
@@ -110,87 +112,87 @@ static void command_loop(int fd) {
                     long long size = json_get_num(line, "size");
                     cmd_read(fd, id, addr, size);
                 } else if (strcmp(op, "jni_probe") == 0) {
-                    idh_cmd_jni_probe(fd, id);
+                    adh_cmd_jni_probe(fd, id);
                 } else if (strcmp(op, "gothook_selftest") == 0) {
-                    idh_cmd_gothook_selftest(fd, id);
+                    adh_cmd_gothook_selftest(fd, id);
                 } else if (strcmp(op, "crypto_probe") == 0) {
-                    idh_cmd_crypto_probe(fd, id);
+                    adh_cmd_crypto_probe(fd, id);
                 } else if (strcmp(op, "crypto_hook_test") == 0) {
                     char tcls[200] = ""; json_get_str(line, "className", tcls, sizeof(tcls));
-                    idh_cmd_crypto_hook_test(fd, id, tcls);
+                    adh_cmd_crypto_hook_test(fd, id, tcls);
                 } else if (strcmp(op, "capture_start") == 0) {
                     char cmod[64] = "", fmod[64] = "", smod[64] = "";
                     json_get_str(line, "cryptoModule", cmod, sizeof(cmod));
                     json_get_str(line, "fileModule", fmod, sizeof(fmod));
                     json_get_str(line, "sysModule", smod, sizeof(smod));
-                    idh_cmd_capture_start(fd, id, cmod, fmod, smod);
+                    adh_cmd_capture_start(fd, id, cmod, fmod, smod);
                 } else if (strcmp(op, "capture_drain") == 0) {
-                    idh_cmd_capture_drain(fd, id);
+                    adh_cmd_capture_drain(fd, id);
                 } else if (strcmp(op, "capture_stop") == 0) {
-                    idh_cmd_capture_stop(fd, id);
+                    adh_cmd_capture_stop(fd, id);
                 } else if (strcmp(op, "trigger") == 0) {
                     char tcls[200] = "", tm[80] = "";
                     json_get_str(line, "className", tcls, sizeof(tcls));
                     json_get_str(line, "method", tm, sizeof(tm));
                     long long lv = json_get_num(line, "level");
-                    idh_cmd_trigger(fd, id, tcls, tm, lv > 0 ? (int)lv : 1);
+                    adh_cmd_trigger(fd, id, tcls, tm, lv > 0 ? (int)lv : 1);
                 } else if (strcmp(op, "inline_crypto_test") == 0) {
                     char im[96] = "", is[96] = "", ic[220] = "", it[80] = "";
                     json_get_str(line, "module", im, sizeof(im));
                     json_get_str(line, "symbol", is, sizeof(is));
                     json_get_str(line, "className", ic, sizeof(ic));
                     json_get_str(line, "method", it, sizeof(it));
-                    idh_cmd_inline_crypto_test(fd, id, im, is, ic, it);
+                    adh_cmd_inline_crypto_test(fd, id, im, is, ic, it);
                 } else if (strcmp(op, "load_so") == 0) {
                     char lpath[400] = "", lsym[96] = "";
                     json_get_str(line, "path", lpath, sizeof(lpath));
                     json_get_str(line, "symbol", lsym, sizeof(lsym));
-                    idh_cmd_load_so(fd, id, lpath, lsym);
+                    adh_cmd_load_so(fd, id, lpath, lsym);
                 } else if (strcmp(op, "net_hook_test") == 0) {
                     char tcls[200] = ""; json_get_str(line, "className", tcls, sizeof(tcls));
-                    idh_cmd_net_hook_test(fd, id, tcls);
+                    adh_cmd_net_hook_test(fd, id, tcls);
                 } else if (strcmp(op, "file_probe") == 0) {
-                    idh_cmd_file_probe(fd, id);
+                    adh_cmd_file_probe(fd, id);
                 } else if (strcmp(op, "file_hook_test") == 0) {
                     char fmod[64] = "", tcls[200] = "";
                     json_get_str(line, "module", fmod, sizeof(fmod));
                     json_get_str(line, "className", tcls, sizeof(tcls));
-                    idh_cmd_file_hook_test(fd, id, fmod, tcls);
+                    adh_cmd_file_hook_test(fd, id, fmod, tcls);
                 } else if (strcmp(op, "flow_watch") == 0) {
                     char tcls[200] = ""; json_get_str(line, "className", tcls, sizeof(tcls));
-                    idh_cmd_flow_watch(fd, id, tcls);
+                    adh_cmd_flow_watch(fd, id, tcls);
                 } else if (strcmp(op, "detect_watch") == 0) {
                     char dmod[64] = "", tcls[200] = "";
                     json_get_str(line, "module", dmod, sizeof(dmod));
                     json_get_str(line, "className", tcls, sizeof(tcls));
-                    idh_cmd_detect_watch(fd, id, dmod, tcls);
+                    adh_cmd_detect_watch(fd, id, dmod, tcls);
                 } else if (strcmp(op, "qbdi_trace") == 0) {
                     char sl[64] = "", sy[80] = "";
                     json_get_str(line, "symLib", sl, sizeof(sl));
                     json_get_str(line, "symbol", sy, sizeof(sy));
-                    idh_cmd_qbdi_trace(fd, id, sl, sy);
+                    adh_cmd_qbdi_trace(fd, id, sl, sy);
                 } else if (strcmp(op, "trace_run") == 0) {
                     char sl[64] = "", sy[64] = "", hm[80] = "", tcls[200] = "";
                     json_get_str(line, "symLib", sl, sizeof(sl));
                     json_get_str(line, "symbol", sy, sizeof(sy));
                     json_get_str(line, "hookModule", hm, sizeof(hm));
                     json_get_str(line, "className", tcls, sizeof(tcls));
-                    idh_cmd_trace_run(fd, id, sl, sy, hm, tcls);
+                    adh_cmd_trace_run(fd, id, sl, sy, hm, tcls);
                 } else if (strcmp(op, "compat_probe") == 0) {
-                    idh_cmd_compat_probe(fd, id);
+                    adh_cmd_compat_probe(fd, id);
                 } else if (strcmp(op, "object_inspect") == 0) {
                     char cls[160] = "", fld[64] = "";
                     json_get_str(line, "className", cls, sizeof(cls));
                     json_get_str(line, "field", fld, sizeof(fld));
-                    idh_cmd_object_inspect(fd, id, cls, fld);
+                    adh_cmd_object_inspect(fd, id, cls, fld);
                 } else if (strcmp(op, "object_invoke") == 0) {
                     char cls[160] = "", fld[64] = "", mth[64] = "";
                     json_get_str(line, "className", cls, sizeof(cls));
                     json_get_str(line, "field", fld, sizeof(fld));
                     json_get_str(line, "method", mth, sizeof(mth));
-                    idh_cmd_object_invoke(fd, id, cls, fld, mth);
+                    adh_cmd_object_invoke(fd, id, cls, fld, mth);
                 } else if (strcmp(op, "art_dexfiles") == 0) {
-                    idh_cmd_art_dexfiles(fd, id);
+                    adh_cmd_art_dexfiles(fd, id);
                 } else if (strcmp(op, "list_dir") == 0) {
                     char path[2048] = ""; json_get_str(line, "path", path, sizeof(path));
                     cmd_list_dir(fd, id, path);
@@ -220,7 +222,7 @@ static void command_loop(int fd) {
 static void *agent_thread(void *arg) {
     (void)arg;
     for (int attempt = 0; attempt < 30; attempt++) {
-        int fd = connect_idhd();
+        int fd = connect_adhd();
         if (fd >= 0) {
             LOGI("connected to Host ADH Daemon %s:%d", ADH_HOST, ADH_PORT);
             report(fd);
@@ -249,91 +251,120 @@ void adh_agent_set_package(const char *pkg) {
     }
 }
 
-static int claim_single_instance(JNIEnv *env);   // defined below; used by both bootstrap entries
+// More than one backend can load this .so into one process (Zygisk + self-load + Xposed).
+// Each copy has its own pthread_once; only the first copy in link-map order may bootstrap.
+struct AgentCopyCtx { void *first_base; };
+
+static int find_first_agent_copy(struct dl_phdr_info *info, size_t size, void *data) {
+    (void)size;
+    struct AgentCopyCtx *ctx = (struct AgentCopyCtx *)data;
+    const char *name = info->dlpi_name ? info->dlpi_name : "";
+    const char *base = strrchr(name, '/');
+    base = base ? base + 1 : name;
+    if (strcmp(base, "libadh_agent.so") != 0) return 0;
+    ctx->first_base = (void *)(uintptr_t)info->dlpi_addr;
+    return 1;   // stop at the first loaded copy
+}
+
+static int current_agent_copy_is_owner(void) {
+    Dl_info self;
+    if (!dladdr((void *)(uintptr_t)current_agent_copy_is_owner, &self) || !self.dli_fbase) {
+        LOGI("single-instance guard unavailable (dladdr) — continuing");
+        return 1;
+    }
+    struct AgentCopyCtx ctx = {0};
+    dl_iterate_phdr(find_first_agent_copy, &ctx);
+    if (!ctx.first_base) {
+        LOGI("single-instance guard: agent not found in link map — continuing");
+        return 1;
+    }
+    if (ctx.first_base != self.dli_fbase) {
+        LOGI("another agent copy was loaded first — skipping bootstrap");
+        return 0;
+    }
+    return 1;
+}
+
+static void start_reporter_watch(void);   // defined below
 
 __attribute__((visibility("default")))
 void adh_agent_start(void) {
     // Same single-instance rule as JNI_OnLoad: a second copy in this process must stay inert.
-    int did = 0;
-    JNIEnv *env = idh_jni_attach(&did);
-    if (env && !claim_single_instance(env)) { idh_jni_detach(did); return; }
+    if (!current_agent_copy_is_owner()) return;
     adh_footprint_capture_baseline();
     strncpy(g_entry, "start", sizeof(g_entry) - 1);
+    start_reporter_watch();
     pthread_once(&g_once, do_start);
-    if (did) idh_jni_detach(did);
-}
-
-__attribute__((visibility("default")))
-void idh_agent_start(void) {
-    adh_agent_start();
-}
-
-// Mixed backends can bring MORE THAN ONE copy of this .so into the same process: the Zygisk
-// companion (/data/adb/modules/adh/libadh_agent.so), the optional Xposed module (mapped from its
-// own APK) and the host app's System.loadLibrary. Each copy has its own pthread_once, so without
-// a process-wide guard the second copy opens a duplicate session and the two fight over the same
-// GOT slots (on device: crypto_hook_test reported replaced=0 because the first copy held them).
-// A System property is process-global and independent of the dlopen flags each loader used.
-// Returns 1 when this copy may bootstrap, 0 when another copy already did.
-static int claim_single_instance(JNIEnv *env) {
-    jclass sysCls = (*env)->FindClass(env, "java/lang/System");
-    if (!sysCls) { if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); LOGI("single-instance guard unavailable (System class)"); return 1; }
-    jmethodID getProp = (*env)->GetStaticMethodID(env, sysCls, "getProperty", "(Ljava/lang/String;)Ljava/lang/String;");
-    jmethodID setProp = (*env)->GetStaticMethodID(env, sysCls, "setProperty", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
-    if (!getProp || !setProp) { if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); LOGI("single-instance guard unavailable (property accessors)"); return 1; }
-    jstring key = (*env)->NewStringUTF(env, "adh.agent.instance");
-    jstring existing = key ? (jstring)(*env)->CallStaticObjectMethod(env, sysCls, getProp, key) : NULL;
-    if (existing) {
-        const char *who = (*env)->GetStringUTFChars(env, existing, NULL);
-        LOGI("another agent copy is already active in this process (owner pid=%s) — skipping bootstrap", who ? who : "?");
-        if (who) (*env)->ReleaseStringUTFChars(env, existing, who);
-        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-        return 0;
-    }
-    char owner[24];
-    snprintf(owner, sizeof(owner), "%d", getpid());
-    jstring jowner = (*env)->NewStringUTF(env, owner);
-    if (jowner) (*env)->CallStaticObjectMethod(env, sysCls, setProp, key, jowner);
-    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-    LOGI("agent instance claimed for this process (pid=%s)", owner);
-    return 1;
 }
 
 // If the target published its Java rich-capture reporter class via the "adh.reporter.class"
-// system property, bind idh_nreport_impl onto its nReport method (RegisterNatives). Target-
-// agnostic: the agent knows no class name. The IDH key remains a compatibility fallback.
-static void bind_reporter_from_prop(JNIEnv *env) {
+// system property, bind adh_nreport_impl onto its nReport method (RegisterNatives). Target-
+// agnostic: the agent knows no class name.
+static int bind_reporter_from_prop(JNIEnv *env) {
     jclass sysCls = (*env)->FindClass(env, "java/lang/System");
     jmethodID getProp = sysCls ? (*env)->GetStaticMethodID(env, sysCls, "getProperty", "(Ljava/lang/String;)Ljava/lang/String;") : NULL;
-    if (!getProp) { if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); return; }
+    if (!getProp) { if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); return 0; }
     jstring jkey = (*env)->NewStringUTF(env, "adh.reporter.class");
     jstring jval = jkey ? (jstring)(*env)->CallStaticObjectMethod(env, sysCls, getProp, jkey) : NULL;
     if (!jval) {
         if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-        jkey = (*env)->NewStringUTF(env, "idh.reporter.class");
-        jval = jkey ? (jstring)(*env)->CallStaticObjectMethod(env, sysCls, getProp, jkey) : NULL;
+        return 0;
     }
-    if (jval) {
-        const char *cls = (*env)->GetStringUTFChars(env, jval, NULL);
-        if (cls && cls[0]) { int ok = idh_capture_register_reporter(env, cls); LOGI("rich-capture reporter '%s' bind %s", cls, ok ? "ok" : "FAILED"); }
-        if (cls) (*env)->ReleaseStringUTFChars(env, jval, cls);
+    const char *cls = (*env)->GetStringUTFChars(env, jval, NULL);
+    int ok = 0;
+    if (cls && cls[0]) {
+        ok = adh_capture_register_reporter(env, cls);
+        LOGI("rich-capture reporter '%s' bind %s", cls, ok ? "ok" : "FAILED");
     }
+    if (cls) (*env)->ReleaseStringUTFChars(env, jval, cls);
     if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    return ok;
+}
+
+// Zygisk starts before the app sets adh.reporter.class; poll briefly from the winning copy so the
+// reporter still binds without opening a second agent copy/session.
+#define ADH_REPORTER_WATCH_STEP_MS 50
+#define ADH_REPORTER_WATCH_TOTAL_MS 10000
+static void *reporter_watch_thread(void *arg) {
+    (void)arg;
+    for (int waited = 0; waited < ADH_REPORTER_WATCH_TOTAL_MS; waited += ADH_REPORTER_WATCH_STEP_MS) {
+        int did = 0;
+        JNIEnv *env = adh_jni_attach(&did);
+        if (env) {
+            int ok = bind_reporter_from_prop(env);
+            if (did) adh_jni_detach(did);
+            if (ok) return NULL;
+        }
+        usleep(ADH_REPORTER_WATCH_STEP_MS * 1000);
+    }
+    return NULL;
+}
+
+static void start_reporter_watch(void) {
+    static int started = 0;
+    if (__atomic_exchange_n(&started, 1, __ATOMIC_SEQ_CST)) return;
+    pthread_t th;
+    if (pthread_create(&th, NULL, reporter_watch_thread, NULL) == 0) {
+        pthread_detach(th);
+    } else {
+        __atomic_store_n(&started, 0, __ATOMIC_SEQ_CST);
+        LOGI("reporter watcher thread create failed");
+    }
 }
 
 JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *reserved) {
     (void)reserved;
+    if (!current_agent_copy_is_owner()) return JNI_VERSION_1_6;
     adh_footprint_capture_baseline();
-    idh_jni_set_vm(vm);
+    adh_jni_set_vm(vm);
     strncpy(g_entry, "jni_onload", sizeof(g_entry) - 1);
     LOGI("JNI_OnLoad — agent " AGENT_VER " starting");
     // Bind the Java rich-capture reporter (if the target opted in via adh.reporter.class) HERE —
     // before the target installs its JCE provider — so the binding is in place before any report
-    // fires (a later bind would race the target's first crypto op and lose).
+    // fires. If the target sets the property later, the winning copy's watcher binds it.
     JNIEnv *env = NULL;
     int have_env = ((*vm)->GetEnv(vm, (void **)&env, JNI_VERSION_1_6) == JNI_OK && env);
-    if (have_env && !claim_single_instance(env)) return JNI_VERSION_1_6;   // another copy owns this process
-    if (have_env) bind_reporter_from_prop(env);
+    if (have_env && !bind_reporter_from_prop(env)) start_reporter_watch();
     pthread_once(&g_once, do_start);
     return JNI_VERSION_1_6;
 }

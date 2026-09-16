@@ -5,7 +5,7 @@ import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
-// WS-C high-rate capture driver. Invoked from OUTSIDE the agent — idhd's trigger passes the
+// WS-C high-rate capture driver. Invoked from OUTSIDE the agent — adhd's trigger passes the
 // class name as a parameter; the agent has ZERO knowledge of this class (no hardcoded symbol).
 // run() spawns a background daemon thread that performs BURST AES/CBC encryptions as fast as
 // possible; each routes through Conscrypt → BoringSSL EVP_CipherUpdate, flooding the agent's

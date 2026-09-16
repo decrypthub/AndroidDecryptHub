@@ -3,7 +3,7 @@
 # do not execute it directly.
 #
 # What this dedups (previously hand-copied into ~26 scripts, ~60-75% of each):
-#   - env resolution (ROOT/HTTP/SERIAL/BASE; ADH_* preferred, IDH_* aliases)
+#   - env resolution (ROOT/HTTP/SERIAL/BASE; ADH_* variables)
 #   - sandbox liveness probe (adb pidof com.adh.sandbox)
 #   - result gate (RESULT:PASS sentinel grep + optional alive check)
 #   - host-only chk accumulator + finish gate
@@ -12,6 +12,8 @@
 # Behavior contract preserved: each verify script still exits 0 on PASS / 1 on FAIL.
 # The node heredoc payload (the unique per-test code) stays verbatim in each script;
 # this file only factors the SHELL boilerplate around it.
+
+source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
 
 # ---------------------------------------------------------------------------
 # env resolution
@@ -22,16 +24,22 @@
 #
 # BASH_SOURCE[0] here is THIS file (tools/lib/verify_common.sh) — two levels up
 # is the repo root, so ROOT is correct regardless of which script sourced us.
-# ADH_* preferred; IDH_* kept as legacy aliases. ANDROID_SERIAL also honored.
+# ADH_* env vars; ANDROID_SERIAL also honored.
 verify_resolve_env() {
   ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-  HTTP="${ADH_HTTP_PORT:-${IDH_HTTP_PORT:-8760}}"
+  if command -v cygpath >/dev/null 2>&1; then
+    ROOT="$(cygpath -m "$ROOT")"
+  fi
+  HTTP="${ADH_HTTP_PORT:-8088}"
   BASE="http://127.0.0.1:$HTTP"
-  SERIAL="${ANDROID_SERIAL:-${ADH_SERIAL:-${IDH_SERIAL:-$(adb devices 2>/dev/null | awk 'NR==2{print $1}')}}}"
+  SERIAL="${ANDROID_SERIAL:-${ADH_SERIAL:-$(adb devices 2>/dev/null | awk 'NR==2{print $1}')}}"
 }
 verify_resolve_env_host() {
   ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-  HTTP="${ADH_HTTP_PORT:-${IDH_HTTP_PORT:-8760}}"
+  if command -v cygpath >/dev/null 2>&1; then
+    ROOT="$(cygpath -m "$ROOT")"
+  fi
+  HTTP="${ADH_HTTP_PORT:-8088}"
   BASE="http://127.0.0.1:$HTTP"
 }
 

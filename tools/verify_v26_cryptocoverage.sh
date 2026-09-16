@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# v2.1 native Signature/AEAD coverage (GOT hook, no LSPlant). Confirms the real BoringSSL
+# v2.1 native Signature/AEAD coverage (GOT hook). Confirms the real BoringSSL
 # symbols (ECDSA_sign/verify, EVP_PKEY_encrypt/decrypt, EVP_AEAD_CTX_seal/open) are actually
 # hooked and capturing — not just compiled. Two real gaps closed this round:
 #  1) Conscrypt's AES/GCM and ChaCha20-Poly1305 route through BoringSSL's one-shot
@@ -11,27 +11,17 @@
 #     got_replace's value-match scan/got_replace_by_name's first pass covered — needed a
 #     dedicated APS2 decoder (find_packed_reloc_slot in agent_main.c) to find these slots.
 #
-# PBKDF2/HKDF/scrypt KDF native one-shot capture is PENDING, NOT asserted here (see
-# docs/DEVELOPMENT_PLAN.md §6.9.4): PKCS5_PBKDF2_HMAC/HKDF are never imported by
-# libjavacrypto.so at all (confirmed via llvm-readelf --dyn-syms), and EVP_PBE_scrypt,
-# while genuinely imported and hookable, has no Android JCA provider name that calls it —
-# Android's own PBKDF2WithHmacSHA256 is a pure Java iterative Mac.doFinal loop with no
-# native one-shot KDF call to intercept. kdfDemo is still driven below (to prove it doesn't
-# crash the agent) but its ~10k HMAC iterations are still a lot of noise, so it fires LAST,
-# after the sig/aead assertions have already been polled — same reasoning as the SM2/SM3/SM4
-# PENDING precedent: don't assert a capability that doesn't exist on this platform.
-#
 # Separately: MainActivity auto-starts JavaCrypto's background live driver (1 op every 2s,
 # forever, cycling a fixed algo menu) as soon as the sandbox app launches. That's what was
 # actually flooding the bounded 1000-entry capture ring and evicting sigDemo's own captures
-# before they could be polled — not kdfDemo's ordering. This script calls JavaCrypto.stopLive
+# before they could be polled. This script calls JavaCrypto.stopLive
 # up front so the deterministic assertions below aren't racing a standing background load.
 #
-# Drives JavaCrypto.sigDemo/aeadDemo/kdfDemo via the existing target-agnostic
+# Drives JavaCrypto.sigDemo/aeadDemo via the existing target-agnostic
 # /api/unpack/trigger reflection endpoint, then asserts specific algo/op labels AND
 # known plaintext markers show up in the capture detail — a real input->expected-output
 # check, not "some record appeared". Exit 0 = PASS.
-# Prereq: idhd + device + sandbox running (verify_all relaunches it), capture enabled.
+# Prereq: adhd + device + sandbox running (verify_all relaunches it), capture enabled.
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
 verify_resolve_env
@@ -58,7 +48,7 @@ const trig=async(method)=>J(`/api/unpack/trigger?session=${sid}&class=${encodeUR
 // MainActivity.onCreate auto-starts JavaCrypto's live driver (1 random-algo op every 2s,
 // forever) — it floods the bounded 1000-entry capture ring at a steady rate regardless of
 // demo ordering, which is what was actually evicting sigDemo's captures before they could be
-// polled (not kdfDemo specifically, though that made it worse). Stop it for the duration of
+// polled. Stop it for the duration of
 // this deterministic check; nothing else in this script depends on it running.
 await trig('stopLive');
 
@@ -90,10 +80,7 @@ const aead=await trig('aeadDemo'); console.log(`aeadDemo: invoked=${aead.invoked
 const aeadList = await pollUntil(l=>l.some(x=>x.algo.startsWith('AEAD 加密')), 10, 800, 2);
 const aeadHit = aeadList.filter(x=>x.algo.startsWith('AEAD 加密'));
 
-// fires LAST: ~10k HMAC iterations flood the ring, and its own native KDF hit is
-// architecturally unreachable (see header note) — invoked-only check, no capture assertion
-const kdf=await trig('kdfDemo');   console.log(`kdfDemo: invoked=${kdf.invoked} result=${JSON.stringify(kdf.result)} (native PBKDF2/HKDF capture: PENDING, not asserted — see script header)`);
-const allInvoked = sig.invoked===true && aead.invoked===true && kdf.invoked===true;
+const allInvoked = sig.invoked===true && aead.invoked===true;
 if(!allInvoked){console.log('RESULT:FAIL (one or more demo methods not invoked)');process.exit(0);}
 
 console.log(`captures since=${since}: sig=${sigHit.length} aead=${aeadHit.length}`);
@@ -126,4 +113,4 @@ EOF
 )"
 echo "$OUT"
 verify_sandbox_alive
-verify_gate "v2.1 native Signature/AEAD coverage (ECDSA_sign/verify + EVP_AEAD_CTX_seal/open hooked and capturing via GOT + APS2-packed reloc scan, no LSPlant; KDF native one-shot capture PENDING — see script header)" 1 && exit 0 || exit 1
+verify_gate "v2.1 native Signature/AEAD coverage (ECDSA_sign/verify + EVP_AEAD_CTX_seal/open hooked and capturing via GOT + APS2-packed reloc scan)" 1 && exit 0 || exit 1

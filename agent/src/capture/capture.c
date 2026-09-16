@@ -25,7 +25,7 @@
 // just increments g_cap_dropped. Nothing vanishes silently: g_cap_seq counts every capture()
 // attempt (atomic), so the invariant
 //   g_cap_seq == (records ever drained) + (records still in ring) + g_cap_dropped
-// always holds, and idhd surfaces dropped>0 as complete:false.
+// always holds, and adhd surfaces dropped>0 as complete:false.
 #define CAP_BYTES 2048
 #define CAP_RING  1024          // ~2 MiB; bounded agent memory (architecture red line)
 struct CapRec { char func[24]; int inl; int n; int tid; long long ts_ns; unsigned char data[CAP_BYTES]; };
@@ -199,10 +199,8 @@ static int my_EVP_DigestVerifyFinal(void *ctx, const unsigned char *sig, size_t 
     return g_orig_dverify_final(ctx, sig, sig_len);
 }
 
-// ---- Signature (RSA/ECDSA) + KDF (PBKDF2/HKDF/scrypt) + AEAD (GCM/ChaCha20-Poly1305) ----
-// 原生 GOT hook，标准 BoringSSL 导出符号 —— 刻意不用 LSPlant（见 DEVELOPMENT_PLAN §6.9.1
-// WS-A 备注：Java 方法级 hook 在主流 stripped-libart ROM 上设备级阻塞；这 9 个符号是
-// 目前能跨设备工作的原生可 hook 子集）。
+// ---- Signature (RSA/ECDSA) + AEAD (GCM/ChaCha20-Poly1305) ----
+// 原生 GOT hook，标准 BoringSSL 导出符号；这些是当前能跨设备工作的原生可 hook 子集。
 
 // EVP_PKEY_sign/verify are NOT imported by libjavacrypto.so at all (confirmed via
 // `llvm-readelf --dyn-syms` against the on-device Conscrypt native lib) — Android's
@@ -238,36 +236,6 @@ static int my_EVP_PKEY_decrypt(void *ctx, unsigned char *out, size_t *outlen, co
     capture("EVP_PKEY_decrypt_in", in, (int)inlen);
     int rc = g_pkey_decrypt_orig(ctx, out, outlen, in, inlen);
     if (rc == 1 && out && outlen) capture("EVP_PKEY_decrypt_out", out, (int)*outlen);
-    return rc;
-}
-
-typedef int (*PBKDF2_t)(const char *pass, int passlen, const unsigned char *salt, int saltlen, unsigned iter, const void *digest, int keylen, unsigned char *out);
-static PBKDF2_t g_pbkdf2_orig = NULL;
-static int my_PKCS5_PBKDF2_HMAC(const char *pass, int passlen, const unsigned char *salt, int saltlen, unsigned iter, const void *digest, int keylen, unsigned char *out) {
-    if (pass) capture("PBKDF2_pass", (const unsigned char *)pass, passlen);
-    if (salt) capture("PBKDF2_salt", salt, saltlen);
-    int rc = g_pbkdf2_orig(pass, passlen, salt, saltlen, iter, digest, keylen, out);
-    if (rc == 1 && out) capture("PBKDF2_key", out, keylen);
-    return rc;
-}
-
-typedef int (*HKDF_t)(unsigned char *out_key, size_t out_len, const void *digest, const unsigned char *secret, size_t secret_len, const unsigned char *salt, size_t salt_len, const unsigned char *info, size_t info_len);
-static HKDF_t g_hkdf_orig = NULL;
-static int my_HKDF(unsigned char *out_key, size_t out_len, const void *digest, const unsigned char *secret, size_t secret_len, const unsigned char *salt, size_t salt_len, const unsigned char *info, size_t info_len) {
-    if (secret) capture("HKDF_secret", secret, (int)secret_len);
-    if (salt)   capture("HKDF_salt", salt, (int)salt_len);
-    int rc = g_hkdf_orig(out_key, out_len, digest, secret, secret_len, salt, salt_len, info, info_len);
-    if (rc == 1 && out_key) capture("HKDF_key", out_key, (int)out_len);
-    return rc;
-}
-
-typedef int (*scrypt_t)(const char *pass, size_t passlen, const unsigned char *salt, size_t saltlen, uint64_t N, uint64_t r, uint64_t p, uint64_t maxmem, unsigned char *key, size_t keylen);
-static scrypt_t g_scrypt_orig = NULL;
-static int my_EVP_PBE_scrypt(const char *pass, size_t passlen, const unsigned char *salt, size_t saltlen, uint64_t N, uint64_t r, uint64_t p, uint64_t maxmem, unsigned char *key, size_t keylen) {
-    if (pass) capture("scrypt_pass", (const unsigned char *)pass, (int)passlen);
-    if (salt) capture("scrypt_salt", salt, (int)saltlen);
-    int rc = g_scrypt_orig(pass, passlen, salt, saltlen, N, r, p, maxmem, key, keylen);
-    if (rc == 1 && key) capture("scrypt_key", key, (int)keylen);
     return rc;
 }
 
@@ -342,12 +310,12 @@ static void got_probe(int fd, const char *id, const char *opname, const char *na
 }
 
 // Recon: which modules' GOT holds the EVP/HMAC/SSL pointers (candidate crypto hook sites).
-void idh_cmd_crypto_probe(int fd, const char *id) {
+void adh_cmd_crypto_probe(int fd, const char *id) {
     const char *names[] = { "EVP_CipherUpdate", "EVP_EncryptUpdate", "EVP_DecryptUpdate", "EVP_DigestUpdate", "HMAC_Update", "SSL_read", "SSL_write" };
     void *addrs[7];
-    for (int i = 0; i < 5; i++) addrs[i] = idh_resolve_sym("libcrypto.so", names[i]);
-    addrs[5] = idh_resolve_sym("libssl.so", "SSL_read");
-    addrs[6] = idh_resolve_sym("libssl.so", "SSL_write");
+    for (int i = 0; i < 5; i++) addrs[i] = adh_resolve_sym("libcrypto.so", names[i]);
+    addrs[5] = adh_resolve_sym("libssl.so", "SSL_read");
+    addrs[6] = adh_resolve_sym("libssl.so", "SSL_write");
     got_probe(fd, id, "crypto_probe", names, addrs, 7);
 }
 
@@ -366,20 +334,20 @@ static int my_SSL_read(void *ssl, void *buf, int num) {
 
 // Hook SSL_write/SSL_read in Conscrypt, trigger an HTTPS request via JNI reflection,
 // and report the captured TLS plaintext (request + response).
-void idh_cmd_net_hook_test(int fd, const char *id, const char *className) {
+void adh_cmd_net_hook_test(int fd, const char *id, const char *className) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
-    void *ow = idh_resolve_sym("libssl.so", "SSL_write");
-    void *orr = idh_resolve_sym("libssl.so", "SSL_read");
+    void *ow = adh_resolve_sym("libssl.so", "SSL_write");
+    void *orr = adh_resolve_sym("libssl.so", "SSL_read");
     g_orig_ssl_write = (SSL_rw_t)ow; g_orig_ssl_read = (SSL_rw_t)orr;
-    int rw = ow ? idh_got_replace("libjavacrypto.so", ow, (void *)my_SSL_write) : -1;
-    int rr = orr ? idh_got_replace("libjavacrypto.so", orr, (void *)my_SSL_read) : -1;
+    int rw = ow ? adh_got_replace("libjavacrypto.so", ow, (void *)my_SSL_write) : -1;
+    int rr = orr ? adh_got_replace("libjavacrypto.so", orr, (void *)my_SSL_read) : -1;
     cap_reset();
 
     int did = 0, triggered = 0; char result[128] = "";
-    JNIEnv *env = idh_jni_attach(&did);
+    JNIEnv *env = adh_jni_attach(&did);
     if (env) {
         (*env)->PushLocalFrame(env, 32);
-        jclass jc = className[0] ? idh_jni_load_app_class(env, className) : NULL;
+        jclass jc = className[0] ? adh_jni_load_app_class(env, className) : NULL;
         if (jc) {
             jmethodID run = (*env)->GetStaticMethodID(env, jc, "run", "()Ljava/lang/String;");
             if (run) {
@@ -390,10 +358,10 @@ void idh_cmd_net_hook_test(int fd, const char *id, const char *className) {
         }
         if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
         (*env)->PopLocalFrame(env, NULL);
-        idh_jni_detach(did);
+        adh_jni_detach(did);
     }
-    if (rw > 0) idh_got_replace("libjavacrypto.so", (void *)my_SSL_write, ow);
-    if (rr > 0) idh_got_replace("libjavacrypto.so", (void *)my_SSL_read, orr);
+    if (rw > 0) adh_got_replace("libjavacrypto.so", (void *)my_SSL_write, ow);
+    if (rr > 0) adh_got_replace("libjavacrypto.so", (void *)my_SSL_read, orr);
 
     size_t cap = 1 << 16, len = 0; char *out = malloc(cap); if (!out) { send_oom(fd, idj, "net_hook_test"); return; }
     char rj[200]; json_escape(result, rj, sizeof(rj));
@@ -408,7 +376,7 @@ void idh_cmd_net_hook_test(int fd, const char *id, const char *className) {
 // ---- file I/O capture (open/openat/read/write/close via a caller module's GOT) ----
 // Which module's GOT actually holds these libc pointers for Java FileInputStream/
 // FileOutputStream varies by ART/API level (libopenjdk.so on modern Android) — use
-// idh_cmd_file_probe to discover it empirically rather than hardcoding a guess.
+// adh_cmd_file_probe to discover it empirically rather than hardcoding a guess.
 typedef int (*open_t)(const char *, int, mode_t);
 typedef int (*openat_t)(int, const char *, int, mode_t);
 typedef ssize_t (*rw_t)(int, void *, size_t);
@@ -512,53 +480,53 @@ static ssize_t my_write_chk(int fd, const void *buf, size_t count, size_t buflen
 }
 
 // Recon: for open/openat/read/write/close (libc.so), report which loaded modules'
-// GOT holds each pointer (candidate hook sites) — mirrors idh_cmd_crypto_probe.
+// GOT holds each pointer (candidate hook sites) — mirrors adh_cmd_crypto_probe.
 // Recon: which modules' GOT holds the libc file-I/O pointers (candidate file hook sites).
-void idh_cmd_file_probe(int fd, const char *id) {
+void adh_cmd_file_probe(int fd, const char *id) {
     const char *names[] = { "open", "openat", "read", "write", "close" };
     void *addrs[5];
-    for (int i = 0; i < 5; i++) addrs[i] = idh_resolve_sym("libc.so", names[i]);
+    for (int i = 0; i < 5; i++) addrs[i] = adh_resolve_sym("libc.so", names[i]);
     got_probe(fd, id, "file_probe", names, addrs, 5);
 }
 
-// Hook open/openat/read/write/close in `module` (from idhd; discover it via idh_cmd_file_probe —
+// Hook open/openat/read/write/close in `module` (from adhd; discover it via adh_cmd_file_probe —
 // no default, the agent never guesses a target module), trigger the target's file workload
-// class (className, from idhd) via JNI reflection, and report captured paths + read/write bytes.
-void idh_cmd_file_hook_test(int fd, const char *id, const char *module, const char *className) {
+// class (className, from adhd) via JNI reflection, and report captured paths + read/write bytes.
+void adh_cmd_file_hook_test(int fd, const char *id, const char *module, const char *className) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
-    // No hardcoded target module: idhd passes which loaded module's GOT backs java.io
+    // No hardcoded target module: adhd passes which loaded module's GOT backs java.io
     // (discover it via file_probe). Empty -> fail-loud rather than guess a device-specific lib.
     if (!module || !module[0]) { char e[220]; snprintf(e, sizeof(e), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"file_hook_test\",\"ok\":false,\"error\":\"need module (which loaded module backs java.io; discover via file_probe)\"}\n", idj); send_line(fd, e); return; }
     const char *mod = module;
-    void *oo  = idh_resolve_sym("libc.so", "open");
-    void *ooa = idh_resolve_sym("libc.so", "openat");
-    void *ord = idh_resolve_sym("libc.so", "read");
-    void *owr = idh_resolve_sym("libc.so", "write");
-    void *ocl = idh_resolve_sym("libc.so", "close");
-    void *osc = idh_resolve_sym("libc.so", "syscall");
-    void *orc = idh_resolve_sym("libc.so", "__read_chk");
-    void *owv = idh_resolve_sym("libc.so", "__write_chk");
+    void *oo  = adh_resolve_sym("libc.so", "open");
+    void *ooa = adh_resolve_sym("libc.so", "openat");
+    void *ord = adh_resolve_sym("libc.so", "read");
+    void *owr = adh_resolve_sym("libc.so", "write");
+    void *ocl = adh_resolve_sym("libc.so", "close");
+    void *osc = adh_resolve_sym("libc.so", "syscall");
+    void *orc = adh_resolve_sym("libc.so", "__read_chk");
+    void *owv = adh_resolve_sym("libc.so", "__write_chk");
     g_orig_open = (open_t)oo; g_orig_openat = (openat_t)ooa;
     g_orig_read = (rw_t)ord; g_orig_fwrite_sys = (rw_t)owr; g_orig_fclose = (fclose_t)ocl;
     g_orig_syscall = (syscall_t)osc;
     g_orig_read_chk = (read_chk_t)orc; g_orig_write_chk = (write_chk_t)owv;
 
-    int ro  = oo  ? idh_got_replace(mod, oo,  (void *)my_open)  : -1;
-    int roa = ooa ? idh_got_replace(mod, ooa, (void *)my_openat) : -1;
-    int rr  = ord ? idh_got_replace(mod, ord, (void *)my_read)  : -1;
-    int rw  = owr ? idh_got_replace(mod, owr, (void *)my_write) : -1;
-    int rc  = ocl ? idh_got_replace(mod, ocl, (void *)my_file_close) : -1;
-    int rsc = osc ? idh_got_replace(mod, osc, (void *)my_syscall) : -1;
-    int rrc = orc ? idh_got_replace(mod, orc, (void *)my_read_chk) : -1;
-    int rwv = owv ? idh_got_replace(mod, owv, (void *)my_write_chk) : -1;
+    int ro  = oo  ? adh_got_replace(mod, oo,  (void *)my_open)  : -1;
+    int roa = ooa ? adh_got_replace(mod, ooa, (void *)my_openat) : -1;
+    int rr  = ord ? adh_got_replace(mod, ord, (void *)my_read)  : -1;
+    int rw  = owr ? adh_got_replace(mod, owr, (void *)my_write) : -1;
+    int rc  = ocl ? adh_got_replace(mod, ocl, (void *)my_file_close) : -1;
+    int rsc = osc ? adh_got_replace(mod, osc, (void *)my_syscall) : -1;
+    int rrc = orc ? adh_got_replace(mod, orc, (void *)my_read_chk) : -1;
+    int rwv = owv ? adh_got_replace(mod, owv, (void *)my_write_chk) : -1;
     cap_reset();
     g_file_close_hits = 0;
 
     int did = 0, triggered = 0; char result[160] = "";
-    JNIEnv *env = idh_jni_attach(&did);
+    JNIEnv *env = adh_jni_attach(&did);
     if (env) {
         (*env)->PushLocalFrame(env, 32);
-        jclass jc = className[0] ? idh_jni_load_app_class(env, className) : NULL;
+        jclass jc = className[0] ? adh_jni_load_app_class(env, className) : NULL;
         if (jc) {
             jmethodID run = (*env)->GetStaticMethodID(env, jc, "run", "()Ljava/lang/String;");
             if (run) {
@@ -569,17 +537,17 @@ void idh_cmd_file_hook_test(int fd, const char *id, const char *module, const ch
         }
         if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
         (*env)->PopLocalFrame(env, NULL);
-        idh_jni_detach(did);
+        adh_jni_detach(did);
     }
 
-    if (ro  > 0) idh_got_replace(mod, (void *)my_open,       oo);
-    if (roa > 0) idh_got_replace(mod, (void *)my_openat,     ooa);
-    if (rr  > 0) idh_got_replace(mod, (void *)my_read,       ord);
-    if (rw  > 0) idh_got_replace(mod, (void *)my_write,      owr);
-    if (rc  > 0) idh_got_replace(mod, (void *)my_file_close, ocl);
-    if (rsc > 0) idh_got_replace(mod, (void *)my_syscall,    osc);
-    if (rrc > 0) idh_got_replace(mod, (void *)my_read_chk,   orc);
-    if (rwv > 0) idh_got_replace(mod, (void *)my_write_chk,  owv);
+    if (ro  > 0) adh_got_replace(mod, (void *)my_open,       oo);
+    if (roa > 0) adh_got_replace(mod, (void *)my_openat,     ooa);
+    if (rr  > 0) adh_got_replace(mod, (void *)my_read,       ord);
+    if (rw  > 0) adh_got_replace(mod, (void *)my_write,      owr);
+    if (rc  > 0) adh_got_replace(mod, (void *)my_file_close, ocl);
+    if (rsc > 0) adh_got_replace(mod, (void *)my_syscall,    osc);
+    if (rrc > 0) adh_got_replace(mod, (void *)my_read_chk,   orc);
+    if (rwv > 0) adh_got_replace(mod, (void *)my_write_chk,  owv);
 
     size_t cap = 1 << 16, len = 0; char *out = malloc(cap); if (!out) { send_oom(fd, idj, "file_hook_test"); return; }
     char modj[64]; json_escape(mod, modj, sizeof(modj));
@@ -598,22 +566,22 @@ void idh_cmd_file_hook_test(int fd, const char *id, const char *module, const ch
 
 // Correlation flow: hook BOTH EVP_CipherUpdate (encrypt) and SSL_write (send) at
 // once, trigger an encrypt-then-send flow, and return all captures with tid+ts so
-// idhd can correlate "this plaintext was encrypted then sent" (取证闭环).
-void idh_cmd_flow_watch(int fd, const char *id, const char *className) {
+// adhd can correlate "this plaintext was encrypted then sent" (取证闭环).
+void adh_cmd_flow_watch(int fd, const char *id, const char *className) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
-    void *oe = idh_resolve_sym("libcrypto.so", "EVP_CipherUpdate");
-    void *ow = idh_resolve_sym("libssl.so", "SSL_write");
+    void *oe = adh_resolve_sym("libcrypto.so", "EVP_CipherUpdate");
+    void *ow = adh_resolve_sym("libssl.so", "SSL_write");
     g_evp_cipher_orig = (EVP_CipherUpdate_t)oe;
     g_orig_ssl_write = (SSL_rw_t)ow;
-    int re = oe ? idh_got_replace("libjavacrypto.so", oe, (void *)my_EVP_CipherUpdate) : -1;
-    int rw = ow ? idh_got_replace("libjavacrypto.so", ow, (void *)my_SSL_write) : -1;
+    int re = oe ? adh_got_replace("libjavacrypto.so", oe, (void *)my_EVP_CipherUpdate) : -1;
+    int rw = ow ? adh_got_replace("libjavacrypto.so", ow, (void *)my_SSL_write) : -1;
     cap_reset();
 
     int did = 0, triggered = 0; char result[128] = "";
-    JNIEnv *env = idh_jni_attach(&did);
+    JNIEnv *env = adh_jni_attach(&did);
     if (env) {
         (*env)->PushLocalFrame(env, 32);
-        jclass jc = className[0] ? idh_jni_load_app_class(env, className) : NULL;
+        jclass jc = className[0] ? adh_jni_load_app_class(env, className) : NULL;
         if (jc) {
             jmethodID run = (*env)->GetStaticMethodID(env, jc, "run", "()Ljava/lang/String;");
             if (run) {
@@ -624,10 +592,10 @@ void idh_cmd_flow_watch(int fd, const char *id, const char *className) {
         }
         if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
         (*env)->PopLocalFrame(env, NULL);
-        idh_jni_detach(did);
+        adh_jni_detach(did);
     }
-    if (re > 0) idh_got_replace("libjavacrypto.so", (void *)my_EVP_CipherUpdate, oe);
-    if (rw > 0) idh_got_replace("libjavacrypto.so", (void *)my_SSL_write, ow);
+    if (re > 0) adh_got_replace("libjavacrypto.so", (void *)my_EVP_CipherUpdate, oe);
+    if (rw > 0) adh_got_replace("libjavacrypto.so", (void *)my_SSL_write, ow);
 
     size_t cap = 1 << 16, len = 0; char *out = malloc(cap); if (!out) { send_oom(fd, idj, "flow_watch"); return; }
     char rj[200]; json_escape(result, rj, sizeof(rj));
@@ -641,30 +609,30 @@ void idh_cmd_flow_watch(int fd, const char *id, const char *className) {
 
 // Install EVP_CipherUpdate GOT hook in libjavacrypto (Conscrypt), trigger the
 // sandbox's AES via JNI reflection, and return what plaintext the wrapper captured.
-void idh_cmd_crypto_hook_test(int fd, const char *id, const char *className) {
+void adh_cmd_crypto_hook_test(int fd, const char *id, const char *className) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
-    void *orig = idh_resolve_sym("libcrypto.so", "EVP_CipherUpdate");
+    void *orig = adh_resolve_sym("libcrypto.so", "EVP_CipherUpdate");
     g_evp_cipher_orig = (EVP_CipherUpdate_t)orig;
-    int replaced = orig ? idh_got_replace("libjavacrypto.so", orig, (void *)my_EVP_CipherUpdate) : -1;
+    int replaced = orig ? adh_got_replace("libjavacrypto.so", orig, (void *)my_EVP_CipherUpdate) : -1;
     cap_reset();
 
-    // trigger the target's crypto workload class (className, from idhd) via the app classloader
+    // trigger the target's crypto workload class (className, from adhd) via the app classloader
     int did = 0, triggered = 0;
-    JNIEnv *env = idh_jni_attach(&did);
+    JNIEnv *env = adh_jni_attach(&did);
     if (env) {
         (*env)->PushLocalFrame(env, 64);
-        jclass jc = className[0] ? idh_jni_load_app_class(env, className) : NULL;
+        jclass jc = className[0] ? adh_jni_load_app_class(env, className) : NULL;
         if (jc) {
             jmethodID run = (*env)->GetStaticMethodID(env, jc, "run", "()V");
             if (run) { (*env)->CallStaticVoidMethod(env, jc, run); triggered = 1; }
         }
         if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
         (*env)->PopLocalFrame(env, NULL);
-        idh_jni_detach(did);
+        adh_jni_detach(did);
     }
 
     // unhook (restore) before building reply
-    if (replaced > 0 && orig) idh_got_replace("libjavacrypto.so", (void *)my_EVP_CipherUpdate, orig);
+    if (replaced > 0 && orig) adh_got_replace("libjavacrypto.so", (void *)my_EVP_CipherUpdate, orig);
 
     // build reply with captured records (hex)
     size_t cap = 1 << 15, len = 0; char *out = malloc(cap); if (!out) { send_oom(fd, idj, "crypto_hook_test"); return; }
@@ -678,7 +646,7 @@ void idh_cmd_crypto_hook_test(int fd, const char *id, const char *className) {
 
 // ---- Java-layer rich capture: an interposing JCE provider (installed by the target/self-test
 //      app) reports every Cipher/Mac/MessageDigest op here with algorithm+op+key+iv+input+output.
-//      Bound at capture_start via RegisterNatives to the reporter class idhd names (target-agnostic;
+//      Bound at capture_start via RegisterNatives to the reporter class adhd names (target-agnostic;
 //      no sandbox-specific JNI symbol). ----------------------------------------------------------
 #define JCAP_MAX 96
 #define JCAP_KEY 64
@@ -704,8 +672,8 @@ static int copy_jba(JNIEnv *env, jbyteArray a, unsigned char *dst, int cap) {
 }
 
 // nReport implementation. Registered onto the target's reporter class at capture_start
-// (idh_capture_register_reporter) — no hardcoded JNI symbol ties the agent to any package.
-static void idh_nreport_impl(
+// (adh_capture_register_reporter) — no hardcoded JNI symbol ties the agent to any package.
+static void adh_nreport_impl(
         JNIEnv *env, jclass cls, jstring jalgo, jstring jop,
         jbyteArray jkey, jbyteArray jiv, jbyteArray jin, jbyteArray jout) {
     (void)cls;
@@ -735,14 +703,14 @@ static void idh_nreport_impl(
     pthread_mutex_unlock(&g_cap_lock);
 }
 
-// Register idh_nreport_impl as the target reporter class's `nReport`. Called at capture_start
-// with the class name idhd supplies (target-agnostic). Returns 1 on success, 0 if the class is
+// Register adh_nreport_impl as the target reporter class's `nReport`. Called at capture_start
+// with the class name adhd supplies (target-agnostic). Returns 1 on success, 0 if the class is
 // absent or registration fails (fail-loud: reported in the capture_start reply, not silent).
-int idh_capture_register_reporter(JNIEnv *env, const char *reportClass) {
+int adh_capture_register_reporter(JNIEnv *env, const char *reportClass) {
     if (!reportClass || !reportClass[0]) return 0;
-    jclass rc = idh_jni_load_app_class(env, reportClass);
+    jclass rc = adh_jni_load_app_class(env, reportClass);
     if (!rc) return 0;
-    JNINativeMethod m = { (char *)"nReport", (char *)"(Ljava/lang/String;Ljava/lang/String;[B[B[B[B)V", (void *)idh_nreport_impl };
+    JNINativeMethod m = { (char *)"nReport", (char *)"(Ljava/lang/String;Ljava/lang/String;[B[B[B[B)V", (void *)adh_nreport_impl };
     int r = (*env)->RegisterNatives(env, rc, &m, 1);
     if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
     return (r == 0) ? 1 : 0;
@@ -791,58 +759,52 @@ static int my_prop(const char *name, char *value) {
     return g_orig_prop(name, value);
 }
 
-// Persistent-hook target modules (from idhd's capture_start params) — remembered so
+// Persistent-hook target modules (from adhd's capture_start params) — remembered so
 // capture_stop restores the exact GOT it patched. Empty = that category not installed.
 static char g_file_mod[64] = "";
 static char g_sys_mod[64] = "";
 // crypto/TLS caller module whose GOT holds the EVP/SSL pointers. Empty = scan ALL file-backed
 // modules (default): catches Conscrypt (libjavacrypto) AND non-Conscrypt BoringSSL callers
-// (cronet's bundled copy, renamed/statically-linked libs). idhd may pass a specific module.
+// (cronet's bundled copy, renamed/statically-linked libs). adhd may pass a specific module.
 static char g_crypto_mod[64] = "";
 
 // ---- continuous capture: install persistent EVP+SSL hooks, drain accumulated records
-//      periodically from idhd (mirrors the ios-decrypt-helper log-store model: hooks
+//      periodically from adhd (mirrors the ios-decrypt-helper log-store model: hooks
 //      stay installed and events stream to the panel, instead of one-shot triggers) ----
 static int g_capture_on = 0;
-void idh_cmd_capture_start(int fd, const char *id, const char *cryptoModule, const char *fileModule, const char *sysModule) {
+void adh_cmd_capture_start(int fd, const char *id, const char *cryptoModule, const char *fileModule, const char *sysModule) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
-    void *evp = idh_resolve_sym("libcrypto.so", "EVP_CipherUpdate");
-    void *dig = idh_resolve_sym("libcrypto.so", "EVP_DigestUpdate");
-    void *hm  = idh_resolve_sym("libcrypto.so", "HMAC_Update");
-    void *dsu = idh_resolve_sym("libcrypto.so", "EVP_DigestSignUpdate");
-    void *ow  = idh_resolve_sym("libssl.so", "SSL_write");
-    void *orr = idh_resolve_sym("libssl.so", "SSL_read");
+    void *evp = adh_resolve_sym("libcrypto.so", "EVP_CipherUpdate");
+    void *dig = adh_resolve_sym("libcrypto.so", "EVP_DigestUpdate");
+    void *hm  = adh_resolve_sym("libcrypto.so", "HMAC_Update");
+    void *dsu = adh_resolve_sym("libcrypto.so", "EVP_DigestSignUpdate");
+    void *ow  = adh_resolve_sym("libssl.so", "SSL_write");
+    void *orr = adh_resolve_sym("libssl.so", "SSL_read");
     if (evp) g_evp_cipher_orig = (EVP_CipherUpdate_t)evp;
     if (dig) g_orig_evp_digest = (update3_t)dig;
     if (hm)  g_orig_hmac       = (update3_t)hm;
     if (dsu) g_orig_digest_sign= (update3_t)dsu;
     if (ow)  g_orig_ssl_write  = (SSL_rw_t)ow;
     if (orr) g_orig_ssl_read   = (SSL_rw_t)orr;
-    // Signature/KDF/AEAD (WS-A P0 replacement, native GOT hook, no LSPlant — see DEVELOPMENT_PLAN §6.9.1)
-    void *pks = idh_resolve_sym("libcrypto.so", "ECDSA_sign");
-    void *pkv = idh_resolve_sym("libcrypto.so", "ECDSA_verify");
-    void *pke = idh_resolve_sym("libcrypto.so", "EVP_PKEY_encrypt");
-    void *pkd = idh_resolve_sym("libcrypto.so", "EVP_PKEY_decrypt");
-    void *kp5 = idh_resolve_sym("libcrypto.so", "PKCS5_PBKDF2_HMAC");
-    void *khk = idh_resolve_sym("libcrypto.so", "HKDF");
-    void *ksc = idh_resolve_sym("libcrypto.so", "EVP_PBE_scrypt");
-    void *aes = idh_resolve_sym("libcrypto.so", "EVP_AEAD_CTX_seal");
-    void *aeo = idh_resolve_sym("libcrypto.so", "EVP_AEAD_CTX_open");
+    // Signature/AEAD native GOT hooks (WS-A P0 coverage)
+    void *pks = adh_resolve_sym("libcrypto.so", "ECDSA_sign");
+    void *pkv = adh_resolve_sym("libcrypto.so", "ECDSA_verify");
+    void *pke = adh_resolve_sym("libcrypto.so", "EVP_PKEY_encrypt");
+    void *pkd = adh_resolve_sym("libcrypto.so", "EVP_PKEY_decrypt");
+    void *aes = adh_resolve_sym("libcrypto.so", "EVP_AEAD_CTX_seal");
+    void *aeo = adh_resolve_sym("libcrypto.so", "EVP_AEAD_CTX_open");
     // EVP_DigestSign/VerifyInit+Final (the actual Conscrypt SHA256withECDSA/RSA call path on
     // this device — see the dsign_ctx_* comment above); EVP_PKEY_id is a plain accessor, never hooked.
-    void *dsi = idh_resolve_sym("libcrypto.so", "EVP_DigestSignInit");
-    void *dvi = idh_resolve_sym("libcrypto.so", "EVP_DigestVerifyInit");
-    void *dsf = idh_resolve_sym("libcrypto.so", "EVP_DigestSignFinal");
-    void *dvu = idh_resolve_sym("libcrypto.so", "EVP_DigestVerifyUpdate");
-    void *dvf = idh_resolve_sym("libcrypto.so", "EVP_DigestVerifyFinal");
-    void *pid = idh_resolve_sym("libcrypto.so", "EVP_PKEY_id");
+    void *dsi = adh_resolve_sym("libcrypto.so", "EVP_DigestSignInit");
+    void *dvi = adh_resolve_sym("libcrypto.so", "EVP_DigestVerifyInit");
+    void *dsf = adh_resolve_sym("libcrypto.so", "EVP_DigestSignFinal");
+    void *dvu = adh_resolve_sym("libcrypto.so", "EVP_DigestVerifyUpdate");
+    void *dvf = adh_resolve_sym("libcrypto.so", "EVP_DigestVerifyFinal");
+    void *pid = adh_resolve_sym("libcrypto.so", "EVP_PKEY_id");
     if (pks) g_ecdsa_sign_orig   = (ECDSA_sign_t)pks;
     if (pkv) g_ecdsa_verify_orig = (ECDSA_verify_t)pkv;
     if (pke) g_pkey_encrypt_orig = (EVP_PKEY_crypt_t)pke;
     if (pkd) g_pkey_decrypt_orig = (EVP_PKEY_crypt_t)pkd;
-    if (kp5) g_pbkdf2_orig = (PBKDF2_t)kp5;
-    if (khk) g_hkdf_orig   = (HKDF_t)khk;
-    if (ksc) g_scrypt_orig = (scrypt_t)ksc;
     if (aes) g_aead_seal_orig = (aead_crypt_t)aes;
     if (aeo) g_aead_open_orig = (aead_crypt_t)aeo;
     if (dsi) g_orig_dsign_init   = (digest_sign_init_t)dsi;
@@ -852,75 +814,72 @@ void idh_cmd_capture_start(int fd, const char *id, const char *cryptoModule, con
     if (dvf) g_orig_dverify_final= (digest_verify_final_t)dvf;
     if (pid) g_evp_pkey_id_fn    = (EVP_PKEY_id_t)pid;
     // Persistent hooks in the crypto/TLS caller module's GOT (not restored — that's what makes
-    // it "live"). g_crypto_mod from idhd; empty = scan ALL file-backed modules so we catch
+    // it "live"). g_crypto_mod from adhd; empty = scan ALL file-backed modules so we catch
     // whatever routes crypto (Conscrypt, cronet's BoringSSL, renamed libs), not just libjavacrypto.
     // Covers symmetric (EVP_CipherUpdate), digest (EVP_DigestUpdate), HMAC (HMAC_Update
     // and the EVP_PKEY HMAC path EVP_DigestSignUpdate), and TLS (SSL_read/write).
     strncpy(g_crypto_mod, (cryptoModule && cryptoModule[0]) ? cryptoModule : "", sizeof(g_crypto_mod)-1);
     g_crypto_mod[sizeof(g_crypto_mod)-1]=0;
-    int re = evp ? idh_got_replace(g_crypto_mod, evp, (void *)my_EVP_CipherUpdate) : -1;
-    int rd = dig ? idh_got_replace(g_crypto_mod, dig, (void *)my_EVP_DigestUpdate) : -1;
-    int rh = hm  ? idh_got_replace(g_crypto_mod, hm,  (void *)my_HMAC_Update) : -1;
-    int rs = dsu ? idh_got_replace(g_crypto_mod, dsu, (void *)my_EVP_DigestSignUpdate) : -1;
-    int rw = ow  ? idh_got_replace(g_crypto_mod, ow,  (void *)my_SSL_write) : -1;
-    int rr = orr ? idh_got_replace(g_crypto_mod, orr, (void *)my_SSL_read) : -1;
-    // Name-based install (see idh_got_replace_by_name): these 7 are one-shot BoringSSL APIs the
+    int re = evp ? adh_got_replace(g_crypto_mod, evp, (void *)my_EVP_CipherUpdate) : -1;
+    int rd = dig ? adh_got_replace(g_crypto_mod, dig, (void *)my_EVP_DigestUpdate) : -1;
+    int rh = hm  ? adh_got_replace(g_crypto_mod, hm,  (void *)my_HMAC_Update) : -1;
+    int rs = dsu ? adh_got_replace(g_crypto_mod, dsu, (void *)my_EVP_DigestSignUpdate) : -1;
+    int rw = ow  ? adh_got_replace(g_crypto_mod, ow,  (void *)my_SSL_write) : -1;
+    int rr = orr ? adh_got_replace(g_crypto_mod, orr, (void *)my_SSL_read) : -1;
+    // Name-based install (see adh_got_replace_by_name): these 7 are one-shot BoringSSL APIs the
     // app may never have called before capture_start runs, so their PLT slot is typically
-    // still unbound — value-match (idh_got_replace) would silently find 0 matching slots even
+    // still unbound — value-match (adh_got_replace) would silently find 0 matching slots even
     // though the symbol is genuinely imported. Matching by the reloc entry's own symbol name
     // works regardless of bind state.
-    int rpks = pks ? idh_got_replace_by_name(g_crypto_mod, "ECDSA_sign", (void*)my_ECDSA_sign) : -1;
-    int rpkv = pkv ? idh_got_replace_by_name(g_crypto_mod, "ECDSA_verify", (void*)my_ECDSA_verify) : -1;
-    int rpke = pke ? idh_got_replace_by_name(g_crypto_mod, "EVP_PKEY_encrypt", (void*)my_EVP_PKEY_encrypt) : -1;
-    int rpkd = pkd ? idh_got_replace_by_name(g_crypto_mod, "EVP_PKEY_decrypt", (void*)my_EVP_PKEY_decrypt) : -1;
-    int rkp5 = kp5 ? idh_got_replace_by_name(g_crypto_mod, "PKCS5_PBKDF2_HMAC", (void*)my_PKCS5_PBKDF2_HMAC) : -1;
-    int rkhk = khk ? idh_got_replace_by_name(g_crypto_mod, "HKDF", (void*)my_HKDF) : -1;
-    int rksc = ksc ? idh_got_replace_by_name(g_crypto_mod, "EVP_PBE_scrypt", (void*)my_EVP_PBE_scrypt) : -1;
-    int raes = aes ? idh_got_replace_by_name(g_crypto_mod, "EVP_AEAD_CTX_seal", (void*)my_EVP_AEAD_CTX_seal) : -1;
-    int raeo = aeo ? idh_got_replace_by_name(g_crypto_mod, "EVP_AEAD_CTX_open", (void*)my_EVP_AEAD_CTX_open) : -1;
-    int rdsi = dsi ? idh_got_replace_by_name(g_crypto_mod, "EVP_DigestSignInit", (void*)my_EVP_DigestSignInit) : -1;
-    int rdvi = dvi ? idh_got_replace_by_name(g_crypto_mod, "EVP_DigestVerifyInit", (void*)my_EVP_DigestVerifyInit) : -1;
-    int rdsf = dsf ? idh_got_replace_by_name(g_crypto_mod, "EVP_DigestSignFinal", (void*)my_EVP_DigestSignFinal) : -1;
-    int rdvu = dvu ? idh_got_replace_by_name(g_crypto_mod, "EVP_DigestVerifyUpdate", (void*)my_EVP_DigestVerifyUpdate) : -1;
-    int rdvf = dvf ? idh_got_replace_by_name(g_crypto_mod, "EVP_DigestVerifyFinal", (void*)my_EVP_DigestVerifyFinal) : -1;
+    int rpks = pks ? adh_got_replace_by_name(g_crypto_mod, "ECDSA_sign", (void*)my_ECDSA_sign) : -1;
+    int rpkv = pkv ? adh_got_replace_by_name(g_crypto_mod, "ECDSA_verify", (void*)my_ECDSA_verify) : -1;
+    int rpke = pke ? adh_got_replace_by_name(g_crypto_mod, "EVP_PKEY_encrypt", (void*)my_EVP_PKEY_encrypt) : -1;
+    int rpkd = pkd ? adh_got_replace_by_name(g_crypto_mod, "EVP_PKEY_decrypt", (void*)my_EVP_PKEY_decrypt) : -1;
+    int raes = aes ? adh_got_replace_by_name(g_crypto_mod, "EVP_AEAD_CTX_seal", (void*)my_EVP_AEAD_CTX_seal) : -1;
+    int raeo = aeo ? adh_got_replace_by_name(g_crypto_mod, "EVP_AEAD_CTX_open", (void*)my_EVP_AEAD_CTX_open) : -1;
+    int rdsi = dsi ? adh_got_replace_by_name(g_crypto_mod, "EVP_DigestSignInit", (void*)my_EVP_DigestSignInit) : -1;
+    int rdvi = dvi ? adh_got_replace_by_name(g_crypto_mod, "EVP_DigestVerifyInit", (void*)my_EVP_DigestVerifyInit) : -1;
+    int rdsf = dsf ? adh_got_replace_by_name(g_crypto_mod, "EVP_DigestSignFinal", (void*)my_EVP_DigestSignFinal) : -1;
+    int rdvu = dvu ? adh_got_replace_by_name(g_crypto_mod, "EVP_DigestVerifyUpdate", (void*)my_EVP_DigestVerifyUpdate) : -1;
+    int rdvf = dvf ? adh_got_replace_by_name(g_crypto_mod, "EVP_DigestVerifyFinal", (void*)my_EVP_DigestVerifyFinal) : -1;
 
-    // -- 文件: persistent file-I/O hooks in the module backing java.io (fileModule, from idhd;
+    // -- 文件: persistent file-I/O hooks in the module backing java.io (fileModule, from adhd;
     //    empty = skip so the agent never hardcodes a target module). Streams openat paths +
-    //    read/write bytes into the same capture() ring (category=file on idhd). --
+    //    read/write bytes into the same capture() ring (category=file on adhd). --
     int fo=-1, foa=-1, frd=-1, fwr=-1, fsc=-1, frc=-1, fwc=-1;
     if (fileModule && fileModule[0]) {
         strncpy(g_file_mod, fileModule, sizeof(g_file_mod)-1); g_file_mod[sizeof(g_file_mod)-1]=0;
-        void *oo=idh_resolve_sym("libc.so","open"),   *ooa=idh_resolve_sym("libc.so","openat");
-        void *ord=idh_resolve_sym("libc.so","read"),  *owr=idh_resolve_sym("libc.so","write");
-        void *osc=idh_resolve_sym("libc.so","syscall");
-        void *orc=idh_resolve_sym("libc.so","__read_chk"), *owv=idh_resolve_sym("libc.so","__write_chk");
+        void *oo=adh_resolve_sym("libc.so","open"),   *ooa=adh_resolve_sym("libc.so","openat");
+        void *ord=adh_resolve_sym("libc.so","read"),  *owr=adh_resolve_sym("libc.so","write");
+        void *osc=adh_resolve_sym("libc.so","syscall");
+        void *orc=adh_resolve_sym("libc.so","__read_chk"), *owv=adh_resolve_sym("libc.so","__write_chk");
         if (oo)  g_orig_open       = (open_t)oo;    if (ooa) g_orig_openat = (openat_t)ooa;
         if (ord) g_orig_read       = (rw_t)ord;     if (owr) g_orig_fwrite_sys = (rw_t)owr;
         if (osc) g_orig_syscall    = (syscall_t)osc;
         if (orc) g_orig_read_chk   = (read_chk_t)orc; if (owv) g_orig_write_chk = (write_chk_t)owv;
-        fo  = oo  ? idh_got_replace(g_file_mod, oo,  (void *)my_open)     : -1;
-        foa = ooa ? idh_got_replace(g_file_mod, ooa, (void *)my_openat)   : -1;
-        frd = ord ? idh_got_replace(g_file_mod, ord, (void *)my_read)     : -1;
-        fwr = owr ? idh_got_replace(g_file_mod, owr, (void *)my_write)    : -1;
-        fsc = osc ? idh_got_replace(g_file_mod, osc, (void *)my_syscall)  : -1;
-        frc = orc ? idh_got_replace(g_file_mod, orc, (void *)my_read_chk) : -1;
-        fwc = owv ? idh_got_replace(g_file_mod, owv, (void *)my_write_chk): -1;
+        fo  = oo  ? adh_got_replace(g_file_mod, oo,  (void *)my_open)     : -1;
+        foa = ooa ? adh_got_replace(g_file_mod, ooa, (void *)my_openat)   : -1;
+        frd = ord ? adh_got_replace(g_file_mod, ord, (void *)my_read)     : -1;
+        fwr = owr ? adh_got_replace(g_file_mod, owr, (void *)my_write)    : -1;
+        fsc = osc ? adh_got_replace(g_file_mod, osc, (void *)my_syscall)  : -1;
+        frc = orc ? adh_got_replace(g_file_mod, orc, (void *)my_read_chk) : -1;
+        fwc = owv ? adh_got_replace(g_file_mod, owv, (void *)my_write_chk): -1;
     }
     // -- 系统: persistent detection/system-query hooks (ptrace/access/__system_property_get)
     //    in sysModule. Observe-only (g_defeat_ptrace stays 0). Streams category=system. --
     int sp=-1, sa=-1, sg=-1;
     if (sysModule && sysModule[0]) {
         strncpy(g_sys_mod, sysModule, sizeof(g_sys_mod)-1); g_sys_mod[sizeof(g_sys_mod)-1]=0;
-        void *op=idh_resolve_sym("libc.so","ptrace"), *oa=idh_resolve_sym("libc.so","access");
-        void *og=idh_resolve_sym("libc.so","__system_property_get");
+        void *op=adh_resolve_sym("libc.so","ptrace"), *oa=adh_resolve_sym("libc.so","access");
+        void *og=adh_resolve_sym("libc.so","__system_property_get");
         if (op) g_orig_ptrace = (ptrace_t)op; if (oa) g_orig_access = (access_t)oa; if (og) g_orig_prop = (prop_t)og;
         // Name-based install: the detection trio is exactly what a target may not have called
         // yet, so its PLT slot can still be unbound and value-match finds nothing (measured on
         // the sandbox: capture_start reported sys p=0 a=0 g=0 while libadhdetect.so genuinely
         // imports all three). Resolve the slot from the module's own relocations instead.
-        sp = op ? idh_got_replace_by_name(g_sys_mod, "ptrace", (void *)my_ptrace) : -1;
-        sa = oa ? idh_got_replace_by_name(g_sys_mod, "access", (void *)my_access) : -1;
-        sg = og ? idh_got_replace_by_name(g_sys_mod, "__system_property_get", (void *)my_prop) : -1;
+        sp = op ? adh_got_replace_by_name(g_sys_mod, "ptrace", (void *)my_ptrace) : -1;
+        sa = oa ? adh_got_replace_by_name(g_sys_mod, "access", (void *)my_access) : -1;
+        sg = og ? adh_got_replace_by_name(g_sys_mod, "__system_property_get", (void *)my_prop) : -1;
     }
     g_capture_on = 1;
     char cmj[80], fmj[80], smj[80];
@@ -931,13 +890,12 @@ void idh_cmd_capture_start(int fd, const char *id, const char *cryptoModule, con
     snprintf(out, sizeof(out),
         "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"capture_start\",\"ok\":true,\"cryptoModule\":\"%s\",\"evp\":%d,\"digest\":%d,\"hmac\":%d,\"digestSign\":%d,\"sslWrite\":%d,\"sslRead\":%d,"
         "\"pkey\":{\"sign\":%d,\"verify\":%d,\"encrypt\":%d,\"decrypt\":%d},"
-        "\"kdf\":{\"pbkdf2\":%d,\"hkdf\":%d,\"scrypt\":%d},"
         "\"aead\":{\"seal\":%d,\"open\":%d},"
         "\"digestSignVerify\":{\"signInit\":%d,\"verifyInit\":%d,\"signFinal\":%d,\"verifyUpdate\":%d,\"verifyFinal\":%d},"
         "\"fileModule\":\"%s\",\"file\":{\"open\":%d,\"openat\":%d,\"read\":%d,\"write\":%d,\"syscall\":%d,\"readChk\":%d,\"writeChk\":%d},"
         "\"sysModule\":\"%s\",\"sys\":{\"ptrace\":%d,\"access\":%d,\"prop\":%d},\"on\":true}\n",
         idj, cmj, re, rd, rh, rs, rw, rr,
-        rpks, rpkv, rpke, rpkd, rkp5, rkhk, rksc, raes, raeo,
+        rpks, rpkv, rpke, rpkd, raes, raeo,
         rdsi, rdvi, rdsf, rdvu, rdvf,
         fmj, fo, foa, frd, fwr, fsc, frc, fwc, smj, sp, sa, sg);
     send_line(fd, out);
@@ -947,73 +905,70 @@ void idh_cmd_capture_start(int fd, const char *id, const char *cryptoModule, con
 
 // Uninstall the persistent capture hooks and restore the original GOT pointers, so the
 // one-shot probe endpoints (crypto_hook_test / net_hook_test / flow_watch) get a clean
-// slot to install-and-restore their own hook. idhd suspends continuous capture around
+// slot to install-and-restore their own hook. adhd suspends continuous capture around
 // those probes, then calls capture_start again.
-void idh_cmd_capture_stop(int fd, const char *id) {
+void adh_cmd_capture_stop(int fd, const char *id) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
     int e = 0, w = 0, r = 0, dg = 0, hm = 0, ds = 0;
-    int pks = 0, pkv = 0, pke = 0, pkd = 0, kp5 = 0, khk = 0, ksc = 0, aes = 0, aeo = 0;
+    int pks = 0, pkv = 0, pke = 0, pkd = 0, aes = 0, aeo = 0;
     int dsi = 0, dvi = 0, dsf = 0, dvu = 0, dvf = 0;
-    if (g_evp_cipher_orig) e  = idh_got_replace(g_crypto_mod, (void *)my_EVP_CipherUpdate, (void *)g_evp_cipher_orig);
-    if (g_orig_evp_digest) dg = idh_got_replace(g_crypto_mod, (void *)my_EVP_DigestUpdate, (void *)g_orig_evp_digest);
-    if (g_orig_hmac)       hm = idh_got_replace(g_crypto_mod, (void *)my_HMAC_Update, (void *)g_orig_hmac);
-    if (g_orig_digest_sign)ds = idh_got_replace(g_crypto_mod, (void *)my_EVP_DigestSignUpdate, (void *)g_orig_digest_sign);
-    if (g_orig_ssl_write)  w  = idh_got_replace(g_crypto_mod, (void *)my_SSL_write, (void *)g_orig_ssl_write);
-    if (g_orig_ssl_read)   r  = idh_got_replace(g_crypto_mod, (void *)my_SSL_read, (void *)g_orig_ssl_read);
-    if (g_ecdsa_sign_orig)   pks = idh_got_replace_by_name(g_crypto_mod, "ECDSA_sign", (void *)g_ecdsa_sign_orig);
-    if (g_ecdsa_verify_orig) pkv = idh_got_replace_by_name(g_crypto_mod, "ECDSA_verify", (void *)g_ecdsa_verify_orig);
-    if (g_pkey_encrypt_orig) pke = idh_got_replace_by_name(g_crypto_mod, "EVP_PKEY_encrypt", (void *)g_pkey_encrypt_orig);
-    if (g_pkey_decrypt_orig) pkd = idh_got_replace_by_name(g_crypto_mod, "EVP_PKEY_decrypt", (void *)g_pkey_decrypt_orig);
-    if (g_pbkdf2_orig)       kp5 = idh_got_replace_by_name(g_crypto_mod, "PKCS5_PBKDF2_HMAC", (void *)g_pbkdf2_orig);
-    if (g_hkdf_orig)         khk = idh_got_replace_by_name(g_crypto_mod, "HKDF", (void *)g_hkdf_orig);
-    if (g_scrypt_orig)       ksc = idh_got_replace_by_name(g_crypto_mod, "EVP_PBE_scrypt", (void *)g_scrypt_orig);
-    if (g_aead_seal_orig)    aes = idh_got_replace_by_name(g_crypto_mod, "EVP_AEAD_CTX_seal", (void *)g_aead_seal_orig);
-    if (g_aead_open_orig)    aeo = idh_got_replace_by_name(g_crypto_mod, "EVP_AEAD_CTX_open", (void *)g_aead_open_orig);
-    if (g_orig_dsign_init)   dsi = idh_got_replace_by_name(g_crypto_mod, "EVP_DigestSignInit", (void *)g_orig_dsign_init);
-    if (g_orig_dverify_init) dvi = idh_got_replace_by_name(g_crypto_mod, "EVP_DigestVerifyInit", (void *)g_orig_dverify_init);
-    if (g_orig_dsign_final)  dsf = idh_got_replace_by_name(g_crypto_mod, "EVP_DigestSignFinal", (void *)g_orig_dsign_final);
-    if (g_orig_digest_verify)dvu = idh_got_replace_by_name(g_crypto_mod, "EVP_DigestVerifyUpdate", (void *)g_orig_digest_verify);
-    if (g_orig_dverify_final)dvf = idh_got_replace_by_name(g_crypto_mod, "EVP_DigestVerifyFinal", (void *)g_orig_dverify_final);
+    if (g_evp_cipher_orig) e  = adh_got_replace(g_crypto_mod, (void *)my_EVP_CipherUpdate, (void *)g_evp_cipher_orig);
+    if (g_orig_evp_digest) dg = adh_got_replace(g_crypto_mod, (void *)my_EVP_DigestUpdate, (void *)g_orig_evp_digest);
+    if (g_orig_hmac)       hm = adh_got_replace(g_crypto_mod, (void *)my_HMAC_Update, (void *)g_orig_hmac);
+    if (g_orig_digest_sign)ds = adh_got_replace(g_crypto_mod, (void *)my_EVP_DigestSignUpdate, (void *)g_orig_digest_sign);
+    if (g_orig_ssl_write)  w  = adh_got_replace(g_crypto_mod, (void *)my_SSL_write, (void *)g_orig_ssl_write);
+    if (g_orig_ssl_read)   r  = adh_got_replace(g_crypto_mod, (void *)my_SSL_read, (void *)g_orig_ssl_read);
+    if (g_ecdsa_sign_orig)   pks = adh_got_replace_by_name(g_crypto_mod, "ECDSA_sign", (void *)g_ecdsa_sign_orig);
+    if (g_ecdsa_verify_orig) pkv = adh_got_replace_by_name(g_crypto_mod, "ECDSA_verify", (void *)g_ecdsa_verify_orig);
+    if (g_pkey_encrypt_orig) pke = adh_got_replace_by_name(g_crypto_mod, "EVP_PKEY_encrypt", (void *)g_pkey_encrypt_orig);
+    if (g_pkey_decrypt_orig) pkd = adh_got_replace_by_name(g_crypto_mod, "EVP_PKEY_decrypt", (void *)g_pkey_decrypt_orig);
+    if (g_aead_seal_orig)    aes = adh_got_replace_by_name(g_crypto_mod, "EVP_AEAD_CTX_seal", (void *)g_aead_seal_orig);
+    if (g_aead_open_orig)    aeo = adh_got_replace_by_name(g_crypto_mod, "EVP_AEAD_CTX_open", (void *)g_aead_open_orig);
+    if (g_orig_dsign_init)   dsi = adh_got_replace_by_name(g_crypto_mod, "EVP_DigestSignInit", (void *)g_orig_dsign_init);
+    if (g_orig_dverify_init) dvi = adh_got_replace_by_name(g_crypto_mod, "EVP_DigestVerifyInit", (void *)g_orig_dverify_init);
+    if (g_orig_dsign_final)  dsf = adh_got_replace_by_name(g_crypto_mod, "EVP_DigestSignFinal", (void *)g_orig_dsign_final);
+    if (g_orig_digest_verify)dvu = adh_got_replace_by_name(g_crypto_mod, "EVP_DigestVerifyUpdate", (void *)g_orig_digest_verify);
+    if (g_orig_dverify_final)dvf = adh_got_replace_by_name(g_crypto_mod, "EVP_DigestVerifyFinal", (void *)g_orig_dverify_final);
     // restore persistent file hooks in the module capture_start patched
     if (g_file_mod[0]) {
-        if (g_orig_open)       idh_got_replace(g_file_mod, (void *)my_open,       (void *)g_orig_open);
-        if (g_orig_openat)     idh_got_replace(g_file_mod, (void *)my_openat,     (void *)g_orig_openat);
-        if (g_orig_read)       idh_got_replace(g_file_mod, (void *)my_read,       (void *)g_orig_read);
-        if (g_orig_fwrite_sys) idh_got_replace(g_file_mod, (void *)my_write,      (void *)g_orig_fwrite_sys);
-        if (g_orig_syscall)    idh_got_replace(g_file_mod, (void *)my_syscall,    (void *)g_orig_syscall);
-        if (g_orig_read_chk)   idh_got_replace(g_file_mod, (void *)my_read_chk,   (void *)g_orig_read_chk);
-        if (g_orig_write_chk)  idh_got_replace(g_file_mod, (void *)my_write_chk,  (void *)g_orig_write_chk);
+        if (g_orig_open)       adh_got_replace(g_file_mod, (void *)my_open,       (void *)g_orig_open);
+        if (g_orig_openat)     adh_got_replace(g_file_mod, (void *)my_openat,     (void *)g_orig_openat);
+        if (g_orig_read)       adh_got_replace(g_file_mod, (void *)my_read,       (void *)g_orig_read);
+        if (g_orig_fwrite_sys) adh_got_replace(g_file_mod, (void *)my_write,      (void *)g_orig_fwrite_sys);
+        if (g_orig_syscall)    adh_got_replace(g_file_mod, (void *)my_syscall,    (void *)g_orig_syscall);
+        if (g_orig_read_chk)   adh_got_replace(g_file_mod, (void *)my_read_chk,   (void *)g_orig_read_chk);
+        if (g_orig_write_chk)  adh_got_replace(g_file_mod, (void *)my_write_chk,  (void *)g_orig_write_chk);
         g_file_mod[0] = 0;
     }
     // restore persistent system/detection hooks
     if (g_sys_mod[0]) {
-        if (g_orig_ptrace) idh_got_replace_by_name(g_sys_mod, "ptrace", (void *)g_orig_ptrace);
-        if (g_orig_access) idh_got_replace_by_name(g_sys_mod, "access", (void *)g_orig_access);
-        if (g_orig_prop)   idh_got_replace_by_name(g_sys_mod, "__system_property_get", (void *)g_orig_prop);
+        if (g_orig_ptrace) adh_got_replace_by_name(g_sys_mod, "ptrace", (void *)g_orig_ptrace);
+        if (g_orig_access) adh_got_replace_by_name(g_sys_mod, "access", (void *)g_orig_access);
+        if (g_orig_prop)   adh_got_replace_by_name(g_sys_mod, "__system_property_get", (void *)g_orig_prop);
         g_sys_mod[0] = 0;
     }
     g_capture_on = 0;
     cap_reset();
     char out[700];
     snprintf(out, sizeof(out), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"capture_stop\",\"ok\":true,\"restored\":{\"evp\":%d,\"digest\":%d,\"hmac\":%d,\"digestSign\":%d,\"sslWrite\":%d,\"sslRead\":%d,"
-        "\"pkeySign\":%d,\"pkeyVerify\":%d,\"pkeyEncrypt\":%d,\"pkeyDecrypt\":%d,\"pbkdf2\":%d,\"hkdf\":%d,\"scrypt\":%d,\"aeadSeal\":%d,\"aeadOpen\":%d,"
+        "\"pkeySign\":%d,\"pkeyVerify\":%d,\"pkeyEncrypt\":%d,\"pkeyDecrypt\":%d,\"aeadSeal\":%d,\"aeadOpen\":%d,"
         "\"digestSignInit\":%d,\"digestVerifyInit\":%d,\"digestSignFinal\":%d,\"digestVerifyUpdate\":%d,\"digestVerifyFinal\":%d}}\n",
-        idj, e, dg, hm, ds, w, r, pks, pkv, pke, pkd, kp5, khk, ksc, aes, aeo, dsi, dvi, dsf, dvu, dvf);
+        idj, e, dg, hm, ds, w, r, pks, pkv, pke, pkd, aes, aeo, dsi, dvi, dsf, dvu, dvf);
     send_line(fd, out);
     LOGI("capture_stop: restored evp=%d sslw=%d sslr=%d", e, w, r);
 }
 
 // Drain (pop) up to a batch of ring records + rich Java records, and report HONEST WS-C
 // stats: seq (total capture attempts), dropped/jdropped (never silent), backlog (still in
-// ring), first/last drop ts. idhd streams the records and surfaces dropped>0 as
+// ring), first/last drop ts. adhd streams the records and surfaces dropped>0 as
 // complete:false. Buffer grows as needed (the old fixed 64KB could overflow with a full ring).
-void idh_cmd_capture_drain(int fd, const char *id) {
+void adh_cmd_capture_drain(int fd, const char *id) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
     size_t cap = 1 << 16, len = 0; char *out = malloc(cap); if (!out) { send_oom(fd, idj, "capture_drain"); return; }
     len += snprintf(out + len, cap - len,
         "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"capture_drain\",\"ok\":true,\"on\":%s,\"captures\":[",
         idj, g_capture_on ? "true" : "false");
-    const int DRAIN_BATCH = 512;   // bound one response; idhd polls again to clear the backlog
+    const int DRAIN_BATCH = 512;   // bound one response; adhd polls again to clear the backlog
     pthread_mutex_lock(&g_cap_lock);
     int ncaps = 0;
     while (g_ring_count > 0 && ncaps < DRAIN_BATCH) {
@@ -1058,40 +1013,40 @@ void idh_cmd_capture_drain(int fd, const char *id) {
 
 // Install GOT hooks on libadhdetect's detection calls, trigger Detection.run(),
 // report what the target checked.
-void idh_cmd_detect_watch(int fd, const char *id, const char *module, const char *className) {
+void adh_cmd_detect_watch(int fd, const char *id, const char *module, const char *className) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
-    // No hardcoded target module: idhd passes the module whose GOT holds the detection calls.
+    // No hardcoded target module: adhd passes the module whose GOT holds the detection calls.
     if (!module || !module[0]) { char e[200]; snprintf(e, sizeof(e), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"detect_watch\",\"ok\":false,\"error\":\"need module (which loaded module makes the detection calls)\"}\n", idj); send_line(fd, e); return; }
     const char *mod = module;
-    void *op = idh_resolve_sym("libc.so", "ptrace");
-    void *oa = idh_resolve_sym("libc.so", "access");
-    void *og = idh_resolve_sym("libc.so", "__system_property_get");
+    void *op = adh_resolve_sym("libc.so", "ptrace");
+    void *oa = adh_resolve_sym("libc.so", "access");
+    void *og = adh_resolve_sym("libc.so", "__system_property_get");
     g_orig_ptrace = (ptrace_t)op; g_orig_access = (access_t)oa; g_orig_prop = (prop_t)og;
     // Name-based: the probe runs BEFORE the target has ever called these (that is the point —
     // install then trigger), so a value-match on the still-lazily-bound PLT slot finds nothing.
-    int r1 = op ? idh_got_replace_by_name(mod, "ptrace", (void *)my_ptrace) : -1;
-    int r2 = oa ? idh_got_replace_by_name(mod, "access", (void *)my_access) : -1;
-    int r3 = og ? idh_got_replace_by_name(mod, "__system_property_get", (void *)my_prop) : -1;
+    int r1 = op ? adh_got_replace_by_name(mod, "ptrace", (void *)my_ptrace) : -1;
+    int r2 = oa ? adh_got_replace_by_name(mod, "access", (void *)my_access) : -1;
+    int r3 = og ? adh_got_replace_by_name(mod, "__system_property_get", (void *)my_prop) : -1;
     g_defeat_ptrace = 1;   // this one-shot probe defeats TRACEME (original behavior); reset after
     pthread_mutex_lock(&g_det_lock); g_ndets = 0; pthread_mutex_unlock(&g_det_lock);
 
     int did = 0, triggered = 0, rc = -999;
-    JNIEnv *env = idh_jni_attach(&did);
+    JNIEnv *env = adh_jni_attach(&did);
     if (env) {
         (*env)->PushLocalFrame(env, 32);
-        jclass jc = className[0] ? idh_jni_load_app_class(env, className) : NULL;
+        jclass jc = className[0] ? adh_jni_load_app_class(env, className) : NULL;
         if (jc) {
             jmethodID run = (*env)->GetStaticMethodID(env, jc, "run", "()I");
             if (run) { rc = (*env)->CallStaticIntMethod(env, jc, run); triggered = 1; }
         }
         if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
         (*env)->PopLocalFrame(env, NULL);
-        idh_jni_detach(did);
+        adh_jni_detach(did);
     }
     // restore
-    if (r1 > 0) idh_got_replace_by_name(mod, "ptrace", op);
-    if (r2 > 0) idh_got_replace_by_name(mod, "access", oa);
-    if (r3 > 0) idh_got_replace_by_name(mod, "__system_property_get", og);
+    if (r1 > 0) adh_got_replace_by_name(mod, "ptrace", op);
+    if (r2 > 0) adh_got_replace_by_name(mod, "access", oa);
+    if (r3 > 0) adh_got_replace_by_name(mod, "__system_property_get", og);
     g_defeat_ptrace = 0;
 
     size_t cap = 1 << 13, len = 0; char *out = malloc(cap); if (!out) { send_oom(fd, idj, "detect_watch"); return; }
@@ -1121,7 +1076,7 @@ static int my_inline_crypto_update(void *ctx, unsigned char *out, int *outl,
     return g_inline_crypto_orig ? g_inline_crypto_orig(ctx, out, outl, in, inl) : 0;
 }
 
-void idh_cmd_inline_crypto_test(int fd, const char *id, const char *module,
+void adh_cmd_inline_crypto_test(int fd, const char *id, const char *module,
                                    const char *symbol, const char *className, const char *method) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
     char mj[96], sj[96], cj[220], errj[180];
@@ -1129,13 +1084,13 @@ void idh_cmd_inline_crypto_test(int fd, const char *id, const char *module,
     json_escape(symbol ? symbol : "", sj, sizeof(sj));
     json_escape(className ? className : "", cj, sizeof(cj));
     const char *error = "";
-    void *target = (module && symbol) ? idh_resolve_sym(module, symbol) : NULL;
+    void *target = (module && symbol) ? adh_resolve_sym(module, symbol) : NULL;
     void *original = NULL;
     int installed = 0, hooked = 0;
     if (target && g_inline_crypto_target == target && g_inline_crypto_orig) hooked = 1;
     else if (target && g_inline_crypto_target) error = "inline slot already owns another target";
     else if (target) {
-        hooked = idh_inline_hook(target, (void *)my_inline_crypto_update, &original);
+        hooked = adh_inline_hook(target, (void *)my_inline_crypto_update, &original);
         if (hooked) {
             g_inline_crypto_orig = (inline_crypto_update_t)original;
             g_inline_crypto_target = target;
@@ -1149,11 +1104,11 @@ void idh_cmd_inline_crypto_test(int fd, const char *id, const char *module,
     else if (!hooked) { if (!error[0]) error = "inline backend rejected hook"; }
     else {
         __atomic_store_n(&g_inline_crypto_active, 1, __ATOMIC_RELAXED);
-        JNIEnv *env = idh_jni_attach(&did);
+        JNIEnv *env = adh_jni_attach(&did);
         if (!env) error = "no JNI env";
         else {
             (*env)->PushLocalFrame(env, 48);
-            jclass jc = idh_jni_load_app_class(env, className ? className : "");
+            jclass jc = adh_jni_load_app_class(env, className ? className : "");
             jmethodID mid = jc ? (*env)->GetStaticMethodID(env, jc, method ? method : "", "()I") : NULL;
             if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); mid = NULL; }
             if (!mid) error = "static int trigger not found";
@@ -1163,7 +1118,7 @@ void idh_cmd_inline_crypto_test(int fd, const char *id, const char *module,
                 else triggered = 1;
             }
             (*env)->PopLocalFrame(env, NULL);
-            idh_jni_detach(did);
+            adh_jni_detach(did);
         }
         __atomic_store_n(&g_inline_crypto_active, 0, __ATOMIC_RELAXED);
     }
@@ -1183,14 +1138,14 @@ void idh_cmd_inline_crypto_test(int fd, const char *id, const char *module,
          module ? module : "", symbol ? symbol : "", hooked, triggered, n, error);
 }
 #else
-void idh_cmd_inline_crypto_test(int fd, const char *id, const char *module,
+void adh_cmd_inline_crypto_test(int fd, const char *id, const char *module,
                                    const char *symbol, const char *className, const char *method) {
     (void)module; (void)symbol; (void)className; (void)method;
     char idj[64]; json_escape(id, idj, sizeof(idj));
     char out[240];
     snprintf(out, sizeof(out),
         "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"inline_crypto_test\","
-        "\"ok\":false,\"hooked\":false,\"error\":\"inline backend not built - run tools/fetch_lsplant.sh\"}\n",
+        "\"ok\":false,\"hooked\":false,\"error\":\"inline backend not built - run tools/fetch_dobby.sh\"}\n",
         idj);
     send_line(fd, out);
 }

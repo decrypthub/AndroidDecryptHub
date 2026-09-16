@@ -15,7 +15,7 @@ static void init_dobby() {
     dobby_enable_near_branch_trampoline();
 }
 
-extern "C" int idh_inline_hook(void *target, void *replacement, void **original) {
+extern "C" int adh_inline_hook(void *target, void *replacement, void **original) {
     if (!target || !replacement || !original) return 0;
     pthread_once(&g_dobby_once, init_dobby);
     *original = nullptr;
@@ -27,7 +27,7 @@ extern "C" int idh_inline_hook(void *target, void *replacement, void **original)
     return *original != nullptr ? 1 : 0;
 }
 
-extern "C" int idh_inline_unhook(void *target) {
+extern "C" int adh_inline_unhook(void *target) {
     if (!target) return 0;
     const auto rc = DobbyDestroy(target);
     if (rc != RT_SUCCESS) {

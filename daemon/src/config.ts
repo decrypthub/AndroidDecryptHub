@@ -1,8 +1,7 @@
 import { networkInterfaces } from 'node:os';
 
-// ADH_* preferred; IDH_* kept as legacy aliases.
-export const HTTP_PORT = Number(process.env.ADH_HTTP_PORT ?? process.env.IDH_HTTP_PORT ?? 8760);
-export const AGENT_PORT = Number(process.env.ADH_AGENT_PORT ?? process.env.IDH_AGENT_PORT ?? 8761);
+export const HTTP_PORT = Number(process.env.ADH_HTTP_PORT ?? 8088);
+export const AGENT_PORT = Number(process.env.ADH_AGENT_PORT ?? 8761);
 
 function lanIPv4s(): string[] {
   const nics = networkInterfaces();

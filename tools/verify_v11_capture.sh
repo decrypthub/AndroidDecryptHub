@@ -3,7 +3,7 @@
 # crypto surface exercised by the sandbox live driver — not just AES: symmetric + digest
 # + HMAC all appear in /api/captures without any manual trigger, and a capture detail
 # decodes the (Chinese) plaintext. Also checks DEX was auto-dumped + is downloadable.
-# Exit 0 = PASS. Prereq: idhd + device + sandbox running (verify_all relaunches it).
+# Exit 0 = PASS. Prereq: adhd + device + sandbox running (verify_all relaunches it).
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
 verify_resolve_env_host

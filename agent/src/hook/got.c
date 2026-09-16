@@ -133,7 +133,7 @@ static int slot_in_set(unsigned long long a, const unsigned long long *set, int 
 // module's other data segments would corrupt that module's own call path and deadlock
 // the trampoline. Returns total slots replaced. Generalizes over multiple callers; for
 // a filter that matches a single module it reduces to hooking that one slot.
-int idh_got_replace(const char *module_substr, void *orig, void *wrapper) {
+int adh_got_replace(const char *module_substr, void *orig, void *wrapper) {
     FILE *m = fopen("/proc/self/maps", "r");
     if (!m) return -1;
     char line[512];
@@ -326,7 +326,7 @@ static void *find_reloc_slot_by_symbol(unsigned long long base, const char *sym_
 // Same module-scan shape as got_replace, but resolves the slot by symbol name instead of by
 // value — works for symbols whose PLT slot hasn't been lazily bound yet. One slot per
 // matching module (mirrors got_replace's one-slot-per-module rule).
-int idh_got_replace_by_name(const char *module_substr, const char *sym_name, void *wrapper) {
+int adh_got_replace_by_name(const char *module_substr, const char *sym_name, void *wrapper) {
     FILE *m = fopen("/proc/self/maps", "r");
     if (!m) return -1;
     char line[512];
@@ -370,26 +370,19 @@ static int my_close(int fd) {
     return ((close_t)g_orig_close)(fd);
 }
 
-// The agent ships as libadh_agent.so, but a module dir flashed before that rename still carries
-// libidh_agent.so (and the Zygisk companion accepts both). The self-test must therefore never
-// hardcode its own file name — derive the basename from dladdr().
+// Single shipped name: the self-test resolves exactly this module in /proc/self/maps.
 static const char *self_module_name(void) {
-    Dl_info info;
-    if (dladdr((void *)(uintptr_t)self_module_name, &info) && info.dli_fname) {
-        const char *base = strrchr(info.dli_fname, '/');
-        return base ? base + 1 : info.dli_fname;
-    }
     return "libadh_agent.so";
 }
 
-void idh_cmd_gothook_selftest(int fd, const char *id) {
+void adh_cmd_gothook_selftest(int fd, const char *id) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
     const char *self_lib = self_module_name();
     void *libc = dlopen("libc.so", RTLD_NOW);
     void *orig = libc ? dlsym(libc, "close") : NULL;
     g_orig_close = orig;
     g_dbg_slot = 0; g_dbg_orig_perms[0] = 0;
-    int replaced = orig ? idh_got_replace(self_lib, orig, (void *)my_close) : -1;
+    int replaced = orig ? adh_got_replace(self_lib, orig, (void *)my_close) : -1;
     // While still hooked: read the hooked slot's page perms. got_write_slot restores the
     // page's original protection after publishing, so RELRO (r--) must read back r-- —
     // proving we don't leave the page rw-flipped (weakened RELRO / integrity-check bait).
@@ -400,7 +393,7 @@ void idh_cmd_gothook_selftest(int fd, const char *id) {
     int tfd = open("/proc/self/stat", O_RDONLY);
     if (tfd >= 0) close(tfd);
     int after = g_close_hits;
-    if (replaced > 0 && orig) idh_got_replace(self_lib, (void *)my_close, orig);  // restore
+    if (replaced > 0 && orig) adh_got_replace(self_lib, (void *)my_close, orig);  // restore
     char out[320];
     snprintf(out, sizeof(out),
         "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"gothook_selftest\",\"ok\":true,\"replaced\":%d,\"hitsBefore\":%d,\"hitsAfter\":%d,\"fired\":%s,\"origPerms\":\"%s\",\"slotPerms\":\"%s\",\"protRestored\":%s}\n",
@@ -490,8 +483,7 @@ static void *resolve_sym_ex(const char *mod_substr, const char *symbol, int pref
     }
     return NULL;
 }
-// Exact-match resolver (original behavior) + a prefix variant, plus C-ABI wrappers used by
-// the C++ LSPlant shim (java_lsplant.cpp) for ART symbol resolution (some ART symbols must be
-// matched by prefix because the mangled std::__1 allocator spelling varies across ROMs).
-void *idh_resolve_sym(const char *mod, const char *sym) { return resolve_sym_ex(mod, sym, 0); }
-void *idh_resolve_sym_prefix(const char *mod, const char *pre) { return resolve_sym_ex(mod, pre, 1); }
+// Exact-match resolver (original behavior) plus a prefix variant used for symbols whose
+// mangled spelling varies across ROM/ABI versions.
+void *adh_resolve_sym(const char *mod, const char *sym) { return resolve_sym_ex(mod, sym, 0); }
+void *adh_resolve_sym_prefix(const char *mod, const char *pre) { return resolve_sym_ex(mod, pre, 1); }

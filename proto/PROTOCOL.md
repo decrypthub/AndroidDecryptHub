@@ -34,7 +34,7 @@
 
 ## 端口
 
-- idhd HTTP + WebSocket：`8760`（对外称 **ADH Daemon**；npm 包名 `adhd`）
+- adhd HTTP + WebSocket：`8088`（对外称 **ADH Daemon**；npm 包名 `adhd`；与 iOS `idh` 同端口）
 - ADH Daemon Agent TCP：`8761`
 
 ## agent → Host ADH Daemon（均为 `FRAME_JSON`）
@@ -78,4 +78,4 @@ framing 完整送达整帧时 `tail` 才非空。验收：`tools/verify_v21_fram
 ## 会话身份
 
 - Host ADH Daemon 为每个连接分配 `sessionId`；同 pid 重连视为同一逻辑目标，保留历史。
-- 事件持久化到 `adhd-data/events.jsonl`；若已有 legacy `idhd-data/`，继续兼容读取。
+- 事件持久化到 `adhd-data/events.jsonl`。

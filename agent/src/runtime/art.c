@@ -95,10 +95,10 @@ static int resolve_dexfile(int mem_fd, unsigned long long dexfile_ptr, struct De
 
 // Walk live thread context ClassLoaders and their parent chains, then resolve each
 // DexFile cookie structurally. This is the SDK 35/36 path; it does not magic-scan RAM.
-void idh_cmd_art_dexfiles(int fd, const char *id) {
+void adh_cmd_art_dexfiles(int fd, const char *id) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
     int did = 0;
-    JNIEnv *env = idh_jni_attach(&did);
+    JNIEnv *env = adh_jni_attach(&did);
     if (!env) { char e[160]; snprintf(e, sizeof(e), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"art_dexfiles\",\"ok\":false,\"error\":\"no JavaVM\"}\n", idj); send_line(fd, e); return; }
     (*env)->PushLocalFrame(env, 512);
 
@@ -202,7 +202,7 @@ void idh_cmd_art_dexfiles(int fd, const char *id) {
     if (mem_fd >= 0) close(mem_fd);
     if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
     (*env)->PopLocalFrame(env, NULL);
-    idh_jni_detach(did);
+    adh_jni_detach(did);
 
     size_t output_size = (records ? strlen(records) : 0) + 200;
     char *out = (char *)malloc(output_size);

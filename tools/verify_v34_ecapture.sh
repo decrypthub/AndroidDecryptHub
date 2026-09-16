@@ -18,7 +18,7 @@ set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
 verify_resolve_env
 
-TLS_PORT="${ADH_TLS_PORT:-${IDH_TLS_PORT:-8762}}"
+TLS_PORT="${ADH_TLS_PORT:-8762}"
 MARKER="ADH_NET_MARKER_v1"; RESP="ADH_NET_RESPONSE_v1"
 PKG="com.adh.sandbox"
 CAP_SECONDS="${ADH_ECAPTURE_SECONDS:-15}"
@@ -55,7 +55,7 @@ adb -s "$SERIAL" reverse tcp:$TLS_PORT tcp:$TLS_PORT >/dev/null
 
 # 4) capture in the background, then drive traffic through the plugin ------------------------
 CAP_LOG="$(mktemp)"
-bash "$ROOT/tools/ecapture_capture.sh" --package "$PKG" --model text --seconds "$CAP_SECONDS" >"$CAP_LOG" 2>&1 &
+bash "$ROOT/tools/ecapture_capture.sh" --package "$PKG" --seconds "$CAP_SECONDS" >"$CAP_LOG" 2>&1 &
 CAP_PID=$!
 sleep 5
 set +e

@@ -5,7 +5,7 @@
 extern "C" {
 #endif
 
-void idh_cmd_art_dexfiles(int fd, const char *id);
+void adh_cmd_art_dexfiles(int fd, const char *id);
 
 #ifdef __cplusplus
 }

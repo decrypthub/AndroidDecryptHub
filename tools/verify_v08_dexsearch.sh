@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # v0.8 dex search index (HOST-ONLY). Searches the probe dex and the app's dex for
-# strings/classes/methods and asserts known hits. Exit 0 = PASS. Prereq: idhd + APK.
+# strings/classes/methods and asserts known hits. Exit 0 = PASS. Prereq: adhd + APK.
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
 verify_resolve_env_host
@@ -20,7 +20,7 @@ const POST=(p,b)=>fetch(`${base}${p}`,{method:'POST',headers:{'content-type':'ap
 // probe dex: search class/method/string
 const s1=await POST('/api/dex/search',{b64:probeB64,query:'Probe',kinds:['class']});
 const s2=await POST('/api/dex/search',{b64:probeB64,query:'hello',kinds:['method']});
-const s3=await POST('/api/dex/search',{b64:probeB64,query:'IDH_PROBE_OK',kinds:['string']});
+const s3=await POST('/api/dex/search',{b64:probeB64,query:'IDH_PROBE_OK',kinds:['string']}); // hash-bound legacy probe marker
 console.log(`probe: class(Probe)=${s1.counts.classes} method(hello)=${s2.counts.methods} string=${s3.counts.strings}`);
 const probePass = (s1.classes||[]).some(c=>/Probe/.test(c)) && (s2.methods||[]).some(m=>m.name==='hello') && (s3.strings||[]).includes('IDH_PROBE_OK');
 

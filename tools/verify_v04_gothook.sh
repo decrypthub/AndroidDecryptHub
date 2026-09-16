@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# v0.4 GOT hook engine self-test. Prereq: idhd running, device, sandbox running.
+# v0.4 GOT hook engine self-test. Prereq: adhd running, device, sandbox running.
 #   Hooks the agent's own close() GOT slot, triggers a close, asserts:
 #   replaced>=1 (slot found+swapped) AND fired (wrapper ran) AND process alive
 #   (proves interception + trampoline-through-to-original without crash/hang).

@@ -4,7 +4,7 @@
 //
 // This header carries the common macros + the cross-module function prototypes. No target
 // knowledge lives anywhere in the agent (architecture red line): every class/module name the
-// one-shot ops drive is supplied by idhd at runtime.
+// one-shot ops drive is supplied by adhd at runtime.
 #ifndef ADH_AGENT_INTERNAL_H
 #define ADH_AGENT_INTERNAL_H
 
@@ -38,7 +38,7 @@ int hex2bytes(const char *hex, unsigned char *out, int maxlen);
 long long now_ns(void);
 
 // ---- io.c ----
-int connect_idhd(void);
+int connect_adhd(void);
 int send_all(int fd, const char *s, size_t len);
 int send_frame(int fd, unsigned char type, const char *payload, size_t len);
 int send_line(int fd, const char *s);

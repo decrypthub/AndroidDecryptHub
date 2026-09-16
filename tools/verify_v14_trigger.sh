@@ -3,7 +3,7 @@
 # policy holds: a SAFE static no-arg method (safeCompute) is invoked, while a dangerous one
 # (deleteAll — blacklisted name) is SKIPPED, not called. This is the P2 "trigger source"
 # that gives a refill-type shell a chance to restore CodeItems (then re-snapshot + recover).
-# Exit 0 = PASS. Prereq: idhd + device + sandbox running.
+# Exit 0 = PASS. Prereq: adhd + device + sandbox running.
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
 verify_resolve_env_host

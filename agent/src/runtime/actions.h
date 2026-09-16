@@ -5,8 +5,8 @@
 extern "C" {
 #endif
 
-void idh_cmd_trigger(int fd, const char *id, const char *class_name, const char *method, int level);
-void idh_cmd_load_so(int fd, const char *id, const char *path, const char *symbol);
+void adh_cmd_trigger(int fd, const char *id, const char *class_name, const char *method, int level);
+void adh_cmd_load_so(int fd, const char *id, const char *path, const char *symbol);
 
 #ifdef __cplusplus
 }

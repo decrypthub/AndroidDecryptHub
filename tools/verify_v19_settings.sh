@@ -20,7 +20,7 @@ POST="$(curl -s -X POST "$BASE/api/config" -H 'content-type: application/json' -
 verify_chk "POST applies capture"          '[ "$(echo "$POST" | jget applied)" = "[\"capture\"]" ]'
 verify_chk "POST reports persisted (honest)" '[ "$(echo "$POST" | jget persisted)" = "true" ]'  # fail-loud: success must be disk-confirmed, not assumed
 verify_chk "readback retain == 2000"       '[ "$(curl -s "$BASE/api/config" | jget settings.capture.retain)" = "2000" ]'
-verify_chk "persisted to settings.json"    '[ "$(cat "$ROOT/idhd-data/settings.json" | jget capture.retain)" = "2000" ]'
+verify_chk "persisted to settings.json"    '[ "$(cat "$ROOT/adhd-data/settings.json" | jget capture.retain)" = "2000" ]'
 
 # 3) settings export / import (section-merge on ui)
 verify_chk "GET /api/settings/export 200"  '[ "$(curl -s "$BASE/api/settings/export" | jget ui.displayCap)" != "ERR" ]'
@@ -30,7 +30,7 @@ verify_chk "import readback displayCap"    '[ "$(curl -s "$BASE/api/config" | jg
 verify_chk "import rejects empty segs"     '[ "$(curl -s -o /dev/null -w %{http_code} -X POST "$BASE/api/settings/import" -H "content-type: application/json" -d "{\"nope\":1}")" = "400" ]'
 
 # 4) MCP config carries the CLI-equivalent line
-verify_chk "mcp config has cli equiv"      'curl -s "$BASE/api/mcp/config" | grep -q "claude mcp add --transport http"'
+verify_chk "mcp config has HTTP endpoint"   'curl -s "$BASE/api/mcp/config" | grep -q "/mcp"'
 
 # 5) data clear endpoint validates input
 verify_chk "/api/data/clear bad what=400"  '[ "$(curl -s -o /dev/null -w %{http_code} -X POST "$BASE/api/data/clear" -H "content-type: application/json" -d "{\"what\":\"bogus\"}")" = "400" ]'

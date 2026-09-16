@@ -19,7 +19,7 @@ import javax.net.ssl.X509TrustManager
 
 // The real forensic scenario: encrypt data, then send the CIPHERTEXT over TLS —
 // all on one thread. The agent hooks EVP_CipherUpdate (sees the plaintext) and
-// SSL_write (sees the request carrying the ciphertext); idhd correlates them by
+// SSL_write (sees the request carrying the ciphertext); adhd correlates them by
 // thread+time to prove "this plaintext was encrypted and sent in this request".
 object CorrelatedFlow {
     private const val TAG = "ADH_SANDBOX"
