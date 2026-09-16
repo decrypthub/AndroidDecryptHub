@@ -395,7 +395,12 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
         val bundle = Bundle().apply {
             putString(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value)
         }
+        // Focus + click first: ACTION_IME_ENTER only reaches the app when an IME is attached, and
+        // a fresh screen has none. (Observed on-device: without the click the action returned true
+        // but no editor-action ever fired, so "submitted" would have been a lie.)
         editable.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+        editable.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        if (args.optBoolean("submit", false)) Thread.sleep(250)
         if (!editable.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, bundle)) {
             throw AutomationException("set_text_rejected", "node rejected ACTION_SET_TEXT")
         }

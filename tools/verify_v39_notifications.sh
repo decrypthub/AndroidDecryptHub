@@ -99,6 +99,24 @@ try {
   execFileSync('adb', ['-s', serial, 'shell', 'cmd', 'notification', 'post', '-S', 'bigtext', '-t', 'ADH_OTP', 'adhotp', waitMarker], { stdio: 'ignore' });
   const waited = await waiting;
   chk('phone_wait blocks on an incoming notification and returns it', waited.matched === true && waited.kind === 'notification' && String(waited.item?.text ?? '').includes(waitMarker), `elapsed=${waited.elapsedMs} text=${waited.item?.text}`);
+
+  // Composition: one task waits for the code, then types that exact text via {{...}} and submits.
+  const taskMarker = 'ADH_OTP_task_' + Date.now().toString().slice(-6);
+  const taskPromise = tool('phone_task', { steps: [
+    { type: 'app', args: { action: 'restart', package: 'com.adh.sandbox' } },
+    { type: 'wait', args: { activePackage: 'com.adh.sandbox', timeoutMs: 10_000, intervalMs: 300, maxNodes: 120 } },
+    { id: 'code', type: 'wait', args: { notificationContains: taskMarker, timeoutMs: 20_000, intervalMs: 400, lookbackMs: 30_000 } },
+    { type: 'act', args: { action: 'set_text', resourceId: 'com.adh.sandbox:id/adh_input_probe', text: '{{code.item.text}}', submit: true, maxNodes: 150 } },
+  ] });
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  execFileSync('adb', ['-s', serial, 'shell', 'cmd', 'notification', 'post', '-S', 'bigtext', '-t', 'ADH_OTP', 'adhotp', taskMarker], { stdio: 'ignore' });
+  const task = await taskPromise;
+  const codeStep = task.steps?.find((step) => step.id === 'code');
+  const typedStep = task.steps?.find((step) => step.type === 'act');
+  chk('a task waits for the code and types that exact text through a template', task.ok === true && String(codeStep?.result?.item?.text ?? '') === taskMarker && typedStep?.result?.submitted === true, `ok=${task.ok} code=${codeStep?.result?.item?.text} submitted=${typedStep?.result?.submitted}`);
+  // Wait for the echo label instead of sampling once — the app updates it on the IME action.
+  const echo = await tool('phone_wait', { textContains: '提交回显', timeoutMs: 5_000, intervalMs: 250, maxNodes: 150 });
+  chk('the app received the typed code', echo.matched === true && String(echo.node?.text ?? '').includes(taskMarker), `node=${echo.node?.text ?? '-'}`);
 } catch (error) {
   chk('notification acceptance path completed', false, error.message || String(error));
 } finally {
