@@ -1,6 +1,6 @@
 # ADH MCP Tools
 
-Generated from the live ADH Daemon registry (49 tools). Endpoint: `POST /mcp` (JSON-RPC 2.0).
+Generated from the live ADH Daemon registry (50 tools). Endpoint: `POST /mcp` (JSON-RPC 2.0).
 
 | Tool | Description | Args |
 |---|---|---|
@@ -52,4 +52,5 @@ Generated from the live ADH Daemon registry (49 tools). Endpoint: `POST /mcp` (J
 | `phone_act` | Act on the active phone screen. Prefer a selector or snapshotId+ref from phone_observe; use normalized coordinates only as the visual fallback. Supports tap, long_press, swipe, scroll, set_text and global back/home/recents/notifications/quick_settings/power/lock/screenshot. For set_text the text argument is the payload to write, not a filter (target the field with ref, resourceId, editable or selector); the value can be read back with phone_find. | text, textContains, resourceId, contentDescription, contentDescriptionContains, clickable, editable, scrollable, index, snapshotId, action, ref, x, y, x2, y2, coordinateSpace, key, direction, durationMs, observeAfter, package |
 | `phone_app` | Open, stop or restart an allowlisted app by package name. Open uses the root Device Daemon when protocol v6+ is available, with a compatibility fallback for older daemons; stop/restart delegate to the same authenticated daemon. | action, package |
 | `phone_device` | Read or control device power state: status, wake, unlock a non-secure keyguard, or lock the screen. Secure credentials are never bypassed. | action |
+| `phone_skill` | Save, list, run or delete named phone recipes (skills). A skill is a validated, bounded list of phone_task steps kept on the host, so a flow the AI worked out once replays in one call. Skills run through the same primitives, allowlist and retry semantics as phone_task; they cannot nest skills or reach a shell. | action, name, description, overwrite, stopOnError, steps |
 | `phone_task` | Run a bounded sequence of phone primitives in one MCP call. Steps may observe, find, wait (UI state or agent signal), act, control an app, or control device power; each step supports retries and structured failure output. | stopOnError, steps |

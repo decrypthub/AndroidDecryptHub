@@ -33,6 +33,9 @@
   · 顺带确认的路径与限制：从桌面抽屉点击应用图标能正常拉起应用（实测微信 → `com.tencent.mm` 前台），没有跨应用限制；但 `phone_app open` 在旧 daemon（协议 5，Accessibility fallback）上会触发 ColorOS 跨应用确认框（`com.oplus.securitypermission`；不在 allowlist 时 fail-loud 报出包名），这正是刷入 v0.3.7 后 root `open` 要消除的路径。allowlist 内的系统弹窗（如 `com.android.shell` 的错误报告框）AI 能识别并点掉。
   · 验收：`daemon/test/automation.test.ts` 14/14；`tools/verify_v36_automation.sh` 真机 PASS（新增 3 项：通知栏可读、搜索框可编辑、set_text 写后读回；agent 信号等待 5 项同样通过）。
 
+- [x] **phone_skill：把操控流程沉淀成可复用配方（2026-09-17，真机 PASS）**：目标里"AI 自己制定操控任务、驾轻就熟"缺的不是单个动作，而是**复用**——之前每轮都要重新推导"先等哪个界面、再点哪个控件"。新增 MCP `phone_skill`（save / list / run / delete）：主机侧 `adhd-data/skills.json` 保存命名配方，`run` 直接复用 `phone_task` 的执行器（同样的重试、`stopOnError`、agent 信号等待、allowlist 门槛）。安全上与 `phone_task` 同级、不多一分：步骤类型只允许 observe/find/wait/act/app/device（≤30 步）、不能嵌套 skills、无 shell；文件被篡改或损坏时丢弃条目而不是执行（单测覆盖）。
+  · 真机验收：保存 `v36-crypto-tab`（等待沙盒前台 + 点"加解密"）→ list 可见 → run `ok=true` 两步全过 → 非法步骤 `shell` 被拒（`unsupported type 'shell'`）→ delete 生效；`daemon/test/automation.test.ts` 17/17。
+
 - [x] **未发布口径：删除 IDH 兼容/兜底（2026-09-16）**：只保留 `libadh_agent.so` 单交付名、`adh_agent_start` 单导出入口。Zygisk 只从 module dir 打开新文件名，不再尝试旧文件名、绝对路径或旧 dlsym；Xposed 只走 `System.loadLibrary("adh_agent")`，删除了 `/proc/self/maps` 二次路径扫描；agent 内部 `idh_*` helper 全部改为 `adh_*`，reporter 只认 `adh.reporter.class`；daemon/tools 不再读取 `IDH_*`，数据目录固定 `adhd-data/`，也不再迁移 `libidhdetect.so`。历史段落里的 IDH 事件/日志证据仅用于说明当时现象，当前代码不包含这些兼容路径。Zygisk + app `System.loadLibrary` 的混态由 native 首载 copy owner guard（`dl_iterate_phdr` link-map order）收敛为单会话；Zygisk 早于 app 设置 `adh.reporter.class` 时，winner copy 的 reporter watcher 会迟绑定，v24 Java rich capture 仍 PASS。两轮真机 `verify_all.sh` 均 51/51。
 - [x] **v1 范围收敛（2026-09-16）**：发布面只保留 `docs/FEATURE_STATUS.md §2` 的 51 项已验收能力。未验收、半成品或没有真实触发源的能力，已从 agent / daemon / Web UI / MCP / tools / 发布文档中删除；历史细节只留在 `docs/archive/`，不再作为产品入口或发布说明。`tools/verify_all.sh` 51/51。
 - [x] **Web UI 会话模块修复：会话无限堆积 + 选择器"白屏"（2026-09-16）**：两个独立缺陷 ——

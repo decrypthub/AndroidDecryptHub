@@ -229,6 +229,32 @@ try {
     }
   }
 
+  // ---- reusable recipes: save -> list -> run -> delete -----------------------------------
+  const recipe = parseTree(await callTool('phone_skill', {
+    action: 'save',
+    name: 'v36-crypto-tab',
+    description: 'acceptance recipe',
+    overwrite: true,
+    steps: [
+      { type: 'wait', args: { activePackage: 'com.adh.sandbox', timeoutMs: 4000, intervalMs: 200, maxNodes: 120 } },
+      { type: 'act', args: { action: 'tap', contentDescription: '加解密', maxNodes: 120 } },
+    ],
+  }));
+  chk('phone_skill saves a validated recipe', recipe.saved === true && recipe.steps === 2, `steps=${recipe.steps}`);
+  const recipes = parseTree(await callTool('phone_skill', { action: 'list' }));
+  chk('phone_skill lists the saved recipe', (recipes.skills ?? []).some((skill) => skill.name === 'v36-crypto-tab'));
+  const replay = parseTree(await callTool('phone_skill', { action: 'run', name: 'v36-crypto-tab' }));
+  chk('phone_skill replays the recipe through the task runner', replay.ok === true && replay.steps?.length === 2, `ok=${replay.ok} steps=${replay.steps?.length ?? 0}`);
+  let skillRejected = '';
+  try {
+    await callTool('phone_skill', { action: 'save', name: 'v36-bad', overwrite: true, steps: [{ type: 'shell', args: { cmd: 'id' } }] });
+  } catch (error) {
+    skillRejected = error.message || String(error);
+  }
+  chk('phone_skill rejects step types outside the primitive set', /unsupported type/.test(skillRejected), skillRejected);
+  const removedRecipe = parseTree(await callTool('phone_skill', { action: 'delete', name: 'v36-crypto-tab' }));
+  chk('phone_skill deletes the recipe', removedRecipe.deleted === true);
+
   const visual = await callTool('phone_observe', { mode: 'visual', maxNodes: 20 });
   const image = visual.content?.find((item) => item.type === 'image');
   chk('visual fallback returns a JPEG image', image?.mimeType === 'image/jpeg' && (image?.data?.length ?? 0) > 1000, `bytes=${image?.data?.length ?? 0}`);

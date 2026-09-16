@@ -5,6 +5,10 @@ import { AutomationHub } from '../src/automation.ts';
 import { mergeSettings, settings } from '../src/state.ts';
 import { agentWaitSightings, findAgentWaitMatch, hasAgentWaitFilters } from '../src/agent_events.ts';
 import { implicitSelectorFor, selectorFrom } from '../src/phone_selectors.ts';
+import { PhoneSkillStore, validateSkillName, validateSkillSteps } from '../src/phone_skills.ts';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 function connect(port: number): Promise<net.Socket> {
   return new Promise((resolve, reject) => {
@@ -213,4 +217,44 @@ test('other actions keep text as a selector and false stays a real filter', () =
   assert.deepEqual(implicitSelectorFor(undefined, { contentDescription: '搜索' }), { contentDescription: '搜索' });
   assert.deepEqual(selectorFrom({ text: 'a', clickable: false }), { text: 'a', clickable: false });
   assert.deepEqual(selectorFrom({ text: null, clickable: undefined }), {});
+});
+
+test('skill store validates, persists, lists and deletes recipes', () => {
+  const file = join(mkdtempSync(join(tmpdir(), 'adh-skills-')), 'skills.json');
+  const store = new PhoneSkillStore(file);
+  assert.deepEqual(store.list(), []);
+
+  store.save('open-crypto-tab', 'sandbox crypto tab', [{ type: 'act', args: { action: 'tap', text: '加解密' } }], false);
+  assert.throws(() => store.save('open-crypto-tab', undefined, [{ type: 'act' }], false), /skill_exists/);
+
+  const replaced = store.save('open-crypto-tab', 'v2', [{ type: 'wait', args: { activePackage: 'com.adh.sandbox' } }], true);
+  assert.equal(replaced.steps.length, 1);
+  assert.equal(store.get('open-crypto-tab')?.description, 'v2');
+  store.noteRun('open-crypto-tab');
+
+  const reloaded = new PhoneSkillStore(file);           // survives a daemon restart
+  const listed = reloaded.list();
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0].name, 'open-crypto-tab');
+  assert.equal(listed[0].runs, 1);
+  assert.equal(reloaded.remove('open-crypto-tab'), true);
+  assert.deepEqual(new PhoneSkillStore(file).list(), []);
+});
+
+test('skills reject unsupported steps, bad args and bad names', () => {
+  assert.throws(() => validateSkillSteps([]), /non-empty/);
+  assert.throws(() => validateSkillSteps([{ type: 'shell', args: { cmd: 'id' } }]), /unsupported type/);
+  assert.throws(() => validateSkillSteps([{ type: 'act', args: 'nope' }]), /args must be an object/);
+  assert.throws(() => validateSkillSteps(Array.from({ length: 31 }, () => ({ type: 'observe' }))), /at most 30/);
+  assert.throws(() => validateSkillName('../etc/passwd'), /invalid_skill_name/);
+  assert.throws(() => validateSkillName(''), /invalid_skill_name/);
+  assert.equal(validateSkillName('open-crypto-tab'), 'open-crypto-tab');
+});
+
+test('a tampered skill file is dropped on load instead of executed', () => {
+  const file = join(mkdtempSync(join(tmpdir(), 'adh-skills-')), 'skills.json');
+  writeFileSync(file, JSON.stringify({ version: 1, skills: [{ name: 'evil', steps: [{ type: 'shell', args: { cmd: 'id' } }] }] }));
+  assert.deepEqual(new PhoneSkillStore(file).list(), []);
+  writeFileSync(file, 'not json at all');
+  assert.deepEqual(new PhoneSkillStore(file).list(), []);
 });

@@ -16,7 +16,8 @@ import { backendMatrix, classifySession } from './backends.ts';
 import { automation } from './automation.ts';
 import { agentWaitSightings, findAgentWaitMatch, hasAgentWaitFilters } from './agent_events.ts';
 import { implicitSelectorFor, selectorFrom } from './phone_selectors.ts';
-import { sessions, dumps, captures, captureTimers, events, agentCursor, SANDBOX, settings, CAPTURES, cryptoIdentify } from './state.ts';
+import { PhoneSkillStore } from './phone_skills.ts';
+import { sessions, dumps, captures, captureTimers, events, agentCursor, DATA_DIR, SANDBOX, settings, CAPTURES, cryptoIdentify } from './state.ts';
 import type { DumpMeta } from './state.ts';
 
 const S = { type: 'string' }, N = { type: 'number' };
@@ -87,6 +88,7 @@ MCP_TOOLS.push(
   { name: 'phone_act', description: 'Act on the active phone screen. Prefer a selector or snapshotId+ref from phone_observe; use normalized coordinates only as the visual fallback. Supports tap, long_press, swipe, scroll, set_text and global back/home/recents/notifications/quick_settings/power/lock/screenshot. For set_text the text argument is the payload to write, not a filter (target the field with ref, resourceId, editable or selector); the value can be read back with phone_find.', inputSchema: { type: 'object', properties: { ...SEL, snapshotId: S, action: { type: 'string', enum: ['tap', 'long_press', 'swipe', 'scroll', 'set_text', 'global'] }, ref: S, x: N, y: N, x2: N, y2: N, coordinateSpace: { type: 'string', enum: ['normalized', 'pixel'] }, text: S, key: { type: 'string', enum: ['back', 'home', 'recents', 'notifications', 'quick_settings', 'power', 'lock', 'screenshot'] }, direction: { type: 'string', enum: ['forward', 'backward'] }, durationMs: N, observeAfter: { type: 'boolean' }, package: S }, required: ['action'] }, raw: true, handler: async (a) => actPhone(a) },
   { name: 'phone_app', description: 'Open, stop or restart an allowlisted app by package name. Open uses the root Device Daemon when protocol v6+ is available, with a compatibility fallback for older daemons; stop/restart delegate to the same authenticated daemon.', inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['open', 'stop', 'restart'] }, package: S }, required: ['action', 'package'] }, handler: async (a) => appPhone(a) },
   { name: 'phone_device', description: 'Read or control device power state: status, wake, unlock a non-secure keyguard, or lock the screen. Secure credentials are never bypassed.', inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['status', 'wake', 'unlock', 'lock'] } }, required: ['action'] }, handler: async (a) => devicePhone(a) },
+  { name: 'phone_skill', description: 'Save, list, run or delete named phone recipes (skills). A skill is a validated, bounded list of phone_task steps kept on the host, so a flow the AI worked out once replays in one call. Skills run through the same primitives, allowlist and retry semantics as phone_task; they cannot nest skills or reach a shell.', inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['list', 'save', 'run', 'delete'] }, name: S, description: S, overwrite: { type: 'boolean' }, stopOnError: { type: 'boolean' }, steps: { type: 'array', minItems: 1, maxItems: 30, items: { type: 'object' } } }, required: ['action'] }, handler: async (a) => skillPhone(a) },
   { name: 'phone_task', description: 'Run a bounded sequence of phone primitives in one MCP call. Steps may observe, find, wait (UI state or agent signal), act, control an app, or control device power; each step supports retries and structured failure output.', inputSchema: { type: 'object', properties: { stopOnError: { type: 'boolean' }, steps: { type: 'array', minItems: 1, maxItems: 30, items: { type: 'object', properties: { id: S, type: { type: 'string', enum: ['observe', 'find', 'wait', 'act', 'app', 'device'] }, args: { type: 'object' }, retries: N, retryDelayMs: N }, required: ['type'] } } }, required: ['steps'] }, handler: async (a) => taskPhone(a) },
 );
 
@@ -224,6 +226,31 @@ async function waitPhone(args: any) {
     }
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
+}
+
+const phoneSkills = new PhoneSkillStore(join(DATA_DIR, 'skills.json'));
+
+async function skillPhone(args: any) {
+  const action = String(args.action ?? '');
+  if (action === 'list') return { skills: phoneSkills.list() };
+  if (action === 'delete') {
+    const name = String(args.name ?? '');
+    if (!name) throw new Error('phone_skill delete requires a name');
+    return { name, deleted: phoneSkills.remove(name) };
+  }
+  if (action === 'save') {
+    const skill = phoneSkills.save(args.name, args.description, args.steps, args.overwrite === true);
+    return { name: skill.name, description: skill.description ?? '', steps: skill.steps.length, saved: true };
+  }
+  if (action === 'run') {
+    const name = String(args.name ?? '');
+    const skill = phoneSkills.get(name);
+    if (!skill) throw new Error(`skill_not_found: '${name}' is not saved on this host`);
+    const result = await taskPhone({ ...args, steps: skill.steps });
+    phoneSkills.noteRun(name);
+    return { name, ...result };
+  }
+  throw new Error('phone_skill requires action: list | save | run | delete');
 }
 
 async function taskPhone(args: any) {
