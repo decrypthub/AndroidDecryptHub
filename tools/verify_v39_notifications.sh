@@ -59,8 +59,8 @@ MARKER="ADH_NOTIFY_v1_$(date +%s)"
 adb -s "$SERIAL" shell cmd notification post -S bigtext -t "ADH_ACCEPTANCE" "adhtest" "$MARKER" >/dev/null 2>&1
 sleep 2
 
-OUT="$(node - "$BASE" "$MARKER" <<'EOF'
-const [base, marker] = process.argv.slice(2);
+OUT="$(node - "$BASE" "$MARKER" "$SERIAL" <<'EOF'
+const [base, marker, serial] = process.argv.slice(2);
 const checks = [];
 const chk = (label, ok, detail = '') => {
   checks.push([label, !!ok]);
@@ -90,6 +90,15 @@ try {
     const again = await tool('phone_notifications', { limit: 10, sinceMs: hit.ts + 1 });
     chk('sinceMs lets the AI poll incrementally', (again.notifications ?? []).every((entry) => entry.ts >= hit.ts + 1), `count=${again.count}`);
   }
+
+  // The loop an AI actually needs: fire "send code", then block until the notification lands.
+  const { execFileSync } = await import('node:child_process');
+  const waitMarker = 'ADH_OTP_' + Date.now().toString().slice(-6);
+  const waiting = tool('phone_wait', { notificationContains: waitMarker, timeoutMs: 15_000, intervalMs: 400 });
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  execFileSync('adb', ['-s', serial, 'shell', 'cmd', 'notification', 'post', '-S', 'bigtext', '-t', 'ADH_OTP', 'adhotp', waitMarker], { stdio: 'ignore' });
+  const waited = await waiting;
+  chk('phone_wait blocks on an incoming notification and returns it', waited.matched === true && waited.kind === 'notification' && String(waited.item?.text ?? '').includes(waitMarker), `elapsed=${waited.elapsedMs} text=${waited.item?.text}`);
 } catch (error) {
   chk('notification acceptance path completed', false, error.message || String(error));
 } finally {

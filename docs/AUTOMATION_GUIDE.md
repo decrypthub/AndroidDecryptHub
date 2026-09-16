@@ -89,6 +89,14 @@ Android 15 不再把通知正文放进无障碍事件，所以这一项走独立
 
 设备侧缓冲只在内存、最多 30 条、不落盘；未授权时工具报 `notification_access_not_granted`，开关关闭时报 `notifications_disabled`。通知栏本身仍可用 `phone_act {action:"global", key:"notifications"}` + `phone_observe` 读取（会扰动屏幕）。
 
+**等通知（推荐用法）**：把"点发送"和"等验证码"串起来，不用轮询：
+
+```json
+{ "name": "phone_wait", "arguments": { "notificationContains": "验证码", "timeoutMs": 20000 } }
+```
+
+命中返回 `{matched:true, kind:"notification", item:{package,title,text,ts,key}}`；也可以先读取 `phone_notifications` 拿到 `ts`，再用 `sinceMs` 增量轮询。
+
 ## 6. 安全边界（默认值，别改错）
 
 - 自动化**默认关闭**；关闭时 `phone_*` 工具根本不暴露。

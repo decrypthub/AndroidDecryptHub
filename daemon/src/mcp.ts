@@ -86,10 +86,10 @@ const SEL = {
 };
 
 MCP_TOOLS.push(
-  { name: 'automation_status', description: 'Read-only phone automation status: user toggle, bridge connection, connected device capabilities and package allowlist. This tool never enables automation.', inputSchema: { type: 'object', properties: {} }, handler: async () => ({ enabled: settings.automation.enabled, packages: settings.automation.packages, bridge: automation.status() }) },
+  { name: 'automation_status', description: 'Read-only phone automation status: user toggle, privacy switches, package allowlist, bridge/device state (foreground package, snapshots, notification grant/ring, watchdog counters). This tool never enables automation.', inputSchema: { type: 'object', properties: {} }, handler: async () => ({ enabled: settings.automation.enabled, packages: settings.automation.packages, settings: { screenshot: settings.automation.screenshot, notifications: settings.automation.notifications, maxNodes: settings.automation.maxNodes }, bridge: automation.status(), device: await automationDeviceStatus() }) },
   { name: 'phone_observe', description: 'Observe the active phone screen. Prefer the AccessibilityService node tree; when it is empty or non-semantic, fall back to a screenshot that the AI can inspect. Returns snapshotId plus nodes or an image. mode=text renders the same tree as terse plain-text lines (refs stay usable) to save context, and includeScreenshot:true adds a JPEG alongside that text.', inputSchema: { type: 'object', properties: { mode: { type: 'string', enum: ['auto', 'tree', 'visual', 'text'] }, includeScreenshot: { type: 'boolean' }, maxNodes: N, maxDepth: N, interactiveOnly: { type: 'boolean' }, package: S } }, raw: true, handler: async (a) => observePhone(a) },
   { name: 'phone_find', description: 'Find compact, actionable nodes without transferring the whole tree. Supports text/resourceId/contentDescription and interaction flags; returns refs valid for snapshotId.', inputSchema: { type: 'object', properties: { ...SEL, limit: N, maxNodes: N, interactiveOnly: { type: 'boolean' }, package: S } }, handler: async (a) => findPhone(a) },
-  { name: 'phone_wait', description: 'Wait until a screen state / selector matches, until the screen settles (stable:true, stableMs holds still), or until the injected agent reports a signal. Agent filters: agentEvent (exact event type), agentEventContains (substring of the event JSON), captureCategory (crypto/net/file/system), captureContains (substring of the decoded capture text + metadata). With scroll:true the wait scrolls a container until the target shows up — scrollMode=gesture swipes instead of sending ACTION_SCROLL, which is what pagers and custom lists (e.g. launcher pages) require, and axis picks vertical or horizontal. Same-kind filters are ANDed; the two kinds race and whichever fires first wins. Race-free pattern: take the cursor from the preceding observe/act response and pass it as afterCaptureId / afterEventSeq; lookbackMs is the coarse alternative (bounded 0..300000). On an agent-signal timeout the reply carries saw (recent captures/events from the window plus totals) and the live cursor, so the filter can be retargeted.', inputSchema: { type: 'object', properties: { ...SEL, activePackage: S, activityContains: S, gone: { type: 'boolean' }, agentEvent: S, agentEventContains: S, captureCategory: { type: 'string', enum: ['crypto', 'net', 'file', 'system'] }, captureContains: S, afterEventSeq: N, afterCaptureId: N, lookbackMs: N, timeoutMs: N, intervalMs: N, scroll: { type: 'boolean' }, scrollMode: { type: 'string', enum: ['action', 'gesture'] }, stable: { type: 'boolean' }, stableMs: N, axis: { type: 'string', enum: ['vertical', 'horizontal'] }, direction: { type: 'string', enum: ['forward', 'backward'] }, maxScrolls: N, maxNodes: N, interactiveOnly: { type: 'boolean' }, package: S } }, handler: async (a) => waitPhone(a) },
+  { name: 'phone_wait', description: 'Wait until a screen state / selector matches, until the screen settles (stable:true, stableMs holds still), or until the injected agent reports a signal. Agent filters: agentEvent (exact event type), agentEventContains (substring of the event JSON), captureCategory (crypto/net/file/system), captureContains (substring of the decoded capture text + metadata). Notification filters: notificationContains (substring of title/text, needs the opt-in notification listener) and notificationFrom (package). With scroll:true the wait scrolls a container until the target shows up — scrollMode=gesture swipes instead of sending ACTION_SCROLL, which is what pagers and custom lists (e.g. launcher pages) require, and axis picks vertical or horizontal. Same-kind filters are ANDed; the two kinds race and whichever fires first wins. Race-free pattern: take the cursor from the preceding observe/act response and pass it as afterCaptureId / afterEventSeq; lookbackMs is the coarse alternative (bounded 0..300000). On an agent-signal timeout the reply carries saw (recent captures/events from the window plus totals) and the live cursor, so the filter can be retargeted.', inputSchema: { type: 'object', properties: { ...SEL, activePackage: S, activityContains: S, gone: { type: 'boolean' }, agentEvent: S, agentEventContains: S, captureCategory: { type: 'string', enum: ['crypto', 'net', 'file', 'system'] }, captureContains: S, notificationContains: S, notificationFrom: S, afterEventSeq: N, afterCaptureId: N, lookbackMs: N, timeoutMs: N, intervalMs: N, scroll: { type: 'boolean' }, scrollMode: { type: 'string', enum: ['action', 'gesture'] }, stable: { type: 'boolean' }, stableMs: N, axis: { type: 'string', enum: ['vertical', 'horizontal'] }, direction: { type: 'string', enum: ['forward', 'backward'] }, maxScrolls: N, maxNodes: N, interactiveOnly: { type: 'boolean' }, package: S } }, handler: async (a) => waitPhone(a) },
   { name: 'phone_act', description: 'Act on the active phone screen. Prefer a selector or snapshotId+ref from phone_observe; use normalized coordinates only as the visual fallback. Supports tap, long_press, swipe, scroll, set_text and global back/home/recents/notifications/quick_settings/power/lock/screenshot. For set_text the text argument is the payload to write, not a filter (target the field with ref, resourceId, editable or selector); the value can be read back with phone_find. set_text takes submit:true to press the field’s keyboard action button (search / send / done) afterwards, and reports submitted:true when the field accepted it. A failed action answers with the compact current screen so the target can be re-derived without another observe.', inputSchema: { type: 'object', properties: { ...SEL, snapshotId: S, action: { type: 'string', enum: ['tap', 'long_press', 'swipe', 'scroll', 'set_text', 'global'] }, ref: S, x: N, y: N, x2: N, y2: N, coordinateSpace: { type: 'string', enum: ['normalized', 'pixel'] }, text: S, submit: { type: 'boolean' }, key: { type: 'string', enum: ['back', 'home', 'recents', 'notifications', 'quick_settings', 'power', 'lock', 'screenshot'] }, direction: { type: 'string', enum: ['forward', 'backward'] }, durationMs: N, submit: { type: 'boolean' }, observeAfter: { type: 'boolean' }, package: S }, required: ['action'] }, raw: true, handler: async (a) => actPhone(a) },
   { name: 'phone_app', description: 'Open, stop or restart an allowlisted app by package name. open verifies that the app really reached the foreground and reports verified/foreground/warning when an OEM dialog swallowed the launch (with a hint on how to unblock). Open uses the root Device Daemon when protocol v6+ is available, with a compatibility fallback for older daemons; stop/restart delegate to the same authenticated daemon.', inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['open', 'stop', 'restart'] }, package: S }, required: ['action', 'package'] }, handler: async (a) => appPhone(a) },
   { name: 'phone_notifications', description: 'Recent notifications the accessibility connection saw (newest first: package, text lines, time). Needs the operator to enable automation.notifications — reading notification text is a privacy step beyond UI control and stays opt-in. Keep the returned ts to poll incrementally with sinceMs.', inputSchema: { type: 'object', properties: { limit: N, sinceMs: N } }, handler: async (a) => notificationsPhone(a) },
@@ -146,6 +146,31 @@ async function findPhone(args: any) {
   };
 }
 
+// Poll the opt-in notification ring for a title/text/package match. Bounded by limit so a busy
+// phone cannot flood the model; the caller sees the matched entry (ts/title/text/package) and can
+// extract whatever it needs, e.g. an OTP.
+async function findNotificationMatch(args: any, sinceMs: number, _timeoutMs: number): Promise<{ item: any } | null> {
+  const result = await automation.cmd('notifications', {
+    limit: Math.max(1, Math.min(30, Number(args.notificationLimit ?? 10))),
+    sinceMs,
+  }, 15_000);
+  if (result?.granted === false) {
+    throw new Error('notification_access_not_granted: enable "notification access" for ADH Manager in system settings (设置 → 通知 → 通知使用权), then retry');
+  }
+  const needle = args.notificationContains != null ? String(args.notificationContains) : null;
+  const from = args.notificationFrom != null ? String(args.notificationFrom) : null;
+  for (const entry of result?.notifications ?? []) {
+    if (from && String(entry.package ?? '') !== from) continue;
+    if (needle) {
+      const haystack = [entry.title, entry.text, ...(Array.isArray(entry.lines) ? entry.lines : [])].map((value: unknown) => String(value ?? '')).join('\n');
+      if (!haystack.includes(needle)) continue;
+    }
+    const { title, text, package: pkg, ts, key } = entry;
+    return { item: { package: pkg, title, text, ts, key } };
+  }
+  return null;
+}
+
 async function waitPhone(args: any) {
   assertAutomationReady();
   const selector = selectorFrom(args);
@@ -153,8 +178,11 @@ async function waitPhone(args: any) {
   const wantsStable = args.stable === true;
   const needsUi = Object.keys(selector).length > 0 || hasState || wantsStable;
   const wantsAgent = hasAgentWaitFilters(args);
-  if (!needsUi && !wantsAgent)
-    throw new Error('phone_wait requires a selector, activePackage, activityContains or an agent filter (agentEvent/agentEventContains/captureCategory/captureContains)');
+  const wantsNotification = args.notificationContains != null || args.notificationFrom != null;
+  if (!needsUi && !wantsAgent && !wantsNotification)
+    throw new Error('phone_wait requires a selector, activePackage, activityContains, an agent filter (agentEvent/agentEventContains/captureCategory/captureContains) or a notification filter (notificationContains/notificationFrom)');
+  if (wantsNotification && settings.automation.notifications !== true)
+    throw new Error('notifications_disabled: enable automation.notifications in ADH settings to wait on notifications');
   const timeoutMs = Math.max(500, Math.min(60_000, Number(args.timeoutMs ?? 8_000)));
   const intervalMs = Math.max(100, Math.min(2_000, Number(args.intervalMs ?? 350)));
   const maxScrolls = Math.max(0, Math.min(50, Number(args.maxScrolls ?? 10)));
@@ -201,6 +229,21 @@ async function waitPhone(args: any) {
     }
   }
   for (;;) {
+    // Notifications first: "tap send, then wait for the SMS/OTP to arrive" is the whole point,
+    // and it does not depend on the node tree either.
+    if (wantsNotification) {
+      const hit = await findNotificationMatch(args, startedAt - lookbackMs, timeoutMs);
+      if (hit) {
+        return {
+          matched: true,
+          kind: 'notification',
+          item: hit.item,
+          elapsedMs: Date.now() - startedAt,
+          activePackage: last?.activePackage,
+          snapshotId: last?.snapshotId,
+        };
+      }
+    }
     // Agent signals need no node tree, so a pure signal wait never depends on the
     // AccessibilityService, and a mixed wait takes whichever condition fires first.
     if (wantsAgent) {
@@ -378,6 +421,16 @@ function contentToValue(result: any): any {
     return JSON.parse(text);
   } catch {
     return { text };
+  }
+}
+
+// One call should orient an AI: ask the device for its own status (foreground package, snapshot
+// count, notification grant/ring, watchdog counters) but never fail the tool when it is offline.
+async function automationDeviceStatus(): Promise<any> {
+  try {
+    return await automation.cmd('status', {}, 10_000);
+  } catch (error) {
+    return { error: (error as Error)?.message ?? String(error) };
   }
 }
 

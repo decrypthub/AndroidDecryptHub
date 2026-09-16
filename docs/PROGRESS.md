@@ -78,6 +78,10 @@
   · 关键工程细节：光写 `settings put secure enabled_notification_listeners` **不会**让系统绑定（dumpsys 的 Allowed listeners 里始终没有我们），必须走 `cmd notification allow_listener <component>`；验收脚本因此用它来"借"授权，并在结束时 `disallow_listener` + 还原原值，**手机最终状态与运行前一致**（实测跑完 `enabled_notification_listeners` 回到 `[]`）。
   · 真机：`tools/verify_v39_notifications.sh` PASS —— ①开关关闭时工具被拒（`notifications_disabled`）②借用授权后 `granted=true connected=true` ③`cmd notification post` 发的通知被读到（`pkg=com.android.shell title=ADH_ACCEPTANCE`）④`sinceMs` 增量轮询为空（符合预期）⑤退出时释放授权。全量 `verify_all.sh` **55/55**。
 
+- [x] **通知接进等待原语 + automation_status 全貌（2026-09-17，真机 PASS）**：光"能读通知"还不够，AI 真正需要的是"点发送 → 等验证码到达 → 提取填入"的闭环。`phone_wait` 现在支持 `notificationContains`（标题/正文/多行文本子串）与 `notificationFrom`（包名），命中即返回 `kind:"notification"` + `{package,title,text,ts,key}`；同样受 `automation.notifications`（默认 false）与系统授权两道门槛，未授权时报 `notification_access_not_granted`。纯通知等待不依赖控件树，可与选择器/agent 信号条件竞速。
+  · `automation_status` 也补齐了：一次调用返回开关、隐私开关（screenshot/notifications/maxNodes）、包名 allowlist、桥接状态与**设备实时状态**（前台包、快照数、通知授权/缓冲/watchdog 计数），设备离线时该字段降级为 `{error}` 而不是让工具整体失败。
+  · 真机：`verify_v39_notifications.sh` 新增"先起等待 → 1.5s 后发通知"检查，**1666ms 命中**且 item 文本即为验证码标记；配合原有的"默认被开关挡住/授权后读到刚发布通知/`sinceMs` 增量/结束释放授权"。全量 `verify_all.sh` **55/55**。
+
 - [x] **未发布口径：删除 IDH 兼容/兜底（2026-09-16）**：只保留 `libadh_agent.so` 单交付名、`adh_agent_start` 单导出入口。Zygisk 只从 module dir 打开新文件名，不再尝试旧文件名、绝对路径或旧 dlsym；Xposed 只走 `System.loadLibrary("adh_agent")`，删除了 `/proc/self/maps` 二次路径扫描；agent 内部 `idh_*` helper 全部改为 `adh_*`，reporter 只认 `adh.reporter.class`；daemon/tools 不再读取 `IDH_*`，数据目录固定 `adhd-data/`，也不再迁移 `libidhdetect.so`。历史段落里的 IDH 事件/日志证据仅用于说明当时现象，当前代码不包含这些兼容路径。Zygisk + app `System.loadLibrary` 的混态由 native 首载 copy owner guard（`dl_iterate_phdr` link-map order）收敛为单会话；Zygisk 早于 app 设置 `adh.reporter.class` 时，winner copy 的 reporter watcher 会迟绑定，v24 Java rich capture 仍 PASS。两轮真机 `verify_all.sh` 均 51/51。
 - [x] **v1 范围收敛（2026-09-16）**：发布面只保留 `docs/FEATURE_STATUS.md §2` 的 51 项已验收能力。未验收、半成品或没有真实触发源的能力，已从 agent / daemon / Web UI / MCP / tools / 发布文档中删除；历史细节只留在 `docs/archive/`，不再作为产品入口或发布说明。`tools/verify_all.sh` 51/51。
 - [x] **Web UI 会话模块修复：会话无限堆积 + 选择器"白屏"（2026-09-16）**：两个独立缺陷 ——
