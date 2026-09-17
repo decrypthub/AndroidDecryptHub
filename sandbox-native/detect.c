@@ -298,6 +298,23 @@ JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_jniCallTypesProbe(JNIEnv *
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return 0xAD5000 | bits; }
     return (jint)(0xAD5000 | bits);
 }
+// v4.28 fixture: allocate JniCtorTarget(21) via NewObjectA and read totalValue(). A working
+// constructor hook must still let the object exist and keep total = 42 (0xAD6001).
+JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_jniCtorProbe(JNIEnv *env, jclass clazz) {
+    jclass target = (*env)->FindClass(env, "com/adh/sandbox/JniCtorTarget");
+    if (!target) { if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); return 0xAD6000; }
+    jmethodID ctor = (*env)->GetMethodID(env, target, "<init>", "(I)V");
+    jvalue seed;
+    seed.i = 21;
+    jobject obj = ctor ? (*env)->NewObjectA(env, target, ctor, &seed) : NULL;
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return 0xAD6000; }
+    if (!obj) return 0xAD6000;
+    jmethodID total = (*env)->GetMethodID(env, target, "totalValue", "()I");
+    jint value = total ? (*env)->CallIntMethodA(env, obj, total, NULL) : -1;
+    (*env)->DeleteLocalRef(env, obj);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return 0xAD6000; }
+    return (jint)(0xAD6000 | (value == 42 ? 1 : 0));
+}
 JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_run(JNIEnv *env, jclass clazz) {
     (void)env; (void)clazz;
     int flags = 0;

@@ -50,6 +50,12 @@
       · 安全/输入：inline 绝对地址必须 `confirm:true`，agent 校验目标位于 executable mapping；active 发布顺序移到所有字段之后；重复 target fail-loud；Java bridge 增加 `ready` 安装窗口自旋、ADH 自有 backup global ref、事件字符串 512 字符上限。
       · 真机 `aa165071` PASS：native 与 Java 同一目标各连续 24 次 install/unhook 后行为恢复、agent 存活（`tools/verify_v56_hook_stress.sh`）；v4.3/v4.6/v4.12–v4.15 全部复跑 PASS。
       · 已知边界：软卸载会在目标里保留 stub/LSPlant patch（去特征场景需要后续 hard-unhook/quiesce 方案）；JNI_OnLoad 仍未覆盖；Java/native 的唯一目标数仍受 16 槽上限约束。
+- [x] **v4.28 java_hook 完整性：构造器 hook + 继承成员解析（2026-09-18，真机 PASS）**：把 Xposed 类框架的两块基本能力补齐。
+      · **构造器**：`java_hook {method:"<init>", params:"int"}` —— 桥接层新增 `isConstructor`：回调收到的 `args[0]` 是"正在构造的对象"，原构造器通过 LSPlant 给的 backup 在该 receiver 上执行，返回值必须仍是这个对象（`new` 的结果），否则目标会拿到 null。真机证据：`lastArg="21"`（实参可见）、`lastReturn="…JniCtorTarget@…"`（对象正常）、`NewObjectA(21)` 之后 `totalValue()==42` 不变。构造器**不允许** `skipOriginal`/`returnValue`（装不上就明确报错，不装作支持）。
+      · **继承成员**：`java_hook{className:"JniDerived", method:"baseValue"}` 现在会沿 `getSuperclass()` 链解析（最多 10 层），签名里报**声明类**（`com.adh.sandbox.JniBase.baseValue()`），因为 LSPlant hook 的是 ArtMethod，作用域本来就是声明类 + 其子类。
+      · 过程中修掉一个自己引入的错：重写成员扫描时漏了"方法名比对"，只剩参数类型匹配 —— 结果 hook `JniDerived.baseValue` 实际装到了同参数的 `derivedValue` 上（`hits=0` 暴露）。现在名字 + 参数类型双条件匹配；构造器路径按参数类型匹配（构造器无名字）。
+      · 真机 `aa165071` PASS（`tools/verify_v65_java_ctor_inherited.sh`）；同批 v42/v43/v44/v45/v52/v53/v58/v64 共 9 项全 PASS（同一桥接层，参数改写/返回值覆盖未受影响）。
+      · 已知边界：接口 default 方法未走接口链解析；构造器 hook 不支持"跳过原构造器"（语言语义上也没有意义）。
 - [x] **v4.27 Call* 全族覆盖 + 通配安装 + 抑制语义修复（2026-09-18，真机 PASS）**：槽位从 40 扩到 **76**（13 固定 + 21 族 × 3 形态）——补齐 `CallBoolean/Byte/Char/Short/Int/Long/Float/Double`（实例）+ `CallStatic*` 同名族（含 static Boolean/Long）+ `NewObject`，每族 varargs / V / A 全装；新增**通配安装**：`function:"*"`/`"all"` 或前缀式（如 `"CallIntMethod*"`、`"Call*"`）一次装/卸多个槽位，回包给 `applied`/`failed`，不会静默跳过。
       · **修掉一个会"隐藏目标行为"的严重缺陷**：原先的 `__thread` reentry 标志把"目标自己的那次调用"也罩住了 —— 于是目标在 hooked 调用内部再发起的 JNI 调用（Java→JNI 回调、反射调用链）全部被当作"我们自己的递归"静默吞掉。全量安装时 `java_call` 本身就经由 `CallStaticIntMethodV` 进入，导致探针里所有调用都不再被记录（hits=0、无事件）。现在标志改名为 `g_env_hook_in_ours` 且**只包住 ADH 自己的 instrumentation JNI 调用**（成员名反查、类名、数组长度），目标调用一律在标志清零状态下执行；varargs 包装改为转发到**保存的 V 原函数**而不是实时表，因此不再需要靠标志去重。
       · 顺带给状态加了 `last`（每槽位最近一次事件文本，有界 192B 快照）：目标流量大时捕获环会被冲掉（实测守护进程 1000 条环里 990 条是 app 自己的 `FindClass`/`GetStaticMethodID`），ring-based 断言会变成竞态；`hits` + `last` 则不受影响。verify 脚本因此改成"命中数 + last 标签"双证据。

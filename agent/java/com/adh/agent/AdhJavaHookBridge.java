@@ -15,6 +15,10 @@ import java.util.Arrays;
 public final class AdhJavaHookBridge {
     public Method backup;
     public boolean isStatic;
+    // Constructor hooks: args[0] is the object being constructed, the original runs on that
+    // same receiver, and the invocation result must stay thisObject (the ctor "returns" the
+    // new instance). skipOriginal/overrideReturn are rejected at install time for these.
+    public boolean isConstructor;
     public int hookId;
     public int hits;
     public String lastArg;
@@ -64,6 +68,24 @@ public final class AdhJavaHookBridge {
                 lastArg = rewritten == null ? "null" : String.valueOf(rewritten);
             } catch (Throwable t) {
                 lastError = "argument rewrite failed: " + t;
+                nativeReport(hookId, target, lastArg, "", lastError);
+                throw t;
+            }
+        }
+        if (isConstructor) {
+            try {
+                backup.invoke(receiver, params);
+                lastReturn = bounded(receiver);
+                lastError = "";
+                nativeReport(hookId, target, lastArg, lastReturn, lastError);
+                return receiver;
+            } catch (InvocationTargetException e) {
+                Throwable cause = e.getCause() != null ? e.getCause() : e;
+                lastError = String.valueOf(cause);
+                nativeReport(hookId, target, lastArg, "", lastError);
+                throw cause;
+            } catch (Throwable t) {
+                lastError = String.valueOf(t);
                 nativeReport(hookId, target, lastArg, "", lastError);
                 throw t;
             }

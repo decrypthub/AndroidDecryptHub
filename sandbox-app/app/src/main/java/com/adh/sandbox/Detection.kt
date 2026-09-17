@@ -32,6 +32,9 @@ object Detection {
     // v4.27 fixture: every remaining Call* return type (Boolean/Byte/Char/Short/Long/
     // Float/Double, instance + static) has a target method exercised from native code.
     @JvmStatic external fun jniCallTypesProbe(): Int
+    // v4.28 fixture: construct JniCtorTarget(21) through JNI so a constructor hook sees the
+    // argument and the object is still usable afterwards (total must stay 42).
+    @JvmStatic external fun jniCtorProbe(): Int
 
     fun load() {
         try {

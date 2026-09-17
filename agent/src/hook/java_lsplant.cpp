@@ -320,6 +320,7 @@ struct JavaHookContext {
     jobject backup_method;      // global ref returned by LSPlant
     jobject bridge;             // global ref to AdhJavaHookBridge
     bool is_static;
+    bool is_ctor;                 // constructor hook (args[0] is the new object)
     std::string target_name;
 };
 
@@ -332,6 +333,7 @@ static jobject g_bridge_loader = nullptr;
 static void *g_bridge_dex_mem = nullptr;
 static jfieldID g_bridge_backup = nullptr;
 static jfieldID g_bridge_is_static = nullptr;
+static jfieldID g_bridge_is_ctor = nullptr;
 static jfieldID g_bridge_hook_id = nullptr;
 static jfieldID g_bridge_hits = nullptr;
 static jfieldID g_bridge_last_arg = nullptr;
@@ -506,6 +508,7 @@ static jclass load_bridge_class(JNIEnv *env, std::string &error) {
 
     g_bridge_backup = env->GetFieldID(bridge_class, "backup", "Ljava/lang/reflect/Method;");
     g_bridge_is_static = env->GetFieldID(bridge_class, "isStatic", "Z");
+    g_bridge_is_ctor = env->GetFieldID(bridge_class, "isConstructor", "Z");
     g_bridge_hook_id = env->GetFieldID(bridge_class, "hookId", "I");
     g_bridge_hits = env->GetFieldID(bridge_class, "hits", "I");
     g_bridge_last_arg = env->GetFieldID(bridge_class, "lastArg", "Ljava/lang/String;");
@@ -520,7 +523,7 @@ static jclass load_bridge_class(JNIEnv *env, std::string &error) {
     g_bridge_class = (jclass)env->NewGlobalRef(bridge_class);
     g_bridge_loader = env->NewGlobalRef(bridge_loader);
 
-    if (!g_bridge_class || !g_bridge_backup || !g_bridge_is_static || !g_bridge_hook_id ||
+    if (!g_bridge_class || !g_bridge_backup || !g_bridge_is_static || !g_bridge_is_ctor || !g_bridge_hook_id ||
         !g_bridge_hits || !g_bridge_last_arg || !g_bridge_last_return || !g_bridge_last_error ||
         !g_bridge_target || !g_bridge_skip_original || !g_bridge_override_return || !g_bridge_arg_index || !g_bridge_arg_value || !g_bridge_ready || !g_bridge_active) {
         error = "AdhJavaHookBridge fields are missing";
@@ -586,79 +589,122 @@ static bool method_is_static(JNIEnv *env, jobject method, bool &is_static, std::
     return true;
 }
 
+// Scan one class's declared members for an exact (name, parameter-types) match. `member_get_name`
+// is null for constructors (their "name" is the class and cannot distinguish overloads), and
+// `wanted_name` is the requested method name. The name check is mandatory: matching on parameter
+// types alone would happily hook a same-arity sibling method.
+static jobject scan_declared_members(JNIEnv *env, jclass cls, jmethodID collect, jmethodID get_params,
+                                     jmethodID member_get_name, const char *wanted_name,
+                                     jmethodID class_get_name, jmethodID set_accessible,
+                                     const std::vector<std::string> &wanted, int *matches) {
+    jobjectArray members = (jobjectArray)env->CallObjectMethod(cls, collect);
+    if (!members) { if (env->ExceptionCheck()) env->ExceptionClear(); return nullptr; }
+    jobject found = nullptr;
+    jsize count = env->GetArrayLength(members);
+    for (jsize i = 0; i < count; i++) {
+        jobject member = env->GetObjectArrayElement(members, i);
+        if (!member) continue;
+        if (member_get_name) {
+            jstring jname = (jstring)env->CallObjectMethod(member, member_get_name);
+            const char *chars = jname ? env->GetStringUTFChars(jname, nullptr) : nullptr;
+            bool name_ok = chars && wanted_name && strcmp(chars, wanted_name) == 0;
+            if (chars) env->ReleaseStringUTFChars(jname, chars);
+            if (jname) env->DeleteLocalRef(jname);
+            if (!name_ok) { env->DeleteLocalRef(member); continue; }
+        }
+        jobjectArray parameter_types = (jobjectArray)env->CallObjectMethod(member, get_params);
+        jsize parameter_count = parameter_types ? env->GetArrayLength(parameter_types) : 0;
+        bool params_ok = parameter_count == (jsize)wanted.size();
+        for (jsize j = 0; params_ok && j < parameter_count; j++) {
+            jclass parameter_class = (jclass)env->GetObjectArrayElement(parameter_types, j);
+            jstring parameter_name = parameter_class ? (jstring)env->CallObjectMethod(parameter_class, class_get_name) : nullptr;
+            const char *parameter_chars = parameter_name ? env->GetStringUTFChars(parameter_name, nullptr) : nullptr;
+            std::string actual = parameter_chars ? parameter_chars : "";
+            if (parameter_chars) env->ReleaseStringUTFChars(parameter_name, parameter_chars);
+            if (parameter_name) env->DeleteLocalRef(parameter_name);
+            if (parameter_class) env->DeleteLocalRef(parameter_class);
+            if (normalize_type(actual) != wanted[(size_t)j]) params_ok = false;
+        }
+        if (parameter_types) env->DeleteLocalRef(parameter_types);
+        if (params_ok) {
+            if (set_accessible) env->CallVoidMethod(member, set_accessible, JNI_TRUE);
+            if (env->ExceptionCheck()) env->ExceptionClear();
+            if (!found) found = (jobject)env->NewLocalRef(member);
+            (*matches)++;
+        }
+        env->DeleteLocalRef(member);
+    }
+    env->DeleteLocalRef(members);
+    return found;
+}
 static jobject find_target_method(JNIEnv *env, jclass target_class, const std::string &class_name,
                                   const std::string &method_name, const std::string &params,
                                   std::string &signature, std::string &error) {
     std::vector<std::string> wanted = split_params(params);
+    const bool want_ctor = method_name == "<init>" || method_name == "constructor";
     jclass class_class = env->FindClass("java/lang/Class");
     jmethodID get_declared_methods = env->GetMethodID(class_class, "getDeclaredMethods",
                                                       "()[Ljava/lang/reflect/Method;");
+    jmethodID get_declared_ctors = env->GetMethodID(class_class, "getDeclaredConstructors",
+                                                    "()[Ljava/lang/reflect/Constructor;");
+    jmethodID get_super = env->GetMethodID(class_class, "getSuperclass", "()Ljava/lang/Class;");
     jmethodID get_name = env->GetMethodID(class_class, "getName", "()Ljava/lang/String;");
     jclass method_class = env->FindClass("java/lang/reflect/Method");
-    jmethodID method_get_name = env->GetMethodID(method_class, "getName", "()Ljava/lang/String;");
     jmethodID method_get_params = env->GetMethodID(method_class, "getParameterTypes",
                                                    "()[Ljava/lang/Class;");
-    jmethodID set_accessible = env->GetMethodID(method_class, "setAccessible", "(Z)V");
-    jobjectArray methods = (jobjectArray)env->CallObjectMethod(target_class, get_declared_methods);
-    if (!methods) {
-        error = "Class.getDeclaredMethods failed";
+    jmethodID method_get_name = env->GetMethodID(method_class, "getName", "()Ljava/lang/String;");
+    jmethodID method_set_accessible = env->GetMethodID(method_class, "setAccessible", "(Z)V");
+    jclass ctor_class = env->FindClass("java/lang/reflect/Constructor");
+    jmethodID ctor_get_params = env->GetMethodID(ctor_class, "getParameterTypes",
+                                                 "()[Ljava/lang/Class;");
+    jmethodID ctor_set_accessible = env->GetMethodID(ctor_class, "setAccessible", "(Z)V");
+    if (!get_declared_methods || !get_declared_ctors || !get_super || !get_name ||
+        !method_get_params || !method_get_name || !ctor_get_params) {
+        error = "reflection methods unavailable";
         if (env->ExceptionCheck()) env->ExceptionClear();
         return nullptr;
     }
 
     jobject found = nullptr;
     int matches = 0;
-    jsize count = env->GetArrayLength(methods);
-    for (jsize i = 0; i < count; i++) {
-        jobject method = env->GetObjectArrayElement(methods, i);
-        jstring name = (jstring)env->CallObjectMethod(method, method_get_name);
-        const char *name_chars = name ? env->GetStringUTFChars(name, nullptr) : nullptr;
-        bool name_ok = name_chars && method_name == name_chars;
-        if (name_chars) env->ReleaseStringUTFChars(name, name_chars);
-        if (name) env->DeleteLocalRef(name);
-        if (!name_ok) {
-            env->DeleteLocalRef(method);
-            continue;
-        }
-
-        jobjectArray parameter_types = (jobjectArray)env->CallObjectMethod(method, method_get_params);
-        jsize parameter_count = parameter_types ? env->GetArrayLength(parameter_types) : 0;
-        bool params_ok = parameter_count == (jsize)wanted.size();
-        for (jsize j = 0; params_ok && j < parameter_count; j++) {
-            jclass parameter_class = (jclass)env->GetObjectArrayElement(parameter_types, j);
-            jstring parameter_name = (jstring)env->CallObjectMethod(parameter_class, get_name);
-            const char *parameter_chars = parameter_name ? env->GetStringUTFChars(parameter_name, nullptr) : nullptr;
-            std::string actual = parameter_chars ? parameter_chars : "";
-            if (parameter_chars) env->ReleaseStringUTFChars(parameter_name, parameter_chars);
-            if (parameter_name) env->DeleteLocalRef(parameter_name);
-            env->DeleteLocalRef(parameter_class);
-            if (normalize_type(actual) != wanted[(size_t)j]) params_ok = false;
-        }
-        if (parameter_types) env->DeleteLocalRef(parameter_types);
-
-        if (params_ok) {
-            if (set_accessible) env->CallVoidMethod(method, set_accessible, JNI_TRUE);
+    std::string declaring = class_name;
+    if (want_ctor) {
+        found = scan_declared_members(env, target_class, get_declared_ctors, ctor_get_params,
+                                      nullptr, nullptr, get_name, ctor_set_accessible, wanted, &matches);
+    } else {
+        jclass cursor = (jclass)env->NewLocalRef(target_class);
+        for (int depth = 0; cursor && depth < 10 && !found; depth++) {
+            found = scan_declared_members(env, cursor, get_declared_methods, method_get_params,
+                                          method_get_name, method_name.c_str(), get_name,
+                                          method_set_accessible, wanted, &matches);
+            if (found) {
+                jstring jname = (jstring)env->CallObjectMethod(cursor, get_name);
+                const char *chars = jname ? env->GetStringUTFChars(jname, nullptr) : nullptr;
+                if (chars) { declaring = chars; env->ReleaseStringUTFChars(jname, chars); }
+                if (jname) env->DeleteLocalRef(jname);
+                break;
+            }
+            jclass parent = (jclass)env->CallObjectMethod(cursor, get_super);
             if (env->ExceptionCheck()) env->ExceptionClear();
-            if (!found) found = env->NewLocalRef(method);
-            matches++;
+            env->DeleteLocalRef(cursor);
+            cursor = parent;
         }
-        env->DeleteLocalRef(method);
+        if (cursor && !found) env->DeleteLocalRef(cursor);
     }
-    env->DeleteLocalRef(methods);
 
     if (!found) {
-        error = "target method not found: " + class_name + "." + method_name + "(" + params + ")";
+        error = std::string(want_ctor ? "target constructor not found: " : "target method not found: ") +
+                class_name + "." + method_name + "(" + params + ")";
         return nullptr;
     }
     if (matches > 1) {
         env->DeleteLocalRef(found);
-        error = "ambiguous target method (multiple overloads): " + class_name + "." + method_name;
+        error = "ambiguous target (multiple overloads): " + class_name + "." + method_name;
         return nullptr;
     }
-    signature = class_name + "." + method_name + "(" + params + ")";
+    signature = declaring + "." + (want_ctor ? std::string("<init>") : method_name) + "(" + params + ")";
     return found;
 }
-
 static int find_free_hook_slot_locked() {
     for (int i = 0; i < ADH_JAVA_MAX_HOOKS; i++) {
         if (g_java_hooks[i].active == 0 && !g_java_hooks[i].used) return i;
@@ -739,8 +785,13 @@ extern "C" int adh_javahook_hook_method(JNIEnv *env, const char *class_name, con
     env->DeleteLocalRef(target_class);
     if (!target) return fail_hook(problem.c_str());
 
+    const bool is_ctor = strcmp(method_name, "<init>") == 0 || strcmp(method_name, "constructor") == 0;
+    if (is_ctor && (skip_original || (override_return && override_return[0]))) {
+        env->DeleteLocalRef(target);
+        return fail_hook("constructor hooks cannot skip the original or override the return value");
+    }
     bool is_static = false;
-    if (!method_is_static(env, target, is_static, problem)) {
+    if (!is_ctor && !method_is_static(env, target, is_static, problem)) {
         env->DeleteLocalRef(target);
         return fail_hook(problem.c_str());
     }
@@ -762,6 +813,7 @@ extern "C" int adh_javahook_hook_method(JNIEnv *env, const char *class_name, con
         jstring target_string = env->NewStringUTF(signature.c_str());
         env->SetObjectField(old_bridge, g_bridge_target, target_string);
         env->SetBooleanField(old_bridge, g_bridge_is_static, is_static ? JNI_TRUE : JNI_FALSE);
+        env->SetBooleanField(old_bridge, g_bridge_is_ctor, is_ctor ? JNI_TRUE : JNI_FALSE);
         env->SetBooleanField(old_bridge, g_bridge_skip_original, skip_original ? JNI_TRUE : JNI_FALSE);
         jstring override_string = env->NewStringUTF(override_return ? override_return : "");
         env->SetObjectField(old_bridge, g_bridge_override_return, override_string);
@@ -801,6 +853,7 @@ extern "C" int adh_javahook_hook_method(JNIEnv *env, const char *class_name, con
     jstring target_string = env->NewStringUTF(signature.c_str());
     env->SetObjectField(bridge, g_bridge_target, target_string);
     env->SetBooleanField(bridge, g_bridge_is_static, is_static ? JNI_TRUE : JNI_FALSE);
+    env->SetBooleanField(bridge, g_bridge_is_ctor, is_ctor ? JNI_TRUE : JNI_FALSE);
     env->SetObjectField(bridge, g_bridge_backup, nullptr);
     env->SetBooleanField(bridge, g_bridge_active, JNI_FALSE);
     env->SetBooleanField(bridge, g_bridge_skip_original, skip_original ? JNI_TRUE : JNI_FALSE);
@@ -859,6 +912,7 @@ extern "C" int adh_javahook_hook_method(JNIEnv *env, const char *class_name, con
     ctx.bridge = bridge;
     ctx.patched = 1;
     ctx.is_static = is_static;
+    ctx.is_ctor = is_ctor;
     ctx.target_name = signature;
     pthread_mutex_unlock(&g_java_hooks_lock);
 
