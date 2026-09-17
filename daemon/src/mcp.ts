@@ -16,7 +16,7 @@ import { backendMatrix, classifySession } from './backends.ts';
 import { automation } from './automation.ts';
 import { agentWaitSightings, findAgentWaitMatch, hasAgentWaitFilters } from './agent_events.ts';
 import { implicitSelectorFor, selectorFrom } from './phone_selectors.ts';
-import { PhoneSkillStore, resolveSkillInputs } from './phone_skills.ts';
+import { PhoneSkillStore, resolveSkillInputs, skillPreflightIssues } from './phone_skills.ts';
 import { normalizeAxis, swipePath } from './phone_gestures.ts';
 import { isSettled, noteSample, screenSignature } from './phone_stability.ts';
 import { resolveTemplates } from './phone_templates.ts';
@@ -346,7 +346,10 @@ async function skillPhone(args: any) {
   }
   if (action === 'save') {
     const skill = phoneSkills.save(args.name, args.description, args.steps, args.overwrite === true, args.params, args.defaults);
-    return { name: skill.name, description: skill.description ?? '', steps: skill.steps.length, params: skill.params ?? [], saved: true };
+    // Advisory preflight: tell the caller when the recipe silently depends on the screen it was
+    // recorded on, so a flow that worked once does not become a flow that fails on replay.
+    const issues = skillPreflightIssues(skill.steps);
+    return { name: skill.name, description: skill.description ?? '', steps: skill.steps.length, params: skill.params ?? [], saved: true, ...(issues.length ? { warnings: issues } : {}) };
   }
   if (action === 'run') {
     const name = String(args.name ?? '');

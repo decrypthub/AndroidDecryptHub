@@ -65,6 +65,40 @@ export function validateSkillSteps(steps: unknown): any[] {
   return steps as any[];
 }
 
+/**
+ * Predicts which app a recipe's steps assume, so the save call can warn when nothing establishes
+ * that state. A step that acts on a bare screen silently depends on whatever was there when the
+ * run started - exactly how a recorded flow works once and then fails on replay. Warnings are
+ * advisory with the step index; recipes stay saveable.
+ */
+export function skillPreflightIssues(steps: any[]): string[] {
+  const issues: string[] = [];
+  let established = false;
+  (steps ?? []).forEach((step: any, index: number) => {
+    const type = String(step?.type ?? '');
+    if (type === 'app') {
+      const action = String(step?.args?.action ?? 'open');
+      if (action === 'open' || action === 'restart') established = true;
+      return;
+    }
+    if (type === 'device') return;
+    if (type === 'wait_any') {
+      const hasState = Array.isArray(step?.args?.conditions)
+        && step.args.conditions.some((condition: any) => condition && (condition.activePackage != null || condition.text != null || condition.textContains != null));
+      if (hasState) established = true;
+      return;
+    }
+    if (type === 'wait') {
+      if (step?.args?.activePackage != null || step?.args?.activityContains != null) established = true;
+      return;
+    }
+    if ((type === 'act' || type === 'observe' || type === 'find') && !established) {
+      issues.push('step_' + index + '_no_app_context: this ' + type + ' step runs on whatever screen happens to be current; open an app first, wait for activePackage, or guard the step with onlyIf.');
+    }
+  });
+  return issues;
+}
+
 export class PhoneSkillStore {
   private skills = new Map<string, PhoneSkill>();
   private file: string;

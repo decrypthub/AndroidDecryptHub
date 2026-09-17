@@ -5,7 +5,7 @@ import { AutomationHub } from '../src/automation.ts';
 import { mergeSettings, settings } from '../src/state.ts';
 import { agentWaitSightings, findAgentWaitMatch, hasAgentWaitFilters } from '../src/agent_events.ts';
 import { implicitSelectorFor, selectorFrom } from '../src/phone_selectors.ts';
-import { PhoneSkillStore, resolveSkillInputs, validateSkillName, validateSkillParams, validateSkillSteps } from '../src/phone_skills.ts';
+import { PhoneSkillStore, resolveSkillInputs, skillPreflightIssues, validateSkillName, validateSkillParams, validateSkillSteps } from '../src/phone_skills.ts';
 import { renderScreenText } from '../src/phone_text.ts';
 import { readPath, resolveTemplates } from '../src/phone_templates.ts';
 import { normalizeAxis, swipePath } from '../src/phone_gestures.ts';
@@ -98,6 +98,30 @@ test('floating-window dismissal retry only targets system blockers', () => {
   assert.equal(needsDismissRetry('com.android.settings', 'com.tencent.mm'), false);
   assert.equal(needsDismissRetry('com.android.settings', null), false);
 });
+test('skill preflight warns only when a recipe assumes the current screen', () => {
+  assert.deepEqual(
+    skillPreflightIssues([
+      { type: 'app', args: { action: 'open', package: 'com.example.app' } },
+      { type: 'wait', args: { activePackage: 'com.example.app' } },
+      { type: 'act', args: { action: 'tap', text: 'OK' } },
+    ]),
+    [],
+  );
+  const missing = skillPreflightIssues([{ type: 'act', args: { action: 'tap', text: 'OK' } }]);
+  assert.equal(missing.length, 1);
+  assert.match(missing[0], /step_0_no_app_context/);
+  // A wait that only checks the screen settled does not establish which app is in front.
+  assert.equal(skillPreflightIssues([{ type: 'wait', args: { stable: true } }, { type: 'observe', args: {} }]).length, 1);
+  // A wait_any over activePackage does establish it.
+  assert.deepEqual(
+    skillPreflightIssues([
+      { type: 'wait_any', args: { conditions: [{ activePackage: 'com.example.app' }] } },
+      { type: 'act', args: { action: 'tap', text: 'OK' } },
+    ]),
+    [],
+  );
+});
+
 test('blocked package notices are bounded, deduped and reject junk', () => {
   clearBlockedPackages();
   assert.equal(recordBlockedPackage('com.oplus.battery'), true);
