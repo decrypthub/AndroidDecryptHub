@@ -47,4 +47,8 @@ interface IAdhScopeService {
     String getVolumeJson();
     /** Protocol v10: set a stream volume (index clamped to the stream range). stream: music|ring|alarm|voice. */
     boolean setVolume(String stream, int index);
+    /** Protocol v11: current clipboard text (empty when the clipboard holds no text). */
+    String getClipboardText();
+    /** Protocol v11: replace the clipboard with this text; false when the system refuses (refused beyond 8 KiB). */
+    boolean setClipboardText(String text);
 }

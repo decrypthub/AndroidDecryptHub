@@ -72,6 +72,17 @@ object AdhDeviceDaemon {
                 val y = args.getOrNull(2)?.toIntOrNull() ?: exitProcess(2)
                 exitProcess(if (DeviceInputControl.tap(x, y)) 0 else 1)
             }
+            "--clipboard-read" -> {
+                requireRoot()
+                Looper.prepareMainLooper()
+                println(DeviceClipboardControl.read(SystemContext.create()))
+                return
+            }
+            "--clipboard-write" -> {
+                requireRoot()
+                Looper.prepareMainLooper()
+                exitProcess(if (DeviceClipboardControl.write(SystemContext.create(), args.drop(1).joinToString(" "))) 0 else 1)
+            }
             "--volume-status" -> {
                 requireRoot()
                 Looper.prepareMainLooper()

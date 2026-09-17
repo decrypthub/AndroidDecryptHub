@@ -131,6 +131,16 @@ internal class RootScopeBinder(
         return DeviceAudioControl.setVolume(context, stream, index)
     }
 
+    override fun getClipboardText(): String {
+        verifier.enforce()
+        return DeviceClipboardControl.read(context)
+    }
+
+    override fun setClipboardText(text: String?): Boolean {
+        verifier.enforce()
+        return DeviceClipboardControl.write(context, text)
+    }
+
     private fun atomicWrite(target: File, content: String) {
         target.parentFile?.mkdirs()
         val temp = File(target.parentFile, ".${target.name}.${android.os.Process.myPid()}.tmp")

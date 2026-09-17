@@ -90,6 +90,8 @@ class DaemonBinderProvider : ContentProvider() {
                     service.injectInputSwipe(x1, y1, x2, y2, durationMs)
                 override val volumeJson: String get() = service.volumeJson.orEmpty()
                 override fun setVolume(stream: String, index: Int): Boolean = service.setVolume(stream, index)
+                override val clipboardText: String get() = service.clipboardText.orEmpty()
+                override fun setClipboardText(text: String): Boolean = service.setClipboardText(text)
             }
             runCatching {
                 binder.linkToDeath({

@@ -320,6 +320,27 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
                 val dismissed = daemon.dismissKeyguard()
                 powerStatus().put("dismissed", dismissed)
             }
+            "clipboard_read" -> {
+                // Try our own process first: the accessibility service is often the foreground-ish
+                // context, and Android 10+ hides clipboard reads from background processes. Fall
+                // back to the root daemon for the cases where it is allowed.
+                val local = localClipboardRead()
+                if (local != null) return JSONObject().put("action", "clipboard_read").put("text", local).put("source", "service")
+                val daemon = requireClipboardDaemon()
+                JSONObject().put("action", "clipboard_read").put("text", daemon.clipboardText).put("source", "daemon")
+            }
+            "clipboard_write" -> {
+                val value = args.optString("text", "")
+                if (value.isEmpty()) throw AutomationException("bad_clipboard_text", "clipboard_write requires non-empty text")
+                if (localClipboardWrite(value)) {
+                    return JSONObject().put("action", "clipboard_write").put("length", value.length).put("source", "service")
+                }
+                val daemon = requireClipboardDaemon()
+                if (!daemon.setClipboardText(value)) {
+                    throw AutomationException("clipboard_write_rejected", "system refused the clipboard write (max 8 KiB)")
+                }
+                JSONObject().put("action", "clipboard_write").put("length", value.length).put("source", "daemon")
+            }
             "volume_status" -> {
                 val daemon = DaemonBinderProvider.awaitClient(3_000)
                     ?: throw AutomationException("device_daemon_unavailable", "ADH Device Daemon is unavailable")
@@ -353,8 +374,33 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
                 }
                 JSONObject().put("action", "lock").put("result", "ok")
             }
-            else -> throw AutomationException("bad_device_action", "device action must be status, wake, unlock, lock, volume_status or volume_set")
+            else -> throw AutomationException("bad_device_action", "device action must be status, wake, unlock, lock, volume_status, volume_set, clipboard_read or clipboard_write")
         }
+    }
+
+    private fun localClipboardRead(): String? {
+        val manager = getSystemService(android.content.ClipboardManager::class.java) ?: return null
+        val clip = runCatching { manager.primaryClip }.getOrNull() ?: return null
+        if (clip.itemCount <= 0) return null
+        val text = runCatching { clip.getItemAt(0).coerceToText(this).toString() }.getOrNull() ?: return null
+        return text.take(8 * 1024)
+    }
+
+    private fun localClipboardWrite(value: String): Boolean {
+        val manager = getSystemService(android.content.ClipboardManager::class.java) ?: return false
+        return runCatching {
+            manager.setPrimaryClip(android.content.ClipData.newPlainText("ADH", value))
+            true
+        }.getOrDefault(false)
+    }
+
+    private fun requireClipboardDaemon(): com.adh.manager.data.DaemonClient {
+        val client = DaemonBinderProvider.awaitClient(3_000)
+            ?: throw AutomationException("device_daemon_unavailable", "ADH Device Daemon is unavailable")
+        if (client.protocolVersion < AdhProtocol.MIN_CLIPBOARD_VERSION) {
+            throw AutomationException("device_daemon_old", "Device Daemon protocol " + client.protocolVersion + " has no clipboard control (needs v11)")
+        }
+        return client
     }
 
     private fun powerStatus(): JSONObject {

@@ -35,6 +35,10 @@ interface DaemonClient {
     /** Protocol v10: audio volume read/write. */
     val volumeJson: String
     fun setVolume(stream: String, index: Int): Boolean
+
+    /** Protocol v11: clipboard text read/write. */
+    val clipboardText: String
+    fun setClipboardText(text: String): Boolean
 }
 
 class DaemonScopeRepository(
