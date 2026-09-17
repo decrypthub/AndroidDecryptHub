@@ -193,7 +193,13 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
             throw AutomationException("stale_snapshot", "active package changed from ${snapshot.packageName} to $active")
         }
 
-        val before = windowSignature()
+        // Sample the visible labels twice before acting: an app that is still animating after the
+        // previous command would otherwise make the post-action comparison report a change that
+        // the action never caused (and that suppresses the root-input fallback).
+        val beforeA = windowSignature()
+        Thread.sleep(260)
+        val beforeB = windowSignature()
+        val before = if (beforeA != null && beforeA == beforeB) beforeA else null
 
         val result = when (action) {
             "tap" -> tap(args, snapshot, ref)
@@ -208,8 +214,14 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
         if (action == "tap" || action == "swipe" || action == "input") {
             // A few Compose UIs accept dispatchGesture and never act on it: the callback completes
             // while the window stays identical. Report that instead of pretending the action worked.
-            Thread.sleep(320)
-            val after = windowSignature()
+            Thread.sleep(260)
+            val afterA = windowSignature()
+            Thread.sleep(160)
+            val afterB = windowSignature()
+            val after = if (afterA != null && afterA == afterB) afterA else null
+            // Unknown before (screen still settling) reports changed:true on purpose: the fallback
+            // exists for apps that silently swallow gestures, and a wrong true is harmless there
+            // while a wrong false would double-tap a UI that DID react.
             result.put("changed", before == null || after == null || before != after)
         }
         if (snapshotId != null) snapshots.remove(snapshotId)
@@ -373,21 +385,31 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
         return x to y
     }
     /**
-     * Cheap fingerprint of the visible window content. Taps use it to notice the "gesture
-     * completed, nothing moved" case (a few Compose UIs swallow dispatchGesture). Only the
-     * text-bearing part of the first nodes is hashed, so this stays cheap next to a real observe.
+     * Fingerprint of what is actually visible on screen, used to tell whether an action moved the
+     * UI. It hashes the sorted set of visible text / content descriptions:
+     *   - a tab switch, dialog or page load changes which labels are visible  -> changed:true
+     *   - a WebView scroll brings different result rows into view             -> changed:true
+     *   - animations, ripples and geometry-only redraws keep the same labels  -> changed:false
+     * Geometry is deliberately NOT hashed: hashing it made SukiSU's blinking cursor read as a
+     * change, which suppressed the root-input fallback exactly where it is needed.
      */
     private fun windowSignature(): String? {
         val root = rootInActiveWindow ?: return null
         return try {
-            val builder = StringBuilder(256)
-            var budget = 60
+            val display = screenBounds()
+            val tokens = sortedSetOf<String>()
+            val bounds = Rect()
+            var budget = 120
             fun visit(node: AccessibilityNodeInfo) {
                 if (budget <= 0) return
                 budget--
-                builder.append(node.windowId).append(':')
-                node.text?.takeIf { it.isNotEmpty() }?.let { builder.append(it).append('\u0001') }
-                node.contentDescription?.takeIf { it.isNotEmpty() }?.let { builder.append(it).append('\u0002') }
+                node.getBoundsInScreen(bounds)
+                val visible = !bounds.isEmpty && bounds.right > display.left && bounds.left < display.right &&
+                    bounds.bottom > display.top && bounds.top < display.bottom
+                if (visible) {
+                    node.text?.takeIf { it.isNotEmpty() }?.let { tokens.add("t:" + it) }
+                    node.contentDescription?.takeIf { it.isNotEmpty() }?.let { tokens.add("d:" + it) }
+                }
                 for (index in 0 until node.childCount) {
                     val child = node.getChild(index) ?: continue
                     visit(child)
@@ -395,7 +417,7 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
             }
             visit(root)
             MessageDigest.getInstance("SHA-1")
-                .digest(builder.toString().toByteArray(Charsets.UTF_8))
+                .digest(tokens.joinToString("\u0000").toByteArray(Charsets.UTF_8))
                 .joinToString("") { "%02x".format(it) }
         } catch (_: Throwable) {
             null
