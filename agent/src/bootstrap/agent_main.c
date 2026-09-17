@@ -131,7 +131,7 @@ static void cmd_javahook_probe(int fd, const char *id) {
 // Generic single Java-method hook command. All target identity comes from the command;
 // the agent has no sandbox/package/class constants.
 static void cmd_java_hook(int fd, const char *id, const char *action, const char *class_name,
-                          const char *method_name, const char *params) {
+                          const char *method_name, const char *params, long long requested_hook_id) {
     char idj[64];
     json_escape(id, idj, sizeof(idj));
 #ifdef ADH_HAVE_LSPLANT
@@ -147,14 +147,15 @@ static void cmd_java_hook(int fd, const char *id, const char *action, const char
 
     char error[512] = "";
     int ok = 0;
+    int new_hook_id = 0;
     if (strcmp(action, "hook") == 0) {
         if (!class_name[0] || !method_name[0]) {
             snprintf(error, sizeof(error), "hook requires className and method");
         } else {
-            ok = adh_javahook_hook_method(env, class_name, method_name, params, error, sizeof(error));
+            ok = adh_javahook_hook_method(env, class_name, method_name, params, &new_hook_id, error, sizeof(error));
         }
     } else if (strcmp(action, "unhook") == 0) {
-        ok = adh_javahook_unhook_active(env, error, sizeof(error));
+        ok = adh_javahook_unhook_id(env, (int)requested_hook_id, error, sizeof(error));
     } else if (strcmp(action, "status") == 0) {
         ok = 1;
     } else {
@@ -170,12 +171,12 @@ static void cmd_java_hook(int fd, const char *id, const char *action, const char
     char out[4096];
     snprintf(out, sizeof(out),
              "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"java_hook\",\"ok\":%s,\"action\":\"%s\","
-             "\"error\":\"%s\",\"status\":%s}\n",
-             idj, ok ? "true" : "false", action, errj, status);
+             "\"hookId\":%d,\"error\":\"%s\",\"status\":%s}\n",
+             idj, ok ? "true" : "false", action, new_hook_id, errj, status);
     send_line(fd, out);
     LOGI("java_hook: action=%s ok=%d error=%s", action, ok, error);
 #else
-    (void)action; (void)class_name; (void)method_name; (void)params;
+    (void)action; (void)class_name; (void)method_name; (void)params; (void)requested_hook_id;
     char out[240];
     snprintf(out, sizeof(out),
              "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"java_hook\",\"ok\":false,"
@@ -216,7 +217,8 @@ static void command_loop(int fd) {
                     json_get_str(line, "className", jcls, sizeof(jcls));
                     json_get_str(line, "method", jmethod, sizeof(jmethod));
                     json_get_str(line, "params", jparams, sizeof(jparams));
-                    cmd_java_hook(fd, id, jaction, jcls, jmethod, jparams);
+                    long long jhook_id = json_get_num(line, "id");
+                    cmd_java_hook(fd, id, jaction, jcls, jmethod, jparams, jhook_id);
                 } else if (strcmp(op, "javahook_probe") == 0) {
                     cmd_javahook_probe(fd, id);
                 } else if (strcmp(op, "gothook_selftest") == 0) {

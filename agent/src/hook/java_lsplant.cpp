@@ -13,6 +13,7 @@
 #include "lsplant.hpp"
 #include "native_inline.h"
 #include "../runtime/jni.h"
+#include "../capture/capture.h"
 
 #include <android/api-level.h>
 #include <android/log.h>
@@ -301,17 +302,60 @@ extern "C" const char *adh_compute_shorty(JNIEnv *env, jobject method) {
     return shorty.c_str();
 }
 
-// ---- embedded bridge dex loader --------------------------------------------------------
+// ---- embedded bridge dex loader + multi-hook registry ---------------------------------
+#define ADH_JAVA_MAX_HOOKS 16
+
+struct JavaHookContext {
+    int id;
+    int active;                 // 0 free, 1 active, 2 reserved
+    jobject target_method;      // global ref to java.lang.reflect.Method
+    jobject backup_method;      // global ref returned by LSPlant
+    jobject bridge;             // global ref to AdhJavaHookBridge
+    bool is_static;
+    std::string target_name;
+};
+
+static JavaHookContext g_java_hooks[ADH_JAVA_MAX_HOOKS];
+static pthread_mutex_t g_java_hooks_lock = PTHREAD_MUTEX_INITIALIZER;
+static int g_next_java_hook_id = 1;
+
 static jclass g_bridge_class = nullptr;
-static jobject g_bridge_object = nullptr;
+static void *g_bridge_dex_mem = nullptr;
 static jfieldID g_bridge_backup = nullptr;
 static jfieldID g_bridge_is_static = nullptr;
+static jfieldID g_bridge_hook_id = nullptr;
 static jfieldID g_bridge_hits = nullptr;
 static jfieldID g_bridge_last_arg = nullptr;
 static jfieldID g_bridge_last_return = nullptr;
 static jfieldID g_bridge_last_error = nullptr;
 static jfieldID g_bridge_target = nullptr;
-static void *g_bridge_dex_mem = nullptr;
+
+static std::string jstring_to_utf(JNIEnv *env, jstring value) {
+    if (!env || !value) return "";
+    const char *chars = env->GetStringUTFChars(value, nullptr);
+    std::string out = chars ? chars : "";
+    if (chars) env->ReleaseStringUTFChars(value, chars);
+    if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+        return "";
+    }
+    return out;
+}
+
+static void JNICALL adh_java_hook_native_report(JNIEnv *env, jclass, jint hook_id,
+                                                jstring target, jstring arg,
+                                                jstring result, jstring error) {
+    std::string target_s = json_escape(jstring_to_utf(env, target));
+    std::string arg_s = json_escape(jstring_to_utf(env, arg));
+    std::string result_s = json_escape(jstring_to_utf(env, result));
+    std::string error_s = json_escape(jstring_to_utf(env, error));
+    std::string json = "{\"hookId\":" + std::to_string((int)hook_id) +
+                       ",\"target\":\"" + target_s + "\"" +
+                       ",\"arg\":\"" + arg_s + "\"" +
+                       ",\"ret\":\"" + result_s + "\"" +
+                       ",\"error\":\"" + error_s + "\"}";
+    adh_capture_push_text("JAVA_HOOK", json.c_str());
+}
 
 static jclass load_bridge_class(JNIEnv *env, std::string &error) {
     if (g_bridge_class) return g_bridge_class;
@@ -373,49 +417,57 @@ static jclass load_bridge_class(JNIEnv *env, std::string &error) {
         return nullptr;
     }
 
+    JNINativeMethod report = {
+        const_cast<char *>("nativeReport"),
+        const_cast<char *>("(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V"),
+        reinterpret_cast<void *>(adh_java_hook_native_report),
+    };
+    if (env->RegisterNatives(bridge_class, &report, 1) != JNI_OK) {
+        error = "failed to register AdhJavaHookBridge.nativeReport";
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        return nullptr;
+    }
+
     g_bridge_backup = env->GetFieldID(bridge_class, "backup", "Ljava/lang/reflect/Method;");
     g_bridge_is_static = env->GetFieldID(bridge_class, "isStatic", "Z");
+    g_bridge_hook_id = env->GetFieldID(bridge_class, "hookId", "I");
     g_bridge_hits = env->GetFieldID(bridge_class, "hits", "I");
     g_bridge_last_arg = env->GetFieldID(bridge_class, "lastArg", "Ljava/lang/String;");
     g_bridge_last_return = env->GetFieldID(bridge_class, "lastReturn", "Ljava/lang/String;");
     g_bridge_last_error = env->GetFieldID(bridge_class, "lastError", "Ljava/lang/String;");
     g_bridge_target = env->GetFieldID(bridge_class, "target", "Ljava/lang/String;");
     g_bridge_class = (jclass)env->NewGlobalRef(bridge_class);
-    if (!g_bridge_class || !g_bridge_backup || !g_bridge_is_static || !g_bridge_hits ||
-        !g_bridge_last_arg || !g_bridge_last_return || !g_bridge_last_error || !g_bridge_target) {
+    if (!g_bridge_class || !g_bridge_backup || !g_bridge_is_static || !g_bridge_hook_id ||
+        !g_bridge_hits || !g_bridge_last_arg || !g_bridge_last_return || !g_bridge_last_error ||
+        !g_bridge_target) {
         error = "AdhJavaHookBridge fields are missing";
         return nullptr;
     }
-    LLOGI("loaded embedded AdhJavaHookBridge");
+    LLOGI("loaded embedded AdhJavaHookBridge with native event reporting");
     return g_bridge_class;
 }
 
-static jobject get_bridge_object(JNIEnv *env, std::string &error) {
-    if (g_bridge_object) return g_bridge_object;
+static jobject create_bridge_object(JNIEnv *env, int hook_id, std::string &error) {
     jclass bridge_class = load_bridge_class(env, error);
     if (!bridge_class) return nullptr;
     jmethodID ctor = env->GetMethodID(bridge_class, "<init>", "()V");
-    jobject object = ctor ? env->NewObject(bridge_class, ctor) : nullptr;
-    if (!object) {
+    jobject local = ctor ? env->NewObject(bridge_class, ctor) : nullptr;
+    if (!local) {
         error = "failed to create AdhJavaHookBridge instance";
         if (env->ExceptionCheck()) env->ExceptionClear();
         return nullptr;
     }
-    g_bridge_object = env->NewGlobalRef(object);
-    env->DeleteLocalRef(object);
-    if (!g_bridge_object) {
+    env->SetIntField(local, g_bridge_hook_id, hook_id);
+    jobject global = env->NewGlobalRef(local);
+    env->DeleteLocalRef(local);
+    if (!global) {
         error = "failed to retain AdhJavaHookBridge instance";
         return nullptr;
     }
-    return g_bridge_object;
+    return global;
 }
 
-// ---- target lookup / hook state -------------------------------------------------------
-static jobject g_target_method = nullptr;   // global ref to java.lang.reflect.Method
-static jobject g_backup_method = nullptr;   // global ref returned by LSPlant
-static int g_hook_active = 0;
-static std::string g_target_name;
-
+// ---- target lookup / multi-hook state --------------------------------------------------
 static jclass load_app_class(JNIEnv *env, const std::string &class_name, std::string &error) {
     jobject loader = adh_jni_app_class_loader(env);
     if (!loader) {
@@ -524,8 +576,41 @@ static jobject find_target_method(JNIEnv *env, jclass target_class, const std::s
     return found;
 }
 
+static int find_free_hook_slot_locked() {
+    for (int i = 0; i < ADH_JAVA_MAX_HOOKS; i++) {
+        if (g_java_hooks[i].active == 0) return i;
+    }
+    return -1;
+}
+
+static int find_hook_slot_locked(int id) {
+    for (int i = 0; i < ADH_JAVA_MAX_HOOKS; i++) {
+        if (g_java_hooks[i].active == 1 && g_java_hooks[i].id == id) return i;
+    }
+    return -1;
+}
+
+static void reset_hook_slot(JavaHookContext &hook) {
+    hook.id = 0;
+    hook.active = 0;
+    hook.target_method = nullptr;
+    hook.backup_method = nullptr;
+    hook.bridge = nullptr;
+    hook.is_static = false;
+    hook.target_name.clear();
+}
+
+static void release_hook_slot(JNIEnv *env, JavaHookContext &hook) {
+    if (hook.bridge && g_bridge_backup) env->SetObjectField(hook.bridge, g_bridge_backup, nullptr);
+    if (hook.backup_method) env->DeleteGlobalRef(hook.backup_method);
+    if (hook.target_method) env->DeleteGlobalRef(hook.target_method);
+    if (hook.bridge) env->DeleteGlobalRef(hook.bridge);
+    reset_hook_slot(hook);
+}
+
 extern "C" int adh_javahook_hook_method(JNIEnv *env, const char *class_name, const char *method_name,
-                                         const char *params, char *error, size_t error_size) {
+                                         const char *params, int *hook_id_out, char *error, size_t error_size) {
+    if (hook_id_out) *hook_id_out = 0;
     if (!env || !class_name || !method_name) {
         set_error(error, error_size, "missing class/method");
         return 0;
@@ -534,42 +619,53 @@ extern "C" int adh_javahook_hook_method(JNIEnv *env, const char *class_name, con
         set_error(error, error_size, "%s", adh_javahook_last_error());
         return 0;
     }
-    if (g_hook_active) {
-        set_error(error, error_size, "a Java hook is already active; unhook it first");
+
+    std::string problem;
+    int slot = -1;
+    int hook_id = 0;
+    pthread_mutex_lock(&g_java_hooks_lock);
+    slot = find_free_hook_slot_locked();
+    if (slot >= 0) {
+        hook_id = g_next_java_hook_id++;
+        if (g_next_java_hook_id <= 0) g_next_java_hook_id = 1;
+        g_java_hooks[slot].active = 2;      // reserve while resolving/installing
+        g_java_hooks[slot].id = hook_id;
+    }
+    pthread_mutex_unlock(&g_java_hooks_lock);
+    if (slot < 0) {
+        set_error(error, error_size, "too many active Java hooks (max %d)", ADH_JAVA_MAX_HOOKS);
         return 0;
     }
 
-    std::string problem;
-    jclass target_class = load_app_class(env, class_name, problem);
-    if (!target_class) {
-        set_error(error, error_size, "%s", problem.c_str());
+    auto fail_hook = [&](const char *message) -> int {
+        pthread_mutex_lock(&g_java_hooks_lock);
+        if (g_java_hooks[slot].active == 2) reset_hook_slot(g_java_hooks[slot]);
+        pthread_mutex_unlock(&g_java_hooks_lock);
+        set_error(error, error_size, "%s", message);
         return 0;
-    }
+    };
+
+    jclass target_class = load_app_class(env, class_name, problem);
+    if (!target_class) return fail_hook(problem.c_str());
     std::string signature;
     jobject target = find_target_method(env, target_class, class_name, method_name, params ? params : "", signature, problem);
     env->DeleteLocalRef(target_class);
-    if (!target) {
-        set_error(error, error_size, "%s", problem.c_str());
-        return 0;
-    }
+    if (!target) return fail_hook(problem.c_str());
 
     bool is_static = false;
     if (!method_is_static(env, target, is_static, problem)) {
         env->DeleteLocalRef(target);
-        set_error(error, error_size, "%s", problem.c_str());
-        return 0;
+        return fail_hook(problem.c_str());
     }
 
-    jobject bridge = get_bridge_object(env, problem);
+    jobject bridge = create_bridge_object(env, hook_id, problem);
     if (!bridge) {
         env->DeleteLocalRef(target);
-        set_error(error, error_size, "%s", problem.c_str());
-        return 0;
+        return fail_hook(problem.c_str());
     }
 
-    // Reset the fixed bridge before installing the next hook.
-    env->SetIntField(bridge, g_bridge_hits, 0);
     jstring empty = env->NewStringUTF("");
+    env->SetIntField(bridge, g_bridge_hits, 0);
     env->SetObjectField(bridge, g_bridge_last_arg, empty);
     env->SetObjectField(bridge, g_bridge_last_return, empty);
     env->SetObjectField(bridge, g_bridge_last_error, empty);
@@ -582,69 +678,107 @@ extern "C" int adh_javahook_hook_method(JNIEnv *env, const char *class_name, con
                                              "([Ljava/lang/Object;)Ljava/lang/Object;");
     jobject callback = callback_id ? env->ToReflectedMethod(g_bridge_class, callback_id, JNI_FALSE) : nullptr;
     if (!callback) {
+        env->DeleteGlobalRef(bridge);
         env->DeleteLocalRef(target);
-        set_error(error, error_size, "failed to reflect AdhJavaHookBridge.callback");
-        if (env->ExceptionCheck()) env->ExceptionClear();
-        return 0;
+        return fail_hook("failed to reflect AdhJavaHookBridge.callback");
     }
 
     jobject backup = lsplant::Hook(env, target, bridge, callback);
     env->DeleteLocalRef(callback);
     if (!backup) {
+        env->DeleteGlobalRef(bridge);
         env->DeleteLocalRef(target);
-        set_error(error, error_size, "lsplant::Hook failed (check logcat tag ADH_LSP)");
-        return 0;
+        return fail_hook("lsplant::Hook failed (check logcat tag ADH_LSP)");
     }
 
-    env->SetObjectField(bridge, g_bridge_backup, backup);
-    g_target_method = env->NewGlobalRef(target);
-    g_backup_method = backup;  // LSPlant returns a global reference
-    g_hook_active = 1;
-    g_target_name = signature;
+    jobject target_global = env->NewGlobalRef(target);
+    if (!target_global) {
+        (void)lsplant::UnHook(env, target);
+        env->DeleteLocalRef(target);
+        env->DeleteGlobalRef(backup);
+        env->DeleteGlobalRef(bridge);
+        return fail_hook("failed to retain target method global reference");
+    }
     env->DeleteLocalRef(target);
+
+    env->SetObjectField(bridge, g_bridge_backup, backup);
+    pthread_mutex_lock(&g_java_hooks_lock);
+    JavaHookContext &ctx = g_java_hooks[slot];
+    ctx.id = hook_id;
+    ctx.active = 1;
+    ctx.target_method = target_global;
+    ctx.backup_method = backup;
+    ctx.bridge = bridge;
+    ctx.is_static = is_static;
+    ctx.target_name = signature;
+    pthread_mutex_unlock(&g_java_hooks_lock);
+
+    if (hook_id_out) *hook_id_out = hook_id;
+    LLOGI("java_hook installed id=%d target=%s", hook_id, signature.c_str());
     return 1;
 }
 
-extern "C" int adh_javahook_unhook_active(JNIEnv *env, char *error, size_t error_size) {
-    if (!env || !g_hook_active || !g_target_method) {
-        set_error(error, error_size, "no active Java hook");
+extern "C" int adh_javahook_unhook_id(JNIEnv *env, int hook_id, char *error, size_t error_size) {
+    if (!env) {
+        set_error(error, error_size, "no JavaVM/JNIEnv available");
         return 0;
     }
-    if (!lsplant::UnHook(env, g_target_method)) {
-        set_error(error, error_size, "lsplant::UnHook failed (check logcat tag ADH_LSP)");
+    int removed = 0, failed = 0;
+    pthread_mutex_lock(&g_java_hooks_lock);
+    for (int i = 0; i < ADH_JAVA_MAX_HOOKS; i++) {
+        JavaHookContext &hook = g_java_hooks[i];
+        if (hook.active != 1 || (hook_id != 0 && hook.id != hook_id)) continue;
+        if (lsplant::UnHook(env, hook.target_method)) {
+            release_hook_slot(env, hook);
+            removed++;
+        } else {
+            failed++;
+        }
+    }
+    pthread_mutex_unlock(&g_java_hooks_lock);
+    if (removed == 0 && failed == 0) {
+        set_error(error, error_size, hook_id ? "no matching active Java hook" : "no active Java hooks");
         return 0;
     }
-    if (g_bridge_object && g_bridge_backup) env->SetObjectField(g_bridge_object, g_bridge_backup, nullptr);
-    if (g_bridge_object && g_bridge_hits) env->SetIntField(g_bridge_object, g_bridge_hits, 0);
-    if (g_backup_method) {
-        env->DeleteGlobalRef(g_backup_method);
-        g_backup_method = nullptr;
+    if (failed) {
+        set_error(error, error_size, "%d Java hook(s) failed to unhook", failed);
+        return 0;
     }
-    env->DeleteGlobalRef(g_target_method);
-    g_target_method = nullptr;
-    g_hook_active = 0;
-    g_target_name.clear();
     return 1;
 }
 
 extern "C" int adh_javahook_status_json(JNIEnv *env, char *out, size_t out_size) {
     if (!out || !out_size) return 0;
-    int hits = 0;
-    std::string last_arg, last_return, last_error;
-    if (env && g_bridge_object) {
-        hits = env->GetIntField(g_bridge_object, g_bridge_hits);
-        last_arg = get_string_field(env, g_bridge_object, g_bridge_last_arg);
-        last_return = get_string_field(env, g_bridge_object, g_bridge_last_return);
-        last_error = get_string_field(env, g_bridge_object, g_bridge_last_error);
+    std::string hooks = "[";
+    int active_count = 0;
+    pthread_mutex_lock(&g_java_hooks_lock);
+    for (int i = 0; i < ADH_JAVA_MAX_HOOKS; i++) {
+        JavaHookContext &hook = g_java_hooks[i];
+        if (hook.active != 1) continue;
+        int hits = 0;
+        std::string last_arg, last_return, last_error;
+        if (env && hook.bridge) {
+            hits = env->GetIntField(hook.bridge, g_bridge_hits);
+            last_arg = get_string_field(env, hook.bridge, g_bridge_last_arg);
+            last_return = get_string_field(env, hook.bridge, g_bridge_last_return);
+            last_error = get_string_field(env, hook.bridge, g_bridge_last_error);
+        }
+        if (active_count) hooks += ",";
+        hooks += "{\"id\":" + std::to_string(hook.id) +
+                 ",\"target\":\"" + json_escape(hook.target_name) + "\"" +
+                 ",\"hits\":" + std::to_string(hits) +
+                 ",\"lastArg\":\"" + json_escape(last_arg) + "\"" +
+                 ",\"lastReturn\":\"" + json_escape(last_return) + "\"" +
+                 ",\"lastError\":\"" + json_escape(last_error) + "\"}";
+        active_count++;
     }
-    std::string json =
-        std::string("{\"available\":true,\"initOk\":") + (g_init_ok ? "true" : "false") +
-        ",\"backend\":\"lsplant\",\"version\":\"v6.4\",\"active\":" + (g_hook_active ? "true" : "false") +
-        ",\"target\":\"" + json_escape(g_target_name) + "\"" +
-        ",\"hits\":" + std::to_string(hits) +
-        ",\"lastArg\":\"" + json_escape(last_arg) + "\"" +
-        ",\"lastReturn\":\"" + json_escape(last_return) + "\"" +
-        ",\"lastError\":\"" + json_escape(last_error) + "\"}";
+    pthread_mutex_unlock(&g_java_hooks_lock);
+    hooks += "]";
+    std::string json = "{\"available\":true,\"initOk\":" + std::string(g_init_ok ? "true" : "false") +
+                       ",\"backend\":\"lsplant\",\"version\":\"v6.4\",\"active\":" +
+                       std::string(active_count ? "true" : "false") +
+                       ",\"count\":" + std::to_string(active_count) +
+                       ",\"hooks\":" + hooks + "}";
     snprintf(out, out_size, "%s", json.c_str());
     out[out_size - 1] = 0;
     return 1;

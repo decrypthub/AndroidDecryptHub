@@ -67,6 +67,10 @@ static void capture(const char *func, const unsigned char *in, int inl) {
 
 // Empty the ring (used by the one-shot probes in place of the old `g_ncaps = 0`). Discarded
 // in-ring records are rolled into g_cap_dropped (see below); cumulative seq is never touched.
+void adh_capture_push_text(const char *func, const char *text) {
+    if (!func || !text) return;
+    capture(func, (const unsigned char *)text, (int)strlen(text));
+}
 static void cap_reset(void) {
     pthread_mutex_lock(&g_cap_lock);
     // Records still in the ring are being discarded (a one-shot probe / capture_stop clears

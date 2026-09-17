@@ -82,24 +82,41 @@ if (bc.status !== 0) {
   process.exit(0);
 }
 
+const hookId = Number(hook.hookId ?? 0);
 let status = null;
 for (let i = 0; i < 20; i++) {
   status = await post('/api/java/hook', { session: agent.sessionId, action: 'status' });
-  if (status?.status?.hits >= 1) break;
+  const h = (status?.status?.hooks ?? []).find((x) => Number(x.id) === hookId);
+  if (h?.hits >= 1) break;
   await sleep(100);
 }
-const st = status?.status ?? {};
+const st = (status?.status?.hooks ?? []).find((x) => Number(x.id) === hookId) ?? {};
+let event = null;
+for (let i = 0; i < 20; i++) {
+  const list = await (await fetch(`${base}/api/captures?session=${encodeURIComponent(agent.sessionId)}&limit=200`)).json();
+  const found = (list.captures ?? []).find((c) => c.func === 'JAVA_HOOK');
+  if (found) {
+    const detail = await (await fetch(`${base}/api/captures/${found.id}`)).json();
+    if (String(detail.text ?? '').includes('ADH_HOOK_PING') &&
+        String(detail.text ?? '').includes('REAL_HOOK:ADH_HOOK_PING')) {
+      event = detail;
+      break;
+    }
+  }
+  await sleep(100);
+}
 const alive = String(spawnSync(adb, ['-s', serial, 'shell', 'pidof', 'com.adh.sandbox'], { encoding: 'utf8' }).stdout || '').trim();
-const unhook = await post('/api/java/hook', { session: agent.sessionId, action: 'unhook' }).catch(() => null);
-const pass = hook.ok === true &&
-  st.active === true && st.hits >= 1 &&
+const unhook = await post('/api/java/hook', { session: agent.sessionId, action: 'unhook', id: hookId }).catch(() => null);
+const pass = hook.ok === true && hookId >= 1 &&
+  st.hits >= 1 &&
   st.lastArg === 'ADH_HOOK_PING' &&
   st.lastReturn === 'REAL_HOOK:ADH_HOOK_PING' &&
   (st.lastError === '' || st.lastError == null) &&
+  event != null &&
   unhook?.ok === true &&
   alive.length > 0;
-console.log(JSON.stringify({ hook, status, unhook, alive }));
-result('java_hook install + trigger + original + unhook', pass);
+console.log(JSON.stringify({ hook, status, event: event ? { id: event.id, func: event.func, algo: event.algo, op: event.op, preview: event.preview } : null, unhook, alive }));
+result('java_hook install + trigger + original + event stream + unhook', pass);
 process.exit(0);
 EOF
 )"

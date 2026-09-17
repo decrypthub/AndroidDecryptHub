@@ -19,6 +19,8 @@ void adh_cmd_capture_drain(int fd, const char *id);
 void adh_cmd_detect_watch(int fd, const char *id, const char *module, const char *class_name);
 void adh_cmd_inline_crypto_test(int fd, const char *id, const char *module, const char *symbol, const char *class_name, const char *method);
 int adh_capture_register_reporter(JNIEnv *env, const char *report_class);
+// Push a bounded, target-generated text event (for example a Java hook callback) into the existing capture ring.
+void adh_capture_push_text(const char *func, const char *text);
 
 #ifdef __cplusplus
 }
