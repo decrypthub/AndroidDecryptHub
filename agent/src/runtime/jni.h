@@ -9,6 +9,7 @@ extern "C" {
 
 void adh_jni_set_vm(JavaVM *vm);
 int adh_jni_vm_available(void);
+JavaVM *adh_jni_get_vm(void);
 JNIEnv *adh_jni_attach(int *did_attach);
 void adh_jni_detach(int did_attach);
 jclass adh_jni_load_app_class(JNIEnv *env, const char *dotname);

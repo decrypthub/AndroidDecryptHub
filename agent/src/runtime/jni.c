@@ -14,6 +14,10 @@ int adh_jni_vm_available(void) {
     return g_vm != NULL;
 }
 
+JavaVM *adh_jni_get_vm(void) {
+    return g_vm;
+}
+
 JNIEnv *adh_jni_attach(int *did_attach) {
     *did_attach = 0;
     if (!g_vm) {

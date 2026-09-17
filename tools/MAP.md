@@ -96,4 +96,5 @@ translation — kept separate).
 - `verify_v54_jni_register_hook.sh` — JNIEnv->RegisterNatives hook：触发 `Detection.jniRegisterProbe()`，断言 JNI_NATIVE 事件和新注册方法 `0xAD11`，再 uninstall（deploy new agent/sandbox）。
 - `verify_v55_native_rewrite.sh` — native hook 参数改写 `1,2 -> 18`，skip original + returnValue `0x54 -> 84`，status 字段与 unhook（deploy new agent/daemon）。
 - `verify_v56_hook_stress.sh` — 同一 native/Java 目标各 24 次 install/unhook，断言软卸载复用、最终行为恢复、agent 存活（deploy new agent/daemon）。
+- `verify_v57_jni_onload.sh` — JNI_OnLoad list → hook → 手动 call（返回 JNI_VERSION_1_6）→ JNI_ONLOAD 事件 → 软 unhook → 再次 call 不新增 hit（已加载模块路径，非 load-time 拦截）。
 - `verify_v47_got_enum.sh` — 枚举 `libadhdetect.so` 的 GOT/relocation，断言导入符号可见（deploy new agent；未部署时 SKIP）。
