@@ -49,6 +49,35 @@ if [ -z "$READY" ]; then
 fi
 echo "PASS  boot script started the device daemon (pid=$PID)"
 
+# A freshly rebooted device is locked; the keyguard owns the foreground and app launches land
+# behind it. Non-secure keyguards are dismissed through the authenticated daemon (secure
+# credentials are never touched), matching what a user does by swiping up.
+UNLOCK="$(node - "$BASE" <<'EOF'
+const base = process.argv[2];
+const call = async (name, args) => {
+  const body = { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } };
+  const r = await (await fetch(base + '/mcp', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })).json();
+  if (r.result?.isError) throw new Error(r.result.content?.[0]?.text || 'error');
+  const item = r.result?.content?.find((c) => c.type === 'text');
+  return item ? JSON.parse(item.text) : {};
+};
+try {
+  const before = await call('phone_device', { action: 'status' });
+  if (before.locked) {
+    await call('phone_device', { action: 'unlock' });
+    await new Promise((r) => setTimeout(r, 1200));
+  }
+  const after = await call('phone_device', { action: 'status' });
+  console.log('locked=' + after.locked);
+} catch (e) { console.log('locked=unknown err=' + String(e.message).slice(0, 120)); }
+EOF
+)"
+case "$UNLOCK" in
+  *locked=false*) echo "PASS  keyguard dismissed (non-secure) before UI probes: $UNLOCK" ;;
+  *locked=true*) echo "SKIP  device has a secure lock screen; UI probes run only if the foreground allows it" ;;
+  *) echo "SKIP  lock state unknown: $UNLOCK" ;;
+esac
+
 PROTO="$(node - "$BASE" <<'EOF'
 const base = process.argv[2];
 const call = async (name, args) => {
