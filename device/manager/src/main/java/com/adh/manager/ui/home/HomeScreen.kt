@@ -117,7 +117,21 @@ fun HomeScreen(
     var bridgeRefresh by remember { mutableIntStateOf(0) }
     LaunchedEffect(repository, refreshVersion, automationRefresh) {
         automationEnabled = withContext(Dispatchers.IO) {
-            repository.isAutomationEnabled() ?: AutomationStatus.isServiceEnabled(context)
+            // Right after an install/resume the accessibility manager can still report no enabled
+            // service and the daemon binder may not be published yet; retry briefly before deciding,
+            // otherwise the card claims "已关闭" while the service is demonstrably running.
+            var resolved: Boolean? = null
+            for (attempt in 0 until 3) {
+                val fromService = AutomationStatus.isServiceEnabled(context)
+                val fromDaemon = repository.isAutomationEnabled()
+                if (!fromService && fromDaemon != true && attempt < 2) {
+                    Thread.sleep(400)
+                    continue
+                }
+                resolved = fromDaemon ?: fromService
+                break
+            }
+            resolved ?: false
         }
         notificationGranted = withContext(Dispatchers.IO) { AdhNotificationListener.isGranted(context) }
     }
@@ -270,7 +284,10 @@ private fun AutomationSection(
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                if (enabled) {
+                // Show the bridge line whenever the service is on OR the bridge is talking to the
+                // host: a stale toggle must not hide the fact that automation is actually working.
+                val bridgeLive = bridgeSummary.startsWith("已连接") || bridgeSummary.startsWith("正在连接")
+                if (enabled || bridgeLive) {
                     Text(
                         text = "桥接：" + bridgeSummary,
                         style = MaterialTheme.typography.bodySmall,

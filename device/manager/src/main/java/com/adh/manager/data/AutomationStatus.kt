@@ -17,7 +17,11 @@ object AutomationStatus {
 
     fun bridgeSummary(): String = when {
         bridgeState == "disabled" -> "未启用"
-        bridgeState.startsWith("connected:") -> "已连接 " + bridgeState.removePrefix("connected:")
+        bridgeState.startsWith("connected:") -> {
+            val which = bridgeState.removePrefix("connected:")
+            // Loopback means the adb reverse tunnel; anything else is a direct network connection.
+            if (which == "127.0.0.1" || which == "localhost") "已连接（USB/adb reverse）" else "已连接（局域网 " + which + "）"
+        }
         bridgeState.startsWith("connecting:") -> "正在连接 " + bridgeState.removePrefix("connecting:")
         bridgeState.startsWith("error:") -> "未连接（" + bridgeState.removePrefix("error:") + "）"
         else -> bridgeState
