@@ -10,9 +10,10 @@
 | ADH 模块已刷入 | Zygisk 模块 + Manager（手机侧）+ Device Daemon（root）。bundle 见 `injector/zygisk/dist/adh-bundle-vX.Y.Z.zip` |
 | Manager 已安装 | 承载可选的 `AdhAutomationAccessibilityService`（自动化执行面） |
 | Host ADH Daemon 在跑 | `cd daemon && node src/index.ts`（HTTP/WS `8088`，agent `8761`，自动化桥 `8763`） |
-| `adb reverse` 已建立 | `bash tools/dev_up.sh` 会一次性设好 8761/8763/8088 三条隧道 |
+| `adb reverse` 已建立（开发路径） | `bash tools/dev_up.sh` 会一次性设好 8761/8763/8088 三条隧道 |
 
-> 只走 USB/局域网时，**三个端口都要 reverse**，否则手机侧的 agent 与自动化桥都回不来。
+> 自动化桥除了 `adb reverse`，还会**记住 host 广播过的局域网地址**：只要成功连过一次，之后拔线或换到同一网段也能自己直连（协议 v9+ 的 `helloAck.lanHosts`）。
+> agent（8761）目前仍需要 `adb reverse` 或可达网络路径。
 
 ## 2. 打开自动化（默认关闭）
 
@@ -72,6 +73,7 @@ phone_observe {mode:"text"}         # 省上下文的紧凑屏幕视图（含 sn
 - **保存即体检**：`phone_skill save` 会在保存前跑一次静态预检，对「没有 app/wait 建立应用上下文就开始 act/observe/find」的步骤按索引给出 `warnings`（例如 `step_0_no_app_context`）。告警不阻止保存，但会让配方作者知道这条流程只在录制时的那个界面成立。
 - **多状态恢复**：应用常常从不同状态打开（浏览器停在首页或结果页、设置停在首页或搜索页）。用 `phone_wait_any`（或 `phone_task` 的 `wait_any` 步骤）表达「任一状态都可以」，命中时回报 `condition` 下标；都不命中则明确超时。配方里还可以给步骤加 `onlyIf`：守卫选择器不存在时该步 `skipped:true`，不是失败。
 - **手势保真**：tap/swipe 返回 `changed`（窗口文本签名是否真的变化）。有些 Compose 界面（SukiSU Ultra、Vector/LSPosed 管理器）接受无障碍手势但界面不动 —— 此时 `phone_act` 会自动用同坐标走 root 注入重试一次并标注 `fallback:"root"`；也可以显式要求 `inputMode:"root"`（Device Daemon v9），或直接 `{action:"input", mode:"tap|swipe"}`。
+- **设备级控制**：`phone_device` 除电源（status/wake/unlock/lock）外，还能读写**音量**（`volume_status`；`volume_set {stream: music|ring|alarm|voice, index}`，index 会被夹到该流上限）和**剪贴板**（`clipboard_read` / `clipboard_write {text}`，≤8 KiB；写入后前台应用可粘贴——Android 只允许前台进程读剪贴板）。
 - **看图**：`phone_observe {mode:"text", includeScreenshot:true}` 一次给文本 + JPEG。
 
 ## 5. 读通知（可选，需要你在系统里授权一次）
@@ -116,11 +118,13 @@ Android 15 不再把通知正文放进无障碍事件，所以这一项走独立
 | 现象 | 含义与处理 |
 |---|---|
 | `automation_disabled` | Host 开关没开（`/api/config` 的 `automation.enabled`） |
-| `no automation device connected` | 无障碍服务被系统关掉，或 `adb reverse tcp:8763` 断了；先看 `/api/automation/status` 的 `bridge` |
+| `no automation device connected` | 无障碍服务被系统关掉、`adb reverse tcp:8763` 断了、或**开机时守护进程没起来**；先看 `/api/automation/status` 的 `bridge`，再看手机 `/data/adb/adh/device_daemon.log` |
 | `command_timeout: device did not answer …` | 目标窗口被冻结/无响应（设备侧 10s 硬截止）。**通道仍然可用**：重试，或对该 App 执行 `phone_app {action:"restart"}` |
 | `selector_not_found` / `stale_ref` | 报错里已附**当前屏幕**的紧凑文本视图，照着改选择器或重新 `phone_find` |
-| `phone_app open` 报了 `verified:false` 且 `warning` 指向某个系统包 | OEM 跨应用确认框拦住了启动：手动确认、把该包加入 allowlist、或刷入含协议 v6+ 的新模块包（当前为 v0.3.8）走 root `open` |
-| `blocked_package: … is not in the automation allowlist` | 目标包不在 allowlist（前台包或要打开的目标包） |
+| `phone_app open` 报了 `verified:false` 且 `warning` 指向某个系统包 | OEM 跨应用确认框或系统浮窗拦住了启动：确认弹窗、把该包加入 allowlist，或刷入含协议 v6+ 的模块包（当前 v0.3.9）走 root `open`（浮窗会自动按返回键重试） |
+| `blocked_package: … is not in the automation allowlist` | 目标包不在 allowlist（前台包或要打开的目标包）。Web 设置页会出现「被拒绝的包名」+ 一键添加；Manager 自身永远被拒绝（自我防护） |
+| `device_daemon_old` / `device_daemon_unavailable` | 手机上的 Device Daemon 比 Manager 旧或没在跑：刷入当前 bundle 并重启；守护进程日志在 `/data/adb/adh/device_daemon.log` |
+| `clipboard_read` 返回空 | Android 10+ 只允许**前台进程**读剪贴板：要读的内容来自哪个 App，就让那个 App 在前台（写剪贴板不受此限） |
 
 诊断入口（验收用，不进产品 MCP 面）：`POST /api/automation/selftest?op=status`，以及设备侧故障注入 `POST /api/automation/selftest?op=selftest_sleep&ms=20000`。
 
@@ -131,5 +135,6 @@ bash tools/verify_v36_automation.sh        # 控件树/文本视图/动作/等�
 bash tools/verify_v37_agent_reconnect.sh   # Host 重启后 agent 自行重连（同进程新会话）
 bash tools/verify_v38_automation_watchdog.sh  # 命令卡死 → 10s 回 command_timeout，通道存活
 bash tools/verify_v39_notifications.sh     # 通知读取（脚本借用授权并在结束时还原）
-bash tools/verify_all.sh                   # 全量回归（设备/沙盒缺席时对应项 SKIP）
+bash tools/verify_v41_postflash.sh         # 刷机重启后跑：等开机自启 → 音量/剪贴板/根输入
+bash tools/verify_all.sh                   # 全量回归（含 v4.1；设备缺席时对应项 SKIP）
 ```
