@@ -121,7 +121,7 @@ Android 15 不再把通知正文放进无障碍事件，所以这一项走独立
 | `no automation device connected` | 无障碍服务被系统关掉、`adb reverse tcp:8763` 断了、或**开机时守护进程没起来**；先看 `/api/automation/status` 的 `bridge`，再看手机 `/data/adb/adh/device_daemon.log` |
 | `command_timeout: device did not answer …` | 目标窗口被冻结/无响应（设备侧 10s 硬截止）。**通道仍然可用**：重试，或对该 App 执行 `phone_app {action:"restart"}` |
 | `selector_not_found` / `stale_ref` | 报错里已附**当前屏幕**的紧凑文本视图，照着改选择器或重新 `phone_find` |
-| `phone_app open` 报了 `verified:false` 且 `warning` 指向某个系统包 | OEM 跨应用确认框或系统浮窗拦住了启动：确认弹窗、把该包加入 allowlist，或刷入含协议 v6+ 的模块包（当前 v0.3.9）走 root `open`（浮窗会自动按返回键重试） |
+| `phone_app open` 报了 `verified:false` 且 `warning` 指向某个系统包 | OEM 跨应用确认框或系统浮窗拦住了启动：确认弹窗、把该包加入 allowlist，或刷入含协议 v6+ 的模块包（当前 v0.3.10）走 root `open`（浮窗会自动按返回键重试） |
 | `blocked_package: … is not in the automation allowlist` | 目标包不在 allowlist（前台包或要打开的目标包）。Web 设置页会出现「被拒绝的包名」+ 一键添加；Manager 自身永远被拒绝（自我防护） |
 | `device_daemon_old` / `device_daemon_unavailable` | 手机上的 Device Daemon 比 Manager 旧或没在跑：刷入当前 bundle 并重启；守护进程日志在 `/data/adb/adh/device_daemon.log` |
 | `clipboard_read` 返回空 | Android 10+ 只允许**前台进程**读剪贴板：要读的内容来自哪个 App，就让那个 App 在前台（写剪贴板不受此限） |
