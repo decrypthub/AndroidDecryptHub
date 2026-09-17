@@ -16,6 +16,11 @@ object Detection {
     // JNIEnv table hook. jniEnvValue exists only to be resolved by GetStaticMethodID.
     @JvmStatic external fun jniEnvProbe(): Int
     @JvmStatic fun jniEnvValue(): String = "ADH_JNI_ENV_VALUE"
+    // v4.19 fixture for the field-ID / byte-array JNIEnv hooks: native code performs
+    // GetFieldID / GetStaticFieldID / SetByteArrayRegion / GetByteArrayElements in one call.
+    @JvmStatic external fun jniEnvArrayProbe(): Int
+    // Exists so the probe can resolve a static field ID on this class.
+    @JvmField val jniEnvStaticField: Int = 0x51
 
     fun load() {
         try {

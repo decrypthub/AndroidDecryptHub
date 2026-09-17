@@ -16,8 +16,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const MARKER = 'ADH_JNI_ENV_MARKER';
 const EXPECT = {
   FindClass: 'com/adh/sandbox/Detection',
-  GetMethodID: 'load()V',
-  GetStaticMethodID: 'jniEnvValue()Ljava/lang/String;',
+  GetMethodID: 'com.adh.sandbox.Detection#load()V',
+  GetStaticMethodID: 'com.adh.sandbox.Detection#jniEnvValue()Ljava/lang/String;',
   NewStringUTF: MARKER,
   GetStringUTFChars: MARKER,
 };

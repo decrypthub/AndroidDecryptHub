@@ -418,6 +418,10 @@ RSA_public_encrypt / RSA_private_decrypt
 | `NewStringUTF` / `GetStringUTFChars` | 字符串内容 |
 | `GetByteArrayElements` / `SetByteArrayRegion` | 数组数据摘要 |
 | `FindClass` | class 名 |
+| `GetFieldID` / `GetStaticFieldID` | 字段所属类、name、签名 |
+
+> 实现状态（v4.18 / v4.19，真机 `aa165071` 验收）：JNI 监控通过 **JNIEnv 函数表槽位 hook**（替换表项指针，非函数体 patch）实现 —— 已实现 `RegisterNatives`（v4.14）、`FindClass` / `GetMethodID` / `GetStaticMethodID` / `NewStringUTF` / `GetStringUTFChars`（v4.18）、`GetFieldID` / `GetStaticFieldID` / `GetByteArrayElements` / `SetByteArrayRegion`（v4.19）。成员 ID 事件带所属类（`<class>#<name><sig>`），数组事件带长度 + 有界 hex 摘要（前 24 字节）。
+> 边界：只观察**经过 JNIEnv 表**的调用（native 库的正常用法），ART 内部 C++ 直调不经过该表；`Call*Method` 系列（可变参数入口）尚未接入。每个槽位有 256 条事件上限，超过后只累加 `dropped`。
 
 ### 8.6 Direct Syscall 覆盖（分级）
 

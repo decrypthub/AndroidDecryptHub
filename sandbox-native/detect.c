@@ -126,6 +126,26 @@ JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_jniEnvProbe(JNIEnv *env, j
     (void)load;
     return out;
 }
+// v4.19 fixture for the field-ID / byte-array JNIEnv table hooks: one call performs
+// GetFieldID, GetStaticFieldID, SetByteArrayRegion and GetByteArrayElements.
+JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_jniEnvArrayProbe(JNIEnv *env, jclass clazz) {
+    jclass holder = (*env)->FindClass(env, "com/adh/sandbox/JniEnvHolder");
+    if (!holder) { if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); return -1; }
+    jfieldID instance_field = (*env)->GetFieldID(env, holder, "marker", "I");
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    jfieldID static_field = (*env)->GetStaticFieldID(env, clazz, "jniEnvStaticField", "I");
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    jbyteArray arr = (*env)->NewByteArray(env, 8);
+    if (!arr) { if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); return -2; }
+    const jbyte data[8] = { 0x41, 0x44, 0x48, 0x02, 0x03, 0x04, 0x05, 0x06 };
+    (*env)->SetByteArrayRegion(env, arr, 0, 8, data);
+    jbyte *elems = (*env)->GetByteArrayElements(env, arr, NULL);
+    int ok = elems != NULL && elems[0] == 0x41 && elems[3] == 0x02 && elems[7] == 0x06;
+    if (elems) (*env)->ReleaseByteArrayElements(env, arr, elems, JNI_ABORT);
+    (*env)->DeleteLocalRef(env, arr);
+    if (!instance_field || !static_field || !ok) return -3;
+    return 0xAD1008;   // = 0xAD1000 + 8 array bytes
+}
 JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_run(JNIEnv *env, jclass clazz) {
     (void)env; (void)clazz;
     int flags = 0;

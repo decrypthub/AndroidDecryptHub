@@ -31,28 +31,6 @@ static void set_jni_error(const char *message) {
     snprintf(g_jni_hook_error, sizeof(g_jni_hook_error), "%s", message ? message : "");
 }
 
-static void jni_class_name(JNIEnv *env, jclass clazz, char *out, size_t out_size) {
-    if (!out || !out_size) return;
-    out[0] = 0;
-    if (!env || !clazz) return;
-    if ((*env)->PushLocalFrame(env, 8) != 0) return;
-    jclass class_class = (*env)->GetObjectClass(env, clazz);
-    jmethodID get_name = class_class
-        ? (*env)->GetMethodID(env, class_class, "getName", "()Ljava/lang/String;") : NULL;
-    jstring name = get_name ? (jstring)(*env)->CallObjectMethod(env, clazz, get_name) : NULL;
-    if (name) {
-        const char *chars = (*env)->GetStringUTFChars(env, name, NULL);
-        if (chars) {
-            strncpy(out, chars, out_size - 1);
-            out[out_size - 1] = 0;
-            (*env)->ReleaseStringUTFChars(env, name, chars);
-        }
-        (*env)->DeleteLocalRef(env, name);
-    }
-    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-    (*env)->PopLocalFrame(env, NULL);
-}
-
 static jint JNICALL register_natives_wrapper(JNIEnv *env, jclass clazz,
                                              const JNINativeMethod *methods, jint nMethods) {
     register_natives_fn original =
@@ -67,7 +45,7 @@ static jint JNICALL register_natives_wrapper(JNIEnv *env, jclass clazz,
     if (methods && nMethods > 0) {
         char class_name[192];
         char class_escaped[400];
-        jni_class_name(env, clazz, class_name, sizeof(class_name));
+        adh_jni_class_name(env, clazz, class_name, sizeof(class_name));
         json_escape(class_name, class_escaped, sizeof(class_escaped));
         int limit = nMethods > 16 ? 16 : (int)nMethods;
         for (int i = 0; i < limit; i++) {

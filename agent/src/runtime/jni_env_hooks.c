@@ -7,6 +7,8 @@
 // Hot-path rule: a hooked JNI entry can run on any target thread, so the wrappers must never
 // block or allocate without bound. Each slot emits a bounded number of JNI_ENV events and then
 // only counts drops; the capture ring is entered through its own try-lock (capture.c).
+// Member-ID events additionally resolve the owning class name (class-name resolution is only
+// done while a slot is still emitting events, so it is bounded by the same budget).
 
 #include "jni_env_hooks.h"
 
@@ -21,8 +23,9 @@
 #include <stdio.h>
 #include <string.h>
 
-#define ENV_HOOK_MAX 5
+#define ENV_HOOK_MAX 9
 #define ENV_EVENT_LIMIT 256
+#define ENV_HEX_PREVIEW 24   // bytes of array payload echoed in one event
 
 struct EnvHookSlot {
     const char *name;
@@ -35,11 +38,15 @@ struct EnvHookSlot {
 };
 
 static struct EnvHookSlot g_env_hooks[ENV_HOOK_MAX] = {
-    { "GetStringUTFChars", NULL, NULL, 0, 0, 0, 0 },
-    { "FindClass",         NULL, NULL, 0, 0, 0, 0 },
-    { "GetMethodID",       NULL, NULL, 0, 0, 0, 0 },
-    { "GetStaticMethodID", NULL, NULL, 0, 0, 0, 0 },
-    { "NewStringUTF",      NULL, NULL, 0, 0, 0, 0 },
+    { "GetStringUTFChars",   NULL, NULL, 0, 0, 0, 0 },
+    { "FindClass",           NULL, NULL, 0, 0, 0, 0 },
+    { "GetMethodID",         NULL, NULL, 0, 0, 0, 0 },
+    { "GetStaticMethodID",   NULL, NULL, 0, 0, 0, 0 },
+    { "NewStringUTF",        NULL, NULL, 0, 0, 0, 0 },
+    { "GetFieldID",          NULL, NULL, 0, 0, 0, 0 },
+    { "GetStaticFieldID",    NULL, NULL, 0, 0, 0, 0 },
+    { "GetByteArrayElements", NULL, NULL, 0, 0, 0, 0 },
+    { "SetByteArrayRegion",  NULL, NULL, 0, 0, 0, 0 },
 };
 static pthread_mutex_t g_env_hook_lock = PTHREAD_MUTEX_INITIALIZER;
 static __thread int g_env_hook_reentry = 0;
@@ -49,6 +56,8 @@ typedef const char *(*get_string_utf_chars_fn)(JNIEnv *, jstring, jboolean *);
 typedef jclass (*find_class_fn)(JNIEnv *, const char *);
 typedef jmethodID (*get_method_id_fn)(JNIEnv *, jclass, const char *, const char *);
 typedef jstring (*new_string_utf_fn)(JNIEnv *, const char *);
+typedef jbyte *(*get_byte_array_elements_fn)(JNIEnv *, jarray, jboolean *);
+typedef void (*set_byte_array_region_fn)(JNIEnv *, jarray, jsize, jsize, const jbyte *);
 
 static void *slot_original(int index) {
     return __atomic_load_n(&g_env_hooks[index].original, __ATOMIC_ACQUIRE);
@@ -71,6 +80,33 @@ static void env_event(int index, const char *value) {
     snprintf(json, sizeof(json), "{\"function\":\"%s\",\"value\":\"%s\"}",
              g_env_hooks[index].name, valuej);
     adh_capture_push_text("JNI_ENV", json);
+}
+
+// "<class>#<name><signature>" for methods, "<class>#<name>:<signature>" for fields, so a
+// member-ID event says which class the lookup targeted without a second command.
+static void detail_method(JNIEnv *env, jclass clazz, const char *name, const char *sig,
+                          char *out, size_t out_size) {
+    char cls[192];
+    adh_jni_class_name(env, clazz, cls, sizeof(cls));
+    snprintf(out, out_size, "%s#%s%s", cls[0] ? cls : "?", name ? name : "", sig ? sig : "");
+}
+
+static void detail_field(JNIEnv *env, jclass clazz, const char *name, const char *sig,
+                         char *out, size_t out_size) {
+    char cls[192];
+    adh_jni_class_name(env, clazz, cls, sizeof(cls));
+    snprintf(out, out_size, "%s#%s:%s", cls[0] ? cls : "?", name ? name : "", sig ? sig : "");
+}
+
+static void hex_preview(const jbyte *data, jsize len, char *out, size_t out_size) {
+    size_t used = 0;
+    jsize cap = len > ENV_HEX_PREVIEW ? ENV_HEX_PREVIEW : len;
+    if (!out || out_size == 0) return;
+    out[0] = 0;
+    if (!data) return;
+    for (jsize i = 0; i < cap && used + 3 < out_size; i++) {
+        used += (size_t)snprintf(out + used, out_size - used, "%02x", (unsigned char)data[i]);
+    }
 }
 
 static const char *GetStringUTFChars_wrapper(JNIEnv *env, jstring str, jboolean *isCopy) {
@@ -106,8 +142,8 @@ static jmethodID GetMethodID_wrapper(JNIEnv *env, jclass clazz, const char *name
     if (g_env_hook_reentry || !slot_active(2)) return original(env, clazz, name, sig);
     g_env_hook_reentry = 1;
     jmethodID result = original(env, clazz, name, sig);
-    char detail[320];
-    snprintf(detail, sizeof(detail), "%s%s", name ? name : "", sig ? sig : "");
+    char detail[512];
+    detail_method(env, clazz, name, sig, detail, sizeof(detail));
     env_event(2, detail);
     g_env_hook_reentry = 0;
     return result;
@@ -119,8 +155,8 @@ static jmethodID GetStaticMethodID_wrapper(JNIEnv *env, jclass clazz, const char
     if (g_env_hook_reentry || !slot_active(3)) return original(env, clazz, name, sig);
     g_env_hook_reentry = 1;
     jmethodID result = original(env, clazz, name, sig);
-    char detail[320];
-    snprintf(detail, sizeof(detail), "%s%s", name ? name : "", sig ? sig : "");
+    char detail[512];
+    detail_method(env, clazz, name, sig, detail, sizeof(detail));
     env_event(3, detail);
     g_env_hook_reentry = 0;
     return result;
@@ -135,6 +171,65 @@ static jstring NewStringUTF_wrapper(JNIEnv *env, const char *chars) {
     env_event(4, chars);
     g_env_hook_reentry = 0;
     return result;
+}
+
+static jfieldID GetFieldID_wrapper(JNIEnv *env, jclass clazz, const char *name, const char *sig) {
+    get_method_id_fn original = (get_method_id_fn)slot_original(5);
+    if (!original) return NULL;
+    if (g_env_hook_reentry || !slot_active(5)) return (jfieldID)original(env, clazz, name, sig);
+    g_env_hook_reentry = 1;
+    jfieldID result = (jfieldID)original(env, clazz, name, sig);
+    char detail[512];
+    detail_field(env, clazz, name, sig, detail, sizeof(detail));
+    env_event(5, detail);
+    g_env_hook_reentry = 0;
+    return result;
+}
+
+static jfieldID GetStaticFieldID_wrapper(JNIEnv *env, jclass clazz, const char *name, const char *sig) {
+    get_method_id_fn original = (get_method_id_fn)slot_original(6);
+    if (!original) return NULL;
+    if (g_env_hook_reentry || !slot_active(6)) return (jfieldID)original(env, clazz, name, sig);
+    g_env_hook_reentry = 1;
+    jfieldID result = (jfieldID)original(env, clazz, name, sig);
+    char detail[512];
+    detail_field(env, clazz, name, sig, detail, sizeof(detail));
+    env_event(6, detail);
+    g_env_hook_reentry = 0;
+    return result;
+}
+
+// Array payloads are the interesting part (decrypted/plain buffers crossing the JNI
+// boundary), so both array entries echo length + a bounded hex preview of the bytes.
+static jbyte *GetByteArrayElements_wrapper(JNIEnv *env, jarray array, jboolean *isCopy) {
+    get_byte_array_elements_fn original = (get_byte_array_elements_fn)slot_original(7);
+    if (!original) return NULL;
+    if (g_env_hook_reentry || !slot_active(7)) return original(env, array, isCopy);
+    g_env_hook_reentry = 1;
+    jbyte *result = original(env, array, isCopy);
+    if (result && array) {
+        jsize len = (*env)->GetArrayLength(env, array);
+        char hex[2 * ENV_HEX_PREVIEW + 8], detail[96];
+        hex_preview(result, len, hex, sizeof(hex));
+        snprintf(detail, sizeof(detail), "len=%d hex=%s", (int)len, hex);
+        env_event(7, detail);
+    }
+    g_env_hook_reentry = 0;
+    return result;
+}
+
+static void SetByteArrayRegion_wrapper(JNIEnv *env, jarray array, jsize start, jsize len,
+                                       const jbyte *buf) {
+    set_byte_array_region_fn original = (set_byte_array_region_fn)slot_original(8);
+    if (!original) return;
+    if (g_env_hook_reentry || !slot_active(8)) { original(env, array, start, len, buf); return; }
+    g_env_hook_reentry = 1;
+    char hex[2 * ENV_HEX_PREVIEW + 8], detail[128];
+    hex_preview(buf, len, hex, sizeof(hex));
+    snprintf(detail, sizeof(detail), "start=%d len=%d hex=%s", (int)start, (int)len, hex);
+    original(env, array, start, len, buf);
+    env_event(8, detail);
+    g_env_hook_reentry = 0;
 }
 
 static int env_hook_index(const char *name) {
@@ -153,6 +248,10 @@ static void **env_hook_slot(struct JNINativeInterface *table, int index) {
         case 2: return (void **)(uintptr_t)&table->GetMethodID;
         case 3: return (void **)(uintptr_t)&table->GetStaticMethodID;
         case 4: return (void **)(uintptr_t)&table->NewStringUTF;
+        case 5: return (void **)(uintptr_t)&table->GetFieldID;
+        case 6: return (void **)(uintptr_t)&table->GetStaticFieldID;
+        case 7: return (void **)(uintptr_t)&table->GetByteArrayElements;
+        case 8: return (void **)(uintptr_t)&table->SetByteArrayRegion;
         default: return NULL;
     }
 }
@@ -164,6 +263,10 @@ static void *env_hook_wrapper(int index) {
         case 2: return (void *)&GetMethodID_wrapper;
         case 3: return (void *)&GetStaticMethodID_wrapper;
         case 4: return (void *)&NewStringUTF_wrapper;
+        case 5: return (void *)&GetFieldID_wrapper;
+        case 6: return (void *)&GetStaticFieldID_wrapper;
+        case 7: return (void *)&GetByteArrayElements_wrapper;
+        case 8: return (void *)&SetByteArrayRegion_wrapper;
         default: return NULL;
     }
 }
@@ -181,9 +284,8 @@ static void send_env_result(int fd, const char *id, const char *action, const ch
     // protection of the table (and of each known slot) with every result.
     char table_perms[8] = "";
     if (g_env_hook_table) adh_perms_of_addr((void *)(uintptr_t)g_env_hook_table, table_perms, sizeof(table_perms));
-    char out[2048];
+    char out[3072];
     size_t len = snprintf(out, sizeof(out),
-
         "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"jni_env_hook\",\"ok\":%s,"
         "\"action\":\"%s\",\"function\":\"%s\",\"table\":\"0x%llx\",\"tablePerms\":\"%s\","
         "\"error\":\"%s\",\"hooks\":[",

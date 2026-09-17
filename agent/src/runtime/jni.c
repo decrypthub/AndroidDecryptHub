@@ -3,6 +3,7 @@
 #include "jni.h"
 
 #include <dlfcn.h>
+#include <string.h>
 
 static JavaVM *g_vm = NULL;
 
@@ -74,6 +75,28 @@ jobject adh_jni_app_class_loader(JNIEnv *env) {
     if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
     return NULL;
 }
+void adh_jni_class_name(JNIEnv *env, jclass clazz, char *out, size_t out_size) {
+    if (!out || out_size == 0) return;
+    out[0] = 0;
+    if (!env || !clazz) return;
+    if ((*env)->PushLocalFrame(env, 8) != 0) return;
+    jclass class_class = (*env)->GetObjectClass(env, clazz);
+    jmethodID get_name = class_class
+        ? (*env)->GetMethodID(env, class_class, "getName", "()Ljava/lang/String;") : NULL;
+    jstring name = get_name ? (jstring)(*env)->CallObjectMethod(env, clazz, get_name) : NULL;
+    if (name) {
+        const char *chars = (*env)->GetStringUTFChars(env, name, NULL);
+        if (chars) {
+            strncpy(out, chars, out_size - 1);
+            out[out_size - 1] = 0;
+            (*env)->ReleaseStringUTFChars(env, name, chars);
+        }
+        (*env)->DeleteLocalRef(env, name);
+    }
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    (*env)->PopLocalFrame(env, NULL);
+}
+
 jclass adh_jni_load_app_class(JNIEnv *env, const char *dotname) {
     jclass at = (*env)->FindClass(env, "android/app/ActivityThread");
     jmethodID cur = at ? (*env)->GetStaticMethodID(env, at, "currentApplication", "()Landroid/app/Application;") : NULL;

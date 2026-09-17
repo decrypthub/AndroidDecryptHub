@@ -14,6 +14,10 @@ JNIEnv *adh_jni_attach(int *did_attach);
 void adh_jni_detach(int did_attach);
 jclass adh_jni_load_app_class(JNIEnv *env, const char *dotname);
 jobject adh_jni_app_class_loader(JNIEnv *env);
+// Resolve a jclass to its dotted name through reflection (Class.getName()). Used
+// to make member-ID hook events self-describing; returns "" and clears pending
+// exceptions on failure.
+void adh_jni_class_name(JNIEnv *env, jclass clazz, char *out, size_t out_size);
 
 #ifdef __cplusplus
 }
