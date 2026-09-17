@@ -80,6 +80,7 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
             onLanHosts = { hosts ->
                 memory.edit().putStringSet(BRIDGE_LAN_HOSTS, hosts.take(4).toSet()).apply()
             },
+            onState = { state -> com.adh.manager.data.AutomationStatus.bridgeState = state },
         ).also { it.start() }
         Log.i(TAG, "automation accessibility service connected")
     }
@@ -96,6 +97,7 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         bridge?.stop()
         bridge = null
+        com.adh.manager.data.AutomationStatus.bridgeState = "disabled"
         snapshots.clear()
         snapshotOrder.clear()
         executor.shutdownNow()

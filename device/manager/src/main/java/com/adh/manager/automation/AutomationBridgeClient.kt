@@ -41,6 +41,8 @@ class AutomationBridgeClient(
     rememberedHosts: List<String> = emptyList(),
     /** Called with the LAN addresses the host advertises in its helloAck. */
     private val onLanHosts: (List<String>) -> Unit = {},
+    /** Called with "connecting:<host>", "connected:<host>" or "error:<message>". */
+    private val onState: (String) -> Unit = {},
 ) {
     private val running = AtomicBoolean(false)
     private val commandBusy = AtomicBoolean(false)
@@ -88,6 +90,7 @@ class AutomationBridgeClient(
         while (running.get()) {
             try {
                 val endpoint = nextEndpoint()
+                onState("connecting:" + endpoint.host)
                 Socket().use { connection ->
                     socket = connection
                     connection.tcpNoDelay = true
@@ -101,17 +104,23 @@ class AutomationBridgeClient(
                     val ack = awaitHelloAck(connection, reader)
                     if (ack != null) rememberLanHosts(ack)
                     if (ack == null) {
-                        Log.d(TAG, "no hello_ack from \${endpoint.host}:\${endpoint.port} - trying the next endpoint")
+                        onState("error:no helloAck from " + endpoint.host)
+                        Log.d(TAG, "no hello_ack from " + endpoint.host + ":" + endpoint.port + " - trying the next endpoint")
                         return@use
                     }
                     remember(endpoint)
+                    onState("connected:" + endpoint.host)
                     while (running.get()) {
                         val line = reader.readLine() ?: break
                         handleLine(line, writer)
                     }
                 }
             } catch (error: Exception) {
-                if (running.get()) Log.d(TAG, "bridge reconnect: ${error.message}")
+                if (running.get()) {
+                    val reason = error.message ?: error.javaClass.simpleName
+                    onState("error:" + reason)
+                    Log.d(TAG, "bridge reconnect: " + reason)
+                }
             } finally {
                 socket = null
             }

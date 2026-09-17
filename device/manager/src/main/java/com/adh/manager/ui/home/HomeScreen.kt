@@ -109,11 +109,28 @@ fun HomeScreen(
         webStatus = withContext(Dispatchers.IO) { webUiRepository.probe() }
     }
 
-    LaunchedEffect(repository, refreshVersion) {
+    // The automation service can be enabled/disabled outside this screen (system settings, the
+    // daemon's ensure loop), so re-read it whenever the user comes back instead of only when they
+    // press refresh. Without this the card claimed "已关闭" while the bridge was actually online.
+    var automationRefresh by remember { mutableIntStateOf(0) }
+    var bridgeSummary by remember { mutableStateOf("未启用") }
+    var bridgeRefresh by remember { mutableIntStateOf(0) }
+    LaunchedEffect(repository, refreshVersion, automationRefresh) {
         automationEnabled = withContext(Dispatchers.IO) {
             repository.isAutomationEnabled() ?: AutomationStatus.isServiceEnabled(context)
         }
         notificationGranted = withContext(Dispatchers.IO) { AdhNotificationListener.isGranted(context) }
+    }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { automationRefresh++ }
+
+    // The bridge state lives in the AccessibilityService; poll it while this card is visible so the
+    // operator can tell "cannot reach the host" from "connected, but this app is not allowlisted".
+    LaunchedEffect(automationEnabled, automationEnabled, bridgeRefresh) {
+        bridgeSummary = AutomationStatus.bridgeSummary()
+        while (true) {
+            kotlinx.coroutines.delay(2_000)
+            bridgeSummary = AutomationStatus.bridgeSummary()
+        }
     }
 
     Column(
@@ -134,6 +151,7 @@ fun HomeScreen(
             AutomationSection(
                 enabled = automationEnabled,
                 busy = automationBusy,
+                bridgeSummary = bridgeSummary,
                 onToggle = { checked ->
                     if (!automationBusy) {
                         automationBusy = true
@@ -149,6 +167,7 @@ fun HomeScreen(
                     }
                 },
                 onOpenSettings = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) },
+                onRefreshBridge = { bridgeRefresh++ },
             )
             NotificationAccessSection(
                 granted = notificationGranted,
@@ -220,8 +239,10 @@ fun HomeScreen(
 private fun AutomationSection(
     enabled: Boolean,
     busy: Boolean,
+    bridgeSummary: String,
     onToggle: (Boolean) -> Unit,
     onOpenSettings: () -> Unit,
+    onRefreshBridge: () -> Unit,
 ) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainer,
@@ -249,8 +270,24 @@ private fun AutomationSection(
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (enabled) {
+                    Text(
+                        text = "桥接：" + bridgeSummary,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
             Switch(checked = enabled, onCheckedChange = onToggle, enabled = !busy)
+            if (enabled) {
+                IconButton(onClick = onRefreshBridge, enabled = !busy) {
+                    Icon(
+                        Icons.Rounded.Refresh,
+                        contentDescription = "刷新桥接状态",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
             IconButton(onClick = onOpenSettings, enabled = !busy) {
                 Icon(
                     Icons.Rounded.Settings,
