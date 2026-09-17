@@ -5,7 +5,9 @@
 #include <stdint.h>
 
 #include "../bootstrap/agent_internal.h"
+#include "../hook/got.h"
 #include "jni.h"
+#include <errno.h>
 
 static int name_blacklisted(const char *s) {
     static const char *bad[] = {
@@ -157,4 +159,108 @@ void adh_cmd_load_so(int fd, const char *id, const char *path, const char *symbo
     send_line(fd, out);
     LOGI("load_so path=%s ok=%d symFound=%d err=%s", path, handle != NULL,
          resolved != NULL, error ? error : "");
+}
+
+// Generic integer/pointer native invocation by module+symbol or absolute address.
+// This is intentionally not policy-enforcing in the agent: the Host requires confirm:true
+// before dispatching the command, while the agent only resolves and calls.
+static int parse_u64_args(const char *csv, unsigned long long *out, int max,
+                          int *count_out, char *error, size_t error_size) {
+    *count_out = 0;
+    if (!csv || !csv[0]) return 1;
+    const char *p = csv;
+    while (*p && *count_out < max) {
+        while (*p == ' ' || *p == '\t' || *p == ',') p++;
+        if (!*p) break;
+        if (*p == '-') {
+            snprintf(error, error_size, "native_call only accepts unsigned integer/pointer args");
+            return 0;
+        }
+        char *end = NULL;
+        errno = 0;
+        unsigned long long value = strtoull(p, &end, 0);
+        if (errno || end == p) {
+            snprintf(error, error_size, "invalid native_call arg at '%s' (decimal or 0x hex)", p);
+            return 0;
+        }
+        out[(*count_out)++] = value;
+        p = end;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p && *p != ',') {
+            snprintf(error, error_size, "native_call args must be comma-separated");
+            return 0;
+        }
+    }
+    if (*p) {
+        snprintf(error, error_size, "too many native_call args (max %d)", max);
+        return 0;
+    }
+    return 1;
+}
+
+void adh_cmd_native_call(int fd, const char *id, const char *module, const char *symbol,
+                         const char *addr_hex, const char *args_csv) {
+    char idj[64];
+    json_escape(id, idj, sizeof(idj));
+    void *target = NULL;
+    const char *source = "";
+    if (addr_hex && addr_hex[0]) {
+        target = (void *)(uintptr_t)strtoull(addr_hex, NULL, 0);
+        source = "addr";
+    } else if (module && module[0] && symbol && symbol[0]) {
+        target = adh_resolve_sym(module, symbol);
+        source = "symbol";
+    }
+    if (!target) {
+        char out[420];
+        snprintf(out, sizeof(out),
+                 "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"native_call\",\"ok\":false,"
+                 "\"error\":\"native_call needs addr or module+symbol (target not found)\"}\n", idj);
+        send_line(fd, out);
+        return;
+    }
+
+    unsigned long long args[8] = {0};
+    int argc = 0;
+    char error[256] = "";
+    if (!parse_u64_args(args_csv ? args_csv : "", args, 8, &argc, error, sizeof(error))) {
+        char errorj[320];
+        json_escape(error, errorj, sizeof(errorj));
+        char out[520];
+        snprintf(out, sizeof(out),
+                 "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"native_call\",\"ok\":false,"
+                 "\"error\":\"%s\"}\n", idj, errorj);
+        send_line(fd, out);
+        return;
+    }
+
+    typedef unsigned long long (*fn8_t)(unsigned long long, unsigned long long,
+                                        unsigned long long, unsigned long long,
+                                        unsigned long long, unsigned long long,
+                                        unsigned long long, unsigned long long);
+    long long start_ns = now_ns();
+    unsigned long long result = ((fn8_t)target)(
+        args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7]);
+    long long duration_ns = now_ns() - start_ns;
+
+    char modulej[160], symbolj[200], argsj[256];
+    json_escape(module ? module : "", modulej, sizeof(modulej));
+    json_escape(symbol ? symbol : "", symbolj, sizeof(symbolj));
+    size_t arglen = 0;
+    argsj[0] = 0;
+    for (int i = 0; i < argc; i++) {
+        arglen += (size_t)snprintf(argsj + arglen, sizeof(argsj) - arglen, "%s\"0x%llx\"",
+                                   i ? "," : "", args[i]);
+        if (arglen >= sizeof(argsj)) break;
+    }
+    char out[1200];
+    snprintf(out, sizeof(out),
+             "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"native_call\",\"ok\":true,"
+             "\"source\":\"%s\",\"module\":\"%s\",\"symbol\":\"%s\",\"target\":\"0x%llx\","
+             "\"args\":[%s],\"argCount\":%d,\"result\":\"0x%llx\",\"resultDecimal\":%llu,"
+             "\"durationUs\":%lld,\"fpSupported\":false}\n",
+             idj, source, modulej, symbolj, (unsigned long long)(uintptr_t)target,
+             argsj, argc, result, result, duration_ns / 1000);
+    send_line(fd, out);
+    LOGI("native_call src=%s target=%p args=%d result=0x%llx", source, target, argc, result);
 }

@@ -75,6 +75,11 @@ int adh_trace_target(void) {
     return s;   // 0+3+6+9+12 = 30
 }
 
+// Deterministic active-call target: (a + b) * 2, exported for native_call acceptance.
+__attribute__((noinline, used, visibility("default")))
+long adh_add_target(long a, long b) {
+    return (a + b) * 2;
+}
 // Deterministic trigger for the generic native-hook manager: an explicit JNI call into
 // adh_trace_target() lets the acceptance script install an inline/GOT hook and observe it.
 JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_nativeHookProbe(JNIEnv *env, jclass clazz) {

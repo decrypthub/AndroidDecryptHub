@@ -411,7 +411,13 @@ static void command_loop(int fd) {
                     json_get_str(line, "symbol", nsymbol, sizeof(nsymbol));
                     json_get_str(line, "addr", naddr, sizeof(naddr));
                     long long nid = json_get_num(line, "hookId");
-                    cmd_native_hook(fd, id, naction, nmode, nmodule, nsymbol, naddr, nid);
+                    cmd_native_hook(fd, id, naction, nmode, nmodule, nsymbol, naddr, nid);                } else if (strcmp(op, "native_call") == 0) {
+                    char cmodule[128] = "", csymbol[160] = "", caddr[32] = "", cargs[256] = "";
+                    json_get_str(line, "module", cmodule, sizeof(cmodule));
+                    json_get_str(line, "symbol", csymbol, sizeof(csymbol));
+                    json_get_str(line, "addr", caddr, sizeof(caddr));
+                    json_get_str(line, "args", cargs, sizeof(cargs));
+                    adh_cmd_native_call(fd, id, cmodule, csymbol, caddr, cargs);
                 } else if (strcmp(op, "got_enum") == 0) {
                     char gmodule[128] = "", gfilter[160] = "";
                     json_get_str(line, "module", gmodule, sizeof(gmodule));

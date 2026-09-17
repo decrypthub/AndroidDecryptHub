@@ -36,6 +36,7 @@ SCRIPTS=(
   "verify_v46_native_hook.sh:device"
   "verify_v47_got_enum.sh:device"
   "verify_v48_memory_disasm.sh:device"
+  "verify_v49_native_call.sh:device"
   "verify_v02_dump.sh:device"
   "verify_v02_so.sh:device"
   "verify_v02_dexrepair.sh:host"

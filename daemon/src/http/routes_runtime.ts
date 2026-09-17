@@ -64,6 +64,19 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
         }, 20_000);
         return send(r.ok ? 200 : 502, r);
       } catch (e) { return send(504, { error: (e as Error).message }); }
+    } },    { method: 'POST', path: '/api/native/call', handler: async () => {
+      const body = await readBody(req);
+      const { session, module, symbol, addr, args, confirm } = JSON.parse(body || '{}');
+      const sid = pickSid(session);
+      if (!sid || (!addr && (!module || !symbol))) return send(400, { error: 'need session and addr or module+symbol' });
+      if (confirm !== true) return send(400, { error: 'native_call requires confirm:true (arbitrary target call can crash the process)' });
+      try {
+        const r = await sendCmd(sid, 'native_call', {
+          module: module ?? '', symbol: symbol ?? '', addr: addr ?? '',
+          args: Array.isArray(args) ? args.map((v: any) => String(v)).join(',') : String(args ?? ''),
+        }, 20_000);
+        return send(r.ok ? 200 : 502, r);
+      } catch (e) { return send(504, { error: (e as Error).message }); }
     } },    { method: 'POST', path: '/api/java/enum', handler: async () => {
       const body = await readBody(req);
       const { session, className } = JSON.parse(body || '{}');

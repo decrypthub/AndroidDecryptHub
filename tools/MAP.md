@@ -88,4 +88,5 @@ translation — kept separate).
 - `verify_v46_native_hook.sh` — 沙盒 `libadhdetect.so:adh_trace_target` inline hook → JNI 触发 → 真实 hookId 的寄存器 capture 事件 → unhook 验收（deploy new agent/sandbox；未部署时 SKIP）。
 - `verify_v47_got_enum.sh` — 枚举 `libadhdetect.so` 的 GOT/relocation，断言导入符号可见（deploy new agent；未部署时 SKIP）。
 - `verify_v48_memory_disasm.sh` — 真机地址 → agent 读内存 → Host Capstone 5 WASM 反汇编；覆盖绝对地址与 module+offset 两条路径（deploy new daemon/agent；未部署时 SKIP）。
+- `verify_v49_native_call.sh` — `adh_add_target` 按 module+symbol 和绝对地址主动调用，断言返回值与 confirm 门禁（deploy new agent/daemon；未部署时 SKIP）。
 - `verify_v47_got_enum.sh` — 枚举 `libadhdetect.so` 的 GOT/relocation，断言导入符号可见（deploy new agent；未部署时 SKIP）。
