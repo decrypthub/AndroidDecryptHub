@@ -19,7 +19,7 @@ export interface PhoneSkill {
   lastRunAt?: number;
 }
 
-export const SKILL_STEP_TYPES = ['observe', 'find', 'wait', 'act', 'app', 'device'];
+export const SKILL_STEP_TYPES = ['observe', 'find', 'wait', 'wait_any', 'act', 'app', 'device'];
 const SKILL_NAME = /^[a-z0-9][a-z0-9_.-]{0,39}$/i;
 const MAX_STEPS = 30;
 

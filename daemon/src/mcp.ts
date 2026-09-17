@@ -91,12 +91,13 @@ MCP_TOOLS.push(
   { name: 'phone_observe', description: 'Observe the active phone screen. Prefer the AccessibilityService node tree; when it is empty or non-semantic, fall back to a screenshot that the AI can inspect. Returns snapshotId plus nodes or an image. mode=text renders the same tree as terse plain-text lines (refs stay usable) to save context, and includeScreenshot:true adds a JPEG alongside that text.', inputSchema: { type: 'object', properties: { mode: { type: 'string', enum: ['auto', 'tree', 'visual', 'text'] }, includeScreenshot: { type: 'boolean' }, maxNodes: N, maxDepth: N, interactiveOnly: { type: 'boolean' }, package: S } }, raw: true, handler: async (a) => observePhone(a) },
   { name: 'phone_find', description: 'Find compact, actionable nodes without transferring the whole tree. Supports text/resourceId/contentDescription and interaction flags; returns refs valid for snapshotId.', inputSchema: { type: 'object', properties: { ...SEL, limit: N, maxNodes: N, interactiveOnly: { type: 'boolean' }, package: S } }, handler: async (a) => findPhone(a) },
   { name: 'phone_wait', description: 'Wait until a screen state / selector matches, until the screen settles (stable:true, stableMs holds still), or until the injected agent reports a signal. Agent filters: agentEvent (exact event type), agentEventContains (substring of the event JSON), captureCategory (crypto/net/file/system), captureContains (substring of the decoded capture text + metadata). Notification filters: notificationContains (substring of title/text, needs the opt-in notification listener) and notificationFrom (package). With scroll:true the wait scrolls a container until the target shows up — scrollMode=gesture swipes instead of sending ACTION_SCROLL, which is what pagers and custom lists (e.g. launcher pages) require, and axis picks vertical or horizontal. Same-kind filters are ANDed; the two kinds race and whichever fires first wins. Race-free pattern: take the cursor from the preceding observe/act response and pass it as afterCaptureId / afterEventSeq; lookbackMs is the coarse alternative (bounded 0..300000). On an agent-signal timeout the reply carries saw (recent captures/events from the window plus totals) and the live cursor, so the filter can be retargeted.', inputSchema: { type: 'object', properties: { ...SEL, activePackage: S, activityContains: S, gone: { type: 'boolean' }, agentEvent: S, agentEventContains: S, captureCategory: { type: 'string', enum: ['crypto', 'net', 'file', 'system'] }, captureContains: S, notificationContains: S, notificationFrom: S, afterEventSeq: N, afterCaptureId: N, lookbackMs: N, timeoutMs: N, intervalMs: N, scroll: { type: 'boolean' }, scrollMode: { type: 'string', enum: ['action', 'gesture'] }, stable: { type: 'boolean' }, stableMs: N, axis: { type: 'string', enum: ['vertical', 'horizontal'] }, direction: { type: 'string', enum: ['forward', 'backward'] }, maxScrolls: N, maxNodes: N, interactiveOnly: { type: 'boolean' }, package: S } }, handler: async (a) => waitPhone(a) },
+  { name: 'phone_wait_any', description: 'Wait until any one of several conditions matches and report which one did. Use when an app can resume into different states (a browser opening on its home page or on existing results, settings on its home page or inside search): one plain phone_wait can only express a single expectation, so recipes would break. Each condition is the same shape as phone_wait args (selector / activePackage / stable / notification / agent filter).', inputSchema: { type: 'object', properties: { conditions: { type: 'array', minItems: 1, maxItems: 8, items: { type: 'object' } }, timeoutMs: N, intervalMs: N }, required: ['conditions'] }, raw: true, handler: async (a) => ({ content: [{ type: 'text', text: JSON.stringify(await runTaskStep('wait_any', a), null, 2) }] }) },
   { name: 'phone_act', description: 'Act on the active phone screen. Prefer a selector or snapshotId+ref from phone_observe; use normalized coordinates only as the visual fallback. Supports tap, long_press, swipe, input, scroll, set_text and global back/home/recents/notifications/quick_settings/power/lock/screenshot. Set inputMode:"root" when the accessibility gesture is accepted but the screen does not change (some Compose UIs, e.g. SukiSU Ultra or the LSPosed/Vector manager, swallow dispatchGesture): it injects the tap/swipe through the root Device Daemon instead, which needs protocol v9. For set_text the text argument is the payload to write, not a filter (target the field with ref, resourceId, editable or selector); the value can be read back with phone_find. set_text takes submit:true to press the field’s keyboard action button (search / send / done) afterwards, and reports submitted:true when the field accepted it. A failed action answers with the compact current screen so the target can be re-derived without another observe.', inputSchema: { type: 'object', properties: { ...SEL, snapshotId: S, action: { type: 'string', enum: ['tap', 'long_press', 'swipe', 'input', 'scroll', 'set_text', 'global'] }, ref: S, x: N, y: N, x2: N, y2: N, coordinateSpace: { type: 'string', enum: ['normalized', 'pixel'] }, inputMode: { type: 'string', enum: ['accessibility', 'root'] }, text: S, submit: { type: 'boolean' }, key: { type: 'string', enum: ['back', 'home', 'recents', 'notifications', 'quick_settings', 'power', 'lock', 'screenshot'] }, direction: { type: 'string', enum: ['forward', 'backward'] }, durationMs: N, submit: { type: 'boolean' }, observeAfter: { type: 'boolean' }, package: S }, required: ['action'] }, raw: true, handler: async (a) => actPhone(a) },
   { name: 'phone_app', description: 'Open, stop or restart an allowlisted app by package name. open verifies that the app really reached the foreground and reports verified/foreground/warning when an OEM dialog swallowed the launch (with a hint on how to unblock). Open uses the root Device Daemon when protocol v6+ is available, with a compatibility fallback for older daemons; stop/restart delegate to the same authenticated daemon.', inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['open', 'stop', 'restart'] }, package: S }, required: ['action', 'package'] }, handler: async (a) => appPhone(a) },
   { name: 'phone_notifications', description: 'Recent notifications the accessibility connection saw (newest first: package, text lines, time). Needs the operator to enable automation.notifications — reading notification text is a privacy step beyond UI control and stays opt-in. Keep the returned ts to poll incrementally with sinceMs.', inputSchema: { type: 'object', properties: { limit: N, sinceMs: N } }, handler: async (a) => notificationsPhone(a) },
   { name: 'phone_device', description: 'Read or control device power state: status, wake, unlock a non-secure keyguard, or lock the screen. Secure credentials are never bypassed.', inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['status', 'wake', 'unlock', 'lock'] } }, required: ['action'] }, handler: async (a) => devicePhone(a) },
   { name: 'phone_skill', description: 'Save, list, run or delete named phone recipes (skills). A skill is a validated, bounded list of phone_task steps kept on the host, so a flow the AI worked out once replays in one call. Recipes can take params (declared on save) that steps read as {{input.<name>}} and runs pass as inputs; defaults fill the optional ones. Skills run through the same primitives, allowlist and retry semantics as phone_task; they cannot nest skills or reach a shell.', inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['list', 'save', 'run', 'delete'] }, name: S, description: S, overwrite: { type: 'boolean' }, stopOnError: { type: 'boolean' }, steps: { type: 'array', minItems: 1, maxItems: 30, items: { type: 'object' } }, params: { type: 'array', maxItems: 10, items: { type: 'string' } }, defaults: { type: 'object' }, inputs: { type: 'object' } }, required: ['action'] }, handler: async (a) => skillPhone(a) },
-  { name: 'phone_task', description: 'Run a bounded sequence of phone primitives in one MCP call. Steps may observe, find, wait (UI state or agent signal), act, control an app, or control device power; each step supports retries and structured failure output. Steps with an id can be referenced by later steps as {{id.path}} (e.g. take the ref and snapshotId a find discovered straight into act), which avoids ref-expiry between separate calls.', inputSchema: { type: 'object', properties: { stopOnError: { type: 'boolean' }, steps: { type: 'array', minItems: 1, maxItems: 30, items: { type: 'object', properties: { id: S, type: { type: 'string', enum: ['observe', 'find', 'wait', 'act', 'app', 'device'] }, args: { type: 'object' }, retries: N, retryDelayMs: N }, required: ['type'] } } }, required: ['steps'] }, handler: async (a) => taskPhone(a) },
+  { name: 'phone_task', description: 'Run a bounded sequence of phone primitives in one MCP call. Steps may observe, find, wait (UI state or agent signal), act, control an app, or control device power; each step supports retries and structured failure output. Steps with an id can be referenced by later steps as {{id.path}} (e.g. take the ref and snapshotId a find discovered straight into act), which avoids ref-expiry between separate calls.', inputSchema: { type: 'object', properties: { stopOnError: { type: 'boolean' }, steps: { type: 'array', minItems: 1, maxItems: 30, items: { type: 'object', properties: { id: S, type: { type: 'string', enum: ['observe', 'find', 'wait', 'wait_any', 'act', 'app', 'device'] }, args: { type: 'object' }, retries: N, retryDelayMs: N, onlyIf: { type: 'object' } }, required: ['type'] } } }, required: ['steps'] }, handler: async (a) => taskPhone(a) },
 );
 
 
@@ -135,6 +136,11 @@ async function findPhone(args: any) {
   assertAutomationReady();
   const result = await observeTree(args);
   const selector = selectorFrom(args);
+  // implicitOnly turns "not found" into an empty result instead of a hard failure, so a recipe can
+  // express an optional step (tap the search box only when it is present) without conditionals.
+  if (Object.keys(selector).length === 0 && args.implicitOnly !== true) {
+    throw new Error('find requires a selector (text/textContains/resourceId/contentDescription/clickable/editable/scrollable)');
+  }
   const matches = findNodes(result.nodes ?? [], selector, args.limit ?? 20);
   return {
     activePackage: result.activePackage,
@@ -372,6 +378,17 @@ async function taskPhone(args: any) {
     let attempt = 0;
     for (;;) {
       try {
+        // Only-if guard: recipes frequently need an optional step whose target may not be on
+        // screen (e.g. "return to the search box, but only when the app did not resume there").
+        // When the guard selector is absent the step is skipped, not failed, and says so.
+        if (step.onlyIf && typeof step.onlyIf === 'object') {
+          const guard = await findPhone({ ...resolveTemplates(step.onlyIf, outputs), limit: 1 });
+          if (!guard?.count) {
+            results.push({ index, id: step.id, type, ok: true, skipped: true, reason: 'onlyIf not matched' });
+            if (step.id) outputs[String(step.id)] = { skipped: true };
+            break;
+          }
+        }
         const value = await runTaskStep(type, resolveTemplates(stepArgs, outputs));
         results.push({ index, id: step.id, type, ok: true, result: value });
         if (step.id) outputs[String(step.id)] = value;
@@ -397,6 +414,36 @@ async function runTaskStep(type: string, args: any): Promise<any> {
       return contentToValue(await observePhone(args));
     case 'find':
       return await findPhone(args);
+    case 'wait_any': {
+      // Recipes have to survive apps that resume into different states (browser home vs results,
+      // settings home vs search). A plain wait can express only one expectation; this succeeds
+      // when the first of several selectors matches, and reports which one did.
+      const conditions = Array.isArray(args.conditions) ? args.conditions.filter((item: any) => item && typeof item === 'object') : [];
+      if (!conditions.length) throw new Error('wait_any requires a conditions array');
+      const timeoutMs = Math.max(500, Math.min(60_000, Number(args.timeoutMs ?? 10_000)));
+      const intervalMs = Math.max(150, Math.min(2_000, Number(args.intervalMs ?? 350)));
+      const startedAt = Date.now();
+      let lastError = '';
+      for (;;) {
+        for (let index = 0; index < conditions.length; index++) {
+          try {
+            const value = await waitPhone({ ...conditions[index], timeoutMs: 900, intervalMs: 300 });
+            // waitPhone reports a miss as { timedOut: true } instead of throwing, so a plain call
+            // would look like a match. Only a real match may short-circuit.
+            if (value?.matched === true && value?.timedOut !== true) {
+              return { matched: true, condition: index, conditionArgs: conditions[index], result: value };
+            }
+            lastError = 'condition ' + index + ' did not match';
+          } catch (error) {
+            lastError = (error as Error)?.message ?? String(error);
+          }
+        }
+        if (Date.now() - startedAt >= timeoutMs) {
+          throw new Error('wait_any_timeout: none of ' + conditions.length + ' conditions matched in ' + (Date.now() - startedAt) + 'ms; last=' + lastError.slice(0, 200));
+        }
+        await new Promise((resolve) => setTimeout(resolve, intervalMs));
+      }
+    }
     case 'wait': {
       const value = await waitPhone(args);
       // A timed-out wait must fail the step: otherwise the task continues as if the expected

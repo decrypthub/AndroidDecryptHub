@@ -1524,7 +1524,9 @@ Host ADH Daemon / MCP  →  自动化 TCP 8763（loopback + adb reverse）  → 
 | `phone_notifications` | 读取最近通知（包名/标题/正文/时间，最新在前；`sinceMs` 可增量轮询）。需用户在系统设置里给 Manager 开启"通知使用权"，且 Host `automation.notifications`（默认 false）已开；缓冲区仅内存、≤30 条、不落盘 |
 | `phone_device` | `status` / `wake` / `unlock` / `lock`；安全锁屏凭据不绕过（真机验收：lock→`interactive:false, locked:true`，wake→`interactive:true`，unlock→`dismissed:true`） |
 | `phone_task` | 单次 MCP 调用内执行有界步骤序列（≤30 步），步骤间可用 `{{id.path}}` 引用前序步骤的结果（如把 `find` 得到的 `snapshotId`/`ref` 直接喂给 `act`）；每步支持 `retries` 与结构化失败输出 |
-| `phone_skill` | 保存 / 列出 / 运行 / 删除命名手机配方（skills）：步骤受校验（仅 observe/find/wait/act/app/device，≤30 步）、不可嵌套、无 shell；配方可声明 `params`（≤10）并由步骤以 `{{input.<name>}}` 引用，运行时用 `inputs` 传值、`defaults` 兜底，缺参数 fail-loud；运行复用 `phone_task` 的执行器、allowlist 与重试语义 |
+| `phone_wait_any` | 多个条件任一命中即成功（`wait_any` 步骤同样可用）：应用可能从不同状态恢复时用它，避免配方只认一种状态；都不命中时 fail-loud（`wait_any_timeout` + 最后失败原因） |
+| `phone_task` onlyIf | 步骤级守卫：`onlyIf` 选择器不存在时该步标记 `skipped:true` 而非失败，配方可表达「仅当这个控件在时才点它」 |
+| `phone_skill` |  保存 / 列出 / 运行 / 删除命名手机配方（skills）：步骤受校验（仅 observe/find/wait/act/app/device，≤30 步）、不可嵌套、无 shell；配方可声明 `params`（≤10）并由步骤以 `{{input.<name>}}` 引用，运行时用 `inputs` 传值、`defaults` 兜底，缺参数 fail-loud；运行复用 `phone_task` 的执行器、allowlist 与重试语义 |
 
 ### 31.3 兜底规则
 
