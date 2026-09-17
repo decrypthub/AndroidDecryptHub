@@ -88,6 +88,15 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
         const r = await watchSyscalls(sid, { module, limit });
         return send(200, r);
       } catch (e) { return send(502, { error: (e as Error).message }); }
+    } },    { method: 'POST', path: '/api/jni/hook', handler: async () => {
+      const body = await readBody(req);
+      const { session, action } = JSON.parse(body || '{}');
+      const sid = pickSid(session);
+      if (!sid || !action) return send(400, { error: 'need session, action' });
+      try {
+        const r = await sendCmd(sid, 'jni_hook', { action }, 20_000);
+        return send(r.ok ? 200 : 502, r);
+      } catch (e) { return send(504, { error: (e as Error).message }); }
     } },    { method: 'POST', path: '/api/java/enum', handler: async () => {
       const body = await readBody(req);
       const { session, className } = JSON.parse(body || '{}');

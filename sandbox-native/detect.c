@@ -86,6 +86,21 @@ JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_nativeHookProbe(JNIEnv *en
     (void)env; (void)clazz;
     return adh_trace_target();
 }
+// RegisterNatives probe: the agent's jni_hook intercepts this call and emits a
+// JNI_NATIVE event; jniRegisteredProbe is then callable through ordinary JNI reflection.
+static jint adh_jni_registered_probe_impl(JNIEnv *env, jclass clazz) {
+    (void)env; (void)clazz;
+    return 0xAD11;
+}
+
+JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_jniRegisterProbe(JNIEnv *env, jclass clazz) {
+    JNINativeMethod method = {
+        (char *)"jniRegisteredProbe",
+        (char *)"()I",
+        (void *)adh_jni_registered_probe_impl,
+    };
+    return (*env)->RegisterNatives(env, clazz, &method, 1);
+}
 JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_run(JNIEnv *env, jclass clazz) {
     (void)env; (void)clazz;
     int flags = 0;

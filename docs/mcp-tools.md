@@ -1,6 +1,6 @@
 # ADH MCP Tools
 
-Generated from the live ADH Daemon registry (61 tools). Endpoint: `POST /mcp` (JSON-RPC 2.0).
+Generated from the live ADH Daemon registry (62 tools). Endpoint: `POST /mcp` (JSON-RPC 2.0).
 
 | Tool | Description | Args |
 |---|---|---|
@@ -8,6 +8,7 @@ Generated from the live ADH Daemon registry (61 tools). Endpoint: `POST /mcp` (J
 | `backends` | Injection-backend matrix: sessions by entry, host-side Frida Gadget cache + loader command, device-side backend pointers. Pass session to classify which injection paths are really loaded in that process (zygisk / xposed_module / frida_gadget / self_load). | session |
 | `dumps_list` | List captured dump artifacts (dex/so/region) | — |
 | `compat_probe` | Self-assess agent env + injection footprint: tracer/seccomp/backends/exec/anon/rwx | session |
+| `jni_hook` | Install, remove or inspect the global JNIEnv->RegisterNatives hook. Each registration emits a JNI_NATIVE capture event with class, method, signature and native function pointer. | session, action |
 | `javahook_probe` | Probe the optional statically linked LSPlant Java-method hook backend: compile-time availability and one-time ART initialization status. It does not install a hook by itself. | session |
 | `java_hook` | Install, remove or inspect Java method hooks through the LSPlant backend. params is a comma-separated Java parameter-type list (empty means no-arg); the target class is loaded through the app ClassLoader. Multiple hooks are supported (bounded); status lists every hook with hit count, last argument, last return value and last error. Each callback also emits a JAVA_HOOK event into the bounded live-capture stream. | session, action, hookId, className, method, params, skipOriginal, returnValue, argIndex, argValue |
 | `java_enum` | Enumerate a live Java class through reflection: modifiers, superclass, interfaces, constructors, overloaded methods and fields. Read-only and uses the app ClassLoader. | session, className |

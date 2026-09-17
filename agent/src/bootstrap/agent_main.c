@@ -22,6 +22,7 @@
 #include "../runtime/art.h"
 #include "../runtime/inspection.h"
 #include "../runtime/jni.h"
+#include "../runtime/jni_hooks.h"
 #include "../runtime/java_enum.h"
 #include "../trace/commands.h"
 #include "../hook/native_hooks.h"
@@ -388,6 +389,10 @@ static void command_loop(int fd) {
                     cmd_read(fd, id, addr, size);
                 } else if (strcmp(op, "jni_probe") == 0) {
                     adh_cmd_jni_probe(fd, id);
+                } else if (strcmp(op, "jni_hook") == 0) {
+                    char jaction[16] = "";
+                    json_get_str(line, "action", jaction, sizeof(jaction));
+                    adh_cmd_jni_hook(fd, id, jaction);
                 } else if (strcmp(op, "java_hook") == 0) {
                     char jaction[16] = "", jcls[256] = "", jmethod[128] = "", jparams[512] = "";
                     char jskip[8] = "", jreturn[512] = "", jargvalue[512] = "";

@@ -1,0 +1,186 @@
+// Global JNIEnv->RegisterNatives hook. The wrapper observes every native-method
+// registration and forwards to the original JNI table entry. It is deliberately
+// small and bounded: one JNI_NATIVE capture event per registered method (max 16/table),
+// no allocation in the target while the registration lock is held.
+#include "jni_hooks.h"
+
+#include "../bootstrap/agent_internal.h"
+#include "../capture/capture.h"
+#include "../runtime/jni.h"
+#ifdef ADH_HAVE_INLINE_HOOK
+#include "../hook/native_inline.h"
+#endif
+
+#include <jni.h>
+#include <pthread.h>
+#include <stdint.h>
+#include <stdio.h>
+
+typedef jint (*register_natives_fn)(JNIEnv *, jclass, const JNINativeMethod *, jint);
+
+static pthread_mutex_t g_jni_hook_lock = PTHREAD_MUTEX_INITIALIZER;
+static int g_jni_hook_installed = 0;
+static void *g_jni_hook_target = NULL;
+static register_natives_fn g_jni_hook_original = NULL;
+static unsigned long long g_jni_hook_hits = 0;
+static int g_jni_hook_last_count = 0;
+static char g_jni_hook_error[256] = "";
+static __thread int g_jni_hook_in_wrapper = 0;
+
+static void set_jni_error(const char *message) {
+    snprintf(g_jni_hook_error, sizeof(g_jni_hook_error), "%s", message ? message : "");
+}
+
+static void jni_class_name(JNIEnv *env, jclass clazz, char *out, size_t out_size) {
+    if (!out || !out_size) return;
+    out[0] = 0;
+    if (!env || !clazz) return;
+    if ((*env)->PushLocalFrame(env, 8) != 0) return;
+    jclass class_class = (*env)->FindClass(env, "java/lang/Class");
+    jmethodID get_name = class_class
+        ? (*env)->GetMethodID(env, class_class, "getName", "()Ljava/lang/String;") : NULL;
+    jstring name = get_name ? (jstring)(*env)->CallObjectMethod(env, clazz, get_name) : NULL;
+    if (name) {
+        const char *chars = (*env)->GetStringUTFChars(env, name, NULL);
+        if (chars) {
+            strncpy(out, chars, out_size - 1);
+            out[out_size - 1] = 0;
+            (*env)->ReleaseStringUTFChars(env, name, chars);
+        }
+        (*env)->DeleteLocalRef(env, name);
+    }
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    (*env)->PopLocalFrame(env, NULL);
+}
+
+static jint JNICALL register_natives_wrapper(JNIEnv *env, jclass clazz,
+                                             const JNINativeMethod *methods, jint nMethods) {
+    if (g_jni_hook_in_wrapper || !g_jni_hook_original) {
+        return g_jni_hook_original ? g_jni_hook_original(env, clazz, methods, nMethods) : JNI_ERR;
+    }
+    g_jni_hook_in_wrapper = 1;
+    __atomic_add_fetch(&g_jni_hook_hits, 1, __ATOMIC_RELAXED);
+    __atomic_store_n(&g_jni_hook_last_count, nMethods > 0 ? nMethods : 0, __ATOMIC_RELAXED);
+
+    if (methods && nMethods > 0) {
+        char class_name[192];
+        char class_escaped[400];
+        jni_class_name(env, clazz, class_name, sizeof(class_name));
+        json_escape(class_name, class_escaped, sizeof(class_escaped));
+        int limit = nMethods > 16 ? 16 : (int)nMethods;
+        for (int i = 0; i < limit; i++) {
+            char name_escaped[256], signature_escaped[256], event[1024];
+            json_escape(methods[i].name ? methods[i].name : "", name_escaped, sizeof(name_escaped));
+            json_escape(methods[i].signature ? methods[i].signature : "", signature_escaped,
+                        sizeof(signature_escaped));
+            snprintf(event, sizeof(event),
+                     "{\"class\":\"%s\",\"method\":\"%s\",\"signature\":\"%s\","
+                     "\"fnPtr\":\"0x%llx\",\"index\":%d,\"total\":%d}",
+                     class_escaped, name_escaped, signature_escaped,
+                     (unsigned long long)(uintptr_t)methods[i].fnPtr, i, (int)nMethods);
+            adh_capture_push_text("JNI_NATIVE", event);
+        }
+    }
+
+    g_jni_hook_in_wrapper = 0;
+    return g_jni_hook_original(env, clazz, methods, nMethods);
+}
+
+static void send_jni_hook_result(int fd, const char *id, const char *action, int ok,
+                                 const char *error) {
+    char idj[64], actionj[32], errorj[512];
+    json_escape(id, idj, sizeof(idj));
+    json_escape(action ? action : "", actionj, sizeof(actionj));
+    json_escape(error ? error : "", errorj, sizeof(errorj));
+    char out[1024];
+    snprintf(out, sizeof(out),
+             "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"jni_hook\",\"ok\":%s,"
+             "\"action\":\"%s\",\"installed\":%s,\"hits\":%llu,\"lastCount\":%d,"
+             "\"target\":\"0x%llx\",\"error\":\"%s\"}\n",
+             idj, ok ? "true" : "false", actionj,
+             g_jni_hook_installed ? "true" : "false",
+             (unsigned long long)g_jni_hook_hits, g_jni_hook_last_count,
+             (unsigned long long)(uintptr_t)g_jni_hook_target, errorj);
+    send_line(fd, out);
+}
+
+void adh_cmd_jni_hook(int fd, const char *id, const char *action) {
+#ifndef ADH_HAVE_INLINE_HOOK
+    (void)fd; (void)id; (void)action;
+    char idj[64];
+    json_escape(id, idj, sizeof(idj));
+    char out[260];
+    snprintf(out, sizeof(out),
+             "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"jni_hook\",\"ok\":false,"
+             "\"error\":\"inline hook backend not built\"}\n", idj);
+    send_line(fd, out);
+#else
+    if (!action || !action[0]) {
+        send_jni_hook_result(fd, id, action, 0, "jni_hook requires action: install | uninstall | status");
+        return;
+    }
+    if (strcmp(action, "install") == 0) {
+        int did_attach = 0;
+        JNIEnv *env = adh_jni_attach(&did_attach);
+        if (!env) {
+            send_jni_hook_result(fd, id, action, 0, "no JavaVM/JNIEnv");
+            return;
+        }
+        void *target = (void *)(*env)->RegisterNatives;
+        adh_jni_detach(did_attach);
+        if (!target) {
+            send_jni_hook_result(fd, id, action, 0, "JNIEnv->RegisterNatives is null");
+            return;
+        }
+        pthread_mutex_lock(&g_jni_hook_lock);
+        if (g_jni_hook_installed) {
+            pthread_mutex_unlock(&g_jni_hook_lock);
+            send_jni_hook_result(fd, id, action, 0, "RegisterNatives hook already installed");
+            return;
+        }
+        pthread_mutex_unlock(&g_jni_hook_lock);
+
+        void *original = NULL;
+        if (!adh_inline_hook(target, (void *)register_natives_wrapper, &original) || !original) {
+            send_jni_hook_result(fd, id, action, 0, "inline hook installation failed");
+            return;
+        }
+        pthread_mutex_lock(&g_jni_hook_lock);
+        g_jni_hook_target = target;
+        g_jni_hook_original = (register_natives_fn)original;
+        g_jni_hook_installed = 1;
+        g_jni_hook_hits = 0;
+        g_jni_hook_last_count = 0;
+        set_jni_error("");
+        pthread_mutex_unlock(&g_jni_hook_lock);
+        send_jni_hook_result(fd, id, action, 1, "");
+        return;
+    }
+    if (strcmp(action, "uninstall") == 0) {
+        pthread_mutex_lock(&g_jni_hook_lock);
+        if (!g_jni_hook_installed || !g_jni_hook_target) {
+            pthread_mutex_unlock(&g_jni_hook_lock);
+            send_jni_hook_result(fd, id, action, 0, "RegisterNatives hook is not installed");
+            return;
+        }
+        void *target = g_jni_hook_target;
+        pthread_mutex_unlock(&g_jni_hook_lock);
+        int ok = adh_inline_unhook(target);
+        pthread_mutex_lock(&g_jni_hook_lock);
+        if (ok) {
+            g_jni_hook_installed = 0;
+            set_jni_error("");
+        } else {
+            set_jni_error("inline unhook failed");
+        }
+        pthread_mutex_unlock(&g_jni_hook_lock);
+        send_jni_hook_result(fd, id, action, ok ? 1 : 0, ok ? "" : "inline unhook failed");
+        return;
+    }
+    if (strcmp(action, "status") == 0) {
+        send_jni_hook_result(fd, id, action, 1, g_jni_hook_error);
+        return;
+    }
+    send_jni_hook_result(fd, id, action, 0, "jni_hook requires action: install | uninstall | status");
+#endif
+}

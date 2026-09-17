@@ -8,7 +8,8 @@ object Detection {
     private const val TAG = "ADH_SANDBOX"
     @JvmStatic external fun run(): Int
     @JvmStatic external fun staticCrypto(): Int
-    @JvmStatic external fun nativeHookProbe(): Int
+    @JvmStatic external fun nativeHookProbe(): Int    @JvmStatic external fun jniRegisterProbe(): Int
+    @JvmStatic external fun jniRegisteredProbe(): Int
 
     fun load() {
         try {

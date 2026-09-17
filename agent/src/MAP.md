@@ -22,6 +22,7 @@
 | `runtime/inspection.c` | Live-object reflection, JNI/runtime compatibility probes, and the bootstrap/current injection-footprint counters |
 | `runtime/java_enum.cpp` | Live-class reflection: enumerate class metadata/constructors/overloaded methods/fields and actively invoke static or field-backed instance methods |
 | `runtime/jni.c` | JavaVM discovery, native-thread attach/detach, and app ClassLoader access |
+| untime/jni_hooks.c | Global JNIEnv->RegisterNatives hook and bounded JNI_NATIVE registration events |
 | `trace/commands.c` | Function-call trace state, GOT trace orchestration, and QBDI command response handling |
 | `trace/qbdi_trace.c` | Optional runtime-loaded QBDI instruction trace |
 
