@@ -14,6 +14,7 @@ set(AGENT_SOURCES
     src/bootstrap/mem.c
     src/bootstrap/fs.c
     src/hook/got.c
+    src/hook/native_hooks.cpp
     src/runtime/actions.c
     src/runtime/art.c
     src/runtime/inspection.c

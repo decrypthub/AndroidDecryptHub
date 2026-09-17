@@ -31,6 +31,13 @@
                 <action android:name="com.adh.sandbox.HOOK_PROBE" />
             </intent-filter>
         </receiver>
+        <receiver
+            android:name=".NativeHookProbeReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.adh.sandbox.NATIVE_HOOK_PROBE" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>

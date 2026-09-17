@@ -24,6 +24,7 @@
 #include "../runtime/jni.h"
 #include "../runtime/java_enum.h"
 #include "../trace/commands.h"
+#include "../hook/native_hooks.h"
 
 #ifdef ADH_HAVE_LSPLANT
 #include "../hook/java_lsplant.h"
@@ -269,6 +270,41 @@ static void cmd_java_call(int fd, const char *id, const char *class_name, const 
         if (json) adh_java_enum_free(json);
     }
 }
+static void cmd_native_hook(int fd, const char *id, const char *action, const char *mode,
+                            const char *module, const char *symbol, const char *addr,
+                            long long requested_id) {
+    char idj[64];
+    json_escape(id, idj, sizeof(idj));
+    char error[512] = "";
+    int ok = 0;
+    int new_id = 0;
+    if (strcmp(action, "hook") == 0) {
+        ok = adh_native_hook_install(mode, module, symbol, addr, &new_id, error, sizeof(error));
+    } else if (strcmp(action, "unhook") == 0) {
+        ok = adh_native_hook_unhook((int)requested_id, error, sizeof(error));
+    } else if (strcmp(action, "status") == 0) {
+        ok = 1;
+    } else {
+        snprintf(error, sizeof(error), "native_hook requires action: hook | unhook | status");
+    }
+    char status[8192] = "{}";
+    adh_native_hook_status_json(status, sizeof(status));
+    char errj[768];
+    json_escape(error, errj, sizeof(errj));
+    size_t out_len = strlen(status) + 1024;
+    char *out = (char *)malloc(out_len);
+    if (!out) {
+        send_oom(fd, idj, "native_hook");
+        return;
+    }
+    snprintf(out, out_len,
+             "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"native_hook\",\"ok\":%s,\"action\":\"%s\","
+             "\"hookId\":%d,\"error\":\"%s\",\"status\":%s}\n",
+             idj, ok ? "true" : "false", action, new_id, errj, status);
+    send_line(fd, out);
+    free(out);
+    LOGI("native_hook: action=%s ok=%d id=%d error=%s", action, ok, new_id, error);
+}
 // Read framed commands from the Host ADH Daemon and dispatch.
 static void command_loop(int fd) {
     for (;;) {
@@ -316,6 +352,15 @@ static void command_loop(int fd) {
                     json_get_str(line, "field", jfield, sizeof(jfield));
                     json_get_str(line, "args", jargs, sizeof(jargs));
                     cmd_java_call(fd, id, jcls, jmethod, jparams, jfield, jargs);
+                } else if (strcmp(op, "native_hook") == 0) {
+                    char naction[16] = "", nmode[16] = "", nmodule[128] = "", nsymbol[160] = "", naddr[32] = "";
+                    json_get_str(line, "action", naction, sizeof(naction));
+                    json_get_str(line, "mode", nmode, sizeof(nmode));
+                    json_get_str(line, "module", nmodule, sizeof(nmodule));
+                    json_get_str(line, "symbol", nsymbol, sizeof(nsymbol));
+                    json_get_str(line, "addr", naddr, sizeof(naddr));
+                    long long nid = json_get_num(line, "id");
+                    cmd_native_hook(fd, id, naction, nmode, nmodule, nsymbol, naddr, nid);
                 } else if (strcmp(op, "javahook_probe") == 0) {
                     cmd_javahook_probe(fd, id);
                 } else if (strcmp(op, "gothook_selftest") == 0) {

@@ -45,6 +45,17 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
         }, 20_000);
         return send(r.ok ? 200 : 502, r);
       } catch (e) { return send(504, { error: (e as Error).message }); }
+    } },    { method: 'POST', path: '/api/native/hook', handler: async () => {
+      const body = await readBody(req);
+      const { session, action, id, mode, module, symbol, addr } = JSON.parse(body || '{}');
+      const sid = pickSid(session);
+      if (!sid || !action) return send(400, { error: 'need session, action' });
+      try {
+        const r = await sendCmd(sid, 'native_hook', {
+          action, id: Number(id ?? 0), mode: mode ?? '', module: module ?? '', symbol: symbol ?? '', addr: addr ?? '',
+        }, 20_000);
+        return send(r.ok ? 200 : 502, r);
+      } catch (e) { return send(504, { error: (e as Error).message }); }
     } },    { method: 'POST', path: '/api/java/enum', handler: async () => {
       const body = await readBody(req);
       const { session, className } = JSON.parse(body || '{}');
