@@ -10,7 +10,7 @@ import { renderScreenText } from '../src/phone_text.ts';
 import { readPath, resolveTemplates } from '../src/phone_templates.ts';
 import { normalizeAxis, swipePath } from '../src/phone_gestures.ts';
 import { isSettled, noteSample, screenSignature } from '../src/phone_stability.ts';
-import { blockedPackageFromError, openOutcomeHint } from '../src/phone_foreground.ts';
+import { blockedPackageFromError, isSystemPackage, needsDismissRetry, openOutcomeHint } from '../src/phone_foreground.ts';
 import { blockedPackageNotices, clearBlockedPackages, recordBlockedPackage } from '../src/phone_blocked.ts';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -86,6 +86,18 @@ test('automation hub fails loudly when no device is connected', async () => {
   await hub.close();
 });
 
+test('floating-window dismissal retry only targets system blockers', () => {
+  assert.equal(isSystemPackage('com.oplus.battery'), true);
+  assert.equal(isSystemPackage('com.android.settings'), true);
+  assert.equal(isSystemPackage('com.heytap.quicksearchbox'), true);
+  assert.equal(isSystemPackage('android'), true);
+  assert.equal(isSystemPackage('com.tencent.mm'), false);
+  assert.equal(isSystemPackage(''), false);
+  assert.equal(needsDismissRetry('com.android.settings', 'com.oplus.battery'), true);
+  assert.equal(needsDismissRetry('com.android.settings', 'com.android.settings'), false);
+  assert.equal(needsDismissRetry('com.android.settings', 'com.tencent.mm'), false);
+  assert.equal(needsDismissRetry('com.android.settings', null), false);
+});
 test('blocked package notices are bounded, deduped and reject junk', () => {
   clearBlockedPackages();
   assert.equal(recordBlockedPackage('com.oplus.battery'), true);

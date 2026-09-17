@@ -21,7 +21,7 @@ import { normalizeAxis, swipePath } from './phone_gestures.ts';
 import { isSettled, noteSample, screenSignature } from './phone_stability.ts';
 import { resolveTemplates } from './phone_templates.ts';
 import { renderScreenText } from './phone_text.ts';
-import { blockedPackageFromError, openOutcomeHint } from './phone_foreground.ts';
+import { blockedPackageFromError, needsDismissRetry, openOutcomeHint } from './phone_foreground.ts';
 import { recordBlockedPackage } from './phone_blocked.ts';
 import { sessions, dumps, captures, captureTimers, events, agentCursor, DATA_DIR, SANDBOX, settings, CAPTURES, cryptoIdentify } from './state.ts';
 import type { DumpMeta } from './state.ts';
@@ -466,9 +466,13 @@ async function appPhone(args: any) {
   if (args.action !== 'open' && args.action !== 'restart') return result;   // stop leaves the app, nothing to verify
   // An OEM dialog can swallow the launch while the call itself succeeds, so confirm the app
   // really reached the foreground and say what is in front when it did not.
-  const deadline = Date.now() + 5_000;
+  // Cold launches can take a while on ColorOS (splash + re-parenting); 12s keeps a slow but
+  // real launch from being reported as a failure.
+  const startedAt = Date.now();
+  const deadline = startedAt + 12_000;
   let foreground: string | null = null;
   let blocked = false;
+  let relaunched = false;
   for (;;) {
     try {
       const probe = await automation.cmd('observe', normalizeObserveArgs({ mode: 'tree', includeScreenshot: false, maxNodes: 1 }), 8_000);
@@ -480,9 +484,39 @@ async function appPhone(args: any) {
       foreground = packageFromError;
       blocked = !!packageFromError;
     }
-    if (foreground === packageName) return { ...result, verified: true, foreground };
+    if (foreground === packageName) {
+      return { ...result, verified: true, foreground, ...(relaunched ? { relaunched: true } : {}) };
+    }
+    // One bounded re-issue: an OEM splash can swallow the first launch intent without an error.
+    if (!relaunched && Date.now() - startedAt > 4_000) {
+      relaunched = true;
+      await automation.cmd('app', { action: 'open', package: packageName, allowedPackages: settings.automation.packages }, 25_000).catch(() => undefined);
+    }
     if (Date.now() >= deadline) break;
     await new Promise((resolve) => setTimeout(resolve, 400));
+  }
+  // ColorOS keeps some OEM settings sub-pages as floating windows that own the active
+  // accessibility window: the launch lands behind them and verification fails. One BACK
+  // dismisses that layer, so retry the launch exactly once before reporting failure.
+  if (!blocked && needsDismissRetry(packageName, foreground)) {
+    const blocker = foreground;
+    await automation.cmd('act', { action: 'global', key: 'back', allowedPackages: settings.automation.packages }, 10_000).catch(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    await automation.cmd('app', { action: 'open', package: packageName, allowedPackages: settings.automation.packages }, 25_000).catch(() => undefined);
+    const retryDeadline = Date.now() + 3_000;
+    for (;;) {
+      try {
+        const probe = await automation.cmd('observe', normalizeObserveArgs({ mode: 'tree', includeScreenshot: false, maxNodes: 1 }), 8_000);
+        foreground = probe?.activePackage ?? null;
+      } catch {
+        foreground = null;
+      }
+      if (foreground === packageName) {
+        return { ...result, verified: true, foreground, dismissedBlockingPackage: blocker };
+      }
+      if (Date.now() >= retryDeadline) break;
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    }
   }
   const hint = openOutcomeHint(packageName, foreground, blocked);
   return { ...result, verified: false, foreground, warning: hint };

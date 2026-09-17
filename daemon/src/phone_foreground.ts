@@ -19,3 +19,22 @@ export function openOutcomeHint(requested: string, foreground: string | null, bl
   if (!foreground) return 'open_unverified: the foreground package could not be read (is the automation bridge connected?)';
   return `open_unverified: foreground is '${foreground}', not '${requested}'`;
 }
+/**
+ * Some OEM "settings" sub-pages are floating/embedded windows that own the active accessibility
+ * window even when another activity is resumed. Launching an app while such a window is in front
+ * "succeeds" but the requested app never takes the screen (observed on ColorOS with
+ * com.oplus.battery). The fix is one BACK to dismiss the floating layer, then launch again.
+ * Only system packages qualify as blockers — never a third-party app the user is using.
+ */
+export function isSystemPackage(packageName: unknown): boolean {
+  const name = String(packageName ?? '');
+  return name === 'android'
+    || name.startsWith('com.android.')
+    || name.startsWith('com.oplus.')
+    || name.startsWith('com.coloros.')
+    || name.startsWith('com.heytap.');
+}
+
+export function needsDismissRetry(requested: string, foreground: string | null): boolean {
+  return !!foreground && foreground !== requested && isSystemPackage(foreground);
+}
