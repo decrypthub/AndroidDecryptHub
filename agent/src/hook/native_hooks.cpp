@@ -213,8 +213,15 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
     int hook_mode = -1;
     if (strcmp(mode, "got") == 0) {
         if (!module || !module[0] || !symbol || !symbol[0]) return fail("got hook needs module and symbol");
-        target = adh_resolve_sym(module, symbol);
-        if (!target) return fail("GOT target symbol not found");
+        // Prefer the relocation slot's current resolved value: imported calls (open/access/
+        // ptrace/...) are not defined by the caller module, so adh_resolve_sym alone cannot
+        // recover the original function pointer. Fall back to the module-defined symbol.
+        void *slot_value = nullptr;
+        if (!adh_got_slot_value(module, symbol, nullptr, &slot_value) || !slot_value) {
+            slot_value = adh_resolve_sym(module, symbol);
+        }
+        target = slot_value;
+        if (!target) return fail("GOT target symbol not found or slot unresolved");
         g_native_hook_originals[slot] = target;
         int replaced = adh_got_replace_by_name(module, symbol, stub);
         if (replaced <= 0) {

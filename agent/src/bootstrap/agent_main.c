@@ -325,6 +325,37 @@ static void cmd_native_hook(int fd, const char *id, const char *action, const ch
     free(status);
     LOGI("native_hook: action=%s ok=%d id=%d error=%s", action, ok, new_id, error);
 }
+static void cmd_got_enum(int fd, const char *id, const char *module, const char *filter) {
+    char idj[64];
+    json_escape(id, idj, sizeof(idj));
+    char error[512] = "";
+    char *json = NULL;
+    int ok = adh_got_enum_json(module, filter, &json, error, sizeof(error));
+    if (ok && json) {
+        size_t len = strlen(json) + 512;
+        char *out = (char *)malloc(len);
+        if (!out) {
+            free(json);
+            send_oom(fd, idj, "got_enum");
+            return;
+        }
+        snprintf(out, len,
+                 "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"got_enum\",\"ok\":true,\"result\":%s}\n",
+                 idj, json);
+        send_line(fd, out);
+        free(out);
+        free(json);
+    } else {
+        char errj[768];
+        json_escape(error, errj, sizeof(errj));
+        char out[1024];
+        snprintf(out, sizeof(out),
+                 "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"got_enum\",\"ok\":false,\"error\":\"%s\"}\n",
+                 idj, errj);
+        send_line(fd, out);
+        if (json) free(json);
+    }
+}
 // Read framed commands from the Host ADH Daemon and dispatch.
 static void command_loop(int fd) {
     for (;;) {
@@ -381,6 +412,11 @@ static void command_loop(int fd) {
                     json_get_str(line, "addr", naddr, sizeof(naddr));
                     long long nid = json_get_num(line, "hookId");
                     cmd_native_hook(fd, id, naction, nmode, nmodule, nsymbol, naddr, nid);
+                } else if (strcmp(op, "got_enum") == 0) {
+                    char gmodule[128] = "", gfilter[160] = "";
+                    json_get_str(line, "module", gmodule, sizeof(gmodule));
+                    json_get_str(line, "filter", gfilter, sizeof(gfilter));
+                    cmd_got_enum(fd, id, gmodule, gfilter);
                 } else if (strcmp(op, "javahook_probe") == 0) {
                     cmd_javahook_probe(fd, id);
                 } else if (strcmp(op, "gothook_selftest") == 0) {

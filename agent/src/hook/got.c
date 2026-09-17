@@ -291,7 +291,6 @@ static void *find_reloc_slot_by_symbol(unsigned long long base, const char *sym_
         else if (d[0] == 6)  symtab = d[1];   // DT_SYMTAB
         else if (d[0] == 5)  strtab = d[1];   // DT_STRTAB
         else if (d[0] == 0x60000011ULL) android_rela = d[1];    // DT_ANDROID_RELA
-        else if (d[0] == 0x60000012ULL) android_relasz = d[1];  // DT_ANDROID_RELASZ
     }
     if (relaent == 0) relaent = 24;
     if (!symtab || !strtab) return NULL;
@@ -323,6 +322,20 @@ static void *find_reloc_slot_by_symbol(unsigned long long base, const char *sym_
     return NULL;
 }
 
+// Find one relocation slot by symbol name and return its current resolved value. Used by the
+// native hook manager when the target symbol is imported rather than defined by the module.
+int adh_got_slot_value(const char *module, const char *symbol, void **slot_out, void **value_out) {
+    if (slot_out) *slot_out = NULL;
+    if (value_out) *value_out = NULL;
+    if (!module || !symbol || !module[0] || !symbol[0]) return 0;
+    unsigned long long base = module_base_of(module);
+    if (!base) return 0;
+    void *slot = find_reloc_slot_by_symbol(base, symbol);
+    if (!slot) return 0;
+    if (slot_out) *slot_out = slot;
+    if (value_out) *value_out = *(void **)slot;
+    return 1;
+}
 // Same module-scan shape as got_replace, but resolves the slot by symbol name instead of by
 // value — works for symbols whose PLT slot hasn't been lazily bound yet. One slot per
 // matching module (mirrors got_replace's one-slot-per-module rule).
@@ -487,3 +500,120 @@ static void *resolve_sym_ex(const char *mod_substr, const char *symbol, int pref
 // mangled spelling varies across ROM/ABI versions.
 void *adh_resolve_sym(const char *mod, const char *sym) { return resolve_sym_ex(mod, sym, 0); }
 void *adh_resolve_sym_prefix(const char *mod, const char *pre) { return resolve_sym_ex(mod, pre, 1); }
+
+// Enumerate relocation/GOT entries for one loaded module. Plain Elf64_RELA/JMPREL entries are
+// emitted with slot/symbol/current value; Android packed RELA is reported explicitly but not
+// expanded yet (fail-loud rather than pretending the table is complete).
+static const char *reloc_type_name(unsigned long long type) {
+    switch (type) {
+        case 1025: return "GLOB_DAT";
+        case 1026: return "JUMP_SLOT";
+        case 257: return "ABS64";
+        default: return "OTHER";
+    }
+}
+
+int adh_got_enum_json(const char *module, const char *filter, char **out_json,
+                      char *error, size_t error_size) {
+    if (out_json) *out_json = NULL;
+    if (!module || !module[0]) {
+        snprintf(error, error_size, "need module");
+        return 0;
+    }
+    unsigned long long base = module_base_of(module);
+    if (!base) {
+        snprintf(error, error_size, "module not found: %s", module);
+        return 0;
+    }
+    unsigned char *p = (unsigned char *)base;
+    if (memcmp(p, "\x7f""ELF", 4) != 0) {
+        snprintf(error, error_size, "module is not ELF: %s", module);
+        return 0;
+    }
+    unsigned long long phoff = *(unsigned long long *)(p + 32);
+    unsigned short phentsize = *(unsigned short *)(p + 54);
+    unsigned short phnum = *(unsigned short *)(p + 56);
+    unsigned long long dyn_vaddr = 0;
+    for (int i = 0; i < phnum; i++) {
+        unsigned char *ph = p + phoff + (unsigned long long)i * phentsize;
+        if (*(unsigned int *)ph == 2) { dyn_vaddr = *(unsigned long long *)(ph + 16); break; }
+    }
+    if (!dyn_vaddr) {
+        snprintf(error, error_size, "PT_DYNAMIC not found");
+        return 0;
+    }
+    unsigned long long jmprel = 0, pltrelsz = 0, rela = 0, relasz = 0, relaent = 24;
+    unsigned long long symtab = 0, strtab = 0, android_rela = 0;
+    unsigned long long *d = (unsigned long long *)(base + dyn_vaddr);
+    for (; d[0] != 0; d += 2) {
+        if (d[0] == 23) jmprel = d[1];             // DT_JMPREL
+        else if (d[0] == 2) pltrelsz = d[1];        // DT_PLTRELSZ
+        else if (d[0] == 7) rela = d[1];            // DT_RELA
+        else if (d[0] == 8) relasz = d[1];          // DT_RELASZ
+        else if (d[0] == 9) relaent = d[1];         // DT_RELAENT
+        else if (d[0] == 6) symtab = d[1];          // DT_SYMTAB
+        else if (d[0] == 5) strtab = d[1];          // DT_STRTAB
+        else if (d[0] == 0x60000011ULL) android_rela = d[1];    // DT_ANDROID_RELA
+    }
+    if (!symtab || !strtab || (!jmprel && !rela)) {
+        snprintf(error, error_size, "dynamic relocation tables unavailable");
+        return 0;
+    }
+    if (relaent == 0) relaent = 24;
+    if (symtab < base) symtab += base;
+    if (strtab < base) strtab += base;
+    const size_t cap = 512 * 1024;
+    char *out = (char *)malloc(cap);
+    if (!out) {
+        snprintf(error, error_size, "out of memory");
+        return 0;
+    }
+    size_t len = 0;
+    int count = 0;
+    int truncated = 0;
+    const unsigned long long regions[2][2] = { { jmprel, pltrelsz }, { rela, relasz } };
+    len += snprintf(out + len, cap - len,
+                    "{\"module\":\"%s\",\"count\":0,\"truncated\":false,\"packed\":%s,\"filter\":\"%s\",\"entries\":[",
+                    module, android_rela ? "true" : "false", filter ? filter : "");
+    for (int r = 0; r < 2 && !truncated; r++) {
+        unsigned long long off = regions[r][0], sz = regions[r][1];
+        if (!off || !sz) continue;
+        if (off < base) off += base;
+        for (unsigned long long e = off; e + relaent <= off + sz; e += relaent) {
+            if (len > cap - 768) { truncated = 1; break; }
+            unsigned long long r_offset = *(unsigned long long *)e;
+            unsigned long long r_info = *(unsigned long long *)(e + 8);
+            unsigned int sym_idx = (unsigned int)(r_info >> 32);
+            unsigned long long type = r_info & 0xffffffffULL;
+            if (sym_idx == 0) continue;
+            unsigned char *symrec = (unsigned char *)(symtab + (unsigned long long)sym_idx * 24);
+            unsigned int st_name = *(unsigned int *)symrec;
+            const char *name = (const char *)(strtab + st_name);
+            if (!name || !name[0]) continue;
+            if (filter && filter[0] && strcmp(name, filter) != 0) continue;
+            unsigned long long slot_addr = r_offset < base ? base + r_offset : r_offset;
+            void *value = *(void **)slot_addr;
+            char name_escaped[512];
+            char module_escaped[256];
+            json_escape(name, name_escaped, sizeof(name_escaped));
+            json_escape(module, module_escaped, sizeof(module_escaped));
+            len += snprintf(out + len, cap - len,
+                            "%s{\"slot\":\"0x%llx\",\"symbol\":\"%s\",\"value\":\"0x%llx\",\"type\":\"%s\"}",
+                            count ? "," : "", slot_addr, name_escaped,
+                            (unsigned long long)(uintptr_t)value, reloc_type_name(type));
+            count++;
+            if (count >= 4096) { truncated = 1; break; }
+        }
+    }
+    len += snprintf(out + len, cap - len,
+                    "],\"packedUnsupported\":%s}",
+                    android_rela ? "true" : "false");
+    char *copy = strdup(out);
+    free(out);
+    if (!copy) {
+        snprintf(error, error_size, "out of memory");
+        return 0;
+    }
+    *out_json = copy;
+    return 1;
+}

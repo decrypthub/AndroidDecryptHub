@@ -45,6 +45,13 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
         }, 20_000);
         return send(r.ok ? 200 : 502, r);
       } catch (e) { return send(504, { error: (e as Error).message }); }
+    } },    { method: 'POST', path: '/api/native/got_enum', handler: async () => {
+      const body = await readBody(req);
+      const { session, module, filter } = JSON.parse(body || '{}');
+      const sid = pickSid(session);
+      if (!sid || !module) return send(400, { error: 'need session, module' });
+      try { const r = await sendCmd(sid, 'got_enum', { module, filter: filter ?? '' }, 20_000); return send(r.ok ? 200 : 502, r); }
+      catch (e) { return send(504, { error: (e as Error).message }); }
     } },    { method: 'POST', path: '/api/native/hook', handler: async () => {
       const body = await readBody(req);
       const { session, action, hookId, mode, module, symbol, addr } = JSON.parse(body || '{}');
