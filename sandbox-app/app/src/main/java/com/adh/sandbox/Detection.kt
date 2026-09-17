@@ -26,6 +26,9 @@ object Detection {
     @JvmStatic external fun jniEnvExceptionProbe(): Int
     // v4.24 fixture for the Call*Method / NewObject table hooks (all three JNI forms).
     @JvmStatic external fun jniCallProbe(): Int
+    // v4.26 fixture: byte[] written back in place via ReleaseByteArrayElements and the
+    // primitive-array critical pair (the post-decryption pattern).
+    @JvmStatic external fun jniArrayWriteProbe(): Int
 
     fun load() {
         try {

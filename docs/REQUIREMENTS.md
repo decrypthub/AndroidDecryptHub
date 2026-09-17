@@ -416,7 +416,7 @@ RSA_public_encrypt / RSA_private_decrypt
 | `RegisterNatives` | class、methods 表（name/signature/fnPtr） |
 | `Call*Method` 系列 | class、method、参数 |
 | `NewStringUTF` / `GetStringUTFChars` | 字符串内容 |
-| `GetByteArrayElements` / `SetByteArrayRegion` | 数组数据摘要 |
+| `GetByteArrayElements` / `SetByteArrayRegion` / `GetByteArrayRegion` / `ReleaseByteArrayElements` / `Get|ReleasePrimitiveArrayCritical` | 数组数据摘要（含 in-place 回写后的最终内容） |
 | `FindClass` | class 名 |
 | `GetFieldID` / `GetStaticFieldID` | 字段所属类、name、签名 |
 

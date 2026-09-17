@@ -215,6 +215,41 @@ JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_jniCallProbe(JNIEnv *env, 
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return 0xAD3000; }
     return (jint)(0xAD3000 | bits);
 }
+// v4.26 fixture for the byte-array writeback hooks: fill a byte[], rewrite it in place through
+// Get/ReleaseByteArrayElements (copy-back mode) and again through the primitive-array critical
+// pair, reading the result back with GetByteArrayRegion each time. Returns
+// 0xAD4000 | bits so the verifier can prove both writebacks really landed.
+JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_jniArrayWriteProbe(JNIEnv *env, jclass clazz) {
+    jint bits = 0;
+    jbyteArray arr = (*env)->NewByteArray(env, 8);
+    if (!arr) { if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); return 0xAD4000; }
+    const jbyte seed[8] = { 1, 2, 3, 4, 5, 6, 7, 8 };
+    (*env)->SetByteArrayRegion(env, arr, 0, 8, seed);
+
+    // 1) in-place rewrite through GetByteArrayElements -> ReleaseByteArrayElements(mode 0)
+    jbyte *elems = (*env)->GetByteArrayElements(env, arr, NULL);
+    if (elems) {
+        for (int i = 0; i < 8; i++) elems[i] = (jbyte)(0xA0 + i);
+        (*env)->ReleaseByteArrayElements(env, arr, elems, 0);
+    }
+    jbyte readback[8] = { 0 };
+    (*env)->GetByteArrayRegion(env, arr, 0, 8, readback);
+    if (readback[0] == (jbyte)0xA0 && readback[7] == (jbyte)0xA7) bits |= 1;
+
+    // 2) in-place rewrite inside a primitive-array critical section
+    jbyte *crit = (jbyte *)(*env)->GetPrimitiveArrayCritical(env, arr, NULL);
+    if (crit) {
+        for (int i = 0; i < 8; i++) crit[i] = (jbyte)(0xB0 + i);
+        (*env)->ReleasePrimitiveArrayCritical(env, arr, crit, 0);
+    }
+    jbyte readback2[8] = { 0 };
+    (*env)->GetByteArrayRegion(env, arr, 0, 8, readback2);
+    if (readback2[0] == (jbyte)0xB0 && readback2[7] == (jbyte)0xB7) bits |= 2;
+
+    (*env)->DeleteLocalRef(env, arr);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return 0xAD4000; }
+    return (jint)(0xAD4000 | bits);
+}
 JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_run(JNIEnv *env, jclass clazz) {
     (void)env; (void)clazz;
     int flags = 0;

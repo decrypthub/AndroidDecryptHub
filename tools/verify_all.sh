@@ -50,6 +50,7 @@ SCRIPTS=(
   "verify_v60_jni_env_preserve.sh:device"
   "verify_v61_got_by_name.sh:device"
   "verify_v62_jni_call_hooks.sh:device"
+  "verify_v63_jni_array_writeback.sh:device"
   "verify_v02_dump.sh:device"
   "verify_v02_so.sh:device"
   "verify_v02_dexrepair.sh:host"

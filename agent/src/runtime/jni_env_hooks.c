@@ -55,6 +55,10 @@ enum {
     ENV_SLOT_GetStaticFieldID,
     ENV_SLOT_GetByteArrayElements,
     ENV_SLOT_SetByteArrayRegion,
+    ENV_SLOT_ReleaseByteArrayElements,
+    ENV_SLOT_GetByteArrayRegion,
+    ENV_SLOT_GetPrimitiveArrayCritical,
+    ENV_SLOT_ReleasePrimitiveArrayCritical,
     ENV_FIXED_SLOTS,
 
     ENV_SLOT_CallObjectMethod = ENV_FIXED_SLOTS,
@@ -82,7 +86,8 @@ struct EnvHookSlot {
 #define ADH_FIXED_SLOT_INITS(X) \
     X("GetStringUTFChars") X("FindClass") X("GetMethodID") X("GetStaticMethodID") \
     X("NewStringUTF") X("GetFieldID") X("GetStaticFieldID") X("GetByteArrayElements") \
-    X("SetByteArrayRegion")
+    X("SetByteArrayRegion") X("ReleaseByteArrayElements") X("GetByteArrayRegion") \
+    X("GetPrimitiveArrayCritical") X("ReleasePrimitiveArrayCritical")
 
 #define ADH_CALL_VALUE_FAMILIES(X) \
     X(CallObjectMethod,       jobject,  jobject, ADH_MEMBER_INSTANCE, ENV_SLOT_CallObjectMethod) \
@@ -119,6 +124,10 @@ typedef jmethodID (*get_method_id_fn)(JNIEnv *, jclass, const char *, const char
 typedef jstring (*new_string_utf_fn)(JNIEnv *, const char *);
 typedef jbyte *(*get_byte_array_elements_fn)(JNIEnv *, jarray, jboolean *);
 typedef void (*set_byte_array_region_fn)(JNIEnv *, jarray, jsize, jsize, const jbyte *);
+typedef void (*release_byte_array_elements_fn)(JNIEnv *, jbyteArray, jbyte *, jint);
+typedef void (*get_byte_array_region_fn)(JNIEnv *, jbyteArray, jsize, jsize, jbyte *);
+typedef void *(*get_primitive_array_critical_fn)(JNIEnv *, jarray, jboolean *);
+typedef void (*release_primitive_array_critical_fn)(JNIEnv *, jarray, void *, jint);
 
 static void *slot_original(int index) {
     return __atomic_load_n(&g_env_hooks[index].original, __ATOMIC_ACQUIRE);
@@ -477,6 +486,133 @@ static void SetByteArrayRegion_wrapper(JNIEnv *env, jarray array, jsize start, j
     }
     g_env_hook_reentry = 0;
 }
+// Critical arrays: JNI forbids calling other JNI functions (or blocking) between
+// Get/ReleasePrimitiveArrayCritical, so the length is captured at Get time keyed by the
+// returned buffer pointer and consumed at Release time. Reading the buffer at release is then
+// legal and gives the in-place writeback (the usual post-decryption pattern) with no JNI call
+// inside the critical section and no stale-handle guessing.
+#define ENV_CRIT_SLOTS 8
+struct CritEntry { void *carray; jsize len; };
+static struct CritEntry g_crit[ENV_CRIT_SLOTS];
+static pthread_mutex_t g_crit_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static void crit_stash(void *carray, jsize len) {
+    if (!carray || len <= 0 || pthread_mutex_trylock(&g_crit_lock) != 0) return;
+    int slot = -1;
+    for (int i = 0; i < ENV_CRIT_SLOTS; i++) {
+        if (__atomic_load_n(&g_crit[i].carray, __ATOMIC_ACQUIRE) == carray) { slot = i; break; }
+        if (!g_crit[i].carray && slot < 0) slot = i;
+    }
+    if (slot >= 0) {
+        g_crit[slot].len = len;
+        __atomic_store_n(&g_crit[slot].carray, carray, __ATOMIC_RELEASE);
+    }
+    pthread_mutex_unlock(&g_crit_lock);
+}
+
+// Consume-on-release: an entry is cleared when its buffer is released, so a recycled pointer
+// finds an empty slot instead of an old length.
+static jsize crit_take(void *carray) {
+    if (!carray) return 0;
+    for (int i = 0; i < ENV_CRIT_SLOTS; i++) {
+        if (__atomic_load_n(&g_crit[i].carray, __ATOMIC_ACQUIRE) != carray) continue;
+        jsize len = g_crit[i].len;
+        __atomic_store_n(&g_crit[i].carray, NULL, __ATOMIC_RELEASE);
+        return len;
+    }
+    return 0;
+}
+
+static void ReleaseByteArrayElements_wrapper(JNIEnv *env, jbyteArray array, jbyte *elems, jint mode) {
+    release_byte_array_elements_fn original =
+        (release_byte_array_elements_fn)slot_original(ENV_SLOT_ReleaseByteArrayElements);
+    if (!original) return;
+    if (g_env_hook_reentry || !slot_active(ENV_SLOT_ReleaseByteArrayElements)) {
+        original(env, array, elems, mode);
+        return;
+    }
+    g_env_hook_reentry = 1;
+    if (env_budget_left(ENV_SLOT_ReleaseByteArrayElements)) {
+        char hex[2 * ENV_HEX_PREVIEW + 8], detail[160];
+        jsize len = (array && elems) ? (*env)->GetArrayLength(env, array) : 0;
+        hex_preview(elems, (mode == JNI_ABORT) ? 0 : len, hex, sizeof(hex));
+        snprintf(detail, sizeof(detail), "len=%d mode=%d %s%s", (int)len, (int)mode,
+                 (mode == JNI_ABORT) ? "(no copyback)" : "writeback hex=", hex);
+        original(env, array, elems, mode);
+        env_note(ENV_SLOT_ReleaseByteArrayElements, detail, 1);
+    } else {
+        original(env, array, elems, mode);
+        env_note(ENV_SLOT_ReleaseByteArrayElements, NULL, 1);
+    }
+    g_env_hook_reentry = 0;
+}
+
+static void GetByteArrayRegion_wrapper(JNIEnv *env, jbyteArray array, jsize start, jsize len, jbyte *buf) {
+    get_byte_array_region_fn original =
+        (get_byte_array_region_fn)slot_original(ENV_SLOT_GetByteArrayRegion);
+    if (!original) return;
+    if (g_env_hook_reentry || !slot_active(ENV_SLOT_GetByteArrayRegion)) {
+        original(env, array, start, len, buf);
+        return;
+    }
+    g_env_hook_reentry = 1;
+    original(env, array, start, len, buf);
+    if (env_budget_left(ENV_SLOT_GetByteArrayRegion) && !(*env)->ExceptionCheck(env)) {
+        char hex[2 * ENV_HEX_PREVIEW + 8], detail[128];
+        hex_preview(buf, len, hex, sizeof(hex));
+        snprintf(detail, sizeof(detail), "start=%d len=%d hex=%s", (int)start, (int)len, hex);
+        env_note(ENV_SLOT_GetByteArrayRegion, detail, 1);
+    } else {
+        env_note(ENV_SLOT_GetByteArrayRegion, NULL, 0);
+    }
+    g_env_hook_reentry = 0;
+}
+
+static void *GetPrimitiveArrayCritical_wrapper(JNIEnv *env, jarray array, jboolean *isCopy) {
+    get_primitive_array_critical_fn original =
+        (get_primitive_array_critical_fn)slot_original(ENV_SLOT_GetPrimitiveArrayCritical);
+    if (!original) return NULL;
+    if (g_env_hook_reentry || !slot_active(ENV_SLOT_GetPrimitiveArrayCritical)) {
+        return original(env, array, isCopy);
+    }
+    g_env_hook_reentry = 1;
+    void *result = original(env, array, isCopy);
+    if (result && array) crit_stash(result, (*env)->GetArrayLength(env, array));
+    if (env_budget_left(ENV_SLOT_GetPrimitiveArrayCritical)) {
+        char detail[96];
+        snprintf(detail, sizeof(detail), "ptr=0x%llx isCopy=%s", (unsigned long long)(uintptr_t)result,
+                 (isCopy && *isCopy) ? "true" : "false");
+        env_note(ENV_SLOT_GetPrimitiveArrayCritical, detail, result != NULL);
+    } else {
+        env_note(ENV_SLOT_GetPrimitiveArrayCritical, NULL, result != NULL);
+    }
+    g_env_hook_reentry = 0;
+    return result;
+}
+
+static void ReleasePrimitiveArrayCritical_wrapper(JNIEnv *env, jarray array, void *carray, jint mode) {
+    release_primitive_array_critical_fn original =
+        (release_primitive_array_critical_fn)slot_original(ENV_SLOT_ReleasePrimitiveArrayCritical);
+    if (!original) return;
+    if (g_env_hook_reentry || !slot_active(ENV_SLOT_ReleasePrimitiveArrayCritical)) {
+        original(env, array, carray, mode);
+        return;
+    }
+    g_env_hook_reentry = 1;
+    jsize len = crit_take(carray);
+    if (env_budget_left(ENV_SLOT_ReleasePrimitiveArrayCritical)) {
+        char hex[2 * ENV_HEX_PREVIEW + 8], detail[160];
+        hex_preview((const jbyte *)carray, (mode == JNI_ABORT) ? 0 : len, hex, sizeof(hex));
+        snprintf(detail, sizeof(detail), "len=%d mode=%d %s%s", (int)len, (int)mode,
+                 (mode == JNI_ABORT) ? "(no copyback)" : "writeback hex=", hex);
+        original(env, array, carray, mode);
+        env_note(ENV_SLOT_ReleasePrimitiveArrayCritical, detail, 1);
+    } else {
+        original(env, array, carray, mode);
+        env_note(ENV_SLOT_ReleasePrimitiveArrayCritical, NULL, 1);
+    }
+    g_env_hook_reentry = 0;
+}
 // ---- Call* family wrappers (macro-generated per form) ---------------------
 #define ADH_DEFINE_CALL_VALUE(NAME, RET, TGT, KIND, BASE)                                      \
     static RET NAME##_wrapper(JNIEnv *env, TGT target, jmethodID mid, ...) {                    \
@@ -607,6 +743,10 @@ static int env_hook_spec_index(int index) {
         case ENV_SLOT_NewStringUTF: return 167;
         case ENV_SLOT_GetStringUTFChars: return 169;
         case ENV_SLOT_GetByteArrayElements: return 184;
+        case ENV_SLOT_ReleaseByteArrayElements: return 192;
+        case ENV_SLOT_GetByteArrayRegion: return 200;
+        case ENV_SLOT_GetPrimitiveArrayCritical: return 222;
+        case ENV_SLOT_ReleasePrimitiveArrayCritical: return 223;
         case ENV_SLOT_SetByteArrayRegion: return 208;
         default: return -1;
     }
@@ -636,6 +776,10 @@ static void **env_hook_slot(struct JNINativeInterface *table, int index) {
         case ENV_SLOT_GetStaticFieldID: return (void **)(uintptr_t)&table->GetStaticFieldID;
         case ENV_SLOT_GetByteArrayElements: return (void **)(uintptr_t)&table->GetByteArrayElements;
         case ENV_SLOT_SetByteArrayRegion: return (void **)(uintptr_t)&table->SetByteArrayRegion;
+        case ENV_SLOT_ReleaseByteArrayElements: return (void **)(uintptr_t)&table->ReleaseByteArrayElements;
+        case ENV_SLOT_GetByteArrayRegion: return (void **)(uintptr_t)&table->GetByteArrayRegion;
+        case ENV_SLOT_GetPrimitiveArrayCritical: return (void **)(uintptr_t)&table->GetPrimitiveArrayCritical;
+        case ENV_SLOT_ReleasePrimitiveArrayCritical: return (void **)(uintptr_t)&table->ReleasePrimitiveArrayCritical;
         ADH_CALL_VALUE_FAMILIES(ADH_CALL_SLOT_CASES)
         ADH_CALL_VOID_FAMILIES(ADH_CALL_VOID_SLOT_CASES)
         default: return NULL;
@@ -659,6 +803,10 @@ static void *env_hook_wrapper(int index) {
         case ENV_SLOT_GetStaticFieldID: return (void *)&GetStaticFieldID_wrapper;
         case ENV_SLOT_GetByteArrayElements: return (void *)&GetByteArrayElements_wrapper;
         case ENV_SLOT_SetByteArrayRegion: return (void *)&SetByteArrayRegion_wrapper;
+        case ENV_SLOT_ReleaseByteArrayElements: return (void *)&ReleaseByteArrayElements_wrapper;
+        case ENV_SLOT_GetByteArrayRegion: return (void *)&GetByteArrayRegion_wrapper;
+        case ENV_SLOT_GetPrimitiveArrayCritical: return (void *)&GetPrimitiveArrayCritical_wrapper;
+        case ENV_SLOT_ReleasePrimitiveArrayCritical: return (void *)&ReleasePrimitiveArrayCritical_wrapper;
         ADH_CALL_VALUE_FAMILIES(ADH_CALL_WRAPPER_CASES)
         ADH_CALL_VOID_FAMILIES(ADH_CALL_VOID_WRAPPER_CASES)
         default: return NULL;
