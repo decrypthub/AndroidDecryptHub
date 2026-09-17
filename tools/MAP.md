@@ -99,4 +99,5 @@ translation — kept separate).
 - `verify_v57_jni_onload.sh` — JNI_OnLoad list → hook → 手动 call（返回 JNI_VERSION_1_6）→ JNI_ONLOAD 事件 → 软 unhook → 再次 call 不新增 hit（已加载模块路径，非 load-time 拦截）。
 - `verify_v58_jni_env_hook.sh` — JNIEnv 函数表逐项 hook：FindClass / GetMethodID / GetStaticMethodID / NewStringUTF / GetStringUTFChars 各装一次，触发 `Detection.jniEnvProbe()` 后断言 5 条精确 JNI_ENV 事件与 hits，再 uninstall 证明表项已还原（hits 冻结、探针返回值不变）。
 - `verify_v59_jni_env_arrays.sh` — JNIEnv 字段/数组表项 hook：GetFieldID / GetStaticFieldID / SetByteArrayRegion / GetByteArrayElements 各装一次，触发 `Detection.jniEnvArrayProbe()` 后断言 4 条精确 JNI_ENV 事件（含 `start=0 len=8 hex=414448…` 与 `len=8 hex=…`），再 uninstall 证明表项还原（hits 冻结、返回值不变、RELRO 仍为 r--）。
+- `verify_v60_jni_env_preserve.sh` — JNIEnv hook 行为不变性：安装 GetMethodID / GetStaticMethodID / GetFieldID / GetStaticFieldID 后 `Detection.jniEnvExceptionProbe()` 的返回值必须与未安装时一致（失败查找仍留下 NoSuchMethodError / NoSuchFieldError，且失败查找本身也有 JNI_ENV 事件），uninstall 后再次一致。
 - `verify_v47_got_enum.sh` — 枚举 `libadhdetect.so` 的 GOT/relocation，断言导入符号可见（deploy new agent；未部署时 SKIP）。

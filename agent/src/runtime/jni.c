@@ -79,7 +79,15 @@ void adh_jni_class_name(JNIEnv *env, jclass clazz, char *out, size_t out_size) {
     if (!out || out_size == 0) return;
     out[0] = 0;
     if (!env || !clazz) return;
-    if ((*env)->PushLocalFrame(env, 8) != 0) return;
+    // The caller may already have a pending exception (a failed member-ID lookup is a normal
+    // path in real targets). Park it: clearing or overwriting it here would silently change the
+    // target's control flow, so the same throwable is re-thrown before we return.
+    jthrowable pending = (*env)->ExceptionOccurred(env);
+    if (pending) (*env)->ExceptionClear(env);
+    if ((*env)->PushLocalFrame(env, 8) != 0) {
+        if (pending) (*env)->Throw(env, pending);
+        return;
+    }
     jclass class_class = (*env)->GetObjectClass(env, clazz);
     jmethodID get_name = class_class
         ? (*env)->GetMethodID(env, class_class, "getName", "()Ljava/lang/String;") : NULL;
@@ -93,8 +101,12 @@ void adh_jni_class_name(JNIEnv *env, jclass clazz, char *out, size_t out_size) {
         }
         (*env)->DeleteLocalRef(env, name);
     }
-    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);   // ours, not the caller's
     (*env)->PopLocalFrame(env, NULL);
+    if (pending) {
+        if (!(*env)->ExceptionCheck(env)) (*env)->Throw(env, pending);
+        (*env)->DeleteLocalRef(env, pending);
+    }
 }
 
 jclass adh_jni_load_app_class(JNIEnv *env, const char *dotname) {

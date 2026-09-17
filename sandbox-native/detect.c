@@ -146,6 +146,22 @@ JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_jniEnvArrayProbe(JNIEnv *e
     if (!instance_field || !static_field || !ok) return -3;
     return 0xAD1008;   // = 0xAD1000 + 8 array bytes
 }
+// v4.20 invariant fixture: the JNIEnv table hooks must not change what the target observes.
+// Bit 1: a failed GetMethodID still leaves NoSuchMethodError pending. Bit 4: a failed
+// GetStaticFieldID still leaves NoSuchFieldError pending. Both are legal JNI (a *failed*
+// lookup returns NULL and throws); calling an arbitrary JNI function while an exception is
+// already pending is NOT legal — CheckJNI aborts the process (verified on device) — so the
+// fixture deliberately stays inside the legal subset.
+JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_jniEnvExceptionProbe(JNIEnv *env, jclass clazz) {
+    jint bits = 0;
+    jmethodID missing = (*env)->GetMethodID(env, clazz, "adhNoSuchMethod", "()V");
+    if (missing == NULL && (*env)->ExceptionCheck(env)) bits |= 1;
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    jfieldID bad = (*env)->GetStaticFieldID(env, clazz, "adhNoSuchField", "I");
+    if (bad == NULL && (*env)->ExceptionCheck(env)) bits |= 4;
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    return bits;
+}
 JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_run(JNIEnv *env, jclass clazz) {
     (void)env; (void)clazz;
     int flags = 0;

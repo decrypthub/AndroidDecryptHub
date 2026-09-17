@@ -21,6 +21,9 @@ object Detection {
     @JvmStatic external fun jniEnvArrayProbe(): Int
     // Exists so the probe can resolve a static field ID on this class.
     @JvmField val jniEnvStaticField: Int = 0x51
+    // v4.20 invariant fixture: hooking member-ID lookups must not change the target's
+    // exception state (a failed lookup must still leave its error pending).
+    @JvmStatic external fun jniEnvExceptionProbe(): Int
 
     fun load() {
         try {

@@ -50,6 +50,10 @@
       · 安全/输入：inline 绝对地址必须 `confirm:true`，agent 校验目标位于 executable mapping；active 发布顺序移到所有字段之后；重复 target fail-loud；Java bridge 增加 `ready` 安装窗口自旋、ADH 自有 backup global ref、事件字符串 512 字符上限。
       · 真机 `aa165071` PASS：native 与 Java 同一目标各连续 24 次 install/unhook 后行为恢复、agent 存活（`tools/verify_v56_hook_stress.sh`）；v4.3/v4.6/v4.12–v4.15 全部复跑 PASS。
       · 已知边界：软卸载会在目标里保留 stub/LSPlant patch（去特征场景需要后续 hard-unhook/quiesce 方案）；JNI_OnLoad 仍未覆盖；Java/native 的唯一目标数仍受 16 槽上限约束。
+- [x] **v4.20 JNIEnv hook 行为不变性修复 + CheckJNI 发现（2026-09-18，真机 PASS）**：修掉一个会**改变目标行为**的缺陷 —— 成员 ID wrapper 里为了拿类名要跑 `Class.getName()` 反射，而反射返回时会把调用方原本 pending 的异常清掉，等于吞掉目标的 `NoSuchMethodError` / `NoSuchFieldError`。现在 `adh_jni_class_name()` 先 `ExceptionOccurred` + `ExceptionClear` park 住调用方异常，做完自己的活再把**同一个 throwable** `Throw` 回去（自己的异常照旧清掉），失败路径也照常发事件。
+      · 意外收获（真机 crash report）：沙盒 debug 包是 debuggable，Android 对它启用 **CheckJNI**，所以 `env->functions` 指向的是 CheckJNI 表，我们替换的表项 original 仍是 CheckJNI 包装 —— ART 的参数/异常检查依旧生效。同一次崩溃还确认了：**在 pending exception 下调用 GetMethodID 会被 CheckJNI 直接 abort 进程**（`JNI DETECTED ERROR IN APPLICATION`，ActivityThread 之外的线程同样致命），所以 fixture 只覆盖合法子集（失败的查找本身是合法的：返回 NULL + 抛异常）。
+      · 真机 `aa165071` PASS（`tools/verify_v60_jni_env_preserve.sh`）：`Detection.jniEnvExceptionProbe()` 在「未安装 hook / 安装 4 个成员 ID hook / uninstall 之后」三种状态下返回值均为 `5`（bit1 = NoSuchMethodError 仍 pending，bit4 = NoSuchFieldError 仍 pending），且两次失败查找都被捕获成 JNI_ENV 事件；同批 v58/v59/v54/v43 复跑 PASS。
+      · 测试方法的教训：这类"hook 是否改变目标行为"的检查必须做 **A/B 对照**（装/不装/卸后同值），只断言"事件出现"无法发现异常被吞。
 - [x] **v4.19 JNIEnv 字段 / 字节数组表项 hook（2026-09-18，真机 PASS）**：把 v4.18 的表槽位机制扩到 4 个新入口：`GetFieldID` / `GetStaticFieldID` / `GetByteArrayElements` / `SetByteArrayRegion`（共 9 个槽位）。
       · 事件信息量提升：成员 ID 事件现在带所属类（`<class>#<name><sig>`，如 `com.adh.sandbox.Detection#load()V`、字段 `…JniEnvHolder#marker:I`）—— 类名解析走 `Class.getName()`，只在"该槽位仍在发事件"的窗口内做（有界），且嵌套 JNI 调用被 reentry 标志挡住，不会自我递归。新增共享 helper `adh_jni_class_name()`（`runtime/jni.c`），`jni_hooks.c` 里原先私有的一份改为复用。
       · 数组事件带长度 + 前 24 字节 hex 摘要（`SetByteArrayRegion` 还带 start），这类"跨 JNI 边界写入 byte[]"的数据正是脱壳/解密场景最关心的明文落点。
