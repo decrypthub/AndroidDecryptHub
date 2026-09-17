@@ -43,6 +43,33 @@ void adh_jni_detach(int did_attach) {
     if (did_attach && g_vm) (*g_vm)->DetachCurrentThread(g_vm);
 }
 
+jobject adh_jni_app_class_loader(JNIEnv *env) {
+    if (!env) return NULL;
+    jclass at = (*env)->FindClass(env, "android/app/ActivityThread");
+    if (at) {
+        jmethodID cur = (*env)->GetStaticMethodID(env, at, "currentApplication",
+                                                  "()Landroid/app/Application;");
+        jobject app = cur ? (*env)->CallStaticObjectMethod(env, at, cur) : NULL;
+        jclass ctx = (*env)->FindClass(env, "android/content/Context");
+        jmethodID gcl = ctx ? (*env)->GetMethodID(env, ctx, "getClassLoader",
+                                                  "()Ljava/lang/ClassLoader;") : NULL;
+        if (app && gcl) {
+            jobject loader = (*env)->CallObjectMethod(env, app, gcl);
+            if (loader) return loader;
+        }
+    }
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+
+    jclass thread = (*env)->FindClass(env, "java/lang/Thread");
+    jmethodID current = thread ? (*env)->GetStaticMethodID(env, thread, "currentThread",
+                                                          "()Ljava/lang/Thread;") : NULL;
+    jobject t = current ? (*env)->CallStaticObjectMethod(env, thread, current) : NULL;
+    jmethodID get = t ? (*env)->GetMethodID(env, thread, "getContextClassLoader",
+                                            "()Ljava/lang/ClassLoader;") : NULL;
+    if (get) return (*env)->CallObjectMethod(env, t, get);
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    return NULL;
+}
 jclass adh_jni_load_app_class(JNIEnv *env, const char *dotname) {
     jclass at = (*env)->FindClass(env, "android/app/ActivityThread");
     jmethodID cur = at ? (*env)->GetStaticMethodID(env, at, "currentApplication", "()Landroid/app/Application;") : NULL;

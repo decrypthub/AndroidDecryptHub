@@ -12,6 +12,7 @@ int adh_jni_vm_available(void);
 JNIEnv *adh_jni_attach(int *did_attach);
 void adh_jni_detach(int did_attach);
 jclass adh_jni_load_app_class(JNIEnv *env, const char *dotname);
+jobject adh_jni_app_class_loader(JNIEnv *env);
 
 #ifdef __cplusplus
 }

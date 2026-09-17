@@ -31,6 +31,14 @@ jobject adh_javahook_hook(JNIEnv *env, jobject target_method, jobject hooker_obj
 
 int adh_javahook_unhook(JNIEnv *env, jobject target_method);   // 1 ok, 0 fail
 int adh_javahook_is_hooked(JNIEnv *env, jobject method);       // 1 hooked, 0 not
+// Generic single-hook command surface used by agent_main.c. These functions resolve the
+// target through the app ClassLoader; params is a comma-separated list of Java type names
+// (for example "java.lang.String,int"). Only one active Java hook is supported in this
+// first slice; hook fails loudly when another hook is already active.
+int adh_javahook_hook_method(JNIEnv *env, const char *class_name, const char *method_name,
+                             const char *params, char *error, size_t error_size); // 1 ok, 0 fail
+int adh_javahook_unhook_active(JNIEnv *env, char *error, size_t error_size);      // 1 ok, 0 fail
+int adh_javahook_status_json(JNIEnv *env, char *out, size_t out_size);            // 1 ok, 0 fail
 
 #ifdef __cplusplus
 }

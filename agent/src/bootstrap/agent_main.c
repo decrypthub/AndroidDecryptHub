@@ -128,6 +128,61 @@ static void cmd_javahook_probe(int fd, const char *id) {
     send_line(fd, out);
 #endif
 }
+// Generic single Java-method hook command. All target identity comes from the command;
+// the agent has no sandbox/package/class constants.
+static void cmd_java_hook(int fd, const char *id, const char *action, const char *class_name,
+                          const char *method_name, const char *params) {
+    char idj[64];
+    json_escape(id, idj, sizeof(idj));
+#ifdef ADH_HAVE_LSPLANT
+    int did_attach = 0;
+    JNIEnv *env = adh_jni_attach(&did_attach);
+    if (!env) {
+        char out[220];
+        snprintf(out, sizeof(out),
+                 "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"java_hook\",\"ok\":false,\"error\":\"no JavaVM\"}\n", idj);
+        send_line(fd, out);
+        return;
+    }
+
+    char error[512] = "";
+    int ok = 0;
+    if (strcmp(action, "hook") == 0) {
+        if (!class_name[0] || !method_name[0]) {
+            snprintf(error, sizeof(error), "hook requires className and method");
+        } else {
+            ok = adh_javahook_hook_method(env, class_name, method_name, params, error, sizeof(error));
+        }
+    } else if (strcmp(action, "unhook") == 0) {
+        ok = adh_javahook_unhook_active(env, error, sizeof(error));
+    } else if (strcmp(action, "status") == 0) {
+        ok = 1;
+    } else {
+        snprintf(error, sizeof(error), "java_hook requires action: hook | unhook | status");
+    }
+
+    char status[2048] = "{}";
+    adh_javahook_status_json(env, status, sizeof(status));
+    if (did_attach) adh_jni_detach(did_attach);
+
+    char errj[768];
+    json_escape(error, errj, sizeof(errj));
+    char out[4096];
+    snprintf(out, sizeof(out),
+             "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"java_hook\",\"ok\":%s,\"action\":\"%s\","
+             "\"error\":\"%s\",\"status\":%s}\n",
+             idj, ok ? "true" : "false", action, errj, status);
+    send_line(fd, out);
+    LOGI("java_hook: action=%s ok=%d error=%s", action, ok, error);
+#else
+    (void)action; (void)class_name; (void)method_name; (void)params;
+    char out[240];
+    snprintf(out, sizeof(out),
+             "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"java_hook\",\"ok\":false,"
+             "\"error\":\"lsplant not built — run tools/fetch_lsplant.sh\"}\n", idj);
+    send_line(fd, out);
+#endif
+}
 // Read framed commands from the Host ADH Daemon and dispatch.
 static void command_loop(int fd) {
     for (;;) {
@@ -155,6 +210,13 @@ static void command_loop(int fd) {
                     cmd_read(fd, id, addr, size);
                 } else if (strcmp(op, "jni_probe") == 0) {
                     adh_cmd_jni_probe(fd, id);
+                } else if (strcmp(op, "java_hook") == 0) {
+                    char jaction[16] = "", jcls[256] = "", jmethod[128] = "", jparams[512] = "";
+                    json_get_str(line, "action", jaction, sizeof(jaction));
+                    json_get_str(line, "className", jcls, sizeof(jcls));
+                    json_get_str(line, "method", jmethod, sizeof(jmethod));
+                    json_get_str(line, "params", jparams, sizeof(jparams));
+                    cmd_java_hook(fd, id, jaction, jcls, jmethod, jparams);
                 } else if (strcmp(op, "javahook_probe") == 0) {
                     cmd_javahook_probe(fd, id);
                 } else if (strcmp(op, "gothook_selftest") == 0) {

@@ -23,14 +23,26 @@ if (!r.ok && /unsupported|unknown op|lsplant not built/i.test(err)) {
   console.log('RESULT:SKIP');
   process.exit(0);
 }
-console.log(JSON.stringify({ package: a.package, pid: a.pid, available: r.available, initOk: r.initOk, backend: r.backend, version: r.version, error: err }));
-const pass = r.ok === true && r.available === true && r.initOk === true;
+const hook = await (await fetch(`${base}/api/java/hook`, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ session: a.sessionId, action: 'status' }),
+})).json();
+const hookErr = String(hook.error ?? '');
+if (!hook.ok && /unsupported|unknown op|lsplant not built/i.test(hookErr)) {
+  console.log(`old payload / no java_hook: ${hookErr}`);
+  console.log('RESULT:SKIP');
+  process.exit(0);
+}
+console.log(JSON.stringify({ package: a.package, pid: a.pid, available: r.available, initOk: r.initOk, backend: r.backend, version: r.version, error: err, hookStatus: hook.status ?? null, hookError: hookErr }));
+const pass = r.ok === true && r.available === true && r.initOk === true &&
+             hook.ok === true && hook.status && hook.status.active === false;
 console.log(pass ? 'RESULT:PASS' : 'RESULT:FAIL');
 EOF
 )"
 echo "$OUT"
 if echo "$OUT" | grep -q 'RESULT:PASS'; then
-  echo "✅ v4.2 LSPlant Java-method-hook backend PASS (static link + ART init)"
+  echo "✅ v4.2 LSPlant probe + java_hook status PASS (static link + ART init)"
   exit 0
 elif echo "$OUT" | grep -q 'RESULT:SKIP'; then
   echo "⏭  v4.2 LSPlant probe SKIP (agent payload not deployed yet)"
