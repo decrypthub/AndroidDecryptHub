@@ -67,7 +67,20 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
             ?.takeIf { it.isNotBlank() }
             ?: Build.FINGERPRINT
         bridge?.stop()
-        bridge = AutomationBridgeClient(deviceId, Build.MODEL, Build.VERSION.SDK_INT, ::handleCommand).also { it.start() }
+        // Remember the host's LAN addresses across service restarts: after one adb-reverse session
+        // the phone can reconnect over Wi-Fi without the cable.
+        val memory = getSharedPreferences(BRIDGE_PREFS, MODE_PRIVATE)
+        val remembered = (memory.getStringSet(BRIDGE_LAN_HOSTS, emptySet()) ?: emptySet()).toList()
+        bridge = AutomationBridgeClient(
+            deviceId,
+            Build.MODEL,
+            Build.VERSION.SDK_INT,
+            ::handleCommand,
+            rememberedHosts = remembered,
+            onLanHosts = { hosts ->
+                memory.edit().putStringSet(BRIDGE_LAN_HOSTS, hosts.take(4).toSet()).apply()
+            },
+        ).also { it.start() }
         Log.i(TAG, "automation accessibility service connected")
     }
 
@@ -952,5 +965,8 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
         private const val MAX_SNAPSHOTS = 16
         private const val OBSERVE_BUDGET_MS = 4_000L
         private const val QUEUE_LIMIT = 20_000
+        private const val BRIDGE_PREFS = "adh_automation"
+        private const val BRIDGE_LAN_HOSTS = "lan_hosts"
     }
+
 }

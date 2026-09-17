@@ -1,4 +1,5 @@
 import net from 'node:net';
+import { webUrls } from './config.ts';
 import { blockedPackageFromError } from './phone_foreground.ts';
 import { recordBlockedPackage } from './phone_blocked.ts';
 import { randomUUID } from 'node:crypto';
@@ -180,7 +181,12 @@ export class AutomationHub {
               previous.socket.destroy();
             }
             this.devices.set(deviceId, record);
-            socket.write(JSON.stringify({ t: 'helloAck', deviceId }) + '\n');
+            // Advertise the host's LAN addresses: a client that got here through adb reverse can
+            // remember them and reconnect over Wi-Fi next time instead of needing the cable.
+            const lanHosts = webUrls().lan
+              .map((url) => url.replace(/^https?:\/\//, '').split('/')[0].split(':')[0])
+              .filter((host) => /^[0-9.]+$/.test(host));
+            socket.write(JSON.stringify({ t: 'helloAck', deviceId, lanHosts }) + '\n');
             continue;
           }
           if (!helloSeen || !registeredId) continue;

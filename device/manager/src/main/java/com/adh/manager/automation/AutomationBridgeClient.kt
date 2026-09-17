@@ -19,8 +19,13 @@ import kotlin.concurrent.thread
 
 /**
  * Narrow, opt-in bridge from the user-enabled AccessibilityService to the Host ADH Daemon.
- * The device is always the client: the Host listens on loopback and adb reverse forwards
- * tcp:8763 into the daemon. No HTTP/MCP server runs here.
+ * The device is always the client: the Host listens for it and there is no HTTP/MCP server here.
+ *
+ * Two transports are supported, in preference order:
+ *  1. "127.0.0.1:8763" via adb reverse — the dev setup, no extra host configuration.
+ *  2. The host's LAN address, discovered from GET /health (web.lan) once per reconnect
+ *     cycle — so the phone keeps working when the cable is unplugged or adb reverse is gone.
+ * The last address that worked is remembered and tried first on the next reconnect.
  *
  * Command execution is deliberately decoupled from the socket reader. A slow Accessibility
  * traversal must not stop reconnects or turn the whole bridge into a black hole.
@@ -32,6 +37,10 @@ class AutomationBridgeClient(
     private val handler: (String, JSONObject) -> JSONObject,
     private val host: String = "127.0.0.1",
     private val port: Int = PORT,
+    /** LAN addresses that worked before, so a cable-free start can reach the host directly. */
+    rememberedHosts: List<String> = emptyList(),
+    /** Called with the LAN addresses the host advertises in its helloAck. */
+    private val onLanHosts: (List<String>) -> Unit = {},
 ) {
     private val running = AtomicBoolean(false)
     private val commandBusy = AtomicBoolean(false)
@@ -46,6 +55,18 @@ class AutomationBridgeClient(
     @Volatile private var socket: Socket? = null
     @Volatile private var worker: Thread? = null
     @Volatile private var watchdog: Thread? = null
+
+    // Endpoint memory: the configured (usually loopback) address first, discovered LAN hosts next,
+    // and whichever connected last moves to the front.
+    private val endpoints = java.util.concurrent.CopyOnWriteArrayList<Endpoint>().apply {
+        add(Endpoint(host, port))
+        rememberedHosts.map { it.trim() }.filter { it.isNotEmpty() }.forEach { address ->
+            val endpoint = Endpoint(address, port)
+            if (!contains(endpoint)) add(endpoint)
+        }
+    }
+    @Volatile private var candidateCursor = 0
+    @Volatile private var lanDiscoveryAt = 0L
 
     fun start() {
         if (!running.compareAndSet(false, true)) return
@@ -66,13 +87,24 @@ class AutomationBridgeClient(
     private fun runLoop() {
         while (running.get()) {
             try {
+                val endpoint = nextEndpoint()
                 Socket().use { connection ->
                     socket = connection
                     connection.tcpNoDelay = true
-                    connection.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MS)
+                    connection.connect(InetSocketAddress(endpoint.host, endpoint.port), CONNECT_TIMEOUT_MS)
                     val reader = BufferedReader(InputStreamReader(connection.getInputStream(), Charsets.UTF_8))
                     val writer = BufferedWriter(OutputStreamWriter(connection.getOutputStream(), Charsets.UTF_8))
                     writeJson(writer, hello())
+                    // A TCP accept is not proof that the host daemon is on the other side: another
+                    // device on the LAN may answer. Wait for the host's hello_ack before treating
+                    // this endpoint as good, otherwise keep rotating.
+                    val ack = awaitHelloAck(connection, reader)
+                    if (ack != null) rememberLanHosts(ack)
+                    if (ack == null) {
+                        Log.d(TAG, "no hello_ack from \${endpoint.host}:\${endpoint.port} - trying the next endpoint")
+                        return@use
+                    }
+                    remember(endpoint)
                     while (running.get()) {
                         val line = reader.readLine() ?: break
                         handleLine(line, writer)
@@ -203,10 +235,97 @@ class AutomationBridgeClient(
         }
     }
 
+    private data class Endpoint(val host: String, val port: Int)
+
+    /** Rotates through known endpoints; discovers LAN candidates when the local one keeps failing. */
+    private fun nextEndpoint(): Endpoint {
+        val list = endpoints.toList()
+        val now = System.currentTimeMillis()
+        if (list.size <= 1 && now - lanDiscoveryAt > LAN_PROBE_INTERVAL_MS) {
+            lanDiscoveryAt = now
+            discoverLanEndpoints()
+        }
+        val current = endpoints.toList()
+        val index = candidateCursor % current.size
+        candidateCursor = (candidateCursor + 1) % Int.MAX_VALUE
+        return current[index]
+    }
+
+    /** Reads the host's helloAck (or any first line) with a bounded wait. */
+    private fun awaitHelloAck(connection: Socket, reader: BufferedReader): String? {
+        val previous = connection.soTimeout
+        connection.soTimeout = HELLO_ACK_TIMEOUT_MS
+        return try {
+            reader.readLine()
+        } catch (_: Exception) {
+            null
+        } finally {
+            connection.soTimeout = previous
+        }
+    }
+
+    /**
+     * The host tells us its LAN addresses in the ack. Remembering them lets the next app start
+     * connect over Wi-Fi (or another route) instead of requiring adb reverse to be set up again.
+     */
+    private fun rememberLanHosts(ack: String) {
+        runCatching {
+            val hosts = JSONObject(ack).optJSONArray("lanHosts") ?: return@runCatching
+            val discovered = mutableListOf<String>()
+            for (index in 0 until hosts.length()) {
+                val address = hosts.optString(index).trim()
+                if (address.isBlank()) continue
+                discovered.add(address)
+                val endpoint = Endpoint(address, port)
+                if (!endpoints.contains(endpoint)) endpoints.add(endpoint)
+            }
+            // Keep the list short: a stale address only costs one connect timeout per cycle.
+            while (endpoints.size > 1 + MAX_REMEMBERED_HOSTS) endpoints.removeAt(endpoints.size - 1)
+            if (discovered.isNotEmpty()) onLanHosts(discovered)
+        }
+    }
+
+    /** Moves the endpoint that just connected to the front so later reconnects retry it first. */
+    private fun remember(endpoint: Endpoint) {
+        if (endpoints.firstOrNull() == endpoint) return
+        endpoints.remove(endpoint)
+        endpoints.add(0, endpoint)
+    }
+
+    /**
+     * Reads the host's /health over the loopback reverse tunnel and remembers every LAN address the
+     * host advertises. Any failure is silent: the loopback endpoint stays the only candidate.
+     */
+    private fun discoverLanEndpoints() {
+        runCatching {
+            val url = java.net.URL("http://127.0.0.1:$HEALTH_PORT/health")
+            val connection = (url.openConnection() as java.net.HttpURLConnection).apply {
+                connectTimeout = 1_500
+                readTimeout = 1_500
+                requestMethod = "GET"
+            }
+            val body = connection.inputStream.bufferedReader().use { it.readText() }
+            connection.disconnect()
+            val lan = JSONObject(body).optJSONObject("web")?.optJSONArray("lan") ?: return@runCatching
+            for (index in 0 until lan.length()) {
+                val raw = lan.optString(index)
+                val host = raw.substringAfter("://", raw).substringBefore(':').substringBefore('/')
+                if (host.isNotBlank()) {
+                    val endpoint = Endpoint(host, port)
+                    if (!endpoints.contains(endpoint)) endpoints.add(endpoint)
+                }
+            }
+        }
+    }
+
     companion object {
         const val PORT = 8763
+        private const val HEALTH_PORT = 8088
+        private const val LAN_PROBE_INTERVAL_MS = 30_000L
         private const val TAG = "AdhAutomationBridge"
         private const val CONNECT_TIMEOUT_MS = 2_000
+        private const val HELLO_ACK_TIMEOUT_MS = 3_000
+        private const val MAX_REMEMBERED_HOSTS = 4
         private const val RECONNECT_DELAY_MS = 2_000L
         // The host's own per-op timeouts are 20-25s, so answering first at 10s keeps the host
         // from treating a recoverable stall as an unanswerable command.
