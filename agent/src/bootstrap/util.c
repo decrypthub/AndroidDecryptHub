@@ -32,13 +32,54 @@ void json_escape(const char *in, char *out, size_t n) {
 }
 
 // Minimal JSON field extractors for our own controlled protocol.
+static int hex_nibble(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
 int json_get_str(const char *json, const char *key, char *out, size_t n) {
     char pat[64]; snprintf(pat, sizeof(pat), "\"%s\":\"", key);
     const char *p = strstr(json, pat);
     if (!p) { out[0] = 0; return 0; }
     p += strlen(pat);
     size_t o = 0;
-    while (*p && *p != '"' && o + 1 < n) out[o++] = *p++;
+    while (*p && *p != '"' && o + 1 < n) {
+        unsigned char c = (unsigned char)*p++;
+        if (c != '\\') { out[o++] = (char)c; continue; }
+        if (!*p) break;
+        char esc = *p++;
+        switch (esc) {
+            case '"': c = '"'; break;
+            case '\\': c = '\\'; break;
+            case '/': c = '/'; break;
+            case 'b': c = '\b'; break;
+            case 'f': c = '\f'; break;
+            case 'n': c = '\n'; break;
+            case 'r': c = '\r'; break;
+            case 't': c = '\t'; break;
+            case 'u': {
+                if (!p[0] || !p[1] || !p[2] || !p[3]) { p += strlen(p); break; }
+                int h0 = hex_nibble(p[0]), h1 = hex_nibble(p[1]), h2 = hex_nibble(p[2]), h3 = hex_nibble(p[3]);
+                if (h0 < 0 || h1 < 0 || h2 < 0 || h3 < 0) { p += 4; break; }
+                unsigned cp = (unsigned)((h0 << 12) | (h1 << 8) | (h2 << 4) | h3);
+                p += 4;
+                if (cp < 0x80) { out[o++] = (char)cp; }
+                else if (cp < 0x800 && o + 2 < n) {
+                    out[o++] = (char)(0xc0 | (cp >> 6));
+                    out[o++] = (char)(0x80 | (cp & 0x3f));
+                } else if (o + 3 < n) {
+                    out[o++] = (char)(0xe0 | (cp >> 12));
+                    out[o++] = (char)(0x80 | ((cp >> 6) & 0x3f));
+                    out[o++] = (char)(0x80 | (cp & 0x3f));
+                }
+                continue;
+            }
+            default: c = (unsigned char)esc; break;
+        }
+        if (o + 1 < n) out[o++] = (char)c;
+    }
     out[o] = 0;
     return 1;
 }

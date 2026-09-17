@@ -27,7 +27,14 @@ SCRIPTS=(
   # Post-flash boot path: waits for the boot-started daemon and exercises volume/clipboard/root
   # input. Meaningful right after a flash; also runs (and passes) while the daemon is already up.
   "verify_v41_postflash.sh:device"
-  "verify_v02_dump.sh:device"
+  # LSPlant Java hooks + Java enum/call + native/GOT hook runtime (v4.2-v4.7). Each script
+  # SKIPs cleanly on an older deployed payload; on the current agent they are deterministic.
+  "verify_v42_lsplant.sh:device"
+  "verify_v43_javahook.sh:device"
+  "verify_v44_java_enum.sh:device"
+  "verify_v45_java_call.sh:device"
+  "verify_v46_native_hook.sh:device"
+  "verify_v47_got_enum.sh:device"  "verify_v02_dump.sh:device"
   "verify_v02_so.sh:device"
   "verify_v02_dexrepair.sh:host"
   "verify_v03.sh:device"

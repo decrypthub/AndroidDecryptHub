@@ -21,7 +21,9 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <fcntl.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <vector>
 
@@ -325,6 +327,7 @@ static pthread_mutex_t g_java_hooks_lock = PTHREAD_MUTEX_INITIALIZER;
 static int g_next_java_hook_id = 1;
 
 static jclass g_bridge_class = nullptr;
+static jobject g_bridge_loader = nullptr;
 static void *g_bridge_dex_mem = nullptr;
 static jfieldID g_bridge_backup = nullptr;
 static jfieldID g_bridge_is_static = nullptr;
@@ -362,64 +365,126 @@ static void JNICALL adh_java_hook_native_report(JNIEnv *env, jclass, jint hook_i
     adh_capture_push_text("JAVA_HOOK", json.c_str());
 }
 
+static std::string pending_exception_text(JNIEnv *env) {
+    if (!env || !env->ExceptionCheck()) return "";
+    jthrowable throwable = env->ExceptionOccurred();
+    env->ExceptionClear();
+    if (!throwable) return "unknown Java exception";
+    jclass throwable_class = env->FindClass("java/lang/Throwable");
+    jmethodID to_string = throwable_class ? env->GetMethodID(throwable_class, "toString", "()Ljava/lang/String;") : nullptr;
+    jstring text = to_string ? (jstring)env->CallObjectMethod(throwable, to_string) : nullptr;
+    std::string result = text ? jstring_to_utf(env, text) : std::string();
+    if (text) env->DeleteLocalRef(text);
+    env->DeleteLocalRef(throwable);
+    return result.empty() ? "unknown Java exception" : result;
+}
 static jclass load_bridge_class(JNIEnv *env, std::string &error) {
     if (g_bridge_class) return g_bridge_class;
 
-    if (!g_bridge_dex_mem) {
-        void *mem = mmap(nullptr, ADH_JAVA_HOOK_BRIDGE_DEX_SIZE, PROT_READ | PROT_WRITE,
-                         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        if (mem == MAP_FAILED) {
-            error = "mmap failed for embedded Java hook bridge dex";
-            return nullptr;
-        }
-        memcpy(mem, ADH_JAVA_HOOK_BRIDGE_DEX, ADH_JAVA_HOOK_BRIDGE_DEX_SIZE);
-        if (mprotect(mem, ADH_JAVA_HOOK_BRIDGE_DEX_SIZE, PROT_READ) != 0) {
-            error = "mprotect failed for embedded Java hook bridge dex";
-            return nullptr;
-        }
-        g_bridge_dex_mem = mem;
-    }
-
-    jobject loader = adh_jni_app_class_loader(env);
-    if (!loader) {
+    jobject app_loader = adh_jni_app_class_loader(env);
+    if (!app_loader) {
         error = "no app ClassLoader available for Java hook bridge";
         return nullptr;
     }
 
-    jobject byte_buffer = env->NewDirectByteBuffer(g_bridge_dex_mem, (jlong)ADH_JAVA_HOOK_BRIDGE_DEX_SIZE);
-    jclass dex_file_class = env->FindClass("dalvik/system/DexFile");
-    if (!byte_buffer || !dex_file_class) {
-        error = "failed to prepare DexFile for Java hook bridge";
+    // A real DexClassLoader with a persistent dex path is visible to LSPlant's generated
+    // child loader. Anonymous in-memory DexFile classes were not resolvable by name in the
+    // generated class on ColorOS, so materialize the tiny bridge dex in the app code cache.
+    jclass activity_thread_class = env->FindClass("android/app/ActivityThread");
+    jmethodID current_application = activity_thread_class ? env->GetStaticMethodID(
+        activity_thread_class, "currentApplication", "()Landroid/app/Application;") : nullptr;
+    jobject app = current_application ? env->CallStaticObjectMethod(activity_thread_class, current_application) : nullptr;
+    jclass context_class = env->FindClass("android/content/Context");
+    jmethodID get_code_cache_dir = context_class ? env->GetMethodID(
+        context_class, "getCodeCacheDir", "()Ljava/io/File;") : nullptr;
+    jobject code_cache_dir = (app && get_code_cache_dir) ? env->CallObjectMethod(app, get_code_cache_dir) : nullptr;
+    jclass file_class = env->FindClass("java/io/File");
+    jmethodID get_absolute_path = file_class ? env->GetMethodID(file_class, "getAbsolutePath", "()Ljava/lang/String;") : nullptr;
+    jstring dir_path_j = (code_cache_dir && get_absolute_path) ? (jstring)env->CallObjectMethod(code_cache_dir, get_absolute_path) : nullptr;
+    std::string code_cache_dir_path = jstring_to_utf(env, dir_path_j);
+    if (code_cache_dir_path.empty()) {
+        std::string detail = pending_exception_text(env);
+        error = "cannot resolve app code cache directory" + (detail.empty() ? std::string() : ": " + detail);
         return nullptr;
     }
-
-    jobject dex_file = nullptr;
-    int api = android_get_device_api_level();
-    if (api >= 29) {
-        jclass byte_buffer_class = env->FindClass("java/nio/ByteBuffer");
-        jobjectArray buffers = env->NewObjectArray(1, byte_buffer_class, byte_buffer);
-        jmethodID ctor = env->GetMethodID(
-            dex_file_class, "<init>",
-            "([Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;[Ldalvik/system/DexPathList$Element;)V");
-        if (ctor) dex_file = env->NewObject(dex_file_class, ctor, buffers, loader, (jobjectArray)nullptr);
-    } else {
-        jmethodID ctor = env->GetMethodID(dex_file_class, "<init>", "(Ljava/nio/ByteBuffer;)V");
-        if (ctor) dex_file = env->NewObject(dex_file_class, ctor, byte_buffer);
+    std::string bridge_dex_path = code_cache_dir_path + "/adh_bridge.dex";
+    int dex_fd = open(bridge_dex_path.c_str(), O_CREAT | O_TRUNC | O_WRONLY, 0600);
+    if (dex_fd < 0) {
+        // A previous run deliberately made this file read-only for Android 14+ dex loading.
+        chmod(bridge_dex_path.c_str(), 0600);
+        dex_fd = open(bridge_dex_path.c_str(), O_CREAT | O_TRUNC | O_WRONLY, 0600);
     }
-    if (!dex_file) {
-        error = "failed to construct in-memory DexFile for Java hook bridge";
-        if (env->ExceptionCheck()) env->ExceptionClear();
+    if (dex_fd < 0 ||
+        write(dex_fd, ADH_JAVA_HOOK_BRIDGE_DEX, ADH_JAVA_HOOK_BRIDGE_DEX_SIZE) != (ssize_t)ADH_JAVA_HOOK_BRIDGE_DEX_SIZE) {
+        if (dex_fd >= 0) close(dex_fd);
+        error = "failed to write embedded bridge dex to app code cache";
         return nullptr;
     }
+    // Since Android 14, DexClassLoader rejects writable dex paths. Materialize read-only,
+    // then flip back to writable first if this code path runs again in a later process.
+    if (fchmod(dex_fd, 0400) != 0) {
+        close(dex_fd);
+        error = "failed to mark bridge dex read-only";
+        return nullptr;
+    }
+    close(dex_fd);
 
-    jmethodID load_class = env->GetMethodID(
-        dex_file_class, "loadClass", "(Ljava/lang/String;Ljava/lang/ClassLoader;)Ljava/lang/Class;");
+    jclass dex_loader_class = env->FindClass("dalvik/system/DexClassLoader");
+    if (!dex_loader_class) {
+        error = "cannot find dalvik.system.DexClassLoader: " + pending_exception_text(env);
+        return nullptr;
+    }
+    jmethodID dex_loader_ctor = env->GetMethodID(
+        dex_loader_class, "<init>",
+        "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V");
+    if (!dex_loader_ctor) {
+        error = "cannot find DexClassLoader constructor: " + pending_exception_text(env);
+        return nullptr;
+    }
+    jstring bridge_dex_path_j = env->NewStringUTF(bridge_dex_path.c_str());
+    jstring code_cache_dir_path_j = env->NewStringUTF(code_cache_dir_path.c_str());
+    jobject bridge_loader = env->NewObject(
+        dex_loader_class, dex_loader_ctor,
+        bridge_dex_path_j, code_cache_dir_path_j, nullptr, app_loader);
+    if (env->ExceptionCheck()) {
+        error = "failed to create bridge DexClassLoader: " + pending_exception_text(env);
+        return nullptr;
+    }
+    if (!bridge_loader) {
+        error = "failed to create bridge DexClassLoader: unknown failure";
+        return nullptr;
+    }
+    jclass class_loader_class = env->FindClass("java/lang/ClassLoader");
+    jmethodID load_class = class_loader_class ? env->GetMethodID(
+        class_loader_class, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;") : nullptr;
     jstring class_name = env->NewStringUTF("com.adh.agent.AdhJavaHookBridge");
-    jclass bridge_class = load_class ? (jclass)env->CallObjectMethod(dex_file, load_class, class_name, loader) : nullptr;
+    jclass bridge_class = load_class ? (jclass)env->CallObjectMethod(bridge_loader, load_class, class_name) : nullptr;
     if (!bridge_class) {
-        error = "failed to load AdhJavaHookBridge from embedded dex";
-        if (env->ExceptionCheck()) env->ExceptionClear();
+        std::string detail = pending_exception_text(env);
+        error = "failed to load AdhJavaHookBridge from code-cache dex" + (detail.empty() ? std::string() : ": " + detail);
         return nullptr;
+    }
+    {
+        jclass class_class = env->FindClass("java/lang/Class");
+        jmethodID get_loader = env->GetMethodID(class_class, "getClassLoader", "()Ljava/lang/ClassLoader;");
+        jobject actual_loader = get_loader ? env->CallObjectMethod(bridge_class, get_loader) : nullptr;
+        jclass object_class = env->FindClass("java/lang/Object");
+        jmethodID to_string = env->GetMethodID(object_class, "toString", "()Ljava/lang/String;");
+        jstring loader_text = (actual_loader && to_string) ? (jstring)env->CallObjectMethod(actual_loader, to_string) : nullptr;
+        const char *loader_chars = loader_text ? env->GetStringUTFChars(loader_text, nullptr) : nullptr;
+        LLOGI("bridge classloader=%s", loader_chars ? loader_chars : "(none)");
+        if (loader_chars) env->ReleaseStringUTFChars(loader_text, loader_chars);
+        if (loader_text) env->DeleteLocalRef(loader_text);
+        if (actual_loader) {
+            jclass loader_class = env->FindClass("java/lang/ClassLoader");
+            jmethodID load_class = env->GetMethodID(loader_class, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;");
+            jstring bridge_name = env->NewStringUTF("com.adh.agent.AdhJavaHookBridge");
+            jobject found = load_class ? env->CallObjectMethod(actual_loader, load_class, bridge_name) : nullptr;
+            LLOGI("bridge self-resolve=%s", found ? "ok" : "FAIL");
+            if (env->ExceptionCheck()) env->ExceptionClear();
+            if (found) env->DeleteLocalRef(found);
+            env->DeleteLocalRef(bridge_name);
+        }
     }
 
     JNINativeMethod report = {
@@ -442,6 +507,8 @@ static jclass load_bridge_class(JNIEnv *env, std::string &error) {
     g_bridge_last_error = env->GetFieldID(bridge_class, "lastError", "Ljava/lang/String;");
     g_bridge_target = env->GetFieldID(bridge_class, "target", "Ljava/lang/String;");
     g_bridge_class = (jclass)env->NewGlobalRef(bridge_class);
+    g_bridge_loader = env->NewGlobalRef(bridge_loader);
+
     if (!g_bridge_class || !g_bridge_backup || !g_bridge_is_static || !g_bridge_hook_id ||
         !g_bridge_hits || !g_bridge_last_arg || !g_bridge_last_return || !g_bridge_last_error ||
         !g_bridge_target) {

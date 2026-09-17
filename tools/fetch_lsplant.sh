@@ -66,6 +66,14 @@ if grep -q 'if (!RETRIEVE_FUNC_SYMBOL(art_quick_to_interpreter_bridge' "$CL" \
   echo "!! LSPlant deopt-entrypoint patch did not apply"; exit 1
 fi
 
+# ---- patch 3: JIT code cache is optional on stripped ROMs -------------------------
+# ColorOS/A15 may not export JitCodeCache::GarbageCollectCache. Basic Java hooking does not
+# need that GC-maintenance hook; LSPlant can continue, only JIT movement tracking is disabled.
+LSC="$LSP/lsplant/src/main/jni/lsplant.cc"
+if ! grep -q 'JIT code cache unavailable' "$LSC"; then
+  perl -0777 -pi -e 's/if \(!JitCodeCache::Init\(handler\)\) \{\s*\n\s*LOGE\("Failed to init jit code cache"\);\s*\n\s*return false;\s*\n\s*\}/if (!JitCodeCache::Init(handler)) {\n        LOGW("JIT code cache unavailable - continuing without JIT movement tracking");\n    }/s' "$LSC"
+fi
+grep -q 'JIT code cache unavailable' "$LSC" || { echo "!! LSPlant JIT-cache fallback patch did not apply"; exit 1; }
 # ---- Dobby: the statically linked inline-hook backend LSPlant uses -----------------
 bash "$ROOT/tools/fetch_dobby.sh"
 [ -f "$TP/dobby/lib/arm64-v8a/libdobby.a" ] && [ -f "$TP/dobby/include/dobby.h" ] \

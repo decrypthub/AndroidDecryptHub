@@ -563,24 +563,23 @@ int adh_got_enum_json(const char *module, const char *filter, char **out_json,
     if (symtab < base) symtab += base;
     if (strtab < base) strtab += base;
     const size_t cap = 512 * 1024;
-    char *out = (char *)malloc(cap);
-    if (!out) {
+    char *entries = (char *)malloc(cap);
+    if (!entries) {
         snprintf(error, error_size, "out of memory");
         return 0;
     }
-    size_t len = 0;
+    size_t elen = 1;
+    entries[0] = '[';
+    entries[1] = 0;
     int count = 0;
     int truncated = 0;
     const unsigned long long regions[2][2] = { { jmprel, pltrelsz }, { rela, relasz } };
-    len += snprintf(out + len, cap - len,
-                    "{\"module\":\"%s\",\"count\":0,\"truncated\":false,\"packed\":%s,\"filter\":\"%s\",\"entries\":[",
-                    module, android_rela ? "true" : "false", filter ? filter : "");
     for (int r = 0; r < 2 && !truncated; r++) {
         unsigned long long off = regions[r][0], sz = regions[r][1];
         if (!off || !sz) continue;
         if (off < base) off += base;
         for (unsigned long long e = off; e + relaent <= off + sz; e += relaent) {
-            if (len > cap - 768) { truncated = 1; break; }
+            if (elen > cap - 768) { truncated = 1; break; }
             unsigned long long r_offset = *(unsigned long long *)e;
             unsigned long long r_info = *(unsigned long long *)(e + 8);
             unsigned int sym_idx = (unsigned int)(r_info >> 32);
@@ -594,23 +593,35 @@ int adh_got_enum_json(const char *module, const char *filter, char **out_json,
             unsigned long long slot_addr = r_offset < base ? base + r_offset : r_offset;
             void *value = *(void **)slot_addr;
             char name_escaped[512];
-            char module_escaped[256];
             json_escape(name, name_escaped, sizeof(name_escaped));
-            json_escape(module, module_escaped, sizeof(module_escaped));
-            len += snprintf(out + len, cap - len,
-                            "%s{\"slot\":\"0x%llx\",\"symbol\":\"%s\",\"value\":\"0x%llx\",\"type\":\"%s\"}",
-                            count ? "," : "", slot_addr, name_escaped,
-                            (unsigned long long)(uintptr_t)value, reloc_type_name(type));
+            elen += snprintf(entries + elen, cap - elen,
+                             "%s{\"slot\":\"0x%llx\",\"symbol\":\"%s\",\"value\":\"0x%llx\",\"type\":\"%s\"}",
+                             count ? "," : "", slot_addr, name_escaped,
+                             (unsigned long long)(uintptr_t)value, reloc_type_name(type));
             count++;
             if (count >= 4096) { truncated = 1; break; }
         }
     }
-    len += snprintf(out + len, cap - len,
-                    "],\"packedUnsupported\":%s}",
-                    android_rela ? "true" : "false");
+    if (elen + 2 >= cap) truncated = 1;
+    snprintf(entries + elen, cap - elen, "]");
+    char module_escaped[256];
+    char filter_escaped[512];
+    json_escape(module, module_escaped, sizeof(module_escaped));
+    json_escape(filter ? filter : "", filter_escaped, sizeof(filter_escaped));
+    char *out = (char *)malloc(cap);
+    if (!out) {
+        free(entries);
+        snprintf(error, error_size, "out of memory");
+        return 0;
+    }
+    snprintf(out, cap,
+             "{\"module\":\"%s\",\"count\":%d,\"truncated\":%s,\"packed\":%s,\"filter\":\"%s\",\"entries\":%s,\"packedUnsupported\":%s}",
+             module_escaped, count, truncated ? "true" : "false",
+             android_rela ? "true" : "false", filter_escaped, entries,
+             android_rela ? "true" : "false");
+    free(entries);
     char *copy = strdup(out);
-    free(out);
-    if (!copy) {
+    free(out);    if (!copy) {
         snprintf(error, error_size, "out of memory");
         return 0;
     }

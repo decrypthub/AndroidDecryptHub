@@ -68,6 +68,7 @@ JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_staticCrypto(JNIEnv *env, 
 
 // Deterministic target for QBDI instruction trace: sum i*3 for i in 0..4 -> 30.
 // (volatile prevents constant-folding so QBDI sees real loop instructions.)
+__attribute__((noinline, visibility("default")))
 int adh_trace_target(void) {
     volatile int s = 0;
     for (volatile int i = 0; i < 5; i++) s += i * 3;

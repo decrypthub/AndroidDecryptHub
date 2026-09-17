@@ -33,7 +33,7 @@ async function post(path, body) {
 }
 function result(name, pass) {
   console.log(name);
-  console.log(`RESULT:${pass}`);
+  console.log(pass ? 'RESULT:PASS' : 'RESULT:FAIL');
 }
 function skip(reason) {
   console.log(reason);
