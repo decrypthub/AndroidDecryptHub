@@ -13,10 +13,7 @@ internal object ExternalProviderPublisher {
     private const val EXTRA_BINDER = "daemonBinder"
 
     fun publish(binder: IBinder): Boolean = runCatching {
-        val activityManagerClass = Class.forName("android.app.ActivityManager")
-        val activityManager = activityManagerClass.getDeclaredMethod("getService").apply {
-            isAccessible = true
-        }.invoke(null)
+        val activityManager = resolveActivityManager() ?: return@runCatching false
         val getProvider = activityManager.javaClass.methods.first {
             it.name == "getContentProviderExternal" && it.parameterCount == 4
         }.apply { isAccessible = true }
@@ -45,6 +42,33 @@ internal object ExternalProviderPublisher {
             removeExternalProvider(activityManager)
         }
     }.onFailure { Log.w(TAG, "binder publish failed", it) }.getOrDefault(false)
+
+    // ActivityManager.getService() hands back the process-wide CACHED proxy
+    // (IActivityManagerSingleton), so once system_server restarts the daemon keeps transacting with
+    // a dead binder: every publish attempt throws DeadObjectException and the Manager reports
+    // "ADH Device Daemon is unavailable" for the rest of the session even though the daemon is
+    // alive (observed on the PGP110 test device: the daemon started at boot, system_server
+    // restarted 4h later, publishing stayed dead afterwards). Resolve a FRESH proxy from
+    // ServiceManager on every attempt, and keep the cached one only as a fallback.
+    private fun resolveActivityManager(): Any? {
+        runCatching {
+            val serviceManager = Class.forName("android.os.ServiceManager")
+            val service = serviceManager.getDeclaredMethod("getService", String::class.java)
+                .apply { isAccessible = true }
+                .invoke(null, "activity") as? IBinder
+            if (service != null && service.pingBinder()) {
+                val stub = Class.forName("android.app.IActivityManager\$Stub")
+                return stub.getDeclaredMethod("asInterface", IBinder::class.java)
+                    .apply { isAccessible = true }
+                    .invoke(null, service)
+            }
+        }.onFailure { Log.w(TAG, "ServiceManager activity lookup failed", it) }
+        return runCatching {
+            Class.forName("android.app.ActivityManager").getDeclaredMethod("getService")
+                .apply { isAccessible = true }
+                .invoke(null)
+        }.onFailure { Log.w(TAG, "ActivityManager.getService fallback failed", it) }.getOrNull()
+    }
 
     private fun callArguments(parameterCount: Int, extras: Bundle): Array<Any?> = when {
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && parameterCount == 5 -> arrayOf(
