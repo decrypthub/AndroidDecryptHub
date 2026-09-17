@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # v0.5 anti-analysis behavior observation (module V). GOT-hooks the target's native
+# NOTE: the footprint assertion below assumes a process that has not run an inline hook yet
+# (Dobby keeps its trampoline pool resident, which shows up as rwx/anon-exec). verify_all
+# force-stops + relaunches the sandbox per script, so it always measures a fresh process.
 # detection calls (in libadhdetect.so), triggers them via JNI reflection, and asserts
 # the agent observed the target's defense map: debug (ptrace TRACEME), root (su paths),
 # prop (ro.debuggable). Also neutralizes TRACEME (S). Target survives. Exit 0 = PASS.

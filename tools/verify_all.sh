@@ -49,6 +49,7 @@ SCRIPTS=(
   "verify_v59_jni_env_arrays.sh:device"
   "verify_v60_jni_env_preserve.sh:device"
   "verify_v61_got_by_name.sh:device"
+  "verify_v62_jni_call_hooks.sh:device"
   "verify_v02_dump.sh:device"
   "verify_v02_so.sh:device"
   "verify_v02_dexrepair.sh:host"

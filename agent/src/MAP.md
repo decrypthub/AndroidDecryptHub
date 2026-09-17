@@ -23,7 +23,8 @@
 | `runtime/java_enum.cpp` | Live-class reflection: enumerate class metadata/constructors/overloaded methods/fields and actively invoke static or field-backed instance methods |
 | `runtime/jni.c` | JavaVM discovery, native-thread attach/detach, and app ClassLoader access |
 | `runtime/jni_hooks.c` | Global JNIEnv->RegisterNatives hook and bounded JNI_NATIVE registration events |
-| `runtime/jni_env_hooks.c` | JNIEnv function-table per-entry hooks (FindClass / GetMethodID / GetStaticMethodID / NewStringUTF / GetStringUTFChars / GetFieldID / GetStaticFieldID / GetByteArrayElements / SetByteArrayRegion) with bounded JNI_ENV events, reactivation and clean slot restore |
+| `runtime/jni_env_hooks.c` | JNIEnv function-table per-entry hooks: the nine fixed entries plus the Call*Method / NewObject families in all three JNI forms (varargs / V / A) with resolved member labels and rendered arguments; ABI-guarded slot offsets and bounded JNI_ENV events with bounded JNI_ENV events, reactivation and clean slot restore |
+| `runtime/jni_method_names.c` | jmethodID -> "<class>#<name><signature>" resolution for the Call* hooks (reflection over the receiver chain, mid-keyed cache, capped scans) |
 | `runtime/jni_onload.c` | Already-loaded module JNI_OnLoad discovery, inline hook, manual invocation and soft unhook |
 | `trace/commands.c` | Function-call trace state, GOT trace orchestration, and QBDI command response handling |
 | `trace/qbdi_trace.c` | Optional runtime-loaded QBDI instruction trace |

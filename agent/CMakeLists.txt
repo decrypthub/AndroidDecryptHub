@@ -21,6 +21,7 @@ set(AGENT_SOURCES
     src/runtime/jni.c
     src/runtime/jni_hooks.c
     src/runtime/jni_env_hooks.c
+    src/runtime/jni_method_names.c
     src/runtime/jni_onload.c
     src/runtime/java_enum.cpp
     src/trace/commands.c

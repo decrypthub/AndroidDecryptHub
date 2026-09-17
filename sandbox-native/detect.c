@@ -162,6 +162,59 @@ JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_jniEnvExceptionProbe(JNIEn
     if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
     return bits;
 }
+// v4.24 fixture for the JNIEnv Call*Method / NewObject hooks. The probe drives all three JNI
+// forms on purpose: A (jvalue array), varargs (C caller) and NewObjectA. Returns a bitmask
+// 0xAD3000 | bits so a verifier can assert the calls actually produced the expected values.
+JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_jniCallProbe(JNIEnv *env, jclass clazz) {
+    jint bits = 0;
+    jclass target = (*env)->FindClass(env, "com/adh/sandbox/JniCallTarget");
+    jclass statics = (*env)->FindClass(env, "com/adh/sandbox/JniCallStatics");
+    if (!target || !statics) { if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); return 0xAD3000; }
+    jmethodID ctor = (*env)->GetMethodID(env, target, "<init>", "()V");
+    jobject obj = ctor ? (*env)->NewObjectA(env, target, ctor, NULL) : NULL;
+    jmethodID combine = (*env)->GetMethodID(env, target, "combine", "(Ljava/lang/String;I)Ljava/lang/String;");
+    jmethodID counter = (*env)->GetMethodID(env, target, "counterValue", "()I");
+    jmethodID note = (*env)->GetMethodID(env, target, "note", "(Ljava/lang/String;)V");
+    jmethodID static_combine = (*env)->GetStaticMethodID(env, statics, "staticCombine", "(Ljava/lang/String;I)Ljava/lang/String;");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return 0xAD3000; }
+    jstring label = (*env)->NewStringUTF(env, "ADH_CALL");
+
+    // A form: (String, int) -> String
+    jvalue args[2];
+    args[0].l = label;
+    args[1].i = 7;
+    jstring combined = (obj && combine) ? (jstring)(*env)->CallObjectMethodA(env, obj, combine, args) : NULL;
+    if (combined) {
+        const char *chars = (*env)->GetStringUTFChars(env, combined, NULL);
+        if (chars) {
+            if (strcmp(chars, "ADH_CALL:7") == 0) bits |= 1;
+            (*env)->ReleaseStringUTFChars(env, combined, chars);
+        }
+        (*env)->DeleteLocalRef(env, combined);
+    }
+    // A form: no-argument int
+    jint n = (obj && counter) ? (*env)->CallIntMethodA(env, obj, counter, NULL) : -1;
+    if (n == 41) bits |= 2;
+    // varargs form: void with one String (C caller hits the varargs table entry)
+    if (obj && note) (*env)->CallVoidMethod(env, obj, note, label);
+    jint after = (obj && counter) ? (*env)->CallIntMethodA(env, obj, counter, NULL) : -1;
+    if (after == 49) bits |= 8;   // 41 + strlen("ADH_CALL")
+    // varargs form: static (String, int) -> String
+    jstring static_result = static_combine
+        ? (jstring)(*env)->CallStaticObjectMethod(env, statics, static_combine, label, 9) : NULL;
+    if (static_result) {
+        const char *chars = (*env)->GetStringUTFChars(env, static_result, NULL);
+        if (chars) {
+            if (strcmp(chars, "S:ADH_CALL:9") == 0) bits |= 4;
+            (*env)->ReleaseStringUTFChars(env, static_result, chars);
+        }
+        (*env)->DeleteLocalRef(env, static_result);
+    }
+    if (label) (*env)->DeleteLocalRef(env, label);
+    if (obj) (*env)->DeleteLocalRef(env, obj);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return 0xAD3000; }
+    return (jint)(0xAD3000 | bits);
+}
 JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_run(JNIEnv *env, jclass clazz) {
     (void)env; (void)clazz;
     int flags = 0;

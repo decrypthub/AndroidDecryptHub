@@ -24,6 +24,8 @@ object Detection {
     // v4.20 invariant fixture: hooking member-ID lookups must not change the target's
     // exception state (a failed lookup must still leave its error pending).
     @JvmStatic external fun jniEnvExceptionProbe(): Int
+    // v4.24 fixture for the Call*Method / NewObject table hooks (all three JNI forms).
+    @JvmStatic external fun jniCallProbe(): Int
 
     fun load() {
         try {
