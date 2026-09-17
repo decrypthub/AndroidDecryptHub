@@ -31,6 +31,10 @@ interface DaemonClient {
     /** Protocol v9: raw input injection fallback (see the accessibility executor `input` action). */
     fun injectInputTap(x: Int, y: Int): Boolean
     fun injectInputSwipe(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Int): Boolean
+
+    /** Protocol v10: audio volume read/write. */
+    val volumeJson: String
+    fun setVolume(stream: String, index: Int): Boolean
 }
 
 class DaemonScopeRepository(

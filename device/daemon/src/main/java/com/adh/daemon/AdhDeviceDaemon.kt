@@ -72,6 +72,19 @@ object AdhDeviceDaemon {
                 val y = args.getOrNull(2)?.toIntOrNull() ?: exitProcess(2)
                 exitProcess(if (DeviceInputControl.tap(x, y)) 0 else 1)
             }
+            "--volume-status" -> {
+                requireRoot()
+                Looper.prepareMainLooper()
+                println(DeviceAudioControl.statusJson(SystemContext.create()))
+                return
+            }
+            "--volume-set" -> {
+                requireRoot()
+                Looper.prepareMainLooper()
+                val stream = args.getOrNull(1) ?: exitProcess(2)
+                val index = args.getOrNull(2)?.toIntOrNull() ?: exitProcess(2)
+                exitProcess(if (DeviceAudioControl.setVolume(SystemContext.create(), stream, index)) 0 else 1)
+            }
             "--input-swipe" -> {
                 requireRoot()
                 val values = args.drop(1).mapNotNull { it.toIntOrNull() }

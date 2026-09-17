@@ -121,6 +121,16 @@ internal class RootScopeBinder(
         return DeviceInputControl.swipe(x1, y1, x2, y2, durationMs)
     }
 
+    override fun getVolumeJson(): String {
+        verifier.enforce()
+        return DeviceAudioControl.statusJson(context)
+    }
+
+    override fun setVolume(stream: String?, index: Int): Boolean {
+        verifier.enforce()
+        return DeviceAudioControl.setVolume(context, stream, index)
+    }
+
     private fun atomicWrite(target: File, content: String) {
         target.parentFile?.mkdirs()
         val temp = File(target.parentFile, ".${target.name}.${android.os.Process.myPid()}.tmp")

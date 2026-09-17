@@ -43,4 +43,8 @@ interface IAdhScopeService {
     boolean injectInputTap(int x, int y);
     /** Protocol v9: inject one raw swipe (absolute display pixels). */
     boolean injectInputSwipe(int x1, int y1, int x2, int y2, int durationMs);
+    /** Protocol v10: compact JSON {"music":n,"musicMax":n,"ring":..,"ringMax":..,"volume":n}. */
+    String getVolumeJson();
+    /** Protocol v10: set a stream volume (index clamped to the stream range). stream: music|ring|alarm|voice. */
+    boolean setVolume(String stream, int index);
 }

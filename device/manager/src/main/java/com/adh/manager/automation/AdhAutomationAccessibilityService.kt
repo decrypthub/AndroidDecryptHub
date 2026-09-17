@@ -320,6 +320,30 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
                 val dismissed = daemon.dismissKeyguard()
                 powerStatus().put("dismissed", dismissed)
             }
+            "volume_status" -> {
+                val daemon = DaemonBinderProvider.awaitClient(3_000)
+                    ?: throw AutomationException("device_daemon_unavailable", "ADH Device Daemon is unavailable")
+                if (daemon.protocolVersion < AdhProtocol.MIN_VOLUME_VERSION) {
+                    throw AutomationException("device_daemon_old", "Device Daemon protocol " + daemon.protocolVersion + " has no volume control (needs v10)")
+                }
+                val json = daemon.volumeJson
+                if (json.isBlank()) throw AutomationException("volume_read_failed", "device daemon returned no volume state")
+                JSONObject().put("action", "volume_status").put("volume", JSONObject(json))
+            }
+            "volume_set" -> {
+                val stream = args.optString("stream", "music")
+                val index = args.optInt("index", -1)
+                if (index < 0) throw AutomationException("bad_volume_index", "volume_set requires index >= 0")
+                val daemon = DaemonBinderProvider.awaitClient(3_000)
+                    ?: throw AutomationException("device_daemon_unavailable", "ADH Device Daemon is unavailable")
+                if (daemon.protocolVersion < AdhProtocol.MIN_VOLUME_VERSION) {
+                    throw AutomationException("device_daemon_old", "Device Daemon protocol " + daemon.protocolVersion + " has no volume control (needs v10)")
+                }
+                if (!daemon.setVolume(stream, index)) {
+                    throw AutomationException("volume_set_rejected", "daemon rejected volume_set for stream '" + stream + "'")
+                }
+                JSONObject().put("action", "volume_set").put("stream", stream).put("index", index)
+            }
             "lock" -> {
                 if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
                     throw AutomationException("device_unsupported", "lock action requires Android 9 or newer")
@@ -329,7 +353,7 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
                 }
                 JSONObject().put("action", "lock").put("result", "ok")
             }
-            else -> throw AutomationException("bad_device_action", "device action must be status, wake, unlock or lock")
+            else -> throw AutomationException("bad_device_action", "device action must be status, wake, unlock, lock, volume_status or volume_set")
         }
     }
 
