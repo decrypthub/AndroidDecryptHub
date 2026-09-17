@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.22)
 project(adh_agent C CXX)
 
 set(CMAKE_C_STANDARD 11)
-set(CMAKE_CXX_STANDARD 20)          # C++ hook shims (Dobby)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_C_VISIBILITY_PRESET hidden)
 
@@ -46,10 +46,60 @@ else()
     message(WARNING "Dobby absent — run tools/fetch_dobby.sh for native inline hooking")
 endif()
 
+# LSPlant (ART Java-method hook) is optional and statically linked when its pinned sources
+# are present. It reuses the same Dobby static backend as native inline hooks. No HTTP/DB/
+# analysis code enters the agent; the shim only exposes init/hook/unhook/probe primitives.
+set(LSPLANT_VERSION "v6.4")
+set(LSP "${CMAKE_CURRENT_SOURCE_DIR}/third_party/lsplant/lsplant/src/main/jni")
+set(DXB "${LSP}/external/dex_builder")
+set(LSPLANT_INC "")
+set(LSPLANT_LIBS "")
+if(EXISTS "${LSP}/lsplant.cc"
+   AND EXISTS "${DXB}/dex_builder.cc"
+   AND EXISTS "${DXB}/external/parallel_hashmap/CMakeLists.txt"
+   AND EXISTS "${DOB}/lib/arm64-v8a/libdobby.a"
+   AND EXISTS "${DOB}/include/dobby.h")
+    message(STATUS "LSPlant present — enabling ART Java-method hook backend")
+    add_subdirectory("${DXB}/external/parallel_hashmap" phmap_build EXCLUDE_FROM_ALL)
+    list(APPEND AGENT_SOURCES
+        src/hook/java_lsplant.cpp
+        "${LSP}/lsplant.cc"
+        "${DXB}/dex_builder.cc"
+        "${DXB}/dex_helper.cc"
+        "${DXB}/slicer/reader.cc"
+        "${DXB}/slicer/writer.cc"
+        "${DXB}/slicer/dex_ir.cc"
+        "${DXB}/slicer/common.cc"
+        "${DXB}/slicer/dex_format.cc"
+        "${DXB}/slicer/dex_utf8.cc"
+        "${DXB}/slicer/dex_bytecode.cc"
+        "${DXB}/slicer/sha1.cpp"
+    )
+    set(LSPLANT_INC "${LSP}" "${LSP}/include" "${DXB}/include" "${DXB}")
+    set(LSPLANT_LIBS z phmap)
+    add_compile_definitions(ADH_HAVE_LSPLANT=1 ADH_LSPLANT_VERSION="${LSPLANT_VERSION}")
+    set_source_files_properties(
+        "${LSP}/lsplant.cc"
+        "${DXB}/dex_builder.cc"
+        "${DXB}/dex_helper.cc"
+        "${DXB}/slicer/reader.cc"
+        "${DXB}/slicer/writer.cc"
+        "${DXB}/slicer/dex_ir.cc"
+        "${DXB}/slicer/common.cc"
+        "${DXB}/slicer/dex_format.cc"
+        "${DXB}/slicer/dex_utf8.cc"
+        "${DXB}/slicer/dex_bytecode.cc"
+        "${DXB}/slicer/sha1.cpp"
+        PROPERTIES COMPILE_FLAGS "-Wno-everything"
+    )
+else()
+    message(WARNING "LSPlant absent — run tools/fetch_lsplant.sh for Java-method hooking")
+endif()
+
 add_library(adh_agent SHARED ${AGENT_SOURCES})
 
 # Release footprint: keep only the three bootstrap entry points in .dynsym.
-# Dobby/libc++ internals stay local to this DSO; Zygisk resolves only
+# Dobby/libc++/LSPlant internals stay local to this DSO; Zygisk resolves only
 # adh_agent_start and System.loadLibrary resolves JNI_OnLoad.
 set(AGENT_EXPORT_MAP "${CMAKE_CURRENT_SOURCE_DIR}/exports.map")
 if(NOT EXISTS "${AGENT_EXPORT_MAP}")
@@ -57,13 +107,13 @@ if(NOT EXISTS "${AGENT_EXPORT_MAP}")
 endif()
 target_link_options(adh_agent PRIVATE "-Wl,--version-script=${AGENT_EXPORT_MAP}")
 
-target_include_directories(adh_agent PRIVATE ${QBDI_INC} ${HOOK_INC})
+target_include_directories(adh_agent PRIVATE ${QBDI_INC} ${HOOK_INC} ${LSPLANT_INC})
 
 # Android system libs: log (android/log.h), plus libc/pthread (implicit).
 find_library(log-lib log)
-target_link_libraries(adh_agent ${log-lib} dl ${HOOK_LIBS})
+target_link_libraries(adh_agent ${log-lib} dl ${HOOK_LIBS} ${LSPLANT_LIBS})
 
 # Keep our own code small + hidden; -Wall/-Wextra apply to C agent sources only
-# (Third-party hook sources get -Wno-everything above.)
+# (third-party hook sources get -Wno-everything above).
 target_compile_options(adh_agent PRIVATE -O2 -fvisibility=hidden)
 target_compile_options(adh_agent PRIVATE $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra>)

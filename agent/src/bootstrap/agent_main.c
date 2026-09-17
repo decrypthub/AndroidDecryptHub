@@ -24,6 +24,13 @@
 #include "../runtime/jni.h"
 #include "../trace/commands.h"
 
+#ifdef ADH_HAVE_LSPLANT
+#include "../hook/java_lsplant.h"
+#ifndef ADH_LSPLANT_VERSION
+#define ADH_LSPLANT_VERSION "unknown"
+#endif
+#endif
+
 // Common macros (AGENT_VER/ADH_HOST/ADH_PORT/TAG/LOGI/LOGE/FRAME_*) + cross-module prototypes
 // Shared bootstrap helpers live in agent_internal.h.
 #include "agent_internal.h"
@@ -86,6 +93,41 @@ static void cmd_frame_echo(int fd, const char *id, const char *line) {
     LOGI("frame_echo: recvBytes=%zu tail=%s padLen=%lld", recv, tail, padLen);
 }
 
+// Probe the optional LSPlant backend without installing a Java hook. This proves the
+// static linkage and ART initialization state, and keeps startup footprint unchanged.
+static void cmd_javahook_probe(int fd, const char *id) {
+    char idj[64];
+    json_escape(id, idj, sizeof(idj));
+#ifdef ADH_HAVE_LSPLANT
+    int did_attach = 0;
+    JNIEnv *env = adh_jni_attach(&did_attach);
+    if (!env) {
+        char out[240];
+        snprintf(out, sizeof(out),
+                 "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"javahook_probe\",\"ok\":false,\"available\":true,\"error\":\"no JavaVM\"}\n", idj);
+        send_line(fd, out);
+        return;
+    }
+    int init_ok = adh_javahook_init(env);
+    const char *err = adh_javahook_last_error();
+    if (did_attach) adh_jni_detach(did_attach);
+    char errj[512];
+    json_escape(err ? err : "", errj, sizeof(errj));
+    char out[1024];
+    snprintf(out, sizeof(out),
+             "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"javahook_probe\",\"ok\":%s,\"available\":true,"
+             "\"initOk\":%s,\"backend\":\"lsplant\",\"version\":\"%s\",\"error\":\"%s\"}\n",
+             idj, init_ok ? "true" : "false", init_ok ? "true" : "false", ADH_LSPLANT_VERSION, errj);
+    send_line(fd, out);
+    LOGI("javahook_probe: init=%d error=%s", init_ok, err ? err : "");
+#else
+    char out[240];
+    snprintf(out, sizeof(out),
+             "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"javahook_probe\",\"ok\":false,\"available\":false,"
+             "\"error\":\"lsplant not built — run tools/fetch_lsplant.sh\"}\n", idj);
+    send_line(fd, out);
+#endif
+}
 // Read framed commands from the Host ADH Daemon and dispatch.
 static void command_loop(int fd) {
     for (;;) {
@@ -113,6 +155,8 @@ static void command_loop(int fd) {
                     cmd_read(fd, id, addr, size);
                 } else if (strcmp(op, "jni_probe") == 0) {
                     adh_cmd_jni_probe(fd, id);
+                } else if (strcmp(op, "javahook_probe") == 0) {
+                    cmd_javahook_probe(fd, id);
                 } else if (strcmp(op, "gothook_selftest") == 0) {
                     adh_cmd_gothook_selftest(fd, id);
                 } else if (strcmp(op, "crypto_probe") == 0) {

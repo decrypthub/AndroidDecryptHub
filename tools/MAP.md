@@ -62,7 +62,7 @@ translation — kept separate).
 
 - `build_agent.sh` — `libadh_agent.so` (arm64-v8a, NDK+SDK cmake), stages into `sandbox-app/…/jniLibs/$ABI`, prints `adh_agent_set_package` + `adh_agent_start` + `JNI_OnLoad` exports (fail-loud on compile error — do NOT hide build output).
 - `build_detect.sh` — `libadhdetect.so` (sandbox's mock detection target), same cmake pattern.
-- `fetch_qbdi.sh` / `fetch_dobby.sh` — one-time third-party fetch (gitignored under `agent/third_party/`). Dobby is the verified inline-hook backend.
+- `fetch_qbdi.sh` / `fetch_dobby.sh` / `fetch_lsplant.sh` — one-time third-party fetch (gitignored under `agent/third_party/`). Dobby is the verified native inline backend; LSPlant v6.4 is the optional ART Java-method hook backend and is statically linked into the agent when present.
 - `build_zygisk.sh` — 构建 Manager 证书固定的 Root Device Daemon + Zygisk 模块 → `injector/zygisk/dist/adh-zygisk.zip`
 - `build_bundle.sh` — Magisk/KernelSU 可直接安装的版本化组合包（Zygisk + Device Daemon + Manager）→ `injector/zygisk/dist/adh-bundle-vX.Y.Z.zip`
 - `flash_device.sh` — 把组合包推到当前手机并刷入（自动识别 KernelSU `ksud` / Magisk）。`--no-build` 跳过重建；`--reboot` 刷完重启让 Zygisk + Device Daemon 加载。多设备时必须设 `ANDROID_SERIAL`。

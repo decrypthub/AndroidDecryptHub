@@ -70,7 +70,8 @@ Bash (Git Bash / WSL) — the `tools/*.sh` scripts assume it. `node 24` runs `.t
 bash tools/build_agent.sh          # -> agent/build/libadh_agent.so
 bash tools/build_detect.sh         # sandbox mock native lib libadhdetect.so
 bash tools/fetch_qbdi.sh           # one-time: QBDI headers/.so (instruction trace); gitignored
-bash tools/fetch_dobby.sh          # one-time: Dobby (native inline hook; the only hook backend in v1)
+bash tools/fetch_dobby.sh          # one-time: Dobby (verified native inline-hook backend)
+# bash tools/fetch_lsplant.sh       # optional: LSPlant v6.4 + patched ART fallback (Java method hook; statically linked when present)
 
 # --- ADH Daemon (daemon/, npm adhd) — from daemon/
 node src/index.ts                  # start (HTTP/WS 8088, agent TCP 8761); or: npm start
@@ -93,7 +94,7 @@ bash tools/verify_v04_crypto.sh    # a single acceptance check (exit 0 = PASS). 
 
 ```
 
-Ports: Host ADH Daemon HTTP/WS `8088` (LAN, same as iOS `idh`), agent TCP `8761`, automation TCP `8763` (loopback + `adb reverse`; Host-side AccessibilityService bridge). Override via `ADH_HTTP_PORT` / `ADH_AGENT_PORT` / `ADH_AUTOMATION_PORT`. Prefer `http://<LAN>:8088/<package>` to pin an app; do not default to `127.0.0.1`. Agent and the optional user-enabled Manager automation bridge dial host through `adb reverse`; `dev_up.sh` sets all tunnels. New-machine repro order: `fetch_qbdi` → `build_agent` → `build_detect` → `dev_up` → `verify_all`.
+Ports: Host ADH Daemon HTTP/WS `8088` (LAN, same as iOS `idh`), agent TCP `8761`, automation TCP `8763` (loopback + `adb reverse`; Host-side AccessibilityService bridge). Override via `ADH_HTTP_PORT` / `ADH_AGENT_PORT` / `ADH_AUTOMATION_PORT`. Prefer `http://<LAN>:8088/<package>` to pin an app; do not default to `127.0.0.1`. Agent and the optional user-enabled Manager automation bridge dial host through `adb reverse`; `dev_up.sh` sets all tunnels. New-machine repro order: `fetch_qbdi` → `fetch_dobby` → optional `fetch_lsplant` → `build_agent` → `build_detect` → `dev_up` → `verify_all`.
 
 There is no separate lint step. `CLAUDE.md` (for Claude) is kept in sync with this file apart from the header line — mirror any change into both.
 
@@ -115,7 +116,7 @@ Each layer has a `MAP.md` — read it before editing that layer:
 - **Multiple identical PGP110 units are attached** (`13f54a46` + others). adb commands without `-s` fail with "more than one device" — `export ANDROID_SERIAL=13f54a46` so every adb call (incl. the `tools/*.sh` scripts) targets the right unit.
 - Keep **per-API-level ART resolvers**; the ART-structure dex resolver (L.6) must handle **SDK 35** (this device). SDK 36 (Pixel 6 Pro) is a secondary target, not attached now.
 - Primary agent ABI is `arm64-v8a`.
-- This OnePlus/ColorOS ROM ships a **heavily stripped `libart.so`**. The v1 scope relies on the verified native inline-hook backend (Dobby, `tools/fetch_dobby.sh`).
+- This OnePlus/ColorOS ROM ships a **heavily stripped `libart.so`**. The v1 scope relies on the verified native inline-hook backend (Dobby, `tools/fetch_dobby.sh`); LSPlant v6.4 is an optional Java-method hook backend and is statically linked into the agent only when `tools/fetch_lsplant.sh` has prepared its pinned sources.
 
 ## Boundaries
 

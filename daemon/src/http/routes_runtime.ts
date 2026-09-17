@@ -28,7 +28,12 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
         return send(r.ok ? 200 : 502, r);
       } catch (e) { return send(504, { error: (e as Error).message }); }
     } },
-    { method: 'POST', path: '/api/object/inspect', handler: async () => {
+    { path: '/api/java/probe', handler: async () => {
+      const sid = pickSid(url.searchParams.get('session'));
+      if (!sid) return send(400, { error: 'no session' });
+      try { const r = await sendCmd(sid, 'javahook_probe', {}, 20_000); return send(r.ok ? 200 : 502, r); }
+      catch (e) { return send(504, { error: (e as Error).message }); }
+    } },    { method: 'POST', path: '/api/object/inspect', handler: async () => {
       const body = await readBody(req);
       const { session, className, field } = JSON.parse(body || '{}');
       const sid = pickSid(session);

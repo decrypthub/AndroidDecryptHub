@@ -15,6 +15,7 @@
 | `capture/capture.c` | Crypto/TLS/file/system wrappers, bounded capture buffers, Java reporter, and capture/probe commands |
 | `hook/got.c` | ELF relocation parsing, GOT slot replacement, in-memory symbol lookup, and GOT self-test |
 | `hook/native_inline_dobby.cpp` | Dobby native inline-hook backend |
+| hook/java_lsplant.cpp | LSPlant v6.4 ART Java-method hook shim; optional static link over the same Dobby backend |
 | `runtime/actions.c` | Safety-gated Java trigger and explicit in-process `.so` loading commands |
 | `runtime/art.c` | ClassLoader-cookie enumeration and per-API ART DexFile structural resolution |
 | `runtime/inspection.c` | Live-object reflection, JNI/runtime compatibility probes, and the bootstrap/current injection-footprint counters |
