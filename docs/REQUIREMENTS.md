@@ -1518,6 +1518,7 @@ Host ADH Daemon / MCP  →  自动化 TCP 8763（loopback + adb reverse）  → 
 | `phone_find` | 按 text/resourceId/contentDescription/交互标志返回紧凑节点列表，不传整棵树 |
 | `phone_wait` | 等待四类条件竞速命中：控件/状态、agent 事件、进程内捕获、通知（`notificationContains`/`notificationFrom`，需通知开关与授权）；可对虚拟列表执行 scroll-until-found（`scrollMode=gesture` 用真滑动代替 `ACTION_SCROLL`，用于翻页器/自绘列表，`axis` 选纵向或横向）；`stable:true` 时等到屏幕签名连续 `stableMs` 不变再返回（附 `signature`/`waitedMs` 与可直接动作的 refs）；`afterCaptureId`/`afterEventSeq` 游标或 `lookbackMs` 消除两次调用间的信号丢失 |
 | `phone_act` | `tap` / `long_press` / `swipe` / `scroll` / `set_text` / `global back/home/recents`；优先 selector 或 `snapshotId+ref`，兜底归一化坐标；`set_text` 的 `text` 是输入内容而非目标过滤条件，`submit:true` 追加键盘动作键（搜索/发送/完成）并用 `submitted:true` 表示控件已接受 |
+| `phone_blocked` | Host 侧记录最近被允许名单拒绝的包名（仅包名，内存有界），`GET /api/automation/status` 返回 `blocked[]`；Web 设置面板据此提供一键加入允许名单 |
 | `phone_act` (input) | `action:"input"` / `inputMode:"root"` 经 Device Daemon v9 注入绝对像素 tap/swipe；普通 tap/swipe 返回 `changed`（窗口签名是否真的变化），`changed:false` 时自动 root 重试并标注 `fallback:"root"` |
 | `phone_app` | 通过包名 `open` / `stop` / `restart` 授权应用；新 daemon 走 root Device Daemon，旧 daemon 保留 Accessibility fallback。`open`/`restart` 必须**验证前台**：未到达时返回 `verified:false` + 实际前台包 + 处理提示（OEM 确认框吞掉启动时必须点名该包） |
 | `phone_notifications` | 读取最近通知（包名/标题/正文/时间，最新在前；`sinceMs` 可增量轮询）。需用户在系统设置里给 Manager 开启"通知使用权"，且 Host `automation.notifications`（默认 false）已开；缓冲区仅内存、≤30 条、不落盘 |

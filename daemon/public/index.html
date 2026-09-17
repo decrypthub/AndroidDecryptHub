@@ -637,6 +637,13 @@
           <div class="set-row" style="align-items:flex-start">
             <div class="lab"><b>允许的包名</b><span>每行一个；为空时拒绝 phone_* 操作。建议只填授权目标。</span><textarea id="setAutomationPackages" spellcheck="false" placeholder="com.example.target"></textarea></div>
           </div>
+          <div class="set-row" id="setAutomationBlockedRow" style="display:none">
+            <div class="lab">
+              <b>被拒绝的包名</b>
+              <span id="setAutomationBlockedText">最近一次操控因为包名不在允许名单里被拒绝。添加后 AI 可以继续操作这个界面。</span>
+              <div id="setAutomationBlockedAdd" class="set-actions"></div>
+            </div>
+          </div>
           <div class="set-row"><div class="lab"><b>桥接状态</b><span id="setAutomationStatus">未开启</span></div></div>
         </div>
         <div id="setPageBackends" class="set-page">
@@ -1103,10 +1110,31 @@ async function loadAutomationStatus(){
   try{
     const r=await (await fetch('/api/automation/status')).json();
     const device=(r.bridge?.devices||[])[0];
+    renderAutomationBlocked(r.blocked||[], r.packages||[]);
     if(!r.enabled){ el.textContent='已关闭'; return; }
     if(!r.packages?.length){ el.textContent='已开启 · 但允许包名为空'; return; }
     el.textContent=device?`已连接 · ${device.model||device.deviceId} · SDK ${device.sdk||'?'}`:'已开启 · 等待手机 AccessibilityService 连接';
   }catch(e){ el.textContent='状态读取失败: '+e; }
+}
+function renderAutomationBlocked(blocked, packages){
+  const row=document.getElementById('setAutomationBlockedRow');
+  const text=document.getElementById('setAutomationBlockedText');
+  const host=document.getElementById('setAutomationBlockedAdd');
+  if(!row||!text||!host) return;
+  const allowed=new Set(packages||[]);
+  const pending=(blocked||[]).filter(item=>item&&item.package&&!allowed.has(item.package));
+  if(!pending.length){ row.style.display='none'; host.innerHTML=''; return; }
+  row.style.display='flex';
+  text.textContent='最近一次操控因为以下包名不在允许名单里被拒绝，添加后 AI 可以继续操作这些界面：';
+  host.innerHTML=pending.slice(0,4).map(item=>`<button data-pkg="${item.package}">+ ${item.package}</button>`).join('');
+  host.querySelectorAll('button[data-pkg]').forEach(btn=>btn.addEventListener('click',()=>{
+    const pkg=btn.dataset.pkg;
+    const ta=document.getElementById('setAutomationPackages');
+    const current=String(ta.value||'').split(/[\n,;\s]+/).filter(Boolean);
+    if(!current.includes(pkg)) current.push(pkg);
+    ta.value=current.join('\n');
+    postConfig({automation:{packages:current}});
+  }));
 }
 async function postConfig(patch){
   try{ const r=await (await fetch('/api/config',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(patch)})).json();

@@ -66,6 +66,7 @@ phone_observe {mode:"text"}         # 省上下文的紧凑屏幕视图（含 sn
 - **一次调用多步**：`phone_task` 的步骤可用 `{{id.path}}` 引用前序结果（例如把 `find` 拿到的 `ref` 直接喂给 `act`），步骤还支持 `retries`/`stopOnError`。
 - **沉淀流程**：`phone_skill` 保存命名配方（可声明 `params`，运行时用 `inputs` 传值），下次一条 `run` 复现；配方与 `phone_task` 同级、不可嵌套、无 shell。
 - **输入**：`phone_act {action:"set_text", resourceId|ref|editable, text}`；`submit:true` 会再按一次键盘动作键（搜索/发送/完成），回 `submitted:true`。
+- **被拒绝的包名**：操控落到允许名单外的界面时（ColorOS 的设置页分散在 `com.oplus.battery` 等独立包里），工具会明确报 `blocked_package`，Host 记住这个包名，Web「设置 → 手机自动化」会出现一行「被拒绝的包名」+ 一键添加；加进名单后 AI 可以立刻继续。Host 只记包名，不记页面内容。
 - **手势保真**：tap/swipe 返回 `changed`（窗口文本签名是否真的变化）。有些 Compose 界面（SukiSU Ultra、Vector/LSPosed 管理器）接受无障碍手势但界面不动 —— 此时 `phone_act` 会自动用同坐标走 root 注入重试一次并标注 `fallback:"root"`；也可以显式要求 `inputMode:"root"`（Device Daemon v9），或直接 `{action:"input", mode:"tap|swipe"}`。
 - **看图**：`phone_observe {mode:"text", includeScreenshot:true}` 一次给文本 + JPEG。
 

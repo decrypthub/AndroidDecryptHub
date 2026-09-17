@@ -11,6 +11,7 @@ import { readPath, resolveTemplates } from '../src/phone_templates.ts';
 import { normalizeAxis, swipePath } from '../src/phone_gestures.ts';
 import { isSettled, noteSample, screenSignature } from '../src/phone_stability.ts';
 import { blockedPackageFromError, openOutcomeHint } from '../src/phone_foreground.ts';
+import { blockedPackageNotices, clearBlockedPackages, recordBlockedPackage } from '../src/phone_blocked.ts';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -85,6 +86,24 @@ test('automation hub fails loudly when no device is connected', async () => {
   await hub.close();
 });
 
+test('blocked package notices are bounded, deduped and reject junk', () => {
+  clearBlockedPackages();
+  assert.equal(recordBlockedPackage('com.oplus.battery'), true);
+  assert.equal(recordBlockedPackage('com.oplus.battery'), true);
+  assert.equal(recordBlockedPackage('not a package'), false);
+  assert.equal(recordBlockedPackage(''), false);
+  assert.equal(recordBlockedPackage('com.example.' + 'x'.repeat(200)), false);
+  const notices = blockedPackageNotices();
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0].package, 'com.oplus.battery');
+  assert.equal(notices[0].count, 2);
+  for (let index = 0; index < 20; index++) recordBlockedPackage(`com.example.p${index}`);
+  assert.ok(blockedPackageNotices().length <= 8, 'notices stay bounded');
+  // Newest first.
+  assert.equal(blockedPackageNotices()[0].package, 'com.example.p19');
+  clearBlockedPackages();
+  assert.deepEqual(blockedPackageNotices(), []);
+});
 test('automation settings merge is opt-in and bounded', () => {
   const before = JSON.stringify(settings.automation);
   const applied = mergeSettings({

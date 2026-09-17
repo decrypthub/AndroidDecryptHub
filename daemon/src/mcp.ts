@@ -22,6 +22,7 @@ import { isSettled, noteSample, screenSignature } from './phone_stability.ts';
 import { resolveTemplates } from './phone_templates.ts';
 import { renderScreenText } from './phone_text.ts';
 import { blockedPackageFromError, openOutcomeHint } from './phone_foreground.ts';
+import { recordBlockedPackage } from './phone_blocked.ts';
 import { sessions, dumps, captures, captureTimers, events, agentCursor, DATA_DIR, SANDBOX, settings, CAPTURES, cryptoIdentify } from './state.ts';
 import type { DumpMeta } from './state.ts';
 
@@ -458,6 +459,7 @@ async function appPhone(args: any) {
   assertAutomationReady();
   const packageName = String(args.package ?? '').trim();
   if (!packageName || !settings.automation.packages.includes(packageName)) {
+    recordBlockedPackage(packageName);
     throw new Error(`blocked_package: ${packageName || '(empty)'} is not in the automation allowlist`);
   }
   const result = await automation.cmd('app', { action: args.action, package: packageName, allowedPackages: settings.automation.packages }, 25_000);
@@ -474,6 +476,7 @@ async function appPhone(args: any) {
       blocked = false;
     } catch (error) {
       const packageFromError = blockedPackageFromError((error as Error)?.message);
+      if (packageFromError) recordBlockedPackage(packageFromError);
       foreground = packageFromError;
       blocked = !!packageFromError;
     }
@@ -545,6 +548,8 @@ async function actPhone(args: any) {
     result = await automation.cmd('act', normalizeActArgs(effective), 25_000);
   } catch (error) {
     // stale refs, rejected gestures and blocked windows all land here: hand back the screen.
+    const blocked = blockedPackageFromError((error as Error)?.message);
+    if (blocked) recordBlockedPackage(blocked);
     throw new Error(((error as Error)?.message ?? String(error)) + (await screenContext()));
   }
   // Self-healing fallback: some Compose UIs accept an accessibility gesture and never act on it
@@ -560,7 +565,8 @@ async function actPhone(args: any) {
         ...effective,
         action: 'input',
         mode: effective.action === 'swipe' ? 'swipe' : 'tap',
-        ref: undefined,
+        ref: undefined,
+
         snapshotId: undefined,
       });
       const fallback = await automation.cmd('act', fallbackArgs, 25_000);

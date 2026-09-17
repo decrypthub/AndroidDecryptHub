@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 import { backendMatrix } from '../backends.ts';
 import { automation } from '../automation.ts';
+import { blockedPackageNotices } from '../phone_blocked.ts';
 import { webUrls } from '../config.ts';
 import { handleMcp, MCP_TOOLS } from '../mcp.ts';
 import { applyCaptureEnabled } from '../service.ts';
@@ -103,7 +104,7 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       }
       return send(200, { settings, stats: configStats() });
     } },
-    { path: '/api/automation/status', handler: () => send(200, { ok: true, enabled: settings.automation.enabled, packages: settings.automation.packages, settings: settings.automation, bridge: automation.status() }) },
+    { path: '/api/automation/status', handler: () => send(200, { ok: true, enabled: settings.automation.enabled, packages: settings.automation.packages, blocked: blockedPackageNotices(), settings: settings.automation, bridge: automation.status() }) },
     // Acceptance/diagnostic path: forward a raw op to the device bridge, so fault-injection
     // (selftest_sleep) and future low-level probes stay reachable without growing the MCP tool
     // surface. The device only implements its fixed op set — unknown ops answer unsupported_op.

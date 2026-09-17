@@ -1,4 +1,6 @@
 import net from 'node:net';
+import { blockedPackageFromError } from './phone_foreground.ts';
+import { recordBlockedPackage } from './phone_blocked.ts';
 import { randomUUID } from 'node:crypto';
 
 export interface AutomationCaps {
@@ -190,7 +192,14 @@ export class AutomationHub {
             clearTimeout(pending.timer);
             this.pending.delete(pending.id);
             if (msg.t === 'result' && msg.ok !== false) pending.resolve(msg.result ?? msg);
-            else pending.reject(protocolError(msg.error?.code ?? 'automation_error', msg.error?.message ?? msg.error ?? 'automation command failed'));
+            else {
+              const failure = protocolError(msg.error?.code ?? 'automation_error', msg.error?.message ?? msg.error ?? 'automation command failed');
+              // Central allowlist-refusal sink: every phone_* path reports through here, so the
+              // settings panel can offer to add the package the AI actually ran into.
+              const refused = blockedPackageFromError(failure.message);
+              if (refused) recordBlockedPackage(refused);
+              pending.reject(failure);
+            }
           }
         } catch (error) {
           fail(error as Error);
