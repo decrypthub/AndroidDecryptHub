@@ -24,6 +24,9 @@ SCRIPTS=(
   # Root Device Daemon surface (v6-v8): root open, screen control, ensure loop. SKIPs when the
   # resident daemon is still the old payload.
   "verify_v40_device_daemon.sh:device"
+  # Post-flash boot path: waits for the boot-started daemon and exercises volume/clipboard/root
+  # input. Meaningful right after a flash; also runs (and passes) while the daemon is already up.
+  "verify_v41_postflash.sh:device"
   "verify_v02_dump.sh:device"
   "verify_v02_so.sh:device"
   "verify_v02_dexrepair.sh:host"

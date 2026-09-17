@@ -58,6 +58,7 @@
 - [x] **模拟开机流程验证（2026-09-17，真机 PASS）**：把模块 `service.sh` 部署到设备并用「杀掉所有 adh-device-daemon / 清 marker / 执行 service.sh」的方式模拟 Magisk 开机流程。结果：`service_rc=0`、`ready=1`、pid 落盘、只有一个守护进程实例，桥接恢复 online；随后复验 `volume_status`（alarm 12）、`volume_set 10 -> 10 -> 复原 12`、`phone_app open SukiSU` 全部正常。这证明上一轮修的回退链在真实启动路径上工作（此前 `--propagation` 会让开机后守护进程永不启动）。
 - [x] **根输入支持长按 + 按选择器解析（协议 v12，2026-09-17，真机 PASS）**：此前长按只能走无障碍手势，而「吞手势」的应用就完全长按不了。协议 v12 增加 duration-aware 的 `injectInputTap2`，`phone_act {action:"tap", durationMs>=600}`（含 `inputMode:"root"`）会转成零距离长压；同时根输入路径现在接受 snapshotId+ref，不再强制要求原始坐标（此前 selector-only 的 root tap 会报 `input requires x and y`）。
 - [x] **刷机后一键验收脚本 v4.1 + 剪贴板能力澄清（2026-09-17，真机 PASS）**：新增 `tools/verify_v41_postflash.sh`：刷机重启后直接跑，会等最多 90s 让开机脚本自己把守护进程拉起来，然后依次验证 daemon ready/pid、桥接 online、协议 v10+ 音量（读 + 写回环并复原）、剪贴板回环、根输入注入真的到达窗口；任何一步不成都会 FAIL。
+- [x] **v4.1 并入全量回归（2026-09-17，57/57）**：`verify_v41_postflash.sh` 已加入 `tools/verify_all.sh` 的设备段（紧跟 v4.0）。全量重跑结果 57/57，0 skip。沙盒新增剪贴板靶子后所有既有验收仍全绿，刷机后验收也进入常规回归。
       · 为验证剪贴板新增了沙盒靶子（读剪贴板按钮 + `adh_clipboard_echo`）。这次实测修正了上一轮的判断：`clipboard_write` 写进去的内容，前台应用确实能读到（写入 18 字符 hello-from-adh-剪贴板，点沙盒按钮，回显完全一致）。真正的规则是只有不在前台的进程读不到，上一轮 Manager 不在前台所以读到空。因此 `clipboard_read` 在需要读的应用处于前台时是完整可用的。
       · 影响面：`verify_v36_automation.sh` 复跑 PASS（沙盒新增控件未破坏既有断言）。
       · 真机验收：桌面上 900ms 根注入长按进入桌面编辑模式（`changed:true`，出现壁纸/小组件面板）；按选择器的 root tap 正确居中到节点。
