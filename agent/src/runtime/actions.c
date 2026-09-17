@@ -168,11 +168,13 @@ void adh_cmd_load_so(int fd, const char *id, const char *path, const char *symbo
 // This is intentionally not policy-enforcing in the agent: the Host requires confirm:true
 // before dispatching the command, while the agent only resolves and calls.
 
-// Implemented in fp_call.S: x0-x7 come from ints[], d0-d7 from fps[] (AAPCS64 assigns the two
-// banks independently) and the FP return register d0 lands in this global.
-unsigned long long g_adh_fp_call_result = 0;
+// Implemented in fp_call.S: x0-x7 come from ints[], d0-d7 from fps[] (AAPCS64 assigns the two banks
+// independently); the FP return register d0 is written through fp_result_out. That is a per-call
+// slot on purpose: a shared global would let two concurrent native_call requests read each other's
+// result in the window between one call returning and its result being read.
 extern unsigned long long adh_fp_call(void *target, const unsigned long long *ints,
-                                      unsigned long long *fps);
+                                      const unsigned long long *fps,
+                                      unsigned long long *fp_result_out);
 
 // Argument syntax: "f:<float>" and "d:<double>" fill the FP bank in order, anything else is an
 // integer/pointer in x0-x7. Both banks hold at most 8 arguments; unknown or malformed tokens are
@@ -183,9 +185,8 @@ static int parse_typed_args(const char *csv, unsigned long long *ints, int *int_
     *int_count = 0; *fp_count = 0; *total_count = 0;
     if (!csv || !csv[0]) return 1;
     const char *p = csv;
-    while (*p) {
-        while (*p == ' ' || *p == '\t' || *p == ',') p++;
-        if (!*p) break;
+    for (;;) {
+        while (*p == ' ' || *p == '\t') p++;
         const char *start = p;
         while (*p && *p != ',') p++;
         size_t len = (size_t)(p - start);
@@ -197,15 +198,31 @@ static int parse_typed_args(const char *csv, unsigned long long *ints, int *int_
         while (*t == ' ' || *t == '\t') t++;
         char *te = t + strlen(t);
         while (te > t && (te[-1] == ' ' || te[-1] == '\t')) *--te = 0;
-        if (!*t) continue;
+        // A separator with nothing next to it ("1,,2", leading/trailing comma) is a typo, not a
+        // shorter argument list: dropping it silently shifts every later argument by one register,
+        // so the target would be called with arguments the caller never asked for. Fail loud.
+        if (!*t) {
+            snprintf(error, error_size, "empty argument in '%s' (leading, trailing or doubled comma)", csv);
+            return 0;
+        }
         int is_fp = (t[0] == 'f' || t[0] == 'd' || t[0] == 'F' || t[0] == 'D') && t[1] == ':';
         if (is_fp) {
             if (*fp_count >= 8) { snprintf(error, error_size, "at most 8 floating-point arguments (d0-d7)"); return 0; }
             const char *value = t + 2;
             char *endp = NULL;
+            errno = 0;
             double d = strtod(value, &endp);
-            if (!value[0] || !endp || *endp) { snprintf(error, error_size, "bad floating-point argument: %s", t); return 0; }
+            if (!value[0] || endp == value || *endp) { snprintf(error, error_size, "bad floating-point argument: %s", t); return 0; }
+            // strtod quietly clamps overflow to +-HUGE_VAL; a silent inf is exactly the kind of
+            // "looks like it worked" answer this tool must not produce.
+            if (errno == ERANGE) { snprintf(error, error_size, "floating-point argument out of range: %s", t); return 0; }
             if (t[0] == 'f' || t[0] == 'F') {
+                // (float)d is undefined behaviour when d is outside float range, and NaN fails both
+                // comparisons, so this single check covers overflow and "f:nan" alike.
+                if (!(d >= -3.4028234663852886e38 && d <= 3.4028234663852886e38)) {
+                    snprintf(error, error_size, "float argument out of range: %s", t);
+                    return 0;
+                }
                 float f = (float)d;
                 uint32_t bits = 0;
                 memcpy(&bits, &f, sizeof(bits));
@@ -222,12 +239,16 @@ static int parse_typed_args(const char *csv, unsigned long long *ints, int *int_
                 return 0;
             }
             char *endp = NULL;
+            errno = 0;
             unsigned long long v = strtoull(t, &endp, 0);
-            if (!endp || *endp) { snprintf(error, error_size, "bad integer argument: %s", t); return 0; }
+            if (endp == t || *endp) { snprintf(error, error_size, "bad integer argument: %s", t); return 0; }
+            if (errno == ERANGE) { snprintf(error, error_size, "integer argument out of range: %s", t); return 0; }
             ints[*int_count] = v;
             (*int_count)++;
         }
         (*total_count)++;
+        if (*p != ',') break;
+        p++;
     }
     return 1;
 }
@@ -236,6 +257,16 @@ void adh_cmd_native_call(int fd, const char *id, const char *module, const char 
                          const char *addr_hex, const char *args_csv) {
     char idj[64];
     json_escape(id, idj, sizeof(idj));
+    // The echoed args pass through a fixed 320-byte JSON buffer: a longer list would be silently cut
+    // and reported as if that had been the request. Refuse it before the target runs at all.
+    if (strlen(args_csv ? args_csv : "") >= 280) {
+        char out[260];
+        snprintf(out, sizeof(out),
+                 "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"native_call\",\"ok\":false,"
+                 "\"error\":\"native_call args string too long (max 279 bytes)\"}\n", idj);
+        send_line(fd, out);
+        return;
+    }
     void *target = NULL;
     const char *source = "";
     if (addr_hex && addr_hex[0]) {
@@ -280,8 +311,7 @@ void adh_cmd_native_call(int fd, const char *id, const char *module, const char 
     if (fp_argc > 0) {
         LOGI("native_call fp: target=%p ints=%p fps=%p fp_argc=%d int_argc=%d",
              target, (void *)ints, (void *)fps, fp_argc, int_argc);
-        result = adh_fp_call(target, ints, fps);
-        fp_result = g_adh_fp_call_result;
+        result = adh_fp_call(target, ints, fps, &fp_result);
     } else {
         typedef unsigned long long (*fn8_t)(unsigned long long, unsigned long long,
                                             unsigned long long, unsigned long long,
@@ -305,13 +335,19 @@ void adh_cmd_native_call(int fd, const char *id, const char *module, const char 
         float fp_float = 0;
         memcpy(&fp_float, &flow, sizeof(fp_float));
         char dnum[32], fnum[32];
-        if (isfinite(fp_double)) snprintf(dnum, sizeof(dnum), "%.9g", fp_double);
+        // %.17g round-trips a double exactly: reporting a rounded value would hide the last few
+        // bits of what the target actually returned (a float32-rounded argument, for one).
+        if (isfinite(fp_double)) snprintf(dnum, sizeof(dnum), "%.17g", fp_double);
         else snprintf(dnum, sizeof(dnum), "null");
         if (isfinite(fp_float)) snprintf(fnum, sizeof(fnum), "%.9g", (double)fp_float);
         else snprintf(fnum, sizeof(fnum), "null");
         snprintf(fpjson, sizeof(fpjson),
                  ",\"fpResult\":\"0x%llx\",\"fpResultDouble\":%s,\"fpResultFloat\":%s,"
-                 "\"fpArgCount\":%d,\"intArgCount\":%d,\"returnBank\":\"d0\"",
+                 "\"fpArgCount\":%d,\"intArgCount\":%d,\"returnBank\":\"d0\","
+                 // A double return fills d0; a float return fills only its low 32 bits (s0).
+                 // x0 is the integer-bank return and is only meaningful when the target returns an
+                 // int, so say so instead of letting result look like the answer for an FP target.
+                 "\"x0MayBeStale\":true",
                  fp_result, dnum, fnum, fp_argc, int_argc);
     }
     char out[1400];

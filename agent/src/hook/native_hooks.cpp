@@ -110,7 +110,10 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id) {
     else if (skip_original) regs[0] = 0;
 
     int hook_uid = g_native_hook_slot_ids[hook_id].load(std::memory_order_relaxed);
-    if (hook_uid <= 0) hook_uid = hook_id + 1;
+    // No id means this slot was never published to the Host. Inventing one would hand the operator a
+    // hookId that no install ever returned, so stay silent (the argument/return rewrite above has
+    // already been applied either way).
+    if (hook_uid <= 0) return skip_original ? 1 : 0;
     g_native_hook_hits[hook_id].fetch_add(1, std::memory_order_relaxed);
     // v4.31: the stub saved q0-q7 at regs[16..31] (low/high lane per 128-bit register), so float,
     // double and vector arguments are visible too. Every lane is rendered twice - as the double
@@ -152,7 +155,13 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id) {
                            "\"returnSet\":%s,\"returnValue\":\"0x%llx\"}",
                            arg_index, (unsigned long long)arg_value, skip_original ? "true" : "false",
                            return_set ? "true" : "false", (unsigned long long)return_value);
-    if (joff >= sizeof(json)) LOGE("native hook event truncated: json buffer %zu bytes exhausted", sizeof(json));
+    if (joff >= sizeof(json)) {
+        // A half-written object is not JSON and the daemon cannot parse it, so replace it with a
+        // valid event that says the record was truncated instead of pushing a broken line.
+        LOGE("native hook event truncated: %zu-byte buffer exhausted", sizeof(json));
+        snprintf(json, sizeof(json), "{\"hookId\":%d,\"truncated\":true,\"buffer\":%zu}",
+                 hook_uid, sizeof(json));
+    }
     adh_capture_push_text("NATIVE_HOOK", json);
     return skip_original ? 1 : 0;
 }
@@ -350,6 +359,9 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
             copy_cstr(old.symbol, sizeof(old.symbol), symbol);
             old.address = (uintptr_t)target;
             g_native_hook_hits[i].store(0ULL, std::memory_order_relaxed);
+            // This new id is about to be returned to the Host, so the events this hook emits must
+            // carry it too; leaving the old value here makes status and events disagree.
+            g_native_hook_slot_ids[i].store(id, std::memory_order_relaxed);
             __atomic_store_n(&old.active, 1, __ATOMIC_RELEASE);
             reset_context(g_native_hooks[slot]);
             g_native_hooks[slot].used = 0;

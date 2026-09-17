@@ -326,6 +326,29 @@ __attribute__((noinline, used, visibility("default")))
 float adh_fp_target_f(float a, double b, int c) {
     return (float)((double)a * b + (double)c);
 }
+// Bank/order probes that cannot cancel out: both calls must return 291.0, which only holds when
+// the FIRST typed argument lands in the first FP register whatever its width (f: then d:, d: then f:).
+__attribute__((noinline, used, visibility("default")))
+double adh_fp_order_fd(float a, double b, int c) {
+    return (double)a * 100.0 + b * 10.0 + (double)c;
+}
+__attribute__((noinline, used, visibility("default")))
+double adh_fp_order_df(double a, float b, int c) {
+    return a * 100.0 + (double)b * 10.0 + (double)c;
+}
+// f:0.1 must be rounded to float32 before it is used: 0.1f*1000+2 = 102.00000149011612, while
+// storing the double 0.1 would give 102.00000000000001 - 1.5e-6 apart, far outside the assertion
+// epsilon, so this pins the width (not just the register) of an "f:" argument.
+__attribute__((noinline, used, visibility("default")))
+double adh_fp_mix(float a, double b) {
+    return (double)a * 1000.0 + b;
+}
+// Deterministic NaN return, so the "non-finite result is null, not invalid JSON" path is testable.
+__attribute__((noinline, used, visibility("default")))
+double adh_fp_nan(double seed) {
+    volatile double zero = 0.0;
+    return (seed - seed) + zero / zero;
+}
 JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_run(JNIEnv *env, jclass clazz) {
     (void)env; (void)clazz;
     int flags = 0;

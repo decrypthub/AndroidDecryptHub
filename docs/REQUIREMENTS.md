@@ -361,7 +361,7 @@ HookBackend
 
 **UI 必须标注来源**：`Java API` / `libc` / `syscall` / `DBI` / `可能漏检 direct syscall`
 
-> 实现状态（v4.6 / v4.9 / v4.15 / v4.31，真机 `aa165071` 验收）：inline hook 与主动调用都已覆盖 **两套寄存器 bank**。hook 事件给 `x0-x8/x18` 加 `fp:{d0-d7, s0-s7, q0hi-q3hi}`（float 参数只填低 32 位，事件同时给 double/float 两种读法）；参数改写目前只支持 x0-x7 整数槽，FP 参数只读。`native_call` 的实参是类型化的 `f:<float>` / `d:<double>`（FP bank）与整数/指针 token（x0-x7），返回同时给整数 x0（`result`/`resultDecimal`）与 FP d0/s0（`fpResult`/`fpResultDouble`/`fpResultFloat` + `returnBank`）；两个 bank 各限 8 个参数。128-bit / vector 返回值与栈上传参不在支持范围（显式报边界，不静默截断）。
+> 实现状态（v4.6 / v4.9 / v4.15 / v4.31，真机 `aa165071` 验收）：inline hook 与主动调用都已覆盖 **两套寄存器 bank**。hook 事件给 `x0-x8/x18` 加 `fp:{d0-d7, s0-s7, q0hi-q7hi}`（float 参数只填低 32 位；事件把 double/float 两种读法都给出，**不做猜测** —— 哪种是调用方用的必须由目标签名判定）。参数改写目前只支持 x0-x7 整数槽，FP 参数只读。`native_call` 的实参是类型化的 `f:<float>` / `d:<double>`（同一条 FP 寄存器序列：第 i 个 FP 参数进 d_i，float 只填低 32 位即 s_i）与整数/指针 token（x0-x7），两个 bank 各限 8 个（第 9 个直接报错，v68 已验）。**用了 FP 参数时**才返回 `fpResult`(d0 原始 64 位) / `fpResultDouble`(%.17g，double 精确往返) / `fpResultFloat`(%.9g) + `returnBank:"d0"` + `x0MayBeStale:true`：double 返回填 d0，float 返回只填 d0 的低 32 位（s0），而 `result`/`resultDecimal` 是整数 bank 的 x0，只有目标确实返回整数时才是答案。128-bit / vector / 结构体返回值与栈上传参不在支持范围，**当前既不检测也不提示**（不解析，调用方按签名自判）。
 
 ### 8.2 libc / bionic 监控
 
