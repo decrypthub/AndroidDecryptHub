@@ -68,6 +68,7 @@ phone_observe {mode:"text"}         # 省上下文的紧凑屏幕视图（含 sn
 - **输入**：`phone_act {action:"set_text", resourceId|ref|editable, text}`；`submit:true` 会再按一次键盘动作键（搜索/发送/完成），回 `submitted:true`。
 - **启动与浮窗**：`phone_app open` 会等前台真正切换（冷启动最多 12s，中途重发一次启动意图），返回 `verified`/`foreground`/`relaunched`。ColorOS 把部分系统设置子页做成浮窗（例如 `com.oplus.battery`）时，启动会落在浮窗后面 —— 此时接口自动按一次返回键再重发启动，并在结果里标 `dismissedBlockingPackage`；只有系统包会被当作浮窗，第三方应用永远不会被自动返回键打扰。
 - **被拒绝的包名**：操控落到允许名单外的界面时（ColorOS 的设置页分散在 `com.oplus.battery` 等独立包里），工具会明确报 `blocked_package`，Host 记住这个包名，Web「设置 → 手机自动化」会出现一行「被拒绝的包名」+ 一键添加；加进名单后 AI 可以立刻继续。Host 只记包名，不记页面内容。
+- **技能库面板**：Web 设置里新增「技能库」页，列出每条配方的名称/描述/步数/参数/运行次数，可单条运行、刷新、删除；运行结果直接显示成功或失败步号。REST 面：`GET /api/skills`、`POST /api/skills {action:"run|delete", name, inputs}`。
 - **保存即体检**：`phone_skill save` 会在保存前跑一次静态预检，对「没有 app/wait 建立应用上下文就开始 act/observe/find」的步骤按索引给出 `warnings`（例如 `step_0_no_app_context`）。告警不阻止保存，但会让配方作者知道这条流程只在录制时的那个界面成立。
 - **多状态恢复**：应用常常从不同状态打开（浏览器停在首页或结果页、设置停在首页或搜索页）。用 `phone_wait_any`（或 `phone_task` 的 `wait_any` 步骤）表达「任一状态都可以」，命中时回报 `condition` 下标；都不命中则明确超时。配方里还可以给步骤加 `onlyIf`：守卫选择器不存在时该步 `skipped:true`，不是失败。
 - **手势保真**：tap/swipe 返回 `changed`（窗口文本签名是否真的变化）。有些 Compose 界面（SukiSU Ultra、Vector/LSPosed 管理器）接受无障碍手势但界面不动 —— 此时 `phone_act` 会自动用同坐标走 root 注入重试一次并标注 `fallback:"root"`；也可以显式要求 `inputMode:"root"`（Device Daemon v9），或直接 `{action:"input", mode:"tap|swipe"}`。
