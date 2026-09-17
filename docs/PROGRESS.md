@@ -50,6 +50,13 @@
       · 安全/输入：inline 绝对地址必须 `confirm:true`，agent 校验目标位于 executable mapping；active 发布顺序移到所有字段之后；重复 target fail-loud；Java bridge 增加 `ready` 安装窗口自旋、ADH 自有 backup global ref、事件字符串 512 字符上限。
       · 真机 `aa165071` PASS：native 与 Java 同一目标各连续 24 次 install/unhook 后行为恢复、agent 存活（`tools/verify_v56_hook_stress.sh`）；v4.3/v4.6/v4.12–v4.15 全部复跑 PASS。
       · 已知边界：软卸载会在目标里保留 stub/LSPlant patch（去特征场景需要后续 hard-unhook/quiesce 方案）；JNI_OnLoad 仍未覆盖；Java/native 的唯一目标数仍受 16 槽上限约束。
+- [x] **v4.23 JNIEnv hook 评审加固（2026-09-18，真机 PASS）**：对 v4.18/v4.19 的独立评审整改（评审全文要点按 P0/P1/P2 落地）：
+      · **P0 热路径**：原来只限制"发事件"的条数，类名反射 / 数组 hex / 字符串拷贝却**每次调用都做**（文件头还声称有界，属于自欺）。现在 `env_budget_left()` 作为唯一闸门：预算耗尽后每次调用只剩一次原子自增；`hits` 改为**统计每一次被拦截的调用**（成功/失败都算），不再只在"有结果"时计数，避免高频失败路径看起来 0 命中。
+      · **P0 异常语义**：成员 ID wrapper 在 original 抛错后**不再做任何反射**（CheckJNI 下带 pending exception 调 JNI 会 abort），改为发一条不带类名的事件（`?#name+sig`，`ok:false`）；`adh_jni_class_name()` 的 park/rethrow 保留作为纵深防御，并补掉 PushLocalFrame 失败路径的 local ref 泄漏。
+      · **P1 验收强度**：状态新增 `slotValue`（读的是**表项实时值**，不是缓存）与 `original`；v58/v59 现在断言"安装后 slotValue != original、卸载后 slotValue == original"，证明表项真的被改写并写回，而不是只翻了个 active 标志；`tablePerms` 断言保留。
+      · **P2 诚实性**：`status` 在 attach 失败时改为 fail-loud（ok:false + "no JavaVM/JNIEnv"），不再用陈旧 table 报成功；事件 JSON 增加 `ok` 字段区分"查找成功/失败"；MCP 工具描述补全 9 个入口（此前 enum 与描述漂移）。
+      · 评审提出但**本次未做**（记录待办）：`ReleaseByteArrayElements` / `GetByteArrayRegion` 未覆盖（in-place 解密回写路径看不到最终明文）；verify 脚本的"能力缺失 → SKIP"在 `verify_all` 里仍计 PASS（项目既有约定，需单独收紧）；生产库上 `GetFieldID` 复用 jmethodID typedef 的 UB 只是规范层面（arm64 ABI 一致）。
+      · 真机 `aa165071` 复跑 PASS：v58 / v59 / v60 / v54 / v43。
 - [x] **v4.22 GOT hook 两处回归修复（2026-09-18，真机 PASS）**：全量 `verify_all.sh` 跑出 **72 pass / 4 fail**，其中两条是"已文档化能力其实已经悄悄失效"的回归（另两条 v36/v41 是设备侧 Binder 状态，不在本次范围）：
       · **按名 GOT 替换整条失效**：`adh_got_replace_by_name*` 把 `/proc/self/maps` 的完整路径传给 `module_base_of()`，而该函数在 v2.x 加固时改成"basename 精确比较"，于是永远匹配不上 → 静默返回 0（`detect_watch` 报 `hooked:{ptrace:0,access:0,prop:0}`、`native_hook mode=got` 报 "symbol/slot not found"）。修复：`module_base_of()` 自行归一化参数（basename 或完整路径都能解析），并保留加固过的"不匹配子串"语义。
       · **APS2 packed reloc 解码器从未生效**：`DT_ANDROID_RELASZ`(0x60000012) 在 dynamic 段解析里被漏读，`find_packed_reloc_slot()` 因 `android_relasz < 4` 永远直接返回 NULL → 只在 packed 段里的 `EVP_AEAD_CTX_seal/open`、`EVP_PKEY_encrypt/decrypt` 等符号永远找不到（capture_start 报 `aead.seal=0`、`pkey.*=0`）。修复：两处 DT 循环都补上 0x60000012。

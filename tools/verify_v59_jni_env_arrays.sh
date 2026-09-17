@@ -35,6 +35,8 @@ async function callProbe(session) {
 }
 const relroOk = (body) => typeof body?.tablePerms === 'string' && body.tablePerms.startsWith('r') && body.tablePerms[1] !== 'w'
   && (body?.hooks ?? []).every((h) => h.installed !== true || (typeof h.perms === 'string' && h.perms.startsWith('r') && h.perms[1] !== 'w'));
+const tablePatched = (body) => (body?.hooks ?? []).every((h) => h.installed !== true || (h.slotValue && h.slotValue !== h.original));
+const tableRestored = (body) => (body?.hooks ?? []).every((h) => h.installed === true || !h.original || h.original === '0x0' || h.slotValue === h.original);
 const session = agent.sessionId;
 const initial = await post('/api/jni/env_hook', { session, action: 'status' });
 if (initial.status === 404 || /unsupported|unknown op/i.test(String(initial.body.error ?? ''))) {
@@ -74,6 +76,7 @@ const status1 = await post('/api/jni/env_hook', { session, action: 'status' });
 const hitsBefore = Object.fromEntries((status1.body.hooks ?? []).map((h) => [h.function, Number(h.hits)]));
 const hitsOk = FUNCS.every((f) => hitsBefore[f] >= 1);
 const relro1 = relroOk(status1.body);
+const patched1 = tablePatched(status1.body);
 const uninstalls = {};
 const uninstallOk = [];
 for (const f of FUNCS) {
@@ -88,15 +91,16 @@ const status3 = await post('/api/jni/env_hook', { session, action: 'status' });
 const hitsAfter = Object.fromEntries((status3.body.hooks ?? []).map((h) => [h.function, Number(h.hits)]));
 const frozen = FUNCS.every((f) => hitsAfter[f] === hitsBefore[f]);
 const relro2 = relroOk(status3.body);
+const restored2 = tableRestored(status2.body) && tableRestored(status3.body);
 const alive = (await (await fetch(`${base}/api/agents`)).json()).some((x) => x.online && x.package === 'com.adh.sandbox');
 const pass = installOk.every(Boolean) && probe1.ok === true && Number(probe1.value) === PROBE_VALUE &&
   Object.keys(found).length === FUNCS.length && hitsOk && uninstallOk.every(Boolean) && restored &&
-  probe2.ok === true && Number(probe2.value) === PROBE_VALUE && frozen && relro1 && relro2 && alive;
+  probe2.ok === true && Number(probe2.value) === PROBE_VALUE && frozen && relro1 && relro2 && patched1 && restored2 && alive;
 console.log(JSON.stringify({
   table: status1.body.table, tablePerms: [status1.body.tablePerms, status3.body.tablePerms],
   installs, probe1: probe1.value, probe1Error: probe1.error ?? null,
   events: Object.fromEntries(Object.entries(found).map(([k, v]) => [k, v.id])), hitsBefore, hitsOk,
-  uninstalls, restored, probe2: probe2.value, hitsAfter, frozen, relro1, relro2, alive,
+  uninstalls, restored, probe2: probe2.value, hitsAfter, frozen, relro1, relro2, patched1, restored2, alive,
 }));
 console.log(pass ? 'RESULT:PASS' : 'RESULT:FAIL');
 EOF

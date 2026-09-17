@@ -85,7 +85,7 @@ void adh_jni_class_name(JNIEnv *env, jclass clazz, char *out, size_t out_size) {
     jthrowable pending = (*env)->ExceptionOccurred(env);
     if (pending) (*env)->ExceptionClear(env);
     if ((*env)->PushLocalFrame(env, 8) != 0) {
-        if (pending) (*env)->Throw(env, pending);
+        if (pending) { (*env)->Throw(env, pending); (*env)->DeleteLocalRef(env, pending); }
         return;
     }
     jclass class_class = (*env)->GetObjectClass(env, clazz);
