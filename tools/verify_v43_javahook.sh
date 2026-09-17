@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# v4.3 LSPlant Java-method-hook acceptance.
+#
+# Deterministic path: install a hook on com.adh.sandbox.HookProbe.ping(String), trigger the
+# exported HookProbeReceiver with an explicit broadcast, then assert the bridge captured the
+# real argument and original return value while the target process stayed alive.
+#
+# SKIPs when the deployed agent predates java_hook or the sandbox is not running. Exit 0 = PASS/SKIP.
+set -uo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+HTTP="${ADH_HTTP_PORT:-8088}"
+export ADH_ADB="${ADH_ADB:-$(command -v adb)}"
+
+set +e
+OUT="$(node - "$HTTP" <<'EOF'
+import { spawnSync } from 'node:child_process';
+const [http] = process.argv.slice(2);
+const base = `http://127.0.0.1:${http}`;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const adb = process.env.ADH_ADB || 'adb';
+
+function adbArgs(args) {
+  const serial = process.env.ANDROID_SERIAL || process.env.ADH_SERIAL || '';
+  return serial ? ['-s', serial, ...args] : args;
+}
+async function post(path, body) {
+  const r = await fetch(`${base}${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return r.json();
+}
+function result(name, pass) {
+  console.log(name);
+  console.log(`RESULT:${pass}`);
+}
+function skip(reason) {
+  console.log(reason);
+  console.log('RESULT:SKIP');
+  process.exit(0);
+}
+
+const agents = await (await fetch(`${base}/api/agents`)).json();
+const agent = agents.filter((x) => x.online && x.package === 'com.adh.sandbox')
+  .sort((x, y) => (y.connectedAt ?? 0) - (x.connectedAt ?? 0))[0];
+const serialOut = spawnSync(adb, adbArgs(['devices']), { encoding: 'utf8' });
+if (serialOut.status !== 0) skip(`adb unavailable: ${serialOut.stderr || serialOut.stdout}`);
+const lines = String(serialOut.stdout || '').split(/\r?\n/).filter((x) => /\tdevice$/.test(x));
+if (!lines.length) skip('no Android device');
+const serial = (process.env.ANDROID_SERIAL || process.env.ADH_SERIAL || lines[0].split('\t')[0]);
+const pidOut = spawnSync(adb, ['-s', serial, 'shell', 'pidof', 'com.adh.sandbox'], { encoding: 'utf8' });
+if (!String(pidOut.stdout || '').trim()) skip('com.adh.sandbox is not running');
+if (!agent) skip('no online com.adh.sandbox agent session');
+
+await post('/api/java/hook', { session: agent.sessionId, action: 'unhook' }).catch(() => null);
+const hook = await post('/api/java/hook', {
+  session: agent.sessionId,
+  action: 'hook',
+  className: 'com.adh.sandbox.HookProbe',
+  method: 'ping',
+  params: 'java.lang.String',
+});
+const hookError = String(hook.error ?? '');
+if (!hook.ok && /lsplant not built|unsupported|unknown op/i.test(hookError)) {
+  skip(`agent does not expose LSPlant java_hook: ${hookError}`);
+}
+if (!hook.ok) {
+  console.log(JSON.stringify({ hook, hookError }));
+  result('java_hook install', false);
+  process.exit(0);
+}
+
+const bc = spawnSync(adb, ['-s', serial, 'shell', 'am', 'broadcast',
+  '-a', 'com.adh.sandbox.HOOK_PROBE',
+  '--es', 'value', 'ADH_HOOK_PING',
+  '-n', 'com.adh.sandbox/.HookProbeReceiver'], { encoding: 'utf8' });
+if (bc.status !== 0) {
+  console.log(`broadcast failed: ${bc.stderr || bc.stdout}`);
+  await post('/api/java/hook', { session: agent.sessionId, action: 'unhook' }).catch(() => null);
+  result('hook trigger broadcast', false);
+  process.exit(0);
+}
+
+let status = null;
+for (let i = 0; i < 20; i++) {
+  status = await post('/api/java/hook', { session: agent.sessionId, action: 'status' });
+  if (status?.status?.hits >= 1) break;
+  await sleep(100);
+}
+const st = status?.status ?? {};
+const alive = String(spawnSync(adb, ['-s', serial, 'shell', 'pidof', 'com.adh.sandbox'], { encoding: 'utf8' }).stdout || '').trim();
+const unhook = await post('/api/java/hook', { session: agent.sessionId, action: 'unhook' }).catch(() => null);
+const pass = hook.ok === true &&
+  st.active === true && st.hits >= 1 &&
+  st.lastArg === 'ADH_HOOK_PING' &&
+  st.lastReturn === 'REAL_HOOK:ADH_HOOK_PING' &&
+  (st.lastError === '' || st.lastError == null) &&
+  unhook?.ok === true &&
+  alive.length > 0;
+console.log(JSON.stringify({ hook, status, unhook, alive }));
+result('java_hook install + trigger + original + unhook', pass);
+process.exit(0);
+EOF
+)"
+echo "$OUT"
+if echo "$OUT" | grep -q 'RESULT:PASS'; then
+  echo "✅ v4.3 LSPlant java_hook PASS"
+  exit 0
+elif echo "$OUT" | grep -q 'RESULT:SKIP'; then
+  echo "⏭  v4.3 LSPlant java_hook SKIP (new agent/sandbox not deployed yet)"
+  exit 0
+else
+  echo "❌ v4.3 LSPlant java_hook FAIL"
+  exit 1
+fi

@@ -24,6 +24,13 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <receiver
+            android:name=".HookProbeReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.adh.sandbox.HOOK_PROBE" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>
