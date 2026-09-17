@@ -209,6 +209,7 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
             "scroll" -> scroll(args, snapshot, ref)
             "set_text" -> setText(args, snapshot, ref)
             "global" -> global(args)
+            "ime" -> ime(args)
             else -> throw AutomationException("unsupported_action", "unsupported action: $action")
         }
         if (action == "tap" || action == "swipe" || action == "input") {
@@ -535,6 +536,58 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
             result.put("submitted", true)
         }
         return result
+    }
+
+    /**
+     * Press the keyboard action key (search / send / done / go) on whatever field currently has
+     * focus. Some apps (HeyTap browser) ignore a tap on their own search button - the accessibility
+     * click lands, nothing submits - while the IME action reliably triggers the same handler the
+     * on-screen keyboard uses. Fail loudly when the platform is too old or no field is focused.
+     */
+    private fun ime(args: JSONObject): JSONObject {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            throw AutomationException("ime_action_unsupported", "IME action requires Android 11 or newer")
+        }
+        val requested = args.optString("key", "search").ifBlank { "search" }
+        val actionId = when (requested) {
+            "search" -> AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id
+            "done", "go", "send", "next", "previous" -> AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id
+            else -> throw AutomationException("bad_ime_key", "ime key must be search, done, go, send, next or previous")
+        }
+        val node = focusedEditable()
+            ?: findFirstEditable()
+            ?: throw AutomationException("no_focused_field", "no editable field has focus; tap it first")
+        val performed = node.performAction(actionId)
+        if (!performed) throw AutomationException("ime_rejected", "field rejected the IME action ($requested)")
+        return JSONObject().put("action", "ime").put("key", requested)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun focusedEditable(): AccessibilityNodeInfo? {
+        val root = rootInActiveWindow ?: return null
+        return try {
+            root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)?.takeIf { it.isEditable }
+        } finally {
+            root.recycle()
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun findFirstEditable(): AccessibilityNodeInfo? {
+        val root = rootInActiveWindow ?: return null
+        return try {
+            val queue = ArrayDeque<AccessibilityNodeInfo>()
+            queue.add(root)
+            var budget = 200
+            while (queue.isNotEmpty() && budget-- > 0) {
+                val node = queue.removeFirst()
+                if (node.isEditable && node.isVisibleToUser) return node
+                for (index in 0 until node.childCount) node.getChild(index)?.let { queue.add(it) }
+            }
+            null
+        } finally {
+            root.recycle()
+        }
     }
 
     private fun global(args: JSONObject): JSONObject {
