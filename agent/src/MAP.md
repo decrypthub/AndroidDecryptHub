@@ -19,6 +19,7 @@
 | `runtime/actions.c` | Safety-gated Java trigger and explicit in-process `.so` loading commands |
 | `runtime/art.c` | ClassLoader-cookie enumeration and per-API ART DexFile structural resolution |
 | `runtime/inspection.c` | Live-object reflection, JNI/runtime compatibility probes, and the bootstrap/current injection-footprint counters |
+| `runtime/java_enum.cpp` | Read-only live-class reflection: class metadata, constructors, overloaded methods and fields |
 | `runtime/jni.c` | JavaVM discovery, native-thread attach/detach, and app ClassLoader access |
 | `trace/commands.c` | Function-call trace state, GOT trace orchestration, and QBDI command response handling |
 | `trace/qbdi_trace.c` | Optional runtime-loaded QBDI instruction trace |

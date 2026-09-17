@@ -83,3 +83,4 @@ translation — kept separate).
 - `verify_v35_sessions.sh` — v3.5 会话清理（host）：`pruneSessions` 单测（保留上限 / 过期丢弃 / 不动在线会话）+ 会话选择器标记与下拉配色 + daemon 可达时校验实际离线会话上限。
 - `verify_v42_lsplant.sh` — LSPlant probe + `java_hook status`（deploy new agent；旧 payload 明确 SKIP）。
 - `verify_v43_javahook.sh` — 沙盒确定性 `HookProbe.ping` install → broadcast 触发 → 原返回值 → `JAVA_HOOK` capture 事件 → `unhook` 验收（deploy new sandbox/agent；未部署时 SKIP）。
+- `verify_v44_java_enum.sh` — 沙盒 `HookProbe` 类/字段/两个 `ping` 重载枚举验收（deploy new agent/sandbox；未部署时 SKIP）。

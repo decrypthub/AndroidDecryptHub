@@ -22,6 +22,7 @@
 #include "../runtime/art.h"
 #include "../runtime/inspection.h"
 #include "../runtime/jni.h"
+#include "../runtime/java_enum.h"
 #include "../trace/commands.h"
 
 #ifdef ADH_HAVE_LSPLANT
@@ -184,6 +185,47 @@ static void cmd_java_hook(int fd, const char *id, const char *action, const char
     send_line(fd, out);
 #endif
 }
+static void cmd_java_enum(int fd, const char *id, const char *class_name) {
+    char idj[64];
+    json_escape(id, idj, sizeof(idj));
+    int did_attach = 0;
+    JNIEnv *env = adh_jni_attach(&did_attach);
+    if (!env) {
+        char out[220];
+        snprintf(out, sizeof(out),
+                 "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"java_enum\",\"ok\":false,\"error\":\"no JavaVM\"}\n", idj);
+        send_line(fd, out);
+        return;
+    }
+    char error[512] = "";
+    char *json = NULL;
+    int ok = adh_java_enum_json(env, class_name, &json, error, sizeof(error));
+    if (did_attach) adh_jni_detach(did_attach);
+    if (ok && json) {
+        size_t len = strlen(json) + 512;
+        char *out = (char *)malloc(len);
+        if (!out) {
+            adh_java_enum_free(json);
+            send_oom(fd, idj, "java_enum");
+            return;
+        }
+        snprintf(out, len,
+                 "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"java_enum\",\"ok\":true,\"result\":%s}\n",
+                 idj, json);
+        send_line(fd, out);
+        free(out);
+        adh_java_enum_free(json);
+    } else {
+        char errj[768];
+        json_escape(error, errj, sizeof(errj));
+        char out[1024];
+        snprintf(out, sizeof(out),
+                 "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"java_enum\",\"ok\":false,\"error\":\"%s\"}\n",
+                 idj, errj);
+        send_line(fd, out);
+        if (json) adh_java_enum_free(json);
+    }
+}
 // Read framed commands from the Host ADH Daemon and dispatch.
 static void command_loop(int fd) {
     for (;;) {
@@ -219,6 +261,10 @@ static void command_loop(int fd) {
                     json_get_str(line, "params", jparams, sizeof(jparams));
                     long long jhook_id = json_get_num(line, "id");
                     cmd_java_hook(fd, id, jaction, jcls, jmethod, jparams, jhook_id);
+                } else if (strcmp(op, "java_enum") == 0) {
+                    char jcls[256] = "";
+                    json_get_str(line, "className", jcls, sizeof(jcls));
+                    cmd_java_enum(fd, id, jcls);
                 } else if (strcmp(op, "javahook_probe") == 0) {
                     cmd_javahook_probe(fd, id);
                 } else if (strcmp(op, "gothook_selftest") == 0) {

@@ -18,6 +18,7 @@ set(AGENT_SOURCES
     src/runtime/art.c
     src/runtime/inspection.c
     src/runtime/jni.c
+    src/runtime/java_enum.cpp
     src/trace/commands.c
     src/trace/qbdi_trace.c
 )
