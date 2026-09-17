@@ -89,12 +89,9 @@ EOF
 )"
 verify_chk "volume write round trip with restore" '[ "$(echo "$RESTORE" | grep -c "roundtrip=true restored=true")" -eq 1 ]'
 
-node - "$BASE" <<'EOF'
-const base = process.argv[2];
-const body = { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'phone_app', arguments: { action: 'open', package: 'com.adh.manager' } } };
-try { await fetch(base + '/mcp', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }); } catch {}
-EOF
-sleep 2
+# The clipboard probe uses the sandbox: it is allowlisted, always available and exposes a
+# deterministic 读剪贴板 button + adh_clipboard_echo view. (The Manager itself is refused by the
+# self-control guard, by design.)
 CLIP="$(node - "$BASE" <<'EOF'
 const base = process.argv[2];
 const call = async (name, args) => {
@@ -104,17 +101,22 @@ const call = async (name, args) => {
   const item = r.result?.content?.find((c) => c.type === 'text');
   return item ? JSON.parse(item.text) : {};
 };
+const probe = 'ADH post-flash clipboard probe';
 try {
-  // The manager must be in front for the clipboard to be readable (Android 10+ rule).
-  await call('phone_device', { action: 'clipboard_write', text: 'ADH post-flash probe' });
-  const read = await call('phone_device', { action: 'clipboard_read' });
-  console.log('clipboard=' + (read.text === 'ADH post-flash probe' ? 'yes' : 'no:' + JSON.stringify(read.text).slice(0, 40)));
-} catch (e) { console.log('clipboard=no err=' + String(e.message).slice(0, 120)); }
+  await call('phone_app', { action: 'open', package: 'com.adh.sandbox' });
+  await call('phone_wait', { activePackage: 'com.adh.sandbox', stable: true, stableMs: 800, timeoutMs: 8000 });
+  await call('phone_device', { action: 'clipboard_write', text: probe });
+  await call('phone_act', { action: 'tap', text: '读剪贴板' });
+  await new Promise((r) => setTimeout(r, 800));
+  const found = await call('phone_find', { resourceId: 'com.adh.sandbox:id/adh_clipboard_echo', limit: 1 });
+  const shown = found?.nodes?.[0]?.text ?? '';
+  console.log('clipboard=' + (shown === '剪贴板内容：' + probe ? 'yes' : 'no:' + JSON.stringify(shown).slice(0, 60)));
+} catch (e) { console.log('clipboard=no err=' + String(e.message).slice(0, 140)); }
 EOF
 )"
 case "$CLIP" in
-  *clipboard=yes*) echo "PASS  clipboard round trip through the service context: $CLIP" ;;
-  *) echo "SKIP  clipboard round trip (manager not in front or platform refused): $CLIP" ;;
+  *clipboard=yes*) echo "PASS  clipboard write -> foreground app reads it back: $CLIP" ;;
+  *) echo "FAIL  clipboard write -> foreground app reads it back: $CLIP"; fail=1 ;;
 esac
 
 ROOT_TAP="$(node - "$BASE" <<'EOF'
