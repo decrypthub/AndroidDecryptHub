@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { backendMatrix } from '../backends.ts';
 import { automation } from '../automation.ts';
 import { blockedPackageNotices } from '../phone_blocked.ts';
+import { phoneSkillCommand } from '../mcp.ts';
 import { webUrls } from '../config.ts';
 import { handleMcp, MCP_TOOLS } from '../mcp.ts';
 import { applyCaptureEnabled } from '../service.ts';
@@ -103,6 +104,24 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
         return send(200, { ok: true, applied, settings, stats: configStats(), persisted: true });
       }
       return send(200, { settings, stats: configStats() });
+    } },
+    // Recipe library: the same store the phone_skill MCP tool uses. List, run, delete.
+    { path: '/api/skills', handler: async () => {
+      if (req.method === 'GET') {
+        return send(200, await phoneSkillCommand({ action: 'list' }));
+      }
+      let body: any = {};
+      try { body = JSON.parse((await readBody(req)) || '{}'); } catch { return send(400, { error: 'bad json' }); }
+      const action = String(body.action ?? '');
+      if (action === 'delete') {
+        if (!body.name) return send(400, { error: 'delete requires name' });
+        return send(200, await phoneSkillCommand({ action: 'delete', name: body.name }));
+      }
+      if (action === 'run') {
+        if (!body.name) return send(400, { error: 'run requires name' });
+        return send(200, await phoneSkillCommand({ action: 'run', name: body.name, inputs: body.inputs ?? {} }));
+      }
+      return send(400, { error: 'unsupported action: use GET or POST {action: run|delete}' });
     } },
     { path: '/api/automation/status', handler: async () => {
       const bridge = automation.status();

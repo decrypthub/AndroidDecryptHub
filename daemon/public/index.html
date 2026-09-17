@@ -556,6 +556,7 @@
         <button data-setpage="data">数据</button>
         <button data-setpage="rawcfg">配置 JSON</button>
         <button data-setpage="automation">手机自动化</button>
+        <button data-setpage="skills">技能库</button>
         <button data-setpage="backends">注入后端</button>
       </nav>
       <div class="set-main">
@@ -645,6 +646,13 @@
             </div>
           </div>
           <div class="set-row"><div class="lab"><b>桥接状态</b><span id="setAutomationStatus">未开启</span></div></div>
+        </div>
+        <div id="setPageSkills" class="set-page">
+          <h4>技能库</h4>
+          <p class="set-lead">AI 自己沉淀的可复用操控配方（保存时会预检是否依赖当前界面）。每条都能在这里单独运行或删除。</p>
+          <div id="setSkillsList" class="muted">加载中…</div>
+          <div class="set-actions"><button onclick="loadSkills()">刷新</button></div>
+          <div id="setSkillsResult" class="muted"></div>
         </div>
         <div id="setPageBackends" class="set-page">
           <h4>注入后端</h4>
@@ -1037,6 +1045,7 @@ function setSettingsPage(name){
   if(name==='rawcfg') loadRawCfg(true);
   if(name==='backends') renderBackends();
   if(name==='automation') loadAutomationStatus();
+  if(name==='skills') loadSkills();
 }
 function renderFamilies(fam){
   document.getElementById('setFamilies').innerHTML=FAMILIES.map(([k,label])=>
@@ -1136,6 +1145,43 @@ function renderAutomationBlocked(blocked, packages){
     ta.value=current.join('\n');
     postConfig({automation:{packages:current}});
   }));
+}
+async function loadSkills(resetResult){
+  const el=document.getElementById('setSkillsList');
+  const out=document.getElementById('setSkillsResult');
+  if(!el) return;
+  el.textContent='加载中…';
+  if(out && resetResult !== false) out.textContent='';
+  try{
+    const r=await (await fetch('/api/skills')).json();
+    const skills=r.skills||[];
+    if(!skills.length){ el.textContent='还没有配方。让 AI 跑一遍流程并保存即可。'; return; }
+    el.innerHTML=skills.map((s,i)=>
+      '<div class="set-row" style="align-items:flex-start">'
+      + '<div class="lab"><b>'+s.name+'</b>'
+      + '<span>'+((s.description||'无描述').replace(/</g,'&lt;'))+'</span>'
+      + '<span class="muted">'+s.steps+' 步 · 参数 ['+(s.params||[]).join(', ')+'] · 运行 '+((s.runs||0))+' 次</span></div>'
+      + '<div class="set-actions">'
+      + '<button data-skill-run="'+i+'">运行</button>'
+      + '<button data-skill-del="'+i+'" class="danger">删除</button>'
+      + '</div></div>').join('');
+    el.querySelectorAll('button[data-skill-run]').forEach(btn=>btn.addEventListener('click',async()=>{
+      const skill=skills[Number(btn.dataset.skillRun)];
+      if(out) out.textContent='运行 '+skill.name+' …';
+      try{
+        const rr=await (await fetch('/api/skills',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'run',name:skill.name})})).json();
+        const failed=(rr.steps||[]).find(st=>!st.ok);
+        if(out) out.textContent='运行 '+skill.name+'：'+(rr.ok?'成功':('失败在第 '+(failed?failed.index:'?')+' 步 · '+((failed&&failed.error)||'')));
+      }catch(e){ if(out) out.textContent='运行失败: '+e; }
+      loadSkills(false);
+    }));
+    el.querySelectorAll('button[data-skill-del]').forEach(btn=>btn.addEventListener('click',async()=>{
+      const skill=skills[Number(btn.dataset.skillDel)];
+      if(!confirm('删除配方 '+skill.name+' ？')) return;
+      try{ await fetch('/api/skills',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'delete',name:skill.name})}); }catch(e){ }
+      loadSkills(false);
+    }));
+  }catch(e){ el.textContent='读取失败: '+e; }
 }
 async function postConfig(patch){
   try{ const r=await (await fetch('/api/config',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(patch)})).json();

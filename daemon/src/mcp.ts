@@ -723,6 +723,11 @@ function observationContent(result: any) {
 function visibleMcpTools() {
   return MCP_TOOLS.filter((tool) => !tool.name.startsWith('phone_') || settings.automation.enabled);
 }
+/** REST surface for the skills panel: same implementation as the phone_skill MCP tool. */
+export async function phoneSkillCommand(args: any): Promise<any> {
+  return await skillPhone(args);
+}
+
 export const MCP_MAP = new Map(MCP_TOOLS.map(t => [t.name, t]));
 
 export async function handleMcp(reqBody: string, res: ServerResponse, opts?: { package?: string }) {
