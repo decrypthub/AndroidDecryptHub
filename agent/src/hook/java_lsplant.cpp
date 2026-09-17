@@ -315,6 +315,7 @@ struct JavaHookContext {
     int id;
     int active;                 // 0 free, 1 active, 2 reserved
     int used;                   // retired slots are never reused
+    int patched;                // LSPlant hook remains installed (soft unhook / reuse)
     jobject target_method;      // global ref to java.lang.reflect.Method
     jobject backup_method;      // global ref returned by LSPlant
     jobject bridge;             // global ref to AdhJavaHookBridge
@@ -338,7 +339,9 @@ static jfieldID g_bridge_last_return = nullptr;
 static jfieldID g_bridge_last_error = nullptr;
 static jfieldID g_bridge_target = nullptr;
 static jfieldID g_bridge_skip_original = nullptr;
-static jfieldID g_bridge_override_return = nullptr;static jfieldID g_bridge_arg_index = nullptr;
+static jfieldID g_bridge_override_return = nullptr;
+static jfieldID g_bridge_ready = nullptr;
+static jfieldID g_bridge_active = nullptr;static jfieldID g_bridge_arg_index = nullptr;
 static jfieldID g_bridge_arg_value = nullptr;
 
 static std::string jstring_to_utf(JNIEnv *env, jstring value) {
@@ -510,14 +513,16 @@ static jclass load_bridge_class(JNIEnv *env, std::string &error) {
     g_bridge_last_error = env->GetFieldID(bridge_class, "lastError", "Ljava/lang/String;");
     g_bridge_target = env->GetFieldID(bridge_class, "target", "Ljava/lang/String;");
     g_bridge_skip_original = env->GetFieldID(bridge_class, "skipOriginal", "Z");
-    g_bridge_override_return = env->GetFieldID(bridge_class, "overrideReturn", "Ljava/lang/String;");    g_bridge_arg_index = env->GetFieldID(bridge_class, "argIndex", "I");
+    g_bridge_override_return = env->GetFieldID(bridge_class, "overrideReturn", "Ljava/lang/String;");
+    g_bridge_ready = env->GetFieldID(bridge_class, "ready", "Z");
+    g_bridge_active = env->GetFieldID(bridge_class, "active", "Z");    g_bridge_arg_index = env->GetFieldID(bridge_class, "argIndex", "I");
     g_bridge_arg_value = env->GetFieldID(bridge_class, "argValue", "Ljava/lang/String;");
     g_bridge_class = (jclass)env->NewGlobalRef(bridge_class);
     g_bridge_loader = env->NewGlobalRef(bridge_loader);
 
     if (!g_bridge_class || !g_bridge_backup || !g_bridge_is_static || !g_bridge_hook_id ||
         !g_bridge_hits || !g_bridge_last_arg || !g_bridge_last_return || !g_bridge_last_error ||
-        !g_bridge_target || !g_bridge_skip_original || !g_bridge_override_return || !g_bridge_arg_index || !g_bridge_arg_value) {
+        !g_bridge_target || !g_bridge_skip_original || !g_bridge_override_return || !g_bridge_arg_index || !g_bridge_arg_value || !g_bridge_ready || !g_bridge_active) {
         error = "AdhJavaHookBridge fields are missing";
         return nullptr;
     }
@@ -672,6 +677,7 @@ static void reset_hook_slot(JavaHookContext &hook) {
     hook.id = 0;
     hook.active = 0;
     hook.used = 0;
+    hook.patched = 0;
     hook.target_method = nullptr;
     hook.backup_method = nullptr;
     hook.bridge = nullptr;
@@ -739,6 +745,48 @@ extern "C" int adh_javahook_hook_method(JNIEnv *env, const char *class_name, con
         return fail_hook(problem.c_str());
     }
 
+    // Reactivate an already soft-unhooked LSPlant hook on the same signature instead of
+    // calling lsplant::Hook again (which cannot safely re-hook a patched method).
+    pthread_mutex_lock(&g_java_hooks_lock);
+    for (int i = 0; i < ADH_JAVA_MAX_HOOKS; i++) {
+        JavaHookContext &old = g_java_hooks[i];
+        if (i == slot || !old.patched || old.active != 0 || !old.bridge ||
+            old.target_name != signature) continue;
+        jobject old_bridge = old.bridge;
+        jstring empty = env->NewStringUTF("");
+        env->SetIntField(old_bridge, g_bridge_hook_id, hook_id);
+        env->SetIntField(old_bridge, g_bridge_hits, 0);
+        env->SetObjectField(old_bridge, g_bridge_last_arg, empty);
+        env->SetObjectField(old_bridge, g_bridge_last_return, empty);
+        env->SetObjectField(old_bridge, g_bridge_last_error, empty);
+        jstring target_string = env->NewStringUTF(signature.c_str());
+        env->SetObjectField(old_bridge, g_bridge_target, target_string);
+        env->SetBooleanField(old_bridge, g_bridge_is_static, is_static ? JNI_TRUE : JNI_FALSE);
+        env->SetBooleanField(old_bridge, g_bridge_skip_original, skip_original ? JNI_TRUE : JNI_FALSE);
+        jstring override_string = env->NewStringUTF(override_return ? override_return : "");
+        env->SetObjectField(old_bridge, g_bridge_override_return, override_string);
+        env->SetIntField(old_bridge, g_bridge_arg_index, arg_index);
+        jstring arg_value_string = env->NewStringUTF(arg_value ? arg_value : "");
+        env->SetObjectField(old_bridge, g_bridge_arg_value, arg_value_string);
+        env->SetBooleanField(old_bridge, g_bridge_ready, JNI_TRUE);
+        env->SetBooleanField(old_bridge, g_bridge_active, JNI_TRUE);
+        if (empty) env->DeleteLocalRef(empty);
+        if (target_string) env->DeleteLocalRef(target_string);
+        if (override_string) env->DeleteLocalRef(override_string);
+        if (arg_value_string) env->DeleteLocalRef(arg_value_string);
+
+        old.id = hook_id;
+        old.active = 1;
+        old.used = 1;
+        old.patched = 1;
+        old.is_static = is_static;
+        reset_hook_slot(g_java_hooks[slot]);   // release the newly reserved spare slot
+        pthread_mutex_unlock(&g_java_hooks_lock);
+        if (hook_id_out) *hook_id_out = hook_id;
+        LLOGI("java_hook reactivated id=%d target=%s", hook_id, signature.c_str());
+        return 1;
+    }
+    pthread_mutex_unlock(&g_java_hooks_lock);
     jobject bridge = create_bridge_object(env, hook_id, problem);
     if (!bridge) {
         env->DeleteLocalRef(target);
@@ -754,6 +802,7 @@ extern "C" int adh_javahook_hook_method(JNIEnv *env, const char *class_name, con
     env->SetObjectField(bridge, g_bridge_target, target_string);
     env->SetBooleanField(bridge, g_bridge_is_static, is_static ? JNI_TRUE : JNI_FALSE);
     env->SetObjectField(bridge, g_bridge_backup, nullptr);
+    env->SetBooleanField(bridge, g_bridge_active, JNI_FALSE);
     env->SetBooleanField(bridge, g_bridge_skip_original, skip_original ? JNI_TRUE : JNI_FALSE);
     jstring override_string = env->NewStringUTF(override_return ? override_return : "");
     env->SetObjectField(bridge, g_bridge_override_return, override_string);
@@ -779,25 +828,36 @@ extern "C" int adh_javahook_hook_method(JNIEnv *env, const char *class_name, con
         return fail_hook("lsplant::Hook failed (check logcat tag ADH_RT)");
     }
 
+    // The Method returned by LSPlant is LSPlant's own global ref; UnHook deletes it. Keep
+    // an ADH-owned ref for the bridge so in-flight callbacks never depend on that handle.
+    jobject adh_backup = env->NewGlobalRef(backup);
+    if (!adh_backup) {
+        (void)lsplant::UnHook(env, target);
+        env->DeleteLocalRef(target);
+        env->DeleteGlobalRef(bridge);
+        return fail_hook("failed to retain hook backup global reference");
+    }
+    env->SetObjectField(bridge, g_bridge_backup, adh_backup);
+    env->SetBooleanField(bridge, g_bridge_ready, JNI_TRUE);
+    env->SetBooleanField(bridge, g_bridge_active, JNI_TRUE);
+
     jobject target_global = env->NewGlobalRef(target);
     if (!target_global) {
         (void)lsplant::UnHook(env, target);
         env->DeleteLocalRef(target);
-        env->DeleteGlobalRef(backup);
-        env->DeleteGlobalRef(bridge);
         return fail_hook("failed to retain target method global reference");
     }
     env->DeleteLocalRef(target);
 
-    env->SetObjectField(bridge, g_bridge_backup, backup);
     pthread_mutex_lock(&g_java_hooks_lock);
     JavaHookContext &ctx = g_java_hooks[slot];
     ctx.id = hook_id;
     ctx.active = 1;
     ctx.used = 1;
     ctx.target_method = target_global;
-    ctx.backup_method = backup;
+    ctx.backup_method = adh_backup;
     ctx.bridge = bridge;
+    ctx.patched = 1;
     ctx.is_static = is_static;
     ctx.target_name = signature;
     pthread_mutex_unlock(&g_java_hooks_lock);
@@ -817,12 +877,14 @@ extern "C" int adh_javahook_unhook_id(JNIEnv *env, int hook_id, char *error, siz
     for (int i = 0; i < ADH_JAVA_MAX_HOOKS; i++) {
         JavaHookContext &hook = g_java_hooks[i];
         if (hook.active != 1 || (hook_id != 0 && hook.id != hook_id)) continue;
-        if (lsplant::UnHook(env, hook.target_method)) {
-            // LSPlant UnHook is not atomic with respect to in-flight callbacks. Keep the
-            // bridge/backup refs alive and retire this slot permanently instead of deleting
-            // objects a concurrent callback may still be using.
+        if (hook.bridge && g_bridge_active) {
+            // Soft-unhook: keep the LSPlant hook and all refs installed, but make the bridge
+            // forward straight to the backup. This avoids LSPlant UnHook races and lets a
+            // later install reactivate the same target without consuming a new slot.
+            env->SetBooleanField(hook.bridge, g_bridge_active, JNI_FALSE);
             hook.active = 0;
             hook.id = 0;
+            hook.patched = 1;
             removed++;
         } else {
             failed++;
@@ -844,10 +906,11 @@ extern "C" int adh_javahook_status_json(JNIEnv *env, char *out, size_t out_size)
     if (!out || !out_size) return 0;
     std::string hooks = "[";
     int active_count = 0;
+    int patched_count = 0;
     pthread_mutex_lock(&g_java_hooks_lock);
     for (int i = 0; i < ADH_JAVA_MAX_HOOKS; i++) {
         JavaHookContext &hook = g_java_hooks[i];
-        if (hook.active != 1) continue;
+        if (hook.active != 1) { if (hook.patched) patched_count++; continue; }
         int hits = 0;
         std::string last_arg, last_return, last_error;
         if (env && hook.bridge) {
@@ -871,6 +934,7 @@ extern "C" int adh_javahook_status_json(JNIEnv *env, char *out, size_t out_size)
                        ",\"backend\":\"lsplant\",\"version\":\"v6.4\",\"active\":" +
                        std::string(active_count ? "true" : "false") +
                        ",\"count\":" + std::to_string(active_count) +
+                       ",\"patched\":" + std::to_string(patched_count) +
                        ",\"hooks\":" + hooks + "}";
     snprintf(out, out_size, "%s", json.c_str());
     out[out_size - 1] = 0;

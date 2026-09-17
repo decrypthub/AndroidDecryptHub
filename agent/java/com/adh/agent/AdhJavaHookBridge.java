@@ -21,6 +21,8 @@ public final class AdhJavaHookBridge {
     public String lastReturn;
     public String lastError;
     public String target;
+    public volatile boolean ready;
+    public volatile boolean active;
     public boolean skipOriginal;
     public String overrideReturn;
     public int argIndex = -1;
@@ -34,14 +36,18 @@ public final class AdhJavaHookBridge {
         try {
             if (args != null && args.length > first) {
                 Object value = args[first];
-                lastArg = value == null ? "null" : String.valueOf(value);
+                lastArg = bounded(value);
             } else {
                 lastArg = "";
             }
         } catch (Throwable t) {
             lastArg = "<toString failed>";
         }
-        if (backup == null) {
+        if (!ready) {
+            long deadline = System.nanoTime() + 50_000_000L;
+            while (!ready && System.nanoTime() < deadline) Thread.yield();
+        }
+        if (!ready || backup == null) {
             lastError = "hook backup not ready";
             nativeReport(hookId, target, lastArg, "", lastError);
             throw new IllegalStateException(lastError);
@@ -50,7 +56,7 @@ public final class AdhJavaHookBridge {
         Object[] params = isStatic
             ? (args != null ? args : new Object[0])
             : (args != null && args.length > 1 ? Arrays.copyOfRange(args, 1, args.length) : new Object[0]);
-        if (argIndex >= 0 && argIndex < params.length) {
+        if (active && argIndex >= 0 && argIndex < params.length) {
             try {
                 Class<?>[] types = backup.getParameterTypes();
                 Object rewritten = convertReturn(argValue, types[argIndex]);
@@ -62,10 +68,10 @@ public final class AdhJavaHookBridge {
                 throw t;
             }
         }
-        if (skipOriginal) {
+        if (active && skipOriginal) {
             try {
                 Object replaced = convertReturn(overrideReturn, backup.getReturnType());
-                lastReturn = replaced == null ? "null" : String.valueOf(replaced);
+                lastReturn = bounded(replaced);
                 lastError = "";
                 nativeReport(hookId, target, lastArg, lastReturn, lastError);
                 return replaced;
@@ -77,7 +83,7 @@ public final class AdhJavaHookBridge {
         }
         try {
             Object result = backup.invoke(receiver, params);
-            lastReturn = result == null ? "null" : String.valueOf(result);
+            lastReturn = bounded(result);
             lastError = "";
             nativeReport(hookId, target, lastArg, lastReturn, lastError);
             return result;
@@ -93,6 +99,20 @@ public final class AdhJavaHookBridge {
         }
     }
 
+    private static final int MAX_VALUE_CHARS = 512;
+
+    private static String bounded(Object value) {
+        if (value == null) return "null";
+        if (value instanceof String) {
+            String text = (String) value;
+            return text.length() <= MAX_VALUE_CHARS ? text : text.substring(0, MAX_VALUE_CHARS) + "...";
+        }
+        if (value instanceof Number || value instanceof Boolean || value instanceof Character) {
+            String text = String.valueOf(value);
+            return text.length() <= MAX_VALUE_CHARS ? text : text.substring(0, MAX_VALUE_CHARS) + "...";
+        }
+        return value.getClass().getName() + "@" + Integer.toHexString(System.identityHashCode(value));
+    }
     private static long parseLongValue(String value) {
         String v = value == null ? "" : value.trim();
         return (v.startsWith("0x") || v.startsWith("0X"))

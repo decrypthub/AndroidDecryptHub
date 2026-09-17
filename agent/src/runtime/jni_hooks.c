@@ -21,7 +21,7 @@ typedef jint (*register_natives_fn)(JNIEnv *, jclass, const JNINativeMethod *, j
 static pthread_mutex_t g_jni_hook_lock = PTHREAD_MUTEX_INITIALIZER;
 static int g_jni_hook_installed = 0;
 static void *g_jni_hook_target = NULL;
-static register_natives_fn g_jni_hook_original = NULL;
+static void *g_jni_hook_original_ptr = NULL;
 static unsigned long long g_jni_hook_hits = 0;
 static int g_jni_hook_last_count = 0;
 static char g_jni_hook_error[256] = "";
@@ -36,7 +36,7 @@ static void jni_class_name(JNIEnv *env, jclass clazz, char *out, size_t out_size
     out[0] = 0;
     if (!env || !clazz) return;
     if ((*env)->PushLocalFrame(env, 8) != 0) return;
-    jclass class_class = (*env)->FindClass(env, "java/lang/Class");
+    jclass class_class = (*env)->GetObjectClass(env, clazz);
     jmethodID get_name = class_class
         ? (*env)->GetMethodID(env, class_class, "getName", "()Ljava/lang/String;") : NULL;
     jstring name = get_name ? (jstring)(*env)->CallObjectMethod(env, clazz, get_name) : NULL;
@@ -55,9 +55,11 @@ static void jni_class_name(JNIEnv *env, jclass clazz, char *out, size_t out_size
 
 static jint JNICALL register_natives_wrapper(JNIEnv *env, jclass clazz,
                                              const JNINativeMethod *methods, jint nMethods) {
-    if (g_jni_hook_in_wrapper || !g_jni_hook_original) {
-        return g_jni_hook_original ? g_jni_hook_original(env, clazz, methods, nMethods) : JNI_ERR;
-    }
+    register_natives_fn original =
+        (register_natives_fn)__atomic_load_n(&g_jni_hook_original_ptr, __ATOMIC_ACQUIRE);
+    if (!original) return JNI_ERR;
+    if (g_jni_hook_in_wrapper) return original(env, clazz, methods, nMethods);
+
     g_jni_hook_in_wrapper = 1;
     __atomic_add_fetch(&g_jni_hook_hits, 1, __ATOMIC_RELAXED);
     __atomic_store_n(&g_jni_hook_last_count, nMethods > 0 ? nMethods : 0, __ATOMIC_RELAXED);
@@ -82,8 +84,9 @@ static jint JNICALL register_natives_wrapper(JNIEnv *env, jclass clazz,
         }
     }
 
+    jint result = original(env, clazz, methods, nMethods);
     g_jni_hook_in_wrapper = 0;
-    return g_jni_hook_original(env, clazz, methods, nMethods);
+    return result;
 }
 
 static void send_jni_hook_result(int fd, const char *id, const char *action, int ok,
@@ -140,14 +143,18 @@ void adh_cmd_jni_hook(int fd, const char *id, const char *action) {
         }
         pthread_mutex_unlock(&g_jni_hook_lock);
 
+        // Publish the real function entry before patching so a concurrent RegisterNatives
+        // during the install window still reaches the original implementation.
+        __atomic_store_n(&g_jni_hook_original_ptr, (void *)target, __ATOMIC_RELEASE);
         void *original = NULL;
         if (!adh_inline_hook(target, (void *)register_natives_wrapper, &original) || !original) {
+            __atomic_store_n(&g_jni_hook_original_ptr, NULL, __ATOMIC_RELEASE);
             send_jni_hook_result(fd, id, action, 0, "inline hook installation failed");
             return;
         }
+        __atomic_store_n(&g_jni_hook_original_ptr, original, __ATOMIC_RELEASE);
         pthread_mutex_lock(&g_jni_hook_lock);
         g_jni_hook_target = target;
-        g_jni_hook_original = (register_natives_fn)original;
         g_jni_hook_installed = 1;
         g_jni_hook_hits = 0;
         g_jni_hook_last_count = 0;

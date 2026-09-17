@@ -56,9 +56,10 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
       catch (e) { return send(504, { error: (e as Error).message }); }
     } },    { method: 'POST', path: '/api/native/hook', handler: async () => {
       const body = await readBody(req);
-      const { session, action, hookId, mode, module, symbol, addr, skipOriginal, returnValue, argIndex, argValue } = JSON.parse(body || '{}');
+      const { session, action, hookId, mode, module, symbol, addr, skipOriginal, returnValue, argIndex, argValue, confirm } = JSON.parse(body || '{}');
       const sid = pickSid(session);
       if (!sid || !action) return send(400, { error: 'need session, action' });
+      if (mode === 'inline' && addr && confirm !== true) return send(400, { error: 'native_hook inline addr requires confirm:true' });
       try {
         const r = await sendCmd(sid, 'native_hook', {
           action, hookId: Number(hookId ?? 0), mode: mode ?? '', module: module ?? '', symbol: symbol ?? '', addr: addr ?? '',

@@ -37,6 +37,7 @@ struct NativeHookContext {
     uint64_t return_value;
     int arg_index;
     uint64_t arg_value;
+    int patched;             // inline stub remains installed (soft unhook / reactivation)
 };
 
 static NativeHookContext g_native_hooks[ADH_NATIVE_MAX_HOOKS];
@@ -207,6 +208,7 @@ static void reset_context(NativeHookContext &ctx) {
     ctx.return_value = 0;
     ctx.arg_index = -1;
     ctx.arg_value = 0;
+    ctx.patched = 0;
 }
 
 static void copy_cstr(char *dst, size_t size, const char *src) {
@@ -252,18 +254,16 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
         // Prefer the relocation slot's current resolved value: imported calls (open/access/
         // ptrace/...) are not defined by the caller module, so adh_resolve_sym alone cannot
         // recover the original function pointer. Fall back to the module-defined symbol.
+        void *slot_addr = nullptr;
         void *slot_value = nullptr;
-        if (!adh_got_slot_value(module, symbol, nullptr, &slot_value) || !slot_value) {
-            slot_value = adh_resolve_sym(module, symbol);
+        int replaced = adh_got_replace_by_name_ex(module, symbol, stub, &slot_addr, &slot_value);
+        if (replaced != 1 || !slot_addr || !slot_value) {
+            g_native_hook_originals[slot] = nullptr;
+            return fail(replaced == 0 ? "GOT target symbol/slot not found"
+                                      : "GOT target matched multiple slots; use an exact module path");
         }
         target = slot_value;
-        if (!target) return fail("GOT target symbol not found or slot unresolved");
         g_native_hook_originals[slot] = target;
-        int replaced = adh_got_replace_by_name(module, symbol, stub);
-        if (replaced <= 0) {
-            g_native_hook_originals[slot] = nullptr;
-            return fail("GOT replacement failed");
-        }
         original = target;
         hook_mode = 0;
     } else if (strcmp(mode, "inline") == 0) {
@@ -273,11 +273,52 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
             target = adh_resolve_sym(module, symbol);
         }
         if (!target) return fail("inline hook needs address or module+symbol");
+        if (!adh_addr_is_executable(target)) return fail("inline target is not in an executable mapping");
+        // Reuse an already-installed stub before touching Dobby. Re-hooking a patched
+        // function is not reliable across Dobby versions.
+        pthread_mutex_lock(&g_native_hooks_lock);
+        for (int i = 0; i < ADH_NATIVE_MAX_HOOKS; i++) {
+            NativeHookContext &old = g_native_hooks[i];
+            if (i == slot || old.active != 0 || old.target != target || old.mode != 1 || !old.replacement) continue;
+            old.id = id;
+            old.skip_original = skip_original ? 1 : 0;
+            old.return_set = return_set ? 1 : 0;
+            old.return_value = return_value;
+            old.arg_index = arg_index;
+            old.arg_value = arg_value;
+            copy_cstr(old.module, sizeof(old.module), module);
+            copy_cstr(old.symbol, sizeof(old.symbol), symbol);
+            old.address = (uintptr_t)target;
+            g_native_hook_hits[i].store(0ULL, std::memory_order_relaxed);
+            __atomic_store_n(&old.active, 1, __ATOMIC_RELEASE);
+            reset_context(g_native_hooks[slot]);
+            g_native_hooks[slot].used = 0;
+            pthread_mutex_unlock(&g_native_hooks_lock);
+            if (hook_id_out) *hook_id_out = id;
+            LOGI("native_hook reactivated id=%d target=%p", id, target);
+            return 1;
+        }
+        pthread_mutex_unlock(&g_native_hooks_lock);
         if (!adh_inline_hook(target, stub, &original)) return fail("inline hook installation failed");
         g_native_hook_originals[slot] = original;
         hook_mode = 1;
     } else {
         return fail("mode must be got or inline");
+    }
+
+    // Reject a second hook on the same resolved target. Duplicate Dobby patches and
+    // GOT-original bookkeeping both become ambiguous otherwise.
+    int duplicate_id = 0;
+    pthread_mutex_lock(&g_native_hooks_lock);
+    for (int i = 0; i < ADH_NATIVE_MAX_HOOKS; i++) {
+        if (i == slot || g_native_hooks[i].active != 1 || !g_native_hooks[i].target) continue;
+        if (g_native_hooks[i].target == target) { duplicate_id = g_native_hooks[i].id; break; }
+    }
+    pthread_mutex_unlock(&g_native_hooks_lock);
+    if (duplicate_id) {
+        char duplicate_error[96];
+        snprintf(duplicate_error, sizeof(duplicate_error), "target already hooked by id %d", duplicate_id);
+        return fail(duplicate_error);
     }
 
     pthread_mutex_lock(&g_native_hooks_lock);
@@ -288,7 +329,6 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
     ctx.return_value = return_value;
     ctx.arg_index = arg_index;
     ctx.arg_value = arg_value;
-    __atomic_store_n(&ctx.active, 1, __ATOMIC_RELEASE);
     ctx.mode = hook_mode;
     ctx.target = target;
     ctx.original = original;
@@ -296,6 +336,8 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
     copy_cstr(ctx.module, sizeof(ctx.module), module);
     copy_cstr(ctx.symbol, sizeof(ctx.symbol), symbol);
     ctx.address = (uintptr_t)target;
+    ctx.patched = (hook_mode == 1) ? 1 : 0;
+    __atomic_store_n(&ctx.active, 1, __ATOMIC_RELEASE);
     pthread_mutex_unlock(&g_native_hooks_lock);
     g_native_hook_hits[slot].store(0ULL, std::memory_order_relaxed);
     if (hook_id_out) *hook_id_out = id;
@@ -310,23 +352,35 @@ extern "C" int adh_native_hook_unhook(int hook_id, char *error, size_t error_siz
         pthread_mutex_unlock(&g_native_hooks_lock);
         return (set_error(error, error_size, "no native hook with id %d", hook_id), 0);
     }
-    int ok = 0;
+    int slot = (int)(ctx - g_native_hooks);
     if (ctx->mode == 0) {
         int restored = adh_got_replace(ctx->module, ctx->replacement, ctx->original);
-        ok = restored > 0;
-    } else {
-        ok = adh_inline_unhook(ctx->target) != 0;
-    }
-    if (!ok) {
+        if (restored <= 0) {
+            pthread_mutex_unlock(&g_native_hooks_lock);
+            return (set_error(error, error_size, "native unhook failed id=%d", hook_id), 0);
+        }
+        g_native_hook_hits[slot].store(0ULL, std::memory_order_relaxed);
+        __atomic_store_n(&ctx->active, 0, __ATOMIC_RELEASE);
+        reset_context(*ctx);
+        ctx->used = 0;   // GOT restore is a real, safe unhook: free the slot
         pthread_mutex_unlock(&g_native_hooks_lock);
-        return (set_error(error, error_size, "native unhook failed id=%d", hook_id), 0);
+        LOGI("native_hook removed id=%d (got)", hook_id);
+        return 1;
     }
-    int slot = (int)(ctx - g_native_hooks);
+    // Inline soft-unhook: leave the already-installed stub in place, deactivate it, and
+    // keep the slot patched for safe reactivation. This avoids freeing a trampoline that a
+    // concurrent target thread may still be executing.
+    if (!ctx->patched || !ctx->target || !ctx->replacement) {
+        pthread_mutex_unlock(&g_native_hooks_lock);
+        return (set_error(error, error_size, "inline patch state unavailable for id=%d", hook_id), 0);
+    }
     g_native_hook_hits[slot].store(0ULL, std::memory_order_relaxed);
     __atomic_store_n(&ctx->active, 0, __ATOMIC_RELEASE);
-    reset_context(*ctx);
+    ctx->skip_original = 0;
+    ctx->return_set = 0;
+    ctx->arg_index = -1;
     pthread_mutex_unlock(&g_native_hooks_lock);
-    LOGI("native_hook removed id=%d", hook_id);
+    LOGI("native_hook soft-unhooked id=%d target=%p", hook_id, ctx->target);
     return 1;
 }
 
@@ -334,10 +388,11 @@ extern "C" int adh_native_hook_status_json(char *out, size_t out_size) {
     if (!out || !out_size) return 0;
     std::string hooks = "[";
     int count = 0;
+    int patched_count = 0;
     pthread_mutex_lock(&g_native_hooks_lock);
     for (int i = 0; i < ADH_NATIVE_MAX_HOOKS; i++) {
         NativeHookContext &ctx = g_native_hooks[i];
-        if (ctx.active != 1) continue;
+        if (ctx.active != 1) { if (ctx.patched) patched_count++; continue; }
         if (count) hooks += ",";
         unsigned long long hits = g_native_hook_hits[i].load(std::memory_order_relaxed);
         char item[768];
@@ -356,7 +411,7 @@ extern "C" int adh_native_hook_status_json(char *out, size_t out_size) {
     }
     pthread_mutex_unlock(&g_native_hooks_lock);
     hooks += "]";
-    std::string json = "{\"count\":" + std::to_string(count) + ",\"hooks\":" + hooks + "}";
+    std::string json = "{\"count\":" + std::to_string(count) + ",\"patched\":" + std::to_string(patched_count) + ",\"hooks\":" + hooks + "}";
     snprintf(out, out_size, "%s", json.c_str());
     out[out_size - 1] = 0;
     return 1;

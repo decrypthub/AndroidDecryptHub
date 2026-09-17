@@ -249,10 +249,16 @@ void adh_cmd_native_call(int fd, const char *id, const char *module, const char 
     size_t arglen = 0;
     argsj[0] = 0;
     for (int i = 0; i < argc; i++) {
-        arglen += (size_t)snprintf(argsj + arglen, sizeof(argsj) - arglen, "%s\"0x%llx\"",
-                                   i ? "," : "", args[i]);
-        if (arglen >= sizeof(argsj)) break;
+        if (arglen + 1 >= sizeof(argsj)) { arglen = sizeof(argsj) - 1; break; }
+        int written = snprintf(argsj + arglen, sizeof(argsj) - arglen, "%s\"0x%llx\"",
+                               i ? "," : "", args[i]);
+        if (written < 0 || (size_t)written >= sizeof(argsj) - arglen) {
+            arglen = sizeof(argsj) - 1;
+            break;
+        }
+        arglen += (size_t)written;
     }
+    argsj[arglen] = 0;
     char out[1200];
     snprintf(out, sizeof(out),
              "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"native_call\",\"ok\":true,"

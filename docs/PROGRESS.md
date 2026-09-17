@@ -42,6 +42,14 @@
 - [x] **v4.15 native hook 改参 / 换返回值 / 跳过原函数（2026-09-18，真机 PASS）**：`native_hook` 新增 `argIndex/argValue/skipOriginal/returnValue`。固定 arm64 stub 现在把 `adh_native_hook_record` 的返回值作为 skip 标志：stub 先恢复被改写的 x0-x7，若 skip 则直接 `ret`，否则跳原 trampoline；事件保留原始入参快照并附加 rewrite/skip 字段，status 同步暴露配置。
       · 真机 `aa165071` PASS：`adh_add_target(a,b)=(a+b)*2` 上先用 `argIndex:0,argValue:7` 把 `1,2` 改成 `7,2 -> 18`；再用 `skipOriginal:true,returnValue:0x54` 跳过原函数并返回 `84`；status、unhook、进程存活均正确。`tools/verify_v55_native_rewrite.sh` 覆盖两种路径。v4.6 native hook 验收也修成遍历历史事件，复跑 PASS。
       · 当前边界：native 参数/返回值以 raw 64-bit register 处理，覆盖 x0-x7 整数/指针与 x0 返回值；浮点/向量参数、栈上传参和 128-bit 返回值仍显式不支持。
+- [x] **v4.16 评审后稳定性加固（2026-09-18，真机 PASS）**：两位独立 subagent 评审后修复了本轮 hook 代码的 P0/P1：
+      · GOT：新增 exact-module + `adh_got_replace_by_name_ex`，native GOT hook 的 `original` 现在直接取“实际被替换槽的原值”，不再独立解析另一个槽；模块名改为 basename 精确匹配，多槽/多模块命中直接 fail-loud。
+      · native_call：参数序列化改为显式剩余空间检查，修掉 `snprintf` would-be-length 造成的 size_t 下溢越界写。
+      · JNI RegisterNatives：安装前先发布真实函数入口，安装窗口内并发注册不再返回 JNI_ERR；original 指针用 `__atomic` acquire/release；wrapper 的 re-entrancy 标志改为原函数返回后再清；类名改用 `GetObjectClass`，避免 hook 内触发 FindClass/类加载。
+      · native/Java 生命周期：unhook 默认改为 **软卸载**（保留已安装 stub/LSPlant hook，只停用配置），同 target/signature 再次 install 直接 reactivate，不再对已 patched 函数二次 DobbyHook / LSPlant Hook，也不再 `DobbyDestroy` 释放正在使用的 trampoline。status 增加 `patched` 计数。
+      · 安全/输入：inline 绝对地址必须 `confirm:true`，agent 校验目标位于 executable mapping；active 发布顺序移到所有字段之后；重复 target fail-loud；Java bridge 增加 `ready` 安装窗口自旋、ADH 自有 backup global ref、事件字符串 512 字符上限。
+      · 真机 `aa165071` PASS：native 与 Java 同一目标各连续 24 次 install/unhook 后行为恢复、agent 存活（`tools/verify_v56_hook_stress.sh`）；v4.3/v4.6/v4.12–v4.15 全部复跑 PASS。
+      · 已知边界：软卸载会在目标里保留 stub/LSPlant patch（去特征场景需要后续 hard-unhook/quiesce 方案）；JNI_OnLoad 仍未覆盖；Java/native 的唯一目标数仍受 16 槽上限约束。
 - [x] **LSPlant v6.4 可选静态打包（2026-09-17，构建 PASS / 设备 runtime probe 待部署）**：把历史半成品重新接回 agent，但按当前红线收敛为“显式探测、默认不初始化”。新增 `tools/fetch_lsplant.sh`（v6.4 + dex_builder + parallel_hashmap；带 ColorOS/A15 `GetMethodShorty` 反射兜底和 deopt 入口缺失容忍补丁）、`agent/src/hook/java_lsplant.{h,cpp}` C-ABI shim，以及 CMake 可选静态链接；LSPlant 复用现有 Dobby 静态 inline 后端，不新增运行时 `.so`。
       · 新增 agent 命令与 MCP 工具 `javahook_probe`，仅报告 `available/initOk/backend/version/error`；不会在 `JNI_OnLoad` 自动初始化，也不安装任何 Java hook。设备 runtime probe 脚本为 `tools/verify_v42_lsplant.sh`（未部署新 agent 前明确 SKIP，不加入全量回归）。
       · 已验证：`tools/build_agent.sh` 编译并链接 LSPlant/DexBuilder 成功（release `.so` 322,208 -> 425,752 B），`tools/verify_v26_footprint.sh` PASS（无 `.symtab`/`.debug`、仍仅 3 个动态导出、无 RWX LOAD），`daemon/test/smoke.ts` 在 LSPlant 版 daemon 上 PASS，MCP 工具数 52 -> 53；真机注入/初始化仍未验证，需显式安装/刷入新 agent 后再跑 v4.2。

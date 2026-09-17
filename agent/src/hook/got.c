@@ -336,10 +336,24 @@ int adh_got_slot_value(const char *module, const char *symbol, void **slot_out, 
     if (value_out) *value_out = *(void **)slot;
     return 1;
 }
+// Exact module-name matching: full path compares exactly; a bare basename compares the
+// mapping's basename exactly (never a substring, so "libc" does not match "libcrypto.so").
+static int module_path_matches(const char *path, const char *wanted) {
+    if (!path || !wanted || !wanted[0]) return 0;
+    if (strchr(wanted, '/')) return strcmp(path, wanted) == 0;
+    const char *bn = strrchr(path, '/');
+    bn = bn ? bn + 1 : path;
+    return strcmp(bn, wanted) == 0;
+}
+
 // Same module-scan shape as got_replace, but resolves the slot by symbol name instead of by
-// value — works for symbols whose PLT slot hasn't been lazily bound yet. One slot per
-// matching module (mirrors got_replace's one-slot-per-module rule).
-int adh_got_replace_by_name(const char *module_substr, const char *sym_name, void *wrapper) {
+// value — works for symbols whose PLT slot hasn't been lazily bound yet. Returns the number
+// of matching modules actually replaced; the first replaced slot's address and previous value
+// are returned through slot_out/value_out so callers can keep a matching trampoline.
+int adh_got_replace_by_name_ex(const char *module_name, const char *sym_name, void *wrapper,
+                               void **slot_out, void **value_out) {
+    if (slot_out) *slot_out = NULL;
+    if (value_out) *value_out = NULL;
     FILE *m = fopen("/proc/self/maps", "r");
     if (!m) return -1;
     char line[512];
@@ -353,18 +367,22 @@ int adh_got_replace_by_name(const char *module_substr, const char *sym_name, voi
         if (nf < 6) continue;
         char *pp = path; while (*pp == ' ') pp++;
         if (pp[0] != '/') continue;
-        if (!strstr(pp, module_substr)) continue;
+        if (!module_path_matches(pp, module_name)) continue;
         if (strcmp(pp, cur_mod) == 0) continue;   // already handled this module (multiple mappings per .so)
         snprintf(cur_mod, sizeof(cur_mod), "%s", pp);
-        const char *bn = strrchr(cur_mod, '/'); bn = bn ? bn + 1 : cur_mod;
-        unsigned long long mb = module_base_of(bn);
+        unsigned long long mb = module_base_of(cur_mod);
         if (!mb) continue;
         void *slot_addr = find_reloc_slot_by_symbol(mb, sym_name);
         if (!slot_addr) continue;
         char permsOf[8]; perms_of_addr((unsigned long long)slot_addr, permsOf, sizeof(permsOf));
         if (permsOf[0] == '?') continue;   // slot address not actually mapped — refuse to touch it
         int orig_prot = perms_to_prot(permsOf);
+        void *old_value = *(void **)slot_addr;
         if (got_write_slot((void **)slot_addr, wrapper, orig_prot, pagesz)) {
+            if (replaced == 0) {
+                if (slot_out) *slot_out = slot_addr;
+                if (value_out) *value_out = old_value;
+            }
             replaced++;
             g_dbg_slot = (unsigned long long)slot_addr;
             snprintf(g_dbg_orig_perms, sizeof(g_dbg_orig_perms), "%s", permsOf);
@@ -372,6 +390,10 @@ int adh_got_replace_by_name(const char *module_substr, const char *sym_name, voi
     }
     fclose(m);
     return replaced;
+}
+
+int adh_got_replace_by_name(const char *module_name, const char *sym_name, void *wrapper) {
+    return adh_got_replace_by_name_ex(module_name, sym_name, wrapper, NULL, NULL);
 }
 
 // --- self-test target: hook the agent's own close() (plain syscall wrapper) ---
@@ -501,6 +523,12 @@ static void *resolve_sym_ex(const char *mod_substr, const char *symbol, int pref
 void *adh_resolve_sym(const char *mod, const char *sym) { return resolve_sym_ex(mod, sym, 0); }
 void *adh_resolve_sym_prefix(const char *mod, const char *pre) { return resolve_sym_ex(mod, pre, 1); }
 
+int adh_addr_is_executable(void *addr) {
+    if (!addr) return 0;
+    char perms[8];
+    perms_of_addr((unsigned long long)(uintptr_t)addr, perms, sizeof(perms));
+    return perms[0] != '?' && perms[2] == 'x';
+}
 // Enumerate relocation/GOT entries for one loaded module. Plain Elf64_RELA/JMPREL entries are
 // emitted with slot/symbol/current value; Android packed RELA is reported explicitly but not
 // expanded yet (fail-loud rather than pretending the table is complete).
