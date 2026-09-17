@@ -49,6 +49,10 @@ export interface AgentSession {
   online: boolean;
   mapsCount: number;
   regionsSample: MapsRegion[];
+  // Last capture_start/capture_stop reply from the agent (per-hook install counters:
+  // evp/digest/hmac/pkey/aead/file/sys). Without it "capture_start returned ok" is the
+  // only visible signal for whether the persistent hooks actually installed.
+  captureHooks?: Record<string, any>;
 }
 export type AgentMsg =
   | ({ t: 'hello' } & Partial<AgentSession>)

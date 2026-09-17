@@ -91,7 +91,14 @@ void adh_perms_of_addr(void *addr, char *out, int out_size) {
 // slots (.rela.plt + .rela.dyn) so we only ever patch genuine relocation entries.
 #define RSET_MAX 262144   // per-module reloc-slot cap (~2 MiB transient); truncation -> fallback
 
-static unsigned long long module_base_of(const char *basename) {
+// Module base lookup. Accepts a basename ("libadhdetect.so") or a full /proc/self/maps
+// path: the reloc scan below feeds it a maps path while the command layer passes a bare
+// module name, and both must resolve to the same module (regression: passing a path made
+// the by-name GOT replacement silently match nothing -> "hooked:0" with ok:true).
+static unsigned long long module_base_of(const char *name) {
+    if (!name || !name[0]) return 0;
+    const char *slash = strrchr(name, '/');
+    const char *wanted = slash ? slash + 1 : name;
     unsigned long long base = 0;
     FILE *m = fopen("/proc/self/maps", "r");
     if (!m) return 0;
@@ -102,7 +109,7 @@ static unsigned long long module_base_of(const char *basename) {
         if (sscanf(line, "%31[0-9a-f]-%31[0-9a-f] %7s %31s %15s %llu %399[^\n]", sa, ea, perms, off, dev, &inode, path) < 6) continue;
         char *pp = path; while (*pp == ' ') pp++;
         const char *bn = strrchr(pp, '/'); bn = bn ? bn + 1 : pp;
-        if (strcmp(bn, basename) != 0) continue;
+        if (strcmp(bn, wanted) != 0) continue;
         if (strcmp(off, "0") && strcmp(off, "00000000")) continue;   // mapping at file offset 0
         unsigned long long s = strtoull(sa, NULL, 16);
         if (base == 0 || s < base) base = s;
@@ -320,6 +327,7 @@ static void *find_reloc_slot_by_symbol(unsigned long long base, const char *sym_
         else if (d[0] == 6)  symtab = d[1];   // DT_SYMTAB
         else if (d[0] == 5)  strtab = d[1];   // DT_STRTAB
         else if (d[0] == 0x60000011ULL) android_rela = d[1];    // DT_ANDROID_RELA
+        else if (d[0] == 0x60000012ULL) android_relasz = d[1];  // DT_ANDROID_RELASZ
     }
     if (relaent == 0) relaent = 24;
     if (!symtab || !strtab) return NULL;
@@ -600,7 +608,7 @@ int adh_got_enum_json(const char *module, const char *filter, char **out_json,
         return 0;
     }
     unsigned long long jmprel = 0, pltrelsz = 0, rela = 0, relasz = 0, relaent = 24;
-    unsigned long long symtab = 0, strtab = 0, android_rela = 0;
+    unsigned long long symtab = 0, strtab = 0, android_rela = 0, android_relasz = 0;
     unsigned long long *d = (unsigned long long *)(base + dyn_vaddr);
     for (; d[0] != 0; d += 2) {
         if (d[0] == 23) jmprel = d[1];             // DT_JMPREL
@@ -611,6 +619,7 @@ int adh_got_enum_json(const char *module, const char *filter, char **out_json,
         else if (d[0] == 6) symtab = d[1];          // DT_SYMTAB
         else if (d[0] == 5) strtab = d[1];          // DT_STRTAB
         else if (d[0] == 0x60000011ULL) android_rela = d[1];    // DT_ANDROID_RELA
+        else if (d[0] == 0x60000012ULL) android_relasz = d[1];  // DT_ANDROID_RELASZ
     }
     if (!symtab || !strtab || (!jmprel && !rela)) {
         snprintf(error, error_size, "dynamic relocation tables unavailable");

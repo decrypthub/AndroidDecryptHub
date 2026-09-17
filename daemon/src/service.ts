@@ -211,19 +211,28 @@ export async function dumpRegion(sid: string, addrHex: string, size: number, tag
 // The one-shot probe endpoints install-and-restore their OWN hooks on the same GOT slot
 // the continuous capture uses. Suspend continuous capture around them (pause the drain +
 // uninstall the persistent hooks) so the probe sees a clean slot, then resume.
+// Remember the agent's per-hook install counters reported by capture_start/capture_stop.
+// Fail-loud visibility: the persistent-hook path used to log only "capture_start <sid>", so a
+// half-installed hook set (e.g. evp=0) looked identical to a healthy one.
+function recordCaptureHooks(sid: string, r: any) {
+  if (!r || (r.op !== 'capture_start' && r.op !== 'capture_stop')) return;
+  const s = sessions.get(sid);
+  if (s) s.captureHooks = r;
+}
+
 export async function withCaptureSuspended<T>(sid: string, fn: () => Promise<T>): Promise<T> {
   const wasOn = captureTimers.has(sid);
   if (wasOn) {
     capturePaused.add(sid);
     // fail-loud: if stop fails the probe patches a slot the persistent hook still holds — visible, not silent
-    try { await sendCmd(sid, 'capture_stop', {}, 8_000); }
+    try { recordCaptureHooks(sid, await sendCmd(sid, 'capture_stop', {}, 8_000)); }
     catch (e) { log(`[capture] suspend: capture_stop ${sid} 失败 — 探针将在持久 hook 仍占的槽上安装:`, (e as Error).message); }
   }
   try { return await fn(); }
   finally {
     if (wasOn) {
       // fail-loud: a failed resume leaves continuous capture dead — must not vanish silently
-      try { await sendCmd(sid, 'capture_start', captureModules(), 8_000); }
+      try { recordCaptureHooks(sid, await sendCmd(sid, 'capture_start', captureModules(), 8_000)); }
       catch (e) { log(`[capture] resume: capture_start ${sid} 失败 — 持续捕获已停，需手动重启:`, (e as Error).message); }
       capturePaused.delete(sid);
     }
@@ -237,7 +246,7 @@ export async function applyCaptureEnabled() {
     const cmd = settings.capture.enabled ? 'capture_start' : 'capture_stop';
     const args = settings.capture.enabled ? captureModules() : {};
     // Fail loud: a live session that rejects the toggle means the panel and the target disagree.
-    try { await sendCmd(s.sessionId, cmd, args, 8_000); }
+    try { recordCaptureHooks(s.sessionId, await sendCmd(s.sessionId, cmd, args, 8_000)); }
     catch (e) { log(`[settings] ${cmd} 会话 ${s.sessionId} 失败:`, (e as Error).message); }
   }
 }
@@ -249,7 +258,7 @@ let capSeq = 0;   // service-local — ++'d here; can't reassign an imported bin
 export function startCaptureLoop(sid: string) {
   setTimeout(async () => {
     if (settings.capture.enabled) {
-      try { await sendCmd(sid, 'capture_start', captureModules(), 15_000); log(`capture_start ${sid}`); } catch (e) { log('capture_start failed', (e as Error).message); }
+      try { recordCaptureHooks(sid, await sendCmd(sid, 'capture_start', captureModules(), 15_000)); log(`capture_start ${sid}`); } catch (e) { log('capture_start failed', (e as Error).message); }
     }
     if (settings.capture.autoDumpDex) autoDumpDex(sid).catch((e) => log(`[capture] autoDumpDex ${sid} 失败:`, (e as Error).message));
     if (captureTimers.has(sid)) return;
