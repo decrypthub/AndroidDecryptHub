@@ -23,6 +23,8 @@ public final class AdhJavaHookBridge {
     public String target;
     public boolean skipOriginal;
     public String overrideReturn;
+    public int argIndex = -1;
+    public String argValue;
 
     private static native void nativeReport(int hookId, String target, String arg, String ret, String error);
 
@@ -48,6 +50,18 @@ public final class AdhJavaHookBridge {
         Object[] params = isStatic
             ? (args != null ? args : new Object[0])
             : (args != null && args.length > 1 ? Arrays.copyOfRange(args, 1, args.length) : new Object[0]);
+        if (argIndex >= 0 && argIndex < params.length) {
+            try {
+                Class<?>[] types = backup.getParameterTypes();
+                Object rewritten = convertReturn(argValue, types[argIndex]);
+                params[argIndex] = rewritten;
+                lastArg = rewritten == null ? "null" : String.valueOf(rewritten);
+            } catch (Throwable t) {
+                lastError = "argument rewrite failed: " + t;
+                nativeReport(hookId, target, lastArg, "", lastError);
+                throw t;
+            }
+        }
         if (skipOriginal) {
             try {
                 Object replaced = convertReturn(overrideReturn, backup.getReturnType());
