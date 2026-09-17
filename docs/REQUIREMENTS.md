@@ -1528,6 +1528,7 @@ Host ADH Daemon / MCP  →  自动化 TCP 8763（loopback + adb reverse）  → 
 | `phone_act` (ime) | 对聚焦控件执行 IME 动作键（search/done/go/send/next/previous）；应用忽略自家提交按钮时用它，Android 11 以下或无输入框时明确失败 |
 | `phone_wait_any` | 多个条件任一命中即成功（`wait_any` 步骤同样可用）：应用可能从不同状态恢复时用它，避免配方只认一种状态；都不命中时 fail-loud（`wait_any_timeout` + 最后失败原因） |
 | `phone_task` onlyIf | 步骤级守卫：`onlyIf` 选择器不存在时该步标记 `skipped:true` 而非失败，配方可表达「仅当这个控件在时才点它」 |
+| `phone_skill` (save) | 保存前静态预检：对未建立应用上下文（无 app / wait activePackage / wait_any 状态条件）的 act/observe/find 步骤按索引返回 `warnings`，不阻止保存 |
 | `phone_skill` |  保存 / 列出 / 运行 / 删除命名手机配方（skills）：步骤受校验（仅 observe/find/wait/act/app/device，≤30 步）、不可嵌套、无 shell；配方可声明 `params`（≤10）并由步骤以 `{{input.<name>}}` 引用，运行时用 `inputs` 传值、`defaults` 兜底，缺参数 fail-loud；运行复用 `phone_task` 的执行器、allowlist 与重试语义 |
 
 ### 31.3 兜底规则
