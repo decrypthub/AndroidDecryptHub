@@ -65,7 +65,7 @@
 | 设备侧后端（Zygisk/Manager） | v27_zygisk, verify_v32_backend_control | scope 往返；Device Daemon 驱动框架状态/作用域并**恢复测试前状态** |
 | 可选后端（Gadget/Xposed/eCapture） | v30, v31, v32, v34 | 官方二进制 + sha256 固定；Java bridge hook 真跑通；eCapture 抓到请求+响应明文 |
 | 控制面 / MCP / Web | v10_mcp, v10_webui, v10_export, v10_events, v19_settings, v33_backends, v35_sessions | MCP 51 工具可调（自动化关闭时隐藏 phone_*）、Web UI 可用、后端矩阵、会话清理与选择器修复 |
-| 可选手机自动化（模块 X） | v36_automation | 默认关闭；控件树/截图兜底（受保护窗口 fail-loud）、find/wait/selector/ref/坐标/scroll/app/global 动作、进程内信号等待（事件/捕获 + 游标 + UTF-8 明文）、agent 断线自愈重连、设备侧命令硬超时（卡死不再拖垮通道）、set_text 真输入并提交、通知读取（opt-in listener）、命名配方（phone_skill）、双层包名 allowlist；协议 v7 一键启停 + opt-in 自动修复（真机：抹掉服务后 ≤20s 自愈）；协议 v8 屏幕状态/唤醒/非安全解锁（真机状态往返 PASS）；协议 v9 受限根输入注入（tap/swipe）+ `changed` 窗口签名判定 + 手势被吞时自动 root 重试（真机 PASS）；root `open` 真机不弹 OEM 确认框（`via=device-daemon`）；随新模块部署（当前产物 v0.3.8，已构建+推送至 /sdcard，尚未刷入；v4.0 验收脚本已并入全量回归） |
+| 可选手机自动化（模块 X） | v36_automation | 默认关闭；控件树/截图兜底（受保护窗口 fail-loud）、find/wait/selector/ref/坐标/scroll/app/global 动作、进程内信号等待（事件/捕获 + 游标 + UTF-8 明文）、agent 断线自愈重连、设备侧命令硬超时（卡死不再拖垮通道）、set_text 真输入并提交、通知读取（opt-in listener）、命名配方（phone_skill）、双层包名 allowlist；协议 v7 一键启停 + opt-in 自动修复（真机：抹掉服务后 ≤20s 自愈）；协议 v8 屏幕状态/唤醒/非安全解锁（真机状态往返 PASS）；协议 v9 受限根输入注入（tap/swipe）+ `changed` 窗口签名判定 + 手势被吞时自动 root 重试（真机 PASS）；root `open` 真机不弹 OEM 确认框（`via=device-daemon`）；随新模块部署（当前产物 v0.3.9，已构建+推送至 /sdcard，尚未刷入；v4.0 验收脚本已并入全量回归） |
 | 注入足迹 | v26_footprint | release agent 剥离 + 仅 3 个动态导出 + 无 RWX LOAD |
 | 注入单实例收敛 | 真机混态手工验证（Zygisk + self-load） | `dl_iterate_phdr` 首载 copy 独占 bootstrap；同 PID 不再出现第二个 `jni_onload` 会话；winner copy 迟绑定 reporter，v24 rich Java 仍 PASS |
 
