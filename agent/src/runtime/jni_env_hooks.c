@@ -63,11 +63,23 @@ enum {
 
     ENV_SLOT_CallObjectMethod = ENV_FIXED_SLOTS,
     ENV_SLOT_CallBooleanMethod = ENV_SLOT_CallObjectMethod + 3,
-    ENV_SLOT_CallIntMethod = ENV_SLOT_CallBooleanMethod + 3,
+    ENV_SLOT_CallByteMethod = ENV_SLOT_CallBooleanMethod + 3,
+    ENV_SLOT_CallCharMethod = ENV_SLOT_CallByteMethod + 3,
+    ENV_SLOT_CallShortMethod = ENV_SLOT_CallCharMethod + 3,
+    ENV_SLOT_CallIntMethod = ENV_SLOT_CallShortMethod + 3,
     ENV_SLOT_CallLongMethod = ENV_SLOT_CallIntMethod + 3,
-    ENV_SLOT_CallStaticObjectMethod = ENV_SLOT_CallLongMethod + 3,
-    ENV_SLOT_CallStaticIntMethod = ENV_SLOT_CallStaticObjectMethod + 3,
-    ENV_SLOT_NewObject = ENV_SLOT_CallStaticIntMethod + 3,
+    ENV_SLOT_CallFloatMethod = ENV_SLOT_CallLongMethod + 3,
+    ENV_SLOT_CallDoubleMethod = ENV_SLOT_CallFloatMethod + 3,
+    ENV_SLOT_CallStaticObjectMethod = ENV_SLOT_CallDoubleMethod + 3,
+    ENV_SLOT_CallStaticBooleanMethod = ENV_SLOT_CallStaticObjectMethod + 3,
+    ENV_SLOT_CallStaticByteMethod = ENV_SLOT_CallStaticBooleanMethod + 3,
+    ENV_SLOT_CallStaticCharMethod = ENV_SLOT_CallStaticByteMethod + 3,
+    ENV_SLOT_CallStaticShortMethod = ENV_SLOT_CallStaticCharMethod + 3,
+    ENV_SLOT_CallStaticIntMethod = ENV_SLOT_CallStaticShortMethod + 3,
+    ENV_SLOT_CallStaticLongMethod = ENV_SLOT_CallStaticIntMethod + 3,
+    ENV_SLOT_CallStaticFloatMethod = ENV_SLOT_CallStaticLongMethod + 3,
+    ENV_SLOT_CallStaticDoubleMethod = ENV_SLOT_CallStaticFloatMethod + 3,
+    ENV_SLOT_NewObject = ENV_SLOT_CallStaticDoubleMethod + 3,
     ENV_SLOT_CallVoidMethod = ENV_SLOT_NewObject + 3,
     ENV_SLOT_CallStaticVoidMethod = ENV_SLOT_CallVoidMethod + 3,
     ENV_HOOK_MAX = ENV_SLOT_CallStaticVoidMethod + 3,
@@ -81,6 +93,10 @@ struct EnvHookSlot {
     int active;               // atomic: wrappers forward without emitting while 0
     unsigned long long hits;
     unsigned long long dropped;
+    // Last emitted value, so status can show what a slot saw even when the capture ring has
+    // already evicted the record (a busy target can push thousands of events). Benignly racy:
+    // hits/dropped stay authoritative, this is a diagnostic snapshot.
+    char last[192];
 };
 
 #define ADH_FIXED_SLOT_INITS(X) \
@@ -90,23 +106,35 @@ struct EnvHookSlot {
     X("GetPrimitiveArrayCritical") X("ReleasePrimitiveArrayCritical")
 
 #define ADH_CALL_VALUE_FAMILIES(X) \
-    X(CallObjectMethod,       jobject,  jobject, ADH_MEMBER_INSTANCE, ENV_SLOT_CallObjectMethod) \
-    X(CallBooleanMethod,      jboolean, jobject, ADH_MEMBER_INSTANCE, ENV_SLOT_CallBooleanMethod) \
-    X(CallIntMethod,          jint,     jobject, ADH_MEMBER_INSTANCE, ENV_SLOT_CallIntMethod) \
-    X(CallLongMethod,         jlong,    jobject, ADH_MEMBER_INSTANCE, ENV_SLOT_CallLongMethod) \
-    X(CallStaticObjectMethod, jobject,  jclass,  ADH_MEMBER_STATIC,   ENV_SLOT_CallStaticObjectMethod) \
-    X(CallStaticIntMethod,    jint,     jclass,  ADH_MEMBER_STATIC,   ENV_SLOT_CallStaticIntMethod) \
-    X(NewObject,              jobject,  jclass,  ADH_MEMBER_CTOR,     ENV_SLOT_NewObject)
+    X(CallObjectMethod,        jobject,  jobject, ADH_MEMBER_INSTANCE, ENV_SLOT_CallObjectMethod,        34) \
+    X(CallBooleanMethod,       jboolean, jobject, ADH_MEMBER_INSTANCE, ENV_SLOT_CallBooleanMethod,       37) \
+    X(CallByteMethod,          jbyte,    jobject, ADH_MEMBER_INSTANCE, ENV_SLOT_CallByteMethod,          40) \
+    X(CallCharMethod,          jchar,    jobject, ADH_MEMBER_INSTANCE, ENV_SLOT_CallCharMethod,          43) \
+    X(CallShortMethod,         jshort,   jobject, ADH_MEMBER_INSTANCE, ENV_SLOT_CallShortMethod,         46) \
+    X(CallIntMethod,           jint,     jobject, ADH_MEMBER_INSTANCE, ENV_SLOT_CallIntMethod,           49) \
+    X(CallLongMethod,          jlong,    jobject, ADH_MEMBER_INSTANCE, ENV_SLOT_CallLongMethod,          52) \
+    X(CallFloatMethod,         jfloat,   jobject, ADH_MEMBER_INSTANCE, ENV_SLOT_CallFloatMethod,         55) \
+    X(CallDoubleMethod,        jdouble,  jobject, ADH_MEMBER_INSTANCE, ENV_SLOT_CallDoubleMethod,        58) \
+    X(CallStaticObjectMethod,  jobject,  jclass,  ADH_MEMBER_STATIC,   ENV_SLOT_CallStaticObjectMethod,  114) \
+    X(CallStaticBooleanMethod, jboolean, jclass,  ADH_MEMBER_STATIC,   ENV_SLOT_CallStaticBooleanMethod, 117) \
+    X(CallStaticByteMethod,    jbyte,    jclass,  ADH_MEMBER_STATIC,   ENV_SLOT_CallStaticByteMethod,    120) \
+    X(CallStaticCharMethod,    jchar,    jclass,  ADH_MEMBER_STATIC,   ENV_SLOT_CallStaticCharMethod,    123) \
+    X(CallStaticShortMethod,   jshort,   jclass,  ADH_MEMBER_STATIC,   ENV_SLOT_CallStaticShortMethod,   126) \
+    X(CallStaticIntMethod,     jint,     jclass,  ADH_MEMBER_STATIC,   ENV_SLOT_CallStaticIntMethod,     129) \
+    X(CallStaticLongMethod,    jlong,    jclass,  ADH_MEMBER_STATIC,   ENV_SLOT_CallStaticLongMethod,    132) \
+    X(CallStaticFloatMethod,   jfloat,   jclass,  ADH_MEMBER_STATIC,   ENV_SLOT_CallStaticFloatMethod,   135) \
+    X(CallStaticDoubleMethod,  jdouble,  jclass,  ADH_MEMBER_STATIC,   ENV_SLOT_CallStaticDoubleMethod,  138) \
+    X(NewObject,               jobject,  jclass,  ADH_MEMBER_CTOR,     ENV_SLOT_NewObject,               28)
 
 #define ADH_CALL_VOID_FAMILIES(X) \
-    X(CallVoidMethod,         jobject, ADH_MEMBER_INSTANCE, ENV_SLOT_CallVoidMethod) \
-    X(CallStaticVoidMethod,   jclass,  ADH_MEMBER_STATIC,   ENV_SLOT_CallStaticVoidMethod)
+    X(CallVoidMethod,       jobject, ADH_MEMBER_INSTANCE, ENV_SLOT_CallVoidMethod,       61) \
+    X(CallStaticVoidMethod, jclass,  ADH_MEMBER_STATIC,   ENV_SLOT_CallStaticVoidMethod, 141)
 
-#define ADH_SLOT_INIT(name) { name, NULL, NULL, 0, 0, 0, 0 },
+#define ADH_SLOT_INIT(name) { name, NULL, NULL, 0, 0, 0, 0, "" },
 #define ADH_CALL_INITS_3(name, ret, tgt, kind, base) \
     ADH_SLOT_INIT(#name) ADH_SLOT_INIT(#name "V") ADH_SLOT_INIT(#name "A")
-#define ADH_CALL_INITS(name, ret, tgt, kind, base) ADH_CALL_INITS_3(name, ret, tgt, kind, base)
-#define ADH_CALL_VOID_INITS(name, tgt, kind, base) ADH_CALL_INITS_3(name, void, tgt, kind, base)
+#define ADH_CALL_INITS(name, ret, tgt, kind, base, spec) ADH_CALL_INITS_3(name, ret, tgt, kind, base)
+#define ADH_CALL_VOID_INITS(name, tgt, kind, base, spec) ADH_CALL_INITS_3(name, void, tgt, kind, base)
 
 static struct EnvHookSlot g_env_hooks[ENV_HOOK_MAX] = {
     ADH_FIXED_SLOT_INITS(ADH_SLOT_INIT)
@@ -115,7 +143,11 @@ static struct EnvHookSlot g_env_hooks[ENV_HOOK_MAX] = {
 };
 
 static pthread_mutex_t g_env_hook_lock = PTHREAD_MUTEX_INITIALIZER;
-static __thread int g_env_hook_reentry = 0;
+// Marks the current thread as running ADH instrumentation code (label resolution, class
+// names, array-length reads). Only our own nested JNI calls are suppressed by it: the target's
+// own call always runs with the flag clear, so Java->JNI callbacks made *inside* a hooked call
+// are still observed. Setting it across the target call would silently hide that traffic.
+static __thread int g_env_hook_in_ours = 0;
 static unsigned long long g_env_hook_table = 0;
 
 typedef const char *(*get_string_utf_chars_fn)(JNIEnv *, jstring, jboolean *);
@@ -148,6 +180,7 @@ static void env_note(int index, const char *value, int ok) {
         __atomic_add_fetch(&g_env_hooks[index].dropped, 1, __ATOMIC_RELAXED);
         return;
     }
+    snprintf(g_env_hooks[index].last, sizeof(g_env_hooks[index].last), "%s", value ? value : "");
     char valuej[1024], json[1280];
     json_escape(value ? value : "", valuej, sizeof(valuej));
     snprintf(json, sizeof(json), "{\"function\":\"%s\",\"value\":\"%s\",\"ok\":%s}",
@@ -327,8 +360,8 @@ static void call_emit(int slot, struct AdhCallDetail *d) {
 static const char *GetStringUTFChars_wrapper(JNIEnv *env, jstring str, jboolean *isCopy) {
     get_string_utf_chars_fn original = (get_string_utf_chars_fn)slot_original(ENV_SLOT_GetStringUTFChars);
     if (!original) return NULL;
-    if (g_env_hook_reentry || !slot_active(ENV_SLOT_GetStringUTFChars)) return original(env, str, isCopy);
-    g_env_hook_reentry = 1;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_GetStringUTFChars)) return original(env, str, isCopy);
+    g_env_hook_in_ours = 1;
     const char *result = original(env, str, isCopy);
     if (result && env_budget_left(ENV_SLOT_GetStringUTFChars)) {
         char bounded[257];
@@ -338,26 +371,25 @@ static const char *GetStringUTFChars_wrapper(JNIEnv *env, jstring str, jboolean 
     } else {
         env_note(ENV_SLOT_GetStringUTFChars, NULL, result != NULL);
     }
-    g_env_hook_reentry = 0;
+    g_env_hook_in_ours = 0;
     return result;
 }
 
 static jclass FindClass_wrapper(JNIEnv *env, const char *name) {
     find_class_fn original = (find_class_fn)slot_original(ENV_SLOT_FindClass);
     if (!original) return NULL;
-    if (g_env_hook_reentry || !slot_active(ENV_SLOT_FindClass)) return original(env, name);
-    g_env_hook_reentry = 1;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_FindClass)) return original(env, name);
+    g_env_hook_in_ours = 1;
     jclass result = original(env, name);
     env_note(ENV_SLOT_FindClass, env_budget_left(ENV_SLOT_FindClass) ? name : NULL, result != NULL);
-    g_env_hook_reentry = 0;
+    g_env_hook_in_ours = 0;
     return result;
 }
 
 static jmethodID GetMethodID_wrapper(JNIEnv *env, jclass clazz, const char *name, const char *sig) {
     get_method_id_fn original = (get_method_id_fn)slot_original(ENV_SLOT_GetMethodID);
     if (!original) return NULL;
-    if (g_env_hook_reentry || !slot_active(ENV_SLOT_GetMethodID)) return original(env, clazz, name, sig);
-    g_env_hook_reentry = 1;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_GetMethodID)) return original(env, clazz, name, sig);
     jmethodID result = original(env, clazz, name, sig);
     char detail[512];
     if (!env_budget_left(ENV_SLOT_GetMethodID)) {
@@ -366,18 +398,18 @@ static jmethodID GetMethodID_wrapper(JNIEnv *env, jclass clazz, const char *name
         detail_method_plain(name, sig, detail, sizeof(detail));
         env_note(ENV_SLOT_GetMethodID, detail, 0);
     } else {
+        g_env_hook_in_ours = 1;
         detail_method(env, clazz, name, sig, detail, sizeof(detail));
+        g_env_hook_in_ours = 0;
         env_note(ENV_SLOT_GetMethodID, detail, 1);
     }
-    g_env_hook_reentry = 0;
     return result;
 }
 
 static jmethodID GetStaticMethodID_wrapper(JNIEnv *env, jclass clazz, const char *name, const char *sig) {
     get_method_id_fn original = (get_method_id_fn)slot_original(ENV_SLOT_GetStaticMethodID);
     if (!original) return NULL;
-    if (g_env_hook_reentry || !slot_active(ENV_SLOT_GetStaticMethodID)) return original(env, clazz, name, sig);
-    g_env_hook_reentry = 1;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_GetStaticMethodID)) return original(env, clazz, name, sig);
     jmethodID result = original(env, clazz, name, sig);
     char detail[512];
     if (!env_budget_left(ENV_SLOT_GetStaticMethodID)) {
@@ -386,29 +418,29 @@ static jmethodID GetStaticMethodID_wrapper(JNIEnv *env, jclass clazz, const char
         detail_method_plain(name, sig, detail, sizeof(detail));
         env_note(ENV_SLOT_GetStaticMethodID, detail, 0);
     } else {
+        g_env_hook_in_ours = 1;
         detail_method(env, clazz, name, sig, detail, sizeof(detail));
+        g_env_hook_in_ours = 0;
         env_note(ENV_SLOT_GetStaticMethodID, detail, 1);
     }
-    g_env_hook_reentry = 0;
     return result;
 }
 
 static jstring NewStringUTF_wrapper(JNIEnv *env, const char *chars) {
     new_string_utf_fn original = (new_string_utf_fn)slot_original(ENV_SLOT_NewStringUTF);
     if (!original) return NULL;
-    if (g_env_hook_reentry || !slot_active(ENV_SLOT_NewStringUTF)) return original(env, chars);
-    g_env_hook_reentry = 1;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_NewStringUTF)) return original(env, chars);
+    g_env_hook_in_ours = 1;
     jstring result = original(env, chars);
     env_note(ENV_SLOT_NewStringUTF, env_budget_left(ENV_SLOT_NewStringUTF) ? chars : NULL, result != NULL);
-    g_env_hook_reentry = 0;
+    g_env_hook_in_ours = 0;
     return result;
 }
 
 static jfieldID GetFieldID_wrapper(JNIEnv *env, jclass clazz, const char *name, const char *sig) {
     get_method_id_fn original = (get_method_id_fn)slot_original(ENV_SLOT_GetFieldID);
     if (!original) return NULL;
-    if (g_env_hook_reentry || !slot_active(ENV_SLOT_GetFieldID)) return (jfieldID)original(env, clazz, name, sig);
-    g_env_hook_reentry = 1;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_GetFieldID)) return (jfieldID)original(env, clazz, name, sig);
     jfieldID result = (jfieldID)original(env, clazz, name, sig);
     char detail[512];
     if (!env_budget_left(ENV_SLOT_GetFieldID)) {
@@ -417,18 +449,18 @@ static jfieldID GetFieldID_wrapper(JNIEnv *env, jclass clazz, const char *name, 
         detail_field_plain(name, sig, detail, sizeof(detail));
         env_note(ENV_SLOT_GetFieldID, detail, 0);
     } else {
+        g_env_hook_in_ours = 1;
         detail_field(env, clazz, name, sig, detail, sizeof(detail));
+        g_env_hook_in_ours = 0;
         env_note(ENV_SLOT_GetFieldID, detail, 1);
     }
-    g_env_hook_reentry = 0;
     return result;
 }
 
 static jfieldID GetStaticFieldID_wrapper(JNIEnv *env, jclass clazz, const char *name, const char *sig) {
     get_method_id_fn original = (get_method_id_fn)slot_original(ENV_SLOT_GetStaticFieldID);
     if (!original) return NULL;
-    if (g_env_hook_reentry || !slot_active(ENV_SLOT_GetStaticFieldID)) return (jfieldID)original(env, clazz, name, sig);
-    g_env_hook_reentry = 1;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_GetStaticFieldID)) return (jfieldID)original(env, clazz, name, sig);
     jfieldID result = (jfieldID)original(env, clazz, name, sig);
     char detail[512];
     if (!env_budget_left(ENV_SLOT_GetStaticFieldID)) {
@@ -437,10 +469,11 @@ static jfieldID GetStaticFieldID_wrapper(JNIEnv *env, jclass clazz, const char *
         detail_field_plain(name, sig, detail, sizeof(detail));
         env_note(ENV_SLOT_GetStaticFieldID, detail, 0);
     } else {
+        g_env_hook_in_ours = 1;
         detail_field(env, clazz, name, sig, detail, sizeof(detail));
+        g_env_hook_in_ours = 0;
         env_note(ENV_SLOT_GetStaticFieldID, detail, 1);
     }
-    g_env_hook_reentry = 0;
     return result;
 }
 
@@ -448,11 +481,12 @@ static jbyte *GetByteArrayElements_wrapper(JNIEnv *env, jarray array, jboolean *
     get_byte_array_elements_fn original =
         (get_byte_array_elements_fn)slot_original(ENV_SLOT_GetByteArrayElements);
     if (!original) return NULL;
-    if (g_env_hook_reentry || !slot_active(ENV_SLOT_GetByteArrayElements)) return original(env, array, isCopy);
-    g_env_hook_reentry = 1;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_GetByteArrayElements)) return original(env, array, isCopy);
     jbyte *result = original(env, array, isCopy);
     if (result && array && env_budget_left(ENV_SLOT_GetByteArrayElements)) {
+        g_env_hook_in_ours = 1;
         jsize len = (*env)->GetArrayLength(env, array);
+        g_env_hook_in_ours = 0;
         char hex[2 * ENV_HEX_PREVIEW + 8], detail[96];
         hex_preview(result, len, hex, sizeof(hex));
         snprintf(detail, sizeof(detail), "len=%d hex=%s", (int)len, hex);
@@ -460,7 +494,6 @@ static jbyte *GetByteArrayElements_wrapper(JNIEnv *env, jarray array, jboolean *
     } else {
         env_note(ENV_SLOT_GetByteArrayElements, NULL, result != NULL);
     }
-    g_env_hook_reentry = 0;
     return result;
 }
 
@@ -469,11 +502,11 @@ static void SetByteArrayRegion_wrapper(JNIEnv *env, jarray array, jsize start, j
     set_byte_array_region_fn original =
         (set_byte_array_region_fn)slot_original(ENV_SLOT_SetByteArrayRegion);
     if (!original) return;
-    if (g_env_hook_reentry || !slot_active(ENV_SLOT_SetByteArrayRegion)) {
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_SetByteArrayRegion)) {
         original(env, array, start, len, buf);
         return;
     }
-    g_env_hook_reentry = 1;
+    g_env_hook_in_ours = 1;
     if (env_budget_left(ENV_SLOT_SetByteArrayRegion)) {
         char hex[2 * ENV_HEX_PREVIEW + 8], detail[128];
         hex_preview(buf, len, hex, sizeof(hex));
@@ -484,7 +517,7 @@ static void SetByteArrayRegion_wrapper(JNIEnv *env, jarray array, jsize start, j
         original(env, array, start, len, buf);
         env_note(ENV_SLOT_SetByteArrayRegion, NULL, 1);
     }
-    g_env_hook_reentry = 0;
+    g_env_hook_in_ours = 0;
 }
 // Critical arrays: JNI forbids calling other JNI functions (or blocking) between
 // Get/ReleasePrimitiveArrayCritical, so the length is captured at Get time keyed by the
@@ -527,14 +560,15 @@ static void ReleaseByteArrayElements_wrapper(JNIEnv *env, jbyteArray array, jbyt
     release_byte_array_elements_fn original =
         (release_byte_array_elements_fn)slot_original(ENV_SLOT_ReleaseByteArrayElements);
     if (!original) return;
-    if (g_env_hook_reentry || !slot_active(ENV_SLOT_ReleaseByteArrayElements)) {
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_ReleaseByteArrayElements)) {
         original(env, array, elems, mode);
         return;
     }
-    g_env_hook_reentry = 1;
     if (env_budget_left(ENV_SLOT_ReleaseByteArrayElements)) {
         char hex[2 * ENV_HEX_PREVIEW + 8], detail[160];
+        g_env_hook_in_ours = 1;
         jsize len = (array && elems) ? (*env)->GetArrayLength(env, array) : 0;
+        g_env_hook_in_ours = 0;
         hex_preview(elems, (mode == JNI_ABORT) ? 0 : len, hex, sizeof(hex));
         snprintf(detail, sizeof(detail), "len=%d mode=%d %s%s", (int)len, (int)mode,
                  (mode == JNI_ABORT) ? "(no copyback)" : "writeback hex=", hex);
@@ -544,18 +578,16 @@ static void ReleaseByteArrayElements_wrapper(JNIEnv *env, jbyteArray array, jbyt
         original(env, array, elems, mode);
         env_note(ENV_SLOT_ReleaseByteArrayElements, NULL, 1);
     }
-    g_env_hook_reentry = 0;
 }
 
 static void GetByteArrayRegion_wrapper(JNIEnv *env, jbyteArray array, jsize start, jsize len, jbyte *buf) {
     get_byte_array_region_fn original =
         (get_byte_array_region_fn)slot_original(ENV_SLOT_GetByteArrayRegion);
     if (!original) return;
-    if (g_env_hook_reentry || !slot_active(ENV_SLOT_GetByteArrayRegion)) {
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_GetByteArrayRegion)) {
         original(env, array, start, len, buf);
         return;
     }
-    g_env_hook_reentry = 1;
     original(env, array, start, len, buf);
     if (env_budget_left(ENV_SLOT_GetByteArrayRegion) && !(*env)->ExceptionCheck(env)) {
         char hex[2 * ENV_HEX_PREVIEW + 8], detail[128];
@@ -565,28 +597,28 @@ static void GetByteArrayRegion_wrapper(JNIEnv *env, jbyteArray array, jsize star
     } else {
         env_note(ENV_SLOT_GetByteArrayRegion, NULL, 0);
     }
-    g_env_hook_reentry = 0;
 }
 
 static void *GetPrimitiveArrayCritical_wrapper(JNIEnv *env, jarray array, jboolean *isCopy) {
     get_primitive_array_critical_fn original =
         (get_primitive_array_critical_fn)slot_original(ENV_SLOT_GetPrimitiveArrayCritical);
     if (!original) return NULL;
-    if (g_env_hook_reentry || !slot_active(ENV_SLOT_GetPrimitiveArrayCritical)) {
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_GetPrimitiveArrayCritical)) {
         return original(env, array, isCopy);
     }
-    g_env_hook_reentry = 1;
+    // Length must be read BEFORE the original call: once it returns we are inside the critical
+    // section, where JNI forbids further JNI calls.
+    jsize len = array ? (*env)->GetArrayLength(env, array) : 0;
     void *result = original(env, array, isCopy);
-    if (result && array) crit_stash(result, (*env)->GetArrayLength(env, array));
+    if (result && len > 0) crit_stash(result, len);
     if (env_budget_left(ENV_SLOT_GetPrimitiveArrayCritical)) {
         char detail[96];
-        snprintf(detail, sizeof(detail), "ptr=0x%llx isCopy=%s", (unsigned long long)(uintptr_t)result,
-                 (isCopy && *isCopy) ? "true" : "false");
+        snprintf(detail, sizeof(detail), "len=%d ptr=0x%llx isCopy=%s", (int)len,
+                 (unsigned long long)(uintptr_t)result, (isCopy && *isCopy) ? "true" : "false");
         env_note(ENV_SLOT_GetPrimitiveArrayCritical, detail, result != NULL);
     } else {
         env_note(ENV_SLOT_GetPrimitiveArrayCritical, NULL, result != NULL);
     }
-    g_env_hook_reentry = 0;
     return result;
 }
 
@@ -594,11 +626,10 @@ static void ReleasePrimitiveArrayCritical_wrapper(JNIEnv *env, jarray array, voi
     release_primitive_array_critical_fn original =
         (release_primitive_array_critical_fn)slot_original(ENV_SLOT_ReleasePrimitiveArrayCritical);
     if (!original) return;
-    if (g_env_hook_reentry || !slot_active(ENV_SLOT_ReleasePrimitiveArrayCritical)) {
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_ReleasePrimitiveArrayCritical)) {
         original(env, array, carray, mode);
         return;
     }
-    g_env_hook_reentry = 1;
     jsize len = crit_take(carray);
     if (env_budget_left(ENV_SLOT_ReleasePrimitiveArrayCritical)) {
         char hex[2 * ENV_HEX_PREVIEW + 8], detail[160];
@@ -611,146 +642,136 @@ static void ReleasePrimitiveArrayCritical_wrapper(JNIEnv *env, jarray array, voi
         original(env, array, carray, mode);
         env_note(ENV_SLOT_ReleasePrimitiveArrayCritical, NULL, 1);
     }
-    g_env_hook_reentry = 0;
 }
 // ---- Call* family wrappers (macro-generated per form) ---------------------
-#define ADH_DEFINE_CALL_VALUE(NAME, RET, TGT, KIND, BASE)                                      \
+#define ADH_DEFINE_CALL_VALUE(NAME, RET, TGT, KIND, BASE, SPEC)                                \
     static RET NAME##_wrapper(JNIEnv *env, TGT target, jmethodID mid, ...) {                    \
         va_list ap;                                                                             \
         va_start(ap, mid);                                                                      \
-        if (g_env_hook_reentry || !slot_active(BASE)) {                                         \
-            RET r = (*env)->NAME##V(env, target, mid, ap);                                      \
+        RET (*v_original)(JNIEnv *, TGT, jmethodID, va_list) =                                  \
+            (RET (*)(JNIEnv *, TGT, jmethodID, va_list))slot_original(BASE + 1);                \
+        if (!slot_active(BASE)) {                                                               \
+            RET r = v_original ? v_original(env, target, mid, ap)                               \
+                               : (*env)->NAME##V(env, target, mid, ap);                         \
             va_end(ap);                                                                         \
             return r;                                                                           \
         }                                                                                       \
-        g_env_hook_reentry = 1;                                                                 \
         struct AdhCallDetail detail;                                                            \
+        g_env_hook_in_ours = 1;                                                                 \
         call_detail_va(env, BASE, (jobject)target, KIND, mid, ap, &detail);                     \
-        RET result = (*env)->NAME##V(env, target, mid, ap);                                     \
+        g_env_hook_in_ours = 0;                                                                 \
+        RET result = v_original ? v_original(env, target, mid, ap)                              \
+                                : (*env)->NAME##V(env, target, mid, ap);                        \
         va_end(ap);                                                                             \
         call_emit(BASE, &detail);                                                               \
-        g_env_hook_reentry = 0;                                                                 \
         return result;                                                                          \
     }                                                                                           \
     static RET NAME##V_wrapper(JNIEnv *env, TGT target, jmethodID mid, va_list ap) {            \
         RET (*original)(JNIEnv *, TGT, jmethodID, va_list) =                                    \
             (RET (*)(JNIEnv *, TGT, jmethodID, va_list))slot_original(BASE + 1);                \
         if (!original) return (RET)0;                                                           \
-        if (g_env_hook_reentry || !slot_active(BASE + 1)) return original(env, target, mid, ap); \
-        g_env_hook_reentry = 1;                                                                 \
+        if (g_env_hook_in_ours || !slot_active(BASE + 1)) return original(env, target, mid, ap); \
         struct AdhCallDetail detail;                                                            \
+        g_env_hook_in_ours = 1;                                                                 \
         call_detail_va(env, BASE + 1, (jobject)target, KIND, mid, ap, &detail);                 \
+        g_env_hook_in_ours = 0;                                                                 \
         RET result = original(env, target, mid, ap);                                            \
         call_emit(BASE + 1, &detail);                                                           \
-        g_env_hook_reentry = 0;                                                                 \
         return result;                                                                          \
     }                                                                                           \
     static RET NAME##A_wrapper(JNIEnv *env, TGT target, jmethodID mid, const jvalue *args) {    \
         RET (*original)(JNIEnv *, TGT, jmethodID, const jvalue *) =                             \
             (RET (*)(JNIEnv *, TGT, jmethodID, const jvalue *))slot_original(BASE + 2);          \
         if (!original) return (RET)0;                                                           \
-        if (g_env_hook_reentry || !slot_active(BASE + 2)) return original(env, target, mid, args); \
-        g_env_hook_reentry = 1;                                                                 \
+        if (g_env_hook_in_ours || !slot_active(BASE + 2)) return original(env, target, mid, args); \
         struct AdhCallDetail detail;                                                            \
+        g_env_hook_in_ours = 1;                                                                 \
         call_detail_a(env, BASE + 2, (jobject)target, KIND, mid, args, &detail);                 \
+        g_env_hook_in_ours = 0;                                                                 \
         RET result = original(env, target, mid, args);                                          \
         call_emit(BASE + 2, &detail);                                                           \
-        g_env_hook_reentry = 0;                                                                 \
         return result;                                                                          \
     }
 
-#define ADH_DEFINE_CALL_VOID(NAME, TGT, KIND, BASE)                                             \
+#define ADH_DEFINE_CALL_VOID(NAME, TGT, KIND, BASE, SPEC)                                       \
     static void NAME##_wrapper(JNIEnv *env, TGT target, jmethodID mid, ...) {                   \
         va_list ap;                                                                             \
         va_start(ap, mid);                                                                      \
-        if (g_env_hook_reentry || !slot_active(BASE)) {                                         \
-            (*env)->NAME##V(env, target, mid, ap);                                              \
+        void (*v_original)(JNIEnv *, TGT, jmethodID, va_list) =                                 \
+            (void (*)(JNIEnv *, TGT, jmethodID, va_list))slot_original(BASE + 1);               \
+        if (!slot_active(BASE)) {                                                               \
+            if (v_original) v_original(env, target, mid, ap);                                   \
+            else (*env)->NAME##V(env, target, mid, ap);                                         \
             va_end(ap);                                                                         \
             return;                                                                             \
         }                                                                                       \
-        g_env_hook_reentry = 1;                                                                 \
         struct AdhCallDetail detail;                                                            \
+        g_env_hook_in_ours = 1;                                                                 \
         call_detail_va(env, BASE, (jobject)target, KIND, mid, ap, &detail);                     \
-        (*env)->NAME##V(env, target, mid, ap);                                                  \
+        g_env_hook_in_ours = 0;                                                                 \
+        if (v_original) v_original(env, target, mid, ap);                                       \
+        else (*env)->NAME##V(env, target, mid, ap);                                             \
         va_end(ap);                                                                             \
         call_emit(BASE, &detail);                                                               \
-        g_env_hook_reentry = 0;                                                                 \
     }                                                                                           \
     static void NAME##V_wrapper(JNIEnv *env, TGT target, jmethodID mid, va_list ap) {           \
         void (*original)(JNIEnv *, TGT, jmethodID, va_list) =                                   \
             (void (*)(JNIEnv *, TGT, jmethodID, va_list))slot_original(BASE + 1);               \
         if (!original) return;                                                                  \
-        if (g_env_hook_reentry || !slot_active(BASE + 1)) { original(env, target, mid, ap); return; } \
-        g_env_hook_reentry = 1;                                                                 \
+        if (g_env_hook_in_ours || !slot_active(BASE + 1)) { original(env, target, mid, ap); return; } \
         struct AdhCallDetail detail;                                                            \
+        g_env_hook_in_ours = 1;                                                                 \
         call_detail_va(env, BASE + 1, (jobject)target, KIND, mid, ap, &detail);                 \
+        g_env_hook_in_ours = 0;                                                                 \
         original(env, target, mid, ap);                                                         \
         call_emit(BASE + 1, &detail);                                                           \
-        g_env_hook_reentry = 0;                                                                 \
     }                                                                                           \
     static void NAME##A_wrapper(JNIEnv *env, TGT target, jmethodID mid, const jvalue *args) {   \
         void (*original)(JNIEnv *, TGT, jmethodID, const jvalue *) =                            \
             (void (*)(JNIEnv *, TGT, jmethodID, const jvalue *))slot_original(BASE + 2);         \
         if (!original) return;                                                                  \
-        if (g_env_hook_reentry || !slot_active(BASE + 2)) { original(env, target, mid, args); return; } \
-        g_env_hook_reentry = 1;                                                                 \
+        if (g_env_hook_in_ours || !slot_active(BASE + 2)) { original(env, target, mid, args); return; } \
         struct AdhCallDetail detail;                                                            \
+        g_env_hook_in_ours = 1;                                                                 \
         call_detail_a(env, BASE + 2, (jobject)target, KIND, mid, args, &detail);                 \
+        g_env_hook_in_ours = 0;                                                                 \
         original(env, target, mid, args);                                                       \
         call_emit(BASE + 2, &detail);                                                           \
-        g_env_hook_reentry = 0;                                                                 \
     }
 
 ADH_CALL_VALUE_FAMILIES(ADH_DEFINE_CALL_VALUE)
 ADH_CALL_VOID_FAMILIES(ADH_DEFINE_CALL_VOID)
+
 // JNIEnv table slot indices, straight from the JNINativeInterface field order in the NDK
-// jni.h (the layout the JNI spec fixes). The offset check below turns "my index table drifted
-// from the real ABI" into a loud install failure instead of patching a neighbouring entry.
+// jni.h (the layout the JNI spec fixes). The offset check turns "my index table drifted from
+// the real ABI" into a loud install failure instead of patching a neighbouring JNI function.
+#define ADH_CALL_GUARD_CASES(name, ret, tgt, kind, base, spec) \
+    case base: return spec; \
+    case base + 1: return spec + 1; \
+    case base + 2: return spec + 2;
+#define ADH_CALL_VOID_GUARD_CASES(name, tgt, kind, base, spec) ADH_CALL_GUARD_CASES(name, void, tgt, kind, base, spec)
+
 static int env_hook_spec_index(int index) {
     switch (index) {
         case ENV_SLOT_FindClass: return 6;
-        case ENV_SLOT_NewObject: return 28;
-        case ENV_SLOT_NewObject + 1: return 29;
-        case ENV_SLOT_NewObject + 2: return 30;
         case ENV_SLOT_GetMethodID: return 33;
-        case ENV_SLOT_CallObjectMethod: return 34;
-        case ENV_SLOT_CallObjectMethod + 1: return 35;
-        case ENV_SLOT_CallObjectMethod + 2: return 36;
-        case ENV_SLOT_CallBooleanMethod: return 37;
-        case ENV_SLOT_CallBooleanMethod + 1: return 38;
-        case ENV_SLOT_CallBooleanMethod + 2: return 39;
-        case ENV_SLOT_CallIntMethod: return 49;
-        case ENV_SLOT_CallIntMethod + 1: return 50;
-        case ENV_SLOT_CallIntMethod + 2: return 51;
-        case ENV_SLOT_CallLongMethod: return 52;
-        case ENV_SLOT_CallLongMethod + 1: return 53;
-        case ENV_SLOT_CallLongMethod + 2: return 54;
-        case ENV_SLOT_CallVoidMethod: return 61;
-        case ENV_SLOT_CallVoidMethod + 1: return 62;
-        case ENV_SLOT_CallVoidMethod + 2: return 63;
+        ADH_CALL_VALUE_FAMILIES(ADH_CALL_GUARD_CASES)
+        ADH_CALL_VOID_FAMILIES(ADH_CALL_VOID_GUARD_CASES)
         case ENV_SLOT_GetFieldID: return 94;
         case ENV_SLOT_GetStaticMethodID: return 113;
-        case ENV_SLOT_CallStaticObjectMethod: return 114;
-        case ENV_SLOT_CallStaticObjectMethod + 1: return 115;
-        case ENV_SLOT_CallStaticObjectMethod + 2: return 116;
-        case ENV_SLOT_CallStaticIntMethod: return 129;
-        case ENV_SLOT_CallStaticIntMethod + 1: return 130;
-        case ENV_SLOT_CallStaticIntMethod + 2: return 131;
-        case ENV_SLOT_CallStaticVoidMethod: return 141;
-        case ENV_SLOT_CallStaticVoidMethod + 1: return 142;
-        case ENV_SLOT_CallStaticVoidMethod + 2: return 143;
         case ENV_SLOT_GetStaticFieldID: return 144;
         case ENV_SLOT_NewStringUTF: return 167;
         case ENV_SLOT_GetStringUTFChars: return 169;
         case ENV_SLOT_GetByteArrayElements: return 184;
         case ENV_SLOT_ReleaseByteArrayElements: return 192;
         case ENV_SLOT_GetByteArrayRegion: return 200;
+        case ENV_SLOT_SetByteArrayRegion: return 208;
         case ENV_SLOT_GetPrimitiveArrayCritical: return 222;
         case ENV_SLOT_ReleasePrimitiveArrayCritical: return 223;
-        case ENV_SLOT_SetByteArrayRegion: return 208;
         default: return -1;
     }
 }
+
 // ---- slot lookup ----------------------------------------------------------
 static int env_hook_index(const char *name) {
     for (int i = 0; i < ENV_HOOK_MAX; i++) {
@@ -759,11 +780,11 @@ static int env_hook_index(const char *name) {
     return -1;
 }
 
-#define ADH_CALL_SLOT_CASES(name, ret, tgt, kind, base) \
+#define ADH_CALL_SLOT_CASES(name, ret, tgt, kind, base, spec) \
     case base: return (void **)(uintptr_t)&table->name; \
     case base + 1: return (void **)(uintptr_t)&table->name##V; \
     case base + 2: return (void **)(uintptr_t)&table->name##A;
-#define ADH_CALL_VOID_SLOT_CASES(name, tgt, kind, base) ADH_CALL_SLOT_CASES(name, void, tgt, kind, base)
+#define ADH_CALL_VOID_SLOT_CASES(name, tgt, kind, base, spec) ADH_CALL_SLOT_CASES(name, void, tgt, kind, base, spec)
 
 static void **env_hook_slot(struct JNINativeInterface *table, int index) {
     switch (index) {
@@ -786,11 +807,11 @@ static void **env_hook_slot(struct JNINativeInterface *table, int index) {
     }
 }
 
-#define ADH_CALL_WRAPPER_CASES(name, ret, tgt, kind, base) \
+#define ADH_CALL_WRAPPER_CASES(name, ret, tgt, kind, base, spec) \
     case base: return (void *)&name##_wrapper; \
     case base + 1: return (void *)&name##V_wrapper; \
     case base + 2: return (void *)&name##A_wrapper;
-#define ADH_CALL_VOID_WRAPPER_CASES(name, tgt, kind, base) ADH_CALL_WRAPPER_CASES(name, void, tgt, kind, base)
+#define ADH_CALL_VOID_WRAPPER_CASES(name, tgt, kind, base, spec) ADH_CALL_WRAPPER_CASES(name, void, tgt, kind, base, spec)
 
 static void *env_hook_wrapper(int index) {
     switch (index) {
@@ -818,23 +839,26 @@ static void *env_hook_wrapper(int index) {
 // installing must make it differ from original, uninstalling must make them equal again - that
 // is what lets a verifier prove the table (not just a flag) was patched and restored.
 static void send_env_result(int fd, const char *id, const char *action, const char *function,
-                            int ok, const char *error) {
-    char idj[64], actionj[32], functionj[64], errorj[256];
+                            int ok, int applied, int failed, const char *error) {
+    char idj[64], actionj[32], functionj[96], errorj[384];
     json_escape(id, idj, sizeof(idj));
     json_escape(action ? action : "", actionj, sizeof(actionj));
     json_escape(function ? function : "", functionj, sizeof(functionj));
     json_escape(error ? error : "", errorj, sizeof(errorj));
     char table_perms[8] = "";
     if (g_env_hook_table) adh_perms_of_addr((void *)(uintptr_t)g_env_hook_table, table_perms, sizeof(table_perms));
-    char out[16384];
+    char out[32768];
     size_t len = snprintf(out, sizeof(out),
         "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"jni_env_hook\",\"ok\":%s,"
-        "\"action\":\"%s\",\"function\":\"%s\",\"table\":\"0x%llx\",\"tablePerms\":\"%s\","
-        "\"error\":\"%s\",\"hooks\":[",
-        idj, ok ? "true" : "false", actionj, functionj, g_env_hook_table, table_perms, errorj);
+        "\"action\":\"%s\",\"function\":\"%s\",\"applied\":%d,\"failed\":%d,"
+        "\"table\":\"0x%llx\",\"tablePerms\":\"%s\",\"error\":\"%s\",\"hooks\":[",
+        idj, ok ? "true" : "false", actionj, functionj, applied, failed,
+        g_env_hook_table, table_perms, errorj);
     int first = 1;
-    for (int i = 0; i < ENV_HOOK_MAX && len + 320 < sizeof(out); i++) {
+    for (int i = 0; i < ENV_HOOK_MAX && len + 340 < sizeof(out); i++) {
         char slot_perms[8] = "";
+        char lastj[512];
+        json_escape(g_env_hooks[i].last, lastj, sizeof(lastj));
         void *live = NULL;
         if (g_env_hooks[i].slot) {
             adh_perms_of_addr((void *)(uintptr_t)g_env_hooks[i].slot, slot_perms, sizeof(slot_perms));
@@ -843,115 +867,81 @@ static void send_env_result(int fd, const char *id, const char *action, const ch
         len += snprintf(out + len, sizeof(out) - len,
                         "%s{\"function\":\"%s\",\"installed\":%s,\"active\":%s,"
                         "\"hits\":%llu,\"dropped\":%llu,\"entry\":\"0x%llx\",\"perms\":\"%s\","
-                        "\"slotValue\":\"0x%llx\",\"original\":\"0x%llx\"}",
+                        "\"slotValue\":\"0x%llx\",\"original\":\"0x%llx\",\"last\":\"%s\"}",
                         first ? "" : ",", g_env_hooks[i].name,
                         g_env_hooks[i].installed ? "true" : "false",
                         slot_active(i) ? "true" : "false",
                         g_env_hooks[i].hits, g_env_hooks[i].dropped,
                         (unsigned long long)(uintptr_t)g_env_hooks[i].slot, slot_perms,
                         (unsigned long long)(uintptr_t)live,
-                        (unsigned long long)(uintptr_t)g_env_hooks[i].original);
+                        (unsigned long long)(uintptr_t)g_env_hooks[i].original, lastj);
         first = 0;
     }
     snprintf(out + len, sizeof(out) - len, "]}\n");
     send_line(fd, out);
 }
-void adh_cmd_jni_env_hook(int fd, const char *id, const char *action, const char *function) {
-    if (!action || !action[0]) {
-        send_env_result(fd, id, action, function, 0,
-                        "jni_env_hook requires action: install | uninstall | status");
-        return;
-    }
-    if (strcmp(action, "status") == 0) {
-        int did_attach = 0;
-        JNIEnv *env = adh_jni_attach(&did_attach);
-        if (!env) {
-            send_env_result(fd, id, action, function, 0, "no JavaVM/JNIEnv");
-            return;
-        }
-        g_env_hook_table = (unsigned long long)(uintptr_t)(*env);
-        adh_jni_detach(did_attach);
-        send_env_result(fd, id, action, function, 1, "");
-        return;
-    }
-    if (strcmp(action, "install") != 0 && strcmp(action, "uninstall") != 0) {
-        send_env_result(fd, id, action, function, 0,
-                        "action must be install|uninstall|status");
-        return;
-    }
-    if (!function || !function[0]) {
-        send_env_result(fd, id, action, function, 0, "jni_env_hook requires function");
-        return;
-    }
-    int index = env_hook_index(function);
-    if (index < 0) {
-        send_env_result(fd, id, action, function, 0, "unsupported JNIEnv function");
-        return;
-    }
 
-    if (strcmp(action, "uninstall") == 0) {
-        pthread_mutex_lock(&g_env_hook_lock);
-        if (!g_env_hooks[index].installed || !g_env_hooks[index].slot) {
-            pthread_mutex_unlock(&g_env_hook_lock);
-            send_env_result(fd, id, action, function, 0, "function is not hooked");
-            return;
-        }
-        void **saved_slot = g_env_hooks[index].slot;
-        void *saved_original = g_env_hooks[index].original;
+// Restore one slot's original entry. Fail-loud: refuse if the entry no longer points at our
+// wrapper (somebody else patched it), and stay active if the page cannot be made writable.
+static int env_hook_uninstall_index(int index, char *error, size_t error_size) {
+    pthread_mutex_lock(&g_env_hook_lock);
+    if (!g_env_hooks[index].installed || !g_env_hooks[index].slot) {
         pthread_mutex_unlock(&g_env_hook_lock);
-
-        // Deactivate first: a call already inside the wrapper then still reaches the real
-        // implementation (saved_original is a stable pointer) but stops emitting events.
-        __atomic_store_n(&g_env_hooks[index].active, 0, __ATOMIC_RELEASE);
-        void *current = __atomic_load_n(saved_slot, __ATOMIC_ACQUIRE);
-        if (current != env_hook_wrapper(index)) {
-            send_env_result(fd, id, action, function, 0,
-                            "JNIEnv table entry changed underneath the ADH wrapper; left untouched");
-            return;
-        }
-        if (!adh_swap_pointer_in_ro_page(saved_slot, saved_original)) {
-            __atomic_store_n(&g_env_hooks[index].active, 1, __ATOMIC_RELEASE);
-            send_env_result(fd, id, action, function, 0,
-                            "JNIEnv table page could not be made writable");
-            return;
-        }
-        pthread_mutex_lock(&g_env_hook_lock);
-        g_env_hooks[index].installed = 0;
-        pthread_mutex_unlock(&g_env_hook_lock);
-        send_env_result(fd, id, action, function, 1, "");
-        return;
+        snprintf(error, error_size, "%s is not hooked", g_env_hooks[index].name);
+        return 0;
     }
+    void **saved_slot = g_env_hooks[index].slot;
+    void *saved_original = g_env_hooks[index].original;
+    pthread_mutex_unlock(&g_env_hook_lock);
 
+    // Deactivate first: a call already inside the wrapper then still reaches the real
+    // implementation (saved_original is a stable pointer) but stops emitting events.
+    __atomic_store_n(&g_env_hooks[index].active, 0, __ATOMIC_RELEASE);
+    void *current = __atomic_load_n(saved_slot, __ATOMIC_ACQUIRE);
+    if (current != env_hook_wrapper(index)) {
+        snprintf(error, error_size, "%s: table entry changed underneath the ADH wrapper; left untouched",
+                 g_env_hooks[index].name);
+        return 0;
+    }
+    if (!adh_swap_pointer_in_ro_page(saved_slot, saved_original)) {
+        __atomic_store_n(&g_env_hooks[index].active, 1, __ATOMIC_RELEASE);
+        snprintf(error, error_size, "%s: table page could not be made writable", g_env_hooks[index].name);
+        return 0;
+    }
+    pthread_mutex_lock(&g_env_hook_lock);
+    g_env_hooks[index].installed = 0;
+    pthread_mutex_unlock(&g_env_hook_lock);
+    return 1;
+}
+
+// Patch one slot. The JNIEnv table lives in libart's RELRO segment, so the swap goes through
+// adh_swap_pointer_in_ro_page() and the ABI guard below refuses to touch a drifted offset.
+static int env_hook_install_index(int index, char *error, size_t error_size) {
     int did_attach = 0;
     JNIEnv *env = adh_jni_attach(&did_attach);
     if (!env) {
-        send_env_result(fd, id, action, function, 0, "no JavaVM/JNIEnv");
-        return;
+        snprintf(error, error_size, "no JavaVM/JNIEnv");
+        return 0;
     }
     struct JNINativeInterface *table = (struct JNINativeInterface *)(*env);
     adh_jni_detach(did_attach);
     if (!table) {
-        send_env_result(fd, id, action, function, 0, "JNIEnv function table unavailable");
-        return;
+        snprintf(error, error_size, "JNIEnv function table unavailable");
+        return 0;
     }
     g_env_hook_table = (unsigned long long)(uintptr_t)table;
     void **slot = env_hook_slot(table, index);
     if (!slot) {
-        send_env_result(fd, id, action, function, 0, "JNIEnv function table entry unavailable");
-        return;
+        snprintf(error, error_size, "%s: table entry unavailable", g_env_hooks[index].name);
+        return 0;
     }
-    // ABI guard: the address we are about to patch must be the spec-defined field for this
-    // entry. A drifted index table would otherwise silently hook a neighbouring JNI function.
     int spec = env_hook_spec_index(index);
     unsigned long long slot_offset = (unsigned long long)((char *)slot - (char *)table);
     if (spec < 0 || slot_offset != (unsigned long long)spec * sizeof(void *)) {
-        char guard_error[192];
-        snprintf(guard_error, sizeof(guard_error),
-                 "JNIEnv table layout mismatch for %s (offset %llu, spec %d) — refusing to patch",
-                 function, slot_offset, spec);
-        LOGE("jni_env_hook: %s", guard_error);
-        send_env_result(fd, id, action, function, 0, guard_error);
-        return;
+        snprintf(error, error_size, "%s: JNIEnv table layout mismatch (offset %llu, spec %d) - refusing to patch",
+                 g_env_hooks[index].name, slot_offset, spec);
+        LOGE("jni_env_hook: %s", error);
+        return 0;
     }
 
     pthread_mutex_lock(&g_env_hook_lock);
@@ -961,35 +951,31 @@ void adh_cmd_jni_env_hook(int fd, const char *id, const char *action, const char
         g_env_hooks[index].dropped = 0;
         pthread_mutex_unlock(&g_env_hook_lock);
         __atomic_store_n(&g_env_hooks[index].active, 1, __ATOMIC_RELEASE);
-        send_env_result(fd, id, action, function, 1, "");
-        return;
+        return 1;
     }
     if (g_env_hooks[index].installed) {
         pthread_mutex_unlock(&g_env_hook_lock);
-        send_env_result(fd, id, action, function, 0,
-                        "already hooked at a different table entry");
-        return;
+        snprintf(error, error_size, "%s is already hooked at a different table entry", g_env_hooks[index].name);
+        return 0;
     }
     pthread_mutex_unlock(&g_env_hook_lock);
 
     void *original = __atomic_load_n(slot, __ATOMIC_ACQUIRE);
     if (!original) {
-        send_env_result(fd, id, action, function, 0, "JNIEnv table entry is null");
-        return;
+        snprintf(error, error_size, "%s: table entry is null", g_env_hooks[index].name);
+        return 0;
     }
     if (original == env_hook_wrapper(index)) {
-        send_env_result(fd, id, action, function, 0,
-                        "JNIEnv table entry already points at the ADH wrapper");
-        return;
+        snprintf(error, error_size, "%s: entry already points at the ADH wrapper", g_env_hooks[index].name);
+        return 0;
     }
     // Publish the real entry before the swap: a call that lands in the wrapper during the
     // swap window then still reaches the original implementation.
     __atomic_store_n(&g_env_hooks[index].original, original, __ATOMIC_RELEASE);
     if (!adh_swap_pointer_in_ro_page(slot, env_hook_wrapper(index))) {
         __atomic_store_n(&g_env_hooks[index].original, NULL, __ATOMIC_RELEASE);
-        send_env_result(fd, id, action, function, 0,
-                        "JNIEnv table page could not be made writable");
-        return;
+        snprintf(error, error_size, "%s: table page could not be made writable", g_env_hooks[index].name);
+        return 0;
     }
     __atomic_store_n(&g_env_hooks[index].active, 1, __ATOMIC_RELEASE);
     pthread_mutex_lock(&g_env_hook_lock);
@@ -998,5 +984,82 @@ void adh_cmd_jni_env_hook(int fd, const char *id, const char *action, const char
     g_env_hooks[index].hits = 0;
     g_env_hooks[index].dropped = 0;
     pthread_mutex_unlock(&g_env_hook_lock);
-    send_env_result(fd, id, action, function, 1, "");
+    return 1;
+}
+
+void adh_cmd_jni_env_hook(int fd, const char *id, const char *action, const char *function) {
+    if (!action || !action[0]) {
+        send_env_result(fd, id, action, function, 0, 0, 0,
+                        "jni_env_hook requires action: install | uninstall | status");
+        return;
+    }
+    if (strcmp(action, "status") == 0) {
+        int did_attach = 0;
+        JNIEnv *env = adh_jni_attach(&did_attach);
+        if (!env) {
+            send_env_result(fd, id, action, function, 0, 0, 0, "no JavaVM/JNIEnv");
+            return;
+        }
+        g_env_hook_table = (unsigned long long)(uintptr_t)(*env);
+        adh_jni_detach(did_attach);
+        send_env_result(fd, id, action, function, 1, 0, 0, "");
+        return;
+    }
+    if (strcmp(action, "install") != 0 && strcmp(action, "uninstall") != 0) {
+        send_env_result(fd, id, action, function, 0, 0, 0, "action must be install|uninstall|status");
+        return;
+    }
+    if (!function || !function[0]) {
+        send_env_result(fd, id, action, function, 0, 0, 0, "jni_env_hook requires function");
+        return;
+    }
+
+    // Wildcard so dozens of table entries stay operable in one call: "all"/"*" selects every
+    // slot, a trailing '*' selects a prefix ("CallIntMethod*" = varargs + V + A, "Call*" = all
+    // call families). Reports how many were applied and the first failure, never a silent skip.
+    int wildcard = 0;
+    size_t prefix_len = 0;
+    if (strcmp(function, "all") == 0 || strcmp(function, "*") == 0) {
+        wildcard = 1;
+    } else {
+        size_t flen = strlen(function);
+        if (flen && function[flen - 1] == '*') {
+            wildcard = 1;
+            prefix_len = flen - 1;
+        }
+    }
+
+    int applying = strcmp(action, "install") == 0;
+    int applied = 0, failed = 0, matched = 0;
+    char first_error[320] = "";
+    if (!wildcard) {
+        int index = env_hook_index(function);
+        if (index < 0) {
+            send_env_result(fd, id, action, function, 0, 0, 0, "unsupported JNIEnv function");
+            return;
+        }
+        matched = 1;
+        char error[320] = "";
+        int ok = applying ? env_hook_install_index(index, error, sizeof(error))
+                          : env_hook_uninstall_index(index, error, sizeof(error));
+        if (ok) applied = 1; else { failed = 1; snprintf(first_error, sizeof(first_error), "%s", error); }
+    } else {
+        for (int i = 0; i < ENV_HOOK_MAX; i++) {
+            if (prefix_len && strncmp(g_env_hooks[i].name, function, prefix_len) != 0) continue;
+            matched++;
+            char error[320] = "";
+            int ok = applying ? env_hook_install_index(i, error, sizeof(error))
+                              : env_hook_uninstall_index(i, error, sizeof(error));
+            if (ok) applied++;
+            else {
+                failed++;
+                if (!first_error[0]) snprintf(first_error, sizeof(first_error), "%s", error);
+            }
+        }
+        if (matched == 0) {
+            send_env_result(fd, id, action, function, 0, 0, 0, "no JNIEnv function matches that pattern");
+            return;
+        }
+    }
+    send_env_result(fd, id, action, function, (failed == 0) ? 1 : 0, applied, failed, first_error);
 }

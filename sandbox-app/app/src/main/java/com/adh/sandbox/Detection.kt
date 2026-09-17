@@ -29,6 +29,9 @@ object Detection {
     // v4.26 fixture: byte[] written back in place via ReleaseByteArrayElements and the
     // primitive-array critical pair (the post-decryption pattern).
     @JvmStatic external fun jniArrayWriteProbe(): Int
+    // v4.27 fixture: every remaining Call* return type (Boolean/Byte/Char/Short/Long/
+    // Float/Double, instance + static) has a target method exercised from native code.
+    @JvmStatic external fun jniCallTypesProbe(): Int
 
     fun load() {
         try {

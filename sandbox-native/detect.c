@@ -250,6 +250,54 @@ JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_jniArrayWriteProbe(JNIEnv 
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return 0xAD4000; }
     return (jint)(0xAD4000 | bits);
 }
+// v4.27 fixture: exercise every remaining Call* return type (instance + static) through the
+// A and varargs forms and verify the values. Returns 0xAD5000 | bits.
+JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_jniCallTypesProbe(JNIEnv *env, jclass clazz) {
+    jint bits = 0;
+    jclass target = (*env)->FindClass(env, "com/adh/sandbox/JniCallTarget");
+    jclass statics = (*env)->FindClass(env, "com/adh/sandbox/JniCallStatics");
+    if (!target || !statics) { if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); return 0xAD5000; }
+    jmethodID ctor = (*env)->GetMethodID(env, target, "<init>", "()V");
+    jobject obj = ctor ? (*env)->NewObject(env, target, ctor) : NULL;
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return 0xAD5000; }
+
+    jmethodID m_flag = (*env)->GetMethodID(env, target, "flag", "()Z");
+    jmethodID m_byte = (*env)->GetMethodID(env, target, "byteValue", "()B");
+    jmethodID m_char = (*env)->GetMethodID(env, target, "charValue", "()C");
+    jmethodID m_short = (*env)->GetMethodID(env, target, "shortValue", "()S");
+    jmethodID m_long = (*env)->GetMethodID(env, target, "longValue", "()J");
+    jmethodID m_float = (*env)->GetMethodID(env, target, "floatValue", "()F");
+    jmethodID m_double = (*env)->GetMethodID(env, target, "doubleValue", "()D");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return 0xAD5000; }
+
+    if (obj && m_flag && (*env)->CallBooleanMethodA(env, obj, m_flag, NULL) == JNI_TRUE) bits |= 1;
+    if (obj && m_byte && (*env)->CallByteMethodA(env, obj, m_byte, NULL) == (jbyte)0x2A) bits |= 2;
+    if (obj && m_char && (*env)->CallCharMethodA(env, obj, m_char, NULL) == (jchar)'Z') bits |= 4;
+    if (obj && m_short && (*env)->CallShortMethodA(env, obj, m_short, NULL) == (jshort)1234) bits |= 8;
+    if (obj && m_long && (*env)->CallLongMethodA(env, obj, m_long, NULL) == 1234567890123LL) bits |= 16;
+    if (obj && m_float && (*env)->CallFloatMethodA(env, obj, m_float, NULL) == 2.5f) bits |= 32;
+    if (obj && m_double && (*env)->CallDoubleMethodA(env, obj, m_double, NULL) == 1.25) bits |= 64;
+
+    jmethodID s_flag = (*env)->GetStaticMethodID(env, statics, "staticFlag", "()Z");
+    jmethodID s_byte = (*env)->GetStaticMethodID(env, statics, "staticByte", "()B");
+    jmethodID s_char = (*env)->GetStaticMethodID(env, statics, "staticChar", "()C");
+    jmethodID s_short = (*env)->GetStaticMethodID(env, statics, "staticShort", "()S");
+    jmethodID s_long = (*env)->GetStaticMethodID(env, statics, "staticLong", "()J");
+    jmethodID s_float = (*env)->GetStaticMethodID(env, statics, "staticFloat", "()F");
+    jmethodID s_double = (*env)->GetStaticMethodID(env, statics, "staticDouble", "()D");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return 0xAD5000 | bits; }
+    if (s_flag && (*env)->CallStaticBooleanMethod(env, statics, s_flag) == JNI_TRUE) bits |= 256;
+    if (s_byte && (*env)->CallStaticByteMethod(env, statics, s_byte) == (jbyte)0x37) bits |= 512;
+    if (s_char && (*env)->CallStaticCharMethod(env, statics, s_char) == (jchar)'Q') bits |= 1024;
+    if (s_short && (*env)->CallStaticShortMethod(env, statics, s_short) == (jshort)4321) bits |= 2048;
+    if (s_long && (*env)->CallStaticLongMethod(env, statics, s_long) == 9876543210LL) bits |= 4096;
+    if (s_float && (*env)->CallStaticFloatMethod(env, statics, s_float) == 3.5f) bits |= 8192;
+    if (s_double && (*env)->CallStaticDoubleMethod(env, statics, s_double) == 6.25) bits |= 16384;
+
+    if (obj) (*env)->DeleteLocalRef(env, obj);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return 0xAD5000 | bits; }
+    return (jint)(0xAD5000 | bits);
+}
 JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_run(JNIEnv *env, jclass clazz) {
     (void)env; (void)clazz;
     int flags = 0;
