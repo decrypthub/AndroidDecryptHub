@@ -51,7 +51,7 @@ Generated from the live ADH Daemon registry (61 tools). Endpoint: `POST /mcp` (J
 | `dump_all_dex` | 一键 dump 当前目标进程所有已加载 DEX：ART DexFile 枚举 + 逐个 dump + SHA-256 去重 | session |
 | `dex_recover` | Recover extracted CodeItems from a restored snapshot into a base dex + rebuild (baseSha/baseB64 + restoredSha/restoredB64) | baseB64, baseSha, restoredB64, restoredSha |
 | `trigger` | Actively load a class (level 1) and invoke a safe static no-arg method (level 3) to force code paths — a trigger source for unpacking | session, class, method, level |
-| `qbdi_trace` | QBDI instruction-level dynamic trace of a native function (per-instruction disassembly + return value) | session, symLib, symbol |
+| `qbdi_trace` | QBDI instruction-level dynamic trace of a native function (per-instruction disassembly + return value), invoked with up to 8 unsigned integer/pointer args. | session, symLib, symbol, args |
 | `net_correlate` | Network↔crypto correlation: pair plaintext with the TLS request carrying its ciphertext (same thread + time window) | session |
 | `load_library` | 把任意 .so 加载进目标进程（如 frida-gadget，随后 gadget 会按 script 模式自动跑你的 frida 脚本）。可选 symbol 探测。dlopen from inside the target. | session, path, symbol |
 | `automation_status` | Read-only phone automation status: user toggle, privacy switches, package allowlist, bridge/device state (foreground package, snapshots, notification grant/ring, watchdog counters). This tool never enables automation. | — |

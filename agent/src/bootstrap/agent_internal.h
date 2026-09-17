@@ -35,6 +35,8 @@ int json_get_str(const char *json, const char *key, char *out, size_t n);
 long long json_get_num(const char *json, const char *key);
 size_t b64_encode(const unsigned char *in, size_t len, char *out);
 int hex2bytes(const char *hex, unsigned char *out, int maxlen);
+int adh_parse_u64_csv(const char *csv, unsigned long long *out, int max,
+                       int *count_out, char *error, size_t error_size);
 long long now_ns(void);
 
 // ---- io.c ----

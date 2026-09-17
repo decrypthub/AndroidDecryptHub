@@ -479,10 +479,11 @@ static void command_loop(int fd) {
                     json_get_str(line, "className", tcls, sizeof(tcls));
                     adh_cmd_detect_watch(fd, id, dmod, tcls);
                 } else if (strcmp(op, "qbdi_trace") == 0) {
-                    char sl[64] = "", sy[80] = "";
+                    char sl[64] = "", sy[80] = "", targs[256] = "";
                     json_get_str(line, "symLib", sl, sizeof(sl));
                     json_get_str(line, "symbol", sy, sizeof(sy));
-                    adh_cmd_qbdi_trace(fd, id, sl, sy);
+                    json_get_str(line, "args", targs, sizeof(targs));
+                    adh_cmd_qbdi_trace(fd, id, sl, sy, targs);
                 } else if (strcmp(op, "trace_run") == 0) {
                     char sl[64] = "", sy[64] = "", hm[80] = "", tcls[200] = "";
                     json_get_str(line, "symLib", sl, sizeof(sl));

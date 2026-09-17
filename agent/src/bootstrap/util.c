@@ -3,6 +3,7 @@
 // decode, and a monotonic nanosecond clock. No globals, no target knowledge.
 #include "agent_internal.h"
 #include <sys/system_properties.h>
+#include <errno.h>
 #include <time.h>
 
 void prop(const char *key, char *out, size_t n) {
@@ -120,4 +121,40 @@ int hex2bytes(const char *hex, unsigned char *out, int maxlen) {
 long long now_ns(void) {
     struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
     return (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+}
+
+// Parse a comma-separated list of unsigned decimal/0x-hex integer or pointer args.
+// Shared by native_call and QBDI trace so both reject malformed input identically.
+int adh_parse_u64_csv(const char *csv, unsigned long long *out, int max,
+                      int *count_out, char *error, size_t error_size) {
+    *count_out = 0;
+    if (!csv || !csv[0]) return 1;
+    const char *p = csv;
+    while (*p && *count_out < max) {
+        while (*p == ' ' || *p == '\t' || *p == ',') p++;
+        if (!*p) break;
+        if (*p == '-') {
+            snprintf(error, error_size, "only unsigned integer/pointer args are supported");
+            return 0;
+        }
+        char *end = NULL;
+        errno = 0;
+        unsigned long long value = strtoull(p, &end, 0);
+        if (errno || end == p) {
+            snprintf(error, error_size, "invalid integer arg at '%s' (decimal or 0x hex)", p);
+            return 0;
+        }
+        out[(*count_out)++] = value;
+        p = end;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p && *p != ',') {
+            snprintf(error, error_size, "args must be comma-separated");
+            return 0;
+        }
+    }
+    if (*p) {
+        snprintf(error, error_size, "too many args (max %d)", max);
+        return 0;
+    }
+    return 1;
 }

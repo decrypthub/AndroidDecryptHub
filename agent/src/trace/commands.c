@@ -147,7 +147,7 @@ void adh_cmd_trace_run(int fd, const char *id, const char *symbol_library,
 }
 
 void adh_cmd_qbdi_trace(int fd, const char *id, const char *symbol_library,
-                        const char *symbol) {
+                        const char *symbol, const char *args_csv) {
     const char *library = symbol_library[0] ? symbol_library : "libadhdetect.so";
     const char *target_symbol = symbol[0] ? symbol : "adh_trace_target";
     void *function = adh_resolve_sym(library, target_symbol);
@@ -163,13 +163,29 @@ void adh_cmd_qbdi_trace(int fd, const char *id, const char *symbol_library,
         return;
     }
 
+    unsigned long long args[8] = {0};
+    int argc = 0;
+    char arg_error[256] = "";
+    if (!adh_parse_u64_csv(args_csv ? args_csv : "", args, 8, &argc, arg_error, sizeof(arg_error))) {
+        char errorj[320];
+        json_escape(arg_error, errorj, sizeof(errorj));
+        char *error_out = malloc(520);
+        if (!error_out) { send_oom(fd, idj, "qbdi_trace"); return; }
+        snprintf(error_out, 520,
+                 "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"qbdi_trace\",\"ok\":false,"
+                 "\"error\":\"%s\"}\n", idj, errorj);
+        send_line(fd, error_out);
+        free(error_out);
+        return;
+    }
+
     char *trace = malloc(1 << 18);
     if (!trace) {
         send_oom(fd, idj, "qbdi_trace");
         return;
     }
     trace[0] = 0;
-    adh_qbdi_trace(function, trace, (1 << 18) - 64);
+    adh_qbdi_trace(function, args, argc, trace, (1 << 18) - 64);
     char *message = malloc((1 << 18) + 128);
     if (!message) {
         free(trace);

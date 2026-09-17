@@ -47,7 +47,7 @@ static VMAction qbdi_insn_cb(VMInstanceRef vm, GPRState *gpr, FPRState *fpr, voi
 
 // Trace `func` (invoked with no args) via QBDI. Writes JSON FIELDS (no outer braces)
 // into out — the caller wraps them in the cmdResult object. Returns insn count / -1.
-int adh_qbdi_trace(void *func, char *out, int outsz) {
+int adh_qbdi_trace(void *func, const unsigned long long *args, int argc, char *out, int outsz) {
     void *h = dlopen("libQBDI.so", RTLD_NOW);
     if (!h) { snprintf(out, outsz, "\"ok\":false,\"error\":\"libQBDI.so not available (dlopen)\""); return -1; }
     p_initVM_t f_init = (p_initVM_t)dlsym(h, "qbdi_initVM");
@@ -75,7 +75,19 @@ int adh_qbdi_trace(void *func, char *out, int outsz) {
     f_addmod(vm, (rword)(uintptr_t)func);
     f_addcb(vm, QBDI_PREINST, qbdi_insn_cb, NULL, 0);
     rword ret = 0;
-    f_call(vm, &ret, (rword)(uintptr_t)func, 0);
+    if (argc < 0) argc = 0;
+    if (argc > 8) argc = 8;
+    switch (argc) {
+        case 0: f_call(vm, &ret, (rword)(uintptr_t)func, 0); break;
+        case 1: f_call(vm, &ret, (rword)(uintptr_t)func, 1, (rword)args[0]); break;
+        case 2: f_call(vm, &ret, (rword)(uintptr_t)func, 2, (rword)args[0], (rword)args[1]); break;
+        case 3: f_call(vm, &ret, (rword)(uintptr_t)func, 3, (rword)args[0], (rword)args[1], (rword)args[2]); break;
+        case 4: f_call(vm, &ret, (rword)(uintptr_t)func, 4, (rword)args[0], (rword)args[1], (rword)args[2], (rword)args[3]); break;
+        case 5: f_call(vm, &ret, (rword)(uintptr_t)func, 5, (rword)args[0], (rword)args[1], (rword)args[2], (rword)args[3], (rword)args[4]); break;
+        case 6: f_call(vm, &ret, (rword)(uintptr_t)func, 6, (rword)args[0], (rword)args[1], (rword)args[2], (rword)args[3], (rword)args[4], (rword)args[5]); break;
+        case 7: f_call(vm, &ret, (rword)(uintptr_t)func, 7, (rword)args[0], (rword)args[1], (rword)args[2], (rword)args[3], (rword)args[4], (rword)args[5], (rword)args[6]); break;
+        default: f_call(vm, &ret, (rword)(uintptr_t)func, 8, (rword)args[0], (rword)args[1], (rword)args[2], (rword)args[3], (rword)args[4], (rword)args[5], (rword)args[6], (rword)args[7]); break;
+    }
     int n = g_nqtrace;
     if (f_free && stack) f_free(stack);
     if (f_term) f_term(vm);
