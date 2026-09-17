@@ -82,7 +82,7 @@ translation — kept separate).
 - `verify_v34_ecapture.sh` — v3.4 eCapture 验收（device）：官方二进制 → 预检 → 对 sandbox 起 TLS probe → 用 MCP `net_capture` 驱动一次真实 HTTPS → 断言 eCapture 抓到 `ADH_NET_MARKER_v1`/`ADH_NET_RESPONSE_v1`；内核不支持时 SKIP。- **`verify_v08_disasm.sh` / `verify_v08_analyze.sh`** intermittently report `exports=0` on the memory-reconstructed `.so`. Root cause is in `daemon reconstructSo` (index.ts:686) — `readMem` breaks early on a short first chunk (line 663), which can truncate a PT_LOAD and drop the dynamic segment. Both pass on re-run. Tracked for the daemon `dump.ts` extraction (Phase 2).
 - `verify_v35_sessions.sh` — v3.5 会话清理（host）：`pruneSessions` 单测（保留上限 / 过期丢弃 / 不动在线会话）+ 会话选择器标记与下拉配色 + daemon 可达时校验实际离线会话上限。
 - `verify_v42_lsplant.sh` — LSPlant probe + `java_hook status`（deploy new agent；旧 payload 明确 SKIP）。
-- `verify_v43_javahook.sh` — 沙盒确定性 `HookProbe.ping` install → broadcast 触发 → 原返回值 → `JAVA_HOOK` capture 事件 → `unhook` 验收（deploy new sandbox/agent；未部署时 SKIP）。
+- `verify_v43_javahook.sh` — 沙盒确定性静态 `HookProbe.ping` + 实例 `instancePing`（`INSTANCE` receiver）install → broadcast 触发 → 原返回值 → `JAVA_HOOK` capture 事件 → `unhook` 验收（deploy new sandbox/agent；未部署时 SKIP）。
 - `verify_v44_java_enum.sh` — 沙盒 `HookProbe` 类/字段/两个 `ping` 重载枚举验收（deploy new agent/sandbox；未部署时 SKIP）。
 - `verify_v45_java_call.sh` — 沙盒 `HookProbe.ping` 两个重载的反射主动调用与返回值验收（deploy new agent/sandbox；未部署时 SKIP）。
-- `verify_v46_native_hook.sh` — 沙盒 `libadhdetect.so:adh_trace_target` inline hook → JNI 触发 → 寄存器 capture 事件 → unhook 验收（deploy new agent/sandbox；未部署时 SKIP）。
+- `verify_v46_native_hook.sh` — 沙盒 `libadhdetect.so:adh_trace_target` inline hook → JNI 触发 → 真实 hookId 的寄存器 capture 事件 → unhook 验收（deploy new agent/sandbox；未部署时 SKIP）。

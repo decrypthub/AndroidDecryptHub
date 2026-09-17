@@ -24,6 +24,7 @@
 struct NativeHookContext {
     int id;
     int active;              // 0 free, 1 active, 2 reserved
+    int used;                // slots are never reused after unhook (race safety)
     int mode;                // 0 got, 1 inline
     void *target;
     void *original;
@@ -37,6 +38,7 @@ static NativeHookContext g_native_hooks[ADH_NATIVE_MAX_HOOKS];
 static pthread_mutex_t g_native_hooks_lock = PTHREAD_MUTEX_INITIALIZER;
 static int g_next_native_hook_id = 1;
 static std::atomic<unsigned long long> g_native_hook_hits[ADH_NATIVE_MAX_HOOKS];
+static std::atomic<int> g_native_hook_slot_ids[ADH_NATIVE_MAX_HOOKS];
 
 // Referenced directly by the fixed arm64 stubs below.
 extern "C" void *g_native_hook_originals[ADH_NATIVE_MAX_HOOKS] = {};
@@ -52,13 +54,15 @@ static void set_error(char *error, size_t error_size, const char *format, ...) {
 
 extern "C" void adh_native_hook_record(uint64_t *regs, int hook_id) {
     if (!regs || hook_id < 0 || hook_id >= ADH_NATIVE_MAX_HOOKS) return;
+    int hook_uid = g_native_hook_slot_ids[hook_id].load(std::memory_order_relaxed);
+    if (hook_uid <= 0) hook_uid = hook_id + 1;
     g_native_hook_hits[hook_id].fetch_add(1, std::memory_order_relaxed);
     char json[640];
     snprintf(json, sizeof(json),
              "{\"hookId\":%d,\"x0\":\"0x%llx\",\"x1\":\"0x%llx\",\"x2\":\"0x%llx\","
              "\"x3\":\"0x%llx\",\"x4\":\"0x%llx\",\"x5\":\"0x%llx\",\"x6\":\"0x%llx\","
              "\"x7\":\"0x%llx\",\"x8\":\"0x%llx\",\"x18\":\"0x%llx\"}",
-             hook_id,
+             hook_uid,
              (unsigned long long)regs[0], (unsigned long long)regs[1],
              (unsigned long long)regs[2], (unsigned long long)regs[3],
              (unsigned long long)regs[4], (unsigned long long)regs[5],
@@ -146,7 +150,7 @@ static void *stub_for_id(int id) {
 
 static int find_free_slot_locked() {
     for (int i = 0; i < ADH_NATIVE_MAX_HOOKS; i++) {
-        if (g_native_hooks[i].active == 0) return i;
+        if (g_native_hooks[i].active == 0 && !g_native_hooks[i].used) return i;
     }
     return -1;
 }
@@ -188,7 +192,9 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
     if (id <= 0) { g_next_native_hook_id = 1; id = g_next_native_hook_id++; }
     if (slot >= 0) {
         g_native_hooks[slot].active = 2;
+        g_native_hooks[slot].used = 1;
         g_native_hooks[slot].id = id;
+        g_native_hook_slot_ids[slot].store(id, std::memory_order_relaxed);
     }
     pthread_mutex_unlock(&g_native_hooks_lock);
     if (slot < 0) return (set_error(error, error_size, "too many native hooks (max %d)", ADH_NATIVE_MAX_HOOKS), 0);
@@ -268,7 +274,6 @@ extern "C" int adh_native_hook_unhook(int hook_id, char *error, size_t error_siz
         return (set_error(error, error_size, "native unhook failed id=%d", hook_id), 0);
     }
     int slot = (int)(ctx - g_native_hooks);
-    g_native_hook_originals[slot] = nullptr;
     g_native_hook_hits[slot].store(0ULL, std::memory_order_relaxed);
     reset_context(*ctx);
     pthread_mutex_unlock(&g_native_hooks_lock);

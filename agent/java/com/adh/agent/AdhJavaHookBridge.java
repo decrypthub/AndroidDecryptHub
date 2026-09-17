@@ -2,6 +2,7 @@ package com.adh.agent;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.util.Arrays;
 
 /**
  * Fixed LSPlant hooker class bundled with libadh_agent.so.
@@ -26,19 +27,27 @@ public final class AdhJavaHookBridge {
     public Object callback(Object[] args) throws Throwable {
         hits++;
         int first = isStatic ? 0 : 1;
-        if (args != null && args.length > first) {
-            Object value = args[first];
-            lastArg = value == null ? "null" : String.valueOf(value);
-        } else {
-            lastArg = "";
+        try {
+            if (args != null && args.length > first) {
+                Object value = args[first];
+                lastArg = value == null ? "null" : String.valueOf(value);
+            } else {
+                lastArg = "";
+            }
+        } catch (Throwable t) {
+            lastArg = "<toString failed>";
         }
         if (backup == null) {
             lastError = "hook backup not ready";
             nativeReport(hookId, target, lastArg, "", lastError);
             throw new IllegalStateException(lastError);
         }
+        Object receiver = isStatic ? null : (args != null && args.length > 0 ? args[0] : null);
+        Object[] params = isStatic
+            ? (args != null ? args : new Object[0])
+            : (args != null && args.length > 1 ? Arrays.copyOfRange(args, 1, args.length) : new Object[0]);
         try {
-            Object result = backup.invoke(null, args);
+            Object result = backup.invoke(receiver, params);
             lastReturn = result == null ? "null" : String.valueOf(result);
             lastError = "";
             nativeReport(hookId, target, lastArg, lastReturn, lastError);

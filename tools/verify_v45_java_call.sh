@@ -29,7 +29,7 @@ try {
   console.log('RESULT:SKIP');
   process.exit(0);
 }
-if (!one.ok && /unsupported|unknown op|timeout/i.test(String(one.error ?? ''))) {
+if (!one.ok && /unsupported|unknown op/i.test(String(one.error ?? ''))) {
   console.log(`old payload / no java_call: ${one.error}`);
   console.log('RESULT:SKIP');
   process.exit(0);

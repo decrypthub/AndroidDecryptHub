@@ -25,7 +25,7 @@
 #include <unistd.h>
 #include <vector>
 
-#define LTAG "ADH_LSP"
+#define LTAG "ADH_RT"
 #define LLOGI(...) __android_log_print(ANDROID_LOG_INFO,  LTAG, __VA_ARGS__)
 #define LLOGE(...) __android_log_print(ANDROID_LOG_ERROR, LTAG, __VA_ARGS__)
 
@@ -191,6 +191,10 @@ static void do_init(void) {
             std::string prefix(p);
             return adh_resolve_sym_prefix("libart.so", prefix.c_str());
         },
+        .generated_class_name = "com.android.internal.util.NativeBridge_",
+        .generated_source_name = "NativeBridge",
+        .generated_field_name = "handler",
+        .generated_method_name = "{target}",
     };
 
     try {
@@ -204,7 +208,7 @@ static void do_init(void) {
         g_init_error[0] = 0;
         LLOGI("lsplant::Init -> ok");
     } else {
-        if (!g_init_error[0]) set_init_error("lsplant::Init returned false (check logcat tag ADH_LSP)");
+        if (!g_init_error[0]) set_init_error("lsplant::Init returned false (check logcat tag ADH_RT)");
         LLOGE("lsplant::Init -> FAIL: %s", g_init_error);
     }
 }
@@ -308,6 +312,7 @@ extern "C" const char *adh_compute_shorty(JNIEnv *env, jobject method) {
 struct JavaHookContext {
     int id;
     int active;                 // 0 free, 1 active, 2 reserved
+    int used;                   // retired slots are never reused
     jobject target_method;      // global ref to java.lang.reflect.Method
     jobject backup_method;      // global ref returned by LSPlant
     jobject bridge;             // global ref to AdhJavaHookBridge
@@ -578,7 +583,7 @@ static jobject find_target_method(JNIEnv *env, jclass target_class, const std::s
 
 static int find_free_hook_slot_locked() {
     for (int i = 0; i < ADH_JAVA_MAX_HOOKS; i++) {
-        if (g_java_hooks[i].active == 0) return i;
+        if (g_java_hooks[i].active == 0 && !g_java_hooks[i].used) return i;
     }
     return -1;
 }
@@ -593,6 +598,7 @@ static int find_hook_slot_locked(int id) {
 static void reset_hook_slot(JavaHookContext &hook) {
     hook.id = 0;
     hook.active = 0;
+    hook.used = 0;
     hook.target_method = nullptr;
     hook.backup_method = nullptr;
     hook.bridge = nullptr;
@@ -688,7 +694,7 @@ extern "C" int adh_javahook_hook_method(JNIEnv *env, const char *class_name, con
     if (!backup) {
         env->DeleteGlobalRef(bridge);
         env->DeleteLocalRef(target);
-        return fail_hook("lsplant::Hook failed (check logcat tag ADH_LSP)");
+        return fail_hook("lsplant::Hook failed (check logcat tag ADH_RT)");
     }
 
     jobject target_global = env->NewGlobalRef(target);
@@ -706,6 +712,7 @@ extern "C" int adh_javahook_hook_method(JNIEnv *env, const char *class_name, con
     JavaHookContext &ctx = g_java_hooks[slot];
     ctx.id = hook_id;
     ctx.active = 1;
+    ctx.used = 1;
     ctx.target_method = target_global;
     ctx.backup_method = backup;
     ctx.bridge = bridge;
@@ -729,7 +736,11 @@ extern "C" int adh_javahook_unhook_id(JNIEnv *env, int hook_id, char *error, siz
         JavaHookContext &hook = g_java_hooks[i];
         if (hook.active != 1 || (hook_id != 0 && hook.id != hook_id)) continue;
         if (lsplant::UnHook(env, hook.target_method)) {
-            release_hook_slot(env, hook);
+            // LSPlant UnHook is not atomic with respect to in-flight callbacks. Keep the
+            // bridge/backup refs alive and retire this slot permanently instead of deleting
+            // objects a concurrent callback may still be using.
+            hook.active = 0;
+            hook.id = 0;
             removed++;
         } else {
             failed++;

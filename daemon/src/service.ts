@@ -22,7 +22,7 @@ export function sendCmd(sessionId: string, op: string, args: Record<string, unkn
     const id = nextCmdId();
     const timer = setTimeout(() => { pending.delete(id); reject(new Error('command timeout')); }, timeoutMs);
     pending.set(id, { resolve, reject, timer });
-    sock.write(frameJson({ t: 'cmd', id, op, ...args }));
+    sock.write(frameJson({ ...args, t: 'cmd', id, op }));
   });
 }
 

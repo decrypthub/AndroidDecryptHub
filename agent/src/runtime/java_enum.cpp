@@ -15,6 +15,8 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
+static std::string jstring_to_utf(JNIEnv *env, jstring value);
+
 static void set_error(char *error, size_t error_size, const char *format, ...) {
     if (!error || !error_size) return;
     va_list ap;
@@ -22,6 +24,34 @@ static void set_error(char *error, size_t error_size, const char *format, ...) {
     vsnprintf(error, error_size, format, ap);
     va_end(ap);
     error[error_size - 1] = 0;
+}
+
+struct LocalFrameGuard {
+    JNIEnv *env;
+    bool active;
+    LocalFrameGuard(JNIEnv *e, jint capacity) : env(e), active(false) {
+        if (env && env->PushLocalFrame(capacity) == 0) active = true;
+    }
+    ~LocalFrameGuard() {
+        if (active) {
+            if (env->ExceptionCheck()) env->ExceptionClear();
+            env->PopLocalFrame(nullptr);
+        }
+    }
+};
+
+static std::string pending_exception_text(JNIEnv *env) {
+    if (!env || !env->ExceptionCheck()) return "";
+    jthrowable throwable = env->ExceptionOccurred();
+    env->ExceptionClear();
+    if (!throwable) return "unknown Java exception";
+    jclass throwable_class = env->FindClass("java/lang/Throwable");
+    jmethodID to_string = throwable_class ? env->GetMethodID(throwable_class, "toString", "()Ljava/lang/String;") : nullptr;
+    jstring text = to_string ? (jstring)env->CallObjectMethod(throwable, to_string) : nullptr;
+    std::string result = jstring_to_utf(env, text);
+    if (text) env->DeleteLocalRef(text);
+    env->DeleteLocalRef(throwable);
+    return result.empty() ? "unknown Java exception" : result;
 }
 
 static std::string json_escape(const std::string &value) {
@@ -102,6 +132,7 @@ static void append_params(JNIEnv *env, std::string &out, jobjectArray params, jm
 
 extern "C" int adh_java_enum_json(JNIEnv *env, const char *class_name, char **out_json,
                                    char *error, size_t error_size) {
+    LocalFrameGuard local_frame(env, 256);
     if (out_json) *out_json = nullptr;
     if (!env || !class_name || !class_name[0] || !out_json) {
         set_error(error, error_size, "need className and JNIEnv");
@@ -586,6 +617,7 @@ static jobject make_java_arg(JNIEnv *env, jclass param_type, const CallArg &arg,
 extern "C" int adh_java_call_json(JNIEnv *env, const char *class_name, const char *method_name,
                                    const char *params, const char *field_name, const char *args_json,
                                    char **out_json, char *error, size_t error_size) {
+    LocalFrameGuard local_frame(env, 256);
     if (out_json) *out_json = nullptr;
     if (!env || !class_name || !method_name || !out_json) {
         set_error(error, error_size, "need className and method");
@@ -615,16 +647,35 @@ extern "C" int adh_java_call_json(JNIEnv *env, const char *class_name, const cha
             env->DeleteLocalRef(target_class);
             return (set_error(error, error_size, "instance method requires field=<static field holding the receiver>"), 0);
         }
-        jmethodID get_field = env->GetMethodID(env->FindClass("java/lang/Class"), "getDeclaredField",
+        jclass class_class = env->FindClass("java/lang/Class");
+        jmethodID get_field = env->GetMethodID(class_class, "getDeclaredField",
                                                "(Ljava/lang/String;)Ljava/lang/reflect/Field;");
         jstring field_j = env->NewStringUTF(field_name);
         jobject field = get_field ? env->CallObjectMethod(target_class, get_field, field_j) : nullptr;
+        if (env->ExceptionCheck()) {
+            std::string reason = pending_exception_text(env);
+            env->DeleteLocalRef(method);
+            env->DeleteLocalRef(target_class);
+            return (set_error(error, error_size, "receiver field lookup failed: %s", reason.c_str()), 0);
+        }
         if (field) {
             jclass field_class = env->FindClass("java/lang/reflect/Field");
             jmethodID set_accessible = env->GetMethodID(field_class, "setAccessible", "(Z)V");
             jmethodID get_value = env->GetMethodID(field_class, "get", "(Ljava/lang/Object;)Ljava/lang/Object;");
             env->CallVoidMethod(field, set_accessible, JNI_TRUE);
+            if (env->ExceptionCheck()) {
+                std::string reason = pending_exception_text(env);
+                env->DeleteLocalRef(method);
+                env->DeleteLocalRef(target_class);
+                return (set_error(error, error_size, "receiver field access failed: %s", reason.c_str()), 0);
+            }
             receiver = env->CallObjectMethod(field, get_value, nullptr);
+            if (env->ExceptionCheck()) {
+                std::string reason = pending_exception_text(env);
+                env->DeleteLocalRef(method);
+                env->DeleteLocalRef(target_class);
+                return (set_error(error, error_size, "receiver field read failed: %s", reason.c_str()), 0);
+            }
         }
         if (!receiver) {
             env->DeleteLocalRef(method);

@@ -10,4 +10,5 @@ object HookProbe {
 
     @JvmStatic
     fun ping(input: String, repeat: Int): String = "REAL_HOOK:$input*$repeat"
+    fun instancePing(input: String): String = "REAL_INSTANCE:$input"
 }

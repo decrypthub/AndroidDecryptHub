@@ -35,7 +35,7 @@ const serial = process.env.ANDROID_SERIAL || process.env.ADH_SERIAL || line.spli
 const pid = String(spawnSync(adb, ['-s', serial, 'shell', 'pidof', 'com.adh.sandbox'], { encoding: 'utf8' }).stdout || '').trim();
 if (!pid) skip('com.adh.sandbox is not running');
 
-await post('/api/native/hook', { session: agent.sessionId, action: 'unhook', id: 0 }).catch(() => null);
+await post('/api/native/hook', { session: agent.sessionId, action: 'unhook', hookId: 0 }).catch(() => null);
 let hook;
 try {
   hook = await post('/api/native/hook', {
@@ -44,7 +44,7 @@ try {
   });
 } catch (e) { skip(`old payload / no native_hook: ${e.message}`); }
 const hookErr = String(hook.error ?? '');
-if (!hook.ok && /unsupported|unknown op|timeout/i.test(hookErr)) skip(`old payload / no native_hook: ${hookErr}`);
+if (!hook.ok && /unsupported|unknown op/i.test(hookErr)) skip(`old payload / no native_hook: ${hookErr}`);
 if (!hook.ok) {
   if (/symbol not found|not found/i.test(hookErr)) skip(`libadhdetect target unavailable: ${hookErr}`);
   console.log(JSON.stringify({ hook }));
@@ -56,7 +56,7 @@ const bc = spawnSync(adb, ['-s', serial, 'shell', 'am', 'broadcast',
   '-a', 'com.adh.sandbox.NATIVE_HOOK_PROBE',
   '-n', 'com.adh.sandbox/.NativeHookProbeReceiver'], { encoding: 'utf8' });
 if (bc.status !== 0) {
-  await post('/api/native/hook', { session: agent.sessionId, action: 'unhook', id: hookId }).catch(() => null);
+  await post('/api/native/hook', { session: agent.sessionId, action: 'unhook', hookId: hookId }).catch(() => null);
   console.log(`broadcast failed: ${bc.stderr || bc.stdout}`);
   console.log('RESULT:FAIL');
   process.exit(0);
@@ -79,7 +79,7 @@ for (let i = 0; i < 20; i++) {
 }
 const h = (status?.status?.hooks ?? []).find((x) => Number(x.id) === hookId) ?? {};
 const alive = String(spawnSync(adb, ['-s', serial, 'shell', 'pidof', 'com.adh.sandbox'], { encoding: 'utf8' }).stdout || '').trim();
-const unhook = await post('/api/native/hook', { session: agent.sessionId, action: 'unhook', id: hookId }).catch(() => null);
+const unhook = await post('/api/native/hook', { session: agent.sessionId, action: 'unhook', hookId: hookId }).catch(() => null);
 const pass = hook.ok === true && hookId >= 1 && h.hits >= 1 && event != null && unhook?.ok === true && alive.length > 0;
 console.log(JSON.stringify({ hook, status, event: event ? { id: event.id, func: event.func, algo: event.algo, op: event.op, preview: event.preview } : null, unhook, alive }));
 console.log(pass ? 'RESULT:PASS' : 'RESULT:FAIL');

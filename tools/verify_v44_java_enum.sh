@@ -25,7 +25,7 @@ try {
   console.log('RESULT:SKIP');
   process.exit(0);
 }
-if (!r.ok && /unsupported|unknown op|timeout/i.test(String(r.error ?? ''))) {
+if (!r.ok && /unsupported|unknown op/i.test(String(r.error ?? ''))) {
   console.log(`old payload / no java_enum: ${r.error}`);
   console.log('RESULT:SKIP');
   process.exit(0);

@@ -164,18 +164,32 @@ static void cmd_java_hook(int fd, const char *id, const char *action, const char
         snprintf(error, sizeof(error), "java_hook requires action: hook | unhook | status");
     }
 
-    char status[2048] = "{}";
-    adh_javahook_status_json(env, status, sizeof(status));
+    char *status = (char *)malloc(65536);
+    if (!status) {
+        if (did_attach) adh_jni_detach(did_attach);
+        send_oom(fd, idj, "java_hook");
+        return;
+    }
+    status[0] = 0;
+    adh_javahook_status_json(env, status, 65536);
     if (did_attach) adh_jni_detach(did_attach);
 
     char errj[768];
     json_escape(error, errj, sizeof(errj));
-    char out[4096];
-    snprintf(out, sizeof(out),
+    size_t out_len = strlen(status) + 2048;
+    char *out = (char *)malloc(out_len);
+    if (!out) {
+        free(status);
+        send_oom(fd, idj, "java_hook");
+        return;
+    }
+    snprintf(out, out_len,
              "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"java_hook\",\"ok\":%s,\"action\":\"%s\","
              "\"hookId\":%d,\"error\":\"%s\",\"status\":%s}\n",
              idj, ok ? "true" : "false", action, new_hook_id, errj, status);
     send_line(fd, out);
+    free(status);
+    free(out);
     LOGI("java_hook: action=%s ok=%d error=%s", action, ok, error);
 #else
     (void)action; (void)class_name; (void)method_name; (void)params; (void)requested_hook_id;
@@ -287,8 +301,13 @@ static void cmd_native_hook(int fd, const char *id, const char *action, const ch
     } else {
         snprintf(error, sizeof(error), "native_hook requires action: hook | unhook | status");
     }
-    char status[8192] = "{}";
-    adh_native_hook_status_json(status, sizeof(status));
+    char *status = (char *)malloc(65536);
+    if (!status) {
+        send_oom(fd, idj, "native_hook");
+        return;
+    }
+    status[0] = 0;
+    adh_native_hook_status_json(status, 65536);
     char errj[768];
     json_escape(error, errj, sizeof(errj));
     size_t out_len = strlen(status) + 1024;
@@ -303,6 +322,7 @@ static void cmd_native_hook(int fd, const char *id, const char *action, const ch
              idj, ok ? "true" : "false", action, new_id, errj, status);
     send_line(fd, out);
     free(out);
+    free(status);
     LOGI("native_hook: action=%s ok=%d id=%d error=%s", action, ok, new_id, error);
 }
 // Read framed commands from the Host ADH Daemon and dispatch.
@@ -338,7 +358,7 @@ static void command_loop(int fd) {
                     json_get_str(line, "className", jcls, sizeof(jcls));
                     json_get_str(line, "method", jmethod, sizeof(jmethod));
                     json_get_str(line, "params", jparams, sizeof(jparams));
-                    long long jhook_id = json_get_num(line, "id");
+                    long long jhook_id = json_get_num(line, "hookId");
                     cmd_java_hook(fd, id, jaction, jcls, jmethod, jparams, jhook_id);
                 } else if (strcmp(op, "java_enum") == 0) {
                     char jcls[256] = "";
@@ -359,7 +379,7 @@ static void command_loop(int fd) {
                     json_get_str(line, "module", nmodule, sizeof(nmodule));
                     json_get_str(line, "symbol", nsymbol, sizeof(nsymbol));
                     json_get_str(line, "addr", naddr, sizeof(naddr));
-                    long long nid = json_get_num(line, "id");
+                    long long nid = json_get_num(line, "hookId");
                     cmd_native_hook(fd, id, naction, nmode, nmodule, nsymbol, naddr, nid);
                 } else if (strcmp(op, "javahook_probe") == 0) {
                     cmd_javahook_probe(fd, id);

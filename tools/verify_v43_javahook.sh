@@ -53,7 +53,7 @@ const pidOut = spawnSync(adb, ['-s', serial, 'shell', 'pidof', 'com.adh.sandbox'
 if (!String(pidOut.stdout || '').trim()) skip('com.adh.sandbox is not running');
 if (!agent) skip('no online com.adh.sandbox agent session');
 
-await post('/api/java/hook', { session: agent.sessionId, action: 'unhook' }).catch(() => null);
+await post('/api/java/hook', { session: agent.sessionId, action: 'unhook', hookId: 0 }).catch(() => null);
 const hook = await post('/api/java/hook', {
   session: agent.sessionId,
   action: 'hook',
@@ -77,7 +77,7 @@ const bc = spawnSync(adb, ['-s', serial, 'shell', 'am', 'broadcast',
   '-n', 'com.adh.sandbox/.HookProbeReceiver'], { encoding: 'utf8' });
 if (bc.status !== 0) {
   console.log(`broadcast failed: ${bc.stderr || bc.stdout}`);
-  await post('/api/java/hook', { session: agent.sessionId, action: 'unhook' }).catch(() => null);
+  await post('/api/java/hook', { session: agent.sessionId, action: 'unhook', hookId: 0 }).catch(() => null);
   result('hook trigger broadcast', false);
   process.exit(0);
 }
@@ -105,18 +105,51 @@ for (let i = 0; i < 20; i++) {
   }
   await sleep(100);
 }
+const instanceHook = await post('/api/java/hook', {
+  session: agent.sessionId,
+  action: 'hook',
+  className: 'com.adh.sandbox.HookProbe',
+  method: 'instancePing',
+  params: 'java.lang.String',
+  field: 'INSTANCE',
+});
+const instanceHookId = Number(instanceHook.hookId ?? 0);
+let instanceStatus = null;
+if (instanceHook.ok) {
+  const ibc = spawnSync(adb, ['-s', serial, 'shell', 'am', 'broadcast',
+    '-a', 'com.adh.sandbox.INSTANCE_HOOK_PROBE',
+    '--es', 'value', 'ADH_INSTANCE_PING',
+    '-n', 'com.adh.sandbox/.InstanceHookProbeReceiver'], { encoding: 'utf8' });
+  if (ibc.status !== 0) console.log(`instance broadcast failed: ${ibc.stderr || ibc.stdout}`);
+  for (let i = 0; i < 20; i++) {
+    instanceStatus = await post('/api/java/hook', { session: agent.sessionId, action: 'status' });
+    const h = (instanceStatus?.status?.hooks ?? []).find((x) => Number(x.id) === instanceHookId);
+    if (h?.hits >= 1) break;
+    await sleep(100);
+  }
+}
+const ist = (instanceStatus?.status?.hooks ?? []).find((x) => Number(x.id) === instanceHookId) ?? {};
 const alive = String(spawnSync(adb, ['-s', serial, 'shell', 'pidof', 'com.adh.sandbox'], { encoding: 'utf8' }).stdout || '').trim();
-const unhook = await post('/api/java/hook', { session: agent.sessionId, action: 'unhook', id: hookId }).catch(() => null);
+const unhookStatic = await post('/api/java/hook', { session: agent.sessionId, action: 'unhook', hookId: hookId }).catch(() => null);
+const unhookInstance = instanceHookId > 0
+  ? await post('/api/java/hook', { session: agent.sessionId, action: 'unhook', hookId: instanceHookId }).catch(() => null)
+  : null;
 const pass = hook.ok === true && hookId >= 1 &&
   st.hits >= 1 &&
   st.lastArg === 'ADH_HOOK_PING' &&
   st.lastReturn === 'REAL_HOOK:ADH_HOOK_PING' &&
   (st.lastError === '' || st.lastError == null) &&
   event != null &&
-  unhook?.ok === true &&
+  instanceHook.ok === true && instanceHookId >= 1 &&
+  ist.hits >= 1 &&
+  ist.lastArg === 'ADH_INSTANCE_PING' &&
+  ist.lastReturn === 'REAL_INSTANCE:ADH_INSTANCE_PING' &&
+  (ist.lastError === '' || ist.lastError == null) &&
+  unhookStatic?.ok === true &&
+  unhookInstance?.ok === true &&
   alive.length > 0;
-console.log(JSON.stringify({ hook, status, event: event ? { id: event.id, func: event.func, algo: event.algo, op: event.op, preview: event.preview } : null, unhook, alive }));
-result('java_hook install + trigger + original + event stream + unhook', pass);
+console.log(JSON.stringify({ hook, instanceHook, status, instanceStatus, event: event ? { id: event.id, func: event.func, algo: event.algo, op: event.op, preview: event.preview } : null, unhookStatic, unhookInstance, alive }));
+result('java_hook static + instance + original + event stream + unhook', pass);
 process.exit(0);
 EOF
 )"
