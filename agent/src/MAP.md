@@ -25,7 +25,8 @@
 | `runtime/jni_hooks.c` | Global JNIEnv->RegisterNatives hook and bounded JNI_NATIVE registration events |
 | `runtime/jni_env_hooks.c` | JNIEnv function-table per-entry hooks: the thirteen fixed entries (member IDs, byte-array read + in-place writeback, primitive-array critical pair) plus every Call*Method / NewObject family and all three JNI forms (varargs / V / A) — 76 slots total — with resolved member labels, rendered arguments, wildcard install ("*" / prefix*), ABI-guarded slot offsets, bounded JNI_ENV events and a per-slot `last` snapshot with bounded JNI_ENV events, reactivation and clean slot restore |
 | `runtime/jni_method_names.c` | jmethodID -> "<class>#<name><signature>" resolution for the Call* hooks (reflection over the receiver chain, mid-keyed cache, capped scans) |
-| `runtime/jni_onload.c` | Already-loaded module JNI_OnLoad discovery, inline hook, manual invocation and soft unhook |
+| `runtime/jni_onload.c` | JNI_OnLoad work: already-loaded module discovery, inline hook with prologue snapshot, manual invocation, real unhook (restores the bytes), plus the load-time watch state consumed by `runtime/dlopen_watch.c` (skip/return replacement of a load-time call) |
+| `runtime/dlopen_watch.c` | Lazily-installed dlopen/`android_dlopen_ext` hook that offers every freshly mapped module to the JNI_OnLoad watch, so the patch is in place before the VM calls it |
 | `trace/commands.c` | Function-call trace state, GOT trace orchestration, and QBDI command response handling |
 | `trace/qbdi_trace.c` | Optional runtime-loaded QBDI instruction trace |
 

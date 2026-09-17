@@ -25,6 +25,7 @@
 #include "../runtime/jni_hooks.h"
 #include "../runtime/jni_env_hooks.h"
 #include "../runtime/jni_onload.h"
+#include "../runtime/dlopen_watch.h"
 #include "../runtime/java_enum.h"
 #include "../trace/commands.h"
 #include "../hook/native_hooks.h"
@@ -400,10 +401,14 @@ static void command_loop(int fd) {
                     json_get_str(line, "action", jaction, sizeof(jaction));
                     adh_cmd_jni_hook(fd, id, jaction);
                 } else if (strcmp(op, "jni_onload") == 0) {
-                    char oaction[16] = "", omodule[160] = "";
+                    char oaction[16] = "", omodule[160] = "", oskip[8] = "", oreturn[32] = "";
                     json_get_str(line, "action", oaction, sizeof(oaction));
                     json_get_str(line, "module", omodule, sizeof(omodule));
-                    adh_cmd_jni_onload(fd, id, oaction, omodule);
+                    json_get_str(line, "skipOriginal", oskip, sizeof(oskip));
+                    json_get_str(line, "returnValue", oreturn, sizeof(oreturn));
+                    int oskip_original = (strcmp(oskip, "true") == 0 || strcmp(oskip, "1") == 0);
+                    int oreturn_value = oreturn[0] ? (int)strtol(oreturn, NULL, 0) : 0;
+                    adh_cmd_jni_onload(fd, id, oaction, omodule, oskip_original, oreturn_value);
                 } else if (strcmp(op, "jni_env_hook") == 0) {
                     char eaction[16] = "", efunction[64] = "";
                     json_get_str(line, "action", eaction, sizeof(eaction));

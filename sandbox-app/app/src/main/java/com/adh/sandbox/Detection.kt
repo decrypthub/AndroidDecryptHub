@@ -35,6 +35,10 @@ object Detection {
     // v4.28 fixture: construct JniCtorTarget(21) through JNI so a constructor hook sees the
     // argument and the object is still usable afterwards (total must stay 42).
     @JvmStatic external fun jniCtorProbe(): Int
+    // v4.30 fixtures for the load-time JNI_OnLoad watch: these libraries are NOT loaded at
+    // startup, the verifier triggers the load after arming the watch.
+    @JvmStatic fun loadPluginA() { System.loadLibrary("adhplugin_a") }
+    @JvmStatic fun loadPluginB() { System.loadLibrary("adhplugin_b") }
 
     fun load() {
         try {

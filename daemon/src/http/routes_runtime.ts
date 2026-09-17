@@ -93,12 +93,12 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
       } catch (e) { return send(502, { error: (e as Error).message }); }
     } },    { method: 'POST', path: '/api/jni/onload', handler: async () => {
       const body = await readBody(req);
-      const { session, action, module, confirm } = JSON.parse(body || '{}');
+      const { session, action, module, confirm, skipOriginal, returnValue } = JSON.parse(body || '{}');
       const sid = pickSid(session);
       if (!sid || !action) return send(400, { error: 'need session, action' });
       if (action === 'call' && confirm !== true) return send(400, { error: 'jni_onload call requires confirm:true' });
       try {
-        const r = await sendCmd(sid, 'jni_onload', { action, module: module ?? '' }, 30_000);
+        const r = await sendCmd(sid, 'jni_onload', { action, module: module ?? '', skipOriginal: skipOriginal ? 'true' : 'false', returnValue: String(returnValue ?? 0) }, 30_000);
         return send(r.ok ? 200 : 502, r);
       } catch (e) { return send(504, { error: (e as Error).message }); }
     } },    { method: 'POST', path: '/api/jni/hook', handler: async () => {

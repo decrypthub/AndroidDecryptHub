@@ -50,6 +50,12 @@
       · 安全/输入：inline 绝对地址必须 `confirm:true`，agent 校验目标位于 executable mapping；active 发布顺序移到所有字段之后；重复 target fail-loud；Java bridge 增加 `ready` 安装窗口自旋、ADH 自有 backup global ref、事件字符串 512 字符上限。
       · 真机 `aa165071` PASS：native 与 Java 同一目标各连续 24 次 install/unhook 后行为恢复、agent 存活（`tools/verify_v56_hook_stress.sh`）；v4.3/v4.6/v4.12–v4.15 全部复跑 PASS。
       · 已知边界：软卸载会在目标里保留 stub/LSPlant patch（去特征场景需要后续 hard-unhook/quiesce 方案）；JNI_OnLoad 仍未覆盖；Java/native 的唯一目标数仍受 16 槽上限约束。
+- [x] **v4.30 load-time `JNI_OnLoad` 拦截（2026-09-18，真机 PASS）**：目标里点名的 `jni_onload` 能力补上"加载时"这一半 —— 以前只能对**已加载**模块 list/hook/call，现在能在模块刚映射、VM 还没调用之前就把 `JNI_OnLoad` 挂上，甚至**替换**这次调用。
+      · 实现：新增 `runtime/dlopen_watch.c`，按 `android_dlopen_ext` → `dlopen` → `__loader_android_dlopen_ext` 顺序解析并 inline hook **一个** dlopen 入口（懒安装：只有 `jni_onload watch` 才装，默认足迹不变）。wrapper 先跑原 dlopen，再把 (path, handle) 交给 `jni_onload` 的 watch：匹配模块名 → `dlsym("JNI_OnLoad")` → 在 VM 调用之前装 inline hook → 返回原 handle。事件带 `phase:"load"`，可带 `skipOriginal/returnValue` 把这次 load-time 调用替换掉。
+      · 顺手把 `jni_onload unhook` 从"软卸载"改成**真还原**（快照 24 字节原始序言 → `adh_patch_code_bytes` 写回），否则上一个 watch 的 patch 会一直占着 onload 槽位、挡住下一次 watch；被还原过的地址再 hook 会 fail-loud 提示重启目标（Dobby 状态陈旧，与 native hard unhook 同一套策略）。watch 失败（无 JNI_OnLoad / 槽位忙）会记录 `g_watch_error`、在 status 里回显，并发一条 `phase:"watch-miss"` 事件，不静默。
+      · 真机 `aa165071` PASS（`tools/verify_v67_jni_onload_watch.sh`）：watch `libadhplugin_a.so` → 触发 `System.loadLibrary` → 断言事件 `{"module":"libadhplugin_a.so","retval":65542,"phase":"load","skipped":false}` 且插件自身计数=1；unhook 后 watch `libadhplugin_b.so` 带 `skipOriginal+returnValue` → 事件 `"skipped":true`、插件计数=**0**（真被替换）、`System.loadLibrary` 仍成功；unwatch 生效、进程存活。
+      · 同批 v57/v54/v58/v62/v64/v65/v66/v46/v05 共 10 项全 PASS。
+      · 已知边界：同时只保留一个 JNI_OnLoad hook 槽（要换模块先 unhook）；dlopen 入口只 hook 一个（够覆盖 VM 的加载路径）；不走 dlopen 的（如自实现 linker/直接 mmap 加载）不在覆盖范围。
 - [x] **v4.29 native hard unhook（真·卸载）+ 足迹核算（2026-09-18，真机 PASS）**：软卸载会把 Dobby stub/trampoline 一直留在目标里（可被扫描/指纹），本轮补上按需的真卸载。
       · 实现：装 hook 时先 **快照 24 字节原始序言**，并**校验补丁真的落到入口**（比较前 4 字节；Dobby 说成功但字节没变就直接报错，不再"成功但其实没挂上"）。`unhook {hard:true}` 在静默窗口（命中计数连续 ~25ms 不动）后用 `adh_patch_code_bytes()`（mprotect→memcpy→icache flush→恢复权限）**把原始字节写回**并释放槽位。
       · 为什么不用 `DobbyDestroy`：真机复现了"DobbyDestroy 之后再 DobbyHook → 崩在 Dobby 自己的 memcpy（SIGSEGV：trampoline 池已释放但分配器仍引用）"。因此 hard unhook 改为**自己回写原始字节、完全不碰 Dobby 池**：代码恢复、补丁消失、对新地址装 hook 依然正常；代价是**同一地址在本进程内不能再 hook**（Dobby 状态陈旧）——这点 fail-loud 明确拒绝并提示重启目标，不装作支持。

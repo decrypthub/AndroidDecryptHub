@@ -106,4 +106,5 @@ translation — kept separate).
 - `verify_v64_jni_call_types.sh` — Call* 全族覆盖 + 通配安装：`function:"*"` 一次装 76 个槽位（断言 `applied=76 failed=0`，每个槽位过 ABI 偏移守卫），触发 `Detection.jniCallTypesProbe()` 断言 Boolean/Byte/Char/Short/Long/Float/Double（实例 A 形态 + 静态 varargs 形态）每族命中且 `status.last` 里能看到解析后的 `class#method(sig)`，再全量卸载证明还原。
 - `verify_v65_java_ctor_inherited.sh` — java_hook 完整性：hook 构造器 `JniCtorTarget.<init>(int)`（断言回调看到实参 21、对象仍被正确构造 total=42、`skipOriginal/returnValue` 被 fail-loud 拒绝）+ hook 继承成员 `JniDerived.baseValue`（解析到声明类 `JniBase.baseValue()`），再逐个 unhook 并复查行为不变。
 - `verify_v66_native_hard_unhook.sh` — native **hard unhook**：inline hook → 命中/调用正常 → `hard:true` 卸载（回写保存的原始序言、释放槽位、不动 Dobby 池）→ 行为恢复、status `count/patched=0`、无 RWX、anon 足迹稳定不泄漏、同地址再 hook 被明确拒绝（Dobby 状态已陈旧，需重启目标）。
+- `verify_v67_jni_onload_watch.sh` — **load-time JNI_OnLoad 拦截**：`jni_onload watch` 装 dlopen 钩子 → 两个运行时才加载的插件库各走一遍：A 观察（事件 `phase:"load"`、插件 JNI_OnLoad 真的跑过 count=1）；unhook（真还原字节）后 watch B 用 `skipOriginal+returnValue` **替换** load-time 调用（事件 `skipped:true`、插件计数 0、`System.loadLibrary` 仍成功）。
 - `verify_v47_got_enum.sh` — 枚举 `libadhdetect.so` 的 GOT/relocation，断言导入符号可见（deploy new agent；未部署时 SKIP）。
