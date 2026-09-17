@@ -1528,6 +1528,7 @@ Host ADH Daemon / MCP  →  自动化 TCP 8763（loopback + adb reverse）  → 
 | `phone_act` (ime) | 对聚焦控件执行 IME 动作键（search/done/go/send/next/previous）；应用忽略自家提交按钮时用它，Android 11 以下或无输入框时明确失败 |
 | `phone_wait_any` | 多个条件任一命中即成功（`wait_any` 步骤同样可用）：应用可能从不同状态恢复时用它，避免配方只认一种状态；都不命中时 fail-loud（`wait_any_timeout` + 最后失败原因） |
 | `phone_task` onlyIf | 步骤级守卫：`onlyIf` 选择器不存在时该步标记 `skipped:true` 而非失败，配方可表达「仅当这个控件在时才点它」 |
+| `phone_device` (volume) | `volume_status` 读取 music/ring/alarm/voice 当前值与最大值；`volume_set {stream, index}` 写入（夹到该流上限，未知流拒绝）。协议 v10 |
 | `GET /api/skills` | 列出配方库（名称/描述/步数/参数/运行次数），供 Web「技能库」页展示 |
 | `POST /api/skills` | `{action:"run", name, inputs}` 或 `{action:"delete", name}`；与 `phone_skill` 共用同一实现与允许名单 |
 | `phone_skill` (save) | 保存前静态预检：对未建立应用上下文（无 app / wait activePackage / wait_any 状态条件）的 act/observe/find 步骤按索引返回 `warnings`，不阻止保存 |
