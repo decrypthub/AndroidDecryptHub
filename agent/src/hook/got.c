@@ -7,6 +7,7 @@
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <sys/mman.h>
+#include <unistd.h>
 
 // ---- GOT/PLT hook engine (E.8.1) -----------------------------------------
 // Replace the GOT slot that holds `orig` with `wrapper` in modules matching name.
@@ -53,6 +54,34 @@ static void perms_of_addr(unsigned long long addr, char *out, int outsz) {
         if (addr >= s && addr < e) { snprintf(out, outsz, "%s", perms); break; }
     }
     fclose(m);
+}
+
+// Swap one pointer-sized slot that lives in a read-only mapping (RELRO / const data): the
+// page is made writable, the new value published with a full barrier, then the mapping's
+// original protection is restored. Used by the JNIEnv function-table hooks, whose entries
+// are const data in libart. Returns 1 on success, 0 when the address is unmapped or the
+// page could not be made writable.
+int adh_swap_pointer_in_ro_page(void **slot, void *newval) {
+    if (!slot) return 0;
+    long pagesz = sysconf(_SC_PAGESIZE);
+    if (pagesz <= 0) pagesz = 4096;
+    char perms[8];
+    perms_of_addr((unsigned long long)(uintptr_t)slot, perms, sizeof(perms));
+    if (perms[0] == '?') return 0;
+    if (perms[1] == 'w') {                 // already writable: plain aligned store
+        *slot = newval;
+        __atomic_thread_fence(__ATOMIC_SEQ_CST);
+        return 1;
+    }
+    return got_write_slot(slot, newval, perms_to_prot(perms), pagesz);
+}
+
+// Copy the /proc/self/maps permission string ("r--p") of the mapping containing addr, or
+// "?" when the address is unmapped. Callers use this to prove a page that had to be made
+// writable for a slot swap was restored to its original protection.
+void adh_perms_of_addr(void *addr, char *out, int out_size) {
+    if (!out || out_size <= 0) return;
+    perms_of_addr((unsigned long long)(uintptr_t)addr, out, out_size);
 }
 
 // ---- relocation-slot cross-verification (v2.x audit P1) --------------------

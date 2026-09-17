@@ -45,6 +45,7 @@ SCRIPTS=(
   "verify_v55_native_rewrite.sh:device"
   "verify_v56_hook_stress.sh:device"
   "verify_v57_jni_onload.sh:device"
+  "verify_v58_jni_env_hook.sh:device"
   "verify_v02_dump.sh:device"
   "verify_v02_so.sh:device"
   "verify_v02_dexrepair.sh:host"

@@ -24,6 +24,12 @@ int adh_got_slot_value(const char *module, const char *symbol, void **slot_out, 
 int adh_got_enum_json(const char *module, const char *filter, char **out_json,
                       char *error, size_t error_size);
 int adh_addr_is_executable(void *addr);
+// Swap one pointer-sized slot in a (possibly read-only/RELRO) page and restore the
+// original protection. Returns 1 on success. Used by the JNIEnv function-table hooks.
+int adh_swap_pointer_in_ro_page(void **slot, void *newval);
+// Copy the /proc/self/maps permission string ("r--p") of the mapping containing addr,
+// or "?" when unmapped. Used to prove a temporarily-writable page was restored.
+void adh_perms_of_addr(void *addr, char *out, int out_size);
 void adh_cmd_gothook_selftest(int fd, const char *id);
 
 #ifdef __cplusplus

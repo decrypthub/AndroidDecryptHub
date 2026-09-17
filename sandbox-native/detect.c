@@ -105,6 +105,27 @@ JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_jniRegisterProbe(JNIEnv *e
     };
     return (*env)->RegisterNatives(env, clazz, &method, 1);
 }
+// JNIEnv function-table probe: one call drives every table entry the agent can hook, so a
+// single trigger yields one JNI_ENV event per entry. Returns 0xAD0000 | strlen(marker).
+JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_jniEnvProbe(JNIEnv *env, jclass clazz) {
+    jclass detection = (*env)->FindClass(env, "com/adh/sandbox/Detection");
+    if (!detection) { if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); return -1; }
+    jmethodID load = (*env)->GetMethodID(env, detection, "load", "()V");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); load = NULL; }
+    jmethodID value = (*env)->GetStaticMethodID(env, clazz, "jniEnvValue", "()Ljava/lang/String;");
+    if (!value) { if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); return -2; }
+    jstring made = (*env)->NewStringUTF(env, "ADH_JNI_ENV_MARKER");
+    if (!made) { if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); return -3; }
+    const char *chars = (*env)->GetStringUTFChars(env, made, NULL);
+    jint out = -4;
+    if (chars) {
+        out = (jint)(0xAD0000u | (unsigned)strlen(chars));
+        (*env)->ReleaseStringUTFChars(env, made, chars);
+    }
+    (*env)->DeleteLocalRef(env, made);
+    (void)load;
+    return out;
+}
 JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_run(JNIEnv *env, jclass clazz) {
     (void)env; (void)clazz;
     int flags = 0;

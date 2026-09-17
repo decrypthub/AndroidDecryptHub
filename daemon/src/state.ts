@@ -277,7 +277,7 @@ export function hexToPreview(hex: string, max = 80): string {
 // stamps func: EVP_*/HMAC_* (crypto), SSL_read/write (net), open*/read/write/close (file),
 // ptrace/access/sysprop (system) — see cmd_capture_start.
 export function categoryOf(func: string): CapCategory {
-  if (func === 'JAVA_HOOK' || func === 'NATIVE_HOOK' || func === 'JNI_NATIVE' || func === 'JNI_ONLOAD') return 'system';
+  if (func === 'JAVA_HOOK' || func === 'NATIVE_HOOK' || func === 'JNI_NATIVE' || func === 'JNI_ONLOAD' || func === 'JNI_ENV') return 'system';
   if (func === 'SSL_write' || func === 'SSL_read') return 'net';
   if (/^(open|openat|read|write|close)$/.test(func)) return 'file';
   if (/^(ptrace|access|sysprop|__system_property_get|getprop)$/.test(func)) return 'system';
@@ -288,6 +288,7 @@ export function classify(func: string): { algo: string; op: string } {
   if (func === 'NATIVE_HOOK') return { algo: 'Native Hook', op: '函数调用' };
   if (func === 'JNI_NATIVE') return { algo: 'JNI Hook', op: 'RegisterNatives' };
   if (func === 'JNI_ONLOAD') return { algo: 'JNI Hook', op: 'JNI_OnLoad' };
+  if (func === 'JNI_ENV') return { algo: 'JNI Hook', op: 'JNIEnv' };
   if (func.startsWith('EVP_Cipher') || func.startsWith('EVP_Encrypt') || func.startsWith('EVP_Decrypt'))
     return { algo: '对称加解密', op: '明文' };
   if (func === 'HMAC_Update' || func === 'EVP_DigestSignUpdate' || func === 'EVP_DigestVerifyUpdate') return { algo: 'HMAC', op: '消息' };
