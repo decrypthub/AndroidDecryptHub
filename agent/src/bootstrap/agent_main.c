@@ -295,7 +295,7 @@ static void cmd_java_call(int fd, const char *id, const char *class_name, const 
 static void cmd_native_hook(int fd, const char *id, const char *action, const char *mode,
                             const char *module, const char *symbol, const char *addr,
                             int skip_original, const char *return_value, long long arg_index,
-                            const char *arg_value, long long requested_id) {
+                            const char *arg_value, long long requested_id, int hard) {
     char idj[64];
     json_escape(id, idj, sizeof(idj));
     char error[512] = "";
@@ -307,7 +307,7 @@ static void cmd_native_hook(int fd, const char *id, const char *action, const ch
                                     (uint64_t)strtoull(arg_value, NULL, 0),
                                     &new_id, error, sizeof(error));
     } else if (strcmp(action, "unhook") == 0) {
-        ok = adh_native_hook_unhook((int)requested_id, error, sizeof(error));
+        ok = adh_native_hook_unhook((int)requested_id, hard, error, sizeof(error));
     } else if (strcmp(action, "status") == 0) {
         ok = 1;
     } else {
@@ -449,7 +449,10 @@ static void command_loop(int fd) {
                     long long nid = json_get_num(line, "hookId");
                     long long nargindex = json_get_num(line, "argIndex");
                     int nskip_original = (strcmp(nskip, "true") == 0 || strcmp(nskip, "1") == 0);
-                    cmd_native_hook(fd, id, naction, nmode, nmodule, nsymbol, naddr, nskip_original, nreturn, nargindex, nargvalue, nid);                } else if (strcmp(op, "native_call") == 0) {
+                    char nhard[8] = "";
+                    json_get_str(line, "hard", nhard, sizeof(nhard));
+                    int nhard_flag = (strcmp(nhard, "true") == 0 || strcmp(nhard, "1") == 0);
+                    cmd_native_hook(fd, id, naction, nmode, nmodule, nsymbol, naddr, nskip_original, nreturn, nargindex, nargvalue, nid, nhard_flag);                } else if (strcmp(op, "native_call") == 0) {
                     char cmodule[128] = "", csymbol[160] = "", caddr[32] = "", cargs[256] = "";
                     json_get_str(line, "module", cmodule, sizeof(cmodule));
                     json_get_str(line, "symbol", csymbol, sizeof(csymbol));

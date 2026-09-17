@@ -30,6 +30,9 @@ int adh_swap_pointer_in_ro_page(void **slot, void *newval);
 // Copy the /proc/self/maps permission string ("r--p") of the mapping containing addr,
 // or "?" when unmapped. Used to prove a temporarily-writable page was restored.
 void adh_perms_of_addr(void *addr, char *out, int out_size);
+// Write raw code bytes in place (make the covering pages writable, memcpy, flush the icache,
+// restore protection). Returns 1 on success. Used to restore an inline hook prologue.
+int adh_patch_code_bytes(void *addr, const void *bytes, size_t len);
 void adh_cmd_gothook_selftest(int fd, const char *id);
 
 #ifdef __cplusplus

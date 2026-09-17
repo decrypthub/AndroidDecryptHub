@@ -38,10 +38,27 @@ struct NativeHookContext {
     int arg_index;
     uint64_t arg_value;
     int patched;             // inline stub remains installed (soft unhook / reactivation)
+    unsigned char prologue[24];   // original bytes captured before the inline patch
+    int prologue_len;             // 0 when not captured / not an inline hook
 };
 
 static NativeHookContext g_native_hooks[ADH_NATIVE_MAX_HOOKS];
 static pthread_mutex_t g_native_hooks_lock = PTHREAD_MUTEX_INITIALIZER;
+
+// Addresses whose prologue we restored by hand. Dobby still believes they are hooked, so a
+// second DobbyHook on the same address may silently not patch: refuse it loudly instead.
+#define ADH_RESTORED_MAX 8
+static void *g_restored_targets[ADH_RESTORED_MAX];
+static int g_restored_count = 0;
+
+static bool target_was_hard_restored(void *target) {
+    for (int i = 0; i < g_restored_count; i++) if (g_restored_targets[i] == target) return true;
+    return false;
+}
+static void remember_hard_restored(void *target) {
+    if (target_was_hard_restored(target)) return;
+    if (g_restored_count < ADH_RESTORED_MAX) g_restored_targets[g_restored_count++] = target;
+}
 static int g_next_native_hook_id = 1;
 static std::atomic<unsigned long long> g_native_hook_hits[ADH_NATIVE_MAX_HOOKS];
 static std::atomic<int> g_native_hook_slot_ids[ADH_NATIVE_MAX_HOOKS];
@@ -194,6 +211,7 @@ static NativeHookContext *find_hook_locked(int id) {
 }
 
 static void reset_context(NativeHookContext &ctx) {
+    ctx.prologue_len = 0;
     ctx.id = 0;
     ctx.active = 0;
     ctx.mode = 0;
@@ -299,7 +317,23 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
             return 1;
         }
         pthread_mutex_unlock(&g_native_hooks_lock);
+        if (target_was_hard_restored(target)) {
+            return fail("target was hard-unhooked earlier in this process: its Dobby state is stale, restart the target before hooking it again");
+        }
+        // Snapshot the original prologue so a hard unhook can write it back without asking Dobby
+        // to free its trampoline pool (DobbyDestroy breaks later DobbyHook calls on this build).
+        unsigned char prologue[24];
+        memcpy(prologue, target, sizeof(prologue));
         if (!adh_inline_hook(target, stub, &original)) return fail("inline hook installation failed");
+        if (memcmp(prologue, target, 4) == 0) {
+            // Dobby reported success but the entry is unchanged: never claim a hook that is not there.
+            (void)adh_inline_unhook(target);
+            return fail("inline patch did not change the target entry (stale Dobby state?)");
+        }
+        pthread_mutex_lock(&g_native_hooks_lock);
+        memcpy(g_native_hooks[slot].prologue, prologue, sizeof(prologue));
+        g_native_hooks[slot].prologue_len = (int)sizeof(prologue);
+        pthread_mutex_unlock(&g_native_hooks_lock);
         g_native_hook_originals[slot] = original;
         hook_mode = 1;
     } else {
@@ -345,7 +379,14 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
     return 1;
 }
 
-extern "C" int adh_native_hook_unhook(int hook_id, char *error, size_t error_size) {
+// hard=1 performs a REAL inline unhook: deactivate, quiesce (wait until the hit counter stops
+// moving, so nothing entered the stub/trampoline during a settle window), then DobbyDestroy the
+// patch and free the slot for reuse. DobbyDestroy restores the original prologue and releases
+// the trampoline - that is what removes the RWX/anon-exec footprint a soft unhook leaves behind.
+// Residual race (documented, not hidden): a thread that already read the patched branch can be a
+// few instructions inside the trampoline; the settle window bounds it but does not suspend
+// threads, so hard unhook stays opt-in while soft unhook remains the default.
+extern "C" int adh_native_hook_unhook(int hook_id, int hard, char *error, size_t error_size) {
     pthread_mutex_lock(&g_native_hooks_lock);
     NativeHookContext *ctx = find_hook_locked(hook_id);
     if (!ctx) {
@@ -367,20 +408,60 @@ extern "C" int adh_native_hook_unhook(int hook_id, char *error, size_t error_siz
         LOGI("native_hook removed id=%d (got)", hook_id);
         return 1;
     }
-    // Inline soft-unhook: leave the already-installed stub in place, deactivate it, and
-    // keep the slot patched for safe reactivation. This avoids freeing a trampoline that a
-    // concurrent target thread may still be executing.
     if (!ctx->patched || !ctx->target || !ctx->replacement) {
         pthread_mutex_unlock(&g_native_hooks_lock);
         return (set_error(error, error_size, "inline patch state unavailable for id=%d", hook_id), 0);
     }
+    void *target = ctx->target;
     g_native_hook_hits[slot].store(0ULL, std::memory_order_relaxed);
     __atomic_store_n(&ctx->active, 0, __ATOMIC_RELEASE);
     ctx->skip_original = 0;
     ctx->return_set = 0;
     ctx->arg_index = -1;
+    if (!hard) {
+        // Soft unhook: leave the installed stub in place, deactivated, and keep the slot
+        // patched for safe reactivation (never frees a trampoline a thread may still use).
+        pthread_mutex_unlock(&g_native_hooks_lock);
+        LOGI("native_hook soft-unhooked id=%d target=%p", hook_id, target);
+        return 1;
+    }
     pthread_mutex_unlock(&g_native_hooks_lock);
-    LOGI("native_hook soft-unhooked id=%d target=%p", hook_id, ctx->target);
+    // Quiesce: the trampoline is only reachable through our stub, so a hit counter that stays
+    // still for a few milliseconds means nothing entered it during that window.
+    bool quiet = false;
+    for (int round = 0; round < 80 && !quiet; round++) {
+        unsigned long long before = g_native_hook_hits[slot].load(std::memory_order_relaxed);
+        struct timespec ts = { 0, 5 * 1000 * 1000 };
+        nanosleep(&ts, nullptr);
+        unsigned long long after = g_native_hook_hits[slot].load(std::memory_order_relaxed);
+        if (after == before && round >= 4) quiet = true;   // ~25 ms of silence before touching code
+        else if (after != before) round = 0;
+    }
+    pthread_mutex_lock(&g_native_hooks_lock);
+    unsigned char prologue[24];
+    int prologue_len = ctx->prologue_len;
+    memcpy(prologue, ctx->prologue, sizeof(prologue));
+    pthread_mutex_unlock(&g_native_hooks_lock);
+    if (prologue_len <= 0) {
+        set_error(error, error_size, "no captured prologue for id=%d (cannot restore safely)", hook_id);
+        return 0;
+    }
+    // Restore the ORIGINAL BYTES ourselves. DobbyDestroy is deliberately not used: on this Dobby
+    // build it frees the trampoline pool in a way that makes the next DobbyHook crash inside
+    // Dobby's own memcpy (observed on device). Leaving the pool alone keeps later hooks working;
+    // the price is that this exact address cannot be re-hooked in this process (refused loudly).
+    if (!adh_patch_code_bytes(target, prologue, (size_t)prologue_len)) {
+        set_error(error, error_size, "failed to restore the original prologue for id=%d target=%p (hook stays patched)", hook_id, target);
+        return 0;
+    }
+    remember_hard_restored(target);
+    pthread_mutex_lock(&g_native_hooks_lock);
+    void *stale_stub = ctx->replacement;
+    unsigned long long stale_id = (unsigned long long)ctx->id;
+    reset_context(*ctx);
+    ctx->used = 0;
+    pthread_mutex_unlock(&g_native_hooks_lock);
+    LOGI("native_hook hard-unhooked id=%llu target=%p (quiet=%d, original bytes restored, stub=%p parked)", stale_id, target, quiet ? 1 : 0, stale_stub);
     return 1;
 }
 

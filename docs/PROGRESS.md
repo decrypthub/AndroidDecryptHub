@@ -50,6 +50,12 @@
       · 安全/输入：inline 绝对地址必须 `confirm:true`，agent 校验目标位于 executable mapping；active 发布顺序移到所有字段之后；重复 target fail-loud；Java bridge 增加 `ready` 安装窗口自旋、ADH 自有 backup global ref、事件字符串 512 字符上限。
       · 真机 `aa165071` PASS：native 与 Java 同一目标各连续 24 次 install/unhook 后行为恢复、agent 存活（`tools/verify_v56_hook_stress.sh`）；v4.3/v4.6/v4.12–v4.15 全部复跑 PASS。
       · 已知边界：软卸载会在目标里保留 stub/LSPlant patch（去特征场景需要后续 hard-unhook/quiesce 方案）；JNI_OnLoad 仍未覆盖；Java/native 的唯一目标数仍受 16 槽上限约束。
+- [x] **v4.29 native hard unhook（真·卸载）+ 足迹核算（2026-09-18，真机 PASS）**：软卸载会把 Dobby stub/trampoline 一直留在目标里（可被扫描/指纹），本轮补上按需的真卸载。
+      · 实现：装 hook 时先 **快照 24 字节原始序言**，并**校验补丁真的落到入口**（比较前 4 字节；Dobby 说成功但字节没变就直接报错，不再"成功但其实没挂上"）。`unhook {hard:true}` 在静默窗口（命中计数连续 ~25ms 不动）后用 `adh_patch_code_bytes()`（mprotect→memcpy→icache flush→恢复权限）**把原始字节写回**并释放槽位。
+      · 为什么不用 `DobbyDestroy`：真机复现了"DobbyDestroy 之后再 DobbyHook → 崩在 Dobby 自己的 memcpy（SIGSEGV：trampoline 池已释放但分配器仍引用）"。因此 hard unhook 改为**自己回写原始字节、完全不碰 Dobby 池**：代码恢复、补丁消失、对新地址装 hook 依然正常；代价是**同一地址在本进程内不能再 hook**（Dobby 状态陈旧）——这点 fail-loud 明确拒绝并提示重启目标，不装作支持。
+      · 真机 `aa165071` PASS（`tools/verify_v66_native_hard_unhook.sh`）：`adh_trace_target` 与 `adh_add_target` 各走一轮 install→命中→hard unhook→行为恢复（30 / 84），status `count=0 patched=0`；同地址再 hook 返回 "target was hard-unhooked earlier in this process…"；`rwx` 全程 0，anon-exec 足迹 0→2 且**两轮不增长**（Dobby 池复用而非每 hook 泄漏）；进程存活。
+      · 顺带：`got_enum` 现在回报 `packedSize`；同批 v46/v47/v49/v55/v56/v61/v04/v05/v26 共 10 项全 PASS。
+      · 已知边界：hard unhook 后同地址需重启进程才能再 hook；Dobby 池页（r-x，2 页）在进程生命周期内保留；未做线程挂起的绝对静止（静默窗口 + 补丁只经 stub 触达，残余竞态已记录）。
 - [x] **v4.28 java_hook 完整性：构造器 hook + 继承成员解析（2026-09-18，真机 PASS）**：把 Xposed 类框架的两块基本能力补齐。
       · **构造器**：`java_hook {method:"<init>", params:"int"}` —— 桥接层新增 `isConstructor`：回调收到的 `args[0]` 是"正在构造的对象"，原构造器通过 LSPlant 给的 backup 在该 receiver 上执行，返回值必须仍是这个对象（`new` 的结果），否则目标会拿到 null。真机证据：`lastArg="21"`（实参可见）、`lastReturn="…JniCtorTarget@…"`（对象正常）、`NewObjectA(21)` 之后 `totalValue()==42` 不变。构造器**不允许** `skipOriginal`/`returnValue`（装不上就明确报错，不装作支持）。
       · **继承成员**：`java_hook{className:"JniDerived", method:"baseValue"}` 现在会沿 `getSuperclass()` 链解析（最多 10 层），签名里报**声明类**（`com.adh.sandbox.JniBase.baseValue()`），因为 LSPlant hook 的是 ArtMethod，作用域本来就是声明类 + 其子类。

@@ -15,7 +15,7 @@
 | `capture/capture.c` | Crypto/TLS/file/system wrappers, bounded capture buffers, Java reporter, and capture/probe commands |
 | `hook/got.c` | ELF relocation parsing, GOT slot replacement, in-memory symbol lookup, and GOT self-test |
 | `hook/native_inline_dobby.cpp` | Dobby native inline-hook backend |
-| `hook/native_hooks.cpp` | Unified native hook registry: GOT/inline/address install, arm64 register-capture stubs, and NATIVE_HOOK events |
+| `hook/native_hooks.cpp` | Unified native hook registry: GOT/inline/address install (prologue snapshot + patch verification), arm64 register-capture stubs, NATIVE_HOOK events, soft unhook by default and opt-in hard unhook (writes the saved original bytes back, frees the slot, leaves the Dobby pool untouched) |
 | hook/java_lsplant.cpp | LSPlant v6.4 ART hook shim (optional static link over the same Dobby backend): methods incl. inherited ones (superclass-chain resolution, declaring class reported) and constructors (`method: "<init>"`, ctor-argument observation, skip/override rejected) |
 | `runtime/actions.c` | Safety-gated Java trigger and explicit in-process `.so` loading commands |
 | `runtime/art.c` | ClassLoader-cookie enumeration and per-API ART DexFile structural resolution |

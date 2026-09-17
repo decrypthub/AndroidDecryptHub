@@ -53,6 +53,7 @@ SCRIPTS=(
   "verify_v63_jni_array_writeback.sh:device"
   "verify_v64_jni_call_types.sh:device"
   "verify_v65_java_ctor_inherited.sh:device"
+  "verify_v66_native_hard_unhook.sh:device"
   "verify_v02_dump.sh:device"
   "verify_v02_so.sh:device"
   "verify_v02_dexrepair.sh:host"

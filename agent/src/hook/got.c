@@ -76,6 +76,30 @@ int adh_swap_pointer_in_ro_page(void **slot, void *newval) {
     return got_write_slot(slot, newval, perms_to_prot(perms), pagesz);
 }
 
+// Patch raw code bytes in place: make every page covering [addr, addr+len) writable (keeping X),
+// memcpy, flush the instruction cache and restore the original protection. Used to write a saved
+// original prologue back over an inline hook without asking Dobby to free its trampoline pool
+// (DobbyDestroy makes later DobbyHook calls in the same process unreliable on this build).
+int adh_patch_code_bytes(void *addr, const void *bytes, size_t len) {
+    if (!addr || !bytes || !len) return 0;
+    long pagesz = sysconf(_SC_PAGESIZE);
+    if (pagesz <= 0) pagesz = 4096;
+    uintptr_t start = (uintptr_t)addr;
+    uintptr_t page_start = start & ~((uintptr_t)pagesz - 1);
+    uintptr_t end = start + len - 1;
+    uintptr_t page_end = end & ~((uintptr_t)pagesz - 1);
+    size_t span = (size_t)(page_end - page_start) + (size_t)pagesz;
+    char perms[8];
+    perms_of_addr(start, perms, sizeof(perms));
+    if (perms[0] == '?') return 0;
+    int orig_prot = perms_to_prot(perms);
+    if (mprotect((void *)page_start, span, orig_prot | PROT_WRITE) != 0) return 0;
+    memcpy(addr, bytes, len);
+    __builtin___clear_cache((char *)addr, (char *)addr + len);
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    return mprotect((void *)page_start, span, orig_prot) == 0;
+}
+
 // Copy the /proc/self/maps permission string ("r--p") of the mapping containing addr, or
 // "?" when the address is unmapped. Callers use this to prove a page that had to be made
 // writable for a slot swap was restored to its original protection.
@@ -681,9 +705,9 @@ int adh_got_enum_json(const char *module, const char *filter, char **out_json,
         return 0;
     }
     snprintf(out, cap,
-             "{\"module\":\"%s\",\"count\":%d,\"truncated\":%s,\"packed\":%s,\"filter\":\"%s\",\"entries\":%s,\"packedUnsupported\":%s}",
+             "{\"module\":\"%s\",\"count\":%d,\"truncated\":%s,\"packed\":%s,\"packedSize\":%llu,\"filter\":\"%s\",\"entries\":%s,\"packedUnsupported\":%s}",
              module_escaped, count, truncated ? "true" : "false",
-             android_rela ? "true" : "false", filter_escaped, entries,
+             android_rela ? "true" : "false", (unsigned long long)android_relasz, filter_escaped, entries,
              android_rela ? "true" : "false");
     free(entries);
     char *copy = strdup(out);
