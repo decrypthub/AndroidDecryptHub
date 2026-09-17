@@ -1524,6 +1524,7 @@ Host ADH Daemon / MCP  →  自动化 TCP 8763（loopback + adb reverse）  → 
 | `phone_notifications` | 读取最近通知（包名/标题/正文/时间，最新在前；`sinceMs` 可增量轮询）。需用户在系统设置里给 Manager 开启"通知使用权"，且 Host `automation.notifications`（默认 false）已开；缓冲区仅内存、≤30 条、不落盘 |
 | `phone_device` | `status` / `wake` / `unlock` / `lock`；安全锁屏凭据不绕过（真机验收：lock→`interactive:false, locked:true`，wake→`interactive:true`，unlock→`dismissed:true`） |
 | `phone_task` | 单次 MCP 调用内执行有界步骤序列（≤30 步），步骤间可用 `{{id.path}}` 引用前序步骤的结果（如把 `find` 得到的 `snapshotId`/`ref` 直接喂给 `act`）；每步支持 `retries` 与结构化失败输出 |
+| 桥接传输 | 设备侧始终作为客户端；优先 `adb reverse` 的 loopback，其次 host 在 `helloAck` 里广播的 LAN 地址（需真实收到 `helloAck` 才算连上，可用地址持久化以便拔线后重连）。host 默认只监听 loopback，`ADH_AUTOMATION_HOST` 可放开 |
 | `phone_act` (ime) | 对聚焦控件执行 IME 动作键（search/done/go/send/next/previous）；应用忽略自家提交按钮时用它，Android 11 以下或无输入框时明确失败 |
 | `phone_wait_any` | 多个条件任一命中即成功（`wait_any` 步骤同样可用）：应用可能从不同状态恢复时用它，避免配方只认一种状态；都不命中时 fail-loud（`wait_any_timeout` + 最后失败原因） |
 | `phone_task` onlyIf | 步骤级守卫：`onlyIf` 选择器不存在时该步标记 `skipped:true` 而非失败，配方可表达「仅当这个控件在时才点它」 |
