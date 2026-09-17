@@ -84,3 +84,4 @@ translation — kept separate).
 - `verify_v42_lsplant.sh` — LSPlant probe + `java_hook status`（deploy new agent；旧 payload 明确 SKIP）。
 - `verify_v43_javahook.sh` — 沙盒确定性 `HookProbe.ping` install → broadcast 触发 → 原返回值 → `JAVA_HOOK` capture 事件 → `unhook` 验收（deploy new sandbox/agent；未部署时 SKIP）。
 - `verify_v44_java_enum.sh` — 沙盒 `HookProbe` 类/字段/两个 `ping` 重载枚举验收（deploy new agent/sandbox；未部署时 SKIP）。
+- `verify_v45_java_call.sh` — 沙盒 `HookProbe.ping` 两个重载的反射主动调用与返回值验收（deploy new agent/sandbox；未部署时 SKIP）。

@@ -34,7 +34,18 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
       try { const r = await sendCmd(sid, 'javahook_probe', {}, 20_000); return send(r.ok ? 200 : 502, r); }
       catch (e) { return send(504, { error: (e as Error).message }); }
     } },
-    { method: 'POST', path: '/api/java/enum', handler: async () => {
+    { method: 'POST', path: '/api/java/call', handler: async () => {
+      const body = await readBody(req);
+      const { session, className, method, params, field, args } = JSON.parse(body || '{}');
+      const sid = pickSid(session);
+      if (!sid || !className || !method) return send(400, { error: 'need session, className, method' });
+      try {
+        const r = await sendCmd(sid, 'java_call', {
+          className, method, params: params ?? '', field: field ?? '', args: JSON.stringify(args ?? []),
+        }, 20_000);
+        return send(r.ok ? 200 : 502, r);
+      } catch (e) { return send(504, { error: (e as Error).message }); }
+    } },    { method: 'POST', path: '/api/java/enum', handler: async () => {
       const body = await readBody(req);
       const { session, className } = JSON.parse(body || '{}');
       const sid = pickSid(session);

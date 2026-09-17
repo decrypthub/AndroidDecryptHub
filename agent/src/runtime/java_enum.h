@@ -14,6 +14,12 @@ extern "C" {
 int adh_java_enum_json(JNIEnv *env, const char *class_name, char **out_json,
                        char *error, size_t error_size);
 void adh_java_enum_free(char *json);
+// Invoke a live Java method by reflection. params is a comma-separated parameter-type list;
+// args_json is a JSON array of string/number/boolean/null values; field is required for an
+// instance method and must name a static field holding the receiver object.
+int adh_java_call_json(JNIEnv *env, const char *class_name, const char *method_name,
+                       const char *params, const char *field_name, const char *args_json,
+                       char **out_json, char *error, size_t error_size);
 
 #ifdef __cplusplus
 }
