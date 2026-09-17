@@ -1,6 +1,7 @@
 import {
   dumpAllDex, dumpRegion, pickSid, sendCmd, withCaptureSuspended,
 } from '../service.ts';
+import { watchSyscalls } from '../syscall_watch.ts';
 import { liveDisasm } from '../memory.ts';
 import { readBody, SANDBOX, sessions, settings } from '../state.ts';
 import type { Route, RouteContext } from './types.ts';
@@ -77,6 +78,16 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
         }, 20_000);
         return send(r.ok ? 200 : 502, r);
       } catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
+    { method: 'POST', path: '/api/native/syscall_watch', handler: async () => {
+      const body = await readBody(req);
+      const { session, module, limit } = JSON.parse(body || '{}');
+      const sid = pickSid(session);
+      if (!sid || !module) return send(400, { error: 'need session, module' });
+      try {
+        const r = await watchSyscalls(sid, { module, limit });
+        return send(200, r);
+      } catch (e) { return send(502, { error: (e as Error).message }); }
     } },    { method: 'POST', path: '/api/java/enum', handler: async () => {
       const body = await readBody(req);
       const { session, className } = JSON.parse(body || '{}');

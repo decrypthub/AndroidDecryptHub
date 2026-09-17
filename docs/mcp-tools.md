@@ -1,6 +1,6 @@
 # ADH MCP Tools
 
-Generated from the live ADH Daemon registry (60 tools). Endpoint: `POST /mcp` (JSON-RPC 2.0).
+Generated from the live ADH Daemon registry (61 tools). Endpoint: `POST /mcp` (JSON-RPC 2.0).
 
 | Tool | Description | Args |
 |---|---|---|
@@ -14,6 +14,7 @@ Generated from the live ADH Daemon registry (60 tools). Endpoint: `POST /mcp` (J
 | `java_call` | Invoke a live Java method through reflection. params is a comma-separated parameter-type list; args is a JSON array of string/number/boolean/null values; field names a static field holding the receiver for instance methods. Returns the original result or a fail-loud exception. | session, className, method, params, field, args |
 | `native_hook` | Install, remove or inspect native hooks. mode=got needs module+symbol; mode=inline accepts module+symbol or addr. Each callback emits a NATIVE_HOOK event with x0-x8/x18 registers through the bounded live-capture stream. | session, action, hookId, mode, module, symbol, addr |
 | `native_call` | Actively call a native function by module+symbol or absolute addr with up to 8 unsigned integer/pointer args (AAPCS64; floating-point/vector args unsupported). This is an arbitrary target call and requires confirm:true; it can crash the target, so use only on authorized targets. | session, module, symbol, addr, args, confirm |
+| `syscall_watch` | Scan one loaded module for direct svc #0 sites, inline-hook up to limit of them, and report hook IDs whose NATIVE_HOOK events carry x8 as the syscall number. Host-side orchestration: dump + static scan + native_hook; agent remains execution-only. | session, module, limit |
 | `got_enum` | Enumerate relocation/GOT entries for one loaded module: slot address, symbol name, current resolved value and relocation type. Optional filter matches one symbol exactly. | session, module, filter |
 | `memory_maps` | On-demand full /proc/self/maps of the target | session |
 | `memory_read` | Read target memory at hex addr for size bytes (base64 out) | session, addr, size |
