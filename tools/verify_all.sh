@@ -55,6 +55,7 @@ SCRIPTS=(
   "verify_v65_java_ctor_inherited.sh:device"
   "verify_v66_native_hard_unhook.sh:device"
   "verify_v67_jni_onload_watch.sh:device"
+  "verify_v68_native_fp_args.sh:device"
   "verify_v02_dump.sh:device"
   "verify_v02_so.sh:device"
   "verify_v02_dexrepair.sh:host"

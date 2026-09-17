@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(adh_agent C CXX)
+project(adh_agent C CXX ASM)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 20)
@@ -16,6 +16,7 @@ set(AGENT_SOURCES
     src/hook/got.c
     src/hook/native_hooks.cpp
     src/runtime/actions.c
+    src/runtime/fp_call.S
     src/runtime/art.c
     src/runtime/inspection.c
     src/runtime/jni.c

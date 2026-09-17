@@ -8,6 +8,7 @@
 
 #include <android/log.h>
 #include <atomic>
+#include <cmath>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -75,6 +76,21 @@ static void set_error(char *error, size_t error_size, const char *format, ...) {
     error[error_size - 1] = 0;
 }
 
+// Bounded JSON append. snprintf returns the WOULD-BE length, so adding it to the offset blindly
+// walks the offset past the buffer and the next "cap - off" underflows into a huge size_t. This
+// clamps at the end instead, and the caller reports the truncation rather than emitting a
+// half-written event.
+static size_t adh_json_append(char *out, size_t cap, size_t off, const char *format, ...) {
+    if (off >= cap) return cap;
+    va_list ap;
+    va_start(ap, format);
+    int n = vsnprintf(out + off, cap - off, format, ap);
+    va_end(ap);
+    if (n < 0) return cap;
+    size_t next = off + (size_t)n;
+    return next < cap ? next : cap;
+}
+
 extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id) {
     if (!regs || hook_id < 0 || hook_id >= ADH_NATIVE_MAX_HOOKS) return 0;
     NativeHookContext &ctx = g_native_hooks[hook_id];
@@ -96,21 +112,47 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id) {
     int hook_uid = g_native_hook_slot_ids[hook_id].load(std::memory_order_relaxed);
     if (hook_uid <= 0) hook_uid = hook_id + 1;
     g_native_hook_hits[hook_id].fetch_add(1, std::memory_order_relaxed);
-    char json[1024];
-    snprintf(json, sizeof(json),
-             "{\"hookId\":%d,\"x0\":\"0x%llx\",\"x1\":\"0x%llx\",\"x2\":\"0x%llx\","
-             "\"x3\":\"0x%llx\",\"x4\":\"0x%llx\",\"x5\":\"0x%llx\",\"x6\":\"0x%llx\","
-             "\"x7\":\"0x%llx\",\"x8\":\"0x%llx\",\"x18\":\"0x%llx\","
-             "\"argIndex\":%d,\"argValue\":\"0x%llx\",\"skipOriginal\":%s,"
-             "\"returnSet\":%s,\"returnValue\":\"0x%llx\"}",
-             hook_uid,
-             (unsigned long long)in0, (unsigned long long)in1,
-             (unsigned long long)in2, (unsigned long long)in3,
-             (unsigned long long)in4, (unsigned long long)in5,
-             (unsigned long long)in6, (unsigned long long)in7,
-             (unsigned long long)in8, (unsigned long long)in18,
-             arg_index, (unsigned long long)arg_value, skip_original ? "true" : "false",
-             return_set ? "true" : "false", (unsigned long long)return_value);
+    // v4.31: the stub saved q0-q7 at regs[16..31] (low/high lane per 128-bit register), so float,
+    // double and vector arguments are visible too. Every lane is rendered twice - as the double
+    // (d0-d7) and as the float (s0-s7) it would be - because a float argument only fills the low
+    // 32 bits of its register: whichever reading is a sane finite number is the one the caller
+    // actually used. High lanes stay raw hex (vector/struct arguments).
+    char json[3072];
+    size_t joff = 0;
+    joff = adh_json_append(json, sizeof(json), joff,
+                           "{\"hookId\":%d,\"x0\":\"0x%llx\",\"x1\":\"0x%llx\",\"x2\":\"0x%llx\","
+                           "\"x3\":\"0x%llx\",\"x4\":\"0x%llx\",\"x5\":\"0x%llx\",\"x6\":\"0x%llx\","
+                           "\"x7\":\"0x%llx\",\"x8\":\"0x%llx\",\"x18\":\"0x%llx\",",
+                           hook_uid,
+                           (unsigned long long)in0, (unsigned long long)in1,
+                           (unsigned long long)in2, (unsigned long long)in3,
+                           (unsigned long long)in4, (unsigned long long)in5,
+                           (unsigned long long)in6, (unsigned long long)in7,
+                           (unsigned long long)in8, (unsigned long long)in18);
+    joff = adh_json_append(json, sizeof(json), joff, "\"fp\":{");
+    for (int i = 0; i < 8; i++) {
+        uint64_t bits = regs[16 + i * 2];
+        uint32_t low = (uint32_t)(bits & 0xffffffffu);
+        double d = 0;
+        float f = 0;
+        memcpy(&d, &bits, sizeof(d));
+        memcpy(&f, &low, sizeof(f));
+        char dv[24], sv[24];
+        if (std::isfinite(d) && d > -1e12 && d < 1e12) snprintf(dv, sizeof(dv), "%.6g", d);
+        else snprintf(dv, sizeof(dv), "0x%016llx", (unsigned long long)bits);
+        if (std::isfinite(f) && f > -1e12f && f < 1e12f) snprintf(sv, sizeof(sv), "%.6g", (double)f);
+        else snprintf(sv, sizeof(sv), "0x%08x", (unsigned)low);
+        joff = adh_json_append(json, sizeof(json), joff,
+                               "%s\"d%d\":\"%s\",\"s%d\":\"%s\",\"q%dhi\":\"0x%llx\"",
+                               i ? "," : "", i, dv, i, sv, i,
+                               (unsigned long long)regs[17 + i * 2]);
+    }
+    joff = adh_json_append(json, sizeof(json), joff,
+                           "},\"argIndex\":%d,\"argValue\":\"0x%llx\",\"skipOriginal\":%s,"
+                           "\"returnSet\":%s,\"returnValue\":\"0x%llx\"}",
+                           arg_index, (unsigned long long)arg_value, skip_original ? "true" : "false",
+                           return_set ? "true" : "false", (unsigned long long)return_value);
+    if (joff >= sizeof(json)) LOGE("native hook event truncated: json buffer %zu bytes exhausted", sizeof(json));
     adh_capture_push_text("NATIVE_HOOK", json);
     return skip_original ? 1 : 0;
 }

@@ -17,7 +17,8 @@
 | `hook/native_inline_dobby.cpp` | Dobby native inline-hook backend |
 | `hook/native_hooks.cpp` | Unified native hook registry: GOT/inline/address install (prologue snapshot + patch verification), arm64 register-capture stubs, NATIVE_HOOK events, soft unhook by default and opt-in hard unhook (writes the saved original bytes back, frees the slot, leaves the Dobby pool untouched) |
 | hook/java_lsplant.cpp | LSPlant v6.4 ART hook shim (optional static link over the same Dobby backend): methods incl. inherited ones (superclass-chain resolution, declaring class reported) and constructors (`method: "<init>"`, ctor-argument observation, skip/override rejected) |
-| `runtime/actions.c` | Safety-gated Java trigger and explicit in-process `.so` loading commands |
+| `runtime/actions.c` | Safety-gated Java trigger, explicit in-process `.so` loading, and the typed `native_call` active-call command (integer/pointer args in x0-x7, `f:`/`d:` args in s0-s7/d0-d7) |
+| `runtime/fp_call.S` | AAPCS64 trampoline that loads the integer bank, loads d0-d7, calls the target and parks the d0 return for `native_call` (must stay assembly: a naked C version loses the argument registers under -O3) |
 | `runtime/art.c` | ClassLoader-cookie enumeration and per-API ART DexFile structural resolution |
 | `runtime/inspection.c` | Live-object reflection, JNI/runtime compatibility probes, and the bootstrap/current injection-footprint counters |
 | `runtime/java_enum.cpp` | Live-class reflection: enumerate class metadata/constructors/overloaded methods/fields and actively invoke static or field-backed instance methods |

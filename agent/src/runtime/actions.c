@@ -3,6 +3,9 @@
 #include <dlfcn.h>
 #include <jni.h>
 #include <stdint.h>
+#include <string.h>
+#include <stdlib.h>
+#include <math.h>
 
 #include "../bootstrap/agent_internal.h"
 #include "../hook/got.h"
@@ -164,36 +167,67 @@ void adh_cmd_load_so(int fd, const char *id, const char *path, const char *symbo
 // Generic integer/pointer native invocation by module+symbol or absolute address.
 // This is intentionally not policy-enforcing in the agent: the Host requires confirm:true
 // before dispatching the command, while the agent only resolves and calls.
-static int parse_u64_args(const char *csv, unsigned long long *out, int max,
-                          int *count_out, char *error, size_t error_size) {
-    *count_out = 0;
+
+// Implemented in fp_call.S: x0-x7 come from ints[], d0-d7 from fps[] (AAPCS64 assigns the two
+// banks independently) and the FP return register d0 lands in this global.
+unsigned long long g_adh_fp_call_result = 0;
+extern unsigned long long adh_fp_call(void *target, const unsigned long long *ints,
+                                      unsigned long long *fps);
+
+// Argument syntax: "f:<float>" and "d:<double>" fill the FP bank in order, anything else is an
+// integer/pointer in x0-x7. Both banks hold at most 8 arguments; unknown or malformed tokens are
+// rejected instead of being silently coerced to 0.
+static int parse_typed_args(const char *csv, unsigned long long *ints, int *int_count,
+                            unsigned long long *fps, int *fp_count, int *total_count,
+                            char *error, size_t error_size) {
+    *int_count = 0; *fp_count = 0; *total_count = 0;
     if (!csv || !csv[0]) return 1;
     const char *p = csv;
-    while (*p && *count_out < max) {
+    while (*p) {
         while (*p == ' ' || *p == '\t' || *p == ',') p++;
         if (!*p) break;
-        if (*p == '-') {
-            snprintf(error, error_size, "native_call only accepts unsigned integer/pointer args");
-            return 0;
+        const char *start = p;
+        while (*p && *p != ',') p++;
+        size_t len = (size_t)(p - start);
+        char token[96];
+        if (len >= sizeof(token)) { snprintf(error, error_size, "argument too long"); return 0; }
+        memcpy(token, start, len);
+        token[len] = 0;
+        char *t = token;
+        while (*t == ' ' || *t == '\t') t++;
+        char *te = t + strlen(t);
+        while (te > t && (te[-1] == ' ' || te[-1] == '\t')) *--te = 0;
+        if (!*t) continue;
+        int is_fp = (t[0] == 'f' || t[0] == 'd' || t[0] == 'F' || t[0] == 'D') && t[1] == ':';
+        if (is_fp) {
+            if (*fp_count >= 8) { snprintf(error, error_size, "at most 8 floating-point arguments (d0-d7)"); return 0; }
+            const char *value = t + 2;
+            char *endp = NULL;
+            double d = strtod(value, &endp);
+            if (!value[0] || !endp || *endp) { snprintf(error, error_size, "bad floating-point argument: %s", t); return 0; }
+            if (t[0] == 'f' || t[0] == 'F') {
+                float f = (float)d;
+                uint32_t bits = 0;
+                memcpy(&bits, &f, sizeof(bits));
+                fps[*fp_count] = bits;
+            } else {
+                memcpy(&fps[*fp_count], &d, sizeof(d));
+            }
+            (*fp_count)++;
+        } else {
+            if (*int_count >= 8) { snprintf(error, error_size, "at most 8 integer arguments (x0-x7)"); return 0; }
+            if (strchr(t, ':')) {
+                snprintf(error, error_size,
+                         "unknown argument type in '%s' (use f:<float>, d:<double>, or an integer/pointer)", t);
+                return 0;
+            }
+            char *endp = NULL;
+            unsigned long long v = strtoull(t, &endp, 0);
+            if (!endp || *endp) { snprintf(error, error_size, "bad integer argument: %s", t); return 0; }
+            ints[*int_count] = v;
+            (*int_count)++;
         }
-        char *end = NULL;
-        errno = 0;
-        unsigned long long value = strtoull(p, &end, 0);
-        if (errno || end == p) {
-            snprintf(error, error_size, "invalid native_call arg at '%s' (decimal or 0x hex)", p);
-            return 0;
-        }
-        out[(*count_out)++] = value;
-        p = end;
-        while (*p == ' ' || *p == '\t') p++;
-        if (*p && *p != ',') {
-            snprintf(error, error_size, "native_call args must be comma-separated");
-            return 0;
-        }
-    }
-    if (*p) {
-        snprintf(error, error_size, "too many native_call args (max %d)", max);
-        return 0;
+        (*total_count)++;
     }
     return 1;
 }
@@ -220,10 +254,16 @@ void adh_cmd_native_call(int fd, const char *id, const char *module, const char 
         return;
     }
 
-    unsigned long long args[8] = {0};
-    int argc = 0;
+    // Typed arguments: "f:<float>" / "d:<double>" go to the FP register bank (s0../d0..), everything
+    // else is an integer/pointer in x0-x7. AAPCS64 assigns the banks independently, so the counts
+    // are tracked separately; integers are always loaded into x0-x7 too, so pointer/handle
+    // arguments can be combined with FP ones.
+    unsigned long long ints[8] = {0};
+    // fps[0..7] are loaded into d0-d7; the FP return lands in g_adh_fp_call_result.
+    unsigned long long fps[8] __attribute__((aligned(16))) = {0};
+    int int_argc = 0, fp_argc = 0, argc = 0;
     char error[256] = "";
-    if (!parse_u64_args(args_csv ? args_csv : "", args, 8, &argc, error, sizeof(error))) {
+    if (!parse_typed_args(args_csv ? args_csv : "", ints, &int_argc, fps, &fp_argc, &argc, error, sizeof(error))) {
         char errorj[320];
         json_escape(error, errorj, sizeof(errorj));
         char out[520];
@@ -234,39 +274,55 @@ void adh_cmd_native_call(int fd, const char *id, const char *module, const char 
         return;
     }
 
-    typedef unsigned long long (*fn8_t)(unsigned long long, unsigned long long,
-                                        unsigned long long, unsigned long long,
-                                        unsigned long long, unsigned long long,
-                                        unsigned long long, unsigned long long);
     long long start_ns = now_ns();
-    unsigned long long result = ((fn8_t)target)(
-        args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7]);
+    unsigned long long result = 0;
+    unsigned long long fp_result = 0;
+    if (fp_argc > 0) {
+        LOGI("native_call fp: target=%p ints=%p fps=%p fp_argc=%d int_argc=%d",
+             target, (void *)ints, (void *)fps, fp_argc, int_argc);
+        result = adh_fp_call(target, ints, fps);
+        fp_result = g_adh_fp_call_result;
+    } else {
+        typedef unsigned long long (*fn8_t)(unsigned long long, unsigned long long,
+                                            unsigned long long, unsigned long long,
+                                            unsigned long long, unsigned long long,
+                                            unsigned long long, unsigned long long);
+        result = ((fn8_t)target)(ints[0], ints[1], ints[2], ints[3], ints[4], ints[5], ints[6], ints[7]);
+    }
     long long duration_ns = now_ns() - start_ns;
+    double fp_double = 0;
+    memcpy(&fp_double, &fp_result, sizeof(fp_double));
 
-    char modulej[160], symbolj[200], argsj[256];
+    char modulej[160], symbolj[200], argsj[320];
     json_escape(module ? module : "", modulej, sizeof(modulej));
     json_escape(symbol ? symbol : "", symbolj, sizeof(symbolj));
-    size_t arglen = 0;
-    argsj[0] = 0;
-    for (int i = 0; i < argc; i++) {
-        if (arglen + 1 >= sizeof(argsj)) { arglen = sizeof(argsj) - 1; break; }
-        int written = snprintf(argsj + arglen, sizeof(argsj) - arglen, "%s\"0x%llx\"",
-                               i ? "," : "", args[i]);
-        if (written < 0 || (size_t)written >= sizeof(argsj) - arglen) {
-            arglen = sizeof(argsj) - 1;
-            break;
-        }
-        arglen += (size_t)written;
+    json_escape(args_csv ? args_csv : "", argsj, sizeof(argsj));
+    char fpjson[320] = "";
+    if (fp_argc > 0) {
+        // x0 is only the return value for integer-returning targets; an FP-returning target leaves
+        // it stale, so name the bank the numbers actually came from (d0).
+        uint32_t flow = (uint32_t)(fp_result & 0xffffffffu);
+        float fp_float = 0;
+        memcpy(&fp_float, &flow, sizeof(fp_float));
+        char dnum[32], fnum[32];
+        if (isfinite(fp_double)) snprintf(dnum, sizeof(dnum), "%.9g", fp_double);
+        else snprintf(dnum, sizeof(dnum), "null");
+        if (isfinite(fp_float)) snprintf(fnum, sizeof(fnum), "%.9g", (double)fp_float);
+        else snprintf(fnum, sizeof(fnum), "null");
+        snprintf(fpjson, sizeof(fpjson),
+                 ",\"fpResult\":\"0x%llx\",\"fpResultDouble\":%s,\"fpResultFloat\":%s,"
+                 "\"fpArgCount\":%d,\"intArgCount\":%d,\"returnBank\":\"d0\"",
+                 fp_result, dnum, fnum, fp_argc, int_argc);
     }
-    argsj[arglen] = 0;
-    char out[1200];
+    char out[1400];
     snprintf(out, sizeof(out),
              "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"native_call\",\"ok\":true,"
              "\"source\":\"%s\",\"module\":\"%s\",\"symbol\":\"%s\",\"target\":\"0x%llx\","
-             "\"args\":[%s],\"argCount\":%d,\"result\":\"0x%llx\",\"resultDecimal\":%llu,"
-             "\"durationUs\":%lld,\"fpSupported\":false}\n",
+             "\"args\":\"[%s]\",\"argCount\":%d,\"result\":\"0x%llx\",\"resultDecimal\":%llu,"
+             "\"durationUs\":%lld,\"fpSupported\":true%s}\n",
              idj, source, modulej, symbolj, (unsigned long long)(uintptr_t)target,
-             argsj, argc, result, result, duration_ns / 1000);
+             argsj, argc, result, result, duration_ns / 1000, fpjson);
     send_line(fd, out);
-    LOGI("native_call src=%s target=%p args=%d result=0x%llx", source, target, argc, result);
+    LOGI("native_call src=%s target=%p args=%d fp=%d result=0x%llx", source, target, argc, fp_argc, result);
 }
+

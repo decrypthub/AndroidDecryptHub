@@ -86,6 +86,7 @@ translation — kept separate).
 - `verify_v44_java_enum.sh` — 沙盒 `HookProbe` 类/字段/两个 `ping` 重载枚举验收（deploy new agent/sandbox；未部署时 SKIP）。
 - `verify_v45_java_call.sh` — 沙盒 `HookProbe.ping` 两个重载的反射主动调用与返回值验收（deploy new agent/sandbox；未部署时 SKIP）。
 - `verify_v46_native_hook.sh` — 沙盒 `libadhdetect.so:adh_trace_target` inline hook → JNI 触发 → 真实 hookId 的寄存器 capture 事件 → unhook 验收（deploy new agent/sandbox；未部署时 SKIP）。
+- `verify_v68_native_fp_args.sh` — native **FP/SIMD 参数与 FP 返回**：`native_call f:2.5,d:4,1` → `fpResult 0x4026000000000000` / `fpResultDouble 11`（double 返回）、`adh_fp_target_f` → `fpResultFloat 11` / 低位 `0x41300000`（float 返回）、整数路径 `20,22 -> 84` 不回归、`x:1.5` 报 "unknown argument type"（fail-loud）；同一函数 inline hook 的 `NATIVE_HOOK` 事件必须同时含 `"x0":"0x1"`（整数 bank）与 `"s0":"2.5"` / `"d1":"4"`（FP bank），unhook 后调用恢复。
 - `verify_v47_got_enum.sh` — 枚举 `libadhdetect.so` 的 GOT/relocation，断言导入符号可见（deploy new agent；未部署时 SKIP）。
 - `verify_v48_memory_disasm.sh` — 真机地址 → agent 读内存 → Host Capstone 5 WASM 反汇编；覆盖绝对地址与 module+offset 两条路径（deploy new daemon/agent；未部署时 SKIP）。
 - `verify_v49_native_call.sh` — `adh_add_target` 按 module+symbol 和绝对地址主动调用，断言返回值与 confirm 门禁（deploy new agent/daemon；未部署时 SKIP）。

@@ -315,6 +315,17 @@ JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_jniCtorProbe(JNIEnv *env, 
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return 0xAD6000; }
     return (jint)(0xAD6000 | (value == 42 ? 1 : 0));
 }
+// v4.31 fixture for FP register capture and FP active calls: (float a, double b, int c) -> a*b+c.
+// Call it with f:2.5 d:4 1 to get 11.0 back in d0.
+__attribute__((noinline, used, visibility("default")))
+double adh_fp_target(float a, double b, int c) {
+    return (double)a * b + (double)c;
+}
+// Same shape but returning float, to prove the s0 (32-bit) return path: f:2.5 d:4 1 -> 11.0f.
+__attribute__((noinline, used, visibility("default")))
+float adh_fp_target_f(float a, double b, int c) {
+    return (float)((double)a * b + (double)c);
+}
 JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_run(JNIEnv *env, jclass clazz) {
     (void)env; (void)clazz;
     int flags = 0;
