@@ -1113,7 +1113,8 @@ async function loadAutomationStatus(){
     renderAutomationBlocked(r.blocked||[], r.packages||[]);
     if(!r.enabled){ el.textContent='已关闭'; return; }
     if(!r.packages?.length){ el.textContent='已开启 · 但允许包名为空'; return; }
-    el.textContent=device?`已连接 · ${device.model||device.deviceId} · SDK ${device.sdk||'?'}`:'已开启 · 等待手机 AccessibilityService 连接';
+    const grant=r.device&&r.device.notifications?(' · 通知读取:'+(r.device.notifications.granted?'已授权':'未授权')):'';
+    el.textContent=device?`已连接 · ${device.model||device.deviceId} · SDK ${device.sdk||'?'}`+grant:'已开启 · 等待手机 AccessibilityService 连接';
   }catch(e){ el.textContent='状态读取失败: '+e; }
 }
 function renderAutomationBlocked(blocked, packages){

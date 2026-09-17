@@ -104,7 +104,36 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       }
       return send(200, { settings, stats: configStats() });
     } },
-    { path: '/api/automation/status', handler: () => send(200, { ok: true, enabled: settings.automation.enabled, packages: settings.automation.packages, blocked: blockedPackageNotices(), settings: settings.automation, bridge: automation.status() }) },
+    { path: '/api/automation/status', handler: async () => {
+      const bridge = automation.status();
+      // Enrich with the device-side view (active package, notification-access grant) when a phone
+      // is actually connected: the settings panel should say what is still pending instead of
+      // making the operator bounce between the Web UI and the phone. A dead bridge must not make
+      // the endpoint hang, hence the short timeout and the null device.
+      let device: any = null;
+      const online = bridge.connected && (bridge.devices ?? []).some((item: any) => item.online);
+      if (online) {
+        try {
+          const status = await automation.cmd('status', {}, 4_000);
+          device = {
+            activePackage: status?.activePackage ?? null,
+            activity: status?.activity ?? null,
+            notifications: status?.notifications ?? null,
+          };
+        } catch (error) {
+          device = { error: (error as Error).message };
+        }
+      }
+      return send(200, {
+        ok: true,
+        enabled: settings.automation.enabled,
+        packages: settings.automation.packages,
+        blocked: blockedPackageNotices(),
+        settings: settings.automation,
+        bridge,
+        device,
+      });
+    } },
     // Acceptance/diagnostic path: forward a raw op to the device bridge, so fault-injection
     // (selftest_sleep) and future low-level probes stay reachable without growing the MCP tool
     // surface. The device only implements its fixed op set — unknown ops answer unsupported_op.
