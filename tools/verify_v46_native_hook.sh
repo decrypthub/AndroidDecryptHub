@@ -67,11 +67,10 @@ for (let i = 0; i < 20; i++) {
   status = await post('/api/native/hook', { session: agent.sessionId, action: 'status' });
   const h = (status?.status?.hooks ?? []).find((x) => Number(x.id) === hookId);
   if (h?.hits >= 1) {
-    const list = await (await fetch(`${base}/api/captures?session=${encodeURIComponent(agent.sessionId)}&limit=200`)).json();
-    const found = (list.captures ?? []).find((c) => c.func === 'NATIVE_HOOK');
-    if (found) {
+    const list = await (await fetch(`${base}/api/captures?session=${encodeURIComponent(agent.sessionId)}&limit=300`)).json();
+    for (const found of (list.captures ?? []).filter((c) => c.func === 'NATIVE_HOOK')) {
       const detail = await (await fetch(`${base}/api/captures/${found.id}`)).json();
-      if (String(detail.text ?? '').includes(`"hookId":${hookId}`)) event = detail;
+      if (String(detail.text ?? '').includes(`"hookId":${hookId}`)) { event = detail; break; }
     }
   }
   if (event) break;

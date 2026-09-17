@@ -32,6 +32,11 @@ struct NativeHookContext {
     char module[128];
     char symbol[128];
     uintptr_t address;
+    int skip_original;
+    int return_set;
+    uint64_t return_value;
+    int arg_index;
+    uint64_t arg_value;
 };
 
 static NativeHookContext g_native_hooks[ADH_NATIVE_MAX_HOOKS];
@@ -52,23 +57,44 @@ static void set_error(char *error, size_t error_size, const char *format, ...) {
     error[error_size - 1] = 0;
 }
 
-extern "C" void adh_native_hook_record(uint64_t *regs, int hook_id) {
-    if (!regs || hook_id < 0 || hook_id >= ADH_NATIVE_MAX_HOOKS) return;
+extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id) {
+    if (!regs || hook_id < 0 || hook_id >= ADH_NATIVE_MAX_HOOKS) return 0;
+    NativeHookContext &ctx = g_native_hooks[hook_id];
+    if (__atomic_load_n(&ctx.active, __ATOMIC_ACQUIRE) != 1) return 0;
+
+    uint64_t in0 = regs[0], in1 = regs[1], in2 = regs[2], in3 = regs[3];
+    uint64_t in4 = regs[4], in5 = regs[5], in6 = regs[6], in7 = regs[7];
+    uint64_t in8 = regs[8], in18 = regs[12];
+    int arg_index = __atomic_load_n(&ctx.arg_index, __ATOMIC_RELAXED);
+    uint64_t arg_value = __atomic_load_n(&ctx.arg_value, __ATOMIC_RELAXED);
+    int return_set = __atomic_load_n(&ctx.return_set, __ATOMIC_RELAXED);
+    uint64_t return_value = __atomic_load_n(&ctx.return_value, __ATOMIC_RELAXED);
+    int skip_original = __atomic_load_n(&ctx.skip_original, __ATOMIC_RELAXED);
+
+    if (arg_index >= 0 && arg_index < 8) regs[arg_index] = arg_value;
+    if (return_set) regs[0] = return_value;
+    else if (skip_original) regs[0] = 0;
+
     int hook_uid = g_native_hook_slot_ids[hook_id].load(std::memory_order_relaxed);
     if (hook_uid <= 0) hook_uid = hook_id + 1;
     g_native_hook_hits[hook_id].fetch_add(1, std::memory_order_relaxed);
-    char json[640];
+    char json[1024];
     snprintf(json, sizeof(json),
              "{\"hookId\":%d,\"x0\":\"0x%llx\",\"x1\":\"0x%llx\",\"x2\":\"0x%llx\","
              "\"x3\":\"0x%llx\",\"x4\":\"0x%llx\",\"x5\":\"0x%llx\",\"x6\":\"0x%llx\","
-             "\"x7\":\"0x%llx\",\"x8\":\"0x%llx\",\"x18\":\"0x%llx\"}",
+             "\"x7\":\"0x%llx\",\"x8\":\"0x%llx\",\"x18\":\"0x%llx\","
+             "\"argIndex\":%d,\"argValue\":\"0x%llx\",\"skipOriginal\":%s,"
+             "\"returnSet\":%s,\"returnValue\":\"0x%llx\"}",
              hook_uid,
-             (unsigned long long)regs[0], (unsigned long long)regs[1],
-             (unsigned long long)regs[2], (unsigned long long)regs[3],
-             (unsigned long long)regs[4], (unsigned long long)regs[5],
-             (unsigned long long)regs[6], (unsigned long long)regs[7],
-             (unsigned long long)regs[8], (unsigned long long)regs[12]);
+             (unsigned long long)in0, (unsigned long long)in1,
+             (unsigned long long)in2, (unsigned long long)in3,
+             (unsigned long long)in4, (unsigned long long)in5,
+             (unsigned long long)in6, (unsigned long long)in7,
+             (unsigned long long)in8, (unsigned long long)in18,
+             arg_index, (unsigned long long)arg_value, skip_original ? "true" : "false",
+             return_set ? "true" : "false", (unsigned long long)return_value);
     adh_capture_push_text("NATIVE_HOOK", json);
+    return skip_original ? 1 : 0;
 }
 
 #define ADH_NATIVE_STUB(N, OFF) \
@@ -90,6 +116,7 @@ extern "C" void adh_native_stub_##N(void) { \
         "mov x0, sp\n" \
         "mov x1, #" #N "\n" \
         "bl adh_native_hook_record\n" \
+        "mov x16, x0\n" \
         "ldp x0, x1, [sp, #0]\n" \
         "ldp x2, x3, [sp, #16]\n" \
         "ldp x4, x5, [sp, #32]\n" \
@@ -102,10 +129,13 @@ extern "C" void adh_native_stub_##N(void) { \
         "ldp q4, q5, [sp, #192]\n" \
         "ldp q6, q7, [sp, #224]\n" \
         "add sp, sp, #256\n" \
-        "adrp x16, g_native_hook_originals+" #OFF "\n" \
-        "add x16, x16, :lo12:g_native_hook_originals+" #OFF "\n" \
-        "ldr x16, [x16]\n" \
-        "br x16\n" \
+        "cbnz x16, 1f\n" \
+        "adrp x17, g_native_hook_originals+" #OFF "\n" \
+        "add x17, x17, :lo12:g_native_hook_originals+" #OFF "\n" \
+        "ldr x17, [x17]\n" \
+        "br x17\n" \
+        "1:\n" \
+        "ret\n" \
     ); \
 }
 
@@ -172,6 +202,11 @@ static void reset_context(NativeHookContext &ctx) {
     ctx.module[0] = 0;
     ctx.symbol[0] = 0;
     ctx.address = 0;
+    ctx.skip_original = 0;
+    ctx.return_set = 0;
+    ctx.return_value = 0;
+    ctx.arg_index = -1;
+    ctx.arg_value = 0;
 }
 
 static void copy_cstr(char *dst, size_t size, const char *src) {
@@ -182,8 +217,9 @@ static void copy_cstr(char *dst, size_t size, const char *src) {
 }
 
 extern "C" int adh_native_hook_install(const char *mode, const char *module, const char *symbol,
-                                        const char *addr, int *hook_id_out,
-                                        char *error, size_t error_size) {
+                                        const char *addr, int skip_original, int return_set,
+                                        uint64_t return_value, int arg_index, uint64_t arg_value,
+                                        int *hook_id_out, char *error, size_t error_size) {
     if (hook_id_out) *hook_id_out = 0;
     if (!mode) return (set_error(error, error_size, "need mode got|inline"), 0);
     pthread_mutex_lock(&g_native_hooks_lock);
@@ -247,7 +283,12 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
     pthread_mutex_lock(&g_native_hooks_lock);
     NativeHookContext &ctx = g_native_hooks[slot];
     ctx.id = id;
-    ctx.active = 1;
+    ctx.skip_original = skip_original ? 1 : 0;
+    ctx.return_set = return_set ? 1 : 0;
+    ctx.return_value = return_value;
+    ctx.arg_index = arg_index;
+    ctx.arg_value = arg_value;
+    __atomic_store_n(&ctx.active, 1, __ATOMIC_RELEASE);
     ctx.mode = hook_mode;
     ctx.target = target;
     ctx.original = original;
@@ -282,6 +323,7 @@ extern "C" int adh_native_hook_unhook(int hook_id, char *error, size_t error_siz
     }
     int slot = (int)(ctx - g_native_hooks);
     g_native_hook_hits[slot].store(0ULL, std::memory_order_relaxed);
+    __atomic_store_n(&ctx->active, 0, __ATOMIC_RELEASE);
     reset_context(*ctx);
     pthread_mutex_unlock(&g_native_hooks_lock);
     LOGI("native_hook removed id=%d", hook_id);
@@ -302,11 +344,13 @@ extern "C" int adh_native_hook_status_json(char *out, size_t out_size) {
         snprintf(item, sizeof(item),
                  "{\"id\":%d,\"mode\":\"%s\",\"module\":\"%s\",\"symbol\":\"%s\","
                  "\"address\":\"0x%llx\",\"target\":\"0x%llx\",\"original\":\"0x%llx\","
-                 "\"replacement\":\"0x%llx\",\"hits\":%llu}",
+                 "\"replacement\":\"0x%llx\",\"hits\":%llu,\"argIndex\":%d,\"argValue\":\"0x%llx\",\"skipOriginal\":%s,\"returnSet\":%s,\"returnValue\":\"0x%llx\"}",
                  ctx.id, ctx.mode == 0 ? "got" : "inline", ctx.module, ctx.symbol,
                  (unsigned long long)ctx.address, (unsigned long long)(uintptr_t)ctx.target,
                  (unsigned long long)(uintptr_t)ctx.original,
-                 (unsigned long long)(uintptr_t)ctx.replacement, hits);
+                 (unsigned long long)(uintptr_t)ctx.replacement, hits, ctx.arg_index,
+                 (unsigned long long)ctx.arg_value, ctx.skip_original ? "true" : "false",
+                 ctx.return_set ? "true" : "false", (unsigned long long)ctx.return_value);
         hooks += item;
         count++;
     }

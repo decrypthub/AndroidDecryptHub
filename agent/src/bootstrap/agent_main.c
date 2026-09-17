@@ -292,14 +292,18 @@ static void cmd_java_call(int fd, const char *id, const char *class_name, const 
 }
 static void cmd_native_hook(int fd, const char *id, const char *action, const char *mode,
                             const char *module, const char *symbol, const char *addr,
-                            long long requested_id) {
+                            int skip_original, const char *return_value, long long arg_index,
+                            const char *arg_value, long long requested_id) {
     char idj[64];
     json_escape(id, idj, sizeof(idj));
     char error[512] = "";
     int ok = 0;
     int new_id = 0;
     if (strcmp(action, "hook") == 0) {
-        ok = adh_native_hook_install(mode, module, symbol, addr, &new_id, error, sizeof(error));
+        ok = adh_native_hook_install(mode, module, symbol, addr, skip_original, return_value[0] ? 1 : 0,
+                                    (uint64_t)strtoull(return_value, NULL, 0), (int)arg_index,
+                                    (uint64_t)strtoull(arg_value, NULL, 0),
+                                    &new_id, error, sizeof(error));
     } else if (strcmp(action, "unhook") == 0) {
         ok = adh_native_hook_unhook((int)requested_id, error, sizeof(error));
     } else if (strcmp(action, "status") == 0) {
@@ -421,13 +425,19 @@ static void command_loop(int fd) {
                     cmd_java_call(fd, id, jcls, jmethod, jparams, jfield, jargs);
                 } else if (strcmp(op, "native_hook") == 0) {
                     char naction[16] = "", nmode[16] = "", nmodule[128] = "", nsymbol[160] = "", naddr[32] = "";
+                    char nskip[8] = "", nreturn[64] = "", nargvalue[64] = "";
                     json_get_str(line, "action", naction, sizeof(naction));
                     json_get_str(line, "mode", nmode, sizeof(nmode));
                     json_get_str(line, "module", nmodule, sizeof(nmodule));
                     json_get_str(line, "symbol", nsymbol, sizeof(nsymbol));
                     json_get_str(line, "addr", naddr, sizeof(naddr));
+                    json_get_str(line, "skipOriginal", nskip, sizeof(nskip));
+                    json_get_str(line, "returnValue", nreturn, sizeof(nreturn));
+                    json_get_str(line, "argValue", nargvalue, sizeof(nargvalue));
                     long long nid = json_get_num(line, "hookId");
-                    cmd_native_hook(fd, id, naction, nmode, nmodule, nsymbol, naddr, nid);                } else if (strcmp(op, "native_call") == 0) {
+                    long long nargindex = json_get_num(line, "argIndex");
+                    int nskip_original = (strcmp(nskip, "true") == 0 || strcmp(nskip, "1") == 0);
+                    cmd_native_hook(fd, id, naction, nmode, nmodule, nsymbol, naddr, nskip_original, nreturn, nargindex, nargvalue, nid);                } else if (strcmp(op, "native_call") == 0) {
                     char cmodule[128] = "", csymbol[160] = "", caddr[32] = "", cargs[256] = "";
                     json_get_str(line, "module", cmodule, sizeof(cmodule));
                     json_get_str(line, "symbol", csymbol, sizeof(csymbol));
