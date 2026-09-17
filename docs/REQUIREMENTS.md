@@ -1528,6 +1528,7 @@ Host ADH Daemon / MCP  →  自动化 TCP 8763（loopback + adb reverse）  → 
 | `phone_act` (ime) | 对聚焦控件执行 IME 动作键（search/done/go/send/next/previous）；应用忽略自家提交按钮时用它，Android 11 以下或无输入框时明确失败 |
 | `phone_wait_any` | 多个条件任一命中即成功（`wait_any` 步骤同样可用）：应用可能从不同状态恢复时用它，避免配方只认一种状态；都不命中时 fail-loud（`wait_any_timeout` + 最后失败原因） |
 | `phone_task` onlyIf | 步骤级守卫：`onlyIf` 选择器不存在时该步标记 `skipped:true` 而非失败，配方可表达「仅当这个控件在时才点它」 |
+| `phone_act` (long press) | `action:"tap"` + `durationMs>=600` 走长压；`inputMode:"root"` 时经协议 v12 的零距离长压注入，用于吞无障碍手势的应用；根输入也接受 snapshotId+ref 而不只是坐标 |
 | `phone_device` (clipboard) | `clipboard_read` 读取剪贴板文本、`clipboard_write {text}` 写入（≤8 KiB）；无障碍服务上下文优先、root daemon（协议 v11）兜底 |
 | `phone_device` (volume) | `volume_status` 读取 music/ring/alarm/voice 当前值与最大值；`volume_set {stream, index}` 写入（夹到该流上限，未知流拒绝）。协议 v10 |
 | `GET /api/skills` | 列出配方库（名称/描述/步数/参数/运行次数），供 Web「技能库」页展示 |
