@@ -198,9 +198,17 @@ class MainActivity : Activity() {
             }
             addView(input)
             addView(echo)
+            val clipEcho = TextView(this@MainActivity).apply {
+                id = R.id.adh_clipboard_echo
+                text = "剪贴板内容：—"
+            }
+            addView(clipEcho)
             addView(btnRow(
                 mbutton("发测试通知") { postTestNotification() },
                 mbutton(if (secureWindow) "关闭安全窗口" else "开启安全窗口") { toggleSecureWindow() }.also { secureToggleButton = it },
+                // Lets the acceptance test ask what a FOREGROUND app can read: that is the only
+                // context Android 10+ allows clipboard reads from.
+                mbutton("读剪贴板") { readClipboardProbe() },
             ))
         })
     }
@@ -317,6 +325,16 @@ class MainActivity : Activity() {
 
     // Fixture for the notification acceptance: post a real notification the accessibility
     // connection can observe and the AI can read back through phone_notifications.
+    private fun readClipboardProbe() {
+        val echo = findViewById<TextView>(R.id.adh_clipboard_echo)
+        val manager = getSystemService(android.content.ClipboardManager::class.java)
+        val clip = runCatching { manager?.primaryClip }.getOrNull()
+        val value = if (clip != null && clip.itemCount > 0) {
+            runCatching { clip.getItemAt(0).coerceToText(this).toString() }.getOrDefault("")
+        } else ""
+        echo?.text = if (value.isNotEmpty()) "剪贴板内容：$value" else "剪贴板内容：（空或被系统隐藏）"
+    }
+
     private fun postTestNotification() {
         val manager = getSystemService(NotificationManager::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
