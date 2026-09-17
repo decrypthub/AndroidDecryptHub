@@ -37,6 +37,11 @@ object Detection {
     @JvmStatic external fun jniCtorProbe(): Int
     // v4.30 fixtures for the load-time JNI_OnLoad watch: these libraries are NOT loaded at
     // startup, the verifier triggers the load after arming the watch.
+    // v4.32 anti-hook self-audit: inspects this library's own mappings and code bytes (anonymous
+    // executable mappings, prologue self-integrity, an "agent"-named module, an entry that branches
+    // outside its own module) and returns the raw numbers as JSON. Used to prove both that an
+    // inline hook IS visible this way and that the opt-in stealth pool removes the anonymous page.
+    @JvmStatic external fun antiHookProbe(): String
     @JvmStatic fun loadPluginA() { System.loadLibrary("adhplugin_a") }
     @JvmStatic fun loadPluginB() { System.loadLibrary("adhplugin_b") }
 

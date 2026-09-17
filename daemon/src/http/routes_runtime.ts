@@ -82,6 +82,21 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
         return send(r.ok ? 200 : 502, r);
       } catch (e) { return send(504, { error: (e as Error).message }); }
     } },
+    { method: 'POST', path: '/api/native/stealth', handler: async () => {
+      const body = await readBody(req);
+      const { session, action, confirm } = JSON.parse(body || '{}');
+      const sid = pickSid(session);
+      const act = String(action ?? '');
+      if (!sid) return send(400, { error: 'need session' });
+      if (act !== 'status' && act !== 'on' && act !== 'off') return send(400, { error: 'action must be on|off|status' });
+      if (act !== 'status' && confirm !== true) {
+        return send(400, { error: 'stealth on/off changes the target process footprint and requires confirm:true' });
+      }
+      try {
+        const r = await sendCmd(sid, 'stealth', { action: act }, 15_000);
+        return send(r.ok ? 200 : 502, r);
+      } catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
     { method: 'POST', path: '/api/native/syscall_watch', handler: async () => {
       const body = await readBody(req);
       const { session, module, limit } = JSON.parse(body || '{}');

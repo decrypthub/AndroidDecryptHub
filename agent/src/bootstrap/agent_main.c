@@ -29,6 +29,7 @@
 #include "../runtime/java_enum.h"
 #include "../trace/commands.h"
 #include "../hook/native_hooks.h"
+#include "../hook/stealth_pool.h"
 
 #ifdef ADH_HAVE_LSPLANT
 #include "../hook/java_lsplant.h"
@@ -469,6 +470,10 @@ static void command_loop(int fd) {
                     json_get_str(line, "module", gmodule, sizeof(gmodule));
                     json_get_str(line, "filter", gfilter, sizeof(gfilter));
                     cmd_got_enum(fd, id, gmodule, gfilter);
+                } else if (strcmp(op, "stealth") == 0) {
+                    char saction[16] = "";
+                    json_get_str(line, "action", saction, sizeof(saction));
+                    adh_cmd_stealth(fd, id, saction);
                 } else if (strcmp(op, "javahook_probe") == 0) {
                     cmd_javahook_probe(fd, id);
                 } else if (strcmp(op, "gothook_selftest") == 0) {

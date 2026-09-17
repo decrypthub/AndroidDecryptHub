@@ -1330,6 +1330,8 @@ MCP              →  AI 可编程操控，与 HTTP 同源
 - **最小侵入模式**：只启用 maps/dex/classloader/crypto 等低痕迹模块，关闭高痕迹 hook
 - **hook 自校验对抗**：应对目标周期性校验函数序言字节、检测 GOT 改写
 
+> 实现状态（v4.32，真机 `aa165071` 验收）：**hook 自校验对抗**落地一半，且是可测量的。开启 `stealth` 后，inline hook 后端不再留下"无路径的可执行页"：Dobby 的 trampoline arena 被重定向到 ART 风格的 `/memfd:jit-cache` 映射（Dobby 的 mmap 走本模块 GOT；重定向窗口线程本地；任何失败回退真 mmap 并如实报 errno）。沙盒 `Detection.antiHookProbe`（目标自己扫 maps + 自校验序言）在开启前后给出可对账的数字：`anonExec 2 → 0`。但**入口序言被改写无法隐藏**（同一审计在 stealth 下仍报 `prologueDiffers/entryBranchesOutside=true`，v69 已断言这一点）——要"序言也不变"必须改用 GOT/表项 hook 或 ART 层 Java hook（LSPlant 不改 .text）。默认关闭，开启需 Host `confirm:true`。
+
 ### 26.3 边界
 
 - 不承诺绕过所有反调试/反注入

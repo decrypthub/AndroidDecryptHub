@@ -14,6 +14,7 @@
 | `bootstrap/fs.c` | Directory listing and file-read commands |
 | `capture/capture.c` | Crypto/TLS/file/system wrappers, bounded capture buffers, Java reporter, and capture/probe commands |
 | `hook/got.c` | ELF relocation parsing, GOT slot replacement, in-memory symbol lookup, and GOT self-test |
+| `hook/stealth_pool.c` | Opt-in trampoline-pool camouflage for authorized anti-detection work: swaps this module's own RELRO GOT slot for `mmap`, so Dobby's arenas land in a `memfd:jit-cache` mapping instead of an anonymous executable page (thread-local redirect window around the Dobby calls, always falls back to the real `mmap`, reports its errno honestly) |
 | `hook/native_inline_dobby.cpp` | Dobby native inline-hook backend |
 | `hook/native_hooks.cpp` | Unified native hook registry: GOT/inline/address install (prologue snapshot + patch verification), arm64 register-capture stubs, NATIVE_HOOK events, soft unhook by default and opt-in hard unhook (writes the saved original bytes back, frees the slot, leaves the Dobby pool untouched) |
 | hook/java_lsplant.cpp | LSPlant v6.4 ART hook shim (optional static link over the same Dobby backend): methods incl. inherited ones (superclass-chain resolution, declaring class reported) and constructors (`method: "<init>"`, ctor-argument observation, skip/override rejected) |

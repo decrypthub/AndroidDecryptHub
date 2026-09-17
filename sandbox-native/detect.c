@@ -7,6 +7,9 @@
 #include <jni.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/ptrace.h>
 #include <sys/system_properties.h>
@@ -381,4 +384,117 @@ JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_run(JNIEnv *env, jclass cl
 
     __android_log_print(ANDROID_LOG_INFO, TAG, "detections ran: ptrace=%ld debuggable=%s flags=0x%x", pr, prop, flags);
     return flags;
+}
+
+// ---- v4.32 anti-hook self-audit ---------------------------------------------------------
+// What a hardened app can see about an injected hook framework WITHOUT trusting it: this fixture
+// inspects its own address space and its own code bytes instead of asking the tool anything.
+//   bit0  an executable mapping with no path (what an anonymous trampoline pool looks like)
+//   bit1  adh_add_target's prologue differs from the bytes captured when this library loaded
+//   bit2  an executable mapping whose path contains "agent" (a module injected by name)
+//   bit3  adh_add_target's first instruction branches outside its own module mapping
+// The baseline is captured in a constructor, i.e. before anything of ours runs, which is exactly
+// how a real app would snapshot its own code.
+// 24 bytes = the inline backend's restore window, so "restored" cannot be a 16-byte illusion.
+static unsigned char g_anti_prologue[24];
+static int g_anti_baseline_ok;
+
+__attribute__((constructor)) static void adh_anti_capture_baseline(void) {
+    memcpy(g_anti_prologue, (const void *)(uintptr_t)adh_add_target, sizeof(g_anti_prologue));
+    g_anti_baseline_ok = 1;
+}
+
+// Path + exec flag of the mapping containing addr, straight from /proc/self/maps.
+static int adh_anti_mapping_of(unsigned long long addr, char *path, int path_size, int *is_exec) {
+    FILE *m = fopen("/proc/self/maps", "r");
+    if (!m) return 0;
+    char line[512];
+    int found = 0;
+    while (fgets(line, sizeof(line), m)) {
+        unsigned long long start = 0, end = 0;
+        char perms[8] = "";
+        if (sscanf(line, "%llx-%llx %7s", &start, &end, perms) != 3) continue;
+        if (addr < start || addr >= end) continue;
+        char *nl = strchr(line, '\n');
+        if (nl) *nl = 0;
+        // The path is the last whitespace-separated field; offsets/dev/inode may be absent for
+        // special mappings, so take everything after the 5th field when it exists.
+        char *q = line;
+        for (int f = 0; f < 5 && q; f++) { q = strchr(q, ' '); if (q) while (*q == ' ') q++; }
+        if (q) { snprintf(path, (size_t)path_size, "%s", q); }
+        else path[0] = 0;
+        if (is_exec) *is_exec = perms[2] == 'x';
+        found = 1;
+        break;
+    }
+    fclose(m);
+    return found;
+}
+
+JNIEXPORT jstring JNICALL Java_com_adh_sandbox_Detection_antiHookProbe(JNIEnv *env, jclass clazz) {
+    (void)clazz;
+    int anon_exec = 0, agent_named_exec = 0, memfd_exec = 0;
+    FILE *m = fopen("/proc/self/maps", "r");
+    int maps_read_ok = m != NULL;
+    if (m) {
+        char line[512];
+        while (fgets(line, sizeof(line), m)) {
+            unsigned long long start = 0, end = 0;
+            char perms[8] = "";
+            if (sscanf(line, "%llx-%llx %7s", &start, &end, perms) != 3) continue;
+            if (perms[2] != 'x') continue;
+            char *nl = strchr(line, '\n');
+            if (nl) *nl = 0;
+            char *q = line;
+            for (int f = 0; f < 5 && q; f++) { q = strchr(q, ' '); if (q) while (*q == ' ') q++; }
+            if (!q || !*q) { anon_exec++; continue; }
+            if (strstr(q, "agent")) agent_named_exec++;
+            if (strstr(q, "memfd")) memfd_exec++;
+        }
+        fclose(m);
+    }
+
+    unsigned char now[24];
+    memcpy(now, (const void *)(uintptr_t)adh_add_target, sizeof(now));
+    int prologue_differs = g_anti_baseline_ok && memcmp(now, g_anti_prologue, sizeof(now)) != 0;
+
+    // arm64: is the first instruction an unconditional B, and where does it go?
+    unsigned int insn = 0;
+    memcpy(&insn, (const void *)(uintptr_t)adh_add_target, sizeof(insn));
+    int entry_branches_outside = 0;
+    unsigned long long branch_target = 0;
+    char branch_path[256] = "";
+    char own_path[256] = "";
+    int own_exec = 0;
+    adh_anti_mapping_of((unsigned long long)(uintptr_t)adh_add_target, own_path, sizeof(own_path), &own_exec);
+    if ((insn & 0xFC000000u) == 0x14000000u) {
+        int imm26 = (int)(insn & 0x03FFFFFFu);
+        if (imm26 & 0x02000000) imm26 -= 0x04000000;
+        branch_target = (unsigned long long)(uintptr_t)adh_add_target + (unsigned long long)(long long)imm26 * 4ull;
+        int bexec = 0;
+        if (!adh_anti_mapping_of(branch_target, branch_path, sizeof(branch_path), &bexec)) {
+            entry_branches_outside = 1;              // branches somewhere unmapped/anon
+        } else if (!bexec || strcmp(branch_path, own_path) != 0) {
+            entry_branches_outside = 1;              // branches into another (or non-exec) mapping
+        }
+    }
+
+    int bits = 0;
+    if (anon_exec > 0) bits |= 1;
+    if (prologue_differs) bits |= 2;
+    if (agent_named_exec > 0) bits |= 4;
+    if (entry_branches_outside) bits |= 8;
+
+    char out[1024];
+    snprintf(out, sizeof(out),
+             "{\"bits\":%d,\"anonExec\":%d,\"memfdExec\":%d,\"agentNamedExec\":%d,"
+             "\"prologueDiffers\":%s,\"entryBranchesOutside\":%s,\"firstInsn\":\"0x%08x\","
+             "\"branchTarget\":\"0x%llx\",\"branchTargetPath\":\"%s\",\"ownPath\":\"%s\","
+             "\"mapsReadOk\":%s,\"prologueBytes\":%d,\"baselineCaptured\":%s}",
+             bits, anon_exec, memfd_exec, agent_named_exec,
+             prologue_differs ? "true" : "false", entry_branches_outside ? "true" : "false",
+             insn, branch_target, branch_path, own_path,
+             maps_read_ok ? "true" : "false", (int)sizeof(now),
+             g_anti_baseline_ok ? "true" : "false");
+    return (*env)->NewStringUTF(env, out);
 }

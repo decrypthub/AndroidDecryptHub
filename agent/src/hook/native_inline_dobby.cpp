@@ -1,6 +1,7 @@
 #include "native_inline.h"
 
 #include "dobby.h"
+#include "stealth_pool.h"
 #include <pthread.h>
 #include <android/log.h>
 
@@ -19,7 +20,11 @@ extern "C" int adh_inline_hook(void *target, void *replacement, void **original)
     if (!target || !replacement || !original) return 0;
     pthread_once(&g_dobby_once, init_dobby);
     *original = nullptr;
+    // Dobby allocates its trampoline arena during this call. With the opt-in pool camouflage
+    // enabled, the window makes that allocation land in a memfd instead of an anonymous r-x page.
+    adh_stealth_pool_window(1);
     const auto rc = DobbyHook(target, replacement, original);
+    adh_stealth_pool_window(0);
     if (rc != RS_SUCCESS) {
         ILOGE("DobbyHook failed target=%p rc=%d", target, (int)rc);
         return 0;
@@ -29,7 +34,9 @@ extern "C" int adh_inline_hook(void *target, void *replacement, void **original)
 
 extern "C" int adh_inline_unhook(void *target) {
     if (!target) return 0;
+    adh_stealth_pool_window(1);
     const auto rc = DobbyDestroy(target);
+    adh_stealth_pool_window(0);
     if (rc != RT_SUCCESS) {
         ILOGE("DobbyDestroy failed target=%p rc=%d", target, (int)rc);
         return 0;
