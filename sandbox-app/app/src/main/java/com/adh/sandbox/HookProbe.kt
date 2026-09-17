@@ -10,5 +10,19 @@ object HookProbe {
 
     @JvmStatic
     fun ping(input: String, repeat: Int): String = "REAL_HOOK:$input*$repeat"
+
+    @Volatile
+    private var lastPing: String = ""
+
+    @JvmStatic
+    fun recordPing(input: String): String {
+        val result = ping(input)
+        lastPing = result
+        return result
+    }
+
+    @JvmStatic
+    fun lastPingResult(): String = lastPing
+
     fun instancePing(input: String): String = "REAL_INSTANCE:$input"
 }

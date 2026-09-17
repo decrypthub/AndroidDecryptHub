@@ -133,7 +133,8 @@ static void cmd_javahook_probe(int fd, const char *id) {
 // Generic single Java-method hook command. All target identity comes from the command;
 // the agent has no sandbox/package/class constants.
 static void cmd_java_hook(int fd, const char *id, const char *action, const char *class_name,
-                          const char *method_name, const char *params, long long requested_hook_id) {
+                          const char *method_name, const char *params, int skip_original,
+                          const char *override_return, long long requested_hook_id) {
     char idj[64];
     json_escape(id, idj, sizeof(idj));
 #ifdef ADH_HAVE_LSPLANT
@@ -154,7 +155,8 @@ static void cmd_java_hook(int fd, const char *id, const char *action, const char
         if (!class_name[0] || !method_name[0]) {
             snprintf(error, sizeof(error), "hook requires className and method");
         } else {
-            ok = adh_javahook_hook_method(env, class_name, method_name, params, &new_hook_id, error, sizeof(error));
+            ok = adh_javahook_hook_method(env, class_name, method_name, params, skip_original,
+                                             override_return, &new_hook_id, error, sizeof(error));
         }
     } else if (strcmp(action, "unhook") == 0) {
         ok = adh_javahook_unhook_id(env, (int)requested_hook_id, error, sizeof(error));
@@ -192,7 +194,8 @@ static void cmd_java_hook(int fd, const char *id, const char *action, const char
     free(out);
     LOGI("java_hook: action=%s ok=%d error=%s", action, ok, error);
 #else
-    (void)action; (void)class_name; (void)method_name; (void)params; (void)requested_hook_id;
+    (void)action; (void)class_name; (void)method_name; (void)params; (void)skip_original;
+    (void)override_return; (void)requested_hook_id;
     char out[240];
     snprintf(out, sizeof(out),
              "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"java_hook\",\"ok\":false,"
@@ -385,12 +388,16 @@ static void command_loop(int fd) {
                     adh_cmd_jni_probe(fd, id);
                 } else if (strcmp(op, "java_hook") == 0) {
                     char jaction[16] = "", jcls[256] = "", jmethod[128] = "", jparams[512] = "";
+                    char jskip[8] = "", jreturn[512] = "";
                     json_get_str(line, "action", jaction, sizeof(jaction));
                     json_get_str(line, "className", jcls, sizeof(jcls));
                     json_get_str(line, "method", jmethod, sizeof(jmethod));
                     json_get_str(line, "params", jparams, sizeof(jparams));
+                    json_get_str(line, "skipOriginal", jskip, sizeof(jskip));
+                    json_get_str(line, "returnValue", jreturn, sizeof(jreturn));
                     long long jhook_id = json_get_num(line, "hookId");
-                    cmd_java_hook(fd, id, jaction, jcls, jmethod, jparams, jhook_id);
+                    int skip_original = (strcmp(jskip, "true") == 0 || strcmp(jskip, "1") == 0);
+                    cmd_java_hook(fd, id, jaction, jcls, jmethod, jparams, skip_original, jreturn, jhook_id);
                 } else if (strcmp(op, "java_enum") == 0) {
                     char jcls[256] = "";
                     json_get_str(line, "className", jcls, sizeof(jcls));

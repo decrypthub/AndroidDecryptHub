@@ -21,6 +21,8 @@ public final class AdhJavaHookBridge {
     public String lastReturn;
     public String lastError;
     public String target;
+    public boolean skipOriginal;
+    public String overrideReturn;
 
     private static native void nativeReport(int hookId, String target, String arg, String ret, String error);
 
@@ -46,6 +48,19 @@ public final class AdhJavaHookBridge {
         Object[] params = isStatic
             ? (args != null ? args : new Object[0])
             : (args != null && args.length > 1 ? Arrays.copyOfRange(args, 1, args.length) : new Object[0]);
+        if (skipOriginal) {
+            try {
+                Object replaced = convertReturn(overrideReturn, backup.getReturnType());
+                lastReturn = replaced == null ? "null" : String.valueOf(replaced);
+                lastError = "";
+                nativeReport(hookId, target, lastArg, lastReturn, lastError);
+                return replaced;
+            } catch (Throwable t) {
+                lastError = "return override failed: " + t;
+                nativeReport(hookId, target, lastArg, "", lastError);
+                throw t;
+            }
+        }
         try {
             Object result = backup.invoke(receiver, params);
             lastReturn = result == null ? "null" : String.valueOf(result);
@@ -62,6 +77,32 @@ public final class AdhJavaHookBridge {
             nativeReport(hookId, target, lastArg, "", lastError);
             throw t;
         }
+    }
+
+    private static long parseLongValue(String value) {
+        String v = value == null ? "" : value.trim();
+        return (v.startsWith("0x") || v.startsWith("0X"))
+            ? Long.parseLong(v.substring(2), 16)
+            : Long.parseLong(v);
+    }
+
+    private static Object convertReturn(String value, Class<?> type) {
+        boolean nullish = value == null || value.length() == 0 || value.equalsIgnoreCase("null");
+        if (type == void.class || type == Void.class) return null;
+        if (type == String.class) return nullish ? null : value;
+        if (type == boolean.class || type == Boolean.class) {
+            return nullish ? Boolean.FALSE : (Boolean.parseBoolean(value) || "1".equals(value));
+        }
+        if (type == byte.class || type == Byte.class) return nullish ? (byte) 0 : (byte) parseLongValue(value);
+        if (type == char.class || type == Character.class) return nullish ? (char) 0 : (value.isEmpty() ? (char) 0 : value.charAt(0));
+        if (type == short.class || type == Short.class) return nullish ? (short) 0 : (short) parseLongValue(value);
+        if (type == int.class || type == Integer.class) return nullish ? 0 : (int) parseLongValue(value);
+        if (type == long.class || type == Long.class) return nullish ? 0L : parseLongValue(value);
+        if (type == float.class || type == Float.class) return nullish ? 0f : Float.parseFloat(value);
+        if (type == double.class || type == Double.class) return nullish ? 0d : Double.parseDouble(value);
+        if (type == Object.class) return nullish ? null : value;
+        if (nullish) return null;
+        throw new IllegalArgumentException("unsupported return override type " + type.getName());
     }
 
     public void reset() {

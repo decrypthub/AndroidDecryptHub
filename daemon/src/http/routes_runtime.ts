@@ -97,7 +97,7 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
       catch (e) { return send(504, { error: (e as Error).message }); }
     } },    { method: 'POST', path: '/api/java/hook', handler: async () => {
       const body = await readBody(req);
-      const { session, action, hookId, className, method, params } = JSON.parse(body || '{}');
+      const { session, action, hookId, className, method, params, skipOriginal, returnValue } = JSON.parse(body || '{}');
       const sid = pickSid(session);
       if (!sid || !action) return send(400, { error: 'need session, action' });
       try {
@@ -107,6 +107,8 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
           className: className ?? '',
           method: method ?? '',
           params: params ?? '',
+          skipOriginal: skipOriginal ? 'true' : 'false',
+          returnValue: returnValue ?? '',
         }, 30_000);
         return send(r.ok ? 200 : 502, r);
       } catch (e) { return send(504, { error: (e as Error).message }); }

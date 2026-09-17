@@ -94,8 +94,7 @@ const st = (status?.status?.hooks ?? []).find((x) => Number(x.id) === hookId) ??
 let event = null;
 for (let i = 0; i < 20; i++) {
   const list = await (await fetch(`${base}/api/captures?session=${encodeURIComponent(agent.sessionId)}&limit=200`)).json();
-  const found = (list.captures ?? []).find((c) => c.func === 'JAVA_HOOK');
-  if (found) {
+  for (const found of (list.captures ?? []).filter((c) => c.func === 'JAVA_HOOK')) {
     const detail = await (await fetch(`${base}/api/captures/${found.id}`)).json();
     if (String(detail.text ?? '').includes('ADH_HOOK_PING') &&
         String(detail.text ?? '').includes('REAL_HOOK:ADH_HOOK_PING')) {

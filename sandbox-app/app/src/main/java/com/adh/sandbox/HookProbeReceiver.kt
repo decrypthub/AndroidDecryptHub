@@ -12,7 +12,8 @@ import android.util.Log
 class HookProbeReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val value = intent.getStringExtra(EXTRA_VALUE) ?: "ADH_HOOK_EMPTY"
-        Log.i(TAG, "result=${HookProbe.ping(value)}")
+        val result = HookProbe.recordPing(value)
+        Log.i(TAG, "result=$result")
     }
 
     companion object {

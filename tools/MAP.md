@@ -91,4 +91,5 @@ translation — kept separate).
 - `verify_v49_native_call.sh` — `adh_add_target` 按 module+symbol 和绝对地址主动调用，断言返回值与 confirm 门禁（deploy new agent/daemon；未部署时 SKIP）。
 - `verify_v50_syscall_watch.sh` — Host dump+静态扫描 `svc #0` → native inline hook → 调 `adh_direct_gettid`，断言 x8=0xb2 的事件与 unhook（deploy new daemon/agent；未部署时 SKIP）。
 - `verify_v51_qbdi_args.sh` — QBDI 带 2 个整数参数 trace `adh_add_target(20,22)`，断言 retval=84 与指令流非空；旧 agent 忽略 args 时 SKIP（deploy new agent/daemon）。
+- `verify_v52_java_override.sh` — LSPlant Java hook `skipOriginal + returnValue`：调 `recordPing`/`lastPingResult` 证明调用方实际拿到替换值，再 unhook（deploy new agent/sandbox）。
 - `verify_v47_got_enum.sh` — 枚举 `libadhdetect.so` 的 GOT/relocation，断言导入符号可见（deploy new agent；未部署时 SKIP）。

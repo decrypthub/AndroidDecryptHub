@@ -337,6 +337,8 @@ static jfieldID g_bridge_last_arg = nullptr;
 static jfieldID g_bridge_last_return = nullptr;
 static jfieldID g_bridge_last_error = nullptr;
 static jfieldID g_bridge_target = nullptr;
+static jfieldID g_bridge_skip_original = nullptr;
+static jfieldID g_bridge_override_return = nullptr;
 
 static std::string jstring_to_utf(JNIEnv *env, jstring value) {
     if (!env || !value) return "";
@@ -506,12 +508,14 @@ static jclass load_bridge_class(JNIEnv *env, std::string &error) {
     g_bridge_last_return = env->GetFieldID(bridge_class, "lastReturn", "Ljava/lang/String;");
     g_bridge_last_error = env->GetFieldID(bridge_class, "lastError", "Ljava/lang/String;");
     g_bridge_target = env->GetFieldID(bridge_class, "target", "Ljava/lang/String;");
+    g_bridge_skip_original = env->GetFieldID(bridge_class, "skipOriginal", "Z");
+    g_bridge_override_return = env->GetFieldID(bridge_class, "overrideReturn", "Ljava/lang/String;");
     g_bridge_class = (jclass)env->NewGlobalRef(bridge_class);
     g_bridge_loader = env->NewGlobalRef(bridge_loader);
 
     if (!g_bridge_class || !g_bridge_backup || !g_bridge_is_static || !g_bridge_hook_id ||
         !g_bridge_hits || !g_bridge_last_arg || !g_bridge_last_return || !g_bridge_last_error ||
-        !g_bridge_target) {
+        !g_bridge_target || !g_bridge_skip_original || !g_bridge_override_return) {
         error = "AdhJavaHookBridge fields are missing";
         return nullptr;
     }
@@ -682,7 +686,8 @@ static void release_hook_slot(JNIEnv *env, JavaHookContext &hook) {
 }
 
 extern "C" int adh_javahook_hook_method(JNIEnv *env, const char *class_name, const char *method_name,
-                                         const char *params, int *hook_id_out, char *error, size_t error_size) {
+                                         const char *params, int skip_original, const char *override_return,
+                                         int *hook_id_out, char *error, size_t error_size) {
     if (hook_id_out) *hook_id_out = 0;
     if (!env || !class_name || !method_name) {
         set_error(error, error_size, "missing class/method");
@@ -746,6 +751,10 @@ extern "C" int adh_javahook_hook_method(JNIEnv *env, const char *class_name, con
     env->SetObjectField(bridge, g_bridge_target, target_string);
     env->SetBooleanField(bridge, g_bridge_is_static, is_static ? JNI_TRUE : JNI_FALSE);
     env->SetObjectField(bridge, g_bridge_backup, nullptr);
+    env->SetBooleanField(bridge, g_bridge_skip_original, skip_original ? JNI_TRUE : JNI_FALSE);
+    jstring override_string = env->NewStringUTF(override_return ? override_return : "");
+    env->SetObjectField(bridge, g_bridge_override_return, override_string);
+    if (override_string) env->DeleteLocalRef(override_string);
 
     jmethodID callback_id = env->GetMethodID(g_bridge_class, "callback",
                                              "([Ljava/lang/Object;)Ljava/lang/Object;");
@@ -852,7 +861,7 @@ extern "C" int adh_javahook_status_json(JNIEnv *env, char *out, size_t out_size)
     }
     pthread_mutex_unlock(&g_java_hooks_lock);
     hooks += "]";
-    std::string json = "{\"available\":true,\"initOk\":" + std::string(g_init_ok ? "true" : "false") +
+    std::string json = "{\"available\":true,\"returnOverride\":true,\"initOk\":" + std::string(g_init_ok ? "true" : "false") +
                        ",\"backend\":\"lsplant\",\"version\":\"v6.4\",\"active\":" +
                        std::string(active_count ? "true" : "false") +
                        ",\"count\":" + std::to_string(active_count) +

@@ -39,6 +39,7 @@ SCRIPTS=(
   "verify_v49_native_call.sh:device"
   "verify_v50_syscall_watch.sh:device"
   "verify_v51_qbdi_args.sh:device"
+  "verify_v52_java_override.sh:device"
   "verify_v02_dump.sh:device"
   "verify_v02_so.sh:device"
   "verify_v02_dexrepair.sh:host"
