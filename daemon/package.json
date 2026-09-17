@@ -11,6 +11,7 @@
     "test:automation": "node --test test/automation.test.ts"
   },
   "dependencies": {
+    "capstone-wasm": "^1.0.3",
     "ws": "^8.18.0"
   },
   "devDependencies": {

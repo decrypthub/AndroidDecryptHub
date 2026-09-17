@@ -1,6 +1,7 @@
 import {
   dumpAllDex, dumpRegion, pickSid, sendCmd, withCaptureSuspended,
 } from '../service.ts';
+import { liveDisasm } from '../memory.ts';
 import { readBody, SANDBOX, sessions, settings } from '../state.ts';
 import type { Route, RouteContext } from './types.ts';
 
@@ -270,6 +271,18 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
         const r = await sendCmd(sid, 'read', { addr: String(addr), size: Number(size) });
         return send(r.ok ? 200 : 502, r);
       } catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
+    { method: 'POST', path: '/api/memory/disasm', handler: async () => {
+      const body = await readBody(req);
+      const { session, addr, size, module, offset } = JSON.parse(body || '{}');
+      const sid = pickSid(session);
+      if (!sid || (!addr && (!module || offset === undefined || offset === null))) {
+        return send(400, { error: 'need session and addr, or session+module+offset' });
+      }
+      try {
+        const r = await liveDisasm(sid, { addr, size, module, offset });
+        return send(200, r);
+      } catch (e) { return send(502, { error: (e as Error).message }); }
     } },
     { method: 'POST', path: '/api/unpack/dump-all', handler: async () => {
       const body = JSON.parse((await readBody(req)) || '{}');

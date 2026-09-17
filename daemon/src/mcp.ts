@@ -12,6 +12,7 @@ import { analyzeSo, cryptoConstScan, svcScan, disasmSo } from './analysis.ts';
 import { parseDex, cryptoScan, searchDex, invokeXref, extractMethodCode, analyzeCoverage, rebuildStandardDex, recoverFromSnapshots } from './dex.ts';
 import { ensureDexIndex, searchDexIndex, listDexReflections } from './dex_index.ts';
 import { agentCmd, dumpAllDex, dumpBuf, dumpBufPath, dumpRegion, pickSid, repairDexHeader, sessionForPackage } from './service.ts';
+import { liveDisasm } from './memory.ts';
 import { backendMatrix, classifySession } from './backends.ts';
 import { automation } from './automation.ts';
 import { agentWaitSightings, findAgentWaitMatch, hasAgentWaitFilters } from './agent_events.ts';
@@ -40,6 +41,7 @@ export const MCP_TOOLS: { name: string; description: string; inputSchema: any; h
 { name: 'got_enum', description: 'Enumerate relocation/GOT entries for one loaded module: slot address, symbol name, current resolved value and relocation type. Optional filter matches one symbol exactly.', inputSchema: { type: 'object', properties: { session: S, module: S, filter: S }, required: ['module'] }, handler: (a) => agentCmd(a.session, 'got_enum', { module: a.module, filter: a.filter ?? '' }, 20_000) },
   { name: 'memory_maps', description: 'On-demand full /proc/self/maps of the target', inputSchema: { type: 'object', properties: { session: S } }, handler: (a) => agentCmd(a.session, 'maps') },
   { name: 'memory_read', description: 'Read target memory at hex addr for size bytes (base64 out)', inputSchema: { type: 'object', properties: { session: S, addr: S, size: N }, required: ['addr', 'size'] }, handler: (a) => agentCmd(a.session, 'read', { addr: a.addr, size: a.size }) },
+  { name: 'memory_disasm', description: 'Disassemble live target memory with host-side Capstone 5 (WASM). addr is an absolute hex address, or pass module plus offset to resolve the module base from live maps. size is bounded to 64 KiB and aligned to AArch64 instructions.', inputSchema: { type: 'object', properties: { session: S, addr: S, size: N, module: S, offset: S } }, handler: async (a) => { const sid = pickSid(a.session); if (!sid) throw new Error('no session'); return liveDisasm(sid, { addr: a.addr, size: a.size, module: a.module, offset: a.offset }); } },
   { name: 'memory_search', description: 'Search target memory for hex or text pattern', inputSchema: { type: 'object', properties: { session: S, hex: S, text: S, limit: N } }, handler: (a) => agentCmd(a.session, 'search', { pat: a.hex ?? Buffer.from(String(a.text ?? ''), 'utf8').toString('hex'), limit: a.limit ?? 256 }, 90_000) },
   { name: 'memory_scan_magic', description: 'Scan target memory for dex/elf/oat/vdex/zip magics', inputSchema: { type: 'object', properties: { session: S } }, handler: (a) => agentCmd(a.session, 'scan_magic', {}, 90_000) },
   { name: 'art_dexfiles', description: 'Enumerate loaded DexFiles via ART ClassLoader structures (no magic scan)', inputSchema: { type: 'object', properties: { session: S } }, handler: (a) => agentCmd(a.session, 'art_dexfiles', {}, 30_000) },

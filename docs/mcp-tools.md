@@ -1,6 +1,6 @@
 # ADH MCP Tools
 
-Generated from the live ADH Daemon registry (51 tools). Endpoint: `POST /mcp` (JSON-RPC 2.0).
+Generated from the live ADH Daemon registry (59 tools). Endpoint: `POST /mcp` (JSON-RPC 2.0).
 
 | Tool | Description | Args |
 |---|---|---|
@@ -10,6 +10,7 @@ Generated from the live ADH Daemon registry (51 tools). Endpoint: `POST /mcp` (J
 | `compat_probe` | Self-assess agent env + injection footprint: tracer/seccomp/backends/exec/anon/rwx | session |
 | `memory_maps` | On-demand full /proc/self/maps of the target | session |
 | `memory_read` | Read target memory at hex addr for size bytes (base64 out) | session, addr, size |
+| memory_disasm | Disassemble live target memory with host-side Capstone 5 (WASM); addr or module+offset | session, addr, size, module, offset |
 | `memory_search` | Search target memory for hex or text pattern | session, hex, text, limit |
 | `memory_scan_magic` | Scan target memory for dex/elf/oat/vdex/zip magics | session |
 | `art_dexfiles` | Enumerate loaded DexFiles via ART ClassLoader structures (no magic scan) | session |
