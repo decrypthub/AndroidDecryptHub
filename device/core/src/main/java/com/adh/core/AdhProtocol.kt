@@ -2,8 +2,8 @@ package com.adh.core
 
 /** Binder protocol between Manager and the root Device Daemon. */
 object AdhProtocol {
-    /** v1: scope + module status. v2: + catalog. v3: + icons. v4: + stop/restart. v5: + optional Xposed backend. v6: + app open. v7: + automation service control. v8: + device power state. v9: + raw input injection. v10: + audio volume. v11: + clipboard text. */
-    const val VERSION = 11
+    /** v1: scope + module status. v2: + catalog. v3: + icons. v4: + stop/restart. v5: + optional Xposed backend. v6: + app open. v7: + automation service control. v8: + device power state. v9: + raw input injection. v10: + audio volume. v11: + clipboard text. v12: + long-press input injection. */
+    const val VERSION = 12
     const val MIN_SCOPE_VERSION = 1
     const val MIN_CATALOG_VERSION = 2
     const val MIN_ICON_VERSION = 3
@@ -18,4 +18,6 @@ object AdhProtocol {
     const val MIN_VOLUME_VERSION = 10
     /** Clipboard read/write through the root daemon. */
     const val MIN_CLIPBOARD_VERSION = 11
+    /** Long-press capable input injection through the root daemon. */
+    const val MIN_INPUT_LONG_PRESS_VERSION = 12
 }

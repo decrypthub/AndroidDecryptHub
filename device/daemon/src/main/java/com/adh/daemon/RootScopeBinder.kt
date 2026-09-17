@@ -131,6 +131,11 @@ internal class RootScopeBinder(
         return DeviceAudioControl.setVolume(context, stream, index)
     }
 
+    override fun injectInputTap2(x: Int, y: Int, durationMs: Int): Boolean {
+        verifier.enforce()
+        return DeviceInputControl.longPress(x, y, durationMs)
+    }
+
     override fun getClipboardText(): String {
         verifier.enforce()
         return DeviceClipboardControl.read(context)

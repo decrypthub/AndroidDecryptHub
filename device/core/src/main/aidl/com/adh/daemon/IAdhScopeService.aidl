@@ -51,4 +51,6 @@ interface IAdhScopeService {
     String getClipboardText();
     /** Protocol v11: replace the clipboard with this text; false when the system refuses (refused beyond 8 KiB). */
     boolean setClipboardText(String text);
+    /** Protocol v12: tap with an explicit duration (long press when durationMs >= 600). */
+    boolean injectInputTap2(int x, int y, int durationMs);
 }

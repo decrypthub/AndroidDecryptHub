@@ -36,6 +36,9 @@ interface DaemonClient {
     val volumeJson: String
     fun setVolume(stream: String, index: Int): Boolean
 
+    /** Protocol v12: tap with an explicit hold time (long press). */
+    fun injectInputTapWithDuration(x: Int, y: Int, durationMs: Int): Boolean
+
     /** Protocol v11: clipboard text read/write. */
     val clipboardText: String
     fun setClipboardText(text: String): Boolean

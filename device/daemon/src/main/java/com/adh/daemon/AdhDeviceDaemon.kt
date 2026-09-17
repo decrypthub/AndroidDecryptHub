@@ -72,6 +72,13 @@ object AdhDeviceDaemon {
                 val y = args.getOrNull(2)?.toIntOrNull() ?: exitProcess(2)
                 exitProcess(if (DeviceInputControl.tap(x, y)) 0 else 1)
             }
+            "--input-long-press" -> {
+                requireRoot()
+                val x = args.getOrNull(1)?.toIntOrNull() ?: exitProcess(2)
+                val y = args.getOrNull(2)?.toIntOrNull() ?: exitProcess(2)
+                val ms = args.getOrNull(3)?.toIntOrNull() ?: 800
+                exitProcess(if (DeviceInputControl.longPress(x, y, ms)) 0 else 1)
+            }
             "--clipboard-read" -> {
                 requireRoot()
                 Looper.prepareMainLooper()

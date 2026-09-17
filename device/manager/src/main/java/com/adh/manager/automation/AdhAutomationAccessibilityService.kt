@@ -429,9 +429,31 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
     private fun input(args: JSONObject): JSONObject {
         val mode = args.optString("mode", "tap").ifBlank { "tap" }.lowercase()
         val client = requireInputInjectionDaemon()
+        // A root action may arrive with a node ref instead of coordinates (the host resolves a
+        // selector to a ref). Derive the pixel point from the snapshot node, same as tap() does.
+        val snapshotId = args.optString("snapshotId").takeIf { it.isNotBlank() }
+        val ref = args.optString("ref").takeIf { it.isNotBlank() }
+        val refPoint: Pair<Float, Float>? = if (snapshotId != null && ref != null) {
+            val node = snapshots[snapshotId]?.nodes?.get(ref)
+            if (node != null) {
+                refreshOrThrow(node)
+                val r = rectOf(node)
+                if (r.width() > 0 && r.height() > 0) r.exactCenterX() to r.exactCenterY() else null
+            } else null
+        } else null
         return when (mode) {
             "tap" -> {
-                val point = pixelPoint(args)
+                val point = refPoint ?: pixelPoint(args)
+                val duration = args.optInt("durationMs", 60).coerceIn(1, 3_000)
+                // A long press cannot be expressed through the plain tap helper, so route it
+                // through the duration-aware path (zero-distance swipe) when asked.
+                if (duration >= 600) {
+                    if (!client.injectInputTapWithDuration(point.first.toInt(), point.second.toInt(), duration)) {
+                        throw AutomationException("input_injection_rejected", "root long press returned failure")
+                    }
+                    return JSONObject().put("action", "input").put("mode", "long_press")
+                        .put("x", point.first.toInt()).put("y", point.second.toInt()).put("durationMs", duration)
+                }
                 if (!client.injectInputTap(point.first.toInt(), point.second.toInt())) {
                     throw AutomationException("input_injection_rejected", "root input tap returned failure")
                 }
@@ -439,8 +461,8 @@ class AdhAutomationAccessibilityService : AccessibilityService() {
                     .put("x", point.first.toInt()).put("y", point.second.toInt())
             }
             "swipe" -> {
-                val start = pixelPoint(args)
-                val end = pixelPoint(args, "x2", "y2")
+                val start = refPoint ?: pixelPoint(args)
+                val end = if (refPoint != null) pixelPoint(args, "x2", "y2") else pixelPoint(args, "x2", "y2")
                 val duration = args.optInt("durationMs", 320).coerceIn(1, 3_000)
                 if (!client.injectInputSwipe(start.first.toInt(), start.second.toInt(), end.first.toInt(), end.second.toInt(), duration)) {
                     throw AutomationException("input_injection_rejected", "root input swipe returned failure")

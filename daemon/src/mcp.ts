@@ -628,7 +628,9 @@ async function actPhone(args: any) {
     effective = { ...effective, snapshotId: observed.snapshotId, ref: match.ref };
   }
   // inputMode:"root" bypasses the accessibility gesture: same coordinates, injected through the
-  // root Device Daemon. Some Compose UIs accept dispatchGesture but never act on it.
+  // root Device Daemon. Some Compose UIs accept dispatchGesture but never act on it. The implicit
+  // selector resolution above already turned a ref into a snapshotId+ref, so the device can derive
+  // the pixel point from the node - a selector-only root tap used to fail with "requires x and y".
   if (effective.inputMode === 'root' && (effective.action === 'tap' || effective.action === 'swipe')) {
     effective = { ...effective, action: 'input', mode: effective.action === 'swipe' ? 'swipe' : 'tap' };
   }

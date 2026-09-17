@@ -27,6 +27,18 @@ internal object DeviceInputControl {
         return runInput("tap", px.toString(), py.toString())
     }
 
+    /**
+     * Tap with an explicit hold time. Android's own long press is a touch that stays down; the
+     * input binary expresses that as a zero-distance swipe with a duration, which is what apps
+     * that swallow accessibility gestures still react to.
+     */
+    fun longPress(x: Int, y: Int, durationMs: Int): Boolean {
+        val px = x.coerceIn(0, MAX_COORD)
+        val py = y.coerceIn(0, MAX_COORD)
+        val duration = durationMs.coerceIn(1, MAX_DURATION_MS)
+        return runInput("swipe", px.toString(), py.toString(), px.toString(), py.toString(), duration.toString())
+    }
+
     fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Int): Boolean {
         val duration = durationMs.coerceIn(1, MAX_DURATION_MS)
         return runInput(
