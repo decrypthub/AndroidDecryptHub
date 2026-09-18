@@ -43,6 +43,9 @@ const MUST_BE_ABSENT = [
   'Host ADH Daemon', 'ADH wrapper',
   // our own messages that named the vendored frameworks
   'lsplant::', 'DobbyDestroy', 'stale Dobby state', 'fetch_dobby.sh', 'fetch_lsplant.sh',
+  // the vendored ART backend, renamed by tools/patch_vendor_signatures.sh at fetch time: its suspend
+  // reason, its log tag and (most importantly) the source name of the dex it generates at runtime
+  'LSPlant', 'lsplant',
   // sandbox fixture names: the agent must never know them (they were defaults in qbdi_trace)
   'libadhdetect.so', 'adh_trace_target',
   // our own library name: it used to sit in .rodata (self-name fallback) and in DT_SONAME
@@ -65,9 +68,8 @@ const BUDGETED = [
   { token: 'AdhJavaHookBridge', budget: 10, why: 'the class name in the dex type descriptor + 9 bridge diagnostics; stage 2 renames them together' },
   { token: 'adh_bridge.dex', budget: 1, why: 'code-cache dex file name for the same bridge (stage 2: rename it and drop this to 0)' },
   { token: 'adh.reporter.class', budget: 1, why: 'property the sandbox sets to name its reporter class; stage 2 needs a DUAL READ (new name first, old as fallback) or existing targets silently lose the rich reporter' },
-  { token: 'Dobby', budget: 2, why: 'vendored inline-hook backend (prebuilt static lib)' },
-  { token: 'DobbyHook', budget: 1, why: 'same prebuilt lib' },
-  { token: 'LSPlant', budget: 2, why: 'vendored ART hook backend (ScopedSuspendAll name x2)' },
+  { token: 'Dobby', budget: 2, why: 'prebuilt Dobby AAR (static lib only, no source): either binary-patch the archive or rebuild Dobby from patched source' },
+  { token: 'DobbyHook', budget: 1, why: 'same prebuilt AAR' },
   { token: 'libQBDI.so', budget: 2, why: 'the real dlopen name of the tracer library' },
   { token: 'libzygisk.so', budget: 1, why: 'injection-backend probe reads the real module name' },
 ];

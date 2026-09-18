@@ -60,7 +60,13 @@ for (const rel of ['agent/src/trace/commands.c', 'agent/src/hook/got.c', 'agent/
 }
 notes.push('source check: no fixture names / old tags as string literals in the touched files');
 
-// 4) report the remaining budget so drift is visible in the log
+// 4) the fetch step must have patched the vendored sources (a re-fetch would otherwise silently
+//    reintroduce the names, and the artifact scan would only catch it on the NEXT build)
+const vendor = spawnSync('bash', [`${root}/tools/patch_vendor_signatures.sh`, '--check'], { encoding: 'utf8' });
+if (vendor.status !== 0) problems.push('the fetched vendor sources still carry the framework names: ' + String(vendor.stdout ?? '').trim());
+else notes.push('vendor check: LSPlant sources are patched (or not fetched yet)');
+
+// 5) report the remaining budget so drift is visible in the log
 const stage2 = text.split('\n').filter((l) => /budget \d+\)/.test(l)).map((l) => l.trim());
 notes.push(`stage 2 budget: ${stage2.length} entries still above zero`);
 

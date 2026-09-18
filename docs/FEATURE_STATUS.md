@@ -52,7 +52,7 @@
 | 控制面 / MCP / Web | v10_mcp, v10_webui, v10_export, v10_events, v19_settings, v33_backends, v35_sessions, **v71(registry)**, **v80(trace digest)**, **v83(java trace)**, **v84(native batch)**, **v85(一站式 syscall)**, **v86(throttle)**, **v87(MCP 可操作性)** | MCP 76 工具可调；注册表形状自检；Web UI；会话清理 |
 | 手机自动化（模块 X） | v36, v38, v39, v40, v41 | 树/截图/选择器/手势/输入/wait/通知/技能；硬超时、桥接自愈、root 输入、屏幕状态；**重启后的 OEM 弹窗按 BACK 有界重试** |
 | 注入足迹 | v26_footprint, v01 | release 剥离 + 仅 3 个动态导出 + 无 RWX LOAD |
-| 字符串去特征（stage 1） | **v88**, scan_agent_signatures | 自己的 tag/文案/自名/fixture 默认值全部清零（含 DT_SONAME）；剩余第三方与契约串按只许降预算记账；门禁带**负对照**（植入 token 必须被抓到） |
+| 字符串去特征 | **v88**, scan_agent_signatures, patch_vendor_signatures | 自己的 tag/文案/自名/fixture 默认值全部清零（含 DT_SONAME）；vendored LSPlant 的三处（含运行时 dex source name）由 fetch 期补丁清掉并机检；剩余 Dobby/导出/Java bridge 等按只许降预算记账；门禁带**负对照**（植入 token 必须被抓到） |
 | MCP 可操作性 / 设备文件系统 | **v87**, v25_fsbrowser | 每个 agent op 必须能从 MCP 导入图到达（否则在 `INTERNAL_OPS` 写明理由）：`fs_list`/`fs_read` 与 REST 共用实现；存活/引擎/通道三个探针的判定显式（引擎 `ok` = fired && protRestored） |
 | 单元测试（host） | v76, v80, v81, v83, v84, v85, **v86**, **v87** | syscall 归因/参数解码/一站式装配、trace 摘要、backtrace dynsym、Java trace（含三阶段装配与 drain 守卫）、native 批量选择、native 限流（默认/夹紧/拒绝垃圾值 + 安装回路真实 payload）、探针判定与设备文件读取（二进制/超大/截断/坏 base64）：**112 条** `node --test` 用例（合计含 automation 30 条 = 142；v81/v83/v86/v87 按文件最小数断言） |
 

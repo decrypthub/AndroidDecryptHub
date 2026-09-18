@@ -15,6 +15,10 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.51 去特征 stage 2a：vendored LSPlant 字符串（2026-09-19，host 验收 PASS）**：stage 1 清掉的是**我们自己**的串；`LSPlant`/`lsplant` 这几个来自 vendored 源码，其中最要命的不是日志——**LSPlant 运行时生成的 dex 以 `"lsplant"` 作为 source name**（`lsplant.cc:474`），目标只要枚举已加载 dex 就能读到工具名。
+      · 新增 `tools/patch_vendor_signatures.sh`（幂等，带 `--check`）：把三处改成中性——`ScopedSuspendAll("LSPlant Hook")` → `"art hook"`、`logging.hpp` 的 `#define LOG_TAG "LSPlant"` → `"rt.java"`、生成的 dex source name `"lsplant"` → `"generated"`；`tools/fetch_lsplant.sh` 在已有的源码补丁之后调用它（vendored 目录是 gitignored，改 checkout 会被下次 fetch 覆盖，所以补丁必须挂在 fetch 路径上）。
+      · 扫描器把 `LSPlant`/`lsplant` 从"预算"提到 **MUST_BE_ABSENT**；`tools/verify_v88_agent_signatures.sh` 新增 **vendor check**（跑 `--check`），这样"重新 fetch 后忘了打补丁"会在门禁里现形，而不是等下一次构建才发现。重建后实测：`LSPlant` 0、`lsplant` 0、`Dobby` 2（预编译 AAR，仍预算内）。
+      · **stage 2 仍欠**：Dobby（AAR 里只有预编译静态库，要二进制补丁或从源码重建）、两个导出名、Java bridge 类名与其 10 处诊断串、`adh.reporter.class`（需双读过渡）、`libQBDI.so`、`libzygisk.so`。
 - [~] **v4.50 agent 去特征 stage 1 + 签名门禁（2026-09-19，host 验收 PASS；真机待做）**：以前"去特征"只有 stealth pool / memfd / RELRO 还原这类**行为层**措施，**字符串层**没人管——agent 跑在目标进程里，它的 `.rodata` 就是目标能自己读的内存，一次 `strings` 式扫描就能把工具名读出来。本轮把它变成**可测的数字**。
       · 新增 `tools/scan_agent_signatures.sh`：扫 release `.so` 的字符串，分两类——**MUST_BE_ABSENT**（我们自己的身份串，无外部契约，必须为 0）与 **BUDGETED**（还动不了的，每项带一个只许降不许升的上限 + stage 2 修法）。`tools/verify_v88_agent_signatures.sh` 跑它，并带**负对照**：往 .so 副本里植入一个真 token，扫描器**必须**报 FAIL（门禁不能自证）。
       · **stage 1 已清零**：7 个 `ADH_*` 日志 tag → 中性 `rt.*`（仓库内没有任何脚本读 logcat，改动零契约）；agent 自己的日志/错误文案里的 Host ADH Daemon / ADH wrapper / lsplant:: / Dobby* / fetch_dobby.sh / fetch_lsplant.sh 全部改中性；`qbdi_trace` 里的**沙盒 fixture 默认值**（libadhdetect.so / adh_trace_target）删掉——这同时修掉一处**红线违规**（agent 不得硬编码目标模块名），改为 fail-loud 要求调用方给出 symLib+symbol；`got.c` 的自名 fallback 改为 **XOR 混淆**（volatile 表 + volatile key，防止 -O2 把明文折回 .rodata）；CMake 关掉 **DT_SONAME**（用 NO_SONAME 属性），因为我们从来不用 soname 加载（Zygisk/Xposed 走路径，sandbox 走文件名）。

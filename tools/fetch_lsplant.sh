@@ -69,6 +69,10 @@ fi
 # ---- patch 3: JIT code cache is optional on stripped ROMs -------------------------
 # ColorOS/A15 may not export JitCodeCache::GarbageCollectCache. Basic Java hooking does not
 # need that GC-maintenance hook; LSPlant can continue, only JIT movement tracking is disabled.
+# Signature scrub: the vendored strings are renamed so the shipped .rodata does not carry the
+# framework name (and so the generated dex source name is neutral). Idempotent; verified by
+# tools/verify_v88_agent_signatures.sh via the artifact scan.
+bash "$ROOT/tools/patch_vendor_signatures.sh"
 LSC="$LSP/lsplant/src/main/jni/lsplant.cc"
 if ! grep -q 'JIT code cache unavailable' "$LSC"; then
   perl -0777 -pi -e 's/if \(!JitCodeCache::Init\(handler\)\) \{\s*\n\s*LOGE\("Failed to init jit code cache"\);\s*\n\s*return false;\s*\n\s*\}/if (!JitCodeCache::Init(handler)) {\n        LOGW("JIT code cache unavailable - continuing without JIT movement tracking");\n    }/s' "$LSC"
