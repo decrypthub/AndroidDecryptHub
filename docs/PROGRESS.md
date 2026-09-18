@@ -15,6 +15,10 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.69 JNIEnv 类型自省 / monitor / 弱引用 / GetVersion（2026-09-19，host 验收 PASS；真机待做）**：覆盖率名单里再下一批——**类型自省**（反篡改代码天天问"你是不是 XX 类的子类/实例/这个引用是什么类型"）、**monitor**（死锁/反调试的锁行为）、**弱引用对**与 `GetVersion`。
+      · 新增 11 槽（覆盖率 **133/229 → 144/229 = 63%**）：`GetVersion`（`version=0x..`）、`DefineClass`（**动态加载类**：name + loader + 字节数 + 结果类）、`GetSuperclass`（`class -> super`，带类名）、`IsAssignableFrom`（`A <- B = true/false`）、`GetObjectClass`（`obj -> class`）、`IsInstanceOf`（`obj class = true/false`）、`MonitorEnter`/`MonitorExit`（`monitor=0x..`，成对出现）、`NewWeakGlobalRef`/`DeleteWeakGlobalRef`、`GetObjectRefType`（`local/global/weak/invalid`）。
+      · 安全网照旧：11 条 `_Static_assert`、索引由 v90 对 `jni.h` 机检（`checked 144 indices`），覆盖率下限**再提到 144**；类名解析只在**入口无挂起异常**时做（避免 CheckJNI 下 abort 的老问题）。
+      · 验收：agent 零告警重建；v90 PASS（144/229，63%）；host 全量门禁 **31 PASS / 0 FAIL / 84 SKIP**（115 脚本）。
 - [~] **v4.68 JNIEnv 引用生命周期（2026-09-19，host 验收 PASS；真机待做）**：覆盖率名单里的下一批——**引用生命周期**。目标创建了哪些引用、有没有释放、有没有把 global ref 泄漏、有没有把 local frame 一直开着，这些都是可直接读的分析信号，而且这 8 个表项是**每个 JNI 库都会碰**的。
       · 新增 8 槽（覆盖率 **125/229 → 133/229 = 58%**）：`PushLocalFrame`（capacity）、`PopLocalFrame`（result → 返回值）、`NewLocalRef`/`NewGlobalRef`（ref → 新引用）、`DeleteLocalRef`/`DeleteGlobalRef`（ref）、`IsSameObject`（a/b/same）、`EnsureLocalCapacity`（capacity）。
       · 安全网照旧：8 条 `_Static_assert` 签名证明、索引 19/20/21/22/23/24/25/26 由 v90 对 `jni.h` 机检（`checked 133 indices`），覆盖率下限**再提到 133**（只升不降）。

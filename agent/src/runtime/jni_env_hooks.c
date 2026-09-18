@@ -106,6 +106,20 @@ enum {
     ENV_SLOT_DeleteGlobalRef,
     ENV_SLOT_IsSameObject,
     ENV_SLOT_EnsureLocalCapacity,
+    // v4.69: type introspection, monitors, weak globals and GetVersion. Anti-tamper code asks type
+    // questions (superclass / assignable / instance-of / ref type) and takes monitors; a weak-global
+    // pair plus GetVersion complete the "what does the target ask the VM" picture.
+    ENV_SLOT_GetVersion,
+    ENV_SLOT_DefineClass,
+    ENV_SLOT_GetSuperclass,
+    ENV_SLOT_IsAssignableFrom,
+    ENV_SLOT_GetObjectClass,
+    ENV_SLOT_IsInstanceOf,
+    ENV_SLOT_MonitorEnter,
+    ENV_SLOT_MonitorExit,
+    ENV_SLOT_NewWeakGlobalRef,
+    ENV_SLOT_DeleteWeakGlobalRef,
+    ENV_SLOT_GetObjectRefType,
     ENV_SLOT_NewDirectByteBuffer,
     ENV_SLOT_GetDirectBufferAddress,
     ENV_SLOT_GetDirectBufferCapacity,
@@ -166,6 +180,9 @@ struct EnvHookSlot {
     X("Throw") X("ThrowNew") X("ExceptionOccurred") X("ExceptionDescribe") X("ExceptionClear") \
     X("GetJavaVM") X("PushLocalFrame") X("PopLocalFrame") X("NewLocalRef") X("DeleteLocalRef") \
     X("NewGlobalRef") X("DeleteGlobalRef") X("IsSameObject") X("EnsureLocalCapacity") \
+    X("GetVersion") X("DefineClass") X("GetSuperclass") X("IsAssignableFrom") X("GetObjectClass") \
+    X("IsInstanceOf") X("MonitorEnter") X("MonitorExit") X("NewWeakGlobalRef") \
+    X("DeleteWeakGlobalRef") X("GetObjectRefType") \
     X("NewDirectByteBuffer") \
     X("GetDirectBufferAddress") X("GetDirectBufferCapacity")
 
@@ -1278,7 +1295,200 @@ static jint EnsureLocalCapacity_wrapper(JNIEnv *env, jint capacity) {
     return rc;
 }
 
+// ---- v4.69: type introspection / monitors / weak globals / GetVersion -------
+static jint GetVersion_wrapper(JNIEnv *env) {
+    typedef jint (JNICALL *fn_t)(JNIEnv *);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_GetVersion);
+    if (!original) return 0;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_GetVersion)) return original(env);
+    g_env_hook_in_ours = 1;
+    jint v = original(env);
+    g_env_hook_in_ours = 0;
+    char detail[64];
+    snprintf(detail, sizeof(detail), "version=0x%x", (unsigned)v);
+    env_note(ENV_SLOT_GetVersion, env_budget_left(ENV_SLOT_GetVersion) ? detail : NULL, 1);
+    return v;
+}
+
+static jclass DefineClass_wrapper(JNIEnv *env, const char *name, jobject loader, const jbyte *buf, jsize len) {
+    typedef jclass (JNICALL *fn_t)(JNIEnv *, const char *, jobject, const jbyte *, jsize);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_DefineClass);
+    if (!original) return NULL;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_DefineClass)) return original(env, name, loader, buf, len);
+    g_env_hook_in_ours = 1;
+    jclass cls = original(env, name, loader, buf, len);
+    g_env_hook_in_ours = 0;
+    char detail[220]; detail[0] = 0;
+    if (env_budget_left(ENV_SLOT_DefineClass)) {
+        char nm[96] = "";
+        if (name) { size_t p = 0; for (size_t i = 0; name[i] && p + 2 < sizeof(nm); i++) { char c = name[i]; nm[p++] = (c >= 0x20 && c < 0x7f) ? c : '.'; } nm[p] = 0; }
+        snprintf(detail, sizeof(detail), "name=\"%s\" loader=%p bytes=%d class=%p", nm, (void *)loader, (int)len, (void *)cls);
+    }
+    env_note(ENV_SLOT_DefineClass, detail[0] ? detail : NULL, cls != NULL);
+    return cls;
+}
+
+static jclass GetSuperclass_wrapper(JNIEnv *env, jclass clazz) {
+    typedef jclass (JNICALL *fn_t)(JNIEnv *, jclass);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_GetSuperclass);
+    if (!original) return NULL;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_GetSuperclass)) return original(env, clazz);
+    g_env_hook_in_ours = 1;
+    jclass sup = original(env, clazz);
+    g_env_hook_in_ours = 0;
+    char detail[260] = "";
+    if (env_budget_left(ENV_SLOT_GetSuperclass) && !(*env)->ExceptionCheck(env)) {
+        char a[96] = "", b[96] = "";
+        if (clazz) adh_jni_class_name(env, clazz, a, sizeof(a));
+        if (sup) adh_jni_class_name(env, sup, b, sizeof(b));
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        snprintf(detail, sizeof(detail), "class=%s -> %s", a[0] ? a : "?", b[0] ? b : "(none)");
+    }
+    env_note(ENV_SLOT_GetSuperclass, detail[0] ? detail : NULL, 1);
+    return sup;
+}
+
+static jboolean IsAssignableFrom_wrapper(JNIEnv *env, jclass a, jclass b) {
+    typedef jboolean (JNICALL *fn_t)(JNIEnv *, jclass, jclass);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_IsAssignableFrom);
+    if (!original) return JNI_FALSE;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_IsAssignableFrom)) return original(env, a, b);
+    g_env_hook_in_ours = 1;
+    jboolean r = original(env, a, b);
+    g_env_hook_in_ours = 0;
+    char detail[220]; detail[0] = 0;
+    if (env_budget_left(ENV_SLOT_IsAssignableFrom)) {
+        char na[96] = "", nb[96] = "";
+        if (a) adh_jni_class_name(env, a, na, sizeof(na));
+        if (b) adh_jni_class_name(env, b, nb, sizeof(nb));
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        snprintf(detail, sizeof(detail), "%s <- %s = %s", na[0] ? na : "?", nb[0] ? nb : "?", r ? "true" : "false");
+    }
+    env_note(ENV_SLOT_IsAssignableFrom, detail[0] ? detail : NULL, 1);
+    return r;
+}
+
+static jclass GetObjectClass_wrapper(JNIEnv *env, jobject obj) {
+    typedef jclass (JNICALL *fn_t)(JNIEnv *, jobject);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_GetObjectClass);
+    if (!original) return NULL;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_GetObjectClass)) return original(env, obj);
+    g_env_hook_in_ours = 1;
+    jclass cls = original(env, obj);
+    g_env_hook_in_ours = 0;
+    char detail[220] = "";
+    if (env_budget_left(ENV_SLOT_GetObjectClass)) {
+        char name[96] = "";
+        if (cls) adh_jni_class_name(env, cls, name, sizeof(name));
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        snprintf(detail, sizeof(detail), "obj=%p class=%s", (void *)obj, name[0] ? name : "?");
+    }
+    env_note(ENV_SLOT_GetObjectClass, detail[0] ? detail : NULL, cls != NULL);
+    return cls;
+}
+
+static jboolean IsInstanceOf_wrapper(JNIEnv *env, jobject obj, jclass clazz) {
+    typedef jboolean (JNICALL *fn_t)(JNIEnv *, jobject, jclass);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_IsInstanceOf);
+    if (!original) return JNI_FALSE;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_IsInstanceOf)) return original(env, obj, clazz);
+    g_env_hook_in_ours = 1;
+    jboolean r = original(env, obj, clazz);
+    g_env_hook_in_ours = 0;
+    char detail[220] = "";
+    if (env_budget_left(ENV_SLOT_IsInstanceOf)) {
+        char name[96] = "";
+        if (clazz) adh_jni_class_name(env, clazz, name, sizeof(name));
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        snprintf(detail, sizeof(detail), "obj=%p class=%s = %s", (void *)obj, name[0] ? name : "?", r ? "true" : "false");
+    }
+    env_note(ENV_SLOT_IsInstanceOf, detail[0] ? detail : NULL, 1);
+    return r;
+}
+
+static jint MonitorEnter_wrapper(JNIEnv *env, jobject obj) {
+    typedef jint (JNICALL *fn_t)(JNIEnv *, jobject);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_MonitorEnter);
+    if (!original) return JNI_ERR;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_MonitorEnter)) return original(env, obj);
+    g_env_hook_in_ours = 1;
+    jint rc = original(env, obj);
+    g_env_hook_in_ours = 0;
+    char detail[96];
+    snprintf(detail, sizeof(detail), "monitor=%p", (void *)obj);
+    env_note(ENV_SLOT_MonitorEnter, env_budget_left(ENV_SLOT_MonitorEnter) ? detail : NULL, rc == JNI_OK);
+    return rc;
+}
+
+static jint MonitorExit_wrapper(JNIEnv *env, jobject obj) {
+    typedef jint (JNICALL *fn_t)(JNIEnv *, jobject);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_MonitorExit);
+    if (!original) return JNI_ERR;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_MonitorExit)) return original(env, obj);
+    g_env_hook_in_ours = 1;
+    jint rc = original(env, obj);
+    g_env_hook_in_ours = 0;
+    char detail[96];
+    snprintf(detail, sizeof(detail), "monitor=%p", (void *)obj);
+    env_note(ENV_SLOT_MonitorExit, env_budget_left(ENV_SLOT_MonitorExit) ? detail : NULL, rc == JNI_OK);
+    return rc;
+}
+
+static jweak NewWeakGlobalRef_wrapper(JNIEnv *env, jobject obj) {
+    typedef jweak (JNICALL *fn_t)(JNIEnv *, jobject);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_NewWeakGlobalRef);
+    if (!original) return NULL;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_NewWeakGlobalRef)) return original(env, obj);
+    g_env_hook_in_ours = 1;
+    jweak out = original(env, obj);
+    g_env_hook_in_ours = 0;
+    char detail[128];
+    snprintf(detail, sizeof(detail), "obj=%p -> weak=%p", (void *)obj, (void *)out);
+    env_note(ENV_SLOT_NewWeakGlobalRef, env_budget_left(ENV_SLOT_NewWeakGlobalRef) ? detail : NULL, out != NULL);
+    return out;
+}
+
+static void DeleteWeakGlobalRef_wrapper(JNIEnv *env, jweak ref) {
+    typedef void (JNICALL *fn_t)(JNIEnv *, jweak);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_DeleteWeakGlobalRef);
+    if (!original) return;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_DeleteWeakGlobalRef)) { original(env, ref); return; }
+    g_env_hook_in_ours = 1;
+    original(env, ref);
+    g_env_hook_in_ours = 0;
+    char detail[96];
+    snprintf(detail, sizeof(detail), "weak=%p", (void *)ref);
+    env_note(ENV_SLOT_DeleteWeakGlobalRef, env_budget_left(ENV_SLOT_DeleteWeakGlobalRef) ? detail : NULL, 1);
+}
+
+static jobjectRefType GetObjectRefType_wrapper(JNIEnv *env, jobject obj) {
+    typedef jobjectRefType (JNICALL *fn_t)(JNIEnv *, jobject);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_GetObjectRefType);
+    if (!original) return JNIInvalidRefType;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_GetObjectRefType)) return original(env, obj);
+    g_env_hook_in_ours = 1;
+    jobjectRefType t = original(env, obj);
+    g_env_hook_in_ours = 0;
+    const char *tn = t == JNILocalRefType ? "local" : t == JNIGlobalRefType ? "global"
+                   : t == JNIWeakGlobalRefType ? "weak" : "invalid";
+    char detail[96];
+    snprintf(detail, sizeof(detail), "obj=%p type=%s", (void *)obj, tn);
+    env_note(ENV_SLOT_GetObjectRefType, env_budget_left(ENV_SLOT_GetObjectRefType) ? detail : NULL, t != JNIInvalidRefType);
+    return t;
+}
+
 // Compile-time type check: each wrapper must have exactly its table entry signature.
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetVersion), __typeof__(&GetVersion_wrapper)), "GetVersion_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->DefineClass), __typeof__(&DefineClass_wrapper)), "DefineClass_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetSuperclass), __typeof__(&GetSuperclass_wrapper)), "GetSuperclass_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->IsAssignableFrom), __typeof__(&IsAssignableFrom_wrapper)), "IsAssignableFrom_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetObjectClass), __typeof__(&GetObjectClass_wrapper)), "GetObjectClass_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->IsInstanceOf), __typeof__(&IsInstanceOf_wrapper)), "IsInstanceOf_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->MonitorEnter), __typeof__(&MonitorEnter_wrapper)), "MonitorEnter_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->MonitorExit), __typeof__(&MonitorExit_wrapper)), "MonitorExit_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->NewWeakGlobalRef), __typeof__(&NewWeakGlobalRef_wrapper)), "NewWeakGlobalRef_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->DeleteWeakGlobalRef), __typeof__(&DeleteWeakGlobalRef_wrapper)), "DeleteWeakGlobalRef_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetObjectRefType), __typeof__(&GetObjectRefType_wrapper)), "GetObjectRefType_wrapper signature mismatch");
 _Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->PushLocalFrame), __typeof__(&PushLocalFrame_wrapper)), "PushLocalFrame_wrapper signature mismatch");
 _Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->PopLocalFrame), __typeof__(&PopLocalFrame_wrapper)), "PopLocalFrame_wrapper signature mismatch");
 _Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->NewLocalRef), __typeof__(&NewLocalRef_wrapper)), "NewLocalRef_wrapper signature mismatch");
@@ -1402,6 +1612,17 @@ static int env_hook_spec_index(int index) {
         case ENV_SLOT_SetByteArrayRegion: return 208;
         case ENV_SLOT_GetPrimitiveArrayCritical: return 222;
         case ENV_SLOT_GetStringRegion: return 220;
+        case ENV_SLOT_GetVersion: return 4;
+        case ENV_SLOT_DefineClass: return 5;
+        case ENV_SLOT_GetSuperclass: return 10;
+        case ENV_SLOT_IsAssignableFrom: return 11;
+        case ENV_SLOT_GetObjectClass: return 31;
+        case ENV_SLOT_IsInstanceOf: return 32;
+        case ENV_SLOT_MonitorEnter: return 217;
+        case ENV_SLOT_MonitorExit: return 218;
+        case ENV_SLOT_NewWeakGlobalRef: return 226;
+        case ENV_SLOT_DeleteWeakGlobalRef: return 227;
+        case ENV_SLOT_GetObjectRefType: return 232;
         case ENV_SLOT_PushLocalFrame: return 19;
         case ENV_SLOT_PopLocalFrame: return 20;
         case ENV_SLOT_NewLocalRef: return 25;
@@ -1456,6 +1677,17 @@ static void **env_hook_slot(struct JNINativeInterface *table, int index) {
         case ENV_SLOT_ReleaseByteArrayElements: return (void **)(uintptr_t)&table->ReleaseByteArrayElements;
         case ENV_SLOT_GetByteArrayRegion: return (void **)(uintptr_t)&table->GetByteArrayRegion;
         case ENV_SLOT_GetPrimitiveArrayCritical: return (void **)(uintptr_t)&table->GetPrimitiveArrayCritical;
+        case ENV_SLOT_GetVersion: return (void **)(uintptr_t)&table->GetVersion;
+        case ENV_SLOT_DefineClass: return (void **)(uintptr_t)&table->DefineClass;
+        case ENV_SLOT_GetSuperclass: return (void **)(uintptr_t)&table->GetSuperclass;
+        case ENV_SLOT_IsAssignableFrom: return (void **)(uintptr_t)&table->IsAssignableFrom;
+        case ENV_SLOT_GetObjectClass: return (void **)(uintptr_t)&table->GetObjectClass;
+        case ENV_SLOT_IsInstanceOf: return (void **)(uintptr_t)&table->IsInstanceOf;
+        case ENV_SLOT_MonitorEnter: return (void **)(uintptr_t)&table->MonitorEnter;
+        case ENV_SLOT_MonitorExit: return (void **)(uintptr_t)&table->MonitorExit;
+        case ENV_SLOT_NewWeakGlobalRef: return (void **)(uintptr_t)&table->NewWeakGlobalRef;
+        case ENV_SLOT_DeleteWeakGlobalRef: return (void **)(uintptr_t)&table->DeleteWeakGlobalRef;
+        case ENV_SLOT_GetObjectRefType: return (void **)(uintptr_t)&table->GetObjectRefType;
         case ENV_SLOT_PushLocalFrame: return (void **)(uintptr_t)&table->PushLocalFrame;
         case ENV_SLOT_PopLocalFrame: return (void **)(uintptr_t)&table->PopLocalFrame;
         case ENV_SLOT_NewLocalRef: return (void **)(uintptr_t)&table->NewLocalRef;
@@ -1505,6 +1737,17 @@ static void *env_hook_wrapper(int index) {
         case ENV_SLOT_ReleaseByteArrayElements: return (void *)&ReleaseByteArrayElements_wrapper;
         case ENV_SLOT_GetByteArrayRegion: return (void *)&GetByteArrayRegion_wrapper;
         case ENV_SLOT_GetPrimitiveArrayCritical: return (void *)&GetPrimitiveArrayCritical_wrapper;
+        case ENV_SLOT_GetVersion: return (void *)&GetVersion_wrapper;
+        case ENV_SLOT_DefineClass: return (void *)&DefineClass_wrapper;
+        case ENV_SLOT_GetSuperclass: return (void *)&GetSuperclass_wrapper;
+        case ENV_SLOT_IsAssignableFrom: return (void *)&IsAssignableFrom_wrapper;
+        case ENV_SLOT_GetObjectClass: return (void *)&GetObjectClass_wrapper;
+        case ENV_SLOT_IsInstanceOf: return (void *)&IsInstanceOf_wrapper;
+        case ENV_SLOT_MonitorEnter: return (void *)&MonitorEnter_wrapper;
+        case ENV_SLOT_MonitorExit: return (void *)&MonitorExit_wrapper;
+        case ENV_SLOT_NewWeakGlobalRef: return (void *)&NewWeakGlobalRef_wrapper;
+        case ENV_SLOT_DeleteWeakGlobalRef: return (void *)&DeleteWeakGlobalRef_wrapper;
+        case ENV_SLOT_GetObjectRefType: return (void *)&GetObjectRefType_wrapper;
         case ENV_SLOT_PushLocalFrame: return (void *)&PushLocalFrame_wrapper;
         case ENV_SLOT_PopLocalFrame: return (void *)&PopLocalFrame_wrapper;
         case ENV_SLOT_NewLocalRef: return (void *)&NewLocalRef_wrapper;
