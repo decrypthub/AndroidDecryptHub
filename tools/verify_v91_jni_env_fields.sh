@@ -94,6 +94,15 @@ console.log(`digest: groups=${(digest.body?.groups ?? []).length} resolved=${res
 if (resolvedGroups[0]) console.log(`  ${resolvedGroups[0].accessor} ${resolvedGroups[0].field} x${resolvedGroups[0].count} last=${resolvedGroups[0].lastValue}`);
 const digestOk = digest.body?.drain?.ok === true && resolvedGroups.length >= 1 && /#/.test(String(resolvedGroups[0]?.field ?? ''));
 
+// (3c) pattern selection: "*Field" must select the whole field family (36 slots) in ONE call.
+const byPattern = await post('/api/jni/env_hook', { session, action: 'hook', function: '*Field' });
+const status3 = await post('/api/jni/env_hook', { session, action: 'status' });
+const fieldSlots = (status3.body?.hooks ?? []).filter((h) => h.installed === true && /Field$/.test(String(h.function ?? '')));
+const patternOk = byPattern.body?.ok === true && fieldSlots.length >= 36;
+console.log(`pattern "*Field": ok=${byPattern.body?.ok} installedFieldSlots=${fieldSlots.length} (expect >= 36)`);
+const unhookPattern = await post('/api/jni/env_hook', { session, action: 'unhook', function: '*Field' });
+if (unhookPattern.body?.ok !== true) console.log('pattern unhook did not report ok');
+
 // (4) unhook, table restored, process alive
 const unhooked = [];
 for (const f of hooked) unhooked.push((await post('/api/jni/env_hook', { session, action: 'unhook', function: f })).body?.ok === true);
@@ -106,7 +115,8 @@ const alive = String(spawnSync('adb', ['-s', serial, 'shell', 'pidof', 'com.adh.
 
 if (missing.length) console.log('no event for: ' + missing.join(', '));
 if (!digestOk) console.log('the field digest did not resolve any access to a name');
-const pass = installedOk && patchedOk && relroOk && calls >= 2 && missing.length === 0 && valueOk && digestOk
+if (!patternOk) console.log('the "*Field" pattern did not select the field family (suffix matching)');
+const pass = installedOk && patchedOk && relroOk && calls >= 2 && missing.length === 0 && valueOk && digestOk && patternOk
   && unhooked.every(Boolean) && restored && alive.length > 0;
 console.log(pass ? 'RESULT:PASS' : 'RESULT:FAIL');
 EOF

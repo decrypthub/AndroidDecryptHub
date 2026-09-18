@@ -1180,19 +1180,28 @@ void adh_cmd_jni_env_hook(int fd, const char *id, const char *action, const char
         return;
     }
 
-    // Wildcard so dozens of table entries stay operable in one call: "all"/"*" selects every
-    // slot, a trailing '*' selects a prefix ("CallIntMethod*" = varargs + V + A, "Call*" = all
-    // call families). Reports how many were applied and the first failure, never a silent skip.
-    int wildcard = 0;
-    size_t prefix_len = 0;
+    // Wildcards so dozens of table entries stay operable in one call:
+    //   "*" / "all"   every slot
+    //   "Call*"       prefix   (all three forms of a Call family)
+    //   "*Field"      suffix   (the 36 field accessors in one call)
+    //   "*Field*"     contains (the field ID lookups AND the accessors - what the field digest needs)
+    // Reports how many were applied and the first failure, never a silent skip.
+    int wildcard = 0, suffix_only = 0, contains = 0;
+    const char *pat = function;
+    size_t pat_len = strlen(function);
     if (strcmp(function, "all") == 0 || strcmp(function, "*") == 0) {
         wildcard = 1;
-    } else {
-        size_t flen = strlen(function);
-        if (flen && function[flen - 1] == '*') {
-            wildcard = 1;
-            prefix_len = flen - 1;
-        }
+        pat = "";
+        pat_len = 0;
+    } else if (pat_len && pat[0] == '*') {
+        wildcard = 1;
+        pat++;
+        pat_len--;
+        if (pat_len && pat[pat_len - 1] == '*') { contains = 1; pat_len--; }   // trim the trailing star too
+        else suffix_only = 1;
+    } else if (pat_len && pat[pat_len - 1] == '*') {
+        wildcard = 1;
+        pat_len--;
     }
 
     int applying = strcmp(action, "install") == 0;
@@ -1211,7 +1220,17 @@ void adh_cmd_jni_env_hook(int fd, const char *id, const char *action, const char
         if (ok) applied = 1; else { failed = 1; snprintf(first_error, sizeof(first_error), "%s", error); }
     } else {
         for (int i = 0; i < ENV_HOOK_MAX; i++) {
-            if (prefix_len && strncmp(g_env_hooks[i].name, function, prefix_len) != 0) continue;
+            const char *n = g_env_hooks[i].name;
+            size_t nlen = strlen(n);
+            int hit = 0;
+            if (!pat_len) hit = 1;                                             // "all" / "*" / "**"
+            else if (suffix_only) hit = nlen >= pat_len && strncmp(n + nlen - pat_len, pat, pat_len) == 0;
+            else if (contains) {
+                for (size_t o = 0; o + pat_len <= nlen && !hit; o++) {
+                    if (strncmp(n + o, pat, pat_len) == 0) hit = 1;
+                }
+            } else hit = strncmp(n, pat, pat_len) == 0;                        // prefix
+            if (!hit) continue;
             matched++;
             char error[320] = "";
             int ok = applying ? env_hook_install_index(i, error, sizeof(error))

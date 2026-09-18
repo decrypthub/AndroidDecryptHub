@@ -15,6 +15,9 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.57 JNIEnv 钩子选择器支持后缀/包含匹配（2026-09-19，host 验收 PASS；真机待做）**：v4.55 之后字段访问器有 36 个槽，但选择器只支持**前缀**通配（`CallIntMethod*`），想一次挂上整个字段族没有写法。现在四种形态都支持：`"*"`/`"all"` = 全部、`Call*` = 前缀、**`*Field` = 后缀**（一次挂上 36 个字段访问器）、**`*Field*` = 包含**（同时命中 `GetFieldID`/`GetStaticFieldID` 与访问器——这正是字段摘要解析名字所需要的组合）。匹配用有界比较实现，不依赖 NUL 终止的子串；命中数/失败数与首个失败原因照旧上报。
+      · 接线：MCP `jni_env_hook` 的描述把四种模式与"36 个字段访问器"写清楚（AI 客户端不必猜）；设备脚本 v91 新增一段：用 `*Field` 一次安装，status 里 `installed` 且名字以 `Field` 结尾的槽位**必须 ≥ 36**，再用同一模式整体卸载。
+      · 验收：agent 零告警重建；host 全量门禁 **31 PASS / 0 FAIL / 84 SKIP**（115 脚本）；daemon 单测 149。
 - [~] **v4.56 字段事件可归因 + JNIEnv 字段摘要（2026-09-19，host 验收 PASS；真机待做）**：v4.55 的 36 个字段槽位会发事件，但事件里只有一个**不透明的 `jfieldID`**（`field=0x..`）——分析者读不出"这是哪个字段"。
       · agent：`GetFieldID`/`GetStaticFieldID` 的事件 detail 现在**带上它们交出去的 id**（`Class#name:sig -> 0x..`），访问事件这才有名字可对。
       · host：新增 `daemon/src/jni_field_digest.ts`（纯函数 `digestJniFields` + `jniFieldDigest`）：用 id 事件建 `id → Class#name:sig` 表，再把访问事件按 **(accessor, field)** 分组，给出次数、最后值、线程、时间窗；**没见过的 id 保持原始指针并计入 `unresolvedAccesses`**（不猜名字）；空窗口给出"还没 hook 字段槽位"的说明而不是干净结果；drain 走共享 `drainSession`（java_trace P0 的教训）。
