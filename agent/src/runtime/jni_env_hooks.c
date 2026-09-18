@@ -1047,10 +1047,18 @@ static void send_env_result(int fd, const char *id, const char *action, const ch
         idj, ok ? "true" : "false", actionj, functionj, applied, failed,
         g_env_hook_table, table_perms, errorj);
     int first = 1;
-    for (int i = 0; i < ENV_HOOK_MAX && len + 340 < sizeof(out); i++) {
+    for (int i = 0; i < ENV_HOOK_MAX && len + 380 < sizeof(out); i++) {
         char slot_perms[8] = "";
         char lastj[512];
         json_escape(g_env_hooks[i].last, lastj, sizeof(lastj));
+        // A running write override must be visible in status - otherwise the operator cannot tell
+        // whether a Set<Type>Field hook is still rewriting values.
+        char ovbuf[48] = "";
+        if (g_env_hooks[i].override_active) {
+            if ((double)g_env_hooks[i].override_i == g_env_hooks[i].override_d) snprintf(ovbuf, sizeof(ovbuf), "%lld", g_env_hooks[i].override_i);
+            else snprintf(ovbuf, sizeof(ovbuf), "%g", g_env_hooks[i].override_d);
+        }
+        const char *ovjson = g_env_hooks[i].override_active ? ovbuf : "null";
         void *live = NULL;
         if (g_env_hooks[i].slot) {
             adh_perms_of_addr((void *)(uintptr_t)g_env_hooks[i].slot, slot_perms, sizeof(slot_perms));
@@ -1059,14 +1067,15 @@ static void send_env_result(int fd, const char *id, const char *action, const ch
         len += snprintf(out + len, sizeof(out) - len,
                         "%s{\"function\":\"%s\",\"installed\":%s,\"active\":%s,"
                         "\"hits\":%llu,\"dropped\":%llu,\"entry\":\"0x%llx\",\"perms\":\"%s\","
-                        "\"slotValue\":\"0x%llx\",\"original\":\"0x%llx\",\"last\":\"%s\"}",
+                        "\"slotValue\":\"0x%llx\",\"original\":\"0x%llx\",\"override\":%s,\"last\":\"%s\"}",
                         first ? "" : ",", g_env_hooks[i].name,
                         g_env_hooks[i].installed ? "true" : "false",
                         slot_active(i) ? "true" : "false",
                         g_env_hooks[i].hits, g_env_hooks[i].dropped,
                         (unsigned long long)(uintptr_t)g_env_hooks[i].slot, slot_perms,
                         (unsigned long long)(uintptr_t)live,
-                        (unsigned long long)(uintptr_t)g_env_hooks[i].original, lastj);
+                        (unsigned long long)(uintptr_t)g_env_hooks[i].original,
+                        g_env_hooks[i].override_active ? ovjson : "null", lastj);
         first = 0;
     }
     snprintf(out + len, sizeof(out) - len, "]}\n");

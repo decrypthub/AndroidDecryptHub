@@ -60,6 +60,12 @@ const relroOk = typeof status1.body?.tablePerms === 'string' && status1.body.tab
   && slots.every((h) => typeof h.perms !== 'string' || (h.perms.startsWith('r') && h.perms[1] !== 'w'));
 console.log(`hooks: ${slots.map((h) => h.function).join(',')} installed=${installedOk} patched=${patchedOk} relro=${relroOk} tablePerms=${status1.body?.tablePerms}`);
 
+// (1b) baseline cursor so the event assertions below cannot be satisfied by events from an
+// EARLIER run (the capture store keeps history).
+const preList = await (await fetch(`${base}/api/captures?session=${encodeURIComponent(session)}&limit=1`)).json().catch(() => ({}));
+const cursor = Math.max(0, ...(preList.captures ?? []).map((c) => Number(c.id ?? 0)));
+console.log(`event baseline cursor=${cursor}`);
+
 // (2) trigger the native probe (it goes through the hooked entries)
 const call = await post('/api/java/call', { session, className: 'com.adh.sandbox.Detection', method: 'jniFieldProbe', params: '', args: [] });
 const calls = Number(call.body?.result?.result ?? -1);
@@ -74,7 +80,7 @@ await sleep(1500);   // let the capture loop drain
 // (3) the events must name the hooked accessors and carry the field id
 const list = await (await fetch(`${base}/api/captures?session=${encodeURIComponent(session)}&limit=400`)).json().catch(() => ({}));
 const seen = new Map();
-for (const c of (list.captures ?? []).filter((x) => x.func === 'JNI_ENV')) {
+for (const c of (list.captures ?? []).filter((x) => x.func === 'JNI_ENV' && Number(x.id ?? 0) > cursor)) {
   const d = await (await fetch(`${base}/api/captures/${c.id}`)).json().catch(() => null);
   let ev = null;
   try { ev = JSON.parse(String(d?.text ?? '')); } catch { ev = null; }
@@ -101,7 +107,8 @@ const fieldSlots = (status3.body?.hooks ?? []).filter((h) => h.installed === tru
 const patternOk = byPattern.body?.ok === true && fieldSlots.length >= 36;
 console.log(`pattern "*Field": ok=${byPattern.body?.ok} installedFieldSlots=${fieldSlots.length} (expect >= 36)`);
 const unhookPattern = await post('/api/jni/env_hook', { session, action: 'uninstall', function: '*Field' });
-if (unhookPattern.body?.ok !== true) console.log('pattern unhook did not report ok');
+const patternUnhookOk = unhookPattern.body?.ok === true;
+if (!patternUnhookOk) console.log('pattern unhook did not report ok');
 
 // (3d) write override (v4.58): with setValue the hook REWRITES what native code stores. The probe
 // reads HeapProbe.sConfig.counter and writes it back, so with SetIntField overridden to 42 a
@@ -132,7 +139,7 @@ if (missing.length) console.log('no event for: ' + missing.join(', '));
 if (!digestOk) console.log('the field digest did not resolve any access to a name');
 if (!patternOk) console.log('the "*Field" pattern did not select the field family (suffix matching)');
 if (!overrideOk) console.log('the SetIntField override did not change what the target stored');
-const pass = installedOk && patchedOk && relroOk && calls >= 2 && missing.length === 0 && valueOk && digestOk && patternOk && overrideOk
+const pass = installedOk && patchedOk && relroOk && calls >= 2 && missing.length === 0 && valueOk && digestOk && patternOk && patternUnhookOk && overrideOk
   && unhooked.every(Boolean) && restored && alive.length > 0;
 console.log(pass ? 'RESULT:PASS' : 'RESULT:FAIL');
 EOF
