@@ -237,84 +237,112 @@ JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_jniArrayRegionProbe(JNIEnv
         jbooleanArray a = (*env)->NewBooleanArray(env, 4);
         const jboolean seed[4] = { 1, 0, 1, 0 };
         jboolean back[4] = { 0 };
-        if (a) {
-            (*env)->SetBooleanArrayRegion(env, a, 0, 4, seed);
-            (*env)->GetBooleanArrayRegion(env, a, 0, 4, back);
-            if (memcmp(seed, back, sizeof(seed)) == 0) bits |= 1;
-            (*env)->DeleteLocalRef(env, a);
+        if (!a) {
+            // An allocation failure leaves an exception pending, and the next JNI call with one
+            // pending is illegal (CheckJNI aborts) - bail out instead of driving the probe on.
+            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+            return (jint)(0xAD7000 | bits);
         }
+        (*env)->SetBooleanArrayRegion(env, a, 0, 4, seed);
+        (*env)->GetBooleanArrayRegion(env, a, 0, 4, back);
+        if (memcmp(seed, back, sizeof(seed)) == 0) bits |= 1;
+        (*env)->DeleteLocalRef(env, a);
     }
     // Char: 65,68,72,33
     {
         jcharArray a = (*env)->NewCharArray(env, 4);
         const jchar seed[4] = { 65, 68, 72, 33 };
         jchar back[4] = { 0 };
-        if (a) {
-            (*env)->SetCharArrayRegion(env, a, 0, 4, seed);
-            (*env)->GetCharArrayRegion(env, a, 0, 4, back);
-            if (memcmp(seed, back, sizeof(seed)) == 0) bits |= 2;
-            (*env)->DeleteLocalRef(env, a);
+        if (!a) {
+            // An allocation failure leaves an exception pending, and the next JNI call with one
+            // pending is illegal (CheckJNI aborts) - bail out instead of driving the probe on.
+            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+            return (jint)(0xAD7000 | bits);
         }
+        (*env)->SetCharArrayRegion(env, a, 0, 4, seed);
+        (*env)->GetCharArrayRegion(env, a, 0, 4, back);
+        if (memcmp(seed, back, sizeof(seed)) == 0) bits |= 2;
+        (*env)->DeleteLocalRef(env, a);
     }
     // Short: 1000,2000,3000,4000
     {
         jshortArray a = (*env)->NewShortArray(env, 4);
         const jshort seed[4] = { 1000, 2000, 3000, 4000 };
         jshort back[4] = { 0 };
-        if (a) {
-            (*env)->SetShortArrayRegion(env, a, 0, 4, seed);
-            (*env)->GetShortArrayRegion(env, a, 0, 4, back);
-            if (memcmp(seed, back, sizeof(seed)) == 0) bits |= 4;
-            (*env)->DeleteLocalRef(env, a);
+        if (!a) {
+            // An allocation failure leaves an exception pending, and the next JNI call with one
+            // pending is illegal (CheckJNI aborts) - bail out instead of driving the probe on.
+            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+            return (jint)(0xAD7000 | bits);
         }
+        (*env)->SetShortArrayRegion(env, a, 0, 4, seed);
+        (*env)->GetShortArrayRegion(env, a, 0, 4, back);
+        if (memcmp(seed, back, sizeof(seed)) == 0) bits |= 4;
+        (*env)->DeleteLocalRef(env, a);
     }
     // Int: 100000,200000,300000,400000
     {
         jintArray a = (*env)->NewIntArray(env, 4);
         const jint seed[4] = { 100000, 200000, 300000, 400000 };
         jint back[4] = { 0 };
-        if (a) {
-            (*env)->SetIntArrayRegion(env, a, 0, 4, seed);
-            (*env)->GetIntArrayRegion(env, a, 0, 4, back);
-            if (memcmp(seed, back, sizeof(seed)) == 0) bits |= 8;
-            (*env)->DeleteLocalRef(env, a);
+        if (!a) {
+            // An allocation failure leaves an exception pending, and the next JNI call with one
+            // pending is illegal (CheckJNI aborts) - bail out instead of driving the probe on.
+            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+            return (jint)(0xAD7000 | bits);
         }
+        (*env)->SetIntArrayRegion(env, a, 0, 4, seed);
+        (*env)->GetIntArrayRegion(env, a, 0, 4, back);
+        if (memcmp(seed, back, sizeof(seed)) == 0) bits |= 8;
+        (*env)->DeleteLocalRef(env, a);
     }
     // Long: 10000000000,20000000000,30000000000,40000000000
     {
         jlongArray a = (*env)->NewLongArray(env, 4);
         const jlong seed[4] = { 10000000000LL, 20000000000LL, 30000000000LL, 40000000000LL };
         jlong back[4] = { 0 };
-        if (a) {
-            (*env)->SetLongArrayRegion(env, a, 0, 4, seed);
-            (*env)->GetLongArrayRegion(env, a, 0, 4, back);
-            if (memcmp(seed, back, sizeof(seed)) == 0) bits |= 16;
-            (*env)->DeleteLocalRef(env, a);
+        if (!a) {
+            // An allocation failure leaves an exception pending, and the next JNI call with one
+            // pending is illegal (CheckJNI aborts) - bail out instead of driving the probe on.
+            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+            return (jint)(0xAD7000 | bits);
         }
+        (*env)->SetLongArrayRegion(env, a, 0, 4, seed);
+        (*env)->GetLongArrayRegion(env, a, 0, 4, back);
+        if (memcmp(seed, back, sizeof(seed)) == 0) bits |= 16;
+        (*env)->DeleteLocalRef(env, a);
     }
     // Float: 1.5,2.5,3.5,4.5
     {
         jfloatArray a = (*env)->NewFloatArray(env, 4);
         const jfloat seed[4] = { 1.5f, 2.5f, 3.5f, 4.5f };
         jfloat back[4] = { 0.0f };
-        if (a) {
-            (*env)->SetFloatArrayRegion(env, a, 0, 4, seed);
-            (*env)->GetFloatArrayRegion(env, a, 0, 4, back);
-            if (memcmp(seed, back, sizeof(seed)) == 0) bits |= 32;
-            (*env)->DeleteLocalRef(env, a);
+        if (!a) {
+            // An allocation failure leaves an exception pending, and the next JNI call with one
+            // pending is illegal (CheckJNI aborts) - bail out instead of driving the probe on.
+            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+            return (jint)(0xAD7000 | bits);
         }
+        (*env)->SetFloatArrayRegion(env, a, 0, 4, seed);
+        (*env)->GetFloatArrayRegion(env, a, 0, 4, back);
+        if (memcmp(seed, back, sizeof(seed)) == 0) bits |= 32;
+        (*env)->DeleteLocalRef(env, a);
     }
     // Double: 1.25,2.25,3.25,4.25
     {
         jdoubleArray a = (*env)->NewDoubleArray(env, 4);
         const jdouble seed[4] = { 1.25, 2.25, 3.25, 4.25 };
         jdouble back[4] = { 0.0 };
-        if (a) {
-            (*env)->SetDoubleArrayRegion(env, a, 0, 4, seed);
-            (*env)->GetDoubleArrayRegion(env, a, 0, 4, back);
-            if (memcmp(seed, back, sizeof(seed)) == 0) bits |= 64;
-            (*env)->DeleteLocalRef(env, a);
+        if (!a) {
+            // An allocation failure leaves an exception pending, and the next JNI call with one
+            // pending is illegal (CheckJNI aborts) - bail out instead of driving the probe on.
+            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+            return (jint)(0xAD7000 | bits);
         }
+        (*env)->SetDoubleArrayRegion(env, a, 0, 4, seed);
+        (*env)->GetDoubleArrayRegion(env, a, 0, 4, back);
+        if (memcmp(seed, back, sizeof(seed)) == 0) bits |= 64;
+        (*env)->DeleteLocalRef(env, a);
     }
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return (jint)0xAD7000; }
     return (jint)(0xAD7000 | bits);

@@ -1567,7 +1567,9 @@ static void JNI_NAME##_wrapper(JNIEnv *env, jarray arr, jsize start, jsize len, 
         snprintf(detail, sizeof(detail), "array=%p start=%d len=%d <call failed>",            \
                  (void *)arr, (int)start, (int)len);                                         \
     }                                                                                        \
-    env_note(ENV_SLOT_##JNI_NAME, detail[0] ? detail : NULL, !failed && buf != NULL);        \
+    /* A zero-length region call with a NULL buffer is a legal no-op, not a failure. */       \
+    env_note(ENV_SLOT_##JNI_NAME, detail[0] ? detail : NULL,                                 \
+             !failed && (buf != NULL || len == 0));                                          \
 }
 
 ADH_DEFINE_ARRAY_REGION(GetBooleanArrayRegion, jboolean, jboolean *, "%d", (int))

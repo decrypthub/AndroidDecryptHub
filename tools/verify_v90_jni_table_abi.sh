@@ -77,7 +77,7 @@ const fixed = [...src.matchAll(/X\("([A-Za-z0-9_]+)"\)/g)].map((m) => m[1]);
 // name as well, so they belong in the "what can we install" inventory - and in the spec-index check.
 const fieldDef = src.match(/#define ADH_FIELD_SLOT_LIST\(X\)([\s\S]*?)\n#define /);
 const fieldSlots = fieldDef ? [...fieldDef[1].matchAll(/\bX\(([A-Za-z0-9_]+)\)/g)].map((m) => m[1]) : [];
-if (!fieldSlots.length) problems.push('no field accessors found in ADH_FIELD_SLOT_LIST (did the list macro move?)');
+if (fieldSlots.length !== 36) problems.push(`expected 36 field accessors in ADH_FIELD_SLOT_LIST, found ${fieldSlots.length} (update this gate deliberately when the list changes)`);
 notes.push(`agent: ${fixed.length} fixed slots + ${fieldSlots.length} field accessors + ${families.length} call families (= ${fixed.length + fieldSlots.length + families.length * 3} table entries), ${claimed.size} spec indices`);
 
 // ---- 3. every claimed index must equal the ABI index ----

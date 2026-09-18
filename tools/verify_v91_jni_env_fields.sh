@@ -28,8 +28,29 @@ OUT="$(node - "$HTTP" <<'EOF'
 const [http] = process.argv.slice(2);
 const base = `http://127.0.0.1:${http}`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const skip = (msg) => { console.log('SKIP  verify_v91_jni_env_fields (' + msg + ')'); console.log('RESULT:SKIP'); process.exit(0); };
-const fail = (msg, extra) => { if (extra !== undefined) console.log(JSON.stringify(extra).slice(0, 600)); console.log('FAIL ' + msg); console.log('RESULT:FAIL'); process.exit(0); };
+// Every install is recorded here so the terminal paths (fail/skip) always restore the table: a
+// check that fails while leaving slots patched would poison every later run in the same process.
+const installedSlots = [];
+const uninstallAll = async () => {
+  const list = installedSlots.splice(0, installedSlots.length);
+  for (const f of list) {
+    try { await post('/api/jni/env_hook', { session, action: 'uninstall', function: f }); } catch { /* best effort */ }
+  }
+};
+const skip = async (msg) => { await uninstallAll(); console.log('SKIP  verify_v91_jni_env_fields (' + msg + ')'); console.log('RESULT:SKIP'); process.exit(0); };
+const fail = async (msg, extra) => { if (extra !== undefined) console.log(JSON.stringify(extra).slice(0, 600)); console.log('FAIL ' + msg); await uninstallAll(); console.log('RESULT:FAIL'); process.exit(0); };
+const installSlot = async (f) => {
+  const r = await post('/api/jni/env_hook', { session, action: 'install', function: f });
+  if (r.body?.ok !== true) { await fail(`install of ${f} failed: ` + String(r.body?.error ?? r.status), r.body); return false; }
+  installedSlots.push(f);
+  return true;
+};
+const uninstallSlot = async (f) => {
+  const r = await post('/api/jni/env_hook', { session, action: 'uninstall', function: f });
+  const ok = r.body?.ok === true;
+  if (ok) { const i = installedSlots.indexOf(f); if (i >= 0) installedSlots.splice(i, 1); }
+  return ok;
+};
 async function post(path, body) {
   const r = await fetch(`${base}${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
   let parsed = null; try { parsed = await r.json(); } catch { parsed = null; }
@@ -38,24 +59,20 @@ async function post(path, body) {
 const agents = await (await fetch(`${base}/api/agents`)).json().catch(() => null);
 const agent = (Array.isArray(agents) ? agents : []).filter((x) => x.online && x.package === 'com.adh.sandbox')
   .sort((a, b) => (b.connectedAt ?? 0) - (a.connectedAt ?? 0))[0];
-if (!agent) skip('no online sandbox agent');
+if (!agent) await skip('no online sandbox agent');
 const session = agent.sessionId;
 // GetFieldID is hooked as well so the field DIGEST can join an access back to its name.
 const FUNCS = ['GetFieldID', 'GetStaticObjectField', 'GetIntField', 'SetIntField', 'GetStaticIntField', 'SetStaticIntField'];
 
 // (0) capability: a status call must know the slot names at all.
 const status0 = await post('/api/jni/env_hook', { session, action: 'status' });
-if (status0.status === 404) skip('daemon predates the JNIEnv surface');
+if (status0.status === 404) await skip('daemon predates the JNIEnv surface');
 const known = new Set((status0.body?.hooks ?? []).map((h) => h.function));
-if (FUNCS.some((f) => !known.has(f))) skip('agent predates the field accessor slots (redeploy the agent)');
+if (FUNCS.some((f) => !known.has(f))) await skip('agent predates the field accessor slots (redeploy the agent)');
 
 // (1) hook them
 const hooked = [];
-for (const f of FUNCS) {
-  const r = await post('/api/jni/env_hook', { session, action: 'install', function: f });
-  if (r.body?.ok !== true) fail(`hook of ${f} failed: ${String(r.body?.error ?? r.status)}`, r.body);
-  hooked.push(f);
-}
+for (const f of FUNCS) { await installSlot(f); hooked.push(f); }
 const status1 = await post('/api/jni/env_hook', { session, action: 'status' });
 const slots = (status1.body?.hooks ?? []).filter((h) => hooked.includes(h.function));
 const installedOk = slots.length === FUNCS.length && slots.every((h) => h.installed === true);
@@ -67,7 +84,7 @@ console.log(`hooks: ${slots.map((h) => h.function).join(',')} installed=${instal
 // (1b) baseline cursor so the event assertions below cannot be satisfied by events from an
 // EARLIER run (the capture store keeps history).
 const preList = await (await fetch(`${base}/api/captures?session=${encodeURIComponent(session)}&limit=1`)).json().catch(() => null);
-if (!preList || !Array.isArray(preList.captures)) fail('could not read the capture baseline (the cursor would silently become 0 and history could satisfy the event assertions)');
+if (!preList || !Array.isArray(preList.captures)) await fail('could not read the capture baseline (the cursor would silently become 0 and history could satisfy the event assertions)');
 const cursor = Math.max(0, ...(preList.captures ?? []).map((c) => Number(c.id ?? 0)));
 console.log(`event baseline cursor=${cursor}`);
 
@@ -76,10 +93,10 @@ const call = await post('/api/java/call', { session, className: 'com.adh.sandbox
 const calls = Number(call.body?.result?.result ?? -1);
 if (calls === 0) {
   console.log('fixture unavailable (HeapProbe.sConfig not initialized) - is the sandbox activity open?');
-  for (const f of hooked) await post('/api/jni/env_hook', { session, action: 'uninstall', function: f }).catch(() => null);
-  skip('sandbox fixture not initialized');
+  for (const f of hooked) await uninstallSlot(f);
+  await skip('sandbox fixture not initialized');
 }
-if (calls < 0) fail('java_call of the field probe failed: ' + String(call.body?.error ?? call.status), call.body);
+if (calls < 0) await fail('java_call of the field probe failed: ' + String(call.body?.error ?? call.status), call.body);
 await sleep(1500);   // let the capture loop drain
 
 // (3) the events must name the hooked accessors and carry the field id
@@ -122,9 +139,9 @@ if (!patternUnhookOk) console.log('pattern unhook did not report ok');
 // be satisfied by a fixture that was already 42.
 const beforeOv = await post('/api/object/inspect', { session, className: 'com.adh.sandbox.HeapProbe', field: 'sConfig' });
 const counterBefore = Object.fromEntries((beforeOv.body?.fields ?? []).map((f) => [f.name, f.value])).counter;
-if (counterBefore !== '7') fail(`the fixture should hold counter=7 before the override, saw ${counterBefore}`, beforeOv.body);
+if (counterBefore !== '7') await fail(`the fixture should hold counter=7 before the override, saw ${counterBefore}`, beforeOv.body);
 const ovHook = await post('/api/jni/env_hook', { session, action: 'install', function: 'SetIntField', setValue: '42' });
-if (ovHook.body?.ok !== true) fail('SetIntField override install failed: ' + String(ovHook.body?.error ?? ovHook.status), ovHook.body);
+if (ovHook.body?.ok !== true) await fail('SetIntField override install failed: ' + String(ovHook.body?.error ?? ovHook.status), ovHook.body);
 const ovCall = await post('/api/java/call', { session, className: 'com.adh.sandbox.Detection', method: 'jniFieldProbe', params: '', args: [] });
 const ovRead = await post('/api/object/inspect', { session, className: 'com.adh.sandbox.HeapProbe', field: 'sConfig' });
 const counterNow = Object.fromEntries((ovRead.body?.fields ?? []).map((f) => [f.name, f.value])).counter;
@@ -150,18 +167,13 @@ const rewriteDigestOk = Number(ovDigest.body?.rewrittenSamples ?? 0) >= 1
 // buffers and hands a native payload to Java as a direct ByteBuffer, so each hooked entry must
 // produce an event whose detail carries what the wrapper promised (text preview, address, capacity).
 const STR_FUNCS = ['GetStringRegion', 'GetStringUTFRegion', 'GetStringChars', 'ReleaseStringChars', 'NewDirectByteBuffer', 'GetDirectBufferAddress', 'GetDirectBufferCapacity'];
-const strInstalled = [];
-for (const f of STR_FUNCS) {
-  const r = await post('/api/jni/env_hook', { session, action: 'install', function: f });
-  if (r.body?.ok !== true) fail(`install of ${f} failed: ` + String(r.body?.error ?? r.status), r.body);
-  strInstalled.push(f);
-}
+for (const f of STR_FUNCS) await installSlot(f);
 const preStr = await (await fetch(`${base}/api/captures?session=${encodeURIComponent(session)}&limit=1`)).json().catch(() => null);
-if (!preStr || !Array.isArray(preStr.captures)) fail('could not read the capture baseline for the string section');
+if (!preStr || !Array.isArray(preStr.captures)) await fail('could not read the capture baseline for the string section');
 const strCursor = Math.max(0, ...(preStr.captures ?? []).map((c) => Number(c.id ?? 0)));
 const strCall = await post('/api/java/call', { session, className: 'com.adh.sandbox.Detection', method: 'jniStringProbe', params: '', args: [] });
 const strCalls = Number(strCall.body?.result?.result ?? -1);
-if (strCalls < 0) fail('java_call of jniStringProbe failed: ' + String(strCall.body?.error ?? strCall.status), strCall.body);
+if (strCalls < 0) await fail('java_call of jniStringProbe failed: ' + String(strCall.body?.error ?? strCall.status), strCall.body);
 await sleep(1500);
 const strList = await (await fetch(`${base}/api/captures?session=${encodeURIComponent(session)}&limit=400`)).json().catch(() => ({}));
 const strSeen = new Map();
@@ -187,7 +199,7 @@ const bufferOk = /address=0x/.test(String(strSeen.get('GetDirectBufferAddress') 
   && /capacity=64/.test(String(strSeen.get('NewDirectByteBuffer') ?? ''))
   && /capacity=64/.test(String(strSeen.get('GetDirectBufferCapacity') ?? ''));
 const strUnhooked = [];
-for (const f of STR_FUNCS) strUnhooked.push((await post('/api/jni/env_hook', { session, action: 'uninstall', function: f })).body?.ok === true);
+for (const f of STR_FUNCS) strUnhooked.push(await uninstallSlot(f));
 const stringProbeOk = strCall.body?.ok === true && strCalls >= STR_FUNCS.length && strMissing.length === 0 && textOk && bufferOk && strUnhooked.every(Boolean);
 if (strMissing.length) console.log('no event for: ' + strMissing.join(', '));
 if (!textOk) console.log('at least one string reader did not carry the copied text preview');
@@ -200,18 +212,18 @@ const REGION_FUNCS = ['GetBooleanArrayRegion', 'SetBooleanArrayRegion', 'GetChar
   'GetShortArrayRegion', 'SetShortArrayRegion', 'GetIntArrayRegion', 'SetIntArrayRegion',
   'GetLongArrayRegion', 'SetLongArrayRegion', 'GetFloatArrayRegion', 'SetFloatArrayRegion',
   'GetDoubleArrayRegion', 'SetDoubleArrayRegion'];
-const regionInstalled = [];
-for (const f of REGION_FUNCS) {
-  const r = await post('/api/jni/env_hook', { session, action: 'install', function: f });
-  if (r.body?.ok !== true) fail(`install of ${f} failed: ` + String(r.body?.error ?? r.status), r.body);
-  regionInstalled.push(f);
-}
+// Capability precondition, like the field section: a payload from before v4.70 cannot be judged by
+// this section, so it SKIPs instead of turning "old agent" into a FAIL.
+if (REGION_FUNCS.some((f) => !known.has(f))) await skip('agent predates the array-region slots (redeploy the agent)');
+for (const f of REGION_FUNCS) await installSlot(f);
 const preRegion = await (await fetch(`${base}/api/captures?session=${encodeURIComponent(session)}&limit=1`)).json().catch(() => null);
-if (!preRegion || !Array.isArray(preRegion.captures)) fail('could not read the capture baseline for the array-region section');
+if (!preRegion || !Array.isArray(preRegion.captures)) await fail('could not read the capture baseline for the array-region section');
 const regionCursor = Math.max(0, ...(preRegion.captures ?? []).map((c) => Number(c.id ?? 0)));
 const regionCall = await post('/api/java/call', { session, className: 'com.adh.sandbox.Detection', method: 'jniArrayRegionProbe', params: '', args: [] });
 const regionCode = Number(regionCall.body?.result?.result ?? -1);
-if (regionCode !== 0xAD707F) fail(`jniArrayRegionProbe returned ${regionCode}, expected 0xAD707F (all seven families round-tripped through the hooked entries)`);
+// A missing fixture is an old APK, not a broken hook: the script header promises SKIP for that.
+if (regionCall.body?.ok !== true) await skip('jniArrayRegionProbe unavailable (old APK without the v4.70 fixture?)');
+if (regionCode !== 0xAD707F) await fail(`jniArrayRegionProbe returned ${regionCode}, expected 0xAD707F (all seven families round-tripped through the hooked entries)`);
 await sleep(1500);
 const regionList = await (await fetch(`${base}/api/captures?session=${encodeURIComponent(session)}&limit=600`)).json().catch(() => ({}));
 const regionSeen = new Map();
@@ -243,16 +255,19 @@ for (const [type, preview] of Object.entries(regionExpect)) {
     if (!(v.includes('start=0') && v.includes('len=4') && v.includes(`first=[${preview}]`))) regionBad.push(f);
   }
 }
-console.log(`  array-region events: ${REGION_FUNCS.length - regionMissing.length}/${REGION_FUNCS.length} present, ${regionBad.length} with a wrong start/len/preview`);
+// A flooded ring would turn "missing event" into a mystery; the health block says whether the
+// daemon dropped anything during this window instead of letting the operator guess.
+const regionHealth = regionList.health ?? {};
+console.log(`  array-region events: ${REGION_FUNCS.length - regionMissing.length}/${REGION_FUNCS.length} present, ${regionBad.length} with a wrong start/len/preview (capture health: dropped=${regionHealth.dropped ?? '?'} backlog=${regionHealth.backlog ?? '?'} complete=${regionHealth.complete ?? '?'})`);
 const regionUnhooked = [];
-for (const f of REGION_FUNCS) regionUnhooked.push((await post('/api/jni/env_hook', { session, action: 'uninstall', function: f })).body?.ok === true);
-const arrayProbeOk = regionCall.body?.ok === true && regionMissing.length === 0 && regionBad.length === 0 && regionUnhooked.every(Boolean);
+for (const f of REGION_FUNCS) regionUnhooked.push(await uninstallSlot(f));
+const arrayProbeOk = regionMissing.length === 0 && regionBad.length === 0 && regionUnhooked.every(Boolean);
 if (regionMissing.length) console.log('no event for: ' + regionMissing.join(', '));
 if (regionBad.length) console.log('start/len/preview mismatch for: ' + regionBad.join(', '));
 
 // (4) unhook, table restored, process alive
 const unhooked = [];
-for (const f of hooked) unhooked.push((await post('/api/jni/env_hook', { session, action: 'uninstall', function: f })).body?.ok === true);
+for (const f of hooked) unhooked.push(await uninstallSlot(f));
 const status2 = await post('/api/jni/env_hook', { session, action: 'status' });
 const restored = (status2.body?.hooks ?? []).filter((h) => hooked.includes(h.function))
   .every((h) => h.installed !== true && (!h.original || h.original === '0x0' || h.slotValue === h.original));

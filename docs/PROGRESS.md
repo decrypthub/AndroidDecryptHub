@@ -15,6 +15,15 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.73 评审收口：v4.70/v4.71 的 1 条 P1 + 5 条 P2 全部落地（2026-09-19，host 验收 PASS）**：评审独立复跑了 v90 的索引机检并确认 14 条签名证明、四处派发点与 `_Static_assert` 齐全（无 P0/P1 落在 agent 正确性上），报出的问题集中在"验证脚本自己会不会骗人"。
+      · **P1（验证脚本）**：v91 的 `fail()` 直接 `process.exit`，而数组区域段的三个硬失败点都在逐个卸载之前——失败时目标进程的 JNIEnv 表**留着被改写的槽位**，后续脚本会看到多出来的事件。现在所有安装都记进 `installedSlots`，`fail`/`skip` 出口统一 `uninstallAll()`，各段落装卸走 `installSlot`/`uninstallSlot`（15 处终态调用全部 `await`）。
+      · **P2-1（agent）**：`Get/Set<T>ArrayRegion(arr, 0, 0, NULL)` 这类**零长度无缓冲**的成功调用被记成 `ok=false`。判据改成 `!failed && (buf != NULL || len == 0)`。
+      · **P2-2（验证脚本）**：数组区域段缺能力前置检查，遇到旧 agent/旧 APK 会 FAIL 而不是脚本头承诺的 SKIP；现在先查 status 里的槽位名单（旧载荷 → SKIP），夹具方法不存在（`java_call` 非 ok）→ SKIP，只有"夹具跑通但返回码不对"才 FAIL。
+      · **P2-3（可诊断性）**：事件窗口加印 `capture health: dropped/backlog/complete`，"事件缺失"与"环被冲掉"不再只能靠猜。
+      · **P2-4（夹具）**：`jniArrayRegionProbe` 只在函数末尾查异常——`New*Array` 分配失败时后面几段会带着挂起异常继续调 JNI（CheckJNI 下是 abort）。现在每段 `!a` 立即清异常并返回已得 bits（少一位就不是 `0xAD707F`）。
+      · **P2-5（门禁）**：v90 的字段访问器清单从"非空"改成**必须恰好 36 条**（改动列表就得显式改这个数）。
+      · 顺带：MCP `jni_env_hook` 的描述补齐到当前能力面（字符串拷贝/pin、直接缓冲、异常流、`GetJavaVM`、引用生命周期、类型自省、monitor/弱引用、数组 region 与数组元素族），并写明 `*ArrayRegion`/`*ArrayElements` 这类后缀通配。
+      · 验收：agent 零告警重建（956 KB）；`build_detect.sh` 零告警；v90 PASS（172/229，75%）；v91 `bash -n` + 内嵌 JS `node --check`；daemon `node --test` 151 条；host 全量门禁 **31 PASS / 0 FAIL / 84 SKIP**（115 脚本）。
 - [~] **v4.72 JNIEnv 数组元素族（pin + 写回）全入表（2026-09-19，host 验收 PASS；真机待做）**：v4.70 补的是"整段 region 搬运"，这一批补**指针族**——`Get<Type>ArrayElements` 直接把数组元素指针交给 native（可能是真指针也可能是副本，`isCopy` 说了算），`Release<Type>ArrayElements` 才是写入真正落地的地方，而 `mode` 决定落还是不落（`JNI_ABORT` = 目标的修改被丢掉）。这是"谁改了数组、改的东西有没有生效"最直接的信号。
       · 新增 14 槽（覆盖率 **158/229 → 172/229 = 75%**）：`Get/Release{Boolean,Char,Short,Int,Long,Float,Double}ArrayElements`（`Byte` 那一对在 v4.19 已覆盖）。事件 `array=.. len=.. elements=.. isCopy=.. first=[…]`；Release 事件额外给 `mode=0(copyback)|1(commit)|2(abort)`。
       · 两条纪律：**长度只在不处于挂起异常时**用 `GetArrayLength` 取（有挂起异常还调 JNI 是非法用法，CheckJNI 会 abort——v4.69 的老教训），预览严格按取回的长度截断到 4 个元素，不会越界读；Release 的预览在**调用原函数之前**读（缓冲区此刻仍有效），所以 `abort` 的事件里显示的正是"被丢弃的那些值"，不是猜测。
