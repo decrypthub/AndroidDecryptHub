@@ -82,6 +82,10 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
       const sid = pickSid(session);
       if (!sid || !action) return send(400, { error: 'need session, action' });
       if (mode === 'inline' && addr && confirm !== true) return send(400, { error: 'native_hook inline addr requires confirm:true' });
+      if (mode === 'inline' && addr) {
+        const guard = await assertCallableAddress(sid, String(addr));
+        if (!guard.ok) return send(400, { error: guard.error });
+      }
       const throttle = parseThrottleMs(throttleMs);
       if ('error' in throttle) return send(400, { error: throttle.error });
       try {

@@ -15,6 +15,10 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.98 地址守卫再补一处：`native_hook mode=inline addr`（2026-09-19，host 验收 PASS）**：v4.97 把 `native_call` 的守卫收敛成共享函数后，同一类"拿裸地址对目标下手"的路径还有一条——`native_hook` 的 `mode=inline` + `addr`（在未映射/不可执行地址上装 inline hook，同样崩在目标里）。
+      · `mcp.ts` 与 `/api/native/hook` 路由都先过 `assertCallableAddress()`；守卫文案改为中性（"…refusing to use it as a call or hook target"，同一函数服务两种动作）。
+      · 顺带确认 `jni_onload action=call` 只接受 **module**（内部解析符号），不是裸地址，因此不需要同一守卫——已核对 schema。
+      · 验收：`mcp.ts`/`routes_runtime.ts` 均可正常 import（78 工具）；daemon `node --test` 157；host 全量门禁 **32 PASS / 0 FAIL / 84 SKIP**（116 脚本）。
 - [~] **v4.97 `native_call` 的地址守卫收敛为一份（MCP 与 REST 不再分叉）（2026-09-19，host 验收 PASS）**：v4.94 把活体校验加在 **MCP handler** 上，但 REST 路由 `/api/native/call` 直接透传 agent——而设备脚本走的正是 REST，所以那条路当时等于没校验（和早先"REST 漏参数"是同一类分叉）。
       · 新增共享 `assertCallableAddress(sid, addr)`（memory.ts）：空地址=走 module+symbol 放行；否则取 maps → 未映射/不可执行分别给出明确错误；`mcp.ts` 与 `routes_runtime.ts` 都调用它。两个入口现在共用一份判断，改一处不会漏另一处。
       · 顺带核对：`routes_runtime.ts` 与 `mcp.ts` 均可正常 import（78 个 MCP 工具）；daemon `node --test` **157**。

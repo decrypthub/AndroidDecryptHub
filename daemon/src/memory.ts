@@ -49,7 +49,7 @@ export async function assertCallableAddress(sid: string, addr: string): Promise<
   if (!maps.ok) throw new Error(maps.error ?? 'maps command failed');
   const cls = classifyAddress(maps.regions ?? [], trimmed);
   if (!cls.mapped) return { ok: false, error: `addr ${trimmed} is not in any mapped region of the target (stale or wrong)` };
-  if (!cls.executable) return { ok: false, error: `addr ${trimmed} is mapped${cls.path ? ' (' + cls.path + ')' : ''} but not executable - refusing to call it` };
+  if (!cls.executable) return { ok: false, error: `addr ${trimmed} is mapped${cls.path ? ' (' + cls.path + ')' : ''} but not executable - refusing to use it as a call or hook target` };
   return { ok: true };
 }
 
