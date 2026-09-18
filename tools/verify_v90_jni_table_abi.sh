@@ -71,8 +71,12 @@ for (const m of src.matchAll(/X\(\s*([A-Za-z0-9_]+)\s*,\s*[^,]+,\s*[^,]+,\s*[^,]
 for (const m of src.matchAll(/X\(\s*([A-Za-z0-9_]+)\s*,\s*[^,]+,\s*[^,]+,\s*ENV_SLOT_[A-Za-z0-9_]+\s*,\s*(\d+)\s*\)/g)) {
   if (!claimed.has(m[1])) addFamily(m[1], Number(m[2]));
 }
-// fixed slots declared for installation: X("GetStringUTFChars") ...
-const fixed = [...src.matchAll(/X\("([A-Za-z0-9_]+)"\)/g)].map((m) => m[1]);
+// Fixed slots: they live in their own list macro (ADH_FIXED_SLOT_LIST, unquoted names) that now
+// drives the enum values AND the installable-name table, so parsing that list is also checking
+// that the agent has one source of truth for them.
+const fixedDef = src.match(/#define ADH_FIXED_SLOT_LIST\(X\)([\s\S]*?)\n#define /);
+const fixed = fixedDef ? [...fixedDef[1].matchAll(/\bX\(([A-Za-z0-9_]+)\)/g)].map((m) => m[1]) : [];
+if (fixed.length !== 99) problems.push(`expected 99 fixed slots in ADH_FIXED_SLOT_LIST, found ${fixed.length}`);
 // field accessors live in their own list macro (ADH_FIELD_SLOT_LIST, v4.55) and are installed by
 // name as well, so they belong in the "what can we install" inventory - and in the spec-index check.
 const fieldDef = src.match(/#define ADH_FIELD_SLOT_LIST\(X\)([\s\S]*?)\n#define /);

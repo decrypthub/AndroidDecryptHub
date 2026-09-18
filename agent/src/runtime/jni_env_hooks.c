@@ -63,139 +63,43 @@
 #define ADH_FIELD_SLOT_CASE(name) case ENV_SLOT_##name: return (void **)(uintptr_t)&table->name;
 #define ADH_FIELD_WRAPPER_CASE(name) case ENV_SLOT_##name: return (void *)&name##_wrapper;
 
+// The fixed slots: ONE list drives the enum values, the installable-name table and the name
+// mapping the layout self-check compares them against, all in the same order. Adding a slot in
+// one place and forgetting another can no longer produce a hook that patches the neighbouring
+// entry (the failure the field family lived with). Per-version history: docs/PROGRESS.md.
+#define ADH_FIXED_SLOT_LIST(X) \
+    X(GetStringUTFChars) X(FindClass) X(GetMethodID) X(GetStaticMethodID) \
+    X(NewStringUTF) X(GetFieldID) X(GetStaticFieldID) X(GetByteArrayElements) \
+    X(SetByteArrayRegion) X(ReleaseByteArrayElements) X(GetByteArrayRegion) X(GetBooleanArrayElements) \
+    X(ReleaseBooleanArrayElements) X(GetCharArrayElements) X(ReleaseCharArrayElements) X(GetShortArrayElements) \
+    X(ReleaseShortArrayElements) X(GetIntArrayElements) X(ReleaseIntArrayElements) X(GetLongArrayElements) \
+    X(ReleaseLongArrayElements) X(GetFloatArrayElements) X(ReleaseFloatArrayElements) X(GetDoubleArrayElements) \
+    X(ReleaseDoubleArrayElements) X(GetArrayLength) X(NewObjectArray) X(GetObjectArrayElement) \
+    X(SetObjectArrayElement) X(AllocObject) X(NewBooleanArray) X(NewByteArray) \
+    X(NewCharArray) X(NewShortArray) X(NewIntArray) X(NewLongArray) \
+    X(NewFloatArray) X(NewDoubleArray) X(GetPrimitiveArrayCritical) X(ReleasePrimitiveArrayCritical) \
+    X(GetStringRegion) X(GetStringUTFRegion) X(GetStringChars) X(ReleaseStringChars) \
+    X(NewString) X(GetStringLength) X(GetStringUTFLength) X(ReleaseStringUTFChars) \
+    X(GetStringCritical) X(ReleaseStringCritical) X(FromReflectedMethod) X(FromReflectedField) \
+    X(ToReflectedMethod) X(ToReflectedField) X(UnregisterNatives) X(FatalError) \
+    X(ExceptionCheck) X(Throw) X(ThrowNew) X(ExceptionOccurred) \
+    X(ExceptionDescribe) X(ExceptionClear) X(GetJavaVM) X(PushLocalFrame) \
+    X(PopLocalFrame) X(NewLocalRef) X(DeleteLocalRef) X(NewGlobalRef) \
+    X(DeleteGlobalRef) X(IsSameObject) X(EnsureLocalCapacity) X(GetVersion) \
+    X(DefineClass) X(GetSuperclass) X(IsAssignableFrom) X(GetObjectClass) \
+    X(IsInstanceOf) X(MonitorEnter) X(MonitorExit) X(NewWeakGlobalRef) \
+    X(DeleteWeakGlobalRef) X(GetObjectRefType) X(GetBooleanArrayRegion) X(SetBooleanArrayRegion) \
+    X(GetCharArrayRegion) X(SetCharArrayRegion) X(GetShortArrayRegion) X(SetShortArrayRegion) \
+    X(GetIntArrayRegion) X(SetIntArrayRegion) X(GetLongArrayRegion) X(SetLongArrayRegion) \
+    X(GetFloatArrayRegion) X(SetFloatArrayRegion) X(GetDoubleArrayRegion) X(SetDoubleArrayRegion) \
+    X(NewDirectByteBuffer) X(GetDirectBufferAddress) X(GetDirectBufferCapacity)
+
+#define ADH_FIXED_ENUM_ENTRY(name) ENV_SLOT_##name,
+
 enum {
-    ENV_SLOT_GetStringUTFChars = 0,
-    ENV_SLOT_FindClass,
-    ENV_SLOT_GetMethodID,
-    ENV_SLOT_GetStaticMethodID,
-    ENV_SLOT_NewStringUTF,
-    ENV_SLOT_GetFieldID,
-    ENV_SLOT_GetStaticFieldID,
-    ENV_SLOT_GetByteArrayElements,
-    ENV_SLOT_SetByteArrayRegion,
-    ENV_SLOT_ReleaseByteArrayElements,
-    ENV_SLOT_GetByteArrayRegion,
-    // v4.72: the rest of the Get/Release<Type>ArrayElements family (Byte landed in v4.19).
-    // Get pins an array's elements - isCopy says whether the target got a private copy, which
-    // decides whether a later Release has to copy back - and Release is where those writes land,
-    // or get thrown away (JNI_ABORT).
-    ENV_SLOT_GetBooleanArrayElements,
-    ENV_SLOT_ReleaseBooleanArrayElements,
-    ENV_SLOT_GetCharArrayElements,
-    ENV_SLOT_ReleaseCharArrayElements,
-    ENV_SLOT_GetShortArrayElements,
-    ENV_SLOT_ReleaseShortArrayElements,
-    ENV_SLOT_GetIntArrayElements,
-    ENV_SLOT_ReleaseIntArrayElements,
-    ENV_SLOT_GetLongArrayElements,
-    ENV_SLOT_ReleaseLongArrayElements,
-    ENV_SLOT_GetFloatArrayElements,
-    ENV_SLOT_ReleaseFloatArrayElements,
-    ENV_SLOT_GetDoubleArrayElements,
-    ENV_SLOT_ReleaseDoubleArrayElements,
-    // v4.75: array CREATION (the eight primitive New*Array plus NewObjectArray), array length,
-    // object-array element access and AllocObject (allocate without running a constructor).
-    ENV_SLOT_AllocObject,
-    ENV_SLOT_GetArrayLength,
-    ENV_SLOT_NewObjectArray,
-    ENV_SLOT_GetObjectArrayElement,
-    ENV_SLOT_SetObjectArrayElement,
-    ENV_SLOT_NewBooleanArray,
-    ENV_SLOT_NewByteArray,
-    ENV_SLOT_NewCharArray,
-    ENV_SLOT_NewShortArray,
-    ENV_SLOT_NewIntArray,
-    ENV_SLOT_NewLongArray,
-    ENV_SLOT_NewFloatArray,
-    ENV_SLOT_NewDoubleArray,
-    ENV_SLOT_GetPrimitiveArrayCritical,
-    ENV_SLOT_ReleasePrimitiveArrayCritical,
-    // v4.63: the "native pulls Java data into its own buffer / hands Java a native buffer" entries.
-    // Fingerprint code reads Java strings into native memory, and native crypto passes payloads to
-    // Java through a direct ByteBuffer - both were invisible.
-    ENV_SLOT_GetStringRegion,
-    ENV_SLOT_GetStringUTFRegion,
-    // v4.65: the "pin the Java string, then release it" pair - the other common way native code
-    // reads a Java string (a direct pointer instead of a copy).
-    ENV_SLOT_GetStringChars,
-    ENV_SLOT_ReleaseStringChars,
-    // v4.77: the rest of the string family - building a string from UTF-16, the two length
-    // queries, releasing a UTF-8 buffer, and the "critical" pair (a pinned pointer that must be
-    // released before any other JNI call).
-    ENV_SLOT_NewString,
-    ENV_SLOT_GetStringLength,
-    ENV_SLOT_GetStringUTFLength,
-    ENV_SLOT_ReleaseStringUTFChars,
-    ENV_SLOT_GetStringCritical,
-    ENV_SLOT_ReleaseStringCritical,
-    // v4.78: the reflection bridge and the un-register side of native binding. From* turn a
-    // java.lang.reflect member into a JNI id (a known way to keep a call site out of the
-    // GetMethodID/GetFieldID traffic), To* go the other way, and UnregisterNatives is the
-    // teardown half of RegisterNatives.
-    ENV_SLOT_FromReflectedMethod,
-    ENV_SLOT_FromReflectedField,
-    ENV_SLOT_ToReflectedMethod,
-    ENV_SLOT_ToReflectedField,
-    ENV_SLOT_UnregisterNatives,
-    // v4.79: the last two entries with a reason to exist. FatalError never returns, so its
-    // event is written BEFORE the original runs; ExceptionCheck is the hottest entry there is,
-    // which is exactly why ADH's own checks no longer travel through the table.
-    ENV_SLOT_FatalError,
-    ENV_SLOT_ExceptionCheck,
-    // v4.67: exception flow + VM handle. Anti-analysis code uses exceptions as control flow, so
-    // "which exception was raised and who cleared it" is a real signal; GetJavaVM hands the target
-    // the VM handle it would need for anything more invasive.
-    ENV_SLOT_Throw,
-    ENV_SLOT_ThrowNew,
-    ENV_SLOT_ExceptionOccurred,
-    ENV_SLOT_ExceptionDescribe,
-    ENV_SLOT_ExceptionClear,
-    ENV_SLOT_GetJavaVM,
-    // v4.68: reference lifecycle. Which references the target creates and frees (and whether it
-    // leaks a global ref, or keeps a local frame open) is a concrete analysis signal - and these are
-    // the entries every JNI library touches.
-    ENV_SLOT_PushLocalFrame,
-    ENV_SLOT_PopLocalFrame,
-    ENV_SLOT_NewLocalRef,
-    ENV_SLOT_DeleteLocalRef,
-    ENV_SLOT_NewGlobalRef,
-    ENV_SLOT_DeleteGlobalRef,
-    ENV_SLOT_IsSameObject,
-    ENV_SLOT_EnsureLocalCapacity,
-    // v4.69: type introspection, monitors, weak globals and GetVersion. Anti-tamper code asks type
-    // questions (superclass / assignable / instance-of / ref type) and takes monitors; a weak-global
-    // pair plus GetVersion complete the "what does the target ask the VM" picture.
-    ENV_SLOT_GetVersion,
-    ENV_SLOT_DefineClass,
-    ENV_SLOT_GetSuperclass,
-    ENV_SLOT_IsAssignableFrom,
-    ENV_SLOT_GetObjectClass,
-    ENV_SLOT_IsInstanceOf,
-    ENV_SLOT_MonitorEnter,
-    ENV_SLOT_MonitorExit,
-    ENV_SLOT_NewWeakGlobalRef,
-    ENV_SLOT_DeleteWeakGlobalRef,
-    ENV_SLOT_GetObjectRefType,
-    // v4.70: the rest of the array-region family (Byte was already hooked). These are the bulk
-    // data movement entries: Get*ArrayRegion lifts an array into native memory, Set* writes one
-    // back, and the event carries a bounded preview of the first elements.
-    ENV_SLOT_GetBooleanArrayRegion,
-    ENV_SLOT_SetBooleanArrayRegion,
-    ENV_SLOT_GetCharArrayRegion,
-    ENV_SLOT_SetCharArrayRegion,
-    ENV_SLOT_GetShortArrayRegion,
-    ENV_SLOT_SetShortArrayRegion,
-    ENV_SLOT_GetIntArrayRegion,
-    ENV_SLOT_SetIntArrayRegion,
-    ENV_SLOT_GetLongArrayRegion,
-    ENV_SLOT_SetLongArrayRegion,
-    ENV_SLOT_GetFloatArrayRegion,
-    ENV_SLOT_SetFloatArrayRegion,
-    ENV_SLOT_GetDoubleArrayRegion,
-    ENV_SLOT_SetDoubleArrayRegion,
-    ENV_SLOT_NewDirectByteBuffer,
-    ENV_SLOT_GetDirectBufferAddress,
-    ENV_SLOT_GetDirectBufferCapacity,
+    // The fixed slots, in table order, straight from ADH_FIXED_SLOT_LIST: the enum values ARE the
+    // table indices, so deriving both from one list is what keeps name lookup and dispatch aligned.
+    ADH_FIXED_SLOT_LIST(ADH_FIXED_ENUM_ENTRY)
     ENV_FIXED_SLOTS,
 
     ENV_SLOT_CallObjectMethod = ENV_FIXED_SLOTS,
@@ -261,57 +165,6 @@ struct EnvHookSlot {
     double override_d;
 };
 
-#define ADH_FIXED_SLOT_INITS(X) \
-    X("GetStringUTFChars") X("FindClass") X("GetMethodID") X("GetStaticMethodID") \
-    X("NewStringUTF") X("GetFieldID") X("GetStaticFieldID") X("GetByteArrayElements") \
-    X("SetByteArrayRegion") X("ReleaseByteArrayElements") X("GetByteArrayRegion") \
-    X("GetBooleanArrayElements") X("ReleaseBooleanArrayElements") \
-    X("GetCharArrayElements") X("ReleaseCharArrayElements") \
-    X("GetShortArrayElements") X("ReleaseShortArrayElements") \
-    X("GetIntArrayElements") X("ReleaseIntArrayElements") \
-    X("GetLongArrayElements") X("ReleaseLongArrayElements") \
-    X("GetFloatArrayElements") X("ReleaseFloatArrayElements") \
-    X("GetDoubleArrayElements") X("ReleaseDoubleArrayElements") \
-    X("GetArrayLength") X("NewObjectArray") \
-    X("GetObjectArrayElement") X("SetObjectArrayElement") X("AllocObject") \
-    X("NewBooleanArray") \
-    X("NewByteArray") \
-    X("NewCharArray") \
-    X("NewShortArray") \
-    X("NewIntArray") \
-    X("NewLongArray") \
-    X("NewFloatArray") \
-    X("NewDoubleArray") \
-    X("GetPrimitiveArrayCritical") X("ReleasePrimitiveArrayCritical") \
-    X("GetStringRegion") X("GetStringUTFRegion") X("GetStringChars") X("ReleaseStringChars") \
-    X("NewString") X("GetStringLength") X("GetStringUTFLength") X("ReleaseStringUTFChars") \
-    X("GetStringCritical") X("ReleaseStringCritical") \
-    X("FromReflectedMethod") X("FromReflectedField") X("ToReflectedMethod") X("ToReflectedField") \
-    X("UnregisterNatives") \
-    X("FatalError") X("ExceptionCheck") \
-    X("Throw") X("ThrowNew") X("ExceptionOccurred") X("ExceptionDescribe") X("ExceptionClear") \
-    X("GetJavaVM") X("PushLocalFrame") X("PopLocalFrame") X("NewLocalRef") X("DeleteLocalRef") \
-    X("NewGlobalRef") X("DeleteGlobalRef") X("IsSameObject") X("EnsureLocalCapacity") \
-    X("GetVersion") X("DefineClass") X("GetSuperclass") X("IsAssignableFrom") X("GetObjectClass") \
-    X("IsInstanceOf") X("MonitorEnter") X("MonitorExit") X("NewWeakGlobalRef") \
-    X("DeleteWeakGlobalRef") X("GetObjectRefType") \
-    X("GetBooleanArrayRegion") \
-    X("SetBooleanArrayRegion") \
-    X("GetCharArrayRegion") \
-    X("SetCharArrayRegion") \
-    X("GetShortArrayRegion") \
-    X("SetShortArrayRegion") \
-    X("GetIntArrayRegion") \
-    X("SetIntArrayRegion") \
-    X("GetLongArrayRegion") \
-    X("SetLongArrayRegion") \
-    X("GetFloatArrayRegion") \
-    X("SetFloatArrayRegion") \
-    X("GetDoubleArrayRegion") \
-    X("SetDoubleArrayRegion") \
-    X("NewDirectByteBuffer") \
-    X("GetDirectBufferAddress") X("GetDirectBufferCapacity")
-
 #define ADH_CALL_VALUE_FAMILIES(X) \
     X(CallObjectMethod,        jobject,  jobject, ADH_MEMBER_INSTANCE, ENV_SLOT_CallObjectMethod,        34) \
     X(CallBooleanMethod,       jboolean, jobject, ADH_MEMBER_INSTANCE, ENV_SLOT_CallBooleanMethod,       37) \
@@ -355,6 +208,7 @@ struct EnvHookSlot {
     X(CallNonvirtualVoidMethod, jobject, ADH_MEMBER_INSTANCE, ENV_SLOT_CallNonvirtualVoidMethod, 91)
 
 #define ADH_SLOT_INIT(name) { name, NULL, NULL, 0, 0, 0, 0, "", 0, 0, 0.0 },
+#define ADH_FIXED_INIT(name) ADH_SLOT_INIT(#name)
 #define ADH_CALL_INITS_3(name, ret, tgt, kind, base) \
     ADH_SLOT_INIT(#name) ADH_SLOT_INIT(#name "V") ADH_SLOT_INIT(#name "A")
 #define ADH_CALL_INITS(name, ret, tgt, kind, base, spec) ADH_CALL_INITS_3(name, ret, tgt, kind, base)
@@ -363,7 +217,7 @@ struct EnvHookSlot {
 #define ADH_CALLNV_VOID_INITS(name, tgt, kind, base, spec) ADH_CALL_INITS_3(name, void, tgt, kind, base)
 
 static struct EnvHookSlot g_env_hooks[] = {
-    ADH_FIXED_SLOT_INITS(ADH_SLOT_INIT)
+    ADH_FIXED_SLOT_LIST(ADH_FIXED_INIT)
     ADH_CALL_VALUE_FAMILIES(ADH_CALL_INITS)
     ADH_CALL_VOID_FAMILIES(ADH_CALL_VOID_INITS)
     ADH_CALLNV_VALUE_FAMILIES(ADH_CALLNV_INITS)
@@ -1161,6 +1015,57 @@ ADH_CALL_VALUE_FAMILIES(ADH_CALL_ASSERT_VALUE)
 ADH_CALL_VOID_FAMILIES(ADH_CALL_ASSERT_VOID)
 ADH_CALLNV_VALUE_FAMILIES(ADH_CALL_ASSERT_VALUE)
 ADH_CALLNV_VOID_FAMILIES(ADH_CALL_ASSERT_VOID)
+
+// ---- layout self-check ----------------------------------------------------
+// The enum values ARE the table indices (name lookup returns a table position and every switch is
+// keyed by the enum), so a drift between the two installs the NEIGHBOURING entry while the reply
+// still shows the requested name - exactly how the field family looked installed for months. This
+// mapping is generated from the same lists that build the enum and the table; comparing the two
+// turns any such drift into a refusal instead of a hook on the wrong function.
+#define ADH_ENUM_NAME_CASE(name) case ENV_SLOT_##name: return #name;
+#define ADH_FAMILY_NAME_CASES(name, ret, tgt, kind, base, spec) \
+    case base: return #name; case base + 1: return #name "V"; case base + 2: return #name "A";
+#define ADH_FAMILY_VOID_NAME_CASES(name, tgt, kind, base, spec) \
+    ADH_FAMILY_NAME_CASES(name, void, tgt, kind, base, spec)
+
+static const char *env_slot_name(int index) {
+    switch (index) {
+        ADH_FIXED_SLOT_LIST(ADH_ENUM_NAME_CASE)
+        ADH_CALL_VALUE_FAMILIES(ADH_FAMILY_NAME_CASES)
+        ADH_CALL_VOID_FAMILIES(ADH_FAMILY_VOID_NAME_CASES)
+        ADH_CALLNV_VALUE_FAMILIES(ADH_FAMILY_NAME_CASES)
+        ADH_CALLNV_VOID_FAMILIES(ADH_FAMILY_VOID_NAME_CASES)
+        ADH_FIELD_SLOT_LIST(ADH_ENUM_NAME_CASE)
+        default: return NULL;
+    }
+}
+
+static int env_hook_layout_ok(char *error, size_t error_size) {
+    for (int i = 0; i < ENV_HOOK_MAX; i++) {
+        const char *expect = env_slot_name(i);
+        if (!expect || strcmp(expect, g_env_hooks[i].name) != 0) {
+            snprintf(error, error_size,
+                     "JNIEnv slot table layout mismatch at %d: the enum names it %s, the table has %s - refusing to patch anything",
+                     i, expect ? expect : "(none)", g_env_hooks[i].name);
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int g_env_layout_state = 0;              // 0 = unchecked, 1 = ok, -1 = mismatch
+static char g_env_layout_error[224];
+
+static int env_hook_layout_ready(char *error, size_t error_size) {
+    int state = __atomic_load_n(&g_env_layout_state, __ATOMIC_ACQUIRE);
+    if (state == 0) {
+        int ok = env_hook_layout_ok(g_env_layout_error, sizeof(g_env_layout_error));
+        __atomic_store_n(&g_env_layout_state, ok ? 1 : -1, __ATOMIC_RELEASE);
+        state = ok ? 1 : -1;
+    }
+    if (state < 0) { snprintf(error, error_size, "%s", g_env_layout_error); return 0; }
+    return 1;
+}
 
 
 // ---- field accessors ------------------------------------------------------
@@ -3199,6 +3104,15 @@ void adh_cmd_jni_env_hook(int fd, const char *id, const char *action, const char
     if (strcmp(action, "install") != 0 && strcmp(action, "uninstall") != 0) {
         send_env_result(fd, id, action, function, 0, 0, 0, "action must be install|uninstall|status");
         return;
+    }
+    // Never patch a table whose enum/name layout does not line up: the patch would land on the
+    // neighbouring entry while the reply still named the requested one.
+    {
+        char layout_error[224];
+        if (!env_hook_layout_ready(layout_error, sizeof(layout_error))) {
+            send_env_result(fd, id, action, function, 0, 0, 0, layout_error);
+            return;
+        }
     }
     if (!function || !function[0]) {
         send_env_result(fd, id, action, function, 0, 0, 0, "jni_env_hook requires function");
