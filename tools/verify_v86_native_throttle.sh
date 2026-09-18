@@ -34,9 +34,9 @@ const text = `${t.stdout ?? ''}${t.stderr ?? ''}`;
 const passed = Number(/pass (\d+)/.exec(text)?.[1] ?? -1);
 const failed = Number(/fail (\d+)/.exec(text)?.[1] ?? -1);
 if (t.status !== 0) problems.push(`throttle unit tests exited ${t.status}`);
-if (passed < 8) problems.push(`expected >=8 throttle unit tests, saw ${passed}`);
+if (passed < 12) problems.push(`expected >=12 throttle unit tests, saw ${passed}`);
 if (failed !== 0) problems.push(`throttle unit tests report ${failed} failures`);
-notes.push(`payload/clamp unit tests: pass=${passed} fail=${failed}`);
+notes.push(`payload/clamp/install-loop unit tests: pass=${passed} fail=${failed}`);
 
 let normalizeThrottleMs, nativeHookInstallPayload;
 try {
@@ -60,7 +60,7 @@ has(hdr, 'int throttle_ms, int *hook_id_out', 'native_hooks.h install signature'
 has(hdr, 'suppresses EVENTS ONLY', 'native_hooks.h must state that only the event is suppressed');
 
 const hooks = read('agent/src/hook/native_hooks.cpp');
-has(hooks, '#define ADH_NATIVE_THROTTLE_MAX_MS 60000', 'native_hooks.cpp ceiling');
+has(hooks, 'ADH_NATIVE_THROTTLE_MAX_MS', 'native_hooks.cpp must clamp with the shared ceiling');
 has(hooks, 'g_native_hook_throttled_total', 'native_hooks.cpp suppressed-hit total');
 has(hooks, '\\"throttled\\":%llu', 'native_hooks.cpp event must carry the suppressed delta');
 has(hooks, 'ctx.throttle_ms = effective_throttle_ms', 'native_hooks.cpp must store the clamped window');
@@ -76,16 +76,25 @@ before(hooks, 'const int throttle_ms = __atomic_load_n(&ctx.throttle_ms', 'char 
 const gate = hooks.slice(hooks.indexOf('const int throttle_ms = __atomic_load_n(&ctx.throttle_ms'), hooks.indexOf('char json[3072]'));
 if (!/return skip_original \? 1 : 0;/.test(gate)) problems.push('a suppressed hit must still answer skipOriginal for the site backend');
 if (!/fetch_add\(1, std::memory_order_relaxed\)/.test(gate)) problems.push('a suppressed hit must be counted, not dropped silently');
+// The per-event delta is the one subtle piece: load+store would let two concurrent emitters both
+// claim the same suppressed hits (the totals would still add up, the deltas would lie).
+has(hooks, 'exchange(total, std::memory_order_relaxed)', 'the suppressed delta must be taken with exchange');
+if (/g_native_hook_throttled_reported\[hook_id\]\.load/.test(hooks)) problems.push('the reported counter must never be read with a plain load');
 notes.push('agent: rewrite before gate, suppressed hits counted and answered');
 
 const main = read('agent/src/bootstrap/agent_main.c');
 has(main, 'json_get_num(line, "throttleMs")', 'agent_main.c must parse throttleMs');
-has(main, 'nthrottle > 60000', 'agent_main.c must clamp the window');
+has(main, 'ADH_NATIVE_THROTTLE_MAX_MS', 'agent_main.c must clamp with the shared ceiling');
+if (/nthrottle > 60000/.test(main)) problems.push('agent_main.c must not hardcode 60000 (it would drift from the header)');
+has(read('agent/src/hook/native_hooks.h'), '#define ADH_NATIVE_THROTTLE_MAX_MS 60000', 'the ceiling must be defined once, in the header');
 has(main, 'backtrace_flag, nthrottle_ms', 'agent_main.c must pass the window into cmd_native_hook');
 
 // ---- 3. host tools really send it ----
 has(read('daemon/src/native_hook_all.ts'), 'nativeHookInstallPayload(', 'native_hook_all must use the shared payload');
 has(read('daemon/src/syscall_watch.ts'), 'nativeHookInstallPayload(', 'syscall_watch must use the shared payload');
+// ...and the install loops must be the ones the unit tests drive (not a copy that quietly diverges).
+has(read('daemon/src/native_hook_all.ts'), 'installSymbolHooks(session, base, selected, opts)', 'native_hook_all must install through installSymbolHooks');
+has(read('daemon/src/syscall_watch.ts'), 'installSvcSiteHooks(sid, sites, opts.throttleMs)', 'syscall_watch must install through installSvcSiteHooks');
 has(read('daemon/src/native_hook_all.ts'), 'throttleMs,', 'native_hook_all response must echo the window');
 has(read('daemon/src/syscall_watch.ts'), 'throttleMs,', 'syscall_watch response must echo the window');
 has(read('daemon/src/http/routes_runtime.ts'), 'parseThrottleMs', 'REST routes must validate the window');

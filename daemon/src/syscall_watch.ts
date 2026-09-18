@@ -23,6 +23,45 @@ function hexAddress(value: bigint): string {
   return `0x${value.toString(16)}`;
 }
 
+export interface SvcSite {
+  addr: bigint;
+  vaddr: string;
+  fileOff: string;
+  nr: number | null;
+  name: string | null;
+  attribution: string;
+}
+
+/**
+ * One inline hook per selected svc site. The sender is injectable so the payload that really reaches
+ * the agent (backtrace:true plus throttleMs) is covered by a unit test, and the return shape is
+ * deliberate: on a mid-batch failure the caller still receives the hooks that WERE installed, because
+ * an unrolled-back watch would keep emitting events for the rest of the session.
+ */
+export async function installSvcSiteHooks(
+  sid: string,
+  sites: SvcSite[],
+  throttleMs: number | undefined,
+  send: typeof sendCmd = sendCmd,
+): Promise<{ installed: any[]; error: Error | null }> {
+  const installed: any[] = [];
+  for (const site of sites) {
+    const addr = site.addr;
+    // v4.39: each event carries the caller chain captured at the hit, so a syscall can be attributed
+    // to the app function that issued it instead of only to libc.
+    const r = await send(sid, 'native_hook', nativeHookInstallPayload({
+      addr: hexAddress(addr), backtrace: true, throttleMs,
+    }), 20_000).catch((e) => ({ ok: false, error: (e as Error).message }));
+    if (!r?.ok) return { installed, error: new Error(`svc hook failed at ${hexAddress(addr)}: ${r?.error ?? 'unknown error'}`) };
+    installed.push({
+      hookId: Number(r.hookId), addr: hexAddress(addr), vaddr: site.vaddr, fileOff: site.fileOff,
+      syscall: site.nr == null ? null : { nr: site.nr, name: site.name },
+      attribution: site.attribution,
+    });
+  }
+  return { installed, error: null };
+}
+
 // arm64 syscall numbers (asm-generic) with the names an analyst actually filters on. The table is a
 // convenience only - the number from the site is always reported next to it, and an unknown number
 // stays unknown rather than being guessed.
@@ -190,28 +229,19 @@ export async function watchSyscalls(sid: string, opts: SyscallWatchOptions): Pro
     throw new Error(`no svc #0 site matched ${[...filter.wanted].map((n) => `${syscallName(n)}(${n})`).join('/')} in ${mod.name}: attributed ${known} of ${attributed.length} sites`);
   }
   const selected = matched.slice(0, limit);
-  const installed: any[] = [];
-  try {
-    for (const hit of selected) {
-      const addr = base + BigInt(String(hit.vaddr));
-      // v4.39: each event carries the caller chain captured at the hit, so a syscall can be
-      // attributed to the app function that issued it instead of only to libc.
-      const r = await sendCmd(sid, 'native_hook', nativeHookInstallPayload({
-        addr: hexAddress(addr), backtrace: true, throttleMs: opts.throttleMs,
-      }), 20_000);
-      if (!r.ok) throw new Error(`svc hook failed at ${hexAddress(addr)}: ${r.error ?? 'unknown error'}`);
-      installed.push({
-        hookId: Number(r.hookId), addr: hexAddress(addr), vaddr: String(hit.vaddr),
-        fileOff: String(hit.fileOff),
-        syscall: hit.nr == null ? null : { nr: hit.nr, name: hit.name },
-        attribution: hit.attribution,
-      });
-    }
-  } catch (e) {
+  const sites: SvcSite[] = selected.map((hit) => ({
+    addr: base + BigInt(String(hit.vaddr)),
+    vaddr: String(hit.vaddr), fileOff: String(hit.fileOff),
+    nr: hit.nr, name: hit.name, attribution: hit.attribution,
+  }));
+  const { installed, error } = await installSvcSiteHooks(sid, sites, opts.throttleMs);
+  if (error) {
+    // A half-installed watch must not be left running: the caller gets the error, the process gets
+    // its syscalls back.
     for (const hook of installed) {
       await sendCmd(sid, 'native_hook', { action: 'unhook', hookId: hook.hookId }, 20_000).catch(() => null);
     }
-    throw e;
+    throw error;
   }
 
   const throttleMs = normalizeThrottleMs(opts.throttleMs);

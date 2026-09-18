@@ -39,12 +39,12 @@
 | TLS / 文件 I/O | v07, v07_flow, v20_file, v25_fsbrowser | SSL_write/read 明文与关联；libc open/read/write 捕获 |
 | 反检测观测与去特征 | v05_detect, v69(stealth), v70/v72(sites), v73/v74(vtable) | 目标自审（anon r-x、序言比对）；stealth 后 anonExec 2→0；sites 保持入口字节不变 |
 | Java hook（LSPlant） | v42/v43/v52/v53/v65, **v79(stack)**, **v82(hookAll)**, **v83(java_trace digest)** | 单方法/构造器/继承、参数改写、返回值替换、skip original；`stack:true` 给出 App 帧调用链；`hookAll` 一次装全类（截断可见） |
-| native hook | v46, v49, v55, v56, v66, v68, **v84(native_hook_all selection)**, **v86(事件限流)** | inline/addr、软/硬卸载、寄存器事件、浮点参数、千次压测、热站点限流（`hits = 已发事件 + throttled` 如实记账） |
+| native hook | v46, v49, v55, v56, v66, v68, **v84(native_hook_all selection)**, **v86(限流装配，仅 host)** | inline/addr、软/硬卸载、寄存器事件、浮点参数、千次压测；限流窗口/计数只做了**装配**验收（host），运行时恒等式 `hits = 已发 + throttled` 待真机（§2） |
 | JNI 面 | v54, v57, v58, v59, v60, v62, v63, v64, v67 | RegisterNatives、JNI_OnLoad（含加载时替换）、JNIEnv 76 槽、Call* 三类入口、数组写回、异常保持 |
 | 主动调用 | v45(java_call), v49(native_call), v51(qbdi args) | 反射调用 Java 方法/字段；按符号或地址调 native（整数+浮点） |
 | trace | v10_trace, v10_qbdi, **v78(backtrace)** | 函数参数/线程/时间戳；QBDI 指令级（用后 dlclose）；hook 命中当刻的 x29 调用链 + 符号化 |
 | 内存反汇编（MCP） | v48 | Capstone 5 WASM，绝对地址或 module+offset |
-| 系统调用监听 | v50(direct), **v76(归因)**, **v77(libc+过滤)**, **v81(摘要+参数)**, **v85(syscall_trace 装配)**, **v86(throttle)** | 直接 `svc #0` 捕获；静态归因（223/224 libc 站点）；按名/号过滤只装命中站点；`syscall_digest` 给调用方/次数/`paths` 直方图，并比对运行期 x8 与归因号 |
+| 系统调用监听 | v50(direct), **v76(归因)**, **v77(libc+过滤)**, **v81(摘要+参数)**, **v85(syscall_trace 装配)**, **v86(限流装配，仅 host)** | 直接 `svc #0` 捕获；静态归因（223/224 libc 站点）；按名/号过滤只装命中站点；`syscall_digest` 给调用方/次数/`paths` 直方图，并比对运行期 x8 与归因号 |
 | 一键 dump 所有 DEX | v15, v17 | ART DexFile 枚举 → 逐 dex dump → SHA-256 去重 → 下载（REST+MCP） |
 | 进程内 dlopen | v18 | 目标进程内加载任意 `.so` 并解析符号 |
 | 设备侧后端（Zygisk/Manager） | v27_zygisk, v32_backend_control, **v75(memfd)** | scope 往返；后端状态/作用域可控并恢复；**agent 从 memfd 加载**（目标 maps 无模块路径，目标内自证 + ELF 头） |
@@ -52,7 +52,7 @@
 | 控制面 / MCP / Web | v10_mcp, v10_webui, v10_export, v10_events, v19_settings, v33_backends, v35_sessions, **v71(registry)**, **v80(trace digest)**, **v83(java trace)**, **v84(native batch)**, **v85(一站式 syscall)**, **v86(throttle)** | MCP 71 工具可调；注册表形状自检；Web UI；会话清理 |
 | 手机自动化（模块 X） | v36, v38, v39, v40, v41 | 树/截图/选择器/手势/输入/wait/通知/技能；硬超时、桥接自愈、root 输入、屏幕状态；**重启后的 OEM 弹窗按 BACK 有界重试** |
 | 注入足迹 | v26_footprint, v01 | release 剥离 + 仅 3 个动态导出 + 无 RWX LOAD |
-| 单元测试（host） | v76, v80, v81, v83, v84, v85, **v86** | syscall 归因/参数解码/一站式装配、trace 摘要、backtrace dynsym、Java trace（含三阶段装配与 drain 守卫）、native 批量选择、native 限流装配（默认/夹紧/拒绝垃圾值）：**92 条** `node --test` 用例（合计含 automation 30 条 = 122；v81/v83/v86 按文件最小数断言） |
+| 单元测试（host） | v76, v80, v81, v83, v84, v85, **v86** | syscall 归因/参数解码/一站式装配、trace 摘要、backtrace dynsym、Java trace（含三阶段装配与 drain 守卫）、native 批量选择、native 限流（默认/夹紧/拒绝垃圾值 + 安装回路真实 payload）：**96 条** `node --test` 用例（合计含 automation 30 条 = 126；v81/v83/v86 按文件最小数断言） |
 
 ## 2. 待真机验证（代码 + host 验收已完成，手机不在位）
 

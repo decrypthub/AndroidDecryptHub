@@ -27,9 +27,8 @@
 // Caller frames captured at the hit (x30 + the x29 chain). 8 covers ordinary call depth without
 // growing the event; the host symbolizes them and reports the count it actually got.
 #define ADH_NATIVE_BT_MAX 8
-// Upper bound of the per-hook event throttle window. Anything larger is silently a "log nothing
-// useful" setting, so it is clamped and the effective value is echoed in status.
-#define ADH_NATIVE_THROTTLE_MAX_MS 60000
+// ADH_NATIVE_THROTTLE_MAX_MS (the window ceiling) lives in native_hooks.h so the install clamp, the
+// command parser in agent_main.c and this file cannot drift apart.
 
 struct NativeHookContext {
     int id;
@@ -101,6 +100,11 @@ static void reset_throttle_counters(int slot) {
     g_native_hook_throttled_reported[slot].store(0, std::memory_order_relaxed);
 }
 
+// Window clock. On Android CLOCK_MONOTONIC is served from the vDSO, i.e. this is a user-space read
+// and not a syscall (the same call the capture ring already makes per event). A ROM without a vDSO
+// would turn each suppressed hit into one real syscall, which is the one case where throttling a
+// hot site costs more than it saves - worth re-measuring on such a device, not worth a fallback
+// clock here.
 static uint64_t adh_mono_ns(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);

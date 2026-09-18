@@ -547,7 +547,8 @@ static void command_loop(int fd) {
                     // (json_get_num answers -1 for a missing key); a too-large window is clamped to
                     // the same ceiling the agent applies, and status echoes the effective value.
                     long long nthrottle = json_get_num(line, "throttleMs");
-                    int nthrottle_ms = nthrottle > 60000 ? 60000 : (nthrottle > 0 ? (int)nthrottle : 0);
+                    int nthrottle_ms = nthrottle > ADH_NATIVE_THROTTLE_MAX_MS ? ADH_NATIVE_THROTTLE_MAX_MS
+                                       : (nthrottle > 0 ? (int)nthrottle : 0);
                     cmd_native_hook(fd, id, naction, nmode, nmodule, nsymbol, naddr, nskip_original, nreturn, nargindex, nargvalue, nid, nhard_flag, nsites_flag, nscope, slots_writable_flag, backtrace_flag, nthrottle_ms);
                 } else if (strcmp(op, "native_call") == 0) {
                     char cmodule[128] = "", csymbol[160] = "", caddr[32] = "", cargs[256] = "";

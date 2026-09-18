@@ -4,6 +4,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
+// Upper bound of the per-hook event throttle window (ms). One definition for the whole agent
+// (install clamp, command parser and status echo all use it); anything larger is effectively a
+// "log nothing useful" setting, so it is clamped instead of rejected and the effective value is
+// echoed back in status. The host mirrors this number in daemon/src/native_hook_args.ts.
+#define ADH_NATIVE_THROTTLE_MAX_MS 60000
+
 #ifdef __cplusplus
 extern "C" {
 #endif

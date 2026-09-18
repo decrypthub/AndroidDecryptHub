@@ -12,6 +12,39 @@ import { reconstructSo } from './service.ts';
 
 export interface SymbolChoice { name: string; address: string; offset: string; size: number }
 
+export interface InstalledHook { hookId: number; symbol: string; address: string }
+export interface HookFailure { symbol: string; error: string }
+
+/**
+ * Install one inline hook per selected symbol, in address order, reporting per-symbol progress (one
+ * failure never aborts the batch). The sender is injectable so the payload that actually reaches the
+ * agent - throttleMs, backtrace and the rest - is covered by a unit test instead of by grepping for
+ * the call: dropping a field here is exactly the bug a pure-function test cannot see.
+ */
+export async function installSymbolHooks(
+  session: string,
+  base: bigint,
+  selected: SymbolChoice[],
+  opts: { throttleMs?: number; backtrace?: boolean; skipOriginal?: boolean; returnValue?: string; argIndex?: number; argValue?: string },
+  send: typeof sendCmd = sendCmd,
+): Promise<{ hooks: InstalledHook[]; failures: HookFailure[] }> {
+  const hooks: InstalledHook[] = [];
+  const failures: HookFailure[] = [];
+  for (const sym of selected) {
+    const off = parseHex(sym.address);
+    if (off == null) { failures.push({ symbol: sym.name, error: 'bad offset' }); continue; }
+    const runtime = base + off;
+    const r = await send(session, 'native_hook', nativeHookInstallPayload({
+      addr: hex(runtime), throttleMs: opts.throttleMs, backtrace: opts.backtrace,
+      skipOriginal: opts.skipOriginal, returnValue: opts.returnValue,
+      argIndex: opts.argIndex, argValue: opts.argValue,
+    }), 20_000).catch((e) => ({ ok: false, error: (e as Error).message }));
+    if (r?.ok && Number(r.hookId) > 0) hooks.push({ hookId: Number(r.hookId), symbol: sym.name, address: hex(runtime) });
+    else failures.push({ symbol: sym.name, error: String(r?.error ?? 'install failed') });
+  }
+  return { hooks, failures };
+}
+
 export interface SelectOptions {
   prefix?: string;
   contains?: string;
@@ -88,20 +121,7 @@ export async function nativeHookAll(session: string, opts: {
 
   const base = parseHex(mod.base);
   if (base == null) throw new Error('module base is not a valid address');
-  const hooks: { hookId: number; symbol: string; address: string }[] = [];
-  const failures: { symbol: string; error: string }[] = [];
-  for (const sym of selected) {
-    const off = parseHex(sym.address);
-    if (off == null) { failures.push({ symbol: sym.name, error: 'bad offset' }); continue; }
-    const runtime = base + off;
-    const r = await sendCmd(session, 'native_hook', nativeHookInstallPayload({
-      addr: hex(runtime), throttleMs: opts.throttleMs, backtrace: opts.backtrace,
-      skipOriginal: opts.skipOriginal, returnValue: opts.returnValue,
-      argIndex: opts.argIndex, argValue: opts.argValue,
-    }), 20_000).catch((e) => ({ ok: false, error: (e as Error).message }));
-    if (r?.ok && Number(r.hookId) > 0) hooks.push({ hookId: Number(r.hookId), symbol: sym.name, address: hex(runtime) });
-    else failures.push({ symbol: sym.name, error: String(r?.error ?? 'install failed') });
-  }
+  const { hooks, failures } = await installSymbolHooks(session, base, selected, opts);
   const throttleMs = normalizeThrottleMs(opts.throttleMs);
   return {
     module: mod.name,
