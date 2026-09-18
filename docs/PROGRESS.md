@@ -15,6 +15,12 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.60 覆盖功能收口：REST 参数面 P0 + 严格解析 + 范围检查 + 内存序（2026-09-19，host 验收 PASS；真机待做）**：评审在 v4.58/v4.59 里抓到一个**我引入的 P0**——`setValue` 只接进了 MCP，**REST 路由 `/api/jni/env_hook` 把它丢了**，而设备脚本 v91 走的正是 REST，那条"覆盖后 counter 必须变 42"的断言在真机上**永远不可能成立**。已修：
+      · **P0**：路由补上 `setValue` 的解析与转发，并在 host 侧加了一条**通用参数面检查**（v92）：把 `jni_env_hook` MCP schema 的每个属性名拿去比对 REST handler 块，缺哪个就红——这次输出 `REST parity: ... forwards all 4 MCP parameters (session, setValue, action, function)`。这类"只接了 MCP、忘了 REST"在本仓库出现过多次（v4.49 scope、v4.50 slotsWritable），现在至少这条路径被机检钉住。
+      · **P1**：`setValue` 的解析又犯了 v4.53 抓过的老毛病（`strtoll/strtod` 传 NULL endptr）：`"abc"` 会静默改成 0、`"1e3"` 在 int 字段上得到 1（strtoll 停在 e）而 float 字段得到 1000。现在**整串必须是数字**（endptr 走到结尾 + 查 errno），并且"只有浮点解析成功"时把 `ov_i` 同步成 `(long long)ov_d`，两种字段类型拿到同一个数值；垃圾串直接 fail-loud。
+      · **P2 全修**：① **按目标类型做范围检查**（Boolean 0/1、Byte -128..127、Char 0..65535、Short ±32767、Int 全 int 范围、Float/Double 必须 `isfinite`）——`setValue:"300"` 装到 boolean 槽以前会静默写成 `(jboolean)300 == 0`；② `override_active` 改成 **release 发布 / acquire 读取**，值写在标志之前，status 读覆盖时**持同一把锁**（此前是 relaxed + 普通读，严格说是数据竞争）。
+      · v91 证据再加固：覆盖前先断言夹具 `counter == 7`（否则"之后是 42"本身可能是夹具本来就是 42）、capture 基线失败不再静默降级成 0、`uninstall` 与 `object_set` 还原的返回值纳入 `pass`。
+      · 验收：agent 零告警重建；daemon 单测 149；host 全量门禁 **31 PASS / 0 FAIL / 84 SKIP**（115 脚本）。
 - [~] **v4.59 覆盖状态可见 + v91 证据加固（2026-09-19，host 验收 PASS；真机待做）**：v4.58 的 `setValue` 是"装了就在改写"，但 status 里看不到——操作者无法确认某个 `Set<Type>Field` 是否仍处于改写状态。
       · agent：`jni_env_hook status` 的每个槽位新增 **`"override"`**（未开启为 `null`，开启时给出整数值；若安装的是小数则给 `%g`）。这样"还有哪些槽在改写"一眼可见，卸载后自动回到 `null`。
       · v91 证据加固（评审指出事件断言可能被**历史事件**满足）：触发前先取 capture 游标，之后的 `JNI_ENV` 事件只统计 `id > cursor` 的；`*Field` 模式卸载的返回值也纳入 `pass`（此前只打印）。

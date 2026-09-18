@@ -1341,6 +1341,8 @@ MCP              →  AI 可编程操控，与 HTTP 同源
 
 > 实现状态（v4.56，**实现 + host 验收完成，真机验收待做**）：**字段事件可归因 + JNIEnv 字段摘要**。v4.55 的访问事件只有 `field=0x..`，读不出字段名；现在 `GetFieldID`/`GetStaticFieldID` 的事件会带上它们交出去的 id（`Class#name:sig -> 0x..`），新增的 `jniFieldDigest`（MCP `jni_field_digest` + `POST /api/jni/field_digest`）用 id→名字表把访问按 (accessor, field) 聚合成"哪个字段被读写了几次、最后值是什么、哪些线程"，未解析的 id 保持原始指针并单独计数（不猜），空窗口明确提示需要先 hook 字段槽位；drain 走共享 `drainSession`。
 
+> 实现状态（v4.60，**实现 + host 验收完成**）：**覆盖功能的收口**。REST `/api/jni/env_hook` 补上 `setValue` 转发（v4.58 只接了 MCP，设备脚本走 REST 因此永远不可能通过），并在 host 侧加了通用参数面检查——MCP schema 的每个属性名必须在对应 REST handler 里出现（v92 现在会打印 `forwards all N MCP parameters`）。`setValue` 改为严格解析（整串必须是数字，只有浮点可解析时同步到整数槽），并按目标字段类型做范围检查（Boolean 0/1、Byte/Char/Short/Int 各自区间、Float/Double 必须有限），越界 fail-loud 而不是静默取模；`override_active` 改为 release/acquire 发布，status 读覆盖时持同一把锁。
+
 > 实现状态（v4.58，**实现 + host 验收完成，真机验收待做**）：**JNIEnv 字段写入可改写**。`jni_env_hook` 新增 `setValue`（数字，单槽）：`Set<Type>Field` wrapper 在调用原函数前替换写入值，事件给出 `value=<应用值> requested=<原值>`，覆盖状态随卸载清除；只支持 boolean/byte/char/short/int/long/float/double（对象字段需要 agent 不持有的引用，直接拒绝），`setValue` + 通配模式亦拒绝。覆盖值安装时解析成整数与浮点各一份，热路径零解析。同时收口评审 P2：ID 查询在"无异常但返回 NULL"时不再报 ok:1、预算耗尽不再把成功的调用标成 ok:false、两个 ID wrapper 补 `_Static_assert` 签名检查。
 
 > 实现状态（v4.57，**实现 + host 验收完成，真机验收待做**）：**JNIEnv 钩子选择器补齐后缀/包含匹配**。此前只有前缀通配（`CallIntMethod*`），36 个字段访问器没有一次装上的写法。现在 `"*"`/`all` = 全部、`Call*` = 前缀、**`*Field` = 后缀**（一次挂上整个字段族）、**`*Field*` = 包含**（同时命中 `GetFieldID`/`GetStaticFieldID` 与访问器——字段摘要解析名字所需的组合）；匹配用有界比较（不依赖子串 NUL 终止），命中/失败数与首个失败原因照旧上报，MCP 描述里写明四种模式。设备脚本 v91 增加断言：`*Field` 一次安装后 status 中名字以 `Field` 结尾且 `installed` 的槽位 ≥ 36，再用同一模式整体卸载。

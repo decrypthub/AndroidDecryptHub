@@ -8,6 +8,7 @@
 #include <jni.h>
 #include <pthread.h>
 #include <stdio.h>
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -481,8 +482,30 @@ static void command_loop(int fd) {
                     // and a double so the slot wrapper can use the one its field type needs.
                     int eov_active = 0; long long eov_i = 0; double eov_d = 0;
                     if (esetval[0]) {
-                        eov_i = strtoll(esetval, NULL, 0);
-                        eov_d = strtod(esetval, NULL);
+                        // Strict: the WHOLE string must be a number. strtoll/strtod with a NULL endptr
+                        // would turn a typo into 0 and silently rewrite the field (the same bug class
+                        // the v4.53 review caught in object_set). A value that only the float parser
+                        // accepts (like 1e3) is also mirrored into the integer slot so an int field
+                        // does not get a truncated 1.
+                        char *end_i = NULL, *end_d = NULL;
+                        errno = 0;
+                        eov_i = strtoll(esetval, &end_i, 0);
+                        int int_ok = (errno == 0 && end_i != esetval && *end_i == '\0');
+                        errno = 0;
+                        eov_d = strtod(esetval, &end_d);
+                        int dbl_ok = (errno == 0 && end_d != esetval && *end_d == '\0');
+                        if (!int_ok && !dbl_ok) {
+                            char idj[64]; json_escape(id, idj, sizeof(idj));
+                            char ej[128]; json_escape(esetval, ej, sizeof(ej));
+                            char e[256];
+                            snprintf(e, sizeof(e),
+                                     "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"jni_env_hook\",\"ok\":false,"
+                                     "\"error\":\"setValue must be a number, got '%s'\"}\n", idj, ej);
+                            send_line(fd, e);
+                            return;
+                        }
+                        if (int_ok) eov_d = (double)eov_i;
+                        else eov_i = (long long)eov_d;
                         eov_active = 1;
                     }
                     adh_cmd_jni_env_hook(fd, id, eaction, efunction, eov_active, eov_i, eov_d);

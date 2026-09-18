@@ -235,12 +235,12 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
       } catch (e) { return send(504, { error: (e as Error).message }); }
     } },    { method: 'POST', path: '/api/jni/env_hook', handler: async () => {
       const body = await readBody(req);
-      const { session, action, function: fn } = JSON.parse(body || '{}');
+      const { session, action, function: fn, setValue } = JSON.parse(body || '{}');
       const sid = pickSid(session);
       if (!sid || !action) return send(400, { error: 'need session, action' });
       if (action !== 'status' && !fn) return send(400, { error: 'need function' });
       try {
-        const r = await sendCmd(sid, 'jni_env_hook', { action, function: fn ?? '' }, 20_000);
+        const r = await sendCmd(sid, 'jni_env_hook', { action, function: fn ?? '', setValue: setValue ?? '' }, 20_000);
         return send(r.ok ? 200 : 502, r);
       } catch (e) { return send(504, { error: (e as Error).message }); }
     } },

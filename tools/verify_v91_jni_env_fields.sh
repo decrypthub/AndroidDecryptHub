@@ -62,7 +62,8 @@ console.log(`hooks: ${slots.map((h) => h.function).join(',')} installed=${instal
 
 // (1b) baseline cursor so the event assertions below cannot be satisfied by events from an
 // EARLIER run (the capture store keeps history).
-const preList = await (await fetch(`${base}/api/captures?session=${encodeURIComponent(session)}&limit=1`)).json().catch(() => ({}));
+const preList = await (await fetch(`${base}/api/captures?session=${encodeURIComponent(session)}&limit=1`)).json().catch(() => null);
+if (!preList || !Array.isArray(preList.captures)) fail('could not read the capture baseline (the cursor would silently become 0 and history could satisfy the event assertions)');
 const cursor = Math.max(0, ...(preList.captures ?? []).map((c) => Number(c.id ?? 0)));
 console.log(`event baseline cursor=${cursor}`);
 
@@ -113,17 +114,23 @@ if (!patternUnhookOk) console.log('pattern unhook did not report ok');
 // (3d) write override (v4.58): with setValue the hook REWRITES what native code stores. The probe
 // reads HeapProbe.sConfig.counter and writes it back, so with SetIntField overridden to 42 a
 // follow-up read must see 42 instead of the original 7.
+// Pin the value the fixture holds BEFORE the override, otherwise "counter == 42 afterwards" could
+// be satisfied by a fixture that was already 42.
+const beforeOv = await post('/api/object/inspect', { session, className: 'com.adh.sandbox.HeapProbe', field: 'sConfig' });
+const counterBefore = Object.fromEntries((beforeOv.body?.fields ?? []).map((f) => [f.name, f.value])).counter;
+if (counterBefore !== '7') fail(`the fixture should hold counter=7 before the override, saw ${counterBefore}`, beforeOv.body);
 const ovHook = await post('/api/jni/env_hook', { session, action: 'install', function: 'SetIntField', setValue: '42' });
 if (ovHook.body?.ok !== true) fail('SetIntField override install failed: ' + String(ovHook.body?.error ?? ovHook.status), ovHook.body);
 const ovCall = await post('/api/java/call', { session, className: 'com.adh.sandbox.Detection', method: 'jniFieldProbe', params: '', args: [] });
 const ovRead = await post('/api/object/inspect', { session, className: 'com.adh.sandbox.HeapProbe', field: 'sConfig' });
 const counterNow = Object.fromEntries((ovRead.body?.fields ?? []).map((f) => [f.name, f.value])).counter;
 console.log(`override: calls=${ovCall.body?.result?.result} counter=${counterNow} (expect 42)`);
-const overrideOk = ovCall.body?.ok === true && counterNow === '42';
+const overrideOk = ovCall.body?.ok === true && counterNow === '42' && ovRestoreOk;
 // restore: unhook the override, then put the fixture back through object_set
-await post('/api/jni/env_hook', { session, action: 'uninstall', function: 'SetIntField' });
+const ovUnhook = await post('/api/jni/env_hook', { session, action: 'uninstall', function: 'SetIntField' });
 const restoreCounter = await post('/api/object/set', { session, className: 'com.adh.sandbox.HeapProbe', field: 'sConfig', targetField: 'counter', value: '7' });
-if (restoreCounter.body?.ok !== true) console.log('fixture counter restore did not report ok');
+const ovRestoreOk = ovUnhook.body?.ok === true && restoreCounter.body?.ok === true;
+if (!ovRestoreOk) console.log('the override unhook / fixture restore did not report ok');
 
 // (4) unhook, table restored, process alive
 const unhooked = [];
@@ -138,7 +145,7 @@ const alive = String(spawnSync('adb', ['-s', serial, 'shell', 'pidof', 'com.adh.
 if (missing.length) console.log('no event for: ' + missing.join(', '));
 if (!digestOk) console.log('the field digest did not resolve any access to a name');
 if (!patternOk) console.log('the "*Field" pattern did not select the field family (suffix matching)');
-if (!overrideOk) console.log('the SetIntField override did not change what the target stored');
+if (!overrideOk) console.log('the SetIntField override did not change what the target stored, or the restore failed');
 const pass = installedOk && patchedOk && relroOk && calls >= 2 && missing.length === 0 && valueOk && digestOk && patternOk && patternUnhookOk && overrideOk
   && unhooked.every(Boolean) && restored && alive.length > 0;
 console.log(pass ? 'RESULT:PASS' : 'RESULT:FAIL');

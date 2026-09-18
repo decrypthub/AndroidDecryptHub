@@ -51,6 +51,21 @@ try {
 try {
   const routes = fs.readFileSync(`${root}/daemon/src/http/routes_runtime.ts`, 'utf8');
   if (!routes.includes("path: '/api/jni/field_digest'")) problems.push('the REST route /api/jni/field_digest is missing');
+
+  // Parameter-face check (the P0 class from the v4.58 review: setValue was wired into MCP only and
+  // the REST route silently dropped it, which made the device script impossible to pass):
+  // every property the MCP tool accepts must appear inside the matching REST handler block.
+  const { MCP_TOOLS } = await import(`${base}/daemon/src/mcp.ts`);
+  const tool = (MCP_TOOLS ?? []).find((x) => x.name === 'jni_env_hook');
+  const props = Object.keys(tool?.inputSchema?.properties ?? {});
+  const at = routes.indexOf("path: '/api/jni/env_hook'");
+  if (at < 0) problems.push('the REST route /api/jni/env_hook is missing');
+  else {
+    const block = routes.slice(at, at + 900);
+    const missing = props.filter((k) => !new RegExp('\\b' + k + '\\b').test(block));
+    if (missing.length) problems.push(`/api/jni/env_hook does not forward: ${missing.join(', ')}`);
+    else notes.push(`REST parity: /api/jni/env_hook forwards all ${props.length} MCP parameters (${props.join(', ')})`);
+  }
 } catch (e) { problems.push('read routes failed: ' + e.message); }
 
 for (const n of notes) console.log('  ' + n);

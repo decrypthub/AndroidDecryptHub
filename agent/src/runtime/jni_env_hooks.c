@@ -33,6 +33,8 @@
 #include "../runtime/jni_method_names.h"
 
 #include <jni.h>
+#include <limits.h>
+#include <math.h>
 #include <pthread.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -817,7 +819,7 @@ static void JNICALL JNI_NAME##_wrapper(JNIEnv *env, TARGET target, jfieldID fiel
     }                                                                                       \
     CTYPE requested = value;                                                                \
     long long ov_i = 0; double ov_d = 0; int override_on = 0;                               \
-    if (__atomic_load_n(&g_env_hooks[ENV_SLOT_##JNI_NAME].override_active, __ATOMIC_RELAXED)) { \
+    if (__atomic_load_n(&g_env_hooks[ENV_SLOT_##JNI_NAME].override_active, __ATOMIC_ACQUIRE)) { \
         ov_i = g_env_hooks[ENV_SLOT_##JNI_NAME].override_i;                                 \
         ov_d = g_env_hooks[ENV_SLOT_##JNI_NAME].override_d;                                 \
         (void)ov_i; (void)ov_d;   /* only one of them feeds OV, per field type */            \
@@ -1047,6 +1049,7 @@ static void send_env_result(int fd, const char *id, const char *action, const ch
         idj, ok ? "true" : "false", actionj, functionj, applied, failed,
         g_env_hook_table, table_perms, errorj);
     int first = 1;
+    pthread_mutex_lock(&g_env_hook_lock);
     for (int i = 0; i < ENV_HOOK_MAX && len + 380 < sizeof(out); i++) {
         char slot_perms[8] = "";
         char lastj[512];
@@ -1078,6 +1081,7 @@ static void send_env_result(int fd, const char *id, const char *action, const ch
                         g_env_hooks[i].override_active ? ovjson : "null", lastj);
         first = 0;
     }
+    pthread_mutex_unlock(&g_env_hook_lock);
     snprintf(out + len, sizeof(out) - len, "]}\n");
     send_line(fd, out);
 }
@@ -1111,7 +1115,7 @@ static int env_hook_uninstall_index(int index, char *error, size_t error_size) {
     }
     pthread_mutex_lock(&g_env_hook_lock);
     g_env_hooks[index].installed = 0;
-    g_env_hooks[index].override_active = 0;   // a removed hook must not keep rewriting writes
+    __atomic_store_n(&g_env_hooks[index].override_active, 0, __ATOMIC_RELEASE);   // a removed hook must not keep rewriting writes
     pthread_mutex_unlock(&g_env_hook_lock);
     return 1;
 }
@@ -1130,6 +1134,24 @@ static int env_hook_install_index(int index, int override_active, long long over
         }
         if (strstr(name, "Object") != NULL) {
             snprintf(error, error_size, "setValue cannot override %s: an object value would need a reference the agent does not hold", name);
+            return 0;
+        }
+        // Range-check against the TARGET type: silently writing (jboolean)300 == 0 would be exactly
+        // the kind of "it said ok but the field did not get what I asked for" this tool must not do.
+        const char *type = (strncmp(name, "SetStatic", 9) == 0) ? name + 9
+                         : (strncmp(name, "Set", 3) == 0) ? name + 3 : NULL;
+        int in_range = 0;
+        const char *range = "";
+        if (type && strcmp(type, "BooleanField") == 0) { in_range = (override_i == 0 || override_i == 1); range = "0 or 1"; }
+        else if (type && strcmp(type, "ByteField") == 0) { in_range = (override_i >= -128 && override_i <= 127); range = "-128..127"; }
+        else if (type && strcmp(type, "CharField") == 0) { in_range = (override_i >= 0 && override_i <= 65535); range = "0..65535"; }
+        else if (type && strcmp(type, "ShortField") == 0) { in_range = (override_i >= -32768 && override_i <= 32767); range = "-32768..32767"; }
+        else if (type && strcmp(type, "IntField") == 0) { in_range = (override_i >= INT_MIN && override_i <= INT_MAX); range = "the int range"; }
+        else if (type && strcmp(type, "LongField") == 0) { in_range = 1; }
+        else if (type && (strcmp(type, "FloatField") == 0 || strcmp(type, "DoubleField") == 0)) { in_range = isfinite(override_d) ? 1 : 0; range = "a finite number"; }
+        else { in_range = 0; range = "(unknown field type)"; }
+        if (!in_range) {
+            snprintf(error, error_size, "setValue for %s must be %s (got %lld / %g)", name, range, override_i, override_d);
             return 0;
         }
     }
@@ -1165,9 +1187,10 @@ static int env_hook_install_index(int index, int override_active, long long over
         // Same entry: re-activate the existing hook instead of patching twice.
         g_env_hooks[index].hits = 0;
         g_env_hooks[index].dropped = 0;
-        g_env_hooks[index].override_active = override_active ? 1 : 0;
         g_env_hooks[index].override_i = override_i;
         g_env_hooks[index].override_d = override_d;
+        // Release AFTER the values so a wrapper that sees the flag with an acquire load also sees them.
+        __atomic_store_n(&g_env_hooks[index].override_active, override_active ? 1 : 0, __ATOMIC_RELEASE);
         pthread_mutex_unlock(&g_env_hook_lock);
         __atomic_store_n(&g_env_hooks[index].active, 1, __ATOMIC_RELEASE);
         return 1;
@@ -1200,9 +1223,9 @@ static int env_hook_install_index(int index, int override_active, long long over
     pthread_mutex_lock(&g_env_hook_lock);
     g_env_hooks[index].slot = slot;
     g_env_hooks[index].installed = 1;
-    g_env_hooks[index].override_active = override_active ? 1 : 0;
     g_env_hooks[index].override_i = override_i;
     g_env_hooks[index].override_d = override_d;
+    __atomic_store_n(&g_env_hooks[index].override_active, override_active ? 1 : 0, __ATOMIC_RELEASE);
     g_env_hooks[index].hits = 0;
     g_env_hooks[index].dropped = 0;
     pthread_mutex_unlock(&g_env_hook_lock);
