@@ -15,6 +15,10 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.68 JNIEnv 引用生命周期（2026-09-19，host 验收 PASS；真机待做）**：覆盖率名单里的下一批——**引用生命周期**。目标创建了哪些引用、有没有释放、有没有把 global ref 泄漏、有没有把 local frame 一直开着，这些都是可直接读的分析信号，而且这 8 个表项是**每个 JNI 库都会碰**的。
+      · 新增 8 槽（覆盖率 **125/229 → 133/229 = 58%**）：`PushLocalFrame`（capacity）、`PopLocalFrame`（result → 返回值）、`NewLocalRef`/`NewGlobalRef`（ref → 新引用）、`DeleteLocalRef`/`DeleteGlobalRef`（ref）、`IsSameObject`（a/b/same）、`EnsureLocalCapacity`（capacity）。
+      · 安全网照旧：8 条 `_Static_assert` 签名证明、索引 19/20/21/22/23/24/25/26 由 v90 对 `jni.h` 机检（`checked 133 indices`），覆盖率下限**再提到 133**（只升不降）。
+      · 验收：agent 零告警重建；v90 PASS（133/229，58%）；host 全量门禁 **31 PASS / 0 FAIL / 84 SKIP**（115 脚本）。
 - [~] **v4.67 JNIEnv 异常流 + VM 句柄（2026-09-19，host 验收 PASS；真机待做）**：覆盖率报告（v4.66）点名的下一批高价值表项就是**异常流**——反分析代码常用异常当控制流，"抛了什么、谁清掉的"本身就是信号；`GetJavaVM` 则是目标拿到 VM 句柄去做更激进事情的入口。
       · 新增 6 个槽（覆盖率 **119/229 → 125/229 = 55%**）：`Throw`（事件带 throwable 指针 + 类名）、`ThrowNew`（类名 + **有界消息预览**）、`ExceptionOccurred`（只报指针——**此时异常正在挂起，绝不能再调 JNI 取类名**，否则 CheckJNI 直接 abort，这条写进注释）、`ExceptionDescribe`/`ExceptionClear`（成对出现，看清"谁把异常吞了"）、`GetJavaVM`（vm 指针）。
       · 安全网照旧：6 条 `_Static_assert` 钉死签名、索引 13/14/15/16/17/219 由 v90 对 `jni.h` 机检（`checked 125 indices`），安装期仍 refuse 偏移不符；v90 的覆盖率下限**从 115 提到 125**（只升不降）。

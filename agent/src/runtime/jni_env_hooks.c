@@ -95,6 +95,17 @@ enum {
     ENV_SLOT_ExceptionDescribe,
     ENV_SLOT_ExceptionClear,
     ENV_SLOT_GetJavaVM,
+    // v4.68: reference lifecycle. Which references the target creates and frees (and whether it
+    // leaks a global ref, or keeps a local frame open) is a concrete analysis signal - and these are
+    // the entries every JNI library touches.
+    ENV_SLOT_PushLocalFrame,
+    ENV_SLOT_PopLocalFrame,
+    ENV_SLOT_NewLocalRef,
+    ENV_SLOT_DeleteLocalRef,
+    ENV_SLOT_NewGlobalRef,
+    ENV_SLOT_DeleteGlobalRef,
+    ENV_SLOT_IsSameObject,
+    ENV_SLOT_EnsureLocalCapacity,
     ENV_SLOT_NewDirectByteBuffer,
     ENV_SLOT_GetDirectBufferAddress,
     ENV_SLOT_GetDirectBufferCapacity,
@@ -153,7 +164,8 @@ struct EnvHookSlot {
     X("GetPrimitiveArrayCritical") X("ReleasePrimitiveArrayCritical") \
     X("GetStringRegion") X("GetStringUTFRegion") X("GetStringChars") X("ReleaseStringChars") \
     X("Throw") X("ThrowNew") X("ExceptionOccurred") X("ExceptionDescribe") X("ExceptionClear") \
-    X("GetJavaVM") \
+    X("GetJavaVM") X("PushLocalFrame") X("PopLocalFrame") X("NewLocalRef") X("DeleteLocalRef") \
+    X("NewGlobalRef") X("DeleteGlobalRef") X("IsSameObject") X("EnsureLocalCapacity") \
     X("NewDirectByteBuffer") \
     X("GetDirectBufferAddress") X("GetDirectBufferCapacity")
 
@@ -1153,7 +1165,128 @@ static jint GetJavaVM_wrapper(JNIEnv *env, JavaVM **vm) {
     return rc;
 }
 
+// ---- v4.68: reference lifecycle ---------------------------------------------
+// Pointer-in/pointer-out entries: the detail is the reference and its identity, which is what makes
+// "who allocated this global ref and never freed it" answerable from the capture stream.
+static jint PushLocalFrame_wrapper(JNIEnv *env, jint capacity) {
+    typedef jint (JNICALL *fn_t)(JNIEnv *, jint);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_PushLocalFrame);
+    if (!original) return JNI_ERR;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_PushLocalFrame)) return original(env, capacity);
+    g_env_hook_in_ours = 1;
+    jint rc = original(env, capacity);
+    g_env_hook_in_ours = 0;
+    char detail[96];
+    snprintf(detail, sizeof(detail), "capacity=%d", (int)capacity);
+    env_note(ENV_SLOT_PushLocalFrame, env_budget_left(ENV_SLOT_PushLocalFrame) ? detail : NULL, rc == JNI_OK);
+    return rc;
+}
+
+static jobject PopLocalFrame_wrapper(JNIEnv *env, jobject result) {
+    typedef jobject (JNICALL *fn_t)(JNIEnv *, jobject);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_PopLocalFrame);
+    if (!original) return NULL;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_PopLocalFrame)) return original(env, result);
+    g_env_hook_in_ours = 1;
+    jobject out = original(env, result);
+    g_env_hook_in_ours = 0;
+    char detail[128];
+    snprintf(detail, sizeof(detail), "result=%p -> %p", (void *)result, (void *)out);
+    env_note(ENV_SLOT_PopLocalFrame, env_budget_left(ENV_SLOT_PopLocalFrame) ? detail : NULL, 1);
+    return out;
+}
+
+static jobject NewLocalRef_wrapper(JNIEnv *env, jobject ref) {
+    typedef jobject (JNICALL *fn_t)(JNIEnv *, jobject);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_NewLocalRef);
+    if (!original) return NULL;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_NewLocalRef)) return original(env, ref);
+    g_env_hook_in_ours = 1;
+    jobject out = original(env, ref);
+    g_env_hook_in_ours = 0;
+    char detail[128];
+    snprintf(detail, sizeof(detail), "ref=%p -> %p", (void *)ref, (void *)out);
+    env_note(ENV_SLOT_NewLocalRef, env_budget_left(ENV_SLOT_NewLocalRef) ? detail : NULL, out != NULL);
+    return out;
+}
+
+static void DeleteLocalRef_wrapper(JNIEnv *env, jobject ref) {
+    typedef void (JNICALL *fn_t)(JNIEnv *, jobject);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_DeleteLocalRef);
+    if (!original) return;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_DeleteLocalRef)) { original(env, ref); return; }
+    g_env_hook_in_ours = 1;
+    original(env, ref);
+    g_env_hook_in_ours = 0;
+    char detail[96];
+    snprintf(detail, sizeof(detail), "ref=%p", (void *)ref);
+    env_note(ENV_SLOT_DeleteLocalRef, env_budget_left(ENV_SLOT_DeleteLocalRef) ? detail : NULL, 1);
+}
+
+static jobject NewGlobalRef_wrapper(JNIEnv *env, jobject ref) {
+    typedef jobject (JNICALL *fn_t)(JNIEnv *, jobject);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_NewGlobalRef);
+    if (!original) return NULL;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_NewGlobalRef)) return original(env, ref);
+    g_env_hook_in_ours = 1;
+    jobject out = original(env, ref);
+    g_env_hook_in_ours = 0;
+    char detail[128];
+    snprintf(detail, sizeof(detail), "ref=%p -> %p", (void *)ref, (void *)out);
+    env_note(ENV_SLOT_NewGlobalRef, env_budget_left(ENV_SLOT_NewGlobalRef) ? detail : NULL, out != NULL);
+    return out;
+}
+
+static void DeleteGlobalRef_wrapper(JNIEnv *env, jobject ref) {
+    typedef void (JNICALL *fn_t)(JNIEnv *, jobject);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_DeleteGlobalRef);
+    if (!original) return;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_DeleteGlobalRef)) { original(env, ref); return; }
+    g_env_hook_in_ours = 1;
+    original(env, ref);
+    g_env_hook_in_ours = 0;
+    char detail[96];
+    snprintf(detail, sizeof(detail), "ref=%p", (void *)ref);
+    env_note(ENV_SLOT_DeleteGlobalRef, env_budget_left(ENV_SLOT_DeleteGlobalRef) ? detail : NULL, 1);
+}
+
+static jboolean IsSameObject_wrapper(JNIEnv *env, jobject a, jobject b) {
+    typedef jboolean (JNICALL *fn_t)(JNIEnv *, jobject, jobject);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_IsSameObject);
+    if (!original) return JNI_FALSE;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_IsSameObject)) return original(env, a, b);
+    g_env_hook_in_ours = 1;
+    jboolean same = original(env, a, b);
+    g_env_hook_in_ours = 0;
+    char detail[128];
+    snprintf(detail, sizeof(detail), "a=%p b=%p same=%s", (void *)a, (void *)b, same ? "true" : "false");
+    env_note(ENV_SLOT_IsSameObject, env_budget_left(ENV_SLOT_IsSameObject) ? detail : NULL, 1);
+    return same;
+}
+
+static jint EnsureLocalCapacity_wrapper(JNIEnv *env, jint capacity) {
+    typedef jint (JNICALL *fn_t)(JNIEnv *, jint);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_EnsureLocalCapacity);
+    if (!original) return JNI_ERR;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_EnsureLocalCapacity)) return original(env, capacity);
+    g_env_hook_in_ours = 1;
+    jint rc = original(env, capacity);
+    g_env_hook_in_ours = 0;
+    char detail[96];
+    snprintf(detail, sizeof(detail), "capacity=%d", (int)capacity);
+    env_note(ENV_SLOT_EnsureLocalCapacity, env_budget_left(ENV_SLOT_EnsureLocalCapacity) ? detail : NULL, rc == JNI_OK);
+    return rc;
+}
+
 // Compile-time type check: each wrapper must have exactly its table entry signature.
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->PushLocalFrame), __typeof__(&PushLocalFrame_wrapper)), "PushLocalFrame_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->PopLocalFrame), __typeof__(&PopLocalFrame_wrapper)), "PopLocalFrame_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->NewLocalRef), __typeof__(&NewLocalRef_wrapper)), "NewLocalRef_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->DeleteLocalRef), __typeof__(&DeleteLocalRef_wrapper)), "DeleteLocalRef_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->NewGlobalRef), __typeof__(&NewGlobalRef_wrapper)), "NewGlobalRef_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->DeleteGlobalRef), __typeof__(&DeleteGlobalRef_wrapper)), "DeleteGlobalRef_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->IsSameObject), __typeof__(&IsSameObject_wrapper)), "IsSameObject_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->EnsureLocalCapacity), __typeof__(&EnsureLocalCapacity_wrapper)), "EnsureLocalCapacity_wrapper signature mismatch");
 _Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->Throw), __typeof__(&Throw_wrapper)), "Throw_wrapper signature mismatch");
 _Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->ThrowNew), __typeof__(&ThrowNew_wrapper)), "ThrowNew_wrapper signature mismatch");
 _Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->ExceptionOccurred), __typeof__(&ExceptionOccurred_wrapper)), "ExceptionOccurred_wrapper signature mismatch");
@@ -1269,6 +1402,14 @@ static int env_hook_spec_index(int index) {
         case ENV_SLOT_SetByteArrayRegion: return 208;
         case ENV_SLOT_GetPrimitiveArrayCritical: return 222;
         case ENV_SLOT_GetStringRegion: return 220;
+        case ENV_SLOT_PushLocalFrame: return 19;
+        case ENV_SLOT_PopLocalFrame: return 20;
+        case ENV_SLOT_NewLocalRef: return 25;
+        case ENV_SLOT_DeleteLocalRef: return 23;
+        case ENV_SLOT_NewGlobalRef: return 21;
+        case ENV_SLOT_DeleteGlobalRef: return 22;
+        case ENV_SLOT_IsSameObject: return 24;
+        case ENV_SLOT_EnsureLocalCapacity: return 26;
         case ENV_SLOT_Throw: return 13;
         case ENV_SLOT_ThrowNew: return 14;
         case ENV_SLOT_ExceptionOccurred: return 15;
@@ -1315,6 +1456,14 @@ static void **env_hook_slot(struct JNINativeInterface *table, int index) {
         case ENV_SLOT_ReleaseByteArrayElements: return (void **)(uintptr_t)&table->ReleaseByteArrayElements;
         case ENV_SLOT_GetByteArrayRegion: return (void **)(uintptr_t)&table->GetByteArrayRegion;
         case ENV_SLOT_GetPrimitiveArrayCritical: return (void **)(uintptr_t)&table->GetPrimitiveArrayCritical;
+        case ENV_SLOT_PushLocalFrame: return (void **)(uintptr_t)&table->PushLocalFrame;
+        case ENV_SLOT_PopLocalFrame: return (void **)(uintptr_t)&table->PopLocalFrame;
+        case ENV_SLOT_NewLocalRef: return (void **)(uintptr_t)&table->NewLocalRef;
+        case ENV_SLOT_DeleteLocalRef: return (void **)(uintptr_t)&table->DeleteLocalRef;
+        case ENV_SLOT_NewGlobalRef: return (void **)(uintptr_t)&table->NewGlobalRef;
+        case ENV_SLOT_DeleteGlobalRef: return (void **)(uintptr_t)&table->DeleteGlobalRef;
+        case ENV_SLOT_IsSameObject: return (void **)(uintptr_t)&table->IsSameObject;
+        case ENV_SLOT_EnsureLocalCapacity: return (void **)(uintptr_t)&table->EnsureLocalCapacity;
         case ENV_SLOT_Throw: return (void **)(uintptr_t)&table->Throw;
         case ENV_SLOT_ThrowNew: return (void **)(uintptr_t)&table->ThrowNew;
         case ENV_SLOT_ExceptionOccurred: return (void **)(uintptr_t)&table->ExceptionOccurred;
@@ -1356,6 +1505,14 @@ static void *env_hook_wrapper(int index) {
         case ENV_SLOT_ReleaseByteArrayElements: return (void *)&ReleaseByteArrayElements_wrapper;
         case ENV_SLOT_GetByteArrayRegion: return (void *)&GetByteArrayRegion_wrapper;
         case ENV_SLOT_GetPrimitiveArrayCritical: return (void *)&GetPrimitiveArrayCritical_wrapper;
+        case ENV_SLOT_PushLocalFrame: return (void *)&PushLocalFrame_wrapper;
+        case ENV_SLOT_PopLocalFrame: return (void *)&PopLocalFrame_wrapper;
+        case ENV_SLOT_NewLocalRef: return (void *)&NewLocalRef_wrapper;
+        case ENV_SLOT_DeleteLocalRef: return (void *)&DeleteLocalRef_wrapper;
+        case ENV_SLOT_NewGlobalRef: return (void *)&NewGlobalRef_wrapper;
+        case ENV_SLOT_DeleteGlobalRef: return (void *)&DeleteGlobalRef_wrapper;
+        case ENV_SLOT_IsSameObject: return (void *)&IsSameObject_wrapper;
+        case ENV_SLOT_EnsureLocalCapacity: return (void *)&EnsureLocalCapacity_wrapper;
         case ENV_SLOT_Throw: return (void *)&Throw_wrapper;
         case ENV_SLOT_ThrowNew: return (void *)&ThrowNew_wrapper;
         case ENV_SLOT_ExceptionOccurred: return (void *)&ExceptionOccurred_wrapper;
