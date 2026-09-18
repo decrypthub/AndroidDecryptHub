@@ -1219,7 +1219,8 @@ extern "C" int adh_javahook_status_json(JNIEnv *env, char *out, size_t out_size)
     }
     pthread_mutex_unlock(&g_java_hooks_lock);
     hooks += "]";
-    std::string json = "{\"available\":true,\"returnOverride\":true,\"argRewrite\":true,\"stackCapture\":true,\"initOk\":" + std::string(g_init_ok ? "true" : "false") +
+    std::string json = "{\"available\":true,\"returnOverride\":true,\"argRewrite\":true,\"stackCapture\":true,"
+                       "\"maxHooks\":" + std::to_string(ADH_JAVA_MAX_HOOKS) + ",\"initOk\":" + std::string(g_init_ok ? "true" : "false") +
                        ",\"backend\":\"art\",\"version\":\"v6.4\",\"active\":" +
                        std::string(active_count ? "true" : "false") +
                        ",\"count\":" + std::to_string(active_count) +

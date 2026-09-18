@@ -15,6 +15,11 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.52 hook 槽位预算可见 + 批处理按预算截断（2026-09-19，host 验收 PASS；真机待做）**：以前"最多 16 个并发 hook"是**隐藏在失败里**的——第 17 个只是装不上，批量工具还会对着只剩 4 个空闲的 agent 发 16 次安装，然后报 12 条 `install failed`。
+      · agent：`native_hook status` 新增顶层 **`slots`**（`max`/`used`/`free`/`byMode{got,inline,sites,vtable}`），`java_hook status` 新增 **`maxHooks`**（active 计数本来就有）——AI 装钩前能先看预算，而不是撞墙。
+      · host：`native_hook_all` 先发一次 `native_hook status`，用新纯函数 **`effectiveBatchLimit(requested, freeSlots)`** 决定本批上限：`free=4` 且请求 16 → 装 4 并给出 `limitReason`；**`free=0` 直接 fail-loud**（"unhook something first"）而不是逐符号失败；老 payload 不上报预算时回退到请求值并说明。响应新增 `slots` 与 `limitReason`，`matched`/`installedCount` 的语义不变。
+      · 验收：`daemon/test/native_hook_all.test.ts` 7 → **8** 条（预算=4 截断、0 空闲阻断、老 payload 回退、请求夹紧）；`tools/verify_v84_native_hook_all.sh`（host）新增槽位断言（agent 源码必须上报 `slots`、daemon 必须走 status 取预算、响应必须带 `limitReason`），**PASS**。全量 host 门禁 **29 PASS / 0 FAIL / 78 SKIP**（107 脚本）；daemon 单测 **143**。
+      · **待真机**：沙盒里挂满 16 个后再调 `native_hook_all`，必须回 `limitReason` + 0 安装（而不是 16 条失败）；卸载几个后同一调用应能装进去。
 - [~] **v4.51 去特征 stage 2a：vendored LSPlant 字符串（2026-09-19，host 验收 PASS）**：stage 1 清掉的是**我们自己**的串；`LSPlant`/`lsplant` 这几个来自 vendored 源码，其中最要命的不是日志——**LSPlant 运行时生成的 dex 以 `"lsplant"` 作为 source name**（`lsplant.cc:474`），目标只要枚举已加载 dex 就能读到工具名。
       · 新增 `tools/patch_vendor_signatures.sh`（幂等，带 `--check`）：把三处改成中性——`ScopedSuspendAll("LSPlant Hook")` → `"art hook"`、`logging.hpp` 的 `#define LOG_TAG "LSPlant"` → `"rt.java"`、生成的 dex source name `"lsplant"` → `"generated"`；`tools/fetch_lsplant.sh` 在已有的源码补丁之后调用它（vendored 目录是 gitignored，改 checkout 会被下次 fetch 覆盖，所以补丁必须挂在 fetch 路径上）。
       · 扫描器把 `LSPlant`/`lsplant` 从"预算"提到 **MUST_BE_ABSENT**；`tools/verify_v88_agent_signatures.sh` 新增 **vendor check**（跑 `--check`），这样"重新 fetch 后忘了打补丁"会在门禁里现形，而不是等下一次构建才发现。重建后实测：`LSPlant` 0、`lsplant` 0、`Dobby` 2（预编译 AAR，仍预算内）。

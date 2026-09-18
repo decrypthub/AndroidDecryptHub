@@ -12,6 +12,7 @@ verify_resolve_env_host
 OUT="$(node - "$ROOT" <<'EOF'
 const [root] = process.argv.slice(2);
 const { spawnSync } = await import('node:child_process');
+const fs = await import('node:fs');
 const base = 'file:///' + String(root).replace(/\\/g, '/').replace(/^\//, '');
 const problems = [];
 const notes = [];
@@ -21,7 +22,7 @@ const text = `${t.stdout ?? ''}${t.stderr ?? ''}`;
 const passed = Number(/pass (\d+)/.exec(text)?.[1] ?? -1);
 const failed = Number(/fail (\d+)/.exec(text)?.[1] ?? -1);
 if (t.status !== 0) problems.push(`native_hook_all unit tests exited ${t.status}`);
-if (passed < 7) problems.push(`expected >=7 native_hook_all unit tests, saw ${passed}`);
+if (passed < 8) problems.push(`expected >=8 native_hook_all unit tests, saw ${passed}`);
 if (failed !== 0) problems.push(`native_hook_all unit tests report ${failed} failures`);
 notes.push(`native_hook_all unit tests: pass=${passed} fail=${failed}`);
 
@@ -40,6 +41,27 @@ if (selectExportSymbols) {
   const all = selectExportSymbols(table, { limit: 16 });
   if (all.matched !== 3 || all.selected.some((s) => s.name === 'data_tbl')) problems.push('data symbols must never be selected');
   notes.push(`synthetic export table -> matched=${matched} selected=${selected.length}`);
+}
+
+// The batch must size itself from the agent slot budget (agent v4.52 reports slots in status),
+// instead of firing 16 installs into 4 free slots and reporting 12 failures.
+let effectiveBatchLimit;
+try {
+  ({ effectiveBatchLimit } = await import(`${base}/daemon/src/native_hook_all.ts`));
+  const tight = effectiveBatchLimit(16, 4);
+  const none = effectiveBatchLimit(8, 0);
+  const noneBudget = effectiveBatchLimit(8, null);
+  if (tight.limit !== 4) problems.push(`the slot budget must truncate the batch (got ${tight.limit})`);
+  if (!none.blocked || none.limit !== 0) problems.push('0 free slots must refuse the batch, not fail symbol by symbol');
+  if (noneBudget.limit !== 8) problems.push('an older payload without a budget must fall back to the request');
+  const agentSrc = fs.readFileSync(`${root}/agent/src/hook/native_hooks.cpp`, 'utf8');
+  if (!agentSrc.includes('\\"slots\\":{\\"max\\":%d')) problems.push('agent status must report the slot budget (slots.max/used/free/byMode)');
+  const helperSrc = fs.readFileSync(`${root}/daemon/src/native_hook_all.ts`, 'utf8');
+  if (!helperSrc.includes('action: \'status\'')) problems.push('native_hook_all must read the slot budget from a status call');
+  if (!helperSrc.includes('limitReason')) problems.push('the response must explain the effective limit');
+  notes.push(`slot budget: 16 requested with 4 free -> ${tight.limit}, 0 free -> blocked, no budget -> ${noneBudget.limit}`);
+} catch (e) {
+  problems.push('slot budget check failed: ' + e.message);
 }
 
 try {

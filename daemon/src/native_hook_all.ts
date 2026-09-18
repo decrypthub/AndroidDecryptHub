@@ -12,6 +12,22 @@ import { reconstructSo } from './service.ts';
 
 export interface SymbolChoice { name: string; address: string; offset: string; size: number }
 
+/**
+ * How many hooks the agent can ACTUALLY take right now: min(requested, free slots it reports).
+ * Without this the 17th install just fails symbol by symbol; with it the batch is truncated to what
+ * fits and says why. freeSlots=null means an older payload that does not report a budget.
+ */
+export function effectiveBatchLimit(requested: number, freeSlots: number | null): { limit: number; reason: string; blocked: boolean } {
+  const want = Math.max(1, Math.min(16, Math.trunc(Number(requested) || 8)));
+  if (freeSlots == null || !Number.isFinite(Number(freeSlots))) {
+    return { limit: want, reason: `the agent did not report a slot budget (older payload): assuming the requested ${want}`, blocked: false };
+  }
+  const free = Math.max(0, Math.trunc(Number(freeSlots)));
+  if (free === 0) return { limit: 0, reason: 'the agent reports 0 free hook slots: unhook something first', blocked: true };
+  if (free < want) return { limit: free, reason: `only ${free} of the requested ${want} hooks fit (agent reports ${free} free slot(s))`, blocked: false };
+  return { limit: want, reason: `${free} slot(s) free, installing up to ${want}`, blocked: false };
+}
+
 export interface InstalledHook { hookId: number; symbol: string; address: string }
 export interface HookFailure { symbol: string; error: string }
 
@@ -86,6 +102,10 @@ export interface NativeHookAllResult {
   installedCount: number;
   /** Effective per-hook event throttle (0 = every hit emits). */
   throttleMs: number;
+  /** Slot budget the agent reported before the batch (null = older payload that does not report it). */
+  slots: { max: number; used: number; free: number; byMode?: Record<string, number> } | null;
+  /** Why the batch was (or was not) truncated - the agent slot budget, not a guess. */
+  limitReason: string;
   slotLimited: boolean;
   hooks: { hookId: number; symbol: string; address: string }[];
   failures: { symbol: string; error: string }[];
@@ -116,7 +136,14 @@ export async function nativeHookAll(session: string, opts: {
   const buf = await reconstructSo(session, String(mod.base));
   const symbols = parseDynSymbols(buf);
   if (!symbols.length) throw new Error(`no dynamic symbols could be read from ${mod.name} (dump failed or the module is stripped)`);
-  const { selected, matched } = selectExportSymbols(symbols, opts);
+  // Ask the agent for its slot budget first: a batch that does not fit should be truncated with a
+  // reason, not rejected symbol by symbol.
+  const status = await sendCmd(session, 'native_hook', { action: 'status' }, 15_000).catch(() => null);
+  const slotsRaw = status?.status?.slots ?? null;
+  const freeSlots = slotsRaw && Number.isFinite(Number(slotsRaw.free)) ? Number(slotsRaw.free) : null;
+  const budget = effectiveBatchLimit(opts.limit ?? 8, freeSlots);
+  if (budget.blocked) throw new Error(`native_hook_all: ${budget.reason}`);
+  const { selected, matched } = selectExportSymbols(symbols, { ...opts, limit: budget.limit });
   if (!matched) throw new Error(`no exported function in ${mod.name} matched the filter (prefix/contains/exact)`);
 
   const base = parseHex(mod.base);
@@ -130,11 +157,16 @@ export async function nativeHookAll(session: string, opts: {
     matched,
     installedCount: hooks.length,
     throttleMs,
+    slots: slotsRaw && Number.isFinite(Number(slotsRaw.max))
+      ? { max: Number(slotsRaw.max), used: Number(slotsRaw.used), free: Number(slotsRaw.free), ...(slotsRaw.byMode ? { byMode: slotsRaw.byMode } : {}) }
+      : null,
+    limitReason: budget.reason,
     slotLimited: matched > selected.length,
     hooks,
     failures,
     note: `filter=${opts.exact ? `exact:${opts.exact}` : opts.prefix ? `prefix:${opts.prefix}` : opts.contains ? `contains:${opts.contains}` : 'any'} limit=${selected.length === matched ? 'not reached' : `truncated to ${selected.length}`}; unhook with native_hook unhook per hookId`
-      + (throttleMs ? `; each hook emits at most one event per ${throttleMs} ms (status reports hits vs throttled)` : ''),
+      + (throttleMs ? `; each hook emits at most one event per ${throttleMs} ms (status reports hits vs throttled)` : '')
+      + `; ${budget.reason}`,
   };
 }
 

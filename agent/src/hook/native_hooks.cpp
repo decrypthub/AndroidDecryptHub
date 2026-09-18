@@ -784,11 +784,15 @@ extern "C" int adh_native_hook_status_json(char *out, size_t out_size) {
     std::string hooks = "[";
     int count = 0;
     int patched_count = 0;
+    // Per-mode usage: the host needs to know how much of the budget is left BEFORE it asks for a
+    // batch of hooks, otherwise the 17th install just fails one symbol at a time.
+    int by_mode[4] = {0, 0, 0, 0};
     pthread_mutex_lock(&g_native_hooks_lock);
     for (int i = 0; i < ADH_NATIVE_MAX_HOOKS; i++) {
         NativeHookContext &ctx = g_native_hooks[i];
         if (ctx.active != 1) { if (ctx.patched) patched_count++; continue; }
         if (count) hooks += ",";
+        if (ctx.mode >= 0 && ctx.mode < 4) by_mode[ctx.mode]++;
         unsigned long long hits = g_native_hook_hits[i].load(std::memory_order_relaxed);
         char sitebuf[1400] = "";
         if (ctx.mode == 3) {
@@ -823,7 +827,14 @@ extern "C" int adh_native_hook_status_json(char *out, size_t out_size) {
     hooks += "]";
     char kept[96] = "";
     adh_site_hook_last_revert_json(kept, sizeof(kept));
-    std::string json = "{\"count\":" + std::to_string(count) + ",\"patched\":" + std::to_string(patched_count) + "," +
+    char slots[256];
+    snprintf(slots, sizeof(slots),
+             "\"slots\":{\"max\":%d,\"used\":%d,\"free\":%d,"
+             "\"byMode\":{\"got\":%d,\"inline\":%d,\"sites\":%d,\"vtable\":%d}},",
+             ADH_NATIVE_MAX_HOOKS, count, ADH_NATIVE_MAX_HOOKS - count,
+             by_mode[0], by_mode[1], by_mode[2], by_mode[3]);
+    std::string json = "{" + std::string(slots) +
+                       "\"count\":" + std::to_string(count) + ",\"patched\":" + std::to_string(patched_count) + "," +
                        kept + "\"hooks\":" + hooks + "}";
     snprintf(out, out_size, "%s", json.c_str());
     out[out_size - 1] = 0;

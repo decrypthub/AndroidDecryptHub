@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { selectExportSymbols } from '../src/native_hook_all.ts';
+import { effectiveBatchLimit, selectExportSymbols } from '../src/native_hook_all.ts';
 
 const sym = (name, addr, size, kind = 'func') => ({ name, addr, size, kind });
 
@@ -69,4 +69,25 @@ test('addresses stay module-relative and carry their offset', () => {
   assert.equal(selected[0].address, '0x2a00');
   assert.equal(selected[0].offset, '0x2a00');
   assert.equal(selected[0].size, 12);
+});
+test('the batch limit comes from the agent slot budget, not from a guess', () => {
+  // older payload: no budget reported -> assume the request, but say so
+  const noBudget = effectiveBatchLimit(8, null);
+  assert.deepEqual({ limit: noBudget.limit, blocked: noBudget.blocked }, { limit: 8, blocked: false });
+  assert.match(noBudget.reason, /did not report a slot budget/);
+
+  // only 4 slots left: truncate to 4 and explain
+  const tight = effectiveBatchLimit(16, 4);
+  assert.equal(tight.limit, 4);
+  assert.match(tight.reason, /only 4 of the requested 16/);
+
+  // nothing left: refuse instead of failing symbol by symbol
+  const none = effectiveBatchLimit(8, 0);
+  assert.equal(none.blocked, true);
+  assert.equal(none.limit, 0);
+  assert.match(none.reason, /unhook something first/);
+
+  // plenty free: keep the request; an absurd request still clamps to the agent ceiling
+  assert.equal(effectiveBatchLimit(8, 64).limit, 8);
+  assert.equal(effectiveBatchLimit(1000, 64).limit, 16);
 });
