@@ -7,6 +7,8 @@ extern "C" {
 #endif
 
 int adh_got_replace(const char *module_substr, void *orig, void *wrapper);
+// Our own module name as it shows up in /proc/self/maps (works for a memfd-loaded agent too).
+const char *adh_self_module_name(void);
 // 1 when addr is one of the module's relocation (GOT) slots, 0 for plain data / unknown.
 int adh_got_is_slot(const char *module, void *addr);
 int adh_got_replace_by_name(const char *module_substr, const char *symbol, void *wrapper);

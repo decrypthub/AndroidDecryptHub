@@ -642,15 +642,49 @@ void adh_agent_set_package(const char *pkg) {
 
 // More than one backend can load this .so into one process (Zygisk + self-load + Xposed).
 // Each copy has its own pthread_once; only the first copy in link-map order may bootstrap.
-struct AgentCopyCtx { void *first_base; };
+// Image span (sum of PT_LOAD memsz) of the module loaded at `base`, used to recognise another copy
+// of THIS .so without relying on its file name (a memfd-loaded agent has none).
+struct SpanCtx { unsigned long long base; unsigned long long span; };
+
+static int measure_span_cb(struct dl_phdr_info *info, size_t size, void *data) {
+    (void)size;
+    struct SpanCtx *c = (struct SpanCtx *)data;
+    if ((unsigned long long)info->dlpi_addr != c->base) return 0;
+    unsigned long long span = 0;
+    for (int i = 0; i < info->dlpi_phnum; i++) {
+        const ElfW(Phdr) *ph = &info->dlpi_phdr[i];
+        if (ph->p_type != PT_LOAD) continue;
+        unsigned long long end = (unsigned long long)ph->p_vaddr + (unsigned long long)ph->p_memsz;
+        if (end > span) span = end;
+    }
+    c->span = span;
+    return 1;
+}
+
+static unsigned long long image_span_of(void *base) {
+    struct SpanCtx ctx = { (unsigned long long)(uintptr_t)base, 0 };
+    dl_iterate_phdr(measure_span_cb, &ctx);
+    return ctx.span;
+}
+
+struct AgentCopyCtx { const char *own_path; unsigned long long own_span; void *first_base; };
 
 static int find_first_agent_copy(struct dl_phdr_info *info, size_t size, void *data) {
     (void)size;
     struct AgentCopyCtx *ctx = (struct AgentCopyCtx *)data;
+    // Do NOT match a hardcoded file name: a memfd-loaded agent shows up as
+    // "/memfd:jit-cache (deleted)" in the link map. Compare the exact path dladdr gave us plus the
+    // image span (sum of PT_LOAD memory sizes), which two copies of the same .so always share.
     const char *name = info->dlpi_name ? info->dlpi_name : "";
-    const char *base = strrchr(name, '/');
-    base = base ? base + 1 : name;
-    if (strcmp(base, "libadh_agent.so") != 0) return 0;
+    if (!ctx->own_path || strcmp(name, ctx->own_path) != 0) return 0;
+    unsigned long long span = 0;
+    for (int i = 0; i < info->dlpi_phnum; i++) {
+        const ElfW(Phdr) *ph = &info->dlpi_phdr[i];
+        if (ph->p_type != PT_LOAD) continue;
+        unsigned long long end = (unsigned long long)ph->p_vaddr + (unsigned long long)ph->p_memsz;
+        if (end > span) span = end;
+    }
+    if (span != ctx->own_span) return 0;
     ctx->first_base = (void *)(uintptr_t)info->dlpi_addr;
     return 1;   // stop at the first loaded copy
 }
@@ -662,6 +696,12 @@ static int current_agent_copy_is_owner(void) {
         return 1;
     }
     struct AgentCopyCtx ctx = {0};
+    ctx.own_path = self.dli_fname;
+    ctx.own_span = self.dli_fbase ? image_span_of((void *)(uintptr_t)self.dli_fbase) : 0;
+    if (!ctx.own_span) {
+        LOGI("single-instance guard unavailable (no PT_LOAD span) — continuing");
+        return 1;
+    }
     dl_iterate_phdr(find_first_agent_copy, &ctx);
     if (!ctx.first_base) {
         LOGI("single-instance guard: agent not found in link map — continuing");

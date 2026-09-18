@@ -112,8 +112,8 @@ int adh_stealth_pool_set(int enable, char *error, size_t error_size) {
     }
     if (!g_installed) {
         void *slot = NULL, *value = NULL;
-        if (!adh_got_slot_value("libadh_agent.so", "mmap", &slot, &value) || !slot || !value) {
-            pool_error(error, error_size, "mmap GOT slot not found in libadh_agent.so (cannot camouflage the pool)");
+        if (!adh_got_slot_value(adh_self_module_name(), "mmap", &slot, &value) || !slot || !value) {
+            pool_error(error, error_size, "mmap GOT slot not found in our own module (cannot camouflage the pool)");
             return 0;
         }
         if (value == (void *)adh_pool_mmap) {

@@ -516,9 +516,25 @@ static int my_close(int fd) {
     return ((close_t)g_orig_close)(fd);
 }
 
-// Single shipped name: the self-test resolves exactly this module in /proc/self/maps.
+// Our own module name as it appears in /proc/self/maps. Derived from dladdr rather than hardcoded:
+// the agent may be loaded from a memfd (zygisk memfd loading), in which case the path is
+// "/memfd:jit-cache (deleted)" and a hardcoded "libadh_agent.so" lookup would find nothing.
+// Distinct names may be configured, and every scan through /proc/self/maps uses this.
+const char *adh_self_module_name(void) {
+    static char cached[128];
+    if (cached[0]) return cached;
+    Dl_info self;
+    if (dladdr((void *)(uintptr_t)adh_self_module_name, &self) && self.dli_fname && self.dli_fname[0]) {
+        const char *slash = strrchr(self.dli_fname, '/');
+        snprintf(cached, sizeof(cached), "%s", slash ? slash + 1 : self.dli_fname);
+    } else {
+        snprintf(cached, sizeof(cached), "libadh_agent.so");
+    }
+    return cached;
+}
+
 static const char *self_module_name(void) {
-    return "libadh_agent.so";
+    return adh_self_module_name();
 }
 
 void adh_cmd_gothook_selftest(int fd, const char *id) {

@@ -200,7 +200,10 @@ static int footprint_scan(struct footprint_counts *c, int *module_count) {
             c->anon_exec_bytes += bytes;
         }
 
-        if (strstr(pth, "libadh_agent.so")) c->agent_exec++;
+        // Use the name WE are actually mapped under (dladdr): a memfd-loaded agent shows up as
+        // "/memfd:jit-cache (deleted)", and a hardcoded "libadh_agent.so" would report 0 for it -
+        // which would look like "no agent footprint" exactly when the agent is hidden.
+        if (pth[0] && strstr(pth, adh_self_module_name())) c->agent_exec++;
         if (strstr(pth, "/zygisk/") || strstr(pth, "libzygisk.so") || strstr(pth, "zygisk_"))
             c->zygisk_exec++;
     }

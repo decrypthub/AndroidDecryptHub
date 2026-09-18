@@ -1330,6 +1330,8 @@ MCP              →  AI 可编程操控，与 HTTP 同源
 - **最小侵入模式**：只启用 maps/dex/classloader/crypto 等低痕迹模块，关闭高痕迹 hook
 - **hook 自校验对抗**：应对目标周期性校验函数序言字节、检测 GOT 改写
 
+> 实现状态（v4.37，真机 `aa165071` 验收）：**Zygisk 注入的 agent 不再以文件路径出现在目标 maps** —— 伴生进程把 agent 复制进 `memfd:jit-cache`，并在 **post-specialize（App 域）** 由 linker 从该 fd 加载（pre-specialize 创建的 memfd 因域切换会被 linker 拒绝，真机实测），失败则回退模块路径并记录；scope 判定改由 **root 伴生进程**代读 `/data/adb/adh/scope.json`（`scope <pkg>` 协议）；注入决策写 `/data/adb/adh/zygisk_inject.log`（实例在 App 域时经伴生转发）。真机 `com.android.settings`：maps 中 `libadh_agent.so` 计数为 0、agent 以三个小 `/memfd:jit-cache (deleted)` 映射出现、daemon 侧在线 `entry=start`。
+
 > 实现状态（v4.36，真机 `aa165071` 验收）：指针槽后端覆盖到**真实对象虚调用**（对象持 vptr、表在 RELRO、`ldr vptr/ldr slot/blr`）与**可写函数指针**（回调变量）：默认只改只读槽，可写槽需 `slotsWritable:true`（默认安装会明确报"writable slots were skipped"，成功路径也会回传 `skippedWritable`）；revert 只还原"仍等于我们 thunk"的槽，目标自己改写过的槽保留并回传 `slotChangedByTarget`；验收断言对象虚调用的命中归因（只调该探针时 hits 增长）、被改槽确是函数地址、函数 24 字节前后逐位相同、槽位逐位还原与 thunk 页消失。
 
 > 实现状态（v4.35，真机 `aa165071` 验收）：**指针槽（vtable/回调表/GOT）hook**——`native_hook mode=vtable` 扫描可读非可执行 data 段里等于目标地址的 8 字节槽，改槽不改码：函数入口、调用点、指令缓存都不动，间接调用（函数指针表，内存形态与 C++ vtable 相同；真实对象分派未单独验收）因此也能拦。逐槽回传 `kind`（只有 GLOB_DAT/JUMP_SLOT 算 `got`，vtable 里的 RELATIVE 指针算 `data`）与所在模块/映射权限；真机断言"直接读函数地址的 24 字节安装前后逐位相同" + "间接调用命中" + "相邻槽未被改" + "hard unhook 逐位还原且 thunk 页 munmap"。**已知副作用（验收里如实断言）**：改模块自己的 GOT 槽会改变该模块内 `&symbol` 的解析结果，目标自查可因此发现重定向（代码本身没有变）。默认只改只读映射里的槽，`slotsWritable:true` 才改可写槽；回滚失败时保留 thunk 页并把 `pageKept` 报到 status。
