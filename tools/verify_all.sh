@@ -94,12 +94,19 @@ SCRIPTS=(
   "verify_v85_syscall_trace.sh:host"
   # Per-hook native event throttle (v4.48): payload shaping + agent wiring + MCP/REST shape. Host-only.
   "verify_v86_native_throttle.sh:host"
+  # ...and its device half: hits = emitted + throttled on a real hook, with the return rewrite still
+  # applied to every throttled hit.
+  "verify_v86_device_throttle.sh:device"
   # MCP operability (v4.49): every agent op must be reachable through the MCP import graph (or be
   # declared internal with a reason); probe/filesystem tools share their logic with the REST routes.
   "verify_v87_mcp_operability.sh:host"
+  # Device half of the MCP operability tools: ping / engine self-test / protocol self-test / fs.
+  "verify_v87_device_probe_fs.sh:device"
   # Signature scrub (v4.50): the release agent must not carry our own identity strings (stage 1)
   # and the remaining third-party/contract strings are budgeted. SKIPs when the .so is not built.
   "verify_v88_agent_signatures.sh:host"
+  # Device half: scan the LOADED agent image for the tokens stage 1 removed (with a positive control).
+  "verify_v88_device_memory_signature.sh:device"
   # Hook-hit caller backtrace (v4.39): the event must carry the at-hit chain and every frame must be
   # resolved to module + symbol; a bogus frame pointer must stop the walk, not invent frames.
   "verify_v78_hook_backtrace.sh:device"

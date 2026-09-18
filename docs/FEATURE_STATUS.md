@@ -1,10 +1,10 @@
 # ADH 功能状态（发布前梳理，2026-09-19 更新）
 
 > 这份文件回答一个问题：**现在到底有什么、什么是验证过的、什么是没验证的、什么还没做完。**
-> 判定只认 `tools/verify_all.sh`（**104 个脚本 = 29 host + 75 device**），不认"看起来能跑"。
+> 判定只认 `tools/verify_all.sh`（**107 个脚本 = 29 host + 78 device**），不认"看起来能跑"。
 > 规格见 `REQUIREMENTS.md`，架构与排期见 `DEVELOPMENT_PLAN.md`，跨会话进度见 `PROGRESS.md`。
 > 最近一次**全绿**门禁：`6319d5d`（设备在位，**92 PASS / 0 FAIL / 2 SKIP**）。
-> 最近一次 host-only 门禁（手机不在位）：**29 PASS / 0 FAIL / 75 SKIP** —— 设备脚本如实记 SKIP，不再冒充通过。
+> 最近一次 host-only 门禁（手机不在位）：**29 PASS / 0 FAIL / 78 SKIP** —— 设备脚本如实记 SKIP，不再冒充通过。
 
 ## 0. 发布物
 
@@ -69,9 +69,9 @@
 | Java 类级 trace | start 挂 HookProbe → java_call stackOuter → digest 给出两个重载各自次数与调用方 → stop 后进程存活 | v83（设备半） |
 | 一站式 syscall 跟踪 | libc uname 站点 start → 触发 adh_libc_uname_probe → digest 调用方是该 fixture、observed 全 160、无 mismatch → stop 后存活 | v85（设备半） |
 | native 批量挂钩 | 对 libadhdetect.so 用 prefix:adh_ 装一批 → 触发 → unhook 全部 → 进程存活 | v84（设备半） |
-| 签名去特征（运行期） | 目标进程内用 agent 自己的 memory read 扫已加载镜像，确认 deny-list 一个都不在（静态镜像已过 v88）；`qbdi_trace` 缺 symLib/symbol 必须 fail-loud | v88（设备半）/v51/v10_qbdi |
-| MCP 探针与文件系统 | `agent_ping` 往返延迟、`engine_selftest` 在沙盒上 `fired && protRestored`、`protocol_selftest` 1MB 帧完整、`fs_list`/`fs_read` 走 `/data/data/com.adh.sandbox` 与 `/proc/self/cmdline`（v25 老断言必须继续过） | v87（设备半） |
-| native 事件限流 | libc 热站点（`read`/`write`）用 `throttleMs:200`：事件间隔 ≥ 窗口、`hits = 已发事件 + throttled`、`throttled` 单调递增；带 `returnValue`/`skipOriginal` 的钩子每一次命中都生效 | v86（设备半） |
+| 签名去特征（运行期，**脚本已就绪**） | 目标进程内用 agent 自己的 memory read 扫已加载镜像，确认 deny-list 一个都不在（静态镜像已过 v88）；`qbdi_trace` 缺 symLib/symbol 必须 fail-loud | v88_device/v51/v10_qbdi |
+| MCP 探针与文件系统（**脚本已就绪**） | `agent_ping` 往返延迟、`engine_selftest` 在沙盒上 `fired && protRestored`、`protocol_selftest` 1MB 帧完整、`fs_list`/`fs_read` 走 `/data/data/com.adh.sandbox` 与 `/proc/self/cmdline`（v25 老断言必须继续过） | v87_device |
+| native 事件限流（**脚本已就绪**） | libc 热站点（`read`/`write`）用 `throttleMs:200`：事件间隔 ≥ 窗口、`hits = 已发事件 + throttled`、`throttled` 单调递增；带 `returnValue`/`skipOriginal` 的钩子每一次命中都生效 | v86_device |
 | 门禁抖动定性 | gate11 的 v11/v16/v20 单独复跑（评审判定为设备状态级联，非回归） | — |
 | 采集链路回归 | `service.ts` 的 drain 重构（共享 `drainSession`，java_trace/syscall_digest 不再裸发 `capture_drain`）需要设备复跑采集家族：v04_crypto / v11 / v16 / v20 / v22 / v26 | — |
 | 全量门禁 | 手机接回后跑到全绿，把数字写回本文件与 `PROGRESS.md` | — |
