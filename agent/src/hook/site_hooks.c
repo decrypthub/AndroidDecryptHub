@@ -29,7 +29,6 @@
 #define ADH_SITE_MAX_SITES 8
 #define ADH_SITE_THUNK_STRIDE 256
 #define ADH_SITE_PAGE_LEN 4096
-#define ADH_NEAR_PAGE_MAX 8                       // one page per site, bounded
 #define ADH_SITE_SCAN_BUDGET (128u * 1024u * 1024u)  // never scan more .text than this per apply
 #define ADH_MAX_RANGES 4096   // dynamic: the sandbox process has ~2600 mappings; a truncated table used to hide the caller module
 #define ADH_BL_RANGE (128u * 1024u * 1024u)
@@ -107,10 +106,19 @@ static unsigned int enc_branch(int64_t site, int64_t target, int link) {
     return (link ? 0x94000000u : 0x14000000u) | (unsigned)((delta >> 2) & 0x03FFFFFF);
 }
 
+static int off_ok(int off, int unit, int max) { return off >= 0 && off % unit == 0 && off <= max; }
+
 // Emit one thunk. Returns the word count, or 0 when the layout check fails.
 static int emit_thunk(unsigned int *c, int cap, void *recorder, void *original, int hook_slot) {
     int n = 0;
     if (cap < 48) return 0;
+    // The encoders mask their immediates, so an out-of-range offset would silently emit a different
+    // instruction. Check every offset this thunk actually uses before encoding anything.
+    if (hook_slot < 0 || hook_slot > 0xFFFF) return 0;
+    if (!off_ok(0, 8, 32760) || !off_ok(16, 8, 32760) || !off_ok(32, 8, 32760) || !off_ok(48, 8, 32760)) return 0;
+    if (!off_ok(FR_X8, 8, 32760) || !off_ok(FR_X9, 8, 32760) || !off_ok(FR_X29, 8, 32760) || !off_ok(FR_X18, 8, 32760)) return 0;
+    if (!off_ok(FR_Q0, 16, 504) || !off_ok(FR_Q0 + 32, 16, 504) || !off_ok(FR_Q0 + 64, 16, 504) || !off_ok(FR_Q0 + 96, 16, 504)) return 0;
+    if (!off_ok(FR_FRAME, 16, 4095)) return 0;
     c[n++] = enc_sub_sp(FR_FRAME);
     c[n++] = enc_stp_x(0, 1, 31, 0);
     c[n++] = enc_stp_x(2, 3, 31, 16);
@@ -198,7 +206,7 @@ static int basename_of(const char *path, char *out, size_t out_size) {
 // JIT caches and thunk pages - never a call site of interest and expensive to walk - so they are
 // skipped, but the WHOLE file is parsed: the app's own libraries sit far beyond the first few
 // hundred lines of a 2600-mapping process, and stopping early silently lost the target module.
-static int collect_ranges(struct mod_range *out, int max, int *exec_n) {
+static int collect_ranges(struct mod_range *out, int max, int *exec_n, int *table_full) {
     FILE *m = fopen("/proc/self/maps", "r");
     if (!m) return 0;
     char line[512];
@@ -213,7 +221,11 @@ static int collect_ranges(struct mod_range *out, int max, int *exec_n) {
         char *q = line;
         for (int f = 0; f < 5 && q; f++) { q = strchr(q, ' '); if (q) while (*q == ' ') q++; }
         const char *path = (q && *q) ? q : "";
-        if (path[0] != '/') continue;                       // anonymous / memfd / [anon:...]
+        // Anonymous mappings have no path; memfd mappings (ART JIT caches) DO start with "/", so
+        // they need their own check - missing it let the scanner treat JIT code as a call site and
+        // burn the byte budget on it.
+        if (path[0] != '/') continue;
+        if (strncmp(path, "/memfd:", 7) == 0) continue;
         const int exec = perms[2] == 'x';
         const int read = perms[0] == 'r';
         if (!exec && !read) continue;
@@ -229,6 +241,7 @@ static int collect_ranges(struct mod_range *out, int max, int *exec_n) {
     }
     fclose(m);
     if (exec_n) *exec_n = e_count;
+    if (table_full) *table_full = (n >= max) ? 1 : 0;
     return n;
 }
 
@@ -260,8 +273,8 @@ static void module_of_addr(const struct mod_range *rs, int n, unsigned long long
 // the address it jumps to lives in the GOT slot the second instruction reads. A call to an
 // interposable symbol (which is how the compiler calls a function exported by another module, and
 // even a same-module default-visibility symbol) goes through such a stub.
-static void *stub_jump_target(void *stub, const struct mod_range *rs, int n) {
-    if (!range_contains_addr(rs, n, (unsigned long long)(uintptr_t)stub, 1)) return NULL;
+static void *stub_jump_target(const struct mod_range *all, int all_n, void *stub) {
+    if (!range_contains_addr(all, all_n, (unsigned long long)(uintptr_t)stub, 1)) return NULL;
     unsigned int i0 = *(unsigned int *)stub;
     if (((i0 >> 24) & 0x1Fu) != 0x10u) return NULL;              // ADRP
     if ((int)(i0 & 31u) != 16) return NULL;
@@ -274,7 +287,14 @@ static void *stub_jump_target(void *stub, const struct mod_range *rs, int n) {
     if ((i1 & 0xFFC00000u) != 0xF9400000u) return NULL;          // LDR (unsigned offset, 64-bit)
     if ((int)((i1 >> 5) & 31u) != 16) return NULL;
     unsigned long long slot = page + (unsigned long long)((i1 >> 10) & 0xFFFu) * 8ull;
-    if (!range_readable(rs, n, slot)) return NULL;
+    if (!range_readable(all, all_n, slot)) return NULL;
+    // The slot must belong to the same module as the stub: the GOT a PLT entry reads is in its own
+    // module, and without this check a random data word elsewhere could resolve to the target and
+    // turn a non-call instruction into a "site".
+    char stub_mod[96] = "", slot_mod[96] = "";
+    module_of_addr(all, all_n, (unsigned long long)(uintptr_t)stub, stub_mod, sizeof(stub_mod));
+    module_of_addr(all, all_n, slot, slot_mod, sizeof(slot_mod));
+    if (!stub_mod[0] || strcmp(stub_mod, slot_mod) != 0) return NULL;
     return *(void **)(uintptr_t)slot;
 }
 
@@ -375,15 +395,19 @@ static int wanted_range(const struct mod_range *r, const char *scope, const char
 // 0 = the target's own module, 1 = a module under /data (the app's own code), 2 = everything else.
 // Order matters: with a flat budget the scan used to spend all of it on system libraries and never
 // reached the app's own callers ("scan budget hit", 0 sites).
-static int range_class(const struct mod_range *r, const char *target_module) {
+static int range_class(const struct mod_range *r, const char *target_module, const char *target_dir) {
     char bn[96];
     if (basename_of(r->path, bn, sizeof(bn)) && target_module[0] && strcmp(bn, target_module) == 0) return 0;
+    // Everything in the target module's own directory first too: for an app that is every sibling
+    // library, which is where cross-module callers realistically live.
+    if (target_dir[0] && strncmp(r->path, target_dir, strlen(target_dir)) == 0) return 0;
     if (strncmp(r->path, "/data/", 6) == 0) return 1;
     return 2;
 }
 
 static int scan_sites(void *target, int max_sites, const struct mod_range *all, int all_n,
-                      const char *scope, const char *target_module, const char *self_module,
+                      const char *scope, const char *target_module, const char *target_dir,
+                      const char *self_module,
                       struct site_entry *out, long long *scanned, int *truncated) {
     int found = 0;
     long long budget = 0;
@@ -391,7 +415,7 @@ static int scan_sites(void *target, int max_sites, const struct mod_range *all, 
     for (int pass = 0; pass < 3; pass++) {
     for (int r = 0; r < all_n && found < max_sites; r++) {
         if (!wanted_range(&all[r], scope, target_module, self_module)) continue;
-        if (range_class(&all[r], target_module) != pass) continue;
+        if (range_class(&all[r], target_module, target_dir) != pass) continue;
         unsigned long long len = all[r].end - all[r].start;
         if (budget + (long long)len > (long long)ADH_SITE_SCAN_BUDGET) { *truncated = 1; goto scan_done; }
         budget += (long long)len;
@@ -404,7 +428,7 @@ static int scan_sites(void *target, int max_sites, const struct mod_range *all, 
             int imm26 = (int)(insn & 0x03FFFFFFu);
             if (imm26 & 0x02000000) imm26 -= 0x04000000;
             void *dst = (void *)((uintptr_t)p + (intptr_t)imm26 * 4);
-            if (dst != target && stub_jump_target(dst, all, all_n) != target) continue;
+            if (dst != target && stub_jump_target(all, all_n, dst) != target) continue;
             out[found].at = p;
             out[found].orig = insn;
             out[found].thunk = NULL;
@@ -441,7 +465,8 @@ int adh_site_hook_apply(int slot, void *target, int max_sites, const char *scope
         snprintf(error, error_size, "out of memory for the mapping table");
         return 0;
     }
-    int all_n = collect_ranges(ranges, ADH_MAX_RANGES, NULL);
+    int table_full = 0;
+    int all_n = collect_ranges(ranges, ADH_MAX_RANGES, NULL, &table_full);
     if (all_n <= 0) {
         free(ranges);
         snprintf(error, error_size, "could not read /proc/self/maps");
@@ -456,6 +481,29 @@ int adh_site_hook_apply(int slot, void *target, int max_sites, const char *scope
     }
     char self_module[96] = "";
     module_of_addr(ranges, all_n, (unsigned long long)(uintptr_t)&adh_site_hook_apply, self_module, sizeof(self_module));
+    if ((!scope || !scope[0] || strcmp(scope, "all") == 0) && !self_module[0]) {
+        // Without our own module name the scanner cannot exclude the agent, and "all" would then be
+        // free to rewrite the agent's own calls. Fail loud instead of hooking ourselves.
+        free(ranges);
+        snprintf(error, error_size, "cannot resolve the agent module name; scope=all would be unsafe");
+        return 0;
+    }
+    char target_dir[160] = "";
+    {
+        char target_path[160] = "";
+        for (int i = 0; i < all_n; i++) {
+            if ((unsigned long long)(uintptr_t)target < ranges[i].start || (unsigned long long)(uintptr_t)target >= ranges[i].end) continue;
+            snprintf(target_path, sizeof(target_path), "%s", ranges[i].path);
+            break;
+        }
+        const char *slash = target_path[0] ? strrchr(target_path, '/') : NULL;
+        if (slash) {
+            size_t len = (size_t)(slash - target_path);
+            if (len >= sizeof(target_dir)) len = sizeof(target_dir) - 1;
+            memcpy(target_dir, target_path, len);
+            target_dir[len] = 0;
+        }
+    }
 
     struct site_ctx *ctx = &g_site_ctx[slot];
     pthread_mutex_lock(&g_site_lock);
@@ -475,19 +523,21 @@ int adh_site_hook_apply(int slot, void *target, int max_sites, const char *scope
     }
     long long scanned = 0;
     int truncated = 0;
-    int count = scan_sites(target, max_sites, ranges, all_n, scope, target_module, self_module,
+    int count = scan_sites(target, max_sites, ranges, all_n, scope, target_module, target_dir, self_module,
                            ctx->sites, &scanned, &truncated);
     ctx->scanned = scanned;
-    ctx->truncated = truncated;
+    ctx->truncated = truncated || table_full;
     if (count <= 0) {
         pthread_mutex_lock(&g_site_lock);
         memset(ctx, 0, sizeof(*ctx));
         pthread_mutex_unlock(&g_site_lock);
         free(ranges);
         snprintf(error, error_size,
-                 "no B/BL call site for %p found (scope=%s target module=%s self=%s, %d ranges (%d matched, %d other exec file), scanned %lld bytes%s) - use mode=inline or mode=got",
+                 "no B/BL call site for %p found (scope=%s target module=%s self=%s, %d ranges%s (%d matched, %d other exec file), scanned %lld bytes%s) - use mode=inline or mode=got",
                  target, scope && scope[0] ? scope : "module", target_module, self_module, all_n,
-                 matched_ranges, matched_masked, scanned, truncated ? ", scan budget hit" : "");
+                 table_full ? " (table full - some modules were not indexed)" : "",
+                 matched_ranges, matched_masked, scanned,
+                 truncated ? ", scan budget hit" : "");
         return 0;
     }
 
@@ -525,6 +575,11 @@ int adh_site_hook_apply(int slot, void *target, int max_sites, const char *scope
 
         int64_t delta = (int64_t)(uintptr_t)thunk - site;
         if (delta > (int64_t)ADH_BL_RANGE || delta < -(int64_t)ADH_BL_RANGE) {
+            // This site's page was already recorded: unmap it here or the rollback below (which only
+            // walks the finished sites) leaks it.
+            munmap(page, ADH_SITE_PAGE_LEN);
+            ctx->sites[i].page = NULL;
+            ctx->sites[i].thunk = NULL;
             snprintf(error, error_size, "thunk for site %d is out of BL range (%lld bytes)", i, (long long)delta);
             break;
         }
@@ -539,9 +594,21 @@ int adh_site_hook_apply(int slot, void *target, int max_sites, const char *scope
 
     if (done != count) {
         // Roll back everything already installed: a half-applied hook is worse than none.
+        // Rollback: restore what we patched. If a restore FAILS the site still branches into that
+        // thunk, so the page must stay mapped (never unmap the landing pad of live code) and the
+        // kept page is recorded for status.
         for (int i = 0; i < done; i++) {
-            if (ctx->sites[i].at) adh_patch_code_bytes(ctx->sites[i].at, &ctx->sites[i].orig, 4);
-            if (ctx->sites[i].page) munmap(ctx->sites[i].page, ADH_SITE_PAGE_LEN);
+            int restored = 1;
+            if (ctx->sites[i].at) {
+                restored = adh_patch_code_bytes(ctx->sites[i].at, &ctx->sites[i].orig, 4) &&
+                           *ctx->sites[i].at == ctx->sites[i].orig;
+            }
+            if (ctx->sites[i].page && restored) {
+                munmap(ctx->sites[i].page, ADH_SITE_PAGE_LEN);
+            } else if (ctx->sites[i].page) {
+                g_last_kept_page = ctx->sites[i].page;
+                g_last_kept_slot = slot;
+            }
         }
         pthread_mutex_lock(&g_site_lock);
         memset(ctx, 0, sizeof(*ctx));
@@ -630,6 +697,18 @@ void *adh_site_hook_page(int slot) {
     if (slot < 0 || slot >= ADH_SITE_MAX_SLOTS) return NULL;
     if (g_site_ctx[slot].count > 0) return g_site_ctx[slot].sites[0].page;
     return NULL;
+}
+
+// Last revert that had to keep a thunk page mapped, as a JSON fragment for the hook status. Without
+// this the information existed only in the agent log: the hook entry is already gone by then.
+void adh_site_hook_last_revert_json(char *out, size_t out_size) {
+    if (!out || !out_size) return;
+    pthread_mutex_lock(&g_site_lock);
+    void *kept = g_last_kept_page;
+    int slot = g_last_kept_slot;
+    pthread_mutex_unlock(&g_site_lock);
+    snprintf(out, out_size, "\"sitesPageKept\":\"0x%llx\",\"sitesPageKeptSlot\":%d,",
+             (unsigned long long)(uintptr_t)kept, slot);
 }
 
 void adh_site_hook_sites_json(int slot, char *out, size_t out_size, size_t *used) {

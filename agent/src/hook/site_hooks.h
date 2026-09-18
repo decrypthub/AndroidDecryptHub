@@ -34,6 +34,8 @@ int adh_site_hook_apply(int slot, void *target, int max_sites, const char *scope
                         char *error, size_t error_size);
 int adh_site_hook_revert(int slot, char *error, size_t error_size);
 int adh_site_hook_count(int slot);
+// JSON fragment (name/value pairs) describing the last revert that had to keep a thunk page mapped.
+void adh_site_hook_last_revert_json(char *out, size_t out_size);
 // Base of the first thunk page (what status shows as the "replacement"), or NULL when idle.
 void *adh_site_hook_page(int slot);
 // Appends the site list (per site: address, form, module, original/current instruction, thunk, page)

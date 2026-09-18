@@ -623,7 +623,10 @@ extern "C" int adh_native_hook_status_json(char *out, size_t out_size) {
     }
     pthread_mutex_unlock(&g_native_hooks_lock);
     hooks += "]";
-    std::string json = "{\"count\":" + std::to_string(count) + ",\"patched\":" + std::to_string(patched_count) + ",\"hooks\":" + hooks + "}";
+    char kept[96] = "";
+    adh_site_hook_last_revert_json(kept, sizeof(kept));
+    std::string json = "{\"count\":" + std::to_string(count) + ",\"patched\":" + std::to_string(patched_count) + "," +
+                       kept + "\"hooks\":" + hooks + "}";
     snprintf(out, out_size, "%s", json.c_str());
     out[out_size - 1] = 0;
     return 1;

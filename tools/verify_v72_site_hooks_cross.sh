@@ -97,7 +97,8 @@ const unhookAll = await mcp('native_hook', { action: 'unhook', hookId: hAll?.id,
 const wordsRestored = [];
 for (const s of sites) wordsRestored.push(await readWord(s.at));
 const rs2 = await regions();
-const pagesGone = sites.every((s) => mappingOf(rs2, s.thunk) == null);
+const mapsReadAfterUnhook = rs2.length;
+const pagesGone = rs2.length > 0 && sites.every((s) => mappingOf(rs2, s.thunk) == null);
 const after = { plugin: Number(await jc('pluginProbe')), same: Number(await jc('siteProbe')) };
 
 // 3) a named module scope selects only that module
@@ -116,6 +117,8 @@ const pass =
   sites.length >= 3 && modules.includes('libadhplugin_a.so') && modules.includes('libadhdetect.so') &&
   forms.includes('b') && forms.includes('bl') &&
   sites.every((s) => s.now !== s.orig) &&
+  sites.every((s) => !/memfd/i.test(s.module)) &&          // JIT memfds must never be scan targets
+  String(hAll?.pageKept ?? '') === 'false' &&
   hooked.plugin === 84 && hooked.same === 84 && hooked.bl === 84 && hits >= 3 &&
   a1.prologueDiffers === false && a1.entryBranchesOutside === false && a1.anonExec === 0 &&
   thunkPaths.every((p) => /^\/memfd:jit-cache/.test(p)) &&
@@ -132,7 +135,7 @@ console.log(JSON.stringify({
   scopeAll: { ok: all.ok, error: all.error, siteCount: sites.length, modules, forms, scanned: hAll?.scanned, truncated: hAll?.truncated,
               sites: sites.map((s) => ({ at: s.at, form: s.form, module: s.module, orig: s.orig, now: s.now, page: s.page })) },
   hookedProbes: hooked, hits, auditWhileHooked: { prologueDiffers: a1.prologueDiffers, entryBranchesOutside: a1.entryBranchesOutside, anonExec: a1.anonExec },
-  thunkPaths, wordsHooked, unhookAll: unhookAll.ok, wordsRestored, pagesGone, after,
+  thunkPaths, wordsHooked, pageKeptField: hAll?.pageKept, mapsReadAfterUnhook, unhookAll: unhookAll.ok, wordsRestored, pagesGone, after,
   scopeNamed: { ok: named.ok, error: named.error, modules: namedModules, value: namedValue, hits: namedHits, unhookOk: unhookNamed.ok },
   alive,
 }));
