@@ -15,6 +15,12 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.95 `native_call` 看门狗：卡死的调用不再冻住会话（2026-09-19，host 构建/门禁 PASS；真机待做）**：v4.94 把"调用本身没有超时"留作已知边界，这一版把它做掉——后果很重：一个不返回的目标函数会把 **agent 命令循环整个堵死**，之后所有命令都排在它后面，host 只能看到自己的超时。
+      · agent：目标调用改在**独立线程**上跑，命令线程用 `pthread_cond_timedwait` 等 **15 秒**（早于 host 的 20s，保证 host 收到的是我们的诚实答复）；超时回 `ok:false, timedOut:true, watchdogSeconds:15`，说明"调用仍在目标里跑、结果不可用、会话仍可用"；成功回带 `timedOut:false`。
+      · 两个语义细节：挂起 Java 异常的检查挪进 worker（异常是 **per-thread** 的，必须在真正发起调用的线程上查）；超时路径**故意让 job 泄漏**（worker 可能还在写它——一个小结构体换掉 use-after-free）。
+      · 沙盒夹具新增 `adh_slow_leaf()`（纯 C、`sleep(30)`、按符号可调），`verify_v49_native_call.sh` 新增看门狗段：断言 `timedOut:true`、耗时落在 14–19s，且**紧接着的 ping 必须成功**（后半句才是看门狗的意义）。
+      · 仍未做：worker 线程无法被取消（目标函数只能等它自己返回），本版保证的是"会话可用 + 如实上报"。
+      · 验收：agent 零告警重建；`build_detect.sh` 重建（`llvm-nm` 可见 `adh_slow_leaf`）；v49 `bash -n` + 内嵌 JS `node --check`；host 全量门禁 **32 PASS / 0 FAIL / 84 SKIP**（116 脚本）。
 - [~] **v4.94 `native_call` 的原始地址先过活体校验（2026-09-19，host 验收 PASS；真机待做）**：v4.92 把"原始地址不做存活性校验"记成了已知边界，这一版把能修的那一半修掉——**调用前先查活体 maps**。
       · 新增纯函数 `classifyAddress(regions, addr)`（`mapped` / `executable` / `path`，end 不包含，非法地址不映射）并有单测；`native_call` 在处理原始 `addr` 时先取一次 maps：**未映射** → `ok:false, "not in any mapped region (stale or wrong)"`；**映射但不可执行** → `ok:false, "... mapped (path) but not executable - refusing to call it"`（以前这两种都会直接跳进去，崩在目标里）。
       · `module+symbol` 路径本来就每次重解析 maps ✓（卸载后即 target not found），这条补的是裸地址那条路。

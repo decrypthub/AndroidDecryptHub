@@ -805,6 +805,12 @@ JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_jniFieldProbe(JNIEnv *env,
     return (jint)calls;
 }
 
+// v4.95 fixture for the native_call watchdog: a plain (non-JNI) function that takes its time, so
+// the agent has to answer timedOut and stay usable while this is still running.
+void adh_slow_leaf(void) {
+    sleep(30);
+}
+
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
     (void)vm; (void)reserved;
     return JNI_VERSION_1_6;

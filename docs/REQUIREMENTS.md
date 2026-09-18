@@ -1380,6 +1380,8 @@ MCP              →  AI 可编程操控，与 HTTP 同源
 
 > 实现状态（v4.94，**实现 + host 验收完成，真机待做**）：**`native_call` 原始地址的活体校验**。新增纯函数 `classifyAddress()`（mapped/executable/path，end 不包含、非法输入不映射），`native_call` 处理原始 `addr` 时先取 maps：未映射或不可执行一律 `ok:false` 并说明原因（此前会直接跳进去崩在目标里）；`module+symbol` 路径本就每次重解析 maps。仍未做：调用本身没有超时（daemon 放弃等待但 agent 会阻塞在被调函数里，需 agent 侧看门狗）。
 
+> 实现状态（v4.95，**实现 + host 构建/门禁通过，真机验收待做**）：**`native_call` 看门狗**。目标调用改在独立线程执行，命令线程以 15s（早于 host 的 20s）`pthread_cond_timedwait` 等待；超时回 `ok:false, timedOut:true, watchdogSeconds:15`（调用仍在目标里跑、结果不可用、会话保持可用），成功回带 `timedOut:false`。挂起 Java 异常的检查移入 worker（异常是 per-thread 的）；超时路径刻意让 job 泄漏以避免 use-after-free。沙盒夹具 `adh_slow_leaf()` + `verify_v49` 新段断言 `timedOut` 与"随后的 ping 仍然成功"。worker 无法被取消（等目标函数自己返回）——本版保证的是会话可用与如实上报。
+
 > 实现状态（v4.80，**实现 + host 验收完成，真机验收待做**）：**JNIEnv status 可过滤、并自报完整性**。表项涨到 228 后，整表回复超出旧的 32 KB 缓冲会被**静默截断**（只回一部分槽位且不说明——验证者会把"缺条目"读成"未安装"）。现在 `action:status` 用 `function` 当过滤器（与安装同语法：精确名 / 前缀 / `*后缀` / `*包含*` / `all`·`*`），另支持关键字 `installed`(仅已挂槽位)；解析与匹配和安装路径共用同一实现，回复带 `total`/`matched`/`emitted`/`truncated`，缓冲 128 KB（协议长度分帧、上限 64 MB）足够整表一次带回。安装/卸载对 `installed` 关键字显式报错（它是 status 过滤器，不是槽位名）。MCP 描述同步；v91 新增 `(3i)` 设备段断言三种视角的自洽性。
 
 > 实现状态（v4.66，**实现 + host 验收完成**）：**JNIEnv 覆盖率成为数字** + 两条评审 P1 收口。① 事件可信度：字符串拷贝/ pin 的 wrapper 在调用抛异常时**不再读缓冲区**（越界时 ART 不写 buf，读了就是拿未初始化内存当证据），失败事件写明 `<copy failed, buffer untouched>` 且 `ok=false`；`capacity=0` 显式标注歧义。② v91 对三个字符串读取器**逐个**断言（独立代码路径必须各自证明），并去掉魔数。③ `verify_v90_jni_table_abi.sh` 输出 `coverage: N/229` 与未覆盖名单（当时 119/229 = 52%，下限 115），"JNIEnv 全表可挂"从此有可跟踪的数字与待办清单。

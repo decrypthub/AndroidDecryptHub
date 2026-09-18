@@ -47,7 +47,20 @@ const unhook = hookId > 0
 const byAddress = addr
   ? await post('/api/native/call', { session, addr, args: ['0x7', '8'], confirm: true })
   : { body: { ok: false, error: 'no resolved address' } };
-const pass = bySymbol.body.ok === true && Number(bySymbol.body.resultDecimal) === 84 &&
+// v4.95: a call that does not return must not freeze the session. adh_slow_leaf sleeps 30s, the
+// agent's 15s watchdog has to answer timedOut:true (before the host's own 20s gives up), and the
+// very next command must still work - that second half is the whole point of the watchdog.
+const slowStart = Date.now();
+const slow = await post('/api/native/call', {
+  session, module: 'libadhdetect.so', symbol: 'adh_slow_leaf', args: [], confirm: true,
+});
+const slowMs = Date.now() - slowStart;
+const pingAfter = await (await fetch(`${base}/api/agent/ping?session=${encodeURIComponent(session)}`)).json().catch(() => ({}));
+const watchdogPass = slow.body?.timedOut === true && slow.body?.ok === false
+  && slowMs >= 14000 && slowMs < 19000 && pingAfter.ok === true;
+console.log(`watchdog: timedOut=${slow.body?.timedOut} after ${slowMs}ms pingAfter=${pingAfter.ok} (${String(slow.body?.error ?? '').slice(0, 60)})`);
+
+const pass = watchdogPass && bySymbol.body.ok === true && Number(bySymbol.body.resultDecimal) === 84 &&
   noArg.body.ok === true && Number(noArg.body.resultDecimal) === 30 &&
   byAddress.body.ok === true && Number(byAddress.body.resultDecimal) === 30 &&
   unconfirmed.status === 400 && /confirm:true/i.test(String(unconfirmed.body.error ?? '')) &&

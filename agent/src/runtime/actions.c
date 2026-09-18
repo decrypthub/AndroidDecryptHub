@@ -12,6 +12,8 @@
 #include "jni.h"
 #include "jni_env_hooks.h"
 #include <errno.h>
+#include <pthread.h>
+#include <time.h>
 
 static int name_blacklisted(const char *s) {
     static const char *bad[] = {
@@ -254,6 +256,57 @@ static int parse_typed_args(const char *csv, unsigned long long *ints, int *int_
     return 1;
 }
 
+// A native call entered by the analyst can run into a function that never returns (a blocking read
+// on a dead socket, an infinite loop, a lock held by a suspended thread). Running it on the command
+// thread used to freeze the whole session: every later command queued behind it and the host only
+// saw timeouts. The call now runs on its own thread with a watchdog; if it does not finish in time
+// the command answers honestly (timedOut) and the session stays usable. The job is intentionally
+// leaked on the timeout path - the worker may still be writing to it, and one small struct per
+// abandoned call is cheaper than a use-after-free.
+#define ADH_NATIVE_CALL_WATCHDOG_S 15
+
+struct NativeCallJob {
+    void *target;
+    unsigned long long ints[8];
+    unsigned long long fps[8] __attribute__((aligned(16)));
+    int fp_argc;
+    unsigned long long result;
+    unsigned long long fp_result;
+    long long duration_ns;
+    int pending_exception;
+    pthread_mutex_t lock;
+    pthread_cond_t cond;
+    int done;
+};
+
+static void *native_call_worker(void *arg) {
+    struct NativeCallJob *job = (struct NativeCallJob *)arg;
+    long long start = now_ns();
+    if (job->fp_argc > 0) {
+        job->result = adh_fp_call(job->target, job->ints, job->fps, &job->fp_result);
+    } else {
+        typedef unsigned long long (*fn8_t)(unsigned long long, unsigned long long,
+                                            unsigned long long, unsigned long long,
+                                            unsigned long long, unsigned long long,
+                                            unsigned long long, unsigned long long);
+        job->result = ((fn8_t)job->target)(job->ints[0], job->ints[1], job->ints[2], job->ints[3],
+                                           job->ints[4], job->ints[5], job->ints[6], job->ints[7]);
+    }
+    job->duration_ns = now_ns() - start;
+    // The pending-exception probe has to run on the thread that made the call.
+    int did_attach = 0;
+    JNIEnv *env = adh_jni_attach(&did_attach);
+    if (env) {
+        job->pending_exception = adh_jni_exception_check(env) ? 1 : 0;
+        adh_jni_detach(did_attach);
+    }
+    pthread_mutex_lock(&job->lock);
+    job->done = 1;
+    pthread_cond_signal(&job->cond);
+    pthread_mutex_unlock(&job->lock);
+    return NULL;
+}
+
 void adh_cmd_native_call(int fd, const char *id, const char *module, const char *symbol,
                          const char *addr_hex, const char *args_csv) {
     char idj[64];
@@ -319,35 +372,60 @@ void adh_cmd_native_call(int fd, const char *id, const char *module, const char 
         return;
     }
 
-    long long start_ns = now_ns();
-    unsigned long long result = 0;
-    unsigned long long fp_result = 0;
-    if (fp_argc > 0) {
-        LOGI("native_call fp: target=%p ints=%p fps=%p fp_argc=%d int_argc=%d",
-             target, (void *)ints, (void *)fps, fp_argc, int_argc);
-        result = adh_fp_call(target, ints, fps, &fp_result);
-    } else {
-        typedef unsigned long long (*fn8_t)(unsigned long long, unsigned long long,
-                                            unsigned long long, unsigned long long,
-                                            unsigned long long, unsigned long long,
-                                            unsigned long long, unsigned long long);
-        result = ((fn8_t)target)(ints[0], ints[1], ints[2], ints[3], ints[4], ints[5], ints[6], ints[7]);
+    struct NativeCallJob *job = (struct NativeCallJob *)calloc(1, sizeof(*job));
+    if (!job) {
+        send_oom(fd, idj, "native_call");
+        return;
     }
-    long long duration_ns = now_ns() - start_ns;
+    job->target = target;
+    memcpy(job->ints, ints, sizeof(job->ints));
+    memcpy(job->fps, fps, sizeof(job->fps));
+    job->fp_argc = fp_argc;
+    pthread_mutex_init(&job->lock, NULL);
+    pthread_cond_init(&job->cond, NULL);
+    pthread_t worker;
+    if (pthread_create(&worker, NULL, native_call_worker, job) != 0) {
+        char out[360];
+        snprintf(out, sizeof(out),
+                 "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"native_call\",\"ok\":false,"
+                 "\"error\":\"could not start the call thread\"}\n", idj);
+        send_line(fd, out);
+        pthread_mutex_destroy(&job->lock);
+        pthread_cond_destroy(&job->cond);
+        free(job);
+        return;
+    }
+    struct timespec watchdog;
+    clock_gettime(CLOCK_REALTIME, &watchdog);
+    watchdog.tv_sec += ADH_NATIVE_CALL_WATCHDOG_S;
+    int finished = 0;
+    pthread_mutex_lock(&job->lock);
+    while (!job->done) {
+        if (pthread_cond_timedwait(&job->cond, &job->lock, &watchdog) == ETIMEDOUT) break;
+    }
+    finished = job->done;
+    pthread_mutex_unlock(&job->lock);
+    if (!finished) {
+        pthread_detach(worker);          // the call keeps running; the job must stay alive
+        char out[560];
+        snprintf(out, sizeof(out),
+                 "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"native_call\",\"ok\":false,"
+                 "\"timedOut\":true,\"source\":\"%s\",\"target\":\"0x%llx\",\"watchdogSeconds\":%d,"
+                 "\"error\":\"the call did not return within the watchdog window; it is still running in the target and its result is not available (the command session stays usable)\"}\n",
+                 idj, source, (unsigned long long)(uintptr_t)target, ADH_NATIVE_CALL_WATCHDOG_S);
+        send_line(fd, out);
+        return;
+    }
+    pthread_join(worker, NULL);
+    unsigned long long result = job->result;
+    unsigned long long fp_result = job->fp_result;
+    long long duration_ns = job->duration_ns;
+    int pending_exception = job->pending_exception;
+    pthread_mutex_destroy(&job->lock);
+    pthread_cond_destroy(&job->cond);
+    free(job);
     double fp_double = 0;
     memcpy(&fp_double, &fp_result, sizeof(fp_double));
-    // A callee that threw leaves a pending Java exception on this thread: the returned value is
-    // then meaningless, so the reply must not read as a normal success (java_call already fails
-    // loud here; native_call used to answer ok:true regardless).
-    int pending_exception = 0;
-    {
-        int call_attach = 0;
-        JNIEnv *call_env = adh_jni_attach(&call_attach);
-        if (call_env) {
-            pending_exception = adh_jni_exception_check(call_env) ? 1 : 0;
-            adh_jni_detach(call_attach);
-        }
-    }
 
     char modulej[160], symbolj[200], argsj[320];
     json_escape(module ? module : "", modulej, sizeof(modulej));
@@ -378,7 +456,7 @@ void adh_cmd_native_call(int fd, const char *id, const char *module, const char 
     }
     char out[1400];
     snprintf(out, sizeof(out),
-             "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"native_call\",\"ok\":%s,"
+             "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"native_call\",\"ok\":%s,\"timedOut\":false,"
              "\"pendingException\":%s,\"error\":\"%s\",\"source\":\"%s\",\"module\":\"%s\",\"symbol\":\"%s\",\"target\":\"0x%llx\","
              "\"args\":\"[%s]\",\"argCount\":%d,\"result\":\"0x%llx\",\"resultDecimal\":%llu,"
              "\"durationUs\":%lld,\"fpSupported\":true%s}\n",
