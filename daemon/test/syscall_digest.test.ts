@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { digestSyscallSamples, pickCaller, callerLabel } from '../src/syscall_digest.ts';
+import { digestSyscallSamples, pickCaller, callerLabel, ringNote } from '../src/syscall_digest.ts';
 
 const caller = (module, symbol = null, offset = '0x10') => ({ module, symbol, offset });
 const sample = (hookId, observedNr, ts, tid, callers) => ({ hookId, observedNr, ts, tid, callers });
@@ -13,6 +13,14 @@ test('skips libc frames and reports the first app frame as the caller', () => {
   const only = pickCaller([caller('libc.so', 'openat')]);
   assert.equal(only.module, 'libc.so');
   assert.equal(callerLabel(null), '(unknown)');
+});
+
+test('a lossy capture ring produces a note instead of a clean-looking digest', () => {
+  assert.equal(ringNote(null), null);
+  assert.equal(ringNote({ seq: 10, emitted: 10, dropped: 0, backlog: 0, complete: true }), null);
+  const note = ringNote({ seq: 100, emitted: 20, dropped: 80, backlog: 0, complete: false });
+  assert.match(String(note), /capture ring is incomplete \(dropped=80/);
+  assert.match(String(note), /lower bound/);
 });
 
 test('an unmapped (JIT) caller frame is used with its raw address instead of being skipped', () => {

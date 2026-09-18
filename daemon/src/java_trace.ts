@@ -7,8 +7,9 @@
 //   digest -> drain the agent ring THROUGH drainSession (the drain is pop-semantics: only the code
 //             that ingests the records into the local store may send it) and digest those hook ids
 //   stop   -> unhook exactly those ids; id 0 would mean "all hooks" and is refused
-import { captures as stateCaptures } from './state.ts';
+import { captures as stateCaptures, capStats } from './state.ts';
 import { sendCmd as serviceSendCmd, drainSession as serviceDrainSession } from './service.ts';
+import { ringNote, type RingHealth } from './syscall_digest.ts';
 
 export interface JavaTraceSample {
   hookId: number;
@@ -161,6 +162,8 @@ export interface JavaTraceDigestResult {
   action: 'digest';
   hookIds: number[];
   drain: { ok: boolean; error?: string };
+  /** Capture-ring health: a trace taken while the ring was dropping is incomplete. */
+  ring: RingHealth | null;
   digest: JavaTraceDigest;
 }
 
@@ -223,7 +226,13 @@ export async function javaTraceDigest(session: string, opts: { hookIds: number[]
   }
   const digest = digestJavaTrace(samples, opts);
   if (!drain.ok) digest.notes.push(`capture drain failed (${drain.error ?? 'unknown'}): the digest reads whatever the store already holds`);
-  return { action: 'digest', hookIds: [...wanted].sort((a, b) => a - b), drain: { ok: drain.ok, ...(drain.error ? { error: drain.error } : {}) }, digest };
+  const stat = capStats.get(session) ?? null;
+  const ring = stat
+    ? { seq: stat.seq, emitted: stat.emitted, dropped: stat.dropped, backlog: stat.backlog, complete: stat.complete }
+    : null;
+  const lossy = ringNote(ring, 'the trace may be missing events');
+  if (lossy) digest.notes.push(lossy);
+  return { action: 'digest', hookIds: [...wanted].sort((a, b) => a - b), drain: { ok: drain.ok, ...(drain.error ? { error: drain.error } : {}) }, ring, digest };
 }
 
 export async function javaTraceStop(session: string, opts: { hookIds: number[] }, deps: JavaTraceDeps = defaultDeps): Promise<JavaTraceStop> {

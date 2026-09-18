@@ -5,7 +5,7 @@
 // function collects this fingerprint, and how often". This module groups the events by
 // (syscall number, caller symbol) and keeps the runtime x8 next to the statically attributed number,
 // so a wrong attribution shows up as a mismatch instead of silently mislabelling the hook.
-import { captures } from './state.ts';
+import { captures, capStats } from './state.ts';
 import { sendCmd, drainSession } from './service.ts';
 import { loadModuleTable, symbolizeAddresses, parseHex, hex, type SymbolizedAddress } from './module_symbols.ts';
 import { argPlan, decodeArgs, pathOf, summarizeArgs, type DecodedArg } from './syscall_args.ts';
@@ -29,6 +29,15 @@ export interface SyscallSample {
   args?: DecodedArg[];
   /** The immediate frame (bt[0]) even when a wrapper is the interesting caller. */
   immediate?: SyscallCaller | null;
+}
+
+export interface RingHealth { seq: number; emitted: number; dropped: number; backlog: number; complete: boolean }
+
+/** The note a digest must carry when the capture ring was lossy (pure so it is testable). */
+export function ringNote(ring: RingHealth | null, what = 'counts here are a lower bound'): string | null {
+  if (!ring) return null;
+  if (ring.dropped <= 0 && ring.complete !== false) return null;
+  return `capture ring is incomplete (dropped=${ring.dropped}, backlog=${ring.backlog}): ${what} - narrow the filter or set a throttle`;
 }
 
 export interface SyscallGroup {
@@ -175,6 +184,8 @@ export function digestSyscallSamples(samples: SyscallSample[], opts: {
 export interface SyscallDigestResult extends SyscallDigest {
   window: { sinceMs: number | null; limit: number };
   symbolSource: string;
+  /** Capture-ring health for this session: a digest built on a lossy ring is NOT complete. */
+  ring: { seq: number; emitted: number; dropped: number; backlog: number; complete: boolean } | null;
 }
 
 /** Read the session's NATIVE_HOOK captures, parse them and digest the syscall hits. */
@@ -300,7 +311,13 @@ export async function syscallDigest(session: string, opts: {
   const result = digestSyscallSamples(samples, { expected, maxGroups: opts.maxGroups });
   result.notes.push(...decodeNotes);
   if (!drain.ok) result.notes.push(`capture drain failed (${drain.error ?? 'unknown'}): the digest reads whatever the store already holds`);
+  const stat = capStats.get(session) ?? null;
+  const ring = stat
+    ? { seq: stat.seq, emitted: stat.emitted, dropped: stat.dropped, backlog: stat.backlog, complete: stat.complete }
+    : null;
+  const lossy = ringNote(ring);
+  if (lossy) result.notes.push(lossy);
   if (symbolSource === 'unavailable') result.notes.push('symbolization unavailable: caller frames are shown as module+offset only');
   if (symbolSource === 'none') result.notes.push('no caller chain in the events: install the watch through syscall_watch (it sets backtrace:true)');
-  return { ...result, window: { sinceMs, limit }, symbolSource };
+  return { ...result, window: { sinceMs, limit }, symbolSource, ring };
 }
