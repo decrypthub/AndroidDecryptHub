@@ -1341,6 +1341,8 @@ MCP              →  AI 可编程操控，与 HTTP 同源
 
 > 实现状态（v4.56，**实现 + host 验收完成，真机验收待做**）：**字段事件可归因 + JNIEnv 字段摘要**。v4.55 的访问事件只有 `field=0x..`，读不出字段名；现在 `GetFieldID`/`GetStaticFieldID` 的事件会带上它们交出去的 id（`Class#name:sig -> 0x..`），新增的 `jniFieldDigest`（MCP `jni_field_digest` + `POST /api/jni/field_digest`）用 id→名字表把访问按 (accessor, field) 聚合成"哪个字段被读写了几次、最后值是什么、哪些线程"，未解析的 id 保持原始指针并单独计数（不猜），空窗口明确提示需要先 hook 字段槽位；drain 走共享 `drainSession`。
 
+> 实现状态（v4.63，**实现 + host 验收完成，真机验收待做**）：**JNIEnv 再补 5 个表项**——`GetStringRegion`/`GetStringUTFRegion`（native 把 Java 字符串拷进自己的缓冲区；事件带 `string=0x.. start/len` 与有界文本预览，UTF-16 24 字符 / UTF-8 48 字节、不可打印转 `.`）与直接缓冲三件套 `NewDirectByteBuffer`/`GetDirectBufferAddress`/`GetDirectBufferCapacity`（事件带 `address/capacity`）。槽位 112 → **117**（18 固定 + 21 族 ×3）；签名由 `_Static_assert` 编译期钉死、索引由 `verify_v90_jni_table_abi.sh` 对 NDK `jni.h` 机检（`checked 117 indices`）。其余表项（`GetStringChars`/`ReleaseStringChars`、`GetJavaVM`、`NewWeakGlobalRef`、`ExceptionOccurred` 等）仍是盲区，同机制可加。
+
 > 实现状态（v4.61，**实现 + host 验收完成**）：**字段摘要区分"被改写的写入"**。`jni_field_digest` 现在解析 `value=<应用值> requested=<原值>`：顶层给出 `rewrittenSamples`，每组给出 `rewritten` 与 `lastRequested`，`lastValue` 固定为**目标最终存下的值**，并在 notes 里点名"有 N 次写入被激活的 setValue 覆盖改写"——"目标想写 7、被我们写成 42"本身就是这类分析的结论，不能再混进普通写入里。单测 5 → 7 条；MCP 描述同步。
 
 > 实现状态（v4.60，**实现 + host 验收完成**）：**覆盖功能的收口**。REST `/api/jni/env_hook` 补上 `setValue` 转发（v4.58 只接了 MCP，设备脚本走 REST 因此永远不可能通过），并在 host 侧加了通用参数面检查——MCP schema 的每个属性名必须在对应 REST handler 里出现（v92 现在会打印 `forwards all N MCP parameters`）。`setValue` 改为严格解析（整串必须是数字，只有浮点可解析时同步到整数槽），并按目标字段类型做范围检查（Boolean 0/1、Byte/Char/Short/Int 各自区间、Float/Double 必须有限），越界 fail-loud 而不是静默取模；`override_active` 改为 release/acquire 发布，status 读覆盖时持同一把锁。

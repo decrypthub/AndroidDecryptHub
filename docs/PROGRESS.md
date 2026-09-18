@@ -15,6 +15,10 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.63 JNIEnv 再补 5 个表项：字符串拷出 + 直接缓冲（2026-09-19，host 验收 PASS；真机待做）**：评审列的两个盲区正是指纹/算法分析最常踩的路径——**native 把 Java 字符串拷进自己的缓冲区**（`GetStringRegion`/`GetStringUTFRegion`）与**native 把大块数据以直接 ByteBuffer 交给 Java**（`NewDirectByteBuffer`/`GetDirectBufferAddress`/`GetDirectBufferCapacity`）。JNIEnv 表从 112 → **117 槽**（18 固定 + 21 族 ×3）。
+      · 事件内容：字符串拷出事件带 `string=0x.. start/len` 与**有界文本预览**（UTF-16 24 字符、UTF-8 48 字节，不可打印转 `.`）——"它把哪个字符串拷走了"直接可读；直接缓冲事件带 `address/capacity`（`NewDirectByteBuffer` 另带返回的 jobject）。
+      · 安全网照旧：每个 wrapper 有 `_Static_assert` 钉死与表项的签名一致（签名不符编译期失败，不是真机崩），索引由 `tools/verify_v90_jni_table_abi.sh` 对着 NDK `jni.h` 校验（现在 `checked 117 indices against the ABI`），安装期仍做偏移不符即拒绝。
+      · 验收：agent 零告警重建（891,184 B）；v90 PASS；host 全量门禁 **31 PASS / 0 FAIL / 84 SKIP**（115 脚本）。
 - [~] **v4.62 v91 收口：修掉自己引入的 TDZ + 断言"摘要真的看到改写"（2026-09-19，host 语法/SKIP 验证 PASS；真机待做）**：v4.61 之后，设备脚本应当在真机上把"观测 → 改写 → 摘要"串起来。
       · **自查抓到第二个自伤 bug**：v91 的 `overrideOk` 引用了**尚未声明**的 `const ovRestoreOk`（TDZ），真机执行到那段会直接抛 `ReferenceError`——已把还原步骤提到断言之前。
       · 新增 `(3e)`：覆盖生效并触发探针后，再调 `jni_field_digest`，要求 **`rewrittenSamples ≥ 1`** 且存在 `rewritten ≥ 1` 的分组、其 **`lastRequested === '7'`**（即"目标想写 7、被写成 42"这件事在摘要里可见），并纳入 `pass`。

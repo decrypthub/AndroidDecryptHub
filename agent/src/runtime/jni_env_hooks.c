@@ -77,6 +77,14 @@ enum {
     ENV_SLOT_GetByteArrayRegion,
     ENV_SLOT_GetPrimitiveArrayCritical,
     ENV_SLOT_ReleasePrimitiveArrayCritical,
+    // v4.63: the "native pulls Java data into its own buffer / hands Java a native buffer" entries.
+    // Fingerprint code reads Java strings into native memory, and native crypto passes payloads to
+    // Java through a direct ByteBuffer - both were invisible.
+    ENV_SLOT_GetStringRegion,
+    ENV_SLOT_GetStringUTFRegion,
+    ENV_SLOT_NewDirectByteBuffer,
+    ENV_SLOT_GetDirectBufferAddress,
+    ENV_SLOT_GetDirectBufferCapacity,
     ENV_FIXED_SLOTS,
 
     ENV_SLOT_CallObjectMethod = ENV_FIXED_SLOTS,
@@ -129,7 +137,9 @@ struct EnvHookSlot {
     X("GetStringUTFChars") X("FindClass") X("GetMethodID") X("GetStaticMethodID") \
     X("NewStringUTF") X("GetFieldID") X("GetStaticFieldID") X("GetByteArrayElements") \
     X("SetByteArrayRegion") X("ReleaseByteArrayElements") X("GetByteArrayRegion") \
-    X("GetPrimitiveArrayCritical") X("ReleasePrimitiveArrayCritical")
+    X("GetPrimitiveArrayCritical") X("ReleasePrimitiveArrayCritical") \
+    X("GetStringRegion") X("GetStringUTFRegion") X("NewDirectByteBuffer") \
+    X("GetDirectBufferAddress") X("GetDirectBufferCapacity")
 
 #define ADH_CALL_VALUE_FAMILIES(X) \
     X(CallObjectMethod,        jobject,  jobject, ADH_MEMBER_INSTANCE, ENV_SLOT_CallObjectMethod,        34) \
@@ -857,7 +867,113 @@ ADH_FIELD_TYPE_ROW(Long, jlong, "%lld", (long long), (jlong)ov_i)
 ADH_FIELD_TYPE_ROW(Float, jfloat, "%g", (double), (jfloat)ov_d)
 ADH_FIELD_TYPE_ROW(Double, jdouble, "%g", (double), (jdouble)ov_d)
 
+// ---- v4.63: string region + direct buffer entries ---------------------------
+// GetStringRegion/GetStringUTFRegion copy a Java string INTO a native buffer (how native fingerprint
+// code lifts values out of Java), so the event carries a bounded preview of what was copied. The
+// direct-buffer trio is how native code hands a payload to Java (or looks one up), so the event
+// carries the address and capacity.
+static void GetStringRegion_wrapper(JNIEnv *env, jstring str, jsize start, jsize len, jchar *buf) {
+    typedef void (JNICALL *fn_t)(JNIEnv *, jstring, jsize, jsize, jchar *);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_GetStringRegion);
+    if (!original) return;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_GetStringRegion)) { original(env, str, start, len, buf); return; }
+    g_env_hook_in_ours = 1;
+    original(env, str, start, len, buf);
+    char detail[220]; detail[0] = 0;
+    if (env_budget_left(ENV_SLOT_GetStringRegion)) {
+        char preview[80] = "";
+        size_t p = 0;
+        if (buf && len > 0) {
+            for (jsize i = 0; i < len && i < 24 && p + 2 < sizeof(preview); i++) {
+                jchar c = buf[i];
+                preview[p++] = (c >= 0x20 && c < 0x7f) ? (char)c : '.';
+            }
+            preview[p] = 0;
+        }
+        snprintf(detail, sizeof(detail), "string=%p start=%d len=%d text=\"%s\"", (void *)str, (int)start, (int)len, preview);
+    }
+    env_note(ENV_SLOT_GetStringRegion, detail[0] ? detail : NULL, buf != NULL);
+    g_env_hook_in_ours = 0;
+}
+
+static void GetStringUTFRegion_wrapper(JNIEnv *env, jstring str, jsize start, jsize len, char *buf) {
+    typedef void (JNICALL *fn_t)(JNIEnv *, jstring, jsize, jsize, char *);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_GetStringUTFRegion);
+    if (!original) return;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_GetStringUTFRegion)) { original(env, str, start, len, buf); return; }
+    g_env_hook_in_ours = 1;
+    original(env, str, start, len, buf);
+    char detail[220]; detail[0] = 0;
+    if (env_budget_left(ENV_SLOT_GetStringUTFRegion)) {
+        char preview[96] = "";
+        size_t p = 0;
+        if (buf && len > 0) {
+            for (jsize i = 0; i < len && i < 48 && p + 2 < sizeof(preview); i++) {
+                char c = buf[i];
+                preview[p++] = (c >= 0x20 && c < 0x7f) ? c : '.';
+            }
+            preview[p] = 0;
+        }
+        snprintf(detail, sizeof(detail), "string=%p start=%d len=%d text=\"%s\"", (void *)str, (int)start, (int)len, preview);
+    }
+    env_note(ENV_SLOT_GetStringUTFRegion, detail[0] ? detail : NULL, buf != NULL);
+    g_env_hook_in_ours = 0;
+}
+
+static jobject NewDirectByteBuffer_wrapper(JNIEnv *env, void *address, jlong capacity) {
+    typedef jobject (JNICALL *fn_t)(JNIEnv *, void *, jlong);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_NewDirectByteBuffer);
+    if (!original) return NULL;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_NewDirectByteBuffer)) return original(env, address, capacity);
+    g_env_hook_in_ours = 1;
+    jobject result = original(env, address, capacity);
+    char detail[128]; detail[0] = 0;
+    if (env_budget_left(ENV_SLOT_NewDirectByteBuffer)) {
+        snprintf(detail, sizeof(detail), "address=%p capacity=%lld result=%p", address, (long long)capacity, (void *)result);
+    }
+    env_note(ENV_SLOT_NewDirectByteBuffer, detail[0] ? detail : NULL, result != NULL);
+    g_env_hook_in_ours = 0;
+    return result;
+}
+
+static void *GetDirectBufferAddress_wrapper(JNIEnv *env, jobject buf) {
+    typedef void *(JNICALL *fn_t)(JNIEnv *, jobject);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_GetDirectBufferAddress);
+    if (!original) return NULL;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_GetDirectBufferAddress)) return original(env, buf);
+    g_env_hook_in_ours = 1;
+    void *address = original(env, buf);
+    char detail[128]; detail[0] = 0;
+    if (env_budget_left(ENV_SLOT_GetDirectBufferAddress)) {
+        snprintf(detail, sizeof(detail), "buffer=%p address=%p", (void *)buf, address);
+    }
+    env_note(ENV_SLOT_GetDirectBufferAddress, detail[0] ? detail : NULL, address != NULL);
+    g_env_hook_in_ours = 0;
+    return address;
+}
+
+static jlong GetDirectBufferCapacity_wrapper(JNIEnv *env, jobject buf) {
+    typedef jlong (JNICALL *fn_t)(JNIEnv *, jobject);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_GetDirectBufferCapacity);
+    if (!original) return -1;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_GetDirectBufferCapacity)) return original(env, buf);
+    g_env_hook_in_ours = 1;
+    jlong capacity = original(env, buf);
+    char detail[128]; detail[0] = 0;
+    if (env_budget_left(ENV_SLOT_GetDirectBufferCapacity)) {
+        snprintf(detail, sizeof(detail), "buffer=%p capacity=%lld", (void *)buf, (long long)capacity);
+    }
+    env_note(ENV_SLOT_GetDirectBufferCapacity, detail[0] ? detail : NULL, capacity >= 0);
+    g_env_hook_in_ours = 0;
+    return capacity;
+}
+
 // Compile-time type check: each wrapper must have exactly its table entry signature.
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetStringRegion), __typeof__(&GetStringRegion_wrapper)), "GetStringRegion_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetStringUTFRegion), __typeof__(&GetStringUTFRegion_wrapper)), "GetStringUTFRegion_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->NewDirectByteBuffer), __typeof__(&NewDirectByteBuffer_wrapper)), "NewDirectByteBuffer_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetDirectBufferAddress), __typeof__(&GetDirectBufferAddress_wrapper)), "GetDirectBufferAddress_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetDirectBufferCapacity), __typeof__(&GetDirectBufferCapacity_wrapper)), "GetDirectBufferCapacity_wrapper signature mismatch");
 _Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetFieldID), __typeof__(&GetFieldID_wrapper)), "GetFieldID_wrapper signature mismatch");
 _Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetStaticFieldID), __typeof__(&GetStaticFieldID_wrapper)), "GetStaticFieldID_wrapper signature mismatch");
 _Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetObjectField), __typeof__(&GetObjectField_wrapper)), "GetObjectField_wrapper signature mismatch");
@@ -959,6 +1075,11 @@ static int env_hook_spec_index(int index) {
         case ENV_SLOT_GetByteArrayRegion: return 200;
         case ENV_SLOT_SetByteArrayRegion: return 208;
         case ENV_SLOT_GetPrimitiveArrayCritical: return 222;
+        case ENV_SLOT_GetStringRegion: return 220;
+        case ENV_SLOT_GetStringUTFRegion: return 221;
+        case ENV_SLOT_NewDirectByteBuffer: return 229;
+        case ENV_SLOT_GetDirectBufferAddress: return 230;
+        case ENV_SLOT_GetDirectBufferCapacity: return 231;
         case ENV_SLOT_ReleasePrimitiveArrayCritical: return 223;
         default: return -1;
     }
@@ -993,6 +1114,11 @@ static void **env_hook_slot(struct JNINativeInterface *table, int index) {
         case ENV_SLOT_ReleaseByteArrayElements: return (void **)(uintptr_t)&table->ReleaseByteArrayElements;
         case ENV_SLOT_GetByteArrayRegion: return (void **)(uintptr_t)&table->GetByteArrayRegion;
         case ENV_SLOT_GetPrimitiveArrayCritical: return (void **)(uintptr_t)&table->GetPrimitiveArrayCritical;
+        case ENV_SLOT_GetStringRegion: return (void **)(uintptr_t)&table->GetStringRegion;
+        case ENV_SLOT_GetStringUTFRegion: return (void **)(uintptr_t)&table->GetStringUTFRegion;
+        case ENV_SLOT_NewDirectByteBuffer: return (void **)(uintptr_t)&table->NewDirectByteBuffer;
+        case ENV_SLOT_GetDirectBufferAddress: return (void **)(uintptr_t)&table->GetDirectBufferAddress;
+        case ENV_SLOT_GetDirectBufferCapacity: return (void **)(uintptr_t)&table->GetDirectBufferCapacity;
         case ENV_SLOT_ReleasePrimitiveArrayCritical: return (void **)(uintptr_t)&table->ReleasePrimitiveArrayCritical;
         ADH_CALL_VALUE_FAMILIES(ADH_CALL_SLOT_CASES)
         ADH_CALL_VOID_FAMILIES(ADH_CALL_VOID_SLOT_CASES)
@@ -1021,6 +1147,11 @@ static void *env_hook_wrapper(int index) {
         case ENV_SLOT_ReleaseByteArrayElements: return (void *)&ReleaseByteArrayElements_wrapper;
         case ENV_SLOT_GetByteArrayRegion: return (void *)&GetByteArrayRegion_wrapper;
         case ENV_SLOT_GetPrimitiveArrayCritical: return (void *)&GetPrimitiveArrayCritical_wrapper;
+        case ENV_SLOT_GetStringRegion: return (void *)&GetStringRegion_wrapper;
+        case ENV_SLOT_GetStringUTFRegion: return (void *)&GetStringUTFRegion_wrapper;
+        case ENV_SLOT_NewDirectByteBuffer: return (void *)&NewDirectByteBuffer_wrapper;
+        case ENV_SLOT_GetDirectBufferAddress: return (void *)&GetDirectBufferAddress_wrapper;
+        case ENV_SLOT_GetDirectBufferCapacity: return (void *)&GetDirectBufferCapacity_wrapper;
         case ENV_SLOT_ReleasePrimitiveArrayCritical: return (void *)&ReleasePrimitiveArrayCritical_wrapper;
         ADH_CALL_VALUE_FAMILIES(ADH_CALL_WRAPPER_CASES)
         ADH_CALL_VOID_FAMILIES(ADH_CALL_VOID_WRAPPER_CASES)
