@@ -45,17 +45,20 @@ IS_AARCH64=$(echo "$HDR" | grep -c "AArch64")
 IS_DYN=$(echo "$HDR" | grep -Ec "Type:.*DYN")
 HAS_LOAD=$(echo "$PHDR" | grep -c "LOAD")
 HAS_DYNAMIC=$(echo "$PHDR" | grep -c "DYNAMIC")
+# v4.50 removed DT_SONAME on purpose (the shipped .dynstr must not carry our library name, and
+# nothing loads us by soname - the loaders dlopen a path/file name). So the expectation flipped: the
+# reassembled image must NOT contain it.
 HAS_SONAME=$(echo "$DYN" | grep -c "libadh_agent.so")
 HAS_SYMTAB=$(echo "$DYN" | grep -c "SYMTAB")
 HAS_STRTAB=$(echo "$DYN" | grep -c "STRTAB")
 STR_START=$(grep -c "adh_agent_start" "$DUMP_PATH" 2>/dev/null)
 STR_JNI=$(grep -c "JNI_OnLoad" "$DUMP_PATH" 2>/dev/null)
 echo "  elf64=$IS_ELF64 aarch64=$IS_AARCH64 dyn=$IS_DYN LOAD=$HAS_LOAD DYNAMIC=$HAS_DYNAMIC"
-echo "  dyn: soname=$HAS_SONAME symtab=$HAS_SYMTAB strtab=$HAS_STRTAB ; dynstr has adh_agent_start=$STR_START JNI_OnLoad=$STR_JNI"
+echo "  dyn: soname=$HAS_SONAME (expect 0 since v4.50) symtab=$HAS_SYMTAB strtab=$HAS_STRTAB ; dynstr has adh_agent_start=$STR_START JNI_OnLoad=$STR_JNI"
 
 if [ "$IS_ELF64" -ge 1 ] && [ "$IS_AARCH64" -ge 1 ] && [ "$IS_DYN" -ge 1 ] \
    && [ "$HAS_LOAD" -ge 1 ] && [ "$HAS_DYNAMIC" -ge 1 ] \
-   && [ "$HAS_SONAME" -ge 1 ] && [ "$HAS_SYMTAB" -ge 1 ] && [ "$HAS_STRTAB" -ge 1 ] \
+   && [ "$HAS_SONAME" -eq 0 ] && [ "$HAS_SYMTAB" -ge 1 ] && [ "$HAS_STRTAB" -ge 1 ] \
    && [ "$STR_START" -ge 1 ] && [ "$STR_JNI" -ge 1 ]; then
   echo "✅ v0.2 SO-reassembly PASS (valid ELF from memory; PT_DYNAMIC + dynstr intact & analyzable)"
   echo "RESULT:PASS"; exit 0

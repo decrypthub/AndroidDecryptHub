@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # v0.8 native binary analysis (HOST-ONLY). Host ADH Daemon returns exports/imports/needed/strings
 # for an ELF .so. Verifies the agent's own .so: exports adh_agent_start and JNI_OnLoad,
-# NEEDED includes liblog, imports include a hooked libc/crypto symbol, strings has ADH.
+# NEEDED includes liblog, imports include a hooked libc/crypto symbol, strings has a token we keep (native_hook / rt.hook).
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
 verify_resolve_env_host

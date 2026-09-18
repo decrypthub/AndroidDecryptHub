@@ -289,8 +289,11 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
     { path: '/api/trace/qbdi', handler: async () => {
       const sid = pickSid(url.searchParams.get('session'));
       if (!sid) return send(400, { error: 'no session' });
-      const symLib = url.searchParams.get('symLib') ?? 'libadhdetect.so';
-      const symbol = url.searchParams.get('symbol') ?? 'adh_trace_target';
+      // No fixture defaults anywhere (agent v4.50 refuses them, and the sandbox names must not leak
+      // into the host either): say what is missing instead of silently tracing a fixture.
+      const symLib = url.searchParams.get('symLib') ?? '';
+      const symbol = url.searchParams.get('symbol') ?? '';
+      if (!symLib || !symbol) return send(400, { error: 'qbdi_trace needs symLib and symbol' });
       const args = url.searchParams.get('args') ?? '';
       try { const r = await sendCmd(sid, 'qbdi_trace', { symLib, symbol, args }, 30_000); return send(r.ok ? 200 : 502, r); }
       catch (e) { return send(504, { error: (e as Error).message }); }

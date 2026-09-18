@@ -62,8 +62,9 @@ const BUDGETED = [
   { token: 'adh_agent_start', budget: 1, why: 'export name resolved by the Zygisk/Xposed loaders (stage 2: rename it and drop this to 0)' },
   { token: 'adh_agent_set_package', budget: 1, why: 'same loader contract (stage 2: rename it and drop this to 0)' },
   { token: 'com.adh.agent', budget: 1, why: 'Java bridge class inside the embedded dex (stage 2: rename it and drop this to 0)' },
+  { token: 'AdhJavaHookBridge', budget: 10, why: 'the class name in the dex type descriptor + 9 bridge diagnostics; stage 2 renames them together' },
   { token: 'adh_bridge.dex', budget: 1, why: 'code-cache dex file name for the same bridge (stage 2: rename it and drop this to 0)' },
-  { token: 'adh.reporter.class', budget: 1, why: 'property the sandbox sets to name its reporter class (stage 2: rename it and drop this to 0)' },
+  { token: 'adh.reporter.class', budget: 1, why: 'property the sandbox sets to name its reporter class; stage 2 needs a DUAL READ (new name first, old as fallback) or existing targets silently lose the rich reporter' },
   { token: 'Dobby', budget: 2, why: 'vendored inline-hook backend (prebuilt static lib)' },
   { token: 'DobbyHook', budget: 1, why: 'same prebuilt lib' },
   { token: 'LSPlant', budget: 2, why: 'vendored ART hook backend (ScopedSuspendAll name x2)' },
@@ -71,6 +72,9 @@ const BUDGETED = [
   { token: 'libzygisk.so', budget: 1, why: 'injection-backend probe reads the real module name' },
 ];
 
+// Substring matching on purpose: for identity tokens that is the stricter reading (a token hidden inside
+// a longer string still counts). The tradeoff is noise - a vendored path containing a short token would
+// show up as a leak - so the tokens in the tables are kept specific.
 const count = (t) => uniq.filter((s) => s.includes(t)).length;
 const samples = (t, n = 4) => uniq.filter((s) => s.includes(t)).slice(0, n);
 

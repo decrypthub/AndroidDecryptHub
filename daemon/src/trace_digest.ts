@@ -262,7 +262,10 @@ export interface TraceDigestResult {
 }
 
 /** Run qbdi_trace on the session and digest the result, adding symbol names where possible. */
-export async function traceDigest(session: string, opts: { symLib?: string; symbol: string; args?: unknown[] }): Promise<TraceDigestResult> {
+export async function traceDigest(session: string, opts: { symLib: string; symbol: string; args?: unknown[] }): Promise<TraceDigestResult> {
+  // The agent refuses a trace without an explicit library since v4.50 (no fixture names there),
+  // so fail with a clear message HERE instead of forwarding an empty string.
+  if (!opts.symLib) throw new Error('trace_digest needs symLib (the module that defines the symbol)');
   const { sendCmd } = await import('./service.ts');
   const raw = await sendCmd(session, 'qbdi_trace', {
     symLib: opts.symLib ?? '',
