@@ -106,11 +106,11 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
     } },
     { method: 'POST', path: '/api/syscall/digest', handler: async () => {
       const body = await readBody(req);
-      const { session, hookIds, expected, sinceMs, limit, maxGroups } = JSON.parse(body || '{}');
+      const { session, hookIds, expected, sinceMs, limit, maxGroups, decode, decodeLimit } = JSON.parse(body || '{}');
       const sid = pickSid(session);
       if (!sid) return send(400, { error: 'need session' });
       try {
-        return send(200, await syscallDigest(sid, { hookIds, expected, sinceMs, limit, maxGroups }));
+        return send(200, await syscallDigest(sid, { hookIds, expected, sinceMs, limit, maxGroups, decode, decodeLimit }));
       } catch (e) { return send(502, { error: (e as Error).message }); }
     } },
     { method: 'POST', path: '/api/trace/digest', handler: async () => {

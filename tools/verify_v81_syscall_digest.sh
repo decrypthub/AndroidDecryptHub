@@ -17,6 +17,7 @@ const notes = [];
 
 const t = spawnSync(process.execPath, ['--test',
   `${root}/daemon/test/syscall_digest.test.ts`,
+  `${root}/daemon/test/syscall_args.test.ts`,
   `${root}/daemon/test/syscall_watch.test.ts`,
   `${root}/daemon/test/trace_digest.test.ts`,
   `${root}/daemon/test/backtrace.test.ts`], { encoding: 'utf8' });
@@ -24,7 +25,7 @@ const text = `${t.stdout ?? ''}${t.stderr ?? ''}`;
 const passed = Number(/pass (\d+)/.exec(text)?.[1] ?? -1);
 const failed = Number(/fail (\d+)/.exec(text)?.[1] ?? -1);
 if (t.status !== 0) problems.push(`unit tests exited ${t.status}`);
-if (passed < 33) problems.push(`expected >=33 passing unit tests (8 syscall-digest + 14 syscall + 7 trace + 4 backtrace), saw ${passed}`);
+if (passed < 44) problems.push(`expected >=44 passing unit tests (10 syscall-digest + 9 syscall-args + 14 syscall + 7 trace + 4 backtrace), saw ${passed}`);
 if (failed !== 0) problems.push(`unit tests report ${failed} failures`);
 notes.push(`unit tests: pass=${passed} fail=${failed}`);
 
@@ -46,6 +47,32 @@ if (digestSyscallSamples) {
   if (d.groups.some((g) => g.caller.startsWith('libc.so'))) problems.push('caller selection kept a libc frame instead of the issuing frame');
   if (!d.mismatches.some((m) => m.hookId === 4 && m.attributed === 160 && m.observed === 63)) problems.push(`mismatch detection drifted: ${JSON.stringify(d.mismatches)}`);
   notes.push(`synthetic hits -> groups=${d.groups.length} mismatches=${d.mismatches.length} observed=${JSON.stringify(d.observed)}`);
+
+  // Argument decoding: the path argument becomes a group example and feeds the path histogram.
+  let decodeArgs, argPlan, digestWithArgs;
+  try {
+    ({ decodeArgs, argPlan } = await import(`${base}/daemon/src/syscall_args.ts`));
+  } catch (e) {
+    problems.push('import syscall_args.ts failed: ' + e.message);
+  }
+  if (decodeArgs && argPlan) {
+    const plan = argPlan(56, [0n, 0x1000n, 0x80000n, 0n]);
+    if (plan.reads.length !== 1 || plan.reads[0].reg !== 1) problems.push(`openat arg plan drifted: ${JSON.stringify(plan)}`);
+    const args = decodeArgs(56, [-100n, 0x1000n, 0x80000n, 0n], { 1: Buffer.from('/proc/cpuinfo\0', 'utf8') });
+    const path = args.find((a) => a.name === 'path')?.value;
+    if (path !== '/proc/cpuinfo') problems.push(`openat path decoding drifted: ${path}`);
+    const flags = String(args.find((a) => a.name === 'flags')?.value ?? '');
+    if (!/O_RDONLY/.test(flags) || !/O_CLOEXEC/.test(flags)) problems.push(`openat flag decoding drifted: ${flags}`);
+    if (digestSyscallSamples) {
+      const withArgs = digestSyscallSamples([
+        { hookId: 9, observedNr: 56, ts: 1, tid: 1, callers: [caller('libapp.so', 'probe')], args },
+        { hookId: 9, observedNr: 56, ts: 2, tid: 1, callers: [caller('libapp.so', 'probe')], args },
+      ]);
+      if (withArgs.paths[0]?.path !== '/proc/cpuinfo' || withArgs.paths[0]?.count !== 2) problems.push(`path histogram drifted: ${JSON.stringify(withArgs.paths)}`);
+      if (!String(withArgs.groups[0]?.example ?? '').includes('/proc/cpuinfo')) problems.push('group example missing the decoded path');
+      notes.push(`arg decode -> path=${path} flags=${flags} histogram=${JSON.stringify(withArgs.paths)}`);
+    }
+  }
 }
 
 try {
@@ -55,6 +82,7 @@ try {
   else {
     if (!tool.inputSchema?.properties?.hookIds) problems.push('syscall_digest does not accept hookIds');
     if (!tool.inputSchema?.properties?.expected) problems.push('syscall_digest does not accept the expected attribution map');
+    if (!tool.inputSchema?.properties?.decode) problems.push('syscall_digest does not accept the decode toggle');
     notes.push(`MCP tools=${MCP_TOOLS.length}, syscall_digest present`);
   }
 } catch (e) {

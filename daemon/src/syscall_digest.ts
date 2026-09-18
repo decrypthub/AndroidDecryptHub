@@ -6,7 +6,9 @@
 // (syscall number, caller symbol) and keeps the runtime x8 next to the statically attributed number,
 // so a wrong attribution shows up as a mismatch instead of silently mislabelling the hook.
 import { captures } from './state.ts';
+import { readMem } from './service.ts';
 import { loadModuleTable, symbolizeAddresses, parseHex, hex, type SymbolizedAddress } from './module_symbols.ts';
+import { argPlan, decodeArgs, pathOf, summarizeArgs, type DecodedArg } from './syscall_args.ts';
 
 export interface SyscallCaller { module: string | null; symbol: string | null; offset: string | null }
 export interface SyscallSample {
@@ -15,6 +17,8 @@ export interface SyscallSample {
   tid: number;
   observedNr: number | null;
   callers: SyscallCaller[];
+  regs?: bigint[];
+  args?: DecodedArg[];
 }
 
 export interface SyscallGroup {
@@ -25,6 +29,7 @@ export interface SyscallGroup {
   firstTs: number;
   lastTs: number;
   tids: number[];
+  example?: string;
 }
 
 export interface SyscallDigest {
@@ -34,6 +39,10 @@ export interface SyscallDigest {
   observed: { nr: number | null; count: number }[];
   mismatches: { hookId: number; attributed: number; observed: number; count: number }[];
   hooksSeen: number[];
+  // "which files/names did it probe": the path-like argument per sample, grouped. This is the
+  // fingerprint-collection signal the whole watch exists for.
+  paths: { path: string; count: number }[];
+  decodedSamples: number;
   notes: string[];
 }
 
@@ -69,6 +78,8 @@ export function digestSyscallSamples(samples: SyscallSample[], opts: {
   const list = Array.isArray(samples) ? samples : [];
 
   const groupMap = new Map<string, SyscallGroup>();
+  const pathMap = new Map<string, number>();
+  let decodedSamples = 0;
   const observedMap = new Map<string, { nr: number | null; count: number }>();
   const mismatchMap = new Map<string, { hookId: number; attributed: number; observed: number; count: number }>();
   const hooksSeen = new Set<number>();
@@ -96,6 +107,13 @@ export function digestSyscallSamples(samples: SyscallSample[], opts: {
         tids: [s.tid],
       });
     }
+    if (Array.isArray(s.args) && s.args.length) {
+      decodedSamples++;
+      const g2 = groupMap.get(key)!;
+      if (!g2.example) g2.example = summarizeArgs(s.args);
+      const p = s.observedNr == null ? null : pathOf(s.observedNr, s.args);
+      if (p) pathMap.set(p, (pathMap.get(p) ?? 0) + 1);
+    }
     const obsKey = String(s.observedNr ?? '?');
     const obs = observedMap.get(obsKey) ?? { nr: s.observedNr, count: 0 };
     obs.count++;
@@ -122,6 +140,8 @@ export function digestSyscallSamples(samples: SyscallSample[], opts: {
     observed: [...observedMap.values()].sort((a, b) => b.count - a.count),
     mismatches: [...mismatchMap.values()],
     hooksSeen: [...hooksSeen].sort((a, b) => a - b),
+    paths: [...pathMap.entries()].map(([path, count]) => ({ path, count })).sort((a, b) => b.count - a.count).slice(0, maxGroups),
+    decodedSamples,
     notes,
   };
 }
@@ -138,6 +158,11 @@ export async function syscallDigest(session: string, opts: {
   sinceMs?: number;
   limit?: number;
   maxGroups?: number;
+  // Argument decoding reads the target's memory through pointer arguments (paths, sockaddrs,
+  // utsname). Bounded by decodeLimit samples so a busy watch cannot turn the digest into a
+  // memory-read storm.
+  decode?: boolean;
+  decodeLimit?: number;
 } = {}): Promise<SyscallDigestResult> {
   const limit = Math.max(1, Math.min(5000, Math.trunc(Number(opts.limit ?? 1000))));
   const sinceMs = Number.isFinite(Number(opts.sinceMs)) ? Number(opts.sinceMs) : null;
@@ -148,7 +173,7 @@ export async function syscallDigest(session: string, opts: {
     if (Number.isFinite(id) && Number.isFinite(nr)) expected[id] = nr;
   }
 
-  const raw: { hookId: number; ts: number; tid: number; observedNr: number | null; bt: bigint[] }[] = [];
+  const raw: { hookId: number; ts: number; tid: number; observedNr: number | null; bt: bigint[]; regs: bigint[] }[] = [];
   for (let i = captures.length - 1; i >= 0 && raw.length < limit; i--) {
     const c: any = captures[i];
     if (c.sessionId !== session || c.func !== 'NATIVE_HOOK') continue;
@@ -165,7 +190,13 @@ export async function syscallDigest(session: string, opts: {
     const bt: bigint[] = Array.isArray(event.bt)
       ? event.bt.map((v: any) => parseHex(v)).filter((v: bigint | null): v is bigint => v != null)
       : [];
-    raw.push({ hookId, ts: Number(c.ts ?? 0), tid: Number(c.tid ?? 0), observedNr, bt });
+    const regs: bigint[] = [];
+    for (const key of ['x0', 'x1', 'x2', 'x3', 'x4', 'x5', 'x6', 'x7', 'x8']) {
+      const v = event[key];
+      const parsed = parseHex(v);
+      regs.push(parsed ?? 0n);
+    }
+    raw.push({ hookId, ts: Number(c.ts ?? 0), tid: Number(c.tid ?? 0), observedNr, bt, regs });
   }
 
   // Symbolize every frame we might report as the caller (bounded by the sample count).
@@ -187,6 +218,7 @@ export async function syscallDigest(session: string, opts: {
     ts: r.ts,
     tid: r.tid,
     observedNr: r.observedNr,
+    regs: r.regs,
     callers: r.bt.slice(0, 4).map((a) => {
       const s = symbolMap.get(hex(a));
       return s
@@ -195,7 +227,37 @@ export async function syscallDigest(session: string, opts: {
     }),
   }));
 
+  // Argument decoding: bounded, and only for the samples that actually have a number to decode.
+  const decodeNotes: string[] = [];
+  let decodedCount = 0;
+  if (opts.decode !== false) {
+    const decodeLimit = Math.max(0, Math.min(200, Math.trunc(Number(opts.decodeLimit ?? 40))));
+    for (const s of samples) {
+      if (decodedCount >= decodeLimit) break;
+      if (s.observedNr == null) continue;
+      const plan = argPlan(s.observedNr, s.regs ?? []);
+      const mem: Record<number, Buffer | null> = {};
+      let unreadable = false;
+      for (const read of plan.reads.slice(0, 2)) {
+        if (read.addr === 0n || read.len <= 0) { mem[read.reg] = null; continue; }
+        let buf: Buffer = Buffer.alloc(0);
+        try { buf = await readMem(session, read.addr, Math.min(read.len, 512)); } catch { buf = Buffer.alloc(0); }
+        mem[read.reg] = buf && buf.length ? buf : null;
+        if (!mem[read.reg]) unreadable = true;
+      }
+      s.args = decodeArgs(s.observedNr, s.regs ?? [], mem);
+      decodedCount++;
+      if (unreadable && !decodeNotes.includes('some pointer arguments could not be read (the address may have been freed or unmapped by the time the digest ran)')) {
+        decodeNotes.push('some pointer arguments could not be read (the address may have been freed or unmapped by the time the digest ran)');
+      }
+    }
+    if (samples.length > decodedCount) decodeNotes.push(`argument decoding stopped after ${decodedCount} of ${samples.length} samples (decodeLimit)`);
+  } else {
+    decodeNotes.push('argument decoding disabled (decode:false): numbers and callers only');
+  }
+
   const result = digestSyscallSamples(samples, { expected, maxGroups: opts.maxGroups });
+  result.notes.push(...decodeNotes);
   if (symbolSource === 'unavailable') result.notes.push('symbolization unavailable: caller frames are shown as module+offset only');
   if (symbolSource === 'none') result.notes.push('no caller chain in the events: install the watch through syscall_watch (it sets backtrace:true)');
   return { ...result, window: { sinceMs, limit }, symbolSource };

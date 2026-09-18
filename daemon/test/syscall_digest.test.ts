@@ -78,6 +78,28 @@ test('the tids list stays bounded and unique', () => {
   assert.equal(new Set(d.groups[0].tids).size, 4);
 });
 
+test('decoded arguments become a group example and feed the path histogram', () => {
+  const openat = (path) => [{ name: 'path', kind: 'string', value: path }, { name: 'flags', kind: 'flags', value: 'O_RDONLY' }];
+  const d = digestSyscallSamples([
+    { hookId: 1, observedNr: 56, ts: 1, tid: 1, callers: [caller('libapp.so', 'probe')], args: openat('/proc/cpuinfo') },
+    { hookId: 1, observedNr: 56, ts: 2, tid: 1, callers: [caller('libapp.so', 'probe')], args: openat('/proc/cpuinfo') },
+    { hookId: 1, observedNr: 56, ts: 3, tid: 1, callers: [caller('libapp.so', 'probe')], args: openat('/sys/devices/system/cpu/possible') },
+  ]);
+  assert.equal(d.decodedSamples, 3);
+  assert.match(String(d.groups[0].example), /path=\/proc\/cpuinfo/);
+  assert.deepEqual(d.paths, [
+    { path: '/proc/cpuinfo', count: 2 },
+    { path: '/sys/devices/system/cpu/possible', count: 1 },
+  ]);
+});
+
+test('a group without decoded arguments has no example, and no paths are invented', () => {
+  const d = digestSyscallSamples([sample(1, 178, 1, 1, [caller('libapp.so', 'gettidProbe')])]);
+  assert.equal(d.groups[0].example, undefined);
+  assert.deepEqual(d.paths, []);
+  assert.equal(d.decodedSamples, 0);
+});
+
 test('a module without a symbol is labelled by offset, not by an empty name', () => {
   const d = digestSyscallSamples([sample(1, 178, 1, 1, [caller('libapp.so', null, '0x4bb10')])]);
   assert.equal(d.groups[0].caller, 'libapp.so+0x4bb10');
