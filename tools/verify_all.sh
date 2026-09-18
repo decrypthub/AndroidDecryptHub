@@ -143,7 +143,10 @@ for entry in "${SCRIPTS[@]}"; do
     # Counting those as passes would report an acceptance that never ran; counting RESULT:SKIP as a
     # failure (the old behaviour) was equally wrong. Both are counted - and printed - as skips.
     if grep -qE '^(SKIP|RESULT:SKIP)' /tmp/vr.log; then
-      echo "SKIP  $name ($(grep -m1E '^(SKIP|RESULT:SKIP)' /tmp/vr.log | sed -e 's/^RESULT:SKIP[[:space:]]*//' -e 's/^SKIP[[:space:]]*//'))"; skip=$((skip+1))
+      # Prefer the human line ("... SKIP (reason)"); the bare RESULT:SKIP sentinel carries no reason.
+      reason="$(grep -m1 'SKIP (' /tmp/vr.log | sed -e 's/^[[:space:]]*//' -e 's/^[^A-Za-z0-9]*//')"
+      [ -n "$reason" ] || reason="$(grep -m1E '^(SKIP|RESULT:SKIP)' /tmp/vr.log | sed -e 's/^RESULT:SKIP[[:space:]]*//' -e 's/^SKIP[[:space:]]*//')"
+      echo "SKIP  $name ($reason)"; skip=$((skip+1))
     else
       echo "PASS  $name"; pass=$((pass+1))
     fi
