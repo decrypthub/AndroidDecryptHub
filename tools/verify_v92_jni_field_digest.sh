@@ -22,7 +22,7 @@ const text = `${t.stdout ?? ''}${t.stderr ?? ''}`;
 const passed = Number(/pass (\d+)/.exec(text)?.[1] ?? -1);
 const failed = Number(/fail (\d+)/.exec(text)?.[1] ?? -1);
 if (t.status !== 0) problems.push(`jni_field_digest unit tests exited ${t.status}`);
-if (passed < 5) problems.push(`expected >=5 digest unit tests, saw ${passed}`);
+if (passed < 7) problems.push(`expected >=7 digest unit tests, saw ${passed}`);
 if (failed !== 0) problems.push(`digest unit tests report ${failed} failures`);
 notes.push(`digest unit tests: pass=${passed} fail=${failed}`);
 
@@ -31,6 +31,7 @@ const agentSrc = fs.readFileSync(`${root}/agent/src/runtime/jni_env_hooks.c`, 'u
 if (!agentSrc.includes('" -> %p"')) problems.push('GetFieldID/GetStaticFieldID events must carry the returned jfieldID (" -> %p")');
 const digestSrc = fs.readFileSync(`${root}/daemon/src/jni_field_digest.ts`, 'utf8');
 if (!digestSrc.includes('drainSession(')) problems.push('the live digest must drain through the shared drainSession');
+if (!digestSrc.includes('rewrittenSamples')) problems.push('the digest must surface rewritten writes (setValue) separately');
 if (/capture_drain/.test(digestSrc)) problems.push('the digest must never send a raw capture_drain (it would eat another consumer\'s events)');
 notes.push('agent hands out the id; digest drains through the shared path');
 

@@ -24,6 +24,10 @@ export interface JniFieldGroup {
   resolved: boolean;
   count: number;
   lastValue: string | null;
+  /** Writes whose stored value was REWRITTEN by a setValue override (v4.58). */
+  rewritten: number;
+  /** What the target tried to store the last time it was rewritten. */
+  lastRequested: string | null;
   tids: number[];
   firstTs: number | null;
   lastTs: number | null;
@@ -34,13 +38,15 @@ export interface JniFieldDigest {
   idEvents: number;
   resolvedIds: number;
   unresolvedAccesses: number;
+  /** Writes where an override changed what the target stored (requested != applied). */
+  rewrittenSamples: number;
   groups: JniFieldGroup[];
   notes: string[];
 }
 
 const ACCESS_RE = /^(Get|Set)(Static)?(Object|Boolean|Byte|Char|Short|Int|Long|Float|Double)Field$/;
 const ID_RE = /^(.*?) -> (0x[0-9a-fA-F]+)$/;
-const DETAIL_RE = /^field=(0x[0-9a-fA-F]+)(?: value=(.*))?$/;
+const DETAIL_RE = /^field=(0x[0-9a-fA-F]+)(?: value=(.*?))?(?: requested=(.*))?$/;
 
 /** Pure so it is unit-tested away from a device (the runner below only feeds it real events). */
 export function digestJniFields(events: JniEnvEvent[], opts: { maxGroups?: number } = {}): JniFieldDigest {
@@ -56,6 +62,7 @@ export function digestJniFields(events: JniEnvEvent[], opts: { maxGroups?: numbe
   const groups = new Map<string, JniFieldGroup>();
   let samples = 0;
   let unresolvedAccesses = 0;
+  let rewrittenSamples = 0;
   for (const ev of events ?? []) {
     if (!ACCESS_RE.test(String(ev?.function ?? ''))) continue;
     const m = DETAIL_RE.exec(String(ev.value ?? ''));
@@ -69,12 +76,17 @@ export function digestJniFields(events: JniEnvEvent[], opts: { maxGroups?: numbe
     if (!g) {
       g = {
         accessor: ev.function, field: resolved ?? m[1], fieldId, resolved: Boolean(resolved),
-        count: 0, lastValue: null, tids: [], firstTs: null, lastTs: null,
+        count: 0, lastValue: null, rewritten: 0, lastRequested: null,
+        tids: [], firstTs: null, lastTs: null,
       };
       groups.set(key, g);
     }
     g.count++;
     if (m[2] !== undefined) g.lastValue = m[2];
+    // "value=42 requested=7" is a REWRITTEN write: the target asked for 7 and the hook stored 42.
+    // Surfacing it separately matters because that difference IS the finding - an unfiltered digest
+    // would just show the applied value and hide that anything intervened.
+    if (m[3] !== undefined) { g.rewritten++; g.lastRequested = m[3]; rewrittenSamples++; }
     const tid = Number(ev.tid ?? 0);
     if (tid && g.tids.length < 16 && !g.tids.includes(tid)) g.tids.push(tid);
     const ts = Number(ev.ts ?? 0);
@@ -86,10 +98,11 @@ export function digestJniFields(events: JniEnvEvent[], opts: { maxGroups?: numbe
   const notes: string[] = [];
   if (!samples) notes.push('no JNIEnv field-access event in this window: hook Get/Set<Type>Field first (jni_env_hook) and trigger the target');
   if (unresolvedAccesses) notes.push(`${unresolvedAccesses} access(es) could not be attributed: their jfieldID was never seen in a GetFieldID event of this window (hook GetFieldID too, or widen sinceMs)`);
+  if (rewrittenSamples) notes.push(`${rewrittenSamples} write(s) were REWRITTEN by an active setValue override: see each group's rewritten/lastRequested (requested != applied)`);
   if (groups.size > maxGroups) notes.push(`only the top ${maxGroups} of ${groups.size} (accessor, field) groups are listed`);
 
   return {
-    samples, idEvents, resolvedIds: ids.size, unresolvedAccesses,
+    samples, idEvents, resolvedIds: ids.size, unresolvedAccesses, rewrittenSamples,
     groups: sorted.slice(0, maxGroups), notes,
   };
 }

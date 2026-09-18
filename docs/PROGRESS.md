@@ -15,6 +15,10 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.61 字段摘要区分"被改写的写入"（2026-09-19，host 验收 PASS；真机待做）**：评审点名这是 v4.58 之后最该补的一条——现在摘要把"native 想把 `isRooted` 写 true、被我们改成 false"和普通写入**混在一起**，而那个差值本身就是结论。
+      · `daemon/src/jni_field_digest.ts`：detail 解析改成 `field=0x.. value=<应用值> [requested=<原值>]`，新增 **`rewrittenSamples`（顶层）**、**每组 `rewritten` 计数与 `lastRequested`**，并在 `notes` 里明确写出"有 N 次写入被激活的 setValue 覆盖改写"；`lastValue` 语义固定为**目标最终存下的值**（应用值），`lastRequested` 才是目标原本要写的值。
+      · 单测 5 → **7**（一条证明改写被单列且 requested/applied 不混；一条证明没有覆盖时不会误报）；MCP 描述写明这层语义；`tools/verify_v92_jni_field_digest.sh` 的断言同步（最小测试数 5 → 7 + "摘要必须暴露 rewrittenSamples"）。
+      · 验收：daemon 单测 **151**；v92 PASS；host 全量门禁 **31 PASS / 0 FAIL / 84 SKIP**（115 脚本）。
 - [~] **v4.60 覆盖功能收口：REST 参数面 P0 + 严格解析 + 范围检查 + 内存序（2026-09-19，host 验收 PASS；真机待做）**：评审在 v4.58/v4.59 里抓到一个**我引入的 P0**——`setValue` 只接进了 MCP，**REST 路由 `/api/jni/env_hook` 把它丢了**，而设备脚本 v91 走的正是 REST，那条"覆盖后 counter 必须变 42"的断言在真机上**永远不可能成立**。已修：
       · **P0**：路由补上 `setValue` 的解析与转发，并在 host 侧加了一条**通用参数面检查**（v92）：把 `jni_env_hook` MCP schema 的每个属性名拿去比对 REST handler 块，缺哪个就红——这次输出 `REST parity: ... forwards all 4 MCP parameters (session, setValue, action, function)`。这类"只接了 MCP、忘了 REST"在本仓库出现过多次（v4.49 scope、v4.50 slotsWritable），现在至少这条路径被机检钉住。
       · **P1**：`setValue` 的解析又犯了 v4.53 抓过的老毛病（`strtoll/strtod` 传 NULL endptr）：`"abc"` 会静默改成 0、`"1e3"` 在 int 字段上得到 1（strtoll 停在 e）而 float 字段得到 1000。现在**整串必须是数字**（endptr 走到结尾 + 查 errno），并且"只有浮点解析成功"时把 `ov_i` 同步成 `(long long)ov_d`，两种字段类型拿到同一个数值；垃圾串直接 fail-loud。

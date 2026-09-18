@@ -70,7 +70,7 @@
 | 一站式 syscall 跟踪 | libc uname 站点 start → 触发 adh_libc_uname_probe → digest 调用方是该 fixture、observed 全 160、无 mismatch → stop 后存活（**脚本已就绪**） | v85_device |
 | native 批量挂钩 | 对 libadhdetect.so 用 prefix:adh_ 装一批 → 触发 → unhook 全部 → 进程存活 | v84（设备半） |
 | 签名去特征（运行期，**脚本已就绪**） | 目标进程内用 agent 自己的 search 扫已加载镜像（带正对照 `native_hook`，扫不到正对照则 FAIL）；`qbdi_trace`/`trace_digest` 现在 **symLib 必填**（MCP schema + REST 400），v10_qbdi 已改显式传参 | v88_device/v51/v10_qbdi/v02_so |
-| JNIEnv 字段访问器 + 写入改写（严格解析 + 按类型范围检查 + status 可见 `override`）+ 摘要 | hook `Get/Set<Type>Field`（instance+static）→ 触发沙盒 native 探针 → 事件必须带 `field=0x.. value=..`、**字段摘要能把访问还原成 `Class#name:sig`**（靠 GetFieldID 事件带出的 id）、**`setValue` 覆盖 `SetIntField` 后目标里的值真的变成覆盖值**、RELRO 还原、进程存活 | v91（**脚本已就绪**） |
+| JNIEnv 字段访问器 + 写入改写（严格解析 + 范围检查 + status `override`）+ 摘要（区分被改写写入） | hook `Get/Set<Type>Field`（instance+static）→ 触发沙盒 native 探针 → 事件必须带 `field=0x.. value=..`、**字段摘要能把访问还原成 `Class#name:sig`**（靠 GetFieldID 事件带出的 id）且**被 setValue 改写的写入单列**（rewrittenSamples/lastRequested vs lastValue）、**`setValue` 覆盖 `SetIntField` 后目标里的值真的变成覆盖值**、RELRO 还原、进程存活 | v91（**脚本已就绪**） |
 | 活体对象字段写入 | `object_set` 在沙盒上把 `HeapProbe.sConfig` 的 `flag/counter/label` 改掉 → 后续读取必须看到新值 → **继承字段 `inherited`（声明在父类）写入后复读为 9 且声明类正确** → `note`（Kotlin val/final）必须 ok:false → typo/越界值必须被拒 → 还原后进程存活 | v89（**脚本已就绪**） |
 | MCP 探针与文件系统（**脚本已就绪**） | `agent_ping` 往返延迟、`engine_selftest` 在沙盒上 `fired && protRestored`、`protocol_selftest` 1MB 帧完整、`fs_list`/`fs_read` 走 `/data/data/com.adh.sandbox` 与 `/proc/self/cmdline`（v25 老断言必须继续过） | v87_device |
 | native 事件限流（**脚本已就绪**） | libc 热站点（`read`/`write`）用 `throttleMs:200`：事件间隔 ≥ 窗口、`hits = 已发事件 + throttled`、`throttled` 单调递增；带 `returnValue`/`skipOriginal` 的钩子每一次命中都生效 | v86_device |

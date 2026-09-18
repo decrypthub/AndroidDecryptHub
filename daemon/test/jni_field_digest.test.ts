@@ -58,3 +58,25 @@ test('only real accessor names count: other JNI_ENV events are ignored', () => {
   assert.equal(d.samples, 1);
   assert.equal(d.idEvents, 1);
 });
+
+test('a write whose stored value differs from what the target asked is reported as rewritten', () => {
+  const d = digestJniFields([
+    idEvent('com.example.Foo#isRooted:Z -> 0xAAAA'),
+    access('SetBooleanField', 'field=0xAAAA value=0 requested=1'),
+    access('SetBooleanField', 'field=0xAAAA value=0', 3),   // a normal write, not rewritten
+  ]);
+  assert.equal(d.rewrittenSamples, 1);
+  const g = d.groups.find((x) => x.accessor === 'SetBooleanField');
+  assert.equal(g.rewritten, 1);
+  assert.equal(g.lastRequested, '1');
+  assert.equal(g.lastValue, '0');       // the APPLIED value is what the target ended up storing
+  assert.match(d.notes.join(' '), /REWRITTEN by an active setValue override/);
+});
+
+test('without an override nothing is reported as rewritten', () => {
+  const d = digestJniFields([access('SetIntField', 'field=0xBEEF value=9')]);
+  assert.equal(d.rewrittenSamples, 0);
+  assert.equal(d.groups[0].rewritten, 0);
+  assert.equal(d.groups[0].lastRequested, null);
+  assert.doesNotMatch(d.notes.join(' '), /REWRITTEN/);
+});
