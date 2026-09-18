@@ -215,6 +215,12 @@ try {
 }
 // Persist. Throws on failure — callers MUST surface it so the UI never claims "已保存" on a failed write.
 export function saveSettings() { writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2)); }
+/** Retention accounting for the in-memory capture list (see the counters above). */
+export function captureStoreStats() {
+  return { pushed: capturePushed, evicted: captureEvicted, retained: captures.length,
+    retain: settings.capture.retain, oldestTs: captures.length ? Number(captures[0].ts ?? 0) : 0 };
+}
+
 export function configStats() { return { captures: captures.length, dumps: dumps.size, events: events.length, on: captureTimers.size > 0, agents: sessions.size, capture: captureHealth() }; }
 // Which crypto family a capture belongs to (mirrors cryptoIdentify's buckets) — used by the
 // Daemon-side family filter (panel-level; the agent still hooks everything).
@@ -232,7 +238,8 @@ export function familyOf(algo: string): 'tls' | 'asymmetric' | 'hmac' | 'digest'
 export function pushCapture(entry: Capture): boolean {
   if (entry.category === 'crypto' && settings.capture.families[familyOf(entry.algo)] === false) return false;
   captures.push(entry);
-  while (captures.length > settings.capture.retain) captures.shift();
+  capturePushed++;
+  while (captures.length > settings.capture.retain) { captures.shift(); captureEvicted++; }
   return true;
 }
 // Self-test workload classes the one-shot probe ops drive. The AGENT is target-agnostic —
@@ -263,6 +270,11 @@ export interface Capture {
   keyHex?: string; ivHex?: string; outHex?: string;
 }
 export const captures: Capture[] = [];
+// Store accounting (v4.93): the in-memory list is capped by settings.capture.retain, and an
+// evicted record is gone for every digest that runs later. Counting pushes and evictions lets
+// a digest admit that its window may be missing events instead of looking complete.
+let capturePushed = 0;
+let captureEvicted = 0;
 // capSeq lives in service.ts — it's ++'d inside startCaptureLoop there, and ESM imported
 // bindings are read-only for the importer (can't reassign from another module). It's only
 // used by the capture loop, so it's a service-local counter, not shared state.

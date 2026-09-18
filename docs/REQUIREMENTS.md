@@ -1376,6 +1376,8 @@ MCP              →  AI 可编程操控，与 HTTP 同源
 
 > 实现状态（v4.92，**实现 + host 验收完成，真机待做**）：**第七轮评审剩余 P2 收口**。① `native_call`：地址字符串严格要求整串被消费（`0x1234zz` 不再被当成 `0x1234`），调用后检查挂起 Java 异常并回 `ok:false, pendingException:true`（值仍回传但标明不可信）。② 模块名解析统一到 `resolveModule()`（精确 → 唯一后缀 → 唯一包含 → 歧义抛错），`liveDisasm`/`syscall_watch`/`/api/module/dump` 共用（后者歧义回 409 + candidates）；`liveDisasm` 拒绝非正/NaN size 与越界 offset。③ automation 要求设备回包 `ok === true`（省略 `ok` 的半截帧不再按成功 resolve）。④ `phone_task`/`phone_skill run` 新增总时限 `timeoutMs`（默认 120s，夹紧 5s–10min），每步/每次重试按剩余预算夹紧，耗尽返回 `timedOut:true` 与停在哪一步。⑤ `/api/module/dump` 的 meta 标注"内存重组、非磁盘复刻"。边界（未修，如实记录）：原始地址路径的 `native_call` 不做存活性校验且无调用超时。
 
+> 实现状态（v4.93，**实现 + host 验收完成**）：**daemon 侧事件环淘汰入 digest 口径**。`state.ts` 新增 `captureStoreStats()`（累计 pushed / evicted、当前 retained / retain、最老保留记录时间戳），`syscall_digest` 在 note 中把"agent 环丢包"与"daemon 存储淘汰"分开报告，并且只在请求窗口确实受影响时提示（无窗口时=全部保留记录；`sinceMs` 早于最老保留记录时点名）。新单测 `capture_store.test.ts` 覆盖淘汰计数与还原。
+
 > 实现状态（v4.80，**实现 + host 验收完成，真机验收待做**）：**JNIEnv status 可过滤、并自报完整性**。表项涨到 228 后，整表回复超出旧的 32 KB 缓冲会被**静默截断**（只回一部分槽位且不说明——验证者会把"缺条目"读成"未安装"）。现在 `action:status` 用 `function` 当过滤器（与安装同语法：精确名 / 前缀 / `*后缀` / `*包含*` / `all`·`*`），另支持关键字 `installed`(仅已挂槽位)；解析与匹配和安装路径共用同一实现，回复带 `total`/`matched`/`emitted`/`truncated`，缓冲 128 KB（协议长度分帧、上限 64 MB）足够整表一次带回。安装/卸载对 `installed` 关键字显式报错（它是 status 过滤器，不是槽位名）。MCP 描述同步；v91 新增 `(3i)` 设备段断言三种视角的自洽性。
 
 > 实现状态（v4.66，**实现 + host 验收完成**）：**JNIEnv 覆盖率成为数字** + 两条评审 P1 收口。① 事件可信度：字符串拷贝/ pin 的 wrapper 在调用抛异常时**不再读缓冲区**（越界时 ART 不写 buf，读了就是拿未初始化内存当证据），失败事件写明 `<copy failed, buffer untouched>` 且 `ok=false`；`capacity=0` 显式标注歧义。② v91 对三个字符串读取器**逐个**断言（独立代码路径必须各自证明），并去掉魔数。③ `verify_v90_jni_table_abi.sh` 输出 `coverage: N/229` 与未覆盖名单（当时 119/229 = 52%，下限 115），"JNIEnv 全表可挂"从此有可跟踪的数字与待办清单。

@@ -15,6 +15,11 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.93 digest 口径补最后一处：daemon 侧事件环的淘汰也要说（2026-09-19，host 验收 PASS）**：第七轮评审还点了一条——`captureHealth` 只反映 **agent 侧**环形缓冲的丢包，**daemon 侧**内存捕获列表按 `capture.retain`（默认 1000）从头淘汰的记录没有任何计数，于是"窗口内事件被淘汰过"这件事在 digest 里不可见。
+      · `state.ts` 新增 `captureStoreStats()`：分别统计累计 `pushed`、`evicted`、当前 `retained`、`retain` 与最老保留记录的 `oldestTs`（`pushCapture` 每次淘汰自增，不是估算）。
+      · `syscall_digest` 现在把两类丢失分开写在 note 里：agent 环丢包（原有 `ringNote`）与 **daemon 存储淘汰**——仅当请求窗口确实被淘汰影响时才提示（无 `sinceMs` 时窗口 = 全部保留记录；有 `sinceMs` 且 `oldestTs > sinceMs` 时说明请求起点早于最老保留记录）。
+      · 单测：新 `capture_store.test.ts` 把 retain 调到 50、推 70 条，断言"保留 50 / 计入 70 次 push / evicted ≥ 20 / oldestTs 有效"，并在 finally 里还原共享状态。
+      · 验收：daemon `node --test` **155** 通过；host 全量门禁 **32 PASS / 0 FAIL / 84 SKIP**（116 脚本）。
 - [~] **v4.92 第七轮评审剩余 5 条 P2 收口：native_call / liveDisasm / automation / 工作流时限（2026-09-19，host 验收 PASS；真机待做）**
       · **native_call 地址严格解析**：`strtoull(addr, NULL, 0)` 把 `0x1234zz` 当 `0x1234` 调用（负数还会回绕），现在要求"整串必须被消费 + 不 ERANGE + 非 0"，否则 `ok:false` 并给示例格式。
       · **native_call 上报挂起 Java 异常**：被调函数若 `Throw`，返回的 `result` 是无意义的——以前仍回 `ok:true`。现在调用后 attach 检查异常，命中则 `ok:false, pendingException:true, error:"...value is not trustworthy"`（结果字段仍保留，但状态如实）。

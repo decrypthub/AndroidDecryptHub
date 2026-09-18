@@ -5,7 +5,7 @@
 // function collects this fingerprint, and how often". This module groups the events by
 // (syscall number, caller symbol) and keeps the runtime x8 next to the statically attributed number,
 // so a wrong attribution shows up as a mismatch instead of silently mislabelling the hook.
-import { captures, capStats } from './state.ts';
+import { captures, capStats, captureStoreStats } from './state.ts';
 import { sendCmd, drainSession } from './service.ts';
 import { loadModuleTable, symbolizeAddresses, parseHex, hex, type SymbolizedAddress } from './module_symbols.ts';
 import { argPlan, decodeArgs, pathOf, summarizeArgs, type DecodedArg } from './syscall_args.ts';
@@ -363,6 +363,14 @@ export async function syscallDigest(session: string, opts: {
     : null;
   const lossy = ringNote(ring);
   if (lossy) result.notes.push(lossy);
+  // Agent-side ring drops are one loss source; the daemon-side store cap is the other. If the
+  // store evicted records that fall inside the requested window, the digest says so.
+  const store = captureStoreStats();
+  if (store.evicted > 0 && (sinceMs == null || store.oldestTs > sinceMs)) {
+    result.notes.push(`capture store: ${store.evicted} older record(s) were evicted (retain ${store.retain})`
+      + (sinceMs == null ? ' - the digest window may miss events that arrived before the oldest retained one'
+                         : ' - the requested window starts before the oldest retained record'));
+  }
   if (symbolSource === 'unavailable') result.notes.push('symbolization unavailable: caller frames are shown as module+offset only');
   if (symbolSource === 'none') result.notes.push('no caller chain in the events: install the watch through syscall_watch (it sets backtrace:true)');
   return { ...result, window: { sinceMs, limit }, symbolSource, ring, counters };
