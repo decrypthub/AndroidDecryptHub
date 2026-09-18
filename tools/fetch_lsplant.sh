@@ -78,6 +78,26 @@ if ! grep -q 'JIT code cache unavailable' "$LSC"; then
   perl -0777 -pi -e 's/if \(!JitCodeCache::Init\(handler\)\) \{\s*\n\s*LOGE\("Failed to init jit code cache"\);\s*\n\s*return false;\s*\n\s*\}/if (!JitCodeCache::Init(handler)) {\n        LOGW("JIT code cache unavailable - continuing without JIT movement tracking");\n    }/s' "$LSC"
 fi
 grep -q 'JIT code cache unavailable' "$LSC" || { echo "!! LSPlant JIT-cache fallback patch did not apply"; exit 1; }
+
+# ---- patch 4: ADH's own exception clearing must not look like target behaviour ----------------
+# LSPlant clears exceptions on its own paths (art_method.hpp's access-flag probe and
+# jni_helper.hpp's ClearException helper). ExceptionClear is a hookable JNIEnv entry, so without
+# this every ADH-side clear would be recorded as a target event. The replacement calls the agent's
+# bypass (jni_env_hooks.c), which uses the saved original and never travels through the table.
+JH="$LSP/lsplant/src/main/jni/include/utils/jni_helper.hpp"
+for f in "$AM" "$JH"; do
+  if ! grep -q 'adh_jni_exception_clear' "$f"; then
+    perl -0777 -pi -e 's/namespace (lsplant(?:::art)? \{)/extern "C" void adh_jni_exception_clear(JNIEnv *env);\n\nnamespace $1/' "$f"
+  fi
+done
+if grep -q 'env->ExceptionClear()' "$AM"; then
+  perl -0777 -pi -e 's/env->ExceptionClear\(\),/adh_jni_exception_clear(env),/' "$AM"
+fi
+if grep -q 'env->ExceptionClear()' "$JH"; then
+  perl -0777 -pi -e 's/env->ExceptionClear\(\);/adh_jni_exception_clear(env);/' "$JH"
+fi
+grep -q 'adh_jni_exception_clear(env),' "$AM" || { echo "!! LSPlant exception-clear patch did not apply (art_method.hpp)"; exit 1; }
+grep -q 'adh_jni_exception_clear(env);' "$JH" || { echo "!! LSPlant exception-clear patch did not apply (jni_helper.hpp)"; exit 1; }
 # ---- Dobby: the statically linked inline-hook backend LSPlant uses -----------------
 bash "$ROOT/tools/fetch_dobby.sh"
 [ -f "$TP/dobby/lib/arm64-v8a/libdobby.a" ] && [ -f "$TP/dobby/include/dobby.h" ] \

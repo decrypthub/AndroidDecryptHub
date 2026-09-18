@@ -113,7 +113,7 @@ void adh_cmd_art_dexfiles(int fd, const char *id) {
     jclass element_class = (*env)->FindClass(env, "dalvik/system/DexPathList$Element");
     jclass dexfile_class = (*env)->FindClass(env, "dalvik/system/DexFile");
     jclass class_class = (*env)->FindClass(env, "java/lang/Class");
-    if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);
+    if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
 
     jmethodID get_all = thread_class ? (*env)->GetStaticMethodID(env, thread_class, "getAllStackTraces", "()Ljava/util/Map;") : NULL;
     jmethodID key_set = map_class ? (*env)->GetMethodID(env, map_class, "keySet", "()Ljava/util/Set;") : NULL;
@@ -127,7 +127,7 @@ void adh_cmd_art_dexfiles(int fd, const char *id) {
     jfieldID dex_elements_field = dex_path_list_class ? (*env)->GetFieldID(env, dex_path_list_class, "dexElements", "[Ldalvik/system/DexPathList$Element;") : NULL;
     jfieldID dexfile_field = element_class ? (*env)->GetFieldID(env, element_class, "dexFile", "Ldalvik/system/DexFile;") : NULL;
     jfieldID cookie_field = dexfile_class ? (*env)->GetFieldID(env, dexfile_class, "mCookie", "Ljava/lang/Object;") : NULL;
-    if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);
+    if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
 
     int mem_fd = open("/proc/self/mem", O_RDONLY);
     size_t capacity = 1 << 14, length = 0; char *records = (char *)malloc(capacity); if (records) records[0] = 0;
@@ -201,7 +201,7 @@ void adh_cmd_art_dexfiles(int fd, const char *id) {
         }
     }
     if (mem_fd >= 0) close(mem_fd);
-    if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);
+    if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
     (*env)->PopLocalFrame(env, NULL);
     adh_jni_detach(did);
 

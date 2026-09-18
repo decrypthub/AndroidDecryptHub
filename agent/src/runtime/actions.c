@@ -48,7 +48,7 @@ void adh_cmd_trigger(int fd, const char *id, const char *class_name, const char 
         (*env)->PushLocalFrame(env, 64);
         jclass target = adh_jni_load_app_class(env, class_name);
         if (adh_jni_exception_check(env)) {
-            (*env)->ExceptionClear(env);
+            adh_jni_exception_clear(env);
             reason = "loadClass threw";
         } else if (target) {
             loaded = 1;
@@ -68,7 +68,7 @@ void adh_cmd_trigger(int fd, const char *id, const char *class_name, const char 
                     jstring method_name = (*env)->NewStringUTF(env, method);
                     jobject reflected = (*env)->CallObjectMethod(env, target, get_method, method_name, empty);
                     if (adh_jni_exception_check(env)) {
-                        (*env)->ExceptionClear(env);
+                        adh_jni_exception_clear(env);
                         skipped = 1;
                         reason = "no such no-arg method";
                     } else if (reflected) {
@@ -94,7 +94,7 @@ void adh_cmd_trigger(int fd, const char *id, const char *class_name, const char 
                                 "(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;");
                             jobject ret = (*env)->CallObjectMethod(env, reflected, invoke, NULL, args);
                             if (adh_jni_exception_check(env)) {
-                                (*env)->ExceptionClear(env);
+                                adh_jni_exception_clear(env);
                                 reason = "invocation threw (isolated)";
                             } else {
                                 invoked = 1;
@@ -120,7 +120,7 @@ void adh_cmd_trigger(int fd, const char *id, const char *class_name, const char 
         } else {
             reason = "class not found";
         }
-        if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);
+        if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
         (*env)->PopLocalFrame(env, NULL);
         adh_jni_detach(did_attach);
     } else {

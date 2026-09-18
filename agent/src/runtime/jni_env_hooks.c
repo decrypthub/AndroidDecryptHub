@@ -375,7 +375,7 @@ static void append_quoted_string(JNIEnv *env, jobject obj, char *out, size_t out
     if (!obj) { snprintf(out, out_size, "null"); return; }
     const char *chars = (*env)->GetStringUTFChars(env, (jstring)obj, NULL);
     if (!chars) {
-        if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);
+        if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
         snprintf(out, out_size, "str?");
         return;
     }
@@ -1299,7 +1299,7 @@ static const jchar *GetStringChars_wrapper(JNIEnv *env, jstring str, jboolean *i
     // The query itself must not look like target behaviour (and must not leave an exception behind
     // if the string is bogus - our clear only removes the copy our own query produced).
     int str_len = -1;
-    if (str && !adh_jni_exception_check(env)) {
+    if (str && env_budget_left(ENV_SLOT_GetStringChars) && !adh_jni_exception_check(env)) {
         g_env_hook_in_ours = 1;
         str_len = (int)(*env)->GetStringLength(env, str);
         g_env_hook_in_ours = 0;
@@ -1407,7 +1407,7 @@ static const jchar *GetStringCritical_wrapper(JNIEnv *env, jstring str, jboolean
     // critical section and may not call another JNI function. That is also the only safe way to
     // bound the preview - the spec does not promise the pinned buffer is NUL-terminated.
     int str_len = -1;
-    if (str && !adh_jni_exception_check(env)) {
+    if (str && env_budget_left(ENV_SLOT_GetStringCritical) && !adh_jni_exception_check(env)) {
         g_env_hook_in_ours = 1;
         str_len = (int)(*env)->GetStringLength(env, str);
         g_env_hook_in_ours = 0;
@@ -1569,7 +1569,7 @@ static void FatalError_wrapper(JNIEnv *env, const char *msg) {
 }
 
 // v4.79: the target's own ExceptionCheck - the signal that says "this code path expects a throwable
-// here". ADH's instrumentation never reaches this wrapper (env_exception_pending() uses the saved
+// here". ADH's instrumentation never reaches this wrapper (adh_jni_exception_check() uses the saved
 // original), so what is recorded is the target's behaviour. It is also the hottest entry in the
 // table, so install it deliberately: the per-slot budget caps the events at ENV_EVENT_LIMIT and the
 // slot keeps counting hits/dropped afterwards.
@@ -1635,7 +1635,7 @@ static jint Throw_wrapper(JNIEnv *env, jthrowable obj) {
         if (!adh_jni_exception_check(env) && obj) {
             jclass c = (*env)->GetObjectClass(env, obj);
             if (c) adh_jni_class_name(env, c, cls, sizeof(cls));
-            if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);
+            if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
         }
         snprintf(detail, sizeof(detail), "throwable=%p class=%s", (void *)obj, cls[0] ? cls : "?");
     }
@@ -1656,7 +1656,7 @@ static jint ThrowNew_wrapper(JNIEnv *env, jclass clazz, const char *message) {
         char cls[160] = "";
         if (!adh_jni_exception_check(env) && clazz) {
             adh_jni_class_name(env, clazz, cls, sizeof(cls));
-            if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);
+            if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
         }
         char msg[96] = "";
         if (message) {
@@ -1885,7 +1885,7 @@ static jclass GetSuperclass_wrapper(JNIEnv *env, jclass clazz) {
         char a[96] = "", b[96] = "";
         if (clazz) adh_jni_class_name(env, clazz, a, sizeof(a));
         if (sup) adh_jni_class_name(env, sup, b, sizeof(b));
-        if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);
+        if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
         snprintf(detail, sizeof(detail), "class=%s -> %s", a[0] ? a : "?", b[0] ? b : "(none)");
     }
     env_note(ENV_SLOT_GetSuperclass, detail[0] ? detail : NULL, 1);
@@ -1905,7 +1905,7 @@ static jboolean IsAssignableFrom_wrapper(JNIEnv *env, jclass a, jclass b) {
         char na[96] = "", nb[96] = "";
         if (a) adh_jni_class_name(env, a, na, sizeof(na));
         if (b) adh_jni_class_name(env, b, nb, sizeof(nb));
-        if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);
+        if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
         snprintf(detail, sizeof(detail), "%s <- %s = %s", na[0] ? na : "?", nb[0] ? nb : "?", r ? "true" : "false");
     }
     env_note(ENV_SLOT_IsAssignableFrom, detail[0] ? detail : NULL, 1);
@@ -1924,7 +1924,7 @@ static jclass GetObjectClass_wrapper(JNIEnv *env, jobject obj) {
     if (env_budget_left(ENV_SLOT_GetObjectClass)) {
         char name[96] = "";
         if (cls) adh_jni_class_name(env, cls, name, sizeof(name));
-        if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);
+        if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
         snprintf(detail, sizeof(detail), "obj=%p class=%s", (void *)obj, name[0] ? name : "?");
     }
     env_note(ENV_SLOT_GetObjectClass, detail[0] ? detail : NULL, cls != NULL);
@@ -1943,7 +1943,7 @@ static jboolean IsInstanceOf_wrapper(JNIEnv *env, jobject obj, jclass clazz) {
     if (env_budget_left(ENV_SLOT_IsInstanceOf)) {
         char name[96] = "";
         if (clazz) adh_jni_class_name(env, clazz, name, sizeof(name));
-        if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);
+        if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
         snprintf(detail, sizeof(detail), "obj=%p class=%s = %s", (void *)obj, name[0] ? name : "?", r ? "true" : "false");
     }
     env_note(ENV_SLOT_IsInstanceOf, detail[0] ? detail : NULL, 1);
@@ -2882,6 +2882,14 @@ static int env_hook_install_index(int index, int override_active, long long over
         snprintf(error, error_size, "%s: table entry unavailable", g_env_hooks[index].name);
         return 0;
     }
+    // A slot whose wrapper is missing must never be installed: adh_swap_pointer_in_ro_page()
+    // accepts a NULL replacement, and a NULL in ART's JNIEnv table is a jump through NULL on the
+    // target's next call to that entry - a crash, not a fail-loud refusal.
+    void *wrapper = env_hook_wrapper(index);
+    if (!wrapper) {
+        snprintf(error, error_size, "%s: no wrapper for this slot - refusing to patch", g_env_hooks[index].name);
+        return 0;
+    }
     int spec = env_hook_spec_index(index);
     unsigned long long slot_offset = (unsigned long long)((char *)slot - (char *)table);
     if (spec < 0 || slot_offset != (unsigned long long)spec * sizeof(void *)) {
@@ -2893,7 +2901,15 @@ static int env_hook_install_index(int index, int override_active, long long over
 
     pthread_mutex_lock(&g_env_hook_lock);
     if (g_env_hooks[index].installed && g_env_hooks[index].slot == slot) {
-        // Same entry: re-activate the existing hook instead of patching twice.
+        // Same entry: re-activate the existing hook instead of patching twice - but only while the
+        // entry still points at OUR wrapper. If something else replaced it, flipping the flag would
+        // make the reply claim a hook that is no longer in the table.
+        if (__atomic_load_n(slot, __ATOMIC_ACQUIRE) != wrapper) {
+            pthread_mutex_unlock(&g_env_hook_lock);
+            snprintf(error, error_size, "%s: table entry no longer points at the hook wrapper; refusing to re-activate",
+                     g_env_hooks[index].name);
+            return 0;
+        }
         g_env_hooks[index].hits = 0;
         g_env_hooks[index].dropped = 0;
         g_env_hooks[index].override_i = override_i;
@@ -2916,14 +2932,14 @@ static int env_hook_install_index(int index, int override_active, long long over
         snprintf(error, error_size, "%s: table entry is null", g_env_hooks[index].name);
         return 0;
     }
-    if (original == env_hook_wrapper(index)) {
+    if (original == wrapper) {
         snprintf(error, error_size, "%s: entry already points at the hook wrapper", g_env_hooks[index].name);
         return 0;
     }
     // Publish the real entry before the swap: a call that lands in the wrapper during the
     // swap window then still reaches the original implementation.
     __atomic_store_n(&g_env_hooks[index].original, original, __ATOMIC_RELEASE);
-    if (!adh_swap_pointer_in_ro_page(slot, env_hook_wrapper(index))) {
+    if (!adh_swap_pointer_in_ro_page(slot, wrapper)) {
         __atomic_store_n(&g_env_hooks[index].original, NULL, __ATOMIC_RELEASE);
         snprintf(error, error_size, "%s: table page could not be made writable", g_env_hooks[index].name);
         return 0;

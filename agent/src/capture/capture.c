@@ -362,7 +362,7 @@ void adh_cmd_net_hook_test(int fd, const char *id, const char *className) {
                 if (rs) { const char *s = (*env)->GetStringUTFChars(env, rs, NULL); if (s) { strncpy(result, s, sizeof(result)-1); (*env)->ReleaseStringUTFChars(env, rs, s); } }
             }
         }
-        if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);
+        if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
         (*env)->PopLocalFrame(env, NULL);
         adh_jni_detach(did);
     }
@@ -541,7 +541,7 @@ void adh_cmd_file_hook_test(int fd, const char *id, const char *module, const ch
                 if (rs) { const char *s = (*env)->GetStringUTFChars(env, rs, NULL); if (s) { strncpy(result, s, sizeof(result)-1); (*env)->ReleaseStringUTFChars(env, rs, s); } }
             }
         }
-        if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);
+        if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
         (*env)->PopLocalFrame(env, NULL);
         adh_jni_detach(did);
     }
@@ -596,7 +596,7 @@ void adh_cmd_flow_watch(int fd, const char *id, const char *className) {
                 if (rs) { const char *s = (*env)->GetStringUTFChars(env, rs, NULL); if (s) { strncpy(result, s, sizeof(result)-1); (*env)->ReleaseStringUTFChars(env, rs, s); } }
             }
         }
-        if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);
+        if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
         (*env)->PopLocalFrame(env, NULL);
         adh_jni_detach(did);
     }
@@ -632,7 +632,7 @@ void adh_cmd_crypto_hook_test(int fd, const char *id, const char *className) {
             jmethodID run = (*env)->GetStaticMethodID(env, jc, "run", "()V");
             if (run) { (*env)->CallStaticVoidMethod(env, jc, run); triggered = 1; }
         }
-        if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);
+        if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
         (*env)->PopLocalFrame(env, NULL);
         adh_jni_detach(did);
     }
@@ -718,7 +718,7 @@ int adh_capture_register_reporter(JNIEnv *env, const char *reportClass) {
     if (!rc) return 0;
     JNINativeMethod m = { (char *)"nReport", (char *)"(Ljava/lang/String;Ljava/lang/String;[B[B[B[B)V", (void *)adh_nreport_impl };
     int r = (*env)->RegisterNatives(env, rc, &m, 1);
-    if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);
+    if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
     return (r == 0) ? 1 : 0;
 }
 
@@ -1045,7 +1045,7 @@ void adh_cmd_detect_watch(int fd, const char *id, const char *module, const char
             jmethodID run = (*env)->GetStaticMethodID(env, jc, "run", "()I");
             if (run) { rc = (*env)->CallStaticIntMethod(env, jc, run); triggered = 1; }
         }
-        if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);
+        if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
         (*env)->PopLocalFrame(env, NULL);
         adh_jni_detach(did);
     }
@@ -1116,11 +1116,11 @@ void adh_cmd_inline_crypto_test(int fd, const char *id, const char *module,
             (*env)->PushLocalFrame(env, 48);
             jclass jc = adh_jni_load_app_class(env, className ? className : "");
             jmethodID mid = jc ? (*env)->GetStaticMethodID(env, jc, method ? method : "", "()I") : NULL;
-            if (adh_jni_exception_check(env)) { (*env)->ExceptionClear(env); mid = NULL; }
+            if (adh_jni_exception_check(env)) { adh_jni_exception_clear(env); mid = NULL; }
             if (!mid) error = "static int trigger not found";
             else {
                 value = (*env)->CallStaticIntMethod(env, jc, mid);
-                if (adh_jni_exception_check(env)) { (*env)->ExceptionClear(env); error = "trigger threw"; }
+                if (adh_jni_exception_check(env)) { adh_jni_exception_clear(env); error = "trigger threw"; }
                 else triggered = 1;
             }
             (*env)->PopLocalFrame(env, NULL);

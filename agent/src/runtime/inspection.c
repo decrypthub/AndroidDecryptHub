@@ -24,10 +24,10 @@ static jobject adh_find_field_walk(JNIEnv *env, jmethodID get_declared_field, jm
     jclass cur = start;
     while (cur) {
         jobject f = (*env)->CallObjectMethod(env, cur, get_declared_field, (*env)->NewStringUTF(env, name));
-        if (adh_jni_exception_check(env)) { (*env)->ExceptionClear(env); f = NULL; }
+        if (adh_jni_exception_check(env)) { adh_jni_exception_clear(env); f = NULL; }
         if (f) return f;
         cur = (*env)->CallObjectMethod(env, cur, get_superclass);
-        if (adh_jni_exception_check(env)) { (*env)->ExceptionClear(env); cur = NULL; }
+        if (adh_jni_exception_check(env)) { adh_jni_exception_clear(env); cur = NULL; }
     }
     return NULL;
 }
@@ -65,7 +65,7 @@ void adh_cmd_object_inspect(int fd, const char *id, const char *class_name,
     if (!field_obj) { strncpy(err, "field not found (searched the superclass chain)", sizeof(err)-1); goto done; }
     (*env)->CallVoidMethod(env, field_obj, set_accessible, JNI_TRUE);
     jobject obj = (*env)->CallObjectMethod(env, field_obj, field_get, NULL);
-    if (adh_jni_exception_check(env)) { (*env)->ExceptionClear(env); strncpy(err, "field.get failed (not static?)", sizeof(err)-1); goto done; }
+    if (adh_jni_exception_check(env)) { adh_jni_exception_clear(env); strncpy(err, "field.get failed (not static?)", sizeof(err)-1); goto done; }
     if (!obj) { strncpy(err, "field value is null", sizeof(err)-1); goto done; }
 
     jclass object_class = (*env)->GetObjectClass(env, obj);
@@ -85,7 +85,7 @@ void adh_cmd_object_inspect(int fd, const char *id, const char *class_name,
         (*env)->CallVoidMethod(env, field, set_accessible, JNI_TRUE);
         jstring name = (jstring)(*env)->CallObjectMethod(env, field, field_get_name);
         jobject value = (*env)->CallObjectMethod(env, field, field_get, obj);
-        if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);
+        if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
         jstring value_string = (jstring)(*env)->CallStaticObjectMethod(env, str_class, value_of, value);
         char name_buf[96] = "", value_buf[300] = "";
         if (name) { const char *s = (*env)->GetStringUTFChars(env, name, NULL); if (s) { strncpy(name_buf, s, sizeof(name_buf)-1); (*env)->ReleaseStringUTFChars(env, name, s); } }
@@ -97,12 +97,12 @@ void adh_cmd_object_inspect(int fd, const char *id, const char *class_name,
         (*env)->DeleteLocalRef(env, field);
     }
     walker = (*env)->CallObjectMethod(env, walker, inspect_get_superclass);
-    if (adh_jni_exception_check(env)) { (*env)->ExceptionClear(env); walker = NULL; }
+    if (adh_jni_exception_check(env)) { adh_jni_exception_clear(env); walker = NULL; }
     }
     ok = 1;
 
 done:
-    if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);
+    if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
     (*env)->PopLocalFrame(env, NULL);
     adh_jni_detach(did);
     if (out) {
@@ -145,19 +145,19 @@ void adh_cmd_object_invoke(int fd, const char *id, const char *class_name,
     if (!field_obj) { strncpy(err, "field not found (searched the superclass chain)", sizeof(err)-1); goto done; }
     (*env)->CallVoidMethod(env, field_obj, set_accessible, JNI_TRUE);
     jobject obj = (*env)->CallObjectMethod(env, field_obj, field_get, NULL);
-    if (!obj || adh_jni_exception_check(env)) { (*env)->ExceptionClear(env); strncpy(err, "field value null", sizeof(err)-1); goto done; }
+    if (!obj || adh_jni_exception_check(env)) { adh_jni_exception_clear(env); strncpy(err, "field value null", sizeof(err)-1); goto done; }
 
     jclass object_class = (*env)->GetObjectClass(env, obj);
     jobject method = (*env)->CallObjectMethod(env, object_class, get_method, (*env)->NewStringUTF(env, method_name), NULL);
-    if (!method || adh_jni_exception_check(env)) { (*env)->ExceptionClear(env); strncpy(err, "method not found (no-arg only)", sizeof(err)-1); goto done; }
+    if (!method || adh_jni_exception_check(env)) { adh_jni_exception_clear(env); strncpy(err, "method not found (no-arg only)", sizeof(err)-1); goto done; }
     jobject ret = (*env)->CallObjectMethod(env, method, invoke, obj, NULL);
-    if (adh_jni_exception_check(env)) { (*env)->ExceptionClear(env); strncpy(err, "invoke threw", sizeof(err)-1); goto done; }
+    if (adh_jni_exception_check(env)) { adh_jni_exception_clear(env); strncpy(err, "invoke threw", sizeof(err)-1); goto done; }
     jstring value_string = (jstring)(*env)->CallStaticObjectMethod(env, str_class, value_of, ret);
     if (value_string) { const char *s = (*env)->GetStringUTFChars(env, value_string, NULL); if (s) { strncpy(result, s, sizeof(result)-1); (*env)->ReleaseStringUTFChars(env, value_string, s); } }
     ok = 1;
 
 done:
-    if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);
+    if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
     (*env)->PopLocalFrame(env, NULL);
     adh_jni_detach(did);
     char resultj[500], errorj[160]; json_escape(result, resultj, sizeof(resultj)); json_escape(err, errorj, sizeof(errorj));
@@ -209,7 +209,7 @@ static void adh_object_value_to_str(JNIEnv *env, jclass str_class, jobject value
     out[0] = 0;
     if (value_of && str_class) {
         jstring s = (jstring)(*env)->CallStaticObjectMethod(env, str_class, value_of, value);
-        if (adh_jni_exception_check(env)) { (*env)->ExceptionClear(env); }
+        if (adh_jni_exception_check(env)) { adh_jni_exception_clear(env); }
         if (s) {
             const char *c = (*env)->GetStringUTFChars(env, s, NULL);
             if (c) { snprintf(out, out_size, "%s", c); (*env)->ReleaseStringUTFChars(env, s, c); }
@@ -254,7 +254,7 @@ void adh_cmd_object_set(int fd, const char *id, const char *class_name, const ch
     if (!holder) { snprintf(err, sizeof(err), "holder field not found (searched the superclass chain)"); goto done; }
     (*env)->CallVoidMethod(env, holder, set_accessible, JNI_TRUE);
     jobject obj = (*env)->CallObjectMethod(env, holder, field_get, NULL);
-    if (!obj || adh_jni_exception_check(env)) { (*env)->ExceptionClear(env); snprintf(err, sizeof(err), "holder field is null (nothing to write to)"); goto done; }
+    if (!obj || adh_jni_exception_check(env)) { adh_jni_exception_clear(env); snprintf(err, sizeof(err), "holder field is null (nothing to write to)"); goto done; }
 
     jclass object_class = (*env)->GetObjectClass(env, obj);
     {
@@ -274,15 +274,15 @@ void adh_cmd_object_set(int fd, const char *id, const char *class_name, const ch
     // version lumped both into one "probably final" message.
     {
         jint mods = (*env)->CallIntMethod(env, field, get_modifiers);
-        if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);
+        if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
         if ((*env)->CallStaticBooleanMethod(env, mod_class, modifier_is_final, mods)) {
             snprintf(err, sizeof(err), "field '%s' is final (Kotlin val / read-only): reflection cannot write it here", target_field);
             goto done;
         }
-        if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);
+        if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
     }
     jobject old_value = (*env)->CallObjectMethod(env, field, field_get, obj);
-    if (adh_jni_exception_check(env)) { (*env)->ExceptionClear(env); snprintf(err, sizeof(err), "could not read the old value"); goto done; }
+    if (adh_jni_exception_check(env)) { adh_jni_exception_clear(env); snprintf(err, sizeof(err), "could not read the old value"); goto done; }
     adh_object_value_to_str(env, str_class, old_value, value_of, before, sizeof(before));
 
     if (strcmp(type_name, "boolean") == 0) {
@@ -324,18 +324,18 @@ void adh_cmd_object_set(int fd, const char *id, const char *class_name, const ch
         goto done;
     }
     if (adh_jni_exception_check(env)) {
-        (*env)->ExceptionClear(env);
+        adh_jni_exception_clear(env);
         // A final field (Kotlin val) lands here: report it as such instead of pretending it worked.
         snprintf(err, sizeof(err), "set failed - the value is not acceptable for %s (field %s)", type_name, target_field);
         goto done;
     }
     jobject new_value = (*env)->CallObjectMethod(env, field, field_get, obj);
-    if (adh_jni_exception_check(env)) { (*env)->ExceptionClear(env); snprintf(err, sizeof(err), "wrote the field but could not read it back"); goto done; }
+    if (adh_jni_exception_check(env)) { adh_jni_exception_clear(env); snprintf(err, sizeof(err), "wrote the field but could not read it back"); goto done; }
     adh_object_value_to_str(env, str_class, new_value, value_of, after, sizeof(after));
     ok = 1;
 
 done:
-    if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);
+    if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
     (*env)->PopLocalFrame(env, NULL);
     adh_jni_detach(did);
     char classj[200], fieldj[160], typej[140], beforej[500], afterj[500], errorj[240];
@@ -556,7 +556,7 @@ void adh_cmd_jni_probe(int fd, const char *id) {
         }
         (*env)->DeleteLocalRef(env, version);
     }
-    if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);
+    if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
     adh_jni_detach(did);
 
     char out[256], releasej[128]; json_escape(release, releasej, sizeof(releasej));

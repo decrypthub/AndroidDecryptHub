@@ -104,7 +104,7 @@ void adh_cmd_trace_run(int fd, const char *id, const char *symbol_library,
                 triggered = 1;
             }
         }
-        if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);
+        if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
         (*env)->PopLocalFrame(env, NULL);
         adh_jni_detach(did_attach);
     }

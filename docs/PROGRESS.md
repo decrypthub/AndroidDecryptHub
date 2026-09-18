@@ -15,6 +15,12 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.89 第五轮评审收口：C 侧 `ExceptionClear` 归因 + 家门禁两处假阴性 + vendored LSPlant（2026-09-19，host 验收 PASS；真机待做）**：评审把"ADH 自身异常流量不进事件流"这句话又拆开验了一遍，确认只做了 C++ 那一半。
+      · **P1-1（已修）**：`ExceptionClear` 同样是可挂槽位，而 C 侧还有 **60 处** `(*env)->ExceptionClear(env)` 直接走表（8 个 C 模块 52 处 + `jni_env_hooks.c` 自己的 7 处 + 1 处是 helper 内部的合法回退）。现在除 helper 的合法回退外全部改走 `adh_jni_exception_clear()`；**vendored LSPlant 的两处清理**（`art_method.hpp` 的 access-flag 探针、`jni_helper.hpp` 的 `ClearException`）也一并处理——做法是 `tools/fetch_lsplant.sh` 新增**第 4 号补丁**（注入 `extern "C"` 声明 + 替换调用，带"未生效即退出"校验），本地树已应用并在副本上模拟验证过补丁逻辑；vendor 树是 gitignored，所以补丁只存在于 fetch 脚本里（下次 fetch 自动重放）。
+      · **P1-2（两处家门禁假阴性）**：① 家族 **base** 形态的配对正则 `&table->name\b` 会**同时匹配** `&table->name##V`（`#` 是非单词字符），所以删掉 base case 门禁照样绿——现在锚到分号（`&table->name;`）并补上 `&name##_wrapper;` 这一条；两个负对照（删 base slot case / 删 base wrapper case）现在都会 FAIL。② 安装路径不检查 `env_hook_wrapper(index)` 是否为 NULL，而 `adh_swap_pointer_in_ro_page()` **接受 NULL 替换值**——未来一次误删就能把 NULL 写进 ART 的 JNIEnv 表、目标下次调用即跳空崩溃；现在安装前先取 wrapper 并判空，缺失就拒绝 patch（fail-loud）。
+      · **P2（已修）**：字符串预览的长度预查询加上了 `env_budget_left()` 门（预算耗尽后不再多打一次 JNI 调用）；重新激活分支补上"表项仍指向我们的 wrapper"校验（不然别人叠钩后我们会谎报已挂）；v91 `(3i)` 增加 `layout == "ok"` 断言。
+      · **口径更正**：`docs/REQUIREMENTS.md` 里最后一处 "84 条签名断言" → 93；`env_exception_pending()` 的旧名残留（FEATURE_STATUS + 源码注释）→ `adh_jni_exception_check()`。
+      · 验收：agent 零告警重建（含打过补丁的 LSPlant）；v90 PASS（228/229）；host 全量门禁 **32 PASS / 0 FAIL / 84 SKIP**（116 脚本）。
 - [~] **v4.88 门禁再补一条："wrapper 只能谈自己的槽位"（2026-09-19，host 验收 PASS）**：评审点出的最后一类"静态检查看不见的错"——手写 wrapper **函数体里写错 `ENV_SLOT_*` 常量**（例如在 `GetVersion_wrapper` 里 `env_note(ENV_SLOT_FindClass, ...)`）：签名对、接线对、布局对，只有真机跑才会发现它把事件写进了别的槽位、也会去还原别人的 original。现在 v90 两条规则：
       · 手写 wrapper：体内出现的每个 `ENV_SLOT_X` 必须等于 `<wrapper 名>`（当前 0 违规）；
       · 宏生成的 wrapper：宏体内**不允许出现字面量 `ENV_SLOT_<名字>`**（槽位必须来自参数 `ENV_SLOT_##NAME`，否则说明这个"通用"wrapper 被硬编码到某一个槽位）。

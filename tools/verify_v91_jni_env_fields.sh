@@ -340,7 +340,9 @@ if (!elemAbortOk) console.log('the JNI_ABORT round did not show the discarded mu
 await installSlot('GetJavaVM');   // the 'installed' filter below needs at least one hooked slot
 const stAll = await post('/api/jni/env_hook', { session, action: 'status', function: '' });
 const stAllTotal = Number(stAll.body?.total ?? 0), stAllMatched = Number(stAll.body?.matched ?? 0), stAllEmitted = Number(stAll.body?.emitted ?? 0);
-const stAllOk = stAll.body?.ok === true && stAllTotal >= 228 && stAllMatched === stAllTotal
+// The reply must also vouch for the table layout (v4.86): a drifted enum/name mapping makes the
+// agent refuse install/uninstall, and status is where that shows up first.
+const stAllOk = stAll.body?.ok === true && stAllTotal >= 228 && stAllMatched === stAllTotal && stAll.body?.layout === 'ok'
   && (stAll.body?.truncated === false ? stAllEmitted === stAllMatched : stAllEmitted < stAllMatched);
 const stRegion = await post('/api/jni/env_hook', { session, action: 'status', function: '*ArrayRegion' });
 const stRegionHooks = stRegion.body?.hooks ?? [];
@@ -353,7 +355,7 @@ const stInstOk = stInstHooks.length >= 1 && stInstHooks.every((h) => h.installed
   && stInstHooks.some((h) => h.function === 'GetJavaVM')
   && Number(stInst.body?.matched ?? -1) === stInstHooks.length
   && stInst.body?.truncated === false;
-console.log(`  status: total=${stAllTotal} matched=${stAllMatched} emitted=${stAllEmitted} truncated=${stAll.body?.truncated}; *ArrayRegion=${stRegionHooks.length}; installed=${stInstHooks.length}`);
+console.log(`  status: total=${stAllTotal} matched=${stAllMatched} emitted=${stAllEmitted} truncated=${stAll.body?.truncated} layout=${stAll.body?.layout}; *ArrayRegion=${stRegionHooks.length}; installed=${stInstHooks.length}`);
 const statusFilterOk = stAllOk && stRegionOk && stInstOk;
 if (!stAllOk) console.log('the unfiltered status did not report a consistent total/matched/emitted/truncated');
 if (!stRegionOk) console.log('the "*ArrayRegion" status filter did not return exactly the 16 region entries');

@@ -138,11 +138,14 @@ const pairing = [
   ['ADH_FIXED_WRAPPER_CASE', /&name##_wrapper/, 'installs &name##_wrapper'],
   ['ADH_FIELD_SLOT_CASE', /&table->name\b/, 'selects &table->name'],
   ['ADH_FIELD_WRAPPER_CASE', /&name##_wrapper/, 'installs &name##_wrapper'],
-  ['ADH_CALL_SLOT_CASES', /&table->name\b/, 'selects &table->name'],
-  ['ADH_CALL_SLOT_CASES', /&table->name##V/, 'selects &table->nameV'],
-  ['ADH_CALL_SLOT_CASES', /&table->name##A/, 'selects &table->nameA'],
+  // Anchored on the semicolon: /&table->name\b/ also matches "&table->name##V" (# is a non-word
+  // char, so \b still holds), which let the family BASE case be deleted with the gate still green.
+  ['ADH_CALL_SLOT_CASES', /&table->name;/, 'selects &table->name'],
+  ['ADH_CALL_SLOT_CASES', /&table->name##V;/, 'selects &table->nameV'],
+  ['ADH_CALL_SLOT_CASES', /&table->name##A;/, 'selects &table->nameA'],
+  ['ADH_CALL_WRAPPER_CASES', /&name##_wrapper;/, 'installs &name_wrapper'],
   ['ADH_CALL_WRAPPER_CASES', /&name##V_wrapper/, 'installs &nameV_wrapper'],
-  ['ADH_CALL_WRAPPER_CASES', /&name##A_wrapper/, 'installs &nameA_wrapper'],
+  ['ADH_CALL_WRAPPER_CASES', /&name##A_wrapper;/, 'installs &nameA_wrapper'],
 ];
 for (const [macro, pattern, what] of pairing) {
   const body = macroBodies.get(macro) ?? '';

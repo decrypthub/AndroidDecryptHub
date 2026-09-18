@@ -64,7 +64,7 @@ jobject adh_jni_app_class_loader(JNIEnv *env) {
         if (app && gcl) result = (*env)->CallObjectMethod(env, app, gcl);
     }
     if (!result) {
-        if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);
+        if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
         jclass thread = (*env)->FindClass(env, "java/lang/Thread");
         jmethodID current = thread ? (*env)->GetStaticMethodID(env, thread, "currentThread",
                                                                "()Ljava/lang/Thread;") : NULL;
@@ -72,7 +72,7 @@ jobject adh_jni_app_class_loader(JNIEnv *env) {
         jmethodID get = t ? (*env)->GetMethodID(env, thread, "getContextClassLoader",
                                                 "()Ljava/lang/ClassLoader;") : NULL;
         if (get) result = (*env)->CallObjectMethod(env, t, get);
-        if (!result && adh_jni_exception_check(env)) (*env)->ExceptionClear(env);
+        if (!result && adh_jni_exception_check(env)) adh_jni_exception_clear(env);
     }
     adh_jni_ours_leave(ours);
     return result;
@@ -87,7 +87,7 @@ void adh_jni_class_name(JNIEnv *env, jclass clazz, char *out, size_t out_size) {
     // path in real targets). Park it: clearing or overwriting it here would silently change the
     // target's control flow, so the same throwable is re-thrown before we return.
     jthrowable pending = (*env)->ExceptionOccurred(env);
-    if (pending) (*env)->ExceptionClear(env);
+    if (pending) adh_jni_exception_clear(env);
     if ((*env)->PushLocalFrame(env, 8) != 0) {
         if (pending) { (*env)->Throw(env, pending); (*env)->DeleteLocalRef(env, pending); }
         adh_jni_ours_leave(ours);
@@ -106,7 +106,7 @@ void adh_jni_class_name(JNIEnv *env, jclass clazz, char *out, size_t out_size) {
         }
         (*env)->DeleteLocalRef(env, name);
     }
-    if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);   // ours, not the caller's
+    if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);   // ours, not the caller's
     (*env)->PopLocalFrame(env, NULL);
     if (pending) {
         if (!adh_jni_exception_check(env)) (*env)->Throw(env, pending);
