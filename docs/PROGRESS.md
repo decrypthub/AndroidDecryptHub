@@ -15,6 +15,11 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.58 JNIEnv 字段写入可改写 + 评审 P2 收口（2026-09-19，host 验收 PASS；真机待做）**：评审指出 36 个字段槽位目前**只能看不能改**——而"native 代码把 `isRooted` 写回 false"正是这类分析最常见的诉求，且 native hook 早有 `returnValue` 先例。
+      · agent：`jni_env_hook` 新增 `setValue`（数字，**单槽**）：命中的 `Set<Type>Field` wrapper 在调用原函数前把值替换成覆盖值，事件同时给出 **`value=<应用值> requested=<原值>`**；覆盖状态存在槽位里，卸载即清除（不会留着继续改写）。**只允许 boolean/byte/char/short/int/long/float/double**：对象字段需要 agent 不持有的对象引用 → 直接拒绝并说明；`setValue` + 通配模式也被拒绝（"needs a single Set<Type>Field slot"）。实现上覆盖值在安装时解析成 `long long` 与 `double` 各一份，热路径不做字符串解析。
+      · 评审 P2 一并收口：`GetFieldID`/`GetStaticFieldID` 在**无异常但返回 NULL** 时不再报 `ok=1`（那会在字段摘要里留一个静默空洞）；预算是"跳过细节"而不是"调用失败"，预算耗尽时事件改为 `ok=<真实结果>` + `value="<budget spent>"`；两个 ID wrapper 补上自己的 typedef 与 `_Static_assert`（签名不符编译期就报错，实测 exit 1）。
+      · **自查抓到**：设备脚本 v91 之前写的是 `action: 'hook'/'unhook'`，而 agent 的动作名是 **`install`/`uninstall`**——非 install 会走卸载分支，真机上会"装了个寂寞"。已全部改正，并新增：`*Field` 一次安装 ≥36 槽、`setValue=42` 覆盖 `SetIntField` 后目标里 `counter` 必须变成 42（再卸载并用 `object_set` 还原夹具）。
+      · 验收：agent 零告警重建（884,352 B）；v71 注册表 PASS；daemon 单测 149；host 全量门禁 **31 PASS / 0 FAIL / 84 SKIP**（115 脚本）。
 - [~] **v4.57 JNIEnv 钩子选择器支持后缀/包含匹配（2026-09-19，host 验收 PASS；真机待做）**：v4.55 之后字段访问器有 36 个槽，但选择器只支持**前缀**通配（`CallIntMethod*`），想一次挂上整个字段族没有写法。现在四种形态都支持：`"*"`/`"all"` = 全部、`Call*` = 前缀、**`*Field` = 后缀**（一次挂上 36 个字段访问器）、**`*Field*` = 包含**（同时命中 `GetFieldID`/`GetStaticFieldID` 与访问器——这正是字段摘要解析名字所需要的组合）。匹配用有界比较实现，不依赖 NUL 终止的子串；命中数/失败数与首个失败原因照旧上报。
       · 接线：MCP `jni_env_hook` 的描述把四种模式与"36 个字段访问器"写清楚（AI 客户端不必猜）；设备脚本 v91 新增一段：用 `*Field` 一次安装，status 里 `installed` 且名字以 `Field` 结尾的槽位**必须 ≥ 36**，再用同一模式整体卸载。
       · 验收：agent 零告警重建；host 全量门禁 **31 PASS / 0 FAIL / 84 SKIP**（115 脚本）；daemon 单测 149。

@@ -57,7 +57,7 @@
     X(SetStaticObjectField) X(SetStaticBooleanField) X(SetStaticByteField) X(SetStaticCharField) X(SetStaticShortField) X(SetStaticIntField) X(SetStaticLongField) X(SetStaticFloatField) X(SetStaticDoubleField)
 
 #define ADH_FIELD_ENUM_ENTRY(name) ENV_SLOT_##name,
-#define ADH_FIELD_NAME_ENTRY(name) { #name, NULL, NULL, 0, 0, 0, 0, "" },
+#define ADH_FIELD_NAME_ENTRY(name) { #name, NULL, NULL, 0, 0, 0, 0, "", 0, 0, 0.0 },
 #define ADH_FIELD_SLOT_CASE(name) case ENV_SLOT_##name: return (void **)(uintptr_t)&table->name;
 #define ADH_FIELD_WRAPPER_CASE(name) case ENV_SLOT_##name: return (void *)&name##_wrapper;
 
@@ -115,6 +115,12 @@ struct EnvHookSlot {
     // already evicted the record (a busy target can push thousands of events). Benignly racy:
     // hits/dropped stay authoritative, this is a diagnostic snapshot.
     char last[192];
+    // v4.58 write override for one Set<Type>Field slot: the wrapper stores override_i/override_d
+    // instead of the caller's value and the event reports requested -> applied. Only the numeric and
+    // boolean field types can be overridden (an object value would need a reference we do not have).
+    int override_active;
+    long long override_i;
+    double override_d;
 };
 
 #define ADH_FIXED_SLOT_INITS(X) \
@@ -148,7 +154,7 @@ struct EnvHookSlot {
     X(CallVoidMethod,       jobject, ADH_MEMBER_INSTANCE, ENV_SLOT_CallVoidMethod,       61) \
     X(CallStaticVoidMethod, jclass,  ADH_MEMBER_STATIC,   ENV_SLOT_CallStaticVoidMethod, 141)
 
-#define ADH_SLOT_INIT(name) { name, NULL, NULL, 0, 0, 0, 0, "" },
+#define ADH_SLOT_INIT(name) { name, NULL, NULL, 0, 0, 0, 0, "", 0, 0, 0.0 },
 #define ADH_CALL_INITS_3(name, ret, tgt, kind, base) \
     ADH_SLOT_INIT(#name) ADH_SLOT_INIT(#name "V") ADH_SLOT_INIT(#name "A")
 #define ADH_CALL_INITS(name, ret, tgt, kind, base, spec) ADH_CALL_INITS_3(name, ret, tgt, kind, base)
@@ -456,15 +462,19 @@ static jstring NewStringUTF_wrapper(JNIEnv *env, const char *chars) {
     return result;
 }
 
+typedef jfieldID (JNICALL *get_field_id_fn)(JNIEnv *, jclass, const char *, const char *);
+
 static jfieldID GetFieldID_wrapper(JNIEnv *env, jclass clazz, const char *name, const char *sig) {
-    get_method_id_fn original = (get_method_id_fn)slot_original(ENV_SLOT_GetFieldID);
+    get_field_id_fn original = (get_field_id_fn)slot_original(ENV_SLOT_GetFieldID);
     if (!original) return NULL;
     if (g_env_hook_in_ours || !slot_active(ENV_SLOT_GetFieldID)) return (jfieldID)original(env, clazz, name, sig);
     jfieldID result = (jfieldID)original(env, clazz, name, sig);
     char detail[512];
     if (!env_budget_left(ENV_SLOT_GetFieldID)) {
-        env_note(ENV_SLOT_GetFieldID, NULL, 0);
-    } else if ((*env)->ExceptionCheck(env)) {
+        // The CALL may have succeeded: the budget only decided that we skip the expensive detail.
+        // Saying ok=false here made a successful lookup look like a failed one downstream.
+        env_note(ENV_SLOT_GetFieldID, "<budget spent>", result != NULL);
+    } else if (result == NULL || (*env)->ExceptionCheck(env)) {
         detail_field_plain(name, sig, detail, sizeof(detail));
         env_note(ENV_SLOT_GetFieldID, detail, 0);
     } else {
@@ -484,14 +494,14 @@ static jfieldID GetFieldID_wrapper(JNIEnv *env, jclass clazz, const char *name, 
 }
 
 static jfieldID GetStaticFieldID_wrapper(JNIEnv *env, jclass clazz, const char *name, const char *sig) {
-    get_method_id_fn original = (get_method_id_fn)slot_original(ENV_SLOT_GetStaticFieldID);
+    get_field_id_fn original = (get_field_id_fn)slot_original(ENV_SLOT_GetStaticFieldID);
     if (!original) return NULL;
     if (g_env_hook_in_ours || !slot_active(ENV_SLOT_GetStaticFieldID)) return (jfieldID)original(env, clazz, name, sig);
     jfieldID result = (jfieldID)original(env, clazz, name, sig);
     char detail[512];
     if (!env_budget_left(ENV_SLOT_GetStaticFieldID)) {
-        env_note(ENV_SLOT_GetStaticFieldID, NULL, 0);
-    } else if ((*env)->ExceptionCheck(env)) {
+        env_note(ENV_SLOT_GetStaticFieldID, "<budget spent>", result != NULL);
+    } else if (result == NULL || (*env)->ExceptionCheck(env)) {
         detail_field_plain(name, sig, detail, sizeof(detail));
         env_note(ENV_SLOT_GetStaticFieldID, detail, 0);
     } else {
@@ -796,7 +806,7 @@ static CTYPE JNICALL JNI_NAME##_wrapper(JNIEnv *env, TARGET target, jfieldID fie
     return result;                                                                          \
 }
 
-#define ADH_DEFINE_FIELD_SET_BODY(JNI_NAME, CTYPE, FMT, CAST, TARGET)                       \
+#define ADH_DEFINE_FIELD_SET_BODY(JNI_NAME, CTYPE, FMT, CAST, TARGET, OV)                   \
 static void JNICALL JNI_NAME##_wrapper(JNIEnv *env, TARGET target, jfieldID field, CTYPE value) { \
     typedef void (JNICALL *fn_t)(JNIEnv *, TARGET, jfieldID, CTYPE);                        \
     fn_t original = (fn_t)slot_original(ENV_SLOT_##JNI_NAME);                               \
@@ -805,33 +815,49 @@ static void JNICALL JNI_NAME##_wrapper(JNIEnv *env, TARGET target, jfieldID fiel
         original(env, target, field, value);                                                \
         return;                                                                             \
     }                                                                                       \
+    CTYPE requested = value;                                                                \
+    long long ov_i = 0; double ov_d = 0; int override_on = 0;                               \
+    if (__atomic_load_n(&g_env_hooks[ENV_SLOT_##JNI_NAME].override_active, __ATOMIC_RELAXED)) { \
+        ov_i = g_env_hooks[ENV_SLOT_##JNI_NAME].override_i;                                 \
+        ov_d = g_env_hooks[ENV_SLOT_##JNI_NAME].override_d;                                 \
+        (void)ov_i; (void)ov_d;   /* only one of them feeds OV, per field type */            \
+        value = (OV);                                                                       \
+        override_on = 1;                                                                    \
+    }                                                                                       \
     g_env_hook_in_ours = 1;                                                                 \
     original(env, target, field, value);                                                    \
-    char detail[128]; detail[0] = 0;                                                        \
+    char detail[192]; detail[0] = 0;                                                        \
     if (env_budget_left(ENV_SLOT_##JNI_NAME)) {                                             \
-        snprintf(detail, sizeof(detail), "field=%p value=" FMT, (void *)field, CAST(value)); \
+        if (override_on) {                                                                  \
+            snprintf(detail, sizeof(detail), "field=%p value=" FMT " requested=" FMT,       \
+                     (void *)field, CAST(value), CAST(requested));                          \
+        } else {                                                                            \
+            snprintf(detail, sizeof(detail), "field=%p value=" FMT, (void *)field, CAST(value)); \
+        }                                                                                   \
     }                                                                                       \
     env_note(ENV_SLOT_##JNI_NAME, detail[0] ? detail : NULL, 1);                            \
     g_env_hook_in_ours = 0;                                                                 \
 }
 
-#define ADH_FIELD_TYPE_ROW(NAME, CTYPE, FMT, CAST)                                          \
+#define ADH_FIELD_TYPE_ROW(NAME, CTYPE, FMT, CAST, OV)                                      \
     ADH_DEFINE_FIELD_GET_BODY(Get##NAME##Field, CTYPE, FMT, CAST, jobject)                  \
-    ADH_DEFINE_FIELD_SET_BODY(Set##NAME##Field, CTYPE, FMT, CAST, jobject)                  \
+    ADH_DEFINE_FIELD_SET_BODY(Set##NAME##Field, CTYPE, FMT, CAST, jobject, OV)              \
     ADH_DEFINE_FIELD_GET_BODY(GetStatic##NAME##Field, CTYPE, FMT, CAST, jclass)             \
-    ADH_DEFINE_FIELD_SET_BODY(SetStatic##NAME##Field, CTYPE, FMT, CAST, jclass)
+    ADH_DEFINE_FIELD_SET_BODY(SetStatic##NAME##Field, CTYPE, FMT, CAST, jclass, OV)
 
-ADH_FIELD_TYPE_ROW(Object, jobject, "%p", (const void *))
-ADH_FIELD_TYPE_ROW(Boolean, jboolean, "%d", (int))
-ADH_FIELD_TYPE_ROW(Byte, jbyte, "%d", (int))
-ADH_FIELD_TYPE_ROW(Char, jchar, "%u", (unsigned))
-ADH_FIELD_TYPE_ROW(Short, jshort, "%d", (int))
-ADH_FIELD_TYPE_ROW(Int, jint, "%d", (int))
-ADH_FIELD_TYPE_ROW(Long, jlong, "%lld", (long long))
-ADH_FIELD_TYPE_ROW(Float, jfloat, "%g", (double))
-ADH_FIELD_TYPE_ROW(Double, jdouble, "%g", (double))
+ADH_FIELD_TYPE_ROW(Object, jobject, "%p", (const void *), (jobject)0)      // object writes cannot be overridden
+ADH_FIELD_TYPE_ROW(Boolean, jboolean, "%d", (int), (jboolean)ov_i)
+ADH_FIELD_TYPE_ROW(Byte, jbyte, "%d", (int), (jbyte)ov_i)
+ADH_FIELD_TYPE_ROW(Char, jchar, "%u", (unsigned), (jchar)ov_i)
+ADH_FIELD_TYPE_ROW(Short, jshort, "%d", (int), (jshort)ov_i)
+ADH_FIELD_TYPE_ROW(Int, jint, "%d", (int), (jint)ov_i)
+ADH_FIELD_TYPE_ROW(Long, jlong, "%lld", (long long), (jlong)ov_i)
+ADH_FIELD_TYPE_ROW(Float, jfloat, "%g", (double), (jfloat)ov_d)
+ADH_FIELD_TYPE_ROW(Double, jdouble, "%g", (double), (jdouble)ov_d)
 
 // Compile-time type check: each wrapper must have exactly its table entry signature.
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetFieldID), __typeof__(&GetFieldID_wrapper)), "GetFieldID_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetStaticFieldID), __typeof__(&GetStaticFieldID_wrapper)), "GetStaticFieldID_wrapper signature mismatch");
 _Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetObjectField), __typeof__(&GetObjectField_wrapper)), "GetObjectField_wrapper signature mismatch");
 _Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->SetObjectField), __typeof__(&SetObjectField_wrapper)), "SetObjectField_wrapper signature mismatch");
 _Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetStaticObjectField), __typeof__(&GetStaticObjectField_wrapper)), "GetStaticObjectField_wrapper signature mismatch");
@@ -1076,13 +1102,28 @@ static int env_hook_uninstall_index(int index, char *error, size_t error_size) {
     }
     pthread_mutex_lock(&g_env_hook_lock);
     g_env_hooks[index].installed = 0;
+    g_env_hooks[index].override_active = 0;   // a removed hook must not keep rewriting writes
     pthread_mutex_unlock(&g_env_hook_lock);
     return 1;
 }
 
 // Patch one slot. The JNIEnv table lives in libart's RELRO segment, so the swap goes through
 // adh_swap_pointer_in_ro_page() and the ABI guard below refuses to touch a drifted offset.
-static int env_hook_install_index(int index, char *error, size_t error_size) {
+static int env_hook_install_index(int index, int override_active, long long override_i, double override_d,
+                                  char *error, size_t error_size) {
+    // Validate the override BEFORE touching the table: it only makes sense for one Set*Field slot.
+    if (override_active) {
+        const char *name = g_env_hooks[index].name;
+        int is_set_field = strncmp(name, "Set", 3) == 0 && strstr(name, "Field") != NULL;
+        if (!is_set_field) {
+            snprintf(error, error_size, "setValue applies to a Set<Type>Field slot, not %s", name);
+            return 0;
+        }
+        if (strstr(name, "Object") != NULL) {
+            snprintf(error, error_size, "setValue cannot override %s: an object value would need a reference the agent does not hold", name);
+            return 0;
+        }
+    }
     int did_attach = 0;
     JNIEnv *env = adh_jni_attach(&did_attach);
     if (!env) {
@@ -1115,6 +1156,9 @@ static int env_hook_install_index(int index, char *error, size_t error_size) {
         // Same entry: re-activate the existing hook instead of patching twice.
         g_env_hooks[index].hits = 0;
         g_env_hooks[index].dropped = 0;
+        g_env_hooks[index].override_active = override_active ? 1 : 0;
+        g_env_hooks[index].override_i = override_i;
+        g_env_hooks[index].override_d = override_d;
         pthread_mutex_unlock(&g_env_hook_lock);
         __atomic_store_n(&g_env_hooks[index].active, 1, __ATOMIC_RELEASE);
         return 1;
@@ -1147,13 +1191,17 @@ static int env_hook_install_index(int index, char *error, size_t error_size) {
     pthread_mutex_lock(&g_env_hook_lock);
     g_env_hooks[index].slot = slot;
     g_env_hooks[index].installed = 1;
+    g_env_hooks[index].override_active = override_active ? 1 : 0;
+    g_env_hooks[index].override_i = override_i;
+    g_env_hooks[index].override_d = override_d;
     g_env_hooks[index].hits = 0;
     g_env_hooks[index].dropped = 0;
     pthread_mutex_unlock(&g_env_hook_lock);
     return 1;
 }
 
-void adh_cmd_jni_env_hook(int fd, const char *id, const char *action, const char *function) {
+void adh_cmd_jni_env_hook(int fd, const char *id, const char *action, const char *function,
+                          int override_active, long long override_i, double override_d) {
     if (!action || !action[0]) {
         send_env_result(fd, id, action, function, 0, 0, 0,
                         "jni_env_hook requires action: install | uninstall | status");
@@ -1204,6 +1252,10 @@ void adh_cmd_jni_env_hook(int fd, const char *id, const char *action, const char
         pat_len--;
     }
 
+    if (override_active && wildcard) {
+        send_env_result(fd, id, action, function, 0, 0, 0, "setValue needs a single Set<Type>Field slot (no wildcard pattern)");
+        return;
+    }
     int applying = strcmp(action, "install") == 0;
     int applied = 0, failed = 0, matched = 0;
     char first_error[320] = "";
@@ -1215,7 +1267,7 @@ void adh_cmd_jni_env_hook(int fd, const char *id, const char *action, const char
         }
         matched = 1;
         char error[320] = "";
-        int ok = applying ? env_hook_install_index(index, error, sizeof(error))
+        int ok = applying ? env_hook_install_index(index, override_active, override_i, override_d, error, sizeof(error))
                           : env_hook_uninstall_index(index, error, sizeof(error));
         if (ok) applied = 1; else { failed = 1; snprintf(first_error, sizeof(first_error), "%s", error); }
     } else {
@@ -1233,7 +1285,7 @@ void adh_cmd_jni_env_hook(int fd, const char *id, const char *action, const char
             if (!hit) continue;
             matched++;
             char error[320] = "";
-            int ok = applying ? env_hook_install_index(i, error, sizeof(error))
+            int ok = applying ? env_hook_install_index(i, 0, 0, 0, error, sizeof(error))
                               : env_hook_uninstall_index(i, error, sizeof(error));
             if (ok) applied++;
             else {

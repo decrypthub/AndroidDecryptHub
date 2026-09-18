@@ -473,10 +473,19 @@ static void command_loop(int fd) {
                     int oreturn_value = oreturn[0] ? (int)strtol(oreturn, NULL, 0) : 0;
                     adh_cmd_jni_onload(fd, id, oaction, omodule, oskip_original, oreturn_value);
                 } else if (strcmp(op, "jni_env_hook") == 0) {
-                    char eaction[16] = "", efunction[64] = "";
+                    char eaction[16] = "", efunction[64] = "", esetval[48] = "";
                     json_get_str(line, "action", eaction, sizeof(eaction));
                     json_get_str(line, "function", efunction, sizeof(efunction));
-                    adh_cmd_jni_env_hook(fd, id, eaction, efunction);
+                    json_get_str(line, "setValue", esetval, sizeof(esetval));
+                    // setValue rewrites what a Set<Type>Field hook stores. Parsed into both an integer
+                    // and a double so the slot wrapper can use the one its field type needs.
+                    int eov_active = 0; long long eov_i = 0; double eov_d = 0;
+                    if (esetval[0]) {
+                        eov_i = strtoll(esetval, NULL, 0);
+                        eov_d = strtod(esetval, NULL);
+                        eov_active = 1;
+                    }
+                    adh_cmd_jni_env_hook(fd, id, eaction, efunction, eov_active, eov_i, eov_d);
                 } else if (strcmp(op, "java_hook") == 0) {
                     char jaction[16] = "", jcls[256] = "", jmethod[128] = "", jparams[512] = "";
                     char jskip[8] = "", jreturn[512] = "", jargvalue[512] = "", jstack[8] = "";

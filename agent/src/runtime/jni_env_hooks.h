@@ -15,7 +15,10 @@ extern "C" {
 // Method/field-ID events name the owning class; array events carry length + a bounded
 // hex preview of the payload.
 // Events are emitted as bounded JNI_ENV capture records.
-void adh_cmd_jni_env_hook(int fd, const char *id, const char *action, const char *function);
+// override_* apply to ONE Set<Type>Field slot: when active the wrapper writes the given value
+// instead of the caller's, and the event reports both (requested -> applied).
+void adh_cmd_jni_env_hook(int fd, const char *id, const char *action, const char *function,
+                          int override_active, long long override_i, double override_d);
 
 #ifdef __cplusplus
 }
