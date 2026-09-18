@@ -15,6 +15,12 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.72 JNIEnv 数组元素族（pin + 写回）全入表（2026-09-19，host 验收 PASS；真机待做）**：v4.70 补的是"整段 region 搬运"，这一批补**指针族**——`Get<Type>ArrayElements` 直接把数组元素指针交给 native（可能是真指针也可能是副本，`isCopy` 说了算），`Release<Type>ArrayElements` 才是写入真正落地的地方，而 `mode` 决定落还是不落（`JNI_ABORT` = 目标的修改被丢掉）。这是"谁改了数组、改的东西有没有生效"最直接的信号。
+      · 新增 14 槽（覆盖率 **158/229 → 172/229 = 75%**）：`Get/Release{Boolean,Char,Short,Int,Long,Float,Double}ArrayElements`（`Byte` 那一对在 v4.19 已覆盖）。事件 `array=.. len=.. elements=.. isCopy=.. first=[…]`；Release 事件额外给 `mode=0(copyback)|1(commit)|2(abort)`。
+      · 两条纪律：**长度只在不处于挂起异常时**用 `GetArrayLength` 取（有挂起异常还调 JNI 是非法用法，CheckJNI 会 abort——v4.69 的老教训），预览严格按取回的长度截断到 4 个元素，不会越界读；Release 的预览在**调用原函数之前**读（缓冲区此刻仍有效），所以 `abort` 的事件里显示的正是"被丢弃的那些值"，不是猜测。
+      · 文案差异是刻意的：`Byte` 那对沿用 v4.19 的 `hex=`（被 v59/v63 设备断言钉死），新 13 个类型用 `first=[…]`（更可读）。想统一要连设备断言一起改，不在这一版里偷偷改。
+      · 安全网照旧：14 条 `_Static_assert` 签名证明、索引 183–198 由 v90 对 `jni.h` 机检（`checked 172 indices`），覆盖率下限**再提到 172**（59/73 固定槽 + 36 字段访问器 + 21 族 ×3 = 172，与 spec 索引数一致）。
+      · 验收：agent 零告警重建（956 KB，新槽位名在 `.so` 里可 grep 到）；v90 PASS（172/229，75%）；host 全量门禁 **31 PASS / 0 FAIL / 84 SKIP**（115 脚本）。
 - [~] **v4.71 数组区域族补上设备证据路径（2026-09-19，host 构建通过；真机待做）**：v4.70 的 14 个表项此前只有 host 侧证明，按 v4.63→v4.64 的老规矩把真机路径补齐。
       · 沙盒 native 夹具 `Detection.jniArrayRegionProbe`：七种类型各"写回读"一遍（固定内容，便于逐条断言事件预览），全部往返成功才返回 `0xAD707F`（`0xAD7000 | 0x7F`）——少一位就是少一个类型往返，夹具不掩盖失败。
       · `tools/verify_v91_jni_env_fields.sh` 新增 `(3g)` 段：逐个安装 14 个表项 → 触发夹具 → 要求**每个表项各有自己的事件**且 `start=0 len=4 first=[<期望值>]` 精确匹配（Get/Set 两侧都要）→ 逐个卸载；`pass` 表达式纳入 `arrayProbeOk`，头注释同步。

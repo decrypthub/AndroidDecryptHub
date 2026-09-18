@@ -75,6 +75,24 @@ enum {
     ENV_SLOT_SetByteArrayRegion,
     ENV_SLOT_ReleaseByteArrayElements,
     ENV_SLOT_GetByteArrayRegion,
+    // v4.72: the rest of the Get/Release<Type>ArrayElements family (Byte landed in v4.19).
+    // Get pins an array's elements - isCopy says whether the target got a private copy, which
+    // decides whether a later Release has to copy back - and Release is where those writes land,
+    // or get thrown away (JNI_ABORT).
+    ENV_SLOT_GetBooleanArrayElements,
+    ENV_SLOT_ReleaseBooleanArrayElements,
+    ENV_SLOT_GetCharArrayElements,
+    ENV_SLOT_ReleaseCharArrayElements,
+    ENV_SLOT_GetShortArrayElements,
+    ENV_SLOT_ReleaseShortArrayElements,
+    ENV_SLOT_GetIntArrayElements,
+    ENV_SLOT_ReleaseIntArrayElements,
+    ENV_SLOT_GetLongArrayElements,
+    ENV_SLOT_ReleaseLongArrayElements,
+    ENV_SLOT_GetFloatArrayElements,
+    ENV_SLOT_ReleaseFloatArrayElements,
+    ENV_SLOT_GetDoubleArrayElements,
+    ENV_SLOT_ReleaseDoubleArrayElements,
     ENV_SLOT_GetPrimitiveArrayCritical,
     ENV_SLOT_ReleasePrimitiveArrayCritical,
     // v4.63: the "native pulls Java data into its own buffer / hands Java a native buffer" entries.
@@ -192,6 +210,13 @@ struct EnvHookSlot {
     X("GetStringUTFChars") X("FindClass") X("GetMethodID") X("GetStaticMethodID") \
     X("NewStringUTF") X("GetFieldID") X("GetStaticFieldID") X("GetByteArrayElements") \
     X("SetByteArrayRegion") X("ReleaseByteArrayElements") X("GetByteArrayRegion") \
+    X("GetBooleanArrayElements") X("ReleaseBooleanArrayElements") \
+    X("GetCharArrayElements") X("ReleaseCharArrayElements") \
+    X("GetShortArrayElements") X("ReleaseShortArrayElements") \
+    X("GetIntArrayElements") X("ReleaseIntArrayElements") \
+    X("GetLongArrayElements") X("ReleaseLongArrayElements") \
+    X("GetFloatArrayElements") X("ReleaseFloatArrayElements") \
+    X("GetDoubleArrayElements") X("ReleaseDoubleArrayElements") \
     X("GetPrimitiveArrayCritical") X("ReleasePrimitiveArrayCritical") \
     X("GetStringRegion") X("GetStringUTFRegion") X("GetStringChars") X("ReleaseStringChars") \
     X("Throw") X("ThrowNew") X("ExceptionOccurred") X("ExceptionDescribe") X("ExceptionClear") \
@@ -1560,6 +1585,105 @@ ADH_DEFINE_ARRAY_REGION(SetFloatArrayRegion, jfloat, const jfloat *, "%g", (doub
 ADH_DEFINE_ARRAY_REGION(GetDoubleArrayRegion, jdouble, jdouble *, "%g", (double))
 ADH_DEFINE_ARRAY_REGION(SetDoubleArrayRegion, jdouble, const jdouble *, "%g", (double))
 
+// v4.72 fixture-free family: Get/Release<Type>ArrayElements. Get hands the target a pointer to the
+// array data (a copy or the real thing - isCopy says which) and Release is where the target's
+// writes either land (mode copyback / commit) or are dropped (mode abort). The length comes from
+// GetArrayLength, and ONLY when no exception is pending: querying it while one is pending is
+// illegal JNI (the CheckJNI lesson from the exception batch). The preview is read while the buffer
+// is still valid - before the release call - so an abort honestly shows what was discarded.
+#define ADH_DEFINE_ARRAY_ELEMENTS(JNI_NAME, CTYPE, FMT, CAST)                                       \
+static CTYPE *JNI_NAME##_wrapper(JNIEnv *env, jarray arr, jboolean *isCopy) {                    \
+    typedef CTYPE *(JNICALL *fn_t)(JNIEnv *, jarray, jboolean *);                                \
+    fn_t original = (fn_t)slot_original(ENV_SLOT_##JNI_NAME);                                    \
+    if (!original) return NULL;                                                                  \
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_##JNI_NAME)) return original(env, arr, isCopy); \
+    CTYPE *elems = original(env, arr, isCopy);                                                   \
+    int failed = (*env)->ExceptionCheck(env) ? 1 : 0;                                            \
+    char detail[220]; detail[0] = 0;                                                             \
+    if (failed) {                                                                                \
+        snprintf(detail, sizeof(detail), "array=%p <call failed>", (void *)arr);                 \
+    } else if (elems && arr && env_budget_left(ENV_SLOT_##JNI_NAME)) {                           \
+        g_env_hook_in_ours = 1;                                                                  \
+        int len = (int)(*env)->GetArrayLength(env, arr);                                         \
+        g_env_hook_in_ours = 0;                                                                  \
+        char preview[96] = "";                                                                   \
+        size_t p = 0;                                                                            \
+        for (int i = 0; i < len && i < 4 && p + 24 < sizeof(preview); i++) {                     \
+            p += (size_t)snprintf(preview + p, sizeof(preview) - p, "%s" FMT,                    \
+                                  i ? "," : "", CAST(elems[i]));                                 \
+        }                                                                                        \
+        snprintf(detail, sizeof(detail), "array=%p len=%d elements=%p isCopy=%d first=[%s]",     \
+                 (void *)arr, len, (void *)elems, isCopy ? (int)*isCopy : -1, preview);          \
+    }                                                                                            \
+    env_note(ENV_SLOT_##JNI_NAME, detail[0] ? detail : NULL, !failed && elems != NULL);          \
+    return elems;                                                                                \
+}
+
+#define ADH_DEFINE_ARRAY_ELEMENTS_RELEASE(JNI_NAME, CTYPE, FMT, CAST)                               \
+static void JNI_NAME##_wrapper(JNIEnv *env, jarray arr, CTYPE *elems, jint mode) {               \
+    typedef void (JNICALL *fn_t)(JNIEnv *, jarray, CTYPE *, jint);                               \
+    fn_t original = (fn_t)slot_original(ENV_SLOT_##JNI_NAME);                                    \
+    if (!original) return;                                                                       \
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_##JNI_NAME)) {                               \
+        original(env, arr, elems, mode);                                                         \
+        return;                                                                                  \
+    }                                                                                            \
+    char detail[220]; detail[0] = 0;                                                             \
+    if (env_budget_left(ENV_SLOT_##JNI_NAME)) {                                                  \
+        int len = -1;                                                                            \
+        if (arr && !(*env)->ExceptionCheck(env)) {                                               \
+            g_env_hook_in_ours = 1;                                                              \
+            len = (int)(*env)->GetArrayLength(env, arr);                                         \
+            g_env_hook_in_ours = 0;                                                              \
+        }                                                                                        \
+        const char *mode_name = mode == 0 ? "copyback"                                              \
+                              : mode == 1 ? "commit"                                                \
+                              : mode == 2 ? "abort" : "unknown";                                    \
+        char preview[96] = "";                                                                   \
+        size_t p = 0;                                                                            \
+        for (int i = 0; i < len && i < 4 && p + 24 < sizeof(preview); i++) {                     \
+            p += (size_t)snprintf(preview + p, sizeof(preview) - p, "%s" FMT,                    \
+                                  i ? "," : "", CAST(elems[i]));                                 \
+        }                                                                                        \
+        snprintf(detail, sizeof(detail), "array=%p len=%d elements=%p mode=%d(%s) first=[%s]",   \
+                 (void *)arr, len, (void *)elems, (int)mode, mode_name,                          \
+                 elems ? preview : "");                                                          \
+    }                                                                                            \
+    original(env, arr, elems, mode);                                                             \
+    env_note(ENV_SLOT_##JNI_NAME, detail[0] ? detail : NULL, elems != NULL);                     \
+}
+
+ADH_DEFINE_ARRAY_ELEMENTS(GetBooleanArrayElements, jboolean, "%d", (int))
+ADH_DEFINE_ARRAY_ELEMENTS_RELEASE(ReleaseBooleanArrayElements, jboolean, "%d", (int))
+ADH_DEFINE_ARRAY_ELEMENTS(GetCharArrayElements, jchar, "%u", (unsigned))
+ADH_DEFINE_ARRAY_ELEMENTS_RELEASE(ReleaseCharArrayElements, jchar, "%u", (unsigned))
+ADH_DEFINE_ARRAY_ELEMENTS(GetShortArrayElements, jshort, "%d", (int))
+ADH_DEFINE_ARRAY_ELEMENTS_RELEASE(ReleaseShortArrayElements, jshort, "%d", (int))
+ADH_DEFINE_ARRAY_ELEMENTS(GetIntArrayElements, jint, "%d", (int))
+ADH_DEFINE_ARRAY_ELEMENTS_RELEASE(ReleaseIntArrayElements, jint, "%d", (int))
+ADH_DEFINE_ARRAY_ELEMENTS(GetLongArrayElements, jlong, "%lld", (long long))
+ADH_DEFINE_ARRAY_ELEMENTS_RELEASE(ReleaseLongArrayElements, jlong, "%lld", (long long))
+ADH_DEFINE_ARRAY_ELEMENTS(GetFloatArrayElements, jfloat, "%g", (double))
+ADH_DEFINE_ARRAY_ELEMENTS_RELEASE(ReleaseFloatArrayElements, jfloat, "%g", (double))
+ADH_DEFINE_ARRAY_ELEMENTS(GetDoubleArrayElements, jdouble, "%g", (double))
+ADH_DEFINE_ARRAY_ELEMENTS_RELEASE(ReleaseDoubleArrayElements, jdouble, "%g", (double))
+
+// Compile-time type check: each wrapper must have exactly its table entry signature.
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetBooleanArrayElements), __typeof__(&GetBooleanArrayElements_wrapper)), "GetBooleanArrayElements_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->ReleaseBooleanArrayElements), __typeof__(&ReleaseBooleanArrayElements_wrapper)), "ReleaseBooleanArrayElements_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetCharArrayElements), __typeof__(&GetCharArrayElements_wrapper)), "GetCharArrayElements_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->ReleaseCharArrayElements), __typeof__(&ReleaseCharArrayElements_wrapper)), "ReleaseCharArrayElements_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetShortArrayElements), __typeof__(&GetShortArrayElements_wrapper)), "GetShortArrayElements_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->ReleaseShortArrayElements), __typeof__(&ReleaseShortArrayElements_wrapper)), "ReleaseShortArrayElements_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetIntArrayElements), __typeof__(&GetIntArrayElements_wrapper)), "GetIntArrayElements_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->ReleaseIntArrayElements), __typeof__(&ReleaseIntArrayElements_wrapper)), "ReleaseIntArrayElements_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetLongArrayElements), __typeof__(&GetLongArrayElements_wrapper)), "GetLongArrayElements_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->ReleaseLongArrayElements), __typeof__(&ReleaseLongArrayElements_wrapper)), "ReleaseLongArrayElements_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetFloatArrayElements), __typeof__(&GetFloatArrayElements_wrapper)), "GetFloatArrayElements_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->ReleaseFloatArrayElements), __typeof__(&ReleaseFloatArrayElements_wrapper)), "ReleaseFloatArrayElements_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetDoubleArrayElements), __typeof__(&GetDoubleArrayElements_wrapper)), "GetDoubleArrayElements_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->ReleaseDoubleArrayElements), __typeof__(&ReleaseDoubleArrayElements_wrapper)), "ReleaseDoubleArrayElements_wrapper signature mismatch");
+
 // Compile-time type check: each wrapper must have exactly its table entry signature.
 _Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetBooleanArrayRegion), __typeof__(&GetBooleanArrayRegion_wrapper)), "GetBooleanArrayRegion_wrapper signature mismatch");
 _Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->SetBooleanArrayRegion), __typeof__(&SetBooleanArrayRegion_wrapper)), "SetBooleanArrayRegion_wrapper signature mismatch");
@@ -1705,6 +1829,21 @@ static int env_hook_spec_index(int index) {
         case ENV_SLOT_GetStringUTFChars: return 169;
         case ENV_SLOT_GetByteArrayElements: return 184;
         case ENV_SLOT_ReleaseByteArrayElements: return 192;
+        // v4.72: the rest of the elements family.
+        case ENV_SLOT_GetBooleanArrayElements: return 183;
+        case ENV_SLOT_ReleaseBooleanArrayElements: return 191;
+        case ENV_SLOT_GetCharArrayElements: return 185;
+        case ENV_SLOT_ReleaseCharArrayElements: return 193;
+        case ENV_SLOT_GetShortArrayElements: return 186;
+        case ENV_SLOT_ReleaseShortArrayElements: return 194;
+        case ENV_SLOT_GetIntArrayElements: return 187;
+        case ENV_SLOT_ReleaseIntArrayElements: return 195;
+        case ENV_SLOT_GetLongArrayElements: return 188;
+        case ENV_SLOT_ReleaseLongArrayElements: return 196;
+        case ENV_SLOT_GetFloatArrayElements: return 189;
+        case ENV_SLOT_ReleaseFloatArrayElements: return 197;
+        case ENV_SLOT_GetDoubleArrayElements: return 190;
+        case ENV_SLOT_ReleaseDoubleArrayElements: return 198;
         case ENV_SLOT_GetByteArrayRegion: return 200;
         case ENV_SLOT_SetByteArrayRegion: return 208;
         case ENV_SLOT_GetPrimitiveArrayCritical: return 222;
@@ -1786,6 +1925,20 @@ static void **env_hook_slot(struct JNINativeInterface *table, int index) {
         case ENV_SLOT_GetByteArrayElements: return (void **)(uintptr_t)&table->GetByteArrayElements;
         case ENV_SLOT_SetByteArrayRegion: return (void **)(uintptr_t)&table->SetByteArrayRegion;
         case ENV_SLOT_ReleaseByteArrayElements: return (void **)(uintptr_t)&table->ReleaseByteArrayElements;
+        case ENV_SLOT_GetBooleanArrayElements: return (void **)(uintptr_t)&table->GetBooleanArrayElements;
+        case ENV_SLOT_ReleaseBooleanArrayElements: return (void **)(uintptr_t)&table->ReleaseBooleanArrayElements;
+        case ENV_SLOT_GetCharArrayElements: return (void **)(uintptr_t)&table->GetCharArrayElements;
+        case ENV_SLOT_ReleaseCharArrayElements: return (void **)(uintptr_t)&table->ReleaseCharArrayElements;
+        case ENV_SLOT_GetShortArrayElements: return (void **)(uintptr_t)&table->GetShortArrayElements;
+        case ENV_SLOT_ReleaseShortArrayElements: return (void **)(uintptr_t)&table->ReleaseShortArrayElements;
+        case ENV_SLOT_GetIntArrayElements: return (void **)(uintptr_t)&table->GetIntArrayElements;
+        case ENV_SLOT_ReleaseIntArrayElements: return (void **)(uintptr_t)&table->ReleaseIntArrayElements;
+        case ENV_SLOT_GetLongArrayElements: return (void **)(uintptr_t)&table->GetLongArrayElements;
+        case ENV_SLOT_ReleaseLongArrayElements: return (void **)(uintptr_t)&table->ReleaseLongArrayElements;
+        case ENV_SLOT_GetFloatArrayElements: return (void **)(uintptr_t)&table->GetFloatArrayElements;
+        case ENV_SLOT_ReleaseFloatArrayElements: return (void **)(uintptr_t)&table->ReleaseFloatArrayElements;
+        case ENV_SLOT_GetDoubleArrayElements: return (void **)(uintptr_t)&table->GetDoubleArrayElements;
+        case ENV_SLOT_ReleaseDoubleArrayElements: return (void **)(uintptr_t)&table->ReleaseDoubleArrayElements;
         case ENV_SLOT_GetByteArrayRegion: return (void **)(uintptr_t)&table->GetByteArrayRegion;
         case ENV_SLOT_GetPrimitiveArrayCritical: return (void **)(uintptr_t)&table->GetPrimitiveArrayCritical;
         case ENV_SLOT_GetBooleanArrayRegion: return (void **)(uintptr_t)&table->GetBooleanArrayRegion;
@@ -1860,6 +2013,20 @@ static void *env_hook_wrapper(int index) {
         case ENV_SLOT_GetByteArrayElements: return (void *)&GetByteArrayElements_wrapper;
         case ENV_SLOT_SetByteArrayRegion: return (void *)&SetByteArrayRegion_wrapper;
         case ENV_SLOT_ReleaseByteArrayElements: return (void *)&ReleaseByteArrayElements_wrapper;
+        case ENV_SLOT_GetBooleanArrayElements: return (void *)&GetBooleanArrayElements_wrapper;
+        case ENV_SLOT_ReleaseBooleanArrayElements: return (void *)&ReleaseBooleanArrayElements_wrapper;
+        case ENV_SLOT_GetCharArrayElements: return (void *)&GetCharArrayElements_wrapper;
+        case ENV_SLOT_ReleaseCharArrayElements: return (void *)&ReleaseCharArrayElements_wrapper;
+        case ENV_SLOT_GetShortArrayElements: return (void *)&GetShortArrayElements_wrapper;
+        case ENV_SLOT_ReleaseShortArrayElements: return (void *)&ReleaseShortArrayElements_wrapper;
+        case ENV_SLOT_GetIntArrayElements: return (void *)&GetIntArrayElements_wrapper;
+        case ENV_SLOT_ReleaseIntArrayElements: return (void *)&ReleaseIntArrayElements_wrapper;
+        case ENV_SLOT_GetLongArrayElements: return (void *)&GetLongArrayElements_wrapper;
+        case ENV_SLOT_ReleaseLongArrayElements: return (void *)&ReleaseLongArrayElements_wrapper;
+        case ENV_SLOT_GetFloatArrayElements: return (void *)&GetFloatArrayElements_wrapper;
+        case ENV_SLOT_ReleaseFloatArrayElements: return (void *)&ReleaseFloatArrayElements_wrapper;
+        case ENV_SLOT_GetDoubleArrayElements: return (void *)&GetDoubleArrayElements_wrapper;
+        case ENV_SLOT_ReleaseDoubleArrayElements: return (void *)&ReleaseDoubleArrayElements_wrapper;
         case ENV_SLOT_GetByteArrayRegion: return (void *)&GetByteArrayRegion_wrapper;
         case ENV_SLOT_GetPrimitiveArrayCritical: return (void *)&GetPrimitiveArrayCritical_wrapper;
         case ENV_SLOT_GetBooleanArrayRegion: return (void *)&GetBooleanArrayRegion_wrapper;
