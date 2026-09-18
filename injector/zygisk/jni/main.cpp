@@ -7,8 +7,11 @@
 #include <cerrno>
 #include <fcntl.h>
 #include <unistd.h>
+#include <poll.h>
 #include <sys/syscall.h>
 #include <sys/stat.h>
+#include <sys/socket.h>
+#include <sys/time.h>
 #include <sys/mman.h>   // MFD_CLOEXEC
 #include <cstdio>
 #include <cstring>
@@ -50,19 +53,71 @@ static bool write_all(int fd, const char *buf, size_t len) {
     return true;
 }
 
-static bool read_reply(int fd, char *buf, size_t cap) {
-    ssize_t n = read(fd, buf, cap - 1);
-    if (n <= 0) return false;
-    buf[n] = 0;
+// Sockets: a companion that closed early must fail the write, not kill the target with SIGPIPE
+// (this runs in the app process, whose SIGPIPE disposition we do not control).
+static bool send_all(int fd, const char *buf, size_t len) {
+    size_t off = 0;
+    while (off < len) {
+        ssize_t n = send(fd, buf + off, len - off, MSG_NOSIGNAL);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return false;
+        }
+        if (n == 0) return false;
+        off += (size_t)n;
+    }
     return true;
 }
 
+// Read one reply LINE (without the terminator) from a companion socket. Requires a real '\n' inside
+// the cap: a short read, a timed-out read (SO_RCVTIMEO) or a missing terminator all report failure,
+// so a half-consumed old reply can never be mistaken for this request's answer.
+static bool read_reply_line(int fd, char *buf, size_t cap) {
+    size_t used = 0;
+    while (used + 1 < cap) {
+        char c;
+        ssize_t n = read(fd, &c, 1);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return false;
+        }
+        if (n == 0) return false;
+        if (c == '\n') {
+            buf[used] = 0;
+            return true;
+        }
+        buf[used++] = c;
+    }
+    buf[used] = 0;
+    return false;
+}
+
+static bool reply_is(int fd, const char *expect) {
+    char buf[16];
+    return read_reply_line(fd, buf, sizeof(buf)) && strcmp(buf, expect) == 0;
+}
+
+// Companion side: bound the wait for the next byte so a half-open client (killed between connect and
+// its request line) cannot pin this loop forever. Linux poll() works on sockets on every supported
+// kernel; a timeout is treated exactly like a closed peer.
+static constexpr int kCompanionIdleMs = 15000;
+
+static bool wait_readable(int fd, int timeout_ms) {
+    struct pollfd p {};
+    p.fd = fd;
+    p.events = POLLIN;
+    int r = poll(&p, 1, timeout_ms);
+    return r > 0;
+}
+
 // Read one request line: at most cap-1 bytes, terminated by '\n'. Returns the line length, -1 when the
-// peer closed / the read failed, or -2 when the line did not fit. A truncated or over-long request is
-// never acted on - the previous read-once code let leftover bytes fall through to "mark".
+// peer closed / timed out, or -2 when the line did not fit (the rest of that line is drained first, so
+// the stream stays aligned). A truncated or over-long request is never acted on - the previous
+// read-once code let leftover bytes fall through to "mark".
 static ssize_t read_request_line(int fd, char *buf, size_t cap) {
     size_t used = 0;
     while (used + 1 < cap) {
+        if (!wait_readable(fd, kCompanionIdleMs)) return -1;
         char c;
         ssize_t n = read(fd, &c, 1);
         if (n < 0) {
@@ -77,7 +132,18 @@ static ssize_t read_request_line(int fd, char *buf, size_t cap) {
         buf[used++] = c;
     }
     buf[used] = 0;
-    return -2;                          // over-long request
+    // Drain the rest of the over-long line (bounded, EOF/timeout ends it) before reporting it.
+    for (size_t drained = 0; drained < 8192; drained++) {
+        if (!wait_readable(fd, kCompanionIdleMs)) break;
+        char c;
+        ssize_t n = read(fd, &c, 1);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        if (n == 0 || c == '\n') break;
+    }
+    return -2;
 }
 
 // The companion relay exists for the pre-specialize window only (Zygisk Next dlcloses the module
@@ -87,10 +153,24 @@ static int g_companion_socket = -1;
 static int g_companion_fails = 0;
 static constexpr int kCompanionMaxFails = 3;
 
+// A companion socket with bounded reads/writes: this runs on the app's startup path, so a wedged
+// companion must cost at most ~1 s per attempt instead of blocking the process indefinitely.
+static int connect_companion(void) {
+    if (!g_api_for_log) return -1;
+    int fd = g_api_for_log->connectCompanion();
+    if (fd < 0) return -1;
+    struct timeval tv {};
+    tv.tv_sec = 1;
+    tv.tv_usec = 0;
+    (void)setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    (void)setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    return fd;
+}
+
 static bool companion_log_line(const char *line) {
-    if (!g_api_for_log || g_companion_fails >= kCompanionMaxFails) return false;
+    if (g_companion_fails >= kCompanionMaxFails) return false;
     if (g_companion_socket < 0) {
-        g_companion_socket = g_api_for_log->connectCompanion();
+        g_companion_socket = connect_companion();
         if (g_companion_socket < 0) {
             g_companion_fails++;
             return false;
@@ -98,9 +178,10 @@ static bool companion_log_line(const char *line) {
     }
     char req[600];
     int len = snprintf(req, sizeof(req), "log %s\n", line);
-    char ack[8] = {0};
-    if (len <= 0 || !write_all(g_companion_socket, req, (size_t)len) ||
-        !read_reply(g_companion_socket, ack, sizeof(ack))) {
+    // "ok" is required: a refusal ("err") or a truncated reply must let note() fall back instead of
+    // silently dropping the line.
+    if (len <= 0 || !send_all(g_companion_socket, req, (size_t)len) ||
+        !reply_is(g_companion_socket, "ok")) {
         close(g_companion_socket);
         g_companion_socket = -1;
         g_companion_fails++;
@@ -125,23 +206,21 @@ static bool valid_pkg_name(const char *pkg) {
     return true;
 }
 
-// Bound the decision log: it is root-readable state that accumulates across reboots.
+// Bound the decision log: it is root-readable state that accumulates across reboots. The cap is
+// enforced by truncating in place (no second file): several module instances append concurrently and
+// a rename would race with them, possibly moving a just-written line out of the file the operator
+// reads. Returns false when the line did not reach the file, so callers can fall back.
 static constexpr off_t kDecisionLogMaxBytes = 512 * 1024;
 
-static void rotate_decision_log_if_needed(void) {
-    struct stat st {};
-    if (stat(ADH_DECISION_LOG, &st) != 0 || st.st_size < kDecisionLogMaxBytes) return;
-    std::string prev = std::string(ADH_DECISION_LOG) + ".1";
-    (void)rename(ADH_DECISION_LOG, prev.c_str());   // replaces the previous rotation
-}
-
-static void append_decision_line(const char *line) {
-    rotate_decision_log_if_needed();
+static bool append_decision_line(const char *line) {
     int fd = open(ADH_DECISION_LOG, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0644);
-    if (fd < 0) return;
-    (void)write_all(fd, line, strlen(line));
-    (void)write_all(fd, "\n", 1);
+    if (fd < 0) return false;
+    struct stat st {};
+    if (fstat(fd, &st) == 0 && st.st_size >= kDecisionLogMaxBytes) (void)ftruncate(fd, 0);
+    bool ok = write_all(fd, line, strlen(line)) && write_all(fd, "\n", 1);
+    if (!ok) LOGE("decision log write failed: %s", strerror(errno));
     close(fd);
+    return ok;
 }
 
 static void note(const char *fmt, ...) {
@@ -154,21 +233,20 @@ static void note(const char *fmt, ...) {
     // The module INSTANCE runs with the app's uid, where /data/adb (0700) is unreadable and
     // unwritable, so its decisions would otherwise be invisible. Try the direct file first (this is
     // how the root companion writes) and relay through the companion otherwise.
-    if (access(ADH_DECISION_LOG, W_OK) == 0) {
-        append_decision_line(line);
-        return;
-    }
+    if (access(ADH_DECISION_LOG, W_OK) == 0 && append_decision_line(line)) return;
     if (companion_log_line(line)) return;
     // Post-specialize the instance is the app uid: /data/adb is out of reach and the companion socket
-    // is no longer usable. With the opt-in debug flag we may write into the app's own cache, which is
-    // the only place that uid can write - target-visible, so it stays off unless the operator asked.
+    // is no longer usable (measured - the connection does not survive the switch). The loader OUTCOME
+    // is still auditable per session: the agent reports its own mapped path (hello.selfModule) to the
+    // Host ADH Daemon, which records "/memfd:jit-cache (deleted)" vs a module path. This last fallback
+    // is the opt-in, target-visible one: the app's own cache, off unless the operator asked for it.
     if (g_debug_verbose && valid_pkg_name(g_debug_pkg)) {
         char path[400];
         snprintf(path, sizeof(path), "/data/data/%s/cache/adh_zygisk.log", g_debug_pkg);
-        struct stat st {};
-        if (stat(path, &st) == 0 && st.st_size >= 256 * 1024) (void)unlink(path);   // bounded too
         int fd = open(path, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0644);
         if (fd >= 0) {
+            struct stat st {};
+            if (fstat(fd, &st) == 0 && st.st_size >= 256 * 1024) (void)ftruncate(fd, 0);
             (void)write_all(fd, line, strlen(line));
             (void)write_all(fd, "\n", 1);
             close(fd);
@@ -353,10 +431,9 @@ public:
         agent_path.clear();
         if (!marker_requested) {
             marker_requested = true;
-            int client = api->connectCompanion();
+            int client = connect_companion();
             if (client >= 0) {
-                char ack[8] = {0};
-                if (!write_all(client, "mark\n", 5) || !read_reply(client, ack, sizeof(ack)))
+                if (!send_all(client, "mark\n", 5) || !reply_is(client, "ok"))
                     LOGE("loader marker request was not acknowledged");
                 close(client);
             } else {
@@ -382,15 +459,15 @@ public:
         }
         int scope_answer = -1;   // -1 unknown, 0 no, 1 yes
         {
-            int sock = api->connectCompanion();
+            int sock = connect_companion();
             if (sock >= 0) {
                 char req[320];
                 int len = snprintf(req, sizeof(req), "scope %s\n", package.c_str());
                 char reply[8] = {0};
-                if (len > 0 && write_all(sock, req, (size_t)len) &&
-                    read_reply(sock, reply, sizeof(reply))) {
+                if (len > 0 && send_all(sock, req, (size_t)len) &&
+                    read_reply_line(sock, reply, sizeof(reply))) {
                     if (reply[0] == '0' || reply[0] == '1') scope_answer = reply[0] - '0';
-                    else note("companion refused scope query pkg=%s reply=%c", package.c_str(), reply[0]);
+                    else note("companion refused scope query pkg=%s reply=%s", package.c_str(), reply);
                 }
                 close(sock);
             }
@@ -488,17 +565,19 @@ static void companion_serve(int client) {
         ssize_t n = read_request_line(client, req, sizeof(req));
         if (n == -1) break;                     // client closed: done serving
         if (n == -2) {                          // unusable line: refuse it, keep the stream usable
-            (void)write_all(client, "err\n", 4);
+            (void)send_all(client, "err\n", 4);
             continue;
         }
         if (strcmp(req, "mark") == 0) {
             mark_loader_active();
-            (void)write_all(client, "ok\n", 3);
+            (void)send_all(client, "ok\n", 3);
             continue;
         }
         if (strncmp(req, "log ", 4) == 0) {
-            append_decision_line(req + 4);      // relayed from an app-uid instance
-            (void)write_all(client, "ok\n", 3);
+            // Only acknowledge what actually reached the file: the client uses "ok" to decide whether
+            // to fall back to its own log, so a refused write must answer "err".
+            const char *ack = append_decision_line(req + 4) ? "ok\n" : "err\n";
+            (void)send_all(client, ack, strlen(ack));
             continue;
         }
         if (strncmp(req, "scope ", 6) == 0) {
@@ -506,11 +585,11 @@ static void companion_serve(int client) {
             char reply[4] = "0\n";
             if (package_in_scope(pkg)) reply[0] = '1';
             note("companion scope query pkg=%s -> %c", pkg, reply[0]);
-            (void)write_all(client, reply, 2);
+            (void)send_all(client, reply, 2);
             continue;
         }
         note("companion refused unknown command");
-        (void)write_all(client, "err\n", 4);
+        (void)send_all(client, "err\n", 4);
     }
     close(client);
 }

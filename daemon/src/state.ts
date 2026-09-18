@@ -44,6 +44,11 @@ export interface AgentSession {
   sdk: number;
   entry: string;
   agentVer: string;
+  // Own-image identity reported by the agent itself (dladdr): with the Zygisk memfd loader the
+  // module has no path on disk, so this is the only per-session proof of HOW the agent is mapped
+  // ("/memfd:jit-cache (deleted)" vs "/data/adb/modules/adh/libadh_agent.so").
+  selfModule?: string;
+  selfBase?: string;
   connectedAt: number;
   lastSeen: number;
   online: boolean;

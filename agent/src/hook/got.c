@@ -548,40 +548,118 @@ const char *adh_self_module_name(void) {
     return cached;
 }
 
-// Image span (highest PT_LOAD p_vaddr+p_memsz) of the module loaded at base. Every copy of the
-// same file shares it, which is the only stable identity for a memfd copy whose name ("jit-cache")
-// is also used by ART's own JIT cache.
-struct image_span_ctx { const void *base; unsigned long long span; };
+#ifndef NT_GNU_BUILD_ID
+#define NT_GNU_BUILD_ID 3
+#endif
 
-static int image_span_cb(struct dl_phdr_info *info, size_t size, void *data) {
-    (void)size;
-    struct image_span_ctx *ctx = (struct image_span_ctx *)data;
-    if ((const void *)(uintptr_t)info->dlpi_addr != ctx->base) return 0;
-    for (int i = 0; i < info->dlpi_phnum; i++) {
-        const ElfW(Phdr) *ph = &info->dlpi_phdr[i];
-        if (ph->p_type != PT_LOAD) continue;
-        unsigned long long end = (unsigned long long)ph->p_vaddr + (unsigned long long)ph->p_memsz;
-        if (end > ctx->span) ctx->span = end;
+// Everything we can learn about one mapped image from its phdr table: the [start,end) address range
+// and the GNU build ID. Both come from a single pass over the phdrs, so a dl_iterate_phdr callback
+// can describe each candidate without re-entering dl_iterate_phdr (bionic's recursive lock makes the
+// nested form work, but it is undocumented and quadratic).
+struct image_desc {
+    const void *base;
+    unsigned long long start;
+    unsigned long long end;
+    unsigned char build_id[64];
+    size_t build_id_len;
+    int found;
+};
+
+static void describe_phdrs(struct image_desc *d, const ElfW(Phdr) *ph, int phnum) {
+    unsigned long long lo = ~0ULL, hi = 0;
+    for (int i = 0; i < phnum; i++) {
+        if (ph[i].p_type != PT_LOAD || !ph[i].p_memsz) continue;
+        unsigned long long s = (unsigned long long)ph[i].p_vaddr;
+        unsigned long long e = s + (unsigned long long)ph[i].p_memsz;
+        if (s < lo) lo = s;
+        if (e > hi) hi = e;
     }
+    if (!hi || lo == ~0ULL) return;
+    d->start = (unsigned long long)(uintptr_t)d->base + lo;
+    d->end = (unsigned long long)(uintptr_t)d->base + hi;
+    d->found = 1;
+    // Notes live in PT_NOTE, which bionic maps together with the first PT_LOAD; walk them in memory.
+    for (int i = 0; i < phnum && !d->build_id_len; i++) {
+        if (ph[i].p_type != PT_NOTE || !ph[i].p_memsz) continue;
+        const unsigned char *p = (const unsigned char *)((uintptr_t)d->base + (uintptr_t)ph[i].p_vaddr);
+        size_t size = (size_t)ph[i].p_memsz;
+        size_t off = 0;
+        while (off + 12 <= size) {
+            uint32_t namesz = 0, descsz = 0, type = 0;
+            memcpy(&namesz, p + off, 4);
+            memcpy(&descsz, p + off + 4, 4);
+            memcpy(&type, p + off + 8, 4);
+            off += 12;
+            size_t name_off = ((size_t)namesz + 3u) & ~3u;
+            size_t desc_off = ((size_t)descsz + 3u) & ~3u;
+            if (off + name_off + desc_off > size) break;
+            if (type == NT_GNU_BUILD_ID && namesz >= 3 && memcmp(p + off, "GNU", 3) == 0 && descsz) {
+                size_t n = (size_t)descsz < sizeof(d->build_id) ? (size_t)descsz : sizeof(d->build_id);
+                memcpy(d->build_id, p + off + name_off, n);
+                d->build_id_len = n;
+            }
+            off += name_off + desc_off;
+        }
+    }
+}
+
+static int image_desc_cb(struct dl_phdr_info *info, size_t size, void *data) {
+    (void)size;
+    struct image_desc *d = (struct image_desc *)data;
+    if ((const void *)(uintptr_t)info->dlpi_addr != d->base) return 0;
+    describe_phdrs(d, info->dlpi_phdr, (int)info->dlpi_phnum);
     return 1;
 }
 
-unsigned long long adh_image_span_of(const void *base) {
+static void image_describe(const void *base, struct image_desc *d) {
+    memset(d, 0, sizeof(*d));
+    d->base = base;
+    if (base) dl_iterate_phdr(image_desc_cb, d);
+}
+
+int adh_image_bounds_of(const void *base, unsigned long long *start, unsigned long long *end) {
     if (!base) return 0;
-    struct image_span_ctx ctx = { base, 0 };
-    dl_iterate_phdr(image_span_cb, &ctx);
-    return ctx.span;
+    struct image_desc d;
+    image_describe(base, &d);
+    if (!d.found) return 0;
+    if (start) *start = d.start;
+    if (end) *end = d.end;
+    return 1;
+}
+
+int adh_build_id_of(const void *base, unsigned char *out, size_t cap, size_t *len) {
+    if (!base) return 0;
+    struct image_desc d;
+    image_describe(base, &d);
+    if (!d.build_id_len) return 0;
+    if (len) *len = d.build_id_len;
+    if (out && cap) memcpy(out, d.build_id, d.build_id_len < cap ? d.build_id_len : cap);
+    return 1;
+}
+
+int adh_build_id_from_phdr(const void *base, const ElfW(Phdr) *phdrs, int phnum,
+                           unsigned char *out, size_t cap, size_t *len) {
+    if (!base || !phdrs || phnum <= 0) return 0;
+    struct image_desc d;
+    memset(&d, 0, sizeof(d));
+    d.base = base;
+    describe_phdrs(&d, phdrs, phnum);
+    if (!d.build_id_len) return 0;
+    if (len) *len = d.build_id_len;
+    if (out && cap) memcpy(out, d.build_id, d.build_id_len < cap ? d.build_id_len : cap);
+    return 1;
 }
 
 int adh_self_image_bounds(unsigned long long *start, unsigned long long *end) {
     Dl_info self;
     if (!dladdr((void *)(uintptr_t)adh_self_module_name, &self) || !self.dli_fbase) return 0;
-    unsigned long long base = (unsigned long long)(uintptr_t)self.dli_fbase;
-    unsigned long long span = adh_image_span_of(self.dli_fbase);
-    if (!span) return 0;
-    if (start) *start = base;
-    if (end) *end = base + span;
-    return 1;
+    return adh_image_bounds_of(self.dli_fbase, start, end);
+}
+
+int adh_self_build_id(unsigned char *out, size_t cap, size_t *len) {
+    Dl_info self;
+    if (!dladdr((void *)(uintptr_t)adh_self_module_name, &self) || !self.dli_fbase) return 0;
+    return adh_build_id_of(self.dli_fbase, out, cap, len);
 }
 
 static const char *self_module_name(void) {

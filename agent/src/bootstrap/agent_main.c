@@ -58,12 +58,28 @@ static void report(int fd) {
     char sdk[PROP_VALUE_MAX]; prop("ro.build.version.sdk", sdk, sizeof(sdk));
     char abi[PROP_VALUE_MAX]; prop("ro.product.cpu.abi", abi, sizeof(abi));
 
-    char hello[1200];
+    // Own-image identity: with the Zygisk memfd loader our copy has no path on disk, and a hardcoded
+    // name would report a lie. Report what THIS copy is mapped as (dladdr) plus its base, so the
+    // daemon can show "loaded from a memfd" per session without writing anything into the target.
+    // Full path our copy was mapped under (dladdr): "/data/adb/modules/adh/libadh_agent.so" for a
+    // plain load, "/memfd:jit-cache (deleted)" for the memfd loader. The short name alone would hide
+    // which of the two it is.
+    Dl_info self;
+    const char *selfpath = (dladdr((void *)(uintptr_t)adh_self_module_name, &self) && self.dli_fname)
+                               ? self.dli_fname : adh_self_module_name();
+    char selfj[512];
+    json_escape(selfpath, selfj, sizeof(selfj));
+    unsigned long long self_start = 0, self_end = 0;
+    if (!adh_self_image_bounds(&self_start, &self_end)) self_start = 0;
+
+    char hello[1600];
     snprintf(hello, sizeof(hello),
         "{\"t\":\"hello\",\"agentVer\":\"%s\",\"pid\":%d,\"uid\":%d,"
-        "\"package\":\"%s\",\"process\":\"%s\",\"abi\":\"%s\",\"android\":\"%s\",\"sdk\":%s,\"entry\":\"%s\"}\n",
+        "\"package\":\"%s\",\"process\":\"%s\",\"abi\":\"%s\",\"android\":\"%s\",\"sdk\":%s,"
+        "\"entry\":\"%s\",\"selfModule\":\"%s\",\"selfBase\":\"0x%llx\"}\n",
         AGENT_VER, getpid(), getuid(), pkg, pkg,
-        abi[0] ? abi : "?", rel[0] ? rel : "?", sdk[0] ? sdk : "0", g_entry);
+        abi[0] ? abi : "?", rel[0] ? rel : "?", sdk[0] ? sdk : "0", g_entry,
+        selfj, self_start);
     if (send_line(fd, hello) != 0) { LOGE("send hello failed"); return; }
 
     int total = 0;
@@ -642,18 +658,41 @@ void adh_agent_set_package(const char *pkg) {
 
 // More than one backend can load this .so into one process (Zygisk + self-load + Xposed).
 // Each copy has its own pthread_once; only the first copy in link-map order may bootstrap.
-struct AgentCopyCtx { unsigned long long own_span; void *first_base; };
+struct AgentCopyCtx {
+    unsigned char own_id[64];   // GNU build ID: identifies "another copy of this exact file"
+    size_t own_id_len;
+    unsigned long long own_span;  // fallback when either copy has no build ID
+    void *first_base;
+};
 
 static int find_first_agent_copy(struct dl_phdr_info *info, size_t size, void *data) {
     (void)size;
     struct AgentCopyCtx *ctx = (struct AgentCopyCtx *)data;
-    // Identify a copy of THIS .so by its image span (adh_image_span_of), never by a name: a memfd
-    // copy has no stable name (both copies would read "jit-cache") and dlpi_name may differ from the
-    // path dladdr reports. dl_iterate_phdr walks in load order, so the FIRST entry whose span matches
-    // - ourselves included - is the copy that owns the process-global bootstrap; later copies stay
-    // inert. Matching against a *different* base would make both copies inert instead.
-    unsigned long long span = adh_image_span_of((const void *)(uintptr_t)info->dlpi_addr);
-    if (span == 0 || span != ctx->own_span) return 0;
+    // Never match by name: a memfd copy has no stable name (both copies would read "jit-cache") and
+    // dlpi_name may differ from the path dladdr reports. Identity is the GNU build ID - exact for two
+    // copies of the same file - falling back to the image span only when a build ID is unavailable.
+    // The span is computed inline (a nested dl_iterate_phdr from this callback is undocumented and
+    // quadratic). dl_iterate_phdr walks in load order, so the FIRST match - ourselves included - owns
+    // the process-global bootstrap; later copies stay inert. Excluding our own base instead would
+    // make every copy decide it is not first, i.e. the agent would never start.
+    const void *base = (const void *)(uintptr_t)info->dlpi_addr;
+    unsigned char id[64];
+    size_t id_len = 0;
+    int has_id = adh_build_id_from_phdr(base, info->dlpi_phdr, (int)info->dlpi_phnum, id, sizeof(id), &id_len);
+    if (ctx->own_id_len && has_id) {
+        if (id_len != ctx->own_id_len || memcmp(id, ctx->own_id, id_len) != 0) return 0;
+    } else {
+        unsigned long long lo = ~0ULL, hi = 0;
+        for (int i = 0; i < info->dlpi_phnum; i++) {
+            const ElfW(Phdr) *ph = &info->dlpi_phdr[i];
+            if (ph->p_type != PT_LOAD || !ph->p_memsz) continue;
+            unsigned long long s = (unsigned long long)ph->p_vaddr;
+            unsigned long long e = s + (unsigned long long)ph->p_memsz;
+            if (s < lo) lo = s;
+            if (e > hi) hi = e;
+        }
+        if (!hi || lo == ~0ULL || hi - lo != ctx->own_span) return 0;
+    }
     ctx->first_base = (void *)(uintptr_t)info->dlpi_addr;
     return 1;   // stop at the first copy of our image
 }
@@ -665,11 +704,18 @@ static int current_agent_copy_is_owner(void) {
         return 1;
     }
     struct AgentCopyCtx ctx = {0};
-    ctx.own_span = adh_image_span_of(self.dli_fbase);
-    if (!ctx.own_span) {
-        LOGI("single-instance guard unavailable (no PT_LOAD span) — continuing");
+    adh_self_build_id(ctx.own_id, sizeof(ctx.own_id), &ctx.own_id_len);
+    unsigned long long self_start = 0, self_end = 0;
+    if (adh_image_bounds_of(self.dli_fbase, &self_start, &self_end)) ctx.own_span = self_end - self_start;
+    if (!ctx.own_id_len && !ctx.own_span) {
+        LOGI("single-instance guard unavailable (no build ID, no PT_LOAD span) — continuing");
         return 1;
     }
+    // A build ID only proves "same file": two DIFFERENT builds of the agent loaded together both
+    // consider themselves first. That is a deployment error (stale module + fresh sandbox); the span
+    // is logged so the duplicate sessions in the daemon can be traced back to it.
+    LOGI("single-instance check: id=%s span=%llu", ctx.own_id_len ? "build-id" : "span",
+         (unsigned long long)ctx.own_span);
     dl_iterate_phdr(find_first_agent_copy, &ctx);
     if (!ctx.first_base) {
         LOGI("single-instance guard: agent not found in link map — continuing");

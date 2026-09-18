@@ -51,6 +51,8 @@ const agentServer = net.createServer((sock) => {
         sdk: msg.sdk ?? 0,
         entry: msg.entry ?? '?',
         agentVer: msg.agentVer ?? '?',
+        selfModule: msg.selfModule ?? '',
+        selfBase: msg.selfBase ?? '',
         connectedAt: Date.now(),
         lastSeen: Date.now(),
         online: true,
@@ -60,7 +62,7 @@ const agentServer = net.createServer((sock) => {
       sessions.set(id, session);
       pruneSessions();   // a new dial-in is the natural moment to drop stale dead sessions
       agentSockets.set(id, sock);
-      log(`agent HELLO ${session.package} pid=${session.pid} abi=${session.abi} entry=${session.entry} -> ${id}`);
+      log(`agent HELLO ${session.package} pid=${session.pid} abi=${session.abi} entry=${session.entry} self=${session.selfModule || '?'} -> ${id}`);
       sock.write(frameJson({ t: 'ack', sessionId: id }));
       broadcast('agent.hello', session);
       startCaptureLoop(id);   // install persistent hooks + stream captures to the panel

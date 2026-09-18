@@ -48,13 +48,18 @@ translation — kept separate).
 2. Source `lib/verify_common.sh`, call `verify_resolve_env` (device) or `verify_resolve_env_host` (host).
 3. Write the unique test as a `node - "$HTTP" [args] <<'EOF' … EOF` heredoc that prints exactly one `RESULT:PASS` or `RESULT:FAIL` line (use `process.exit(0)` on the fail path so `set +e` isn't needed... but keep `set +e` before the `OUT=$(…)` capture anyway — node may throw).
 4. `echo "$OUT"` for diagnostics, then `verify_gate "<descriptive label>" <0|1> && exit 0 || exit 1`.
+   **Missing preconditions are SKIPs, not passes**: print `SKIP <script> (<reason>)` and `exit 0`
+   *without* the `RESULT:PASS` sentinel (and return before `verify_gate`). `verify_all.sh` counts a
+   script that exits 0 with a top-level `SKIP` line as a skip, so a capability that never ran is
+   never reported as an acceptance (`verify_v75_zygisk_memfd.sh` is the reference).
 5. `bash -n tools/verify_vXX.sh` (syntax), then run it standalone against a live adhd+device+sandbox to confirm green.
 6. **Add it to `verify_all.sh`'s `SCRIPTS` array** as `"verify_vXX.sh:device"` or `:host"`, in version order. Without this it never runs in regression.
 
 ## `verify_all.sh` — the regression runner
 
 - Runs `dev_up.sh` first, then each script in `SCRIPTS` (sequential; `:device` scripts force-stop + relaunch `com.adh.sandbox/.MainActivity` + sleep 4 first).
-- `:device` scripts SKIP (not FAIL) when no device attached.
+- `:device` scripts SKIP (not FAIL) when no device attached; a script that exits 0 after a top-level
+  `SKIP ...` line is counted (and printed) as a skip, not a pass — the sentinel is `RESULT:PASS`.
 - Exit 0 iff all RUN scripts pass. Prints `pass=N fail=N skip=N [failed:…]`.
 - `verify_v26_footprint.sh` — host-only static guard: stripped agent `.so`, exactly three dynamic exports, no RWX `LOAD`; runs in `verify_all.sh` without a device.
 

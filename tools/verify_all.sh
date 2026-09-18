@@ -138,7 +138,15 @@ for entry in "${SCRIPTS[@]}"; do
     adb shell am start -n com.adh.sandbox/.MainActivity >/dev/null 2>&1; sleep 4
   fi
   if bash "tools/$name" >/tmp/vr.log 2>&1; then
-    echo "PASS  $name"; pass=$((pass+1))
+    # A capability script whose precondition is missing exits 0 WITHOUT the RESULT:PASS sentinel: it
+    # prints either a top-level "SKIP ..." line (verify_v75) or "RESULT:SKIP" (verify_v30/31/32/34).
+    # Counting those as passes would report an acceptance that never ran; counting RESULT:SKIP as a
+    # failure (the old behaviour) was equally wrong. Both are counted - and printed - as skips.
+    if grep -qE '^(SKIP|RESULT:SKIP)' /tmp/vr.log; then
+      echo "SKIP  $name ($(grep -m1E '^(SKIP|RESULT:SKIP)' /tmp/vr.log | sed -e 's/^RESULT:SKIP[[:space:]]*//' -e 's/^SKIP[[:space:]]*//'))"; skip=$((skip+1))
+    else
+      echo "PASS  $name"; pass=$((pass+1))
+    fi
   else
     echo "FAIL  $name"; fail=$((fail+1)); FAILED="$FAILED $name"
     tail -6 /tmp/vr.log | sed 's/^/        /'

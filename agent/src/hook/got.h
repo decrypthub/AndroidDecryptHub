@@ -1,5 +1,6 @@
 #ifndef ADH_AGENT_GOT_H
 #define ADH_AGENT_GOT_H
+#include <link.h>
 #include <stddef.h>
 
 #ifdef __cplusplus
@@ -9,12 +10,21 @@ extern "C" {
 int adh_got_replace(const char *module_substr, void *orig, void *wrapper);
 // Our own module name as it shows up in /proc/self/maps (works for a memfd-loaded agent too).
 const char *adh_self_module_name(void);
-// Address range [start,end) covered by OUR loaded image (dladdr + PT_LOAD span). Recognises our own
-// mappings by address, which matters when the name is shared with an unrelated module (a memfd agent
-// maps as "jit-cache", the same name ART's own JIT cache uses). Returns 1 on success.
+// [start,end) address range of the image loaded at base (min/max over its PT_LOAD segments).
+// Recognises our own mappings by address, which matters when the name is shared with an unrelated
+// module (a memfd agent maps as "jit-cache", the same name ART's own JIT cache uses). 1 on success.
+int adh_image_bounds_of(const void *base, unsigned long long *start, unsigned long long *end);
+// GNU build ID (PT_NOTE / NT_GNU_BUILD_ID) of the image loaded at base, read straight out of memory.
+// Bit-identical for every copy of the same file, so it identifies "another copy of this .so" exactly
+// - unlike an image span, which an unrelated module can happen to share. Returns 1 and sets *len.
+int adh_build_id_of(const void *base, unsigned char *out, size_t cap, size_t *len);
+// Same, but from an already-available phdr table (lets a dl_iterate_phdr callback identify each
+// candidate without re-entering the iterator).
+int adh_build_id_from_phdr(const void *base, const ElfW(Phdr) *phdrs, int phnum,
+                           unsigned char *out, size_t cap, size_t *len);
+// The above two for OUR OWN image.
 int adh_self_image_bounds(unsigned long long *start, unsigned long long *end);
-// Image span (highest PT_LOAD p_vaddr+p_memsz) of the module loaded at base, 0 when not found.
-unsigned long long adh_image_span_of(const void *base);
+int adh_self_build_id(unsigned char *out, size_t cap, size_t *len);
 // 1 when addr is one of the module's relocation (GOT) slots, 0 for plain data / unknown.
 int adh_got_is_slot(const char *module, void *addr);
 int adh_got_replace_by_name(const char *module_substr, const char *symbol, void *wrapper);

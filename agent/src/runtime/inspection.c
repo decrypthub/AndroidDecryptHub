@@ -209,8 +209,10 @@ static int footprint_scan(struct footprint_counts *c, int *module_count) {
             static unsigned long long self_start, self_end;
             static int self_resolved = 0;
             if (!self_resolved) {
-                self_resolved = 1;
-                if (!adh_self_image_bounds(&self_start, &self_end)) self_start = self_end = 0;
+                // Cache only a SUCCESSFUL resolution: caching a transient failure would report
+                // "no agent footprint" for the rest of the process lifetime.
+                unsigned long long s = 0, e = 0;
+                if (adh_self_image_bounds(&s, &e)) { self_start = s; self_end = e; self_resolved = 1; }
             }
             if (self_start && start >= self_start && start < self_end) c->agent_exec++;
         }
