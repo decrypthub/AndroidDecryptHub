@@ -92,6 +92,23 @@ for (const f of families) {
 }
 notes.push(`checked ${claimed.size} indices against the ABI`);
 
+// ---- 5. pin the indices the NEXT step (field accessors) will use, so those numbers come from the
+// ABI header instead of being hand-copied into the implementation or the docs ----
+const FIELD_TYPES = ['Object', 'Boolean', 'Byte', 'Char', 'Short', 'Int', 'Long', 'Float', 'Double'];
+const planned = [];
+for (let i = 0; i < FIELD_TYPES.length; i++) {
+  planned.push([`Get${FIELD_TYPES[i]}Field`, 95 + i]);
+  planned.push([`Set${FIELD_TYPES[i]}Field`, 104 + i]);
+  planned.push([`GetStatic${FIELD_TYPES[i]}Field`, 145 + i]);
+  planned.push([`SetStatic${FIELD_TYPES[i]}Field`, 154 + i]);
+}
+for (const [name, spec] of planned) {
+  const abiIdx = abi.get(name);
+  if (abiIdx === undefined) problems.push(`planned field accessor '${name}' is not in jni.h`);
+  else if (abiIdx !== spec) problems.push(`planned field accessor '${name}': expected ${spec}, jni.h says ${abiIdx}`);
+}
+notes.push(`planned field accessors: ${planned.length} indices verified (instance Get 95-103 / Set 104-112, static Get 145-153 / Set 154-162)`);
+
 for (const n of notes) console.log('  ' + n);
 for (const p of problems) console.log('FAIL ' + p);
 console.log(problems.length === 0 ? 'RESULT:PASS' : 'RESULT:FAIL');
