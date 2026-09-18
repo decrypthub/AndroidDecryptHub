@@ -8,6 +8,10 @@
 # Get/SetObjectField, Get/SetStaticIntField), and require JNI_ENV events with the field id + value.
 # The RELRO checks from v58 apply too: the table page must come back read-only after the swap.
 #
+# Sections (3f) and (3g) extend the same chain: the string-copy / direct-buffer entries (v4.63/v4.65)
+# and the array-region family (v4.70) - fourteen Get/Set<Type>ArrayRegion slots that the native
+# fixture drives with fixed contents, so every entry must emit its own start/len/first=[..] event.
+#
 # Missing preconditions (no device / no agent / old payload without the field slots / old APK without
 # the fixture) print SKIP and exit 0 WITHOUT RESULT:PASS.
 set -uo pipefail
@@ -189,6 +193,63 @@ if (strMissing.length) console.log('no event for: ' + strMissing.join(', '));
 if (!textOk) console.log('at least one string reader did not carry the copied text preview');
 if (!bufferOk) console.log('the direct-buffer events did not carry address/capacity');
 
+// (3g) v4.70: the array-region family. The fixture walks all seven primitive types with fixed
+// contents, so every one of the fourteen entries must produce its OWN event with start/len and the
+// first elements it moved - a shared "at least one worked" rule would let a broken wrapper ride along.
+const REGION_FUNCS = ['GetBooleanArrayRegion', 'SetBooleanArrayRegion', 'GetCharArrayRegion', 'SetCharArrayRegion',
+  'GetShortArrayRegion', 'SetShortArrayRegion', 'GetIntArrayRegion', 'SetIntArrayRegion',
+  'GetLongArrayRegion', 'SetLongArrayRegion', 'GetFloatArrayRegion', 'SetFloatArrayRegion',
+  'GetDoubleArrayRegion', 'SetDoubleArrayRegion'];
+const regionInstalled = [];
+for (const f of REGION_FUNCS) {
+  const r = await post('/api/jni/env_hook', { session, action: 'install', function: f });
+  if (r.body?.ok !== true) fail(`install of ${f} failed: ` + String(r.body?.error ?? r.status), r.body);
+  regionInstalled.push(f);
+}
+const preRegion = await (await fetch(`${base}/api/captures?session=${encodeURIComponent(session)}&limit=1`)).json().catch(() => null);
+if (!preRegion || !Array.isArray(preRegion.captures)) fail('could not read the capture baseline for the array-region section');
+const regionCursor = Math.max(0, ...(preRegion.captures ?? []).map((c) => Number(c.id ?? 0)));
+const regionCall = await post('/api/java/call', { session, className: 'com.adh.sandbox.Detection', method: 'jniArrayRegionProbe', params: '', args: [] });
+const regionCode = Number(regionCall.body?.result?.result ?? -1);
+if (regionCode !== 0xAD707F) fail(`jniArrayRegionProbe returned ${regionCode}, expected 0xAD707F (all seven families round-tripped through the hooked entries)`);
+await sleep(1500);
+const regionList = await (await fetch(`${base}/api/captures?session=${encodeURIComponent(session)}&limit=600`)).json().catch(() => ({}));
+const regionSeen = new Map();
+for (const c of (regionList.captures ?? []).filter((x) => x.func === 'JNI_ENV' && Number(x.id ?? 0) > regionCursor)) {
+  const d = await (await fetch(`${base}/api/captures/${c.id}`)).json().catch(() => null);
+  let ev = null;
+  try { ev = JSON.parse(String(d?.text ?? '')); } catch { ev = null; }
+  if (!ev?.function || !REGION_FUNCS.includes(ev.function)) continue;
+  if (!regionSeen.has(ev.function)) regionSeen.set(ev.function, ev.value);
+}
+for (const f of REGION_FUNCS) console.log(`  event ${f}: ${regionSeen.get(f) ?? '(missing)'}`);
+const regionMissing = REGION_FUNCS.filter((f) => !regionSeen.has(f));
+// The fixture writes the same fixed content in both directions, so the preview of a Get and the
+// preview of the matching Set must both show it.
+const regionExpect = {
+  Boolean: '1,0,1,0',
+  Char: '65,68,72,33',
+  Short: '1000,2000,3000,4000',
+  Int: '100000,200000,300000,400000',
+  Long: '10000000000,20000000000,30000000000,40000000000',
+  Float: '1.5,2.5,3.5,4.5',
+  Double: '1.25,2.25,3.25,4.25',
+};
+const regionBad = [];
+for (const [type, preview] of Object.entries(regionExpect)) {
+  for (const dir of ['Get', 'Set']) {
+    const f = `${dir}${type}ArrayRegion`;
+    const v = String(regionSeen.get(f) ?? '');
+    if (!(v.includes('start=0') && v.includes('len=4') && v.includes(`first=[${preview}]`))) regionBad.push(f);
+  }
+}
+console.log(`  array-region events: ${REGION_FUNCS.length - regionMissing.length}/${REGION_FUNCS.length} present, ${regionBad.length} with a wrong start/len/preview`);
+const regionUnhooked = [];
+for (const f of REGION_FUNCS) regionUnhooked.push((await post('/api/jni/env_hook', { session, action: 'uninstall', function: f })).body?.ok === true);
+const arrayProbeOk = regionCall.body?.ok === true && regionMissing.length === 0 && regionBad.length === 0 && regionUnhooked.every(Boolean);
+if (regionMissing.length) console.log('no event for: ' + regionMissing.join(', '));
+if (regionBad.length) console.log('start/len/preview mismatch for: ' + regionBad.join(', '));
+
 // (4) unhook, table restored, process alive
 const unhooked = [];
 for (const f of hooked) unhooked.push((await post('/api/jni/env_hook', { session, action: 'uninstall', function: f })).body?.ok === true);
@@ -204,7 +265,7 @@ if (!digestOk) console.log('the field digest did not resolve any access to a nam
 if (!patternOk) console.log('the "*Field" pattern did not select the field family (suffix matching)');
 if (!overrideOk) console.log('the SetIntField override did not change what the target stored, or the restore failed');
 if (!rewriteDigestOk) console.log('the field digest did not report the rewritten write (rewrittenSamples/lastRequested)');
-const pass = installedOk && patchedOk && relroOk && calls >= 2 && missing.length === 0 && valueOk && digestOk && patternOk && patternUnhookOk && overrideOk && rewriteDigestOk && stringProbeOk
+const pass = installedOk && patchedOk && relroOk && calls >= 2 && missing.length === 0 && valueOk && digestOk && patternOk && patternUnhookOk && overrideOk && rewriteDigestOk && stringProbeOk && arrayProbeOk
   && unhooked.every(Boolean) && restored && alive.length > 0;
 console.log(pass ? 'RESULT:PASS' : 'RESULT:FAIL');
 EOF

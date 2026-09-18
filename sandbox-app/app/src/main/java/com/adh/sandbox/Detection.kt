@@ -21,6 +21,9 @@ object Detection {
 
     /** v4.63: drives the string-copy and direct-buffer JNIEnv entries. */
     @JvmStatic external fun jniStringProbe(): Int
+
+    /** v4.70: drives the array-region family (Get/Set<Type>ArrayRegion) for every primitive type. */
+    @JvmStatic external fun jniArrayRegionProbe(): Int
     @JvmStatic fun jniEnvValue(): String = "ADH_JNI_ENV_VALUE"
     // v4.19 fixture for the field-ID / byte-array JNIEnv hooks: native code performs
     // GetFieldID / GetStaticFieldID / SetByteArrayRegion / GetByteArrayElements in one call.

@@ -15,6 +15,10 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.71 数组区域族补上设备证据路径（2026-09-19，host 构建通过；真机待做）**：v4.70 的 14 个表项此前只有 host 侧证明，按 v4.63→v4.64 的老规矩把真机路径补齐。
+      · 沙盒 native 夹具 `Detection.jniArrayRegionProbe`：七种类型各"写回读"一遍（固定内容，便于逐条断言事件预览），全部往返成功才返回 `0xAD707F`（`0xAD7000 | 0x7F`）——少一位就是少一个类型往返，夹具不掩盖失败。
+      · `tools/verify_v91_jni_env_fields.sh` 新增 `(3g)` 段：逐个安装 14 个表项 → 触发夹具 → 要求**每个表项各有自己的事件**且 `start=0 len=4 first=[<期望值>]` 精确匹配（Get/Set 两侧都要）→ 逐个卸载；`pass` 表达式纳入 `arrayProbeOk`，头注释同步。
+      · 验收：`build_detect.sh` 重建 `.so`（`llvm-nm` 可见 `Java_com_adh_sandbox_Detection_jniArrayRegionProbe`）、`:app:assembleDebug` PASS（`Detection.class` 含声明）、v91 `bash -n` + 内嵌 JS `node --check` 通过；整段在真机上由 v91 执行（当前无设备 → SKIP）。
 - [~] **v4.70 JNIEnv 数组区域读写全族（2026-09-19，host 验收 PASS；真机待做）**：覆盖率名单里的下一批——`Get<Type>ArrayRegion` 把 Java 数组整段搬进 native 缓冲、`Set<Type>ArrayRegion` 把 native 数据写回 Java 数组。脱壳/校验/协议解析都走这条批量通道，写回事件还是"目标动了数组内容"的直接证据。
       · 新增 14 槽（覆盖率 **144/229 → 158/229 = 69%**）：`Get/Set{Boolean,Char,Short,Int,Long,Float,Double}ArrayRegion`（ABI 里没有 `SetObjectArrayRegion`，所以是 14 不是 16；`Byte` 那对在 v4.19 已覆盖）。
       · 事件格式 `array=0x.. start=N len=N first=[…]`（最多 4 个元素的有界预览，按类型给格式 `%d`/`%u`/`%lld`/`%g`）；调用抛异常时**不读缓冲区**，事件写 `<call failed>` 且 `ok=false` —— v4.66 那条"失败的拷贝不是证据"的教训直接复用。
