@@ -177,6 +177,48 @@ JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_nativeHookProbe(JNIEnv *en
     (void)env; (void)clazz;
     return adh_trace_target();
 }
+// v4.55 fixture: drive the JNIEnv FIELD accessors. Native code that reads/writes fields through the
+// env table (instead of reflection or bytecode) is what the agent's new slots exist for, so this
+// probe goes through GetStaticObjectField -> Get/Set<Type>Field on the live HeapProbe.sConfig and
+// Get/SetStaticIntField on the holder. It returns the number of accessor calls it made (0 = the
+// fixture object is not initialized yet).
+JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_jniFieldProbe(JNIEnv *env, jclass clazz) {
+    (void)clazz;
+    int calls = 0;
+    jclass holder = (*env)->FindClass(env, "com/adh/sandbox/HeapProbe");
+    if (!holder) { (*env)->ExceptionClear(env); return 0; }
+    jfieldID sConfig = (*env)->GetStaticFieldID(env, holder, "sConfig", "Lcom/adh/sandbox/HeapProbe$Config;");
+    if (!sConfig) { (*env)->ExceptionClear(env); return 0; }
+    jobject cfg = (*env)->GetStaticObjectField(env, holder, sConfig);
+    calls++;
+    if (!cfg) { (*env)->ExceptionClear(env); return calls; }
+    jclass cfg_cls = (*env)->GetObjectClass(env, cfg);
+    jfieldID counter = (*env)->GetFieldID(env, cfg_cls, "counter", "I");
+    jfieldID flag = (*env)->GetFieldID(env, cfg_cls, "flag", "Z");
+    jfieldID label = (*env)->GetFieldID(env, cfg_cls, "label", "Ljava/lang/String;");
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    if (counter) {
+        jint v = (*env)->GetIntField(env, cfg, counter); calls++;
+        (*env)->SetIntField(env, cfg, counter, v); calls++;
+    }
+    if (flag) {
+        jboolean b = (*env)->GetBooleanField(env, cfg, flag); calls++;
+        (*env)->SetBooleanField(env, cfg, flag, b); calls++;
+    }
+    if (label) {
+        jobject s = (*env)->GetObjectField(env, cfg, label); calls++;
+        if (s) { (*env)->SetObjectField(env, cfg, label, s); calls++; }
+    }
+    jfieldID sCounter = (*env)->GetStaticFieldID(env, holder, "sCounter", "I");
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    if (sCounter) {
+        jint v = (*env)->GetStaticIntField(env, holder, sCounter); calls++;
+        (*env)->SetStaticIntField(env, holder, sCounter, v); calls++;
+    }
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    return (jint)calls;
+}
+
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
     (void)vm; (void)reserved;
     return JNI_VERSION_1_6;

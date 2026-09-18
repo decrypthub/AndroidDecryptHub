@@ -45,6 +45,22 @@
 #define ENV_ARG_CHARS 64       // characters per rendered argument
 
 // ---- slot layout ----------------------------------------------------------
+// Field accessors (v4.55). Native code that reads/writes fields through the JNIEnv table is a
+// large blind spot - object_set only covers the reflection path. One list drives the enum, the
+// name table, the struct-field cases and the wrapper dispatch, so those four cannot drift apart;
+// the numeric spec indices come from struct JNINativeInterface and are checked against the SDK
+// jni.h by tools/verify_v90_jni_table_abi.sh.
+#define ADH_FIELD_SLOT_LIST(X) \
+    X(GetObjectField) X(GetBooleanField) X(GetByteField) X(GetCharField) X(GetShortField) X(GetIntField) X(GetLongField) X(GetFloatField) X(GetDoubleField) \
+    X(SetObjectField) X(SetBooleanField) X(SetByteField) X(SetCharField) X(SetShortField) X(SetIntField) X(SetLongField) X(SetFloatField) X(SetDoubleField) \
+    X(GetStaticObjectField) X(GetStaticBooleanField) X(GetStaticByteField) X(GetStaticCharField) X(GetStaticShortField) X(GetStaticIntField) X(GetStaticLongField) X(GetStaticFloatField) X(GetStaticDoubleField) \
+    X(SetStaticObjectField) X(SetStaticBooleanField) X(SetStaticByteField) X(SetStaticCharField) X(SetStaticShortField) X(SetStaticIntField) X(SetStaticLongField) X(SetStaticFloatField) X(SetStaticDoubleField)
+
+#define ADH_FIELD_ENUM_ENTRY(name) ENV_SLOT_##name,
+#define ADH_FIELD_NAME_ENTRY(name) { #name, NULL, NULL, 0, 0, 0, 0, "" },
+#define ADH_FIELD_SLOT_CASE(name) case ENV_SLOT_##name: return (void **)(uintptr_t)&table->name;
+#define ADH_FIELD_WRAPPER_CASE(name) case ENV_SLOT_##name: return (void *)&name##_wrapper;
+
 enum {
     ENV_SLOT_GetStringUTFChars = 0,
     ENV_SLOT_FindClass,
@@ -82,7 +98,9 @@ enum {
     ENV_SLOT_NewObject = ENV_SLOT_CallStaticDoubleMethod + 3,
     ENV_SLOT_CallVoidMethod = ENV_SLOT_NewObject + 3,
     ENV_SLOT_CallStaticVoidMethod = ENV_SLOT_CallVoidMethod + 3,
-    ENV_HOOK_MAX = ENV_SLOT_CallStaticVoidMethod + 3,
+    ENV_SLOT_CallStaticVoidMethod_end = ENV_SLOT_CallStaticVoidMethod + 3,
+    ADH_FIELD_SLOT_LIST(ADH_FIELD_ENUM_ENTRY)
+    ENV_HOOK_MAX,
 };
 
 struct EnvHookSlot {
@@ -140,6 +158,7 @@ static struct EnvHookSlot g_env_hooks[ENV_HOOK_MAX] = {
     ADH_FIXED_SLOT_INITS(ADH_SLOT_INIT)
     ADH_CALL_VALUE_FAMILIES(ADH_CALL_INITS)
     ADH_CALL_VOID_FAMILIES(ADH_CALL_VOID_INITS)
+    ADH_FIELD_SLOT_LIST(ADH_FIELD_NAME_ENTRY)
 };
 
 static pthread_mutex_t g_env_hook_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -742,6 +761,103 @@ static void ReleasePrimitiveArrayCritical_wrapper(JNIEnv *env, jarray array, voi
 ADH_CALL_VALUE_FAMILIES(ADH_DEFINE_CALL_VALUE)
 ADH_CALL_VOID_FAMILIES(ADH_DEFINE_CALL_VOID)
 
+
+// ---- field accessors ------------------------------------------------------
+// Each wrapper forwards to the saved table entry and records one bounded event. The _Static_assert
+// block at the end is compile-time proof that every wrapper has EXACTLY the JNI signature of the
+// entry it replaces - a mismatch stops the build instead of crashing inside a target.
+#define ADH_DEFINE_FIELD_GET_BODY(JNI_NAME, CTYPE, FMT, CAST, TARGET)                       \
+static CTYPE JNICALL JNI_NAME##_wrapper(JNIEnv *env, TARGET target, jfieldID field) {       \
+    typedef CTYPE (JNICALL *fn_t)(JNIEnv *, TARGET, jfieldID);                              \
+    fn_t original = (fn_t)slot_original(ENV_SLOT_##JNI_NAME);                               \
+    if (!original) return (CTYPE)0;                                                         \
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_##JNI_NAME)) {                          \
+        return original(env, target, field);                                                \
+    }                                                                                       \
+    g_env_hook_in_ours = 1;                                                                 \
+    CTYPE result = original(env, target, field);                                            \
+    char detail[128]; detail[0] = 0;                                                        \
+    if (env_budget_left(ENV_SLOT_##JNI_NAME)) {                                             \
+        snprintf(detail, sizeof(detail), "field=%p value=" FMT, (void *)field, CAST(result)); \
+    }                                                                                       \
+    env_note(ENV_SLOT_##JNI_NAME, detail[0] ? detail : NULL, 1);                            \
+    g_env_hook_in_ours = 0;                                                                 \
+    return result;                                                                          \
+}
+
+#define ADH_DEFINE_FIELD_SET_BODY(JNI_NAME, CTYPE, FMT, CAST, TARGET)                       \
+static void JNICALL JNI_NAME##_wrapper(JNIEnv *env, TARGET target, jfieldID field, CTYPE value) { \
+    typedef void (JNICALL *fn_t)(JNIEnv *, TARGET, jfieldID, CTYPE);                        \
+    fn_t original = (fn_t)slot_original(ENV_SLOT_##JNI_NAME);                               \
+    if (!original) return;                                                                  \
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_##JNI_NAME)) {                          \
+        original(env, target, field, value);                                                \
+        return;                                                                             \
+    }                                                                                       \
+    g_env_hook_in_ours = 1;                                                                 \
+    original(env, target, field, value);                                                    \
+    char detail[128]; detail[0] = 0;                                                        \
+    if (env_budget_left(ENV_SLOT_##JNI_NAME)) {                                             \
+        snprintf(detail, sizeof(detail), "field=%p value=" FMT, (void *)field, CAST(value)); \
+    }                                                                                       \
+    env_note(ENV_SLOT_##JNI_NAME, detail[0] ? detail : NULL, 1);                            \
+    g_env_hook_in_ours = 0;                                                                 \
+}
+
+#define ADH_FIELD_TYPE_ROW(NAME, CTYPE, FMT, CAST)                                          \
+    ADH_DEFINE_FIELD_GET_BODY(Get##NAME##Field, CTYPE, FMT, CAST, jobject)                  \
+    ADH_DEFINE_FIELD_SET_BODY(Set##NAME##Field, CTYPE, FMT, CAST, jobject)                  \
+    ADH_DEFINE_FIELD_GET_BODY(GetStatic##NAME##Field, CTYPE, FMT, CAST, jclass)             \
+    ADH_DEFINE_FIELD_SET_BODY(SetStatic##NAME##Field, CTYPE, FMT, CAST, jclass)
+
+ADH_FIELD_TYPE_ROW(Object, jobject, "%p", (const void *))
+ADH_FIELD_TYPE_ROW(Boolean, jboolean, "%d", (int))
+ADH_FIELD_TYPE_ROW(Byte, jbyte, "%d", (int))
+ADH_FIELD_TYPE_ROW(Char, jchar, "%u", (unsigned))
+ADH_FIELD_TYPE_ROW(Short, jshort, "%d", (int))
+ADH_FIELD_TYPE_ROW(Int, jint, "%d", (int))
+ADH_FIELD_TYPE_ROW(Long, jlong, "%lld", (long long))
+ADH_FIELD_TYPE_ROW(Float, jfloat, "%g", (double))
+ADH_FIELD_TYPE_ROW(Double, jdouble, "%g", (double))
+
+// Compile-time type check: each wrapper must have exactly its table entry signature.
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetObjectField), __typeof__(&GetObjectField_wrapper)), "GetObjectField_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->SetObjectField), __typeof__(&SetObjectField_wrapper)), "SetObjectField_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetStaticObjectField), __typeof__(&GetStaticObjectField_wrapper)), "GetStaticObjectField_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->SetStaticObjectField), __typeof__(&SetStaticObjectField_wrapper)), "SetStaticObjectField_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetBooleanField), __typeof__(&GetBooleanField_wrapper)), "GetBooleanField_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->SetBooleanField), __typeof__(&SetBooleanField_wrapper)), "SetBooleanField_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetStaticBooleanField), __typeof__(&GetStaticBooleanField_wrapper)), "GetStaticBooleanField_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->SetStaticBooleanField), __typeof__(&SetStaticBooleanField_wrapper)), "SetStaticBooleanField_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetByteField), __typeof__(&GetByteField_wrapper)), "GetByteField_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->SetByteField), __typeof__(&SetByteField_wrapper)), "SetByteField_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetStaticByteField), __typeof__(&GetStaticByteField_wrapper)), "GetStaticByteField_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->SetStaticByteField), __typeof__(&SetStaticByteField_wrapper)), "SetStaticByteField_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetCharField), __typeof__(&GetCharField_wrapper)), "GetCharField_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->SetCharField), __typeof__(&SetCharField_wrapper)), "SetCharField_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetStaticCharField), __typeof__(&GetStaticCharField_wrapper)), "GetStaticCharField_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->SetStaticCharField), __typeof__(&SetStaticCharField_wrapper)), "SetStaticCharField_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetShortField), __typeof__(&GetShortField_wrapper)), "GetShortField_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->SetShortField), __typeof__(&SetShortField_wrapper)), "SetShortField_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetStaticShortField), __typeof__(&GetStaticShortField_wrapper)), "GetStaticShortField_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->SetStaticShortField), __typeof__(&SetStaticShortField_wrapper)), "SetStaticShortField_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetIntField), __typeof__(&GetIntField_wrapper)), "GetIntField_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->SetIntField), __typeof__(&SetIntField_wrapper)), "SetIntField_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetStaticIntField), __typeof__(&GetStaticIntField_wrapper)), "GetStaticIntField_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->SetStaticIntField), __typeof__(&SetStaticIntField_wrapper)), "SetStaticIntField_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetLongField), __typeof__(&GetLongField_wrapper)), "GetLongField_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->SetLongField), __typeof__(&SetLongField_wrapper)), "SetLongField_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetStaticLongField), __typeof__(&GetStaticLongField_wrapper)), "GetStaticLongField_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->SetStaticLongField), __typeof__(&SetStaticLongField_wrapper)), "SetStaticLongField_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetFloatField), __typeof__(&GetFloatField_wrapper)), "GetFloatField_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->SetFloatField), __typeof__(&SetFloatField_wrapper)), "SetFloatField_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetStaticFloatField), __typeof__(&GetStaticFloatField_wrapper)), "GetStaticFloatField_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->SetStaticFloatField), __typeof__(&SetStaticFloatField_wrapper)), "SetStaticFloatField_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetDoubleField), __typeof__(&GetDoubleField_wrapper)), "GetDoubleField_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->SetDoubleField), __typeof__(&SetDoubleField_wrapper)), "SetDoubleField_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetStaticDoubleField), __typeof__(&GetStaticDoubleField_wrapper)), "GetStaticDoubleField_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->SetStaticDoubleField), __typeof__(&SetStaticDoubleField_wrapper)), "SetStaticDoubleField_wrapper signature mismatch");
+
 // JNIEnv table slot indices, straight from the JNINativeInterface field order in the NDK
 // jni.h (the layout the JNI spec fixes). The offset check turns "my index table drifted from
 // the real ABI" into a loud install failure instead of patching a neighbouring JNI function.
@@ -753,6 +869,43 @@ ADH_CALL_VOID_FAMILIES(ADH_DEFINE_CALL_VOID)
 
 static int env_hook_spec_index(int index) {
     switch (index) {
+        // field accessors (v4.55): indices verified against jni.h by tools/verify_v90_jni_table_abi.sh
+        case ENV_SLOT_GetObjectField: return 95;
+        case ENV_SLOT_GetBooleanField: return 96;
+        case ENV_SLOT_GetByteField: return 97;
+        case ENV_SLOT_GetCharField: return 98;
+        case ENV_SLOT_GetShortField: return 99;
+        case ENV_SLOT_GetIntField: return 100;
+        case ENV_SLOT_GetLongField: return 101;
+        case ENV_SLOT_GetFloatField: return 102;
+        case ENV_SLOT_GetDoubleField: return 103;
+        case ENV_SLOT_SetObjectField: return 104;
+        case ENV_SLOT_SetBooleanField: return 105;
+        case ENV_SLOT_SetByteField: return 106;
+        case ENV_SLOT_SetCharField: return 107;
+        case ENV_SLOT_SetShortField: return 108;
+        case ENV_SLOT_SetIntField: return 109;
+        case ENV_SLOT_SetLongField: return 110;
+        case ENV_SLOT_SetFloatField: return 111;
+        case ENV_SLOT_SetDoubleField: return 112;
+        case ENV_SLOT_GetStaticObjectField: return 145;
+        case ENV_SLOT_GetStaticBooleanField: return 146;
+        case ENV_SLOT_GetStaticByteField: return 147;
+        case ENV_SLOT_GetStaticCharField: return 148;
+        case ENV_SLOT_GetStaticShortField: return 149;
+        case ENV_SLOT_GetStaticIntField: return 150;
+        case ENV_SLOT_GetStaticLongField: return 151;
+        case ENV_SLOT_GetStaticFloatField: return 152;
+        case ENV_SLOT_GetStaticDoubleField: return 153;
+        case ENV_SLOT_SetStaticObjectField: return 154;
+        case ENV_SLOT_SetStaticBooleanField: return 155;
+        case ENV_SLOT_SetStaticByteField: return 156;
+        case ENV_SLOT_SetStaticCharField: return 157;
+        case ENV_SLOT_SetStaticShortField: return 158;
+        case ENV_SLOT_SetStaticIntField: return 159;
+        case ENV_SLOT_SetStaticLongField: return 160;
+        case ENV_SLOT_SetStaticFloatField: return 161;
+        case ENV_SLOT_SetStaticDoubleField: return 162;
         case ENV_SLOT_FindClass: return 6;
         case ENV_SLOT_GetMethodID: return 33;
         ADH_CALL_VALUE_FAMILIES(ADH_CALL_GUARD_CASES)
@@ -795,6 +948,7 @@ static void **env_hook_slot(struct JNINativeInterface *table, int index) {
         case ENV_SLOT_NewStringUTF: return (void **)(uintptr_t)&table->NewStringUTF;
         case ENV_SLOT_GetFieldID: return (void **)(uintptr_t)&table->GetFieldID;
         case ENV_SLOT_GetStaticFieldID: return (void **)(uintptr_t)&table->GetStaticFieldID;
+        ADH_FIELD_SLOT_LIST(ADH_FIELD_SLOT_CASE)
         case ENV_SLOT_GetByteArrayElements: return (void **)(uintptr_t)&table->GetByteArrayElements;
         case ENV_SLOT_SetByteArrayRegion: return (void **)(uintptr_t)&table->SetByteArrayRegion;
         case ENV_SLOT_ReleaseByteArrayElements: return (void **)(uintptr_t)&table->ReleaseByteArrayElements;
@@ -822,6 +976,7 @@ static void *env_hook_wrapper(int index) {
         case ENV_SLOT_NewStringUTF: return (void *)&NewStringUTF_wrapper;
         case ENV_SLOT_GetFieldID: return (void *)&GetFieldID_wrapper;
         case ENV_SLOT_GetStaticFieldID: return (void *)&GetStaticFieldID_wrapper;
+        ADH_FIELD_SLOT_LIST(ADH_FIELD_WRAPPER_CASE)
         case ENV_SLOT_GetByteArrayElements: return (void *)&GetByteArrayElements_wrapper;
         case ENV_SLOT_SetByteArrayRegion: return (void *)&SetByteArrayRegion_wrapper;
         case ENV_SLOT_ReleaseByteArrayElements: return (void *)&ReleaseByteArrayElements_wrapper;

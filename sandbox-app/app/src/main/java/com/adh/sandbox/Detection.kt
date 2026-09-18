@@ -15,6 +15,9 @@ object Detection {
     // NewStringUTF / GetStringUTFChars through this JNIEnv, so one trigger exercises every
     // JNIEnv table hook. jniEnvValue exists only to be resolved by GetStaticMethodID.
     @JvmStatic external fun jniEnvProbe(): Int
+
+    /** v4.55: drives the JNIEnv FIELD accessors (Get/Set<Type>Field, static + instance). */
+    @JvmStatic external fun jniFieldProbe(): Int
     @JvmStatic fun jniEnvValue(): String = "ADH_JNI_ENV_VALUE"
     // v4.19 fixture for the field-ID / byte-array JNIEnv hooks: native code performs
     // GetFieldID / GetStaticFieldID / SetByteArrayRegion / GetByteArrayElements in one call.

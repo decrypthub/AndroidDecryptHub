@@ -32,6 +32,11 @@ object HeapProbe {
     @JvmStatic
     var sInherited: InheritChild? = null
 
+    // v4.55 fixture for the JNIEnv FIELD accessor slots: a mutable STATIC int the native probe can
+    // read and write through Get/SetStaticIntField.
+    @JvmStatic
+    var sCounter: Int = 11
+
     @JvmStatic
     fun init() {
         sConfig = Config("ADH_TOKEN_abc123", 42, "live-object")

@@ -147,6 +147,8 @@ SCRIPTS=(
   # JNIEnv table ABI (v4.54): every hand-written slot index is checked against the SDK jni.h, so
   # adding a slot (e.g. the field accessors) is machine-verified before it ever runs in a target.
   "verify_v90_jni_table_abi.sh:host"
+  # JNIEnv FIELD accessor slots (v4.55): the native probe drives them; events must carry field+value.
+  "verify_v91_jni_env_fields.sh:device"
   "verify_v10_mcp.sh:host"
   "verify_v10_webui.sh:host"
   "verify_v33_backends.sh:host"

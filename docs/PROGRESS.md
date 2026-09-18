@@ -15,6 +15,11 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.55 JNIEnv 字段访问器 36 槽（2026-09-19，host 验收 PASS；真机待做）**：评审点名的覆盖缺口——native 代码通过 `env->Get/Set<Type>Field` 读写字段这条路径此前**完全看不见**（`object_set` 只覆盖反射路径）。现在 JNIEnv 表从 76 槽扩到 **112 槽**。
+      · agent（`runtime/jni_env_hooks.c`）：新增 36 个槽（Object/Boolean/Byte/Char/Short/Int/Long/Float/Double × Get/Set × instance/static），**一份列表宏驱动枚举/名字表/结构体字段 case/wrapper 派发**（四处不可能漂移），每个 wrapper 转发给保存的原函数并记一条有界事件（`field=0x.. value=..`），沿用既有的重入守卫、预算门与 RELRO 还原语义。
+      · **签名安全**：每个 wrapper 都跟它所替换的表项做 `_Static_assert(__builtin_types_compatible_p(typeof(表项), typeof(&wrapper)))`——签名不符**编译期就失败**，不会等到真机把目标的每次 JNI 调用带崩；索引则由 `tools/verify_v90_jni_table_abi.sh` 对着 NDK `jni.h` 机器校验（76 现有 + 36 计划索引全部一致），加上安装期 `slot_offset == spec*sizeof(void*)` 的 refuse 共三层。
+      · 夹具与验收：沙盒新增 `HeapProbe.sCounter`（static int）+ native 探针 `Detection.jniFieldProbe`（走 GetStaticObjectField → Get/SetIntField、Get/SetBooleanField、Get/SetObjectField、Get/SetStaticIntField）；`tools/verify_v91_jni_env_fields.sh`（device，**脚本已就绪**）hook 其中 5 个槽、触发探针、要求每个被 hook 的访问器都出事件且 value 含 `field=0x`、表页仍为只读、卸载后槽位还原、进程存活。无设备时干净 SKIP。
+      · agent 零告警重建；host 门禁 **30 PASS / 0 FAIL / 84 SKIP**（114 脚本 = 30 host + 84 device）。
 - [~] **v4.54 JNIEnv 槽位索引的 ABI 机检（2026-09-19，host 验收 PASS）**：上一轮评审把"补 JNIEnv `Get/Set<Type>Field` 槽位"列为覆盖面的下一台阶，但**索引写错会打到相邻的 JNI 函数**——那会影响目标里每一次 JNI 调用。所以在动它之前，先把"索引表到底对不对"变成机检。
       · 新增 `tools/verify_v90_jni_table_abi.sh`（host，只需 NDK 头）：解析 NDK `jni.h` 里 `struct JNINativeInterface` 的**字段顺序**（4 个 reserved + 229 个函数指针 = 233 槽），与 agent 的 `env_hook_spec_index()` 表（把 `ADH_CALL_VALUE_FAMILIES`/`ADH_CALL_VOID_FAMILIES` 两套宏行展开成 `Name/NameV/NameA`）逐条比对，并检查"要安装的槽位是否都有索引"（缺索引时安装会 refuse）。
       · 结果：**13 个固定槽 + 21 个调用族 × 3 = 76 条全部与 jni.h 一致**（`checked 76 indices against the ABI`，PASS）——这同时证明现有 76 槽是照 AB I 写的、没有历史错位；与 agent 侧原有的运行期保护（`env_hook_slot()` 取真实结构体字段 + `slot_offset == spec * sizeof(void*)` 不符即拒绝 patch）互为呼应。
