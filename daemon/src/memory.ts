@@ -30,6 +30,30 @@ function hexAddress(value: bigint): string {
 }
 
 /** Thrown when a module name matches more than one loaded module. */
+/**
+ * Classify an absolute address against the live maps: is it mapped at all, and is that mapping
+ * executable? Used before an arbitrary native call so a stale address (unloaded module, typo) fails
+ * here instead of jumping into unmapped memory inside the target.
+ */
+export interface AddressClass { mapped: boolean; executable: boolean; path?: string; }
+
+export function classifyAddress(regions: MapsRegion[], addr: string | bigint | number): AddressClass {
+  let value: bigint;
+  try {
+    value = typeof addr === 'bigint' ? addr : BigInt(parseAddress(addr));
+  } catch {
+    return { mapped: false, executable: false };
+  }
+  for (const r of regions) {
+    const start = BigInt('0x' + String(r.start).replace(/^0x/i, ''));
+    const end = BigInt('0x' + String(r.end).replace(/^0x/i, ''));
+    if (value >= start && value < end) {
+      return { mapped: true, executable: String(r.perms ?? '').includes('x'), path: r.path || undefined };
+    }
+  }
+  return { mapped: false, executable: false };
+}
+
 export class ModuleAmbiguousError extends Error {
   candidates: string[];
   constructor(name: string, candidates: string[]) {

@@ -15,6 +15,12 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.94 `native_call` 的原始地址先过活体校验（2026-09-19，host 验收 PASS；真机待做）**：v4.92 把"原始地址不做存活性校验"记成了已知边界，这一版把能修的那一半修掉——**调用前先查活体 maps**。
+      · 新增纯函数 `classifyAddress(regions, addr)`（`mapped` / `executable` / `path`，end 不包含，非法地址不映射）并有单测；`native_call` 在处理原始 `addr` 时先取一次 maps：**未映射** → `ok:false, "not in any mapped region (stale or wrong)"`；**映射但不可执行** → `ok:false, "... mapped (path) but not executable - refusing to call it"`（以前这两种都会直接跳进去，崩在目标里）。
+      · `module+symbol` 路径本来就每次重解析 maps ✓（卸载后即 target not found），这条补的是裸地址那条路。
+      · 仍未做（如实保留）：调用本身**没有超时**——daemon 的 20s 只是放弃等待，agent 命令循环会一直阻塞在被调函数里；要修需要在 agent 侧加看门狗线程，不在这一版。
+      · 单测：`memory.test.ts` 增 `classifyAddress`（可执行 / 可读写 / 未映射 / end 边界 / 垃圾输入）→ daemon `node --test` **156**。
+      · 验收：host 全量门禁 **32 PASS / 0 FAIL / 84 SKIP**（116 脚本）。
 - [~] **v4.93 digest 口径补最后一处：daemon 侧事件环的淘汰也要说（2026-09-19，host 验收 PASS）**：第七轮评审还点了一条——`captureHealth` 只反映 **agent 侧**环形缓冲的丢包，**daemon 侧**内存捕获列表按 `capture.retain`（默认 1000）从头淘汰的记录没有任何计数，于是"窗口内事件被淘汰过"这件事在 digest 里不可见。
       · `state.ts` 新增 `captureStoreStats()`：分别统计累计 `pushed`、`evicted`、当前 `retained`、`retain` 与最老保留记录的 `oldestTs`（`pushCapture` 每次淘汰自增，不是估算）。
       · `syscall_digest` 现在把两类丢失分开写在 note 里：agent 环丢包（原有 `ringNote`）与 **daemon 存储淘汰**——仅当请求窗口确实被淘汰影响时才提示（无 `sinceMs` 时窗口 = 全部保留记录；有 `sinceMs` 且 `oldestTs > sinceMs` 时说明请求起点早于最老保留记录）。
