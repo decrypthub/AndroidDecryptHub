@@ -54,6 +54,11 @@ if (/requires action/i.test(String(probe.body?.error ?? ''))) {
 }
 await post('/api/java/hook', { session, action: 'unhook', hookId: 0 }).catch(() => null);
 
+// Cursor so a rerun cannot be satisfied by the PREVIOUS run's events: Java hook ids restart at 1 in
+// a fresh agent, so "an event with this hookId exists" is not proof that THIS run fired it.
+const cursorList = await (await fetch(`${base}/api/captures?session=${encodeURIComponent(session)}&limit=1`)).json().catch(() => ({}));
+const sinceId = Number((cursorList.captures ?? []).slice(-1)[0]?.id ?? 0);
+
 // (1) both ping overloads in one call
 const batch = await post('/api/java/hook', { session, action: 'hookAll', className: CLASS, method: 'ping', limit: 4 });
 if (batch.body?.ok !== true) fail(`hookAll(ping) failed: ${batch.body?.error ?? batch.status}`, batch);
@@ -74,6 +79,7 @@ const deadline = Date.now() + 10_000;
 while (Date.now() < deadline && sawIds.size < batchIds.length) {
   const list = await (await fetch(`${base}/api/captures?session=${encodeURIComponent(session)}&limit=300`)).json().catch(() => ({}));
   for (const item of (list.captures ?? [])) {
+    if (Number(item.id) <= sinceId) continue;          // older than this run
     if (item.func !== 'JAVA_HOOK') continue;
     const detail = await (await fetch(`${base}/api/captures/${item.id}`)).json().catch(() => null);
     const text = Buffer.from(String(detail?.hex ?? ''), 'hex').toString('utf8');
@@ -86,6 +92,7 @@ if (sawIds.size !== batchIds.length) {
   await post('/api/java/hook', { session, action: 'unhook', hookId: 0 });
   fail(`only ${sawIds.size}/${batchIds.length} overload hooks produced events: ${JSON.stringify([...sawIds])} vs ${JSON.stringify(batchIds)}`, { batchIds, sawIds: [...sawIds] });
 }
+if (batch.body?.partial === true) fail('batch reported partial install on the two-overload case', batch);
 const unhookAll = await post('/api/java/hook', { session, action: 'unhook', hookId: 0 });
 
 // (2) class-wide batch with a small limit: truncation must be visible via matched
@@ -111,7 +118,13 @@ console.log(JSON.stringify({
   unhook: { first: unhookAll.body?.ok === true, second: unhook2.body?.ok === true },
   online,
 }));
-const pass = unhookAll.body?.ok === true && unhook2.body?.ok === true && online;
+// Fold every assertion into the final verdict instead of relying on the early-exit calls alone.
+const pingBatchOk = batch.body?.ok === true && batchIds.length === 2 && Number(batch.body.matched) === 2 && batch.body.partial !== true;
+const overloadsFired = sawIds.size === batchIds.length;
+const limitedOk = limited.body?.ok === true && limitedIds.length === 3 && limitedMatched > 3 && limited.body.partial === true;
+const callsOk = String(callOne.body?.result?.result) === 'REAL_HOOK:ADH_ALL_ONE' && String(callTwo.body?.result?.result) === 'REAL_HOOK:ADH_ALL_TWO*3';
+const pass = pingBatchOk && overloadsFired && callsOk && limitedOk && statusCount === limitedIds.length &&
+  unhookAll.body?.ok === true && unhook2.body?.ok === true && online;
 if (!pass) console.log('FAIL unhook or liveness check failed');
 console.log(pass ? 'RESULT:PASS' : 'RESULT:FAIL');
 EOF

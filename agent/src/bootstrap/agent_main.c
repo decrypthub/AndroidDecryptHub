@@ -177,6 +177,10 @@ static void cmd_java_hook(int fd, const char *id, const char *action, const char
     int hook_ids[ADH_JAVA_HOOK_MAX];
     int hook_id_count = 0;
     int matched_count = 0;
+    int collect_capped = 0;
+    int applied_limit = 0;
+    int batch_partial = 0;
+    int ids_truncated = 0;
     if (strcmp(action, "hook") == 0) {
         if (!class_name[0] || !method_name[0]) {
             snprintf(error, sizeof(error), "hook requires className and method");
@@ -189,13 +193,17 @@ static void cmd_java_hook(int fd, const char *id, const char *action, const char
         if (!class_name[0]) {
             snprintf(error, sizeof(error), "hook_all requires className");
         } else {
-            int want = (int)((max_hooks > 0 && max_hooks <= ADH_JAVA_HOOK_MAX) ? max_hooks : ADH_JAVA_HOOK_MAX);
+            applied_limit = (int)((max_hooks > 0 && max_hooks <= ADH_JAVA_HOOK_MAX) ? max_hooks : ADH_JAVA_HOOK_MAX);
             ok = adh_javahook_hook_all(env, class_name, method_name, params, skip_original,
                                        override_return, (int)arg_index, arg_value, capture_stack_flag,
-                                       want, hook_ids, ADH_JAVA_HOOK_MAX, &matched_count,
-                                       error, sizeof(error));
+                                       applied_limit, hook_ids, ADH_JAVA_HOOK_MAX, &matched_count,
+                                       &collect_capped, error, sizeof(error));
             hook_id_count = ok > 0 ? ok : 0;
             new_hook_id = hook_id_count > 0 ? hook_ids[0] : 0;
+            // A batch that installed fewer hooks than it matched is either truncated by the slot
+            // limit or partially failed - both must be visible, not inferred from the numbers.
+            if (ok > 0 && hook_id_count < matched_count) batch_partial = 1;
+            if (error[0]) batch_partial = 1;
         }
     } else if (strcmp(action, "unhook") == 0) {
         ok = adh_javahook_unhook_id(env, (int)requested_hook_id, error, sizeof(error));
@@ -226,13 +234,23 @@ static void cmd_java_hook(int fd, const char *id, const char *action, const char
     }
     // hook_all reports every id it installed plus how many methods matched, so a slot-limited or
     // partially failed batch is visible rather than looking like a complete one.
-    char ids_json[256] = "";
+    char ids_json[512] = "";
     if (hook_id_count > 0) {
         size_t used = (size_t)snprintf(ids_json, sizeof(ids_json), ",\"hookIds\":[");
-        for (int i = 0; i < hook_id_count && used + 16 < sizeof(ids_json); i++) {
-            used += (size_t)snprintf(ids_json + used, sizeof(ids_json) - used, "%s%d", i ? "," : "", hook_ids[i]);
+        int written = 0;
+        for (int i = 0; i < hook_id_count; i++) {
+            int n = snprintf(ids_json + used, sizeof(ids_json) - used, "%s%d", i ? "," : "", hook_ids[i]);
+            if (n <= 0 || (size_t)n >= sizeof(ids_json) - used) { ids_truncated = 1; break; }
+            used += (size_t)n;
+            written++;
         }
-        snprintf(ids_json + used, sizeof(ids_json) - used, "],\"matched\":%d", matched_count);
+        if (written < hook_id_count) ids_truncated = 1;
+        size_t tail = strnlen(ids_json, sizeof(ids_json));
+        snprintf(ids_json + tail, sizeof(ids_json) - tail, "],\"matched\":%d,\"limit\":%d%s%s%s",
+                 matched_count, applied_limit,
+                 collect_capped ? ",\"matchedCapped\":true" : "",
+                 ids_truncated ? ",\"hookIdsTruncated\":true" : "",
+                 batch_partial ? ",\"partial\":true" : "");
     }
     snprintf(out, out_len,
              "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"java_hook\",\"ok\":%s,\"action\":\"%s\","

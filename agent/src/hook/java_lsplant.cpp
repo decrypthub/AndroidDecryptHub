@@ -722,6 +722,10 @@ static jobject find_target_method(JNIEnv *env, jclass target_class, const std::s
 // optional exact parameter list. "*" or an empty list means "any". Used by hook-all, where the point
 // is to stop hand-enumerating overloads before installing - the Frida `overloads.forEach(hook)`
 // workflow. Slots are bounded by the caller; the local-ref count stays well under the 512 limit.
+// Hard ceiling for COLLECTION (a JNI local-ref budget, not the install limit): the install limit is
+// applied later and must never shrink the reported match count - a caller asking for limit=3 out of
+// 30 matches has to see matched=30, otherwise the truncation is invisible.
+#define ADH_JAVA_COLLECT_MAX 64
 static int collect_target_methods(JNIEnv *env, jclass target_class, const std::string &method_name,
                                   const std::string &params, int cap, std::vector<jobject> &out,
                                   std::string &error) {
@@ -786,7 +790,13 @@ static int collect_target_methods(JNIEnv *env, jclass target_class, const std::s
                     for (const std::string &s : seen) if (s == dedupe_key) { duplicate = true; break; }
                     if (!duplicate) {
                         env->CallVoidMethod(member, member_set_accessible, JNI_TRUE);
-                        if (env->ExceptionCheck()) env->ExceptionClear();
+                        if (env->ExceptionCheck()) {
+                            // Not fatal (the install path may still succeed for public members), but it
+                            // must be visible: silently clearing it turned a permission problem into a
+                            // mysterious install failure later.
+                            LLOGI("WARN hook_all: setAccessible failed for %s (member kept; install may fail)", dedupe_key.c_str());
+                            env->ExceptionClear();
+                        }
                         seen.push_back(dedupe_key);
                         out.push_back((jobject)env->NewLocalRef(member));
                     }
@@ -803,6 +813,8 @@ static int collect_target_methods(JNIEnv *env, jclass target_class, const std::s
         cursor = parent;
     }
     if (cursor) env->DeleteLocalRef(cursor);
+    // Count everything that WOULD match, so matched is honest even when we stop collecting at the
+    // local-ref budget; the caller decides how many of them to install.
     return (int)out.size();
 }
 
@@ -1034,7 +1046,7 @@ extern "C" int adh_javahook_hook_all(JNIEnv *env, const char *class_name, const 
                                      const char *params, int skip_original, const char *override_return,
                                      int arg_index, const char *arg_value, int capture_stack,
                                      int max_hooks, int *hook_ids_out, int hook_ids_cap,
-                                     int *matched_out, char *error, size_t error_size) {
+                                     int *matched_out, int *collect_capped_out, char *error, size_t error_size) {
     if (matched_out) *matched_out = 0;
     if (!env || !class_name || !class_name[0]) {
         set_error(error, error_size, "hook_all needs className");
@@ -1044,7 +1056,11 @@ extern "C" int adh_javahook_hook_all(JNIEnv *env, const char *class_name, const 
         set_error(error, error_size, "%s", adh_javahook_last_error());
         return 0;
     }
-    const int cap = max_hooks > 0 ? max_hooks : ADH_JAVA_MAX_HOOKS;
+    if (matched_out) *matched_out = 0;
+    if (collect_capped_out) *collect_capped_out = 0;
+    if (hook_ids_cap > ADH_JAVA_MAX_HOOKS) hook_ids_cap = ADH_JAVA_MAX_HOOKS;   // never trust the caller's buffer size
+    const int install_cap = max_hooks > 0 ? (max_hooks > ADH_JAVA_MAX_HOOKS ? ADH_JAVA_MAX_HOOKS : max_hooks)
+                                          : ADH_JAVA_MAX_HOOKS;
     std::string problem;
     jclass target_class = load_app_class(env, class_name, problem);
     if (!target_class) {
@@ -1054,7 +1070,10 @@ extern "C" int adh_javahook_hook_all(JNIEnv *env, const char *class_name, const 
     std::vector<jobject> methods;
     std::string collect_error;
     int matched = collect_target_methods(env, target_class, method_name ? method_name : "",
-                                         params ? params : "*", cap, methods, collect_error);
+                                         params ? params : "*", ADH_JAVA_COLLECT_MAX, methods, collect_error);
+    if (collect_capped_out) *collect_capped_out = matched >= ADH_JAVA_COLLECT_MAX ? 1 : 0;
+    // Install at most install_cap of them; `matched` above stays the size of the match set.
+    int install_count = matched < install_cap ? matched : install_cap;
     if (matched <= 0) {
         env->DeleteLocalRef(target_class);
         set_error(error, error_size, "%s",
@@ -1063,18 +1082,25 @@ extern "C" int adh_javahook_hook_all(JNIEnv *env, const char *class_name, const 
     }
     if (matched_out) *matched_out = matched;
 
+    // Constructors are collected as java.lang.reflect.Constructor objects: the install loop must ask
+    // the right reflection class for their parameter types (see below).
+    const bool want_ctor = method_name && (strcmp(method_name, "<init>") == 0 || strcmp(method_name, "constructor") == 0);
     int installed = 0;
+    int failed = 0;
     int first_error_kept = 0;
     char first_error[192] = "";
-    for (int i = 0; i < matched && installed < hook_ids_cap; i++) {
+    for (int i = 0; i < install_count && installed < hook_ids_cap; i++) {
         jobject method = methods[(size_t)i];
         // Build the exact parameter list of THIS overload so the single-method resolver selects it
         // unambiguously, and read the real method name when the caller asked for "any name".
         std::string param_list;
         std::string actual_name = method_name ? method_name : "";
-        jclass method_class = env->FindClass("java/lang/reflect/Method");
+        // Constructors live in java.lang.reflect.Constructor: asking THAT object for Method.getName()
+        // throws and the exception would be swallowed, leaving the name to a lucky fallback.
+        const bool collecting_ctors_here = want_ctor;
+        jclass method_class = env->FindClass(collecting_ctors_here ? "java/lang/reflect/Constructor" : "java/lang/reflect/Method");
         jmethodID get_params = method_class ? env->GetMethodID(method_class, "getParameterTypes", "()[Ljava/lang/Class;") : nullptr;
-        jmethodID get_name = method_class ? env->GetMethodID(method_class, "getName", "()Ljava/lang/String;") : nullptr;
+        jmethodID get_name = (!collecting_ctors_here && method_class) ? env->GetMethodID(method_class, "getName", "()Ljava/lang/String;") : nullptr;
         jclass class_class = env->FindClass("java/lang/Class");
         jmethodID class_get_name = class_class ? env->GetMethodID(class_class, "getName", "()Ljava/lang/String;") : nullptr;
         if (actual_name.empty() && get_name) {
@@ -1102,9 +1128,12 @@ extern "C" int adh_javahook_hook_all(JNIEnv *env, const char *class_name, const 
                                           capture_stack, &hook_id, hook_error, sizeof(hook_error));
         if (ok && hook_id > 0) {
             hook_ids_out[installed++] = hook_id;
-        } else if (!first_error_kept) {
-            first_error_kept = 1;
-            snprintf(first_error, sizeof(first_error), "%s", hook_error[0] ? hook_error : "install failed");
+        } else {
+            failed++;
+            if (!first_error_kept) {
+                first_error_kept = 1;
+                snprintf(first_error, sizeof(first_error), "%s", hook_error[0] ? hook_error : "install failed");
+            }
         }
     }
     for (jobject m : methods) env->DeleteLocalRef(m);
@@ -1114,9 +1143,9 @@ extern "C" int adh_javahook_hook_all(JNIEnv *env, const char *class_name, const 
         return 0;
     }
     if (first_error_kept && error && error_size) {
-        // Report the partial failure through the error string while still returning success: the
-        // operator must see that some overloads did not install.
-        snprintf(error, error_size, "partial: %s", first_error);
+        // Partial failure: the error string says what failed, and the caller also gets a `partial`
+        // flag so "ok:true with some methods missing" cannot be read as a complete batch.
+        snprintf(error, error_size, "partial (%d of %d failed): %s", failed, install_count, first_error);
     }
     LLOGI("java_hook_all installed=%d matched=%d class=%s", installed, matched, class_name);
     return installed;
