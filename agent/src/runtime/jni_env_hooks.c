@@ -196,7 +196,25 @@ enum {
     ENV_SLOT_NewObject = ENV_SLOT_CallStaticDoubleMethod + 3,
     ENV_SLOT_CallVoidMethod = ENV_SLOT_NewObject + 3,
     ENV_SLOT_CallStaticVoidMethod = ENV_SLOT_CallVoidMethod + 3,
-    ENV_SLOT_CallStaticVoidMethod_end = ENV_SLOT_CallStaticVoidMethod + 3,
+    // v4.76: CallNonvirtual* - the three JNI forms with an explicit class, i.e. the caller names
+    // the implementation to run instead of letting the receiver's runtime class decide.
+    ENV_SLOT_CallNonvirtualObjectMethod = ENV_SLOT_CallStaticVoidMethod + 3,
+    ENV_SLOT_CallNonvirtualBooleanMethod = ENV_SLOT_CallNonvirtualObjectMethod + 3,
+    ENV_SLOT_CallNonvirtualByteMethod = ENV_SLOT_CallNonvirtualBooleanMethod + 3,
+    ENV_SLOT_CallNonvirtualCharMethod = ENV_SLOT_CallNonvirtualByteMethod + 3,
+    ENV_SLOT_CallNonvirtualShortMethod = ENV_SLOT_CallNonvirtualCharMethod + 3,
+    ENV_SLOT_CallNonvirtualIntMethod = ENV_SLOT_CallNonvirtualShortMethod + 3,
+    ENV_SLOT_CallNonvirtualLongMethod = ENV_SLOT_CallNonvirtualIntMethod + 3,
+    ENV_SLOT_CallNonvirtualFloatMethod = ENV_SLOT_CallNonvirtualLongMethod + 3,
+    ENV_SLOT_CallNonvirtualDoubleMethod = ENV_SLOT_CallNonvirtualFloatMethod + 3,
+    ENV_SLOT_CallNonvirtualVoidMethod = ENV_SLOT_CallNonvirtualDoubleMethod + 3,
+    // The field accessors follow, and the table keeps exactly one entry per accessor, so the
+    // first field slot has to land on CallNonvirtualVoidMethodA + 1. An enumerator always
+    // consumes a value, hence this alias: it names the A slot (which is addressed as base+2
+    // everywhere in the code) so the field block starts exactly where the table does. The old
+    // "*_end" markers did the same job but swallowed a slot, which silently pushed the whole
+    // field family one index past its table position.
+    ENV_SLOT_CallNonvirtualVoidMethodA_alias = ENV_SLOT_CallNonvirtualVoidMethod + 2,
     ADH_FIELD_SLOT_LIST(ADH_FIELD_ENUM_ENTRY)
     ENV_HOOK_MAX,
 };
@@ -292,18 +310,47 @@ struct EnvHookSlot {
     X(CallVoidMethod,       jobject, ADH_MEMBER_INSTANCE, ENV_SLOT_CallVoidMethod,       61) \
     X(CallStaticVoidMethod, jclass,  ADH_MEMBER_STATIC,   ENV_SLOT_CallStaticVoidMethod, 141)
 
+// v4.76: the CallNonvirtual* family. Same three JNI forms as Call*, plus an explicit jclass that
+// names the implementation to run (the receiver's runtime class is bypassed on purpose). The
+// wrappers therefore take (env, obj, clazz, mid, ...) and the event adds "via=<class>".
+#define ADH_CALLNV_VALUE_FAMILIES(X) \
+    X(CallNonvirtualObjectMethod, jobject, jobject, ADH_MEMBER_INSTANCE, ENV_SLOT_CallNonvirtualObjectMethod,  64) \
+    X(CallNonvirtualBooleanMethod, jboolean, jobject, ADH_MEMBER_INSTANCE, ENV_SLOT_CallNonvirtualBooleanMethod,  67) \
+    X(CallNonvirtualByteMethod, jbyte, jobject, ADH_MEMBER_INSTANCE, ENV_SLOT_CallNonvirtualByteMethod,  70) \
+    X(CallNonvirtualCharMethod, jchar, jobject, ADH_MEMBER_INSTANCE, ENV_SLOT_CallNonvirtualCharMethod,  73) \
+    X(CallNonvirtualShortMethod, jshort, jobject, ADH_MEMBER_INSTANCE, ENV_SLOT_CallNonvirtualShortMethod,  76) \
+    X(CallNonvirtualIntMethod,  jint, jobject, ADH_MEMBER_INSTANCE, ENV_SLOT_CallNonvirtualIntMethod,  79) \
+    X(CallNonvirtualLongMethod, jlong, jobject, ADH_MEMBER_INSTANCE, ENV_SLOT_CallNonvirtualLongMethod,  82) \
+    X(CallNonvirtualFloatMethod, jfloat, jobject, ADH_MEMBER_INSTANCE, ENV_SLOT_CallNonvirtualFloatMethod,  85) \
+    X(CallNonvirtualDoubleMethod, jdouble, jobject, ADH_MEMBER_INSTANCE, ENV_SLOT_CallNonvirtualDoubleMethod,  88) \
+
+#define ADH_CALLNV_VOID_FAMILIES(X) \
+    X(CallNonvirtualVoidMethod, jobject, ADH_MEMBER_INSTANCE, ENV_SLOT_CallNonvirtualVoidMethod, 91)
+
 #define ADH_SLOT_INIT(name) { name, NULL, NULL, 0, 0, 0, 0, "", 0, 0, 0.0 },
 #define ADH_CALL_INITS_3(name, ret, tgt, kind, base) \
     ADH_SLOT_INIT(#name) ADH_SLOT_INIT(#name "V") ADH_SLOT_INIT(#name "A")
 #define ADH_CALL_INITS(name, ret, tgt, kind, base, spec) ADH_CALL_INITS_3(name, ret, tgt, kind, base)
 #define ADH_CALL_VOID_INITS(name, tgt, kind, base, spec) ADH_CALL_INITS_3(name, void, tgt, kind, base)
+#define ADH_CALLNV_INITS(name, ret, tgt, kind, base, spec) ADH_CALL_INITS_3(name, ret, tgt, kind, base)
+#define ADH_CALLNV_VOID_INITS(name, tgt, kind, base, spec) ADH_CALL_INITS_3(name, void, tgt, kind, base)
 
-static struct EnvHookSlot g_env_hooks[ENV_HOOK_MAX] = {
+static struct EnvHookSlot g_env_hooks[] = {
     ADH_FIXED_SLOT_INITS(ADH_SLOT_INIT)
     ADH_CALL_VALUE_FAMILIES(ADH_CALL_INITS)
     ADH_CALL_VOID_FAMILIES(ADH_CALL_VOID_INITS)
+    ADH_CALLNV_VALUE_FAMILIES(ADH_CALLNV_INITS)
+    ADH_CALLNV_VOID_FAMILIES(ADH_CALLNV_VOID_INITS)
     ADH_FIELD_SLOT_LIST(ADH_FIELD_NAME_ENTRY)
 };
+// The table is indexed by the ENV_SLOT_* enumerators, so its size must be exactly the enum
+// value that follows them: an unsized array plus this assert turns "the enum and the table
+// drifted apart" into one clear compile error instead of silent truncation.
+_Static_assert(sizeof(g_env_hooks) / sizeof(g_env_hooks[0]) == ENV_HOOK_MAX,
+               "g_env_hooks must have exactly ENV_HOOK_MAX entries");
+_Static_assert(ENV_SLOT_SetStaticDoubleField == ENV_HOOK_MAX - 1,
+               "the field accessors are the last group in the table, so the last field slot must be the"
+               " last enum value before ENV_HOOK_MAX (a drifting base would land on the wrong slot)");
 
 static pthread_mutex_t g_env_hook_lock = PTHREAD_MUTEX_INITIALIZER;
 // Marks the current thread as running ADH instrumentation code (label resolution, class
@@ -828,7 +875,7 @@ static void ReleasePrimitiveArrayCritical_wrapper(JNIEnv *env, jarray array, voi
         va_start(ap, mid);                                                                      \
         RET (*v_original)(JNIEnv *, TGT, jmethodID, va_list) =                                  \
             (RET (*)(JNIEnv *, TGT, jmethodID, va_list))slot_original(BASE + 1);                \
-        if (!slot_active(BASE)) {                                                               \
+        if (g_env_hook_in_ours || !slot_active(BASE)) {                                        \
             RET r = v_original ? v_original(env, target, mid, ap)                               \
                                : (*env)->NAME##V(env, target, mid, ap);                         \
             va_end(ap);                                                                         \
@@ -877,7 +924,7 @@ static void ReleasePrimitiveArrayCritical_wrapper(JNIEnv *env, jarray array, voi
         va_start(ap, mid);                                                                      \
         void (*v_original)(JNIEnv *, TGT, jmethodID, va_list) =                                 \
             (void (*)(JNIEnv *, TGT, jmethodID, va_list))slot_original(BASE + 1);               \
-        if (!slot_active(BASE)) {                                                               \
+        if (g_env_hook_in_ours || !slot_active(BASE)) {                                        \
             if (v_original) v_original(env, target, mid, ap);                                   \
             else (*env)->NAME##V(env, target, mid, ap);                                         \
             va_end(ap);                                                                         \
@@ -919,6 +966,132 @@ static void ReleasePrimitiveArrayCritical_wrapper(JNIEnv *env, jarray array, voi
 
 ADH_CALL_VALUE_FAMILIES(ADH_DEFINE_CALL_VALUE)
 ADH_CALL_VOID_FAMILIES(ADH_DEFINE_CALL_VOID)
+
+// ---- v4.76: CallNonvirtual* ----------------------------------------------------------------
+// The caller passes the class explicitly, so the receiver's runtime class does not decide which
+// implementation runs. That is worth a field of its own in the event: the label already says which
+// member was called, " via=<class>" says which implementation the caller asked for.
+static void callnv_add_via(JNIEnv *env, jclass clazz, struct AdhCallDetail *d) {
+    if (!clazz || !d->text[0]) return;
+    char cls[192];
+    adh_jni_class_name(env, clazz, cls, sizeof(cls));
+    size_t used = strlen(d->text);
+    if (used + 8 < sizeof(d->text))
+        snprintf(d->text + used, sizeof(d->text) - used, " via=%s", cls[0] ? cls : "?");
+}
+
+#define ADH_DEFINE_CALLNV_VALUE(NAME, RET, BASE)                                                   \
+    static RET NAME##_wrapper(JNIEnv *env, jobject obj, jclass clazz, jmethodID mid, ...) {        \
+        va_list ap;                                                                                \
+        va_start(ap, mid);                                                                         \
+        RET (*v_original)(JNIEnv *, jobject, jclass, jmethodID, va_list) =                          \
+            (RET (*)(JNIEnv *, jobject, jclass, jmethodID, va_list))slot_original(BASE + 1);        \
+        if (g_env_hook_in_ours || !slot_active(BASE)) {                                             \
+            RET r = v_original ? v_original(env, obj, clazz, mid, ap)                               \
+                               : (*env)->NAME##V(env, obj, clazz, mid, ap);                         \
+            va_end(ap);                                                                             \
+            return r;                                                                               \
+        }                                                                                           \
+        struct AdhCallDetail detail;                                                                \
+        g_env_hook_in_ours = 1;                                                                     \
+        call_detail_va(env, BASE, obj, ADH_MEMBER_INSTANCE, mid, ap, &detail);                      \
+        callnv_add_via(env, clazz, &detail);                                                        \
+        g_env_hook_in_ours = 0;                                                                     \
+        RET result = v_original ? v_original(env, obj, clazz, mid, ap)                              \
+                                : (*env)->NAME##V(env, obj, clazz, mid, ap);                        \
+        va_end(ap);                                                                                 \
+        call_emit(BASE, &detail);                                                                   \
+        return result;                                                                              \
+    }                                                                                               \
+    static RET NAME##V_wrapper(JNIEnv *env, jobject obj, jclass clazz, jmethodID mid, va_list ap) {  \
+        RET (*original)(JNIEnv *, jobject, jclass, jmethodID, va_list) =                            \
+            (RET (*)(JNIEnv *, jobject, jclass, jmethodID, va_list))slot_original(BASE + 1);        \
+        if (!original) return (RET)0;                                                               \
+        if (g_env_hook_in_ours || !slot_active(BASE + 1))                                           \
+            return original(env, obj, clazz, mid, ap);                                              \
+        struct AdhCallDetail detail;                                                                \
+        g_env_hook_in_ours = 1;                                                                     \
+        call_detail_va(env, BASE + 1, obj, ADH_MEMBER_INSTANCE, mid, ap, &detail);                  \
+        callnv_add_via(env, clazz, &detail);                                                        \
+        g_env_hook_in_ours = 0;                                                                     \
+        RET result = original(env, obj, clazz, mid, ap);                                            \
+        call_emit(BASE + 1, &detail);                                                               \
+        return result;                                                                              \
+    }                                                                                               \
+    static RET NAME##A_wrapper(JNIEnv *env, jobject obj, jclass clazz, jmethodID mid,               \
+                               const jvalue *args) {                                                \
+        RET (*original)(JNIEnv *, jobject, jclass, jmethodID, const jvalue *) =                     \
+            (RET (*)(JNIEnv *, jobject, jclass, jmethodID, const jvalue *))slot_original(BASE + 2); \
+        if (!original) return (RET)0;                                                               \
+        if (g_env_hook_in_ours || !slot_active(BASE + 2))                                           \
+            return original(env, obj, clazz, mid, args);                                            \
+        struct AdhCallDetail detail;                                                                \
+        g_env_hook_in_ours = 1;                                                                     \
+        call_detail_a(env, BASE + 2, obj, ADH_MEMBER_INSTANCE, mid, args, &detail);                 \
+        callnv_add_via(env, clazz, &detail);                                                        \
+        g_env_hook_in_ours = 0;                                                                     \
+        RET result = original(env, obj, clazz, mid, args);                                          \
+        call_emit(BASE + 2, &detail);                                                               \
+        return result;                                                                              \
+    }
+
+#define ADH_DEFINE_CALLNV_VOID(NAME, BASE)                                                         \
+    static void NAME##_wrapper(JNIEnv *env, jobject obj, jclass clazz, jmethodID mid, ...) {       \
+        va_list ap;                                                                                \
+        va_start(ap, mid);                                                                         \
+        void (*v_original)(JNIEnv *, jobject, jclass, jmethodID, va_list) =                        \
+            (void (*)(JNIEnv *, jobject, jclass, jmethodID, va_list))slot_original(BASE + 1);       \
+        if (g_env_hook_in_ours || !slot_active(BASE)) {                                            \
+            if (v_original) v_original(env, obj, clazz, mid, ap);                                  \
+            else (*env)->NAME##V(env, obj, clazz, mid, ap);                                        \
+            va_end(ap);                                                                            \
+            return;                                                                                \
+        }                                                                                          \
+        struct AdhCallDetail detail;                                                               \
+        g_env_hook_in_ours = 1;                                                                    \
+        call_detail_va(env, BASE, obj, ADH_MEMBER_INSTANCE, mid, ap, &detail);                     \
+        callnv_add_via(env, clazz, &detail);                                                       \
+        g_env_hook_in_ours = 0;                                                                    \
+        if (v_original) v_original(env, obj, clazz, mid, ap);                                      \
+        else (*env)->NAME##V(env, obj, clazz, mid, ap);                                            \
+        va_end(ap);                                                                                \
+        call_emit(BASE, &detail);                                                                  \
+    }                                                                                              \
+    static void NAME##V_wrapper(JNIEnv *env, jobject obj, jclass clazz, jmethodID mid, va_list ap) {\
+        void (*original)(JNIEnv *, jobject, jclass, jmethodID, va_list) =                          \
+            (void (*)(JNIEnv *, jobject, jclass, jmethodID, va_list))slot_original(BASE + 1);       \
+        if (!original) return;                                                                     \
+        if (g_env_hook_in_ours || !slot_active(BASE + 1)) { original(env, obj, clazz, mid, ap); return; } \
+        struct AdhCallDetail detail;                                                               \
+        g_env_hook_in_ours = 1;                                                                    \
+        call_detail_va(env, BASE + 1, obj, ADH_MEMBER_INSTANCE, mid, ap, &detail);                 \
+        callnv_add_via(env, clazz, &detail);                                                       \
+        g_env_hook_in_ours = 0;                                                                    \
+        original(env, obj, clazz, mid, ap);                                                        \
+        call_emit(BASE + 1, &detail);                                                              \
+    }                                                                                              \
+    static void NAME##A_wrapper(JNIEnv *env, jobject obj, jclass clazz, jmethodID mid,             \
+                                const jvalue *args) {                                              \
+        void (*original)(JNIEnv *, jobject, jclass, jmethodID, const jvalue *) =                   \
+            (void (*)(JNIEnv *, jobject, jclass, jmethodID, const jvalue *))slot_original(BASE + 2);\
+        if (!original) return;                                                                     \
+        if (g_env_hook_in_ours || !slot_active(BASE + 2)) { original(env, obj, clazz, mid, args); return; } \
+        struct AdhCallDetail detail;                                                               \
+        g_env_hook_in_ours = 1;                                                                    \
+        call_detail_a(env, BASE + 2, obj, ADH_MEMBER_INSTANCE, mid, args, &detail);                \
+        callnv_add_via(env, clazz, &detail);                                                       \
+        g_env_hook_in_ours = 0;                                                                    \
+        original(env, obj, clazz, mid, args);                                                      \
+        call_emit(BASE + 2, &detail);                                                              \
+    }
+
+// The family list carries (name, ret, target, kind, base, spec); the NV wrappers need only
+// (name, ret, base) because the extra jclass is fixed by the JNI signature.
+#define ADH_DEFINE_CALLNV_VALUE_ENTRY(name, ret, tgt, kind, base, spec) ADH_DEFINE_CALLNV_VALUE(name, ret, base)
+#define ADH_DEFINE_CALLNV_VOID_ENTRY(name, tgt, kind, base, spec) ADH_DEFINE_CALLNV_VOID(name, base)
+
+ADH_CALLNV_VALUE_FAMILIES(ADH_DEFINE_CALLNV_VALUE_ENTRY)
+ADH_CALLNV_VOID_FAMILIES(ADH_DEFINE_CALLNV_VOID_ENTRY)
 
 
 // ---- field accessors ------------------------------------------------------
@@ -1988,6 +2161,8 @@ static int env_hook_spec_index(int index) {
         case ENV_SLOT_GetMethodID: return 33;
         ADH_CALL_VALUE_FAMILIES(ADH_CALL_GUARD_CASES)
         ADH_CALL_VOID_FAMILIES(ADH_CALL_VOID_GUARD_CASES)
+        ADH_CALLNV_VALUE_FAMILIES(ADH_CALL_GUARD_CASES)
+        ADH_CALLNV_VOID_FAMILIES(ADH_CALL_VOID_GUARD_CASES)
         case ENV_SLOT_GetFieldID: return 94;
         case ENV_SLOT_GetStaticMethodID: return 113;
         case ENV_SLOT_GetStaticFieldID: return 144;
@@ -2183,6 +2358,8 @@ static void **env_hook_slot(struct JNINativeInterface *table, int index) {
         case ENV_SLOT_ReleasePrimitiveArrayCritical: return (void **)(uintptr_t)&table->ReleasePrimitiveArrayCritical;
         ADH_CALL_VALUE_FAMILIES(ADH_CALL_SLOT_CASES)
         ADH_CALL_VOID_FAMILIES(ADH_CALL_VOID_SLOT_CASES)
+        ADH_CALLNV_VALUE_FAMILIES(ADH_CALL_SLOT_CASES)
+        ADH_CALLNV_VOID_FAMILIES(ADH_CALL_VOID_SLOT_CASES)
         default: return NULL;
     }
 }
@@ -2284,6 +2461,8 @@ static void *env_hook_wrapper(int index) {
         case ENV_SLOT_ReleasePrimitiveArrayCritical: return (void *)&ReleasePrimitiveArrayCritical_wrapper;
         ADH_CALL_VALUE_FAMILIES(ADH_CALL_WRAPPER_CASES)
         ADH_CALL_VOID_FAMILIES(ADH_CALL_VOID_WRAPPER_CASES)
+        ADH_CALLNV_VALUE_FAMILIES(ADH_CALL_WRAPPER_CASES)
+        ADH_CALLNV_VOID_FAMILIES(ADH_CALL_VOID_WRAPPER_CASES)
         default: return NULL;
     }
 }

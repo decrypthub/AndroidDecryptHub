@@ -15,6 +15,13 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.76 CallNonvirtual 全族入表 + 表/枚举一致性硬约束（2026-09-19，host 验收 PASS；真机待做）**：这一批把最大的剩余盲区一次收完，顺带揪出并修掉一个**从 v4.55 起就潜伏的字段槽位错位**。
+      · 新增 30 槽（覆盖率 **185/229 → 215/229 = 94%**）：`CallNonvirtual{Object,Boolean,Byte,Char,Short,Int,Long,Float,Double}Method` 与 `CallNonvirtualVoidMethod`，各三种 JNI 形态（varargs / V / A）。非虚调用是"**调用方自己指定执行哪个实现**、绕过接收者运行时的类"，所以事件在常规成员标签后追加 `via=<class>`——"到底调了谁"是这类调用唯一值得记的东西。
+      · **P1（潜伏 bug，本批修复）**：`ENV_SLOT_CallStaticVoidMethod_end` 是个纯算术锚点，但枚举成员**必然会占用一个值**，于是字段访问器整族的枚举值比它们在 `g_env_hooks[]` 里的位置**大 1**。安装路径是"按名字取表位置 → `env_hook_slot(index)` 按枚举值 switch"，结果每个字段槽位都会落到 `default` 分支、以 `table entry unavailable` 被拒——**v4.55 的 36 个字段访问器、v4.58 的 setValue 改写、v4.56 的字段摘要从来没有真正挂上过**（真机验收一直是待做，所以没人发现）。现在锚点改成不吞槽位的别名式写法（`ENV_SLOT_CallNonvirtualVoidMethodA_alias = base + 2`），字段块落在 179–214 与表一一对应。
+      · 顺带修掉 Call* 族的**重入守卫不对称**：varargs 形态缺少 `g_env_hook_in_ours` 检查（V/A 形态有），agent 自己解析类名时经过 `CallObjectMethod` 的内部调用会被当成目标事件记下来。
+      · 安全网升级：`g_env_hooks[]` 改成**不定长数组**并加两条编译期不变式——表长必须等于 `ENV_HOOK_MAX`、最后一个字段槽必须是 `ENV_HOOK_MAX-1`。这两条把"枚举与表悄悄漂移"从静默截断变成一行清晰的编译错误（本次正是它逼出了上面那个 bug）。索引 64–93 由 v90 对 `jni.h` 机检（`checked 215 indices`），覆盖率下限**再提到 215**。
+      · 剩余 14 个盲区（v90 名单）：`From/ToReflected*` 4 项、`NewString`/`GetStringLength`/`GetStringUTFLength`/`ReleaseStringUTFChars`/`Get+ReleaseStringCritical` 6 项、`FatalError`、`UnregisterNatives`、`ExceptionCheck`（`RegisterNatives` 已在 v4.14 注册路径覆盖，这里是 env 表口径）。
+      · 验收：agent 零告警重建（998 KB）；v90 PASS（215/229，94%）；host 全量门禁 **31 PASS / 0 FAIL / 84 SKIP**（115 脚本）。
 - [~] **v4.75 JNIEnv 创建 / 长度 / 对象数组 / AllocObject（2026-09-19，host 验收 PASS；真机待做）**：覆盖名单里剩下的"跟数组有关但不在 region/elements 两族"的表项一次收完——**造数组**（8 个 `New<Type>Array` + `NewObjectArray`）、**问长度**（`GetArrayLength`）、**对象数组元素读写**（`Get/SetObjectArrayElement`）和**不开构造器直接分配对象**（`AllocObject`）。
       · 新增 13 槽（覆盖率 **172/229 → 185/229 = 81%**）：事件分别是 `len=N -> 0x..`（造数组，含元素类名的 `elem=Class`）、`array=.. len=N`、`array=.. index=N -> 0x..`、`array=.. index=N value=0x..`、`class=Class -> 0x..`。
       · 语义细节：`GetObjectArrayElement` 的 **NULL 元素是合法的**，所以 `ok` 跟异常状态走、文案区分 `-> 0x0 (null element)` 与越界抛异常的 `<call failed>`；`New*Array`/`AllocObject` 的 NULL 返回必然伴随异常（OOM/负数长度/Instantiation 问题），`ok` 取 `!failed && result != NULL`，不会把"没造出来"记成成功。
