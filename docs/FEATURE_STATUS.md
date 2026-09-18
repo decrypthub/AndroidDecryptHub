@@ -38,7 +38,7 @@
 | 加解密动态捕获 | v04_crypto, v11_capture, v24_javacap, v26_cryptocoverage | EVP 边界明文、富采集、ECDSA/AEAD 覆盖（含 APS2 packed reloc） |
 | TLS / 文件 I/O | v07, v07_flow, v20_file, v25_fsbrowser | SSL_write/read 明文与关联；libc open/read/write 捕获 |
 | 反检测观测与去特征 | v05_detect, v69(stealth), v70/v72(sites), v73/v74(vtable) | 目标自审（anon r-x、序言比对）；stealth 后 anonExec 2→0；sites 保持入口字节不变 |
-| Java hook（LSPlant） | v42/v43/v52/v53/v65, **v79(stack)**, **v82(hookAll)** | 单方法/构造器/继承、参数改写、返回值替换、skip original；`stack:true` 给出 App 帧调用链；`hookAll` 一次装全类（截断可见） |
+| Java hook（LSPlant） | v42/v43/v52/v53/v65, **v79(stack)**, **v82(hookAll)**, **v83(java_trace digest)** | 单方法/构造器/继承、参数改写、返回值替换、skip original；`stack:true` 给出 App 帧调用链；`hookAll` 一次装全类（截断可见） |
 | native hook | v46, v49, v55, v56, v66, v68 | inline/addr、软/硬卸载、寄存器事件、浮点参数、千次压测 |
 | JNI 面 | v54, v57, v58, v59, v60, v62, v63, v64, v67 | RegisterNatives、JNI_OnLoad（含加载时替换）、JNIEnv 76 槽、Call* 三类入口、数组写回、异常保持 |
 | 主动调用 | v45(java_call), v49(native_call), v51(qbdi args) | 反射调用 Java 方法/字段；按符号或地址调 native（整数+浮点） |
@@ -52,7 +52,7 @@
 | 控制面 / MCP / Web | v10_mcp, v10_webui, v10_export, v10_events, v19_settings, v33_backends, v35_sessions, **v71(registry)**, **v80(trace digest)** | MCP 68 工具可调；注册表形状自检；Web UI；会话清理 |
 | 手机自动化（模块 X） | v36, v38, v39, v40, v41 | 树/截图/选择器/手势/输入/wait/通知/技能；硬超时、桥接自愈、root 输入、屏幕状态；**重启后的 OEM 弹窗按 BACK 有界重试** |
 | 注入足迹 | v26_footprint, v01 | release 剥离 + 仅 3 个动态导出 + 无 RWX LOAD |
-| 单元测试（host） | v76, v80, v81 | syscall 归因/参数解码、trace 摘要、backtrace dynsym：**53 条** `node --test` 用例（v81 按文件最小数断言） |
+| 单元测试（host） | v76, v80, v81, v83 | syscall 归因/参数解码、trace 摘要、backtrace dynsym、Java trace 摘要：**60 条** `node --test` 用例（v81 按文件最小数断言） |
 
 ## 2. 待真机验证（代码 + host 验收已完成，手机不在位）
 
@@ -64,6 +64,7 @@
 | trace 摘要 | 对 `libadhdetect.so:adh_add_target` 实跑 `trace_digest` | v80（设备半） |
 | syscall 摘要 | libc `uname` 站点 → 调用方必须是 `adh_libc_uname_probe`、observed 全 160、无 mismatch | v81（设备半） |
 | Java 批量挂钩 | 两个 `ping` 重载各自出事件；类级 `limit=3` 显示 `installed=3 < matched` | v82 |
+| Java 类级 trace | start 挂 HookProbe → java_call stackOuter → digest 给出两个重载各自次数与调用方 → stop 后进程存活 | v83（设备半） |
 | 门禁抖动定性 | gate11 的 v11/v16/v20 单独复跑（评审判定为设备状态级联，非回归） | — |
 | 全量门禁 | 手机接回后跑到全绿，把数字写回本文件与 `PROGRESS.md` | — |
 

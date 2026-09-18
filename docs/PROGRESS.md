@@ -15,6 +15,10 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.45 Java 类级 trace 摘要 `java_trace`（2026-09-18，host 验收 PASS；真机验收待做）**：Java 侧的"类级时间线"——算法还原时最常用的工作流：**挂一个类 → 触发 → 看什么跑了、按什么顺序、参数返回值是什么**。建立在刚做完的 `hookAll`（v4.44）之上。
+      · `daemon/src/java_trace.ts`：三个阶段显式分开（中间通常要由操作者或其它工具触发目标）：`start` = `hook_all` 并**保留**钩子，返回 `hookIds/matched/cursor`；`digest` = 先显式发一次 `capture_drain`（不等后台 1.5s 轮询）再把这些 hookId 的 `JAVA_HOOK` 事件聚合成 **每方法次数/首末时间/线程/最后参数与返回值/错误计数 + 时间线（保留最新窗口）+ 调用方直方图**（`stack:true` 时取 Java 调用链最内层 App 帧）；`stop` = **只卸传入的那几个 id**（绝不用 `unhook 0`，那会把无关钩子一起卸掉）。纯函数 `digestJavaTrace`/`callerOfStack` 有 7 条单测。
+      · 新增 MCP `java_trace`（action: start|digest|stop）+ `POST /api/java/trace`，工具数 68 → 69；`tools/verify_v83_java_trace.sh`（host）= 7 条单测 + 合成 trace 断言 + MCP schema，**PASS**。
+      · **待办**：真机三阶段实跑（start 挂 `HookProbe` → `java_call stackOuter` → digest 给出两个 ping 重载各自次数与调用方 → stop 后进程存活），与 v77/v78/v79/v80-device/v81-device/v82 一起排队。
 - [~] **v4.44 Java 批量挂钩 `hookAll`（2026-09-18，实现 + 构建完成；真机验收待做）**：目标第 1 条里"普通方法重载方法"的最后一截——以前要挂一个类的全部重载，得先 `java_enum` 再逐个装。
       · `agent/src/hook/java_lsplant.cpp`：`collect_target_methods()` 遍历声明 + 继承链收集匹配方法（`method`/`params` 可选、`"*"` 任意；**去重键 = 方法名 + 参数列表**，否则类级扫描会把 `foo(int)` 与 `bar(int)` 去重掉一个）；`adh_javahook_hook_all()` 对每个方法调用**既有单方法安装路径**（构造器规则、16 槽上限、逐方法回滚全部沿用），返回 `hookIds[]` + `matched`（匹配总数，截断可见）。
       · 命令层：`cmd_java_hook` 新增 `hook_all` 分支与 `limit` 参数，响应带 `hookIds`/`matched`；MCP `java_hook action:hookAll`（映射到 `hook_all`）+ HTTP 同名参数；agent 构建 **0 告警**。
