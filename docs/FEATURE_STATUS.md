@@ -67,6 +67,7 @@
 | Java 类级 trace | start 挂 HookProbe → java_call stackOuter → digest 给出两个重载各自次数与调用方 → stop 后进程存活 | v83（设备半） |
 | native 批量挂钩 | 对 libadhdetect.so 用 prefix:adh_ 装一批 → 触发 → unhook 全部 → 进程存活 | v84（设备半） |
 | 门禁抖动定性 | gate11 的 v11/v16/v20 单独复跑（评审判定为设备状态级联，非回归） | — |
+| 采集链路回归 | `service.ts` 的 drain 重构（共享 `drainSession`，java_trace/syscall_digest 不再裸发 `capture_drain`）需要设备复跑采集家族：v04_crypto / v11 / v16 / v20 / v22 / v26 | — |
 | 全量门禁 | 手机接回后跑到全绿，把数字写回本文件与 `PROGRESS.md` | — |
 
 ## 3. 发布结论

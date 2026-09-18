@@ -1,9 +1,87 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { callerOfStack, digestJavaTrace } from '../src/java_trace.ts';
+import { callerOfStack, digestJavaTrace, javaTraceDigest, javaTraceStop } from '../src/java_trace.ts';
 
 const sample = (hookId, target, ts, tid, arg, ret, extra = {}) => ({ hookId, target, ts, tid, arg, ret, error: '', ...extra });
 
+// --- the three-phase assembly (the pure digest alone let the drain bug slip through) ---------
+function fakeDeps({ captures = [], drain = { ok: true }, send = [] } = {}) {
+  return {
+    deps: {
+      sendCmd: async (session, op, args) => { send.push({ session, op, args }); return { ok: true, hookId: 1, hookIds: [1], matched: 1 }; },
+      captures,
+      drainSession: async (session) => { send.push({ session, op: 'drainSession' }); return drain; },
+    },
+    send,
+  };
+}
+const capRow = (id, hookId, tsNs, arg = '') => ({
+  id, sessionId: 's1', func: 'JAVA_HOOK', tid: 7, ts: 1000, tsNs,
+  hex: Buffer.from(JSON.stringify({ hookId, target: 'com.pkg.C#m()', arg, ret: 'r', error: '' }), 'utf8').toString('hex'),
+});
+
+test('digest goes through the shared drainSession and never sends a raw capture_drain', async () => {
+  const { deps, send } = fakeDeps({ captures: [capRow(5, 1, 10)] });
+  const r = await javaTraceDigest('s1', { hookIds: [1] }, deps);
+  assert.ok(send.some((s) => s.op === 'drainSession'), 'drainSession must be used');
+  assert.ok(!send.some((s) => s.op === 'capture_drain'), 'a raw capture_drain would pop records without ingesting them');
+  assert.equal(r.digest.samples, 1);
+  assert.equal(r.drain.ok, true);
+});
+
+test('a failed drain is reported instead of looking like an empty trace', async () => {
+  const { deps } = fakeDeps({ captures: [], drain: { ok: false, error: 'agent wedged' } });
+  const r = await javaTraceDigest('s1', { hookIds: [1] }, deps);
+  assert.equal(r.drain.ok, false);
+  assert.ok(r.digest.notes.some((n) => n.includes('capture drain failed (agent wedged)')));
+});
+
+test('the cursor filters out events from before start', async () => {
+  const { deps } = fakeDeps({ captures: [capRow(3, 1, 10), capRow(9, 1, 20), capRow(11, 1, 30)] });
+  const r = await javaTraceDigest('s1', { hookIds: [1], sinceCaptureId: 9 }, deps);
+  assert.equal(r.digest.samples, 1);
+  assert.equal(r.digest.timeline[0].ts, 1000);
+});
+
+test('events are ordered by the agent timestamp, not by the shared drain timestamp', async () => {
+  // Same drain ts (1000) for both rows: only tsNs can say which ran first.
+  const { deps } = fakeDeps({ captures: [capRow(1, 7, 500, 'second'), capRow(2, 3, 100, 'first')] });
+  const r = await javaTraceDigest('s1', { hookIds: [3, 7] }, deps);
+  assert.deepEqual(r.digest.timeline.map((t) => t.arg), ['first', 'second']);
+});
+
+test('stop refuses hookId 0, which would unhook every Java hook', async () => {
+  const { deps, send } = fakeDeps({});
+  await assert.rejects(() => javaTraceStop('s1', { hookIds: [0] }, deps), /id 0 means every hook/);
+  await assert.rejects(() => javaTraceStop('s1', { hookIds: [-3] }, deps), /refusing to unhook/);
+  assert.equal(send.length, 0, 'nothing may be sent to the agent');
+});
+
+test('stop dedupes ids and reports per-id failures without aborting the rest', async () => {
+  const sent = [];
+  const deps = {
+    captures: [],
+    drainSession: async () => ({ ok: true }),
+    sendCmd: async (session, op, args) => { sent.push(args.hookId); return args.hookId === 2 ? { ok: false, error: 'gone' } : { ok: true }; },
+  };
+  const r = await javaTraceStop('s1', { hookIds: [1, 1, 2] }, deps);
+  assert.deepEqual(sent, [1, 2]);
+  assert.deepEqual(r.unhooked, [1]);
+  assert.equal(r.failures.length, 1);
+  assert.equal(r.ok, false);
+});
+
+test('callerOfStack ignores the bridge failure marker and normalises hidden classes', () => {
+  assert.equal(callerOfStack('<stack capture failed: boom>'), null);
+  assert.equal(callerOfStack('com.pkg.C$$Lambda$1/0x1234#run:7 <- com.pkg.C#m:1'), 'com.pkg.C$$Lambda$1#run');
+});
+
+test('a trace without stack data says so instead of showing an empty caller list', () => {
+  const d = digestJavaTrace([sample(1, 'com.pkg.C#m()', 1, 1, '', '')]);
+  assert.equal(d.callers.length, 0);
+  assert.equal(d.complete, false);
+  assert.ok(d.notes.some((n) => n.includes('start the trace with stack:true')));
+});
 test('callerOfStack takes the innermost frame and drops the line number', () => {
   assert.equal(callerOfStack('com.adh.sandbox.HookProbe#stackMiddle:33 <- com.adh.sandbox.HookProbe#stackOuter:36'),
     'com.adh.sandbox.HookProbe#stackMiddle');

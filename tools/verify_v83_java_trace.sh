@@ -21,7 +21,7 @@ const text = `${t.stdout ?? ''}${t.stderr ?? ''}`;
 const passed = Number(/pass (\d+)/.exec(text)?.[1] ?? -1);
 const failed = Number(/fail (\d+)/.exec(text)?.[1] ?? -1);
 if (t.status !== 0) problems.push(`java_trace unit tests exited ${t.status}`);
-if (passed < 7) problems.push(`expected >=7 java_trace unit tests, saw ${passed}`);
+if (passed < 15) problems.push(`expected >=15 java_trace unit tests (digest + three-phase assembly + drain/cursor/stop guards), saw ${passed}`);
 if (failed !== 0) problems.push(`java_trace unit tests report ${failed} failures`);
 notes.push(`java_trace unit tests: pass=${passed} fail=${failed}`);
 

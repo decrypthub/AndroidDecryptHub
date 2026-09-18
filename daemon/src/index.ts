@@ -5,7 +5,7 @@ import net from 'node:net';
 import { AGENT_PORT, AUTOMATION_HOST, AUTOMATION_PORT, HTTP_PORT, webUrls } from './config.ts';
 import { automation } from './automation.ts';
 import { handleHttp } from './http/router.ts';
-import { startCaptureLoop } from './service.ts';
+import { startCaptureLoop, forgetCaptureSession } from './service.ts';
 import {
   agentSockets, broadcast, captureTimers, frameJson, FRAME_JSON, FRAME_MAX,
   log, nextId, pending, pruneSessions, sessions, wss,
@@ -89,7 +89,7 @@ const agentServer = net.createServer((sock) => {
       session.lastSeen = Date.now();
       agentSockets.delete(session.sessionId);
       const t = captureTimers.get(session.sessionId);
-      if (t) { clearInterval(t); captureTimers.delete(session.sessionId); }
+      if (t) { clearInterval(t); captureTimers.delete(session.sessionId); forgetCaptureSession(session.sessionId); }
       log(`agent CLOSE ${session.package} ${session.sessionId}`);
       broadcast('agent.close', { sessionId: session.sessionId });
       pruneSessions();

@@ -6,7 +6,7 @@
 // (syscall number, caller symbol) and keeps the runtime x8 next to the statically attributed number,
 // so a wrong attribution shows up as a mismatch instead of silently mislabelling the hook.
 import { captures } from './state.ts';
-import { sendCmd } from './service.ts';
+import { sendCmd, drainSession } from './service.ts';
 import { loadModuleTable, symbolizeAddresses, parseHex, hex, type SymbolizedAddress } from './module_symbols.ts';
 import { argPlan, decodeArgs, pathOf, summarizeArgs, type DecodedArg } from './syscall_args.ts';
 
@@ -190,6 +190,9 @@ export async function syscallDigest(session: string, opts: {
   decode?: boolean;
   decodeLimit?: number;
 } = {}): Promise<SyscallDigestResult> {
+  // Same rule as java_trace: only the shared drainSession may take records out of the agent ring
+  // (a raw capture_drain would pop them without ingesting them anywhere).
+  const drain = await drainSession(session).catch(() => ({ ok: false, error: 'drainSession threw' }));
   const limit = Math.max(1, Math.min(5000, Math.trunc(Number(opts.limit ?? 1000))));
   const sinceMs = Number.isFinite(Number(opts.sinceMs)) ? Number(opts.sinceMs) : null;
   const wanted = new Set((opts.hookIds ?? []).map((v) => Number(v)).filter((v) => Number.isFinite(v)));
@@ -296,6 +299,7 @@ export async function syscallDigest(session: string, opts: {
 
   const result = digestSyscallSamples(samples, { expected, maxGroups: opts.maxGroups });
   result.notes.push(...decodeNotes);
+  if (!drain.ok) result.notes.push(`capture drain failed (${drain.error ?? 'unknown'}): the digest reads whatever the store already holds`);
   if (symbolSource === 'unavailable') result.notes.push('symbolization unavailable: caller frames are shown as module+offset only');
   if (symbolSource === 'none') result.notes.push('no caller chain in the events: install the watch through syscall_watch (it sets backtrace:true)');
   return { ...result, window: { sinceMs, limit }, symbolSource };

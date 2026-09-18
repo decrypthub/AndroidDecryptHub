@@ -256,6 +256,29 @@ export async function applyCaptureEnabled() {
 // into the store + over WS. Also auto-dump the app's DEX files so the panel can download
 // them. Mirrors the ios-decrypt-helper flow (hooks stay live, events fill the panel).
 let capSeq = 0;   // service-local — ++'d here; can't reassign an imported binding (ESM)
+
+// The agent's capture_drain is POP semantics: whatever the response holds leaves the agent ring for
+// good. Only the code that puts it into the local store may therefore send it - a bare
+// `sendCmd(sid, 'capture_drain')` throws those records away (and with them any other capture in the
+// same batch). Every drainer registers itself here, and readers (java_trace, syscall_digest, ...) go
+// through drainSession().
+const captureDrainers = new Map<string, () => Promise<any>>();
+
+/**
+ * Drain the agent capture ring into the local store for this session.
+ * Returns the last frame's response, or null when the session has no capture loop yet (in that case
+ * the caller must NOT send capture_drain itself - the records would be lost).
+ */
+export interface DrainOutcome { ok: boolean; response?: any; error?: string }
+export async function drainSession(sid: string): Promise<DrainOutcome> {
+  const run = captureDrainers.get(sid);
+  if (!run) return { ok: false, error: 'no capture loop registered for this session' };
+  try { return { ok: true, response: await run() }; }
+  catch (e) { return { ok: false, error: (e as Error).message }; }
+}
+
+export function forgetCaptureSession(sid: string) { captureDrainers.delete(sid); }
+
 export function startCaptureLoop(sid: string) {
   setTimeout(async () => {
     if (settings.capture.enabled) {
@@ -293,9 +316,13 @@ export function startCaptureLoop(sid: string) {
           broadcast('capture.new', { id: entry.id, sessionId: sid, source: 'native', category, algo, op, preview: entry.preview, inl: entry.inl, ts: entry.ts });
       }
     };
-    const timer = setInterval(async () => {
-      if (busy || capturePaused.has(sid) || !sessions.get(sid)?.online) return;
+    // One drain implementation for both the polling loop and explicit callers: concurrent requests
+    // coalesce on the same promise so two drains can never interleave their processDrain calls.
+    let inFlight: Promise<any> | null = null;
+    const runDrain = async (): Promise<any> => {
+      if (inFlight) return inFlight;
       busy = true;
+      inFlight = (async () => {
       try {
         // Drain repeatedly while the agent ring has a backlog, so a burst is pulled out
         // fast (WS-C: keeps drops near zero when the pipeline can keep up). Bounded so one
@@ -320,7 +347,15 @@ export function startCaptureLoop(sid: string) {
         }
       } catch (e) {
         if (!drainErrLogged) { drainErrLogged = true; log(`[capture] drain ${sid} 失败 (静默重试直至恢复):`, (e as Error).message); }
+        throw e;
       } finally { busy = false; }
+      })();
+      try { return await inFlight; } finally { inFlight = null; }
+    };
+    captureDrainers.set(sid, runDrain);
+    const timer = setInterval(async () => {
+      if (busy || capturePaused.has(sid) || !sessions.get(sid)?.online) return;
+      await runDrain().catch(() => null);   // the loop never propagates: it retries next tick
     }, 1500);
     captureTimers.set(sid, timer);
   }, 1200);
