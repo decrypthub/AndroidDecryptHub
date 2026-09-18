@@ -2,6 +2,7 @@
 // methods and fields. This is reflection-only; heavy analysis and indexing stay on the Host.
 #include "java_enum.h"
 #include "jni.h"
+#include "jni_env_hooks.h"
 
 #include <android/log.h>
 #include <cstdarg>
@@ -34,16 +35,16 @@ struct LocalFrameGuard {
     }
     ~LocalFrameGuard() {
         if (active) {
-            if (env->ExceptionCheck()) env->ExceptionClear();
+            if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
             env->PopLocalFrame(nullptr);
         }
     }
 };
 
 static std::string pending_exception_text(JNIEnv *env) {
-    if (!env || !env->ExceptionCheck()) return "";
+    if (!env || !adh_jni_exception_check(env)) return "";
     jthrowable throwable = env->ExceptionOccurred();
-    env->ExceptionClear();
+    adh_jni_exception_clear(env);
     if (!throwable) return "unknown Java exception";
     jclass throwable_class = env->FindClass("java/lang/Throwable");
     jmethodID to_string = throwable_class ? env->GetMethodID(throwable_class, "toString", "()Ljava/lang/String;") : nullptr;
@@ -83,8 +84,8 @@ static std::string jstring_to_utf(JNIEnv *env, jstring value) {
     const char *chars = env->GetStringUTFChars(value, nullptr);
     std::string out = chars ? chars : "";
     if (chars) env->ReleaseStringUTFChars(value, chars);
-    if (env->ExceptionCheck()) {
-        env->ExceptionClear();
+    if (adh_jni_exception_check(env)) {
+        adh_jni_exception_clear(env);
         return "";
     }
     return out;
@@ -152,7 +153,7 @@ extern "C" int adh_java_enum_json(JNIEnv *env, const char *class_name, char **ou
     jstring requested = env->NewStringUTF(dot_name.c_str());
     jclass target = load_class ? (jclass)env->CallObjectMethod(loader, load_class, requested) : nullptr;
     if (!target) {
-        if (env->ExceptionCheck()) env->ExceptionClear();
+        if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
         set_error(error, error_size, "target class not found: %s", dot_name.c_str());
         return 0;
     }
@@ -465,7 +466,7 @@ static jclass load_class_by_name(JNIEnv *env, const std::string &class_name, std
     jclass target = load_class ? (jclass)env->CallObjectMethod(loader, load_class, name) : nullptr;
     if (!target) {
         error = "target class not found: " + dot_name;
-        if (env->ExceptionCheck()) env->ExceptionClear();
+        if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
         return nullptr;
     }
     return target;
@@ -487,7 +488,7 @@ static jobject find_call_method(JNIEnv *env, jclass target_class, const std::str
     jobjectArray methods = (jobjectArray)env->CallObjectMethod(target_class, get_declared_methods);
     if (!methods) {
         error = "Class.getDeclaredMethods failed";
-        if (env->ExceptionCheck()) env->ExceptionClear();
+        if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
         return nullptr;
     }
     jobject found = nullptr;
@@ -517,7 +518,7 @@ static jobject find_call_method(JNIEnv *env, jclass target_class, const std::str
         if (parameter_types) env->DeleteLocalRef(parameter_types);
         if (params_ok) {
             if (set_accessible) env->CallVoidMethod(method, set_accessible, JNI_TRUE);
-            if (env->ExceptionCheck()) env->ExceptionClear();
+            if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
             if (!found) found = env->NewLocalRef(method);
             matches++;
         }
@@ -652,7 +653,7 @@ extern "C" int adh_java_call_json(JNIEnv *env, const char *class_name, const cha
                                                "(Ljava/lang/String;)Ljava/lang/reflect/Field;");
         jstring field_j = env->NewStringUTF(field_name);
         jobject field = get_field ? env->CallObjectMethod(target_class, get_field, field_j) : nullptr;
-        if (env->ExceptionCheck()) {
+        if (adh_jni_exception_check(env)) {
             std::string reason = pending_exception_text(env);
             env->DeleteLocalRef(method);
             env->DeleteLocalRef(target_class);
@@ -663,14 +664,14 @@ extern "C" int adh_java_call_json(JNIEnv *env, const char *class_name, const cha
             jmethodID set_accessible = env->GetMethodID(field_class, "setAccessible", "(Z)V");
             jmethodID get_value = env->GetMethodID(field_class, "get", "(Ljava/lang/Object;)Ljava/lang/Object;");
             env->CallVoidMethod(field, set_accessible, JNI_TRUE);
-            if (env->ExceptionCheck()) {
+            if (adh_jni_exception_check(env)) {
                 std::string reason = pending_exception_text(env);
                 env->DeleteLocalRef(method);
                 env->DeleteLocalRef(target_class);
                 return (set_error(error, error_size, "receiver field access failed: %s", reason.c_str()), 0);
             }
             receiver = env->CallObjectMethod(field, get_value, nullptr);
-            if (env->ExceptionCheck()) {
+            if (adh_jni_exception_check(env)) {
                 std::string reason = pending_exception_text(env);
                 env->DeleteLocalRef(method);
                 env->DeleteLocalRef(target_class);
@@ -717,9 +718,9 @@ extern "C" int adh_java_call_json(JNIEnv *env, const char *class_name, const cha
     jmethodID invoke = env->GetMethodID(method_class, "invoke",
                                         "(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;");
     jobject result = env->CallObjectMethod(method, invoke, receiver, invoke_args);
-    if (env->ExceptionCheck()) {
+    if (adh_jni_exception_check(env)) {
         jthrowable throwable = env->ExceptionOccurred();
-        env->ExceptionClear();
+        adh_jni_exception_clear(env);
         std::string exception_text = "invocation threw an exception";
         if (throwable) {
             jclass throwable_class = env->FindClass("java/lang/Throwable");

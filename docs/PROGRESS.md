@@ -15,6 +15,12 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.86 第四轮评审收口：C++ 侧归因缺口（P1）+ 4 条 P2（2026-09-19，host 验收 PASS；真机待做）**：评审独立复算了 v4.75 的错位（确认是真 bug，且受影响的是 **5 个**槽位）并把上一轮的说法逐条对账。
+      · **P1（真缺口，已修）**：`adh_jni_exception_check()` 只覆盖了 8 个 C 模块的 52 处，**两个 C++ 模块没切**——`java_lsplant.cpp` 17 处、`java_enum.cpp` 11 处仍是 `env->ExceptionCheck()`，而且它们连头文件都没 include；`g_env_hook_in_ours` 又是 `jni_env_hooks.c` 的 file-static，C++ 侧根本设不了。修：两个文件 include `jni_env_hooks.h`、28 处全改走 helper；并补 `adh_jni_exception_clear()`（`ExceptionClear` 同样是可挂槽位），把 C++ 侧 **16 + 8 处**也切过去——"ADH 自己的异常检查不进事件流"这句话现在才真的成立。
+      · **P2-4（越界读）**：`GetStringChars`/`GetStringCritical` 的预览原先假设"字符串自带 NUL 终止"，而 JNI 规范并不保证（critical 缓冲区尤甚）。现在**先取 `GetStringLength`**（在 critical 区之外、用守卫包住）**再按真实长度截断**；查询自身若抛异常只清掉我们那一份（用新的 `adh_jni_exception_clear`），不改目标语义。
+      · **P2-5（最后一类静默错位）**：99 个固定槽的 dispatch case 从手写改为**列表驱动**（`ADH_FIXED_SLOT_LIST(ADH_FIXED_SLOT_CASE/WRAPPER_CASE)`）——"case 选中的槽位与它返回的 wrapper 配错、且两者签名相同"这种连签名断言/布局自检/offset 检查都看不见的错，从此由构造消除；v90 的 wiring 门禁改为校验**宏体必须把名字配到自己的字段/wrapper**（负对照：把家族 V 形态的 case 指向 base 字段 → `FAIL ADH_CALL_SLOT_CASES must selects &table->nameV`）。
+      · **P2-1/2/3（口径更正）**：家族数是 **31**（19 value + 2 void + 9 NV value + 1 NV void）→ 签名断言 **93 条**（此前文档写 28/84，已全部改）；"布局自检拒绝 install/uninstall/status"应写作**拒绝 install/uninstall**，status 反而会带 `layout: ok|mismatch` + `layoutError`（已按此实现）；v4.75 错位的受影响槽位补上 `AllocObject` → **5 个**。
+      · 验收：agent 零告警重建；v90 PASS（228/229，wiring 行现在是 `99 fixed slots dispatched from the list, 36 field accessors and 31 families kept paired, 0 silent wrappers`）；host 全量门禁 **31 PASS / 0 FAIL / 84 SKIP**（115 脚本）。
 - [~] **v4.85 归因卫生：ADH 自己的 JNI 工作不再被记成目标行为（2026-09-19，host 验收 PASS；真机待做）**：v4.79 只把 `ExceptionCheck` 一处改成直调；这一版把**类名解析与会话类装载**这两条"由 ADH 发起、却要经过 JNIEnv 表"的路径也收进守卫。
       · 新增 `adh_jni_ours_enter()/adh_jni_ours_leave()`（保存/恢复上一状态，可嵌套）：`jni.c` 的三个 helper 内部自行进出守卫——`adh_jni_app_class_loader`（FindClass/GetStaticMethodID/CallStaticObjectMethod/GetMethodID/CallObjectMethod）、`adh_jni_class_name`（GetObjectClass/GetMethodID/CallObjectMethod/GetStringUTFChars…）、`adh_jni_load_app_class`（FindClass/…/NewStringUTF）。
         这样无论调用者是谁（wrapper 内部、RegisterNatives 钩子回调、还是 `java_call`/`object_inspect`/`java_trace` 这些命令路径——`capture.c` 里 7 处、`inspection.c`/`actions.c`/`trace/commands.c` 还有 5 处），这些查找都不会再被记成目标事件（此前一旦挂了 `FindClass`/`GetMethodID`/`CallObjectMethod` 等槽位，仪表自己的查找就会污染事件流）。
@@ -28,12 +34,12 @@
 - [~] **v4.83 v4.75–v4.79 的设备证据路径（夹具 + v91 `(3j)`）（2026-09-19，host 构建通过；真机待做）**：这几批槽位此前只有 host 侧证明，按老规矩补上"真机一次跑完"的路径。
       · 沙盒 native 夹具 `Detection.jniFamilyProbe`：八种 `New<Type>Array` + `GetArrayLength`、`NewObjectArray` + 对象数组元素读写（含 **NULL 元素合法** 那一条）、`AllocObject`、**三种形态的 `CallNonvirtualObjectMethod`**（配套新增 `JniNonvirtualBase/Child`：非虚调用必须返回父类实现 `base:t`，返回 `child:t` 就说明 hook 破坏了派发）、反射桥（`FromReflected*` 拿到的 id 必须**等于** `GetMethodID`/`GetFieldID` 的结果；`ToReflected*` 回来的对象名字必须是 `combine`/`counter`）、字符串族（`NewString`/`GetStringLength`/`GetStringUTFLength`/critical 对/`ReleaseStringUTFChars`）、`ExceptionCheck`（无挂起异常时必须报 false）。全过返回 `0xAD91FF`。
       · `tools/verify_v91_jni_env_fields.sh` 新增 `(3j)`：安装这 29 个槽位（27 个由夹具触发；`FatalError`/`UnregisterNatives` 只验证装卸——不能拿活进程触发）→ 被触发者必须各自有事件、关键字段逐条匹配（`len=4`、`index=0 -> 0x0 (null element)`、`class=com.adh.sandbox.JniCallTarget -> 0x`、`via=com.adh.sandbox.JniNonvirtualBase`、`static=0 -> 0x`、`text="ADH42"`、`pending=false` …）→ 逐个卸载；`pass` 纳入 `familyProbeOk`。
-      · 诚实边界：`CallNonvirtual` 只触发 Object 形态（另外 27 个返回类型槽位共用同一套宏生成 + 84 条签名断言，但真机只证了 Object 这三个入口）；`FatalError`/`UnregisterNatives` 只证可装卸。
+      · 诚实边界：`CallNonvirtual` 只触发 Object 形态（另外 27 个返回类型槽位共用同一套宏生成 + 93 条签名断言，但真机只证了 Object 这三个入口）；`FatalError`/`UnregisterNatives` 只证可装卸。
       · 验收：`build_detect.sh` 与 `:app:assembleDebug` 零告警 / 通过；v91 `bash -n` + 内嵌 JS `node --check`；host 全量门禁 **31 PASS / 0 FAIL / 84 SKIP**（115 脚本）。
 - [~] **v4.82 单一来源 + 运行期布局自检：不再"挂到隔壁函数"（2026-09-19，host 验收 PASS；真机待做）**：v4.81 的组基址断言只钉住"组"，钉不住"组内顺序"。这一版把固定槽位改成**一份列表驱动三处**（枚举值 / 可安装名字表 / 名字映射），并加运行期自检——把"枚举与表错位"从"静默挂错函数"变成"拒绝执行 + 明确报错"。
       · 固定槽位改为 `ADH_FIXED_SLOT_LIST` 单一来源（此前枚举与名字表是两份手写清单，v90 只查"名字↔spec index"、查不出顺序）：枚举值、名字表顺序、`env_slot_name()` 的期望名全由它展开。
-      · **这同时修掉一个 v4.75 引入的真 bug**：那 13 个新槽位在枚举与名字表里的插入位置不同（`AllocObject` 在枚举里紧跟 `ReleaseDoubleArrayElements`，在表里却排在 `SetObjectArrayElement` 之后），于是 `GetArrayLength`/`NewObjectArray`/`GetObjectArrayElement`/`SetObjectArrayElement` 这四个槽位安装时会命中"隔壁"的 case——正是字段族那种静默错位（评审 P2-1 预测的同一类问题），只是这次由单一来源从根上消除。
-      · 运行期自检 `env_hook_layout_ok()`：对全部 228 个位置比较"枚举给出的名字"与"表里的名字"，任何不一致 → **拒绝 install/uninstall/status**，并报"第 N 位：枚举说是 X、表里是 Y——拒绝 patch 任何东西"（结果缓存，不重复扫描）。
+      · **这同时修掉一个 v4.75 引入的真 bug**：那 13 个新槽位在枚举与名字表里的插入位置不同（`AllocObject` 在枚举里紧跟 `ReleaseDoubleArrayElements`，在表里却排在 `SetObjectArrayElement` 之后），于是 `GetArrayLength`/`NewObjectArray`/`GetObjectArrayElement`/`SetObjectArrayElement`/`AllocObject` **这五个**槽位安装时会命中"隔壁"的 case——正是字段族那种静默错位（评审 P2-1 预测的同一类问题），只是这次由单一来源从根上消除。
+      · 运行期自检 `env_hook_layout_ok()`：对全部 228 个位置比较"枚举给出的名字"与"表里的名字"，任何不一致 → **拒绝 install/uninstall**（status 仍放行，并在回复里带 `layout`/`layoutError`——出问题时正是要看它），并报"第 N 位：枚举说是 X、表里是 Y——拒绝 patch 任何东西"（结果缓存，不重复扫描）。
         诚实说明它的价值分布：对已经单一来源的两块（固定槽位、字段访问器）这条自检接近同义反复、只是兜底；对仍是"手写 `= prev + 3` 链 + 家族 X-macro 列表"两套的 Call*/CallNonvirtual 家族（31 个），它才是真正的门禁——那一层目前还靠这条自检 + v4.81 的组基址断言守着。
       · v90 改成解析新列表，并断言固定槽位恰好 99 条（少一条/多一条都要显式改门禁）。
       · 验收：agent 零告警重建（1018 KB）；v90 PASS（228/229）；host 全量门禁 **31 PASS / 0 FAIL / 84 SKIP**（115 脚本）。
@@ -42,7 +48,7 @@
       · 归因更正："两条总数断言抓出它"不成立（定长数组下恒真 / 错位下同样成立）。真正报错的是中间态的 `-Warray-bounds`（表 215 项 vs `ENV_HOOK_MAX` 216，`g_env_hooks[215]` 越界）。
       · 新增 **组基址断言**：`ENV_SLOT_CallObjectMethod == ENV_FIXED_SLOTS`、`ENV_SLOT_CallNonvirtualObjectMethod == ENV_SLOT_CallStaticVoidMethod + 3`、`ENV_SLOT_GetObjectField == ENV_SLOT_CallNonvirtualVoidMethod + 3`、`ENV_SLOT_SetStaticDoubleField == ENV_SLOT_GetObjectField + 35`——整体平移会在这里编译失败。
       · 结构收口：最后一个家族的 V/A 由"算术别名"改为**真枚举**（别名可删），字段块自然从 `base + 3` 开始。
-      · 补齐 **Call*/CallNonvirtual 家族的签名证明**：28 个家族 × 3 形态 = **84 条 `_Static_assert`**（此前这两个家族一条都没有——wrapper 是强转成 `void*` 装进表的，签名错了只会在目标调用时炸）。
+      · 补齐 **Call*/CallNonvirtual 家族的签名证明**：31 个家族 × 3 形态 = **93 条 `_Static_assert`**（此前这两个家族一条都没有——wrapper 是强转成 `void*` 装进表的，签名错了只会在目标调用时炸）。
       · 验收：agent 零告警重建（1015 KB）；v90 PASS（228/229）；host 全量门禁 **31 PASS / 0 FAIL / 84 SKIP**（115 脚本）。
 - [~] **v4.80 JNIEnv status 可过滤 + 自报完整性（2026-09-19，host 验收 PASS；真机待做）**：228 个槽位的整表 status 已经超过早期一次回复能带的量——**旧实现会在 32 KB 处静默截断**，只回一部分 hooks 且不作说明，验证者会把"缺条目"读成"未安装"。
       · `action:status` 现在可以用 `function` 当过滤器（与安装同语法：精确名 / `Call*` 前缀 / `*Field` 后缀 / `*Field*` 包含 / `all`·`*` 全部），另加关键字 **`installed`**（只看当前挂着的槽位）；解析与匹配**与安装路径共用一份**（`env_filter_parse`/`env_filter_match`），不再有两套模式语言。

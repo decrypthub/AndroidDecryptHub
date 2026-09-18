@@ -11,6 +11,7 @@ extern "C" {
 // the agent is attached to the same VM as the target, so its own JNI traffic must not be recorded
 // as target behaviour. Use this everywhere inside ADH instead of (*env)->ExceptionCheck(env).
 jboolean adh_jni_exception_check(JNIEnv *env);
+void adh_jni_exception_clear(JNIEnv *env);
 
 // Mark the current thread as running ADH's own JNI work (see jni_env_hooks.c). enter returns
 // the previous state, leave restores it - always pair them, even on early returns.

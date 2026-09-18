@@ -13,6 +13,7 @@
 #include "lsplant.hpp"
 #include "native_inline.h"
 #include "../runtime/jni.h"
+#include "../runtime/jni_env_hooks.h"
 #include "../capture/capture.h"
 
 #include <android/api-level.h>
@@ -43,9 +44,9 @@ static void set_error(char *error, size_t error_size, const char *format, ...) {
 }
 
 static bool jni_failed(JNIEnv *env, const char *stage, std::string &error) {
-    if (!env || !env->ExceptionCheck()) return false;
+    if (!env || !adh_jni_exception_check(env)) return false;
     env->ExceptionDescribe();
-    env->ExceptionClear();
+    adh_jni_exception_clear(env);
     error = stage;
     return true;
 }
@@ -142,8 +143,8 @@ static std::string get_string_field(JNIEnv *env, jobject object, jfieldID field)
     std::string out = chars ? chars : "";
     if (chars) env->ReleaseStringUTFChars(value, chars);
     env->DeleteLocalRef(value);
-    if (env->ExceptionCheck()) {
-        env->ExceptionClear();
+    if (adh_jni_exception_check(env)) {
+        adh_jni_exception_clear(env);
         return "";
     }
     return out;
@@ -353,8 +354,8 @@ static std::string jstring_to_utf(JNIEnv *env, jstring value) {
     const char *chars = env->GetStringUTFChars(value, nullptr);
     std::string out = chars ? chars : "";
     if (chars) env->ReleaseStringUTFChars(value, chars);
-    if (env->ExceptionCheck()) {
-        env->ExceptionClear();
+    if (adh_jni_exception_check(env)) {
+        adh_jni_exception_clear(env);
         return "";
     }
     return out;
@@ -384,9 +385,9 @@ static void JNICALL adh_java_hook_native_report(JNIEnv *env, jclass, jint hook_i
 }
 
 static std::string pending_exception_text(JNIEnv *env) {
-    if (!env || !env->ExceptionCheck()) return "";
+    if (!env || !adh_jni_exception_check(env)) return "";
     jthrowable throwable = env->ExceptionOccurred();
-    env->ExceptionClear();
+    adh_jni_exception_clear(env);
     if (!throwable) return "unknown Java exception";
     jclass throwable_class = env->FindClass("java/lang/Throwable");
     jmethodID to_string = throwable_class ? env->GetMethodID(throwable_class, "toString", "()Ljava/lang/String;") : nullptr;
@@ -464,7 +465,7 @@ static jclass load_bridge_class(JNIEnv *env, std::string &error) {
     jobject bridge_loader = env->NewObject(
         dex_loader_class, dex_loader_ctor,
         bridge_dex_path_j, code_cache_dir_path_j, nullptr, app_loader);
-    if (env->ExceptionCheck()) {
+    if (adh_jni_exception_check(env)) {
         error = "failed to create bridge DexClassLoader: " + pending_exception_text(env);
         return nullptr;
     }
@@ -499,7 +500,7 @@ static jclass load_bridge_class(JNIEnv *env, std::string &error) {
             jstring bridge_name = env->NewStringUTF("com.adh.agent.AdhJavaHookBridge");
             jobject found = load_class ? env->CallObjectMethod(actual_loader, load_class, bridge_name) : nullptr;
             LLOGI("bridge self-resolve=%s", found ? "ok" : "FAIL");
-            if (env->ExceptionCheck()) env->ExceptionClear();
+            if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
             if (found) env->DeleteLocalRef(found);
             env->DeleteLocalRef(bridge_name);
         }
@@ -512,7 +513,7 @@ static jclass load_bridge_class(JNIEnv *env, std::string &error) {
     };
     if (env->RegisterNatives(bridge_class, &report, 1) != JNI_OK) {
         error = "failed to register AdhJavaHookBridge.nativeReport";
-        if (env->ExceptionCheck()) env->ExceptionClear();
+        if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
         return nullptr;
     }
 
@@ -553,7 +554,7 @@ static jobject create_bridge_object(JNIEnv *env, int hook_id, std::string &error
     jobject local = ctor ? env->NewObject(bridge_class, ctor) : nullptr;
     if (!local) {
         error = "failed to create AdhJavaHookBridge instance";
-        if (env->ExceptionCheck()) env->ExceptionClear();
+        if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
         return nullptr;
     }
     env->SetIntField(local, g_bridge_hook_id, hook_id);
@@ -582,7 +583,7 @@ static jclass load_app_class(JNIEnv *env, const std::string &class_name, std::st
     jclass target_class = load_class ? (jclass)env->CallObjectMethod(loader, load_class, name) : nullptr;
     if (!target_class) {
         error = "target class not found: " + dot_name;
-        if (env->ExceptionCheck()) env->ExceptionClear();
+        if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
         return nullptr;
     }
     return target_class;
@@ -611,7 +612,7 @@ static jobject scan_declared_members(JNIEnv *env, jclass cls, jmethodID collect,
                                      jmethodID class_get_name, jmethodID set_accessible,
                                      const std::vector<std::string> &wanted, int *matches) {
     jobjectArray members = (jobjectArray)env->CallObjectMethod(cls, collect);
-    if (!members) { if (env->ExceptionCheck()) env->ExceptionClear(); return nullptr; }
+    if (!members) { if (adh_jni_exception_check(env)) adh_jni_exception_clear(env); return nullptr; }
     jobject found = nullptr;
     jsize count = env->GetArrayLength(members);
     for (jsize i = 0; i < count; i++) {
@@ -641,7 +642,7 @@ static jobject scan_declared_members(JNIEnv *env, jclass cls, jmethodID collect,
         if (parameter_types) env->DeleteLocalRef(parameter_types);
         if (params_ok) {
             if (set_accessible) env->CallVoidMethod(member, set_accessible, JNI_TRUE);
-            if (env->ExceptionCheck()) env->ExceptionClear();
+            if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
             if (!found) found = (jobject)env->NewLocalRef(member);
             (*matches)++;
         }
@@ -674,7 +675,7 @@ static jobject find_target_method(JNIEnv *env, jclass target_class, const std::s
     if (!get_declared_methods || !get_declared_ctors || !get_super || !get_name ||
         !method_get_params || !method_get_name || !ctor_get_params) {
         error = "reflection methods unavailable";
-        if (env->ExceptionCheck()) env->ExceptionClear();
+        if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
         return nullptr;
     }
 
@@ -698,7 +699,7 @@ static jobject find_target_method(JNIEnv *env, jclass target_class, const std::s
                 break;
             }
             jclass parent = (jclass)env->CallObjectMethod(cursor, get_super);
-            if (env->ExceptionCheck()) env->ExceptionClear();
+            if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
             env->DeleteLocalRef(cursor);
             cursor = parent;
         }
@@ -745,7 +746,7 @@ static int collect_target_methods(JNIEnv *env, jclass target_class, const std::s
     jmethodID member_set_accessible = member_class ? env->GetMethodID(member_class, "setAccessible", "(Z)V") : nullptr;
     if (!get_declared_methods || !get_declared_ctors || !get_super || !get_name || !member_get_params || !member_set_accessible) {
         error = "reflection methods unavailable";
-        if (env->ExceptionCheck()) env->ExceptionClear();
+        if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
         return 0;
     }
 
@@ -790,12 +791,12 @@ static int collect_target_methods(JNIEnv *env, jclass target_class, const std::s
                     for (const std::string &s : seen) if (s == dedupe_key) { duplicate = true; break; }
                     if (!duplicate) {
                         env->CallVoidMethod(member, member_set_accessible, JNI_TRUE);
-                        if (env->ExceptionCheck()) {
+                        if (adh_jni_exception_check(env)) {
                             // Not fatal (the install path may still succeed for public members), but it
                             // must be visible: silently clearing it turned a permission problem into a
                             // mysterious install failure later.
                             LLOGI("WARN hook_all: setAccessible failed for %s (member kept; install may fail)", dedupe_key.c_str());
-                            env->ExceptionClear();
+                            adh_jni_exception_clear(env);
                         }
                         seen.push_back(dedupe_key);
                         out.push_back((jobject)env->NewLocalRef(member));
@@ -804,11 +805,11 @@ static int collect_target_methods(JNIEnv *env, jclass target_class, const std::s
                 env->DeleteLocalRef(member);
             }
             env->DeleteLocalRef(members);
-        } else if (env->ExceptionCheck()) {
-            env->ExceptionClear();
+        } else if (adh_jni_exception_check(env)) {
+            adh_jni_exception_clear(env);
         }
         jclass parent = (jclass)env->CallObjectMethod(cursor, get_super);
-        if (env->ExceptionCheck()) env->ExceptionClear();
+        if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
         env->DeleteLocalRef(cursor);
         cursor = parent;
     }

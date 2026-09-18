@@ -104,30 +104,13 @@ for (const f of families) {
 }
 notes.push(`checked ${claimed.size} indices against the ABI`);
 
-// ---- 5. installability and event wiring: a slot must be reachable by BOTH switch helpers, and every
-// wrapper must be able to emit. A name that resolves and then hits no case is refused at runtime
-// (fail-loud, but only once a device is attached); a wrapper that never emits looks installed and
-// silently collects nothing. Both are cheap to catch here, so they are gated here.
-const switchCases = (pattern) => new Set([...src.matchAll(pattern)].map((m) => m[1]));
-const slotCaseNames = switchCases(/case ENV_SLOT_([A-Za-z0-9_]+):\s*return \(void \*\*\)/g);
-const wrapperCaseNames = switchCases(/case ENV_SLOT_([A-Za-z0-9_]+):\s*return \(void \*\)&/g);
-const unwired = [];
-for (const name of fixed) {
-  if (!slotCaseNames.has(name)) unwired.push(`${name} (env_hook_slot)`);
-  if (!wrapperCaseNames.has(name)) unwired.push(`${name} (env_hook_wrapper)`);
-}
-if (unwired.length) problems.push(`fixed slots with no dispatch case: ${unwired.join(', ')}`);
-for (const [macro, list] of [['ADH_FIELD_SLOT_CASE', 'ADH_FIELD_SLOT_LIST'], ['ADH_FIELD_WRAPPER_CASE', 'ADH_FIELD_SLOT_LIST']]) {
-  if (!new RegExp(`${list}\\(${macro}\\)`).test(src)) problems.push(`${macro} is not expanded over ${list} (field slots would have no dispatch case)`);
-}
-for (const expansion of ['ADH_CALL_VALUE_FAMILIES(ADH_CALL_SLOT_CASES)', 'ADH_CALL_VOID_FAMILIES(ADH_CALL_VOID_SLOT_CASES)',
-                         'ADH_CALLNV_VALUE_FAMILIES(ADH_CALL_SLOT_CASES)', 'ADH_CALLNV_VOID_FAMILIES(ADH_CALL_VOID_SLOT_CASES)',
-                         'ADH_CALL_VALUE_FAMILIES(ADH_CALL_WRAPPER_CASES)', 'ADH_CALL_VOID_FAMILIES(ADH_CALL_VOID_WRAPPER_CASES)',
-                         'ADH_CALLNV_VALUE_FAMILIES(ADH_CALL_WRAPPER_CASES)', 'ADH_CALLNV_VOID_FAMILIES(ADH_CALL_VOID_WRAPPER_CASES)']) {
-  if (!src.includes(expansion)) problems.push(`missing dispatch expansion: ${expansion}`);
-}
-
-// Every wrapper-generating macro must contain an emit call, and so must every hand-written wrapper.
+// ---- 5. installability and event wiring -------------------------------------
+// A name that resolves and then hits no case is refused at runtime (fail-loud, but only once a
+// device is attached); a wrapper that never emits looks installed and silently collects nothing.
+// Both are cheap to catch here. The dispatch cases are generated from the same lists that build the
+// enum and the table, so the check is about the macro bodies pairing a name with ITS OWN field and
+// wrapper - a hand-written pair with identical signatures (two ID lookups, two field entries) used
+// to be invisible to the signature asserts, the layout check and the offset check alike.
 const macroBodies = new Map();
 {
   const lines = src.split('\n');
@@ -139,6 +122,33 @@ const macroBodies = new Map();
     macroBodies.set(m[1], body);
   }
 }
+const missingExpansions = [
+  'ADH_FIXED_SLOT_LIST(ADH_FIXED_SLOT_CASE)', 'ADH_FIXED_SLOT_LIST(ADH_FIXED_WRAPPER_CASE)',
+  'ADH_FIELD_SLOT_LIST(ADH_FIELD_SLOT_CASE)', 'ADH_FIELD_SLOT_LIST(ADH_FIELD_WRAPPER_CASE)',
+  'ADH_CALL_VALUE_FAMILIES(ADH_CALL_SLOT_CASES)', 'ADH_CALL_VOID_FAMILIES(ADH_CALL_VOID_SLOT_CASES)',
+  'ADH_CALLNV_VALUE_FAMILIES(ADH_CALL_SLOT_CASES)', 'ADH_CALLNV_VOID_FAMILIES(ADH_CALL_VOID_SLOT_CASES)',
+  'ADH_CALL_VALUE_FAMILIES(ADH_CALL_WRAPPER_CASES)', 'ADH_CALL_VOID_FAMILIES(ADH_CALL_VOID_WRAPPER_CASES)',
+  'ADH_CALLNV_VALUE_FAMILIES(ADH_CALL_WRAPPER_CASES)', 'ADH_CALLNV_VOID_FAMILIES(ADH_CALL_VOID_WRAPPER_CASES)',
+].filter((e) => !src.includes(e));
+if (missingExpansions.length) problems.push(`missing dispatch expansion(s): ${missingExpansions.join(', ')}`);
+// A case macro must select the SAME member it dispatches to; that pairing is what a hand-written
+// switch can get wrong while every other check stays green.
+const pairing = [
+  ['ADH_FIXED_SLOT_CASE', /&table->name\b/, 'selects &table->name'],
+  ['ADH_FIXED_WRAPPER_CASE', /&name##_wrapper/, 'installs &name##_wrapper'],
+  ['ADH_FIELD_SLOT_CASE', /&table->name\b/, 'selects &table->name'],
+  ['ADH_FIELD_WRAPPER_CASE', /&name##_wrapper/, 'installs &name##_wrapper'],
+  ['ADH_CALL_SLOT_CASES', /&table->name\b/, 'selects &table->name'],
+  ['ADH_CALL_SLOT_CASES', /&table->name##V/, 'selects &table->nameV'],
+  ['ADH_CALL_SLOT_CASES', /&table->name##A/, 'selects &table->nameA'],
+  ['ADH_CALL_WRAPPER_CASES', /&name##V_wrapper/, 'installs &nameV_wrapper'],
+  ['ADH_CALL_WRAPPER_CASES', /&name##A_wrapper/, 'installs &nameA_wrapper'],
+];
+for (const [macro, pattern, what] of pairing) {
+  const body = macroBodies.get(macro) ?? '';
+  if (!pattern.test(body)) problems.push(`${macro} must ${what} (the case and the entry it returns have to stay paired)`);
+}
+// Every wrapper-generating macro must contain an emit call, and so must every hand-written wrapper.
 const silentMacros = [...macroBodies.entries()]
   .filter(([name, body]) => name.startsWith('ADH_DEFINE_') && /_wrapper\(/.test(body) && !/env_note\(|call_emit\(/.test(body))
   .map(([name]) => name);
@@ -149,7 +159,7 @@ for (const m of src.matchAll(/static [^\n]*?([A-Za-z0-9_]+)_wrapper\([^)]*\)\s*\
   if (!/env_note\(|call_emit\(/.test(m[2])) silentWrappers.push(m[1]);
 }
 if (silentWrappers.length) problems.push(`hand-written wrappers with no event call: ${silentWrappers.join(', ')}`);
-notes.push(`wiring: ${fixed.length} fixed slots reachable in both switches, ${silentWrappers.length + silentMacros.length} silent wrappers`);
+notes.push(`wiring: ${fixed.length} fixed slots dispatched from the list, ${fieldSlots.length} field accessors and ${families.length} families kept paired, ${silentWrappers.length + silentMacros.length} silent wrappers`);
 
 // ---- coverage report: turn "JNIEnv fully hookable" into a number ----
 const abiFns = [...abi.keys()].filter((n) => !/^reserved\d+$/.test(n));

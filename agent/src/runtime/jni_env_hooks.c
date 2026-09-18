@@ -62,6 +62,12 @@
 #define ADH_FIELD_NAME_ENTRY(name) { #name, NULL, NULL, 0, 0, 0, 0, "", 0, 0, 0.0 },
 #define ADH_FIELD_SLOT_CASE(name) case ENV_SLOT_##name: return (void **)(uintptr_t)&table->name;
 #define ADH_FIELD_WRAPPER_CASE(name) case ENV_SLOT_##name: return (void *)&name##_wrapper;
+// Fixed-slot dispatch cases, generated from the same list as the enum and the name table: which
+// field a case returns and which wrapper it installs can no longer be paired by hand. A mismatched
+// pair with identical signatures (two ID lookups, two Get/Set field entries) used to be invisible
+// to the asserts, the layout check and the offset check alike.
+#define ADH_FIXED_SLOT_CASE(name) case ENV_SLOT_##name: return (void **)(uintptr_t)&table->name;
+#define ADH_FIXED_WRAPPER_CASE(name) case ENV_SLOT_##name: return (void *)&name##_wrapper;
 
 // The fixed slots: ONE list drives the enum values, the installable-name table and the name
 // mapping the layout self-check compares them against, all in the same order. Adding a slot in
@@ -315,6 +321,15 @@ jboolean adh_jni_exception_check(JNIEnv *env) {
     jboolean (*original)(JNIEnv *) = (jboolean (*)(JNIEnv *))slot_original(ENV_SLOT_ExceptionCheck);
     if (original) return original(env) ? 1 : 0;
     return (*env)->ExceptionCheck(env) ? 1 : 0;
+}
+
+// ExceptionClear is a hookable table entry too: ADH clearing an exception it caused (or parking one
+// while it resolves a name) must not look like target behaviour either.
+void adh_jni_exception_clear(JNIEnv *env) {
+    if (!env || !(*env)->ExceptionClear) return;
+    void (*original)(JNIEnv *) = (void (*)(JNIEnv *))slot_original(ENV_SLOT_ExceptionClear);
+    if (original) { original(env); return; }
+    (*env)->ExceptionClear(env);
 }
 // ---- member-ID / array detail --------------------------------------------
 static void detail_method_plain(const char *name, const char *sig, char *out, size_t out_size) {
@@ -1278,6 +1293,18 @@ static const jchar *GetStringChars_wrapper(JNIEnv *env, jstring str, jboolean *i
     fn_t original = (fn_t)slot_original(ENV_SLOT_GetStringChars);
     if (!original) return NULL;
     if (g_env_hook_in_ours || !slot_active(ENV_SLOT_GetStringChars)) return original(env, str, is_copy);
+    // Length first, while we may still call other entries: the JNI spec promises neither that the
+    // buffer we are about to receive is NUL-terminated nor any particular layout, so the preview is
+    // bounded by the real element count instead of by a terminator we would be guessing at.
+    // The query itself must not look like target behaviour (and must not leave an exception behind
+    // if the string is bogus - our clear only removes the copy our own query produced).
+    int str_len = -1;
+    if (str && !adh_jni_exception_check(env)) {
+        g_env_hook_in_ours = 1;
+        str_len = (int)(*env)->GetStringLength(env, str);
+        g_env_hook_in_ours = 0;
+        if (adh_jni_exception_check(env)) { adh_jni_exception_clear(env); str_len = -1; }
+    }
     g_env_hook_in_ours = 1;
     const jchar *chars = original(env, str, is_copy);
     int failed = adh_jni_exception_check(env) ? 1 : 0;   // never read a pointer a failed call returned
@@ -1288,9 +1315,9 @@ static const jchar *GetStringChars_wrapper(JNIEnv *env, jstring str, jboolean *i
         char preview[80] = "";
         if (chars) {
             size_t p = 0;
-            for (int i = 0; i < 24 && p + 2 < sizeof(preview); i++) {
+            for (int i = 0; i < 24 && i < str_len && p + 2 < sizeof(preview); i++) {
                 jchar c = chars[i];
-                if (c == 0) break;                       // bounded by the string's own terminator
+                if (c == 0) break;                       // stop at an embedded NUL as well
                 preview[p++] = (c >= 0x20 && c < 0x7f) ? (char)c : '.';
             }
             preview[p] = 0;
@@ -1376,6 +1403,16 @@ static const jchar *GetStringCritical_wrapper(JNIEnv *env, jstring str, jboolean
     fn_t original = (fn_t)slot_original(ENV_SLOT_GetStringCritical);
     if (!original) return NULL;
     if (g_env_hook_in_ours || !slot_active(ENV_SLOT_GetStringCritical)) return original(env, str, is_copy);
+    // The length has to come BEFORE the pin: once GetStringCritical has run we are inside the
+    // critical section and may not call another JNI function. That is also the only safe way to
+    // bound the preview - the spec does not promise the pinned buffer is NUL-terminated.
+    int str_len = -1;
+    if (str && !adh_jni_exception_check(env)) {
+        g_env_hook_in_ours = 1;
+        str_len = (int)(*env)->GetStringLength(env, str);
+        g_env_hook_in_ours = 0;
+        if (adh_jni_exception_check(env)) { adh_jni_exception_clear(env); str_len = -1; }
+    }
     const jchar *chars = original(env, str, is_copy);
     char detail[220]; detail[0] = 0;
     if (!chars) {
@@ -1383,9 +1420,9 @@ static const jchar *GetStringCritical_wrapper(JNIEnv *env, jstring str, jboolean
     } else if (env_budget_left(ENV_SLOT_GetStringCritical)) {
         char preview[80] = "";
         size_t p = 0;
-        for (int i = 0; i < 24 && p + 2 < sizeof(preview); i++) {
+        for (int i = 0; i < 24 && i < str_len && p + 2 < sizeof(preview); i++) {
             jchar c = chars[i];
-            if (c == 0) break;                       // bounded by the string's own terminator
+            if (c == 0) break;                       // stop at an embedded NUL as well
             preview[p++] = (c >= 0x20 && c < 0x7f) ? (char)c : '.';
         }
         preview[p] = 0;
@@ -2538,106 +2575,8 @@ static int env_hook_index(const char *name) {
 
 static void **env_hook_slot(struct JNINativeInterface *table, int index) {
     switch (index) {
-        case ENV_SLOT_GetStringUTFChars: return (void **)(uintptr_t)&table->GetStringUTFChars;
-        case ENV_SLOT_FindClass: return (void **)(uintptr_t)&table->FindClass;
-        case ENV_SLOT_GetMethodID: return (void **)(uintptr_t)&table->GetMethodID;
-        case ENV_SLOT_GetStaticMethodID: return (void **)(uintptr_t)&table->GetStaticMethodID;
-        case ENV_SLOT_NewStringUTF: return (void **)(uintptr_t)&table->NewStringUTF;
-        case ENV_SLOT_GetFieldID: return (void **)(uintptr_t)&table->GetFieldID;
-        case ENV_SLOT_GetStaticFieldID: return (void **)(uintptr_t)&table->GetStaticFieldID;
+        ADH_FIXED_SLOT_LIST(ADH_FIXED_SLOT_CASE)
         ADH_FIELD_SLOT_LIST(ADH_FIELD_SLOT_CASE)
-        case ENV_SLOT_GetByteArrayElements: return (void **)(uintptr_t)&table->GetByteArrayElements;
-        case ENV_SLOT_SetByteArrayRegion: return (void **)(uintptr_t)&table->SetByteArrayRegion;
-        case ENV_SLOT_ReleaseByteArrayElements: return (void **)(uintptr_t)&table->ReleaseByteArrayElements;
-        case ENV_SLOT_GetBooleanArrayElements: return (void **)(uintptr_t)&table->GetBooleanArrayElements;
-        case ENV_SLOT_ReleaseBooleanArrayElements: return (void **)(uintptr_t)&table->ReleaseBooleanArrayElements;
-        case ENV_SLOT_GetCharArrayElements: return (void **)(uintptr_t)&table->GetCharArrayElements;
-        case ENV_SLOT_ReleaseCharArrayElements: return (void **)(uintptr_t)&table->ReleaseCharArrayElements;
-        case ENV_SLOT_GetShortArrayElements: return (void **)(uintptr_t)&table->GetShortArrayElements;
-        case ENV_SLOT_ReleaseShortArrayElements: return (void **)(uintptr_t)&table->ReleaseShortArrayElements;
-        case ENV_SLOT_GetIntArrayElements: return (void **)(uintptr_t)&table->GetIntArrayElements;
-        case ENV_SLOT_ReleaseIntArrayElements: return (void **)(uintptr_t)&table->ReleaseIntArrayElements;
-        case ENV_SLOT_GetLongArrayElements: return (void **)(uintptr_t)&table->GetLongArrayElements;
-        case ENV_SLOT_ReleaseLongArrayElements: return (void **)(uintptr_t)&table->ReleaseLongArrayElements;
-        case ENV_SLOT_GetFloatArrayElements: return (void **)(uintptr_t)&table->GetFloatArrayElements;
-        case ENV_SLOT_ReleaseFloatArrayElements: return (void **)(uintptr_t)&table->ReleaseFloatArrayElements;
-        case ENV_SLOT_GetDoubleArrayElements: return (void **)(uintptr_t)&table->GetDoubleArrayElements;
-        case ENV_SLOT_ReleaseDoubleArrayElements: return (void **)(uintptr_t)&table->ReleaseDoubleArrayElements;
-        case ENV_SLOT_AllocObject: return (void **)(uintptr_t)&table->AllocObject;
-        case ENV_SLOT_GetArrayLength: return (void **)(uintptr_t)&table->GetArrayLength;
-        case ENV_SLOT_NewObjectArray: return (void **)(uintptr_t)&table->NewObjectArray;
-        case ENV_SLOT_GetObjectArrayElement: return (void **)(uintptr_t)&table->GetObjectArrayElement;
-        case ENV_SLOT_SetObjectArrayElement: return (void **)(uintptr_t)&table->SetObjectArrayElement;
-        case ENV_SLOT_NewBooleanArray: return (void **)(uintptr_t)&table->NewBooleanArray;
-        case ENV_SLOT_NewByteArray: return (void **)(uintptr_t)&table->NewByteArray;
-        case ENV_SLOT_NewCharArray: return (void **)(uintptr_t)&table->NewCharArray;
-        case ENV_SLOT_NewShortArray: return (void **)(uintptr_t)&table->NewShortArray;
-        case ENV_SLOT_NewIntArray: return (void **)(uintptr_t)&table->NewIntArray;
-        case ENV_SLOT_NewLongArray: return (void **)(uintptr_t)&table->NewLongArray;
-        case ENV_SLOT_NewFloatArray: return (void **)(uintptr_t)&table->NewFloatArray;
-        case ENV_SLOT_NewDoubleArray: return (void **)(uintptr_t)&table->NewDoubleArray;
-        case ENV_SLOT_GetByteArrayRegion: return (void **)(uintptr_t)&table->GetByteArrayRegion;
-        case ENV_SLOT_GetPrimitiveArrayCritical: return (void **)(uintptr_t)&table->GetPrimitiveArrayCritical;
-        case ENV_SLOT_GetBooleanArrayRegion: return (void **)(uintptr_t)&table->GetBooleanArrayRegion;
-        case ENV_SLOT_SetBooleanArrayRegion: return (void **)(uintptr_t)&table->SetBooleanArrayRegion;
-        case ENV_SLOT_GetCharArrayRegion: return (void **)(uintptr_t)&table->GetCharArrayRegion;
-        case ENV_SLOT_SetCharArrayRegion: return (void **)(uintptr_t)&table->SetCharArrayRegion;
-        case ENV_SLOT_GetShortArrayRegion: return (void **)(uintptr_t)&table->GetShortArrayRegion;
-        case ENV_SLOT_SetShortArrayRegion: return (void **)(uintptr_t)&table->SetShortArrayRegion;
-        case ENV_SLOT_GetIntArrayRegion: return (void **)(uintptr_t)&table->GetIntArrayRegion;
-        case ENV_SLOT_SetIntArrayRegion: return (void **)(uintptr_t)&table->SetIntArrayRegion;
-        case ENV_SLOT_GetLongArrayRegion: return (void **)(uintptr_t)&table->GetLongArrayRegion;
-        case ENV_SLOT_SetLongArrayRegion: return (void **)(uintptr_t)&table->SetLongArrayRegion;
-        case ENV_SLOT_GetFloatArrayRegion: return (void **)(uintptr_t)&table->GetFloatArrayRegion;
-        case ENV_SLOT_SetFloatArrayRegion: return (void **)(uintptr_t)&table->SetFloatArrayRegion;
-        case ENV_SLOT_GetDoubleArrayRegion: return (void **)(uintptr_t)&table->GetDoubleArrayRegion;
-        case ENV_SLOT_SetDoubleArrayRegion: return (void **)(uintptr_t)&table->SetDoubleArrayRegion;
-        case ENV_SLOT_GetVersion: return (void **)(uintptr_t)&table->GetVersion;
-        case ENV_SLOT_DefineClass: return (void **)(uintptr_t)&table->DefineClass;
-        case ENV_SLOT_GetSuperclass: return (void **)(uintptr_t)&table->GetSuperclass;
-        case ENV_SLOT_IsAssignableFrom: return (void **)(uintptr_t)&table->IsAssignableFrom;
-        case ENV_SLOT_GetObjectClass: return (void **)(uintptr_t)&table->GetObjectClass;
-        case ENV_SLOT_IsInstanceOf: return (void **)(uintptr_t)&table->IsInstanceOf;
-        case ENV_SLOT_MonitorEnter: return (void **)(uintptr_t)&table->MonitorEnter;
-        case ENV_SLOT_MonitorExit: return (void **)(uintptr_t)&table->MonitorExit;
-        case ENV_SLOT_NewWeakGlobalRef: return (void **)(uintptr_t)&table->NewWeakGlobalRef;
-        case ENV_SLOT_DeleteWeakGlobalRef: return (void **)(uintptr_t)&table->DeleteWeakGlobalRef;
-        case ENV_SLOT_GetObjectRefType: return (void **)(uintptr_t)&table->GetObjectRefType;
-        case ENV_SLOT_PushLocalFrame: return (void **)(uintptr_t)&table->PushLocalFrame;
-        case ENV_SLOT_PopLocalFrame: return (void **)(uintptr_t)&table->PopLocalFrame;
-        case ENV_SLOT_NewLocalRef: return (void **)(uintptr_t)&table->NewLocalRef;
-        case ENV_SLOT_DeleteLocalRef: return (void **)(uintptr_t)&table->DeleteLocalRef;
-        case ENV_SLOT_NewGlobalRef: return (void **)(uintptr_t)&table->NewGlobalRef;
-        case ENV_SLOT_DeleteGlobalRef: return (void **)(uintptr_t)&table->DeleteGlobalRef;
-        case ENV_SLOT_IsSameObject: return (void **)(uintptr_t)&table->IsSameObject;
-        case ENV_SLOT_EnsureLocalCapacity: return (void **)(uintptr_t)&table->EnsureLocalCapacity;
-        case ENV_SLOT_Throw: return (void **)(uintptr_t)&table->Throw;
-        case ENV_SLOT_ThrowNew: return (void **)(uintptr_t)&table->ThrowNew;
-        case ENV_SLOT_ExceptionOccurred: return (void **)(uintptr_t)&table->ExceptionOccurred;
-        case ENV_SLOT_ExceptionDescribe: return (void **)(uintptr_t)&table->ExceptionDescribe;
-        case ENV_SLOT_ExceptionClear: return (void **)(uintptr_t)&table->ExceptionClear;
-        case ENV_SLOT_GetJavaVM: return (void **)(uintptr_t)&table->GetJavaVM;
-        case ENV_SLOT_GetStringChars: return (void **)(uintptr_t)&table->GetStringChars;
-        case ENV_SLOT_ReleaseStringChars: return (void **)(uintptr_t)&table->ReleaseStringChars;
-        case ENV_SLOT_NewString: return (void **)(uintptr_t)&table->NewString;
-        case ENV_SLOT_GetStringLength: return (void **)(uintptr_t)&table->GetStringLength;
-        case ENV_SLOT_GetStringUTFLength: return (void **)(uintptr_t)&table->GetStringUTFLength;
-        case ENV_SLOT_ReleaseStringUTFChars: return (void **)(uintptr_t)&table->ReleaseStringUTFChars;
-        case ENV_SLOT_GetStringCritical: return (void **)(uintptr_t)&table->GetStringCritical;
-        case ENV_SLOT_ReleaseStringCritical: return (void **)(uintptr_t)&table->ReleaseStringCritical;
-        case ENV_SLOT_FromReflectedMethod: return (void **)(uintptr_t)&table->FromReflectedMethod;
-        case ENV_SLOT_FromReflectedField: return (void **)(uintptr_t)&table->FromReflectedField;
-        case ENV_SLOT_ToReflectedMethod: return (void **)(uintptr_t)&table->ToReflectedMethod;
-        case ENV_SLOT_ToReflectedField: return (void **)(uintptr_t)&table->ToReflectedField;
-        case ENV_SLOT_UnregisterNatives: return (void **)(uintptr_t)&table->UnregisterNatives;
-        case ENV_SLOT_FatalError: return (void **)(uintptr_t)&table->FatalError;
-        case ENV_SLOT_ExceptionCheck: return (void **)(uintptr_t)&table->ExceptionCheck;
-        case ENV_SLOT_GetStringRegion: return (void **)(uintptr_t)&table->GetStringRegion;
-        case ENV_SLOT_GetStringUTFRegion: return (void **)(uintptr_t)&table->GetStringUTFRegion;
-        case ENV_SLOT_NewDirectByteBuffer: return (void **)(uintptr_t)&table->NewDirectByteBuffer;
-        case ENV_SLOT_GetDirectBufferAddress: return (void **)(uintptr_t)&table->GetDirectBufferAddress;
-        case ENV_SLOT_GetDirectBufferCapacity: return (void **)(uintptr_t)&table->GetDirectBufferCapacity;
-        case ENV_SLOT_ReleasePrimitiveArrayCritical: return (void **)(uintptr_t)&table->ReleasePrimitiveArrayCritical;
         ADH_CALL_VALUE_FAMILIES(ADH_CALL_SLOT_CASES)
         ADH_CALL_VOID_FAMILIES(ADH_CALL_VOID_SLOT_CASES)
         ADH_CALLNV_VALUE_FAMILIES(ADH_CALL_SLOT_CASES)
@@ -2654,106 +2593,8 @@ static void **env_hook_slot(struct JNINativeInterface *table, int index) {
 
 static void *env_hook_wrapper(int index) {
     switch (index) {
-        case ENV_SLOT_GetStringUTFChars: return (void *)&GetStringUTFChars_wrapper;
-        case ENV_SLOT_FindClass: return (void *)&FindClass_wrapper;
-        case ENV_SLOT_GetMethodID: return (void *)&GetMethodID_wrapper;
-        case ENV_SLOT_GetStaticMethodID: return (void *)&GetStaticMethodID_wrapper;
-        case ENV_SLOT_NewStringUTF: return (void *)&NewStringUTF_wrapper;
-        case ENV_SLOT_GetFieldID: return (void *)&GetFieldID_wrapper;
-        case ENV_SLOT_GetStaticFieldID: return (void *)&GetStaticFieldID_wrapper;
+        ADH_FIXED_SLOT_LIST(ADH_FIXED_WRAPPER_CASE)
         ADH_FIELD_SLOT_LIST(ADH_FIELD_WRAPPER_CASE)
-        case ENV_SLOT_GetByteArrayElements: return (void *)&GetByteArrayElements_wrapper;
-        case ENV_SLOT_SetByteArrayRegion: return (void *)&SetByteArrayRegion_wrapper;
-        case ENV_SLOT_ReleaseByteArrayElements: return (void *)&ReleaseByteArrayElements_wrapper;
-        case ENV_SLOT_GetBooleanArrayElements: return (void *)&GetBooleanArrayElements_wrapper;
-        case ENV_SLOT_ReleaseBooleanArrayElements: return (void *)&ReleaseBooleanArrayElements_wrapper;
-        case ENV_SLOT_GetCharArrayElements: return (void *)&GetCharArrayElements_wrapper;
-        case ENV_SLOT_ReleaseCharArrayElements: return (void *)&ReleaseCharArrayElements_wrapper;
-        case ENV_SLOT_GetShortArrayElements: return (void *)&GetShortArrayElements_wrapper;
-        case ENV_SLOT_ReleaseShortArrayElements: return (void *)&ReleaseShortArrayElements_wrapper;
-        case ENV_SLOT_GetIntArrayElements: return (void *)&GetIntArrayElements_wrapper;
-        case ENV_SLOT_ReleaseIntArrayElements: return (void *)&ReleaseIntArrayElements_wrapper;
-        case ENV_SLOT_GetLongArrayElements: return (void *)&GetLongArrayElements_wrapper;
-        case ENV_SLOT_ReleaseLongArrayElements: return (void *)&ReleaseLongArrayElements_wrapper;
-        case ENV_SLOT_GetFloatArrayElements: return (void *)&GetFloatArrayElements_wrapper;
-        case ENV_SLOT_ReleaseFloatArrayElements: return (void *)&ReleaseFloatArrayElements_wrapper;
-        case ENV_SLOT_GetDoubleArrayElements: return (void *)&GetDoubleArrayElements_wrapper;
-        case ENV_SLOT_ReleaseDoubleArrayElements: return (void *)&ReleaseDoubleArrayElements_wrapper;
-        case ENV_SLOT_AllocObject: return (void *)&AllocObject_wrapper;
-        case ENV_SLOT_GetArrayLength: return (void *)&GetArrayLength_wrapper;
-        case ENV_SLOT_NewObjectArray: return (void *)&NewObjectArray_wrapper;
-        case ENV_SLOT_GetObjectArrayElement: return (void *)&GetObjectArrayElement_wrapper;
-        case ENV_SLOT_SetObjectArrayElement: return (void *)&SetObjectArrayElement_wrapper;
-        case ENV_SLOT_NewBooleanArray: return (void *)&NewBooleanArray_wrapper;
-        case ENV_SLOT_NewByteArray: return (void *)&NewByteArray_wrapper;
-        case ENV_SLOT_NewCharArray: return (void *)&NewCharArray_wrapper;
-        case ENV_SLOT_NewShortArray: return (void *)&NewShortArray_wrapper;
-        case ENV_SLOT_NewIntArray: return (void *)&NewIntArray_wrapper;
-        case ENV_SLOT_NewLongArray: return (void *)&NewLongArray_wrapper;
-        case ENV_SLOT_NewFloatArray: return (void *)&NewFloatArray_wrapper;
-        case ENV_SLOT_NewDoubleArray: return (void *)&NewDoubleArray_wrapper;
-        case ENV_SLOT_GetByteArrayRegion: return (void *)&GetByteArrayRegion_wrapper;
-        case ENV_SLOT_GetPrimitiveArrayCritical: return (void *)&GetPrimitiveArrayCritical_wrapper;
-        case ENV_SLOT_GetBooleanArrayRegion: return (void *)&GetBooleanArrayRegion_wrapper;
-        case ENV_SLOT_SetBooleanArrayRegion: return (void *)&SetBooleanArrayRegion_wrapper;
-        case ENV_SLOT_GetCharArrayRegion: return (void *)&GetCharArrayRegion_wrapper;
-        case ENV_SLOT_SetCharArrayRegion: return (void *)&SetCharArrayRegion_wrapper;
-        case ENV_SLOT_GetShortArrayRegion: return (void *)&GetShortArrayRegion_wrapper;
-        case ENV_SLOT_SetShortArrayRegion: return (void *)&SetShortArrayRegion_wrapper;
-        case ENV_SLOT_GetIntArrayRegion: return (void *)&GetIntArrayRegion_wrapper;
-        case ENV_SLOT_SetIntArrayRegion: return (void *)&SetIntArrayRegion_wrapper;
-        case ENV_SLOT_GetLongArrayRegion: return (void *)&GetLongArrayRegion_wrapper;
-        case ENV_SLOT_SetLongArrayRegion: return (void *)&SetLongArrayRegion_wrapper;
-        case ENV_SLOT_GetFloatArrayRegion: return (void *)&GetFloatArrayRegion_wrapper;
-        case ENV_SLOT_SetFloatArrayRegion: return (void *)&SetFloatArrayRegion_wrapper;
-        case ENV_SLOT_GetDoubleArrayRegion: return (void *)&GetDoubleArrayRegion_wrapper;
-        case ENV_SLOT_SetDoubleArrayRegion: return (void *)&SetDoubleArrayRegion_wrapper;
-        case ENV_SLOT_GetVersion: return (void *)&GetVersion_wrapper;
-        case ENV_SLOT_DefineClass: return (void *)&DefineClass_wrapper;
-        case ENV_SLOT_GetSuperclass: return (void *)&GetSuperclass_wrapper;
-        case ENV_SLOT_IsAssignableFrom: return (void *)&IsAssignableFrom_wrapper;
-        case ENV_SLOT_GetObjectClass: return (void *)&GetObjectClass_wrapper;
-        case ENV_SLOT_IsInstanceOf: return (void *)&IsInstanceOf_wrapper;
-        case ENV_SLOT_MonitorEnter: return (void *)&MonitorEnter_wrapper;
-        case ENV_SLOT_MonitorExit: return (void *)&MonitorExit_wrapper;
-        case ENV_SLOT_NewWeakGlobalRef: return (void *)&NewWeakGlobalRef_wrapper;
-        case ENV_SLOT_DeleteWeakGlobalRef: return (void *)&DeleteWeakGlobalRef_wrapper;
-        case ENV_SLOT_GetObjectRefType: return (void *)&GetObjectRefType_wrapper;
-        case ENV_SLOT_PushLocalFrame: return (void *)&PushLocalFrame_wrapper;
-        case ENV_SLOT_PopLocalFrame: return (void *)&PopLocalFrame_wrapper;
-        case ENV_SLOT_NewLocalRef: return (void *)&NewLocalRef_wrapper;
-        case ENV_SLOT_DeleteLocalRef: return (void *)&DeleteLocalRef_wrapper;
-        case ENV_SLOT_NewGlobalRef: return (void *)&NewGlobalRef_wrapper;
-        case ENV_SLOT_DeleteGlobalRef: return (void *)&DeleteGlobalRef_wrapper;
-        case ENV_SLOT_IsSameObject: return (void *)&IsSameObject_wrapper;
-        case ENV_SLOT_EnsureLocalCapacity: return (void *)&EnsureLocalCapacity_wrapper;
-        case ENV_SLOT_Throw: return (void *)&Throw_wrapper;
-        case ENV_SLOT_ThrowNew: return (void *)&ThrowNew_wrapper;
-        case ENV_SLOT_ExceptionOccurred: return (void *)&ExceptionOccurred_wrapper;
-        case ENV_SLOT_ExceptionDescribe: return (void *)&ExceptionDescribe_wrapper;
-        case ENV_SLOT_ExceptionClear: return (void *)&ExceptionClear_wrapper;
-        case ENV_SLOT_GetJavaVM: return (void *)&GetJavaVM_wrapper;
-        case ENV_SLOT_GetStringChars: return (void *)&GetStringChars_wrapper;
-        case ENV_SLOT_ReleaseStringChars: return (void *)&ReleaseStringChars_wrapper;
-        case ENV_SLOT_NewString: return (void *)&NewString_wrapper;
-        case ENV_SLOT_GetStringLength: return (void *)&GetStringLength_wrapper;
-        case ENV_SLOT_GetStringUTFLength: return (void *)&GetStringUTFLength_wrapper;
-        case ENV_SLOT_ReleaseStringUTFChars: return (void *)&ReleaseStringUTFChars_wrapper;
-        case ENV_SLOT_GetStringCritical: return (void *)&GetStringCritical_wrapper;
-        case ENV_SLOT_ReleaseStringCritical: return (void *)&ReleaseStringCritical_wrapper;
-        case ENV_SLOT_FromReflectedMethod: return (void *)&FromReflectedMethod_wrapper;
-        case ENV_SLOT_FromReflectedField: return (void *)&FromReflectedField_wrapper;
-        case ENV_SLOT_ToReflectedMethod: return (void *)&ToReflectedMethod_wrapper;
-        case ENV_SLOT_ToReflectedField: return (void *)&ToReflectedField_wrapper;
-        case ENV_SLOT_UnregisterNatives: return (void *)&UnregisterNatives_wrapper;
-        case ENV_SLOT_FatalError: return (void *)&FatalError_wrapper;
-        case ENV_SLOT_ExceptionCheck: return (void *)&ExceptionCheck_wrapper;
-        case ENV_SLOT_GetStringRegion: return (void *)&GetStringRegion_wrapper;
-        case ENV_SLOT_GetStringUTFRegion: return (void *)&GetStringUTFRegion_wrapper;
-        case ENV_SLOT_NewDirectByteBuffer: return (void *)&NewDirectByteBuffer_wrapper;
-        case ENV_SLOT_GetDirectBufferAddress: return (void *)&GetDirectBufferAddress_wrapper;
-        case ENV_SLOT_GetDirectBufferCapacity: return (void *)&GetDirectBufferCapacity_wrapper;
-        case ENV_SLOT_ReleasePrimitiveArrayCritical: return (void *)&ReleasePrimitiveArrayCritical_wrapper;
         ADH_CALL_VALUE_FAMILIES(ADH_CALL_WRAPPER_CASES)
         ADH_CALL_VOID_FAMILIES(ADH_CALL_VOID_WRAPPER_CASES)
         ADH_CALLNV_VALUE_FAMILIES(ADH_CALL_WRAPPER_CASES)
@@ -2895,12 +2736,18 @@ static void send_env_status(int fd, const char *id, const char *function, const 
         if (env_filter_match(filter, g_env_hooks[i].name)) matched++;
     }
 
+    // Status stays available even when the layout is broken - that is exactly when an operator
+    // needs to see the table - but it has to SAY so instead of looking healthy.
+    char layout_error[224] = "";
+    int layout_ok = env_hook_layout_ready(layout_error, sizeof(layout_error));
+    char layout_errorj[256] = "";
+    if (!layout_ok) json_escape(layout_error, layout_errorj, sizeof(layout_errorj));
     size_t len = snprintf(out, sizeof(out),
         "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"jni_env_hook\",\"ok\":true,"
         "\"action\":\"status\",\"function\":\"%s\",\"applied\":0,\"failed\":0,"
-        "\"total\":%d,\"matched\":%d,"
+        "\"total\":%d,\"matched\":%d,\"layout\":\"%s\",\"layoutError\":\"%s\","
         "\"table\":\"0x%llx\",\"tablePerms\":\"%s\",\"error\":\"\",\"hooks\":[",
-        idj, functionj, ENV_HOOK_MAX, matched,
+        idj, functionj, ENV_HOOK_MAX, matched, layout_ok ? "ok" : "mismatch", layout_errorj,
         g_env_hook_table, table_perms);
 
     // Pass 2: emit what fits. A slot that does not fit is NOT reported as absent - the header
