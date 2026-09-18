@@ -106,7 +106,12 @@ const covered = abiFns.filter((n) => claimed.has(n));
 const uncovered = abiFns.filter((n) => !claimed.has(n));
 notes.push(`coverage: ${covered.length}/${abiFns.length} function-table entries hooked (${Math.round((covered.length / abiFns.length) * 100)}%)`);
 notes.push(`uncovered (${uncovered.length}): ${uncovered.slice(0, 16).join(', ')}${uncovered.length > 16 ? ', ...' : ''}`);
-if (covered.length < 215) problems.push(`JNIEnv coverage dropped to ${covered.length}/${abiFns.length} (expected >= 215; the floor only ratchets up)`);
+// The one entry no table slot can claim: jni_hooks.c inline-hooks the RegisterNatives entry
+// itself and reports JNI_HOOK events, so it is covered by a different mechanism on purpose.
+const COVERED_ELSEWHERE = new Set(['RegisterNatives']);
+const unclassified = uncovered.filter((n) => !COVERED_ELSEWHERE.has(n));
+if (unclassified.length) problems.push(`unclassified JNIEnv entries (neither hooked nor covered elsewhere): ${unclassified.join(', ')}`);
+if (covered.length < 228) problems.push(`JNIEnv coverage dropped to ${covered.length}/${abiFns.length} (expected >= 228; the floor only ratchets up)`);
 
 // ---- 5. pin the indices the NEXT step (field accessors) will use, so those numbers come from the
 // ABI header instead of being hand-copied into the implementation or the docs ----

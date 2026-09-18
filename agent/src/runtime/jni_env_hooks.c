@@ -119,6 +119,29 @@ enum {
     // reads a Java string (a direct pointer instead of a copy).
     ENV_SLOT_GetStringChars,
     ENV_SLOT_ReleaseStringChars,
+    // v4.77: the rest of the string family - building a string from UTF-16, the two length
+    // queries, releasing a UTF-8 buffer, and the "critical" pair (a pinned pointer that must be
+    // released before any other JNI call).
+    ENV_SLOT_NewString,
+    ENV_SLOT_GetStringLength,
+    ENV_SLOT_GetStringUTFLength,
+    ENV_SLOT_ReleaseStringUTFChars,
+    ENV_SLOT_GetStringCritical,
+    ENV_SLOT_ReleaseStringCritical,
+    // v4.78: the reflection bridge and the un-register side of native binding. From* turn a
+    // java.lang.reflect member into a JNI id (a known way to keep a call site out of the
+    // GetMethodID/GetFieldID traffic), To* go the other way, and UnregisterNatives is the
+    // teardown half of RegisterNatives.
+    ENV_SLOT_FromReflectedMethod,
+    ENV_SLOT_FromReflectedField,
+    ENV_SLOT_ToReflectedMethod,
+    ENV_SLOT_ToReflectedField,
+    ENV_SLOT_UnregisterNatives,
+    // v4.79: the last two entries with a reason to exist. FatalError never returns, so its
+    // event is written BEFORE the original runs; ExceptionCheck is the hottest entry there is,
+    // which is exactly why ADH's own checks no longer travel through the table.
+    ENV_SLOT_FatalError,
+    ENV_SLOT_ExceptionCheck,
     // v4.67: exception flow + VM handle. Anti-analysis code uses exceptions as control flow, so
     // "which exception was raised and who cleared it" is a real signal; GetJavaVM hands the target
     // the VM handle it would need for anything more invasive.
@@ -262,6 +285,11 @@ struct EnvHookSlot {
     X("NewDoubleArray") \
     X("GetPrimitiveArrayCritical") X("ReleasePrimitiveArrayCritical") \
     X("GetStringRegion") X("GetStringUTFRegion") X("GetStringChars") X("ReleaseStringChars") \
+    X("NewString") X("GetStringLength") X("GetStringUTFLength") X("ReleaseStringUTFChars") \
+    X("GetStringCritical") X("ReleaseStringCritical") \
+    X("FromReflectedMethod") X("FromReflectedField") X("ToReflectedMethod") X("ToReflectedField") \
+    X("UnregisterNatives") \
+    X("FatalError") X("ExceptionCheck") \
     X("Throw") X("ThrowNew") X("ExceptionOccurred") X("ExceptionDescribe") X("ExceptionClear") \
     X("GetJavaVM") X("PushLocalFrame") X("PopLocalFrame") X("NewLocalRef") X("DeleteLocalRef") \
     X("NewGlobalRef") X("DeleteGlobalRef") X("IsSameObject") X("EnsureLocalCapacity") \
@@ -397,6 +425,19 @@ static void env_note(int index, const char *value, int ok) {
              g_env_hooks[index].name, valuej, ok ? "true" : "false");
     adh_capture_push_text("JNI_ENV", json);
 }
+
+// ADH's own exception checks must NOT go through the (possibly hooked) table entry. If the
+// ExceptionCheck slot is installed, every ADH-side call would otherwise be recorded as target
+// behaviour - wrong attribution - and re-entering the wrapper from instrumentation paths is pure
+// noise. The saved original is used once the slot has been installed, the live entry otherwise;
+// both are the real function. Shared with the rest of the agent (jni_env_hooks.h) so no module
+// has to remember this rule.
+jboolean adh_jni_exception_check(JNIEnv *env) {
+    if (!env || !(*env)->ExceptionCheck) return 0;
+    jboolean (*original)(JNIEnv *) = (jboolean (*)(JNIEnv *))slot_original(ENV_SLOT_ExceptionCheck);
+    if (original) return original(env) ? 1 : 0;
+    return (*env)->ExceptionCheck(env) ? 1 : 0;
+}
 // ---- member-ID / array detail --------------------------------------------
 static void detail_method_plain(const char *name, const char *sig, char *out, size_t out_size) {
     snprintf(out, out_size, "?#%s%s", name ? name : "", sig ? sig : "");
@@ -441,7 +482,7 @@ static void append_quoted_string(JNIEnv *env, jobject obj, char *out, size_t out
     if (!obj) { snprintf(out, out_size, "null"); return; }
     const char *chars = (*env)->GetStringUTFChars(env, (jstring)obj, NULL);
     if (!chars) {
-        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);
         snprintf(out, out_size, "str?");
         return;
     }
@@ -604,7 +645,7 @@ static jmethodID GetMethodID_wrapper(JNIEnv *env, jclass clazz, const char *name
     char detail[512];
     if (!env_budget_left(ENV_SLOT_GetMethodID)) {
         env_note(ENV_SLOT_GetMethodID, NULL, 0);
-    } else if ((*env)->ExceptionCheck(env)) {
+    } else if (adh_jni_exception_check(env)) {
         detail_method_plain(name, sig, detail, sizeof(detail));
         env_note(ENV_SLOT_GetMethodID, detail, 0);
     } else {
@@ -624,7 +665,7 @@ static jmethodID GetStaticMethodID_wrapper(JNIEnv *env, jclass clazz, const char
     char detail[512];
     if (!env_budget_left(ENV_SLOT_GetStaticMethodID)) {
         env_note(ENV_SLOT_GetStaticMethodID, NULL, 0);
-    } else if ((*env)->ExceptionCheck(env)) {
+    } else if (adh_jni_exception_check(env)) {
         detail_method_plain(name, sig, detail, sizeof(detail));
         env_note(ENV_SLOT_GetStaticMethodID, detail, 0);
     } else {
@@ -659,7 +700,7 @@ static jfieldID GetFieldID_wrapper(JNIEnv *env, jclass clazz, const char *name, 
         // The CALL may have succeeded: the budget only decided that we skip the expensive detail.
         // Saying ok=false here made a successful lookup look like a failed one downstream.
         env_note(ENV_SLOT_GetFieldID, "<budget spent>", result != NULL);
-    } else if (result == NULL || (*env)->ExceptionCheck(env)) {
+    } else if (result == NULL || adh_jni_exception_check(env)) {
         detail_field_plain(name, sig, detail, sizeof(detail));
         env_note(ENV_SLOT_GetFieldID, detail, 0);
     } else {
@@ -686,7 +727,7 @@ static jfieldID GetStaticFieldID_wrapper(JNIEnv *env, jclass clazz, const char *
     char detail[512];
     if (!env_budget_left(ENV_SLOT_GetStaticFieldID)) {
         env_note(ENV_SLOT_GetStaticFieldID, "<budget spent>", result != NULL);
-    } else if (result == NULL || (*env)->ExceptionCheck(env)) {
+    } else if (result == NULL || adh_jni_exception_check(env)) {
         detail_field_plain(name, sig, detail, sizeof(detail));
         env_note(ENV_SLOT_GetStaticFieldID, detail, 0);
     } else {
@@ -814,7 +855,7 @@ static void GetByteArrayRegion_wrapper(JNIEnv *env, jbyteArray array, jsize star
         return;
     }
     original(env, array, start, len, buf);
-    if (env_budget_left(ENV_SLOT_GetByteArrayRegion) && !(*env)->ExceptionCheck(env)) {
+    if (env_budget_left(ENV_SLOT_GetByteArrayRegion) && !adh_jni_exception_check(env)) {
         char hex[2 * ENV_HEX_PREVIEW + 8], detail[128];
         hex_preview(buf, len, hex, sizeof(hex));
         snprintf(detail, sizeof(detail), "start=%d len=%d hex=%s", (int)start, (int)len, hex);
@@ -1181,7 +1222,7 @@ static void GetStringRegion_wrapper(JNIEnv *env, jstring str, jsize start, jsize
     // A failed copy (out-of-range start/len throws and leaves buf UNTOUCHED) must not be
     // reported as data the target lifted out of Java: reading buf here would put uninitialized
     // memory into the event with ok=1.
-    int failed = (*env)->ExceptionCheck(env) ? 1 : 0;
+    int failed = adh_jni_exception_check(env) ? 1 : 0;
     char detail[220]; detail[0] = 0;
     if (failed) {
         snprintf(detail, sizeof(detail), "string=%p start=%d len=%d <copy failed, buffer untouched>", (void *)str, (int)start, (int)len);
@@ -1211,7 +1252,7 @@ static void GetStringUTFRegion_wrapper(JNIEnv *env, jstring str, jsize start, js
     // A failed copy (out-of-range start/len throws and leaves buf UNTOUCHED) must not be
     // reported as data the target lifted out of Java: reading buf here would put uninitialized
     // memory into the event with ok=1.
-    int failed = (*env)->ExceptionCheck(env) ? 1 : 0;
+    int failed = adh_jni_exception_check(env) ? 1 : 0;
     char detail[220]; detail[0] = 0;
     if (failed) {
         snprintf(detail, sizeof(detail), "string=%p start=%d len=%d <copy failed, buffer untouched>", (void *)str, (int)start, (int)len);
@@ -1292,7 +1333,7 @@ static const jchar *GetStringChars_wrapper(JNIEnv *env, jstring str, jboolean *i
     if (g_env_hook_in_ours || !slot_active(ENV_SLOT_GetStringChars)) return original(env, str, is_copy);
     g_env_hook_in_ours = 1;
     const jchar *chars = original(env, str, is_copy);
-    int failed = (*env)->ExceptionCheck(env) ? 1 : 0;   // never read a pointer a failed call returned
+    int failed = adh_jni_exception_check(env) ? 1 : 0;   // never read a pointer a failed call returned
     char detail[220]; detail[0] = 0;
     if (failed) {
         snprintf(detail, sizeof(detail), "string=%p <pin failed>", (void *)str);
@@ -1314,6 +1355,271 @@ static const jchar *GetStringChars_wrapper(JNIEnv *env, jstring str, jboolean *i
     g_env_hook_in_ours = 0;
     return chars;
 }
+
+// v4.77: string construction and the two length queries. NewString's input is the caller's own
+// buffer, so a bounded preview of it costs nothing and shows what the target built.
+static jstring NewString_wrapper(JNIEnv *env, const jchar *unicode, jsize len) {
+    typedef jstring (JNICALL *fn_t)(JNIEnv *, const jchar *, jsize);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_NewString);
+    if (!original) return NULL;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_NewString)) return original(env, unicode, len);
+    jstring result = original(env, unicode, len);
+    int failed = adh_jni_exception_check(env) ? 1 : 0;
+    char detail[220]; detail[0] = 0;
+    if (failed) snprintf(detail, sizeof(detail), "len=%d <call failed>", (int)len);
+    else if (env_budget_left(ENV_SLOT_NewString)) {
+        char preview[80] = "";
+        if (unicode && len > 0) {
+            size_t p = 0;
+            for (jsize i = 0; i < len && i < 24 && p + 2 < sizeof(preview); i++)
+                preview[p++] = (unicode[i] >= 0x20 && unicode[i] < 0x7f) ? (char)unicode[i] : '.';
+            preview[p] = 0;
+        }
+        snprintf(detail, sizeof(detail), "len=%d text=\"%s\" -> %p", (int)len, preview, (void *)result);
+    }
+    env_note(ENV_SLOT_NewString, detail[0] ? detail : NULL, !failed && result != NULL);
+    return result;
+}
+
+#define ADH_DEFINE_STRING_LENGTH(JNI_NAME)                                                      \
+static jsize JNI_NAME##_wrapper(JNIEnv *env, jstring str) {                                     \
+    typedef jsize (JNICALL *fn_t)(JNIEnv *, jstring);                                           \
+    fn_t original = (fn_t)slot_original(ENV_SLOT_##JNI_NAME);                                   \
+    if (!original) return 0;                                                                    \
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_##JNI_NAME)) return original(env, str);     \
+    jsize len = original(env, str);                                                             \
+    int failed = adh_jni_exception_check(env) ? 1 : 0;                                           \
+    char detail[128]; detail[0] = 0;                                                            \
+    if (failed) snprintf(detail, sizeof(detail), "string=%p <call failed>", (void *)str);       \
+    else if (env_budget_left(ENV_SLOT_##JNI_NAME))                                              \
+        snprintf(detail, sizeof(detail), "string=%p len=%d", (void *)str, (int)len);            \
+    env_note(ENV_SLOT_##JNI_NAME, detail[0] ? detail : NULL, !failed);                          \
+    return len;                                                                                 \
+}
+
+ADH_DEFINE_STRING_LENGTH(GetStringLength)
+ADH_DEFINE_STRING_LENGTH(GetStringUTFLength)
+
+static void ReleaseStringUTFChars_wrapper(JNIEnv *env, jstring str, const char *utf) {
+    typedef void (JNICALL *fn_t)(JNIEnv *, jstring, const char *);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_ReleaseStringUTFChars);
+    if (!original) return;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_ReleaseStringUTFChars)) {
+        original(env, str, utf);
+        return;
+    }
+    if (env_budget_left(ENV_SLOT_ReleaseStringUTFChars)) {
+        char detail[128];
+        snprintf(detail, sizeof(detail), "string=%p chars=%p", (void *)str, (const void *)utf);
+        original(env, str, utf);
+        env_note(ENV_SLOT_ReleaseStringUTFChars, detail, 1);
+    } else {
+        original(env, str, utf);
+        env_note(ENV_SLOT_ReleaseStringUTFChars, NULL, 1);
+    }
+}
+
+// GetStringCritical hands out a pinned pointer that must be released before ANY other JNI call, so
+// this wrapper does not call ExceptionCheck/GetStringLength after it (that would break the critical
+// section the target just entered): a NULL result is the only failure signal it needs, and the
+// preview is a bounded read of the buffer that is already in hand. The same rule makes
+// ReleaseStringCritical a plain pair of pointers.
+static const jchar *GetStringCritical_wrapper(JNIEnv *env, jstring str, jboolean *is_copy) {
+    typedef const jchar *(JNICALL *fn_t)(JNIEnv *, jstring, jboolean *);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_GetStringCritical);
+    if (!original) return NULL;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_GetStringCritical)) return original(env, str, is_copy);
+    const jchar *chars = original(env, str, is_copy);
+    char detail[220]; detail[0] = 0;
+    if (!chars) {
+        snprintf(detail, sizeof(detail), "string=%p <pin failed>", (void *)str);
+    } else if (env_budget_left(ENV_SLOT_GetStringCritical)) {
+        char preview[80] = "";
+        size_t p = 0;
+        for (int i = 0; i < 24 && p + 2 < sizeof(preview); i++) {
+            jchar c = chars[i];
+            if (c == 0) break;                       // bounded by the string's own terminator
+            preview[p++] = (c >= 0x20 && c < 0x7f) ? (char)c : '.';
+        }
+        preview[p] = 0;
+        snprintf(detail, sizeof(detail), "string=%p isCopy=%s text=\"%s\"",
+                 (void *)str, (is_copy && *is_copy) ? "true" : "false", preview);
+    }
+    env_note(ENV_SLOT_GetStringCritical, detail[0] ? detail : NULL, chars != NULL);
+    return chars;
+}
+
+static void ReleaseStringCritical_wrapper(JNIEnv *env, jstring str, const jchar *cstring) {
+    typedef void (JNICALL *fn_t)(JNIEnv *, jstring, const jchar *);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_ReleaseStringCritical);
+    if (!original) return;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_ReleaseStringCritical)) {
+        original(env, str, cstring);
+        return;
+    }
+    char detail[128]; detail[0] = 0;
+    if (env_budget_left(ENV_SLOT_ReleaseStringCritical))
+        snprintf(detail, sizeof(detail), "string=%p chars=%p", (void *)str, (const void *)cstring);
+    original(env, str, cstring);
+    env_note(ENV_SLOT_ReleaseStringCritical, detail[0] ? detail : NULL, 1);
+}
+
+// v4.78: the reflection bridge. The id in the event is the join key: the host already turns ids
+// into Class#name:sig from the GetMethodID/GetFieldID events, so a reflected call site stops being
+// invisible without this wrapper having to resolve a member name itself.
+static jmethodID FromReflectedMethod_wrapper(JNIEnv *env, jobject method) {
+    typedef jmethodID (JNICALL *fn_t)(JNIEnv *, jobject);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_FromReflectedMethod);
+    if (!original) return NULL;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_FromReflectedMethod)) return original(env, method);
+    jmethodID mid = original(env, method);
+    int failed = adh_jni_exception_check(env) ? 1 : 0;
+    char detail[160]; detail[0] = 0;
+    if (failed) snprintf(detail, sizeof(detail), "reflect=%p <call failed>", (void *)method);
+    else if (env_budget_left(ENV_SLOT_FromReflectedMethod))
+        snprintf(detail, sizeof(detail), "reflect=%p -> mid=%p", (void *)method, (void *)mid);
+    env_note(ENV_SLOT_FromReflectedMethod, detail[0] ? detail : NULL, !failed);
+    return mid;
+}
+
+static jfieldID FromReflectedField_wrapper(JNIEnv *env, jobject field) {
+    typedef jfieldID (JNICALL *fn_t)(JNIEnv *, jobject);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_FromReflectedField);
+    if (!original) return NULL;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_FromReflectedField)) return original(env, field);
+    jfieldID fid = original(env, field);
+    int failed = adh_jni_exception_check(env) ? 1 : 0;
+    char detail[160]; detail[0] = 0;
+    if (failed) snprintf(detail, sizeof(detail), "reflect=%p <call failed>", (void *)field);
+    else if (env_budget_left(ENV_SLOT_FromReflectedField))
+        snprintf(detail, sizeof(detail), "reflect=%p -> fid=%p", (void *)field, (void *)fid);
+    env_note(ENV_SLOT_FromReflectedField, detail[0] ? detail : NULL, !failed);
+    return fid;
+}
+
+static jobject ToReflectedMethod_wrapper(JNIEnv *env, jclass clazz, jmethodID mid, jboolean is_static) {
+    typedef jobject (JNICALL *fn_t)(JNIEnv *, jclass, jmethodID, jboolean);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_ToReflectedMethod);
+    if (!original) return NULL;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_ToReflectedMethod))
+        return original(env, clazz, mid, is_static);
+    jobject result = original(env, clazz, mid, is_static);
+    int failed = adh_jni_exception_check(env) ? 1 : 0;
+    char detail[320]; detail[0] = 0;
+    if (failed) snprintf(detail, sizeof(detail), "mid=%p <call failed>", (void *)mid);
+    else if (env_budget_left(ENV_SLOT_ToReflectedMethod)) {
+        char cls[192];
+        g_env_hook_in_ours = 1;
+        adh_jni_class_name(env, clazz, cls, sizeof(cls));
+        g_env_hook_in_ours = 0;
+        snprintf(detail, sizeof(detail), "class=%s mid=%p static=%d -> %p",
+                 cls[0] ? cls : "?", (void *)mid, is_static ? 1 : 0, (void *)result);
+    }
+    env_note(ENV_SLOT_ToReflectedMethod, detail[0] ? detail : NULL, !failed && result != NULL);
+    return result;
+}
+
+static jobject ToReflectedField_wrapper(JNIEnv *env, jclass clazz, jfieldID fid, jboolean is_static) {
+    typedef jobject (JNICALL *fn_t)(JNIEnv *, jclass, jfieldID, jboolean);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_ToReflectedField);
+    if (!original) return NULL;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_ToReflectedField))
+        return original(env, clazz, fid, is_static);
+    jobject result = original(env, clazz, fid, is_static);
+    int failed = adh_jni_exception_check(env) ? 1 : 0;
+    char detail[320]; detail[0] = 0;
+    if (failed) snprintf(detail, sizeof(detail), "fid=%p <call failed>", (void *)fid);
+    else if (env_budget_left(ENV_SLOT_ToReflectedField)) {
+        char cls[192];
+        g_env_hook_in_ours = 1;
+        adh_jni_class_name(env, clazz, cls, sizeof(cls));
+        g_env_hook_in_ours = 0;
+        snprintf(detail, sizeof(detail), "class=%s fid=%p static=%d -> %p",
+                 cls[0] ? cls : "?", (void *)fid, is_static ? 1 : 0, (void *)result);
+    }
+    env_note(ENV_SLOT_ToReflectedField, detail[0] ? detail : NULL, !failed && result != NULL);
+    return result;
+}
+
+// Returns 0 when the class' native bindings were dropped; anything else (or a throw) is a failure.
+static jint UnregisterNatives_wrapper(JNIEnv *env, jclass clazz) {
+    typedef jint (JNICALL *fn_t)(JNIEnv *, jclass);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_UnregisterNatives);
+    if (!original) return -1;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_UnregisterNatives)) return original(env, clazz);
+    jint result = original(env, clazz);
+    int failed = adh_jni_exception_check(env) ? 1 : 0;
+    char detail[320]; detail[0] = 0;
+    if (failed) snprintf(detail, sizeof(detail), "class=%p <call failed>", (void *)clazz);
+    else if (env_budget_left(ENV_SLOT_UnregisterNatives)) {
+        char cls[192];
+        g_env_hook_in_ours = 1;
+        adh_jni_class_name(env, clazz, cls, sizeof(cls));
+        g_env_hook_in_ours = 0;
+        snprintf(detail, sizeof(detail), "class=%s -> %d", cls[0] ? cls : "?", (int)result);
+    }
+    env_note(ENV_SLOT_UnregisterNatives, detail[0] ? detail : NULL, !failed && result == 0);
+    return result;
+}
+
+// v4.79: FatalError is the VM's last word before the process goes down and (per the JNI spec) it
+// never returns, so there is no "after the call" - the message is the argument and the event is
+// written first. Caveat worth stating: the capture ring is drained by the host loop and the process
+// may die before that happens, so this event is best effort.
+static void FatalError_wrapper(JNIEnv *env, const char *msg) {
+    typedef void (JNICALL *fn_t)(JNIEnv *, const char *);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_FatalError);
+    if (!original) return;
+    if (!g_env_hook_in_ours && slot_active(ENV_SLOT_FatalError)) {
+        char bounded[160] = "";
+        if (msg) {
+            size_t n = strnlen(msg, sizeof(bounded) - 1);
+            memcpy(bounded, msg, n);
+            bounded[n] = 0;
+        }
+        char detail[200];
+        snprintf(detail, sizeof(detail), "msg=\"%s\"", bounded);
+        env_note(ENV_SLOT_FatalError, detail, 1);
+    }
+    original(env, msg);
+}
+
+// v4.79: the target's own ExceptionCheck - the signal that says "this code path expects a throwable
+// here". ADH's instrumentation never reaches this wrapper (env_exception_pending() uses the saved
+// original), so what is recorded is the target's behaviour. It is also the hottest entry in the
+// table, so install it deliberately: the per-slot budget caps the events at ENV_EVENT_LIMIT and the
+// slot keeps counting hits/dropped afterwards.
+static jboolean ExceptionCheck_wrapper(JNIEnv *env) {
+    typedef jboolean (JNICALL *fn_t)(JNIEnv *);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_ExceptionCheck);
+    if (!original) return JNI_FALSE;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_ExceptionCheck)) return original(env);
+    jboolean pending = original(env);
+    if (env_budget_left(ENV_SLOT_ExceptionCheck))
+        env_note(ENV_SLOT_ExceptionCheck, pending ? "pending=true" : "pending=false", 1);
+    else
+        env_note(ENV_SLOT_ExceptionCheck, NULL, 1);
+    return pending;
+}
+
+// Compile-time type check: the last two entries must match theirs exactly too.
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->FatalError), __typeof__(&FatalError_wrapper)), "FatalError_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->ExceptionCheck), __typeof__(&ExceptionCheck_wrapper)), "ExceptionCheck_wrapper signature mismatch");
+
+// Compile-time type check: the reflection bridge and UnregisterNatives must match their entries.
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->FromReflectedMethod), __typeof__(&FromReflectedMethod_wrapper)), "FromReflectedMethod_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->FromReflectedField), __typeof__(&FromReflectedField_wrapper)), "FromReflectedField_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->ToReflectedMethod), __typeof__(&ToReflectedMethod_wrapper)), "ToReflectedMethod_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->ToReflectedField), __typeof__(&ToReflectedField_wrapper)), "ToReflectedField_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->UnregisterNatives), __typeof__(&UnregisterNatives_wrapper)), "UnregisterNatives_wrapper signature mismatch");
+
+// Compile-time type check: the six new string wrappers must match their table entries exactly.
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->NewString), __typeof__(&NewString_wrapper)), "NewString_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetStringLength), __typeof__(&GetStringLength_wrapper)), "GetStringLength_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetStringUTFLength), __typeof__(&GetStringUTFLength_wrapper)), "GetStringUTFLength_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->ReleaseStringUTFChars), __typeof__(&ReleaseStringUTFChars_wrapper)), "ReleaseStringUTFChars_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetStringCritical), __typeof__(&GetStringCritical_wrapper)), "GetStringCritical_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->ReleaseStringCritical), __typeof__(&ReleaseStringCritical_wrapper)), "ReleaseStringCritical_wrapper signature mismatch");
 
 static void ReleaseStringChars_wrapper(JNIEnv *env, jstring str, const jchar *chars) {
     typedef void (JNICALL *fn_t)(JNIEnv *, jstring, const jchar *);
@@ -1342,10 +1648,10 @@ static jint Throw_wrapper(JNIEnv *env, jthrowable obj) {
     char detail[220] = "";
     if (env_budget_left(ENV_SLOT_Throw)) {
         char cls[160] = "";
-        if (!(*env)->ExceptionCheck(env) && obj) {
+        if (!adh_jni_exception_check(env) && obj) {
             jclass c = (*env)->GetObjectClass(env, obj);
             if (c) adh_jni_class_name(env, c, cls, sizeof(cls));
-            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+            if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);
         }
         snprintf(detail, sizeof(detail), "throwable=%p class=%s", (void *)obj, cls[0] ? cls : "?");
     }
@@ -1364,9 +1670,9 @@ static jint ThrowNew_wrapper(JNIEnv *env, jclass clazz, const char *message) {
     char detail[280] = "";
     if (env_budget_left(ENV_SLOT_ThrowNew)) {
         char cls[160] = "";
-        if (!(*env)->ExceptionCheck(env) && clazz) {
+        if (!adh_jni_exception_check(env) && clazz) {
             adh_jni_class_name(env, clazz, cls, sizeof(cls));
-            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+            if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);
         }
         char msg[96] = "";
         if (message) {
@@ -1591,11 +1897,11 @@ static jclass GetSuperclass_wrapper(JNIEnv *env, jclass clazz) {
     jclass sup = original(env, clazz);
     g_env_hook_in_ours = 0;
     char detail[260] = "";
-    if (env_budget_left(ENV_SLOT_GetSuperclass) && !(*env)->ExceptionCheck(env)) {
+    if (env_budget_left(ENV_SLOT_GetSuperclass) && !adh_jni_exception_check(env)) {
         char a[96] = "", b[96] = "";
         if (clazz) adh_jni_class_name(env, clazz, a, sizeof(a));
         if (sup) adh_jni_class_name(env, sup, b, sizeof(b));
-        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);
         snprintf(detail, sizeof(detail), "class=%s -> %s", a[0] ? a : "?", b[0] ? b : "(none)");
     }
     env_note(ENV_SLOT_GetSuperclass, detail[0] ? detail : NULL, 1);
@@ -1615,7 +1921,7 @@ static jboolean IsAssignableFrom_wrapper(JNIEnv *env, jclass a, jclass b) {
         char na[96] = "", nb[96] = "";
         if (a) adh_jni_class_name(env, a, na, sizeof(na));
         if (b) adh_jni_class_name(env, b, nb, sizeof(nb));
-        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);
         snprintf(detail, sizeof(detail), "%s <- %s = %s", na[0] ? na : "?", nb[0] ? nb : "?", r ? "true" : "false");
     }
     env_note(ENV_SLOT_IsAssignableFrom, detail[0] ? detail : NULL, 1);
@@ -1634,7 +1940,7 @@ static jclass GetObjectClass_wrapper(JNIEnv *env, jobject obj) {
     if (env_budget_left(ENV_SLOT_GetObjectClass)) {
         char name[96] = "";
         if (cls) adh_jni_class_name(env, cls, name, sizeof(name));
-        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);
         snprintf(detail, sizeof(detail), "obj=%p class=%s", (void *)obj, name[0] ? name : "?");
     }
     env_note(ENV_SLOT_GetObjectClass, detail[0] ? detail : NULL, cls != NULL);
@@ -1653,7 +1959,7 @@ static jboolean IsInstanceOf_wrapper(JNIEnv *env, jobject obj, jclass clazz) {
     if (env_budget_left(ENV_SLOT_IsInstanceOf)) {
         char name[96] = "";
         if (clazz) adh_jni_class_name(env, clazz, name, sizeof(name));
-        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);
         snprintf(detail, sizeof(detail), "obj=%p class=%s = %s", (void *)obj, name[0] ? name : "?", r ? "true" : "false");
     }
     env_note(ENV_SLOT_IsInstanceOf, detail[0] ? detail : NULL, 1);
@@ -1748,7 +2054,7 @@ static void JNI_NAME##_wrapper(JNIEnv *env, jarray arr, jsize start, jsize len, 
     g_env_hook_in_ours = 1;                                                                  \
     original(env, arr, start, len, buf);                                                     \
     g_env_hook_in_ours = 0;                                                                  \
-    int failed = (*env)->ExceptionCheck(env) ? 1 : 0;                                        \
+    int failed = adh_jni_exception_check(env) ? 1 : 0;                                        \
     char detail[220]; detail[0] = 0;                                                         \
     if (!failed && env_budget_left(ENV_SLOT_##JNI_NAME)) {                                   \
         char preview[96] = "";                                                               \
@@ -1798,7 +2104,7 @@ static CTYPE *JNI_NAME##_wrapper(JNIEnv *env, jarray arr, jboolean *isCopy) {   
     if (!original) return NULL;                                                                  \
     if (g_env_hook_in_ours || !slot_active(ENV_SLOT_##JNI_NAME)) return original(env, arr, isCopy); \
     CTYPE *elems = original(env, arr, isCopy);                                                   \
-    int failed = (*env)->ExceptionCheck(env) ? 1 : 0;                                            \
+    int failed = adh_jni_exception_check(env) ? 1 : 0;                                            \
     char detail[220]; detail[0] = 0;                                                             \
     if (failed) {                                                                                \
         snprintf(detail, sizeof(detail), "array=%p <call failed>", (void *)arr);                 \
@@ -1831,7 +2137,7 @@ static void JNI_NAME##_wrapper(JNIEnv *env, jarray arr, CTYPE *elems, jint mode)
     char detail[220]; detail[0] = 0;                                                             \
     if (env_budget_left(ENV_SLOT_##JNI_NAME)) {                                                  \
         int len = -1;                                                                            \
-        if (arr && !(*env)->ExceptionCheck(env)) {                                               \
+        if (arr && !adh_jni_exception_check(env)) {                                               \
             g_env_hook_in_ours = 1;                                                              \
             len = (int)(*env)->GetArrayLength(env, arr);                                         \
             g_env_hook_in_ours = 0;                                                              \
@@ -1922,7 +2228,7 @@ static jobject JNI_NAME##_wrapper(JNIEnv *env, jsize len) {                     
     if (!original) return NULL;                                                             \
     if (g_env_hook_in_ours || !slot_active(ENV_SLOT_##JNI_NAME)) return original(env, len); \
     jobject result = original(env, len);                                                    \
-    int failed = (*env)->ExceptionCheck(env) ? 1 : 0;                                       \
+    int failed = adh_jni_exception_check(env) ? 1 : 0;                                       \
     char detail[128]; detail[0] = 0;                                                        \
     if (failed) snprintf(detail, sizeof(detail), "len=%d <call failed>", (int)len);         \
     else if (env_budget_left(ENV_SLOT_##JNI_NAME))                                          \
@@ -1946,7 +2252,7 @@ static jsize GetArrayLength_wrapper(JNIEnv *env, jarray arr) {
     if (!original) return 0;
     if (g_env_hook_in_ours || !slot_active(ENV_SLOT_GetArrayLength)) return original(env, arr);
     jsize len = original(env, arr);
-    int failed = (*env)->ExceptionCheck(env) ? 1 : 0;
+    int failed = adh_jni_exception_check(env) ? 1 : 0;
     char detail[128]; detail[0] = 0;
     if (failed) snprintf(detail, sizeof(detail), "array=%p <call failed>", (void *)arr);
     else if (env_budget_left(ENV_SLOT_GetArrayLength))
@@ -1962,7 +2268,7 @@ static jobject NewObjectArray_wrapper(JNIEnv *env, jsize len, jclass elem_class,
     if (g_env_hook_in_ours || !slot_active(ENV_SLOT_NewObjectArray))
         return original(env, len, elem_class, initial);
     jobject result = original(env, len, elem_class, initial);
-    int failed = (*env)->ExceptionCheck(env) ? 1 : 0;
+    int failed = adh_jni_exception_check(env) ? 1 : 0;
     char detail[320]; detail[0] = 0;
     if (failed) snprintf(detail, sizeof(detail), "len=%d <call failed>", (int)len);
     else if (env_budget_left(ENV_SLOT_NewObjectArray)) {
@@ -1986,7 +2292,7 @@ static jobject GetObjectArrayElement_wrapper(JNIEnv *env, jobjectArray arr, jsiz
     if (g_env_hook_in_ours || !slot_active(ENV_SLOT_GetObjectArrayElement))
         return original(env, arr, index);
     jobject result = original(env, arr, index);
-    int failed = (*env)->ExceptionCheck(env) ? 1 : 0;
+    int failed = adh_jni_exception_check(env) ? 1 : 0;
     char detail[192]; detail[0] = 0;
     if (failed) snprintf(detail, sizeof(detail), "array=%p index=%d <call failed>", (void *)arr, (int)index);
     else if (env_budget_left(ENV_SLOT_GetObjectArrayElement))
@@ -2005,7 +2311,7 @@ static void SetObjectArrayElement_wrapper(JNIEnv *env, jobjectArray arr, jsize i
         return;
     }
     original(env, arr, index, value);
-    int failed = (*env)->ExceptionCheck(env) ? 1 : 0;
+    int failed = adh_jni_exception_check(env) ? 1 : 0;
     char detail[192]; detail[0] = 0;
     if (failed) snprintf(detail, sizeof(detail), "array=%p index=%d value=%p <call failed>",
                          (void *)arr, (int)index, (void *)value);
@@ -2021,7 +2327,7 @@ static jobject AllocObject_wrapper(JNIEnv *env, jclass clazz) {
     if (!original) return NULL;
     if (g_env_hook_in_ours || !slot_active(ENV_SLOT_AllocObject)) return original(env, clazz);
     jobject result = original(env, clazz);
-    int failed = (*env)->ExceptionCheck(env) ? 1 : 0;
+    int failed = adh_jni_exception_check(env) ? 1 : 0;
     char detail[320]; detail[0] = 0;
     if (failed) snprintf(detail, sizeof(detail), "class=%p <call failed>", (void *)clazz);
     else if (env_budget_left(ENV_SLOT_AllocObject)) {
@@ -2244,6 +2550,22 @@ static int env_hook_spec_index(int index) {
         case ENV_SLOT_GetJavaVM: return 219;
         case ENV_SLOT_GetStringChars: return 165;
         case ENV_SLOT_ReleaseStringChars: return 166;
+        // v4.77: the rest of the string family.
+        case ENV_SLOT_NewString: return 163;
+        case ENV_SLOT_GetStringLength: return 164;
+        case ENV_SLOT_GetStringUTFLength: return 168;
+        case ENV_SLOT_ReleaseStringUTFChars: return 170;
+        case ENV_SLOT_GetStringCritical: return 224;
+        case ENV_SLOT_ReleaseStringCritical: return 225;
+        // v4.78: reflection bridge + UnregisterNatives.
+        case ENV_SLOT_FromReflectedMethod: return 7;
+        case ENV_SLOT_FromReflectedField: return 8;
+        case ENV_SLOT_ToReflectedMethod: return 9;
+        case ENV_SLOT_ToReflectedField: return 12;
+        case ENV_SLOT_UnregisterNatives: return 216;
+        // v4.79: the last two.
+        case ENV_SLOT_FatalError: return 18;
+        case ENV_SLOT_ExceptionCheck: return 228;
         case ENV_SLOT_GetStringUTFRegion: return 221;
         case ENV_SLOT_NewDirectByteBuffer: return 229;
         case ENV_SLOT_GetDirectBufferAddress: return 230;
@@ -2350,6 +2672,19 @@ static void **env_hook_slot(struct JNINativeInterface *table, int index) {
         case ENV_SLOT_GetJavaVM: return (void **)(uintptr_t)&table->GetJavaVM;
         case ENV_SLOT_GetStringChars: return (void **)(uintptr_t)&table->GetStringChars;
         case ENV_SLOT_ReleaseStringChars: return (void **)(uintptr_t)&table->ReleaseStringChars;
+        case ENV_SLOT_NewString: return (void **)(uintptr_t)&table->NewString;
+        case ENV_SLOT_GetStringLength: return (void **)(uintptr_t)&table->GetStringLength;
+        case ENV_SLOT_GetStringUTFLength: return (void **)(uintptr_t)&table->GetStringUTFLength;
+        case ENV_SLOT_ReleaseStringUTFChars: return (void **)(uintptr_t)&table->ReleaseStringUTFChars;
+        case ENV_SLOT_GetStringCritical: return (void **)(uintptr_t)&table->GetStringCritical;
+        case ENV_SLOT_ReleaseStringCritical: return (void **)(uintptr_t)&table->ReleaseStringCritical;
+        case ENV_SLOT_FromReflectedMethod: return (void **)(uintptr_t)&table->FromReflectedMethod;
+        case ENV_SLOT_FromReflectedField: return (void **)(uintptr_t)&table->FromReflectedField;
+        case ENV_SLOT_ToReflectedMethod: return (void **)(uintptr_t)&table->ToReflectedMethod;
+        case ENV_SLOT_ToReflectedField: return (void **)(uintptr_t)&table->ToReflectedField;
+        case ENV_SLOT_UnregisterNatives: return (void **)(uintptr_t)&table->UnregisterNatives;
+        case ENV_SLOT_FatalError: return (void **)(uintptr_t)&table->FatalError;
+        case ENV_SLOT_ExceptionCheck: return (void **)(uintptr_t)&table->ExceptionCheck;
         case ENV_SLOT_GetStringRegion: return (void **)(uintptr_t)&table->GetStringRegion;
         case ENV_SLOT_GetStringUTFRegion: return (void **)(uintptr_t)&table->GetStringUTFRegion;
         case ENV_SLOT_NewDirectByteBuffer: return (void **)(uintptr_t)&table->NewDirectByteBuffer;
@@ -2453,6 +2788,19 @@ static void *env_hook_wrapper(int index) {
         case ENV_SLOT_GetJavaVM: return (void *)&GetJavaVM_wrapper;
         case ENV_SLOT_GetStringChars: return (void *)&GetStringChars_wrapper;
         case ENV_SLOT_ReleaseStringChars: return (void *)&ReleaseStringChars_wrapper;
+        case ENV_SLOT_NewString: return (void *)&NewString_wrapper;
+        case ENV_SLOT_GetStringLength: return (void *)&GetStringLength_wrapper;
+        case ENV_SLOT_GetStringUTFLength: return (void *)&GetStringUTFLength_wrapper;
+        case ENV_SLOT_ReleaseStringUTFChars: return (void *)&ReleaseStringUTFChars_wrapper;
+        case ENV_SLOT_GetStringCritical: return (void *)&GetStringCritical_wrapper;
+        case ENV_SLOT_ReleaseStringCritical: return (void *)&ReleaseStringCritical_wrapper;
+        case ENV_SLOT_FromReflectedMethod: return (void *)&FromReflectedMethod_wrapper;
+        case ENV_SLOT_FromReflectedField: return (void *)&FromReflectedField_wrapper;
+        case ENV_SLOT_ToReflectedMethod: return (void *)&ToReflectedMethod_wrapper;
+        case ENV_SLOT_ToReflectedField: return (void *)&ToReflectedField_wrapper;
+        case ENV_SLOT_UnregisterNatives: return (void *)&UnregisterNatives_wrapper;
+        case ENV_SLOT_FatalError: return (void *)&FatalError_wrapper;
+        case ENV_SLOT_ExceptionCheck: return (void *)&ExceptionCheck_wrapper;
         case ENV_SLOT_GetStringRegion: return (void *)&GetStringRegion_wrapper;
         case ENV_SLOT_GetStringUTFRegion: return (void *)&GetStringUTFRegion_wrapper;
         case ENV_SLOT_NewDirectByteBuffer: return (void *)&NewDirectByteBuffer_wrapper;

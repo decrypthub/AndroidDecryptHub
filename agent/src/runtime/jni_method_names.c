@@ -16,6 +16,7 @@
 
 #include "../bootstrap/agent_internal.h"
 #include "jni.h"
+#include "jni_env_hooks.h"
 
 #include <pthread.h>
 #include <stdint.h>
@@ -128,7 +129,7 @@ static int scan_members(JNIEnv *env, jclass cls, int kind, jmethodID mid,
     jmethodID get_members = (kind == ADH_MEMBER_CTOR)
         ? (*env)->GetMethodID(env, class_class, "getDeclaredConstructors", "()[Ljava/lang/reflect/Constructor;")
         : (*env)->GetMethodID(env, class_class, "getDeclaredMethods", "()[Ljava/lang/reflect/Method;");
-    if ((*env)->ExceptionCheck(env) || !get_members) { (*env)->ExceptionClear(env); return 0; }
+    if (adh_jni_exception_check(env) || !get_members) { (*env)->ExceptionClear(env); return 0; }
     jclass member_class = (*env)->FindClass(env, member_type);
     jmethodID get_param_types = member_class
         ? (*env)->GetMethodID(env, member_class, "getParameterTypes", "()[Ljava/lang/Class;") : NULL;
@@ -138,7 +139,7 @@ static int scan_members(JNIEnv *env, jclass cls, int kind, jmethodID mid,
         ? (*env)->GetMethodID(env, member_class, "getReturnType", "()Ljava/lang/Class;") : NULL;
     jmethodID get_declaring = (kind == ADH_MEMBER_CTOR && member_class)
         ? (*env)->GetMethodID(env, member_class, "getDeclaringClass", "()Ljava/lang/Class;") : NULL;
-    if ((*env)->ExceptionCheck(env) || !get_param_types ||
+    if (adh_jni_exception_check(env) || !get_param_types ||
         (kind != ADH_MEMBER_CTOR && (!get_name || !get_return_type)) ||
         (kind == ADH_MEMBER_CTOR && !get_declaring)) {
         (*env)->ExceptionClear(env);
@@ -146,18 +147,18 @@ static int scan_members(JNIEnv *env, jclass cls, int kind, jmethodID mid,
     }
 
     jobjectArray members = (jobjectArray)(*env)->CallObjectMethod(env, cls, get_members);
-    if ((*env)->ExceptionCheck(env) || !members) { (*env)->ExceptionClear(env); return 0; }
+    if (adh_jni_exception_check(env) || !members) { (*env)->ExceptionClear(env); return 0; }
     jsize count = (*env)->GetArrayLength(env, members);
     if (count > ADH_METHOD_MEMBERS) count = ADH_METHOD_MEMBERS;
     int found = 0;
     for (jsize i = 0; i < count && !found; i++) {
         jobject member = (*env)->GetObjectArrayElement(env, members, i);
-        if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); continue; }
+        if (adh_jni_exception_check(env)) { (*env)->ExceptionClear(env); continue; }
         if (!member) continue;
         char name[128] = "<init>";
         if (kind != ADH_MEMBER_CTOR) {
             jstring jname = (jstring)(*env)->CallObjectMethod(env, member, get_name);
-            if ((*env)->ExceptionCheck(env)) {
+            if (adh_jni_exception_check(env)) {
                 (*env)->ExceptionClear(env);
                 (*env)->DeleteLocalRef(env, member);
                 continue;
@@ -176,7 +177,7 @@ static int scan_members(JNIEnv *env, jclass cls, int kind, jmethodID mid,
         if (kind != ADH_MEMBER_CTOR) {
             return_type = (jclass)(*env)->CallObjectMethod(env, member, get_return_type);
         }
-        if ((*env)->ExceptionCheck(env)) {
+        if (adh_jni_exception_check(env)) {
             (*env)->ExceptionClear(env);
             if (params) (*env)->DeleteLocalRef(env, params);
             if (return_type) (*env)->DeleteLocalRef(env, return_type);
@@ -187,7 +188,7 @@ static int scan_members(JNIEnv *env, jclass cls, int kind, jmethodID mid,
         build_signature(env, params, return_type, sig, sizeof(sig));
         if (params) (*env)->DeleteLocalRef(env, params);
         if (return_type) (*env)->DeleteLocalRef(env, return_type);
-        if ((*env)->ExceptionCheck(env)) {   // abstract/native oddities: skip this member
+        if (adh_jni_exception_check(env)) {   // abstract/native oddities: skip this member
             (*env)->ExceptionClear(env);
             (*env)->DeleteLocalRef(env, member);
             continue;
@@ -195,7 +196,7 @@ static int scan_members(JNIEnv *env, jclass cls, int kind, jmethodID mid,
         jmethodID candidate = NULL;
         if (kind == ADH_MEMBER_CTOR) {
             jclass declaring = (jclass)(*env)->CallObjectMethod(env, member, get_declaring);
-            if (!(*env)->ExceptionCheck(env) && declaring) {
+            if (!adh_jni_exception_check(env) && declaring) {
                 candidate = (*env)->GetMethodID(env, declaring, "<init>", sig);
             }
             if (declaring) (*env)->DeleteLocalRef(env, declaring);
@@ -206,7 +207,7 @@ static int scan_members(JNIEnv *env, jclass cls, int kind, jmethodID mid,
         }
         // A lookup for a member of the other staticness throws; that is expected and must not
         // leak into the next iteration (CheckJNI aborts on JNI calls with a pending exception).
-        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);
         if (candidate == mid) {
             char cls_name[192] = "";
             adh_jni_class_name(env, cls, cls_name, sizeof(cls_name));
@@ -253,7 +254,7 @@ struct AdhMethodInfo *adh_jni_method_info(JNIEnv *env, jobject target, int kind,
             jmethodID get_super = class_class
                 ? (*env)->GetMethodID(env, class_class, "getSuperclass", "()Ljava/lang/Class;") : NULL;
             jclass super = get_super ? (jclass)(*env)->CallObjectMethod(env, cls, get_super) : NULL;
-            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+            if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);
             cls = super;
         }
         if (label[0]) {

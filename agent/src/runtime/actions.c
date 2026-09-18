@@ -10,6 +10,7 @@
 #include "../bootstrap/agent_internal.h"
 #include "../hook/got.h"
 #include "jni.h"
+#include "jni_env_hooks.h"
 #include <errno.h>
 
 static int name_blacklisted(const char *s) {
@@ -46,7 +47,7 @@ void adh_cmd_trigger(int fd, const char *id, const char *class_name, const char 
     if (env) {
         (*env)->PushLocalFrame(env, 64);
         jclass target = adh_jni_load_app_class(env, class_name);
-        if ((*env)->ExceptionCheck(env)) {
+        if (adh_jni_exception_check(env)) {
             (*env)->ExceptionClear(env);
             reason = "loadClass threw";
         } else if (target) {
@@ -66,7 +67,7 @@ void adh_cmd_trigger(int fd, const char *id, const char *class_name, const char 
                     jobjectArray empty = (*env)->NewObjectArray(env, 0, class_class, NULL);
                     jstring method_name = (*env)->NewStringUTF(env, method);
                     jobject reflected = (*env)->CallObjectMethod(env, target, get_method, method_name, empty);
-                    if ((*env)->ExceptionCheck(env)) {
+                    if (adh_jni_exception_check(env)) {
                         (*env)->ExceptionClear(env);
                         skipped = 1;
                         reason = "no such no-arg method";
@@ -92,7 +93,7 @@ void adh_cmd_trigger(int fd, const char *id, const char *class_name, const char 
                                 env, method_class, "invoke",
                                 "(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;");
                             jobject ret = (*env)->CallObjectMethod(env, reflected, invoke, NULL, args);
-                            if ((*env)->ExceptionCheck(env)) {
+                            if (adh_jni_exception_check(env)) {
                                 (*env)->ExceptionClear(env);
                                 reason = "invocation threw (isolated)";
                             } else {
@@ -119,7 +120,7 @@ void adh_cmd_trigger(int fd, const char *id, const char *class_name, const char 
         } else {
             reason = "class not found";
         }
-        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);
         (*env)->PopLocalFrame(env, NULL);
         adh_jni_detach(did_attach);
     } else {

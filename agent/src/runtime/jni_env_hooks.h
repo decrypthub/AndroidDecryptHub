@@ -5,6 +5,13 @@
 extern "C" {
 #endif
 
+#include <jni.h>
+
+// Exception state check that never travels through the (possibly hooked) JNIEnv table entry:
+// the agent is attached to the same VM as the target, so its own JNI traffic must not be recorded
+// as target behaviour. Use this everywhere inside ADH instead of (*env)->ExceptionCheck(env).
+jboolean adh_jni_exception_check(JNIEnv *env);
+
 // Per-entry hooks on the JNIEnv function table. In C a JNIEnv* points at a table of
 // function pointers, so one aligned slot swap intercepts every JNI call that goes through
 // that env. No trampoline is involved: the saved slot value is the real implementation, so

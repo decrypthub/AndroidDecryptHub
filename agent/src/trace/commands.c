@@ -9,6 +9,8 @@
 #include "../bootstrap/agent_internal.h"
 #include "../hook/got.h"
 #include "../runtime/jni.h"
+
+#include "../runtime/jni_env_hooks.h"
 #include "qbdi_trace.h"
 
 struct TraceRecord {
@@ -102,7 +104,7 @@ void adh_cmd_trace_run(int fd, const char *id, const char *symbol_library,
                 triggered = 1;
             }
         }
-        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);
         (*env)->PopLocalFrame(env, NULL);
         adh_jni_detach(did_attach);
     }

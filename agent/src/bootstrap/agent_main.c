@@ -860,11 +860,11 @@ void adh_agent_start(void) {
 static int bind_reporter_from_prop(JNIEnv *env) {
     jclass sysCls = (*env)->FindClass(env, "java/lang/System");
     jmethodID getProp = sysCls ? (*env)->GetStaticMethodID(env, sysCls, "getProperty", "(Ljava/lang/String;)Ljava/lang/String;") : NULL;
-    if (!getProp) { if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); return 0; }
+    if (!getProp) { if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env); return 0; }
     jstring jkey = (*env)->NewStringUTF(env, "adh.reporter.class");
     jstring jval = jkey ? (jstring)(*env)->CallStaticObjectMethod(env, sysCls, getProp, jkey) : NULL;
     if (!jval) {
-        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);
         return 0;
     }
     const char *cls = (*env)->GetStringUTFChars(env, jval, NULL);
@@ -874,7 +874,7 @@ static int bind_reporter_from_prop(JNIEnv *env) {
         LOGI("rich-capture reporter '%s' bind %s", cls, ok ? "ok" : "FAILED");
     }
     if (cls) (*env)->ReleaseStringUTFChars(env, jval, cls);
-    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);
     return ok;
 }
 

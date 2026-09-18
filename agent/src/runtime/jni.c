@@ -1,6 +1,7 @@
 // JavaVM discovery and app-class loading shared by command modules.
 
 #include "jni.h"
+#include "jni_env_hooks.h"
 
 #include <dlfcn.h>
 #include <string.h>
@@ -63,7 +64,7 @@ jobject adh_jni_app_class_loader(JNIEnv *env) {
             if (loader) return loader;
         }
     }
-    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);
 
     jclass thread = (*env)->FindClass(env, "java/lang/Thread");
     jmethodID current = thread ? (*env)->GetStaticMethodID(env, thread, "currentThread",
@@ -72,7 +73,7 @@ jobject adh_jni_app_class_loader(JNIEnv *env) {
     jmethodID get = t ? (*env)->GetMethodID(env, thread, "getContextClassLoader",
                                             "()Ljava/lang/ClassLoader;") : NULL;
     if (get) return (*env)->CallObjectMethod(env, t, get);
-    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);
     return NULL;
 }
 void adh_jni_class_name(JNIEnv *env, jclass clazz, char *out, size_t out_size) {
@@ -101,10 +102,10 @@ void adh_jni_class_name(JNIEnv *env, jclass clazz, char *out, size_t out_size) {
         }
         (*env)->DeleteLocalRef(env, name);
     }
-    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);   // ours, not the caller's
+    if (adh_jni_exception_check(env)) (*env)->ExceptionClear(env);   // ours, not the caller's
     (*env)->PopLocalFrame(env, NULL);
     if (pending) {
-        if (!(*env)->ExceptionCheck(env)) (*env)->Throw(env, pending);
+        if (!adh_jni_exception_check(env)) (*env)->Throw(env, pending);
         (*env)->DeleteLocalRef(env, pending);
     }
 }

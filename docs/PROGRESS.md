@@ -15,6 +15,13 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.77–v4.79 JNIEnv 表收尾：字符串全族 + 反射桥 + FatalError/ExceptionCheck（2026-09-19，host 验收 PASS；真机待做）**：把覆盖率名单的最后 13 项一次做完——**228/229 表项已可挂**，唯一余项由另一套机制覆盖。
+      · v4.77 字符串族补齐 6 槽（覆盖率 **215 → 221**）：`NewString`（UTF-16 → Java 字符串，事件 `len=N text="…"` 有界预览）、`GetStringLength`/`GetStringUTFLength`（`string=.. len=N`）、`ReleaseStringUTFChars`（`string=.. chars=..`）、`GetStringCritical`/`ReleaseStringCritical`。**critical 那一对刻意不调任何 JNI 函数**（规范禁止在 critical 区里再调 JNI）：`GetStringCritical` 用"返回 NULL 即失败"代替 `ExceptionCheck`，预览只读已到手的内存；释放侧只记指针。
+      · v4.78 反射桥 + 注销侧 5 槽（**221 → 226**）：`FromReflectedMethod`/`FromReflectedField`（`reflect=.. -> mid/fid=0x..`——id 正是 host 侧与 `GetMethodID`/`GetFieldID` 事件连接的关键，"用反射拿 id、绕开 ID 查询流量"的调用点从此可见）、`ToReflectedMethod`/`ToReflectedField`（带类名与 static 标志）、`UnregisterNatives`（`class=Class -> 0/-1`，卸载 native 绑定的信号）。
+      · v4.79 最后两项（**226 → 228**）+ 一处必要的内部改造：`FatalError` **先写事件再调原函数**（规范上它永不返回、进程随即就死，事件是 best effort——ring 靠 host 循环排空）；`ExceptionCheck` 是表里最热的表项，为了不把**我们自己的**异常检查记成目标行为，agent 内部全部改走 `adh_jni_exception_check()`（用已保存的 original 直调、永不经过表）——不只是本文件，另外 8 个模块（bootstrap/capture/actions/art/inspection/jni/jni_method_names/trace）的 **52 处**调用也一起切过来，声明放在 `jni_env_hooks.h` 里，避免"某个模块忘了这条规则"；只有目标自己的调用会进事件（`pending=true/false`，按槽位预算封顶）。
+      · 唯一剩下的 `RegisterNatives` 不是缺口：v4.14 起由 `jni_hooks.c` 的**入口 inline hook** 覆盖（JNI_HOOK 事件）；v90 现在把它显式列为 `COVERED_ELSEWHERE`，并加门禁——"未挂且不在该名单"的表项直接 FAIL，不允许悄悄漏掉。
+      · 安全网：13 条新 `_Static_assert`；索引 163/164/168/170/224/225、7/8/9/12/216、18/228 由 v90 对 `jni.h` 机检（`checked 228 indices`），覆盖率下限提到 228。
+      · 验收：agent 零告警重建（1014 KB）；v90 PASS（228/229，未覆盖名单只剩 `RegisterNatives` 且已分类）；host 全量门禁 **31 PASS / 0 FAIL / 84 SKIP**（115 脚本）。
 - [~] **v4.76 CallNonvirtual 全族入表 + 表/枚举一致性硬约束（2026-09-19，host 验收 PASS；真机待做）**：这一批把最大的剩余盲区一次收完，顺带揪出并修掉一个**从 v4.55 起就潜伏的字段槽位错位**。
       · 新增 30 槽（覆盖率 **185/229 → 215/229 = 94%**）：`CallNonvirtual{Object,Boolean,Byte,Char,Short,Int,Long,Float,Double}Method` 与 `CallNonvirtualVoidMethod`，各三种 JNI 形态（varargs / V / A）。非虚调用是"**调用方自己指定执行哪个实现**、绕过接收者运行时的类"，所以事件在常规成员标签后追加 `via=<class>`——"到底调了谁"是这类调用唯一值得记的东西。
       · **P1（潜伏 bug，本批修复）**：`ENV_SLOT_CallStaticVoidMethod_end` 是个纯算术锚点，但枚举成员**必然会占用一个值**，于是字段访问器整族的枚举值比它们在 `g_env_hooks[]` 里的位置**大 1**。安装路径是"按名字取表位置 → `env_hook_slot(index)` 按枚举值 switch"，结果每个字段槽位都会落到 `default` 分支、以 `table entry unavailable` 被拒——**v4.55 的 36 个字段访问器、v4.58 的 setValue 改写、v4.56 的字段摘要从来没有真正挂上过**（真机验收一直是待做，所以没人发现）。现在锚点改成不吞槽位的别名式写法（`ENV_SLOT_CallNonvirtualVoidMethodA_alias = base + 2`），字段块落在 179–214 与表一一对应。
