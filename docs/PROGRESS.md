@@ -15,6 +15,10 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.67 JNIEnv 异常流 + VM 句柄（2026-09-19，host 验收 PASS；真机待做）**：覆盖率报告（v4.66）点名的下一批高价值表项就是**异常流**——反分析代码常用异常当控制流，"抛了什么、谁清掉的"本身就是信号；`GetJavaVM` 则是目标拿到 VM 句柄去做更激进事情的入口。
+      · 新增 6 个槽（覆盖率 **119/229 → 125/229 = 55%**）：`Throw`（事件带 throwable 指针 + 类名）、`ThrowNew`（类名 + **有界消息预览**）、`ExceptionOccurred`（只报指针——**此时异常正在挂起，绝不能再调 JNI 取类名**，否则 CheckJNI 直接 abort，这条写进注释）、`ExceptionDescribe`/`ExceptionClear`（成对出现，看清"谁把异常吞了"）、`GetJavaVM`（vm 指针）。
+      · 安全网照旧：6 条 `_Static_assert` 钉死签名、索引 13/14/15/16/17/219 由 v90 对 `jni.h` 机检（`checked 125 indices`），安装期仍 refuse 偏移不符；v90 的覆盖率下限**从 115 提到 125**（只升不降）。
+      · 验收：agent 零告警重建；v90 PASS（125/229，55%）；host 全量门禁 **31 PASS / 0 FAIL / 84 SKIP**（115 脚本）。
 - [~] **v4.66 评审收口 + JNIEnv 覆盖率报告（2026-09-19，host 验收 PASS）**：评审给了两条 P1 和一条结构建议，全部落地。
       · **P1（事件可信度）**：`GetStringRegion`/`GetStringUTFRegion`/`GetStringChars` 此前在**调用失败（抛异常）后仍读缓冲区做预览**——越界时 ART 抛 `StringIndexOutOfBoundsException` 且**不写 buf**，于是我们会把**调用方的未初始化内存**当"目标拷走的字符串"打进事件，还报 `ok=1`。现在调用后立刻 `ExceptionCheck`，失败则**跳过预览**、事件写明 `<copy failed, buffer untouched>` 且 `ok=false`；`GetDirectBufferCapacity` 的 `capacity=0` 也改成显式标注（"空直接缓冲 or 非直接缓冲"），不再让人猜。
       · **P1（验收强度）**：v91 的 `textOk` 原本是"三个字符串读取器里两个命中即可"，而三个 wrapper 是**独立代码路径**——现改为**逐个证明**（`utf16 && utf8 && pin && release` 四条独立断言），并把 `strCalls >= 7` 换成 `>= STR_FUNCS.length`（去掉魔数）。

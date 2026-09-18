@@ -98,7 +98,7 @@ const covered = abiFns.filter((n) => claimed.has(n));
 const uncovered = abiFns.filter((n) => !claimed.has(n));
 notes.push(`coverage: ${covered.length}/${abiFns.length} function-table entries hooked (${Math.round((covered.length / abiFns.length) * 100)}%)`);
 notes.push(`uncovered (${uncovered.length}): ${uncovered.slice(0, 16).join(', ')}${uncovered.length > 16 ? ', ...' : ''}`);
-if (covered.length < 115) problems.push(`JNIEnv coverage dropped to ${covered.length}/${abiFns.length} (expected >= 115; add slots or fix the table)`);
+if (covered.length < 125) problems.push(`JNIEnv coverage dropped to ${covered.length}/${abiFns.length} (expected >= 125; the floor only ratchets up)`);
 
 // ---- 5. pin the indices the NEXT step (field accessors) will use, so those numbers come from the
 // ABI header instead of being hand-copied into the implementation or the docs ----

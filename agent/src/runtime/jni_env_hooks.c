@@ -86,6 +86,15 @@ enum {
     // reads a Java string (a direct pointer instead of a copy).
     ENV_SLOT_GetStringChars,
     ENV_SLOT_ReleaseStringChars,
+    // v4.67: exception flow + VM handle. Anti-analysis code uses exceptions as control flow, so
+    // "which exception was raised and who cleared it" is a real signal; GetJavaVM hands the target
+    // the VM handle it would need for anything more invasive.
+    ENV_SLOT_Throw,
+    ENV_SLOT_ThrowNew,
+    ENV_SLOT_ExceptionOccurred,
+    ENV_SLOT_ExceptionDescribe,
+    ENV_SLOT_ExceptionClear,
+    ENV_SLOT_GetJavaVM,
     ENV_SLOT_NewDirectByteBuffer,
     ENV_SLOT_GetDirectBufferAddress,
     ENV_SLOT_GetDirectBufferCapacity,
@@ -143,6 +152,8 @@ struct EnvHookSlot {
     X("SetByteArrayRegion") X("ReleaseByteArrayElements") X("GetByteArrayRegion") \
     X("GetPrimitiveArrayCritical") X("ReleasePrimitiveArrayCritical") \
     X("GetStringRegion") X("GetStringUTFRegion") X("GetStringChars") X("ReleaseStringChars") \
+    X("Throw") X("ThrowNew") X("ExceptionOccurred") X("ExceptionDescribe") X("ExceptionClear") \
+    X("GetJavaVM") \
     X("NewDirectByteBuffer") \
     X("GetDirectBufferAddress") X("GetDirectBufferCapacity")
 
@@ -1036,7 +1047,119 @@ static void ReleaseStringChars_wrapper(JNIEnv *env, jstring str, const jchar *ch
     g_env_hook_in_ours = 0;
 }
 
+// ---- v4.67: exception flow + VM handle --------------------------------------
+// ExceptionOccurred is called exactly WHEN an exception is pending, so none of these wrappers may make
+// JNI calls that require a clear exception state: the name lookups are gated on "no pending exception
+// at entry" and ExceptionOccurred reports only the pointer.
+static jint Throw_wrapper(JNIEnv *env, jthrowable obj) {
+    typedef jint (JNICALL *fn_t)(JNIEnv *, jthrowable);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_Throw);
+    if (!original) return JNI_ERR;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_Throw)) return original(env, obj);
+    char detail[220] = "";
+    if (env_budget_left(ENV_SLOT_Throw)) {
+        char cls[160] = "";
+        if (!(*env)->ExceptionCheck(env) && obj) {
+            jclass c = (*env)->GetObjectClass(env, obj);
+            if (c) adh_jni_class_name(env, c, cls, sizeof(cls));
+            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        }
+        snprintf(detail, sizeof(detail), "throwable=%p class=%s", (void *)obj, cls[0] ? cls : "?");
+    }
+    g_env_hook_in_ours = 1;
+    jint rc = original(env, obj);
+    g_env_hook_in_ours = 0;
+    env_note(ENV_SLOT_Throw, detail[0] ? detail : NULL, rc == JNI_OK);
+    return rc;
+}
+
+static jint ThrowNew_wrapper(JNIEnv *env, jclass clazz, const char *message) {
+    typedef jint (JNICALL *fn_t)(JNIEnv *, jclass, const char *);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_ThrowNew);
+    if (!original) return JNI_ERR;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_ThrowNew)) return original(env, clazz, message);
+    char detail[280] = "";
+    if (env_budget_left(ENV_SLOT_ThrowNew)) {
+        char cls[160] = "";
+        if (!(*env)->ExceptionCheck(env) && clazz) {
+            adh_jni_class_name(env, clazz, cls, sizeof(cls));
+            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        }
+        char msg[96] = "";
+        if (message) {
+            size_t p = 0;
+            for (size_t i = 0; message[i] && p + 2 < sizeof(msg); i++) {
+                char c = message[i];
+                msg[p++] = (c >= 0x20 && c < 0x7f) ? c : '.';
+            }
+            msg[p] = 0;
+        }
+        snprintf(detail, sizeof(detail), "class=%s message=\"%s\"", cls[0] ? cls : "?", msg);
+    }
+    g_env_hook_in_ours = 1;
+    jint rc = original(env, clazz, message);
+    g_env_hook_in_ours = 0;
+    env_note(ENV_SLOT_ThrowNew, detail[0] ? detail : NULL, rc == JNI_OK);
+    return rc;
+}
+
+static jthrowable ExceptionOccurred_wrapper(JNIEnv *env) {
+    typedef jthrowable (JNICALL *fn_t)(JNIEnv *);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_ExceptionOccurred);
+    if (!original) return NULL;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_ExceptionOccurred)) return original(env);
+    g_env_hook_in_ours = 1;
+    jthrowable ex = original(env);
+    g_env_hook_in_ours = 0;
+    char detail[128];
+    snprintf(detail, sizeof(detail), "throwable=%p", (void *)ex);
+    env_note(ENV_SLOT_ExceptionOccurred, env_budget_left(ENV_SLOT_ExceptionOccurred) ? detail : NULL, ex != NULL);
+    return ex;
+}
+
+static void ExceptionDescribe_wrapper(JNIEnv *env) {
+    typedef void (JNICALL *fn_t)(JNIEnv *);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_ExceptionDescribe);
+    if (!original) return;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_ExceptionDescribe)) { original(env); return; }
+    g_env_hook_in_ours = 1;
+    original(env);
+    g_env_hook_in_ours = 0;
+    env_note(ENV_SLOT_ExceptionDescribe, env_budget_left(ENV_SLOT_ExceptionDescribe) ? "describe" : NULL, 1);
+}
+
+static void ExceptionClear_wrapper(JNIEnv *env) {
+    typedef void (JNICALL *fn_t)(JNIEnv *);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_ExceptionClear);
+    if (!original) return;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_ExceptionClear)) { original(env); return; }
+    g_env_hook_in_ours = 1;
+    original(env);
+    g_env_hook_in_ours = 0;
+    env_note(ENV_SLOT_ExceptionClear, env_budget_left(ENV_SLOT_ExceptionClear) ? "cleared" : NULL, 1);
+}
+
+static jint GetJavaVM_wrapper(JNIEnv *env, JavaVM **vm) {
+    typedef jint (JNICALL *fn_t)(JNIEnv *, JavaVM **);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_GetJavaVM);
+    if (!original) return JNI_ERR;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_GetJavaVM)) return original(env, vm);
+    g_env_hook_in_ours = 1;
+    jint rc = original(env, vm);
+    g_env_hook_in_ours = 0;
+    char detail[96];
+    snprintf(detail, sizeof(detail), "vm=%p", (void *)(vm ? *vm : NULL));
+    env_note(ENV_SLOT_GetJavaVM, env_budget_left(ENV_SLOT_GetJavaVM) ? detail : NULL, rc == JNI_OK);
+    return rc;
+}
+
 // Compile-time type check: each wrapper must have exactly its table entry signature.
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->Throw), __typeof__(&Throw_wrapper)), "Throw_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->ThrowNew), __typeof__(&ThrowNew_wrapper)), "ThrowNew_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->ExceptionOccurred), __typeof__(&ExceptionOccurred_wrapper)), "ExceptionOccurred_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->ExceptionDescribe), __typeof__(&ExceptionDescribe_wrapper)), "ExceptionDescribe_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->ExceptionClear), __typeof__(&ExceptionClear_wrapper)), "ExceptionClear_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetJavaVM), __typeof__(&GetJavaVM_wrapper)), "GetJavaVM_wrapper signature mismatch");
 _Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetStringChars), __typeof__(&GetStringChars_wrapper)), "GetStringChars_wrapper signature mismatch");
 _Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->ReleaseStringChars), __typeof__(&ReleaseStringChars_wrapper)), "ReleaseStringChars_wrapper signature mismatch");
 _Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetStringRegion), __typeof__(&GetStringRegion_wrapper)), "GetStringRegion_wrapper signature mismatch");
@@ -1146,6 +1269,12 @@ static int env_hook_spec_index(int index) {
         case ENV_SLOT_SetByteArrayRegion: return 208;
         case ENV_SLOT_GetPrimitiveArrayCritical: return 222;
         case ENV_SLOT_GetStringRegion: return 220;
+        case ENV_SLOT_Throw: return 13;
+        case ENV_SLOT_ThrowNew: return 14;
+        case ENV_SLOT_ExceptionOccurred: return 15;
+        case ENV_SLOT_ExceptionDescribe: return 16;
+        case ENV_SLOT_ExceptionClear: return 17;
+        case ENV_SLOT_GetJavaVM: return 219;
         case ENV_SLOT_GetStringChars: return 165;
         case ENV_SLOT_ReleaseStringChars: return 166;
         case ENV_SLOT_GetStringUTFRegion: return 221;
@@ -1186,6 +1315,12 @@ static void **env_hook_slot(struct JNINativeInterface *table, int index) {
         case ENV_SLOT_ReleaseByteArrayElements: return (void **)(uintptr_t)&table->ReleaseByteArrayElements;
         case ENV_SLOT_GetByteArrayRegion: return (void **)(uintptr_t)&table->GetByteArrayRegion;
         case ENV_SLOT_GetPrimitiveArrayCritical: return (void **)(uintptr_t)&table->GetPrimitiveArrayCritical;
+        case ENV_SLOT_Throw: return (void **)(uintptr_t)&table->Throw;
+        case ENV_SLOT_ThrowNew: return (void **)(uintptr_t)&table->ThrowNew;
+        case ENV_SLOT_ExceptionOccurred: return (void **)(uintptr_t)&table->ExceptionOccurred;
+        case ENV_SLOT_ExceptionDescribe: return (void **)(uintptr_t)&table->ExceptionDescribe;
+        case ENV_SLOT_ExceptionClear: return (void **)(uintptr_t)&table->ExceptionClear;
+        case ENV_SLOT_GetJavaVM: return (void **)(uintptr_t)&table->GetJavaVM;
         case ENV_SLOT_GetStringChars: return (void **)(uintptr_t)&table->GetStringChars;
         case ENV_SLOT_ReleaseStringChars: return (void **)(uintptr_t)&table->ReleaseStringChars;
         case ENV_SLOT_GetStringRegion: return (void **)(uintptr_t)&table->GetStringRegion;
@@ -1221,6 +1356,12 @@ static void *env_hook_wrapper(int index) {
         case ENV_SLOT_ReleaseByteArrayElements: return (void *)&ReleaseByteArrayElements_wrapper;
         case ENV_SLOT_GetByteArrayRegion: return (void *)&GetByteArrayRegion_wrapper;
         case ENV_SLOT_GetPrimitiveArrayCritical: return (void *)&GetPrimitiveArrayCritical_wrapper;
+        case ENV_SLOT_Throw: return (void *)&Throw_wrapper;
+        case ENV_SLOT_ThrowNew: return (void *)&ThrowNew_wrapper;
+        case ENV_SLOT_ExceptionOccurred: return (void *)&ExceptionOccurred_wrapper;
+        case ENV_SLOT_ExceptionDescribe: return (void *)&ExceptionDescribe_wrapper;
+        case ENV_SLOT_ExceptionClear: return (void *)&ExceptionClear_wrapper;
+        case ENV_SLOT_GetJavaVM: return (void *)&GetJavaVM_wrapper;
         case ENV_SLOT_GetStringChars: return (void *)&GetStringChars_wrapper;
         case ENV_SLOT_ReleaseStringChars: return (void *)&ReleaseStringChars_wrapper;
         case ENV_SLOT_GetStringRegion: return (void *)&GetStringRegion_wrapper;
