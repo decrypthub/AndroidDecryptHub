@@ -5,7 +5,7 @@
 // v4.56, the id they handed out ("Class#name:sig -> 0x.."). Joining the two is what turns a pointer
 // into "com.example.Foo#isDebug:Z" - the thing an analyst can actually read, and the signal that
 // says which fields a target probes through native code.
-import { captures } from './state.ts';
+import { captures, storeLossNote } from './state.ts';
 import { drainSession } from './service.ts';
 
 export interface JniEnvEvent {
@@ -132,5 +132,10 @@ export async function jniFieldDigest(session: string, opts: { sinceMs?: number; 
     } catch { /* not our event shape */ }
   }
   events.reverse();   // oldest first, so firstTs/lastTs/lastValue are chronological
-  return { drain, window: { sinceMs, limit }, ...digestJniFields(events, opts) };
+  const digest = { drain, window: { sinceMs, limit }, ...digestJniFields(events, opts) };
+  // A window whose records were evicted from the store can look like "the field was never
+  // accessed" - say so instead (v4.96).
+  const storeNote = storeLossNote(session, { sinceMs });
+  if (storeNote) digest.notes.push(storeNote);
+  return digest;
 }

@@ -215,10 +215,32 @@ try {
 }
 // Persist. Throws on failure — callers MUST surface it so the UI never claims "已保存" on a failed write.
 export function saveSettings() { writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2)); }
-/** Retention accounting for the in-memory capture list (see the counters above). */
-export function captureStoreStats() {
+/** Retention accounting for the in-memory capture list. Pass a session for that session's view. */
+export function captureStoreStats(session?: string) {
+  if (session) {
+    const c = captureSessionCounters.get(session) ?? { pushed: 0, evicted: 0 };
+    const mine = captures.filter((x) => x.sessionId === session);
+    return { pushed: c.pushed, evicted: c.evicted, retained: mine.length,
+      retain: settings.capture.retain, oldestTs: mine.length ? Number(mine[0].ts ?? 0) : 0,
+      oldestId: mine.length ? Number(mine[0].id ?? 0) : 0 };
+  }
   return { pushed: capturePushed, evicted: captureEvicted, retained: captures.length,
-    retain: settings.capture.retain, oldestTs: captures.length ? Number(captures[0].ts ?? 0) : 0 };
+    retain: settings.capture.retain, oldestTs: captures.length ? Number(captures[0].ts ?? 0) : 0,
+    oldestId: captures.length ? Number(captures[0].id ?? 0) : 0 };
+}
+
+/**
+ * A note for any digest that filters the store by session and window: when that session had
+ * records evicted and the requested window reaches back past the oldest retained record, the
+ * window may be missing events. Returns null when nothing was lost or the window is intact.
+ */
+export function storeLossNote(session: string, window: { sinceMs?: number | null; sinceCaptureId?: number | null } = {}): string | null {
+  const s = captureStoreStats(session);
+  if (s.evicted <= 0) return null;
+  // The window is intact when the oldest retained record still precedes what was asked for.
+  if (window.sinceMs != null && s.oldestTs > 0 && s.oldestTs <= window.sinceMs) return null;
+  if (window.sinceCaptureId != null && s.oldestId > 0 && s.oldestId <= window.sinceCaptureId) return null;
+  return `capture store: ${s.evicted} record(s) of this session were evicted (retain ${s.retain}) - the requested window may be missing events`;
 }
 
 export function configStats() { return { captures: captures.length, dumps: dumps.size, events: events.length, on: captureTimers.size > 0, agents: sessions.size, capture: captureHealth() }; }
@@ -239,7 +261,12 @@ export function pushCapture(entry: Capture): boolean {
   if (entry.category === 'crypto' && settings.capture.families[familyOf(entry.algo)] === false) return false;
   captures.push(entry);
   capturePushed++;
-  while (captures.length > settings.capture.retain) { captures.shift(); captureEvicted++; }
+  bumpSession(entry.sessionId, 'pushed');
+  while (captures.length > settings.capture.retain) {
+    const dropped = captures.shift();
+    captureEvicted++;
+    if (dropped) bumpSession(dropped.sessionId, 'evicted');
+  }
   return true;
 }
 // Self-test workload classes the one-shot probe ops drive. The AGENT is target-agnostic —
@@ -275,6 +302,15 @@ export const captures: Capture[] = [];
 // a digest admit that its window may be missing events instead of looking complete.
 let capturePushed = 0;
 let captureEvicted = 0;
+// Per session as well: the store is one FIFO across sessions, so a digest that filters by
+// session cannot read the global eviction counter and expect it to describe its own window.
+const captureSessionCounters = new Map<string, { pushed: number; evicted: number }>();
+function bumpSession(sessionId: string | undefined, field: 'pushed' | 'evicted'): void {
+  if (!sessionId) return;
+  const cur = captureSessionCounters.get(sessionId) ?? { pushed: 0, evicted: 0 };
+  cur[field]++;
+  captureSessionCounters.set(sessionId, cur);
+}
 // capSeq lives in service.ts — it's ++'d inside startCaptureLoop there, and ESM imported
 // bindings are read-only for the importer (can't reassign from another module). It's only
 // used by the capture loop, so it's a service-local counter, not shared state.

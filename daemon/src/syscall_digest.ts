@@ -5,7 +5,7 @@
 // function collects this fingerprint, and how often". This module groups the events by
 // (syscall number, caller symbol) and keeps the runtime x8 next to the statically attributed number,
 // so a wrong attribution shows up as a mismatch instead of silently mislabelling the hook.
-import { captures, capStats, captureStoreStats } from './state.ts';
+import { captures, capStats, captureStoreStats, storeLossNote } from './state.ts';
 import { sendCmd, drainSession } from './service.ts';
 import { loadModuleTable, symbolizeAddresses, parseHex, hex, type SymbolizedAddress } from './module_symbols.ts';
 import { argPlan, decodeArgs, pathOf, summarizeArgs, type DecodedArg } from './syscall_args.ts';
@@ -190,13 +190,15 @@ export function syscallCounters(
   status: { id: number; hits: number; throttled: number }[] | null,
   sampleCount: number,
   eventThrottled: number,
-): { hits: number; throttled: number; emitted: number; source: 'hook-status' | 'events' } {
+): { hits: number; throttled: number; emitted: number; source: 'hook-status' | 'events'; basis: 'since-install' | 'window-lower-bound' } {
   if (status && status.length) {
     const hits = status.reduce((a, h) => a + h.hits, 0);
     const throttled = status.reduce((a, h) => a + h.throttled, 0);
-    return { hits, throttled, emitted: Math.max(0, hits - throttled), source: 'hook-status' };
+    // The agent counters are cumulative for the hook, NOT for the digest window: hits/emitted here
+    // describe everything since the watch was installed, while the groups below describe the window.
+    return { hits, throttled, emitted: Math.max(0, hits - throttled), source: 'hook-status', basis: 'since-install' };
   }
-  return { hits: sampleCount + eventThrottled, throttled: eventThrottled, emitted: sampleCount, source: 'events' };
+  return { hits: sampleCount + eventThrottled, throttled: eventThrottled, emitted: sampleCount, source: 'events', basis: 'window-lower-bound' };
 }
 
 export interface SyscallDigestResult extends SyscallDigest {
@@ -210,7 +212,9 @@ export interface SyscallDigestResult extends SyscallDigest {
    * ('hook-status' = the authoritative agent counters, 'events' = the deltas in the events when
    * status was unavailable, which undercounts the last window).
    */
-  counters: { hits: number; throttled: number; emitted: number; source: 'hook-status' | 'events' };
+  counters: { hits: number; throttled: number; emitted: number; source: 'hook-status' | 'events';
+    /** 'since-install' = cumulative agent counters, 'window-lower-bound' = the event deltas. */
+    basis: 'since-install' | 'window-lower-bound' };
 }
 
 /** Read the session's NATIVE_HOOK captures, parse them and digest the syscall hits. */
@@ -354,7 +358,12 @@ export async function syscallDigest(session: string, opts: {
   } catch { /* fall back to the event deltas */ }
   const counters = syscallCounters(hookStatus, samples.length, eventThrottled);
   if (counters.throttled > 0) {
-    result.notes.push(`throttled: ${counters.throttled} hit(s) were suppressed by the watch window - the digest counts every hit (emitted ${counters.emitted} of ${counters.hits}, source ${counters.source})`);
+    result.notes.push(`throttled: ${counters.throttled} hit(s) were suppressed by the watch window - the digest counts every hit (emitted ${counters.emitted} of ${counters.hits}, source ${counters.source}, basis ${counters.basis})`);
+  }
+  if (counters.basis === 'since-install') {
+    result.notes.push('counters are cumulative since the hook was installed; the groups below cover the requested window only');
+  } else {
+    result.notes.push('counters are a window lower bound (hook status unavailable): the last throttled hit of a window never produces an event');
   }
   if (!drain.ok) result.notes.push(`capture drain failed (${drain.error ?? 'unknown'}): the digest reads whatever the store already holds`);
   const stat = capStats.get(session) ?? null;
@@ -365,12 +374,8 @@ export async function syscallDigest(session: string, opts: {
   if (lossy) result.notes.push(lossy);
   // Agent-side ring drops are one loss source; the daemon-side store cap is the other. If the
   // store evicted records that fall inside the requested window, the digest says so.
-  const store = captureStoreStats();
-  if (store.evicted > 0 && (sinceMs == null || store.oldestTs > sinceMs)) {
-    result.notes.push(`capture store: ${store.evicted} older record(s) were evicted (retain ${store.retain})`
-      + (sinceMs == null ? ' - the digest window may miss events that arrived before the oldest retained one'
-                         : ' - the requested window starts before the oldest retained record'));
-  }
+  const storeNote = storeLossNote(session, { sinceMs });
+  if (storeNote) result.notes.push(storeNote);
   if (symbolSource === 'unavailable') result.notes.push('symbolization unavailable: caller frames are shown as module+offset only');
   if (symbolSource === 'none') result.notes.push('no caller chain in the events: install the watch through syscall_watch (it sets backtrace:true)');
   return { ...result, window: { sinceMs, limit }, symbolSource, ring, counters };

@@ -139,10 +139,10 @@ test('a module without a symbol is labelled by offset, not by an empty name', ()
 test('a thinned watch is counted, not mistaken for a quiet target', () => {
   // The agent's status is authoritative: hits counts every hit, throttled the suppressed ones.
   const withStatus = syscallCounters([{ id: 3, hits: 120, throttled: 100 }, { id: 4, hits: 5, throttled: 0 }], 25, 3);
-  assert.deepEqual(withStatus, { hits: 125, throttled: 100, emitted: 25, source: 'hook-status' });
+  assert.deepEqual(withStatus, { hits: 125, throttled: 100, emitted: 25, source: 'hook-status', basis: 'since-install' });
   // Without status the event deltas are the lower bound - and the source field says so.
   const events = syscallCounters(null, 25, 3);
-  assert.deepEqual(events, { hits: 28, throttled: 3, emitted: 25, source: 'events' });
+  assert.deepEqual(events, { hits: 28, throttled: 3, emitted: 25, source: 'events', basis: 'window-lower-bound' });
   // A hook set that exists but was never hit must not invent numbers.
-  assert.deepEqual(syscallCounters([{ id: 9, hits: 0, throttled: 0 }], 0, 0), { hits: 0, throttled: 0, emitted: 0, source: 'hook-status' });
+  assert.deepEqual(syscallCounters([{ id: 9, hits: 0, throttled: 0 }], 0, 0), { hits: 0, throttled: 0, emitted: 0, source: 'hook-status', basis: 'since-install' });
 });

@@ -243,7 +243,7 @@ async function waitPhone(args: any) {
     throw new Error('phone_wait requires a selector, activePackage, activityContains, an agent filter (agentEvent/agentEventContains/captureCategory/captureContains) or a notification filter (notificationContains/notificationFrom)');
   if (wantsNotification && settings.automation.notifications !== true)
     throw new Error('notifications_disabled: enable automation.notifications in ADH settings to wait on notifications');
-  const timeoutMs = Math.max(500, Math.min(60_000, Number(args.timeoutMs ?? 8_000)));
+  const timeoutMs = finiteNumber(args.timeoutMs, 8_000, 500, 60_000);
   const intervalMs = Math.max(100, Math.min(2_000, Number(args.intervalMs ?? 350)));
   const maxScrolls = Math.max(0, Math.min(50, Number(args.maxScrolls ?? 10)));
   const startedAt = Date.now();
@@ -416,6 +416,16 @@ async function skillPhone(args: any) {
   throw new Error('phone_skill requires action: list | save | run | delete');
 }
 
+// NaN-safe numeric parsing (v4.96). Number('abc') is NaN and every Math.max/min clamp propagates
+// it: a NaN timeout never fires, so a wait primitive polls forever, and NaN retries make
+// `attempt >= retries` false forever. The MCP layer does not schema-validate, so this has to be
+// handled where the numbers are read.
+function finiteNumber(value: unknown, fallback: number, min: number, max: number): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
+}
+
 async function taskPhone(args: any) {
   assertAutomationReady();
   const steps = Array.isArray(args.steps) ? args.steps : [];
@@ -428,7 +438,7 @@ async function taskPhone(args: any) {
   // Overall budget (v4.92): a per-step timeout bounds one step, so a workflow of N steps could take
   // N x timeout and a hung step still burned its whole window. The deadline is checked before every
   // step and retry, and the remaining budget is pushed into the step's own timeoutMs.
-  const totalMs = Math.max(5_000, Math.min(10 * 60_000, Number(args.timeoutMs ?? 120_000)));
+  const totalMs = finiteNumber(args.timeoutMs, 120_000, 5_000, 600_000);
   const deadline = Date.now() + totalMs;
   const remainingMs = () => deadline - Date.now();
   const deadlineHit = (index: number) => ({ ok: false, timedOut: true, failedStep: index, steps: results,
@@ -441,8 +451,8 @@ async function taskPhone(args: any) {
     // The step may ask for its own timeout; it never gets more than the task has left.
     const askedMs = Number(stepArgs.timeoutMs);
     stepArgs.timeoutMs = Number.isFinite(askedMs) && askedMs > 0 ? Math.min(askedMs, remainingMs()) : remainingMs();
-    const retries = Math.max(0, Math.min(3, Number(step.retries ?? 0)));
-    const retryDelayMs = Math.max(50, Math.min(3_000, Number(step.retryDelayMs ?? 300)));
+    const retries = Math.trunc(finiteNumber(step.retries, 0, 0, 3));
+    const retryDelayMs = finiteNumber(step.retryDelayMs, 300, 50, 3_000);
     let attempt = 0;
     for (;;) {
       try {
@@ -464,6 +474,9 @@ async function taskPhone(args: any) {
       } catch (error) {
         const message = (error as Error).message || String(error);
         if (attempt >= retries) {
+          // If the budget ran out, that is the reason the step failed - reporting a generic step
+          // error would hide why (and a clamped wait looks like an ordinary wait_timeout).
+          if (remainingMs() <= 0) return deadlineHit(index);
           results.push({ index, id: step.id, type, ok: false, error: message });
           if (stopOnError) return { ok: false, failedStep: index, steps: results };
           break;
@@ -471,7 +484,7 @@ async function taskPhone(args: any) {
         attempt++;
         if (retryDelayMs >= remainingMs()) return deadlineHit(index);
         await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
-        stepArgs.timeoutMs = Math.max(1000, Math.min(Number(stepArgs.timeoutMs ?? remainingMs()), remainingMs()));
+        stepArgs.timeoutMs = Math.max(0, Math.min(Number(stepArgs.timeoutMs ?? remainingMs()), remainingMs()));
       }
     }
   }
@@ -490,7 +503,7 @@ async function runTaskStep(type: string, args: any): Promise<any> {
       // when the first of several selectors matches, and reports which one did.
       const conditions = Array.isArray(args.conditions) ? args.conditions.filter((item: any) => item && typeof item === 'object') : [];
       if (!conditions.length) throw new Error('wait_any requires a conditions array');
-      const timeoutMs = Math.max(500, Math.min(60_000, Number(args.timeoutMs ?? 10_000)));
+      const timeoutMs = finiteNumber(args.timeoutMs, 10_000, 500, 60_000);
       const intervalMs = Math.max(150, Math.min(2_000, Number(args.intervalMs ?? 350)));
       const startedAt = Date.now();
       let lastError = '';

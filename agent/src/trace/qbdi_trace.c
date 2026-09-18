@@ -119,6 +119,10 @@ int adh_qbdi_trace(void *func, const unsigned long long *args, int argc, char *o
     int o = snprintf(out, outsz,
                      "\"ok\":true,\"retval\":%llu,\"count\":%d,\"seen\":%d,\"cap\":%d,\"truncated\":%s,\"insns\":[",
                      (unsigned long long)ret, fits, n, QTRACE_MAX, truncated ? "true" : "false");
+    if (o < 0 || o >= outsz) {
+        snprintf(out, (size_t)(outsz > 0 ? outsz : 0), "\"ok\":false,\"error\":\"trace reply buffer too small for the header\"");
+        return -1;
+    }
     int emitted = 0;
     for (int i = 0; i < fits && o > 0 && o < outsz - 100; i++, emitted++)
         o += snprintf(out + o, outsz - o, "%s{\"addr\":\"%llx\",\"text\":\"%s\"}", i ? "," : "", g_qtrace[i].addr, g_qtrace[i].text);

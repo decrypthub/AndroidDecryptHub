@@ -216,7 +216,13 @@ export async function dumpRegion(sid: string, addrHex: string, size: number, tag
   const buf = Buffer.concat(parts);
   const sha = createHash('sha256').update(buf).digest('hex');
   const existing = dumps.get(sha);
-  if (existing) return { meta: existing, dedup: true };
+  // Dedup by content, but describe THIS request: the stored meta carries the completeness of the
+  // request that created it. A short read whose bytes match an earlier artifact used to inherit
+  // that artifact meta (complete:true, a smaller requestedSize), so a truncated dump came back
+  // looking whole.
+  if (existing) {
+    return { meta: { ...existing, size: buf.length, requestedSize: size, complete: buf.length === size }, dedup: true };
+  }
   const s = sessions.get(sid);
   const kind = inferKind(buf);
   const path = join(CAPTURES, `${sha.slice(0, 16)}.${kind}.bin`);

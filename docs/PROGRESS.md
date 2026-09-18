@@ -15,6 +15,12 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.96 第八轮评审收口：2 条 P1 + 4 条 P2（2026-09-19，host 验收 PASS；真机待做）**：这一轮评审的是 v4.91–v4.93（它审的 HEAD 早于 v4.94/v4.95，所以"native_call 原始地址无校验"那条已在本分支修掉）。
+      · **P1-1 dump 的 dedup 会借旧 meta**：`dumpRegion` 按 sha 命中已有工件时直接返回**旧 meta**——旧请求是 `complete:true, requestedSize:N`，新请求（2N，实际只读到 N）拿到同样的字节前缀就会命中，于是"短读"又变成了"完整"。现在 dedup 分支按**本次**请求重算 `size/requestedSize/complete` ✓。
+      · **P1-2 `phone_task` 的 NaN 会把时限变成无限**：`Number('abc')` → NaN 一路穿透（`Math.max/min` 不修 NaN）→ `remainingMs() <= 0` 永不成立、注入给 `wait`/`wait_any` 的 NaN 超时让轮询永不退出、NaN retries 让 `attempt >= retries` 永假；MCP 层没有 schema 校验，所以可达。现在统一走 `finiteNumber(value, fallback, min, max)`（timeout / retries / retryDelay 全部 NaN-safe）✓。
+      · **P2**：syscall `counters` 增加 `basis: since-install | window-lower-bound` 并在 note 里说明"计数是自安装累计、下面的分组才是窗口"；`qbdi_trace` 补"回复缓冲连 header 都放不下"的早退（当前不可达的契约洞）；`phone_task` 在**预算耗尽**导致步骤失败时改回报 `timedOut:true`（而不是一个看不出原因的 step error），重试注入的超时也改为 `max(0, …)`；`captureStoreStats(session)` 支持**按 session** 统计（evicted/pushed/oldestTs/oldestId），并把淘汰说明抽成 `storeLossNote()` 供 **syscall digest / java_trace / jni_field_digest** 三处共用（此前只有 syscall digest 有）。
+      · 单测：store 的窗口判定（`sinceMs`/`sinceCaptureId`/无窗口/未知 session）×1、counters basis 期望值更新 → daemon `node --test` **157**。
+      · 验收：agent 零告警重建；daemon 157 测试通过；host 全量门禁 **32 PASS / 0 FAIL / 84 SKIP**（116 脚本）。
 - [~] **v4.95 `native_call` 看门狗：卡死的调用不再冻住会话（2026-09-19，host 构建/门禁 PASS；真机待做）**：v4.94 把"调用本身没有超时"留作已知边界，这一版把它做掉——后果很重：一个不返回的目标函数会把 **agent 命令循环整个堵死**，之后所有命令都排在它后面，host 只能看到自己的超时。
       · agent：目标调用改在**独立线程**上跑，命令线程用 `pthread_cond_timedwait` 等 **15 秒**（早于 host 的 20s，保证 host 收到的是我们的诚实答复）；超时回 `ok:false, timedOut:true, watchdogSeconds:15`，说明"调用仍在目标里跑、结果不可用、会话仍可用"；成功回带 `timedOut:false`。
       · 两个语义细节：挂起 Java 异常的检查挪进 worker（异常是 **per-thread** 的，必须在真正发起调用的线程上查）；超时路径**故意让 job 泄漏**（worker 可能还在写它——一个小结构体换掉 use-after-free）。
