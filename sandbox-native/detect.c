@@ -182,6 +182,39 @@ JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_nativeHookProbe(JNIEnv *en
 // probe goes through GetStaticObjectField -> Get/Set<Type>Field on the live HeapProbe.sConfig and
 // Get/SetStaticIntField on the holder. It returns the number of accessor calls it made (0 = the
 // fixture object is not initialized yet).
+// v4.63 fixture: drive the string-copy and direct-buffer JNIEnv entries. Native fingerprint code
+// lifts Java strings into its own buffers (GetStringRegion / GetStringUTFRegion) and hands payloads
+// to Java as direct ByteBuffers (NewDirectByteBuffer + the two lookups). Returns the number of
+// accessor calls it made so the caller can assert the probe really ran.
+JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_jniStringProbe(JNIEnv *env, jclass clazz) {
+    (void)clazz;
+    int calls = 0;
+    jstring text = (*env)->NewStringUTF(env, "ADH-STRING-PROBE-0123456789");
+    if (!text) { (*env)->ExceptionClear(env); return 0; }
+
+    jchar wbuf[32];
+    memset(wbuf, 0, sizeof(wbuf));
+    (*env)->GetStringRegion(env, text, 4, 12, wbuf);
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); else calls++;
+
+    char ubuf[48];
+    memset(ubuf, 0, sizeof(ubuf));
+    (*env)->GetStringUTFRegion(env, text, 4, 12, ubuf);
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); else calls++;
+
+    static unsigned char payload[64];
+    for (int i = 0; i < 64; i++) payload[i] = (unsigned char)(i + 0x41);
+    jobject direct = (*env)->NewDirectByteBuffer(env, payload, (jlong)sizeof(payload));
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); else calls++;
+    if (direct) {
+        void *addr = (*env)->GetDirectBufferAddress(env, direct);
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); else calls++;
+        jlong cap = (*env)->GetDirectBufferCapacity(env, direct);
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); else calls++;
+    }
+    return (jint)calls;
+}
+
 JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_jniFieldProbe(JNIEnv *env, jclass clazz) {
     (void)clazz;
     int calls = 0;

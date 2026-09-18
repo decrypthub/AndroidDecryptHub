@@ -15,6 +15,10 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.64 v4.63 的设备半 + 沙盒夹具（2026-09-19，host 验收 PASS；真机待做）**：新加的 5 个表项（字符串拷出 + 直接缓冲）此前只有实现，没有真机验证路径。
+      · 沙盒新增 native 探针 **`Detection.jniStringProbe`**：`NewStringUTF` 造一个可识别字符串 → `GetStringRegion`（UTF-16，24 字符）+ `GetStringUTFRegion`（UTF-8，48 字节）各拷一次 → 对 64 字节本地缓冲 `NewDirectByteBuffer` → `GetDirectBufferAddress` + `GetDirectBufferCapacity`，返回实际调用次数。**`tools/build_detect.sh` 与 `sandbox-app` 的 `:app:assembleDebug` 都已在 host 上构建通过**（native 夹具 + Kotlin 声明 + APK）。
+      · v91 新增 `(3f)`：逐个安装这 5 个槽 → 取 capture 游标 → 触发探针（`calls ≥ 5`）→ 断言**每个被 hook 的表项都出事件**，且内容达标：字符串事件必须带 `text="…ADH-STR…"` 预览，直接缓冲事件必须带 `address=0x…` 与 `capacity=64`；随后逐个卸载并把结果纳入 `pass`。
+      · 验收：host 全量门禁 **31 PASS / 0 FAIL / 84 SKIP**（115 脚本）。
 - [~] **v4.63 JNIEnv 再补 5 个表项：字符串拷出 + 直接缓冲（2026-09-19，host 验收 PASS；真机待做）**：评审列的两个盲区正是指纹/算法分析最常踩的路径——**native 把 Java 字符串拷进自己的缓冲区**（`GetStringRegion`/`GetStringUTFRegion`）与**native 把大块数据以直接 ByteBuffer 交给 Java**（`NewDirectByteBuffer`/`GetDirectBufferAddress`/`GetDirectBufferCapacity`）。JNIEnv 表从 112 → **117 槽**（18 固定 + 21 族 ×3）。
       · 事件内容：字符串拷出事件带 `string=0x.. start/len` 与**有界文本预览**（UTF-16 24 字符、UTF-8 48 字节，不可打印转 `.`）——"它把哪个字符串拷走了"直接可读；直接缓冲事件带 `address/capacity`（`NewDirectByteBuffer` 另带返回的 jobject）。
       · 安全网照旧：每个 wrapper 有 `_Static_assert` 钉死与表项的签名一致（签名不符编译期失败，不是真机崩），索引由 `tools/verify_v90_jni_table_abi.sh` 对着 NDK `jni.h` 校验（现在 `checked 117 indices against the ABI`），安装期仍做偏移不符即拒绝。

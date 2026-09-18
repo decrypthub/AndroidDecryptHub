@@ -142,6 +142,46 @@ console.log(`digest after override: rewrittenSamples=${ovDigest.body?.rewrittenS
 const rewriteDigestOk = Number(ovDigest.body?.rewrittenSamples ?? 0) >= 1
   && rewrittenGroups.some((g) => g.lastRequested === '7');
 
+// (3f) v4.63: the string-copy and direct-buffer entries. The probe lifts a Java string into native
+// buffers and hands a native payload to Java as a direct ByteBuffer, so each hooked entry must
+// produce an event whose detail carries what the wrapper promised (text preview, address, capacity).
+const STR_FUNCS = ['GetStringRegion', 'GetStringUTFRegion', 'NewDirectByteBuffer', 'GetDirectBufferAddress', 'GetDirectBufferCapacity'];
+const strInstalled = [];
+for (const f of STR_FUNCS) {
+  const r = await post('/api/jni/env_hook', { session, action: 'install', function: f });
+  if (r.body?.ok !== true) fail(`install of ${f} failed: ` + String(r.body?.error ?? r.status), r.body);
+  strInstalled.push(f);
+}
+const preStr = await (await fetch(`${base}/api/captures?session=${encodeURIComponent(session)}&limit=1`)).json().catch(() => null);
+if (!preStr || !Array.isArray(preStr.captures)) fail('could not read the capture baseline for the string section');
+const strCursor = Math.max(0, ...(preStr.captures ?? []).map((c) => Number(c.id ?? 0)));
+const strCall = await post('/api/java/call', { session, className: 'com.adh.sandbox.Detection', method: 'jniStringProbe', params: '', args: [] });
+const strCalls = Number(strCall.body?.result?.result ?? -1);
+if (strCalls < 0) fail('java_call of jniStringProbe failed: ' + String(strCall.body?.error ?? strCall.status), strCall.body);
+await sleep(1500);
+const strList = await (await fetch(`${base}/api/captures?session=${encodeURIComponent(session)}&limit=400`)).json().catch(() => ({}));
+const strSeen = new Map();
+for (const c of (strList.captures ?? []).filter((x) => x.func === 'JNI_ENV' && Number(x.id ?? 0) > strCursor)) {
+  const d = await (await fetch(`${base}/api/captures/${c.id}`)).json().catch(() => null);
+  let ev = null;
+  try { ev = JSON.parse(String(d?.text ?? '')); } catch { ev = null; }
+  if (!ev?.function || !STR_FUNCS.includes(ev.function)) continue;
+  if (!strSeen.has(ev.function)) strSeen.set(ev.function, ev.value);
+}
+for (const f of STR_FUNCS) console.log(`  event ${f}: ${strSeen.get(f) ?? '(missing)'}`);
+const strMissing = STR_FUNCS.filter((f) => !strSeen.has(f));
+const textOk = /text="[^"]*ADH-STR/.test(String(strSeen.get('GetStringUTFRegion') ?? ''))
+  || /text="[^"]*ADH-STR/.test(String(strSeen.get('GetStringRegion') ?? ''));
+const bufferOk = /address=0x/.test(String(strSeen.get('GetDirectBufferAddress') ?? ''))
+  && /capacity=64/.test(String(strSeen.get('NewDirectByteBuffer') ?? ''))
+  && /capacity=64/.test(String(strSeen.get('GetDirectBufferCapacity') ?? ''));
+const strUnhooked = [];
+for (const f of STR_FUNCS) strUnhooked.push((await post('/api/jni/env_hook', { session, action: 'uninstall', function: f })).body?.ok === true);
+const stringProbeOk = strCall.body?.ok === true && strCalls >= 5 && strMissing.length === 0 && textOk && bufferOk && strUnhooked.every(Boolean);
+if (strMissing.length) console.log('no event for: ' + strMissing.join(', '));
+if (!textOk) console.log('the string-region event did not carry the copied text preview');
+if (!bufferOk) console.log('the direct-buffer events did not carry address/capacity');
+
 // (4) unhook, table restored, process alive
 const unhooked = [];
 for (const f of hooked) unhooked.push((await post('/api/jni/env_hook', { session, action: 'uninstall', function: f })).body?.ok === true);
@@ -157,7 +197,7 @@ if (!digestOk) console.log('the field digest did not resolve any access to a nam
 if (!patternOk) console.log('the "*Field" pattern did not select the field family (suffix matching)');
 if (!overrideOk) console.log('the SetIntField override did not change what the target stored, or the restore failed');
 if (!rewriteDigestOk) console.log('the field digest did not report the rewritten write (rewrittenSamples/lastRequested)');
-const pass = installedOk && patchedOk && relroOk && calls >= 2 && missing.length === 0 && valueOk && digestOk && patternOk && patternUnhookOk && overrideOk && rewriteDigestOk
+const pass = installedOk && patchedOk && relroOk && calls >= 2 && missing.length === 0 && valueOk && digestOk && patternOk && patternUnhookOk && overrideOk && rewriteDigestOk && stringProbeOk
   && unhooked.every(Boolean) && restored && alive.length > 0;
 console.log(pass ? 'RESULT:PASS' : 'RESULT:FAIL');
 EOF
