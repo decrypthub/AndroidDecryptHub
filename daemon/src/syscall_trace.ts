@@ -34,7 +34,7 @@ export interface SyscallTraceStart {
   note: string;
 }
 
-export async function syscallTraceStart(session: string, opts: SyscallWatchOptions & { throttleMs?: number }, deps: SyscallTraceDeps = defaultDeps): Promise<SyscallTraceStart> {
+export async function syscallTraceStart(session: string, opts: SyscallWatchOptions, deps: SyscallTraceDeps = defaultDeps): Promise<SyscallTraceStart> {
   const watch = await deps.watch(session, opts);
   const hooks: any[] = Array.isArray(watch?.hooks) ? watch.hooks : [];
   const hookIds: number[] = [];
@@ -52,6 +52,7 @@ export async function syscallTraceStart(session: string, opts: SyscallWatchOptio
   const notes: string[] = [];
   if (unattributed.length) notes.push(`${unattributed.length} site(s) had no statically attributed number: their events still report the runtime x8, but a filter-based attribution cannot be checked for them`);
   if (watch?.scanTruncated) notes.push('the static scanner hit its site cap: later svc sites were not examined');
+  if (Number(watch?.throttleMs) > 0) notes.push(`each hook emits at most one event per ${Number(watch.throttleMs)} ms: the digest counts every hit through status (hits - throttled), so a thinned stream is visible instead of looking like a quiet target`);
   return {
     action: 'start',
     module: String(watch?.module ?? opts.module),

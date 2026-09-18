@@ -17,6 +17,7 @@
 #include <cstring>
 #include <pthread.h>
 #include <string>
+#include <time.h>
 
 #define TAG "ADH_NATIVE_HOOK"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
@@ -26,6 +27,9 @@
 // Caller frames captured at the hit (x30 + the x29 chain). 8 covers ordinary call depth without
 // growing the event; the host symbolizes them and reports the count it actually got.
 #define ADH_NATIVE_BT_MAX 8
+// Upper bound of the per-hook event throttle window. Anything larger is silently a "log nothing
+// useful" setting, so it is clamped and the effective value is echoed in status.
+#define ADH_NATIVE_THROTTLE_MAX_MS 60000
 
 struct NativeHookContext {
     int id;
@@ -44,6 +48,7 @@ struct NativeHookContext {
     int arg_index;
     uint64_t arg_value;
     int want_backtrace;      // capture the caller chain in each event (opt-in, per hook)
+    int throttle_ms;         // 0 = every hit emits; >0 = at most one event per window (per hook)
     int patched;             // inline stub remains installed (soft unhook / reactivation)
     unsigned char prologue[24];   // original bytes captured before the inline patch
     int prologue_len;             // 0 when not captured / not an inline hook
@@ -71,6 +76,36 @@ static void remember_hard_restored(void *target) {
 static int g_next_native_hook_id = 1;
 static std::atomic<unsigned long long> g_native_hook_hits[ADH_NATIVE_MAX_HOOKS];
 static std::atomic<int> g_native_hook_slot_ids[ADH_NATIVE_MAX_HOOKS];
+
+// Per-hook event throttle state (v4.48). The recorder sits on the target thread, so this is
+// lock-free and allocation-free: one relaxed timestamp load in the common case, one relaxed store
+// when an event is actually emitted.
+//   last_ns  - when this hook last EMITTED an event (0 = nothing emitted yet)
+//   total    - hits suppressed since the hook was installed
+//   reported - value of total at the previous emitted event, so the event can carry the delta
+static std::atomic<uint64_t> g_native_hook_throttle_last_ns[ADH_NATIVE_MAX_HOOKS];
+static std::atomic<unsigned long long> g_native_hook_throttled_total[ADH_NATIVE_MAX_HOOKS];
+static std::atomic<unsigned long long> g_native_hook_throttled_reported[ADH_NATIVE_MAX_HOOKS];
+
+static int clamp_throttle_ms(int requested) {
+    if (requested <= 0) return 0;
+    return requested > ADH_NATIVE_THROTTLE_MAX_MS ? ADH_NATIVE_THROTTLE_MAX_MS : requested;
+}
+
+// Slot reuse / reactivation must start from a clean window: inheriting the previous hook's
+// timestamp would suppress the first events of a brand new hook for no reason.
+static void reset_throttle_counters(int slot) {
+    if (slot < 0 || slot >= ADH_NATIVE_MAX_HOOKS) return;
+    g_native_hook_throttle_last_ns[slot].store(0, std::memory_order_relaxed);
+    g_native_hook_throttled_total[slot].store(0, std::memory_order_relaxed);
+    g_native_hook_throttled_reported[slot].store(0, std::memory_order_relaxed);
+}
+
+static uint64_t adh_mono_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
 
 // Referenced directly by the fixed arm64 stubs below.
 extern "C" void *g_native_hook_originals[ADH_NATIVE_MAX_HOOKS] = {};
@@ -193,6 +228,26 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id) {
     // already been applied either way).
     if (hook_uid <= 0) return skip_original ? 1 : 0;
     g_native_hook_hits[hook_id].fetch_add(1, std::memory_order_relaxed);
+    // Per-hook event throttle. The rewrite above has already been applied, so dropping the EVENT
+    // never changes what the target does - it only stops a hot site (read/write/futex) from
+    // overflowing the capture ring and making the digest look quiet. Suppressed hits are counted and
+    // reported, so a thinned log is never mistaken for a quiet target. Best effort by design: two
+    // threads can pass the window check together (one extra event), and nothing ever blocks.
+    const int throttle_ms = __atomic_load_n(&ctx.throttle_ms, __ATOMIC_RELAXED);
+    unsigned long long throttled = 0;
+    if (throttle_ms > 0) {
+        const uint64_t now = adh_mono_ns();
+        const uint64_t last = g_native_hook_throttle_last_ns[hook_id].load(std::memory_order_relaxed);
+        if (last != 0 && now - last < (uint64_t)throttle_ms * 1000000ull) {
+            g_native_hook_throttled_total[hook_id].fetch_add(1, std::memory_order_relaxed);
+            return skip_original ? 1 : 0;
+        }
+        g_native_hook_throttle_last_ns[hook_id].store(now, std::memory_order_relaxed);
+        const unsigned long long total = g_native_hook_throttled_total[hook_id].load(std::memory_order_relaxed);
+        // exchange, not load+store: two emitters racing here must not both claim the same delta.
+        const unsigned long long seen = g_native_hook_throttled_reported[hook_id].exchange(total, std::memory_order_relaxed);
+        throttled = total > seen ? total - seen : 0;
+    }
     // v4.31: the stub saved q0-q7 at regs[16..31] (low/high lane per 128-bit register), so float,
     // double and vector arguments are visible too. Every lane is rendered twice - as the double
     // (d0-d7) and as the float (s0-s7) it would be - because a float argument only fills the low
@@ -201,11 +256,12 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id) {
     char json[3072];
     size_t joff = 0;
     joff = adh_json_append(json, sizeof(json), joff,
-                           "{\"hookId\":%d,\"kind\":\"%s\",\"x0\":\"0x%llx\",\"x1\":\"0x%llx\",\"x2\":\"0x%llx\","
+                           "{\"hookId\":%d,\"kind\":\"%s\",\"throttleMs\":%d,\"throttled\":%llu,"
+                           "\"x0\":\"0x%llx\",\"x1\":\"0x%llx\",\"x2\":\"0x%llx\","
                            "\"x3\":\"0x%llx\",\"x4\":\"0x%llx\",\"x5\":\"0x%llx\",\"x6\":\"0x%llx\","
                            "\"x7\":\"0x%llx\",\"x8\":\"0x%llx\",\"x18\":\"0x%llx\","
                            "\"x29\":\"0x%llx\",\"x30\":\"0x%llx\",",
-                           hook_uid, kind_name(hook_id),
+                           hook_uid, kind_name(hook_id), throttle_ms, throttled,
                            (unsigned long long)in0, (unsigned long long)in1,
                            (unsigned long long)in2, (unsigned long long)in3,
                            (unsigned long long)in4, (unsigned long long)in5,
@@ -377,6 +433,7 @@ static void reset_context(NativeHookContext &ctx) {
     ctx.return_value = 0;
     ctx.arg_index = -1;
     ctx.want_backtrace = 0;   // slot reuse must not inherit the previous hook's capture choice
+    ctx.throttle_ms = 0;      // ...nor the previous hook's throttle window
     ctx.arg_value = 0;
     ctx.patched = 0;
 }
@@ -392,8 +449,10 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
                                         const char *addr, int skip_original, int return_set,
                                         uint64_t return_value, int arg_index, uint64_t arg_value,
                                         int max_sites, const char *sites_scope, int allow_writable_slots,
-                                        int want_backtrace, int *hook_id_out, char *error, size_t error_size) {
+                                        int want_backtrace, int throttle_ms, int *hook_id_out, char *error, size_t error_size) {
     if (hook_id_out) *hook_id_out = 0;
+    // Effective (clamped) window: installed state and status must report what was really applied.
+    const int effective_throttle_ms = clamp_throttle_ms(throttle_ms);
     if (!mode) return (set_error(error, error_size, "need mode got|inline"), 0);
     pthread_mutex_lock(&g_native_hooks_lock);
     int slot = find_free_slot_locked();
@@ -457,7 +516,11 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
             old.return_value = return_value;
             old.arg_index = arg_index;
             old.want_backtrace = want_backtrace ? 1 : 0;
+            old.throttle_ms = effective_throttle_ms;
             old.arg_value = arg_value;
+            // Reactivating a soft-unhooked target is a new hook for the operator: start its window
+            // and its suppressed-hit counters from zero instead of inheriting the old run.
+            reset_throttle_counters(i);
             copy_cstr(old.module, sizeof(old.module), module);
             copy_cstr(old.symbol, sizeof(old.symbol), symbol);
             old.address = (uintptr_t)target;
@@ -569,6 +632,7 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
     ctx.arg_index = arg_index;
     ctx.arg_value = arg_value;
     ctx.want_backtrace = want_backtrace ? 1 : 0;
+    ctx.throttle_ms = effective_throttle_ms;
     ctx.mode = hook_mode;
     ctx.target = target;
     ctx.original = original;
@@ -582,6 +646,10 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
                     : (hook_mode == 3 ? adh_slot_hook_count(slot) : 0);
     copy_cstr(ctx.sites_scope, sizeof(ctx.sites_scope), (hook_mode == 2 && sites_scope) ? sites_scope : "");
     ctx.patched = (hook_mode == 1 || hook_mode == 2 || hook_mode == 3) ? 1 : 0;
+    // Hard unhook frees the slot for reuse but leaves the throttle atomics behind, so clear them
+    // BEFORE publishing active: otherwise the first hits of a new hook on a recycled slot could be
+    // suppressed by the previous hook's timestamp (and their count wiped by this reset).
+    reset_throttle_counters(slot);
     __atomic_store_n(&ctx.active, 1, __ATOMIC_RELEASE);
     pthread_mutex_unlock(&g_native_hooks_lock);
     g_native_hook_hits[slot].store(0ULL, std::memory_order_relaxed);
@@ -728,11 +796,14 @@ extern "C" int adh_native_hook_status_json(char *out, size_t out_size) {
             if (used >= sizeof(sitebuf)) used = 0;
             adh_site_hook_sites_json(i, sitebuf, sizeof(sitebuf), &used);
         }
+        // hits counts EVERY hit; throttled counts the hits whose event was suppressed inside the
+        // window, so emitted events = hits - throttled and a quiet log stays explainable.
+        unsigned long long throttled = g_native_hook_throttled_total[i].load(std::memory_order_relaxed);
         char item[2048];
         snprintf(item, sizeof(item),
                  "{\"id\":%d,\"mode\":\"%s\",\"module\":\"%s\",\"symbol\":\"%s\","
                  "\"address\":\"0x%llx\",\"target\":\"0x%llx\",\"original\":\"0x%llx\","
-                 "\"replacement\":\"0x%llx\",\"hits\":%llu,\"argIndex\":%d,\"argValue\":\"0x%llx\",\"skipOriginal\":%s,\"returnSet\":%s,\"returnValue\":\"0x%llx\",\"backtrace\":%s"
+                 "\"replacement\":\"0x%llx\",\"hits\":%llu,\"argIndex\":%d,\"argValue\":\"0x%llx\",\"skipOriginal\":%s,\"returnSet\":%s,\"returnValue\":\"0x%llx\",\"backtrace\":%s,\"throttleMs\":%d,\"throttled\":%llu"
                  "%s}",
                  ctx.id, ctx.mode == 0 ? "got" : (ctx.mode == 1 ? "inline" : (ctx.mode == 2 ? "sites" : "vtable")), ctx.module, ctx.symbol,
                  (unsigned long long)ctx.address, (unsigned long long)(uintptr_t)ctx.target,
@@ -740,7 +811,7 @@ extern "C" int adh_native_hook_status_json(char *out, size_t out_size) {
                  (unsigned long long)(uintptr_t)ctx.replacement, hits, ctx.arg_index,
                  (unsigned long long)ctx.arg_value, ctx.skip_original ? "true" : "false",
                  ctx.return_set ? "true" : "false", (unsigned long long)ctx.return_value,
-                 ctx.want_backtrace ? "true" : "false", sitebuf);
+                 ctx.want_backtrace ? "true" : "false", ctx.throttle_ms, throttled, sitebuf);
         hooks += item;
         count++;
     }

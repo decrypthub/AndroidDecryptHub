@@ -5,6 +5,7 @@
 // reconstructions), the runtime address is base + st_value, and the install loop is bounded by the
 // agent's 16 concurrent native slots, reporting matched vs installed so truncation is visible.
 import { sendCmd } from './service.ts';
+import { nativeHookInstallPayload, normalizeThrottleMs } from './native_hook_args.ts';
 import { loadModuleTable, parseHex, hex } from './module_symbols.ts';
 import { parseDynSymbols, type DynSymbol } from './backtrace.ts';
 import { reconstructSo } from './service.ts';
@@ -50,6 +51,8 @@ export interface NativeHookAllResult {
   symbolsInModule: number;
   matched: number;
   installedCount: number;
+  /** Effective per-hook event throttle (0 = every hit emits). */
+  throttleMs: number;
   slotLimited: boolean;
   hooks: { hookId: number; symbol: string; address: string }[];
   failures: { symbol: string; error: string }[];
@@ -64,6 +67,8 @@ export async function nativeHookAll(session: string, opts: {
   limit?: number;
   exclude?: string[];
   backtrace?: boolean;
+  /** 0 = every hit emits; >0 = at most one event per hook per window (hot symbols). */
+  throttleMs?: number;
   skipOriginal?: boolean;
   returnValue?: string;
   argIndex?: number;
@@ -89,25 +94,27 @@ export async function nativeHookAll(session: string, opts: {
     const off = parseHex(sym.address);
     if (off == null) { failures.push({ symbol: sym.name, error: 'bad offset' }); continue; }
     const runtime = base + off;
-    const r = await sendCmd(session, 'native_hook', {
-      action: 'hook', mode: 'inline', module: '', symbol: '', addr: hex(runtime),
-      backtrace: opts.backtrace ? 'true' : 'false',
-      skipOriginal: opts.skipOriginal ? 'true' : 'false',
-      returnValue: opts.returnValue ?? '', argIndex: Number(opts.argIndex ?? -1), argValue: opts.argValue ?? '',
-    }, 20_000).catch((e) => ({ ok: false, error: (e as Error).message }));
+    const r = await sendCmd(session, 'native_hook', nativeHookInstallPayload({
+      addr: hex(runtime), throttleMs: opts.throttleMs, backtrace: opts.backtrace,
+      skipOriginal: opts.skipOriginal, returnValue: opts.returnValue,
+      argIndex: opts.argIndex, argValue: opts.argValue,
+    }), 20_000).catch((e) => ({ ok: false, error: (e as Error).message }));
     if (r?.ok && Number(r.hookId) > 0) hooks.push({ hookId: Number(r.hookId), symbol: sym.name, address: hex(runtime) });
     else failures.push({ symbol: sym.name, error: String(r?.error ?? 'install failed') });
   }
+  const throttleMs = normalizeThrottleMs(opts.throttleMs);
   return {
     module: mod.name,
     base: mod.base,
     symbolsInModule: symbols.filter((s) => s.kind === 'func').length,
     matched,
     installedCount: hooks.length,
+    throttleMs,
     slotLimited: matched > selected.length,
     hooks,
     failures,
-    note: `filter=${opts.exact ? `exact:${opts.exact}` : opts.prefix ? `prefix:${opts.prefix}` : opts.contains ? `contains:${opts.contains}` : 'any'} limit=${selected.length === matched ? 'not reached' : `truncated to ${selected.length}`}; unhook with native_hook unhook per hookId`,
+    note: `filter=${opts.exact ? `exact:${opts.exact}` : opts.prefix ? `prefix:${opts.prefix}` : opts.contains ? `contains:${opts.contains}` : 'any'} limit=${selected.length === matched ? 'not reached' : `truncated to ${selected.length}`}; unhook with native_hook unhook per hookId`
+      + (throttleMs ? `; each hook emits at most one event per ${throttleMs} ms (status reports hits vs throttled)` : ''),
   };
 }
 

@@ -16,11 +16,18 @@ extern "C" {
 // want_backtrace=1 makes every event carry the caller chain captured AT THE HIT (x30 + the x29
 // chain walked inside the thread's own stack) so the host can symbolize it without reading a stack
 // that has already been reused. Off by default: it costs a few stack loads per hit.
+// throttle_ms>0 keeps at most ONE event per hook per window; every hit inside the window is counted
+// instead of emitted (the next event reports how many it stands for, status reports the running
+// total), so a hot site such as read/write/futex cannot flood the capture ring and a thinned log is
+// never mistaken for a quiet target. The throttle suppresses EVENTS ONLY: the argument/return
+// rewrite and the "do not call the original" answer are applied to throttled hits as well. Values
+// are clamped to 0..60000 ms (0 = every hit emits), and status echoes the effective value.
 int adh_native_hook_install(const char *mode, const char *module, const char *symbol,
                             const char *addr, int skip_original, int return_set,
                             uint64_t return_value, int arg_index, uint64_t arg_value,
                             int max_sites, const char *sites_scope, int allow_writable_slots,
-                            int want_backtrace, int *hook_id_out, char *error, size_t error_size);
+                            int want_backtrace, int throttle_ms, int *hook_id_out, char *error,
+                            size_t error_size);
 // hard=1 destroys the inline patch (DobbyDestroy) after a quiesce window and frees the slot;
 // hard=0 keeps the soft-unhook semantics (stub stays installed but inactive).
 int adh_native_hook_unhook(int hook_id, int hard, char *error, size_t error_size);

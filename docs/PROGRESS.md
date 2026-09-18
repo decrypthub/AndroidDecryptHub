@@ -15,6 +15,12 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.48 native 事件限流 `throttleMs`（2026-09-19，host 验收 PASS；真机验收待做）**：热站点（`read`/`write`/`futex`）一秒能打出上万条 `NATIVE_HOOK`，事件环一满，摘要读起来就像"目标没动静"——限流要解决的是这个**诚实性问题**，不是省流量。
+      · agent（`agent/src/hook/native_hooks.{h,cpp}` + `agent_main.c`）：每个钩子一个窗口，窗口内**最多发一条事件**；被压掉的命中**照样计数**（下一条事件带 `throttled`＝它代表多少次命中，`status` 带累计 `throttled`），恒等式 `hits = 已发事件 + throttled` 始终成立，日志变稀不会变成"看起来安静"。窗口 0 = 每条都发（默认，行为不变），>0 夹紧到 0..60000 ms 且 status 回显**生效值**；槽位复用与软卸载后重新激活都会清零窗口与计数，不继承上一个钩子的设置。
+      · **限流只压事件、不改行为**：参数改写（`argIndex`）、返回值替换（`returnValue`）、`skipOriginal` 在窗口内的命中上照常生效（`record_site` 照常回答"不要调原函数"）——限流永远不会把改行为的钩子变成"偶尔放行"。实现无锁（命中线程上一条 relaxed 时间戳读；窗口判断用单调钟；增量用 `exchange` 取，两个 emitter 不会重复报同一批被压命中），失败模式是"多发一条"，不是阻塞目标线程。
+      · host 侧：新增纯函数模块 `daemon/src/native_hook_args.ts`（`normalizeThrottleMs`：缺省/≤0 = 0，>60000 夹紧，非数字**拒绝**而不是当 0；`nativeHookInstallPayload` 统一装配），`native_hook_all` 与 `syscall_watch` 都改走它——"throttleMs 真的上线了"从此是**可单测**的事实，两者响应都回显生效窗口。`native_hook`/`native_hook_all`/`syscall_watch`/`syscall_trace`（MCP + REST `/api/native/hook`、`/api/native/hook_all`、`/api/native/syscall_watch`、`/api/syscall/trace`）全部暴露 `throttleMs`；REST 对非法值回 **400**（不是 502/504，参数错不是设备错）；`syscall_digest` 的 ring 告警文案改成点名 `throttleMs`。
+      · 验收：`daemon/test/native_hook_throttle.test.ts`（8 条：默认关闭/夹紧/截断/拒绝垃圾值/装配完整性/不悄悄限流）+ `tools/verify_v86_native_throttle.sh`（host：8 条单测 + 断言 agent 侧"先改写后限流、被压命中计数并照常回答 skipOriginal、status 带窗口与累计"、断言 host 工具确实带上该字段、MCP 四工具 schema 有 `throttleMs`），**PASS**；agent 零告警重建通过（836,192 B）。全量 host 门禁 **27 PASS / 0 FAIL / 75 SKIP**（102 个脚本 = 27 host + 75 device）。
+      · **待办（真机）**：对 libc 热站点（`read`/`write`）用 `throttleMs:200` 实跑，断言事件间隔 ≥ 窗口、`hits = 已发事件 + throttled`、`throttled` 单调递增，且带 `returnValue`/`skipOriginal` 的钩子在限流下**每一次**命中都生效。
 - [~] **v4.47 一站式系统调用跟踪 `syscall_trace`（2026-09-18，host 验收 PASS；真机验收待做）**：watch / digest / 卸载三个工具分开时，最容易错的两件事——**静态归因没有从 watch 传到 digest**、**drain 没走共享路径**——现在由工具自己保证。
       · `daemon/src/syscall_trace.ts`：`start` = 调 `syscall_watch` 并用它的响应**自动构造 `{hookId: nr}` 期望表**（归因错位以后会以 `mismatches` 形式暴露，而不是被手工抄错）；解不出号的站点进 `unattributed` 并说明『只有运行期 x8 可看』。`digest` = 走共享 `drainSession` + `syscall_digest`（调用方、次数、`paths` 直方图、mismatch）。`stop` = **只卸传入 id**（显式拒绝空列表与 0，不做隐式全卸）。装不上任何钩（模块没有匹配的 svc 站点）时 fail-loud。
       · 新增 MCP `syscall_trace`（action: start|digest|stop）+ `POST /api/syscall/trace`，工具数 70 → 71；`tools/verify_v85_syscall_trace.sh`（host）= 8 条装配单测 + start→digest→stop 合成链路（断言 expected 传到位、stop 只卸自己装的 id）+ MCP schema，**PASS**。

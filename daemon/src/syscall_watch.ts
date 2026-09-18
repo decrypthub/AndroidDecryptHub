@@ -4,6 +4,7 @@
 // events carry x0-x8; for a syscall site x8 is the syscall number.
 import { svcScan } from './analysis.ts';
 import { modulesFromMaps, reconstructSo, sendCmd } from './service.ts';
+import { nativeHookInstallPayload, normalizeThrottleMs } from './native_hook_args.ts';
 
 export interface SyscallWatchOptions {
   module: string;
@@ -12,6 +13,10 @@ export interface SyscallWatchOptions {
   // ("uname", 160, "0xa0") are accepted; a filter that matches nothing fails loud instead of
   // silently hooking the wrong sites.
   syscalls?: (string | number)[] | string;
+  // Per-hook event throttle in ms (0 = every hit emits). Hot syscalls (read/write/futex) produce
+  // more events than the capture ring holds; the agent then reports at most one event per site per
+  // window and counts the rest, so the digest stays honest instead of lossy.
+  throttleMs?: number;
 }
 
 function hexAddress(value: bigint): string {
@@ -189,12 +194,11 @@ export async function watchSyscalls(sid: string, opts: SyscallWatchOptions): Pro
   try {
     for (const hit of selected) {
       const addr = base + BigInt(String(hit.vaddr));
-      const r = await sendCmd(sid, 'native_hook', {
-        action: 'hook', mode: 'inline', module: '', symbol: '', addr: hexAddress(addr),
-        // v4.39: each event carries the caller chain captured at the hit, so a syscall can be
-        // attributed to the app function that issued it instead of only to libc.
-        backtrace: 'true',
-      }, 20_000);
+      // v4.39: each event carries the caller chain captured at the hit, so a syscall can be
+      // attributed to the app function that issued it instead of only to libc.
+      const r = await sendCmd(sid, 'native_hook', nativeHookInstallPayload({
+        addr: hexAddress(addr), backtrace: true, throttleMs: opts.throttleMs,
+      }), 20_000);
       if (!r.ok) throw new Error(`svc hook failed at ${hexAddress(addr)}: ${r.error ?? 'unknown error'}`);
       installed.push({
         hookId: Number(r.hookId), addr: hexAddress(addr), vaddr: String(hit.vaddr),
@@ -210,9 +214,11 @@ export async function watchSyscalls(sid: string, opts: SyscallWatchOptions): Pro
     throw e;
   }
 
+  const throttleMs = normalizeThrottleMs(opts.throttleMs);
   return {
     module: mod.name,
     base: mod.base,
+    throttleMs,
     execSegs: scan.execSegs,
     scannedBytes: scan.scanned,
     svcCount: scan.hits.length,
@@ -231,6 +237,7 @@ export async function watchSyscalls(sid: string, opts: SyscallWatchOptions): Pro
       ? 'Only sites whose syscall number was attributed statically AND matched the filter are hooked; x8 in the events is the runtime number (should equal the attributed one).'
       : 'Events from these hooks carry x8 as the syscall number; hooks[] reports the statically attributed number per site. Unhook with native_hook/unhook per hookId.')
       + (scanTruncated ? ' WARNING: the static scanner hit its 4096-site cap, so later sites were not examined.' : '')
+      + (throttleMs ? ` Each hook emits at most one event per ${throttleMs} ms; NATIVE_HOOK events carry throttleMs/throttled and status reports the running total, so emitted events = hits - throttled.` : '')
       + ' Events also carry the caller chain (bt) for native_backtrace.',
   };
 }

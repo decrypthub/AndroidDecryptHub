@@ -37,7 +37,7 @@ export interface RingHealth { seq: number; emitted: number; dropped: number; bac
 export function ringNote(ring: RingHealth | null, what = 'counts here are a lower bound'): string | null {
   if (!ring) return null;
   if (ring.dropped <= 0 && ring.complete !== false) return null;
-  return `capture ring is incomplete (dropped=${ring.dropped}, backlog=${ring.backlog}): ${what} - narrow the filter or set a throttle`;
+  return `capture ring is incomplete (dropped=${ring.dropped}, backlog=${ring.backlog}): ${what} - narrow the filter or set throttleMs on the watch (native_hook/syscall_watch)`;
 }
 
 export interface SyscallGroup {

@@ -7,10 +7,17 @@ import { traceDigest } from '../trace_digest.ts';
 import { syscallDigest } from '../syscall_digest.ts';
 import { javaTraceStart, javaTraceDigest, javaTraceStop } from '../java_trace.ts';
 import { nativeHookAll, nativeUnhookAll } from '../native_hook_all.ts';
+import { normalizeThrottleMs } from '../native_hook_args.ts';
 import { syscallTraceStart, syscallTraceDigest, syscallTraceStop } from '../syscall_trace.ts';
 import { liveDisasm } from '../memory.ts';
 import { readBody, SANDBOX, sessions, settings } from '../state.ts';
 import type { Route, RouteContext } from './types.ts';
+
+// A non-numeric throttleMs is a caller error, not a device failure: answer 400 before the
+// sendCmd try/catch blocks below (which turn anything they catch into 502/504).
+function parseThrottleMs(value: unknown): { ms: number } | { error: string } {
+  try { return { ms: normalizeThrottleMs(value) }; } catch (e) { return { error: (e as Error).message }; }
+}
 
 export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
   return [
@@ -62,15 +69,18 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
       catch (e) { return send(504, { error: (e as Error).message }); }
     } },    { method: 'POST', path: '/api/native/hook', handler: async () => {
       const body = await readBody(req);
-      const { session, action, hookId, mode, module, symbol, addr, skipOriginal, returnValue, argIndex, argValue, confirm, hard, sites, scope, slotsWritable, backtrace } = JSON.parse(body || '{}');
+      const { session, action, hookId, mode, module, symbol, addr, skipOriginal, returnValue, argIndex, argValue, confirm, hard, sites, scope, slotsWritable, backtrace, throttleMs } = JSON.parse(body || '{}');
       const sid = pickSid(session);
       if (!sid || !action) return send(400, { error: 'need session, action' });
       if (mode === 'inline' && addr && confirm !== true) return send(400, { error: 'native_hook inline addr requires confirm:true' });
+      const throttle = parseThrottleMs(throttleMs);
+      if ('error' in throttle) return send(400, { error: throttle.error });
       try {
         const r = await sendCmd(sid, 'native_hook', {
           action, hookId: Number(hookId ?? 0), mode: mode ?? '', module: module ?? '', symbol: symbol ?? '', addr: addr ?? '',
           skipOriginal: skipOriginal ? 'true' : 'false', returnValue: returnValue ?? '',
           backtrace: backtrace ? 'true' : 'false',
+          throttleMs: throttle.ms,
           argIndex: Number(argIndex ?? -1), argValue: argValue ?? '', hard: hard ? 'true' : 'false',
           sites: Number(sites ?? 0),
           scope: typeof scope === 'string' ? scope : '',
@@ -109,11 +119,15 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
     } },
     { method: 'POST', path: '/api/syscall/trace', handler: async () => {
       const body = await readBody(req);
-      const { session, action, module, syscalls, limit, hookIds, expected, sinceMs, decode, decodeLimit, maxGroups } = JSON.parse(body || '{}');
+      const { session, action, module, syscalls, limit, hookIds, expected, sinceMs, decode, decodeLimit, maxGroups, throttleMs } = JSON.parse(body || '{}');
       const sid = pickSid(session);
       if (!sid || !action) return send(400, { error: 'need session, action' });
       try {
-        if (action === 'start') return send(200, await syscallTraceStart(sid, { module, syscalls, limit }));
+        if (action === 'start') {
+          const throttle = parseThrottleMs(throttleMs);
+          if ('error' in throttle) return send(400, { error: throttle.error });
+          return send(200, await syscallTraceStart(sid, { module, syscalls, limit, throttleMs: throttle.ms }));
+        }
         if (action === 'digest') return send(200, await syscallTraceDigest(sid, { hookIds, expected, sinceMs, decode, decodeLimit, maxGroups }));
         if (action === 'stop') return send(200, await syscallTraceStop(sid, { hookIds }));
         return send(400, { error: 'action must be start | digest | stop' });
@@ -121,14 +135,16 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
     } },
     { method: 'POST', path: '/api/native/hook_all', handler: async () => {
       const body = await readBody(req);
-      const { session, action, module, prefix, contains, exact, exclude, limit, backtrace, skipOriginal, returnValue, argIndex, argValue, hookIds, confirm } = JSON.parse(body || '{}');
+      const { session, action, module, prefix, contains, exact, exclude, limit, backtrace, skipOriginal, returnValue, argIndex, argValue, hookIds, confirm, throttleMs } = JSON.parse(body || '{}');
       const sid = pickSid(session);
       if (!sid || !action) return send(400, { error: 'need session, action' });
       try {
         if (action === 'unhook') return send(200, await nativeUnhookAll(sid, hookIds));
         if (action !== 'hook') return send(400, { error: 'action must be hook | unhook' });
         if (confirm !== true) return send(400, { error: 'native_hook_all requires confirm:true (it installs inline hooks in the target)' });
-        return send(200, await nativeHookAll(sid, { module, prefix, contains, exact, exclude, limit, backtrace, skipOriginal, returnValue, argIndex, argValue }));
+        const throttle = parseThrottleMs(throttleMs);
+        if ('error' in throttle) return send(400, { error: throttle.error });
+        return send(200, await nativeHookAll(sid, { module, prefix, contains, exact, exclude, limit, backtrace, throttleMs: throttle.ms, skipOriginal, returnValue, argIndex, argValue }));
       } catch (e) { return send(502, { error: (e as Error).message }); }
     } },
     { method: 'POST', path: '/api/java/trace', handler: async () => {
@@ -172,11 +188,13 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
     } },
     { method: 'POST', path: '/api/native/syscall_watch', handler: async () => {
       const body = await readBody(req);
-      const { session, module, limit, syscalls } = JSON.parse(body || '{}');
+      const { session, module, limit, syscalls, throttleMs } = JSON.parse(body || '{}');
       const sid = pickSid(session);
       if (!sid || !module) return send(400, { error: 'need session, module' });
       try {
-        const r = await watchSyscalls(sid, { module, limit, syscalls });
+        const throttle = parseThrottleMs(throttleMs);
+        if ('error' in throttle) return send(400, { error: throttle.error });
+        const r = await watchSyscalls(sid, { module, limit, syscalls, throttleMs: throttle.ms });
         return send(200, r);
       } catch (e) { return send(502, { error: (e as Error).message }); }
     } },    { method: 'POST', path: '/api/jni/onload', handler: async () => {
