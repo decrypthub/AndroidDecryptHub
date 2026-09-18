@@ -15,6 +15,12 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.80 JNIEnv status 可过滤 + 自报完整性（2026-09-19，host 验收 PASS；真机待做）**：228 个槽位的整表 status 已经超过早期一次回复能带的量——**旧实现会在 32 KB 处静默截断**，只回一部分 hooks 且不作说明，验证者会把"缺条目"读成"未安装"。
+      · `action:status` 现在可以用 `function` 当过滤器（与安装同语法：精确名 / `Call*` 前缀 / `*Field` 后缀 / `*Field*` 包含 / `all`·`*` 全部），另加关键字 **`installed`**（只看当前挂着的槽位）；解析与匹配**与安装路径共用一份**（`env_filter_parse`/`env_filter_match`），不再有两套模式语言。
+      · 回复自报完整性：`total`/`matched`/`emitted`/`truncated`——被过滤或被裁剪都写在回复里，"看起来完整"的残缺列表不再是可能状态；缓冲区提到 128 KB（agent 协议是长度分帧、上限 64 MB），整表 228 项正常一次带回且 `truncated:false`。
+      · 安装/卸载路径显式拒绝 `installed` 关键字（它是 status 过滤器、不是槽位名），避免"把本来没挂的槽位当模式批量安装"。
+      · MCP 描述同步；v91 新增 `(3i)` 段（真机）：整表必须 `matched==total` 且 `emitted==matched`（或 `truncated` 与 `emitted<matched` 自洽）、`*ArrayRegion` 必须正好 16 项、`installed` 必须只回已挂槽位并包含刚挂上的 `GetJavaVM`。
+      · 验收：agent 零告警重建（1015 KB）；daemon `node --test` 151；v91 `bash -n` + 内嵌 JS `node --check`；host 全量门禁 **31 PASS / 0 FAIL / 84 SKIP**（115 脚本）。
 - [~] **v4.77–v4.79 JNIEnv 表收尾：字符串全族 + 反射桥 + FatalError/ExceptionCheck（2026-09-19，host 验收 PASS；真机待做）**：把覆盖率名单的最后 13 项一次做完——**228/229 表项已可挂**，唯一余项由另一套机制覆盖。
       · v4.77 字符串族补齐 6 槽（覆盖率 **215 → 221**）：`NewString`（UTF-16 → Java 字符串，事件 `len=N text="…"` 有界预览）、`GetStringLength`/`GetStringUTFLength`（`string=.. len=N`）、`ReleaseStringUTFChars`（`string=.. chars=..`）、`GetStringCritical`/`ReleaseStringCritical`。**critical 那一对刻意不调任何 JNI 函数**（规范禁止在 critical 区里再调 JNI）：`GetStringCritical` 用"返回 NULL 即失败"代替 `ExceptionCheck`，预览只读已到手的内存；释放侧只记指针。
       · v4.78 反射桥 + 注销侧 5 槽（**221 → 226**）：`FromReflectedMethod`/`FromReflectedField`（`reflect=.. -> mid/fid=0x..`——id 正是 host 侧与 `GetMethodID`/`GetFieldID` 事件连接的关键，"用反射拿 id、绕开 ID 查询流量"的调用点从此可见）、`ToReflectedMethod`/`ToReflectedField`（带类名与 static 标志）、`UnregisterNatives`（`class=Class -> 0/-1`，卸载 native 绑定的信号）。

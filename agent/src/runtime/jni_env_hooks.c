@@ -2816,6 +2816,62 @@ static void *env_hook_wrapper(int index) {
 }
 
 // ---- command handling -----------------------------------------------------
+
+// ---- slot filters ---------------------------------------------------------
+// `function` doubles as a pattern for action:status, with the same language the install path uses
+// (exact name, prefix, "*suffix", "*contains*", "all"/"*") plus the keyword "installed" for the
+// slots that are hooked right now. One parser for both paths, so they cannot drift apart.
+struct EnvNameFilter {
+    const char *pat;
+    size_t pat_len;
+    int wildcard;
+    int suffix_only;
+    int contains;
+    int installed_only;
+};
+
+static void env_filter_parse(const char *function, struct EnvNameFilter *f) {
+    memset(f, 0, sizeof(*f));
+    f->pat = function ? function : "";
+    f->pat_len = strlen(f->pat);
+    if (f->pat_len && strcmp(f->pat, "installed") == 0) {
+        f->wildcard = 1;
+        f->installed_only = 1;
+        f->pat = "";
+        f->pat_len = 0;
+        return;
+    }
+    if (f->pat_len == 0 || strcmp(f->pat, "all") == 0 || strcmp(f->pat, "*") == 0) {
+        f->wildcard = 1;
+        f->pat = "";
+        f->pat_len = 0;
+        return;
+    }
+    if (f->pat[0] == '*') {
+        f->wildcard = 1;
+        f->pat++;
+        f->pat_len--;
+        if (f->pat_len && f->pat[f->pat_len - 1] == '*') { f->contains = 1; f->pat_len--; }
+        else f->suffix_only = 1;
+    } else if (f->pat[f->pat_len - 1] == '*') {
+        f->wildcard = 1;
+        f->pat_len--;
+    }
+}
+
+static int env_filter_match(const struct EnvNameFilter *f, const char *name) {
+    if (!f->wildcard) return strcmp(name, f->pat) == 0;
+    if (f->pat_len == 0) return 1;                                  // all / * / installed
+    size_t nlen = strlen(name);
+    if (f->suffix_only) return nlen >= f->pat_len && strncmp(name + nlen - f->pat_len, f->pat, f->pat_len) == 0;
+    if (f->contains) {
+        for (size_t o = 0; o + f->pat_len <= nlen; o++) {
+            if (strncmp(name + o, f->pat, f->pat_len) == 0) return 1;
+        }
+        return 0;
+    }
+    return strncmp(name, f->pat, f->pat_len) == 0;                   // prefix
+}
 // Every slot is reported, hooked or not. slotValue is the LIVE table entry read at reply time:
 // installing must make it differ from original, uninstalling must make them equal again - that
 // is what lets a verifier prove the table (not just a flag) was patched and restored.
@@ -2870,6 +2926,78 @@ static void send_env_result(int fd, const char *id, const char *action, const ch
     }
     pthread_mutex_unlock(&g_env_hook_lock);
     snprintf(out + len, sizeof(out) - len, "]}\n");
+    send_line(fd, out);
+}
+
+// The status reply says how much of the table it is showing. The list is filtered by `function`
+// and, if it still does not fit the frame buffer, clipped - and both facts are in the reply
+// (total/matched/emitted/truncated), because a partial slot list that claims to be complete is
+// worse than no list at all: a verifier would read "not installed" out of a missing entry.
+static void send_env_status(int fd, const char *id, const char *function, const struct EnvNameFilter *filter) {
+    static char out[128 * 1024];              // command handling is serial; agent frames carry up to FRAME_MAX
+    char idj[64], functionj[96];
+    json_escape(id, idj, sizeof(idj));
+    json_escape(function ? function : "", functionj, sizeof(functionj));
+    char table_perms[8] = "";
+    if (g_env_hook_table) adh_perms_of_addr((void *)(uintptr_t)g_env_hook_table, table_perms, sizeof(table_perms));
+
+    // Pass 1: count what matches, so the header can state it even when the list is clipped.
+    int matched = 0;
+    for (int i = 0; i < ENV_HOOK_MAX; i++) {
+        if (filter->installed_only && !g_env_hooks[i].installed) continue;
+        if (env_filter_match(filter, g_env_hooks[i].name)) matched++;
+    }
+
+    size_t len = snprintf(out, sizeof(out),
+        "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"jni_env_hook\",\"ok\":true,"
+        "\"action\":\"status\",\"function\":\"%s\",\"applied\":0,\"failed\":0,"
+        "\"total\":%d,\"matched\":%d,"
+        "\"table\":\"0x%llx\",\"tablePerms\":\"%s\",\"error\":\"\",\"hooks\":[",
+        idj, functionj, ENV_HOOK_MAX, matched,
+        g_env_hook_table, table_perms);
+
+    // Pass 2: emit what fits. A slot that does not fit is NOT reported as absent - the header
+    // carries matched vs emitted so the caller knows the list was clipped.
+    int emitted = 0, first = 1;
+    pthread_mutex_lock(&g_env_hook_lock);
+    for (int i = 0; i < ENV_HOOK_MAX; i++) {
+        if (filter->installed_only && !g_env_hooks[i].installed) continue;
+        if (!env_filter_match(filter, g_env_hooks[i].name)) continue;
+        if (len + 900 >= sizeof(out)) continue;
+        char slot_perms[8] = "";
+        char lastj[512];
+        json_escape(g_env_hooks[i].last, lastj, sizeof(lastj));
+        char ovbuf[48] = "";
+        if (g_env_hooks[i].override_active) {
+            if ((double)g_env_hooks[i].override_i == g_env_hooks[i].override_d) snprintf(ovbuf, sizeof(ovbuf), "%lld", g_env_hooks[i].override_i);
+            else snprintf(ovbuf, sizeof(ovbuf), "%g", g_env_hooks[i].override_d);
+        }
+        const char *ovjson = g_env_hooks[i].override_active ? ovbuf : "null";
+        void *live = NULL;
+        if (g_env_hooks[i].slot) {
+            adh_perms_of_addr((void *)(uintptr_t)g_env_hooks[i].slot, slot_perms, sizeof(slot_perms));
+            live = __atomic_load_n(g_env_hooks[i].slot, __ATOMIC_ACQUIRE);
+        }
+        len += snprintf(out + len, sizeof(out) - len,
+                        "%s{\"function\":\"%s\",\"installed\":%s,\"active\":%s,"
+                        "\"hits\":%llu,\"dropped\":%llu,\"entry\":\"0x%llx\",\"perms\":\"%s\","
+                        "\"slotValue\":\"0x%llx\",\"original\":\"0x%llx\",\"override\":%s,\"last\":\"%s\"}",
+                        first ? "" : ",", g_env_hooks[i].name,
+                        g_env_hooks[i].installed ? "true" : "false",
+                        slot_active(i) ? "true" : "false",
+                        g_env_hooks[i].hits, g_env_hooks[i].dropped,
+                        (unsigned long long)(uintptr_t)g_env_hooks[i].slot, slot_perms,
+                        (unsigned long long)(uintptr_t)live,
+                        (unsigned long long)(uintptr_t)g_env_hooks[i].original,
+                        g_env_hooks[i].override_active ? ovjson : "null", lastj);
+        first = 0;
+        emitted++;
+    }
+    pthread_mutex_unlock(&g_env_hook_lock);
+    // emitted/truncated are only known now, so they travel after the list instead of forcing a
+    // rewrite of the header (the header states total+matched, which are known up front).
+    snprintf(out + len, sizeof(out) - len, "],\"emitted\":%d,\"truncated\":%s}\n",
+             emitted, (emitted == matched) ? "false" : "true");
     send_line(fd, out);
 }
 
@@ -3035,7 +3163,9 @@ void adh_cmd_jni_env_hook(int fd, const char *id, const char *action, const char
         }
         g_env_hook_table = (unsigned long long)(uintptr_t)(*env);
         adh_jni_detach(did_attach);
-        send_env_result(fd, id, action, function, 1, 0, 0, "");
+        struct EnvNameFilter status_filter;
+        env_filter_parse(function, &status_filter);
+        send_env_status(fd, id, function, &status_filter);
         return;
     }
     if (strcmp(action, "install") != 0 && strcmp(action, "uninstall") != 0) {
@@ -3053,22 +3183,13 @@ void adh_cmd_jni_env_hook(int fd, const char *id, const char *action, const char
     //   "*Field"      suffix   (the 36 field accessors in one call)
     //   "*Field*"     contains (the field ID lookups AND the accessors - what the field digest needs)
     // Reports how many were applied and the first failure, never a silent skip.
-    int wildcard = 0, suffix_only = 0, contains = 0;
-    const char *pat = function;
-    size_t pat_len = strlen(function);
-    if (strcmp(function, "all") == 0 || strcmp(function, "*") == 0) {
-        wildcard = 1;
-        pat = "";
-        pat_len = 0;
-    } else if (pat_len && pat[0] == '*') {
-        wildcard = 1;
-        pat++;
-        pat_len--;
-        if (pat_len && pat[pat_len - 1] == '*') { contains = 1; pat_len--; }   // trim the trailing star too
-        else suffix_only = 1;
-    } else if (pat_len && pat[pat_len - 1] == '*') {
-        wildcard = 1;
-        pat_len--;
+    struct EnvNameFilter filter;
+    env_filter_parse(function, &filter);
+    int wildcard = filter.wildcard;
+    if (filter.installed_only) {
+        send_env_result(fd, id, action, function, 0, 0, 0,
+                        "\"installed\" is a status filter; install/uninstall need a slot name or pattern");
+        return;
     }
 
     if (override_active && wildcard) {
@@ -3092,16 +3213,7 @@ void adh_cmd_jni_env_hook(int fd, const char *id, const char *action, const char
     } else {
         for (int i = 0; i < ENV_HOOK_MAX; i++) {
             const char *n = g_env_hooks[i].name;
-            size_t nlen = strlen(n);
-            int hit = 0;
-            if (!pat_len) hit = 1;                                             // "all" / "*" / "**"
-            else if (suffix_only) hit = nlen >= pat_len && strncmp(n + nlen - pat_len, pat, pat_len) == 0;
-            else if (contains) {
-                for (size_t o = 0; o + pat_len <= nlen && !hit; o++) {
-                    if (strncmp(n + o, pat, pat_len) == 0) hit = 1;
-                }
-            } else hit = strncmp(n, pat, pat_len) == 0;                        // prefix
-            if (!hit) continue;
+            if (!env_filter_match(&filter, n)) continue;
             matched++;
             char error[320] = "";
             int ok = applying ? env_hook_install_index(i, 0, 0, 0, error, sizeof(error))

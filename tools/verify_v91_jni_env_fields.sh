@@ -9,7 +9,8 @@
 # The RELRO checks from v58 apply too: the table page must come back read-only after the swap.
 #
 # Sections (3f)-(3h) extend the same chain: the string-copy / direct-buffer entries (v4.63/v4.65), the
-# array-region family (v4.70) and the array-elements family (v4.72) - the native fixtures drive them
+# array-region family (v4.70), the array-elements family (v4.72) and the status filter/counters (v4.80) -
+# the native fixtures drive them
 # with fixed contents, so every entry must emit its own event (start/len/first=[..], plus isCopy and
 # the release mode for the element family, where a JNI_ABORT round also has to be seen discarding).
 #
@@ -331,6 +332,33 @@ if (elemShapeBad.length) console.log('no event with len/elements/isCopy-or-mode 
 if (elemBad.length) console.log('release preview mismatch for: ' + elemBad.join(', '));
 if (!elemAbortOk) console.log('the JNI_ABORT round did not show the discarded mutation');
 
+// (3i) v4.80: the status reply has to be honest about what it shows. `function` doubles as a
+// filter for action:status (same pattern language as install, plus the keyword "installed"), and
+// the reply must state total/matched/emitted/truncated - a clipped list that looks complete would
+// let a verifier read "not installed" out of a missing entry.
+await installSlot('GetJavaVM');   // the 'installed' filter below needs at least one hooked slot
+const stAll = await post('/api/jni/env_hook', { session, action: 'status', function: '' });
+const stAllTotal = Number(stAll.body?.total ?? 0), stAllMatched = Number(stAll.body?.matched ?? 0), stAllEmitted = Number(stAll.body?.emitted ?? 0);
+const stAllOk = stAll.body?.ok === true && stAllTotal >= 228 && stAllMatched === stAllTotal
+  && (stAll.body?.truncated === false ? stAllEmitted === stAllMatched : stAllEmitted < stAllMatched);
+const stRegion = await post('/api/jni/env_hook', { session, action: 'status', function: '*ArrayRegion' });
+const stRegionHooks = stRegion.body?.hooks ?? [];
+const stRegionOk = stRegionHooks.length === 16 && Number(stRegion.body?.matched ?? 0) === 16
+  && stRegionHooks.every((h) => typeof h.function === 'string' && h.function.endsWith('ArrayRegion'))
+  && stRegionHooks.every((h) => h.installed === false);
+const stInst = await post('/api/jni/env_hook', { session, action: 'status', function: 'installed' });
+const stInstHooks = stInst.body?.hooks ?? [];
+const stInstOk = stInstHooks.length >= 1 && stInstHooks.every((h) => h.installed === true)
+  && stInstHooks.some((h) => h.function === 'GetJavaVM')
+  && Number(stInst.body?.matched ?? -1) === stInstHooks.length
+  && stInst.body?.truncated === false;
+console.log(`  status: total=${stAllTotal} matched=${stAllMatched} emitted=${stAllEmitted} truncated=${stAll.body?.truncated}; *ArrayRegion=${stRegionHooks.length}; installed=${stInstHooks.length}`);
+const statusFilterOk = stAllOk && stRegionOk && stInstOk;
+if (!stAllOk) console.log('the unfiltered status did not report a consistent total/matched/emitted/truncated');
+if (!stRegionOk) console.log('the "*ArrayRegion" status filter did not return exactly the 16 region entries');
+if (!stInstOk) console.log('the "installed" status filter did not return only the hooked slots');
+const statusSlotOffOk = await uninstallSlot('GetJavaVM');
+
 // (4) unhook, table restored, process alive
 const unhooked = [];
 for (const f of hooked) unhooked.push(await uninstallSlot(f));
@@ -346,7 +374,7 @@ if (!digestOk) console.log('the field digest did not resolve any access to a nam
 if (!patternOk) console.log('the "*Field" pattern did not select the field family (suffix matching)');
 if (!overrideOk) console.log('the SetIntField override did not change what the target stored, or the restore failed');
 if (!rewriteDigestOk) console.log('the field digest did not report the rewritten write (rewrittenSamples/lastRequested)');
-const pass = installedOk && patchedOk && relroOk && calls >= 2 && missing.length === 0 && valueOk && digestOk && patternOk && patternUnhookOk && overrideOk && rewriteDigestOk && stringProbeOk && arrayProbeOk && elementsProbeOk
+const pass = installedOk && patchedOk && relroOk && calls >= 2 && missing.length === 0 && valueOk && digestOk && patternOk && patternUnhookOk && overrideOk && rewriteDigestOk && stringProbeOk && arrayProbeOk && elementsProbeOk && statusFilterOk && statusSlotOffOk
   && unhooked.every(Boolean) && restored && alive.length > 0;
 console.log(pass ? 'RESULT:PASS' : 'RESULT:FAIL');
 EOF
