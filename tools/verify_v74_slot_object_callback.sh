@@ -85,6 +85,8 @@ const objInfo = objHook.status?.hooks?.[0];
 const objSlots = objInfo?.slots ?? [];
 const objSlot = objSlots.find((s) => s.at.toLowerCase() === objVt.toLowerCase());
 const objSlotRead = objSlot ? await readPtr(objSlot.at) : null;
+const objRs = await regions();
+const objThunkPath = objSlot ? String(mappingOf(objRs, objSlot.thunk)?.path ?? '') : '';
 const objCallHooked = Number(await jc('objCall'));
 const objHits = await hitsNow();                       // only the vcall probe ran
 const objEntryAfter = await readHex(objFn, 24);
@@ -102,11 +104,16 @@ const cbOptIn = await mcp('native_hook', { action: 'hook', hookId: 0, mode: 'vta
 const cbInfo = cbOptIn.status?.hooks?.[0];
 const cbSlots = cbInfo?.slots ?? [];
 const cbSlot = cbSlots[0];
+const cbEntryBefore = await readHex(cbAddr, 24);
 const cbSlotRead = cbSlot ? await readPtr(cbSlot.at) : null;
+const cbThunkPath = cbSlot ? String(mappingOf(await regions(), cbSlot.thunk)?.path ?? '') : '';
 const cbCallHooked = Number(await jc('cbCall'));
 const cbHits = await hitsNow();
 const cbUnhook = await mcp('native_hook', { action: 'unhook', hookId: cbInfo?.id, hard: true });
 const cbSlotRestored = cbSlot ? await readPtr(cbSlot.at) : null;
+const cbEntryAfter = await readHex(cbAddr, 24);
+const rsAfterCb = await regions();
+const cbPagesGone = rsAfterCb.length > 0 && cbSlots.every((s) => mappingOf(rsAfterCb, s.thunk) == null);
 const cbCallAfter = Number(await jc('cbCall'));
 const alive = pidOfSandbox().length > 0;
 
@@ -115,7 +122,8 @@ const pass =
   objHook.ok === true && objSlots.length === 1 &&          // only the object table holds this function
   Number(objInfo?.skippedWritable ?? 0) === 0 &&
   objSlot != null && objSlot.kind === 'data' && /^r/.test(objSlot.perms) && !/w/.test(objSlot.perms) &&
-  objSlot.orig === objFn && objSlotRead === objSlot.now && objSlot.now !== objSlot.orig &&
+  objSlot.orig === objFn && objSlotRead === objSlot.now && objSlotRead === objSlot.thunk &&
+  objSlot.now !== objSlot.orig && /^\/memfd:jit-cache/.test(objThunkPath) &&
   objCallHooked === 84 && objHits >= 1 &&                    // the OBJECT vcall entered the thunk
   objEntryAfter === objBase.entry &&                        // no code written anywhere
   objUnhook.ok === true && objSlotRestored === objSlot.orig && objPagesGone && objCallAfter === 84 &&
@@ -124,20 +132,23 @@ const pass =
   cbOptIn.ok === true && cbSlots.length >= 1 &&
   Number(cbInfo?.skippedWritable ?? -1) === 0 &&
   cbSlot != null && /w/.test(cbSlot.perms) && cbSlot.kind === 'data' &&
-  cbSlotRead === cbSlot.now && cbSlot.now !== cbSlot.orig &&
+  cbSlotRead === cbSlot.now && cbSlotRead === cbSlot.thunk && cbSlot.now !== cbSlot.orig &&
+  /^\/memfd:jit-cache/.test(cbThunkPath) &&
+  cbEntryAfter === cbEntryBefore &&                       // the callback target code is untouched too
   cbCallHooked === 304 && cbHits >= 1 &&
-  cbUnhook.ok === true && cbSlotRestored === cbSlot.orig && cbCallAfter === 304 &&
+  cbUnhook.ok === true && cbSlotRestored === cbSlot.orig && cbPagesGone && cbCallAfter === 304 &&
   alive;
 
 console.log(JSON.stringify({
   object: { vtable: objVt, fn: objFn, baselineCall: objBase.call, install: { ok: objHook.ok, error: objHook.error, slotCount: objInfo?.slotCount },
             slot: objSlot && { at: objSlot.at, kind: objSlot.kind, perms: objSlot.perms, orig: objSlot.orig, now: objSlot.now },
-            slotRead: objSlotRead, callHooked: objCallHooked, hits: objHits, entryUnchanged: objEntryAfter === objBase.entry,
+            slotRead: objSlotRead, thunkPath: objThunkPath, callHooked: objCallHooked, hits: objHits, entryUnchanged: objEntryAfter === objBase.entry,
             unhook: objUnhook.ok, slotRestored: objSlotRestored, pagesGone: objPagesGone, callAfter: objCallAfter },
   writable: { target: cbAddr, baselineCall: cbBase, defaultHook: { ok: cbDefault.ok, error: cbDefault.error },
               optIn: { ok: cbOptIn.ok, error: cbOptIn.error, slotCount: cbInfo?.slotCount },
               slot: cbSlot && { at: cbSlot.at, kind: cbSlot.kind, perms: cbSlot.perms, orig: cbSlot.orig, now: cbSlot.now },
-              slotRead: cbSlotRead, callHooked: cbCallHooked, hits: cbHits,
+              slotRead: cbSlotRead, thunkPath: cbThunkPath, entryUnchanged: cbEntryAfter === cbEntryBefore,
+              callHooked: cbCallHooked, hits: cbHits, pagesGone: cbPagesGone,
               unhook: cbUnhook.ok, slotRestored: cbSlotRestored, callAfter: cbCallAfter },
   alive,
 }));
