@@ -15,6 +15,12 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.41 trace 摘要（AI 自主分析 trace 日志的入口）（2026-09-18，host 验收 PASS；真机验收待做）**：QBDI 一次给 8192 条原始指令，AI 读不完也没法比较；本轮把"trace 日志 → 可读摘要"这一层补上。
+      · `daemon/src/trace_digest.ts`：纯函数 `digestTrace()`（无设备可测）聚合 **循环**（只认"被分支指向"的地址作回边目标——第一版把"执行两次的调用点"也当循环，噪声很大）、**调用目标+次数**（`blr` 如实标为未解析）、**内存访问形态**（`[base+off]` 计数；第一版按逗号切操作数，把 `[x1, #0x10]` 切碎了，内存访问数恒为 0，单测当场抓到）、**立即数常量**（内置 crypto magic 表：TEA 黄金比、MD5/SHA1/SHA256 初值、FNV 等）、**分支形态**、**热点指令**，并附诚实注释（命中上限/未解析间接调用/无循环）。`traceDigest()` 负责"跑 `qbdi_trace` + 摘要 + 通过 `module_symbols.ts` 给调用点与热点符号化"。
+      · 新增 MCP `trace_digest`（+ `POST /api/trace/digest`），MCP 工具数 66 → 67；模块/符号解析从 `backtrace.ts` 抽到 `module_symbols.ts` 供两者复用。
+      · 验收：`tools/verify_v80_trace_digest.sh`（host）：18 条单元测试（digest 7 + backtrace 4 + syscall 7）+ 合成 trace 断言（循环 1 / 调用 1 / 内存 1 / 常量 1）+ MCP schema，**PASS**。
+      · **未完成**：真机验收（对 `libadhdetect.so:adh_add_target` 跑 `trace_digest` 并断言摘要内容）；`backtrace.ts`→`module_symbols.ts` 的抽取属重构，`verify_v77/v78` 需在手机空闲后复跑确认。
+
 - [x] **v4.40 Java hook 命中带调用链（native v4.39 的姊妹能力）（2026-09-18，真机 PASS）**：native 侧能看到"谁调进来的"之后，Java 侧同样补上——算法还原里最常问的就是"这个 `ping/encrypt` 是被哪个方法调起的"。
       · **实现**：`java_hook stack:true`（opt-in，默认关：每次命中一次栈遍历）时，`AdhJavaHookBridge` 在回调里用 `Thread.currentThread().getStackTrace()` 采一条**有界**链（最多 12 帧 / 512 字符，`Class#method:line`，最内层在前），并过滤掉采集与 hook 管线（`java.lang.Thread`、`dalvik.system.VMStack`、`java.lang.reflect.Method`、`AdhJavaHookBridge`、LSPlant 的 `com.android.internal.util.NativeBridge_` 合成类）——**第一版没过滤 VMStack/反射帧**，链里混进 `VMStack#getThreadStackTrace` 与 `Method#invoke`，读起来像噪声，加上过滤后链就是应用自己的帧。bridge dex 用 `tools/build_java_hook_bridge.sh` 重新生成（javac=Android Studio JBR + SDK d8），产物一并提交。
       · **事件与状态**：`nativeReport` 的 JNI 签名从 5 参变 6 参（`stack` 为空时**不写字段**，opt-in 语义在事件里也成立）；`JAVA_HOOK` 事件新增 `stack`；per-hook status 增加 `stackCapture`/`lastStack`，status 顶层能力位 `stackCapture:true`（老 agent 会被验收脚本识别为 SKIP，不假通过）。

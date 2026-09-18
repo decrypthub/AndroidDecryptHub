@@ -81,6 +81,8 @@ SCRIPTS=(
   # proves a libc-mediated syscall (uname) can be selected by name and really fires with x8=0xa0.
   "verify_v76_syscall_attribution.sh:host"
   "verify_v77_syscall_watch_libc.sh:device"
+  # Trace digest (v4.41): pure digest of a QBDI stream + the MCP tool shape. Host-only.
+  "verify_v80_trace_digest.sh:host"
   # Hook-hit caller backtrace (v4.39): the event must carry the at-hit chain and every frame must be
   # resolved to module + symbol; a bogus frame pointer must stop the walk, not invent frames.
   "verify_v78_hook_backtrace.sh:device"
