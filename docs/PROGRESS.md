@@ -15,6 +15,10 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.87 设备脚本的 HTTP 路由门禁（host-only，116 脚本 = 32 host + 84 device）（2026-09-19，host 验收 PASS）**：设备脚本是整套验收里唯一"必须插手机才能跑"的部分，所以**路由改名/删除以后会在真机上集体失败**、此前没有任何东西能在 host 侧发现。新增 `tools/verify_v94_device_script_routes.sh`：读 daemon 实际声明的每一个 `path:` 路由，扫 `tools/verify_*.sh` 里出现的每个 `/api/...`，对不上就 FAIL（前缀路由按前缀匹配；`'/'` 这种静态/SPA 兜底路由被排除，否则"任何路径都有服务"会让检查永远通过）。
+      · 现状：**88 条 api 路由**（与文档里的"88 条 HTTP 路由"对上），脚本引用 **82 条**，**0 条无服务**；另有 5 条 api 路由目前没有任何验收脚本引用（`/api/native/stealth`、`/api/native/hook_all`、`/api/native/backtrace`、`/api/file/probe`、`/api/skills`）——只报信息，不算失败（其中前几条由单元/设备脚本以别的方式覆盖或本就未纳入验收，详见各自章节）。
+      · 牙口验证：故意在某脚本里加一条 `http://.../api/does_not_exist_xyz` → `FAIL no route serves /api/does_not_exist_xyz`；同时把注释里的路径（如头部说明里的 "api/settings export→import"）排除掉，避免把散文当端点（第一版就因为 `'/'` 前缀 + 注释误报，两处都已修）。
+      · 已接入 `tools/verify_all.sh`（`verify_v94_device_script_routes.sh:host`）；门禁 `32 PASS / 0 FAIL / 84 SKIP`。
 - [~] **v4.86 第四轮评审收口：C++ 侧归因缺口（P1）+ 4 条 P2（2026-09-19，host 验收 PASS；真机待做）**：评审独立复算了 v4.75 的错位（确认是真 bug，且受影响的是 **5 个**槽位）并把上一轮的说法逐条对账。
       · **P1（真缺口，已修）**：`adh_jni_exception_check()` 只覆盖了 8 个 C 模块的 52 处，**两个 C++ 模块没切**——`java_lsplant.cpp` 17 处、`java_enum.cpp` 11 处仍是 `env->ExceptionCheck()`，而且它们连头文件都没 include；`g_env_hook_in_ours` 又是 `jni_env_hooks.c` 的 file-static，C++ 侧根本设不了。修：两个文件 include `jni_env_hooks.h`、28 处全改走 helper；并补 `adh_jni_exception_clear()`（`ExceptionClear` 同样是可挂槽位），把 C++ 侧 **16 + 8 处**也切过去——"ADH 自己的异常检查不进事件流"这句话现在才真的成立。
       · **P2-4（越界读）**：`GetStringChars`/`GetStringCritical` 的预览原先假设"字符串自带 NUL 终止"，而 JNI 规范并不保证（critical 缓冲区尤甚）。现在**先取 `GetStringLength`**（在 critical 区之外、用守卫包住）**再按真实长度截断**；查询自身若抛异常只清掉我们那一份（用新的 `adh_jni_exception_clear`），不改目标语义。

@@ -151,6 +151,10 @@ SCRIPTS=(
   "verify_v91_jni_env_fields.sh:device"
   # JNIEnv field digest (v4.56): join access events with the IDs they were handed out with.
   "verify_v92_jni_field_digest.sh:host"
+  # Device-script routes (v4.87): every /api/... an acceptance script calls must exist in the
+  # daemon route table. The device scripts only run when a phone is attached, so a renamed route
+  # would otherwise stay invisible until then.
+  "verify_v94_device_script_routes.sh:host"
   "verify_v10_mcp.sh:host"
   "verify_v10_webui.sh:host"
   "verify_v33_backends.sh:host"
