@@ -3,6 +3,7 @@
 // Imports ONLY from state.ts (+ dex.ts pure layer + node builtins) — no circular refs.
 import { readFile } from 'node:fs/promises';
 import { writeFileSync, existsSync } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -197,7 +198,7 @@ export async function dumpRegion(sid: string, addrHex: string, size: number, tag
   const s = sessions.get(sid);
   const kind = inferKind(buf);
   const path = join(CAPTURES, `${sha.slice(0, 16)}.${kind}.bin`);
-  if (!existsSync(path)) writeFileSync(path, buf);
+  if (!existsSync(path)) await writeFile(path, buf);
   const meta: DumpMeta = {
     sha256: sha, size: buf.length, source: 'region', addr: addrHex, tag,
     sessionId: sid, package: s?.package ?? '?', capturedAt: Date.now(), path, kind,

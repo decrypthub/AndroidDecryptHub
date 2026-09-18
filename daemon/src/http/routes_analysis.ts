@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { createReadStream, existsSync, unlinkSync, writeFileSync } from 'node:fs';
+import { createReadStream, existsSync, unlinkSync } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -99,7 +100,7 @@ export function analysisRoutes({ req, res, url, send }: RouteContext): Route[] {
         if (existing) return send(200, { ...existing, dedup: true, module: mod.name });
         const s = sessions.get(sid);
         const path = join(CAPTURES, `${sha.slice(0, 16)}.so`);
-        if (!existsSync(path)) writeFileSync(path, buf);
+        if (!existsSync(path)) await writeFile(path, buf);
         const meta: DumpMeta = { sha256: sha, size: buf.length, source: 'so-reassembly', addr: mod.base, tag: mod.name, sessionId: sid, package: s?.package ?? '?', capturedAt: Date.now(), path, kind: 'so' };
         dumps.set(sha, meta);
         broadcast('dump.new', meta);
@@ -172,7 +173,7 @@ export function analysisRoutes({ req, res, url, send }: RouteContext): Route[] {
       let parseOk = true; try { parseDex(rb.dex); } catch { parseOk = false; }
       const outSha = createHash('sha256').update(rb.dex).digest('hex');
       const path = join(CAPTURES, `${outSha.slice(0, 16)}.dex`);
-      if (!existsSync(path)) writeFileSync(path, rb.dex);
+      if (!existsSync(path)) await writeFile(path, rb.dex);
       const meta: DumpMeta = { sha256: outSha, size: rb.dex.length, source: 'dex-recover', addr: '0', tag: 'recovered', sessionId: '', package: '', capturedAt: Date.now(), path, kind: 'dex' };
       dumps.set(outSha, meta); broadcast('dump.new', meta);
       return send(200, { ok: true, ...report, injected: rb.injected, classesRewritten: rb.classesRewritten, parseOk, sha256: outSha, size: rb.dex.length });
@@ -194,7 +195,7 @@ export function analysisRoutes({ req, res, url, send }: RouteContext): Route[] {
       try { const pd = parseDex(res.dex); methods = pd.counts.methods; } catch { parseOk = false; }
       const outSha = createHash('sha256').update(res.dex).digest('hex');
       const path = join(CAPTURES, `${outSha.slice(0, 16)}.dex`);
-      if (!existsSync(path)) writeFileSync(path, res.dex);
+      if (!existsSync(path)) await writeFile(path, res.dex);
       const meta: DumpMeta = { sha256: outSha, size: res.dex.length, source: 'dex-rebuild', addr: '0', tag: 'rebuilt', sessionId: '', package: '', capturedAt: Date.now(), path, kind: 'dex' };
       dumps.set(outSha, meta); broadcast('dump.new', meta);
       return send(200, { ok: true, injected: res.injected, classesRewritten: res.classesRewritten, parseOk, methods, sha256: outSha, size: res.dex.length });
