@@ -58,6 +58,7 @@ async function mcp(name, args, timeoutMs = 60000) {
 }
 const jc = async (m) => (await mcp('java_call', { className: 'com.adh.sandbox.Detection', method: m, params: '', args: [] }))?.result?.result;
 const hexOf = (v) => '0x' + BigInt(v).toString(16);
+const leHex = (v) => { const b = Buffer.alloc(8); b.writeBigUInt64LE(BigInt(v)); return b.toString('hex'); };
 const readHex = async (addr, size) => {
   const r = await mcp('memory_read', { addr, size });
   const b64 = String(r?.b64 ?? '');
@@ -86,8 +87,15 @@ const kinds = [...new Set(slots.map((s) => s.kind))];
 const vtableSlot = slots.find((s) => s.at.toLowerCase() === vtable.toLowerCase());
 const entryAfter = await readHex(fn, 24);
 const slotsAfter = await readHex(vtable, 16);
+// independent read-back of EVERY slot (not just the 16 bytes at the table), while still installed
+const slotReadsAfter = [];
+for (const sl of slots) slotReadsAfter.push(await readHex(sl.at, 8));
 const subAfter = '0x' + Buffer.from(slotsAfter ?? '00'.repeat(16), 'hex').readBigUInt64LE(8).toString(16);
+// Hit attribution: the vtable slot is read only by slotProbe, so call it FIRST and read the counter
+// here - the direct siteProbe below can only add more (it goes through the module GOT slot that this
+// same hook also patched, so an aggregate counter alone could not tell the two paths apart).
 const probeHooked = Number(await jc('slotProbe'));
+const hitsAfterIndirect = Number(((await hookStatus())[0]?.hits) ?? 0);
 const directStill = Number(await jc('siteProbe'));
 const hits = Number(((await hookStatus())[0]?.hits) ?? 0);
 const audit = await (async () => { try { return JSON.parse(String(await jc('antiHookProbe'))); } catch { return {}; } })();
@@ -95,6 +103,8 @@ const rs = await regions();
 const thunkPaths = slots.map((s) => String(mappingOf(rs, s.thunk)?.path ?? ''));
 const unhook = await mcp('native_hook', { action: 'unhook', hookId: h?.id, hard: true });
 const slotsRestored = await readHex(vtable, 16);
+const slotReadsRestored = [];
+for (const sl of slots) slotReadsRestored.push(await readHex(sl.at, 8));
 const rs2 = await regions();
 const pagesGone = rs2.length > 0 && slots.every((s) => mappingOf(rs2, s.thunk) == null);
 const probeAfter = Number(await jc('slotProbe'));
@@ -111,7 +121,12 @@ const pass =
   entryAfter === entryBefore &&                                // NO code was written
   slotsAfter !== null && slotsAfter !== slotsBefore &&
   subAfter === sub &&                                          // neighbouring slot untouched
-  probeHooked === 84 && hits >= 1 && directStill === 84 &&
+  probeHooked === 84 && hitsAfterIndirect >= 1 &&                 // the INDIRECT path entered the thunk
+  directStill === 84 && hits >= hitsAfterIndirect &&
+  slotReadsAfter.length === slots.length &&
+  slots.every((sl, i) => slotReadsAfter[i] === leHex(sl.now)) &&          // every slot really holds the thunk
+  slots.every((sl, i) => slotReadsRestored[i] === leHex(sl.orig)) &&     // ... and is back to the original
+  vtableSlot.orig === fn &&
   audit.entryBranchesOutside === false &&
   thunkPaths.every((p) => /^\/memfd:jit-cache/.test(p)) &&
   unhook.ok === true && slotsRestored === slotsBefore && pagesGone && probeAfter === 84 &&
@@ -124,7 +139,7 @@ console.log(JSON.stringify({
   kinds,
   entryUnchanged: entryAfter === entryBefore,
   slotsBefore, slotsAfter, subUnchanged: subAfter === sub,
-  probeHooked, directStill, hits,
+  probeHooked, hitsAfterIndirect, directStill, hits, slotReadsAfter, slotReadsRestored,
   auditView: { prologueDiffers: audit.prologueDiffers, entryBranchesOutside: audit.entryBranchesOutside,
                note: 'the audit reads the symbol through the patched GOT slot; the direct 24-byte read above is the code truth' },
   thunkPaths, unhook: unhook.ok, slotsRestored, pagesGone, probeAfter, alive,
