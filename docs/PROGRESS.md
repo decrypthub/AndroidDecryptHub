@@ -15,6 +15,13 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.81 评审更正 + 把"整体平移"变成编译错误（2026-09-19，host 验收 PASS）**：subagent 独立复算（从各提交抽取枚举与宏、用 NDK clang 做静态断言，并带负对照）确认了字段错位，但**证伪了我对症状的描述**，这一版按事实改写文档并补上真正能挡住这类错位的门禁。
+      · 症状更正：不是"每个字段槽都被拒"。**只有第一个字段 `GetObjectField` 落 `default` 被拒**；其余 35 个命中**上一个字段**的 case，把那个字段的槽位与 wrapper 装了进去、事件名却写成请求的名字——静默错位绑定，比响亮拒绝更危险（被点名字段的真实表项没被动过，它的调用永远不会有事件）。
+      · 归因更正："两条总数断言抓出它"不成立（定长数组下恒真 / 错位下同样成立）。真正报错的是中间态的 `-Warray-bounds`（表 215 项 vs `ENV_HOOK_MAX` 216，`g_env_hooks[215]` 越界）。
+      · 新增 **组基址断言**：`ENV_SLOT_CallObjectMethod == ENV_FIXED_SLOTS`、`ENV_SLOT_CallNonvirtualObjectMethod == ENV_SLOT_CallStaticVoidMethod + 3`、`ENV_SLOT_GetObjectField == ENV_SLOT_CallNonvirtualVoidMethod + 3`、`ENV_SLOT_SetStaticDoubleField == ENV_SLOT_GetObjectField + 35`——整体平移会在这里编译失败。
+      · 结构收口：最后一个家族的 V/A 由"算术别名"改为**真枚举**（别名可删），字段块自然从 `base + 3` 开始。
+      · 补齐 **Call*/CallNonvirtual 家族的签名证明**：28 个家族 × 3 形态 = **84 条 `_Static_assert`**（此前这两个家族一条都没有——wrapper 是强转成 `void*` 装进表的，签名错了只会在目标调用时炸）。
+      · 验收：agent 零告警重建（1015 KB）；v90 PASS（228/229）；host 全量门禁 **31 PASS / 0 FAIL / 84 SKIP**（115 脚本）。
 - [~] **v4.80 JNIEnv status 可过滤 + 自报完整性（2026-09-19，host 验收 PASS；真机待做）**：228 个槽位的整表 status 已经超过早期一次回复能带的量——**旧实现会在 32 KB 处静默截断**，只回一部分 hooks 且不作说明，验证者会把"缺条目"读成"未安装"。
       · `action:status` 现在可以用 `function` 当过滤器（与安装同语法：精确名 / `Call*` 前缀 / `*Field` 后缀 / `*Field*` 包含 / `all`·`*` 全部），另加关键字 **`installed`**（只看当前挂着的槽位）；解析与匹配**与安装路径共用一份**（`env_filter_parse`/`env_filter_match`），不再有两套模式语言。
       · 回复自报完整性：`total`/`matched`/`emitted`/`truncated`——被过滤或被裁剪都写在回复里，"看起来完整"的残缺列表不再是可能状态；缓冲区提到 128 KB（agent 协议是长度分帧、上限 64 MB），整表 228 项正常一次带回且 `truncated:false`。
@@ -30,9 +37,9 @@
       · 验收：agent 零告警重建（1014 KB）；v90 PASS（228/229，未覆盖名单只剩 `RegisterNatives` 且已分类）；host 全量门禁 **31 PASS / 0 FAIL / 84 SKIP**（115 脚本）。
 - [~] **v4.76 CallNonvirtual 全族入表 + 表/枚举一致性硬约束（2026-09-19，host 验收 PASS；真机待做）**：这一批把最大的剩余盲区一次收完，顺带揪出并修掉一个**从 v4.55 起就潜伏的字段槽位错位**。
       · 新增 30 槽（覆盖率 **185/229 → 215/229 = 94%**）：`CallNonvirtual{Object,Boolean,Byte,Char,Short,Int,Long,Float,Double}Method` 与 `CallNonvirtualVoidMethod`，各三种 JNI 形态（varargs / V / A）。非虚调用是"**调用方自己指定执行哪个实现**、绕过接收者运行时的类"，所以事件在常规成员标签后追加 `via=<class>`——"到底调了谁"是这类调用唯一值得记的东西。
-      · **P1（潜伏 bug，本批修复）**：`ENV_SLOT_CallStaticVoidMethod_end` 是个纯算术锚点，但枚举成员**必然会占用一个值**，于是字段访问器整族的枚举值比它们在 `g_env_hooks[]` 里的位置**大 1**。安装路径是"按名字取表位置 → `env_hook_slot(index)` 按枚举值 switch"，结果每个字段槽位都会落到 `default` 分支、以 `table entry unavailable` 被拒——**v4.55 的 36 个字段访问器、v4.58 的 setValue 改写、v4.56 的字段摘要从来没有真正挂上过**（真机验收一直是待做，所以没人发现）。现在锚点改成不吞槽位的别名式写法（`ENV_SLOT_CallNonvirtualVoidMethodA_alias = base + 2`），字段块落在 179–214 与表一一对应。
+      · **P1（潜伏 bug，本批修复；症状描述经 v4.81 评审更正）**：`ENV_SLOT_CallStaticVoidMethod_end` 是个纯算术锚点，但枚举成员**必然会占用一个值**，于是字段访问器整族的枚举值比它们在 `g_env_hooks[]` 里的位置**大 1**；安装路径"按名字取表位置 → `env_hook_slot(index)` 按枚举值 switch"因此错位——**第一个字段槽 `GetObjectField` 落到 `default` 被响亮拒绝，其余 35 个静默绑定到"上一个字段"的表项与 wrapper**（请求 `GetIntField` 实际挂上的是 `GetShortField` 的槽位与 wrapper），而事件名仍写成请求的那个字段：被点名的字段的真实表项从未被改，它的调用因此**不会产生任何事件**。所以 v4.55 的 36 个字段访问器、v4.58 的 `setValue` 改写、v4.56 的字段摘要从来没有真正生效（真机验收一直是待做，v91 的字段段与 `*Field` 计数在真机上必然失败，所以没人发现）。现在最后一个家族的 V/A 写成真枚举（`ENV_SLOT_CallNonvirtualVoidMethodV/A`），字段块落在 179–214 与表一一对应。
       · 顺带修掉 Call* 族的**重入守卫不对称**：varargs 形态缺少 `g_env_hook_in_ours` 检查（V/A 形态有），agent 自己解析类名时经过 `CallObjectMethod` 的内部调用会被当成目标事件记下来。
-      · 安全网升级：`g_env_hooks[]` 改成**不定长数组**并加两条编译期不变式——表长必须等于 `ENV_HOOK_MAX`、最后一个字段槽必须是 `ENV_HOOK_MAX-1`。这两条把"枚举与表悄悄漂移"从静默截断变成一行清晰的编译错误（本次正是它逼出了上面那个 bug）。索引 64–93 由 v90 对 `jni.h` 机检（`checked 215 indices`），覆盖率下限**再提到 215**。
+      · 安全网升级：`g_env_hooks[]` 改成**不定长数组**并加编译期不变式——表长必须等于 `ENV_HOOK_MAX`、最后一个字段槽是 `ENV_HOOK_MAX-1`，v4.81 又补上**组基址断言**（`ENV_SLOT_GetObjectField == ENV_SLOT_CallNonvirtualVoidMethod + 3` 等）。注意事实边界（评审更正）：暴露这个 bug 的并不是那两条总数断言——定长数组下 `sizeof/sizeof == ENV_HOOK_MAX` 恒真、末字段断言在错位版本同样成立；真正报错的是"不定长数组 + 新增 CallNV 家族而 `_end` 锚点还在"这个中间态的 `-Warray-bounds`。能抓住"整体平移"的是后补的**基址断言**。索引 64–93 由 v90 对 `jni.h` 机检（`checked 215 indices`），覆盖率下限**再提到 215**。
       · 剩余 14 个盲区（v90 名单）：`From/ToReflected*` 4 项、`NewString`/`GetStringLength`/`GetStringUTFLength`/`ReleaseStringUTFChars`/`Get+ReleaseStringCritical` 6 项、`FatalError`、`UnregisterNatives`、`ExceptionCheck`（`RegisterNatives` 已在 v4.14 注册路径覆盖，这里是 env 表口径）。
       · 验收：agent 零告警重建（998 KB）；v90 PASS（215/229，94%）；host 全量门禁 **31 PASS / 0 FAIL / 84 SKIP**（115 脚本）。
 - [~] **v4.75 JNIEnv 创建 / 长度 / 对象数组 / AllocObject（2026-09-19，host 验收 PASS；真机待做）**：覆盖名单里剩下的"跟数组有关但不在 region/elements 两族"的表项一次收完——**造数组**（8 个 `New<Type>Array` + `NewObjectArray`）、**问长度**（`GetArrayLength`）、**对象数组元素读写**（`Get/SetObjectArrayElement`）和**不开构造器直接分配对象**（`AllocObject`）。

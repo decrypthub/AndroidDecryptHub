@@ -231,13 +231,12 @@ enum {
     ENV_SLOT_CallNonvirtualFloatMethod = ENV_SLOT_CallNonvirtualLongMethod + 3,
     ENV_SLOT_CallNonvirtualDoubleMethod = ENV_SLOT_CallNonvirtualFloatMethod + 3,
     ENV_SLOT_CallNonvirtualVoidMethod = ENV_SLOT_CallNonvirtualDoubleMethod + 3,
-    // The field accessors follow, and the table keeps exactly one entry per accessor, so the
-    // first field slot has to land on CallNonvirtualVoidMethodA + 1. An enumerator always
-    // consumes a value, hence this alias: it names the A slot (which is addressed as base+2
-    // everywhere in the code) so the field block starts exactly where the table does. The old
-    // "*_end" markers did the same job but swallowed a slot, which silently pushed the whole
-    // field family one index past its table position.
-    ENV_SLOT_CallNonvirtualVoidMethodA_alias = ENV_SLOT_CallNonvirtualVoidMethod + 2,
+    // Name the V/A forms of the last family instead of leaving them as bare arithmetic: the field
+    // block follows and must start at CallNonvirtualVoidMethodA + 1. The old "*_end" arithmetic
+    // anchor consumed an enum value without a matching table entry, which pushed every field slot
+    // one index past its table position; the assert block further down pins the layout now.
+    ENV_SLOT_CallNonvirtualVoidMethodV,
+    ENV_SLOT_CallNonvirtualVoidMethodA,
     ADH_FIELD_SLOT_LIST(ADH_FIELD_ENUM_ENTRY)
     ENV_HOOK_MAX,
 };
@@ -379,6 +378,17 @@ _Static_assert(sizeof(g_env_hooks) / sizeof(g_env_hooks[0]) == ENV_HOOK_MAX,
 _Static_assert(ENV_SLOT_SetStaticDoubleField == ENV_HOOK_MAX - 1,
                "the field accessors are the last group in the table, so the last field slot must be the"
                " last enum value before ENV_HOOK_MAX (a drifting base would land on the wrong slot)");
+// A total-size check alone cannot see a shifted layout: in the broken version the table and the enum
+// agreed on the count while every field slot sat one index too high. These pin the group BASES to the
+// positions the table actually has (fixed slots, then the Call families, then the field block).
+_Static_assert(ENV_SLOT_CallObjectMethod == ENV_FIXED_SLOTS,
+               "the Call families start right after the fixed slots");
+_Static_assert(ENV_SLOT_CallNonvirtualObjectMethod == ENV_SLOT_CallStaticVoidMethod + 3,
+               "the CallNonvirtual families start where the CallStaticVoid family ends");
+_Static_assert(ENV_SLOT_GetObjectField == ENV_SLOT_CallNonvirtualVoidMethod + 3,
+               "the field accessor block starts exactly where the last CallNonvirtual family ends");
+_Static_assert(ENV_SLOT_SetStaticDoubleField == ENV_SLOT_GetObjectField + 35,
+               "the field list must stay at 36 entries, one table entry each");
 
 static pthread_mutex_t g_env_hook_lock = PTHREAD_MUTEX_INITIALIZER;
 // Marks the current thread as running ADH instrumentation code (label resolution, class
@@ -1133,6 +1143,24 @@ static void callnv_add_via(JNIEnv *env, jclass clazz, struct AdhCallDetail *d) {
 
 ADH_CALLNV_VALUE_FAMILIES(ADH_DEFINE_CALLNV_VALUE_ENTRY)
 ADH_CALLNV_VOID_FAMILIES(ADH_DEFINE_CALLNV_VOID_ENTRY)
+
+#define ADH_CALL_ASSERT_3(name)                                                                 \
+    _Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->name), \
+                   __typeof__(&name##_wrapper)), "family wrapper signature mismatch");          \
+    _Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->name##V), \
+                   __typeof__(&name##V_wrapper)), "family V wrapper signature mismatch");       \
+    _Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->name##A), \
+                   __typeof__(&name##A_wrapper)), "family A wrapper signature mismatch");
+
+// Every Call* / CallNonvirtual* family gets the same compile-time proof the fixed slots, the field
+// accessors and the array families already have: the wrappers are cast to void* at install time, so a
+// signature mismatch would only surface when the target calls the entry.
+#define ADH_CALL_ASSERT_VALUE(name, ret, tgt, kind, base, spec) ADH_CALL_ASSERT_3(name)
+#define ADH_CALL_ASSERT_VOID(name, tgt, kind, base, spec) ADH_CALL_ASSERT_3(name)
+ADH_CALL_VALUE_FAMILIES(ADH_CALL_ASSERT_VALUE)
+ADH_CALL_VOID_FAMILIES(ADH_CALL_ASSERT_VOID)
+ADH_CALLNV_VALUE_FAMILIES(ADH_CALL_ASSERT_VALUE)
+ADH_CALLNV_VOID_FAMILIES(ADH_CALL_ASSERT_VOID)
 
 
 // ---- field accessors ------------------------------------------------------
