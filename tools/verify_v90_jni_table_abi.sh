@@ -159,6 +159,22 @@ for (const m of src.matchAll(/static [^\n]*?([A-Za-z0-9_]+)_wrapper\([^)]*\)\s*\
   if (!/env_note\(|call_emit\(/.test(m[2])) silentWrappers.push(m[1]);
 }
 if (silentWrappers.length) problems.push(`hand-written wrappers with no event call: ${silentWrappers.join(', ')}`);
+// A wrapper body must talk about ITS OWN slot. A hand-written wrapper that calls slot_original() or
+// env_note() with a foreign ENV_SLOT_* emits into (and restores) the wrong slot while looking
+// perfectly healthy - no other gate and no signature assert can see it, only a device run.
+const foreignSlots = [];
+for (const m of src.matchAll(/static [^\n]*?([A-Za-z0-9_]+)_wrapper\([^)]*\)\s*\{([\s\S]*?)\n\}/g)) {
+  if (m[1] === 'env_hook') continue;
+  const foreign = [...new Set([...m[2].matchAll(/ENV_SLOT_([A-Za-z0-9_]+)/g)].map((x) => x[1]))].filter((s) => s !== m[1]);
+  if (foreign.length) foreignSlots.push(`${m[1]} uses ${foreign.join(',')}`);
+}
+if (foreignSlots.length) problems.push(`hand-written wrappers referencing another slot: ${foreignSlots.join('; ')}`);
+// Macro-generated wrappers take the slot as a parameter (ENV_SLOT_##NAME); a literal ENV_SLOT_ name
+// inside such a macro means the generic wrapper is hard-wired to one entry.
+const hardwired = [...macroBodies.entries()]
+  .filter(([, body]) => /_wrapper\(/.test(body) && /ENV_SLOT_[A-Za-z0-9_]+/.test(body))
+  .map(([name]) => name);
+if (hardwired.length) problems.push(`wrapper macros naming a slot literally: ${hardwired.join(', ')}`);
 notes.push(`wiring: ${fixed.length} fixed slots dispatched from the list, ${fieldSlots.length} field accessors and ${families.length} families kept paired, ${silentWrappers.length + silentMacros.length} silent wrappers`);
 
 // ---- coverage report: turn "JNIEnv fully hookable" into a number ----

@@ -15,6 +15,11 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.88 门禁再补一条："wrapper 只能谈自己的槽位"（2026-09-19，host 验收 PASS）**：评审点出的最后一类"静态检查看不见的错"——手写 wrapper **函数体里写错 `ENV_SLOT_*` 常量**（例如在 `GetVersion_wrapper` 里 `env_note(ENV_SLOT_FindClass, ...)`）：签名对、接线对、布局对，只有真机跑才会发现它把事件写进了别的槽位、也会去还原别人的 original。现在 v90 两条规则：
+      · 手写 wrapper：体内出现的每个 `ENV_SLOT_X` 必须等于 `<wrapper 名>`（当前 0 违规）；
+      · 宏生成的 wrapper：宏体内**不允许出现字面量 `ENV_SLOT_<名字>`**（槽位必须来自参数 `ENV_SLOT_##NAME`，否则说明这个"通用"wrapper 被硬编码到某一个槽位）。
+      · 牙口验证：把 `GetVersion_wrapper` 的 `env_note` 指向 `ENV_SLOT_FindClass` → `FAIL hand-written wrappers referencing another slot: GetVersion uses FindClass`；恢复后 PASS。
+      · 验收：v90 PASS（228/229）；host 全量门禁 **32 PASS / 0 FAIL / 84 SKIP**（116 脚本）。
 - [~] **v4.87 设备脚本的 HTTP 路由门禁（host-only，116 脚本 = 32 host + 84 device）（2026-09-19，host 验收 PASS）**：设备脚本是整套验收里唯一"必须插手机才能跑"的部分，所以**路由改名/删除以后会在真机上集体失败**、此前没有任何东西能在 host 侧发现。新增 `tools/verify_v94_device_script_routes.sh`：读 daemon 实际声明的每一个 `path:` 路由，扫 `tools/verify_*.sh` 里出现的每个 `/api/...`，对不上就 FAIL（前缀路由按前缀匹配；`'/'` 这种静态/SPA 兜底路由被排除，否则"任何路径都有服务"会让检查永远通过）。
       · 现状：**88 条 api 路由**（与文档里的"88 条 HTTP 路由"对上），脚本引用 **82 条**，**0 条无服务**；另有 5 条 api 路由目前没有任何验收脚本引用（`/api/native/stealth`、`/api/native/hook_all`、`/api/native/backtrace`、`/api/file/probe`、`/api/skills`）——只报信息，不算失败（其中前几条由单元/设备脚本以别的方式覆盖或本就未纳入验收，详见各自章节）。
       · 牙口验证：故意在某脚本里加一条 `http://.../api/does_not_exist_xyz` → `FAIL no route serves /api/does_not_exist_xyz`；同时把注释里的路径（如头部说明里的 "api/settings export→import"）排除掉，避免把散文当端点（第一版就因为 `'/'` 前缀 + 注释误报，两处都已修）。
