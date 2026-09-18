@@ -102,8 +102,12 @@ export interface NativeHookAllResult {
   installedCount: number;
   /** Effective per-hook event throttle (0 = every hit emits). */
   throttleMs: number;
-  /** Slot budget the agent reported before the batch (null = older payload that does not report it). */
-  slots: { max: number; used: number; free: number; byMode?: Record<string, number> } | null;
+  /**
+   * Slot budget the agent reported before the batch (null = older payload that does not report it).
+   * used = CONSUMED slots (a soft-unhooked inline hook keeps its slot until a hard unhook), active =
+   * hooks currently installed.
+   */
+  slots: { max: number; used: number; active?: number; free: number; byMode?: Record<string, number> } | null;
   /** Why the batch was (or was not) truncated - the agent slot budget, not a guess. */
   limitReason: string;
   slotLimited: boolean;
@@ -158,7 +162,11 @@ export async function nativeHookAll(session: string, opts: {
     installedCount: hooks.length,
     throttleMs,
     slots: slotsRaw && Number.isFinite(Number(slotsRaw.max))
-      ? { max: Number(slotsRaw.max), used: Number(slotsRaw.used), free: Number(slotsRaw.free), ...(slotsRaw.byMode ? { byMode: slotsRaw.byMode } : {}) }
+      ? {
+          max: Number(slotsRaw.max), used: Number(slotsRaw.used), free: Number(slotsRaw.free),
+          ...(Number.isFinite(Number(slotsRaw.active)) ? { active: Number(slotsRaw.active) } : {}),
+          ...(slotsRaw.byMode ? { byMode: slotsRaw.byMode } : {}),
+        }
       : null,
     limitReason: budget.reason,
     slotLimited: matched > selected.length,

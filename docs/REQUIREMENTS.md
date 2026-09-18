@@ -1339,7 +1339,7 @@ MCP              →  AI 可编程操控，与 HTTP 同源
 
 **目标**：授权取证环境中，提高 Agent 在主动反调试/反注入运行时下的**存活能力、采集稳定性与故障定位能力**。
 
-> 实现状态（v4.52，**实现 + host 验收完成，真机验收待做**）：**hook 槽位预算从"藏在失败里"变成可见、可被工具遵守**。agent 的 `native_hook status` 新增 `slots{max,used,free,byMode{got,inline,sites,vtable}}`、`java_hook status` 新增 `maxHooks`；host 的 `native_hook_all` 先读一次 status，用纯函数 `effectiveBatchLimit(requested, freeSlots)` 决定这一批装几个——`free < requested` 时截断并由 `limitReason` 说明，**`free == 0` 直接 fail-loud**（"unhook something first"）而不是逐符号失败，老 payload 不上报预算时回退到请求值并注明。单测 7 → 8 条（截断/阻断/回退/夹紧），`tools/verify_v84_native_hook_all.sh` 增加"agent 必须上报 slots、daemon 必须走 status 取预算、响应必须带 limitReason"的断言。
+> 实现状态（v4.52，**实现 + host 验收完成，真机验收待做**）：**hook 槽位预算从"藏在失败里"变成可见、可被工具遵守**。agent 的 `native_hook status` 新增 `slots{max,used,active,free,byMode{got,inline,sites,vtable}}`，其中 **`used` = 已消耗槽位**（软卸载的 inline 钩子保留 stub、槽位直到硬卸载才释放），`free = max - used` 才是真实余量、`java_hook status` 新增 `maxHooks`；host 的 `native_hook_all` 先读一次 status，用纯函数 `effectiveBatchLimit(requested, freeSlots)` 决定这一批装几个——`free < requested` 时截断并由 `limitReason` 说明，**`free == 0` 直接 fail-loud**（"unhook something first"）而不是逐符号失败，老 payload 不上报预算时回退到请求值并注明。单测 7 → 8 条（截断/阻断/回退/夹紧），`tools/verify_v84_native_hook_all.sh` 增加"agent 必须上报 slots、daemon 必须走 status 取预算、响应必须带 limitReason"的断言。
 
 > 实现状态（v4.51，**实现 + host 验收完成**）：**vendored LSPlant 的字符串也清掉了**——`tools/patch_vendor_signatures.sh`（幂等 + `--check`，由 `tools/fetch_lsplant.sh` 调用）把 `ScopedSuspendAll("LSPlant Hook")`、LSPlant 的 log tag、以及**运行时生成 dex 的 source name `"lsplant"`** 改成中性；扫描器把 `LSPlant`/`lsplant` 提为 MUST_BE_ABSENT，门禁额外跑 vendor check（重新 fetch 忘打补丁会现形）。Dobby（预编译 AAR）与导出/Java bridge 仍在预算内。
 
