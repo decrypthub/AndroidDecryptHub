@@ -19,9 +19,23 @@ object HeapProbe {
     @JvmStatic
     var sConfig: Config? = null
 
+    // v4.53b fixture: the field to patch is declared on the SUPERCLASS, so the agent has to walk the
+    // chain (getDeclaredField alone reports "not found" for it).
+    open class InheritBase {
+        @JvmField var inherited: Int = 5
+    }
+
+    class InheritChild : InheritBase() {
+        @JvmField var own: Int = 1
+    }
+
+    @JvmStatic
+    var sInherited: InheritChild? = null
+
     @JvmStatic
     fun init() {
         sConfig = Config("ADH_TOKEN_abc123", 42, "live-object")
+        sInherited = InheritChild()
         Log.i(TAG, "HeapProbe.sConfig initialized")
     }
 }

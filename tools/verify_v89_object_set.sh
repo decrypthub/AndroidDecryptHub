@@ -35,6 +35,7 @@ const agent = (Array.isArray(agents) ? agents : []).filter((x) => x.online && x.
 if (!agent) skip('no online sandbox agent');
 const session = agent.sessionId;
 const CLASS = 'com.adh.sandbox.HeapProbe';
+let inheritedOk = true;   // stays true when the sandbox APK predates the inherited fixture
 const HOLDER = 'sConfig';
 const set = (targetField, value) => post('/api/object/set', { session, className: CLASS, field: HOLDER, targetField, value });
 
@@ -64,6 +65,24 @@ const counter = await set('counter', '99');
 const label = await set('label', 'patched');
 console.log(`counter: ok=${counter.body?.ok} ${counter.body?.before} -> ${counter.body?.after}`);
 console.log(`label: ok=${label.body?.ok} ${label.body?.before} -> ${label.body?.after}`);
+
+// (3b) an INHERITED field: declared on the superclass, so getDeclaredField alone would say
+// "not found". The write must succeed AND the follow-up read (which now walks the chain too) must
+// show the new value together with its declaring class.
+const inheritedProbe = await post('/api/object/inspect', { session, className: CLASS, field: 'sInherited' });
+if (inheritedProbe.body?.ok !== true) {
+  console.log('inherited fixture unavailable (older APK) - that part is skipped');
+} else {
+  const inheritedSet = await set('inherited', '9');
+  const inheritedRead = await post('/api/object/inspect', { session, className: CLASS, field: 'sInherited' });
+  const inhFields = Object.fromEntries((inheritedRead.body?.fields ?? []).map((f) => [f.name, f.value]));
+  const inhDeclaring = (inheritedRead.body?.fields ?? []).find((f) => f.name === 'inherited')?.class ?? '';
+  console.log(`inherited: ok=${inheritedSet.body?.ok} ${inheritedSet.body?.before} -> ${inheritedSet.body?.after} readBack=${inhFields.inherited} declaredOn=${inhDeclaring}`);
+  inheritedOk = inheritedSet.body?.ok === true && inheritedSet.body.before === '5' && inheritedSet.body.after === '9'
+    && inhFields.inherited === '9' && /InheritBase/.test(inhDeclaring);
+  const restoreInherited = await set('inherited', '5');
+  if (restoreInherited.body?.ok !== true) inheritedOk = false;
+}
 
 // (4) a final field (Kotlin val) must fail loud, not pretend
 const finalField = await set('note', 'nope');
@@ -96,11 +115,13 @@ const pass = flagBefore && flagAfter
   && finalRefused
   && strictParse
   && restoredOk
+  && inheritedOk
   && back.flag === 'false' && back.counter === '7' && back.label === 'before'
   && alive.length > 0;
 if (!finalRefused) console.log('the final-field write did not fail loud with a final/read-only reason');
 if (!strictParse) console.log('a typo or an out-of-range int was not refused (silent cast)');
 if (!restoredOk) console.log('the fixture restore did not report ok');
+if (!inheritedOk) console.log('the inherited-field write/read-back failed (superclass walk)');
 console.log(pass ? 'RESULT:PASS' : 'RESULT:FAIL');
 EOF
 )"

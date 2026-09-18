@@ -15,6 +15,22 @@
 
 // Resolve a live object through a caller-supplied static field and enumerate its
 // declared fields without embedding target class knowledge in the agent.
+// getDeclaredField only sees the class it is called on, so an INHERITED holder/target field used to
+// be reported as "not found" - a usability failure, not a missing feature: the Java-side resolver
+// already walks the superclass chain. Walk it here too (Object.getSuperclass() == NULL ends the loop).
+static jobject adh_find_field_walk(JNIEnv *env, jmethodID get_declared_field, jmethodID get_superclass,
+                                   jclass start, const char *name) {
+    jclass cur = start;
+    while (cur) {
+        jobject f = (*env)->CallObjectMethod(env, cur, get_declared_field, (*env)->NewStringUTF(env, name));
+        if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); f = NULL; }
+        if (f) return f;
+        cur = (*env)->CallObjectMethod(env, cur, get_superclass);
+        if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); cur = NULL; }
+    }
+    return NULL;
+}
+
 void adh_cmd_object_inspect(int fd, const char *id, const char *class_name,
                             const char *field_name) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
@@ -25,13 +41,14 @@ void adh_cmd_object_inspect(int fd, const char *id, const char *class_name,
 
     size_t cap = 1 << 14; char *out = malloc(cap);
     int ok = 0; char err[128] = ""; char obj_class[160] = ""; int nfields = 0;
-    char *recs = malloc(1 << 13); if (recs) recs[0] = 0; size_t rlen = 0, rcap = 1 << 13;
+    char *recs = malloc(1 << 14); if (recs) recs[0] = 0; size_t rlen = 0, rcap = 1 << 14;   // room for the declaring-class field
 
     jclass cls_class = (*env)->FindClass(env, "java/lang/Class");
     jclass field_class = (*env)->FindClass(env, "java/lang/reflect/Field");
     jclass str_class = (*env)->FindClass(env, "java/lang/String");
     jmethodID get_field = (*env)->GetMethodID(env, cls_class, "getDeclaredField", "(Ljava/lang/String;)Ljava/lang/reflect/Field;");
     jmethodID get_fields = (*env)->GetMethodID(env, cls_class, "getDeclaredFields", "()[Ljava/lang/reflect/Field;");
+    jmethodID inspect_get_superclass = (*env)->GetMethodID(env, cls_class, "getSuperclass", "()Ljava/lang/Class;");
     jmethodID get_name = (*env)->GetMethodID(env, cls_class, "getName", "()Ljava/lang/String;");
     jmethodID set_accessible = (*env)->GetMethodID(env, field_class, "setAccessible", "(Z)V");
     jmethodID field_get = (*env)->GetMethodID(env, field_class, "get", "(Ljava/lang/Object;)Ljava/lang/Object;");
@@ -42,8 +59,9 @@ void adh_cmd_object_inspect(int fd, const char *id, const char *class_name,
     if (!target) { strncpy(err, "class not found", sizeof(err)-1); goto done; }
 
     jstring field_name_value = (*env)->NewStringUTF(env, field_name);
-    jobject field_obj = (*env)->CallObjectMethod(env, target, get_field, field_name_value);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); strncpy(err, "field not found", sizeof(err)-1); goto done; }
+    (void)field_name_value;
+    jobject field_obj = adh_find_field_walk(env, get_field, inspect_get_superclass, target, field_name);
+    if (!field_obj) { strncpy(err, "field not found (searched the superclass chain)", sizeof(err)-1); goto done; }
     (*env)->CallVoidMethod(env, field_obj, set_accessible, JNI_TRUE);
     jobject obj = (*env)->CallObjectMethod(env, field_obj, field_get, NULL);
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); strncpy(err, "field.get failed (not static?)", sizeof(err)-1); goto done; }
@@ -53,7 +71,13 @@ void adh_cmd_object_inspect(int fd, const char *id, const char *class_name,
     jstring object_class_name = (jstring)(*env)->CallObjectMethod(env, object_class, get_name);
     if (object_class_name) { const char *s = (*env)->GetStringUTFChars(env, object_class_name, NULL); if (s) { strncpy(obj_class, s, sizeof(obj_class)-1); (*env)->ReleaseStringUTFChars(env, object_class_name, s); } }
 
-    jobjectArray fields = (jobjectArray)(*env)->CallObjectMethod(env, object_class, get_fields);
+    // Walk the runtime class AND its superclasses: an inherited field must show up here, otherwise
+    // the read path cannot confirm a write to it. Each record names its declaring class.
+    for (jclass walker = object_class; walker && recs; ) {
+    jstring walker_name = (jstring)(*env)->CallObjectMethod(env, walker, get_name);
+    char walker_buf[160] = "";
+    if (walker_name) { const char *c = (*env)->GetStringUTFChars(env, walker_name, NULL); if (c) { strncpy(walker_buf, c, sizeof(walker_buf)-1); (*env)->ReleaseStringUTFChars(env, walker_name, c); } }
+    jobjectArray fields = (jobjectArray)(*env)->CallObjectMethod(env, walker, get_fields);
     jsize field_count = fields ? (*env)->GetArrayLength(env, fields) : 0;
     for (jsize i = 0; i < field_count && recs; i++) {
         jobject field = (*env)->GetObjectArrayElement(env, fields, i);
@@ -66,9 +90,13 @@ void adh_cmd_object_inspect(int fd, const char *id, const char *class_name,
         if (name) { const char *s = (*env)->GetStringUTFChars(env, name, NULL); if (s) { strncpy(name_buf, s, sizeof(name_buf)-1); (*env)->ReleaseStringUTFChars(env, name, s); } }
         if (value_string) { const char *s = (*env)->GetStringUTFChars(env, value_string, NULL); if (s) { strncpy(value_buf, s, sizeof(value_buf)-1); (*env)->ReleaseStringUTFChars(env, value_string, s); } }
         char namej[120], valuej[600]; json_escape(name_buf, namej, sizeof(namej)); json_escape(value_buf, valuej, sizeof(valuej));
-        char rec[760]; int written = snprintf(rec, sizeof(rec), "%s{\"name\":\"%s\",\"value\":\"%s\"}", nfields ? "," : "", namej, valuej);
+        char walkerj[200]; json_escape(walker_buf, walkerj, sizeof(walkerj));
+        char rec[900]; int written = snprintf(rec, sizeof(rec), "%s{\"name\":\"%s\",\"value\":\"%s\",\"class\":\"%s\"}", nfields ? "," : "", namej, valuej, walkerj);
         if (written > 0 && rlen + (size_t)written + 1 < rcap) { memcpy(recs + rlen, rec, written); rlen += written; recs[rlen] = 0; nfields++; }
         (*env)->DeleteLocalRef(env, field);
+    }
+    walker = (*env)->CallObjectMethod(env, walker, inspect_get_superclass);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); walker = NULL; }
     }
     ok = 1;
 
@@ -104,6 +132,7 @@ void adh_cmd_object_invoke(int fd, const char *id, const char *class_name,
     jclass str_class = (*env)->FindClass(env, "java/lang/String");
     jmethodID get_field = (*env)->GetMethodID(env, cls_class, "getDeclaredField", "(Ljava/lang/String;)Ljava/lang/reflect/Field;");
     jmethodID get_method = (*env)->GetMethodID(env, cls_class, "getMethod", "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;");
+    jmethodID invoke_get_superclass = (*env)->GetMethodID(env, cls_class, "getSuperclass", "()Ljava/lang/Class;");
     jmethodID set_accessible = (*env)->GetMethodID(env, field_class, "setAccessible", "(Z)V");
     jmethodID field_get = (*env)->GetMethodID(env, field_class, "get", "(Ljava/lang/Object;)Ljava/lang/Object;");
     jmethodID invoke = (*env)->GetMethodID(env, method_class, "invoke", "(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;");
@@ -111,8 +140,8 @@ void adh_cmd_object_invoke(int fd, const char *id, const char *class_name,
 
     jclass target = adh_jni_load_app_class(env, class_name);
     if (!target) { strncpy(err, "class not found", sizeof(err)-1); goto done; }
-    jobject field_obj = (*env)->CallObjectMethod(env, target, get_field, (*env)->NewStringUTF(env, field_name));
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); strncpy(err, "field not found", sizeof(err)-1); goto done; }
+    jobject field_obj = adh_find_field_walk(env, get_field, invoke_get_superclass, target, field_name);
+    if (!field_obj) { strncpy(err, "field not found (searched the superclass chain)", sizeof(err)-1); goto done; }
     (*env)->CallVoidMethod(env, field_obj, set_accessible, JNI_TRUE);
     jobject obj = (*env)->CallObjectMethod(env, field_obj, field_get, NULL);
     if (!obj || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); strncpy(err, "field value null", sizeof(err)-1); goto done; }
@@ -201,6 +230,7 @@ void adh_cmd_object_set(int fd, const char *id, const char *class_name, const ch
     jclass field_class = (*env)->FindClass(env, "java/lang/reflect/Field");
     jclass str_class = (*env)->FindClass(env, "java/lang/String");
     jmethodID get_declared_field = (*env)->GetMethodID(env, cls_class, "getDeclaredField", "(Ljava/lang/String;)Ljava/lang/reflect/Field;");
+    jmethodID get_superclass = (*env)->GetMethodID(env, cls_class, "getSuperclass", "()Ljava/lang/Class;");
     jmethodID get_name = (*env)->GetMethodID(env, cls_class, "getName", "()Ljava/lang/String;");
     jmethodID field_get_type = (*env)->GetMethodID(env, field_class, "getType", "()Ljava/lang/Class;");
     jmethodID set_accessible = (*env)->GetMethodID(env, field_class, "setAccessible", "(Z)V");
@@ -219,8 +249,8 @@ void adh_cmd_object_set(int fd, const char *id, const char *class_name, const ch
     if (!value || !value[0]) { snprintf(err, sizeof(err), "need value"); goto done; }
     jclass target = adh_jni_load_app_class(env, class_name);
     if (!target) { snprintf(err, sizeof(err), "class not found"); goto done; }
-    jobject holder = (*env)->CallObjectMethod(env, target, get_declared_field, (*env)->NewStringUTF(env, holder_field));
-    if (!holder || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); snprintf(err, sizeof(err), "holder field not found"); goto done; }
+    jobject holder = adh_find_field_walk(env, get_declared_field, get_superclass, target, holder_field);
+    if (!holder) { snprintf(err, sizeof(err), "holder field not found (searched the superclass chain)"); goto done; }
     (*env)->CallVoidMethod(env, holder, set_accessible, JNI_TRUE);
     jobject obj = (*env)->CallObjectMethod(env, holder, field_get, NULL);
     if (!obj || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); snprintf(err, sizeof(err), "holder field is null (nothing to write to)"); goto done; }
@@ -230,8 +260,8 @@ void adh_cmd_object_set(int fd, const char *id, const char *class_name, const ch
         jstring cn = (jstring)(*env)->CallObjectMethod(env, object_class, get_name);
         if (cn) { const char *c = (*env)->GetStringUTFChars(env, cn, NULL); if (c) { snprintf(obj_class_name, sizeof(obj_class_name), "%s", c); (*env)->ReleaseStringUTFChars(env, cn, c); } }
     }
-    jobject field = (*env)->CallObjectMethod(env, object_class, get_declared_field, (*env)->NewStringUTF(env, target_field));
-    if (!field || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); snprintf(err, sizeof(err), "target field not found on %s", obj_class_name); goto done; }
+    jobject field = adh_find_field_walk(env, get_declared_field, get_superclass, object_class, target_field);
+    if (!field) { snprintf(err, sizeof(err), "target field not found on %s (searched the superclass chain)", obj_class_name); goto done; }
     (*env)->CallVoidMethod(env, field, set_accessible, JNI_TRUE);
 
     jobject field_type = (*env)->CallObjectMethod(env, field, field_get_type);

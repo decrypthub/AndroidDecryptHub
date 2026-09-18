@@ -15,6 +15,10 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.53b 活体对象：父类链查找 + 继承字段枚举（2026-09-19，host 验收 PASS；真机待做）**：评审指出 `object_inspect`/`object_invoke`/`object_set` 都只对**本类**做 `getDeclaredField`——一个 `class Child : Base` 的字段会被报成 "target field not found"，分析者很容易误读成"这个对象没有该字段"。这是**能不能用**的问题，不是"多一种类型"。
+      · agent：新增 `adh_find_field_walk()`（沿 `getSuperclass()` 上溯，`Object.getSuperclass()==NULL` 结束）替换三个命令里的持有者/目标字段查找，失败文案改成 `... (searched the superclass chain)`；`object_inspect` 的**枚举**也从"只列本类"改成走整条父类链，每条记录带上**声明类**（`"class":"com.adh.sandbox.HeapProbe$InheritBase"`），否则对一个继承字段写入后根本没有独立的读回路径。
+      · 沙盒：新增 `HeapProbe.InheritBase/InheritChild` + `sInherited` 夹具（字段 `inherited` 声明在父类），`tools/verify_v89_object_set.sh` 增加一段：写 `inherited 5 → 9` → 复读必须看到 `9` **且声明类是父类**（老 APK 缺夹具时该段跳过，不影响其它断言）。
+      · 验收：agent 零告警重建；`node --test` 144；host 全量门禁 **29 PASS / 0 FAIL / 83 SKIP**。
 - [~] **v4.53 活体对象字段写入 `object_set`（2026-09-19，host 验收 PASS；真机待做）**：目标要求"参考 frida"——`object_inspect`（读字段）与 `object_invoke`（调方法）早就有，但**不能改**：把一个活体实例上的 `isRooted`/`debugChecked`/密钥字段改掉再继续跑，是最常见的分析动作之一，之前只能靠 Java hook 去骗返回值。
       · agent 新增命令 `object_set {className, field, targetField, value}`：`field` 仍是"静态持有者"约定（和 inspect/invoke 一致，沙盒里是 `HeapProbe.sConfig`），`targetField` 是该对象上的字段；值**按字段声明类型**强转（boolean/int/long/float/double/String，其它类型 fail-loud），返回 **before/after**，并**回读一次**证明写入真的落到目标里；Kotlin `val`（编译成 final 字段）会被 ART 拒绝 → 明确报 `set failed - the field is probably final`，不装作成功。
       · MCP `object_set`（76 → **77** 工具）+ `POST /api/object/set`；沙盒夹具 `HeapProbe.Config` 增加三个**可变**字段（`flag`/`counter`/`label`）作为真机验收的 ground truth（v06 只按名字断言值，不受影响）。
