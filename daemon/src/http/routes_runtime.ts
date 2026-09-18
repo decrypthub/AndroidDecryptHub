@@ -6,6 +6,7 @@ import { nativeBacktrace } from '../backtrace.ts';
 import { traceDigest } from '../trace_digest.ts';
 import { syscallDigest } from '../syscall_digest.ts';
 import { javaTraceStart, javaTraceDigest, javaTraceStop } from '../java_trace.ts';
+import { nativeHookAll, nativeUnhookAll } from '../native_hook_all.ts';
 import { liveDisasm } from '../memory.ts';
 import { readBody, SANDBOX, sessions, settings } from '../state.ts';
 import type { Route, RouteContext } from './types.ts';
@@ -104,6 +105,18 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
         const r = await sendCmd(sid, 'stealth', { action: act }, 15_000);
         return send(r.ok ? 200 : 502, r);
       } catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
+    { method: 'POST', path: '/api/native/hook_all', handler: async () => {
+      const body = await readBody(req);
+      const { session, action, module, prefix, contains, exact, exclude, limit, backtrace, skipOriginal, returnValue, argIndex, argValue, hookIds, confirm } = JSON.parse(body || '{}');
+      const sid = pickSid(session);
+      if (!sid || !action) return send(400, { error: 'need session, action' });
+      try {
+        if (action === 'unhook') return send(200, await nativeUnhookAll(sid, hookIds));
+        if (action !== 'hook') return send(400, { error: 'action must be hook | unhook' });
+        if (confirm !== true) return send(400, { error: 'native_hook_all requires confirm:true (it installs inline hooks in the target)' });
+        return send(200, await nativeHookAll(sid, { module, prefix, contains, exact, exclude, limit, backtrace, skipOriginal, returnValue, argIndex, argValue }));
+      } catch (e) { return send(502, { error: (e as Error).message }); }
     } },
     { method: 'POST', path: '/api/java/trace', handler: async () => {
       const body = await readBody(req);

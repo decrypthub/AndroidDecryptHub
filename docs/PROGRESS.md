@@ -15,6 +15,10 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.46 native 侧批量挂钩 `native_hook_all`（2026-09-18，host 验收 PASS；真机验收待做）**：Java 侧有 `hookAll`（v4.44）之后，native 侧补上同款工作流——**把 libcrypto 里所有 EVP_* 一口气挂上**，而不是手工 dump 符号、算地址、逐个装。
+      · `daemon/src/native_hook_all.ts`（host 编排，agent 仍只执行 `native_hook`）：从模块 dump 解析导出表（复用 `parseDynSymbols`，内存重建镜像也能用），按 `prefix/contains/exact` 过滤 **STT_FUNC**（数据符号永不入选、未命名符号忽略），可选 `exclude` 去掉噪声；按**地址升序**取前 `limit` 个（≤16，与 native 槽位上限一致）逐个装 inline hook，返回 `hookIds` + `matched` vs `installedCount`（截断可见）+ 每符号失败明细。`action:unhook` 只卸传入 id。纯函数 `selectExportSymbols` 7 条单测（前缀/包含/精确、数据符号与空名排除、matched≠selected、地址序确定性、limit 夹紧、exclude、相对地址与 size）。
+      · 新增 MCP `native_hook_all`（action: hook|unhook，`confirm:true` 必填——地址级 hook 属于强操作）+ `POST /api/native/hook_all`，工具数 69 → 70；`tools/verify_v84_native_hook_all.sh`（host）= 7 条单测 + 合成导出表断言 + MCP schema/confirm 门禁，**PASS**。
+      · **待办**：真机实跑（对 `libadhdetect.so` 用 `prefix:adh_` 装一批、逐个触发、unhook 全部、进程存活），与 v77/v78/v79/v80-device/v81-device/v82/v83-device 一起排队。
 - [~] **v4.45 Java 类级 trace 摘要 `java_trace`（2026-09-18，host 验收 PASS；真机验收待做）**：Java 侧的"类级时间线"——算法还原时最常用的工作流：**挂一个类 → 触发 → 看什么跑了、按什么顺序、参数返回值是什么**。建立在刚做完的 `hookAll`（v4.44）之上。
       · `daemon/src/java_trace.ts`：三个阶段显式分开（中间通常要由操作者或其它工具触发目标）：`start` = `hook_all` 并**保留**钩子，返回 `hookIds/matched/cursor`；`digest` = 先显式发一次 `capture_drain`（不等后台 1.5s 轮询）再把这些 hookId 的 `JAVA_HOOK` 事件聚合成 **每方法次数/首末时间/线程/最后参数与返回值/错误计数 + 时间线（保留最新窗口）+ 调用方直方图**（`stack:true` 时取 Java 调用链最内层 App 帧）；`stop` = **只卸传入的那几个 id**（绝不用 `unhook 0`，那会把无关钩子一起卸掉）。纯函数 `digestJavaTrace`/`callerOfStack` 有 7 条单测。
       · 新增 MCP `java_trace`（action: start|digest|stop）+ `POST /api/java/trace`，工具数 68 → 69；`tools/verify_v83_java_trace.sh`（host）= 7 条单测 + 合成 trace 断言 + MCP schema，**PASS**。
