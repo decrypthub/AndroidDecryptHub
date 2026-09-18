@@ -104,6 +104,53 @@ for (const f of families) {
 }
 notes.push(`checked ${claimed.size} indices against the ABI`);
 
+// ---- 5. installability and event wiring: a slot must be reachable by BOTH switch helpers, and every
+// wrapper must be able to emit. A name that resolves and then hits no case is refused at runtime
+// (fail-loud, but only once a device is attached); a wrapper that never emits looks installed and
+// silently collects nothing. Both are cheap to catch here, so they are gated here.
+const switchCases = (pattern) => new Set([...src.matchAll(pattern)].map((m) => m[1]));
+const slotCaseNames = switchCases(/case ENV_SLOT_([A-Za-z0-9_]+):\s*return \(void \*\*\)/g);
+const wrapperCaseNames = switchCases(/case ENV_SLOT_([A-Za-z0-9_]+):\s*return \(void \*\)&/g);
+const unwired = [];
+for (const name of fixed) {
+  if (!slotCaseNames.has(name)) unwired.push(`${name} (env_hook_slot)`);
+  if (!wrapperCaseNames.has(name)) unwired.push(`${name} (env_hook_wrapper)`);
+}
+if (unwired.length) problems.push(`fixed slots with no dispatch case: ${unwired.join(', ')}`);
+for (const [macro, list] of [['ADH_FIELD_SLOT_CASE', 'ADH_FIELD_SLOT_LIST'], ['ADH_FIELD_WRAPPER_CASE', 'ADH_FIELD_SLOT_LIST']]) {
+  if (!new RegExp(`${list}\\(${macro}\\)`).test(src)) problems.push(`${macro} is not expanded over ${list} (field slots would have no dispatch case)`);
+}
+for (const expansion of ['ADH_CALL_VALUE_FAMILIES(ADH_CALL_SLOT_CASES)', 'ADH_CALL_VOID_FAMILIES(ADH_CALL_VOID_SLOT_CASES)',
+                         'ADH_CALLNV_VALUE_FAMILIES(ADH_CALL_SLOT_CASES)', 'ADH_CALLNV_VOID_FAMILIES(ADH_CALL_VOID_SLOT_CASES)',
+                         'ADH_CALL_VALUE_FAMILIES(ADH_CALL_WRAPPER_CASES)', 'ADH_CALL_VOID_FAMILIES(ADH_CALL_VOID_WRAPPER_CASES)',
+                         'ADH_CALLNV_VALUE_FAMILIES(ADH_CALL_WRAPPER_CASES)', 'ADH_CALLNV_VOID_FAMILIES(ADH_CALL_VOID_WRAPPER_CASES)']) {
+  if (!src.includes(expansion)) problems.push(`missing dispatch expansion: ${expansion}`);
+}
+
+// Every wrapper-generating macro must contain an emit call, and so must every hand-written wrapper.
+const macroBodies = new Map();
+{
+  const lines = src.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^#define\s+([A-Za-z0-9_]+)\s*(\([^)]*\))?\s*(.*)$/);
+    if (!m) continue;
+    let body = m[3];
+    while (lines[i].trimEnd().endsWith('\\') && i + 1 < lines.length) { i++; body += '\n' + lines[i]; }
+    macroBodies.set(m[1], body);
+  }
+}
+const silentMacros = [...macroBodies.entries()]
+  .filter(([name, body]) => name.startsWith('ADH_DEFINE_') && /_wrapper\(/.test(body) && !/env_note\(|call_emit\(/.test(body))
+  .map(([name]) => name);
+if (silentMacros.length) problems.push(`wrapper macros with no event call: ${silentMacros.join(', ')}`);
+const silentWrappers = [];
+for (const m of src.matchAll(/static [^\n]*?([A-Za-z0-9_]+)_wrapper\([^)]*\)\s*\{([\s\S]*?)\n\}/g)) {
+  if (m[1] === 'env_hook') continue;   // the dispatch helper itself, matched by the same shape
+  if (!/env_note\(|call_emit\(/.test(m[2])) silentWrappers.push(m[1]);
+}
+if (silentWrappers.length) problems.push(`hand-written wrappers with no event call: ${silentWrappers.join(', ')}`);
+notes.push(`wiring: ${fixed.length} fixed slots reachable in both switches, ${silentWrappers.length + silentMacros.length} silent wrappers`);
+
 // ---- coverage report: turn "JNIEnv fully hookable" into a number ----
 const abiFns = [...abi.keys()].filter((n) => !/^reserved\d+$/.test(n));
 const covered = abiFns.filter((n) => claimed.has(n));

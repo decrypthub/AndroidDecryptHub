@@ -15,6 +15,10 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.84 门禁加牙：接线完整性 + "静默 wrapper" 检查（2026-09-19，host 验收 PASS）**：v90 此前只查"名字↔spec index"与覆盖数字，查不出两类只会在真机上暴露的错：**名字在列表里却没有 dispatch case**（真机上才 fail-loud），以及 **wrapper 装上了但从不发事件**（装了也白装）。
+      · 接线：每个固定槽位必须在 `env_hook_slot()` 与 `env_hook_wrapper()` 两个 switch 里各有 case；字段访问器与 Call*/CallNonvirtual 家族则要求对应的宏展开（`ADH_FIELD_SLOT_LIST(ADH_FIELD_SLOT_CASE)`、`ADH_CALL_VALUE_FAMILIES(ADH_CALL_SLOT_CASES)` 等）确实存在。**负对照验证过牙口**：临时删掉 `FatalError` 的 slot case，v90 立刻报 `FAIL fixed slots with no dispatch case: FatalError (env_hook_slot)`，恢复后 PASS。
+      · 发事件：每个 wrapper 生成宏（`ADH_DEFINE_*`）与每个手写 wrapper 必须含 `env_note(`/`call_emit(`，否则报 silent wrapper；当前 0 个（`env_hook_wrapper` 这个派发函数本身按名字排除）。
+      · 验收：v90 PASS（228/229，`wiring: 99 fixed slots reachable in both switches, 0 silent wrappers`）；host 全量门禁 **31 PASS / 0 FAIL / 84 SKIP**（115 脚本）。
 - [~] **v4.83 v4.75–v4.79 的设备证据路径（夹具 + v91 `(3j)`）（2026-09-19，host 构建通过；真机待做）**：这几批槽位此前只有 host 侧证明，按老规矩补上"真机一次跑完"的路径。
       · 沙盒 native 夹具 `Detection.jniFamilyProbe`：八种 `New<Type>Array` + `GetArrayLength`、`NewObjectArray` + 对象数组元素读写（含 **NULL 元素合法** 那一条）、`AllocObject`、**三种形态的 `CallNonvirtualObjectMethod`**（配套新增 `JniNonvirtualBase/Child`：非虚调用必须返回父类实现 `base:t`，返回 `child:t` 就说明 hook 破坏了派发）、反射桥（`FromReflected*` 拿到的 id 必须**等于** `GetMethodID`/`GetFieldID` 的结果；`ToReflected*` 回来的对象名字必须是 `combine`/`counter`）、字符串族（`NewString`/`GetStringLength`/`GetStringUTFLength`/critical 对/`ReleaseStringUTFChars`）、`ExceptionCheck`（无挂起异常时必须报 false）。全过返回 `0xAD91FF`。
       · `tools/verify_v91_jni_env_fields.sh` 新增 `(3j)`：安装这 29 个槽位（27 个由夹具触发；`FatalError`/`UnregisterNatives` 只验证装卸——不能拿活进程触发）→ 被触发者必须各自有事件、关键字段逐条匹配（`len=4`、`index=0 -> 0x0 (null element)`、`class=com.adh.sandbox.JniCallTarget -> 0x`、`via=com.adh.sandbox.JniNonvirtualBase`、`static=0 -> 0x`、`text="ADH42"`、`pending=false` …）→ 逐个卸载；`pass` 纳入 `familyProbeOk`。
