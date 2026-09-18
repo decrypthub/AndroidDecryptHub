@@ -36,7 +36,8 @@ const agent = (Array.isArray(agents) ? agents : []).filter((x) => x.online && x.
   .sort((a, b) => (b.connectedAt ?? 0) - (a.connectedAt ?? 0))[0];
 if (!agent) skip('no online sandbox agent');
 const session = agent.sessionId;
-const FUNCS = ['GetStaticObjectField', 'GetIntField', 'SetIntField', 'GetStaticIntField', 'SetStaticIntField'];
+// GetFieldID is hooked as well so the field DIGEST can join an access back to its name.
+const FUNCS = ['GetFieldID', 'GetStaticObjectField', 'GetIntField', 'SetIntField', 'GetStaticIntField', 'SetStaticIntField'];
 
 // (0) capability: a status call must know the slot names at all.
 const status0 = await post('/api/jni/env_hook', { session, action: 'status' });
@@ -86,6 +87,13 @@ for (const f of hooked) console.log(`  event ${f}: ${(seen.get(f) ?? []).length}
 const missing = hooked.filter((f) => (seen.get(f) ?? []).length === 0);
 const valueOk = [...seen.values()].some((vals) => vals.some((v) => /field=0x/.test(String(v))));
 
+// (3b) the digest must resolve at least one access to a NAME through the id the lookup handed out
+const digest = await post('/api/jni/field_digest', { session, maxGroups: 20 });
+const resolvedGroups = (digest.body?.groups ?? []).filter((g) => g.resolved === true);
+console.log(`digest: groups=${(digest.body?.groups ?? []).length} resolved=${resolvedGroups.length} unresolvedAccesses=${digest.body?.unresolvedAccesses}`);
+if (resolvedGroups[0]) console.log(`  ${resolvedGroups[0].accessor} ${resolvedGroups[0].field} x${resolvedGroups[0].count} last=${resolvedGroups[0].lastValue}`);
+const digestOk = digest.body?.drain?.ok === true && resolvedGroups.length >= 1 && /#/.test(String(resolvedGroups[0]?.field ?? ''));
+
 // (4) unhook, table restored, process alive
 const unhooked = [];
 for (const f of hooked) unhooked.push((await post('/api/jni/env_hook', { session, action: 'unhook', function: f })).body?.ok === true);
@@ -97,7 +105,8 @@ const serial = process.env.ANDROID_SERIAL || process.env.ADH_SERIAL || '';
 const alive = String(spawnSync('adb', ['-s', serial, 'shell', 'pidof', 'com.adh.sandbox'], { encoding: 'utf8' }).stdout || '').trim();
 
 if (missing.length) console.log('no event for: ' + missing.join(', '));
-const pass = installedOk && patchedOk && relroOk && calls >= 2 && missing.length === 0 && valueOk
+if (!digestOk) console.log('the field digest did not resolve any access to a name');
+const pass = installedOk && patchedOk && relroOk && calls >= 2 && missing.length === 0 && valueOk && digestOk
   && unhooked.every(Boolean) && restored && alive.length > 0;
 console.log(pass ? 'RESULT:PASS' : 'RESULT:FAIL');
 EOF

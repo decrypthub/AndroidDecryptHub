@@ -15,6 +15,11 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.56 字段事件可归因 + JNIEnv 字段摘要（2026-09-19，host 验收 PASS；真机待做）**：v4.55 的 36 个字段槽位会发事件，但事件里只有一个**不透明的 `jfieldID`**（`field=0x..`）——分析者读不出"这是哪个字段"。
+      · agent：`GetFieldID`/`GetStaticFieldID` 的事件 detail 现在**带上它们交出去的 id**（`Class#name:sig -> 0x..`），访问事件这才有名字可对。
+      · host：新增 `daemon/src/jni_field_digest.ts`（纯函数 `digestJniFields` + `jniFieldDigest`）：用 id 事件建 `id → Class#name:sig` 表，再把访问事件按 **(accessor, field)** 分组，给出次数、最后值、线程、时间窗；**没见过的 id 保持原始指针并计入 `unresolvedAccesses`**（不猜名字）；空窗口给出"还没 hook 字段槽位"的说明而不是干净结果；drain 走共享 `drainSession`（java_trace P0 的教训）。
+      · 接线：MCP `jni_field_digest`（77 → **78** 工具）+ `POST /api/jni/field_digest`；`tools/verify_v92_jni_field_digest.sh`（host：5 条单测 + agent 必须带出 id + digest 必须走共享 drain 且不得发裸 `capture_drain` + MCP/REST 形状）**PASS**；设备脚本 v91 扩成"hook GetFieldID 一起 → 触发探针 → **摘要里至少一组 resolved 且字段名含 `#`**"。
+      · 验收：agent 零告警重建；daemon 单测 **149**；host 全量门禁 **31 PASS / 0 FAIL / 84 SKIP**（115 脚本 = 31 host + 84 device）。
 - [~] **v4.55 JNIEnv 字段访问器 36 槽（2026-09-19，host 验收 PASS；真机待做）**：评审点名的覆盖缺口——native 代码通过 `env->Get/Set<Type>Field` 读写字段这条路径此前**完全看不见**（`object_set` 只覆盖反射路径）。现在 JNIEnv 表从 76 槽扩到 **112 槽**。
       · agent（`runtime/jni_env_hooks.c`）：新增 36 个槽（Object/Boolean/Byte/Char/Short/Int/Long/Float/Double × Get/Set × instance/static），**一份列表宏驱动枚举/名字表/结构体字段 case/wrapper 派发**（四处不可能漂移），每个 wrapper 转发给保存的原函数并记一条有界事件（`field=0x.. value=..`），沿用既有的重入守卫、预算门与 RELRO 还原语义。
       · **签名安全**：每个 wrapper 都跟它所替换的表项做 `_Static_assert(__builtin_types_compatible_p(typeof(表项), typeof(&wrapper)))`——签名不符**编译期就失败**，不会等到真机把目标的每次 JNI 调用带崩；索引则由 `tools/verify_v90_jni_table_abi.sh` 对着 NDK `jni.h` 机器校验（76 现有 + 36 计划索引全部一致），加上安装期 `slot_offset == spec*sizeof(void*)` 的 refuse 共三层。

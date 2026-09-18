@@ -1,10 +1,10 @@
 # ADH 功能状态（发布前梳理，2026-09-19 更新）
 
 > 这份文件回答一个问题：**现在到底有什么、什么是验证过的、什么是没验证的、什么还没做完。**
-> 判定只认 `tools/verify_all.sh`（**114 个脚本 = 30 host + 84 device**），不认"看起来能跑"。
+> 判定只认 `tools/verify_all.sh`（**115 个脚本 = 31 host + 84 device**），不认"看起来能跑"。
 > 规格见 `REQUIREMENTS.md`，架构与排期见 `DEVELOPMENT_PLAN.md`，跨会话进度见 `PROGRESS.md`。
 > 最近一次**全绿**门禁：`6319d5d`（设备在位，**92 PASS / 0 FAIL / 2 SKIP**）。
-> 最近一次 host-only 门禁（手机不在位）：**30 PASS / 0 FAIL / 83 SKIP** —— 设备脚本如实记 SKIP，不再冒充通过。
+> 最近一次 host-only 门禁（手机不在位）：**31 PASS / 0 FAIL / 84 SKIP** —— 设备脚本如实记 SKIP，不再冒充通过。
 
 ## 0. 发布物
 
@@ -22,7 +22,7 @@
 | 层 | 位置 | 承担什么 | 规模 |
 |---|---|---|---|
 | **Agent**（目标进程内） | `agent/` → `libadh_agent.so` | **40 个命令分支**：GOT/inline/addr/sites/vtable hook、Java(LSPlant) hook（单方法 + `hookAll` 批量 + 参数改写/返回值替换/skip/调用链）、JNI_OnLoad（含加载时 watch）/RegisterNatives/JNIEnv 76 槽、函数与 QBDI trace、dex/so/内存 dump、maps/内存读写搜、ART 结构枚举、活体对象自省、主动触发、`load_so`、`native_call`（整数+浮点）、`native_backtrace`、`syscall_watch`、轻量 RPC —— **只采集/执行，不做分析** | C/C++，产物 817 KB |
-| **Host ADH Daemon**（主机） | `daemon/` | **77 个 MCP 工具 + 87 条 HTTP 路由**：dex 解析/索引(SQLite)/搜索/xref、Capstone 反汇编与 syscall 归因/参数解码、trace 摘要、syscall 摘要、脱壳编排与重建、工件存储、Web UI、MCP server | TypeScript（含 12 个单测文件、144 条用例） |
+| **Host ADH Daemon**（主机） | `daemon/` | **78 个 MCP 工具 + 88 条 HTTP 路由**：dex 解析/索引(SQLite)/搜索/xref、Capstone 反汇编与 syscall 归因/参数解码、trace 摘要、syscall 摘要、脱壳编排与重建、工件存储、Web UI、MCP server | TypeScript（含 12 个单测文件、144 条用例） |
 | **Device**（手机侧） | `device/` | AIDL 作用域读写、模块状态、目标进程启停、可选后端开关 —— **不做分析** | Kotlin |
 | **注入器** | `injector/zygisk`、`injector/xposed` | 把 `.so` 送进目标进程（Zygisk 走 **memfd**，目标 maps 不出现模块路径）+ 传真实包名 | C++/Java |
 | **可选后端** | `tools/`（Gadget/eCapture） | 另一种进入/观测方式，默认关闭 | 脚本/薄 APK |
@@ -40,7 +40,7 @@
 | 反检测观测与去特征 | v05_detect, v69(stealth), v70/v72(sites), v73/v74(vtable) | 目标自审（anon r-x、序言比对）；stealth 后 anonExec 2→0；sites 保持入口字节不变 |
 | Java hook（LSPlant） | v42/v43/v52/v53/v65, **v79(stack)**, **v82(hookAll)**, **v83(java_trace digest)** | 单方法/构造器/继承、参数改写、返回值替换、skip original；`stack:true` 给出 App 帧调用链；`hookAll` 一次装全类（截断可见） |
 | native hook | v46, v49, v55, v56, v66, v68, **v84(native_hook_all selection + 槽位预算)**, **v86(限流装配，仅 host)** | inline/addr、软/硬卸载、寄存器事件、浮点参数、千次压测；限流窗口/计数只做了**装配**验收（host），运行时恒等式 `hits = 已发 + throttled` 待真机（§2） |
-| JNI 面 | v54, v57, v58, v59, v60, v62, v63, v64, v67, **v90(表索引 ABI 机检)**, **v91(字段访问器)** | RegisterNatives、JNI_OnLoad（含加载时替换）、JNIEnv **112 槽**（76 原有 + **36 个 `Get/Set<Type>Field` 字段访问器**，索引逐条与 NDK `jni.h` 对照，见 v90；wrapper 签名由 `_Static_assert` 编译期钉死）、Call* 三类入口、数组写回、异常保持 |
+| JNI 面 | v54, v57, v58, v59, v60, v62, v63, v64, v67, **v90(表索引 ABI 机检)**, **v91(字段访问器 + 字段摘要)**, **v92(字段摘要单测/接线)** | RegisterNatives、JNI_OnLoad（含加载时替换）、JNIEnv **112 槽**（76 原有 + **36 个 `Get/Set<Type>Field` 字段访问器**，索引逐条与 NDK `jni.h` 对照，见 v90；wrapper 签名由 `_Static_assert` 编译期钉死）、Call* 三类入口、数组写回、异常保持 |
 | 主动调用 / 活体对象 | v45(java_call), v49(native_call), v51(qbdi args), v06(对象读/调用), **v89(字段写入)** | 反射调用 Java 方法/字段；按符号或地址调 native；活体对象字段**读+写**（写入带 before/after；**严格解析**：typo/越界/int 超范围一律拒绝，不再静默写 0；final 字段 fail-loud；参数超长拒绝而不是截断；**字段查找与枚举走父类链**，继承字段不再报 not found） |
 | trace | v10_trace, v10_qbdi, **v78(backtrace)** | 函数参数/线程/时间戳；QBDI 指令级（用后 dlclose）；hook 命中当刻的 x29 调用链 + 符号化 |
 | 内存反汇编（MCP） | v48 | Capstone 5 WASM，绝对地址或 module+offset |
@@ -70,7 +70,7 @@
 | 一站式 syscall 跟踪 | libc uname 站点 start → 触发 adh_libc_uname_probe → digest 调用方是该 fixture、observed 全 160、无 mismatch → stop 后存活（**脚本已就绪**） | v85_device |
 | native 批量挂钩 | 对 libadhdetect.so 用 prefix:adh_ 装一批 → 触发 → unhook 全部 → 进程存活 | v84（设备半） |
 | 签名去特征（运行期，**脚本已就绪**） | 目标进程内用 agent 自己的 search 扫已加载镜像（带正对照 `native_hook`，扫不到正对照则 FAIL）；`qbdi_trace`/`trace_digest` 现在 **symLib 必填**（MCP schema + REST 400），v10_qbdi 已改显式传参 | v88_device/v51/v10_qbdi/v02_so |
-| JNIEnv 字段访问器 | hook `Get/Set<Type>Field`（instance+static）→ 触发沙盒 native 探针 → 事件必须带 `field=0x.. value=..`、RELRO 还原、进程存活 | v91（**脚本已就绪**） |
+| JNIEnv 字段访问器 + 摘要 | hook `Get/Set<Type>Field`（instance+static）→ 触发沙盒 native 探针 → 事件必须带 `field=0x.. value=..`、**字段摘要能把访问还原成 `Class#name:sig`**（靠 GetFieldID 事件带出的 id）、RELRO 还原、进程存活 | v91（**脚本已就绪**） |
 | 活体对象字段写入 | `object_set` 在沙盒上把 `HeapProbe.sConfig` 的 `flag/counter/label` 改掉 → 后续读取必须看到新值 → **继承字段 `inherited`（声明在父类）写入后复读为 9 且声明类正确** → `note`（Kotlin val/final）必须 ok:false → typo/越界值必须被拒 → 还原后进程存活 | v89（**脚本已就绪**） |
 | MCP 探针与文件系统（**脚本已就绪**） | `agent_ping` 往返延迟、`engine_selftest` 在沙盒上 `fired && protRestored`、`protocol_selftest` 1MB 帧完整、`fs_list`/`fs_read` 走 `/data/data/com.adh.sandbox` 与 `/proc/self/cmdline`（v25 老断言必须继续过） | v87_device |
 | native 事件限流（**脚本已就绪**） | libc 热站点（`read`/`write`）用 `throttleMs:200`：事件间隔 ≥ 窗口、`hits = 已发事件 + throttled`、`throttled` 单调递增；带 `returnValue`/`skipOriginal` 的钩子每一次命中都生效 | v86_device |

@@ -149,6 +149,8 @@ SCRIPTS=(
   "verify_v90_jni_table_abi.sh:host"
   # JNIEnv FIELD accessor slots (v4.55): the native probe drives them; events must carry field+value.
   "verify_v91_jni_env_fields.sh:device"
+  # JNIEnv field digest (v4.56): join access events with the IDs they were handed out with.
+  "verify_v92_jni_field_digest.sh:host"
   "verify_v10_mcp.sh:host"
   "verify_v10_webui.sh:host"
   "verify_v33_backends.sh:host"

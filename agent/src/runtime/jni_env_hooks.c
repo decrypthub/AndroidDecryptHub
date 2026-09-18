@@ -471,6 +471,13 @@ static jfieldID GetFieldID_wrapper(JNIEnv *env, jclass clazz, const char *name, 
         g_env_hook_in_ours = 1;
         detail_field(env, clazz, name, sig, detail, sizeof(detail));
         g_env_hook_in_ours = 0;
+        // Append the id the caller received. The field ACCESS events (Get/Set<Type>Field) carry
+        // "field=0x.." but no name, so this is what lets the host join an access back to
+        // "Class#name:sig" instead of reporting an opaque pointer.
+        {
+            size_t dl = strlen(detail);
+            if (dl + 16 < sizeof(detail)) snprintf(detail + dl, sizeof(detail) - dl, " -> %p", (void *)result);
+        }
         env_note(ENV_SLOT_GetFieldID, detail, 1);
     }
     return result;
@@ -491,6 +498,10 @@ static jfieldID GetStaticFieldID_wrapper(JNIEnv *env, jclass clazz, const char *
         g_env_hook_in_ours = 1;
         detail_field(env, clazz, name, sig, detail, sizeof(detail));
         g_env_hook_in_ours = 0;
+        {
+            size_t dl = strlen(detail);
+            if (dl + 16 < sizeof(detail)) snprintf(detail + dl, sizeof(detail) - dl, " -> %p", (void *)result);
+        }
         env_note(ENV_SLOT_GetStaticFieldID, detail, 1);
     }
     return result;

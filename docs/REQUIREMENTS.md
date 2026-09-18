@@ -1339,6 +1339,8 @@ MCP              →  AI 可编程操控，与 HTTP 同源
 
 **目标**：授权取证环境中，提高 Agent 在主动反调试/反注入运行时下的**存活能力、采集稳定性与故障定位能力**。
 
+> 实现状态（v4.56，**实现 + host 验收完成，真机验收待做**）：**字段事件可归因 + JNIEnv 字段摘要**。v4.55 的访问事件只有 `field=0x..`，读不出字段名；现在 `GetFieldID`/`GetStaticFieldID` 的事件会带上它们交出去的 id（`Class#name:sig -> 0x..`），新增的 `jniFieldDigest`（MCP `jni_field_digest` + `POST /api/jni/field_digest`）用 id→名字表把访问按 (accessor, field) 聚合成"哪个字段被读写了几次、最后值是什么、哪些线程"，未解析的 id 保持原始指针并单独计数（不猜），空窗口明确提示需要先 hook 字段槽位；drain 走共享 `drainSession`。
+
 > 实现状态（v4.55，**实现 + host 验收完成，真机验收待做**）：**JNIEnv 字段访问器 36 槽**。native 代码通过 `env->Get/Set<Type>Field`（instance + static，9 种类型）读写字段的路径此前不可见——`object_set` 只覆盖反射路径。槽位从 76 扩到 **112**：一份列表宏同时驱动枚举、名字表、结构体字段 case 与 wrapper 派发；每个 wrapper 转发原函数并记录 `field=0x.. value=..` 事件，保留重入守卫 / 事件预算 / RELRO 还原。安全性三层：`_Static_assert` 把 wrapper 签名钉死在编译期、`tools/verify_v90_jni_table_abi.sh` 把索引钉死在 SDK `jni.h`、安装期偏移不符即拒绝 patch。沙盒新增 `HeapProbe.sCounter` 与 native 探针 `Detection.jniFieldProbe`，设备脚本 `tools/verify_v91_jni_env_fields.sh` 验证事件内容、表页只读与卸载还原。
 
 > 实现状态（v4.54，**实现 + host 验收完成**）：**JNIEnv 槽位表的 ABI 机检**。索引写错会打到相邻 JNI 函数（影响目标里每一次 JNI 调用），所以在扩展槽位前先把索引正确性变成可机检的证据：`tools/verify_v90_jni_table_abi.sh` 解析 NDK `jni.h` 的 `JNINativeInterface` 字段序（233 槽），与 agent 的 `env_hook_spec_index()`（含两套调用族宏展开）逐条对照，并检查每个要安装的槽位都有索引；同时把下一步要用的 36 个字段访问器索引也钉住，防止实现或文档手抄出错。

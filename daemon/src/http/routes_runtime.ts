@@ -10,6 +10,7 @@ import { nativeHookAll, nativeUnhookAll } from '../native_hook_all.ts';
 import { normalizeThrottleMs } from '../native_hook_args.ts';
 import { agentPing, hookEngineSelftest, protocolSelfTest } from '../agent_probe.ts';
 import { listDeviceDir, readDeviceFile } from '../fs_browse.ts';
+import { jniFieldDigest } from '../jni_field_digest.ts';
 import { syscallTraceStart, syscallTraceDigest, syscallTraceStop } from '../syscall_trace.ts';
 import { liveDisasm } from '../memory.ts';
 import { readBody, SANDBOX, sessions, settings } from '../state.ts';
@@ -166,6 +167,14 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
         if (action === 'stop') return send(200, await javaTraceStop(sid, { hookIds }));
         return send(400, { error: 'action must be start | digest | stop' });
       } catch (e) { return send(502, { error: (e as Error).message }); }
+    } },
+    { method: 'POST', path: '/api/jni/field_digest', handler: async () => {
+      const body = await readBody(req);
+      const { session, sinceMs, limit, maxGroups } = JSON.parse(body || '{}');
+      const sid = pickSid(session);
+      if (!sid) return send(400, { error: 'no session' });
+      try { return send(200, await jniFieldDigest(sid, { sinceMs, limit, maxGroups })); }
+      catch (e) { return send(502, { error: (e as Error).message }); }
     } },
     { method: 'POST', path: '/api/syscall/digest', handler: async () => {
       const body = await readBody(req);
