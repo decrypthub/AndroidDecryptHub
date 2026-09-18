@@ -1,0 +1,202 @@
+// Group watched syscall hits into something an analyst can act on.
+//
+// The watch already reports one NATIVE_HOOK event per syscall hit (with `x8` and, since v4.39, the
+// caller chain `bt`). What it does NOT answer is the question the feature exists for: "which app
+// function collects this fingerprint, and how often". This module groups the events by
+// (syscall number, caller symbol) and keeps the runtime x8 next to the statically attributed number,
+// so a wrong attribution shows up as a mismatch instead of silently mislabelling the hook.
+import { captures } from './state.ts';
+import { loadModuleTable, symbolizeAddresses, parseHex, hex, type SymbolizedAddress } from './module_symbols.ts';
+
+export interface SyscallCaller { module: string | null; symbol: string | null; offset: string | null }
+export interface SyscallSample {
+  hookId: number;
+  ts: number;
+  tid: number;
+  observedNr: number | null;
+  callers: SyscallCaller[];
+}
+
+export interface SyscallGroup {
+  nr: number | null;
+  name: string;
+  caller: string;
+  count: number;
+  firstTs: number;
+  lastTs: number;
+  tids: number[];
+}
+
+export interface SyscallDigest {
+  samples: number;
+  usedSamples: number;
+  groups: SyscallGroup[];
+  observed: { nr: number | null; count: number }[];
+  mismatches: { hookId: number; attributed: number; observed: number; count: number }[];
+  hooksSeen: number[];
+  notes: string[];
+}
+
+// Modules a syscall stub's return address is usually still inside: the interesting frame is the
+// first one OUTSIDE these, i.e. the code that called the wrapper.
+const LIBC_FAMILY = /(^|\/)(libc|libc\+\+|libm|libdl|libbinder_ndk|libbase)\.so$/;
+
+export function pickCaller(callers: SyscallCaller[]): SyscallCaller | null {
+  for (const c of callers) {
+    if (!c.module) continue;
+    if (LIBC_FAMILY.test(c.module)) continue;
+    return c;
+  }
+  return callers.length ? callers[0] : null;
+}
+
+export function callerLabel(caller: SyscallCaller | null): string {
+  if (!caller) return '(unknown)';
+  if (caller.symbol) return `${caller.module ?? '?'}:${caller.symbol}`;
+  if (caller.module && caller.offset) return `${caller.module}+${caller.offset}`;
+  return caller.module ?? '(unknown)';
+}
+
+export function digestSyscallSamples(samples: SyscallSample[], opts: {
+  expected?: Record<number, number>;
+  names?: Record<number, string>;
+  maxGroups?: number;
+  maxTids?: number;
+} = {}): SyscallDigest {
+  const maxGroups = Math.max(1, Math.min(200, opts.maxGroups ?? 50));
+  const maxTids = Math.max(1, Math.min(16, opts.maxTids ?? 6));
+  const notes: string[] = [];
+  const list = Array.isArray(samples) ? samples : [];
+
+  const groupMap = new Map<string, SyscallGroup>();
+  const observedMap = new Map<string, { nr: number | null; count: number }>();
+  const mismatchMap = new Map<string, { hookId: number; attributed: number; observed: number; count: number }>();
+  const hooksSeen = new Set<number>();
+
+  for (const s of list) {
+    if (!s || typeof s.hookId !== 'number') continue;
+    hooksSeen.add(s.hookId);
+    const caller = pickCaller(s.callers ?? []);
+    const label = callerLabel(caller);
+    const key = `${s.observedNr ?? '?'}|${label}`;
+    const g = groupMap.get(key);
+    if (g) {
+      g.count++;
+      if (s.ts < g.firstTs) g.firstTs = s.ts;
+      if (s.ts > g.lastTs) g.lastTs = s.ts;
+      if (g.tids.length < maxTids && !g.tids.includes(s.tid)) g.tids.push(s.tid);
+    } else {
+      groupMap.set(key, {
+        nr: s.observedNr,
+        name: s.observedNr == null ? 'unknown' : (opts.names?.[s.observedNr] ?? `syscall_${s.observedNr}`),
+        caller: label,
+        count: 1,
+        firstTs: s.ts,
+        lastTs: s.ts,
+        tids: [s.tid],
+      });
+    }
+    const obsKey = String(s.observedNr ?? '?');
+    const obs = observedMap.get(obsKey) ?? { nr: s.observedNr, count: 0 };
+    obs.count++;
+    observedMap.set(obsKey, obs);
+
+    const attributed = s.observedNr != null ? opts.expected?.[s.hookId] : undefined;
+    if (attributed != null && s.observedNr != null && attributed !== s.observedNr) {
+      const mk = `${s.hookId}|${attributed}|${s.observedNr}`;
+      const mm = mismatchMap.get(mk) ?? { hookId: s.hookId, attributed, observed: s.observedNr, count: 0 };
+      mm.count++;
+      mismatchMap.set(mk, mm);
+    }
+  }
+
+  const groups = [...groupMap.values()].sort((a, b) => b.count - a.count).slice(0, maxGroups);
+  if (groupMap.size > maxGroups) notes.push(`grouped by (nr, caller): showing the top ${maxGroups} of ${groupMap.size}`);
+  if (!list.length) notes.push('no syscall events in scope: install a watch first (syscall_watch) and trigger the target');
+  if (mismatchMap.size) notes.push('attribution mismatch: the static x8 guess and the runtime x8 disagree for at least one hook - the hook sits at a site whose number is not the one that was decoded');
+
+  return {
+    samples: list.length,
+    usedSamples: list.length,
+    groups,
+    observed: [...observedMap.values()].sort((a, b) => b.count - a.count),
+    mismatches: [...mismatchMap.values()],
+    hooksSeen: [...hooksSeen].sort((a, b) => a - b),
+    notes,
+  };
+}
+
+export interface SyscallDigestResult extends SyscallDigest {
+  window: { sinceMs: number | null; limit: number };
+  symbolSource: string;
+}
+
+/** Read the session's NATIVE_HOOK captures, parse them and digest the syscall hits. */
+export async function syscallDigest(session: string, opts: {
+  hookIds?: number[];
+  expected?: Record<string, number>;
+  sinceMs?: number;
+  limit?: number;
+  maxGroups?: number;
+} = {}): Promise<SyscallDigestResult> {
+  const limit = Math.max(1, Math.min(5000, Math.trunc(Number(opts.limit ?? 1000))));
+  const sinceMs = Number.isFinite(Number(opts.sinceMs)) ? Number(opts.sinceMs) : null;
+  const wanted = new Set((opts.hookIds ?? []).map((v) => Number(v)).filter((v) => Number.isFinite(v)));
+  const expected: Record<number, number> = {};
+  for (const [k, v] of Object.entries(opts.expected ?? {})) {
+    const id = Number(k), nr = Number(v);
+    if (Number.isFinite(id) && Number.isFinite(nr)) expected[id] = nr;
+  }
+
+  const raw: { hookId: number; ts: number; tid: number; observedNr: number | null; bt: bigint[] }[] = [];
+  for (let i = captures.length - 1; i >= 0 && raw.length < limit; i--) {
+    const c: any = captures[i];
+    if (c.sessionId !== session || c.func !== 'NATIVE_HOOK') continue;
+    if (sinceMs != null && Number(c.ts) < sinceMs) break;      // the store is append-ordered
+    let text = '';
+    try { text = Buffer.from(String(c.hex ?? ''), 'hex').toString('utf8'); } catch { text = ''; }
+    if (!text) continue;
+    let event: any = null;
+    try { event = JSON.parse(text); } catch { continue; }
+    const hookId = Number(event.hookId);
+    if (!Number.isFinite(hookId)) continue;
+    if (wanted.size && !wanted.has(hookId)) continue;
+    const observedNr = event.x8 != null ? Number(BigInt(event.x8)) : null;
+    const bt: bigint[] = Array.isArray(event.bt)
+      ? event.bt.map((v: any) => parseHex(v)).filter((v: bigint | null): v is bigint => v != null)
+      : [];
+    raw.push({ hookId, ts: Number(c.ts ?? 0), tid: Number(c.tid ?? 0), observedNr, bt });
+  }
+
+  // Symbolize every frame we might report as the caller (bounded by the sample count).
+  const addrSet = new Set<string>();
+  for (const r of raw) for (const a of r.bt.slice(0, 4)) addrSet.add(hex(a));
+  const symbolMap = new Map<string, SymbolizedAddress>();
+  let symbolSource = 'none';
+  if (addrSet.size) {
+    try {
+      const table = await loadModuleTable(session);
+      const m = await symbolizeAddresses(session, [...addrSet].map((a) => parseHex(a)!).filter(Boolean), table);
+      for (const [k, v] of m) symbolMap.set(k, v);
+      symbolSource = (m as any).symbolSource ?? 'dynsym';
+    } catch { symbolSource = 'unavailable'; }
+  }
+
+  const samples: SyscallSample[] = raw.map((r) => ({
+    hookId: r.hookId,
+    ts: r.ts,
+    tid: r.tid,
+    observedNr: r.observedNr,
+    callers: r.bt.slice(0, 4).map((a) => {
+      const s = symbolMap.get(hex(a));
+      return s
+        ? { module: s.module, symbol: s.symbol, offset: s.moduleOffset }
+        : { module: null, symbol: null, offset: null };
+    }),
+  }));
+
+  const result = digestSyscallSamples(samples, { expected, maxGroups: opts.maxGroups });
+  if (symbolSource === 'unavailable') result.notes.push('symbolization unavailable: caller frames are shown as module+offset only');
+  if (symbolSource === 'none') result.notes.push('no caller chain in the events: install the watch through syscall_watch (it sets backtrace:true)');
+  return { ...result, window: { sinceMs, limit }, symbolSource };
+}

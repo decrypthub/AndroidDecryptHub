@@ -15,6 +15,12 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.43 系统调用归因摘要 `syscall_digest`（2026-09-18，host 验收 PASS；真机验收待做）**：评审（Heisenberg）把"监听发生了"与"知道是谁发的"之间的距离点得很准——这正是目标第 4 条要的信号。
+      · `daemon/src/syscall_digest.ts`：纯函数 `digestSyscallSamples()` 按 **(nr, 调用方帧)** 分组（次数/首末时间/线程，线程列表有界去重），调用方取 **libc 家族之外的第一帧**（`libc/libc++/libm/libdl/libbinder_ndk/libbase` 跳过；全是 libc 时如实回退到第一帧），号码未知也能分组（`nr:null`，不丢样本），支持名字表覆盖；`syscallDigest()` 从 capture store 读 `NATIVE_HOOK` 事件（`x8` + `bt`）、符号化调用帧、并把**运行期 x8 与调用方给的 `expected {hookId: nr}` 比对**，不一致进 `mismatches`——把"归因写错但没人验证"变成可见事实。`syscall_watch` 已改为带 `backtrace:true` 装钩，所以事件天生带调用链。
+      · 新增 MCP `syscall_digest`（+ `POST /api/syscall/digest`），工具数 67 → 68。
+      · 验收：`tools/verify_v81_syscall_digest.sh`（host）：**33 条 daemon 单测**（syscall_digest 8 + syscall_watch 14 + trace_digest 7 + backtrace 4）+ 合成命中（libc 帧被跳过、uname 组 2 次、read 钩被标成错配）+ MCP schema，**PASS**。
+      · **待办**：真机链路（watch libc uname → 触发 `adh_libc_uname_probe` → digest 调用方必须是该 fixture、observed 全 160、无 mismatch）。手机当前不在线（`adb devices` 为空），与 v77/v78/v79/v80-device 一起排队。
+
 - [x] **v4.42 两轮独立评审的修复（backtrace / Java stack / syscall 归因）（2026-09-18，host 验收 PASS；真机复验待做）**：评审（subagent）对 v4.38–v4.40 提了 3 个 P1 + 一批 P2，逐条处理如下。
       · **native backtrace（P1）**：① `want_backtrace` 从不在槽位复用时清空/在 reactivate 时重设 → 换目标复用槽位会**继承**上一条 hook 的采集开关（白付栈遍历开销 + 事件里多出 `bt`），现已在 `reset_context` 与 reactivate 两处修正；② agent 的 8 帧上限对 Host **不可见**（`btCount == 8 == bt.length`，看起来像完整链）→ 事件新增 `btTruncated`，Host 映射为 `stopReason: frame-cap-reached` + `truncated:true`；③ `bt[]` 里全是**返回地址**，但只有 live-walk 分支做了 `-4` 修正 → 现在两条路径一致（避免函数边界上一帧之差落到邻居函数）；④ `pthread_getattr_np` 失败会被**永久记住**导致该线程再也不能回溯 → 改为只在成功时落缓存；⑤ 符号 `exact` 的语义（"尺寸覆盖"而非"证明就是它"）写进注释与 note。
       · **syscall 归因（P1）**：① 反向扫描只要**看到 MOVZ** 就当成"x8 最后写入"，中间若有未建模的写（`mov x8,x1`/`ldr x8,[sp]`/`movk`）会给出**自信的错号** → 新增保守谓词 `mayWriteX8()`：比候选更靠近 svc 的指令一旦可能写 x8，就返回 `ambiguous-write`（宁可不归因，不给错号）；同时补上 `movz w8,#imm,lsl #16` 形态、把未建模的 `movk` 标成 ambiguous。**真机覆盖未退**：重跑本机 libc 镜像仍是 **223/224** 归因（`movz-imm` 223 + `ambiguous-write` 1），`uname/openat/getrandom` 全在。② 单元测试里"验证控制流截断"的用例其实探到了 RET（没覆盖 `b`）→ 重写为对第二个 svc 取证，并为 `b`/`cbz`/`br` 各加一例；评审给的 4 个探针（寄存器写覆盖、load 覆盖、未建模 movk、近者优先）全部落成用例（syscall 用例 7 → 14）。③ 过滤空值（`""`/`[]`）原本会当成"过滤零命中"报错 → 现在等于"不过滤"；MCP schema 允许数字项。

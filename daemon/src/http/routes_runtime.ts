@@ -4,6 +4,7 @@ import {
 import { watchSyscalls } from '../syscall_watch.ts';
 import { nativeBacktrace } from '../backtrace.ts';
 import { traceDigest } from '../trace_digest.ts';
+import { syscallDigest } from '../syscall_digest.ts';
 import { liveDisasm } from '../memory.ts';
 import { readBody, SANDBOX, sessions, settings } from '../state.ts';
 import type { Route, RouteContext } from './types.ts';
@@ -102,6 +103,15 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
         const r = await sendCmd(sid, 'stealth', { action: act }, 15_000);
         return send(r.ok ? 200 : 502, r);
       } catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
+    { method: 'POST', path: '/api/syscall/digest', handler: async () => {
+      const body = await readBody(req);
+      const { session, hookIds, expected, sinceMs, limit, maxGroups } = JSON.parse(body || '{}');
+      const sid = pickSid(session);
+      if (!sid) return send(400, { error: 'need session' });
+      try {
+        return send(200, await syscallDigest(sid, { hookIds, expected, sinceMs, limit, maxGroups }));
+      } catch (e) { return send(502, { error: (e as Error).message }); }
     } },
     { method: 'POST', path: '/api/trace/digest', handler: async () => {
       const body = await readBody(req);
