@@ -73,7 +73,12 @@ for (const m of src.matchAll(/X\(\s*([A-Za-z0-9_]+)\s*,\s*[^,]+,\s*[^,]+,\s*ENV_
 }
 // fixed slots declared for installation: X("GetStringUTFChars") ...
 const fixed = [...src.matchAll(/X\("([A-Za-z0-9_]+)"\)/g)].map((m) => m[1]);
-notes.push(`agent: ${fixed.length} fixed slots + ${families.length} call families (= ${fixed.length + families.length * 3} table entries), ${claimed.size} spec indices`);
+// field accessors live in their own list macro (ADH_FIELD_SLOT_LIST, v4.55) and are installed by
+// name as well, so they belong in the "what can we install" inventory - and in the spec-index check.
+const fieldDef = src.match(/#define ADH_FIELD_SLOT_LIST\(X\)([\s\S]*?)\n#define /);
+const fieldSlots = fieldDef ? [...fieldDef[1].matchAll(/\bX\(([A-Za-z0-9_]+)\)/g)].map((m) => m[1]) : [];
+if (!fieldSlots.length) problems.push('no field accessors found in ADH_FIELD_SLOT_LIST (did the list macro move?)');
+notes.push(`agent: ${fixed.length} fixed slots + ${fieldSlots.length} field accessors + ${families.length} call families (= ${fixed.length + fieldSlots.length + families.length * 3} table entries), ${claimed.size} spec indices`);
 
 // ---- 3. every claimed index must equal the ABI index ----
 for (const [name, spec] of claimed) {
@@ -84,6 +89,9 @@ for (const [name, spec] of claimed) {
 // ---- 4. every slot we install must HAVE a spec index (a missing one makes the install refuse) ----
 for (const name of fixed) {
   if (!claimed.has(name)) problems.push(`fixed slot '${name}' has no spec index (the install would refuse it)`);
+}
+for (const name of fieldSlots) {
+  if (!claimed.has(name)) problems.push(`field accessor '${name}' has no spec index (the install would refuse it)`);
 }
 for (const f of families) {
   for (const suffix of ['', 'V', 'A']) {
@@ -98,7 +106,7 @@ const covered = abiFns.filter((n) => claimed.has(n));
 const uncovered = abiFns.filter((n) => !claimed.has(n));
 notes.push(`coverage: ${covered.length}/${abiFns.length} function-table entries hooked (${Math.round((covered.length / abiFns.length) * 100)}%)`);
 notes.push(`uncovered (${uncovered.length}): ${uncovered.slice(0, 16).join(', ')}${uncovered.length > 16 ? ', ...' : ''}`);
-if (covered.length < 144) problems.push(`JNIEnv coverage dropped to ${covered.length}/${abiFns.length} (expected >= 144; the floor only ratchets up)`);
+if (covered.length < 158) problems.push(`JNIEnv coverage dropped to ${covered.length}/${abiFns.length} (expected >= 158; the floor only ratchets up)`);
 
 // ---- 5. pin the indices the NEXT step (field accessors) will use, so those numbers come from the
 // ABI header instead of being hand-copied into the implementation or the docs ----

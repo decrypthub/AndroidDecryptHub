@@ -15,6 +15,11 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.70 JNIEnv 数组区域读写全族（2026-09-19，host 验收 PASS；真机待做）**：覆盖率名单里的下一批——`Get<Type>ArrayRegion` 把 Java 数组整段搬进 native 缓冲、`Set<Type>ArrayRegion` 把 native 数据写回 Java 数组。脱壳/校验/协议解析都走这条批量通道，写回事件还是"目标动了数组内容"的直接证据。
+      · 新增 14 槽（覆盖率 **144/229 → 158/229 = 69%**）：`Get/Set{Boolean,Char,Short,Int,Long,Float,Double}ArrayRegion`（ABI 里没有 `SetObjectArrayRegion`，所以是 14 不是 16；`Byte` 那对在 v4.19 已覆盖）。
+      · 事件格式 `array=0x.. start=N len=N first=[…]`（最多 4 个元素的有界预览，按类型给格式 `%d`/`%u`/`%lld`/`%g`）；调用抛异常时**不读缓冲区**，事件写 `<call failed>` 且 `ok=false` —— v4.66 那条"失败的拷贝不是证据"的教训直接复用。
+      · 安全网照旧：14 条 `_Static_assert`（`Set*ArrayRegion` 的 `const <T> *` 形参由编译器逼出来，手抄错就是编译失败）、索引 199–214 由 v90 对 `jni.h` 机检（`checked 158 indices`），覆盖率下限**再提到 158**；v90 的清单同时补上 36 个字段访问器（59 固定 + 36 字段 + 21 族 ×3 = 158 表项，与 spec 索引数一致）。
+      · 验收：agent 零告警重建；v90 PASS（158/229，69%）；host 全量门禁 **31 PASS / 0 FAIL / 84 SKIP**（115 脚本）。
 - [~] **v4.69 JNIEnv 类型自省 / monitor / 弱引用 / GetVersion（2026-09-19，host 验收 PASS；真机待做）**：覆盖率名单里再下一批——**类型自省**（反篡改代码天天问"你是不是 XX 类的子类/实例/这个引用是什么类型"）、**monitor**（死锁/反调试的锁行为）、**弱引用对**与 `GetVersion`。
       · 新增 11 槽（覆盖率 **133/229 → 144/229 = 63%**）：`GetVersion`（`version=0x..`）、`DefineClass`（**动态加载类**：name + loader + 字节数 + 结果类）、`GetSuperclass`（`class -> super`，带类名）、`IsAssignableFrom`（`A <- B = true/false`）、`GetObjectClass`（`obj -> class`）、`IsInstanceOf`（`obj class = true/false`）、`MonitorEnter`/`MonitorExit`（`monitor=0x..`，成对出现）、`NewWeakGlobalRef`/`DeleteWeakGlobalRef`、`GetObjectRefType`（`local/global/weak/invalid`）。
       · 安全网照旧：11 条 `_Static_assert`、索引由 v90 对 `jni.h` 机检（`checked 144 indices`），覆盖率下限**再提到 144**；类名解析只在**入口无挂起异常**时做（避免 CheckJNI 下 abort 的老问题）。

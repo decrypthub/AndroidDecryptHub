@@ -120,6 +120,23 @@ enum {
     ENV_SLOT_NewWeakGlobalRef,
     ENV_SLOT_DeleteWeakGlobalRef,
     ENV_SLOT_GetObjectRefType,
+    // v4.70: the rest of the array-region family (Byte was already hooked). These are the bulk
+    // data movement entries: Get*ArrayRegion lifts an array into native memory, Set* writes one
+    // back, and the event carries a bounded preview of the first elements.
+    ENV_SLOT_GetBooleanArrayRegion,
+    ENV_SLOT_SetBooleanArrayRegion,
+    ENV_SLOT_GetCharArrayRegion,
+    ENV_SLOT_SetCharArrayRegion,
+    ENV_SLOT_GetShortArrayRegion,
+    ENV_SLOT_SetShortArrayRegion,
+    ENV_SLOT_GetIntArrayRegion,
+    ENV_SLOT_SetIntArrayRegion,
+    ENV_SLOT_GetLongArrayRegion,
+    ENV_SLOT_SetLongArrayRegion,
+    ENV_SLOT_GetFloatArrayRegion,
+    ENV_SLOT_SetFloatArrayRegion,
+    ENV_SLOT_GetDoubleArrayRegion,
+    ENV_SLOT_SetDoubleArrayRegion,
     ENV_SLOT_NewDirectByteBuffer,
     ENV_SLOT_GetDirectBufferAddress,
     ENV_SLOT_GetDirectBufferCapacity,
@@ -183,6 +200,20 @@ struct EnvHookSlot {
     X("GetVersion") X("DefineClass") X("GetSuperclass") X("IsAssignableFrom") X("GetObjectClass") \
     X("IsInstanceOf") X("MonitorEnter") X("MonitorExit") X("NewWeakGlobalRef") \
     X("DeleteWeakGlobalRef") X("GetObjectRefType") \
+    X("GetBooleanArrayRegion") \
+    X("SetBooleanArrayRegion") \
+    X("GetCharArrayRegion") \
+    X("SetCharArrayRegion") \
+    X("GetShortArrayRegion") \
+    X("SetShortArrayRegion") \
+    X("GetIntArrayRegion") \
+    X("SetIntArrayRegion") \
+    X("GetLongArrayRegion") \
+    X("SetLongArrayRegion") \
+    X("GetFloatArrayRegion") \
+    X("SetFloatArrayRegion") \
+    X("GetDoubleArrayRegion") \
+    X("SetDoubleArrayRegion") \
     X("NewDirectByteBuffer") \
     X("GetDirectBufferAddress") X("GetDirectBufferCapacity")
 
@@ -1477,7 +1508,73 @@ static jobjectRefType GetObjectRefType_wrapper(JNIEnv *env, jobject obj) {
     return t;
 }
 
+
+// ---- v4.70: the rest of the array-region family ------------------------------
+// Get lifts array data into native memory, Set writes native data back into a Java array; both
+// events carry a bounded preview of the first elements. A failed call (exception) leaves the buffer
+// untouched, so the preview is skipped in that case (the lesson from the string-region batch).
+#define ADH_DEFINE_ARRAY_REGION(JNI_NAME, CTYPE, BUFPTR, FMT, CAST)                                  \
+static void JNI_NAME##_wrapper(JNIEnv *env, jarray arr, jsize start, jsize len, BUFPTR buf) { \
+    typedef void (JNICALL *fn_t)(JNIEnv *, jarray, jsize, jsize, BUFPTR);                     \
+    fn_t original = (fn_t)slot_original(ENV_SLOT_##JNI_NAME);                                \
+    if (!original) return;                                                                   \
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_##JNI_NAME)) {                           \
+        original(env, arr, start, len, buf);                                                 \
+        return;                                                                              \
+    }                                                                                        \
+    g_env_hook_in_ours = 1;                                                                  \
+    original(env, arr, start, len, buf);                                                     \
+    g_env_hook_in_ours = 0;                                                                  \
+    int failed = (*env)->ExceptionCheck(env) ? 1 : 0;                                        \
+    char detail[220]; detail[0] = 0;                                                         \
+    if (!failed && env_budget_left(ENV_SLOT_##JNI_NAME)) {                                   \
+        char preview[96] = "";                                                               \
+        size_t p = 0;                                                                        \
+        if (buf && len > 0) {                                                                \
+            for (jsize i = 0; i < len && i < 4 && p + 24 < sizeof(preview); i++) {            \
+                p += (size_t)snprintf(preview + p, sizeof(preview) - p, "%s" FMT,            \
+                                      i ? "," : "", CAST(buf[i]));                           \
+            }                                                                                \
+        }                                                                                    \
+        snprintf(detail, sizeof(detail), "array=%p start=%d len=%d first=[%s]",               \
+                 (void *)arr, (int)start, (int)len, preview);                                \
+    } else if (failed) {                                                                     \
+        snprintf(detail, sizeof(detail), "array=%p start=%d len=%d <call failed>",            \
+                 (void *)arr, (int)start, (int)len);                                         \
+    }                                                                                        \
+    env_note(ENV_SLOT_##JNI_NAME, detail[0] ? detail : NULL, !failed && buf != NULL);        \
+}
+
+ADH_DEFINE_ARRAY_REGION(GetBooleanArrayRegion, jboolean, jboolean *, "%d", (int))
+ADH_DEFINE_ARRAY_REGION(SetBooleanArrayRegion, jboolean, const jboolean *, "%d", (int))
+ADH_DEFINE_ARRAY_REGION(GetCharArrayRegion, jchar, jchar *, "%u", (unsigned))
+ADH_DEFINE_ARRAY_REGION(SetCharArrayRegion, jchar, const jchar *, "%u", (unsigned))
+ADH_DEFINE_ARRAY_REGION(GetShortArrayRegion, jshort, jshort *, "%d", (int))
+ADH_DEFINE_ARRAY_REGION(SetShortArrayRegion, jshort, const jshort *, "%d", (int))
+ADH_DEFINE_ARRAY_REGION(GetIntArrayRegion, jint, jint *, "%d", (int))
+ADH_DEFINE_ARRAY_REGION(SetIntArrayRegion, jint, const jint *, "%d", (int))
+ADH_DEFINE_ARRAY_REGION(GetLongArrayRegion, jlong, jlong *, "%lld", (long long))
+ADH_DEFINE_ARRAY_REGION(SetLongArrayRegion, jlong, const jlong *, "%lld", (long long))
+ADH_DEFINE_ARRAY_REGION(GetFloatArrayRegion, jfloat, jfloat *, "%g", (double))
+ADH_DEFINE_ARRAY_REGION(SetFloatArrayRegion, jfloat, const jfloat *, "%g", (double))
+ADH_DEFINE_ARRAY_REGION(GetDoubleArrayRegion, jdouble, jdouble *, "%g", (double))
+ADH_DEFINE_ARRAY_REGION(SetDoubleArrayRegion, jdouble, const jdouble *, "%g", (double))
+
 // Compile-time type check: each wrapper must have exactly its table entry signature.
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetBooleanArrayRegion), __typeof__(&GetBooleanArrayRegion_wrapper)), "GetBooleanArrayRegion_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->SetBooleanArrayRegion), __typeof__(&SetBooleanArrayRegion_wrapper)), "SetBooleanArrayRegion_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetCharArrayRegion), __typeof__(&GetCharArrayRegion_wrapper)), "GetCharArrayRegion_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->SetCharArrayRegion), __typeof__(&SetCharArrayRegion_wrapper)), "SetCharArrayRegion_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetShortArrayRegion), __typeof__(&GetShortArrayRegion_wrapper)), "GetShortArrayRegion_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->SetShortArrayRegion), __typeof__(&SetShortArrayRegion_wrapper)), "SetShortArrayRegion_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetIntArrayRegion), __typeof__(&GetIntArrayRegion_wrapper)), "GetIntArrayRegion_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->SetIntArrayRegion), __typeof__(&SetIntArrayRegion_wrapper)), "SetIntArrayRegion_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetLongArrayRegion), __typeof__(&GetLongArrayRegion_wrapper)), "GetLongArrayRegion_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->SetLongArrayRegion), __typeof__(&SetLongArrayRegion_wrapper)), "SetLongArrayRegion_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetFloatArrayRegion), __typeof__(&GetFloatArrayRegion_wrapper)), "GetFloatArrayRegion_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->SetFloatArrayRegion), __typeof__(&SetFloatArrayRegion_wrapper)), "SetFloatArrayRegion_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetDoubleArrayRegion), __typeof__(&GetDoubleArrayRegion_wrapper)), "GetDoubleArrayRegion_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->SetDoubleArrayRegion), __typeof__(&SetDoubleArrayRegion_wrapper)), "SetDoubleArrayRegion_wrapper signature mismatch");
 _Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetVersion), __typeof__(&GetVersion_wrapper)), "GetVersion_wrapper signature mismatch");
 _Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->DefineClass), __typeof__(&DefineClass_wrapper)), "DefineClass_wrapper signature mismatch");
 _Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetSuperclass), __typeof__(&GetSuperclass_wrapper)), "GetSuperclass_wrapper signature mismatch");
@@ -1612,6 +1709,20 @@ static int env_hook_spec_index(int index) {
         case ENV_SLOT_SetByteArrayRegion: return 208;
         case ENV_SLOT_GetPrimitiveArrayCritical: return 222;
         case ENV_SLOT_GetStringRegion: return 220;
+        case ENV_SLOT_GetBooleanArrayRegion: return 199;
+        case ENV_SLOT_SetBooleanArrayRegion: return 207;
+        case ENV_SLOT_GetCharArrayRegion: return 201;
+        case ENV_SLOT_SetCharArrayRegion: return 209;
+        case ENV_SLOT_GetShortArrayRegion: return 202;
+        case ENV_SLOT_SetShortArrayRegion: return 210;
+        case ENV_SLOT_GetIntArrayRegion: return 203;
+        case ENV_SLOT_SetIntArrayRegion: return 211;
+        case ENV_SLOT_GetLongArrayRegion: return 204;
+        case ENV_SLOT_SetLongArrayRegion: return 212;
+        case ENV_SLOT_GetFloatArrayRegion: return 205;
+        case ENV_SLOT_SetFloatArrayRegion: return 213;
+        case ENV_SLOT_GetDoubleArrayRegion: return 206;
+        case ENV_SLOT_SetDoubleArrayRegion: return 214;
         case ENV_SLOT_GetVersion: return 4;
         case ENV_SLOT_DefineClass: return 5;
         case ENV_SLOT_GetSuperclass: return 10;
@@ -1677,6 +1788,20 @@ static void **env_hook_slot(struct JNINativeInterface *table, int index) {
         case ENV_SLOT_ReleaseByteArrayElements: return (void **)(uintptr_t)&table->ReleaseByteArrayElements;
         case ENV_SLOT_GetByteArrayRegion: return (void **)(uintptr_t)&table->GetByteArrayRegion;
         case ENV_SLOT_GetPrimitiveArrayCritical: return (void **)(uintptr_t)&table->GetPrimitiveArrayCritical;
+        case ENV_SLOT_GetBooleanArrayRegion: return (void **)(uintptr_t)&table->GetBooleanArrayRegion;
+        case ENV_SLOT_SetBooleanArrayRegion: return (void **)(uintptr_t)&table->SetBooleanArrayRegion;
+        case ENV_SLOT_GetCharArrayRegion: return (void **)(uintptr_t)&table->GetCharArrayRegion;
+        case ENV_SLOT_SetCharArrayRegion: return (void **)(uintptr_t)&table->SetCharArrayRegion;
+        case ENV_SLOT_GetShortArrayRegion: return (void **)(uintptr_t)&table->GetShortArrayRegion;
+        case ENV_SLOT_SetShortArrayRegion: return (void **)(uintptr_t)&table->SetShortArrayRegion;
+        case ENV_SLOT_GetIntArrayRegion: return (void **)(uintptr_t)&table->GetIntArrayRegion;
+        case ENV_SLOT_SetIntArrayRegion: return (void **)(uintptr_t)&table->SetIntArrayRegion;
+        case ENV_SLOT_GetLongArrayRegion: return (void **)(uintptr_t)&table->GetLongArrayRegion;
+        case ENV_SLOT_SetLongArrayRegion: return (void **)(uintptr_t)&table->SetLongArrayRegion;
+        case ENV_SLOT_GetFloatArrayRegion: return (void **)(uintptr_t)&table->GetFloatArrayRegion;
+        case ENV_SLOT_SetFloatArrayRegion: return (void **)(uintptr_t)&table->SetFloatArrayRegion;
+        case ENV_SLOT_GetDoubleArrayRegion: return (void **)(uintptr_t)&table->GetDoubleArrayRegion;
+        case ENV_SLOT_SetDoubleArrayRegion: return (void **)(uintptr_t)&table->SetDoubleArrayRegion;
         case ENV_SLOT_GetVersion: return (void **)(uintptr_t)&table->GetVersion;
         case ENV_SLOT_DefineClass: return (void **)(uintptr_t)&table->DefineClass;
         case ENV_SLOT_GetSuperclass: return (void **)(uintptr_t)&table->GetSuperclass;
@@ -1737,6 +1862,20 @@ static void *env_hook_wrapper(int index) {
         case ENV_SLOT_ReleaseByteArrayElements: return (void *)&ReleaseByteArrayElements_wrapper;
         case ENV_SLOT_GetByteArrayRegion: return (void *)&GetByteArrayRegion_wrapper;
         case ENV_SLOT_GetPrimitiveArrayCritical: return (void *)&GetPrimitiveArrayCritical_wrapper;
+        case ENV_SLOT_GetBooleanArrayRegion: return (void *)&GetBooleanArrayRegion_wrapper;
+        case ENV_SLOT_SetBooleanArrayRegion: return (void *)&SetBooleanArrayRegion_wrapper;
+        case ENV_SLOT_GetCharArrayRegion: return (void *)&GetCharArrayRegion_wrapper;
+        case ENV_SLOT_SetCharArrayRegion: return (void *)&SetCharArrayRegion_wrapper;
+        case ENV_SLOT_GetShortArrayRegion: return (void *)&GetShortArrayRegion_wrapper;
+        case ENV_SLOT_SetShortArrayRegion: return (void *)&SetShortArrayRegion_wrapper;
+        case ENV_SLOT_GetIntArrayRegion: return (void *)&GetIntArrayRegion_wrapper;
+        case ENV_SLOT_SetIntArrayRegion: return (void *)&SetIntArrayRegion_wrapper;
+        case ENV_SLOT_GetLongArrayRegion: return (void *)&GetLongArrayRegion_wrapper;
+        case ENV_SLOT_SetLongArrayRegion: return (void *)&SetLongArrayRegion_wrapper;
+        case ENV_SLOT_GetFloatArrayRegion: return (void *)&GetFloatArrayRegion_wrapper;
+        case ENV_SLOT_SetFloatArrayRegion: return (void *)&SetFloatArrayRegion_wrapper;
+        case ENV_SLOT_GetDoubleArrayRegion: return (void *)&GetDoubleArrayRegion_wrapper;
+        case ENV_SLOT_SetDoubleArrayRegion: return (void *)&SetDoubleArrayRegion_wrapper;
         case ENV_SLOT_GetVersion: return (void *)&GetVersion_wrapper;
         case ENV_SLOT_DefineClass: return (void *)&DefineClass_wrapper;
         case ENV_SLOT_GetSuperclass: return (void *)&GetSuperclass_wrapper;
