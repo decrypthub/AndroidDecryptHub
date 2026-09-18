@@ -52,7 +52,7 @@
 | 控制面 / MCP / Web | v10_mcp, v10_webui, v10_export, v10_events, v19_settings, v33_backends, v35_sessions, **v71(registry)**, **v80(trace digest)** | MCP 68 工具可调；注册表形状自检；Web UI；会话清理 |
 | 手机自动化（模块 X） | v36, v38, v39, v40, v41 | 树/截图/选择器/手势/输入/wait/通知/技能；硬超时、桥接自愈、root 输入、屏幕状态；**重启后的 OEM 弹窗按 BACK 有界重试** |
 | 注入足迹 | v26_footprint, v01 | release 剥离 + 仅 3 个动态导出 + 无 RWX LOAD |
-| 单元测试（host） | v76, v80, v81 | syscall 归因/参数解码、trace 摘要、backtrace dynsym：44 条 `node --test` 用例 |
+| 单元测试（host） | v76, v80, v81 | syscall 归因/参数解码、trace 摘要、backtrace dynsym：**53 条** `node --test` 用例（v81 按文件最小数断言） |
 
 ## 2. 待真机验证（代码 + host 验收已完成，手机不在位）
 
