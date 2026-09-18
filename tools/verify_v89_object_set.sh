@@ -68,12 +68,21 @@ console.log(`label: ok=${label.body?.ok} ${label.body?.before} -> ${label.body?.
 // (4) a final field (Kotlin val) must fail loud, not pretend
 const finalField = await set('note', 'nope');
 console.log(`final field: ok=${finalField.body?.ok} error=${JSON.stringify(String(finalField.body?.error ?? '').slice(0, 60))}`);
-const finalRefused = finalField.body?.ok === false && /final|read-only|set failed/i.test(String(finalField.body?.error ?? ''));
+// The reason must name the real cause: "set failed" alone would also match a rejected VALUE, which
+// is a different bug class (and a fixture that silently became writable would pass unnoticed).
+const finalRefused = finalField.body?.ok === false && /final|read-only/i.test(String(finalField.body?.error ?? ''));
+
+// (4b) strict parsing: a typo must not be written as 0, and an out-of-range int must not wrap.
+const typo = await set('counter', 'abc');
+const overflow = await set('counter', '99999999999');
+console.log(`typo: ok=${typo.body?.ok} error=${JSON.stringify(String(typo.body?.error ?? '').slice(0, 50))}`);
+console.log(`overflow: ok=${overflow.body?.ok} error=${JSON.stringify(String(overflow.body?.error ?? '').slice(0, 50))}`);
+const strictParse = typo.body?.ok === false && /expects an integer/i.test(String(typo.body?.error ?? ''))
+  && overflow.body?.ok === false && /expects an integer in int range/i.test(String(overflow.body?.error ?? ''));
 
 // (5) restore the fixture and prove the restore landed
-await set('flag', 'false');
-await set('counter', '7');
-await set('label', 'before');
+const restores = [await set('flag', 'false'), await set('counter', '7'), await set('label', 'before')];
+const restoredOk = restores.every((r) => r.body?.ok === true);
 const restored = await post('/api/object/inspect', { session, className: CLASS, field: HOLDER });
 const back = Object.fromEntries((restored.body?.fields ?? []).map((f) => [f.name, f.value]));
 const { spawnSync } = await import('node:child_process');
@@ -85,9 +94,13 @@ const pass = flagBefore && flagAfter
   && counter.body?.ok === true && counter.body.before === '7' && counter.body.after === '99'
   && label.body?.ok === true && label.body.before === 'before' && label.body.after === 'patched'
   && finalRefused
+  && strictParse
+  && restoredOk
   && back.flag === 'false' && back.counter === '7' && back.label === 'before'
   && alive.length > 0;
-if (!finalRefused) console.log('the final-field write did not fail loud');
+if (!finalRefused) console.log('the final-field write did not fail loud with a final/read-only reason');
+if (!strictParse) console.log('a typo or an out-of-range int was not refused (silent cast)');
+if (!restoredOk) console.log('the fixture restore did not report ok');
 console.log(pass ? 'RESULT:PASS' : 'RESULT:FAIL');
 EOF
 )"

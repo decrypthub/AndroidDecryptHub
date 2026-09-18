@@ -3,6 +3,9 @@
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <jni.h>
+#include <errno.h>
+#include <limits.h>
+#include <math.h>
 #include <stdint.h>
 #include <pthread.h>
 
@@ -140,6 +143,30 @@ done:
 // that object to patch, and the value is coerced by the FIELD declared type. The reply carries
 // before/after so the caller sees the effect and can put it back - flipping a flag on a live object
 // (isRooted, debugChecked, a key blob) is the whole point.
+// Strict numeric parses: the WHOLE string must be a number (no trailing junk, no ERANGE, finite).
+// strtol with a NULL endptr - what the first version used - turns a typo like "abc" into 0 while the
+// call still reports ok:true with a convincing before/after. Writing a wrong value into a live target
+// silently is exactly what this tool must never do.
+static int adh_parse_i64_strict(const char *v, long long *out) {
+    if (!v || !v[0]) return 0;
+    errno = 0;
+    char *end = NULL;
+    long long x = strtoll(v, &end, 0);
+    if (errno != 0 || end == v || (end && *end != '\0')) return 0;
+    *out = x;
+    return 1;
+}
+
+static int adh_parse_double_strict(const char *v, double *out) {
+    if (!v || !v[0]) return 0;
+    errno = 0;
+    char *end = NULL;
+    double x = strtod(v, &end);
+    if (errno != 0 || end == v || (end && *end != '\0') || !isfinite(x)) return 0;
+    *out = x;
+    return 1;
+}
+
 static int adh_parse_bool_value(const char *v, int *out) {
     if (!v) return 0;
     if (strcmp(v, "true") == 0 || strcmp(v, "1") == 0 || strcmp(v, "yes") == 0) { *out = 1; return 1; }
@@ -147,11 +174,11 @@ static int adh_parse_bool_value(const char *v, int *out) {
     return 0;
 }
 
-static void adh_object_value_to_str(JNIEnv *env, jobject value, jmethodID value_of,
+static void adh_object_value_to_str(JNIEnv *env, jclass str_class, jobject value, jmethodID value_of,
                                     char *out, size_t out_size) {
     out[0] = 0;
-    if (value_of) {
-        jstring s = (jstring)(*env)->CallStaticObjectMethod(env, (*env)->FindClass(env, "java/lang/String"), value_of, value);
+    if (value_of && str_class) {
+        jstring s = (jstring)(*env)->CallStaticObjectMethod(env, str_class, value_of, value);
         if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
         if (s) {
             const char *c = (*env)->GetStringUTFChars(env, s, NULL);
@@ -185,6 +212,9 @@ void adh_cmd_object_set(int fd, const char *id, const char *class_name, const ch
     jmethodID set_double = (*env)->GetMethodID(env, field_class, "setDouble", "(Ljava/lang/Object;D)V");
     jmethodID field_set = (*env)->GetMethodID(env, field_class, "set", "(Ljava/lang/Object;Ljava/lang/Object;)V");
     jmethodID value_of = (*env)->GetStaticMethodID(env, str_class, "valueOf", "(Ljava/lang/Object;)Ljava/lang/String;");
+    jmethodID get_modifiers = (*env)->GetMethodID(env, field_class, "getModifiers", "()I");
+    jclass mod_class = (*env)->FindClass(env, "java/lang/reflect/Modifier");
+    jmethodID modifier_is_final = (*env)->GetStaticMethodID(env, mod_class, "isFinal", "(I)Z");
 
     if (!value || !value[0]) { snprintf(err, sizeof(err), "need value"); goto done; }
     jclass target = adh_jni_load_app_class(env, class_name);
@@ -209,22 +239,53 @@ void adh_cmd_object_set(int fd, const char *id, const char *class_name, const ch
         jstring tn = (jstring)(*env)->CallObjectMethod(env, field_type, get_name);
         if (tn) { const char *c = (*env)->GetStringUTFChars(env, tn, NULL); if (c) { snprintf(type_name, sizeof(type_name), "%s", c); (*env)->ReleaseStringUTFChars(env, tn, c); } }
     }
+    // Distinguish "cannot be written at all" (final) from "the value was rejected": the first
+    // version lumped both into one "probably final" message.
+    {
+        jint mods = (*env)->CallIntMethod(env, field, get_modifiers);
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        if ((*env)->CallStaticBooleanMethod(env, mod_class, modifier_is_final, mods)) {
+            snprintf(err, sizeof(err), "field '%s' is final (Kotlin val / read-only): reflection cannot write it here", target_field);
+            goto done;
+        }
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    }
     jobject old_value = (*env)->CallObjectMethod(env, field, field_get, obj);
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); snprintf(err, sizeof(err), "could not read the old value"); goto done; }
-    adh_object_value_to_str(env, old_value, value_of, before, sizeof(before));
+    adh_object_value_to_str(env, str_class, old_value, value_of, before, sizeof(before));
 
     if (strcmp(type_name, "boolean") == 0) {
         int b = 0;
         if (!adh_parse_bool_value(value, &b)) { snprintf(err, sizeof(err), "boolean field expects true/false/1/0, got '%s'", value); goto done; }
         (*env)->CallVoidMethod(env, field, set_boolean, obj, b ? JNI_TRUE : JNI_FALSE);
     } else if (strcmp(type_name, "int") == 0) {
-        (*env)->CallVoidMethod(env, field, set_int, obj, (jint)strtol(value, NULL, 0));
+        long long x = 0;
+        if (!adh_parse_i64_strict(value, &x) || x < INT_MIN || x > INT_MAX) {
+            snprintf(err, sizeof(err), "int field expects an integer in int range, got '%s'", value);
+            goto done;
+        }
+        (*env)->CallVoidMethod(env, field, set_int, obj, (jint)x);
     } else if (strcmp(type_name, "long") == 0) {
-        (*env)->CallVoidMethod(env, field, set_long, obj, (jlong)strtoll(value, NULL, 0));
+        long long x = 0;
+        if (!adh_parse_i64_strict(value, &x)) {
+            snprintf(err, sizeof(err), "long field expects an integer, got '%s'", value);
+            goto done;
+        }
+        (*env)->CallVoidMethod(env, field, set_long, obj, (jlong)x);
     } else if (strcmp(type_name, "float") == 0) {
-        (*env)->CallVoidMethod(env, field, set_float, obj, (jfloat)strtod(value, NULL));
+        double x = 0;
+        if (!adh_parse_double_strict(value, &x)) {
+            snprintf(err, sizeof(err), "float field expects a finite number, got '%s'", value);
+            goto done;
+        }
+        (*env)->CallVoidMethod(env, field, set_float, obj, (jfloat)x);
     } else if (strcmp(type_name, "double") == 0) {
-        (*env)->CallVoidMethod(env, field, set_double, obj, (jdouble)strtod(value, NULL));
+        double x = 0;
+        if (!adh_parse_double_strict(value, &x)) {
+            snprintf(err, sizeof(err), "double field expects a finite number, got '%s'", value);
+            goto done;
+        }
+        (*env)->CallVoidMethod(env, field, set_double, obj, (jdouble)x);
     } else if (strcmp(type_name, "java.lang.String") == 0) {
         (*env)->CallVoidMethod(env, field, field_set, obj, (*env)->NewStringUTF(env, value));
     } else {
@@ -234,12 +295,12 @@ void adh_cmd_object_set(int fd, const char *id, const char *class_name, const ch
     if ((*env)->ExceptionCheck(env)) {
         (*env)->ExceptionClear(env);
         // A final field (Kotlin val) lands here: report it as such instead of pretending it worked.
-        snprintf(err, sizeof(err), "set failed - the field is probably final (val/read-only) or the value is invalid for %s", type_name);
+        snprintf(err, sizeof(err), "set failed - the value is not acceptable for %s (field %s)", type_name, target_field);
         goto done;
     }
     jobject new_value = (*env)->CallObjectMethod(env, field, field_get, obj);
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); snprintf(err, sizeof(err), "wrote the field but could not read it back"); goto done; }
-    adh_object_value_to_str(env, new_value, value_of, after, sizeof(after));
+    adh_object_value_to_str(env, str_class, new_value, value_of, after, sizeof(after));
     ok = 1;
 
 done:

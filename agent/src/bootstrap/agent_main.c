@@ -647,7 +647,20 @@ static void command_loop(int fd) {
                     json_get_str(line, "field", sholder, sizeof(sholder));
                     json_get_str(line, "targetField", sfield, sizeof(sfield));
                     json_get_str(line, "value", svalue, sizeof(svalue));
-                    adh_cmd_object_set(fd, id, scls, sholder, sfield, svalue);
+                    // json_get_str truncates silently, and writing a TRUNCATED value into a live
+                    // target while reporting ok:true is worse than refusing: a full buffer means the
+                    // parser had to cut it, so fail loud instead.
+                    if (strlen(scls) >= sizeof(scls) - 1 || strlen(sholder) >= sizeof(sholder) - 1 ||
+                        strlen(sfield) >= sizeof(sfield) - 1 || strlen(svalue) >= sizeof(svalue) - 1) {
+                        char idj[64]; json_escape(id, idj, sizeof(idj));
+                        char e[192];
+                        snprintf(e, sizeof(e),
+                                 "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"object_set\",\"ok\":false,"
+                                 "\"error\":\"argument too long (the parser would have truncated it)\"}\n", idj);
+                        send_line(fd, e);
+                    } else {
+                        adh_cmd_object_set(fd, id, scls, sholder, sfield, svalue);
+                    }
                 } else if (strcmp(op, "object_invoke") == 0) {
                     char cls[160] = "", fld[64] = "", mth[64] = "";
                     json_get_str(line, "className", cls, sizeof(cls));
