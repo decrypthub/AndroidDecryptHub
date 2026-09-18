@@ -83,15 +83,23 @@ SCRIPTS=(
   "verify_v77_syscall_watch_libc.sh:device"
   # Trace digest (v4.41): pure digest of a QBDI stream + the MCP tool shape. Host-only.
   "verify_v80_trace_digest.sh:host"
+  # Device half of the same feature: QBDI-trace a real fixture and digest THAT stream.
+  "verify_v80_device_trace_digest.sh:device"
   # Syscall digest (v4.43): groups watched syscall hits by (nr, issuing caller frame) and compares
   # runtime x8 with the attributed number. Host-only.
   "verify_v81_syscall_digest.sh:host"
+  # Device half: the digest must name the fixture that issued the libc uname(2) call.
+  "verify_v81_device_syscall_digest.sh:device"
   # Java class-level trace digest (v4.45): hook_all + capture ring + per-method/timeline digest.
   "verify_v83_java_trace.sh:host"
+  # Device half: start -> trigger the call chain -> digest methods/callers -> stop.
+  "verify_v83_device_java_trace.sh:device"
   # Native batch hooking by export pattern (v4.46): symbol selection + MCP shape. Host-only.
   "verify_v84_native_hook_all.sh:host"
   # One-shot syscall tracing (v4.47): watch->digest->stop assembly with the attribution threaded.
   "verify_v85_syscall_trace.sh:host"
+  # Device half: the threaded attribution must survive start -> trigger -> digest -> stop.
+  "verify_v85_device_syscall_trace.sh:device"
   # Per-hook native event throttle (v4.48): payload shaping + agent wiring + MCP/REST shape. Host-only.
   "verify_v86_native_throttle.sh:host"
   # ...and its device half: hits = emitted + throttled on a real hook, with the return rewrite still

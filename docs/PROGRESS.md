@@ -15,6 +15,12 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **设备队列补齐：v80/v81/v83/v85 的设备半脚本（2026-09-19，host 语法/SKIP 验证 PASS）**：这四项之前只有 host 验证，`FEATURE_STATUS §2` 里写着"待真机"却**没有脚本**——手机回来也无从下手。现在四个都写好了，**13 项待真机全部可执行**。
+      · `tools/verify_v80_device_trace_digest.sh`：对 `libadhdetect.so:adh_add_target`（(2+3)*2=10）实跑 QBDI → `/api/trace/digest`，断言 `retval=10`、指令数 ≥3、助记符 ≥2、hot 非空（QBDI 未打包则 SKIP）。
+      · `tools/verify_v81_device_syscall_digest.sh`：libc uname 站点 watch → 触发 `adh_libc_uname_probe` → digest，断言 samples ≥1、运行期 x8 =160、**mismatches 为空**、分组里出现发起者（libc 之外的 fixture）、ring 非 lossy，卸载后进程存活。前面还带**正对照**（`adh_add_target(2,3)` 必须可调用），避免把"老 APK 缺 fixture"误判成 resolver 回归。
+      · `tools/verify_v83_device_java_trace.sh`：`java_trace start`（HookProbe.ping + stack）→ `java_call stackOuter` 走 stackOuter→stackMiddle→ping → digest（每方法次数、时间线、调用方直方图要出现 stackMiddle/stackOuter、`complete` 不为 false）→ stop 后进程存活。
+      · `tools/verify_v85_device_syscall_trace.sh`：一站式链路 start → 触发 → digest（expected 表若没传到位就会以 mismatch 暴露）→ stop。
+      · 四个脚本无设备时干净 `RESULT:SKIP`（已实测），注册进 `verify_all.sh`：现在是 **111 脚本 = 29 host + 82 device**；host 门禁仍 **29 PASS / 0 FAIL / 82 SKIP**。
 - [~] **v4.52 hook 槽位预算可见 + 批处理按预算截断（2026-09-19，host 验收 PASS；真机待做）**：以前"最多 16 个并发 hook"是**隐藏在失败里**的——第 17 个只是装不上，批量工具还会对着只剩 4 个空闲的 agent 发 16 次安装，然后报 12 条 `install failed`。
       · agent：`native_hook status` 新增顶层 **`slots`**（`max`/`used`/**`active`**/`free`/`byMode{got,inline,sites,vtable}`），其中 **`used` 是"已消耗的槽位"而不是"当前生效的钩子"**——软卸载的 inline 钩子按竞态安全设计保留 stub，槽位直到硬卸载才释放，所以 `free = max - used` 才是真实可用的数字（第一版写成 `max - active`，自查时抓到并修正），`java_hook status` 新增 **`maxHooks`**（active 计数本来就有）——AI 装钩前能先看预算，而不是撞墙。
       · host：`native_hook_all` 先发一次 `native_hook status`，用新纯函数 **`effectiveBatchLimit(requested, freeSlots)`** 决定本批上限：`free=4` 且请求 16 → 装 4 并给出 `limitReason`；**`free=0` 直接 fail-loud**（"unhook something first"）而不是逐符号失败；老 payload 不上报预算时回退到请求值并说明。响应新增 `slots` 与 `limitReason`，`matched`/`installedCount` 的语义不变。
