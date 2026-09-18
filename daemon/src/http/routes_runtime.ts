@@ -7,6 +7,7 @@ import { traceDigest } from '../trace_digest.ts';
 import { syscallDigest } from '../syscall_digest.ts';
 import { javaTraceStart, javaTraceDigest, javaTraceStop } from '../java_trace.ts';
 import { nativeHookAll, nativeUnhookAll } from '../native_hook_all.ts';
+import { syscallTraceStart, syscallTraceDigest, syscallTraceStop } from '../syscall_trace.ts';
 import { liveDisasm } from '../memory.ts';
 import { readBody, SANDBOX, sessions, settings } from '../state.ts';
 import type { Route, RouteContext } from './types.ts';
@@ -105,6 +106,18 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
         const r = await sendCmd(sid, 'stealth', { action: act }, 15_000);
         return send(r.ok ? 200 : 502, r);
       } catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
+    { method: 'POST', path: '/api/syscall/trace', handler: async () => {
+      const body = await readBody(req);
+      const { session, action, module, syscalls, limit, hookIds, expected, sinceMs, decode, decodeLimit, maxGroups } = JSON.parse(body || '{}');
+      const sid = pickSid(session);
+      if (!sid || !action) return send(400, { error: 'need session, action' });
+      try {
+        if (action === 'start') return send(200, await syscallTraceStart(sid, { module, syscalls, limit }));
+        if (action === 'digest') return send(200, await syscallTraceDigest(sid, { hookIds, expected, sinceMs, decode, decodeLimit, maxGroups }));
+        if (action === 'stop') return send(200, await syscallTraceStop(sid, { hookIds }));
+        return send(400, { error: 'action must be start | digest | stop' });
+      } catch (e) { return send(502, { error: (e as Error).message }); }
     } },
     { method: 'POST', path: '/api/native/hook_all', handler: async () => {
       const body = await readBody(req);

@@ -15,6 +15,10 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.47 一站式系统调用跟踪 `syscall_trace`（2026-09-18，host 验收 PASS；真机验收待做）**：watch / digest / 卸载三个工具分开时，最容易错的两件事——**静态归因没有从 watch 传到 digest**、**drain 没走共享路径**——现在由工具自己保证。
+      · `daemon/src/syscall_trace.ts`：`start` = 调 `syscall_watch` 并用它的响应**自动构造 `{hookId: nr}` 期望表**（归因错位以后会以 `mismatches` 形式暴露，而不是被手工抄错）；解不出号的站点进 `unattributed` 并说明『只有运行期 x8 可看』。`digest` = 走共享 `drainSession` + `syscall_digest`（调用方、次数、`paths` 直方图、mismatch）。`stop` = **只卸传入 id**（显式拒绝空列表与 0，不做隐式全卸）。装不上任何钩（模块没有匹配的 svc 站点）时 fail-loud。
+      · 新增 MCP `syscall_trace`（action: start|digest|stop）+ `POST /api/syscall/trace`，工具数 70 → 71；`tools/verify_v85_syscall_trace.sh`（host）= 8 条装配单测 + start→digest→stop 合成链路（断言 expected 传到位、stop 只卸自己装的 id）+ MCP schema，**PASS**。
+      · **待办**：真机链路（libc uname 站点 → watch(start) → 触发 `adh_libc_uname_probe` → digest 的调用方必须是该 fixture、observed 全 160、无 mismatch → stop 后进程存活），与其它真机项一起排队。
 - [~] **v4.46 native 侧批量挂钩 `native_hook_all`（2026-09-18，host 验收 PASS；真机验收待做）**：Java 侧有 `hookAll`（v4.44）之后，native 侧补上同款工作流——**把 libcrypto 里所有 EVP_* 一口气挂上**，而不是手工 dump 符号、算地址、逐个装。
       · `daemon/src/native_hook_all.ts`（host 编排，agent 仍只执行 `native_hook`）：从模块 dump 解析导出表（复用 `parseDynSymbols`，内存重建镜像也能用），按 `prefix/contains/exact` 过滤 **STT_FUNC**（数据符号永不入选、未命名符号忽略），可选 `exclude` 去掉噪声；按**地址升序**取前 `limit` 个（≤16，与 native 槽位上限一致）逐个装 inline hook，返回 `hookIds` + `matched` vs `installedCount`（截断可见）+ 每符号失败明细。`action:unhook` 只卸传入 id。纯函数 `selectExportSymbols` 7 条单测（前缀/包含/精确、数据符号与空名排除、matched≠selected、地址序确定性、limit 夹紧、exclude、相对地址与 size）。
       · 新增 MCP `native_hook_all`（action: hook|unhook，`confirm:true` 必填——地址级 hook 属于强操作）+ `POST /api/native/hook_all`，工具数 69 → 70；`tools/verify_v84_native_hook_all.sh`（host）= 7 条单测 + 合成导出表断言 + MCP schema/confirm 门禁，**PASS**。

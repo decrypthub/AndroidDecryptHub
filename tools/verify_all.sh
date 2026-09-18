@@ -90,6 +90,8 @@ SCRIPTS=(
   "verify_v83_java_trace.sh:host"
   # Native batch hooking by export pattern (v4.46): symbol selection + MCP shape. Host-only.
   "verify_v84_native_hook_all.sh:host"
+  # One-shot syscall tracing (v4.47): watch->digest->stop assembly with the attribution threaded.
+  "verify_v85_syscall_trace.sh:host"
   # Hook-hit caller backtrace (v4.39): the event must carry the at-hit chain and every frame must be
   # resolved to module + symbol; a bogus frame pointer must stop the walk, not invent frames.
   "verify_v78_hook_backtrace.sh:device"
