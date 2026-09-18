@@ -33,6 +33,8 @@ export async function agentPing(session: string, deps: ProbeDeps = defaultDeps):
 }
 
 export interface EngineSelftestFields {
+  commandOk?: boolean;
+  error?: string;
   replaced?: number;
   fired?: boolean;
   protRestored?: boolean;
@@ -51,6 +53,12 @@ export interface EngineVerdict { ok: boolean; verdict: string }
  * exists for the same reason).
  */
 export function engineVerdict(r: EngineSelftestFields): EngineVerdict {
+  // A failed COMMAND and a broken ENGINE are different findings: the fields are missing in the first
+  // case, and reading that as "the engine cannot install" would send the operator hunting a bug that
+  // is not there.
+  if (r?.commandOk === false) {
+    return { ok: false, verdict: `the selftest command itself failed: ${r?.error ?? 'the agent did not answer ok:true'}` };
+  }
   const replaced = Number(r?.replaced ?? -1);
   const hits = Number(r?.hitsAfter ?? 0) - Number(r?.hitsBefore ?? 0);
   if (replaced <= 0) return { ok: false, verdict: `GOT slot was not replaced (replaced=${replaced}) - the hook engine cannot install into this module` };
@@ -69,15 +77,17 @@ export interface EngineSelftestResult extends EngineVerdict, EngineSelftestField
 
 export async function hookEngineSelftest(session: string, deps: ProbeDeps = defaultDeps): Promise<EngineSelftestResult> {
   const raw = await deps.send(session, 'gothook_selftest', {}, 15_000);
-  const verdict = engineVerdict(raw ?? {});
+  const verdict = engineVerdict({ ...(raw ?? {}), commandOk: raw?.ok === true });
   // Agent fields stay top level so the pre-existing consumers (the REST route, the v04/v26
   // acceptance scripts and the web diagnostics panel) keep reading replaced/fired/protRestored.
+  // commandOk is passed INTO the verdict as well, so a failed command cannot be misread as a
+  // broken engine (see engineVerdict).
   return { ...(raw ?? {}), ...verdict, commandOk: raw?.ok === true, raw };
 }
 
 export const FRAME_ECHO_TAIL = 'ADH_FRAME_TAIL_v1';
 
-export interface FrameEchoFields { recvBytes?: number; tail?: string; padLen?: number }
+export interface FrameEchoFields { recvBytes?: number; tail?: string; padLen?: number; commandOk?: boolean; error?: string }
 export interface FrameEchoVerdict { ok: boolean; tailOk: boolean; notTruncated: boolean; problems: string[] }
 
 /**
@@ -86,10 +96,14 @@ export interface FrameEchoVerdict { ok: boolean; tailOk: boolean; notTruncated: 
  */
 export function frameEchoVerdict(r: FrameEchoFields, expected: { tail: string; padLen: number }): FrameEchoVerdict {
   const problems: string[] = [];
+  if (r?.commandOk === false) problems.push(`the frame_echo command failed: ${r?.error ?? 'no ok:true'}`);
   const tailOk = r?.tail === expected.tail;
-  const notTruncated = Number(r?.recvBytes ?? 0) > expected.padLen;
+  // padLen sits AFTER the pad in the frame, so a truncated frame comes back without it (or with a
+  // wrong value). Checking the echo is a stronger signal than "the frame was longer than the pad".
+  const padLenOk = Number(r?.padLen) === expected.padLen;
+  const notTruncated = Number(r?.recvBytes ?? 0) > expected.padLen && padLenOk;
   if (!tailOk) problems.push(`tail mismatch: expected ${JSON.stringify(expected.tail)}, got ${JSON.stringify(r?.tail ?? null)}`);
-  if (!notTruncated) problems.push(`the frame was truncated: recvBytes=${r?.recvBytes ?? 0} must exceed padLen=${expected.padLen}`);
+  if (!notTruncated) problems.push(`the frame was truncated or malformed: recvBytes=${r?.recvBytes ?? 0} (must exceed padLen=${expected.padLen}) and the echoed padLen=${JSON.stringify(r?.padLen ?? null)} must match`);
   return { ok: tailOk && notTruncated, tailOk, notTruncated, problems };
 }
 
@@ -102,7 +116,10 @@ export interface ProtocolSelftestResult extends FrameEchoVerdict {
 
 /** Send one oversized frame and check it arrived whole. kb is clamped to 1..4096 (4MB). */
 export async function protocolSelfTest(session: string, kb = 64, deps: ProbeDeps = defaultDeps): Promise<ProtocolSelftestResult> {
-  const n = Math.max(1, Math.min(4096, Math.trunc(Number(kb) || 64)));
+  // Same clamp as the REST route (they share this helper): 1..4096 KB, and only a MISSING size falls
+  // back to the 64 KB default - an explicit 0 is clamped to 1 instead of silently meaning 64.
+  const requested = kb === undefined || kb === null || (kb as unknown) === '' ? 64 : Number(kb);
+  const n = Math.max(1, Math.min(4096, Number.isFinite(requested) ? Math.trunc(requested) : 64));
   const padLen = n * 1024;
   const r = await deps.send(session, 'frame_echo', { pad: 'A'.repeat(padLen), tail: FRAME_ECHO_TAIL, padLen }, 30_000);
   const check = frameEchoVerdict(r ?? {}, { tail: FRAME_ECHO_TAIL, padLen });

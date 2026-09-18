@@ -92,3 +92,40 @@ test('the engine selftest keeps the agent fields top level and reports ok as the
   assert.equal(leaky.commandOk, true);
   assert.match(leaky.verdict, /detectable/);
 });
+
+test('a FAILED selftest command is not reported as a broken engine', async () => {
+  const r = await hookEngineSelftest('s1', {
+    send: async () => ({ ok: false, error: 'got engine unavailable in this build' }),
+    now: () => 0,
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.commandOk, false);
+  assert.match(r.verdict, /command itself failed/);
+  assert.doesNotMatch(r.verdict, /cannot install/);   // the engine was never asked
+});
+
+test('a frame that comes back without the echoed padLen counts as truncated', () => {
+  const expected = { tail: FRAME_ECHO_TAIL, padLen: 16384 };
+  const noEcho = frameEchoVerdict({ recvBytes: 17000, tail: FRAME_ECHO_TAIL }, expected);
+  assert.equal(noEcho.ok, false);
+  assert.equal(noEcho.tailOk, true);
+  assert.equal(noEcho.notTruncated, false);
+  assert.match(noEcho.problems.join(' '), /echoed padLen/);
+  const wrongEcho = frameEchoVerdict({ recvBytes: 17000, tail: FRAME_ECHO_TAIL, padLen: 8192 }, expected);
+  assert.equal(wrongEcho.ok, false);
+});
+
+test('protocol selftest clamps the frame size instead of sending whatever was asked', async () => {
+  const sent: any[] = [];
+  const fake = async (_s: string, _o: string, args: Record<string, unknown>) => {
+    sent.push(args);
+    return { ok: true, recvBytes: String(args.pad).length + 120, tail: args.tail, padLen: args.padLen };
+  };
+  const small = await protocolSelfTest('s1', 0, { send: fake, now: () => 0 });
+  assert.equal(small.kb, 1);
+  assert.equal(small.sentPadLen, 1024);
+  const huge = await protocolSelfTest('s1', 5000, { send: fake, now: () => 0 });
+  assert.equal(huge.kb, 4096);
+  assert.equal(huge.sentPadLen, 4096 * 1024);
+  assert.equal(sent.length, 2);
+});

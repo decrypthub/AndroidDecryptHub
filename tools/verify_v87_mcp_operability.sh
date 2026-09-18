@@ -44,9 +44,9 @@ const INTERNAL_OPS = {
   capture_start: 'driven by the daemon capture loop and the settings toggle, not by a single tool call',
   capture_stop: 'same loop; withCaptureSuspended also borrows it around risky commands',
   capture_drain: 'the shared drainSession owns the ring - a tool that drained it directly is the java_trace P0',
-  crypto_probe: 'v0.4-era boundary probe; the live tool paths are crypto_capture/file_capture',
-  jni_probe: 'compat_probe covers the JNI surface for tool users; this op backs the v04 acceptance scripts',
-  inline_crypto_test: 'v0.4-era inline-hook demo; native_hook + native_hook_all are the tool-level path',
+  crypto_probe: 'v0.4-era crypto boundary self-test; nothing calls /api/crypto/probe any more - the tool-level paths are crypto_hook_test + native_hook',
+  jni_probe: 'JNI surface probe: still driven by the v03 acceptance script through /api/jni/probe; compat_probe covers the tool-level story',
+  inline_crypto_test: 'v0.4-era inline-hook demo behind /api/native/inline_hook_test; native_hook + native_hook_all are the tool-level path',
 };
 for (const op of Object.keys(INTERNAL_OPS)) {
   if (!agentOps.includes(op)) problems.push(`INTERNAL_OPS lists ${op}, which the agent no longer has (stale entry)`);
@@ -59,7 +59,8 @@ function resolveImport(fromRel, spec) {
     if (seg === '.' || seg === '') continue;
     if (seg === '..') parts.pop(); else parts.push(seg);
   }
-  return parts.join('/');
+  const joined = parts.join('/');
+  return /\.(ts|js)$/.test(joined) ? joined : `${joined}.ts`;   // imports may or may not carry the extension
 }
 function closure(entry) {
   const seen = new Set();
@@ -71,6 +72,7 @@ function closure(entry) {
     let src;
     try { src = read(rel); } catch { problems.push(`import graph: cannot read ${rel}`); continue; }
     for (const m of src.matchAll(/from\s+'(\.[^']+)'/g)) queue.push(resolveImport(rel, m[1]));
+    for (const m of src.matchAll(/import\('(\.\.[^']+)'\)/g)) queue.push(resolveImport(rel, m[1]));   // dynamic imports count too
   }
   return seen;
 }
@@ -80,7 +82,9 @@ const opsFromFiles = (files) => {
     let src;
     try { src = read(rel); } catch { continue; }
     // sendCmd/agentCmd plus the injected-sender form used by the extracted helpers (deps.send(...))
-    for (const m of src.matchAll(/(?:sendCmd|agentCmd|\.send|(?:^|[^.\w])send)\([^,]+,\s*'([a-z0-9_]+)'/g)) ops.add(m[1]);
+    // deps.send is the injected-sender form used by the extracted helpers; a bare `.send(` on any other
+    // receiver would be a false positive that could mask a genuinely unreachable op, so it is not accepted.
+    for (const m of src.matchAll(/(?:\bsendCmd|\bagentCmd|\b(?:deps|opts)\.send)\([^,]+,\s*'([a-z0-9_]+)'/g)) ops.add(m[1]);
   }
   return ops;
 };
