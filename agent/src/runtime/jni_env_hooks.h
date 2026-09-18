@@ -12,6 +12,11 @@ extern "C" {
 // as target behaviour. Use this everywhere inside ADH instead of (*env)->ExceptionCheck(env).
 jboolean adh_jni_exception_check(JNIEnv *env);
 
+// Mark the current thread as running ADH's own JNI work (see jni_env_hooks.c). enter returns
+// the previous state, leave restores it - always pair them, even on early returns.
+int adh_jni_ours_enter(void);
+void adh_jni_ours_leave(int previous);
+
 // Per-entry hooks on the JNIEnv function table. In C a JNIEnv* points at a table of
 // function pointers, so one aligned slot swap intercepts every JNI call that goes through
 // that env. No trampoline is involved: the saved slot value is the real implementation, so

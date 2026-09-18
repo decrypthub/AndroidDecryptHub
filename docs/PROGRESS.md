@@ -15,6 +15,12 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.85 归因卫生：ADH 自己的 JNI 工作不再被记成目标行为（2026-09-19，host 验收 PASS；真机待做）**：v4.79 只把 `ExceptionCheck` 一处改成直调；这一版把**类名解析与会话类装载**这两条"由 ADH 发起、却要经过 JNIEnv 表"的路径也收进守卫。
+      · 新增 `adh_jni_ours_enter()/adh_jni_ours_leave()`（保存/恢复上一状态，可嵌套）：`jni.c` 的三个 helper 内部自行进出守卫——`adh_jni_app_class_loader`（FindClass/GetStaticMethodID/CallStaticObjectMethod/GetMethodID/CallObjectMethod）、`adh_jni_class_name`（GetObjectClass/GetMethodID/CallObjectMethod/GetStringUTFChars…）、`adh_jni_load_app_class`（FindClass/…/NewStringUTF）。
+        这样无论调用者是谁（wrapper 内部、RegisterNatives 钩子回调、还是 `java_call`/`object_inspect`/`java_trace` 这些命令路径——`capture.c` 里 7 处、`inspection.c`/`actions.c`/`trace/commands.c` 还有 5 处），这些查找都不会再被记成目标事件（此前一旦挂了 `FindClass`/`GetMethodID`/`CallObjectMethod` 等槽位，仪表自己的查找就会污染事件流）。
+      · 顺带修掉 `adh_jni_load_app_class` 的一处崩溃隐患：原实现把 `FindClass("android/content/Context")`、`FindClass("java/lang/ClassLoader")` 的结果**未判空**就传给 `GetMethodID`（解析失败即把 NULL class 交给 ART）；现在判空后返回 NULL（拿不到就返回 NULL，语义不变）。
+      · 诚实边界（未做，留给后续）：**agent 主动触发的那次调用本身**（`java_call`/`object_invoke` 的 Call* 入口、`crypto_capture` 的触发）仍作为普通事件出现、不带"由 ADH 发起"的来源标记；要区分来源需要给事件加 origin 字段，属于后续设计，这一版不假装做了。
+      · 验收：agent 零告警重建（1019 KB）；v90 PASS（228/229）；host 全量门禁 **31 PASS / 0 FAIL / 84 SKIP**（115 脚本）。
 - [~] **v4.84 门禁加牙：接线完整性 + "静默 wrapper" 检查（2026-09-19，host 验收 PASS）**：v90 此前只查"名字↔spec index"与覆盖数字，查不出两类只会在真机上暴露的错：**名字在列表里却没有 dispatch case**（真机上才 fail-loud），以及 **wrapper 装上了但从不发事件**（装了也白装）。
       · 接线：每个固定槽位必须在 `env_hook_slot()` 与 `env_hook_wrapper()` 两个 switch 里各有 case；字段访问器与 Call*/CallNonvirtual 家族则要求对应的宏展开（`ADH_FIELD_SLOT_LIST(ADH_FIELD_SLOT_CASE)`、`ADH_CALL_VALUE_FAMILIES(ADH_CALL_SLOT_CASES)` 等）确实存在。**负对照验证过牙口**：临时删掉 `FatalError` 的 slot case，v90 立刻报 `FAIL fixed slots with no dispatch case: FatalError (env_hook_slot)`，恢复后 PASS。
       · 发事件：每个 wrapper 生成宏（`ADH_DEFINE_*`）与每个手写 wrapper 必须含 `env_note(`/`call_emit(`，否则报 silent wrapper；当前 0 个（`env_hook_wrapper` 这个派发函数本身按名字排除）。

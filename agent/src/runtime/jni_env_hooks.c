@@ -250,6 +250,20 @@ static pthread_mutex_t g_env_hook_lock = PTHREAD_MUTEX_INITIALIZER;
 // own call always runs with the flag clear, so Java->JNI callbacks made *inside* a hooked call
 // are still observed. Setting it across the target call would silently hide that traffic.
 static __thread int g_env_hook_in_ours = 0;
+
+// ADH's own JNI work (class-name resolution, loader lookups, command paths) must not be recorded as
+// target behaviour when the corresponding slots are hooked. Helpers that do such work set this flag
+// around themselves; the enter/leave pair restores the previous value, so a helper called from inside
+// a wrapper (where the flag is already set) behaves exactly like one called from a command path.
+int adh_jni_ours_enter(void) {
+    int previous = g_env_hook_in_ours;
+    g_env_hook_in_ours = 1;
+    return previous;
+}
+
+void adh_jni_ours_leave(int previous) {
+    g_env_hook_in_ours = previous;
+}
 static unsigned long long g_env_hook_table = 0;
 
 typedef const char *(*get_string_utf_chars_fn)(JNIEnv *, jstring, jboolean *);

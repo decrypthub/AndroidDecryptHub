@@ -1364,6 +1364,8 @@ MCP              →  AI 可编程操控，与 HTTP 同源
 
 > 实现状态（v4.84，**实现 + host 验收完成**）：**v90 的接线与发事件门禁**。① 接线：每个固定槽位必须在 `env_hook_slot()` 与 `env_hook_wrapper()` 两个 switch 里各有 case，字段访问器与全部 Call 家族要求相应宏展开存在——名字在列表里却没有 case 的错（真机才 fail-loud）从此在 host 门禁就失败（负对照：删掉 `FatalError` 的 slot case → `FAIL fixed slots with no dispatch case`）。② 发事件：每个 wrapper 生成宏与手写 wrapper 必须含 `env_note(`/`call_emit(`，防止"装了但从不发事件"的空壳槽位（当前 0 个）。
 
+> 实现状态（v4.85，**实现 + host 验收完成，真机待做**）：**归因卫生**。`adh_jni_ours_enter()/adh_jni_ours_leave()`（可嵌套，保存/恢复）内建到 `jni.c` 三个 helper（`adh_jni_app_class_loader`/`adh_jni_class_name`/`adh_jni_load_app_class`）内部，使其**无论被谁调用**（wrapper、RegisterNatives 钩子回调、`java_call`/`object_inspect`/`java_trace` 等命令路径）产生的 JNI 查找都不再被记成目标事件——挂了 `FindClass`/`GetMethodID`/`CallObjectMethod` 等槽位后，仪表自身的类名解析原本会污染事件流。同时修掉 `adh_jni_load_app_class` 把 `FindClass` 结果未判空就交给 `GetMethodID` 的崩溃隐患（失败返回 NULL）。边界如实记录：agent 主动触发的那一次调用本身仍作为普通事件出现、暂无 origin 标记。
+
 > 实现状态（v4.80，**实现 + host 验收完成，真机验收待做**）：**JNIEnv status 可过滤、并自报完整性**。表项涨到 228 后，整表回复超出旧的 32 KB 缓冲会被**静默截断**（只回一部分槽位且不说明——验证者会把"缺条目"读成"未安装"）。现在 `action:status` 用 `function` 当过滤器（与安装同语法：精确名 / 前缀 / `*后缀` / `*包含*` / `all`·`*`），另支持关键字 `installed`(仅已挂槽位)；解析与匹配和安装路径共用同一实现，回复带 `total`/`matched`/`emitted`/`truncated`，缓冲 128 KB（协议长度分帧、上限 64 MB）足够整表一次带回。安装/卸载对 `installed` 关键字显式报错（它是 status 过滤器，不是槽位名）。MCP 描述同步；v91 新增 `(3i)` 设备段断言三种视角的自洽性。
 
 > 实现状态（v4.66，**实现 + host 验收完成**）：**JNIEnv 覆盖率成为数字** + 两条评审 P1 收口。① 事件可信度：字符串拷贝/ pin 的 wrapper 在调用抛异常时**不再读缓冲区**（越界时 ART 不写 buf，读了就是拿未初始化内存当证据），失败事件写明 `<copy failed, buffer untouched>` 且 `ok=false`；`capacity=0` 显式标注歧义。② v91 对三个字符串读取器**逐个**断言（独立代码路径必须各自证明），并去掉魔数。③ `verify_v90_jni_table_abi.sh` 输出 `coverage: N/229` 与未覆盖名单（当时 119/229 = 52%，下限 115），"JNIEnv 全表可挂"从此有可跟踪的数字与待办清单。
