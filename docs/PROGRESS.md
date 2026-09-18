@@ -19,6 +19,7 @@
       · 固定槽位改为 `ADH_FIXED_SLOT_LIST` 单一来源（此前枚举与名字表是两份手写清单，v90 只查"名字↔spec index"、查不出顺序）：枚举值、名字表顺序、`env_slot_name()` 的期望名全由它展开。
       · **这同时修掉一个 v4.75 引入的真 bug**：那 13 个新槽位在枚举与名字表里的插入位置不同（`AllocObject` 在枚举里紧跟 `ReleaseDoubleArrayElements`，在表里却排在 `SetObjectArrayElement` 之后），于是 `GetArrayLength`/`NewObjectArray`/`GetObjectArrayElement`/`SetObjectArrayElement` 这四个槽位安装时会命中"隔壁"的 case——正是字段族那种静默错位（评审 P2-1 预测的同一类问题），只是这次由单一来源从根上消除。
       · 运行期自检 `env_hook_layout_ok()`：对全部 228 个位置比较"枚举给出的名字"与"表里的名字"，任何不一致 → **拒绝 install/uninstall/status**，并报"第 N 位：枚举说是 X、表里是 Y——拒绝 patch 任何东西"（结果缓存，不重复扫描）。
+        诚实说明它的价值分布：对已经单一来源的两块（固定槽位、字段访问器）这条自检接近同义反复、只是兜底；对仍是"手写 `= prev + 3` 链 + 家族 X-macro 列表"两套的 Call*/CallNonvirtual 家族（31 个），它才是真正的门禁——那一层目前还靠这条自检 + v4.81 的组基址断言守着。
       · v90 改成解析新列表，并断言固定槽位恰好 99 条（少一条/多一条都要显式改门禁）。
       · 验收：agent 零告警重建（1018 KB）；v90 PASS（228/229）；host 全量门禁 **31 PASS / 0 FAIL / 84 SKIP**（115 脚本）。
 - [~] **v4.81 评审更正 + 把"整体平移"变成编译错误（2026-09-19，host 验收 PASS）**：subagent 独立复算（从各提交抽取枚举与宏、用 NDK clang 做静态断言，并带负对照）确认了字段错位，但**证伪了我对症状的描述**，这一版按事实改写文档并补上真正能挡住这类错位的门禁。
