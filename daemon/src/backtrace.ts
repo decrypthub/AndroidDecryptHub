@@ -155,6 +155,9 @@ export function symbolize(offset: bigint, symbols: DynSymbol[]): SymbolHit {
   const s = symbols[best];
   const delta = offset - s.addr;
   const exact = s.size > 0n && delta < s.size;
+  // "exact" here means the symbol's declared size COVERS this offset (the strongest statement a
+  // dynamic symbol table supports); outside that range the nearest preceding function is returned
+  // and flagged inexact.
   return { symbol: s.name, exact, symbolOffset: hex(delta), symbolSize: s.size > 0n ? hex(s.size) : null };
 }
 
@@ -170,6 +173,7 @@ export async function nativeBacktrace(opts: BacktraceOptions): Promise<any> {
   let lr = toBigInt(opts.lr);
   let source = 'explicit-fp-lr';
   let atHitCount: number | null = null;
+  let atHitTruncated = false;
 
   if (fp == null && lr == null) {
     if (opts.hookId == null) throw new Error('need hookId (uses the newest event of that hook) or explicit fp/lr');
@@ -187,10 +191,16 @@ export async function nativeBacktrace(opts: BacktraceOptions): Promise<any> {
     if (Array.isArray(hit.bt) && hit.bt.length) {
       // Captured by the agent AT THE HIT (x30 + the x29 chain). Reading the stack later would read
       // memory the process has long since reused, so this is the only trustworthy chain.
-      const parsed = hit.bt.map((v: any) => toBigInt(v)).filter((v: bigint | null): v is bigint => v != null && v !== 0n);
+      // Every entry is a RETURN ADDRESS (x30 at the hit, then [fp+8] up the chain): step back one
+      // instruction so the symbol lookup lands inside the calling function instead of the next one.
+      const parsed = hit.bt
+        .map((v: any) => toBigInt(v))
+        .filter((v: bigint | null): v is bigint => v != null && v !== 0n)
+        .map((v) => (v > 4n ? v - 4n : v));
       if (!parsed.length) throw new Error('the event carried an empty caller chain (agent backtrace capture failed)');
       pcs = parsed.slice(0, maxFrames);
       atHitCount = Number(hit.btCount ?? parsed.length);
+      atHitTruncated = hit.btTruncated === true || /true/i.test(String(hit.btTruncated ?? ''));
       source = `hook-hit(at-hit, hookId=${Number(opts.hookId)})`;
     } else if (hit.x29 !== undefined && hit.x30 !== undefined) {
       fp = toBigInt(hit.x29);
@@ -268,6 +278,10 @@ export async function nativeBacktrace(opts: BacktraceOptions): Promise<any> {
       frames.push(await describe(pc, frames.length));
     }
     if (atHitCount != null && atHitCount > pcs.length) truncated = true;
+    if (atHitTruncated) {
+      truncated = true;
+      stopReason = stopReason ?? 'frame-cap-reached';
+    }
   } else {
     if (lr == null || lr === 0n) throw new Error('no return address (x30) captured for this hit');
     // Live walk (explicit fp/lr): best effort - the stack may already have been reused.
@@ -307,8 +321,8 @@ export async function nativeBacktrace(opts: BacktraceOptions): Promise<any> {
     trusted: frames.length >= 2,
     note: frames.length >= 2
       ? (pcs
-        ? 'frames[0] is the immediate caller; the chain was captured at the hook hit (no later stack read).'
+        ? 'frames[0] is the immediate caller; the chain was captured at the hook hit (no later stack read). Return addresses are adjusted by -4 so a frame resolved at a function boundary still lands in the caller.'
         : 'frames[0] is the immediate caller (from x30); the rest come from a live x29 walk - prefer backtrace:true for an at-hit chain.')
-      : 'only the immediate caller is known: no usable frame-pointer chain at the hit (leaf callers or -fomit-frame-pointer builds).',
+      : 'only the immediate caller is known: no usable frame-pointer chain at the hit (leaf callers, -fomit-frame-pointer builds, or the agent stopped early - see stopReason).',
   };
 }

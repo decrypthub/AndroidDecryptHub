@@ -72,9 +72,10 @@ export function cryptoConstScan(buf: Buffer): { name: string; offset: string; he
 
 // Scan an ELF .so's executable segments for arm64 `svc #0` (0xd4000001) — direct
 // syscalls that bypass libc/PLT (and thus GOT hooks). E.9 L1: locate hotspots.
-export function svcScan(buf: Buffer): { hits: { fileOff: string; vaddr: string }[]; execSegs: number; scanned: number } {
+export function svcScan(buf: Buffer): { hits: { fileOff: string; vaddr: string }[]; execSegs: number; scanned: number; truncated?: boolean } {
   const hits: { fileOff: string; vaddr: string }[] = [];
   let execSegs = 0, scanned = 0;
+  let truncated = false;
   if (buf.length < 64 || buf.readUInt32LE(0) !== 0x464c457f || buf[4] !== 2) return { hits, execSegs, scanned };
   const phoff = Number(buf.readBigUInt64LE(32));
   const phentsize = buf.readUInt16LE(54), phnum = buf.readUInt16LE(56);
@@ -91,10 +92,12 @@ export function svcScan(buf: Buffer): { hits: { fileOff: string; vaddr: string }
     for (let a = off; a + 4 <= end; a += 4) {
       scanned += 4;
       if (buf.readUInt32LE(a) === 0xd4000001) hits.push({ fileOff: '0x' + a.toString(16), vaddr: '0x' + (vaddr + (a - off)).toString(16) });
-      if (hits.length >= 4096) return { hits, execSegs, scanned };
+      // The cap is reported, not silent: callers must be able to tell "the module has 4096 svc sites"
+      // from "we stopped looking".
+      if (hits.length >= 4096) { truncated = true; return { hits, execSegs, scanned, truncated }; }
     }
   }
-  return { hits, execSegs, scanned };
+  return truncated ? { hits, execSegs, scanned, truncated } : { hits, execSegs, scanned };
 }
 
 export interface Insn { addr: string; bytes: string; mnemonic: string; text: string; }

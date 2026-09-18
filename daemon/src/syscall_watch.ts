@@ -45,7 +45,7 @@ export function parseSyscallToken(token: string | number): number | null {
   return byName ? Number(byName[0]) : null;
 }
 
-function resolveSyscallFilter(input: SyscallWatchOptions['syscalls']): { wanted: Set<number>; bad: string[] } | null {
+export function resolveSyscallFilter(input: SyscallWatchOptions['syscalls']): { wanted: Set<number>; bad: string[] } | null {
   if (input == null) return null;
   const list = Array.isArray(input) ? input : String(input).split(',');
   const wanted = new Set<number>();
@@ -56,6 +56,9 @@ function resolveSyscallFilter(input: SyscallWatchOptions['syscalls']): { wanted:
     const nr = parseSyscallToken(token);
     if (nr == null) bad.push(token); else wanted.add(nr);
   }
+  // An empty filter ("", [] or only commas) means "no filter" - not "match nothing", which used to
+  // fail with a message that did not even name a target.
+  if (!wanted.size && !bad.length) return null;
   return { wanted, bad };
 }
 
@@ -80,28 +83,63 @@ function isControlFlow(word: number): boolean {
   return false;
 }
 
+// Conservative "might this instruction write x8/w8?" test, used to refuse an attribution when some
+// instruction CLOSER to the svc could have overwritten the register we are about to trust. False
+// positives only cost coverage (the site is reported as ambiguous); false negatives would produce a
+// confident wrong number, which is the failure mode that matters.
+function mayWriteX8(word: number): boolean {
+  const w = word >>> 0;
+  // Loads: LDR/STR family - bit 22 = 1 means load (writes Rt), 0 means store (does not).
+  if ((w & 0x3b000000) === 0x39000000) return ((w >>> 22) & 1) === 1 && (w & 0x1f) === 8;
+  // Pair loads/stores: LDP/STP family.
+  if ((w & 0x3a000000) === 0x28000000) {
+    if (((w >>> 22) & 1) !== 1) return false;
+    return (w & 0x1f) === 8 || ((w >>> 10) & 0x1f) === 8;
+  }
+  // Everything else that can write a register (ALU/mov-family): conservative destination guess.
+  if (isControlFlow(w)) return false;
+  return (w & 0x1f) === 8;
+}
+
 export function attributeSite(buf: Buffer, fileOff: number): { nr: number | null; how: string; insns: string[] } {
   const insns: string[] = [];
+  // Walking from the svc BACKWARDS: everything seen so far is CLOSER to the svc than the candidate we
+  // are about to accept, so any of them writing x8 invalidates that candidate.
+  let shadowed = false;
   for (let i = 1; i <= 10; i++) {
     const off = fileOff - i * 4;
     if (off < 0) break;
     const word = buf.readUInt32LE(off);
-    // MOVZ x8/w8, #imm16  -> 0xd2800008 / 0x52800008 (sf / 32-bit)
     const masked = maskOf(word, 0xffe0001f);
+    // MOVZ x8/w8, #imm16  -> 0xd2800008 / 0x52800008 (sf / 32-bit)
     if (masked === 0xd2800008 || masked === 0x52800008) {
       const nr = (word >>> 5) & 0xffff;
       insns.push(`movz ${(word & 0x80000000) ? 'x8' : 'w8'}, #${nr}`);
+      if (shadowed) return { nr: null, how: 'ambiguous-write', insns };
       return { nr, how: 'movz-imm', insns };
     }
-    // MOVZ x8, #imm16, lsl #16 (high half only - low half would follow in an earlier MOVK)
-    if (masked === 0xd2a00008) {
-      const nr = ((word >>> 5) & 0xffff) << 16;
-      insns.push(`movz x8, #${(word >>> 5) & 0xffff}, lsl #16`);
-      return { nr, how: 'movz-imm-lsl16', insns };
+    // MOVZ x8/w8, #imm16, lsl #16
+    if (masked === 0xd2a00008 || masked === 0x52a00008) {
+      const half = (word >>> 5) & 0xffff;
+      insns.push(`movz ${(word & 0x80000000) ? 'x8' : 'w8'}, #${half}, lsl #16`);
+      if (shadowed) return { nr: null, how: 'ambiguous-write', insns };
+      // A MOVK closer to the svc would complete the constant; we do not model that pairing, so a
+      // value that is only the high half stays ambiguous rather than half-right.
+      return { nr: half << 16, how: 'movz-imm-lsl16', insns };
+    }
+    // MOVK x8 (keep) is part of a two-instruction constant: unmodelled, so refuse it.
+    if (masked === 0xf2800008 || masked === 0x72800008) {
+      insns.push('movk x8 (unmodelled)');
+      shadowed = true;
+      continue;
+    }
+    if (mayWriteX8(word)) {
+      insns.push('x8-write@' + off.toString(16));
+      shadowed = true;
     }
     if (isControlFlow(word)) { insns.push('stop@' + off.toString(16)); break; }
   }
-  return { nr: null, how: 'unknown', insns };
+  return { nr: null, how: shadowed ? 'ambiguous-write' : 'unknown', insns };
 }
 
 function findModule(modules: any[], name: string): any {
@@ -120,6 +158,7 @@ export async function watchSyscalls(sid: string, opts: SyscallWatchOptions): Pro
 
   const buf = await reconstructSo(sid, String(mod.base));
   const scan = svcScan(buf);
+  const scanTruncated = (scan as any).truncated === true;
   const limit = Math.max(1, Math.min(16, Math.trunc(Number(opts.limit ?? 8))));
   const base = BigInt(`0x${String(mod.base).replace(/^0x/i, '')}`);
 
@@ -152,6 +191,9 @@ export async function watchSyscalls(sid: string, opts: SyscallWatchOptions): Pro
       const addr = base + BigInt(String(hit.vaddr));
       const r = await sendCmd(sid, 'native_hook', {
         action: 'hook', mode: 'inline', module: '', symbol: '', addr: hexAddress(addr),
+        // v4.39: each event carries the caller chain captured at the hit, so a syscall can be
+        // attributed to the app function that issued it instead of only to libc.
+        backtrace: 'true',
       }, 20_000);
       if (!r.ok) throw new Error(`svc hook failed at ${hexAddress(addr)}: ${r.error ?? 'unknown error'}`);
       installed.push({
@@ -177,6 +219,7 @@ export async function watchSyscalls(sid: string, opts: SyscallWatchOptions): Pro
     limit,
     installedCount: installed.length,
     truncated: matched.length > limit,
+    scanTruncated,
     filter: filter ? [...filter.wanted].map((n) => ({ nr: n, name: syscallName(n) })) : null,
     attributedCount: attributed.filter((a) => a.nr != null).length,
     unknownCount: attributed.filter((a) => a.nr == null).length,
@@ -184,8 +227,10 @@ export async function watchSyscalls(sid: string, opts: SyscallWatchOptions): Pro
     hooks: installed,
     event: 'NATIVE_HOOK',
     syscallRegister: 'x8',
-    note: filter
+    note: (filter
       ? 'Only sites whose syscall number was attributed statically AND matched the filter are hooked; x8 in the events is the runtime number (should equal the attributed one).'
-      : 'Events from these hooks carry x8 as the syscall number; hooks[] reports the statically attributed number per site. Unhook with native_hook/unhook per hookId.',
+      : 'Events from these hooks carry x8 as the syscall number; hooks[] reports the statically attributed number per site. Unhook with native_hook/unhook per hookId.')
+      + (scanTruncated ? ' WARNING: the static scanner hit its 4096-site cap, so later sites were not examined.' : '')
+      + ' Events also carry the caller chain (bt) for native_backtrace.',
   };
 }

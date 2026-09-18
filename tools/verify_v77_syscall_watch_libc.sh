@@ -62,10 +62,16 @@ if (probe.body?.attributedCount === undefined) {
   console.log('SKIP  verify_v77_syscall_watch_libc (daemon response has no attribution counters)');
   process.exit(0);
 }
-await unhookAll(probe.body?.hooks);
+if (!(await unhookAll(probe.body?.hooks))) console.log('WARN  probe hook could not be removed; later events may be noisy');
 
 // (1) the target's own direct svc must be attributed to the right number and selectable by name.
 const direct = await post('/api/native/syscall_watch', { session, module: 'libadhdetect.so', syscalls: ['gettid'], limit: 4 });
+// Positive control for the "sandbox fixture missing" SKIP further down: a symbol that must resolve on
+// any sandbox build, so a real resolver regression cannot be excused as "the APK is old".
+const control = await post('/api/native/call', { session, module: 'libadhdetect.so', symbol: 'adh_add_target', args: ['2', '3'], confirm: true });
+if (control.body?.ok !== true) {
+  fail(`positive control failed: libadhdetect.so:adh_add_target is not callable (${control.body?.error ?? control.status}) - resolver problem, not an old APK`, control);
+}
 if (!direct.body || direct.body.installedCount !== 1) {
   fail('expected exactly one gettid svc site in libadhdetect.so', direct);
 }
@@ -82,6 +88,16 @@ if (!libc.body || Number(libc.body.installedCount) < 1) {
   fail('no uname svc site found/hooked in libc.so', libc);
 }
 if (Number(libc.body.svcCount) < 50) fail(`libc scan looks wrong (svcCount=${libc.body.svcCount})`, libc.body);
+// The header claims libc attribution IN GENERAL, not just "one uname site exists": a decoder that
+// could only resolve uname would otherwise still go green.
+const attributed = Number(libc.body.attributedCount ?? 0);
+const unknown = Number(libc.body.unknownCount ?? (Number(libc.body.svcCount) - attributed));
+if (!(attributed >= Math.floor(Number(libc.body.svcCount) * 0.9))) {
+  fail(`attribution coverage too low: attributed ${attributed} of ${libc.body.svcCount} svc sites`, libc.body);
+}
+if (unknown > Math.ceil(Number(libc.body.svcCount) * 0.1)) {
+  fail(`too many unattributed sites: unknown=${unknown} of ${libc.body.svcCount}`, libc.body);
+}
 const wrong = (libc.body.hooks ?? []).filter((h) => h?.syscall?.nr !== 160);
 if (wrong.length) fail(`filter hooked a non-uname site: ${JSON.stringify(wrong)}`, libc.body);
 
@@ -92,8 +108,10 @@ const call = await post('/api/native/call', {
 if (!call.body?.ok) {
   const err = String(call.body?.error ?? '');
   if (/not found|no such|symbol/i.test(err)) {
+    // The positive control above proved symbol resolution works, so this really is the fixture being
+    // absent (an older sandbox APK) rather than a resolver regression.
+    if (!(await unhookAll(libc.body.hooks))) console.log('WARN  libc hooks could not be removed before skipping');
     console.log('SKIP  verify_v77_syscall_watch_libc (sandbox fixture adh_libc_uname_probe missing; rebuild + install the sandbox APK)');
-    await unhookAll(libc.body.hooks);
     process.exit(0);
   }
   fail(`native_call of the uname probe failed: ${err}`, call);
@@ -113,6 +131,14 @@ while (Date.now() < deadline) {
   await sleep(120);
 }
 
+// numeric filter path: '178' must resolve to gettid exactly like the name does
+const numeric = await post('/api/native/syscall_watch', { session, module: 'libadhdetect.so', syscalls: ['178'], limit: 2 });
+const numericOk = Number(numeric.body?.installedCount) === 1 && Number(numeric.body?.hooks?.[0]?.syscall?.nr) === 178;
+if (!(await unhookAll(numeric.body?.hooks))) console.log('WARN  numeric-filter hooks could not be removed');
+if (!numericOk) {
+  await unhookAll(libc.body.hooks);
+  fail('numeric syscall filter (178 -> gettid) did not behave like the name filter', numeric);
+}
 const unhooked = await unhookAll(libc.body.hooks);
 const online = (await (await fetch(`${base}/api/agents`)).json().catch(() => [])).some((x) => x.online && x.package === 'com.adh.sandbox');
 console.log(JSON.stringify({
@@ -123,7 +149,7 @@ console.log(JSON.stringify({
   },
   call: { ok: call.body.ok, resultDecimal: call.body.resultDecimal },
   event: found ? { id: found.id, preview: found.preview } : null,
-  unhooked, online,
+  unhooked, online, numericFilter: { installed: numeric.body?.installedCount, nr: numeric.body?.hooks?.[0]?.syscall?.nr },
 }));
 const pass = call.body?.ok === true && found != null && unhooked && online;
 if (!found) console.log(`FAIL no NATIVE_HOOK event with x8=0xa0 was captured for hookIds=${hookIds.join(',')}`);

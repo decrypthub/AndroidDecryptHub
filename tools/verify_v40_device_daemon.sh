@@ -82,6 +82,7 @@ try {
   for (let attempt = 0; attempt < 3 && (opened.verified !== true || opened.foreground !== 'com.adh.sandbox'); attempt++) {
     const focus = String(spawnSync('adb', ['-s', serial, 'shell', 'dumpsys window | grep mCurrentFocus'], { encoding: 'utf8' }).stdout ?? '').trim();
     if (!/com\.android\.systemui/.test(focus)) break;   // not the OEM dialog: a real failure
+    console.log(`  (attempt ${attempt + 1}: dismissing the SystemUI dialog before retrying: ${focus})`);
     spawnSync('adb', ['-s', serial, 'shell', 'input', 'keyevent', '4'], { encoding: 'utf8' });
     await sleep(900);
     opened = await tool('phone_app', { action: 'open', package: 'com.adh.sandbox' });

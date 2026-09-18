@@ -15,6 +15,13 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [x] **v4.42 两轮独立评审的修复（backtrace / Java stack / syscall 归因）（2026-09-18，host 验收 PASS；真机复验待做）**：评审（subagent）对 v4.38–v4.40 提了 3 个 P1 + 一批 P2，逐条处理如下。
+      · **native backtrace（P1）**：① `want_backtrace` 从不在槽位复用时清空/在 reactivate 时重设 → 换目标复用槽位会**继承**上一条 hook 的采集开关（白付栈遍历开销 + 事件里多出 `bt`），现已在 `reset_context` 与 reactivate 两处修正；② agent 的 8 帧上限对 Host **不可见**（`btCount == 8 == bt.length`，看起来像完整链）→ 事件新增 `btTruncated`，Host 映射为 `stopReason: frame-cap-reached` + `truncated:true`；③ `bt[]` 里全是**返回地址**，但只有 live-walk 分支做了 `-4` 修正 → 现在两条路径一致（避免函数边界上一帧之差落到邻居函数）；④ `pthread_getattr_np` 失败会被**永久记住**导致该线程再也不能回溯 → 改为只在成功时落缓存；⑤ 符号 `exact` 的语义（"尺寸覆盖"而非"证明就是它"）写进注释与 note。
+      · **syscall 归因（P1）**：① 反向扫描只要**看到 MOVZ** 就当成"x8 最后写入"，中间若有未建模的写（`mov x8,x1`/`ldr x8,[sp]`/`movk`）会给出**自信的错号** → 新增保守谓词 `mayWriteX8()`：比候选更靠近 svc 的指令一旦可能写 x8，就返回 `ambiguous-write`（宁可不归因，不给错号）；同时补上 `movz w8,#imm,lsl #16` 形态、把未建模的 `movk` 标成 ambiguous。**真机覆盖未退**：重跑本机 libc 镜像仍是 **223/224** 归因（`movz-imm` 223 + `ambiguous-write` 1），`uname/openat/getrandom` 全在。② 单元测试里"验证控制流截断"的用例其实探到了 RET（没覆盖 `b`）→ 重写为对第二个 svc 取证，并为 `b`/`cbz`/`br` 各加一例；评审给的 4 个探针（寄存器写覆盖、load 覆盖、未建模 movk、近者优先）全部落成用例（syscall 用例 7 → 14）。③ 过滤空值（`""`/`[]`）原本会当成"过滤零命中"报错 → 现在等于"不过滤"；MCP schema 允许数字项。
+      · **验收脚本加固（P1/P2）**：v77 之前只断言"装了 ≥1 个 uname 钩"，一个**只会认 uname** 的解码器也能过 → 增加 `attributedCount ≥ 90% svcCount` 与未知率上限、加**数字过滤**用例（`178 → gettid`）、加**正对照**（先调 `adh_add_target` 证明符号解析没坏，再允许把"fixture 缺失"判为 SKIP）、卸载失败不再静默；v40 的重试会打印每次"dismissed + attempt"；runner 的 skip 判定从"日志里任何一行 `^SKIP`"收紧为"**最后一行**是 SKIP 或存在 `RESULT:SKIP`"（避免整体 PASS 的脚本因为内部提了一句 skip 被记成 skip）。
+      · 另外给 bridge 源码加了 ABI 警示注释（改 `nativeReport` 签名必须同时重生成 dex + 改 RegisterNatives 描述符，否则 dex 校验会**响亮**失败）。
+      · **待办（真机）**：`v77`（新增的比率/数字过滤断言）、`v78`（btTruncated/帧号修正）、`v79`（Java 链）、`v80` 的设备半（trace_digest 实跑）都还没在手机上跑过——本轮全部只做了 host 验证（18 → 25 条单测 + MCP shape）。
+
 - [~] **v4.41 trace 摘要（AI 自主分析 trace 日志的入口）（2026-09-18，host 验收 PASS；真机验收待做）**：QBDI 一次给 8192 条原始指令，AI 读不完也没法比较；本轮把"trace 日志 → 可读摘要"这一层补上。
       · `daemon/src/trace_digest.ts`：纯函数 `digestTrace()`（无设备可测）聚合 **循环**（只认"被分支指向"的地址作回边目标——第一版把"执行两次的调用点"也当循环，噪声很大）、**调用目标+次数**（`blr` 如实标为未解析）、**内存访问形态**（`[base+off]` 计数；第一版按逗号切操作数，把 `[x1, #0x10]` 切碎了，内存访问数恒为 0，单测当场抓到）、**立即数常量**（内置 crypto magic 表：TEA 黄金比、MD5/SHA1/SHA256 初值、FNV 等）、**分支形态**、**热点指令**，并附诚实注释（命中上限/未解析间接调用/无循环）。`traceDigest()` 负责"跑 `qbdi_trace` + 摘要 + 通过 `module_symbols.ts` 给调用点与热点符号化"。
       · 新增 MCP `trace_digest`（+ `POST /api/trace/digest`），MCP 工具数 66 → 67；模块/符号解析从 `backtrace.ts` 抽到 `module_symbols.ts` 供两者复用。

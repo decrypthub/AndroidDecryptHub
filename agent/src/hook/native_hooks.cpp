@@ -116,7 +116,8 @@ static __thread int t_stack_known;
 
 static void adh_stack_bounds_once(void) {
     if (t_stack_known) return;
-    t_stack_known = 1;
+    // Only latch SUCCESS: pthread_getattr_np can fail transiently, and latching that would disable
+    // backtrace on this thread for the rest of the process.
     pthread_attr_t attr;
     if (pthread_getattr_np(pthread_self(), &attr) != 0) return;
     void *base = NULL;
@@ -126,6 +127,7 @@ static void adh_stack_bounds_once(void) {
         t_stack_hi = (uintptr_t)base + size;
     }
     pthread_attr_destroy(&attr);
+    if (t_stack_hi) t_stack_known = 1;
 }
 
 // out[0] is the immediate caller (the value x30 held at the hit); the rest come from the frame
@@ -217,13 +219,18 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id) {
         uint64_t bt[ADH_NATIVE_BT_MAX];
         int n = 0;
         bt[n++] = in30;
-        n += adh_walk_x29(in29, bt + n, ADH_NATIVE_BT_MAX - n);
+        int walked = adh_walk_x29(in29, bt + n, ADH_NATIVE_BT_MAX - n);
+        n += walked;
+        // Say so when WE stopped at the cap: without this the host cannot tell a complete chain from
+        // a truncated one (both arrive as a full bt[] array).
+        int bt_truncated = (n >= ADH_NATIVE_BT_MAX) ? 1 : 0;
         joff = adh_json_append(json, sizeof(json), joff, "\"bt\":[");
         for (int i = 0; i < n; i++) {
             joff = adh_json_append(json, sizeof(json), joff, "%s\"0x%llx\"", i ? "," : "",
                                    (unsigned long long)bt[i]);
         }
-        joff = adh_json_append(json, sizeof(json), joff, "],\"btCount\":%d,", n);
+        joff = adh_json_append(json, sizeof(json), joff, "],\"btCount\":%d,\"btTruncated\":%s,",
+                               n, bt_truncated ? "true" : "false");
     }
     joff = adh_json_append(json, sizeof(json), joff, "\"fp\":{");
     for (int i = 0; i < 8; i++) {
@@ -369,6 +376,7 @@ static void reset_context(NativeHookContext &ctx) {
     ctx.return_set = 0;
     ctx.return_value = 0;
     ctx.arg_index = -1;
+    ctx.want_backtrace = 0;   // slot reuse must not inherit the previous hook's capture choice
     ctx.arg_value = 0;
     ctx.patched = 0;
 }
@@ -448,6 +456,7 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
             old.return_set = return_set ? 1 : 0;
             old.return_value = return_value;
             old.arg_index = arg_index;
+            old.want_backtrace = want_backtrace ? 1 : 0;
             old.arg_value = arg_value;
             copy_cstr(old.module, sizeof(old.module), module);
             copy_cstr(old.symbol, sizeof(old.symbol), symbol);

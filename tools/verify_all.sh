@@ -165,8 +165,11 @@ for entry in "${SCRIPTS[@]}"; do
     # prints either a top-level "SKIP ..." line (verify_v75) or "RESULT:SKIP" (verify_v30/31/32/34).
     # Counting those as passes would report an acceptance that never ran; counting RESULT:SKIP as a
     # failure (the old behaviour) was equally wrong. Both are counted - and printed - as skips.
-    if grep -qE '^(SKIP|RESULT:SKIP)' /tmp/vr.log; then
-      # Prefer the human line ("... SKIP (reason)"); the bare RESULT:SKIP sentinel carries no reason.
+    # A skip must be the script's FINAL result: the last non-empty line starts with SKIP (v75 style)
+    # or the script ends with the RESULT:SKIP sentinel (v30/31/32/34 style). Matching any line in the
+    # log would turn a script that merely mentions an internal skip into a skip itself.
+    last_line="$(grep -v '^[[:space:]]*$' /tmp/vr.log | tail -1)"
+    if [[ "$last_line" == SKIP* ]] || grep -q '^RESULT:SKIP' /tmp/vr.log; then
       reason="$(grep -m1 'SKIP (' /tmp/vr.log | sed -e 's/^[[:space:]]*//' -e 's/^[^A-Za-z0-9]*//')"
       [ -n "$reason" ] || reason="$(grep -m1E '^(SKIP|RESULT:SKIP)' /tmp/vr.log | sed -e 's/^RESULT:SKIP[[:space:]]*//' -e 's/^SKIP[[:space:]]*//')"
       echo "SKIP  $name ($reason)"; skip=$((skip+1))

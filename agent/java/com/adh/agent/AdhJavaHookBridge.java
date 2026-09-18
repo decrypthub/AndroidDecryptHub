@@ -11,6 +11,11 @@ import java.util.Arrays;
  * backup Method into one instance before calling LSPlant.Hook(). LSPlant routes the target
  * invocation into callback(Object[]); this class invokes the original through the backup and
  * reports one bounded event per hit to the native capture ring.
+ *
+ * IMPORTANT: nativeReport's signature is part of the ABI with libadh_agent.so. Changing it here
+ * REQUIRES regenerating the dex with tools/build_java_hook_bridge.sh AND updating the RegisterNatives
+ * descriptor in agent/src/hook/java_lsplant.cpp in the same change - otherwise the dex fails to
+ * verify (loudly) instead of silently dropping events.
  */
 public final class AdhJavaHookBridge {
     public Method backup;
