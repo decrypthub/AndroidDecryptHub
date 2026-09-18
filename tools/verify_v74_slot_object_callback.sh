@@ -112,7 +112,8 @@ const alive = pidOfSandbox().length > 0;
 
 const pass =
   objBase.call === 84 && objBase.entry !== null &&
-  objHook.ok === true && objSlots.length >= 1 &&
+  objHook.ok === true && objSlots.length === 1 &&          // only the object table holds this function
+  Number(objInfo?.skippedWritable ?? 0) === 0 &&
   objSlot != null && objSlot.kind === 'data' && /^r/.test(objSlot.perms) && !/w/.test(objSlot.perms) &&
   objSlot.orig === objFn && objSlotRead === objSlot.now && objSlot.now !== objSlot.orig &&
   objCallHooked === 84 && objHits >= 1 &&                    // the OBJECT vcall entered the thunk
@@ -121,6 +122,7 @@ const pass =
   cbBase === 304 &&
   cbDefault.ok === false && /writable slots were skipped/.test(String(cbDefault.error || '')) &&
   cbOptIn.ok === true && cbSlots.length >= 1 &&
+  Number(cbInfo?.skippedWritable ?? -1) === 0 &&
   cbSlot != null && /w/.test(cbSlot.perms) && cbSlot.kind === 'data' &&
   cbSlotRead === cbSlot.now && cbSlot.now !== cbSlot.orig &&
   cbCallHooked === 304 && cbHits >= 1 &&

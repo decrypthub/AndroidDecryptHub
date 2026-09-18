@@ -467,7 +467,12 @@ static void command_loop(int fd) {
                     // Clamp instead of dropping a too-large request back to the default: silently
                     // installing a different number than asked for is exactly what this tool must not do.
                     int nsites_flag = nsites > 64 ? 64 : (nsites > 0 ? (int)nsites : 0);
-                    cmd_native_hook(fd, id, naction, nmode, nmodule, nsymbol, naddr, nskip_original, nreturn, nargindex, nargvalue, nid, nhard_flag, nsites_flag, nscope, (strcmp(nslotsrw, "true") == 0 || strcmp(nslotsrw, "1") == 0) ? 1 : 0);                } else if (strcmp(op, "native_call") == 0) {
+                    // Accept a JSON boolean too: the daemon sends the string "true"/"false", but a
+                    // direct HTTP caller may send a real boolean, and silently treating that as
+                    // false would install less than the caller asked for.
+                    int slots_writable_flag = (strcmp(nslotsrw, "true") == 0 || strcmp(nslotsrw, "1") == 0) ? 1 : 0;
+                    if (strstr(line, "\"slotsWritable\":true") != NULL) slots_writable_flag = 1;
+                    cmd_native_hook(fd, id, naction, nmode, nmodule, nsymbol, naddr, nskip_original, nreturn, nargindex, nargvalue, nid, nhard_flag, nsites_flag, nscope, slots_writable_flag);                } else if (strcmp(op, "native_call") == 0) {
                     char cmodule[128] = "", csymbol[160] = "", caddr[32] = "", cargs[256] = "";
                     json_get_str(line, "module", cmodule, sizeof(cmodule));
                     json_get_str(line, "symbol", csymbol, sizeof(csymbol));

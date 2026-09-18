@@ -44,6 +44,7 @@ struct slot_ctx {
     void *page;
     long long scanned;
     int truncated;
+    int skipped_writable;      // slots skipped because they live in writable data
     struct slot_entry entries[ADH_SLOT_MAX_ENTRIES];
 };
 
@@ -53,6 +54,10 @@ static pthread_mutex_t g_slot_lock = PTHREAD_MUTEX_INITIALIZER;
 // by then, exactly like in the sites backend).
 static void *g_slot_last_kept_page;
 static int g_slot_last_kept_slot = -1;
+// Slots the target rewrote itself while we held the hook (common for a writable callback). Those must
+// NOT be clobbered with our stale original on revert, so the count is kept for status.
+static int g_slot_last_changed_by_target;
+static int g_slot_last_changed_slot = -1;
 
 struct slot_range { unsigned long long start, end; int exec, read, write; char path[160]; };
 
@@ -242,6 +247,7 @@ int adh_slot_hook_apply(int slot, void *target, int max_slots, const char *scope
                           allow_writable, &skipped_writable, ctx->entries, &scanned, &truncated);
     ctx->scanned = scanned;
     ctx->truncated = truncated || table_full;
+    ctx->skipped_writable = skipped_writable;
     if (count <= 0) {
         pthread_mutex_lock(&g_slot_lock);
         memset(ctx, 0, sizeof(*ctx));
@@ -344,7 +350,15 @@ int adh_slot_hook_revert(int slot, char *error, size_t error_size) {
     int count = ctx->count;
     void *page = ctx->page;
     int restored = 0;
+    int changed_by_target = 0;
     for (int i = 0; i < count; i++) {
+        void *now = *ctx->entries[i].at;
+        if (now != ctx->entries[i].thunk) {
+            // The target rewrote this slot itself (typical for a writable callback): leave ITS value
+            // alone and report it instead of clobbering it with our stale original.
+            changed_by_target++;
+            continue;
+        }
         if (!adh_swap_pointer_in_ro_page(ctx->entries[i].at, ctx->entries[i].orig) ||
             *ctx->entries[i].at != ctx->entries[i].orig) {
             pthread_mutex_unlock(&g_slot_lock);
@@ -353,6 +367,7 @@ int adh_slot_hook_revert(int slot, char *error, size_t error_size) {
         }
         restored++;
     }
+    if (changed_by_target) { g_slot_last_changed_by_target = changed_by_target; g_slot_last_changed_slot = slot; }
     memset(ctx, 0, sizeof(*ctx));
     pthread_mutex_unlock(&g_slot_lock);
 
@@ -396,10 +411,12 @@ void adh_slot_hook_slots_json(int slot, char *out, size_t out_size, size_t *used
     struct slot_ctx *ctx = &g_slot_ctx[slot];
     size_t off = *used;
     int kept = (g_slot_last_kept_slot == slot && g_slot_last_kept_page) ? 1 : 0;
+    int changed = (g_slot_last_changed_slot == slot && g_slot_last_changed_by_target > 0) ? 1 : 0;
     int n = snprintf(out + off, out_size - off,
-                     ",\"slotCount\":%d,\"scanned\":%lld,\"truncated\":\"%s\",\"pageKept\":\"%s\","
-                     "\"thunkPage\":\"0x%llx\",\"slots\":[",
-                     ctx->count, ctx->scanned, ctx->truncated ? "true" : "false", kept ? "true" : "false",
+                     ",\"slotCount\":%d,\"skippedWritable\":%d,\"scanned\":%lld,\"truncated\":\"%s\","
+                     "\"pageKept\":\"%s\",\"slotChangedByTarget\":\"%s\",\"thunkPage\":\"0x%llx\",\"slots\":[",
+                     ctx->count, ctx->skipped_writable, ctx->scanned, ctx->truncated ? "true" : "false",
+                     kept ? "true" : "false", changed ? "true" : "false",
                      (unsigned long long)(uintptr_t)ctx->page);
     if (n < 0 || (size_t)n >= out_size - off) return;
     off += (size_t)n;
