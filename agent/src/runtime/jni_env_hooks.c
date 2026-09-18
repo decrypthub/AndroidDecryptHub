@@ -93,6 +93,21 @@ enum {
     ENV_SLOT_ReleaseFloatArrayElements,
     ENV_SLOT_GetDoubleArrayElements,
     ENV_SLOT_ReleaseDoubleArrayElements,
+    // v4.75: array CREATION (the eight primitive New*Array plus NewObjectArray), array length,
+    // object-array element access and AllocObject (allocate without running a constructor).
+    ENV_SLOT_AllocObject,
+    ENV_SLOT_GetArrayLength,
+    ENV_SLOT_NewObjectArray,
+    ENV_SLOT_GetObjectArrayElement,
+    ENV_SLOT_SetObjectArrayElement,
+    ENV_SLOT_NewBooleanArray,
+    ENV_SLOT_NewByteArray,
+    ENV_SLOT_NewCharArray,
+    ENV_SLOT_NewShortArray,
+    ENV_SLOT_NewIntArray,
+    ENV_SLOT_NewLongArray,
+    ENV_SLOT_NewFloatArray,
+    ENV_SLOT_NewDoubleArray,
     ENV_SLOT_GetPrimitiveArrayCritical,
     ENV_SLOT_ReleasePrimitiveArrayCritical,
     // v4.63: the "native pulls Java data into its own buffer / hands Java a native buffer" entries.
@@ -217,6 +232,16 @@ struct EnvHookSlot {
     X("GetLongArrayElements") X("ReleaseLongArrayElements") \
     X("GetFloatArrayElements") X("ReleaseFloatArrayElements") \
     X("GetDoubleArrayElements") X("ReleaseDoubleArrayElements") \
+    X("GetArrayLength") X("NewObjectArray") \
+    X("GetObjectArrayElement") X("SetObjectArrayElement") X("AllocObject") \
+    X("NewBooleanArray") \
+    X("NewByteArray") \
+    X("NewCharArray") \
+    X("NewShortArray") \
+    X("NewIntArray") \
+    X("NewLongArray") \
+    X("NewFloatArray") \
+    X("NewDoubleArray") \
     X("GetPrimitiveArrayCritical") X("ReleasePrimitiveArrayCritical") \
     X("GetStringRegion") X("GetStringUTFRegion") X("GetStringChars") X("ReleaseStringChars") \
     X("Throw") X("ThrowNew") X("ExceptionOccurred") X("ExceptionDescribe") X("ExceptionClear") \
@@ -1712,6 +1737,145 @@ _Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterfa
 _Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->NewWeakGlobalRef), __typeof__(&NewWeakGlobalRef_wrapper)), "NewWeakGlobalRef_wrapper signature mismatch");
 _Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->DeleteWeakGlobalRef), __typeof__(&DeleteWeakGlobalRef_wrapper)), "DeleteWeakGlobalRef_wrapper signature mismatch");
 _Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetObjectRefType), __typeof__(&GetObjectRefType_wrapper)), "GetObjectRefType_wrapper signature mismatch");
+
+// ---- v4.75: creation, length, object arrays and AllocObject --------------------------------
+// The eight primitive array constructors share one shape (len in, array out). A length that is
+// rejected (negative) throws, and so does an allocation failure - both are reported as failed
+// rather than as a mysterious 0x0 result.
+#define ADH_DEFINE_NEW_ARRAY(JNI_NAME)                                                      \
+static jobject JNI_NAME##_wrapper(JNIEnv *env, jsize len) {                                 \
+    typedef jobject (JNICALL *fn_t)(JNIEnv *, jsize);                                       \
+    fn_t original = (fn_t)slot_original(ENV_SLOT_##JNI_NAME);                               \
+    if (!original) return NULL;                                                             \
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_##JNI_NAME)) return original(env, len); \
+    jobject result = original(env, len);                                                    \
+    int failed = (*env)->ExceptionCheck(env) ? 1 : 0;                                       \
+    char detail[128]; detail[0] = 0;                                                        \
+    if (failed) snprintf(detail, sizeof(detail), "len=%d <call failed>", (int)len);         \
+    else if (env_budget_left(ENV_SLOT_##JNI_NAME))                                          \
+        snprintf(detail, sizeof(detail), "len=%d -> %p", (int)len, (void *)result);         \
+    env_note(ENV_SLOT_##JNI_NAME, detail[0] ? detail : NULL, !failed && result != NULL);    \
+    return result;                                                                          \
+}
+
+ADH_DEFINE_NEW_ARRAY(NewBooleanArray)
+ADH_DEFINE_NEW_ARRAY(NewByteArray)
+ADH_DEFINE_NEW_ARRAY(NewCharArray)
+ADH_DEFINE_NEW_ARRAY(NewShortArray)
+ADH_DEFINE_NEW_ARRAY(NewIntArray)
+ADH_DEFINE_NEW_ARRAY(NewLongArray)
+ADH_DEFINE_NEW_ARRAY(NewFloatArray)
+ADH_DEFINE_NEW_ARRAY(NewDoubleArray)
+
+static jsize GetArrayLength_wrapper(JNIEnv *env, jarray arr) {
+    typedef jsize (JNICALL *fn_t)(JNIEnv *, jarray);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_GetArrayLength);
+    if (!original) return 0;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_GetArrayLength)) return original(env, arr);
+    jsize len = original(env, arr);
+    int failed = (*env)->ExceptionCheck(env) ? 1 : 0;
+    char detail[128]; detail[0] = 0;
+    if (failed) snprintf(detail, sizeof(detail), "array=%p <call failed>", (void *)arr);
+    else if (env_budget_left(ENV_SLOT_GetArrayLength))
+        snprintf(detail, sizeof(detail), "array=%p len=%d", (void *)arr, (int)len);
+    env_note(ENV_SLOT_GetArrayLength, detail[0] ? detail : NULL, !failed);
+    return len;
+}
+
+static jobject NewObjectArray_wrapper(JNIEnv *env, jsize len, jclass elem_class, jobject initial) {
+    typedef jobject (JNICALL *fn_t)(JNIEnv *, jsize, jclass, jobject);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_NewObjectArray);
+    if (!original) return NULL;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_NewObjectArray))
+        return original(env, len, elem_class, initial);
+    jobject result = original(env, len, elem_class, initial);
+    int failed = (*env)->ExceptionCheck(env) ? 1 : 0;
+    char detail[320]; detail[0] = 0;
+    if (failed) snprintf(detail, sizeof(detail), "len=%d <call failed>", (int)len);
+    else if (env_budget_left(ENV_SLOT_NewObjectArray)) {
+        char cls[192];
+        g_env_hook_in_ours = 1;
+        adh_jni_class_name(env, elem_class, cls, sizeof(cls));
+        g_env_hook_in_ours = 0;
+        snprintf(detail, sizeof(detail), "len=%d elem=%s initial=%p -> %p",
+                 (int)len, cls[0] ? cls : "?", (void *)initial, (void *)result);
+    }
+    env_note(ENV_SLOT_NewObjectArray, detail[0] ? detail : NULL, !failed && result != NULL);
+    return result;
+}
+
+// A NULL element is legal (it is just a null entry), so ok tracks the exception state and the text
+// says which of the two it was - an out-of-range index throws and must not look like a null read.
+static jobject GetObjectArrayElement_wrapper(JNIEnv *env, jobjectArray arr, jsize index) {
+    typedef jobject (JNICALL *fn_t)(JNIEnv *, jobjectArray, jsize);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_GetObjectArrayElement);
+    if (!original) return NULL;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_GetObjectArrayElement))
+        return original(env, arr, index);
+    jobject result = original(env, arr, index);
+    int failed = (*env)->ExceptionCheck(env) ? 1 : 0;
+    char detail[192]; detail[0] = 0;
+    if (failed) snprintf(detail, sizeof(detail), "array=%p index=%d <call failed>", (void *)arr, (int)index);
+    else if (env_budget_left(ENV_SLOT_GetObjectArrayElement))
+        snprintf(detail, sizeof(detail), "array=%p index=%d -> %p%s",
+                 (void *)arr, (int)index, (void *)result, result ? "" : " (null element)");
+    env_note(ENV_SLOT_GetObjectArrayElement, detail[0] ? detail : NULL, !failed);
+    return result;
+}
+
+static void SetObjectArrayElement_wrapper(JNIEnv *env, jobjectArray arr, jsize index, jobject value) {
+    typedef void (JNICALL *fn_t)(JNIEnv *, jobjectArray, jsize, jobject);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_SetObjectArrayElement);
+    if (!original) return;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_SetObjectArrayElement)) {
+        original(env, arr, index, value);
+        return;
+    }
+    original(env, arr, index, value);
+    int failed = (*env)->ExceptionCheck(env) ? 1 : 0;
+    char detail[192]; detail[0] = 0;
+    if (failed) snprintf(detail, sizeof(detail), "array=%p index=%d value=%p <call failed>",
+                         (void *)arr, (int)index, (void *)value);
+    else if (env_budget_left(ENV_SLOT_SetObjectArrayElement))
+        snprintf(detail, sizeof(detail), "array=%p index=%d value=%p",
+                 (void *)arr, (int)index, (void *)value);
+    env_note(ENV_SLOT_SetObjectArrayElement, detail[0] ? detail : NULL, !failed);
+}
+
+static jobject AllocObject_wrapper(JNIEnv *env, jclass clazz) {
+    typedef jobject (JNICALL *fn_t)(JNIEnv *, jclass);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_AllocObject);
+    if (!original) return NULL;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_AllocObject)) return original(env, clazz);
+    jobject result = original(env, clazz);
+    int failed = (*env)->ExceptionCheck(env) ? 1 : 0;
+    char detail[320]; detail[0] = 0;
+    if (failed) snprintf(detail, sizeof(detail), "class=%p <call failed>", (void *)clazz);
+    else if (env_budget_left(ENV_SLOT_AllocObject)) {
+        char cls[192];
+        g_env_hook_in_ours = 1;
+        adh_jni_class_name(env, clazz, cls, sizeof(cls));
+        g_env_hook_in_ours = 0;
+        snprintf(detail, sizeof(detail), "class=%s -> %p", cls[0] ? cls : "?", (void *)result);
+    }
+    env_note(ENV_SLOT_AllocObject, detail[0] ? detail : NULL, !failed && result != NULL);
+    return result;
+}
+
+// Compile-time type check: each wrapper must have exactly its table entry signature.
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->AllocObject), __typeof__(&AllocObject_wrapper)), "AllocObject_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetArrayLength), __typeof__(&GetArrayLength_wrapper)), "GetArrayLength_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->NewObjectArray), __typeof__(&NewObjectArray_wrapper)), "NewObjectArray_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetObjectArrayElement), __typeof__(&GetObjectArrayElement_wrapper)), "GetObjectArrayElement_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->SetObjectArrayElement), __typeof__(&SetObjectArrayElement_wrapper)), "SetObjectArrayElement_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->NewBooleanArray), __typeof__(&NewBooleanArray_wrapper)), "NewBooleanArray_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->NewByteArray), __typeof__(&NewByteArray_wrapper)), "NewByteArray_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->NewCharArray), __typeof__(&NewCharArray_wrapper)), "NewCharArray_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->NewShortArray), __typeof__(&NewShortArray_wrapper)), "NewShortArray_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->NewIntArray), __typeof__(&NewIntArray_wrapper)), "NewIntArray_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->NewLongArray), __typeof__(&NewLongArray_wrapper)), "NewLongArray_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->NewFloatArray), __typeof__(&NewFloatArray_wrapper)), "NewFloatArray_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->NewDoubleArray), __typeof__(&NewDoubleArray_wrapper)), "NewDoubleArray_wrapper signature mismatch");
 _Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->PushLocalFrame), __typeof__(&PushLocalFrame_wrapper)), "PushLocalFrame_wrapper signature mismatch");
 _Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->PopLocalFrame), __typeof__(&PopLocalFrame_wrapper)), "PopLocalFrame_wrapper signature mismatch");
 _Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->NewLocalRef), __typeof__(&NewLocalRef_wrapper)), "NewLocalRef_wrapper signature mismatch");
@@ -1846,6 +2010,20 @@ static int env_hook_spec_index(int index) {
         case ENV_SLOT_ReleaseFloatArrayElements: return 197;
         case ENV_SLOT_GetDoubleArrayElements: return 190;
         case ENV_SLOT_ReleaseDoubleArrayElements: return 198;
+        // v4.75: creation / length / object arrays / AllocObject.
+        case ENV_SLOT_AllocObject: return 27;
+        case ENV_SLOT_GetArrayLength: return 171;
+        case ENV_SLOT_NewObjectArray: return 172;
+        case ENV_SLOT_GetObjectArrayElement: return 173;
+        case ENV_SLOT_SetObjectArrayElement: return 174;
+        case ENV_SLOT_NewBooleanArray: return 175;
+        case ENV_SLOT_NewByteArray: return 176;
+        case ENV_SLOT_NewCharArray: return 177;
+        case ENV_SLOT_NewShortArray: return 178;
+        case ENV_SLOT_NewIntArray: return 179;
+        case ENV_SLOT_NewLongArray: return 180;
+        case ENV_SLOT_NewFloatArray: return 181;
+        case ENV_SLOT_NewDoubleArray: return 182;
         case ENV_SLOT_GetByteArrayRegion: return 200;
         case ENV_SLOT_SetByteArrayRegion: return 208;
         case ENV_SLOT_GetPrimitiveArrayCritical: return 222;
@@ -1941,6 +2119,19 @@ static void **env_hook_slot(struct JNINativeInterface *table, int index) {
         case ENV_SLOT_ReleaseFloatArrayElements: return (void **)(uintptr_t)&table->ReleaseFloatArrayElements;
         case ENV_SLOT_GetDoubleArrayElements: return (void **)(uintptr_t)&table->GetDoubleArrayElements;
         case ENV_SLOT_ReleaseDoubleArrayElements: return (void **)(uintptr_t)&table->ReleaseDoubleArrayElements;
+        case ENV_SLOT_AllocObject: return (void **)(uintptr_t)&table->AllocObject;
+        case ENV_SLOT_GetArrayLength: return (void **)(uintptr_t)&table->GetArrayLength;
+        case ENV_SLOT_NewObjectArray: return (void **)(uintptr_t)&table->NewObjectArray;
+        case ENV_SLOT_GetObjectArrayElement: return (void **)(uintptr_t)&table->GetObjectArrayElement;
+        case ENV_SLOT_SetObjectArrayElement: return (void **)(uintptr_t)&table->SetObjectArrayElement;
+        case ENV_SLOT_NewBooleanArray: return (void **)(uintptr_t)&table->NewBooleanArray;
+        case ENV_SLOT_NewByteArray: return (void **)(uintptr_t)&table->NewByteArray;
+        case ENV_SLOT_NewCharArray: return (void **)(uintptr_t)&table->NewCharArray;
+        case ENV_SLOT_NewShortArray: return (void **)(uintptr_t)&table->NewShortArray;
+        case ENV_SLOT_NewIntArray: return (void **)(uintptr_t)&table->NewIntArray;
+        case ENV_SLOT_NewLongArray: return (void **)(uintptr_t)&table->NewLongArray;
+        case ENV_SLOT_NewFloatArray: return (void **)(uintptr_t)&table->NewFloatArray;
+        case ENV_SLOT_NewDoubleArray: return (void **)(uintptr_t)&table->NewDoubleArray;
         case ENV_SLOT_GetByteArrayRegion: return (void **)(uintptr_t)&table->GetByteArrayRegion;
         case ENV_SLOT_GetPrimitiveArrayCritical: return (void **)(uintptr_t)&table->GetPrimitiveArrayCritical;
         case ENV_SLOT_GetBooleanArrayRegion: return (void **)(uintptr_t)&table->GetBooleanArrayRegion;
@@ -2029,6 +2220,19 @@ static void *env_hook_wrapper(int index) {
         case ENV_SLOT_ReleaseFloatArrayElements: return (void *)&ReleaseFloatArrayElements_wrapper;
         case ENV_SLOT_GetDoubleArrayElements: return (void *)&GetDoubleArrayElements_wrapper;
         case ENV_SLOT_ReleaseDoubleArrayElements: return (void *)&ReleaseDoubleArrayElements_wrapper;
+        case ENV_SLOT_AllocObject: return (void *)&AllocObject_wrapper;
+        case ENV_SLOT_GetArrayLength: return (void *)&GetArrayLength_wrapper;
+        case ENV_SLOT_NewObjectArray: return (void *)&NewObjectArray_wrapper;
+        case ENV_SLOT_GetObjectArrayElement: return (void *)&GetObjectArrayElement_wrapper;
+        case ENV_SLOT_SetObjectArrayElement: return (void *)&SetObjectArrayElement_wrapper;
+        case ENV_SLOT_NewBooleanArray: return (void *)&NewBooleanArray_wrapper;
+        case ENV_SLOT_NewByteArray: return (void *)&NewByteArray_wrapper;
+        case ENV_SLOT_NewCharArray: return (void *)&NewCharArray_wrapper;
+        case ENV_SLOT_NewShortArray: return (void *)&NewShortArray_wrapper;
+        case ENV_SLOT_NewIntArray: return (void *)&NewIntArray_wrapper;
+        case ENV_SLOT_NewLongArray: return (void *)&NewLongArray_wrapper;
+        case ENV_SLOT_NewFloatArray: return (void *)&NewFloatArray_wrapper;
+        case ENV_SLOT_NewDoubleArray: return (void *)&NewDoubleArray_wrapper;
         case ENV_SLOT_GetByteArrayRegion: return (void *)&GetByteArrayRegion_wrapper;
         case ENV_SLOT_GetPrimitiveArrayCritical: return (void *)&GetPrimitiveArrayCritical_wrapper;
         case ENV_SLOT_GetBooleanArrayRegion: return (void *)&GetBooleanArrayRegion_wrapper;

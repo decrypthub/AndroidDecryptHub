@@ -15,6 +15,12 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.75 JNIEnv 创建 / 长度 / 对象数组 / AllocObject（2026-09-19，host 验收 PASS；真机待做）**：覆盖名单里剩下的"跟数组有关但不在 region/elements 两族"的表项一次收完——**造数组**（8 个 `New<Type>Array` + `NewObjectArray`）、**问长度**（`GetArrayLength`）、**对象数组元素读写**（`Get/SetObjectArrayElement`）和**不开构造器直接分配对象**（`AllocObject`）。
+      · 新增 13 槽（覆盖率 **172/229 → 185/229 = 81%**）：事件分别是 `len=N -> 0x..`（造数组，含元素类名的 `elem=Class`）、`array=.. len=N`、`array=.. index=N -> 0x..`、`array=.. index=N value=0x..`、`class=Class -> 0x..`。
+      · 语义细节：`GetObjectArrayElement` 的 **NULL 元素是合法的**，所以 `ok` 跟异常状态走、文案区分 `-> 0x0 (null element)` 与越界抛异常的 `<call failed>`；`New*Array`/`AllocObject` 的 NULL 返回必然伴随异常（OOM/负数长度/Instantiation 问题），`ok` 取 `!failed && result != NULL`，不会把"没造出来"记成成功。
+      · 安全网照旧：13 条 `_Static_assert` 签名证明、索引 27/171–182 由 v90 对 `jni.h` 机检（`checked 185 indices`），覆盖率下限**再提到 185**（86 固定 + 36 字段访问器 + 21 族 ×3 = 185，与 spec 索引数一致）。
+      · 剩下的 44 个盲区已经在 v90 的未覆盖名单里点名：`CallNonvirtual*` 30 项（最大一块）、字符串 6 项（`NewString`/`GetStringLength`/`GetStringUTFLength`/`ReleaseStringUTFChars`/`Get+ReleaseStringCritical`）、反射桥 4 项（`From/ToReflected*`）、`FatalError`/`UnregisterNatives`/`ExceptionCheck`（`RegisterNatives` 已在 v4.14 的注册路径覆盖，这里是 env 表槽位口径）。
+      · 验收：agent 零告警重建（969 KB）；v90 PASS（185/229，81%）；host 全量门禁 **31 PASS / 0 FAIL / 84 SKIP**（115 脚本）。
 - [~] **v4.74 数组元素族补上设备证据路径（2026-09-19，host 构建通过；真机待做）**：v4.72 的 14 个表项此前只有 host 侧证明，按 v4.63→v4.64 / v4.70→v4.71 的老规矩补齐真机路径，且这次带上**语义不变量的证明**。
       · 沙盒 native 夹具 `Detection.jniArrayElementsProbe`：七种类型各"Set 种子 → Get 拿指针 → 改第 0 个元素 → Release(copyback) → GetArrayRegion 回读"，回读必须**正好**等于改写后的期望值（`memcmp` 比较 want/back，不是"没等于旧值就算过"）；再多跑一轮 `int[]` + `JNI_ABORT`，回读必须仍是旧值——**hook 不许把 abort 变成 commit**。全过才返回 `0xAD80FF`（7 位类型 + 0x80 abort）。
       · `tools/verify_v91_jni_env_fields.sh` 新增 `(3h)` 段：能力前置检查（旧 agent → SKIP）、夹具缺失（旧 APK → SKIP）、逐个安装 14 个表项 → 触发 → 断言**每个表项各有自己的事件**且形状正确（`len=4`、`elements=0x<非零>`、Get 带 `isCopy=0|1`、Release 带 `mode=<n>(...)`、`first=[…]`）→ Release 预览逐类型精确匹配（copyback）→ abort 轮必须出现 `mode=2(abort)` 且预览里带着那个被丢弃的值 → 逐个卸载；`pass` 表达式纳入 `elementsProbeOk`，事件窗口照旧印 capture health。
