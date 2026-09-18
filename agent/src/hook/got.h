@@ -7,6 +7,8 @@ extern "C" {
 #endif
 
 int adh_got_replace(const char *module_substr, void *orig, void *wrapper);
+// 1 when addr is one of the module's relocation (GOT) slots, 0 for plain data / unknown.
+int adh_got_is_slot(const char *module, void *addr);
 int adh_got_replace_by_name(const char *module_substr, const char *symbol, void *wrapper);
 // Exact-module replacement that also returns the first slot address and its previous value.
 // Returns the number of modules replaced; callers that need one unambiguous slot must

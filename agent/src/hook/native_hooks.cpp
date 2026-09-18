@@ -5,6 +5,7 @@
 #include "got.h"
 #include "native_inline.h"
 #include "site_hooks.h"
+#include "slot_hooks.h"
 #include "../capture/capture.h"
 
 #include <android/log.h>
@@ -42,7 +43,7 @@ struct NativeHookContext {
     int patched;             // inline stub remains installed (soft unhook / reactivation)
     unsigned char prologue[24];   // original bytes captured before the inline patch
     int prologue_len;             // 0 when not captured / not an inline hook
-    int site_count;               // mode 2: how many call sites were rewritten
+    int site_count;               // mode 2: how many call sites were rewritten (mode 3: slots patched)
     char sites_scope[48];         // mode 2: where they were searched ("module" / "all" / a module name)
 };
 
@@ -73,7 +74,7 @@ extern "C" void *g_native_hook_originals[ADH_NATIVE_MAX_HOOKS] = {};
 static const char *kind_name(int hook_id) {
     if (hook_id < 0 || hook_id >= ADH_NATIVE_MAX_HOOKS) return "?";
     const int mode = g_native_hooks[hook_id].mode;
-    return mode == 0 ? "got" : (mode == 1 ? "inline" : "sites");
+    return mode == 0 ? "got" : (mode == 1 ? "inline" : (mode == 2 ? "sites" : "vtable"));
 }
 
 static void set_error(char *error, size_t error_size, const char *format, ...) {
@@ -316,7 +317,7 @@ static void copy_cstr(char *dst, size_t size, const char *src) {
 extern "C" int adh_native_hook_install(const char *mode, const char *module, const char *symbol,
                                         const char *addr, int skip_original, int return_set,
                                         uint64_t return_value, int arg_index, uint64_t arg_value,
-                                        int max_sites, const char *sites_scope,
+                                        int max_sites, const char *sites_scope, int allow_writable_slots,
                                         int *hook_id_out, char *error, size_t error_size) {
     if (hook_id_out) *hook_id_out = 0;
     if (!mode) return (set_error(error, error_size, "need mode got|inline"), 0);
@@ -375,7 +376,7 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
         pthread_mutex_lock(&g_native_hooks_lock);
         for (int i = 0; i < ADH_NATIVE_MAX_HOOKS; i++) {
             NativeHookContext &old = g_native_hooks[i];
-            if (i == slot || old.active != 0 || old.target != target || (old.mode != 1 && old.mode != 2) || !old.replacement) continue;
+            if (i == slot || old.active != 0 || old.target != target || (old.mode != 1 && old.mode != 2 && old.mode != 3) || !old.replacement) continue;
             old.id = id;
             old.skip_original = skip_original ? 1 : 0;
             old.return_set = return_set ? 1 : 0;
@@ -434,8 +435,24 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
         original = target;
         g_native_hook_originals[slot] = target;
         hook_mode = 2;
+    } else if (strcmp(mode, "vtable") == 0) {
+        if (addr && addr[0]) {
+            target = (void *)(uintptr_t)strtoull(addr, nullptr, 0);
+        } else if (module && module[0] && symbol && symbol[0]) {
+            target = adh_resolve_sym(module, symbol);
+        }
+        if (!target) return fail("vtable hook needs address or module+symbol");
+        if (!adh_addr_is_executable(target)) return fail("vtable target is not in an executable mapping");
+        if (skip_original || return_set) {
+            return fail("vtable mode cannot replace the return value: which register carries it depends on "
+                        "the target (x0/x1 or d0/d1) - use mode=inline for skipOriginal/returnValue");
+        }
+        // The function itself is never written; only data slots that point at it are.
+        original = target;
+        g_native_hook_originals[slot] = target;
+        hook_mode = 3;
     } else {
-        return fail("mode must be got, inline or sites");
+        return fail("mode must be got, inline, sites or vtable");
     }
 
     // Reject a second hook on the same resolved target. Duplicate Dobby patches and
@@ -453,6 +470,13 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
         return fail(duplicate_error);
     }
 
+    if (hook_mode == 3) {
+        if (!adh_slot_hook_apply(slot, target, max_sites, sites_scope, allow_writable_slots, error, error_size)) {
+            char slot_error[224];
+            snprintf(slot_error, sizeof(slot_error), "%s", (error && error[0]) ? error : "vtable hook installation failed");
+            return fail(slot_error);
+        }
+    }
     if (hook_mode == 2) {
         if (!adh_site_hook_apply(slot, target, max_sites, sites_scope, error, error_size)) {
             char site_error[192];
@@ -472,13 +496,16 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
     ctx.mode = hook_mode;
     ctx.target = target;
     ctx.original = original;
-    ctx.replacement = (hook_mode == 2) ? (adh_site_hook_page(slot) ? adh_site_hook_page(slot) : stub) : stub;
+    if (hook_mode == 2) ctx.replacement = adh_site_hook_page(slot) ? adh_site_hook_page(slot) : stub;
+    else if (hook_mode == 3) ctx.replacement = adh_slot_hook_page(slot) ? adh_slot_hook_page(slot) : stub;
+    else ctx.replacement = stub;
     copy_cstr(ctx.module, sizeof(ctx.module), module);
     copy_cstr(ctx.symbol, sizeof(ctx.symbol), symbol);
     ctx.address = (uintptr_t)target;
-    ctx.site_count = (hook_mode == 2) ? adh_site_hook_count(slot) : 0;
+    ctx.site_count = (hook_mode == 2) ? adh_site_hook_count(slot)
+                    : (hook_mode == 3 ? adh_slot_hook_count(slot) : 0);
     copy_cstr(ctx.sites_scope, sizeof(ctx.sites_scope), (hook_mode == 2 && sites_scope) ? sites_scope : "");
-    ctx.patched = (hook_mode == 1 || hook_mode == 2) ? 1 : 0;
+    ctx.patched = (hook_mode == 1 || hook_mode == 2 || hook_mode == 3) ? 1 : 0;
     __atomic_store_n(&ctx.active, 1, __ATOMIC_RELEASE);
     pthread_mutex_unlock(&g_native_hooks_lock);
     g_native_hook_hits[slot].store(0ULL, std::memory_order_relaxed);
@@ -514,6 +541,21 @@ extern "C" int adh_native_hook_unhook(int hook_id, int hard, char *error, size_t
         ctx->used = 0;   // GOT restore is a real, safe unhook: free the slot
         pthread_mutex_unlock(&g_native_hooks_lock);
         LOGI("native_hook removed id=%d (got)", hook_id);
+        return 1;
+    }
+    if (ctx->mode == 3) {
+        // A vtable hook writes data pointers only; hard unhook = put the original pointers back.
+        pthread_mutex_unlock(&g_native_hooks_lock);
+        char slot_error[192] = "";
+        if (!adh_slot_hook_revert(slot, slot_error, sizeof(slot_error))) {
+            set_error(error, error_size, "%s", slot_error[0] ? slot_error : "vtable hook revert failed");
+            return 0;
+        }
+        pthread_mutex_lock(&g_native_hooks_lock);
+        reset_context(*ctx);
+        ctx->used = 0;
+        pthread_mutex_unlock(&g_native_hooks_lock);
+        LOGI("native_hook hard-unhooked id=%d (vtable slots restored)", hook_id);
         return 1;
     }
     if (ctx->mode == 2) {
@@ -601,7 +643,11 @@ extern "C" int adh_native_hook_status_json(char *out, size_t out_size) {
         if (count) hooks += ",";
         unsigned long long hits = g_native_hook_hits[i].load(std::memory_order_relaxed);
         char sitebuf[1400] = "";
-        if (ctx.mode == 2) {
+        if (ctx.mode == 3) {
+            size_t used = snprintf(sitebuf, sizeof(sitebuf), ",\"sitesScope\":\"%s\"", ctx.sites_scope);
+            if (used >= sizeof(sitebuf)) used = 0;
+            adh_slot_hook_slots_json(i, sitebuf, sizeof(sitebuf), &used);
+        } else if (ctx.mode == 2) {
             size_t used = snprintf(sitebuf, sizeof(sitebuf), ",\"sitesScope\":\"%s\"", ctx.sites_scope);
             if (used >= sizeof(sitebuf)) used = 0;
             adh_site_hook_sites_json(i, sitebuf, sizeof(sitebuf), &used);
@@ -612,7 +658,7 @@ extern "C" int adh_native_hook_status_json(char *out, size_t out_size) {
                  "\"address\":\"0x%llx\",\"target\":\"0x%llx\",\"original\":\"0x%llx\","
                  "\"replacement\":\"0x%llx\",\"hits\":%llu,\"argIndex\":%d,\"argValue\":\"0x%llx\",\"skipOriginal\":%s,\"returnSet\":%s,\"returnValue\":\"0x%llx\""
                  "%s}",
-                 ctx.id, ctx.mode == 0 ? "got" : (ctx.mode == 1 ? "inline" : "sites"), ctx.module, ctx.symbol,
+                 ctx.id, ctx.mode == 0 ? "got" : (ctx.mode == 1 ? "inline" : (ctx.mode == 2 ? "sites" : "vtable")), ctx.module, ctx.symbol,
                  (unsigned long long)ctx.address, (unsigned long long)(uintptr_t)ctx.target,
                  (unsigned long long)(uintptr_t)ctx.original,
                  (unsigned long long)(uintptr_t)ctx.replacement, hits, ctx.arg_index,

@@ -38,6 +38,11 @@ int adh_site_hook_count(int slot);
 void adh_site_hook_last_revert_json(char *out, size_t out_size);
 // Base of the first thunk page (what status shows as the "replacement"), or NULL when idle.
 void *adh_site_hook_page(int slot);
+// Write one thunk (same verified emitter the sites backend uses) into `page`. Returns the number of
+// bytes written, or 0 when the layout self-check fails. Used by pointer-slot (vtable) hooking too:
+// a slot is entered through a pointer, so its thunk has no BL-range constraint.
+int adh_site_thunk_write(void *page, void *recorder, void *original, int hook_slot);
+
 // Appends the site list (per site: address, form, module, original/current instruction, thunk, page)
 // to out, continuing from *used.
 void adh_site_hook_sites_json(int slot, char *out, size_t out_size, size_t *used);

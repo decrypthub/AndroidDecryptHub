@@ -385,6 +385,56 @@ static void *find_reloc_slot_by_symbol(unsigned long long base, const char *sym_
 
 // Find one relocation slot by symbol name and return its current resolved value. Used by the
 // native hook manager when the target symbol is imported rather than defined by the module.
+// Is addr one of this module's relocation (GOT) slots? A patched data slot that a relocation writes
+// is a GOT entry - and patching it also changes what &symbol resolves to inside that module - while
+// anything else is plain data (a vtable, a callback table). Reported per slot so the operator can
+// see which kind they just rewrote. Only the unpacked relocation tables are consulted; a slot that
+// lives in a packed (DT_ANDROID_RELA) table is reported as data.
+int adh_got_is_slot(const char *module, void *addr) {
+    if (!module || !module[0] || !addr) return 0;
+    unsigned long long base = module_base_of(module);
+    if (!base) return 0;
+    unsigned char *p = (unsigned char *)base;
+    if (memcmp(p, "\x7f" "ELF", 4) != 0) return 0;
+    unsigned long long phoff = *(unsigned long long *)(p + 32);
+    unsigned short phentsize = *(unsigned short *)(p + 54);
+    unsigned short phnum = *(unsigned short *)(p + 56);
+    unsigned long long dyn_vaddr = 0;
+    for (int i = 0; i < phnum; i++) {
+        unsigned char *ph = p + phoff + (unsigned long long)i * phentsize;
+        if (*(unsigned int *)ph == 2) { dyn_vaddr = *(unsigned long long *)(ph + 16); break; }
+    }
+    if (!dyn_vaddr) return 0;
+    unsigned long long jmprel = 0, pltrelsz = 0, rela = 0, relasz = 0, relaent = 24;
+    unsigned long long *d = (unsigned long long *)(base + dyn_vaddr);
+    for (; d[0] != 0; d += 2) {
+        if (d[0] == 23) jmprel = d[1];
+        else if (d[0] == 2) pltrelsz = d[1];
+        else if (d[0] == 7) rela = d[1];
+        else if (d[0] == 8) relasz = d[1];
+        else if (d[0] == 9) relaent = d[1];
+    }
+    if (relaent == 0) relaent = 24;
+    unsigned long long regions[2][2] = { { jmprel, pltrelsz }, { rela, relasz } };
+    for (int r = 0; r < 2; r++) {
+        unsigned long long off = regions[r][0], sz = regions[r][1];
+        if (!off || !sz) continue;
+        if (off < base) off += base;
+        for (unsigned long long e = off; e + relaent <= off + sz; e += relaent) {
+            unsigned long long r_offset = *(unsigned long long *)e;
+            unsigned long long r_info = *(unsigned long long *)(e + 8);
+            unsigned long long slot_addr = r_offset < base ? base + r_offset : r_offset;
+            if (slot_addr != (unsigned long long)(uintptr_t)addr) continue;
+            // Only the linker-managed import slots count as "GOT": R_AARCH64_GLOB_DAT (1025) and
+            // R_AARCH64_JUMP_SLOT (1026). A data pointer that merely has a R_AARCH64_RELATIVE (1027)
+            // fixup - e.g. a vtable - is plain data, and reporting it as GOT would be wrong.
+            unsigned int type = (unsigned int)(r_info & 0xffffffffu);
+            return (type == 1025u || type == 1026u) ? 1 : 0;
+        }
+    }
+    return 0;
+}
+
 int adh_got_slot_value(const char *module, const char *symbol, void **slot_out, void **value_out) {
     if (slot_out) *slot_out = NULL;
     if (value_out) *value_out = NULL;

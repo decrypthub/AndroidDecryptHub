@@ -1330,6 +1330,8 @@ MCP              →  AI 可编程操控，与 HTTP 同源
 - **最小侵入模式**：只启用 maps/dex/classloader/crypto 等低痕迹模块，关闭高痕迹 hook
 - **hook 自校验对抗**：应对目标周期性校验函数序言字节、检测 GOT 改写
 
+> 实现状态（v4.35，真机 `aa165071` 验收）：**指针槽（vtable/回调表/GOT）hook**——`native_hook mode=vtable` 扫描可读非可执行 data 段里等于目标地址的 8 字节槽，改槽不改码：函数入口、调用点、指令缓存都不动，间接调用（函数指针表，内存形态与 C++ vtable 相同；真实对象分派未单独验收）因此也能拦。逐槽回传 `kind`（只有 GLOB_DAT/JUMP_SLOT 算 `got`，vtable 里的 RELATIVE 指针算 `data`）与所在模块/映射权限；真机断言"直接读函数地址的 24 字节安装前后逐位相同" + "间接调用命中" + "相邻槽未被改" + "hard unhook 逐位还原且 thunk 页 munmap"。**已知副作用（验收里如实断言）**：改模块自己的 GOT 槽会改变该模块内 `&symbol` 的解析结果，目标自查可因此发现重定向（代码本身没有变）。默认只改只读映射里的槽，`slotsWritable:true` 才改可写槽；回滚失败时保留 thunk 页并把 `pageKept` 报到 status。
+
 > 实现状态（v4.34，真机 `aa165071` 验收）：**跨模块调用点拦截**：`scope` 选择扫描范围（`module` 默认 / `all` 所有文件映射可执行段 / 单个模块名），每个调用点各自分配 near thunk 页（跨模块调用点常超出单页的 BL 范围）；扫描按"目标模块 → /data 应用自有模块 → 系统库"排序，128 MB 预算，`scanned`/`truncated` 如实回传。沙盒新增跨模块 fixture（插件库调用目标库），真机断言 3 站点/2 模块全部命中、目标入口审计仍然干净、hard unhook 后逐位还原且所有 thunk 页 munmap。生成 thunk 后先自检（pc 相对分支与字面量）才允许安装。
 
 > 实现状态（v4.33，真机 `aa165071` 验收）：**"序言不变也能拦"** 已落地：`native_hook mode=sites` 不改目标函数，只改同模块内调用它的 `B`/`BL`（含一层 PLT/尾调用解析）到自家 near thunk（memfd 页、±128 MB 内解析、按原指令形态写回 `b`/`bl`），因此目标自校验序言时看到的是**原始字节**。验收断言"拦截真的发生"（两种形态 b/bl 各命中、hits≥1、返回值正确）、"入口审计干净"（目标自己的 24 字节序言比对 + 入口首指令不外跳 + 无匿名可执行页），并在 hard unhook 后独立读回两个调用点的字节 == agent 记录的原值、确认 thunk 页已 munmap、同进程重装仍可用。边界：只覆盖同模块直接调用（含一层 PLT/尾调用 stub）；调用点自身字节可被检查；最多 8 个调用点/hook；sites 模式**不支持** skipOriginal/returnSet（返回值 bank 依目标而定，直接 fail-loud）。

@@ -16,7 +16,7 @@ extern "C" {
 int adh_native_hook_install(const char *mode, const char *module, const char *symbol,
                             const char *addr, int skip_original, int return_set,
                             uint64_t return_value, int arg_index, uint64_t arg_value,
-                            int max_sites, const char *sites_scope,
+                            int max_sites, const char *sites_scope, int allow_writable_slots,
                             int *hook_id_out, char *error, size_t error_size);
 // hard=1 destroys the inline patch (DobbyDestroy) after a quiesce window and frees the slot;
 // hard=0 keeps the soft-unhook semantics (stub stays installed but inactive).

@@ -78,16 +78,30 @@ int adh_trace_target(void) {
     return s;   // 0+3+6+9+12 = 30
 }
 
-long adh_add_target(long a, long b);   // defined below; the call-site fixtures call it through a BL
+// Attributes MUST be on the first declaration as well: with a plain prototype here the compiler
+// inlined the body into the fixtures (the definition's noinline did not apply), which silently left
+// the call-site tests with no call at all - v70 caught that loudly.
+__attribute__((noinline, used, visibility("default")))
+long adh_add_target(long a, long b);
+// v4.35 fixture for pointer-slot ("vtable") hooking: a const table of function pointers lands in
+// .data.rel.ro (read-only after relocation), and the probe reaches adh_add_target ONLY through it,
+// so an indirect call can be intercepted without touching either the function or a call site.
+// const volatile keeps the compiler from folding the load and devirtualising the call.
+struct adh_vt { long (*add)(long, long); long (*sub)(long, long); };
 volatile long adh_site_sink;           // forces adh_site_probe_bl to make a real call instead of a tail call
 
 
 // v4.33 fixture: the ONLY caller of adh_add_target inside this module, so a call-site hook has an
 // unambiguous BL to rewrite. noinline on both sides keeps the call a real BL instead of an inlined
 // add. The entry-prologue self-audit must stay clean while this call is intercepted.
+// The arguments live in a volatile array on purpose: with literal constants the compiler folded the
+// whole call into "mov w0, #84; ret" (IPA constant propagation), which silently left the fixture with
+// no call site at all - and the sites backend then correctly reported "no B/BL call site found".
+volatile long adh_site_args[2] = { 20, 22 };
+
 __attribute__((noinline, used, visibility("default")))
 long adh_site_probe(void) {
-    return adh_add_target(20, 22);          // compiled as a tail call (b) through the PLT stub
+    return adh_add_target(adh_site_args[0], adh_site_args[1]);   // tail call (b) through the PLT stub
 }
 
 // Same call, but the result is consumed, so the compiler emits a real BL instead of a tail call.
@@ -95,13 +109,18 @@ long adh_site_probe(void) {
 // them hid a bug where a tail call was patched with a BL and the target spun at its own entry.
 __attribute__((noinline, used, visibility("default")))
 long adh_site_probe_bl(void) {
-    long v = adh_add_target(20, 22);
+    long v = adh_add_target(adh_site_args[0], adh_site_args[1]);
     adh_site_sink = v;
     return v;
 }
 
 // Deterministic active-call target: (a + b) * 2, exported for native_call acceptance.
 __attribute__((noinline, used, visibility("default")))
+__attribute__((noinline, used, visibility("default")))
+long adh_sub_target(long a, long b) {
+    return a - b;
+}
+
 long adh_add_target(long a, long b) {
     return (a + b) * 2;
 }
@@ -340,6 +359,14 @@ JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_jniCtorProbe(JNIEnv *env, 
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return 0xAD6000; }
     return (jint)(0xAD6000 | (value == 42 ? 1 : 0));
 }
+const volatile struct adh_vt adh_vtable = { adh_add_target, adh_sub_target };
+
+__attribute__((noinline, used, visibility("default")))
+long adh_slot_probe(void) {
+    long (*fn)(long, long) = adh_vtable.add;   // indirect: the address comes from the table
+    return fn(20, 22);
+}
+
 // v4.31 fixture for FP register capture and FP active calls: (float a, double b, int c) -> a*b+c.
 // Call it with f:2.5 d:4 1 to get 11.0 back in d0.
 __attribute__((noinline, used, visibility("default")))
@@ -451,6 +478,16 @@ static int adh_anti_mapping_of(unsigned long long addr, char *path, int path_siz
     }
     fclose(m);
     return found;
+}
+
+JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_slotProbe(JNIEnv *env, jclass clazz) {
+    (void)env; (void)clazz;
+    return (jint)adh_slot_probe();
+}
+
+JNIEXPORT jlong JNICALL Java_com_adh_sandbox_Detection_vtableAddress(JNIEnv *env, jclass clazz) {
+    (void)env; (void)clazz;
+    return (jlong)(uintptr_t)&adh_vtable;
 }
 
 JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_siteProbe(JNIEnv *env, jclass clazz) {

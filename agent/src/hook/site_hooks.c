@@ -688,6 +688,16 @@ int adh_site_hook_revert(int slot, char *error, size_t error_size) {
     return 1;
 }
 
+int adh_site_thunk_write(void *page, void *recorder, void *original, int hook_slot) {
+    if (!page) return 0;
+    unsigned int words[64];
+    int n = emit_thunk(words, 64, recorder, original, hook_slot);
+    if (n <= 0 || n * 4 > ADH_SITE_THUNK_STRIDE) return 0;
+    memcpy(page, words, (size_t)n * 4);
+    __builtin___clear_cache((char *)page, (char *)page + ADH_SITE_THUNK_STRIDE);
+    return n * 4;
+}
+
 int adh_site_hook_count(int slot) {
     if (slot < 0 || slot >= ADH_SITE_MAX_SLOTS) return 0;
     return g_site_ctx[slot].count;

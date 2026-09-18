@@ -45,6 +45,11 @@ object Detection {
     // v4.33 fixture for call-site ("sites") hooking: native code reaches adh_add_target through an
     // ordinary BL, which the sites backend rewrites while leaving adh_add_target's prologue intact.
     @JvmStatic external fun siteProbe(): Int
+    // v4.35 fixture: reaches adh_add_target only through a function-pointer table (indirect call), so
+    // intercepting it requires patching the data slot, not any code.
+    @JvmStatic external fun slotProbe(): Int
+    // Address of that table (slot 0 = adh_add_target, slot 1 = a different function).
+    @JvmStatic external fun vtableAddress(): Long
     // Same target reached through a real BL (result consumed) instead of a tail call, so both
     // patch forms are exercised.
     @JvmStatic external fun siteProbeBl(): Int
