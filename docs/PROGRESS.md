@@ -15,6 +15,10 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.62 v91 收口：修掉自己引入的 TDZ + 断言"摘要真的看到改写"（2026-09-19，host 语法/SKIP 验证 PASS；真机待做）**：v4.61 之后，设备脚本应当在真机上把"观测 → 改写 → 摘要"串起来。
+      · **自查抓到第二个自伤 bug**：v91 的 `overrideOk` 引用了**尚未声明**的 `const ovRestoreOk`（TDZ），真机执行到那段会直接抛 `ReferenceError`——已把还原步骤提到断言之前。
+      · 新增 `(3e)`：覆盖生效并触发探针后，再调 `jni_field_digest`，要求 **`rewrittenSamples ≥ 1`** 且存在 `rewritten ≥ 1` 的分组、其 **`lastRequested === '7'`**（即"目标想写 7、被写成 42"这件事在摘要里可见），并纳入 `pass`。
+      · `FEATURE_STATUS` §3 补上诚实的盲区说明：JNIEnv 面目前覆盖「ID 查询 + Call*/NewObject 三形态 + 数组/字符串读取 + 36 字段访问器」，`GetStringRegion`/`SetStringRegion`/`NewDirectByteBuffer`/`GetDirectBufferAddress` 等仍是盲区（同机制可加，索引由 v90 机检）。
 - [~] **v4.61 字段摘要区分"被改写的写入"（2026-09-19，host 验收 PASS；真机待做）**：评审点名这是 v4.58 之后最该补的一条——现在摘要把"native 想把 `isRooted` 写 true、被我们改成 false"和普通写入**混在一起**，而那个差值本身就是结论。
       · `daemon/src/jni_field_digest.ts`：detail 解析改成 `field=0x.. value=<应用值> [requested=<原值>]`，新增 **`rewrittenSamples`（顶层）**、**每组 `rewritten` 计数与 `lastRequested`**，并在 `notes` 里明确写出"有 N 次写入被激活的 setValue 覆盖改写"；`lastValue` 语义固定为**目标最终存下的值**（应用值），`lastRequested` 才是目标原本要写的值。
       · 单测 5 → **7**（一条证明改写被单列且 requested/applied 不混；一条证明没有覆盖时不会误报）；MCP 描述写明这层语义；`tools/verify_v92_jni_field_digest.sh` 的断言同步（最小测试数 5 → 7 + "摘要必须暴露 rewrittenSamples"）。

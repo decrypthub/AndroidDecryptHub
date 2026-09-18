@@ -125,12 +125,22 @@ const ovCall = await post('/api/java/call', { session, className: 'com.adh.sandb
 const ovRead = await post('/api/object/inspect', { session, className: 'com.adh.sandbox.HeapProbe', field: 'sConfig' });
 const counterNow = Object.fromEntries((ovRead.body?.fields ?? []).map((f) => [f.name, f.value])).counter;
 console.log(`override: calls=${ovCall.body?.result?.result} counter=${counterNow} (expect 42)`);
-const overrideOk = ovCall.body?.ok === true && counterNow === '42' && ovRestoreOk;
-// restore: unhook the override, then put the fixture back through object_set
+// restore FIRST (the assertion below is a plain conjunction, and the earlier version referenced
+// ovRestoreOk before its declaration - a TDZ crash that only a device run would have shown)
 const ovUnhook = await post('/api/jni/env_hook', { session, action: 'uninstall', function: 'SetIntField' });
 const restoreCounter = await post('/api/object/set', { session, className: 'com.adh.sandbox.HeapProbe', field: 'sConfig', targetField: 'counter', value: '7' });
 const ovRestoreOk = ovUnhook.body?.ok === true && restoreCounter.body?.ok === true;
 if (!ovRestoreOk) console.log('the override unhook / fixture restore did not report ok');
+const overrideOk = ovCall.body?.ok === true && counterNow === '42' && ovRestoreOk;
+
+// (3e) the digest must attribute the rewrite: v4.61 exists precisely so "the target asked for 7 and
+// the hook stored 42" shows up as a rewritten sample instead of an ordinary write.
+await sleep(1500);   // let the capture loop drain the events the probe just produced
+const ovDigest = await post('/api/jni/field_digest', { session, maxGroups: 20 });
+const rewrittenGroups = (ovDigest.body?.groups ?? []).filter((g) => Number(g.rewritten ?? 0) >= 1);
+console.log(`digest after override: rewrittenSamples=${ovDigest.body?.rewrittenSamples} rewrittenGroups=${rewrittenGroups.length} lastRequested=${rewrittenGroups[0]?.lastRequested}`);
+const rewriteDigestOk = Number(ovDigest.body?.rewrittenSamples ?? 0) >= 1
+  && rewrittenGroups.some((g) => g.lastRequested === '7');
 
 // (4) unhook, table restored, process alive
 const unhooked = [];
@@ -146,7 +156,8 @@ if (missing.length) console.log('no event for: ' + missing.join(', '));
 if (!digestOk) console.log('the field digest did not resolve any access to a name');
 if (!patternOk) console.log('the "*Field" pattern did not select the field family (suffix matching)');
 if (!overrideOk) console.log('the SetIntField override did not change what the target stored, or the restore failed');
-const pass = installedOk && patchedOk && relroOk && calls >= 2 && missing.length === 0 && valueOk && digestOk && patternOk && patternUnhookOk && overrideOk
+if (!rewriteDigestOk) console.log('the field digest did not report the rewritten write (rewrittenSamples/lastRequested)');
+const pass = installedOk && patchedOk && relroOk && calls >= 2 && missing.length === 0 && valueOk && digestOk && patternOk && patternUnhookOk && overrideOk && rewriteDigestOk
   && unhooked.every(Boolean) && restored && alive.length > 0;
 console.log(pass ? 'RESULT:PASS' : 'RESULT:FAIL');
 EOF
