@@ -15,6 +15,10 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.97 `native_call` 的地址守卫收敛为一份（MCP 与 REST 不再分叉）（2026-09-19，host 验收 PASS）**：v4.94 把活体校验加在 **MCP handler** 上，但 REST 路由 `/api/native/call` 直接透传 agent——而设备脚本走的正是 REST，所以那条路当时等于没校验（和早先"REST 漏参数"是同一类分叉）。
+      · 新增共享 `assertCallableAddress(sid, addr)`（memory.ts）：空地址=走 module+symbol 放行；否则取 maps → 未映射/不可执行分别给出明确错误；`mcp.ts` 与 `routes_runtime.ts` 都调用它。两个入口现在共用一份判断，改一处不会漏另一处。
+      · 顺带核对：`routes_runtime.ts` 与 `mcp.ts` 均可正常 import（78 个 MCP 工具）；daemon `node --test` **157**。
+      · 验收：host 全量门禁 **32 PASS / 0 FAIL / 84 SKIP**（116 脚本）。
 - [~] **v4.96 第八轮评审收口：2 条 P1 + 4 条 P2（2026-09-19，host 验收 PASS；真机待做）**：这一轮评审的是 v4.91–v4.93（它审的 HEAD 早于 v4.94/v4.95，所以"native_call 原始地址无校验"那条已在本分支修掉）。
       · **P1-1 dump 的 dedup 会借旧 meta**：`dumpRegion` 按 sha 命中已有工件时直接返回**旧 meta**——旧请求是 `complete:true, requestedSize:N`，新请求（2N，实际只读到 N）拿到同样的字节前缀就会命中，于是"短读"又变成了"完整"。现在 dedup 分支按**本次**请求重算 `size/requestedSize/complete` ✓。
       · **P1-2 `phone_task` 的 NaN 会把时限变成无限**：`Number('abc')` → NaN 一路穿透（`Math.max/min` 不修 NaN）→ `remainingMs() <= 0` 永不成立、注入给 `wait`/`wait_any` 的 NaN 超时让轮询永不退出、NaN retries 让 `attempt >= retries` 永假；MCP 层没有 schema 校验，所以可达。现在统一走 `finiteNumber(value, fallback, min, max)`（timeout / retries / retryDelay 全部 NaN-safe）✓。

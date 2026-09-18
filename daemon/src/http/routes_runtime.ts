@@ -12,7 +12,7 @@ import { agentPing, hookEngineSelftest, protocolSelfTest } from '../agent_probe.
 import { listDeviceDir, readDeviceFile } from '../fs_browse.ts';
 import { jniFieldDigest } from '../jni_field_digest.ts';
 import { syscallTraceStart, syscallTraceDigest, syscallTraceStop } from '../syscall_trace.ts';
-import { liveDisasm } from '../memory.ts';
+import { liveDisasm , assertCallableAddress } from '../memory.ts';
 import { readBody, SANDBOX, sessions, settings } from '../state.ts';
 import type { Route, RouteContext } from './types.ts';
 
@@ -103,6 +103,10 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
       const sid = pickSid(session);
       if (!sid || (!addr && (!module || !symbol))) return send(400, { error: 'need session and addr or module+symbol' });
       if (confirm !== true) return send(400, { error: 'native_call requires confirm:true (arbitrary target call can crash the process)' });
+      // Same guard as the MCP tool (v4.97): the two entry points must not diverge on something that
+      // decides whether an arbitrary address is called.
+      const guard = await assertCallableAddress(sid, String(addr ?? ''));
+      if (!guard.ok) return send(400, { error: guard.error });
       try {
         const r = await sendCmd(sid, 'native_call', {
           module: module ?? '', symbol: symbol ?? '', addr: addr ?? '',

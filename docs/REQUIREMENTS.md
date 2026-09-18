@@ -1384,6 +1384,8 @@ MCP              →  AI 可编程操控，与 HTTP 同源
 
 > 实现状态（v4.96，**实现 + host 验收完成**）：**第八轮评审收口**。① dump 的 dedup 按**本次**请求重算 `size/requestedSize/complete`（此前命中旧工件会借旧 meta，把短读又变成"完整"）。② `phone_task`/`phone_skill` 的超时与重试解析全部改走 NaN-safe 的 `finiteNumber()`（`Number('abc')` 曾让 deadline 失效并让 wait 无限轮询；MCP 层不做 schema 校验）。③ syscall `counters` 增加 `basis`（自安装累计 / 窗口下界）并写进 note；`qbdi_trace` 补回复缓冲过小的早退；`phone_task` 在预算耗尽时回报 `timedOut:true` 而不是普通步骤失败；`captureStoreStats(session)` 支持按 session 统计，淘汰说明抽成 `storeLossNote()` 供 syscall/java/field 三个 digest 共用。
 
+> 实现状态（v4.97，**实现 + host 验收完成**）：**`native_call` 地址守卫单一来源**。v4.94 只给 MCP handler 加了活体校验，REST 路由（设备脚本走的路径）仍是透传；现抽出共享 `assertCallableAddress(sid, addr)`（空地址放行给 module+symbol；否则取 maps 判"未映射/不可执行"）供 MCP 与 REST 共用，两端不再分叉。
+
 > 实现状态（v4.80，**实现 + host 验收完成，真机验收待做**）：**JNIEnv status 可过滤、并自报完整性**。表项涨到 228 后，整表回复超出旧的 32 KB 缓冲会被**静默截断**（只回一部分槽位且不说明——验证者会把"缺条目"读成"未安装"）。现在 `action:status` 用 `function` 当过滤器（与安装同语法：精确名 / 前缀 / `*后缀` / `*包含*` / `all`·`*`），另支持关键字 `installed`(仅已挂槽位)；解析与匹配和安装路径共用同一实现，回复带 `total`/`matched`/`emitted`/`truncated`，缓冲 128 KB（协议长度分帧、上限 64 MB）足够整表一次带回。安装/卸载对 `installed` 关键字显式报错（它是 status 过滤器，不是槽位名）。MCP 描述同步；v91 新增 `(3i)` 设备段断言三种视角的自洽性。
 
 > 实现状态（v4.66，**实现 + host 验收完成**）：**JNIEnv 覆盖率成为数字** + 两条评审 P1 收口。① 事件可信度：字符串拷贝/ pin 的 wrapper 在调用抛异常时**不再读缓冲区**（越界时 ART 不写 buf，读了就是拿未初始化内存当证据），失败事件写明 `<copy failed, buffer untouched>` 且 `ok=false`；`capacity=0` 显式标注歧义。② v91 对三个字符串读取器**逐个**断言（独立代码路径必须各自证明），并去掉魔数。③ `verify_v90_jni_table_abi.sh` 输出 `coverage: N/229` 与未覆盖名单（当时 119/229 = 52%，下限 115），"JNIEnv 全表可挂"从此有可跟踪的数字与待办清单。

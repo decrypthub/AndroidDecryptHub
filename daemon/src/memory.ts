@@ -37,6 +37,22 @@ function hexAddress(value: bigint): string {
  */
 export interface AddressClass { mapped: boolean; executable: boolean; path?: string; }
 
+/**
+ * Host-side guard shared by every native_call entry point (MCP tool and REST route): a raw address
+ * must be mapped AND executable before the agent is asked to call it. Kept here so the two paths
+ * cannot drift - the REST route used to skip the check the MCP tool performed.
+ */
+export async function assertCallableAddress(sid: string, addr: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  const trimmed = String(addr ?? '').trim();
+  if (!trimmed) return { ok: true };                      // module+symbol path; the agent resolves it
+  const maps = await sendCmd(sid, 'maps');
+  if (!maps.ok) throw new Error(maps.error ?? 'maps command failed');
+  const cls = classifyAddress(maps.regions ?? [], trimmed);
+  if (!cls.mapped) return { ok: false, error: `addr ${trimmed} is not in any mapped region of the target (stale or wrong)` };
+  if (!cls.executable) return { ok: false, error: `addr ${trimmed} is mapped${cls.path ? ' (' + cls.path + ')' : ''} but not executable - refusing to call it` };
+  return { ok: true };
+}
+
 export function classifyAddress(regions: MapsRegion[], addr: string | bigint | number): AddressClass {
   let value: bigint;
   try {

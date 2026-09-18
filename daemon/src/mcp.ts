@@ -12,7 +12,7 @@ import { analyzeSo, cryptoConstScan, svcScan, disasmSo } from './analysis.ts';
 import { parseDex, cryptoScan, searchDex, invokeXref, extractMethodCode, analyzeCoverage, rebuildStandardDex, recoverFromSnapshots } from './dex.ts';
 import { ensureDexIndex, searchDexIndex, listDexReflections } from './dex_index.ts';
 import { agentCmd, dumpAllDex, dumpBuf, dumpBufPath, dumpRegion, pickSid, repairDexHeader, sessionForPackage } from './service.ts';
-import { liveDisasm, classifyAddress } from './memory.ts';
+import { liveDisasm, assertCallableAddress } from './memory.ts';
 import { watchSyscalls, attributeSite, syscallName } from './syscall_watch.ts';
 import { nativeBacktrace } from './backtrace.ts';
 import { traceDigest } from './trace_digest.ts';
@@ -62,16 +62,10 @@ export const MCP_TOOLS: { name: string; description: string; inputSchema: any; h
     if (a.confirm !== true) return { ok: false, error: 'native_call requires confirm:true (arbitrary target call can crash the process)' };
     const sid = pickSid(a.session);
     if (!sid) throw new Error('no session');
-    // v4.94: a raw address is checked against the live maps before anything is called. A stale
-    // address (unloaded module, typo) used to reach the agent and crash the target; now it fails
-    // here, and a non-executable mapping is refused too. module+symbol resolves per call anyway.
-    if (a.addr && String(a.addr).trim() !== '') {
-      const maps = await agentCmd(sid, 'maps');
-      if (!maps.ok) throw new Error(maps.error ?? 'maps command failed');
-      const cls = classifyAddress(maps.regions ?? [], String(a.addr));
-      if (!cls.mapped) return { ok: false, error: `addr ${a.addr} is not in any mapped region of the target (stale or wrong)` };
-      if (!cls.executable) return { ok: false, error: `addr ${a.addr} is mapped${cls.path ? ' (' + cls.path + ')' : ''} but not executable - refusing to call it` };
-    }
+    // v4.94/v4.97: a raw address is checked against the live maps before anything is called - the
+    // shared guard keeps this tool and the REST route from drifting apart.
+    const guard = await assertCallableAddress(sid, String(a.addr ?? ''));
+    if (!guard.ok) return { ok: false, error: guard.error };
     return agentCmd(sid, 'native_call', { module: a.module ?? '', symbol: a.symbol ?? '', addr: a.addr ?? '', args: (a.args ?? []).map((v: any) => String(v)).join(',') }, 20_000);
   } },
 { name: 'stealth', description: 'Opt-in anti-detection for this session: with action:"on" the allocations the inline-hook backend makes while it is inside a Dobby call (typically its trampoline arena) stop being anonymous executable pages and land in a memfd-backed mapping named like the ART JIT cache, so a target that scans its own /proc/self/maps for an executable mapping without a path no longer sees the hook pool. It changes what the target process looks like (authorized use only) and requires confirm:true for on/off; status reports enabled/installed/active, the live GOT slot value next to the original mmap, how many allocations were redirected, and the memfd error when the platform refuses (then the real mmap is used and nothing is hidden). Default off; pools created by earlier hooks are not moved.', inputSchema: { type: 'object', properties: { session: S, action: { type: 'string', enum: ['on', 'off', 'status'] }, confirm: { type: 'boolean' } }, required: ['action'] }, handler: (a) => { const act = String(a.action ?? ''); if (act !== 'status' && a.confirm !== true) return Promise.resolve({ ok: false, error: 'stealth on/off requires confirm:true (it changes the target process footprint; authorized use only)' }); return agentCmd(a.session, 'stealth', { action: act }, 15_000); } },
