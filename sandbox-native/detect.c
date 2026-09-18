@@ -348,6 +348,209 @@ JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_jniArrayRegionProbe(JNIEnv
     return (jint)(0xAD7000 | bits);
 }
 
+// v4.74 fixture: drive the array-elements family (Get/Release<Type>ArrayElements). Each type is
+// seeded through Set<Type>ArrayRegion, pinned with Get<Type>ArrayElements, mutated in the pinned
+// buffer, released with mode 0 (copy back) and read back - so the release preview and the target's
+// own view of the array have to agree. A last round mutates an int[] and releases with JNI_ABORT:
+// the read-back must still show the OLD value, because the hook must not turn "discard" into
+// "commit". Returns 0xAD8000 | bits (one bit per type, 0x80 for the abort round).
+JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_jniArrayElementsProbe(JNIEnv *env, jclass clazz) {
+    (void)clazz;
+    jint bits = 0;
+    // Boolean: seed 1, 0, 1, 0 -> pin, mutate element 0 to 0, copy back
+    {
+        jbooleanArray a = (*env)->NewBooleanArray(env, 4);
+        if (!a) {
+            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+            return (jint)(0xAD8000 | bits);
+        }
+        const jboolean seed[4] = { 1, 0, 1, 0 };
+        jboolean back[4] = { 0 };
+        (*env)->SetBooleanArrayRegion(env, a, 0, 4, seed);
+        jboolean *elems = (*env)->GetBooleanArrayElements(env, a, NULL);
+        if (!elems) {
+            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+            (*env)->DeleteLocalRef(env, a);
+            return (jint)(0xAD8000 | bits);
+        }
+        elems[0] = 0;
+        (*env)->ReleaseBooleanArrayElements(env, a, elems, 0);
+        (*env)->GetBooleanArrayRegion(env, a, 0, 4, back);
+        const jboolean want[4] = { 0, seed[1], seed[2], seed[3] };
+        // The read-back has to show exactly what the pinned buffer was told to become.
+        if (memcmp(want, back, sizeof(want)) == 0) bits |= 1;
+        (*env)->DeleteLocalRef(env, a);
+    }
+    // Char: seed 65, 68, 72, 33 -> pin, mutate element 0 to 90, copy back
+    {
+        jcharArray a = (*env)->NewCharArray(env, 4);
+        if (!a) {
+            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+            return (jint)(0xAD8000 | bits);
+        }
+        const jchar seed[4] = { 65, 68, 72, 33 };
+        jchar back[4] = { 0 };
+        (*env)->SetCharArrayRegion(env, a, 0, 4, seed);
+        jchar *elems = (*env)->GetCharArrayElements(env, a, NULL);
+        if (!elems) {
+            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+            (*env)->DeleteLocalRef(env, a);
+            return (jint)(0xAD8000 | bits);
+        }
+        elems[0] = 90;
+        (*env)->ReleaseCharArrayElements(env, a, elems, 0);
+        (*env)->GetCharArrayRegion(env, a, 0, 4, back);
+        const jchar want[4] = { 90, seed[1], seed[2], seed[3] };
+        // The read-back has to show exactly what the pinned buffer was told to become.
+        if (memcmp(want, back, sizeof(want)) == 0) bits |= 2;
+        (*env)->DeleteLocalRef(env, a);
+    }
+    // Short: seed 1000, 2000, 3000, 4000 -> pin, mutate element 0 to 1111, copy back
+    {
+        jshortArray a = (*env)->NewShortArray(env, 4);
+        if (!a) {
+            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+            return (jint)(0xAD8000 | bits);
+        }
+        const jshort seed[4] = { 1000, 2000, 3000, 4000 };
+        jshort back[4] = { 0 };
+        (*env)->SetShortArrayRegion(env, a, 0, 4, seed);
+        jshort *elems = (*env)->GetShortArrayElements(env, a, NULL);
+        if (!elems) {
+            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+            (*env)->DeleteLocalRef(env, a);
+            return (jint)(0xAD8000 | bits);
+        }
+        elems[0] = 1111;
+        (*env)->ReleaseShortArrayElements(env, a, elems, 0);
+        (*env)->GetShortArrayRegion(env, a, 0, 4, back);
+        const jshort want[4] = { 1111, seed[1], seed[2], seed[3] };
+        // The read-back has to show exactly what the pinned buffer was told to become.
+        if (memcmp(want, back, sizeof(want)) == 0) bits |= 4;
+        (*env)->DeleteLocalRef(env, a);
+    }
+    // Int: seed 100000, 200000, 300000, 400000 -> pin, mutate element 0 to 111111, copy back
+    {
+        jintArray a = (*env)->NewIntArray(env, 4);
+        if (!a) {
+            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+            return (jint)(0xAD8000 | bits);
+        }
+        const jint seed[4] = { 100000, 200000, 300000, 400000 };
+        jint back[4] = { 0 };
+        (*env)->SetIntArrayRegion(env, a, 0, 4, seed);
+        jint *elems = (*env)->GetIntArrayElements(env, a, NULL);
+        if (!elems) {
+            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+            (*env)->DeleteLocalRef(env, a);
+            return (jint)(0xAD8000 | bits);
+        }
+        elems[0] = 111111;
+        (*env)->ReleaseIntArrayElements(env, a, elems, 0);
+        (*env)->GetIntArrayRegion(env, a, 0, 4, back);
+        const jint want[4] = { 111111, seed[1], seed[2], seed[3] };
+        // The read-back has to show exactly what the pinned buffer was told to become.
+        if (memcmp(want, back, sizeof(want)) == 0) bits |= 8;
+        (*env)->DeleteLocalRef(env, a);
+    }
+    // Long: seed 10000000000LL, 20000000000LL, 30000000000LL, 40000000000LL -> pin, mutate element 0 to 11111111111LL, copy back
+    {
+        jlongArray a = (*env)->NewLongArray(env, 4);
+        if (!a) {
+            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+            return (jint)(0xAD8000 | bits);
+        }
+        const jlong seed[4] = { 10000000000LL, 20000000000LL, 30000000000LL, 40000000000LL };
+        jlong back[4] = { 0 };
+        (*env)->SetLongArrayRegion(env, a, 0, 4, seed);
+        jlong *elems = (*env)->GetLongArrayElements(env, a, NULL);
+        if (!elems) {
+            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+            (*env)->DeleteLocalRef(env, a);
+            return (jint)(0xAD8000 | bits);
+        }
+        elems[0] = 11111111111LL;
+        (*env)->ReleaseLongArrayElements(env, a, elems, 0);
+        (*env)->GetLongArrayRegion(env, a, 0, 4, back);
+        const jlong want[4] = { 11111111111LL, seed[1], seed[2], seed[3] };
+        // The read-back has to show exactly what the pinned buffer was told to become.
+        if (memcmp(want, back, sizeof(want)) == 0) bits |= 16;
+        (*env)->DeleteLocalRef(env, a);
+    }
+    // Float: seed 1.5f, 2.5f, 3.5f, 4.5f -> pin, mutate element 0 to 9.5f, copy back
+    {
+        jfloatArray a = (*env)->NewFloatArray(env, 4);
+        if (!a) {
+            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+            return (jint)(0xAD8000 | bits);
+        }
+        const jfloat seed[4] = { 1.5f, 2.5f, 3.5f, 4.5f };
+        jfloat back[4] = { 0 };
+        (*env)->SetFloatArrayRegion(env, a, 0, 4, seed);
+        jfloat *elems = (*env)->GetFloatArrayElements(env, a, NULL);
+        if (!elems) {
+            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+            (*env)->DeleteLocalRef(env, a);
+            return (jint)(0xAD8000 | bits);
+        }
+        elems[0] = 9.5f;
+        (*env)->ReleaseFloatArrayElements(env, a, elems, 0);
+        (*env)->GetFloatArrayRegion(env, a, 0, 4, back);
+        const jfloat want[4] = { 9.5f, seed[1], seed[2], seed[3] };
+        // The read-back has to show exactly what the pinned buffer was told to become.
+        if (memcmp(want, back, sizeof(want)) == 0) bits |= 32;
+        (*env)->DeleteLocalRef(env, a);
+    }
+    // Double: seed 1.25, 2.25, 3.25, 4.25 -> pin, mutate element 0 to 9.75, copy back
+    {
+        jdoubleArray a = (*env)->NewDoubleArray(env, 4);
+        if (!a) {
+            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+            return (jint)(0xAD8000 | bits);
+        }
+        const jdouble seed[4] = { 1.25, 2.25, 3.25, 4.25 };
+        jdouble back[4] = { 0 };
+        (*env)->SetDoubleArrayRegion(env, a, 0, 4, seed);
+        jdouble *elems = (*env)->GetDoubleArrayElements(env, a, NULL);
+        if (!elems) {
+            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+            (*env)->DeleteLocalRef(env, a);
+            return (jint)(0xAD8000 | bits);
+        }
+        elems[0] = 9.75;
+        (*env)->ReleaseDoubleArrayElements(env, a, elems, 0);
+        (*env)->GetDoubleArrayRegion(env, a, 0, 4, back);
+        const jdouble want[4] = { 9.75, seed[1], seed[2], seed[3] };
+        // The read-back has to show exactly what the pinned buffer was told to become.
+        if (memcmp(want, back, sizeof(want)) == 0) bits |= 64;
+        (*env)->DeleteLocalRef(env, a);
+    }
+    // Abort round: the mutation must be DISCARDED by JNI_ABORT, so the array keeps its old values.
+    {
+        jintArray a = (*env)->NewIntArray(env, 4);
+        if (!a) {
+            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+            return (jint)(0xAD8000 | bits);
+        }
+        const jint seed[4] = { 100000, 200000, 300000, 400000 };
+        jint back[4] = { 0 };
+        (*env)->SetIntArrayRegion(env, a, 0, 4, seed);
+        jint *elems = (*env)->GetIntArrayElements(env, a, NULL);
+        if (!elems) {
+            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+            (*env)->DeleteLocalRef(env, a);
+            return (jint)(0xAD8000 | bits);
+        }
+        elems[1] = 999999;
+        (*env)->ReleaseIntArrayElements(env, a, elems, JNI_ABORT);
+        (*env)->GetIntArrayRegion(env, a, 0, 4, back);
+        if (back[0] == 100000 && back[1] == 200000 && back[2] == 300000 && back[3] == 400000) bits |= 0x80;
+        (*env)->DeleteLocalRef(env, a);
+    }
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return (jint)(0xAD8000 | bits); }
+    return (jint)(0xAD8000 | bits);
+}
+
 JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_jniFieldProbe(JNIEnv *env, jclass clazz) {
     (void)clazz;
     int calls = 0;

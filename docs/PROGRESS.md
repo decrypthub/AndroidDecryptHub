@@ -15,6 +15,10 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.74 数组元素族补上设备证据路径（2026-09-19，host 构建通过；真机待做）**：v4.72 的 14 个表项此前只有 host 侧证明，按 v4.63→v4.64 / v4.70→v4.71 的老规矩补齐真机路径，且这次带上**语义不变量的证明**。
+      · 沙盒 native 夹具 `Detection.jniArrayElementsProbe`：七种类型各"Set 种子 → Get 拿指针 → 改第 0 个元素 → Release(copyback) → GetArrayRegion 回读"，回读必须**正好**等于改写后的期望值（`memcmp` 比较 want/back，不是"没等于旧值就算过"）；再多跑一轮 `int[]` + `JNI_ABORT`，回读必须仍是旧值——**hook 不许把 abort 变成 commit**。全过才返回 `0xAD80FF`（7 位类型 + 0x80 abort）。
+      · `tools/verify_v91_jni_env_fields.sh` 新增 `(3h)` 段：能力前置检查（旧 agent → SKIP）、夹具缺失（旧 APK → SKIP）、逐个安装 14 个表项 → 触发 → 断言**每个表项各有自己的事件**且形状正确（`len=4`、`elements=0x<非零>`、Get 带 `isCopy=0|1`、Release 带 `mode=<n>(...)`、`first=[…]`）→ Release 预览逐类型精确匹配（copyback）→ abort 轮必须出现 `mode=2(abort)` 且预览里带着那个被丢弃的值 → 逐个卸载；`pass` 表达式纳入 `elementsProbeOk`，事件窗口照旧印 capture health。
+      · 验收：`build_detect.sh` 重建 `.so`（`llvm-nm` 可见 `Java_com_adh_sandbox_Detection_jniArrayElementsProbe`）、`:app:assembleDebug` PASS（`Detection.class` 含声明）、v91 `bash -n` + 内嵌 JS `node --check` 通过；host 全量门禁 **31 PASS / 0 FAIL / 84 SKIP**（115 脚本）。真机由 v91 一次跑完 `(3f)(3g)(3h)` 三段。
 - [~] **v4.73 评审收口：v4.70/v4.71 的 1 条 P1 + 5 条 P2 全部落地（2026-09-19，host 验收 PASS）**：评审独立复跑了 v90 的索引机检并确认 14 条签名证明、四处派发点与 `_Static_assert` 齐全（无 P0/P1 落在 agent 正确性上），报出的问题集中在"验证脚本自己会不会骗人"。
       · **P1（验证脚本）**：v91 的 `fail()` 直接 `process.exit`，而数组区域段的三个硬失败点都在逐个卸载之前——失败时目标进程的 JNIEnv 表**留着被改写的槽位**，后续脚本会看到多出来的事件。现在所有安装都记进 `installedSlots`，`fail`/`skip` 出口统一 `uninstallAll()`，各段落装卸走 `installSlot`/`uninstallSlot`（15 处终态调用全部 `await`）。
       · **P2-1（agent）**：`Get/Set<T>ArrayRegion(arr, 0, 0, NULL)` 这类**零长度无缓冲**的成功调用被记成 `ok=false`。判据改成 `!failed && (buf != NULL || len == 0)`。

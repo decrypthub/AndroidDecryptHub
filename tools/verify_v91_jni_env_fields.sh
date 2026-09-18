@@ -8,9 +8,10 @@
 # Get/SetObjectField, Get/SetStaticIntField), and require JNI_ENV events with the field id + value.
 # The RELRO checks from v58 apply too: the table page must come back read-only after the swap.
 #
-# Sections (3f) and (3g) extend the same chain: the string-copy / direct-buffer entries (v4.63/v4.65)
-# and the array-region family (v4.70) - fourteen Get/Set<Type>ArrayRegion slots that the native
-# fixture drives with fixed contents, so every entry must emit its own start/len/first=[..] event.
+# Sections (3f)-(3h) extend the same chain: the string-copy / direct-buffer entries (v4.63/v4.65), the
+# array-region family (v4.70) and the array-elements family (v4.72) - the native fixtures drive them
+# with fixed contents, so every entry must emit its own event (start/len/first=[..], plus isCopy and
+# the release mode for the element family, where a JNI_ABORT round also has to be seen discarding).
 #
 # Missing preconditions (no device / no agent / old payload without the field slots / old APK without
 # the fixture) print SKIP and exit 0 WITHOUT RESULT:PASS.
@@ -265,6 +266,71 @@ const arrayProbeOk = regionMissing.length === 0 && regionBad.length === 0 && reg
 if (regionMissing.length) console.log('no event for: ' + regionMissing.join(', '));
 if (regionBad.length) console.log('start/len/preview mismatch for: ' + regionBad.join(', '));
 
+// (3h) v4.72: the array-elements family. The fixture seeds each primitive type, pins it with
+// Get<Type>ArrayElements, mutates the pinned buffer, releases with mode 0 (copy back) and reads the
+// array back; one extra int[] round releases with JNI_ABORT, where the mutation must NOT land. Every
+// one of the fourteen entries needs its own event, and the release preview must show the values that
+// were written back - or, for the abort round, the ones that were thrown away.
+const ELEM_TYPES = ['Boolean', 'Char', 'Short', 'Int', 'Long', 'Float', 'Double'];
+const ELEM_FUNCS = ELEM_TYPES.flatMap((t) => [`Get${t}ArrayElements`, `Release${t}ArrayElements`]);
+if (ELEM_FUNCS.some((f) => !known.has(f))) await skip('agent predates the array-elements slots (redeploy the agent)');
+for (const f of ELEM_FUNCS) await installSlot(f);
+const preElem = await (await fetch(`${base}/api/captures?session=${encodeURIComponent(session)}&limit=1`)).json().catch(() => null);
+if (!preElem || !Array.isArray(preElem.captures)) await fail('could not read the capture baseline for the array-elements section');
+const elemCursor = Math.max(0, ...(preElem.captures ?? []).map((c) => Number(c.id ?? 0)));
+const elemCall = await post('/api/java/call', { session, className: 'com.adh.sandbox.Detection', method: 'jniArrayElementsProbe', params: '', args: [] });
+if (elemCall.body?.ok !== true) await skip('jniArrayElementsProbe unavailable (old APK without the v4.72 fixture?)');
+const elemCode = Number(elemCall.body?.result?.result ?? -1);
+if (elemCode !== 0xAD80FF) await fail(`jniArrayElementsProbe returned ${elemCode}, expected 0xAD80FF (seven types copied back and the abort round discarded)`);
+await sleep(1500);
+const elemList = await (await fetch(`${base}/api/captures?session=${encodeURIComponent(session)}&limit=600`)).json().catch(() => ({}));
+const elemEvents = new Map();
+for (const c of (elemList.captures ?? []).filter((x) => x.func === 'JNI_ENV' && Number(x.id ?? 0) > elemCursor)) {
+  const d = await (await fetch(`${base}/api/captures/${c.id}`)).json().catch(() => null);
+  let ev = null;
+  try { ev = JSON.parse(String(d?.text ?? '')); } catch { ev = null; }
+  if (!ev?.function || !ELEM_FUNCS.includes(ev.function)) continue;
+  if (!elemEvents.has(ev.function)) elemEvents.set(ev.function, []);
+  elemEvents.get(ev.function).push(String(ev.value ?? ''));
+}
+const elemValues = (f) => elemEvents.get(f) ?? [];
+for (const f of ELEM_FUNCS) console.log(`  event ${f}: ${elemValues(f)[0] ?? '(missing)'}`);
+const elemMissing = ELEM_FUNCS.filter((f) => elemValues(f).length === 0);
+// Structural shape per entry: a real buffer pointer, the array length, and the flag that matters for
+// that direction (isCopy on Get, the release mode on Release).
+const elemShapeBad = ELEM_FUNCS.filter((f) => {
+  const ok = elemValues(f).some((v) => /len=4/.test(v) && /elements=0x[1-9a-fA-F]/.test(v) && /first=\[/.test(v)
+    && (f.startsWith('Get') ? /isCopy=[01]/.test(v) : /mode=[012]\(/.test(v)));
+  return !ok;
+});
+// What the pinned buffer was told to become has to show up in the release preview.
+const elemExpect = {
+  Boolean: { get: '1,0,1,0', rel: '0,0,1,0' },
+  Char: { get: '65,68,72,33', rel: '90,68,72,33' },
+  Short: { get: '1000,2000,3000,4000', rel: '1111,2000,3000,4000' },
+  Int: { get: '100000,200000,300000,400000', rel: '111111,200000,300000,400000' },
+  Long: { get: '10000000000,20000000000,30000000000,40000000000', rel: '11111111111,20000000000,30000000000,40000000000' },
+  Float: { get: '1.5,2.5,3.5,4.5', rel: '9.5,2.5,3.5,4.5' },
+  Double: { get: '1.25,2.25,3.25,4.25', rel: '9.75,2.25,3.25,4.25' },
+};
+const elemBad = [];
+for (const [type, exp] of Object.entries(elemExpect)) {
+  if (!elemValues(`Get${type}ArrayElements`).some((v) => v.includes(`first=[${exp.get}]`))) elemBad.push(`Get${type}ArrayElements`);
+  if (!elemValues(`Release${type}ArrayElements`).some((v) => v.includes('mode=0(copyback)') && v.includes(`first=[${exp.rel}]`))) elemBad.push(`Release${type}ArrayElements`);
+}
+// The abort round is the one that proves the hook kept JNI_ABORT semantics: the target read back the
+// OLD values (the fixture's return code) and the event still shows the discarded mutation.
+const elemAbortOk = elemValues('ReleaseIntArrayElements').some((v) => v.includes('mode=2(abort)') && v.includes('first=[100000,999999,300000,400000]'));
+const elemHealth = elemList.health ?? {};
+console.log(`  array-elements: ${ELEM_FUNCS.length - elemMissing.length}/${ELEM_FUNCS.length} present, ${elemShapeBad.length} without shape, ${elemBad.length} with a wrong preview, abort=${elemAbortOk} (capture health: dropped=${elemHealth.dropped ?? '?'} backlog=${elemHealth.backlog ?? '?'})`);
+const elemUnhooked = [];
+for (const f of ELEM_FUNCS) elemUnhooked.push(await uninstallSlot(f));
+const elementsProbeOk = elemMissing.length === 0 && elemShapeBad.length === 0 && elemBad.length === 0 && elemAbortOk && elemUnhooked.every(Boolean);
+if (elemMissing.length) console.log('no event for: ' + elemMissing.join(', '));
+if (elemShapeBad.length) console.log('no event with len/elements/isCopy-or-mode for: ' + elemShapeBad.join(', '));
+if (elemBad.length) console.log('release preview mismatch for: ' + elemBad.join(', '));
+if (!elemAbortOk) console.log('the JNI_ABORT round did not show the discarded mutation');
+
 // (4) unhook, table restored, process alive
 const unhooked = [];
 for (const f of hooked) unhooked.push(await uninstallSlot(f));
@@ -280,7 +346,7 @@ if (!digestOk) console.log('the field digest did not resolve any access to a nam
 if (!patternOk) console.log('the "*Field" pattern did not select the field family (suffix matching)');
 if (!overrideOk) console.log('the SetIntField override did not change what the target stored, or the restore failed');
 if (!rewriteDigestOk) console.log('the field digest did not report the rewritten write (rewrittenSamples/lastRequested)');
-const pass = installedOk && patchedOk && relroOk && calls >= 2 && missing.length === 0 && valueOk && digestOk && patternOk && patternUnhookOk && overrideOk && rewriteDigestOk && stringProbeOk && arrayProbeOk
+const pass = installedOk && patchedOk && relroOk && calls >= 2 && missing.length === 0 && valueOk && digestOk && patternOk && patternUnhookOk && overrideOk && rewriteDigestOk && stringProbeOk && arrayProbeOk && elementsProbeOk
   && unhooked.every(Boolean) && restored && alive.length > 0;
 console.log(pass ? 'RESULT:PASS' : 'RESULT:FAIL');
 EOF
