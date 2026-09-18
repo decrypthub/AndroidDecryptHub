@@ -15,6 +15,30 @@ test('skips libc frames and reports the first app frame as the caller', () => {
   assert.equal(callerLabel(null), '(unknown)');
 });
 
+test('an unmapped (JIT) caller frame is used with its raw address instead of being skipped', () => {
+  const jit = { module: null, symbol: null, offset: null, address: '0x7f0012340000' };
+  const d = digestSyscallSamples([{ hookId: 1, observedNr: 278, ts: 1, tid: 1, callers: [jit] }]);
+  assert.equal(d.groups[0].caller, '0x7f0012340000 (no module)');
+});
+
+test('a nearest-preceding symbol is labelled as such instead of pretending to be exact', () => {
+  const near = { module: 'libapp.so', symbol: 'cryptoInit', offset: '0x120', address: '0x1', exact: false };
+  const exact = { module: 'libapp.so', symbol: 'cryptoInit', offset: '0x10', address: '0x1', exact: true };
+  assert.equal(callerLabel(near), 'libapp.so:cryptoInit (near)');
+  assert.equal(callerLabel(exact), 'libapp.so:cryptoInit');
+});
+
+test('the digest reports the timestamp window it actually observed', () => {
+  const d = digestSyscallSamples([
+    sample(1, 160, 500, 1, [caller('libapp.so', 'probe')]),
+    sample(1, 160, 100, 1, [caller('libapp.so', 'probe')]),
+    sample(1, 160, 900, 1, [caller('libapp.so', 'probe')]),
+  ]);
+  assert.equal(d.observedFrom, 100);
+  assert.equal(d.observedTo, 900);
+});
+
+
 test('groups by (syscall number, caller) with counts, window and tids', () => {
   const d = digestSyscallSamples([
     sample(1, 160, 100, 11, [caller('libc.so', 'uname'), caller('libapp.so', 'collectFingerprint')]),

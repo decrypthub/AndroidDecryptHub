@@ -15,19 +15,28 @@ const base = 'file:///' + String(root).replace(/\\/g, '/').replace(/^\//, '');
 const problems = [];
 const notes = [];
 
-const t = spawnSync(process.execPath, ['--test',
-  `${root}/daemon/test/syscall_digest.test.ts`,
-  `${root}/daemon/test/syscall_args.test.ts`,
-  `${root}/daemon/test/syscall_watch.test.ts`,
-  `${root}/daemon/test/trace_digest.test.ts`,
-  `${root}/daemon/test/backtrace.test.ts`], { encoding: 'utf8' });
-const text = `${t.stdout ?? ''}${t.stderr ?? ''}`;
-const passed = Number(/pass (\d+)/.exec(text)?.[1] ?? -1);
-const failed = Number(/fail (\d+)/.exec(text)?.[1] ?? -1);
-if (t.status !== 0) problems.push(`unit tests exited ${t.status}`);
-if (passed < 44) problems.push(`expected >=44 passing unit tests (10 syscall-digest + 9 syscall-args + 14 syscall + 7 trace + 4 backtrace), saw ${passed}`);
-if (failed !== 0) problems.push(`unit tests report ${failed} failures`);
-notes.push(`unit tests: pass=${passed} fail=${failed}`);
+// Per-FILE minimums: a single total would still pass if one file's tests were deleted while another
+// grew, which is exactly the hole this check is supposed to close.
+const TEST_FILES = [
+  ['syscall_digest.test.ts', 13],
+  ['syscall_args.test.ts', 15],
+  ['syscall_watch.test.ts', 14],
+  ['trace_digest.test.ts', 7],
+  ['backtrace.test.ts', 4],
+];
+let passed = 0, failed = 0;
+for (const [file, minimum] of TEST_FILES) {
+  const t = spawnSync(process.execPath, ['--test', `${root}/daemon/test/${file}`], { encoding: 'utf8' });
+  const text = `${t.stdout ?? ''}${t.stderr ?? ''}`;
+  const p = Number(/pass (\d+)/.exec(text)?.[1] ?? -1);
+  const f = Number(/fail (\d+)/.exec(text)?.[1] ?? -1);
+  if (t.status !== 0) problems.push(`${file}: exited ${t.status}`);
+  if (p < minimum) problems.push(`${file}: expected >=${minimum} passing tests, saw ${p}`);
+  if (f !== 0) problems.push(`${file}: reports ${f} failures`);
+  passed += Math.max(0, p); failed += Math.max(0, f);
+}
+if (passed < 53) problems.push(`expected >=53 passing unit tests in total, saw ${passed}`);
+notes.push(`unit tests: pass=${passed} fail=${failed} (per-file minimums enforced)`);
 
 let digestSyscallSamples;
 try {

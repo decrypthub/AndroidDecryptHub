@@ -6,11 +6,19 @@
 // (syscall number, caller symbol) and keeps the runtime x8 next to the statically attributed number,
 // so a wrong attribution shows up as a mismatch instead of silently mislabelling the hook.
 import { captures } from './state.ts';
-import { readMem } from './service.ts';
+import { sendCmd } from './service.ts';
 import { loadModuleTable, symbolizeAddresses, parseHex, hex, type SymbolizedAddress } from './module_symbols.ts';
 import { argPlan, decodeArgs, pathOf, summarizeArgs, type DecodedArg } from './syscall_args.ts';
 
-export interface SyscallCaller { module: string | null; symbol: string | null; offset: string | null }
+export interface SyscallCaller {
+  module: string | null;
+  symbol: string | null;
+  offset: string | null;
+  /** Raw frame address, kept even when no module/symbol could be resolved. */
+  address?: string;
+  /** false = the symbol is the nearest PRECEDING one, not one whose size covers the address. */
+  exact?: boolean;
+}
 export interface SyscallSample {
   hookId: number;
   ts: number;
@@ -19,6 +27,8 @@ export interface SyscallSample {
   callers: SyscallCaller[];
   regs?: bigint[];
   args?: DecodedArg[];
+  /** The immediate frame (bt[0]) even when a wrapper is the interesting caller. */
+  immediate?: SyscallCaller | null;
 }
 
 export interface SyscallGroup {
@@ -34,7 +44,6 @@ export interface SyscallGroup {
 
 export interface SyscallDigest {
   samples: number;
-  usedSamples: number;
   groups: SyscallGroup[];
   observed: { nr: number | null; count: number }[];
   mismatches: { hookId: number; attributed: number; observed: number; count: number }[];
@@ -43,17 +52,24 @@ export interface SyscallDigest {
   // fingerprint-collection signal the whole watch exists for.
   paths: { path: string; count: number }[];
   decodedSamples: number;
+  /** Timestamps the samples actually span (the caller's sinceMs window may be wider). */
+  observedFrom: number | null;
+  observedTo: number | null;
   notes: string[];
 }
 
-// Modules a syscall stub's return address is usually still inside: the interesting frame is the
-// first one OUTSIDE these, i.e. the code that called the wrapper.
+// Frames that merely WRAP the syscall: the interesting one is the first outside these, i.e. the code
+// that decided to make the call. libc is the common case; the ART/runtime libraries show up when the
+// VM itself (GC, JIT, class loading) issues syscalls and there is no app frame above it.
 const LIBC_FAMILY = /(^|\/)(libc|libc\+\+|libm|libdl|libbinder_ndk|libbase)\.so$/;
+const RUNTIME_FAMILY = /(^|\/)(libart|libartbase|libandroid_runtime|libnativehelper|libutils|libbinder|libopenjdk)\.so$/;
 
 export function pickCaller(callers: SyscallCaller[]): SyscallCaller | null {
   for (const c of callers) {
-    if (!c.module) continue;
-    if (LIBC_FAMILY.test(c.module)) continue;
+    if (c.module && (LIBC_FAMILY.test(c.module) || RUNTIME_FAMILY.test(c.module))) continue;
+    // Unmapped / JIT frames are accepted (they carry the raw address) instead of being skipped: a
+    // JITted caller is a real caller, and skipping it would attribute the syscall to a deeper frame.
+    if (!c.module && !c.address) continue;
     return c;
   }
   return callers.length ? callers[0] : null;
@@ -61,8 +77,12 @@ export function pickCaller(callers: SyscallCaller[]): SyscallCaller | null {
 
 export function callerLabel(caller: SyscallCaller | null): string {
   if (!caller) return '(unknown)';
-  if (caller.symbol) return `${caller.module ?? '?'}:${caller.symbol}`;
+  if (caller.symbol) {
+    const base = `${caller.module ?? '?'}:${caller.symbol}`;
+    return caller.exact === false ? `${base} (near)` : base;
+  }
   if (caller.module && caller.offset) return `${caller.module}+${caller.offset}`;
+  if (caller.address) return `${caller.address} (no module)`;
   return caller.module ?? '(unknown)';
 }
 
@@ -80,6 +100,8 @@ export function digestSyscallSamples(samples: SyscallSample[], opts: {
   const groupMap = new Map<string, SyscallGroup>();
   const pathMap = new Map<string, number>();
   let decodedSamples = 0;
+  let observedFrom: number | null = null;
+  let observedTo: number | null = null;
   const observedMap = new Map<string, { nr: number | null; count: number }>();
   const mismatchMap = new Map<string, { hookId: number; attributed: number; observed: number; count: number }>();
   const hooksSeen = new Set<number>();
@@ -89,6 +111,8 @@ export function digestSyscallSamples(samples: SyscallSample[], opts: {
     hooksSeen.add(s.hookId);
     const caller = pickCaller(s.callers ?? []);
     const label = callerLabel(caller);
+    if (s.ts && (observedFrom === null || s.ts < observedFrom)) observedFrom = s.ts;
+    if (s.ts && (observedTo === null || s.ts > observedTo)) observedTo = s.ts;
     const key = `${s.observedNr ?? '?'}|${label}`;
     const g = groupMap.get(key);
     if (g) {
@@ -130,18 +154,20 @@ export function digestSyscallSamples(samples: SyscallSample[], opts: {
 
   const groups = [...groupMap.values()].sort((a, b) => b.count - a.count).slice(0, maxGroups);
   if (groupMap.size > maxGroups) notes.push(`grouped by (nr, caller): showing the top ${maxGroups} of ${groupMap.size}`);
+  if (pathMap.size > maxGroups) notes.push(`paths: showing the top ${maxGroups} of ${pathMap.size}`);
   if (!list.length) notes.push('no syscall events in scope: install a watch first (syscall_watch) and trigger the target');
   if (mismatchMap.size) notes.push('attribution mismatch: the static x8 guess and the runtime x8 disagree for at least one hook - the hook sits at a site whose number is not the one that was decoded');
 
   return {
     samples: list.length,
-    usedSamples: list.length,
     groups,
     observed: [...observedMap.values()].sort((a, b) => b.count - a.count),
     mismatches: [...mismatchMap.values()],
     hooksSeen: [...hooksSeen].sort((a, b) => a - b),
     paths: [...pathMap.entries()].map(([path, count]) => ({ path, count })).sort((a, b) => b.count - a.count).slice(0, maxGroups),
     decodedSamples,
+    observedFrom,
+    observedTo,
     notes,
   };
 }
@@ -222,9 +248,16 @@ export async function syscallDigest(session: string, opts: {
     callers: r.bt.slice(0, 4).map((a) => {
       const s = symbolMap.get(hex(a));
       return s
-        ? { module: s.module, symbol: s.symbol, offset: s.moduleOffset }
-        : { module: null, symbol: null, offset: null };
+        ? { module: s.module, symbol: s.symbol, offset: s.moduleOffset, address: hex(a), exact: s.symbolExact }
+        : { module: null, symbol: null, offset: null, address: hex(a) };   // keep the address either way
     }),
+    immediate: (() => {
+      if (!r.bt.length) return null;
+      const s = symbolMap.get(hex(r.bt[0]));
+      return s
+        ? { module: s.module, symbol: s.symbol, offset: s.moduleOffset, address: hex(r.bt[0]), exact: s.symbolExact }
+        : { module: null, symbol: null, offset: null, address: hex(r.bt[0]) };
+    })(),
   }));
 
   // Argument decoding: bounded, and only for the samples that actually have a number to decode.
@@ -241,7 +274,12 @@ export async function syscallDigest(session: string, opts: {
       for (const read of plan.reads.slice(0, 2)) {
         if (read.addr === 0n || read.len <= 0) { mem[read.reg] = null; continue; }
         let buf: Buffer = Buffer.alloc(0);
-        try { buf = await readMem(session, read.addr, Math.min(read.len, 512)); } catch { buf = Buffer.alloc(0); }
+        try {
+          // 4s per read instead of readMem's 20s: decoding is bounded by decodeLimit samples and a
+          // wedged agent would otherwise multiply the timeout by the sample count.
+          const r = await sendCmd(session, 'read', { addr: read.addr.toString(16), size: Math.min(read.len, 512) }, 4_000);
+          buf = (r && r.ok && r.b64) ? Buffer.from(r.b64, 'base64') : Buffer.alloc(0);
+        } catch { buf = Buffer.alloc(0); }
         mem[read.reg] = buf && buf.length ? buf : null;
         if (!mem[read.reg]) unreadable = true;
       }

@@ -10,16 +10,27 @@ export interface DecodedArg { name: string; kind: string; value: string; note?: 
 
 export interface ArgPlan { reads: ArgRead[]; decode: string }
 
+// Values taken from the NDK's asm-generic/fcntl.h (arm64 uses asm-generic): the first version of
+// this table had O_PATH/O_SYNC/O_TMPFILE shifted by hand and reported the fingerprint-relevant
+// "O_PATH|O_CLOEXEC" probe as "O_SYNC". Composite values come first so the bit loop matches them
+// before their components.
 const OPEN_FLAGS: [number, string][] = [
-  [0x000000, 'O_RDONLY'], [0x000001, 'O_WRONLY'], [0x000002, 'O_RDWR'], [0x40, 'O_CREAT'],
-  [0x80, 'O_EXCL'], [0x100, 'O_NOCTTY'], [0x200, 'O_TRUNC'], [0x400, 'O_APPEND'],
-  [0x800, 'O_NONBLOCK'], [0x1000, 'O_DSYNC'], [0x4000, 'O_DIRECT'], [0x10000, 'O_DIRECTORY'],
-  [0x20000, 'O_NOFOLLOW'], [0x80000, 'O_CLOEXEC'], [0x200000, 'O_SYNC'], [0x400000, 'O_PATH'],
+  [0x101000, 'O_SYNC'], [0x420000, 'O_TMPFILE'],
+  [0x40, 'O_CREAT'], [0x80, 'O_EXCL'], [0x100, 'O_NOCTTY'], [0x200, 'O_TRUNC'], [0x400, 'O_APPEND'],
+  [0x800, 'O_NONBLOCK'], [0x1000, 'O_DSYNC'], [0x4000, 'O_DIRECT'], [0x10000, 'O_LARGEFILE'],
+  [0x20000, 'O_DIRECTORY'], [0x40000, 'O_NOFOLLOW'], [0x80000, 'O_CLOEXEC'], [0x100000, 'O_NOATIME'],
+  [0x200000, 'O_PATH'], [0x400000, 'O_TMPFILE_BASE'],
 ];
 const ACCESS_MODES: [number, string][] = [[0, 'F_OK'], [1, 'X_OK'], [2, 'W_OK'], [4, 'R_OK']];
 const SOCKET_DOMAINS: Record<number, string> = { 1: 'AF_UNIX', 2: 'AF_INET', 10: 'AF_INET6', 16: 'AF_NETLINK' };
 const SOCKET_TYPES: Record<number, string> = { 1: 'SOCK_STREAM', 2: 'SOCK_DGRAM', 3: 'SOCK_RAW', 5: 'SOCK_SEQPACKET' };
-const AT_FDCWD = -100n;
+const AT_FDCWD_SIGNED = -100n;
+
+/** Normalise a register value that may be the 64-bit or 32-bit two's-complement of a negative int. */
+function asSigned32(v: bigint): bigint {
+  const low = v & 0xffffffffn;
+  return BigInt.asIntN(32, low);
+}
 
 function translate(value: bigint, table: [number, string][], fallbackHex = true): string {
   const v = Number(value & 0xffffffffn);
@@ -37,7 +48,7 @@ function translate(value: bigint, table: [number, string][], fallbackHex = true)
   return parts.length ? parts.join('|') : (fallbackHex ? `0x${v.toString(16)}` : '0');
 }
 
-export function hexValue(v: bigint): string { return `0x${(v < 0n ? -v : v).toString(16)}`; }
+export function hexValue(v: bigint): string { return `${v < 0n ? '-' : ''}0x${(v < 0n ? -v : v).toString(16)}`; }
 
 // openat flags: the low two bits are the ACCESS MODE (not a bit flag), so "0x80000" must read as
 // O_RDONLY|O_CLOEXEC rather than only O_CLOEXEC.
@@ -67,9 +78,15 @@ export function argPlan(nr: number, regs: bigint[]): ArgPlan {
     // uname(buf)
     case 160: return { reads: [{ reg: 0, addr: r(0), len: 390, why: 'utsname' }], decode: 'uname' };
     // memfd_create(name, flags)
-    case 279: return { reads: [{ reg: 0, addr: r(0), len: 128, why: 'name' }], decode: 'memfd_create' };
+    case 279: return { reads: [{ reg: 0, addr: r(0), len: 256, why: 'name' }], decode: 'memfd_create' };
     // connect(fd, sockaddr, addrlen)
-    case 203: return { reads: [{ reg: 1, addr: r(1), len: 28, why: 'sockaddr' }], decode: 'connect' };
+    case 203: {
+      // addrlen is the third argument: reading 28 bytes for a sockaddr_in (16) walks into whatever
+      // follows it, which may be unmapped and cost us the whole decode.
+      const addrlen = Number(r(2) & 0xffffn);
+      const len = Math.max(16, Math.min(addrlen || 28, 128));
+      return { reads: [{ reg: 1, addr: r(1), len, why: 'sockaddr' }], decode: 'connect' };
+    }
     default: return { reads: [], decode: 'raw' };
   }
 }
@@ -77,8 +94,10 @@ export function argPlan(nr: number, regs: bigint[]): ArgPlan {
 function cstring(buf: Buffer | null | undefined, cap = 256): string | null {
   if (!buf || !buf.length) return null;
   const end = buf.indexOf(0);
-  const slice = buf.subarray(0, end >= 0 ? end : Math.min(buf.length, cap));
-  const text = slice.toString('utf8');
+  // No terminator means the read stopped before the end of the string (short read / unmapped page):
+  // returning the printable prefix would fabricate a path that was never a complete one.
+  if (end < 0) return null;
+  const text = buf.subarray(0, Math.min(end, cap)).toString('utf8');
   // Bounded/printable check: a pointer that was not a string should not become garbage in the report.
   if (!text || /[\uFFFD\u0000-\u001f]/.test(text)) return null;
   return text.length > 200 ? text.slice(0, 200) + '...' : text;
@@ -86,7 +105,8 @@ function cstring(buf: Buffer | null | undefined, cap = 256): string | null {
 
 export function decodeArgs(nr: number, regs: bigint[], mem: Record<number, Buffer | null | undefined> = {}): DecodedArg[] {
   const r = (i: number) => regs[i] ?? 0n;
-  const fd = (v: bigint) => (v === AT_FDCWD ? 'AT_FDCWD' : String(Number(v & 0xffffffffn)));
+  const fd = (v: bigint) =>
+    (v === AT_FDCWD_SIGNED || asSigned32(v) === AT_FDCWD_SIGNED) ? 'AT_FDCWD' : String(Number(v & 0xffffffffn));
   switch (nr) {
     case 56: return [
       { name: 'dirfd', kind: 'fd', value: fd(r(0)) },
@@ -114,10 +134,11 @@ export function decodeArgs(nr: number, regs: bigint[], mem: Record<number, Buffe
         { name: 'release', kind: 'string', value: field(2) },
         { name: 'version', kind: 'string', value: field(3) },
         { name: 'machine', kind: 'string', value: field(4) },
+        { name: 'domainname', kind: 'string', value: field(5) },
       ];
     }
     case 279: return [
-      { name: 'name', kind: 'string', value: cstring(mem[0], 128) ?? `${hexValue(r(0))} (unreadable)` },
+      { name: 'name', kind: 'string', value: cstring(mem[0], 256) ?? `${hexValue(r(0))} (unreadable)` },
       { name: 'flags', kind: 'hex', value: hexValue(r(1)) },
     ];
     case 203: {

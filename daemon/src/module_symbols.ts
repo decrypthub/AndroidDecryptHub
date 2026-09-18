@@ -45,15 +45,18 @@ export async function loadModuleTable(session: string): Promise<ModuleTable> {
     if (region?.path) {
       const exact = modules.find((m) => m.path === region.path);
       if (exact) return exact;
+      // The region HAS a path but the module table does not know it (memfd JIT caches, anonymous
+      // mappings, a library mapped from an archive). Do NOT fall back to a min/max span match here:
+      // base.apk's mappings span gigabytes and would swallow the frame, attributing it to a module it
+      // was never in. "no module" is the honest answer; callers keep the raw address.
+      return null;
     }
-    let best: ModuleInfo | null = null, bestSpan = 0n;
+    // No path at all: only accept a module whose OWN base is this region's start.
     for (const m of modules) {
       const base = BigInt(`0x${m.base}`), end = BigInt(`0x${m.end}`);
-      if (addr < base || addr >= end) continue;
-      const span = end - base;
-      if (!best || span < bestSpan) { best = m; bestSpan = span; }
+      if (addr >= base && addr < end && BigInt(`0x${region.start}`) === base) return m;
     }
-    return best;
+    return null;
   };
   return { regions, modules, inRegion, moduleOf };
 }
@@ -72,6 +75,7 @@ export async function symbolizeAddresses(session: string, addrs: bigint[], table
   const out = new Map<string, SymbolizedAddress>();
   const cache = new Map<string, DynSymbol[]>();
   let symbolSource = 'dynsym';
+  let dumpFailures = 0;
   for (const addr of addrs) {
     const key = hex(addr);
     if (out.has(key)) continue;
@@ -90,8 +94,10 @@ export async function symbolizeAddresses(session: string, addrs: bigint[], table
       if (!cache.has(cacheKey)) {
         try {
           const buf = await reconstructSo(session, String(mod.base));
-          cache.set(cacheKey, parseDynSymbols(buf));
-        } catch { cache.set(cacheKey, []); }
+          const parsed = parseDynSymbols(buf);
+          if (!parsed.length) dumpFailures++;
+          cache.set(cacheKey, parsed);
+        } catch { dumpFailures++; cache.set(cacheKey, []); }
       }
       syms = cache.get(cacheKey)!;
     }
@@ -101,6 +107,8 @@ export async function symbolizeAddresses(session: string, addrs: bigint[], table
       symbol: hit.symbol, symbolExact: hit.exact,
     });
   }
+  // Say when some modules could not be symbolized instead of claiming a clean dynsym run.
+  if (dumpFailures) symbolSource = symbolSource === 'dynsym' ? 'partial' : symbolSource;
   (out as any).symbolSource = symbolSource;
   return out;
 }
