@@ -5,7 +5,9 @@
 #include "../bootstrap/agent_internal.h"
 
 #include <dlfcn.h>
+#include <link.h>
 #include <fcntl.h>
+#include <stdint.h>
 #include <sys/mman.h>
 #include <unistd.h>
 
@@ -121,6 +123,17 @@ void adh_perms_of_addr(void *addr, char *out, int out_size) {
 // the by-name GOT replacement silently match nothing -> "hooked:0" with ok:true).
 static unsigned long long module_base_of(const char *name) {
     if (!name || !name[0]) return 0;
+    // Asking for OUR own module by name must never resolve to a different mapping that shares the
+    // name (the memfd load path is "jit-cache", which ART's own JIT cache also uses): answer with
+    // our own base. Derived per call - a second copy in the same process must resolve to itself.
+    Dl_info self;
+    if (dladdr((void *)(uintptr_t)adh_self_module_name, &self) && self.dli_fbase) {
+        const char *mine = self.dli_fname ? strrchr(self.dli_fname, '/') : NULL;
+        mine = mine ? mine + 1 : (self.dli_fname && self.dli_fname[0] ? self.dli_fname : "");
+        const char *wanted = strrchr(name, '/');
+        wanted = wanted ? wanted + 1 : name;
+        if (mine[0] && strcmp(mine, wanted) == 0) return (unsigned long long)(uintptr_t)self.dli_fbase;
+    }
     const char *slash = strrchr(name, '/');
     const char *wanted = slash ? slash + 1 : name;
     unsigned long long base = 0;
@@ -519,18 +532,56 @@ static int my_close(int fd) {
 // Our own module name as it appears in /proc/self/maps. Derived from dladdr rather than hardcoded:
 // the agent may be loaded from a memfd (zygisk memfd loading), in which case the path is
 // "/memfd:jit-cache (deleted)" and a hardcoded "libadh_agent.so" lookup would find nothing.
-// Distinct names may be configured, and every scan through /proc/self/maps uses this.
+// Resolved on EVERY call (no permanent cache): the agent can be loaded more than once in one
+// process (self-load + zygisk), each copy seeing its own path, so a cached name would point one
+// copy at the other. The buffer is thread-local for the same reason.
 const char *adh_self_module_name(void) {
-    static char cached[128];
-    if (cached[0]) return cached;
+    static __thread char cached[128];
+    cached[0] = 0;
     Dl_info self;
     if (dladdr((void *)(uintptr_t)adh_self_module_name, &self) && self.dli_fname && self.dli_fname[0]) {
         const char *slash = strrchr(self.dli_fname, '/');
         snprintf(cached, sizeof(cached), "%s", slash ? slash + 1 : self.dli_fname);
-    } else {
-        snprintf(cached, sizeof(cached), "libadh_agent.so");
+        return cached;
     }
+    snprintf(cached, sizeof(cached), "libadh_agent.so");
     return cached;
+}
+
+// Image span (highest PT_LOAD p_vaddr+p_memsz) of the module loaded at base. Every copy of the
+// same file shares it, which is the only stable identity for a memfd copy whose name ("jit-cache")
+// is also used by ART's own JIT cache.
+struct image_span_ctx { const void *base; unsigned long long span; };
+
+static int image_span_cb(struct dl_phdr_info *info, size_t size, void *data) {
+    (void)size;
+    struct image_span_ctx *ctx = (struct image_span_ctx *)data;
+    if ((const void *)(uintptr_t)info->dlpi_addr != ctx->base) return 0;
+    for (int i = 0; i < info->dlpi_phnum; i++) {
+        const ElfW(Phdr) *ph = &info->dlpi_phdr[i];
+        if (ph->p_type != PT_LOAD) continue;
+        unsigned long long end = (unsigned long long)ph->p_vaddr + (unsigned long long)ph->p_memsz;
+        if (end > ctx->span) ctx->span = end;
+    }
+    return 1;
+}
+
+unsigned long long adh_image_span_of(const void *base) {
+    if (!base) return 0;
+    struct image_span_ctx ctx = { base, 0 };
+    dl_iterate_phdr(image_span_cb, &ctx);
+    return ctx.span;
+}
+
+int adh_self_image_bounds(unsigned long long *start, unsigned long long *end) {
+    Dl_info self;
+    if (!dladdr((void *)(uintptr_t)adh_self_module_name, &self) || !self.dli_fbase) return 0;
+    unsigned long long base = (unsigned long long)(uintptr_t)self.dli_fbase;
+    unsigned long long span = adh_image_span_of(self.dli_fbase);
+    if (!span) return 0;
+    if (start) *start = base;
+    if (end) *end = base + span;
+    return 1;
 }
 
 static const char *self_module_name(void) {

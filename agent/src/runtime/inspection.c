@@ -203,7 +203,17 @@ static int footprint_scan(struct footprint_counts *c, int *module_count) {
         // Use the name WE are actually mapped under (dladdr): a memfd-loaded agent shows up as
         // "/memfd:jit-cache (deleted)", and a hardcoded "libadh_agent.so" would report 0 for it -
         // which would look like "no agent footprint" exactly when the agent is hidden.
-        if (pth[0] && strstr(pth, adh_self_module_name())) c->agent_exec++;
+        // Count OUR mapping by address range: the memfd name we load under ("jit-cache") is shared
+        // with ART's own JIT caches, so a name match would report the target's own pages as ours.
+        {
+            static unsigned long long self_start, self_end;
+            static int self_resolved = 0;
+            if (!self_resolved) {
+                self_resolved = 1;
+                if (!adh_self_image_bounds(&self_start, &self_end)) self_start = self_end = 0;
+            }
+            if (self_start && start >= self_start && start < self_end) c->agent_exec++;
+        }
         if (strstr(pth, "/zygisk/") || strstr(pth, "libzygisk.so") || strstr(pth, "zygisk_"))
             c->zygisk_exec++;
     }

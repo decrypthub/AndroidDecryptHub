@@ -9,6 +9,12 @@ extern "C" {
 int adh_got_replace(const char *module_substr, void *orig, void *wrapper);
 // Our own module name as it shows up in /proc/self/maps (works for a memfd-loaded agent too).
 const char *adh_self_module_name(void);
+// Address range [start,end) covered by OUR loaded image (dladdr + PT_LOAD span). Recognises our own
+// mappings by address, which matters when the name is shared with an unrelated module (a memfd agent
+// maps as "jit-cache", the same name ART's own JIT cache uses). Returns 1 on success.
+int adh_self_image_bounds(unsigned long long *start, unsigned long long *end);
+// Image span (highest PT_LOAD p_vaddr+p_memsz) of the module loaded at base, 0 when not found.
+unsigned long long adh_image_span_of(const void *base);
 // 1 when addr is one of the module's relocation (GOT) slots, 0 for plain data / unknown.
 int adh_got_is_slot(const char *module, void *addr);
 int adh_got_replace_by_name(const char *module_substr, const char *symbol, void *wrapper);

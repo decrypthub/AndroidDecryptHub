@@ -62,6 +62,10 @@ SCRIPTS=(
   "verify_v72_site_hooks_cross.sh:device"
   "verify_v73_vtable_hook.sh:device"
   "verify_v74_slot_object_callback.sh:device"
+  # Memfd loader (v4.37): the injected agent must be alive AND loaded from an unnamed memfd. Checks
+  # the decision log, the target's maps (outside), the agent's own maps + ELF header (inside), and
+  # restores the Zygisk scope afterwards.
+  "verify_v75_zygisk_memfd.sh:device"
   "verify_v02_dump.sh:device"
   "verify_v02_so.sh:device"
   "verify_v02_dexrepair.sh:host"

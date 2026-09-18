@@ -8,6 +8,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/syscall.h>
+#include <sys/stat.h>
 #include <sys/mman.h>   // MFD_CLOEXEC
 #include <cstdio>
 #include <cstring>
@@ -33,11 +34,113 @@ static zygisk::Api *g_api_for_log = nullptr;   // set in onLoad, used to relay l
 static bool g_debug_verbose = false;           // /data/adb/adh/zygisk_debug exists (opt-in)
 static char g_debug_pkg[256];                  // package name, for the app-cache debug fallback
 
+// These control messages are tiny, but a single write() may still come up short, and a plain
+// write(...) != len check would silently drop a decision line. Both directions are checked.
+static bool write_all(int fd, const char *buf, size_t len) {
+    size_t off = 0;
+    while (off < len) {
+        ssize_t n = write(fd, buf + off, len - off);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return false;
+        }
+        if (n == 0) return false;
+        off += (size_t)n;
+    }
+    return true;
+}
+
+static bool read_reply(int fd, char *buf, size_t cap) {
+    ssize_t n = read(fd, buf, cap - 1);
+    if (n <= 0) return false;
+    buf[n] = 0;
+    return true;
+}
+
+// Read one request line: at most cap-1 bytes, terminated by '\n'. Returns the line length, -1 when the
+// peer closed / the read failed, or -2 when the line did not fit. A truncated or over-long request is
+// never acted on - the previous read-once code let leftover bytes fall through to "mark".
+static ssize_t read_request_line(int fd, char *buf, size_t cap) {
+    size_t used = 0;
+    while (used + 1 < cap) {
+        char c;
+        ssize_t n = read(fd, &c, 1);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (n == 0) return -1;          // peer closed: nothing more to serve
+        if (c == '\n') {
+            buf[used] = 0;
+            return (ssize_t)used;
+        }
+        buf[used++] = c;
+    }
+    buf[used] = 0;
+    return -2;                          // over-long request
+}
+
+// The companion relay exists for the pre-specialize window only (Zygisk Next dlcloses the module
+// library afterwards), so the socket is cached and given up after a few consecutive failures instead
+// of being reopened for every single log line.
+static int g_companion_socket = -1;
+static int g_companion_fails = 0;
+static constexpr int kCompanionMaxFails = 3;
+
+static bool companion_log_line(const char *line) {
+    if (!g_api_for_log || g_companion_fails >= kCompanionMaxFails) return false;
+    if (g_companion_socket < 0) {
+        g_companion_socket = g_api_for_log->connectCompanion();
+        if (g_companion_socket < 0) {
+            g_companion_fails++;
+            return false;
+        }
+    }
+    char req[600];
+    int len = snprintf(req, sizeof(req), "log %s\n", line);
+    char ack[8] = {0};
+    if (len <= 0 || !write_all(g_companion_socket, req, (size_t)len) ||
+        !read_reply(g_companion_socket, ack, sizeof(ack))) {
+        close(g_companion_socket);
+        g_companion_socket = -1;
+        g_companion_fails++;
+        return false;
+    }
+    return true;
+}
+
+// The debug fallback writes into /data/data/<pkg>/cache, so only a plain package-name character set
+// is accepted: a '/', a ".." or whitespace would escape the directory the operator opted into.
+static bool valid_pkg_name(const char *pkg) {
+    if (!pkg || !pkg[0]) return false;
+    size_t len = strlen(pkg);
+    if (len > 200) return false;
+    for (size_t i = 0; i < len; i++) {
+        char c = pkg[i];
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+            c == '.' || c == '_')
+            continue;
+        return false;
+    }
+    return true;
+}
+
+// Bound the decision log: it is root-readable state that accumulates across reboots.
+static constexpr off_t kDecisionLogMaxBytes = 512 * 1024;
+
+static void rotate_decision_log_if_needed(void) {
+    struct stat st {};
+    if (stat(ADH_DECISION_LOG, &st) != 0 || st.st_size < kDecisionLogMaxBytes) return;
+    std::string prev = std::string(ADH_DECISION_LOG) + ".1";
+    (void)rename(ADH_DECISION_LOG, prev.c_str());   // replaces the previous rotation
+}
+
 static void append_decision_line(const char *line) {
+    rotate_decision_log_if_needed();
     int fd = open(ADH_DECISION_LOG, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0644);
     if (fd < 0) return;
-    (void)write(fd, line, strlen(line));
-    (void)write(fd, "\n", 1);
+    (void)write_all(fd, line, strlen(line));
+    (void)write_all(fd, "\n", 1);
     close(fd);
 }
 
@@ -55,43 +158,33 @@ static void note(const char *fmt, ...) {
         append_decision_line(line);
         return;
     }
-    if (g_api_for_log) {
-        int sock = g_api_for_log->connectCompanion();
-        if (sock >= 0) {
-            char req[600];
-            int len = snprintf(req, sizeof(req), "log %s\n", line);
-            if (len > 0) {
-                (void)write(sock, req, (size_t)len);
-                char ack[4] = {0};
-                (void)read(sock, ack, sizeof(ack) - 1);
-            }
-            close(sock);
-            return;
-        }
-    }
+    if (companion_log_line(line)) return;
     // Post-specialize the instance is the app uid: /data/adb is out of reach and the companion socket
     // is no longer usable. With the opt-in debug flag we may write into the app's own cache, which is
     // the only place that uid can write - target-visible, so it stays off unless the operator asked.
-    if (g_debug_verbose && g_debug_pkg[0]) {
+    if (g_debug_verbose && valid_pkg_name(g_debug_pkg)) {
         char path[400];
         snprintf(path, sizeof(path), "/data/data/%s/cache/adh_zygisk.log", g_debug_pkg);
+        struct stat st {};
+        if (stat(path, &st) == 0 && st.st_size >= 256 * 1024) (void)unlink(path);   // bounded too
         int fd = open(path, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0644);
         if (fd >= 0) {
-            (void)write(fd, line, strlen(line));
-            (void)write(fd, "\n", 1);
+            (void)write_all(fd, line, strlen(line));
+            (void)write_all(fd, "\n", 1);
             close(fd);
         }
     }
 }
 
-static void mark_loader_active(int client) {
+// The marker records "the Zygisk loader ran in this boot"; the request itself arrives once per app
+// instance, so a second call is not an error (O_EXCL keeps the file content at "active").
+static void mark_loader_active(void) {
     int fd = open(kLoaderMarker, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644);
     if (fd >= 0) {
         static constexpr char kActive[] = "active\n";
-        (void)write(fd, kActive, sizeof(kActive) - 1);
+        (void)write_all(fd, kActive, sizeof(kActive) - 1);
         close(fd);
     }
-    close(client);
 }
 
 static bool is_hard_exclude(const char *pkg) {
@@ -262,10 +355,12 @@ public:
             marker_requested = true;
             int client = api->connectCompanion();
             if (client >= 0) {
-                (void)write(client, "mark\n", 5);
-                char ack[4] = {0};
-                (void)read(client, ack, sizeof(ack) - 1);
+                char ack[8] = {0};
+                if (!write_all(client, "mark\n", 5) || !read_reply(client, ack, sizeof(ack)))
+                    LOGE("loader marker request was not acknowledged");
                 close(client);
+            } else {
+                LOGE("companion unavailable; loader marker not written this boot");
             }
         }
         if (!g_debug_pkg[0]) {
@@ -291,10 +386,11 @@ public:
             if (sock >= 0) {
                 char req[320];
                 int len = snprintf(req, sizeof(req), "scope %s\n", package.c_str());
-                if (len > 0 && write(sock, req, (size_t)len) == len) {
-                    char reply[4] = {0};
-                    ssize_t got = read(sock, reply, sizeof(reply) - 1);
-                    if (got > 0 && (reply[0] == '0' || reply[0] == '1')) scope_answer = reply[0] - '0';
+                char reply[8] = {0};
+                if (len > 0 && write_all(sock, req, (size_t)len) &&
+                    read_reply(sock, reply, sizeof(reply))) {
+                    if (reply[0] == '0' || reply[0] == '1') scope_answer = reply[0] - '0';
+                    else note("companion refused scope query pkg=%s reply=%c", package.c_str(), reply[0]);
                 }
                 close(sock);
             }
@@ -369,47 +465,54 @@ private:
     bool should_inject = false;
     bool marker_requested = false;
     int agent_fd = -1;
-    int fallback_fd = -1;
-    std::string fallback_path;
     std::string agent_path;
     std::string package_name;
 };
 
 REGISTER_ZYGISK_MODULE(AdhModule)
-// Companion protocol (module instance -> companion process):
-//   "mark\n"              -> writes the loader marker, replies "ok\n"
+// Companion protocol (module instance -> companion process), one request line per message. A single
+// connection may carry several request lines: the instance caches one connection for the whole
+// pre/post-specialize window (the post-specialize lines are exactly the memfd-load outcome), and the
+// companion serves them in order until the client closes. The companion runs as root, the module
+// instance does not: /data/adb is 0700, so the instance can never read the scope file itself.
+//
+//   "mark\n"              -> creates the loader marker, replies "ok\n"
 //   "scope <package>\n"   -> replies "1\n" (in allowlist) or "0\n"
-// The companion runs as root, the module instance does not: /data/adb is 0700, so the instance can
-// never read the scope file itself.
+//   "log <line>\n"        -> appends to the root decision log, replies "ok\n"
+// Anything else - including a line that arrived truncated or over-long - is refused with "err\n":
+// the companion never guesses, so an incomplete request can no longer be mistaken for a "mark".
 static void companion_serve(int client) {
     if (client < 0) return;
-    char req[512];
-    ssize_t n = read(client, req, sizeof(req) - 1);
-    if (n <= 0) {
-        close(client);
-        return;
+    char req[1024];
+    for (;;) {
+        ssize_t n = read_request_line(client, req, sizeof(req));
+        if (n == -1) break;                     // client closed: done serving
+        if (n == -2) {                          // unusable line: refuse it, keep the stream usable
+            (void)write_all(client, "err\n", 4);
+            continue;
+        }
+        if (strcmp(req, "mark") == 0) {
+            mark_loader_active();
+            (void)write_all(client, "ok\n", 3);
+            continue;
+        }
+        if (strncmp(req, "log ", 4) == 0) {
+            append_decision_line(req + 4);      // relayed from an app-uid instance
+            (void)write_all(client, "ok\n", 3);
+            continue;
+        }
+        if (strncmp(req, "scope ", 6) == 0) {
+            const char *pkg = req + 6;
+            char reply[4] = "0\n";
+            if (package_in_scope(pkg)) reply[0] = '1';
+            note("companion scope query pkg=%s -> %c", pkg, reply[0]);
+            (void)write_all(client, reply, 2);
+            continue;
+        }
+        note("companion refused unknown command");
+        (void)write_all(client, "err\n", 4);
     }
-    req[n] = 0;
-    // Trim at the first newline.
-    char *nl = strchr(req, '\n');
-    if (nl) *nl = 0;
-
-    if (strncmp(req, "log ", 4) == 0) {
-        append_decision_line(req + 4);          // relayed from an app-uid instance
-        (void)write(client, "ok\n", 3);
-        close(client);
-        return;
-    }
-    if (strncmp(req, "scope ", 6) == 0) {
-        const char *pkg = req + 6;
-        char reply[4] = "0\n";
-        if (package_in_scope(pkg)) reply[0] = '1';
-        note("companion scope query pkg=%s -> %c", pkg, reply[0]);
-        (void)write(client, reply, 2);
-        close(client);
-        return;
-    }
-    mark_loader_active(client);   // "mark" and anything else: legacy behaviour
+    close(client);
 }
 
 REGISTER_ZYGISK_COMPANION(companion_serve)
