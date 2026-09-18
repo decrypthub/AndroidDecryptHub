@@ -48,6 +48,12 @@ object Detection {
     // v4.35 fixture: reaches adh_add_target only through a function-pointer table (indirect call), so
     // intercepting it requires patching the data slot, not any code.
     @JvmStatic external fun slotProbe(): Int
+    // v4.36: a real object dispatch (vptr held by the object, table in RELRO) and a function pointer
+    // that lives in WRITABLE data (only reachable with slotsWritable:true).
+    @JvmStatic external fun objCall(): Int
+    @JvmStatic external fun objVtableAddress(): Long
+    @JvmStatic external fun cbCall(): Int
+    @JvmStatic external fun cbTargetAddress(): Long
     // Address of that table (slot 0 = adh_add_target, slot 1 = a different function).
     @JvmStatic external fun vtableAddress(): Long
     // Same target reached through a real BL (result consumed) instead of a tail call, so both

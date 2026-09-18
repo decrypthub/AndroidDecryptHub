@@ -50,6 +50,11 @@
       · 安全/输入：inline 绝对地址必须 `confirm:true`，agent 校验目标位于 executable mapping；active 发布顺序移到所有字段之后；重复 target fail-loud；Java bridge 增加 `ready` 安装窗口自旋、ADH 自有 backup global ref、事件字符串 512 字符上限。
       · 真机 `aa165071` PASS：native 与 Java 同一目标各连续 24 次 install/unhook 后行为恢复、agent 存活（`tools/verify_v56_hook_stress.sh`）；v4.3/v4.6/v4.12–v4.15 全部复跑 PASS。
       · 已知边界：软卸载会在目标里保留 stub/LSPlant patch（去特征场景需要后续 hard-unhook/quiesce 方案）；JNI_OnLoad 仍未覆盖；Java/native 的唯一目标数仍受 16 槽上限约束。
+- [x] **v4.36 指针槽覆盖面：真实对象虚调用 + 可写函数指针（slotsWritable）（2026-09-18，真机 PASS）**：v4.35 的验收只用了"全局函数指针表"，评审点名两个缺口：真实 C++ 调用形态（对象里放 vptr、表在 RELRO、`ldr vptr/ldr slot/blr`）与**运行时可写**的函数指针（回调变量）。
+      · 沙盒新增两组 fixture：① 对象分派——`struct adh_obj { const volatile struct adh_obj_vt *vptr; }` + RELRO 里的 `adh_obj_vtable`，探针 `adh_obj_call()` **只经对象**取槽再间接调用（不是全局表）；② 可写回调——**file-local** 的 `adh_cb_target` + 可写(=`rw-`)槽 `adh_cb_slot`，探针 `adh_cb_call()` 走该槽（返回 a*100+b）。
+      · 真机 `aa165071` PASS（`tools/verify_v74_slot_object_callback.sh`）：对象侧 `mode=vtable` 命中**对象表那一个槽**（`kind=data`、`perms=r--`、`orig` 就是函数地址），**只调对象探针**后 `hits=1`（命中归因到间接路径），函数地址处 24 字节前后逐位相同（没有写任何代码），hard unhook 后槽位读回 == 原值、thunk 页从 maps 消失、探针仍 84；可写侧**默认必须 fail-loud**（"writable slots were skipped; pass slotsWritable:true to include them"），`slotsWritable:true` 后命中 `rw-` 槽、`hits=1`、探针值正确，unhook 后槽位还原、探针仍 304。
+      · 这一轮也再次验证了 fail-loud 的价值：`adh_cb_target` 一开始是导出符号，模块自己就给它建了一个**只读 GOT 槽**，于是"默认跳过可写槽"根本没被触发（默认安装直接成功）——改成 file-local 后才真正只存在可写引用，默认路径如期报错。
+      · 诚实边界：可写槽是**安装时刻**的快照值，目标之后自行改写该变量不受我们跟踪（改回原值即失效）；对象虚表必须是**已被重定位**的静态表（运行时动态拼出来的 vtable 不在范围）；仍不支持 skipOriginal/returnValue（返回值 bank 依目标而定）。
 - [x] **v4.35 指针槽（vtable）hook：间接调用也能"零代码改写"（2026-09-18，真机 PASS）**：v4.33/v4.34 解决了直接 `B`/`BL`，但加固 App 的加密入口常常是 **C++ 虚函数 / 函数指针表**（`ldr x0,[xObj]; ldr x8,[x0,#off]; blr x8`）——既没有可改的"入口"，也没有单一调用点。本轮补上第三个"完全不动代码"的后端：`native_hook mode=vtable`。
       · 做法（`agent/src/hook/slot_hooks.c`）：扫描**可读非可执行的 data 段**（默认目标模块，`scope` 支持 all/指定模块），找 8 字节对齐且值等于目标地址的槽位，把槽位值换成我们自己的 thunk——**函数本体与任何调用点都不改**。槽位常在 `.data.rel.ro`（RELRO），因此写回走既有的 `adh_swap_pointer_in_ro_page`。thunk 复用 v4.33 那套已自检的编码器（指针调用不受 ±128 MB 限制）。
       · **顺手做了个诚实的分类**：一个槽位到底是"导入槽（GOT）"还是"普通数据（vtable/回调表）"由重定位类型判断——只有 `R_AARCH64_GLOB_DAT`/`JUMP_SLOT` 算 GOT，`RELATIVE`（vtable 里那些指针式重定位）算 data，状态里逐槽回传 `kind`。这条分类不是学术问题：**改 GOT 槽会改变该模块内 `&symbol` 解析到的地址**，验证里就把这个副作用如实打出来了。

@@ -361,6 +361,47 @@ JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_jniCtorProbe(JNIEnv *env, 
 }
 const volatile struct adh_vt adh_vtable = { adh_add_target, adh_sub_target };
 
+// ---- v4.36 fixture A: object dispatch ---------------------------------------------------
+// Same memory shape a C++ virtual call produces: the object holds a vptr, the vtable lives in
+// .data.rel.ro (read-only after relocation), and the call is ldr vptr / ldr slot / blr. The probe
+// takes the address through the OBJECT (not through a global table), so this covers the real
+// "obj->method()" form rather than only a named table.
+struct adh_obj;
+struct adh_obj_vt {
+    long (*add)(struct adh_obj *self, long a, long b);
+    long (*sub)(struct adh_obj *self, long a, long b);
+};
+struct adh_obj { const volatile struct adh_obj_vt *vptr; };
+
+__attribute__((noinline, used, visibility("default")))
+long adh_obj_add(struct adh_obj *self, long a, long b) { (void)self; return (a + b) * 2; }
+__attribute__((noinline, used, visibility("default")))
+long adh_obj_sub(struct adh_obj *self, long a, long b) { (void)self; return a - b; }
+
+const volatile struct adh_obj_vt adh_obj_vtable = { adh_obj_add, adh_obj_sub };
+struct adh_obj adh_obj_instance = { &adh_obj_vtable };
+
+__attribute__((noinline, used, visibility("default")))
+long adh_obj_call(void) {
+    struct adh_obj *o = &adh_obj_instance;
+    long (*fn)(struct adh_obj *, long, long) = o->vptr->add;   // vptr load + slot load + blr
+    return fn(o, 20, 22);
+}
+
+// ---- v4.36 fixture B: writable function pointer ------------------------------------------
+// The slot lives in .data (writable), which the backend skips unless slotsWritable:true is passed:
+// a writable word that merely equals a target is as likely to be a constant as a call target.
+// file-local on purpose: the ONLY reference to this function is the writable slot below, so the
+// module gets no read-only GOT/vtable entry for it and the default (read-only-only) scan must find
+// nothing - which is what the slotsWritable opt-in is for. The probe hands the address to the Host.
+__attribute__((noinline, used))
+static long adh_cb_target(long a, long b) { return a * 100 + b; }
+
+long (*volatile adh_cb_slot)(long, long) = adh_cb_target;      // .data, writable
+
+__attribute__((noinline, used, visibility("default")))
+long adh_cb_call(void) { return adh_cb_slot(3, 4); }
+
 __attribute__((noinline, used, visibility("default")))
 long adh_slot_probe(void) {
     long (*fn)(long, long) = adh_vtable.add;   // indirect: the address comes from the table
@@ -478,6 +519,26 @@ static int adh_anti_mapping_of(unsigned long long addr, char *path, int path_siz
     }
     fclose(m);
     return found;
+}
+
+JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_objCall(JNIEnv *env, jclass clazz) {
+    (void)env; (void)clazz;
+    return (jint)adh_obj_call();
+}
+
+JNIEXPORT jlong JNICALL Java_com_adh_sandbox_Detection_objVtableAddress(JNIEnv *env, jclass clazz) {
+    (void)env; (void)clazz;
+    return (jlong)(uintptr_t)&adh_obj_vtable;
+}
+
+JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_cbCall(JNIEnv *env, jclass clazz) {
+    (void)env; (void)clazz;
+    return (jint)adh_cb_call();
+}
+
+JNIEXPORT jlong JNICALL Java_com_adh_sandbox_Detection_cbTargetAddress(JNIEnv *env, jclass clazz) {
+    (void)env; (void)clazz;
+    return (jlong)(uintptr_t)adh_cb_target;
 }
 
 JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_slotProbe(JNIEnv *env, jclass clazz) {

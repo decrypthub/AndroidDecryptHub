@@ -1330,6 +1330,8 @@ MCP              →  AI 可编程操控，与 HTTP 同源
 - **最小侵入模式**：只启用 maps/dex/classloader/crypto 等低痕迹模块，关闭高痕迹 hook
 - **hook 自校验对抗**：应对目标周期性校验函数序言字节、检测 GOT 改写
 
+> 实现状态（v4.36，真机 `aa165071` 验收）：指针槽后端覆盖到**真实对象虚调用**（对象持 vptr、表在 RELRO、`ldr vptr/ldr slot/blr`）与**可写函数指针**（回调变量）：默认只改只读槽，可写槽需 `slotsWritable:true`（默认安装会明确报"writable slots were skipped"而不是静默少改）；验收断言对象虚调用的命中归因（只调该探针时 hits 增长）、被改槽确是函数地址、函数 24 字节前后逐位相同、槽位逐位还原与 thunk 页消失。
+
 > 实现状态（v4.35，真机 `aa165071` 验收）：**指针槽（vtable/回调表/GOT）hook**——`native_hook mode=vtable` 扫描可读非可执行 data 段里等于目标地址的 8 字节槽，改槽不改码：函数入口、调用点、指令缓存都不动，间接调用（函数指针表，内存形态与 C++ vtable 相同；真实对象分派未单独验收）因此也能拦。逐槽回传 `kind`（只有 GLOB_DAT/JUMP_SLOT 算 `got`，vtable 里的 RELATIVE 指针算 `data`）与所在模块/映射权限；真机断言"直接读函数地址的 24 字节安装前后逐位相同" + "间接调用命中" + "相邻槽未被改" + "hard unhook 逐位还原且 thunk 页 munmap"。**已知副作用（验收里如实断言）**：改模块自己的 GOT 槽会改变该模块内 `&symbol` 的解析结果，目标自查可因此发现重定向（代码本身没有变）。默认只改只读映射里的槽，`slotsWritable:true` 才改可写槽；回滚失败时保留 thunk 页并把 `pageKept` 报到 status。
 
 > 实现状态（v4.34，真机 `aa165071` 验收）：**跨模块调用点拦截**：`scope` 选择扫描范围（`module` 默认 / `all` 所有文件映射可执行段 / 单个模块名），每个调用点各自分配 near thunk 页（跨模块调用点常超出单页的 BL 范围）；扫描按"目标模块 → /data 应用自有模块 → 系统库"排序，128 MB 预算，`scanned`/`truncated` 如实回传。沙盒新增跨模块 fixture（插件库调用目标库），真机断言 3 站点/2 模块全部命中、目标入口审计仍然干净、hard unhook 后逐位还原且所有 thunk 页 munmap。生成 thunk 后先自检（pc 相对分支与字面量）才允许安装。

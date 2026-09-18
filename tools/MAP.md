@@ -92,6 +92,7 @@ translation — kept separate).
 - `verify_v71_mcp_registry.sh` — **MCP 注册表 host 自检**（<1s、不需设备）：直接 import `daemon/src/mcp.ts` 并逐个校验 name/description/inputSchema/handler，专门拦"描述里一个撇号把整个模块搞挂、而 `node --check` 看不出来"这类事故（本轮真的踩到过：daemon 起不来、所有静态检查全绿）。
 - `verify_v72_site_hooks_cross.sh` — **跨模块 call-site hooking**：加载插件库（跨模块调用 adh_add_target）→ `scope=all` 断言 3 站点/2 模块（`b`+`bl`）、三个探针都 84 且 `hits>=3`、目标审计 `prologueDiffers/entryBranchesOutside=false`、`anonExec=0`、三张 thunk 页都在 `/memfd:jit-cache` → hard unhook 后逐位读回 == `orig` 且三页全部 munmap → `scope=<plugin>` 只选中该模块。
 - `verify_v73_vtable_hook.sh` — **指针槽（vtable）hook**：`mode=vtable` 后断言 `slotCount>=1`、vtable 槽 `kind=data`、模块 PLT 槽 `kind=got`、**直接读函数地址的 24 字节安装前后逐位相同**、相邻槽未被改、`slotProbe()` 仍 84 且 `hits>=1`（间接调用被拦）、thunk 页在 `/memfd:jit-cache`、hard unhook 后 16 字节槽位区逐位还原 + 页 munmap；同时把"审计因 GOT 槽被换而报 prologueDiffers"这个副作用原样打印。
+- `verify_v74_slot_object_callback.sh` — **对象虚调用 + 可写函数指针**：对象侧断言只改对象表那一个槽（`kind=data`/`r--`/`orig`==函数地址）、**只调对象探针**时 `hits>=1`、函数 24 字节前后逐位相同、unhook 后槽位读回 == 原值且 thunk 页消失；可写侧断言默认 **fail-loud**（"writable slots were skipped"）、`slotsWritable:true` 后命中 `rw-` 槽且探针命中，unhook 后还原。
 - `verify_v47_got_enum.sh` — 枚举 `libadhdetect.so` 的 GOT/relocation，断言导入符号可见（deploy new agent；未部署时 SKIP）。
 - `verify_v48_memory_disasm.sh` — 真机地址 → agent 读内存 → Host Capstone 5 WASM 反汇编；覆盖绝对地址与 module+offset 两条路径（deploy new daemon/agent；未部署时 SKIP）。
 - `verify_v49_native_call.sh` — `adh_add_target` 按 module+symbol 和绝对地址主动调用，断言返回值与 confirm 门禁（deploy new agent/daemon；未部署时 SKIP）。
