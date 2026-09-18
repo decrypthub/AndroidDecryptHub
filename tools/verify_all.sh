@@ -66,6 +66,10 @@ SCRIPTS=(
   # the decision log, the target's maps (outside), the agent's own maps + ELF header (inside), and
   # restores the Zygisk scope afterwards.
   "verify_v75_zygisk_memfd.sh:device"
+  # Syscall attribution (v4.38): the static decoder is unit-tested on the host; the device script
+  # proves a libc-mediated syscall (uname) can be selected by name and really fires with x8=0xa0.
+  "verify_v76_syscall_attribution.sh:host"
+  "verify_v77_syscall_watch_libc.sh:device"
   "verify_v02_dump.sh:device"
   "verify_v02_so.sh:device"
   "verify_v02_dexrepair.sh:host"

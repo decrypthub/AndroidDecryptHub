@@ -21,7 +21,7 @@ ADH Daemon / `adhd` (Node 24 + TypeScript, runs `.ts` directly, no build step). 
 | `analysis.ts` | Host-side ELF analysis shelling out to NDK llvm tools (`analyzeSo`/`cryptoConstScan`/`svcScan`/`disasmSo`/`OBJDUMP`). | — |
 | `capstone.ts` | Pure host-side raw-byte AArch64 disassembly through Capstone 5 (WASM); no daemon state. | `capstone-wasm` |
 | `memory.ts` | Live memory helpers combining agent `read` with host-side Capstone (`liveDisasm`, module+offset resolution). | `service.ts`, `capstone.ts` |
-| `syscall_watch.ts` | Host-orchestrated direct `svc #0` watch: reconstruct module + `svcScan` + per-site `native_hook`; events carry x8 as the syscall number. | `service.ts`, `analysis.ts` |
+| `syscall_watch.ts` | Host-orchestrated `svc #0` watch: reconstruct module + `svcScan` + per-site **static attribution** (`attributeSite` decodes the MOV that materialises x8; note JS bitwise AND is signed, so every masked compare is `>>> 0`) + name/number filtering + per-site `native_hook`; events carry x8 as the runtime syscall number. `libc.so` is the main target since app code reaches the kernel through its stubs. Also exports `parseSyscallToken`/`syscallName` for `native_syscall_scan` and the unit test. | `service.ts`, `analysis.ts` |
 **Import graph is one-directional**: `state ← service ← mcp/http/index`; `dex_index` depends only on `state` + pure `dex`; `analysis` and `capstone` stay pure; `memory` depends on `service` + `capstone`; `syscall_watch` depends on `service` + `analysis`. No circular refs.
 
 ## Why the split (was: one 1585-line `index.ts`)

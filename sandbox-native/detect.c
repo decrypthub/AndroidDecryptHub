@@ -48,6 +48,24 @@ long adh_direct_gettid(void) {
     return ret;
 }
 
+// libc-MEDIATED syscall fixture. Ordinary app code never issues its own `svc`; it calls bionic
+// wrappers, whose stubs live in libc.so (`mov x8, #160 ; svc #0` for uname). A scan of THIS module
+// finds nothing, which is exactly why the syscall watch must also be able to target libc.so and
+// attribute the number statically before hooking. uname is used because it is rare (no noise) and
+// deterministic. The return value is a stable checksum of utsname.sysname/version so the caller can
+// assert the call really happened.
+#include <sys/utsname.h>
+__attribute__((noinline, visibility("default")))
+long adh_libc_uname_probe(void) {
+    struct utsname u;
+    memset(&u, 0, sizeof(u));
+    if (uname(&u) != 0) return -1;
+    long sum = 0;
+    for (const char *p = u.sysname; *p; p++) sum += (unsigned char)*p;
+    for (const char *p = u.machine; *p; p++) sum = sum * 3 + (unsigned char)*p;
+    return sum;
+}
+
 // Static-linked crypto-shaped target for the WS-A inline-hook acceptance path. It is
 // deliberately not a PLT call: the JNI entry below calls this function directly, so a GOT
 // replacement cannot observe it. A real target may replace this with a statically linked

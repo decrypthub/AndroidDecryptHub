@@ -15,6 +15,14 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [x] **v4.38 系统调用监听升级：静态归因 + 按名筛选 + 覆盖 libc 封装（2026-09-18，真机 PASS）**：v4.10 只能扫"目标模块自己的 `svc #0`"，而真实 App 极少自己发系统调用——它们调 bionic 包装，桩在 `libc.so` 里。本轮把 L1 从"找得到"做到"看得懂、挑得准"。
+      · **静态归因**（`daemon/src/syscall_watch.ts` `attributeSite()`）：对每个 `svc #0` 站点向前最多 10 条指令解码"写 x8 的那条"——`MOVZ x8/w8, #imm` 与 `MOVZ x8, #imm, lsl #16`；遇到任何控制流指令（b/bl/b.cond/cbz/tbz/ret/br/blr/svc）立即停止，**绝不借用相邻桩的号**；解不出来就报 `unknown`，不猜。
+      · **筛选与失败语义**：`syscall_watch` 新增 `syscalls` 参数（MCP 数组或 CSV，名字/十进制/十六进制均可，如 `["uname","openat",117]`），只挂归因命中且匹配的站点；**命中 0 个直接报错**（附"归因了几个/共几个站点"），不静默挂 0 个。`native_syscall_scan`（纯静态、不需要设备）同样返回每站点的号与名字，并给出 `attributedCount/unknownCount`。
+      · **真机数据**（`aa165071`，Android 15）：bionic `/apex/com.android.runtime/lib64/bionic/libc.so` **224 个 `svc` 站点，223 个成功归因**（`openat`、`getrandom`、`uname`、`getuid/geteuid/getgid/getegid`、`clone`、`munmap`…，1 个解不出）；`tools/verify_v77_syscall_watch_libc.sh` PASS：`libadhdetect.so` 的 direct svc 归因 `gettid(178)` 且按名筛选只挂 1 个；`libc.so + syscalls:["uname"]` 只挂那 1 个 `uname` 站点（`matched=1/224`）；调用沙盒新增的 libc 探针 `adh_libc_uname_probe`（内部走 libc `uname()`）后，`NATIVE_HOOK` 事件以 **x8=0xa0** 命中，逐个卸钩成功、进程存活。
+      · **归因解码器有单元测试**（`daemon/test/syscall_watch.test.ts`，`node --test`，7 条：x8/w8/lsl16 三种形态、控制流截断、寄存器来源必须报 unknown、token 解析、未知号命名）：`tools/verify_v76_syscall_attribution.sh`（host，秒级）在门禁里跑它们。**这套测试第一版就抓到一个致命 bug**——JS 位与是**有符号 int32**，`word & 0xffe0001f` 对 `0xd2800008` 这类高位掩码落在负数域，与正向字面量比较**永远不成立**，归因结果全空而 `node --check`／类型剥离／MCP 注册检查全绿；修法是所有掩码比较统一 `>>> 0`。这正是"静态检查不算验证"的又一例。
+      · **门禁**：新增 `verify_v76_syscall_attribution.sh`（host：跑单元测试 + 断言 MCP schema 暴露 `syscalls`）与 `verify_v77_syscall_watch_libc.sh`（device）后，全量 `tools/verify_all.sh` **91 PASS / 0 FAIL / 2 SKIP**（两次 SKIP 是 v37 重启 Host Daemon 后 v38/v39 的自动化桥未及重连，按契约跳过）。
+      · 边界（未变）：仍是**采样式**观测——每个 hook 站点的事件量受 agent 事件环上限约束，高频 syscall（如 `read`）会产生大量事件且只保留最近的；seccomp/PTRACE_SYSEMU 级别的全量拦截仍是 L3 高风险实验，不在默认产品能力内。
+
 - [x] **v4.2–v4.7 真机运行时验收（2026-09-18，Android 15 / SDK 35 PASS）**：LSPlant Java hook、Java 枚举/主动调用、native inline hook、GOT 枚举在真机 `com.adh.sandbox` 上全部通过，测试设备 OnePlus PGP110 / serial `aa165071`。以下历史条目的 “runtime pending” 已被本条取代。
       · v4.2 `javahook_probe`：`initOk:true`，backend `lsplant` v6.4；ColorOS 缺失 `VisiblyInitializedCallback` / `JitCodeCache::GarbageCollectCache` 时按 availability 降级，只关闭 JIT movement tracking，不再让 Init 假失败。
       · v4.3 `java_hook`：静态 `HookProbe.ping(String)` + 实例 `instancePing(String)` 均命中，原始返回值 `REAL_*`、`JAVA_HOOK` 事件和逐个 unhook 都正确，进程存活。Android 14+ 拒绝可写 dex，bridge 现在将嵌入 dex 落到 app `code_cache/adh_bridge.dex`、`fchmod 0400` 后交给 `DexClassLoader`。

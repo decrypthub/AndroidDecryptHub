@@ -102,11 +102,11 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
     } },
     { method: 'POST', path: '/api/native/syscall_watch', handler: async () => {
       const body = await readBody(req);
-      const { session, module, limit } = JSON.parse(body || '{}');
+      const { session, module, limit, syscalls } = JSON.parse(body || '{}');
       const sid = pickSid(session);
       if (!sid || !module) return send(400, { error: 'need session, module' });
       try {
-        const r = await watchSyscalls(sid, { module, limit });
+        const r = await watchSyscalls(sid, { module, limit, syscalls });
         return send(200, r);
       } catch (e) { return send(502, { error: (e as Error).message }); }
     } },    { method: 'POST', path: '/api/jni/onload', handler: async () => {

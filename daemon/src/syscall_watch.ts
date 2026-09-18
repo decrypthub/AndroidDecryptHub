@@ -8,10 +8,100 @@ import { modulesFromMaps, reconstructSo, sendCmd } from './service.ts';
 export interface SyscallWatchOptions {
   module: string;
   limit?: number;
+  // Only hook sites whose syscall number could be attributed statically. Numbers or names
+  // ("uname", 160, "0xa0") are accepted; a filter that matches nothing fails loud instead of
+  // silently hooking the wrong sites.
+  syscalls?: (string | number)[] | string;
 }
 
 function hexAddress(value: bigint): string {
   return `0x${value.toString(16)}`;
+}
+
+// arm64 syscall numbers (asm-generic) with the names an analyst actually filters on. The table is a
+// convenience only - the number from the site is always reported next to it, and an unknown number
+// stays unknown rather than being guessed.
+const SYSCALL_NAMES: Record<number, string> = {
+  29: 'ioctl', 48: 'faccessat', 56: 'openat', 57: 'close', 61: 'getdents64', 63: 'read', 64: 'write',
+  79: 'newfstatat', 80: 'fstat', 98: 'futex', 101: 'nanosleep', 113: 'clock_gettime', 117: 'ptrace',
+  129: 'kill', 131: 'tgkill', 160: 'uname', 167: 'prctl', 169: 'gettimeofday', 172: 'getpid',
+  174: 'getuid', 175: 'geteuid', 176: 'getgid', 177: 'getegid', 178: 'gettid', 179: 'sysinfo',
+  183: 'sethostname', 198: 'socket', 203: 'connect', 206: 'sendto', 207: 'recvfrom', 211: 'sendmsg',
+  212: 'recvmsg', 215: 'munmap', 220: 'clone', 221: 'execve', 222: 'mmap', 226: 'mprotect',
+  233: 'madvise', 260: 'wait4', 273: 'set_robust_list', 278: 'getrandom', 279: 'memfd_create',
+  291: 'statx',
+};
+
+export function syscallName(nr: number): string { return SYSCALL_NAMES[nr] ?? `syscall_${nr}`; }
+export function syscallTable(): Record<number, string> { return { ...SYSCALL_NAMES }; }
+
+export function parseSyscallToken(token: string | number): number | null {
+  if (typeof token === 'number') return Number.isFinite(token) ? Math.trunc(token) : null;
+  const t = String(token).trim().toLowerCase();
+  if (!t) return null;
+  if (/^0x[0-9a-f]+$/.test(t)) return parseInt(t, 16);
+  if (/^[0-9]+$/.test(t)) return parseInt(t, 10);
+  const byName = Object.entries(SYSCALL_NAMES).find(([, name]) => name === t);
+  return byName ? Number(byName[0]) : null;
+}
+
+function resolveSyscallFilter(input: SyscallWatchOptions['syscalls']): { wanted: Set<number>; bad: string[] } | null {
+  if (input == null) return null;
+  const list = Array.isArray(input) ? input : String(input).split(',');
+  const wanted = new Set<number>();
+  const bad: string[] = [];
+  for (const raw of list) {
+    const token = String(raw).trim();
+    if (!token) continue;
+    const nr = parseSyscallToken(token);
+    if (nr == null) bad.push(token); else wanted.add(nr);
+  }
+  return { wanted, bad };
+}
+
+// Statically attribute the syscall number of one `svc #0` site by looking at the instructions right
+// before it: bionic (and most compilers) materialise the number with MOVZ/MOV into x8/w8. The scan is
+// pure byte arithmetic over the reconstructed file - no disassembler needed - and stops at the first
+// control-flow instruction so a number that belongs to a neighbouring stub is never borrowed.
+// NOTE: JS bitwise operators produce SIGNED int32 results, so 0xd2800008 & mask is negative and
+// never === the positive literal. Every masked comparison below is forced unsigned with >>> 0.
+function maskOf(word: number, mask: number): number { return (word & mask) >>> 0; }
+
+function isControlFlow(word: number): boolean {
+  if (maskOf(word, 0xffe0001f) === 0xd4000001) return true;     // svc
+  if (maskOf(word, 0xff000000) === 0xd4000000) return true;     // other exception-generating
+  if (maskOf(word, 0x7c000000) === 0x14000000) return true;     // b / bl
+  if (maskOf(word, 0x7e000000) === 0x34000000) return true;     // cbz / cbnz
+  if (maskOf(word, 0x7e000000) === 0x36000000) return true;     // tbz / tbnz
+  if (maskOf(word, 0xff000010) === 0x54000000) return true;     // b.cond
+  if (maskOf(word, 0xfffffc1f) === 0xd65f0000) return true;     // ret
+  if (maskOf(word, 0xfffffc1f) === 0xd61f0000) return true;     // br
+  if (maskOf(word, 0xfffffc1f) === 0xd63f0000) return true;     // blr
+  return false;
+}
+
+export function attributeSite(buf: Buffer, fileOff: number): { nr: number | null; how: string; insns: string[] } {
+  const insns: string[] = [];
+  for (let i = 1; i <= 10; i++) {
+    const off = fileOff - i * 4;
+    if (off < 0) break;
+    const word = buf.readUInt32LE(off);
+    // MOVZ x8/w8, #imm16  -> 0xd2800008 / 0x52800008 (sf / 32-bit)
+    const masked = maskOf(word, 0xffe0001f);
+    if (masked === 0xd2800008 || masked === 0x52800008) {
+      const nr = (word >>> 5) & 0xffff;
+      insns.push(`movz ${(word & 0x80000000) ? 'x8' : 'w8'}, #${nr}`);
+      return { nr, how: 'movz-imm', insns };
+    }
+    // MOVZ x8, #imm16, lsl #16 (high half only - low half would follow in an earlier MOVK)
+    if (masked === 0xd2a00008) {
+      const nr = ((word >>> 5) & 0xffff) << 16;
+      insns.push(`movz x8, #${(word >>> 5) & 0xffff}, lsl #16`);
+      return { nr, how: 'movz-imm-lsl16', insns };
+    }
+    if (isControlFlow(word)) { insns.push('stop@' + off.toString(16)); break; }
+  }
+  return { nr: null, how: 'unknown', insns };
 }
 
 function findModule(modules: any[], name: string): any {
@@ -31,8 +121,31 @@ export async function watchSyscalls(sid: string, opts: SyscallWatchOptions): Pro
   const buf = await reconstructSo(sid, String(mod.base));
   const scan = svcScan(buf);
   const limit = Math.max(1, Math.min(16, Math.trunc(Number(opts.limit ?? 8))));
-  const selected = scan.hits.slice(0, limit);
   const base = BigInt(`0x${String(mod.base).replace(/^0x/i, '')}`);
+
+  // Attribute every site (cheap: a few words of arithmetic each, bounded by the scanner's 4096 cap),
+  // then either take the first N or only the ones the caller filtered for.
+  const attributed = scan.hits.map((hit) => {
+    const fileOff = Number(BigInt(String(hit.fileOff)));
+    const attr = attributeSite(buf, fileOff);
+    return {
+      ...hit,
+      fileOffNum: fileOff,
+      nr: attr.nr,
+      name: attr.nr == null ? null : syscallName(attr.nr),
+      attribution: attr.how,
+    };
+  });
+  const filter = resolveSyscallFilter(opts.syscalls);
+  if (filter && filter.bad.length) {
+    throw new Error(`unknown syscall filter value(s): ${filter.bad.join(', ')} (use a number or one of: ${Object.values(SYSCALL_NAMES).join(', ')})`);
+  }
+  const matched = filter ? attributed.filter((a) => a.nr != null && filter.wanted.has(a.nr)) : attributed;
+  if (filter && matched.length === 0) {
+    const known = attributed.filter((a) => a.nr != null).length;
+    throw new Error(`no svc #0 site matched ${[...filter.wanted].map((n) => `${syscallName(n)}(${n})`).join('/')} in ${mod.name}: attributed ${known} of ${attributed.length} sites`);
+  }
+  const selected = matched.slice(0, limit);
   const installed: any[] = [];
   try {
     for (const hit of selected) {
@@ -41,7 +154,12 @@ export async function watchSyscalls(sid: string, opts: SyscallWatchOptions): Pro
         action: 'hook', mode: 'inline', module: '', symbol: '', addr: hexAddress(addr),
       }, 20_000);
       if (!r.ok) throw new Error(`svc hook failed at ${hexAddress(addr)}: ${r.error ?? 'unknown error'}`);
-      installed.push({ hookId: Number(r.hookId), addr: hexAddress(addr), vaddr: String(hit.vaddr), fileOff: String(hit.fileOff) });
+      installed.push({
+        hookId: Number(r.hookId), addr: hexAddress(addr), vaddr: String(hit.vaddr),
+        fileOff: String(hit.fileOff),
+        syscall: hit.nr == null ? null : { nr: hit.nr, name: hit.name },
+        attribution: hit.attribution,
+      });
     }
   } catch (e) {
     for (const hook of installed) {
@@ -58,10 +176,16 @@ export async function watchSyscalls(sid: string, opts: SyscallWatchOptions): Pro
     svcCount: scan.hits.length,
     limit,
     installedCount: installed.length,
-    truncated: scan.hits.length > limit,
+    truncated: matched.length > limit,
+    filter: filter ? [...filter.wanted].map((n) => ({ nr: n, name: syscallName(n) })) : null,
+    attributedCount: attributed.filter((a) => a.nr != null).length,
+    unknownCount: attributed.filter((a) => a.nr == null).length,
+    matchedCount: matched.length,
     hooks: installed,
     event: 'NATIVE_HOOK',
     syscallRegister: 'x8',
-    note: 'Events from these hooks carry x8 as the syscall number. Unhook with native_hook/unhook per hookId.',
+    note: filter
+      ? 'Only sites whose syscall number was attributed statically AND matched the filter are hooked; x8 in the events is the runtime number (should equal the attributed one).'
+      : 'Events from these hooks carry x8 as the syscall number; hooks[] reports the statically attributed number per site. Unhook with native_hook/unhook per hookId.',
   };
 }

@@ -437,7 +437,10 @@ RSA_public_encrypt / RSA_private_decrypt
 | L0 声明 | libc/PLT/inline hook 可能漏 direct syscall；UI 明确标注事件来源 | 默认 |
 | L1 检测 | 扫描可执行段中 `svc #0` 指令热点，识别高频 syscall wrapper，输出疑似绕过 libc 的函数列表 | 静态，安全 |
 | L2 观测 | 对指定函数/地址范围用 DBI 记录 syscall 前后寄存器，与文件/网络事件弱关联 | 需指定范围 |
+
 | L3 高风险实验 | SVC patch / seccomp-unotify / PTRACE_SYSEMU | 仅 sandbox/授权环境，非默认产品能力 |
+
+> 实现状态（v4.38，真机 `aa165071` 验收）：**L1 升级为"可归因 + 可按名筛选"，并把覆盖面从"目标自己的 direct svc"扩到 libc 封装**——普通 App 不自己发 `svc`，它调的是 bionic 包装函数，桩在 `libc.so` 里。Host 侧新增静态归因：对每个 `svc #0` 站点向前解码"把号写进 x8 的 MOV"(MOVZ x8/w8，#imm / MOVZ x8，#imm，lsl #16)，遇到控制流指令即停止（绝不借用邻桩的号）；解不出来就如实报 `unknown`，不猜。`syscall_watch` 因此支持 `syscalls: ["uname","openat",117]` 过滤（名字/十进制/十六进制都行），命中为 0 时 **fail-loud**；`native_syscall_scan` 同样返回每站点的号 + 名字。真机数据：bionic `libc.so` 224 个 `svc` 站点，223 个成功归因（`openat/getrandom/uname/getuid...`，1 个解不出）；`syscall_watch module=libc.so syscalls=["uname"]` 只挂那 1 个站点，沙盒探针走 libc `uname()` 后 `NATIVE_HOOK` 事件 `x8=0xa0` 命中，卸钩后进程存活（`tools/verify_v77_syscall_watch_libc.sh`）。归因解码器有真机无关的单元测试（`daemon/test/syscall_watch.test.ts`，7 条）——第一版就抓到一个致命 bug：JS 位与是**有符号 int32**，`0xd2800008 & mask` 落在负数域，等于正向字面量永不成立，归因**全空**而所有静态检查全绿。
 
 ---
 
