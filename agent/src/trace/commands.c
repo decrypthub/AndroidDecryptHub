@@ -148,11 +148,24 @@ void adh_cmd_trace_run(int fd, const char *id, const char *symbol_library,
 
 void adh_cmd_qbdi_trace(int fd, const char *id, const char *symbol_library,
                         const char *symbol, const char *args_csv) {
-    const char *library = symbol_library[0] ? symbol_library : "libadhdetect.so";
-    const char *target_symbol = symbol[0] ? symbol : "adh_trace_target";
-    void *function = adh_resolve_sym(library, target_symbol);
+    // The caller names both the library and the symbol. A fixture name must never be baked in
+    // here: the agent runs in arbitrary targets, so a hardcoded module/symbol is a coupling bug
+    // AND a signature the target can read straight out of our own memory. Fail loud instead of
+    // silently tracing whatever fixture happened to be loaded.
     char idj[64];
     json_escape(id, idj, sizeof(idj));
+    if (!symbol_library[0] || !symbol[0]) {
+        char err[192];
+        snprintf(err, sizeof(err),
+                 "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"qbdi_trace\","
+                 "\"ok\":false,\"error\":\"qbdi_trace needs symLib and symbol\"}\n",
+                 idj);
+        send_line(fd, err);
+        return;
+    }
+    const char *library = symbol_library;
+    const char *target_symbol = symbol;
+    void *function = adh_resolve_sym(library, target_symbol);
     if (!function) {
         char error[160];
         snprintf(error, sizeof(error),

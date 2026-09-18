@@ -62,7 +62,7 @@ const hook = await post('/api/java/hook', {
   params: 'java.lang.String',
 });
 const hookError = String(hook.error ?? '');
-if (!hook.ok && /lsplant not built|unsupported|unknown op/i.test(hookError)) {
+if (!hook.ok && /lsplant not built|java hook backend not built|unsupported|unknown op/i.test(hookError)) {
   skip(`agent does not expose LSPlant java_hook: ${hookError}`);
 }
 if (!hook.ok) {

@@ -20,7 +20,9 @@ const exp=new Set(a.exports), imp=new Set(a.imports);
 const hasExports = exp.has('adh_agent_start') && exp.has('JNI_OnLoad');
 const hasNeeded = (a.needed||[]).some(n=>/liblog|libc/.test(n));
 const hasImports = [...imp].some(s=>/pthread|mprotect|dlopen|__system_property_get/.test(s));
-const hasStr = (a.strings||[]).some(s=>/ADH_AGENT|adhd|Host ADH Daemon/.test(s));
+// v4.50 scrubbed our identity strings, so the fixture is now a token we WANT to keep: the
+// native_hook op name (the string extractor must still find real content).
+const hasStr = (a.strings||[]).some(s=>/native_hook|rt\.hook/.test(s));
 console.log(`exports(adh_agent_start,JNI_OnLoad)=${hasExports} needed=${JSON.stringify(a.needed)} imports=${hasImports} strings=${hasStr}`);
 const pass = hasExports && hasNeeded && hasImports && hasStr;
 console.log(pass?'RESULT:PASS':'RESULT:FAIL');

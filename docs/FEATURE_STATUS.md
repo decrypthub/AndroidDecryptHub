@@ -1,16 +1,16 @@
 # ADH 功能状态（发布前梳理，2026-09-19 更新）
 
 > 这份文件回答一个问题：**现在到底有什么、什么是验证过的、什么是没验证的、什么还没做完。**
-> 判定只认 `tools/verify_all.sh`（**103 个脚本 = 28 host + 75 device**），不认"看起来能跑"。
+> 判定只认 `tools/verify_all.sh`（**104 个脚本 = 29 host + 75 device**），不认"看起来能跑"。
 > 规格见 `REQUIREMENTS.md`，架构与排期见 `DEVELOPMENT_PLAN.md`，跨会话进度见 `PROGRESS.md`。
 > 最近一次**全绿**门禁：`6319d5d`（设备在位，**92 PASS / 0 FAIL / 2 SKIP**）。
-> 最近一次 host-only 门禁（手机不在位）：**28 PASS / 0 FAIL / 75 SKIP** —— 设备脚本如实记 SKIP，不再冒充通过。
+> 最近一次 host-only 门禁（手机不在位）：**29 PASS / 0 FAIL / 75 SKIP** —— 设备脚本如实记 SKIP，不再冒充通过。
 
 ## 0. 发布物
 
 | 交付物 | 来源 | 状态 |
 |---|---|---|
-| `libadh_agent.so`（arm64-v8a，release 剥离，836,192 B） | `tools/build_agent.sh` | ✅ 已验收（v01–v79 系列） |
+| `libadh_agent.so`（arm64-v8a，release 剥离，836,432 B） | `tools/build_agent.sh` | ✅ 已验收（v01–v79 系列） |
 | Zygisk 模块 zip + ADH Manager APK + 组合包（**v0.3.10**） | `tools/build_zygisk.sh` / `build_bundle.sh` / `flash_device.sh` | ✅ 已验收（v27）+ 真机刷入（memfd 注入 v4.37） |
 | 可选后端：Xposed 薄模块 APK | `injector/xposed/` + `tools/build_xposed.sh` | ✅ 已验收（v31/v32），默认关闭 |
 | 可选后端：Frida Gadget | `tools/fetch_frida_gadget.sh` + `load_frida_gadget.sh` | ✅ 已验收（v30），默认关闭；官方二进制（未魔改） |
@@ -21,7 +21,7 @@
 
 | 层 | 位置 | 承担什么 | 规模 |
 |---|---|---|---|
-| **Agent**（目标进程内） | `agent/` → `libadh_agent.so` | **40 个命令分支**：GOT/inline/addr/sites/vtable hook、Java(LSPlant) hook（单方法 + `hookAll` 批量 + 参数改写/返回值替换/skip/调用链）、JNI_OnLoad（含加载时 watch）/RegisterNatives/JNIEnv 76 槽、函数与 QBDI trace、dex/so/内存 dump、maps/内存读写搜、ART 结构枚举、活体对象自省、主动触发、`load_so`、`native_call`（整数+浮点）、`native_backtrace`、`syscall_watch`、轻量 RPC —— **只采集/执行，不做分析** | C/C++，产物 816 KB |
+| **Agent**（目标进程内） | `agent/` → `libadh_agent.so` | **40 个命令分支**：GOT/inline/addr/sites/vtable hook、Java(LSPlant) hook（单方法 + `hookAll` 批量 + 参数改写/返回值替换/skip/调用链）、JNI_OnLoad（含加载时 watch）/RegisterNatives/JNIEnv 76 槽、函数与 QBDI trace、dex/so/内存 dump、maps/内存读写搜、ART 结构枚举、活体对象自省、主动触发、`load_so`、`native_call`（整数+浮点）、`native_backtrace`、`syscall_watch`、轻量 RPC —— **只采集/执行，不做分析** | C/C++，产物 817 KB |
 | **Host ADH Daemon**（主机） | `daemon/` | **76 个 MCP 工具 + 86 条 HTTP 路由**：dex 解析/索引(SQLite)/搜索/xref、Capstone 反汇编与 syscall 归因/参数解码、trace 摘要、syscall 摘要、脱壳编排与重建、工件存储、Web UI、MCP server | TypeScript（含 12 个单测文件、139 条用例） |
 | **Device**（手机侧） | `device/` | AIDL 作用域读写、模块状态、目标进程启停、可选后端开关 —— **不做分析** | Kotlin |
 | **注入器** | `injector/zygisk`、`injector/xposed` | 把 `.so` 送进目标进程（Zygisk 走 **memfd**，目标 maps 不出现模块路径）+ 传真实包名 | C++/Java |
@@ -52,6 +52,7 @@
 | 控制面 / MCP / Web | v10_mcp, v10_webui, v10_export, v10_events, v19_settings, v33_backends, v35_sessions, **v71(registry)**, **v80(trace digest)**, **v83(java trace)**, **v84(native batch)**, **v85(一站式 syscall)**, **v86(throttle)**, **v87(MCP 可操作性)** | MCP 76 工具可调；注册表形状自检；Web UI；会话清理 |
 | 手机自动化（模块 X） | v36, v38, v39, v40, v41 | 树/截图/选择器/手势/输入/wait/通知/技能；硬超时、桥接自愈、root 输入、屏幕状态；**重启后的 OEM 弹窗按 BACK 有界重试** |
 | 注入足迹 | v26_footprint, v01 | release 剥离 + 仅 3 个动态导出 + 无 RWX LOAD |
+| 字符串去特征（stage 1） | **v88**, scan_agent_signatures | 自己的 tag/文案/自名/fixture 默认值全部清零（含 DT_SONAME）；剩余第三方与契约串按只许降预算记账；门禁带**负对照**（植入 token 必须被抓到） |
 | MCP 可操作性 / 设备文件系统 | **v87**, v25_fsbrowser | 每个 agent op 必须能从 MCP 导入图到达（否则在 `INTERNAL_OPS` 写明理由）：`fs_list`/`fs_read` 与 REST 共用实现；存活/引擎/通道三个探针的判定显式（引擎 `ok` = fired && protRestored） |
 | 单元测试（host） | v76, v80, v81, v83, v84, v85, **v86**, **v87** | syscall 归因/参数解码/一站式装配、trace 摘要、backtrace dynsym、Java trace（含三阶段装配与 drain 守卫）、native 批量选择、native 限流（默认/夹紧/拒绝垃圾值 + 安装回路真实 payload）、探针判定与设备文件读取（二进制/超大/截断/坏 base64）：**109 条** `node --test` 用例（合计含 automation 30 条 = 139；v81/v83/v86/v87 按文件最小数断言） |
 
@@ -68,6 +69,7 @@
 | Java 类级 trace | start 挂 HookProbe → java_call stackOuter → digest 给出两个重载各自次数与调用方 → stop 后进程存活 | v83（设备半） |
 | 一站式 syscall 跟踪 | libc uname 站点 start → 触发 adh_libc_uname_probe → digest 调用方是该 fixture、observed 全 160、无 mismatch → stop 后存活 | v85（设备半） |
 | native 批量挂钩 | 对 libadhdetect.so 用 prefix:adh_ 装一批 → 触发 → unhook 全部 → 进程存活 | v84（设备半） |
+| 签名去特征（运行期） | 目标进程内用 agent 自己的 memory read 扫已加载镜像，确认 deny-list 一个都不在（静态镜像已过 v88）；`qbdi_trace` 缺 symLib/symbol 必须 fail-loud | v88（设备半）/v51/v10_qbdi |
 | MCP 探针与文件系统 | `agent_ping` 往返延迟、`engine_selftest` 在沙盒上 `fired && protRestored`、`protocol_selftest` 1MB 帧完整、`fs_list`/`fs_read` 走 `/data/data/com.adh.sandbox` 与 `/proc/self/cmdline`（v25 老断言必须继续过） | v87（设备半） |
 | native 事件限流 | libc 热站点（`read`/`write`）用 `throttleMs:200`：事件间隔 ≥ 窗口、`hits = 已发事件 + throttled`、`throttled` 单调递增；带 `returnValue`/`skipOriginal` 的钩子每一次命中都生效 | v86（设备半） |
 | 门禁抖动定性 | gate11 的 v11/v16/v20 单独复跑（评审判定为设备状态级联，非回归） | — |

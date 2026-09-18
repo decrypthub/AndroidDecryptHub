@@ -17,7 +17,7 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 
-#define TSTAG "ADH_SLOT"
+#define TSTAG "rt.slot"
 #define TLOGI(...) __android_log_print(ANDROID_LOG_INFO, TSTAG, __VA_ARGS__)
 #define TLOGE(...) __android_log_print(ANDROID_LOG_ERROR, TSTAG, __VA_ARGS__)
 

@@ -899,7 +899,7 @@ static int env_hook_uninstall_index(int index, char *error, size_t error_size) {
     __atomic_store_n(&g_env_hooks[index].active, 0, __ATOMIC_RELEASE);
     void *current = __atomic_load_n(saved_slot, __ATOMIC_ACQUIRE);
     if (current != env_hook_wrapper(index)) {
-        snprintf(error, error_size, "%s: table entry changed underneath the ADH wrapper; left untouched",
+        snprintf(error, error_size, "%s: table entry changed underneath the hook wrapper; left untouched",
                  g_env_hooks[index].name);
         return 0;
     }
@@ -966,7 +966,7 @@ static int env_hook_install_index(int index, char *error, size_t error_size) {
         return 0;
     }
     if (original == env_hook_wrapper(index)) {
-        snprintf(error, error_size, "%s: entry already points at the ADH wrapper", g_env_hooks[index].name);
+        snprintf(error, error_size, "%s: entry already points at the hook wrapper", g_env_hooks[index].name);
         return 0;
     }
     // Publish the real entry before the swap: a call that lands in the wrapper during the

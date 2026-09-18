@@ -15,6 +15,13 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.50 agent 去特征 stage 1 + 签名门禁（2026-09-19，host 验收 PASS；真机待做）**：以前"去特征"只有 stealth pool / memfd / RELRO 还原这类**行为层**措施，**字符串层**没人管——agent 跑在目标进程里，它的 `.rodata` 就是目标能自己读的内存，一次 `strings` 式扫描就能把工具名读出来。本轮把它变成**可测的数字**。
+      · 新增 `tools/scan_agent_signatures.sh`：扫 release `.so` 的字符串，分两类——**MUST_BE_ABSENT**（我们自己的身份串，无外部契约，必须为 0）与 **BUDGETED**（还动不了的，每项带一个只许降不许升的上限 + stage 2 修法）。`tools/verify_v88_agent_signatures.sh` 跑它，并带**负对照**：往 .so 副本里植入一个真 token，扫描器**必须**报 FAIL（门禁不能自证）。
+      · **stage 1 已清零**：7 个 `ADH_*` 日志 tag → 中性 `rt.*`（仓库内没有任何脚本读 logcat，改动零契约）；agent 自己的日志/错误文案里的 Host ADH Daemon / ADH wrapper / lsplant:: / Dobby* / fetch_dobby.sh / fetch_lsplant.sh 全部改中性；`qbdi_trace` 里的**沙盒 fixture 默认值**（libadhdetect.so / adh_trace_target）删掉——这同时修掉一处**红线违规**（agent 不得硬编码目标模块名），改为 fail-loud 要求调用方给出 symLib+symbol；`got.c` 的自名 fallback 改为 **XOR 混淆**（volatile 表 + volatile key，防止 -O2 把明文折回 .rodata）；CMake 关掉 **DT_SONAME**（用 NO_SONAME 属性），因为我们从来不用 soname 加载（Zygisk/Xposed 走路径，sandbox 走文件名）。
+      · 顺带修：`javahook_probe`/`java_hook status` 的 `backend` 值 `"lsplant"` → `"art"`（主机侧没有消费者断言该值），v42/v43 的 SKIP 正则同时接受新旧文案；`verify_v10_qbdi.sh` 改为显式传 fixture（以前靠 agent 的默认值）。
+      · **仍是预算内（stage 2，每项都写了修法）**：`adh_agent_start`/`adh_agent_set_package`（两个 loader 的导出契约，改名要同时改 Zygisk/Xposed + 脚本）、`com.adh.agent.AdhJavaHookBridge` + `/adh_bridge.dex`（Java bridge 类名与 code-cache 文件名，需要重生成内嵌 dex）、`adh.reporter.class`（沙盒设置的属性名）、Dobby x2 / DobbyHook x1 / LSPlant x2（**预编译静态库**里的名字，要在 fetch 时打补丁重建）、`libQBDI.so` x2（真实 dlopen 名）、`libzygisk.so` x1。
+      · 验收：agent 零告警重建（836,432 B，SONAME 已无）；`tools/verify_v88_agent_signatures.sh`（扫描 PASS + 负对照捕获植入 token + 源码里 fixture 名/旧 tag 不得回归）**PASS**；全量 host 门禁 **29 PASS / 0 FAIL / 75 SKIP**（104 脚本 = 29 host + 75 device）。
+      · **待真机**：① 沙盒里 `qbdi_trace` 缺 symLib/symbol 必须 fail-loud（v51 走显式参数应继续 PASS，v10_qbdi 已改）；② 目标进程**内存内**扫描（用 agent 自己的 memory read 扫已加载的 agent 镜像）确认 deny-list 不存在——静态镜像已证明，运行期再证一次。
 - [~] **v4.49 MCP 可操作性（op 覆盖审计 + 探针 + 设备文件系统）（2026-09-19，host 验收 PASS；真机验收待做）**：目标里"让 MCP 完全可操作"此前只是一句**口号**——没有任何东西在检查它。本轮先做**审计**（40 个 agent 命令分支 × MCP 导入图可达性），再修审计出来的缺口。
       · **审计发现**：① `ping` 从 v0.2 起就是**死代码**（agent 侧有实现，Host 侧从来没有任何地方发过它），于是"agent 还活着吗"只能靠发一条真命令等超时；② 三个能力**只有 REST/验收脚本有**：设备文件浏览（`list_dir`/`read_file`）、hook 引擎自检（`gothook_selftest`）、通道自检（`frame_echo`）；③ 反向检查干净——daemon 没有发过 agent 不认识的 op。
       · 新增 5 个 MCP 工具（71 → **76**）：`agent_ping`（5s 快速存活 + 往返延迟，用来区分"目标没了"和"这条命令慢"）、`engine_selftest`（`ok` 是**判定**不是"命令跑通了"：`fired` 且 `protRestored` 才算过，留下可写 RELRO 页的构建直接报 detectable）、`protocol_selftest`（超大帧 + 尾部标记越过老的 8192 单行上限）、`fs_list` / `fs_read`（设备文件系统：1MB 上限 + `truncated` 如实，二进制/超大文件用 `textOmitted` 说明原因而不是把垃圾贴出来）。

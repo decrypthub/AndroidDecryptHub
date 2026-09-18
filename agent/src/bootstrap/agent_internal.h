@@ -18,7 +18,7 @@
 #define AGENT_VER   "0.2.0"
 #define ADH_HOST    "127.0.0.1"
 #define ADH_PORT    8761
-#define TAG         "ADH_AGENT"
+#define TAG         "rt.agent"
 #define LOGI(...)   __android_log_print(ANDROID_LOG_INFO,  TAG, __VA_ARGS__)
 #define LOGE(...)   __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 

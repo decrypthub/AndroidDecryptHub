@@ -18,7 +18,7 @@ const a = agents.filter(x => x.online).sort((x, y) => (y.connectedAt ?? 0) - (x.
 if (!a) { console.log('NO_AGENT'); console.log('RESULT:SKIP'); process.exit(0); }
 const r = await (await fetch(`${base}/api/java/probe?session=${encodeURIComponent(a.sessionId)}`)).json();
 const err = String(r.error ?? '');
-if (!r.ok && /unsupported|unknown op|lsplant not built/i.test(err)) {
+if (!r.ok && /unsupported|unknown op|lsplant not built|java hook backend not built/i.test(err)) {
   console.log(`old payload / no LSPlant: ${err}`);
   console.log('RESULT:SKIP');
   process.exit(0);
@@ -29,7 +29,7 @@ const hook = await (await fetch(`${base}/api/java/hook`, {
   body: JSON.stringify({ session: a.sessionId, action: 'status' }),
 })).json();
 const hookErr = String(hook.error ?? '');
-if (!hook.ok && /unsupported|unknown op|lsplant not built/i.test(hookErr)) {
+if (!hook.ok && /unsupported|unknown op|lsplant not built|java hook backend not built/i.test(hookErr)) {
   console.log(`old payload / no java_hook: ${hookErr}`);
   console.log('RESULT:SKIP');
   process.exit(0);

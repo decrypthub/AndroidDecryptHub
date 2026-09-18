@@ -1339,6 +1339,8 @@ MCP              →  AI 可编程操控，与 HTTP 同源
 
 **目标**：授权取证环境中，提高 Agent 在主动反调试/反注入运行时下的**存活能力、采集稳定性与故障定位能力**。
 
+> 实现状态（v4.50，**实现 + host 验收完成，真机验收待做**）：**字符串层去特征 + 签名门禁**。agent 跑在目标进程里，`.rodata` 就是目标能自己读的内存，所以「还残留哪些串」必须是**可测**的：`tools/scan_agent_signatures.sh` 分两类——MUST_BE_ABSENT（我们自己的身份串，必须为 0）与 BUDGETED（还动不了的，带只许降的上限 + stage 2 修法）。stage 1 已清零：7 个 `ADH_*` 日志 tag → 中性 `rt.*`；自己文案里的 Host ADH Daemon / ADH wrapper / `lsplant::` / `Dobby*` / `fetch_*_dobby|lsplant.sh` → 中性；`qbdi_trace` 的沙盒 fixture 默认值删除（同时修掉「agent 不得硬编码目标模块名」的红线违规，改为要求调用方给 symLib+symbol）；`got.c` 自名 fallback 改 XOR 混淆（volatile 表+key 防常量折叠）；CMake 关掉 DT_SONAME（我们从不用 soname 加载）。门禁 `tools/verify_v88_agent_signatures.sh` 带**负对照**：往 .so 副本植入一个 token，扫描器必须报 FAIL。仍预算中的（`adh_agent_start`/`adh_agent_set_package` 导出、Java bridge 类名与 dex 文件名、`adh.reporter.class`、预编译 Dobby/LSPlant 符号、`libQBDI.so`、`libzygisk.so`）各自写明 stage 2 修法，数字只许降。
+
 ### 26.1 诊断层
 
 - 检测目标是否存在：hook 冲突、maps 自扫描、ptrace 占用、seccomp 限制、linker namespace 限制、inline-hook 序言校验、Zygisk/框架痕迹检测

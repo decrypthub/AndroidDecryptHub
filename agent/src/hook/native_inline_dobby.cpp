@@ -5,7 +5,7 @@
 #include <pthread.h>
 #include <android/log.h>
 
-#define ITAG "ADH_INLINE"
+#define ITAG "rt.inline"
 #define ILOGE(...) __android_log_print(ANDROID_LOG_ERROR, ITAG, __VA_ARGS__)
 
 static pthread_once_t g_dobby_once = PTHREAD_ONCE_INIT;
@@ -26,7 +26,7 @@ extern "C" int adh_inline_hook(void *target, void *replacement, void **original)
     const auto rc = DobbyHook(target, replacement, original);
     adh_stealth_pool_window(0);
     if (rc != RS_SUCCESS) {
-        ILOGE("DobbyHook failed target=%p rc=%d", target, (int)rc);
+        ILOGE("inline patch failed target=%p rc=%d", target, (int)rc);
         return 0;
     }
     return *original != nullptr ? 1 : 0;
@@ -38,7 +38,7 @@ extern "C" int adh_inline_unhook(void *target) {
     const auto rc = DobbyDestroy(target);
     adh_stealth_pool_window(0);
     if (rc != RT_SUCCESS) {
-        ILOGE("DobbyDestroy failed target=%p rc=%d", target, (int)rc);
+        ILOGE("inline patch removal failed target=%p rc=%d", target, (int)rc);
         return 0;
     }
     return 1;

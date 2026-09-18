@@ -118,6 +118,13 @@ if(NOT EXISTS "${AGENT_EXPORT_MAP}")
 endif()
 target_link_options(adh_agent PRIVATE "-Wl,--version-script=${AGENT_EXPORT_MAP}")
 
+# No SONAME at all: the shipped .dynstr is readable by the target (it can walk its own mappings), so
+# the library name must not sit in there. Nothing needs it - the Zygisk/Xposed loaders dlopen a PATH
+# (memfd or absolute path), and System.loadLibrary resolves the FILE name (libadh_agent.so, which
+# stays for build/tooling compatibility). A plain -soname link option loses to CMake's own, hence
+# the property.
+set_target_properties(adh_agent PROPERTIES NO_SONAME TRUE)
+
 target_include_directories(adh_agent PRIVATE ${QBDI_INC} ${HOOK_INC} ${LSPLANT_INC})
 
 # Android system libs: log (android/log.h), plus libc/pthread (implicit).

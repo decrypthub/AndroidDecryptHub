@@ -27,7 +27,7 @@
 #include <unistd.h>
 #include <vector>
 
-#define LTAG "ADH_RT"
+#define LTAG "rt.java"
 #define LLOGI(...) __android_log_print(ANDROID_LOG_INFO,  LTAG, __VA_ARGS__)
 #define LLOGE(...) __android_log_print(ANDROID_LOG_ERROR, LTAG, __VA_ARGS__)
 
@@ -203,15 +203,15 @@ static void do_init(void) {
         g_init_ok = lsplant::Init(g_init_env, info) ? 1 : 0;
     } catch (...) {
         g_init_ok = 0;
-        set_init_error("LSPlant init threw a C++ exception");
+        set_init_error("java hook backend init threw a C++ exception");
     }
 
     if (g_init_ok) {
         g_init_error[0] = 0;
-        LLOGI("lsplant::Init -> ok");
+        LLOGI("java hook backend init -> ok");
     } else {
-        if (!g_init_error[0]) set_init_error("lsplant::Init returned false (check logcat tag ADH_RT)");
-        LLOGE("lsplant::Init -> FAIL: %s", g_init_error);
+        if (!g_init_error[0]) set_init_error("java hook backend init returned false (check logcat tag rt.java)");
+        LLOGE("java hook backend init -> FAIL: %s", g_init_error);
     }
 }
 
@@ -994,7 +994,7 @@ extern "C" int adh_javahook_hook_method(JNIEnv *env, const char *class_name, con
     if (!backup) {
         env->DeleteGlobalRef(bridge);
         env->DeleteLocalRef(target);
-        return fail_hook("lsplant::Hook failed (check logcat tag ADH_RT)");
+        return fail_hook("java hook backend hook failed (check logcat tag rt.java)");
     }
 
     // The Method returned by LSPlant is LSPlant's own global ref; UnHook deletes it. Keep
@@ -1220,7 +1220,7 @@ extern "C" int adh_javahook_status_json(JNIEnv *env, char *out, size_t out_size)
     pthread_mutex_unlock(&g_java_hooks_lock);
     hooks += "]";
     std::string json = "{\"available\":true,\"returnOverride\":true,\"argRewrite\":true,\"stackCapture\":true,\"initOk\":" + std::string(g_init_ok ? "true" : "false") +
-                       ",\"backend\":\"lsplant\",\"version\":\"v6.4\",\"active\":" +
+                       ",\"backend\":\"art\",\"version\":\"v6.4\",\"active\":" +
                        std::string(active_count ? "true" : "false") +
                        ",\"count\":" + std::to_string(active_count) +
                        ",\"patched\":" + std::to_string(patched_count) +

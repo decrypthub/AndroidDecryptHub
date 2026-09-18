@@ -140,7 +140,7 @@ static void cmd_javahook_probe(int fd, const char *id) {
     char out[1024];
     snprintf(out, sizeof(out),
              "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"javahook_probe\",\"ok\":%s,\"available\":true,"
-             "\"initOk\":%s,\"backend\":\"lsplant\",\"version\":\"%s\",\"error\":\"%s\"}\n",
+             "\"initOk\":%s,\"backend\":\"art\",\"version\":\"%s\",\"error\":\"%s\"}\n",
              idj, init_ok ? "true" : "false", init_ok ? "true" : "false", ADH_LSPLANT_VERSION, errj);
     send_line(fd, out);
     LOGI("javahook_probe: init=%d error=%s", init_ok, err ? err : "");
@@ -148,7 +148,7 @@ static void cmd_javahook_probe(int fd, const char *id) {
     char out[240];
     snprintf(out, sizeof(out),
              "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"javahook_probe\",\"ok\":false,\"available\":false,"
-             "\"error\":\"lsplant not built — run tools/fetch_lsplant.sh\"}\n", idj);
+             "\"error\":\"java hook backend not built in this build\"}\n", idj);
     send_line(fd, out);
 #endif
 }
@@ -266,7 +266,7 @@ static void cmd_java_hook(int fd, const char *id, const char *action, const char
     char out[240];
     snprintf(out, sizeof(out),
              "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"java_hook\",\"ok\":false,"
-             "\"error\":\"lsplant not built — run tools/fetch_lsplant.sh\"}\n", idj);
+             "\"error\":\"java hook backend not built in this build\"}\n", idj);
     send_line(fd, out);
 #endif
 }
@@ -686,18 +686,18 @@ static void *agent_thread(void *arg) {
     for (;;) {
         int fd = connect_adhd();
         if (fd >= 0) {
-            if (failed) LOGI("reconnected to Host ADH Daemon %s:%d after %d failed attempts", ADH_HOST, ADH_PORT, failed);
-            else LOGI("connected to Host ADH Daemon %s:%d", ADH_HOST, ADH_PORT);
+            if (failed) LOGI("reconnected to host daemon %s:%d after %d failed attempts", ADH_HOST, ADH_PORT, failed);
+            else LOGI("connected to host daemon %s:%d", ADH_HOST, ADH_PORT);
             failed = 0;
             report(fd);
             command_loop(fd);
             close(fd);
-            LOGI("Host ADH Daemon connection closed; reconnecting");
+            LOGI("host daemon connection closed; reconnecting");
             usleep(1000 * 1000);   // give a restarting daemon time to bind before re-dialling
             continue;
         }
         if (failed == 0 || failed % 20 == 0)
-            LOGE("Host ADH Daemon unreachable (attempt %d, need: adb reverse tcp:%d tcp:%d)", failed + 1, ADH_PORT, ADH_PORT);
+            LOGE("host daemon unreachable (attempt %d, need: adb reverse tcp:%d tcp:%d)", failed + 1, ADH_PORT, ADH_PORT);
         failed++;
         usleep(500 * 1000);
     }

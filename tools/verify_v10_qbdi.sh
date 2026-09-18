@@ -14,7 +14,8 @@ const http=process.argv[2]; const base=`http://127.0.0.1:${http}`;
 const agents=await (await fetch(`${base}/api/agents`)).json();
 const a=agents.filter(x=>x.package==='com.adh.sandbox'&&x.online).sort((x,y)=>y.connectedAt-x.connectedAt)[0];
 if(!a){console.log('NO_AGENT');console.log('RESULT:FAIL');process.exit(0);}
-const r=await (await fetch(`${base}/api/trace/qbdi?session=${a.sessionId}`)).json();
+// The agent no longer knows any fixture name: the caller must name the library and symbol.
+const r=await (await fetch(`${base}/api/trace/qbdi?session=${a.sessionId}&symLib=libadhdetect.so&symbol=adh_trace_target`)).json();
 if(r.error){console.log('ERR',r.error);console.log('RESULT:FAIL');process.exit(0);}
 if(r.ok===false && /not available|dlopen/.test(r.error||JSON.stringify(r))){console.log('QBDI not bundled -> SKIP');console.log('RESULT:SKIP');process.exit(0);}
 console.log(`ok=${r.ok} retval=${r.retval} insnCount=${r.count}`);

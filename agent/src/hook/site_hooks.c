@@ -21,7 +21,7 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 
-#define STAG "ADH_SITE"
+#define STAG "rt.site"
 #define SLOGI(...) __android_log_print(ANDROID_LOG_INFO, STAG, __VA_ARGS__)
 #define SLOGE(...) __android_log_print(ANDROID_LOG_ERROR, STAG, __VA_ARGS__)
 

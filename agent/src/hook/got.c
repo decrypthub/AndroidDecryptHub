@@ -535,6 +535,20 @@ static int my_close(int fd) {
 // Resolved on EVERY call (no permanent cache): the agent can be loaded more than once in one
 // process (self-load + zygisk), each copy seeing its own path, so a cached name would point one
 // copy at the other. The buffer is thread-local for the same reason.
+// Fallback self-name. Obfuscated on purpose: the target can read its own memory, so a plain
+// literal here would hand a scanner our library name for free. Both the table and the key are
+// volatile - without that an optimizing compiler folds the decode loop back into the plaintext.
+static const volatile unsigned char k_self_name_enc[] = { 0x36, 0x33, 0x38, 0x3b, 0x3e, 0x32, 0x05, 0x3b, 0x3d, 0x3f, 0x34, 0x2e, 0x74, 0x29, 0x35 };
+static const volatile unsigned char k_self_name_key = 0x5a;
+static const char *self_name_fallback(void) {
+    static __thread char plain[32];
+    const size_t n = sizeof(k_self_name_enc);
+    if (n + 1 > sizeof(plain)) { plain[0] = 0; return plain; }
+    for (size_t i = 0; i < n; i++) plain[i] = (char)(k_self_name_enc[i] ^ k_self_name_key);
+    plain[n] = 0;
+    return plain;
+}
+
 const char *adh_self_module_name(void) {
     static __thread char cached[128];
     cached[0] = 0;
@@ -544,7 +558,7 @@ const char *adh_self_module_name(void) {
         snprintf(cached, sizeof(cached), "%s", slash ? slash + 1 : self.dli_fname);
         return cached;
     }
-    snprintf(cached, sizeof(cached), "libadh_agent.so");
+    snprintf(cached, sizeof(cached), "%s", self_name_fallback());
     return cached;
 }
 

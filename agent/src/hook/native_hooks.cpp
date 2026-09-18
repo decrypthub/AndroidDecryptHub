@@ -19,7 +19,7 @@
 #include <string>
 #include <time.h>
 
-#define TAG "ADH_NATIVE_HOOK"
+#define TAG "rt.hook"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
@@ -542,7 +542,7 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
         }
         pthread_mutex_unlock(&g_native_hooks_lock);
         if (target_was_hard_restored(target)) {
-            return fail("target was hard-unhooked earlier in this process: its Dobby state is stale, restart the target before hooking it again");
+            return fail("target was hard-unhooked earlier in this process: its backend state is stale, restart the target before hooking it again");
         }
         // Snapshot the original prologue so a hard unhook can write it back without asking Dobby
         // to free its trampoline pool (DobbyDestroy breaks later DobbyHook calls on this build).
@@ -552,7 +552,7 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
         if (memcmp(prologue, target, 4) == 0) {
             // Dobby reported success but the entry is unchanged: never claim a hook that is not there.
             (void)adh_inline_unhook(target);
-            return fail("inline patch did not change the target entry (stale Dobby state?)");
+            return fail("inline patch did not change the target entry (stale backend state?)");
         }
         pthread_mutex_lock(&g_native_hooks_lock);
         memcpy(g_native_hooks[slot].prologue, prologue, sizeof(prologue));

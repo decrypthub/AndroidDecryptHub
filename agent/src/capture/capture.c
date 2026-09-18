@@ -1149,7 +1149,7 @@ void adh_cmd_inline_crypto_test(int fd, const char *id, const char *module,
     char out[240];
     snprintf(out, sizeof(out),
         "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"inline_crypto_test\","
-        "\"ok\":false,\"hooked\":false,\"error\":\"inline backend not built - run tools/fetch_dobby.sh\"}\n",
+        "\"ok\":false,\"hooked\":false,\"error\":\"inline hook backend not built in this build\"}\n",
         idj);
     send_line(fd, out);
 }
