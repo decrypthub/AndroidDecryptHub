@@ -1339,6 +1339,8 @@ MCP              →  AI 可编程操控，与 HTTP 同源
 
 **目标**：授权取证环境中，提高 Agent 在主动反调试/反注入运行时下的**存活能力、采集稳定性与故障定位能力**。
 
+> 实现状态（v4.53，**实现 + host 验收完成，真机验收待做**）：**活体对象从"能读、能调"补到"能写"**。`object_set{className, field, targetField, value}`（MCP + `POST /api/object/set`）沿用 inspect/invoke 的静态持有者约定，按字段声明类型强转（boolean/int/long/float/double/String），返回 before/after 并回读验证；final 字段（Kotlin `val`）明确失败。设备脚本 `tools/verify_v89_object_set.sh` 在 `HeapProbe.sConfig` 上翻转三个可变字段并复读，另要求 final 字段 fail-loud。边界：只覆盖反射可见字段，直接 `iget/iput` 与 JNIEnv `Get/Set*Field` 仍未纳入观察面（后者是 v4.54+ 的 JNIEnv 槽位候选）。
+
 > 实现状态（v4.52，**实现 + host 验收完成，真机验收待做**）：**hook 槽位预算从"藏在失败里"变成可见、可被工具遵守**。agent 的 `native_hook status` 新增 `slots{max,used,active,free,byMode{got,inline,sites,vtable}}`，其中 **`used` = 已消耗槽位**（软卸载的 inline 钩子保留 stub、槽位直到硬卸载才释放），`free = max - used` 才是真实余量、`java_hook status` 新增 `maxHooks`；host 的 `native_hook_all` 先读一次 status，用纯函数 `effectiveBatchLimit(requested, freeSlots)` 决定这一批装几个——`free < requested` 时截断并由 `limitReason` 说明，**`free == 0` 直接 fail-loud**（"unhook something first"）而不是逐符号失败，老 payload 不上报预算时回退到请求值并注明，负数预算按"agent 报告损坏"拒绝（不再伪装成 0 空闲），响应带 `effectiveLimit`/`requestedLimit`。**安装失败不再烧槽位**：预留位（`active==2`，从未发布）在失败路径归还 `used`，否则 16 次失败就能吃光整个预算。单测 7 → 9 条（截断/阻断/回退/夹紧/损坏预算），`tools/verify_v84_native_hook_all.sh` 增加"agent 必须上报 slots、daemon 必须走 status 取预算、响应必须带 limitReason"的断言。
 
 > 实现状态（v4.51，**实现 + host 验收完成**）：**vendored LSPlant 的字符串也清掉了**——`tools/patch_vendor_signatures.sh`（幂等 + `--check`，由 `tools/fetch_lsplant.sh` 调用）把 `ScopedSuspendAll("LSPlant Hook")`、LSPlant 的 log tag、以及**运行时生成 dex 的 source name `"lsplant"`** 改成中性；扫描器把 `LSPlant`/`lsplant` 提为 MUST_BE_ABSENT，门禁额外跑 vendor check（重新 fetch 忘打补丁会现形）。Dobby（预编译 AAR）与导出/Java bridge 仍在预算内。

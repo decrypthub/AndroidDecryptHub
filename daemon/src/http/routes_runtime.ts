@@ -272,6 +272,17 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
       try { const r = await sendCmd(sid, 'object_inspect', { className, field }); return send(r.ok ? 200 : 502, r); }
       catch (e) { return send(504, { error: (e as Error).message }); }
     } },
+    { method: 'POST', path: '/api/object/set', handler: async () => {
+      const body = await readBody(req);
+      const { session, className, field, targetField, value } = JSON.parse(body || '{}');
+      const sid = pickSid(session);
+      if (!sid || !className || !field || !targetField) return send(400, { error: 'need session, className, field, targetField' });
+      if (value === undefined || value === null) return send(400, { error: 'need value' });
+      try {
+        const r = await sendCmd(sid, 'object_set', { className, field, targetField, value: String(value) }, 20_000);
+        return send(r.ok ? 200 : 502, r);
+      } catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
     { method: 'POST', path: '/api/object/invoke', handler: async () => {
       const body = await readBody(req);
       const { session, className, field, method } = JSON.parse(body || '{}');

@@ -15,6 +15,11 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.53 活体对象字段写入 `object_set`（2026-09-19，host 验收 PASS；真机待做）**：目标要求"参考 frida"——`object_inspect`（读字段）与 `object_invoke`（调方法）早就有，但**不能改**：把一个活体实例上的 `isRooted`/`debugChecked`/密钥字段改掉再继续跑，是最常见的分析动作之一，之前只能靠 Java hook 去骗返回值。
+      · agent 新增命令 `object_set {className, field, targetField, value}`：`field` 仍是"静态持有者"约定（和 inspect/invoke 一致，沙盒里是 `HeapProbe.sConfig`），`targetField` 是该对象上的字段；值**按字段声明类型**强转（boolean/int/long/float/double/String，其它类型 fail-loud），返回 **before/after**，并**回读一次**证明写入真的落到目标里；Kotlin `val`（编译成 final 字段）会被 ART 拒绝 → 明确报 `set failed - the field is probably final`，不装作成功。
+      · MCP `object_set`（76 → **77** 工具）+ `POST /api/object/set`；沙盒夹具 `HeapProbe.Config` 增加三个**可变**字段（`flag`/`counter`/`label`）作为真机验收的 ground truth（v06 只按名字断言值，不受影响）。
+      · 验收：`tools/verify_v89_object_set.sh`（device，**脚本已就绪**）——布尔/整型/字符串三种写入的 before/after、**写后用 object_inspect 复读**、final 字段必须 ok:false、还原后进程存活；无设备时干净 SKIP。op 覆盖门禁（v87）自动把新 op 纳入"必须能从 MCP 到达"。host 门禁 **29 PASS / 0 FAIL / 83 SKIP**（112 脚本 = 29 host + 83 device）；agent 零告警重建。
+      · **边界（不隐瞒）**：写的是**反射可见的字段**；直接字节码 `iget/iput` 与 JNIEnv `Get/Set<Type>Field` 仍不在观察面内（前者要 ART instrumentation，后者是下一批 JNIEnv 槽位的候选）。继承字段当前只查 `getDeclaredField`（本类），跨类继承要按父类链走。
 - [~] **设备队列补齐：v80/v81/v83/v85 的设备半脚本（2026-09-19，host 语法/SKIP 验证 PASS）**：这四项之前只有 host 验证，`FEATURE_STATUS §2` 里写着"待真机"却**没有脚本**——手机回来也无从下手。现在四个都写好了，**13 项待真机全部可执行**。
       · `tools/verify_v80_device_trace_digest.sh`：对 `libadhdetect.so:adh_add_target`（(2+3)*2=10）实跑 QBDI → `/api/trace/digest`，断言 `retval=10`、指令数 ≥3、助记符 ≥2、hot 非空（QBDI 未打包则 SKIP）。
       · `tools/verify_v81_device_syscall_digest.sh`：libc uname 站点 watch → 触发 `adh_libc_uname_probe` → digest，断言 samples ≥1、运行期 x8 =160、**mismatches 为空**、分组里出现发起者（libc 之外的 fixture）、ring 非 lossy，卸载后进程存活。前面还带**正对照**（`adh_add_target(2,3)` 必须可调用），避免把"老 APK 缺 fixture"误判成 resolver 回归。

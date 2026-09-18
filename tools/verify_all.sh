@@ -142,6 +142,8 @@ SCRIPTS=(
   "verify_v09_cryptoconst.sh:host"
   "verify_v09_syscall.sh:host"
   "verify_v09_methodcode.sh:host"
+  # Live-object field WRITE (v4.53): read -> patch -> read back, and a final field must refuse.
+  "verify_v89_object_set.sh:device"
   "verify_v10_mcp.sh:host"
   "verify_v10_webui.sh:host"
   "verify_v33_backends.sh:host"

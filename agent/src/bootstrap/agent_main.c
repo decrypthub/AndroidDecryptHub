@@ -641,6 +641,13 @@ static void command_loop(int fd) {
                     json_get_str(line, "className", cls, sizeof(cls));
                     json_get_str(line, "field", fld, sizeof(fld));
                     adh_cmd_object_inspect(fd, id, cls, fld);
+                } else if (strcmp(op, "object_set") == 0) {
+                    char scls[256] = "", sholder[128] = "", sfield[128] = "", svalue[512] = "";
+                    json_get_str(line, "className", scls, sizeof(scls));
+                    json_get_str(line, "field", sholder, sizeof(sholder));
+                    json_get_str(line, "targetField", sfield, sizeof(sfield));
+                    json_get_str(line, "value", svalue, sizeof(svalue));
+                    adh_cmd_object_set(fd, id, scls, sholder, sfield, svalue);
                 } else if (strcmp(op, "object_invoke") == 0) {
                     char cls[160] = "", fld[64] = "", mth[64] = "";
                     json_get_str(line, "className", cls, sizeof(cls));

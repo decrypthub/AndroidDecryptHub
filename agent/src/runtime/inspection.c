@@ -135,6 +135,140 @@ done:
     LOGI("object_invoke: %s.%s.%s() -> %s ok=%d", class_name, field_name, method_name, result, ok);
 }
 
+// Write one field of a live object: the write counterpart of object_inspect. `field` names the STATIC
+// holder that carries the object (same convention as inspect/invoke), `target_field` is the field on
+// that object to patch, and the value is coerced by the FIELD declared type. The reply carries
+// before/after so the caller sees the effect and can put it back - flipping a flag on a live object
+// (isRooted, debugChecked, a key blob) is the whole point.
+static int adh_parse_bool_value(const char *v, int *out) {
+    if (!v) return 0;
+    if (strcmp(v, "true") == 0 || strcmp(v, "1") == 0 || strcmp(v, "yes") == 0) { *out = 1; return 1; }
+    if (strcmp(v, "false") == 0 || strcmp(v, "0") == 0 || strcmp(v, "no") == 0) { *out = 0; return 1; }
+    return 0;
+}
+
+static void adh_object_value_to_str(JNIEnv *env, jobject value, jmethodID value_of,
+                                    char *out, size_t out_size) {
+    out[0] = 0;
+    if (value_of) {
+        jstring s = (jstring)(*env)->CallStaticObjectMethod(env, (*env)->FindClass(env, "java/lang/String"), value_of, value);
+        if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+        if (s) {
+            const char *c = (*env)->GetStringUTFChars(env, s, NULL);
+            if (c) { snprintf(out, out_size, "%s", c); (*env)->ReleaseStringUTFChars(env, s, c); }
+        }
+    }
+    if (!out[0]) snprintf(out, out_size, "%s", value ? "<object>" : "null");
+}
+
+void adh_cmd_object_set(int fd, const char *id, const char *class_name, const char *holder_field,
+                        const char *target_field, const char *value) {
+    char idj[64]; json_escape(id, idj, sizeof(idj));
+    int did = 0;
+    JNIEnv *env = adh_jni_attach(&did);
+    if (!env) { char e[160]; snprintf(e, sizeof(e), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"object_set\",\"ok\":false,\"error\":\"no JavaVM\"}\n", idj); send_line(fd, e); return; }
+    (*env)->PushLocalFrame(env, 128);
+    int ok = 0; char err[200] = "", before[300] = "", after[300] = "", type_name[96] = "", obj_class_name[160] = "";
+
+    jclass cls_class = (*env)->FindClass(env, "java/lang/Class");
+    jclass field_class = (*env)->FindClass(env, "java/lang/reflect/Field");
+    jclass str_class = (*env)->FindClass(env, "java/lang/String");
+    jmethodID get_declared_field = (*env)->GetMethodID(env, cls_class, "getDeclaredField", "(Ljava/lang/String;)Ljava/lang/reflect/Field;");
+    jmethodID get_name = (*env)->GetMethodID(env, cls_class, "getName", "()Ljava/lang/String;");
+    jmethodID field_get_type = (*env)->GetMethodID(env, field_class, "getType", "()Ljava/lang/Class;");
+    jmethodID set_accessible = (*env)->GetMethodID(env, field_class, "setAccessible", "(Z)V");
+    jmethodID field_get = (*env)->GetMethodID(env, field_class, "get", "(Ljava/lang/Object;)Ljava/lang/Object;");
+    jmethodID set_boolean = (*env)->GetMethodID(env, field_class, "setBoolean", "(Ljava/lang/Object;Z)V");
+    jmethodID set_int = (*env)->GetMethodID(env, field_class, "setInt", "(Ljava/lang/Object;I)V");
+    jmethodID set_long = (*env)->GetMethodID(env, field_class, "setLong", "(Ljava/lang/Object;J)V");
+    jmethodID set_float = (*env)->GetMethodID(env, field_class, "setFloat", "(Ljava/lang/Object;F)V");
+    jmethodID set_double = (*env)->GetMethodID(env, field_class, "setDouble", "(Ljava/lang/Object;D)V");
+    jmethodID field_set = (*env)->GetMethodID(env, field_class, "set", "(Ljava/lang/Object;Ljava/lang/Object;)V");
+    jmethodID value_of = (*env)->GetStaticMethodID(env, str_class, "valueOf", "(Ljava/lang/Object;)Ljava/lang/String;");
+
+    if (!value || !value[0]) { snprintf(err, sizeof(err), "need value"); goto done; }
+    jclass target = adh_jni_load_app_class(env, class_name);
+    if (!target) { snprintf(err, sizeof(err), "class not found"); goto done; }
+    jobject holder = (*env)->CallObjectMethod(env, target, get_declared_field, (*env)->NewStringUTF(env, holder_field));
+    if (!holder || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); snprintf(err, sizeof(err), "holder field not found"); goto done; }
+    (*env)->CallVoidMethod(env, holder, set_accessible, JNI_TRUE);
+    jobject obj = (*env)->CallObjectMethod(env, holder, field_get, NULL);
+    if (!obj || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); snprintf(err, sizeof(err), "holder field is null (nothing to write to)"); goto done; }
+
+    jclass object_class = (*env)->GetObjectClass(env, obj);
+    {
+        jstring cn = (jstring)(*env)->CallObjectMethod(env, object_class, get_name);
+        if (cn) { const char *c = (*env)->GetStringUTFChars(env, cn, NULL); if (c) { snprintf(obj_class_name, sizeof(obj_class_name), "%s", c); (*env)->ReleaseStringUTFChars(env, cn, c); } }
+    }
+    jobject field = (*env)->CallObjectMethod(env, object_class, get_declared_field, (*env)->NewStringUTF(env, target_field));
+    if (!field || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); snprintf(err, sizeof(err), "target field not found on %s", obj_class_name); goto done; }
+    (*env)->CallVoidMethod(env, field, set_accessible, JNI_TRUE);
+
+    jobject field_type = (*env)->CallObjectMethod(env, field, field_get_type);
+    {
+        jstring tn = (jstring)(*env)->CallObjectMethod(env, field_type, get_name);
+        if (tn) { const char *c = (*env)->GetStringUTFChars(env, tn, NULL); if (c) { snprintf(type_name, sizeof(type_name), "%s", c); (*env)->ReleaseStringUTFChars(env, tn, c); } }
+    }
+    jobject old_value = (*env)->CallObjectMethod(env, field, field_get, obj);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); snprintf(err, sizeof(err), "could not read the old value"); goto done; }
+    adh_object_value_to_str(env, old_value, value_of, before, sizeof(before));
+
+    if (strcmp(type_name, "boolean") == 0) {
+        int b = 0;
+        if (!adh_parse_bool_value(value, &b)) { snprintf(err, sizeof(err), "boolean field expects true/false/1/0, got '%s'", value); goto done; }
+        (*env)->CallVoidMethod(env, field, set_boolean, obj, b ? JNI_TRUE : JNI_FALSE);
+    } else if (strcmp(type_name, "int") == 0) {
+        (*env)->CallVoidMethod(env, field, set_int, obj, (jint)strtol(value, NULL, 0));
+    } else if (strcmp(type_name, "long") == 0) {
+        (*env)->CallVoidMethod(env, field, set_long, obj, (jlong)strtoll(value, NULL, 0));
+    } else if (strcmp(type_name, "float") == 0) {
+        (*env)->CallVoidMethod(env, field, set_float, obj, (jfloat)strtod(value, NULL));
+    } else if (strcmp(type_name, "double") == 0) {
+        (*env)->CallVoidMethod(env, field, set_double, obj, (jdouble)strtod(value, NULL));
+    } else if (strcmp(type_name, "java.lang.String") == 0) {
+        (*env)->CallVoidMethod(env, field, field_set, obj, (*env)->NewStringUTF(env, value));
+    } else {
+        snprintf(err, sizeof(err), "unsupported field type '%s' (boolean/int/long/float/double/String)", type_name);
+        goto done;
+    }
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        // A final field (Kotlin val) lands here: report it as such instead of pretending it worked.
+        snprintf(err, sizeof(err), "set failed - the field is probably final (val/read-only) or the value is invalid for %s", type_name);
+        goto done;
+    }
+    jobject new_value = (*env)->CallObjectMethod(env, field, field_get, obj);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); snprintf(err, sizeof(err), "wrote the field but could not read it back"); goto done; }
+    adh_object_value_to_str(env, new_value, value_of, after, sizeof(after));
+    ok = 1;
+
+done:
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    (*env)->PopLocalFrame(env, NULL);
+    adh_jni_detach(did);
+    char classj[200], fieldj[160], typej[140], beforej[500], afterj[500], errorj[240];
+    json_escape(obj_class_name, classj, sizeof(classj));
+    json_escape(target_field, fieldj, sizeof(fieldj));
+    json_escape(type_name, typej, sizeof(typej));
+    json_escape(before, beforej, sizeof(beforej));
+    json_escape(after, afterj, sizeof(afterj));
+    json_escape(err, errorj, sizeof(errorj));
+    char out[1600];
+    if (ok) {
+        snprintf(out, sizeof(out),
+                 "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"object_set\",\"ok\":true,\"objectClass\":\"%s\","
+                 "\"field\":\"%s\",\"type\":\"%s\",\"before\":\"%s\",\"after\":\"%s\"}\n",
+                 idj, classj, fieldj, typej, beforej, afterj);
+    } else {
+        snprintf(out, sizeof(out),
+                 "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"object_set\",\"ok\":false,\"objectClass\":\"%s\","
+                 "\"field\":\"%s\",\"type\":\"%s\",\"error\":\"%s\"}\n",
+                 idj, classj, fieldj, typej, errorj);
+    }
+    send_line(fd, out);
+    LOGI("object_set: %s.%s.%s = %s (%s -> %s) ok=%d", class_name, holder_field, target_field, value, before, after, ok);
+}
+
 // Runtime footprint. These are observation counters only: no hiding, no fake VMA
 // names, no policy decisions. The baseline is captured when the agent is first
 // entered (JNI_OnLoad or adh_agent_start), before any hook/trace command runs.
