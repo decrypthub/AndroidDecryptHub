@@ -298,7 +298,8 @@ static void cmd_java_call(int fd, const char *id, const char *class_name, const 
 static void cmd_native_hook(int fd, const char *id, const char *action, const char *mode,
                             const char *module, const char *symbol, const char *addr,
                             int skip_original, const char *return_value, long long arg_index,
-                            const char *arg_value, long long requested_id, int hard, int max_sites) {
+                            const char *arg_value, long long requested_id, int hard, int max_sites,
+                            const char *sites_scope) {
     char idj[64];
     json_escape(id, idj, sizeof(idj));
     char error[512] = "";
@@ -307,7 +308,7 @@ static void cmd_native_hook(int fd, const char *id, const char *action, const ch
     if (strcmp(action, "hook") == 0) {
         ok = adh_native_hook_install(mode, module, symbol, addr, skip_original, return_value[0] ? 1 : 0,
                                     (uint64_t)strtoull(return_value, NULL, 0), (int)arg_index,
-                                    (uint64_t)strtoull(arg_value, NULL, 0), max_sites,
+                                    (uint64_t)strtoull(arg_value, NULL, 0), max_sites, sites_scope,
                                     &new_id, error, sizeof(error));
     } else if (strcmp(action, "unhook") == 0) {
         ok = adh_native_hook_unhook((int)requested_id, hard, error, sizeof(error));
@@ -459,11 +460,13 @@ static void command_loop(int fd) {
                     char nhard[8] = "";
                     json_get_str(line, "hard", nhard, sizeof(nhard));
                     int nhard_flag = (strcmp(nhard, "true") == 0 || strcmp(nhard, "1") == 0);
+                    char nscope[96] = "";
+                    json_get_str(line, "scope", nscope, sizeof(nscope));
                     long long nsites = json_get_num(line, "sites");
                     // Clamp instead of dropping a too-large request back to the default: silently
                     // installing a different number than asked for is exactly what this tool must not do.
                     int nsites_flag = nsites > 64 ? 64 : (nsites > 0 ? (int)nsites : 0);
-                    cmd_native_hook(fd, id, naction, nmode, nmodule, nsymbol, naddr, nskip_original, nreturn, nargindex, nargvalue, nid, nhard_flag, nsites_flag);                } else if (strcmp(op, "native_call") == 0) {
+                    cmd_native_hook(fd, id, naction, nmode, nmodule, nsymbol, naddr, nskip_original, nreturn, nargindex, nargvalue, nid, nhard_flag, nsites_flag, nscope);                } else if (strcmp(op, "native_call") == 0) {
                     char cmodule[128] = "", csymbol[160] = "", caddr[32] = "", cargs[256] = "";
                     json_get_str(line, "module", cmodule, sizeof(cmodule));
                     json_get_str(line, "symbol", csymbol, sizeof(csymbol));

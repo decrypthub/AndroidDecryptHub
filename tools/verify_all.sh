@@ -59,6 +59,7 @@ SCRIPTS=(
   "verify_v71_mcp_registry.sh:host"
   "verify_v69_stealth_pool.sh:device"
   "verify_v70_site_hooks.sh:device"
+  "verify_v72_site_hooks_cross.sh:device"
   "verify_v02_dump.sh:device"
   "verify_v02_so.sh:device"
   "verify_v02_dexrepair.sh:host"

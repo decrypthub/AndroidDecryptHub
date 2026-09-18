@@ -9,27 +9,35 @@ extern "C" {
 
 // Call-site hooking ("sites" mode).
 //
-// The entry-based inline hook rewrites the target function's first bytes, which any app can see by
-// comparing its own prologue against the copy it took at startup (the sandbox audit does exactly
-// that: prologueDiffers/entryBranchesOutside). This backend leaves the FUNCTION untouched and
-// patches the BL call sites instead: the target's prologue stays byte-identical, and because the
-// patch is ours (not Dobby's state machine) install/unhook are fully reversible and repeatable.
+// An entry-based inline hook rewrites the target function's first bytes, which any app can see by
+// comparing its own prologue with the copy it took at startup (the sandbox audit reports exactly
+// that as prologueDiffers/entryBranchesOutside). This backend never writes the function: it patches
+// the B/BL instructions that CALL it, so the prologue stays byte-identical - and because the patch
+// is the agent's own (not Dobby's state machine), install/unhook are reversible and repeatable.
 //
-// How it works: every BL that calls the target is rewritten to a thunk we emit on a page allocated
-// within +-128 MB of the module (BL range). The thunk saves the argument registers into the same
-// 256-byte frame layout the entry stubs use, calls adh_native_hook_record_site() (so events, hit
-// counters, integer argument rewrite and skip/return replacement all behave like a normal hook),
-// reloads the registers, calls the real function, and returns its result untouched.
+// Scope: "module" (default) scans only the target's own module; "all" scans every file-backed
+// executable mapping of the process (the operator can also pass a module name/basename to scan just
+// that one). Each site is rewritten to a hand-encoded arm64 thunk on a memfd page that is allocated
+// within +-128 MB of THAT site (BL reach), so sites in different modules get their own page.
 //
-// Honest limits: only direct BL sites inside the target module are covered (indirect calls, PLT
-// calls and other modules need the GOT or entry backend); a bounded number of sites per hook;
-// the rewritten CALLER bytes are of course visible to anyone checking those.
-int adh_site_hook_apply(int slot, void *target, int max_sites, char *error, size_t error_size);
+// The thunk saves x0-x9/x29/x30/x18/q0-q7 in the same 256-byte layout the entry stubs use, calls
+// adh_native_hook_record_site() (events, hit counters and integer argument rewrite come for free),
+// reloads the registers, calls the real function and returns its result.
+//
+// Honest limits: direct B/BL only (indirect calls, function pointers and vtables need the GOT or
+// entry backend); the patch keeps the site's instruction FORM (b stays b, bl stays bl) because a
+// tail call patched with a BL makes the thunk return into the callee body and the target spins at
+// its own entry; bounded number of sites per hook; the CALLER bytes are of course visible to anyone
+// checking those; skipOriginal/returnValue are refused because the return register bank depends on
+// the target.
+int adh_site_hook_apply(int slot, void *target, int max_sites, const char *scope,
+                        char *error, size_t error_size);
 int adh_site_hook_revert(int slot, char *error, size_t error_size);
 int adh_site_hook_count(int slot);
-// Base of the thunk page (the "replacement" the status shows) or NULL when not installed.
+// Base of the first thunk page (what status shows as the "replacement"), or NULL when idle.
 void *adh_site_hook_page(int slot);
-// Appends one JSON object with the site list to out (already used bytes in *used).
+// Appends the site list (per site: address, form, module, original/current instruction, thunk, page)
+// to out, continuing from *used.
 void adh_site_hook_sites_json(int slot, char *out, size_t out_size, size_t *used);
 
 #ifdef __cplusplus

@@ -42,7 +42,8 @@ struct NativeHookContext {
     int patched;             // inline stub remains installed (soft unhook / reactivation)
     unsigned char prologue[24];   // original bytes captured before the inline patch
     int prologue_len;             // 0 when not captured / not an inline hook
-    int site_count;               // mode 2: how many BL call sites were rewritten
+    int site_count;               // mode 2: how many call sites were rewritten
+    char sites_scope[48];         // mode 2: where they were searched ("module" / "all" / a module name)
 };
 
 static NativeHookContext g_native_hooks[ADH_NATIVE_MAX_HOOKS];
@@ -315,7 +316,8 @@ static void copy_cstr(char *dst, size_t size, const char *src) {
 extern "C" int adh_native_hook_install(const char *mode, const char *module, const char *symbol,
                                         const char *addr, int skip_original, int return_set,
                                         uint64_t return_value, int arg_index, uint64_t arg_value,
-                                        int max_sites, int *hook_id_out, char *error, size_t error_size) {
+                                        int max_sites, const char *sites_scope,
+                                        int *hook_id_out, char *error, size_t error_size) {
     if (hook_id_out) *hook_id_out = 0;
     if (!mode) return (set_error(error, error_size, "need mode got|inline"), 0);
     pthread_mutex_lock(&g_native_hooks_lock);
@@ -452,7 +454,7 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
     }
 
     if (hook_mode == 2) {
-        if (!adh_site_hook_apply(slot, target, max_sites, error, error_size)) {
+        if (!adh_site_hook_apply(slot, target, max_sites, sites_scope, error, error_size)) {
             char site_error[192];
             snprintf(site_error, sizeof(site_error), "%s", (error && error[0]) ? error : "site hook installation failed");
             return fail(site_error);
@@ -475,6 +477,7 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
     copy_cstr(ctx.symbol, sizeof(ctx.symbol), symbol);
     ctx.address = (uintptr_t)target;
     ctx.site_count = (hook_mode == 2) ? adh_site_hook_count(slot) : 0;
+    copy_cstr(ctx.sites_scope, sizeof(ctx.sites_scope), (hook_mode == 2 && sites_scope) ? sites_scope : "");
     ctx.patched = (hook_mode == 1 || hook_mode == 2) ? 1 : 0;
     __atomic_store_n(&ctx.active, 1, __ATOMIC_RELEASE);
     pthread_mutex_unlock(&g_native_hooks_lock);
@@ -597,9 +600,10 @@ extern "C" int adh_native_hook_status_json(char *out, size_t out_size) {
         if (ctx.active != 1) { if (ctx.patched) patched_count++; continue; }
         if (count) hooks += ",";
         unsigned long long hits = g_native_hook_hits[i].load(std::memory_order_relaxed);
-        char sitebuf[1024] = "";
+        char sitebuf[1400] = "";
         if (ctx.mode == 2) {
-            size_t used = 0;
+            size_t used = snprintf(sitebuf, sizeof(sitebuf), ",\"sitesScope\":\"%s\"", ctx.sites_scope);
+            if (used >= sizeof(sitebuf)) used = 0;
             adh_site_hook_sites_json(i, sitebuf, sizeof(sitebuf), &used);
         }
         char item[2048];

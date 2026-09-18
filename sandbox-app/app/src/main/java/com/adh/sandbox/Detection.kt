@@ -48,6 +48,9 @@ object Detection {
     // Same target reached through a real BL (result consumed) instead of a tail call, so both
     // patch forms are exercised.
     @JvmStatic external fun siteProbeBl(): Int
+    // v4.34 cross-module fixture: implemented in libadhplugin_a.so (not in libadhdetect.so), so it
+    // reaches adh_add_target through another module's PLT. Requires loadPluginA() first.
+    @JvmStatic external fun pluginProbe(): Int
     @JvmStatic fun loadPluginA() { System.loadLibrary("adhplugin_a") }
     @JvmStatic fun loadPluginB() { System.loadLibrary("adhplugin_b") }
 
