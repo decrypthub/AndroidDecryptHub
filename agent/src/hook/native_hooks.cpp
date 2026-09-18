@@ -4,6 +4,7 @@
 #include "native_hooks.h"
 #include "got.h"
 #include "native_inline.h"
+#include "site_hooks.h"
 #include "../capture/capture.h"
 
 #include <android/log.h>
@@ -41,6 +42,7 @@ struct NativeHookContext {
     int patched;             // inline stub remains installed (soft unhook / reactivation)
     unsigned char prologue[24];   // original bytes captured before the inline patch
     int prologue_len;             // 0 when not captured / not an inline hook
+    int site_count;               // mode 2: how many BL call sites were rewritten
 };
 
 static NativeHookContext g_native_hooks[ADH_NATIVE_MAX_HOOKS];
@@ -67,6 +69,12 @@ static std::atomic<int> g_native_hook_slot_ids[ADH_NATIVE_MAX_HOOKS];
 // Referenced directly by the fixed arm64 stubs below.
 extern "C" void *g_native_hook_originals[ADH_NATIVE_MAX_HOOKS] = {};
 
+static const char *kind_name(int hook_id) {
+    if (hook_id < 0 || hook_id >= ADH_NATIVE_MAX_HOOKS) return "?";
+    const int mode = g_native_hooks[hook_id].mode;
+    return mode == 0 ? "got" : (mode == 1 ? "inline" : "sites");
+}
+
 static void set_error(char *error, size_t error_size, const char *format, ...) {
     if (!error || !error_size) return;
     va_list ap;
@@ -89,6 +97,23 @@ static size_t adh_json_append(char *out, size_t cap, size_t off, const char *for
     if (n < 0) return cap;
     size_t next = off + (size_t)n;
     return next < cap ? next : cap;
+}
+
+// Called by the site thunks: same recording as the entry stubs, but the return value tells the
+// thunk whether it may still call the real function (skipOriginal and returnSet both answer from
+// the saved frame instead).
+extern "C" uint64_t adh_native_hook_record_site(uint64_t *regs, int hook_id) {
+    adh_native_hook_record(regs, hook_id);
+    if (hook_id < 0 || hook_id >= ADH_NATIVE_MAX_HOOKS) return 1;
+    NativeHookContext &ctx = g_native_hooks[hook_id];
+    if (__atomic_load_n(&ctx.skip_original, __ATOMIC_RELAXED)) return 1;
+    if (__atomic_load_n(&ctx.return_set, __ATOMIC_RELAXED)) return 1;
+    return 0;
+}
+
+extern "C" unsigned long long adh_native_hook_hits(int hook_id) {
+    if (hook_id < 0 || hook_id >= ADH_NATIVE_MAX_HOOKS) return 0;
+    return g_native_hook_hits[hook_id].load(std::memory_order_relaxed);
 }
 
 extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id) {
@@ -123,10 +148,10 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id) {
     char json[3072];
     size_t joff = 0;
     joff = adh_json_append(json, sizeof(json), joff,
-                           "{\"hookId\":%d,\"x0\":\"0x%llx\",\"x1\":\"0x%llx\",\"x2\":\"0x%llx\","
+                           "{\"hookId\":%d,\"kind\":\"%s\",\"x0\":\"0x%llx\",\"x1\":\"0x%llx\",\"x2\":\"0x%llx\","
                            "\"x3\":\"0x%llx\",\"x4\":\"0x%llx\",\"x5\":\"0x%llx\",\"x6\":\"0x%llx\","
                            "\"x7\":\"0x%llx\",\"x8\":\"0x%llx\",\"x18\":\"0x%llx\",",
-                           hook_uid,
+                           hook_uid, kind_name(hook_id),
                            (unsigned long long)in0, (unsigned long long)in1,
                            (unsigned long long)in2, (unsigned long long)in3,
                            (unsigned long long)in4, (unsigned long long)in5,
@@ -290,7 +315,7 @@ static void copy_cstr(char *dst, size_t size, const char *src) {
 extern "C" int adh_native_hook_install(const char *mode, const char *module, const char *symbol,
                                         const char *addr, int skip_original, int return_set,
                                         uint64_t return_value, int arg_index, uint64_t arg_value,
-                                        int *hook_id_out, char *error, size_t error_size) {
+                                        int max_sites, int *hook_id_out, char *error, size_t error_size) {
     if (hook_id_out) *hook_id_out = 0;
     if (!mode) return (set_error(error, error_size, "need mode got|inline"), 0);
     pthread_mutex_lock(&g_native_hooks_lock);
@@ -348,7 +373,7 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
         pthread_mutex_lock(&g_native_hooks_lock);
         for (int i = 0; i < ADH_NATIVE_MAX_HOOKS; i++) {
             NativeHookContext &old = g_native_hooks[i];
-            if (i == slot || old.active != 0 || old.target != target || old.mode != 1 || !old.replacement) continue;
+            if (i == slot || old.active != 0 || old.target != target || (old.mode != 1 && old.mode != 2) || !old.replacement) continue;
             old.id = id;
             old.skip_original = skip_original ? 1 : 0;
             old.return_set = return_set ? 1 : 0;
@@ -390,8 +415,25 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
         pthread_mutex_unlock(&g_native_hooks_lock);
         g_native_hook_originals[slot] = original;
         hook_mode = 1;
+    } else if (strcmp(mode, "sites") == 0) {
+        if (addr && addr[0]) {
+            target = (void *)(uintptr_t)strtoull(addr, nullptr, 0);
+        } else if (module && module[0] && symbol && symbol[0]) {
+            target = adh_resolve_sym(module, symbol);
+        }
+        if (!target) return fail("sites hook needs address or module+symbol");
+        if (!adh_addr_is_executable(target)) return fail("sites target is not in an executable mapping");
+        if (skip_original || return_set) {
+            return fail("sites mode cannot replace the return value: which register carries it depends on "
+                        "the target (x0/x1 or d0/d1), so skipping the call would hand the caller an "
+                        "undefined value - use mode=inline (or mode=got) for skipOriginal/returnValue");
+        }
+        // The function itself is never written; only the BL instructions that call it are.
+        original = target;
+        g_native_hook_originals[slot] = target;
+        hook_mode = 2;
     } else {
-        return fail("mode must be got or inline");
+        return fail("mode must be got, inline or sites");
     }
 
     // Reject a second hook on the same resolved target. Duplicate Dobby patches and
@@ -409,6 +451,14 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
         return fail(duplicate_error);
     }
 
+    if (hook_mode == 2) {
+        if (!adh_site_hook_apply(slot, target, max_sites, error, error_size)) {
+            char site_error[192];
+            snprintf(site_error, sizeof(site_error), "%s", (error && error[0]) ? error : "site hook installation failed");
+            return fail(site_error);
+        }
+    }
+
     pthread_mutex_lock(&g_native_hooks_lock);
     NativeHookContext &ctx = g_native_hooks[slot];
     ctx.id = id;
@@ -420,11 +470,12 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
     ctx.mode = hook_mode;
     ctx.target = target;
     ctx.original = original;
-    ctx.replacement = stub;
+    ctx.replacement = (hook_mode == 2) ? (adh_site_hook_page(slot) ? adh_site_hook_page(slot) : stub) : stub;
     copy_cstr(ctx.module, sizeof(ctx.module), module);
     copy_cstr(ctx.symbol, sizeof(ctx.symbol), symbol);
     ctx.address = (uintptr_t)target;
-    ctx.patched = (hook_mode == 1) ? 1 : 0;
+    ctx.site_count = (hook_mode == 2) ? adh_site_hook_count(slot) : 0;
+    ctx.patched = (hook_mode == 1 || hook_mode == 2) ? 1 : 0;
     __atomic_store_n(&ctx.active, 1, __ATOMIC_RELEASE);
     pthread_mutex_unlock(&g_native_hooks_lock);
     g_native_hook_hits[slot].store(0ULL, std::memory_order_relaxed);
@@ -460,6 +511,22 @@ extern "C" int adh_native_hook_unhook(int hook_id, int hard, char *error, size_t
         ctx->used = 0;   // GOT restore is a real, safe unhook: free the slot
         pthread_mutex_unlock(&g_native_hooks_lock);
         LOGI("native_hook removed id=%d (got)", hook_id);
+        return 1;
+    }
+    if (ctx->mode == 2) {
+        // A sites hook has no Dobby state: hard unhook = write the original BLs back, verify, and
+        // free the thunk page after a quiet window. Fully repeatable (re-hooking works again).
+        pthread_mutex_unlock(&g_native_hooks_lock);
+        char site_error[192] = "";
+        if (!adh_site_hook_revert(slot, site_error, sizeof(site_error))) {
+            set_error(error, error_size, "%s", site_error[0] ? site_error : "site hook revert failed");
+            return 0;
+        }
+        pthread_mutex_lock(&g_native_hooks_lock);
+        reset_context(*ctx);
+        ctx->used = 0;
+        pthread_mutex_unlock(&g_native_hooks_lock);
+        LOGI("native_hook hard-unhooked id=%d (sites restored)", hook_id);
         return 1;
     }
     if (!ctx->patched || !ctx->target || !ctx->replacement) {
@@ -530,17 +597,23 @@ extern "C" int adh_native_hook_status_json(char *out, size_t out_size) {
         if (ctx.active != 1) { if (ctx.patched) patched_count++; continue; }
         if (count) hooks += ",";
         unsigned long long hits = g_native_hook_hits[i].load(std::memory_order_relaxed);
-        char item[768];
+        char sitebuf[1024] = "";
+        if (ctx.mode == 2) {
+            size_t used = 0;
+            adh_site_hook_sites_json(i, sitebuf, sizeof(sitebuf), &used);
+        }
+        char item[2048];
         snprintf(item, sizeof(item),
                  "{\"id\":%d,\"mode\":\"%s\",\"module\":\"%s\",\"symbol\":\"%s\","
                  "\"address\":\"0x%llx\",\"target\":\"0x%llx\",\"original\":\"0x%llx\","
-                 "\"replacement\":\"0x%llx\",\"hits\":%llu,\"argIndex\":%d,\"argValue\":\"0x%llx\",\"skipOriginal\":%s,\"returnSet\":%s,\"returnValue\":\"0x%llx\"}",
-                 ctx.id, ctx.mode == 0 ? "got" : "inline", ctx.module, ctx.symbol,
+                 "\"replacement\":\"0x%llx\",\"hits\":%llu,\"argIndex\":%d,\"argValue\":\"0x%llx\",\"skipOriginal\":%s,\"returnSet\":%s,\"returnValue\":\"0x%llx\""
+                 "%s}",
+                 ctx.id, ctx.mode == 0 ? "got" : (ctx.mode == 1 ? "inline" : "sites"), ctx.module, ctx.symbol,
                  (unsigned long long)ctx.address, (unsigned long long)(uintptr_t)ctx.target,
                  (unsigned long long)(uintptr_t)ctx.original,
                  (unsigned long long)(uintptr_t)ctx.replacement, hits, ctx.arg_index,
                  (unsigned long long)ctx.arg_value, ctx.skip_original ? "true" : "false",
-                 ctx.return_set ? "true" : "false", (unsigned long long)ctx.return_value);
+                 ctx.return_set ? "true" : "false", (unsigned long long)ctx.return_value, sitebuf);
         hooks += item;
         count++;
     }

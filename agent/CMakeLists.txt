@@ -14,6 +14,7 @@ set(AGENT_SOURCES
     src/bootstrap/mem.c
     src/bootstrap/fs.c
     src/hook/got.c
+    src/hook/site_hooks.c
     src/hook/stealth_pool.c
     src/hook/native_hooks.cpp
     src/runtime/actions.c

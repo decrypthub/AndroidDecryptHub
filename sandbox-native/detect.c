@@ -78,6 +78,28 @@ int adh_trace_target(void) {
     return s;   // 0+3+6+9+12 = 30
 }
 
+long adh_add_target(long a, long b);   // defined below; the call-site fixtures call it through a BL
+volatile long adh_site_sink;           // forces adh_site_probe_bl to make a real call instead of a tail call
+
+
+// v4.33 fixture: the ONLY caller of adh_add_target inside this module, so a call-site hook has an
+// unambiguous BL to rewrite. noinline on both sides keeps the call a real BL instead of an inlined
+// add. The entry-prologue self-audit must stay clean while this call is intercepted.
+__attribute__((noinline, used, visibility("default")))
+long adh_site_probe(void) {
+    return adh_add_target(20, 22);          // compiled as a tail call (b) through the PLT stub
+}
+
+// Same call, but the result is consumed, so the compiler emits a real BL instead of a tail call.
+// The sites backend must match the instruction FORM of each site (b vs bl); covering only one of
+// them hid a bug where a tail call was patched with a BL and the target spun at its own entry.
+__attribute__((noinline, used, visibility("default")))
+long adh_site_probe_bl(void) {
+    long v = adh_add_target(20, 22);
+    adh_site_sink = v;
+    return v;
+}
+
 // Deterministic active-call target: (a + b) * 2, exported for native_call acceptance.
 __attribute__((noinline, used, visibility("default")))
 long adh_add_target(long a, long b) {
@@ -429,6 +451,16 @@ static int adh_anti_mapping_of(unsigned long long addr, char *path, int path_siz
     }
     fclose(m);
     return found;
+}
+
+JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_siteProbe(JNIEnv *env, jclass clazz) {
+    (void)env; (void)clazz;
+    return (jint)adh_site_probe();
+}
+
+JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_siteProbeBl(JNIEnv *env, jclass clazz) {
+    (void)env; (void)clazz;
+    return (jint)adh_site_probe_bl();
 }
 
 JNIEXPORT jstring JNICALL Java_com_adh_sandbox_Detection_antiHookProbe(JNIEnv *env, jclass clazz) {

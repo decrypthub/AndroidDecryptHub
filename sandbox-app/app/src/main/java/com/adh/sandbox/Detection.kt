@@ -42,6 +42,12 @@ object Detection {
     // outside its own module) and returns the raw numbers as JSON. Used to prove both that an
     // inline hook IS visible this way and that the opt-in stealth pool removes the anonymous page.
     @JvmStatic external fun antiHookProbe(): String
+    // v4.33 fixture for call-site ("sites") hooking: native code reaches adh_add_target through an
+    // ordinary BL, which the sites backend rewrites while leaving adh_add_target's prologue intact.
+    @JvmStatic external fun siteProbe(): Int
+    // Same target reached through a real BL (result consumed) instead of a tail call, so both
+    // patch forms are exercised.
+    @JvmStatic external fun siteProbeBl(): Int
     @JvmStatic fun loadPluginA() { System.loadLibrary("adhplugin_a") }
     @JvmStatic fun loadPluginB() { System.loadLibrary("adhplugin_b") }
 

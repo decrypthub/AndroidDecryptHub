@@ -1330,6 +1330,8 @@ MCP              →  AI 可编程操控，与 HTTP 同源
 - **最小侵入模式**：只启用 maps/dex/classloader/crypto 等低痕迹模块，关闭高痕迹 hook
 - **hook 自校验对抗**：应对目标周期性校验函数序言字节、检测 GOT 改写
 
+> 实现状态（v4.33，真机 `aa165071` 验收）：**"序言不变也能拦"** 已落地：`native_hook mode=sites` 不改目标函数，只改同模块内调用它的 `B`/`BL`（含一层 PLT/尾调用解析）到自家 near thunk（memfd 页、±128 MB 内解析、按原指令形态写回 `b`/`bl`），因此目标自校验序言时看到的是**原始字节**。验收断言"拦截真的发生"（两种形态 b/bl 各命中、hits≥1、返回值正确）、"入口审计干净"（目标自己的 24 字节序言比对 + 入口首指令不外跳 + 无匿名可执行页），并在 hard unhook 后独立读回两个调用点的字节 == agent 记录的原值、确认 thunk 页已 munmap、同进程重装仍可用。边界：只覆盖同模块直接调用（含一层 PLT/尾调用 stub）；调用点自身字节可被检查；最多 8 个调用点/hook；sites 模式**不支持** skipOriginal/returnSet（返回值 bank 依目标而定，直接 fail-loud）。
+
 > 实现状态（v4.32，真机 `aa165071` 验收）：**hook 自校验对抗**落地一半，且是可测量的。开启 `stealth` 后，inline hook 后端不再留下"无路径的可执行页"：Dobby 的 trampoline arena 被重定向到 ART 风格的 `/memfd:jit-cache` 映射（Dobby 的 mmap 走本模块 GOT；重定向窗口线程本地；任何失败回退真 mmap 并如实报 errno）。沙盒 `Detection.antiHookProbe`（目标自己扫 maps + 自校验序言）在开启前后给出可对账的数字：`anonExec 2 → 0`。但**入口序言被改写无法隐藏**（同一审计在 stealth 下仍报 `prologueDiffers/entryBranchesOutside=true`，v69 已断言这一点）——要"序言也不变"必须改用 GOT/表项 hook 或 ART 层 Java hook（LSPlant 不改 .text）。默认关闭，开启需 Host `confirm:true`。
 
 ### 26.3 边界
