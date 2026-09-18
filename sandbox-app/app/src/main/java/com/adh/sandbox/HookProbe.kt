@@ -24,5 +24,16 @@ object HookProbe {
     @JvmStatic
     fun lastPingResult(): String = lastPing
 
+    /**
+     * Caller-chain fixture for the Java-side stack capture (v4.40): stackOuter -> stackMiddle ->
+     * ping. Both frames must show up in the JAVA_HOOK event when the hook is installed with
+     * stack:true, and the chain must be absent when it is not.
+     */
+    @JvmStatic
+    fun stackMiddle(input: String): String = ping(input)
+
+    @JvmStatic
+    fun stackOuter(input: String): String = stackMiddle(input)
+
     fun instancePing(input: String): String = "REAL_INSTANCE:$input"
 }

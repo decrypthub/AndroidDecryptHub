@@ -334,6 +334,8 @@ static void *g_bridge_dex_mem = nullptr;
 static jfieldID g_bridge_backup = nullptr;
 static jfieldID g_bridge_is_static = nullptr;
 static jfieldID g_bridge_is_ctor = nullptr;
+static jfieldID g_bridge_capture_stack = nullptr;
+static jfieldID g_bridge_last_stack = nullptr;
 static jfieldID g_bridge_hook_id = nullptr;
 static jfieldID g_bridge_hits = nullptr;
 static jfieldID g_bridge_last_arg = nullptr;
@@ -360,16 +362,24 @@ static std::string jstring_to_utf(JNIEnv *env, jstring value) {
 
 static void JNICALL adh_java_hook_native_report(JNIEnv *env, jclass, jint hook_id,
                                                 jstring target, jstring arg,
-                                                jstring result, jstring error) {
+                                                jstring result, jstring error,
+                                                jstring stack) {
     std::string target_s = json_escape(jstring_to_utf(env, target));
     std::string arg_s = json_escape(jstring_to_utf(env, arg));
     std::string result_s = json_escape(jstring_to_utf(env, result));
     std::string error_s = json_escape(jstring_to_utf(env, error));
+    std::string stack_raw = jstring_to_utf(env, stack);
+    // The Java side already bounds the chain; cap again so one long class name cannot bloat the
+    // capture ring, and only emit the field when there IS a chain (opt-in per hook).
+    if (stack_raw.size() > 700) stack_raw = stack_raw.substr(0, 700) + "...";
+    std::string stack_s = json_escape(stack_raw);
     std::string json = "{\"hookId\":" + std::to_string((int)hook_id) +
                        ",\"target\":\"" + target_s + "\"" +
                        ",\"arg\":\"" + arg_s + "\"" +
                        ",\"ret\":\"" + result_s + "\"" +
-                       ",\"error\":\"" + error_s + "\"}";
+                       ",\"error\":\"" + error_s + "\"";
+    if (!stack_s.empty()) json += ",\"stack\":\"" + stack_s + "\"";
+    json += "}";
     adh_capture_push_text("JAVA_HOOK", json.c_str());
 }
 
@@ -497,7 +507,7 @@ static jclass load_bridge_class(JNIEnv *env, std::string &error) {
 
     JNINativeMethod report = {
         const_cast<char *>("nativeReport"),
-        const_cast<char *>("(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V"),
+        const_cast<char *>("(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V"),
         reinterpret_cast<void *>(adh_java_hook_native_report),
     };
     if (env->RegisterNatives(bridge_class, &report, 1) != JNI_OK) {
@@ -514,6 +524,8 @@ static jclass load_bridge_class(JNIEnv *env, std::string &error) {
     g_bridge_last_arg = env->GetFieldID(bridge_class, "lastArg", "Ljava/lang/String;");
     g_bridge_last_return = env->GetFieldID(bridge_class, "lastReturn", "Ljava/lang/String;");
     g_bridge_last_error = env->GetFieldID(bridge_class, "lastError", "Ljava/lang/String;");
+    g_bridge_capture_stack = env->GetFieldID(bridge_class, "captureStack", "Z");
+    g_bridge_last_stack = env->GetFieldID(bridge_class, "lastStack", "Ljava/lang/String;");
     g_bridge_target = env->GetFieldID(bridge_class, "target", "Ljava/lang/String;");
     g_bridge_skip_original = env->GetFieldID(bridge_class, "skipOriginal", "Z");
     g_bridge_override_return = env->GetFieldID(bridge_class, "overrideReturn", "Ljava/lang/String;");
@@ -525,6 +537,7 @@ static jclass load_bridge_class(JNIEnv *env, std::string &error) {
 
     if (!g_bridge_class || !g_bridge_backup || !g_bridge_is_static || !g_bridge_is_ctor || !g_bridge_hook_id ||
         !g_bridge_hits || !g_bridge_last_arg || !g_bridge_last_return || !g_bridge_last_error ||
+        !g_bridge_capture_stack || !g_bridge_last_stack ||
         !g_bridge_target || !g_bridge_skip_original || !g_bridge_override_return || !g_bridge_arg_index || !g_bridge_arg_value || !g_bridge_ready || !g_bridge_active) {
         error = "AdhJavaHookBridge fields are missing";
         return nullptr;
@@ -741,7 +754,7 @@ static void release_hook_slot(JNIEnv *env, JavaHookContext &hook) {
 
 extern "C" int adh_javahook_hook_method(JNIEnv *env, const char *class_name, const char *method_name,
                                          const char *params, int skip_original, const char *override_return,
-                                         int arg_index, const char *arg_value,
+                                         int arg_index, const char *arg_value, int capture_stack,
                                          int *hook_id_out, char *error, size_t error_size) {
     if (hook_id_out) *hook_id_out = 0;
     if (!env || !class_name || !method_name) {
@@ -820,6 +833,7 @@ extern "C" int adh_javahook_hook_method(JNIEnv *env, const char *class_name, con
         env->SetIntField(old_bridge, g_bridge_arg_index, arg_index);
         jstring arg_value_string = env->NewStringUTF(arg_value ? arg_value : "");
         env->SetObjectField(old_bridge, g_bridge_arg_value, arg_value_string);
+        env->SetBooleanField(old_bridge, g_bridge_capture_stack, capture_stack ? JNI_TRUE : JNI_FALSE);
         env->SetBooleanField(old_bridge, g_bridge_ready, JNI_TRUE);
         env->SetBooleanField(old_bridge, g_bridge_active, JNI_TRUE);
         if (empty) env->DeleteLocalRef(empty);
@@ -863,6 +877,8 @@ extern "C" int adh_javahook_hook_method(JNIEnv *env, const char *class_name, con
     jstring arg_value_string = env->NewStringUTF(arg_value ? arg_value : "");
     env->SetObjectField(bridge, g_bridge_arg_value, arg_value_string);
     if (arg_value_string) env->DeleteLocalRef(arg_value_string);
+    env->SetBooleanField(bridge, g_bridge_capture_stack, capture_stack ? JNI_TRUE : JNI_FALSE);
+    if (empty) env->SetObjectField(bridge, g_bridge_last_stack, empty);
 
     jmethodID callback_id = env->GetMethodID(g_bridge_class, "callback",
                                              "([Ljava/lang/Object;)Ljava/lang/Object;");
@@ -966,12 +982,15 @@ extern "C" int adh_javahook_status_json(JNIEnv *env, char *out, size_t out_size)
         JavaHookContext &hook = g_java_hooks[i];
         if (hook.active != 1) { if (hook.patched) patched_count++; continue; }
         int hits = 0;
-        std::string last_arg, last_return, last_error;
+        std::string last_arg, last_return, last_error, last_stack;
+        bool capture_stack = false;
         if (env && hook.bridge) {
             hits = env->GetIntField(hook.bridge, g_bridge_hits);
             last_arg = get_string_field(env, hook.bridge, g_bridge_last_arg);
             last_return = get_string_field(env, hook.bridge, g_bridge_last_return);
             last_error = get_string_field(env, hook.bridge, g_bridge_last_error);
+            last_stack = get_string_field(env, hook.bridge, g_bridge_last_stack);
+            capture_stack = env->GetBooleanField(hook.bridge, g_bridge_capture_stack) == JNI_TRUE;
         }
         if (active_count) hooks += ",";
         hooks += "{\"id\":" + std::to_string(hook.id) +
@@ -979,12 +998,14 @@ extern "C" int adh_javahook_status_json(JNIEnv *env, char *out, size_t out_size)
                  ",\"hits\":" + std::to_string(hits) +
                  ",\"lastArg\":\"" + json_escape(last_arg) + "\"" +
                  ",\"lastReturn\":\"" + json_escape(last_return) + "\"" +
-                 ",\"lastError\":\"" + json_escape(last_error) + "\"}";
+                 ",\"lastError\":\"" + json_escape(last_error) + "\"" +
+                 ",\"stackCapture\":" + std::string(capture_stack ? "true" : "false") +
+                 ",\"lastStack\":\"" + json_escape(last_stack) + "\"}";
         active_count++;
     }
     pthread_mutex_unlock(&g_java_hooks_lock);
     hooks += "]";
-    std::string json = "{\"available\":true,\"returnOverride\":true,\"argRewrite\":true,\"initOk\":" + std::string(g_init_ok ? "true" : "false") +
+    std::string json = "{\"available\":true,\"returnOverride\":true,\"argRewrite\":true,\"stackCapture\":true,\"initOk\":" + std::string(g_init_ok ? "true" : "false") +
                        ",\"backend\":\"lsplant\",\"version\":\"v6.4\",\"active\":" +
                        std::string(active_count ? "true" : "false") +
                        ",\"count\":" + std::to_string(active_count) +

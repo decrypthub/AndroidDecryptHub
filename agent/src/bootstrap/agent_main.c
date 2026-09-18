@@ -157,7 +157,7 @@ static void cmd_javahook_probe(int fd, const char *id) {
 static void cmd_java_hook(int fd, const char *id, const char *action, const char *class_name,
                           const char *method_name, const char *params, int skip_original,
                           const char *override_return, long long arg_index, const char *arg_value,
-                          long long requested_hook_id) {
+                          long long requested_hook_id, int capture_stack_flag) {
     char idj[64];
     json_escape(id, idj, sizeof(idj));
 #ifdef ADH_HAVE_LSPLANT
@@ -179,7 +179,7 @@ static void cmd_java_hook(int fd, const char *id, const char *action, const char
             snprintf(error, sizeof(error), "hook requires className and method");
         } else {
             ok = adh_javahook_hook_method(env, class_name, method_name, params, skip_original,
-                                             override_return, (int)arg_index, arg_value,
+                                             override_return, (int)arg_index, arg_value, capture_stack_flag,
                                              &new_hook_id, error, sizeof(error));
         }
     } else if (strcmp(action, "unhook") == 0) {
@@ -435,7 +435,7 @@ static void command_loop(int fd) {
                     adh_cmd_jni_env_hook(fd, id, eaction, efunction);
                 } else if (strcmp(op, "java_hook") == 0) {
                     char jaction[16] = "", jcls[256] = "", jmethod[128] = "", jparams[512] = "";
-                    char jskip[8] = "", jreturn[512] = "", jargvalue[512] = "";
+                    char jskip[8] = "", jreturn[512] = "", jargvalue[512] = "", jstack[8] = "";
                     json_get_str(line, "action", jaction, sizeof(jaction));
                     json_get_str(line, "className", jcls, sizeof(jcls));
                     json_get_str(line, "method", jmethod, sizeof(jmethod));
@@ -443,10 +443,14 @@ static void command_loop(int fd) {
                     json_get_str(line, "skipOriginal", jskip, sizeof(jskip));
                     json_get_str(line, "returnValue", jreturn, sizeof(jreturn));
                     json_get_str(line, "argValue", jargvalue, sizeof(jargvalue));
+                    json_get_str(line, "stack", jstack, sizeof(jstack));
                     long long jhook_id = json_get_num(line, "hookId");
                     int skip_original = (strcmp(jskip, "true") == 0 || strcmp(jskip, "1") == 0);
                     long long jarg_index = json_get_num(line, "argIndex");
-                    cmd_java_hook(fd, id, jaction, jcls, jmethod, jparams, skip_original, jreturn, jarg_index, jargvalue, jhook_id);
+                    // Opt-in per-hook caller chain (the Java analogue of the native backtrace).
+                    int jcapture_stack = (strcmp(jstack, "true") == 0 || strcmp(jstack, "1") == 0) ? 1 : 0;
+                    if (strstr(line, "\"stack\":true") != NULL) jcapture_stack = 1;
+                    cmd_java_hook(fd, id, jaction, jcls, jmethod, jparams, skip_original, jreturn, jarg_index, jargvalue, jhook_id, jcapture_stack);
                 } else if (strcmp(op, "java_enum") == 0) {
                     char jcls[256] = "";
                     json_get_str(line, "className", jcls, sizeof(jcls));

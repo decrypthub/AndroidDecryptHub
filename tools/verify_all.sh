@@ -84,6 +84,9 @@ SCRIPTS=(
   # Hook-hit caller backtrace (v4.39): the event must carry the at-hit chain and every frame must be
   # resolved to module + symbol; a bogus frame pointer must stop the walk, not invent frames.
   "verify_v78_hook_backtrace.sh:device"
+  # Java caller chain (v4.40): the LSPlant callback must report the app frames that led to the hooked
+  # method when stack:true is set - and nothing when it is not.
+  "verify_v79_java_stack.sh:device"
   "verify_v02_dump.sh:device"
   "verify_v02_so.sh:device"
   "verify_v02_dexrepair.sh:host"

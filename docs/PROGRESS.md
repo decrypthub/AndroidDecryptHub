@@ -15,6 +15,12 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [x] **v4.40 Java hook 命中带调用链（native v4.39 的姊妹能力）（2026-09-18，真机 PASS）**：native 侧能看到"谁调进来的"之后，Java 侧同样补上——算法还原里最常问的就是"这个 `ping/encrypt` 是被哪个方法调起的"。
+      · **实现**：`java_hook stack:true`（opt-in，默认关：每次命中一次栈遍历）时，`AdhJavaHookBridge` 在回调里用 `Thread.currentThread().getStackTrace()` 采一条**有界**链（最多 12 帧 / 512 字符，`Class#method:line`，最内层在前），并过滤掉采集与 hook 管线（`java.lang.Thread`、`dalvik.system.VMStack`、`java.lang.reflect.Method`、`AdhJavaHookBridge`、LSPlant 的 `com.android.internal.util.NativeBridge_` 合成类）——**第一版没过滤 VMStack/反射帧**，链里混进 `VMStack#getThreadStackTrace` 与 `Method#invoke`，读起来像噪声，加上过滤后链就是应用自己的帧。bridge dex 用 `tools/build_java_hook_bridge.sh` 重新生成（javac=Android Studio JBR + SDK d8），产物一并提交。
+      · **事件与状态**：`nativeReport` 的 JNI 签名从 5 参变 6 参（`stack` 为空时**不写字段**，opt-in 语义在事件里也成立）；`JAVA_HOOK` 事件新增 `stack`；per-hook status 增加 `stackCapture`/`lastStack`，status 顶层能力位 `stackCapture:true`（老 agent 会被验收脚本识别为 SKIP，不假通过）。
+      · **真机 `aa165071` PASS**（`tools/verify_v79_java_stack.sh`）：沙盒新增 `HookProbe.stackOuter → stackMiddle → ping` 链；hook `ping(String)`（stack:true）后经 `java_call stackOuter` 触发，事件 `stack` 恰为 `com.adh.sandbox.HookProbe#stackMiddle:33 <- com.adh.sandbox.HookProbe#stackOuter:36`（顺序最内层在前、无管线帧），status.lastStack 一致；**同一方法再以不带 stack 的方式 hook** 时事件里没有 stack 字段、返回值 `REAL_HOOK:ADH_STACK` 不变，两次 unhook 后进程存活。
+      · 边界：链是 **Java 层**的（ART 里的 Java 帧），看不到 native 调用方——两边要一起用时，native 帧由 v4.39 的 `native_backtrace` 给；`stack:true` 有开销（每次命中一次栈遍历 + 12 帧字符串），热路径建议只对目标方法临时开。
+
 - [x] **v4.39 native hook 命中带调用链（对标 Frida \`Thread.backtrace()\`）（2026-09-18，真机 PASS）**：以前 hook 命中只能告诉你"参数是什么"，但**是谁调进来的**要到 Frida 里才有。本轮把它补齐，并且是"命中当刻"的链，不是事后猜测。
       · **agent 侧（\`agent/src/hook/native_hooks.cpp\`）**：\`native_hook\` 新增 **opt-in\`backtrace:true\`**。命中时在**受害者线程自己身上**采集：先用 \`pthread_attr_getstack\` 取本线程栈边界（thread-local 只算一次），再在边界内逐帧读 \`[fp]\`/\`[fp+8]\` 走 x29 链，最多 8 帧，事件里给出 \`bt\`（\`bt[0]\` = \`x30\`，立即调用者）与 \`btCount\`；同时事件依旧带 \`x29/x30\` 原始值。
       · **为什么必须在命中当刻采**：第一版是"事件里给 x29/x30，Host 事后再读栈"，真机实测 \`[fp]\`/\`[fp+8]\` 已经是 **0**（调用返回后同一段栈被后续调用复用），只有 \`lr\` 可信——于是改成 agent 在命中时走链，Host 事后只做符号化。第二个 bug 同样来自真机：第一次实现把 \`x30\`（代码地址）当栈帧指针传进 walker，链全空；必须从 \`x29\` 起走，并把 \`x30\` 作为第 0 帧。

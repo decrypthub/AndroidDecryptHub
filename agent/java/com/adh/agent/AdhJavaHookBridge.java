@@ -31,11 +31,24 @@ public final class AdhJavaHookBridge {
     public String overrideReturn;
     public int argIndex = -1;
     public String argValue;
+    // Opt-in per hook: capture a bounded caller chain at the hit (the Java analogue of
+    // Thread.backtrace()). Off by default - it costs a stack walk on every hit.
+    public boolean captureStack;
+    public String lastStack;
 
-    private static native void nativeReport(int hookId, String target, String arg, String ret, String error);
+    private static native void nativeReport(int hookId, String target, String arg, String ret, String error, String stack);
 
     public Object callback(Object[] args) throws Throwable {
         hits++;
+        if (captureStack) {
+            try {
+                lastStack = stackTrace();
+            } catch (Throwable t) {
+                lastStack = "<stack capture failed: " + t + ">";
+            }
+        } else {
+            lastStack = "";
+        }
         int first = isStatic ? 0 : 1;
         try {
             if (args != null && args.length > first) {
@@ -53,7 +66,7 @@ public final class AdhJavaHookBridge {
         }
         if (!ready || backup == null) {
             lastError = "hook backup not ready";
-            nativeReport(hookId, target, lastArg, "", lastError);
+            nativeReport(hookId, target, lastArg, "", lastError, lastStack);
             throw new IllegalStateException(lastError);
         }
         Object receiver = isStatic ? null : (args != null && args.length > 0 ? args[0] : null);
@@ -68,7 +81,7 @@ public final class AdhJavaHookBridge {
                 lastArg = rewritten == null ? "null" : String.valueOf(rewritten);
             } catch (Throwable t) {
                 lastError = "argument rewrite failed: " + t;
-                nativeReport(hookId, target, lastArg, "", lastError);
+                nativeReport(hookId, target, lastArg, "", lastError, lastStack);
                 throw t;
             }
         }
@@ -77,16 +90,16 @@ public final class AdhJavaHookBridge {
                 backup.invoke(receiver, params);
                 lastReturn = bounded(receiver);
                 lastError = "";
-                nativeReport(hookId, target, lastArg, lastReturn, lastError);
+                nativeReport(hookId, target, lastArg, lastReturn, lastError, lastStack);
                 return receiver;
             } catch (InvocationTargetException e) {
                 Throwable cause = e.getCause() != null ? e.getCause() : e;
                 lastError = String.valueOf(cause);
-                nativeReport(hookId, target, lastArg, "", lastError);
+                nativeReport(hookId, target, lastArg, "", lastError, lastStack);
                 throw cause;
             } catch (Throwable t) {
                 lastError = String.valueOf(t);
-                nativeReport(hookId, target, lastArg, "", lastError);
+                nativeReport(hookId, target, lastArg, "", lastError, lastStack);
                 throw t;
             }
         }
@@ -95,11 +108,11 @@ public final class AdhJavaHookBridge {
                 Object replaced = convertReturn(overrideReturn, backup.getReturnType());
                 lastReturn = bounded(replaced);
                 lastError = "";
-                nativeReport(hookId, target, lastArg, lastReturn, lastError);
+                nativeReport(hookId, target, lastArg, lastReturn, lastError, lastStack);
                 return replaced;
             } catch (Throwable t) {
                 lastError = "return override failed: " + t;
-                nativeReport(hookId, target, lastArg, "", lastError);
+                nativeReport(hookId, target, lastArg, "", lastError, lastStack);
                 throw t;
             }
         }
@@ -107,21 +120,49 @@ public final class AdhJavaHookBridge {
             Object result = backup.invoke(receiver, params);
             lastReturn = bounded(result);
             lastError = "";
-            nativeReport(hookId, target, lastArg, lastReturn, lastError);
+            nativeReport(hookId, target, lastArg, lastReturn, lastError, lastStack);
             return result;
         } catch (InvocationTargetException e) {
             Throwable cause = e.getCause() != null ? e.getCause() : e;
             lastError = String.valueOf(cause);
-            nativeReport(hookId, target, lastArg, "", lastError);
+            nativeReport(hookId, target, lastArg, "", lastError, lastStack);
             throw cause;
         } catch (Throwable t) {
             lastError = String.valueOf(t);
-            nativeReport(hookId, target, lastArg, "", lastError);
+            nativeReport(hookId, target, lastArg, "", lastError, lastStack);
             throw t;
         }
     }
 
     private static final int MAX_VALUE_CHARS = 512;
+    private static final int MAX_STACK_FRAMES = 12;
+    private static final int MAX_STACK_CHARS = 512;
+
+    /**
+     * Bounded caller chain captured at the hit: "pkg.Class#method:line <- ..." (innermost first).
+     * Frames that belong to the hook plumbing itself are skipped - they tell the operator nothing
+     * about who really called the target.
+     */
+    private static String stackTrace() {
+        StackTraceElement[] frames = Thread.currentThread().getStackTrace();
+        StringBuilder sb = new StringBuilder();
+        int written = 0;
+        for (StackTraceElement frame : frames) {
+            String cls = frame.getClassName();
+            // Skip the capture plumbing itself (Thread/VMStack), our own bridge, the ART reflection
+            // frame used by java_call, and LSPlant's synthetic subclass for the hooked method - the
+            // operator wants the app frames, not our machinery.
+            if (cls.equals("java.lang.Thread") || cls.equals("dalvik.system.VMStack") ||
+                cls.equals("java.lang.reflect.Method") || cls.startsWith("com.adh.agent.AdhJavaHookBridge") ||
+                cls.startsWith("com.android.internal.util.NativeBridge_")) continue;
+            if (written++ >= MAX_STACK_FRAMES) break;
+            if (sb.length() > 0) sb.append(" <- ");
+            sb.append(cls).append('#').append(frame.getMethodName());
+            if (frame.getFileName() != null) sb.append(':').append(frame.getLineNumber());
+            if (sb.length() >= MAX_STACK_CHARS) break;
+        }
+        return sb.length() <= MAX_STACK_CHARS ? sb.toString() : sb.substring(0, MAX_STACK_CHARS) + "...";
+    }
 
     private static String bounded(Object value) {
         if (value == null) return "null";
@@ -166,5 +207,6 @@ public final class AdhJavaHookBridge {
         lastArg = "";
         lastReturn = "";
         lastError = "";
+        lastStack = "";
     }
 }

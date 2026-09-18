@@ -35,9 +35,10 @@ int adh_javahook_is_hooked(JNIEnv *env, jobject method);       // 1 hooked, 0 no
 // target through the app ClassLoader; params is a comma-separated list of Java type names
 // (for example "java.lang.String,int"). Hooks are bounded and have stable numeric ids;
 // hook_id_out receives the id of a newly installed hook.
+// capture_stack=1 makes every hook event carry the bounded caller chain captured at the hit.
 int adh_javahook_hook_method(JNIEnv *env, const char *class_name, const char *method_name,
                              const char *params, int skip_original, const char *override_return, int arg_index, const char *arg_value,
-                             int *hook_id_out, char *error, size_t error_size); // 1 ok, 0 fail
+                             int capture_stack, int *hook_id_out, char *error, size_t error_size); // 1 ok, 0 fail
 int adh_javahook_unhook_id(JNIEnv *env, int hook_id, char *error, size_t error_size); // id=0 unhooks all; 1 ok, 0 fail
 int adh_javahook_status_json(JNIEnv *env, char *out, size_t out_size);            // 1 ok, 0 fail
 
