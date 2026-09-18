@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { digestTrace } from '../src/trace_digest.ts';
+import {digestTrace, traceCompleteness } from '../src/trace_digest.ts';
 
 const insn = (addr, text) => ({ addr, text });
 
@@ -93,4 +93,13 @@ test('a straight-line trace reports no loops and says why', () => {
   const d = digestTrace([insn('0x1', 'mov x0, #1'), insn('0x2', 'ret')]);
   assert.equal(d.loops.length, 0);
   assert.ok(d.notes.some((n) => n.includes('no repeated address')));
+});
+test('a clipped trace is reported as clipped, not as a short one', () => {
+  assert.deepEqual(traceCompleteness({ count: 120, seen: 900, truncated: true, cap: 8192 }, 120),
+    { seen: 900, truncated: true, cap: 8192 });
+  // Older agent: no seen/truncated - the list length is all we know, and nothing is claimed.
+  assert.deepEqual(traceCompleteness({ count: 120 }, 120), { seen: 120, truncated: false, cap: null });
+  // A counter smaller than the list is inconsistent; the list wins and nothing is claimed about
+  // clipping (the agent's count is what it SAW, so it can only be >= the list length).
+  assert.deepEqual(traceCompleteness({ count: 100 }, 120), { seen: 120, truncated: false, cap: null });
 });

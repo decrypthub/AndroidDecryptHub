@@ -18,11 +18,15 @@ if(!a){console.log('NO_AGENT');console.log('RESULT:FAIL');process.exit(0);}
 const r=await (await fetch(`${base}/api/trace/qbdi?session=${a.sessionId}&symLib=libadhdetect.so&symbol=adh_trace_target`)).json();
 if(r.error){console.log('ERR',r.error);console.log('RESULT:FAIL');process.exit(0);}
 if(r.ok===false && /not available|dlopen/.test(r.error||JSON.stringify(r))){console.log('QBDI not bundled -> SKIP');console.log('RESULT:SKIP');process.exit(0);}
-console.log(`ok=${r.ok} retval=${r.retval} insnCount=${r.count}`);
+console.log(`ok=${r.ok} retval=${r.retval} insnCount=${r.count} seen=${r.seen} truncated=${r.truncated} cap=${r.cap}`);
 (r.insns||[]).slice(0,6).forEach(i=>console.log(`  ${i.addr}: ${i.text}`));
 const texts=(r.insns||[]).map(i=>i.text).join(' ');
 const hasMnemonics=/\b(ldr|str|add|sub|cmp|b\.)\b/.test(texts);
-const pass = r.ok===true && Number(r.retval)===30 && r.count>=10 && hasMnemonics;
+// v4.91: the reply must describe what it carries (count == insns.length) and say whether the
+// trace was clipped - the digest can only be trusted if a clipped trace says so.
+const shapeOk = Number(r.count)===(r.insns||[]).length && Number(r.seen)>=Number(r.count) && r.truncated===false;
+if(!shapeOk) console.log(`trace shape: count=${r.count} insns=${(r.insns||[]).length} seen=${r.seen} truncated=${r.truncated}`);
+const pass = r.ok===true && Number(r.retval)===30 && r.count>=10 && hasMnemonics && shapeOk;
 console.log(pass?'RESULT:PASS':'RESULT:FAIL');
 EOF
 )"

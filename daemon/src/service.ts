@@ -64,22 +64,32 @@ function inferKind(b: Buffer): string {
   return 'region';
 }
 
-// Read [addr, addr+size) from the target via chunked agent reads. Stops on short read.
-export async function readMem(sid: string, addr: bigint, size: number): Promise<Buffer> {
+// Read [addr, addr+size) from the target via chunked agent reads, and SAY whether all of it
+// arrived. A short read used to be returned as an ordinary buffer, which let callers treat a
+// partial dump as a complete artifact (and a zero-filled hole in a reassembled ELF look real).
+export interface MemRead { buf: Buffer; requested: number; read: number; complete: boolean; error?: string; }
+export async function readMemEx(sid: string, addr: bigint, size: number): Promise<MemRead> {
   const CHUNK = 1 << 20;
   const parts: Buffer[] = [];
   let a = addr, remaining = size;
+  let error: string | undefined;
   while (remaining > 0) {
     const want = Math.min(CHUNK, remaining);
     const r = await sendCmd(sid, 'read', { addr: a.toString(16), size: want }, 20_000);
-    if (!r.ok) break;
+    if (!r.ok) { error = String(r.error ?? 'read failed'); break; }
     const b = Buffer.from(r.b64, 'base64');
     parts.push(b);
     a += BigInt(b.length);
     remaining -= b.length;
-    if (b.length < want) break;
+    if (b.length < want) { error = `short read (${b.length}/${want} bytes at 0x${a.toString(16)})`; break; }
   }
-  return Buffer.concat(parts);
+  const buf = Buffer.concat(parts);
+  return { buf, requested: size, read: buf.length, complete: buf.length === size, error };
+}
+
+// Buffer-only view for callers that genuinely do not care (kept for compatibility).
+export async function readMem(sid: string, addr: bigint, size: number): Promise<Buffer> {
+  return (await readMemEx(sid, addr, size)).buf;
 }
 
 export interface ModuleInfo { name: string; path: string; base: string; end: string; size: number; segs: number; }
@@ -127,10 +137,16 @@ export async function reconstructSo(sid: string, baseHex: string): Promise<Buffe
   if (imgSize === 0n || imgSize > 512n * 1024n * 1024n) throw new Error('implausible image size');
   const image = Buffer.alloc(Number(imgSize));
 
-  // pass 2: copy each PT_LOAD's memory to file offset == vaddr
+  // pass 2: copy each PT_LOAD's memory to file offset == vaddr. A segment that does not arrive
+  // in full is an error: Buffer.alloc already zero-filled the image, so a short read would look
+  // like a legitimate zero region and the "reconstructed" .so would be quietly wrong.
   for (const { vaddr, memsz } of loads) {
-    const seg = await readMem(sid, base + vaddr, Number(memsz));
-    seg.copy(image, Number(vaddr));
+    const seg = await readMemEx(sid, base + vaddr, Number(memsz));
+    if (!seg.complete) {
+      throw new Error(`PT_LOAD at +0x${vaddr.toString(16)} short read: ${seg.read}/${seg.requested} bytes`
+        + (seg.error ? ` (${seg.error})` : ''));
+    }
+    seg.buf.copy(image, Number(vaddr));
   }
   // rewrite ehdr in image: drop section headers
   ehdr.copy(image, 0, 0, 64);
@@ -177,6 +193,11 @@ export function repairDexHeader(buf: Buffer): { fileSize: number; checksum: stri
 
 // Dump [addr, addr+size) by orchestrating chunked agent reads, then sha256 + dedup + persist.
 export async function dumpRegion(sid: string, addrHex: string, size: number, tag: string): Promise<{ meta: DumpMeta; dedup: boolean }> {
+  // Validate before doing anything: Number(undefined) is NaN, and `while (remaining > 0)` with NaN
+  // does nothing - the old code then hashed an empty buffer and reported a successful 0-byte dump.
+  if (!Number.isSafeInteger(size) || size <= 0) throw new Error(`dump size must be a positive integer (got ${size})`);
+  const DUMP_MAX = 512 * 1024 * 1024;
+  if (size > DUMP_MAX) throw new Error(`dump size ${size} exceeds the ${DUMP_MAX} byte cap`);
   const CHUNK = 1 << 20;                          // matches agent per-read cap
   let addr = BigInt('0x' + addrHex);
   const parts: Buffer[] = [];
@@ -185,6 +206,7 @@ export async function dumpRegion(sid: string, addrHex: string, size: number, tag
     const want = Math.min(CHUNK, remaining);
     const r = await sendCmd(sid, 'read', { addr: addr.toString(16), size: want }, 20_000);
     if (!r.ok) { if (parts.length) break; throw new Error(`read failed @0x${addr.toString(16)}: ${r.error}`); }
+    // A mid-dump failure keeps what arrived, but the meta below says so (complete:false).
     const b = Buffer.from(r.b64, 'base64');
     parts.push(b);
     addr += BigInt(b.length);
@@ -199,8 +221,9 @@ export async function dumpRegion(sid: string, addrHex: string, size: number, tag
   const kind = inferKind(buf);
   const path = join(CAPTURES, `${sha.slice(0, 16)}.${kind}.bin`);
   if (!existsSync(path)) await writeFile(path, buf);
+  const complete = buf.length === size;
   const meta: DumpMeta = {
-    sha256: sha, size: buf.length, source: 'region', addr: addrHex, tag,
+    sha256: sha, size: buf.length, requestedSize: size, complete, source: 'region', addr: addrHex, tag,
     sessionId: sid, package: s?.package ?? '?', capturedAt: Date.now(), path, kind,
   };
   dumps.set(sha, meta);

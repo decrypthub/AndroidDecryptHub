@@ -181,11 +181,36 @@ export function digestSyscallSamples(samples: SyscallSample[], opts: {
   };
 }
 
+/**
+ * hits / throttled / emitted for the watched sites. `status` is the agent's hook status (authoritative:
+ * hits counts every hit, throttled the ones the window suppressed); when it is unavailable the
+ * per-event deltas are used, which undercount a final suppressed hit - hence the source field.
+ */
+export function syscallCounters(
+  status: { id: number; hits: number; throttled: number }[] | null,
+  sampleCount: number,
+  eventThrottled: number,
+): { hits: number; throttled: number; emitted: number; source: 'hook-status' | 'events' } {
+  if (status && status.length) {
+    const hits = status.reduce((a, h) => a + h.hits, 0);
+    const throttled = status.reduce((a, h) => a + h.throttled, 0);
+    return { hits, throttled, emitted: Math.max(0, hits - throttled), source: 'hook-status' };
+  }
+  return { hits: sampleCount + eventThrottled, throttled: eventThrottled, emitted: sampleCount, source: 'events' };
+}
+
 export interface SyscallDigestResult extends SyscallDigest {
   window: { sinceMs: number | null; limit: number };
   symbolSource: string;
   /** Capture-ring health for this session: a digest built on a lossy ring is NOT complete. */
   ring: { seq: number; emitted: number; dropped: number; backlog: number; complete: boolean } | null;
+  /**
+   * hits counts EVERY hit on the watched sites, throttled the hits whose event was suppressed by
+   * the throttle window. hits = emitted + throttled; source says where the numbers came from
+   * ('hook-status' = the authoritative agent counters, 'events' = the deltas in the events when
+   * status was unavailable, which undercounts the last window).
+   */
+  counters: { hits: number; throttled: number; emitted: number; source: 'hook-status' | 'events' };
 }
 
 /** Read the session's NATIVE_HOOK captures, parse them and digest the syscall hits. */
@@ -213,7 +238,7 @@ export async function syscallDigest(session: string, opts: {
     if (Number.isFinite(id) && Number.isFinite(nr)) expected[id] = nr;
   }
 
-  const raw: { hookId: number; ts: number; tid: number; observedNr: number | null; bt: bigint[]; regs: bigint[] }[] = [];
+  const raw: { hookId: number; ts: number; tid: number; observedNr: number | null; bt: bigint[]; regs: bigint[]; throttled: number }[] = [];
   for (let i = captures.length - 1; i >= 0 && raw.length < limit; i--) {
     const c: any = captures[i];
     if (c.sessionId !== session || c.func !== 'NATIVE_HOOK') continue;
@@ -236,7 +261,10 @@ export async function syscallDigest(session: string, opts: {
       const parsed = parseHex(v);
       regs.push(parsed ?? 0n);
     }
-    raw.push({ hookId, ts: Number(c.ts ?? 0), tid: Number(c.tid ?? 0), observedNr, bt, regs });
+    // The event carries how many hits the throttle window suppressed since the last emitted one;
+    // a final suppressed hit never produces a follow-up event, so this is a lower bound.
+    const throttled = Number.isFinite(Number(event.throttled)) ? Number(event.throttled) : 0;
+    raw.push({ hookId, ts: Number(c.ts ?? 0), tid: Number(c.tid ?? 0), observedNr, bt, regs, throttled });
   }
 
   // Symbolize every frame we might report as the caller (bounded by the sample count).
@@ -310,6 +338,24 @@ export async function syscallDigest(session: string, opts: {
 
   const result = digestSyscallSamples(samples, { expected, maxGroups: opts.maxGroups });
   result.notes.push(...decodeNotes);
+  // Throttled hits never become events, so a digest that counts only events must say how many
+  // were suppressed - otherwise a thinned log reads as a quiet target. The hook status is the
+  // authoritative source (hits counts every hit, throttled the suppressed ones); the per-event
+  // deltas are the fallback when status is unavailable.
+  const eventThrottled = raw.reduce((a, r) => a + r.throttled, 0);
+  const scope = wanted.size ? wanted : new Set(samples.map((s) => s.hookId));
+  let hookStatus: { id: number; hits: number; throttled: number }[] | null = null;
+  try {
+    const st: any = await sendCmd(session, 'native_hook', { action: 'status' }, 8_000);
+    const hooks = Array.isArray(st?.hooks) ? st.hooks : [];
+    hookStatus = hooks
+      .filter((h: any) => scope.size === 0 || scope.has(Number(h.id)))
+      .map((h: any) => ({ id: Number(h.id), hits: Number(h.hits ?? 0), throttled: Number(h.throttled ?? 0) }));
+  } catch { /* fall back to the event deltas */ }
+  const counters = syscallCounters(hookStatus, samples.length, eventThrottled);
+  if (counters.throttled > 0) {
+    result.notes.push(`throttled: ${counters.throttled} hit(s) were suppressed by the watch window - the digest counts every hit (emitted ${counters.emitted} of ${counters.hits}, source ${counters.source})`);
+  }
   if (!drain.ok) result.notes.push(`capture drain failed (${drain.error ?? 'unknown'}): the digest reads whatever the store already holds`);
   const stat = capStats.get(session) ?? null;
   const ring = stat
@@ -319,5 +365,5 @@ export async function syscallDigest(session: string, opts: {
   if (lossy) result.notes.push(lossy);
   if (symbolSource === 'unavailable') result.notes.push('symbolization unavailable: caller frames are shown as module+offset only');
   if (symbolSource === 'none') result.notes.push('no caller chain in the events: install the watch through syscall_watch (it sets backtrace:true)');
-  return { ...result, window: { sinceMs, limit }, symbolSource, ring };
+  return { ...result, window: { sinceMs, limit }, symbolSource, ring, counters };
 }

@@ -81,8 +81,9 @@ void cmd_read(int fd, const char *id, const char *addr_hex, long long size) {
     char *out = (char *)malloc(hlen);
     if (out) {
         snprintf(out, hlen,
-            "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"read\",\"ok\":true,\"addr\":\"%s\",\"size\":%zd,\"b64\":\"%s\"}\n",
-            idj, addr_hex, got, b64);
+            "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"read\",\"ok\":true,\"addr\":\"%s\",\"size\":%zd,"
+            "\"requested\":%lld,\"short\":%s,\"b64\":\"%s\"}\n",
+            idj, addr_hex, got, size, (got < size) ? "true" : "false", b64);
         send_line(fd, out);
         free(out);
     }

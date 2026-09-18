@@ -69,6 +69,11 @@ export interface DumpMeta {
   sha256: string; size: number; source: string; addr: string;
   tag: string; sessionId: string; package: string; capturedAt: number;
   path: string; kind: string;   // dex|so|region|... inferred from magic
+  // Completeness (v4.91). `size` is what actually landed on disk; `requestedSize` is what the
+  // caller asked for and `complete` says whether they match. A short dump is still an artifact
+  // worth keeping - it just must not look like the whole region.
+  requestedSize?: number;
+  complete?: boolean;
 }
 
 // ---- registry ------------------------------------------------------------

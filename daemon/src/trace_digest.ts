@@ -100,7 +100,7 @@ export function digestTrace(insns: TraceInsn[], opts: { maxHot?: number; maxList
     return {
       instructions: 0, uniqueAddresses: 0, mnemonics: [], hotInstructions: [], loops: [], calls: [], memory: [],
       constants: [], branches: { conditional: 0, unconditional: 0, indirect: 0, targets: [] },
-      notes: ['empty trace: nothing was executed or the trace was not collected'],
+      notes: ['empty trace: the traced function executed 0 instructions (a failed QBDI start is reported separately as ok:false)'],
     };
   }
 
@@ -233,7 +233,6 @@ export function digestTrace(insns: TraceInsn[], opts: { maxHot?: number; maxList
     .slice(0, maxList)
     .map(([mnemonic, count]) => ({ mnemonic, count }));
 
-  if (list.length >= 8000) notes.push('trace hit the 8192-instruction cap: the tail was not recorded');
   if (calls.some((c) => c.target.startsWith('('))) notes.push('some call targets are register-indirect (blr) and were not resolved');
   if (!loops.length) notes.push('no repeated address found: the traced function looks straight-line (or the loop was inlined away)');
 
@@ -254,9 +253,36 @@ export function digestTrace(insns: TraceInsn[], opts: { maxHot?: number; maxList
   };
 }
 
+/**
+ * How complete the recorded trace is. The agent sends count == the records it carried, seen == what
+ * it collected and a truncated flag; a reply from an older agent has only count, in which case
+ * seen is taken from the list length and nothing is claimed about clipping.
+ */
+export function traceCompleteness(
+  raw: { count?: unknown; seen?: unknown; truncated?: unknown; cap?: unknown },
+  insnCount: number,
+): { seen: number; truncated: boolean; cap: number | null } {
+  // Never claim fewer records than the list holds: an old agent's count is what it SAW, so it can
+  // only be >= the list length; if it is smaller the list is still the truth.
+  const seen = Number.isFinite(Number(raw.seen))
+    ? Number(raw.seen)
+    : Math.max(Number(raw.count ?? insnCount), insnCount);
+  return {
+    seen,
+    truncated: raw.truncated === true || seen > insnCount,
+    cap: raw.cap != null && Number.isFinite(Number(raw.cap)) ? Number(raw.cap) : null,
+  };
+}
+
 export interface TraceDigestResult {
   retval: string | null;
+  /** Instructions in the digest - always the length of the list that was analysed. */
   instructionCount: number;
+  /** What the agent collected before the reply was built; > instructionCount means it was clipped. */
+  seen: number;
+  /** The agent hit its instruction cap or could not fit every record into the reply. */
+  truncated: boolean;
+  cap: number | null;
   digest: TraceDigest;
   symbolNames: Record<string, SymbolizedAddress>;
 }
@@ -295,9 +321,21 @@ export async function traceDigest(session: string, opts: { symLib: string; symbo
       digest.notes.push(`symbolization unavailable: ${(e as Error).message}`);
     }
   }
+  // The counters must describe the list that was digested: `raw.count` used to be "everything
+  // the agent saw" while the list stopped at the reply-buffer limit, so a clipped trace was
+  // reported as a complete one. The agent now sends count == records and a truncated flag;
+  // either way instructionCount follows the list.
+  const { seen, truncated, cap } = traceCompleteness(raw, insns.length);
+  if (truncated) {
+    digest.notes.push(`trace was clipped: ${insns.length} of ${seen} instructions were recorded`
+      + (cap ? ` (cap ${cap})` : '') + ' - the digest describes the recorded prefix only');
+  }
   return {
     retval: raw.retval != null ? `0x${BigInt(raw.retval).toString(16)}` : null,
-    instructionCount: Number(raw.count ?? insns.length),
+    instructionCount: insns.length,
+    seen,
+    truncated,
+    cap,
     digest,
     symbolNames,
   };

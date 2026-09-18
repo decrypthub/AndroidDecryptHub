@@ -41,7 +41,8 @@ console.log('candidates:', s.hits.map(h=>`${h.addr}(${(h.path||'anon').slice(0,2
 let match=null;
 for(const h of s.hits){
   const d=await P({path:'/api/memory/dump',body:{session:a.sessionId,addr:h.addr,size:MOCK,tag:'mockdex'}});
-  const good = d.sha256===expSha && d.size===MOCK && d.kind==='dex';
+  // v4.91: the reply has to say the dump is complete, not just hand back a sha.
+  const good = d.sha256===expSha && d.size===MOCK && d.kind==='dex' && d.complete===true && d.requestedSize===MOCK;
   console.log(`  @${h.addr} -> kind=${d.kind} sha=${(d.sha256||'').slice(0,16)}… ${good?'✓ MATCH':''}`);
   if(good){ match=h; break; }
 }
@@ -56,7 +57,23 @@ if(match){
   console.log(`re-dump: dedup=${d2.dedup} ${dedupPass?'✓':'✗'}`);
 }
 
-const pass=shaPass && dedupPass;
+// 5) an unmapped range must not come back as a successful artifact. Take the first >=4 KiB gap
+//    between two mapped regions; if the process has none, say so instead of pretending to test.
+const maps = await P({path:`/api/process/maps?session=${a.sessionId}`});
+const regs = (maps.regions??[]).map(r=>({s:BigInt('0x'+r.start), e:BigInt('0x'+r.end)}))
+  .filter(r=>r.e>r.s).sort((x,y)=>(x.s<y.s?-1:(x.s>y.s?1:0)));
+let gap=null;
+for(let i=0;i+1<regs.length;i++){ if(regs[i+1].s-regs[i].e>=4096n){ gap=regs[i].e; break; } }
+let gapPass=null;
+if(gap){
+  const bad=await P({path:'/api/memory/dump',body:{session:a.sessionId,addr:gap.toString(16),size:4096,tag:'gap'}});
+  gapPass = bad.sha256===undefined || bad.complete===false;
+  console.log(`unmapped dump: sha=${bad.sha256?'present':'(none)'} complete=${bad.complete ?? '(n/a)'} ${gapPass?'✓ refused/flagged':'✗ looked successful'}`);
+} else {
+  console.log('unmapped dump: (no >=4 KiB gap in maps, sub-check skipped)');
+}
+
+const pass=shaPass && dedupPass && gapPass!==false;
 console.log(pass?'✅ v0.2 dump PASS (search + dump + sha256 verified vs known content + dedup)':'❌ v0.2 dump FAIL');
 console.log(pass?'RESULT:PASS':'RESULT:FAIL');
 EOF

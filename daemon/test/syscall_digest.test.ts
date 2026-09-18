@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { digestSyscallSamples, pickCaller, callerLabel, ringNote } from '../src/syscall_digest.ts';
+import { digestSyscallSamples, pickCaller, callerLabel, ringNote, syscallCounters } from '../src/syscall_digest.ts';
 
 const caller = (module, symbol = null, offset = '0x10') => ({ module, symbol, offset });
 const sample = (hookId, observedNr, ts, tid, callers) => ({ hookId, observedNr, ts, tid, callers });
@@ -135,4 +135,14 @@ test('a group without decoded arguments has no example, and no paths are invente
 test('a module without a symbol is labelled by offset, not by an empty name', () => {
   const d = digestSyscallSamples([sample(1, 178, 1, 1, [caller('libapp.so', null, '0x4bb10')])]);
   assert.equal(d.groups[0].caller, 'libapp.so+0x4bb10');
+});
+test('a thinned watch is counted, not mistaken for a quiet target', () => {
+  // The agent's status is authoritative: hits counts every hit, throttled the suppressed ones.
+  const withStatus = syscallCounters([{ id: 3, hits: 120, throttled: 100 }, { id: 4, hits: 5, throttled: 0 }], 25, 3);
+  assert.deepEqual(withStatus, { hits: 125, throttled: 100, emitted: 25, source: 'hook-status' });
+  // Without status the event deltas are the lower bound - and the source field says so.
+  const events = syscallCounters(null, 25, 3);
+  assert.deepEqual(events, { hits: 28, throttled: 3, emitted: 25, source: 'events' });
+  // A hook set that exists but was never hit must not invent numbers.
+  assert.deepEqual(syscallCounters([{ id: 9, hits: 0, throttled: 0 }], 0, 0), { hits: 0, throttled: 0, emitted: 0, source: 'hook-status' });
 });

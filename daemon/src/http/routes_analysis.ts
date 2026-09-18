@@ -92,7 +92,15 @@ export function analysisRoutes({ req, res, url, send }: RouteContext): Route[] {
       if (!sid || !name) return send(400, { error: 'need session, name' });
       try {
         const maps = await sendCmd(sid, 'maps');
-        const mod = modulesFromMaps(maps.regions ?? []).find(m => m.name === name || m.path.includes(name));
+        // Exact basename first; a substring match is only accepted when it is unambiguous - `libc`
+        // used to silently pick between libc.so / libc++.so / libcutils.so.
+        const mods = modulesFromMaps(maps.regions ?? []);
+        let mod = mods.find(m => m.name === name);
+        if (!mod) {
+          const loose = mods.filter(m => m.path.includes(name));
+          if (loose.length > 1) return send(409, { error: `ambiguous module '${name}': ${loose.map(m => m.name).join(', ')}` });
+          mod = loose[0];
+        }
         if (!mod) return send(404, { error: `module not found: ${name}` });
         const buf = await reconstructSo(sid, mod.base);
         const sha = createHash('sha256').update(buf).digest('hex');
@@ -101,7 +109,7 @@ export function analysisRoutes({ req, res, url, send }: RouteContext): Route[] {
         const s = sessions.get(sid);
         const path = join(CAPTURES, `${sha.slice(0, 16)}.so`);
         if (!existsSync(path)) await writeFile(path, buf);
-        const meta: DumpMeta = { sha256: sha, size: buf.length, source: 'so-reassembly', addr: mod.base, tag: mod.name, sessionId: sid, package: s?.package ?? '?', capturedAt: Date.now(), path, kind: 'so' };
+        const meta: DumpMeta = { sha256: sha, size: buf.length, requestedSize: buf.length, complete: true, source: 'so-reassembly', addr: mod.base, tag: mod.name, sessionId: sid, package: s?.package ?? '?', capturedAt: Date.now(), path, kind: 'so' };
         dumps.set(sha, meta);
         broadcast('dump.new', meta);
         return send(200, { ...meta, dedup: false, module: mod.name, segments: mod.segs });

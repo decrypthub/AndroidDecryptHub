@@ -29,10 +29,17 @@ static p_getInstAnalysis_t f_getInstAnalysis = NULL;
 struct QInsn { unsigned long long addr; char text[56]; };
 static struct QInsn g_qtrace[QTRACE_MAX];
 static int g_nqtrace = 0;
+// Set when the instruction cap stopped collection: a clipped trace must say so, because the
+// digest of a clipped trace looks exactly like the digest of a short one.
+static int g_qtrace_capped = 0;
 
 static VMAction qbdi_insn_cb(VMInstanceRef vm, GPRState *gpr, FPRState *fpr, void *data) {
     (void)gpr; (void)fpr; (void)data;
-    if (g_nqtrace < QTRACE_MAX && f_getInstAnalysis) {
+    if (g_nqtrace >= QTRACE_MAX) {
+        g_qtrace_capped = 1;
+        return QBDI_CONTINUE;
+    }
+    if (f_getInstAnalysis) {
         const InstAnalysis *a = f_getInstAnalysis(vm, QBDI_ANALYSIS_INSTRUCTION | QBDI_ANALYSIS_DISASSEMBLY);
         if (a) {
             struct QInsn *r = &g_qtrace[g_nqtrace++];
@@ -67,13 +74,18 @@ int adh_qbdi_trace(void *func, const unsigned long long *args, int argc, char *o
     }
 
     g_nqtrace = 0;
+    g_qtrace_capped = 0;
     VMInstanceRef vm = NULL;
     f_init(&vm, NULL, NULL, (Options)0);
+    // Every step is checked: running on a half-initialised VM used to be reported as
+    // "ok:true, count:0", which the digest could only describe as "nothing was executed".
+    if (!vm) { snprintf(out, outsz, "\"ok\":false,\"error\":\"qbdi_initVM failed\""); f_getInstAnalysis = NULL; (void)dlclose(h); return -1; }
     GPRState *st = f_gpr(vm);
+    if (!st) { snprintf(out, outsz, "\"ok\":false,\"error\":\"qbdi_getGPRState failed\""); if (f_term) f_term(vm); f_getInstAnalysis = NULL; (void)dlclose(h); return -1; }
     uint8_t *stack = NULL;
-    f_alloc(st, 0x100000, &stack);
-    f_addmod(vm, (rword)(uintptr_t)func);
-    f_addcb(vm, QBDI_PREINST, qbdi_insn_cb, NULL, 0);
+    if (!f_alloc(st, 0x100000, &stack) || !stack) { snprintf(out, outsz, "\"ok\":false,\"error\":\"qbdi_allocateVirtualStack failed\""); if (f_term) f_term(vm); f_getInstAnalysis = NULL; (void)dlclose(h); return -1; }
+    if (!f_addmod(vm, (rword)(uintptr_t)func)) { snprintf(out, outsz, "\"ok\":false,\"error\":\"qbdi_addInstrumentedModuleFromAddr failed (module not instrumentable?)\""); if (f_free) f_free(stack); if (f_term) f_term(vm); f_getInstAnalysis = NULL; (void)dlclose(h); return -1; }
+    if (f_addcb(vm, QBDI_PREINST, qbdi_insn_cb, NULL, 0) == 0) { snprintf(out, outsz, "\"ok\":false,\"error\":\"qbdi_addCodeCB failed\""); if (f_free) f_free(stack); if (f_term) f_term(vm); f_getInstAnalysis = NULL; (void)dlclose(h); return -1; }
     rword ret = 0;
     if (argc < 0) argc = 0;
     if (argc > 8) argc = 8;
@@ -94,9 +106,38 @@ int adh_qbdi_trace(void *func, const unsigned long long *args, int argc, char *o
     f_getInstAnalysis = NULL;
     (void)dlclose(h);
 
-    int o = snprintf(out, outsz, "\"ok\":true,\"retval\":%llu,\"count\":%d,\"insns\":[", (unsigned long long)ret, n);
-    for (int i = 0; i < n && o < outsz - 100; i++)
+    // Decide how many records the reply can carry BEFORE writing the header: the record text is
+    // bounded (56 bytes) so a conservative per-record estimate is enough, and the counters then
+    // describe exactly the list that follows. (The old code wrote count = everything it had seen and
+    // stopped emitting when the buffer filled, so the reply claimed instructions it did not carry.)
+    const int PER_RECORD = 120;                       // bounded text + addr + punctuation + slack
+    int fits = n;
+    const int headroom = 96;                          // header + closing brackets
+    if (outsz > headroom && fits > (outsz - headroom) / PER_RECORD) fits = (outsz - headroom) / PER_RECORD;
+    if (fits < 0) fits = 0;
+    int truncated = g_qtrace_capped || fits < n ? 1 : 0;
+    int o = snprintf(out, outsz,
+                     "\"ok\":true,\"retval\":%llu,\"count\":%d,\"seen\":%d,\"cap\":%d,\"truncated\":%s,\"insns\":[",
+                     (unsigned long long)ret, fits, n, QTRACE_MAX, truncated ? "true" : "false");
+    int emitted = 0;
+    for (int i = 0; i < fits && o > 0 && o < outsz - 100; i++, emitted++)
         o += snprintf(out + o, outsz - o, "%s{\"addr\":\"%llx\",\"text\":\"%s\"}", i ? "," : "", g_qtrace[i].addr, g_qtrace[i].text);
+    if (emitted < fits) truncated = 1;                // belt and braces: the array is the truth
+    if (emitted < fits) {
+        char fix[64];
+        const char *at = strstr(out, "\"count\":");
+        if (at) {
+            char *list = strstr((char *)at, "\"insns\":[");
+            if (list) {
+                int flen = snprintf(fix, sizeof(fix), "\"count\":%d,\"seen\":%d,\"cap\":%d,\"truncated\":true,\"insns\":[",
+                                    emitted, n, QTRACE_MAX);
+                size_t after = (size_t)(list - out) + strlen("\"insns\":[");
+                memmove(out + (size_t)(at - out) + (size_t)flen, out + after, strlen(out + after) + 1);
+                memcpy(out + (size_t)(at - out), fix, (size_t)flen);
+                o = (int)strlen(out);
+            }
+        }
+    }
     snprintf(out + o, outsz - o, "]");
-    return n;
+    return emitted;
 }

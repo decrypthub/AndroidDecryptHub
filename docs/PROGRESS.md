@@ -15,6 +15,13 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.91 第七轮评审（能力面）收口：三处"看起来成功"改成如实上报（2026-09-19，host 验收 PASS；真机待做）**：评审对 memory / syscall / call / trace / automation 五个面做了独立审计，4 条 P1 全是"结果看起来成功、实际不完整"，先修三条。
+      · **P1 内存 dump 链路**：agent `read` 回 `requested/short`；daemon 新增 `readMemEx`（`complete/requested/read`），`reconstructSo` 对每个 PT_LOAD **整段校验**（短读直接抛错——不再让 `Buffer.alloc` 的 0 填看着像真实零区），`dumpRegion` 先校验 size（NaN/负数/超 512 MB 直接拒绝）并在 meta 里带 `requestedSize/complete`；三个出口（`/api/memory/dump`、`memory_dump`、`/api/module/dump`）原样上报。`/api/module/dump` 的模块名匹配改为"精确 basename → 唯一宽松匹配 → 歧义即 409"（此前 `libc` 会在 libc.so / libc++.so / libcutils.so 之间静默挑一个）。v02 设备脚本新增断言：正常 dump `complete:true`、落在未映射空洞上的 dump 必须被拒绝或标记。
+      · **P1 syscall digest 吞限流计数**：事件里的 `throttled` 只是"距上次发出"的增量（最后一次被压制的命中永远带不出来），digest 现在额外读 agent 的 `native_hook` status（权威计数）→ 结果给 `counters {hits, throttled, emitted, source}` 并写明"被限流 N 次"；status 不可用时退回事件增量并标注 `source:'events'`（欠计最后一段窗口）。逻辑抽成纯函数 `syscallCounters()` + 单测。
+      · **P1 QBDI trace 截断无标记**：agent 侧新增 `seen/cap/truncated`，且 `count` 恒等于实际携带的条数（旧实现先写 header、缓冲满时停手 → "声称 N 条、实际只带 M 条"）；QBDI 生命周期的 5 个调用（initVM / getGPRState / allocateVirtualStack / addMod / addCodeCB）返回值全部检查，"半初始化 VM 跑出 0 条"不再伪装成 `ok:true,count:0`。daemon 侧抽 `traceCompleteness()`（带单测）并把 `truncated` 写成 digest note（删掉按 `list.length>=8000` 猜截断的启发式）；v10_qbdi 设备脚本断言 `count == insns.length && seen >= count && truncated === false`。
+      · 顺带：MCP 的 memory/digest 工具描述同步；`node --test` **153**（+2）。
+      · 评审另有 4 条 P2（liveDisasm 的 NaN/越界校验、native_call 地址严格解析 + 挂起异常上报、automation 要求 `ok===true`、phone_task 总 deadline）留下一批。
+      · 验收：agent 零告警重建；daemon `node --test` 153 通过；host 全量门禁 **32 PASS / 0 FAIL / 84 SKIP**（116 脚本）。顺带一提：中途我改 MCP 描述时引入了一个多余的引号，**v71 的注册表门禁当场把 10 个 host 脚本打红**——那条"描述里的撇号会炸掉整个模块"的门禁按设计工作了。
 - [~] **v4.90 `file_probe` 补上设备证据路径（2026-09-19，host 语法/门禁 PASS；真机待做）**：v4.87 的路由门禁点出 5 条 api 路由没有任何验收脚本引用，其中 4 条（stealth/hook_all/backtrace/skills）的能力其实由 MCP 面覆盖（`verify_v69`/`v84`+`v86`/`v78`/`v36`），只剩 `file_probe` 真的没人叫过——它正是 `file_capture` 那个 `module` 参数的来源，探测不到就会在下一步以"莫名其妙装不上"的形式暴露。
       · 在既有的设备脚本 `verify_v87_device_probe_fs.sh`（名字就叫 device_probe_fs）里加第 5 段：调 `/api/file/probe`，断言 `ok`、五个符号（open/openat/read/write/close）**都解析出非零地址**、`modules` 非空且都是 `.so`、并且至少有一个模块确实持有这五个中的一个（按符号打印命中数）。"哪个符号被哪个模块 import"随 ROM 变（libjavacore 用 open/close + `__read_chk`/`__write_chk`，别的模块持 plain read/write），所以断言的是"能探测到候选"而不是"必须是某个模块"。
       · 路由门禁的"无人引用"名单随之从 5 条降到 4 条；剩余 4 条已确认由 MCP 面覆盖。
