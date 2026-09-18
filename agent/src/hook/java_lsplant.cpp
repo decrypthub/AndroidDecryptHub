@@ -309,7 +309,7 @@ extern "C" const char *adh_compute_shorty(JNIEnv *env, jobject method) {
 }
 
 // ---- embedded bridge dex loader + multi-hook registry ---------------------------------
-#define ADH_JAVA_MAX_HOOKS 16
+#define ADH_JAVA_MAX_HOOKS ADH_JAVA_HOOK_MAX   // shared with agent_main.c through the header
 
 struct JavaHookContext {
     int id;
@@ -718,6 +718,94 @@ static jobject find_target_method(JNIEnv *env, jclass target_class, const std::s
     signature = declaring + "." + (want_ctor ? std::string("<init>") : method_name) + "(" + params + ")";
     return found;
 }
+// Collect EVERY method of the class (declared + superclass chain) that matches an optional name and an
+// optional exact parameter list. "*" or an empty list means "any". Used by hook-all, where the point
+// is to stop hand-enumerating overloads before installing - the Frida `overloads.forEach(hook)`
+// workflow. Slots are bounded by the caller; the local-ref count stays well under the 512 limit.
+static int collect_target_methods(JNIEnv *env, jclass target_class, const std::string &method_name,
+                                  const std::string &params, int cap, std::vector<jobject> &out,
+                                  std::string &error) {
+    const bool any_name = method_name.empty();
+    const bool want_ctor = method_name == "<init>" || method_name == "constructor";
+    const bool any_params = params.empty() || params == "*";
+    std::vector<std::string> wanted = any_params ? std::vector<std::string>() : split_params(params);
+
+    jclass class_class = env->FindClass("java/lang/Class");
+    jmethodID get_declared_methods = env->GetMethodID(class_class, "getDeclaredMethods", "()[Ljava/lang/reflect/Method;");
+    jmethodID get_declared_ctors = env->GetMethodID(class_class, "getDeclaredConstructors", "()[Ljava/lang/reflect/Constructor;");
+    jmethodID get_super = env->GetMethodID(class_class, "getSuperclass", "()Ljava/lang/Class;");
+    jmethodID get_name = env->GetMethodID(class_class, "getName", "()Ljava/lang/String;");
+    jclass member_class = env->FindClass(want_ctor ? "java/lang/reflect/Constructor" : "java/lang/reflect/Method");
+    jmethodID member_get_params = member_class ? env->GetMethodID(member_class, "getParameterTypes", "()[Ljava/lang/Class;") : nullptr;
+    jmethodID member_get_name = want_ctor || !member_class ? nullptr : env->GetMethodID(member_class, "getName", "()Ljava/lang/String;");
+    jmethodID member_set_accessible = member_class ? env->GetMethodID(member_class, "setAccessible", "(Z)V") : nullptr;
+    if (!get_declared_methods || !get_declared_ctors || !get_super || !get_name || !member_get_params || !member_set_accessible) {
+        error = "reflection methods unavailable";
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        return 0;
+    }
+
+    std::vector<std::string> seen;
+    jclass cursor = (jclass)env->NewLocalRef(target_class);
+    for (int depth = 0; cursor && depth < 10 && (int)out.size() < cap; depth++) {
+        jobjectArray members = (jobjectArray)env->CallObjectMethod(cursor, want_ctor ? get_declared_ctors : get_declared_methods);
+        if (members) {
+            jsize count = env->GetArrayLength(members);
+            for (jsize i = 0; i < count && (int)out.size() < cap; i++) {
+                jobject member = env->GetObjectArrayElement(members, i);
+                if (!member) continue;
+                bool keep = true;
+                std::string member_name = want_ctor ? "<init>" : "";
+                if (!want_ctor && member_get_name) {
+                    jstring jname = (jstring)env->CallObjectMethod(member, member_get_name);
+                    member_name = jstring_to_utf(env, jname);
+                    if (jname) env->DeleteLocalRef(jname);
+                    if (!any_name) keep = method_name == member_name;
+                }
+                jobjectArray parameter_types = keep ? (jobjectArray)env->CallObjectMethod(member, member_get_params) : nullptr;
+                jsize parameter_count = parameter_types ? env->GetArrayLength(parameter_types) : 0;
+                std::string signature_key;
+                bool params_ok = keep && (any_params || parameter_count == (jsize)wanted.size());
+                for (jsize j = 0; params_ok && j < parameter_count; j++) {
+                    jclass parameter_class = (jclass)env->GetObjectArrayElement(parameter_types, j);
+                    jstring parameter_name = parameter_class ? (jstring)env->CallObjectMethod(parameter_class, get_name) : nullptr;
+                    const char *parameter_chars = parameter_name ? env->GetStringUTFChars(parameter_name, nullptr) : nullptr;
+                    std::string actual = parameter_chars ? parameter_chars : "";
+                    if (parameter_chars) env->ReleaseStringUTFChars(parameter_name, parameter_chars);
+                    if (parameter_name) env->DeleteLocalRef(parameter_name);
+                    if (parameter_class) env->DeleteLocalRef(parameter_class);
+                    if (!any_params && normalize_type(actual) != wanted[(size_t)j]) params_ok = false;
+                    if (params_ok) { if (!signature_key.empty()) signature_key += ","; signature_key += actual; }
+                }
+                if (parameter_types) env->DeleteLocalRef(parameter_types);
+                if (params_ok) {
+                    // Key on (name, params): a class-wide scan sees foo(int) and bar(int), which must
+                    // both be collected - keying on params alone silently dropped one of them.
+                    std::string dedupe_key = member_name + "(" + signature_key + ")";
+                    bool duplicate = false;
+                    for (const std::string &s : seen) if (s == dedupe_key) { duplicate = true; break; }
+                    if (!duplicate) {
+                        env->CallVoidMethod(member, member_set_accessible, JNI_TRUE);
+                        if (env->ExceptionCheck()) env->ExceptionClear();
+                        seen.push_back(dedupe_key);
+                        out.push_back((jobject)env->NewLocalRef(member));
+                    }
+                }
+                env->DeleteLocalRef(member);
+            }
+            env->DeleteLocalRef(members);
+        } else if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+        }
+        jclass parent = (jclass)env->CallObjectMethod(cursor, get_super);
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        env->DeleteLocalRef(cursor);
+        cursor = parent;
+    }
+    if (cursor) env->DeleteLocalRef(cursor);
+    return (int)out.size();
+}
+
 static int find_free_hook_slot_locked() {
     for (int i = 0; i < ADH_JAVA_MAX_HOOKS; i++) {
         if (g_java_hooks[i].active == 0 && !g_java_hooks[i].used) return i;
@@ -935,6 +1023,103 @@ extern "C" int adh_javahook_hook_method(JNIEnv *env, const char *class_name, con
     if (hook_id_out) *hook_id_out = hook_id;
     LLOGI("java_hook installed id=%d target=%s", hook_id, signature.c_str());
     return 1;
+}
+
+// Hook every method of a class in one call (Frida's "hook all overloads / hook the whole class"
+// workflow). Each collected method is installed through the ordinary single-method path, so all the
+// existing rules apply (constructors reject skip/override, slots are bounded, failures roll back per
+// method). Installs stop at the slot limit; the caller learns how many methods matched so a truncated
+// result is visible instead of silently partial.
+extern "C" int adh_javahook_hook_all(JNIEnv *env, const char *class_name, const char *method_name,
+                                     const char *params, int skip_original, const char *override_return,
+                                     int arg_index, const char *arg_value, int capture_stack,
+                                     int max_hooks, int *hook_ids_out, int hook_ids_cap,
+                                     int *matched_out, char *error, size_t error_size) {
+    if (matched_out) *matched_out = 0;
+    if (!env || !class_name || !class_name[0]) {
+        set_error(error, error_size, "hook_all needs className");
+        return 0;
+    }
+    if (!adh_javahook_init(env)) {
+        set_error(error, error_size, "%s", adh_javahook_last_error());
+        return 0;
+    }
+    const int cap = max_hooks > 0 ? max_hooks : ADH_JAVA_MAX_HOOKS;
+    std::string problem;
+    jclass target_class = load_app_class(env, class_name, problem);
+    if (!target_class) {
+        set_error(error, error_size, "%s", problem.c_str());
+        return 0;
+    }
+    std::vector<jobject> methods;
+    std::string collect_error;
+    int matched = collect_target_methods(env, target_class, method_name ? method_name : "",
+                                         params ? params : "*", cap, methods, collect_error);
+    if (matched <= 0) {
+        env->DeleteLocalRef(target_class);
+        set_error(error, error_size, "%s",
+                  collect_error.empty() ? "no method matched (name/params filter too narrow?)" : collect_error.c_str());
+        return 0;
+    }
+    if (matched_out) *matched_out = matched;
+
+    int installed = 0;
+    int first_error_kept = 0;
+    char first_error[192] = "";
+    for (int i = 0; i < matched && installed < hook_ids_cap; i++) {
+        jobject method = methods[(size_t)i];
+        // Build the exact parameter list of THIS overload so the single-method resolver selects it
+        // unambiguously, and read the real method name when the caller asked for "any name".
+        std::string param_list;
+        std::string actual_name = method_name ? method_name : "";
+        jclass method_class = env->FindClass("java/lang/reflect/Method");
+        jmethodID get_params = method_class ? env->GetMethodID(method_class, "getParameterTypes", "()[Ljava/lang/Class;") : nullptr;
+        jmethodID get_name = method_class ? env->GetMethodID(method_class, "getName", "()Ljava/lang/String;") : nullptr;
+        jclass class_class = env->FindClass("java/lang/Class");
+        jmethodID class_get_name = class_class ? env->GetMethodID(class_class, "getName", "()Ljava/lang/String;") : nullptr;
+        if (actual_name.empty() && get_name) {
+            jstring jname = (jstring)env->CallObjectMethod(method, get_name);
+            actual_name = jstring_to_utf(env, jname);
+            if (jname) env->DeleteLocalRef(jname);
+        }
+        jobjectArray parameter_types = get_params ? (jobjectArray)env->CallObjectMethod(method, get_params) : nullptr;
+        jsize parameter_count = parameter_types ? env->GetArrayLength(parameter_types) : 0;
+        for (jsize j = 0; j < parameter_count; j++) {
+            jclass parameter_class = (jclass)env->GetObjectArrayElement(parameter_types, j);
+            jstring parameter_name = parameter_class && class_get_name ? (jstring)env->CallObjectMethod(parameter_class, class_get_name) : nullptr;
+            std::string actual = jstring_to_utf(env, parameter_name);
+            if (parameter_name) env->DeleteLocalRef(parameter_name);
+            if (parameter_class) env->DeleteLocalRef(parameter_class);
+            if (j) param_list += ",";
+            param_list += actual;
+        }
+        if (parameter_types) env->DeleteLocalRef(parameter_types);
+
+        char hook_error[192] = "";
+        int hook_id = 0;
+        int ok = adh_javahook_hook_method(env, class_name, actual_name.c_str(), param_list.c_str(),
+                                          skip_original, override_return, arg_index, arg_value,
+                                          capture_stack, &hook_id, hook_error, sizeof(hook_error));
+        if (ok && hook_id > 0) {
+            hook_ids_out[installed++] = hook_id;
+        } else if (!first_error_kept) {
+            first_error_kept = 1;
+            snprintf(first_error, sizeof(first_error), "%s", hook_error[0] ? hook_error : "install failed");
+        }
+    }
+    for (jobject m : methods) env->DeleteLocalRef(m);
+    env->DeleteLocalRef(target_class);
+    if (installed <= 0) {
+        set_error(error, error_size, "%s", first_error[0] ? first_error : "no hook could be installed (slot limit?)");
+        return 0;
+    }
+    if (first_error_kept && error && error_size) {
+        // Report the partial failure through the error string while still returning success: the
+        // operator must see that some overloads did not install.
+        snprintf(error, error_size, "partial: %s", first_error);
+    }
+    LLOGI("java_hook_all installed=%d matched=%d class=%s", installed, matched, class_name);
+    return installed;
 }
 
 extern "C" int adh_javahook_unhook_id(JNIEnv *env, int hook_id, char *error, size_t error_size) {

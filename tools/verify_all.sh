@@ -92,6 +92,9 @@ SCRIPTS=(
   # Java caller chain (v4.40): the LSPlant callback must report the app frames that led to the hooked
   # method when stack:true is set - and nothing when it is not.
   "verify_v79_java_stack.sh:device"
+  # Batch Java hooks (v4.44): hookAll must install every matching overload in one call and report a
+  # larger matched count when the slot limit truncates the batch.
+  "verify_v82_java_hook_all.sh:device"
   "verify_v02_dump.sh:device"
   "verify_v02_so.sh:device"
   "verify_v02_dexrepair.sh:host"

@@ -15,6 +15,11 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.44 Java 批量挂钩 `hookAll`（2026-09-18，实现 + 构建完成；真机验收待做）**：目标第 1 条里"普通方法重载方法"的最后一截——以前要挂一个类的全部重载，得先 `java_enum` 再逐个装。
+      · `agent/src/hook/java_lsplant.cpp`：`collect_target_methods()` 遍历声明 + 继承链收集匹配方法（`method`/`params` 可选、`"*"` 任意；**去重键 = 方法名 + 参数列表**，否则类级扫描会把 `foo(int)` 与 `bar(int)` 去重掉一个）；`adh_javahook_hook_all()` 对每个方法调用**既有单方法安装路径**（构造器规则、16 槽上限、逐方法回滚全部沿用），返回 `hookIds[]` + `matched`（匹配总数，截断可见）。
+      · 命令层：`cmd_java_hook` 新增 `hook_all` 分支与 `limit` 参数，响应带 `hookIds`/`matched`；MCP `java_hook action:hookAll`（映射到 `hook_all`）+ HTTP 同名参数；agent 构建 **0 告警**。
+      · 已写好的真机验收 `tools/verify_v82_java_hook_all.sh`：① `hookAll(method=ping)` 必须返回 2 个 id、`matched=2`，`ping(String)` 与 `ping(String,int)` **各自**产生 `JAVA_HOOK` 事件；② 类级 `hookAll(limit=3)` 必须 `installed=3 < matched` 且 status.count 一致；③ `unhook 0` 后进程存活。
+      · **待办**：真机执行 v82（与 v77/v78/v79/v80-device/v81-device 一起排队——手机当前不在线）。
 - [~] **v4.43 系统调用归因摘要 `syscall_digest`（2026-09-18，host 验收 PASS；真机验收待做）**：评审（Heisenberg）把"监听发生了"与"知道是谁发的"之间的距离点得很准——这正是目标第 4 条要的信号。
       · `daemon/src/syscall_digest.ts`：纯函数 `digestSyscallSamples()` 按 **(nr, 调用方帧)** 分组（次数/首末时间/线程，线程列表有界去重），调用方取 **libc 家族之外的第一帧**（`libc/libc++/libm/libdl/libbinder_ndk/libbase` 跳过；全是 libc 时如实回退到第一帧），号码未知也能分组（`nr:null`，不丢样本），支持名字表覆盖；`syscallDigest()` 从 capture store 读 `NATIVE_HOOK` 事件（`x8` + `bt`）、符号化调用帧、并把**运行期 x8 与调用方给的 `expected {hookId: nr}` 比对**，不一致进 `mismatches`——把"归因写错但没人验证"变成可见事实。`syscall_watch` 已改为带 `backtrace:true` 装钩，所以事件天生带调用链。
       · **参数解码（同轮补齐）**：`daemon/src/syscall_args.ts` 把寄存器快照翻译成人类可读参数——`openat/faccessat/newfstatat` 的**路径**（并按 `O_RDONLY/O_CREAT/O_CLOEXEC…` 位翻译 flags，低位访问模式单独处理）、`memfd_create` 的名字、`uname` 的 utsname 五个字段、`connect` 的 IPv4/IPv6 地址端口、`ioctl` 的 request、`socket` 的 domain/type、`read/write/getrandom/kill/tgkill/prctl` 的标量。指针参数由 Host 经 agent 读目标内存（**有界**：每样本最多 2 次读、`decodeLimit` 默认 40 个样本，可 `decode:false` 关掉），读不到就如实写 `(unreadable)`（延迟读可能已被释放/换页，注释里说明）。摘要因此多了 **`paths` 直方图**（"这段代码在探测哪些文件"——指纹排查最直接的信号）与每组的 `example`（`path=/proc/cpuinfo flags=O_RDONLY|O_CLOEXEC`）。9 条单测（plan/路径/flags 访问模式/uname/双栈 sockaddr/ioctl/不可读指针/二进制垃圾不当字符串/未知号回退）。

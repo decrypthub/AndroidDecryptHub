@@ -157,7 +157,7 @@ static void cmd_javahook_probe(int fd, const char *id) {
 static void cmd_java_hook(int fd, const char *id, const char *action, const char *class_name,
                           const char *method_name, const char *params, int skip_original,
                           const char *override_return, long long arg_index, const char *arg_value,
-                          long long requested_hook_id, int capture_stack_flag) {
+                          long long requested_hook_id, int capture_stack_flag, long long max_hooks) {
     char idj[64];
     json_escape(id, idj, sizeof(idj));
 #ifdef ADH_HAVE_LSPLANT
@@ -174,6 +174,9 @@ static void cmd_java_hook(int fd, const char *id, const char *action, const char
     char error[512] = "";
     int ok = 0;
     int new_hook_id = 0;
+    int hook_ids[ADH_JAVA_HOOK_MAX];
+    int hook_id_count = 0;
+    int matched_count = 0;
     if (strcmp(action, "hook") == 0) {
         if (!class_name[0] || !method_name[0]) {
             snprintf(error, sizeof(error), "hook requires className and method");
@@ -182,12 +185,24 @@ static void cmd_java_hook(int fd, const char *id, const char *action, const char
                                              override_return, (int)arg_index, arg_value, capture_stack_flag,
                                              &new_hook_id, error, sizeof(error));
         }
+    } else if (strcmp(action, "hook_all") == 0) {
+        if (!class_name[0]) {
+            snprintf(error, sizeof(error), "hook_all requires className");
+        } else {
+            int want = (int)((max_hooks > 0 && max_hooks <= ADH_JAVA_HOOK_MAX) ? max_hooks : ADH_JAVA_HOOK_MAX);
+            ok = adh_javahook_hook_all(env, class_name, method_name, params, skip_original,
+                                       override_return, (int)arg_index, arg_value, capture_stack_flag,
+                                       want, hook_ids, ADH_JAVA_HOOK_MAX, &matched_count,
+                                       error, sizeof(error));
+            hook_id_count = ok > 0 ? ok : 0;
+            new_hook_id = hook_id_count > 0 ? hook_ids[0] : 0;
+        }
     } else if (strcmp(action, "unhook") == 0) {
         ok = adh_javahook_unhook_id(env, (int)requested_hook_id, error, sizeof(error));
     } else if (strcmp(action, "status") == 0) {
         ok = 1;
     } else {
-        snprintf(error, sizeof(error), "java_hook requires action: hook | unhook | status");
+        snprintf(error, sizeof(error), "java_hook requires action: hook | hook_all | unhook | status");
     }
 
     char *status = (char *)malloc(65536);
@@ -209,10 +224,20 @@ static void cmd_java_hook(int fd, const char *id, const char *action, const char
         send_oom(fd, idj, "java_hook");
         return;
     }
+    // hook_all reports every id it installed plus how many methods matched, so a slot-limited or
+    // partially failed batch is visible rather than looking like a complete one.
+    char ids_json[256] = "";
+    if (hook_id_count > 0) {
+        size_t used = (size_t)snprintf(ids_json, sizeof(ids_json), ",\"hookIds\":[");
+        for (int i = 0; i < hook_id_count && used + 16 < sizeof(ids_json); i++) {
+            used += (size_t)snprintf(ids_json + used, sizeof(ids_json) - used, "%s%d", i ? "," : "", hook_ids[i]);
+        }
+        snprintf(ids_json + used, sizeof(ids_json) - used, "],\"matched\":%d", matched_count);
+    }
     snprintf(out, out_len,
              "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"java_hook\",\"ok\":%s,\"action\":\"%s\","
-             "\"hookId\":%d,\"error\":\"%s\",\"status\":%s}\n",
-             idj, ok ? "true" : "false", action, new_hook_id, errj, status);
+             "\"hookId\":%d%s,\"error\":\"%s\",\"status\":%s}\n",
+             idj, ok ? "true" : "false", action, new_hook_id, ids_json, errj, status);
     send_line(fd, out);
     free(status);
     free(out);
@@ -437,6 +462,7 @@ static void command_loop(int fd) {
                     char jaction[16] = "", jcls[256] = "", jmethod[128] = "", jparams[512] = "";
                     char jskip[8] = "", jreturn[512] = "", jargvalue[512] = "", jstack[8] = "";
                     json_get_str(line, "action", jaction, sizeof(jaction));
+                    long long jmax_hooks = json_get_num(line, "limit");
                     json_get_str(line, "className", jcls, sizeof(jcls));
                     json_get_str(line, "method", jmethod, sizeof(jmethod));
                     json_get_str(line, "params", jparams, sizeof(jparams));
@@ -450,7 +476,7 @@ static void command_loop(int fd) {
                     // Opt-in per-hook caller chain (the Java analogue of the native backtrace).
                     int jcapture_stack = (strcmp(jstack, "true") == 0 || strcmp(jstack, "1") == 0) ? 1 : 0;
                     if (strstr(line, "\"stack\":true") != NULL) jcapture_stack = 1;
-                    cmd_java_hook(fd, id, jaction, jcls, jmethod, jparams, skip_original, jreturn, jarg_index, jargvalue, jhook_id, jcapture_stack);
+                    cmd_java_hook(fd, id, jaction, jcls, jmethod, jparams, skip_original, jreturn, jarg_index, jargvalue, jhook_id, jcapture_stack, jmax_hooks);
                 } else if (strcmp(op, "java_enum") == 0) {
                     char jcls[256] = "";
                     json_get_str(line, "className", jcls, sizeof(jcls));
