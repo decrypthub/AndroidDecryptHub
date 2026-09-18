@@ -8,6 +8,8 @@ import { syscallDigest } from '../syscall_digest.ts';
 import { javaTraceStart, javaTraceDigest, javaTraceStop } from '../java_trace.ts';
 import { nativeHookAll, nativeUnhookAll } from '../native_hook_all.ts';
 import { normalizeThrottleMs } from '../native_hook_args.ts';
+import { agentPing, hookEngineSelftest, protocolSelfTest } from '../agent_probe.ts';
+import { listDeviceDir, readDeviceFile } from '../fs_browse.ts';
 import { syscallTraceStart, syscallTraceDigest, syscallTraceStop } from '../syscall_trace.ts';
 import { liveDisasm } from '../memory.ts';
 import { readBody, SANDBOX, sessions, settings } from '../state.ts';
@@ -22,17 +24,23 @@ function parseThrottleMs(value: unknown): { ms: number } | { error: string } {
 export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
   return [
     // WS-D protocol self-test: GET /api/debug/frame_echo?session=ID&kb=N
+    // Shares protocolSelfTest with the MCP tool protocol_selftest, so the two surfaces cannot drift.
     { path: '/api/debug/frame_echo', handler: async () => {
       const sid = pickSid(url.searchParams.get('session'));
       if (!sid) return send(400, { error: 'no session' });
       const kb = Math.max(1, Math.min(4096, Number(url.searchParams.get('kb') ?? 64)));
-      const padLen = kb * 1024;
-      const pad = 'A'.repeat(padLen);
-      const tail = 'ADH_FRAME_TAIL_v1';
       try {
-        const r = await sendCmd(sid, 'frame_echo', { pad, tail, padLen }, 20_000);
-        return send(r.ok ? 200 : 502, { ...r, sentPadLen: padLen, tailOk: r.tail === tail, notTruncated: (r.recvBytes ?? 0) > padLen });
+        const r = await protocolSelfTest(sid, kb);
+        return send(r.ok ? 200 : 502, r);
       } catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
+    // Liveness probe for one session (agent_ping): the agent op existed since v0.2 but no host
+    // code ever sent it, so a hung agent could only be diagnosed by waiting out a real timeout.
+    { path: '/api/agent/ping', handler: async () => {
+      const sid = pickSid(url.searchParams.get('session'));
+      if (!sid) return send(400, { error: 'no session' });
+      try { return send(200, await agentPing(sid)); }
+      catch (e) { return send(504, { error: (e as Error).message }); }
     } },
     { path: '/api/process/maps', handler: async () => {
       const sid = pickSid(url.searchParams.get('session'));
@@ -358,19 +366,22 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
       if (!sid) return send(400, { error: 'no session' });
       const path = url.searchParams.get('path') || '';
       if (!path) return send(400, { error: 'need path' });
-      try { const r = await sendCmd(sid, 'list_dir', { path }, 20_000); return send(r.ok ? 200 : 502, r); }
-      catch (e) { return send(504, { error: (e as Error).message }); }
+      // Shared with the MCP tool fs_list.
+      try { return send(200, await listDeviceDir(sid, path)); }
+      catch (e) { return send(502, { ok: false, error: (e as Error).message }); }
     } },
     { method: 'POST', path: '/api/fs/read', handler: async () => {
       const body = await readBody(req);
       const { session, path } = JSON.parse(body || '{}');
       const sid = pickSid(session);
       if (!sid || !path) return send(400, { error: 'need session, path' });
+      // Shared with the MCP tool fs_read; `text` is kept for the pre-existing consumers (the web
+      // file viewer and verify_v25_fsbrowser read /proc/self/cmdline through it).
       try {
-        const r = await sendCmd(sid, 'read_file', { path: String(path) }, 25_000);
-        if (r.ok && r.b64) { try { r.text = Buffer.from(r.b64, 'base64').toString('utf8'); } catch { r.text = ''; } }
-        return send(r.ok ? 200 : 502, r);
-      } catch (e) { return send(504, { error: (e as Error).message }); }
+        const r = await readDeviceFile(sid, String(path), { includeBase64: true });
+        const text = Buffer.from(r.b64 ?? '', 'base64').toString('utf8');
+        return send(200, { ...r, text });
+      } catch (e) { return send(502, { ok: false, error: (e as Error).message }); }
     } },
     { path: '/api/crypto/hook_test', handler: async () => {
       const sid = pickSid(url.searchParams.get('session'));
@@ -396,10 +407,13 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
         return send(r.ok ? 200 : 502, r);
       } catch (e) { return send(504, { error: (e as Error).message }); }
     } },
+    // Shares hookEngineSelftest with the MCP tool engine_selftest. The agent fields stay top level
+    // (replaced/fired/protRestored/perms) and the status code follows the VERDICT, so a build that
+    // leaves the page writable no longer answers 200 just because the command ran.
     { path: '/api/hook/selftest', handler: async () => {
       const sid = pickSid(url.searchParams.get('session'));
       if (!sid) return send(400, { error: 'no session' });
-      try { const r = await sendCmd(sid, 'gothook_selftest'); return send(r.ok ? 200 : 502, r); }
+      try { const r = await hookEngineSelftest(sid); return send(r.ok ? 200 : 502, r); }
       catch (e) { return send(504, { error: (e as Error).message }); }
     } },
     { path: '/api/art/dexfiles', handler: async () => {

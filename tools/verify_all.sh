@@ -94,6 +94,9 @@ SCRIPTS=(
   "verify_v85_syscall_trace.sh:host"
   # Per-hook native event throttle (v4.48): payload shaping + agent wiring + MCP/REST shape. Host-only.
   "verify_v86_native_throttle.sh:host"
+  # MCP operability (v4.49): every agent op must be reachable through the MCP import graph (or be
+  # declared internal with a reason); probe/filesystem tools share their logic with the REST routes.
+  "verify_v87_mcp_operability.sh:host"
   # Hook-hit caller backtrace (v4.39): the event must carry the at-hit chain and every frame must be
   # resolved to module + symbol; a bogus frame pointer must stop the walk, not invent frames.
   "verify_v78_hook_backtrace.sh:device"

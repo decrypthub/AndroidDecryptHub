@@ -1104,6 +1104,8 @@ compat.probe / report
 inject.backends / attach_zygisk / pack_gadget / status
 ```
 
+> 实现状态（v4.49，**实现 + host 验收完成，真机验收待做**）：**"MCP 完全可操作"从口号变成可机检的不变式**。此前没人检查"MCP 能不能做到 agent 能做的每一件事"，审计（40 个 agent 命令分支 × MCP 导入图可达性）抓到两类真问题：`ping` 自 v0.2 起就是**死代码**（agent 实现了，Host 侧从没发过，于是判断 agent 存活只能靠一条真命令等超时）；另有三个能力只有 REST/验收脚本能到——设备文件浏览（`list_dir`/`read_file`）、hook 引擎自检（`gothook_selftest`）、通道完整性自检（`frame_echo`）。本轮把它们做成工具：`agent_ping`（5s 存活 + 往返延迟）、`engine_selftest`（`ok` = **判定**：GOT hook 必须 `fired` 且 RELRO 页保护 `protRestored`，否则报"这个构建可被检测"）、`protocol_selftest`（超大帧 + 越过 8192 老上限的尾部标记）、`fs_list` / `fs_read`（设备文件系统，1MB 上限、`truncated` 如实、二进制/超大文件用 `textOmitted` 说明原因、base64 需显式开启）。实现只写一份：`daemon/src/agent_probe.ts` 与 `daemon/src/fs_browse.ts` 同时服务 MCP 与 REST（`/api/agent/ping` 新增；`/api/hook/selftest` 状态码跟随判定；`/api/fs/*` 保留 v25 依赖的 `text` 与 `ok:false`）。不变式由 `tools/verify_v87_mcp_operability.sh` 机检：**每个 agent op 必须能从 MCP 导入图到达，除非在 `INTERNAL_OPS` 里写明理由**（当前 3 个只剩验收脚本使用：`crypto_probe`/`jni_probe`/`inline_crypto_test`），同时反向检查"daemon 发过 agent 不认识的 op"与五个工具的 schema。13 条单测（延迟/时钟注入、三种引擎判定、尾部丢失与截断、空路径不发送、二进制/超大 omission、坏 base64 拒绝）+ 全量 host 门禁 28 PASS / 0 FAIL / 75 SKIP。
+
 ### 18.3 与 iOS 参考项目 MCP 的对照
 
 iOS 已有：disassemble、analyze_function、list_imports、get_macho_info、query_events、correlate_request、get_event、get_stats、get_diag、dump_status 等。
