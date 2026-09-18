@@ -1,76 +1,74 @@
-# ADH 功能状态（发布前梳理，2026-09-16）
+# ADH 功能状态（发布前梳理，2026-09-19 更新）
 
-> 这份文件回答一个问题：**第一版里到底有什么、什么是验证过的、什么是没验证的、什么还没做完。**
-> 判定只认 `tools/verify_all.sh` 的 pass/fail（当前 **52/52 全绿**，设备 + host），不认"看起来能跑"。
+> 这份文件回答一个问题：**现在到底有什么、什么是验证过的、什么是没验证的、什么还没做完。**
+> 判定只认 `tools/verify_all.sh`（**98 个脚本 = 23 host + 75 device**），不认"看起来能跑"。
 > 规格见 `REQUIREMENTS.md`，架构与排期见 `DEVELOPMENT_PLAN.md`，跨会话进度见 `PROGRESS.md`。
+> 最近一次**全绿**门禁：`6319d5d`（设备在位，**92 PASS / 0 FAIL / 2 SKIP**）。
+> 最近一次 host-only 门禁（手机不在位）：**23 PASS / 0 FAIL / 75 SKIP** —— 设备脚本如实记 SKIP，不再冒充通过。
 
-## 0. 第一版发布物
+## 0. 发布物
 
 | 交付物 | 来源 | 状态 |
 |---|---|---|
-| `libadh_agent.so`（arm64-v8a，322,032 B，release 剥离） | `tools/build_agent.sh` | ✅ 已验收 |
-| Zygisk 模块 zip + ADH Manager APK + 组合包 | `tools/build_zygisk.sh` / `build_bundle.sh` / `flash_device.sh` | ✅ 已验收（v27）+ 真机刷入 |
+| `libadh_agent.so`（arm64-v8a，release 剥离，834,408 B） | `tools/build_agent.sh` | ✅ 已验收（v01–v79 系列） |
+| Zygisk 模块 zip + ADH Manager APK + 组合包（**v0.3.10**） | `tools/build_zygisk.sh` / `build_bundle.sh` / `flash_device.sh` | ✅ 已验收（v27）+ 真机刷入（memfd 注入 v4.37） |
 | 可选后端：Xposed 薄模块 APK | `injector/xposed/` + `tools/build_xposed.sh` | ✅ 已验收（v31/v32），默认关闭 |
-| 可选后端：Frida Gadget | `tools/fetch_frida_gadget.sh` + `load_frida_gadget.sh` | ✅ 已验收（v30），默认关闭 |
-| 可选后端：eCapture | `tools/fetch_ecapture.sh` + `ecapture_capture.sh` | ✅ 已验收（v34），默认关闭 |
-| 开发用（不随发布物交付） | `sandbox-app/`（测试宿主）、`tools/`、`docs/`、`daemon/` | — |
+| 可选后端：Frida Gadget | `tools/fetch_frida_gadget.sh` + `load_frida_gadget.sh` | ✅ 已验收（v30），默认关闭；官方二进制（未魔改） |
+| 可选后端：eCapture | `tools/fetch_ecapture.sh` + `ecapture_capture.sh` | ✅ 已验收（v34），默认关闭；需内核 eBPF |
+| 开发用（不随发布物交付） | `sandbox-app/`、`sandbox-native/`、`tools/`、`docs/`、`daemon/` | — |
 
-## 0.5 能力分布：什么在 .so、什么在主机、什么在设备侧
-
-> 一句话：**`libadh_agent.so` 是"运行时唯一入口"（目标进程里的眼睛和手），但不是全部能力的载体。**
-> 分析/索引/存储/编排/呈现都在主机；"给谁注入、何时注入"在设备侧；可选后端是另一种进入/观测方式。
+## 0.5 能力分布
 
 | 层 | 位置 | 承担什么 | 规模 |
 |---|---|---|---|
-| **Agent**（目标进程内） | `agent/` → `libadh_agent.so` | **29 个命令**：GOT/inline hook、函数与 QBDI trace、dex/so/内存 dump、maps 与内存读写搜、ART 结构枚举、活体对象自省、主动触发、`load_so`、轻量 RPC —— 只**采集/执行** | 13 个 C 文件（≈190 KB 源码）→ 产物 322,032 B |
-| **Host ADH Daemon**（主机） | `daemon/` | **63 个 HTTP 路由 + 42 个 MCP 工具**：dex 解析/索引(SQLite)/搜索/xref、Capstone 反汇编、原生常量与 syscall 扫描、脱壳编排与重建、捕获与工件存储、Web UI、MCP server | TypeScript |
-| **Device**（手机侧） | `device/`（`:core` AIDL + `:daemon` root + `:manager` Compose） | **12 个 AIDL 方法**：作用域读写、模块状态、应用目录/图标、目标进程启停、可选后端（Xposed）状态/开关/作用域 —— **不做分析** | Kotlin |
-| **注入器** | `injector/zygisk`、`injector/xposed` | 唯一职责：把 `.so` 送进目标进程 + 传真实包名 | C++ / Java |
-| **可选后端** | `tools/`（Gadget/eCapture）+ `injector/xposed` | 另一种"进入/观测"方式，默认关闭 | 脚本 / 薄 APK |
+| **Agent**（目标进程内） | `agent/` → `libadh_agent.so` | **40 个命令分支**：GOT/inline/addr/sites/vtable hook、Java(LSPlant) hook（单方法 + `hookAll` 批量 + 参数改写/返回值替换/skip/调用链）、JNI_OnLoad（含加载时 watch）/RegisterNatives/JNIEnv 76 槽、函数与 QBDI trace、dex/so/内存 dump、maps/内存读写搜、ART 结构枚举、活体对象自省、主动触发、`load_so`、`native_call`（整数+浮点）、`native_backtrace`、`syscall_watch`、轻量 RPC —— **只采集/执行，不做分析** | C/C++，产物 834 KB |
+| **Host ADH Daemon**（主机） | `daemon/` | **68 个 MCP 工具 + 46 条 HTTP 路由**：dex 解析/索引(SQLite)/搜索/xref、Capstone 反汇编与 syscall 归因/参数解码、trace 摘要、syscall 摘要、脱壳编排与重建、工件存储、Web UI、MCP server | TypeScript（含 5 个单测文件、44+ 条用例） |
+| **Device**（手机侧） | `device/` | AIDL 作用域读写、模块状态、目标进程启停、可选后端开关 —— **不做分析** | Kotlin |
+| **注入器** | `injector/zygisk`、`injector/xposed` | 把 `.so` 送进目标进程（Zygisk 走 **memfd**，目标 maps 不出现模块路径）+ 传真实包名 | C++/Java |
+| **可选后端** | `tools/`（Gadget/eCapture） | 另一种进入/观测方式，默认关闭 | 脚本/薄 APK |
 
-### 依赖关系（发布视角）
-
-- **必须注入 `.so`**：42 个 MCP 工具里的 **21 个** —— 明文捕获（加解密/TLS/文件/反检测）、hook、trace、dump、活体对象自省、主动触发（runtime 面）。
-- **不需要 `.so`**：另外 **21 个**（静态/工件面）—— `dex_search`/`dex_index`/`dex_xref`/`dex_repair`/`dex_recover`、`native_disasm`/`native_analyze`/`native_crypto_const`/`native_syscall_scan`、`crypto_identify`、`live_captures`/`capture_detail` 等；其中静态分析可以直接喂 `b64`/`sha` 工件（`dumpBuf` 支持），**完全不注入也能用**。
-- **完全不看 `.so`**：eCapture（eBPF 在设备侧读 `SSL_write/SSL_read` 明文）；Frida Gadget 的 JS hook 也不依赖我们的 `.so`（我们只是用它当载体/用 `load_library` 触发）。
-
-### ADH Manager 到底管什么
-
-12 个 AIDL 方法里 **10 个与"注入/后端/作用域"相关**（作用域读写 2、应用目录与图标 2、模块状态 3、Xposed 状态/开关/作用域 3），另 1 个目标进程启停、1 个协议版本。
-它**从不接触 `.so`**：不 `dlopen`、不做分析 —— "注入动作"由 Zygisk / Xposed / 沙盒完成，"决定给谁注入、后端开不开、目标进程要不要重启"才归 Manager。
-## 1. v1 范围收敛
-
-第一版只保留下方“测过的功能”。未验收、半成品或没有真实触发源的能力，已从代码、Web UI、MCP/工具入口、Manager 和发布文档中移除；历史记录只保留在 `docs/archive/`，不作为产品入口或发布说明。
-
-当前 `verify_all` 没有任何“跑不过却还留着”的检查：fail=0。
-
-## 2. 测过的功能（52/52 全绿）
+## 1. 测过的功能（按 verify_all 的脚本分组）
 
 | 能力 | 覆盖脚本 | 验收要点 |
 |---|---|---|
-| 命令通道 / 协议分帧 | v02, v21_frame | 1MB 命令帧 + 16MB dump 跨帧字节一致（无 8192 上限） |
-| 内存与 dump | v02_dump, v02_so, v22_capture | 搜索/落盘/ sha256 对照 / 去重；高频突发下 `emitted+backlog+dropped==seq` 如实记账 |
-| dex 静态分析 | v03, v04_dexparse, v08_dexsearch, v08_xref, v09_methodcode | ART 结构枚举、crypto 常量扫描、调用图 xref、方法字节码恢复 |
-| dex 修复/重建/恢复 | v02_dexrepair, v12_rebuild, v13_recover, v29_dexindex | 头部修复字节一致、CodeItem 注入重建可解析、持久索引 + 反射边 |
-| 原生反汇编/常量/syscall | v08_disasm, v08_analyze, v09_cryptoconst, v09_syscall | 内存镜像反汇编、导入导出、AES S-box、`svc #0` 直连点 |
-| 加解密动态捕获（Java 层） | v04_crypto, v11_capture, v24_javacap | EVP 边界明文、富采集（算法+Key+IV+明文+密文） |
-| 加解密动态捕获（原生 GOT） | v26_cryptocoverage | ECDSA_sign/verify + `EVP_AEAD_CTX_seal/open` 命中（含 APS2 packed reloc 扫描） |
-| TLS 明文 | v07, v07_flow | `SSL_write/SSL_read` 边界明文 + 明文↔密文同线程关联 |
-| 文件 I/O | v20_file, v25_fsbrowser | libc `open/read/write` 捕获；`list_dir`/`read_file` + 坏路径 fail-loud |
-| 反检测观测 | v05_detect | 目标自身 `ptrace/access/__system_property_get` 被观测（含 lazy-binding 修复） |
-| 活体对象 / 主动触发 | v06, v14_trigger, v16_identify | 字段反射 + 方法调用、安全触发器、算法识别 |
-| 函数/指令 trace | v10_trace, v10_qbdi | 参数/tid/时间戳；QBDI 指令级 trace（用后 `dlclose`） |
-| 一键 dump 所有 DEX | v15_dumpall, v17_dumpall_mcp | ART DexFile 枚举 → 逐 dex dump → SHA-256 去重 → 下载；REST + MCP 双入口 |
-| 进程内 dlopen | v18_loadso | 目标进程内加载任意 `.so` 并解析符号（Gadget 依赖此能力） |
-| 设备侧后端（Zygisk/Manager） | v27_zygisk, verify_v32_backend_control | scope 往返；Device Daemon 驱动框架状态/作用域并**恢复测试前状态** |
-| 可选后端（Gadget/Xposed/eCapture） | v30, v31, v32, v34 | 官方二进制 + sha256 固定；Java bridge hook 真跑通；eCapture 抓到请求+响应明文 |
-| 控制面 / MCP / Web | v10_mcp, v10_webui, v10_export, v10_events, v19_settings, v33_backends, v35_sessions | MCP 51 工具可调（自动化关闭时隐藏 phone_*）、Web UI 可用、后端矩阵、会话清理与选择器修复 |
-| 可选手机自动化（模块 X） | v36_automation | 默认关闭；控件树/截图兜底（受保护窗口 fail-loud）、find/wait/selector/ref/坐标/scroll/app/global 动作、进程内信号等待（事件/捕获 + 游标 + UTF-8 明文）、agent 断线自愈重连、设备侧命令硬超时（卡死不再拖垮通道）、set_text 真输入并提交、通知读取（opt-in listener）、命名配方（phone_skill）、双层包名 allowlist；协议 v7 一键启停 + opt-in 自动修复（真机：抹掉服务后 ≤20s 自愈）；协议 v8 屏幕状态/唤醒/非安全解锁（真机状态往返 PASS）；协议 v9 受限根输入注入（tap/swipe）+ `changed` 窗口签名判定 + 手势被吞时自动 root 重试（真机 PASS）；root `open` 真机不弹 OEM 确认框（`via=device-daemon`）；随新模块部署（当前产物 v0.3.10，已构建+推送到设备；v0.3.9 已真机刷入并重启验证开机自启：daemon 由 service.sh 自启 PID 3092/PPID=1、桥接自动重连、v4.1 六项与全量 57/57；v4.0/v4.1 验收脚本均已并入全量回归） |
-| 注入足迹 | v26_footprint | release agent 剥离 + 仅 3 个动态导出 + 无 RWX LOAD |
-| 注入单实例收敛 | 真机混态手工验证（Zygisk + self-load） | `dl_iterate_phdr` 首载 copy 独占 bootstrap；同 PID 不再出现第二个 `jni_onload` 会话；winner copy 迟绑定 reporter，v24 rich Java 仍 PASS |
+| 命令通道 / 协议分帧 | v02, v21_frame | 1MB 命令帧 + 16MB dump 跨帧字节一致 |
+| 内存与 dump | v02_dump, v02_so, v22_capture | 搜索/落盘/sha256 对照/去重；突发下 `emitted+backlog+dropped==seq` 如实记账 |
+| dex 静态分析 / 修复 / 索引 | v03, v04_dexparse, v08_*, v09_methodcode, v12_rebuild, v13_recover, v29_dexindex | ART 结构枚举、常量扫描、xref、字节码恢复、重建与持久索引 |
+| 原生反汇编 / 常量 / syscall 扫描 | v08_disasm, v08_analyze, v09_cryptoconst, v09_syscall | 内存镜像反汇编、导入导出、AES S-box、`svc #0` 直连点 |
+| 加解密动态捕获 | v04_crypto, v11_capture, v24_javacap, v26_cryptocoverage | EVP 边界明文、富采集、ECDSA/AEAD 覆盖（含 APS2 packed reloc） |
+| TLS / 文件 I/O | v07, v07_flow, v20_file, v25_fsbrowser | SSL_write/read 明文与关联；libc open/read/write 捕获 |
+| 反检测观测与去特征 | v05_detect, v69(stealth), v70/v72(sites), v73/v74(vtable) | 目标自审（anon r-x、序言比对）；stealth 后 anonExec 2→0；sites 保持入口字节不变 |
+| Java hook（LSPlant） | v42/v43/v52/v53/v65, **v79(stack)**, **v82(hookAll)** | 单方法/构造器/继承、参数改写、返回值替换、skip original；`stack:true` 给出 App 帧调用链；`hookAll` 一次装全类（截断可见） |
+| native hook | v46, v49, v55, v56, v66, v68 | inline/addr、软/硬卸载、寄存器事件、浮点参数、千次压测 |
+| JNI 面 | v54, v57, v58, v59, v60, v62, v63, v64, v67 | RegisterNatives、JNI_OnLoad（含加载时替换）、JNIEnv 76 槽、Call* 三类入口、数组写回、异常保持 |
+| 主动调用 | v45(java_call), v49(native_call), v51(qbdi args) | 反射调用 Java 方法/字段；按符号或地址调 native（整数+浮点） |
+| trace | v10_trace, v10_qbdi, **v78(backtrace)** | 函数参数/线程/时间戳；QBDI 指令级（用后 dlclose）；hook 命中当刻的 x29 调用链 + 符号化 |
+| 内存反汇编（MCP） | v48 | Capstone 5 WASM，绝对地址或 module+offset |
+| 系统调用监听 | v50(direct), **v76(归因)**, **v77(libc+过滤)**, **v81(摘要+参数)** | 直接 `svc #0` 捕获；静态归因（223/224 libc 站点）；按名/号过滤只装命中站点；`syscall_digest` 给调用方/次数/`paths` 直方图，并比对运行期 x8 与归因号 |
+| 一键 dump 所有 DEX | v15, v17 | ART DexFile 枚举 → 逐 dex dump → SHA-256 去重 → 下载（REST+MCP） |
+| 进程内 dlopen | v18 | 目标进程内加载任意 `.so` 并解析符号 |
+| 设备侧后端（Zygisk/Manager） | v27_zygisk, v32_backend_control, **v75(memfd)** | scope 往返；后端状态/作用域可控并恢复；**agent 从 memfd 加载**（目标 maps 无模块路径，目标内自证 + ELF 头） |
+| 可选后端 | v30, v31, v34 | 官方二进制 + sha256 固定；Xposed Java bridge；eCapture 抓明文 |
+| 控制面 / MCP / Web | v10_mcp, v10_webui, v10_export, v10_events, v19_settings, v33_backends, v35_sessions, **v71(registry)**, **v80(trace digest)** | MCP 68 工具可调；注册表形状自检；Web UI；会话清理 |
+| 手机自动化（模块 X） | v36, v38, v39, v40, v41 | 树/截图/选择器/手势/输入/wait/通知/技能；硬超时、桥接自愈、root 输入、屏幕状态；**重启后的 OEM 弹窗按 BACK 有界重试** |
+| 注入足迹 | v26_footprint, v01 | release 剥离 + 仅 3 个动态导出 + 无 RWX LOAD |
+| 单元测试（host） | v76, v80, v81 | syscall 归因/参数解码、trace 摘要、backtrace dynsym：44 条 `node --test` 用例 |
+
+## 2. 待真机验证（代码 + host 验收已完成，手机不在位）
+
+| 项 | 内容 | 脚本 |
+|---|---|---|
+| syscall 归因比率/数字过滤 | `attributedCount ≥ 90% svcCount`、`syscalls:['178']` | v77 |
+| hook 回溯健壮性 | `btTruncated` → `frame-cap-reached`、`bt[]` 帧 `-4` 修正、槽位复用不复用旧开关 | v78 |
+| Java 调用链 | `stack:true` 链里两个 fixture 帧 + 不带 stack 时无链 | v79 |
+| trace 摘要 | 对 `libadhdetect.so:adh_add_target` 实跑 `trace_digest` | v80（设备半） |
+| syscall 摘要 | libc `uname` 站点 → 调用方必须是 `adh_libc_uname_probe`、observed 全 160、无 mismatch | v81（设备半） |
+| Java 批量挂钩 | 两个 `ping` 重载各自出事件；类级 `limit=3` 显示 `installed=3 < matched` | v82 |
+| 门禁抖动定性 | gate11 的 v11/v16/v20 单独复跑（评审判定为设备状态级联，非回归） | — |
+| 全量门禁 | 手机接回后跑到全绿，把数字写回本文件与 `PROGRESS.md` | — |
 
 ## 3. 发布结论
 
-- 可以发布：`libadh_agent.so` + Zygisk 包/Manager + 三个可选后端（Gadget/Xposed/eCapture，均默认关闭）。
-- 当前验收入口：`tools/verify_all.sh`，52/52 全绿。
-- 发布口径只认本文件 §2 和 `verify_all`；不再宣传或暴露未验收/半成品能力。
+- 可以发布：`libadh_agent.so` + Zygisk 包/Manager（v0.3.10）+ 三个可选后端（Gadget/Xposed/eCapture，均默认关闭）。
+- 发布口径只认 `verify_all.sh` 的 pass/fail 与本文 §1；§2 的项在真机复验前不算通过。
+- 已知边界（不隐瞒）：arm64-v8a only；Java/native 各 16 个并发 hook 槽；`-fomit-frame-pointer` 的第三方库只能拿到 1 帧调用链；高频 syscall 事件受 agent 事件环上限约束（有 `dropped` 记账）；全量 syscall 拦截（seccomp/PTRACE_SYSEMU）仍属 L3 未实现；Frida Gadget 后端用官方二进制（未魔改去特征）。
