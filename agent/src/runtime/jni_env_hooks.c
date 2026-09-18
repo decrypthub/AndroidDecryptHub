@@ -884,8 +884,14 @@ static void GetStringRegion_wrapper(JNIEnv *env, jstring str, jsize start, jsize
     if (g_env_hook_in_ours || !slot_active(ENV_SLOT_GetStringRegion)) { original(env, str, start, len, buf); return; }
     g_env_hook_in_ours = 1;
     original(env, str, start, len, buf);
+    // A failed copy (out-of-range start/len throws and leaves buf UNTOUCHED) must not be
+    // reported as data the target lifted out of Java: reading buf here would put uninitialized
+    // memory into the event with ok=1.
+    int failed = (*env)->ExceptionCheck(env) ? 1 : 0;
     char detail[220]; detail[0] = 0;
-    if (env_budget_left(ENV_SLOT_GetStringRegion)) {
+    if (failed) {
+        snprintf(detail, sizeof(detail), "string=%p start=%d len=%d <copy failed, buffer untouched>", (void *)str, (int)start, (int)len);
+    } else if (env_budget_left(ENV_SLOT_GetStringRegion)) {
         char preview[80] = "";
         size_t p = 0;
         if (buf && len > 0) {
@@ -897,7 +903,7 @@ static void GetStringRegion_wrapper(JNIEnv *env, jstring str, jsize start, jsize
         }
         snprintf(detail, sizeof(detail), "string=%p start=%d len=%d text=\"%s\"", (void *)str, (int)start, (int)len, preview);
     }
-    env_note(ENV_SLOT_GetStringRegion, detail[0] ? detail : NULL, buf != NULL);
+    env_note(ENV_SLOT_GetStringRegion, detail[0] ? detail : NULL, !failed && buf != NULL);
     g_env_hook_in_ours = 0;
 }
 
@@ -908,8 +914,14 @@ static void GetStringUTFRegion_wrapper(JNIEnv *env, jstring str, jsize start, js
     if (g_env_hook_in_ours || !slot_active(ENV_SLOT_GetStringUTFRegion)) { original(env, str, start, len, buf); return; }
     g_env_hook_in_ours = 1;
     original(env, str, start, len, buf);
+    // A failed copy (out-of-range start/len throws and leaves buf UNTOUCHED) must not be
+    // reported as data the target lifted out of Java: reading buf here would put uninitialized
+    // memory into the event with ok=1.
+    int failed = (*env)->ExceptionCheck(env) ? 1 : 0;
     char detail[220]; detail[0] = 0;
-    if (env_budget_left(ENV_SLOT_GetStringUTFRegion)) {
+    if (failed) {
+        snprintf(detail, sizeof(detail), "string=%p start=%d len=%d <copy failed, buffer untouched>", (void *)str, (int)start, (int)len);
+    } else if (env_budget_left(ENV_SLOT_GetStringUTFRegion)) {
         char preview[96] = "";
         size_t p = 0;
         if (buf && len > 0) {
@@ -921,7 +933,7 @@ static void GetStringUTFRegion_wrapper(JNIEnv *env, jstring str, jsize start, js
         }
         snprintf(detail, sizeof(detail), "string=%p start=%d len=%d text=\"%s\"", (void *)str, (int)start, (int)len, preview);
     }
-    env_note(ENV_SLOT_GetStringUTFRegion, detail[0] ? detail : NULL, buf != NULL);
+    env_note(ENV_SLOT_GetStringUTFRegion, detail[0] ? detail : NULL, !failed && buf != NULL);
     g_env_hook_in_ours = 0;
 }
 
@@ -966,7 +978,13 @@ static jlong GetDirectBufferCapacity_wrapper(JNIEnv *env, jobject buf) {
     jlong capacity = original(env, buf);
     char detail[128]; detail[0] = 0;
     if (env_budget_left(ENV_SLOT_GetDirectBufferCapacity)) {
-        snprintf(detail, sizeof(detail), "buffer=%p capacity=%lld", (void *)buf, (long long)capacity);
+        // capacity 0 is both "a legal empty direct buffer" and what some VMs answer for a non-direct
+        // buffer: say so explicitly instead of letting the reader guess.
+        if (capacity == 0) {
+            snprintf(detail, sizeof(detail), "buffer=%p capacity=0 (empty direct buffer or not a direct buffer)", (void *)buf);
+        } else {
+            snprintf(detail, sizeof(detail), "buffer=%p capacity=%lld", (void *)buf, (long long)capacity);
+        }
     }
     env_note(ENV_SLOT_GetDirectBufferCapacity, detail[0] ? detail : NULL, capacity >= 0);
     g_env_hook_in_ours = 0;
@@ -980,8 +998,11 @@ static const jchar *GetStringChars_wrapper(JNIEnv *env, jstring str, jboolean *i
     if (g_env_hook_in_ours || !slot_active(ENV_SLOT_GetStringChars)) return original(env, str, is_copy);
     g_env_hook_in_ours = 1;
     const jchar *chars = original(env, str, is_copy);
+    int failed = (*env)->ExceptionCheck(env) ? 1 : 0;   // never read a pointer a failed call returned
     char detail[220]; detail[0] = 0;
-    if (env_budget_left(ENV_SLOT_GetStringChars)) {
+    if (failed) {
+        snprintf(detail, sizeof(detail), "string=%p <pin failed>", (void *)str);
+    } else if (env_budget_left(ENV_SLOT_GetStringChars)) {
         char preview[80] = "";
         if (chars) {
             size_t p = 0;
@@ -995,7 +1016,7 @@ static const jchar *GetStringChars_wrapper(JNIEnv *env, jstring str, jboolean *i
         snprintf(detail, sizeof(detail), "string=%p isCopy=%s text=\"%s\"",
                  (void *)str, (is_copy && *is_copy) ? "true" : "false", preview);
     }
-    env_note(ENV_SLOT_GetStringChars, detail[0] ? detail : NULL, chars != NULL);
+    env_note(ENV_SLOT_GetStringChars, detail[0] ? detail : NULL, !failed && chars != NULL);
     g_env_hook_in_ours = 0;
     return chars;
 }

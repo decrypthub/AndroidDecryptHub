@@ -170,20 +170,23 @@ for (const c of (strList.captures ?? []).filter((x) => x.func === 'JNI_ENV' && N
 }
 for (const f of STR_FUNCS) console.log(`  event ${f}: ${strSeen.get(f) ?? '(missing)'}`);
 const strMissing = STR_FUNCS.filter((f) => !strSeen.has(f));
-// At least two of the three string readers must show the copied text: one of the region copies and
-// the pinned pointer, so a single working entry cannot carry the whole section.
-const textHit = ['GetStringUTFRegion', 'GetStringRegion', 'GetStringChars']
-  .filter((f) => /text="[^"]*ADH-STR/.test(String(strSeen.get(f) ?? '')));
+// Each string reader is a SEPARATE wrapper, so each one has to prove itself: an OR/at-least-two
+// rule would let one working entry carry the section while another is broken.
+const previewOf = (f) => /text="[^"]*ADH-STR/.test(String(strSeen.get(f) ?? ''));
+const utf16Ok = previewOf('GetStringRegion');
+const utf8Ok = previewOf('GetStringUTFRegion');
+const pinOk = previewOf('GetStringChars');
 const releaseOk = /chars=0x/.test(String(strSeen.get('ReleaseStringChars') ?? ''));
-const textOk = textHit.length >= 2 && releaseOk;
+const textOk = utf16Ok && utf8Ok && pinOk && releaseOk;
+console.log(`  string previews: utf16=${utf16Ok} utf8=${utf8Ok} pin=${pinOk} release=${releaseOk}`);
 const bufferOk = /address=0x/.test(String(strSeen.get('GetDirectBufferAddress') ?? ''))
   && /capacity=64/.test(String(strSeen.get('NewDirectByteBuffer') ?? ''))
   && /capacity=64/.test(String(strSeen.get('GetDirectBufferCapacity') ?? ''));
 const strUnhooked = [];
 for (const f of STR_FUNCS) strUnhooked.push((await post('/api/jni/env_hook', { session, action: 'uninstall', function: f })).body?.ok === true);
-const stringProbeOk = strCall.body?.ok === true && strCalls >= 7 && strMissing.length === 0 && textOk && bufferOk && strUnhooked.every(Boolean);
+const stringProbeOk = strCall.body?.ok === true && strCalls >= STR_FUNCS.length && strMissing.length === 0 && textOk && bufferOk && strUnhooked.every(Boolean);
 if (strMissing.length) console.log('no event for: ' + strMissing.join(', '));
-if (!textOk) console.log(`the string readers did not carry the copied text (hits=${textHit.join(',') || 'none'}, release=${releaseOk})`);
+if (!textOk) console.log('at least one string reader did not carry the copied text preview');
 if (!bufferOk) console.log('the direct-buffer events did not carry address/capacity');
 
 // (4) unhook, table restored, process alive

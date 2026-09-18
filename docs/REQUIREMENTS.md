@@ -1341,6 +1341,8 @@ MCP              →  AI 可编程操控，与 HTTP 同源
 
 > 实现状态（v4.56，**实现 + host 验收完成，真机验收待做**）：**字段事件可归因 + JNIEnv 字段摘要**。v4.55 的访问事件只有 `field=0x..`，读不出字段名；现在 `GetFieldID`/`GetStaticFieldID` 的事件会带上它们交出去的 id（`Class#name:sig -> 0x..`），新增的 `jniFieldDigest`（MCP `jni_field_digest` + `POST /api/jni/field_digest`）用 id→名字表把访问按 (accessor, field) 聚合成"哪个字段被读写了几次、最后值是什么、哪些线程"，未解析的 id 保持原始指针并单独计数（不猜），空窗口明确提示需要先 hook 字段槽位；drain 走共享 `drainSession`。
 
+> 实现状态（v4.66，**实现 + host 验收完成**）：**JNIEnv 覆盖率成为数字** + 两条评审 P1 收口。① 事件可信度：字符串拷贝/ pin 的 wrapper 在调用抛异常时**不再读缓冲区**（越界时 ART 不写 buf，读了就是拿未初始化内存当证据），失败事件写明 `<copy failed, buffer untouched>` 且 `ok=false`；`capacity=0` 显式标注歧义。② v91 对三个字符串读取器**逐个**断言（独立代码路径必须各自证明），并去掉魔数。③ `verify_v90_jni_table_abi.sh` 输出 `coverage: N/229` 与未覆盖名单（当前 119/229 = 52%，下限 115），"JNIEnv 全表可挂"从此有可跟踪的数字与待办清单。
+
 > 实现状态（v4.65，**实现 + host 验收完成，真机验收待做**）：**pin 住 Java 字符串的一对**。`GetStringChars`（事件带 `string=.. isCopy=.. text="…"`，有界预览最多 24 字符且遇字符串自带终止符即停）与 `ReleaseStringChars`（事件带 `string=/chars=`）补齐"直接拿内部指针"这条读字符串路径；JNIEnv 表 117 → **119 槽**，索引 165/166 由 `verify_v90_jni_table_abi.sh` 对 NDK `jni.h` 机检、签名由 `_Static_assert` 编译期钉死。沙盒探针与 v91 的 `(3f)` 同步扩展。
 
 > 实现状态（v4.64，**实现 + host 验收完成，真机验收待做**）：v4.63 那 5 个表项的设备验证路径补齐——沙盒 native 探针 `Detection.jniStringProbe`（`GetStringRegion`/`GetStringUTFRegion` 各拷一次 + `NewDirectByteBuffer`/`GetDirectBufferAddress`/`GetDirectBufferCapacity` 各一次）与 Kotlin 声明已在 host 构建通过（`build_detect.sh` + `:app:assembleDebug`）；v91 的 `(3f)` 段逐个安装/触发/断言事件内容（`text="…"`、`address=`、`capacity=64`）/卸载，并纳入 pass。

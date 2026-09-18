@@ -15,6 +15,11 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.66 评审收口 + JNIEnv 覆盖率报告（2026-09-19，host 验收 PASS）**：评审给了两条 P1 和一条结构建议，全部落地。
+      · **P1（事件可信度）**：`GetStringRegion`/`GetStringUTFRegion`/`GetStringChars` 此前在**调用失败（抛异常）后仍读缓冲区做预览**——越界时 ART 抛 `StringIndexOutOfBoundsException` 且**不写 buf**，于是我们会把**调用方的未初始化内存**当"目标拷走的字符串"打进事件，还报 `ok=1`。现在调用后立刻 `ExceptionCheck`，失败则**跳过预览**、事件写明 `<copy failed, buffer untouched>` 且 `ok=false`；`GetDirectBufferCapacity` 的 `capacity=0` 也改成显式标注（"空直接缓冲 or 非直接缓冲"），不再让人猜。
+      · **P1（验收强度）**：v91 的 `textOk` 原本是"三个字符串读取器里两个命中即可"，而三个 wrapper 是**独立代码路径**——现改为**逐个证明**（`utf16 && utf8 && pin && release` 四条独立断言），并把 `strCalls >= 7` 换成 `>= STR_FUNCS.length`（去掉魔数）。
+      · **结构建议（已采纳）**：`tools/verify_v90_jni_table_abi.sh` 新增**覆盖率报告**——它本来就有 ABI 字段序与 agent 的索引表，现在直接输出 **`coverage: 119/229 function-table entries hooked (52%)`** 与**未覆盖名单**（`GetVersion`、`DefineClass`、`ExceptionOccurred`、`PushLocalFrame`…），并设了 `>= 115` 的下限门禁。这样"JNIEnv 全表可挂"从一个方向变成一个**数字**，下一步该补哪些槽位由名单而不是手感决定（与 v87 的 op-coverage 同一模式）。
+      · 验收：agent 零告警重建；v90 PASS（119 条索引 + 覆盖率报告）；v91 语法/SKIP 通过；host 全量门禁 **31 PASS / 0 FAIL / 84 SKIP**（115 脚本）。
 - [~] **v4.65 JNIEnv 补"pin 住 Java 字符串"的一对（2026-09-19，host 验收 PASS；真机待做）**：v4.63 覆盖的是"把字符串**拷进** native 缓冲"，另一条常见路径是**直接拿字符串内部指针**（`GetStringChars`）再 `ReleaseStringChars` 放回——指纹/校验代码用它是为了省一次拷贝。
       · agent：JNIEnv 表 117 → **119 槽**。`GetStringChars` 事件带 `string=0x.. isCopy=true/false text="…"`（**有界预览**：最多 24 个字符、遇字符串自带的 `\0` 终止符即停，不会越过字符串尾读内存）；`ReleaseStringChars` 事件带 `string=.. chars=..`，把"pin → 放回"这一对在时间线上对齐。
       · 签名照旧由 `_Static_assert` 编译期钉死；索引 165/166 由 `tools/verify_v90_jni_table_abi.sh` 对 NDK `jni.h` 机检（现在 `checked 119 indices against the ABI`，20 固定 + 21 族 ×3）。
