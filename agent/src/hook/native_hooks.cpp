@@ -23,6 +23,9 @@
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
 #define ADH_NATIVE_MAX_HOOKS 16
+// Caller frames captured at the hit (x30 + the x29 chain). 8 covers ordinary call depth without
+// growing the event; the host symbolizes them and reports the count it actually got.
+#define ADH_NATIVE_BT_MAX 8
 
 struct NativeHookContext {
     int id;
@@ -40,6 +43,7 @@ struct NativeHookContext {
     uint64_t return_value;
     int arg_index;
     uint64_t arg_value;
+    int want_backtrace;      // capture the caller chain in each event (opt-in, per hook)
     int patched;             // inline stub remains installed (soft unhook / reactivation)
     unsigned char prologue[24];   // original bytes captured before the inline patch
     int prologue_len;             // 0 when not captured / not an inline hook
@@ -101,6 +105,47 @@ static size_t adh_json_append(char *out, size_t cap, size_t off, const char *for
     return next < cap ? next : cap;
 }
 
+// At-hit caller chain. The x29 chain must be read WHILE the hit is live: reading it later from the
+// host reads a stack that the process has already reused (the first version did that and found zeros
+// where the frame records had been). The current thread's stack bounds come from
+// pthread_attr_getstack - cached per thread, so a bogus frame pointer can never make this read
+// outside the stack.
+static __thread uintptr_t t_stack_lo;
+static __thread uintptr_t t_stack_hi;
+static __thread int t_stack_known;
+
+static void adh_stack_bounds_once(void) {
+    if (t_stack_known) return;
+    t_stack_known = 1;
+    pthread_attr_t attr;
+    if (pthread_getattr_np(pthread_self(), &attr) != 0) return;
+    void *base = NULL;
+    size_t size = 0;
+    if (pthread_attr_getstack(&attr, &base, &size) == 0 && base && size) {
+        t_stack_lo = (uintptr_t)base;
+        t_stack_hi = (uintptr_t)base + size;
+    }
+    pthread_attr_destroy(&attr);
+}
+
+// out[0] is the immediate caller (the value x30 held at the hit); the rest come from the frame
+// records. Returns the number of frames written (0 when the chain is unusable, which the host reports
+// as "only the immediate caller is known" instead of inventing frames).
+static int adh_walk_x29(uint64_t fp, uint64_t *out, int max) {
+    adh_stack_bounds_once();
+    if (!t_stack_hi) return 0;
+    int n = 0;
+    while (n < max && fp >= t_stack_lo && fp + 16 <= t_stack_hi) {
+        uint64_t next = *(volatile uint64_t *)(uintptr_t)fp;
+        uint64_t ret = *(volatile uint64_t *)(uintptr_t)(fp + 8);
+        if (!ret) break;
+        out[n++] = ret;
+        if (next <= fp) break;
+        fp = next;
+    }
+    return n;
+}
+
 // Called by the site thunks: same recording as the entry stubs, but the return value tells the
 // thunk whether it may still call the real function (skipOriginal and returnSet both answer from
 // the saved frame instead).
@@ -126,6 +171,10 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id) {
     uint64_t in0 = regs[0], in1 = regs[1], in2 = regs[2], in3 = regs[3];
     uint64_t in4 = regs[4], in5 = regs[5], in6 = regs[6], in7 = regs[7];
     uint64_t in8 = regs[8], in18 = regs[12];
+    // x29/x30 were already saved by the stub ([sp,#80]) but never published. They are the frame
+    // pointer and the return address AT THE HIT, i.e. exactly what a caller backtrace needs (the
+    // host walks the x29 chain by reading the stack; see daemon/src/backtrace.ts).
+    uint64_t in29 = regs[10], in30 = regs[11];
     int arg_index = __atomic_load_n(&ctx.arg_index, __ATOMIC_RELAXED);
     uint64_t arg_value = __atomic_load_n(&ctx.arg_value, __ATOMIC_RELAXED);
     int return_set = __atomic_load_n(&ctx.return_set, __ATOMIC_RELAXED);
@@ -152,13 +201,30 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id) {
     joff = adh_json_append(json, sizeof(json), joff,
                            "{\"hookId\":%d,\"kind\":\"%s\",\"x0\":\"0x%llx\",\"x1\":\"0x%llx\",\"x2\":\"0x%llx\","
                            "\"x3\":\"0x%llx\",\"x4\":\"0x%llx\",\"x5\":\"0x%llx\",\"x6\":\"0x%llx\","
-                           "\"x7\":\"0x%llx\",\"x8\":\"0x%llx\",\"x18\":\"0x%llx\",",
+                           "\"x7\":\"0x%llx\",\"x8\":\"0x%llx\",\"x18\":\"0x%llx\","
+                           "\"x29\":\"0x%llx\",\"x30\":\"0x%llx\",",
                            hook_uid, kind_name(hook_id),
                            (unsigned long long)in0, (unsigned long long)in1,
                            (unsigned long long)in2, (unsigned long long)in3,
                            (unsigned long long)in4, (unsigned long long)in5,
                            (unsigned long long)in6, (unsigned long long)in7,
-                           (unsigned long long)in8, (unsigned long long)in18);
+                           (unsigned long long)in8, (unsigned long long)in18,
+                           (unsigned long long)in29, (unsigned long long)in30);
+    if (__atomic_load_n(&ctx.want_backtrace, __ATOMIC_RELAXED)) {
+        // bt[0] is the immediate caller (what x30 held at the hit); the rest come from the x29
+        // chain STARTING AT THE FRAME POINTER - walking from x30 (a code address) finds nothing,
+        // which is exactly the bug the first deployment of this had.
+        uint64_t bt[ADH_NATIVE_BT_MAX];
+        int n = 0;
+        bt[n++] = in30;
+        n += adh_walk_x29(in29, bt + n, ADH_NATIVE_BT_MAX - n);
+        joff = adh_json_append(json, sizeof(json), joff, "\"bt\":[");
+        for (int i = 0; i < n; i++) {
+            joff = adh_json_append(json, sizeof(json), joff, "%s\"0x%llx\"", i ? "," : "",
+                                   (unsigned long long)bt[i]);
+        }
+        joff = adh_json_append(json, sizeof(json), joff, "],\"btCount\":%d,", n);
+    }
     joff = adh_json_append(json, sizeof(json), joff, "\"fp\":{");
     for (int i = 0; i < 8; i++) {
         uint64_t bits = regs[16 + i * 2];
@@ -318,7 +384,7 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
                                         const char *addr, int skip_original, int return_set,
                                         uint64_t return_value, int arg_index, uint64_t arg_value,
                                         int max_sites, const char *sites_scope, int allow_writable_slots,
-                                        int *hook_id_out, char *error, size_t error_size) {
+                                        int want_backtrace, int *hook_id_out, char *error, size_t error_size) {
     if (hook_id_out) *hook_id_out = 0;
     if (!mode) return (set_error(error, error_size, "need mode got|inline"), 0);
     pthread_mutex_lock(&g_native_hooks_lock);
@@ -493,6 +559,7 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
     ctx.return_value = return_value;
     ctx.arg_index = arg_index;
     ctx.arg_value = arg_value;
+    ctx.want_backtrace = want_backtrace ? 1 : 0;
     ctx.mode = hook_mode;
     ctx.target = target;
     ctx.original = original;
@@ -656,14 +723,15 @@ extern "C" int adh_native_hook_status_json(char *out, size_t out_size) {
         snprintf(item, sizeof(item),
                  "{\"id\":%d,\"mode\":\"%s\",\"module\":\"%s\",\"symbol\":\"%s\","
                  "\"address\":\"0x%llx\",\"target\":\"0x%llx\",\"original\":\"0x%llx\","
-                 "\"replacement\":\"0x%llx\",\"hits\":%llu,\"argIndex\":%d,\"argValue\":\"0x%llx\",\"skipOriginal\":%s,\"returnSet\":%s,\"returnValue\":\"0x%llx\""
+                 "\"replacement\":\"0x%llx\",\"hits\":%llu,\"argIndex\":%d,\"argValue\":\"0x%llx\",\"skipOriginal\":%s,\"returnSet\":%s,\"returnValue\":\"0x%llx\",\"backtrace\":%s"
                  "%s}",
                  ctx.id, ctx.mode == 0 ? "got" : (ctx.mode == 1 ? "inline" : (ctx.mode == 2 ? "sites" : "vtable")), ctx.module, ctx.symbol,
                  (unsigned long long)ctx.address, (unsigned long long)(uintptr_t)ctx.target,
                  (unsigned long long)(uintptr_t)ctx.original,
                  (unsigned long long)(uintptr_t)ctx.replacement, hits, ctx.arg_index,
                  (unsigned long long)ctx.arg_value, ctx.skip_original ? "true" : "false",
-                 ctx.return_set ? "true" : "false", (unsigned long long)ctx.return_value, sitebuf);
+                 ctx.return_set ? "true" : "false", (unsigned long long)ctx.return_value,
+                 ctx.want_backtrace ? "true" : "false", sitebuf);
         hooks += item;
         count++;
     }

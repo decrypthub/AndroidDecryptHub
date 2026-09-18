@@ -2,6 +2,7 @@ import {
   dumpAllDex, dumpRegion, pickSid, sendCmd, withCaptureSuspended,
 } from '../service.ts';
 import { watchSyscalls } from '../syscall_watch.ts';
+import { nativeBacktrace } from '../backtrace.ts';
 import { liveDisasm } from '../memory.ts';
 import { readBody, SANDBOX, sessions, settings } from '../state.ts';
 import type { Route, RouteContext } from './types.ts';
@@ -56,7 +57,7 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
       catch (e) { return send(504, { error: (e as Error).message }); }
     } },    { method: 'POST', path: '/api/native/hook', handler: async () => {
       const body = await readBody(req);
-      const { session, action, hookId, mode, module, symbol, addr, skipOriginal, returnValue, argIndex, argValue, confirm, hard, sites, scope, slotsWritable } = JSON.parse(body || '{}');
+      const { session, action, hookId, mode, module, symbol, addr, skipOriginal, returnValue, argIndex, argValue, confirm, hard, sites, scope, slotsWritable, backtrace } = JSON.parse(body || '{}');
       const sid = pickSid(session);
       if (!sid || !action) return send(400, { error: 'need session, action' });
       if (mode === 'inline' && addr && confirm !== true) return send(400, { error: 'native_hook inline addr requires confirm:true' });
@@ -64,6 +65,7 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
         const r = await sendCmd(sid, 'native_hook', {
           action, hookId: Number(hookId ?? 0), mode: mode ?? '', module: module ?? '', symbol: symbol ?? '', addr: addr ?? '',
           skipOriginal: skipOriginal ? 'true' : 'false', returnValue: returnValue ?? '',
+          backtrace: backtrace ? 'true' : 'false',
           argIndex: Number(argIndex ?? -1), argValue: argValue ?? '', hard: hard ? 'true' : 'false',
           sites: Number(sites ?? 0),
           scope: typeof scope === 'string' ? scope : '',
@@ -99,6 +101,15 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
         const r = await sendCmd(sid, 'stealth', { action: act }, 15_000);
         return send(r.ok ? 200 : 502, r);
       } catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
+    { method: 'POST', path: '/api/native/backtrace', handler: async () => {
+      const body = await readBody(req);
+      const { session, hookId, fp, lr, maxFrames } = JSON.parse(body || '{}');
+      const sid = pickSid(session);
+      if (!sid) return send(400, { error: 'need session' });
+      try {
+        return send(200, await nativeBacktrace({ session: sid, hookId, fp, lr, maxFrames }));
+      } catch (e) { return send(502, { error: (e as Error).message }); }
     } },
     { method: 'POST', path: '/api/native/syscall_watch', handler: async () => {
       const body = await readBody(req);

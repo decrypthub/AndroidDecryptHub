@@ -66,6 +66,35 @@ long adh_libc_uname_probe(void) {
     return sum;
 }
 
+// Caller-chain fixture for the hook-hit backtrace (v4.39): the host walks the x29 chain captured at
+// the hook hit, so the chain must contain REAL frame records. Built with -fno-omit-frame-pointer
+// (see CMakeLists) - the same choice AOSP makes, because without it the chain is empty and the
+// backtrace would honestly report only the return address.
+__attribute__((noinline, used, visibility("default")))
+int adh_bt_target(void);
+__attribute__((noinline, used, visibility("default")))
+int adh_bt_mid2(void);
+__attribute__((noinline, used, visibility("default")))
+int adh_bt_mid1(void);
+__attribute__((noinline, used, visibility("default")))
+int adh_bt_outer(void);
+
+// The seed is volatile so clang cannot constant-fold the whole chain away (the first version
+// compiled all four functions into "mov w0, #imm; ret" - 8 bytes each, no calls, no frames).
+volatile int adh_bt_seed = 1;
+
+__attribute__((noinline, used, visibility("default")))
+int adh_bt_target(void) { return 0x40 + (adh_bt_seed - 1); }   // 64
+
+__attribute__((noinline, used, visibility("default")))
+int adh_bt_mid2(void) { return adh_bt_target() + 1 + (adh_bt_seed - 1); }   // 65
+
+__attribute__((noinline, used, visibility("default")))
+int adh_bt_mid1(void) { return adh_bt_mid2() * adh_bt_seed + 1; }           // 66
+
+__attribute__((noinline, used, visibility("default")))
+int adh_bt_outer(void) { return adh_bt_mid1() + 1; }                        // 67
+
 // Static-linked crypto-shaped target for the WS-A inline-hook acceptance path. It is
 // deliberately not a PLT call: the JNI entry below calls this function directly, so a GOT
 // replacement cannot observe it. A real target may replace this with a statically linked

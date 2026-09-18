@@ -315,7 +315,7 @@ static void cmd_native_hook(int fd, const char *id, const char *action, const ch
                             const char *module, const char *symbol, const char *addr,
                             int skip_original, const char *return_value, long long arg_index,
                             const char *arg_value, long long requested_id, int hard, int max_sites,
-                            const char *sites_scope, int allow_writable_slots) {
+                            const char *sites_scope, int allow_writable_slots, int want_backtrace) {
     char idj[64];
     json_escape(id, idj, sizeof(idj));
     char error[512] = "";
@@ -325,7 +325,7 @@ static void cmd_native_hook(int fd, const char *id, const char *action, const ch
         ok = adh_native_hook_install(mode, module, symbol, addr, skip_original, return_value[0] ? 1 : 0,
                                     (uint64_t)strtoull(return_value, NULL, 0), (int)arg_index,
                                     (uint64_t)strtoull(arg_value, NULL, 0), max_sites, sites_scope,
-                                    allow_writable_slots, &new_id, error, sizeof(error));
+                                    allow_writable_slots, want_backtrace, &new_id, error, sizeof(error));
     } else if (strcmp(action, "unhook") == 0) {
         ok = adh_native_hook_unhook((int)requested_id, hard, error, sizeof(error));
     } else if (strcmp(action, "status") == 0) {
@@ -488,7 +488,13 @@ static void command_loop(int fd) {
                     // false would install less than the caller asked for.
                     int slots_writable_flag = (strcmp(nslotsrw, "true") == 0 || strcmp(nslotsrw, "1") == 0) ? 1 : 0;
                     if (strstr(line, "\"slotsWritable\":true") != NULL) slots_writable_flag = 1;
-                    cmd_native_hook(fd, id, naction, nmode, nmodule, nsymbol, naddr, nskip_original, nreturn, nargindex, nargvalue, nid, nhard_flag, nsites_flag, nscope, slots_writable_flag);                } else if (strcmp(op, "native_call") == 0) {
+                    // Opt-in per-hook caller chain (x30 + x29 walk) for the host backtrace tool.
+                    char nbt[8] = "";
+                    json_get_str(line, "backtrace", nbt, sizeof(nbt));
+                    int backtrace_flag = (strcmp(nbt, "true") == 0 || strcmp(nbt, "1") == 0) ? 1 : 0;
+                    if (strstr(line, "\"backtrace\":true") != NULL) backtrace_flag = 1;
+                    cmd_native_hook(fd, id, naction, nmode, nmodule, nsymbol, naddr, nskip_original, nreturn, nargindex, nargvalue, nid, nhard_flag, nsites_flag, nscope, slots_writable_flag, backtrace_flag);
+                } else if (strcmp(op, "native_call") == 0) {
                     char cmodule[128] = "", csymbol[160] = "", caddr[32] = "", cargs[256] = "";
                     json_get_str(line, "module", cmodule, sizeof(cmodule));
                     json_get_str(line, "symbol", csymbol, sizeof(csymbol));

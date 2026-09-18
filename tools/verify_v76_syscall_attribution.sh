@@ -21,12 +21,12 @@ const problems = [];
 const notes = [];
 
 // (1) unit tests for the attribution decoder
-const t = spawnSync(process.execPath, ['--test', `${root}/daemon/test/syscall_watch.test.ts`], { encoding: 'utf8' });
+const t = spawnSync(process.execPath, ['--test', `${root}/daemon/test/syscall_watch.test.ts`, `${root}/daemon/test/backtrace.test.ts`], { encoding: 'utf8' });
 const text = `${t.stdout ?? ''}${t.stderr ?? ''}`;
 const passed = Number(/pass (\d+)/.exec(text)?.[1] ?? -1);
 const failed = Number(/fail (\d+)/.exec(text)?.[1] ?? -1);
 if (t.status !== 0) problems.push(`unit tests exited ${t.status}`);
-if (passed < 7) problems.push(`expected >=7 passing unit tests, saw ${passed}`);
+if (passed < 11) problems.push(`expected >=11 passing unit tests (7 syscall + 4 backtrace), saw ${passed}`);
 if (failed !== 0) problems.push(`unit tests report ${failed} failures`);
 notes.push(`unit tests: pass=${passed} fail=${failed}`);
 

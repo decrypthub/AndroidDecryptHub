@@ -15,6 +15,14 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [x] **v4.39 native hook 命中带调用链（对标 Frida \`Thread.backtrace()\`）（2026-09-18，真机 PASS）**：以前 hook 命中只能告诉你"参数是什么"，但**是谁调进来的**要到 Frida 里才有。本轮把它补齐，并且是"命中当刻"的链，不是事后猜测。
+      · **agent 侧（\`agent/src/hook/native_hooks.cpp\`）**：\`native_hook\` 新增 **opt-in\`backtrace:true\`**。命中时在**受害者线程自己身上**采集：先用 \`pthread_attr_getstack\` 取本线程栈边界（thread-local 只算一次），再在边界内逐帧读 \`[fp]\`/\`[fp+8]\` 走 x29 链，最多 8 帧，事件里给出 \`bt\`（\`bt[0]\` = \`x30\`，立即调用者）与 \`btCount\`；同时事件依旧带 \`x29/x30\` 原始值。
+      · **为什么必须在命中当刻采**：第一版是"事件里给 x29/x30，Host 事后再读栈"，真机实测 \`[fp]\`/\`[fp+8]\` 已经是 **0**（调用返回后同一段栈被后续调用复用），只有 \`lr\` 可信——于是改成 agent 在命中时走链，Host 事后只做符号化。第二个 bug 同样来自真机：第一次实现把 \`x30\`（代码地址）当栈帧指针传进 walker，链全空；必须从 \`x29\` 起走，并把 \`x30\` 作为第 0 帧。
+      · **Host 侧（\`daemon/src/backtrace.ts\`，MCP \`native_backtrace\` + \`POST /api/native/backtrace\`）**：优先用事件里采好的 \`bt\`；每帧按**包含它的 maps 区域**定位模块（原来的 min/max 匹配把沙盒帧错认成 \`base.apk\`——base.apk 的映射散布在整个地址空间，min..max 跨度 4 GB），并用 **PT_DYNAMIC** 解析 \`.dynsym\`（内存重建镜像没有节头表，一样能用）给出"模块 + 偏移 + 最近符号"，符号尺寸覆盖该地址时标 \`symbolExact:true\`。诚实的停止原因写进 \`stopReason\`：未映射返回地址（列表到此为止）、栈不可读、fp 不在可写映射、链不递增/成环；来自 APK 内映射的库报 \`symbolSource=archive-mapped\`，不硬凑符号名。
+      · **真机 \`aa165071\` PASS**（\`tools/verify_v78_hook_backtrace.sh\`）：沙盒固定链 \`adh_bt_outer → adh_bt_mid1 → adh_bt_mid2 → adh_bt_target\`（该库用 \`-fno-omit-frame-pointer\` 构建，和 AOSP 的做法一致）——hook \`adh_bt_target\`、经 \`native_call adh_bt_outer\` 触发（返回 67），8 帧的当刻链里**前三帧全部 \`exact\`**（\`adh_bt_mid2+0xc / adh_bt_mid1+0xc / adh_bt_outer+0xc\`），随后两帧落在 \`libadh_agent.so\`（native_call 蹦床的调用方），第 8 项是垃圾地址、被 \`return-address-not-mapped\` 截断而不是当成帧列出来；显式 \`fp=0x1\` 路径返回 1 帧 + \`frame-pointer-outside-stack\`（不编造）。卸钩后进程存活。
+      · 单元测试 \`daemon/test/backtrace.test.ts\`（\`symbolize\` 精确/最近/无符号三态、对真实沙盒 \`.so\` 走 PT_DYNAMIC 解出 \`adh_bt_target\` 并验证尺寸覆盖、非 ELF/截断头不抛异常），随 \`tools/verify_v76_syscall_attribution.sh\` 在门禁里跑。
+      · 边界：链依赖**帧指针**——第三方库若 \`-fomit-frame-pointer\`，只能拿到 \`lr\` 这一帧（工具如实说明 \`trusted:false\` 与原因）；Java 层调用链（ART 栈回溯）仍不在本工具内，需要时走 \`java_enum\`/ART 结构另做。
+
 - [x] **v4.38 系统调用监听升级：静态归因 + 按名筛选 + 覆盖 libc 封装（2026-09-18，真机 PASS）**：v4.10 只能扫"目标模块自己的 `svc #0`"，而真实 App 极少自己发系统调用——它们调 bionic 包装，桩在 `libc.so` 里。本轮把 L1 从"找得到"做到"看得懂、挑得准"。
       · **静态归因**（`daemon/src/syscall_watch.ts` `attributeSite()`）：对每个 `svc #0` 站点向前最多 10 条指令解码"写 x8 的那条"——`MOVZ x8/w8, #imm` 与 `MOVZ x8, #imm, lsl #16`；遇到任何控制流指令（b/bl/b.cond/cbz/tbz/ret/br/blr/svc）立即停止，**绝不借用相邻桩的号**；解不出来就报 `unknown`，不猜。
       · **筛选与失败语义**：`syscall_watch` 新增 `syscalls` 参数（MCP 数组或 CSV，名字/十进制/十六进制均可，如 `["uname","openat",117]`），只挂归因命中且匹配的站点；**命中 0 个直接报错**（附"归因了几个/共几个站点"），不静默挂 0 个。`native_syscall_scan`（纯静态、不需要设备）同样返回每站点的号与名字，并给出 `attributedCount/unknownCount`。
