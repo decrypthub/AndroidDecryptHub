@@ -52,13 +52,27 @@ console.log(`fs_read: ok=${read.body?.ok} size=${read.body?.size} binary=${read.
 const bad = await (await fetch(`${base}/api/fs/list?session=${encodeURIComponent(session)}&path=${encodeURIComponent('/nonexistent-' + Date.now())}`)).json().catch(() => ({}));
 console.log(`fs_list bad path: ok=${bad.ok} err=${JSON.stringify(String(bad.error ?? '').slice(0, 40))}`);
 
+// 5) file_probe (v4.90): which loaded module's GOT holds the libc file-I/O pointers. That answer
+//    is what file_capture's module argument comes from, so a probe that returns nothing useful
+//    has to be visible here instead of surfacing as a confusing file_capture failure later.
+const fp = await (await fetch(`${base}/api/file/probe?session=${encodeURIComponent(session)}`)).json().catch(() => ({}));
+const fpFns = fp.fns ?? {};
+const fpModules = Array.isArray(fp.modules) ? fp.modules : [];
+const fpAddrsOk = ['open', 'openat', 'read', 'write', 'close'].every((n) => /^0x[0-9a-f]+$/.test(String(fpFns[n] ?? '')) && String(fpFns[n]) !== '0x0');
+const fpModulesOk = fpModules.length >= 1 && fpModules.every((m) => typeof m.name === 'string' && m.name.endsWith('.so'));
+// Any of the five is enough: which symbols a module imports varies by ROM (libjavacore imports
+// open/close plus the __read_chk/__write_chk wrappers, other modules hold plain read/write).
+const fpAnyOk = fpModules.some((m) => ['open', 'openat', 'read', 'write', 'close'].some((k) => Number(m[k] ?? 0) >= 1));
+console.log(`file_probe: ok=${fp.ok} fns=${Object.keys(fpFns).length} modules=${fpModules.length} first=${fpModules[0]?.name ?? '(none)'} openHits=${fpModules.reduce((a, m) => a + Number(m.open ?? 0), 0)}`);
+
 const pass = ping.ok === true && Number(ping.latencyMs) >= 0 && Number(ping.latencyMs) < 5000
   && engine.ok === true && Number(engine.replaced) >= 1 && engine.fired === true && engine.protRestored === true
   && String(engine.slotPerms ?? '')[1] === '-'
   && frame.ok === true && frame.tailOk === true && frame.notTruncated === true
   && dir.ok === true && Number(dir.count) > 0
   && read.body?.ok === true && Number(read.body?.size) > 0 && text.includes(agent.package)
-  && bad.ok === false;
+  && bad.ok === false
+  && fp.ok === true && fpAddrsOk && fpModulesOk && fpAnyOk;
 console.log(pass ? 'RESULT:PASS' : 'RESULT:FAIL');
 EOF
 )"

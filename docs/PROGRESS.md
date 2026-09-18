@@ -15,6 +15,10 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.90 `file_probe` 补上设备证据路径（2026-09-19，host 语法/门禁 PASS；真机待做）**：v4.87 的路由门禁点出 5 条 api 路由没有任何验收脚本引用，其中 4 条（stealth/hook_all/backtrace/skills）的能力其实由 MCP 面覆盖（`verify_v69`/`v84`+`v86`/`v78`/`v36`），只剩 `file_probe` 真的没人叫过——它正是 `file_capture` 那个 `module` 参数的来源，探测不到就会在下一步以"莫名其妙装不上"的形式暴露。
+      · 在既有的设备脚本 `verify_v87_device_probe_fs.sh`（名字就叫 device_probe_fs）里加第 5 段：调 `/api/file/probe`，断言 `ok`、五个符号（open/openat/read/write/close）**都解析出非零地址**、`modules` 非空且都是 `.so`、并且至少有一个模块确实持有这五个中的一个（按符号打印命中数）。"哪个符号被哪个模块 import"随 ROM 变（libjavacore 用 open/close + `__read_chk`/`__write_chk`，别的模块持 plain read/write），所以断言的是"能探测到候选"而不是"必须是某个模块"。
+      · 路由门禁的"无人引用"名单随之从 5 条降到 4 条；剩余 4 条已确认由 MCP 面覆盖。
+      · 验收：`bash -n` + 内嵌 JS `node --check` 通过；v94 PASS；host 全量门禁 **32 PASS / 0 FAIL / 84 SKIP**（116 脚本）。
 - [~] **v4.89 第五轮评审收口：C 侧 `ExceptionClear` 归因 + 家门禁两处假阴性 + vendored LSPlant（2026-09-19，host 验收 PASS；真机待做）**：评审把"ADH 自身异常流量不进事件流"这句话又拆开验了一遍，确认只做了 C++ 那一半。
       · **P1-1（已修）**：`ExceptionClear` 同样是可挂槽位，而 C 侧还有 **60 处** `(*env)->ExceptionClear(env)` 直接走表（8 个 C 模块 52 处 + `jni_env_hooks.c` 自己的 7 处 + 1 处是 helper 内部的合法回退）。现在除 helper 的合法回退外全部改走 `adh_jni_exception_clear()`；**vendored LSPlant 的两处清理**（`art_method.hpp` 的 access-flag 探针、`jni_helper.hpp` 的 `ClearException`）也一并处理——做法是 `tools/fetch_lsplant.sh` 新增**第 4 号补丁**（注入 `extern "C"` 声明 + 替换调用，带"未生效即退出"校验），本地树已应用并在副本上模拟验证过补丁逻辑；vendor 树是 gitignored，所以补丁只存在于 fetch 脚本里（下次 fetch 自动重放）。
       · **P1-2（两处家门禁假阴性）**：① 家族 **base** 形态的配对正则 `&table->name\b` 会**同时匹配** `&table->name##V`（`#` 是非单词字符），所以删掉 base case 门禁照样绿——现在锚到分号（`&table->name;`）并补上 `&name##_wrapper;` 这一条；两个负对照（删 base slot case / 删 base wrapper case）现在都会 FAIL。② 安装路径不检查 `env_hook_wrapper(index)` 是否为 NULL，而 `adh_swap_pointer_in_ro_page()` **接受 NULL 替换值**——未来一次误删就能把 NULL 写进 ART 的 JNIEnv 表、目标下次调用即跳空崩溃；现在安装前先取 wrapper 并判空，缺失就拒绝 patch（fail-loud）。
