@@ -43,8 +43,8 @@ if [[ "$ENABLED" != *"$SERVICE"* ]]; then
   exit 0
 fi
 
-OUT="$(node - "$BASE" <<'EOF'
-const base = process.argv[2];
+OUT="$(node - "$BASE" "$SERIAL" <<'EOF'
+const [base, serial] = process.argv.slice(2);
 const checks = [];
 let original = null;
 let rpcId = 1;
@@ -110,9 +110,30 @@ try {
   chk('phone_task is exposed when automation is enabled', names.has('phone_task'));
   chk('phone_act is exposed when automation is enabled', names.has('phone_act'));
 
+// The ColorOS cross-app confirmation is drawn by SystemUI. It blocks every foreground check and it
+// does NOT disappear on its own for a long time - but BACK dismisses it reliably. Inject the key
+// through adb (the accessibility bridge right after a reboot may not answer yet, which is why the
+// automation-backed global-back retry was not enough); this is exactly what the operator does.
+const { spawnSync } = await import('node:child_process');
+const adb = (...args) => spawnSync('adb', ['-s', serial, ...args], { encoding: 'utf8' });
+const currentFocus = () => String(adb('shell', 'dumpsys window | grep mCurrentFocus').stdout ?? '').trim();
+const clearSystemDialog = async () => {
+  const focus = currentFocus();
+  if (!/com\.android\.systemui/.test(focus)) return null;
+  adb('shell', 'input', 'keyevent', '4');
+  await new Promise((resolve) => setTimeout(resolve, 900));
+  return focus;
+};
+
   // Restarting the sandbox re-creates its process (and its agent session), so it must happen
   // BEFORE the tree snapshot every later ref-based check depends on.
-  const reopened = parseTree(await callTool('phone_app', { action: 'restart', package: 'com.adh.sandbox' }));
+  let reopened = parseTree(await callTool('phone_app', { action: 'restart', package: 'com.adh.sandbox' }));
+  for (let attempt = 0; attempt < 3 && (reopened.verified !== true || reopened.foreground !== 'com.adh.sandbox'); attempt++) {
+    const blocked = await clearSystemDialog();
+    if (!blocked) break;                       // not the OEM dialog: a real failure, stop retrying
+    console.log(`  (dismissed SystemUI dialog: ${blocked})`);
+    reopened = parseTree(await callTool('phone_app', { action: 'restart', package: 'com.adh.sandbox' }));
+  }
   chk('phone_app restart verifies the app really reached the foreground', reopened.verified === true && reopened.foreground === 'com.adh.sandbox', `verified=${reopened.verified} foreground=${reopened.foreground} warning=${reopened.warning ?? '-'}`);
 
   const observe = await callTool('phone_observe', { mode: 'tree', includeScreenshot: false, maxNodes: 80 });

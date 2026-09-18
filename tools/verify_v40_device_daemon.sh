@@ -54,9 +54,10 @@ fi
 
 ENABLED_SERVICES="$(adb -s "$SERIAL" shell settings get secure enabled_accessibility_services 2>/dev/null | tr -d '\r')"
 
-OUT="$(node - "$BASE" <<'EOF'
-const base = process.argv[2];
+OUT="$(node - "$BASE" "$SERIAL" <<'EOF'
+const [base, serial] = process.argv.slice(2);
 const checks = [];
+const { spawnSync } = await import('node:child_process');
 const chk = (label, ok, detail = '') => {
   checks.push([label, !!ok]);
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}${detail ? ' — ' + detail : ''}`);
@@ -73,7 +74,18 @@ try {
   const started = await tool('phone_device', { action: 'status' });
   chk('device status reports the real screen state', typeof started.interactive === 'boolean' && typeof started.locked === 'boolean', JSON.stringify(started));
 
-  const opened = await tool('phone_app', { action: 'open', package: 'com.adh.sandbox' });
+  // Right after a reboot ColorOS raises a cross-app confirmation owned by SystemUI, which sits in
+  // front and makes the foreground check fail even though the open itself was fine. The operator
+  // taps it away; the harness does the same (adb BACK + retry) - and still fails if that did not
+  // help, so a real regression cannot hide behind it.
+  let opened = await tool('phone_app', { action: 'open', package: 'com.adh.sandbox' });
+  for (let attempt = 0; attempt < 3 && (opened.verified !== true || opened.foreground !== 'com.adh.sandbox'); attempt++) {
+    const focus = String(spawnSync('adb', ['-s', serial, 'shell', 'dumpsys window | grep mCurrentFocus'], { encoding: 'utf8' }).stdout ?? '').trim();
+    if (!/com\.android\.systemui/.test(focus)) break;   // not the OEM dialog: a real failure
+    spawnSync('adb', ['-s', serial, 'shell', 'input', 'keyevent', '4'], { encoding: 'utf8' });
+    await sleep(900);
+    opened = await tool('phone_app', { action: 'open', package: 'com.adh.sandbox' });
+  }
   chk('root open bypasses the OEM dialog and verifies the foreground', opened.via === 'device-daemon' && opened.verified === true && opened.foreground === 'com.adh.sandbox', `via=${opened.via} fg=${opened.foreground}`);
 
   const locked = await tool('phone_device', { action: 'lock' });

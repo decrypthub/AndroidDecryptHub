@@ -7,6 +7,17 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 bash tools/dev_up.sh >/dev/null 2>&1
 STATE="$(adb get-state 2>/dev/null | tr -d '\r')"
+# Right after a reboot the Manager accessibility service (and with it the automation bridge) needs a
+# moment to come back; v36/v38/v39/v40/v41 drive the UI and otherwise fail or skip confusingly. Wait
+# once here, bounded, instead of teaching every script to poll.
+if [ "$STATE" = "device" ]; then
+  for _ in $(seq 1 20); do
+    if curl -s -m 2 "http://127.0.0.1:${ADH_HTTP_PORT:-8088}/api/automation/status" 2>/dev/null | grep -Eq '"connected"[[:space:]]*:[[:space:]]*true'; then
+      break
+    fi
+    sleep 3
+  done
+fi
 
 # name:needs_device
 SCRIPTS=(
