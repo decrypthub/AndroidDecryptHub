@@ -74,6 +74,8 @@ export interface DumpMeta {
   // worth keeping - it just must not look like the whole region.
   requestedSize?: number;
   complete?: boolean;
+  /** Free-form caveat, e.g. that a reassembled .so is not byte-exact. */
+  note?: string;
 }
 
 // ---- registry ------------------------------------------------------------

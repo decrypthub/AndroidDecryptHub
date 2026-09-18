@@ -15,6 +15,16 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.92 第七轮评审剩余 5 条 P2 收口：native_call / liveDisasm / automation / 工作流时限（2026-09-19，host 验收 PASS；真机待做）**
+      · **native_call 地址严格解析**：`strtoull(addr, NULL, 0)` 把 `0x1234zz` 当 `0x1234` 调用（负数还会回绕），现在要求"整串必须被消费 + 不 ERANGE + 非 0"，否则 `ok:false` 并给示例格式。
+      · **native_call 上报挂起 Java 异常**：被调函数若 `Throw`，返回的 `result` 是无意义的——以前仍回 `ok:true`。现在调用后 attach 检查异常，命中则 `ok:false, pendingException:true, error:"...value is not trustworthy"`（结果字段仍保留，但状态如实）。
+      · **模块名解析收敛成一个严格函数**：`resolveModule()`（精确 basename/path → 唯一后缀 → 唯一包含 → 歧义抛 `ModuleAmbiguousError`）被 `liveDisasm`、`syscall_watch`、`/api/module/dump`（歧义 → 409 + candidates）共用；`libc` 不再在 libc.so / libc++.so / libcutils.so 之间静默挑一个。`liveDisasm` 另补：size 非正/NaN 直接报错（以前 `Math.max(4, NaN)` 静默变 4），`module+offset` 越界报错。
+      · **automation 要求显式 `ok:true`**：设备回包省略 `ok` 时以前按成功 resolve（半截/旧格式帧看起来像成功），现在必须 `msg.ok === true`。
+      · **`phone_task` / `phone_skill run` 有总时限**：新增 `timeoutMs`（默认 120s，夹紧 5s–10min），每一步与每次重试都按"剩余预算"夹紧自己的 timeout，耗尽时返回 `timedOut:true` + 停在哪一步（此前只有单步超时，N 步最坏 N×timeout，卡死的步骤会把每一步都拖满）。
+      · **如实标注重组 .so**：`/api/module/dump` 的 meta 增加 `note`："reassembled from memory: offsets == vaddrs, section headers dropped, not byte-exact"（它是给 dynsym/符号分析用的，不是磁盘复刻）。
+      · 新增/更新单测：`resolveModule`（精确/唯一/歧义/未加载）→ daemon `node --test` **154**。
+      · 已知边界（如实记录，未修）：`native_call` 走**原始地址**时不做存活性校验、调用本身没有超时——daemon 的 20s 只是放弃等待，agent 的命令循环会一直阻塞在被调函数里；用 `module+symbol` 可避免（每次重新解析 maps，卸载后即 "target not found"）。
+      · 验收：agent 零告警重建；daemon 154 测试通过；host 全量门禁 **32 PASS / 0 FAIL / 84 SKIP**（116 脚本）。
 - [~] **v4.91 第七轮评审（能力面）收口：三处"看起来成功"改成如实上报（2026-09-19，host 验收 PASS；真机待做）**：评审对 memory / syscall / call / trace / automation 五个面做了独立审计，4 条 P1 全是"结果看起来成功、实际不完整"，先修三条。
       · **P1 内存 dump 链路**：agent `read` 回 `requested/short`；daemon 新增 `readMemEx`（`complete/requested/read`），`reconstructSo` 对每个 PT_LOAD **整段校验**（短读直接抛错——不再让 `Buffer.alloc` 的 0 填看着像真实零区），`dumpRegion` 先校验 size（NaN/负数/超 512 MB 直接拒绝）并在 meta 里带 `requestedSize/complete`；三个出口（`/api/memory/dump`、`memory_dump`、`/api/module/dump`）原样上报。`/api/module/dump` 的模块名匹配改为"精确 basename → 唯一宽松匹配 → 歧义即 409"（此前 `libc` 会在 libc.so / libc++.so / libcutils.so 之间静默挑一个）。v02 设备脚本新增断言：正常 dump `complete:true`、落在未映射空洞上的 dump 必须被拒绝或标记。
       · **P1 syscall digest 吞限流计数**：事件里的 `throttled` 只是"距上次发出"的增量（最后一次被压制的命中永远带不出来），digest 现在额外读 agent 的 `native_hook` status（权威计数）→ 结果给 `counters {hits, throttled, emitted, source}` 并写明"被限流 N 次"；status 不可用时退回事件增量并标注 `source:'events'`（欠计最后一段窗口）。逻辑抽成纯函数 `syscallCounters()` + 单测。

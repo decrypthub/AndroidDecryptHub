@@ -197,7 +197,9 @@ export class AutomationHub {
             if (!pending) continue;
             clearTimeout(pending.timer);
             this.pending.delete(pending.id);
-            if (msg.t === 'result' && msg.ok !== false) pending.resolve(msg.result ?? msg);
+            // An explicit ok:true is required (v4.92): a truncated or legacy device reply that omits
+            // the field used to resolve as a success, so a half-written frame looked like a result.
+            if (msg.t === 'result' && msg.ok === true) pending.resolve(msg.result ?? msg);
             else {
               const failure = protocolError(msg.error?.code ?? 'automation_error', msg.error?.message ?? msg.error ?? 'automation command failed');
               // Central allowlist-refusal sink: every phone_* path reports through here, so the

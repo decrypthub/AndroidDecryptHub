@@ -29,12 +29,33 @@ function hexAddress(value: bigint): string {
   return `0x${value.toString(16)}`;
 }
 
-function findModule(modules: any[], name: string): any {
+/** Thrown when a module name matches more than one loaded module. */
+export class ModuleAmbiguousError extends Error {
+  candidates: string[];
+  constructor(name: string, candidates: string[]) {
+    super(`ambiguous module '${name}': ${candidates.join(', ')}`);
+    this.candidates = candidates;
+  }
+}
+
+/**
+ * Resolve a module name against the live maps: exact basename/path first, then a unique suffix
+ * match, and only then a unique substring match. `libc` used to silently pick whichever of
+ * libc.so / libc++.so / libcutils.so the map order happened to hit first; ambiguity is an error.
+ */
+export function resolveModule(modules: any[], name: string): any {
   const exact = modules.find((m) => m.name === name || m.path === name);
   if (exact) return exact;
-  return modules.find((m) => String(m.path ?? '').endsWith(`/${name}`)) ??
-    modules.find((m) => String(m.path ?? '').includes(name));
+  const suffix = modules.filter((m) => String(m.path ?? '').endsWith(`/${name}`));
+  if (suffix.length === 1) return suffix[0];
+  if (suffix.length > 1) throw new ModuleAmbiguousError(name, suffix.map((m) => m.name));
+  const loose = modules.filter((m) => String(m.path ?? '').includes(name));
+  if (loose.length === 1) return loose[0];
+  if (loose.length > 1) throw new ModuleAmbiguousError(name, loose.map((m) => m.name));
+  return undefined;
 }
+
+const findModule = resolveModule;   // kept for the existing call sites in this module
 
 /**
  * Read target memory and disassemble it with Capstone on the host.
@@ -52,13 +73,20 @@ export async function liveDisasm(sid: string, opts: LiveDisasmOptions): Promise<
     const mod = findModule(modulesFromMaps(maps.regions ?? []), String(opts.module));
     if (!mod) throw new Error(`module not found: ${opts.module}`);
     const moduleOffset = parseAddress(opts.offset);
+    if (!(Number(mod.size) > 0) || moduleOffset >= BigInt(mod.size)) {
+      throw new Error(`offset 0x${moduleOffset.toString(16)} is outside ${mod.name} (size ${mod.size} bytes)`);
+    }
     address = BigInt(`0x${String(mod.base).replace(/^0x/i, '')}`) + moduleOffset;
     resolvedFrom = `${opts.module}+${hexAddress(moduleOffset)}`;
   }
   if (address === null) throw new Error('need addr or module+offset');
   if (address % 4n !== 0n) throw new Error(`address must be 4-byte aligned for AArch64: ${hexAddress(address)}`);
 
-  const requested = Math.max(4, Math.min(65536, Math.trunc(Number(opts.size ?? 256))));
+  // Number(undefined)/NaN used to become 4 through Math.max, so a typo disassembled four bytes and
+  // looked like an answer. The size has to be a positive number now; the ceiling still clamps.
+  const rawSize = Number(opts.size ?? 256);
+  if (!Number.isFinite(rawSize) || rawSize <= 0) throw new Error(`size must be a positive number (got ${opts.size})`);
+  const requested = Math.max(4, Math.min(65536, Math.trunc(rawSize)));
   const aligned = requested - (requested % 4) || 4;
   const r = await sendCmd(sid, 'read', { addr: hexAddress(address), size: aligned }, 20_000);
   if (!r.ok) throw new Error(r.error ?? 'memory read failed');

@@ -271,7 +271,20 @@ void adh_cmd_native_call(int fd, const char *id, const char *module, const char 
     void *target = NULL;
     const char *source = "";
     if (addr_hex && addr_hex[0]) {
-        target = (void *)(uintptr_t)strtoull(addr_hex, NULL, 0);
+        // Strict parse: strtoull stops at the first bad character, so "0x1234zz" used to be
+        // accepted as 0x1234 and the call went to whatever address that happened to be.
+        errno = 0;
+        char *addr_end = NULL;
+        unsigned long long addr_value = strtoull(addr_hex, &addr_end, 0);
+        if (addr_end == addr_hex || (addr_end && *addr_end != 0) || errno == ERANGE || addr_value == 0) {
+            char out[360];
+            snprintf(out, sizeof(out),
+                     "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"native_call\",\"ok\":false,"
+                     "\"error\":\"bad addr: expected a hex address like 0x7f12345678 (got a partial or non-numeric value)\"}\n", idj);
+            send_line(fd, out);
+            return;
+        }
+        target = (void *)(uintptr_t)addr_value;
         source = "addr";
     } else if (module && module[0] && symbol && symbol[0]) {
         target = adh_resolve_sym(module, symbol);
@@ -323,6 +336,18 @@ void adh_cmd_native_call(int fd, const char *id, const char *module, const char 
     long long duration_ns = now_ns() - start_ns;
     double fp_double = 0;
     memcpy(&fp_double, &fp_result, sizeof(fp_double));
+    // A callee that threw leaves a pending Java exception on this thread: the returned value is
+    // then meaningless, so the reply must not read as a normal success (java_call already fails
+    // loud here; native_call used to answer ok:true regardless).
+    int pending_exception = 0;
+    {
+        int call_attach = 0;
+        JNIEnv *call_env = adh_jni_attach(&call_attach);
+        if (call_env) {
+            pending_exception = adh_jni_exception_check(call_env) ? 1 : 0;
+            adh_jni_detach(call_attach);
+        }
+    }
 
     char modulej[160], symbolj[200], argsj[320];
     json_escape(module ? module : "", modulej, sizeof(modulej));
@@ -353,11 +378,14 @@ void adh_cmd_native_call(int fd, const char *id, const char *module, const char 
     }
     char out[1400];
     snprintf(out, sizeof(out),
-             "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"native_call\",\"ok\":true,"
-             "\"source\":\"%s\",\"module\":\"%s\",\"symbol\":\"%s\",\"target\":\"0x%llx\","
+             "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"native_call\",\"ok\":%s,"
+             "\"pendingException\":%s,\"error\":\"%s\",\"source\":\"%s\",\"module\":\"%s\",\"symbol\":\"%s\",\"target\":\"0x%llx\","
              "\"args\":\"[%s]\",\"argCount\":%d,\"result\":\"0x%llx\",\"resultDecimal\":%llu,"
              "\"durationUs\":%lld,\"fpSupported\":true%s}\n",
-             idj, source, modulej, symbolj, (unsigned long long)(uintptr_t)target,
+             idj, pending_exception ? "false" : "true",
+             pending_exception ? "true" : "false",
+             pending_exception ? "called function left a pending Java exception: the returned value is not trustworthy" : "",
+             source, modulej, symbolj, (unsigned long long)(uintptr_t)target,
              argsj, argc, result, result, duration_ns / 1000, fpjson);
     send_line(fd, out);
     LOGI("native_call src=%s target=%p args=%d fp=%d result=0x%llx", source, target, argc, fp_argc, result);

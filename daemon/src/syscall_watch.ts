@@ -4,6 +4,7 @@
 // events carry x0-x8; for a syscall site x8 is the syscall number.
 import { svcScan } from './analysis.ts';
 import { modulesFromMaps, reconstructSo, sendCmd } from './service.ts';
+import { resolveModule } from './memory.ts';   // one strict module-name resolution for the whole daemon
 import { nativeHookInstallPayload, normalizeThrottleMs } from './native_hook_args.ts';
 
 export interface SyscallWatchOptions {
@@ -186,12 +187,7 @@ export function attributeSite(buf: Buffer, fileOff: number): { nr: number | null
   return { nr: null, how: shadowed ? 'ambiguous-write' : 'unknown', insns };
 }
 
-function findModule(modules: any[], name: string): any {
-  const exact = modules.find((m) => m.name === name || m.path === name);
-  if (exact) return exact;
-  return modules.find((m) => String(m.path ?? '').endsWith(`/${name}`)) ??
-    modules.find((m) => String(m.path ?? '').includes(name));
-}
+const findModule = resolveModule;   // exact -> unique suffix -> unique substring, else throw
 
 export async function watchSyscalls(sid: string, opts: SyscallWatchOptions): Promise<any> {
   if (!opts.module) throw new Error('need module');
