@@ -15,6 +15,11 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.65 JNIEnv 补"pin 住 Java 字符串"的一对（2026-09-19，host 验收 PASS；真机待做）**：v4.63 覆盖的是"把字符串**拷进** native 缓冲"，另一条常见路径是**直接拿字符串内部指针**（`GetStringChars`）再 `ReleaseStringChars` 放回——指纹/校验代码用它是为了省一次拷贝。
+      · agent：JNIEnv 表 117 → **119 槽**。`GetStringChars` 事件带 `string=0x.. isCopy=true/false text="…"`（**有界预览**：最多 24 个字符、遇字符串自带的 `\0` 终止符即停，不会越过字符串尾读内存）；`ReleaseStringChars` 事件带 `string=.. chars=..`，把"pin → 放回"这一对在时间线上对齐。
+      · 签名照旧由 `_Static_assert` 编译期钉死；索引 165/166 由 `tools/verify_v90_jni_table_abi.sh` 对 NDK `jni.h` 机检（现在 `checked 119 indices against the ABI`，20 固定 + 21 族 ×3）。
+      · 夹具与验收：沙盒探针 `jniStringProbe` 增加 `GetStringChars` + `ReleaseStringChars` 一对（返回调用次数 5 → 7）；v91 的 `(3f)` 段把两者纳入 `STR_FUNCS`，并要求**三个字符串读取器里至少两个**出现 `text="…ADH-STR…"` 预览、`ReleaseStringChars` 事件带 `chars=0x…`——单个入口坏掉不再能蒙混过关。
+      · 验收：agent 零告警重建；`tools/build_detect.sh` PASS；v90 PASS（119 条）；host 全量门禁 **31 PASS / 0 FAIL / 84 SKIP**（115 脚本）。
 - [~] **v4.64 v4.63 的设备半 + 沙盒夹具（2026-09-19，host 验收 PASS；真机待做）**：新加的 5 个表项（字符串拷出 + 直接缓冲）此前只有实现，没有真机验证路径。
       · 沙盒新增 native 探针 **`Detection.jniStringProbe`**：`NewStringUTF` 造一个可识别字符串 → `GetStringRegion`（UTF-16，24 字符）+ `GetStringUTFRegion`（UTF-8，48 字节）各拷一次 → 对 64 字节本地缓冲 `NewDirectByteBuffer` → `GetDirectBufferAddress` + `GetDirectBufferCapacity`，返回实际调用次数。**`tools/build_detect.sh` 与 `sandbox-app` 的 `:app:assembleDebug` 都已在 host 上构建通过**（native 夹具 + Kotlin 声明 + APK）。
       · v91 新增 `(3f)`：逐个安装这 5 个槽 → 取 capture 游标 → 触发探针（`calls ≥ 5`）→ 断言**每个被 hook 的表项都出事件**，且内容达标：字符串事件必须带 `text="…ADH-STR…"` 预览，直接缓冲事件必须带 `address=0x…` 与 `capacity=64`；随后逐个卸载并把结果纳入 `pass`。

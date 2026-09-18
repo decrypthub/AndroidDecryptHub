@@ -202,6 +202,15 @@ JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_jniStringProbe(JNIEnv *env
     (*env)->GetStringUTFRegion(env, text, 4, 12, ubuf);
     if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); else calls++;
 
+    // v4.65: the pin/unpin pair - a direct pointer to the Java string's characters.
+    jboolean is_copy = JNI_FALSE;
+    const jchar *pinned = (*env)->GetStringChars(env, text, &is_copy);
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); else calls++;
+    if (pinned) {
+        (*env)->ReleaseStringChars(env, text, pinned);
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); else calls++;
+    }
+
     static unsigned char payload[64];
     for (int i = 0; i < 64; i++) payload[i] = (unsigned char)(i + 0x41);
     jobject direct = (*env)->NewDirectByteBuffer(env, payload, (jlong)sizeof(payload));

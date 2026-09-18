@@ -1341,6 +1341,8 @@ MCP              →  AI 可编程操控，与 HTTP 同源
 
 > 实现状态（v4.56，**实现 + host 验收完成，真机验收待做**）：**字段事件可归因 + JNIEnv 字段摘要**。v4.55 的访问事件只有 `field=0x..`，读不出字段名；现在 `GetFieldID`/`GetStaticFieldID` 的事件会带上它们交出去的 id（`Class#name:sig -> 0x..`），新增的 `jniFieldDigest`（MCP `jni_field_digest` + `POST /api/jni/field_digest`）用 id→名字表把访问按 (accessor, field) 聚合成"哪个字段被读写了几次、最后值是什么、哪些线程"，未解析的 id 保持原始指针并单独计数（不猜），空窗口明确提示需要先 hook 字段槽位；drain 走共享 `drainSession`。
 
+> 实现状态（v4.65，**实现 + host 验收完成，真机验收待做**）：**pin 住 Java 字符串的一对**。`GetStringChars`（事件带 `string=.. isCopy=.. text="…"`，有界预览最多 24 字符且遇字符串自带终止符即停）与 `ReleaseStringChars`（事件带 `string=/chars=`）补齐"直接拿内部指针"这条读字符串路径；JNIEnv 表 117 → **119 槽**，索引 165/166 由 `verify_v90_jni_table_abi.sh` 对 NDK `jni.h` 机检、签名由 `_Static_assert` 编译期钉死。沙盒探针与 v91 的 `(3f)` 同步扩展。
+
 > 实现状态（v4.64，**实现 + host 验收完成，真机验收待做**）：v4.63 那 5 个表项的设备验证路径补齐——沙盒 native 探针 `Detection.jniStringProbe`（`GetStringRegion`/`GetStringUTFRegion` 各拷一次 + `NewDirectByteBuffer`/`GetDirectBufferAddress`/`GetDirectBufferCapacity` 各一次）与 Kotlin 声明已在 host 构建通过（`build_detect.sh` + `:app:assembleDebug`）；v91 的 `(3f)` 段逐个安装/触发/断言事件内容（`text="…"`、`address=`、`capacity=64`）/卸载，并纳入 pass。
 
 > 实现状态（v4.63，**实现 + host 验收完成，真机验收待做**）：**JNIEnv 再补 5 个表项**——`GetStringRegion`/`GetStringUTFRegion`（native 把 Java 字符串拷进自己的缓冲区；事件带 `string=0x.. start/len` 与有界文本预览，UTF-16 24 字符 / UTF-8 48 字节、不可打印转 `.`）与直接缓冲三件套 `NewDirectByteBuffer`/`GetDirectBufferAddress`/`GetDirectBufferCapacity`（事件带 `address/capacity`）。槽位 112 → **117**（18 固定 + 21 族 ×3）；签名由 `_Static_assert` 编译期钉死、索引由 `verify_v90_jni_table_abi.sh` 对 NDK `jni.h` 机检（`checked 117 indices`）。其余表项（`GetStringChars`/`ReleaseStringChars`、`GetJavaVM`、`NewWeakGlobalRef`、`ExceptionOccurred` 等）仍是盲区，同机制可加。

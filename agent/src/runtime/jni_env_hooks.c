@@ -82,6 +82,10 @@ enum {
     // Java through a direct ByteBuffer - both were invisible.
     ENV_SLOT_GetStringRegion,
     ENV_SLOT_GetStringUTFRegion,
+    // v4.65: the "pin the Java string, then release it" pair - the other common way native code
+    // reads a Java string (a direct pointer instead of a copy).
+    ENV_SLOT_GetStringChars,
+    ENV_SLOT_ReleaseStringChars,
     ENV_SLOT_NewDirectByteBuffer,
     ENV_SLOT_GetDirectBufferAddress,
     ENV_SLOT_GetDirectBufferCapacity,
@@ -138,7 +142,8 @@ struct EnvHookSlot {
     X("NewStringUTF") X("GetFieldID") X("GetStaticFieldID") X("GetByteArrayElements") \
     X("SetByteArrayRegion") X("ReleaseByteArrayElements") X("GetByteArrayRegion") \
     X("GetPrimitiveArrayCritical") X("ReleasePrimitiveArrayCritical") \
-    X("GetStringRegion") X("GetStringUTFRegion") X("NewDirectByteBuffer") \
+    X("GetStringRegion") X("GetStringUTFRegion") X("GetStringChars") X("ReleaseStringChars") \
+    X("NewDirectByteBuffer") \
     X("GetDirectBufferAddress") X("GetDirectBufferCapacity")
 
 #define ADH_CALL_VALUE_FAMILIES(X) \
@@ -968,7 +973,51 @@ static jlong GetDirectBufferCapacity_wrapper(JNIEnv *env, jobject buf) {
     return capacity;
 }
 
+static const jchar *GetStringChars_wrapper(JNIEnv *env, jstring str, jboolean *is_copy) {
+    typedef const jchar *(JNICALL *fn_t)(JNIEnv *, jstring, jboolean *);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_GetStringChars);
+    if (!original) return NULL;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_GetStringChars)) return original(env, str, is_copy);
+    g_env_hook_in_ours = 1;
+    const jchar *chars = original(env, str, is_copy);
+    char detail[220]; detail[0] = 0;
+    if (env_budget_left(ENV_SLOT_GetStringChars)) {
+        char preview[80] = "";
+        if (chars) {
+            size_t p = 0;
+            for (int i = 0; i < 24 && p + 2 < sizeof(preview); i++) {
+                jchar c = chars[i];
+                if (c == 0) break;                       // bounded by the string's own terminator
+                preview[p++] = (c >= 0x20 && c < 0x7f) ? (char)c : '.';
+            }
+            preview[p] = 0;
+        }
+        snprintf(detail, sizeof(detail), "string=%p isCopy=%s text=\"%s\"",
+                 (void *)str, (is_copy && *is_copy) ? "true" : "false", preview);
+    }
+    env_note(ENV_SLOT_GetStringChars, detail[0] ? detail : NULL, chars != NULL);
+    g_env_hook_in_ours = 0;
+    return chars;
+}
+
+static void ReleaseStringChars_wrapper(JNIEnv *env, jstring str, const jchar *chars) {
+    typedef void (JNICALL *fn_t)(JNIEnv *, jstring, const jchar *);
+    fn_t original = (fn_t)slot_original(ENV_SLOT_ReleaseStringChars);
+    if (!original) return;
+    if (g_env_hook_in_ours || !slot_active(ENV_SLOT_ReleaseStringChars)) { original(env, str, chars); return; }
+    g_env_hook_in_ours = 1;
+    original(env, str, chars);
+    char detail[128]; detail[0] = 0;
+    if (env_budget_left(ENV_SLOT_ReleaseStringChars)) {
+        snprintf(detail, sizeof(detail), "string=%p chars=%p", (void *)str, (const void *)chars);
+    }
+    env_note(ENV_SLOT_ReleaseStringChars, detail[0] ? detail : NULL, 1);
+    g_env_hook_in_ours = 0;
+}
+
 // Compile-time type check: each wrapper must have exactly its table entry signature.
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetStringChars), __typeof__(&GetStringChars_wrapper)), "GetStringChars_wrapper signature mismatch");
+_Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->ReleaseStringChars), __typeof__(&ReleaseStringChars_wrapper)), "ReleaseStringChars_wrapper signature mismatch");
 _Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetStringRegion), __typeof__(&GetStringRegion_wrapper)), "GetStringRegion_wrapper signature mismatch");
 _Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->GetStringUTFRegion), __typeof__(&GetStringUTFRegion_wrapper)), "GetStringUTFRegion_wrapper signature mismatch");
 _Static_assert(__builtin_types_compatible_p(__typeof__(((struct JNINativeInterface *)0)->NewDirectByteBuffer), __typeof__(&NewDirectByteBuffer_wrapper)), "NewDirectByteBuffer_wrapper signature mismatch");
@@ -1076,6 +1125,8 @@ static int env_hook_spec_index(int index) {
         case ENV_SLOT_SetByteArrayRegion: return 208;
         case ENV_SLOT_GetPrimitiveArrayCritical: return 222;
         case ENV_SLOT_GetStringRegion: return 220;
+        case ENV_SLOT_GetStringChars: return 165;
+        case ENV_SLOT_ReleaseStringChars: return 166;
         case ENV_SLOT_GetStringUTFRegion: return 221;
         case ENV_SLOT_NewDirectByteBuffer: return 229;
         case ENV_SLOT_GetDirectBufferAddress: return 230;
@@ -1114,6 +1165,8 @@ static void **env_hook_slot(struct JNINativeInterface *table, int index) {
         case ENV_SLOT_ReleaseByteArrayElements: return (void **)(uintptr_t)&table->ReleaseByteArrayElements;
         case ENV_SLOT_GetByteArrayRegion: return (void **)(uintptr_t)&table->GetByteArrayRegion;
         case ENV_SLOT_GetPrimitiveArrayCritical: return (void **)(uintptr_t)&table->GetPrimitiveArrayCritical;
+        case ENV_SLOT_GetStringChars: return (void **)(uintptr_t)&table->GetStringChars;
+        case ENV_SLOT_ReleaseStringChars: return (void **)(uintptr_t)&table->ReleaseStringChars;
         case ENV_SLOT_GetStringRegion: return (void **)(uintptr_t)&table->GetStringRegion;
         case ENV_SLOT_GetStringUTFRegion: return (void **)(uintptr_t)&table->GetStringUTFRegion;
         case ENV_SLOT_NewDirectByteBuffer: return (void **)(uintptr_t)&table->NewDirectByteBuffer;
@@ -1147,6 +1200,8 @@ static void *env_hook_wrapper(int index) {
         case ENV_SLOT_ReleaseByteArrayElements: return (void *)&ReleaseByteArrayElements_wrapper;
         case ENV_SLOT_GetByteArrayRegion: return (void *)&GetByteArrayRegion_wrapper;
         case ENV_SLOT_GetPrimitiveArrayCritical: return (void *)&GetPrimitiveArrayCritical_wrapper;
+        case ENV_SLOT_GetStringChars: return (void *)&GetStringChars_wrapper;
+        case ENV_SLOT_ReleaseStringChars: return (void *)&ReleaseStringChars_wrapper;
         case ENV_SLOT_GetStringRegion: return (void *)&GetStringRegion_wrapper;
         case ENV_SLOT_GetStringUTFRegion: return (void *)&GetStringUTFRegion_wrapper;
         case ENV_SLOT_NewDirectByteBuffer: return (void *)&NewDirectByteBuffer_wrapper;

@@ -145,7 +145,7 @@ const rewriteDigestOk = Number(ovDigest.body?.rewrittenSamples ?? 0) >= 1
 // (3f) v4.63: the string-copy and direct-buffer entries. The probe lifts a Java string into native
 // buffers and hands a native payload to Java as a direct ByteBuffer, so each hooked entry must
 // produce an event whose detail carries what the wrapper promised (text preview, address, capacity).
-const STR_FUNCS = ['GetStringRegion', 'GetStringUTFRegion', 'NewDirectByteBuffer', 'GetDirectBufferAddress', 'GetDirectBufferCapacity'];
+const STR_FUNCS = ['GetStringRegion', 'GetStringUTFRegion', 'GetStringChars', 'ReleaseStringChars', 'NewDirectByteBuffer', 'GetDirectBufferAddress', 'GetDirectBufferCapacity'];
 const strInstalled = [];
 for (const f of STR_FUNCS) {
   const r = await post('/api/jni/env_hook', { session, action: 'install', function: f });
@@ -170,16 +170,20 @@ for (const c of (strList.captures ?? []).filter((x) => x.func === 'JNI_ENV' && N
 }
 for (const f of STR_FUNCS) console.log(`  event ${f}: ${strSeen.get(f) ?? '(missing)'}`);
 const strMissing = STR_FUNCS.filter((f) => !strSeen.has(f));
-const textOk = /text="[^"]*ADH-STR/.test(String(strSeen.get('GetStringUTFRegion') ?? ''))
-  || /text="[^"]*ADH-STR/.test(String(strSeen.get('GetStringRegion') ?? ''));
+// At least two of the three string readers must show the copied text: one of the region copies and
+// the pinned pointer, so a single working entry cannot carry the whole section.
+const textHit = ['GetStringUTFRegion', 'GetStringRegion', 'GetStringChars']
+  .filter((f) => /text="[^"]*ADH-STR/.test(String(strSeen.get(f) ?? '')));
+const releaseOk = /chars=0x/.test(String(strSeen.get('ReleaseStringChars') ?? ''));
+const textOk = textHit.length >= 2 && releaseOk;
 const bufferOk = /address=0x/.test(String(strSeen.get('GetDirectBufferAddress') ?? ''))
   && /capacity=64/.test(String(strSeen.get('NewDirectByteBuffer') ?? ''))
   && /capacity=64/.test(String(strSeen.get('GetDirectBufferCapacity') ?? ''));
 const strUnhooked = [];
 for (const f of STR_FUNCS) strUnhooked.push((await post('/api/jni/env_hook', { session, action: 'uninstall', function: f })).body?.ok === true);
-const stringProbeOk = strCall.body?.ok === true && strCalls >= 5 && strMissing.length === 0 && textOk && bufferOk && strUnhooked.every(Boolean);
+const stringProbeOk = strCall.body?.ok === true && strCalls >= 7 && strMissing.length === 0 && textOk && bufferOk && strUnhooked.every(Boolean);
 if (strMissing.length) console.log('no event for: ' + strMissing.join(', '));
-if (!textOk) console.log('the string-region event did not carry the copied text preview');
+if (!textOk) console.log(`the string readers did not carry the copied text (hits=${textHit.join(',') || 'none'}, release=${releaseOk})`);
 if (!bufferOk) console.log('the direct-buffer events did not carry address/capacity');
 
 // (4) unhook, table restored, process alive
