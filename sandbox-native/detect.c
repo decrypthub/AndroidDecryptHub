@@ -551,6 +551,223 @@ JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_jniArrayElementsProbe(JNIE
     return (jint)(0xAD8000 | bits);
 }
 
+// v4.83 fixture: one deterministic walk over the families added after the array work - array
+// creation, object arrays, AllocObject, CallNonvirtual dispatch, the reflection bridge, the string
+// length/critical entries and ExceptionCheck. Every section asserts a value the target should see,
+// so a hook that changes behaviour fails the probe instead of silently "working".
+// Returns 0xAD9000 | bits, one bit per section (0xAD91FF when everything held).
+static jstring family_find_member(JNIEnv *env, jobjectArray members, jclass member_cls, const char *wanted) {
+    if (!members || !member_cls) return NULL;
+    jmethodID get_name = (*env)->GetMethodID(env, member_cls, "getName", "()Ljava/lang/String;");
+    jsize len = (*env)->GetArrayLength(env, members);
+    jstring found = NULL;
+    for (jsize i = 0; i < len && !found; i++) {
+        jobject member = (*env)->GetObjectArrayElement(env, members, i);
+        if (!member) continue;
+        jstring name = get_name ? (jstring)(*env)->CallObjectMethod(env, member, get_name) : NULL;
+        if (name) {
+            const char *chars = (*env)->GetStringUTFChars(env, name, NULL);
+            if (chars && strcmp(chars, wanted) == 0) found = (jstring)member;   /* borrowed: caller deletes */
+            if (chars) (*env)->ReleaseStringUTFChars(env, name, chars);
+            (*env)->DeleteLocalRef(env, name);
+        }
+        if (!found) (*env)->DeleteLocalRef(env, member);
+    }
+    return found;
+}
+
+// The V form needs a va_list, which only a variadic helper can build.
+static jstring family_call_nv_v(JNIEnv *env, jobject obj, jclass clazz, jmethodID mid, ...) {
+    va_list ap;
+    va_start(ap, mid);
+    jstring result = (jstring)(*env)->CallNonvirtualObjectMethodV(env, obj, clazz, mid, ap);
+    va_end(ap);
+    return result;
+}
+
+JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_jniFamilyProbe(JNIEnv *env, jclass clazz) {
+    (void)clazz;
+    jint bits = 0;
+
+    // 1) the eight primitive array constructors plus GetArrayLength
+    {
+        jsize len = 4;
+        jarray arrays[8];
+        arrays[0] = (*env)->NewBooleanArray(env, len);
+        arrays[1] = (*env)->NewByteArray(env, len);
+        arrays[2] = (*env)->NewCharArray(env, len);
+        arrays[3] = (*env)->NewShortArray(env, len);
+        arrays[4] = (*env)->NewIntArray(env, len);
+        arrays[5] = (*env)->NewLongArray(env, len);
+        arrays[6] = (*env)->NewFloatArray(env, len);
+        arrays[7] = (*env)->NewDoubleArray(env, len);
+        int all = 1;
+        for (int i = 0; i < 8; i++) if (!arrays[i]) all = 0;
+        if (all) bits |= 1;
+        if (arrays[4] && (*env)->GetArrayLength(env, arrays[4]) == len) bits |= 4;
+        for (int i = 0; i < 8; i++) if (arrays[i]) (*env)->DeleteLocalRef(env, arrays[i]);
+    }
+
+    // 2) NewObjectArray + Get/SetObjectArrayElement round trip
+    {
+        jclass string_cls = (*env)->FindClass(env, "java/lang/String");
+        jobjectArray arr = string_cls ? (*env)->NewObjectArray(env, 3, string_cls, NULL) : NULL;
+        if (arr) {
+            jstring value = (*env)->NewStringUTF(env, "ADH");
+            if (value) {
+                (*env)->SetObjectArrayElement(env, arr, 1, value);
+                jstring back = (jstring)(*env)->GetObjectArrayElement(env, arr, 1);
+                if (back) {
+                    const char *chars = (*env)->GetStringUTFChars(env, back, NULL);
+                    if (chars) {
+                        if (strcmp(chars, "ADH") == 0) bits |= 2;
+                        (*env)->ReleaseStringUTFChars(env, back, chars);
+                    }
+                    (*env)->DeleteLocalRef(env, back);
+                }
+                if ((*env)->GetObjectArrayElement(env, arr, 0) == NULL) bits |= 2;   /* null entry is legal */
+                (*env)->DeleteLocalRef(env, value);
+            }
+            (*env)->DeleteLocalRef(env, arr);
+        }
+        if (string_cls) (*env)->DeleteLocalRef(env, string_cls);
+    }
+
+    // 3) AllocObject: allocate without running a constructor
+    {
+        jclass target = (*env)->FindClass(env, "com/adh/sandbox/JniCallTarget");
+        jobject obj = target ? (*env)->AllocObject(env, target) : NULL;
+        if (obj) { bits |= 8; (*env)->DeleteLocalRef(env, obj); }
+        if (target) (*env)->DeleteLocalRef(env, target);
+    }
+
+    // 4) CallNonvirtual: the BASE implementation must run even though the child overrides it
+    {
+        jclass child = (*env)->FindClass(env, "com/adh/sandbox/JniNonvirtualChild");
+        jclass base = child ? (*env)->GetSuperclass(env, child) : NULL;
+        jmethodID ctor = child ? (*env)->GetMethodID(env, child, "<init>", "()V") : NULL;
+        jobject obj = (child && ctor) ? (*env)->NewObjectA(env, child, ctor, NULL) : NULL;
+        jmethodID describe = base ? (*env)->GetMethodID(env, base, "describe", "(Ljava/lang/String;)Ljava/lang/String;") : NULL;
+        if (obj && describe) {
+            jstring tag = (*env)->NewStringUTF(env, "t");
+            // All three JNI forms: a C caller (varargs), the V entry and the A entry. Only the
+            // varargs one is what C++ inlines and what C often emits, so each needs its own check.
+            jvalue jargs[1];
+            jargs[0].l = tag;
+            jstring outs[3];
+            outs[0] = (jstring)(*env)->CallNonvirtualObjectMethod(env, obj, base, describe, tag);
+            outs[1] = family_call_nv_v(env, obj, base, describe, tag);
+            outs[2] = (jstring)(*env)->CallNonvirtualObjectMethodA(env, obj, base, describe, jargs);
+            int all_base = 1;
+            for (int i = 0; i < 3; i++) {
+                if (!outs[i]) { all_base = 0; continue; }
+                const char *chars = (*env)->GetStringUTFChars(env, outs[i], NULL);
+                if (!chars || strcmp(chars, "base:t") != 0) all_base = 0;   /* "child:t" = dispatch broke */
+                if (chars) (*env)->ReleaseStringUTFChars(env, outs[i], chars);
+                (*env)->DeleteLocalRef(env, outs[i]);
+            }
+            if (all_base) bits |= 16;
+            if (tag) (*env)->DeleteLocalRef(env, tag);
+        }
+        if (obj) (*env)->DeleteLocalRef(env, obj);
+        if (base) (*env)->DeleteLocalRef(env, base);
+        if (child) (*env)->DeleteLocalRef(env, child);
+    }
+
+    // 5) the reflection bridge: From* must yield the ID the JNI lookup gives, To* must come back named
+    {
+        jclass target = (*env)->FindClass(env, "com/adh/sandbox/JniCallTarget");
+        jclass class_cls = target ? (*env)->GetObjectClass(env, (jobject)target) : NULL;
+        jmethodID get_methods = class_cls ? (*env)->GetMethodID(env, class_cls, "getDeclaredMethods", "()[Ljava/lang/reflect/Method;") : NULL;
+        jmethodID get_fields = class_cls ? (*env)->GetMethodID(env, class_cls, "getDeclaredFields", "()[Ljava/lang/reflect/Field;") : NULL;
+        if (target && get_methods && get_fields) {
+            jobjectArray methods = (jobjectArray)(*env)->CallObjectMethod(env, target, get_methods);
+            jclass method_cls = (*env)->FindClass(env, "java/lang/reflect/Method");
+            jobject reflected = family_find_member(env, methods, method_cls, "combine");
+            if (reflected) {
+                jmethodID mid = (*env)->GetMethodID(env, target, "combine", "(Ljava/lang/String;I)Ljava/lang/String;");
+                jmethodID from = (*env)->FromReflectedMethod(env, reflected);
+                if (mid && from == mid) bits |= 32;
+                jobject back = mid ? (*env)->ToReflectedMethod(env, target, mid, JNI_FALSE) : NULL;
+                if (back) {
+                    jclass back_cls = (*env)->GetObjectClass(env, back);
+                    jmethodID get_name = (*env)->GetMethodID(env, back_cls, "getName", "()Ljava/lang/String;");
+                    jstring name = get_name ? (jstring)(*env)->CallObjectMethod(env, back, get_name) : NULL;
+                    if (name) {
+                        const char *chars = (*env)->GetStringUTFChars(env, name, NULL);
+                        if (chars) {
+                            if (strcmp(chars, "combine") == 0) bits |= 32;
+                            (*env)->ReleaseStringUTFChars(env, name, chars);
+                        }
+                        (*env)->DeleteLocalRef(env, name);
+                    }
+                    (*env)->DeleteLocalRef(env, back_cls);
+                    (*env)->DeleteLocalRef(env, back);
+                }
+                (*env)->DeleteLocalRef(env, reflected);
+            }
+            jobjectArray fields = (jobjectArray)(*env)->CallObjectMethod(env, target, get_fields);
+            jclass field_cls = (*env)->FindClass(env, "java/lang/reflect/Field");
+            jobject reflected_field = family_find_member(env, fields, field_cls, "counter");
+            if (reflected_field) {
+                jfieldID fid = (*env)->GetFieldID(env, target, "counter", "I");
+                jfieldID from = (*env)->FromReflectedField(env, reflected_field);
+                if (fid && from == fid) bits |= 32;
+                jobject back = fid ? (*env)->ToReflectedField(env, target, fid, JNI_FALSE) : NULL;
+                if (back) {
+                    jclass back_cls = (*env)->GetObjectClass(env, back);
+                    jmethodID get_name = (*env)->GetMethodID(env, back_cls, "getName", "()Ljava/lang/String;");
+                    jstring name = get_name ? (jstring)(*env)->CallObjectMethod(env, back, get_name) : NULL;
+                    if (name) {
+                        const char *chars = (*env)->GetStringUTFChars(env, name, NULL);
+                        if (chars) {
+                            if (strcmp(chars, "counter") == 0) bits |= 32;
+                            (*env)->ReleaseStringUTFChars(env, name, chars);
+                        }
+                        (*env)->DeleteLocalRef(env, name);
+                    }
+                    (*env)->DeleteLocalRef(env, back_cls);
+                    (*env)->DeleteLocalRef(env, back);
+                }
+                (*env)->DeleteLocalRef(env, reflected_field);
+            }
+            if (method_cls) (*env)->DeleteLocalRef(env, method_cls);
+            if (field_cls) (*env)->DeleteLocalRef(env, field_cls);
+            if (methods) (*env)->DeleteLocalRef(env, methods);
+            if (fields) (*env)->DeleteLocalRef(env, fields);
+        }
+        if (class_cls) (*env)->DeleteLocalRef(env, class_cls);
+        if (target) (*env)->DeleteLocalRef(env, target);
+    }
+
+    // 6) strings: NewString, the two length queries, the critical pair and the UTF-8 release
+    {
+        const jchar text[5] = { 'A', 'D', 'H', '4', '2' };
+        jstring s = (*env)->NewString(env, text, 5);
+        if (s) {
+            if ((*env)->GetStringLength(env, s) == 5 && (*env)->GetStringUTFLength(env, s) == 5) bits |= 64;
+            jboolean is_copy = JNI_FALSE;
+            const jchar *crit = (*env)->GetStringCritical(env, s, &is_copy);
+            if (crit) {
+                if (crit[0] == 'A' && crit[4] == '2') bits |= 128;
+                (*env)->ReleaseStringCritical(env, s, crit);
+            }
+            const char *utf = (*env)->GetStringUTFChars(env, s, NULL);
+            if (utf) {
+                if (strcmp(utf, "ADH42") == 0) bits |= 128;
+                (*env)->ReleaseStringUTFChars(env, s, utf);
+            }
+            (*env)->DeleteLocalRef(env, s);
+        }
+    }
+
+    // 7) ExceptionCheck with nothing pending must say so (the entry is hooked, the answer must not change)
+    if ((*env)->ExceptionCheck(env) == JNI_FALSE) bits |= 256;
+
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return (jint)(0xAD9000 | bits); }
+    return (jint)(0xAD9000 | bits);
+}
+
 JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_jniFieldProbe(JNIEnv *env, jclass clazz) {
     (void)clazz;
     int calls = 0;

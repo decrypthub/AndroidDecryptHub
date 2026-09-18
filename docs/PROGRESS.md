@@ -15,6 +15,11 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.83 v4.75–v4.79 的设备证据路径（夹具 + v91 `(3j)`）（2026-09-19，host 构建通过；真机待做）**：这几批槽位此前只有 host 侧证明，按老规矩补上"真机一次跑完"的路径。
+      · 沙盒 native 夹具 `Detection.jniFamilyProbe`：八种 `New<Type>Array` + `GetArrayLength`、`NewObjectArray` + 对象数组元素读写（含 **NULL 元素合法** 那一条）、`AllocObject`、**三种形态的 `CallNonvirtualObjectMethod`**（配套新增 `JniNonvirtualBase/Child`：非虚调用必须返回父类实现 `base:t`，返回 `child:t` 就说明 hook 破坏了派发）、反射桥（`FromReflected*` 拿到的 id 必须**等于** `GetMethodID`/`GetFieldID` 的结果；`ToReflected*` 回来的对象名字必须是 `combine`/`counter`）、字符串族（`NewString`/`GetStringLength`/`GetStringUTFLength`/critical 对/`ReleaseStringUTFChars`）、`ExceptionCheck`（无挂起异常时必须报 false）。全过返回 `0xAD91FF`。
+      · `tools/verify_v91_jni_env_fields.sh` 新增 `(3j)`：安装这 29 个槽位（27 个由夹具触发；`FatalError`/`UnregisterNatives` 只验证装卸——不能拿活进程触发）→ 被触发者必须各自有事件、关键字段逐条匹配（`len=4`、`index=0 -> 0x0 (null element)`、`class=com.adh.sandbox.JniCallTarget -> 0x`、`via=com.adh.sandbox.JniNonvirtualBase`、`static=0 -> 0x`、`text="ADH42"`、`pending=false` …）→ 逐个卸载；`pass` 纳入 `familyProbeOk`。
+      · 诚实边界：`CallNonvirtual` 只触发 Object 形态（另外 27 个返回类型槽位共用同一套宏生成 + 84 条签名断言，但真机只证了 Object 这三个入口）；`FatalError`/`UnregisterNatives` 只证可装卸。
+      · 验收：`build_detect.sh` 与 `:app:assembleDebug` 零告警 / 通过；v91 `bash -n` + 内嵌 JS `node --check`；host 全量门禁 **31 PASS / 0 FAIL / 84 SKIP**（115 脚本）。
 - [~] **v4.82 单一来源 + 运行期布局自检：不再"挂到隔壁函数"（2026-09-19，host 验收 PASS；真机待做）**：v4.81 的组基址断言只钉住"组"，钉不住"组内顺序"。这一版把固定槽位改成**一份列表驱动三处**（枚举值 / 可安装名字表 / 名字映射），并加运行期自检——把"枚举与表错位"从"静默挂错函数"变成"拒绝执行 + 明确报错"。
       · 固定槽位改为 `ADH_FIXED_SLOT_LIST` 单一来源（此前枚举与名字表是两份手写清单，v90 只查"名字↔spec index"、查不出顺序）：枚举值、名字表顺序、`env_slot_name()` 的期望名全由它展开。
       · **这同时修掉一个 v4.75 引入的真 bug**：那 13 个新槽位在枚举与名字表里的插入位置不同（`AllocObject` 在枚举里紧跟 `ReleaseDoubleArrayElements`，在表里却排在 `SetObjectArrayElement` 之后），于是 `GetArrayLength`/`NewObjectArray`/`GetObjectArrayElement`/`SetObjectArrayElement` 这四个槽位安装时会命中"隔壁"的 case——正是字段族那种静默错位（评审 P2-1 预测的同一类问题），只是这次由单一来源从根上消除。

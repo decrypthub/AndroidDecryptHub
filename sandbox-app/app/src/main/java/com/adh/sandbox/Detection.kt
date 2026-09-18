@@ -27,6 +27,9 @@ object Detection {
 
     /** v4.72: drives the array-elements family (Get/Release<Type>ArrayElements, copyback + abort). */
     @JvmStatic external fun jniArrayElementsProbe(): Int
+
+    /** v4.83: drives creation, object arrays, AllocObject, CallNonvirtual, the reflection bridge and strings. */
+    @JvmStatic external fun jniFamilyProbe(): Int
     @JvmStatic fun jniEnvValue(): String = "ADH_JNI_ENV_VALUE"
     // v4.19 fixture for the field-ID / byte-array JNIEnv hooks: native code performs
     // GetFieldID / GetStaticFieldID / SetByteArrayRegion / GetByteArrayElements in one call.

@@ -9,7 +9,8 @@
 # The RELRO checks from v58 apply too: the table page must come back read-only after the swap.
 #
 # Sections (3f)-(3h) extend the same chain: the string-copy / direct-buffer entries (v4.63/v4.65), the
-# array-region family (v4.70), the array-elements family (v4.72) and the status filter/counters (v4.80) -
+# array-region family (v4.70), the array-elements family (v4.72), the status filter/counters (v4.80) and the
+# creation / object-array / CallNonvirtual / reflection / string families (v4.83) -
 # the native fixtures drive them
 # with fixed contents, so every entry must emit its own event (start/len/first=[..], plus isCopy and
 # the release mode for the element family, where a JNI_ABORT round also has to be seen discarding).
@@ -359,6 +360,74 @@ if (!stRegionOk) console.log('the "*ArrayRegion" status filter did not return ex
 if (!stInstOk) console.log('the "installed" status filter did not return only the hooked slots');
 const statusSlotOffOk = await uninstallSlot('GetJavaVM');
 
+// (3j) v4.83: the families added after the array work. The fixture walks array creation, object
+// arrays, AllocObject, all three CallNonvirtual forms, the reflection bridge, the string
+// length/critical entries and ExceptionCheck, asserting a value for each section - so a hook that
+// changes target behaviour fails here instead of looking fine. FatalError and UnregisterNatives
+// cannot be triggered on a live process; for those two the section only proves that they install,
+// report and uninstall like any other slot.
+const FAMILY_FUNCS = ['NewBooleanArray', 'NewByteArray', 'NewCharArray', 'NewShortArray', 'NewIntArray',
+  'NewLongArray', 'NewFloatArray', 'NewDoubleArray', 'NewObjectArray', 'GetArrayLength',
+  'GetObjectArrayElement', 'SetObjectArrayElement', 'AllocObject',
+  'CallNonvirtualObjectMethod', 'CallNonvirtualObjectMethodV', 'CallNonvirtualObjectMethodA',
+  'FromReflectedMethod', 'FromReflectedField', 'ToReflectedMethod', 'ToReflectedField',
+  'NewString', 'GetStringLength', 'GetStringUTFLength', 'GetStringCritical', 'ReleaseStringCritical',
+  'ReleaseStringUTFChars', 'ExceptionCheck', 'FatalError', 'UnregisterNatives'];
+const FAMILY_NO_TRIGGER = ['FatalError', 'UnregisterNatives'];
+if (FAMILY_FUNCS.some((f) => !known.has(f))) await skip('agent predates the v4.83 families (redeploy the agent)');
+for (const f of FAMILY_FUNCS) await installSlot(f);
+const preFam = await (await fetch(`${base}/api/captures?session=${encodeURIComponent(session)}&limit=1`)).json().catch(() => null);
+if (!preFam || !Array.isArray(preFam.captures)) await fail('could not read the capture baseline for the family section');
+const famCursor = Math.max(0, ...(preFam.captures ?? []).map((c) => Number(c.id ?? 0)));
+const famCall = await post('/api/java/call', { session, className: 'com.adh.sandbox.Detection', method: 'jniFamilyProbe', params: '', args: [] });
+if (famCall.body?.ok !== true) await skip('jniFamilyProbe unavailable (old APK without the v4.83 fixture?)');
+const famCode = Number(famCall.body?.result?.result ?? -1);
+if (famCode !== 0xAD91FF) await fail(`jniFamilyProbe returned ${famCode}, expected 0xAD91FF (array creation, object arrays, AllocObject, nonvirtual dispatch, reflection bridge, strings, clean ExceptionCheck)`);
+await sleep(1500);
+const famList = await (await fetch(`${base}/api/captures?session=${encodeURIComponent(session)}&limit=600`)).json().catch(() => ({}));
+const famEvents = new Map();
+for (const c of (famList.captures ?? []).filter((x) => x.func === 'JNI_ENV' && Number(x.id ?? 0) > famCursor)) {
+  const d = await (await fetch(`${base}/api/captures/${c.id}`)).json().catch(() => null);
+  let ev = null;
+  try { ev = JSON.parse(String(d?.text ?? '')); } catch { ev = null; }
+  if (!ev?.function || !FAMILY_FUNCS.includes(ev.function)) continue;
+  if (!famEvents.has(ev.function)) famEvents.set(ev.function, []);
+  famEvents.get(ev.function).push(String(ev.value ?? ''));
+}
+const famValues = (f) => famEvents.get(f) ?? [];
+for (const f of FAMILY_FUNCS) console.log(`  event ${f}: ${famValues(f)[0] ?? (FAMILY_NO_TRIGGER.includes(f) ? '(not triggered by design)' : '(missing)')}`);
+const famMissing = FAMILY_FUNCS.filter((f) => !FAMILY_NO_TRIGGER.includes(f) && famValues(f).length === 0);
+// Spot checks on the values the wrappers promise; the fixture already proved the target's view.
+const famChecks = {
+  GetArrayLength: /len=4/,
+  NewObjectArray: /len=3 elem=java\.lang\.String/,
+  GetObjectArrayElement: /index=0 -> 0x0 \(null element\)/,
+  SetObjectArrayElement: /index=1 value=0x/,
+  AllocObject: /class=com\.adh\.sandbox\.JniCallTarget -> 0x/,
+  CallNonvirtualObjectMethod: /via=com\.adh\.sandbox\.JniNonvirtualBase/,
+  FromReflectedMethod: /-> mid=0x/,
+  ToReflectedMethod: /static=0 -> 0x/,
+  FromReflectedField: /-> fid=0x/,
+  ToReflectedField: /static=0 -> 0x/,
+  NewString: /len=5 text="ADH42"/,
+  GetStringLength: /len=5/,
+  GetStringCritical: /text="ADH42"/,
+  ReleaseStringCritical: /chars=0x/,
+  ReleaseStringUTFChars: /chars=0x/,
+  ExceptionCheck: /pending=false/,
+};
+const famBad = [];
+for (const [f, re] of Object.entries(famChecks)) {
+  if (!famValues(f).some((v) => re.test(v))) famBad.push(f);
+}
+const famHealth = famList.health ?? {};
+console.log(`  families: ${FAMILY_FUNCS.length - famMissing.length}/${FAMILY_FUNCS.length} present, ${famBad.length} with a wrong value (capture health: dropped=${famHealth.dropped ?? '?'} backlog=${famHealth.backlog ?? '?'})`);
+if (famMissing.length) console.log('no event for: ' + famMissing.join(', '));
+if (famBad.length) console.log('value mismatch for: ' + famBad.join(', '));
+const famUnhooked = [];
+for (const f of FAMILY_FUNCS) famUnhooked.push(await uninstallSlot(f));
+const familyProbeOk = famMissing.length === 0 && famBad.length === 0 && famUnhooked.every(Boolean);
+
 // (4) unhook, table restored, process alive
 const unhooked = [];
 for (const f of hooked) unhooked.push(await uninstallSlot(f));
@@ -374,7 +443,7 @@ if (!digestOk) console.log('the field digest did not resolve any access to a nam
 if (!patternOk) console.log('the "*Field" pattern did not select the field family (suffix matching)');
 if (!overrideOk) console.log('the SetIntField override did not change what the target stored, or the restore failed');
 if (!rewriteDigestOk) console.log('the field digest did not report the rewritten write (rewrittenSamples/lastRequested)');
-const pass = installedOk && patchedOk && relroOk && calls >= 2 && missing.length === 0 && valueOk && digestOk && patternOk && patternUnhookOk && overrideOk && rewriteDigestOk && stringProbeOk && arrayProbeOk && elementsProbeOk && statusFilterOk && statusSlotOffOk
+const pass = installedOk && patchedOk && relroOk && calls >= 2 && missing.length === 0 && valueOk && digestOk && patternOk && patternUnhookOk && overrideOk && rewriteDigestOk && stringProbeOk && arrayProbeOk && elementsProbeOk && statusFilterOk && statusSlotOffOk && familyProbeOk
   && unhooked.every(Boolean) && restored && alive.length > 0;
 console.log(pass ? 'RESULT:PASS' : 'RESULT:FAIL');
 EOF
