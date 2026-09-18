@@ -1,10 +1,10 @@
 # ADH 功能状态（发布前梳理，2026-09-19 更新）
 
 > 这份文件回答一个问题：**现在到底有什么、什么是验证过的、什么是没验证的、什么还没做完。**
-> 判定只认 `tools/verify_all.sh`（**112 个脚本 = 29 host + 83 device**），不认"看起来能跑"。
+> 判定只认 `tools/verify_all.sh`（**113 个脚本 = 30 host + 83 device**），不认"看起来能跑"。
 > 规格见 `REQUIREMENTS.md`，架构与排期见 `DEVELOPMENT_PLAN.md`，跨会话进度见 `PROGRESS.md`。
 > 最近一次**全绿**门禁：`6319d5d`（设备在位，**92 PASS / 0 FAIL / 2 SKIP**）。
-> 最近一次 host-only 门禁（手机不在位）：**29 PASS / 0 FAIL / 78 SKIP** —— 设备脚本如实记 SKIP，不再冒充通过。
+> 最近一次 host-only 门禁（手机不在位）：**30 PASS / 0 FAIL / 83 SKIP** —— 设备脚本如实记 SKIP，不再冒充通过。
 
 ## 0. 发布物
 
@@ -40,7 +40,7 @@
 | 反检测观测与去特征 | v05_detect, v69(stealth), v70/v72(sites), v73/v74(vtable) | 目标自审（anon r-x、序言比对）；stealth 后 anonExec 2→0；sites 保持入口字节不变 |
 | Java hook（LSPlant） | v42/v43/v52/v53/v65, **v79(stack)**, **v82(hookAll)**, **v83(java_trace digest)** | 单方法/构造器/继承、参数改写、返回值替换、skip original；`stack:true` 给出 App 帧调用链；`hookAll` 一次装全类（截断可见） |
 | native hook | v46, v49, v55, v56, v66, v68, **v84(native_hook_all selection + 槽位预算)**, **v86(限流装配，仅 host)** | inline/addr、软/硬卸载、寄存器事件、浮点参数、千次压测；限流窗口/计数只做了**装配**验收（host），运行时恒等式 `hits = 已发 + throttled` 待真机（§2） |
-| JNI 面 | v54, v57, v58, v59, v60, v62, v63, v64, v67 | RegisterNatives、JNI_OnLoad（含加载时替换）、JNIEnv 76 槽、Call* 三类入口、数组写回、异常保持 |
+| JNI 面 | v54, v57, v58, v59, v60, v62, v63, v64, v67, **v90(表索引 ABI 机检)** | RegisterNatives、JNI_OnLoad（含加载时替换）、JNIEnv **76 槽**（索引逐条与 NDK `jni.h` 的 `JNINativeInterface` 字段序对照，见 v90）、Call* 三类入口、数组写回、异常保持 |
 | 主动调用 / 活体对象 | v45(java_call), v49(native_call), v51(qbdi args), v06(对象读/调用), **v89(字段写入)** | 反射调用 Java 方法/字段；按符号或地址调 native；活体对象字段**读+写**（写入带 before/after；**严格解析**：typo/越界/int 超范围一律拒绝，不再静默写 0；final 字段 fail-loud；参数超长拒绝而不是截断；**字段查找与枚举走父类链**，继承字段不再报 not found） |
 | trace | v10_trace, v10_qbdi, **v78(backtrace)** | 函数参数/线程/时间戳；QBDI 指令级（用后 dlclose）；hook 命中当刻的 x29 调用链 + 符号化 |
 | 内存反汇编（MCP） | v48 | Capstone 5 WASM，绝对地址或 module+offset |

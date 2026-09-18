@@ -144,6 +144,9 @@ SCRIPTS=(
   "verify_v09_methodcode.sh:host"
   # Live-object field WRITE (v4.53): read -> patch -> read back, and a final field must refuse.
   "verify_v89_object_set.sh:device"
+  # JNIEnv table ABI (v4.54): every hand-written slot index is checked against the SDK jni.h, so
+  # adding a slot (e.g. the field accessors) is machine-verified before it ever runs in a target.
+  "verify_v90_jni_table_abi.sh:host"
   "verify_v10_mcp.sh:host"
   "verify_v10_webui.sh:host"
   "verify_v33_backends.sh:host"

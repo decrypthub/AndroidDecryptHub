@@ -15,6 +15,11 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.54 JNIEnv 槽位索引的 ABI 机检（2026-09-19，host 验收 PASS）**：上一轮评审把"补 JNIEnv `Get/Set<Type>Field` 槽位"列为覆盖面的下一台阶，但**索引写错会打到相邻的 JNI 函数**——那会影响目标里每一次 JNI 调用。所以在动它之前，先把"索引表到底对不对"变成机检。
+      · 新增 `tools/verify_v90_jni_table_abi.sh`（host，只需 NDK 头）：解析 NDK `jni.h` 里 `struct JNINativeInterface` 的**字段顺序**（4 个 reserved + 229 个函数指针 = 233 槽），与 agent 的 `env_hook_spec_index()` 表（把 `ADH_CALL_VALUE_FAMILIES`/`ADH_CALL_VOID_FAMILIES` 两套宏行展开成 `Name/NameV/NameA`）逐条比对，并检查"要安装的槽位是否都有索引"（缺索引时安装会 refuse）。
+      · 结果：**13 个固定槽 + 21 个调用族 × 3 = 76 条全部与 jni.h 一致**（`checked 76 indices against the ABI`，PASS）——这同时证明现有 76 槽是照 AB I 写的、没有历史错位；与 agent 侧原有的运行期保护（`env_hook_slot()` 取真实结构体字段 + `slot_offset == spec * sizeof(void*)` 不符即拒绝 patch）互为呼应。
+      · 意义：**下一步加 `Get/Set<Type>Field` 36 个槽位时，索引由本脚本机器校验**——编译器偏移 + 静态 ABI 对照 + 运行期 refuse，三层保证"不会打到邻居"。全量 host 门禁 **30 PASS / 0 FAIL / 83 SKIP**（113 脚本 = 30 host + 83 device）。
+      · **下一步（待实现）**：按字段族加 36 个槽位（Object/Boolean/Byte/Char/Short/Int/Long/Float/Double × Get/Set × instance/static），jni.h 给出的期望索引：instance Get 95–103 / Set 104–112、static Get 145–153 / Set 154–162；沙盒需新增走 `JNIEnv->SetIntField/GetObjectField` 的 native 夹具，再加 `verify_v5x_jni_env_fields.sh`（device）验证事件与转发。
 - [~] **v4.53b 活体对象：父类链查找 + 继承字段枚举（2026-09-19，host 验收 PASS；真机待做）**：评审指出 `object_inspect`/`object_invoke`/`object_set` 都只对**本类**做 `getDeclaredField`——一个 `class Child : Base` 的字段会被报成 "target field not found"，分析者很容易误读成"这个对象没有该字段"。这是**能不能用**的问题，不是"多一种类型"。
       · agent：新增 `adh_find_field_walk()`（沿 `getSuperclass()` 上溯，`Object.getSuperclass()==NULL` 结束）替换三个命令里的持有者/目标字段查找，失败文案改成 `... (searched the superclass chain)`；`object_inspect` 的**枚举**也从"只列本类"改成走整条父类链，每条记录带上**声明类**（`"class":"com.adh.sandbox.HeapProbe$InheritBase"`），否则对一个继承字段写入后根本没有独立的读回路径。
       · 沙盒：新增 `HeapProbe.InheritBase/InheritChild` + `sInherited` 夹具（字段 `inherited` 声明在父类），`tools/verify_v89_object_set.sh` 增加一段：写 `inherited 5 → 9` → 复读必须看到 `9` **且声明类是父类**（老 APK 缺夹具时该段跳过，不影响其它断言）。
