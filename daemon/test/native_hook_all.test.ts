@@ -91,3 +91,16 @@ test('the batch limit comes from the agent slot budget, not from a guess', () =>
   assert.equal(effectiveBatchLimit(8, 64).limit, 8);
   assert.equal(effectiveBatchLimit(1000, 64).limit, 16);
 });
+
+test('a corrupt or oddly-typed slot budget is handled explicitly', () => {
+  // JSON numbers arrive as strings when a producer stringifies them: still usable
+  assert.equal(effectiveBatchLimit(8, Number('4')).limit, 4);
+  // negative = corrupt report, not "0 free": say what was received instead of putting words in the agent mouth
+  const negative = effectiveBatchLimit(8, -3);
+  assert.equal(negative.blocked, true);
+  assert.match(negative.reason, /corrupt slot budget \(free=-3\)/);
+  // NaN falls back to the request with a note (older payloads and broken producers look the same)
+  const nan = effectiveBatchLimit(8, Number.NaN);
+  assert.equal(nan.limit, 8);
+  assert.match(nan.reason, /did not report a slot budget/);
+});

@@ -55,7 +55,12 @@ try {
   if (!none.blocked || none.limit !== 0) problems.push('0 free slots must refuse the batch, not fail symbol by symbol');
   if (noneBudget.limit !== 8) problems.push('an older payload without a budget must fall back to the request');
   const agentSrc = fs.readFileSync(`${root}/agent/src/hook/native_hooks.cpp`, 'utf8');
-  if (!agentSrc.includes('\\"slots\\":{\\"max\\":%d')) problems.push('agent status must report the slot budget (slots.max/used/free/byMode)');
+  if (!agentSrc.includes('\\"slots\\":{\\"max\\":%d')) problems.push('agent status must report the slot budget (slots.max/used/active/free/byMode)');
+  // Pin WHAT used counts: the c94fb9d correction (ctx.used, not the active count) is the part that
+  // is easy to regress, and a format-string match alone cannot see it.
+  if (!agentSrc.includes('if (ctx.used) used_slots++')) problems.push('slots.used must count consumed slots (ctx.used), not active hooks');
+  // ...and a failed install must not burn the reservation.
+  if (!agentSrc.includes('g_native_hooks[slot].used = 0;')) problems.push('a failed install must return its slot reservation');
   const helperSrc = fs.readFileSync(`${root}/daemon/src/native_hook_all.ts`, 'utf8');
   if (!helperSrc.includes('action: \'status\'')) problems.push('native_hook_all must read the slot budget from a status call');
   if (!helperSrc.includes('limitReason')) problems.push('the response must explain the effective limit');

@@ -22,7 +22,13 @@ export function effectiveBatchLimit(requested: number, freeSlots: number | null)
   if (freeSlots == null || !Number.isFinite(Number(freeSlots))) {
     return { limit: want, reason: `the agent did not report a slot budget (older payload): assuming the requested ${want}`, blocked: false };
   }
-  const free = Math.max(0, Math.trunc(Number(freeSlots)));
+  const raw = Math.trunc(Number(freeSlots));
+  if (raw < 0) {
+    // A negative budget is a corrupt/overflowed report: saying "0 free" would put words in the
+    // agent mouth, so refuse and say what was actually received.
+    return { limit: 0, reason: `the agent reported a corrupt slot budget (free=${raw})`, blocked: true };
+  }
+  const free = raw;
   if (free === 0) return { limit: 0, reason: 'the agent reports 0 free hook slots: unhook something first', blocked: true };
   if (free < want) return { limit: free, reason: `only ${free} of the requested ${want} hooks fit (agent reports ${free} free slot(s))`, blocked: false };
   return { limit: want, reason: `${free} slot(s) free, installing up to ${want}`, blocked: false };
@@ -110,6 +116,9 @@ export interface NativeHookAllResult {
   slots: { max: number; used: number; active?: number; free: number; byMode?: Record<string, number> } | null;
   /** Why the batch was (or was not) truncated - the agent slot budget, not a guess. */
   limitReason: string;
+  /** The limit that was actually used, next to what the caller asked for. */
+  effectiveLimit: number;
+  requestedLimit: number;
   slotLimited: boolean;
   hooks: { hookId: number; symbol: string; address: string }[];
   failures: { symbol: string; error: string }[];
@@ -169,6 +178,8 @@ export async function nativeHookAll(session: string, opts: {
         }
       : null,
     limitReason: budget.reason,
+    effectiveLimit: budget.limit,
+    requestedLimit: Math.max(1, Math.min(16, Math.trunc(Number(opts.limit ?? 8) || 8))),
     slotLimited: matched > selected.length,
     hooks,
     failures,

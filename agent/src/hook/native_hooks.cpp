@@ -473,7 +473,17 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
 
     auto fail = [&](const char *message) -> int {
         pthread_mutex_lock(&g_native_hooks_lock);
-        if (g_native_hooks[slot].active == 2) reset_context(g_native_hooks[slot]);
+        if (g_native_hooks[slot].active == 2) {
+            // The slot was only RESERVED here (active==2 means it was never published, so no hit can
+            // be in flight - the recorder bails out unless active==1). Hand it back instead of
+            // burning it: before this, sixteen failed installs (a typo, a missing symbol, an
+            // unusable address) consumed the entire budget for the lifetime of the process, and with
+            // the v4.52 slot accounting those burned slots showed up as "used" as well.
+            reset_context(g_native_hooks[slot]);
+            g_native_hooks[slot].used = 0;
+            g_native_hook_slot_ids[slot].store(0, std::memory_order_relaxed);
+            g_native_hook_hits[slot].store(0ULL, std::memory_order_relaxed);
+        }
         pthread_mutex_unlock(&g_native_hooks_lock);
         set_error(error, error_size, "%s", message);
         return 0;

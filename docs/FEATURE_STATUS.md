@@ -22,7 +22,7 @@
 | 层 | 位置 | 承担什么 | 规模 |
 |---|---|---|---|
 | **Agent**（目标进程内） | `agent/` → `libadh_agent.so` | **40 个命令分支**：GOT/inline/addr/sites/vtable hook、Java(LSPlant) hook（单方法 + `hookAll` 批量 + 参数改写/返回值替换/skip/调用链）、JNI_OnLoad（含加载时 watch）/RegisterNatives/JNIEnv 76 槽、函数与 QBDI trace、dex/so/内存 dump、maps/内存读写搜、ART 结构枚举、活体对象自省、主动触发、`load_so`、`native_call`（整数+浮点）、`native_backtrace`、`syscall_watch`、轻量 RPC —— **只采集/执行，不做分析** | C/C++，产物 817 KB |
-| **Host ADH Daemon**（主机） | `daemon/` | **76 个 MCP 工具 + 86 条 HTTP 路由**：dex 解析/索引(SQLite)/搜索/xref、Capstone 反汇编与 syscall 归因/参数解码、trace 摘要、syscall 摘要、脱壳编排与重建、工件存储、Web UI、MCP server | TypeScript（含 12 个单测文件、143 条用例） |
+| **Host ADH Daemon**（主机） | `daemon/` | **76 个 MCP 工具 + 86 条 HTTP 路由**：dex 解析/索引(SQLite)/搜索/xref、Capstone 反汇编与 syscall 归因/参数解码、trace 摘要、syscall 摘要、脱壳编排与重建、工件存储、Web UI、MCP server | TypeScript（含 12 个单测文件、144 条用例） |
 | **Device**（手机侧） | `device/` | AIDL 作用域读写、模块状态、目标进程启停、可选后端开关 —— **不做分析** | Kotlin |
 | **注入器** | `injector/zygisk`、`injector/xposed` | 把 `.so` 送进目标进程（Zygisk 走 **memfd**，目标 maps 不出现模块路径）+ 传真实包名 | C++/Java |
 | **可选后端** | `tools/`（Gadget/eCapture） | 另一种进入/观测方式，默认关闭 | 脚本/薄 APK |
@@ -54,7 +54,7 @@
 | 注入足迹 | v26_footprint, v01 | release 剥离 + 仅 3 个动态导出 + 无 RWX LOAD |
 | 字符串去特征 | **v88**, scan_agent_signatures, patch_vendor_signatures | 自己的 tag/文案/自名/fixture 默认值全部清零（含 DT_SONAME）；vendored LSPlant 的三处（含运行时 dex source name）由 fetch 期补丁清掉并机检；剩余 Dobby/导出/Java bridge 等按只许降预算记账；门禁带**负对照**（植入 token 必须被抓到） |
 | MCP 可操作性 / 设备文件系统 | **v87**, v25_fsbrowser | 每个 agent op 必须能从 MCP 导入图到达（否则在 `INTERNAL_OPS` 写明理由）：`fs_list`/`fs_read` 与 REST 共用实现；存活/引擎/通道三个探针的判定显式（引擎 `ok` = fired && protRestored） |
-| 单元测试（host） | v76, v80, v81, v83, v84, v85, **v86**, **v87** | syscall 归因/参数解码/一站式装配、trace 摘要、backtrace dynsym、Java trace（含三阶段装配与 drain 守卫）、native 批量选择、native 限流（默认/夹紧/拒绝垃圾值 + 安装回路真实 payload）、探针判定与设备文件读取（二进制/超大/截断/坏 base64）：**113 条** `node --test` 用例（合计含 automation 30 条 = 143；v81/v83/v86/v87 按文件最小数断言） |
+| 单元测试（host） | v76, v80, v81, v83, v84, v85, **v86**, **v87** | syscall 归因/参数解码/一站式装配、trace 摘要、backtrace dynsym、Java trace（含三阶段装配与 drain 守卫）、native 批量选择、native 限流（默认/夹紧/拒绝垃圾值 + 安装回路真实 payload）、探针判定与设备文件读取（二进制/超大/截断/坏 base64）：**114 条** `node --test` 用例（合计含 automation 30 条 = 144；v81/v83/v86/v87 按文件最小数断言） |
 
 ## 2. 待真机验证（代码 + host 验收已完成，手机不在位）
 
@@ -80,4 +80,4 @@
 
 - 可以发布：`libadh_agent.so` + Zygisk 包/Manager（v0.3.10）+ 三个可选后端（Gadget/Xposed/eCapture，均默认关闭）。
 - 发布口径只认 `verify_all.sh` 的 pass/fail 与本文 §1；§2 的项在真机复验前不算通过。
-- 已知边界（不隐瞒）：arm64-v8a only；Java/native 各 16 个并发 hook 槽（`status` 现在报告 `slots.max/used/free/byMode` 与 `maxHooks`，批量安装按预算截断并在 0 空闲时 fail-loud）；`-fomit-frame-pointer` 的第三方库只能拿到 1 帧调用链；高频事件用 `throttleMs` 限流（实现 + host 验收完成，真机验证待做），事件环另有 `dropped` 记账；全量 syscall 拦截（seccomp/PTRACE_SYSEMU）仍属 L3 未实现；Frida Gadget 后端用官方二进制（未魔改去特征）。
+- 已知边界（不隐瞒）：arm64-v8a only；Java/native 各 16 个并发 hook 槽（`status` 报告 `slots{max,used,active,free,byMode}` 与 `maxHooks`：**`used` = 已占用槽位**，软卸载的 inline 钩子仍占、失败装不再占；批量安装按 `free` 截断并在 0 空闲时 fail-loud）；`-fomit-frame-pointer` 的第三方库只能拿到 1 帧调用链；高频事件用 `throttleMs` 限流（实现 + host 验收完成，真机验证待做），事件环另有 `dropped` 记账；全量 syscall 拦截（seccomp/PTRACE_SYSEMU）仍属 L3 未实现；Frida Gadget 后端用官方二进制（未魔改去特征）。
