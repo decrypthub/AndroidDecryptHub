@@ -4,6 +4,8 @@
 // context on every observe. This renders the same tree as terse lines an AI can read directly,
 // while refs stay usable for phone_act.
 
+import { finiteNumber } from './num.ts';
+
 export interface ScreenTextOptions { maxNodes?: number; maxTextLength?: number }
 
 const DEFAULT_MAX_NODES = 60;
@@ -15,8 +17,9 @@ function clip(value: unknown, max: number): string {
 }
 
 export function renderScreenText(result: any, options: ScreenTextOptions = {}): string {
-  const maxNodes = Math.max(1, Math.min(400, Number(options.maxNodes ?? DEFAULT_MAX_NODES)));
-  const maxText = Math.max(8, Math.min(200, Number(options.maxTextLength ?? DEFAULT_MAX_TEXT)));
+  // NaN-safe (v4.99): Number('abc') used to reach slice(0, NaN) -> an empty render with no warning.
+  const maxNodes = Math.trunc(finiteNumber(options.maxNodes, DEFAULT_MAX_NODES, 1, 400));
+  const maxText = Math.trunc(finiteNumber(options.maxTextLength, DEFAULT_MAX_TEXT, 8, 200));
   const screen = result?.screen ?? {};
   const nodes: any[] = Array.isArray(result?.nodes) ? result.nodes : [];
   const lines: string[] = [];

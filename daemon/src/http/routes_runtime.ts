@@ -82,15 +82,20 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
       const sid = pickSid(session);
       if (!sid || !action) return send(400, { error: 'need session, action' });
       if (mode === 'inline' && addr && confirm !== true) return send(400, { error: 'native_hook inline addr requires confirm:true' });
-      if (mode === 'inline' && addr) {
+      // v4.99: same coverage and normalization as the MCP tool - every raw-address hook mode
+      // (inline/sites/vtable) is checked, the agent receives the address that was checked, and
+      // action:unhook/status (hookId only) is not blocked by a stale addr.
+      let hookAddr = typeof addr === 'string' ? addr : '';
+      if (action === 'hook' && addr && (mode === 'inline' || mode === 'sites' || mode === 'vtable')) {
         const guard = await assertCallableAddress(sid, String(addr));
         if (!guard.ok) return send(400, { error: guard.error });
+        hookAddr = guard.addr;
       }
       const throttle = parseThrottleMs(throttleMs);
       if ('error' in throttle) return send(400, { error: throttle.error });
       try {
         const r = await sendCmd(sid, 'native_hook', {
-          action, hookId: Number(hookId ?? 0), mode: mode ?? '', module: module ?? '', symbol: symbol ?? '', addr: addr ?? '',
+          action, hookId: Number(hookId ?? 0), mode: mode ?? '', module: module ?? '', symbol: symbol ?? '', addr: hookAddr,
           skipOriginal: skipOriginal ? 'true' : 'false', returnValue: returnValue ?? '',
           backtrace: backtrace ? 'true' : 'false',
           throttleMs: throttle.ms,
@@ -113,7 +118,7 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
       if (!guard.ok) return send(400, { error: guard.error });
       try {
         const r = await sendCmd(sid, 'native_call', {
-          module: module ?? '', symbol: symbol ?? '', addr: addr ?? '',
+          module: module ?? '', symbol: symbol ?? '', addr: guard.addr,
           args: Array.isArray(args) ? args.map((v: any) => String(v)).join(',') : String(args ?? ''),
         }, 20_000);
         return send(r.ok ? 200 : 502, r);

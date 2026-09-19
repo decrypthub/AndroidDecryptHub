@@ -29,6 +29,15 @@ function hexAddress(value: bigint): string {
   return `0x${value.toString(16)}`;
 }
 
+/**
+ * Canonical form of a caller-supplied address for the agent. The agent parses addresses with
+ * strtoull(...,0), so the text the daemon validated and the text the agent acts on must be the
+ * same string - this is the single place that decides how a bare address is read.
+ */
+export function normalizeAddressForAgent(addr: string): string {
+  return hexAddress(parseAddress(addr));
+}
+
 /** Thrown when a module name matches more than one loaded module. */
 /**
  * Classify an absolute address against the live maps: is it mapped at all, and is that mapping
@@ -42,15 +51,21 @@ export interface AddressClass { mapped: boolean; executable: boolean; path?: str
  * must be mapped AND executable before the agent is asked to call it. Kept here so the two paths
  * cannot drift - the REST route used to skip the check the MCP tool performed.
  */
-export async function assertCallableAddress(sid: string, addr: string): Promise<{ ok: true } | { ok: false; error: string }> {
+export async function assertCallableAddress(sid: string, addr: string): Promise<{ ok: true; addr: string } | { ok: false; error: string }> {
   const trimmed = String(addr ?? '').trim();
-  if (!trimmed) return { ok: true };                      // module+symbol path; the agent resolves it
+  if (!trimmed) return { ok: true, addr: '' };            // module+symbol path; the agent resolves it
   const maps = await sendCmd(sid, 'maps');
   if (!maps.ok) throw new Error(maps.error ?? 'maps command failed');
   const cls = classifyAddress(maps.regions ?? [], trimmed);
   if (!cls.mapped) return { ok: false, error: `addr ${trimmed} is not in any mapped region of the target (stale or wrong)` };
   if (!cls.executable) return { ok: false, error: `addr ${trimmed} is mapped${cls.path ? ' (' + cls.path + ')' : ''} but not executable - refusing to use it as a call or hook target` };
-  return { ok: true };
+  // Hand back the address that was actually checked (v4.99). The agent parses with strtoull(...,0),
+  // where a bare digit string is decimal - or octal with a leading zero - so forwarding the caller's
+  // original text could reach a different address than the one validated here ("010000000000" is
+  // 10_000_000_000 to this guard and 0x40000000 to strtoull). The normalized 0x form is
+  // unambiguous for both sides, and it also drops the surrounding whitespace that used to send a
+  // padded string into the agent's addr branch instead of the module+symbol path.
+  return { ok: true, addr: normalizeAddressForAgent(trimmed) };
 }
 
 export function classifyAddress(regions: MapsRegion[], addr: string | bigint | number): AddressClass {

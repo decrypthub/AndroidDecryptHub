@@ -264,6 +264,13 @@ static int parse_typed_args(const char *csv, unsigned long long *ints, int *int_
 // leaked on the timeout path - the worker may still be writing to it, and one small struct per
 // abandoned call is cheaper than a use-after-free.
 #define ADH_NATIVE_CALL_WATCHDOG_S 15
+// A call that never returns keeps its worker thread alive (the watchdog cannot cancel it) and every
+// worker holds a full thread stack, so a retry loop against a hung function could slowly fill the
+// target with abandoned threads. Past this many outstanding workers a new call is refused - fail
+// loud instead of degrading the process we are supposed to observe.
+#define ADH_NATIVE_CALL_MAX_OUTSTANDING 4
+static pthread_mutex_t g_native_call_lock = PTHREAD_MUTEX_INITIALIZER;
+static int g_native_call_outstanding = 0;
 
 struct NativeCallJob {
     void *target;
@@ -274,6 +281,8 @@ struct NativeCallJob {
     unsigned long long fp_result;
     long long duration_ns;
     int pending_exception;
+    int probe_unavailable;   // JNIEnv attach failed: the pending-exception probe never ran
+    int call_done;           // the target returned; result/fp_result/duration_ns are published
     pthread_mutex_t lock;
     pthread_cond_t cond;
     int done;
@@ -292,18 +301,31 @@ static void *native_call_worker(void *arg) {
         job->result = ((fn8_t)job->target)(job->ints[0], job->ints[1], job->ints[2], job->ints[3],
                                            job->ints[4], job->ints[5], job->ints[6], job->ints[7]);
     }
-    job->duration_ns = now_ns() - start;
+    long long duration_ns = now_ns() - start;
+    // Publish the call result BEFORE the JNI probe: the watchdog window is about the call, and an
+    // AttachCurrentThread that blocks must not turn a returned call into "still running".
+    pthread_mutex_lock(&job->lock);
+    job->duration_ns = duration_ns;
+    job->call_done = 1;
+    pthread_cond_signal(&job->cond);
+    pthread_mutex_unlock(&job->lock);
     // The pending-exception probe has to run on the thread that made the call.
     int did_attach = 0;
     JNIEnv *env = adh_jni_attach(&did_attach);
     if (env) {
         job->pending_exception = adh_jni_exception_check(env) ? 1 : 0;
         adh_jni_detach(did_attach);
+    } else {
+        job->probe_unavailable = 1;
     }
     pthread_mutex_lock(&job->lock);
     job->done = 1;
     pthread_cond_signal(&job->cond);
     pthread_mutex_unlock(&job->lock);
+    // No longer outstanding whether it timed out or not: the counter tracks live workers.
+    pthread_mutex_lock(&g_native_call_lock);
+    if (g_native_call_outstanding > 0) g_native_call_outstanding--;
+    pthread_mutex_unlock(&g_native_call_lock);
     return NULL;
 }
 
@@ -337,6 +359,17 @@ void adh_cmd_native_call(int fd, const char *id, const char *module, const char 
             send_line(fd, out);
             return;
         }
+        // The host guard checks this too (v4.94), but nothing forces a client to go through the
+        // host: an unmapped or non-executable address must not be called just because it parsed.
+        if (!adh_addr_is_executable((void *)(uintptr_t)addr_value)) {
+            char out[420];
+            snprintf(out, sizeof(out),
+                     "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"native_call\",\"ok\":false,"
+                     "\"error\":\"addr 0x%llx is not in an executable mapping of this process\"}\n",
+                     idj, (unsigned long long)addr_value);
+            send_line(fd, out);
+            return;
+        }
         target = (void *)(uintptr_t)addr_value;
         source = "addr";
     } else if (module && module[0] && symbol && symbol[0]) {
@@ -357,7 +390,9 @@ void adh_cmd_native_call(int fd, const char *id, const char *module, const char 
     // are tracked separately; integers are always loaded into x0-x7 too, so pointer/handle
     // arguments can be combined with FP ones.
     unsigned long long ints[8] = {0};
-    // fps[0..7] are loaded into d0-d7; the FP return lands in g_adh_fp_call_result.
+    // fps[0..7] are loaded into d0-d7; the FP return is written through the out pointer adh_fp_call()
+    // is given (fp_call.S stores d0 via x1) - never a global, which is what keeps concurrent
+    // watchdog workers from mixing their results.
     unsigned long long fps[8] __attribute__((aligned(16))) = {0};
     int int_argc = 0, fp_argc = 0, argc = 0;
     char error[256] = "";
@@ -372,6 +407,18 @@ void adh_cmd_native_call(int fd, const char *id, const char *module, const char 
         return;
     }
 
+    pthread_mutex_lock(&g_native_call_lock);
+    int outstanding = g_native_call_outstanding;
+    pthread_mutex_unlock(&g_native_call_lock);
+    if (outstanding >= ADH_NATIVE_CALL_MAX_OUTSTANDING) {
+        char out[460];
+        snprintf(out, sizeof(out),
+                 "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"native_call\",\"ok\":false,"
+                 "\"error\":\"%d calls are still running in the target (abandoned after the watchdog window); refusing a new call until they return\"}\n",
+                 idj, outstanding);
+        send_line(fd, out);
+        return;
+    }
     struct NativeCallJob *job = (struct NativeCallJob *)calloc(1, sizeof(*job));
     if (!job) {
         send_oom(fd, idj, "native_call");
@@ -395,19 +442,47 @@ void adh_cmd_native_call(int fd, const char *id, const char *module, const char 
         free(job);
         return;
     }
+    pthread_mutex_lock(&g_native_call_lock);
+    g_native_call_outstanding++;
+    pthread_mutex_unlock(&g_native_call_lock);
     struct timespec watchdog;
     clock_gettime(CLOCK_REALTIME, &watchdog);
     watchdog.tv_sec += ADH_NATIVE_CALL_WATCHDOG_S;
-    int finished = 0;
+    int finished = 0, returned = 0;
+    unsigned long long early_result = 0, early_fp_result = 0;
+    long long early_duration_ns = 0;
     pthread_mutex_lock(&job->lock);
     while (!job->done) {
         if (pthread_cond_timedwait(&job->cond, &job->lock, &watchdog) == ETIMEDOUT) break;
     }
     finished = job->done;
+    returned = job->call_done;
+    early_result = job->result;
+    early_fp_result = job->fp_result;
+    early_duration_ns = job->duration_ns;
     pthread_mutex_unlock(&job->lock);
     if (!finished) {
         pthread_detach(worker);          // the call keeps running; the job must stay alive
-        char out[560];
+        char out[720];
+        if (returned) {
+            // The target returned inside the window; only the post-call JNI probe is still busy
+            // (it attaches this worker to the VM). Saying "still running in the target" would be
+            // wrong, so hand back the result and admit the probe is unavailable.
+            char earlyfp[128] = "";
+            if (fp_argc > 0)
+                snprintf(earlyfp, sizeof(earlyfp),
+                         ",\"fpResult\":\"0x%llx\",\"returnBank\":\"d0\",\"x0MayBeStale\":true",
+                         early_fp_result);
+            snprintf(out, sizeof(out),
+                     "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"native_call\",\"ok\":true,"
+                     "\"timedOut\":false,\"exceptionProbe\":\"unavailable\",\"source\":\"%s\",\"target\":\"0x%llx\","
+                     "\"result\":\"0x%llx\",\"resultDecimal\":%llu,\"durationUs\":%lld%s,"
+                     "\"error\":\"the call returned, but the post-call JNI exception probe did not finish within the watchdog window; a pending Java exception is not reported\"}\n",
+                     idj, source, (unsigned long long)(uintptr_t)target, early_result, early_result,
+                     early_duration_ns / 1000, earlyfp);
+            send_line(fd, out);
+            return;
+        }
         snprintf(out, sizeof(out),
                  "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"native_call\",\"ok\":false,"
                  "\"timedOut\":true,\"source\":\"%s\",\"target\":\"0x%llx\",\"watchdogSeconds\":%d,"
@@ -421,6 +496,7 @@ void adh_cmd_native_call(int fd, const char *id, const char *module, const char 
     unsigned long long fp_result = job->fp_result;
     long long duration_ns = job->duration_ns;
     int pending_exception = job->pending_exception;
+    int probe_unavailable = job->probe_unavailable;
     pthread_mutex_destroy(&job->lock);
     pthread_cond_destroy(&job->cond);
     free(job);
@@ -457,12 +533,14 @@ void adh_cmd_native_call(int fd, const char *id, const char *module, const char 
     char out[1400];
     snprintf(out, sizeof(out),
              "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"native_call\",\"ok\":%s,\"timedOut\":false,"
-             "\"pendingException\":%s,\"error\":\"%s\",\"source\":\"%s\",\"module\":\"%s\",\"symbol\":\"%s\",\"target\":\"0x%llx\","
+             "\"exceptionProbe\":\"%s\",\"pendingException\":%s,\"error\":\"%s\",\"source\":\"%s\",\"module\":\"%s\",\"symbol\":\"%s\",\"target\":\"0x%llx\","
              "\"args\":\"[%s]\",\"argCount\":%d,\"result\":\"0x%llx\",\"resultDecimal\":%llu,"
              "\"durationUs\":%lld,\"fpSupported\":true%s}\n",
              idj, pending_exception ? "false" : "true",
+             probe_unavailable ? "unavailable" : "ok",
              pending_exception ? "true" : "false",
-             pending_exception ? "called function left a pending Java exception: the returned value is not trustworthy" : "",
+             pending_exception ? "called function left a pending Java exception: the returned value is not trustworthy"
+                               : (probe_unavailable ? "the post-call JNI exception probe could not run (JNIEnv attach failed); a pending Java exception is not reported" : ""),
              source, modulej, symbolj, (unsigned long long)(uintptr_t)target,
              argsj, argc, result, result, duration_ns / 1000, fpjson);
     send_line(fd, out);

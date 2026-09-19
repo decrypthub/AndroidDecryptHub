@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveModule, ModuleAmbiguousError, classifyAddress } from '../src/memory.ts';
+import { resolveModule, ModuleAmbiguousError, classifyAddress, normalizeAddressForAgent } from '../src/memory.ts';
 
 const mod = (name: string, path: string) => ({ name, path, base: '7000000000', end: '7000100000', size: 65536, segs: 1 });
 
@@ -27,4 +27,18 @@ test('an address is classified against the live maps before anything is called',
   assert.equal(classifyAddress(regions, '0x6000000000').mapped, false);          // not mapped at all
   assert.equal(classifyAddress(regions, '0x7000100000').mapped, false);          // end is exclusive
   assert.equal(classifyAddress(regions, 'not-an-address').mapped, false);        // garbage never maps
+});
+
+test('the address handed to the agent is the one the guard checked', () => {
+  // The agent parses with strtoull(...,0): a bare digit string is decimal there and octal with a
+  // leading zero - "010000000000" used to be 10_000_000_000 for the guard and 0x40000000 for the
+  // agent. The guard now hands over its own normalized form, so both sides mean the same address.
+  assert.equal(normalizeAddressForAgent('0x7000001000'), '0x7000001000');
+  assert.equal(normalizeAddressForAgent('  0x7000001000  '), '0x7000001000');   // whitespace dropped
+  assert.equal(normalizeAddressForAgent('0X7000001000'), '0x7000001000');       // case normalized
+  assert.equal(normalizeAddressForAgent('7f0000abc0'), '0x7f0000abc0');         // bare hex keeps a-f
+  assert.equal(normalizeAddressForAgent('010000000000'), '0x2540be400');        // decimal, never octal
+  assert.equal(normalizeAddressForAgent('7000001000'), '0x1a13b89e8');          // all-digit = decimal
+  assert.throws(() => normalizeAddressForAgent('0x7000000000garbage'));
+  assert.throws(() => normalizeAddressForAgent('-1'));
 });

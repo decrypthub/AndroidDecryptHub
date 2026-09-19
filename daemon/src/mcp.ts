@@ -22,6 +22,7 @@ import { nativeHookAll, nativeUnhookAll } from './native_hook_all.ts';
 import { normalizeThrottleMs } from './native_hook_args.ts';
 import { agentPing, hookEngineSelftest, protocolSelfTest } from './agent_probe.ts';
 import { listDeviceDir, readDeviceFile } from './fs_browse.ts';
+import { finiteNumber } from './num.ts';
 import { jniFieldDigest } from './jni_field_digest.ts';
 import { syscallTraceStart, syscallTraceDigest, syscallTraceStop } from './syscall_trace.ts';
 import { backendMatrix, classifySession } from './backends.ts';
@@ -53,15 +54,21 @@ export const MCP_TOOLS: { name: string; description: string; inputSchema: any; h
 { name: 'java_call', description: 'Invoke a live Java method through reflection. params is a comma-separated parameter-type list; args is a JSON array of string/number/boolean/null values; field names a static field holding the receiver for instance methods. Returns the original result or a fail-loud exception.', inputSchema: { type: 'object', properties: { session: S, className: S, method: S, params: S, field: S, args: { type: 'array' } }, required: ['className', 'method'] }, handler: (a) => agentCmd(a.session, 'java_call', { className: a.className, method: a.method, params: a.params ?? '', field: a.field ?? '', args: JSON.stringify(a.args ?? []) }, 20_000) },
 { name: 'native_hook', description: 'Install, remove or inspect native hooks. backtrace:true makes every event carry the caller chain captured AT THE HIT (x30 + the x29 walk inside the thread stack), which native_backtrace then symbolizes. mode=got needs module+symbol; mode=inline accepts module+symbol or addr; mode=sites (module+symbol) rewrites the B/BL call sites that reach the function instead of the function entry, so the prologue of the target stays byte-identical while the CALLER bytes change (use it when the target verifies the prologue of the function itself). scope picks where to look: module (default, the target module), all (every file-backed module except JIT memfds, app code first; status reports scanned bytes and truncated when the budget stops it), or one module name/basename; sites bounds how many call sites are patched, and status lists each site with its form (b or bl), module, original and current instruction. for mode=got/inline unhook is soft by default (the patch stays installed but inactive, safe to reactivate) and hard:true really restores the original bytes after a quiesce window; mode=sites always restores the rewritten call-site instructions (the patch belongs to the agent, so there is no Dobby state to keep) and, in the rare case where a thunk page had to stay mapped because a thread was still inside it, reports the kept page as sitesPageKept in the status response (the hook itself is already gone at that point). mode=vtable (module+symbol) patches DATA slots holding the function address (function-pointer tables such as C++ vtables, callback tables, and the module own GOT entries) instead of any code, so neither the function nor any call site changes - use it for indirect calls. By default only slots in read-only mappings are touched, because a writable word that merely equals the target is as likely to be a constant; pass slotsWritable:true to include writable slots. Patching a GOT slot also redirects direct calls in that module and changes what the symbol address resolves to there (the code itself is unchanged). slots bounds how many are patched, scope works like for sites, and status lists each slot with its module, mapping permissions, kind (got|data), original and current value. throttleMs (ms, clamped to 0..60000, 0 = off) keeps a hot hook such as read/write/futex from flooding the capture ring: the agent still applies argIndex/returnValue/skipOriginal to EVERY hit, but emits at most one event per hook per window and counts the hits it did not emit. The next emitted event carries throttled (how many hits it stands for) and status carries throttleMs plus the running throttled total, so emitted events = hits - throttled and a thinned log never looks like a quiet target. Each callback emits a NATIVE_HOOK event with the x0-x8/x18 registers through the bounded live-capture stream.', inputSchema: { type: 'object', properties: { session: S, action: { type: 'string', enum: ['hook', 'unhook', 'status'] }, hookId: N, mode: { type: 'string', enum: ['got', 'inline', 'sites', 'vtable'] }, module: S, symbol: S, addr: S, skipOriginal: { type: 'boolean' }, returnValue: S, argIndex: N, argValue: S, confirm: { type: 'boolean' }, hard: { type: 'boolean' }, sites: N, scope: S, slotsWritable: { type: 'boolean' }, backtrace: { type: 'boolean' }, throttleMs: N }, required: ['action'] }, handler: async (a) => {
     if (a.mode === 'inline' && a.addr && a.confirm !== true) return { ok: false, error: 'native_hook inline addr requires confirm:true' };
-    // v4.97: the same liveness/executability guard as native_call - installing an inline hook on an
-    // unmapped or non-executable address is the same kind of "will crash inside the target".
-    if (a.mode === 'inline' && a.addr) {
+    // v4.99: every raw-address hook mode goes through the shared guard, and the agent receives the
+    // guard's normalized address - the agent parses bare digit strings as decimal/octal, so
+    // forwarding the caller's text could patch a different address than the one that was checked.
+    // action:unhook/status only use hookId; guarding them would let a stale addr block an unhook.
+    let hookAddr = String(a.addr ?? '');
+    let hookSid = a.session;
+    if (a.action === 'hook' && a.addr && (a.mode === 'inline' || a.mode === 'sites' || a.mode === 'vtable')) {
       const sid0 = pickSid(a.session);
       if (!sid0) throw new Error('no session');
-      const guard = await assertCallableAddress(sid0, String(a.addr));
+      const guard = await assertCallableAddress(sid0, hookAddr);
       if (!guard.ok) return { ok: false, error: guard.error };
+      hookAddr = guard.addr;
+      hookSid = sid0;                    // guard and install must talk to the same session
     }
-    return agentCmd(a.session, 'native_hook', { action: a.action, hookId: a.hookId ?? 0, mode: a.mode ?? '', module: a.module ?? '', symbol: a.symbol ?? '', addr: a.addr ?? '', skipOriginal: a.skipOriginal ? 'true' : 'false', returnValue: a.returnValue ?? '', argIndex: a.argIndex ?? -1, argValue: a.argValue ?? '', hard: a.hard ? 'true' : 'false', sites: a.sites ?? 0, scope: a.scope ?? '', slotsWritable: a.slotsWritable ? 'true' : 'false', backtrace: a.backtrace ? 'true' : 'false', throttleMs: normalizeThrottleMs(a.throttleMs) }, 20_000);
+    return agentCmd(hookSid, 'native_hook', { action: a.action, hookId: a.hookId ?? 0, mode: a.mode ?? '', module: a.module ?? '', symbol: a.symbol ?? '', addr: hookAddr, skipOriginal: a.skipOriginal ? 'true' : 'false', returnValue: a.returnValue ?? '', argIndex: a.argIndex ?? -1, argValue: a.argValue ?? '', hard: a.hard ? 'true' : 'false', sites: a.sites ?? 0, scope: a.scope ?? '', slotsWritable: a.slotsWritable ? 'true' : 'false', backtrace: a.backtrace ? 'true' : 'false', throttleMs: normalizeThrottleMs(a.throttleMs) }, 20_000);
   } },
 { name: 'syscall_digest', description: 'Turn watched syscall hits into an answer: groups the NATIVE_HOOK events of the hooks you pass by (syscall number, CALLER frame) with counts, time window and threads, picks the first caller frame outside libc (that is the code that issued the syscall, which is what fingerprint-collection hunting needs), decodes the argument registers through the pointers the syscall actually uses (openat/faccessat/newfstatat paths, memfd_create names, uname utsname fields, connect IPv4/IPv6, ioctl request, socket domain/type) into a per-group example plus a paths histogram - which files does this code probe - and compares the runtime x8 with the statically attributed number so a wrong attribution shows up as a mismatch instead of a mislabel. Argument decoding reads target memory, so it is bounded by decodeLimit (default 40 samples) and can be turned off with decode:false. Install the watch with syscall_watch (it sets backtrace:true) and pass its hookIds plus expected {hookId: nr}.. Counters are reported as hits/throttled/emitted: a throttled watch counts every hit (from the authoritative agent hook status), so a thinned log cannot read as a quiet target', inputSchema: { type: 'object', properties: { session: S, hookIds: { type: 'array', items: { type: 'number' } }, expected: { type: 'object' }, sinceMs: N, limit: N, maxGroups: N, decode: { type: 'boolean' }, decodeLimit: N } }, handler: async (a) => { const sid = pickSid(a.session); if (!sid) throw new Error('no session'); return syscallDigest(sid, { hookIds: a.hookIds, expected: a.expected, sinceMs: a.sinceMs, limit: a.limit, maxGroups: a.maxGroups, decode: a.decode, decodeLimit: a.decodeLimit }); } },
 { name: 'java_trace', description: 'Class-level Java tracing in three explicit phases. action:start hooks every matching method of a class (hook_all semantics: method/params are optional filters, "*"/empty = any) and returns hookIds + matched + a capture cursor, KEEPING the hooks installed. action:digest drains the agent capture ring and turns the JAVA_HOOK events of those hook ids into a digest: per-method counts, first/last timestamp, threads, last argument and return, error counts, a chronological timeline (newest window) and a caller histogram when the hooks were started with stack:true. action:stop unhooks exactly the given ids (id 0 means every Java hook in the agent and is refused). Pass the cursor from start as sinceCaptureId on digest to see only events newer than that point. The digest drains the agent ring through the shared drainSession path, so it never eats records that another consumer still needs; a failed drain is reported in drain.ok instead of silently returning an empty trace. Trigger the target or let natural traffic run between start and digest.', inputSchema: { type: 'object', properties: { session: S, action: { type: 'string', enum: ['start', 'digest', 'stop'] }, className: S, method: S, params: S, limit: N, stack: { type: 'boolean' }, hookIds: { type: 'array', items: { type: 'number' } }, sinceCaptureId: N, maxTimeline: N, maxMethods: N, maxCallers: N }, required: ['action'] }, handler: async (a) => { const sid = pickSid(a.session); if (!sid) throw new Error('no session'); if (a.action === 'start') return javaTraceStart(sid, { className: String(a.className ?? ''), method: a.method, params: a.params, limit: a.limit, stack: a.stack === true }); if (a.action === 'digest') return javaTraceDigest(sid, { hookIds: a.hookIds, sinceCaptureId: a.sinceCaptureId, maxTimeline: a.maxTimeline, maxMethods: a.maxMethods, maxCallers: a.maxCallers }); if (a.action === 'stop') return javaTraceStop(sid, { hookIds: a.hookIds }); throw new Error('action must be start | digest | stop'); } },
@@ -77,7 +84,7 @@ export const MCP_TOOLS: { name: string; description: string; inputSchema: any; h
     // shared guard keeps this tool and the REST route from drifting apart.
     const guard = await assertCallableAddress(sid, String(a.addr ?? ''));
     if (!guard.ok) return { ok: false, error: guard.error };
-    return agentCmd(sid, 'native_call', { module: a.module ?? '', symbol: a.symbol ?? '', addr: a.addr ?? '', args: (a.args ?? []).map((v: any) => String(v)).join(',') }, 20_000);
+    return agentCmd(sid, 'native_call', { module: a.module ?? '', symbol: a.symbol ?? '', addr: guard.addr, args: (a.args ?? []).map((v: any) => String(v)).join(',') }, 20_000);
   } },
 { name: 'stealth', description: 'Opt-in anti-detection for this session: with action:"on" the allocations the inline-hook backend makes while it is inside a Dobby call (typically its trampoline arena) stop being anonymous executable pages and land in a memfd-backed mapping named like the ART JIT cache, so a target that scans its own /proc/self/maps for an executable mapping without a path no longer sees the hook pool. It changes what the target process looks like (authorized use only) and requires confirm:true for on/off; status reports enabled/installed/active, the live GOT slot value next to the original mmap, how many allocations were redirected, and the memfd error when the platform refuses (then the real mmap is used and nothing is hidden). Default off; pools created by earlier hooks are not moved.', inputSchema: { type: 'object', properties: { session: S, action: { type: 'string', enum: ['on', 'off', 'status'] }, confirm: { type: 'boolean' } }, required: ['action'] }, handler: (a) => { const act = String(a.action ?? ''); if (act !== 'status' && a.confirm !== true) return Promise.resolve({ ok: false, error: 'stealth on/off requires confirm:true (it changes the target process footprint; authorized use only)' }); return agentCmd(a.session, 'stealth', { action: act }, 15_000); } },
 { name: 'syscall_watch', description: 'Scan one loaded module for direct svc #0 sites (libc.so is the interesting one: its stubs are what ordinary app code reaches the kernel through), attribute each site to a syscall number by decoding the MOV that precedes the svc, inline-hook up to limit of the matching sites, and report hooks whose NATIVE_HOOK events carry x8 as the runtime syscall number. syscalls filters by name or number and accepts a CSV or an array ("uname,openat,117"); a filter that matches nothing fails loud. throttleMs (0 = off) caps how often each site reports an event - hot syscalls such as read/write/futex otherwise overflow the ring and make the digest look quiet; the response echoes the effective window. Host-side orchestration: dump + static scan + native_hook; agent remains execution-only.', inputSchema: { type: 'object', properties: { session: S, module: S, limit: N, throttleMs: N, syscalls: { anyOf: [ { type: 'array', items: { anyOf: [ { type: 'string' }, { type: 'number' } ] } }, { type: 'string' } ] } }, required: ['module'] }, handler: async (a) => { const sid = pickSid(a.session); if (!sid) throw new Error('no session'); return watchSyscalls(sid, { module: a.module, limit: a.limit, syscalls: a.syscalls, throttleMs: a.throttleMs }); } },
@@ -249,15 +256,15 @@ async function waitPhone(args: any) {
   if (wantsNotification && settings.automation.notifications !== true)
     throw new Error('notifications_disabled: enable automation.notifications in ADH settings to wait on notifications');
   const timeoutMs = finiteNumber(args.timeoutMs, 8_000, 500, 60_000);
-  const intervalMs = Math.max(100, Math.min(2_000, Number(args.intervalMs ?? 350)));
-  const maxScrolls = Math.max(0, Math.min(50, Number(args.maxScrolls ?? 10)));
+  const intervalMs = finiteNumber(args.intervalMs, 350, 100, 2_000);
+  const maxScrolls = Math.trunc(finiteNumber(args.maxScrolls, 10, 0, 50));
   const startedAt = Date.now();
-  const lookbackMs = Math.max(0, Math.min(300_000, Number(args.lookbackMs ?? 0)));
+  const lookbackMs = finiteNumber(args.lookbackMs, 0, 0, 300_000);
   const agentWindow = { since: startedAt - lookbackMs, afterEventSeq: args.afterEventSeq, afterCaptureId: args.afterCaptureId };
   let scrolls = 0;
   let last: any = null;
   if (wantsStable) {
-    const stableMs = Math.max(200, Math.min(5_000, Number(args.stableMs ?? 600)));
+    const stableMs = finiteNumber(args.stableMs, 600, 200, 5_000);
     let sample: { signature: string; changedAt: number } | null = null;
     for (;;) {
       const result = await observeTree(args);
@@ -421,15 +428,7 @@ async function skillPhone(args: any) {
   throw new Error('phone_skill requires action: list | save | run | delete');
 }
 
-// NaN-safe numeric parsing (v4.96). Number('abc') is NaN and every Math.max/min clamp propagates
-// it: a NaN timeout never fires, so a wait primitive polls forever, and NaN retries make
-// `attempt >= retries` false forever. The MCP layer does not schema-validate, so this has to be
-// handled where the numbers are read.
-function finiteNumber(value: unknown, fallback: number, min: number, max: number): number {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return fallback;
-  return Math.max(min, Math.min(max, n));
-}
+// finiteNumber now lives in num.ts so the phone text renderer shares the same NaN-safe clamp.
 
 async function taskPhone(args: any) {
   assertAutomationReady();
@@ -509,7 +508,7 @@ async function runTaskStep(type: string, args: any): Promise<any> {
       const conditions = Array.isArray(args.conditions) ? args.conditions.filter((item: any) => item && typeof item === 'object') : [];
       if (!conditions.length) throw new Error('wait_any requires a conditions array');
       const timeoutMs = finiteNumber(args.timeoutMs, 10_000, 500, 60_000);
-      const intervalMs = Math.max(150, Math.min(2_000, Number(args.intervalMs ?? 350)));
+      const intervalMs = finiteNumber(args.intervalMs, 350, 150, 2_000);
       const startedAt = Date.now();
       let lastError = '';
       for (;;) {

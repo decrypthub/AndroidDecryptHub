@@ -104,7 +104,15 @@ export function analysisRoutes({ req, res, url, send }: RouteContext): Route[] {
         const buf = await reconstructSo(sid, mod.base);
         const sha = createHash('sha256').update(buf).digest('hex');
         const existing = dumps.get(sha);
-        if (existing) return send(200, { ...existing, dedup: true, module: mod.name });
+        // v4.99: a dedup hit must describe THIS request, not the call that happened to store the
+        // bytes first. The sha proves the content is identical; everything that says "what this
+        // response is" (source/complete/session/tag/addr) is recomputed here, the same rule
+        // dumpRegion has followed since v4.96. Without this, a module dump whose bytes first came
+        // from a region dump came back as source:'region' with that session's tag and package.
+        if (existing) return send(200, { ...existing, dedup: true, module: mod.name, segments: mod.segs,
+          source: 'so-reassembly', note: 'reassembled from memory: offsets == vaddrs, section headers dropped, not byte-exact',
+          size: buf.length, requestedSize: buf.length, complete: true, addr: mod.base, tag: mod.name,
+          sessionId: sid, package: sessions.get(sid)?.package ?? existing.package ?? '?' });
         const s = sessions.get(sid);
         const path = join(CAPTURES, `${sha.slice(0, 16)}.so`);
         if (!existsSync(path)) await writeFile(path, buf);
