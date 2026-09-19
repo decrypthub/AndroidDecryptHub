@@ -22,7 +22,7 @@ import { nativeHookAll, nativeUnhookAll } from './native_hook_all.ts';
 import { normalizeThrottleMs } from './native_hook_args.ts';
 import { agentPing, hookEngineSelftest, protocolSelfTest } from './agent_probe.ts';
 import { listDeviceDir, readDeviceFile } from './fs_browse.ts';
-import { finiteNumber } from './num.ts';
+import { finiteNumber, cursorNumber } from './num.ts';
 import { jniFieldDigest } from './jni_field_digest.ts';
 import { syscallTraceStart, syscallTraceDigest, syscallTraceStop } from './syscall_trace.ts';
 import { backendMatrix, classifySession } from './backends.ts';
@@ -262,8 +262,8 @@ async function waitPhone(args: any) {
   const lookbackMs = finiteNumber(args.lookbackMs, 0, 0, 300_000);
   // A cursor that is not a finite number would make every comparison false and the wait would
   // silently match nothing, so a malformed cursor is treated as "not given".
-  const afterEventSeq = Number.isFinite(Number(args.afterEventSeq)) ? Number(args.afterEventSeq) : undefined;
-  const afterCaptureId = Number.isFinite(Number(args.afterCaptureId)) ? Number(args.afterCaptureId) : undefined;
+  const afterEventSeq = cursorNumber(args.afterEventSeq);
+  const afterCaptureId = cursorNumber(args.afterCaptureId);
   const agentWindow = { since: startedAt - lookbackMs, afterEventSeq, afterCaptureId };
   let scrolls = 0;
   let last: any = null;

@@ -8,3 +8,14 @@ export function finiteNumber(value: unknown, fallback: number, min: number, max:
   if (!Number.isFinite(n)) return fallback;
   return Math.max(min, Math.min(max, n));
 }
+
+/**
+ * A cursor that is not a finite number is not a cursor. null/''/[] must stay absent rather than
+ * collapsing to 0 (Number(null) === 0): cursor 0 means "everything since the beginning", which is a
+ * different query from the time window the caller asked for.
+ */
+export function cursorNumber(value: unknown): number | undefined {
+  if (value === null || value === undefined || value === '' || Array.isArray(value)) return undefined;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : undefined;
+}

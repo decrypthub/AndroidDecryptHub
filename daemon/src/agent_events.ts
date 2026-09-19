@@ -8,6 +8,8 @@
 // match wins. Both stores are append-ordered, so each scan walks newest -> oldest and stops as
 // soon as a record falls outside the window (a timestamp, or an explicit cursor).
 
+import { cursorNumber } from './num.ts';
+
 export interface WaitEvent { seq: number; ts: number; type: string; data: any }
 export interface WaitCapture { id: number; ts: number; category: string; [key: string]: any }
 export interface AgentWaitMatch { kind: 'event' | 'capture'; item: any }
@@ -93,8 +95,9 @@ export interface AgentWaitWindow {
 // out-of-window record means every older record is out of window too.
 function inWindow(record: WaitEvent | WaitCapture, cursor: number | undefined, since: number): boolean {
   // A cursor that is not a finite number makes every comparison false (n > NaN), which would look
-  // like "nothing arrived" - treat it as absent instead (the MCP layer sanitizes too).
-  const c = Number.isFinite(Number(cursor)) ? Number(cursor) : undefined;
+  // like "nothing arrived"; null/''/[] must not collapse to cursor 0 either (Number(null) === 0
+  // would turn a time-window wait into "everything since the beginning").
+  const c = cursorNumber(cursor);
   if (c != null) return Number((record as any).seq ?? (record as any).id) > c;
   return Number(record.ts) >= since;
 }

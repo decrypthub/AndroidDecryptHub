@@ -87,7 +87,7 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
       // action:unhook/status (hookId only) is not blocked by a stale addr.
       let hookAddr = typeof addr === 'string' ? addr : '';
       if (action === 'hook' && addr && (mode === 'inline' || mode === 'sites' || mode === 'vtable')) {
-        const guard = await assertCallableAddress(sid, String(addr));
+        const guard = await assertCallableAddress(sid, addr);
         if (!guard.ok) return send(400, { error: guard.error });
         hookAddr = guard.addr;
       }
@@ -114,7 +114,7 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
       if (confirm !== true) return send(400, { error: 'native_call requires confirm:true (arbitrary target call can crash the process)' });
       // Same guard as the MCP tool (v4.97): the two entry points must not diverge on something that
       // decides whether an arbitrary address is called.
-      const guard = await assertCallableAddress(sid, String(addr ?? ''));
+      const guard = await assertCallableAddress(sid, addr);
       if (!guard.ok) return send(400, { error: guard.error });
       try {
         const r = await sendCmd(sid, 'native_call', {

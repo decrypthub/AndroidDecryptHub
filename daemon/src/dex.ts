@@ -410,6 +410,9 @@ export function extractMethodCode(buf: Buffer, d: ParsedDex, classPat: string, m
         [diff, p] = readUleb128(buf, p); midx += diff;
         [af, p] = readUleb128(buf, p);
         [co, p] = readUleb128(buf, p);
+        // dm/vm are attacker-controlled ulebs: without this bound a lying count walks the loop for
+        // up to 2^32 iterations (the review measured ~60s per class) while holding the request thread.
+        if (p > buf.length) break;
         const m = methods[midx];
         if (!m) continue;
         if (!m.cls.toLowerCase().includes(cp)) continue;
@@ -462,6 +465,7 @@ export function invokeXref(buf: Buffer, d: ParsedDex): XrefResult {
         [diff, p] = readUleb128(buf, p); midx += diff;
         [af, p] = readUleb128(buf, p);
         [co, p] = readUleb128(buf, p);
+        if (p > buf.length) break;                   // bounded: see extractMethodCode
         if (co) {
           methodsWithCode++;
           const caller = methods[midx] ? methods[midx].cls + '->' + methods[midx].name : `?#${midx}`;
@@ -532,6 +536,7 @@ export function analyzeCoverage(buf: Buffer, d: ParsedDex): Coverage {
       let midx = 0;
       for (let k = 0; k < count; k++) {
         let diff, af, co; [diff, p] = readUleb128(buf, p); midx += diff; [af, p] = readUleb128(buf, p); [co, p] = readUleb128(buf, p);
+        if (p > buf.length) break;                   // bounded: see extractMethodCode
         total++;
         if (af & 0x0100) { nat++; continue; }       // native
         if (af & 0x0400) { abs++; continue; }        // abstract
@@ -637,17 +642,37 @@ export function verifyDexLayout(buf: Buffer): LayoutCheck {
     p = cd.end;
   }
   const classDefsSize = u32(96), classDefsOff = u32(100);
+  let sawClassData = false, sawCode = false;
   for (let i = 0; i < classDefsSize; i++) {
     const co = u32(classDefsOff + i * 32 + 24);
     if (!co) continue;
-    if (classDataStarts.size && !classDataStarts.has(co)) push(`class_def #${i} points at class_data 0x${co.toString(16)}, which the map does not list`);
+    sawClassData = true;
+    if (!classDataStarts.has(co)) push(`class_def #${i} points at class_data 0x${co.toString(16)}, which the map does not list`);
     const cd = readClassDataItem(buf, co);
     if (!cd) { push(`class_def #${i}: class_data at 0x${co.toString(16)} does not parse`); continue; }
     for (const m of [...cd.direct, ...cd.virt]) {
       if (!m.co) continue;
-      if (codeStarts.size && !codeStarts.has(m.co)) push(`method #${m.midx}: code_off 0x${m.co.toString(16)} is not a code_item the map lists`);
+      sawCode = true;
+      if (!codeStarts.has(m.co)) push(`method #${m.midx}: code_off 0x${m.co.toString(16)} is not a code_item the map lists`);
     }
   }
+  if (sawClassData && cdCount === 0) push('class_defs reference class_data items but the map lists no class_data region');
+  if (sawCode && ciCount === 0) push('methods reference code_items but the map lists no code_item region');
+  // P2-1: the header's own bookkeeping has to match the bytes too.
+  if (u32(32) !== buf.length) push(`file_size (${u32(32)}) does not match the buffer length (${buf.length})`);
+  const dataOff = u32(108), dataSize = u32(104);
+  if (dataOff > buf.length) push(`data_off (${dataOff}) is past the end of the file`);
+  else if (dataOff + dataSize !== buf.length) push(`data_size (${dataSize}) does not cover the data section (file has ${buf.length - dataOff} bytes past data_off)`);
+  // P2-2: sections the header says exist must appear in the map, and a class_def/method that points
+  // at class_data/code_item must find its region listed - the old `set.size &&` guard skipped the
+  // whole check when the map simply lacked the two types.
+  const requiredSections: [number, number, string][] = [
+    [u32(56), 0x0001, 'string_id'], [u32(64), 0x0002, 'type_id'], [u32(72), 0x0003, 'proto_id'],
+    [u32(80), 0x0004, 'field_id'], [u32(88), 0x0005, 'method_id'], [u32(96), 0x0006, 'class_def'],
+    [u32(56), 0x2002, 'string_data'],
+  ];
+  for (const [count, type, name] of requiredSections)
+    if (count > 0 && !seen.has(type)) push(`the map does not list ${name} although the header says ${count} exist`);
   if (u32(8) !== adler32(buf.subarray(12))) push('checksum does not match the file bytes');
   if (!createHash('sha1').update(buf.subarray(32)).digest().equals(buf.subarray(12, 32))) push('signature (SHA-1) does not match the file bytes');
   return { ok: errors.length === 0, errors, mapEntries, classDataItems, codeItems };
@@ -664,11 +689,14 @@ export function verifyDexLayout(buf: Buffer): LayoutCheck {
 // Fixes file_size / data_size / map_off / signature (SHA-1) / checksum (Adler-32).
 export function rebuildStandardDex(base: Buffer, captures: { midx: number; codeItemHex: string }[]):
     { dex: Buffer; injected: number; classesRewritten: number; relocatedCodeItems: number; relocatedClassData: number;
-      mapRebuilt: boolean; mapEntries: number; unmatchedCaptures: number; skippedCaptures: number[]; layout: LayoutCheck } {
+      mapRebuilt: boolean; mapEntries: number; unmatchedCaptures: number; skippedCaptures: number[];
+      duplicateCaptures: number[]; layout: LayoutCheck } {
   const capMap = new Map<number, Buffer>();
   const skippedCaptures: number[] = [];
+  const duplicateCaptures: number[] = [];
   for (const c of captures) {
     if (!c.codeItemHex) { skippedCaptures.push(c.midx); continue; }   // reported, never silently dropped
+    if (capMap.has(c.midx)) { duplicateCaptures.push(c.midx); continue; }   // first wins; the rest are reported
     const ci = Buffer.from(c.codeItemHex, 'hex');
     // Fail loud: a capture that is not a complete code_item (truncated insns, half a handler
     // list, odd-length hex) would be appended verbatim and produce a dex that only looks rebuilt.
@@ -745,12 +773,21 @@ export function rebuildStandardDex(base: Buffer, captures: { midx: number; codeI
   if (mapOff && mapOff + 4 <= base.length) {
     const n = base.readUInt32LE(mapOff);
     const entries: { type: number; size: number; off: number }[] = [];
+    let readEntries = 0;
     for (let i = 0; i < n; i++) {
       const e = mapOff + 4 + i * 12;
       if (e + 12 > base.length) break;
+      readEntries++;
       const type = base.readUInt16LE(e), size = base.readUInt32LE(e + 4), off = base.readUInt32LE(e + 8);
       if (type === 0x1000 || type === 0x2000 || type === 0x2001) continue;   // map_list / the two relocated types
       entries.push({ type, size, off });
+    }
+    // A truncated source map would silently produce a NEW map that lists only the entries we managed
+    // to read (the sandbox dex lost 11 of 17 types in review testing) while still reporting
+    // mapRebuilt:true. Refuse instead: the caller's input is damaged, and a green rebuild flag on an
+    // incomplete map is exactly the kind of lie this work exists to remove.
+    if (readEntries !== n) {
+      throw new Error(`the base dex map_list is truncated (${readEntries} of ${n} entries readable) - refusing to claim a rebuilt map`);
     }
     pad(4);                                        // map_list itself is 4-byte aligned
     newMapOff = len;
@@ -778,7 +815,7 @@ export function rebuildStandardDex(base: Buffer, captures: { midx: number; codeI
   const matched = new Set<number>();
   for (const { cd } of classes) for (const m of [...cd.direct, ...cd.virt]) if (capMap.has(m.midx)) matched.add(m.midx);
   return { dex: out, injected, classesRewritten, relocatedCodeItems, relocatedClassData,
-           mapRebuilt, mapEntries, unmatchedCaptures: capMap.size - matched.size, skippedCaptures,
+           mapRebuilt, mapEntries, unmatchedCaptures: capMap.size - matched.size, skippedCaptures, duplicateCaptures,
            layout: verifyDexLayout(out) };
 }
 
@@ -804,6 +841,7 @@ export function codeItemOfDetailed(buf: Buffer, midx: number):
       let mi = 0;
       for (let k = 0; k < count; k++) {
         let diff, af, co; [diff, p] = readUleb128(buf, p); mi += diff; [af, p] = readUleb128(buf, p); [co, p] = readUleb128(buf, p);
+        if (p > buf.length) break;                   // bounded: see extractMethodCode
         if (mi === midx) {
           if (!co) return { ok: false, reason: 'code_off is 0 (method extracted or has no code)' };
           const ci = readCodeItem(buf, co);
@@ -833,6 +871,7 @@ export function stripMethodCode(buf: Buffer, midx: number): Buffer {
       for (let k = 0; k < count; k++) {
         let diff, af; [diff, p] = readUleb128(out, p); mi += diff; [af, p] = readUleb128(out, p);
         const coStart = p; let co; [co, p] = readUleb128(out, p);
+        if (p > out.length) break;                   // bounded: see extractMethodCode
         if (mi === midx && co) {
           const len = p - coStart;                        // keep byte count identical
           for (let b = 0; b < len - 1; b++) out[coStart + b] = 0x80;

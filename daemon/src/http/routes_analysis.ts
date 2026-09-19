@@ -200,7 +200,9 @@ export function analysisRoutes({ req, res, url, send }: RouteContext): Route[] {
       if (!existsSync(path)) await writeFile(path, rb.dex);
       const meta: DumpMeta = { sha256: outSha, size: rb.dex.length, source: 'dex-recover', addr: '0', tag: 'recovered', sessionId: '', package: '', capturedAt: Date.now(), path, kind: 'dex' };
       dumps.set(outSha, meta); broadcast('dump.new', meta);
-      return send(200, { ok: true, ...report, injected: rb.injected, classesRewritten: rb.classesRewritten, parseOk, sha256: outSha, size: rb.dex.length });
+      return send(200, { ok: true, ...report, injected: rb.injected, classesRewritten: rb.classesRewritten, parseOk, sha256: outSha, size: rb.dex.length,
+        mapRebuilt: rb.mapRebuilt, mapEntries: rb.mapEntries, relocatedCodeItems: rb.relocatedCodeItems, relocatedClassData: rb.relocatedClassData,
+        unmatchedCaptures: rb.unmatchedCaptures, skippedCaptures: rb.skippedCaptures, duplicateCaptures: rb.duplicateCaptures, layout: rb.layout });
     } },
     { method: 'POST', path: '/api/dex/strip', handler: async () => {
       const { b64, sha, midx } = JSON.parse((await readBody(req)) || '{}');
@@ -222,7 +224,9 @@ export function analysisRoutes({ req, res, url, send }: RouteContext): Route[] {
       if (!existsSync(path)) await writeFile(path, res.dex);
       const meta: DumpMeta = { sha256: outSha, size: res.dex.length, source: 'dex-rebuild', addr: '0', tag: 'rebuilt', sessionId: '', package: '', capturedAt: Date.now(), path, kind: 'dex' };
       dumps.set(outSha, meta); broadcast('dump.new', meta);
-      return send(200, { ok: true, injected: res.injected, classesRewritten: res.classesRewritten, parseOk, methods, sha256: outSha, size: res.dex.length });
+      return send(200, { ok: true, injected: res.injected, classesRewritten: res.classesRewritten, parseOk, methods, sha256: outSha, size: res.dex.length,
+        mapRebuilt: res.mapRebuilt, mapEntries: res.mapEntries, relocatedCodeItems: res.relocatedCodeItems, relocatedClassData: res.relocatedClassData,
+        unmatchedCaptures: res.unmatchedCaptures, skippedCaptures: res.skippedCaptures, duplicateCaptures: res.duplicateCaptures, layout: res.layout });
     } },
     // Combined: /api/dex/parse | /api/dex/crypto_scan | /api/dex/search — one body, branches on path.
     { method: 'POST', path: '/api/dex/parse', handler: dexParseScanSearch },

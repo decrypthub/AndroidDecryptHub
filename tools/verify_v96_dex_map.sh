@@ -58,6 +58,24 @@ const plain = rebuildStandardDex(buf, []);
 if (!plain.mapRebuilt || !plain.layout.ok || plain.injected !== 0) problems.push(`a rebuild without captures broke: mapRebuilt=${plain.mapRebuilt} layoutOk=${plain.layout.ok} injected=${plain.injected}`);
 console.log(`no-capture rebuild: mapRebuilt=${plain.mapRebuilt} layoutOk=${plain.layout.ok} injected=${plain.injected}`);
 
+// a truncated SOURCE map must not be reported as a successful rebuild (v5.03): the old code broke
+// out of the entry loop, kept the entries it had read and still said mapRebuilt:true - the new map
+// silently lost most of its types while the layout check stayed green.
+let mapTruncRefused = false;
+try {
+  rebuildStandardDex(buf.subarray(0, buf.readUInt32LE(52) + 4 + 3 * 12), []);
+} catch (e) { mapTruncRefused = /map_list is truncated/.test(String(e && e.message)); }
+console.log(`truncated source map refused: ${mapTruncRefused}`);
+if (!mapTruncRefused) problems.push('a truncated source map_list was not refused');
+
+// the header's own bookkeeping is part of the layout check now
+const badSize = Buffer.from(rb.dex);
+badSize.writeUInt32LE(12345, 32);
+const sizeCheck = verifyDexLayout(badSize);
+const mentionsFileSize = sizeCheck.errors.some((e) => /file_size/.test(e));
+console.log(`file_size tamper: ok=${sizeCheck.ok} mentions file_size=${mentionsFileSize}`);
+if (sizeCheck.ok || !mentionsFileSize) problems.push('the layout check did not report a wrong file_size');
+
 // the layout checker must have teeth
 const truncated = verifyDexLayout(rb.dex.subarray(0, rb.dex.length - 16));
 if (truncated.ok) problems.push('the layout check accepted a truncated dex');
