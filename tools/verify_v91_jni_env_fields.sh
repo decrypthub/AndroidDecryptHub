@@ -189,12 +189,15 @@ for (const c of (strList.captures ?? []).filter((x) => x.func === 'JNI_ENV' && N
 }
 for (const f of STR_FUNCS) console.log(`  event ${f}: ${strSeen.get(f) ?? '(missing)'}`);
 const strMissing = STR_FUNCS.filter((f) => !strSeen.has(f));
-// Each string reader is a SEPARATE wrapper, so each one has to prove itself: an OR/at-least-two
-// rule would let one working entry carry the section while another is broken.
-const previewOf = (f) => /text="[^"]*ADH-STR/.test(String(strSeen.get(f) ?? ''));
-const utf16Ok = previewOf('GetStringRegion');
-const utf8Ok = previewOf('GetStringUTFRegion');
-const pinOk = previewOf('GetStringChars');
+// Each string reader is a SEPARATE wrapper, so each one has to prove itself with the text IT
+// actually copied - an OR/at-least-two rule would let one working entry carry the section while
+// another is broken. The probe copies the region [4,16) of "ADH-STRING-PROBE-0123456789" (i.e.
+// "STRING-PROBE") through both region readers, and pins the WHOLE string through GetStringChars;
+// asserting "ADH-STR" everywhere would demand that a region reader preview text it never copied.
+const previewOf = (f, want) => new RegExp(`text="[^"]*${want}`).test(String(strSeen.get(f) ?? ''));
+const utf16Ok = previewOf('GetStringRegion', 'STRING-PROBE');
+const utf8Ok = previewOf('GetStringUTFRegion', 'STRING-PROBE');
+const pinOk = previewOf('GetStringChars', 'ADH-STRING-PROBE');
 const releaseOk = /chars=0x/.test(String(strSeen.get('ReleaseStringChars') ?? ''));
 const textOk = utf16Ok && utf8Ok && pinOk && releaseOk;
 console.log(`  string previews: utf16=${utf16Ok} utf8=${utf8Ok} pin=${pinOk} release=${releaseOk}`);
@@ -430,9 +433,20 @@ const famUnhooked = [];
 for (const f of FAMILY_FUNCS) famUnhooked.push(await uninstallSlot(f));
 const familyProbeOk = famMissing.length === 0 && famBad.length === 0 && famUnhooked.every(Boolean);
 
-// (4) unhook, table restored, process alive
+// (4) unhook, table restored, process alive.
+// Earlier sections already unhooked some of these on purpose (`*Field` in (3c), SetIntField in (3d)),
+// and the agent answers an unhook of an inactive slot with ok:false ("... is not hooked") - that is
+// the fail-loud contract, not a failure. Ask which slots are still live and only unhook those; the
+// end state is what matters and `restored` below re-reads it from the status.
+const preFinal = await post('/api/jni/env_hook', { session, action: 'status', function: 'installed' });
+const stillInstalled = new Set((preFinal.body?.hooks ?? []).map((h) => h.function));
+const alreadyOff = hooked.filter((f) => !stillInstalled.has(f));
+if (alreadyOff.length) console.log(`  already unhooked by an earlier section: ${alreadyOff.join(', ')}`);
 const unhooked = [];
-for (const f of hooked) unhooked.push(await uninstallSlot(f));
+for (const f of hooked) {
+  if (!stillInstalled.has(f)) { unhooked.push(true); continue; }
+  unhooked.push(await uninstallSlot(f));
+}
 const status2 = await post('/api/jni/env_hook', { session, action: 'status' });
 const restored = (status2.body?.hooks ?? []).filter((h) => hooked.includes(h.function))
   .every((h) => h.installed !== true && (!h.original || h.original === '0x0' || h.slotValue === h.original));
@@ -447,6 +461,11 @@ if (!overrideOk) console.log('the SetIntField override did not change what the t
 if (!rewriteDigestOk) console.log('the field digest did not report the rewritten write (rewrittenSamples/lastRequested)');
 const pass = installedOk && patchedOk && relroOk && calls >= 2 && missing.length === 0 && valueOk && digestOk && patternOk && patternUnhookOk && overrideOk && rewriteDigestOk && stringProbeOk && arrayProbeOk && elementsProbeOk && statusFilterOk && statusSlotOffOk && familyProbeOk
   && unhooked.every(Boolean) && restored && alive.length > 0;
+// A bare FAIL with every section printing green is unactionable; name the flags that failed.
+if (!pass) {
+  const flags = { installedOk, patchedOk, relroOk, 'calls>=2': calls >= 2, 'noMissing': missing.length === 0, valueOk, digestOk, patternOk, patternUnhookOk, overrideOk, rewriteDigestOk, stringProbeOk, arrayProbeOk, elementsProbeOk, statusFilterOk, statusSlotOffOk, familyProbeOk, unhooked: unhooked.every(Boolean), restored, alive: alive.length > 0 };
+  console.log('failed checks: ' + Object.entries(flags).filter(([, v]) => !v).map(([k]) => k).join(', '));
+}
 console.log(pass ? 'RESULT:PASS' : 'RESULT:FAIL');
 EOF
 )"

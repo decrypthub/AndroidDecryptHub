@@ -5,6 +5,7 @@
 > 规格见 `REQUIREMENTS.md`，架构与排期见 `DEVELOPMENT_PLAN.md`，跨会话进度见 `PROGRESS.md`。
 > 最近一次**全绿**门禁：`6319d5d`（设备在位，**92 PASS / 0 FAIL / 2 SKIP**）。
 > 最近一次 host-only 门禁（手机不在位）：**34 PASS / 0 FAIL / 84 SKIP** —— 设备脚本如实记 SKIP，不再冒充通过。
+> 最近一次**带真机**门禁（aa165071，Android 15 / PGP110）：**109 PASS / 6 FAIL / 3 SKIP**（修复后；未收口项与现场证据见 `PROGRESS.md` v5.04）。
 
 ## 0. 发布物
 

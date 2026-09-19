@@ -50,7 +50,9 @@ if (!start.body?.hookIds?.length) {
 }
 const ids = start.body.hookIds.map(Number).filter((n) => n > 0);
 
-const call = await post('/api/java/call', { session, className: CLASS, method: 'stackOuter', args: ['ADH_JT'] });
+// stackOuter(input: String): the params spec is part of the request, otherwise the agent looks for
+// a no-arg overload that does not exist ("target method not found: ...stackOuter()").
+const call = await post('/api/java/call', { session, className: CLASS, method: 'stackOuter', params: 'java.lang.String', args: ['ADH_JT'] });
 if (call.body?.ok !== true) fail('java_call of the fixture failed: ' + String(call.body?.error ?? call.status), call.body);
 await sleep(500);
 

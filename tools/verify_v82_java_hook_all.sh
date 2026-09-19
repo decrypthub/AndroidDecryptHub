@@ -67,7 +67,7 @@ if (batchIds.length !== 2 || Number(batch.body.matched) !== 2) {
   fail(`expected both ping overloads (ids=2, matched=2), got ids=${JSON.stringify(batchIds)} matched=${batch.body.matched}`, batch);
 }
 const callOne = await post('/api/java/call', { session, className: CLASS, method: 'ping', params: 'java.lang.String', args: ['ADH_ALL_ONE'] });
-const callTwo = await post('/api/java/call', { session, className: CLASS, method: 'ping', params: 'java.lang.String,int', args: ['ADH_ALL_TWO', '3'] });
+const callTwo = await post('/api/java/call', { session, className: CLASS, method: 'ping', params: 'java.lang.String,int', args: ['ADH_ALL_TWO', 3] });
 if (callOne.body?.ok !== true || String(callOne.body?.result?.result) !== 'REAL_HOOK:ADH_ALL_ONE') {
   fail(`1-arg overload call failed: ${callOne.body?.result?.result ?? callOne.body?.error}`, callOne);
 }

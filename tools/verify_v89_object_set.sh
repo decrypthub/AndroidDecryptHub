@@ -38,6 +38,9 @@ const CLASS = 'com.adh.sandbox.HeapProbe';
 let inheritedOk = true;   // stays true when the sandbox APK predates the inherited fixture
 const HOLDER = 'sConfig';
 const set = (targetField, value) => post('/api/object/set', { session, className: CLASS, field: HOLDER, targetField, value });
+// The inherited-field fixture is a SECOND holder object: writing "inherited" through sConfig can
+// only fail (that field is not on Config), which is what the first device run showed.
+const setOn = (holder, targetField, value) => post('/api/object/set', { session, className: CLASS, field: holder, targetField, value });
 
 // (0) positive control: the read path must work, so a failing write cannot be excused by a missing
 // fixture. A payload without object_set answers with an unknown-op error -> SKIP.
@@ -73,14 +76,14 @@ const inheritedProbe = await post('/api/object/inspect', { session, className: C
 if (inheritedProbe.body?.ok !== true) {
   console.log('inherited fixture unavailable (older APK) - that part is skipped');
 } else {
-  const inheritedSet = await set('inherited', '9');
+  const inheritedSet = await setOn('sInherited', 'inherited', '9');
   const inheritedRead = await post('/api/object/inspect', { session, className: CLASS, field: 'sInherited' });
   const inhFields = Object.fromEntries((inheritedRead.body?.fields ?? []).map((f) => [f.name, f.value]));
   const inhDeclaring = (inheritedRead.body?.fields ?? []).find((f) => f.name === 'inherited')?.class ?? '';
   console.log(`inherited: ok=${inheritedSet.body?.ok} ${inheritedSet.body?.before} -> ${inheritedSet.body?.after} readBack=${inhFields.inherited} declaredOn=${inhDeclaring}`);
   inheritedOk = inheritedSet.body?.ok === true && inheritedSet.body.before === '5' && inheritedSet.body.after === '9'
     && inhFields.inherited === '9' && /InheritBase/.test(inhDeclaring);
-  const restoreInherited = await set('inherited', '5');
+  const restoreInherited = await setOn('sInherited', 'inherited', '5');
   if (restoreInherited.body?.ok !== true) inheritedOk = false;
 }
 

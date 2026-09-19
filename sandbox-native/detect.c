@@ -357,6 +357,9 @@ JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_jniArrayRegionProbe(JNIEnv
 JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_jniArrayElementsProbe(JNIEnv *env, jclass clazz) {
     (void)clazz;
     jint bits = 0;
+    // Every Get<Type>ArrayElements call asks for the out-param: the wrapper must report the VALUE the
+    // runtime wrote (0/1), not the "caller did not ask" -1 that a NULL pointer honestly produces.
+    jboolean is_copy = JNI_FALSE;
     // Boolean: seed 1, 0, 1, 0 -> pin, mutate element 0 to 0, copy back
     {
         jbooleanArray a = (*env)->NewBooleanArray(env, 4);
@@ -367,7 +370,7 @@ JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_jniArrayElementsProbe(JNIE
         const jboolean seed[4] = { 1, 0, 1, 0 };
         jboolean back[4] = { 0 };
         (*env)->SetBooleanArrayRegion(env, a, 0, 4, seed);
-        jboolean *elems = (*env)->GetBooleanArrayElements(env, a, NULL);
+        jboolean *elems = (*env)->GetBooleanArrayElements(env, a, &is_copy);
         if (!elems) {
             if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
             (*env)->DeleteLocalRef(env, a);
@@ -391,7 +394,7 @@ JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_jniArrayElementsProbe(JNIE
         const jchar seed[4] = { 65, 68, 72, 33 };
         jchar back[4] = { 0 };
         (*env)->SetCharArrayRegion(env, a, 0, 4, seed);
-        jchar *elems = (*env)->GetCharArrayElements(env, a, NULL);
+        jchar *elems = (*env)->GetCharArrayElements(env, a, &is_copy);
         if (!elems) {
             if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
             (*env)->DeleteLocalRef(env, a);
@@ -415,7 +418,7 @@ JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_jniArrayElementsProbe(JNIE
         const jshort seed[4] = { 1000, 2000, 3000, 4000 };
         jshort back[4] = { 0 };
         (*env)->SetShortArrayRegion(env, a, 0, 4, seed);
-        jshort *elems = (*env)->GetShortArrayElements(env, a, NULL);
+        jshort *elems = (*env)->GetShortArrayElements(env, a, &is_copy);
         if (!elems) {
             if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
             (*env)->DeleteLocalRef(env, a);
@@ -439,7 +442,7 @@ JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_jniArrayElementsProbe(JNIE
         const jint seed[4] = { 100000, 200000, 300000, 400000 };
         jint back[4] = { 0 };
         (*env)->SetIntArrayRegion(env, a, 0, 4, seed);
-        jint *elems = (*env)->GetIntArrayElements(env, a, NULL);
+        jint *elems = (*env)->GetIntArrayElements(env, a, &is_copy);
         if (!elems) {
             if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
             (*env)->DeleteLocalRef(env, a);
@@ -463,7 +466,7 @@ JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_jniArrayElementsProbe(JNIE
         const jlong seed[4] = { 10000000000LL, 20000000000LL, 30000000000LL, 40000000000LL };
         jlong back[4] = { 0 };
         (*env)->SetLongArrayRegion(env, a, 0, 4, seed);
-        jlong *elems = (*env)->GetLongArrayElements(env, a, NULL);
+        jlong *elems = (*env)->GetLongArrayElements(env, a, &is_copy);
         if (!elems) {
             if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
             (*env)->DeleteLocalRef(env, a);
@@ -487,7 +490,7 @@ JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_jniArrayElementsProbe(JNIE
         const jfloat seed[4] = { 1.5f, 2.5f, 3.5f, 4.5f };
         jfloat back[4] = { 0 };
         (*env)->SetFloatArrayRegion(env, a, 0, 4, seed);
-        jfloat *elems = (*env)->GetFloatArrayElements(env, a, NULL);
+        jfloat *elems = (*env)->GetFloatArrayElements(env, a, &is_copy);
         if (!elems) {
             if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
             (*env)->DeleteLocalRef(env, a);
@@ -511,7 +514,7 @@ JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_jniArrayElementsProbe(JNIE
         const jdouble seed[4] = { 1.25, 2.25, 3.25, 4.25 };
         jdouble back[4] = { 0 };
         (*env)->SetDoubleArrayRegion(env, a, 0, 4, seed);
-        jdouble *elems = (*env)->GetDoubleArrayElements(env, a, NULL);
+        jdouble *elems = (*env)->GetDoubleArrayElements(env, a, &is_copy);
         if (!elems) {
             if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
             (*env)->DeleteLocalRef(env, a);
@@ -535,7 +538,7 @@ JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_jniArrayElementsProbe(JNIE
         const jint seed[4] = { 100000, 200000, 300000, 400000 };
         jint back[4] = { 0 };
         (*env)->SetIntArrayRegion(env, a, 0, 4, seed);
-        jint *elems = (*env)->GetIntArrayElements(env, a, NULL);
+        jint *elems = (*env)->GetIntArrayElements(env, a, &is_copy);
         if (!elems) {
             if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
             (*env)->DeleteLocalRef(env, a);

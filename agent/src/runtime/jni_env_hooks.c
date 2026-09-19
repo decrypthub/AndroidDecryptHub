@@ -2672,16 +2672,19 @@ static void send_env_result(int fd, const char *id, const char *action, const ch
     json_escape(error ? error : "", errorj, sizeof(errorj));
     char table_perms[8] = "";
     if (g_env_hook_table) adh_perms_of_addr((void *)(uintptr_t)g_env_hook_table, table_perms, sizeof(table_perms));
-    char out[32768];
+    // Same 128 KB buffer as action:status, and the same honesty rule: a slot list that does not fit
+    // must say so (total/emitted/truncated) instead of looking like the whole table. The old 32 KB
+    // buffer silently dropped 69 of the 228 slots, so a caller counting installed entries saw 159.
+    static char out[128 * 1024];              // command handling is serial; agent frames carry up to FRAME_MAX
     size_t len = snprintf(out, sizeof(out),
         "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"jni_env_hook\",\"ok\":%s,"
         "\"action\":\"%s\",\"function\":\"%s\",\"applied\":%d,\"failed\":%d,"
         "\"table\":\"0x%llx\",\"tablePerms\":\"%s\",\"error\":\"%s\",\"hooks\":[",
         idj, ok ? "true" : "false", actionj, functionj, applied, failed,
         g_env_hook_table, table_perms, errorj);
-    int first = 1;
+    int first = 1, emitted = 0;
     pthread_mutex_lock(&g_env_hook_lock);
-    for (int i = 0; i < ENV_HOOK_MAX && len + 380 < sizeof(out); i++) {
+    for (int i = 0; i < ENV_HOOK_MAX && len + 900 < sizeof(out); i++) {
         char slot_perms[8] = "";
         char lastj[512];
         json_escape(g_env_hooks[i].last, lastj, sizeof(lastj));
@@ -2711,9 +2714,11 @@ static void send_env_result(int fd, const char *id, const char *action, const ch
                         (unsigned long long)(uintptr_t)g_env_hooks[i].original,
                         g_env_hooks[i].override_active ? ovjson : "null", lastj);
         first = 0;
+        emitted++;
     }
     pthread_mutex_unlock(&g_env_hook_lock);
-    snprintf(out + len, sizeof(out) - len, "]}\n");
+    snprintf(out + len, sizeof(out) - len, "],\"total\":%d,\"emitted\":%d,\"truncated\":%s}\n",
+             ENV_HOOK_MAX, emitted, emitted < ENV_HOOK_MAX ? "true" : "false");
     send_line(fd, out);
 }
 

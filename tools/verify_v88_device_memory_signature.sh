@@ -35,14 +35,26 @@ const session = agent.sessionId;
 const clean = ['ADH_RT', 'ADH_NATIVE_HOOK', 'ADH_JAVA_ENUM', 'Host ADH Daemon', 'libadh_agent.so', 'libadhdetect.so', 'adh_trace_target'];
 const mustBePresent = ['native_hook'];   // the op name we keep; proves the search really reads our image
 
+// The sandbox process also holds the FIXTURE's own strings (its log tags such as ADH_NATIVE_HOOK,
+// the fixture library name, the fixture symbol adh_trace_target) and every module PATH from
+// /proc/self/maps - a whole-address-space search therefore cannot say anything about the agent
+// image. Every hit carries its module path, so count only the ones inside the agent's own module.
+const agentModule = String(agent.selfModule ?? '');
 async function search(token) {
   const hex = Buffer.from(token, 'ascii').toString('hex');
-  return (await post('/api/memory/search', { session, hex, limit: 8 })).body ?? {};
+  const body = (await post('/api/memory/search', { session, hex, limit: 200 })).body ?? {};
+  const hits = Array.isArray(body.hits) ? body.hits : [];
+  // Only the compiled image counts: the agent's rw-p segment legitimately holds RUNTIME data (the
+  // capture ring's event text names the modules we hooked, so "libadhdetect.so" shows up there
+  // after any test that touched the fixture). Identity strings compiled into the image would sit in
+  // r--p/r-xp, which is exactly what this check is about.
+  const mine = hits.filter((h) => String(h?.path ?? '') === agentModule && !String(h?.perms ?? '').includes('w'));
+  return { ok: body.ok, total: Number(body.count ?? hits.length), mine: mine.length, sample: mine[0] ?? null, hits: hits.length };
 }
 
 const control = await search(mustBePresent[0]);
-const controlHits = Number(control.count ?? (control.hits ?? []).length);
-console.log(`positive control "${mustBePresent[0]}": ok=${control.ok} hits=${controlHits}`);
+const controlHits = control.mine;
+console.log(`positive control "${mustBePresent[0]}": ok=${control.ok} hits-in-agent=${controlHits} (whole process ${control.total})`);
 if (!(controlHits > 0)) {
   // A search that finds nothing at all cannot prove anything: report it as such instead of passing.
   console.log('❌ positive control found nothing - the search did not cover the agent image');
@@ -53,9 +65,8 @@ if (!(controlHits > 0)) {
 const found = [];
 for (const token of clean) {
   const r = await search(token);
-  const n = Number(r.count ?? (r.hits ?? []).length);
-  console.log(`  ${token}: hits=${n}`);
-  if (n > 0) found.push(`${token} x${n}`);
+  console.log(`  ${token}: hits-in-agent=${r.mine} (whole process ${r.total}${r.sample ? ', first at ' + r.sample.addr : ''})`);
+  if (r.mine > 0) found.push(`${token} x${r.mine}`);
 }
 const alive = String((await import('node:child_process')).spawnSync('adb', ['-s', process.env.ANDROID_SERIAL || process.env.ADH_SERIAL || '', 'shell', 'pidof', 'com.adh.sandbox'], { encoding: 'utf8' }).stdout || '').trim();
 if (found.length) console.log('❌ identity strings still in the loaded image: ' + found.join(', '));

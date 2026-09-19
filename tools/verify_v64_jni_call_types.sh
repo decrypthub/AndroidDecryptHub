@@ -60,7 +60,12 @@ if (!(initial.body.hooks ?? []).some((h) => h.function === 'CallStaticDoubleMeth
 // ---- phase 1: install everything, prove per-slot interception -------------------------------
 const baseline = await probe(session);
 const installAll = await post('/api/jni/env_hook', { session, action: 'install', function: '*' });
-const installedCount = (installAll.body.hooks ?? []).filter((h) => h.installed === true).length;
+// The install reply's own list is clipped to the reply buffer; it now says so (total/emitted/
+// truncated). Count from the status reply, which is allowed to carry the whole table.
+const statusAfterInstall = await post('/api/jni/env_hook', { session, action: 'status' });
+const installedCount = (statusAfterInstall.body.hooks ?? []).filter((h) => h.installed === true).length;
+const statusHonest = statusAfterInstall.body?.truncated === false || Number(statusAfterInstall.body?.emitted ?? 0) === Number(statusAfterInstall.body?.matched ?? -1);
+const installReplyHonest = installAll.body?.truncated === false || Number(installAll.body?.emitted ?? -1) < Number(installAll.body?.total ?? -2);
 const probeAll = await probe(session);
 const statusAll = await post('/api/jni/env_hook', { session, action: 'status' });
 const hitsAll = Object.fromEntries((statusAll.body.hooks ?? []).map((h) => [h.function, Number(h.hits)]));
@@ -100,7 +105,7 @@ const probe3 = await probe(session);
 const alive = (await (await fetch(`${base}/api/agents`)).json()).some((x) => x.online && x.package === 'com.adh.sandbox');
 const pass = baseline.ok === true && Number(baseline.value) === PROBE_VALUE &&
   installAll.body.ok === true && Number(installAll.body.applied) === slotCount && Number(installAll.body.failed) === 0 &&
-  installedCount === slotCount && probeAll.ok === true && Number(probeAll.value) === PROBE_VALUE &&
+  installedCount === slotCount && statusHonest && installReplyHonest && probeAll.ok === true && Number(probeAll.value) === PROBE_VALUE &&
   hitOffenders.length === 0 && relro1 && patched1 &&
   uninstallAll.body.ok === true && Number(uninstallAll.body.applied) === slotCount && restoredAll &&
   installNames.every((x) => x.ok) && probe2.ok === true && Number(probe2.value) === PROBE_VALUE &&

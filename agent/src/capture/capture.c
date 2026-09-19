@@ -302,7 +302,9 @@ static void got_probe(int fd, const char *id, const char *opname, const char *na
 
     size_t cap = 1 << 14, len = 0; char *out = malloc(cap); if (!out) { send_oom(fd, idj, opname); return; }
     len += snprintf(out + len, cap - len, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"%s\",\"ok\":true,\"fns\":{", idj, opname);
-    for (int i = 0; i < NF; i++) len += snprintf(out + len, cap - len, "%s\"%s\":\"%llx\"", i?",":"", names[i], (unsigned long long)addrs[i]);
+    // 0x-prefixed like every other address the agent reports (the bare form made the device-side
+    // probe check in verify_v87 read a resolved symbol as "not an address").
+    for (int i = 0; i < NF; i++) len += snprintf(out + len, cap - len, "%s\"%s\":\"0x%llx\"", i?",":"", names[i], (unsigned long long)addrs[i]);
     len += snprintf(out + len, cap - len, "},\"modules\":[");
     for (int k = 0; k < nmods; k++) {
         len += snprintf(out + len, cap - len, "%s{\"name\":\"%s\"", k?",":"", mods[k].name);

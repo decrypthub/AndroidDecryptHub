@@ -64,7 +64,9 @@ for (let i = 0; i < 25 && Object.keys(found).length < FUNCS.length; i++) {
     const detail = await (await fetch(`${base}/api/captures/${c.id}`)).json();
     const text = String(detail.text ?? '');
     for (const f of FUNCS) {
-      if (!found[f] && text.includes(`"function":"${f}"`) && text.includes(`"value":"${EXPECT[f]}"`)) {
+      // "starts with": the two ID lookups report the resolved jfieldID AFTER the class#field label
+      // ("...marker:I -> 0x21"), which is runtime-assigned and can never match a fixed string.
+      if (!found[f] && text.includes(`"function":"${f}"`) && text.includes(`"value":"${EXPECT[f]}`)) {
         found[f] = { id: c.id, preview: detail.preview ?? '' };
       }
     }
@@ -96,6 +98,12 @@ const alive = (await (await fetch(`${base}/api/agents`)).json()).some((x) => x.o
 const pass = installOk.every(Boolean) && probe1.ok === true && Number(probe1.value) === PROBE_VALUE &&
   Object.keys(found).length === FUNCS.length && hitsOk && uninstallOk.every(Boolean) && restored &&
   probe2.ok === true && Number(probe2.value) === PROBE_VALUE && frozen && relro1 && relro2 && patched1 && restored2 && alive;
+if (!pass) {
+  const flags = { installs: installOk.every(Boolean), probe1: probe1.ok === true && Number(probe1.value) === PROBE_VALUE,
+    found: Object.keys(found).length === FUNCS.length, foundKeys: Object.keys(found).join('/'), hitsOk, uninstalls: uninstallOk.every(Boolean),
+    restored, probe2: probe2.ok === true && Number(probe2.value) === PROBE_VALUE, frozen, relro1, relro2, patched1, restored2, alive };
+  console.log('failed checks: ' + Object.entries(flags).filter(([, v]) => v !== true).map(([k, v]) => `${k}=${v}`).join(', '));
+}
 console.log(JSON.stringify({
   table: status1.body.table, tablePerms: [status1.body.tablePerms, status3.body.tablePerms],
   installs, probe1: probe1.value, probe1Error: probe1.error ?? null,
