@@ -1386,6 +1386,15 @@ MCP              →  AI 可编程操控，与 HTTP 同源
 
 > 实现状态（v4.97，**实现 + host 验收完成**）：**`native_call` 地址守卫单一来源**。v4.94 只给 MCP handler 加了活体校验，REST 路由（设备脚本走的路径）仍是透传；现抽出共享 `assertCallableAddress(sid, addr)`（空地址放行给 module+symbol；否则取 maps 判"未映射/不可执行"）供 MCP 与 REST 共用，两端不再分叉。
 
+> 口径修订建议（**待确认**，2026-09-19；确认后合并进对应模块行，勿留两份）：
+> ① **"去特征"必须先定义对手**——建议把对抗面写死为「目标进程内的字符串扫描 + anon r-x 扫描 + 线程名 + 已加载模块名」，文件系统里的模块名/Zygisk 目录名**明确不在范围**；否则这是无界任务。
+> ② **"Frida/Xposed 级"改为问题对齐**——按分析问题组织（native 算法还原 / Java 状态与风控 / TLS 与协议 / 加固脱壳），每类给一条端到端可验收路径，而不是逐项补平 Frida 的功能表。
+> ③ **SKIP 语义分层**——可选依赖缺失 = `SKIP:optional-dependency`；产品路径缺失 = `FAIL`。QBDI 目前是反例（库在、VM 起不来 → FAIL，看起来像产品坏了）。
+> ④ **无样本功能不进排期**（cdex/041 等）。
+> ⑤ **验证必须写清"扫谁"**——沙盒夹具自身带 log tag/模块名；v88 已收窄到 agent 自己的 r--p/r-xp 段，同类断言都要写明作用域。
+> ⑥ **资源上限写成产品语义**——"单目标最多 N 个活动钩子，超出 fail-loud 并给出释放建议"，而不是裸露的 16。
+> ⑦ **补信任模型**——agent 命令口当前 `0.0.0.0:8761` 无鉴权；建议改绑 `127.0.0.1`（adb reverse 本机连入）或加共享 token，并写进需求。
+>
 > 实现状态（v5.03，**实现 + host 验收完成，真机待做**）：**第十一轮评审收口（1 条 P1 + 7 条 P2）**。① 原始 `map_list` 读不全时**抛错**（此前会带着读到的条目继续重建并报 `mapRebuilt:true`，新 map 静默缺类型）；② `verifyDexLayout` 增加 `file_size` 与 `data_off+data_size` 一致性，并要求 header 中非零的固定区（string/type/proto/field/method/class_def + string_data）以及所有被引用的 class_data/code_item 区都出现在 map 里；③ 重复 midx 的 capture 回报 `duplicateCaptures`；④ `/api/dex/rebuild`、`/api/dex/recover` 与 MCP `dex_recover` 的回复补齐 `mapRebuilt/mapEntries/relocated*/unmatchedCaptures/skippedCaptures/duplicateCaptures/layout`；⑤ 5 个内联 class_data 循环加 `p > buf.length` 边界（恶意 `dm/vm` 曾可让请求线程空转约 60s/类）；⑥ REST 的 `native_call`/`native_hook` 也把原始 addr 交给守卫（`addr:0` 的回退此前只在 MCP 生效）；⑦ `num.ts:cursorNumber()` 统一 cursor 语义（null/''/[] 与非有限值都视为未给，避免 `Number(null)===0` 把时间窗变成全量）。
 >
 > 实现状态（v5.02，**实现 + host 验收完成，真机待做**）：**第十轮评审收口（1 条 P1 + 9 条 P2）**。① `/api/dex/method_code` 的 `recovered` 只数真正走得通的 item，`empty = count - recovered - unresolvable`（三者之和恒等于 `count`）；② `extractMethodCode` 先校验 item 再读 header——越界 `code_off` 不再把"每条方法各自如实报告"变成 500；③ 新增 `codeItemEnd()`（只走不拷贝 hex）供覆盖率与布局自检使用；④ LEB 解码补 `p < buf.length` 边界与 EOF 哨兵；⑤ `missingTotal` 与封顶 5000 的 `missing` 列表分离，`stillMissing` 用它计算；⑥ rebuild 返回 `skippedCaptures`（空 capture 不再静默丢弃）；⑦ agent 侧 `native_call` 的 outstanding 计数改为先计数后创建（create 失败回退）；⑧ phone 面最后两处 NaN 走 `finiteNumber`，`phone_wait` 的 cursor 非数字视为未给；⑨ `addr:0` 视为未给地址，回退 module+symbol；⑩ `/api/dex/recover` 的 rebuild 抛错映射 422。

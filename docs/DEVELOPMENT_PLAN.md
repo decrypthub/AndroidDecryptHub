@@ -606,6 +606,24 @@ v1 只对 `docs/FEATURE_STATUS.md §2` 的已验收能力做加固：捕获背�
 
 ---
 
+### 6.9.5 范围收口建议（**提案，待确认**，2026-09-19）
+
+> 这一节记录"哪些不做 / 降级"，避免每次评审都重新问一遍。**确认后**应把结论合并进
+> §6.9.1/§6.9.2 的对应行，并同步 `FEATURE_STATUS.md` 的发布范围——不要长期留两份计划。
+
+| 项 | 现状与证据 | 建议 | 什么条件下重新考虑 |
+|---|---|---|---|
+| 全量 syscall 拦截（seccomp/PTRACE_SYSEMU） | 一直标 "L3 未实现"；ptrace/seccomp 本身就是强指纹，与"低可检测性"目标冲突 | **不做**，从路线图移除；现有 svc-site hook + libc hook 已覆盖可归因路径 | 出现"必须看到全部 syscall 且不在乎被检测"的授权场景 |
+| QBDI 指令级 trace | 6.5 MB `.so` 打进沙盒 APK；只支持"凭空 call"；本机（PGP110/A15）`qbdi_addCodeCB` 返回 0，上一台设备通过过 | **降级**为可选后端：agent 报出 `initVM/addCodeCB` 真实错误码，脚本按 `SKIP:optional-dependency` 处理；不再投 ROM 兼容 | WS-H 的"真实调用点就地插桩"成为硬需求，且目标 ROM 验证通过 |
+| Frida Gadget 后端 | 官方二进制、未去特征；独特价值只有 JS 生态 | **降级**为开发/调试用（移出发布物）；或单独立项做去特征 | 出现明确的 Frida 脚本复用需求 |
+| eCapture 后端 | 需内核 eBPF；与自带 TLS/syscall 观测重叠 | 降级为**实验脚本**，不进发布物/门禁 | 需要内核级、目标进程外观测 |
+| Xposed 薄模块 | 与 Zygisk 注入路径重复（两套 loader + 一条设备脚本） | 只保留 **Zygisk** 为官方路径，Xposed 标"社区/实验" | LSPosed-only 目标设备成为常态 |
+| 手机自动化（模块 X） | 桥接离线时 v36/v38/v39/v40 直接 SKIP；整链路依赖无障碍服务 + 设备侧服务 + allowlist | 先定性为"可选演示"；无人使用则**冻结** | 出现固定的 UI 自动化工作流 |
+| 8 个沙盒耦合命令 | `crypto_hook_test` / `net_hook_test` / `flow_watch` / `detect_watch` / `trace_run` / `inline_crypto_test` / `crypto_probe` / `jni_probe` 的命令名仍在 `agent_main.c`；WS-B 当初要求删（v4.49 只把 3 个标成"仅验收脚本使用"） | **真删**，验收脚本改走真实 API（红线相关清理，不设条件） | — |
+| cdex/041（WS-E 剩余） | 需真实样本，否则 PENDING | 保持**样本驱动**，不进排期 | 拿到真实 cdex/041 样本 |
+| 多架构（armeabi-v7a / x86_64，WS-K） | 偏移/指针宽度需全参数化，测试矩阵翻倍；现有设备均 arm64 | **arm64-only 作为产品边界** | 出现真实的 32 位目标 |
+| Web UI | 与 MCP/HTTP 面重叠，近期工作全部走 MCP | 冻结为**只读查看器** | 出现"必须用浏览器操作"的场景 |
+
 ## 7. 版本路线图（v0.1–v1.0，**已完成并归档** — 当前路线见 §6.9）
 
 > **归档说明**：以下 v0.1–v1.0 全部实现并逐项验证（`verify_all` 35/35）。保留作历史与能力清单；

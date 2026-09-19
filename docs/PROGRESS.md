@@ -14,6 +14,21 @@
 全来自命令参数）；② 不胡乱兜底 / fail-loud（hook 装不上、缓冲溢出、解不动一律显式报错 + 计数上报，
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
+## 下一会话从这里开始（2026-09-19 会话收尾）
+
+**状态快照**：本地 = 远端 `origin/main`（`d1d3629`，137 个提交已推送），工作区干净；host 门禁 **34 PASS / 0 FAIL / 84 SKIP**；真机门禁（aa165071）**109 PASS / 6 FAIL / 3 SKIP**（v59 单独复跑 PASS）；daemon 单测 **164**；agent 零告警（1,023,392 B）。
+
+**按顺序做（每条都有现场证据，别跳步）**：
+1. **第十二轮评审的 P1/P2**（host 可验）：map 的"逻辑截断"——header 里的条目数撒谎时仍回 `mapRebuilt:true` + `layout.ok:true`；非 walk 类型的 off/size 未与 header 交叉校验；`data_off + data_size === file_size` 对 linked dex 过严；MCP `dex_recover` 缺 `mapRebuilt/layout/...` 字段；class_data 截断在 5 个内联循环里静默传播（extract 整条漏、coverage 少算分母、strip 静默 no-op）；`cursorNumber` 仍把空白/布尔当 cursor。
+2. **v86 限流下的 `returnValue` 改写 0/20**：先读 `agent/src/hook/native_hooks.cpp` 的命中路径定性（是回归还是脚本调用路径不对），再修——v4.48 的承诺是"限流只压事件、不改行为"。
+3. **v77 / v81 syscall 扫描**：`syscall_watch` 在 `libadhdetect.so` 上报 "attributed 0 of 0 sites"（objdump 实测有 2 个 `svc #0`，`adh_direct_gettid` @0x2da8）；libc 的 uname 站点挂上（installedCount=1）却不触发。查模块 dump 的字节来源。
+4. **QBDI 降级**：agent 报出 `initVM/addCodeCB` 真实错误码；脚本按 `SKIP:optional-dependency` 处理（本机 `addCodeCB` 返回 0，库与 dlsym 都正常）。
+5. **范围收口确认**：`DEVELOPMENT_PLAN.md §6.9.5`（不做/降级提案）+ `REQUIREMENTS.md` 的口径修订建议——确认后合并进正文，别留两份计划。
+
+**已知但未收口**：v36/v38/v39/v40 SKIP（手机侧 Manager 无障碍/自动化桥未连接）；重建 dex 文件变大（旧副本作 slack，9.6 MB→13.2 MB）；agent 命令口无鉴权（见口径修订 ⑦）；`v41` 已转 PASS。
+
+**可选后端现状**：Gadget/Xposed/eCapture 均默认关闭且各自有设备脚本；QBDI 是本机唯一"库在但跑不起来"的后端。
+
 ### v2.0+ 进度
 - [~] **v5.04 真机首跑（aa165071）：13 个失败逐个定性，7 个当场修掉（2026-09-19，真机 + host 验收）**：手机接上后第一次跑**带真机的全量门禁**：**100 PASS / 13 FAIL / 5 SKIP**。逐个定性后发现两类——**产品问题 3 个**、**测试脚本自身的问题 10 个**（这些脚本此前只有 host 半，真机半从没跑过）。
       · **产品修复**：① `jni_env_hook` 的 install/uninstall 回复用 32 KB 固定缓冲，**静默**只带回 159/228 个槽位（v64 因此把 228 装成"159"）——改成与 `action:status` 相同的 128 KB，并补 `total/emitted/truncated` 如实上报；② `file_probe`/`crypto_probe` 的地址是裸十六进制（其余 API 一律 `0x…`），v87 的"解析出非零地址"因此判假——统一成 `0x%llx`；③ 沙盒夹具 `jniArrayElementsProbe` 的 7 个 `Get*ArrayElements` 传 `NULL` 取 isCopy，agent 如实报 `-1`（"调用方没问"），而 v91 要 `isCopy=[01]` —— 夹具改为传 `&is_copy`，让"真值"这条路真的被验证。
