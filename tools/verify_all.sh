@@ -158,6 +158,9 @@ SCRIPTS=(
   # WS-E slice 1 (v2.4): try/catch code_items are read in full and rebuilt byte-identically;
   # a method whose item cannot be walked is reported unresolvable, not silently "present".
   "verify_v95_dex_trycatch.sh:host"
+  # WS-E slice 2 (v5.01): the rebuilt dex's map_list names the relocated code_item/class_data
+  # regions, every class_def/code_off is patched to them, and the layout check has teeth.
+  "verify_v96_dex_map.sh:host"
   "verify_v10_mcp.sh:host"
   "verify_v10_webui.sh:host"
   "verify_v33_backends.sh:host"

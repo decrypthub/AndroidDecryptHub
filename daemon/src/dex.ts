@@ -529,13 +529,117 @@ export function analyzeCoverage(buf: Buffer, d: ParsedDex): Coverage {
            unresolvable, recoveryRate: concreteJava ? present / concreteJava : 1, missing, unresolvableMethods };
 }
 
-// Structurally merge captured CodeItems (keyed by method_idx) into the base dex WITHOUT
-// in-place uleb resizing: append each new code_item (4-aligned) + a fresh class_data_item
-// (for each affected class) to the file, then patch that class_def's class_data_off (a
-// fixed u32 field). Fix file_size / data_size / signature (SHA-1) / checksum (Adler-32).
-// map_list is not rebuilt (appended items live past it) — jadx/IDA parse via class_defs.
+// Parse one class_data_item: four uleb counts followed by the encoded field/method lists. Returns
+// null when the item runs past the buffer. class_data items are packed back to back with no
+// alignment padding, so `end` is exactly where the next one starts.
+export interface ClassDataItem {
+  sf: number; inf: number; dm: number; vm: number;
+  staticFields: [number, number][]; instanceFields: [number, number][];
+  direct: { diff: number; af: number; co: number; midx: number }[];
+  virt: { diff: number; af: number; co: number; midx: number }[];
+  end: number;
+}
+export function readClassDataItem(buf: Buffer, off: number): ClassDataItem | null {
+  if (off < 0 || off >= buf.length) return null;
+  let p = off, sf, inf, dm, vm;
+  [sf, p] = readUleb128(buf, p); [inf, p] = readUleb128(buf, p);
+  [dm, p] = readUleb128(buf, p); [vm, p] = readUleb128(buf, p);
+  if (p > buf.length) return null;
+  const pairs = (n: number): [number, number][] => {
+    const a: [number, number][] = [];
+    for (let k = 0; k < n; k++) { let x, y; [x, p] = readUleb128(buf, p); [y, p] = readUleb128(buf, p); if (p > buf.length) throw new Error('eof'); a.push([x, y]); }
+    return a;
+  };
+  const meths = (n: number) => {
+    const a: { diff: number; af: number; co: number; midx: number }[] = [];
+    let midx = 0;
+    for (let k = 0; k < n; k++) {
+      let diff, af, co; [diff, p] = readUleb128(buf, p); midx += diff; [af, p] = readUleb128(buf, p); [co, p] = readUleb128(buf, p);
+      if (p > buf.length) throw new Error('eof');
+      a.push({ diff, af, co, midx });
+    }
+    return a;
+  };
+  try {
+    const staticFields = pairs(sf), instanceFields = pairs(inf);
+    const direct = meths(dm), virt = meths(vm);
+    return { sf, inf, dm, vm, staticFields, instanceFields, direct, virt, end: p };
+  } catch { return null; }
+}
+
+export interface LayoutCheck { ok: boolean; errors: string[]; mapEntries: number; classDataItems: number; codeItems: number; }
+// Structural self-check for a rebuilt dex: the map must exist, list each item type once and be
+// sorted by offset; the class_data/code_item regions it names must walk exactly; every class_def
+// must point at a listed class_data item and every method's code_off at a listed code_item; and the
+// checksum/signature must match the bytes. "The map was rebuilt" is only a claim when this passes.
+export function verifyDexLayout(buf: Buffer): LayoutCheck {
+  const errors: string[] = [];
+  const push = (msg: string) => { if (errors.length < 50) errors.push(msg); };
+  let mapEntries = 0, classDataItems = 0, codeItems = 0;
+  if (buf.length < 112) { push('not a dex (too short)'); return { ok: false, errors, mapEntries, classDataItems, codeItems }; }
+  const u32 = (o: number) => buf.readUInt32LE(o);
+  const mapOff = u32(52);
+  if (!mapOff || mapOff + 4 > buf.length) { push('map_off is 0 or out of range'); return { ok: false, errors, mapEntries, classDataItems, codeItems }; }
+  const n = u32(mapOff);
+  mapEntries = n;
+  const seen = new Set<number>();
+  let last = -1, cdOff = 0, cdCount = 0, ciOff = 0, ciCount = 0;
+  for (let i = 0; i < n; i++) {
+    const e = mapOff + 4 + i * 12;
+    if (e + 12 > buf.length) { push('a map entry runs past the end of the file'); break; }
+    const type = buf.readUInt16LE(e), size = buf.readUInt32LE(e + 4), off = buf.readUInt32LE(e + 8);
+    if (seen.has(type)) push(`map lists type 0x${type.toString(16)} more than once`);
+    seen.add(type);
+    if (off < last) push(`map is not sorted by offset (type 0x${type.toString(16)})`);
+    last = off;
+    if (off > buf.length) push(`map entry 0x${type.toString(16)} points past the end of the file`);
+    if (type === 0x2000) { cdOff = off; cdCount = size; }
+    if (type === 0x2001) { ciOff = off; ciCount = size; }
+  }
+  const codeStarts = new Set<number>(), classDataStarts = new Set<number>();
+  let p = ciOff;
+  for (let i = 0; i < ciCount; i++) {
+    const ci = readCodeItem(buf, p);
+    if (!ci) { push(`code_item #${i} at 0x${p.toString(16)} does not parse`); break; }
+    codeStarts.add(p); codeItems++;
+    p = (p + ci.size + 3) & ~3;                    // code_item entries are 4-byte aligned
+  }
+  p = cdOff;
+  for (let i = 0; i < cdCount; i++) {
+    const cd = readClassDataItem(buf, p);
+    if (!cd) { push(`class_data_item #${i} at 0x${p.toString(16)} does not parse`); break; }
+    classDataStarts.add(p); classDataItems++;
+    p = cd.end;
+  }
+  const classDefsSize = u32(96), classDefsOff = u32(100);
+  for (let i = 0; i < classDefsSize; i++) {
+    const co = u32(classDefsOff + i * 32 + 24);
+    if (!co) continue;
+    if (classDataStarts.size && !classDataStarts.has(co)) push(`class_def #${i} points at class_data 0x${co.toString(16)}, which the map does not list`);
+    const cd = readClassDataItem(buf, co);
+    if (!cd) { push(`class_def #${i}: class_data at 0x${co.toString(16)} does not parse`); continue; }
+    for (const m of [...cd.direct, ...cd.virt]) {
+      if (!m.co) continue;
+      if (codeStarts.size && !codeStarts.has(m.co)) push(`method #${m.midx}: code_off 0x${m.co.toString(16)} is not a code_item the map lists`);
+    }
+  }
+  if (u32(8) !== adler32(buf.subarray(12))) push('checksum does not match the file bytes');
+  if (!createHash('sha1').update(buf.subarray(32)).digest().equals(buf.subarray(12, 32))) push('signature (SHA-1) does not match the file bytes');
+  return { ok: errors.length === 0, errors, mapEntries, classDataItems, codeItems };
+}
+
+// Structurally merge captured CodeItems (keyed by method_idx) into the base dex. Everything that
+// ends up referenced is written at the END of the file and the map_list is rebuilt to name the new
+// regions, so the result is a dex whose map describes its own contents (before v5.01 the appended
+// items were invisible to the map and only our class_defs walker could find them):
+//   [original bytes] [relocated code_items, 4-aligned] [rewritten class_data items] [new map_list]
+// Every class_def's class_data_off and every method's code_off is patched to the new copy; the
+// original class_data/code_item bytes stay behind as unreferenced slack that the map no longer
+// lists. A dex without a map_list still rebuilds, but reports mapRebuilt:false.
+// Fixes file_size / data_size / map_off / signature (SHA-1) / checksum (Adler-32).
 export function rebuildStandardDex(base: Buffer, captures: { midx: number; codeItemHex: string }[]):
-    { dex: Buffer; injected: number; classesRewritten: number } {
+    { dex: Buffer; injected: number; classesRewritten: number; relocatedCodeItems: number; relocatedClassData: number;
+      mapRebuilt: boolean; mapEntries: number; unmatchedCaptures: number; layout: LayoutCheck } {
   const capMap = new Map<number, Buffer>();
   for (const c of captures) {
     if (!c.codeItemHex) continue;
@@ -549,44 +653,106 @@ export function rebuildStandardDex(base: Buffer, captures: { midx: number; codeI
     }
     capMap.set(c.midx, ci);
   }
+  if (base.length < 112) throw new Error('not a dex (too short)');
   const u32 = (o: number) => base.readUInt32LE(o);
   const classDefsSize = u32(96), classDefsOff = u32(100);
   const chunks: Buffer[] = [base]; let len = base.length;
   const pad = (align: number) => { const r = len % align; if (r) { const q = Buffer.alloc(align - r); chunks.push(q); len += q.length; } };
-  const patches: { off: number; val: number }[] = [];
-  let injected = 0, classesRewritten = 0;
 
+  // pass 1: every class_data_item the file references
+  const classes: { idx: number; cd: ClassDataItem }[] = [];
   for (let i = 0; i < classDefsSize; i++) {
-    const cdOff = u32(classDefsOff + i * 32 + 24); if (!cdOff) continue;
-    let p = cdOff; let sf, inf, dm, vm;
-    [sf, p] = readUleb128(base, p); [inf, p] = readUleb128(base, p);
-    [dm, p] = readUleb128(base, p); [vm, p] = readUleb128(base, p);
-    const pairs = (n: number) => { const a: [number, number][] = []; for (let k = 0; k < n; k++) { let x, y; [x, p] = readUleb128(base, p); [y, p] = readUleb128(base, p); a.push([x, y]); } return a; };
-    const staticF = pairs(sf), instF = pairs(inf);
-    const meths = (n: number) => { const a: { diff: number; af: number; co: number; midx: number }[] = []; let midx = 0; for (let k = 0; k < n; k++) { let diff, af, co; [diff, p] = readUleb128(base, p); midx += diff; [af, p] = readUleb128(base, p); [co, p] = readUleb128(base, p); a.push({ diff, af, co, midx }); } return a; };
-    const direct = meths(dm), virt = meths(vm);
-    if (![...direct, ...virt].some(m => capMap.has(m.midx))) continue;   // class unaffected
-    classesRewritten++;
-    const newCo = new Map<number, number>();
-    for (const m of [...direct, ...virt]) if (capMap.has(m.midx) && !newCo.has(m.midx)) {
-      pad(4); newCo.set(m.midx, len); const ci = capMap.get(m.midx)!; chunks.push(ci); len += ci.length; injected++;
+    const cdOff = u32(classDefsOff + i * 32 + 24);
+    if (!cdOff) continue;
+    const cd = readClassDataItem(base, cdOff);
+    if (!cd) throw new Error(`class #${i}: class_data_item at 0x${cdOff.toString(16)} is truncated or malformed`);
+    classes.push({ idx: i, cd });
+  }
+
+  // pass 2: relocate every code_item that is still referenced (a capture wins over the base copy)
+  const newCodeOff = new Map<number, number>();
+  const captured = new Set<number>();
+  let injected = 0, relocatedCodeItems = 0, codeItemStart = 0;
+  for (const { cd } of classes) {
+    for (const m of [...cd.direct, ...cd.virt]) {
+      const cap = capMap.get(m.midx);
+      if (!m.co && !cap) continue;
+      if (newCodeOff.has(m.midx)) continue;
+      let item: Buffer;
+      if (cap) { item = cap; injected++; captured.add(m.midx); }
+      else {
+        const ci = readCodeItem(base, m.co);
+        if (!ci) throw new Error(`method #${m.midx}: code_item at 0x${m.co.toString(16)} is truncated or malformed`);
+        item = Buffer.from(ci.hex, 'hex');
+      }
+      pad(4);
+      if (!relocatedCodeItems) codeItemStart = len;
+      newCodeOff.set(m.midx, len);
+      chunks.push(item); len += item.length; relocatedCodeItems++;
     }
-    const parts: Buffer[] = [writeUleb128(sf), writeUleb128(inf), writeUleb128(dm), writeUleb128(vm)];
-    for (const [x, y] of [...staticF, ...instF]) parts.push(writeUleb128(x), writeUleb128(y));
-    const emit = (arr: typeof direct) => { for (const m of arr) parts.push(writeUleb128(m.diff), writeUleb128(m.af), writeUleb128(newCo.has(m.midx) ? newCo.get(m.midx)! : m.co)); };
-    emit(direct); emit(virt);
-    const cd = Buffer.concat(parts); const newCdOff = len; chunks.push(cd); len += cd.length;
-    patches.push({ off: classDefsOff + i * 32 + 24, val: newCdOff });
+  }
+
+  // pass 3: rewrite every class_data_item with the relocated code_off values
+  const classDataStart = len;
+  const newCdOff = new Map<number, number>();
+  let relocatedClassData = 0, classesRewritten = 0;
+  for (const { idx, cd } of classes) {
+    const parts: Buffer[] = [writeUleb128(cd.sf), writeUleb128(cd.inf), writeUleb128(cd.dm), writeUleb128(cd.vm)];
+    for (const [x, y] of [...cd.staticFields, ...cd.instanceFields]) parts.push(writeUleb128(x), writeUleb128(y));
+    let touched = false;
+    const emit = (arr: typeof cd.direct) => {
+      for (const m of arr) {
+        if (captured.has(m.midx)) touched = true;
+        parts.push(writeUleb128(m.diff), writeUleb128(m.af), writeUleb128(newCodeOff.get(m.midx) ?? m.co));
+      }
+    };
+    emit(cd.direct); emit(cd.virt);
+    if (touched) classesRewritten++;
+    const bytes = Buffer.concat(parts);
+    newCdOff.set(idx, len);
+    chunks.push(bytes); len += bytes.length; relocatedClassData++;
+  }
+
+  // pass 4: the new map_list names the two relocated regions (plus every untouched entry)
+  const mapOff = u32(52);
+  let mapRebuilt = false, mapEntries = 0, newMapOff = 0;
+  if (mapOff && mapOff + 4 <= base.length) {
+    const n = base.readUInt32LE(mapOff);
+    const entries: { type: number; size: number; off: number }[] = [];
+    for (let i = 0; i < n; i++) {
+      const e = mapOff + 4 + i * 12;
+      if (e + 12 > base.length) break;
+      const type = base.readUInt16LE(e), size = base.readUInt32LE(e + 4), off = base.readUInt32LE(e + 8);
+      if (type === 0x1000 || type === 0x2000 || type === 0x2001) continue;   // map_list / the two relocated types
+      entries.push({ type, size, off });
+    }
+    pad(4);                                        // map_list itself is 4-byte aligned
+    newMapOff = len;
+    if (relocatedCodeItems) entries.push({ type: 0x2001, size: relocatedCodeItems, off: codeItemStart });
+    if (relocatedClassData) entries.push({ type: 0x2000, size: relocatedClassData, off: classDataStart });
+    entries.push({ type: 0x1000, size: 1, off: newMapOff });
+    const mapBuf = Buffer.alloc(4 + entries.length * 12);
+    mapBuf.writeUInt32LE(entries.length, 0);
+    entries.forEach((en, i) => {
+      const o = 4 + i * 12;
+      mapBuf.writeUInt16LE(en.type, o); mapBuf.writeUInt32LE(en.size, o + 4); mapBuf.writeUInt32LE(en.off, o + 8);
+    });
+    chunks.push(mapBuf); len += mapBuf.length;
+    mapRebuilt = true; mapEntries = entries.length;
   }
 
   const out = Buffer.concat(chunks);
-  for (const pt of patches) out.writeUInt32LE(pt.val, pt.off);
-  out.writeUInt32LE(out.length, 32);                                  // file_size
+  for (const [idx, off] of newCdOff) out.writeUInt32LE(off, classDefsOff + idx * 32 + 24);
+  if (mapRebuilt) out.writeUInt32LE(newMapOff, 52);                    // header map_off
+  out.writeUInt32LE(out.length, 32);                                   // file_size
   const dataOff = out.readUInt32LE(108);
   if (dataOff && dataOff < out.length) out.writeUInt32LE(out.length - dataOff, 104);  // data_size
-  createHash('sha1').update(out.subarray(32)).digest().copy(out, 12); // signature
-  out.writeUInt32LE(adler32(out.subarray(12)), 8);                    // checksum
-  return { dex: out, injected, classesRewritten };
+  createHash('sha1').update(out.subarray(32)).digest().copy(out, 12);  // signature
+  out.writeUInt32LE(adler32(out.subarray(12)), 8);                     // checksum
+  const matched = new Set<number>();
+  for (const { cd } of classes) for (const m of [...cd.direct, ...cd.virt]) if (capMap.has(m.midx)) matched.add(m.midx);
+  return { dex: out, injected, classesRewritten, relocatedCodeItems, relocatedClassData,
+           mapRebuilt, mapEntries, unmatchedCaptures: capMap.size - matched.size, layout: verifyDexLayout(out) };
 }
 
 // Return the full code_item bytes for a given method_idx, or '' when this image has nothing
