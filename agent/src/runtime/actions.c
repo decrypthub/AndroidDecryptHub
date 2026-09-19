@@ -430,8 +430,17 @@ void adh_cmd_native_call(int fd, const char *id, const char *module, const char 
     job->fp_argc = fp_argc;
     pthread_mutex_init(&job->lock, NULL);
     pthread_cond_init(&job->cond, NULL);
+    // Count the worker BEFORE it exists: a very fast target can finish (and decrement) before the
+    // creating thread gets to increment, which leaked +1 per such call and could eventually refuse
+    // every new call with no worker actually alive. The failure path below decrements again.
+    pthread_mutex_lock(&g_native_call_lock);
+    g_native_call_outstanding++;
+    pthread_mutex_unlock(&g_native_call_lock);
     pthread_t worker;
     if (pthread_create(&worker, NULL, native_call_worker, job) != 0) {
+        pthread_mutex_lock(&g_native_call_lock);
+        if (g_native_call_outstanding > 0) g_native_call_outstanding--;
+        pthread_mutex_unlock(&g_native_call_lock);
         char out[360];
         snprintf(out, sizeof(out),
                  "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"native_call\",\"ok\":false,"
@@ -442,9 +451,6 @@ void adh_cmd_native_call(int fd, const char *id, const char *module, const char 
         free(job);
         return;
     }
-    pthread_mutex_lock(&g_native_call_lock);
-    g_native_call_outstanding++;
-    pthread_mutex_unlock(&g_native_call_lock);
     struct timespec watchdog;
     clock_gettime(CLOCK_REALTIME, &watchdog);
     watchdog.tv_sec += ADH_NATIVE_CALL_WATCHDOG_S;

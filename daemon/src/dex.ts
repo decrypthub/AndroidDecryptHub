@@ -19,24 +19,35 @@ export interface ParsedDex {
 
 function readUleb128(buf: Buffer, pos: number): [number, number] {
   let result = 0, shift = 0, p = pos, b: number;
-  do { b = buf[p++]; result |= (b & 0x7f) << shift; shift += 7; } while (b & 0x80);
+  do {
+    // Bounded: a truncated LEB used to read buf[len] (undefined in Node, but that is not a bounds
+    // check). The sentinel p > buf.length is what every caller already tests for.
+    if (p >= buf.length) return [0, buf.length + 1];
+    b = buf[p++]; result |= (b & 0x7f) << shift; shift += 7;
+  } while (b & 0x80);
   return [result >>> 0, p];
 }
 
 // Signed LEB128 (encoded_catch_handler.size is signed; <= 0 means a catch-all follows).
 function readSleb128(buf: Buffer, pos: number): [number, number] {
   let result = 0, shift = 0, p = pos, b: number;
-  do { b = buf[p++]; result |= (b & 0x7f) << shift; shift += 7; } while (b & 0x80);
+  do {
+    if (p >= buf.length) return [0, buf.length + 1];   // see readUleb128: bounded, sentinel on EOF
+    b = buf[p++]; result |= (b & 0x7f) << shift; shift += 7;
+  } while (b & 0x80);
   if (shift < 32 && (b & 0x40)) result |= -(1 << shift);
   return [result, p];
 }
 
 export interface CodeItemInfo { hex: string; size: number; tries: number; insnsSize: number; }
+// The walk without the hex copy: coverage and the layout checker only need to know whether an item
+// is walkable (materialising a hex string per method is pure allocation amplification on a
+// 46k-method dex, and a hostile handler list can make each of those strings huge).
+export function codeItemEnd(buf: Buffer, co: number): number | null {
 // Parse one FULL code_item: 16B header + insns + (tries[] + encoded_catch_handler_list when
 // tries > 0). Returns null when the item runs past the buffer or the handler list is malformed,
 // so callers report it as unresolvable instead of pretending the method has no code (the old
 // code path silently returned "" for every method with try/catch and inflated the recovery rate).
-export function readCodeItem(buf: Buffer, co: number): CodeItemInfo | null {
   if (co < 0 || co + 16 > buf.length) return null;
   const tries = buf.readUInt16LE(co + 6);
   const insnsSize = buf.readUInt32LE(co + 12);
@@ -67,7 +78,13 @@ export function readCodeItem(buf: Buffer, co: number): CodeItemInfo | null {
     end = p;
   }
   if (end > buf.length) return null;
-  return { hex: buf.subarray(co, end).toString('hex'), size: end - co, tries, insnsSize };
+  return end;
+}
+export function readCodeItem(buf: Buffer, co: number): CodeItemInfo | null {
+  const end = codeItemEnd(buf, co);
+  if (end == null) return null;
+  return { hex: buf.subarray(co, end).toString('hex'), size: end - co,
+           tries: buf.readUInt16LE(co + 6), insnsSize: buf.readUInt32LE(co + 12) };
 }
 
 // string_data_item: uleb128 utf16 length, then MUTF-8 bytes NUL-terminated.
@@ -398,17 +415,24 @@ export function extractMethodCode(buf: Buffer, d: ParsedDex, classPat: string, m
         if (!m.cls.toLowerCase().includes(cp)) continue;
         if (methodName && m.name !== methodName) continue;
         if (!co) { out.push({ method: m.cls + '->' + m.name, midx, access: af, registers: 0, ins: 0, outs: 0, tries: 0, insnsSize: 0, insnsHex: '', codeItemHex: '' }); continue; }
-        const registers = buf.readUInt16LE(co), ins = buf.readUInt16LE(co + 2), outs = buf.readUInt16LE(co + 4);
-        const tries = buf.readUInt16LE(co + 6);
-        const insnsSize = buf.readUInt32LE(co + 12);
-        const insnsHex = buf.subarray(co + 16, co + 16 + insnsSize * 2).toString('hex');
         // Full code_item — including the tries[]/encoded_catch_handler_list tail that follows the
         // insns (4-byte aligned) whenever the method has try/catch blocks. An item we cannot walk
         // comes back as '' plus an explicit `unresolvable` reason, never as a silent empty method.
+        // The header is only read once the item is known to fit: a code_off pointing past the end
+        // used to make readUInt32LE throw (RangeError -> an opaque 500 on the route) before the
+        // per-method reason could be reported.
         const ci = readCodeItem(buf, co);
-        out.push({ method: m.cls + '->' + m.name, midx, access: af, registers, ins, outs, tries, insnsSize, insnsHex,
-                   codeItemHex: ci ? ci.hex : '',
-                   ...(ci ? {} : { unresolvable: `code_item at 0x${co.toString(16)} is truncated or has a malformed handler list` }) });
+        if (!ci) {
+          out.push({ method: m.cls + '->' + m.name, midx, access: af, registers: 0, ins: 0, outs: 0, tries: 0,
+                     insnsSize: 0, insnsHex: '', codeItemHex: '',
+                     unresolvable: `code_item at 0x${co.toString(16)} is truncated or has a malformed handler list` });
+          continue;
+        }
+        const registers = buf.readUInt16LE(co), ins = buf.readUInt16LE(co + 2), outs = buf.readUInt16LE(co + 4);
+        const insnsSize = ci.insnsSize;
+        const insnsHex = buf.subarray(co + 16, co + 16 + insnsSize * 2).toString('hex');
+        out.push({ method: m.cls + '->' + m.name, midx, access: af, registers, ins, outs, tries: ci.tries, insnsSize, insnsHex,
+                   codeItemHex: ci.hex });
       }
     }
   }
@@ -486,7 +510,7 @@ function adler32(buf: Buffer): number {
 export interface Coverage {
   total: number; concreteJava: number; native: number; abstract: number;
   basePresent: number; baseEmpty: number; unresolvable: number; recoveryRate: number;
-  missing: { midx: number; method: string }[];
+  missing: { midx: number; method: string }[]; missingTotal: number;
   unresolvableMethods: { midx: number; method: string; reason: string }[];
 }
 // Honest per-method state over the BASE (dumped) dex. Recovery rate is computed over
@@ -495,7 +519,7 @@ export function analyzeCoverage(buf: Buffer, d: ParsedDex): Coverage {
   const u32 = (o: number) => buf.readUInt32LE(o);
   const classDefsSize = u32(96), classDefsOff = u32(100);
   const methods = d.methods;
-  let total = 0, nat = 0, abs = 0, present = 0, empty = 0, unresolvable = 0;
+  let total = 0, nat = 0, abs = 0, present = 0, empty = 0, unresolvable = 0, missingTotal = 0;
   const missing: { midx: number; method: string }[] = [];
   const unresolvableMethods: { midx: number; method: string; reason: string }[] = [];
   for (let i = 0; i < classDefsSize; i++) {
@@ -515,18 +539,19 @@ export function analyzeCoverage(buf: Buffer, d: ParsedDex): Coverage {
         // "present" means the code_item was actually walked end to end — a code_off that points
         // at a truncated/malformed item is reported as unresolvable (and listed in `missing`, so
         // the recovery path picks it up) instead of counting toward the recovery rate.
-        if (co && readCodeItem(buf, co)) { present++; continue; }
+        if (co && codeItemEnd(buf, co) != null) { present++; continue; }
         if (co) {
           unresolvable++;
           if (unresolvableMethods.length < 200) unresolvableMethods.push({ midx, method: label(), reason: `code_item at 0x${co.toString(16)} truncated or malformed` });
         } else empty++;
+        missingTotal++;                              // the list below is capped; this count is not
         if (missing.length < 5000) missing.push({ midx, method: label() });
       }
     }
   }
   const concreteJava = total - nat - abs;
   return { total, concreteJava, native: nat, abstract: abs, basePresent: present, baseEmpty: empty,
-           unresolvable, recoveryRate: concreteJava ? present / concreteJava : 1, missing, unresolvableMethods };
+           unresolvable, recoveryRate: concreteJava ? present / concreteJava : 1, missing, missingTotal, unresolvableMethods };
 }
 
 // Parse one class_data_item: four uleb counts followed by the encoded field/method lists. Returns
@@ -599,10 +624,10 @@ export function verifyDexLayout(buf: Buffer): LayoutCheck {
   const codeStarts = new Set<number>(), classDataStarts = new Set<number>();
   let p = ciOff;
   for (let i = 0; i < ciCount; i++) {
-    const ci = readCodeItem(buf, p);
-    if (!ci) { push(`code_item #${i} at 0x${p.toString(16)} does not parse`); break; }
+    const end = codeItemEnd(buf, p);
+    if (end == null) { push(`code_item #${i} at 0x${p.toString(16)} does not parse`); break; }
     codeStarts.add(p); codeItems++;
-    p = (p + ci.size + 3) & ~3;                    // code_item entries are 4-byte aligned
+    p = (end + 3) & ~3;                            // code_item entries are 4-byte aligned
   }
   p = cdOff;
   for (let i = 0; i < cdCount; i++) {
@@ -639,10 +664,11 @@ export function verifyDexLayout(buf: Buffer): LayoutCheck {
 // Fixes file_size / data_size / map_off / signature (SHA-1) / checksum (Adler-32).
 export function rebuildStandardDex(base: Buffer, captures: { midx: number; codeItemHex: string }[]):
     { dex: Buffer; injected: number; classesRewritten: number; relocatedCodeItems: number; relocatedClassData: number;
-      mapRebuilt: boolean; mapEntries: number; unmatchedCaptures: number; layout: LayoutCheck } {
+      mapRebuilt: boolean; mapEntries: number; unmatchedCaptures: number; skippedCaptures: number[]; layout: LayoutCheck } {
   const capMap = new Map<number, Buffer>();
+  const skippedCaptures: number[] = [];
   for (const c of captures) {
-    if (!c.codeItemHex) continue;
+    if (!c.codeItemHex) { skippedCaptures.push(c.midx); continue; }   // reported, never silently dropped
     const ci = Buffer.from(c.codeItemHex, 'hex');
     // Fail loud: a capture that is not a complete code_item (truncated insns, half a handler
     // list, odd-length hex) would be appended verbatim and produce a dex that only looks rebuilt.
@@ -752,7 +778,8 @@ export function rebuildStandardDex(base: Buffer, captures: { midx: number; codeI
   const matched = new Set<number>();
   for (const { cd } of classes) for (const m of [...cd.direct, ...cd.virt]) if (capMap.has(m.midx)) matched.add(m.midx);
   return { dex: out, injected, classesRewritten, relocatedCodeItems, relocatedClassData,
-           mapRebuilt, mapEntries, unmatchedCaptures: capMap.size - matched.size, layout: verifyDexLayout(out) };
+           mapRebuilt, mapEntries, unmatchedCaptures: capMap.size - matched.size, skippedCaptures,
+           layout: verifyDexLayout(out) };
 }
 
 // Return the full code_item bytes for a given method_idx, or '' when this image has nothing
@@ -820,7 +847,8 @@ export function stripMethodCode(buf: Buffer, midx: number): Buffer {
   return out;
 }
 
-export interface RecoverResult { recovered: number; stillMissing: number; captured: { midx: number; method: string }[];
+export interface RecoverResult { recovered: number; stillMissing: number; missingTotal: number; missingListed: number;
+  captured: { midx: number; method: string }[];
   unresolvable: { midx: number; method: string; reason: string }[]; }
 // Passive gen-2 recovery: lift CodeItems for BASE_EMPTY methods out of a RESTORED snapshot
 // (the runtime-captured image) and merge them into the base — never assumes the base itself
@@ -836,5 +864,6 @@ export function recoverFromSnapshots(base: Buffer, restored: Buffer, d: ParsedDe
     if (ci.ok) { captures.push({ midx: m.midx, codeItemHex: ci.hex }); captured.push(m); }
     else unresolvable.push({ midx: m.midx, method: m.method, reason: ci.reason });
   }
-  return { captures, report: { recovered: captures.length, stillMissing: cov.missing.length - captures.length, captured, unresolvable } };
+  return { captures, report: { recovered: captures.length, stillMissing: cov.missingTotal - captures.length,
+                               missingTotal: cov.missingTotal, missingListed: cov.missing.length, captured, unresolvable } };
 }

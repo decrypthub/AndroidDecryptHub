@@ -130,13 +130,15 @@ export function analysisRoutes({ req, res, url, send }: RouteContext): Route[] {
       if (!cls) return send(400, { error: 'need class' });
       let parsed; try { parsed = parseDex(buf); } catch (e) { return send(422, { error: (e as Error).message }); }
       const codes = extractMethodCode(buf, parsed, String(cls), method ? String(method) : undefined);
-      const recovered = codes.filter(c => c.insnsSize > 0).length;
+      // recovered + empty + unresolvable === count: an item we cannot walk is neither "recovered"
+      // nor "empty" (it used to be counted as recovered because its header had been read anyway).
+      const recovered = codes.filter(c => c.codeItemHex).length;
       const unresolvable = codes.filter(c => c.unresolvable).length;
       // How many method records to return (default 200, capped) - callers that need to find a
       // specific shape (e.g. a method with try/catch) ask for a bigger window explicitly.
       const lim = Math.min(Math.max(Math.trunc(Number(limit)) || 200, 1), 5000);
-      return send(200, { class: cls, method: method ?? null, count: codes.length, recovered, empty: codes.length - recovered,
-        unresolvable, methods: codes.slice(0, lim) });
+      return send(200, { class: cls, method: method ?? null, count: codes.length, recovered,
+        empty: codes.length - recovered - unresolvable, unresolvable, methods: codes.slice(0, lim) });
     } },
     { method: 'POST', path: '/api/dex/index', handler: async () => {
       const body = JSON.parse((await readBody(req)) || '{}');
@@ -178,7 +180,7 @@ export function analysisRoutes({ req, res, url, send }: RouteContext): Route[] {
       const cov = analyzeCoverage(buf, parsed);
       const lm = Number(limitMissing ?? 100);
       return send(200, { magic: parsed.magic, counts: parsed.counts, ...cov,
-        recoveryPct: +(cov.recoveryRate * 100).toFixed(2), missing: cov.missing.slice(0, lm), missingTotal: cov.missing.length });
+        recoveryPct: +(cov.recoveryRate * 100).toFixed(2), missing: cov.missing.slice(0, lm), missingTotal: cov.missingTotal });
     } },
     { method: 'POST', path: '/api/dex/recover', handler: async () => {
       const body = JSON.parse((await readBody(req)) || '{}');
@@ -189,7 +191,9 @@ export function analysisRoutes({ req, res, url, send }: RouteContext): Route[] {
       if (!base || !restored) return send(400, { error: 'need base + restored (b64 or known sha)' });
       let parsed; try { parsed = parseDex(base); } catch (e) { return send(422, { error: (e as Error).message }); }
       const { captures, report } = recoverFromSnapshots(base, restored, parsed);
-      const rb = rebuildStandardDex(base, captures);
+      // The rebuild fails loud on a base whose still-referenced items cannot be walked; that is a
+      // statement about the input, so it maps to 422 like /api/dex/rebuild, not to a 500.
+      let rb; try { rb = rebuildStandardDex(base, captures); } catch (e) { return send(422, { error: (e as Error).message }); }
       let parseOk = true; try { parseDex(rb.dex); } catch { parseOk = false; }
       const outSha = createHash('sha256').update(rb.dex).digest('hex');
       const path = join(CAPTURES, `${outSha.slice(0, 16)}.dex`);

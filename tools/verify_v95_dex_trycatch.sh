@@ -19,8 +19,8 @@ DEX="/tmp/base.dex"
 [ -s "$DEX" ] || { echo "no base dex (build the app first)"; echo "RESULT:FAIL"; exit 1; }
 
 set +e
-OUT="$(node - "$HTTP" "$DEX" <<'EOF'
-const http=process.argv[2], dexPath=process.argv[3];
+OUT="$(node - "$HTTP" "$DEX" "$ROOT" <<'EOF'
+const http=process.argv[2], dexPath=process.argv[3], rootPath=process.argv[4];
 const base=`http://127.0.0.1:${http}`;
 const { readFileSync }=await import('node:fs');
 const orig=readFileSync(dexPath).toString('base64');
@@ -61,7 +61,58 @@ if(rec.sha256){
   console.log(`roundtrip: full item ${rtOk?'MATCH':'MISMATCH'} (${((same&&same.codeItemHex)||'').length/2}B) tries ${triesOk?'MATCH':'MISMATCH'}`);
 }
 
-// 6) negative control: half an item must be refused, not appended
+// 6) a method whose code_off points at a broken item is reported per method, never as a 500 or as
+//    "recovered": corrupt one code_off uleb (same byte length, value past the file) and check the
+//    route's recovered/empty/unresolvable partition plus the coverage counters.
+const { parseDex, extractMethodCode, analyzeCoverage } = await import('file:///' + String(rootPath).replace(/\\/g, '/').replace(/^\//, '') + '/daemon/src/dex.ts');
+const raw = Buffer.from(orig, 'base64');
+const uleb = (buf, p) => { let r = 0, s = 0, b; do { b = buf[p++]; r |= (b & 0x7f) << s; s += 7; } while (b & 0x80); return [r >>> 0, p]; };
+function findCodeOff(buf, wanted) {
+  const u32 = (o) => buf.readUInt32LE(o);
+  const n = u32(96), off = u32(100);
+  for (let i = 0; i < n; i++) {
+    const cdOff = u32(off + i * 32 + 24); if (!cdOff) continue;
+    let p = cdOff, sf, inf, dm, vm;
+    [sf, p] = uleb(buf, p); [inf, p] = uleb(buf, p); [dm, p] = uleb(buf, p); [vm, p] = uleb(buf, p);
+    for (let k = 0; k < sf + inf; k++) { [, p] = uleb(buf, p); [, p] = uleb(buf, p); }
+    for (const count of [dm, vm]) {
+      let mi = 0;
+      for (let k = 0; k < count; k++) {
+        let diff, af, co; [diff, p] = uleb(buf, p); mi += diff; [af, p] = uleb(buf, p);
+        const pos = p; [co, p] = uleb(buf, p);
+        // Only a 4-byte uleb is useful: its maximum value (2^28-1) lies beyond the file, so the
+        // corrupted code_off is guaranteed to point outside the buffer. A 3-byte maximum can still
+        // land inside the file and parse as garbage - the GIGO case, not the bug under test.
+        if (mi === wanted && co && p - pos >= 4) return { pos, len: p - pos };
+      }
+    }
+  }
+  return null;
+}
+// Any method with a 4-byte code_off uleb will do; its midx is what the assertions below use.
+let wanted = -1;
+for (const c of (mc.methods || [])) { if (findCodeOff(raw, c.midx)) { wanted = c.midx; break; } }
+const target = wanted >= 0 ? findCodeOff(raw, wanted) : null;
+let corruptOk = false, routeOk = false, covOk2 = false;
+if (target) {
+  const bad = Buffer.from(raw);
+  const maxForLen = Math.pow(2, 7 * target.len) - 1;              // largest value the uleb can hold
+  let v = maxForLen, p = target.pos;
+  for (let i = 0; i < target.len; i++) { bad[p++] = (v & 0x7f) | (i === target.len - 1 ? 0 : 0x80); v = Math.floor(v / 128); }
+  const entries = extractMethodCode(bad, parseDex(bad), '/');
+  const entry = entries.find((c) => c.midx === wanted);
+  corruptOk = !!entry && !entry.codeItemHex && !!entry.unresolvable;   // per-method reason, not a throw
+  const covBad = analyzeCoverage(bad, parseDex(bad));
+  covOk2 = covBad.unresolvable >= 1 && covBad.missingTotal >= 1 && covBad.basePresent === cov.basePresent - 1;
+  const r = await post('/api/dex/method_code', { b64: bad.toString('base64'), class: '/', limit: 1 });
+  const sum = Number(r.recovered) + Number(r.empty) + Number(r.unresolvable);
+  routeOk = r.recovered !== undefined && sum === Number(r.count) && Number(r.unresolvable) >= 1;
+  console.log(`corrupt code_off: entryUnresolvable=${corruptOk} coverageUnresolvable=${covBad.unresolvable} missingTotal=${covBad.missingTotal} routeSum=${sum}/${r.count} routeUnresolvable=${r.unresolvable}`);
+} else {
+  console.log('corrupt code_off: could not locate a code_off uleb');
+}
+
+// 7) negative control: half an item must be refused, not appended
 let rejOk=false;
 if(pick.codeItemHex.length>8){
   const r=await postRaw('/api/dex/rebuild',{b64:orig,captures:[{midx:pick.midx,codeItemHex:pick.codeItemHex.slice(0,-2)}]});
@@ -70,7 +121,7 @@ if(pick.codeItemHex.length>8){
   console.log(`negative control: truncated capture -> HTTP ${r.status} ${rejOk?'(refused)':'(NOT refused)'}`);
 }
 
-const pass = covOk && fullItemOk && isMissing && recOk && rtOk && triesOk && rejOk;
+const pass = covOk && fullItemOk && isMissing && recOk && rtOk && triesOk && rejOk && corruptOk && routeOk && covOk2;
 console.log(pass?'RESULT:PASS':'RESULT:FAIL');
 EOF
 )"

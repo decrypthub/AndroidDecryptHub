@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readCodeItem, rebuildStandardDex } from '../src/dex.ts';
+import { readCodeItem, codeItemEnd, rebuildStandardDex } from '../src/dex.ts';
 
 // Build a synthetic code_item: 16B header + insns + optional 4-byte padding + tries[] +
 // encoded_catch_handler_list. Mirrors the shapes a real dex produces (tries>0 => the item
@@ -68,4 +68,16 @@ test('the rebuilder refuses a capture that is not a complete code_item', () => {
     /capture for method #7 is not a complete code_item/);
   assert.throws(() => rebuildStandardDex(Buffer.alloc(112), [{ midx: 9, codeItemHex: '00' }]),
     /capture for method #9 is not a complete code_item/);
+});
+
+test('the size-only walk agrees with the hex walk and never reads past the buffer', () => {
+  const b = codeItem({ tries: 1 });
+  assert.equal(codeItemEnd(b, 0), b.length);
+  assert.equal(codeItemEnd(b, 0), readCodeItem(b, 0)?.size);
+  // A LEB whose last byte claims "more bytes follow" must stop at the end of the buffer instead of
+  // reading buf[len] (undefined) and reporting a bogus length.
+  const cut = Buffer.from(b.subarray(0, b.length - 2));
+  cut[cut.length - 1] = 0x80;                       // continuation bit with nothing after it
+  assert.equal(codeItemEnd(cut, 0), null);
+  assert.equal(readCodeItem(cut, 0), null);
 });

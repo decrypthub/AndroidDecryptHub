@@ -92,7 +92,10 @@ export interface AgentWaitWindow {
 // otherwise only records at/after `since` qualify. Both stores are append-ordered, so an
 // out-of-window record means every older record is out of window too.
 function inWindow(record: WaitEvent | WaitCapture, cursor: number | undefined, since: number): boolean {
-  if (cursor != null) return Number((record as any).seq ?? (record as any).id) > cursor;
+  // A cursor that is not a finite number makes every comparison false (n > NaN), which would look
+  // like "nothing arrived" - treat it as absent instead (the MCP layer sanitizes too).
+  const c = Number.isFinite(Number(cursor)) ? Number(cursor) : undefined;
+  if (c != null) return Number((record as any).seq ?? (record as any).id) > c;
   return Number(record.ts) >= since;
 }
 

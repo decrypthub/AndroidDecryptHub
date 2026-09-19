@@ -51,8 +51,12 @@ export interface AddressClass { mapped: boolean; executable: boolean; path?: str
  * must be mapped AND executable before the agent is asked to call it. Kept here so the two paths
  * cannot drift - the REST route used to skip the check the MCP tool performed.
  */
-export async function assertCallableAddress(sid: string, addr: string): Promise<{ ok: true; addr: string } | { ok: false; error: string }> {
-  const trimmed = String(addr ?? '').trim();
+export async function assertCallableAddress(sid: string, addr: unknown): Promise<{ ok: true; addr: string } | { ok: false; error: string }> {
+  // A missing address (undefined / null / '' / 0) means "use module+symbol"; anything else is text.
+  // JSON callers that send addr:0 with module+symbol used to have it stringified into "0" and
+  // rejected as unmapped instead of falling back to the symbol path.
+  const given = addr === undefined || addr === null || addr === '' || addr === 0;
+  const trimmed = given ? '' : String(addr).trim();
   if (!trimmed) return { ok: true, addr: '' };            // module+symbol path; the agent resolves it
   const maps = await sendCmd(sid, 'maps');
   if (!maps.ok) throw new Error(maps.error ?? 'maps command failed');

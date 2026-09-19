@@ -22,7 +22,7 @@
 | 层 | 位置 | 承担什么 | 规模 |
 |---|---|---|---|
 | **Agent**（目标进程内） | `agent/` → `libadh_agent.so` | **40 个命令分支**：GOT/inline/addr/sites/vtable hook、Java(LSPlant) hook（单方法 + `hookAll` 批量 + 参数改写/返回值替换/skip/调用链）、JNI_OnLoad（含加载时 watch）/RegisterNatives/JNIEnv 76 槽、函数与 QBDI trace、dex/so/内存 dump、maps/内存读写搜、ART 结构枚举、活体对象自省、主动触发、`load_so`、`native_call`（整数+浮点）、`native_backtrace`、`syscall_watch`、轻量 RPC —— **只采集/执行，不做分析** | C/C++，产物 817 KB |
-| **Host ADH Daemon**（主机） | `daemon/` | **78 个 MCP 工具 + 88 条 HTTP 路由**：dex 解析/索引(SQLite)/搜索/xref、Capstone 反汇编与 syscall 归因/参数解码、trace 摘要、syscall 摘要、脱壳编排与重建、工件存储、Web UI、MCP server | TypeScript（含 14 个单测文件、163 条用例） |
+| **Host ADH Daemon**（主机） | `daemon/` | **78 个 MCP 工具 + 88 条 HTTP 路由**：dex 解析/索引(SQLite)/搜索/xref、Capstone 反汇编与 syscall 归因/参数解码、trace 摘要、syscall 摘要、脱壳编排与重建、工件存储、Web UI、MCP server | TypeScript（含 14 个单测文件、164 条用例） |
 | **Device**（手机侧） | `device/` | AIDL 作用域读写、模块状态、目标进程启停、可选后端开关 —— **不做分析** | Kotlin |
 | **注入器** | `injector/zygisk`、`injector/xposed` | 把 `.so` 送进目标进程（Zygisk 走 **memfd**，目标 maps 不出现模块路径）+ 传真实包名 | C++/Java |
 | **可选后端** | `tools/`（Gadget/eCapture） | 另一种进入/观测方式，默认关闭 | 脚本/薄 APK |

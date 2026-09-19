@@ -58,12 +58,12 @@ export const MCP_TOOLS: { name: string; description: string; inputSchema: any; h
     // guard's normalized address - the agent parses bare digit strings as decimal/octal, so
     // forwarding the caller's text could patch a different address than the one that was checked.
     // action:unhook/status only use hookId; guarding them would let a stale addr block an unhook.
-    let hookAddr = String(a.addr ?? '');
+    let hookAddr = a.addr ? String(a.addr) : '';
     let hookSid = a.session;
     if (a.action === 'hook' && a.addr && (a.mode === 'inline' || a.mode === 'sites' || a.mode === 'vtable')) {
       const sid0 = pickSid(a.session);
       if (!sid0) throw new Error('no session');
-      const guard = await assertCallableAddress(sid0, hookAddr);
+      const guard = await assertCallableAddress(sid0, a.addr);
       if (!guard.ok) return { ok: false, error: guard.error };
       hookAddr = guard.addr;
       hookSid = sid0;                    // guard and install must talk to the same session
@@ -82,7 +82,7 @@ export const MCP_TOOLS: { name: string; description: string; inputSchema: any; h
     if (!sid) throw new Error('no session');
     // v4.94/v4.97: a raw address is checked against the live maps before anything is called - the
     // shared guard keeps this tool and the REST route from drifting apart.
-    const guard = await assertCallableAddress(sid, String(a.addr ?? ''));
+    const guard = await assertCallableAddress(sid, a.addr);
     if (!guard.ok) return { ok: false, error: guard.error };
     return agentCmd(sid, 'native_call', { module: a.module ?? '', symbol: a.symbol ?? '', addr: guard.addr, args: (a.args ?? []).map((v: any) => String(v)).join(',') }, 20_000);
   } },
@@ -223,7 +223,7 @@ async function findPhone(args: any) {
 // extract whatever it needs, e.g. an OTP.
 async function findNotificationMatch(args: any, sinceMs: number, _timeoutMs: number): Promise<{ item: any } | null> {
   const result = await automation.cmd('notifications', {
-    limit: Math.max(1, Math.min(30, Number(args.notificationLimit ?? 10))),
+    limit: Math.trunc(finiteNumber(args.notificationLimit, 10, 1, 30)),
     sinceMs,
   }, 15_000);
   if (result?.granted === false) {
@@ -260,7 +260,11 @@ async function waitPhone(args: any) {
   const maxScrolls = Math.trunc(finiteNumber(args.maxScrolls, 10, 0, 50));
   const startedAt = Date.now();
   const lookbackMs = finiteNumber(args.lookbackMs, 0, 0, 300_000);
-  const agentWindow = { since: startedAt - lookbackMs, afterEventSeq: args.afterEventSeq, afterCaptureId: args.afterCaptureId };
+  // A cursor that is not a finite number would make every comparison false and the wait would
+  // silently match nothing, so a malformed cursor is treated as "not given".
+  const afterEventSeq = Number.isFinite(Number(args.afterEventSeq)) ? Number(args.afterEventSeq) : undefined;
+  const afterCaptureId = Number.isFinite(Number(args.afterCaptureId)) ? Number(args.afterCaptureId) : undefined;
+  const agentWindow = { since: startedAt - lookbackMs, afterEventSeq, afterCaptureId };
   let scrolls = 0;
   let last: any = null;
   if (wantsStable) {
@@ -574,7 +578,7 @@ async function notificationsPhone(args: any) {
   if (settings.automation.notifications !== true) {
     throw new Error('notifications_disabled: enable automation.notifications in ADH settings to let the AI read notification text');
   }
-  const limit = Math.max(1, Math.min(30, Number(args.limit ?? 10)));
+  const limit = Math.trunc(finiteNumber(args.limit, 10, 1, 30));
   const sinceMs = Number.isFinite(Number(args.sinceMs)) ? Math.max(0, Math.floor(Number(args.sinceMs))) : 0;
   const result = await automation.cmd('notifications', { limit, sinceMs }, 15_000);
   if (result?.granted === false) {
