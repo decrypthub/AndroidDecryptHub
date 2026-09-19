@@ -113,8 +113,8 @@ Each layer has a `MAP.md` — read it before editing that layer:
 
 ## Test device (available now)
 
-- `adb` serial `13f54a46` — OnePlus PGP110, **Android 15 / SDK 35**, `arm64-v8a`, **rooted** (`su` → uid=0), `ro.debuggable=0`.
-- **Multiple identical PGP110 units are attached** (`13f54a46` + others). adb commands without `-s` fail with "more than one device" — `export ANDROID_SERIAL=13f54a46` so every adb call (incl. the `tools/*.sh` scripts) targets the right unit.
+- `adb` serial `aa165071` — OnePlus PGP110, **Android 15 / SDK 35**, `arm64-v8a`, **rooted** (`su` → uid=0), `ro.debuggable=0`.
+- **Multiple identical PGP110 units are attached** (`aa165071` + others). adb commands without `-s` fail with "more than one device" — `export ANDROID_SERIAL=aa165071` so every adb call (incl. the `tools/*.sh` scripts) targets the right unit.
 - Keep **per-API-level ART resolvers**; the ART-structure dex resolver (L.6) must handle **SDK 35** (this device). SDK 36 (Pixel 6 Pro) is a secondary target, not attached now.
 - Primary agent ABI is `arm64-v8a`.
 - This OnePlus/ColorOS ROM ships a **heavily stripped `libart.so`**. The v1 scope relies on the verified native inline-hook backend (Dobby, `tools/fetch_dobby.sh`); LSPlant v6.4 is an optional Java-method hook backend and is statically linked into the agent only when `tools/fetch_lsplant.sh` has prepared its pinned sources.
