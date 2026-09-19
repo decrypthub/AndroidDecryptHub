@@ -155,6 +155,9 @@ SCRIPTS=(
   # daemon route table. The device scripts only run when a phone is attached, so a renamed route
   # would otherwise stay invisible until then.
   "verify_v94_device_script_routes.sh:host"
+  # WS-E slice 1 (v2.4): try/catch code_items are read in full and rebuilt byte-identically;
+  # a method whose item cannot be walked is reported unresolvable, not silently "present".
+  "verify_v95_dex_trycatch.sh:host"
   "verify_v10_mcp.sh:host"
   "verify_v10_webui.sh:host"
   "verify_v33_backends.sh:host"

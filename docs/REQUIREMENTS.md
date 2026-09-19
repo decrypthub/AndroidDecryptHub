@@ -1386,7 +1386,9 @@ MCP              →  AI 可编程操控，与 HTTP 同源
 
 > 实现状态（v4.97，**实现 + host 验收完成**）：**`native_call` 地址守卫单一来源**。v4.94 只给 MCP handler 加了活体校验，REST 路由（设备脚本走的路径）仍是透传；现抽出共享 `assertCallableAddress(sid, addr)`（空地址放行给 module+symbol；否则取 maps 判"未映射/不可执行"）供 MCP 与 REST 共用，两端不再分叉。
 
-> 实现状态（v4.98，**实现 + host 验收完成**）：**同一守卫覆盖 `native_hook mode=inline addr`**（在未映射/不可执行地址上装 inline hook 与 `native_call` 同类）。MCP 与 REST 两条路径都先调用共享的 `assertCallableAddress()`，守卫文案改为中性以服务"调用或挂钩"两种动作；`jni_onload action=call` 只接受 module（内部解析符号）故不需要该守卫。
+> 实现状态（v4.99，**实现 + host 验收完成，真机待做**）：**WS-E 第一片：try/catch 的 code_item**。`readCodeItem()` 按规范走完 header + insns + 4 字节对齐的 `tries[]` + `encoded_catch_handler_list`（sleb128 handler size、type/addr 对、catch-all）；`tries!=0` 的方法不再被静默跳过（沙盒 dex 1166/46228）。解不动的 item 走**显式 `unresolvable`**：覆盖率里不计入 present、列进 `missing` 并带理由（上限 200 条），恢复报告同样列出失败理由；`rebuildStandardDex` 注入前校验 capture 是完整 code_item（半截件 → 422），不再把半截字节追加进新 dex。`/api/dex/method_code` 支持 `limit`（默认 200、上限 5000）。验收：`verify_v95_dex_trycatch.sh`（host，含负对照）+ `daemon/test/dex_codeitem.test.ts`。仍未做：rebuild 的 map_list 重建、cdex/041（需样本，PENDING）。
+>
+> 实现状态（v4.98，**实现 + host 验收完成**）：**同一守卫覆盖 `native_hook mode=inline addr`**。MCP 与 REST 两条路径都先调用共享的 `assertCallableAddress()`，守卫文案改为中性以服务"调用或挂钩"两种动作；`jni_onload action=call` 只接受 module（内部解析符号）故不需要该守卫。
 
 > 实现状态（v4.80，**实现 + host 验收完成，真机验收待做**）：**JNIEnv status 可过滤、并自报完整性**。表项涨到 228 后，整表回复超出旧的 32 KB 缓冲会被**静默截断**（只回一部分槽位且不说明——验证者会把"缺条目"读成"未安装"）。现在 `action:status` 用 `function` 当过滤器（与安装同语法：精确名 / 前缀 / `*后缀` / `*包含*` / `all`·`*`），另支持关键字 `installed`(仅已挂槽位)；解析与匹配和安装路径共用同一实现，回复带 `total`/`matched`/`emitted`/`truncated`，缓冲 128 KB（协议长度分帧、上限 64 MB）足够整表一次带回。安装/卸载对 `installed` 关键字显式报错（它是 status 过滤器，不是槽位名）。MCP 描述同步；v91 新增 `(3i)` 设备段断言三种视角的自洽性。
 

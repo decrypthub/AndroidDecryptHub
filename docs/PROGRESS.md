@@ -15,6 +15,12 @@
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
 ### v2.0+ 进度
+- [~] **v4.99 WS-E 第一片：带 try/catch 的 code_item 完整读取 + 重建字节一致（2026-09-19，host 验收 PASS；真机待做）**：WS-E 点名的"`tries!=0` 方法静默跳过、恢复率虚高"在这里收口——沙盒 dex 里 **1166/46228** 个具体方法带 try/catch，此前它们的 `codeItemHex` 一律是空串：`dex_method_code` 看不见、`dex_recover` 捞不回来，而覆盖率报告照样显示 100%。
+      · `dex.ts` 新增 `readCodeItem()`：按规范走完 **header(16B) + insns + 4 字节对齐的 tries[] + encoded_catch_handler_list**（sleb128 的 handler size、type/addr 对、catch-all），越界或 handler 列表残缺一律返回 null。
+      · 诚实口径：`extractMethodCode` 对解不动的 item 回 `unresolvable` 理由而不是静默空串；`analyzeCoverage` 新增 `unresolvable`（解不动的 item **不再算 present**，且进入 `missing` 供恢复流程处理）与 `unresolvableMethods`（带理由，上限 200）；`recoverFromSnapshots` 的报告列出每条恢复失败的理由；`/api/dex/method_code` 支持 `limit`（默认 200，上限 5000）并回报 `unresolvable` 计数。
+      · fail-loud：`rebuildStandardDex` 注入前逐个校验 capture 是**完整** code_item（半截 insns / 缺一半 handler 列表 → 抛错，REST 回 422），不再把半截件原样追加进新 dex。
+      · 验收：新增 `tools/verify_v95_dex_trycatch.sh`（host）——coverage `unresolvable=0`、挑一个 tries>0 方法断言 item 比 insns 长（99B vs 72B）、strip→missing→recover→rebuild 后**整件字节一致**（含 tries/handlers）、负对照（截断的 capture 必须 422 被拒）；`daemon/test/dex_codeitem.test.ts` 5 条单测（对齐/多 handler/catch-all/截断/不可能值）；daemon `node --test` **157 → 162**；v12/v13 继续 PASS；host 全量门禁 **33 PASS / 0 FAIL / 84 SKIP**（117 脚本）。
+      · 仍未做（WS-E 剩余）：rebuild 的 **map_list 重建**（当前保留旧 map，追加项只在 class_defs 可达）与 **cdex/041**（需样本，按计划标 PENDING）。
 - [~] **v4.98 地址守卫再补一处：`native_hook mode=inline addr`（2026-09-19，host 验收 PASS）**：v4.97 把 `native_call` 的守卫收敛成共享函数后，同一类"拿裸地址对目标下手"的路径还有一条——`native_hook` 的 `mode=inline` + `addr`（在未映射/不可执行地址上装 inline hook，同样崩在目标里）。
       · `mcp.ts` 与 `/api/native/hook` 路由都先过 `assertCallableAddress()`；守卫文案改为中性（"…refusing to use it as a call or hook target"，同一函数服务两种动作）。
       · 顺带确认 `jni_onload action=call` 只接受 **module**（内部解析符号），不是裸地址，因此不需要同一守卫——已核对 schema。

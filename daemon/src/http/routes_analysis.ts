@@ -116,14 +116,19 @@ export function analysisRoutes({ req, res, url, send }: RouteContext): Route[] {
     } },
     { method: 'POST', path: '/api/dex/method_code', handler: async () => {
       const body = await readBody(req);
-      const { b64, sha, class: cls, method } = JSON.parse(body || '{}');
+      const { b64, sha, class: cls, method, limit } = JSON.parse(body || '{}');
       let buf: Buffer;
       try { buf = await dumpBuf({ b64, sha }); } catch (e: any) { return send(e.status ?? 400, { error: e.message }); }
       if (!cls) return send(400, { error: 'need class' });
       let parsed; try { parsed = parseDex(buf); } catch (e) { return send(422, { error: (e as Error).message }); }
       const codes = extractMethodCode(buf, parsed, String(cls), method ? String(method) : undefined);
       const recovered = codes.filter(c => c.insnsSize > 0).length;
-      return send(200, { class: cls, method: method ?? null, count: codes.length, recovered, empty: codes.length - recovered, methods: codes.slice(0, 200) });
+      const unresolvable = codes.filter(c => c.unresolvable).length;
+      // How many method records to return (default 200, capped) - callers that need to find a
+      // specific shape (e.g. a method with try/catch) ask for a bigger window explicitly.
+      const lim = Math.min(Math.max(Math.trunc(Number(limit)) || 200, 1), 5000);
+      return send(200, { class: cls, method: method ?? null, count: codes.length, recovered, empty: codes.length - recovered,
+        unresolvable, methods: codes.slice(0, lim) });
     } },
     { method: 'POST', path: '/api/dex/index', handler: async () => {
       const body = JSON.parse((await readBody(req)) || '{}');
