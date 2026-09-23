@@ -4,7 +4,6 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.os.Process
-import android.os.SystemClock
 import android.util.Log
 import com.adh.core.AdhPaths
 import java.io.File
@@ -13,7 +12,6 @@ import kotlin.system.exitProcess
 object AdhDeviceDaemon {
     private const val TAG = "AdhDeviceDaemon"
     private const val PUBLISH_INTERVAL_MS = 1_000L
-    private const val AUTOMATION_ENSURE_INTERVAL_MS = 5_000L
 
     @JvmStatic
     fun main(args: Array<String>) {
@@ -25,90 +23,6 @@ object AdhDeviceDaemon {
             "--xposed-enable" -> { requireRoot(); exitProcess(if (XposedBackend.setEnabled(true)) 0 else 1) }
             "--xposed-disable" -> { requireRoot(); exitProcess(if (XposedBackend.setEnabled(false)) 0 else 1) }
             "--xposed-scope" -> { requireRoot(); exitProcess(if (XposedBackend.setScope(args.drop(1))) 0 else 1) }
-            "--automation-status" -> {
-                requireRoot()
-                Looper.prepareMainLooper()
-                val context = SystemContext.create()
-                println(if (AutomationServiceControl.isEnabled(context)) "enabled" else "disabled")
-                return
-            }
-            "--automation-enable" -> {
-                requireRoot()
-                Looper.prepareMainLooper()
-                val context = SystemContext.create()
-                exitProcess(if (AutomationServiceControl.setEnabled(context, true)) 0 else 1)
-            }
-            "--automation-disable" -> {
-                requireRoot()
-                Looper.prepareMainLooper()
-                val context = SystemContext.create()
-                exitProcess(if (AutomationServiceControl.setEnabled(context, false)) 0 else 1)
-            }
-            "--automation-ensure" -> {
-                requireRoot()
-                Looper.prepareMainLooper()
-                val context = SystemContext.create()
-                exitProcess(if (AutomationServiceControl.ensureEnabled(context)) 0 else 1)
-            }
-            "--device-status" -> {
-                requireRoot()
-                Looper.prepareMainLooper()
-                println(DevicePowerControl.statusJson(SystemContext.create()))
-                return
-            }
-            "--device-wake" -> {
-                requireRoot()
-                Looper.prepareMainLooper()
-                exitProcess(if (DevicePowerControl.wake(SystemContext.create())) 0 else 1)
-            }
-            "--device-dismiss-keyguard" -> {
-                requireRoot()
-                Looper.prepareMainLooper()
-                exitProcess(if (DevicePowerControl.dismissKeyguard(SystemContext.create())) 0 else 1)
-            }
-            "--input-tap" -> {
-                requireRoot()
-                val x = args.getOrNull(1)?.toIntOrNull() ?: exitProcess(2)
-                val y = args.getOrNull(2)?.toIntOrNull() ?: exitProcess(2)
-                exitProcess(if (DeviceInputControl.tap(x, y)) 0 else 1)
-            }
-            "--input-long-press" -> {
-                requireRoot()
-                val x = args.getOrNull(1)?.toIntOrNull() ?: exitProcess(2)
-                val y = args.getOrNull(2)?.toIntOrNull() ?: exitProcess(2)
-                val ms = args.getOrNull(3)?.toIntOrNull() ?: 800
-                exitProcess(if (DeviceInputControl.longPress(x, y, ms)) 0 else 1)
-            }
-            "--clipboard-read" -> {
-                requireRoot()
-                Looper.prepareMainLooper()
-                println(DeviceClipboardControl.read(SystemContext.create()))
-                return
-            }
-            "--clipboard-write" -> {
-                requireRoot()
-                Looper.prepareMainLooper()
-                exitProcess(if (DeviceClipboardControl.write(SystemContext.create(), args.drop(1).joinToString(" "))) 0 else 1)
-            }
-            "--volume-status" -> {
-                requireRoot()
-                Looper.prepareMainLooper()
-                println(DeviceAudioControl.statusJson(SystemContext.create()))
-                return
-            }
-            "--volume-set" -> {
-                requireRoot()
-                Looper.prepareMainLooper()
-                val stream = args.getOrNull(1) ?: exitProcess(2)
-                val index = args.getOrNull(2)?.toIntOrNull() ?: exitProcess(2)
-                exitProcess(if (DeviceAudioControl.setVolume(SystemContext.create(), stream, index)) 0 else 1)
-            }
-            "--input-swipe" -> {
-                requireRoot()
-                val values = args.drop(1).mapNotNull { it.toIntOrNull() }
-                if (values.size < 5) exitProcess(2)
-                exitProcess(if (DeviceInputControl.swipe(values[0], values[1], values[2], values[3], values[4])) 0 else 1)
-            }
         }
         Thread.setDefaultUncaughtExceptionHandler { _, error ->
             Log.e(TAG, "fatal daemon error", error)
@@ -124,20 +38,10 @@ object AdhDeviceDaemon {
         File(AdhPaths.SCOPE_DIR).mkdirs()
         File(AdhPaths.DAEMON_PID_PATH).writeText(Process.myPid().toString())
         File(AdhPaths.DAEMON_READY_MARKER).writeText("1\n")
-        runCatching { AutomationServiceControl.ensureEnabled(context) }
-            .onFailure { Log.w(TAG, "initial automation service ensure failed", it) }
-
         val handler = Handler(Looper.getMainLooper())
         var publishedPid = -1
-        var lastAutomationEnsure = 0L
         val publisher = object : Runnable {
             override fun run() {
-                val now = SystemClock.uptimeMillis()
-                if (now - lastAutomationEnsure >= AUTOMATION_ENSURE_INTERVAL_MS) {
-                    lastAutomationEnsure = now
-                    runCatching { AutomationServiceControl.ensureEnabled(context) }
-                        .onFailure { Log.w(TAG, "automation service ensure failed", it) }
-                }
                 val managerPid = findManagerPid()
                 if (managerPid > 0 && managerPid != publishedPid) {
                     val published = ExternalProviderPublisher.publish(service)

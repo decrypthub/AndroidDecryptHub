@@ -25,6 +25,9 @@ if [ -z "${SERIAL:-}" ] || ! adb -s "$SERIAL" get-state >/dev/null 2>&1; then
   echo "SKIP  verify_v91_jni_env_fields (no device)"
   exit 0
 fi
+# This long probe installs many JNI table hooks across several fixture calls. Start from a clean
+# sandbox process so a previous verifier's still-live table patch cannot affect the family result.
+verify_restart_sandbox || { echo "FAIL  could not restart sandbox before JNI family probe"; exit 1; }
 
 set +e
 OUT="$(node - "$HTTP" <<'EOF'
@@ -92,6 +95,7 @@ const cursor = Math.max(0, ...(preList.captures ?? []).map((c) => Number(c.id ??
 console.log(`event baseline cursor=${cursor}`);
 
 // (2) trigger the native probe (it goes through the hooked entries)
+const fieldSinceMs = Date.now();
 const call = await post('/api/java/call', { session, className: 'com.adh.sandbox.Detection', method: 'jniFieldProbe', params: '', args: [] });
 const calls = Number(call.body?.result?.result ?? -1);
 if (calls === 0) {
@@ -100,6 +104,8 @@ if (calls === 0) {
   await skip('sandbox fixture not initialized');
 }
 if (calls < 0) await fail('java_call of the field probe failed: ' + String(call.body?.error ?? call.status), call.body);
+const fieldUnhooked = [];
+for (const f of hooked) fieldUnhooked.push(await uninstallSlot(f));
 await sleep(1500);   // let the capture loop drain
 
 // (3) the events must name the hooked accessors and carry the field id
@@ -119,7 +125,7 @@ const missing = hooked.filter((f) => (seen.get(f) ?? []).length === 0);
 const valueOk = [...seen.values()].some((vals) => vals.some((v) => /field=0x/.test(String(v))));
 
 // (3b) the digest must resolve at least one access to a NAME through the id the lookup handed out
-const digest = await post('/api/jni/field_digest', { session, maxGroups: 20 });
+const digest = await post('/api/jni/field_digest', { session, maxGroups: 20, sinceMs: fieldSinceMs });
 const resolvedGroups = (digest.body?.groups ?? []).filter((g) => g.resolved === true);
 console.log(`digest: groups=${(digest.body?.groups ?? []).length} resolved=${resolvedGroups.length} unresolvedAccesses=${digest.body?.unresolvedAccesses}`);
 if (resolvedGroups[0]) console.log(`  ${resolvedGroups[0].accessor} ${resolvedGroups[0].field} x${resolvedGroups[0].count} last=${resolvedGroups[0].lastValue}`);
@@ -145,6 +151,7 @@ const counterBefore = Object.fromEntries((beforeOv.body?.fields ?? []).map((f) =
 if (counterBefore !== '7') await fail(`the fixture should hold counter=7 before the override, saw ${counterBefore}`, beforeOv.body);
 const ovHook = await post('/api/jni/env_hook', { session, action: 'install', function: 'SetIntField', setValue: '42' });
 if (ovHook.body?.ok !== true) await fail('SetIntField override install failed: ' + String(ovHook.body?.error ?? ovHook.status), ovHook.body);
+const ovSinceMs = Date.now();
 const ovCall = await post('/api/java/call', { session, className: 'com.adh.sandbox.Detection', method: 'jniFieldProbe', params: '', args: [] });
 const ovRead = await post('/api/object/inspect', { session, className: 'com.adh.sandbox.HeapProbe', field: 'sConfig' });
 const counterNow = Object.fromEntries((ovRead.body?.fields ?? []).map((f) => [f.name, f.value])).counter;
@@ -160,7 +167,7 @@ const overrideOk = ovCall.body?.ok === true && counterNow === '42' && ovRestoreO
 // (3e) the digest must attribute the rewrite: v4.61 exists precisely so "the target asked for 7 and
 // the hook stored 42" shows up as a rewritten sample instead of an ordinary write.
 await sleep(1500);   // let the capture loop drain the events the probe just produced
-const ovDigest = await post('/api/jni/field_digest', { session, maxGroups: 20 });
+const ovDigest = await post('/api/jni/field_digest', { session, maxGroups: 20, sinceMs: ovSinceMs });
 const rewrittenGroups = (ovDigest.body?.groups ?? []).filter((g) => Number(g.rewritten ?? 0) >= 1);
 console.log(`digest after override: rewrittenSamples=${ovDigest.body?.rewrittenSamples} rewrittenGroups=${rewrittenGroups.length} lastRequested=${rewrittenGroups[0]?.lastRequested}`);
 const rewriteDigestOk = Number(ovDigest.body?.rewrittenSamples ?? 0) >= 1
@@ -177,6 +184,8 @@ const strCursor = Math.max(0, ...(preStr.captures ?? []).map((c) => Number(c.id 
 const strCall = await post('/api/java/call', { session, className: 'com.adh.sandbox.Detection', method: 'jniStringProbe', params: '', args: [] });
 const strCalls = Number(strCall.body?.result?.result ?? -1);
 if (strCalls < 0) await fail('java_call of jniStringProbe failed: ' + String(strCall.body?.error ?? strCall.status), strCall.body);
+const strUnhooked = [];
+for (const f of STR_FUNCS) strUnhooked.push(await uninstallSlot(f));
 await sleep(1500);
 const strList = await (await fetch(`${base}/api/captures?session=${encodeURIComponent(session)}&limit=400`)).json().catch(() => ({}));
 const strSeen = new Map();
@@ -204,8 +213,6 @@ console.log(`  string previews: utf16=${utf16Ok} utf8=${utf8Ok} pin=${pinOk} rel
 const bufferOk = /address=0x/.test(String(strSeen.get('GetDirectBufferAddress') ?? ''))
   && /capacity=64/.test(String(strSeen.get('NewDirectByteBuffer') ?? ''))
   && /capacity=64/.test(String(strSeen.get('GetDirectBufferCapacity') ?? ''));
-const strUnhooked = [];
-for (const f of STR_FUNCS) strUnhooked.push(await uninstallSlot(f));
 const stringProbeOk = strCall.body?.ok === true && strCalls >= STR_FUNCS.length && strMissing.length === 0 && textOk && bufferOk && strUnhooked.every(Boolean);
 if (strMissing.length) console.log('no event for: ' + strMissing.join(', '));
 if (!textOk) console.log('at least one string reader did not carry the copied text preview');
@@ -230,6 +237,8 @@ const regionCode = Number(regionCall.body?.result?.result ?? -1);
 // A missing fixture is an old APK, not a broken hook: the script header promises SKIP for that.
 if (regionCall.body?.ok !== true) await skip('jniArrayRegionProbe unavailable (old APK without the v4.70 fixture?)');
 if (regionCode !== 0xAD707F) await fail(`jniArrayRegionProbe returned ${regionCode}, expected 0xAD707F (all seven families round-tripped through the hooked entries)`);
+const regionUnhooked = [];
+for (const f of REGION_FUNCS) regionUnhooked.push(await uninstallSlot(f));
 await sleep(1500);
 const regionList = await (await fetch(`${base}/api/captures?session=${encodeURIComponent(session)}&limit=600`)).json().catch(() => ({}));
 const regionSeen = new Map();
@@ -265,8 +274,6 @@ for (const [type, preview] of Object.entries(regionExpect)) {
 // daemon dropped anything during this window instead of letting the operator guess.
 const regionHealth = regionList.health ?? {};
 console.log(`  array-region events: ${REGION_FUNCS.length - regionMissing.length}/${REGION_FUNCS.length} present, ${regionBad.length} with a wrong start/len/preview (capture health: dropped=${regionHealth.dropped ?? '?'} backlog=${regionHealth.backlog ?? '?'} complete=${regionHealth.complete ?? '?'})`);
-const regionUnhooked = [];
-for (const f of REGION_FUNCS) regionUnhooked.push(await uninstallSlot(f));
 const arrayProbeOk = regionMissing.length === 0 && regionBad.length === 0 && regionUnhooked.every(Boolean);
 if (regionMissing.length) console.log('no event for: ' + regionMissing.join(', '));
 if (regionBad.length) console.log('start/len/preview mismatch for: ' + regionBad.join(', '));
@@ -287,6 +294,8 @@ const elemCall = await post('/api/java/call', { session, className: 'com.adh.san
 if (elemCall.body?.ok !== true) await skip('jniArrayElementsProbe unavailable (old APK without the v4.72 fixture?)');
 const elemCode = Number(elemCall.body?.result?.result ?? -1);
 if (elemCode !== 0xAD80FF) await fail(`jniArrayElementsProbe returned ${elemCode}, expected 0xAD80FF (seven types copied back and the abort round discarded)`);
+const elemUnhooked = [];
+for (const f of ELEM_FUNCS) elemUnhooked.push(await uninstallSlot(f));
 await sleep(1500);
 const elemList = await (await fetch(`${base}/api/captures?session=${encodeURIComponent(session)}&limit=600`)).json().catch(() => ({}));
 const elemEvents = new Map();
@@ -328,8 +337,6 @@ for (const [type, exp] of Object.entries(elemExpect)) {
 const elemAbortOk = elemValues('ReleaseIntArrayElements').some((v) => v.includes('mode=2(abort)') && v.includes('first=[100000,999999,300000,400000]'));
 const elemHealth = elemList.health ?? {};
 console.log(`  array-elements: ${ELEM_FUNCS.length - elemMissing.length}/${ELEM_FUNCS.length} present, ${elemShapeBad.length} without shape, ${elemBad.length} with a wrong preview, abort=${elemAbortOk} (capture health: dropped=${elemHealth.dropped ?? '?'} backlog=${elemHealth.backlog ?? '?'})`);
-const elemUnhooked = [];
-for (const f of ELEM_FUNCS) elemUnhooked.push(await uninstallSlot(f));
 const elementsProbeOk = elemMissing.length === 0 && elemShapeBad.length === 0 && elemBad.length === 0 && elemAbortOk && elemUnhooked.every(Boolean);
 if (elemMissing.length) console.log('no event for: ' + elemMissing.join(', '));
 if (elemShapeBad.length) console.log('no event with len/elements/isCopy-or-mode for: ' + elemShapeBad.join(', '));
@@ -388,6 +395,11 @@ const famCall = await post('/api/java/call', { session, className: 'com.adh.sand
 if (famCall.body?.ok !== true) await skip('jniFamilyProbe unavailable (old APK without the v4.83 fixture?)');
 const famCode = Number(famCall.body?.result?.result ?? -1);
 if (famCode !== 0xAD91FF) await fail(`jniFamilyProbe returned ${famCode}, expected 0xAD91FF (array creation, object arrays, AllocObject, nonvirtual dispatch, reflection bridge, strings, clean ExceptionCheck)`);
+// This family is unusually hot: Java/ART itself calls several of these slots while the MCP reply and
+// capture details are being serialized. Stop the hooks as soon as the fixture returns so background
+// runtime traffic cannot evict the probe's events before the host reads the ring.
+const famUnhooked = [];
+for (const f of FAMILY_FUNCS) famUnhooked.push(await uninstallSlot(f));
 await sleep(1500);
 const famList = await (await fetch(`${base}/api/captures?session=${encodeURIComponent(session)}&limit=600`)).json().catch(() => ({}));
 const famEvents = new Map();
@@ -429,8 +441,6 @@ const famHealth = famList.health ?? {};
 console.log(`  families: ${FAMILY_FUNCS.length - famMissing.length}/${FAMILY_FUNCS.length} present, ${famBad.length} with a wrong value (capture health: dropped=${famHealth.dropped ?? '?'} backlog=${famHealth.backlog ?? '?'})`);
 if (famMissing.length) console.log('no event for: ' + famMissing.join(', '));
 if (famBad.length) console.log('value mismatch for: ' + famBad.join(', '));
-const famUnhooked = [];
-for (const f of FAMILY_FUNCS) famUnhooked.push(await uninstallSlot(f));
 const familyProbeOk = famMissing.length === 0 && famBad.length === 0 && famUnhooked.every(Boolean);
 
 // (4) unhook, table restored, process alive.

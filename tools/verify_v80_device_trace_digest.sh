@@ -49,7 +49,8 @@ const d = digest.body.digest;
 const mnemonics = (d.mnemonics ?? []).map((m) => m.mnemonic);
 console.log(`retval=${digest.body.retval} instructions=${digest.body.instructionCount} digestInstructions=${d.instructions}`);
 console.log(`mnemonics=${mnemonics.slice(0, 6).join('/')} hot=${(d.hotInstructions ?? []).length} calls=${(d.calls ?? []).length} memory=${(d.memory ?? []).length} constants=${(d.constants ?? []).length}`);
-const pass = String(digest.body.retval) === '10'
+const retval = Number.parseInt(String(digest.body.retval ?? '').replace(/^0x/i, ''), 16);
+const pass = retval === 10
   && Number(digest.body.instructionCount) >= 3
   && Number(d.instructions) >= 3
   && mnemonics.length >= 2

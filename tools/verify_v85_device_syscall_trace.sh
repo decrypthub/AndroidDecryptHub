@@ -11,6 +11,7 @@ if [ -z "${SERIAL:-}" ] || ! adb -s "$SERIAL" get-state >/dev/null 2>&1; then
   echo "SKIP  verify_v85_device_syscall_trace (no device)"
   exit 0
 fi
+verify_restart_sandbox || { echo "FAIL  could not restart sandbox before syscall scan"; exit 1; }
 
 set +e
 OUT="$(node - "$HTTP" <<'EOF'

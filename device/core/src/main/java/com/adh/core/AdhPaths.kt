@@ -11,7 +11,6 @@ object AdhPaths {
     const val LOADER_MARKER = "/data/adb/adh/zygisk_loaded"
     const val DAEMON_READY_MARKER = "/data/adb/adh/device_daemon_ready"
     const val DAEMON_PID_PATH = "/data/adb/adh/device_daemon.pid"
-    const val AUTOMATION_ENABLED_MARKER = "/data/adb/adh/automation.enabled"
     const val MODULE_DIR = "/data/adb/modules/adh"
     const val MODULE_PROP = "/data/adb/modules/adh/module.prop"
     const val MANAGER_PKG = "com.adh.manager"

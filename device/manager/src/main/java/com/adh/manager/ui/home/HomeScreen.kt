@@ -5,8 +5,6 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.provider.Settings
-import android.widget.Toast
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -33,15 +31,12 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Info
-import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.OpenInBrowser
 import androidx.compose.material.icons.rounded.Refresh
-import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -49,7 +44,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -62,15 +56,12 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.adh.manager.BuildConfig
 import com.adh.manager.R
-import com.adh.manager.data.AutomationStatus
-import com.adh.manager.notify.AdhNotificationListener
 import com.adh.manager.data.ModuleStatus
 import com.adh.manager.data.HostWebUiRepository
 import com.adh.manager.data.ScopeRepository
 import com.adh.manager.data.WebUiRepository
 import com.adh.manager.data.WebUiStatus
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @Composable
@@ -83,11 +74,7 @@ fun HomeScreen(
     var webStatus by remember { mutableStateOf<WebUiStatus?>(null) }
     var count by remember { mutableIntStateOf(0) }
     var refreshVersion by remember { mutableIntStateOf(0) }
-    var automationEnabled by remember { mutableStateOf(false) }
-    var automationBusy by remember { mutableStateOf(false) }
-    var notificationGranted by remember { mutableStateOf(false) }
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
 
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { refreshVersion++ }
 
@@ -109,44 +96,6 @@ fun HomeScreen(
         webStatus = withContext(Dispatchers.IO) { webUiRepository.probe() }
     }
 
-    // The automation service can be enabled/disabled outside this screen (system settings, the
-    // daemon's ensure loop), so re-read it whenever the user comes back instead of only when they
-    // press refresh. Without this the card claimed "已关闭" while the bridge was actually online.
-    var automationRefresh by remember { mutableIntStateOf(0) }
-    var bridgeSummary by remember { mutableStateOf("未启用") }
-    var bridgeRefresh by remember { mutableIntStateOf(0) }
-    LaunchedEffect(repository, refreshVersion, automationRefresh) {
-        automationEnabled = withContext(Dispatchers.IO) {
-            // Right after an install/resume the accessibility manager can still report no enabled
-            // service and the daemon binder may not be published yet; retry briefly before deciding,
-            // otherwise the card claims "已关闭" while the service is demonstrably running.
-            var resolved: Boolean? = null
-            for (attempt in 0 until 3) {
-                val fromService = AutomationStatus.isServiceEnabled(context)
-                val fromDaemon = repository.isAutomationEnabled()
-                if (!fromService && fromDaemon != true && attempt < 2) {
-                    Thread.sleep(400)
-                    continue
-                }
-                resolved = fromDaemon ?: fromService
-                break
-            }
-            resolved ?: false
-        }
-        notificationGranted = withContext(Dispatchers.IO) { AdhNotificationListener.isGranted(context) }
-    }
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { automationRefresh++ }
-
-    // The bridge state lives in the AccessibilityService; poll it while this card is visible so the
-    // operator can tell "cannot reach the host" from "connected, but this app is not allowlisted".
-    LaunchedEffect(automationEnabled, automationEnabled, bridgeRefresh) {
-        bridgeSummary = AutomationStatus.bridgeSummary()
-        while (true) {
-            kotlinx.coroutines.delay(2_000)
-            bridgeSummary = AutomationStatus.bridgeSummary()
-        }
-    }
-
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -162,34 +111,6 @@ fun HomeScreen(
             verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
             WebUiSection(status = webStatus)
-            AutomationSection(
-                enabled = automationEnabled,
-                busy = automationBusy,
-                bridgeSummary = bridgeSummary,
-                onToggle = { checked ->
-                    if (!automationBusy) {
-                        automationBusy = true
-                        scope.launch {
-                            val result = withContext(Dispatchers.IO) { repository.setAutomationEnabled(checked) }
-                            if (result.isSuccess) {
-                                automationEnabled = checked
-                            } else {
-                                Toast.makeText(context, context.getString(R.string.automation_enable_failed), Toast.LENGTH_LONG).show()
-                            }
-                            automationBusy = false
-                        }
-                    }
-                },
-                onOpenSettings = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) },
-                onRefreshBridge = { bridgeRefresh++ },
-            )
-            NotificationAccessSection(
-                granted = notificationGranted,
-                onOpenSettings = {
-                    runCatching { context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }
-                        .onFailure { Toast.makeText(context, R.string.notification_open_settings, Toast.LENGTH_LONG).show() }
-                },
-            )
             SectionLabel(text = stringResource(R.string.section_configuration))
             Surface(
                 color = MaterialTheme.colorScheme.surfaceContainer,
@@ -244,117 +165,6 @@ fun HomeScreen(
                         value = BuildConfig.VERSION_NAME,
                     )
                 }
-            }
-        }
-    }
-}
-
-@Composable
-private fun AutomationSection(
-    enabled: Boolean,
-    busy: Boolean,
-    bridgeSummary: String,
-    onToggle: (Boolean) -> Unit,
-    onOpenSettings: () -> Unit,
-    onRefreshBridge: () -> Unit,
-) {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        shape = RoundedCornerShape(8.dp),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 18.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
-            Icon(
-                Icons.Rounded.Apps,
-                contentDescription = null,
-                tint = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = stringResource(R.string.automation_title),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Text(
-                    text = stringResource(if (enabled) R.string.automation_enabled_summary else R.string.automation_disabled_summary),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                // Show the bridge line whenever the service is on OR the bridge is talking to the
-                // host: a stale toggle must not hide the fact that automation is actually working.
-                val bridgeLive = bridgeSummary.startsWith("已连接") || bridgeSummary.startsWith("正在连接")
-                if (enabled || bridgeLive) {
-                    Text(
-                        text = "桥接：" + bridgeSummary,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            Switch(checked = enabled, onCheckedChange = onToggle, enabled = !busy)
-            if (enabled) {
-                IconButton(onClick = onRefreshBridge, enabled = !busy) {
-                    Icon(
-                        Icons.Rounded.Refresh,
-                        contentDescription = "刷新桥接状态",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            IconButton(onClick = onOpenSettings, enabled = !busy) {
-                Icon(
-                    Icons.Rounded.Settings,
-                    contentDescription = stringResource(R.string.automation_system_settings),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-    }
-}
-@Composable
-private fun NotificationAccessSection(granted: Boolean, onOpenSettings: () -> Unit) {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        shape = RoundedCornerShape(8.dp),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 18.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
-            Icon(
-                Icons.Rounded.Notifications,
-                contentDescription = null,
-                tint = if (granted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = stringResource(R.string.notification_section_title),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Text(
-                    text = stringResource(if (granted) R.string.notification_section_granted else R.string.notification_section_missing),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    text = stringResource(R.string.notification_section_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            IconButton(onClick = onOpenSettings) {
-                Icon(
-                    Icons.Rounded.Settings,
-                    contentDescription = stringResource(R.string.notification_open_settings),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
             }
         }
     }

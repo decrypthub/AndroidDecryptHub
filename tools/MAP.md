@@ -16,6 +16,7 @@ API:
 | `verify_resolve_env` | Sets `ROOT`/`HTTP`/`SERIAL`/`BASE` (`ADH_HTTP_PORT`/`ADH_SERIAL`). For device scripts that gate on liveness OR set SERIAL. |
 | `verify_resolve_env_host` | Sets `ROOT`/`HTTP`/`BASE` only (no SERIAL, no `adb` call). For host-only scripts. |
 | `verify_sandbox_alive` | Sets `ALIVE` (sandbox pid or empty) + prints the alive line. Call before `verify_gate … 1`. |
+| `verify_restart_sandbox` | Force-stops and relaunches the sandbox, then waits for startup. Use before scans of mutable syscall/native code sites or broad JNI hook probes so earlier checks cannot leave live patches behind. |
 | `verify_gate "<label>" <0\|1>` | Reads `$OUT` for `RESULT:PASS`. Returns 0 on pass; if arg2=1, also requires non-empty `$ALIVE`. Prints the ✅/❌ line. Uses here-string grep (SIGPIPE-safe — the `echo\|grep -q` pattern false-fails on >64KB payloads under `pipefail`). |
 | `verify_grep_q <haystack> <pattern>` | SIGPIPE-safe `grep -q` for host scripts grepping large HTML. |
 | `verify_host_begin` / `verify_chk "<label>" '<expr>'` / `verify_host_finish "<label>"` | The chk-accumulator idiom for host scripts with many assertions (replaces the inline `fail=0; chk(){…}` redefinition). |

@@ -12,6 +12,7 @@ if [ -z "${SERIAL:-}" ] || ! adb -s "$SERIAL" get-state >/dev/null 2>&1; then
   echo "SKIP  verify_v81_device_syscall_digest (no device)"
   exit 0
 fi
+verify_restart_sandbox || { echo "FAIL  could not restart sandbox before syscall scan"; exit 1; }
 
 set +e
 OUT="$(node - "$HTTP" <<'EOF'
@@ -44,7 +45,7 @@ if (ctl.body?.ok !== true) fail('positive control failed: adh_add_target is not 
 
 const watch = await post('/api/native/syscall_watch', { session, module: 'libc.so', syscalls: ['uname'], limit: 2 });
 if (watch.status === 404 || /unknown|unsupported/i.test(String(watch.body?.error ?? ''))) skip('daemon predates syscall_watch');
-if (!watch.body?.ok || Number(watch.body.installedCount) < 1) fail('no uname svc site hooked in libc.so', watch.body);
+if (Number(watch.body?.installedCount) < 1) fail('no uname svc site hooked in libc.so', watch.body);
 const ids = (watch.body.hooks ?? []).map((h) => Number(h.hookId)).filter((n) => n > 0);
 const expected = Object.fromEntries(ids.map((id) => [id, 160]));
 

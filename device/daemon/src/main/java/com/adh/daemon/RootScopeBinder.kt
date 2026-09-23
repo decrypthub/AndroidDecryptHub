@@ -86,66 +86,6 @@ internal class RootScopeBinder(
         return XposedBackend.setScope(packages ?: emptyList())
     }
 
-    override fun isAutomationEnabled(): Boolean {
-        verifier.enforce()
-        return AutomationServiceControl.isEnabled(context)
-    }
-
-    override fun setAutomationEnabled(enabled: Boolean): Boolean {
-        verifier.enforce()
-        return AutomationServiceControl.setEnabled(context, enabled)
-    }
-
-    override fun getDevicePowerStatus(): String {
-        verifier.enforce()
-        return DevicePowerControl.statusJson(context)
-    }
-
-    override fun wakeScreen(): Boolean {
-        verifier.enforce()
-        return DevicePowerControl.wake(context)
-    }
-
-    override fun dismissKeyguard(): Boolean {
-        verifier.enforce()
-        return DevicePowerControl.dismissKeyguard(context)
-    }
-
-    override fun injectInputTap(x: Int, y: Int): Boolean {
-        verifier.enforce()
-        return DeviceInputControl.tap(x, y)
-    }
-
-    override fun injectInputSwipe(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Int): Boolean {
-        verifier.enforce()
-        return DeviceInputControl.swipe(x1, y1, x2, y2, durationMs)
-    }
-
-    override fun getVolumeJson(): String {
-        verifier.enforce()
-        return DeviceAudioControl.statusJson(context)
-    }
-
-    override fun setVolume(stream: String?, index: Int): Boolean {
-        verifier.enforce()
-        return DeviceAudioControl.setVolume(context, stream, index)
-    }
-
-    override fun injectInputTap2(x: Int, y: Int, durationMs: Int): Boolean {
-        verifier.enforce()
-        return DeviceInputControl.longPress(x, y, durationMs)
-    }
-
-    override fun getClipboardText(): String {
-        verifier.enforce()
-        return DeviceClipboardControl.read(context)
-    }
-
-    override fun setClipboardText(text: String?): Boolean {
-        verifier.enforce()
-        return DeviceClipboardControl.write(context, text)
-    }
-
     private fun atomicWrite(target: File, content: String) {
         target.parentFile?.mkdirs()
         val temp = File(target.parentFile, ".${target.name}.${android.os.Process.myPid()}.tmp")

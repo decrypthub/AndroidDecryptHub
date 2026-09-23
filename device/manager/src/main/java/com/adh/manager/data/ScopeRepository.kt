@@ -43,8 +43,4 @@ interface ScopeRepository {
     fun setXposedScope(packages: List<String>): Result<Unit> =
         Result.failure(UnsupportedOperationException("xposed backend unsupported"))
 
-    /** Protocol v7: root daemon can read/enable the optional automation AccessibilityService. */
-    fun isAutomationEnabled(): Boolean? = null
-    fun setAutomationEnabled(enabled: Boolean): Result<Unit> =
-        Result.failure(UnsupportedOperationException("automation service control unsupported"))
 }

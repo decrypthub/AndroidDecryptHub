@@ -4,11 +4,11 @@
 > 适用于任意 App 的运行时观测/dump/hook/trace，并**对高对抗目标（反调试、root/签名检测、代码混淆、加密传输）具备实战能力**。
 > **使用范围**：授权范围内的逆向调查与运行时分析；非法律取证，亦非面向未授权目标的规避工具。
 > **参考项目**：[taisuii/ios-decrypt-helper](https://github.com/taisuii/ios-decrypt-helper)（IOSDecryptHub）
-> **本文档范围**：本文档是**唯一权威功能规格**（模块 A–X）。开发步骤与排期见 `DEVELOPMENT_PLAN.md`。
+> **本文档范围**：本文档是**唯一权威功能规格**（模块 A–W；模块 X 手机 UI 自动化已于 2026-09-23 按产品范围决议退役）。开发步骤与排期见 `DEVELOPMENT_PLAN.md`。
 
 ---
 
-> **⚠️ v2.0+ 加固重构（当前工作面）**：模块 A–W 的能力在 v0.1–v1.0 已全部"跑通一遍"，X 为新增的可选手机自动化面。
+> **⚠️ v2.0+ 加固重构（当前工作面）**：模块 A–W 的能力在 v0.1–v1.0 已全部"跑通一遍"；原可选手机自动化模块 X 已退役，AI 需要操作连接手机时直接使用 adb。
 > 当前轮（v2.0+）不是加新模块，而是**把既有每条路径做到不骗人**——真实 hook 覆盖面（Java/inline）、
 > 去 sandbox 耦合、环形缓冲如实上报、length-framed 协议、持久索引、脱壳二代、确定性关联等。
 > 权威工作流与排期见 `DEVELOPMENT_PLAN.md §6.9`（WS-A…WS-K / v2.0–v2.6）。三条门禁：不为过测而耦合、
@@ -1592,7 +1592,7 @@ Agent → TCP 8761 → ADH Daemon（host，经 adb reverse）
 - scope 读取失败必须 fail-loud/no-inject；KernelSU 由 `post-fs-data.sh` 应用 `allow zygote adb_data_file` 的最小规则，Magisk 使用模块根 `sepolicy.rule`。
 - Companion 应设置 `DLCLOSE_MODULE_LIBRARY`，post-specialize 后卸载自身映射；agent `.so` 保持加载服务会话。
 - 模块作者固定为 `decrypthub.com`；root 管理器中的模块描述只显示“等待重启 / 运行中 / 未加载”这类简洁工作状态，不展示内部路径、架构说明或开发备注。
-- ADH Manager 的设备控制能力只限注入作用域、模块状态，以及经 Device Daemon 终止/重启目标应用进程；界面默认中文，已有系统语言资源时跟随系统语言，并跟随系统深浅色主题。首页保留运行状态、Web UI 访问地址、作用域入口和版本信息。Manager 可直接探测 Host ADH Daemon `/health` 来显示并打开局域网优先的 Web UI 地址，但不得把该请求转交 Device Daemon，也不得在设备侧承载 HTTP 服务或分析逻辑。目标进程启停/打开必须走受认证 AIDL（`controlPackage`），协议 v6 增加 `open`；协议 v7 增加自动化 AccessibilityService 的读取/显式启停，Manager 提供用户开关；用户开启后写入 `/data/adb/adh/automation.enabled`，Device Daemon 在服务被系统清理时自动修复。协议 v8 增加 root 屏幕状态/唤醒/非安全锁屏解除；协议 v9 增加受限根输入注入（`injectInputTap`/`injectInputSwipe`，绝对像素、固定 `/system/bin/input`，不是任意 shell），作为「无障碍手势被应用吞掉但回调成功」时的兜底通道。Manager 不得自己调用 `am`/`su`。不得对 Manager、Device Daemon、`system_server`、System UI 或 `android` 执行终止/重启。
+- ADH Manager 的设备控制能力只限注入作用域、模块状态，以及经 Device Daemon 终止/重启目标应用进程；界面默认中文，已有系统语言资源时跟随系统语言，并跟随系统深浅色主题。首页保留运行状态、Web UI 访问地址、作用域入口和版本信息。Manager 可直接探测 Host ADH Daemon `/health` 来显示并打开局域网优先的 Web UI 地址，但不得把该请求转交 Device Daemon，也不得在设备侧承载 HTTP 服务或分析逻辑。目标进程启停/打开必须走受认证 AIDL（`controlPackage`），当前 Device Daemon AIDL 为 v13；旧版 v7-v12 的 AccessibilityService、设备电源状态与受限 UI 输入方法已从当前协议删除。Manager 不得自己调用 `am`/`su`。不得对 Manager、Device Daemon、`system_server`、System UI 或 `android` 执行终止/重启。
 - “运行中”必须来自本次启动中 Zygisk 实际加载模块的标记，不能仅以模块目录存在作为成功依据；标记由 root companion 写入，启动时先清除旧状态。
 - Manager 不得直接调用 `su` 或访问 `/data/adb`。模块以 root `app_process` 启动 Device Daemon，Manager 仅通过 AIDL Binder 读取状态和作用域；daemon 必须校验调用 UID、`com.adh.manager` 包归属和构建时固定的 APK 签名证书。
 - Binder 交接入口只接受 UID 0 发布，并核对 AIDL descriptor；Manager 必须区分 Device Daemon 未连接、模块未安装、模块已安装但未加载、运行中四种状态。服务未连接时不得用空配置冒充真实作用域，也不得显示“模块未安装”。
@@ -1636,79 +1636,11 @@ Agent → TCP 8761 → ADH Daemon（host，经 adb reverse）
 ---
 
 
-## 31. X — 可选手机自动化（UI 观测与执行）
+## 31. X — 手机 UI 自动化（已退役）
 
-**目标**：在用户明确开启后，让 Host ADH Daemon / MCP 能观察并操作授权 App 的界面，为 AI 手机控制提供稳定、可审计的执行面。默认关闭。
+2026-09-23 产品范围决议：移除 ADH 自带的手机 UI 自动化能力。Host 不再提供 AccessibilityService 桥接、phone_* MCP 工具、通知读取、手机电源/音量/剪贴板控制或自动化配方；Manager 不再声明或管理 AccessibilityService / NotificationListenerService。AI Agent 需要操作连接手机时直接调用 adb。
 
-### 31.1 分层
-
-```text
-Host ADH Daemon / MCP  →  自动化 TCP 8763（loopback + adb reverse）  →  Manager AccessibilityService
-                                                                    ├─ 控件树
-                                                                    └─ 截图 + 归一化坐标动作
-```
-
-- 设备侧只允许 `:manager` 中用户启用的 `AdhAutomationAccessibilityService` 作为客户端拨入 Host，不监听端口、不承载 HTTP/MCP/索引/分析。
-- agent `.so` 不参与 UI 自动化；它以事件/单步方式补充目标进程内部状态，匹配与等待逻辑在 Host 侧完成（见 §31.3 规则 5）。
-
-### 31.2 MCP 面
-
-| 工具 | 说明 |
-|---|---|
-| `automation_status` | 只读状态：Host 开关、桥接连接、设备能力、允许包名；不能开启自动化 |
-| `phone_observe` | 优先返回控件树；树为空或非语义时返回压缩截图；支持 `maxDepth`、`interactiveOnly`、truncation 标记；`mode=text` 把同一棵树渲染成紧凑纯文本（含 `snapshotId` 与 ref，可直接用于 `phone_act`），用于节省 AI 上下文；`includeScreenshot:true` 时同一次调用再附 JPEG（既给可读文本又给像素） |
-| `phone_find` | 按 text/resourceId/contentDescription/交互标志返回紧凑节点列表，不传整棵树 |
-| `phone_wait` | 等待四类条件竞速命中：控件/状态、agent 事件、进程内捕获、通知（`notificationContains`/`notificationFrom`，需通知开关与授权）；可对虚拟列表执行 scroll-until-found（`scrollMode=gesture` 用真滑动代替 `ACTION_SCROLL`，用于翻页器/自绘列表，`axis` 选纵向或横向）；`stable:true` 时等到屏幕签名连续 `stableMs` 不变再返回（附 `signature`/`waitedMs` 与可直接动作的 refs）；`afterCaptureId`/`afterEventSeq` 游标或 `lookbackMs` 消除两次调用间的信号丢失 |
-| `phone_act` | `tap` / `long_press` / `swipe` / `scroll` / `set_text` / `global back/home/recents`；优先 selector 或 `snapshotId+ref`，兜底归一化坐标；`set_text` 的 `text` 是输入内容而非目标过滤条件，`submit:true` 追加键盘动作键（搜索/发送/完成）并用 `submitted:true` 表示控件已接受 |
-| `phone_blocked` | Host 侧记录最近被允许名单拒绝的包名（仅包名，内存有界），`GET /api/automation/status` 返回 `blocked[]`；Web 设置面板据此提供一键加入允许名单 |
-| `phone_act` (input) | `action:"input"` / `inputMode:"root"` 经 Device Daemon v9 注入绝对像素 tap/swipe；普通 tap/swipe 返回 `changed`（窗口签名是否真的变化），`changed:false` 时自动 root 重试并标注 `fallback:"root"` |
-| `phone_app` | 通过包名 `open` / `stop` / `restart` 授权应用；新 daemon 走 root Device Daemon，旧 daemon 保留 Accessibility fallback。`open`/`restart` 必须**验证前台**：未到达时返回 `verified:false` + 实际前台包 + 处理提示（OEM 确认框吞掉启动时必须点名该包） |
-| `phone_notifications` | 读取最近通知（包名/标题/正文/时间，最新在前；`sinceMs` 可增量轮询）。需用户在系统设置里给 Manager 开启"通知使用权"，且 Host `automation.notifications`（默认 false）已开；缓冲区仅内存、≤30 条、不落盘 |
-| `phone_device` | `status` / `wake` / `unlock` / `lock`；安全锁屏凭据不绕过（真机验收：lock→`interactive:false, locked:true`，wake→`interactive:true`，unlock→`dismissed:true`） |
-| `phone_task` | 单次 MCP 调用内执行有界步骤序列（≤30 步），步骤间可用 `{{id.path}}` 引用前序步骤的结果（如把 `find` 得到的 `snapshotId`/`ref` 直接喂给 `act`）；每步支持 `retries` 与结构化失败输出 |
-| 桥接传输 | 设备侧始终作为客户端；优先 `adb reverse` 的 loopback，其次 host 在 `helloAck` 里广播的 LAN 地址（需真实收到 `helloAck` 才算连上，可用地址持久化以便拔线后重连）。host 默认只监听 loopback，`ADH_AUTOMATION_HOST` 可放开 |
-| `phone_act` (ime) | 对聚焦控件执行 IME 动作键（search/done/go/send/next/previous）；应用忽略自家提交按钮时用它，Android 11 以下或无输入框时明确失败 |
-| `phone_wait_any` | 多个条件任一命中即成功（`wait_any` 步骤同样可用）：应用可能从不同状态恢复时用它，避免配方只认一种状态；都不命中时 fail-loud（`wait_any_timeout` + 最后失败原因） |
-| `phone_task` onlyIf | 步骤级守卫：`onlyIf` 选择器不存在时该步标记 `skipped:true` 而非失败，配方可表达「仅当这个控件在时才点它」 |
-| `phone_act` (long press) | `action:"tap"` + `durationMs>=600` 走长压；`inputMode:"root"` 时经协议 v12 的零距离长压注入，用于吞无障碍手势的应用；根输入也接受 snapshotId+ref 而不只是坐标 |
-| `phone_device` (clipboard) | `clipboard_read` 读取剪贴板文本、`clipboard_write {text}` 写入（≤8 KiB）；无障碍服务上下文优先、root daemon（协议 v11）兜底 |
-| `phone_device` (volume) | `volume_status` 读取 music/ring/alarm/voice 当前值与最大值；`volume_set {stream, index}` 写入（夹到该流上限，未知流拒绝）。协议 v10 |
-| `GET /api/skills` | 列出配方库（名称/描述/步数/参数/运行次数），供 Web「技能库」页展示 |
-| `POST /api/skills` | `{action:"run", name, inputs}` 或 `{action:"delete", name}`；与 `phone_skill` 共用同一实现与允许名单 |
-| `phone_skill` (save) | 保存前静态预检：对未建立应用上下文（无 app / wait activePackage / wait_any 状态条件）的 act/observe/find 步骤按索引返回 `warnings`，不阻止保存 |
-| `phone_skill` |  保存 / 列出 / 运行 / 删除命名手机配方（skills）：步骤受校验（仅 observe/find/wait/act/app/device，≤30 步）、不可嵌套、无 shell；配方可声明 `params`（≤10）并由步骤以 `{{input.<name>}}` 引用，运行时用 `inputs` 传值、`defaults` 兜底，缺参数 fail-loud；运行复用 `phone_task` 的执行器、allowlist 与重试语义 |
-
-### 31.3 兜底规则
-
-1. 控件树包含文本、contentDescription、resourceId、bounds、可执行动作和 snapshot-bound ref。
-2. 控件树为空、不可操作或目标页面为自绘内容时，截图作为第二感知层返回（JPEG，默认最长边 1280；MCP 通过 image content 返回，不持久化原图）。
-3. 视觉动作只能使用归一化坐标或显式像素坐标；ref 只能用于对应 snapshotId，动作完成后 ref 失效。
-4. `FLAG_SECURE` 等受保护窗口截图失败必须 fail-loud 返回 `screenshot_failed` / `screenshot_unsupported`，不得伪造画面。真机上受保护窗口会**截出全黑帧**（系统不报错），因此设备侧必须在返回前做黑帧/纯色检测并抛 `screenshot_failed`（"blank/black … probably protected"），不得把黑图当成屏幕交出去。（真机验收：v3.6 开启/关闭安全窗口 + 截图恢复）。框架错误码必须翻译成人话并对**截图频率限制**（`ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT`）自动重试一次：连续两次截图会被限流，直接失败会让 AI 白跑一轮。
-5. 进程内信号等待与控件条件竞速，命中即返回；同一类过滤为 AND。事件用 `agentEvent`（精确 type）/ `agentEventContains`（JSON 子串），捕获用 `captureCategory`（crypto/net/file/system）/ `captureContains`（在解码后的 UTF-8 文本 + 元数据上做子串匹配）。`phone_observe`/`phone_find`/`phone_act` 返回 `cursor`（`phone_act` 另有动作派发前的 `cursorBefore`）；把游标传给 `afterCaptureId`/`afterEventSeq` 只匹配更新的记录（不看时间戳），避免信号在两次 MCP 调用之间到达而丢失。agent 与 Host 的连接由 agent 自己维持：Host 重启（每次升级都会发生）后 agent 必须自行重连，目标进程不得失联；纯信号等待不依赖无障碍服务。信号等待超时时必须带回窗口内的实际信号摘要（`saw.captures`/`saw.events` + `totals`）与当时的 `cursor`，让 AI 能改写过滤条件而不是盲猜。
-6. 同一个 JSON 字段既可能是目标也可能是负载：`set_text` 的 `text` 是"要写入的值"，不得当作选择器（否则要求控件当前文本已等于待写入值，永远选不中）——隐式选择器按动作剔除该键，显式 `selector:{text:...}` 仍然有效。选择器解析允许有界重试（≤3 次 / ~500ms），以吸收动画与列表滚动造成的瞬时抖动。
-
-7. `phone_task`/`phone_skill` 的步骤可引用**前序步骤**的结果：`{{stepId}}` 取整份结果，`{{stepId.path.to.0}}` 取深层值（数组用数字下标）；整串是模板时保留原类型，字符串内嵌则转字符串。只能引用带 `id` 且已完成的前序步骤——未知名与缺失路径必须 fail-loud（`template_unknown_step` / `template_path_missing`），不允许静默替换成空值。它让"find 得到 ref → 立刻 act"在一次调用内完成，避免 ref 在两次调用之间过期。保留命名空间 `input`：`phone_skill` 的配方用 `params` 声明参数，运行时 `inputs` 传值（`defaults` 可兜底），缺失时返回 `skill_missing_input` 且不执行任何步骤。
-
-8. 动作失败必须**自带现场**：`phone_act` 的选择器解析失败、ref 过期、手势被窗口拒绝等错误都要附上当前屏幕的紧凑文本视图（`--- current screen ---`）与前台包；若现场本身读不到（例如前台是不在 allowlist 的系统弹窗），则附上"读不到的原因"，不得掩盖原始错误。等待类失败另有 `saw` 摘要（见规则 5）。
-
-9. 设备侧命令必须**有硬超时并必定回答主机**：无障碍节点访问在目标窗口被冻结/无响应时会无限阻塞，因此桥接层对每个命令设置硬截止（10s，早于主机各 op 的 20–25s），超时返回 `command_timeout`（附"重试或重启该应用"的提示）并释放命令闸门；只有多个命令同时堆积（≥3）才回收连接。**任何单次卡死都不得让整条自动化通道失效** —— 这是验收项，不是尽力而为。
-
-10. 通知读取是**独立于界面控制的隐私开关**：Android 15 起通知正文不再随无障碍事件下发（实测 `TYPE_NOTIFICATION_STATE_CHANGED` 的 text 为空、`parcelableData` 是被裁剪的 Notification），因此必须用 `NotificationListenerService`，并且**只有用户在系统设置里授权后**才可能读到正文。实现上：设备侧环形缓冲仅内存、上限 30 条、不持久化；Host 侧 `automation.notifications` 默认 `false`，关闭时工具直接 fail-loud（`notifications_disabled`），授权缺失时报 `notification_access_not_granted` 并指明设置路径。AI 不得代替用户完成该授权。`phone_wait` 可把通知接进等待（`notificationContains`/`notificationFrom`），用于"点发送 → 等验证码到达 → 提取"这类闭环；命中返回 `kind:"notification"` 与 `{package,title,text,ts,key}`。
-
-### 31.4 开关与安全
-
-- Host `settings.automation.enabled` 默认 `false`；关闭时 MCP `tools/list` 不返回 `phone_*`。
-- 自动化必须同时满足：用户在 Android 无障碍设置中启用服务、Host 开关打开、当前前台包在独立 allowlist 内。
-- 不复用注入 scope；不提供任意 shell；系统弹窗/权限页/支付页默认不自动授权。
-- **不得控制自身与关键系统包**：设备侧 `PackageControl.mayControl` 硬拒绝 `com.adh.manager`（HardExcludes：system_server/zygote/zygote64/Manager）、`com.adh.daemon`、`android`、`com.android.systemui`，返回 `app_control_denied` —— 防止"用无障碍驱动承载无障碍的 App"形成自控环路，也避免误停系统界面。
-- skills 只是主机侧保存的配方：不新增权限、不能嵌套 skills、不能携带 shell，写入 `adhd-data/skills.json`（不进版本库）；文件被篡改或损坏时丢弃条目而不是执行。
-- 截图可单独关闭；设备侧再次校验 allowlist，不能靠 MCP 参数绕过。
-
-### 31.5 验收
-
-> 验收/诊断专用入口：`POST /api/automation/selftest?op=<op>&<args>` 把原始 op 转发给设备桥（例如 `selftest_sleep`、`status`），用于故障注入与低层诊断，不进入产品 MCP 工具面；设备只实现自己固定的 op 集合，未知 op 报 `unsupported_op`。
-
-`tools/verify_v36_automation.sh`：MCP 工具可见性、控件树、`phone_find`、selector/ref 点击、`phone_wait`、agent 信号等待（游标 + 明文解码 + fail-loud 超时）、视觉截图兜底、归一化坐标点击、滑动、系统通知栏读取、`set_text` 真输入并读回（后两项仅在设备装了对应启动器/搜索组件时执行，否则 SKIP）、`set_text` 输入后提交（键盘动作键被控件接受且应用有可见反应）、`phone_skill` 存/列/跑/删与非法步骤拒绝、`phone_observe mode=text` 紧凑视图及其 ref 可直接驱动动作（并可同时返回截图）、`phone_app restart` 前台验证、agent 在 Host 重启后自行重连（`tools/verify_v37_agent_reconnect.sh`，同 pid 新会话 + 命令可达）、`phone_task` 步骤链式引用（`{{id.path}}` 命中与未知名 fail-loud）、`phone_wait` 手势滚动（启动器翻页实测生效）、`phone_wait` 稳定等待（settle 后返回的 ref 可直接动作）、受保护窗口截图 fail-loud（`FLAG_SECURE` 黑帧检测 + 关闭后恢复 + 限流重试）、截图开关可独立关闭且关闭后明确拒绝、通知读取（`tools/verify_v39_notifications.sh`：默认被 Host 开关挡住、授权后能读到刚发布的通知、`sinceMs` 增量、`phone_wait` 能阻塞等通知并在 2s 内返回；脚本仅在本轮借用授权并在结束时原样还原）、root Device Daemon 面（`tools/verify_v40_device_daemon.sh`：root `open` 走 `via=device-daemon` 不弹 OEM 确认框、lock/wake/unlock 状态往返、以及守护进程 5 s ensure 循环自动修复被抹掉的无障碍服务；守护进程为旧载荷时 SKIP）、设备侧命令硬超时（`tools/verify_v38_automation_watchdog.sh`，用设备自带的 `selftest_sleep` 注入卡死，断言 `command_timeout` 且后续命令仍被服务）；桥接未启用（或没有在线 agent 会话）时对应段落 SKIP。注意 `verify_v31_xposed.sh` 为让框架重新注入会 `force-stop com.adh.manager`，而 force-stop 会连带给 Manager 的无障碍服务摘牌 —— 该脚本必须记录并在收尾时还原它，否则回归本身会关掉手机自动化。真机证据见 `docs/PROGRESS.md`。
+保留范围：ADH Manager / Device Daemon 继续管理注入作用域、模块状态和目标 App 进程启停；adb 仍是 AI 与测试脚本操作手机的通道。不得因移除 UI 自动化而把 HTTP/MCP/分析搬入设备端。
 
 ---
 

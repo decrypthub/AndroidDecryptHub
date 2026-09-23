@@ -85,7 +85,11 @@ int adh_qbdi_trace(void *func, const unsigned long long *args, int argc, char *o
     uint8_t *stack = NULL;
     if (!f_alloc(st, 0x100000, &stack) || !stack) { snprintf(out, outsz, "\"ok\":false,\"error\":\"qbdi_allocateVirtualStack failed\""); if (f_term) f_term(vm); f_getInstAnalysis = NULL; (void)dlclose(h); return -1; }
     if (!f_addmod(vm, (rword)(uintptr_t)func)) { snprintf(out, outsz, "\"ok\":false,\"error\":\"qbdi_addInstrumentedModuleFromAddr failed (module not instrumentable?)\""); if (f_free) f_free(stack); if (f_term) f_term(vm); f_getInstAnalysis = NULL; (void)dlclose(h); return -1; }
-    if (f_addcb(vm, QBDI_PREINST, qbdi_insn_cb, NULL, 0) == 0) { snprintf(out, outsz, "\"ok\":false,\"error\":\"qbdi_addCodeCB failed\""); if (f_free) f_free(stack); if (f_term) f_term(vm); f_getInstAnalysis = NULL; (void)dlclose(h); return -1; }
+    // QBDI event IDs are opaque; zero is a valid ID (and commonly the first
+    // callback registered on a fresh VM). Only the documented sentinel means
+    // registration failed.
+    uint32_t cb_id = f_addcb(vm, QBDI_PREINST, qbdi_insn_cb, NULL, 0);
+    if (cb_id == QBDI_INVALID_EVENTID) { snprintf(out, outsz, "\"ok\":false,\"error\":\"qbdi_addCodeCB failed\""); if (f_free) f_free(stack); if (f_term) f_term(vm); f_getInstAnalysis = NULL; (void)dlclose(h); return -1; }
     rword ret = 0;
     if (argc < 0) argc = 0;
     if (argc > 8) argc = 8;

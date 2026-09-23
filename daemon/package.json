@@ -7,8 +7,7 @@
   "scripts": {
     "start": "node src/index.ts",
     "dev": "node --watch src/index.ts",
-    "smoke": "node test/smoke.ts",
-    "test:automation": "node --test test/automation.test.ts"
+    "smoke": "node test/smoke.ts"
   },
   "dependencies": {
     "capstone-wasm": "^1.0.3",

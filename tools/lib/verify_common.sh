@@ -53,6 +53,14 @@ verify_sandbox_alive() {
   echo "sandbox alive: ${ALIVE:-NO}"
 }
 
+# Restart the sandbox when a check scans live code bytes: soft-unhooked syscall/native sites keep
+# their branch stubs installed until process exit, so later scanners must start from fresh mappings.
+verify_restart_sandbox() {
+  adb -s "$SERIAL" shell am force-stop com.adh.sandbox >/dev/null 2>&1 || return 1
+  adb -s "$SERIAL" shell am start -n com.adh.sandbox/.MainActivity >/dev/null 2>&1 || return 1
+  sleep "${ADH_SANDBOX_START_WAIT:-4}"
+}
+
 # ---------------------------------------------------------------------------
 # result gate (device + host node-heredoc scripts)
 # ---------------------------------------------------------------------------

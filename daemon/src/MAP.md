@@ -1,6 +1,6 @@
 # ADH Daemon (daemon/src/) — MAP
 
-ADH Daemon / `adhd` (Node 24 + TypeScript, runs `.ts` directly, no build step). HTTP/WS `8088`, agent TCP `8761`, automation TCP `8763` (loopback + adb reverse). App pin: `GET /<package>` and `POST /<package>/mcp`.
+ADH Daemon / `adhd` (Node 24 + TypeScript, runs `.ts` directly, no build step). HTTP/WS `8088`, agent TCP `8761`. App pin: `GET /<package>` and `POST /<package>/mcp`.
 
 ## Module layout (post-split)
 
@@ -10,7 +10,6 @@ ADH Daemon / `adhd` (Node 24 + TypeScript, runs `.ts` directly, no build step). 
 | `state.ts` | **Shared state + leaf helpers.** All registries (`sessions`/`dumps`/`agentSockets`/`pending`), `events`+`recordEvent`, `settings`+`mergeSettings`/`saveSettings`/`configStats`, capture store (`captures`/`captureTimers`/`capStats`/`captureHealth`), classification (`hexToPreview`/`categoryOf`/`classify`/`cryptoIdentify`), `SANDBOX`/`captureModules`, infra (`wss`/`broadcast`/`log`/`readBody`), framing (`frameJson`/`FRAME_JSON`/`FRAME_MAX`). **Imports nothing from service/mcp/index** (no cycles). | node + ws only |
 | `service.ts` | **Service layer.** Agent-command transport (`sendCmd`/`agentCmd`/`pickSid`), dump engine (`readMem`/`reconstructSo`/`repairDexHeader`/`dumpRegion`/`dumpBuf`/`dumpBufPath`/`modulesFromMaps`), capture ops (`withCaptureSuspended`/`startCaptureLoop`/`dumpAllDex`/`autoDumpDex`/`applyCaptureEnabled`). `capSeq` is service-local (`++`'d in `startCaptureLoop` — can't reassign an imported binding in ESM). | `state.ts`, `dex.ts`, node |
 | `mcp.ts` | **MCP Server (JSON-RPC).** `MCP_TOOLS` registry (single array — **add a tool = add one entry**) + `handleMcp`. Handlers delegate to `service.ts` primitives + `state.ts` reads + DEX/index/analysis layers. | `state.ts`, `service.ts`, `dex.ts`, `dex_index.ts`, `analysis.ts`, `memory.ts`, `syscall_watch.ts` |
-| `automation.ts` | **Optional phone automation transport.** Loopback-only NDJSON bridge for the user-enabled Manager AccessibilityService; exposes observe/act/status commands to MCP. No device-side HTTP/MCP/analysis. | — |
 | `http/router.ts` | **REST composition and first-match dispatch.** Creates request context, concatenates route domains in stable order, then `/<package>` dashboard + `POST /<package>/mcp` pin, then 404. | `http/routes_*.ts`, `mcp.ts` |
 | `http/routes_system.ts` | Health, MCP, captures/events, settings, destructive data lifecycle, diagnostics, agent registry, `/wechat-follow.png`, `/raven.svg`/`/raven.png`/`/favicon.ico`, and `/api/mcp/config` (direct HTTP MCP endpoint metadata) | `config.ts`, `state.ts`, `service.ts`, `mcp.ts` | — also serves `GET /api/backends` (injection-backend matrix: sessions by entry + host-side Frida Gadget cache; read-only, the daemon has no adb).
 | `http/routes_runtime.ts` | Live agent execution routes: maps, object/JNI/ART, hook/trace, filesystem, memory, trigger, and unpack commands. | `state.ts`, `service.ts`, `memory.ts`, `syscall_watch.ts` |
@@ -37,7 +36,7 @@ Adding a crypto hook once meant reading the whole file; the REST surface was inl
 
 ## Adding a new capability
 
-- **MCP tool**: add one `{ name, description, inputSchema, handler }` to `MCP_TOOLS` in `mcp.ts`; optional groups can filter `tools/list` (see automation tools). Handler calls `agentCmd`/`dumpBuf`/`dumpRegion`/… from `service.ts`. Done — `tools/list` + `tools/call` pick it up automatically.
+- **MCP tool**: add one `{ name, description, inputSchema, handler }` to `MCP_TOOLS` in `mcp.ts`. Handler calls `agentCmd`/`dumpBuf`/`dumpRegion`/… from `service.ts`. Done — `tools/list` + `tools/call` pick it up automatically.
 - **REST route**: add one table entry to the owning `http/routes_*.ts` domain. Preserve domain composition order in `http/router.ts` when paths overlap.
 - **Agent command op**: handled in the agent C `command_loop` (Phase 3 — table-driven after refactor).
 

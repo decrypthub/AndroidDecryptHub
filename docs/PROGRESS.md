@@ -14,24 +14,21 @@
 全来自命令参数）；② 不胡乱兜底 / fail-loud（hook 装不上、缓冲溢出、解不动一律显式报错 + 计数上报，
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
-## 下一会话从这里开始（2026-09-23 验收收尾）
+## 下一会话从这里开始（2026-09-23 验收与范围收口）
 
-**状态快照**：测试设备 OnePlus PGP110 `aa165071` 在线；Host ADH Daemon 与 adb reverse 已启动。2026-09-23 执行 `tools/verify_all.sh`：**109 PASS / 6 FAIL / 3 SKIP**（118 项），门禁未全绿。完整状态见 `docs/FEATURE_STATUS.md §2`。
+**状态快照**：测试设备 OnePlus PGP110 `aa165071` 在线；Host ADH Daemon 与 adb reverse 已启动。本轮已从产品中退役并移除 Android UI 自动化（模块 X），AI Agent 直接使用 adb。2026-09-23 最终执行 `tools/verify_all.sh`：**113 PASS / 0 FAIL / 0 SKIP**。完整状态见 `docs/FEATURE_STATUS.md §2`。
 
-**本次失败**：
-1. `v51_qbdi_args` 与 `v10_qbdi`：QBDI trace 不可用，`qbdi_addCodeCB failed`；同一原因令 `v80_device_trace_digest` SKIP。
-2. `v77_syscall_watch_libc`：`libadhdetect.so` 的 gettid(178) 被报 `attributed 0 of 0 sites`，虽然 fixture 有 `svc #0`。
-3. `v81_device_syscall_digest`：libc uname site 安装数为 1，但触发 fixture 后没有捕获到事件。
-4. `v86_device_throttle`：事件计数 `hits=20 / throttled=18 / emitted=2` 正常，`returnValue` 改写仍为 0/20。
-5. `v91_jni_env_fields`：唯一失败检查为 `arrayProbeOk`；其余 29/29 家族事件形状正确，capture dropped=0。
+**已完成的修复**：QBDI `qbdi_addCodeCB()` 事件 ID 的失败哨兵判断修正；native hook 在限流时仍正确应用 `returnValue`；syscall 扫描验证前重启沙盒以清除仍驻留的软补丁；v50/v77/v80/v81/v85 验收断言和 v91 JNI 各探针卸钩/摘要时间窗修正。Device `:core:test :daemon:assembleDebug :manager:assembleDebug` 成功。
 
-**本次跳过**：`v38` watchdog 与 `v39` notifications 因自动化桥未连接；`v80_device_trace_digest` 因 QBDI 不可用。全量 runner 提取 v80 skip 原因时另有 `grep -m1E` 参数警告，导致总表理由为空；单独运行脚本已确认实际原因为 `qbdi_addCodeCB failed`，计数仍为 SKIP。
+**模块 X 退役边界**：已删除 Manager AccessibilityService / 通知监听、Device Daemon 的输入/电源/音量/剪贴板控制、Host 自动化桥和 `phone_*` MCP 工具、Web 设置入口以及相关验收脚本。保留 adb、Manager 注入 scope/模块状态/目标进程启停、Device Daemon 与 Xposed 管理能力。协议版本更新为 v13；HTTP/WS MCP 仍在 Host Daemon，设备侧不承载分析。
 
-**已恢复通过**：`v36`、`v37`、`v40`、`v41`；hook backtrace/Java stack、Java hookAll/trace、syscall_trace、MCP 探针与文件系统、运行期签名扫描、对象字段写入、v04/v11/v16/v20/v22/v26 采集回归；Xposed 注入与 Device Daemon 后端控制（v31/v32）。
+**剩余验证/决策**：v84 native batch 的设备侧验收仍未纳入门禁；cdex/041 需要真实样本；agent TCP `8761` 无鉴权的 LAN 信任边界待定；DEX 重建保留旧副本导致文件增大仍是已记录限制。协议 v13 的 release bundle 还未重建或刷入。
 
-**下一步优先级**：① 修复/定位 v77 与 v81 的 syscall 字节来源和命中链；② 查明 v86 限流是否错误抑制返回值改写，并定位 v91 arrayProbeOk；③ 判断 QBDI 在 ColorOS 的兼容问题，按计划把不可用情形作为明确 optional-dependency SKIP；④ 完成第十二轮 map/class_data/cursor 评审项；⑤ 单独复跑 gate11 的 v11/v16/v20 定性抖动；⑥ 确认 `DEVELOPMENT_PLAN.md §6.9.5` 与 `REQUIREMENTS.md` 的范围收口提案。
+### 2026-09-23 本轮改动
 
-**仍需验证或决策**：v84 native batch 的设备侧验收未纳入 `verify_all.sh`（当前只跑 host 脚本）；自动化 bridge watchdog/notifications 需连接后再跑；cdex/041 需真实样本；agent TCP `8761` 无鉴权的 LAN 信任边界待定。DEX 重建文件增大（旧副本保留为 slack）仍是已记录限制。
+- 移除手机自动化功能，明确 AI 手机交互由 adb 承担；MCP 工具现为 67 个，验收门禁由 118 项收敛到 113 项。
+- 修复 QBDI callback 安装失败检测、限流路径返回值替换，以及 syscall / trace / JNI 验收的状态隔离和断言问题。
+- 最终全量：**113 PASS / 0 FAIL / 0 SKIP**；Device Gradle：`:core:test :daemon:assembleDebug :manager:assembleDebug` 成功。
 ### v2.0+ 进度
 - [~] **v5.04 真机首跑（aa165071）：13 个失败逐个定性，7 个当场修掉（2026-09-19，真机 + host 验收）**：手机接上后第一次跑**带真机的全量门禁**：**100 PASS / 13 FAIL / 5 SKIP**。逐个定性后发现两类——**产品问题 3 个**、**测试脚本自身的问题 10 个**（这些脚本此前只有 host 半，真机半从没跑过）。
       · **产品修复**：① `jni_env_hook` 的 install/uninstall 回复用 32 KB 固定缓冲，**静默**只带回 159/228 个槽位（v64 因此把 228 装成"159"）——改成与 `action:status` 相同的 128 KB，并补 `total/emitted/truncated` 如实上报；② `file_probe`/`crypto_probe` 的地址是裸十六进制（其余 API 一律 `0x…`），v87 的"解析出非零地址"因此判假——统一成 `0x%llx`；③ 沙盒夹具 `jniArrayElementsProbe` 的 7 个 `Get*ArrayElements` 传 `NULL` 取 isCopy，agent 如实报 `-1`（"调用方没问"），而 v91 要 `isCopy=[01]` —— 夹具改为传 `&is_copy`，让"真值"这条路真的被验证。

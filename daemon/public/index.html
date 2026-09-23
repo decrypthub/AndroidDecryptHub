@@ -329,7 +329,6 @@
   .set-actions button.danger:hover { color:#17090c; background:var(--danger); }
   .set-actions button.save { color:#07101f; background:var(--blue); border-color:var(--blue); font-weight:600; }
   .set-actions button.save:hover { background:#93bcff; }
-  #setAutomationPackages { width:100%; box-sizing:border-box; min-height:96px; padding:8px 10px; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; line-height:1.5; resize:vertical; }
   #rawCfgText { width:100%; box-sizing:border-box; height:320px; margin-top:10px; padding:10px 12px; font-size:12px; line-height:1.5; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; resize:vertical; white-space:pre; background:transparent; border:0; border-left:2px solid var(--line); border-radius:0; }
   label.ck { color:var(--muted); display:inline-flex; align-items:center; gap:5px; }
 
@@ -555,8 +554,6 @@
         <button data-setpage="capture" class="active">捕获</button>
         <button data-setpage="data">数据</button>
         <button data-setpage="rawcfg">配置 JSON</button>
-        <button data-setpage="automation">手机自动化</button>
-        <button data-setpage="skills">技能库</button>
         <button data-setpage="backends">注入后端</button>
       </nav>
       <div class="set-main">
@@ -607,7 +604,7 @@
         </div>
         <div id="setPageRawcfg" class="set-page">
           <h4>配置 JSON</h4>
-          <p class="set-lead">直接编辑全部配置并按板块合并保存 —— JSON 里有哪段(capture/ui/automation)就应用哪段，删掉某段则保持不变。可下载/从文件载入，在多台机器间搬运配置。</p>
+          <p class="set-lead">直接编辑全部配置并按板块合并保存 —— JSON 里有哪段(capture/ui)就应用哪段，删掉某段则保持不变。可下载/从文件载入，在多台机器间搬运配置。</p>
           <div class="set-actions">
             <button onclick="loadRawCfg(true)">重新载入</button>
             <button onclick="copyText(document.getElementById('rawCfgText').value)">复制</button>
@@ -619,40 +616,6 @@
             <button class="save" onclick="saveRawCfg()">保存并应用</button>
             <span id="rawHint" class="muted"></span>
           </div>
-        </div>
-        <div id="setPageAutomation" class="set-page">
-          <h4>手机自动化（可选）</h4>
-          <p class="set-lead">默认关闭。开启后，AI 才能通过 MCP 的 phone_observe / phone_act 读取控件树或截图并执行操作。控件树优先；树为空或非语义时自动回退截图，坐标统一使用归一化坐标。</p>
-          <div class="set-toggle-row">
-            <div class="lab"><b>启用手机自动化</b><span>关闭时 phone_* 工具不会出现在 MCP tools/list 中</span></div>
-            <label class="set-switch"><input type="checkbox" id="setAutomationEnabled"><span class="slider"></span></label>
-          </div>
-          <div class="set-toggle-row">
-            <div class="lab"><b>允许截图兜底</b><span>控件树失败时返回压缩截图；关闭后只返回错误，不读取屏幕画面</span></div>
-            <label class="set-switch"><input type="checkbox" id="setAutomationScreenshot"><span class="slider"></span></label>
-          </div>
-          <div class="set-toggle-row">
-            <div class="lab"><b>允许 AI 读取通知</b><span>独立隐私开关。还需在手机「ADH Manager → 通知读取」里授予通知使用权；关闭时 phone_notifications 与"等通知"都会被明确拒绝</span></div>
-            <label class="set-switch"><input type="checkbox" id="setAutomationNotifications"><span class="slider"></span></label>
-          </div>
-          <div class="set-row" style="align-items:flex-start">
-            <div class="lab"><b>允许的包名</b><span>每行一个；为空时拒绝 phone_* 操作。建议只填授权目标。</span><textarea id="setAutomationPackages" spellcheck="false" placeholder="com.example.target"></textarea></div>
-          </div>
-          <div class="set-row" id="setAutomationBlockedRow" style="display:none">
-            <div class="lab">
-              <b>被拒绝的包名</b>
-              <span id="setAutomationBlockedText">最近一次操控因为包名不在允许名单里被拒绝。添加后 AI 可以继续操作这个界面。</span>
-              <div id="setAutomationBlockedAdd" class="set-actions"></div>
-            </div>
-          </div>
-          <div class="set-row"><div class="lab"><b>桥接状态</b><span id="setAutomationStatus">未开启</span></div></div>
-        </div>
-        <div id="setPageSkills" class="set-page">
-          <h4>技能库</h4>
-          <p class="set-lead">AI 自己沉淀的可复用操控配方（保存时会预检是否依赖当前界面）。每条都能在这里单独运行或删除。</p>
-          <div id="setSkillsList" class="muted">加载中…</div>
-          <div class="set-actions"><button onclick="loadSkills()">刷新</button></div>
-          <div id="setSkillsResult" class="muted"></div>
         </div>
         <div id="setPageBackends" class="set-page">
           <h4>注入后端</h4>
@@ -1044,8 +1007,6 @@ function setSettingsPage(name){
   document.getElementById('setPage'+name.charAt(0).toUpperCase()+name.slice(1)).classList.add('active');
   if(name==='rawcfg') loadRawCfg(true);
   if(name==='backends') renderBackends();
-  if(name==='automation') loadAutomationStatus();
-  if(name==='skills') loadSkills();
 }
 function renderFamilies(fam){
   document.getElementById('setFamilies').innerHTML=FAMILIES.map(([k,label])=>
@@ -1103,92 +1064,17 @@ async function loadConfig(){
     document.getElementById('setAutoDump').checked=s.capture.autoDumpDex;
     document.getElementById('setRetain').value=String(s.capture.retain);
     document.getElementById('setDisplayCap').value=String(s.ui.displayCap);
-    document.getElementById('setAutomationEnabled').checked=s.automation.enabled;
-    document.getElementById('setAutomationScreenshot').checked=s.automation.screenshot;
-    document.getElementById('setAutomationNotifications').checked=!!s.automation.notifications;
-    document.getElementById('setAutomationPackages').value=(s.automation.packages||[]).join('\n');
     renderFamilies(s.capture.families);
     document.getElementById('statCaptures').textContent=`${st.captures} 条`+(st.on?' · 捕获中':'');
     document.getElementById('statDumps').textContent=`${st.dumps} 个`;
     document.getElementById('statEvents').textContent=`${st.events} 条`;
   }catch(e){ toast('读取配置失败: '+e); }
 }
-async function loadAutomationStatus(){
-  const el=document.getElementById('setAutomationStatus');
-  if(!el) return;
-  try{
-    const r=await (await fetch('/api/automation/status')).json();
-    const device=(r.bridge?.devices||[])[0];
-    renderAutomationBlocked(r.blocked||[], r.packages||[]);
-    if(!r.enabled){ el.textContent='已关闭'; return; }
-    if(!r.packages?.length){ el.textContent='已开启 · 但允许包名为空'; return; }
-    const grant=r.device&&r.device.notifications?(' · 通知读取:'+(r.device.notifications.granted?'已授权':'未授权')):'';
-    el.textContent=device?`已连接 · ${device.model||device.deviceId} · SDK ${device.sdk||'?'}`+grant:'已开启 · 等待手机 AccessibilityService 连接';
-  }catch(e){ el.textContent='状态读取失败: '+e; }
-}
-function renderAutomationBlocked(blocked, packages){
-  const row=document.getElementById('setAutomationBlockedRow');
-  const text=document.getElementById('setAutomationBlockedText');
-  const host=document.getElementById('setAutomationBlockedAdd');
-  if(!row||!text||!host) return;
-  const allowed=new Set(packages||[]);
-  const pending=(blocked||[]).filter(item=>item&&item.package&&!allowed.has(item.package));
-  if(!pending.length){ row.style.display='none'; host.innerHTML=''; return; }
-  row.style.display='flex';
-  text.textContent='最近一次操控因为以下包名不在允许名单里被拒绝，添加后 AI 可以继续操作这些界面：';
-  host.innerHTML=pending.slice(0,4).map(item=>`<button data-pkg="${item.package}">+ ${item.package}</button>`).join('');
-  host.querySelectorAll('button[data-pkg]').forEach(btn=>btn.addEventListener('click',()=>{
-    const pkg=btn.dataset.pkg;
-    const ta=document.getElementById('setAutomationPackages');
-    const current=String(ta.value||'').split(/[\n,;\s]+/).filter(Boolean);
-    if(!current.includes(pkg)) current.push(pkg);
-    ta.value=current.join('\n');
-    postConfig({automation:{packages:current}});
-  }));
-}
-async function loadSkills(resetResult){
-  const el=document.getElementById('setSkillsList');
-  const out=document.getElementById('setSkillsResult');
-  if(!el) return;
-  el.textContent='加载中…';
-  if(out && resetResult !== false) out.textContent='';
-  try{
-    const r=await (await fetch('/api/skills')).json();
-    const skills=r.skills||[];
-    if(!skills.length){ el.textContent='还没有配方。让 AI 跑一遍流程并保存即可。'; return; }
-    el.innerHTML=skills.map((s,i)=>
-      '<div class="set-row" style="align-items:flex-start">'
-      + '<div class="lab"><b>'+s.name+'</b>'
-      + '<span>'+((s.description||'无描述').replace(/</g,'&lt;'))+'</span>'
-      + '<span class="muted">'+s.steps+' 步 · 参数 ['+(s.params||[]).join(', ')+'] · 运行 '+((s.runs||0))+' 次</span></div>'
-      + '<div class="set-actions">'
-      + '<button data-skill-run="'+i+'">运行</button>'
-      + '<button data-skill-del="'+i+'" class="danger">删除</button>'
-      + '</div></div>').join('');
-    el.querySelectorAll('button[data-skill-run]').forEach(btn=>btn.addEventListener('click',async()=>{
-      const skill=skills[Number(btn.dataset.skillRun)];
-      if(out) out.textContent='运行 '+skill.name+' …';
-      try{
-        const rr=await (await fetch('/api/skills',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'run',name:skill.name})})).json();
-        const failed=(rr.steps||[]).find(st=>!st.ok);
-        if(out) out.textContent='运行 '+skill.name+'：'+(rr.ok?'成功':('失败在第 '+(failed?failed.index:'?')+' 步 · '+((failed&&failed.error)||'')));
-      }catch(e){ if(out) out.textContent='运行失败: '+e; }
-      loadSkills(false);
-    }));
-    el.querySelectorAll('button[data-skill-del]').forEach(btn=>btn.addEventListener('click',async()=>{
-      const skill=skills[Number(btn.dataset.skillDel)];
-      if(!confirm('删除配方 '+skill.name+' ？')) return;
-      try{ await fetch('/api/skills',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'delete',name:skill.name})}); }catch(e){ }
-      loadSkills(false);
-    }));
-  }catch(e){ el.textContent='读取失败: '+e; }
-}
 async function postConfig(patch){
   try{ const r=await (await fetch('/api/config',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(patch)})).json();
     if(r.error){ toast('保存失败: '+r.error); return; }
     if(r.stats){ document.getElementById('statCaptures').textContent=`${r.stats.captures} 条`+(r.stats.on?' · 捕获中':''); }
     if(patch.ui&&patch.ui.displayCap) capDisplayCap=r.settings.ui.displayCap;
-    if(patch.automation) loadAutomationStatus();
     toast('已保存');
   }catch(e){ toast('保存失败: '+e); }
 }
@@ -1320,10 +1206,6 @@ document.getElementById('setCapEnabled').addEventListener('change', e=>postConfi
 document.getElementById('setAutoDump').addEventListener('change', e=>postConfig({capture:{autoDumpDex:e.target.checked}}));
 document.getElementById('setRetain').addEventListener('change', e=>postConfig({capture:{retain:Number(e.target.value)}}));
 document.getElementById('setDisplayCap').addEventListener('change', e=>postConfig({ui:{displayCap:Number(e.target.value)}}));
-document.getElementById('setAutomationEnabled').addEventListener('change', e=>postConfig({automation:{enabled:e.target.checked}}));
-document.getElementById('setAutomationScreenshot').addEventListener('change', e=>postConfig({automation:{screenshot:e.target.checked}}));
-document.getElementById('setAutomationNotifications').addEventListener('change', e=>postConfig({automation:{notifications:e.target.checked}}));
-document.getElementById('setAutomationPackages').addEventListener('change', e=>postConfig({automation:{packages:String(e.target.value||'').split(/[\n,;\s]+/).filter(Boolean)}}));
 document.getElementById('rawFile').addEventListener('change', ev=>{ const f=ev.target.files&&ev.target.files[0]; if(!f) return;
   const rd=new FileReader(); rd.onload=()=>{ document.getElementById('rawCfgText').value=rd.result; document.getElementById('rawHint').textContent='已载入文件，检查后点保存并应用'; }; rd.readAsText(f); ev.target.value=''; });
 // 点遮罩空白处关闭模态

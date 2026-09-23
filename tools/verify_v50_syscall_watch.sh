@@ -3,8 +3,11 @@
 # Host reconstructs libadhdetect.so, finds svc #0 sites, inline-hooks them through
 # native_hook, then calls adh_direct_gettid and asserts a NATIVE_HOOK event with x8=0xb2.
 set -uo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-HTTP="${ADH_HTTP_PORT:-8088}"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
+verify_resolve_env
+if [ -n "${SERIAL:-}" ] && adb -s "$SERIAL" get-state >/dev/null 2>&1; then
+  verify_restart_sandbox || echo "WARN  could not restart sandbox before syscall scan"
+fi
 
 set +e
 OUT="$(node - "$HTTP" <<'EOF'
@@ -38,6 +41,11 @@ const hookIds = (watch.body.hooks ?? []).map((h) => Number(h.hookId));
 const call = await post('/api/native/call', {
   session, module: 'libadhdetect.so', symbol: 'adh_direct_gettid', args: [], confirm: true,
 });
+// The scan can install multiple sites in a busy sandbox process. Remove them immediately after
+// the synchronous fixture call so ordinary app traffic cannot flood the event queue while this
+// verifier fetches the captured probe event.
+const unhook = [];
+for (const id of hookIds) unhook.push(await post('/api/native/hook', { session, action: 'unhook', hookId: id }).catch(() => null));
 let found = null;
 for (let i = 0; i < 20; i++) {
   const list = await (await fetch(`${base}/api/captures?session=${encodeURIComponent(session)}&limit=200`)).json();
@@ -50,8 +58,6 @@ for (let i = 0; i < 20; i++) {
   if (found) break;
   await sleep(100);
 }
-const unhook = [];
-for (const id of hookIds) unhook.push(await post('/api/native/hook', { session, action: 'unhook', hookId: id }).catch(() => null));
 const stillOnline = (await (await fetch(`${base}/api/agents`)).json()).some((x) => x.online && x.package === 'com.adh.sandbox');
 const alive = stillOnline && call.body.ok === true && Number(call.body.resultDecimal) >= 0;
 const pass = watch.body.svcCount >= 1 && watch.body.installedCount >= 1 && found != null &&

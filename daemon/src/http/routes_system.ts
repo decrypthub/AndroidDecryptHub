@@ -4,9 +4,6 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { backendMatrix } from '../backends.ts';
-import { automation } from '../automation.ts';
-import { blockedPackageNotices } from '../phone_blocked.ts';
-import { phoneSkillCommand } from '../mcp.ts';
 import { webUrls } from '../config.ts';
 import { handleMcp, MCP_TOOLS } from '../mcp.ts';
 import { applyCaptureEnabled } from '../service.ts';
@@ -105,78 +102,13 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       }
       return send(200, { settings, stats: configStats() });
     } },
-    // Recipe library: the same store the phone_skill MCP tool uses. List, run, delete.
-    { path: '/api/skills', handler: async () => {
-      if (req.method === 'GET') {
-        return send(200, await phoneSkillCommand({ action: 'list' }));
-      }
-      let body: any = {};
-      try { body = JSON.parse((await readBody(req)) || '{}'); } catch { return send(400, { error: 'bad json' }); }
-      const action = String(body.action ?? '');
-      if (action === 'delete') {
-        if (!body.name) return send(400, { error: 'delete requires name' });
-        return send(200, await phoneSkillCommand({ action: 'delete', name: body.name }));
-      }
-      if (action === 'run') {
-        if (!body.name) return send(400, { error: 'run requires name' });
-        return send(200, await phoneSkillCommand({ action: 'run', name: body.name, inputs: body.inputs ?? {} }));
-      }
-      return send(400, { error: 'unsupported action: use GET or POST {action: run|delete}' });
-    } },
-    { path: '/api/automation/status', handler: async () => {
-      const bridge = automation.status();
-      // Enrich with the device-side view (active package, notification-access grant) when a phone
-      // is actually connected: the settings panel should say what is still pending instead of
-      // making the operator bounce between the Web UI and the phone. A dead bridge must not make
-      // the endpoint hang, hence the short timeout and the null device.
-      let device: any = null;
-      const online = bridge.connected && (bridge.devices ?? []).some((item: any) => item.online);
-      if (online) {
-        try {
-          const status = await automation.cmd('status', {}, 4_000);
-          device = {
-            activePackage: status?.activePackage ?? null,
-            activity: status?.activity ?? null,
-            notifications: status?.notifications ?? null,
-          };
-        } catch (error) {
-          device = { error: (error as Error).message };
-        }
-      }
-      return send(200, {
-        ok: true,
-        enabled: settings.automation.enabled,
-        packages: settings.automation.packages,
-        blocked: blockedPackageNotices(),
-        settings: settings.automation,
-        bridge,
-        device,
-      });
-    } },
-    // Acceptance/diagnostic path: forward a raw op to the device bridge, so fault-injection
-    // (selftest_sleep) and future low-level probes stay reachable without growing the MCP tool
-    // surface. The device only implements its fixed op set — unknown ops answer unsupported_op.
-    { method: 'POST', path: '/api/automation/selftest', handler: async () => {
-      const op = url.searchParams.get('op') ?? '';
-      if (!op) return send(400, { error: 'op 参数必填' });
-      const args: Record<string, any> = {};
-      for (const [key, value] of url.searchParams) {
-        if (key === 'op') continue;
-        args[key] = /^-?\d+$/.test(value) ? Number(value) : value;
-      }
-      try {
-        return send(200, { ok: true, op, result: await automation.cmd(op, args, 15_000) });
-      } catch (error) {
-        return send(200, { ok: false, op, code: (error as any)?.code ?? 'automation_error', error: (error as Error).message });
-      }
-    } },
     { path: '/api/settings/export', handler: () => send(200, settings) },
     { method: 'POST', path: '/api/settings/import', handler: async () => {
       let obj: any;
       try { obj = JSON.parse((await readBody(req)) || '{}'); } catch { return send(400, { error: 'JSON 格式错误' }); }
       if (typeof obj !== 'object' || Array.isArray(obj)) return send(400, { error: '顶层必须是对象' });
       const applied = mergeSettings(obj);
-      if (!applied.length) return send(400, { error: '没有可应用的板块(capture/ui/automation)' });
+      if (!applied.length) return send(400, { error: '没有可应用的板块(capture/ui)' });
       while (captures.length > settings.capture.retain) captures.shift();
       applyCaptureEnabled().catch((e) => log('[settings] applyCaptureEnabled:', (e as Error).message));
       try { saveSettings(); }
@@ -204,9 +136,10 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       return send(200, { ok: true, cleared: what, stats: configStats() });
     } },
     { path: '/api/mcp/doc', handler: () => {
+      const cell = (value: unknown) => String(value ?? '—').replaceAll('|', '\\|').replace(/\r?\n/g, ' ');
       const md = ['# ADH MCP Tools', '', `Generated from the live ADH Daemon registry (${MCP_TOOLS.length} tools). Endpoint: \`POST /mcp\` (JSON-RPC 2.0).`, '',
         '| Tool | Description | Args |', '|---|---|---|',
-        ...MCP_TOOLS.map(t => `| \`${t.name}\` | ${t.description} | ${Object.keys(t.inputSchema.properties ?? {}).join(', ') || '—'} |`), ''].join('\n');
+        ...MCP_TOOLS.map(t => `| \`${t.name}\` | ${cell(t.description)} | ${cell(Object.keys(t.inputSchema.properties ?? {}).join(', ') || '—')} |`), ''].join('\n');
       res.writeHead(200, { 'content-type': 'text/markdown; charset=utf-8' }); return res.end(md);
     } },
     { path: '/api/crypto/identify', handler: () => send(200, cryptoIdentify()) },

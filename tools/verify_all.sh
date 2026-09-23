@@ -7,37 +7,13 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 bash tools/dev_up.sh >/dev/null 2>&1
 STATE="$(adb get-state 2>/dev/null | tr -d '\r')"
-# Right after a reboot the Manager accessibility service (and with it the automation bridge) needs a
-# moment to come back; v36/v38/v39/v40/v41 drive the UI and otherwise fail or skip confusingly. Wait
-# once here, bounded, instead of teaching every script to poll.
-if [ "$STATE" = "device" ]; then
-  for _ in $(seq 1 20); do
-    if curl -s -m 2 "http://127.0.0.1:${ADH_HTTP_PORT:-8088}/api/automation/status" 2>/dev/null | grep -Eq '"connected"[[:space:]]*:[[:space:]]*true'; then
-      break
-    fi
-    sleep 3
-  done
-fi
-
 # name:needs_device
 SCRIPTS=(
   "verify_v01.sh:device"
   "verify_v02.sh:device"
-  # Optional phone automation first, before device scripts that may stop Manager.
-  "verify_v36_automation.sh:device"
   # Agent reconnect: the injected agent must survive a Host ADH Daemon restart (kills + restarts
   # the daemon inside the script; SKIPs when it cannot find the process to restart).
   "verify_v37_agent_reconnect.sh:device"
-  # Watchdog: a stuck device command must answer command_timeout and leave the channel usable.
-  "verify_v38_automation_watchdog.sh:device"
-  # Notifications: the opt-in listener (borrows the grant for the run, releases it afterwards).
-  "verify_v39_notifications.sh:device"
-  # Root Device Daemon surface (v6-v8): root open, screen control, ensure loop. SKIPs when the
-  # resident daemon is still the old payload.
-  "verify_v40_device_daemon.sh:device"
-  # Post-flash boot path: waits for the boot-started daemon and exercises volume/clipboard/root
-  # input. Meaningful right after a flash; also runs (and passes) while the daemon is already up.
-  "verify_v41_postflash.sh:device"
   # LSPlant Java hooks + Java enum/call + native/GOT hook runtime (v4.2-v4.7). Each script
   # SKIPs cleanly on an older deployed payload; on the current agent they are deterministic.
   "verify_v42_lsplant.sh:device"

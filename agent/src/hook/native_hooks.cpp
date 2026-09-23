@@ -230,7 +230,7 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id) {
     // No id means this slot was never published to the Host. Inventing one would hand the operator a
     // hookId that no install ever returned, so stay silent (the argument/return rewrite above has
     // already been applied either way).
-    if (hook_uid <= 0) return skip_original ? 1 : 0;
+    if (hook_uid <= 0) return (skip_original || return_set) ? 1 : 0;
     g_native_hook_hits[hook_id].fetch_add(1, std::memory_order_relaxed);
     // Per-hook event throttle. The rewrite above has already been applied, so dropping the EVENT
     // never changes what the target does - it only stops a hot site (read/write/futex) from
@@ -244,7 +244,7 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id) {
         const uint64_t last = g_native_hook_throttle_last_ns[hook_id].load(std::memory_order_relaxed);
         if (last != 0 && now - last < (uint64_t)throttle_ms * 1000000ull) {
             g_native_hook_throttled_total[hook_id].fetch_add(1, std::memory_order_relaxed);
-            return skip_original ? 1 : 0;
+            return (skip_original || return_set) ? 1 : 0;
         }
         g_native_hook_throttle_last_ns[hook_id].store(now, std::memory_order_relaxed);
         const unsigned long long total = g_native_hook_throttled_total[hook_id].load(std::memory_order_relaxed);
@@ -323,7 +323,7 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id) {
                  hook_uid, sizeof(json));
     }
     adh_capture_push_text("NATIVE_HOOK", json);
-    return skip_original ? 1 : 0;
+    return (skip_original || return_set) ? 1 : 0;
 }
 
 #define ADH_NATIVE_STUB(N, OFF) \

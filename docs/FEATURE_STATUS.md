@@ -1,11 +1,10 @@
 # ADH 功能状态（发布前梳理，2026-09-23 更新）
 
 > 这份文件回答一个问题：**现在到底有什么、什么是验证过的、什么是没验证的、什么还没做完。**
-> 判定只认 `tools/verify_all.sh`（**118 个脚本 = 34 host + 84 device**），不认"看起来能跑"。
+> 判定只认 `tools/verify_all.sh`（**113 个脚本 = 34 host + 79 device**），不认"看起来能跑"。
 > 规格见 `REQUIREMENTS.md`，架构与排期见 `DEVELOPMENT_PLAN.md`，跨会话进度见 `PROGRESS.md`。
-> 最近一次**全绿**门禁：`6319d5d`（设备在位，**92 PASS / 0 FAIL / 2 SKIP**）。
-> 最近一次 host-only 门禁（手机不在位）：**34 PASS / 0 FAIL / 84 SKIP** —— 设备脚本如实记 SKIP，不再冒充通过。
-> 最近一次带真机全量门禁（2026-09-23，aa165071 / Android 15 / PGP110）：**109 PASS / 6 FAIL / 3 SKIP**；失败为 v51_qbdi_args、v77_syscall_watch_libc、v81_device_syscall_digest、v86_device_throttle、v91_jni_env_fields、v10_qbdi；跳过为 v38、v39、v80_device_trace_digest。
+> 最近一次带真机全量门禁（2026-09-23，aa165071 / Android 15 / PGP110）：**113 PASS / 0 FAIL / 0 SKIP**。
+> 手机不在位时，当前 34 个 host 脚本运行、79 个 device 脚本按规则记 SKIP；本轮未执行 host-only 门禁。
 > **发布范围收口提案**（不做/降级的 10 项，含证据与"什么条件下重新考虑"）见 `DEVELOPMENT_PLAN.md §6.9.5`；需求口径修订建议（去特征对抗面、SKIP 分层、信任模型等 7 条）见 `REQUIREMENTS.md` 顶部"口径修订建议"——两者都是**待确认**，确认后合并进正文。
 
 ## 0. 发布物
@@ -13,7 +12,7 @@
 | 交付物 | 来源 | 状态 |
 |---|---|---|
 | `libadh_agent.so`（arm64-v8a，release 剥离，836,432 B） | `tools/build_agent.sh` | ✅ 已验收（v01–v79 系列） |
-| Zygisk 模块 zip + ADH Manager APK + 组合包（**v0.3.10**） | `tools/build_zygisk.sh` / `build_bundle.sh` / `flash_device.sh` | ✅ 已验收（v27）+ 真机刷入（memfd 注入 v4.37） |
+| 最近一次 Zygisk 模块 zip + ADH Manager APK + 组合包（**v0.3.10**） | `tools/build_zygisk.sh` / `build_bundle.sh` / `flash_device.sh` | 旧包曾验收并刷入；早于本轮模块 X 退役和 Device AIDL v13，当前源码需要重建 release bundle 后再发布/刷机 |
 | 可选后端：Xposed 薄模块 APK | `injector/xposed/` + `tools/build_xposed.sh` | ✅ 已验收（v31/v32），默认关闭 |
 | 可选后端：Frida Gadget | `tools/fetch_frida_gadget.sh` + `load_frida_gadget.sh` | ✅ 已验收（v30），默认关闭；官方二进制（未魔改） |
 | 可选后端：eCapture | `tools/fetch_ecapture.sh` + `ecapture_capture.sh` | ✅ 已验收（v34），默认关闭；需内核 eBPF |
@@ -24,7 +23,7 @@
 | 层 | 位置 | 承担什么 | 规模 |
 |---|---|---|---|
 | **Agent**（目标进程内） | `agent/` → `libadh_agent.so` | **40 个命令分支**：GOT/inline/addr/sites/vtable hook、Java(LSPlant) hook（单方法 + `hookAll` 批量 + 参数改写/返回值替换/skip/调用链）、JNI_OnLoad（含加载时 watch）/RegisterNatives/JNIEnv 76 槽、函数与 QBDI trace、dex/so/内存 dump、maps/内存读写搜、ART 结构枚举、活体对象自省、主动触发、`load_so`、`native_call`（整数+浮点）、`native_backtrace`、`syscall_watch`、轻量 RPC —— **只采集/执行，不做分析** | C/C++，产物 817 KB |
-| **Host ADH Daemon**（主机） | `daemon/` | **79 个 MCP 工具 + 88 条 HTTP 路由**：dex 解析/索引(SQLite)/搜索/xref、Capstone 反汇编与 syscall 归因/参数解码、trace 摘要、syscall 摘要、脱壳编排与重建、工件存储、Web UI、MCP server | TypeScript（含 14 个单测文件、164 条用例） |
+| **Host ADH Daemon**（主机） | `daemon/` | **67 个 MCP 工具 + 93 条 HTTP 路由**：dex 解析/索引(SQLite)/搜索/xref、Capstone 反汇编与 syscall 归因/参数解码、trace 摘要、syscall 摘要、脱壳编排与重建、工件存储、Web UI、MCP server | TypeScript（含 13 个单测文件、121 条用例） |
 | **Device**（手机侧） | `device/` | AIDL 作用域读写、模块状态、目标进程启停、可选后端开关 —— **不做分析** | Kotlin |
 | **注入器** | `injector/zygisk`、`injector/xposed` | 把 `.so` 送进目标进程（Zygisk 走 **memfd**，目标 maps 不出现模块路径）+ 传真实包名 | C++/Java |
 | **可选后端** | `tools/`（Gadget/eCapture） | 另一种进入/观测方式，默认关闭 | 脚本/薄 APK |
@@ -41,7 +40,7 @@
 | TLS / 文件 I/O | v07, v07_flow, v20_file, v25_fsbrowser | SSL_write/read 明文与关联；libc open/read/write 捕获 |
 | 反检测观测与去特征 | v05_detect, v69(stealth), v70/v72(sites), v73/v74(vtable) | 目标自审（anon r-x、序言比对）；stealth 后 anonExec 2→0；sites 保持入口字节不变 |
 | Java hook（LSPlant） | v42/v43/v52/v53/v65, **v79(stack)**, **v82(hookAll)**, **v83(java_trace digest)** | 单方法/构造器/继承、参数改写、返回值替换、skip original；`stack:true` 给出 App 帧调用链；`hookAll` 一次装全类（截断可见） |
-| native hook | v46, v49, v55, v56, v66, v68, **v84(native_hook_all selection + 槽位预算)**, **v86(native throttle)** | inline/addr、软/硬卸载、寄存器事件、浮点参数、千次压测；host 装配与真机计数恒等式通过；但真机 `returnValue` 改写为 0/20，v86 失败（§2） |
+| native hook | v46, v49, v55, v56, v66, v68, **v84(native_hook_all selection + 槽位预算)**, **v86(native throttle)** | inline/addr、软/硬卸载、寄存器事件、浮点参数、千次压测；限流只压事件、不改返回值替换；v86 真机 `forcedReturn=20/20` |
 | JNI 面 | v54, v57, v58, v59, v60, v62, v63, v64, v67, **v90(表索引 ABI 机检)**, **v91(字段访问器 + 可改写 + 字段摘要 + 通配)**, **v92(字段摘要单测/接线)**, **v93(字符串+直接缓冲表项, host)**, **v90/v91(数组两族 + 创建/对象数组 + CallNonvirtual + 字符串/反射桥 + 覆盖 228/229, host)** | RegisterNatives、JNI_OnLoad（含加载时替换）、JNIEnv **228/229 表项（唯一余项 `RegisterNatives` 由 v4.14 的入口 inline hook 覆盖）**（99 固定 + 36 字段访问器 + 31 族 ×3：ID 查询 / Call* 三类入口 / 字符串与直接缓冲 / **数组 region 读写全族** / **数组元素 pin 与写回全族** / **数组创建 + 长度 + 对象数组元素 + AllocObject** / **CallNonvirtual 三形态全族（事件带 `via=<class>`）** / **字符串全族（含 critical 对）** / **反射桥 `From/ToReflected*`** / `FatalError` / `ExceptionCheck` / 引用生命周期 / 异常流 / 类型自省 / monitor 与弱引用，索引逐条与 NDK `jni.h` 对照，见 v90；wrapper 签名由 `_Static_assert` 编译期钉死；`action:status` 支持用 `function` 过滤（含 `installed` 关键字）并自报 `total/matched/emitted/truncated`，整表 228 项的回复不再静默截断；固定槽位由**单一列表**同时驱动枚举值与名字表（v4.82），并有**运行期布局自检**——枚举与表任何错位都会拒绝 patch 并点名位置，而不是挂到隔壁函数）、Call* 三类入口、数组写回、异常保持 |
 | 主动调用 / 活体对象 | v45(java_call), v49(native_call), v51(qbdi args), v06(对象读/调用), **v89(字段写入)** | 反射调用 Java 方法/字段；按符号或地址调 native；活体对象字段**读+写**（写入带 before/after；**严格解析**：typo/越界/int 超范围一律拒绝，不再静默写 0；final 字段 fail-loud；参数超长拒绝而不是截断；**字段查找与枚举走父类链**，继承字段不再报 not found） |
 | trace | v10_trace, v10_qbdi, **v78(backtrace)** | 函数参数/线程/时间戳；QBDI 指令级（用后 dlclose）；hook 命中当刻的 x29 调用链 + 符号化 |
@@ -51,46 +50,34 @@
 | 进程内 dlopen | v18 | 目标进程内加载任意 `.so` 并解析符号 |
 | 设备侧后端（Zygisk/Manager） | v27_zygisk, v32_backend_control, **v75(memfd)** | scope 往返；后端状态/作用域可控并恢复；**agent 从 memfd 加载**（目标 maps 无模块路径，目标内自证 + ELF 头） |
 | 可选后端 | v30, v31, v34 | 官方二进制 + sha256 固定；Xposed Java bridge；eCapture 抓明文 |
-| 控制面 / MCP / Web | v10_mcp, v10_webui, v10_export, v10_events, v19_settings, v33_backends, v35_sessions, **v71(registry)**, **v80(trace digest)**, **v83(java trace)**, **v84(native batch)**, **v85(一站式 syscall)**, **v86(throttle)**, **v87(MCP 可操作性)** | MCP 79 个工具可调（phone_* 默认关闭时 tools/list 暴露 69 个）；注册表形状自检；Web UI；会话清理 |
-| 手机自动化（模块 X） | v36, v38, v39, v40, v41 | 树/截图/选择器/手势/输入/wait/通知/技能；硬超时、桥接自愈、root 输入、屏幕状态；**重启后的 OEM 弹窗按 BACK 有界重试** |
+| 控制面 / MCP / Web | v10_mcp, v10_webui, v10_export, v10_events, v19_settings, v33_backends, v35_sessions, **v71(registry)**, **v80(trace digest)**, **v83(java trace)**, **v84(native batch)**, **v85(一站式 syscall)**, **v86(throttle)**, **v87(MCP 可操作性)** | MCP 67 个工具可调；注册表形状自检；Web UI；会话清理 |
+| 手机自动化（模块 X） | 已退役，不纳入验收范围 | AI Agent 直接使用 adb 操作手机；ADH 不再提供 AccessibilityService、通知读取、phone_* MCP 工具或设备输入控制桥 |
 | 注入足迹 | v26_footprint, v01 | release 剥离 + 仅 3 个动态导出 + 无 RWX LOAD |
 | 字符串去特征 | **v88**, scan_agent_signatures, patch_vendor_signatures | 自己的 tag/文案/自名/fixture 默认值全部清零（含 DT_SONAME）；vendored LSPlant 的三处（含运行时 dex source name）由 fetch 期补丁清掉并机检；剩余 Dobby/导出/Java bridge 等按只许降预算记账；门禁带**负对照**（植入 token 必须被抓到） |
 | MCP 可操作性 / 设备文件系统 | **v87**, v25_fsbrowser, **v89(object_set)** | 每个 agent op 必须能从 MCP 导入图到达（否则在 `INTERNAL_OPS` 写明理由）：`fs_list`/`fs_read` 与 REST 共用实现；存活/引擎/通道三个探针的判定显式（引擎 `ok` = fired && protRestored） |
-| 单元测试（host） | v76, v80, v81, v83, v84, v85, **v86**, **v87** | syscall 归因/参数解码/一站式装配、trace 摘要、backtrace dynsym、Java trace（含三阶段装配与 drain 守卫）、native 批量选择、native 限流（默认/夹紧/拒绝垃圾值 + 安装回路真实 payload）、探针判定与设备文件读取（二进制/超大/截断/坏 base64）：**121 条** `node --test` 用例（合计含 automation 30 条 = 151；v81/v83/v86/v87 按文件最小数断言） |
+| 单元测试（host） | v76, v80, v81, v83, v84, v85, **v86**, **v87** | syscall 归因/参数解码/一站式装配、trace 摘要、backtrace dynsym、Java trace（含三阶段装配与 drain 守卫）、native 批量选择、native 限流（默认/夹紧/拒绝垃圾值 + 安装回路真实 payload）、探针判定与设备文件读取（二进制/超大/截断/坏 base64）：**121 条** `node --test` 用例 |
 
-## 2. 真机验收结果与未收口项（2026-09-23）
+## 2. 真机验收结果与当前遗留项（2026-09-23）
 
-> `tools/verify_all.sh` 已在 aa165071 上实际执行，结果 **109 PASS / 6 FAIL / 3 SKIP**（118 项）。PASS 仅表示对应验收脚本通过，不代表所有路线图项完成。
+> `tools/verify_all.sh` 在 aa165071（OnePlus PGP110 / Android 15）上实际执行：**113 PASS / 0 FAIL / 0 SKIP**。PASS 表示当前验收脚本通过，不代表所有路线图项都已实现。
 
-### 失败（6）
+### 本轮修复并验收
 
-| 脚本 | 结果 |
-|---|---|
-| `v51_qbdi_args` | QBDI trace 的 withArgs/noArgs 均不可用；`qbdi_addCodeCB` 失败。 |
-| `v77_syscall_watch_libc` | `libadhdetect.so` 的 gettid(178) 报 `attributed 0 of 0 sites`；待查 dump/扫描字节来源。 |
-| `v81_device_syscall_digest` | libc uname hook 报 `installedCount=1`，但 fixture 调用未产生预期事件。 |
-| `v86_device_throttle` | `hits=20, throttled=18, emitted=2`；但 `returnValue` 改写只生效 0/20 次。 |
-| `v91_jni_env_fields` | 唯一失败检查为 `arrayProbeOk`；29/29 家族事件形状正确，capture dropped=0。 |
-| `v10_qbdi` | QBDI `qbdi_addCodeCB` 失败；Node 另输出 Windows `UV_HANDLE_CLOSING` 断言。 |
+- QBDI `qbdi_addCodeCB()` 以 `QBDI_INVALID_EVENTID` 作为失败哨兵；事件 ID `0` 是有效值。修复后带参/无参 QBDI trace 与 trace digest 均通过。
+- Native hook 限流只抑制事件记录，不再覆盖 `skipOriginal` / `returnValue` 的行为；真机 v86 为 `hits=20, throttled=18, emitted=2, forcedReturn=20/20`。
+- Syscall/trace 验收在扫描可变代码站点前重启沙盒，v50 探针调用后立即卸钩；v77 attribution、v80 trace digest、v81 syscall digest、v85 syscall trace 均通过。
+- v91 JNI 验收缩小摘要时间窗，并在每个同步探针返回后立即卸钩；字段改写摘要、字符串、数组 region/element 与 JNI 家族探针均通过。
+- 移除手机自动化模块 X 后，当前验收脚本清单为 **34 host + 79 device = 113**；手机自动化相关的旧 FAIL/SKIP 不再属于产品范围或门禁。
 
-### 跳过（3）
+### 仍未完成或需决策
 
-- `v38_automation_watchdog`、`v39_notifications`：自动化桥未连接。
-- `v80_device_trace_digest`：单独运行确认 QBDI 不可用（`qbdi_addCodeCB failed`）。全量 runner 的 skip 理由解析另报 `grep -m1E` 参数警告、摘要括号为空；SKIP 计数不受影响。
+- v84 native hook batch 目前只有 host 侧验收，尚未加入设备侧批量选择/行为验收。
+- cdex/041 仍需真实样本；DEX 重建追加式布局保留旧副本作为 slack，文件会变大。
+- Agent TCP `8761` 仍监听 `0.0.0.0` 且没有鉴权，LAN 信任边界待产品决策；完整 syscall 拦截（seccomp/PTRACE_SYSEMU）仍属 L3 未实现。
+- `DEVELOPMENT_PLAN.md §6.9.5` 里除模块 X 以外的发布范围收口项仍需逐项确认。
 
-### 本轮通过的重点路径
-
-- v36 自动化基础、v37 agent 重连、v40 Device Daemon、v41 post-flash；v78 hook backtrace、v79 Java stack、v82 Java hookAll、v83 Java trace、v85 syscall_trace。
-- v87 MCP 探针/文件系统、v88 运行期签名扫描、v89 活体对象写入；v04_crypto、v11、v16、v20、v22、v26 采集回归。
-- Xposed 注入链路 v31、Device Daemon Xposed 启停/作用域控制 v32；Frida Gadget v30 与 eCapture v34。
-
-### 仍未完成或需复验
-
-- 修复/定位 v77、v81、v86、v91；判断 QBDI 在当前 ColorOS 的兼容问题，并确保不可用时按 optional-dependency 明确 SKIP。
-- v84 native batch 的设备侧验收未纳入当前 `verify_all.sh`（当前只执行 host 脚本）；gate11 的 v11/v16/v20 抖动仍需单独重复定性。本轮单次全量回归中 v04_crypto/v11/v16/v20/v22/v26 均通过。
-- v38/v39 需自动化桥连接后复验；完整门禁仍有失败，不能记为全绿。
 ## 3. 发布结论
 
-- 可发布物仍为 `libadh_agent.so` + Zygisk 包/Manager（v0.3.10）+ 三个可选后端（Gadget/Xposed/eCapture，均默认关闭）；但本次全量门禁有 6 FAIL，当前验收状态不是全绿。
-- 发布口径只认 `verify_all.sh` 的 pass/fail 与本文 §1；上次全绿记录不覆盖本次 6 个失败，本次失败项关闭或按范围决议降级前，不宣称全量门禁通过。
-- 已知边界（不隐瞒）：arm64-v8a only；**v4.76 修掉一个从 v4.55 潜伏至今的错位**——`ENV_SLOT_CallStaticVoidMethod_end` 这个算术锚点吞掉了一个枚举值，使 36 个字段访问器的枚举值比表位置大 1：首个字段 `GetObjectField` 落 `default` 被拒，**其余 35 个静默绑定到"上一个字段"的表项与 wrapper、事件名却写成请求的字段**（字段钩子/`setValue` 改写/字段摘要因此从未真正生效）；v4.81 已把它改为真枚举 + 组基址断言（整体平移现在编译失败），并把症状描述按事实更正；Java/native 各 16 个并发 hook 槽（`status` 报告 `slots{max,used,active,free,byMode}` 与 `maxHooks`：**`used` = 已占用槽位**，软卸载的 inline 钩子仍占、失败装不再占；批量安装按 `free` 截断并在 0 空闲时 fail-loud）；`-fomit-frame-pointer` 的第三方库只能拿到 1 帧调用链；JNIEnv 面覆盖「ID 查询 + Call*/NewObject 三形态 + 字符串/直接缓冲 + **数组 region 读写全族** + **Get/Release<Type>ArrayElements 指针族** + 36 个字段访问器 + 引用生命周期 + 异常流 + 类型自省与 monitor/弱引用」；覆盖率现在是**可测的数字**：`tools/verify_v90_jni_table_abi.sh` 输出 `coverage: 228/229 function-table entries hooked (100%)` 与**未覆盖名单**（只剩 `RegisterNatives`——它由 `jni_hooks.c` 的入口 inline hook 覆盖，脚本把它单列为 `COVERED_ELSEWHERE`，"未挂且未分类"的表项会让门禁 FAIL），门禁下限 228；`FatalError` 的事件是 best effort（先写后死），`ExceptionCheck` 因为太热、且 agent 自身检查已改走 `adh_jni_exception_check()` 直调（避免把仪表自己的检查记成目标行为），建议按需单装；下一步补哪些槽位由这份名单决定，而不是手感。高频事件用 `throttleMs` 限流（实现 + host 验收完成；本轮真机 v86 计数正常但返回值改写 0/20，详见 §2），事件环另有 `dropped` 记账；`native_call` 的**原始地址**先过活体 maps 校验（未映射/不可执行直接拒绝；v5.00 起守卫把校验过的地址**归一化成 `0x…` 再下发**——agent 用 `strtoull(...,0)` 解析，裸数字串的进制此前与守卫不一致；agent 侧也自己查一次可执行性，因为 agent 端口可被直连），调用本身由 **15s 看门狗**兜住（超时回 `timedOut:true` 且会话保持可用；worker 无法取消，目标里那段代码会继续跑，**因此超时后再发起一次 native_call，目标里可能同时有两个调用在跑**；v5.00 起 agent 用 `ADH_NATIVE_CALL_MAX_OUTSTANDING=4` 计数，超限直接拒绝，不再无上限堆线程栈；调用返回但 JNI 异常探测没在窗口内完成时回 `exceptionProbe:"unavailable"` + 调用结果，而不是谎报"还在跑"；`module+symbol` 路径每次重解析 maps，卸载后即报 target not found）；重建 dex 时 daemon 同时持有 base+chunks+out（约 2.4× 输入），而 HTTP body 没有大小上限——超大 dex 会放大内存峰值（本地工具，暂按文档记录）；agent 命令口监听 `0.0.0.0:8761` 且无鉴权（第九轮评审附带指出：同一局域网内任何能连上该端口的主机都能冒充 agent 上线，也能绕过宿主守卫直接下发裸地址调用——agent 侧 v5.00 起自查可执行性，但「谁能连」这条信任边界仍在；最小修法是改绑 `127.0.0.1`（adb reverse 从本机连入）或加共享 token，需确认是否依赖 LAN 直连后再动）；全量 syscall 拦截（seccomp/PTRACE_SYSEMU）仍属 L3 未实现；Frida Gadget 后端用官方二进制（未魔改去特征）。
+- 当前代码范围为 `libadh_agent.so` + Zygisk/Manager + 三个可选后端（Gadget/Xposed/eCapture，默认关闭）；模块 X 已退役，AI 使用 adb 操作手机。
+- 本轮源码门禁为 **113 PASS / 0 FAIL / 0 SKIP**，Device `:core:test :daemon:assembleDebug :manager:assembleDebug` 成功。协议 v13 对应的 release bundle 尚未重建/刷入，因此这些结果验证的是当前源码与 debug 构建，不代表已发布包升级完成。
+- 已知边界：arm64-v8a only；Java/native 各 16 个并发 hook 槽；`-fomit-frame-pointer` 第三方库可能只能解析 1 帧；JNIEnv 表覆盖 228/229（唯一余项 `RegisterNatives` 由入口 inline hook 覆盖）；`FatalError` 事件为 best effort；高频事件可能受 capture ring 限流/丢弃；native_call 超时后目标调用无法取消；dex 重建会增大文件与内存峰值；Agent TCP `8761` 暂无鉴权；Gadget 使用官方二进制且默认关闭。

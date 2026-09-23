@@ -74,7 +74,7 @@ before(hooks, 'if (arg_index >= 0 && arg_index < 8) regs[arg_index] = arg_value;
        'const int throttle_ms = __atomic_load_n(&ctx.throttle_ms', 'throttle gate placement');
 before(hooks, 'const int throttle_ms = __atomic_load_n(&ctx.throttle_ms', 'char json[3072]', 'throttle gate must precede the event build');
 const gate = hooks.slice(hooks.indexOf('const int throttle_ms = __atomic_load_n(&ctx.throttle_ms'), hooks.indexOf('char json[3072]'));
-if (!/return skip_original \? 1 : 0;/.test(gate)) problems.push('a suppressed hit must still answer skipOriginal for the site backend');
+if (!/return \(?skip_original \|\| return_set\)? \? 1 : 0;/.test(gate)) problems.push('a suppressed hit must return either the configured replacement or the original-skip result for the site backend');
 if (!/fetch_add\(1, std::memory_order_relaxed\)/.test(gate)) problems.push('a suppressed hit must be counted, not dropped silently');
 // The per-event delta is the one subtle piece: load+store would let two concurrent emitters both
 // claim the same suppressed hits (the totals would still add up, the deltas would lie).
