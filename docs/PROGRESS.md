@@ -14,6 +14,43 @@
 全来自命令参数）；② 不胡乱兜底 / fail-loud（hook 装不上、缓冲溢出、解不动一律显式报错 + 计数上报，
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
+## 2026-09-26（三）—— 按计划加固：第 1 项 验证真实化（WS-L）✅
+
+> 从学习通案例的 5 条工具级结论出发，按 `CASE_STUDIES.md` 的顺序逐项修复。
+> **第 1 项优先**：它让后面每一项都在真实路径上被验证。路线图新增 **WS-L**（`DEVELOPMENT_PLAN §6.9.1`）。
+
+**问题**：79 个 device 验收全跑在沙盒自加载路径上，那条路径**结构上不可能**产生 memfd 加载的 agent、
+也不会遇到拒绝 `/proc/self/mem` 的目标。于是 `art_dexfiles`/`java_hook`/`trigger` 与整条读内存链路
+在真机上整组死掉，门禁却全绿。更具体地：`verify_v75_zygisk_memfd.sh` **已经创建了那个真实条件**
+（注入非沙盒 App、`entry=start`、memfd 身份）却只断言 `compat_probe.agentExecMappings>=1`——
+**从不断言 Java 能力**，所以 agent 拿不到 JavaVM 时它照样 PASS。
+
+**修法**
+1. 新增 `tools/verify_v98_injected_java_surface.sh`：复用 v75 的 scope 快照/恢复 + 冷启动技术，
+   断言注入 agent 的 `compat_probe.backends.jniReflect/artDexCapture === true`、
+   `libartJniGetVms === true`、`art_dexfiles ok === true`、`java_enum(java.lang.String)` 走通反射。
+2. agent 新增**强制直读**：`mem_read.c` 的 `adh_mem_fd()` 在被强制时直接返回 -1，于是
+   `cmd_read`/`cmd_search`/`cmd_scan_magic`/`art.c`/`trace` **全部自动走直读分支**（各调用点本就按
+   `mem >= 0` 分支，无需改动）。新 op + MCP 工具 `mem_backend`（`auto|direct|proc`）。
+3. 扩 `verify_v97_memread_direct.sh`：强制直读后断言 `memory_search` / `memory_scan_magic` /
+   `art_dexfiles` / `memory_dump` **全部仍工作**，且分块 dump 与自动路线 **sha 相同**，然后恢复 auto。
+
+**验收（含 mutation 对照，证明测试不是摆设）**
+- `verify_v98`：把 JavaVM 查找临时改成 `return NULL`（模拟修复前）→ **FAIL**，症状是与真实缺陷一字不差的
+  `jniReflect=false artDexCapture=false` + `art_dexfiles: ok=false error="no JavaVM"`；
+  恢复修复 → **PASS**。
+  · 这个对照还暴露一个设计要点：`libartJniGetVms` 在变异版里**仍然是 true**（符号查找没被变异），
+    所以真正抓到 bug 的是**能力断言**，不是机制断言——两层都留着是对的。
+- `verify_v97`：15 项断言全 true（含 `searchOnDirect` / `scanOnDirect` / `dexOnDirect` / `dumpIdentical`）。
+- **学习通真机复验**（新 agent）：`memBackend=direct` / `memOpenErrno=13` / `memRead=true` /
+  `jniReflect=true` / `art_dexfiles 14 DexFiles` / 强制直读下 search + art_dexfiles 仍工作。
+- **顺带确认**：`com.android.settings` 上也是 `memBackend=direct` —— **第二个真实目标同样拒绝
+  `/proc/self/mem`**，说明这条回退不只对学习通有价值。
+
+**第 2–6 项**（工件生命周期 / `native_hook` 机制自证 / 扫描瞄得准 / 加厚一键入口 / 小项）待续。
+
+
+
 ## 2026-09-26（续）—— 两个阻断点已修复并真机验证（另含 C/D 两项加固）
 
 上面那节暴露的 A/B 两个缺陷**已在 agent 内修掉**，未改协议、未改注入器。学习通在**不施加任何

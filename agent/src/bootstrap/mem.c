@@ -262,6 +262,33 @@ void cmd_search(int fd, const char *id, const char *pat_hex, int limit) {
     free(hits);
 }
 
+// Force the memory-read route. Only "direct" is meaningful as a FORCE (auto and proc both mean "let
+// the backend decide"); an unknown value is rejected instead of silently ignored. This exists so the
+// direct fallback can be exercised across every read command — a target that refuses /proc/self/mem
+// cannot be produced on demand, so without it search / magic-scan / dump / art_dexfiles never run on
+// the direct route at all.
+void cmd_mem_backend(int fd, const char *id, const char *backend) {
+    char idj[64]; json_escape(id, idj, sizeof(idj));
+    char want[32] = "";
+    snprintf(want, sizeof(want), "%s", backend ? backend : "");
+    if (want[0] && strcmp(want, "auto") != 0 && strcmp(want, "proc") != 0 && strcmp(want, "direct") != 0) {
+        char err[220];
+        snprintf(err, sizeof(err), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"mem_backend\",\"ok\":false,"
+                 "\"error\":\"unknown backend '%s' (expected auto|direct|proc)\"}\n", idj, want);
+        send_line(fd, err); return;
+    }
+    adh_mem_set_backend(want);
+    char out[340];
+    snprintf(out, sizeof(out),
+        "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"mem_backend\",\"ok\":true,\"requested\":\"%s\","
+        "\"backend\":\"%s\",\"forced\":%s,\"memOpenErrno\":%d}\n",
+        idj, want[0] ? want : "auto", adh_mem_backend_name(),
+        adh_mem_forced_direct() ? "true" : "false", adh_mem_open_errno());
+    send_line(fd, out);
+    LOGI("mem_backend: requested=%s effective=%s forced=%d", want[0] ? want : "auto",
+         adh_mem_backend_name(), adh_mem_forced_direct());
+}
+
 void cmd_maps(int fd, const char *id) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
     int total = 0, trunc = 0;

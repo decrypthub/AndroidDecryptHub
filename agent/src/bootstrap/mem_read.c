@@ -28,12 +28,31 @@
 static int g_mem_fd = -1;                 // cached /proc/self/mem, -1 = not usable
 static int g_mem_open_errno = 0;          // why the last open failed (reported by compat_probe)
 
+// Forced direct read. A target that refuses /proc/self/mem cannot be reproduced on demand — on this
+// ROM even prctl(PR_SET_DUMPABLE,0) leaves self-reads working — so the fallback was only ever tested
+// on the one read path that has a per-call override (`via=direct`), leaving search / magic-scan /
+// dump / art_dexfiles uncovered on the direct route. Forcing it here covers all of them at once:
+// every call site already branches on `adh_mem_fd() >= 0`, so returning -1 puts the whole module on
+// the direct path with no per-site change.
+static int g_forced_direct = 0;
+
 #define ADH_BACKEND_PROC_SELF_MEM 0
 #define ADH_BACKEND_DIRECT        1
+
+// "auto" (default) | "direct" (force) | "proc" (back to auto). Unknown values are rejected by the
+// command layer; returns the effective mode name for the reply.
+const char *adh_mem_set_backend(const char *name) {
+    if (name && strcmp(name, "direct") == 0) g_forced_direct = 1;
+    else if (name && (name[0] == 0 || strcmp(name, "auto") == 0 || strcmp(name, "proc") == 0)) g_forced_direct = 0;
+    return adh_mem_backend_name();
+}
+
+int adh_mem_forced_direct(void) { return g_forced_direct; }
 
 // The cached fd, or -1. A failed open is NOT cached: if the target ever becomes dumpable again
 // (e.g. a prctl round-trip), the cheap fd path comes back on its own.
 int adh_mem_fd(void) {
+    if (g_forced_direct) return -1;       // forced direct: no fd, every caller takes the direct branch
     int fd = __atomic_load_n(&g_mem_fd, __ATOMIC_ACQUIRE);
     if (fd >= 0) return fd;
     int new_fd = open("/proc/self/mem", O_RDONLY);
@@ -52,9 +71,15 @@ int adh_mem_fd(void) {
 
 int adh_mem_backend(void) { return adh_mem_fd() >= 0 ? ADH_BACKEND_PROC_SELF_MEM : ADH_BACKEND_DIRECT; }
 const char *adh_mem_backend_name(void) {
+    if (g_forced_direct) return "direct(forced)";
     return adh_mem_backend() == ADH_BACKEND_PROC_SELF_MEM ? "proc-self-mem" : "direct";
 }
-int adh_mem_open_errno(void) { adh_mem_fd(); return g_mem_open_errno; }
+// The errno from the last real open attempt. Deliberately does NOT re-probe when the direct route is
+// forced, so the reported reason still describes why the fd route is unavailable.
+int adh_mem_open_errno(void) {
+    if (!g_forced_direct) adh_mem_fd();
+    return g_mem_open_errno;
+}
 
 // Is `addr` inside a readable mapping? On success *end gets that mapping's end address.
 // /proc/self/maps is sorted by address, so the first entry that starts past `addr` ends the search.

@@ -1,6 +1,6 @@
 # ADH MCP Tools
 
-Generated from the live ADH Daemon registry (67 tools). Endpoint: `POST /mcp` (JSON-RPC 2.0).
+Generated from the live ADH Daemon registry (68 tools). Endpoint: `POST /mcp` (JSON-RPC 2.0).
 
 | Tool | Description | Args |
 |---|---|---|
@@ -27,7 +27,8 @@ Generated from the live ADH Daemon registry (67 tools). Endpoint: `POST /mcp` (J
 | `syscall_watch` | Scan one loaded module for direct svc #0 sites (libc.so is the interesting one: its stubs are what ordinary app code reaches the kernel through), attribute each site to a syscall number by decoding the MOV that precedes the svc, inline-hook up to limit of the matching sites, and report hooks whose NATIVE_HOOK events carry x8 as the runtime syscall number. syscalls filters by name or number and accepts a CSV or an array ("uname,openat,117"); a filter that matches nothing fails loud. throttleMs (0 = off) caps how often each site reports an event - hot syscalls such as read/write/futex otherwise overflow the ring and make the digest look quiet; the response echoes the effective window. Host-side orchestration: dump + static scan + native_hook; agent remains execution-only. | session, module, limit, throttleMs, syscalls |
 | `got_enum` | Enumerate relocation/GOT entries for one loaded module: slot address, symbol name, current resolved value and relocation type. Optional filter matches one symbol exactly. | session, module, filter |
 | `memory_maps` | On-demand full /proc/self/maps of the target | session |
-| `memory_read` | Read target memory at hex addr for size bytes (base64 out). The reply carries requested/short, so a truncated read is visible without recomputing it from the base64 length | session, addr, size |
+| `memory_read` | Read target memory at hex addr for size bytes (base64 out). The reply carries requested/short, so a truncated read is visible without recomputing it from the base64 length, and `via` names the route that answered. `via:"direct"` forces the direct in-process reader for this one read instead of /proc/self/mem | session, addr, size, via |
+| `mem_backend` | Force which route the agent reads memory by, for the whole session: `auto` (default) uses /proc/self/mem when the target allows that fd and falls back to an in-process direct read otherwise; `direct` forces the fallback everywhere. The reply states requested vs effective backend, whether it is forced, and the errno of the last /proc/self/mem open. Exists because a target that refuses that fd cannot be produced on demand, so without forcing it search / magic-scan / dump / art_dexfiles would never run on the fallback. Set it back to `auto` when done | session, backend |
 | `memory_disasm` | Disassemble live target memory with host-side Capstone 5 (WASM). addr is an absolute hex address, or pass module plus offset to resolve the module base from live maps. size is bounded to 64 KiB and aligned to AArch64 instructions. | session, addr, size, module, offset |
 | `memory_search` | Search target memory for hex or text pattern | session, hex, text, limit |
 | `memory_scan_magic` | Scan target memory for dex/elf/oat/vdex/zip magics | session |

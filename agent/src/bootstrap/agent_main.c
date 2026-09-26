@@ -711,6 +711,9 @@ static void command_loop(int fd) {
                     cmd_read_file(fd, id, path);
                 } else if (strcmp(op, "scan_magic") == 0) {
                     cmd_scan_magic(fd, id);
+                } else if (strcmp(op, "mem_backend") == 0) {
+                    char mb[32] = ""; json_get_str(line, "backend", mb, sizeof(mb));
+                    cmd_mem_backend(fd, id, mb);
                 } else if (strcmp(op, "search") == 0) {
                     char pat[520] = ""; json_get_str(line, "pat", pat, sizeof(pat));
                     long long lim = json_get_num(line, "limit");

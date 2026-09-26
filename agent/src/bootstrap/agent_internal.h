@@ -67,6 +67,9 @@ int adh_mem_region_end(unsigned long long addr, unsigned long long *end);
 int adh_mem_backend(void);
 const char *adh_mem_backend_name(void);
 int adh_mem_open_errno(void);
+const char *adh_mem_set_backend(const char *name);
+int adh_mem_forced_direct(void);
+void cmd_mem_backend(int fd, const char *id, const char *backend);
 
 // ---- fs.c ----
 void cmd_list_dir(int fd, const char *id, const char *path);

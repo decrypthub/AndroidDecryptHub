@@ -140,6 +140,10 @@ SCRIPTS=(
   # v9.7: the agent's memory reads stopped depending on /proc/self/mem. A target that refuses that
   # fd (protectors that make the process non-dumpable) keeps read/search/scan/dump/art_dexfiles.
   "verify_v97_memread_direct.sh:device"
+  # v9.8: the injected path (memfd-loaded agent, no JNI_OnLoad) must still reach Java and ART.
+  # The JavaVM defect this guards left every Java/ART command dead on real targets while the gate
+  # stayed green, because every other device check runs against the self-loading sandbox.
+  "verify_v98_injected_java_surface.sh:device"
   "verify_v10_mcp.sh:host"
   "verify_v10_webui.sh:host"
   "verify_v33_backends.sh:host"

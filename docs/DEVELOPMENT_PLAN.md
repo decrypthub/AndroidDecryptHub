@@ -545,6 +545,7 @@ android-decrpthub/          # 仓库名；产品名 ADH (Android DecryptHub)
 | **I** | 关联：确定性数据流 | crypto↔network 靠"同线程 + 33ms 窗"，并发会错配 → EVP/SSL hook 记录缓冲区指针 + 长度 + 内容哈希；`SSL_write` 的 buf 等于/包含某条 EVP 输出密文（按 content hash）时**确定性**关联；时间窗仅作兜底。 | Daemon（数据）+ Agent（采集字段） |
 | **J** | 反检测：动态面扩展（授权、默认 off；首个可验证切片：`compat_probe` 输出注入足迹基线/当前差值；release agent strip + 三入口导出收敛；基础注入/GOT hook 不新增匿名可执行段，Dobby/QBDI 为已知匿名 `x` 生产者；真机 Sentry 3/3 冷启动 agent online、companion maps=0，Sentry Maps/Memory 检测 clean） | 只 hook 自己 mock 的 `libadhdetect`，只中和 TRACEME → inline hook 目标自身 native so 内检测调用 + svc 热点观测；Java 后端 hook `PackageManager.getPackageInfo(签名)` / root 路径 `File.exists`；中和从单一 TRACEME 扩为可配置策略集，**默认全关，危险中和需 adhd 显式确认**。 | Agent |
 | **K** | 架构拆分 + 多架构 | 随各片落地：agent 拆 `hook/ capture/ dex/ trigger/ inspect/`，`agent_main.c` 只留 bootstrap + 分发；daemon 拆 `routes/ ws/ mcp/ db/ analysis/ dex/ native/`；CMake 产出 arm64 + armeabi-v7a（偏移/指针宽度参数化）；adhd 注册表支持一包多 agent（`:remote` 路由）。 | 全层 |
+| **L** | 验证真实化 | 79 个 device 验收**全跑在沙盒 `System.loadLibrary` 自加载路径上**——那条路径**结构上不可能**产生 memfd 加载的 agent、也不会遇到拒绝 `/proc/self/mem` 的目标。结果是 `art_dexfiles`/`java_hook`/`trigger` 与整条读内存链路在真机上**整组死掉而门禁全绿**（2026-09-26 学习通实战，见 `CASE_STUDIES.md` 案例 1）。改造：① 注入路径的验收必须断言 **Java/ART 能力**，不能只断言"注入成功"；② 读内存回退必须能**覆盖全部读命令**（强制直读开关），因为"目标拒绝该 fd"无法按需制造。**fail-loud 反向要求**：不要为了显得覆盖而添加一个**永远不会失败**的测试（沙盒 `prctl(PR_SET_DUMPABLE,0)` 在本 ROM 就不阻断自读，建了也是装饰）。 | Tools + Agent |
 
 ### 6.9.2 v2.0+ 版本排期（每片有独立 pass/fail；无样本标 PENDING，不伪造）
 
