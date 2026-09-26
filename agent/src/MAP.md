@@ -47,6 +47,13 @@ Move one capability domain at a time and preserve command names and response sch
 
 Phase 3 domain extraction is complete. Further bootstrap work should focus on table-driven RPC dispatch, not moving isolated helper functions solely to reduce line count.
 
+## Versioning
+
+`AGENT_VER` in `bootstrap/agent_internal.h` must equal `version` in `injector/zygisk/module/module.prop`:
+the module ships this `.so`, so "which agent is flashed" and "which module is flashed" cannot have two
+different answers. It is reported by `compat_probe` (and in the hello) so a session can be checked against
+the build you think you flashed. Both the module zip and the agent must be rebuilt/reflashed together.
+
 ## Release footprint
 
 - `tools/build_agent.sh` keeps `libadh_agent.so.debug` locally and stages only a stripped `.so`.

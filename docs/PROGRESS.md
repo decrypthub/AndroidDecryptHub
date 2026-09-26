@@ -99,7 +99,47 @@
 | `firstHitMs` | **0** | 1790435321477（装上后 13ms） |
 | `verdict` | **`installed-never-fired`** | **`fired`** |
 
-**第 4–6 项**（扫描瞄得准 / 加厚一键入口 / 小项）待续。
+### 第 4 项 — 扫描瞄得准 + 诱饵判定 ✅
+
+**问题**：`memory_search`/`memory_scan_magic` 按 maps 顺序扫、受全局额度约束，**没有任何区间参数**。
+学习通有 3700+ 区域，额度在框架 OAT 上就耗尽，根本到不了 app 堆——当时只能把额度调大。
+`dump_all_dex` 只报数量不报性质：14 个里哪个是 120MB/17 类的**诱饵壳**，得人肉考古。
+
+**修法**
+- agent：`cmd_search`/`cmd_scan_magic` 增 `minAddr`/`maxAddr`（0=不限）。**窗口外的区域直接跳过而不是裁掉**，
+  所以额度花在你要问的那段；回复一律回显生效窗口（`"all"` 或 `"lo-hi"`），
+  `scan_magic` 补 `regionClipped`——**部分扫描不能再读起来像全扫描**。
+- `dex.ts` 新增**纯函数** `classifyDexArtifact(size, classes, methods)`：按**每类字节数**判定
+  （真实 dex 几百字节~几 KB/类；SecNeo 载体是 6.8 MiB/类）。抽成纯函数是为了能直接单测。
+
+### 第 5 项 — 加厚一键入口（**未恢复**已删的恢复会话）✅
+
+`dumpAllDex` 从"报数量"变成**带判定的报告**：逐 dex `{classes, methods, bytesPerClass, carrier, shape}`
++ 顶层 `{dexCount, realDexCount, carrierCount, totalBytes, realBytes, index{built,reused}, carriers[]}`。
+分类与**建索引是同一次 pass**（复用 `ensureDexIndex`），所以 dump 完立刻可 `dex_index_search`。
+**明确没做**：T0/T1 快照、全量触发、recover+重建——那是 `855f3db` 有意删掉的链路。
+
+**验收**
+- 新增 `daemon/test/dex_artifact_shape.test.ts`（4 项，v15 里跑）：用**学习通实测数字**钉死正例
+  （120,451,440 B / 17 类 → carrier；13,705,120 B / 9093 类 → 不是），含"0 类"、
+  "阈值是严格大于"、"100MB 但 6 万类仍是真代码"三个边界。
+- 扩 `verify_v15_dumpall.sh`：断言逐 dex 都被分类、`realDexCount+carrierCount==dexCount`、
+  沙盒上 `carrierCount===0`、`index.built>=1`。
+- **学习通真机正例**：`dexCount 14 / realDexCount 13 / carrierCount 1`，
+  `totalBytes 263,763,804` vs **`realBytes 143,312,364`**（把 120MB 外壳与真代码分开），
+  载体那条 `classes=17 | 6.8 MiB per class (> 1 MiB): a carrier, not code`，
+  `index{built:14,reused:14}`，全程 18.9s。窗口：排除 app 的区间正确返回 `count=0`。
+
+### 第 6 项 — 小项 ✅
+
+- **agent 版本可问**：`compat_probe` 增报 `agentVer`，直接用**已经编译进二进制**的 `AGENT_VER`
+  （本来就用在下行 hello 与 JNI_OnLoad 日志里）→ **不新增任何字符串**，v88 字符串去特征门禁不受影响。
+  同时把 `AGENT_VER` 提到 **0.3.12** 与模块版本对齐，并在 `agent/src/MAP.md` 写明规则：
+  **模块发运这个 .so，所以「刷了哪个 agent」和「刷了哪个模块」不能是两个答案**，两者必须同升同刷。
+- **agent TCP 8761 监听 `0.0.0.0` 且无鉴权**：**本轮不改**（按约定只记录决策点，见 `FEATURE_STATUS §2`）——
+  它是信任边界决策，改动牵动 Device Daemon / Manager / adb reverse 三处。
+
+**六项全部落地。** 收口：`verify_all.sh` 116 项；模块升到 **v0.3.12** 并刷入。
 
 
 

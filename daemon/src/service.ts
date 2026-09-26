@@ -17,7 +17,8 @@ import {
 import type { AgentSession, DumpMeta, MapsRegion, Capture } from './state.ts';
 // dex_index.ts imports state.ts, not this file, so this edge cannot form a cycle; it is here so
 // artifact retention can drop the index row of a dex it deletes.
-import { deleteDexDocument } from './dex_index.ts';
+import { deleteDexDocument, ensureDexIndex } from './dex_index.ts';
+import { classifyDexArtifact } from './dex.ts';
 
 // ---- agent command transport ---------------------------------------------
 // Issue a command to an agent and await its cmdResult (10s default timeout).
@@ -447,13 +448,19 @@ export function startCaptureLoop(sid: string) {
   }, 1200);
 }
 
-// Enumerate the app's DEX files and dump each so it's downloadable from the panel.
+// Enumerate the app's DEX files, dump each, and say what each one IS.
+//
+// "14 dex dumped" is not an answer. A packed target hands you a carrier whose header parses but
+// which holds the packer's shell rather than the app's code (see classifyDexArtifact); reporting a
+// count alone makes that one look exactly like the real ones. Each entry is therefore classified
+// from its own class/method table and indexed in the same pass, so the dump is immediately
+// searchable and the carrier is named instead of having to be spotted by hand.
 export async function dumpAllDex(sid: string) {
   const r = await sendCmd(sid, 'art_dexfiles', {}, 30_000);
   const list = Array.isArray(r.dexfiles) ? r.dexfiles : [];
   if (!list.length) throw new Error('no loaded DexFile found (target may not have Java dex loaded yet)');
   const dexes: any[] = [];
-  let dumped = 0, deduped = 0, failed = 0;
+  let dumped = 0, deduped = 0, failed = 0, indexed = 0, indexReused = 0, carriers = 0, realBytes = 0;
   for (const d of list) {
     const begin = String(d.begin ?? '');
     const size = Number(d.size ?? 0);
@@ -465,14 +472,38 @@ export async function dumpAllDex(sid: string) {
     try {
       const { meta, dedup } = await dumpRegion(sid, begin.replace(/^0x/, ''), size, 'dex-all');
       dumped++; if (dedup) deduped++;
-      dexes.push({ begin, size, format: d.format ?? 'dex', version: d.version ?? 0, confidence: d.confidence ?? 0,
-        sha256: meta.sha256, bytes: meta.size, dedup, path: meta.path });
+      const entry: any = { begin, size, format: d.format ?? 'dex', version: d.version ?? 0,
+        confidence: d.confidence ?? 0, sha256: meta.sha256, bytes: meta.size, dedup, path: meta.path };
+      // Classify + index from the stored bytes; a dex that will not parse is reported on its own
+      // entry rather than failing the run (the others are still worth having).
+      try {
+        const buf = await readFile(meta.path);
+        const doc = ensureDexIndex(buf);
+        indexed++; if (doc.cached) indexReused++;
+        const shape = classifyDexArtifact(buf.length, doc.counts?.classes ?? 0, doc.counts?.methods ?? 0);
+        Object.assign(entry, {
+          classes: shape.classes, methods: shape.methods, bytesPerClass: shape.bytesPerClass,
+          carrier: shape.carrier, shape: shape.reason,
+        });
+        if (shape.carrier) carriers++; else realBytes += meta.size;
+      } catch (e) { entry.classifyError = (e as Error).message; }
+      dexes.push(entry);
     } catch (e) {
       failed++;
       dexes.push({ begin, size, format: d.format ?? 'dex', error: (e as Error).message });
     }
   }
-  return { ok: true, session: sid, count: dexes.length, dumped, deduped, failed, dexes };
+  const carrierList = dexes.filter((x) => x.carrier)
+    .map((x) => ({ begin: x.begin, size: x.size, classes: x.classes, sha256: x.sha256, shape: x.shape }));
+  return {
+    ok: true, session: sid,
+    count: dexes.length, dumped, deduped, failed,
+    dexCount: dexes.length, realDexCount: dexes.length - carriers, carrierCount: carriers,
+    realBytes, totalBytes: dexes.reduce((a, x) => a + (Number(x.bytes) || 0), 0),
+    index: { built: indexed, reused: indexReused },
+    carriers: carrierList,
+    dexes,
+  };
 }
 
 // Auto-dump on connect uses the same one-click primitive; per-dex failures are summarized.

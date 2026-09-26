@@ -1,11 +1,21 @@
 #!/usr/bin/env bash
 # v1.5 One-click dump-all DEX (device). Enumerates every loaded DexFile via ART structures
 # and dumps each region; no T0/T1 snapshots, no coverage pass, no recover/rebuild.
-# Asserts: non-empty result, every dex has a valid stored artifact, download works, and a
-# second run reports SHA-256 dedup. Exit 0 = PASS.
+# Asserts: non-empty result, every dex has a valid stored artifact, download works, a second run
+# reports SHA-256 dedup, and every entry is CLASSIFIED (classes/methods/carrier) and indexed in the
+# same pass - a bare count cannot tell a packer carrier from real code. Exit 0 = PASS.
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
 verify_resolve_env_host
+
+# The shape rule (real code vs a packer carrier) is pure and is pinned against the real Chaoxing
+# numbers here, because the sandbox has no carrier to demonstrate it on.
+UNIT="$(cd "$ROOT/daemon" && node --test test/dex_artifact_shape.test.ts 2>&1)"
+echo "$UNIT" | grep -E '^ℹ (pass|fail)' || true
+if ! grep -qE '^ℹ fail 0$' <<<"$UNIT"; then
+  echo "$UNIT" | tail -20
+  echo "RESULT:FAIL (dex shape unit tests did not all pass)"
+fi
 
 set +e
 OUT="$(node - "$HTTP" <<'EOF'
@@ -25,9 +35,20 @@ const dlOk=!!dl && dl.ok && Number((await dl.arrayBuffer()).byteLength)===sample
 const r2=await dump();
 const dedupOk=(r2.deduped||0)>=1;
 console.log(`download=${dlOk} secondRunDedup=${dedupOk}`);
-const pass = r1.ok===true && r1.count>=1 && r1.dumped>=1 && r1.failed===0 && dlOk && dedupOk;
+// The report must say what each dex IS, not just how many there were: a carrier whose header
+// parses looks exactly like real code in a bare count.
+const shaped=(r1.dexes||[]).filter(d=>!d.error && typeof d.classes==='number' && typeof d.carrier==='boolean');
+const shapeOk = shaped.length === okDex.length && shaped.length >= 1;
+const totalsOk = r1.dexCount===r1.count && r1.realDexCount + r1.carrierCount === r1.dexCount;
+// The sandbox's own dexes are real code, so nothing may be flagged here; the positive case (a
+// 120 MB / 17-class SecNeo carrier) is covered by the unit test above.
+const noFalseCarrier = r1.carrierCount === 0 && shaped.every(d=>d.carrier===false);
+const indexOk = r1.index && r1.index.built >= 1;
+console.log(`shaped=${shaped.length}/${okDex.length} dexCount=${r1.dexCount} real=${r1.realDexCount} carrier=${r1.carrierCount} indexBuilt=${r1.index?.built} reused=${r1.index?.reused}`);
+const pass = r1.ok===true && r1.count>=1 && r1.dumped>=1 && r1.failed===0 && dlOk && dedupOk &&
+  shapeOk && totalsOk && noFalseCarrier && !!indexOk;
 console.log(pass?'RESULT:PASS':'RESULT:FAIL');
 EOF
 )"
 echo "$OUT" | grep -vE "Assertion failed|async\.c"
-verify_gate "v1.5 one-click dump-all DEX (ART DexFile 枚举 → dump → SHA-256 去重 → 下载)" 0 && exit 0 || exit 1
+verify_gate "v1.5 one-click dump-all DEX (ART DexFile 枚举 → dump → 去重 → 下载 → 逐 dex 分类/索引)" 0 && exit 0 || exit 1

@@ -77,7 +77,10 @@ const routesNamed = auto.via === 'proc-self-mem' && direct.via === 'direct';
 const badClean = bad.ok === false && typeof bad.error === 'string' && bad.error.includes('direct');
 const survived = ping.ok === true;
 const probeOk = typeof probe.memBackend === 'string' &&
-  Number.isInteger(probe.memOpenErrno) && typeof probe.libartJniGetVms === 'boolean';
+  Number.isInteger(probe.memOpenErrno) && typeof probe.libartJniGetVms === 'boolean' &&
+  // The agent's own build version must be answerable: "which agent is flashed?" and "which module
+  // is flashed?" are the same question (the module ships this .so).
+  typeof probe.agentVer === 'string' && probe.agentVer.length > 0;
 
 // --- forced-direct coverage of EVERY read command -------------------------------------------
 // `via` only reaches `read`. On a real target the fd is refused for the whole process, so search /
@@ -123,7 +126,7 @@ console.log(JSON.stringify({
   sameBytes, routesNamed,
   bad: { ok: bad.ok, error: bad.error },
   ping: { ok: ping.ok, latencyMs: ping.latencyMs },
-  probe: { memBackend: probe.memBackend, memOpenErrno: probe.memOpenErrno, libartJniGetVms: probe.libartJniGetVms, memRead: probe.backends?.memRead },
+  probe: { agentVer: probe.agentVer, memBackend: probe.memBackend, memOpenErrno: probe.memOpenErrno, libartJniGetVms: probe.libartJniGetVms, memRead: probe.backends?.memRead },
   forcedRoute: {
     applied: { backend: forced.backend, forced: forced.forced },
     probeBackend: forcedProbe.memBackend,

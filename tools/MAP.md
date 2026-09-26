@@ -126,3 +126,4 @@ translation — kept separate).
   **这是 JavaVM 缺陷的回归守卫**：memfd 加载的 agent 没有 `JNI_OnLoad`，而 linker 拒绝它 `dlopen("libart.so")`，所以修复前这里全是 `no JavaVM`，而门禁其余 79 项因为跑在自加载沙盒上照样全绿。
   注意断言的是**能力**不是计数：系统应用（如 Settings）在线程上下文类加载器里可能没有应用级 dex，`art_dexfiles count=0` 是合理的，判别信号是 `ok`（修复前为 `ok:false error:"no JavaVM"`）。结束恢复 Zygisk scope。缺前置条件时打印 `SKIP` 且**不带** `RESULT:PASS` 哨兵。
 - `verify_v99_artifact_store.sh` — **工件存储**（host）：先跑 `daemon/test/artifact_store.test.ts`（纯策略单测 8 项：文件名映射、超龄、超量、最旧优先、`protectSha`、mtime 未知不猜老），再**重启 daemon**（PowerShell 杀进程 + 等端口停 + 重起，同 v37）后断言：磁盘上每个工件都重新出现在 `/api/dumps` 里、条目 `source=disk-reload`（不编造来源）、没有指向不存在文件的悬空条目、`settings.artifacts` 暴露预算。**注册在最后**，因为它自己会重启 daemon。
+- `verify_v15_dumpall.sh`（v9.11 扩）——除原有的枚举/dump/去重/下载外，先跑 `daemon/test/dex_artifact_shape.test.ts`（4 项，用学习通实测数字钉死 carrier 判定），再断言逐 dex 都被分类、`realDexCount+carrierCount==dexCount`、沙盒上 `carrierCount===0`、`index.built>=1`。

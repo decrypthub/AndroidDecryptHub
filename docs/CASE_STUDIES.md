@@ -80,12 +80,17 @@
    → status 现在给出机制事实：`slot`/`slotsPatched`（改了哪个槽）、`slotCurrent`（补丁还在不在）、
    `pageProtRestored`（RELRO 有没有被留成可写）、`firstHitMs` 与派生 `verdict`
    （`fired` vs `installed-never-fired`）。
-3. **大目标上瞄不准**：内存扫描没有区间参数、没有分页；`dump_all_dex` 只报数量不报性质
+3. **大目标上瞄不准**（✅ 已办）：内存扫描没有区间参数、没有分页；`dump_all_dex` 只报数量不报性质
    （14 个里哪个是诱饵壳，要人自己看）。
+   → 扫描加 `minAddr`/`maxAddr`（窗口外区域跳过、回复回显窗口、补 `regionClipped`）；
+   `dump_all_dex` 逐 dex 判定 carrier 并**在同一 pass 建索引**。学习通复验：
+   `realDexCount 13 / carrierCount 1`、`realBytes 143MB` vs `totalBytes 263MB`。
 4. **工件生命周期**（✅ 已办）：`dumps` map 只在内存里（daemon 重启后磁盘工件"消失"）；
    磁盘上的 `captures/*.bin` 没有任何回收，本轮就留了约 1.1GB。
    → daemon 启动时从 `captures/` **重新采纳**（重新哈希，自愈，不依赖旁路索引），并新增
    `settings.artifacts{maxBytes,maxAgeDays}` 回收（删文件同时删 dex 索引行）。验收 `verify_v99`：
    真重启后 281 个工件全部回来、标 `disk-reload`、无悬空路径。
-5. **缺一键编排**：零件齐了（scope → 冷启动 → probe → `art_dexfiles` → `dump_all_dex` → index → coverage），
-   但没串起来，本次约 20 次工具调用做考古。
+5. **缺一键编排**（✅ 部分已办）：零件齐了（scope → 冷启动 → probe → `art_dexfiles` → `dump_all_dex`
+   → index → coverage），但没串起来，本次约 20 次工具调用做考古。
+   → `dump_all_dex` 现在自带判定 + 建索引，"dump 完看报告"一步到位；**冷启动/probe 那两段仍要人工**，
+   且**没有**恢复被有意删掉的 T0/T1 恢复会话。

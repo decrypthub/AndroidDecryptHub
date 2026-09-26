@@ -95,6 +95,39 @@ function readMutf8(buf: Buffer, off: number): string {
   return buf.subarray(p, end).toString('utf8');   // ASCII identifiers decode fine
 }
 
+// ---- artifact shape: real code vs carrier ------------------------------------------------
+//
+// A packed target can hand you a dex whose header is valid but whose contents are not the app's
+// code. The Chaoxing/SecNeo case is the reference shape: ART names a 120,451,440-byte buffer
+// "classes.dex" and it parses, but class_defs_size is 17 (and the file declares only 19 KB of its
+// own data). Counting classes is what separates that from the 13 real dexes beside it in the same
+// region (~1.5 KB per class each); without a flag, a "14 dex dumped" summary reads like 14 dexes
+// of real code, and the one that matters looks the same as the one that does not.
+export interface DexArtifactShape {
+  classes: number;
+  methods: number;
+  bytesPerClass: number;   // 0 when the dex declares no classes at all
+  carrier: boolean;
+  reason: string;
+}
+
+/** Bytes a single class would have to occupy before the file cannot be real code (real dexes run
+ *  from a few hundred bytes to a few KB per class; the SecNeo carrier was 7.1 MB). */
+export const DEX_CARRIER_BYTES_PER_CLASS = 1 << 20;
+
+export function classifyDexArtifact(size: number, classes: number, methods: number): DexArtifactShape {
+  const bytesPerClass = classes > 0 ? Math.round(size / classes) : 0;
+  const carrier = classes === 0 || bytesPerClass > DEX_CARRIER_BYTES_PER_CLASS;
+  return {
+    classes, methods, bytesPerClass, carrier,
+    reason: carrier
+      ? (classes === 0
+          ? 'declares no classes'
+          : `${(bytesPerClass / 1048576).toFixed(1)} MiB per class (> ${DEX_CARRIER_BYTES_PER_CLASS / 1048576} MiB): a carrier, not code`)
+      : `${bytesPerClass} bytes per class`,
+  };
+}
+
 export function parseDex(buf: Buffer): ParsedDex {
   if (buf.length < 112 || !(buf[0] === 0x64 && buf[1] === 0x65 && buf[2] === 0x78 && buf[3] === 0x0a))
     throw new Error('not a dex (bad magic)');

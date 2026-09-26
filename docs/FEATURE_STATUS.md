@@ -45,8 +45,9 @@
 | 主动调用 / 活体对象 | v45(java_call), v49(native_call), v51(qbdi args), v06(对象读/调用), **v89(字段写入)** | 反射调用 Java 方法/字段；按符号或地址调 native；活体对象字段**读+写**（写入带 before/after；**严格解析**：typo/越界/int 超范围一律拒绝，不再静默写 0；final 字段 fail-loud；参数超长拒绝而不是截断；**字段查找与枚举走父类链**，继承字段不再报 not found） |
 | trace | v10_trace, v10_qbdi, **v78(backtrace)** | 函数参数/线程/时间戳；QBDI 指令级（用后 dlclose）；hook 命中当刻的 x29 调用链 + 符号化 |
 | 内存反汇编（MCP） | v48 | Capstone 5 WASM，绝对地址或 module+offset |
+| 内存扫描瞄准 | **v15/v97 家族**（`memory_search`/`memory_scan_magic` 的 `minAddr`/`maxAddr`） | 窗口外区域**跳过**而非裁掉，回复回显生效窗口（`all` / `lo-hi`）并报 `regionClipped`/`truncated`——部分扫描不会读起来像全扫描 |
 | 系统调用监听 | v50(direct), **v76(归因)**, **v77(libc+过滤)**, **v81(摘要+参数)**, **v85(syscall_trace 装配)**, **v86(native throttle)** | 直接 `svc #0` 捕获；静态归因（223/224 libc 站点）；按名/号过滤只装命中站点；`syscall_digest` 给调用方/次数/`paths` 直方图，并比对运行期 x8 与归因号 |
-| 一键 dump 所有 DEX | v15, v17 | ART DexFile 枚举 → 逐 dex dump → SHA-256 去重 → 下载（REST+MCP） |
+| 一键 dump 所有 DEX | v15, v17, **v15(逐 dex 分类 carrier/real + 同 pass 建索引)** | ART DexFile 枚举 → 逐 dex dump → SHA-256 去重 → 下载（REST+MCP）；**每个 dex 带 `classes`/`methods`/`carrier` 判定**（诱饵壳 vs 真代码），并复用 `ensureDexIndex` 在同一次 pass 建索引 |
 | 进程内 dlopen | v18 | 目标进程内加载任意 `.so` 并解析符号 |
 | 设备侧后端（Zygisk/Manager） | v27_zygisk, v32_backend_control, **v75(memfd)**, **v98(注入路径的 Java 面)** | scope 往返；后端状态/作用域可控并恢复；**agent 从 memfd 加载**（目标 maps 无模块路径，目标内自证 + ELF 头） |
 | 可选后端 | v30, v31, v34 | 官方二进制 + sha256 固定；Xposed Java bridge；eCapture 抓明文 |
@@ -86,7 +87,13 @@
 - **（2026-09-26 发现，未归属）`verify_v72_site_hooks_cross.sh` 偶发 FAIL**（`scope=all` 的站点扫描报
   `siteCount:0`，但钩子确实装上且命中 3 次；随后按名 scope 的调用被拒 `target already hooked by id 1`）。
   · **与本次改动无关**：`git stash` 摘掉全部改动重建 agent 后失败形态**逐字相同**。
-  · 但它是**间歇**的——随后两次整轮门禁里它都 PASS（"稳定失败"这个说法是当时的初判，不成立）。
+  · 但它是**间歇**的（随后又 PASS 过整轮，`FAIL` 时也能复现）——"稳定失败"这个说法是当时的初判，不成立。
+  · **2026-09-26 追到线索**：缺口是**恒定**的（`seq - accountedFor` 两次都是 22），不是竞态。
+    `g_cap_seq` **只在 native `capture()` 里自增**（Java 富采集路径不推它），所以不是 Java 那条；
+    而 invariant 里的 `emitted` 是 **daemon 把"它自己观察到的** drain 回复里的 `ncaps` 累加**出来的——
+    凡是被**别的消费者** drain 掉、而那条路径没有把计数记进 `capStats` 的，就会让 `accountedFor < seq`。
+    → 下一次查这条时从"谁还会 drain（`withCaptureSuspended` / 一次性探针 / 其它读 `/api/captures` 的路径）"
+    入手，而不是从环形缓冲本身。
   · 第 3 项（`native_hook` 机制自证）已落地并单独跑过 v72：**仍需复看**——本轮它在 9 项 native hook
     家族里 PASS 过、整轮门禁里也 PASS 过，所以第 3 项**没有**解决它，也**没有**证据说它与之相关。
     症状（`hAll = status.hooks[0]` 取到的不是刚装的那个）更像调用方按数组下标取钩子，
@@ -102,7 +109,12 @@
   同一天的后续整轮回归里它又 PASS。属未定因的抖动，建议单独排查（capture ring 在超高 burst 下的记账）。
 - v84 native hook batch 目前只有 host 侧验收，尚未加入设备侧批量选择/行为验收。
 - cdex/041 仍需真实样本；DEX 重建追加式布局保留旧副本作为 slack，文件会变大。
-- Agent TCP `8761` 仍监听 `0.0.0.0` 且没有鉴权，LAN 信任边界待产品决策；完整 syscall 拦截（seccomp/PTRACE_SYSEMU）仍属 L3 未实现。
+- **Agent TCP `8761` 监听 `0.0.0.0` 且无鉴权 —— 待产品决策（2026-09-26 复核后仍未改）。**
+  三条路各有权衡：**加 token 校验**（要改协议握手，需同步 Device Daemon 与验收）、
+  **只绑 `127.0.0.1`**（最小改动，依赖 adb reverse，但会去掉「手机浏览器直连局域网」那条路）、
+  **维持现状**（信任 LAN）。这是信任模型选择而非技术债，且**改动面跨 Device Daemon / Manager /
+  adb reverse 三处**，所以没有在本轮加固里顺手改。
+  完整 syscall 拦截（seccomp/PTRACE_SYSEMU）仍属 L3 未实现（`DEVELOPMENT_PLAN §6.9.5` 建议不做）。
 - `DEVELOPMENT_PLAN.md §6.9.5` 里除模块 X 以外的发布范围收口项仍需逐项确认。
 
 ## 3. 发布结论

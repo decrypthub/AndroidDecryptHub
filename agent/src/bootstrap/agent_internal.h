@@ -15,7 +15,11 @@
 #include <stddef.h>
 #include <android/log.h>
 
-#define AGENT_VER   "0.2.0"
+// Agent build version. Keep it equal to injector/zygisk/module/module.prop: the module ships this
+// .so, so "which agent is flashed?" and "which module is flashed?" must not be two different
+// answers. Reported by compat_probe and in the hello; the string is already compiled in either
+// way, so surfacing it adds no new string to the release image (v88 unaffected).
+#define AGENT_VER   "0.3.12"
 #define ADH_HOST    "127.0.0.1"
 #define ADH_PORT    8761
 #define TAG         "rt.agent"
@@ -50,8 +54,11 @@ int read_full(int fd, unsigned char *buf, size_t n);
 // ---- mem.c ----
 char *build_maps_json(int limit, int *total, int *truncated);
 void cmd_read(int fd, const char *id, const char *addr_hex, long long size, const char *via);
-void cmd_scan_magic(int fd, const char *id);
-void cmd_search(int fd, const char *id, const char *pat_hex, int limit);
+// win_lo/win_hi bound the scan to [lo, hi) (0 = unbounded); regions outside are skipped, and the
+// reply echoes the window so a partial scan cannot read like a full one.
+void cmd_scan_magic(int fd, const char *id, unsigned long long win_lo, unsigned long long win_hi);
+void cmd_search(int fd, const char *id, const char *pat_hex, int limit,
+                unsigned long long win_lo, unsigned long long win_hi);
 void cmd_maps(int fd, const char *id);
 
 // ---- mem_read.c ----

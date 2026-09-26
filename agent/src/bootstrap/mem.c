@@ -99,7 +99,7 @@ void cmd_read(int fd, const char *id, const char *addr_hex, long long size, cons
 
 // Scan readable regions of /proc/self/maps for known container magics.
 // Bounded: <=64MB scanned per region, <=512MB total, <=256 hits. Collect-only.
-void cmd_scan_magic(int fd, const char *id) {
+void cmd_scan_magic(int fd, const char *id, unsigned long long win_lo, unsigned long long win_hi) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
     struct { const char *name; const char *pat; int len; } P[] = {
         { "dex",  "dex\n03", 6 },   // dex\n035..041 (match "dex\n03" prefix)
@@ -128,7 +128,7 @@ void cmd_scan_magic(int fd, const char *id) {
 
     size_t cap = 1 << 16, len = 0;
     char *hits = (char *)malloc(cap); if (hits) hits[0] = 0;
-    int nhits = 0, truncated = 0;
+    int nhits = 0, truncated = 0, clipped = 0;
     size_t total_scanned = 0;
     unsigned char *cbuf = (unsigned char *)malloc(CHUNK + 8);
     char line[1024];
@@ -144,8 +144,13 @@ void cmd_scan_magic(int fd, const char *id) {
         unsigned long long start = strtoull(sa, NULL, 16);
         unsigned long long end = strtoull(ea, NULL, 16);
         if (end <= start) continue;
+        // Optional window. A 3700-region app burns the whole budget on framework OAT before the scan
+        // reaches its heap, and there was no way to aim it. Regions outside the window are SKIPPED
+        // (not clipped), so the caps apply to the part the caller actually asked about.
+        if (win_hi && start >= win_hi) continue;
+        if (win_lo && end <= win_lo) continue;
         unsigned long long rsize = end - start;
-        if (rsize > PERREGION) { rsize = PERREGION; truncated = 1; }   // say so, don't clip silently
+        if (rsize > PERREGION) { rsize = PERREGION; clipped = 1; }   // say so, don't clip silently
         if (total_scanned >= TOTALCAP) { truncated = 1; break; }
 
         unsigned long long o = 0;
@@ -184,12 +189,17 @@ void cmd_scan_magic(int fd, const char *id) {
     }
     fclose(m); free(cbuf); adh_mem_fd_release();
 
-    size_t hlen = (hits ? strlen(hits) : 0) + 200;
+    // Window label: "all" when unbounded, else "lo-hi" in hex. A reply must never read like a full
+    // scan when it only covered the part of the address space the caller asked about.
+    char window[48];
+    if (win_lo || win_hi) snprintf(window, sizeof(window), "0x%llx-0x%llx", win_lo, win_hi);
+    else snprintf(window, sizeof(window), "all");
+    size_t hlen = (hits ? strlen(hits) : 0) + 260;
     char *out = (char *)malloc(hlen);
     if (out) {
         snprintf(out, hlen,
-            "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"scan_magic\",\"ok\":true,\"count\":%d,\"truncated\":%s,\"scanned\":%zu,\"backend\":\"%s\",\"hits\":[%s]}\n",
-            idj, nhits, truncated ? "true" : "false", total_scanned, route, hits ? hits : "");
+            "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"scan_magic\",\"ok\":true,\"count\":%d,\"truncated\":%s,\"regionClipped\":%s,\"scanned\":%zu,\"backend\":\"%s\",\"window\":\"%s\",\"hits\":[%s]}\n",
+            idj, nhits, truncated ? "true" : "false", clipped ? "true" : "false", total_scanned, route, window, hits ? hits : "");
         send_line(fd, out);
         free(out);
     }
@@ -198,7 +208,8 @@ void cmd_scan_magic(int fd, const char *id) {
 
 // Search readable memory for a byte pattern (hex-encoded). Returns hit addresses.
 // Same bounds as scan_magic. Collect-only.
-void cmd_search(int fd, const char *id, const char *pat_hex, int limit) {
+void cmd_search(int fd, const char *id, const char *pat_hex, int limit,
+                unsigned long long win_lo, unsigned long long win_hi) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
     unsigned char pat[256];
     int patlen = hex2bytes(pat_hex, pat, sizeof(pat));
@@ -232,6 +243,10 @@ void cmd_search(int fd, const char *id, const char *pat_hex, int limit) {
         if (strncmp(pp, "/dev/", 5) == 0) continue;
         unsigned long long start = strtoull(sa, NULL, 16), end = strtoull(ea, NULL, 16);
         if (end <= start) continue;
+        // Same optional window as scan_magic: aim the bounded scan instead of spending its budget on
+        // whatever happens to come first in address order.
+        if (win_hi && start >= win_hi) continue;
+        if (win_lo && end <= win_lo) continue;
         unsigned long long rsize = end - start; if (rsize > PERREGION) { rsize = PERREGION; clipped = 1; }
         if (total >= TOTALCAP) break;
         unsigned long long o = 0; int carry = 0;
@@ -257,8 +272,11 @@ void cmd_search(int fd, const char *id, const char *pat_hex, int limit) {
         }
     }
     fclose(m); free(cbuf); adh_mem_fd_release();
-    size_t hlen = (hits ? strlen(hits) : 0) + 200; char *out = (char *)malloc(hlen);
-    if (out) { snprintf(out, hlen, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"search\",\"ok\":true,\"count\":%d,\"truncated\":%s,\"regionClipped\":%s,\"backend\":\"%s\",\"hits\":[%s]}\n", idj, nhits, nhits >= limit ? "true" : "false", clipped ? "true" : "false", route, hits ? hits : ""); send_line(fd, out); free(out); }
+    char window[48];
+    if (win_lo || win_hi) snprintf(window, sizeof(window), "0x%llx-0x%llx", win_lo, win_hi);
+    else snprintf(window, sizeof(window), "all");
+    size_t hlen = (hits ? strlen(hits) : 0) + 260; char *out = (char *)malloc(hlen);
+    if (out) { snprintf(out, hlen, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"search\",\"ok\":true,\"count\":%d,\"truncated\":%s,\"regionClipped\":%s,\"backend\":\"%s\",\"window\":\"%s\",\"hits\":[%s]}\n", idj, nhits, nhits >= limit ? "true" : "false", clipped ? "true" : "false", route, window, hits ? hits : ""); send_line(fd, out); free(out); }
     free(hits);
 }
 

@@ -710,14 +710,20 @@ static void command_loop(int fd) {
                     char path[2048] = ""; json_get_str(line, "path", path, sizeof(path));
                     cmd_read_file(fd, id, path);
                 } else if (strcmp(op, "scan_magic") == 0) {
-                    cmd_scan_magic(fd, id);
+                    char lo[24] = "", hi[24] = "";
+                    json_get_str(line, "minAddr", lo, sizeof(lo));
+                    json_get_str(line, "maxAddr", hi, sizeof(hi));
+                    cmd_scan_magic(fd, id, strtoull(lo, NULL, 16), strtoull(hi, NULL, 16));
                 } else if (strcmp(op, "mem_backend") == 0) {
                     char mb[32] = ""; json_get_str(line, "backend", mb, sizeof(mb));
                     cmd_mem_backend(fd, id, mb);
                 } else if (strcmp(op, "search") == 0) {
-                    char pat[520] = ""; json_get_str(line, "pat", pat, sizeof(pat));
+                    char pat[520] = "", lo[24] = "", hi[24] = "";
+                    json_get_str(line, "pat", pat, sizeof(pat));
+                    json_get_str(line, "minAddr", lo, sizeof(lo));
+                    json_get_str(line, "maxAddr", hi, sizeof(hi));
                     long long lim = json_get_num(line, "limit");
-                    cmd_search(fd, id, pat, (int)lim);
+                    cmd_search(fd, id, pat, (int)lim, strtoull(lo, NULL, 16), strtoull(hi, NULL, 16));
                 } else if (strcmp(op, "frame_echo") == 0) {
                     cmd_frame_echo(fd, id, line);
                 } else if (strcmp(op, "ping") == 0) {

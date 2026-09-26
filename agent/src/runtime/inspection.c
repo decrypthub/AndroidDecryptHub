@@ -505,6 +505,7 @@ void adh_cmd_compat_probe(int fd, const char *id) {
     char out[3072];
     snprintf(out, sizeof(out),
         "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"compat_probe\",\"ok\":true,"
+        "\"agentVer\":\"%s\","
         "\"tracerPid\":%d,\"seccomp\":%d,\"backends\":{\"gotHook\":%s,\"jniReflect\":%s,\"artDexCapture\":%s,\"memRead\":%s},"
         "\"memBackend\":\"%s\",\"memOpenErrno\":%d,\"libartJniGetVms\":%s,"
         "\"mapsReadOk\":%s,\"mapsCount\":%d,\"moduleMappings\":%d,"
@@ -516,7 +517,7 @@ void adh_cmd_compat_probe(int fd, const char *id) {
         "\"baseline\":{\"execMappings\":%d,\"anonExecMappings\":%d,\"anonNamedExecMappings\":%d,\"memfdExecMappings\":%d,\"rwxMappings\":%d,\"agentExecMappings\":%d,\"zygiskExecMappings\":%d},"
         "\"delta\":{\"execMappings\":%d,\"anonExecMappings\":%d,\"anonNamedExecMappings\":%d,\"memfdExecMappings\":%d,\"rwxMappings\":%d},"
         "\"dlopenSystemLibsBlocked\":%s}\n",
-        idj, tracer, seccomp, got_ok ? "true" : "false", jni_ok ? "true" : "false",
+        idj, AGENT_VER, tracer, seccomp, got_ok ? "true" : "false", jni_ok ? "true" : "false",
         adh_jni_vm_available() ? "true" : "false", memread_ok ? "true" : "false",
         mem_backend, mem_open_errno, jni_symbol ? "true" : "false",
         maps_read_ok ? "true" : "false", cur.maps, module_count,
