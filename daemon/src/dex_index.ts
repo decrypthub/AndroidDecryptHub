@@ -147,6 +147,14 @@ export function ensureDexIndex(buf: Buffer) {
   return publicDocument(row, false, +(performance.now() - started).toFixed(2), rebuildReason);
 }
 
+// Drop a document and everything derived from it (the child tables cascade). Used by artifact
+// retention: once the dex file is deleted, an index row for it would answer `dex_index_search`
+// with hits whose bytes no longer exist — a stale answer is worse than no answer.
+export function deleteDexDocument(sha: string): boolean {
+  const info = db.prepare('DELETE FROM dex_documents WHERE sha = ?').run(sha);
+  return Number(info.changes) > 0;
+}
+
 export function searchDexIndex(sha: string, query: string, limit = 200) {
   const started = performance.now();
   const document = getDocument.get(sha) as DocumentRow | undefined;

@@ -47,7 +47,31 @@
 - **顺带确认**：`com.android.settings` 上也是 `memBackend=direct` —— **第二个真实目标同样拒绝
   `/proc/self/mem`**，说明这条回退不只对学习通有价值。
 
-**第 2–6 项**（工件生命周期 / `native_hook` 机制自证 / 扫描瞄得准 / 加厚一键入口 / 小项）待续。
+### 第 2 项 — 工件生命周期（持久化 + 回收）✅
+
+**问题**：`dumps` map **只在内存**，daemon 重启后磁盘工件全部"消失"（`dumps_list`/`/api/dumps`/按 sha 下载/
+`dex_index` 一律答"没有"，而文件好好躺在 `captures/`）；且磁盘**没有任何回收**，本轮实测留下约 1.27GB。
+
+**修法**（纯 daemon）
+- `daemon/src/artifacts.ts`（新，**纯模块、无 fs/state 依赖**）：`artifactKindOf` 认三种命名
+  （`<sha16>.<kind>.bin` / `<sha16>.so` / `<sha16>.dex`），`planArtifactEviction` 定回收策略。
+  抽成纯函数是为了**能直接单测**——`state.ts` 拥有存储，这个模块拥有决策。
+- `state.ts`：启动时 `loadArtifactsFromDisk()` **重新哈希并采纳** `captures/` 里的文件（流式哈希，
+  大 dump 不爆内存）；来源标 `disk-reload` 而不是编造 session/addr/tag；新增
+  `settings.artifacts{maxBytes:8GiB, maxAgeDays:14}`（可经 `/api/config` 调）与 `pruneArtifacts()`；
+  `configStats().artifacts` 让回收**可观测**而不是后台静默规则。
+- `service.ts`：`pruneArtifactsAndIndex()` 把回收接到 **dex 索引行**的删除上（删了 dex 文件还留着索引行，
+  `dex_index_search` 就会答出字节已不存在的命中——**陈旧答案比没有答案更糟**）。`dex_index.ts` 依赖
+  `state.ts`，所以反向不能 import，用回调注入避免成环。
+- 回收在**三处**跑：每次新工件落盘后（`persistArtifact`/`dumpRegion` 尾部，dedup 命中时不跑）、
+  启动时一次、daemon 已有的 60s 清扫里一次（有几条路由直接写工件、绕过前两个，靠定时兜住）。
+
+**验收**：新增 `tools/verify_v99_artifact_store.sh`（host，注册在最后因为它会**真的重启 daemon**）——
+先跑 8 项纯策略单测，再重启后断言磁盘上每个工件都回到 `/api/dumps`、标 `disk-reload`、无悬空条目。
+实测：**290 个文件 → 281 个唯一 sha 全部回流**，预算 `{maxBytes:8589934592, maxAgeDays:14}` 暴露。
+（修复前这一步是 0 条。）
+
+**第 3–6 项**（`native_hook` 机制自证 / 扫描瞄得准 / 加厚一键入口 / 小项）待续。
 
 
 

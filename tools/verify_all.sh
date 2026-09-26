@@ -183,6 +183,9 @@ SCRIPTS=(
   # Optional eCapture backend (module W): eBPF TLS plaintext capture. Needs root + eBPF kernel;
   # SKIPs with an explicit reason when the kernel cannot load eBPF programs.
   "verify_v34_ecapture.sh:device"
+  # v9.9 artifact store: the eviction policy is unit-tested, and artifacts that are on disk must be
+  # listed again after a daemon restart. Registered last because it restarts the daemon itself.
+  "verify_v99_artifact_store.sh:host"
 )
 
 pass=0; fail=0; skip=0; FAILED=""

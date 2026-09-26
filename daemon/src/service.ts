@@ -1,6 +1,7 @@
 // service.ts — ADH Daemon service layer: agent-command transport + dump engine + capture ops.
 // Imported by mcp.ts (MCP handlers) and index.ts (REST routes + agent TCP + boot).
-// Imports ONLY from state.ts (+ dex.ts pure layer + node builtins) — no circular refs.
+// Imports ONLY from state.ts (+ dex.ts pure layer + dex_index.ts for artifact retention +
+// node builtins) — no circular refs.
 import { readFile } from 'node:fs/promises';
 import { writeFileSync, existsSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
@@ -11,8 +12,12 @@ import {
   frameJson, agentSockets, pending, nextCmdId, sessions, dumps, log,
   capturePaused, captureTimers, captureModules, settings, recentJavaIn,
   pushCapture, broadcast, hexToPreview, classify, categoryOf, capStats, CAPTURES,
+  pruneArtifacts,
 } from './state.ts';
 import type { AgentSession, DumpMeta, MapsRegion, Capture } from './state.ts';
+// dex_index.ts imports state.ts, not this file, so this edge cannot form a cycle; it is here so
+// artifact retention can drop the index row of a dex it deletes.
+import { deleteDexDocument } from './dex_index.ts';
 
 // ---- agent command transport ---------------------------------------------
 // Issue a command to an agent and await its cmdResult (10s default timeout).
@@ -191,6 +196,24 @@ export function repairDexHeader(buf: Buffer): { fileSize: number; checksum: stri
   return { fileSize, checksum: checksum.toString(16).padStart(8, '0'), signature: sig.toString('hex'), magicOk };
 }
 
+// Artifact retention, wired to the dex index. Called after a NEW artifact lands (a dedup hit kept
+// the file that was already there, so there is nothing to reclaim) and once at boot. Retention
+// failing must never break a dump that already succeeded, but it must not be silent either.
+export function pruneArtifactsAndIndex(protectSha?: string) {
+  try {
+    const r = pruneArtifacts((sha) => {
+      try { deleteDexDocument(sha); }
+      catch (e) { log(`[artifacts] 索引行未删除 ${sha.slice(0, 16)}(已删文件，索引将留下陈旧行):`, (e as Error).message); }
+    }, protectSha);
+    if (r.removed || r.failed) {
+      log(`[artifacts] 回收 ${r.removed} 个（释放 ${(r.bytesFreed / 1048576).toFixed(1)} MiB，`
+        + `剩余 ${(r.remainingBytes / 1048576).toFixed(1)} MiB / 上限 ${(settings.artifacts.maxBytes / 1048576).toFixed(0)} MiB，保留 ${r.kept}）`
+        + (r.failed ? `，${r.failed} 个删除失败` : ''));
+    }
+    return r;
+  } catch (e) { log('[artifacts] 回收失败:', (e as Error).message); return null; }
+}
+
 // Persist an in-memory buffer as a dump artifact, in the same store, directory and naming scheme
 // dumpRegion uses, so everything downstream (dumps_list, /api/dumps/download, dex_index by sha)
 // works on it unchanged.
@@ -220,6 +243,7 @@ export async function persistArtifact(
   };
   dumps.set(sha, meta);
   broadcast('dump.new', meta);
+  pruneArtifactsAndIndex(sha);     // a new file landed: enforce the on-disk budget now
   return { meta, dedup: false };
 }
 
@@ -266,6 +290,7 @@ export async function dumpRegion(sid: string, addrHex: string, size: number, tag
   };
   dumps.set(sha, meta);
   broadcast('dump.new', meta);
+  pruneArtifactsAndIndex(sha);     // a new file landed: enforce the on-disk budget now
   return { meta, dedup: false };
 }
 

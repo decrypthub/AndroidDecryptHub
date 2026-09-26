@@ -4,7 +4,7 @@ import http from 'node:http';
 import net from 'node:net';
 import { AGENT_PORT, HTTP_PORT, webUrls } from './config.ts';
 import { handleHttp } from './http/router.ts';
-import { startCaptureLoop, forgetCaptureSession } from './service.ts';
+import { startCaptureLoop, forgetCaptureSession, pruneArtifactsAndIndex } from './service.ts';
 import {
   agentSockets, broadcast, captureTimers, frameJson, FRAME_JSON, FRAME_MAX,
   log, nextId, pending, pruneSessions, sessions, wss,
@@ -137,7 +137,15 @@ httpServer.listen(HTTP_PORT, '0.0.0.0', () => {
 process.on('SIGINT', () => { log('shutting down'); process.exit(0); });
 
 // Periodic session sweep: closes can be missed (kill -9, lost sockets), so bound the map anyway.
+// The same tick enforces artifact retention: the dump helpers prune right after they write, but a
+// few routes write artifacts directly, so a periodic sweep is what keeps captures/ bounded no
+// matter which path produced the file.
 setInterval(() => {
   const dropped = pruneSessions();
   if (dropped.length) log(`session prune: dropped ${dropped.length} stale offline session(s)`);
+  pruneArtifactsAndIndex();
 }, 60_000).unref();
+
+// Boot-time reconciliation: adopt what is already on disk (the module body of state.ts does the
+// load) and apply retention once, so a daemon that was down while files piled up starts bounded.
+pruneArtifactsAndIndex();

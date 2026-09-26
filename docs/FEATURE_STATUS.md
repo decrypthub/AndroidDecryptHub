@@ -83,11 +83,19 @@
   `tools/verify_v97_memread_direct.sh` 已入门禁。详见 `PROGRESS.md` 2026-09-26（续）节。
   同一轮还做了两项加固：内存扫描的预算不再被框架 OAT 吃光（截断如实上报 `truncated`/`regionClipped`），
   以及 `dex_repair` 不再把整份修复后的 dex 内联回吐（120MB → 160MB base64），改为落成可按 sha 取回的工件。
-- **（2026-09-26 发现，未归属）`verify_v72_site_hooks_cross.sh` 稳定 FAIL**（`scope=all` 的站点扫描报
+- **（2026-09-26 发现，未归属）`verify_v72_site_hooks_cross.sh` 偶发 FAIL**（`scope=all` 的站点扫描报
   `siteCount:0`，但钩子确实装上且命中 3 次；随后按名 scope 的调用被拒 `target already hooked by id 1`）。
-  **与本次改动无关**：`git stash` 摘掉全部改动重建 agent 后失败形态**逐字相同**。
-  · 注意这很可能**不是扫描失效，而是第 3 项要修的那个缺陷的一个实例**——钩子装上了、命中了，
-    但**回复里的 status 没把机制事实（站点列表）带出来**，于是调用方无法自证。修完 `native_hook` 状态上报后需复看。
+  · **与本次改动无关**：`git stash` 摘掉全部改动重建 agent 后失败形态**逐字相同**。
+  · 但它是**间歇**的——随后两次整轮门禁里它都 PASS（"稳定失败"这个说法是当时的初判，不成立）。
+  · 症状很可能是**第 3 项要修的那个缺陷的一个实例**：钩子装上了、也命中了，但**回复带出的 status
+    里没有机制事实（站点列表）**，调用方无法自证；`hAll = status.hooks[0]` 取到的不是刚装的那个。
+    修完 `native_hook` 状态上报后需复看——若仍偶发，则另有他因（arena/时序）。
+- **（2026-09-26 加固，第 2 项）工件生命周期**：`dumps` 只在内存 → 重启 daemon 后磁盘工件全部不可见
+  （`dumps_list`/按 sha 下载/`dex_index` 一律答"没有"）；`captures/` 无任何回收（实测一轮约 1.27GB）。
+  现在启动时从磁盘**重新哈希采纳**（来源标 `disk-reload`，不编造 provenance），并按新增的
+  `settings.artifacts{maxBytes,maxAgeDays}` 回收——删工件的同时删 dex 索引行（陈旧索引比没有更糟）。
+  策略抽在纯模块 `daemon/src/artifacts.ts` 里并有 8 项单测；验收 `tools/verify_v99_artifact_store.sh`
+  会**真的重启 daemon**，断言 281 个工件全部回流。
 - **（2026-09-26 发现）`verify_v22_capture.sh` 的记账不变量 `emitted+backlog+dropped==seq` 偶发不成立，
   缺额约 5.5k 且形态稳定，与本次内存读取改动无关**——用 `git stash` 摘掉全部改动重建基线 agent 后同样不成立，
   同一天的后续整轮回归里它又 PASS。属未定因的抖动，建议单独排查（capture ring 在超高 burst 下的记账）。

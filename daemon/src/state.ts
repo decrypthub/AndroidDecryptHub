@@ -4,11 +4,13 @@
 // functions that issue agent commands (sendCmd/capture loop/unpack/dump) live in service.ts.
 import net from 'node:net';
 import type { IncomingMessage } from 'node:http';
-import { mkdirSync, writeFileSync, existsSync, appendFileSync, readFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, existsSync, appendFileSync, readFileSync, readdirSync, statSync, unlinkSync, openSync, readSync, closeSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
+import { artifactKindOf, planArtifactEviction } from './artifacts.ts';
+import type { ArtifactEntry } from './artifacts.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const CAPTURES = join(__dirname, '..', '..', 'captures');
@@ -145,6 +147,10 @@ export const SETTINGS_FILE = join(DATA_DIR, 'settings.json');
 export interface Settings {
   capture: { enabled: boolean; autoDumpDex: boolean; retain: number; families: Record<string, boolean>; cryptoModule: string; fileModule: string; sysModule: string };
   ui: { displayCap: number };
+  // On-disk artifact retention (captures/). `capture.retain` above only bounds the in-memory
+  // capture list; the files themselves used to grow without limit (one packed-app run left ~1.1 GB).
+  // maxAgeDays = 0 disables the age rule; the size budget still applies.
+  artifacts: { maxBytes: number; maxAgeDays: number };
 }
 export const DEFAULT_SETTINGS: Settings = {
   // cryptoModule: which module's GOT holds the EVP/SSL calls the agent hooks. The agent bakes
@@ -158,6 +164,7 @@ export const DEFAULT_SETTINGS: Settings = {
   // self-test; override per real target (empty string = don't install that category's hooks).
   capture: { enabled: true, autoDumpDex: true, retain: 1000, families: { digest: true, hmac: true, symmetric: true, asymmetric: true, tls: true, aead: true }, cryptoModule: 'libjavacrypto.so', fileModule: 'libjavacore.so', sysModule: 'libadhdetect.so' },
   ui: { displayCap: 300 },
+  artifacts: { maxBytes: 8 * 1024 ** 3, maxAgeDays: 14 },
 };
 export let settings: Settings = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
 // section-merge (like IDH /api/settings/import): only the segments present in `patch` apply.
@@ -181,6 +188,12 @@ export function mergeSettings(patch: any): string[] {
     if (Number.isFinite(patch.ui.displayCap)) settings.ui.displayCap = Math.max(50, Math.min(5000, Math.floor(patch.ui.displayCap)));
     applied.push('ui');
   }
+  if (patch.artifacts && typeof patch.artifacts === 'object') {
+    const a = patch.artifacts;
+    if (Number.isFinite(a.maxBytes)) settings.artifacts.maxBytes = Math.max(256 * 1024 ** 2, Math.min(512 * 1024 ** 3, Math.floor(a.maxBytes)));
+    if (Number.isFinite(a.maxAgeDays)) settings.artifacts.maxAgeDays = Math.max(0, Math.min(365, Math.floor(a.maxAgeDays)));
+    applied.push('artifacts');
+  }
   return applied;
 }
 // Load persisted settings. Fail LOUD: if the file is present but corrupt/unreadable we must not
@@ -192,6 +205,79 @@ try {
 }
 // Persist. Throws on failure — callers MUST surface it so the UI never claims "已保存" on a failed write.
 export function saveSettings() { writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2)); }
+
+// ---- on-disk artifact store --------------------------------------------------------------
+// Adopt artifacts that are already on disk into the runtime map.
+//
+// Without this the map is empty after a restart: `dumps_list` / `/api/dumps` / download-by-sha /
+// `dex_index` all report "nothing here" while the bytes sit in captures/ — the artifacts survive,
+// only the daemon forgot them. The session, address and tag that produced a file are NOT on disk;
+// they are labelled 'disk-reload' rather than guessed, so nothing downstream reads a fabricated
+// provenance.
+export function loadArtifactsFromDisk(): { loaded: number; skipped: number; bytes: number; ms: number } {
+  const t0 = Date.now();
+  let loaded = 0, skipped = 0, bytes = 0;
+  let names: string[];
+  try { names = readdirSync(CAPTURES); }
+  catch (e) {
+    log(`[artifacts] 扫描 ${CAPTURES} 失败 — 磁盘上的工件本次不可见:`, (e as Error).message);
+    return { loaded: 0, skipped: 0, bytes: 0, ms: Date.now() - t0 };
+  }
+  const chunk = Buffer.allocUnsafe(1 << 20);       // hashing streams: a dump can be 100 MB+
+  for (const name of names) {
+    const kind = artifactKindOf(name);
+    if (!kind) { skipped++; continue; }
+    const path = join(CAPTURES, name);
+    try {
+      const st = statSync(path);
+      if (!st.isFile()) { skipped++; continue; }
+      const h = createHash('sha256');
+      const fd = openSync(path, 'r');
+      try { let n: number; while ((n = readSync(fd, chunk, 0, chunk.length, null)) > 0) h.update(chunk.subarray(0, n)); }
+      finally { closeSync(fd); }
+      const sha = h.digest('hex');
+      if (dumps.has(sha)) { skipped++; continue; }   // already adopted (or produced this session)
+      dumps.set(sha, {
+        sha256: sha, size: st.size, source: 'disk-reload', addr: '', tag: 'disk-reload',
+        sessionId: '', package: '', capturedAt: Math.round(st.mtimeMs), path, kind,
+        requestedSize: st.size, complete: true,
+      });
+      loaded++; bytes += st.size;
+    } catch (e) { skipped++; log(`[artifacts] 跳过 ${name}:`, (e as Error).message); }
+  }
+  return { loaded, skipped, bytes, ms: Date.now() - t0 };
+}
+
+// Enforce `settings.artifacts` against the real store (policy: planArtifactEviction).
+// A file that cannot be unlinked stays in the map — the map has to keep describing what is actually
+// on disk, so a failed delete is reported rather than quietly forgotten.
+// `onDelete` lets a caller drop related state it owns (the dex index row) without state.ts having to
+// import the indexer, which would be a cycle (dex_index.ts imports this file).
+export function pruneArtifacts(onDelete?: (sha: string) => void, protectSha?: string): { removed: number; bytesFreed: number; remainingBytes: number; kept: number; failed: number } {
+  const mtimeOf = (p: string) => { try { return Math.round(statSync(p).mtimeMs); } catch { return 0; } };
+  const entries: ArtifactEntry[] = [...dumps.values()].map((m) => ({
+    sha256: m.sha256, path: m.path, size: Number(m.size) || 0,
+    mtime: mtimeOf(m.path) || Number(m.capturedAt) || 0,
+  }));
+  const plan = planArtifactEviction(entries, settings.artifacts, Date.now(), protectSha);
+  let removed = 0, bytesFreed = 0, failed = 0;
+  for (const e of plan.evict) {
+    try { unlinkSync(e.path); }
+    catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        failed++; log(`[artifacts] 删除失败，保留记账 ${e.path}:`, (err as Error).message); continue;
+      }
+    }
+    dumps.delete(e.sha256); onDelete?.(e.sha256);
+    removed++; bytesFreed += e.size;
+  }
+  return { removed, bytesFreed, remainingBytes: plan.remainingBytes, kept: dumps.size, failed };
+}
+
+{ // re-adopt what is already on disk (see loadArtifactsFromDisk)
+  const a = loadArtifactsFromDisk();
+  if (a.loaded || a.skipped) log(`[artifacts] 从磁盘恢复 ${a.loaded} 个工件（跳过 ${a.skipped}，${(a.bytes / 1048576).toFixed(1)} MiB，${a.ms}ms）`);
+}
 /** Retention accounting for the in-memory capture list. Pass a session for that session's view. */
 export function captureStoreStats(session?: string) {
   if (session) {
@@ -220,7 +306,13 @@ export function storeLossNote(session: string, window: { sinceMs?: number | null
   return `capture store: ${s.evicted} record(s) of this session were evicted (retain ${s.retain}) - the requested window may be missing events`;
 }
 
-export function configStats() { return { captures: captures.length, dumps: dumps.size, events: events.length, on: captureTimers.size > 0, agents: sessions.size, capture: captureHealth() }; }
+/** On-disk artifact accounting, so retention is observable instead of a silent background rule. */
+export function artifactStats() {
+  let bytes = 0;
+  for (const m of dumps.values()) bytes += Number(m.size) || 0;
+  return { count: dumps.size, bytes, maxBytes: settings.artifacts.maxBytes, maxAgeDays: settings.artifacts.maxAgeDays };
+}
+export function configStats() { return { captures: captures.length, dumps: dumps.size, events: events.length, on: captureTimers.size > 0, agents: sessions.size, capture: captureHealth(), artifacts: artifactStats() }; }
 // Which crypto family a capture belongs to (mirrors cryptoIdentify's buckets) — used by the
 // Daemon-side family filter (panel-level; the agent still hooks everything).
 export function familyOf(algo: string): 'tls' | 'asymmetric' | 'hmac' | 'digest' | 'symmetric' | 'aead' {

@@ -8,11 +8,15 @@ verify_resolve_env_host
 verify_host_begin
 
 REP="$(curl -s "$BASE/api/export/report")"
-verify_chk "report shape"      'echo "$REP" | grep -q "idh-diagnostic" && echo "$REP" | grep -q "capabilities"'
-verify_chk "report no-secrets note" 'echo "$REP" | grep -q "metadata only"'
+# verify_grep_q, not `echo | grep -q`: this payload lists every artifact in the store, so it grows
+# with the number of dumps and crosses the 64 KiB pipe buffer (67 KB with ~280 artifacts). Past that
+# point the writer gets SIGPIPE, pipefail turns it into a non-zero status, and the match is reported
+# as a failure even though the text is there — the exact landmine tools/MAP.md documents.
+verify_chk "report shape"      'verify_grep_q "$REP" "idh-diagnostic" && verify_grep_q "$REP" "capabilities"'
+verify_chk "report no-secrets note" 'verify_grep_q "$REP" "metadata only"'
 DOC="$(curl -s "$BASE/api/mcp/doc")"
-verify_chk "mcp doc header"    'echo "$DOC" | grep -q "MCP Tools"'
-verify_chk "mcp doc has tools" 'echo "$DOC" | grep -q "process_list" && echo "$DOC" | grep -q "trace_function"'
+verify_chk "mcp doc header"    'verify_grep_q "$DOC" "MCP Tools"'
+verify_chk "mcp doc has tools" 'verify_grep_q "$DOC" "process_list" && verify_grep_q "$DOC" "trace_function"'
 
 TOOLS="$(curl -s -X POST "$BASE/mcp" -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')"
 COUNT=$(echo "$TOOLS" | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{try{process.stdout.write(String(JSON.parse(d).result.tools.length))}catch(e){process.stdout.write('0')}})")

@@ -80,7 +80,10 @@
    status 应给出机制性证据，而不是只给计数。
 3. **大目标上瞄不准**：内存扫描没有区间参数、没有分页；`dump_all_dex` 只报数量不报性质
    （14 个里哪个是诱饵壳，要人自己看）。
-4. **工件生命周期**：`dumps` map 只在内存里（daemon 重启后磁盘工件"消失"）；
+4. **工件生命周期**（✅ 已办）：`dumps` map 只在内存里（daemon 重启后磁盘工件"消失"）；
    磁盘上的 `captures/*.bin` 没有任何回收，本轮就留了约 1.1GB。
+   → daemon 启动时从 `captures/` **重新采纳**（重新哈希，自愈，不依赖旁路索引），并新增
+   `settings.artifacts{maxBytes,maxAgeDays}` 回收（删文件同时删 dex 索引行）。验收 `verify_v99`：
+   真重启后 281 个工件全部回来、标 `disk-reload`、无悬空路径。
 5. **缺一键编排**：零件齐了（scope → 冷启动 → probe → `art_dexfiles` → `dump_all_dex` → index → coverage），
    但没串起来，本次约 20 次工具调用做考古。

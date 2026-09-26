@@ -108,7 +108,7 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       try { obj = JSON.parse((await readBody(req)) || '{}'); } catch { return send(400, { error: 'JSON 格式错误' }); }
       if (typeof obj !== 'object' || Array.isArray(obj)) return send(400, { error: '顶层必须是对象' });
       const applied = mergeSettings(obj);
-      if (!applied.length) return send(400, { error: '没有可应用的板块(capture/ui)' });
+      if (!applied.length) return send(400, { error: '没有可应用的板块(capture/ui/artifacts)' });
       while (captures.length > settings.capture.retain) captures.shift();
       applyCaptureEnabled().catch((e) => log('[settings] applyCaptureEnabled:', (e as Error).message));
       try { saveSettings(); }
