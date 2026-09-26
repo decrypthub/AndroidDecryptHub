@@ -14,6 +14,57 @@
 全来自命令参数）；② 不胡乱兜底 / fail-loud（hook 装不上、缓冲溢出、解不动一律显式报错 + 计数上报，
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
+## 2026-09-26（续）—— 两个阻断点已修复并真机验证（另含 C/D 两项加固）
+
+上面那节暴露的 A/B 两个缺陷**已在 agent 内修掉**，未改协议、未改注入器。学习通在**不施加任何
+绕法**的情况下完成了完整脱壳。
+
+**A. 内存读取不再依赖 `/proc/self/mem`**（新增 `agent/src/bootstrap/mem_read.c`，成为唯一后端）
+- 目标能打开该 fd 时**行为与改动前逐字节一致**（`pread`），所以既有验收不会漂移；打不开时才走
+  **直读**：先在 `/proc/self/maps` 里确认区间可读，再 `memcpy`，全程包在一个 SIGSEGV/SIGBUS 短守卫里
+  （拷贝途中映射消失 → 报告读取失败，而不是把目标打死）。守卫窗口内其他线程的真崩溃会链回原处置。
+- fd **按命令释放**（`adh_mem_fd_release`）：原实现每条命令 open/close，改动后若长驻 fd，等于在目标里
+  留一个「有人在读我内存」的可观测信号。验收脚本现在直接断言命令结束后 `/proc/<pid>/fd` 里没有它。
+- 每条回复都点名实际走的路线（`via` / `backend`），`compat_probe` 增报 `memBackend` / `memOpenErrno` /
+  `libartJniGetVms` —— 能力降级不再静默。
+- 新增 `read ... via=direct`（MCP `memory_read` 的 `via` 参数），可在**目标伪造 `/proc/self/mem` 返回**
+  时对照两条路线。
+
+**B. Zygisk 注入下拿得到 JavaVM**（`runtime/jni.c`）
+- `JNI_GetCreatedJavaVMs` 改为**从已加载的 libart.so 里按内存镜像查符号**（复用 `adh_resolve_sym`），
+  `dlopen` 只作最后兜底。memfd 加载的 agent 被 linker namespace 拒绝 dlopen 的问题绕开了，
+  且 Gadget / Xposed 两条后端同样受益——**注入器不需要改**。
+
+**C. 扫描预算与截断如实上报**（`bootstrap/mem.c`）
+- `scan_magic`：`MAXHITS` 256→2048、`TOTALCAP` 512MB→2GB、`PERREGION` 64MB→256MB；
+  `search`：`TOTALCAP` 1GB→2GB、`PERREGION` 128MB→256MB。旧的额度被框架 OAT 的 dex magic 吃光，
+  根本扫不到 app 堆。被裁掉的区域现在报 `truncated`（scan）/`regionClipped`（search），不再静默跳过。
+
+**D. `dex_repair` 不再内联回吐整份 dex**（`daemon/src/service.ts` 新增 `persistArtifact`）
+- 原实现把修复后的 dex 以 `repairedB64` 原样回吐：120MB 的 dex → 160MB 的回复，直接撑爆 MCP/HTTP
+  回复与落盘上限（本次实战里我自己就被它顶掉过一次工具输出），而调用方本来就已经持有这些字节。
+- 现在**落成正式工件**（与 `dumpRegion` 同一目录/命名/去重），回复只给头字段 + `sha256`/`size`/`kind`/`path`，
+  于是修复后的 dex 可以像别的 dump 一样被索引和下载。改前确认过 `repairedB64` **没有任何消费方**
+  （web UI 与脚本都不读）。`verify_v02_dexrepair.sh` 相应补了一条"按 sha 取回的字节必须等于修复结果"。
+
+**验证**
+- 新增 `tools/verify_v97_memread_direct.sh`（已入 `verify_all.sh`）：只读代码映射为锚点，自动路线与
+  `via=direct` 返回**逐字节相同**且各自点明路线；对 `---p` 区间直读干净失败且目标存活；
+  `compat_probe` 三个新字段形状正确；无遗留 mem fd。
+- **真机（学习通 / SecNeo，无 prctl 绕法）**：`compat_probe` = `memBackend:"direct"`、`memOpenErrno:13`、
+  `memRead:true`、`libartJniGetVms:true`；`memory_search` 直命中真实类；
+  **`art_dexfiles` 由 `no JavaVM` 变为 `ok:true / count:14 / loaders:100`**；
+  **`dump_all_dex` 一键产出 14 个 dex，其中 13 个真 dex 与手工挖出的结果 sha256 逐字节相同**
+  （外加 120MB 外壳占位）。产物在 `dumps/chaoxing-7.0.4/dex-native/`。
+- 回归：`verify_all.sh`（114 脚本）**114 PASS / 0 FAIL / 0 SKIP**。
+
+**仍未做**
+- 信号守卫的故障路径无法确定性覆盖，验收脚本明确不声称覆盖它。
+- A 的绕法（`native_call libc.so prctl [4,1]`）不再是流程的一部分，仅作应急处置留档。
+- `verify_v22_capture.sh` 的记账不变量偶发不成立（与本次改动无关，见 `FEATURE_STATUS.md §2`）。
+
+
+
 ## 2026-09-26 —— 真机脱壳实战：学习通（`com.chaoxing.mobile` 7.0.4，SecNeo 梆梆加固）
 
 **这是 ADH 第一次在真机上对一个真实加固 App 完成完整脱壳，并且顺带暴露了两个此前从未被门禁覆盖的
@@ -30,7 +81,9 @@
 4. `memory_search` 搜真实类名 `Lcom/chaoxing/mobile/study/account/LoginActivity;` 定位真载荷所在区域。
 5. `memory_dump` 按精确 addr+size 逐个取出 13 个 dex → `dex_index` / `dex_coverage` 验收。
 
-### 本次暴露的 ADH 缺陷（建议排期修复）
+### 本次暴露的 ADH 缺陷（A/B/C 已在上一节修掉，D 待做）
+
+> 下面按**发现当时**的原样保留，作为根因记录；A/B/C 的修法与验证见上一节，D（`dex_repair` 内联回吐）仍未做。
 
 - **A. `/proc/self/mem` 在 non-dumpable 目标上 EACCES，agent 全部读内存能力失效。**
   SecNeo（梆梆）调 `prctl(PR_SET_DUMPABLE,0)`，于是 `open("/proc/self/mem")` 返回 **errno 13**——

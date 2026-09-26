@@ -191,6 +191,38 @@ export function repairDexHeader(buf: Buffer): { fileSize: number; checksum: stri
   return { fileSize, checksum: checksum.toString(16).padStart(8, '0'), signature: sig.toString('hex'), magicOk };
 }
 
+// Persist an in-memory buffer as a dump artifact, in the same store, directory and naming scheme
+// dumpRegion uses, so everything downstream (dumps_list, /api/dumps/download, dex_index by sha)
+// works on it unchanged.
+//
+// This exists because the repair routes used to hand the repaired dex back INLINE as base64. For a
+// real packed target that is a 120 MB dex -> a 160 MB reply, which overflows the MCP/HTTP reply and
+// leaves the caller with something it cannot use anyway (it already had the bytes). Returning the
+// sha and a stored artifact instead makes the repaired dex indexable and downloadable like any
+// other dump.
+export async function persistArtifact(
+  buf: Buffer,
+  fields: Pick<DumpMeta, 'source' | 'addr' | 'tag' | 'sessionId' | 'package'>,
+  opts: { requestedSize?: number; complete?: boolean; note?: string } = {},
+): Promise<{ meta: DumpMeta; dedup: boolean }> {
+  const sha = createHash('sha256').update(buf).digest('hex');
+  const existing = dumps.get(sha);
+  if (existing) return { meta: existing, dedup: true };
+  const kind = inferKind(buf);
+  const path = join(CAPTURES, `${sha.slice(0, 16)}.${kind}.bin`);
+  if (!existsSync(path)) await writeFile(path, buf);
+  const meta: DumpMeta = {
+    sha256: sha, size: buf.length,
+    requestedSize: opts.requestedSize ?? buf.length,
+    complete: opts.complete ?? true,
+    ...fields, capturedAt: Date.now(), path, kind,
+    ...(opts.note ? { note: opts.note } : {}),
+  };
+  dumps.set(sha, meta);
+  broadcast('dump.new', meta);
+  return { meta, dedup: false };
+}
+
 // Dump [addr, addr+size) by orchestrating chunked agent reads, then sha256 + dedup + persist.
 export async function dumpRegion(sid: string, addrHex: string, size: number, tag: string): Promise<{ meta: DumpMeta; dedup: boolean }> {
   // Validate before doing anything: Number(undefined) is NaN, and `while (remaining > 0)` with NaN

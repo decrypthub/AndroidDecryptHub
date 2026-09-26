@@ -47,8 +47,11 @@ char *build_maps_json(int limit, int *total, int *truncated) {
     return buf;
 }
 
-// Read `size` bytes at hex `addr` from /proc/self/mem; reply as base64 cmdResult.
-void cmd_read(int fd, const char *id, const char *addr_hex, long long size) {
+// Read `size` bytes at hex `addr` and reply as base64 cmdResult. Uses the shared backend
+// (mem_read.c), so a target that refuses /proc/self/mem still reads through a direct copy.
+// `via` = "direct" forces the direct route for this one read, so the two routes can be
+// cross-checked against a target that answers /proc/self/mem with plausible garbage.
+void cmd_read(int fd, const char *id, const char *addr_hex, long long size, const char *via) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
     if (size <= 0 || size > (1 << 20)) {  // cap 1MB per read in v0.2
         char err[160];
@@ -56,21 +59,25 @@ void cmd_read(int fd, const char *id, const char *addr_hex, long long size) {
         send_line(fd, err); return;
     }
     unsigned long long addr = strtoull(addr_hex, NULL, 16);
-    int mem = open("/proc/self/mem", O_RDONLY);
+    const char *shown = addr_hex;                       // accept "0x.." without echoing "0x0x.."
+    if (shown[0] == '0' && (shown[1] == 'x' || shown[1] == 'X')) shown += 2;
+    int direct = (via && strcmp(via, "direct") == 0);
+    const char *route = direct ? "direct" : adh_mem_backend_name();
     unsigned char *raw = (unsigned char *)malloc((size_t)size);
-    if (mem < 0 || !raw) {
-        if (mem >= 0) close(mem);
-        free(raw);
-        char err[160];
-        snprintf(err, sizeof(err), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"read\",\"ok\":false,\"error\":\"open mem\"}\n", idj);
-        send_line(fd, err); return;
-    }
-    ssize_t got = pread(mem, raw, (size_t)size, (off_t)addr);
-    close(mem);
+    if (!raw) { send_oom(fd, idj, "read"); return; }
+    ssize_t got = direct ? adh_mem_read_direct(raw, (size_t)size, addr)
+                         : adh_mem_pread(raw, (size_t)size, addr);
+    adh_mem_fd_release();          // no standing /proc/self/mem fd between commands
     if (got <= 0) {
         free(raw);
-        char err[200];
-        snprintf(err, sizeof(err), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"read\",\"ok\":false,\"error\":\"pread errno %d (unreadable)\"}\n", idj, errno);
+        char err[220];
+        // errno only means something on the fd route; the direct route refused the range itself.
+        if (direct || strcmp(route, "direct") == 0)
+            snprintf(err, sizeof(err), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"read\",\"ok\":false,"
+                     "\"error\":\"unreadable at 0x%s (via direct)\"}\n", idj, shown);
+        else
+            snprintf(err, sizeof(err), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"read\",\"ok\":false,"
+                     "\"error\":\"unreadable at 0x%s (via %s, errno %d)\"}\n", idj, shown, route, errno);
         send_line(fd, err); return;
     }
     char *b64 = (char *)malloc((size_t)got * 4 / 3 + 8);
@@ -82,8 +89,8 @@ void cmd_read(int fd, const char *id, const char *addr_hex, long long size) {
     if (out) {
         snprintf(out, hlen,
             "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"read\",\"ok\":true,\"addr\":\"%s\",\"size\":%zd,"
-            "\"requested\":%lld,\"short\":%s,\"b64\":\"%s\"}\n",
-            idj, addr_hex, got, size, (got < size) ? "true" : "false", b64);
+            "\"requested\":%lld,\"short\":%s,\"via\":\"%s\",\"b64\":\"%s\"}\n",
+            idj, addr_hex, got, size, (got < size) ? "true" : "false", route, b64);
         send_line(fd, out);
         free(out);
     }
@@ -103,16 +110,19 @@ void cmd_scan_magic(int fd, const char *id) {
         { "vdex", "vdex",    4 },
     };
     const int NP = (int)(sizeof(P) / sizeof(P[0]));
-    const size_t CHUNK = 1u << 20, PERREGION = 64u << 20, TOTALCAP = 512u << 20;
-    const int MAXHITS = 256;
+    // Budgets. The old 256-hit / 512 MB / 64 MB-per-region caps were exhausted by the framework's
+    // own OAT dex magics before the scan ever reached the app's heap, so a packed target looked
+    // like it had no dex in memory at all. Raise all three and report a clipped region as
+    // truncated instead of silently stopping short of it.
+    const size_t CHUNK = 1u << 20, PERREGION = 256u << 20, TOTALCAP = 2048u << 20;
+    const int MAXHITS = 2048;
 
-    int mem = open("/proc/self/mem", O_RDONLY);
+    int mem = adh_mem_fd();          // -1 on a non-dumpable target: fall back to a direct read
+    const char *route = adh_mem_backend_name();   // captured before the fd is released
     FILE *m = fopen("/proc/self/maps", "r");
-    if (mem < 0 || !m) {
-        if (mem >= 0) close(mem);
-        if (m) fclose(m);
+    if (!m) {
         char err[160];
-        snprintf(err, sizeof(err), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"scan_magic\",\"ok\":false,\"error\":\"open\"}\n", idj);
+        snprintf(err, sizeof(err), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"scan_magic\",\"ok\":false,\"error\":\"read maps\"}\n", idj);
         send_line(fd, err); return;
     }
 
@@ -135,14 +145,16 @@ void cmd_scan_magic(int fd, const char *id) {
         unsigned long long end = strtoull(ea, NULL, 16);
         if (end <= start) continue;
         unsigned long long rsize = end - start;
-        if (rsize > PERREGION) rsize = PERREGION;
+        if (rsize > PERREGION) { rsize = PERREGION; truncated = 1; }   // say so, don't clip silently
         if (total_scanned >= TOTALCAP) { truncated = 1; break; }
 
         unsigned long long o = 0;
         int carry = 0;                                       // bytes kept from previous chunk tail
         while (o < rsize && nhits < MAXHITS) {
             size_t want = (size_t)((rsize - o) < CHUNK ? (rsize - o) : CHUNK);
-            ssize_t got = pread(mem, cbuf + carry, want, (off_t)(start + o));
+            ssize_t got = (mem >= 0)
+                ? pread(mem, cbuf + carry, want, (off_t)(start + o))
+                : adh_mem_read_in_region(cbuf + carry, want, start + o, end);
             if (got <= 0) break;                             // unreadable/uncommitted -> skip region
             size_t avail = (size_t)got + (size_t)carry;
             total_scanned += (size_t)got;
@@ -170,14 +182,14 @@ void cmd_scan_magic(int fd, const char *id) {
             o += (unsigned long long)got;
         }
     }
-    fclose(m); close(mem); free(cbuf);
+    fclose(m); free(cbuf); adh_mem_fd_release();
 
     size_t hlen = (hits ? strlen(hits) : 0) + 200;
     char *out = (char *)malloc(hlen);
     if (out) {
         snprintf(out, hlen,
-            "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"scan_magic\",\"ok\":true,\"count\":%d,\"truncated\":%s,\"scanned\":%zu,\"hits\":[%s]}\n",
-            idj, nhits, truncated ? "true" : "false", total_scanned, hits ? hits : "");
+            "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"scan_magic\",\"ok\":true,\"count\":%d,\"truncated\":%s,\"scanned\":%zu,\"backend\":\"%s\",\"hits\":[%s]}\n",
+            idj, nhits, truncated ? "true" : "false", total_scanned, route, hits ? hits : "");
         send_line(fd, out);
         free(out);
     }
@@ -196,16 +208,19 @@ void cmd_search(int fd, const char *id, const char *pat_hex, int limit) {
         send_line(fd, err); return;
     }
     if (limit <= 0 || limit > 4096) limit = 256;
-    const size_t CHUNK = 1u << 20, PERREGION = 128u << 20, TOTALCAP = 1024u << 20;
+    // Same budget reasoning as scan_magic: the old 128 MB per-region cap never reached the app's
+    // own heap on a large target, and clipping a region was not reported.
+    const size_t CHUNK = 1u << 20, PERREGION = 256u << 20, TOTALCAP = 2048u << 20;
 
-    int mem = open("/proc/self/mem", O_RDONLY);
+    int mem = adh_mem_fd();          // -1 on a non-dumpable target: fall back to a direct read
+    const char *route = adh_mem_backend_name();   // captured before the fd is released
     FILE *m = fopen("/proc/self/maps", "r");
-    if (mem < 0 || !m) { if (mem >= 0) close(mem); if (m) fclose(m);
-        char e[160]; snprintf(e, sizeof(e), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"search\",\"ok\":false,\"error\":\"open\"}\n", idj);
+    if (!m) {
+        char e[160]; snprintf(e, sizeof(e), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"search\",\"ok\":false,\"error\":\"read maps\"}\n", idj);
         send_line(fd, e); return; }
 
     size_t cap = 1 << 14, len = 0; char *hits = (char *)malloc(cap); if (hits) hits[0] = 0;
-    int nhits = 0; size_t total = 0;
+    int nhits = 0, clipped = 0; size_t total = 0;
     unsigned char *cbuf = (unsigned char *)malloc(CHUNK + (size_t)patlen);
     char line[1024];
     while (hits && cbuf && fgets(line, sizeof(line), m) && nhits < limit) {
@@ -217,12 +232,13 @@ void cmd_search(int fd, const char *id, const char *pat_hex, int limit) {
         if (strncmp(pp, "/dev/", 5) == 0) continue;
         unsigned long long start = strtoull(sa, NULL, 16), end = strtoull(ea, NULL, 16);
         if (end <= start) continue;
-        unsigned long long rsize = end - start; if (rsize > PERREGION) rsize = PERREGION;
+        unsigned long long rsize = end - start; if (rsize > PERREGION) { rsize = PERREGION; clipped = 1; }
         if (total >= TOTALCAP) break;
         unsigned long long o = 0; int carry = 0;
         while (o < rsize && nhits < limit) {
             size_t want = (size_t)((rsize - o) < CHUNK ? (rsize - o) : CHUNK);
-            ssize_t got = pread(mem, cbuf + carry, want, (off_t)(start + o));
+            ssize_t got = (mem >= 0) ? pread(mem, cbuf + carry, want, (off_t)(start + o))
+                                     : adh_mem_read_in_region(cbuf + carry, want, start + o, end);
             if (got <= 0) break;
             size_t avail = (size_t)got + (size_t)carry; total += (size_t)got;
             unsigned char *base = cbuf; size_t remain = avail; unsigned char *found;
@@ -240,9 +256,9 @@ void cmd_search(int fd, const char *id, const char *pat_hex, int limit) {
             o += (unsigned long long)got;
         }
     }
-    fclose(m); close(mem); free(cbuf);
-    size_t hlen = (hits ? strlen(hits) : 0) + 160; char *out = (char *)malloc(hlen);
-    if (out) { snprintf(out, hlen, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"search\",\"ok\":true,\"count\":%d,\"truncated\":%s,\"hits\":[%s]}\n", idj, nhits, nhits >= limit ? "true" : "false", hits ? hits : ""); send_line(fd, out); free(out); }
+    fclose(m); free(cbuf); adh_mem_fd_release();
+    size_t hlen = (hits ? strlen(hits) : 0) + 200; char *out = (char *)malloc(hlen);
+    if (out) { snprintf(out, hlen, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"search\",\"ok\":true,\"count\":%d,\"truncated\":%s,\"regionClipped\":%s,\"backend\":\"%s\",\"hits\":[%s]}\n", idj, nhits, nhits >= limit ? "true" : "false", clipped ? "true" : "false", route, hits ? hits : ""); send_line(fd, out); free(out); }
     free(hits);
 }
 

@@ -11,7 +11,7 @@ import {
   rebuildStandardDex, recoverFromSnapshots, searchDex, stripMethodCode,
 } from '../dex.ts';
 import { ensureDexIndex, listDexReflections, searchDexIndex } from '../dex_index.ts';
-import {dumpBuf, dumpBufPath, modulesFromMaps, pickSid, reconstructSo,
+import {dumpBuf, dumpBufPath, modulesFromMaps, persistArtifact, pickSid, reconstructSo,
   repairDexHeader, sendCmd,} from '../service.ts';
 import { resolveModule, ModuleAmbiguousError } from '../memory.ts';
 import { broadcast, CAPTURES, dumps, readBody, sessions } from '../state.ts';
@@ -238,7 +238,9 @@ export function analysisRoutes({ req, res, url, send }: RouteContext): Route[] {
       let buf: Buffer;
       try { buf = await dumpBuf({ b64, sha }); } catch (e: any) { return send(e.status ?? 400, { error: e.message }); }
       const info = repairDexHeader(buf);
-      return send(200, { ...info, size: buf.length, repairedB64: buf.toString('base64') });
+      // Stored, not echoed: see persistArtifact. The repaired dex is fetched by the returned sha.
+      const { meta, dedup } = await persistArtifact(buf, { source: 'dex-repair', addr: '', tag: 'dex_repair', sessionId: '', package: '' });
+      return send(200, { ...info, sha256: meta.sha256, size: meta.size, kind: meta.kind, path: meta.path, dedup });
     } },
     { path: '/api/dumps', handler: () => send(200, [...dumps.values()]) },
     { path: '/api/dumps/download', handler: () => {

@@ -35,9 +35,21 @@ bad.writeUInt32LE(0,8); bad.fill(0,12,32); bad.writeUInt32LE(0,32);
 // repair
 const r=await (await fetch(`${base}/api/dex/repair`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({b64:bad.toString('base64')})})).json();
 console.log(`repaired: fileSize=${r.fileSize} checksum=${r.checksum} sig=${(r.signature||'').slice(0,16)}… magicOk=${r.magicOk}`);
-const pass = r.magicOk && r.fileSize===origFileSize && r.checksum===origChecksum && r.signature===origSig && validSelf;
-console.log(`match original: fileSize=${r.fileSize===origFileSize} checksum=${r.checksum===origChecksum} sig=${r.signature===origSig}`);
-console.log(pass?'✅ v0.2 dex-repair PASS (corrupted header restored to match real dex byte-for-byte)':'❌ v0.2 dex-repair FAIL');
+// The repaired dex is stored, not echoed back inline (a packed target's dex can be 100 MB+), so
+// fetch it by the sha the reply carries and check the bytes that came back are the repaired ones.
+let backOk=false, backInfo='no sha256 in reply';
+if (r.sha256) {
+  const dl=await fetch(`${base}/api/dumps/download?sha=${r.sha256}`);
+  const got=Buffer.from(await dl.arrayBuffer());
+  backOk = dl.ok && got.length===origFileSize &&
+    got.readUInt32LE(8).toString(16).padStart(8,'0')===origChecksum &&
+    got.subarray(12,32).toString('hex')===origSig;
+  backInfo=`GET by sha -> http=${dl.status} len=${got.length} sha=${String(r.sha256).slice(0,16)}…`;
+}
+console.log(backInfo);
+const pass = r.magicOk && r.fileSize===origFileSize && r.checksum===origChecksum && r.signature===origSig && validSelf && backOk;
+console.log(`match original: fileSize=${r.fileSize===origFileSize} checksum=${r.checksum===origChecksum} sig=${r.signature===origSig} retrievableBySha=${backOk}`);
+console.log(pass?'✅ v0.2 dex-repair PASS (corrupted header restored to match real dex byte-for-byte, and the repaired artifact is fetchable by sha)':'❌ v0.2 dex-repair FAIL');
 console.log(pass?'RESULT:PASS':'RESULT:FAIL');
 EOF
 )"

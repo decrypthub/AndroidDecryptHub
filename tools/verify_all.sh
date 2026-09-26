@@ -137,6 +137,9 @@ SCRIPTS=(
   # WS-E slice 2 (v5.01): the rebuilt dex's map_list names the relocated code_item/class_data
   # regions, every class_def/code_off is patched to them, and the layout check has teeth.
   "verify_v96_dex_map.sh:host"
+  # v9.7: the agent's memory reads stopped depending on /proc/self/mem. A target that refuses that
+  # fd (protectors that make the process non-dumpable) keeps read/search/scan/dump/art_dexfiles.
+  "verify_v97_memread_direct.sh:device"
   "verify_v10_mcp.sh:host"
   "verify_v10_webui.sh:host"
   "verify_v33_backends.sh:host"

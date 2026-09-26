@@ -21,10 +21,13 @@ struct DexView {
     int confidence;
 };
 
-static ssize_t safe_read_at(int mem_fd, unsigned long long address, void *buffer, size_t size) {
+// Reads go through the shared backend (mem_read.c): /proc/self/mem when the target is dumpable,
+// a bounds-checked direct copy otherwise. art_dexfiles used to require the fd outright, so a
+// non-dumpable target reported "no dex files" for the same reason every other read failed.
+static ssize_t safe_read_at(unsigned long long address, void *buffer, size_t size) {
     address = UNTAG(address);
     if (address < 0x1000) return 0;
-    ssize_t read_size = pread(mem_fd, buffer, size, (off_t)address);
+    ssize_t read_size = adh_mem_pread(buffer, size, address);
     return read_size > 0 ? read_size : 0;
 }
 
@@ -38,14 +41,14 @@ static unsigned int read_u32(const unsigned char *bytes, int offset) {
 // Scavenge candidate art::DexFile words for begin_ instead of hardcoding ART field
 // offsets. DEX 041 snapshots the full container; compact DEX keeps its data range
 // explicit for later host-side reconstruction.
-static int resolve_dexfile(int mem_fd, unsigned long long dexfile_ptr, struct DexView *view) {
+static int resolve_dexfile(unsigned long long dexfile_ptr, struct DexView *view) {
     unsigned long long words[24];
-    ssize_t read_size = safe_read_at(mem_fd, dexfile_ptr, words, sizeof(words));
+    ssize_t read_size = safe_read_at(dexfile_ptr, words, sizeof(words));
     int word_count = (int)(read_size / 8);
     for (int i = 0; i < word_count; i++) {
         unsigned long long begin = UNTAG(words[i]);
         unsigned char header[120];
-        if (safe_read_at(mem_fd, begin, header, sizeof(header)) < 120) continue;
+        if (safe_read_at(begin, header, sizeof(header)) < 120) continue;
         int compact = 0;
         if (header[0] == 'd' && header[1] == 'e' && header[2] == 'x' && header[3] == '\n') compact = 0;
         else if (header[0] == 'c' && header[1] == 'd' && header[2] == 'e' && header[3] == 'x') compact = 1;
@@ -129,13 +132,12 @@ void adh_cmd_art_dexfiles(int fd, const char *id) {
     jfieldID cookie_field = dexfile_class ? (*env)->GetFieldID(env, dexfile_class, "mCookie", "Ljava/lang/Object;") : NULL;
     if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
 
-    int mem_fd = open("/proc/self/mem", O_RDONLY);
     size_t capacity = 1 << 14, length = 0; char *records = (char *)malloc(capacity); if (records) records[0] = 0;
     int record_count = 0, loader_count = 0;
     unsigned long long seen[512]; int seen_count = 0;
 
     if (get_all && key_set && iterator && path_list_field && dex_elements_field &&
-        dexfile_field && cookie_field && mem_fd >= 0 && records) {
+        dexfile_field && cookie_field && records) {
         jobject map = (*env)->CallStaticObjectMethod(env, thread_class, get_all);
         jobject set = map ? (*env)->CallObjectMethod(env, map, key_set) : NULL;
         jobject iterator_obj = set ? (*env)->CallObjectMethod(env, set, iterator) : NULL;
@@ -166,7 +168,7 @@ void adh_cmd_art_dexfiles(int fd, const char *id) {
                                 unsigned long long pointer = (unsigned long long)values[cookie_index];
                                 if (pointer < 0x10000) continue;
                                 struct DexView view;
-                                if (resolve_dexfile(mem_fd, pointer, &view)) {
+                                if (resolve_dexfile(pointer, &view)) {
                                     int duplicate = 0; for (int i = 0; i < seen_count; i++) if (seen[i] == view.begin) { duplicate = 1; break; }
                                     if (duplicate) continue;
                                     if (seen_count < 512) seen[seen_count++] = view.begin;
@@ -200,8 +202,8 @@ void adh_cmd_art_dexfiles(int fd, const char *id) {
             if (thread) (*env)->DeleteLocalRef(env, thread);
         }
     }
-    if (mem_fd >= 0) close(mem_fd);
     if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
+    adh_mem_fd_release();          // no standing /proc/self/mem fd after the command returns
     (*env)->PopLocalFrame(env, NULL);
     adh_jni_detach(did);
 

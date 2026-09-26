@@ -455,9 +455,11 @@ static void command_loop(int fd) {
                 if (strcmp(op, "maps") == 0) {
                     cmd_maps(fd, id);
                 } else if (strcmp(op, "read") == 0) {
-                    char addr[40] = ""; json_get_str(line, "addr", addr, sizeof(addr));
+                    char addr[40] = "", via[16] = "";
+                    json_get_str(line, "addr", addr, sizeof(addr));
+                    json_get_str(line, "via", via, sizeof(via));
                     long long size = json_get_num(line, "size");
-                    cmd_read(fd, id, addr, size);
+                    cmd_read(fd, id, addr, size, via);
                 } else if (strcmp(op, "jni_probe") == 0) {
                     adh_cmd_jni_probe(fd, id);
                 } else if (strcmp(op, "jni_hook") == 0) {

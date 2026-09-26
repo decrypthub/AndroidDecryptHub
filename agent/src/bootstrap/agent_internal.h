@@ -49,10 +49,24 @@ int read_full(int fd, unsigned char *buf, size_t n);
 
 // ---- mem.c ----
 char *build_maps_json(int limit, int *total, int *truncated);
-void cmd_read(int fd, const char *id, const char *addr_hex, long long size);
+void cmd_read(int fd, const char *id, const char *addr_hex, long long size, const char *via);
 void cmd_scan_magic(int fd, const char *id);
 void cmd_search(int fd, const char *id, const char *pat_hex, int limit);
 void cmd_maps(int fd, const char *id);
+
+// ---- mem_read.c ----
+// The one memory-read backend. /proc/self/mem when the target is dumpable, a bounds-checked
+// direct read otherwise (see mem_read.c). Callers must not open /proc/self/mem themselves.
+int adh_mem_fd(void);
+void adh_mem_fd_release(void);
+ssize_t adh_mem_pread(void *dst, size_t n, unsigned long long addr);
+ssize_t adh_mem_read_direct(void *dst, size_t n, unsigned long long addr);
+ssize_t adh_mem_read_in_region(void *dst, size_t n, unsigned long long addr,
+                               unsigned long long region_end);
+int adh_mem_region_end(unsigned long long addr, unsigned long long *end);
+int adh_mem_backend(void);
+const char *adh_mem_backend_name(void);
+int adh_mem_open_errno(void);
 
 // ---- fs.c ----
 void cmd_list_dir(int fd, const char *id, const char *path);

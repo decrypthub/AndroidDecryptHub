@@ -25,30 +25,15 @@ static int g_trace_count = 0;
 static pthread_mutex_t g_trace_lock = PTHREAD_MUTEX_INITIALIZER;
 typedef long (*fn4_t)(long, long, long, long);
 static fn4_t g_trace_original = NULL;
-static int g_mem_fd = -1;
-
-static int trace_mem_fd(void) {
-    int fd = __atomic_load_n(&g_mem_fd, __ATOMIC_ACQUIRE);
-    if (fd >= 0) return fd;
-    int new_fd = open("/proc/self/mem", O_RDONLY);
-    if (new_fd < 0) return -1;
-    int expected = -1;
-    if (!__atomic_compare_exchange_n(&g_mem_fd, &expected, new_fd, 0,
-                                     __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
-        close(new_fd);
-        return expected;
-    }
-    return new_fd;
-}
-
+// Preview reads go through the shared backend (mem_read.c), which falls back to a
+// bounds-checked direct read when the target refuses /proc/self/mem. No fd state here: the
+// backend owns it, so a trace preview works on a non-dumpable target too.
 static void trace_preview(long address, char *out, int size) {
     out[0] = 0;
     unsigned long long untagged = (unsigned long long)address & 0x00FFFFFFFFFFFFFFULL;
     if (untagged < 0x1000) return;
-    int fd = trace_mem_fd();
-    if (fd < 0) return;
     unsigned char buf[64];
-    ssize_t read_size = pread(fd, buf, sizeof(buf), (off_t)untagged);
+    ssize_t read_size = adh_mem_pread(buf, sizeof(buf), untagged);
     if (read_size <= 0) return;
     int offset = 0;
     for (int i = 0; i < read_size && offset < size - 1; i++) {

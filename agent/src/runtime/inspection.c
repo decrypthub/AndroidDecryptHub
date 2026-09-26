@@ -488,9 +488,16 @@ void adh_cmd_compat_probe(int fd, const char *id) {
     int bv = g_footprint_baseline_valid;
     const struct footprint_counts *base = bv ? &g_footprint_baseline : NULL;
 
+    // Effective read capability. "Can we read target memory" stopped being the same question as
+    // "can we open /proc/self/mem" once a target can be non-dumpable: the shared backend then reads
+    // directly instead. Both the answer and the route are reported, so a silent downgrade cannot
+    // hide behind a single boolean.
     int memread_ok = 0;
-    { int mem_fd = open("/proc/self/mem", O_RDONLY);
-      if (mem_fd >= 0) { unsigned char bytes[4]; memread_ok = (pread(mem_fd, bytes, 4, (off_t)(uintptr_t)&adh_cmd_compat_probe) == 4); close(mem_fd); } }
+    { unsigned char bytes[4];
+      memread_ok = (adh_mem_pread(bytes, 4, (unsigned long long)(uintptr_t)&adh_cmd_compat_probe) == 4); }
+    const char *mem_backend = adh_mem_backend_name();
+    int mem_open_errno = adh_mem_open_errno();
+    int jni_symbol = adh_jni_libart_symbol_resolves();
     void *dlprobe = dlopen("libcrypto.so", RTLD_NOW);
     int dlopen_blocked = (dlprobe == NULL);
     if (dlprobe) dlclose(dlprobe);
@@ -499,6 +506,7 @@ void adh_cmd_compat_probe(int fd, const char *id) {
     snprintf(out, sizeof(out),
         "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"compat_probe\",\"ok\":true,"
         "\"tracerPid\":%d,\"seccomp\":%d,\"backends\":{\"gotHook\":%s,\"jniReflect\":%s,\"artDexCapture\":%s,\"memRead\":%s},"
+        "\"memBackend\":\"%s\",\"memOpenErrno\":%d,\"libartJniGetVms\":%s,"
         "\"mapsReadOk\":%s,\"mapsCount\":%d,\"moduleMappings\":%d,"
         "\"execMappings\":%d,\"fileExecMappings\":%d,\"memfdExecMappings\":%d,"
         "\"anonExecMappings\":%d,\"anonNamedExecMappings\":%d,\"rwxMappings\":%d,"
@@ -510,6 +518,7 @@ void adh_cmd_compat_probe(int fd, const char *id) {
         "\"dlopenSystemLibsBlocked\":%s}\n",
         idj, tracer, seccomp, got_ok ? "true" : "false", jni_ok ? "true" : "false",
         adh_jni_vm_available() ? "true" : "false", memread_ok ? "true" : "false",
+        mem_backend, mem_open_errno, jni_symbol ? "true" : "false",
         maps_read_ok ? "true" : "false", cur.maps, module_count,
         cur.exec, cur.file_exec, cur.memfd_exec, cur.anon_exec, cur.anon_named_exec, cur.rwx,
         (unsigned long long)(cur.exec_bytes / 1024),

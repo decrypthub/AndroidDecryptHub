@@ -2,6 +2,7 @@
 
 #include "jni.h"
 #include "jni_env_hooks.h"
+#include "../hook/got.h"
 
 #include <dlfcn.h>
 #include <string.h>
@@ -20,12 +21,41 @@ JavaVM *adh_jni_get_vm(void) {
     return g_vm;
 }
 
+// JNI_GetCreatedJavaVMs, taken from the libart.so that is ALREADY loaded.
+//
+// dlopen("libart.so") is not a reliable way to reach it. Under Zygisk the agent is mapped from a
+// memfd, and the linker refuses: `library "libart.so" needed or dlopened by "/memfd:jit-cache
+// (deleted)" is not accessible for the namespace "(default)"` — the bare name is not on the app
+// namespace's search path either. The agent then had no JavaVM at all, so art_dexfiles, java_hook,
+// trigger and every object_* command answered "no JavaVM" on a real injected target while all of
+// them passed in the sandbox (which gets its VM from JNI_OnLoad).
+//
+// Reading the symbol straight out of the loaded image sidesteps the namespace question and works
+// for the gadget and Xposed backends too. dlopen stays as a last resort.
+static void *libart_jni_get_created_vms(void) {
+    void *f = adh_resolve_sym("libart.so", "JNI_GetCreatedJavaVMs");
+    if (f) return f;
+    const char *fallbacks[] = { "libart.so", "libnativehelper.so", "libartbase.so" };
+    for (size_t i = 0; i < sizeof(fallbacks) / sizeof(fallbacks[0]); i++) {
+        void *lib = dlopen(fallbacks[i], RTLD_NOW);
+        if (!lib) continue;
+        f = dlsym(lib, "JNI_GetCreatedJavaVMs");
+        if (f) return f;
+    }
+    return NULL;
+}
+
+// Does the in-memory lookup find it? Reported by compat_probe so the "no JavaVM" case is
+// diagnosable instead of just being a wall.
+int adh_jni_libart_symbol_resolves(void) {
+    return adh_resolve_sym("libart.so", "JNI_GetCreatedJavaVMs") != NULL;
+}
+
 JNIEnv *adh_jni_attach(int *did_attach) {
     *did_attach = 0;
     if (!g_vm) {
         typedef jint (*GetVMs)(JavaVM **, jsize, jsize *);
-        void *lib = dlopen("libart.so", RTLD_NOW);
-        GetVMs f = lib ? (GetVMs)dlsym(lib, "JNI_GetCreatedJavaVMs") : NULL;
+        GetVMs f = (GetVMs)libart_jni_get_created_vms();
         if (f) {
             JavaVM *vm = NULL;
             jsize n = 0;

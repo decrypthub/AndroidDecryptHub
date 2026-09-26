@@ -71,14 +71,21 @@
 
 ### 仍未完成或需决策
 
-- **（2026-09-26 真机脱壳实战发现）"内存与 dump / dex 静态分析"与"JNI 面 / Java hook"两组的门禁结论
-  只覆盖了沙盒自加载路径。** 在真机 Zygisk 注入路径下：①目标若 `prctl(PR_SET_DUMPABLE,0)`
-  （SecNeo/梆梆系默认行为），`/proc/self/mem` 对自身返回 EACCES，`memory_read`/`memory_search`/
-  `memory_dump`/`scan_magic`/`art_dexfiles` 全部失效；②agent 由 memfd 加载，`dlopen("libart.so")` 被
-  linker namespace 拒绝（`not accessible for the namespace "(default)"`），拿不到 JavaVM，`art_dexfiles`/
-  `java_hook`/`trigger`/`object_*` 全部返回 `no JavaVM`。两者都有明确修法（直接解引用读取回退；
-  Zygisk 模块把 `env->GetJavaVM()` 传给 agent），**修完前不应把这两组算作真机可用**。
-  详见 `PROGRESS.md` 2026-09-26 节。
+- **（2026-09-26 真机脱壳实战：已修）"内存与 dump / dex 静态分析"与"JNI 面 / Java hook"两组原先只在
+  沙盒自加载路径下过门禁，在真机 Zygisk 注入路径下有两条静默失效路径，现已在 agent 内修掉并真机验证：**
+  ①目标 `prctl(PR_SET_DUMPABLE,0)`（SecNeo/梆梆系默认行为）会让 `open("/proc/self/mem")` 对自身返回
+  EACCES，`memory_read`/`memory_search`/`memory_dump`/`scan_magic`/`art_dexfiles` 一起失效 —— 现在
+  由 `bootstrap/mem_read.c` 的**边界检查直读**兜底（SIGSEGV/SIGBUS 短守卫），fd 按命令释放，
+  每回复点名实际路线；②agent 由 memfd 加载时 `dlopen("libart.so")` 被 linker namespace 拒绝，
+  拿不到 JavaVM —— 现在从已加载的 libart.so **按内存镜像查 `JNI_GetCreatedJavaVMs`**，Gadget/Xposed
+  后端同样受益。真机复验：学习通无需任何绕法即可 `memory_search` / `art_dexfiles`（14 个 DexFile）/
+  一键 `dump_all_dex`，且 13 个真 dex 与手工提取结果 sha256 逐字节相同。验收脚本
+  `tools/verify_v97_memread_direct.sh` 已入门禁。详见 `PROGRESS.md` 2026-09-26（续）节。
+  同一轮还做了两项加固：内存扫描的预算不再被框架 OAT 吃光（截断如实上报 `truncated`/`regionClipped`），
+  以及 `dex_repair` 不再把整份修复后的 dex 内联回吐（120MB → 160MB base64），改为落成可按 sha 取回的工件。
+- **（2026-09-26 发现）`verify_v22_capture.sh` 的记账不变量 `emitted+backlog+dropped==seq` 偶发不成立，
+  缺额约 5.5k 且形态稳定，与本次内存读取改动无关**——用 `git stash` 摘掉全部改动重建基线 agent 后同样不成立，
+  同一天的后续整轮回归里它又 PASS。属未定因的抖动，建议单独排查（capture ring 在超高 burst 下的记账）。
 - v84 native hook batch 目前只有 host 侧验收，尚未加入设备侧批量选择/行为验收。
 - cdex/041 仍需真实样本；DEX 重建追加式布局保留旧副本作为 slack，文件会变大。
 - Agent TCP `8761` 仍监听 `0.0.0.0` 且没有鉴权，LAN 信任边界待产品决策；完整 syscall 拦截（seccomp/PTRACE_SYSEMU）仍属 L3 未实现。
