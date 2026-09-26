@@ -53,6 +53,12 @@ struct NativeHookContext {
     int prologue_len;             // 0 when not captured / not an inline hook
     int site_count;               // mode 2: how many call sites were rewritten (mode 3: slots patched)
     char sites_scope[48];         // mode 2: where they were searched ("module" / "all" / a module name)
+    // mode 0 mechanism facts. A GOT hook reports address == target == original (all three are the
+    // slot's pre-patch VALUE), so without these the caller cannot tell which slot was rewritten or
+    // whether the write left the page protection weakened.
+    uintptr_t slot_addr;          // the relocation slot we rewrote (0 = not a got hook)
+    char slot_perms_before[8];    // that slot page's permissions before the write ("" = unknown)
+    uint64_t installed_at_ms;     // when this hook was (re)activated
 };
 
 static NativeHookContext g_native_hooks[ADH_NATIVE_MAX_HOOKS];
@@ -85,6 +91,17 @@ static std::atomic<int> g_native_hook_slot_ids[ADH_NATIVE_MAX_HOOKS];
 static std::atomic<uint64_t> g_native_hook_throttle_last_ns[ADH_NATIVE_MAX_HOOKS];
 static std::atomic<unsigned long long> g_native_hook_throttled_total[ADH_NATIVE_MAX_HOOKS];
 static std::atomic<unsigned long long> g_native_hook_throttled_reported[ADH_NATIVE_MAX_HOOKS];
+// Wall-clock ms of the FIRST hit, 0 until then. The stub pays one relaxed load per hit and one
+// store on the very first one, which is what turns a bare `hits:0` into an answerable question:
+// "installed and never fired" is a different finding from "no traffic to observe".
+static std::atomic<uint64_t> g_native_hook_first_hit_ms[ADH_NATIVE_MAX_HOOKS];
+
+// Wall-clock milliseconds, epoch-based so the host can render the lifecycle fields directly.
+static uint64_t wall_ms() {
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return (uint64_t)ts.tv_sec * 1000ull + (uint64_t)(ts.tv_nsec / 1000000);
+}
 
 static int clamp_throttle_ms(int requested) {
     if (requested <= 0) return 0;
@@ -232,6 +249,8 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id) {
     // already been applied either way).
     if (hook_uid <= 0) return (skip_original || return_set) ? 1 : 0;
     g_native_hook_hits[hook_id].fetch_add(1, std::memory_order_relaxed);
+    if (g_native_hook_first_hit_ms[hook_id].load(std::memory_order_relaxed) == 0)
+        g_native_hook_first_hit_ms[hook_id].store(wall_ms(), std::memory_order_relaxed);
     // Per-hook event throttle. The rewrite above has already been applied, so dropping the EVENT
     // never changes what the target does - it only stops a hot site (read/write/futex) from
     // overflowing the capture ring and making the digest look quiet. Suppressed hits are counted and
@@ -483,6 +502,7 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
             g_native_hooks[slot].used = 0;
             g_native_hook_slot_ids[slot].store(0, std::memory_order_relaxed);
             g_native_hook_hits[slot].store(0ULL, std::memory_order_relaxed);
+            g_native_hook_first_hit_ms[slot].store(0ULL, std::memory_order_relaxed);
         }
         pthread_mutex_unlock(&g_native_hooks_lock);
         set_error(error, error_size, "%s", message);
@@ -493,6 +513,11 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
     void *target = nullptr;
     void *original = nullptr;
     int hook_mode = -1;
+    // Mechanism facts only the got branch can produce; published with the rest of the context so the
+    // status reply can prove what was actually rewritten.
+    uintptr_t got_slot_addr = 0;
+    char got_perms_before[8] = "";
+
     if (strcmp(mode, "got") == 0) {
         if (!module || !module[0] || !symbol || !symbol[0]) return fail("got hook needs module and symbol");
         // Prefer the relocation slot's current resolved value: imported calls (open/access/
@@ -500,7 +525,9 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
         // recover the original function pointer. Fall back to the module-defined symbol.
         void *slot_addr = nullptr;
         void *slot_value = nullptr;
-        int replaced = adh_got_replace_by_name_ex(module, symbol, stub, &slot_addr, &slot_value);
+        char perms_before[8] = "";
+        int replaced = adh_got_replace_by_name_ex(module, symbol, stub, &slot_addr, &slot_value,
+                                                  perms_before, sizeof(perms_before));
         if (replaced != 1 || !slot_addr || !slot_value) {
             g_native_hook_originals[slot] = nullptr;
             return fail(replaced == 0 ? "GOT target symbol/slot not found"
@@ -510,6 +537,8 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
         g_native_hook_originals[slot] = target;
         original = target;
         hook_mode = 0;
+        got_slot_addr = (uintptr_t)slot_addr;
+        copy_cstr(got_perms_before, sizeof(got_perms_before), perms_before);
     } else if (strcmp(mode, "inline") == 0) {
         if (addr && addr[0]) {
             target = (void *)(uintptr_t)strtoull(addr, nullptr, 0);
@@ -539,6 +568,7 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
             copy_cstr(old.symbol, sizeof(old.symbol), symbol);
             old.address = (uintptr_t)target;
             g_native_hook_hits[i].store(0ULL, std::memory_order_relaxed);
+            g_native_hook_first_hit_ms[i].store(0ULL, std::memory_order_relaxed);
             // This new id is about to be returned to the Host, so the events this hook emits must
             // carry it too; leaving the old value here makes status and events disagree.
             g_native_hook_slot_ids[i].store(id, std::memory_order_relaxed);
@@ -658,6 +688,9 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
     ctx.address = (uintptr_t)target;
     ctx.site_count = (hook_mode == 2) ? adh_site_hook_count(slot)
                     : (hook_mode == 3 ? adh_slot_hook_count(slot) : 0);
+    ctx.slot_addr = got_slot_addr;
+    copy_cstr(ctx.slot_perms_before, sizeof(ctx.slot_perms_before), got_perms_before);
+    ctx.installed_at_ms = wall_ms();
     copy_cstr(ctx.sites_scope, sizeof(ctx.sites_scope), (hook_mode == 2 && sites_scope) ? sites_scope : "");
     ctx.patched = (hook_mode == 1 || hook_mode == 2 || hook_mode == 3) ? 1 : 0;
     // Hard unhook frees the slot for reuse but leaves the throttle atomics behind, so clear them
@@ -667,6 +700,7 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
     __atomic_store_n(&ctx.active, 1, __ATOMIC_RELEASE);
     pthread_mutex_unlock(&g_native_hooks_lock);
     g_native_hook_hits[slot].store(0ULL, std::memory_order_relaxed);
+    g_native_hook_first_hit_ms[slot].store(0ULL, std::memory_order_relaxed);
     if (hook_id_out) *hook_id_out = id;
     LOGI("native_hook installed id=%d mode=%s target=%p original=%p", id, mode, target, original);
     return 1;
@@ -694,6 +728,7 @@ extern "C" int adh_native_hook_unhook(int hook_id, int hard, char *error, size_t
             return (set_error(error, error_size, "native unhook failed id=%d", hook_id), 0);
         }
         g_native_hook_hits[slot].store(0ULL, std::memory_order_relaxed);
+        g_native_hook_first_hit_ms[slot].store(0ULL, std::memory_order_relaxed);
         __atomic_store_n(&ctx->active, 0, __ATOMIC_RELEASE);
         reset_context(*ctx);
         ctx->used = 0;   // GOT restore is a real, safe unhook: free the slot
@@ -738,6 +773,7 @@ extern "C" int adh_native_hook_unhook(int hook_id, int hard, char *error, size_t
     }
     void *target = ctx->target;
     g_native_hook_hits[slot].store(0ULL, std::memory_order_relaxed);
+    g_native_hook_first_hit_ms[slot].store(0ULL, std::memory_order_relaxed);
     __atomic_store_n(&ctx->active, 0, __ATOMIC_RELEASE);
     ctx->skip_original = 0;
     ctx->return_set = 0;
@@ -822,19 +858,46 @@ extern "C" int adh_native_hook_status_json(char *out, size_t out_size) {
         // hits counts EVERY hit; throttled counts the hits whose event was suppressed inside the
         // window, so emitted events = hits - throttled and a quiet log stays explainable.
         unsigned long long throttled = g_native_hook_throttled_total[i].load(std::memory_order_relaxed);
-        char item[2048];
+        // mode 0 mechanism facts. address/target/original are all the slot's pre-patch VALUE for a
+        // got hook, so they say nothing about which slot was touched; these do. A hook that installs
+        // and never fires otherwise looks exactly like a target with no traffic to observe.
+        char gotbuf[288] = "";
+        if (ctx.mode == 0 && ctx.slot_addr) {
+            char perms_now[8] = "?";
+            adh_perms_of_addr((void *)ctx.slot_addr, perms_now, sizeof(perms_now));
+            void *cur = *(void **)ctx.slot_addr;
+            // got_write_slot puts the page protection back; comparing the live value with the one we
+            // recorded before the write is what proves it. Leaving a RELRO page writable is a
+            // footprint a target can see.
+            const int prot_restored = ctx.slot_perms_before[0] != 0 &&
+                                      strncmp(perms_now, ctx.slot_perms_before, 3) == 0;
+            snprintf(gotbuf, sizeof(gotbuf),
+                     ",\"slot\":\"0x%llx\",\"slotCurrent\":\"0x%llx\",\"pageProtRestored\":%s,"
+                     "\"pagePermsBefore\":\"%s\",\"pagePermsNow\":\"%s\"",
+                     (unsigned long long)ctx.slot_addr, (unsigned long long)(uintptr_t)cur,
+                     prot_restored ? "true" : "false", ctx.slot_perms_before, perms_now);
+        }
+        // got rewrites exactly one relocation slot (its install refuses anything else); sites/vtable
+        // report how many they rewrote. Inline patches a function entry rather than a slot.
+        const int slots_patched = (ctx.mode == 0) ? (ctx.slot_addr ? 1 : 0) : ctx.site_count;
+        const uint64_t first_hit = g_native_hook_first_hit_ms[i].load(std::memory_order_relaxed);
+        const char *verdict = hits > 0 ? "fired" : "installed-never-fired";
+        char item[4096];   // sitebuf is 1400 and gotbuf 288; 2048 truncated the JSON for a sites hook
         snprintf(item, sizeof(item),
                  "{\"id\":%d,\"mode\":\"%s\",\"module\":\"%s\",\"symbol\":\"%s\","
                  "\"address\":\"0x%llx\",\"target\":\"0x%llx\",\"original\":\"0x%llx\","
                  "\"replacement\":\"0x%llx\",\"hits\":%llu,\"argIndex\":%d,\"argValue\":\"0x%llx\",\"skipOriginal\":%s,\"returnSet\":%s,\"returnValue\":\"0x%llx\",\"backtrace\":%s,\"throttleMs\":%d,\"throttled\":%llu"
-                 "%s}",
+                 ",\"slotsPatched\":%d,\"installedAtMs\":%llu,\"firstHitMs\":%llu,\"verdict\":\"%s\""
+                 "%s%s}",
                  ctx.id, ctx.mode == 0 ? "got" : (ctx.mode == 1 ? "inline" : (ctx.mode == 2 ? "sites" : "vtable")), ctx.module, ctx.symbol,
                  (unsigned long long)ctx.address, (unsigned long long)(uintptr_t)ctx.target,
                  (unsigned long long)(uintptr_t)ctx.original,
                  (unsigned long long)(uintptr_t)ctx.replacement, hits, ctx.arg_index,
                  (unsigned long long)ctx.arg_value, ctx.skip_original ? "true" : "false",
                  ctx.return_set ? "true" : "false", (unsigned long long)ctx.return_value,
-                 ctx.want_backtrace ? "true" : "false", ctx.throttle_ms, throttled, sitebuf);
+                 ctx.want_backtrace ? "true" : "false", ctx.throttle_ms, throttled,
+                 slots_patched, (unsigned long long)ctx.installed_at_ms, (unsigned long long)first_hit,
+                 verdict, gotbuf, sitebuf);
         hooks += item;
         count++;
     }

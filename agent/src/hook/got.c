@@ -475,9 +475,11 @@ static int module_path_matches(const char *path, const char *wanted) {
 // of matching modules actually replaced; the first replaced slot's address and previous value
 // are returned through slot_out/value_out so callers can keep a matching trampoline.
 int adh_got_replace_by_name_ex(const char *module_name, const char *sym_name, void *wrapper,
-                               void **slot_out, void **value_out) {
+                               void **slot_out, void **value_out,
+                               char *perms_before_out, size_t perms_before_size) {
     if (slot_out) *slot_out = NULL;
     if (value_out) *value_out = NULL;
+    if (perms_before_out && perms_before_size) perms_before_out[0] = 0;
     FILE *m = fopen("/proc/self/maps", "r");
     if (!m) return -1;
     char line[512];
@@ -506,6 +508,8 @@ int adh_got_replace_by_name_ex(const char *module_name, const char *sym_name, vo
             if (replaced == 0) {
                 if (slot_out) *slot_out = slot_addr;
                 if (value_out) *value_out = old_value;
+                if (perms_before_out && perms_before_size)
+                    snprintf(perms_before_out, perms_before_size, "%s", permsOf);
             }
             replaced++;
             g_dbg_slot = (unsigned long long)slot_addr;
@@ -517,7 +521,7 @@ int adh_got_replace_by_name_ex(const char *module_name, const char *sym_name, vo
 }
 
 int adh_got_replace_by_name(const char *module_name, const char *sym_name, void *wrapper) {
-    return adh_got_replace_by_name_ex(module_name, sym_name, wrapper, NULL, NULL);
+    return adh_got_replace_by_name_ex(module_name, sym_name, wrapper, NULL, NULL, NULL, 0);
 }
 
 // --- self-test target: hook the agent's own close() (plain syscall wrapper) ---

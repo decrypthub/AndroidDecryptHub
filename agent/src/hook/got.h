@@ -31,8 +31,12 @@ int adh_got_replace_by_name(const char *module_substr, const char *symbol, void 
 // Exact-module replacement that also returns the first slot address and its previous value.
 // Returns the number of modules replaced; callers that need one unambiguous slot must
 // treat any value other than 1 as an error.
+// `perms_before_out` (optional) receives the slot page's permission string as it was BEFORE the
+// write. got_write_slot puts the protection back, and the caller can compare the live value against
+// this one to prove it — a GOT hook that leaves a RELRO page writable is a detectable footprint.
 int adh_got_replace_by_name_ex(const char *module_name, const char *symbol, void *wrapper,
-                               void **slot_out, void **value_out);
+                               void **slot_out, void **value_out,
+                               char *perms_before_out, size_t perms_before_size);
 void *adh_resolve_sym(const char *module, const char *symbol);
 void *adh_resolve_sym_prefix(const char *module, const char *prefix);
 // Find one relocation slot by symbol name and return both the slot address and its current

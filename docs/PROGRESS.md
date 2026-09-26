@@ -71,7 +71,35 @@
 实测：**290 个文件 → 281 个唯一 sha 全部回流**，预算 `{maxBytes:8589934592, maxAgeDays:14}` 暴露。
 （修复前这一步是 0 条。）
 
-**第 3–6 项**（`native_hook` 机制自证 / 扫描瞄得准 / 加厚一键入口 / 小项）待续。
+### 第 3 项 — `native_hook` 机制自证 ✅
+
+**问题**：钩子**装成功但从不命中**，与**目标空闲**无法区分——两者都是 `ok:true / hits:0`。
+本次实战里我挂了 7 个符号、观察 5 分钟全 0，只能靠"WebSocket 心跳每 30s 却 0 命中"这种**外部推理**
+判断"这条 I/O 路径不走这些符号"。更糟的是 `mode=got` 的 `address`/`target`/`original` **三者同值**
+（都是槽的**改写前取值**），所以连"改了哪个槽"都看不出来；`:501` 算出的槽地址被直接丢弃。
+
+**修法**（agent）
+- `got.c` 的 `adh_got_replace_by_name_ex` 增出参，把**写槽前的页权限**带出来；`native_hooks.cpp`
+  为每个钩子存 `slot_addr` / `slot_perms_before` / `installed_at_ms`。
+- 状态里新增：`slot`（被改写的重定位槽地址）、`slotsPatched`（got 恒为 1——装不上会 fail-loud）、
+  `slotCurrent`（**现在**重读该槽，≠ `replacement` 就说明补丁被别的代码覆盖了）、
+  `pageProtRestored` + `pagePermsBefore/Now`（`got_write_slot` 会把页保护还原；**留一个可写的
+  RELRO 页是可被目标看见的足迹**）、`installedAtMs` / `firstHitMs`、
+  以及派生的 **`verdict`：`fired` | `installed-never-fired`**。
+- `firstHitMs` 在 stub 里只花一次 relaxed load、首次命中时写一次，热路径不引入锁。
+- 顺带：`item[2048]` 对 sites 钩子（sitebuf 1400）本会**截断出非法 JSON**，提到 4096。
+
+**验收**：扩 `verify_v61_got_by_name.sh` 钉住全部新字段。实测（真机沙盒，`libadhdetect.so:adh_trace_target`）：
+
+| | 触发前 | 触发后 |
+|---|---|---|
+| `slotsPatched` / `slot` | 1 / `0x783c0d3778` | 同 |
+| `slotCurrent` | `0x77a3ea35f4`（我们的 stub） | 同 |
+| `pagePermsBefore` → `Now` | `r--p` → `r--p`（`pageProtRestored:true`） | 同 |
+| `firstHitMs` | **0** | 1790435321477（装上后 13ms） |
+| `verdict` | **`installed-never-fired`** | **`fired`** |
+
+**第 4–6 项**（扫描瞄得准 / 加厚一键入口 / 小项）待续。
 
 
 

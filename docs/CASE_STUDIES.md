@@ -75,9 +75,11 @@
      "memfd 注入、无 `JNI_OnLoad`"这个条件，只是从不断言 Java 能力（新增 `verify_v98`）；
      ② 加**强制直读**开关，让读内存回退覆盖**全部**读命令（扩 `verify_v97`）。
      mutation 对照已证明 v98 有牙齿：禁用 JavaVM 查找后它 FAIL，且症状与真实缺陷一字不差。
-2. **`native_hook` 的 `ok:true` + `hits:0` 无法自证。** 装成功时 `original`/`replacement` 看着全对，
+2. **`native_hook` 的 `ok:true` + `hits:0` 无法自证**（✅ 已办）：装成功时 `original`/`replacement` 看着全对，
    但钩子是否落在真实调用路径上无从判断——本次只能靠"心跳周期 vs 0 命中"这种**外部推理**下结论。
-   status 应给出机制性证据，而不是只给计数。
+   → status 现在给出机制事实：`slot`/`slotsPatched`（改了哪个槽）、`slotCurrent`（补丁还在不在）、
+   `pageProtRestored`（RELRO 有没有被留成可写）、`firstHitMs` 与派生 `verdict`
+   （`fired` vs `installed-never-fired`）。
 3. **大目标上瞄不准**：内存扫描没有区间参数、没有分页；`dump_all_dex` 只报数量不报性质
    （14 个里哪个是诱饵壳，要人自己看）。
 4. **工件生命周期**（✅ 已办）：`dumps` map 只在内存里（daemon 重启后磁盘工件"消失"）；
