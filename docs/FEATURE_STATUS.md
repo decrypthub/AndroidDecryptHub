@@ -71,6 +71,14 @@
 
 ### 仍未完成或需决策
 
+- **（2026-09-26 真机脱壳实战发现）"内存与 dump / dex 静态分析"与"JNI 面 / Java hook"两组的门禁结论
+  只覆盖了沙盒自加载路径。** 在真机 Zygisk 注入路径下：①目标若 `prctl(PR_SET_DUMPABLE,0)`
+  （SecNeo/梆梆系默认行为），`/proc/self/mem` 对自身返回 EACCES，`memory_read`/`memory_search`/
+  `memory_dump`/`scan_magic`/`art_dexfiles` 全部失效；②agent 由 memfd 加载，`dlopen("libart.so")` 被
+  linker namespace 拒绝（`not accessible for the namespace "(default)"`），拿不到 JavaVM，`art_dexfiles`/
+  `java_hook`/`trigger`/`object_*` 全部返回 `no JavaVM`。两者都有明确修法（直接解引用读取回退；
+  Zygisk 模块把 `env->GetJavaVM()` 传给 agent），**修完前不应把这两组算作真机可用**。
+  详见 `PROGRESS.md` 2026-09-26 节。
 - v84 native hook batch 目前只有 host 侧验收，尚未加入设备侧批量选择/行为验收。
 - cdex/041 仍需真实样本；DEX 重建追加式布局保留旧副本作为 slack，文件会变大。
 - Agent TCP `8761` 仍监听 `0.0.0.0` 且没有鉴权，LAN 信任边界待产品决策；完整 syscall 拦截（seccomp/PTRACE_SYSEMU）仍属 L3 未实现。

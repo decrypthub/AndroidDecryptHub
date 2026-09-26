@@ -14,7 +14,55 @@
 全来自命令参数）；② 不胡乱兜底 / fail-loud（hook 装不上、缓冲溢出、解不动一律显式报错 + 计数上报，
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
-## 下一会话从这里开始（2026-09-23 验收与范围收口）
+## 2026-09-26 —— 真机脱壳实战：学习通（`com.chaoxing.mobile` 7.0.4，SecNeo 梆梆加固）
+
+**这是 ADH 第一次在真机上对一个真实加固 App 完成完整脱壳，并且顺带暴露了两个此前从未被门禁覆盖的
+真实缺陷（见下）。** 设备 OnePlus PGP110 `aa165071` / Android 15；模块 `adh` v0.3.10 已刷入并运行。
+
+**结果**：13 个 dex，共 143,312,364 字节、**98,135 个类、748,297 个方法**；
+`dex_coverage` 逐个 dex `recoveryRate=1`、`unresolvable=0`；13 份 dex 的 checksum 与 signature 全部有效
+（无方法抽取）。产物：`dumps/chaoxing-7.0.4/dex-adh/classes01..13.dex`（gitignored）。
+
+**实际链路（全部经 ADH，未用 adb 读内存）**：
+1. `scope.json` 写入 `com.chaoxing.mobile` → `am force-stop` + 冷启动 → zygisk 日志 `in scope … will inject`，agent online（`s_16ct`，ping 8–13ms）。
+2. `compat_probe` 报 `memRead:false`、`artDexCapture:false`、`jniReflect:false` —— 两个阻断点。
+3. `native_call libc.so prctl [4,1]` 恢复进程可 dump → `memory_read` 立即恢复。
+4. `memory_search` 搜真实类名 `Lcom/chaoxing/mobile/study/account/LoginActivity;` 定位真载荷所在区域。
+5. `memory_dump` 按精确 addr+size 逐个取出 13 个 dex → `dex_index` / `dex_coverage` 验收。
+
+### 本次暴露的 ADH 缺陷（建议排期修复）
+
+- **A. `/proc/self/mem` 在 non-dumpable 目标上 EACCES，agent 全部读内存能力失效。**
+  SecNeo（梆梆）调 `prctl(PR_SET_DUMPABLE,0)`，于是 `open("/proc/self/mem")` 返回 **errno 13**——
+  连进程读自己都拒绝。`mem.c` 的 `cmd_read`/`cmd_search`/`cmd_scan_magic`、`runtime/art.c`、
+  `trace/commands.c` 全部只走 `/proc/self/mem`，因此 `memory_read`/`memory_search`/`memory_dump`/
+  `scan_magic`/`art_dexfiles` 一起挂。**本次绕法**：`native_call libc.so prctl [4,1]` 就地恢复（3µs）。
+  **正解**：agent 本就在目标地址空间内，应加**直接解引用读取**（先查 `/proc/self/maps` 确认区间可读，
+  再 `memcpy`；`/proc/self/mem` 作为回退），或 `process_vm_readv(self)`。
+- **B. Zygisk 注入路径下没有 JavaVM，所有 Java/ART 能力失效。**
+  agent 由模块经 memfd 加载（maps 里是 `/memfd:jit-cache (deleted)`），`adh_jni_attach` 的兜底
+  `dlopen("libart.so")` 被 linker 拒绝：
+  `library "libart.so" needed or dlopened by "/memfd:jit-cache (deleted)" is not accessible for the namespace "(default)"`；
+  裸名 `libart.so` 也不在 app namespace 搜索路径里。于是 `art_dexfiles` / `java_hook` / `trigger` /
+  `object_*` 全部 `no JavaVM`。模块在 `onLoad(api, env)` 本来就握着 `JNIEnv`，**正解**：
+  `postAppSpecialize` 里 `env->GetJavaVM(&vm)` 并通过新导出 `adh_agent_set_vm` 交给 agent
+  （需加进 version script 白名单）。
+- **C. `memory_scan_magic` 的预算到不了 app 区域。** `MAXHITS=256` / `TOTALCAP=512MB`，而框架 OAT 的
+  dex magic 命中就占满了配额（实测 `scanned=463MB, truncated=true`），扫不到 `0x7c…` 之后的 app 内存。
+  本次靠 `memory_search` + 已知地址绕过。建议支持地址区间/区域过滤或提高预算。
+- **D. `dex_repair` 把整份修复后的 dex 以 `repairedB64` 内联回吐**（120MB dex → 160MB base64），
+  超出 MCP 回复与落盘上限。建议只回头部字段并**把修复结果落成工件**。
+
+### 关于此类壳的路线结论（重要）
+
+学习通的外壳 dex（ART 命名为 `[anon:dalvik-classes.dex extracted in memory from …/base.apk]`，
+120,451,440 字节）是**诱饵**：`file_size` 被吹到 120MB，但 `class_defs_size` 只有 17，
+内容是 `com.secneo.apkwrapper.*` + ARouter 路由表。
+**真 dex 在 `[anon:libc_malloc]` 区域里（`0x7cf6000000`+，13 个 dex 等距排布），ART 没有给它命名**——
+也就是说**只靠 `art_dexfiles`（ART DexFile 枚举）会完全错过真载荷**，必须走内存扫描/区域 dump。
+这条对 SecNeo/梆梆系样本应作为默认路线。
+
+## 历史：2026-09-23 验收与范围收口
 
 **状态快照**：测试设备 OnePlus PGP110 `aa165071` 在线；Host ADH Daemon 与 adb reverse 已启动。本轮已从产品中退役并移除 Android UI 自动化（模块 X），AI Agent 直接使用 adb。2026-09-23 最终执行 `tools/verify_all.sh`：**113 PASS / 0 FAIL / 0 SKIP**。完整状态见 `docs/FEATURE_STATUS.md §2`。
 
