@@ -79,6 +79,8 @@ bash tools/fetch_dobby.sh          # one-time: Dobby (verified native inline-hoo
 node src/index.ts                  # start (HTTP/WS 8088, agent TCP 8761); or: npm start
 node --watch src/index.ts          # dev; or: npm run dev
 node test/smoke.ts                 # smoke; or: npm run smoke
+node src/cli.ts --help             # `adh` CLI (npm run adh): doctor | target | unpack — the client of adhd,
+                                   # and the one implementation of "resolve the target agent" (see docs/PROGRESS.md)
 
 # --- sandbox app (Kotlin, AGP 8.7.3 / Gradle 8.9 / compileSdk 36) — from sandbox-app/
 ./gradlew :app:assembleDebug       # build APK; install with install_apk_root (su + pm, not adb install)

@@ -14,6 +14,45 @@
 全来自命令参数）；② 不胡乱兜底 / fail-loud（hook 装不上、缓冲溢出、解不动一律显式报错 + 计数上报，
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
+## 2026-09-28 —— `adh` 命令行：把"解析目标"收成一处 ✅
+
+**问题**：ADH 在产品意义上**没有命令行**——`daemon/package.json` 没有 `bin`，`src/` 下没有 `cli.ts`，
+命令行面只有「启动 daemon + 117 个验收脚本 + curl」。代价可以量化：**117 个 verify 脚本里 114 个内嵌 node
+脚本，其中 76 个各自重抄了一遍"找在线 agent → 按 `connectedAt` 取最新 → 拿 sessionId"**；我自己每轮开工
+也手抄一次，加 `verify_v98` 时还是照抄。对照组是刚审计完的 `xls-probe`：有 `doctor`、`--json`、退出码把
+"断言失败"与"没测成"分开，ADH 在这件事上比它的用户项目还原始。
+
+**修法**
+1. **`daemon/src/cli.ts`（新）**：`adh` CLI，**纯客户端**——只 import `config.ts`（无 import 即无漂移，
+   且同一份可打远程 daemon）。`doctor` 报 daemon 健康 + **刷入的 agent 版本 vs 本仓源码版本**配对
+   （读 `agent_internal.h` 的 `AGENT_VER` 与 `module.prop`，再与 agent 自报的 `agentVer` 比）+ 后端矩阵；
+   `target` 解析**唯一** agent 并报活体事实（ping / `memBackend` / `libartJniGetVms` / dex 数）；
+   `unpack` 一键 `dump_all_dex` + 逐 dex 分类 + `--out` 落盘（默认只落真 dex）。
+   退出码复用门禁三态，不另立词汇：`0 ok / 1 fail / 2 usage / 3 unavailable`（= SKIP）。
+   歧义目标**必须报错**（列出候选与 `--package`/`--session` 建议），绝不静默换一个进程——这是这条命令唯一不能犯的错。
+2. **flag 纪律**（`cli.ts` 顶部写清，两条守卫兜住）：flag**按子命令**声明，未知/错位 = 用法错（exit 2）；
+   `daemon/test/cli_args.test.ts` 断言"声明了就必须有人消费"；`tools/verify_v100_adh_cli.sh` 断言
+   "每个 flag 都有**可观测效果**"。理由是实的：接受但忽略的 flag 比没有这个 flag 更糟——命令 exit 0
+   却做了别的事，而操作者会信它（`xls-probe --proxy`，见 `CASE_STUDIES` 邻仓审计）。
+3. **`tools/verify_v100_adh_cli.sh`（新，注册为 `:device`）**：13 条 daemon 侧断言 + target/unpack 侧断言。
+
+**过程中量出来的两个真问题**（都不是猜的）
+- 最初用 `fetch` + `AbortSignal.timeout`：abort 确实在 2s 触发，但进程**又活了 8.7s**（undici 的待决 connect
+  句柄在 Windows 上不可取消），改用 `process.exit` 还会撞 libuv 断言。→ 换 `node:http` + 显式 destroy。
+- 换完仍然**谎报**：`req.setTimeout` 只约束 socket **空闲**、不约束 connect，于是 `--timeout 2` 的错误
+  在 **5106ms** 才出现、文案却写着 "timed out after 2s"。→ 改成自己的墙钟定时器（实测 2090ms 出结果、
+  2099ms 退出），并让 `verify_v100` 断言这个界（`< 4000ms`）——**这条断言就是防它回退成谎话**。
+- 顺带记一条环境约束：本仓无构建步骤，node 以 strip-only 跑 `.ts`，**TS 的 parameter property
+  （`constructor(readonly x: T)`）不被支持**，直接语法错。新写的 `.ts` 别用。
+
+**验收**
+- `daemon/test/cli_args.test.ts` **10/10**（含"AGENT_VER 与 module.prop 必须同步升"这条真回归守卫）。
+- `verify_v100`：daemon 侧 **13 条全过**；`doctor` 0.19s 干净退出（stderr 0 字节）；`--port` 错 → exit 3
+  且报文点明端口与 `ECONNREFUSED`；未知/错位 flag → exit 2 并列出可接受集合；`--json` 可解析。
+- **真机那半本轮未跑**：设备当时是 `a22fecdd unauthorized`（需要手机上点"允许 USB 调试"），
+  所以 `target`/`unpack` 的端到端**仍属未验证**，脚本在无 agent 时按规矩 SKIP（exit 0 + 末行 `SKIP (...)`），
+  不计入"已验证"。设备回来后的第一件事就是跑完整 v100。
+
 ## 2026-09-26（三）—— 按计划加固：第 1 项 验证真实化（WS-L）✅
 
 > 从学习通案例的 5 条工具级结论出发，按 `CASE_STUDIES.md` 的顺序逐项修复。

@@ -186,6 +186,11 @@ SCRIPTS=(
   # v9.9 artifact store: the eviction policy is unit-tested, and artifacts that are on disk must be
   # listed again after a daemon restart. Registered last because it restarts the daemon itself.
   "verify_v99_artifact_store.sh:host"
+  # v10.0 `adh` CLI (daemon/): doctor/target/unpack, and — the interesting half — every declared flag
+  # asserted by its EFFECT rather than by its presence in --help (a flag accepted but ignored is how
+  # a diagnostic CLI lies to its operator). Registered as device because target/unpack need a live
+  # agent; the daemon-side half still runs standalone and the agent half SKIPs cleanly when absent.
+  "verify_v100_adh_cli.sh:device"
 )
 
 pass=0; fail=0; skip=0; FAILED=""

@@ -55,6 +55,16 @@ translation — kept separate).
    never reported as an acceptance (`verify_v75_zygisk_memfd.sh` is the reference).
 5. `bash -n tools/verify_vXX.sh` (syntax), then run it standalone against a live adhd+device+sandbox to confirm green.
 6. **Add it to `verify_all.sh`'s `SCRIPTS` array** as `"verify_vXX.sh:device"` or `:host"`, in version order. Without this it never runs in regression.
+7. **Resolving the target agent: use the CLI, do not hand-roll it.** The block
+   ```bash
+   SID="$(cd "$ROOT/daemon" && node src/cli.ts target --package com.adh.sandbox --quiet)" || exit 0   # exit 3 = no agent
+   ```
+   is the same one `adh target` uses (one implementation, `daemon/src/cli.ts`); the older pattern —
+   fetch `/api/agents`, filter by package, sort by `connectedAt`, take `[0]` — had been copied into 76
+   scripts. `--quiet` prints the session id alone; `--json` gives the whole dossier; exit 3 means
+   "no agent online" (the gate's SKIP), 1 means "that package is not there". Prefer `--package` over
+   picking the newest session: a test that resolves a different process than it names is worse than
+   one that fails.
 
 ## `verify_all.sh` — the regression runner
 
@@ -127,3 +137,5 @@ translation — kept separate).
   注意断言的是**能力**不是计数：系统应用（如 Settings）在线程上下文类加载器里可能没有应用级 dex，`art_dexfiles count=0` 是合理的，判别信号是 `ok`（修复前为 `ok:false error:"no JavaVM"`）。结束恢复 Zygisk scope。缺前置条件时打印 `SKIP` 且**不带** `RESULT:PASS` 哨兵。
 - `verify_v99_artifact_store.sh` — **工件存储**（host）：先跑 `daemon/test/artifact_store.test.ts`（纯策略单测 8 项：文件名映射、超龄、超量、最旧优先、`protectSha`、mtime 未知不猜老），再**重启 daemon**（PowerShell 杀进程 + 等端口停 + 重起，同 v37）后断言：磁盘上每个工件都重新出现在 `/api/dumps` 里、条目 `source=disk-reload`（不编造来源）、没有指向不存在文件的悬空条目、`settings.artifacts` 暴露预算。**注册在最后**，因为它自己会重启 daemon。
 - `verify_v15_dumpall.sh`（v9.11 扩）——除原有的枚举/dump/去重/下载外，先跑 `daemon/test/dex_artifact_shape.test.ts`（4 项，用学习通实测数字钉死 carrier 判定），再断言逐 dex 都被分类、`realDexCount+carrierCount==dexCount`、沙盒上 `carrierCount===0`、`index.built>=1`。
+- `verify_v100_adh_cli.sh` — **`adh` 命令行**（device；daemon 那半不需要设备也能跑）：先跑 `daemon/test/cli_args.test.ts`（10 项：声明即消费、未知/错位 flag 报用法错、歧义目标必须报错不许静默选、AGENT_VER 与 module.prop 必须同步），再断言 `doctor` 给出守护进程信息与**刷入的 agent 版本 vs 源码版本**配对、`target` 解析出唯一 agent 并报活体事实（ping/能力/dex 数）、`unpack` 逐 dex 分类且 `--out` 落盘数量等于 `realDexCount`；结构性守卫一条：`cli.ts` 只许 import `config.ts`（客户端，不可能与 daemon 真值漂移）。
+  **每个 flag 都必须有可观测效果**，这是本条的重点：`--port`/`--host` 由错误信息里的 base URL 证、`--timeout` 由"2 秒预算真的在 ~2s 内结束"证（`req.setTimeout` 只约束 socket 空闲、不约束 connect，早先版本会在 5.1s 才报"超时 2 秒"——这条断言就是防它回退）、`--json` 由输出形状证、`--package`/`--session` 由它拒绝解析的目标证、`--out`/`--include-carriers` 由落盘文件数证。理由见 `daemon/src/cli.ts` 顶部：**接受但忽略的 flag 比没有这个 flag 更糟**（`xls-probe` 的 `--proxy` 只在 `signcode` 上生效，`face --proxy` 静默忽略，而那条路正是"换出口"实验本身）。目标侧断言需要在线 agent，没有时打印 `SKIP` 且不带 `RESULT:PASS` 哨兵。

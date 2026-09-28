@@ -15,6 +15,7 @@ ADH Daemon / `adhd` (Node 24 + TypeScript, runs `.ts` directly, no build step). 
 | `http/routes_runtime.ts` | Live agent execution routes: maps, object/JNI/ART, hook/trace, filesystem, memory, trigger, and unpack commands. | `state.ts`, `service.ts`, `memory.ts`, `syscall_watch.ts` |
 | `http/routes_analysis.ts` | Host native/DEX analysis, module reconstruction, dump download, and dashboard routes. | `state.ts`, `service.ts`, `dex.ts`, `dex_index.ts`, `analysis.ts` |
 | `index.ts` | **Boot + agent-TCP frame decode only.** Owns `agentServer`/`httpServer`/WS upgrade/listen/SIGINT and delegates HTTP requests to `http/router.ts`. | `config.ts`, `state.ts`, `service.ts`, `http/router.ts` |
+| `cli.ts` | **`adh` CLI — the operator's command line, and a CLIENT only.** `doctor` (daemon health + flashed-agent-vs-source version pairing + backends), `target` (resolve ONE agent and report its live facts), `unpack` (one-shot `dump_all_dex` + per-dex classification + optional save). Every subcommand is HTTP against `adhd`, so it works against a remote daemon; it imports **only `config.ts`** and nothing imports it. It exists because the "find the online agent for a package and pick its session" block had been hand-copied into 76 `tools/verify_*.sh` scripts and re-derived in every investigation — that block now has one implementation. Flags are declared **per command**, an unknown/misplaced one is a usage error, and both `test/cli_args.test.ts` (declared ⇒ consumed) and `tools/verify_v100_adh_cli.sh` (declared ⇒ observable effect) fail if a flag is accepted and ignored. Exit codes reuse the gate's three states: `0 ok / 1 fail / 2 usage / 3 unavailable` (= SKIP). | `config.ts` |
 | `artifacts.ts` | **Pure artifact-store policy** (no state, no fs): `artifactKindOf` maps an on-disk filename to its kind, `planArtifactEviction` decides what to reclaim (over-age first, then oldest-first to the byte budget; `protectSha` spares the artifact just written; an unreadable mtime is kept, not assumed ancient). Unit-tested directly — `state.ts` owns the store, this owns the decisions. | — |
 | `dex.ts` | Pure DEX parser/rebuilder plus proto/field/code analysis (`parseDex`/`analyzeDexCode`/`searchDex`/`extractMethodCode`/`invokeXref`/`cryptoScan`/`analyzeCoverage`/`rebuildStandardDex`/`recoverFromSnapshots`/`stripMethodCode`). No daemon state. | — |
 | `dex_index.ts` | WS-F persistent SQLite index keyed by DEX SHA/size/parser version: strings and callers, fields and read/write sites, methods, call edges, and `Class.forName` targets. | `state.ts`, `dex.ts`, node:sqlite |
@@ -40,6 +41,10 @@ Adding a crypto hook once meant reading the whole file; the REST surface was inl
 - **MCP tool**: add one `{ name, description, inputSchema, handler }` to `MCP_TOOLS` in `mcp.ts`. Handler calls `agentCmd`/`dumpBuf`/`dumpRegion`/… from `service.ts`. Done — `tools/list` + `tools/call` pick it up automatically.
 - **REST route**: add one table entry to the owning `http/routes_*.ts` domain. Preserve domain composition order in `http/router.ts` when paths overlap.
 - **Agent command op**: handled in the agent C `command_loop` (Phase 3 — table-driven after refactor).
+- **CLI subcommand**: add one entry to `COMMANDS` in `cli.ts` (its own flags + `handlerFlags`). Two guards
+  then apply automatically: `test/cli_args.test.ts` fails if a declared flag is not in `handlerFlags`, and
+  `tools/verify_v100_adh_cli.sh` fails unless every declared flag has an observable effect. Never add a
+  flag to the shared set "for later" — an accepted-but-ignored flag is how this kind of tool lies.
 
 ## Known flake (pre-existing, in `service.ts` reconstructSo path)
 
