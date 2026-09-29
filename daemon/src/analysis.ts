@@ -48,7 +48,9 @@ export async function analyzeSo(path: string): Promise<any> {
 
 // Known crypto constant signatures (byte patterns) — locate algorithms in stripped
 // native libs where symbols are gone (H.4). Little-endian where applicable.
-const CRYPTO_CONSTS: { name: string; hex: string }[] = [
+// Exported so crypto_variants.ts can reuse these standard patterns instead of keeping a second copy
+// of the same table (one fact, one source of truth).
+export const CRYPTO_CONSTS: { name: string; hex: string }[] = [
   { name: 'AES-Sbox', hex: '637c777bf26b6fc53001672bfed7ab76' },
   { name: 'AES-InvSbox', hex: '52096ad53036a538bf40a39e81f3d7fb' },
   { name: 'Base64-std', hex: Buffer.from('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/').toString('hex') },

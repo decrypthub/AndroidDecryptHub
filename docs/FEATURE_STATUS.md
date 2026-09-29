@@ -1,12 +1,13 @@
-# ADH 功能状态（发布前梳理，2026-09-28 更新）
+# ADH 功能状态（发布前梳理，2026-09-29 更新）
 
 > 这份文件回答一个问题：**现在到底有什么、什么是验证过的、什么是没验证的、什么还没做完。**
-> 判定只认 `tools/verify_all.sh`（**117 个脚本 = 35 host + 82 device**），不认"看起来能跑"。
+> 判定只认 `tools/verify_all.sh`（**118 个脚本 = 36 host + 82 device**），不认"看起来能跑"。
 > 规格见 `REQUIREMENTS.md`，架构与排期见 `DEVELOPMENT_PLAN.md`，跨会话进度见 `PROGRESS.md`。
 > 最近一次带真机全量门禁（2026-09-23，aa165071 / Android 15 / PGP110）：**113 PASS / 0 FAIL / 0 SKIP**。
-> **2026-09-28 复跑为 host-only：35 PASS / 0 FAIL / 82 SKIP**（当时设备为 `a22fecdd unauthorized`，
-> 需要在手机上点"允许 USB 调试"；device 脚本按规矩 SKIP，不等于通过）。`verify_v100` 随之 SKIP，
-> 其 `target`/`unpack` 半段**本轮未验证**。
+> **2026-09-29 复跑为 host-only：36 PASS / 0 FAIL。** device 半段**未验证**，原因不是代码：当前设备
+> `a22fecdd` 已授权（`adb devices` 报 `device`）但**沙盒 App 根本没装**（`pm list packages` 里没有任何
+> adh 包，`am start` 报 Activity 不存在），所以 82 个 device 脚本既起不了沙盒也连不上 agent。
+> 要恢复 device 半段：`cd sandbox-app && ./gradlew :app:assembleDebug` + `install_apk_root`。
 > **发布范围收口提案**（不做/降级的 10 项，含证据与"什么条件下重新考虑"）见 `DEVELOPMENT_PLAN.md §6.9.5`；需求口径修订建议（去特征对抗面、SKIP 分层、信任模型等 7 条）见 `REQUIREMENTS.md` 顶部"口径修订建议"——两者都是**待确认**，确认后合并进正文。
 
 ## 0. 发布物
@@ -38,6 +39,7 @@
 | 内存与 dump | v02_dump, v02_so, v22_capture, **v97(读取后端 + 强制直读覆盖全部读命令)** | 搜索/落盘/sha256 对照/去重；突发下 `emitted+backlog+dropped==seq` 如实记账 |
 | dex 静态分析 / 修复 / 索引 | v03, v04_dexparse, v08_*, v09_methodcode, v12_rebuild, v13_recover, **v95(try/catch code_item)**, **v96(map_list 重建 + 布局自检)**, v29_dexindex | ART 结构枚举、常量扫描、xref、字节码恢复、重建与持久索引；**带 try/catch 的方法读全 `code_item`（header+insns+tries[]+handler 列表）并字节级重建一致**，解不动的 item 显式报 `unresolvable` 而不是算作已恢复；**重建把 code_item/class_data 重定位到文件末尾并重建 map_list**（map 现在描述文件本身，代价是旧副本作为 slack 保留、文件变大） |
 | 原生反汇编 / 常量 / syscall 扫描 | v08_disasm, v08_analyze, v09_cryptoconst, v09_syscall | 内存镜像反汇编、导入导出、AES S-box、`svc #0` 直连点 |
+| **变异（魔改）算法识别** | **v101** | 按**结构**识别而不是按标准常量：MD5 由未被改动的 K 表锚定、缺席的 init 作为变异证据（并报"标准 init 被原位改写 12/16"）；SHA1 **从另一端**锚定（IV 在位、轮常量被改）；置换码表按**形状**找到并数出漂移量（54）。变异判定**必须带证据**，且 `limits` 必须自述盲区（运行时生成的表、连锚点一起改的变异）。**并同时断言旧的标准常量扫描对教科书库与变异库返回同一组算法名、且在变异库上误报 `MD5-init`**（假阳性）——即这条能力补的是"两层同时瞎"的整类漏检。靶子是**编译产物**（`fixtures/crypto-variants/` + `build_crypto_variants.sh`），不是测试自己拼的 buffer |
 | 加解密动态捕获 | v04_crypto, v11_capture, v24_javacap, v26_cryptocoverage | EVP 边界明文、富采集、ECDSA/AEAD 覆盖（含 APS2 packed reloc） |
 | TLS / 文件 I/O | v07, v07_flow, v20_file, v25_fsbrowser | SSL_write/read 明文与关联；libc open/read/write 捕获 |
 | 反检测观测与去特征 | v05_detect, v69(stealth), v70/v72(sites), v73/v74(vtable) | 目标自审（anon r-x、序言比对）；stealth 后 anonExec 2→0；sites 保持入口字节不变 |

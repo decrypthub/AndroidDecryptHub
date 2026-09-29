@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { analyzeSo, cryptoConstScan, disasmSo, OBJDUMP, svcScan } from '../analysis.ts';
+import { scanCryptoVariants } from '../crypto_variants.ts';
 import {
   analyzeCoverage, cryptoScan, extractMethodCode, invokeXref, parseDex,
   rebuildStandardDex, recoverFromSnapshots, searchDex, stripMethodCode,
@@ -46,6 +47,16 @@ export function analysisRoutes({ req, res, url, send }: RouteContext): Route[] {
       const byName: Record<string, number> = {};
       for (const h of hits) byName[h.name] = (byName[h.name] ?? 0) + 1;
       return send(200, { size: buf.length, hits, byName, algorithms: Object.keys(byName) });
+    } },
+    // Structural counterpart to crypto_const: the standard-constant scan above is blind to an app
+    // that implements the algorithm itself and perturbs it. This one identifies by structure and
+    // reports the mutation, plus where a static scan cannot see at all.
+    { method: 'POST', path: '/api/native/crypto_variants', handler: async () => {
+      const body = await readBody(req);
+      const { b64, sha } = JSON.parse(body || '{}');
+      let buf: Buffer;
+      try { buf = await dumpBuf({ b64, sha }); } catch (e: any) { return send(e.status ?? 400, { error: e.message }); }
+      return send(200, { size: buf.length, ...scanCryptoVariants(buf) });
     } },
     { method: 'POST', path: '/api/native/analyze', handler: async () => {
       const body = await readBody(req);

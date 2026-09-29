@@ -191,6 +191,11 @@ SCRIPTS=(
   # a diagnostic CLI lies to its operator). Registered as device because target/unpack need a live
   # agent; the daemon-side half still runs standalone and the agent half SKIPs cleanly when absent.
   "verify_v100_adh_cli.sh:device"
+  # v10.1 mutated-algorithm identification (host): identifies crypto by STRUCTURE and names the
+  # mutation, and asserts the standard-constant scan is blind to it (it returns the same algorithm
+  # names for the textbook and the mutated fixture, and claims MD5 on the mutated one). The fixtures
+  # are compiled by tools/build_crypto_variants.sh; no daemon-no-clang SKIPs cleanly.
+  "verify_v101_crypto_variants.sh:host"
 )
 
 pass=0; fail=0; skip=0; FAILED=""
