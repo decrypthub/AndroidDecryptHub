@@ -8,6 +8,8 @@ Guidance for Codex working in this repo. Keep this file short. Only rules that a
 
 ## Source of truth (read before changing scope)
 
+- `docs/HANDOVER.md` — **接手本项目的 Agent 从这里开始**：环境真相（连着的手机**没有 root 且是用户日常机，不要碰**）、
+  其它文档里没有的坑、以及在"无设备 / 无 root"前提下能交付什么。它不定义 scope，只定义**怎么在这里干活**。
 - `docs/REQUIREMENTS.md` — the single authoritative spec of **what** we build (modules A–W; module X is retired).
 - `docs/DEVELOPMENT_PLAN.md` — **how / architecture / roadmap**.
 - `docs/PROGRESS.md` — **where we are right now**; update it every session. This is how work survives across sessions.
@@ -114,13 +116,26 @@ Each layer has a `MAP.md` — read it before editing that layer:
 
 
 
-## Test device (available now)
+## Test device (READ THE CONSTRAINT BEFORE USING IT)
 
-- `adb` serial `aa165071` — OnePlus PGP110, **Android 15 / SDK 35**, `arm64-v8a`, **rooted** (`su` → uid=0), `ro.debuggable=0`.
-- **Multiple identical PGP110 units are attached** (`aa165071` + others). adb commands without `-s` fail with "more than one device" — `export ANDROID_SERIAL=aa165071` so every adb call (incl. the `tools/*.sh` scripts) targets the right unit.
-- Keep **per-API-level ART resolvers**; the ART-structure dex resolver (L.6) must handle **SDK 35** (this device). SDK 36 (Pixel 6 Pro) is a secondary target, not attached now.
-- Primary agent ABI is `arm64-v8a`.
-- This OnePlus/ColorOS ROM ships a **heavily stripped `libart.so`**. The v1 scope relies on the verified native inline-hook backend (Dobby, `tools/fetch_dobby.sh`); LSPlant v6.4 is an optional Java-method hook backend and is statically linked into the agent only when `tools/fetch_lsplant.sh` has prepared its pinned sources.
+- **There is NO rooted device available for you.** The unit on `adb devices` is `a22fecdd` — OnePlus PGP110,
+  **Android 15 / SDK 35**, `arm64-v8a` — and it is the user's **daily driver, deliberately NOT rooted**
+  (verified 2026-09-29: `id` → `uid=2000(shell)`, `which su` → nothing, `ls /data/adb` → permission denied).
+- **Do not flash it, do not install anything on it, do not start/stop apps on it.** `tools/flash_device.sh`
+  (Zygisk/Magisk module) and `install_apk_root` (`su` + `pm install`) cannot work here and must not be tried.
+  `tools/dev_up.sh` also runs `adb reverse` against whatever is attached — skip it for host-only work.
+- **The device half of the gate is dead right now**: the sandbox app is not installed
+  (`pm list packages | grep adh` is empty), so all 82 device scripts fail or hang waiting for an agent that never
+  connects. **Do not run the full `tools/verify_all.sh`** — the host subset is in `docs/HANDOVER.md` §2.2.
+- Want a real target without touching that phone? An AVD exists (`Pixel_6_Pro`, image `android-37.1/x86_64`);
+  check its two blockers first (ABI: x86_64 image vs the arm64-v8a-only agent; API: 37 vs the ART resolver's
+  SDK 35/36 coverage). Details in `docs/HANDOVER.md` §1.3.
+- **`docs/HANDOVER.md` is the onboarding doc** — environment truth, the pitfalls not written anywhere else, and
+  what is deliverable with no device and no root. Read it before planning work.
+- Still true and worth keeping: per-API-level ART resolvers (SDK 35 primary, 36 secondary); primary agent ABI is
+  `arm64-v8a`; this ColorOS ROM ships a **heavily stripped `libart.so`**; the verified native inline-hook backend
+  is Dobby (`tools/fetch_dobby.sh`), with LSPlant v6.4 an optional Java-hook backend linked in only when
+  `tools/fetch_lsplant.sh` has prepared its pinned sources.
 
 ## Boundaries
 
