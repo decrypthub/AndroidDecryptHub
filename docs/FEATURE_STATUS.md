@@ -8,6 +8,18 @@
 > `a22fecdd` 已授权（`adb devices` 报 `device`）但**沙盒 App 根本没装**（`pm list packages` 里没有任何
 > adh 包，`am start` 报 Activity 不存在），所以 82 个 device 脚本既起不了沙盒也连不上 agent。
 > 要恢复 device 半段：`cd sandbox-app && ./gradlew :app:assembleDebug` + `install_apk_root`。
+>
+> ⚠️ **2026-09-29（二）在 Linux 接管机上重跑 host 子集：29 PASS / 5 FAIL / 2 SKIP，上面那个 36/36 不成立。**
+> 两个原因：① 那条 recipe（`HANDOVER §2.2`）**把 SKIP 算成 PASS**，36 里有 2 个其实是 SKIP
+> （`v90_jni_table_abi` 缺 `jni.h`、`v99_artifact_store` 的重启逻辑是 Windows-only）；
+> ② 5 个 FAIL 逐条查完**没有一个是产品代码坏了**——3 个是缺 Windows 路径下的 LLVM 工具
+> （`v08_disasm`/`v08_analyze`/`v26_footprint`），1 个是**测试自己的缺陷**（`v101` 的断言写死了 node
+> spec reporter 的 `ℹ fail 0`，而管道输出走 TAP，永远匹配不上；单元测试 13/13 实际全过），
+> 1 个是**可复现的结构性超时**（`v29_dexindex` 的 `queryMs<250` 预算照本地磁盘定的，而这台机器把
+> 2.1 GB 的 `dex-index.sqlite` + 230 MB WAL 放在 **SMB 共享**上，实测 466ms；58k 方法的 dex 索引后
+> 首次查询要 **49 秒**）。逐条证据见 `PROGRESS.md` 2026-09-29（二）。
+> **device 半段现在具备条件**：设备已换回参考机 `aa165071`（SDK 35 / arm64 / SukiSU root），
+> 且刷入的模块与 HEAD 逐字节一致（见 §0 交付物表），所以全量门禁**不需要重刷即可跑**。
 > **发布范围收口提案**（不做/降级的 10 项，含证据与"什么条件下重新考虑"）见 `DEVELOPMENT_PLAN.md §6.9.5`；需求口径修订建议（去特征对抗面、SKIP 分层、信任模型等 7 条）见 `REQUIREMENTS.md` 顶部"口径修订建议"——两者都是**待确认**，确认后合并进正文。
 
 ## 0. 发布物
@@ -15,7 +27,7 @@
 | 交付物 | 来源 | 状态 |
 |---|---|---|
 | `libadh_agent.so`（arm64-v8a，release 剥离，836,432 B） | `tools/build_agent.sh` | ✅ 已验收（v01–v79 系列） |
-| 最近一次 Zygisk 模块 zip + ADH Manager APK + 组合包（**v0.3.10**） | `tools/build_zygisk.sh` / `build_bundle.sh` / `flash_device.sh` | 旧包曾验收并刷入；早于本轮模块 X 退役和 Device AIDL v13，当前源码需要重建 release bundle 后再发布/刷机 |
+| 最近一次 Zygisk 模块 zip + ADH Manager APK + 组合包（**v0.3.12**） | `tools/build_zygisk.sh` / `build_bundle.sh` / `flash_device.sh` | ✅ **设备上正在跑的模块已逐字节等于 HEAD**（2026-09-29 复核，HEAD `c273ef4`/`aa165071`）：`libadh_agent.so` `82e0cfb5…`、`manager.apk` `e0b2a83d…`、`daemon.apk` `87c2df98…`、`zygisk/arm64-v8a.so` `e565bfdc…` 四项与 `agent/build/`、`device/*/build/`、`injector/zygisk/.stage/` 完全一致；`com.adh.sandbox` 与本仓 `sandbox-app/…/app-debug.apk` 同一次构建。**因此不需要重刷即可跑全量门禁。**（旧结论"早于模块 X 退役和 Device AIDL v13、需重建 bundle 后再刷机"已作废——它描述的是更早的一次刷机。） |
 | 可选后端：Xposed 薄模块 APK | `injector/xposed/` + `tools/build_xposed.sh` | ✅ 已验收（v31/v32），默认关闭 |
 | 可选后端：Frida Gadget | `tools/fetch_frida_gadget.sh` + `load_frida_gadget.sh` | ✅ 已验收（v30），默认关闭；官方二进制（未魔改） |
 | 可选后端：eCapture | `tools/fetch_ecapture.sh` + `ecapture_capture.sh` | ✅ 已验收（v34），默认关闭；需内核 eBPF |

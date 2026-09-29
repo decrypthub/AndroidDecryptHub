@@ -10,9 +10,12 @@
 
 ## 0. 一句话状态
 
-`libadh_agent.so` + Host ADH Daemon + `adh` CLI + 5 个可选后端都已实现。**host 侧门禁 36/36 全绿**；
-**device 侧 82 个脚本在上一次跑的时候一个都跑不了**——但那是因为当时的机器/手机组合（见 §1 A 组），
-**不是代码问题，也不该是你的处境**。加解密/脱壳/抓包三条线的能力地图与待办见 §5。
+`libadh_agent.so` + Host ADH Daemon + `adh` CLI + 5 个可选后端都已实现。**host 侧门禁不是全绿**：
+2026-09-29（二）在 Linux 接管机上按 `RESULT:` 句柄逐一分类是 **29 PASS / 5 FAIL / 2 SKIP**
+（此前记的 "36/36" 把 2 个 SKIP 算成了 PASS，且其中 2 条 FAIL 是**门禁自身的缺陷**——详见 §2.2 与 `PROGRESS.md`）。
+**device 侧 82 个脚本上一次一个都跑不了**——那是因为当时那台手机没装沙盒（见 §1 A 组），
+**不是代码问题，也不该是你的处境**；本接管机的设备已就绪且**不需要重刷**（§1.3.1）。
+加解密/脱壳/抓包三条线的能力地图与待办见 §5。
 
 ---
 
@@ -52,6 +55,11 @@ adb -s <serial> shell getprop ro.build.version.sdk   # 记下 API level（见 §
 
 用户会给你**一台能刷模块、有 root 的手机**。于是常规路径全部可用：
 
+> ⚠️ **但有前提**：2026-09-29 实测的接管机是 Linux，**只有刷/装/跑的能力，没有构建链**
+> （无 cmake/ninja/clang/gradle）。上面这些 `build_*` / `fetch_*` 步骤它做不了。
+> **先读 §1.5** 再决定是"在 Windows 侧重建"还是"在这台 Linux 上装齐 NDK"。
+> 好消息：接管当天设备上刷的包已与 HEAD 逐字节一致（§1.3.1），**只跑门禁的话不需要构建任何东西**。
+
 - `tools/fetch_qbdi.sh` / `fetch_dobby.sh` / `fetch_lsplant.sh`（一次性第三方拉取，进 `agent/third_party/`）
 - `tools/build_agent.sh` / `build_detect.sh` / `build_zygisk.sh` / `build_bundle.sh`
 - `tools/flash_device.sh --reboot`（KernelSU/Magisk 刷入 Zygisk 模块；多设备时 `export ANDROID_SERIAL=<serial>`）
@@ -75,6 +83,29 @@ adb -s <serial> shell getprop ro.build.version.sdk   # 记下 API level（见 §
   不成立或不可信。**模拟器只在"手边没有真机时"当勉强替代**，且要先解决两个阻塞点：镜像是 x86_64
   vs agent 只交付 arm64-v8a；镜像是 API 37 vs 解析器只覆盖 35/36。
 
+#### 1.3.1 已记录设备事实
+
+> 每换一台机器/手机，**先更新这张表再推进**。
+
+| 机器档案 | serial | 机型 / ROM | Android / SDK | ABI | root | 实测日期 |
+|---|---|---|---|---|---|---|
+| **B 组 · Linux 接管机**（工作树是 SMB 共享 `//Russell.lan/X`，见 §1.5） | `aa165071` | OnePlus PGP110（`OP5551L1`，`PGP110_15.0.0.1901(CN01)`） | 15 / **35** | arm64-v8a | **KernelSU**（`su` → `uid=0(root)`） | 2026-09-29 |
+| A 组 · 原始 Windows 工作站（日常机，**不可动**） | `a22fecdd` | OnePlus PGP110 | 15 / 35 | arm64-v8a | **无** | 2026-09-29 |
+
+`aa165071` 这个 serial **就是 2026-09-23 那次 113 PASS / 0 FAIL / 0 SKIP 全量门禁的同一台机器**——
+所以它是"已知全绿"的参考设备，不是新设备。
+
+**接管当天实测：设备上刷的包与本仓 HEAD 逐字节一致，不需要重刷。**（2026-09-29，HEAD `c273ef4`）：
+
+| 文件 | 设备路径 | sha256（设备 == 本仓构建产物） |
+|---|---|---|
+| agent | `/data/adb/modules/adh/libadh_agent.so` | `82e0cfb5…` == `agent/build/libadh_agent.so` |
+| Manager | `/data/adb/modules/adh/manager.apk` | `e0b2a83d…` == `device/manager/build/…/manager-debug.apk` |
+| Device Daemon | `/data/adb/modules/adh/daemon.apk` | `87c2df98…` == `device/daemon/build/…/daemon-debug.apk` |
+| 沙盒 | `com.adh.sandbox`（`lastUpdateTime` 2026-09-27 00:13:07） | 与本仓 `sandbox-app/…/app-debug.apk` 同一次构建 |
+
+因此 `FEATURE_STATUS.md` 里"当前源码需要重建 release bundle 后再发布/刷机"是**过时结论**，已订正。
+
 ### 1.4 参考仓库（靶子来源，与机器无关）
 
 - `https://github.com/CYRUS-STUDIO/CyReverse` —— **教学性质的逆向示例代码**（不是加壳样本集），
@@ -86,6 +117,36 @@ adb -s <serial> shell getprop ro.build.version.sdk   # 记下 API level（见 §
     + `app/src/main/cpp/cyrus_studio_hook.cpp`；资产 `app/src/main/assets/classes3{,_extracted}.dex`
 - ⚠️ **顶层没有 LICENSE**（= 保留所有权利）。**不许把它的源码拷进本仓库**。可以"照原理自己写 + 拿它当
   外部靶子（在仓库外自己 build）"。
+
+### 1.5 接管机的工具链真相（**2026-09-29 新增；与 §1.2 的假设不符，先读这条**）
+
+§1.2 假设"B 组机器上常规路径全部可用"。实测：**接管机是一台 Linux，不是 Windows**，`su`/刷机/装 APK 都能做，
+但**构建链不在它身上**：
+
+- ✅ **能跑**：Host ADH Daemon、`adh` CLI、`tools/verify_*:host` 全部 host 脚本（node 直接跑 `.ts`）。
+- ❌ **不能构建**：**没有 `cmake` / `ninja` / `clang` / `gradle`**，也没有 `sdkmanager`；
+  `/usr/lib/android-sdk` 里只有 `platform-tools`。`sandbox-app/local.properties` 指向
+  `C:\Users\diiho\AppData\Local\Android\Sdk`——**是 Windows 路径**。
+- 结论：**`agent/build/` 与 `device/*/build/` 是 Windows 工作站构建后经 SMB 落到共享树里的产物**，
+  不是这台机器编出来的。`agent/build/CMakeCache.txt` 记的 toolchain 是
+  `C:/Users/diiho/AppData/Local/Android/Sdk/ndk/28.2.13676358/…`。
+  **要重建 `.so` / APK / Zygisk 模块，得在 Windows 侧做，或先在这台 Linux 上装齐
+  NDK 28.2.13676358 + SDK + cmake 3.22.1。**（只跑门禁/分析不需要构建，见 §1.3.1 的逐字节一致表。）
+- ⚠️ **不要在这台机器上直接跑 `tools/build_agent.sh`**：它会跟 Windows 生成的 CMake cache /
+  `build.ninja` 抢同一个 `agent/build/` 目录（cache 里是 Windows 路径）。要么先清目录，要么换 `BUILD_DIR`。
+- 其它实测偏差：
+  - `node` 是 **v22.23.2**（本文档/`CLAUDE.md` 写 v24）。strip-only TS 仍可跑（`adh --help` 正常），
+    但别依赖 node 24 独有行为。
+  - 工作树挂在 **SMB2**（`//Russell.lan/X`），I/O 是这台机器的主要成本：daemon **冷启动 ~33s**
+    （从磁盘重新哈希恢复 290 个工件 / 1304 MiB），单个 host 验收脚本 **40–80s**。
+    进程卡在 `D` 状态（`folio_wait_bit_common`）是**正常现象，不是死锁**，等它读完。
+  - `sudo` 免密可用。`/etc/udev/rules.d/51-android.rules` 原先**只有 Google `18d1` 一条**，
+    因此 OPPO/OnePlus（`22d9`）报 `no permissions`——已补 `22d9` 规则并
+    `sudo udevadm control --reload-rules` + `udevadm trigger`（无需重新插拔）。
+  - ⚠️ **多设备时 `dev_up.sh` 会挑错设备**：它用 `adb devices | awk 'NR==2{print $1}'` 取第一台，
+    而接管机上 `NR==2` 是那台**未授权**的 Google 机（`1A281FDEE003ZV unauthorized`），
+    于是 `adb reverse` 静默落在错的设备上、OPPO 上没有隧道、device 脚本连不上 agent。
+    **跑 `dev_up.sh`（以及 `flash_device.sh`）前一律先 `export ANDROID_SERIAL=aa165071`。**
 
 ---
 
@@ -100,24 +161,39 @@ adb -s <serial> shell getprop ro.build.version.sdk   # 记下 API level（见 §
 
 - **B 组（有可刷机）**：`bash tools/dev_up.sh` 然后 `bash tools/verify_all.sh` 全量。device 脚本自己会
   启停沙盒；SKIP 是"前置缺失"，不是通过（见 §3.1）。
-- **A 组（无 root）**：只跑 host 子集（2026-09-29 实测 **36/36 PASS**）：
+  ⚠️ 多设备时先 `export ANDROID_SERIAL=<serial>`——`dev_up.sh` 用 `adb devices | awk 'NR==2{print $1}'`
+  选设备，会挑中第一台（可能是未授权的那台），`adb reverse` 就静默落在错的设备上（§1.5）。
+- **A 组（无 root）**：只跑 host 子集。**下面的 recipe 会把 SKIP 当 PASS**（SKIP 一般 `exit 0`），
+  所以**必须再按 `RESULT:` 句柄复核一遍**：
 
 ```bash
 cd daemon && node src/index.ts &      # 不要跑 dev_up.sh，它会动用户手机
 cd .. && for s in $(grep -oE '"verify_[^"]+\.sh:host"' tools/verify_all.sh | tr -d '"' | sed 's/:host//'); do
-  bash "tools/$s" >/tmp/vr.log 2>&1 && echo "PASS $s" || { echo "FAIL $s"; tail -5 /tmp/vr.log; }
+  bash "tools/$s" >/tmp/vr_$s.log 2>&1
+  if   grep -q 'RESULT:SKIP' /tmp/vr_$s.log; then echo "SKIP $s"
+  elif grep -q 'RESULT:FAIL' /tmp/vr_$s.log; then echo "FAIL $s"; tail -5 /tmp/vr_$s.log
+  elif grep -q 'RESULT:PASS' /tmp/vr_$s.log; then echo "PASS $s"
+  else echo "?    $s (no RESULT sentinel — 看日志里的 ✅/❌ 行)"; fi
 done
 ```
 
+**2026-09-29（二）在 Linux 接管机上的基准：29 PASS / 5 FAIL / 2 SKIP**，逐条原因见 `PROGRESS.md`
+同一天那一节。**别把这次的 5 个 FAIL 当成"代码坏了"**——3 个是缺 Windows 路径下的 LLVM 工具，
+1 个是门禁自身的断言缺陷，1 个是 SMB 上的 SQLite 结构性超时。
+
 ### 2.3 新机器接管顺序（照 `CLAUDE.md` 的复现顺序，这里补齐容易漏的）
 
-1. 工具链：**node 24**（daemon 直接跑 `.ts`，无构建步骤）；Android SDK + **NDK `28.2.13676358`** +
-   `cmake/3.22.1`；`ANDROID_SDK_ROOT` / `ANDROID_NDK_HOME` 按需覆盖（`tools/lib/env.sh` 读它们）。
+1. 工具链：**node 24**（daemon 直接跑 `.ts`，无构建步骤；实测 node 22 也能跑，但 v101 的 reporter 断言会咬人）；
+   Android SDK + **NDK `28.2.13676358`** + `cmake/3.22.1`；`ANDROID_SDK_ROOT` / `ANDROID_NDK_HOME` 按需覆盖
+   （`tools/lib/env.sh` 读它们，但它把 `windows-x86_64` 与 `.exe` **写死了**，见 §1.5）。
+   **如果这台机器不构建（只跑门禁），这一步可以跳过**——只要 `agent/build/` 与 `device/*/build/` 里的产物
+   跟 HEAD 一致即可（用 §1.3.1 的 sha256 对照法自证）。
 2. `bash tools/fetch_qbdi.sh` → `fetch_dobby.sh` →（可选）`fetch_lsplant.sh`
 3. `bash tools/build_agent.sh` → `build_detect.sh`
-4. **先跑 host 子集（§2.2）**，确认 36/36 → 再 `dev_up.sh` + 装沙盒 + 全量门禁。这能把"环境没搭好"
-   和"代码坏了"分开。
-5. 记录设备事实到 §1.3 的表。
+4. **先跑 host 子集（§2.2）**，按 `RESULT:` 句柄看真实数字（别只看退出码）→ 再 `dev_up.sh` + 装沙盒 + 全量门禁。
+   这能把"环境没搭好"和"代码坏了"分开。
+5. 记录设备事实到 §1.3.1 的**已记录设备事实**表（机型 / API / ABI / root 方式 / serial），
+   并用 sha256 对照确认"设备上刷的 == 本仓构建的"。
 6. 本项目**没有 CI**：门禁就是唯一信号，别指望别的东西告诉你有没有坏。
 
 ### 2.4 加一项能力的标准动作（四件套，缺一不可）
@@ -253,15 +329,21 @@ connect 句柄在 Windows 上不可取消）；换 `node:http` 后 `req.setTimeo
 
 ```bash
 git log --oneline -1                                   # 期望起点：34f8ecc 之后
-node --version                                         # 期望：v24.x
-adb devices                                            # 记下 serial 与个数
+node --version                                         # 期望：v24.x（实测 v22.23.2 也可用）
+adb devices                                            # 记下 serial 与个数（多设备先 export ANDROID_SERIAL）
 adb -s <serial> shell 'id; which su'                   # uid=0/有 su → B 组（可刷机）；否则见 §1.1
 adb -s <serial> shell getprop ro.build.version.sdk     # 35/36 → 解析器可直接用；否则先补覆盖（§1.3）
 adb -s <serial> shell getprop ro.product.cpu.abi       # 必须是 arm64-v8a
 cd daemon && node --test test/*.test.ts 2>&1 | tail -3 # 期望：全部 pass
-bash tools/verify_v101_crypto_variants.sh              # 期望：RESULT:PASS（无需设备）
-cd .. && bash tools/dev_up.sh && bash tools/verify_all.sh   # B 组：全量；A 组改用 §2.2 的 host 子集
+bash tools/verify_v101_crypto_variants.sh              # ⚠️ 见下方注；不是"无需设备就一定 PASS"
+cd .. && export ANDROID_SERIAL=<serial> && bash tools/dev_up.sh && bash tools/verify_all.sh
+                                                       # B 组：全量；A 组改用 §2.2 的 host 子集
 ```
 
-任何一条与本文不符（设备换了 / 没有 root / API 不是 35-36 / 沙盒没装），**先更新本文档 §1.3 的表再推进**——
-这张表是后面所有人的判断依据。
+> ⚠️ **`verify_v101` 在 node 22 上会假红**：它的第 1 步 `grep -qE '^ℹ fail 0$'` 匹配的是 node
+> **spec reporter** 的标记，而脚本用命令替换取输出 = **管道 = 非 TTY**，node 会走 **TAP reporter**
+> 打印 `# fail 0` —— 断言**永远不成立**。单元测试本身 13/13 全过。同类写法还在 `verify_v99` /
+> `verify_v15_dumpall` / `verify_v100` 里，**改之前先知道这是断言缺陷、不是被测代码坏了**。
+
+任何一条与本文不符（设备换了 / 没有 root / API 不是 35-36 / 沙盒没装），**先更新 §1.3.1 的表再推进**——
+这张表是后面所有人的判断依据。**接管机本身换了也要更新 §1.5**（构建链 / node 版本 / I/O 特性）。

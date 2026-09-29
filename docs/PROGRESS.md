@@ -14,6 +14,88 @@
 全来自命令参数）；② 不胡乱兜底 / fail-loud（hook 装不上、缓冲溢出、解不动一律显式报错 + 计数上报，
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
+## 2026-09-29（二）—— 接手第一轮：环境定性 + host 门禁的真实数字（**29 PASS / 5 FAIL / 2 SKIP**）⚠️
+
+**结论先说**：`docs/FEATURE_STATUS.md` 与 `HANDOVER.md §7` 记的"host 子集 36/36 PASS"**在本接管机上不复现**。
+按 `RESULT:` 句柄分类，36 个 host 脚本的真实结果是 **29 PASS / 5 FAIL / 2 SKIP**。
+逐条查完，**5 个 FAIL 里没有一个是"代码坏了"**，但其中 2 个是**测试自身有缺陷**（下面第 4、5 条），必须修。
+
+### 1. 接管机档案与文档假设不符（已订正 `HANDOVER.md §1.5`）
+
+- **本机是 Linux，不是 Windows，且没有构建链**：无 `cmake`/`ninja`/`clang`/`gradle`/`sdkmanager`；
+  `/usr/lib/android-sdk` 只有 `platform-tools`。`sandbox-app/local.properties` 与
+  `agent/build/CMakeCache.txt` 记的都是 **Windows 路径**（`C:\Users\diiho\…\ndk\28.2.13676358`）。
+  → **`agent/build/`、`device/*/build/` 是 Windows 侧构建后经 SMB 落到共享树里的产物。**
+  （只跑门禁不需要构建；要重建就得回 Windows 侧，或在本机装齐 NDK 28.2.13676358 + SDK + cmake 3.22.1。）
+- 工作树挂在 **SMB2**（`//Russell.lan/X`）：daemon 冷启动 **~33s**（从磁盘恢复 290 个工件 / 1304 MiB），
+  单个 host 脚本 40–80s，进程卡 `D` 状态是正常现象。
+- `node` 实测 **v22.23.2**（文档写 v24）。strip-only TS 仍可跑，但 v24 的差异已经真实咬人一次——见第 4 条。
+
+### 2. 设备侧：**不需要重刷**（度量过，不是推断）
+
+补齐 OPPO/OnePlus 的 udev 规则（`51-android.rules` 原先只有 Google `18d1`，所以 `22d9` 报
+`no permissions`）后 `aa165071` 恢复为 `device`。实测 `su -c id` → `uid=0(root)`（SukiSU Ultra）。
+
+**设备上刷的包与 HEAD `c273ef4` 逐字节一致**：`libadh_agent.so` `82e0cfb5…`、`manager.apk` `e0b2a83d…`、
+`daemon.apk` `87c2df98…`、`zygisk/arm64-v8a.so` `e565bfdc…`（模块 `v0.3.12`）。
+→ `FEATURE_STATUS.md` 里"需重建 release bundle 后再刷机"是**过时结论**（已订正），**跑全量门禁不缺任何东西**。
+
+### 3. 门禁数字要把 SKIP 和 PASS 分开算（**方法学订正**）
+
+`HANDOVER.md §2.2` 给 A 组的配方是 `bash tools/$s >log && echo PASS`，**它把 SKIP 算成 PASS**
+（SKIP 通常 `exit 0`）。本轮 31 个"PASS"里有 **2 个其实是 SKIP**：
+`verify_v90_jni_table_abi.sh`（`RESULT:SKIP jni.h not found …/windows-x86_64/…`）与
+`verify_v99_artifact_store.sh`（`RESULT:SKIP`，重启逻辑是 Windows-only 的
+`netstat -ano` + PowerShell `Stop-Process`）。**"36/36" 很可能就是这么来的。**
+→ 统计一律以各脚本的 `RESULT:` 句柄为准，别只看退出码。
+
+### 4. 两个**真缺陷**（在被测代码以外——是**门禁自己**不可靠）
+
+- **`verify_v101_crypto_variants.sh` 的第 1 步断言永远不可能成立**：它 `grep -qE '^ℹ fail 0$'`，
+  而 `ℹ` 是 node **spec reporter** 的标记；只要输出不是 TTY（脚本用 `UNIT="$(…)"` **永远是管道**），
+  node 就走 **TAP reporter**，打印的是 `# fail 0`。当天实测：单元测试 **13 pass / 0 fail 确实全过**，
+  脚本仍报 FAIL。**这不是 node 22 的问题——是断言写死了 reporter 格式。**（同一模式还出现在
+  `verify_v99` / `verify_v15_dumpall` / `verify_v100`。）
+- **`verify_v99_artifact_store.sh` 的 reporter 分支少了 `exit 1`**：它打印
+  `RESULT:FAIL (…unit tests did not all pass)` 之后**继续往下跑**，然后在 Windows-only 的重启逻辑上
+  落到 `RESULT:SKIP` + `exit 0` —— **一条本该红的断言被后面的 SKIP 洗成绿**。
+
+### 5. `verify_v29_dexindex.sh` 的 FAIL 是**可复现的结构性**问题，不是抖动
+
+它的通过条件含 **`hit.queryMs < 250`**（以及 `maxCachedMs < 250`）。实测该值 **465.86ms**（单独重跑同样 ~466ms）。
+逐 dex 量下来根因是 **"索引后第一次查询"的一次性代价**，且随方法数爆炸：
+
+| dex | methods | 索引后第 1 次查询 | 后续查询 |
+|---|---|---|---|
+| `classes.dex` | 58,775 | **49,237 ms** | 47,306 / 46,390 ms |
+| `classes2.dex` | 251 | **2,914 ms** | 2,428 / 2,702 ms |
+| `classes3.dex`（`hit` 落在这里） | 754 | **414 ms** | 35 / 38 ms |
+
+结构原因：`adhd-data/dex-index.sqlite` 是 **2.1 GB**，外加 **230 MB 未 checkpoint 的 WAL**，而且
+**整个 DB 放在 SMB 网络共享上**；`dex_index.ts` 用的是 `PRAGMA journal_mode = WAL`——
+**SQLite 官方明确说 WAL 不能用于网络文件系统**（它依赖 `-shm` 共享内存）。
+所以 250ms 这个预算是照**本地磁盘**定的，在共享树上必然超标。
+→ 两条路：把 `adhd-data/` 挪到本地盘（对这台机器是**最省事且收益最大**的一条），
+或者把这台机器上的 `queryMs` 预算改成分档 / 允许环境覆盖。
+
+### 6. 三个纯环境 FAIL（缺 Windows 路径下的 LLVM 工具）
+
+`verify_v08_disasm.sh` / `verify_v08_analyze.sh`：daemon 报
+`spawn …/windows-x86_64/bin/llvm-objdump.exe ENOENT`；
+`verify_v26_footprint.sh`：直接调 `tools/lib/env.sh:17` 写死的
+`…/windows-x86_64/bin/llvm-readelf.exe`，于是 `defined-exports=none` 而断言失败。
+`daemon/src/analysis.ts:12` 与 `env.sh:17` **都把 Windows 工具链路径写死**（`analysis.ts` 可用
+`ADH_LLVM_BIN`/`ADH_OBJDUMP`/`ADH_READELF` 覆盖；`env.sh` 的 `READELF` **不可覆盖**）。
+→ 装 `llvm`（apt 有 21.1.6）能给 daemon 两个工具，但 `env.sh` 得先改成 host-aware；
+`verify_v90` 还要 NDK 的 `jni.h`（sysroot）。
+
+### 顺带记录
+
+- `tools/dev_up.sh` 用 `adb devices | awk 'NR==2{print $1}'` 选设备：本机 `NR==2` 是那台**未授权**的
+  Google 机，于是 `adb reverse` **静默落在错的设备上**。跑之前必须
+  `export ANDROID_SERIAL=aa165071`（`flash_device.sh` 同理）。
+- 容器/主机侧都没改任何被测代码；本轮只改了文档 + 一条 udev 规则。
+
 ## 2026-09-29 —— 变异算法识别：补上"加解密"这一项的整类漏检 ✅
 
 **问题（度量出来的，不是推测）**：ADH 识别加解密有两条路——运行时按**调用到哪个库函数**命名（`crypto_capture`），
