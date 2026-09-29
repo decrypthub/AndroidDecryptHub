@@ -10,12 +10,13 @@
 
 ## 0. 一句话状态
 
-`libadh_agent.so` + Host ADH Daemon + `adh` CLI + 5 个可选后端都已实现。**host 侧门禁不是全绿**：
-2026-09-29（二）在 Linux 接管机上按 `RESULT:` 句柄逐一分类是 **29 PASS / 5 FAIL / 2 SKIP**
-（此前记的 "36/36" 把 2 个 SKIP 算成了 PASS，且其中 2 条 FAIL 是**门禁自身的缺陷**——详见 §2.2 与 `PROGRESS.md`）。
-**device 侧 82 个脚本上一次一个都跑不了**——那是因为当时那台手机没装沙盒（见 §1 A 组），
-**不是代码问题，也不该是你的处境**；本接管机的设备已就绪且**不需要重刷**（§1.3.1）。
-加解密/脱壳/抓包三条线的能力地图与待办见 §5。
+`libadh_agent.so` + Host ADH Daemon + `adh` CLI + 5 个可选后端都已实现。**门禁已全量跑过**：
+2026-09-29（二）在 Linux 接管机上（设备 `aa165071`，未重刷）**103 PASS / 11 FAIL / 4 SKIP**
+（host 36 = 29/5/2，device 82 = 74/6/2）。**11 条 FAIL 没有一条能归到产品代码**：7 条是本机缺
+Windows 工具链/依赖、2 条是**门禁自己的断言缺陷**、2 条是文档已登记的偶发。**device 半段是健康的**
+（赛前预测的 4 条环境噪声全部命中，无意外红）。逐条见 `PROGRESS.md` 2026-09-29（二）。
+加解密/脱壳/抓包三条线的能力地图见 §5——**下一步最该做的是 §5 第一梯队第 1b 条：把那 9 条环境项治掉**，
+否则门禁在这台机器上会一直带着已知噪声。
 
 ---
 
@@ -146,7 +147,16 @@ adb -s <serial> shell getprop ro.build.version.sdk   # 记下 API level（见 §
   - ⚠️ **多设备时 `dev_up.sh` 会挑错设备**：它用 `adb devices | awk 'NR==2{print $1}'` 取第一台，
     而接管机上 `NR==2` 是那台**未授权**的 Google 机（`1A281FDEE003ZV unauthorized`），
     于是 `adb reverse` 静默落在错的设备上、OPPO 上没有隧道、device 脚本连不上 agent。
-    **跑 `dev_up.sh`（以及 `flash_device.sh`）前一律先 `export ANDROID_SERIAL=aa165071`。**
+    **跑 `dev_up.sh`（以及 `flash_device.sh`、`verify_all.sh`）前一律先 `export ANDROID_SERIAL=aa165071`。**
+    注意 `verify_all.sh` 里 `am force-stop`/`am start` 也**不带 `-s`**，所以更依赖这个变量（它由 adb 自己认，
+    一处 export 全覆盖）。
+  - ⚠️ **`tools/frida/node_modules/` 是跨 OS 的坑**：共享树里那份是 **Windows 装的**，
+    带的是 `@esbuild/win32-x64`，于是 `verify_v30_fridagadget.sh` 在 Linux 上 `bundle failed`（`loader rc=1`）。
+    反过来在 Linux 上 `npm install` 也可能顶掉 Windows 那份。**这类依赖不该跟着 SMB 树走。**
+  - ⚠️ **`adhd-data/` 不该放网络盘**：`dex_index.ts:14` 用 `PRAGMA journal_mode = WAL`，
+    而 **SQLite 官方明确说 WAL 不能用于网络文件系统**；当前 2.1 GB 的 `dex-index.sqlite`
+    + 230 MB WAL 就在 SMB 上，最坏情况单次查询 **49 秒**。`DATA_DIR` 目前**写死**在
+    `daemon/src/state.ts:123`，要挪得加 env 覆盖或做软链。
 
 ---
 
@@ -282,7 +292,8 @@ connect 句柄在 Windows 上不可取消）；换 `node:http` 后 `req.setTimeo
 
 | # | 事项 | 验收信号 |
 |---|---|---|
-| **1** | **先跑一遍全量门禁**，把 device 侧的真实状态量出来（很可能有因设备换代/API 不同而红的项）。**红不是坏事，是待办清单**。 | `pass/fail/skip` 数字 + 每条 FAIL 的原因；落进 `FEATURE_STATUS.md` |
+| **1** | ~~**先跑一遍全量门禁**，把 device 侧的真实状态量出来~~ ✅ **2026-09-29（二）已跑**：**103 PASS / 11 FAIL / 4 SKIP**（host 29/5/2，device 74/6/2）。11 条 FAIL **没有一条归到产品代码**：7 条环境、2 条门禁自身缺陷、2 条文档已登记的偶发。**device 半段是健康的**——赛前预测的 4 条环境噪声全部命中，无意外红。详见 `PROGRESS.md` 同日第 7 条。 | 已完成；下一步是把那 9 条环境项治掉（见下） |
+| **1b** | **治掉让门禁变哑的环境项**（这是本轮新暴露的、收益最直接的一类）：① 把 `env.sh:17` / `analysis.ts:12` / `v02_so:10` 的 **Windows 工具链路径改成 host-aware**（`linux-x86_64` vs `windows-x86_64`、POSIX 不拼 `.exe`），并在本机装 `llvm`（apt 有 21.1.6）→ 救回 `v02_so`/`v08_disasm`/`v08_analyze`/`v26_footprint`，`v90` 还额外要 NDK 的 `jni.h`；② **修 `v99`/`v100`/`v101`/`v15_dumpall` 的 `^ℹ fail 0$` 断言**（改成分别接受 `# fail 0` 与 `ℹ fail 0`），并补 `v99` 漏掉的 `exit 1`——那是**门禁自己在骗人**，优先级高于任何新功能；③ 把 `adhd-data/` 挪出 SMB（`DATA_DIR` 目前**写死**在 `state.ts:123`，要加 env 覆盖或做软链）→ 治 `v29` 与那个"58k 方法 dex 索引后首次查询 49 秒"；④ `tools/frida/node_modules` 按平台各装各的（别跟着 SMB 树走）→ 治 `v30`。 | 修完 host 应回到 **34–36 PASS**、`v90` 由 SKIP 转真跑；每条都要有 pass/fail 信号，不许"看起来好了" |
 | **2** | **`adh target` / `adh unpack` 的端到端**（`verify_v100` 的 device 半段从没跑过——写它的时候没有可用 agent） | `target` 报出唯一 agent 与活体事实；`unpack --out` 落盘数量 == `realDexCount`、`--include-carriers` 会改变落盘集合 |
 | **3** | **二代抽取壳闭环**：fixture（按参考仓库形态：抽取 = 把 `PluginClass.getString()` 的 6 字节方法体 `1A 00 87 00 11 00` 清零）+ **还原点**（hook `art::ClassLinker::LoadMethod`，在方法体解密瞬间抓 CodeItem；参考仓库的 mangled 名在 `cyrus_studio_hook.cpp`）+ 把"覆盖率 → 受控触发 → 恢复 → 重建 → 再测覆盖率"串成 **可断言恢复率**的闭环 | 恢复率是**具体数字**；被抽方法重建后与原文 sha 一致；解不动的显式 `unresolvable` 计入分母。**注意**：本机 ROM 的 `libart.so` 被裁过，先确认 `LoadMethod` 符号在不在——不在就得换落点 |
 | **4** | **`mprotect` 读 PROT_NONE**：很多壳把 ELF 头设成 `PROT_NONE`；agent 内部**有** `mprotect`（hook 机制里用）但**没有对外命令**。加一个只读用途的改页 op。 | 对一个被 `PROT_NONE` 的 ELF 头能读出并重建（`so_unpack` 的经典场景） |

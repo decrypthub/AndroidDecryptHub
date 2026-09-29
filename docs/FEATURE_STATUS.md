@@ -9,17 +9,27 @@
 > adh 包，`am start` 报 Activity 不存在），所以 82 个 device 脚本既起不了沙盒也连不上 agent。
 > 要恢复 device 半段：`cd sandbox-app && ./gradlew :app:assembleDebug` + `install_apk_root`。
 >
-> ⚠️ **2026-09-29（二）在 Linux 接管机上重跑 host 子集：29 PASS / 5 FAIL / 2 SKIP，上面那个 36/36 不成立。**
-> 两个原因：① 那条 recipe（`HANDOVER §2.2`）**把 SKIP 算成 PASS**，36 里有 2 个其实是 SKIP
-> （`v90_jni_table_abi` 缺 `jni.h`、`v99_artifact_store` 的重启逻辑是 Windows-only）；
-> ② 5 个 FAIL 逐条查完**没有一个是产品代码坏了**——3 个是缺 Windows 路径下的 LLVM 工具
-> （`v08_disasm`/`v08_analyze`/`v26_footprint`），1 个是**测试自己的缺陷**（`v101` 的断言写死了 node
-> spec reporter 的 `ℹ fail 0`，而管道输出走 TAP，永远匹配不上；单元测试 13/13 实际全过），
-> 1 个是**可复现的结构性超时**（`v29_dexindex` 的 `queryMs<250` 预算照本地磁盘定的，而这台机器把
-> 2.1 GB 的 `dex-index.sqlite` + 230 MB WAL 放在 **SMB 共享**上，实测 466ms；58k 方法的 dex 索引后
-> 首次查询要 **49 秒**）。逐条证据见 `PROGRESS.md` 2026-09-29（二）。
-> **device 半段现在具备条件**：设备已换回参考机 `aa165071`（SDK 35 / arm64 / SukiSU root），
-> 且刷入的模块与 HEAD 逐字节一致（见 §0 交付物表），所以全量门禁**不需要重刷即可跑**。
+> ### ⚠️ 2026-09-29（二）Linux 接管机上的真实数字：**103 PASS / 11 FAIL / 4 SKIP**
+>
+> 分档：**host 36 条 = 29 PASS / 5 FAIL / 2 SKIP**；**device 82 条 = 74 PASS / 6 FAIL / 2 SKIP**。
+> 设备换回参考机 `aa165071`（SDK 35 / arm64 / SukiSU root），刷入的模块与 HEAD 逐字节一致
+> （见 §0 交付物表），**未重刷即跑**。上面那个 "36/36 host" 不成立，原因见下。
+>
+> **11 条 FAIL 逐条查完，没有一条能归到产品代码**，分三类：
+>
+> | 类别 | 脚本 | 根因 |
+> |---|---|---|
+> | **环境（缺 Windows 工具链 / 依赖是 Windows 装的）** 7 条 | `v01` · `v02_so` · `v08_disasm` · `v08_analyze` · `v26_footprint` · `v29_dexindex` · `v30_fridagadget` | `cmake.exe` / `llvm-readelf.exe` / `llvm-objdump.exe` 写死在 Windows NDK 路径（`env.sh:17`、`analysis.ts:12`）；`v29` 是 2.1 GB WAL 模式 SQLite 放在 SMB 上的结构性超时（实测 466ms，预算 250ms；58k 方法的 dex 索引后首次查询 **49 秒**）；`v30` 是 `tools/frida/node_modules/esbuild` 装的是 **`@esbuild/win32-x64`**，Linux 上打不了包 |
+> | **门禁自身缺陷** 2 条 | `v100_adh_cli` · `v101_crypto_variants` | 断言 `grep -qE '^ℹ fail 0$'` 匹配 node **spec reporter**，而命令替换永远是管道 → node 走 **TAP** 打 `# fail 0`，**断言永远不成立**。`v101` 的单元测试实际 **13/13 全过**。同类写法还在 `v99`/`v15_dumpall` 里 |
+> | **文档已登记的偶发/未定因** 2 条 | `v72_site_hooks_cross` · `v22_capture` | `v72` 的失败形态与 §2 记录的**逐字相同**（`scopeAll.siteCount:0` / `hits:3` / `target already hooked by id 1`）；`v22` 是记账不变量的已知抖动 |
+>
+> **4 条 SKIP 也全是环境**：`v37_agent_reconnect`（`netstat -ano \| grep LISTENING` 是 Windows-only）、
+> `v90_jni_table_abi`（缺 NDK 的 `jni.h`——**JNIEnv 228/229 的机检在这台机器上被静默跳过**）、
+> `v32_backend_control`（`gradle unavailable`）、`v99_artifact_store`（重启逻辑 Windows-only）。
+>
+> **方法学订正**：`HANDOVER §2.2` 那条 A 组 recipe 用 `bash tools/$s && echo PASS`，**把 SKIP 算成 PASS**
+> （SKIP 一般 `exit 0`）——这就是 "36/36" 的来源。（`tools/verify_all.sh` 自身分得清，是文档里的 recipe 不对。）
+> 逐条证据见 `PROGRESS.md` 2026-09-29（二）。
 > **发布范围收口提案**（不做/降级的 10 项，含证据与"什么条件下重新考虑"）见 `DEVELOPMENT_PLAN.md §6.9.5`；需求口径修订建议（去特征对抗面、SKIP 分层、信任模型等 7 条）见 `REQUIREMENTS.md` 顶部"口径修订建议"——两者都是**待确认**，确认后合并进正文。
 
 ## 0. 发布物

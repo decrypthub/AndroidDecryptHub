@@ -89,11 +89,42 @@
 → 装 `llvm`（apt 有 21.1.6）能给 daemon 两个工具，但 `env.sh` 得先改成 host-aware；
 `verify_v90` 还要 NDK 的 `jni.h`（sysroot）。
 
+### 7. 全量 118 条门禁已跑完：**103 PASS / 11 FAIL / 4 SKIP**（`HANDOVER §5` 第一梯队第 1 项 ✅）
+
+OPPO 插回并授权后跑 `tools/verify_all.sh`（先 `export ANDROID_SERIAL=aa165071`，见第 8 条）。
+分档：**host 36 = 29 PASS / 5 FAIL / 2 SKIP**；**device 82 = 74 PASS / 6 FAIL / 2 SKIP**。
+设备未重刷（跑前复核四个文件 sha256 仍与 HEAD 一致），`su -c id` → `uid=0(root)`。
+
+**11 条 FAIL 没有一条能归到产品代码**：
+
+| 类别 | 脚本 | 根因 |
+|---|---|---|
+| 环境（缺 Windows 工具链 / 依赖是 Windows 装的）· 7 | `v01` `v02_so` `v08_disasm` `v08_analyze` `v26_footprint` `v29_dexindex` `v30_fridagadget` | `cmake.exe`（`v01`）；`llvm-readelf.exe`/`llvm-objdump.exe` 写死在 Windows NDK 路径（`v02_so:10` / `env.sh:17` / `analysis.ts:12`）；`v29` 见第 5 条；**`v30` 新查出**：`tools/frida/node_modules/esbuild` 装的是 **`@esbuild/win32-x64`**，Linux 上 `bundle failed`，所以 Gadget 脚本打包不了（`loader rc=1`） |
+| **门禁自身缺陷** · 2 | `v100_adh_cli` `v101_crypto_variants` | 第 4 条那个 `^ℹ fail 0$` 断言——**两条都被赛前预测命中** |
+| 文档已登记的偶发/未定因 · 2 | `v72_site_hooks_cross` `v22_capture` | `v72` 失败形态与 `FEATURE_STATUS.md §2` 记录的**逐字相同**（`scopeAll.siteCount:0` / `hits:3` / `scopeNamed` → `target already hooked by id 1`）；`v22` 是那条已知的记账抖动 |
+
+**4 条 SKIP 也全是环境**：`v37_agent_reconnect`（`netstat -ano | grep LISTENING`，Linux 打的是 `LISTEN`
+→ 匹配不上）、`v90_jni_table_abi`（缺 NDK `jni.h`）、`v32_backend_control`（`gradle unavailable`）、
+`v99_artifact_store`（重启逻辑 Windows-only）。**赛前那张"可预期环境噪声"表里 4 条全部命中**，
+没有出现意料之外的红——这一点本身就是结论：**device 半段在这台机器上是健康的**。
+
+对照 2026-09-23 的 `113 PASS / 0 FAIL / 0 SKIP`（当时 34 host + 79 device = 113）：脚本数从 113 长到 118，
+红的全部落在上面这些类别里，**没有一条指向被注入的代码**。
+
+### 8. `verify_all.sh` 自身的多设备隐患（**已发现，未改**）
+
+它开头调 `bash tools/dev_up.sh`（不带 serial），device 脚本前又跑
+`adb shell am force-stop com.adh.sandbox` / `am start`（**也不带 `-s`**）——多设备时都会落到
+`adb devices` 的第一台（本机曾是那台未授权的 Pixel）。**跑之前必须 `export ANDROID_SERIAL=<serial>`**
+（adb 自己认这个变量，所以一处 export 就全覆盖）。这条**没有改代码**，只是记下来。
+
 ### 顺带记录
 
 - `tools/dev_up.sh` 用 `adb devices | awk 'NR==2{print $1}'` 选设备：本机 `NR==2` 是那台**未授权**的
   Google 机，于是 `adb reverse` **静默落在错的设备上**。跑之前必须
   `export ANDROID_SERIAL=aa165071`（`flash_device.sh` 同理）。
+- `tools/frida/node_modules/` 是**跨 OS 共享树上的 Node 依赖**：Windows 装的就带 `@esbuild/win32-x64`，
+  Linux 上跑不了 `v30`；反过来在 Linux 上 `npm install` 也可能顶掉 Windows 那份。**这类依赖不该跟着 SMB 树走。**
 - 容器/主机侧都没改任何被测代码；本轮只改了文档 + 一条 udev 规则。
 
 ## 2026-09-29 —— 变异算法识别：补上"加解密"这一项的整类漏检 ✅
