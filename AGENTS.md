@@ -116,25 +116,26 @@ Each layer has a `MAP.md` — read it before editing that layer:
 
 
 
-## Test device (READ THE CONSTRAINT BEFORE USING IT)
+## Test device (which phone you have decides everything)
 
-- **There is NO rooted device available for you.** The unit on `adb devices` is `a22fecdd` — OnePlus PGP110,
-  **Android 15 / SDK 35**, `arm64-v8a` — and it is the user's **daily driver, deliberately NOT rooted**
-  (verified 2026-09-29: `id` → `uid=2000(shell)`, `which su` → nothing, `ls /data/adb` → permission denied).
-- **Do not flash it, do not install anything on it, do not start/stop apps on it.** `tools/flash_device.sh`
-  (Zygisk/Magisk module) and `install_apk_root` (`su` + `pm install`) cannot work here and must not be tried.
-  `tools/dev_up.sh` also runs `adb reverse` against whatever is attached — skip it for host-only work.
-- **The device half of the gate is dead right now**: the sandbox app is not installed
-  (`pm list packages | grep adh` is empty), so all 82 device scripts fail or hang waiting for an agent that never
-  connects. **Do not run the full `tools/verify_all.sh`** — the host subset is in `docs/HANDOVER.md` §2.2.
-- Want a real target without touching that phone? An AVD exists (`Pixel_6_Pro`, image `android-37.1/x86_64`);
-  check its two blockers first (ABI: x86_64 image vs the arm64-v8a-only agent; API: 37 vs the ART resolver's
-  SDK 35/36 coverage). Details in `docs/HANDOVER.md` §1.3.
-- **`docs/HANDOVER.md` is the onboarding doc** — environment truth, the pitfalls not written anywhere else, and
-  what is deliverable with no device and no root. Read it before planning work.
-- Still true and worth keeping: per-API-level ART resolvers (SDK 35 primary, 36 secondary); primary agent ABI is
-  `arm64-v8a`; this ColorOS ROM ships a **heavily stripped `libart.so`**; the verified native inline-hook backend
-  is Dobby (`tools/fetch_dobby.sh`), with LSPlant v6.4 an optional Java-hook backend linked in only when
+- **The handover machine gets a rooted, flashable phone from the user.** With it the normal path is open:
+  `tools/flash_device.sh` (KernelSU/Magisk), `install_apk_root` (`su` + `pm install`), and the full
+  `tools/verify_all.sh` (118 = 36 host + 82 device). **Record the device facts** (model / API level / ABI /
+  root method / serial) in `docs/HANDOVER.md` §1.3 — the ART structure resolver is validated on **SDK 35
+  (primary) / 36 (secondary)**, so a different API level means "extend the resolver" is your first task,
+  not "the tool is broken".
+- **On the original Windows workstation there is NO rooted device.** The unit there (`a22fecdd`, PGP110 /
+  Android 15 / SDK 35 / arm64-v8a) is the user's **daily driver and deliberately unrooted** (verified
+  2026-09-29: `id` → `uid=2000(shell)`, no `su`, `/data/adb` permission denied). Do not flash it, install
+  anything on it, or start/stop apps on it; `tools/dev_up.sh` also runs `adb reverse` against whatever is
+  attached, so skip it for host-only work. The sandbox app is not installed there, so all 82 device scripts
+  fail or hang waiting for an agent — **do not run the full `verify_all.sh` on that machine**; the host-subset
+  recipe (36/36 on 2026-09-29) is in `docs/HANDOVER.md` §2.2.
+- **`docs/HANDOVER.md` is the onboarding doc** — environment truth by machine profile, the pitfalls not
+  written anywhere else, and the todo list with acceptance signals. Read it before planning work.
+- Unchanged and still true: primary agent ABI is `arm64-v8a`; keep **per-API-level ART resolvers**; this
+  ColorOS ROM ships a **heavily stripped `libart.so`**; the verified native inline-hook backend is Dobby
+  (`tools/fetch_dobby.sh`), with LSPlant v6.4 an optional Java-hook backend linked in only when
   `tools/fetch_lsplant.sh` has prepared its pinned sources.
 
 ## Boundaries
