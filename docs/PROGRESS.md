@@ -118,6 +118,87 @@ OPPO 插回并授权后跑 `tools/verify_all.sh`（先 `export ANDROID_SERIAL=aa
 `adb devices` 的第一台（本机曾是那台未授权的 Pixel）。**跑之前必须 `export ANDROID_SERIAL=<serial>`**
 （adb 自己认这个变量，所以一处 export 就全覆盖）。这条**没有改代码**，只是记下来。
 
+### 9. 门禁守卫修复：把"永远匹配不上"的断言收成一处实现 ✅
+
+第 4 条那两个缺陷（`v100` / `v101`）已修，并**顺带发现 `v15_dumpall` 和 `v99` 犯的是同一个错**——
+两处都是**打印 `RESULT:FAIL` 之后没有 `exit 1`**，继续往下跑，最后由后面的 `verify_gate` 用
+`RESULT:PASS` 把失败**盖成通过**。所以"失败被洗成绿"是**两处**，不是一处。
+
+**修法：加一个共享 helper，不再各抄一份**（`tools/lib/verify_common.sh`）：
+
+```bash
+verify_unit_pass "<label>" <test-file> [min_pass]
+```
+
+它做四件事：① 解析**两种** reporter（`ℹ fail N` spec / `# fail N` TAP）并先剥 ANSI；② 要求
+`rc == 0`；③ 要求 `fail == 0`；④ **要求 `pass >= min_pass`**（下限）。调用点：
+`v101`(13) / `v99`(8) / `v15_dumpall`(4) 改用 helper 并 `exit 1`；`v100` 的断言在 JS heredoc 里，
+按同样口径改（`unit.status===0 && fail===0 && pass>=10`，并剥 ANSI）。
+
+**为什么必须带下限**：`node --test` 对一个**加载失败的**测试文件也可能退 0，只查 `fail 0` 会放过
+"静默空跑"；下限同时挡住"用例被删光还绿"。
+
+**按 §3.1 验牙齿**（不是只看它变绿）——把被测能力临时破坏，断言守卫必须红。5 项全过：
+
+| 齿检 | 结果 |
+|---|---|
+| 真跑通过 → 绿 | OK |
+| 塞一个**必然失败**的用例 → 必须红 | OK 红 |
+| 测试文件**不存在** → 必须红（防静默空跑） | OK 红 |
+| `min_pass` 高于实际用例数 → 必须红；等于 → 绿 | OK 红 / OK 绿 |
+| 两种 reporter + **带 ANSI** 的 spec 输出都能解析 | `#`/`ℹ`/带色 `ℹ` 三种输入都正确取到数字 |
+
+（探针测试文件用完即删，已确认不在仓里。）
+
+**逐个复跑结果**：
+
+| 脚本 | 修复前 | 修复后 |
+|---|---|---|
+| `v101_crypto_variants.sh` | FAIL（单元门假红） | 单元门 `pass=13 fail=0 rc=0` → 第 2 步**如实 SKIP**（本机没 clang）。装上工具链后会真跑第 3+4 步 |
+| `v99_artifact_store.sh` | **假 SKIP**（`RESULT:FAIL` 被洗掉） | 单元门 `pass=8 fail=0` → 之后如实 SKIP（重启逻辑仍 Windows-only） |
+| `v15_dumpall.sh` | 结局对、但失败会被洗掉 | 单元门 `pass=4 fail=0` → **device 段全绿 `RESULT:PASS`**（4 dex dump/去重/下载/分类/索引） |
+| `v100_adh_cli.sh` | FAIL（单元门假红） | **22 checks / 0 problems 全绿** |
+
+`v100` 转绿还**顺带完成了 `HANDOVER §5` 第一梯队第 2 项**：`adh target` / `adh unpack` 的
+**真机端到端第一次真正跑过**（"target resolves the agent and reports live facts"、
+"unpack classifies every DexFile (real vs carrier)"、"--out is consumed: one file per REAL dex
+lands on disk with the reported byte count" 全过）——此前 `FEATURE_STATUS` 记的是"真机端到端尚未验证"。
+
+### 10. `v100` 在门禁里是**另一条** bug 导致的红（修完后另发现 2 个真缺陷）
+
+修完第 9 条后全量复跑，`v101` 如期由红转 SKIP，但 **`v100` 仍然红**——且**不是**断言失败，是
+**JS 异常崩溃**：`[eval1]:157:49`。两轮门禁的崩溃行号相差正好 8 行 = 我那次编辑加的行数，
+即**同一逻辑行**。追下去是**两个独立于本次修复的真缺陷**：
+
+**(a) `v100` 里 4 处裸解引用 `report.dexCount` 让脚本崩掉，把真失败藏在栈里。**
+`report = dryJson?.report`（dry `unpack` 没产出可解析报告时是 `undefined`），同段其它每一处都写了
+`report?.`，只有 `--include-carriers` 那两行的 4 处是裸的 → `TypeError: Cannot read properties of
+undefined (reading 'dexCount')`，**整个脚本当场挂掉**，`problems` 一条都打不出来。
+改成 `report?.dexCount` 后不再崩，而是**如实判负**并打出 `expected=undefined`。
+（齿检：`node -e` 直接对 `undefined` 跑两种写法——旧写法抛 TypeError，新写法表达式为 `false`、报文可读。）
+
+**(b) `adh doctor` 会把**已经退出的进程**当成"刷入的 agent"，于是刷机升级后**永远报 MISMATCH**。**
+`daemon/src/cli.ts` 的版本配对循环遍历注册表里**所有** agent，**不筛 `online`**。
+实测注册表里有 4 条：3 条 `offline`（其中 `com.adh.manager agentVer=0.2.0` 是**好几次刷机之前**留下的
+进程记录）+ 1 条 `online`（`0.3.12`）。于是源码 `0.3.12` 与模块 `v0.3.12` 明明一致，
+`doctor` 却报 `MISMATCH with the flashed agent` 并 `❌ FAIL` ——而**磁盘上的 .so 本来就是新的，
+"重刷"根本治不好**。这正好砸在 `HANDOVER §2.5` 说的用途上（"doctor 会直接告诉你该不该重刷"）。
+修法：只把 **`online`** 的进程算作"刷入的 agent"，并把忽略掉的 offline 条数**显式报出来**
+（`in-sync with the running agent (3 offline session(s) ignored)`），不再用
+`problems.some(p => p.includes('runs agent'))` 这种字符串反查来推 drift。
+
+**齿检（§3.1：必须证明警报没被捂死）**：把 `agent_internal.h` 的 `AGENT_VER` 与 `module.prop` 的
+`version=` 一起改成假值 `9.9.9-TEETH`，`doctor` **立刻**报
+`MISMATCH with the running agent` + `❌ doctor FAIL`，并点名
+`com.adh.sandbox (pid 13242) runs agent 0.3.12 but this checkout builds 9.9.9-TEETH — rebuild+reflash: …`。
+改完用备份还原，`git status` 干净、两个值回到 `0.3.12` / `v0.3.12`。
+→ **假阳性去掉了，真检测还在，而且现在会报 pid。**
+
+**(c) 顺带观察（未修）**：`/api/agents` 会**永久累积已退出的会话**——一轮全量门禁把沙盒
+`force-stop`/`start` 了 82 次，注册表就积到 `agents 4`（3 offline + 1 online），且只增不减。
+`doctor` 的 listing 会越来越长。已有 `v35_sessions` 覆盖会话清理，但**门禁自身没有清理步骤**，
+所以这是个"跑几轮就越来越吵"的问题，值得单独处理。
+
 ### 顺带记录
 
 - `tools/dev_up.sh` 用 `adb devices | awk 'NR==2{print $1}'` 选设备：本机 `NR==2` 是那台**未授权**的

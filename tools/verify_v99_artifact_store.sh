@@ -18,11 +18,9 @@ set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
 verify_resolve_env_host
 
-UNIT="$(cd "$ROOT/daemon" && node --test test/artifact_store.test.ts 2>&1)"
-echo "$UNIT" | grep -E '^# (pass|fail)|^ℹ (pass|fail)' || true
-if ! grep -qE '^ℹ fail 0$' <<<"$UNIT"; then
-  echo "$UNIT" | tail -20
+if ! verify_unit_pass "artifact-store eviction policy" artifact_store.test.ts 8; then
   echo "RESULT:FAIL (eviction-policy unit tests did not all pass)"
+  exit 1
 fi
 
 DAEMON_PID="$(netstat -ano 2>/dev/null | grep -E "0\.0\.0\.0:$HTTP[[:space:]]" | grep -i LISTENING | awk '{print $5}' | head -1)"

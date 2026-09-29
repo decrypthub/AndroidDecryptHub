@@ -377,14 +377,20 @@ async function cmdDoctor(ctx: Ctx): Promise<number> {
     if (repo.agentVer && repo.moduleVersion && normVer(repo.agentVer) !== normVer(repo.moduleVersion)) {
       problems.push(`agent/src AGENT_VER (${repo.agentVer}) and module.prop (${repo.moduleVersion}) disagree — they must be bumped together (agent/src/MAP.md)`);
     }
-    for (const a of agents) {
-      if (a.agentVer && repo.agentVer && normVer(a.agentVer) !== normVer(repo.agentVer)) {
-        problems.push(`${a.package} runs agent ${a.agentVer} but this checkout builds ${repo.agentVer} — rebuild+reflash: bash tools/build_agent.sh && bash tools/flash_device.sh --reboot`);
-      }
+    // Only ONLINE agents count as "the flashed agent". An offline entry is a process that has already
+    // exited, and its agentVer is whatever was loaded when it started — the ADH Manager process in
+    // particular lingers from flashes several versions back. Comparing those made doctor report
+    // MISMATCH indefinitely after an upgrade, pointing at a reflash that cannot fix anything: the
+    // .so on disk is already current, the stale number came from a process that is gone.
+    const running = agents.filter((a) => a.online !== false);
+    const drifted = running.filter(
+      (a) => a.agentVer && repo.agentVer && normVer(a.agentVer) !== normVer(repo.agentVer));
+    for (const a of drifted) {
+      problems.push(`${a.package} (pid ${a.pid}) runs agent ${a.agentVer} but this checkout builds ${repo.agentVer} — rebuild+reflash: bash tools/build_agent.sh && bash tools/flash_device.sh --reboot`);
     }
-    if (agents.length && repo.agentVer) {
-      const drift = problems.some((p) => p.includes('runs agent'));
-      say(ctx, `  ${drift ? 'MISMATCH' : 'in-sync'} with the flashed agent`);
+    if (running.length && repo.agentVer) {
+      const ignored = agents.length - running.length;
+      say(ctx, `  ${drifted.length ? 'MISMATCH' : 'in-sync'} with the running agent${ignored ? ` (${ignored} offline session(s) ignored)` : ''}`);
     }
   }
 

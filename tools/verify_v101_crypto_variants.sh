@@ -19,10 +19,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
 verify_resolve_env_host
 
 # --- 1. the detector's own unit tests (pure, no daemon, no compiler) --------------------------
-UNIT="$(cd "$ROOT/daemon" && node --test test/crypto_variants.test.ts 2>&1)"
-echo "$UNIT" | grep -E '^# (pass|fail)|^ℹ (pass|fail)' || true
-if ! grep -qE '^ℹ fail 0$' <<<"$UNIT"; then
-  echo "$UNIT" | tail -20
+if ! verify_unit_pass "crypto-variant detector" crypto_variants.test.ts 13; then
   echo "RESULT:FAIL (crypto-variant unit tests did not all pass)"
   exit 1
 fi

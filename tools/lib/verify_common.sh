@@ -89,6 +89,39 @@ verify_gate() {
 verify_grep_q() { grep -q "$2" <<<"$1"; }
 
 # ---------------------------------------------------------------------------
+# node --test unit gate (scripts whose subject has pure unit tests)
+# ---------------------------------------------------------------------------
+
+# verify_unit_pass <label> <test-file> [min_pass]
+# Runs `node --test test/<test-file>` from daemon/ and returns 0 only when the run exits
+# clean AND its own summary reports zero failures. [min_pass] asserts a floor on the
+# passing count, so a test file that silently stopped loading — or lost cases — cannot
+# pass vacuously.
+#
+# Parses BOTH summary shapes node emits for the same run:
+#   ℹ fail 0  — spec reporter, used only when stdout is a TTY (or colour is forced)
+#   # fail 0  — TAP reporter, used whenever stdout is NOT a TTY
+# The callers capture output with `UNIT="$(…)"`, i.e. command substitution, i.e. a pipe —
+# so they always get TAP. The spec-only pattern this replaces (`grep -qE '^ℹ fail 0$'`)
+# was hand-copied into three scripts and could never match there: each one reported
+# FAIL regardless of what the tests actually did. Keep new unit gates on this helper.
+verify_unit_pass() {
+  local label="$1" testfile="$2" min_pass="${3:-0}"
+  local raw rc clean passes fails
+  raw="$(cd "$ROOT/daemon" && node --test "test/$testfile" 2>&1)"; rc=$?
+  # Strip ANSI: a TTY or a forced colour level makes the spec reporter wrap its lines.
+  clean="$(printf '%s\n' "$raw" | sed $'s/\033\\[[0-9;]*[a-zA-Z]//g')"
+  passes="$(grep -m1 -oE '^(#|ℹ) pass [0-9]+$' <<<"$clean")"; passes="${passes##* }"
+  fails="$(grep -m1 -oE '^(#|ℹ) fail [0-9]+$' <<<"$clean")"; fails="${fails##* }"
+  echo "  $label: unit pass=${passes:-?} fail=${fails:-?} rc=$rc (floor $min_pass)"
+  if [ "$rc" = "0" ] && [ "${fails:-1}" = "0" ] && [ "${passes:-0}" -ge "$min_pass" ]; then
+    return 0
+  fi
+  printf '%s\n' "$raw" | tail -20
+  return 1
+}
+
+# ---------------------------------------------------------------------------
 # host-only chk accumulator idiom
 # (verify_v10_webui.sh / verify_v19_settings.sh / v0.8 / v0.9 host analyzers)
 # ---------------------------------------------------------------------------

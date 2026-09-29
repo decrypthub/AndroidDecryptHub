@@ -10,11 +10,9 @@ verify_resolve_env_host
 
 # The shape rule (real code vs a packer carrier) is pure and is pinned against the real Chaoxing
 # numbers here, because the sandbox has no carrier to demonstrate it on.
-UNIT="$(cd "$ROOT/daemon" && node --test test/dex_artifact_shape.test.ts 2>&1)"
-echo "$UNIT" | grep -E '^ℹ (pass|fail)' || true
-if ! grep -qE '^ℹ fail 0$' <<<"$UNIT"; then
-  echo "$UNIT" | tail -20
+if ! verify_unit_pass "dex artifact shape rule" dex_artifact_shape.test.ts 4; then
   echo "RESULT:FAIL (dex shape unit tests did not all pass)"
+  exit 1
 fi
 
 set +e

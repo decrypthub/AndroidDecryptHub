@@ -64,9 +64,17 @@ const run = (args, opts = {}) => {
 
 // ---- 1. the flag contract's unit tests -------------------------------------------------------
 const unit = spawnSync('node', ['--test', 'test/cli_args.test.ts'], { encoding: 'utf8', cwd: join(root, 'daemon') });
-const unitOut = `${unit.stdout ?? ''}${unit.stderr ?? ''}`;
+// spawnSync gives the child a pipe, so `node --test` uses the TAP reporter ('# fail 0') and never
+// the spec reporter's 'ℹ fail 0' — matching only the latter made this check fail unconditionally.
+// Strip ANSI first (a forced colour level wraps the spec lines), accept both reporters, and require
+// a floor on the passing count so a file that stopped loading cannot pass vacuously. The shell-side
+// equivalent is verify_unit_pass in tools/lib/verify_common.sh — keep the two in step.
+const unitOut = `${unit.stdout ?? ''}${unit.stderr ?? ''}`.replace(/\u001b\[[0-9;]*[a-zA-Z]/g, '');
+const unitPass = Number(/^(?:#|ℹ) pass (\d+)$/m.exec(unitOut)?.[1] ?? -1);
+const unitFail = Number(/^(?:#|ℹ) fail (\d+)$/m.exec(unitOut)?.[1] ?? -1);
 chk('flag-contract unit tests pass (declared == consumed, ambiguity is an error)',
-  /^ℹ fail 0$/m.test(unitOut), (unitOut.match(/^ℹ (pass|fail) \d+$/gm) ?? []).join(' '));
+  unit.status === 0 && unitFail === 0 && unitPass >= 10,
+  `rc=${unit.status} pass=${unitPass} fail=${unitFail}`);
 
 // ---- 2. architecture: the CLI is a CLIENT, not a second server -------------------------------
 const src = readFileSync(cli, 'utf8');
@@ -183,14 +191,17 @@ try { allJson = JSON.parse(withCarriers.out); } catch { /* reported below */ }
 const allFiles = existsSync(dirAll) ? readdirSync(dirAll) : [];
 if (Number(report?.carrierCount ?? 0) > 0) {
   chk('--include-carriers is consumed: it changes how many files land on disk',
-    withCarriers.code === 0 && allFiles.length === report.dexCount && allFiles.length > files.length,
-    `files=${allFiles.length} expected=${report.dexCount} (real-only was ${files.length})`);
+    withCarriers.code === 0 && allFiles.length === report?.dexCount && allFiles.length > files.length,
+    `files=${allFiles.length} expected=${report?.dexCount} (real-only was ${files.length})`);
 } else {
   // Honest about a vacuous check rather than counting it as a pass: this target has no carrier dex,
   // so the two flag settings cannot differ (the SecNeo carrier case is in CASE_STUDIES case 1).
+  // `report?.` matters here: when the dry `unpack` above did not return a parsable report, a bare
+  // `report.dexCount` THREW and took the whole script down — hiding the real failure behind a
+  // stack trace. Every sibling check already used `report?.`; these two were the exception.
   chk('--include-carriers is consumed (no carrier on this target: only the count is checkable)',
-    withCarriers.code === 0 && allFiles.length === report.dexCount,
-    `files=${allFiles.length} expected=${report.dexCount}`);
+    withCarriers.code === 0 && allFiles.length === report?.dexCount,
+    `files=${allFiles.length} expected=${report?.dexCount}`);
   note('(vacuous here: carrierCount=0, so --include-carriers cannot change the set)');
 }
 

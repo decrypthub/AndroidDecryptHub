@@ -20,7 +20,7 @@
 > | 类别 | 脚本 | 根因 |
 > |---|---|---|
 > | **环境（缺 Windows 工具链 / 依赖是 Windows 装的）** 7 条 | `v01` · `v02_so` · `v08_disasm` · `v08_analyze` · `v26_footprint` · `v29_dexindex` · `v30_fridagadget` | `cmake.exe` / `llvm-readelf.exe` / `llvm-objdump.exe` 写死在 Windows NDK 路径（`env.sh:17`、`analysis.ts:12`）；`v29` 是 2.1 GB WAL 模式 SQLite 放在 SMB 上的结构性超时（实测 466ms，预算 250ms；58k 方法的 dex 索引后首次查询 **49 秒**）；`v30` 是 `tools/frida/node_modules/esbuild` 装的是 **`@esbuild/win32-x64`**，Linux 上打不了包 |
-> | **门禁自身缺陷** 2 条 | `v100_adh_cli` · `v101_crypto_variants` | 断言 `grep -qE '^ℹ fail 0$'` 匹配 node **spec reporter**，而命令替换永远是管道 → node 走 **TAP** 打 `# fail 0`，**断言永远不成立**。`v101` 的单元测试实际 **13/13 全过**。同类写法还在 `v99`/`v15_dumpall` 里 |
+> | **门禁自身缺陷** 2 条 | `v100_adh_cli` · `v101_crypto_variants` | 断言 `grep -qE '^ℹ fail 0$'` 匹配 node **spec reporter**，而命令替换永远是管道 → node 走 **TAP** 打 `# fail 0`，**断言永远不成立**。`v101` 的单元测试实际 **13/13 全过**。同类写法还在 `v99`/`v15_dumpall` 里。**✅ 这 4 处已于同日修掉**（收成 `verify_unit_pass`，附 5 项齿检）；`v100` 转 **22 checks/0 problems**、`v15_dumpall` device 段全绿、`v101` 由假红变如实 SKIP、`v99` 不再把 `RESULT:FAIL` 洗成假绿——详见 `PROGRESS.md` 同日第 9 条 |
 > | **文档已登记的偶发/未定因** 2 条 | `v72_site_hooks_cross` · `v22_capture` | `v72` 的失败形态与 §2 记录的**逐字相同**（`scopeAll.siteCount:0` / `hits:3` / `target already hooked by id 1`）；`v22` 是记账不变量的已知抖动 |
 >
 > **4 条 SKIP 也全是环境**：`v37_agent_reconnect`（`netstat -ano \| grep LISTENING` 是 Windows-only）、
@@ -78,7 +78,7 @@
 | 设备侧后端（Zygisk/Manager） | v27_zygisk, v32_backend_control, **v75(memfd)**, **v98(注入路径的 Java 面)** | scope 往返；后端状态/作用域可控并恢复；**agent 从 memfd 加载**（目标 maps 无模块路径，目标内自证 + ELF 头） |
 | 可选后端 | v30, v31, v34 | 官方二进制 + sha256 固定；Xposed Java bridge；eCapture 抓明文 |
 | 控制面 / MCP / Web | v10_mcp, v10_webui, v10_export, v10_events, v19_settings, v33_backends, v35_sessions, **v71(registry)**, **v80(trace digest)**, **v83(java trace)**, **v84(native batch)**, **v85(一站式 syscall)**, **v86(throttle)**, **v87(MCP 可操作性)** | MCP 67 个工具可调；注册表形状自检；Web UI；会话清理 |
-| **`adh` 命令行** | **v100** | `doctor`（daemon 健康 + **刷入的 agent 版本 vs 本仓源码版本**配对 + 后端矩阵）· `target`（解析**唯一** agent——歧义时报错而不是静默换进程——并报活体事实）· `unpack`（一键 `dump_all_dex` + 逐 dex 分类 + `--out` 落盘）；纯客户端（只 import `config.ts`，可打远程 daemon）。**每个 flag 都由效果证**：`--port`/`--host` 由错误里的 base URL、`--timeout` 由"2 秒预算真的在 ~2s 内结束"、`--json` 由输出形状、`--package`/`--session` 由它拒绝解析的目标、`--out`/`--include-carriers` 由落盘文件数。它是"找在线 agent 取 session"这段逻辑的**唯一实现**（此前 76 个 verify 脚本各抄一份）。**`target`/`unpack` 的真机端到端尚未验证**（见页首 2026-09-28 说明） |
+| **`adh` 命令行** | **v100** | `doctor`（daemon 健康 + **刷入的 agent 版本 vs 本仓源码版本**配对 + 后端矩阵）· `target`（解析**唯一** agent——歧义时报错而不是静默换进程——并报活体事实）· `unpack`（一键 `dump_all_dex` + 逐 dex 分类 + `--out` 落盘）；纯客户端（只 import `config.ts`，可打远程 daemon）。**每个 flag 都由效果证**：`--port`/`--host` 由错误里的 base URL、`--timeout` 由"2 秒预算真的在 ~2s 内结束"、`--json` 由输出形状、`--package`/`--session` 由它拒绝解析的目标、`--out`/`--include-carriers` 由落盘文件数。它是"找在线 agent 取 session"这段逻辑的**唯一实现**（此前 76 个 verify 脚本各抄一份）。**`target`/`unpack` 的真机端到端已于 2026-09-29（二）验证**：`v100` 真机 **22 checks / 0 problems**，含 `target` 报出唯一 agent + 活体事实、`unpack` 逐 dex 分类、`--out` 每个真 dex 落盘且字节数与报告一致。（页首 2026-09-28 那条"尚未验证"已作废。） |
 | 手机自动化（模块 X） | 已退役，不纳入验收范围 | AI Agent 直接使用 adb 操作手机；ADH 不再提供 AccessibilityService、通知读取、phone_* MCP 工具或设备输入控制桥 |
 | 注入足迹 | v26_footprint, v01 | release 剥离 + 仅 3 个动态导出 + 无 RWX LOAD |
 | 字符串去特征 | **v88**, scan_agent_signatures, patch_vendor_signatures | 自己的 tag/文案/自名/fixture 默认值全部清零（含 DT_SONAME）；vendored LSPlant 的三处（含运行时 dex source name）由 fetch 期补丁清掉并机检；剩余 Dobby/导出/Java bridge 等按只许降预算记账；门禁带**负对照**（植入 token 必须被抓到） |

@@ -19,6 +19,7 @@ API:
 | `verify_restart_sandbox` | Force-stops and relaunches the sandbox, then waits for startup. Use before scans of mutable syscall/native code sites or broad JNI hook probes so earlier checks cannot leave live patches behind. |
 | `verify_gate "<label>" <0\|1>` | Reads `$OUT` for `RESULT:PASS`. Returns 0 on pass; if arg2=1, also requires non-empty `$ALIVE`. Prints the ✅/❌ line. Uses here-string grep (SIGPIPE-safe — the `echo\|grep -q` pattern false-fails on >64KB payloads under `pipefail`). |
 | `verify_grep_q <haystack> <pattern>` | SIGPIPE-safe `grep -q` for host scripts grepping large HTML. |
+| `verify_unit_pass "<label>" <test-file> [min_pass]` | Runs `node --test test/<test-file>` from `daemon/`; returns 0 only if the run exits clean **and** its summary reports zero failures, **and** the passing count meets `min_pass`. Use this for every script that gates on `node --test` — it parses **both** reporters node emits (`ℹ fail 0` spec / `# fail 0` TAP) and strips ANSI. Don't hand-roll the grep: the old `grep -qE '^ℹ fail 0$'` pattern was copied into three scripts and **could never match**, because capturing output with `UNIT="$(…)"` is a pipe, i.e. always TAP. `min_pass` also closes the silent-vacuous-pass hole (a test file that stops loading still exits 0). |
 | `verify_host_begin` / `verify_chk "<label>" '<expr>'` / `verify_host_finish "<label>"` | The chk-accumulator idiom for host scripts with many assertions (replaces the inline `fail=0; chk(){…}` redefinition). |
 | `install_apk_root <apk> [remote] [serial]` | Root `push` + `pm install -r -t` (from `env.sh`). Never `adb install` — ColorOS waits on USB confirm. |
 
@@ -34,11 +35,12 @@ touch shell options; the caller's `set -e/-u/-o pipefail` stands. Git Bash `pwd`
 see `X:/...`. WSL builds use `wsl_env.sh` instead (different SDK discovery + path
 translation — kept separate).
 
-## Script shapes (three coexist by design)
+## Script shapes (four coexist by design)
 
 1. **Device node-heredoc + ALIVE gate** — `verify_resolve_env` + `set +e; OUT="$(node …)"` + `verify_sandbox_alive` + `verify_gate "label" 1`. e.g. `verify_v04_crypto.sh`, `verify_v22_capture.sh`, `verify_v26_cryptocoverage.sh`.
 2. **Device/host node-heredoc, no ALIVE** — `verify_resolve_env[_host]` + heredoc + `verify_gate "label" 0`. e.g. `verify_v18_loadso.sh`, `verify_v10_mcp.sh`, `verify_v08_*`.
 3. **Host chk-accumulator** — `verify_resolve_env_host` + `verify_host_begin` + `verify_chk`×N + `verify_host_finish "label"`. e.g. `verify_v10_webui.sh`, `verify_v19_settings.sh`.
+4. **`node --test` unit gate** — `verify_unit_pass "<label>" <test-file> <min_pass>`, usually as step 1 before the capability half. e.g. `verify_v101_crypto_variants.sh`, `verify_v99_artifact_store.sh`, `verify_v15_dumpall.sh`. **Always use the helper** — see the `verify_unit_pass` row above for why a hand-rolled grep here is a trap. If the check lives inside a JS heredoc instead (like `verify_v100_adh_cli.sh`), mirror the helper's logic: accept `#`/`ℹ`, strip ANSI, require `rc===0`, and floor the passing count.
 
 `verify_v01.sh` is the bootstrap outlier (full build+deploy+maps-verbatim chain, `process.exit(code)+exit $RC` idiom) — left hand-rolled, do not force into the common mold.
 `verify_v02_so.sh` / `verify_v10_qbdi.sh` / `verify_v10_events.sh` have custom footers (readelf pipeline / 3-way SKIP gate / curl+`node -e`) — header-only conversion, custom gate kept verbatim.
@@ -48,6 +50,7 @@ translation — kept separate).
 1. Copy `verify_v04_crypto.sh` as the closest template (device) or `verify_v10_webui.sh` (host-chk).
 2. Source `lib/verify_common.sh`, call `verify_resolve_env` (device) or `verify_resolve_env_host` (host).
 3. Write the unique test as a `node - "$HTTP" [args] <<'EOF' … EOF` heredoc that prints exactly one `RESULT:PASS` or `RESULT:FAIL` line (use `process.exit(0)` on the fail path so `set +e` isn't needed... but keep `set +e` before the `OUT=$(…)` capture anyway — node may throw).
+   If the subject has pure unit tests, gate them **first** with `verify_unit_pass` (shape 4) and `exit 1` on failure — a script that prints `RESULT:FAIL` for its unit gate and then keeps going will have that failure overwritten by the later `RESULT:PASS`. (`verify_v99` and `verify_v15_dumpall` both shipped that bug; both are fixed.)
 4. `echo "$OUT"` for diagnostics, then `verify_gate "<descriptive label>" <0|1> && exit 0 || exit 1`.
    **Missing preconditions are SKIPs, not passes**: print `SKIP <script> (<reason>)` and `exit 0`
    *without* the `RESULT:PASS` sentinel (and return before `verify_gate`). `verify_all.sh` counts a
