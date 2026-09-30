@@ -164,7 +164,10 @@ chk('--session is consumed: a pinned session that does not exist fails (exit 1)'
 const quiet = run(['target', '--package', pkg, '--quiet']);
 chk('--quiet is consumed: it prints exactly the session id and nothing else',
   quiet.code === 0 && quiet.out.trim() === online[0].sessionId && quiet.out.trim().split('\n').length === 1,
-  `stdout=${JSON.stringify(quiet.out)}`);
+  // exit + stderr, not just stdout: this check fails inside the full gate (5/5 runs so far) while
+  // passing standalone and under the gate's own force-stop/start/sleep-4 timing. Reporting only
+  // `stdout=""` left the cause unknown; the CLI's exit code and message are what identify it.
+  `exit=${quiet.code} stdout=${JSON.stringify(quiet.out)} stderr=${JSON.stringify(quiet.err.trim().slice(0, 200))}`);
 
 const dry = run(['unpack', '--package', pkg, '--json']);
 let dryJson = null;
@@ -172,7 +175,7 @@ try { dryJson = JSON.parse(dry.out); } catch { /* reported below */ }
 const report = dryJson?.report;
 chk('unpack classifies every DexFile (real vs carrier) and saves nothing without --out',
   dry.code === 0 && report?.dexCount >= 1 && dryJson?.saved?.length === 0 && report?.realDexCount >= 1,
-  `exit=${dry.code} dex=${report?.dexCount} real=${report?.realDexCount} saved=${dryJson?.saved?.length}`);
+  `exit=${dry.code} dex=${report?.dexCount} real=${report?.realDexCount} saved=${dryJson?.saved?.length} stderr=${JSON.stringify(dry.err.trim().slice(0, 200))}`);
 
 const dirReal = mkdtempSync(join(tmpdir(), 'adh-cli-real-'));
 const saved = run(['unpack', '--package', pkg, '--out', dirReal, '--json']);
