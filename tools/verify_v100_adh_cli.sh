@@ -136,11 +136,19 @@ chk('--quiet and --json are refused together instead of silently choosing one',
 // ---- 6. the agent-dependent half -------------------------------------------------------------
 let agents = [];
 try { agents = await (await fetch(`${base}/api/agents`)).json(); } catch { agents = []; }
-const online = agents.filter((a) => a.online);
+// Filter by PACKAGE, not merely "online". The ADH Manager app is injected by the same Zygisk module
+// and registers as an agent of its own, so after any script that launches it — verify_v31_xposed
+// runs immediately before this one — `online[0]` was the Manager. Every agent-dependent assertion
+// below then ran against a process that cannot dump dexes (`HTTP 504 command timeout`, "agent did
+// not answer agent_ping"), which is exactly why this script failed in EVERY full gate run and passed
+// every standalone run: standalone, nothing had started the Manager.
+const SANDBOX = 'com.adh.sandbox';
+const online = agents.filter((a) => a.online && a.package === SANDBOX);
 if (!online.length) {
   console.log(`daemon checks passed: ${checks.length}`);
   console.log(`  ${checks.join('\n  ')}`);
-  console.log('no online agent — the target/unpack half (and their flags) cannot run');
+  const others = agents.filter((a) => a.online).map((a) => a.package);
+  console.log(`no online ${SANDBOX} agent — the target/unpack half (and their flags) cannot run${others.length ? ` (online: ${others.join(', ')})` : ''}`);
   console.log('RESULT:SKIP');
   process.exit(0);
 }

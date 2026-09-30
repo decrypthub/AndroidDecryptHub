@@ -169,6 +169,20 @@ adb -s <serial> shell getprop ro.build.version.sdk   # 记下 API level（见 §
     它们的清理用 `powershell.exe` + `taskkill`，在这台机器上是 **no-op**，于是
     `daemon/tls_test_server.mjs` 会残留（实测抓到一个活了 23 小时的）。副作用不只是脏：
     **下一轮 v07 可能是在跟这个陈旧服务器对话而通过**。跑完门禁记得查一下有没有残留。
+  - ⚠️ **共享树上任何文件都不可能可执行**（2026-09-30 实测，影响面很广）：
+    CIFS 挂载参数是 `nounix,file_mode=0664,dir_mode=0775`——**服务端不存 Unix 权限位**，
+    客户端把**所有**文件强制成 `0664`。于是 `chmod +x` 看起来成功、`ls` 仍是 `-rw-rw-r--`。
+    症状是"找不到/权限错"，例如 `npm install` 装好的 esbuild 报
+    `spawn …/@esbuild/linux-x64/bin/esbuild EACCES`。
+    **凡是需要从这棵树里 *执行* 东西的，都要先把可执行文件拷到本地盘**——
+    `tools/compile_frida_script.sh` 已经这么做了（拷到 `~/.cache/adh/` 并设 `ESBUILD_BINARY_PATH`）。
+  - **本机已经有一个可用的 Linux NDK**：`/home/r/tools/android-ndk-r29`（含 `clang` / `jni.h` / llvm 工具）。
+    `tools/lib/env.sh` 现在会自动解析 `ADH_NDK_BIN`/`CLANG`/`JNI_H`（先看 `ANDROID_NDK_HOME`，再看配置的 `$NDK`，
+    再扫 `~/tools/android-ndk-*`、`~/Android/Sdk/ndk/*`、`/opt/android-ndk-*`）。
+    **`$NDK` 本身刻意不动**（它驱动 Windows 构建路径），所以这台机器上 `$NDK` 仍指向 Windows 路径、
+    而 `$CLANG`/`$JNI_H` 指向本地 r29——这是有意的。`llvm-objdump`/`llvm-readelf` 装了 apt 的 `llvm`（21.x），
+    与 NDK 自带那份输出格式一致。**`verify_v01` 仍缺构建链（`cmake`/`ninja`/`gradle` + Android SDK），
+    那是"要不要在这台机器上做完整构建"的环境决策，不是路径 bug。**
 
 ---
 
@@ -305,7 +319,10 @@ connect 句柄在 Windows 上不可取消）；换 `node:http` 后 `req.setTimeo
 | # | 事项 | 验收信号 |
 |---|---|---|
 | **1** | ~~**先跑一遍全量门禁**，把 device 侧的真实状态量出来~~ ✅ **2026-09-29（二）已跑**：**103 PASS / 11 FAIL / 4 SKIP**（host 29/5/2，device 74/6/2）。11 条 FAIL **没有一条归到产品代码**：7 条环境、2 条门禁自身缺陷、2 条文档已登记的偶发。**device 半段是健康的**——赛前预测的 4 条环境噪声全部命中，无意外红。详见 `PROGRESS.md` 同日第 7 条。 | 已完成；下一步是把那 9 条环境项治掉（见下） |
-| **1b** | **治掉让门禁变哑的环境项**（本轮新暴露的、收益最直接的一类）：~~② **修 `v99`/`v100`/`v101`/`v15_dumpall` 的 `^ℹ fail 0$` 断言**，并补 `v99`/`v15_dumpall` 漏掉的 `exit 1`~~ ✅ **2026-09-29（二）已修**：收成一处实现 `verify_unit_pass`（`tools/lib/verify_common.sh`，解析两种 reporter + 剥 ANSI + 要求 `rc==0` + **`min_pass` 下限**防静默空跑），四个调用点全部改完，**并按 §3.1 做了 5 项齿检**（含"塞必然失败的用例必须红"与"用例删光必须红"）。`v101` 假红 → 如实 SKIP；`v99` 假绿 → 真实结果；`v15_dumpall` device 段全绿；`v100` **22 checks/0 problems 转绿**。详见 `PROGRESS.md` 同日第 9 条。<br>**剩下 2 项待做**：① 把 `env.sh:17` / `analysis.ts:12` / `v02_so:10` 的 **Windows 工具链路径改成 host-aware**（`linux-x86_64` vs `windows-x86_64`、POSIX 不拼 `.exe`），并在本机装 `llvm`（apt 有 21.1.6）→ 救回 `v02_so`/`v08_disasm`/`v08_analyze`/`v26_footprint`，`v90` 还额外要 NDK 的 `jni.h`；④ `tools/frida/node_modules` 按平台各装各的（别跟着 SMB 树走）→ 治 `v30`。（③ 索引脱离网络盘 **已由 `ADH_DATA_DIR` 完成**——见 §1.5。） | ②③ 已完成；①④ 待做，修完 host 应回到 **34–36 PASS**、`v90` 由 SKIP 转真跑 |
+| **1b** | **治掉让门禁变哑的环境项**（本轮新暴露的、收益最直接的一类）：~~② **修 `v99`/`v100`/`v101`/`v15_dumpall` 的 `^ℹ fail 0$` 断言**，并补 `v99`/`v15_dumpall` 漏掉的 `exit 1`~~ ✅ **2026-09-29（二）已修**：收成一处实现 `verify_unit_pass`（`tools/lib/verify_common.sh`，解析两种 reporter + 剥 ANSI + 要求 `rc==0` + **`min_pass` 下限**防静默空跑），四个调用点全部改完，**并按 §3.1 做了 5 项齿检**（含"塞必然失败的用例必须红"与"用例删光必须红"）。`v101` 假红 → 如实 SKIP；`v99` 假绿 → 真实结果；`v15_dumpall` device 段全绿；`v100` **22 checks/0 problems 转绿**。详见 `PROGRESS.md` 同日第 9 条。<br>**剩下 1 项待做**：`verify_v01` / `verify_v32` 需要**完整构建链**（`cmake`/`ninja`/`gradle` + Android SDK），
+那是"要不要在这台机器上做完整构建"的环境决策，不是路径 bug。（①②③④ **均已在本轮完成**——
+①④ 见下；②③ 见 2026-09-29（二）与 2026-09-30 的提交。） | ① 完成后 `v02_so`/`v08_disasm`/`v08_analyze`/`v26_footprint`/`v30` 全部转 PASS，
+`v90` 由 SKIP 转**真跑**（228 索引逐条对照 jni.h），`v101` 由 SKIP 转**真跑**（clang 编译靶子 + 11 项断言）|
 | **2** | ~~**`adh target` / `adh unpack` 的端到端**~~ ✅ **2026-09-29（二）已随 `v100` 转绿一并验证**：`v100` 真机 **22 checks / 0 problems**，含 `target` 报出唯一 agent + 活体事实、"`unpack` 分类每个 DexFile"、"`--out` 每个真 dex 落盘且字节数与报告一致"。`FEATURE_STATUS` 里"真机端到端尚未验证"已作废。 | 已完成 ✅ |
 | **3** | **二代抽取壳闭环**：fixture（按参考仓库形态：抽取 = 把 `PluginClass.getString()` 的 6 字节方法体 `1A 00 87 00 11 00` 清零）+ **还原点**（hook `art::ClassLinker::LoadMethod`，在方法体解密瞬间抓 CodeItem；参考仓库的 mangled 名在 `cyrus_studio_hook.cpp`）+ 把"覆盖率 → 受控触发 → 恢复 → 重建 → 再测覆盖率"串成 **可断言恢复率**的闭环 | 恢复率是**具体数字**；被抽方法重建后与原文 sha 一致；解不动的显式 `unresolvable` 计入分母。**注意**：本机 ROM 的 `libart.so` 被裁过，先确认 `LoadMethod` 符号在不在——不在就得换落点 |
 | **4** | **`mprotect` 读 PROT_NONE**：很多壳把 ELF 头设成 `PROT_NONE`；agent 内部**有** `mprotect`（hook 机制里用）但**没有对外命令**。加一个只读用途的改页 op。 | 对一个被 `PROT_NONE` 的 ELF 头能读出并重建（`so_unpack` 的经典场景） |

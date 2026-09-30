@@ -255,26 +255,40 @@ classifyError = "database disk image is malformed"     ← SQLite 的 SQLITE_COR
 是 no-op），实测残留了一个活了 23 小时的 `daemon/tls_test_server.mjs`。副作用不只是脏——
 **下一轮 `v07` 可能是在跟这个陈旧服务器对话而通过**。
 
-### 12. **仍未解决**：`v100` 在全量门禁里必红、单独跑必绿（**已排除 5 条路，附带诊断已加**）
+### 12. `v100` 门禁内必红 —— **已定位并修复：它解析到了 ADH Manager，不是沙盒** ✅
 
-**事实**（不含推测）：`v100_adh_cli` 在**五轮全量门禁里全部红**（第 1–2 轮是那个已修的崩溃，
-第 3–5 轮是"agent/CLI 中途不可用"：`--quiet` 的 `stdout=""`、`unpack exit=1`），
-而**单独跑 4 次以上全绿**，包括**完全复刻门禁时序**（`force-stop` → `start` → `sleep 4`）
-以及**紧接 `v22_capture` 之后**。
+**事实**：`v100_adh_cli` 在**六轮全量门禁里全部红**，而**单独跑全绿**（含复刻门禁时序）。
 
-**已排除**（每条都是实测，不是推断）：
+**根因（第 6 轮那条"给失败加诊断"的改动直接命中）**：加诊断后门禁第一次就把它打了出来——
+
+```
+adh: target com.adh.manager is not usable (agent did not answer agent_ping; art_dexfiles failed: unknown)
+adh: /api/unpack/dump-all -> HTTP 504: { "error": "command timeout" }
+```
+
+`v100` 取的是 `online[0].package`（**没有按包过滤**）。而 **ADH Manager 自己也被同一个 Zygisk 模块注入、也会注册成 agent**；
+门禁里 **`verify_v31_xposed`**（就在 `v100` 前一位）会把 `com.adh.manager` force-stop 后重启以测 Xposed 薄模块
+（`TARGET="com.adh.manager"`），于是 Manager 成为"第一个 online"，`v100` 的**全部 agent 相关断言**就都对着
+一个不会 dump dex 的进程跑。**单独跑时 Manager 不在运行**——所以六轮全红、单独必绿。
+修法与其它 device 脚本一致：**按 `com.adh.sandbox` 过滤**（`online` 只按 `online` 过滤本身就是错的）。
+
+**另有一条容易混淆的情况值得记下**：agent 可能**已注册为 online 但实际不响应**
+（`agent_ping` 不通 / `art_dexfiles` 返回 `unknown` / `dump_all_dex` → `HTTP 504 command timeout`）。
+经历整轮门禁之后的长命沙盒就会是这样，**而门禁会为每个 device 脚本重启沙盒所以看不到**；
+单独复现时必须自己先 `force-stop` + `start`，否则会把"陈旧沙盒"误当成别的问题（我就先踩了一次）。
+
+**验证**：修复后按门禁完整时序（重启沙盒）跑 → **22 checks / 0 problems PASS**，
+且注册表里存在 Manager 条目时仍正确解析到沙盒。**仍需第 7 轮全量确认门禁内转绿**（单跑过 = 不算）。
+
+### 以前未解决时排除过的五条路（保留，避免重复走）
 
 | 假设 | 实验 | 结论 |
 |---|---|---|
-| 索引库损坏 | 移到本地盘、4/4 分类 | 已修，v100 仍红 → **不是它** |
+| 索引库损坏 | 移到本地盘、4/4 分类 | 已修，v100 仍红 → 不是它 |
 | 同一沙盒上重复跑会坏 | 连跑两次 v100（不经重启） | 两次都 PASS，pid 不变 → 排除 |
-| 注册表出现两个 online 会话 → `target` 判为歧义而拒绝 | 重启后逐秒采样 12 秒 | **始终只有 1 个 online**，陈旧会话及时标 offline；`adh target` 正常解析 → 排除 |
-| 沙盒被 LMK/低内存杀掉 | 设备 logcat 查杀进程记录 | 只有**显式 force-stop**，无 LMK/低内存记录；daemon 日志显示失败窗口内沙盒会话从未断开 → 排除 |
+| 注册表出现两个 online 会话 → `target` 判为歧义而拒绝 | 重启后逐秒采样 12 秒 | 始终只有 1 个 online；`adh target` 正常解析 → 排除（**但方向对了：确实与"哪个 agent"有关**） |
+| 沙盒被 LMK/低内存杀掉 | 设备 logcat 查杀进程记录 | 只有显式 force-stop，无 LMK 记录；daemon 日志显示失败窗口内会话未断开 → 排除 |
 | `v22_capture` 的爆发把 daemon 拖到超时 | `v22_capture` 后紧接跑 v100 | v100 PASS → 排除 |
-
-**下一步该做的**：`v100` 的失败已**加上诊断**（`--quiet` 与 `unpack` 两条断言现在会打印
-**退出码 + stderr**，此前只有 `stdout=""`，所以查不下去）。下次门禁红的时候，
-**先读那两行 stderr**，再决定方向。在此之前不要再重复上面这 5 条路。
 
 ### 顺带记录
 
