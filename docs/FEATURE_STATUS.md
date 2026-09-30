@@ -30,6 +30,27 @@
 > **方法学订正**：`HANDOVER §2.2` 那条 A 组 recipe 用 `bash tools/$s && echo PASS`，**把 SKIP 算成 PASS**
 > （SKIP 一般 `exit 0`）——这就是 "36/36" 的来源。（`tools/verify_all.sh` 自身分得清，是文档里的 recipe 不对。）
 > 逐条证据见 `PROGRESS.md` 2026-09-29（二）。
+>
+> ### 🔴 2026-09-30：根因是 **dex 索引库损坏**，不是"环境噪声"
+>
+> 上面那些"intermittent device 失败"的真根因只有**一个**：`adhd-data/dex-index.sqlite` 在 **SMB 共享树**上
+> 被**两台机器同时写**，库损坏（`SQLITE_CORRUPT` / "database disk image is malformed"），
+> 4 个 dex 里 3 个分类失败——而**四层静默吸收**让它看起来像无关的零散 flake：
+> `realDexCount` 把没分类的算成真代码、`reportSummary` 丢掉 `classifyError`、
+> `v15_dumpall` 的恒等式因同源推导而永真、`v08_xref` 把错误响应算成"这个 dex 0 个方法"。
+> **四处都已修**（含新增 `ADH_DATA_DIR` 让索引脱离网络盘）。
+> **实测效果**：`unpack` 1/4 → **4/4**（1 秒）；`v29` `queryMs` 466ms → **1.72ms 且 PASS**；
+> `v15_dumpall` `shaped=1/4` → **`4/4` PASS**。详见 `PROGRESS.md` 2026-09-30（第 8–11 条）。
+>
+> **当前真实数字**（gate5，`ADH_DATA_DIR` 指向本地盘，103 PASS / 10 FAIL / 5 SKIP）。
+> 其中 `v08_xref` 与 `v19_settings` 的失败**已在同一轮之后修掉并单独复验通过**，故实际遗留 **8 条**：
+> 6 条环境（`v01` 缺 `cmake.exe`；`v02_so`/`v08_disasm`/`v08_analyze`/`v26_footprint` 缺 Windows 路径下的
+> LLVM 工具，`v90` 因此 SKIP；`v30` 的 `frida/node_modules` 是 Windows 装的 esbuild）、
+> 1 条文档已登记的偶发（`v22_capture` 记账抖动）、
+> 1 条**未解决**（`v100` 在全量门禁里必红、单独跑必绿——已排除 5 条路并加了诊断，见 `PROGRESS.md` 第 12 条）。
+> **下一步**：`HANDOVER §5` 第 1b 条**还剩 ①④**——① 工具链路径 host-aware + 本机装 `llvm`
+> （救 `v02_so`/`v08_disasm`/`v08_analyze`/`v26_footprint`，并让 `v90` 从 SKIP 转真跑）、
+> ④ `frida` 依赖分平台（救 `v30`）。（③ 索引脱离网络盘**已由本轮的 `ADH_DATA_DIR` 完成**。）
 > **发布范围收口提案**（不做/降级的 10 项，含证据与"什么条件下重新考虑"）见 `DEVELOPMENT_PLAN.md §6.9.5`；需求口径修订建议（去特征对抗面、SKIP 分层、信任模型等 7 条）见 `REQUIREMENTS.md` 顶部"口径修订建议"——两者都是**待确认**，确认后合并进正文。
 
 ## 0. 发布物
