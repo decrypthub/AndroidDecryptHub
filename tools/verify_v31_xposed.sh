@@ -34,17 +34,36 @@ FW="$(adb -s "$SERIAL" shell "su -c '$CLI status'" 2>/dev/null | tr -d '\r')"
 grep -q 'Framework' <<<"$FW" || skip "RESULT:SKIP no Xposed framework CLI at $CLI" "framework not installed"
 echo "framework: $(grep -m1 'Version' <<<"$FW") / $(grep -m1 'API Version' <<<"$FW")"
 
-# 2. module APK (build on demand) --------------------------------------------------
+# 2. module APK (build on demand, AND rebuild when stale) ---------------------------
+# The APK bundles a copy of the agent, so an APK built for an older agent keeps injecting that older
+# agent. This is not hypothetical: the cached APK carried agent 0.2.0 against a 0.3.12 checkout, so
+# this script exercised the Xposed chain with a three-versions-old agent, put com.adh.manager online
+# running 0.2.0, and `adh doctor` (correctly) reported a version MISMATCH — which then failed
+# verify_v100 in the full gate. Building only when the file is MISSING hides all of that: the file
+# exists, so it was reused forever. Treat "bundles a different agent than agent/build/" as missing.
+BUNDLED_AGENT_SHA="$(unzip -p "$APK" lib/arm64-v8a/libadh_agent.so 2>/dev/null | sha256sum | awk '{print $1}')"
+CURRENT_AGENT_SHA="$([ -f "$ROOT/agent/build/libadh_agent.so" ] && sha256sum "$ROOT/agent/build/libadh_agent.so" | awk '{print $1}')"
+NEED_BUILD=0
 if [ ! -f "$APK" ]; then
   echo ">> module APK missing — building it (tools/build_xposed.sh)"
+  NEED_BUILD=1
+elif [ -n "$CURRENT_AGENT_SHA" ] && [ "$BUNDLED_AGENT_SHA" != "$CURRENT_AGENT_SHA" ]; then
+  echo ">> module APK bundles a stale agent (${BUNDLED_AGENT_SHA:0:12} vs agent/build ${CURRENT_AGENT_SHA:0:12}) — rebuilding"
+  NEED_BUILD=1
+fi
+if [ "$NEED_BUILD" = "1" ]; then
   set +e
   BUILD_OUT="$(bash "$ROOT/tools/build_xposed.sh" 2>&1)"
   BUILD_RC=$?
-  set +e
   if [ "$BUILD_RC" != "0" ] || [ ! -f "$APK" ]; then
     echo "$BUILD_OUT" | tail -5 | sed 's/^/   /'
-    skip "RESULT:SKIP module APK not built" "gradle/AGP unavailable"
+    # Skipping is the honest outcome here: the only APK on disk carries an agent this checkout does
+    # not build, and testing THAT would report a pass for something we do not ship.
+    skip "RESULT:SKIP module APK stale and not rebuildable" "agent 0.2.0 bundled, gradle/AGP unavailable to rebuild"
   fi
+fi
+if [ -n "$CURRENT_AGENT_SHA" ] && [ "$(unzip -p "$APK" lib/arm64-v8a/libadh_agent.so 2>/dev/null | sha256sum | awk '{print $1}')" != "$CURRENT_AGENT_SHA" ]; then
+  skip "RESULT:SKIP module APK still stale after rebuild" "bundled agent != agent/build/libadh_agent.so"
 fi
 echo "module apk: $APK ($(stat -c %s "$APK" 2>/dev/null || echo '?') bytes)"
 
