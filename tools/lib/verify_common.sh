@@ -43,10 +43,16 @@ verify_resolve_env_host() {
   BASE="http://127.0.0.1:$HTTP"
 }
 
+# verify_data_dir — sets ADH_DATA to the daemon's data directory: $ADH_DATA_DIR if set, else the
+# in-repo adhd-data/. Mirrors daemon/src/state.ts. Scripts that read settings.json / events.jsonl
+# off disk MUST use this instead of hardcoding "$ROOT/adhd-data": the daemon may legitimately be
+# pointed elsewhere (ADH_DATA_DIR), and the hardcoded read then finds a STALE file from the old
+# location and passes on it — a false green, not a failure. Measured 2026-09-30.
+verify_data_dir() { ADH_DATA="${ADH_DATA_DIR:-$ROOT/adhd-data}"; }
+
 # ---------------------------------------------------------------------------
 # sandbox liveness (device scripts)
 # ---------------------------------------------------------------------------
-
 # Sets ALIVE to the sandbox pid (or empty). Prints the alive line.
 verify_sandbox_alive() {
   ALIVE="$(adb -s "$SERIAL" shell pidof com.adh.sandbox 2>/dev/null | tr -d '\r ')"

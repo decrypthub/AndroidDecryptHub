@@ -495,10 +495,19 @@ export async function dumpAllDex(sid: string) {
   }
   const carrierList = dexes.filter((x) => x.carrier)
     .map((x) => ({ begin: x.begin, size: x.size, classes: x.classes, sha256: x.sha256, shape: x.shape }));
+  // "Real" means classification SAID so (`carrier === false`). Counting `dexes.length - carriers`
+  // instead also counted dexes that never got classified at all — a dump that errored, or an index
+  // write that threw — so a run where 3 of 4 dexes failed still reported realDexCount: 4 while
+  // realBytes only summed the one that worked. Two numbers that must agree, disagreeing, is the
+  // tell. `unclassified` names the remainder so no failure is silently absorbed into a plausible count.
+  const realCount = dexes.filter((x) => x.carrier === false).length;
+  const unclassified = dexes.filter((x) => x.classifyError || x.error).length;
+  const firstClassifyError = dexes.find((x) => x.classifyError)?.classifyError;
   return {
     ok: true, session: sid,
     count: dexes.length, dumped, deduped, failed,
-    dexCount: dexes.length, realDexCount: dexes.length - carriers, carrierCount: carriers,
+    dexCount: dexes.length, realDexCount: realCount, carrierCount: carriers,
+    unclassified, ...(firstClassifyError ? { classifyError: firstClassifyError } : {}),
     realBytes, totalBytes: dexes.reduce((a, x) => a + (Number(x.bytes) || 0), 0),
     index: { built: indexed, reused: indexReused },
     carriers: carrierList,

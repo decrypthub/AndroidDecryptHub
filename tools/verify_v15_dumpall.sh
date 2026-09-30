@@ -37,12 +37,20 @@ console.log(`download=${dlOk} secondRunDedup=${dedupOk}`);
 // parses looks exactly like real code in a bare count.
 const shaped=(r1.dexes||[]).filter(d=>!d.error && typeof d.classes==='number' && typeof d.carrier==='boolean');
 const shapeOk = shaped.length === okDex.length && shaped.length >= 1;
-const totalsOk = r1.dexCount===r1.count && r1.realDexCount + r1.carrierCount === r1.dexCount;
+// The accounting identity, made non-vacuous: it used to be `realDexCount + carrierCount === dexCount`,
+// but realDexCount was itself derived as `dexCount - carrierCount`, so it could never fail — and a run
+// where 3 of 4 dexes failed to index satisfied it while looking complete. `unclassified` is the third
+// bucket (a daemon ERROR, not a verdict), so a dex nobody accounted for now breaks the sum.
+const totalsOk = r1.dexCount===r1.count &&
+  r1.realDexCount + r1.carrierCount + (r1.unclassified || 0) === r1.dexCount;
 // The sandbox's own dexes are real code, so nothing may be flagged here; the positive case (a
 // 120 MB / 17-class SecNeo carrier) is covered by the unit test above.
 const noFalseCarrier = r1.carrierCount === 0 && shaped.every(d=>d.carrier===false);
 const indexOk = r1.index && r1.index.built >= 1;
-console.log(`shaped=${shaped.length}/${okDex.length} dexCount=${r1.dexCount} real=${r1.realDexCount} carrier=${r1.carrierCount} indexBuilt=${r1.index?.built} reused=${r1.index?.reused}`);
+console.log(`shaped=${shaped.length}/${okDex.length} dexCount=${r1.dexCount} real=${r1.realDexCount} carrier=${r1.carrierCount} unclassified=${r1.unclassified ?? 0} indexBuilt=${r1.index?.built} reused=${r1.index?.reused}`);
+// Name the reason instead of leaving a bare count mismatch: this is the line that turned four gate
+// runs' worth of "intermittent device flake" into a corrupted-SQLite diagnosis.
+if (!shapeOk && r1.unclassified > 0) console.log(`  ${r1.unclassified} dex(es) unclassified — ${r1.classifyError ?? 'see per-dex classifyError'}`);
 const pass = r1.ok===true && r1.count>=1 && r1.dumped>=1 && r1.failed===0 && dlOk && dedupOk &&
   shapeOk && totalsOk && noFalseCarrier && !!indexOk;
 console.log(pass?'RESULT:PASS':'RESULT:FAIL');

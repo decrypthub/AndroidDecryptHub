@@ -463,11 +463,16 @@ async function cmdUnpack(ctx: Ctx): Promise<number> {
   const dexes: any[] = report.dexes ?? [];
   say(ctx, 'dexes');
   for (const [i, d] of dexes.entries()) {
-    const tag = d.carrier ? 'carrier' : 'real   ';
+    // Three outcomes, not two: a dex that failed to classify is neither real code nor a carrier,
+    // and tagging it 'real' contradicted the warning printed below.
+    const tag = d.classifyError || d.error ? 'failed ' : d.carrier ? 'carrier' : 'real   ';
     say(ctx, `  [${String(i).padStart(2)}] ${tag}  ${fmtBytes(d.bytes ?? d.size)}  classes ${d.classes}  methods ${d.methods}  ${String(d.sha256 ?? '').slice(0, 16)}`);
   }
   for (const c of report.carriers ?? []) {
     say(ctx, `  carrier detail: classes=${c.classes} · ${c.reason ?? ''}`);
+  }
+  if (Number(report.unclassified ?? 0) > 0) {
+    say(ctx, `  ⚠ ${report.unclassified} of ${report.dexCount} dex(es) could not be classified — ${report.classifyError ?? 'see per-dex classifyError'}`);
   }
 
   let saved: { file: string; sha256: string; bytes: number }[] = [];
@@ -487,6 +492,11 @@ async function cmdUnpack(ctx: Ctx): Promise<number> {
 
   const problems: string[] = [];
   if (Number(report.failed ?? 0) > 0) problems.push(`${report.failed} dex failed to dump`);
+  // A dex the daemon ERRORED on is not a result — it is a failure that used to be absorbed, because
+  // realDexCount counted it as real and the error was dropped from the summary. Report it, fail loud.
+  if (Number(report.unclassified ?? 0) > 0) {
+    problems.push(`${report.unclassified} of ${report.dexCount} dex(es) could not be classified — ${report.classifyError ?? 'see per-dex classifyError'}`);
+  }
   if (!dexes.length) problems.push('no DexFile was dumped');
   if (outDir && saved.length !== dexes.filter((d) => ctx.opts['include-carriers'] === true || !d.carrier).length) {
     problems.push('saved file count does not match the dex set');
@@ -501,10 +511,16 @@ async function cmdUnpack(ctx: Ctx): Promise<number> {
 function reportSummary(report: any) {
   return {
     dexCount: report.dexCount, realDexCount: report.realDexCount, carrierCount: report.carrierCount,
+    unclassified: report.unclassified, ...(report.classifyError ? { classifyError: report.classifyError } : {}),
     dumped: report.dumped, failed: report.failed, totalBytes: report.totalBytes, realBytes: report.realBytes,
     index: report.index,
+    // `classifyError` / `error` MUST ride along. Projecting only the happy fields is how a run where
+    // 3 of 4 dexes failed to index still looked like a clean success: the reason was on each entry
+    // and this map dropped it, leaving `problems: []`.
     dexes: (report.dexes ?? []).map((d: any) => ({
       sha256: d.sha256, bytes: d.bytes ?? d.size, classes: d.classes, methods: d.methods, carrier: d.carrier, shape: d.shape,
+      ...(d.classifyError ? { classifyError: d.classifyError } : {}),
+      ...(d.error ? { error: d.error } : {}),
     })),
     carriers: report.carriers ?? [],
   };

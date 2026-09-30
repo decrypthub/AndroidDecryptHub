@@ -153,10 +153,22 @@ adb -s <serial> shell getprop ro.build.version.sdk   # 记下 API level（见 §
   - ⚠️ **`tools/frida/node_modules/` 是跨 OS 的坑**：共享树里那份是 **Windows 装的**，
     带的是 `@esbuild/win32-x64`，于是 `verify_v30_fridagadget.sh` 在 Linux 上 `bundle failed`（`loader rc=1`）。
     反过来在 Linux 上 `npm install` 也可能顶掉 Windows 那份。**这类依赖不该跟着 SMB 树走。**
-  - ⚠️ **`adhd-data/` 不该放网络盘**：`dex_index.ts:14` 用 `PRAGMA journal_mode = WAL`，
-    而 **SQLite 官方明确说 WAL 不能用于网络文件系统**；当前 2.1 GB 的 `dex-index.sqlite`
-    + 230 MB WAL 就在 SMB 上，最坏情况单次查询 **49 秒**。`DATA_DIR` 目前**写死**在
-    `daemon/src/state.ts:123`，要挪得加 env 覆盖或做软链。
+  - ⚠️ **`adhd-data/` 不该放网络盘 —— 这台机器上它已经害过事，必须改（2026-09-30 实测）**：
+    `dex-index.sqlite` 被**两台机器同时在写**（同一个 SMB 共享树），库直接损坏——daemon 报
+    `SQLITE_CORRUPT`（"database disk image is malformed"），4 个 dex 里 **3 个分类失败**；
+    更离谱的是**在 Linux 上连改名都做不到**（`mv` → "设备或资源 busy"，因为**另一端还开着它**），
+    这正是"两个写者"的直接证据。
+    **`export ADH_DATA_DIR=/home/r/adh-data`（本地盘）再启动 daemon**，实测同一个索引从
+    "3/4 失败"变成 **4/4 分类、1 秒完成**，且 `verify_v29_dexindex` 的 `queryMs` 从 **466ms 掉到 1.72ms**。
+    ⚠️ **注意 `dev_up.sh` 启动 daemon 时不会替你设这个变量**——必须自己 export
+    （`verify_all.sh` 会调 `dev_up.sh`，所以跑门禁前也要 export）。
+    `state.ts:123` 读 `ADH_DATA_DIR`（默认仍是仓库内 `adhd-data/`，单机使用不受影响）。
+    `dex_index.ts` 另有 `ADH_SQLITE_JOURNAL` 逃生阀（默认仍 `WAL`，**未改默认值**——见那里的注释：
+    并发写者才是实测到的真因，改日志模式没被测出能防住任何东西）。
+  - ⚠️ **`v07` / `v07_flow` / `v34_ecapture` 起的 TLS 测试服务器在 Linux 上杀不掉**：
+    它们的清理用 `powershell.exe` + `taskkill`，在这台机器上是 **no-op**，于是
+    `daemon/tls_test_server.mjs` 会残留（实测抓到一个活了 23 小时的）。副作用不只是脏：
+    **下一轮 v07 可能是在跟这个陈旧服务器对话而通过**。跑完门禁记得查一下有没有残留。
 
 ---
 

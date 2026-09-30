@@ -5,6 +5,7 @@
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
 verify_resolve_env_host
+verify_data_dir
 verify_host_begin
 
 jget(){ node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);let v=j;for(const k of process.argv[1].split("."))v=v?.[k];console.log(typeof v==="object"?JSON.stringify(v):v)}catch(e){console.log("ERR")}})' "$1"; }
@@ -20,7 +21,7 @@ POST="$(curl -s -X POST "$BASE/api/config" -H 'content-type: application/json' -
 verify_chk "POST applies capture"          '[ "$(echo "$POST" | jget applied)" = "[\"capture\"]" ]'
 verify_chk "POST reports persisted (honest)" '[ "$(echo "$POST" | jget persisted)" = "true" ]'  # fail-loud: success must be disk-confirmed, not assumed
 verify_chk "readback retain == 2000"       '[ "$(curl -s "$BASE/api/config" | jget settings.capture.retain)" = "2000" ]'
-verify_chk "persisted to settings.json"    '[ "$(cat "$ROOT/adhd-data/settings.json" | jget capture.retain)" = "2000" ]'
+verify_chk "persisted to settings.json"    '[ "$(cat "${ADH_DATA:-$ROOT/adhd-data}/settings.json" | jget capture.retain)" = "2000" ]'
 
 # 3) settings export / import (section-merge on ui)
 verify_chk "GET /api/settings/export 200"  '[ "$(curl -s "$BASE/api/settings/export" | jget ui.displayCap)" != "ERR" ]'

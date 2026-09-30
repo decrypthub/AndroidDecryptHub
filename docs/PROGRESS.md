@@ -60,7 +60,7 @@
   `RESULT:FAIL (…unit tests did not all pass)` 之后**继续往下跑**，然后在 Windows-only 的重启逻辑上
   落到 `RESULT:SKIP` + `exit 0` —— **一条本该红的断言被后面的 SKIP 洗成绿**。
 
-### 5. `verify_v29_dexindex.sh` 的 FAIL 是**可复现的结构性**问题，不是抖动
+### 5. `verify_v29_dexindex.sh` 的 FAIL 是**可复现的**，不是抖动（**根因见第 11 条：库损坏，不是网络盘慢**）
 
 它的通过条件含 **`hit.queryMs < 250`**（以及 `maxCachedMs < 250`）。实测该值 **465.86ms**（单独重跑同样 ~466ms）。
 逐 dex 量下来根因是 **"索引后第一次查询"的一次性代价**，且随方法数爆炸：
@@ -71,12 +71,10 @@
 | `classes2.dex` | 251 | **2,914 ms** | 2,428 / 2,702 ms |
 | `classes3.dex`（`hit` 落在这里） | 754 | **414 ms** | 35 / 38 ms |
 
-结构原因：`adhd-data/dex-index.sqlite` 是 **2.1 GB**，外加 **230 MB 未 checkpoint 的 WAL**，而且
-**整个 DB 放在 SMB 网络共享上**；`dex_index.ts` 用的是 `PRAGMA journal_mode = WAL`——
-**SQLite 官方明确说 WAL 不能用于网络文件系统**（它依赖 `-shm` 共享内存）。
-所以 250ms 这个预算是照**本地磁盘**定的，在共享树上必然超标。
-→ 两条路：把 `adhd-data/` 挪到本地盘（对这台机器是**最省事且收益最大**的一条），
-或者把这台机器上的 `queryMs` 预算改成分档 / 允许环境覆盖。
+结构原因（**已于第 11 条查明并订正**）：当时记的是"2.1 GB WAL 库放在 SMB 上 → 网络往返慢"，
+**这个归因不准确**。真实原因是**库已损坏**（`SQLITE_CORRUPT`），49 秒是损坏库的行为，
+不是网络盘的正常往返代价——同一个索引挪到本地盘后，`queryMs` 是 **1.72ms**，整个 `unpack` 1 秒。
+见第 11 条。**唯一成立的那部分结论**：250ms 这个预算是照健康库定的，它确实在**库坏了**的时候先红。
 
 ### 6. 三个纯环境 FAIL（缺 Windows 路径下的 LLVM 工具）
 
@@ -194,10 +192,68 @@ undefined (reading 'dexCount')`，**整个脚本当场挂掉**，`problems` 一�
 改完用备份还原，`git status` 干净、两个值回到 `0.3.12` / `v0.3.12`。
 → **假阳性去掉了，真检测还在，而且现在会报 pid。**
 
-**(c) 顺带观察（未修）**：`/api/agents` 会**永久累积已退出的会话**——一轮全量门禁把沙盒
-`force-stop`/`start` 了 82 次，注册表就积到 `agents 4`（3 offline + 1 online），且只增不减。
-`doctor` 的 listing 会越来越长。已有 `v35_sessions` 覆盖会话清理，但**门禁自身没有清理步骤**，
-所以这是个"跑几轮就越来越吵"的问题，值得单独处理。
+**(c) 顺带观察（未修）**：一轮全量门禁把沙盒 `force-stop`/`start` 了 82 次，`/api/agents` 会积到
+`agents 4`（3 条 offline + 1 条 online）——**已退出的会话不会当场清掉**，`doctor` 的 listing 因此变长。
+**但不是"只增不减"**：2026-09-30 复查时（同一个 daemon 进程，uptime 26.4h 未重启）设备一拔掉
+注册表就回到 **0 条**，说明**断连时会清**。所以是"一轮之内越跑越吵、设备断开即清"，
+不是无界泄漏。已由 `v35_sessions` 覆盖会话清理；门禁自身仍无清理步骤。
+
+### 11. **dex 索引库损坏** —— "偶发 device 失败"的真根因；顺带修掉一串"失败被静默吸收" ✅
+
+**起因**：修完第 9/10 条后，`v100` 在全量里**第 3、4 轮仍然红**，而且第 4 轮连**前三轮都绿的
+`v15_dumpall` 也红了**。两条都不是崩溃，是"agent 不可用"式的失败。三个不同脚本红在同一条路径上，
+就不该再当成 flake 了。
+
+**根因（一次复现拿到）**：`adh-data/dex-index.sqlite` **已损坏**。直接打 REST 路由（绕过 CLI）拿到：
+
+```
+classifyError = "database disk image is malformed"     ← SQLite 的 SQLITE_CORRUPT
+—— 4 个 dex 里 3 个是这样
+```
+
+**为什么坏了**：这个库在 **SMB 共享树**上，而**同一棵树被两台机器同时在使用**——
+最直接的证据是：**在 Linux 上连把它改名都做不到**（`mv` → `设备或资源 busy`；`truncate` 能成功、
+`rm` 报 `输入/输出错误`），而本机**没有任何进程**持有它。**远端写者**才是答案。
+（SQLite 官方也确实说 WAL 不能用于网络文件系统，但那是**次要**因素：
+实测到的真因是并发写者，改日志模式防不住——所以**没有改默认值**。）
+
+**为什么藏了四轮**（两层静默吸收，都是"不 fail-loud"）：
+
+1. `daemon/src/service.ts` 的 `realDexCount = dexes.length - carrierCount`——**分母来自 `dexes.length`**，
+   于是 3 个根本没分类成功的 dex **照样算成"真代码"**。回包 `realDexCount: 4` 却只有
+   `realBytes: 489960`，**两个本该一致的数字互相矛盾**，这就是线索。而 `v15_dumpall` 的恒等式
+   `real + carrier === dexCount` 因为右边也是同一个推导，**永远成立、等于没测**。
+2. `daemon/src/cli.ts` 的 `reportSummary` 只投影
+   `sha256/bytes/classes/methods/carrier/shape`，把 `service.ts` **已经记下来的
+   `classifyError` 丢掉了**（外层 catch 写的 `error` 同样被丢），于是 `problems: []`、
+   `failed: 0`——**看起来完全正常**。
+
+**修法（三处，都是"别静默"）**：
+
+- `service.ts`：`realDexCount` 改成只数**分类明确判为真代码**的（`carrier === false`），
+  并新增 `unclassified` 与顶层 `classifyError`。谎报的 `4` 变成如实的 `1`。
+- `cli.ts`：`reportSummary` 带上 `classifyError`/`error`/`unclassified`；人读输出把未分类的
+  dex 标成 `failed`（此前标 `real`，和警告自相矛盾）、打出
+  `⚠ 3 of 4 dex(es) could not be classified — database disk image is malformed`，
+  并**计入 `problems`**（→ `❌ unpack: FAIL` + `exit 1`）。
+- `v15_dumpall`：恒等式补上第三个桶（`real + carrier + unclassified === dexCount`），
+  这样"有人没被记账"就真的会红；失败时**打出原因**而不是只打计数。
+
+**根因修复**：`state.ts` 新增 `ADH_DATA_DIR`（默认不变，仍是仓库内 `adhd-data/`），
+把数据目录指到**本地盘**。实测同一份数据：
+
+| | 库在 SMB（损坏） | 库在本地 NVMe |
+|---|---|---|
+| `adh unpack` 分类 | **1/4**（3 个 `SQLITE_CORRUPT`） | **4/4**，1 秒 |
+| `v29` 的 `queryMs` | 466ms（预算 250ms）→ FAIL | **1.72ms** → PASS |
+| `v15_dumpall` | `shaped=1/4` FAIL | `shaped=4/4 unclassified=0` PASS |
+| `v100` | 4 条 agent-不可用式失败 | 全绿 |
+
+→ **第 5 条对 `v29` 的归因（"网络盘往返慢"）据此订正：那是损坏库的行为，不是网络代价。**
+
+**顺带查到**：`v07`/`v07_flow`/`v34` 起的 TLS 测试服务器在 Linux 上**杀不掉**（清理走 PowerShell，
+是 no-op），实测残留了一个活了 23 小时的 `daemon/tls_test_server.mjs`。副作用不只是脏——
+**下一轮 `v07` 可能是在跟这个陈旧服务器对话而通过**。
 
 ### 顺带记录
 

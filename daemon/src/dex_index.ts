@@ -9,9 +9,31 @@ import { analyzeDexCode, parseDex } from './dex.ts';
 
 const PARSER_VERSION = 2;
 export const DEX_INDEX_FILE = join(DATA_DIR, 'dex-index.sqlite');
+
+// Journal mode. Default unchanged (WAL); this exists as an escape hatch, deliberately NOT as a
+// changed default.
+//
+// SQLite's documentation says WAL does not work on a network filesystem — it needs the -shm
+// shared-memory file, which network mounts do not provide coherently. Measured 2026-09-30: this
+// index lived on a shared SMB tree and came back SQLITE_CORRUPT ("database disk image is
+// malformed"), and on SMB the corrupt file could not be renamed from Linux (`mv` → "device or
+// resource busy") because another host still held it — i.e. TWO machines had the same DB open.
+//
+// That second fact is why this default was left alone. Concurrent writers corrupt a SQLite file
+// under any journal mode; I did not measure DELETE preventing anything, and this project does not
+// change a default on a theory. The real fix is to stop sharing the database at all — set
+// ADH_DATA_DIR (daemon/src/state.ts) to local disk, which was measured to take this same index from
+// 3-of-4 dexes failing with SQLITE_CORRUPT to 4-of-4 classifying in ~1s.
+// Set ADH_SQLITE_JOURNAL to DELETE/TRUNCATE/PERSIST/MEMORY only if you have measured a reason to.
+const JOURNAL_MODES = ['DELETE', 'TRUNCATE', 'PERSIST', 'MEMORY', 'WAL'];
+const JOURNAL_MODE = (() => {
+  const want = (process.env.ADH_SQLITE_JOURNAL ?? 'WAL').toUpperCase();
+  return JOURNAL_MODES.includes(want) ? want : 'WAL';
+})();
+
 const db = new DatabaseSync(DEX_INDEX_FILE);
 db.exec(`
-  PRAGMA journal_mode = WAL;
+  PRAGMA journal_mode = ${JOURNAL_MODE};
   PRAGMA synchronous = NORMAL;
   PRAGMA foreign_keys = ON;
   CREATE TABLE IF NOT EXISTS dex_documents (

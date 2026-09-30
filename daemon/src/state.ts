@@ -120,7 +120,13 @@ export const nextCmdId = () => `c${(++cmdSeq).toString(36)}`;
 
 // ---- event store (session record/replay) ---------------------------------
 const _dataRoot = join(__dirname, '..', '..');
-export const DATA_DIR = join(_dataRoot, 'adhd-data');
+// Where artifacts, the event log, settings and the dex index live. Overridable because this tree is
+// worked from a SHARED SMB folder, and that is a bad home for a SQLite database: measured
+// 2026-09-30, `adhd-data/dex-index.sqlite` came back SQLITE_CORRUPT while the same tree was open on
+// two machines, and on SMB the corrupt file could not even be renamed away from Linux (`mv` →
+// "device or resource busy") because the other host still held it. Point ADH_DATA_DIR at local disk
+// on any machine sharing this checkout. Default is unchanged for single-machine use.
+export const DATA_DIR = process.env.ADH_DATA_DIR ?? join(_dataRoot, 'adhd-data');
 mkdirSync(DATA_DIR, { recursive: true });
 export const EVENTS_FILE = join(DATA_DIR, 'events.jsonl');
 interface Ev { seq: number; ts: number; type: string; data: any }
