@@ -49,8 +49,44 @@ command -v node >/dev/null 2>&1 || die "node not found (needed to run the bundle
 
 need_deps() {
   [ -f "$NPM_DIR/node_modules/esbuild/package.json" ] &&
-  [ -f "$NPM_DIR/node_modules/frida-java-bridge/package.json" ]
+  [ -f "$NPM_DIR/node_modules/frida-java-bridge/package.json" ] &&
+  # ...and esbuild's binary must be the one for THIS host. node_modules lives in a shared tree, so a
+  # cache installed on the other OS is present-but-unusable: esbuild refuses at bundle time with
+  # "You installed esbuild for another platform", which surfaced as verify_v30 failing at bundling.
+  # Treating that as "deps missing" makes both machines self-heal on first use, which is what this
+  # install-on-demand contract already promised.
+  [ -d "$NPM_DIR/node_modules/$(host_esbuild_pkg)" ]
 }
+
+# @esbuild/<os>-<arch> for the running host, e.g. @esbuild/linux-x64.
+host_esbuild_pkg() {
+  node -e 'const o={linux:"linux",darwin:"darwin",win32:"win32"}[process.platform]||process.platform;
+const a={x64:"x64",arm64:"arm64",arm:"arm",ia32:"ia32"}[process.arch]||process.arch;
+process.stdout.write(`@esbuild/${o}-${a}`)'
+}
+# esbuild's launcher must EXEC its platform binary. This tree is typically on a CIFS mount with
+# nounix,file_mode=0664 — the server stores no Unix mode, so the client forces 0664 on every file and
+# NOTHING on the share can ever be executable. `chmod +x` looks like it works and `ls` still shows
+# -rw-rw-r--; esbuild then dies with EACCES on its own binary. So when the resolved binary is not
+# executable, stage a copy on local disk and point esbuild at it (ESBUILD_BINARY_PATH is esbuild's
+# supported override). Nothing is hidden: the reason is printed.
+ensure_esbuild_runnable() {
+  case "$(uname -s 2>/dev/null)" in MINGW*|MSYS*|CYGWIN*) return 0 ;; esac   # NTFS keeps the mode
+  local pkg bin cache ver
+  pkg="$(host_esbuild_pkg)"
+  bin="$NPM_DIR/node_modules/$pkg/bin/esbuild"
+  [ -f "$bin" ] || return 0
+  [ -x "$bin" ] && return 0
+  ver="$(node -e 'process.stdout.write(String(require(process.argv[1]).version))' "$NPM_DIR/node_modules/esbuild" 2>/dev/null || echo unknown)"
+  cache="${XDG_CACHE_HOME:-$HOME/.cache}/adh/esbuild-$ver-${pkg//\//-}"
+  mkdir -p "$(dirname "$cache")" || die "cannot create cache dir for esbuild"
+  if [ ! -x "$cache" ] || [ "$bin" -nt "$cache" ]; then
+    cp -f "$bin" "$cache" && chmod +x "$cache" || die "cannot stage a runnable esbuild copy at $cache"
+  fi
+  export ESBUILD_BINARY_PATH="$cache"
+  echo ">> $pkg/bin/esbuild is not executable on this filesystem (no exec bit on the share); staged a runnable copy at $cache" >&2
+}
+
 if ! need_deps; then
   if [ "$OFFLINE" = "1" ]; then
     die "bundler deps missing under tools/frida (offline): cd tools/frida && npm install --ignore-scripts"
@@ -60,6 +96,7 @@ if ! need_deps; then
   ( cd "$NPM_DIR" && npm install --no-audit --no-fund --ignore-scripts --loglevel=error ) >&2 ||
     die "npm install failed in $NPM_DIR"
 fi
+ensure_esbuild_runnable
 
 # node is a Windows binary under Git Bash: hand it Windows-style paths.
 NODE_INPUT="$INPUT"; NODE_OUT="$OUT"

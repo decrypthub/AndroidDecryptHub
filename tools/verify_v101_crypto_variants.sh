@@ -25,9 +25,11 @@ if ! verify_unit_pass "crypto-variant detector" crypto_variants.test.ts 13; then
 fi
 
 # --- 2. build the fixtures -------------------------------------------------------------------
-CLANG="$NDK/toolchains/llvm/prebuilt/windows-x86_64/bin/clang.exe"
+# $CLANG comes from tools/lib/env.sh: an NDK that has THIS host's toolchain, falling back to another
+# installed NDK when the pinned Win-path one is absent. Hardcoding the Windows path here made this
+# script SKIP ("no clang") on a Linux host that could build the fixtures perfectly well.
 if [ ! -x "$CLANG" ]; then
-  echo "SKIP (no clang at $CLANG — set ANDROID_NDK_HOME)"
+  echo "SKIP (no clang resolved — CLANG='${CLANG:-<empty>}'; set ANDROID_NDK_HOME or install an NDK)"
   exit 0
 fi
 if ! bash "$ROOT/tools/build_crypto_variants.sh"; then

@@ -20,8 +20,12 @@ fi
 SECTIONS="$("$READELF" -SW "$SO")"
 DYNSYM="$("$READELF" --dyn-syms --wide "$SO")"
 PROGRAM="$("$READELF" -l "$SO")"
-DEFINED="$(awk '$1 ~ /^[0-9]+:$/ && $7 != "UND" {print $8}' <<<"$DYNSYM" | sort -u | tr '\n' ' ')"
-EXPECTED="JNI_OnLoad adh_agent_set_package adh_agent_start "
+# Both sides sorted under LC_ALL=C. The check is about the SET of defined exports (`sort -u` above),
+# but `sort` collation is locale-dependent: under a zh_CN/en_US locale case is folded, so `adh_*`
+# sorts BEFORE `JNI_OnLoad` and a hardcoded order fails while the set is correct. Pinning the
+# collation makes the comparison say what it means, on any host.
+DEFINED="$(awk '$1 ~ /^[0-9]+:$/ && $7 != "UND" {print $8}' <<<"$DYNSYM" | LC_ALL=C sort -u | tr '\n' ' ')"
+EXPECTED="$(printf '%s\n' JNI_OnLoad adh_agent_set_package adh_agent_start | LC_ALL=C sort | tr '\n' ' ')"
 BYTES="$(wc -c < "$SO" | tr -d '[:space:]')"
 DEBUG_SO="$ROOT/agent/build/libadh_agent.so.debug"
 

@@ -6,8 +6,9 @@
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
 verify_resolve_env_host
-NDK="${ANDROID_NDK_HOME:-$HOME/AppData/Local/Android/Sdk/ndk/28.2.13676358}"
-READELF="$NDK/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-readelf.exe"
+# $READELF comes from tools/lib/env.sh (which this sources via verify_common.sh): it is host-aware and
+# falls back to PATH. This script used to redefine it to the Windows NDK path, which made it fail with
+# ENOENT on Linux — the duplicate was the whole bug.
 
 set +e
 OUT="$(node - "$HTTP" "$ROOT" <<'EOF'

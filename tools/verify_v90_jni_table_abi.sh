@@ -13,13 +13,14 @@
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
 verify_resolve_env_host
-# env.sh carries the NDK path this check reads jni.h from.
+# env.sh resolves JNI_H (and CLANG) from an NDK that has THIS host's toolchain, falling back to
+# other installed NDKs when the pinned Win-path one is absent. Do not hardcode the path here — doing
+# so made this check SKIP silently on a Linux host that had a usable NDK.
 source "$(dirname "${BASH_SOURCE[0]}")/lib/env.sh"
 
-JNI_H="$NDK/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include/jni.h"
 AGENT_C="$ROOT/agent/src/runtime/jni_env_hooks.c"
 if [ ! -f "$JNI_H" ]; then
-  echo "RESULT:SKIP jni.h not found ($JNI_H)"
+  echo "RESULT:SKIP jni.h not found (JNI_H='${JNI_H:-<unresolved>}' — set ANDROID_NDK_HOME)"
   echo "⏭ JNIEnv table ABI SKIP"
   exit 0
 fi

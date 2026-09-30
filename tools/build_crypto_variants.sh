@@ -14,9 +14,11 @@
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/env.sh"
 
-CLANG="$NDK/toolchains/llvm/prebuilt/windows-x86_64/bin/clang.exe"
+# env.sh resolves CLANG from an NDK that has THIS host's toolchain (falling back to other installed
+# NDKs when the pinned Win-path one is absent). Hardcoding the Windows path here made the compiled
+# fixtures unbuildable on Linux, which surfaced as verify_v101 failing for "no clang".
 if [ ! -x "$CLANG" ]; then
-  echo "no clang at $CLANG (set ANDROID_NDK_HOME)" >&2
+  echo "no clang resolved (CLANG='${CLANG:-<empty>}' — set ANDROID_NDK_HOME or install an NDK)" >&2
   exit 1
 fi
 

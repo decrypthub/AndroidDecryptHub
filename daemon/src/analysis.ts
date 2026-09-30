@@ -2,16 +2,40 @@
 // Extracted from index.ts so the daemon's wiring stays lean. Pure functions over a file
 // path/Buffer; no daemon state, no agent protocol.
 import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 const execFileP = promisify(execFile);
-const LLVM_BIN = process.env.ADH_LLVM_BIN ??
-  join(homedir(), 'AppData/Local/Android/Sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/windows-x86_64/bin');
-export const OBJDUMP = process.env.ADH_OBJDUMP ?? join(LLVM_BIN, 'llvm-objdump.exe');
-const READELF = process.env.ADH_READELF ?? join(LLVM_BIN, 'llvm-readelf.exe');
+
+// The NDK ships llvm-objdump/llvm-readelf per HOST OS, under a triple-named prebuilt dir, with a
+// .exe suffix on Windows. Hardcoding the Windows triple meant that on any other host the spawn
+// failed with ENOENT and `analyzeSo` reported that as an ANALYSIS error — `defined-exports=none`,
+// `ERR spawn …llvm-objdump.exe` — so two acceptance scripts failed and the failure looked like the
+// binary was unparseable rather than the tool being absent.
+const HOST_TRIPLE = process.platform === 'win32' ? 'windows-x86_64' : 'linux-x86_64';
+const EXE = process.platform === 'win32' ? '.exe' : '';
+function defaultNdkBin(): string {
+  const ndkRoot = process.env.ANDROID_NDK_HOME
+    ?? (process.env.ANDROID_SDK_ROOT ? join(process.env.ANDROID_SDK_ROOT, 'ndk', '28.2.13676358') : undefined)
+    ?? join(homedir(), 'AppData/Local/Android/Sdk/ndk/28.2.13676358');
+  return join(ndkRoot, 'toolchains/llvm/prebuilt', HOST_TRIPLE, 'bin');
+}
+const LLVM_BIN = process.env.ADH_LLVM_BIN ?? defaultNdkBin();
+
+// Resolve a tool: the NDK's copy when it is actually there, otherwise the same-named tool on PATH
+// (a bare name makes execFile search PATH). llvm-objdump/llvm-readelf are the same programs in both
+// places, so this is a lookup, not a substitution — and it is what lets a host without the Android
+// SDK still analyse a .so instead of reporting ENOENT as a parse failure.
+function llvmTool(name: string, override?: string): string {
+  if (override) return override;
+  const fromNdk = join(LLVM_BIN, name + EXE);
+  return existsSync(fromNdk) ? fromNdk : name;
+}
+export const OBJDUMP = llvmTool('llvm-objdump', process.env.ADH_OBJDUMP);
+const READELF = llvmTool('llvm-readelf', process.env.ADH_READELF);
 
 // Dynamic symbols (exports/imports), NEEDED libs, and printable strings of an ELF .so.
 export async function analyzeSo(path: string): Promise<any> {
