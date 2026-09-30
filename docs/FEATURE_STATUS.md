@@ -42,15 +42,22 @@
 > **实测效果**：`unpack` 1/4 → **4/4**（1 秒）；`v29` `queryMs` 466ms → **1.72ms 且 PASS**；
 > `v15_dumpall` `shaped=1/4` → **`4/4` PASS**。详见 `PROGRESS.md` 2026-09-30（第 8–11 条）。
 >
-> **当前真实数字**（gate5，`ADH_DATA_DIR` 指向本地盘，103 PASS / 10 FAIL / 5 SKIP）。
-> 其中 `v08_xref` 与 `v19_settings` 的失败**已在同一轮之后修掉并单独复验通过**，故实际遗留 **8 条**：
-> 6 条环境（`v01` 缺 `cmake.exe`；`v02_so`/`v08_disasm`/`v08_analyze`/`v26_footprint` 缺 Windows 路径下的
-> LLVM 工具，`v90` 因此 SKIP；`v30` 的 `frida/node_modules` 是 Windows 装的 esbuild）、
-> 1 条文档已登记的偶发（`v22_capture` 记账抖动）、
-> 1 条**未解决**（`v100` 在全量门禁里必红、单独跑必绿——已排除 5 条路并加了诊断，见 `PROGRESS.md` 第 12 条）。
-> **下一步**：`HANDOVER §5` 第 1b 条**还剩 ①④**——① 工具链路径 host-aware + 本机装 `llvm`
-> （救 `v02_so`/`v08_disasm`/`v08_analyze`/`v26_footprint`，并让 `v90` 从 SKIP 转真跑）、
-> ④ `frida` 依赖分平台（救 `v30`）。（③ 索引脱离网络盘**已由本轮的 `ADH_DATA_DIR` 完成**。）
+> **当前真实数字**（gate8，`ADH_DATA_DIR` 指向本地盘）：**112 PASS / 2 FAIL / 4 SKIP**。
+> 八轮演进：`103/11/4` → `103/10/5` → `104/9/5` → `103/10/5` → `103/10/5` → `112/3/3` → `112/3/3` → **`112/2/4`**。
+> **剩下 6 条非通过，没有一条是被注入的代码：**
+>
+> | 项 | 原因 |
+> |---|---|
+> | `v01` FAIL | 需要**完整构建链**（`cmake`/`ninja`）——本机没装。属"要不要在这台机器上做完整构建"的环境决策 |
+> | `v22_capture` FAIL | 文档已登记的**偶发记账抖动**（`emitted+backlog+dropped==seq`），非本轮引入 |
+> | `v37_agent_reconnect` SKIP / `v99_artifact_store` SKIP | 进程控制是 **Windows-only**（`netstat -ano \| grep LISTENING`、PowerShell `Stop-Process`），Linux 上是 no-op |
+> | `v31_xposed` SKIP | **模块 APK 里捆的 agent 是 0.2.0**（源码 0.3.12），重建需要 `gradle`——没有，所以如实 SKIP 而不是拿旧 agent 跑出 PASS |
+> | `v32_backend_control` SKIP | 同上，需要 `gradle` |
+>
+> **本轮新增已验证为真跑的**（此前是 SKIP 或假红）：`v90_jni_table_abi`（228 个索引逐条对照 `jni.h`，228/229）、
+> `v101_crypto_variants`（clang 编译靶子 + 11 项断言）、`v02_so`/`v08_disasm`/`v08_analyze`/`v26_footprint`/`v30`。
+> **`v100` 已在门禁内转绿**（此前八轮全红）——它有两个门禁内成因，都已定位：解析到 ADH Manager、以及上面那个 0.2.0 模块。
+> **发布范围收口提案**（不做/降级的 10 项，含证据与"什么条件下重新考虑"）见 `DEVELOPMENT_PLAN.md §6.9.5`；需求口径修订建议（去特征对抗面、SKIP 分层、信任模型等 7 条）见 `REQUIREMENTS.md` 顶部"口径修订建议"——两者都是**待确认**，确认后合并进正文。
 > **发布范围收口提案**（不做/降级的 10 项，含证据与"什么条件下重新考虑"）见 `DEVELOPMENT_PLAN.md §6.9.5`；需求口径修订建议（去特征对抗面、SKIP 分层、信任模型等 7 条）见 `REQUIREMENTS.md` 顶部"口径修订建议"——两者都是**待确认**，确认后合并进正文。
 
 ## 0. 发布物

@@ -280,6 +280,37 @@ adh: /api/unpack/dump-all -> HTTP 504: { "error": "command timeout" }
 **验证**：修复后按门禁完整时序（重启沙盒）跑 → **22 checks / 0 problems PASS**，
 且注册表里存在 Manager 条目时仍正确解析到沙盒。**仍需第 7 轮全量确认门禁内转绿**（单跑过 = 不算）。
 
+### 13. Xposed 模块里**悄悄捆着三版本前的 agent**（`doctor` 是对的，测试是错的）✅
+
+**发现路径**：第 6/7 轮 `v100` 换成在 **`doctor` 断言**上红，注册表给出原因：
+
+```
+com.adh.manager  pid 22542  online  entry=jni_onload  agentVer=0.2.0     ← 源码是 0.3.12
+  loaded as:                      （selfModule 为空——0.2.0 那个年代还没这个字段）
+```
+
+**根因**：已安装的 Xposed 模块 APK **自己捆了一份 agent**，仓库里那份是 **0.2.0**（322,032 字节），
+而当前 checkout 构建的是 **0.3.12**（1,030,312 字节，sha `82e0cfb5…`）。
+把这份旧 agent 弄上线的是 **`verify_v31`**——它以 `com.adh.manager` 为目标做 force-stop + 重启，
+而它**正好跑在 `v100` 前一位**。
+
+`tools/build_xposed.sh` 本身是**对的**：它把当前 agent 拷进 jniLibs，还校验 APK 里那份是否过期
+（`die "module APK still carries a stale libadh_agent.so"`）。**但 `verify_v31` 只在 APK *不存在*时才重建**——
+文件在，于是这份过期副本被无限复用。
+
+**修法**：`v31` 现在把"捆的 agent 与 `agent/build/` 不一致"视同"缺失"，重建并复检。
+**在没有 gradle 的机器上重建会失败，于是它如实 SKIP 并给理由**，而不是拿一个**我们并不发布的 agent**
+跑通之后报 PASS：
+
+```
+RESULT:SKIP module APK stale and not rebuildable
+⏭ Xposed backend SKIP (agent 0.2.0 bundled, gradle/AGP unavailable to rebuild)
+```
+
+**这不只是测试问题**：**Xposed 后端可能一直在目标进程里跑旧 agent 而没人发现**——
+对一个"前提是你知道目标进程里究竟跑着什么"的工具来说，这是实打实的缺陷。
+（顺带解释了 `v100` 六轮全红：gate6 是它解析到 Manager 本身（已修），gate7 是 `doctor` 因这个 0.2.0 报 MISMATCH。）
+
 ### 以前未解决时排除过的五条路（保留，避免重复走）
 
 | 假设 | 实验 | 结论 |
