@@ -77,7 +77,7 @@ Web UI（浏览器）：
 | L1 | `libadh_agent.so` | hook、trace、dump、maps 扫描、事件推送、执行 RPC 命令 | HTTP/MCP、DB、索引、smali 生成、大量反汇编缓存 |
 | L2a | Host ADH Daemon (`adhd`，PC) | Web/MCP 服务、会话、调度、存储、索引、分析、缓存 | 注入目标进程、直接读目标内存 |
 | L2b | Device surface (`device/`) | Manager Compose + Device Daemon 作用域/模块状态/目标进程启停 | 分析、HTTP、MCP、hook |
-| L3 | Web UI | 观测、搜索、配置、可视化、导出 | 业务逻辑、直连 Agent |
+| L3 | Web UI | **只读查看器**（2026-10-01 冻结）：观测、搜索、可视化 | 业务逻辑、直连 Agent、配置写入、导出 |
 
 ### 1.2 外部依赖
 
@@ -85,8 +85,8 @@ Web UI（浏览器）：
 |---|---|---|
 | [Dobby](https://github.com/jmpews/Dobby) | arm64 native inline hook（by address；静态链接） | Agent（`tools/fetch_dobby.sh`，已验证 v2.2/v28） |
 | [Capstone](https://github.com/capstone-engine/capstone) | 反汇编引擎 | Daemon 为主；Agent 可选轻量 wrapper |
-| [QBDI](https://github.com/QBDI/QBDI) | DBI 框架，指定范围 instruction trace | Agent（按需加载） |
-| [Frida Gadget](https://frida.re) | 可选注入后端：官方 so 由 agent `dlopen` 进目标；Frida 17 起 Java/ObjC 语言桥需自行打包 | `tools/load_frida_gadget.sh`（已落地） |
+| [QBDI](https://github.com/QBDI/QBDI) | DBI 框架，指定范围 instruction trace | Agent **可选**（按需加载；起不来按 `SKIP:optional-dependency`） |
+| [Frida Gadget](https://frida.re) | **开发/调试用**：官方 so 由 agent `dlopen` 进目标；Frida 17 起 Java/ObjC 语言桥需自行打包 | `tools/load_frida_gadget.sh`（已落地，**不进发布物**） |
 | Zygisk (Magisk) | root early-inject 后端 | 注入器（root） |
 | MCP Streamable HTTP | 独立进程 HTTP POST/GET + SSE 流式 | Daemon |
 
@@ -106,10 +106,10 @@ HTTP API 与 MCP tools **不重复实现业务逻辑**，共享同一 Service La
 
 ```text
 ADH (Android DecryptHub)
-├── 1. Agent 注入层          — Zygisk / Gadget 直载 / Xposed 桥接 / 模拟注入(CI)
+├── 1. Agent 注入层          — Zygisk（官方路径）/ 模拟注入(CI)；Gadget 与 Xposed 为实验后端
 ├── 2. Dump Engine           — dex / so / memory / maps / magic scan / ART 结构级捕获(L.6)
-├── 3. Syscall / libc / File Monitor — Java + native 文件/系统观测；direct syscall 分级(E.9)
-├── 5. Native Trace Engine   — QBDI，函数/基本块/指令级 trace
+├── 3. Syscall / libc / File Monitor — Java + native 文件/系统观测；svc 站点归因(E.9)
+├── 5. Native Trace Engine   — 指令级 trace（QBDI，可选后端）+ 函数级 trace / trace_digest
 ├── 6. Disasm / Binary Analyzer — Capstone，symbol/xref/asm 搜索；native crypto 常量扫描(H.4)
 ├── 7. Control Server / MCP Server — adhd 守护进程；自观测/审查日志(P)
 └── 8. Web UI + 沙盒测试 App — 观测台 + 自动化验证
@@ -117,7 +117,7 @@ ADH (Android DecryptHub)
 对抗与自省专项模块（贯穿上面各层）：
 ├── S. 抗干扰采集（诊断 + 韧性）          T. 活体对象自省
 ├── U. 非标运行时识别                     V. 反分析行为观测（调试/root/签名/模拟器）
-└── W. 注入后端（Zygisk + Gadget 直载 + Xposed 桥接 + 模拟注入）
+└── W. 注入后端（Zygisk 官方 + 模拟注入；Gadget/Xposed 实验）
 ```
 
 ---
@@ -349,6 +349,10 @@ MCP Server **只放在 adhd**，不放目标进程 so。
 
 ### 4.7 Web UI — 实时观测台
 
+> ⚠️ **已冻结为只读查看器（2026-10-01 决议）**：与 MCP/HTTP 面重叠，近期工作全部走 MCP。
+> 下面的页面表描述**查看能力**仍然有效；任何"用浏览器去配置/写入/导出"的新增一律不做，
+> 除非出现"必须用浏览器操作"的明确场景（届时先改本节再动手）。
+
 | 页面 | 功能 |
 |---|---|
 | Dashboard | 目标进程、PID/UID/package、dex/so 数、hook 数、trace 状态、dump 数 |
@@ -535,16 +539,16 @@ android-decrpthub/          # 仓库名；产品名 ADH (Android DecryptHub)
 | WS | 名称 | 核心缺陷 → 改造 | 归属层 |
 |----|------|----------------|--------|
 | **A** | Hook 引擎第二条腿 | 只有 GOT hook，静态链接/自实现 TLS 等路径抓不到 → `GOT / INLINE` 双后端；native inline 采用静态链接 Dobby 按地址改函数入口。**fail-loud 区分**：符号未解析 / backend 拒绝 / trigger 失败。GOT 与 Dobby inline 为当前 native 主线。 | Agent |
-| **B** | 彻底去 sandbox 耦合 | `net_hook_test/flow_watch/detect_watch/trace_run/crypto_hook_test` 全写死调 sandbox 类、hook 写死 libjavacrypto → 删"一次性 probe + 写死触发类"命令族；`crypto_probe` 枚举出的**每个**持有 EVP 指针的模块都装 hook；触发两条路径：被动（真实 app 自然命中）+ 主动（operator/MCP 下发 `{class,method,args}` 反射，**类名来自命令**）。sandbox 触发改由 verify 脚本 `am broadcast`/`am instrument` 进程外驱动。 | Agent + Daemon |
-| **C** | 采集管线：环形缓冲 | `g_caps[64]/g_jcaps[96]/g_trace[256]` 定长满即**静默丢** → MPSC 环形缓冲 + drain 线程持续推 adhd 落盘；有界阻塞背压；溢出**如实上报** `dropped` 计数 + 首末丢弃时间戳，UI 红字；`dropped>0` → `/api/captures` 与导出报告带 `complete:false`。 | Agent + Daemon |
+| **B** | 彻底去 sandbox 耦合 ✅ **已完成（2026-10-01）** | 9 条一次性触发命令（`crypto_hook_test` / `net_hook_test` / `file_hook_test` / `flow_watch` / `detect_watch` / `trace_run` / `inline_crypto_test` / `crypto_probe` / `jni_probe`）已从 agent 真删。它们真正的耦合不是类名（那是 daemon 给的）而是**把触发契约写死成 `run()`** —— grep 门禁看不见的那一半；其中 3 条还写死 `libjavacrypto.so`。能力改由真实原语提供：持续捕获 `capture_start`/`capture_stop`（crypto/net/file/system 四类，模块名由调用方给出）+ MCP `java_call`（`{class,method,params,args}` 全来自命令）+ `native_hook`（got/inline/sites/vtable）+ `got_enum`/`compat_probe`；网络↔加密关联移到 daemon（`daemon/src/flow.ts`，纯函数 + 单测）。daemon 侧 `SANDBOX` 常量一并删除，**两侧 `com.adh.sandbox` 常量均为 0**。 | Agent + Daemon |
+| **C** | 采集管线：环形缓冲 | `g_caps[64]/g_jcaps[96]` 定长满即**静默丢**（第三个 offender `g_trace[256]` 随 2026-10-01 删除 `trace_run` 一起消失，见 WS-B） → MPSC 环形缓冲 + drain 线程持续推 adhd 落盘；有界阻塞背压；溢出**如实上报** `dropped` 计数 + 首末丢弃时间戳，UI 红字；`dropped>0` → `/api/captures` 与导出报告带 `complete:false`。 | Agent + Daemon |
 | **D** | 协议重写：length-framed | NDJSON + `strstr("\"key\":\"")` 提取 + 8192 命令单行上限 → 帧 `[u32 len][u8 type][payload]`；控制帧 payload 仍为 JSON；取消 8192 上限与超长丢弃；大 dump 走分片帧或 memfd/ashmem 共享内存。**fail-loud**：帧长非法 / 类型未知 → 关连接并上报。`proto/PROTOCOL.md` 同步重写。 | Agent + Daemon |
-| **E** | 脱壳：二代 + try/catch + cdex/041 + map_list | 只做回填型；`tries!=0` 方法**静默跳过**（恢复率虚高）；cdex/041 没做；rebuild 不建 map_list → 完整解析 `code_item`（`tries[]`/`encoded_catch_handler_list`），解不动的显式标 `unresolvable` 计入分母；cdex→标准 dex（共享区去共享 + 偏移重写）；DEX 041 container 逻辑拆分；rebuild 真正重建 `map_list`；gen-2 后端用 WS-A hook 在方法体解密瞬间抓完整 CodeItem。**fail-loud**：定位不到共享区 → 报 `format unsupported:<reason>`，不截断假装成功。**无真实 cdex/041 样本则标 PENDING，不伪造。** | Daemon（+ Agent gen-2 hook） |
+| **E** | 脱壳：二代 + try/catch + cdex/041 + map_list | 只做回填型；`tries!=0` 方法**静默跳过**（恢复率虚高）；cdex/041 没做；rebuild 不建 map_list → 完整解析 `code_item`（`tries[]`/`encoded_catch_handler_list`），解不动的显式标 `unresolvable` 计入分母；cdex→标准 dex（共享区去共享 + 偏移重写）；DEX 041 container 逻辑拆分；rebuild 真正重建 `map_list`；gen-2 后端用 WS-A hook 在方法体解密瞬间抓完整 CodeItem。**fail-loud**：定位不到共享区 → 报 `format unsupported:<reason>`，不截断假装成功。**cdex/041 已决议不进排期（2026-10-01）**：无真实样本，保持样本驱动——拿到样本再立项，不伪造进度。 | Daemon（+ Agent gen-2 hook） |
 | **F** | 分析层：持久化索引 + 深解析 + IR | 每请求全量 reparse + 线性 filter；只解析到 method/class；xref 只连直接调用 → SQLite 持久倒排索引（string→使用点 / field→读写点 / method→callers）；深解析 proto/参数/debug_info；**反射解析**（`const-string + Class.forName/getMethod/invoke` 静态回填）；虚/接口调用经 class hierarchy 解析候选实现集；`analysis/ir.ts` 结构化指令 IR。**fail-loud**：index 与 dex sha/大小不一致 → 强制重建 + 告警。 | Daemon |
 | **G** | native 动态分析：Capstone + 内存镜像反汇编 | 只 shell `llvm-objdump`，无 section 的 raw/strip .so 反汇编不了 → adhd 引入 Capstone，对加载地址直接反汇编（无需 section/symbol）；结合 WS-F 做 native 函数边界识别（prologue 扫描）。 | Daemon |
-| **H** | QBDI 通用化：带参 + 真实调用点 | `adh_qbdi_trace` 只能 trace 无参、凭空 call 的 `adh_trace_target`（测试桩） → 两模式：就地插桩（WS-A hook 命中真实调用时对该地址范围下 `addInstrumentedRange` + PRE/POST，用真实寄存器/栈上下文跑）+ 重放（hook 抓入参后按 arg spec `qbdi_call` 重跑）；目标地址/符号来自命令。**fail-loud**：需参数却没给 spec → 拒绝。 | Agent |
+| **H** | QBDI 通用化：带参 + 真实调用点（**已降级为可选后端，2026-10-01**） | `adh_qbdi_trace` 只能 trace 无参、凭空 call 的 `adh_trace_target`（测试桩） → 两模式：就地插桩 + 重放；目标地址/符号来自命令。**fail-loud**：需参数却没给 spec → 拒绝。**但**：QBDI 要 6.5 MB `.so` 打进 APK，且本机 ROM 上 `qbdi_addCodeCB` 返回 0 —— 因此 agent 只如实报出 `initVM/addCodeCB` 的真实错误码，脚本按 `SKIP:optional-dependency` 处理，**不再投 ROM 兼容**；真实调用点的插桩需求改由 `native_hook`（`mode=got\|inline\|sites` + `backtrace:true`）承接。 | Agent |
 | **I** | 关联：确定性数据流 | crypto↔network 靠"同线程 + 33ms 窗"，并发会错配 → EVP/SSL hook 记录缓冲区指针 + 长度 + 内容哈希；`SSL_write` 的 buf 等于/包含某条 EVP 输出密文（按 content hash）时**确定性**关联；时间窗仅作兜底。 | Daemon（数据）+ Agent（采集字段） |
-| **J** | 反检测：动态面扩展（授权、默认 off；首个可验证切片：`compat_probe` 输出注入足迹基线/当前差值；release agent strip + 三入口导出收敛；基础注入/GOT hook 不新增匿名可执行段，Dobby/QBDI 为已知匿名 `x` 生产者；真机 Sentry 3/3 冷启动 agent online、companion maps=0，Sentry Maps/Memory 检测 clean） | 只 hook 自己 mock 的 `libadhdetect`，只中和 TRACEME → inline hook 目标自身 native so 内检测调用 + svc 热点观测；Java 后端 hook `PackageManager.getPackageInfo(签名)` / root 路径 `File.exists`；中和从单一 TRACEME 扩为可配置策略集，**默认全关，危险中和需 adhd 显式确认**。 | Agent |
-| **K** | 架构拆分 + 多架构 | 随各片落地：agent 拆 `hook/ capture/ dex/ trigger/ inspect/`，`agent_main.c` 只留 bootstrap + 分发；daemon 拆 `routes/ ws/ mcp/ db/ analysis/ dex/ native/`；CMake 产出 arm64 + armeabi-v7a（偏移/指针宽度参数化）；adhd 注册表支持一包多 agent（`:remote` 路由）。 | 全层 |
+| **J** | 反检测：动态面扩展（授权、默认 off；首个可验证切片：`compat_probe` 输出注入足迹基线/当前差值；release agent strip + 三入口导出收敛；基础注入/GOT hook 不新增匿名可执行段，Dobby/QBDI 为已知匿名 `x` 生产者；真机 Sentry 3/3 冷启动 agent online、companion maps=0，Sentry Maps/Memory 检测 clean） | 只 hook 自己 mock 的 `libadhdetect`，只中和 TRACEME → inline hook 目标自身 native so 内检测调用 + svc 热点观测；Java 后端 hook `PackageManager.getPackageInfo(签名)` / root 路径 `File.exists`；中和从单一 TRACEME 扩为可配置策略集，**默认全关，危险中和需 adhd 显式确认**。⚠️ 现状（2026-10-01）：原 `detect_watch` 是 TRACEME 中和的**唯一**开关，它随 WS-B 被删，因此中和目前**没有控制面**；要恢复必须显式设计一个默认关闭的 opt-in（不要顺手接回，见 `CLAUDE.md` 的 boundaries）。 | Agent |
+| **K** | 架构拆分（**多架构已决议不做，2026-10-01**） | 随各片落地：agent 拆 `hook/ capture/ dex/ trigger/ inspect/`，`agent_main.c` 只留 bootstrap + 分发；daemon 拆 `routes/ ws/ mcp/ db/ analysis/ dex/ native/`；adhd 注册表支持一包多 agent（`:remote` 路由）。**产品边界 = `arm64-v8a` only**：不做 armeabi-v7a，也不做 x86_64；重新考虑的条件只有一个 —— 出现必须支持的**真实 32 位目标**（模拟器 x86_64 不算，见 `HANDOVER §1.3`）。 | 全层 |
 | **L** | 验证真实化 | 79 个 device 验收**全跑在沙盒 `System.loadLibrary` 自加载路径上**——那条路径**结构上不可能**产生 memfd 加载的 agent、也不会遇到拒绝 `/proc/self/mem` 的目标。结果是 `art_dexfiles`/`java_hook`/`trigger` 与整条读内存链路在真机上**整组死掉而门禁全绿**（2026-09-26 学习通实战，见 `CASE_STUDIES.md` 案例 1）。改造：① 注入路径的验收必须断言 **Java/ART 能力**，不能只断言"注入成功"；② 读内存回退必须能**覆盖全部读命令**（强制直读开关），因为"目标拒绝该 fd"无法按需制造。**fail-loud 反向要求**：不要为了显得覆盖而添加一个**永远不会失败**的测试（沙盒 `prctl(PR_SET_DUMPABLE,0)` 在本 ROM 就不阻断自读，建了也是装饰）。 | Tools + Agent |
 
 ### 6.9.2 v2.0+ 版本排期（每片有独立 pass/fail；无样本标 PENDING，不伪造）
@@ -552,13 +556,13 @@ android-decrpthub/          # 仓库名；产品名 ADH (Android DecryptHub)
 | 版本 | 内容 | 验收信号（pass/fail） |
 |------|------|----------------------|
 | **v2.0** | WS-D 协议重写 + WS-C 环形缓冲/落盘/如实上报 | dump 16MB region 字节级 sha256 一致；超长命令完整解析；高频驱动 1000/s×10s，`produced` + `dropped` 如实上报（旧实现静默丢 ~9900 却显示成功） |
-| **v2.1** | WS-B 去耦合（已基本完成）+ 原生 Signature/AEAD 覆盖扩展（GOT hook） | `grep com.adh.sandbox agent/` = 0；EVP_PKEY_sign/verify/encrypt/decrypt、EVP_AEAD_CTX_seal/open 全部装上并在 sandbox 触发中各命中 ≥1 次；capture_start 回包对每个新符号如实报告装上/未装上（非 ok:true replaced:0） |
+| **v2.1** | WS-B 去耦合 ✅ 完成（2026-10-01） | 门禁新增三条：`grep -rn 'com\.adh\.sandbox' agent/src daemon/src` = 0（**两侧**都查，此前只查 agent）；agent 里 9 条一次性触发命令的分支不存在；MCP 面上不再有依赖写死触发契约的工具 |
 | **v2.2** | WS-A native inline 后端（Dobby by-address） | sandbox 静态链接的 BoringSSL ABI-shaped native crypto 直接调用（无 GOT slot）被函数入口 hook 捕获；同进程连续两次调用均命中且原 trampoline 返回正确结果 |
 | **v2.3** | WS-F 持久索引 + 深解析 + 反射 | 多 dex 建 SQLite 索引后 string/field/method→callers < 250ms；重复 SHA 命中缓存；一条 `Class.forName` 反射链被静态连出，并可由 REST/MCP 查询 |
-| **v2.4** | WS-E 脱壳二代 + try/catch + cdex/041 | 带 `try` 方法字节级重建一致；cdex→标准 dex 过 dexdump/verifier（**需样本，否则 PENDING**） |
-| **v2.5** | WS-G Capstone + WS-H QBDI 通用化 | strip 内存镜像 .so 反汇编出正确指令序列；带 2 指针参数的 native 函数 trace 读到入参字符串 |
+| **v2.4** | WS-E 脱壳二代 + try/catch（cdex/041 **不进排期**，2026-10-01） | 带 `try` 方法字节级重建一致（已完成，见 v95/v96）；cdex→标准 dex **待真实样本**：拿到样本再立项，不伪造 |
+| **v2.5** | WS-G Capstone + WS-H（QBDI 降级为可选后端） | strip 内存镜像 .so 反汇编出正确指令序列；QBDI 起不来时脚本报 `SKIP:optional-dependency` 并给出 `initVM/addCodeCB` 的真实错误码，而不是把 ROM 不兼容算成产品红 |
 | **v2.6** | WS-I 确定性关联 + WS-J 反检测动态面 | 8 条并发订单流零错配关联；svc 直连 + Java 验签双检测都被观测；`compat_probe` footprint 可读且基础注入/GOT 路径 `anonExec` delta 不增长 |
-| 贯穿 | WS-K 拆分随各片落地；`docs/*` 同步（一份计划） | — |
+| 贯穿 | WS-K **架构拆分**随各片落地（多架构不做）；`docs/*` 同步（一份计划） | — |
 
 **依赖**：Capstone / QBDI 非 git，走 `tools/fetch_*.sh` 拉取（沿用 QBDI 模式），`third_party/` gitignore。
 
@@ -571,7 +575,8 @@ android-decrpthub/          # 仓库名；产品名 ADH (Android DecryptHub)
 - [ ] 符号/参数缺失 → 拒绝执行，**禁止**用 0/猜测硬跑
 - [ ] 索引陈旧 → 重建 + 告警，**禁止**返回旧结果
 - [ ] 删除所有乐观硬编码常量标志
-- [ ] `agent/` 内 `com.adh.sandbox` 常量 = 0，`libjavacrypto` 等目标模块名不硬编码
+- [ ] `agent/` 与 `daemon/src/` 内 `com.adh.sandbox` 常量 = 0，`libjavacrypto` 等目标模块名不硬编码（注释里也不写目标模块名，否则这条断言只能靠人读）
+- [ ] 触发契约不硬编码：agent 不得假定目标有 `run()` 之类的方法名，`{class,method,params,args}` 一律来自命令
 
 ---
 
@@ -584,6 +589,14 @@ v1 只对 `docs/FEATURE_STATUS.md §2` 的已验收能力做加固：捕获背�
 > 与 §6.9 的关系：§6.9 是"把已有能力做扎实"的主线；本节只扩**加载机制**，不新增分析能力，也不占 v2.x 版本号。
 > 判定与验收细则见 `REQUIREMENTS.md §30.5`。
 
+**范围收口（2026-10-01 决议）**：**官方注入路径只有 Zygisk**；下列三者一律降级，不进发布物：
+
+| 后端 | 新定位 | 重新考虑的条件 |
+|---|---|---|
+| Frida Gadget | **开发/调试用**（移出发布物）；独特价值只剩 JS 生态 | 出现明确的 Frida 脚本复用需求，或单独立项做去特征 |
+| LSPosed/Xposed | **社区/实验**（保留代码与验收，不作为官方路径） | LSPosed-only 目标设备成为常态 |
+| eCapture | **实验脚本**，不出现在发布物，且**移出 `verify_all.sh` 门禁**（覆盖由自带的 TLS/syscall 观测承担） | 需要内核级、目标进程外观测 |
+
 - **Frida Gadget（已落地，2026-09-15 真机验证）**：`tools/fetch_frida_gadget.sh`（官方 release、版本/ABI 可切、sha256 固定）
   + `tools/compile_frida_script.sh`（Frida 17 起语言桥移出 runtime → esbuild + `frida-java-bridge` 打包）
   + `tools/load_frida_gadget.sh`（落盘 `<pkg>/code_cache` → `load_so` dlopen → 等 `frida-gadget` 线程 → `--marker` 断言脚本真的跑通）。
@@ -593,7 +606,7 @@ v1 只对 `docs/FEATURE_STATUS.md §2` 的已验收能力做加固：捕获背�
   设备事实：Vector 给模块的 `nativeLibraryDirectories` 指向 `base.apk!/lib/arm64-v8a` → agent `.so` 必须**未压缩**打包（`useLegacyPackaging=false`）；空参数 `scope set` 在 Vector 2.2 抛 NPE，清 scope 必须逐条 `scope rm`。
   **控制面已落地（2026-09-15）**：Device Daemon 的 `XposedBackend` 独占驱动框架（只调 `/data/adb/lspd/cli`），AIDL v5 暴露 status/enable/scope，Manager Scope 页有卡片并把 ADH 允许名单镜像进框架 scope；另有 root-only 一次性 CLI 供运维与 `tools/verify_v32_backend_control.sh`。注入中心亦已收口：主机 `GET /api/backends` + Web 控制台"注入后端"页（`tools/verify_v33_backends.sh`）。待办：Gadget 的一键下发（daemon 无 adb，当前只给命令模板）。
 - **eCapture（可选，root + eBPF，2026-09-16 真机验证）**：`tools/fetch_ecapture.sh`（官方发布、版本固定、sha256 取自官方 checksum 文件） / `tools/ecapture_capture.sh`（`--preflight-only` 给 root/内核/BPF/BTF 判定，运行后按 `probe started successfully` 给结论） / `tools/verify_v34_ecapture.sh`（MCP 驱动真实 HTTPS，断言 eCapture 抓到请求与响应明文）。门槛：root + aarch64 内核 ≥5.5 + eBPF；**BTF 非必需**（本机 5.10 / BTF=n 实测可用），故只作提示。
-- 红线：可选后端只在**显式调用**时启用（默认注入路径不变）；目标进程内不得承载 HTTP/DB/分析；不 vendor 上游 GPL 代码。
+- 红线：**Zygisk 之外的路径只在显式调用时启用**（默认注入路径不变）；目标进程内不得承载 HTTP/DB/分析；不 vendor 上游 GPL 代码。
 
 ### 6.11 手机 UI 自动化（模块 X，已退役）
 
@@ -602,24 +615,6 @@ v1 只对 `docs/FEATURE_STATUS.md §2` 的已验收能力做加固：捕获背�
 历史实现与验收记录留在 `docs/PROGRESS.md`，不构成当前发布能力或路线图。
 
 ---
-
-### 6.9.5 范围收口建议（**提案，待确认**，2026-09-19）
-
-> 这一节记录"哪些不做 / 降级"，避免每次评审都重新问一遍。**确认后**应把结论合并进
-> §6.9.1/§6.9.2 的对应行，并同步 `FEATURE_STATUS.md` 的发布范围——不要长期留两份计划。
-
-| 项 | 现状与证据 | 建议 | 什么条件下重新考虑 |
-|---|---|---|---|
-| 全量 syscall 拦截（seccomp/PTRACE_SYSEMU） | 一直标 "L3 未实现"；ptrace/seccomp 本身就是强指纹，与"低可检测性"目标冲突 | **不做**，从路线图移除；现有 svc-site hook + libc hook 已覆盖可归因路径 | 出现"必须看到全部 syscall 且不在乎被检测"的授权场景 |
-| QBDI 指令级 trace | 6.5 MB `.so` 打进沙盒 APK；只支持"凭空 call"；本机（PGP110/A15）`qbdi_addCodeCB` 返回 0，上一台设备通过过 | **降级**为可选后端：agent 报出 `initVM/addCodeCB` 真实错误码，脚本按 `SKIP:optional-dependency` 处理；不再投 ROM 兼容 | WS-H 的"真实调用点就地插桩"成为硬需求，且目标 ROM 验证通过 |
-| Frida Gadget 后端 | 官方二进制、未去特征；独特价值只有 JS 生态 | **降级**为开发/调试用（移出发布物）；或单独立项做去特征 | 出现明确的 Frida 脚本复用需求 |
-| eCapture 后端 | 需内核 eBPF；与自带 TLS/syscall 观测重叠 | 降级为**实验脚本**，不进发布物/门禁 | 需要内核级、目标进程外观测 |
-| Xposed 薄模块 | 与 Zygisk 注入路径重复（两套 loader + 一条设备脚本） | 只保留 **Zygisk** 为官方路径，Xposed 标"社区/实验" | LSPosed-only 目标设备成为常态 |
-| 手机 UI 自动化（模块 X） | 已按 2026-09-23 产品范围决议移除：无障碍桥、phone_* MCP、通知读取和设备 UI 控制均删除 | **退役，不纳入当前产品与验收**；AI 使用 adb | 用户明确提出重新引入需求 |
-| 8 个沙盒耦合命令 | `crypto_hook_test` / `net_hook_test` / `flow_watch` / `detect_watch` / `trace_run` / `inline_crypto_test` / `crypto_probe` / `jni_probe` 的命令名仍在 `agent_main.c`；WS-B 当初要求删（v4.49 只把 3 个标成"仅验收脚本使用"） | **真删**，验收脚本改走真实 API（红线相关清理，不设条件） | — |
-| cdex/041（WS-E 剩余） | 需真实样本，否则 PENDING | 保持**样本驱动**，不进排期 | 拿到真实 cdex/041 样本 |
-| 多架构（armeabi-v7a / x86_64，WS-K） | 偏移/指针宽度需全参数化，测试矩阵翻倍；现有设备均 arm64 | **arm64-only 作为产品边界** | 出现真实的 32 位目标 |
-| Web UI | 与 MCP/HTTP 面重叠，近期工作全部走 MCP | 冻结为**只读查看器** | 出现"必须用浏览器操作"的场景 |
 
 ## 7. 版本路线图（v0.1–v1.0，**已完成并归档** — 当前路线见 §6.9）
 
@@ -763,13 +758,13 @@ flowchart TD
 - maps 枚举、dex/so/memory dump
 - Java API hook、加密 API 观测
 - 文件读写观测（带来源标注）
-- 指定范围 native trace
-- Capstone 反汇编、Web/MCP 控制
+- 指定范围 native trace（`native_hook` + `trace_digest`；QBDI 指令级 trace 是**可选后端**，起不来按 `SKIP:optional-dependency` 处理）
+- Capstone 反汇编、MCP 控制（Web UI 已冻结为只读查看器）
 
 ### 不能承诺 100%
 
 - 所有壳都能脱
-- 所有 native 函数都能 hook 到（direct syscall、静态链接、内联封装）
+- 所有 native 函数都能 hook 到（**这是刻意不做的**：direct syscall 的全量拦截已决议不做，静态链接/内联封装也不承诺；见 §9.1）
 - 全进程 instruction trace 不影响性能
 - stripped so 函数边界全部准确
 - VMP 壳还原 Java
@@ -781,7 +776,7 @@ flowchart TD
 通用 Android 运行时逆向分析工具：运行时观测、按需 trace、
 dex/so/memory dump、ART 结构级脱壳辅助、活体对象自省、
 明文边界加密观测、反分析行为观测、Java/native 分析工作流；
-Zygisk / Gadget / Xposed 多注入路径。
+Zygisk 注入（官方路径）。
 ```
 
 ### 9.1 高风险能力可行性论证
@@ -796,11 +791,11 @@ Zygisk / Gadget / Xposed 多注入路径。
 | 抗干扰存活(S) | early-inject、最小 footprint、hook 自校验对抗 | **中** | 无法保证对抗所有商用加固 | AntiDebugMock 覆盖 ptrace/maps/序言校验 | 诊断层先报"打不过"，切最小侵入 |
 | 活体对象自省(T) | JNI + ART 堆遍历，枚举+字段读取 | **中高** | 大堆全扫性能、GC 一致性 | HeapObjectActivity 断言字段值 | 限定 class + 数量/深度上限 |
 | 反分析观测(V) | hook 目标的 ptrace/su/签名/属性检查点 | **中高** | direct syscall 检测漏检 | DetectionActivity 断言检测清单命中 | 配合 E.9 syscall 热点检测 |
-| direct syscall 覆盖(E.9) | svc 扫描 + DBI 观测 | **中**(观测)/**低**(拦截) | 拦截高风险易崩 | sandbox direct-syscall mock | 只做 L1/L2，L3 不进默认 |
+| direct syscall 覆盖(E.9) | svc 扫描 + libc hook 归因 | **中**(观测) | 拦截高风险易崩 | sandbox direct-syscall mock | **全量拦截（seccomp/PTRACE_SYSEMU）已决议不做（2026-10-01）**：ptrace/seccomp 本身就是强指纹，与低可检测性冲突；现有 svc-site hook + libc hook 已覆盖可归因路径 |
 | 受控 method 触发(L.7) | 单方法反射/ArtMethod invoke | **中** | 触发业务副作用/自毁 | 仅 sandbox 启用 | dry-run + 默认跳过危险方法 |
-| QBDI 指令 trace | QBDI 指定范围 DBI | **中高** | 与 JIT/加固冲突、性能 | TraceActivity 回放调用树 | 强制过滤+限流，不做全进程 |
+| QBDI 指令 trace | QBDI 指定范围 DBI（**可选后端**） | **中**（依赖 ROM；本机 `qbdi_addCodeCB` 返回 0） | 与 JIT/加固冲突、性能 | 起不来时报 `SKIP:optional-dependency` + 真实错误码 | 强制过滤+限流，不做全进程 |
 
-**结论**：主武器（明文边界观测 + 网络关联）可行性**高**，是地基；ART 抽取与活体自省**中高**，是差异化核心；抗干扰与 direct syscall **中/低**，采用"诊断先行、韧性可选、高风险仅 sandbox"分级收口，不赌"对抗所有加固"。
+**结论**：主武器（明文边界观测 + 网络关联）可行性**高**，是地基；ART 抽取与活体自省**中高**，是差异化核心；抗干扰与 direct syscall 采用"诊断先行、韧性可选"的收口——**全量 syscall 拦截不做**（2026-10-01 决议），不赌"对抗所有加固"。
 
 ---
 

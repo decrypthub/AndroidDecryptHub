@@ -7,7 +7,7 @@
 #   official binary (sha256 pinned from the release's own checksum file)
 #     → preflight (root / kernel >= 5.5 / CONFIG_BPF_SYSCALL + UPROBES; BTF is a note, not a gate)
 #     → start eCapture's TLS probe against the sandbox process
-#     → drive one real HTTPS request through the plugin (MCP net_capture → the app's own Network.run())
+#     → drive one real HTTPS request through the plugin (MCP capture_start + java_call → the app's own Network.run())
 #     → assert eCapture captured the plaintext the app sent (ADH_NET_MARKER_v1) and the response
 #
 # RESULT:SKIP (exit 0, explicit reason) when there is no device, the download is unavailable, or
@@ -69,10 +69,16 @@ const mcp = async (method, params) => (await (await fetch(`${base}/mcp`, {
 const agents = await (await fetch(`${base}/api/agents`)).json();
 const a = agents.filter((x) => x.package === 'com.adh.sandbox' && x.online).sort((x, y) => y.connectedAt - x.connectedAt)[0];
 if (!a) { console.log('NO_AGENT'); process.exit(0); }
-const call = await mcp('tools/call', { name: 'net_capture', arguments: { session: a.sessionId } });
-const payload = JSON.parse(call.result?.content?.[0]?.text ?? '{}');
-const wrote = (payload.captures || []).some((c) => c.func === 'SSL_write' && String(c.ascii || '').includes(marker));
-console.log(`MCP net_capture: hooked=${JSON.stringify(payload.hooked)} triggered=${payload.triggered} result=${payload.result} agent-saw-marker=${wrote}`);
+const call = async (name, args) => { const r = await mcp('tools/call', { name, arguments: args }); const t = r.result?.content?.[0]?.text ?? '{}'; try { return JSON.parse(t); } catch { return {}; } };
+const on = await call('capture_start', { session: a.sessionId });
+const trig = await call('java_call', { session: a.sessionId, className: 'com.adh.sandbox.Network', method: 'run', params: '', args: [] });
+let wrote = false;
+for (let i = 0; i < 10 && !wrote; i++) {
+  await new Promise((r) => setTimeout(r, 1000));
+  const lc = await call('live_captures', { session: a.sessionId, category: 'net', limit: 300, includeText: true });
+  wrote = (lc.captures || []).some((c) => c.func === 'SSL_write' && String(c.ascii || '').includes(marker));
+}
+console.log(`MCP capture_start: ok=${on.ok} installed=${on.installed}/${on.attempted}; java_call Network.run -> ${JSON.stringify(trig.result?.result ?? trig.error ?? null)}; agent-saw-marker=${wrote}`);
 EOF
 )"
 echo "$TRIG" | sed 's/^/   /'

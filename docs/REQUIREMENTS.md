@@ -102,6 +102,7 @@ native 函数在 libxxx.so 的哪个偏移？
 - 不是「万能脱壳器」
 - 不是全进程无差别 instruction trace 工具
 - 不是把重分析引擎塞进目标 App 的单体 so
+- **不做 Frida/Xposed 的功能表对齐（2026-10-01）**：能力按**分析问题**组织——native 算法还原 / Java 状态与风控 / TLS 与协议 / 加固脱壳，每类给一条端到端可验收路径；"Frida 有而我们没有"本身不构成需求
 
 ---
 
@@ -438,7 +439,7 @@ RSA_public_encrypt / RSA_private_decrypt
 | L1 检测 | 扫描可执行段中 `svc #0` 指令热点，识别高频 syscall wrapper，输出疑似绕过 libc 的函数列表 | 静态，安全 |
 | L2 观测 | 对指定函数/地址范围用 DBI 记录 syscall 前后寄存器，与文件/网络事件弱关联 | 需指定范围 |
 
-| L3 高风险实验 | SVC patch / seccomp-unotify / PTRACE_SYSEMU | 仅 sandbox/授权环境，非默认产品能力 |
+| L3 高风险实验 | SVC patch / seccomp-unotify / PTRACE_SYSEMU | **已决议不做（2026-10-01）**：ptrace/seccomp 本身是强指纹，与低可检测性目标冲突；归因需求由 L1/L2 的 svc-site hook 覆盖。出现"必须看到全部 syscall 且不在乎被检测"的授权场景再重新评估 |
 
 > 实现状态（v4.43，**实现 + host 验收完成，真机验收待做**）：**系统调用监听从"发生了什么"推进到"是谁发的、发了多少次、挂对了没有"**。`syscall_digest`（MCP + `POST /api/syscall/digest`）读取本次会话的 `NATIVE_HOOK` 事件（`syscall_watch` 现在装钩时带 `backtrace:true`，事件里带命中当刻的调用链），按 **(syscall 号, 调用方帧)** 分组给出次数/首末时间/线程，并**优先取 libc 之外的第一帧**作为"发起者"（指纹采集排查要的就是这个）；同时把**运行期 x8 与静态归因号逐事件比对**，不一致时列出 `mismatches {hookId, attributed, observed, count}`——这正好补上"归因可能错但没人比对"的缺口。**参数解码**：`syscall_args.ts` 把寄存器翻译成路径/结构体/标志位（`openat` 路径 + flags 访问模式、`uname` 的 utsname、`connect` 的 IPv4/IPv6、`memfd_create` 名字、`ioctl/socket/read/write/getrandom/kill/prctl` 标量），指针由 Host 经 agent 有界读取（`decodeLimit` 默认 40，`decode:false` 可关），读不到写 `(unreadable)`；摘要额外给出 **`paths` 直方图**与每组 `example`。纯函数 `digestSyscallSamples` 有 10 条、`syscall_args` 有 9 条单测（libc 帧跳过、分组/时间窗/线程去重、号码未知不丢、名字表、错配检测、空输入说明、无符号按 offset、plan/路径/flags/uname/双栈 sockaddr/ioctl/不可读/垃圾串）；`tools/verify_v81_syscall_digest.sh`（host）跑全部 **44** 条 daemon 单测 + 合成命中断言 + 参数解码断言 + MCP schema，**PASS**。真机验收（对 `libc.so` 的 uname 站点跑 watch → 触发沙盒探针 → digest 必须给出 `adh_libc_uname_probe` 作为调用方且 `observed` 全为 160）待手机可用时补。
 
@@ -855,6 +856,11 @@ dex_sha256 + method_idx  -> callers[] / callees[]
 不支持承诺：所有壳还原成可读的 Java 源码、VMP 完整语义还原
 ```
 
+**口径（2026-10-01 确认）**：**覆盖所有场景类型都有对应工具与流程，不保证每个壳 100% 还原；
+恢复率如实上报**（分子/分母都来自真实解析，解不动的显式 `unresolvable` 并计入分母）。
+即：产品承诺的是"给你一套能对任何一类壳展开作业的方法与可验证的进度",
+不是"任何壳都能出可读源码"。**无真实样本的壳类型不进排期**（见 §22.3）。
+
 ### 15.6 ART 结构级 Dex 捕获（主力，优先级高）
 
 不依赖 dex magic、不依赖磁盘路径、不依赖 ClassLoader 构造参数，直接从 ART 运行时结构关联真实 DexFile。混淆/加固改不了已加载的字节码，这是最鲁棒的捕获路径。
@@ -1104,7 +1110,7 @@ compat.probe / report
 inject.backends / attach_zygisk / pack_gadget / status
 ```
 
-> 实现状态（v4.49，**实现 + host 验收完成，真机验收待做**）：**"MCP 完全可操作"从口号变成可机检的不变式**。此前没人检查"MCP 能不能做到 agent 能做的每一件事"，审计（40 个 agent 命令分支 × MCP 导入图可达性）抓到两类真问题：`ping` 自 v0.2 起就是**死代码**（agent 实现了，Host 侧从没发过，于是判断 agent 存活只能靠一条真命令等超时）；另有三个能力只有 REST/验收脚本能到——设备文件浏览（`list_dir`/`read_file`）、hook 引擎自检（`gothook_selftest`）、通道完整性自检（`frame_echo`）。本轮把它们做成工具：`agent_ping`（5s 存活 + 往返延迟）、`engine_selftest`（`ok` = **判定**：GOT hook 必须 `fired` 且 RELRO 页保护 `protRestored`，否则报"这个构建可被检测"）、`protocol_selftest`（超大帧 + 越过 8192 老上限的尾部标记）、`fs_list` / `fs_read`（设备文件系统，1MB 上限、`truncated` 如实、二进制/超大文件用 `textOmitted` 说明原因、base64 需显式开启）。实现只写一份：`daemon/src/agent_probe.ts` 与 `daemon/src/fs_browse.ts` 同时服务 MCP 与 REST（`/api/agent/ping` 新增；`/api/hook/selftest` 状态码跟随判定；`/api/fs/*` 保留 v25 依赖的 `text` 与 `ok:false`）。不变式由 `tools/verify_v87_mcp_operability.sh` 机检：**每个 agent op 必须能从 MCP 导入图到达，除非在 `INTERNAL_OPS` 里写明理由**（当前 3 个只剩验收脚本使用：`crypto_probe`/`jni_probe`/`inline_crypto_test`），同时反向检查"daemon 发过 agent 不认识的 op"与五个工具的 schema。16 条单测（延迟/时钟注入、三种引擎判定 + 命令失败不冤枉引擎、尾部丢失/截断/padLen 回显、kb 夹紧、空路径不发送、二进制/超大 omission、坏 base64 拒绝）+ 全量 host 门禁 28 PASS / 0 FAIL / 75 SKIP。
+> 实现状态（v4.49，**实现 + host 验收完成，真机验收待做**）：**"MCP 完全可操作"从口号变成可机检的不变式**。此前没人检查"MCP 能不能做到 agent 能做的每一件事"，审计（40 个 agent 命令分支 × MCP 导入图可达性）抓到两类真问题：`ping` 自 v0.2 起就是**死代码**（agent 实现了，Host 侧从没发过，于是判断 agent 存活只能靠一条真命令等超时）；另有三个能力只有 REST/验收脚本能到——设备文件浏览（`list_dir`/`read_file`）、hook 引擎自检（`gothook_selftest`）、通道完整性自检（`frame_echo`）。本轮把它们做成工具：`agent_ping`（5s 存活 + 往返延迟）、`engine_selftest`（`ok` = **判定**：GOT hook 必须 `fired` 且 RELRO 页保护 `protRestored`，否则报"这个构建可被检测"）、`protocol_selftest`（超大帧 + 越过 8192 老上限的尾部标记）、`fs_list` / `fs_read`（设备文件系统，1MB 上限、`truncated` 如实、二进制/超大文件用 `textOmitted` 说明原因、base64 需显式开启）。实现只写一份：`daemon/src/agent_probe.ts` 与 `daemon/src/fs_browse.ts` 同时服务 MCP 与 REST（`/api/agent/ping` 新增；`/api/hook/selftest` 状态码跟随判定；`/api/fs/*` 保留 v25 依赖的 `text` 与 `ok:false`）。不变式由 `tools/verify_v87_mcp_operability.sh` 机检：**每个 agent op 必须能从 MCP 导入图到达，除非在 `INTERNAL_OPS` 里写明理由**（当前 3 个只剩验收脚本使用：`crypto_probe`/`jni_probe`/`inline_crypto_test`；**2026-10-01 更新：这三条命令连同 `capture_start`/`capture_stop` 一起重排 —— 前者已删除，后者做成了正式 MCP 工具，`INTERNAL_OPS` 只剩 `capture_drain`**），同时反向检查"daemon 发过 agent 不认识的 op"与五个工具的 schema。16 条单测（延迟/时钟注入、三种引擎判定 + 命令失败不冤枉引擎、尾部丢失/截断/padLen 回显、kb 夹紧、空路径不发送、二进制/超大 omission、坏 base64 拒绝）+ 全量 host 门禁 28 PASS / 0 FAIL / 75 SKIP。
 
 ### 18.3 与 iOS 参考项目 MCP 的对照
 
@@ -1162,6 +1168,10 @@ Android 在此基础上增加：全套 dex 操作、Java hook、native trace、m
 - 用户手动开启 LAN 访问
 - 开启 LAN 后**必须**设置 token
 - 可选：一次性访问码、IP 白名单
+- **agent 命令口（TCP `8761`）的信任模型 —— 仍待决策**（2026-10-01 复核未变）：当前监听 `0.0.0.0` 且无鉴权。
+  三条路各有代价：**加共享 token**（要改协议握手，Device Daemon 与验收同步改）、
+  **只绑 `127.0.0.1`**（最小改动，依赖 `adb reverse`，但去掉"手机浏览器直连局域网"那条路）、
+  **维持现状**（信任 LAN）。改动面跨 Device Daemon / Manager / adb reverse 三处，属产品决策，不是技术债。
 
 ### 20.2 危险操作
 
@@ -1207,6 +1217,10 @@ Android 在此基础上增加：全套 dex 操作、Java hook、native trace、m
 - ring buffer 保留最近 N 条事件
 - 单条 blob 上限（如 64KB），防 OOM
 - 大 payload 走共享内存 fd 直传 adhd，不在 Agent 堆积
+- **钩子槽位写成产品语义（2026-10-01）**：单目标最多 **16 个并发 hook**（Java / native 各自独立计数）。
+  这是**产品语义而不是裸数字**：超出时 **fail-loud** 拒绝安装并回报当前占用与释放建议
+  （哪个 hookId 可以卸、卸载后能腾出几个槽），不静默排队、不静默丢弃老钩子。
+  `native_hook_all` 的批量安装按剩余槽位截断并回报 `limitReason`；0 个空槽时整批失败而不是逐个失败。
 
 ### 21.3 导出
 
@@ -1256,6 +1270,18 @@ Android 在此基础上增加：全套 dex 操作、Java hook、native trace、m
 每个搜索类型          → 可命中已知样本
 每个 MCP tool         → 有对应测试用例
 ```
+
+**三条口径（2026-10-01 生效）**：
+
+- **SKIP 语义分层**：**可选依赖**缺失（QBDI 库在但 VM 起不来、Gadget 资产没 fetch、grep 不到的 gradle/工具链）
+  = `SKIP:optional-dependency`；**产品路径**缺失（agent 连不上、能力装不上、断言不成立）= `FAIL`。
+  判据是"换一台达标的机器/环境它会不会必然通过"——会，就是前置缺失；不会，就是产品问题。
+  理由：QBDI 在本机 ROM 上起不来曾被算成红，读起来像产品坏了。
+- **验证必须写清"扫谁"**：任何扫描类断言都要写明作用域（哪一段映射、哪个模块、哪个 tag）。
+  沙盒夹具自带 log tag 与模块名，扫"整个进程"必然把夹具自己的痕迹算进结果——v88 已收窄到
+  agent 自己的 `r--p`/`r-xp` 段，同类断言照此办理。
+- **无样本的功能不进排期**：cdex/041 这类必须以真实样本为前提的能力，没有样本就不立项、不排期、
+  不用合成样本"证明"实现（2026-10-01 决议）。
 
 ---
 
@@ -1386,14 +1412,9 @@ MCP              →  AI 可编程操控，与 HTTP 同源
 
 > 实现状态（v4.97，**实现 + host 验收完成**）：**`native_call` 地址守卫单一来源**。v4.94 只给 MCP handler 加了活体校验，REST 路由（设备脚本走的路径）仍是透传；现抽出共享 `assertCallableAddress(sid, addr)`（空地址放行给 module+symbol；否则取 maps 判"未映射/不可执行"）供 MCP 与 REST 共用，两端不再分叉。
 
-> 口径修订建议（**待确认**，2026-09-19；确认后合并进对应模块行，勿留两份）：
-> ① **"去特征"必须先定义对手**——建议把对抗面写死为「目标进程内的字符串扫描 + anon r-x 扫描 + 线程名 + 已加载模块名」，文件系统里的模块名/Zygisk 目录名**明确不在范围**；否则这是无界任务。
-> ② **"Frida/Xposed 级"改为问题对齐**——按分析问题组织（native 算法还原 / Java 状态与风控 / TLS 与协议 / 加固脱壳），每类给一条端到端可验收路径，而不是逐项补平 Frida 的功能表。
-> ③ **SKIP 语义分层**——可选依赖缺失 = `SKIP:optional-dependency`；产品路径缺失 = `FAIL`。QBDI 目前是反例（库在、VM 起不来 → FAIL，看起来像产品坏了）。
-> ④ **无样本功能不进排期**（cdex/041 等）。
-> ⑤ **验证必须写清"扫谁"**——沙盒夹具自身带 log tag/模块名；v88 已收窄到 agent 自己的 r--p/r-xp 段，同类断言都要写明作用域。
-> ⑥ **资源上限写成产品语义**——"单目标最多 N 个活动钩子，超出 fail-loud 并给出释放建议"，而不是裸露的 16。
-> ⑦ **补信任模型**——agent 命令口当前 `0.0.0.0:8761` 无鉴权；建议改绑 `127.0.0.1`（adb reverse 本机连入）或加共享 token，并写进需求。
+> 口径修订（**已于 2026-10-01 确认并并入正文**，不再留第二份计划）：① 去特征对手面 → §26.3；
+> ② 问题对齐（不做 Frida 功能表对齐）→ §1.3；③ SKIP 语义分层 + ⑤ 验证写清"扫谁" + ④ 无样本不进排期 → §22.3；
+> ⑥ 钩子槽位写成产品语义 → §21.2；⑦ agent 命令口信任模型 → §20.1（**仍待决策**，是本节唯一未决项）。
 >
 > 实现状态（v5.03，**实现 + host 验收完成，真机待做**）：**第十一轮评审收口（1 条 P1 + 7 条 P2）**。① 原始 `map_list` 读不全时**抛错**（此前会带着读到的条目继续重建并报 `mapRebuilt:true`，新 map 静默缺类型）；② `verifyDexLayout` 增加 `file_size` 与 `data_off+data_size` 一致性，并要求 header 中非零的固定区（string/type/proto/field/method/class_def + string_data）以及所有被引用的 class_data/code_item 区都出现在 map 里；③ 重复 midx 的 capture 回报 `duplicateCaptures`；④ `/api/dex/rebuild`、`/api/dex/recover` 与 MCP `dex_recover` 的回复补齐 `mapRebuilt/mapEntries/relocated*/unmatchedCaptures/skippedCaptures/duplicateCaptures/layout`；⑤ 5 个内联 class_data 循环加 `p > buf.length` 边界（恶意 `dm/vm` 曾可让请求线程空转约 60s/类）；⑥ REST 的 `native_call`/`native_hook` 也把原始 addr 交给守卫（`addr:0` 的回退此前只在 MCP 生效）；⑦ `num.ts:cursorNumber()` 统一 cursor 语义（null/''/[] 与非有限值都视为未给，避免 `Number(null)===0` 把时间窗变成全量）。
 >
@@ -1447,7 +1468,10 @@ MCP              →  AI 可编程操控，与 HTTP 同源
 ### 26.2 韧性层（授权环境，默认关闭）
 
 - **early-inject**：抢在目标反调试布防之前完成加载与关键 hook（配合 W 的 Zygisk 后端）
-- **与目标 ptrace 自附加共存**：目标 `PTRACE_TRACEME` 占位时的采集策略
+- **与目标 ptrace 自附加共存**：目标 `PTRACE_TRACEME` 占位时的采集策略。
+  ⚠️ **现状（2026-10-01）**：**观测**这一半由持续捕获的 `system` 类提供（`ptrace`/`access`/`sysprop`
+  事件，默认只记录不改行为）；**中和**（伪造 TRACEME 返回值）**目前没有控制面** —— 唯一实现是
+  已删除的 `detect_watch`。要恢复必须显式设计一个默认关闭、需二次确认的 opt-in（见 `DEVELOPMENT_PLAN §6.9.1` WS-J）。
 - **最小侵入模式**：只启用 maps/dex/classloader/crypto 等低痕迹模块，关闭高痕迹 hook
 - **hook 自校验对抗**：应对目标周期性校验函数序言字节、检测 GOT 改写
 
@@ -1465,6 +1489,8 @@ MCP              →  AI 可编程操控，与 HTTP 同源
 
 ### 26.3 边界
 
+- **对手面已写死（2026-10-01）**：只针对「**目标进程内**的字符串扫描 + `anon r-x` 扫描 + 线程名 + 已加载模块名」。
+  文件系统上的模块名、Zygisk 目录名、包名痕迹**明确不在范围**——不定义对手面这就是无界任务。
 - 不承诺绕过所有反调试/反注入
 - 默认不自我隐藏
 - 不提供面向未授权目标的通用规避能力
@@ -1597,7 +1623,11 @@ Agent → TCP 8761 → ADH Daemon（host，经 adb reverse）
 - Manager 不得直接调用 `su` 或访问 `/data/adb`。模块以 root `app_process` 启动 Device Daemon，Manager 仅通过 AIDL Binder 读取状态和作用域；daemon 必须校验调用 UID、`com.adh.manager` 包归属和构建时固定的 APK 签名证书。
 - Binder 交接入口只接受 UID 0 发布，并核对 AIDL descriptor；Manager 必须区分 Device Daemon 未连接、模块未安装、模块已安装但未加载、运行中四种状态。服务未连接时不得用空配置冒充真实作用域，也不得显示“模块未安装”。
 
-### 30.5 可选注入后端（Gadget / LSPosed）— 默认关闭
+### 30.5 可选注入后端（Gadget / LSPosed）— 实验性，不进发布物
+
+> **范围收口（2026-10-01 决议）**：**官方注入路径只有 Zygisk**（CI 走模拟注入）。
+> Frida Gadget = **开发/调试用**（移出发布物）；LSPosed/Xposed = **社区/实验**（保留代码与验收，不是官方路径）；
+> eCapture = **实验脚本**，且已**移出 `verify_all.sh` 门禁**。判定细则见 `DEVELOPMENT_PLAN.md §6.10`。
 
 两个后端都**不是默认路径**，必须显式调用；默认注入仍是 Zygisk（root）与模拟注入（CI）。两者都是开源生态里现成的加载机制，ADH 只借它把 agent/JS hook 送进目标，不把分析与存储搬进目标进程（架构红线不变）。
 

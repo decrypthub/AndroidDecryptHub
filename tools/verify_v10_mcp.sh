@@ -15,7 +15,7 @@ console.log('initialize:',init.result?.protocolVersion, init.result?.serverInfo?
 const list=await rpc('tools/list',{});
 const names=(list.result?.tools||[]).map(t=>t.name);
 console.log('tools:',names.length);
-const need=['process_list','memory_read','memory_disasm','native_call','syscall_watch','qbdi_trace','art_dexfiles','crypto_capture','dex_search','dex_xref','native_disasm'];
+const need=['process_list','memory_read','memory_disasm','native_call','syscall_watch','qbdi_trace','art_dexfiles','capture_start','capture_stop','live_captures','dex_search','dex_xref','native_disasm'];
 const haveAll=need.every(n=>names.includes(n));
 // tools/call: dex_search on probe dex
 const call=await rpc('tools/call',{name:'dex_search',arguments:{b64:probe,query:'Probe',kinds:['class']}});

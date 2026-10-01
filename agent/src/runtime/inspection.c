@@ -542,37 +542,6 @@ void adh_cmd_compat_probe(int fd, const char *id) {
          tracer, seccomp, got_ok, jni_ok, cur.exec, cur.anon_exec, cur.rwx);
 }
 
-void adh_cmd_jni_probe(int fd, const char *id) {
-    char idj[64]; json_escape(id, idj, sizeof(idj));
-    int did = 0;
-    JNIEnv *env = adh_jni_attach(&did);
-    if (!env) {
-        char error[160]; snprintf(error, sizeof(error), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"jni_probe\",\"ok\":false,\"error\":\"no JavaVM\"}\n", idj);
-        send_line(fd, error); return;
-    }
-    jint sdk = -1; char release[64] = "";
-    jclass version = (*env)->FindClass(env, "android/os/Build$VERSION");
-    if (version) {
-        jfieldID sdk_field = (*env)->GetStaticFieldID(env, version, "SDK_INT", "I");
-        if (sdk_field) sdk = (*env)->GetStaticIntField(env, version, sdk_field);
-        jfieldID release_field = (*env)->GetStaticFieldID(env, version, "RELEASE", "Ljava/lang/String;");
-        if (release_field) {
-            jstring value = (jstring)(*env)->GetStaticObjectField(env, version, release_field);
-            if (value) {
-                const char *s = (*env)->GetStringUTFChars(env, value, NULL);
-                if (s) { strncpy(release, s, sizeof(release) - 1); (*env)->ReleaseStringUTFChars(env, value, s); }
-                (*env)->DeleteLocalRef(env, value);
-            }
-        }
-        (*env)->DeleteLocalRef(env, version);
-    }
-    if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
-    adh_jni_detach(did);
-
-    char out[256], releasej[128]; json_escape(release, releasej, sizeof(releasej));
-    snprintf(out, sizeof(out),
-        "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"jni_probe\",\"ok\":true,\"sdk_int\":%d,\"release\":\"%s\",\"attached\":%d}\n",
-        idj, sdk, releasej, did);
-    send_line(fd, out);
-    LOGI("jni_probe: sdk=%d release=%s", sdk, release);
-}
+// The JNI surface probe (jni_probe) is gone: its one assertion (the agent reads the SDK
+// level through the app ClassLoader from a native thread) is covered by compat_probe's
+// jni/jniReflect fields, and the java_call path proves the same ClassLoader reach.

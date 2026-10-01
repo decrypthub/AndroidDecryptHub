@@ -156,7 +156,7 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
           '用 crypto_identify 看看这个 App 用了哪些加密算法和密钥',
           '用 dump_all_dex 一键 dump 所有 DEX，然后 dumps_list 给我下载链接',
           '用 live_captures 看实时加解密，挑一条用 capture_detail 展开明文',
-          '用 trace_function hook 一下 access，看它检测了哪些 root 路径',
+          '用 capture_start 打开持续捕获，再 java_call 触发目标的工作负载，然后 live_captures 看明文',
           '用 qbdi_trace 逐指令跟踪这个 native 函数',
         ],
       };

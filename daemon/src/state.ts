@@ -344,18 +344,6 @@ export function pushCapture(entry: Capture): boolean {
   }
   return true;
 }
-// Self-test workload classes the one-shot probe ops drive. The AGENT is target-agnostic —
-// it reads className/module/reportClass from each command and knows nothing about the target;
-// ADH Daemon supplies these sandbox defaults so its self-test endpoints work out of the box. A real
-// investigation overrides via ?class= / className. (This is the daemon side of the red line: the
-// grep-com.adh.sandbox-agent/=0 gate is about the .so, which stays clean.)
-export const SANDBOX = {
-  net: 'com.adh.sandbox.Network', flow: 'com.adh.sandbox.CorrelatedFlow',
-  crypto: 'com.adh.sandbox.JavaCrypto', file: 'com.adh.sandbox.FileIO',
-  detect: 'com.adh.sandbox.Detection',
-  inlineModule: 'libadhdetect.so', inlineSymbol: 'adh_static_EVP_CipherUpdate',
-  inlineMethod: 'staticCrypto',
-};
 // The persistent-hook target modules the agent should use. Sent with every capture_start so
 // the agent stays target-agnostic (no hardcoded modules). The Java rich-capture reporter class
 // is published by the TARGET via the "adh.reporter.class" system property (bound at JNI_OnLoad),
@@ -391,7 +379,6 @@ function bumpSession(sessionId: string | undefined, field: 'pushed' | 'evicted')
 // used by the capture loop, so it's a service-local counter, not shared state.
 export const recentJavaIn = new Map<string, number>();   // input-hex -> ts, to dedup native echoes
 export const captureTimers = new Map<string, ReturnType<typeof setInterval>>();
-export const capturePaused = new Set<string>();   // sessions with continuous capture suspended
 // WS-C: per-session honest capture accounting from the agent ring's capture_drain stats.
 export interface CapStat { seq: number; emitted: number; dropped: number; jdropped: number; backlog: number; firstDropNs: number; lastDropNs: number; complete: boolean; ring: number; ts: number; }
 export const capStats = new Map<string, CapStat>();

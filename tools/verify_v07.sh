@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
-# v0.7 network TLS-plaintext capture. Hooks Conscrypt's SSL_write/SSL_read GOT
-# slots, triggers an HTTPS request (via JNI reflection) to a self-contained local
-# HTTPS server over `adb reverse`, and asserts the agent captured the request
-# plaintext (X-Adh-Marker) at SSL_write and the response (ADH_NET_RESPONSE_v1) at
-# SSL_read — i.e. TLS plaintext read at the boundary, bypassing encryption/pinning.
+# v0.7 network TLS-plaintext capture. Arms the persistent capture set (SSL_write/SSL_read in
+# every module that holds them), provokes an HTTPS request to a self-contained local HTTPS
+# server over `adb reverse` through java_call, and asserts the agent captured the request
+# plaintext (X-Adh-Marker) at SSL_write and the response (ADH_NET_RESPONSE_v1) at SSL_read —
+# i.e. TLS plaintext read at the boundary, bypassing encryption/pinning.
 # Exit 0 = PASS. Prereq: adhd running, device, sandbox running.
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
 verify_resolve_env
 TLS_PORT="${ADH_TLS_PORT:-8762}"
 MARKER="ADH_NET_MARKER_v1"; RESP="ADH_NET_RESPONSE_v1"
+CLASS="com.adh.sandbox.Network"
 
 # start a fresh local HTTPS server (kill any stale one holding the port)
 for p in $(powershell.exe -NoProfile -Command "(Get-NetTCPConnection -LocalPort $TLS_PORT -State Listen -ErrorAction SilentlyContinue).OwningProcess" 2>/dev/null | tr -d '\r'); do taskkill //F //PID "$p" >/dev/null 2>&1; done
@@ -18,21 +19,34 @@ sleep 2
 adb -s "$SERIAL" reverse tcp:$TLS_PORT tcp:$TLS_PORT >/dev/null
 
 set +e
-OUT="$(node - "$HTTP" "$MARKER" "$RESP" <<'EOF'
-const [http, marker, resp]=process.argv.slice(2); const base=`http://127.0.0.1:${http}`;
+OUT="$(node - "$HTTP" "$MARKER" "$RESP" "$CLASS" <<'EOF'
+const [http, marker, resp, cls]=process.argv.slice(2); const base=`http://127.0.0.1:${http}`;
+const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
+const rpc=(m,p)=>fetch(`${base}/mcp`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:Math.floor(Math.random()*1e6),method:m,params:p})}).then(r=>r.json());
+const call=async(name,args)=>{const r=await rpc('tools/call',{name,arguments:args}); if(r.error) throw new Error(`${name}: ${r.error.message}`); const t=r.result?.content?.[0]?.text ?? 'null'; try { return JSON.parse(t); } catch { return t; }};
 const agents=await (await fetch(`${base}/api/agents`)).json();
 const a=agents.filter(x=>x.package==='com.adh.sandbox'&&x.online).sort((x,y)=>y.connectedAt-x.connectedAt)[0];
 if(!a){console.log('NO_AGENT');console.log('RESULT:FAIL');process.exit(0);}
-const r=await (await fetch(`${base}/api/net/hook_test?session=${a.sessionId}`)).json();
-if(r.error){console.log('ERR',r.error);console.log('RESULT:FAIL');process.exit(0);}
-console.log(`hooked=${JSON.stringify(r.hooked)} triggered=${r.triggered} result=${r.result} captures=${r.count}`);
-(r.captures||[]).forEach(c=>console.log(`  [${c.func} inl=${c.inl}] ${(c.ascii||'').slice(0,80)}`));
-const wrote=(r.captures||[]).find(c=>c.func==='SSL_write' && c.ascii.includes(marker));
-const read =(r.captures||[]).find(c=>c.func==='SSL_read'  && c.ascii.includes(resp));
-const pass = r.ok && r.hooked.write>=1 && r.hooked.read>=1 && r.triggered
-  && /^200:/.test(r.result||'') && !!wrote && !!read;
-console.log(`request-plaintext(SSL_write) has marker: ${!!wrote}; response-plaintext(SSL_read) has marker: ${!!read}`);
-console.log(pass?'RESULT:PASS':'RESULT:FAIL');
+const sid=a.sessionId;
+try{
+  const on=await call('capture_start',{session:sid});
+  console.log(`capture_start: ok=${on.ok} installed=${on.installed}/${on.attempted} notInstalled=[${(on.notInstalled||[]).join(',')}]`);
+  if(!on.ok){ console.log('FAIL capture_start did not install the hook set'); console.log('RESULT:FAIL'); process.exit(0); }
+  const invoked=await call('java_call',{session:sid,className:cls,method:'run',params:'',args:[]});
+  console.log(`java_call ${cls}.run -> result="${String(invoked.result?.result ?? '').slice(0,40)}"`);
+  let wrote=null, read=null, caps=[];
+  for(let i=0;i<12 && !(wrote&&read);i++){
+    await sleep(1000);
+    const lc=await call('live_captures',{session:sid,category:'net',limit:300,includeText:true});
+    caps=lc.captures||[];
+    wrote=caps.find(c=>c.func==='SSL_write' && String(c.ascii||'').includes(marker));
+    read =caps.find(c=>c.func==='SSL_read'  && String(c.ascii||'').includes(resp));
+  }
+  caps.slice(0,8).forEach(c=>console.log(`  [${c.func} inl=${c.inl}] ${String(c.ascii||'').slice(0,80)}`));
+  const pass = on.ok && !!wrote && !!read;
+  console.log(`request-plaintext(SSL_write) has marker: ${!!wrote}; response-plaintext(SSL_read) has marker: ${!!read}`);
+  console.log(pass?'RESULT:PASS':'RESULT:FAIL');
+}catch(e){ console.log('ERR',e.message); console.log('RESULT:FAIL'); }
 EOF
 )"
 echo "$OUT"

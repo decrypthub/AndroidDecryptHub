@@ -10,8 +10,9 @@
 
 ## 0. 一句话状态
 
-`libadh_agent.so` + Host ADH Daemon + `adh` CLI + 5 个可选后端都已实现。**门禁已全量跑过**：
-2026-09-29（二）在 Linux 接管机上（设备 `aa165071`，未重刷）**103 PASS / 11 FAIL / 4 SKIP**
+`libadh_agent.so` + Host ADH Daemon + `adh` CLI 都已实现；注入后端**只有 Zygisk 是官方路径**（另有 Gadget/Xposed/eCapture 三个实验后端）。**门禁已全量跑过**：
+2026-10-01 在 Linux 接管机上（设备 `aa165071`，agent 换成本机构建的 `40024e15…`）见 `FEATURE_STATUS §2.1`；
+上上轮 2026-09-29（二）**103 PASS / 11 FAIL / 4 SKIP**
 （host 36 = 29/5/2，device 82 = 74/6/2）。**11 条 FAIL 没有一条能归到产品代码**：7 条是本机缺
 Windows 工具链/依赖、2 条是**门禁自己的断言缺陷**、2 条是文档已登记的偶发。**device 半段是健康的**
 （赛前预测的 4 条环境噪声全部命中，无意外红）。逐条见 `PROGRESS.md` 2026-09-29（二）。
@@ -56,16 +57,15 @@ adb -s <serial> shell getprop ro.build.version.sdk   # 记下 API level（见 §
 
 用户会给你**一台能刷模块、有 root 的手机**。于是常规路径全部可用：
 
-> ⚠️ **但有前提**：2026-09-29 实测的接管机是 Linux，**只有刷/装/跑的能力，没有构建链**
-> （无 cmake/ninja/clang/gradle）。上面这些 `build_*` / `fetch_*` 步骤它做不了。
-> **先读 §1.5** 再决定是"在 Windows 侧重建"还是"在这台 Linux 上装齐 NDK"。
-> 好消息：接管当天设备上刷的包已与 HEAD 逐字节一致（§1.3.1），**只跑门禁的话不需要构建任何东西**。
+> ⚠️ **但有前提**：接管机是 Linux。**2026-10-01 订正：agent `.so` 已经能在本机构建**（cmake 4.2.3 +
+> ninja + NDK r29），**APK / Zygisk 模块仍然不能**（没有 gradle）。**先读 §1.5**——那里有能用的构建命令、
+> 以及"不重打 APK 也能把新 agent 送上设备"的做法（改 agent 源码后**必须**走这一步，否则门禁会拿旧 `.so` 骗你）。
 
 - `tools/fetch_qbdi.sh` / `fetch_dobby.sh` / `fetch_lsplant.sh`（一次性第三方拉取，进 `agent/third_party/`）
 - `tools/build_agent.sh` / `build_detect.sh` / `build_zygisk.sh` / `build_bundle.sh`
 - `tools/flash_device.sh --reboot`（KernelSU/Magisk 刷入 Zygisk 模块；多设备时 `export ANDROID_SERIAL=<serial>`）
 - `install_apk_root`（`su` + `pm install`）装沙盒
-- `tools/verify_all.sh` **全量**（118 脚本 = 36 host + 82 device）——这才是设计的常规门禁
+- `tools/verify_all.sh` **全量**（**117 脚本 = 36 host + 81 device**，2026-10-01 起 eCapture 那条移出闸门）——这才是设计的常规门禁
 
 **你要做的第一件事：把设备事实记录到本文档 §1.3 的表里**（机型 / API / ABI / root 方式 / serial）。
 后面所有人（包括下一个 agent）都靠这张表判断 ART 解析器覆盖面与可用后端。
@@ -77,12 +77,14 @@ adb -s <serial> shell getprop ro.build.version.sdk   # 记下 API level（见 §
   **如果你拿到的手机不是 SDK 35/36，第一条任务就是补解析器覆盖**，症状会是 `art_dexfiles` 失败或
   返回 0——**别把它当成"工具坏了"**，那是覆盖率问题，而且它本身是一个有价值的结果。
 - **agent ABI 只交付 `arm64-v8a`**（`tools/lib/env.sh` 的 `ABI="${ABI:-arm64-v8a}"`）。手机必须是 arm64。
+  **这是已确认的产品边界（2026-10-01 决议），不是暂时没做**：armeabi-v7a 与 x86_64 都不做，
+  重新考虑的条件只有"出现必须支持的真实 32 位目标"。
 - 本项目的参考设备是 OnePlus PGP110，其 ColorOS ROM **`libart.so` 被裁得很厉害**——所以
   原生 inline hook 后端用的是验证过的 Dobby，而**按符号名 hook 某些 ART 内部函数可能找不到符号**
   （二代还原点会遇到这个问题，见 §5 B2）。
 - 模拟器不推荐替代真机：本项目验的东西（Zygisk 注入、memfd 加载、真实加固目标）在模拟器上多半
   不成立或不可信。**模拟器只在"手边没有真机时"当勉强替代**，且要先解决两个阻塞点：镜像是 x86_64
-  vs agent 只交付 arm64-v8a；镜像是 API 37 vs 解析器只覆盖 35/36。
+  vs agent 只交付 arm64-v8a（**这个阻塞点是永久的**——多架构已决议不做）；镜像是 API 37 vs 解析器只覆盖 35/36。
 
 #### 1.3.1 已记录设备事实
 
@@ -96,11 +98,14 @@ adb -s <serial> shell getprop ro.build.version.sdk   # 记下 API level（见 §
 `aa165071` 这个 serial **就是 2026-09-23 那次 113 PASS / 0 FAIL / 0 SKIP 全量门禁的同一台机器**——
 所以它是"已知全绿"的参考设备，不是新设备。
 
+> ⚠️ **2026-10-01 更新**：设备上的 agent 已从 `82e0cfb5…` 换成**本机构建的 `40024e15…`**（删掉 9 条沙盒耦合命令后的产物）。
+> Manager / Device Daemon / Zygisk companion 三个 APK 未变，**不需要重刷模块**。
+
 **接管当天实测：设备上刷的包与本仓 HEAD 逐字节一致，不需要重刷。**（2026-09-29，HEAD `c273ef4`）：
 
 | 文件 | 设备路径 | sha256（设备 == 本仓构建产物） |
 |---|---|---|
-| agent | `/data/adb/modules/adh/libadh_agent.so` | `82e0cfb5…` == `agent/build/libadh_agent.so` |
+| agent | `/data/adb/modules/adh/libadh_agent.so` | **`40024e15…`**（2026-10-01 更新）== `agent/build/libadh_agent.so`；同值也写进沙盒 `…/lib/arm64/libadh_agent.so` |
 | Manager | `/data/adb/modules/adh/manager.apk` | `e0b2a83d…` == `device/manager/build/…/manager-debug.apk` |
 | Device Daemon | `/data/adb/modules/adh/daemon.apk` | `87c2df98…` == `device/daemon/build/…/daemon-debug.apk` |
 | 沙盒 | `com.adh.sandbox`（`lastUpdateTime` 2026-09-27 00:13:07） | 与本仓 `sandbox-app/…/app-debug.apk` 同一次构建 |
@@ -119,20 +124,35 @@ adb -s <serial> shell getprop ro.build.version.sdk   # 记下 API level（见 §
 - ⚠️ **顶层没有 LICENSE**（= 保留所有权利）。**不许把它的源码拷进本仓库**。可以"照原理自己写 + 拿它当
   外部靶子（在仓库外自己 build）"。
 
-### 1.5 接管机的工具链真相（**2026-09-29 新增；与 §1.2 的假设不符，先读这条**）
+### 1.5 接管机的工具链真相（**2026-09-29 新增；2026-10-01 订正 —— 先读这条**）
 
-§1.2 假设"B 组机器上常规路径全部可用"。实测：**接管机是一台 Linux，不是 Windows**，`su`/刷机/装 APK 都能做，
-但**构建链不在它身上**：
+§1.2 假设"B 组机器上常规路径全部可用"。实测：**接管机是一台 Linux，不是 Windows**，`su`/刷机/装 APK 都能做。
+**构建能力在 2026-10-01 变了：agent `.so` 现在可以在本机构建，APK 仍然不行。**
 
 - ✅ **能跑**：Host ADH Daemon、`adh` CLI、`tools/verify_*:host` 全部 host 脚本（node 直接跑 `.ts`）。
-- ❌ **不能构建**：**没有 `cmake` / `ninja` / `clang` / `gradle`**，也没有 `sdkmanager`；
-  `/usr/lib/android-sdk` 里只有 `platform-tools`。`sandbox-app/local.properties` 指向
-  `C:\Users\diiho\AppData\Local\Android\Sdk`——**是 Windows 路径**。
-- 结论：**`agent/build/` 与 `device/*/build/` 是 Windows 工作站构建后经 SMB 落到共享树里的产物**，
-  不是这台机器编出来的。`agent/build/CMakeCache.txt` 记的 toolchain 是
-  `C:/Users/diiho/AppData/Local/Android/Sdk/ndk/28.2.13676358/…`。
-  **要重建 `.so` / APK / Zygisk 模块，得在 Windows 侧做，或先在这台 Linux 上装齐
-  NDK 28.2.13676358 + SDK + cmake 3.22.1。**（只跑门禁/分析不需要构建，见 §1.3.1 的逐字节一致表。）
+- ✅ **agent `.so` 能在本地重建（2026-10-01 实测）**：本机有 `cmake 4.2.3` + `ninja 1.13.2`（PATH 上）与
+  NDK `/home/r/tools/android-ndk-r29`（linux-x86_64 clang/llvm-strip/readelf 齐全）。
+  **但别跑 `tools/build_agent.sh`**（它把 `$NDK`/`$CMAKE`/`$NINJA` 指向 Windows SDK 路径、`STRIP` 写死
+  `windows-x86_64/llvm-strip.exe`，且会跟 Windows 生成的 `agent/build/CMakeCache.txt` 抢目录）。
+  可用的做法是**另开构建目录**：
+  ```bash
+  NDK=/home/r/tools/android-ndk-r29
+  cmake -S agent -B /home/r/adh-build/agent -G Ninja -DCMAKE_MAKE_PROGRAM="$(command -v ninja)" \
+    -DCMAKE_TOOLCHAIN_FILE=$NDK/build/cmake/android.toolchain.cmake \
+    -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-26 -DANDROID_STL=c++_static -DCMAKE_BUILD_TYPE=Release
+  cmake --build /home/r/adh-build/agent     # 然后 llvm-strip --strip-unneeded，再拷回 agent/build/ 与 jniLibs
+  ```
+  **构建目录放本地盘**（共享树上文件没有可执行位，见下面的 CIFS 那条）。
+- ❌ **不能构建 APK / Zygisk 模块**：**没有 `gradle`/AGP**；`/usr/lib/android-sdk` 里只有 `platform-tools`。
+  `sandbox-app/local.properties` 指向 `C:\Users\diiho\AppData\Local\Android\Sdk`——**是 Windows 路径**。
+- **不重打 APK 也能把新 agent 送上设备（2026-10-01 实测）**：沙盒的 native 库是**解压式安装**，
+  `adb push` 新 `.so` → `su -c 'cp … /data/app/*/com.adh.sandbox*/lib/arm64/libadh_agent.so'`
+  + `chcon u:object_r:apk_data_file:s0` → `am force-stop` / `am start` 即可（Zygisk 那条路同时换
+  `/data/adb/modules/adh/libadh_agent.so`）。**改了 agent 源码就要走这一步**，否则设备上跑的还是旧 `.so`
+  而门禁会绿着撒谎（§3.1）。前提是**沙盒夹具本身一行都不改**——那是要重打 APK 的。
+- 结论：`agent/build/` 与 `device/*/build/` 是**共享树上的产物**；`agent/build/CMakeCache.txt` 记的 toolchain
+  仍是 `C:/Users/diiho/AppData/Local/Android/Sdk/ndk/28.2.13676358/…`（Windows 那次构建留下的），
+  用上面的 `-B` 换目录即可绕开。
 - ⚠️ **不要在这台机器上直接跑 `tools/build_agent.sh`**：它会跟 Windows 生成的 CMake cache /
   `build.ninja` 抢同一个 `agent/build/` 目录（cache 里是 Windows 路径）。要么先清目录，要么换 `BUILD_DIR`。
 - 其它实测偏差：
@@ -319,7 +339,8 @@ connect 句柄在 Windows 上不可取消）；换 `node:http` 后 `req.setTimeo
 | # | 事项 | 验收信号 |
 |---|---|---|
 | **1** | ~~**先跑一遍全量门禁**，把 device 侧的真实状态量出来~~ ✅ **2026-09-29（二）已跑**：**103 PASS / 11 FAIL / 4 SKIP**（host 29/5/2，device 74/6/2）。11 条 FAIL **没有一条归到产品代码**：7 条环境、2 条门禁自身缺陷、2 条文档已登记的偶发。**device 半段是健康的**——赛前预测的 4 条环境噪声全部命中，无意外红。详见 `PROGRESS.md` 同日第 7 条。 | 已完成；下一步是把那 9 条环境项治掉（见下） |
-| **1b** | **治掉让门禁变哑的环境项**（本轮新暴露的、收益最直接的一类）：~~② **修 `v99`/`v100`/`v101`/`v15_dumpall` 的 `^ℹ fail 0$` 断言**，并补 `v99`/`v15_dumpall` 漏掉的 `exit 1`~~ ✅ **2026-09-29（二）已修**：收成一处实现 `verify_unit_pass`（`tools/lib/verify_common.sh`，解析两种 reporter + 剥 ANSI + 要求 `rc==0` + **`min_pass` 下限**防静默空跑），四个调用点全部改完，**并按 §3.1 做了 5 项齿检**（含"塞必然失败的用例必须红"与"用例删光必须红"）。`v101` 假红 → 如实 SKIP；`v99` 假绿 → 真实结果；`v15_dumpall` device 段全绿；`v100` **22 checks/0 problems 转绿**。详见 `PROGRESS.md` 同日第 9 条。<br>**剩下 1 项待做**：`verify_v01` / `verify_v32` 需要**完整构建链**（`cmake`/`ninja`/`gradle` + Android SDK），
+| **1b** | **治掉让门禁变哑的环境项**（本轮新暴露的、收益最直接的一类）：~~② **修 `v99`/`v100`/`v101`/`v15_dumpall` 的 `^ℹ fail 0$` 断言**，并补 `v99`/`v15_dumpall` 漏掉的 `exit 1`~~ ✅ **2026-09-29（二）已修**：收成一处实现 `verify_unit_pass`（`tools/lib/verify_common.sh`，解析两种 reporter + 剥 ANSI + 要求 `rc==0` + **`min_pass` 下限**防静默空跑），四个调用点全部改完，**并按 §3.1 做了 5 项齿检**（含"塞必然失败的用例必须红"与"用例删光必须红"）。`v101` 假红 → 如实 SKIP；`v99` 假绿 → 真实结果；`v15_dumpall` device 段全绿；`v100` **22 checks/0 problems 转绿**。详见 `PROGRESS.md` 同日第 9 条。<br>**剩下 1 项待做（2026-10-01 部分解决）**：`verify_v01` / `verify_v32` 仍需要 **gradle**（重打沙盒 APK / 模块 APK）——
+agent `.so` 本机已能构建（§1.5），卡住它们的只剩 gradle，
 那是"要不要在这台机器上做完整构建"的环境决策，不是路径 bug。（①②③④ **均已在本轮完成**——
 ①④ 见下；②③ 见 2026-09-29（二）与 2026-09-30 的提交。） | ① 完成后 `v02_so`/`v08_disasm`/`v08_analyze`/`v26_footprint`/`v30` 全部转 PASS，
 `v90` 由 SKIP 转**真跑**（228 索引逐条对照 jni.h），`v101` 由 SKIP 转**真跑**（clang 编译靶子 + 11 项断言）|
@@ -345,11 +366,15 @@ connect 句柄在 Windows 上不可取消）；换 `node:http` 后 `req.setTimeo
 
 ### 需要用户拍板（**不要自己决定**）
 
-- **产品口径冲突**：用户希望"横扫所有脱壳/加解密/抓包"，而 `REQUIREMENTS.md §15.5` 写死不承诺"把每种壳
-  还原成可读 Java 源码 / VMP 完整语义还原"。按 `CLAUDE.md`，两份说法必须合一（**先问，再改文档**）。
-  建议口径：**覆盖所有场景类型都有对应工具与流程（不保证每个壳 100% 还原），恢复率如实上报**。
-- `DEVELOPMENT_PLAN.md §6.9.5` 的发布范围收口 10 项（除模块 X 外）逐项待确认。
-- agent TCP `8761` 无鉴权的信任模型（加 token / 只绑 `127.0.0.1` / 维持现状）。
+### 已拍板（2026-10-01，不要再问一遍）
+
+- **产品口径**：覆盖所有场景类型都有对应工具与流程，**不保证每个壳 100% 还原，恢复率如实上报**
+  （已并入 `REQUIREMENTS.md §15.5`）。
+- **发布范围收口 10 项**：全部照建议执行，已并入 `DEVELOPMENT_PLAN.md §6.9.1/§6.9.2/§6.10`（§6.9.5 已删除，不要再引用它）。
+  要点：arm64-only；QBDI/Frida Gadget/eCapture 降级、Xposed 标社区实验、官方路径只剩 Zygisk；
+  全量 syscall 拦截不做；cdex/041 样本驱动不进排期；Web UI 冻结为只读查看器；
+  **9 个沙盒耦合命令真删**（2026-10-01 完成，能力改由 `capture_start/capture_stop` + `java_call` + `native_hook` 提供）。
+- **agent TCP 8761 无鉴权的信任模型**：**仍未决**，见 `REQUIREMENTS.md §20.1`。
 
 ---
 

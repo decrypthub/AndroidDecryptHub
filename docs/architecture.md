@@ -36,9 +36,14 @@ Do **not** confuse **Host ADH Daemon** (`daemon/` on PC) with **Device Daemon** 
 
 ## Agent commands (collect/execute)
 
-`maps · read · search · scan_magic · art_dexfiles · jni_probe · gothook_selftest ·
-crypto_probe · crypto_hook_test · net_hook_test · flow_watch · detect_watch ·
-compat_probe · trace_run · object_inspect · object_invoke`
+`maps · read · search · scan_magic · art_dexfiles · gothook_selftest · capture_start ·
+capture_stop · capture_drain · compat_probe · got_enum · native_hook · java_hook ·
+jni_env_hook · object_inspect · object_invoke · trigger`
+
+> 2026-10-01：`jni_probe` / `crypto_probe` / `crypto_hook_test` / `net_hook_test` / `file_hook_test` /
+> `flow_watch` / `detect_watch` / `trace_run` / `inline_crypto_test` 已删除——它们把**触发契约**写死成
+> 目标的 `run()`（3 条还写死 `libjavacrypto.so`）。能力改由持续捕获 + `java_call`（class/method 来自命令）
+> 提供；完整清单以 `agent_main.c` 的分发表为准。
 
 Core primitives reused across commands: `got_replace()` (GOT/PLT hook engine, single RELRO
 slot + trampoline), `resolve_sym()` (in-memory dynsym, namespace-independent),

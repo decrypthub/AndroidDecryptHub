@@ -44,7 +44,7 @@ else()
 endif()
 
 # Native inline-hook backend (Dobby, arm64). Present only after tools/fetch_dobby.sh has run;
-# without it the agent still builds and adh_inline_crypto_test reports "inline backend not built".
+# without it the agent still builds (native_hook mode=inline then reports that the backend is not built in).
 set(DOB "${CMAKE_CURRENT_SOURCE_DIR}/third_party/dobby")
 set(HOOK_LIBS "")
 set(HOOK_INC "")

@@ -460,8 +460,6 @@ static void command_loop(int fd) {
                     json_get_str(line, "via", via, sizeof(via));
                     long long size = json_get_num(line, "size");
                     cmd_read(fd, id, addr, size, via);
-                } else if (strcmp(op, "jni_probe") == 0) {
-                    adh_cmd_jni_probe(fd, id);
                 } else if (strcmp(op, "jni_hook") == 0) {
                     char jaction[16] = "";
                     json_get_str(line, "action", jaction, sizeof(jaction));
@@ -604,11 +602,6 @@ static void command_loop(int fd) {
                     cmd_javahook_probe(fd, id);
                 } else if (strcmp(op, "gothook_selftest") == 0) {
                     adh_cmd_gothook_selftest(fd, id);
-                } else if (strcmp(op, "crypto_probe") == 0) {
-                    adh_cmd_crypto_probe(fd, id);
-                } else if (strcmp(op, "crypto_hook_test") == 0) {
-                    char tcls[200] = ""; json_get_str(line, "className", tcls, sizeof(tcls));
-                    adh_cmd_crypto_hook_test(fd, id, tcls);
                 } else if (strcmp(op, "capture_start") == 0) {
                     char cmod[64] = "", fmod[64] = "", smod[64] = "";
                     json_get_str(line, "cryptoModule", cmod, sizeof(cmod));
@@ -625,49 +618,19 @@ static void command_loop(int fd) {
                     json_get_str(line, "method", tm, sizeof(tm));
                     long long lv = json_get_num(line, "level");
                     adh_cmd_trigger(fd, id, tcls, tm, lv > 0 ? (int)lv : 1);
-                } else if (strcmp(op, "inline_crypto_test") == 0) {
-                    char im[96] = "", is[96] = "", ic[220] = "", it[80] = "";
-                    json_get_str(line, "module", im, sizeof(im));
-                    json_get_str(line, "symbol", is, sizeof(is));
-                    json_get_str(line, "className", ic, sizeof(ic));
-                    json_get_str(line, "method", it, sizeof(it));
-                    adh_cmd_inline_crypto_test(fd, id, im, is, ic, it);
                 } else if (strcmp(op, "load_so") == 0) {
                     char lpath[400] = "", lsym[96] = "";
                     json_get_str(line, "path", lpath, sizeof(lpath));
                     json_get_str(line, "symbol", lsym, sizeof(lsym));
                     adh_cmd_load_so(fd, id, lpath, lsym);
-                } else if (strcmp(op, "net_hook_test") == 0) {
-                    char tcls[200] = ""; json_get_str(line, "className", tcls, sizeof(tcls));
-                    adh_cmd_net_hook_test(fd, id, tcls);
                 } else if (strcmp(op, "file_probe") == 0) {
                     adh_cmd_file_probe(fd, id);
-                } else if (strcmp(op, "file_hook_test") == 0) {
-                    char fmod[64] = "", tcls[200] = "";
-                    json_get_str(line, "module", fmod, sizeof(fmod));
-                    json_get_str(line, "className", tcls, sizeof(tcls));
-                    adh_cmd_file_hook_test(fd, id, fmod, tcls);
-                } else if (strcmp(op, "flow_watch") == 0) {
-                    char tcls[200] = ""; json_get_str(line, "className", tcls, sizeof(tcls));
-                    adh_cmd_flow_watch(fd, id, tcls);
-                } else if (strcmp(op, "detect_watch") == 0) {
-                    char dmod[64] = "", tcls[200] = "";
-                    json_get_str(line, "module", dmod, sizeof(dmod));
-                    json_get_str(line, "className", tcls, sizeof(tcls));
-                    adh_cmd_detect_watch(fd, id, dmod, tcls);
                 } else if (strcmp(op, "qbdi_trace") == 0) {
                     char sl[64] = "", sy[80] = "", targs[256] = "";
                     json_get_str(line, "symLib", sl, sizeof(sl));
                     json_get_str(line, "symbol", sy, sizeof(sy));
                     json_get_str(line, "args", targs, sizeof(targs));
                     adh_cmd_qbdi_trace(fd, id, sl, sy, targs);
-                } else if (strcmp(op, "trace_run") == 0) {
-                    char sl[64] = "", sy[64] = "", hm[80] = "", tcls[200] = "";
-                    json_get_str(line, "symLib", sl, sizeof(sl));
-                    json_get_str(line, "symbol", sy, sizeof(sy));
-                    json_get_str(line, "hookModule", hm, sizeof(hm));
-                    json_get_str(line, "className", tcls, sizeof(tcls));
-                    adh_cmd_trace_run(fd, id, sl, sy, hm, tcls);
                 } else if (strcmp(op, "compat_probe") == 0) {
                     adh_cmd_compat_probe(fd, id);
                 } else if (strcmp(op, "object_inspect") == 0) {

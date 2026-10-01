@@ -53,8 +53,8 @@ const bad = await (await fetch(`${base}/api/fs/list?session=${encodeURIComponent
 console.log(`fs_list bad path: ok=${bad.ok} err=${JSON.stringify(String(bad.error ?? '').slice(0, 40))}`);
 
 // 5) file_probe (v4.90): which loaded module's GOT holds the libc file-I/O pointers. That answer
-//    is what file_capture's module argument comes from, so a probe that returns nothing useful
-//    has to be visible here instead of surfacing as a confusing file_capture failure later.
+//    is what capture_start's fileModule argument comes from, so a probe that returns nothing useful
+//    has to be visible here instead of surfacing as a confusing capture_start failure later.
 const fp = await (await fetch(`${base}/api/file/probe?session=${encodeURIComponent(session)}`)).json().catch(() => ({}));
 const fpFns = fp.fns ?? {};
 const fpModules = Array.isArray(fp.modules) ? fp.modules : [];

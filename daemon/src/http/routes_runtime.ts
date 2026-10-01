@@ -1,5 +1,5 @@
 import {
-  dumpAllDex, dumpRegion, pickSid, sendCmd, withCaptureSuspended,
+  dumpAllDex, dumpRegion, pickSid, sendCmd,
 } from '../service.ts';
 import { watchSyscalls } from '../syscall_watch.ts';
 import { nativeBacktrace } from '../backtrace.ts';
@@ -13,7 +13,7 @@ import { listDeviceDir, readDeviceFile } from '../fs_browse.ts';
 import { jniFieldDigest } from '../jni_field_digest.ts';
 import { syscallTraceStart, syscallTraceDigest, syscallTraceStop } from '../syscall_trace.ts';
 import { liveDisasm , assertCallableAddress } from '../memory.ts';
-import { readBody, SANDBOX, sessions, settings } from '../state.ts';
+import { readBody, sessions, settings } from '../state.ts';
 import type { Route, RouteContext } from './types.ts';
 
 // A non-numeric throttleMs is a caller error, not a device failure: answer 400 before the
@@ -331,71 +331,16 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
       try { const r = await sendCmd(sid, 'qbdi_trace', { symLib, symbol, args }, 30_000); return send(r.ok ? 200 : 502, r); }
       catch (e) { return send(504, { error: (e as Error).message }); }
     } },
-    { path: '/api/trace/run', handler: async () => {
-      const sid = pickSid(url.searchParams.get('session'));
-      if (!sid) return send(400, { error: 'no session' });
-      const symLib = url.searchParams.get('symLib') ?? 'libc.so';
-      const symbol = url.searchParams.get('symbol') ?? 'access';
-      const hookModule = url.searchParams.get('hookModule') ?? 'libadhdetect.so';
-      try { const r = await withCaptureSuspended(sid, () => sendCmd(sid, 'trace_run', { symLib, symbol, hookModule, className: url.searchParams.get('class') ?? SANDBOX.detect }, 20_000)); return send(r.ok ? 200 : 502, r); }
-      catch (e) { return send(504, { error: (e as Error).message }); }
-    } },
-    { path: '/api/detect/watch', handler: async () => {
-      const sid = pickSid(url.searchParams.get('session'));
-      if (!sid) return send(400, { error: 'no session' });
-      try { const r = await withCaptureSuspended(sid, () => sendCmd(sid, 'detect_watch', { module: url.searchParams.get('module') ?? settings.capture.sysModule, className: url.searchParams.get('class') ?? SANDBOX.detect }, 20_000)); return send(r.ok ? 200 : 502, r); }
-      catch (e) { return send(504, { error: (e as Error).message }); }
-    } },
-    { path: '/api/crypto/probe', handler: async () => {
-      const sid = pickSid(url.searchParams.get('session'));
-      if (!sid) return send(400, { error: 'no session' });
-      try { const r = await sendCmd(sid, 'crypto_probe', {}, 20_000); return send(r.ok ? 200 : 502, r); }
-      catch (e) { return send(504, { error: (e as Error).message }); }
-    } },
-    { path: '/api/flow/watch', handler: async () => {
-      const sid = pickSid(url.searchParams.get('session'));
-      if (!sid) return send(400, { error: 'no session' });
-      try {
-        const r = await withCaptureSuspended(sid, () => sendCmd(sid, 'flow_watch', { className: url.searchParams.get('class') ?? SANDBOX.flow }, 25_000));
-        const caps = (r.captures ?? []).map((c: any) => ({ ...c, ascii: Buffer.from(c.hex, 'hex').toString('latin1').replace(/[^\x20-\x7e]/g, '.') }));
-        const WINDOW_NS = 200_000_000;
-        const crypto = caps.filter((c: any) => c.func.startsWith('EVP_') || c.func === 'HMAC_Update');
-        const net = caps.filter((c: any) => c.func.startsWith('SSL_'));
-        const correlations = [];
-        for (const cr of crypto) for (const nw of net) {
-          if (cr.tid === nw.tid && Math.abs(cr.tsNs - nw.tsNs) <= WINDOW_NS) {
-            correlations.push({ tid: cr.tid, deltaMs: Math.abs(cr.tsNs - nw.tsNs) / 1e6,
-              plaintext: cr.ascii, cryptoFunc: cr.func, netFunc: nw.func, request: nw.ascii.slice(0, 120) });
-          }
-        }
-        r.captures = caps;
-        return send(r.ok ? 200 : 502, { ...r, correlations });
-      } catch (e) { return send(504, { error: (e as Error).message }); }
-    } },
-    { path: '/api/net/hook_test', handler: async () => {
-      const sid = pickSid(url.searchParams.get('session'));
-      if (!sid) return send(400, { error: 'no session' });
-      try {
-        const r = await withCaptureSuspended(sid, () => sendCmd(sid, 'net_hook_test', { className: url.searchParams.get('class') ?? SANDBOX.net }, 25_000));
-        if (r.captures) r.captures = r.captures.map((c: any) => ({ ...c, ascii: Buffer.from(c.hex, 'hex').toString('latin1').replace(/[^\x20-\x7e]/g, '.') }));
-        return send(r.ok ? 200 : 502, r);
-      } catch (e) { return send(504, { error: (e as Error).message }); }
-    } },
+    // The one-shot probe routes lived here until 2026-10-01: /api/trace/run, /api/detect/watch,
+    // /api/crypto/probe, /api/flow/watch, /api/net/hook_test and /api/crypto/hook_test all drove
+    // agent ops that hardcoded a sandbox trigger contract. The capability now comes from the
+    // persistent capture set (MCP capture_start / capture_stop, agent op capture_start), a
+    // caller-supplied trigger (MCP java_call) and the daemon-side join in flow.ts.
     { path: '/api/file/probe', handler: async () => {
       const sid = pickSid(url.searchParams.get('session'));
       if (!sid) return send(400, { error: 'no session' });
       try { const r = await sendCmd(sid, 'file_probe', {}, 20_000); return send(r.ok ? 200 : 502, r); }
       catch (e) { return send(504, { error: (e as Error).message }); }
-    } },
-    { path: '/api/file/hook_test', handler: async () => {
-      const sid = pickSid(url.searchParams.get('session'));
-      if (!sid) return send(400, { error: 'no session' });
-      const module = url.searchParams.get('module') ?? settings.capture.fileModule;
-      try {
-        const r = await withCaptureSuspended(sid, () => sendCmd(sid, 'file_hook_test', { module, className: url.searchParams.get('class') ?? SANDBOX.file }, 25_000));
-        if (r.captures) r.captures = r.captures.map((c: any) => ({ ...c, ascii: Buffer.from(c.hex, 'hex').toString('latin1').replace(/[^\x20-\x7e]/g, '.') }));
-        return send(r.ok ? 200 : 502, r);
-      } catch (e) { return send(504, { error: (e as Error).message }); }
     } },
     { path: '/api/fs/list', handler: async () => {
       const sid = pickSid(url.searchParams.get('session'));
@@ -418,30 +363,6 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
         const text = Buffer.from(r.b64 ?? '', 'base64').toString('utf8');
         return send(200, { ...r, text });
       } catch (e) { return send(502, { ok: false, error: (e as Error).message }); }
-    } },
-    { path: '/api/crypto/hook_test', handler: async () => {
-      const sid = pickSid(url.searchParams.get('session'));
-      if (!sid) return send(400, { error: 'no session' });
-      try {
-        const r = await withCaptureSuspended(sid, () => sendCmd(sid, 'crypto_hook_test', { className: url.searchParams.get('class') ?? SANDBOX.crypto }, 20_000));
-        if (r.captures) r.captures = r.captures.map((c: any) => ({ ...c, ascii: Buffer.from(c.hex, 'hex').toString('latin1').replace(/[^\x20-\x7e]/g, '.') }));
-        return send(r.ok ? 200 : 502, r);
-      } catch (e) { return send(504, { error: (e as Error).message }); }
-    } },
-    { path: '/api/native/inline_hook_test', handler: async () => {
-      const sid = pickSid(url.searchParams.get('session'));
-      if (!sid) return send(400, { error: 'no session' });
-      const args = {
-        module: url.searchParams.get('module') ?? SANDBOX.inlineModule,
-        symbol: url.searchParams.get('symbol') ?? SANDBOX.inlineSymbol,
-        className: url.searchParams.get('class') ?? SANDBOX.detect,
-        method: url.searchParams.get('method') ?? SANDBOX.inlineMethod,
-      };
-      try {
-        const r = await withCaptureSuspended(sid, () => sendCmd(sid, 'inline_crypto_test', args, 20_000));
-        if (r.captures) r.captures = r.captures.map((c: any) => ({ ...c, ascii: Buffer.from(c.hex, 'hex').toString('latin1').replace(/[^\x20-\x7e]/g, '.') }));
-        return send(r.ok ? 200 : 502, r);
-      } catch (e) { return send(504, { error: (e as Error).message }); }
     } },
     // Shares hookEngineSelftest with the MCP tool engine_selftest. The agent fields stay top level
     // (replaced/fired/protRestored/perms) and the status code follows the VERDICT, so a build that
@@ -467,12 +388,6 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
         const { meta, dedup } = await dumpRegion(sid, String(begin).replace(/^0x/, ''), Number(size), 'art_dexfile');
         return send(200, { ...meta, dedup });
       } catch (e) { return send(502, { error: (e as Error).message }); }
-    } },
-    { path: '/api/jni/probe', handler: async () => {
-      const sid = pickSid(url.searchParams.get('session'));
-      if (!sid) return send(400, { error: 'no session' });
-      try { const r = await sendCmd(sid, 'jni_probe'); return send(r.ok ? 200 : 502, r); }
-      catch (e) { return send(504, { error: (e as Error).message }); }
     } },
     { path: '/api/memory/scan_magic', handler: async () => {
       const sid = pickSid(url.searchParams.get('session'));

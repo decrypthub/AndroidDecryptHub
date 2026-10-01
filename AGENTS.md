@@ -30,7 +30,7 @@ There is one plan. If something contradicts these docs, fix the docs in the same
 | **ADH Manager** | 手机侧 Compose UI（`device/:manager`）；注入作用域与目标进程启停 |
 | **ADH Sandbox** / `com.adh.sandbox` | 模拟注入与确定性验收宿主；不是产品目标包 |
 | **IDH** | iOS 参考项目（IOSDecryptHub / ios-decrypt-helper），仅作对照 |
-| `libadh_agent.so` | 本产品 agent `.so`（唯一交付名，随 Zygisk/Xposed 模块与沙盒打包） |
+| `libadh_agent.so` | 本产品 agent `.so`（唯一交付名，随 Zygisk 模块与沙盒打包；Xposed 薄模块只作社区/实验） |
 - 新代码/新文案使用 `ADH` / `Host ADH Daemon` / `adhd` / `adh_*`。不保留 IDH 名称兼容层：不再产出或接受 `libidh_agent.so`，不导出 `idh_agent_start`，不读取 `IDH_*` 环境变量，不兼容 `idhd-data/` 或 `libidhdetect.so`；IDH 仅指 iOS 参考项目。`com.idh.probe` / `IDH_PROBE_OK` 是 hash 绑定的固定 probe dex 例外。
 
 ## Architecture red line (do not cross)
@@ -40,7 +40,7 @@ Never merge these layers.
 - `libadh_agent.so` (in target process) — **collect / execute only**: hook, trace, dump, maps scan, light RPC. Keep it minimal, low-memory, non-blocking.
 - **Host ADH Daemon** (`daemon/`, npm `adhd`) — HTTP / WebSocket / MCP / DB / index / disasm cache / analysis.
 - **Device** (`device/`: `:core` + `:daemon` + `:manager`) — injection scope + module status + target process stop/restart. No analysis.
-- Web UI (browser) — observe / search / configure.
+- Web UI (browser) — observe / search / visualize (frozen as a READ-ONLY viewer, 2026-10-01).
 
 **Never** put HTTP, MCP, a database, the dex indexer, or Capstone/QBDI heavy analysis inside the agent `.so` or the Device Daemon/Manager. That causes target OOM/ANR and is easy to detect.
 
@@ -56,7 +56,7 @@ Loop: **Explore → Plan → Implement → Verify**, then iterate on the result.
 
 ## Scope priority (current)
 
-Build **`libadh_agent.so` functionality** and self-test via 模拟注入 (sandbox `dlopen`). **Module W**: Zygisk (`injector/zygisk`) + device multi-module (`device/` Compose Manager + root Device Daemon). Module X (Android UI automation) is retired and removed: do not restore the Manager AccessibilityService, notification reader, phone_* MCP tools, or device input/power/volume/clipboard bridge. When an AI agent needs to interact with the attached phone, use `adb` directly. Keep the Device surface limited to injection scope, module status, and target app process control. Frida Gadget remains an optional off-by-default backend (`tools/load_frida_gadget.sh`, verified by `tools/verify_v30_fridagadget.sh`; Frida 17+ hooks using `Java.perform()` must be bundled with `tools/compile_frida_script.sh`). An optional LSPosed/Xposed thin module is also available (`injector/xposed/`, built by `tools/build_xposed.sh`, verified by `tools/verify_v31_xposed.sh`) — it only loads the agent, never analysis code. Do not block feature verification on real injection — CI stays on 模拟注入.
+Build **`libadh_agent.so` functionality** and self-test via 模拟注入 (sandbox `dlopen`). **Module W**: Zygisk (`injector/zygisk`) + device multi-module (`device/` Compose Manager + root Device Daemon). Module X (Android UI automation) is retired and removed: do not restore the Manager AccessibilityService, notification reader, phone_* MCP tools, or device input/power/volume/clipboard bridge. When an AI agent needs to interact with the attached phone, use `adb` directly. Keep the Device surface limited to injection scope, module status, and target app process control. Frida Gadget remains a dev/debug backend (out of the release artifact, 2026-10-01; off by default) (`tools/load_frida_gadget.sh`, verified by `tools/verify_v30_fridagadget.sh`; Frida 17+ hooks using `Java.perform()` must be bundled with `tools/compile_frida_script.sh`). A community/experimental LSPosed/Xposed thin module is also available (Zygisk is the only official path, 2026-10-01) (`injector/xposed/`, built by `tools/build_xposed.sh`, verified by `tools/verify_v31_xposed.sh`) — it only loads the agent, never analysis code. Do not block feature verification on real injection — CI stays on 模拟注入.
 
 ## Verification (give yourself a real signal)
 
@@ -111,7 +111,7 @@ Each layer has a `MAP.md` — read it before editing that layer:
 - `tools/MAP.md` — `tools/lib/verify_common.sh` + `tools/lib/env.sh`. **Add a verify script = source the lib + one node heredoc**.
 - `daemon/src/MAP.md` — Host ADH Daemon: `state.ts` ← `service.ts` ← `mcp.ts` / `index.ts`.
 - `device/MAP.md` — device multi-module: `:core` (scope contract) + `:daemon` (AIDL) + `:manager` (Compose).
-- `injector/` — Zygisk Magisk zip (`injector/zygisk/`); optional LSPosed/Xposed thin loader (`injector/xposed/`).
+- `injector/` — Zygisk Magisk zip (`injector/zygisk/`); community/experimental LSPosed/Xposed thin loader (`injector/xposed/`).
 - `agent/src/MAP.md` — Agent source ownership and Phase 3 extraction rules; read it before moving capabilities out of bootstrap.
 
 
@@ -120,7 +120,7 @@ Each layer has a `MAP.md` — read it before editing that layer:
 
 - **The handover machine gets a rooted, flashable phone from the user.** With it the normal path is open:
   `tools/flash_device.sh` (KernelSU/Magisk), `install_apk_root` (`su` + `pm install`), and the full
-  `tools/verify_all.sh` (118 = 36 host + 82 device). **Record the device facts** (model / API level / ABI /
+  `tools/verify_all.sh` (117 = 36 host + 81 device). **Record the device facts** (model / API level / ABI /
   root method / serial) in `docs/HANDOVER.md` §1.3 — the ART structure resolver is validated on **SDK 35
   (primary) / 36 (secondary)**, so a different API level means "extend the resolver" is your first task,
   not "the tool is broken".
@@ -128,12 +128,12 @@ Each layer has a `MAP.md` — read it before editing that layer:
   Android 15 / SDK 35 / arm64-v8a) is the user's **daily driver and deliberately unrooted** (verified
   2026-09-29: `id` → `uid=2000(shell)`, no `su`, `/data/adb` permission denied). Do not flash it, install
   anything on it, or start/stop apps on it; `tools/dev_up.sh` also runs `adb reverse` against whatever is
-  attached, so skip it for host-only work. The sandbox app is not installed there, so all 82 device scripts
+  attached, so skip it for host-only work. The sandbox app is not installed there, so all 81 device scripts
   fail or hang waiting for an agent — **do not run the full `verify_all.sh` on that machine**; the host-subset
   recipe (36/36 on 2026-09-29) is in `docs/HANDOVER.md` §2.2.
 - **`docs/HANDOVER.md` is the onboarding doc** — environment truth by machine profile, the pitfalls not
   written anywhere else, and the todo list with acceptance signals. Read it before planning work.
-- Unchanged and still true: primary agent ABI is `arm64-v8a`; keep **per-API-level ART resolvers**; this
+- Unchanged and still true: primary agent ABI is `arm64-v8a` **only** (ratified product boundary, 2026-10-01); keep **per-API-level ART resolvers**; this
   ColorOS ROM ships a **heavily stripped `libart.so`**; the verified native inline-hook backend is Dobby
   (`tools/fetch_dobby.sh`), with LSPlant v6.4 an optional Java-hook backend linked in only when
   `tools/fetch_lsplant.sh` has prepared its pinned sources.

@@ -6,9 +6,6 @@
 #include "../runtime/jni.h"
 
 #include "../runtime/jni_env_hooks.h"
-#ifdef ADH_HAVE_INLINE_HOOK
-#include "../hook/native_inline.h"
-#endif
 
 #include <errno.h>
 #include <fcntl.h>
@@ -93,21 +90,6 @@ static size_t emit_caprec(char *out, size_t len, size_t cap, const struct CapRec
     len += snprintf(out + len, cap > len ? cap - len : 0, "\"}");
     return len;
 }
-// Serialize (without popping) every record currently in the ring, tail→head. Used by the
-// one-shot probes, which reset → trigger → serialize, producing far fewer than CAP_RING.
-// Returns count emitted; *lenp updated. Caller holds no lock (we take it).
-static int cap_emit_all(char *out, size_t *lenp, size_t cap) {
-    pthread_mutex_lock(&g_cap_lock);
-    int n = 0;
-    for (int i = 0; i < g_ring_count; i++) {
-        struct CapRec *r = &g_ring[(g_ring_tail + i) % CAP_RING];
-        *lenp = emit_caprec(out, *lenp, cap, r, n == 0);
-        n++;
-    }
-    pthread_mutex_unlock(&g_cap_lock);
-    return n;
-}
-
 typedef int (*EVP_CipherUpdate_t)(void *, unsigned char *, int *, const unsigned char *, int);
 static EVP_CipherUpdate_t g_evp_cipher_orig = NULL;
 static int my_EVP_CipherUpdate(void *ctx, unsigned char *out, int *outl, const unsigned char *in, int inl) {
@@ -208,8 +190,9 @@ static int my_EVP_DigestVerifyFinal(void *ctx, const unsigned char *sig, size_t 
 // ---- Signature (RSA/ECDSA) + AEAD (GCM/ChaCha20-Poly1305) ----
 // 原生 GOT hook，标准 BoringSSL 导出符号；这些是当前能跨设备工作的原生可 hook 子集。
 
-// EVP_PKEY_sign/verify are NOT imported by libjavacrypto.so at all (confirmed via
-// `llvm-readelf --dyn-syms` against the on-device Conscrypt native lib) — Android's
+// EVP_PKEY_sign/verify are NOT imported by the JCE provider's native library at all
+// (confirmed via `llvm-readelf --dyn-syms` against the on-device Conscrypt native lib) —
+// Android's
 // Signature.sign/verify for both RSA and ECDSA route through the legacy one-shot
 // RSA_sign/RSA_verify and ECDSA_sign/ECDSA_verify entry points instead. Hooking
 // ECDSA_sign/verify here (the ones our sigDemo/SHA256withECDSA path actually calls).
@@ -317,17 +300,7 @@ static void got_probe(int fd, const char *id, const char *opname, const char *na
     LOGI("%s: %d modules with GOT refs", opname, nmods);
 }
 
-// Recon: which modules' GOT holds the EVP/HMAC/SSL pointers (candidate crypto hook sites).
-void adh_cmd_crypto_probe(int fd, const char *id) {
-    const char *names[] = { "EVP_CipherUpdate", "EVP_EncryptUpdate", "EVP_DecryptUpdate", "EVP_DigestUpdate", "HMAC_Update", "SSL_read", "SSL_write" };
-    void *addrs[7];
-    for (int i = 0; i < 5; i++) addrs[i] = adh_resolve_sym("libcrypto.so", names[i]);
-    addrs[5] = adh_resolve_sym("libssl.so", "SSL_read");
-    addrs[6] = adh_resolve_sym("libssl.so", "SSL_write");
-    got_probe(fd, id, "crypto_probe", names, addrs, 7);
-}
-
-// ---- network TLS-plaintext capture (SSL_read/SSL_write in libjavacrypto/Conscrypt) ----
+// ---- network TLS-plaintext capture (SSL_read/SSL_write in the JCE provider library) ----
 typedef int (*SSL_rw_t)(void *, void *, int);
 static SSL_rw_t g_orig_ssl_write = NULL, g_orig_ssl_read = NULL;
 static int my_SSL_write(void *ssl, void *buf, int num) {
@@ -340,47 +313,6 @@ static int my_SSL_read(void *ssl, void *buf, int num) {
     return ret;
 }
 
-// Hook SSL_write/SSL_read in Conscrypt, trigger an HTTPS request via JNI reflection,
-// and report the captured TLS plaintext (request + response).
-void adh_cmd_net_hook_test(int fd, const char *id, const char *className) {
-    char idj[64]; json_escape(id, idj, sizeof(idj));
-    void *ow = adh_resolve_sym("libssl.so", "SSL_write");
-    void *orr = adh_resolve_sym("libssl.so", "SSL_read");
-    g_orig_ssl_write = (SSL_rw_t)ow; g_orig_ssl_read = (SSL_rw_t)orr;
-    int rw = ow ? adh_got_replace("libjavacrypto.so", ow, (void *)my_SSL_write) : -1;
-    int rr = orr ? adh_got_replace("libjavacrypto.so", orr, (void *)my_SSL_read) : -1;
-    cap_reset();
-
-    int did = 0, triggered = 0; char result[128] = "";
-    JNIEnv *env = adh_jni_attach(&did);
-    if (env) {
-        (*env)->PushLocalFrame(env, 32);
-        jclass jc = className[0] ? adh_jni_load_app_class(env, className) : NULL;
-        if (jc) {
-            jmethodID run = (*env)->GetStaticMethodID(env, jc, "run", "()Ljava/lang/String;");
-            if (run) {
-                jstring rs = (jstring)(*env)->CallStaticObjectMethod(env, jc, run);
-                triggered = 1;
-                if (rs) { const char *s = (*env)->GetStringUTFChars(env, rs, NULL); if (s) { strncpy(result, s, sizeof(result)-1); (*env)->ReleaseStringUTFChars(env, rs, s); } }
-            }
-        }
-        if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
-        (*env)->PopLocalFrame(env, NULL);
-        adh_jni_detach(did);
-    }
-    if (rw > 0) adh_got_replace("libjavacrypto.so", (void *)my_SSL_write, ow);
-    if (rr > 0) adh_got_replace("libjavacrypto.so", (void *)my_SSL_read, orr);
-
-    size_t cap = 1 << 16, len = 0; char *out = malloc(cap); if (!out) { send_oom(fd, idj, "net_hook_test"); return; }
-    char rj[200]; json_escape(result, rj, sizeof(rj));
-    len += snprintf(out + len, cap - len, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"net_hook_test\",\"ok\":true,\"hooked\":{\"write\":%d,\"read\":%d},\"triggered\":%s,\"result\":\"%s\",\"captures\":[", idj, rw, rr, triggered ? "true" : "false", rj);
-    int n = cap_emit_all(out, &len, cap);
-    snprintf(out + len, cap - len, "],\"count\":%d}\n", n);
-    send_line(fd, out);
-    free(out);
-    LOGI("net_hook_test: hooked w=%d r=%d triggered=%d result=%s captures=%d", rw, rr, triggered, result, n);
-}
-
 // ---- file I/O capture (open/openat/read/write/close via a caller module's GOT) ----
 // Which module's GOT actually holds these libc pointers for Java FileInputStream/
 // FileOutputStream varies by ART/API level (libopenjdk.so on modern Android) — use
@@ -388,13 +320,10 @@ void adh_cmd_net_hook_test(int fd, const char *id, const char *className) {
 typedef int (*open_t)(const char *, int, mode_t);
 typedef int (*openat_t)(int, const char *, int, mode_t);
 typedef ssize_t (*rw_t)(int, void *, size_t);
-typedef int (*fclose_t)(int);
 static open_t g_orig_open = NULL;
 static openat_t g_orig_openat = NULL;
 static rw_t g_orig_read = NULL;
 static rw_t g_orig_fwrite_sys = NULL;
-static fclose_t g_orig_fclose = NULL;
-static volatile int g_file_close_hits = 0;
 
 // arm64 ABI always passes a 3rd arg in a register even when the call site omits it
 // (open()/openat() only read it when O_CREAT/O_TMPFILE is set) — always read+forward it.
@@ -416,10 +345,6 @@ static ssize_t my_read(int fd, void *buf, size_t count) {
 static ssize_t my_write(int fd, const void *buf, size_t count) {
     if (count > 0) capture("write", (const unsigned char *)buf, (int)count);
     return g_orig_fwrite_sys(fd, (void *)buf, count);
-}
-static int my_file_close(int fd) {
-    __atomic_add_fetch(&g_file_close_hits, 1, __ATOMIC_RELAXED);
-    return g_orig_fclose(fd);
 }
 
 // libopenjdk.so imports open/openat/read/write/close (confirmed via dynsym), but Android
@@ -457,8 +382,6 @@ static long my_syscall(long number, ...) {
     long ret = g_orig_syscall(number, a1, a2, a3, a4, a5, a6);
     if (number == __NR_read && ret > 0) {
         capture("read", (const unsigned char *)a2, (int)ret);
-    } else if (number == __NR_close) {
-        __atomic_add_fetch(&g_file_close_hits, 1, __ATOMIC_RELAXED);
     }
     return ret;
 }
@@ -488,7 +411,8 @@ static ssize_t my_write_chk(int fd, const void *buf, size_t count, size_t buflen
 }
 
 // Recon: for open/openat/read/write/close (libc.so), report which loaded modules'
-// GOT holds each pointer (candidate hook sites) — mirrors adh_cmd_crypto_probe.
+// GOT holds each pointer (candidate hook sites) — same recon shape as the crypto side,
+// which the persistent capture path no longer needs (it scans all modules itself).
 // Recon: which modules' GOT holds the libc file-I/O pointers (candidate file hook sites).
 void adh_cmd_file_probe(int fd, const char *id) {
     const char *names[] = { "open", "openat", "read", "write", "close" };
@@ -497,160 +421,11 @@ void adh_cmd_file_probe(int fd, const char *id) {
     got_probe(fd, id, "file_probe", names, addrs, 5);
 }
 
-// Hook open/openat/read/write/close in `module` (from adhd; discover it via adh_cmd_file_probe —
-// no default, the agent never guesses a target module), trigger the target's file workload
-// class (className, from adhd) via JNI reflection, and report captured paths + read/write bytes.
-void adh_cmd_file_hook_test(int fd, const char *id, const char *module, const char *className) {
-    char idj[64]; json_escape(id, idj, sizeof(idj));
-    // No hardcoded target module: adhd passes which loaded module's GOT backs java.io
-    // (discover it via file_probe). Empty -> fail-loud rather than guess a device-specific lib.
-    if (!module || !module[0]) { char e[220]; snprintf(e, sizeof(e), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"file_hook_test\",\"ok\":false,\"error\":\"need module (which loaded module backs java.io; discover via file_probe)\"}\n", idj); send_line(fd, e); return; }
-    const char *mod = module;
-    void *oo  = adh_resolve_sym("libc.so", "open");
-    void *ooa = adh_resolve_sym("libc.so", "openat");
-    void *ord = adh_resolve_sym("libc.so", "read");
-    void *owr = adh_resolve_sym("libc.so", "write");
-    void *ocl = adh_resolve_sym("libc.so", "close");
-    void *osc = adh_resolve_sym("libc.so", "syscall");
-    void *orc = adh_resolve_sym("libc.so", "__read_chk");
-    void *owv = adh_resolve_sym("libc.so", "__write_chk");
-    g_orig_open = (open_t)oo; g_orig_openat = (openat_t)ooa;
-    g_orig_read = (rw_t)ord; g_orig_fwrite_sys = (rw_t)owr; g_orig_fclose = (fclose_t)ocl;
-    g_orig_syscall = (syscall_t)osc;
-    g_orig_read_chk = (read_chk_t)orc; g_orig_write_chk = (write_chk_t)owv;
-
-    int ro  = oo  ? adh_got_replace(mod, oo,  (void *)my_open)  : -1;
-    int roa = ooa ? adh_got_replace(mod, ooa, (void *)my_openat) : -1;
-    int rr  = ord ? adh_got_replace(mod, ord, (void *)my_read)  : -1;
-    int rw  = owr ? adh_got_replace(mod, owr, (void *)my_write) : -1;
-    int rc  = ocl ? adh_got_replace(mod, ocl, (void *)my_file_close) : -1;
-    int rsc = osc ? adh_got_replace(mod, osc, (void *)my_syscall) : -1;
-    int rrc = orc ? adh_got_replace(mod, orc, (void *)my_read_chk) : -1;
-    int rwv = owv ? adh_got_replace(mod, owv, (void *)my_write_chk) : -1;
-    cap_reset();
-    g_file_close_hits = 0;
-
-    int did = 0, triggered = 0; char result[160] = "";
-    JNIEnv *env = adh_jni_attach(&did);
-    if (env) {
-        (*env)->PushLocalFrame(env, 32);
-        jclass jc = className[0] ? adh_jni_load_app_class(env, className) : NULL;
-        if (jc) {
-            jmethodID run = (*env)->GetStaticMethodID(env, jc, "run", "()Ljava/lang/String;");
-            if (run) {
-                jstring rs = (jstring)(*env)->CallStaticObjectMethod(env, jc, run);
-                triggered = 1;
-                if (rs) { const char *s = (*env)->GetStringUTFChars(env, rs, NULL); if (s) { strncpy(result, s, sizeof(result)-1); (*env)->ReleaseStringUTFChars(env, rs, s); } }
-            }
-        }
-        if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
-        (*env)->PopLocalFrame(env, NULL);
-        adh_jni_detach(did);
-    }
-
-    if (ro  > 0) adh_got_replace(mod, (void *)my_open,       oo);
-    if (roa > 0) adh_got_replace(mod, (void *)my_openat,     ooa);
-    if (rr  > 0) adh_got_replace(mod, (void *)my_read,       ord);
-    if (rw  > 0) adh_got_replace(mod, (void *)my_write,      owr);
-    if (rc  > 0) adh_got_replace(mod, (void *)my_file_close, ocl);
-    if (rsc > 0) adh_got_replace(mod, (void *)my_syscall,    osc);
-    if (rrc > 0) adh_got_replace(mod, (void *)my_read_chk,   orc);
-    if (rwv > 0) adh_got_replace(mod, (void *)my_write_chk,  owv);
-
-    size_t cap = 1 << 16, len = 0; char *out = malloc(cap); if (!out) { send_oom(fd, idj, "file_hook_test"); return; }
-    char modj[64]; json_escape(mod, modj, sizeof(modj));
-    char rj[220]; json_escape(result, rj, sizeof(rj));
-    len += snprintf(out + len, cap - len,
-        "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"file_hook_test\",\"ok\":true,\"module\":\"%s\","
-        "\"hooked\":{\"open\":%d,\"openat\":%d,\"read\":%d,\"write\":%d,\"close\":%d,\"syscall\":%d,\"readChk\":%d,\"writeChk\":%d},"
-        "\"triggered\":%s,\"result\":\"%s\",\"closeHits\":%d,\"captures\":[",
-        idj, modj, ro, roa, rr, rw, rc, rsc, rrc, rwv, triggered ? "true" : "false", rj, g_file_close_hits);
-    int n = cap_emit_all(out, &len, cap);
-    snprintf(out + len, cap - len, "],\"count\":%d}\n", n);
-    send_line(fd, out);
-    free(out);
-    LOGI("file_hook_test: mod=%s hooked o=%d oa=%d r=%d w=%d c=%d sc=%d triggered=%d captures=%d", mod, ro, roa, rr, rw, rc, rsc, triggered, n);
-}
-
-// Correlation flow: hook BOTH EVP_CipherUpdate (encrypt) and SSL_write (send) at
-// once, trigger an encrypt-then-send flow, and return all captures with tid+ts so
-// adhd can correlate "this plaintext was encrypted then sent" (取证闭环).
-void adh_cmd_flow_watch(int fd, const char *id, const char *className) {
-    char idj[64]; json_escape(id, idj, sizeof(idj));
-    void *oe = adh_resolve_sym("libcrypto.so", "EVP_CipherUpdate");
-    void *ow = adh_resolve_sym("libssl.so", "SSL_write");
-    g_evp_cipher_orig = (EVP_CipherUpdate_t)oe;
-    g_orig_ssl_write = (SSL_rw_t)ow;
-    int re = oe ? adh_got_replace("libjavacrypto.so", oe, (void *)my_EVP_CipherUpdate) : -1;
-    int rw = ow ? adh_got_replace("libjavacrypto.so", ow, (void *)my_SSL_write) : -1;
-    cap_reset();
-
-    int did = 0, triggered = 0; char result[128] = "";
-    JNIEnv *env = adh_jni_attach(&did);
-    if (env) {
-        (*env)->PushLocalFrame(env, 32);
-        jclass jc = className[0] ? adh_jni_load_app_class(env, className) : NULL;
-        if (jc) {
-            jmethodID run = (*env)->GetStaticMethodID(env, jc, "run", "()Ljava/lang/String;");
-            if (run) {
-                jstring rs = (jstring)(*env)->CallStaticObjectMethod(env, jc, run);
-                triggered = 1;
-                if (rs) { const char *s = (*env)->GetStringUTFChars(env, rs, NULL); if (s) { strncpy(result, s, sizeof(result)-1); (*env)->ReleaseStringUTFChars(env, rs, s); } }
-            }
-        }
-        if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
-        (*env)->PopLocalFrame(env, NULL);
-        adh_jni_detach(did);
-    }
-    if (re > 0) adh_got_replace("libjavacrypto.so", (void *)my_EVP_CipherUpdate, oe);
-    if (rw > 0) adh_got_replace("libjavacrypto.so", (void *)my_SSL_write, ow);
-
-    size_t cap = 1 << 16, len = 0; char *out = malloc(cap); if (!out) { send_oom(fd, idj, "flow_watch"); return; }
-    char rj[200]; json_escape(result, rj, sizeof(rj));
-    len += snprintf(out + len, cap - len, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"flow_watch\",\"ok\":true,\"hooked\":{\"evp\":%d,\"sslWrite\":%d},\"triggered\":%s,\"result\":\"%s\",\"captures\":[", idj, re, rw, triggered ? "true" : "false", rj);
-    int n = cap_emit_all(out, &len, cap);
-    snprintf(out + len, cap - len, "],\"count\":%d}\n", n);
-    send_line(fd, out);
-    free(out);
-    LOGI("flow_watch: hooked evp=%d ssl=%d triggered=%d captures=%d", re, rw, triggered, n);
-}
-
-// Install EVP_CipherUpdate GOT hook in libjavacrypto (Conscrypt), trigger the
-// sandbox's AES via JNI reflection, and return what plaintext the wrapper captured.
-void adh_cmd_crypto_hook_test(int fd, const char *id, const char *className) {
-    char idj[64]; json_escape(id, idj, sizeof(idj));
-    void *orig = adh_resolve_sym("libcrypto.so", "EVP_CipherUpdate");
-    g_evp_cipher_orig = (EVP_CipherUpdate_t)orig;
-    int replaced = orig ? adh_got_replace("libjavacrypto.so", orig, (void *)my_EVP_CipherUpdate) : -1;
-    cap_reset();
-
-    // trigger the target's crypto workload class (className, from adhd) via the app classloader
-    int did = 0, triggered = 0;
-    JNIEnv *env = adh_jni_attach(&did);
-    if (env) {
-        (*env)->PushLocalFrame(env, 64);
-        jclass jc = className[0] ? adh_jni_load_app_class(env, className) : NULL;
-        if (jc) {
-            jmethodID run = (*env)->GetStaticMethodID(env, jc, "run", "()V");
-            if (run) { (*env)->CallStaticVoidMethod(env, jc, run); triggered = 1; }
-        }
-        if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
-        (*env)->PopLocalFrame(env, NULL);
-        adh_jni_detach(did);
-    }
-
-    // unhook (restore) before building reply
-    if (replaced > 0 && orig) adh_got_replace("libjavacrypto.so", (void *)my_EVP_CipherUpdate, orig);
-
-    // build reply with captured records (hex)
-    size_t cap = 1 << 15, len = 0; char *out = malloc(cap); if (!out) { send_oom(fd, idj, "crypto_hook_test"); return; }
-    len += snprintf(out + len, cap - len, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"crypto_hook_test\",\"ok\":true,\"replaced\":%d,\"triggered\":%s,\"captures\":[", idj, replaced, triggered ? "true" : "false");
-    int ncaps = cap_emit_all(out, &len, cap);
-    snprintf(out + len, cap - len, "],\"count\":%d}\n", ncaps);
-    send_line(fd, out);
-    free(out);
-    LOGI("crypto_hook_test: replaced=%d triggered=%d captures=%d", replaced, triggered, ncaps);
-}
+// Correlation flow used to live here as a one-shot op (flow_watch). The agent no longer
+// knows any target class or a "run()" trigger contract: the persistent capture set
+// (capture_start) hooks EVP_CipherUpdate and SSL_write in every module that holds them, and
+// the caller triggers the workload through java_call. The daemon joins the two streams by
+// tid+ts (daemon/src/flow.ts).
 
 // ---- Java-layer rich capture: an interposing JCE provider (installed by the target/self-test
 //      app) reports every Cipher/Mac/MessageDigest op here with algorithm+op+key+iv+input+output.
@@ -727,9 +502,9 @@ int adh_capture_register_reporter(JNIEnv *env, const char *reportClass) {
 // ---- anti-analysis / system-info hooks (module V) — defined here (above capture_start)
 //      so the persistent capture path can install them. GOT-hook the target's own
 //      detection / system-query calls to see WHAT it checks for, and stream each event into
-//      the unified capture() ring so the 系统 panel fills live (not just one-shot
-//      detect_watch). Defeating (returning fake values) is opt-in via g_defeat_ptrace —
-//      default off = pure observation (CLAUDE.md: no self-hiding by default). ----
+//      the unified capture() ring so the 系统 panel fills live. Observe-only by design:
+//      TRACEME neutralization (the old detect_watch's opt-in) has NO control surface now —
+//      restore it as an explicit, default-off opt-in before wiring anything to it. ----
 struct DetRec { char cat[16]; char detail[160]; };
 static struct DetRec g_dets[64];
 static int g_ndets = 0;
@@ -741,7 +516,6 @@ static void det_record(const char *cat, const char *detail) {
         strncpy(r->detail, detail, sizeof(r->detail) - 1); r->detail[sizeof(r->detail)-1]=0; }
     pthread_mutex_unlock(&g_det_lock);
 }
-static int g_defeat_ptrace = 0;   // 0 = observe only; 1 = neutralize TRACEME (opt-in resilience)
 
 typedef long (*ptrace_t)(int, void *, void *, void *);
 static ptrace_t g_orig_ptrace = NULL;
@@ -749,7 +523,6 @@ static long my_ptrace(int req, void *a, void *b, void *c) {
     char d[64]; snprintf(d, sizeof(d), "ptrace(request=%d%s)", req, req == 0 ? " PTRACE_TRACEME" : "");
     det_record("debug", d);
     capture("ptrace", (const unsigned char *)d, (int)strlen(d));
-    if (req == 0 && g_defeat_ptrace) return 0;   // neutralize TRACEME only when defeat opt-in
     return g_orig_ptrace(req, a, b, c);
 }
 typedef int (*access_t)(const char *, int);
@@ -772,7 +545,7 @@ static int my_prop(const char *name, char *value) {
 static char g_file_mod[64] = "";
 static char g_sys_mod[64] = "";
 // crypto/TLS caller module whose GOT holds the EVP/SSL pointers. Empty = scan ALL file-backed
-// modules (default): catches Conscrypt (libjavacrypto) AND non-Conscrypt BoringSSL callers
+// modules (default): catches the JCE provider's Conscrypt AND non-Conscrypt BoringSSL callers
 // (cronet's bundled copy, renamed/statically-linked libs). adhd may pass a specific module.
 static char g_crypto_mod[64] = "";
 
@@ -823,7 +596,7 @@ void adh_cmd_capture_start(int fd, const char *id, const char *cryptoModule, con
     if (pid) g_evp_pkey_id_fn    = (EVP_PKEY_id_t)pid;
     // Persistent hooks in the crypto/TLS caller module's GOT (not restored — that's what makes
     // it "live"). g_crypto_mod from adhd; empty = scan ALL file-backed modules so we catch
-    // whatever routes crypto (Conscrypt, cronet's BoringSSL, renamed libs), not just libjavacrypto.
+    // whatever routes crypto (Conscrypt, cronet's BoringSSL, renamed libs), not just one.
     // Covers symmetric (EVP_CipherUpdate), digest (EVP_DigestUpdate), HMAC (HMAC_Update
     // and the EVP_PKEY HMAC path EVP_DigestSignUpdate), and TLS (SSL_read/write).
     strncpy(g_crypto_mod, (cryptoModule && cryptoModule[0]) ? cryptoModule : "", sizeof(g_crypto_mod)-1);
@@ -874,7 +647,8 @@ void adh_cmd_capture_start(int fd, const char *id, const char *cryptoModule, con
         fwc = owv ? adh_got_replace(g_file_mod, owv, (void *)my_write_chk): -1;
     }
     // -- 系统: persistent detection/system-query hooks (ptrace/access/__system_property_get)
-    //    in sysModule. Observe-only (g_defeat_ptrace stays 0). Streams category=system. --
+    //    in sysModule. Observe-only: the hooks record, they never fake a return value.
+    //    Streams category=system. --
     int sp=-1, sa=-1, sg=-1;
     if (sysModule && sysModule[0]) {
         strncpy(g_sys_mod, sysModule, sizeof(g_sys_mod)-1); g_sys_mod[sizeof(g_sys_mod)-1]=0;
@@ -911,10 +685,10 @@ void adh_cmd_capture_start(int fd, const char *id, const char *cryptoModule, con
          g_crypto_mod, re, rd, rh, rs, rw, rr, rdsi, rdvi, rdsf, rdvu, rdvf, g_file_mod, foa, fsc, frc, fwc, g_sys_mod, sp, sa, sg);
 }
 
-// Uninstall the persistent capture hooks and restore the original GOT pointers, so the
-// one-shot probe endpoints (crypto_hook_test / net_hook_test / flow_watch) get a clean
-// slot to install-and-restore their own hook. adhd suspends continuous capture around
-// those probes, then calls capture_start again.
+// Uninstall the persistent capture hooks and restore the original GOT pointers. Called by
+// the capture_stop tool (after it drains the ring) and by the settings toggle. A caller that
+// stops capture without draining first throws away whatever the ring still holds — which is
+// why the tool drains.
 void adh_cmd_capture_stop(int fd, const char *id) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
     int e = 0, w = 0, r = 0, dg = 0, hm = 0, ds = 0;
@@ -1019,142 +793,10 @@ void adh_cmd_capture_drain(int fd, const char *id) {
     free(out);
 }
 
-// Install GOT hooks on libadhdetect's detection calls, trigger Detection.run(),
-// report what the target checked.
-void adh_cmd_detect_watch(int fd, const char *id, const char *module, const char *className) {
-    char idj[64]; json_escape(id, idj, sizeof(idj));
-    // No hardcoded target module: adhd passes the module whose GOT holds the detection calls.
-    if (!module || !module[0]) { char e[200]; snprintf(e, sizeof(e), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"detect_watch\",\"ok\":false,\"error\":\"need module (which loaded module makes the detection calls)\"}\n", idj); send_line(fd, e); return; }
-    const char *mod = module;
-    void *op = adh_resolve_sym("libc.so", "ptrace");
-    void *oa = adh_resolve_sym("libc.so", "access");
-    void *og = adh_resolve_sym("libc.so", "__system_property_get");
-    g_orig_ptrace = (ptrace_t)op; g_orig_access = (access_t)oa; g_orig_prop = (prop_t)og;
-    // Name-based: the probe runs BEFORE the target has ever called these (that is the point —
-    // install then trigger), so a value-match on the still-lazily-bound PLT slot finds nothing.
-    int r1 = op ? adh_got_replace_by_name(mod, "ptrace", (void *)my_ptrace) : -1;
-    int r2 = oa ? adh_got_replace_by_name(mod, "access", (void *)my_access) : -1;
-    int r3 = og ? adh_got_replace_by_name(mod, "__system_property_get", (void *)my_prop) : -1;
-    g_defeat_ptrace = 1;   // this one-shot probe defeats TRACEME (original behavior); reset after
-    pthread_mutex_lock(&g_det_lock); g_ndets = 0; pthread_mutex_unlock(&g_det_lock);
-
-    int did = 0, triggered = 0, rc = -999;
-    JNIEnv *env = adh_jni_attach(&did);
-    if (env) {
-        (*env)->PushLocalFrame(env, 32);
-        jclass jc = className[0] ? adh_jni_load_app_class(env, className) : NULL;
-        if (jc) {
-            jmethodID run = (*env)->GetStaticMethodID(env, jc, "run", "()I");
-            if (run) { rc = (*env)->CallStaticIntMethod(env, jc, run); triggered = 1; }
-        }
-        if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
-        (*env)->PopLocalFrame(env, NULL);
-        adh_jni_detach(did);
-    }
-    // restore
-    if (r1 > 0) adh_got_replace_by_name(mod, "ptrace", op);
-    if (r2 > 0) adh_got_replace_by_name(mod, "access", oa);
-    if (r3 > 0) adh_got_replace_by_name(mod, "__system_property_get", og);
-    g_defeat_ptrace = 0;
-
-    size_t cap = 1 << 13, len = 0; char *out = malloc(cap); if (!out) { send_oom(fd, idj, "detect_watch"); return; }
-    len += snprintf(out + len, cap - len, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"detect_watch\",\"ok\":true,\"hooked\":{\"ptrace\":%d,\"access\":%d,\"prop\":%d},\"triggered\":%s,\"detectRc\":%d,\"detections\":[", idj, r1, r2, r3, triggered ? "true" : "false", rc);
-    pthread_mutex_lock(&g_det_lock);
-    for (int k = 0; k < g_ndets; k++) { char dj[200]; json_escape(g_dets[k].detail, dj, sizeof(dj));
-        len += snprintf(out + len, cap - len, "%s{\"category\":\"%s\",\"detail\":\"%s\"}", k ? "," : "", g_dets[k].cat, dj); }
-    int n = g_ndets;
-    pthread_mutex_unlock(&g_det_lock);
-    snprintf(out + len, cap - len, "],\"count\":%d}\n", n);
-    send_line(fd, out);
-    free(out);
-    LOGI("detect_watch: hooked p=%d a=%d g=%d triggered=%d detections=%d", r1, r2, r3, triggered, n);
-}
-
-#ifdef ADH_HAVE_INLINE_HOOK
-// v2.2 WS-A native inline self-test. The target supplies the module, symbol and a safe
-// no-arg static trigger; the agent only supplies the ABI-specific wrapper and Dobby backend.
-typedef int (*inline_crypto_update_t)(void *, unsigned char *, int *, const unsigned char *, int);
-static inline_crypto_update_t g_inline_crypto_orig = NULL;
-static void *g_inline_crypto_target = NULL;
-static int g_inline_crypto_active = 0;
-static int my_inline_crypto_update(void *ctx, unsigned char *out, int *outl,
-                                   const unsigned char *in, int inl) {
-    if (__atomic_load_n(&g_inline_crypto_active, __ATOMIC_RELAXED))
-        capture("INLINE_EVP_CipherUpdate", in, inl);
-    return g_inline_crypto_orig ? g_inline_crypto_orig(ctx, out, outl, in, inl) : 0;
-}
-
-void adh_cmd_inline_crypto_test(int fd, const char *id, const char *module,
-                                   const char *symbol, const char *className, const char *method) {
-    char idj[64]; json_escape(id, idj, sizeof(idj));
-    char mj[96], sj[96], cj[220], errj[180];
-    json_escape(module ? module : "", mj, sizeof(mj));
-    json_escape(symbol ? symbol : "", sj, sizeof(sj));
-    json_escape(className ? className : "", cj, sizeof(cj));
-    const char *error = "";
-    void *target = (module && symbol) ? adh_resolve_sym(module, symbol) : NULL;
-    void *original = NULL;
-    int installed = 0, hooked = 0;
-    if (target && g_inline_crypto_target == target && g_inline_crypto_orig) hooked = 1;
-    else if (target && g_inline_crypto_target) error = "inline slot already owns another target";
-    else if (target) {
-        hooked = adh_inline_hook(target, (void *)my_inline_crypto_update, &original);
-        if (hooked) {
-            g_inline_crypto_orig = (inline_crypto_update_t)original;
-            g_inline_crypto_target = target;
-            installed = 1;
-        }
-    }
-    int triggered = 0, value = 0, did = 0;
-    cap_reset();
-
-    if (!target) error = "symbol not found";
-    else if (!hooked) { if (!error[0]) error = "inline backend rejected hook"; }
-    else {
-        __atomic_store_n(&g_inline_crypto_active, 1, __ATOMIC_RELAXED);
-        JNIEnv *env = adh_jni_attach(&did);
-        if (!env) error = "no JNI env";
-        else {
-            (*env)->PushLocalFrame(env, 48);
-            jclass jc = adh_jni_load_app_class(env, className ? className : "");
-            jmethodID mid = jc ? (*env)->GetStaticMethodID(env, jc, method ? method : "", "()I") : NULL;
-            if (adh_jni_exception_check(env)) { adh_jni_exception_clear(env); mid = NULL; }
-            if (!mid) error = "static int trigger not found";
-            else {
-                value = (*env)->CallStaticIntMethod(env, jc, mid);
-                if (adh_jni_exception_check(env)) { adh_jni_exception_clear(env); error = "trigger threw"; }
-                else triggered = 1;
-            }
-            (*env)->PopLocalFrame(env, NULL);
-            adh_jni_detach(did);
-        }
-        __atomic_store_n(&g_inline_crypto_active, 0, __ATOMIC_RELAXED);
-    }
-    json_escape(error, errj, sizeof(errj));
-    size_t cap = 1 << 15, len = 0; char *out = malloc(cap);
-    if (!out) { send_oom(fd, idj, "inline_crypto_test"); return; }
-    len += snprintf(out + len, cap - len,
-        "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"inline_crypto_test\","
-        "\"ok\":%s,\"module\":\"%s\",\"symbol\":\"%s\",\"hooked\":%s,\"installed\":%s,"
-        "\"triggered\":%s,\"result\":%d,\"error\":\"%s\",\"captures\":[",
-        idj, (hooked && triggered && !error[0]) ? "true" : "false", mj, sj,
-        hooked ? "true" : "false", installed ? "true" : "false", triggered ? "true" : "false", value, errj);
-    int n = cap_emit_all(out, &len, cap);
-    len += snprintf(out + len, cap > len ? cap - len : 0, "],\"captureCount\":%d}\n", n);
-    send_line(fd, out); free(out);
-    LOGI("inline_crypto_test module=%s symbol=%s hooked=%d triggered=%d captures=%d error=%s",
-         module ? module : "", symbol ? symbol : "", hooked, triggered, n, error);
-}
-#else
-void adh_cmd_inline_crypto_test(int fd, const char *id, const char *module,
-                                   const char *symbol, const char *className, const char *method) {
-    (void)module; (void)symbol; (void)className; (void)method;
-    char idj[64]; json_escape(id, idj, sizeof(idj));
-    char out[240];
-    snprintf(out, sizeof(out),
-        "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"inline_crypto_test\","
-        "\"ok\":false,\"hooked\":false,\"error\":\"inline hook backend not built in this build\"}\n",
-        idj);
-    send_line(fd, out);
-}
-#endif
+// The system/detection observation used to have a one-shot op (detect_watch). It is gone:
+// capture_start installs the same GOT hooks (by name, on the module the caller names) and
+// streams them as category=system, so the capability is the persistent path's, not a
+// probe's. The caller triggers the workload through java_call.
+//
+// The inline-hook self-test op (inline_crypto_test) is gone too: native_hook mode=inline is
+// the tool-level path, and it takes module/symbol from the caller.

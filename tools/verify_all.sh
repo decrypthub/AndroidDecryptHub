@@ -182,7 +182,10 @@ SCRIPTS=(
   "verify_v32_backend_control.sh:device"
   # Optional eCapture backend (module W): eBPF TLS plaintext capture. Needs root + eBPF kernel;
   # SKIPs with an explicit reason when the kernel cannot load eBPF programs.
-  "verify_v34_ecapture.sh:device"
+  # verify_v34_ecapture.sh:device — REMOVED from the gate on 2026-10-01. eCapture was downgraded to
+  # an experimental script (DEVELOPMENT_PLAN §6.10): it needs kernel eBPF, overlaps the built-in
+  # TLS/syscall observation, and does not ship. The script is kept runnable by hand
+  # (bash tools/verify_v34_ecapture.sh) but is no longer a release gate.
   # v9.9 artifact store: the eviction policy is unit-tested, and artifacts that are on disk must be
   # listed again after a daemon restart. Registered last because it restarts the daemon itself.
   "verify_v99_artifact_store.sh:host"

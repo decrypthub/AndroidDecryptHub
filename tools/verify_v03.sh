@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # v0.3 acceptance — ART structural dex capture. Prereq: adhd running, device attached, sandbox running.
-#   (1) jni_probe: agent JNI reflection from native thread -> SDK_INT == device's actual SDK
+#   (1) java_call: the agent reflects System.getProperty from a native thread through the app
+#       ClassLoader -> the SDK it reads must equal the device's actual SDK
 #   (2) art_dexfiles: structural enumeration (ClassLoader cookie -> art::DexFile* -> begin_),
 #       no magic scan; must find the 728-byte probe dex under InMemoryDexClassLoader
 #   (3) art dump: dump the probe dex from begin -> sha256 == known d8 output (byte-exact)
@@ -17,14 +18,28 @@ OUT="$(node - "$HTTP" "$KNOWN_SHA" "$SDK_EXP" <<'EOF'
 const [http, knownSha, sdkExp] = process.argv.slice(2);
 const base=`http://127.0.0.1:${http}`;
 const P=(o)=>fetch(`${base}${o.path}`,o.body?{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(o.body)}:{}).then(r=>r.json());
+const rpc=(m,p)=>fetch(`${base}/mcp`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:Math.floor(Math.random()*1e6),method:m,params:p})}).then(r=>r.json());
 const agents=await P({path:'/api/agents'});
 const a=agents.filter(x=>x.package==='com.adh.sandbox'&&x.online).sort((x,y)=>y.connectedAt-x.connectedAt)[0];
 if(!a){console.log('NO_AGENT');console.log('RESULT:FAIL');process.exit(0);}
 
-// (1) JNI foundation — agent-reflected SDK must equal the OS-reported SDK for this device
-const j=await P({path:`/api/jni/probe?session=${a.sessionId}`});
-console.log(`jni_probe: ok=${j.ok} sdk_int=${j.sdk_int} (device reports ${sdkExp})`);
-const jniPass = j.ok && !!sdkExp && j.sdk_int===Number(sdkExp);
+// (1) JNI foundation — the agent reflects through the app ClassLoader from a native thread and
+//     reads a value the DEVICE independently reports. NOTE on the route (2026-10-01):
+//     System.getProperty("ro.build.version.sdk") is NOT how Android exposes system properties
+//     (that is android.os.SystemProperties), so it answers null; the SDK level lives in the
+//     static field android.os.Build$VERSION.SDK_INT, which object_inspect reads as the boxed
+//     Integer it is (fields[].value on java.lang.Integer).
+const jc=await rpc('tools/call',{name:'java_call',arguments:{session:a.sessionId,className:'java.lang.System',method:'getProperty',params:'java.lang.String',args:['java.vm.version']}});
+const jr=JSON.parse(jc.result?.content?.[0]?.text ?? 'null');
+const vmVer=jr?.result?.result;
+const oi=await rpc('tools/call',{name:'object_inspect',arguments:{session:a.sessionId,className:'android.os.Build$VERSION',field:'SDK_INT'}});
+const ob=JSON.parse(oi.result?.content?.[0]?.text ?? 'null');
+const sdkField=(ob?.fields||[]).find(f=>f.name==='value');
+const jSdk=Number(sdkField?.value);
+console.log(`java_call System.getProperty(java.vm.version): ok=${jr?.ok} vm=${vmVer}`);
+console.log(`object_inspect Build$VERSION.SDK_INT: objectClass=${ob?.objectClass} value=${sdkField?.value} (device reports ${sdkExp})`);
+const jniPass = jr?.ok===true && /^\d+\.\d+/.test(String(vmVer||''))
+             && ob?.ok===true && !!sdkExp && jSdk===Number(sdkExp);
 
 // (2) ART structural enumeration
 const r=await P({path:`/api/art/dexfiles?session=${a.sessionId}`});

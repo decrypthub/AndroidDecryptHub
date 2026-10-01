@@ -290,8 +290,8 @@ static long long sleb128_decode(unsigned char **pp, unsigned char *end) {
     return (long long)result;
 }
 
-// AOSP system libs (incl. libjavacrypto.so) pack .rela.dyn (GLOB_DAT-relocated symbols, e.g.
-// EVP_PKEY_encrypt/EVP_AEAD_CTX_seal) via DT_ANDROID_RELA in bionic's "APS2" SLEB128
+// AOSP system libs (the JCE provider's native library among them) pack .rela.dyn (GLOB_DAT-relocated
+// symbols, e.g. EVP_PKEY_encrypt/EVP_AEAD_CTX_seal) via DT_ANDROID_RELA in bionic's "APS2" SLEB128
 // group-delta format instead of a plain Elf64_Rela array — that's the default for every
 // modern NDK-built .so, not a device quirk, so it has to be handled for broad coverage.
 // Mirrors bionic/linker/linker_reloc_iterator.h's packed_reloc_iterator.

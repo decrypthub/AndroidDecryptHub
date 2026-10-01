@@ -66,8 +66,10 @@
 ```
 
 命令 `op` 一览见 `agent_main.c` 的 `command_loop` 分发表（maps/read/scan_magic/search/
-crypto_*/capture_*/net_hook_test/flow_watch/detect_watch/trace_run/trigger/art_dexfiles/
-file_probe/file_hook_test/load_so/qbdi_trace/object_*/compat_probe/frame_echo/ping…）。
+crypto_*/capture_*/trigger/art_dexfiles/file_probe/load_so/qbdi_trace/object_*/
+compat_probe/frame_echo/ping…）。**注意（2026-10-01）**：`*_hook_test` / `flow_watch` /
+`detect_watch` / `trace_run` / `jni_probe` / `crypto_probe` / `inline_crypto_test` 这些
+"一次性触发"op 已删除，协议里不再有它们。
 
 ### `frame_echo`（WS-D 协议自测，无目标知识）
 

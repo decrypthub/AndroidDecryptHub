@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   frameJson, agentSockets, pending, nextCmdId, sessions, dumps, log,
-  capturePaused, captureTimers, captureModules, settings, recentJavaIn,
+  captureTimers, captureModules, settings, recentJavaIn,
   pushCapture, broadcast, hexToPreview, classify, categoryOf, capStats, CAPTURES,
   pruneArtifacts,
 } from './state.ts';
@@ -308,25 +308,6 @@ function recordCaptureHooks(sid: string, r: any) {
   if (s) s.captureHooks = r;
 }
 
-export async function withCaptureSuspended<T>(sid: string, fn: () => Promise<T>): Promise<T> {
-  const wasOn = captureTimers.has(sid);
-  if (wasOn) {
-    capturePaused.add(sid);
-    // fail-loud: if stop fails the probe patches a slot the persistent hook still holds — visible, not silent
-    try { recordCaptureHooks(sid, await sendCmd(sid, 'capture_stop', {}, 8_000)); }
-    catch (e) { log(`[capture] suspend: capture_stop ${sid} 失败 — 探针将在持久 hook 仍占的槽上安装:`, (e as Error).message); }
-  }
-  try { return await fn(); }
-  finally {
-    if (wasOn) {
-      // fail-loud: a failed resume leaves continuous capture dead — must not vanish silently
-      try { recordCaptureHooks(sid, await sendCmd(sid, 'capture_start', captureModules(), 8_000)); }
-      catch (e) { log(`[capture] resume: capture_start ${sid} 失败 — 持续捕获已停，需手动重启:`, (e as Error).message); }
-      capturePaused.delete(sid);
-    }
-  }
-}
-
 // Apply the capture.enabled toggle to already-connected sessions (start/stop the hooks).
 export async function applyCaptureEnabled() {
   for (const s of sessions.values()) {
@@ -337,6 +318,110 @@ export async function applyCaptureEnabled() {
     try { recordCaptureHooks(s.sessionId, await sendCmd(s.sessionId, cmd, args, 8_000)); }
     catch (e) { log(`[settings] ${cmd} 会话 ${s.sessionId} 失败:`, (e as Error).message); }
   }
+}
+
+// ---- capture_start / capture_stop (the tools' one implementation) --------------------------
+// The agent answers capture_start with ok:true unconditionally and 20+ per-symbol install
+// counters: `ok:true` therefore says "the command ran", never "the hooks are live". The
+// daemon derives the verdict here, once, so the MCP tool, any future REST route and the
+// settings toggle cannot disagree about what "on" means.
+const CRYPTO_COUNTERS = ['evp', 'digest', 'hmac', 'digestSign', 'sslWrite', 'sslRead'];
+const NESTED_COUNTERS: [string, string[]][] = [
+  ['pkey', ['sign', 'verify', 'encrypt', 'decrypt']],
+  ['aead', ['seal', 'open']],
+  ['digestSignVerify', ['signInit', 'verifyInit', 'signFinal', 'verifyUpdate', 'verifyFinal']],
+  ['file', ['open', 'openat', 'read', 'write', 'syscall', 'readChk', 'writeChk']],
+  ['sys', ['ptrace', 'access', 'prop']],
+];
+
+/** Flatten an install reply into {name: count} for exactly the symbol sets that were requested. */
+export function captureInstallCounters(reply: any): { name: string; value: number }[] {
+  const out: { name: string; value: number }[] = [];
+  if (!reply || typeof reply !== 'object') return out;
+  for (const k of CRYPTO_COUNTERS) if (k in reply) out.push({ name: k, value: Number(reply[k]) || 0 });
+  for (const [group, keys] of NESTED_COUNTERS) {
+    // The file/sys hook sets are only installed when a module was named for them; when the
+    // module is empty the agent does not touch those slots at all and its zeros mean nothing.
+    if (group === 'file' && !String(reply.fileModule ?? '')) continue;
+    if (group === 'sys' && !String(reply.sysModule ?? '')) continue;
+    const g = reply[group];
+    if (!g || typeof g !== 'object') continue;
+    for (const k of keys) if (k in g) out.push({ name: `${group}.${k}`, value: Number(g[k]) || 0 });
+  }
+  return out;
+}
+
+export interface CaptureToggle {
+  ok: boolean; on: boolean; session: string;
+  installed: number; attempted: number; notInstalled: string[]; partial: boolean;
+  /** true when the result can be trusted as complete (nothing dropped, nothing unknown). */
+  complete: boolean;
+  /** capture_start re-arms from a clean slate (drain → stop → start) so the per-symbol counters
+   *  are authoritative; drainedBeforeRearm is what that drain pulled out of the ring first. */
+  rearmed?: boolean; drainedBeforeRearm?: number;
+  /** off: how many records the drain pulled out of the agent ring before the stop (0 when the
+   *  session has no drain loop - then the stop throws away whatever was still in the ring). */
+  drained?: number; drainedOk?: boolean; dropped?: number;
+  drainLoop?: 'armed' | 'started' | 'none';
+  reply: any;
+}
+
+/**
+ * Install or remove the persistent hook set for one session.
+ * `on`: install, then report installed/attempted/notInstalled and a real verdict - with the
+ * module left empty (scan every file-backed module) a symbol that installed nowhere is a
+ * failure, while a named module legitimately may not import every symbol (partial, not failed).
+ * `off`: drain the ring FIRST (capture_stop resets it - stopping without draining destroys
+ * whatever the target produced since the last tick), then stop.
+ */
+export async function setCapture(sid: string, on: boolean, modules?: { cryptoModule?: string; fileModule?: string; sysModule?: string }): Promise<CaptureToggle> {
+  const mods = { ...captureModules() };
+  // Only keys the caller actually passed override the settings defaults (an explicit undefined
+  // must not blank a module out - that would silently turn "hook this module" into "scan all").
+  for (const k of ['cryptoModule', 'fileModule', 'sysModule'] as const) {
+    const v = modules?.[k];
+    if (typeof v === 'string' && v.length) mods[k] = v;
+  }
+  if (on) {
+    if (!captureTimers.has(sid)) startCaptureLoop(sid);   // no drain loop = nothing would stream
+    // RE-ARM FROM A CLEAN SLATE. adh_got_replace matches a GOT slot by VALUE, so an install that
+    // runs while our own wrapper already sits in the slot reports 0 for it - indistinguishable
+    // from "this symbol is not imported". Measured on the sandbox: a repeat capture_start said
+    // 14/27, a stop-then-start said 23/27, and the 4 remaining zeros are genuinely absent from
+    // libjavacore.so. So the verdict is only worth printing if the install started from the
+    // original pointers: drain (never lose what the ring holds), stop, then install.
+    const drained = await drainSession(sid);
+    try { await sendCmd(sid, 'capture_stop', {}, 8_000); } catch { /* not armed: nothing to restore */ }
+    const reply = await sendCmd(sid, 'capture_start', mods, 15_000);
+    recordCaptureHooks(sid, reply);
+    const counters = captureInstallCounters(reply);
+    const notInstalled = counters.filter((c) => c.value <= 0).map((c) => c.name);
+    const installed = counters.length - notInstalled.length;
+    const scannedAll = !String(mods.cryptoModule ?? '');
+    const ok = installed > 0 && (scannedAll ? notInstalled.length === 0 : true);
+    return {
+      ok, on: true, session: sid,
+      installed, attempted: counters.length, notInstalled,
+      partial: notInstalled.length > 0,
+      complete: ok && notInstalled.length === 0,
+      drainLoop: captureTimers.has(sid) ? 'armed' : 'started',
+      rearmed: true, drainedBeforeRearm: Number(drained.response?.count ?? 0) || 0,
+      reply,
+    };
+  }
+  const drained = await drainSession(sid);
+  const reply = await sendCmd(sid, 'capture_stop', {}, 8_000);
+  recordCaptureHooks(sid, reply);
+  const drainedCount = Number(drained.response?.count ?? 0) || 0;
+  const dropped = Number(drained.response?.dropped ?? 0) || 0;
+  return {
+    ok: !!reply?.ok, on: false, session: sid,
+    installed: 0, attempted: 0, notInstalled: [], partial: false,
+    complete: drained.ok && dropped === 0,
+    drained: drainedCount, drainedOk: drained.ok, dropped,
+    drainLoop: captureTimers.has(sid) ? 'armed' : 'none',
+    reply: { ...reply, drainError: drained.error },
+  };
 }
 
 // Install persistent hooks on connect, then poll capture_drain and stream each new record
@@ -441,7 +526,7 @@ export function startCaptureLoop(sid: string) {
     };
     captureDrainers.set(sid, runDrain);
     const timer = setInterval(async () => {
-      if (busy || capturePaused.has(sid) || !sessions.get(sid)?.online) return;
+      if (busy || !sessions.get(sid)?.online) return;
       await runDrain().catch(() => null);   // the loop never propagates: it retries next tick
     }, 1500);
     captureTimers.set(sid, timer);
