@@ -70,7 +70,7 @@ Bash (Git Bash / WSL) — the `tools/*.sh` scripts assume it. `node 24` runs `.t
 
 ```bash
 # --- agent .so (C/NDK, arm64-v8a) — fails loud on compile error, stages into sandbox jniLibs
-bash tools/build_agent.sh          # -> agent/build/libadh_agent.so
+bash tools/build_agent.sh [--deploy]  # -> agent/build/libadh_agent.so (works on Win + Linux; --deploy pushes it to the device)
 bash tools/build_detect.sh         # sandbox mock native lib libadhdetect.so
 # bash tools/build_java_hook_bridge.sh  # regenerate embedded Java hook bridge dex/header after editing its Java source
 bash tools/fetch_qbdi.sh           # one-time: QBDI headers/.so (instruction trace); gitignored

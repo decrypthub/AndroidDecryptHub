@@ -38,7 +38,7 @@ if [ -x "$_adh_ndk_readelf" ]; then READELF="${READELF:-$_adh_ndk_readelf}"; els
 # perfectly good NDK installed they SKIPped (v90) or failed (v101). The JNINativeInterface field
 # order v90 compares against has been stable across NDK majors, so a different installed NDK is an
 # acceptable source when the pinned one is absent.
-ADH_NDK_BIN=""; ADH_JNI_H=""
+ADH_NDK_BIN=""; ADH_JNI_H=""; ADH_NDK_ROOT=""; ADH_NDK_STRIP=""
 for _root in \
   "${ANDROID_NDK_HOME:-}" \
   "$NDK" \
@@ -50,6 +50,8 @@ for _root in \
   _bin="$_root/toolchains/llvm/prebuilt/$_adh_triple/bin"
   if [ -x "$_bin/clang$_adh_exe" ]; then
     ADH_NDK_BIN="$_bin"
+    ADH_NDK_ROOT="$_root"
+    ADH_NDK_STRIP="$_bin/llvm-strip$_adh_exe"
     _jni="$_root/toolchains/llvm/prebuilt/$_adh_triple/sysroot/usr/include/jni.h"
     [ -f "$_jni" ] && ADH_JNI_H="$_jni"
     break
@@ -58,7 +60,12 @@ done
 unset _root _bin _jni
 CLANG="${CLANG:-${ADH_NDK_BIN:+$ADH_NDK_BIN/clang$_adh_exe}}"
 JNI_H="${JNI_H:-$ADH_JNI_H}"
-export ADH_NDK_BIN ADH_JNI_H CLANG JNI_H
+# The NDK toolchain file of the SAME installation the host toolchain came from, so a host that
+# cannot see the pinned Windows NDK can still configure a build (build_agent.sh uses it only as a
+# fallback; $TOOLCHAIN above stays the authoritative Windows path).
+ADH_NDK_TOOLCHAIN=""
+[ -n "$ADH_NDK_ROOT" ] && [ -f "$ADH_NDK_ROOT/build/cmake/android.toolchain.cmake" ] && ADH_NDK_TOOLCHAIN="$ADH_NDK_ROOT/build/cmake/android.toolchain.cmake"
+export ADH_NDK_BIN ADH_JNI_H ADH_NDK_ROOT ADH_NDK_STRIP ADH_NDK_TOOLCHAIN CLANG JNI_H
 # BASH_SOURCE[0] is this file (tools/lib/env.sh) — two levels up = repo root.
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # Git Bash `pwd` is /x/Project/... ; Windows Java/NDK tools need a drive path.

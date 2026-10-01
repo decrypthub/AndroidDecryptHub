@@ -107,7 +107,16 @@ export function pruneSessions(now = Date.now()): string[] {
       if (index >= OFFLINE_KEEP_PER_PACKAGE || age > OFFLINE_RETENTION_MS) dropped.push(s.sessionId);
     });
   }
-  for (const id of dropped) sessions.delete(id);
+  for (const id of dropped) {
+    sessions.delete(id);
+    // The per-session capture accounting dies with the session. Without this the map grows for
+    // every app restart (measured 2026-10-01: 91 entries in one gate run) - and while the health
+    // aggregate only counts LIVE sessions, keeping thousands of dead ones around is pure leak.
+    // Sessions kept as history (OFFLINE_KEEP_PER_PACKAGE / OFFLINE_RETENTION_MS) keep theirs too,
+    // so the "what did that session leave behind" question is still answerable for a while.
+    capStats.delete(id);
+    captureSessionCounters.delete(id);
+  }
   return dropped;
 }
 export const dumps = new Map<string, DumpMeta>();                        // sha256 -> meta (dedup)

@@ -17,10 +17,18 @@ before=$(curl -s "http://127.0.0.1:$HTTP/api/events?type=agent.hello")
 BEFORE_HAS=$(echo "$before" | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{try{const r=JSON.parse(d);process.stdout.write(String(r.events.filter(e=>e.data&&e.data.package==='com.adh.sandbox').length))}catch(e){process.stdout.write('0')}})")
 echo "agent.hello (sandbox) before restart: $BEFORE_HAS"
 
-# restart adhd -> must reload events from disk
-PID=$(powershell.exe -NoProfile -Command "(Get-NetTCPConnection -LocalPort $HTTP -State Listen -ErrorAction SilentlyContinue).OwningProcess" 2>/dev/null | tr -d '\r')
-[ -n "$PID" ] && taskkill //F //PID "$PID" >/dev/null 2>&1
-sleep 1; ( cd "$ROOT/daemon" && node src/index.ts > /tmp/adhd.log 2>&1 & ); sleep 2
+# restart adhd -> must reload events from disk.
+# Cross-platform (ss/lsof on Linux, netstat+PowerShell on Windows): the old powershell/taskkill pair
+# was a silent no-op on Linux, so the "restart" never happened and the events check compared the
+# SAME daemon with itself - a pass that proved nothing.
+PID="$(daemon_pid_on_port "$HTTP")"
+[ -n "$PID" ] && verify_stop_pid "$PID"
+for _ in $(seq 1 12); do [ -z "$(daemon_pid_on_port "$HTTP")" ] && break; sleep 0.5; done
+if ! verify_start_daemon "$HTTP"; then
+  echo "RESULT:FAIL"
+  echo "❌ v1.0 event store FAIL (daemon did not come back within the cold-start budget)"
+  exit 1
+fi
 
 after=$(curl -s "http://127.0.0.1:$HTTP/api/events?type=agent.hello")
 AFTER_HAS=$(echo "$after" | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{try{const r=JSON.parse(d);process.stdout.write(String(r.events.filter(e=>e.data&&e.data.package==='com.adh.sandbox').length))}catch(e){process.stdout.write('0')}})")

@@ -39,19 +39,17 @@ BEFORE_SID="${BEFORE%% *}"
 BEFORE_PID="${BEFORE##* }"
 echo "before: session=$BEFORE_SID pid=$BEFORE_PID"
 
-DAEMON_PID="$(netstat -ano 2>/dev/null | grep -E "0\.0\.0\.0:$HTTP[[:space:]]" | grep -i LISTENING | awk '{print $NF}' | head -1)"
+DAEMON_PID="$(daemon_pid_on_port "$HTTP")"   # ss/lsof on Linux, netstat on Windows
 if [ -z "$DAEMON_PID" ]; then
   echo "RESULT:SKIP"
-  echo "⏭ v3.7 agent reconnect SKIP (could not find the daemon process listening on $HTTP)"
+  echo "⏭ v3.7 agent reconnect SKIP (could not find the daemon process listening on $HTTP — start it with tools/dev_up.sh)"
   exit 0
 fi
 echo ">> restarting adhd (pid $DAEMON_PID)"
-# PowerShell rather than taskkill: under MSYS_NO_PATHCONV the "/F" switch gets mangled and the
-# kill silently does nothing (which would fake a pass by leaving the same daemon running).
-powershell -NoProfile -Command "Stop-Process -Id $DAEMON_PID -Force" >/dev/null 2>&1
+verify_stop_pid "$DAEMON_PID"
 STOPPED=""
 for _ in $(seq 1 12); do
-  if ! netstat -ano 2>/dev/null | grep -E "0\.0\.0\.0:$HTTP[[:space:]]" | grep -qi LISTENING; then STOPPED=1; break; fi
+  if [ -z "$(daemon_pid_on_port "$HTTP")" ]; then STOPPED=1; break; fi
   sleep 0.5
 done
 if [ -z "$STOPPED" ]; then
@@ -59,11 +57,11 @@ if [ -z "$STOPPED" ]; then
   echo "❌ v3.7 agent reconnect FAIL (daemon pid $DAEMON_PID did not stop)"
   exit 1
 fi
-( cd "$ROOT/daemon" && node src/index.ts >/tmp/adhd.log 2>&1 & )
-for _ in $(seq 1 20); do
-  curl -s -m 2 "http://127.0.0.1:$HTTP/health" >/dev/null 2>&1 && break
-  sleep 0.5
-done
+if ! verify_start_daemon "$HTTP"; then
+  echo "RESULT:FAIL"
+  echo "❌ v3.7 agent reconnect FAIL (daemon did not come back within the cold-start budget)"
+  exit 1
+fi
 
 OUT="$(node - "$BASE" "$BEFORE_PID" "$BEFORE_SID" <<'EOF'
 const [base, beforePid, beforeSid] = process.argv.slice(2);

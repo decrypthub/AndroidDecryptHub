@@ -69,14 +69,14 @@ agent 命令分支 **42 → 33**；MCP 工具 **69 → 65**；HTTP 路由 **93 �
 设备上 agent 换成**本机构建**的 `78d9d20f…`（1,036,832 B；当天第二次重建，见下）——本机现在能用 NDK r29 + cmake 构建 `.so`
 （`HANDOVER §1.5` 已订正：那里原先写的"没有构建链"已过时），APK 仍需要 gradle。
 
-### 6. 本轮门禁：**112 PASS / 1 FAIL / 4 SKIP**（117 条 = 36 host + 81 device）
+### 6. 本轮门禁：**114 PASS / 1 FAIL / 2 SKIP**（117 条 = 36 host + 81 device）
 
 设备 `aa165071`，设备上 agent `78d9d20f…`（本机 NDK r29 构建，且由 `install_apk_root` 自动回刷），
 daemon 为本轮源码。**前两轮门禁的 device 半段验的是旧 agent**（见 §6.7），所以以这一轮为准。
 
 **唯一的 FAIL**：`v01` —— 它自己会跑 `build_agent.sh` + `gradlew`，本机没有 gradle
 （agent 那半本机已能构建，见 `HANDOVER §1.5`）。
-**四条 SKIP 全是环境**：`v31`/`v32`（缺 gradle）、`v37`/`v99`（Windows-only 进程控制）。
+**两条 SKIP 全是环境**：`v31`/`v32`（缺 gradle 重建 Xposed 模块 APK）。**`v37`/`v99` 已修成真跑**（见 §6.8）。
 
 > 口径说明：本轮全量跑的是"功能上等价、但还差两处收尾修正"的 daemon 源码——
 > 门禁开始后我又修了 `flowCorrelate` 吞掉 `maxPairs` 参数（本仓库禁止"接受但忽略的 flag"）
@@ -136,6 +136,24 @@ v22 在门禁里第三次挂、单跑却过。查下去发现：**设备上跑�
   与 Zygisk 模块目录，并打印两侧 sha。这样"装了 APK"这个动作**自己**保证设备跑的是本仓构建。
 - **教训**：改 agent 源码后，"重建 + 部署 + 确认设备 hash == 本仓 hash"是一个不可省的闭环；
   本次已把最后一步做进工具链，不再靠人记得。
+
+### 6.8 追加：把"环境 SKIP"变成真检查（v37 / v99 的跨平台进程控制）
+
+`v37`（agent 重连）与 `v99`（工件重启后回流）都要**重启 Host ADH Daemon**，而它们用的是
+`netstat -ano` + `powershell Stop-Process`——在 Linux 上 **no-op**，于是两条门禁在这台机器上
+一直静默 SKIP。同一类坑还有三处：`v07`/`v07_flow`/`v34` 清理 TLS 夹具用的
+`powershell Get-NetTCPConnection` + `taskkill` 在 Linux 上**也是 no-op**，结果**陈旧的 TLS 服务器会残留**
+（实测：补上跨平台清理后第一次运行就杀掉了一个 8762 上的陈旧监听——正是文档警告的
+"下一轮可能是在跟陈旧服务器对话而通过"）。
+
+- 新增三个共享 helper（`tools/lib/verify_common.sh`）：`daemon_pid_on_port`（ss/lsof → netstat 回退）、
+  `verify_stop_pid`（PowerShell / kill）、`verify_kill_port`（清端口）；`v07`/`v07_flow`/`v34`/`v37`/`v99` 改用它们。
+- **顺带挖出一个真问题**：`v99` 重启 daemon 后只等 **10 秒**（20×0.5s）就发请求，而本机冷启动要
+  **~45 秒**（SMB 上重新哈希 280 个工件）→ `ECONNREFUSED` 崩在 fetch 上。这正是它"以前只能 SKIP"的另一半原因。
+  新增 `verify_start_daemon`（setsid 完全脱离终端 + 240s 预算），`v37`/`v99` 共用。
+- **结果**：两条从 SKIP 变**真跑且 PASS** —— `v99`：重启后 **143 个磁盘工件全部重新采纳**、
+  标 `disk-reload`、无悬空路径、预算可读；`v37`：daemon 重启后 agent **同一 pid** 重连、
+  拿到**新 session**、通道可用（532 个模块）。
 
 ### 7. 未完成 / 已知代价
 

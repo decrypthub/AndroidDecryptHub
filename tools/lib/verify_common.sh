@@ -76,6 +76,68 @@ verify_restart_sandbox() {
 # is present AND (when require_alive=1) $ALIVE is non-empty. Prints the ✅/❌ line.
 # Uses here-string grep (<<<"$OUT"), NOT `echo "$OUT"|grep -q`, to dodge the
 # SIGPIPE false-FAIL on payloads large enough to fill the 64KB pipe buffer.
+# ---- daemon process control (cross-platform) ------------------------------------------------
+# Two acceptance scripts must restart the Host ADH Daemon to prove a property (v37 agent
+# reconnect, v99 artifact re-adoption). They used to do it with Windows-only tooling
+# (`netstat -ano` + `powershell Stop-Process`), which made both SKIP on Linux — a real check
+# silently not running. These helpers do the same job on either host.
+
+# PID of the process LISTENING on <port>, or empty.
+daemon_pid_on_port() {
+  local port="$1" pid=""
+  if command -v ss >/dev/null 2>&1; then
+    pid="$(ss -ltnp 2>/dev/null | grep -E "[:.]$port[[:space:]]" | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2)"
+  fi
+  if [ -z "$pid" ] && command -v lsof >/dev/null 2>&1; then
+    pid="$(lsof -ti "tcp:$port" -sTCP:LISTEN 2>/dev/null | head -1)"
+  fi
+  if [ -z "$pid" ] && command -v netstat >/dev/null 2>&1; then
+    # Windows (Git Bash): the owning PID is the last column of a LISTENING line.
+    pid="$(netstat -ano 2>/dev/null | grep -E "[:.]$port[[:space:]]" | grep -i LISTENING | awk '{print $NF}' | head -1 | tr -d '\r')"
+  fi
+  printf '%s' "$pid"
+}
+
+# Stop one PID. PowerShell on Windows (taskkill /F gets mangled under MSYS_NO_PATHCONV and fails
+# silently, which would fake a pass by leaving the daemon running); kill elsewhere.
+verify_stop_pid() {
+  local pid="$1"
+  case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) powershell -NoProfile -Command "Stop-Process -Id $pid -Force" >/dev/null 2>&1 ;;
+    *) kill "$pid" 2>/dev/null ;;
+  esac
+}
+
+# Kill whatever is LISTENING on <port>; echoes how many it stopped. The TLS-fixture scripts
+# (v07/v07_flow/v34) used `powershell Get-NetTCPConnection` + `taskkill`, which is a silent no-op
+# on Linux: the previous run's server stayed up, and the next run could pass by talking to THAT
+# one instead of a fresh fixture - the "test passes for the wrong reason" class.
+verify_kill_port() {
+  local port="$1" pid killed=0
+  pid="$(daemon_pid_on_port "$port")"
+  if [ -n "$pid" ]; then verify_stop_pid "$pid"; killed=1; sleep 1; fi
+  printf '%s' "$killed"
+}
+
+# Start the Host ADH Daemon detached and wait until /health answers. The cold start re-hashes the
+# artifact store - measured ~45s on this checkout's SMB tree - and the scripts that restart it
+# (v37/v99) used a 10s budget, so on a slow host the very next request hit ECONNREFUSED and the
+# test crashed instead of testing anything. Fully detached (setsid + all three fds) so the caller
+# never ends up waiting on the daemon it just launched.
+verify_start_daemon() {
+  local port="${1:-8088}" budget="${2:-240}" waited=0
+  if command -v setsid >/dev/null 2>&1; then
+    ( cd "$ROOT/daemon" && setsid nohup node src/index.ts >/tmp/adhd.log 2>&1 </dev/null & ) >/dev/null 2>&1
+  else
+    ( cd "$ROOT/daemon" && nohup node src/index.ts >/tmp/adhd.log 2>&1 </dev/null & ) >/dev/null 2>&1
+  fi
+  while [ "$waited" -lt "$budget" ]; do
+    curl -s -m 2 "http://127.0.0.1:$port/health" >/dev/null 2>&1 && return 0
+    sleep 1; waited=$((waited + 1))
+  done
+  return 1
+}
+
 verify_gate() {
   local label="$1"
   local require_alive="${2:-1}"

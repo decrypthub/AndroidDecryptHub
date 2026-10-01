@@ -23,7 +23,7 @@ if ! verify_unit_pass "artifact-store eviction policy" artifact_store.test.ts 8;
   exit 1
 fi
 
-DAEMON_PID="$(netstat -ano 2>/dev/null | grep -E "0\.0\.0\.0:$HTTP[[:space:]]" | grep -i LISTENING | awk '{print $5}' | head -1)"
+DAEMON_PID="$(daemon_pid_on_port "$HTTP")"   # ss/lsof on Linux, netstat on Windows
 if [ -z "$DAEMON_PID" ]; then
   echo "RESULT:SKIP"
   echo "⏭ v9.9 artifact store SKIP (no daemon listening on :$HTTP to restart)"
@@ -31,12 +31,12 @@ if [ -z "$DAEMON_PID" ]; then
 fi
 
 echo ">> restarting adhd (pid $DAEMON_PID)"
-# PowerShell rather than taskkill: under MSYS_NO_PATHCONV the "/F" switch gets mangled and the kill
-# silently does nothing — which would fake a pass by leaving the same daemon (and its warm map) up.
-powershell -NoProfile -Command "Stop-Process -Id $DAEMON_PID -Force" >/dev/null 2>&1
+# verify_stop_pid: PowerShell on Windows, kill elsewhere - either way the stop is verified below
+# (with the port still bound, the test would silently keep the warm daemon and fake a pass).
+verify_stop_pid "$DAEMON_PID"
 STOPPED=""
 for _ in $(seq 1 12); do
-  if ! netstat -ano 2>/dev/null | grep -E "0\.0\.0\.0:$HTTP[[:space:]]" | grep -qi LISTENING; then STOPPED=1; break; fi
+  if [ -z "$(daemon_pid_on_port "$HTTP")" ]; then STOPPED=1; break; fi
   sleep 0.5
 done
 if [ -z "$STOPPED" ]; then
@@ -44,11 +44,11 @@ if [ -z "$STOPPED" ]; then
   echo "❌ v9.9 artifact store FAIL (daemon pid $DAEMON_PID did not stop)"
   exit 1
 fi
-( cd "$ROOT/daemon" && node src/index.ts >/tmp/adhd.log 2>&1 & )
-for _ in $(seq 1 20); do
-  curl -s -m 2 "http://127.0.0.1:$HTTP/health" >/dev/null 2>&1 && break
-  sleep 0.5
-done
+if ! verify_start_daemon "$HTTP"; then
+  echo "RESULT:FAIL"
+  echo "❌ v9.9 artifact store FAIL (daemon did not come back within the cold-start budget)"
+  exit 1
+fi
 
 set +e
 OUT="$(node - "$BASE" "$ROOT" <<'EOF'

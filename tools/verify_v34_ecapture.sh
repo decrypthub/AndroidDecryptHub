@@ -48,9 +48,13 @@ fi
 adb -s "$SERIAL" shell "su -c 'am start -n $PKG/.MainActivity'" >/dev/null 2>&1
 sleep 4
 verify_sandbox_alive
-for p in $(powershell.exe -NoProfile -Command "(Get-NetTCPConnection -LocalPort $TLS_PORT -State Listen -ErrorAction SilentlyContinue).OwningProcess" 2>/dev/null | tr -d '\r'); do taskkill //F //PID "$p" >/dev/null 2>&1; done
+verify_kill_port "$TLS_PORT" >/dev/null   # cross-platform: the old powershell/taskkill pair was a silent no-op on Linux
 ( node "$ROOT/daemon/tls_test_server.mjs" > /tmp/adh_tls.log 2>&1 & )
-sleep 2
+# Wait for the LISTENER, not for a fixed 2s: node has to read the script off this SMB tree, and the
+# first start after a kill was measured taking longer than that - the fixed sleep made v07 fail
+# with "nothing is listening" while the very next script bound fine (2s is a guess, the listener is
+# a fact).
+for _ in $(seq 1 30); do [ -n "$(daemon_pid_on_port "$TLS_PORT")" ] && break; sleep 1; done
 adb -s "$SERIAL" reverse tcp:$TLS_PORT tcp:$TLS_PORT >/dev/null
 
 # 4) capture in the background, then drive traffic through the plugin ------------------------

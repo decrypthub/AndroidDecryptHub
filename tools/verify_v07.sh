@@ -13,10 +13,31 @@ MARKER="ADH_NET_MARKER_v1"; RESP="ADH_NET_RESPONSE_v1"
 CLASS="com.adh.sandbox.Network"
 
 # start a fresh local HTTPS server (kill any stale one holding the port)
-for p in $(powershell.exe -NoProfile -Command "(Get-NetTCPConnection -LocalPort $TLS_PORT -State Listen -ErrorAction SilentlyContinue).OwningProcess" 2>/dev/null | tr -d '\r'); do taskkill //F //PID "$p" >/dev/null 2>&1; done
+verify_kill_port "$TLS_PORT" >/dev/null   # cross-platform: the old powershell/taskkill pair was a silent no-op on Linux
 ( node "$ROOT/daemon/tls_test_server.mjs" > /tmp/adh_tls.log 2>&1 & )
-sleep 2
+# Wait for the LISTENER, not for a fixed 2s: node has to read the script off this SMB tree, and the
+# first start after a kill was measured taking longer than that - the fixed sleep made v07 fail
+# with "nothing is listening" while the very next script bound fine (2s is a guess, the listener is
+# a fact).
+for _ in $(seq 1 30); do [ -n "$(daemon_pid_on_port "$TLS_PORT")" ] && break; sleep 1; done
 adb -s "$SERIAL" reverse tcp:$TLS_PORT tcp:$TLS_PORT >/dev/null
+
+# Prove the FIXTURE before blaming the target. Without this a broken server or a dead tunnel shows
+# up only as the app's "error:connection closed", which names neither - and a gate run where the
+# app happened to talk to a leftover server would pass for the wrong reason.
+if [ -z "$(daemon_pid_on_port "$TLS_PORT")" ]; then
+  echo "RESULT:FAIL"
+  echo "❌ TLS fixture FAIL (nothing is listening on $TLS_PORT after starting tls_test_server.mjs)"
+  exit 1
+fi
+FIXTURE_BODY="$(curl -sk -m 5 "https://127.0.0.1:$TLS_PORT/" 2>/dev/null | tr -d '\r')"
+case "$FIXTURE_BODY" in
+  *ADH_NET_RESPONSE_v1*) echo "fixture: server + tunnel OK" ;;
+  *) echo "RESULT:FAIL"
+     echo "❌ TLS fixture FAIL (host-side GET through the tunnel returned '${FIXTURE_BODY:0:60}')"
+     tail -3 /tmp/adh_tls.log 2>/dev/null | sed 's/^/   /'
+     exit 1 ;;
+esac
 
 set +e
 OUT="$(node - "$HTTP" "$MARKER" "$RESP" "$CLASS" <<'EOF'
