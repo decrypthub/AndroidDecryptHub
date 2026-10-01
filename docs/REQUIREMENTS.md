@@ -1218,9 +1218,12 @@ Android 在此基础上增加：全套 dex 操作、Java hook、native trace、m
 - 单条 blob 上限（如 64KB），防 OOM
 - 大 payload 走共享内存 fd 直传 adhd，不在 Agent 堆积
 - **钩子槽位写成产品语义（2026-10-01）**：单目标最多 **16 个并发 hook**（Java / native 各自独立计数）。
-  这是**产品语义而不是裸数字**：超出时 **fail-loud** 拒绝安装并回报当前占用与释放建议
-  （哪个 hookId 可以卸、卸载后能腾出几个槽），不静默排队、不静默丢弃老钩子。
-  `native_hook_all` 的批量安装按剩余槽位截断并回报 `limitReason`；0 个空槽时整批失败而不是逐个失败。
+  这是**产品语义而不是裸数字**：超出时 **fail-loud** 拒绝安装并给出具体原因（`too many native hooks (max 16)`），
+  **不静默排队、不静默丢弃老钩子**。当前占用由 `native_hook action:status` 给出（`slots.max/used/active/free/byMode`
+  + 每个钩子的 `id`/module/symbol），要腾槽就是照这份清单选一个 `unhook`——
+  **agent 目前不主动"建议卸哪个"**，能给的是这份可直接执行的清单。
+  `native_hook_all` 的批量安装按剩余槽位截断并回报 `limitReason`/`effectiveLimit`/`slotLimited`；
+  0 个空槽时整批失败而不是逐个失败。
 
 ### 21.3 导出
 
