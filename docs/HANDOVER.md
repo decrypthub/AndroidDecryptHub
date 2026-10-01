@@ -282,6 +282,12 @@ SID="$(cd daemon && node src/cli.ts target --package com.adh.sandbox --quiet)"  
 强制直读并覆盖**全部**读命令（`verify_v97`）。
 
 **你的第一条纪律**：任何新验收都要问"它跑的路径和真实路径是同一条吗？"
+
+> ⚠️ **2026-10-01 实测的同类坑（已修）**：`verify_v02.sh` 会 `install_apk_root` 重装沙盒 APK，
+> 而 **APK 里自带一份 agent** —— 重装会把热替换进去的新 `.so` 覆盖回旧版，于是**其后所有 device
+> 脚本都在验旧 agent**（实测差了三个版本）。现在 `install_apk_root` 装完会调用 `refresh_agent_so()`
+> 把 `agent/build/libadh_agent.so` 推回沙盒与模块目录并打印 sha。**改 agent 源码后仍然必须闭环：
+> 重建 → 部署 → 确认设备 hash == 本仓 hash**。
 **证明测试有牙齿的做法**（期望你这么干）：把被测能力临时破坏掉，断言测试**必须**红。
 `verify_v98` 就是这么验的（JavaVM 查找改成 `return NULL` → 必须 FAIL）；`verify_v101` 内置了一条
 "旧扫描对两个库返回同一组算法名"的断言，**用度量证明旧层看不见**。

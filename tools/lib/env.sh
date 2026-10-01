@@ -88,5 +88,43 @@ install_apk_root() {
   out="$("$adb_cmd" -s "$serial" shell "su -c 'pm install -r -t $remote'" | tr -d '\r')"
   if [ -n "${saved}" ]; then export MSYS_NO_PATHCONV="$saved"; else unset MSYS_NO_PATHCONV; fi
   printf '%s\n' "$out"
-  grep -q 'Success' <<<"$out"
+  grep -q 'Success' <<<"$out" || return 1
+  # A reinstall of the sandbox APK RESETS the agent .so to the copy baked into that APK, which can
+  # be many revisions behind agent/build/. Every device acceptance script after `verify_v01` then
+  # silently tests the wrong agent - measured 2026-10-01: the gate had been running an agent three
+  # rebuilds old (82e0cfb5 vs 78d9d20f) while the tree said otherwise. So the install step puts our
+  # build back. The sandbox extracts native libs at install time, so this is a plain file copy (no
+  # APK rebuild, no gradle); the Zygisk module path gets the same file.
+  refresh_agent_so "$serial"
+}
+
+# Put agent/build/libadh_agent.so into the installed sandbox (and the flashed module) so the device
+# runs what the tree builds. No-op when the .so is absent. Prints the hash for the log.
+refresh_agent_so() {
+  local serial="${1:-${SERIAL:-${ANDROID_SERIAL:-}}}"
+  local adb_cmd="${ADB:-adb}"
+  local so="$ROOT/agent/build/libadh_agent.so"
+  [ -n "$serial" ] || return 0
+  [ -f "$so" ] || return 0
+  local script="/data/local/tmp/adh_agent_refresh.sh"
+  cat > /tmp/adh_agent_refresh.sh <<'EOS'
+#!/system/bin/sh
+set -e
+NEW=/data/local/tmp/libadh_agent.current.so
+LIB=$(ls -d /data/app/*/com.adh.sandbox*/lib/arm64 2>/dev/null | head -1)
+if [ -n "$LIB" ]; then
+  cp "$NEW" "$LIB/libadh_agent.so"
+  chcon u:object_r:apk_data_file:s0 "$LIB/libadh_agent.so" 2>/dev/null || restorecon "$LIB/libadh_agent.so" 2>/dev/null || true
+  echo "sandbox $(sha256sum "$LIB/libadh_agent.so" | cut -c1-16)"
+fi
+if [ -d /data/adb/modules/adh ]; then
+  cp "$NEW" /data/adb/modules/adh/libadh_agent.so
+  chcon u:object_r:system_file:s0 /data/adb/modules/adh/libadh_agent.so 2>/dev/null || true
+  echo "module $(sha256sum /data/adb/modules/adh/libadh_agent.so | cut -c1-16)"
+fi
+EOS
+  local host_so="/tmp/adh_agent_refresh.sh"
+  "$adb_cmd" -s "$serial" push "$so" /data/local/tmp/libadh_agent.current.so >/dev/null 2>&1
+  "$adb_cmd" -s "$serial" push "$host_so" "$script" >/dev/null 2>&1
+  "$adb_cmd" -s "$serial" shell "su -c 'sh $script'" 2>/dev/null | tr -d '\r' | sed 's/^/   agent: /'
 }

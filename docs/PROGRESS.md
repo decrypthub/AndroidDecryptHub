@@ -69,23 +69,19 @@ agent 命令分支 **42 → 33**；MCP 工具 **69 → 65**；HTTP 路由 **93 �
 设备上 agent 换成**本机构建**的 `78d9d20f…`（1,036,832 B；当天第二次重建，见下）——本机现在能用 NDK r29 + cmake 构建 `.so`
 （`HANDOVER §1.5` 已订正：那里原先写的"没有构建链"已过时），APK 仍需要 gradle。
 
-### 6. 本轮门禁：**111 PASS / 2 FAIL / 4 SKIP**（117 条 = 36 host + 81 device）
+### 6. 本轮门禁：**112 PASS / 1 FAIL / 4 SKIP**（117 条 = 36 host + 81 device）
 
-设备 `aa165071`，设备上 agent `78d9d20f…`（本机 NDK r29 构建），daemon 为本轮源码。
+设备 `aa165071`，设备上 agent `78d9d20f…`（本机 NDK r29 构建，且由 `install_apk_root` 自动回刷），
+daemon 为本轮源码。**前两轮门禁的 device 半段验的是旧 agent**（见 §6.7），所以以这一轮为准。
 
-**两条 FAIL 都不是本轮的改动**：
-- `v01`：它自己会跑 `build_agent.sh` + `gradlew`；本机没有 gradle（agent 那半本机已能构建，见 `HANDOVER §1.5`）。
-- `v22_capture`：文档已登记的记账抖动。**本轮新证据**：一次性探针（`withCaptureSuspended` 的调用者）已删除，
-  缺口仍在（`seq=21906` vs `accountedFor=21561`）——**排除掉那两个嫌疑消费者**，下次应从
-  "`dropped` 与 `jdropped` 为什么分成两笔"入手（本次 `dropped=17716`、`jdropped=19617`）。
-
+**唯一的 FAIL**：`v01` —— 它自己会跑 `build_agent.sh` + `gradlew`，本机没有 gradle
+（agent 那半本机已能构建，见 `HANDOVER §1.5`）。
 **四条 SKIP 全是环境**：`v31`/`v32`（缺 gradle）、`v37`/`v99`（Windows-only 进程控制）。
 
-> 口径说明：全量门禁跑的是"功能上等价、但还差两处收尾修正"的 daemon 源码——门禁开始后我又修了
-> `flowCorrelate` 吞掉 `maxPairs` 参数（本仓库禁止"接受但忽略的 flag"）与一段只写不读的死状态。
-> 两处对门禁断言都无行为影响；改完后已**重启 daemon 并复跑**受影响的 host 门禁
-> （`v71`/`v87`/`v10_mcp`/`v94`）与一条设备脚本（`v04_crypto`），全部 PASS。
-**`v08_xref` 本轮 PASS**——它在本轮改动前的基线里抖红过一次（SMB 上 `_dexes/` 写回竞态），与改动无关。
+> 口径说明：本轮全量跑的是"功能上等价、但还差两处收尾修正"的 daemon 源码——
+> 门禁开始后我又修了 `flowCorrelate` 吞掉 `maxPairs` 参数（本仓库禁止"接受但忽略的 flag"）
+> 与一段只写不读的死状态，并重启 daemon 复跑了受影响的 host 门禁（`v71`/`v87`/`v10_mcp`/`v94`）与
+> 一条设备脚本（`v04_crypto`），全部 PASS。后续 §6.5–§6.7 的三项修复各自都单独复验过。
 
 ### 6.5 追加：`v22_capture` 的记账缺口已定位并修复（本轮第二个实质修复）
 
@@ -123,6 +119,23 @@ agent 命令分支 **42 → 33**；MCP 工具 **69 → 65**；HTTP 路由 **93 �
 `live_captures` 列的是**整个 store**（最新在后），门禁里目标进程有其他系统类事件在跑，
 于是 `limit:300` 那 300 条里**没有一条是本次触发产生的**（`events=300` 而 debug/root/prop 全 false）。
 修法：按触发时间过滤（`ts >= t0`）并把 limit 提到 1000 —— 断言只认**本次触发**产生的事件。
+
+### 6.7 追加：门禁的 device 半段一直在**验旧 agent**（本轮最该记住的一条）
+
+v22 在门禁里第三次挂、单跑却过。查下去发现：**设备上跑的 agent 是 `82e0cfb5…`——最初那个**，
+而本仓构建已经是 `78d9d20f…`。
+
+- **覆盖点**：`verify_v02.sh` 会 `install_apk_root` 把 9/27 那个 APK 重装回去（v01 在本机早就死在
+  `build_agent.sh` 的缺工具链那一步，所以不是它）。APK 里**自带一份 agent**，重装即把热替换的
+  `.so` 覆盖回旧版。
+- **后果**：`verify_v01/v02` 之后的所有 device 脚本，验的都是**旧 agent**。本轮我把 `.so` 换掉、
+  重建、部署，然后跑门禁——门禁 "111 PASS" 而设备上跑的是三个版本前的二进制。**这就是 §3.1
+  说的"门禁绿着撒谎"，只是这次撒谎的是我没有把部署闭环写进工具链。**
+- **修法（一处）**：`install_apk_root` 装完 APK 后调用新的 `refresh_agent_so()`，把
+  `agent/build/libadh_agent.so` 推回沙盒的 native 库目录（解压式安装 → 纯文件复制，不需要 gradle）
+  与 Zygisk 模块目录，并打印两侧 sha。这样"装了 APK"这个动作**自己**保证设备跑的是本仓构建。
+- **教训**：改 agent 源码后，"重建 + 部署 + 确认设备 hash == 本仓 hash"是一个不可省的闭环；
+  本次已把最后一步做进工具链，不再靠人记得。
 
 ### 7. 未完成 / 已知代价
 
