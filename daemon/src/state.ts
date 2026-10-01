@@ -380,14 +380,75 @@ function bumpSession(sessionId: string | undefined, field: 'pushed' | 'evicted')
 export const recentJavaIn = new Map<string, number>();   // input-hex -> ts, to dedup native echoes
 export const captureTimers = new Map<string, ReturnType<typeof setInterval>>();
 // WS-C: per-session honest capture accounting from the agent ring's capture_drain stats.
-export interface CapStat { seq: number; emitted: number; dropped: number; jdropped: number; backlog: number; firstDropNs: number; lastDropNs: number; complete: boolean; ring: number; ts: number; }
+// seq/dropped/jdropped are CUMULATIVE IN THE AGENT PROCESS, while emitted counts only what THIS
+// daemon session ingested — so the raw numbers cannot be compared directly after a daemon restart
+// or an agent reconnect (the gap is permanent and reads as silent loss; measured 3455 records on
+// 2026-10-01). base* is the snapshot taken with the session's FIRST drain response, and HEALTH IS
+// REPORTED RELATIVE TO IT: the window is "since this daemon started watching", where the identity
+// below is true. The raw agent counters are kept in `baseline` so nothing is hidden.
+export interface CapStat {
+  seq: number; emitted: number; dropped: number; jdropped: number; backlog: number;
+  /** Cumulative records the AGENT has popped out of its ring (its own counter). */
+  drained: number;
+  /** The AGENT's own identity residual (seq - drained - backlog - dropped) as it reported it in
+   *  the last drain reply. Compared against agentLost below: if the agent says 0 while the daemon
+   *  computes non-zero, the divergence is in the daemon's accounting, not in the ring. */
+  agentResidual?: number | null;
+  firstDropNs: number; lastDropNs: number; complete: boolean; ring: number; ts: number; announcedDrop?: boolean;
+  base?: { seq: number; dropped: number; jdropped: number; drained: number; emitted: number };
+}
 export const capStats = new Map<string, CapStat>();
 // Aggregate drop accounting across sessions — complete:false the moment anything dropped.
-// The invariant emitted + backlog + dropped === seq holds per session (nothing silent).
+// The invariant emitted + backlog + dropped === seq holds per session, for the session window.
 export function captureHealth() {
+  // AGGREGATE OVER LIVE SESSIONS ONLY, and say so. A session that ends while its last drain
+  // snapshot happened to catch a producer between "counted the attempt" and "the outcome"
+  // (insert / drop) freezes with a residual of a few records, and no later drain can resolve it -
+  // the agent's counters are cumulative and the sample was taken mid-flight. Summing those
+  // forever-stale residues over a long run (the gate restarts the app per script) turned a
+  // handful of in-flight records into thousands and made verify_v22 read as a silent loss.
+  // The health object answers "how is the ring doing RIGHT NOW"; the stale side is reported
+  // separately instead of being folded in or hidden.
+  const liveIds = new Set([...sessions.values()].filter((s) => s.online).map((s) => s.sessionId));
   let seq = 0, emitted = 0, dropped = 0, jdropped = 0, backlog = 0; let complete = true;
-  for (const s of capStats.values()) { seq += s.seq; emitted += s.emitted; dropped += s.dropped; jdropped += s.jdropped; backlog += s.backlog; if (!s.complete) complete = false; }
-  return { seq, emitted, dropped, jdropped, backlog, complete, accountedFor: emitted + backlog + dropped, sessions: capStats.size };
+  let baseSeq = 0, baseDropped = 0, agentResidual = 0, staleResidual = 0, staleSessions = 0;
+  for (const [sid, s] of capStats.entries()) {
+    const b = s.base ?? { seq: s.seq, dropped: s.dropped, jdropped: s.jdropped, drained: s.drained, emitted: s.emitted };
+    if (!liveIds.has(sid)) {
+      staleSessions++;
+      staleResidual += Math.max(0, (s.seq - b.seq) - (s.drained - b.drained) - s.backlog - (s.dropped - b.dropped));
+      continue;
+    }
+    seq += Math.max(0, s.seq - b.seq);
+    dropped += Math.max(0, s.dropped - b.dropped);
+    jdropped += Math.max(0, s.jdropped - b.jdropped);
+    emitted += Math.max(0, s.emitted - b.emitted);
+    backlog += s.backlog;
+    baseSeq += b.seq; baseDropped += b.dropped;
+    agentResidual += Number(s.agentResidual ?? 0);
+    if (!s.complete) complete = false;
+  }
+  // Two DIFFERENT residuals, deliberately separated (a single "unaccounted" hid which side lost what):
+  //   agentLost  - the agent's own identity (seq == drained + backlog + dropped) failed for a LIVE
+  //                session: records left its ring without being popped, counted as dropped, or
+  //                still in the ring.
+  //   daemonLost - the agent popped them (it says so via `drained`) but this daemon never ingested
+  //                them: a drain response that never reached processDrain (timeout/socket error).
+  let agentLost = 0, daemonLost = 0;
+  for (const [sid, s] of capStats.entries()) {
+    if (!liveIds.has(sid)) continue;
+    const b = s.base ?? { seq: s.seq, dropped: s.dropped, jdropped: s.jdropped, drained: s.drained, emitted: s.emitted };
+    const dSeq = Math.max(0, s.seq - b.seq), dDropped = Math.max(0, s.dropped - b.dropped);
+    const dDrained = Math.max(0, s.drained - b.drained), dEmitted = Math.max(0, s.emitted - b.emitted);
+    agentLost += Math.max(0, dSeq - dDrained - s.backlog - dDropped);
+    daemonLost += Math.max(0, dDrained - dEmitted);
+  }
+  const accountedFor = emitted + backlog + dropped;
+  return { seq, emitted, dropped, jdropped, backlog, complete, accountedFor,
+    unaccounted: Math.max(0, seq - accountedFor), agentLost, daemonLost,
+    agentResidual, staleSessions, staleResidual, sessions: capStats.size, liveSessions: capStats.size - staleSessions,
+    baseline: { seq: baseSeq, dropped: baseDropped },
+    window: 'live sessions only, since each session began being watched (agent counters are cumulative over its whole process)' };
 }
 
 export function hexToPreview(hex: string, max = 80): string {

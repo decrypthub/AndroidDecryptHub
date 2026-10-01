@@ -499,23 +499,42 @@ export function startCaptureLoop(sid: string) {
         // Drain repeatedly while the agent ring has a backlog, so a burst is pulled out
         // fast (WS-C: keeps drops near zero when the pipeline can keep up). Bounded so one
         // tick can't monopolise the session.
-        let r: any, drains = 0, emittedTick = 0;
+        //
+        // ACCOUNT PER DRAIN, not per call. The agent's capture_drain has POP semantics: the
+        // records in a response have already left its ring. So the counters for what DID arrive
+        // must be written as it arrives - batching them until the loop ends threw away the
+        // accounting of every earlier iteration whenever a later `sendCmd` failed, and
+        // verify_v22's invariant (emitted+backlog+dropped==seq) then read as a silent loss.
+        // A response that never arrives at all is still unaccounted (the agent popped it and
+        // the bytes are gone with the socket) - that residue is what `unaccounted` in
+        // captureHealth()/the tool replies now names instead of hiding.
+        let r: any, drains = 0;
         do {
           r = await sendCmd(sid, 'capture_drain', {}, 8_000);
-          emittedTick += (r?.count ?? 0);
+          const count = r?.count ?? 0;
+          // Bookkeeping FIRST: the agent has already popped these records, so our accounting must
+          // not depend on our own store-side processing succeeding.
+          const prev = capStats.get(sid);
+          const emittedAfter = (prev?.emitted ?? 0) + count;
+          capStats.set(sid, { seq: r.seq ?? 0, emitted: emittedAfter,
+            dropped: r.dropped ?? 0, jdropped: r.jdropped ?? 0, drained: r.drained ?? 0,
+            backlog: r.backlog ?? 0, firstDropNs: r.firstDropNs ?? 0, lastDropNs: r.lastDropNs ?? 0,
+            complete: r.complete === true, ring: r.ring ?? 0, ts: Date.now(), agentResidual: r.residual ?? null,
+            // The window this session can account for starts at its FIRST drain response: the
+            // agent's seq/dropped are cumulative over its whole process (and keep counting across
+            // a daemon restart), while `emitted` only ever counts what we ingested. The records
+            // in that first response were already popped before this snapshot, so they are
+            // excluded on both sides - see captureHealth() for the identity that then holds.
+            base: prev?.base ?? { seq: r.seq ?? 0, dropped: r.dropped ?? 0, jdropped: r.jdropped ?? 0, drained: r.drained ?? 0, emitted: emittedAfter } });
           processDrain(r, Date.now());
           drains++;
         } while (r && r.backlog > 0 && drains < 60);
         drainErrLogged = false;   // a drain succeeded — clear the failure episode
-        if (r) {
-          const prev = capStats.get(sid);
-          capStats.set(sid, { seq: r.seq ?? 0, emitted: (prev?.emitted ?? 0) + emittedTick,
-            dropped: r.dropped ?? 0, jdropped: r.jdropped ?? 0,
-            backlog: r.backlog ?? 0, firstDropNs: r.firstDropNs ?? 0, lastDropNs: r.lastDropNs ?? 0,
-            complete: r.complete === true, ring: r.ring ?? 0, ts: Date.now() });
-          // fail-loud: announce the first time this session starts dropping
-          if ((r.dropped ?? 0) > 0 && (!prev || prev.dropped === 0))
-            log(`[capture] session ${sid} DROPPING — ring full: dropped=${r.dropped} seq=${r.seq} (complete:false)`);
+        // fail-loud: announce the first time this session starts dropping (once per session)
+        const now = capStats.get(sid);
+        if (now && now.dropped > 0 && !now.announcedDrop) {
+          now.announcedDrop = true;
+          log(`[capture] session ${sid} DROPPING — ring full: dropped=${now.dropped} seq=${now.seq} (complete:false)`);
         }
       } catch (e) {
         if (!drainErrLogged) { drainErrLogged = true; log(`[capture] drain ${sid} 失败 (静默重试直至恢复):`, (e as Error).message); }

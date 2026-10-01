@@ -54,12 +54,14 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
         list = list.filter(c => sids.has(c.sessionId));
       }
       // WS-C: `health` carries honest ring accounting — complete:false + dropped>0 when the
-      // agent ring overflowed (no silent loss; the panel should show this in red).
+      // agent ring overflowed (no silent loss; the panel should show this in red). The health
+      // fields are ALSO mirrored at the top level by SPREADING them, not by hand-copying a subset:
+      // the hand-written mirror silently dropped the newer residual fields, so a script could
+      // assert on them and pass without ever seeing them.
       const health = captureHealth();
       return send(200, {
         total: captures.length, on: captureTimers.size > 0,
-        complete: health.complete, dropped: health.dropped, jdropped: health.jdropped,
-        seq: health.seq, backlog: health.backlog, health,
+        ...health, health,
         captures: list.slice(-limit).map(c => ({ id: c.id, source: c.source, category: c.category, algo: c.algo, op: c.op, func: c.func, inl: c.inl, outl: c.outHex ? c.outHex.length / 2 : 0, tid: c.tid, ts: c.ts, preview: c.preview })),
       });
     } },

@@ -11,7 +11,7 @@
 ## 0. 一句话状态
 
 `libadh_agent.so` + Host ADH Daemon + `adh` CLI 都已实现；注入后端**只有 Zygisk 是官方路径**（另有 Gadget/Xposed/eCapture 三个实验后端）。**门禁已全量跑过**：
-2026-10-01 在 Linux 接管机上（设备 `aa165071`，agent 换成本机构建的 `40024e15…`）见 `FEATURE_STATUS §2.1`；
+2026-10-01 在 Linux 接管机上（设备 `aa165071`，agent 换成本机构建的 `78d9d20f…`）见 `FEATURE_STATUS §2.1`；
 上上轮 2026-09-29（二）**103 PASS / 11 FAIL / 4 SKIP**
 （host 36 = 29/5/2，device 82 = 74/6/2）。**11 条 FAIL 没有一条能归到产品代码**：7 条是本机缺
 Windows 工具链/依赖、2 条是**门禁自己的断言缺陷**、2 条是文档已登记的偶发。**device 半段是健康的**
@@ -98,14 +98,14 @@ adb -s <serial> shell getprop ro.build.version.sdk   # 记下 API level（见 §
 `aa165071` 这个 serial **就是 2026-09-23 那次 113 PASS / 0 FAIL / 0 SKIP 全量门禁的同一台机器**——
 所以它是"已知全绿"的参考设备，不是新设备。
 
-> ⚠️ **2026-10-01 更新**：设备上的 agent 已从 `82e0cfb5…` 换成**本机构建的 `40024e15…`**（删掉 9 条沙盒耦合命令后的产物）。
+> ⚠️ **2026-10-01 更新**：设备上的 agent 已从 `82e0cfb5…` 换成**本机构建的 `78d9d20f…`**（删掉 9 条沙盒耦合命令后的产物）。
 > Manager / Device Daemon / Zygisk companion 三个 APK 未变，**不需要重刷模块**。
 
 **接管当天实测：设备上刷的包与本仓 HEAD 逐字节一致，不需要重刷。**（2026-09-29，HEAD `c273ef4`）：
 
 | 文件 | 设备路径 | sha256（设备 == 本仓构建产物） |
 |---|---|---|
-| agent | `/data/adb/modules/adh/libadh_agent.so` | **`40024e15…`**（2026-10-01 更新）== `agent/build/libadh_agent.so`；同值也写进沙盒 `…/lib/arm64/libadh_agent.so` |
+| agent | `/data/adb/modules/adh/libadh_agent.so` | **`78d9d20f…`**（2026-10-01 更新）== `agent/build/libadh_agent.so`；同值也写进沙盒 `…/lib/arm64/libadh_agent.so` |
 | Manager | `/data/adb/modules/adh/manager.apk` | `e0b2a83d…` == `device/manager/build/…/manager-debug.apk` |
 | Device Daemon | `/data/adb/modules/adh/daemon.apk` | `87c2df98…` == `device/daemon/build/…/daemon-debug.apk` |
 | 沙盒 | `com.adh.sandbox`（`lastUpdateTime` 2026-09-27 00:13:07） | 与本仓 `sandbox-app/…/app-debug.apk` 同一次构建 |

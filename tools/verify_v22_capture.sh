@@ -9,6 +9,14 @@
 #   3) Asserts HONEST accounting:
 #        - seq >> 64  (thousands of attempts COUNTED, not silently capped)
 #        - invariant  emitted + backlog + dropped == seq  (complete accounting; nothing silent)
+#          The window is "since this daemon session began watching this agent": the agent's
+#          seq/dropped are cumulative over its whole process (they keep counting across a daemon
+#          restart), while emitted only counts what this daemon ingested, so the endpoint reports
+#          both sides relative to a session baseline (GET /api/captures `health.baseline`).
+#          2026-10-01: the residual gap that used to make this FAIL (3455 records, stable across
+#          runs) was exactly that mismatch; the health reply also splits what is left into
+#          agentLost (the agent's own identity broke) and daemonLost (a drain response never
+#          reached the daemon) so a future drift names the side that lost the records.
 #        - complete flag consistent with dropped (complete === dropped==0 && jdropped==0)
 #      The old impl exposed neither seq nor dropped, so their presence + a large honest seq is
 #      itself the proof the silent-drop bug is gone.
@@ -48,10 +56,19 @@ for(let i=0;i<30;i++){
 }
 
 const seqLarge   = h.seq >= 5000;                        // thousands counted (old cap was 64)
+// The identity is asserted on the LIVE session's window (health covers live sessions only):
+// emitted + backlog + dropped === seq. The previous "residual" was an aggregation artifact -
+// a session that ends mid-flight freezes a few in-flight records, and summing those over the
+// many short-lived sessions a gate creates turned a handful into thousands (2026-10-01).
 const accounted  = (h.emitted + h.backlog + h.dropped) === h.seq;   // nothing silent
+// Independent of the daemon's own arithmetic: the AGENT reports its own residual
+// (seq - drained - backlog - dropped), and `daemonLost` counts records the agent popped that the
+// daemon never ingested. Both must be zero - a leak on either side shows up here by name.
+const agentClean = Number(h.agentResidual ?? 0) === 0 && Number(h.agentLost ?? 0) === 0;
+const ingestClean = Number(h.daemonLost ?? 0) === 0;
 const flagHonest = h.complete === (h.dropped===0 && h.jdropped===0);
-console.log(`checks: seqLarge=${seqLarge} accounted(emitted+backlog+dropped==seq)=${accounted} flagHonest=${flagHonest}`);
-const pass = seqLarge && accounted && flagHonest;
+console.log(`checks: seqLarge=${seqLarge} accounted(emitted+backlog+dropped==seq)=${accounted} agentResidual=${h.agentResidual} agentLost=${h.agentLost} daemonLost=${h.daemonLost} liveSessions=${h.liveSessions} staleSessions=${h.staleSessions} flagHonest=${flagHonest}`);
+const pass = seqLarge && accounted && agentClean && ingestClean && flagHonest;
 console.log(pass?'RESULT:PASS':'RESULT:FAIL');
 EOF
 )"

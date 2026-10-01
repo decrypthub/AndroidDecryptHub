@@ -31,11 +31,15 @@ try{
   console.log(`capture_start: ok=${on.ok} installed=${on.installed}/${on.attempted} (sys=${JSON.stringify(on.reply?.sys ?? {})})`);
   const invoked=await call('java_call',{session:sid,className:cls,method:'run',params:'',args:[]});
   console.log(`java_call ${cls}.run -> ${JSON.stringify(invoked.result ?? invoked.error ?? null)}`);
+  // Only events produced by MY trigger count: live_captures lists the whole store newest-last, so
+  // a busy target fills the window with unrelated system captures (measured in the gate: 300
+  // records, none of them mine) - and the trigger's own events are older than those.
+  const t0=Date.now();
   let evs=[];
   for(let i=0;i<10 && evs.length===0;i++){
     await sleep(1000);
-    const caps=await call('live_captures',{session:sid,category:'system',limit:300,includeText:true});
-    evs=caps.captures||[];
+    const caps=await call('live_captures',{session:sid,category:'system',limit:1000,includeText:true});
+    evs=(caps.captures||[]).filter(c=>Number(c.ts)>=t0);
   }
   evs.forEach(c=>console.log(`  [${c.func}] ${(c.ascii||'').slice(0,60)}`));
   const hasDebug = evs.some(c=>c.func==='ptrace' && /PTRACE_TRACEME/.test(c.ascii||''));

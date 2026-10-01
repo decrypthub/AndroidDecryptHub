@@ -30,7 +30,7 @@
 > | 轮次 | 结果 | 说明 |
 > |---|---|---|
 > | 本轮**改动前**基线（2026-10-01，本机全量） | **109 PASS / 5 FAIL / 4 SKIP** | 5 条 FAIL 里 3 条不是产品问题：`v87`/`v94` 在编辑中途被抓到（agent 已删、路由未删的中间态）、`v08_xref` 是 SMB 写回抖动（复跑 PASS）。排掉后 = **112 / 2 / 4**，与 2026-09-30 记录一致 |
-> | 本轮**改动后**（2026-10-01，全量） | **111 PASS / 2 FAIL / 4 SKIP** | 同一台设备 `aa165071`，设备上 agent sha `40024e15…`（本机构建）。2 FAIL + 4 SKIP 全部是改动前就有的，逐条见 §2.1 |
+> | 本轮**改动后**（2026-10-01，全量） | **111 PASS / 2 FAIL / 4 SKIP** | 同一台设备 `aa165071`，设备上 agent sha `78d9d20f…`（本机构建）。2 FAIL + 4 SKIP 全部是改动前就有的，逐条见 §2.1 |
 >
 > 排除在外的既有噪声（两次都一样）：`v01`（本机缺 Windows 路径下的完整构建链）、`v22_capture`（已登记的记账抖动）、
 > `v31`/`v32`（缺 gradle 重建模块 APK）、`v37`/`v99`（进程控制是 Windows-only）。逐条历史见 `PROGRESS.md`。
@@ -39,8 +39,8 @@
 
 | 交付物 | 来源 | 状态 |
 |---|---|---|
-| `libadh_agent.so`（arm64-v8a，release 剥离，**1,036,736 B**，sha `40024e15…`） | `tools/build_agent.sh`（**2026-10-01 起也可在本机用 NDK r29 + cmake 构建，见 `HANDOVER §1.5`**） | ✅ 已验收（v01–v79 系列；本轮删除 9 条命令后重建并重新过闸） |
-| 最近一次 Zygisk 模块 zip + ADH Manager APK + 组合包（**v0.3.12**） | `tools/build_zygisk.sh` / `build_bundle.sh` / `flash_device.sh` | ✅ 模块 zip 与 APK 仍是 2026-09-29 那次刷机的产物（`manager.apk` `e0b2a83d…`、`daemon.apk` `87c2df98…`、`zygisk/arm64-v8a.so` `e565bfdc…`，与 HEAD 一致）。**agent 已于 2026-10-01 更新为 `40024e15…`**（本机 NDK r29 构建），同时写进设备的两条路径：沙盒 `…/lib/arm64/libadh_agent.so`（模拟注入）与 `/data/adb/modules/adh/libadh_agent.so`（Zygisk 注入）——**都不需要重刷模块、也不需要重打 APK**（native 库是解压式安装，见 `HANDOVER §1.5`）。 |
+| `libadh_agent.so`（arm64-v8a，release 剥离，**1,036,832 B**，sha `78d9d20f…`） | `tools/build_agent.sh`（**2026-10-01 起也可在本机用 NDK r29 + cmake 构建，见 `HANDOVER §1.5`**） | ✅ 已验收（v01–v79 系列；本轮删除 9 条命令后重建并重新过闸） |
+| 最近一次 Zygisk 模块 zip + ADH Manager APK + 组合包（**v0.3.12**） | `tools/build_zygisk.sh` / `build_bundle.sh` / `flash_device.sh` | ✅ 模块 zip 与 APK 仍是 2026-09-29 那次刷机的产物（`manager.apk` `e0b2a83d…`、`daemon.apk` `87c2df98…`、`zygisk/arm64-v8a.so` `e565bfdc…`，与 HEAD 一致）。**agent 已于 2026-10-01 更新为 `78d9d20f…`（当天第二次重建：WS-C 记账修复需要 agent 多报一个 `drained` 累计量）**（本机 NDK r29 构建），同时写进设备的两条路径：沙盒 `…/lib/arm64/libadh_agent.so`（模拟注入）与 `/data/adb/modules/adh/libadh_agent.so`（Zygisk 注入）——**都不需要重刷模块、也不需要重打 APK**（native 库是解压式安装，见 `HANDOVER §1.5`）。 |
 | 可选后端：Xposed 薄模块 APK | `injector/xposed/` + `tools/build_xposed.sh` | ⚠️ **社区/实验**（2026-10-01 决议）；代码与 v31/v32 验收保留，但**不是官方注入路径** |
 | 可选后端：Frida Gadget | `tools/fetch_frida_gadget.sh` + `load_frida_gadget.sh` | ⚠️ **开发/调试用，移出发布物**（2026-10-01 决议）；官方二进制（未魔改），v30 验收保留 |
 | 可选后端：eCapture | `tools/fetch_ecapture.sh` + `ecapture_capture.sh` | ⚠️ **实验脚本，已移出 `verify_all.sh` 门禁**（2026-10-01 决议）；需内核 eBPF，脚本手动可跑（本次改动后仍 PASS） |
@@ -102,7 +102,7 @@
 >
 > **2 条 FAIL（都不是本轮的改动）**：
 > - `v01`：需要完整构建链——它自己会跑 `build_agent.sh` 与 `gradlew`，本机没有 gradle（agent 部分本机已可构建，见 `HANDOVER §1.5`）。
-> - `v22_capture`：文档已登记的**记账不变量抖动**（`emitted+backlog+dropped==seq` 不成立）。**本轮新证据**：一次性探针命令（`withCaptureSuspended` 的调用者）已删除，缺口**依旧存在**（`seq=21906` vs `accountedFor=21561`），说明成因不是它们；下次排查应看 `dropped` 与 `jdropped` 为何分成两笔（本次 `dropped=17716`、`jdropped=19617`）。
+> - ~~`v22_capture`~~ ✅ **本轮定位并修复（两层根因）**：恒等式此前**恒差 3455**（多次复现、数值稳定）。① **口径不一致**——`seq/dropped` 是 agent **整个进程**的累计值，`emitted` 只统计**本 daemon 会话**，任何一次重启都留下永久偏移；② 更隐蔽的一层是**跨会话聚合**：`capture()` 先在锁外 `seq++` 再 trylock，采样若落在"已计数、结果未定"的窗口里，这一条就既不在 ring 也不在 dropped——活会话下次采样自愈，但**会话恰好结束在那一刻就永久冻结**，门禁每个脚本重启 App 攒下几十个死会话，累加成了几千，读起来正像静默丢记录（其实一条没丢）。修法：health 按**会话基线**汇报、**只聚合在线会话**（历史残渣单列 `staleSessions`/`staleResidual`）、残差拆成 `agentResidual`/`agentLost`/`daemonLost` 三类各自命名、agent 新增累计 `drained`、记账先于处理、`/api/captures` 顶层字段改 spread（此前手抄子集漏掉了新字段，脚本会"断言一个看不到的字段而通过"）。修复后连跑 5 次精确成立（含"只重启 daemon、agent 累计不变"这个原本必挂的条件）。
 >
 > **4 条 SKIP（全是环境）**：`v31`/`v32`（缺 gradle 重建模块 APK）、`v37`/`v99`（进程控制是 Windows-only）。
 >
@@ -142,8 +142,7 @@
     `g_cap_seq` **只在 native `capture()` 里自增**（Java 富采集路径不推它），所以不是 Java 那条；
     而 invariant 里的 `emitted` 是 **daemon 把"它自己观察到的** drain 回复里的 `ncaps` 累加**出来的——
     凡是被**别的消费者** drain 掉、而那条路径没有把计数记进 `capStats` 的，就会让 `accountedFor < seq`。
-    → 下一次查这条时从"谁还会 drain（其它读 `/api/captures` 的路径）"
-    （**2026-10-01 更新**：`withCaptureSuspended` 与一次性探针命令已删除，这条线索里的两个候选者没了；本轮两次全量里 `v22_capture` 仍然红过，说明还有别的消费者或另有成因）
+    ✔ **2026-10-01 已定位并修复**（见 §2.1）：不是"谁还会 drain"，而是 **agent 累计 vs 会话累计的口径差**；`withCaptureSuspended` 与一次性探针命令也已随之删除。
     入手，而不是从环形缓冲本身。
   · 第 3 项（`native_hook` 机制自证）已落地并单独跑过 v72：**仍需复看**——本轮它在 9 项 native hook
     家族里 PASS 过、整轮门禁里也 PASS 过，所以第 3 项**没有**解决它，也**没有**证据说它与之相关。

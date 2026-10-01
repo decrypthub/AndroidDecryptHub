@@ -31,6 +31,12 @@ struct CapRec { char func[24]; int inl; int n; int tid; long long ts_ns; unsigne
 static struct CapRec g_ring[CAP_RING];
 static int g_ring_head = 0, g_ring_tail = 0, g_ring_count = 0;   // ring: head=write, tail=read (under g_cap_lock)
 static unsigned long long g_cap_seq = 0;       // total capture() attempts — ATOMIC (read/written off-lock)
+// Records the drain has POPPED out of the ring, cumulative. Reported so the identity
+//   seq == drained + backlog + dropped
+// can be checked from the agent's own accounting: without it, a daemon that loses a drain
+// response (the records are already popped, the bytes die with the socket) is indistinguishable
+// from the agent silently dropping records - and verify_v22 cannot tell which one it is.
+static unsigned long long g_cap_drained = 0;
 static unsigned long long g_cap_dropped = 0;   // total dropped (ring full or lock busy) — ATOMIC
 static long long g_cap_first_drop_ns = 0, g_cap_last_drop_ns = 0;   // best-effort diagnostic ts
 static pthread_mutex_t g_cap_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -760,8 +766,10 @@ void adh_cmd_capture_drain(int fd, const char *id) {
         g_ring_tail = (g_ring_tail + 1) % CAP_RING;
         g_ring_count--; ncaps++;
     }
+    if (ncaps > 0) __atomic_add_fetch(&g_cap_drained, (unsigned long long)ncaps, __ATOMIC_RELAXED);
     int backlog = g_ring_count;
     unsigned long long seq = __atomic_load_n(&g_cap_seq, __ATOMIC_RELAXED);
+    unsigned long long drained = __atomic_load_n(&g_cap_drained, __ATOMIC_RELAXED);
     unsigned long long dropped = __atomic_load_n(&g_cap_dropped, __ATOMIC_RELAXED);
     unsigned long long jdropped = __atomic_load_n(&g_jcap_dropped, __ATOMIC_RELAXED);
     long long fdrop = g_cap_first_drop_ns, ldrop = g_cap_last_drop_ns;
@@ -786,8 +794,10 @@ void adh_cmd_capture_drain(int fd, const char *id) {
     pthread_mutex_unlock(&g_cap_lock);
     snprintf(out + len, cap > len ? cap - len : 0,
         "],\"count\":%d,\"jcount\":%d,\"backlog\":%d,\"seq\":%llu,\"dropped\":%llu,\"jdropped\":%llu,"
-        "\"firstDropNs\":%lld,\"lastDropNs\":%lld,\"ring\":%d,\"complete\":%s,\"javaActive\":%s}\n",
-        ncaps, njcaps, backlog, seq, dropped, jdropped, fdrop, ldrop, CAP_RING,
+        "\"drained\":%llu,\"residual\":%lld,\"firstDropNs\":%lld,\"lastDropNs\":%lld,\"ring\":%d,\"complete\":%s,\"javaActive\":%s}\n",
+        ncaps, njcaps, backlog, seq, dropped, jdropped, drained,
+        (long long)seq - (long long)drained - (long long)backlog - (long long)dropped,
+        fdrop, ldrop, CAP_RING,
         (dropped == 0 && jdropped == 0) ? "true" : "false", g_java_active ? "true" : "false");
     send_line(fd, out);
     free(out);
