@@ -6,6 +6,7 @@ unzip -o "$ZIPFILE" 'module.prop' -d "$MODPATH" >&2
 unzip -o "$ZIPFILE" 'zygisk/*' -d "$MODPATH" >&2
 unzip -o "$ZIPFILE" 'libadh_agent.so' -d "$MODPATH" >&2
 unzip -o "$ZIPFILE" 'daemon.apk' -d "$MODPATH" >&2
+unzip -o "$ZIPFILE" 'LICENSE' 'NOTICE' 'third_party_licenses/*' -d "$MODPATH" >&2
 unzip -o "$ZIPFILE" 'device-daemon' -d "$MODPATH" >&2
 unzip -o "$ZIPFILE" 'action.sh' -d "$MODPATH" >&2
 unzip -o "$ZIPFILE" 'post-fs-data.sh' -d "$MODPATH" >&2

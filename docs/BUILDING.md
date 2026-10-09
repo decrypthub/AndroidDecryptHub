@@ -1,6 +1,6 @@
 # Building ADH from source
 
-This repository does not ship a prebuilt agent, APK, module ZIP, or captured target data.
+The source repository does not commit generated binaries or captured target data. The [v0.3.12 prerelease](https://github.com/decrypthub/AndroidDecryptHub/releases/tag/v0.3.12) has a flashable bundle built from this source.
 
 ## Prerequisites
 
@@ -29,7 +29,7 @@ bash tools/build_detect.sh
 bash tools/build_bundle.sh
 ```
 
-The bundle builder compiles the Zygisk companion, ADH Manager, and root Device Daemon. It requires a working Gradle environment and Android SDK build tools including `apksigner`, and uses local debug APK signing. Inspect and validate the ZIP before installation. There is currently no certified release artifact for this source snapshot.
+The bundle builder compiles the Zygisk companion, ADH Manager, and root Device Daemon. It requires a working Gradle environment and Android SDK build tools including `apksigner`, and uses local debug APK signing. The output is `injector/zygisk/dist/adh-bundle-v0.3.12.zip`. On a dedicated rooted arm64 test device with Zygisk enabled, install it through Magisk → Modules → Install from storage, then reboot. The installer tries to install Manager automatically; if it cannot, use the module Action or extract `manager.apk` from the ZIP and install it. Start `adhd` on the host, then select the target packages in Manager. The v0.3.12 release passed host build and ZIP checks but has not been flashed or exercised on a dedicated root device in this release run. The bundled Manager APK uses a build-local debug signing key, so a later differently signed APK cannot replace it in place.
 
 ## Host daemon
 

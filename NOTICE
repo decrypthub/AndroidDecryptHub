@@ -14,6 +14,8 @@ license:
 - Frida Gadget and eCapture are optional developer tools fetched separately;
   consult their upstream licenses before redistribution.
 
-This source snapshot contains no prebuilt ADH agent, module ZIP, target dump,
-or third-party checkout. Review the upstream license files when building or
-distributing combined binaries.
+The GitHub release bundle includes a binary agent linked with LSPlant and
+Dobby. The bundle contains the license texts in third_party_licenses/. The
+release also provides the exact patched LSPlant and submodule source used for
+that binary; ADH's corresponding application source and build scripts are at
+the release tag. The source repository contains no captured target data.

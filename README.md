@@ -4,7 +4,7 @@
 
 AndroidDecryptHub（**ADH**）是面向**授权 Android 运行时逆向分析**的开源工具。轻量 agent 注入目标进程，负责 hook、采集、trace 和 dump；电脑上的 Host ADH Daemon（`adhd`）负责存储、DEX 索引、反汇编、Web 查看器与 MCP 接口。iOS 对应项目是 [IOSDecryptHub](https://github.com/decrypthub/IOSDecryptHub)。
 
-本仓是**源码快照**，没有附带可安装的 Release。当前官方注入路径为 **Zygisk**；Frida Gadget、Xposed 和 eCapture 是开发或实验后端。交付架构仅支持 `arm64-v8a`，ART 结构解析主要在 Android SDK 35 验证、SDK 36 次级验证。不同 ROM、加固方式和调用路径需要逐项验证，工具不会保证所有目标都能脱壳或捕获全部事件。
+可刷入的 Zygisk 安装包见 [v0.3.12 Release](https://github.com/decrypthub/AndroidDecryptHub/releases/tag/v0.3.12) 中的 `adh-bundle-v0.3.12.zip`。这是从公开源码构建的**预发布包**：构建和包体已在主机验证，本次没有在专用 root 设备上刷入验收。当前官方注入路径为 **Zygisk**；Frida Gadget、Xposed 和 eCapture 是开发或实验后端。交付架构仅支持 `arm64-v8a`，ART 结构解析主要在 Android SDK 35 验证、SDK 36 次级验证。不同 ROM、加固方式和调用路径需要逐项验证，工具不会保证所有目标都能脱壳或捕获全部事件。
 
 ## 功能
 
@@ -28,6 +28,8 @@ AndroidDecryptHub（**ADH**）是面向**授权 Android 运行时逆向分析**�
 目标进程中的 agent 不运行 HTTP、数据库或重型分析。通信协议见 [proto/PROTOCOL.md](proto/PROTOCOL.md)。
 
 ## 构建与试用
+
+已 root、启用 Zygisk 的专用测试机可在 Magisk 的「模块 → 从本地安装」选择 Release ZIP，安装后重启。ZIP 内含 Manager APK，安装器会尝试自动安装；失败时可使用模块 Action 或从 ZIP 提取 `manager.apk` 安装。首次使用还需要在电脑启动 Host ADH Daemon，并配置 Manager 的目标包范围。预发布 APK 使用本次构建的 debug 签名，后续不同签名的 APK 不能直接覆盖安装。详细步骤见 [构建说明](docs/BUILDING.md)。
 
 需要 Android SDK（compileSdk 36）、NDK `28.2.13676358`、CMake、JDK 17、Node.js 24，以及一台用于设备验收的**专用、已 root 的 arm64 Android 测试机**。构建脚本支持 Windows/Git Bash 与 Linux；设置 `ANDROID_SDK_ROOT`、`ANDROID_NDK_HOME` 后，按 [构建说明](docs/BUILDING.md)执行。
 
