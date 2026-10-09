@@ -14,6 +14,14 @@
 全来自命令参数）；② 不胡乱兜底 / fail-loud（hook 装不上、缓冲溢出、解不动一律显式报错 + 计数上报，
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
+## 2026-10-09 —— 新功能开发前的能力复核（未变更范围）
+
+- 本次只做代码/文档复核与 Host 单测，**没有重跑真机门禁**。当前 agent 命令分支 **33**、MCP 工具 **65**、`verify_all.sh` 脚本 **117**；`cd daemon && node --test test/*.test.ts` 实跑 **179 PASS / 0 FAIL**。最近一次真机全量结果仍是 2026-10-01 的 **114 PASS / 1 FAIL / 2 SKIP**，不可将本次 Host 通过写成新一轮真机通过。
+- 能力收敛：官方 Zygisk 注入、Java/native/JNI 与 crypto/TLS/file/syscall 观测、内存/DEX/SO dump、DEX 索引/xref/反汇编/算法识别和 Web/MCP/CLI 已成体系；真实加固目标学习通的 13 个真 DEX 已与手工提取结果逐字节同 hash（`CASE_STUDIES.md` 案例 1）。
+- 新特性最明显的产品缺口：`adh` CLI 目前仅 `doctor/target/unpack`，作用域、冷启动、探针、捕获与报告仍需人工串联；`flow_correlate` 仅同线程 + 200ms 共现，WS-I 的内容关系确定性关联**未做**；案例 1 的原生 I/O 路径曾出现 GOT 钩子 5 分钟 0 命中，尚缺从零命中走到真实路径的调查编排。
+- 发布边界仍需收口：协议 v13 对应 release bundle 尚未重建/刷入；agent TCP `8761` 监听 `0.0.0.0` 且无鉴权，信任模型待决；覆盖证据主要来自沙盒与少数真机目标，产品边界保持 arm64-v8a only、ART 结构解析验证集中在 SDK 35/36。
+- 候选方向供下一轮选题：①可追溯调查会话（现有原语的 CLI/MCP 编排）；② WS-I 确定性 crypto↔TLS 关联；③原生 I/O 路径定位。**这只是评估结论，不新增规格或第二份路线图**；选定后同步修改 `REQUIREMENTS.md` 与 `DEVELOPMENT_PLAN.md` 并给出独立 pass/fail 验收。
+
 ## 2026-10-01 —— 范围收口 + 9 条沙盒耦合命令真删（用户决议"收尾"）
 
 **一句话**：两份"待确认"提案并入正文并删除原文（不再有第二份计划）；agent 里最后 9 条沙盒耦合命令真删，
