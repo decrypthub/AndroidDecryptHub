@@ -1,0 +1,20 @@
+{
+  "name": "adhd",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "ADH Daemon — HTTP/WebSocket/MCP/agent registry for Android DecryptHub",
+  "scripts": {
+    "start": "node src/index.ts",
+    "dev": "node --watch src/index.ts",
+    "smoke": "node test/smoke.ts",
+    "adh": "node src/cli.ts"
+  },
+  "dependencies": {
+    "capstone-wasm": "^1.0.3",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "selfsigned": "^5.5.0"
+  }
+}

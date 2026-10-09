@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Fixture: the automation acceptance posts a real notification and reads it back. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Agent connects to the Host ADH Daemon over TCP (via `adb reverse`); requires INTERNET. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- The app probes Host ADH Daemon /health over cleartext (127.0.0.1:8088 via adb reverse) to
+         show whether the console is up + discover the host LAN URL. -->
+    <application
+        android:allowBackup="true"
+        android:label="@string/app_name"
+        android:theme="@style/Theme.AdhSandbox"
+        android:supportsRtl="true"
+        android:usesCleartextTraffic="true"
+        android:extractNativeLibs="true">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <receiver
+            android:name=".HookProbeReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.adh.sandbox.HOOK_PROBE" />
+            </intent-filter>
+        </receiver>
+        <receiver
+            android:name=".NativeHookProbeReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.adh.sandbox.NATIVE_HOOK_PROBE" />
+            </intent-filter>
+        </receiver>
+        <receiver
+            android:name=".InstanceHookProbeReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.adh.sandbox.INSTANCE_HOOK_PROBE" />
+            </intent-filter>
+        </receiver>
+    </application>
+
+</manifest>

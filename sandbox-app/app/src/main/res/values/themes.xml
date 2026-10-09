@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Stock Material 3 (DayNight follows the system; no hand-picked palette). -->
+    <style name="Theme.AdhSandbox" parent="Theme.Material3.DayNight.NoActionBar" />
+</resources>

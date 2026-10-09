@@ -1,0 +1,19 @@
+AndroidDecryptHub source code is licensed under MIT; see LICENSE.
+
+The build scripts fetch third-party projects separately. Their licenses remain
+with their respective authors and are not replaced by this repository's MIT
+license:
+
+- LSPlant v6.4 (Java method hook backend): LGPL-3.0
+  https://github.com/LSPosed/LSPlant
+- Dobby 1.2 (native inline hook backend): Apache-2.0
+  https://github.com/jmpews/Dobby
+- QBDI 0.12.1 (optional instruction trace backend): Apache-2.0, with additional
+  components identified in QBDI's LICENSE.txt
+  https://github.com/QBDI/QBDI
+- Frida Gadget and eCapture are optional developer tools fetched separately;
+  consult their upstream licenses before redistribution.
+
+This source snapshot contains no prebuilt ADH agent, module ZIP, target dump,
+or third-party checkout. Review the upstream license files when building or
+distributing combined binaries.

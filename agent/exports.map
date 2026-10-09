@@ -1,0 +1,8 @@
+{
+  global:
+    JNI_OnLoad;
+    adh_agent_set_package;
+    adh_agent_start;
+  local:
+    *;
+};

@@ -1,0 +1,12 @@
+{
+  "name": "adh-frida-hooks",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "ADH Frida hook bundler cache (esbuild + language bridges). Frida 17+ no longer bundles the Java/ObjC bridges inside the Gadget runtime, so hooks that call Java.perform() must be bundled with frida-java-bridge. `buffer` is declared explicitly because frida-java-bridge/lib/mkdex.js imports it without declaring it: an undeclared copy made bundling work by luck until an npm install pruned it.",
+  "dependencies": {
+    "buffer": "^6.0.3",
+    "esbuild": "^0.28.2",
+    "frida-java-bridge": "^7.0.13"
+  }
+}

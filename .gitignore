@@ -1,0 +1,69 @@
+# Build outputs
+build/
+build-*/
+out/
+*.o
+*.so
+*.so.debug
+*.apk
+*.aab
+*.zip
+*.dex.out
+.cxx/
+.ninja_deps
+.ninja_log
+
+# Native / CMake
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+
+# Gradle / Android
+.gradle/
+.kotlin/
+local.properties
+*.iml
+
+# Node / Web
+node_modules/
+dist/
+.vite/
+
+# Rust (if daemon uses it)
+target/
+
+# Captured artifacts / runtime data (never commit target data)
+captures/
+dumps/
+*.dexdump
+*.trace
+adhd-data/
+*.sqlite
+*.sqlite-*
+
+# Third-party checkouts (use submodules)
+agent/third_party/*/
+!agent/third_party/.gitkeep
+
+# Reference clone (kept local only)
+.ref/
+
+# Local tool cache (portable node etc.) — not source, machine-specific paths
+.tools/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Staged agent build artifact (produced by tools/build_agent.sh)
+sandbox-app/app/src/main/jniLibs/*/*.so
+
+# Zygisk ndk-build intermediates (zip under dist/ is build output — also ignored via dist/)
+injector/zygisk/libs/
+injector/zygisk/obj/
+injector/zygisk/.stage/
+
+# harness/session state
+.claude/

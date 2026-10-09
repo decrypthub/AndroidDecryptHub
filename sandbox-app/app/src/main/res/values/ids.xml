@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Deterministic targets for the AI input acceptance (tools/verify_v36_automation.sh). -->
+    <item name="adh_input_probe" type="id" />
+    <item name="adh_input_echo" type="id" />
+    <item name="adh_clipboard_echo" type="id" />
+</resources>

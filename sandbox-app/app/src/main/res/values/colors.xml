@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="adh_bg">#0F1116</color>
+    <color name="adh_surface">#1A1D26</color>
+    <color name="adh_surface_alt">#20242F</color>
+    <color name="adh_primary">#8AB4FF</color>
+    <color name="adh_on_primary">#0B1220</color>
+    <color name="adh_secondary">#8AE6B0</color>
+    <color name="adh_fg">#E6E9F2</color>
+    <color name="adh_muted">#8890A6</color>
+    <color name="adh_danger">#FF8FA3</color>
+</resources>
