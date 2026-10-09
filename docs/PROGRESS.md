@@ -14,6 +14,13 @@
 全来自命令参数）；② 不胡乱兜底 / fail-loud（hook 装不上、缓冲溢出、解不动一律显式报错 + 计数上报，
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
+## 2026-10-09 —— AndroidDecryptHub 公开源码快照准备
+
+- 用户确认公开到 `decrypthub/AndroidDecryptHub`，沿用 iOS 项目的 MIT，采用**清理后的单次源码快照**，不公开本私有仓库的 377 个历史提交。
+- 独立导出目录 `/home/r/AndroidDecryptHub-public` 已生成根提交 `8af6c5f`（418 个文件）：加入中英 README、MIT LICENSE、第三方 NOTICE、构建与安全边界文档；排除内部交接/实战文档、构建产物和捕获数据，并将本机用户名及真实目标案例测试数据改成通用/合成内容。私有仓库原有 Git 历史未复制到公开目录。
+- 导出验收：`npm ci` 成功；Host 单测 **178 PASS / 0 FAIL / 1 SKIP**；CLI `--help` 与相关 Bash 语法检查通过；418 个提交文件的凭据/私钥/本机路径扫描 **0 命中**。本次没有运行设备验收，也没有触碰日常手机。
+- **尚未发布**：`gh repo create decrypthub/AndroidDecryptHub --public` 被组织策略 HTTP 403 拒绝，原因是当前 fine-grained PAT 有效期超过 366 天；浏览器会话未登录。已请用户缩短令牌期限或配置有组织仓库权限的令牌。认证恢复后创建公开仓库、推送这个单次提交，并通过公开仓库检查文件与历史。
+
 ## 2026-10-09 —— 新功能开发前的能力复核（未变更范围）
 
 - 本次只做代码/文档复核与 Host 单测，**没有重跑真机门禁**。当前 agent 命令分支 **33**、MCP 工具 **65**、`verify_all.sh` 脚本 **117**；`cd daemon && node --test test/*.test.ts` 实跑 **179 PASS / 0 FAIL**。最近一次真机全量结果仍是 2026-10-01 的 **114 PASS / 1 FAIL / 2 SKIP**，不可将本次 Host 通过写成新一轮真机通过。
