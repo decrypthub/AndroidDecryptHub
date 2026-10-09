@@ -14,6 +14,13 @@
 全来自命令参数）；② 不胡乱兜底 / fail-loud（hook 装不上、缓冲溢出、解不动一律显式报错 + 计数上报，
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
+## 2026-10-09 —— v0.3.12 可刷入预发布包已公开
+
+- 公开仓库 `decrypthub/AndroidDecryptHub` 的 `main` 增加 `439bc00`，标签 `v0.3.12` 指向该提交；[GitHub Release](https://github.com/decrypthub/AndroidDecryptHub/releases/tag/v0.3.12) 已创建为 **prerelease**。匿名下载链接返回 200，三个附件均显示 `uploaded`：`adh-bundle-v0.3.12.zip`（20,261,727 B）、对应的 LSPlant 修改后源码归档、`SHA256SUMS`。
+- 从公开源码拉取 LSPlant v6.4 + DexBuilder + parallel-hashmap、Dobby 1.2、可选 QBDI 0.12.1，编译 `libadh_agent.so`（1,036,720 B）、Device Daemon、Manager 与 Zygisk companion；`device :core:test :daemon:assembleDebug :manager:assembleDebug` 成功。公开源码此前 Host 单测 **178 PASS / 0 FAIL / 1 SKIP**。ZIP 解压完整性、必要文件、Manager SHA-256、两个 APK 签名、arm64 ELF 架构、许可证材料均通过主机检查。ZIP SHA-256：`8c09b1ace579b6a4d84bea06523151729f547f12b88eee685cb0a6e351c73695`。
+- **本次没有对任何手机刷入或跑设备门禁。** 这个可安装包是主机验证过的预发布产物；最近一次完整真机门禁仍为 2026-10-01 的 **114 PASS / 1 FAIL / 2 SKIP**，不得把本次构建写成新的真机 PASS。Manager 使用此构建本地 debug 签名，未来不同签名的 APK 不能直接覆盖安装；QBDI 运行时库未随 ZIP 交付。
+- 二进制 ZIP 增加 MIT、LGPL-3.0、GPL-3.0、Apache-2.0 许可文本；Release 附精确修改后的 LSPlant 与子模块源码，公开标签含 ADH 应用源码与构建脚本。此私有开发仓同步打包脚本和许可材料，`build_zygisk.sh` 在 SMB 非可执行位环境用 `bash ./gradlew`。
+
 ## 2026-10-09 —— AndroidDecryptHub 公开源码快照准备
 
 - 用户确认公开到 `decrypthub/AndroidDecryptHub`，沿用 iOS 项目的 MIT，采用**清理后的单次源码快照**，不公开本私有仓库的 377 个历史提交。

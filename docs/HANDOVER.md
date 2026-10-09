@@ -57,9 +57,7 @@ adb -s <serial> shell getprop ro.build.version.sdk   # 记下 API level（见 §
 
 用户会给你**一台能刷模块、有 root 的手机**。于是常规路径全部可用：
 
-> ⚠️ **但有前提**：接管机是 Linux。**2026-10-01 订正：agent `.so` 已经能在本机构建**（cmake 4.2.3 +
-> ninja + NDK r29），**APK / Zygisk 模块仍然不能**（没有 gradle）。**先读 §1.5**——那里有能用的构建命令、
-> 以及"不重打 APK 也能把新 agent 送上设备"的做法（改 agent 源码后**必须**走这一步，否则门禁会拿旧 `.so` 骗你）。
+> ⚠️ **先读 §1.5**：2026-10-09 已补齐 SDK 36 和 Gradle 8.9 wrapper 缓存，公开快照的 Agent、APK 与 Zygisk bundle 均能在本机编译；但新 Release 没有刷入真机。私有 SMB 工作树的 wrapper 没有可执行位，构建脚本改用 `bash ./gradlew`。
 
 - `tools/fetch_qbdi.sh` / `fetch_dobby.sh` / `fetch_lsplant.sh`（一次性第三方拉取，进 `agent/third_party/`）
 - `tools/build_agent.sh` / `build_detect.sh` / `build_zygisk.sh` / `build_bundle.sh`
@@ -126,35 +124,25 @@ adb -s <serial> shell getprop ro.build.version.sdk   # 记下 API level（见 §
 
 ### 1.5 接管机的工具链真相（**2026-09-29 新增；2026-10-01 订正 —— 先读这条**）
 
+> **2026-10-09 最新补记**：Android SDK `/home/r/Android/Sdk` 已安装 platform 36；NDK `/home/r/tools/android-ndk-r29`、Gradle 8.9 wrapper 缓存、CMake/Ninja/Java 21 可用。从公开快照 `/home/r/AndroidDecryptHub-public` 实测 `ANDROID_SDK_ROOT=/home/r/Android/Sdk ANDROID_NDK_HOME=/home/r/tools/android-ndk-r29 bash tools/build_agent.sh`、`bash tools/build_bundle.sh` 均成功，`device :core:test :daemon:assembleDebug :manager:assembleDebug` 成功。**下面标记“缺 gradle / 不可构建 APK”的段落是 2026-10-01 历史事实，不再是当前限制。** 私有 SMB 树的 Gradle wrapper 是 664，使用 `bash ./gradlew`；不要把公开快照的构建通过误记为私有树的一次独立构建通过。新 ZIP 尚未刷入设备。
+
 §1.2 假设"B 组机器上常规路径全部可用"。实测：**接管机是一台 Linux，不是 Windows**，`su`/刷机/装 APK 都能做。
-**构建能力在 2026-10-01 变了：agent `.so` 现在可以在本机构建，APK 仍然不行。**
+**2026-10-09 已从公开快照在本机成功构建 agent `.so`、APK 与 Zygisk bundle。**
 
 - ✅ **能跑**：Host ADH Daemon、`adh` CLI、`tools/verify_*:host` 全部 host 脚本（node 直接跑 `.ts`）。
-- ✅ **agent `.so` 能在本地重建（2026-10-01 实测）**：本机有 `cmake 4.2.3` + `ninja 1.13.2`（PATH 上）与
-  NDK `/home/r/tools/android-ndk-r29`（linux-x86_64 clang/llvm-strip/readelf 齐全）。
-  **但别跑 `tools/build_agent.sh`**（它把 `$NDK`/`$CMAKE`/`$NINJA` 指向 Windows SDK 路径、`STRIP` 写死
-  `windows-x86_64/llvm-strip.exe`，且会跟 Windows 生成的 `agent/build/CMakeCache.txt` 抢目录）。
-  可用的做法是**另开构建目录**：
-  ```bash
-  NDK=/home/r/tools/android-ndk-r29
-  cmake -S agent -B /home/r/adh-build/agent -G Ninja -DCMAKE_MAKE_PROGRAM="$(command -v ninja)" \
-    -DCMAKE_TOOLCHAIN_FILE=$NDK/build/cmake/android.toolchain.cmake \
-    -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-26 -DANDROID_STL=c++_static -DCMAKE_BUILD_TYPE=Release
-  cmake --build /home/r/adh-build/agent     # 然后 llvm-strip --strip-unneeded，再拷回 agent/build/ 与 jniLibs
-  ```
-  **构建目录放本地盘**（共享树上文件没有可执行位，见下面的 CIFS 那条）。
-- ❌ **不能构建 APK / Zygisk 模块**：**没有 `gradle`/AGP**；`/usr/lib/android-sdk` 里只有 `platform-tools`。
-  `sandbox-app/local.properties` 指向 `C:\Users\diiho\AppData\Local\Android\Sdk`——**是 Windows 路径**。
+- ✅ **agent `.so` 能在本地重建**：本机有 CMake/Ninja 与 NDK `/home/r/tools/android-ndk-r29`。
+  `tools/build_agent.sh` 已有 Linux fallback，并会避开 Windows 生成的 CMake cache；在本地盘上的公开快照实测成功。命令：
+  `ANDROID_SDK_ROOT=/home/r/Android/Sdk ANDROID_NDK_HOME=/home/r/tools/android-ndk-r29 bash tools/build_agent.sh`。
+- ✅ **APK / Zygisk bundle 能在本机编译**：`/home/r/Android/Sdk` 有 platform 36，Gradle 8.9 wrapper 已缓存；
+  公开快照的 `device :core:test :daemon:assembleDebug :manager:assembleDebug` 与 `bash tools/build_bundle.sh` 成功。
+  私有 SMB 工作树尚未独立重跑构建，且 wrapper 文件没有可执行位；调用 wrapper 时使用 `bash ./gradlew`。
 - **不重打 APK 也能把新 agent 送上设备（2026-10-01 实测）**：沙盒的 native 库是**解压式安装**，
   `adb push` 新 `.so` → `su -c 'cp … /data/app/*/com.adh.sandbox*/lib/arm64/libadh_agent.so'`
   + `chcon u:object_r:apk_data_file:s0` → `am force-stop` / `am start` 即可（Zygisk 那条路同时换
   `/data/adb/modules/adh/libadh_agent.so`）。**改了 agent 源码就要走这一步**，否则设备上跑的还是旧 `.so`
   而门禁会绿着撒谎（§3.1）。前提是**沙盒夹具本身一行都不改**——那是要重打 APK 的。
-- 结论：`agent/build/` 与 `device/*/build/` 是**共享树上的产物**；`agent/build/CMakeCache.txt` 记的 toolchain
-  仍是 `C:/Users/diiho/AppData/Local/Android/Sdk/ndk/28.2.13676358/…`（Windows 那次构建留下的），
-  用上面的 `-B` 换目录即可绕开。
-- ⚠️ **不要在这台机器上直接跑 `tools/build_agent.sh`**：它会跟 Windows 生成的 CMake cache /
-  `build.ninja` 抢同一个 `agent/build/` 目录（cache 里是 Windows 路径）。要么先清目录，要么换 `BUILD_DIR`。
+- 私有树 `agent/build/` 与 `device/*/build/` 是**共享树上的旧产物**，部分 cache 仍有 Windows 路径。
+  Agent 脚本检测 Windows cache 后另开 Linux 构建目录；SMB I/O 较慢，发布重建优先使用本地盘上的公开快照。
 - 其它实测偏差：
   - `node` 是 **v22.23.2**（本文档/`CLAUDE.md` 写 v24）。strip-only TS 仍可跑（`adh --help` 正常），
     但别依赖 node 24 独有行为。

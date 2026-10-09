@@ -1,4 +1,4 @@
-# ADH 功能状态（发布前梳理，2026-10-01 更新）
+# ADH 功能状态（2026-10-09 发布状态补记；设备验收仍以 2026-10-01 为准）
 
 > 这份文件回答一个问题：**现在到底有什么、什么是验证过的、什么是没验证的、什么还没做完。**
 > 判定只认 `tools/verify_all.sh`（**117 个脚本 = 36 host + 81 device**），不认"看起来能跑"。
@@ -37,10 +37,12 @@
 
 ## 0. 发布物
 
+> **2026-10-09 补记**：公开仓库已发布 [v0.3.12 可刷入预发布包](https://github.com/decrypthub/AndroidDecryptHub/releases/tag/v0.3.12)，包含 Zygisk 模块、Agent、Root Device Daemon 和 Manager；ZIP SHA-256 为 `8c09b1ace579b6a4d84bea06523151729f547f12b88eee685cb0a6e351c73695`。本次只通过构建、ZIP/签名/架构主机检查，**未刷入专用 root 设备，未跑新一轮设备门禁**。下表的旧设备 hash 与设备验收结果仍是 2026-10-01 的历史状态。
+
 | 交付物 | 来源 | 状态 |
 |---|---|---|
 | `libadh_agent.so`（arm64-v8a，release 剥离，**1,036,832 B**，sha `78d9d20f…`） | `tools/build_agent.sh`（**2026-10-01 起也可在本机用 NDK r29 + cmake 构建，见 `HANDOVER §1.5`**） | ✅ 已验收（v01–v79 系列；本轮删除 9 条命令后重建并重新过闸） |
-| 最近一次 Zygisk 模块 zip + ADH Manager APK + 组合包（**v0.3.12**） | `tools/build_zygisk.sh` / `build_bundle.sh` / `flash_device.sh` | ✅ 模块 zip 与 APK 仍是 2026-09-29 那次刷机的产物（`manager.apk` `e0b2a83d…`、`daemon.apk` `87c2df98…`、`zygisk/arm64-v8a.so` `e565bfdc…`，与 HEAD 一致）。**agent 已于 2026-10-01 更新为 `78d9d20f…`（当天第二次重建：WS-C 记账修复需要 agent 多报一个 `drained` 累计量）**（本机 NDK r29 构建），同时写进设备的两条路径：沙盒 `…/lib/arm64/libadh_agent.so`（模拟注入）与 `/data/adb/modules/adh/libadh_agent.so`（Zygisk 注入）——**都不需要重刷模块、也不需要重打 APK**（native 库是解压式安装，见 `HANDOVER §1.5`）。 |
+| 2026-10-01 设备上的旧 Zygisk 模块 zip + ADH Manager APK（**v0.3.12**；与 2026-10-09 新发布包区分） | `tools/build_zygisk.sh` / `build_bundle.sh` / `flash_device.sh` | ✅ 模块 zip 与 APK 是 2026-09-29 那次刷机的产物（`manager.apk` `e0b2a83d…`、`daemon.apk` `87c2df98…`、`zygisk/arm64-v8a.so` `e565bfdc…`）。**agent 已于 2026-10-01 更新为 `78d9d20f…`**（本机 NDK r29 构建），同时写进设备的两条路径：沙盒 `…/lib/arm64/libadh_agent.so`（模拟注入）与 `/data/adb/modules/adh/libadh_agent.so`（Zygisk 注入）。这段记录只描述旧设备状态，不代表新 Release 已刷入。 |
 | 可选后端：Xposed 薄模块 APK | `injector/xposed/` + `tools/build_xposed.sh` | ⚠️ **社区/实验**（2026-10-01 决议）；代码与 v31/v32 验收保留，但**不是官方注入路径** |
 | 可选后端：Frida Gadget | `tools/fetch_frida_gadget.sh` + `load_frida_gadget.sh` | ⚠️ **开发/调试用，移出发布物**（2026-10-01 决议）；官方二进制（未魔改），v30 验收保留 |
 | 可选后端：eCapture | `tools/fetch_ecapture.sh` + `ecapture_capture.sh` | ⚠️ **实验脚本，已移出 `verify_all.sh` 门禁**（2026-10-01 决议）；需内核 eBPF，脚本手动可跑（本次改动后仍 PASS） |
@@ -173,5 +175,5 @@
   模块 X 已退役，AI 使用 adb 操作手机。
 - **产品边界 = `arm64-v8a` only**（2026-10-01 决议）；Web UI 冻结为只读查看器；
   全量 syscall 拦截不做；cdex/041 需真实样本、不进排期。
-- 本轮源码门禁结果见 §2.1。Device `:core:test :daemon:assembleDebug :manager:assembleDebug` 需要 gradle，**本机跑不了**（见 `HANDOVER §1.5`），最后一次成功记录是 2026-09-23。协议 v13 对应的 release bundle 尚未重建/刷入。
+- 2026-10-01 设备门禁结果见 §2.1。2026-10-09 已在本机补齐 Android SDK 36 和 Gradle 8.9 wrapper 缓存，并从公开快照成功运行 Device `:core:test :daemon:assembleDebug :manager:assembleDebug`、重建协议 v13 对应的 v0.3.12 bundle、发布到 GitHub；**这个新 bundle 尚未刷入或验收**（见 `HANDOVER §1.5`）。
 - 已知边界：arm64-v8a only（产品边界）；**单目标最多 16 个并发 hook 槽**（Java/native 各计，超出 fail-loud 并给释放建议，见 `REQUIREMENTS §21.2`）；`-fomit-frame-pointer` 第三方库可能只能解析 1 帧；JNIEnv 表覆盖 228/229（唯一余项 `RegisterNatives` 由入口 inline hook 覆盖）；`FatalError` 事件为 best effort；高频事件可能受 capture ring 限流/丢弃；native_call 超时后目标调用无法取消；dex 重建会增大文件与内存峰值；Agent TCP `8761` 暂无鉴权；Gadget 使用官方二进制且默认关闭；`capture_start` 的**先归零再装**语义意味着它会短暂卸下再装回钩子（这段时间目标的事件不会被捕获）。
