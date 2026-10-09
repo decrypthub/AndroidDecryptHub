@@ -19,7 +19,7 @@
 - 用户确认公开到 `decrypthub/AndroidDecryptHub`，沿用 iOS 项目的 MIT，采用**清理后的单次源码快照**，不公开本私有仓库的 377 个历史提交。
 - 独立导出目录 `/home/r/AndroidDecryptHub-public` 已生成根提交 `8af6c5f`（418 个文件）：加入中英 README、MIT LICENSE、第三方 NOTICE、构建与安全边界文档；排除内部交接/实战文档、构建产物和捕获数据，并将本机用户名及真实目标案例测试数据改成通用/合成内容。私有仓库原有 Git 历史未复制到公开目录。
 - 导出验收：`npm ci` 成功；Host 单测 **178 PASS / 0 FAIL / 1 SKIP**；CLI `--help` 与相关 Bash 语法检查通过；418 个提交文件的凭据/私钥/本机路径扫描 **0 命中**。本次没有运行设备验收，也没有触碰日常手机。
-- **尚未发布**：用户已换短期 fine-grained PAT，令牌能读取 `decrypthub` 的公开资料，但 `gh repo create` 仍报 `taisuii does not have the correct permissions to execute CreateRepository`；REST `POST /orgs/decrypthub/repos` 403 且返回所需权限 `administration=write; repository_creation=write`。读取组织资料不能证明令牌有创建权限，需核对 token 的 Resource owner/Repository creation 权限以及账号的组织成员与仓库创建策略。公开快照已把 `origin` 预设为 `https://github.com/decrypthub/AndroidDecryptHub.git`；待权限恢复后创建、推送并核验公开仓库。
+- **仓库已创建，但源码尚未发布**：用户更新 fine-grained PAT 后，`gh repo create decrypthub/AndroidDecryptHub --public` 成功；仓库当前 `PUBLIC`、`viewerPermission=ADMIN`，但 `size=0`、`defaultBranchRef` 为空。`git push -u origin main` 返回 HTTP 403；REST Contents 写入探针同样返回 `Resource not accessible by personal access token`，响应明确要求 `contents=write`。已请用户在当前 token 中为 `AndroidDecryptHub` 授权 `Contents: Read and write`。权限生效后推送公开快照 `8af6c5f`，再核验仓库只有一个提交、README/MIT/NOTICE 均可公开访问。
 
 ## 2026-10-09 —— 新功能开发前的能力复核（未变更范围）
 
