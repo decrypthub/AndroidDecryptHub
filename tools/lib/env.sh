@@ -130,8 +130,19 @@ if [ -d /data/adb/modules/adh ]; then
   echo "module $(sha256sum /data/adb/modules/adh/libadh_agent.so | cut -c1-16)"
 fi
 EOS
+  # Callers (flash_device.sh) export MSYS_NO_PATHCONV=1 so Git Bash leaves device paths alone; that
+  # also stops it converting this POSIX host path for adb.exe, which then reports "cannot stat".
+  # Convert the host side ourselves and pin the env for the pushes.
   local host_so="/tmp/adh_agent_refresh.sh"
-  "$adb_cmd" -s "$serial" push "$so" /data/local/tmp/libadh_agent.current.so >/dev/null 2>&1
+  local so_host="$so"
+  if command -v cygpath >/dev/null 2>&1; then
+    host_so="$(cygpath -w "$host_so")"
+    so_host="$(cygpath -w "$so")"
+  fi
+  local saved_npc="${MSYS_NO_PATHCONV-}"
+  export MSYS_NO_PATHCONV=1
+  "$adb_cmd" -s "$serial" push "$so_host" /data/local/tmp/libadh_agent.current.so >/dev/null 2>&1
   "$adb_cmd" -s "$serial" push "$host_so" "$script" >/dev/null 2>&1
+  if [ -n "$saved_npc" ]; then export MSYS_NO_PATHCONV="$saved_npc"; else unset MSYS_NO_PATHCONV; fi
   "$adb_cmd" -s "$serial" shell "su -c 'sh $script'" 2>/dev/null | tr -d '\r' | sed 's/^/   agent: /'
 }
