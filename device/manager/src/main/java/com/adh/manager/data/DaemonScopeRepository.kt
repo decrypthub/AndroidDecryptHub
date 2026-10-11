@@ -6,8 +6,6 @@ import com.adh.core.InstalledAppsJson
 import com.adh.core.PackageControl
 import com.adh.core.ScopeConfig
 import com.adh.core.ScopeJson
-import com.adh.core.XposedStatus
-import com.adh.core.XposedStatusJson
 import com.adh.manager.ipc.DaemonBinderProvider
 
 interface DaemonClient {
@@ -20,9 +18,6 @@ interface DaemonClient {
     val modulePresent: Boolean
     val loaderActive: Boolean
     val moduleVersion: String
-    val xposedStatusJson: String
-    fun setXposedEnabled(enabled: Boolean): Boolean
-    fun setXposedScope(packages: List<String>): Boolean
 }
 
 class DaemonScopeRepository(
@@ -36,42 +31,6 @@ class DaemonScopeRepository(
     override fun save(config: ScopeConfig): Result<Unit> = runCatching {
         val client = requireClient()
         check(client.setScopeJson(ScopeJson.encode(config))) { "daemon rejected scope update" }
-        // Keep the optional Xposed backend in step with the ADH allowlist: the Manager stays the
-        // single place that decides which apps are in scope. Failure here is reported (the file
-        // write already happened) so the UI does not silently claim success.
-        val xposed = xposedStatusOf(client)
-        if (xposed?.enabled == true) {
-            check(client.setXposedScope(config.packages.sorted())) { "xposed scope sync failed" }
-        }
-    }
-
-    override fun xposedStatus(): XposedStatus? =
-        clientProvider(CONNECT_TIMEOUT_MS)?.let { xposedStatusOf(it) }
-
-    override fun setXposedEnabled(enabled: Boolean): Result<Unit> = runCatching {
-        val client = requireClient()
-        check(client.protocolVersion >= AdhProtocol.MIN_XPOSED_VERSION) {
-            "daemon protocol ${client.protocolVersion} has no Xposed backend surface"
-        }
-        check(client.setXposedEnabled(enabled)) { "framework rejected the module state change" }
-        if (enabled) {
-            check(client.setXposedScope(load().packages.sorted())) { "xposed scope sync failed" }
-        }
-    }
-
-    override fun setXposedScope(packages: List<String>): Result<Unit> = runCatching {
-        val client = requireClient()
-        check(client.protocolVersion >= AdhProtocol.MIN_XPOSED_VERSION) {
-            "daemon protocol ${client.protocolVersion} has no Xposed backend surface"
-        }
-        check(client.setXposedScope(packages.map { it.trim() }.filter { it.isNotEmpty() })) {
-            "framework rejected the scope update"
-        }
-    }
-
-    private fun xposedStatusOf(client: DaemonClient): XposedStatus? {
-        if (client.protocolVersion < AdhProtocol.MIN_XPOSED_VERSION) return null
-        return runCatching { XposedStatusJson.decode(client.xposedStatusJson) }.getOrNull()
     }
 
     override fun listApplications(): List<InstalledApp> {

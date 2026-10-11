@@ -2,8 +2,8 @@
 // tool `backends`, so an AI client and the browser console see exactly the same truth.
 //
 // The Host ADH Daemon has no adb: for Frida Gadget it reports what is cached on this machine plus
-// the loader command; the device-side backends (Zygisk scope, optional Xposed module) are driven
-// through ADH Manager → Device Daemon and are reported here as pointers, not as actions.
+// the loader command; the device-side backend (Zygisk scope) is driven through ADH Manager →
+// Device Daemon and is reported here as a pointer, not as an action.
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -49,20 +49,14 @@ export function backendMatrix() {
       online: s.online,
       entry: s.entry,
       // Coarse host-side label; classifySession() below resolves one session precisely from the
-      // agent's own module list (the agent .so path tells Zygisk / Xposed module / self-load apart).
-      entryKind: s.entry === 'start' ? 'injected (adh_agent_start)' : 'jni_onload (self-load / gadget / xposed)',
+      // agent's own module list (the agent .so path tells Zygisk / gadget / self-load apart).
+      entryKind: s.entry === 'start' ? 'injected (adh_agent_start)' : 'jni_onload (self-load / gadget)',
     })),
     gadget: {
       pinned,
       cached,
       loader: 'tools/load_frida_gadget.sh',
       note: 'optional high-footprint backend: the host tool stages it into <pkg>/code_cache and triggers load_so (MCP: load_library); the daemon itself has no adb.',
-    },
-    xposed: {
-      module: 'com.adh.xposed',
-      source: 'injector/xposed',
-      control: 'device-side: ADH Manager (Scope screen) -> Device Daemon, AIDL v5',
-      verify: ['tools/verify_v31_xposed.sh', 'tools/verify_v32_backend_control.sh'],
     },
     zygisk: {
       module: 'injector/zygisk',
@@ -84,7 +78,6 @@ export async function classifySession(session: string) {
   const paths = mods.map((m: any) => String(m?.path ?? m?.name ?? ''));
   const backends: string[] = ['adhd_agent'];
   if (paths.some((p) => p.includes('/data/adb/modules/adh/'))) backends.push('zygisk');
-  if (paths.some((p) => p.includes('com.adh.xposed'))) backends.push('xposed_module');
   if (paths.some((p) => /libgadget\.so|frida/i.test(p))) backends.push('frida_gadget');
   if (paths.some((p) => /\/lib\/arm64\/libadh_agent\.so$/.test(p))) backends.push('self_load');
   return { session, moduleCount: mods.length, backends };

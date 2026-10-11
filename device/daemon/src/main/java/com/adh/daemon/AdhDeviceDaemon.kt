@@ -7,7 +7,6 @@ import android.os.Process
 import android.util.Log
 import com.adh.core.AdhPaths
 import java.io.File
-import kotlin.system.exitProcess
 
 object AdhDeviceDaemon {
     private const val TAG = "AdhDeviceDaemon"
@@ -15,15 +14,8 @@ object AdhDeviceDaemon {
 
     @JvmStatic
     fun main(args: Array<String>) {
-        // Root-only one-shot CLI for the optional Xposed backend: it runs exactly the code paths
-        // the AIDL surface calls, so operators and tools/verify_v32_backend_control.sh can drive
-        // and inspect it without the Manager UI (and without a reboot).
-        when (args.firstOrNull()) {
-            "--xposed-status" -> { requireRoot(); println(XposedBackend.statusJson()); return }
-            "--xposed-enable" -> { requireRoot(); exitProcess(if (XposedBackend.setEnabled(true)) 0 else 1) }
-            "--xposed-disable" -> { requireRoot(); exitProcess(if (XposedBackend.setEnabled(false)) 0 else 1) }
-            "--xposed-scope" -> { requireRoot(); exitProcess(if (XposedBackend.setScope(args.drop(1))) 0 else 1) }
-        }
+        // app_process invokes main([Ljava/lang/String;)V, so the parameter stays even though the
+        // daemon takes no arguments.
         Thread.setDefaultUncaughtExceptionHandler { _, error ->
             Log.e(TAG, "fatal daemon error", error)
             runCatching { File(com.adh.core.AdhPaths.DAEMON_READY_MARKER).delete() }
@@ -55,10 +47,6 @@ object AdhDeviceDaemon {
         handler.post(publisher)
         Log.i(TAG, "ADH Device Daemon ready pid=${Process.myPid()}")
         Looper.loop()
-    }
-
-    private fun requireRoot() {
-        check(Process.myUid() == Process.ROOT_UID) { "ADH Device Daemon CLI must run as root" }
     }
 
     private fun findManagerPid(): Int = File("/proc").listFiles()

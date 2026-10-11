@@ -71,21 +71,6 @@ internal class RootScopeBinder(
         return AppProcessControl.run(context, packageName, action)
     }
 
-    override fun getXposedStatus(): String {
-        verifier.enforce()
-        return XposedBackend.statusJson()
-    }
-
-    override fun setXposedEnabled(enabled: Boolean): Boolean {
-        verifier.enforce()
-        return XposedBackend.setEnabled(enabled)
-    }
-
-    override fun setXposedScope(packages: MutableList<String>?): Boolean {
-        verifier.enforce()
-        return XposedBackend.setScope(packages ?: emptyList())
-    }
-
     private fun atomicWrite(target: File, content: String) {
         target.parentFile?.mkdirs()
         val temp = File(target.parentFile, ".${target.name}.${android.os.Process.myPid()}.tmp")

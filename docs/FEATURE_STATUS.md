@@ -1,7 +1,7 @@
-# ADH 功能状态（2026-10-09 发布状态补记；设备验收仍以 2026-10-01 为准）
+# ADH 功能状态（2026-10-11 范围变更：可选注入后端收窄；设备验收仍以 2026-10-01 为准）
 
 > 这份文件回答一个问题：**现在到底有什么、什么是验证过的、什么是没验证的、什么还没做完。**
-> 判定只认 `tools/verify_all.sh`（**117 个脚本 = 36 host + 81 device**），不认"看起来能跑"。
+> 判定只认 `tools/verify_all.sh`（**115 个脚本 = 36 host + 79 device**），不认"看起来能跑"。
 > 规格见 `REQUIREMENTS.md`，架构与排期见 `DEVELOPMENT_PLAN.md`，跨会话进度见 `PROGRESS.md`。
 >
 > ### ✅ 2026-10-01 本轮：范围收口 + 沙盒耦合清零
@@ -43,7 +43,6 @@
 |---|---|---|
 | `libadh_agent.so`（arm64-v8a，release 剥离，**1,036,832 B**，sha `78d9d20f…`） | `tools/build_agent.sh`（**2026-10-01 起也可在本机用 NDK r29 + cmake 构建，见 `HANDOVER §1.5`**） | ✅ 已验收（v01–v79 系列；本轮删除 9 条命令后重建并重新过闸） |
 | 2026-10-01 设备上的旧 Zygisk 模块 zip + ADH Manager APK（**v0.3.12**；与 2026-10-09 新发布包区分） | `tools/build_zygisk.sh` / `build_bundle.sh` / `flash_device.sh` | ✅ 模块 zip 与 APK 是 2026-09-29 那次刷机的产物（`manager.apk` `e0b2a83d…`、`daemon.apk` `87c2df98…`、`zygisk/arm64-v8a.so` `e565bfdc…`）。**agent 已于 2026-10-01 更新为 `78d9d20f…`**（本机 NDK r29 构建），同时写进设备的两条路径：沙盒 `…/lib/arm64/libadh_agent.so`（模拟注入）与 `/data/adb/modules/adh/libadh_agent.so`（Zygisk 注入）。这段记录只描述旧设备状态，不代表新 Release 已刷入。 |
-| 可选后端：Xposed 薄模块 APK | `injector/xposed/` + `tools/build_xposed.sh` | ⚠️ **社区/实验**（2026-10-01 决议）；代码与 v31/v32 验收保留，但**不是官方注入路径** |
 | 可选后端：Frida Gadget | `tools/fetch_frida_gadget.sh` + `load_frida_gadget.sh` | ⚠️ **开发/调试用，移出发布物**（2026-10-01 决议）；官方二进制（未魔改），v30 验收保留 |
 | 可选后端：eCapture | `tools/fetch_ecapture.sh` + `ecapture_capture.sh` | ⚠️ **实验脚本，已移出 `verify_all.sh` 门禁**（2026-10-01 决议）；需内核 eBPF，脚本手动可跑（本次改动后仍 PASS） |
 | 开发用（不随发布物交付） | `sandbox-app/`、`sandbox-native/`、`tools/`、`docs/`、`daemon/` | — |
@@ -54,9 +53,9 @@
 |---|---|---|---|
 | **Agent**（目标进程内） | `agent/` → `libadh_agent.so` | **33 个命令分支**（2026-10-01 删掉 9 条一次性触发命令后）：GOT/inline/addr/sites/vtable hook、Java(LSPlant) hook（单方法 + `hookAll` 批量 + 参数改写/返回值替换/skip/调用链）、JNI_OnLoad（含加载时 watch）/RegisterNatives/**JNIEnv 228/229 槽**、持续捕获 `capture_start/stop/drain`、函数与 QBDI trace、dex/so/内存 dump、maps/内存读写搜、ART 结构枚举、活体对象自省、主动触发、`load_so`、`native_call`（整数+浮点）、`native_backtrace`、`syscall_watch`、轻量 RPC —— **只采集/执行，不做分析** | C/C++，产物 1.0 MB |
 | **Host ADH Daemon**（主机） | `daemon/` | **65 个 MCP 工具 + 84 条 HTTP 路由**（2026-10-01 计数，`grep -c` 可复算）：dex 解析/索引(SQLite)/搜索/xref、Capstone 反汇编与 syscall 归因/参数解码、trace 摘要、syscall 摘要、脱壳编排与重建、工件存储、Web UI、MCP server | TypeScript（含 20 个单测文件、**178 条用例**（2026-10-01 实测 `node --test test/*.test.ts` = 178 pass / 0 fail）） |
-| **Device**（手机侧） | `device/` | AIDL 作用域读写、模块状态、目标进程启停、可选后端开关 —— **不做分析** | Kotlin |
-| **注入器** | `injector/zygisk`、`injector/xposed` | 把 `.so` 送进目标进程（Zygisk 走 **memfd**，目标 maps 不出现模块路径）+ 传真实包名 | C++/Java |
-| **可选后端** | `tools/`（Gadget/eCapture） | 另一种进入/观测方式；**均为实验/调试用，不进发布物**（2026-10-01） | 脚本/薄 APK |
+| **Device**（手机侧） | `device/` | AIDL 作用域读写、模块状态、目标进程启停 —— **不做分析** | Kotlin |
+| **注入器** | `injector/zygisk` | 把 `.so` 送进目标进程（Zygisk 走 **memfd**，目标 maps 不出现模块路径）+ 传真实包名 | C++/Java |
+| **可选后端** | `tools/`（Gadget/eCapture） | 另一种进入/观测方式；**均为实验/调试用，不进发布物**（2026-10-01） | 脚本 |
 
 ## 1. 测过的功能（按 verify_all 的脚本分组）
 
@@ -81,7 +80,7 @@
 | 一键 dump 所有 DEX | v15, v17, **v15(逐 dex 分类 carrier/real + 同 pass 建索引)** | ART DexFile 枚举 → 逐 dex dump → SHA-256 去重 → 下载（REST+MCP）；**每个 dex 带 `classes`/`methods`/`carrier` 判定**（诱饵壳 vs 真代码），并复用 `ensureDexIndex` 在同一次 pass 建索引 |
 | 进程内 dlopen | v18 | 目标进程内加载任意 `.so` 并解析符号 |
 | 设备侧后端（Zygisk/Manager） | v27_zygisk, v32_backend_control, **v75(memfd)**, **v98(注入路径的 Java 面)** | scope 往返；后端状态/作用域可控并恢复；**agent 从 memfd 加载**（目标 maps 无模块路径，目标内自证 + ELF 头） |
-| 可选后端 | v30, v31（v34 已移出闸门） | 官方二进制 + sha256 固定；Xposed Java bridge；eCapture 抓明文。三者均为**实验/调试用**，只有 Zygisk 是官方路径（2026-10-01） |
+| 可选后端 | v30（v34 已移出闸门） | 官方二进制 + sha256 固定；eCapture 抓明文。均为**实验/调试用**，只有 Zygisk 是官方路径（2026-10-01） |
 | 控制面 / MCP / Web | v10_mcp, v10_webui, v10_export, v10_events, v19_settings, v33_backends, v35_sessions, **v71(registry)**, **v80(trace digest)**, **v83(java trace)**, **v84(native batch)**, **v85(一站式 syscall)**, **v86(throttle)**, **v87(MCP 可操作性)** | MCP 67 个工具可调；注册表形状自检；Web UI；会话清理 |
 | **`adh` 命令行** | **v100** | `doctor`（daemon 健康 + **刷入的 agent 版本 vs 本仓源码版本**配对 + 后端矩阵）· `target`（解析**唯一** agent——歧义时报错而不是静默换进程——并报活体事实）· `unpack`（一键 `dump_all_dex` + 逐 dex 分类 + `--out` 落盘）；纯客户端（只 import `config.ts`，可打远程 daemon）。**每个 flag 都由效果证**：`--port`/`--host` 由错误里的 base URL、`--timeout` 由"2 秒预算真的在 ~2s 内结束"、`--json` 由输出形状、`--package`/`--session` 由它拒绝解析的目标、`--out`/`--include-carriers` 由落盘文件数。它是"找在线 agent 取 session"这段逻辑的**唯一实现**（此前 76 个 verify 脚本各抄一份）。**`target`/`unpack` 的真机端到端已于 2026-09-29（二）验证**：`v100` 真机 **22 checks / 0 problems**，含 `target` 报出唯一 agent + 活体事实、`unpack` 逐 dex 分类、`--out` 每个真 dex 落盘且字节数与报告一致。（页首 2026-09-28 那条"尚未验证"已作废。） |
 | 手机自动化（模块 X） | 已退役，不纳入验收范围 | AI Agent 直接使用 adb 操作手机；ADH 不再提供 AccessibilityService、通知读取、phone_* MCP 工具或设备输入控制桥 |
@@ -130,7 +129,7 @@
   EACCES，`memory_read`/`memory_search`/`memory_dump`/`scan_magic`/`art_dexfiles` 一起失效 —— 现在
   由 `bootstrap/mem_read.c` 的**边界检查直读**兜底（SIGSEGV/SIGBUS 短守卫），fd 按命令释放，
   每回复点名实际路线；②agent 由 memfd 加载时 `dlopen("libart.so")` 被 linker namespace 拒绝，
-  拿不到 JavaVM —— 现在从已加载的 libart.so **按内存镜像查 `JNI_GetCreatedJavaVMs`**，Gadget/Xposed
+  拿不到 JavaVM —— 现在从已加载的 libart.so **按内存镜像查 `JNI_GetCreatedJavaVMs`**，Gadget
   后端同样受益。真机复验：学习通无需任何绕法即可 `memory_search` / `art_dexfiles`（14 个 DexFile）/
   一键 `dump_all_dex`，且 13 个真 dex 与手工提取结果 sha256 逐字节相同。验收脚本
   `tools/verify_v97_memread_direct.sh` 已入门禁。详见 `PROGRESS.md` 2026-09-26（续）节。
@@ -171,7 +170,7 @@
 ## 3. 发布结论
 
 - 当前代码范围为 `libadh_agent.so` + Zygisk/Manager；**官方注入路径只有 Zygisk**（CI 走模拟注入），
-  Gadget/Xposed/eCapture 三个后端降级为开发调试/社区实验（2026-10-01 决议，见 `DEVELOPMENT_PLAN §6.10`）；
+  Gadget/eCapture 两个后端降级为开发调试/实验（2026-10-01 决议，见 `DEVELOPMENT_PLAN §6.10`）；
   模块 X 已退役，AI 使用 adb 操作手机。
 - **产品边界 = `arm64-v8a` only**（2026-10-01 决议）；Web UI 冻结为只读查看器；
   全量 syscall 拦截不做；cdex/041 需真实样本、不进排期。

@@ -11,7 +11,7 @@
 #   - MUST_BE_ABSENT: our own identity strings. They have no external contract (nothing in the repo
 #     parses logcat, and no host code matches these texts), so they must not appear at all.
 #   - BUDGETED: strings we cannot remove yet without a coordinated change (exported symbol names the
-#     Zygisk/Xposed loaders resolve, the Java bridge class inside the generated dex, vendored
+#     Zygisk loader resolves, the Java bridge class inside the generated dex, vendored
 #     third-party code). Each one carries the current count as a ceiling: the number may only go
 #     down. Stage 2 fixes are named next to them.
 #
@@ -62,7 +62,7 @@ const MUST_BE_ABSENT = [
 //   libQBDI.so     -> stage the tracer under a neutral file name (fetch + dlopen + docs)
 //   libzygisk.so   -> the injection-backend probe reads the real module name
 const BUDGETED = [
-  { token: 'adh_agent_start', budget: 1, why: 'export name resolved by the Zygisk/Xposed loaders (stage 2: rename it and drop this to 0)' },
+  { token: 'adh_agent_start', budget: 1, why: 'export name resolved by the Zygisk loader (stage 2: rename it and drop this to 0)' },
   { token: 'adh_agent_set_package', budget: 1, why: 'same loader contract (stage 2: rename it and drop this to 0)' },
   { token: 'com.adh.agent', budget: 1, why: 'Java bridge class inside the embedded dex (stage 2: rename it and drop this to 0)' },
   { token: 'AdhJavaHookBridge', budget: 10, why: 'the class name in the dex type descriptor + 9 bridge diagnostics; stage 2 renames them together' },

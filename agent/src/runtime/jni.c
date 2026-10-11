@@ -31,7 +31,7 @@ JavaVM *adh_jni_get_vm(void) {
 // them passed in the sandbox (which gets its VM from JNI_OnLoad).
 //
 // Reading the symbol straight out of the loaded image sidesteps the namespace question and works
-// for the gadget and Xposed backends too. dlopen stays as a last resort.
+// for the gadget and self-load paths too. dlopen stays as a last resort.
 static void *libart_jni_get_created_vms(void) {
     void *f = adh_resolve_sym("libart.so", "JNI_GetCreatedJavaVMs");
     if (f) return f;

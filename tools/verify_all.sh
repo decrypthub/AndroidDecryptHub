@@ -174,12 +174,6 @@ SCRIPTS=(
   # Optional Frida Gadget backend (module W): official gadget → dlopen → bundled Java hook.
   # SKIPs (exit 0) when the gadget asset / bundler deps are absent — both are gitignored caches.
   "verify_v30_fridagadget.sh:device"
-  # Optional LSPosed/Xposed backend (module W): framework → thin module → agent. Restores the
-  # pre-test scope/module state; SKIPs when no framework CLI or the module cannot be built.
-  "verify_v31_xposed.sh:device"
-  # Optional backend CONTROL path (module W): Device Daemon drives the framework scope/module
-  # state; restores the pre-test state. SKIPs when there is no framework/module.
-  "verify_v32_backend_control.sh:device"
   # Optional eCapture backend (module W): eBPF TLS plaintext capture. Needs root + eBPF kernel;
   # SKIPs with an explicit reason when the kernel cannot load eBPF programs.
   # verify_v34_ecapture.sh:device — REMOVED from the gate on 2026-10-01. eCapture was downgraded to
@@ -215,11 +209,11 @@ for entry in "${SCRIPTS[@]}"; do
   fi
   if bash "tools/$name" >/tmp/vr.log 2>&1; then
     # A capability script whose precondition is missing exits 0 WITHOUT the RESULT:PASS sentinel: it
-    # prints either a top-level "SKIP ..." line (verify_v75) or "RESULT:SKIP" (verify_v30/31/32/34).
+    # prints either a top-level "SKIP ..." line (verify_v75) or "RESULT:SKIP" (verify_v30/34).
     # Counting those as passes would report an acceptance that never ran; counting RESULT:SKIP as a
     # failure (the old behaviour) was equally wrong. Both are counted - and printed - as skips.
     # A skip must be the script's FINAL result: the last non-empty line starts with SKIP (v75 style)
-    # or the script ends with the RESULT:SKIP sentinel (v30/31/32/34 style). Matching any line in the
+    # or the script ends with the RESULT:SKIP sentinel (v30/34 style). Matching any line in the
     # log would turn a script that merely mentions an internal skip into a skip itself.
     last_line="$(grep -v '^[[:space:]]*$' /tmp/vr.log | tail -1)"
     if [[ "$last_line" == SKIP* ]] || grep -q '^RESULT:SKIP' /tmp/vr.log; then

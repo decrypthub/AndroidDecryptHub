@@ -5,7 +5,7 @@ Generated from the live ADH Daemon registry (65 tools). Endpoint: `POST /mcp` (J
 | Tool | Description | Args |
 |---|---|---|
 | `process_list` | List connected target agent sessions | — |
-| `backends` | Injection-backend matrix: sessions by entry, host-side Frida Gadget cache + loader command, device-side backend pointers. Pass session to classify which injection paths are really loaded in that process (zygisk / xposed_module / frida_gadget / self_load). | session |
+| `backends` | Injection-backend matrix: sessions by entry, host-side Frida Gadget cache + loader command, device-side backend pointers. Pass session to classify which injection paths are really loaded in that process (zygisk / frida_gadget / self_load). | session |
 | `dumps_list` | List captured dump artifacts (dex/so/region) | — |
 | `compat_probe` | Self-assess agent env + injection footprint: tracer/seccomp/backends/exec/anon/rwx | session |
 | `jni_onload` | List, hook, unhook, inspect or manually invoke JNI_OnLoad. hook/call work on an already-loaded module; watch arms a one-shot LOAD-TIME interception: the agent hooks the dlopen entry point and patches the JNI_OnLoad of that module as soon as it is mapped, before the VM calls it (skipOriginal+returnValue can then replace that load-time call). call is dangerous and requires confirm:true. Events are emitted as JNI_ONLOAD with phase=manual\|load. | session, action, module, confirm, skipOriginal, returnValue |

@@ -3,7 +3,6 @@ package com.adh.manager.data
 import com.adh.core.InstalledApp
 import com.adh.core.PackageControl
 import com.adh.core.ScopeConfig
-import com.adh.core.XposedStatus
 
 data class ModuleStatus(
     val daemonAvailable: Boolean? = null,
@@ -28,19 +27,4 @@ interface ScopeRepository {
         PackageControl.RESULT_FAILED
     fun isModulePresent(): Boolean
     fun moduleStatus(): ModuleStatus = ModuleStatus(installed = isModulePresent())
-
-    /**
-     * Optional Xposed/LSPosed backend (module W). null when the daemon is unavailable or older
-     * than protocol v5 — the UI then simply hides the backend card.
-     */
-    fun xposedStatus(): XposedStatus? = null
-
-    /** Enable/disable the framework module; enabling also mirrors the current ADH allowlist. */
-    fun setXposedEnabled(enabled: Boolean): Result<Unit> =
-        Result.failure(UnsupportedOperationException("xposed backend unsupported"))
-
-    /** Mirror an explicit package list into the framework scope. */
-    fun setXposedScope(packages: List<String>): Result<Unit> =
-        Result.failure(UnsupportedOperationException("xposed backend unsupported"))
-
 }

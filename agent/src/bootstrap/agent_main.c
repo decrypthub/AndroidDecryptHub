@@ -744,7 +744,7 @@ void adh_agent_set_package(const char *pkg) {
     }
 }
 
-// More than one backend can load this .so into one process (Zygisk + self-load + Xposed).
+// More than one backend can load this .so into one process (Zygisk + self-load + Frida Gadget).
 // Each copy has its own pthread_once; only the first copy in link-map order may bootstrap.
 struct AgentCopyCtx {
     unsigned char own_id[64];   // GNU build ID: identifies "another copy of this exact file"

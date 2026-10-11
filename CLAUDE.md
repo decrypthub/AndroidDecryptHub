@@ -30,7 +30,7 @@ There is one plan. If something contradicts these docs, fix the docs in the same
 | **ADH Manager** | 手机侧 Compose UI（`device/:manager`）；注入作用域与目标进程启停 |
 | **ADH Sandbox** / `com.adh.sandbox` | 模拟注入与确定性验收宿主；不是产品目标包 |
 | **IDH** | iOS 参考项目（IOSDecryptHub / ios-decrypt-helper），仅作对照 |
-| `libadh_agent.so` | 本产品 agent `.so`（唯一交付名，随 Zygisk 模块与沙盒打包；Xposed 薄模块只作社区/实验） |
+| `libadh_agent.so` | 本产品 agent `.so`（唯一交付名，随 Zygisk 模块与沙盒打包） |
 - 新代码/新文案使用 `ADH` / `Host ADH Daemon` / `adhd` / `adh_*`。不保留 IDH 名称兼容层：不再产出或接受 `libidh_agent.so`，不导出 `idh_agent_start`，不读取 `IDH_*` 环境变量，不兼容 `idhd-data/` 或 `libidhdetect.so`；IDH 仅指 iOS 参考项目。`com.idh.probe` / `IDH_PROBE_OK` 是 hash 绑定的固定 probe dex 例外。
 
 ## Architecture red line (do not cross)
@@ -56,7 +56,7 @@ Loop: **Explore → Plan → Implement → Verify**, then iterate on the result.
 
 ## Scope priority (current)
 
-Build **`libadh_agent.so` functionality** and self-test via 模拟注入 (sandbox `dlopen`). **Module W**: Zygisk (`injector/zygisk`) + device multi-module (`device/` Compose Manager + root Device Daemon). Module X (Android UI automation) is retired and removed: do not restore the Manager AccessibilityService, notification reader, phone_* MCP tools, or device input/power/volume/clipboard bridge. When an AI agent needs to interact with the attached phone, use `adb` directly. Keep the Device surface limited to injection scope, module status, and target app process control. Frida Gadget remains a dev/debug backend (out of the release artifact, 2026-10-01; off by default) (`tools/load_frida_gadget.sh`, verified by `tools/verify_v30_fridagadget.sh`; Frida 17+ hooks using `Java.perform()` must be bundled with `tools/compile_frida_script.sh`). A community/experimental LSPosed/Xposed thin module is also available (Zygisk is the only official path, 2026-10-01) (`injector/xposed/`, built by `tools/build_xposed.sh`, verified by `tools/verify_v31_xposed.sh`) — it only loads the agent, never analysis code. Do not block feature verification on real injection — CI stays on 模拟注入.
+Build **`libadh_agent.so` functionality** and self-test via 模拟注入 (sandbox `dlopen`). **Module W**: Zygisk (`injector/zygisk`) + device multi-module (`device/` Compose Manager + root Device Daemon). Module X (Android UI automation) is retired and removed: do not restore the Manager AccessibilityService, notification reader, phone_* MCP tools, or device input/power/volume/clipboard bridge. When an AI agent needs to interact with the attached phone, use `adb` directly. Keep the Device surface limited to injection scope, module status, and target app process control. Frida Gadget remains a dev/debug backend (out of the release artifact, 2026-10-01; off by default) (`tools/load_frida_gadget.sh`, verified by `tools/verify_v30_fridagadget.sh`; Frida 17+ hooks using `Java.perform()` must be bundled with `tools/compile_frida_script.sh`). Do not block feature verification on real injection — CI stays on 模拟注入.
 
 ## Verification (give yourself a real signal)
 
@@ -111,7 +111,7 @@ Each layer has a `MAP.md` — read it before editing that layer:
 - `tools/MAP.md` — `tools/lib/verify_common.sh` + `tools/lib/env.sh`. **Add a verify script = source the lib + one node heredoc**.
 - `daemon/src/MAP.md` — Host ADH Daemon: `state.ts` ← `service.ts` ← `mcp.ts` / `index.ts`.
 - `device/MAP.md` — device multi-module: `:core` (scope contract) + `:daemon` (AIDL) + `:manager` (Compose).
-- `injector/` — Zygisk Magisk zip (`injector/zygisk/`); community/experimental LSPosed/Xposed thin loader (`injector/xposed/`).
+- `injector/` — Zygisk Magisk zip (`injector/zygisk/`).
 - `agent/src/MAP.md` — Agent source ownership and Phase 3 extraction rules; read it before moving capabilities out of bootstrap.
 
 
@@ -120,7 +120,7 @@ Each layer has a `MAP.md` — read it before editing that layer:
 
 - **The handover machine gets a rooted, flashable phone from the user.** With it the normal path is open:
   `tools/flash_device.sh` (KernelSU/Magisk), `install_apk_root` (`su` + `pm install`), and the full
-  `tools/verify_all.sh` (117 = 36 host + 81 device). **Record the device facts** (model / API level / ABI /
+  `tools/verify_all.sh` (115 = 36 host + 79 device). **Record the device facts** (model / API level / ABI /
   root method / serial) in `docs/HANDOVER.md` §1.3 — the ART structure resolver is validated on **SDK 35
   (primary) / 36 (secondary)**, so a different API level means "extend the resolver" is your first task,
   not "the tool is broken".

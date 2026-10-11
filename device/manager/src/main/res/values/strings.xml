@@ -56,13 +56,4 @@
     <string name="app_no_launcher">已终止 %1$s，但没有可启动的界面</string>
     <string name="app_control_denied">不允许终止或重启该应用</string>
     <string name="app_control_failed">无法操作 %1$s</string>
-    <string name="xposed_backend_title">Xposed 后端（可选）</string>
-    <string name="xposed_framework_absent">未检测到 Xposed/LSPosed 框架</string>
-    <string name="xposed_module_absent">框架已就绪；尚未安装 ADH Xposed 模块</string>
-    <string name="xposed_enabled_summary">已启用 · 作用域 %1$d 个应用</string>
-    <string name="xposed_disabled_summary">已安装，未启用</string>
-    <string name="xposed_state_saved">Xposed 后端状态已更新</string>
-    <string name="xposed_state_failed">Xposed 后端操作失败</string>
-    <string name="xposed_sync_scope">把当前选择同步到 Xposed</string>
-    <string name="xposed_scope_synced">已同步作用域到 Xposed</string>
 </resources>

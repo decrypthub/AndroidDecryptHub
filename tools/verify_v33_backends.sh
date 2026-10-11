@@ -34,7 +34,6 @@ if (matrix) {
   chk('agents[] present', Array.isArray(matrix.agents), `n=${(matrix.agents || []).length}`);
   chk('gadget.pinned is an array', Array.isArray(matrix.gadget?.pinned), JSON.stringify(matrix.gadget?.pinned));
   chk('gadget.cached is an array', Array.isArray(matrix.gadget?.cached));
-  chk('xposed module is com.adh.xposed', matrix.xposed?.module === 'com.adh.xposed', matrix.xposed?.module);
   chk('zygisk module advertised', typeof matrix.zygisk?.module === 'string' && matrix.zygisk.module.length > 0, matrix.zygisk?.module);
 
   // The cache list must reflect the filesystem, not a guess.

@@ -56,13 +56,4 @@
     <string name="app_no_launcher">Stopped %1$s, but it has no launchable activity</string>
     <string name="app_control_denied">This app cannot be stopped or restarted</string>
     <string name="app_control_failed">Unable to control %1$s</string>
-    <string name="xposed_backend_title">Xposed backend (optional)</string>
-    <string name="xposed_framework_absent">No Xposed/LSPosed framework detected</string>
-    <string name="xposed_module_absent">Framework ready; ADH Xposed module is not installed</string>
-    <string name="xposed_enabled_summary">Enabled · %1$d app(s) scoped</string>
-    <string name="xposed_disabled_summary">Installed, disabled</string>
-    <string name="xposed_state_saved">Xposed backend updated</string>
-    <string name="xposed_state_failed">Xposed backend operation failed</string>
-    <string name="xposed_sync_scope">Sync current selection to Xposed</string>
-    <string name="xposed_scope_synced">Scope synced to Xposed</string>
 </resources>

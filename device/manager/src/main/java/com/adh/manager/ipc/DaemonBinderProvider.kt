@@ -75,11 +75,6 @@ class DaemonBinderProvider : ContentProvider() {
                 override val modulePresent: Boolean get() = service.isModulePresent
                 override val loaderActive: Boolean get() = service.isLoaderActive
                 override val moduleVersion: String get() = service.moduleVersion.orEmpty()
-                override val xposedStatusJson: String get() = service.xposedStatus.orEmpty()
-                override fun setXposedEnabled(enabled: Boolean): Boolean =
-                    service.setXposedEnabled(enabled)
-                override fun setXposedScope(packages: List<String>): Boolean =
-                    service.setXposedScope(packages)
             }
             runCatching {
                 binder.linkToDeath({

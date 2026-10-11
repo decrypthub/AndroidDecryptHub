@@ -102,7 +102,7 @@ native 函数在 libxxx.so 的哪个偏移？
 - 不是「万能脱壳器」
 - 不是全进程无差别 instruction trace 工具
 - 不是把重分析引擎塞进目标 App 的单体 so
-- **不做 Frida/Xposed 的功能表对齐（2026-10-01）**：能力按**分析问题**组织——native 算法还原 / Java 状态与风控 / TLS 与协议 / 加固脱壳，每类给一条端到端可验收路径；"Frida 有而我们没有"本身不构成需求
+- **不做 Frida 的功能表对齐（2026-10-01）**：能力按**分析问题**组织——native 算法还原 / Java 状态与风控 / TLS 与协议 / 加固脱壳，每类给一条端到端可验收路径；"Frida 有而我们没有"本身不构成需求
 
 ---
 
@@ -148,7 +148,7 @@ ADH (Android DecryptHub)
 ├── T. Runtime Object Inspector（活体对象自省）
 ├── U. 非标准运行时识别与扩展点（Flutter / Unity / RN）
 ├── V. 反分析行为观测（调试 / root / 签名 / 模拟器 / 完整性检测）
-└── W. 注入后端（Zygisk + Gadget 直载 + Xposed 桥接 + 模拟注入）
+└── W. 注入后端（Zygisk + Gadget 直载 + 模拟注入）
 ```
 
 以下逐模块描述「做什么」「看到什么」「边界在哪」。
@@ -165,7 +165,6 @@ ADH (Android DecryptHub)
 
 - **Root 路径 — Zygisk 插件**（主线，early inject）：随 Zygisk 模块在 zygote fork 后早期加载，抢在目标反调试布防之前。
 - **Frida Gadget 直载**：通过目标进程内的 `load_library` 加载官方 Gadget，运行 Frida JS hook，无需改写目标 APK。
-- LSPosed / Xposed 桥接加载（有框架时）。
 - **模拟注入**（开发/CI 主路径）：`sandbox-test-app` 自身 `dlopen` 加载 agent，无需真机对抗即可验证全部模块。
 
 Agent 必须支持两种 bootstrap 入口且行为一致：被注入器加载（`JNI_OnLoad`/构造函数）与被宿主主动加载（导出唯一入口 `adh_agent_start()`）。
@@ -975,7 +974,7 @@ Event {
 | **Memory Explorer** | maps 浏览、region 读取、magic 扫描、dump |
 | **Object Inspector** | 活体实例枚举、字段读取、堆内 String/byte[] 搜索、低风险 getter 调用（模块 T） |
 | **Anti-Analysis Radar** | 目标的调试/root/签名/模拟器/完整性检测事件、检测手段清单、行为分叉标注（模块 V） |
-| **Injection Center** | 注入后端选择、Zygisk/Gadget/Xposed/模拟注入、agent 加载状态（模块 W） |
+| **Injection Center** | 注入后端选择、Zygisk/Gadget/模拟注入、agent 加载状态（模块 W） |
 | **Compatibility & Health** | 抗干扰诊断报告、hook 后端可用性、自审计日志、诊断包导出（模块 S + P） |
 | **MCP Center** | tool 列表、schema、调用历史、token 管理 |
 | **Settings** | 访问控制、过滤规则、导出、诊断 |
@@ -1305,7 +1304,7 @@ Android 在此基础上增加：全套 dex 操作、Java hook、native trace、m
 - ART 结构级 dex 捕获（不依赖 magic/路径）
 - 活体 Java 对象枚举与字段读取（模块 T）
 - 目标反分析检测的观测（调试/root/签名/模拟器，模块 V）
-- Zygisk + Gadget + Xposed + 模拟注入（模块 W）
+- Zygisk + Gadget + 模拟注入（模块 W）
 - 明文边界加密观测（绕过加密与 pinning）
 
 ### 23.2 不能承诺 100%
@@ -1327,7 +1326,7 @@ Android 在此基础上增加：全套 dex 操作、Java hook、native trace、m
 通用 Android 运行时逆向分析工具：运行时观测、按需 trace、
 dex/so/memory dump、ART 结构级脱壳辅助、活体对象自省、
 明文边界加密观测、反分析行为观测、Java/native 分析工作流；
-Zygisk / Gadget / Xposed 多注入路径。
+Zygisk / Gadget 多注入路径。
 ```
 
 ---
@@ -1585,7 +1584,6 @@ MCP              →  AI 可编程操控，与 HTTP 同源
 |------|------|------|
 | **Zygisk 插件** | root（Magisk） | 主线，zygote fork 后 early-inject，配合 S 韧性；配套 **ADH Manager** 管理作用域白名单（`/data/adb/adh/scope.json`） |
 | **Frida Gadget**（可选，默认关） | 非 root / root | 官方 Gadget so 由 agent `dlopen` 进目标进程，运行 Frida JS hook；按版本/ABI 下载 + sha256 固定；高开销（~25 MB so、额外 maps 与线程），只有显式调用才启用 |
-| LSPosed/Xposed 桥接（可选，默认关） | 有框架（Vector/LSPosed） | 薄 Xposed 模块复用框架加载，不 vendor GPL 代码 |
 | **模拟注入** | 无需 root | sandbox 自身 `dlopen` 加载 agent（开发/CI 主路径） |
 
 ### 30.2 打包交付物
@@ -1621,18 +1619,18 @@ Agent → TCP 8761 → ADH Daemon（host，经 adb reverse）
 - scope 读取失败必须 fail-loud/no-inject；KernelSU 由 `post-fs-data.sh` 应用 `allow zygote adb_data_file` 的最小规则，Magisk 使用模块根 `sepolicy.rule`。
 - Companion 应设置 `DLCLOSE_MODULE_LIBRARY`，post-specialize 后卸载自身映射；agent `.so` 保持加载服务会话。
 - 模块作者固定为 `decrypthub.com`；root 管理器中的模块描述只显示“等待重启 / 运行中 / 未加载”这类简洁工作状态，不展示内部路径、架构说明或开发备注。
-- ADH Manager 的设备控制能力只限注入作用域、模块状态，以及经 Device Daemon 终止/重启目标应用进程；界面默认中文，已有系统语言资源时跟随系统语言，并跟随系统深浅色主题。首页保留运行状态、Web UI 访问地址、作用域入口和版本信息。Manager 可直接探测 Host ADH Daemon `/health` 来显示并打开局域网优先的 Web UI 地址，但不得把该请求转交 Device Daemon，也不得在设备侧承载 HTTP 服务或分析逻辑。目标进程启停/打开必须走受认证 AIDL（`controlPackage`），当前 Device Daemon AIDL 为 v13；旧版 v7-v12 的 AccessibilityService、设备电源状态与受限 UI 输入方法已从当前协议删除。Manager 不得自己调用 `am`/`su`。不得对 Manager、Device Daemon、`system_server`、System UI 或 `android` 执行终止/重启。
+- ADH Manager 的设备控制能力只限注入作用域、模块状态，以及经 Device Daemon 终止/重启目标应用进程；界面默认中文，已有系统语言资源时跟随系统语言，并跟随系统深浅色主题。首页保留运行状态、Web UI 访问地址、作用域入口和版本信息。Manager 可直接探测 Host ADH Daemon `/health` 来显示并打开局域网优先的 Web UI 地址，但不得把该请求转交 Device Daemon，也不得在设备侧承载 HTTP 服务或分析逻辑。目标进程启停/打开必须走受认证 AIDL（`controlPackage`），当前 Device Daemon AIDL 为 v14；旧版 v7-v12 的 AccessibilityService、设备电源状态与受限 UI 输入方法已从当前协议删除。Manager 不得自己调用 `am`/`su`。不得对 Manager、Device Daemon、`system_server`、System UI 或 `android` 执行终止/重启。
 - “运行中”必须来自本次启动中 Zygisk 实际加载模块的标记，不能仅以模块目录存在作为成功依据；标记由 root companion 写入，启动时先清除旧状态。
 - Manager 不得直接调用 `su` 或访问 `/data/adb`。模块以 root `app_process` 启动 Device Daemon，Manager 仅通过 AIDL Binder 读取状态和作用域；daemon 必须校验调用 UID、`com.adh.manager` 包归属和构建时固定的 APK 签名证书。
 - Binder 交接入口只接受 UID 0 发布，并核对 AIDL descriptor；Manager 必须区分 Device Daemon 未连接、模块未安装、模块已安装但未加载、运行中四种状态。服务未连接时不得用空配置冒充真实作用域，也不得显示“模块未安装”。
 
-### 30.5 可选注入后端（Gadget / LSPosed）— 实验性，不进发布物
+### 30.5 可选注入后端（Gadget / eCapture）— 实验性，不进发布物
 
 > **范围收口（2026-10-01 决议）**：**官方注入路径只有 Zygisk**（CI 走模拟注入）。
-> Frida Gadget = **开发/调试用**（移出发布物）；LSPosed/Xposed = **社区/实验**（保留代码与验收，不是官方路径）；
+> Frida Gadget = **开发/调试用**（移出发布物）；
 > eCapture = **实验脚本**，且已**移出 `verify_all.sh` 门禁**。判定细则见 `DEVELOPMENT_PLAN.md §6.10`。
 
-两个后端都**不是默认路径**，必须显式调用；默认注入仍是 Zygisk（root）与模拟注入（CI）。两者都是开源生态里现成的加载机制，ADH 只借它把 agent/JS hook 送进目标，不把分析与存储搬进目标进程（架构红线不变）。
+两个可选后端（Gadget / eCapture）都**不是默认路径**，必须显式调用；默认注入仍是 Zygisk（root）与模拟注入（CI）。两者都是开源生态里现成的机制，ADH 只借它把 agent/JS hook 或明文观测送进目标，不把分析与存储搬进目标进程（架构红线不变）。
 
 **Frida Gadget（已落地并真机验证，2026-09-15）**
 
@@ -1642,15 +1640,6 @@ Agent → TCP 8761 → ADH Daemon（host，经 adb reverse）
 - `--watch` 写 `on_change: reload`：改 `code_cache/adh_hook.js` 即热重载，无需重启目标进程。
 - 验收：`tools/verify_v30_fridagadget.sh`（真机：官方 gadget → dlopen → 打包后的 Java hook 写 marker；gadget 或打包依赖缺失时 SKIP，因为两者都在 gitignore 缓存里）。实测开销：so 25,220,848 B、目标进程 +9 行 maps、+2 个线程。
 
-**LSPosed/Xposed 模块（slice 1 已落地并真机验证，2026-09-15）**
-
-- 形态：`injector/xposed/` 薄加载器 APK（`com.adh.xposed`）。职责只有"框架已加载的前提下把 agent 送进目标进程"，**不含任何分析能力**；hook/trace/dump/索引/HTTP/MCP/DB 仍在 Host ADH Daemon。
-- **不 vendor 上游代码**：`injector/xposed/api-stub/` 是自己写的 compile-only ABI 声明（`IXposedHookLoadPackage` / `XC_LoadPackage.LoadPackageParam` / `XposedBridge.log`），`compileOnly` 依赖，运行时由框架提供真类。静态验证过产物 dex 里**只有** `Lcom/adh/xposed/AdhXposedEntry;` 一个类定义。
-- 载入方式：`System.loadLibrary("adh_agent")`；加载失败即报错，不再做第二套路径扫描兜底。之后 agent 自己连 Host ADH Daemon（`adb reverse` → 8761）。
-- 关键设备事实（决定打包布局）：Vector 给模块的 `nativeLibraryDirectories` 是 **`base.apk!/lib/arm64-v8a`**，所以 agent `.so` 必须以**未压缩**形式留在 APK 里（`useLegacyPackaging=false` + `extractNativeLibs=false`）；"安装时解压"的旧布局下 `System.loadLibrary` 必然 `UnsatisfiedLinkError`（真机日志已确认）。模块 dex 由 `InMemoryDexFile` 载入、APK 不进 maps，所以 `maps` 兜底只对解压式布局有意义。
-- 策略（slice 1）：只进 scope 内应用的**主进程**；永不进 `android` / `com.android.*` / `com.google.android.gms` / 模块自身；**只对 ADH 自己的测试宿主**（sandbox / Manager）写验收 marker，绝不在第三方目标里留文件。
-- 工具链：`tools/build_xposed.sh`（把 agent `.so` 打进模块 → `injector/xposed/dist/adh-xposed.apk`）、`tools/install_xposed.sh`（root 安装 + `vector-cli modules enable` + `scope set`；`--disable` 逐条 `scope rm` 再关模块 —— 空参数的 `scope set` 在 Vector 2.2 会抛 NPE 且不清空）、`tools/verify_v31_xposed.sh`（真机验收，并**恢复测试前状态**，默认回到关闭）。
-- 真机证据（靶子 `com.adh.manager`，不是会自加载 agent 的 sandbox）：marker `ADH_XPOSED_OK pkg=com.adh.manager ... agent=1`；框架日志 `Loading legacy module com.adh.xposed` → `Loading class com.adh.xposed.AdhXposedEntry`；Host daemon 侧出现 `entry=jni_onload` 在线会话且能真的执行命令（模块枚举 533 条）。
 **eCapture（可选，root + eBPF，2026-09-16 真机验证）**
 
 - 用途：eBPF uprobe 在 `SSL_write/SSL_read` 边界读明文，**不需要证书/代理**，与 agent 的 GOT hook 互补（同一次请求里 agent GOT hook 可能 0 命中，eCapture 仍抓到请求+响应明文）。
@@ -1659,12 +1648,9 @@ Agent → TCP 8761 → ADH Daemon（host，经 adb reverse）
 - 门槛：root + aarch64 内核 ≥ 5.5 + eBPF；**内核 BTF 不是必需**（本机 5.10 / `CONFIG_DEBUG_INFO_BTF=n` 实测 OpenSSL probe 正常启动），因此 BTF 只作为提示，真正的能力信号是 probe 是否启动。
 - 验收：`tools/verify_v34_ecapture.sh`（真机：官方二进制 → 预检 → 对 sandbox 起 probe → **用 MCP `net_capture` 驱动一次真实 HTTPS** → 断言抓到 `ADH_NET_MARKER_v1` 请求明文与 `ADH_NET_RESPONSE_v1` 响应明文）；内核不支持时 SKIP 并给出原因。
 
-**控制面（ADH Manager/Device Daemon 驱动 Xposed）**
-  AIDL 协议 v5 新增 `getXposedStatus` / `setXposedEnabled` / `setXposedScope`，Manager 的 Scope 页有对应卡片；ADH 允许名单在保存时镜像进框架 scope（启用状态下），所以"哪些应用"仍然只在 Manager 一处配置。
-  同一个代码路径还导出了 root-only 一次性 CLI（`--xposed-status|--xposed-enable|--xposed-disable|--xposed-scope`），供运维与 `tools/verify_v32_backend_control.sh` 使用（无需 Manager UI、无需重启）。
-  两个框架怪癖已写进实现：`scope set <module>` 不带应用会抛 NPE（清 scope 必须逐条 `scope rm`）；`scope set` 会**隐式启用**模块，所以调用方若要保持"关闭"必须显式再关一次。
-- 注入中心（已落地，2026-09-15）：主机侧 `GET /api/backends` + Web 控制台"注入后端"页给出会话分类、Gadget 缓存/命令与设备侧后端入口（每个会话可一键判定 Zygisk/Xposed/Gadget/自加载）；验收 `tools/verify_v33_backends.sh`。
-- MCP 面（2026-09-16）：`backends` 工具与 REST *同源*（`daemon/src/backends.ts`）；带 `session` 参数按 agent 自身 maps 判定该进程真实存在的注入路径（`zygisk`/`xposed_module`/`frida_gadget`/`self_load`）—— AI 客户端与控制台看到的是同一份真相；验收并入 `tools/verify_v33_backends.sh`。
+**控制面（注入中心）**
+- 注入中心（已落地，2026-09-15）：主机侧 `GET /api/backends` + Web 控制台"注入后端"页给出会话分类、Gadget 缓存/命令与设备侧后端入口（每个会话可一键判定 Zygisk/Gadget/自加载）；验收 `tools/verify_v33_backends.sh`。
+- MCP 面（2026-09-16）：`backends` 工具与 REST *同源*（`daemon/src/backends.ts`）；带 `session` 参数按 agent 自身 maps 判定该进程真实存在的注入路径（`zygisk`/`frida_gadget`/`self_load`）—— AI 客户端与控制台看到的是同一份真相；验收并入 `tools/verify_v33_backends.sh`。
 - Gadget 在控制台里只做"命令模板 + 检测"，一键下发仍走主机工具（daemon 无 adb）。
 ---
 

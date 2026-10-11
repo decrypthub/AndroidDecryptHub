@@ -10,7 +10,7 @@
 
 ## 0. 一句话状态
 
-`libadh_agent.so` + Host ADH Daemon + `adh` CLI 都已实现；注入后端**只有 Zygisk 是官方路径**（另有 Gadget/Xposed/eCapture 三个实验后端）。**门禁已全量跑过**：
+`libadh_agent.so` + Host ADH Daemon + `adh` CLI 都已实现；注入后端**只有 Zygisk 是官方路径**（另有 Gadget/eCapture 两个实验后端）。**门禁已全量跑过**：
 2026-10-01 在 Linux 接管机上（设备 `aa165071`，agent 换成本机构建的 `78d9d20f…`）见 `FEATURE_STATUS §2.1`；
 上上轮 2026-09-29（二）**103 PASS / 11 FAIL / 4 SKIP**
 （host 36 = 29/5/2，device 82 = 74/6/2）。**11 条 FAIL 没有一条能归到产品代码**：7 条是本机缺
@@ -63,7 +63,7 @@ adb -s <serial> shell getprop ro.build.version.sdk   # 记下 API level（见 §
 - `tools/build_agent.sh` / `build_detect.sh` / `build_zygisk.sh` / `build_bundle.sh`
 - `tools/flash_device.sh --reboot`（KernelSU/Magisk 刷入 Zygisk 模块；多设备时 `export ANDROID_SERIAL=<serial>`）
 - `install_apk_root`（`su` + `pm install`）装沙盒
-- `tools/verify_all.sh` **全量**（**117 脚本 = 36 host + 81 device**，2026-10-01 起 eCapture 那条移出闸门）——这才是设计的常规门禁
+- `tools/verify_all.sh` **全量**（**115 脚本 = 36 host + 79 device**，2026-10-01 起 eCapture 那条移出闸门）——这才是设计的常规门禁
 
 **你要做的第一件事：把设备事实记录到本文档 §1.3 的表里**（机型 / API / ABI / root 方式 / serial）。
 后面所有人（包括下一个 agent）都靠这张表判断 ART 解析器覆盖面与可用后端。
@@ -333,7 +333,7 @@ connect 句柄在 Windows 上不可取消）；换 `node:http` 后 `req.setTimeo
 | # | 事项 | 验收信号 |
 |---|---|---|
 | **1** | ~~**先跑一遍全量门禁**，把 device 侧的真实状态量出来~~ ✅ **2026-09-29（二）已跑**：**103 PASS / 11 FAIL / 4 SKIP**（host 29/5/2，device 74/6/2）。11 条 FAIL **没有一条归到产品代码**：7 条环境、2 条门禁自身缺陷、2 条文档已登记的偶发。**device 半段是健康的**——赛前预测的 4 条环境噪声全部命中，无意外红。详见 `PROGRESS.md` 同日第 7 条。 | 已完成；下一步是把那 9 条环境项治掉（见下） |
-| **1b** | **治掉让门禁变哑的环境项**（本轮新暴露的、收益最直接的一类）：~~② **修 `v99`/`v100`/`v101`/`v15_dumpall` 的 `^ℹ fail 0$` 断言**，并补 `v99`/`v15_dumpall` 漏掉的 `exit 1`~~ ✅ **2026-09-29（二）已修**：收成一处实现 `verify_unit_pass`（`tools/lib/verify_common.sh`，解析两种 reporter + 剥 ANSI + 要求 `rc==0` + **`min_pass` 下限**防静默空跑），四个调用点全部改完，**并按 §3.1 做了 5 项齿检**（含"塞必然失败的用例必须红"与"用例删光必须红"）。`v101` 假红 → 如实 SKIP；`v99` 假绿 → 真实结果；`v15_dumpall` device 段全绿；`v100` **22 checks/0 problems 转绿**。详见 `PROGRESS.md` 同日第 9 条。<br>**剩下 1 项待做（2026-10-01 部分解决）**：`verify_v01` / `verify_v32` 仍需要 **gradle**（重打沙盒 APK / 模块 APK）——
+| **1b** | **治掉让门禁变哑的环境项**（本轮新暴露的、收益最直接的一类）：~~② **修 `v99`/`v100`/`v101`/`v15_dumpall` 的 `^ℹ fail 0$` 断言**，并补 `v99`/`v15_dumpall` 漏掉的 `exit 1`~~ ✅ **2026-09-29（二）已修**：收成一处实现 `verify_unit_pass`（`tools/lib/verify_common.sh`，解析两种 reporter + 剥 ANSI + 要求 `rc==0` + **`min_pass` 下限**防静默空跑），四个调用点全部改完，**并按 §3.1 做了 5 项齿检**（含"塞必然失败的用例必须红"与"用例删光必须红"）。`v101` 假红 → 如实 SKIP；`v99` 假绿 → 真实结果；`v15_dumpall` device 段全绿；`v100` **22 checks/0 problems 转绿**。详见 `PROGRESS.md` 同日第 9 条。<br>**剩下 1 项待做（2026-10-01 部分解决）**：`verify_v01` 仍需要 **gradle**（重打沙盒 APK）——
 agent `.so` 本机已能构建（§1.5），卡住它们的只剩 gradle，
 那是"要不要在这台机器上做完整构建"的环境决策，不是路径 bug。（①②③④ **均已在本轮完成**——
 ①④ 见下；②③ 见 2026-09-29（二）与 2026-09-30 的提交。） | ① 完成后 `v02_so`/`v08_disasm`/`v08_analyze`/`v26_footprint`/`v30` 全部转 PASS，
@@ -365,7 +365,7 @@ agent `.so` 本机已能构建（§1.5），卡住它们的只剩 gradle，
 - **产品口径**：覆盖所有场景类型都有对应工具与流程，**不保证每个壳 100% 还原，恢复率如实上报**
   （已并入 `REQUIREMENTS.md §15.5`）。
 - **发布范围收口 10 项**：全部照建议执行，已并入 `DEVELOPMENT_PLAN.md §6.9.1/§6.9.2/§6.10`（§6.9.5 已删除，不要再引用它）。
-  要点：arm64-only；QBDI/Frida Gadget/eCapture 降级、Xposed 标社区实验、官方路径只剩 Zygisk；
+  要点：arm64-only；QBDI/Frida Gadget/eCapture 降级、官方路径只剩 Zygisk；
   全量 syscall 拦截不做；cdex/041 样本驱动不进排期；Web UI 冻结为只读查看器；
   **9 个沙盒耦合命令真删**（2026-10-01 完成，能力改由 `capture_start/capture_stop` + `java_call` + `native_hook` 提供）。
 - **agent TCP 8761 无鉴权的信任模型**：**仍未决**，见 `REQUIREMENTS.md §20.1`。

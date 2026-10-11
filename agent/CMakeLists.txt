@@ -120,7 +120,7 @@ endif()
 target_link_options(adh_agent PRIVATE "-Wl,--version-script=${AGENT_EXPORT_MAP}")
 
 # No SONAME at all: the shipped .dynstr is readable by the target (it can walk its own mappings), so
-# the library name must not sit in there. Nothing needs it - the Zygisk/Xposed loaders dlopen a PATH
+# the library name must not sit in there. Nothing needs it - the Zygisk loader and the gadget dlopen a PATH
 # (memfd or absolute path), and System.loadLibrary resolves the FILE name (libadh_agent.so, which
 # stays for build/tooling compatibility). A plain -soname link option loses to CMake's own, hence
 # the property.

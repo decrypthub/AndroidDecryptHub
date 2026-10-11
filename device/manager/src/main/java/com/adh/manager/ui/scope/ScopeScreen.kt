@@ -43,8 +43,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -70,7 +68,6 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import com.adh.core.PackageControl
 import com.adh.core.ScopeConfig
 import com.adh.manager.R
-import com.adh.core.XposedStatus
 import com.adh.manager.data.ScopeRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -106,8 +103,6 @@ fun ScopeScreen(
     var canControlPackages by remember { mutableStateOf(false) }
     var saving by remember { mutableStateOf(false) }
     var refreshVersion by remember { mutableStateOf(0) }
-    var xposed by remember { mutableStateOf<XposedStatus?>(null) }
-    var xposedBusy by remember { mutableStateOf(false) }
 
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { refreshVersion++ }
 
@@ -124,7 +119,6 @@ fun ScopeScreen(
             return@LaunchedEffect
         }
         canControlPackages = withContext(Dispatchers.IO) { repository.supportsPackageControl() }
-        xposed = withContext(Dispatchers.IO) { repository.xposedStatus() }
         val loaded = runCatching {
             withContext(Dispatchers.IO) { repository.load() }
         }.onFailure {
@@ -261,43 +255,6 @@ fun ScopeScreen(
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
             )
 
-            xposed?.let { status ->
-                XposedBackendCard(
-                    status = status,
-                    busy = xposedBusy,
-                    onToggle = { enabled ->
-                        coroutineScope.launch {
-                            xposedBusy = true
-                            val result = withContext(Dispatchers.IO) { repository.setXposedEnabled(enabled) }
-                            xposed = withContext(Dispatchers.IO) { repository.xposedStatus() }
-                            xposedBusy = false
-                            snackbar.showSnackbar(
-                                context.getString(
-                                    if (result.isSuccess) R.string.xposed_state_saved
-                                    else R.string.xposed_state_failed,
-                                ),
-                            )
-                        }
-                    },
-                    onSyncScope = {
-                        coroutineScope.launch {
-                            xposedBusy = true
-                            val result = withContext(Dispatchers.IO) {
-                                repository.setXposedScope(selected.toList())
-                            }
-                            xposed = withContext(Dispatchers.IO) { repository.xposedStatus() }
-                            xposedBusy = false
-                            snackbar.showSnackbar(
-                                context.getString(
-                                    if (result.isSuccess) R.string.xposed_scope_synced
-                                    else R.string.xposed_state_failed,
-                                ),
-                            )
-                        }
-                    },
-                )
-            }
-
             when {
                 loading -> LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 daemonUnavailable -> EmptyState(
@@ -427,75 +384,6 @@ private fun SearchField(
                 )
             }
             Spacer(Modifier.width(4.dp))
-        }
-    }
-}
-
-@Composable
-private fun XposedBackendCard(
-    status: XposedStatus,
-    busy: Boolean,
-    onToggle: (Boolean) -> Unit,
-    onSyncScope: () -> Unit,
-) {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        shape = RoundedCornerShape(12.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp),
-    ) {
-        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-            Text(
-                text = stringResource(R.string.xposed_backend_title),
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-            )
-            when {
-                !status.present -> Text(
-                    text = stringResource(R.string.xposed_framework_absent),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp),
-                )
-                !status.installed -> Text(
-                    text = stringResource(R.string.xposed_module_absent),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp),
-                )
-                else -> {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(
-                            text = stringResource(
-                                if (status.enabled) R.string.xposed_enabled_summary
-                                else R.string.xposed_disabled_summary,
-                                status.scope.size,
-                            ),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.weight(1f),
-                        )
-                        Switch(
-                            checked = status.enabled,
-                            enabled = !busy,
-                            onCheckedChange = onToggle,
-                        )
-                    }
-                    if (status.enabled) {
-                        TextButton(
-                            enabled = !busy,
-                            onClick = onSyncScope,
-                            modifier = Modifier.padding(top = 2.dp),
-                        ) {
-                            Text(stringResource(R.string.xposed_sync_scope))
-                        }
-                    }
-                }
-            }
         }
     }
 }

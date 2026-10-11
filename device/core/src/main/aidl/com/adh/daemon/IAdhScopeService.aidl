@@ -17,13 +17,4 @@ interface IAdhScopeService {
      * Returns "ok", "denied", "no_launcher", or "failed".
      */
     String controlPackage(String packageName, String action);
-    /**
-     * Optional Xposed/LSPosed backend (module W). Protocol v5.
-     * Compact JSON: {"present":bool,"installed":bool,"enabled":bool,"scope":["pkg",...]}.
-     */
-    String getXposedStatus();
-    /** Enable/disable the ADH Xposed module through the framework CLI. */
-    boolean setXposedEnabled(boolean enabled);
-    /** Replace the ADH Xposed module's framework scope with these packages (user 0). */
-    boolean setXposedScope(in List<String> packages);
 }

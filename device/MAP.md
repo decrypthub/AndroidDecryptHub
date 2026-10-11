@@ -1,4 +1,4 @@
-# device/ — ADH 设备侧多模块工程（对标 Vector 形态，不做 Xposed）
+# device/ — ADH 设备侧多模块工程（对标 Vector 形态）
 
 学形态不学产品：Manager Compose UI + Device Daemon（AIDL/作用域）+ shared core。
 采集/hook 仍在仓库顶层 `agent/`；Host 分析仍在顶层 `daemon/`（ADH Daemon / npm `adhd`）。
@@ -11,20 +11,6 @@ Magisk 打包仍在 `injector/zygisk/`。
 | `:core` | `com.adh.core` | Scope 契约单一真相：路径常量、JSON 编解码、`IAdhScopeService` AIDL、已安装应用目录 JSON、进程控制允许清单 |
 | `:daemon` | `com.adh.daemon` | 模块以 root `app_process` 启动的 APK；读写 `scope.json`、模块状态、枚举已安装应用，并以 uid=0 终止/重启目标应用 |
 | `:manager` | `com.adh.manager` | 普通 Compose APK；经受认证 Binder 读/写 scope、应用目录与进程启停，并直接探测 Host Web UI 地址；不调用 `su`、不自己 `getInstalledApplications` |
-
-## Optional backend control (Xposed/LSPosed)
-
-`device/daemon/src/main/java/com/adh/daemon/XposedBackend.kt` is the only place that talks to the
-framework. It shells out to `/data/adb/lspd/cli` (the framework's own surface — no sqlite poking):
-
-| Surface | Purpose |
-|---|---|
-| `IAdhScopeService.getXposedStatus/setXposedEnabled/setXposedScope` (protocol **v5+**; current protocol **v13**) | Manager UI: card in the Scope screen; the ADH allowlist is mirrored into the framework scope whenever it is saved while the backend is enabled |
-| `app_process … com.adh.daemon.AdhDeviceDaemon --xposed-status\|--xposed-enable\|--xposed-disable\|--xposed-scope <pkgs>` | root-only one-shot CLI (same code paths as AIDL) for operators and `tools/verify_v32_backend_control.sh` |
-
-Framework quirks encoded here: `scope set <module>` with **no** apps throws (so clearing removes
-entries one by one), and `scope set` implicitly enables the module — callers that care about the
-enabled flag must set it explicitly.
 
 ## Boundaries (red line)
 
@@ -76,8 +62,7 @@ Toolchain locked to Gradle 8.9 + AGP 8.7.3 + Kotlin 2.0.21 + Compose BOM (same c
 | manager Compose | `:manager` Compose |
 | on-device daemon | `:daemon` AIDL skeleton |
 | zygisk loader | `injector/zygisk` (Magisk zip) |
-| native collect agent | `agent/` collect agent (not an Xposed framework) |
-| xposed/LSPosed framework | **not ours** — user-installed (LSPosed/Vector). ADH ships an optional thin loader module (injector/xposed/) and drives its enabled/scope state from the Device Daemon ([XposedBackend] below). |
+| native collect agent | `agent/` collect agent（不是框架） |
 
 ADH adopts Vector's versioned module packaging, bundled Manager checksum, Magisk
 Action entry, and privileged-daemon boundary. It does not adopt Vector's parasitic

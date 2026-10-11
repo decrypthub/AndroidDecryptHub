@@ -619,7 +619,7 @@
         </div>
         <div id="setPageBackends" class="set-page">
           <h4>注入后端</h4>
-          <p class="set-lead">ADH 的注入后端现状与可选后端入口。Zygisk 与 Xposed 的作用域由手机侧 <b>ADH Manager → Device Daemon</b> 管理；Frida Gadget 是主机侧可选后端（本守护进程没有 adb，只显示缓存与命令）。</p>
+          <p class="set-lead">ADH 的注入后端现状与可选后端入口。Zygisk 的作用域由手机侧 <b>ADH Manager → Device Daemon</b> 管理；Frida Gadget 是主机侧可选后端（本守护进程没有 adb，只显示缓存与命令）。</p>
           <div class="set-section-title">当前 agent 会话</div>
           <div id="backendsAgents" class="muted">加载中…</div>
           <div class="set-section-title">Frida Gadget（可选，高开销）</div>
@@ -1036,10 +1036,9 @@ async function renderBackends(){
     + `<div style="display:flex;gap:8px;align-items:center;margin-top:4px"><code id="gadgetCmd" style="flex:1;overflow:auto">${cmd}</code>`
     + `<button onclick="copyText(document.getElementById('gadgetCmd').textContent)">复制</button></div>`
     + `<div class="muted" style="margin-top:4px">${g.note||''}</div>`;
-  const x=data.xposed||{}, z=data.zygisk||{};
+  const z=data.zygisk||{};
   dEl.innerHTML=`<div><b>Zygisk</b> · ${z.module||''} — ${z.control||''}</div>`
-    + `<div style="margin-top:4px"><b>Xposed/LSPosed</b> · ${x.module||''} — ${x.control||''}</div>`
-    + `<div class="muted" style="margin-top:4px">验证：${[...(z.verify||[]),...(x.verify||[])].join(' · ')}</div>`;
+    + `<div class="muted" style="margin-top:4px">验证：${(z.verify||[]).join(' · ')}</div>`;
 }
 async function probeBackend(session,pkg){
   try{
@@ -1047,7 +1046,6 @@ async function probeBackend(session,pkg){
     const paths=(mods||[]).map(m=>String(m.path||m.name||''));
     const hit=[];
     if(paths.some(s=>s.includes('/data/adb/modules/adh/'))) hit.push('Zygisk 模块');
-    if(paths.some(s=>s.includes('com.adh.xposed'))) hit.push('Xposed 模块（agent 随模块 APK 映射）');
     if(paths.some(s=>s.includes('libgadget.so')||s.toLowerCase().includes('frida'))) hit.push('Frida Gadget');
     hit.unshift('agent 本体');
     toast(pkg+' → '+hit.join(' + '));

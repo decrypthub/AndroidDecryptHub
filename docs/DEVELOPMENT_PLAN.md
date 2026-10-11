@@ -4,7 +4,7 @@
 > **功能需求**：见 [`REQUIREMENTS.md`](REQUIREMENTS.md)（唯一权威规格，模块 A–W；本文档只管架构与排期）。
 > **跨会话进度**：见 [`PROGRESS.md`](PROGRESS.md)。
 > **参考项目**：[`REFERENCE_IOS.md`](REFERENCE_IOS.md)（[ios-decrypt-helper](https://github.com/taisuii/ios-decrypt-helper)）。
-> **一句话**：运行在目标进程内的 native agent，配合本机 daemon、Web UI 和 MCP Server，实现运行时 dex/so/memory dump、ART 结构级脱壳、Java/native hook、明文边界加密观测、活体对象自省、反分析行为观测、函数/指令 trace、Capstone 反汇编与搜索；Zygisk / Gadget / Xposed 多种注入方式。
+> **一句话**：运行在目标进程内的 native agent，配合本机 daemon、Web UI 和 MCP Server，实现运行时 dex/so/memory dump、ART 结构级脱壳、Java/native hook、明文边界加密观测、活体对象自省、反分析行为观测、函数/指令 trace、Capstone 反汇编与搜索；Zygisk / Gadget 多种注入方式。
 
 ---
 
@@ -106,7 +106,7 @@ HTTP API 与 MCP tools **不重复实现业务逻辑**，共享同一 Service La
 
 ```text
 ADH (Android DecryptHub)
-├── 1. Agent 注入层          — Zygisk（官方路径）/ 模拟注入(CI)；Gadget 与 Xposed 为实验后端
+├── 1. Agent 注入层          — Zygisk（官方路径）/ 模拟注入(CI)；Gadget 为实验后端
 ├── 2. Dump Engine           — dex / so / memory / maps / magic scan / ART 结构级捕获(L.6)
 ├── 3. Syscall / libc / File Monitor — Java + native 文件/系统观测；svc 站点归因(E.9)
 ├── 5. Native Trace Engine   — 指令级 trace（QBDI，可选后端）+ 函数级 trace / trace_digest
@@ -117,7 +117,7 @@ ADH (Android DecryptHub)
 对抗与自省专项模块（贯穿上面各层）：
 ├── S. 抗干扰采集（诊断 + 韧性）          T. 活体对象自省
 ├── U. 非标运行时识别                     V. 反分析行为观测（调试/root/签名/模拟器）
-└── W. 注入后端（Zygisk 官方 + 模拟注入；Gadget/Xposed 实验）
+└── W. 注入后端（Zygisk 官方 + 模拟注入；Gadget 实验）
 ```
 
 ---
@@ -463,7 +463,7 @@ android-decrpthub/          # 仓库名；产品名 ADH (Android DecryptHub)
 │   ├── manager/            # DEPRECATED stub，见 device/manager
 │   └── ptrace/             # 手动注入器（延后）
 │
-├── device/                 # 设备侧多模块（独立于 Host daemon，非 Xposed）
+├── device/                 # 设备侧多模块（独立于 Host daemon）
 │   ├── core/               # ScopeConfig / AdhPaths / ScopeJson + AIDL contract
 │   ├── daemon/             # root app_process Device Daemon（作用域/模块状态/目标进程启停）
 │   └── manager/            # 普通 Compose Manager（Binder 作用域与进程控制 + Host Web UI 地址探测，无 su）
@@ -584,27 +584,23 @@ android-decrpthub/          # 仓库名；产品名 ADH (Android DecryptHub)
 
 v1 只对 `docs/FEATURE_STATUS.md §2` 的已验收能力做加固：捕获背压、GOT 重定位校验、trace fd 缓存、Capstone 内存反汇编、抓包组包和前端去 sandbox 硬编码。未验收的算法家族、注入模式或半成品能力不再进入 v1 排期。
 
-## 6.10 可选注入后端（Gadget / LSPosed，非默认）
+## 6.10 可选注入后端（Gadget / eCapture，非默认）
 
 > 与 §6.9 的关系：§6.9 是"把已有能力做扎实"的主线；本节只扩**加载机制**，不新增分析能力，也不占 v2.x 版本号。
 > 判定与验收细则见 `REQUIREMENTS.md §30.5`。
 
-**范围收口（2026-10-01 决议）**：**官方注入路径只有 Zygisk**；下列三者一律降级，不进发布物：
+**范围收口（2026-10-01 决议）**：**官方注入路径只有 Zygisk**；下列二者一律降级，不进发布物：
 
 | 后端 | 新定位 | 重新考虑的条件 |
 |---|---|---|
 | Frida Gadget | **开发/调试用**（移出发布物）；独特价值只剩 JS 生态 | 出现明确的 Frida 脚本复用需求，或单独立项做去特征 |
-| LSPosed/Xposed | **社区/实验**（保留代码与验收，不作为官方路径） | LSPosed-only 目标设备成为常态 |
 | eCapture | **实验脚本**，不出现在发布物，且**移出 `verify_all.sh` 门禁**（覆盖由自带的 TLS/syscall 观测承担） | 需要内核级、目标进程外观测 |
 
 - **Frida Gadget（已落地，2026-09-15 真机验证）**：`tools/fetch_frida_gadget.sh`（官方 release、版本/ABI 可切、sha256 固定）
   + `tools/compile_frida_script.sh`（Frida 17 起语言桥移出 runtime → esbuild + `frida-java-bridge` 打包）
   + `tools/load_frida_gadget.sh`（落盘 `<pkg>/code_cache` → `load_so` dlopen → 等 `frida-gadget` 线程 → `--marker` 断言脚本真的跑通）。
   验收脚本：`tools/verify_v30_fridagadget.sh`。
-- **LSPosed/Xposed（slice 1 已落地，2026-09-15 真机验证）**：`injector/xposed/` 薄加载器 APK（`api-stub/` 只有自己写的 compile-only ABI 声明，不 vendor 上游代码）
-  + `tools/build_xposed.sh`（把 agent `.so` 打进模块）/ `tools/install_xposed.sh`（`vector-cli` 启用 + scope，`--disable` 逐条 `scope rm`）/ `tools/verify_v31_xposed.sh`（真机验收，自动恢复测试前状态）。
-  设备事实：Vector 给模块的 `nativeLibraryDirectories` 指向 `base.apk!/lib/arm64-v8a` → agent `.so` 必须**未压缩**打包（`useLegacyPackaging=false`）；空参数 `scope set` 在 Vector 2.2 抛 NPE，清 scope 必须逐条 `scope rm`。
-  **控制面已落地（2026-09-15）**：Device Daemon 的 `XposedBackend` 独占驱动框架（只调 `/data/adb/lspd/cli`），AIDL v5 暴露 status/enable/scope，Manager Scope 页有卡片并把 ADH 允许名单镜像进框架 scope；另有 root-only 一次性 CLI 供运维与 `tools/verify_v32_backend_control.sh`。注入中心亦已收口：主机 `GET /api/backends` + Web 控制台"注入后端"页（`tools/verify_v33_backends.sh`）。待办：Gadget 的一键下发（daemon 无 adb，当前只给命令模板）。
+- **注入中心（已落地，2026-09-15）**：主机 `GET /api/backends` + Web 控制台「注入后端」页给出会话分类、Gadget 缓存/命令与设备侧后端入口（每个会话可一键判定 Zygisk/Gadget/自加载，`tools/verify_v33_backends.sh`）。待办：Gadget 的一键下发（daemon 无 adb，当前只给命令模板）。
 - **eCapture（可选，root + eBPF，2026-09-16 真机验证）**：`tools/fetch_ecapture.sh`（官方发布、版本固定、sha256 取自官方 checksum 文件） / `tools/ecapture_capture.sh`（`--preflight-only` 给 root/内核/BPF/BTF 判定，运行后按 `probe started successfully` 给结论） / `tools/verify_v34_ecapture.sh`（MCP 驱动真实 HTTPS，断言 eCapture 抓到请求与响应明文）。门槛：root + aarch64 内核 ≥5.5 + eBPF；**BTF 非必需**（本机 5.10 / BTF=n 实测可用），故只作提示。
 - 红线：**Zygisk 之外的路径只在显式调用时启用**（默认注入路径不变）；目标进程内不得承载 HTTP/DB/分析；不 vendor 上游 GPL 代码。
 

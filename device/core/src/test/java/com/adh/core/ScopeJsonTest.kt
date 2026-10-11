@@ -62,9 +62,8 @@ class ScopeJsonTest {
         assertFalse(apps[0].system)
         assertEquals("com.android.settings", apps[1].packageName)
         assertTrue(apps[1].system)
-        assertEquals(AdhProtocol.VERSION, 13)
+        assertEquals(AdhProtocol.VERSION, 14)
         assertEquals(AdhProtocol.MIN_PROCESS_VERSION, 4)
-        assertEquals(AdhProtocol.MIN_XPOSED_VERSION, 5)
         assertEquals(AdhProtocol.MIN_APP_OPEN_VERSION, 6)
     }
 

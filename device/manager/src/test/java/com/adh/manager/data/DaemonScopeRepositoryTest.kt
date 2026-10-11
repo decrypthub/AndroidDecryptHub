@@ -7,8 +7,6 @@ import com.adh.core.InstalledAppsJson
 import com.adh.core.PackageControl
 import com.adh.core.ScopeConfig
 import com.adh.core.ScopeJson
-import com.adh.core.XposedStatus
-import com.adh.core.XposedStatusJson
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -93,54 +91,6 @@ class DaemonScopeRepositoryTest {
         assertEquals("com.example.target" to PackageControl.ACTION_RESTART, client.lastControl)
     }
 
-    @Test
-    fun xposedBackendRequiresProtocolV5() {
-        val v4 = DaemonScopeRepository { FakeDaemonClient(protocol = 4) }
-
-        assertEquals(null, v4.xposedStatus())
-        assertTrue(v4.setXposedEnabled(true).isFailure)
-        assertTrue(v4.setXposedScope(listOf("com.example.target")).isFailure)
-    }
-
-    @Test
-    fun enablingXposedMirrorsTheCurrentAdhScope() {
-        val client = FakeDaemonClient()
-        val repository = DaemonScopeRepository { client }
-
-        assertTrue(repository.save(ScopeConfig(packages = setOf("com.example.target"))).isSuccess)
-        assertTrue(repository.setXposedEnabled(true).isSuccess)
-
-        assertTrue(client.xposedEnabled)
-        assertEquals(listOf("com.example.target"), client.xposedScope)
-        assertEquals(true, repository.xposedStatus()?.enabled)
-        assertEquals(listOf("com.example.target"), repository.xposedStatus()?.scope)
-    }
-
-    @Test
-    fun savingScopeMirrorsIntoAnEnabledXposedBackend() {
-        val client = FakeDaemonClient()
-        val repository = DaemonScopeRepository { client }
-        client.xposedEnabled = true
-
-        assertTrue(repository.save(ScopeConfig(packages = setOf("com.example.target"))).isSuccess)
-        assertEquals(listOf("com.example.target"), client.xposedScope)
-
-        // A framework rejection must surface even though the ADH scope file was written.
-        client.rejectXposedScope = true
-        assertTrue(repository.save(ScopeConfig(packages = setOf("com.other.target"))).isFailure)
-    }
-
-    @Test
-    fun disabledXposedBackendIsNotMirrored() {
-        val client = FakeDaemonClient()
-        val repository = DaemonScopeRepository { client }
-
-        assertTrue(repository.save(ScopeConfig(packages = setOf("com.example.target"))).isSuccess)
-
-        assertEquals(emptyList<String>(), client.xposedScope)
-        assertEquals(false, repository.xposedStatus()?.enabled)
-    }
-
     private class FakeDaemonClient(
         protocol: Int = AdhProtocol.VERSION,
     ) : DaemonClient {
@@ -172,27 +122,5 @@ class DaemonScopeRepositoryTest {
         override val modulePresent = true
         override val loaderActive = true
         override val moduleVersion = "v0.3.0"
-        var xposedEnabled = false
-        var xposedScope: List<String> = emptyList()
-        var rejectXposedScope = false
-        override val xposedStatusJson: String
-            get() = XposedStatusJson.encode(
-                XposedStatus(
-                    present = true,
-                    installed = true,
-                    enabled = xposedEnabled,
-                    scope = xposedScope,
-                ),
-            )
-        override fun setXposedEnabled(enabled: Boolean): Boolean {
-            if (protocolVersion < AdhProtocol.MIN_XPOSED_VERSION) return false
-            xposedEnabled = enabled
-            return true
-        }
-        override fun setXposedScope(packages: List<String>): Boolean {
-            if (protocolVersion < AdhProtocol.MIN_XPOSED_VERSION || rejectXposedScope) return false
-            xposedScope = packages.sorted()
-            return true
-        }
     }
 }

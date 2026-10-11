@@ -346,8 +346,8 @@ async function cmdDoctor(ctx: Ctx): Promise<number> {
   const health = await ctx.daemon.json('/health', { timeoutS: ctx.timeoutS });
   // Two different views on purpose: /api/agents carries the full session identity the agent
   // reported about itself (agentVer / selfModule / abi / sdk), while /api/backends carries the
-  // injection-backend matrix (zygisk scope pointer, xposed module, gadget cache). Reading the
-  // agent version off /api/backends would silently print '?' — its agent rows are pointers only.
+  // injection-backend matrix (zygisk scope pointer, gadget cache). Reading the agent version off
+  // /api/backends would silently print '?' — its agent rows are pointers only.
   const agents: AgentSession[] = await ctx.daemon.json('/api/agents', { timeoutS: ctx.timeoutS });
   const backends = await ctx.daemon.json('/api/backends', { timeoutS: ctx.timeoutS });
   const repo = repoVersions();
@@ -396,7 +396,6 @@ async function cmdDoctor(ctx: Ctx): Promise<number> {
 
   say(ctx, 'backends');
   say(ctx, `  zygisk  ${backends.zygisk?.control ?? '?'}`);
-  say(ctx, `  xposed  ${backends.xposed?.module ?? '?'}`);
   const cached = backends.gadget?.cached ?? [];
   say(ctx, `  gadget  ${cached.length} cached build(s)${cached.length ? `: ${cached.map((c: any) => `${c.version}/${c.abi}`).join(', ')}` : ''}`);
 
@@ -420,7 +419,7 @@ async function cmdTarget(ctx: Ctx): Promise<number> {
   const dex = await ctx.daemon.mcp('art_dexfiles', {}, a.sessionId, ctx.timeoutS);
 
   say(ctx, `target: ${a.package}  pid ${a.pid}  session ${a.sessionId}`);
-  say(ctx, `  ${a.online === false ? 'offline' : 'online'} · connected ${new Date(Number(a.connectedAt ?? 0)).toISOString()} · entry ${a.entry ?? '?'} (${a.entry === 'start' ? 'injected' : 'jni_onload: self-load / gadget / xposed'})`);
+  say(ctx, `  ${a.online === false ? 'offline' : 'online'} · connected ${new Date(Number(a.connectedAt ?? 0)).toISOString()} · entry ${a.entry ?? '?'} (${a.entry === 'start' ? 'injected' : 'jni_onload: self-load / gadget'})`);
   say(ctx, `  agent ${a.agentVer ?? probe.agentVer ?? '?'} · android ${a.android ?? '?'} sdk ${a.sdk ?? '?'} ${a.abi ?? ''}`);
   say(ctx, `  loaded as ${a.selfModule ?? '(unknown)'}${a.selfBase ? ` base ${a.selfBase}` : ''}`);
   say(ctx, `  ping ${ping.ok === true ? `ok ${ping.latencyMs ?? '?'}ms` : `FAILED ${ping.error ?? '?'}`}`);

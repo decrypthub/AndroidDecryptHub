@@ -14,6 +14,23 @@
 全来自命令参数）；② 不胡乱兜底 / fail-loud（hook 装不上、缓冲溢出、解不动一律显式报错 + 计数上报，
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
+## 2026-10-11 —— 移除 Xposed 后端（用户决议"不做，让代码干净"）
+
+- **决定**：ADH 不再自带任何 Xposed 加载器。理由："用户一般都会自己装 LSPosed"，而本产品的重心是**把逆向能力提供给模型**（Host ADH Daemon 的 MCP / 分析面 + 设备侧注入 scope 与目标进程控制）；框架与模块不再是我们要交付或维护的东西。删除口径是**整段删除**，不留"曾作为社区/实验后端保留"的表述。
+- **删掉的**：`injector/xposed/`（薄加载器 APK + `api-stub/` + README）、`tools/{build,install}_xposed.sh`、`tools/verify_v31_xposed.sh`、`tools/verify_v32_backend_control.sh`；设备侧控制面 `XposedBackend.kt` 与 `XposedStatusJson.kt`、AIDL 的 `getXposedStatus/setXposedEnabled/setXposedScope`、`AdhDeviceDaemon` 的 root-only 一次性 CLI 与随之失效的 `requireRoot()`、Manager 的 Scope 卡片与"允许名单镜像进框架 scope"逻辑、9 条 `xposed_*` 字符串与 4 个 Xposed 单测；host 侧 `/api/backends` 的 `xposed` 键**和** `classifySession` 的 `xposed_module` 取值（连同 Web 控制台那一行与 `verify_v33` 上的真断言）；`agent/` 里 3 处把 Xposed 列为加载路径的注释。
+- **AIDL 协议 13 → 14**（惯例：AIDL 面变了就升），`MIN_XPOSED_VERSION` 删除；`REQUIREMENTS.md §30.4` 里"当前 AIDL 为 v13"同步改 v14。管理 App 与 Device Daemon 同包发布，无私版本兼容负担。
+- **门禁条目 117 → 115（36 host + 79 device）**：v31/v32 都是设备侧脚本（v31 是后端本体、v32 是它的控制面）。已同步 `CLAUDE.md`/`AGENTS.md`、`FEATURE_STATUS.md`、`HANDOVER.md` 的 live 计数；`PROGRESS.md` 与 `FEATURE_STATUS.md` 里 2026-10-01 那轮的历史数字（114 PASS / 1 FAIL / 2 SKIP、118 条基线）**原样保留**——它们是已记录的运行结果，改它们等于篡改。顺带修掉 `tools/MAP.md` 两处畸形行（`## Known flakes` 标题被吞、`verify_v08_*` flake bullet 粘在 v34 行尾）。
+- **保留**：Frida Gadget、eCapture、LSPlant（Java hook 引擎）、Zygisk 全部不动——多处段落把 Xposed 与它们写在同一句/同一张表里，本次只摘 Xposed。两处**描述"检测方会 grep 什么"**（`REQUIREMENTS.md` 的"扫 frida/xposed"、`scan_agent_signatures.sh` 的 detector token 表）也保留：那是目标侧词汇，不是我们的后端。
+- **验证**：`cd device && bash ./gradlew :core:test :manager:testDebugUnitTest :daemon:testDebugUnitTest :daemon:assembleDebug :manager:assembleDebug` → **BUILD SUCCESSFUL**（`DaemonScopeRepositoryTest` 9 → 5 个用例）；全仓 `git grep -i xposed` 只剩本文件的历史条目与 `docs/archive/`。**本轮没有跑真机门禁**，最近一次真机全量结果仍是 2026-10-01 的 **114 PASS / 1 FAIL / 2 SKIP**，不得把本轮写成新的真机通过。改动**尚未提交**。
+
+## 2026-10-11 —— v0.3.12 重建并真机刷入（含刷机脚本的 Windows 阻断修复）
+
+- 环境：**Windows 工作站** + 参考设备 `aa165071`（OnePlus PGP110 / SDK 35 / arm64-v8a / KernelSU + **Zygisk Next 1.4.2**）。设备上原本**没有** ADH 模块（`/data/adb/modules/adh` 不存在，只剩 10-10 的 zygisk 残留标记），本次是重新刷入。
+- 从当前源码在 Windows 上重建：`libadh_agent.so` **1,014,984 B**（sha256 `018116ce2267fae2…`，替换掉设备上旧的 `78d9d20f…`）、`adh-zygisk.zip`、`adh-bundle-v0.3.12.zip`（20,329,668 B）；companion 的 `zygisk_module_entry` / `zygisk_companion_entry` 两个导出已校验。device/ 无源码变更，Manager/Daemon APK 复用既有产物。
+- `tools/flash_device.sh --no-build --reboot` 刷入后实机核对：模块已合并进 `/data/adb/modules/adh`（`zygisk/arm64-v8a.so` 在位）、设备上的 `libadh_agent.so` 与本仓构建**逐字节同 sha256**、`module.prop` 状态「运行中」；重启后 `zygisk_loaded=active`、`adh-device-daemon`（root，pid 3126）与 `zn-zygisk-companion64 adh` 均在跑，作用域仍为 allowlist `com.chaoxing.mobile`。**本次没有跑设备门禁**，故最近一次真机全量结果仍是 2026-10-01 的 **114 PASS / 1 FAIL / 2 SKIP**，不得把本次写进新的真机通过。
+- **修掉一个真实阻断**（`tools/lib/env.sh` `refresh_agent_so`）：它把 POSIX 主机路径 `/tmp/adh_agent_refresh.sh` 直接交给 Windows `adb.exe`，而 `flash_device.sh` 顶部 `export MSYS_NO_PATHCONV=1` 又关掉了 Git Bash 的路径转换，于是 `adb push` 报 `cannot stat` → `set -e` 在 `pm install` 之后中断脚本——**模块只进 `modules_update/`、`--reboot` 从不执行**（表现为"刷了但没生效"）。改为先用 `cygpath` 转换主机侧路径、并在两次 push 期间显式钉住 `MSYS_NO_PATHCONV`（`install_apk_root` 已有同样写法）。修复前后各复现/验证一次，`rc` 从 1 变 0。
+- 注意：该设备上**没有** `com.adh.sandbox`（沙盒 App 未安装），设备侧验收脚本要先装沙盒才有意义。本次改动**尚未提交**。
+
 ## 2026-10-09 —— v0.3.12 可刷入预发布包已公开
 
 - 公开仓库 `decrypthub/AndroidDecryptHub` 的 `main` 增加 `439bc00`，标签 `v0.3.12` 指向该提交；[GitHub Release](https://github.com/decrypthub/AndroidDecryptHub/releases/tag/v0.3.12) 已创建为 **prerelease**。匿名下载链接返回 200，三个附件均显示 `uploaded`：`adh-bundle-v0.3.12.zip`（20,261,727 B）、对应的 LSPlant 修改后源码归档、`SHA256SUMS`。
