@@ -147,11 +147,27 @@ static ssize_t read_request_line(int fd, char *buf, size_t cap) {
 }
 
 // The companion relay exists for the pre-specialize window only (Zygisk Next dlcloses the module
-// library afterwards), so the socket is cached and given up after a few consecutive failures instead
-// of being reopened for every single log line.
+// library afterwards), so the socket is cached instead of being reopened for every single log line.
 static int g_companion_socket = -1;
 static int g_companion_fails = 0;
 static constexpr int kCompanionMaxFails = 3;
+
+// ...and it is RELEASED at the end of that window. After specialize the instance runs with the app's
+// uid, the socket no longer works (measured - the connection does not survive the switch), and an fd
+// left open here lives for the whole life of the app process. Zygisk Next 1.5+ reports exactly that
+// as improper Companion API use ("1 module(s) with issue: adh" / "may cause process crashes and
+// memory leaks"), and it is right: the descriptor is dead weight in a process we already handed the
+// agent to. Closing it also stops note() from opening a NEW companion socket post-specialize, which
+// is not a legal place to call connectCompanion().
+static bool g_companion_relay_open = true;
+
+static void release_companion_relay(void) {
+    if (g_companion_socket >= 0) {
+        close(g_companion_socket);
+        g_companion_socket = -1;
+    }
+    g_companion_relay_open = false;
+}
 
 // A companion socket with bounded reads/writes: this runs on the app's startup path, so a wedged
 // companion must cost at most ~1 s per attempt instead of blocking the process indefinitely.
@@ -168,6 +184,7 @@ static int connect_companion(void) {
 }
 
 static bool companion_log_line(const char *line) {
+    if (!g_companion_relay_open) return false;   // post-specialize: relay released, see above
     if (g_companion_fails >= kCompanionMaxFails) return false;
     if (g_companion_socket < 0) {
         g_companion_socket = connect_companion();
@@ -308,6 +325,65 @@ static bool package_in_scope(const char *pkg) {
     return strstr(buf, needle) != nullptr;
 }
 
+// One family flag out of a policy slice: "d":true / "d": false → 1 / 0; anything else keeps the
+// default (ON). Same fail-open rule as the Kotlin codec, so a hand-edited or truncated scope file
+// can only ever mean "hook more", never "hook less".
+static int family_on(const char *obj, const char *key, int dflt) {
+    char needle[8];
+    snprintf(needle, sizeof(needle), "\"%s\"", key);
+    const char *p = strstr(obj, needle);
+    if (!p) return dflt;
+    p = strchr(p + strlen(needle), ':');
+    if (!p) return dflt;
+    p++;
+    while (*p == ' ' || *p == '\t') p++;
+    if (strncmp(p, "true", 4) == 0) return 1;
+    if (strncmp(p, "false", 5) == 0) return 0;
+    return dflt;
+}
+
+// Render one package's hook policy as the flag line the agent consumes ("d=1,h=0,…").
+// false = this package carries no policy, which leaves the agent on its all-on default.
+static bool policy_flags_for(const char *pkg, char *out, size_t cap) {
+    if (!pkg || !pkg[0]) return false;
+    int fd = open(kScopePath, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return false;
+    char buf[65536];
+    ssize_t n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0) return false;
+    buf[n] = '\0';
+
+    bool ok = false;
+    const char *policy = strstr(buf, "\"policy\"");
+    if (policy) {
+        char needle[512];
+        snprintf(needle, sizeof(needle), "\"%s\"", pkg);
+        const char *entry = strstr(policy, needle);
+        const char *capture = entry ? strstr(entry, "\"c\"") : nullptr;
+        const char *brace = capture ? strchr(capture, '{') : nullptr;
+        if (brace) {
+            // Bound the slice at the matching close brace so a later package's "d" cannot be read.
+            const char *end = brace;
+            int depth = 0;
+            for (; *end; end++) {
+                if (*end == '{') depth++;
+                else if (*end == '}' && --depth == 0) { end++; break; }
+            }
+            char slice[512];
+            size_t len = static_cast<size_t>(end - brace);
+            if (len >= sizeof(slice)) len = sizeof(slice) - 1;
+            memcpy(slice, brace, len);
+            slice[len] = '\0';
+            snprintf(out, cap, "d=%d,h=%d,s=%d,a=%d,t=%d,e=%d",
+                     family_on(slice, "d", 1), family_on(slice, "h", 1), family_on(slice, "s", 1),
+                     family_on(slice, "a", 1), family_on(slice, "t", 1), family_on(slice, "e", 1));
+            ok = true;
+        }
+    }
+    return ok;
+}
+
 static int open_agent_fd(zygisk::Api *api, std::string *where) {
     // Open the agent while we are still in the pre-specialize window. Calling
     // getModuleDir() from postAppSpecialize deadlocks on Zygisk Next, so keep
@@ -426,7 +502,10 @@ public:
         if (api) api->setOption(zygisk::Api::DLCLOSE_MODULE_LIBRARY);
     }
 
-    void preAppSpecialize(zygisk::AppSpecializeArgs *args) override {
+    // The pre-specialize body. preAppSpecialize() below wraps it so the companion relay is released
+    // on EVERY exit path, including the early returns for hard-excluded and out-of-scope packages -
+    // that is exactly where an fd used to be left behind for the whole process.
+    void pre_specialize_inner(zygisk::AppSpecializeArgs *args) {
         should_inject = false;
         agent_path.clear();
         if (!marker_requested) {
@@ -483,6 +562,30 @@ public:
         }
         note("in scope pkg=%s", package.c_str());
 
+        // Which hook families this package is allowed to see installed. Asked here because the
+        // companion socket does not survive specialization; the agent applies it when it starts.
+        policy_flags.clear();
+        {
+            int sock = connect_companion();
+            if (sock >= 0) {
+                char req[320];
+                int len = snprintf(req, sizeof(req), "policy %s\n", package.c_str());
+                char reply[80] = {0};
+                if (len > 0 && send_all(sock, req, (size_t)len) &&
+                    read_reply_line(sock, reply, sizeof(reply))) {
+                    if (reply[0] && strncmp(reply, "default", 7) != 0) policy_flags = reply;
+                }
+                close(sock);
+            }
+            if (policy_flags.empty()) {
+                // Same fallback order as the scope query: a direct read works when this instance
+                // happens to be root, and silence simply leaves the agent on its defaults.
+                char direct[64];
+                if (policy_flags_for(package.c_str(), direct, sizeof(direct))) policy_flags = direct;
+            }
+            if (!policy_flags.empty()) note("policy pkg=%s %s", package.c_str(), policy_flags.c_str());
+        }
+
         should_inject = true;
         int src_fd = open_agent_fd(api, &agent_path);
         if (src_fd < 0) {
@@ -498,7 +601,17 @@ public:
         note("will inject pkg=%s via %s (fd=%d)", package.c_str(), agent_path.c_str(), agent_fd);
     }
 
+    // Always the LAST thing we do before the uid/domain switch: every note() above had its chance to
+    // relay through the companion, and nothing after this point can use that socket anyway.
+    void preAppSpecialize(zygisk::AppSpecializeArgs *args) override {
+        pre_specialize_inner(args);
+        release_companion_relay();
+    }
+
     void postAppSpecialize(const zygisk::AppSpecializeArgs *args) override {
+        // Idempotent backstop: if a future edit adds an exit path that skips the wrapper, the fd is
+        // still closed here rather than living for the life of the app process.
+        release_companion_relay();
         (void)args;
         if (!should_inject || agent_path.empty() || agent_fd < 0) return;
 
@@ -526,6 +639,14 @@ public:
         auto set_pkg = reinterpret_cast<set_pkg_fn>(dlsym(handle, "adh_agent_set_package"));
         if (set_pkg && !package_name.empty()) set_pkg(package_name.c_str());
         else LOGE("adh_agent_set_package not found; agent will infer package from cmdline");
+        // Hand over the per-package hook policy before the agent starts: it arms from this, so a
+        // trimmed app never installs the hooks the user switched off.
+        if (!policy_flags.empty()) {
+            using set_policy_fn = void (*)(const char *);
+            auto set_policy = reinterpret_cast<set_policy_fn>(dlsym(handle, "adh_agent_set_policy"));
+            if (set_policy) set_policy(policy_flags.c_str());
+            else LOGE("adh_agent_set_policy not found; agent keeps every family on");
+        }
         using start_fn = void (*)();
         auto start = reinterpret_cast<start_fn>(dlsym(handle, "adh_agent_start"));
         if (!start) {
@@ -544,6 +665,8 @@ private:
     int agent_fd = -1;
     std::string agent_path;
     std::string package_name;
+    // Hook-family policy line for this package (empty = none configured → agent defaults to all on).
+    std::string policy_flags;
 };
 
 REGISTER_ZYGISK_MODULE(AdhModule)
@@ -586,6 +709,22 @@ static void companion_serve(int client) {
             if (package_in_scope(pkg)) reply[0] = '1';
             note("companion scope query pkg=%s -> %c", pkg, reply[0]);
             (void)send_all(client, reply, 2);
+            continue;
+        }
+        if (strncmp(req, "policy ", 7) == 0) {
+            // Per-package hook policy. "default" (not a flag line) means this package carries none,
+            // so the instance hands over nothing and the agent keeps every family on.
+            const char *pkg = req + 7;
+            char flags[64];
+            if (policy_flags_for(pkg, flags, sizeof(flags))) {
+                note("companion policy query pkg=%s -> %s", pkg, flags);
+                char reply[72];
+                snprintf(reply, sizeof(reply), "%s\n", flags);
+                (void)send_all(client, reply, strlen(reply));
+            } else {
+                note("companion policy query pkg=%s -> default", pkg);
+                (void)send_all(client, "default\n", 8);
+            }
             continue;
         }
         note("companion refused unknown command");

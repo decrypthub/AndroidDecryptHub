@@ -9,17 +9,67 @@ class ScopeJsonTest {
     @Test
     fun encodeDecodeRoundTrip() {
         val cfg = ScopeConfig(
-            version = 1,
             mode = ScopeConfig.MODE_ALLOWLIST,
             packages = setOf("com.adh.sandbox", "com.example.target"),
         )
         val json = ScopeJson.encode(cfg)
         val back = ScopeJson.decode(json)
-        assertEquals(1, back.version)
+        assertEquals(ScopeConfig.CURRENT_VERSION, back.version)
         assertEquals(ScopeConfig.MODE_ALLOWLIST, back.mode)
         assertTrue(back.contains("com.adh.sandbox"))
         assertTrue(back.contains("com.example.target"))
         assertEquals(2, back.packages.size)
+    }
+
+    @Test
+    fun perPackagePolicyRoundTrips() {
+        val cfg = ScopeConfig(packages = setOf("com.example.target"))
+            .withPolicy("com.example.target", CaptureFamilies(digest = true, hmac = false, symmetric = true, asymmetric = false, tls = true, aead = false))
+        val back = ScopeJson.decode(ScopeJson.encode(cfg))
+        assertEquals(
+            CaptureFamilies(digest = true, hmac = false, symmetric = true, asymmetric = false, tls = true, aead = false),
+            back.familiesFor("com.example.target"),
+        )
+        // The flag line the Zygisk companion hands the target process must agree with the JSON.
+        assertEquals("d=1,h=0,s=1,a=0,t=1,e=0", back.familiesFor("com.example.target").toFlagString())
+        assertEquals(back.familiesFor("com.example.target"), CaptureFamilies.fromFlagString("d=1,h=0,s=1,a=0,t=1,e=0"))
+    }
+
+    @Test
+    fun absentPolicyMeansEveryFamilyOn() {
+        // An old scope file (no policy section) must keep the pre-policy behaviour exactly.
+        val old = """{"version":1,"mode":"allowlist","packages":["com.example.target"]}"""
+        val cfg = ScopeJson.decode(old)
+        assertEquals(CaptureFamilies.DEFAULT, cfg.familiesFor("com.example.target"))
+        assertTrue(cfg.familiesFor("com.example.target").isDefault)
+        // ...and a default entry is never written back, so the section stays absent.
+        assertFalse(ScopeJson.encode(cfg).contains("policy"))
+    }
+
+    @Test
+    fun policyForAPackageThatLeftTheScopeIsDropped() {
+        val inScope = ScopeConfig(packages = setOf("com.example.target"))
+            .withPolicy("com.example.target", CaptureFamilies(hmac = false))
+        val dropped = inScope.withPackage("com.example.target", false)
+        assertTrue(dropped.policy.isEmpty())
+        assertFalse(ScopeJson.encode(dropped).contains("policy"))
+        // A policy cannot be attached to a package that is not in scope in the first place.
+        assertTrue(ScopeConfig.EMPTY.withPolicy("com.example.other", CaptureFamilies(hmac = false)).policy.isEmpty())
+    }
+
+    @Test
+    fun policyToleratesMissingAndUnknownFamilyKeys() {
+        // Missing keys default to ON; an unknown key is ignored — a newer writer never breaks a reader.
+        val json = """
+            {"version":2,"mode":"allowlist","packages":["com.example.target"],
+             "policy":{"com.example.target":{"c":{"h":false,"zz":true}}}}
+        """.trimIndent()
+        val families = ScopeJson.decode(json).familiesFor("com.example.target")
+        assertEquals(CaptureFamilies(hmac = false), families)
+        // A truncated flag line can only ever mean "hook more", never "hook less".
+        assertEquals(CaptureFamilies.DEFAULT, CaptureFamilies.fromFlagString(""))
+        assertEquals(CaptureFamilies.DEFAULT, CaptureFamilies.fromFlagString("garbage"))
+        assertEquals(CaptureFamilies(hmac = false), CaptureFamilies.fromFlagString("h=0"))
     }
 
     @Test
@@ -62,7 +112,7 @@ class ScopeJsonTest {
         assertFalse(apps[0].system)
         assertEquals("com.android.settings", apps[1].packageName)
         assertTrue(apps[1].system)
-        assertEquals(AdhProtocol.VERSION, 14)
+        assertEquals(AdhProtocol.VERSION, 15)
         assertEquals(AdhProtocol.MIN_PROCESS_VERSION, 4)
         assertEquals(AdhProtocol.MIN_APP_OPEN_VERSION, 6)
     }

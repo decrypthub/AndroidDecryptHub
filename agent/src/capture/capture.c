@@ -27,7 +27,19 @@
 // always holds, and adhd surfaces dropped>0 as complete:false.
 #define CAP_BYTES 2048
 #define CAP_RING  1024          // ~2 MiB; bounded agent memory (architecture red line)
-struct CapRec { char func[24]; int inl; int n; int tid; long long ts_ns; unsigned char data[CAP_BYTES]; };
+// Symmetric key/IV ride along with the plaintext record they belong to. The key exists only at
+// EVP_CipherInit_ex; the payload exists only at EVP_CipherUpdate. The two are joined by
+// key_store()/key_lookup() below — without that a native AES capture carries the plaintext and no
+// key at all (measured on a real target: the AES plaintext was captured while crypto_identify
+// reported "0 algorithms with a key", because the only key-carrying path was the Java reporter
+// that a real app does not install).
+#define CAP_KEY 64
+#define CAP_IV  32
+struct CapRec {
+    char func[24]; int inl; int n; int tid; long long ts_ns;
+    int nkey; int niv; unsigned char key[CAP_KEY]; unsigned char iv[CAP_IV];
+    unsigned char data[CAP_BYTES];
+};
 static struct CapRec g_ring[CAP_RING];
 static int g_ring_head = 0, g_ring_tail = 0, g_ring_count = 0;   // ring: head=write, tail=read (under g_cap_lock)
 static unsigned long long g_cap_seq = 0;       // total capture() attempts — ATOMIC (read/written off-lock)
@@ -40,7 +52,8 @@ static unsigned long long g_cap_drained = 0;
 static unsigned long long g_cap_dropped = 0;   // total dropped (ring full or lock busy) — ATOMIC
 static long long g_cap_first_drop_ns = 0, g_cap_last_drop_ns = 0;   // best-effort diagnostic ts
 static pthread_mutex_t g_cap_lock = PTHREAD_MUTEX_INITIALIZER;
-static void capture(const char *func, const unsigned char *in, int inl) {
+static void capture_keyed(const char *func, const unsigned char *in, int inl,
+                          const unsigned char *key, int nkey, const unsigned char *iv, int niv) {
     if (inl <= 0 || !in) return;
     // Runs on the target's own crypto/TLS thread — must NEVER block or sleep here (any
     // injected latency is an ANR risk and a timing-based anti-debug surface). Count every
@@ -59,6 +72,9 @@ static void capture(const char *func, const unsigned char *in, int inl) {
         strncpy(r->func, func, sizeof(r->func) - 1); r->func[sizeof(r->func)-1]=0;
         r->inl = inl; r->n = inl < CAP_BYTES ? inl : CAP_BYTES;
         r->tid = (int)gettid(); r->ts_ns = ts;
+        r->nkey = 0; r->niv = 0;
+        if (key && nkey > 0) { r->nkey = nkey < CAP_KEY ? nkey : CAP_KEY; memcpy(r->key, key, r->nkey); }
+        if (iv && niv > 0)   { r->niv  = niv  < CAP_IV  ? niv  : CAP_IV;  memcpy(r->iv,  iv,  r->niv); }
         memcpy(r->data, in, r->n);
         g_ring_head = (g_ring_head + 1) % CAP_RING;
         g_ring_count++;
@@ -68,6 +84,11 @@ static void capture(const char *func, const unsigned char *in, int inl) {
         g_cap_last_drop_ns = ts;
     }
     pthread_mutex_unlock(&g_cap_lock);
+}
+
+// Keyless form — every pre-existing caller (digest/TLS/file/sys wrappers, push_text) keeps using it.
+static void capture(const char *func, const unsigned char *in, int inl) {
+    capture_keyed(func, in, inl, NULL, 0, NULL, 0);
 }
 
 // Empty the ring (used by the one-shot probes in place of the old `g_ncaps = 0`). Discarded
@@ -93,14 +114,120 @@ static size_t emit_caprec(char *out, size_t len, size_t cap, const struct CapRec
     len += snprintf(out + len, cap > len ? cap - len : 0,
         "%s{\"func\":\"%s\",\"inl\":%d,\"tid\":%d,\"tsNs\":%lld,\"hex\":\"", first ? "" : ",", r->func, r->inl, r->tid, r->ts_ns);
     for (int b = 0; b < r->n && len + 3 < cap; b++) len += snprintf(out + len, cap > len ? cap - len : 0, "%02x", r->data[b]);
-    len += snprintf(out + len, cap > len ? cap - len : 0, "\"}");
+    len += snprintf(out + len, cap > len ? cap - len : 0, "\"");
+    // key/iv are optional and only present for symmetric records whose key was seen at init.
+    if (r->nkey > 0) {
+        len += snprintf(out + len, cap > len ? cap - len : 0, ",\"key\":\"");
+        for (int b = 0; b < r->nkey && len + 3 < cap; b++) len += snprintf(out + len, cap > len ? cap - len : 0, "%02x", r->key[b]);
+        len += snprintf(out + len, cap > len ? cap - len : 0, "\"");
+    }
+    if (r->niv > 0) {
+        len += snprintf(out + len, cap > len ? cap - len : 0, ",\"iv\":\"");
+        for (int b = 0; b < r->niv && len + 3 < cap; b++) len += snprintf(out + len, cap > len ? cap - len : 0, "%02x", r->iv[b]);
+        len += snprintf(out + len, cap > len ? cap - len : 0, "\"");
+    }
+    len += snprintf(out + len, cap > len ? cap - len : 0, "}");
     return len;
 }
+// ---- symmetric key/IV join -------------------------------------------------------------------
+// Conscrypt calls EVP_CipherInit_ex(ctx, cipher, impl, key, iv, enc) once per Cipher.init(), then
+// EVP_CipherUpdate(ctx, …) per doFinal(); the key exists only in the first call. This table joins
+// the two by ctx pointer so the plaintext record carries its key. Lengths come from libcrypto's
+// own accessors and NEVER from EVP_CIPHER_CTX struct layout (same reason as the EVP_MD_CTX note
+// above, plus: reading past the real key would be a memory-safety bug inside the target), so an
+// unresolved accessor stores nothing rather than something wrong.
+#define KEY_SLOTS 64
+struct KeySlot { void *ctx; int nkey; int niv; unsigned char key[CAP_KEY]; unsigned char iv[CAP_IV]; };
+struct KeyBlob { int nkey; int niv; unsigned char key[CAP_KEY]; unsigned char iv[CAP_IV]; };
+static struct KeySlot g_keys[KEY_SLOTS];
+static int g_key_next = 0;                                     // round-robin eviction once full
+static pthread_mutex_t g_key_lock = PTHREAD_MUTEX_INITIALIZER;
+typedef int (*cipher_ctx_len_t)(const void *);
+static cipher_ctx_len_t g_cipher_key_len = NULL, g_cipher_iv_len = NULL;
+
+// find-or-claim one slot; caller holds g_key_lock.
+static struct KeySlot *key_slot(void *ctx, int create) {
+    struct KeySlot *spare = NULL;
+    for (int i = 0; i < KEY_SLOTS; i++) {
+        if (g_keys[i].ctx == ctx) return &g_keys[i];
+        if (!g_keys[i].ctx && !spare) spare = &g_keys[i];
+    }
+    if (!create) return NULL;
+    if (spare) return spare;
+    struct KeySlot *victim = &g_keys[g_key_next];
+    g_key_next = (g_key_next + 1) % KEY_SLOTS;
+    return victim;
+}
+
+static void key_store(void *ctx, const unsigned char *key, int klen, const unsigned char *iv, int vlen) {
+    if (!ctx || (!key && !iv)) return;
+    if (klen > CAP_KEY) klen = CAP_KEY;
+    if (vlen > CAP_IV)  vlen = CAP_IV;
+    if (klen <= 0 && vlen <= 0) return;
+    // Never wait for the lock: this runs on the target's own crypto thread (same rule as capture()).
+    if (pthread_mutex_trylock(&g_key_lock) != 0) return;
+    struct KeySlot *s = key_slot(ctx, 1);
+    s->ctx = ctx; s->nkey = klen; s->niv = vlen;
+    if (klen > 0) memcpy(s->key, key, klen);
+    if (vlen > 0) memcpy(s->iv, iv, vlen);
+    pthread_mutex_unlock(&g_key_lock);
+}
+
+static int key_lookup(void *ctx, struct KeyBlob *out) {
+    if (!ctx) return 0;
+    if (pthread_mutex_trylock(&g_key_lock) != 0) return 0;
+    struct KeySlot *s = key_slot(ctx, 0);
+    int hit = 0;
+    if (s && (s->nkey > 0 || s->niv > 0)) {
+        out->nkey = s->nkey; out->niv = s->niv;
+        memcpy(out->key, s->key, CAP_KEY); memcpy(out->iv, s->iv, CAP_IV);
+        hit = 1;
+    }
+    pthread_mutex_unlock(&g_key_lock);
+    return hit;
+}
+
+static void key_forget(void *ctx) {
+    if (!ctx) return;
+    if (pthread_mutex_trylock(&g_key_lock) != 0) return;
+    struct KeySlot *s = key_slot(ctx, 0);
+    if (s) { s->ctx = NULL; s->nkey = 0; s->niv = 0; }
+    pthread_mutex_unlock(&g_key_lock);
+}
+
 typedef int (*EVP_CipherUpdate_t)(void *, unsigned char *, int *, const unsigned char *, int);
 static EVP_CipherUpdate_t g_evp_cipher_orig = NULL;
+// The key was seen at init, the payload is here: emit them on ONE record.
 static int my_EVP_CipherUpdate(void *ctx, unsigned char *out, int *outl, const unsigned char *in, int inl) {
-    capture("EVP_CipherUpdate", in, inl);
+    struct KeyBlob blob;
+    if (key_lookup(ctx, &blob)) capture_keyed("EVP_CipherUpdate", in, inl, blob.key, blob.nkey, blob.iv, blob.niv);
+    else capture("EVP_CipherUpdate", in, inl);
     return g_evp_cipher_orig(ctx, out, outl, in, inl);
+}
+
+typedef int (*EVP_CipherInit_ex_t)(void *, const void *, void *, const unsigned char *, const unsigned char *, int);
+static EVP_CipherInit_ex_t g_evp_cipher_init_orig = NULL;
+// key != NULL is the call that installs the key material (Conscrypt calls this twice: once with the
+// cipher only, then again with key/iv). key == NULL with iv != NULL re-seeds the IV and keeps the key.
+static int my_EVP_CipherInit_ex(void *ctx, const void *type, void *impl,
+                                const unsigned char *key, const unsigned char *iv, int enc) {
+    int rc = g_evp_cipher_init_orig(ctx, type, impl, key, iv, enc);
+    if (rc == 1 && ctx) {
+        int klen = (key && g_cipher_key_len) ? g_cipher_key_len(ctx) : 0;
+        int vlen = (iv  && g_cipher_iv_len)  ? g_cipher_iv_len(ctx)  : 0;
+        if (klen < 0) klen = 0;   // an accessor returning nonsense must not become a length
+        if (vlen < 0) vlen = 0;
+        if (klen > 0 || vlen > 0) key_store(ctx, key, klen, iv, vlen);
+    }
+    return rc;
+}
+
+typedef void (*EVP_CIPHER_CTX_free_t)(void *);
+static EVP_CIPHER_CTX_free_t g_evp_cipher_ctx_free_orig = NULL;
+// The next Cipher can reuse the freed address, so forget the key before that can happen.
+static void my_EVP_CIPHER_CTX_free(void *ctx) {
+    key_forget(ctx);
+    g_evp_cipher_ctx_free_orig(ctx);
 }
 
 // Digest (MD5/SHA-1/SHA-256/SHA-512 via MessageDigest) and HMAC (via Mac) both route
@@ -559,6 +686,43 @@ static char g_crypto_mod[64] = "";
 //      periodically from adhd (mirrors the ios-decrypt-helper log-store model: hooks
 //      stay installed and events stream to the panel, instead of one-shot triggers) ----
 static int g_capture_on = 0;
+
+// Per-package hook policy, delivered by the Zygisk companion (see injector/zygisk/jni/main.cpp's
+// `policy` verb) and applied here. ALL ON is the default and reproduces the behaviour before the
+// policy existed, so an absent policy changes nothing.
+//
+// Unchecked means the hooks are NOT INSTALLED, never "installed then filtered": the point is a
+// smaller footprint inside the target (a hooked app can notice — measured 2026-10-11, a target
+// killed itself with SIGSEGV while our GOT hooks were live).
+struct CaptureFamilyFlags { int digest, hmac, symmetric, asymmetric, tls, aead; };
+static struct CaptureFamilyFlags g_families = { 1, 1, 1, 1, 1, 1 };
+
+void adh_capture_set_families(int digest, int hmac, int symmetric, int asymmetric, int tls, int aead) {
+    g_families.digest = digest ? 1 : 0;
+    g_families.hmac = hmac ? 1 : 0;
+    g_families.symmetric = symmetric ? 1 : 0;
+    g_families.asymmetric = asymmetric ? 1 : 0;
+    g_families.tls = tls ? 1 : 0;
+    g_families.aead = aead ? 1 : 0;
+}
+
+static void skip_add(char *buf, size_t cap, const char *names) {
+    if (strstr(buf, names)) return;
+    size_t len = strlen(buf);
+    snprintf(buf + len, cap > len ? cap - len : 0, "%s%s", len ? "," : "", names);
+}
+
+// There is deliberately NO self-arm here. The per-package policy decides WHICH FAMILIES get
+// installed; WHO INSTALLS is still the caller, because the GOT patch target is a module name and
+// the agent must not carry one (see the WS-B red line in tools/verify_v87_mcp_operability.sh: the
+// name of the app-level JCE/TLS provider module must not appear anywhere under agent/src — it is a
+// plain substring scan, so it would catch even a comment that spells it out). The only module we
+// could name without a caller is "every file-backed module" — which the settings contract
+// explicitly warns against as a default (it hooks framework crypto on the main thread during
+// init). So the policy rides the companion → agent hop (adh_agent_set_policy) and is applied by
+// whatever install comes next; with no host there is no install, which is the documented honest
+// boundary, not an oversight.
+
 void adh_cmd_capture_start(int fd, const char *id, const char *cryptoModule, const char *fileModule, const char *sysModule) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
     void *evp = adh_resolve_sym("libcrypto.so", "EVP_CipherUpdate");
@@ -567,6 +731,17 @@ void adh_cmd_capture_start(int fd, const char *id, const char *cryptoModule, con
     void *dsu = adh_resolve_sym("libcrypto.so", "EVP_DigestSignUpdate");
     void *ow  = adh_resolve_sym("libssl.so", "SSL_write");
     void *orr = adh_resolve_sym("libssl.so", "SSL_read");
+    // Symmetric key/IV: the init call carries the key, the update call carries the payload, so both
+    // ends of the pair must be hooked for a native AES capture to name its key.
+    void *cin = adh_resolve_sym("libcrypto.so", "EVP_CipherInit_ex");
+    void *cfr = adh_resolve_sym("libcrypto.so", "EVP_CIPHER_CTX_free");
+    // Length accessors: resolved and called directly, never hooked (same pattern as EVP_PKEY_id).
+    void *ckl = adh_resolve_sym("libcrypto.so", "EVP_CIPHER_CTX_key_length");
+    void *cvl = adh_resolve_sym("libcrypto.so", "EVP_CIPHER_CTX_iv_length");
+    if (cin) g_evp_cipher_init_orig = (EVP_CipherInit_ex_t)cin;
+    if (cfr) g_evp_cipher_ctx_free_orig = (EVP_CIPHER_CTX_free_t)cfr;
+    if (ckl) g_cipher_key_len = (cipher_ctx_len_t)ckl;
+    if (cvl) g_cipher_iv_len  = (cipher_ctx_len_t)cvl;
     if (evp) g_evp_cipher_orig = (EVP_CipherUpdate_t)evp;
     if (dig) g_orig_evp_digest = (update3_t)dig;
     if (hm)  g_orig_hmac       = (update3_t)hm;
@@ -607,28 +782,50 @@ void adh_cmd_capture_start(int fd, const char *id, const char *cryptoModule, con
     // and the EVP_PKEY HMAC path EVP_DigestSignUpdate), and TLS (SSL_read/write).
     strncpy(g_crypto_mod, (cryptoModule && cryptoModule[0]) ? cryptoModule : "", sizeof(g_crypto_mod)-1);
     g_crypto_mod[sizeof(g_crypto_mod)-1]=0;
-    int re = evp ? adh_got_replace(g_crypto_mod, evp, (void *)my_EVP_CipherUpdate) : -1;
-    int rd = dig ? adh_got_replace(g_crypto_mod, dig, (void *)my_EVP_DigestUpdate) : -1;
-    int rh = hm  ? adh_got_replace(g_crypto_mod, hm,  (void *)my_HMAC_Update) : -1;
-    int rs = dsu ? adh_got_replace(g_crypto_mod, dsu, (void *)my_EVP_DigestSignUpdate) : -1;
-    int rw = ow  ? adh_got_replace(g_crypto_mod, ow,  (void *)my_SSL_write) : -1;
-    int rr = orr ? adh_got_replace(g_crypto_mod, orr, (void *)my_SSL_read) : -1;
+    // Family gate (per-package policy). A group the policy turned off is never installed, and is
+    // named in `skipped` so the daemon can keep installed/attempted meaning "what was asked for".
+    // EVP_DigestSign* serves BOTH the JCA Mac (HMAC) and the PKEY signing path, so it belongs to
+    // either family — it is installed when at least one of them is on.
+    const int on_dig = g_families.digest, on_mac = g_families.hmac, on_sym = g_families.symmetric;
+    const int on_asym = g_families.asymmetric, on_tls = g_families.tls, on_aead = g_families.aead;
+    const int on_dsign = (on_mac || on_asym) ? 1 : 0;
+    char skipped[160]; skipped[0] = 0;
+    if (!on_sym)   skip_add(skipped, sizeof(skipped), "evp,cipherInit,cipherCtxFree");
+    if (!on_dig)   skip_add(skipped, sizeof(skipped), "digest");
+    if (!on_mac)   skip_add(skipped, sizeof(skipped), "hmac");
+    if (!on_dsign) skip_add(skipped, sizeof(skipped), "digestSign,digestSignVerify");
+    if (!on_asym)  skip_add(skipped, sizeof(skipped), "pkey");
+    if (!on_tls)   skip_add(skipped, sizeof(skipped), "sslWrite,sslRead");
+    if (!on_aead)  skip_add(skipped, sizeof(skipped), "aead");
+    int re = (evp && on_sym)   ? adh_got_replace(g_crypto_mod, evp, (void *)my_EVP_CipherUpdate) : -1;
+    int rd = (dig && on_dig)   ? adh_got_replace(g_crypto_mod, dig, (void *)my_EVP_DigestUpdate) : -1;
+    int rh = (hm  && on_mac)   ? adh_got_replace(g_crypto_mod, hm,  (void *)my_HMAC_Update) : -1;
+    int rs = (dsu && on_dsign) ? adh_got_replace(g_crypto_mod, dsu, (void *)my_EVP_DigestSignUpdate) : -1;
+    int rw = (ow  && on_tls)   ? adh_got_replace(g_crypto_mod, ow,  (void *)my_SSL_write) : -1;
+    int rr = (orr && on_tls)   ? adh_got_replace(g_crypto_mod, orr, (void *)my_SSL_read) : -1;
+    // Name-based, like the one-shot APIs below: a Cipher.init()/free() the app has not reached yet
+    // leaves the PLT slot unbound, so value-match would silently report 0 for a genuinely imported
+    // symbol.
+    int rci = (cin && on_sym)  ? adh_got_replace_by_name(g_crypto_mod, "EVP_CipherInit_ex", (void *)my_EVP_CipherInit_ex) : -1;
+    int rcf = (cfr && on_sym)  ? adh_got_replace_by_name(g_crypto_mod, "EVP_CIPHER_CTX_free", (void *)my_EVP_CIPHER_CTX_free) : -1;
     // Name-based install (see adh_got_replace_by_name): these 7 are one-shot BoringSSL APIs the
     // app may never have called before capture_start runs, so their PLT slot is typically
     // still unbound — value-match (adh_got_replace) would silently find 0 matching slots even
     // though the symbol is genuinely imported. Matching by the reloc entry's own symbol name
     // works regardless of bind state.
-    int rpks = pks ? adh_got_replace_by_name(g_crypto_mod, "ECDSA_sign", (void*)my_ECDSA_sign) : -1;
-    int rpkv = pkv ? adh_got_replace_by_name(g_crypto_mod, "ECDSA_verify", (void*)my_ECDSA_verify) : -1;
-    int rpke = pke ? adh_got_replace_by_name(g_crypto_mod, "EVP_PKEY_encrypt", (void*)my_EVP_PKEY_encrypt) : -1;
-    int rpkd = pkd ? adh_got_replace_by_name(g_crypto_mod, "EVP_PKEY_decrypt", (void*)my_EVP_PKEY_decrypt) : -1;
-    int raes = aes ? adh_got_replace_by_name(g_crypto_mod, "EVP_AEAD_CTX_seal", (void*)my_EVP_AEAD_CTX_seal) : -1;
-    int raeo = aeo ? adh_got_replace_by_name(g_crypto_mod, "EVP_AEAD_CTX_open", (void*)my_EVP_AEAD_CTX_open) : -1;
-    int rdsi = dsi ? adh_got_replace_by_name(g_crypto_mod, "EVP_DigestSignInit", (void*)my_EVP_DigestSignInit) : -1;
-    int rdvi = dvi ? adh_got_replace_by_name(g_crypto_mod, "EVP_DigestVerifyInit", (void*)my_EVP_DigestVerifyInit) : -1;
-    int rdsf = dsf ? adh_got_replace_by_name(g_crypto_mod, "EVP_DigestSignFinal", (void*)my_EVP_DigestSignFinal) : -1;
-    int rdvu = dvu ? adh_got_replace_by_name(g_crypto_mod, "EVP_DigestVerifyUpdate", (void*)my_EVP_DigestVerifyUpdate) : -1;
-    int rdvf = dvf ? adh_got_replace_by_name(g_crypto_mod, "EVP_DigestVerifyFinal", (void*)my_EVP_DigestVerifyFinal) : -1;
+    int rpks = (pks && on_asym) ? adh_got_replace_by_name(g_crypto_mod, "ECDSA_sign", (void*)my_ECDSA_sign) : -1;
+    int rpkv = (pkv && on_asym) ? adh_got_replace_by_name(g_crypto_mod, "ECDSA_verify", (void*)my_ECDSA_verify) : -1;
+    int rpke = (pke && on_asym) ? adh_got_replace_by_name(g_crypto_mod, "EVP_PKEY_encrypt", (void*)my_EVP_PKEY_encrypt) : -1;
+    int rpkd = (pkd && on_asym) ? adh_got_replace_by_name(g_crypto_mod, "EVP_PKEY_decrypt", (void*)my_EVP_PKEY_decrypt) : -1;
+    int raes = (aes && on_aead) ? adh_got_replace_by_name(g_crypto_mod, "EVP_AEAD_CTX_seal", (void*)my_EVP_AEAD_CTX_seal) : -1;
+    int raeo = (aeo && on_aead) ? adh_got_replace_by_name(g_crypto_mod, "EVP_AEAD_CTX_open", (void*)my_EVP_AEAD_CTX_open) : -1;
+    int rdsi = (dsi && on_dsign) ? adh_got_replace_by_name(g_crypto_mod, "EVP_DigestSignInit", (void*)my_EVP_DigestSignInit) : -1;
+    int rdvi = (dvi && on_dsign) ? adh_got_replace_by_name(g_crypto_mod, "EVP_DigestVerifyInit", (void*)my_EVP_DigestVerifyInit) : -1;
+    int rdsf = (dsf && on_dsign) ? adh_got_replace_by_name(g_crypto_mod, "EVP_DigestSignFinal", (void*)my_EVP_DigestSignFinal) : -1;
+    int rdvu = (dvu && on_dsign) ? adh_got_replace_by_name(g_crypto_mod, "EVP_DigestVerifyUpdate", (void*)my_EVP_DigestVerifyUpdate) : -1;
+    int rdvf = (dvf && on_dsign) ? adh_got_replace_by_name(g_crypto_mod, "EVP_DigestVerifyFinal", (void*)my_EVP_DigestVerifyFinal) : -1;
+    // The per-family verdict travels in the reply below (and in `skipped`), which is where the
+    // caller reads it: -1 = skipped by policy, 0 = asked for but absent from this module, 1 = installed.
 
     // -- 文件: persistent file-I/O hooks in the module backing java.io (fileModule, from adhd;
     //    empty = skip so the agent never hardcodes a target module). Streams openat paths +
@@ -674,19 +871,22 @@ void adh_cmd_capture_start(int fd, const char *id, const char *cryptoModule, con
     json_escape(g_crypto_mod, cmj, sizeof(cmj));
     json_escape(fileModule ? fileModule : "", fmj, sizeof(fmj));
     json_escape(sysModule ? sysModule : "", smj, sizeof(smj));
-    char out[1400];
+    char out[1800];
     snprintf(out, sizeof(out),
-        "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"capture_start\",\"ok\":true,\"cryptoModule\":\"%s\",\"evp\":%d,\"digest\":%d,\"hmac\":%d,\"digestSign\":%d,\"sslWrite\":%d,\"sslRead\":%d,"
+        "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"capture_start\",\"ok\":true,\"cryptoModule\":\"%s\",\"evp\":%d,\"cipherInit\":%d,\"cipherCtxFree\":%d,\"digest\":%d,\"hmac\":%d,\"digestSign\":%d,\"sslWrite\":%d,\"sslRead\":%d,"
         "\"pkey\":{\"sign\":%d,\"verify\":%d,\"encrypt\":%d,\"decrypt\":%d},"
         "\"aead\":{\"seal\":%d,\"open\":%d},"
         "\"digestSignVerify\":{\"signInit\":%d,\"verifyInit\":%d,\"signFinal\":%d,\"verifyUpdate\":%d,\"verifyFinal\":%d},"
         "\"fileModule\":\"%s\",\"file\":{\"open\":%d,\"openat\":%d,\"read\":%d,\"write\":%d,\"syscall\":%d,\"readChk\":%d,\"writeChk\":%d},"
-        "\"sysModule\":\"%s\",\"sys\":{\"ptrace\":%d,\"access\":%d,\"prop\":%d},\"on\":true}\n",
-        idj, cmj, re, rd, rh, rs, rw, rr,
+        "\"sysModule\":\"%s\",\"sys\":{\"ptrace\":%d,\"access\":%d,\"prop\":%d},"
+        "\"skipped\":\"%s\",\"on\":true}\n",
+        idj, cmj, re, rci, rcf, rd, rh, rs, rw, rr,
         rpks, rpkv, rpke, rpkd, raes, raeo,
         rdsi, rdvi, rdsf, rdvu, rdvf,
-        fmj, fo, foa, frd, fwr, fsc, frc, fwc, smj, sp, sa, sg);
-    send_line(fd, out);
+        fmj, fo, foa, frd, fwr, fsc, frc, fwc, smj, sp, sa, sg, skipped);
+    // fd < 0 would mean a caller with nobody waiting for the answer; no such caller exists today
+    // (the self-arm path that used it was removed — see the note above adh_cmd_capture_start).
+    if (fd >= 0) send_line(fd, out);
     LOGI("capture_start: crypto[%s] evp=%d dig=%d hmac=%d dsu=%d sslw=%d sslr=%d dsi=%d dvi=%d dsf=%d dvu=%d dvf=%d | file[%s] oa=%d sc=%d rc=%d wc=%d | sys[%s] p=%d a=%d g=%d",
          g_crypto_mod, re, rd, rh, rs, rw, rr, rdsi, rdvi, rdsf, rdvu, rdvf, g_file_mod, foa, fsc, frc, fwc, g_sys_mod, sp, sa, sg);
 }
@@ -706,6 +906,8 @@ void adh_cmd_capture_stop(int fd, const char *id) {
     if (g_orig_digest_sign)ds = adh_got_replace(g_crypto_mod, (void *)my_EVP_DigestSignUpdate, (void *)g_orig_digest_sign);
     if (g_orig_ssl_write)  w  = adh_got_replace(g_crypto_mod, (void *)my_SSL_write, (void *)g_orig_ssl_write);
     if (g_orig_ssl_read)   r  = adh_got_replace(g_crypto_mod, (void *)my_SSL_read, (void *)g_orig_ssl_read);
+    if (g_evp_cipher_init_orig)     adh_got_replace_by_name(g_crypto_mod, "EVP_CipherInit_ex", (void *)g_evp_cipher_init_orig);
+    if (g_evp_cipher_ctx_free_orig) adh_got_replace_by_name(g_crypto_mod, "EVP_CIPHER_CTX_free", (void *)g_evp_cipher_ctx_free_orig);
     if (g_ecdsa_sign_orig)   pks = adh_got_replace_by_name(g_crypto_mod, "ECDSA_sign", (void *)g_ecdsa_sign_orig);
     if (g_ecdsa_verify_orig) pkv = adh_got_replace_by_name(g_crypto_mod, "ECDSA_verify", (void *)g_ecdsa_verify_orig);
     if (g_pkey_encrypt_orig) pke = adh_got_replace_by_name(g_crypto_mod, "EVP_PKEY_encrypt", (void *)g_pkey_encrypt_orig);
@@ -737,6 +939,13 @@ void adh_cmd_capture_stop(int fd, const char *id) {
     }
     g_capture_on = 0;
     cap_reset();
+    // Keys outlive a single Cipher only until capture stops; drop the table so a later capture_start
+    // cannot stamp a stale key onto a fresh ctx that reused the same address.
+    if (pthread_mutex_trylock(&g_key_lock) == 0) {
+        memset(g_keys, 0, sizeof(g_keys));
+        g_key_next = 0;
+        pthread_mutex_unlock(&g_key_lock);
+    }
     char out[700];
     snprintf(out, sizeof(out), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"capture_stop\",\"ok\":true,\"restored\":{\"evp\":%d,\"digest\":%d,\"hmac\":%d,\"digestSign\":%d,\"sslWrite\":%d,\"sslRead\":%d,"
         "\"pkeySign\":%d,\"pkeyVerify\":%d,\"pkeyEncrypt\":%d,\"pkeyDecrypt\":%d,\"aeadSeal\":%d,\"aeadOpen\":%d,"

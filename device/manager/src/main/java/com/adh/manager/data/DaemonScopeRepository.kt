@@ -30,6 +30,14 @@ class DaemonScopeRepository(
 
     override fun save(config: ScopeConfig): Result<Unit> = runCatching {
         val client = requireClient()
+        if (config.policy.isNotEmpty()) {
+            // An older daemon decodes into its own :core and re-encodes from it, so it drops a
+            // policy it does not know AND still answers true — the UI would report "saved" for a
+            // policy that silently does not exist. Refuse instead of lying.
+            check(client.protocolVersion >= AdhProtocol.MIN_POLICY_VERSION) {
+                "daemon protocol ${client.protocolVersion} cannot store per-app hook policy"
+            }
+        }
         check(client.setScopeJson(ScopeJson.encode(config))) { "daemon rejected scope update" }
     }
 

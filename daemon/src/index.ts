@@ -52,6 +52,7 @@ const agentServer = net.createServer((sock) => {
         agentVer: msg.agentVer ?? '?',
         selfModule: msg.selfModule ?? '',
         selfBase: msg.selfBase ?? '',
+        policy: msg.policy ?? '',
         connectedAt: Date.now(),
         lastSeen: Date.now(),
         online: true,

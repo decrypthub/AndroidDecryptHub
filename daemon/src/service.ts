@@ -325,7 +325,7 @@ export async function applyCaptureEnabled() {
 // counters: `ok:true` therefore says "the command ran", never "the hooks are live". The
 // daemon derives the verdict here, once, so the MCP tool, any future REST route and the
 // settings toggle cannot disagree about what "on" means.
-const CRYPTO_COUNTERS = ['evp', 'digest', 'hmac', 'digestSign', 'sslWrite', 'sslRead'];
+const CRYPTO_COUNTERS = ['evp', 'cipherInit', 'cipherCtxFree', 'digest', 'hmac', 'digestSign', 'sslWrite', 'sslRead'];
 const NESTED_COUNTERS: [string, string[]][] = [
   ['pkey', ['sign', 'verify', 'encrypt', 'decrypt']],
   ['aead', ['seal', 'open']],
@@ -338,12 +338,19 @@ const NESTED_COUNTERS: [string, string[]][] = [
 export function captureInstallCounters(reply: any): { name: string; value: number }[] {
   const out: { name: string; value: number }[] = [];
   if (!reply || typeof reply !== 'object') return out;
-  for (const k of CRYPTO_COUNTERS) if (k in reply) out.push({ name: k, value: Number(reply[k]) || 0 });
+  // Groups the per-package hook policy turned off. The agent reports them as -1, which would
+  // otherwise read as "asked for but missing" — they were never asked for.
+  const skipped = new Set(
+    String(reply.skipped ?? '').split(',').map((s: string) => s.trim()).filter(Boolean),
+  );
+  const wanted = (name: string) => !skipped.has(name);
+  for (const k of CRYPTO_COUNTERS) if ((k in reply) && wanted(k)) out.push({ name: k, value: Number(reply[k]) || 0 });
   for (const [group, keys] of NESTED_COUNTERS) {
     // The file/sys hook sets are only installed when a module was named for them; when the
     // module is empty the agent does not touch those slots at all and its zeros mean nothing.
     if (group === 'file' && !String(reply.fileModule ?? '')) continue;
     if (group === 'sys' && !String(reply.sysModule ?? '')) continue;
+    if (!wanted(group)) continue;
     const g = reply[group];
     if (!g || typeof g !== 'object') continue;
     for (const k of keys) if (k in g) out.push({ name: `${group}.${k}`, value: Number(g[k]) || 0 });
@@ -483,6 +490,9 @@ export function startCaptureLoop(sid: string) {
           category,
           inl: c.inl, tid: c.tid, tsNs: c.tsNs, ts: now,
           hex: c.hex, preview: hexToPreview(c.hex),
+          // Symmetric captures carry the key/IV the agent joined at EVP_CipherInit_ex; the Java
+          // reporter path has always sent these, the native path only since that join exists.
+          ...(c.key ? { keyHex: c.key } : {}), ...(c.iv ? { ivHex: c.iv } : {}),
         };
         if (pushCapture(entry))
           broadcast('capture.new', { id: entry.id, sessionId: sid, source: 'native', category, algo, op, preview: entry.preview, inl: entry.inl, ts: entry.ts });

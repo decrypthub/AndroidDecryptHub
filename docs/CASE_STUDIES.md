@@ -94,3 +94,47 @@
    → index → coverage），但没串起来，本次约 20 次工具调用做考古。
    → `dump_all_dex` 现在自带判定 + 建索引，"dump 完看报告"一步到位；**冷启动/probe 那两段仍要人工**，
    且**没有**恢复被有意删掉的 T0/T1 恢复会话。
+
+---
+
+## 案例 2 — 漫播 / 克拉克拉（`com.uxin.kilaaudio` 1.6.18，**无壳**）
+
+设备 OnePlus PGP110 `aa165071` / Android 15，模块 `adh` v0.3.12。日期 2026-10-12。
+（完整现场记录含密钥与明文，在 gitignored 的 `dumps/kilaaudio/ANALYSIS.md`。）
+
+### 拿到了什么
+
+**脱壳**：`unpack` 一把出 **10 个真 dex / 65.6 MiB / 0 个诱饵壳**，直接建索引——目标没加壳，
+学习通那种"先脱壳再谈分析"的戏份这次没有。
+
+**登录手机号加密 —— 算法 + 密钥 + 证明**。一次 UI 驱动（adb 点选 + 输入）触发"发送验证码"，
+`EVP_CipherUpdate` 抓到 **11 字节明文（手机号）**，agent 的 ctx→key 连接同时给出 **16 字节 key 与 IV**；
+用这两个值在本地复算，输出与 App 真正放进请求参数的 `cellPhone` 字段**逐字节相同**。
+算法是 **AES-128-CBC / PKCS7**，IV 是源码里的字符串常量，key 不是（见下）。
+
+**同一把工具盘出的全景**：App 自带的 AES/RSA 工具类、证书固定配置的解密路径（AES-CBC + RSA，
+密钥由服务端以 `ENCRYPTED_AES_KEY` 形式下发）、播放器的 AES-CBC/NoPadding、IM 的 HMAC-SHA1/MD5、
+**埋点通道的 AEAD（GCM 类）**，以及若干第三方 SDK 各自的 AES。分类靠
+`dex_index_search` 的 `stringCallers`（"哪段代码引用了这个算法名"）+ `callers`（"谁调了 JCE"），
+一条命令一类，比逐个函数啃字节码快得多。
+
+### 这次暴露的 ADH 缺陷 / 环境事实
+
+| # | 症状 | 说明 |
+|---|---|---|
+| A | **业务请求没发出去**，抓包里只有埋点域名 | App 自己的 `PublicKeyManager` 报 `server public key check fail`，业务调用 `Failed to get response after 3 retries`；把已知的手机号密文在 500 条记录里搜也是 0 命中 → 请求在客户端就被拦。摘掉我们的钩子重试**看不出区别**，所以至少不是我们的 GOT 钩子导致的，但也没证明摘掉就能成。**待办** |
+| B | `am start -n <pkg>/main.MainActivity` 被 `SecurityException: not exported` 拒 | 冷启动必须走 launcher 入口（`cmd package resolve-activity` 拿到的 SplashActivity）或 `monkey -p`。`verify_v102_policy.sh` 早就这么做，但手写脚本时踩了一次 |
+| C | 带 LSPlant/GOT 钩子的进程被 `force-stop` 会留 `SIGSEGV code 0 (SI_USER)` tombstone | 栈在 ART `MarkCompact::UpdateLivenessInfo`——**进程正被拉倒时倒在 GC 线程里**。上一轮把它读成"目标完整性自检自杀"属于**过度解读**，本案例更正 |
+| D | `dex_crypto_scan` 的 `cryptoApis` 对 App 自己的 dex 恒为空 | 它只匹配**声明**在 `javax/crypto`、`java/security` 前缀类里的方法，App 不会去声明这些类。有用的是同一次返回的 `algoStrings` + 索引的 `stringCallers`。**待办**：要么把 `cryptoApis` 改成"引用了这些类的 App 方法"，要么在文档里说清它是什么 |
+| E | `java_hook` 的 `lastArg` 对 `byte[]` 参数是 `[B@…` | 所以"hook 住加密函数看 key"这条路走不通；这次能拿到 key，靠的是 **agent 自己在 native 层做的 ctx→key 连接**，不是 Java 钩子 |
+
+### 目标情报（可复用的形态）
+
+- **加密工具类被混淆成单字母**：`<pkg>.base.utils.encrypt.a`（AESUtil），方法 `b/c/g/h/i/t/u/v/w/x/y`；
+  静态布尔字段是"初始化过没有"，未初始化时调用抛异常——**这本身就是定位线索**：谁还需要初始化，
+  谁就没被这条流用到。
+- **固定 IV + 服务端下发 key**：AES 的 IV 写死在 `certpin.c` 里当字符串常量，key 走配置下发。
+  所以"搜 dex 找 key"注定失败，"搜 dex 找 IV / 找算法名"通常能成。
+- **同一 App 里多套密钥并存**：登录一套、证书配置一套、播放一套、埋点一套、第三方 SDK 各自一套，
+  而且**至少两套的 key 与 IV 相同**（`key == iv`）。看到一条 11 字节明文别急着当手机号，
+  先用它的 key/IV 把候选明文都算一遍对一下。

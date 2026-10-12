@@ -47,6 +47,9 @@
 static pthread_once_t g_once = PTHREAD_ONCE_INIT;
 static char g_entry[16] = "start";
 static char g_package[512] = "";
+// Per-package hook policy line from the Zygisk companion ("d=1,h=0,…"); empty = no policy → every
+// family on, i.e. exactly the behaviour before per-app policy existed.
+static char g_policy[64] = "";
 
 // ---- report + command loop ------------------------------------------------
 
@@ -77,10 +80,11 @@ static void report(int fd) {
     snprintf(hello, sizeof(hello),
         "{\"t\":\"hello\",\"agentVer\":\"%s\",\"pid\":%d,\"uid\":%d,"
         "\"package\":\"%s\",\"process\":\"%s\",\"abi\":\"%s\",\"android\":\"%s\",\"sdk\":%s,"
-        "\"entry\":\"%s\",\"selfModule\":\"%s\",\"selfBase\":\"0x%llx\"}\n",
+        "\"entry\":\"%s\",\"selfModule\":\"%s\",\"selfBase\":\"0x%llx\","
+        "\"policy\":\"%s\"}\n",
         AGENT_VER, getpid(), getuid(), pkg, pkg,
         abi[0] ? abi : "?", rel[0] ? rel : "?", sdk[0] ? sdk : "0", g_entry,
-        selfj, self_start);
+        selfj, self_start, g_policy[0] ? g_policy : "default");
     if (send_line(fd, hello) != 0) { LOGE("send hello failed"); return; }
 
     int total = 0;
@@ -731,6 +735,12 @@ static void *agent_thread(void *arg) {
 }
 
 static void do_start(void) {
+    // The per-package policy is applied by whatever install comes next — it is NOT armed here.
+    // Arming would mean the agent picking a module for its own GOT patch, and the agent carries no
+    // module name by design (WS-B red line, tools/verify_v87_mcp_operability.sh); the only module it
+    // could pick without a caller is "scan every file-backed module", which the settings contract
+    // warns against as a default. So: the policy travels companion → agent at specialize time and
+    // decides the FAMILIES of the next install, while WHO installs stays the caller's decision.
     pthread_t t;
     if (pthread_create(&t, NULL, agent_thread, NULL) == 0) pthread_detach(t);
     else LOGE("pthread_create failed");
@@ -742,6 +752,28 @@ void adh_agent_set_package(const char *pkg) {
         strncpy(g_package, pkg, sizeof(g_package) - 1);
         g_package[sizeof(g_package) - 1] = 0;
     }
+}
+
+// Per-package hook policy, handed over at load time by the Zygisk companion (its `policy` verb;
+// see injector/zygisk/jni/main.cpp). One line: "d=1,h=0,s=1,a=0,t=1,e=0". Anything missing or
+// unparseable keeps that family ON, so a truncated line can only ever mean "hook more".
+static int policy_flag(const char *flags, char key) {
+    for (const char *p = flags; (p = strchr(p, key)) != NULL; p++) {
+        int at_token_start = (p == flags) || (p[-1] == ',');
+        if (at_token_start && p[1] == '=') return (p[2] == '0') ? 0 : 1;
+    }
+    return 1;
+}
+
+__attribute__((visibility("default")))
+void adh_agent_set_policy(const char *flags) {
+    if (!flags || !flags[0]) return;
+    strncpy(g_policy, flags, sizeof(g_policy) - 1);
+    g_policy[sizeof(g_policy) - 1] = 0;
+    adh_capture_set_families(
+        policy_flag(g_policy, 'd'), policy_flag(g_policy, 'h'), policy_flag(g_policy, 's'),
+        policy_flag(g_policy, 'a'), policy_flag(g_policy, 't'), policy_flag(g_policy, 'e'));
+    LOGI("hook policy: %s", g_policy);
 }
 
 // More than one backend can load this .so into one process (Zygisk + self-load + Frida Gadget).

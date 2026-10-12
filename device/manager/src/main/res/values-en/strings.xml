@@ -56,4 +56,16 @@
     <string name="app_no_launcher">Stopped %1$s, but it has no launchable activity</string>
     <string name="app_control_denied">This app cannot be stopped or restarted</string>
     <string name="app_control_failed">Unable to control %1$s</string>
+    <string name="app_hook_config">Hook config</string>
+    <string name="app_hooks_trimmed">Hooks trimmed</string>
+    <string name="hook_config_title">Hook config</string>
+    <string name="hook_config_hint">Unchecked families are not installed in this app at all (smaller footprint). Restart the app after saving.</string>
+    <string name="hook_family_digest">Digest (MD5/SHA)</string>
+    <string name="hook_family_hmac">HMAC</string>
+    <string name="hook_family_symmetric">Symmetric (AES/DES)</string>
+    <string name="hook_family_asymmetric">Asymmetric (RSA/EC)</string>
+    <string name="hook_family_tls">TLS plaintext</string>
+    <string name="hook_family_aead">AEAD</string>
+    <string name="hook_config_reset">All on</string>
+    <string name="hook_config_done">Done</string>
 </resources>

@@ -14,6 +14,121 @@
 全来自命令参数）；② 不胡乱兜底 / fail-loud（hook 装不上、缓冲溢出、解不动一律显式报错 + 计数上报，
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
 
+## 2026-10-12 —— Zygisk Next 报"1 module(s) with issue: adh"：我们真在泄漏伴生 socket
+
+- **症状**：Zygisk Next 1.5.0 把自己的状态写进 `/data/adb/modules/zygisksu/module.prop` 的 description：
+  `[✅zygote, ✅zygote_ocomp, ✅zygote_secondary, ⚠️1 module(s) with issue: adh, Root: ✅KernelSU …]`。
+  它 WebUI 里的解释是 **"improper use of the Companion API, which may cause process crashes and memory
+  leaks"**（另一处 Fn.CompanionFd 分支链到 wiki 的 `#fd-leaking` 锚点）。
+- **根因**（就是我们的错）：`injector/zygisk/jni/main.cpp` 里给 `note()` 做转发的那条伴生 socket
+  **被缓存成 `g_companion_socket` 之后从不关闭**——只有"发失败"那条分支才 `close()`。而 pre-specialize 结束
+  进入 app 域后那条连接已经不可用（注释里本来就写着"measured - the connection does not survive the
+  switch"），于是**每一个被注入的进程都白拿着一个死 fd 活到进程结束**。另外两个调用点（`mark` / `scope`）
+  是当场 `close()` 的，只有转发这条漏了。
+- **修法**：把转发明确成**只在 pre-specialize 窗口存在**的东西——`release_companion_relay()`（关 fd +
+  置 `g_companion_relay_open=false`），由 `preAppSpecialize()` 这个新外壳在**所有返回路径**上调用
+  （原来的函数体改名 `pre_specialize_inner`，所以 hard-exclude / 不在作用域这些提前 return 也一样被覆盖），
+  并在 `postAppSpecialize()` 开头再幂等调一次兜底。`companion_log_line()` 增加 `g_companion_relay_open`
+  门禁，post-specialize 不会再开新连接（在那里调 `connectCompanion()` 本身就是不当用法）。
+- **验收（真机 `aa165071`，两处独立证据）**：
+  - Zygisk Next 自己的状态行 `⚠️1 module(s) with issue: adh` **消失**（刷入修复版并重启后重读 module.prop）；
+  - 同一个被注入的目标 `com.android.settings` 冷启动三次：**修复前 sockets=9 / totalFds=373，
+    修复后 sockets=7 / totalFds=195**。socket 的差数正是那条死连接（另有 1 个来源未定，见下）；
+  - **注入本身没被这次重构搞坏**：`verify_v102_policy` 两轮仍 PASS（说明 `mark`/`scope`/`policy`
+    三个伴生动词在重构后都还工作）。**诚实记录**：totalFds 少掉 178 比"一个 fd"多得多，
+    这一项没有被单变量控制住（前后各只测了一轮环境），我不把它算作修复的成果。
+- **新增门禁** `tools/verify_v103_zygisk_companion.sh`（device）：断言"模块本次启动确实跑过"（`zygisk_loaded`
+  标记，防止"没加载所以没意见"冒充通过）+ "Zygisk Next 的状态行没有把 adh 列为有问题的模块"，
+  并打印冷启动目标进程的 socket/fd 计数作证据。装 Zygisk Next 才跑，否则 SKIP。门禁 116 → **117（36 host + 81 device）**，
+  `CLAUDE.md`/`AGENTS.md`/`HANDOVER.md`/`FEATURE_STATUS.md` 的 live 计数同步。
+- **顺带**：`CASE_STUDIES.md` 增补"案例 2 — 漫播"（脱敏）；完整密钥/明文记录只在 gitignored 的
+  `dumps/kilaaudio/ANALYSIS.md`。**仍未提交**（本条与上面的逐包策略是同一次提交）。
+
+
+
+## 2026-10-12 —— 逐包 Hook 策略（勾了哪个 App，就只给它选中的算法族装钩子）
+
+- **需求**：ADH 的作用域是"勾选列表"，勾谁对谁生效；用户要的是**每个勾上的 App 再单独配一份**——这个 App 要不要 Hook
+  摘要(MD5/SHA)、HMAC、对称(AES)、非对称、TLS、AEAD。动机是 2026-10-11 的实测：某个轻度混淆的目标在钩子生效期间
+  以 `SIGSEGV (SI_USER)`（注入信号，不是真崩）自杀，疑似完整性自检——**少装钩子就是少暴露面**。配置**存在手机上**
+  （`/data/adb/adh/scope.json`），用户用 Manager 改、AI 用 adb 改**同一份文件**，两条路径看到的东西不分叉；没有 AI 时
+  用户自己也能用。**本版不做**：SSL 绕过开关（等 profile 收尾）、MD5/SHA 拆成两个开关（两者在本工具里走同一个
+  `EVP_DigestUpdate` 入口，拆开要额外读算法名）。
+- **契约（`device/:core`）**：`scope.json` 加**可选** `policy` 段，`version` 1 → 2；新增 `CaptureFamilies`（六布尔，
+  缺省全开）与 `ScopeConfig.policy`，`ScopeJson` 走短键 `{"c":{"d":true,"h":false,…}}`（与 `InstalledAppsJson` 同理：
+  同一份 JSON 要过 Binder）。**缺段 / 缺包 / 缺键一律按"开"** → 老 scope 文件、老 Manager、老 daemon 不写该段即保持正确；
+  `encode` 丢弃默认值与已出作用域的条目，所以该段只承载非默认项（作用域里去掉一个 App，它的策略自动消失）。
+  `AdhProtocol.VERSION` 14 → **15** + 新增 `MIN_POLICY_VERSION`——`RootScopeBinder.setScopeJson` 是 decode→re-encode，
+  低于该版本的 daemon 会**静默丢掉 `policy` 却照样回保存成功**，所以 Manager 侧写入前按它门禁、低了如实报失败。
+- **界面（`device/:manager`）**：作用域页每行的 `⋮` 菜单加「Hook 配置」，面板用 `ModalBottomSheet`（**本仓第一个
+  对话框/底部面板**，此前全仓只有 `DropdownMenu` 与 `Snackbar`）；非默认的行显示小徽标，一眼看出"这个 App 的钩子被裁过"。
+  顺带修掉一个真 bug：老的 `save()` 只传 `selected`，会把 `version`/`mode`/策略**全丢掉**，现在整份 config 写回。
+  文案中英两份同步。
+- **送达链路**：companion（root）多一个动词 `policy <包>` → 一行紧凑标志 `d=1,h=0,s=1,a=1,t=1,e=0`（照 `scope <包>` 的
+  容错读法，缺省全开）；实例侧在 `preAppSpecialize` 取回，连同包名交给**新导出** `adh_agent_set_policy`。
+  两个门禁同步：`agent/exports.map` 与 `tools/verify_v26_footprint.sh`（三个导出 → **四个**）。
+- **agent 侧**：`g_families` 门控**每一次安装**的每一组（digest/hmac/symmetric/asymmetric/tls/aead），关掉的组
+  **根本不调 `adh_got_replace`**，并在回执里列进 `skipped`。`EVP_DigestSign*` 同时服务 HMAC 与 PKEY 签名两条路，
+  所以它的规则是"**两者之一开着就装**"（`on_dsign = hmac || asymmetric`）。host 侧 `captureInstallCounters` 把
+  `skipped` 里的名字排除出 `installed/attempted`——否则"没要求"会被读成"要了却没装上"。
+- **⚠️ 中途被自己的红线门禁抓到，并因此改掉了设计**：第一版让 agent 在 `adh_agent_start()` 时**自己武装**（照 daemon 的
+  默认模块名硬编码一个 JCE provider 名字），`verify_v87_mcp_operability` 的 WS-B 红线直接报
+  `target-specific names in product code: agent/src/capture/capture.c`。**修法不是把门禁放宽，而是删掉自我武装**：
+  - GOT 补丁需要一个**模块名**，而"agent 不携带任何模块名"是 WS-B 红线的原意（模块归调用方）；
+  - agent 唯一能不靠调用方拿到的名字是"**扫描每一个 file-backed 模块**"，而 settings 契约明确警告那是会**在 init 期
+    钩到框架 crypto、可能拖垮启动**的高级模式，不能当默认；
+  - 把模块名再抄一份进 `scope.json` 会造出**同一个旋钮的第二个真相源**（daemon 的 `cryptoModule` vs 手机上的值），
+    两处不一致时"有没有 host 连着"会决定同一个 App 被钩在哪个模块里——那是真 bug。
+  于是现在的语义是：**agent 只持有策略，由下一次"调用方发起的安装"应用它**。诚实边界照旧且更清楚：**决定**策略不需要
+  主机（它存在手机上，经 companion → agent 送到），**安装与观测**仍然需要主机。
+  另一处小坑：v87 是**纯子串扫描**，所以连"解释这条红线"的注释里写出那个模块名都会 FAIL——改成不写它的描述。
+- **验收**（全部现场跑过，不是"看起来对"）：
+  - **单元**：`device`: core `ScopeJsonTest` **12**（+逐包策略往返 / 缺省全开 / 未知键容错 / `version`==2）、manager
+    `DaemonScopeRepositoryTest` **7**（+2：假模型现在**照实模拟 daemon 的 decode→re-encode**，否则"字段被静默丢掉"
+    这条路径永远测不出来）+ `WebUiRepositoryTest` 2、daemon `CallerAuthorizerTest` 1 —— 2026-10-12 全绿；
+    daemon `node --test` **180 pass / 0 fail**。
+  - **协议/足迹**：`verify_v26_footprint` PASS（`defined-exports=JNI_OnLoad adh_agent_set_package adh_agent_set_policy
+    adh_agent_start`）；`verify_v87` PASS（`target-name hits=0`）。
+  - **真机端到端**（`aa165071`，agent 重建后 sha `b8dc7137…` 已推入 `/data/adb/modules/adh/libadh_agent.so` 并与本仓逐字节同 sha）：
+    新增 `tools/verify_v102_policy.sh`，**两轮冷启动**——关 hmac+AEAD → agent 的 hello 报
+    `policy=d=1,h=0,s=1,a=1,t=1,e=0`、安装回执 `skipped=hmac,aead` 且 `hmac=-1`/`aead.seal=-1`、其余 8 个族**没有一个**
+    是 -1（含 `digestSign=1`：hmac 关了但非对称开着，共享入口照样装）；全开 → `skipped` 为空、10 个族一个不缺。
+    `ADH_POLICY_TARGET=com.uxin.kilaaudio bash tools/verify_v102_policy.sh` → **PASS**（沙盒未装，故用漫播）。
+  - **门禁**：`verify_v102_policy.sh:device` 已登记，115 → **116（36 host + 80 device）**，`CLAUDE.md`/`AGENTS.md`/
+    `FEATURE_STATUS.md`/`HANDOVER.md` 的 live 计数同步。
+  - **host 半段**：**35 PASS / 1 FAIL**。唯一 FAIL 是 `v19_settings`，且是**环境**不是产品：本机 daemon 起在
+    `ADH_DATA_DIR=C:/Users/diiho/adh-data`（这棵树在 SMB 上，SQLite 索引不能放那儿，见 `state.ts` 那段注释），而脚本读的是
+    `$ROOT/adhd-data/settings.json`；`ADH_DATA="C:/Users/diiho/adh-data" bash tools/verify_v19_settings.sh` → 全 PASS。
+    另：`v10_webui`/`v10_export`/`v26_footprint` 三条只打 `✅ … PASS` 不打 `RESULT:` sentinel（既有约定，不是失败）。
+- **设备状态**：验收脚本自带的还原已把 `scope.json` 写回
+  `{"version":2,"mode":"allowlist","packages":["com.chaoxing.mobile","com.uxin.kilaaudio"]}`（**无 policy 段**＝全开，
+  与改动前行为一致）。测试中我手写过一份显式全开的 `policy`，已删除——`ScopeJson.encode` 本来也会丢掉它。
+- **刷机**：`bash tools/flash_device.sh --reboot`（`aa165071`）——单靠推 agent `.so` 不够：**逐包策略要能从 Manager 界面
+  存下去，设备上的 Device Daemon 也必须是 v15 的 `:core`**，否则它 decode→re-encode 时会静默丢掉 `policy`。刷入后核对：
+  模块内 `daemon.apk` = 本仓 `daemon-debug.apk`（`0e169a56…`）、已安装的 `com.adh.manager` base.apk = 本仓
+  `manager-debug.apk`（`75c0e778…`，即带「Hook 配置」的那版）、模块内 `libadh_agent.so` = `b8dc7137…`；
+  `zygisk_loaded=YES`、`device_daemon_ready=YES`，重启后重连隧道再跑一次 `verify_v102_policy` 仍 **PASS**。
+  注：`com.adh.daemon` 不是安装包，它以 root `app_process` 从模块目录启动，所以"新版 Device Daemon"= 模块内那份 APK 换新。
+- **未提交**。**未做**：SSL 绕过开关（等 profile 收尾，含漫播那种"App 自己比对指纹"的定位结果）、MD5/SHA 拆分。
+
+## 2026-10-12 —— 三处修复（用户点名的：capture 默认值、dex 索引库、密钥/IV 抓取）
+
+- **`capture_start` 的 file/sys 模块默认值**（`daemon/src/state.ts`）：原来默认指向沙盒自己的模块，在真机上等于
+  **静默少装 6 个钩子**（"模块名没加载"和"这个 App 不导入"在回执里长得一样）。改成 `fileModule:''`/`sysModule:''`
+  ＝**两个类别都不装**，并加一条迁移：老 settings 里若还是沙盒默认值，启动时清成 `''`。要钩就必须显式说出模块名
+  （`file_probe` 就是用来告诉你该说哪个的）；沙盒自检自己显式传模块名（v20/v05）。
+- **dex 索引库自愈**（`daemon/src/dex_index.ts`）：SMB 双写导致 `dex-index.sqlite` 出现过 `SQLITE_CORRUPT`，之后**每一次**
+  `dex_index`/`dex_index_search` 都答"没有"，而 dex 明明躺在 `captures/` 里（陈旧答案比没有答案更糟）。现在建库/查询
+  统一走 `withIndex()` 包壳：识别 corruption 错误 → 丢弃坏库 → 重建 schema → 重试一次，四个 `*Inner` 是真正的实现体。
+  配套决定：**这台机器的 daemon 数据目录指向本地盘 `C:/Users/diiho/adh-data`**（`ADH_DATA_DIR`），因为本仓工作树在
+  SMB 上，索引库放那儿就是反复坏。
+- **对称加密的 key/IV 抓取**（`agent/src/capture/capture.c`）：`EVP_CipherInit_ex` 拿 key、`EVP_CipherUpdate` 拿数据，
+  两个入口**必须成对挂**才能给一条本地 AES 记录配上它的密钥；`EVP_CIPHER_CTX_free` 负责让槽位回收。加了
+  `KEY_SLOTS`/`key_store`/`key_lookup`/`key_forget` 这套 ctx→key 的连接，`CapRec`/`emit_caprec` 带上 key/iv，
+  daemon 侧 `Capture` 直接落 `keyHex`/`ivHex`。**诚实记录**：在漫播的登录流上恢复出的那把 key
+  **并不解**它登录字段里的那串密文——所以"拿到 key"与"看懂这条链路"是两件事，别把前者写成后者。
+  （密钥与明文的原值只留在 gitignored 的 `dumps/kilaaudio/ANALYSIS.md`，不进仓库。）
+
 ## 2026-10-11 —— 移除 Xposed 后端（用户决议"不做，让代码干净"）
 
 - **决定**：ADH 不再自带任何 Xposed 加载器。理由："用户一般都会自己装 LSPosed"，而本产品的重心是**把逆向能力提供给模型**（Host ADH Daemon 的 MCP / 分析面 + 设备侧注入 scope 与目标进程控制）；框架与模块不再是我们要交付或维护的东西。删除口径是**整段删除**，不留"曾作为社区/实验后端保留"的表述。

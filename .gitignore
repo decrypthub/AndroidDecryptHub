@@ -55,6 +55,11 @@ Thumbs.db
 # Staged agent build artifact (produced by tools/build_agent.sh)
 sandbox-app/app/src/main/jniLibs/*/*.so
 
+# Per-host agent build tree. tools/build_agent.sh refuses to reuse agent/build/ when it was made on a
+# different host (a CMake cache is not portable) and builds into agent/build-<host>/ instead — which
+# `build/` above does not match, so it showed up as untracked on Windows.
+agent/build-*/
+
 # Zygisk ndk-build intermediates (zip under dist/ is build output — also ignored via dist/)
 injector/zygisk/libs/
 injector/zygisk/obj/

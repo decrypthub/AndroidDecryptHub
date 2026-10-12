@@ -10,10 +10,40 @@ object ScopeJson {
             .filter { it.isNotBlank() && it != AdhPaths.MANAGER_PKG }
             .sorted()
         val obj = JSONObject()
-            .put("version", config.version)
+            .put("version", ScopeConfig.CURRENT_VERSION)
             .put("mode", config.mode.ifBlank { ScopeConfig.MODE_ALLOWLIST })
             .put("packages", JSONArray(pkgs))
+        val policy = encodePolicy(config, pkgs.toHashSet())
+        if (policy.length() > 0) obj.put("policy", policy)
         return obj.toString(2)
+    }
+
+    /**
+     * Per-package policy, short-keyed (`c` = capture, `d/h/s/a/t/e` = families) for the same reason
+     * [InstalledAppsJson] is: the same blob crosses Binder. Entries that are DEFAULT or whose package
+     * left the scope are dropped, so the section only ever holds non-defaults.
+     */
+    private fun encodePolicy(config: ScopeConfig, inScope: Set<String>): JSONObject {
+        val policy = JSONObject()
+        for ((pkg, families) in config.policy.toSortedMap()) {
+            val key = pkg.trim()
+            if (key.isEmpty() || key == AdhPaths.MANAGER_PKG || !inScope.contains(key)) continue
+            if (families.isDefault) continue
+            policy.put(
+                key,
+                JSONObject().put(
+                    "c",
+                    JSONObject()
+                        .put("d", families.digest)
+                        .put("h", families.hmac)
+                        .put("s", families.symmetric)
+                        .put("a", families.asymmetric)
+                        .put("t", families.tls)
+                        .put("e", families.aead),
+                ),
+            )
+        }
+        return policy
     }
 
     /**
@@ -36,7 +66,35 @@ object ScopeJson {
             val p = arr.optString(i).trim()
             if (p.isNotEmpty() && p != AdhPaths.MANAGER_PKG) pkgs.add(p)
         }
-        return ScopeConfig(version = version, mode = mode, packages = pkgs)
+        return ScopeConfig(
+            version = version,
+            mode = mode,
+            packages = pkgs,
+            policy = decodePolicy(obj, pkgs),
+        )
+    }
+
+    /**
+     * Missing section, missing package, or a missing family key all mean DEFAULT (on) — an old
+     * scope file and an old daemon both stay correct by simply not writing the section.
+     */
+    private fun decodePolicy(obj: JSONObject, inScope: Set<String>): Map<String, CaptureFamilies> {
+        val raw = obj.optJSONObject("policy") ?: return emptyMap()
+        val out = linkedMapOf<String, CaptureFamilies>()
+        for (pkg in raw.keys()) {
+            val key = pkg.trim()
+            if (key.isEmpty() || key == AdhPaths.MANAGER_PKG || !inScope.contains(key)) continue
+            val capture = raw.optJSONObject(pkg)?.optJSONObject("c") ?: continue
+            out[key] = CaptureFamilies(
+                digest = capture.optBoolean("d", true),
+                hmac = capture.optBoolean("h", true),
+                symmetric = capture.optBoolean("s", true),
+                asymmetric = capture.optBoolean("a", true),
+                tls = capture.optBoolean("t", true),
+                aead = capture.optBoolean("e", true),
+            )
+        }
+        return out
     }
 
     /** Soft parse for UI: malformed → EMPTY (and optional onError). */

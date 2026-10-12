@@ -8,9 +8,9 @@ Magisk 打包仍在 `injector/zygisk/`。
 
 | Gradle | Package | Role |
 |---|---|---|
-| `:core` | `com.adh.core` | Scope 契约单一真相：路径常量、JSON 编解码、`IAdhScopeService` AIDL、已安装应用目录 JSON、进程控制允许清单 |
+| `:core` | `com.adh.core` | Scope 契约单一真相：路径常量、JSON 编解码、逐包 Hook 策略（`CaptureFamilies`）、`IAdhScopeService` AIDL、已安装应用目录 JSON、进程控制允许清单 |
 | `:daemon` | `com.adh.daemon` | 模块以 root `app_process` 启动的 APK；读写 `scope.json`、模块状态、枚举已安装应用，并以 uid=0 终止/重启目标应用 |
-| `:manager` | `com.adh.manager` | 普通 Compose APK；经受认证 Binder 读/写 scope、应用目录与进程启停，并直接探测 Host Web UI 地址；不调用 `su`、不自己 `getInstalledApplications` |
+| `:manager` | `com.adh.manager` | 普通 Compose APK；经受认证 Binder 读/写 scope（含逐包策略）、应用目录与进程启停，并直接探测 Host Web UI 地址；不调用 `su`、不自己 `getInstalledApplications` |
 
 ## Boundaries (red line)
 
@@ -41,10 +41,32 @@ Injection scope remains `/data/adb/adh/scope.json`.
 Path: `/data/adb/adh/scope.json`
 
 ```json
-{"version":1,"mode":"allowlist","packages":["com.example.target"]}
+{
+  "version": 2,
+  "mode": "allowlist",
+  "packages": ["com.example.target"],
+  "policy": {
+    "com.example.target": { "c": { "d": true, "h": false, "s": true, "a": false, "t": true, "e": false } }
+  }
+}
 ```
 
-Constants live only in `:core` (`AdhPaths`, `ScopeConfig`). Zygisk C++ mirrors the same path string (documented; keep in sync by hand until a codegen step exists).
+`policy` is the **per-package hook policy** (`CaptureFamilies`): which crypto hook families the agent
+**installs** for that package — an unchecked family means those GOT hooks are never installed in that
+process, not that its records are filtered afterwards. Short keys are deliberate (same reason as
+`InstalledAppsJson`: the blob crosses Binder): `c` = capture section, `d/h/s/a/t/e` =
+digest / hmac / symmetric / asymmetric / tls / aead. The agent *holds* the policy but never arms
+itself — a GOT patch needs a module name and the agent carries none (WS-B red line), so the policy
+is applied by the next caller-issued install and its verdict comes back in that install's reply.
+
+**Defaults are all-on, and absence means all-on.** A missing `policy` section, a missing package entry,
+or a missing family key all decode to `true`, so an old scope file, an old Manager and an old daemon
+stay correct by simply not writing the section — and `encode` drops entries that are default or whose
+package left the scope, so the section only ever holds non-defaults. Writers must gate on
+`AdhProtocol.MIN_POLICY_VERSION`: `RootScopeBinder.setScopeJson` decodes and re-encodes, so a daemon
+older than that would silently drop `policy` and still report success.
+
+Constants live only in `:core` (`AdhPaths`, `ScopeConfig`, `CaptureFamilies`). Zygisk C++ mirrors the same path string (documented; keep in sync by hand until a codegen step exists).
 
 ## Build
 

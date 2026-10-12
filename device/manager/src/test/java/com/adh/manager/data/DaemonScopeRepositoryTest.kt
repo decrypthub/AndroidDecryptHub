@@ -2,6 +2,7 @@ package com.adh.manager.data
 
 import com.adh.core.AdhPaths
 import com.adh.core.AdhProtocol
+import com.adh.core.CaptureFamilies
 import com.adh.core.InstalledApp
 import com.adh.core.InstalledAppsJson
 import com.adh.core.PackageControl
@@ -91,13 +92,44 @@ class DaemonScopeRepositoryTest {
         assertEquals("com.example.target" to PackageControl.ACTION_RESTART, client.lastControl)
     }
 
+    @Test
+    fun perAppPolicySurvivesTheDaemonRoundTrip() {
+        val client = FakeDaemonClient()
+        val repository = DaemonScopeRepository { client }
+        val trimmed = CaptureFamilies(digest = true, hmac = false, symmetric = true, asymmetric = false, tls = true, aead = false)
+        val config = ScopeConfig(packages = setOf("com.example.target"))
+            .withPolicy("com.example.target", trimmed)
+
+        assertTrue(repository.save(config).isSuccess)
+        assertEquals(trimmed, repository.load().familiesFor("com.example.target"))
+        // A package with no entry stays at the default (every family on).
+        assertEquals(CaptureFamilies.DEFAULT, repository.load().familiesFor("com.other.target"))
+    }
+
+    @Test
+    fun policyIsRefusedOnADaemonThatCannotStoreIt() {
+        // A v14 daemon decodes into its own :core and re-encodes from it, so it would drop the
+        // policy AND answer true — the UI would show "saved" for a policy that does not exist.
+        val client = FakeDaemonClient(protocol = 14)
+        val repository = DaemonScopeRepository { client }
+        val withPolicy = ScopeConfig(packages = setOf("com.example.target"))
+            .withPolicy("com.example.target", CaptureFamilies(hmac = false))
+
+        assertTrue(repository.save(withPolicy).isFailure)
+        // The same daemon still accepts a config that carries no policy.
+        assertTrue(repository.save(ScopeConfig(packages = setOf("com.example.target"))).isSuccess)
+    }
+
     private class FakeDaemonClient(
         protocol: Int = AdhProtocol.VERSION,
     ) : DaemonClient {
         override val protocolVersion = protocol
         override var scopeJson = ScopeJson.encode(ScopeConfig.EMPTY)
+        // Models the real daemon (RootScopeBinder.setScopeJson): it decodes into its own :core and
+        // re-encodes from it, so anything that build does not understand is dropped on the way
+        // through. Storing the raw string instead would hide that loss entirely.
         override fun setScopeJson(json: String): Boolean {
-            scopeJson = json
+            scopeJson = ScopeJson.encode(ScopeJson.decode(json))
             return true
         }
         override val listApplicationsJson =

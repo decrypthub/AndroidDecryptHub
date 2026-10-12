@@ -120,7 +120,7 @@ Each layer has a `MAP.md` — read it before editing that layer:
 
 - **The handover machine gets a rooted, flashable phone from the user.** With it the normal path is open:
   `tools/flash_device.sh` (KernelSU/Magisk), `install_apk_root` (`su` + `pm install`), and the full
-  `tools/verify_all.sh` (115 = 36 host + 79 device). **Record the device facts** (model / API level / ABI /
+  `tools/verify_all.sh` (117 = 36 host + 81 device). **Record the device facts** (model / API level / ABI /
   root method / serial) in `docs/HANDOVER.md` §1.3 — the ART structure resolver is validated on **SDK 35
   (primary) / 36 (secondary)**, so a different API level means "extend the resolver" is your first task,
   not "the tool is broken".

@@ -30,6 +30,7 @@ import androidx.compose.material.icons.rounded.RestartAlt
 import androidx.compose.material.icons.rounded.Save
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Stop
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
@@ -39,12 +40,16 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -62,9 +67,11 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.annotation.StringRes
 import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import com.adh.core.CaptureFamilies
 import com.adh.core.PackageControl
 import com.adh.core.ScopeConfig
 import com.adh.manager.R
@@ -103,6 +110,9 @@ fun ScopeScreen(
     var canControlPackages by remember { mutableStateOf(false) }
     var saving by remember { mutableStateOf(false) }
     var refreshVersion by remember { mutableStateOf(0) }
+    // Per-package hook policy being edited, keyed by package. Absent = DEFAULT (every family on).
+    var families by remember { mutableStateOf<Map<String, CaptureFamilies>>(emptyMap()) }
+    var editingPackage by remember { mutableStateOf<String?>(null) }
 
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { refreshVersion++ }
 
@@ -129,6 +139,7 @@ fun ScopeScreen(
             return@LaunchedEffect
         }
         selected = loaded.packages
+        families = loaded.policy
 
         val catalog = runCatching {
             withContext(Dispatchers.IO) { repository.listApplications() }
@@ -225,7 +236,14 @@ fun ScopeScreen(
                         coroutineScope.launch {
                             saving = true
                             val result = withContext(Dispatchers.IO) {
-                                repository.save(ScopeConfig(packages = selected))
+                                // Carry the whole config: sending `selected` alone silently drops
+                                // version/mode/policy on every save.
+                                repository.save(
+                                    ScopeConfig(
+                                        packages = selected,
+                                        policy = families.filterKeys { selected.contains(it) },
+                                    ),
+                                )
                             }
                             saving = false
                             snackbar.showSnackbar(if (result.isSuccess) savedMessage else saveFailedMessage)
@@ -298,6 +316,8 @@ fun ScopeScreen(
                                     else selected - row.packageName
                                 },
                                 canControl = canControlPackages,
+                                families = families[row.packageName] ?: CaptureFamilies.DEFAULT,
+                                onConfigure = { editingPackage = row.packageName },
                                 onForceStop = { controlApp(row, restart = false) },
                                 onRestart = { controlApp(row, restart = true) },
                                 loadIcon = { pkg ->
@@ -316,9 +336,101 @@ fun ScopeScreen(
             }
         }
     }
+
+    editingPackage?.let { pkg ->
+        HookConfigSheet(
+            packageName = pkg,
+            label = rows.firstOrNull { it.packageName == pkg }?.label ?: pkg,
+            families = families[pkg] ?: CaptureFamilies.DEFAULT,
+            onChange = { families = families + (pkg to it) },
+            onReset = { families = families - pkg },
+            onDismiss = { editingPackage = null },
+        )
+    }
 }
 
 private const val TAG = "AdhScopeScreen"
+
+/**
+ * Per-package hook policy. Unchecked families are not installed in this app at all — the point is a
+ * smaller target-process footprint, not a quieter report (see [CaptureFamilies]).
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun HookConfigSheet(
+    packageName: String,
+    label: String,
+    families: CaptureFamilies,
+    onChange: (CaptureFamilies) -> Unit,
+    onReset: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 20.dp, end = 20.dp, bottom = 28.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.hook_config_title),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = stringResource(R.string.hook_config_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 10.dp),
+            )
+            FamilyToggle(R.string.hook_family_digest, families.digest) { onChange(families.copy(digest = it)) }
+            FamilyToggle(R.string.hook_family_hmac, families.hmac) { onChange(families.copy(hmac = it)) }
+            FamilyToggle(R.string.hook_family_symmetric, families.symmetric) { onChange(families.copy(symmetric = it)) }
+            FamilyToggle(R.string.hook_family_asymmetric, families.asymmetric) { onChange(families.copy(asymmetric = it)) }
+            FamilyToggle(R.string.hook_family_tls, families.tls) { onChange(families.copy(tls = it)) }
+            FamilyToggle(R.string.hook_family_aead, families.aead) { onChange(families.copy(aead = it)) }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(onClick = onReset) { Text(stringResource(R.string.hook_config_reset)) }
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = onDismiss) { Text(stringResource(R.string.hook_config_done)) }
+            }
+            Text(
+                text = packageName,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun FamilyToggle(@StringRes labelRes: Int, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = stringResource(labelRes),
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.weight(1f),
+        )
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
+}
 
 @Composable
 private fun SearchField(
@@ -423,6 +535,8 @@ private fun AppRowItem(
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
     canControl: Boolean,
+    families: CaptureFamilies,
+    onConfigure: () -> Unit,
     onForceStop: () -> Unit,
     onRestart: () -> Unit,
     loadIcon: suspend (String) -> Drawable?,
@@ -482,6 +596,14 @@ private fun AppRowItem(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            // One glance is enough to tell a trimmed app from a default one.
+            if (checked && !families.isDefault) {
+                Text(
+                    text = stringResource(R.string.app_hooks_trimmed),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
         }
         Checkbox(checked = checked, onCheckedChange = onCheckedChange)
         if (canControl) {
@@ -496,6 +618,17 @@ private fun AppRowItem(
                     expanded = menuOpen,
                     onDismissRequest = { menuOpen = false },
                 ) {
+                    // Only a scoped app can have a hook policy (an unscoped one is never injected).
+                    if (checked) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.app_hook_config)) },
+                            onClick = {
+                                menuOpen = false
+                                onConfigure()
+                            },
+                            leadingIcon = { Icon(Icons.Rounded.Tune, contentDescription = null) },
+                        )
+                    }
                     DropdownMenuItem(
                         text = { Text(stringResource(R.string.app_force_stop)) },
                         onClick = {

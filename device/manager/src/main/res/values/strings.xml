@@ -56,4 +56,16 @@
     <string name="app_no_launcher">已终止 %1$s，但没有可启动的界面</string>
     <string name="app_control_denied">不允许终止或重启该应用</string>
     <string name="app_control_failed">无法操作 %1$s</string>
+    <string name="app_hook_config">Hook 配置</string>
+    <string name="app_hooks_trimmed">已裁剪钩子</string>
+    <string name="hook_config_title">Hook 配置</string>
+    <string name="hook_config_hint">没勾的算法在该应用里不会安装钩子（改动面更小）。保存后重启该应用生效。</string>
+    <string name="hook_family_digest">摘要（MD5/SHA）</string>
+    <string name="hook_family_hmac">HMAC</string>
+    <string name="hook_family_symmetric">对称（AES/DES）</string>
+    <string name="hook_family_asymmetric">非对称（RSA/EC）</string>
+    <string name="hook_family_tls">TLS 明文</string>
+    <string name="hook_family_aead">AEAD</string>
+    <string name="hook_config_reset">全部开启</string>
+    <string name="hook_config_done">完成</string>
 </resources>

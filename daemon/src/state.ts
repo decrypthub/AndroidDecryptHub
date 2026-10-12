@@ -51,6 +51,12 @@ export interface AgentSession {
   // ("/memfd:jit-cache (deleted)" vs "/data/adb/modules/adh/libadh_agent.so").
   selfModule?: string;
   selfBase?: string;
+  // Per-package hook policy the agent holds for this process ("d=1,h=0,…", or "default" when the
+  // scope file carried none). It is applied by the NEXT install, so the verdict that proves it —
+  // `skipped` plus the per-family counters — arrives in the capture_start reply, i.e. in
+  // captureHooks below (`captureHooks.skipped`). The agent cannot pre-empt it: it carries no module
+  // name to arm with (see the note above adh_cmd_capture_start in agent/src/capture/capture.c).
+  policy?: string;
   connectedAt: number;
   lastSeen: number;
   online: boolean;
@@ -175,9 +181,13 @@ export const DEFAULT_SETTINGS: Settings = {
   // bundled BoringSSL / renamed libs, but also hooks framework crypto on the main thread during
   // init and can destabilize startup — opt in per target, don't use as the default).
   // fileModule/sysModule: which loaded module's GOT the persistent file(open/read/…) and
-  // system(ptrace/access/getprop) hooks patch. Defaults are the sandbox-backing modules for
-  // self-test; override per real target (empty string = don't install that category's hooks).
-  capture: { enabled: true, autoDumpDex: true, retain: 1000, families: { digest: true, hmac: true, symmetric: true, asymmetric: true, tls: true, aead: true }, cryptoModule: 'libjavacrypto.so', fileModule: 'libjavacore.so', sysModule: 'libadhdetect.so' },
+  // system(ptrace/access/getprop) hooks patch. Default '' = install NEITHER category: both are
+  // per-target choices (file_probe reports which module actually imports the symbols), and the
+  // MCP contract already says empty = don't hook. A module name that is not loaded in the target
+  // installs nothing without failing, so a wrong default reads as "6 hooks silently missing" —
+  // which is exactly what the sandbox-only defaults below used to do on every real app. The
+  // sandbox self-test passes its own module explicitly (verify_v20_file.sh, verify_v05_detect.sh).
+  capture: { enabled: true, autoDumpDex: true, retain: 1000, families: { digest: true, hmac: true, symmetric: true, asymmetric: true, tls: true, aead: true }, cryptoModule: 'libjavacrypto.so', fileModule: '', sysModule: '' },
   ui: { displayCap: 300 },
   artifacts: { maxBytes: 8 * 1024 ** 3, maxAgeDays: 14 },
 };
@@ -218,6 +228,13 @@ try {
 } catch (e) {
   log(`[settings] ${SETTINGS_FILE} 载入失败，已回退默认值 — 磁盘上的配置未生效:`, (e as Error).message);
 }
+// Migrate ONE legacy default: before 2026-10-11 the daemon defaulted sysModule to
+// 'libadhdetect.so' — the SANDBOX's mock detector lib, built by tools/build_detect.sh. Nothing
+// outside the sandbox ships that name, so a persisted value equal to it can only have come from
+// that default (a target-specific choice would be a real lib). Keeping it would make every real
+// target report six zero-installs for hooks nobody asked for. fileModule's old default
+// ('libjavacore.so') is a genuine Android lib, so it is left alone — only the default changes.
+if (settings.capture.sysModule === 'libadhdetect.so') settings.capture.sysModule = '';
 // Persist. Throws on failure — callers MUST surface it so the UI never claims "已保存" on a failed write.
 export function saveSettings() { writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2)); }
 

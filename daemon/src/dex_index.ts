@@ -2,9 +2,10 @@
 // injected agent only supplies bytes. Rows are keyed by dex SHA + parser version so stale
 // indexes are rebuilt explicitly instead of returning plausible but mismatched results.
 import { createHash } from 'node:crypto';
+import { unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { DATA_DIR } from './state.ts';
+import { DATA_DIR, log } from './state.ts';
 import { analyzeDexCode, parseDex } from './dex.ts';
 
 const PARSER_VERSION = 2;
@@ -31,8 +32,40 @@ const JOURNAL_MODE = (() => {
   return JOURNAL_MODES.includes(want) ? want : 'WAL';
 })();
 
-const db = new DatabaseSync(DEX_INDEX_FILE);
-db.exec(`
+// A damaged index is DROPPED, not reported: everything in this file is a cache of work the DEX
+// parser can redo, while the .dex bytes on disk are untouched — so the only cost of starting over
+// is the rebuild. Corruption used to be permanent (measured 2026-09-30: this file lived on a shared
+// SMB tree held open by two hosts, came back SQLITE_CORRUPT ("database disk image is malformed"),
+// and every index query then failed for two days until the file was moved to local disk). The open
+// path AND the query path are both covered, because SQLite can serve a readable schema over
+// unreadable pages and only fail later.
+const CORRUPT_DB_RE = /malformed|not a database|file is encrypted|SQLITE_CORRUPT|SQLITE_NOTADB/i;
+function isCorruptDbError(error: unknown): boolean {
+  return CORRUPT_DB_RE.test(String((error as Error)?.message ?? error));
+}
+
+function discardIndexFile(reason: string): void {
+  log(`[dex-index] ${DEX_INDEX_FILE} 损坏，丢弃重建 (${reason})`);
+  for (const suffix of ['', '-wal', '-shm']) {
+    try { unlinkSync(DEX_INDEX_FILE + suffix); } catch { /* absent is the normal case */ }
+  }
+}
+
+function openIndexDb(): DatabaseSync {
+  const opened = new DatabaseSync(DEX_INDEX_FILE);
+  try { createSchema(opened); return opened; }
+  catch (error) {
+    if (!isCorruptDbError(error)) throw error;
+    try { opened.close(); } catch { /* already unusable */ }
+    discardIndexFile(String((error as Error)?.message ?? error));
+    const fresh = new DatabaseSync(DEX_INDEX_FILE);
+    createSchema(fresh);
+    return fresh;
+  }
+}
+
+function createSchema(target: DatabaseSync) {
+  target.exec(`
   PRAGMA journal_mode = ${JOURNAL_MODE};
   PRAGMA synchronous = NORMAL;
   PRAGMA foreign_keys = ON;
@@ -94,6 +127,27 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS dex_reflection_target ON dex_reflections(sha, target_class COLLATE NOCASE);
 `);
+}
+
+let db = openIndexDb();
+let getDocument = db.prepare('SELECT * FROM dex_documents WHERE sha = ?');
+
+/**
+ * Run one index operation against the live handle. SQLite can report corruption at query time (see
+ * CORRUPT_DB_RE above), so the retry lives here rather than only at open: drop the file, rebuild
+ * the schema, and give the caller one clean attempt. Non-corruption errors are rethrown untouched.
+ */
+function withIndex<T>(operation: (database: DatabaseSync) => T): T {
+  try { return operation(db); }
+  catch (error) {
+    if (!isCorruptDbError(error)) throw error;
+    try { db.close(); } catch { /* already unusable */ }
+    discardIndexFile(`${String((error as Error)?.message ?? error)} — 运行期`);
+    db = openIndexDb();
+    getDocument = db.prepare('SELECT * FROM dex_documents WHERE sha = ?');
+    return operation(db);
+  }
+}
 
 type DocumentRow = {
   sha: string; size: number; parser_version: number; magic: string;
@@ -101,8 +155,6 @@ type DocumentRow = {
   method_count: number; class_count: number; methods_with_code: number; skipped_methods: number;
   call_count: number; string_use_count: number; reflection_count: number; created_at: number;
 };
-
-const getDocument = db.prepare('SELECT * FROM dex_documents WHERE sha = ?');
 
 function publicDocument(row: DocumentRow, cached: boolean, elapsedMs: number, rebuildReason?: string) {
   return {
@@ -118,6 +170,10 @@ function publicDocument(row: DocumentRow, cached: boolean, elapsedMs: number, re
 }
 
 export function ensureDexIndex(buf: Buffer) {
+  return withIndex(() => ensureDexIndexInner(buf));
+}
+
+function ensureDexIndexInner(buf: Buffer) {
   const started = performance.now();
   const sha = createHash('sha256').update(buf).digest('hex');
   const existing = getDocument.get(sha) as DocumentRow | undefined;
@@ -173,11 +229,19 @@ export function ensureDexIndex(buf: Buffer) {
 // retention: once the dex file is deleted, an index row for it would answer `dex_index_search`
 // with hits whose bytes no longer exist — a stale answer is worse than no answer.
 export function deleteDexDocument(sha: string): boolean {
+  return withIndex(() => deleteDexDocumentInner(sha));
+}
+
+function deleteDexDocumentInner(sha: string): boolean {
   const info = db.prepare('DELETE FROM dex_documents WHERE sha = ?').run(sha);
   return Number(info.changes) > 0;
 }
 
 export function searchDexIndex(sha: string, query: string, limit = 200) {
+  return withIndex(() => searchDexIndexInner(sha, query, limit));
+}
+
+function searchDexIndexInner(sha: string, query: string, limit = 200) {
   const started = performance.now();
   const document = getDocument.get(sha) as DocumentRow | undefined;
   if (!document) throw Object.assign(new Error('dex index not found'), { status: 404 });
@@ -216,6 +280,10 @@ export function searchDexIndex(sha: string, query: string, limit = 200) {
 }
 
 export function listDexReflections(sha: string, limit = 500) {
+  return withIndex(() => listDexReflectionsInner(sha, limit));
+}
+
+function listDexReflectionsInner(sha: string, limit = 500) {
   const document = getDocument.get(sha) as DocumentRow | undefined;
   if (!document) throw Object.assign(new Error('dex index not found'), { status: 404 });
   return db.prepare(`SELECT r.target_class AS targetClass, r.target_descriptor AS targetDescriptor,

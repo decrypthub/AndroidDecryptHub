@@ -193,6 +193,18 @@ SCRIPTS=(
   # names for the textbook and the mutated fixture, and claims MD5 on the mutated one). The fixtures
   # are compiled by tools/build_crypto_variants.sh; no daemon-no-clang SKIPs cleanly.
   "verify_v101_crypto_variants.sh:host"
+  # v10.2 per-package hook policy (module W): the scope file's per-app policy decides which crypto
+  # hook families are INSTALLED in that app — not merely which records are reported afterwards.
+  # Writes a trimmed policy for one target, cold-starts it, asserts the agent's own hello reports the
+  # switched-off families as skipped (-1) and the rest installed (1), then restores the scope file.
+  # Needs the adh Zygisk module AND the target package; SKIPs cleanly otherwise. Set ADH_POLICY_TARGET
+  # to a package that is actually installed (defaults to the sandbox).
+  "verify_v102_policy.sh:device"
+  # v10.3 Zygisk Next integration: Zygisk Next 1.5+ validates how a module uses the companion API and
+  # publishes the verdict in its own status line. Our log-relay socket used to be cached and never
+  # closed, which is exactly "improper use of the Companion API" — every injected process carried a
+  # dead fd for its lifetime. Needs a device with BOTH our module and Zygisk Next; SKIPs otherwise.
+  "verify_v103_zygisk_companion.sh:device"
 )
 
 pass=0; fail=0; skip=0; FAILED=""
