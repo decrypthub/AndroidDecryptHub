@@ -4,9 +4,9 @@ package com.adh.core
  * Injection scope contract shared by Manager, Device Daemon, and (by path) Zygisk.
  * mode is always allowlist in v1 — denylist is out of scope for this foundation.
  *
- * [policy] carries per-package behaviour on top of the plain allowlist: today only which crypto
- * hook families the agent installs for that package. A package with no entry is DEFAULT (all
- * families on), so an empty map is exactly the pre-policy behaviour.
+ * [policy] carries per-package behaviour on top of the plain allowlist: which crypto hook families
+ * the agent installs for that package. A package with no entry is DEFAULT (all families on), so an
+ * empty map is exactly the pre-policy behaviour.
  */
 data class ScopeConfig(
     val version: Int = CURRENT_VERSION,
@@ -27,7 +27,10 @@ data class ScopeConfig(
         if (enabled) next.add(pkg) else next.remove(pkg)
         // A package that leaves the scope cannot keep a policy: it would otherwise be applied to
         // whatever the user picks next under the same name, or sit in the file forever.
-        return copy(packages = next, policy = if (enabled) policy else policy - pkg)
+        return if (enabled) copy(packages = next) else copy(
+            packages = next,
+            policy = policy - pkg,
+        )
     }
 
     /** Set (or with [families] == null, drop) the hook policy of one already-scoped package. */

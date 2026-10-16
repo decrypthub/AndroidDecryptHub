@@ -59,6 +59,15 @@ digest / hmac / symmetric / asymmetric / tls / aead. The agent *holds* the polic
 itself — a GOT patch needs a module name and the agent carries none (WS-B red line), so the policy
 is applied by the next caller-issued install and its verdict comes back in that install's reply.
 
+A leftover `b` object in an old scope file is ignored on read and dropped on the next write. The
+Java SSL-bypass switch that used it was removed: on this ROM it crashed the target inside ART class
+initialization, and TLS plaintext stays the native capture family `t`.
+
+Policy entries are keyed by whatever the injector matched, and that is the **package**: Zygisk hands
+the module a process name (`com.example.app:core`), so the injector tries the exact process name and
+then the package prefix, asking the companion with each. A per-app policy therefore reaches every
+process of the app, which is what the UI promises (REQUIREMENTS §30.4).
+
 **Defaults are all-on, and absence means all-on.** A missing `policy` section, a missing package entry,
 or a missing family key all decode to `true`, so an old scope file, an old Manager and an old daemon
 stay correct by simply not writing the section — and `encode` drops entries that are default or whose

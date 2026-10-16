@@ -305,7 +305,8 @@ export async function dumpRegion(sid: string, addrHex: string, size: number, tag
 function recordCaptureHooks(sid: string, r: any) {
   if (!r || (r.op !== 'capture_start' && r.op !== 'capture_stop')) return;
   const s = sessions.get(sid);
-  if (s) s.captureHooks = r;
+  if (!s) return;
+  s.captureHooks = r;
 }
 
 // Apply the capture.enabled toggle to already-connected sessions (start/stop the hooks).

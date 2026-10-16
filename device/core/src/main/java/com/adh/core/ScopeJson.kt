@@ -20,14 +20,17 @@ object ScopeJson {
 
     /**
      * Per-package policy, short-keyed (`c` = capture, `d/h/s/a/t/e` = families) for the same reason
-     * [InstalledAppsJson] is: the same blob crosses Binder. Entries that are DEFAULT or whose package
-     * left the scope are dropped, so the section only ever holds non-defaults.
+     * [InstalledAppsJson] is: the same blob crosses Binder. Entries that are DEFAULT or whose
+     * package left the scope are dropped, so the section only ever holds non-defaults.
+     *
+     * A leftover `b` object from the removed SSL-bypass switch is not written back.
      */
     private fun encodePolicy(config: ScopeConfig, inScope: Set<String>): JSONObject {
         val policy = JSONObject()
-        for ((pkg, families) in config.policy.toSortedMap()) {
+        for (pkg in config.policy.keys.toSortedSet()) {
             val key = pkg.trim()
             if (key.isEmpty() || key == AdhPaths.MANAGER_PKG || !inScope.contains(key)) continue
+            val families = config.familiesFor(key)
             if (families.isDefault) continue
             policy.put(
                 key,
@@ -77,24 +80,27 @@ object ScopeJson {
     /**
      * Missing section, missing package, or a missing family key all mean DEFAULT (on) — an old
      * scope file and an old daemon both stay correct by simply not writing the section.
+     * A leftover `b` object (the removed SSL-bypass switch) is ignored.
      */
     private fun decodePolicy(obj: JSONObject, inScope: Set<String>): Map<String, CaptureFamilies> {
         val raw = obj.optJSONObject("policy") ?: return emptyMap()
-        val out = linkedMapOf<String, CaptureFamilies>()
+        val families = linkedMapOf<String, CaptureFamilies>()
         for (pkg in raw.keys()) {
             val key = pkg.trim()
             if (key.isEmpty() || key == AdhPaths.MANAGER_PKG || !inScope.contains(key)) continue
-            val capture = raw.optJSONObject(pkg)?.optJSONObject("c") ?: continue
-            out[key] = CaptureFamilies(
-                digest = capture.optBoolean("d", true),
-                hmac = capture.optBoolean("h", true),
-                symmetric = capture.optBoolean("s", true),
-                asymmetric = capture.optBoolean("a", true),
-                tls = capture.optBoolean("t", true),
-                aead = capture.optBoolean("e", true),
-            )
+            val entry = raw.optJSONObject(pkg) ?: continue
+            entry.optJSONObject("c")?.let { capture ->
+                families[key] = CaptureFamilies(
+                    digest = capture.optBoolean("d", true),
+                    hmac = capture.optBoolean("h", true),
+                    symmetric = capture.optBoolean("s", true),
+                    asymmetric = capture.optBoolean("a", true),
+                    tls = capture.optBoolean("t", true),
+                    aead = capture.optBoolean("e", true),
+                )
+            }
         }
-        return out
+        return families
     }
 
     /** Soft parse for UI: malformed → EMPTY (and optional onError). */

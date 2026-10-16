@@ -18,6 +18,8 @@
 
 #include <android/api-level.h>
 #include <android/log.h>
+#include <csetjmp>
+#include <csignal>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -31,6 +33,24 @@
 #define LTAG "rt.java"
 #define LLOGI(...) __android_log_print(ANDROID_LOG_INFO,  LTAG, __VA_ARGS__)
 #define LLOGE(...) __android_log_print(ANDROID_LOG_ERROR, LTAG, __VA_ARGS__)
+
+// lsplant::Hook can fault on a method the app is already inside. That used to kill the
+// installer thread and drop every hook after it. Catch the fault, skip that one method.
+static thread_local sigjmp_buf g_hook_jmp;
+static thread_local struct sigaction g_hook_prev_segv;
+static thread_local struct sigaction g_hook_prev_bus;
+static thread_local volatile sig_atomic_t g_hook_guard = 0;
+
+static void hook_fault_handler(int sig, siginfo_t *info, void *ctx) {
+    if (g_hook_guard) {
+        g_hook_guard = 0;
+        siglongjmp(g_hook_jmp, 1);
+    }
+    struct sigaction *prev = (sig == SIGBUS) ? &g_hook_prev_bus : &g_hook_prev_segv;
+    if ((prev->sa_flags & SA_SIGINFO) && prev->sa_sigaction) prev->sa_sigaction(sig, info, ctx);
+    else if (prev->sa_handler == SIG_IGN) return;
+    else if (prev->sa_handler != SIG_DFL && prev->sa_handler) prev->sa_handler(sig);
+}
 
 // ---- small helpers --------------------------------------------------------------------
 
@@ -348,6 +368,8 @@ static jfieldID g_bridge_override_return = nullptr;
 static jfieldID g_bridge_ready = nullptr;
 static jfieldID g_bridge_active = nullptr;static jfieldID g_bridge_arg_index = nullptr;
 static jfieldID g_bridge_arg_value = nullptr;
+static jfieldID g_bridge_silent = nullptr;
+static jfieldID g_bridge_crypto = nullptr;
 
 static std::string jstring_to_utf(JNIEnv *env, jstring value) {
     if (!env || !value) return "";
@@ -382,6 +404,11 @@ static void JNICALL adh_java_hook_native_report(JNIEnv *env, jclass, jint hook_i
     if (!stack_s.empty()) json += ",\"stack\":\"" + stack_s + "\"";
     json += "}";
     adh_capture_push_text("JAVA_HOOK", json.c_str());
+}
+
+static void JNICALL adh_java_crypto_native(JNIEnv *env, jclass, jstring algo, jstring op,
+                                           jbyteArray key, jbyteArray iv, jbyteArray in, jbyteArray out) {
+    adh_capture_java(env, algo, op, key, iv, in, out);
 }
 
 static std::string pending_exception_text(JNIEnv *env) {
@@ -506,12 +533,19 @@ static jclass load_bridge_class(JNIEnv *env, std::string &error) {
         }
     }
 
-    JNINativeMethod report = {
-        const_cast<char *>("nativeReport"),
-        const_cast<char *>("(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V"),
-        reinterpret_cast<void *>(adh_java_hook_native_report),
+    JNINativeMethod natives[2] = {
+        {
+            const_cast<char *>("nativeReport"),
+            const_cast<char *>("(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V"),
+            reinterpret_cast<void *>(adh_java_hook_native_report),
+        },
+        {
+            const_cast<char *>("nativeCrypto"),
+            const_cast<char *>("(Ljava/lang/String;Ljava/lang/String;[B[B[B[B)V"),
+            reinterpret_cast<void *>(adh_java_crypto_native),
+        },
     };
-    if (env->RegisterNatives(bridge_class, &report, 1) != JNI_OK) {
+    if (env->RegisterNatives(bridge_class, natives, 2) != JNI_OK) {
         error = "failed to register AdhJavaHookBridge.nativeReport";
         if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
         return nullptr;
@@ -533,13 +567,15 @@ static jclass load_bridge_class(JNIEnv *env, std::string &error) {
     g_bridge_ready = env->GetFieldID(bridge_class, "ready", "Z");
     g_bridge_active = env->GetFieldID(bridge_class, "active", "Z");    g_bridge_arg_index = env->GetFieldID(bridge_class, "argIndex", "I");
     g_bridge_arg_value = env->GetFieldID(bridge_class, "argValue", "Ljava/lang/String;");
+    g_bridge_silent = env->GetFieldID(bridge_class, "silent", "Z");
+    g_bridge_crypto = env->GetFieldID(bridge_class, "cryptoMode", "I");
     g_bridge_class = (jclass)env->NewGlobalRef(bridge_class);
     g_bridge_loader = env->NewGlobalRef(bridge_loader);
 
     if (!g_bridge_class || !g_bridge_backup || !g_bridge_is_static || !g_bridge_is_ctor || !g_bridge_hook_id ||
         !g_bridge_hits || !g_bridge_last_arg || !g_bridge_last_return || !g_bridge_last_error ||
         !g_bridge_capture_stack || !g_bridge_last_stack ||
-        !g_bridge_target || !g_bridge_skip_original || !g_bridge_override_return || !g_bridge_arg_index || !g_bridge_arg_value || !g_bridge_ready || !g_bridge_active) {
+        !g_bridge_target || !g_bridge_skip_original || !g_bridge_override_return || !g_bridge_arg_index || !g_bridge_arg_value || !g_bridge_silent || !g_bridge_crypto || !g_bridge_ready || !g_bridge_active) {
         error = "AdhJavaHookBridge fields are missing";
         return nullptr;
     }
@@ -568,22 +604,30 @@ static jobject create_bridge_object(JNIEnv *env, int hook_id, std::string &error
 }
 
 // ---- target lookup / multi-hook state --------------------------------------------------
+// Initialize the class before LSPlant replaces its entry point. ClassLoader.loadClass only
+// resolves it, so a static method is still on the resolution trampoline. This ROM then
+// publishes that trampoline from MarkVisiblyInitialized (the SetStatus call at +1664) and
+// the process jumps into the gap between the zygote GC bitmaps. XposedHelpers.findAndHookMethod
+// uses Class.forName(..., true, loader), which finishes initialization first.
 static jclass load_app_class(JNIEnv *env, const std::string &class_name, std::string &error) {
     jobject loader = adh_jni_app_class_loader(env);
     if (!loader) {
         error = "no app ClassLoader available";
         return nullptr;
     }
-    jclass class_loader_class = env->FindClass("java/lang/ClassLoader");
-    jmethodID load_class = env->GetMethodID(class_loader_class, "loadClass",
-                                            "(Ljava/lang/String;)Ljava/lang/Class;");
     std::string dot_name = class_name;
     for (char &c : dot_name) if (c == '/') c = '.';
+    jclass class_class = env->FindClass("java/lang/Class");
+    jmethodID for_name = class_class ? env->GetStaticMethodID(
+        class_class, "forName", "(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;") : nullptr;
     jstring name = env->NewStringUTF(dot_name.c_str());
-    jclass target_class = load_class ? (jclass)env->CallObjectMethod(loader, load_class, name) : nullptr;
+    jclass target_class = (for_name && name)
+        ? (jclass)env->CallStaticObjectMethod(class_class, for_name, name, JNI_TRUE, loader) : nullptr;
+    if (name) env->DeleteLocalRef(name);
     if (!target_class) {
-        error = "target class not found: " + dot_name;
-        if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
+        std::string detail = pending_exception_text(env);
+        error = "target class not initialized: " + dot_name;
+        if (!detail.empty()) error += ": " + detail;
         return nullptr;
     }
     return target_class;
@@ -855,7 +899,7 @@ static void release_hook_slot(JNIEnv *env, JavaHookContext &hook) {
 
 extern "C" int adh_javahook_hook_method(JNIEnv *env, const char *class_name, const char *method_name,
                                          const char *params, int skip_original, const char *override_return,
-                                         int arg_index, const char *arg_value, int capture_stack,
+                                         int arg_index, const char *arg_value, int capture_stack, int quiet,
                                          int *hook_id_out, char *error, size_t error_size) {
     if (hook_id_out) *hook_id_out = 0;
     if (!env || !class_name || !method_name) {
@@ -979,6 +1023,7 @@ extern "C" int adh_javahook_hook_method(JNIEnv *env, const char *class_name, con
     env->SetObjectField(bridge, g_bridge_arg_value, arg_value_string);
     if (arg_value_string) env->DeleteLocalRef(arg_value_string);
     env->SetBooleanField(bridge, g_bridge_capture_stack, capture_stack ? JNI_TRUE : JNI_FALSE);
+    env->SetBooleanField(bridge, g_bridge_silent, quiet ? JNI_TRUE : JNI_FALSE);
     if (empty) env->SetObjectField(bridge, g_bridge_last_stack, empty);
 
     jmethodID callback_id = env->GetMethodID(g_bridge_class, "callback",
@@ -990,8 +1035,34 @@ extern "C" int adh_javahook_hook_method(JNIEnv *env, const char *class_name, con
         return fail_hook("failed to reflect AdhJavaHookBridge.callback");
     }
 
-    jobject backup = lsplant::Hook(env, target, bridge, callback);
+    struct sigaction act;
+    memset(&act, 0, sizeof(act));
+    act.sa_sigaction = hook_fault_handler;
+    act.sa_flags = SA_SIGINFO | SA_NODEFER;
+    sigemptyset(&act.sa_mask);
+    struct sigaction prev_segv, prev_bus;
+    sigaction(SIGSEGV, &act, &prev_segv);
+    sigaction(SIGBUS, &act, &prev_bus);
+    g_hook_prev_segv = prev_segv;
+    g_hook_prev_bus = prev_bus;
+    g_hook_guard = 1;
+    jobject backup = nullptr;
+    int faulted = 0;
+    if (sigsetjmp(g_hook_jmp, 1) == 0) {
+        backup = lsplant::Hook(env, target, bridge, callback);
+    } else {
+        faulted = 1;
+    }
+    g_hook_guard = 0;
+    sigaction(SIGSEGV, &prev_segv, nullptr);
+    sigaction(SIGBUS, &prev_bus, nullptr);
     env->DeleteLocalRef(callback);
+    if (faulted) {
+        LLOGE("java_hook faulted target=%s", signature.c_str());
+        env->DeleteGlobalRef(bridge);
+        env->DeleteLocalRef(target);
+        return fail_hook("hook faulted");
+    }
     if (!backup) {
         env->DeleteGlobalRef(bridge);
         env->DeleteLocalRef(target);
@@ -1126,7 +1197,7 @@ extern "C" int adh_javahook_hook_all(JNIEnv *env, const char *class_name, const 
         int hook_id = 0;
         int ok = adh_javahook_hook_method(env, class_name, actual_name.c_str(), param_list.c_str(),
                                           skip_original, override_return, arg_index, arg_value,
-                                          capture_stack, &hook_id, hook_error, sizeof(hook_error));
+                                          capture_stack, 0, &hook_id, hook_error, sizeof(hook_error));
         if (ok && hook_id > 0) {
             hook_ids_out[installed++] = hook_id;
         } else {
@@ -1150,6 +1221,22 @@ extern "C" int adh_javahook_hook_all(JNIEnv *env, const char *class_name, const 
     }
     LLOGI("java_hook_all installed=%d matched=%d class=%s", installed, matched, class_name);
     return installed;
+}
+
+extern "C" int adh_javahook_set_crypto_mode(JNIEnv *env, int hook_id, int mode) {
+    if (!env || hook_id <= 0 || !g_bridge_crypto) return 0;
+    int ok = 0;
+    pthread_mutex_lock(&g_java_hooks_lock);
+    for (int i = 0; i < ADH_JAVA_MAX_HOOKS; i++) {
+        JavaHookContext &hook = g_java_hooks[i];
+        if (hook.active == 1 && hook.id == hook_id && hook.bridge) {
+            env->SetIntField(hook.bridge, g_bridge_crypto, mode);
+            ok = 1;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_java_hooks_lock);
+    return ok;
 }
 
 extern "C" int adh_javahook_unhook_id(JNIEnv *env, int hook_id, char *error, size_t error_size) {
@@ -1187,6 +1274,14 @@ extern "C" int adh_javahook_unhook_id(JNIEnv *env, int hook_id, char *error, siz
     return 1;
 }
 
+// Defined at the end of the vendored lsplant.cc (fetch_lsplant.sh patch 6), because that TU is the
+// one that already includes the internal JIT shim. 1 = tracking on, 0 = off.
+extern "C" int adh_art_jit_available(void);
+
+extern "C" int adh_javahook_jit_tracking(void) {
+    return adh_art_jit_available();
+}
+
 extern "C" int adh_javahook_status_json(JNIEnv *env, char *out, size_t out_size) {
     if (!out || !out_size) return 0;
     std::string hooks = "[";
@@ -1222,6 +1317,7 @@ extern "C" int adh_javahook_status_json(JNIEnv *env, char *out, size_t out_size)
     hooks += "]";
     std::string json = "{\"available\":true,\"returnOverride\":true,\"argRewrite\":true,\"stackCapture\":true,"
                        "\"maxHooks\":" + std::to_string(ADH_JAVA_MAX_HOOKS) + ",\"initOk\":" + std::string(g_init_ok ? "true" : "false") +
+                       ",\"jitTracking\":" + std::string(adh_javahook_jit_tracking() ? "true" : "false") +
                        ",\"backend\":\"art\",\"version\":\"v6.4\",\"active\":" +
                        std::string(active_count ? "true" : "false") +
                        ",\"count\":" + std::to_string(active_count) +

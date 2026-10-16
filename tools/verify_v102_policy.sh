@@ -80,6 +80,7 @@ const CRYPTO_MODULE = 'libjavacrypto.so';
 // must still install (the rule is "at least one of them on") — that is asserted in `on` below.
 // `skipped` names the GROUPS the policy turned off (as the agent reports them: the AEAD group is
 // `aead`, while the per-symbol counters below are `aeadSeal`), so the two lists are kept apart.
+//
 const ROUNDS = [
   {
     c: { d: true, h: false, s: true, a: true, t: true, e: false },

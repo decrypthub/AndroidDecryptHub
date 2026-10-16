@@ -38,6 +38,16 @@ export function asciiOf(hex: string): string {
   return out;
 }
 
+/** The exact bytes of a hex payload, base64. This is the LOSSLESS counterpart of asciiOf:
+ *  asciiOf substitutes every non-printable with '.', so a consumer cannot re-frame a TLS
+ *  stream (no CRLF), cannot gunzip, cannot recover a binary payload — it can only read the
+ *  printable parts. b64Of round-trips byte for byte; use it whenever the consumer parses
+ *  rather than eyeballs. */
+export function b64Of(hex: string): string {
+  if (typeof hex !== 'string' || !hex || hex.length % 2) return '';
+  return Buffer.from(hex, 'hex').toString('base64');
+}
+
 export interface FlowRecord {
   tid: number; tsNs: number; func: string; hex: string;
   /** The store's own classification ('crypto' | 'net'). When present it decides the side; the

@@ -63,7 +63,7 @@ adb -s <serial> shell getprop ro.build.version.sdk   # 记下 API level（见 §
 - `tools/build_agent.sh` / `build_detect.sh` / `build_zygisk.sh` / `build_bundle.sh`
 - `tools/flash_device.sh --reboot`（KernelSU/Magisk 刷入 Zygisk 模块；多设备时 `export ANDROID_SERIAL=<serial>`）
 - `install_apk_root`（`su` + `pm install`）装沙盒
-- `tools/verify_all.sh` **全量**（**117 脚本 = 36 host + 81 device**，2026-10-01 起 eCapture 那条移出闸门）——这才是设计的常规门禁
+- `tools/verify_all.sh` **全量**（**118 脚本 = 36 host + 82 device**，2026-10-01 起 eCapture 那条移出闸门）——这才是设计的常规门禁
 
 **你要做的第一件事：把设备事实记录到本文档 §1.3 的表里**（机型 / API / ABI / root 方式 / serial）。
 后面所有人（包括下一个 agent）都靠这张表判断 ART 解析器覆盖面与可用后端。

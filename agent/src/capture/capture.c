@@ -9,6 +9,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <stdio.h>
 #include <jni.h>
 #include <pthread.h>
 #include <stdarg.h>
@@ -704,6 +705,36 @@ void adh_capture_set_families(int digest, int hmac, int symmetric, int asymmetri
     g_families.asymmetric = asymmetric ? 1 : 0;
     g_families.tls = tls ? 1 : 0;
     g_families.aead = aead ? 1 : 0;
+}
+
+void adh_capture_get_families(int *digest, int *hmac, int *symmetric, int *asymmetric, int *tls, int *aead) {
+    if (digest) *digest = g_families.digest;
+    if (hmac) *hmac = g_families.hmac;
+    if (symmetric) *symmetric = g_families.symmetric;
+    if (asymmetric) *asymmetric = g_families.asymmetric;
+    if (tls) *tls = g_families.tls;
+    if (aead) *aead = g_families.aead;
+}
+
+static void copy_jstring(JNIEnv *env, jstring value, char *buf, size_t cap) {
+    buf[0] = 0;
+    if (!env || !value || cap == 0) return;
+    const char *chars = (*env)->GetStringUTFChars(env, value, NULL);
+    if (!chars) return;
+    snprintf(buf, cap, "%s", chars);
+    (*env)->ReleaseStringUTFChars(env, value, chars);
+}
+
+void adh_capture_java(JNIEnv *env, jstring algo, jstring op, jbyteArray key, jbyteArray iv, jbyteArray in, jbyteArray out) {
+    static int logged = 0;
+    if (!__atomic_exchange_n(&logged, 1, __ATOMIC_RELAXED)) {
+        char algo_buf[96];
+        char op_buf[32];
+        copy_jstring(env, algo, algo_buf, sizeof(algo_buf));
+        copy_jstring(env, op, op_buf, sizeof(op_buf));
+        LOGI("java crypto hit %s %s", algo_buf[0] ? algo_buf : "?", op_buf[0] ? op_buf : "?");
+    }
+    adh_nreport_impl(env, NULL, algo, op, key, iv, in, out);
 }
 
 static void skip_add(char *buf, size_t cap, const char *names) {

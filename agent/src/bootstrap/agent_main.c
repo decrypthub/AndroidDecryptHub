@@ -35,6 +35,8 @@
 
 #ifdef ADH_HAVE_LSPLANT
 #include "../hook/java_lsplant.h"
+#include "../hook/ssl_bypass.h"
+#include "../hook/java_crypto.h"
 #ifndef ADH_LSPLANT_VERSION
 #define ADH_LSPLANT_VERSION "unknown"
 #endif
@@ -58,6 +60,15 @@ static void report(int fd) {
     if (g_package[0]) { strncpy(cmd, g_package, sizeof(cmd) - 1); cmd[sizeof(cmd) - 1] = 0; }
     else read_cmdline(cmd, sizeof(cmd));
     char pkg[1024]; json_escape(cmd, pkg, sizeof(pkg));
+    // The injector hands over the PROCESS name (Zygisk's nice_name), which for a secondary process
+    // is "com.foo:bar". Report both: `process` as given, `package` with the suffix cut, so a
+    // multi-process app groups under ONE package in the daemon and the panel while each session
+    // stays attributable to the process it came from.
+    char short_pkg[512];
+    snprintf(short_pkg, sizeof(short_pkg), "%s", cmd);
+    char *colon = strchr(short_pkg, ':');
+    if (colon) *colon = 0;
+    char pkgj[1024]; json_escape(short_pkg, pkgj, sizeof(pkgj));
     char rel[PROP_VALUE_MAX]; prop("ro.build.version.release", rel, sizeof(rel));
     char sdk[PROP_VALUE_MAX]; prop("ro.build.version.sdk", sdk, sizeof(sdk));
     char abi[PROP_VALUE_MAX]; prop("ro.product.cpu.abi", abi, sizeof(abi));
@@ -82,7 +93,7 @@ static void report(int fd) {
         "\"package\":\"%s\",\"process\":\"%s\",\"abi\":\"%s\",\"android\":\"%s\",\"sdk\":%s,"
         "\"entry\":\"%s\",\"selfModule\":\"%s\",\"selfBase\":\"0x%llx\","
         "\"policy\":\"%s\"}\n",
-        AGENT_VER, getpid(), getuid(), pkg, pkg,
+        AGENT_VER, getpid(), getuid(), pkgj, pkg,
         abi[0] ? abi : "?", rel[0] ? rel : "?", sdk[0] ? sdk : "0", g_entry,
         selfj, self_start, g_policy[0] ? g_policy : "default");
     if (send_line(fd, hello) != 0) { LOGE("send hello failed"); return; }
@@ -145,8 +156,9 @@ static void cmd_javahook_probe(int fd, const char *id) {
     char out[1024];
     snprintf(out, sizeof(out),
              "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"javahook_probe\",\"ok\":%s,\"available\":true,"
-             "\"initOk\":%s,\"backend\":\"art\",\"version\":\"%s\",\"error\":\"%s\"}\n",
-             idj, init_ok ? "true" : "false", init_ok ? "true" : "false", ADH_LSPLANT_VERSION, errj);
+             "\"initOk\":%s,\"jitTracking\":%s,\"backend\":\"art\",\"version\":\"%s\",\"error\":\"%s\"}\n",
+             idj, init_ok ? "true" : "false", init_ok ? "true" : "false",
+             adh_javahook_jit_tracking() ? "true" : "false", ADH_LSPLANT_VERSION, errj);
     send_line(fd, out);
     LOGI("javahook_probe: init=%d error=%s", init_ok, err ? err : "");
 #else
@@ -191,7 +203,7 @@ static void cmd_java_hook(int fd, const char *id, const char *action, const char
             snprintf(error, sizeof(error), "hook requires className and method");
         } else {
             ok = adh_javahook_hook_method(env, class_name, method_name, params, skip_original,
-                                             override_return, (int)arg_index, arg_value, capture_stack_flag,
+                                             override_return, (int)arg_index, arg_value, capture_stack_flag, 0,
                                              &new_hook_id, error, sizeof(error));
         }
     } else if (strcmp(action, "hook_all") == 0) {
@@ -744,6 +756,10 @@ static void do_start(void) {
     pthread_t t;
     if (pthread_create(&t, NULL, agent_thread, NULL) == 0) pthread_detach(t);
     else LOGE("pthread_create failed");
+#ifdef ADH_HAVE_LSPLANT
+    adh_ssl_bypass_arm();
+    adh_java_crypto_arm();
+#endif
 }
 
 __attribute__((visibility("default")))
@@ -773,6 +789,11 @@ void adh_agent_set_policy(const char *flags) {
     adh_capture_set_families(
         policy_flag(g_policy, 'd'), policy_flag(g_policy, 'h'), policy_flag(g_policy, 's'),
         policy_flag(g_policy, 'a'), policy_flag(g_policy, 't'), policy_flag(g_policy, 'e'));
+#ifdef ADH_HAVE_LSPLANT
+    // The companion on this phone still sends b=0, which was the old default-off. An injected
+    // process is already the opt-in, so that flag must not disable the bypass.
+    adh_ssl_bypass_set_enabled(1);
+#endif
     LOGI("hook policy: %s", g_policy);
 }
 

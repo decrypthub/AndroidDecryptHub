@@ -112,7 +112,13 @@ while (Date.now() < deadline) {
   let agents = [];
   try { agents = await (await fetch(`${base}/api/agents`)).json(); } catch { /* daemon down -> handled below */ }
   freshCandidates = (Array.isArray(agents) ? agents : [])
-    .filter((a) => a.online && a.package === target && (a.connectedAt ?? 0) >= startedAt);
+    // The MAIN process only. Scope is per package and a scoped app's secondary processes
+    // (`com.x:core`) are injected too, so this fixture can now have several fresh sessions with the
+    // same `package`; the assertion below ties the session to the process `pidof <target>` reports,
+    // which is the main one. `process` is what the agent reports for itself (hello), and it equals
+    // the package exactly when the process IS the package.
+    .filter((a) => a.online && a.package === target && String(a.process ?? target) === target &&
+                   (a.connectedAt ?? 0) >= startedAt);
   session = freshCandidates.sort((x, y) => (y.connectedAt ?? 0) - (x.connectedAt ?? 0))[0] ?? null;
   if (session) break;
   await sleep(700);

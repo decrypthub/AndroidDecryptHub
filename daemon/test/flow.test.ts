@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { correlateFlow, asciiOf, WINDOW_NS, FLOW_CAVEAT } from '../src/flow.ts';
+import { correlateFlow, asciiOf, b64Of, WINDOW_NS, FLOW_CAVEAT } from '../src/flow.ts';
 
 const hex = (text: string) => Buffer.from(text, 'utf8').toString('hex');
 const rec = (func: string, tid: number, tsNs: number, text = '') => ({ func, tid, tsNs, hex: hex(text) });
@@ -91,6 +91,20 @@ test('asciiOf renders printables, dots the rest, and never throws on malformed h
   assert.equal(asciiOf(''), '');
   assert.equal(asciiOf('4'), '');          // odd length: no half byte invented
   assert.equal(asciiOf('zz'), '');         // NaN byte: stop, do not emit garbage
+});
+
+test('b64Of is the lossless counterpart: it round-trips bytes asciiOf throws away', () => {
+  // The whole reason this exists: asciiOf turns CRLF into '..', which is enough to READ a
+  // header but not enough to RE-FRAME a stream. b64Of has to give the bytes back unchanged,
+  // including the ones with no printable form (a gzip body, a binary payload).
+  const tls = 'GET /a HTTP/1.1\r\nHost: h\r\n\r\n';
+  assert.equal(Buffer.from(b64Of(hex(tls)), 'base64').toString('utf8'), tls);
+  assert.equal(asciiOf(hex(tls)), 'GET /a HTTP/1.1..Host: h....');   // lossy by design
+  const binary = Buffer.from([0x00, 0x1f, 0x8b, 0xff, 0x00, 0x80]);
+  assert.deepEqual(Buffer.from(b64Of(binary.toString('hex')), 'base64'), binary);
+  assert.equal(b64Of(''), '');             // empty stays empty, not "of nothing"
+  assert.equal(b64Of('4'), '');            // odd length: refuse, do not invent a nibble
+  assert.equal(b64Of('zz'), '');           // NaN byte: refuse, do not emit garbage
 });
 
 test('the store category decides the side (Java-layer crypto names its records by operation)', () => {

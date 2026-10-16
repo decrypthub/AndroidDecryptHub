@@ -66,6 +66,6 @@
     <string name="hook_family_asymmetric">Asymmetric (RSA/EC)</string>
     <string name="hook_family_tls">TLS plaintext</string>
     <string name="hook_family_aead">AEAD</string>
-    <string name="hook_config_reset">All on</string>
+    <string name="hook_config_reset">Reset</string>
     <string name="hook_config_done">Done</string>
 </resources>

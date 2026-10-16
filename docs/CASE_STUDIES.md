@@ -118,6 +118,10 @@
 `dex_index_search` 的 `stringCallers`（"哪段代码引用了这个算法名"）+ `callers`（"谁调了 JCE"），
 一条命令一类，比逐个函数啃字节码快得多。
 
+**业务登录协议整条还原 + 签名破译**（同日晚）：`POST /api/v549/user/login/password` 的
+表单四字段（手机号密文 / 密码密文 / source / 签名）全部还原，本地复算出的**整个请求体与真机逐字节相同**，
+服务端接受（随机号码回"用户不存在"而非"签名校验失败"）。算法细节见下面"追加：签名算法"。
+
 ### 这次暴露的 ADH 缺陷 / 环境事实
 
 | # | 症状 | 说明 |
@@ -127,8 +131,58 @@
 | C | 带 LSPlant/GOT 钩子的进程被 `force-stop` 会留 `SIGSEGV code 0 (SI_USER)` tombstone | 栈在 ART `MarkCompact::UpdateLivenessInfo`——**进程正被拉倒时倒在 GC 线程里**。上一轮把它读成"目标完整性自检自杀"属于**过度解读**，本案例更正 |
 | D | `dex_crypto_scan` 的 `cryptoApis` 对 App 自己的 dex 恒为空 | 它只匹配**声明**在 `javax/crypto`、`java/security` 前缀类里的方法，App 不会去声明这些类。有用的是同一次返回的 `algoStrings` + 索引的 `stringCallers`。**待办**：要么把 `cryptoApis` 改成"引用了这些类的 App 方法"，要么在文档里说清它是什么 |
 | E | `java_hook` 的 `lastArg` 对 `byte[]` 参数是 `[B@…` | 所以"hook 住加密函数看 key"这条路走不通；这次能拿到 key，靠的是 **agent 自己在 native 层做的 ctx→key 连接**，不是 Java 钩子 |
+| F | **装 LSPlant Java 钩子会把目标打崩** | 冷启动后只装一处 `okio.RealBufferedSink#writeUtf8`，约 6 s 内进程在 `ClassLinker::SetupClass` 里 `SIGSEGV`，`pc` 落在 `<unknown>` 映射（不属于任何已加载 so）——像被替换过的 ART 里的代码。**native（GOT）钩子同一条时间线上全程稳定**。**2026-10-13 已定性**（见下）：崩因是"**钩了桥自己依赖的类**"，不是"热"，也不是"类没加载"；后者的 `pc` 落点查清了——夹在两个 Dalvik GC 匿名区**之间**、不落在任何映射里。 |
+| G | `CAnonymous::PrintLog` 的日志是死代码 | 目标 native 层有 `"input string was:"` / `"version:N,actual salt was:"` 这类日志，但只在外部 logger 指针非空时才发，而 App 从不注册 → `logcat` 里永远看不到。**别把"日志里没有"当成"这条路径没走"。** |
+
+### 追加：Java 钩子崩溃的定性（2026-10-13）
+
+把 `Init` 和 `Hook` 分开测（`javahook_probe` 只做 `adh_javahook_init`，明确不装钩），再用频次阶梯：
+
+| 变体（都是冷启动后装一处钩） | 结果 |
+|---|---|
+| `javahook_probe`（只 Init，不装钩） | ✅ 存活 75 s |
+| `okio.RealBufferedSink#writeUtf8`（约 42 次/秒） | ✅ 存活 240 s，命中 1 万+ |
+| `java.util.HashMap#get(Object)`（77 次/秒，boot classpath） | ✅ 存活 90 s，命中 6897 |
+| `java.lang.String#length()` | ❌ **3.1 s 死**（复现两次，都是 3.1 s） |
+
+**结论：不是"热"，不是"类还没加载"，是"钩了钩子桥自己依赖的类"。** 桥在渲染实参/返回值/事件
+JSON 时用的是 `java.lang.String`，钩上 `String` 就等于让桥递归进自己。可用的规则是
+**别钩 `java.lang.String`（以及桥自身依赖的类）**，其余类没问题 —— 这条把 Java 钩子从
+"不能不用"变成"有明确禁区、可以用"。
+
+两条崩溃签名不同，都是这一族的下游表现：
+* 热点/自引用：`SIGSEGV` 在 **JIT 线程池**，`art::LiveInterval::AddUse` ← `SsaLivenessAnalysis` ← `ComputeLiveness`；
+* 另一条：`ClassLinker::SetupClass+348` 调出去，`pc` 夹在两个 Dalvik GC 匿名区**之间**（不落在任何映射里）。
+
+**顺带修掉一个真缺陷**：`tools/fetch_lsplant.sh` 的 patch 3 让 `JitCodeCache::Init` 失败时"继续跑"，
+于是 `JitCodeCache::Available()` 为假、`RecordJitMovement()` 永不执行 —— JIT 代码移动跟踪**根本没起来**。
+根因不是"符号被 strip"而是**被改名**：`GarbageCollectCache` 在 dynsym 和 symtab 里都不存在，
+而 `JitCodeCache::DoCollection(Thread*)` 存在且在导出表里、参数形状相同。`HookSyms()` 本就支持多候选，
+所以 patch 5 只加了一个候选（正常 ROM 行为不变），patch 6 把 `jitTracking` 报进探针回执。
+两处独立证据：`javahook_probe` 从 `jitTracking:false` 变成 `true`。
+
+### 追加：签名算法（同日晚）
+
+业务接口的 `sign` 是**必须项**——不带它服务端直接回"签名校验失败"，而它由 native 算，
+Java 层只看到一次转发调用。破解路径值得记下来，因为**它不需要任何 Java 钩子**：
+
+1. **载荷从 SSL 明文拿，不从 Java 钩子拿**。`capture_start` 之后 agent 的 native SSL 钩子
+   已经在给 TLS 明文，`live_captures` 按 `category:'net'` 读，一次就拿到完整请求体。
+   这条路同时避开了缺陷 F。
+2. **别拿 hook 出来的签名反推算法**——签名是"参数的函数"，hook 到的如果是另一条请求
+   （不同端点/不同字段集），反推的方程就是错的。必须先钉住**载荷**，再谈算法。
+3. **目标 so 没 strip 就直接读符号**。`llvm-nm -D` 一把列出 `EncryptSalt` / `mapToQuery` /
+   `CAnonymous::Encrypt` / `EncodeTool1` / `EncodeTool2`；顺着 JNI 入口反汇编 40 行就看清主流程，
+   比在 Java 层猜拦截器快一个数量级。**"名字唬人的自定义摘要"要实测**：这里的 `EncodeTool1`
+   IV 和 K 表就是标准 MD5，`EncodeTool2` 才是 SHA-256 —— 名字不可信，常量表可信。
+4. **编译期常量直接读文件**：盐是 `.bss` 里的 `std::string`，由 `_GLOBAL__sub_I_*.cpp` 用
+   `.rodata` 里的字面量初始化 —— 反汇编那三个 `__cxx_global_var_init*` 就能拿到地址，
+   再去文件里读字符串，不需要跑起来也不需要 dump 内存。
+5. 服务端成了最终裁判：修好之后随机号码回的是 **"用户不存在"**（业务判定），
+   而不是之前的 **"签名校验失败"**（协议判定）——**错误码的变化就是 pass/fail 信号**。
 
 ### 目标情报（可复用的形态）
+
 
 - **加密工具类被混淆成单字母**：`<pkg>.base.utils.encrypt.a`（AESUtil），方法 `b/c/g/h/i/t/u/v/w/x/y`；
   静态布尔字段是"初始化过没有"，未初始化时调用抛异常——**这本身就是定位线索**：谁还需要初始化，
@@ -138,3 +192,16 @@
 - **同一 App 里多套密钥并存**：登录一套、证书配置一套、播放一套、埋点一套、第三方 SDK 各自一套，
   而且**至少两套的 key 与 IV 相同**（`key == iv`）。看到一条 11 字节明文别急着当手机号，
   先用它的 key/IV 把候选明文都算一遍对一下。
+
+### 追加：抓包路线的两条真实边界（2026-10-13）
+
+- **多进程**：这个目标跑主进程 + `:core` + `:player`。真机判定过——ADH 的作用域原先按
+  **进程名**字面匹配，所以"勾了包名"只覆盖主进程，次要进程根本没有 agent。**如果一个 App 的网络栈
+  在次要进程里，那么无论旁路做得多好，那个进程里什么都没有**。已修（按包名覆盖该包全部进程），
+  但这条经验是通用的：怀疑"抓不到"时，先确认**发请求的那个进程**里到底有没有采集面。
+- **代理本身**：真机复现中，即使旁路已经在三个进程里装好（`on 12/13`）、系统代理也设成了本机端口，
+  目标这一轮的 socket 仍然**直连 443**（`/proc/net/tcp`，按 uid 过滤），代理侧 0 个连接——即这一轮它
+  不走系统代理；而同一台机器、同一套代理在更早的一轮里确实把登录请求解出来了。**结论要分开讲**：
+  旁路有没有生效是 ADH 能负责的（真机可证），代理能不能看到明文还取决于目标愿不愿意用系统代理，
+  后者不在 ADH 的控制范围内。**2026-10-13 晚：这张 13 条 Java 旁路已从产品里删掉。** 静默回调之后同一地址仍在
+  `MarkVisiblyInitialized` 里把进程打死（uptime 约一小时）。TLS 明文继续走 native 的 `SSL_read`/`SSL_write`。

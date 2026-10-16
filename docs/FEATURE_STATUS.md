@@ -1,7 +1,7 @@
-# ADH 功能状态（2026-10-12 新增：逐包 Hook 策略；2026-10-11 范围变更：可选注入后端收窄；全量设备验收仍以 2026-10-01 为准）
+# ADH 功能状态（2026-10-13 新增：SSL 绕过开关 + 多进程作用域修复；2026-10-12 新增：逐包 Hook 策略；2026-10-11 范围变更：可选注入后端收窄；全量设备验收仍以 2026-10-01 为准）
 
 > 这份文件回答一个问题：**现在到底有什么、什么是验证过的、什么是没验证的、什么还没做完。**
-> 判定只认 `tools/verify_all.sh`（**117 个脚本 = 36 host + 81 device**），不认"看起来能跑"。
+> 判定只认 `tools/verify_all.sh`（**118 个脚本 = 36 host + 82 device**），不认"看起来能跑"。
 > 规格见 `REQUIREMENTS.md`，架构与排期见 `DEVELOPMENT_PLAN.md`，跨会话进度见 `PROGRESS.md`。
 >
 > ### ✅ 2026-10-01 本轮：范围收口 + 沙盒耦合清零
@@ -41,7 +41,7 @@
 
 | 交付物 | 来源 | 状态 |
 |---|---|---|
-| `libadh_agent.so`（arm64-v8a，release 剥离，**1,019,520 B**，sha `b8dc7137…`） | `tools/build_agent.sh`（**2026-10-01 起也可在本机用 NDK r29 + cmake 构建，见 `HANDOVER §1.5`**） | ✅ 已验收（v01–v79 系列 + **v102**；2026-10-12 逐包 Hook 策略加入后重建，`v26_footprint` 断言动态导出恰好 4 个） |
+| `libadh_agent.so`（arm64-v8a，release 剥离，**1,019,520 B**，sha `b8dc7137…`） | `tools/build_agent.sh`（**2026-10-01 起也可在本机用 NDK r29 + cmake 构建，见 `HANDOVER §1.5`**） | ✅ 已验收（v01–v79 系列 + **v102**；2026-10-12 逐包 Hook 策略加入后重建，`v26_footprint` 断言动态导出恰好 4 个）。**2026-10-13 晚当前产物（1,021,856 B，sha `587bff9f…`）**：删掉 Java SSL 绕过 profile、`TrustAllManager`、`bypassKind`。已写入 `aa165071` 的模块目录（沙盒与模块路径同一 hash）。签名扫描 PASS。`v75` / `v42` / `v102` 没有在这份 so 上复跑。`v104` 随该功能删除 |
 | 2026-10-01 设备上的旧 Zygisk 模块 zip + ADH Manager APK（**v0.3.12**；与 2026-10-09 新发布包区分） | `tools/build_zygisk.sh` / `build_bundle.sh` / `flash_device.sh` | ✅ 模块 zip 与 APK 是 2026-09-29 那次刷机的产物（`manager.apk` `e0b2a83d…`、`daemon.apk` `87c2df98…`、`zygisk/arm64-v8a.so` `e565bfdc…`）。**agent 已于 2026-10-01 更新为 `78d9d20f…`**（本机 NDK r29 构建），同时写进设备的两条路径：沙盒 `…/lib/arm64/libadh_agent.so`（模拟注入）与 `/data/adb/modules/adh/libadh_agent.so`（Zygisk 注入）。这段记录只描述旧设备状态，不代表新 Release 已刷入。 |
 | 可选后端：Frida Gadget | `tools/fetch_frida_gadget.sh` + `load_frida_gadget.sh` | ⚠️ **开发/调试用，移出发布物**（2026-10-01 决议）；官方二进制（未魔改），v30 验收保留 |
 | 可选后端：eCapture | `tools/fetch_ecapture.sh` + `ecapture_capture.sh` | ⚠️ **实验脚本，已移出 `verify_all.sh` 门禁**（2026-10-01 决议）；需内核 eBPF，脚本手动可跑（本次改动后仍 PASS） |
@@ -70,6 +70,9 @@
 | TLS / 文件 I/O | v07, v07_flow, v20_file, v25_fsbrowser |（v07 断言 SSL_write/read 两侧明文标记；v07_flow 断言 daemon 侧 tid+200ms 关联；v20 断言 open 路径 + 读写标记，均走持续捕获） SSL_write/read 明文与关联；libc open/read/write 捕获 |
 | 反检测观测与去特征 | v05_detect, v69(stealth), v70/v72(sites), v73/v74(vtable) |（v05 自 2026-10-01 起从**持续捕获的 system 类**读 debug/root/prop；**TRACEME 中和目前没有控制面**——原 `detect_watch` 是唯一开关，已随命令删除，见 `DEVELOPMENT_PLAN §6.9.1` WS-J） 目标自审（anon r-x、序言比对）；stealth 后 anonExec 2→0；sites 保持入口字节不变 |
 | Java hook（LSPlant） | v42/v43/v52/v53/v65, **v79(stack)**, **v82(hookAll)**, **v83(java_trace digest)** | 单方法/构造器/继承、参数改写、返回值替换、skip original；`stack:true` 给出 App 帧调用链；`hookAll` 一次装全类（截断可见） |
+| **Java SSL 绕过** | 真机 `aa165071` 2026-10-16，无独立门禁脚本 | 注入后自动装 `TrustManagerImpl` / `Platform` 的握手校验、`SSLContext.init`、`TrustManagerFactory.getTrustManagers`、OkHttp `CertificatePinner.check`、HostnameVerifier。Android 12+ 不钩 `SetStatus` 和 `ClassLinker::RegisterNative`。漫播三个进程存活，用户确认代理能抓到包。 |
+| **Java 算法采集** | 真机 `aa165071` 2026-10-16，无独立门禁脚本 | 注入后钩 `Cipher` / `Mac` / `MessageDigest` / `Signature` 的 init、doFinal、digest、sign、verify，只观察，原方法照常跑，记录进 `jcaptures`。关掉的算法族不装。漫播主进程记到 `AES/CBC/PKCS5Padding decrypt`，`:player` 记到 `AES/GCM/NoPadding encrypt`，三个进程各装 31 个钩子后仍在。 |
+| **多进程作用域（按包名覆盖该包所有进程）** | 真机判定（2026-10-13），无独立门禁脚本 | Zygisk `nice_name` 是进程名，作用域/策略/界面按包名；修复后"先进程名、后包名"两问，hard-exclude 两 key 都判，`hello.package`/`hello.process` 分开上报。真机验证：只写包名 → 主进程 + `:core` + `:player` 三个进程全部注入且拿到同一份策略；只写 `:core` → 仍只覆盖 `:core` |
 | native hook | v46, v49, v55, v56, v66, v68, **v84(native_hook_all selection + 槽位预算)**, **v86(native throttle)**, **v28(inline 入口 hook)** | inline/addr、软/硬卸载、寄存器事件、浮点参数、千次压测；限流只压事件、不改返回值替换；v86 真机 `forcedReturn=20/20` |
 | JNI 面 | v54, v57, v58, v59, v60, v62, v63, v64, v67, **v90(表索引 ABI 机检)**, **v91(字段访问器 + 可改写 + 字段摘要 + 通配)**, **v92(字段摘要单测/接线)**, **v93(字符串+直接缓冲表项, host)**, **v90/v91(数组两族 + 创建/对象数组 + CallNonvirtual + 字符串/反射桥 + 覆盖 228/229, host)** | RegisterNatives、JNI_OnLoad（含加载时替换）、JNIEnv **228/229 表项（唯一余项 `RegisterNatives` 由 v4.14 的入口 inline hook 覆盖）**（99 固定 + 36 字段访问器 + 31 族 ×3：ID 查询 / Call* 三类入口 / 字符串与直接缓冲 / **数组 region 读写全族** / **数组元素 pin 与写回全族** / **数组创建 + 长度 + 对象数组元素 + AllocObject** / **CallNonvirtual 三形态全族（事件带 `via=<class>`）** / **字符串全族（含 critical 对）** / **反射桥 `From/ToReflected*`** / `FatalError` / `ExceptionCheck` / 引用生命周期 / 异常流 / 类型自省 / monitor 与弱引用，索引逐条与 NDK `jni.h` 对照，见 v90；wrapper 签名由 `_Static_assert` 编译期钉死；`action:status` 支持用 `function` 过滤（含 `installed` 关键字）并自报 `total/matched/emitted/truncated`，整表 228 项的回复不再静默截断；固定槽位由**单一列表**同时驱动枚举值与名字表（v4.82），并有**运行期布局自检**——枚举与表任何错位都会拒绝 patch 并点名位置，而不是挂到隔壁函数）、Call* 三类入口、数组写回、异常保持 |
 | 主动调用 / 活体对象 | v45(java_call), v49(native_call), v51(qbdi args), v06(对象读/调用), **v89(字段写入)** | 反射调用 Java 方法/字段；按符号或地址调 native；活体对象字段**读+写**（写入带 before/after；**严格解析**：typo/越界/int 超范围一律拒绝，不再静默写 0；final 字段 fail-loud；参数超长拒绝而不是截断；**字段查找与枚举走父类链**，继承字段不再报 not found） |

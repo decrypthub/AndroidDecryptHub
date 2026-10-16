@@ -73,6 +73,19 @@ class ScopeJsonTest {
     }
 
     @Test
+    fun leftoverBypassSectionIsDroppedOnReEncode() {
+        val json = """
+            {"version":2,"mode":"allowlist","packages":["com.example.target"],
+             "policy":{"com.example.target":{"c":{"h":false},"b":{"s":true}}}}
+        """.trimIndent()
+        val decoded = ScopeJson.decode(json)
+        assertEquals(CaptureFamilies(hmac = false), decoded.familiesFor("com.example.target"))
+        val roundTripped = ScopeJson.encode(decoded)
+        assertFalse(roundTripped.contains("\"b\""))
+        assertTrue(roundTripped.contains("\"h\": false"))
+    }
+
+    @Test
     fun blankIsEmpty() {
         assertEquals(ScopeConfig.EMPTY, ScopeJson.decode(""))
         assertEquals(ScopeConfig.EMPTY, ScopeJson.decode("   "))
@@ -112,7 +125,7 @@ class ScopeJsonTest {
         assertFalse(apps[0].system)
         assertEquals("com.android.settings", apps[1].packageName)
         assertTrue(apps[1].system)
-        assertEquals(AdhProtocol.VERSION, 15)
+        assertEquals(AdhProtocol.VERSION, 16)
         assertEquals(AdhProtocol.MIN_PROCESS_VERSION, 4)
         assertEquals(AdhProtocol.MIN_APP_OPEN_VERSION, 6)
     }

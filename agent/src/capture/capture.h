@@ -18,6 +18,10 @@ void adh_capture_push_text(const char *func, const char *text);
 // Applied by the NEXT install, whoever issues it: the agent has no module name of its own to arm
 // with (see the note above adh_cmd_capture_start in capture.c).
 void adh_capture_set_families(int digest, int hmac, int symmetric, int asymmetric, int tls, int aead);
+void adh_capture_get_families(int *digest, int *hmac, int *symmetric, int *asymmetric, int *tls, int *aead);
+// Java Cipher/Mac/MessageDigest/Signature hooks report through the same rich-capture records
+// as a target-supplied nReport. Observe-only: the caller already ran the original method.
+void adh_capture_java(JNIEnv *env, jstring algo, jstring op, jbyteArray key, jbyteArray iv, jbyteArray in, jbyteArray out);
 
 #ifdef __cplusplus
 }

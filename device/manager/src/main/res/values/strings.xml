@@ -66,6 +66,6 @@
     <string name="hook_family_asymmetric">非对称（RSA/EC）</string>
     <string name="hook_family_tls">TLS 明文</string>
     <string name="hook_family_aead">AEAD</string>
-    <string name="hook_config_reset">全部开启</string>
+    <string name="hook_config_reset">恢复默认</string>
     <string name="hook_config_done">完成</string>
 </resources>

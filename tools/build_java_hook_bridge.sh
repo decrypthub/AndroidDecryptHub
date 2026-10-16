@@ -5,7 +5,8 @@
 # Android build-tools. Run this only when the Java bridge source changes.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SRC="$ROOT/agent/java/com/adh/agent/AdhJavaHookBridge.java"
+SRCDIR="$ROOT/agent/java/com/adh/agent"
+SRC="$SRCDIR/AdhJavaHookBridge.java"
 TMP="$ROOT/agent/build/java_hook_bridge_tmp"
 DEXOUT="$ROOT/agent/src/hook/adh_java_hook_bridge.dex"
 HDR="$ROOT/agent/src/hook/adh_java_hook_bridge_dex.h"
@@ -31,8 +32,13 @@ D8="$(find "$SDK/build-tools" -maxdepth 2 -type f \( -name d8 -o -name d8.bat \)
 
 rm -rf "$TMP"
 mkdir -p "$TMP"
-"$JAVAC" -source 8 -target 8 -Xlint:-options -d "$TMP" "$SRC"
-"$D8" --min-api 26 --output "$TMP" "$TMP/com/adh/agent/AdhJavaHookBridge.class"
+# The whole package, not just the entry file: a sibling class added later must be visible to javac.
+"$JAVAC" -source 8 -target 8 -Xlint:-options -d "$TMP" "$SRCDIR"/*.java
+# Every class in the package, not just the outer one: nested types compile to their own .class files
+# and d8 drops what it is not handed.
+mapfile -t CLASSES < <(find "$TMP/com/adh/agent" -maxdepth 1 -name '*.class' | sort)
+[ "${#CLASSES[@]}" -ge 1 ] || { echo "!! javac produced no classes"; exit 1; }
+"$D8" --min-api 26 --output "$TMP" "${CLASSES[@]}"
 [ -f "$TMP/classes.dex" ] || { echo "!! d8 did not produce classes.dex"; exit 1; }
 cp "$TMP/classes.dex" "$DEXOUT"
 

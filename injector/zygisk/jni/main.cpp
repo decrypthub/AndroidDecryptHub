@@ -291,6 +291,22 @@ static bool is_hard_exclude(const char *pkg) {
     return false;
 }
 
+// Zygisk hands us the PROCESS name in nice_name; for a secondary process that is
+// `com.example.app:core`, not the package. Everything else in ADH is keyed by PACKAGE - the scope
+// file, the per-app hook policy, the Manager UI - and a multi-process app is ONE scope entry, not
+// one per process (REQUIREMENTS: "支持多进程 App：每个进程独立 session"). So the lookups below try
+// the exact process name FIRST (an operator can narrow the scope to a single process on purpose)
+// and the package prefix second, which is what makes "tick the app" cover all of it.
+//
+// Measured before this existed, on a three-process target, by writing each name into the allowlist
+// alone: only `com.x:core` listed -> only the :core process got an agent; only `com.x` listed -> only
+// the main process did. The app's network stack can live in either one, so which process you happen
+// to have named decided whether a capture worked at all.
+static std::string package_of(const std::string &process) {
+    size_t at = process.find(':');
+    return at == std::string::npos ? process : process.substr(0, at);
+}
+
 // Minimal allowlist check: look for "\"pkg\"" inside the packages array region.
 // Fail-loud: missing/unreadable file → no inject (empty allowlist).
 static bool package_in_scope(const char *pkg) {
@@ -342,8 +358,46 @@ static int family_on(const char *obj, const char *key, int dflt) {
     return dflt;
 }
 
+// Cheap well-formedness guard for the scope file. Brace matching alone cannot tell "this package's
+// object" from "this package's object merged with the next one" when the file is malformed but its
+// braces still balance overall. A whole-file balance check catches the truncation/typo class that
+// matters, and a file that fails it yields NO policy at all, which leaves the agent on families-ON.
+// A brace inside a string value would be a false positive, and no scope field can carry one
+// (packages, "c", "d".."e", "b", "s", true/false).
+static bool scope_json_balances(const char *buf) {
+    int depth = 0;
+    for (const char *p = buf; *p; p++) {
+        if (*p == '{') depth++;
+        else if (*p == '}' && --depth < 0) return false;
+    }
+    return depth == 0;
+}
+
+// Copy the {...} object that follows "key" within [from] into out. false when the key or its brace
+// is absent. Bounded at the matching close brace so a later section's keys cannot be read.
+static bool object_slice(const char *from, const char *key, char *out, size_t cap) {
+    char needle[16];
+    snprintf(needle, sizeof(needle), "\"%s\"", key);
+    const char *p = from ? strstr(from, needle) : nullptr;
+    const char *brace = p ? strchr(p, '{') : nullptr;
+    if (!brace) return false;
+    const char *end = brace;
+    int depth = 0;
+    for (; *end; end++) {
+        if (*end == '{') depth++;
+        else if (*end == '}' && --depth == 0) { end++; break; }
+    }
+    size_t len = static_cast<size_t>(end - brace);
+    if (len >= cap) len = cap - 1;
+    memcpy(out, brace, len);
+    out[len] = '\0';
+    return true;
+}
+
 // Render one package's hook policy as the flag line the agent consumes ("d=1,h=0,…").
-// false = this package carries no policy, which leaves the agent on its all-on default.
+// false = this package carries no capture section, which leaves the agent on its own defaults
+// (every capture family on, and SSL bypass on). "b" is the bypass flag on the package object;
+// a missing key stays on.
 static bool policy_flags_for(const char *pkg, char *out, size_t cap) {
     if (!pkg || !pkg[0]) return false;
     int fd = open(kScopePath, O_RDONLY | O_CLOEXEC);
@@ -353,35 +407,47 @@ static bool policy_flags_for(const char *pkg, char *out, size_t cap) {
     close(fd);
     if (n <= 0) return false;
     buf[n] = '\0';
+    if (!scope_json_balances(buf)) return false;    // malformed file: refuse, do not guess
 
-    bool ok = false;
     const char *policy = strstr(buf, "\"policy\"");
-    if (policy) {
-        char needle[512];
-        snprintf(needle, sizeof(needle), "\"%s\"", pkg);
-        const char *entry = strstr(policy, needle);
-        const char *capture = entry ? strstr(entry, "\"c\"") : nullptr;
-        const char *brace = capture ? strchr(capture, '{') : nullptr;
-        if (brace) {
-            // Bound the slice at the matching close brace so a later package's "d" cannot be read.
-            const char *end = brace;
-            int depth = 0;
-            for (; *end; end++) {
-                if (*end == '{') depth++;
-                else if (*end == '}' && --depth == 0) { end++; break; }
-            }
-            char slice[512];
-            size_t len = static_cast<size_t>(end - brace);
-            if (len >= sizeof(slice)) len = sizeof(slice) - 1;
-            memcpy(slice, brace, len);
-            slice[len] = '\0';
-            snprintf(out, cap, "d=%d,h=%d,s=%d,a=%d,t=%d,e=%d",
-                     family_on(slice, "d", 1), family_on(slice, "h", 1), family_on(slice, "s", 1),
-                     family_on(slice, "a", 1), family_on(slice, "t", 1), family_on(slice, "e", 1));
-            ok = true;
-        }
+    if (!policy) return false;
+    char needle[512];
+    snprintf(needle, sizeof(needle), "\"%s\"", pkg);
+    const char *entry = strstr(policy, needle);
+    if (!entry) return false;
+
+    // Bound EVERY lookup to this package's own object. Searching from `entry` to the end of the file
+    // let one package inherit a later package's keys.
+    char pkg_obj[1024];
+    const char *open = strchr(entry, '{');
+    if (!open) return false;
+    const char *walk = open;
+    int depth = 0;
+    bool closed = false;
+    for (; *walk && (size_t)(walk - open) < sizeof(pkg_obj) - 1; walk++) {
+        if (*walk == '{') depth++;
+        else if (*walk == '}' && --depth == 0) { walk++; closed = true; break; }
     }
-    return ok;
+    // A package object that never closes means the file is malformed. Refuse the whole entry rather
+    // than guess: the agent then keeps its own defaults, which are families ON.
+    if (!closed) return false;
+    size_t olen = (size_t)(walk - open);
+    if (olen >= sizeof(pkg_obj)) olen = sizeof(pkg_obj) - 1;
+    memcpy(pkg_obj, open, olen);
+    pkg_obj[olen] = '\0';
+
+    char capture[512] = "";
+    if (!object_slice(pkg_obj, "c", capture, sizeof(capture))) return false;
+
+    snprintf(out, cap, "d=%d,h=%d,s=%d,a=%d,t=%d,e=%d,b=%d",
+             family_on(capture, "d", 1),
+             family_on(capture, "h", 1),
+             family_on(capture, "s", 1),
+             family_on(capture, "a", 1),
+             family_on(capture, "t", 1),
+             family_on(capture, "e", 1),
+             family_on(pkg_obj, "b", 1));
+    return true;
 }
 
 static int open_agent_fd(zygisk::Api *api, std::string *where) {
@@ -532,28 +598,39 @@ public:
         snprintf(g_debug_pkg, sizeof(g_debug_pkg), "%s", package.c_str());
         env->ReleaseStringUTFChars(args->nice_name, pkg);
 
-        if (is_hard_exclude(package.c_str())) {
+        // Hard exclude on BOTH keys: a manager secondary process is still the manager.
+        const std::string pkg_name = package_of(package);
+        if (is_hard_exclude(package.c_str()) || is_hard_exclude(pkg_name.c_str())) {
             note("skip hard-exclude pkg=%s", package.c_str());
             return;
         }
+        // Which keys name this process, in priority order. One entry when the process IS the
+        // package (the common case), two for a secondary process.
+        std::string keys[2] = { package, pkg_name };
+        const int n_keys = (pkg_name == package) ? 1 : 2;
+
         int scope_answer = -1;   // -1 unknown, 0 no, 1 yes
-        {
+        for (int i = 0; i < n_keys; i++) {
             int sock = connect_companion();
-            if (sock >= 0) {
-                char req[320];
-                int len = snprintf(req, sizeof(req), "scope %s\n", package.c_str());
-                char reply[8] = {0};
-                if (len > 0 && send_all(sock, req, (size_t)len) &&
-                    read_reply_line(sock, reply, sizeof(reply))) {
-                    if (reply[0] == '0' || reply[0] == '1') scope_answer = reply[0] - '0';
-                    else note("companion refused scope query pkg=%s reply=%s", package.c_str(), reply);
-                }
-                close(sock);
+            if (sock < 0) continue;
+            char req[320];
+            int len = snprintf(req, sizeof(req), "scope %s\n", keys[i].c_str());
+            char reply[8] = {0};
+            if (len > 0 && send_all(sock, req, (size_t)len) &&
+                read_reply_line(sock, reply, sizeof(reply))) {
+                if (reply[0] == '1') { scope_answer = 1; close(sock); break; }
+                // A "no" for the narrow key is not final: the package may still be listed.
+                if (reply[0] == '0') scope_answer = 0;
+                else note("companion refused scope query pkg=%s reply=%s", keys[i].c_str(), reply);
             }
+            close(sock);
         }
         if (scope_answer < 0) {
             // Fallbacks, in order: the direct read (works when the instance is root) and nothing.
-            scope_answer = package_in_scope(package.c_str()) ? 1 : 0;
+            for (int i = 0; i < n_keys; i++) {
+                if (package_in_scope(keys[i].c_str())) { scope_answer = 1; break; }
+            }
+            if (scope_answer < 0) scope_answer = 0;
             note("scope query fell back to a direct read pkg=%s -> %d", package.c_str(), scope_answer);
         }
         if (scope_answer != 1) {
@@ -564,12 +641,13 @@ public:
 
         // Which hook families this package is allowed to see installed. Asked here because the
         // companion socket does not survive specialization; the agent applies it when it starts.
+        // Same two-key rule, narrow first: a policy written for one process beats the app's.
         policy_flags.clear();
-        {
+        for (int i = 0; i < n_keys && policy_flags.empty(); i++) {
             int sock = connect_companion();
             if (sock >= 0) {
                 char req[320];
-                int len = snprintf(req, sizeof(req), "policy %s\n", package.c_str());
+                int len = snprintf(req, sizeof(req), "policy %s\n", keys[i].c_str());
                 char reply[80] = {0};
                 if (len > 0 && send_all(sock, req, (size_t)len) &&
                     read_reply_line(sock, reply, sizeof(reply))) {
@@ -581,10 +659,10 @@ public:
                 // Same fallback order as the scope query: a direct read works when this instance
                 // happens to be root, and silence simply leaves the agent on its defaults.
                 char direct[64];
-                if (policy_flags_for(package.c_str(), direct, sizeof(direct))) policy_flags = direct;
+                if (policy_flags_for(keys[i].c_str(), direct, sizeof(direct))) policy_flags = direct;
             }
-            if (!policy_flags.empty()) note("policy pkg=%s %s", package.c_str(), policy_flags.c_str());
         }
+        if (!policy_flags.empty()) note("policy pkg=%s %s", package.c_str(), policy_flags.c_str());
 
         should_inject = true;
         int src_fd = open_agent_fd(api, &agent_path);
@@ -678,6 +756,9 @@ REGISTER_ZYGISK_MODULE(AdhModule)
 //
 //   "mark\n"              -> creates the loader marker, replies "ok\n"
 //   "scope <package>\n"   -> replies "1\n" (in allowlist) or "0\n"
+//   "policy <package>\n"  -> replies "d=1,h=0,s=1,a=1,t=1,e=0,b=1\n", or "default\n" when the
+//                            package carries no policy at all. Capture families and SSL bypass
+//                            both default ON. b=0 is the explicit off switch.
 //   "log <line>\n"        -> appends to the root decision log, replies "ok\n"
 // Anything else - including a line that arrived truncated or over-long - is refused with "err\n":
 // the companion never guesses, so an incomplete request can no longer be mistaken for a "mark".

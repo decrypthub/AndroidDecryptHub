@@ -75,6 +75,8 @@ if(EXISTS "${LSP}/lsplant.cc"
     add_subdirectory("${DXB}/external/parallel_hashmap" phmap_build EXCLUDE_FROM_ALL)
     list(APPEND AGENT_SOURCES
         src/hook/java_lsplant.cpp
+        src/hook/ssl_bypass.cpp
+        src/hook/java_crypto.cpp
         "${LSP}/lsplant.cc"
         "${DXB}/dex_builder.cc"
         "${DXB}/dex_helper.cc"

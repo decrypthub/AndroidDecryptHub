@@ -3,6 +3,21 @@
 > 这是"我们现在在哪"的唯一真相。每个会话开始先读它，结束前更新它。
 > 详细规格见 `REQUIREMENTS.md`，路线与架构见 `DEVELOPMENT_PLAN.md`。
 
+## 2026-10-16 —— Java 层算法也进采集
+
+native 的 EVP 钩子看不到 `Cipher.getAlgorithm()`、密钥和 `doFinal` 的明文边界。注入之后，在 `javax.crypto.Cipher`、`javax.crypto.Mac`、`java.security.MessageDigest`、`java.security.Signature` 的 init / doFinal / digest / sign / verify 上装只观察的钩子，记进原来的 `jcaptures`。原方法照常执行。策略里关掉的族不装。
+
+证书钩子先让路：LSPlant 不能两根线程同时装。某个重载把安装线程卡死时，这一条放弃，后面的重载继续。漫播三个进程都装上 31 个算法钩子，主进程记到 `AES/CBC/PKCS5Padding decrypt`，`:player` 记到 `AES/GCM/NoPadding encrypt`。进程还在。agent `cf64b24d892c955c`。没有单独的门禁脚本。
+
+## 2026-10-16 —— 注入进目标就放行 Java 证书校验
+
+同一台已 root 的手机上，别人的模块勾上作用域就能抓包。我们之前把 Java 证书钩子删了，是因为装钩把进程打死。这次接回去，并且只改我们自己写错的地方。
+
+- 装钩前用 `Class.forName(name, true, loader)` 把类初始化完。Android 12 及以上不钩 `Class::SetStatus`（`paciasp` 开头，Dobby 改写后会跳进没映射的内存）。
+- 也不钩 `ClassLinker::RegisterNative`。钩着它的时候，漫播在 `libimagepipeline.so` 的 `JNI_OnLoad` 里死在 `RegisterNatives`（`SIGSEGV` / `SI_TKILL`）。关掉绕过、不初始化 LSPlant 时，同样三个进程是活的。
+- 不改 Conscrypt 的 `TrustManagerImpl` / `Platform` 入口。改 `SSLContext.init`（TrustManager 换成全信任）、`TrustManagerFactory.getTrustManagers`、`okhttp3.CertificatePinner.check` 两个重载、两个 HostnameVerifier。
+- 只换 `SSLContext.init` 时，启动后没有一次 `checkServerTrusted` 被调用，代理仍然解不开。补上 `TrustManagerImpl` / `Platform` 之后（agent `a8af2c039b505528`）三个进程仍在。用户确认代理已经能抓到包。
+
 ## 当前阶段 —— 🔧 v2.0+ 加固与重构（进行中）
 
 **v0.1–v1.0 全部实现并逐项验证（`tools/verify_all.sh` 35/35，真机 + host）——那一轮证明"每条能力路径可跑通"。**
@@ -13,6 +28,160 @@
 **三条总原则（门禁）**：① 不为过测而耦合（agent 内 `com.adh.sandbox` 常量 = 0，目标模块名不硬编码，
 全来自命令参数）；② 不胡乱兜底 / fail-loud（hook 装不上、缓冲溢出、解不动一律显式报错 + 计数上报，
 绝不 `ok:true replaced:0` 或虚高恢复率）；③ 红线不动（重分析在 adhd，hook/采集在 agent）。
+
+## 2026-10-14 —— Java 钩子先初始化类，API 31+ 不再钩 SetStatus
+
+这台 ColorOS Android 15 的 `libart` 里，`Class::SetStatus` 以 `paciasp` 开头。LSPlant v6.4 会去钩它，Dobby 改写后的入口从 `MarkVisiblyInitialized+1664` 跳进 zygote GC 位图之间的空洞 `0x79c325500c`。状态 14 是 kInitialized，15 是 kVisiblyInitialized；v6.4 在 API≥30 一律把 15 当成要保存入口的点，保存动作正好发生在这次调用里。
+
+两处改动：API≥31 不再安装 `SetStatus` 钩子，备份状态改为 14；`java_hook` 改用 `Class.forName(name, true, loader)`，类初始化完再换入口（和 Xposed 的 `findAndHookMethod` 一样）。`loadClass` 只解析、不初始化，静态方法还停在 resolution trampoline 上。
+
+沙盒 `com.adh.sandbox`（agent `130f602514dc4818`）冷启动后装上 5 个钩子：`HashMap.get`、`SSLContext.init`、`TrustManagerFactory.getTrustManagers`、`TrustManagerImpl.checkServerTrusted` 两个重载。连续 5 分钟 session 未断，`HashMap.get` 命中从 48 增到 584，crash buffer 为空。上一份 agent 在同一条路径上约 30 秒死于 `0x79c325500c`。测完已 `unhook 0`。这仍不是漫播上的一小时证明，也没有把删掉的 13 条证书 profile 装回去。
+
+## 2026-10-13 晚 —— 删掉 Java SSL 绕过
+
+13 条 Java 证书校验 profile 在这台 Android 15 / ColorOS 上会把目标打死：故障地址固定在 `0x79c325500c`（zygote GC 位图之间的空洞）。先死在 `ClassLinker::SetupClass`，改成静默回调之后同一批进程仍在约一小时后死在 `MarkVisiblyInitialized`。开关、profile、`TrustAllManager`、`bypassKind`、作用域 `b` 段、Manager 开关和 `verify_v104` 已删除。旧 scope 里的 `b` 读入时忽略，下次写入丢掉。
+
+抓包留下 native TLS 明文（采集族 `t`：`SSL_read` / `SSL_write`）。它不改目标接受哪张证书，所以外部代理仍然解不开这个应用自己钉死的连接。下面白天的记录是这条功能当时怎么加上的，不再是当前行为。
+
+## 2026-10-13 —— SSL 绕过开关（JustTrustMe 等价）：让代理能抓 Java 栈目标的包 + 一轮评审修复
+
+- **需求**：用户要用代理（Charles / Reqable / 自己的 mitm）抓目标 App 的包，而 ADH 此前**完全不做**任何
+  SSL 绕过（`agent/` 与 `daemon/` 里 `TrustManagerImpl`/`X509TrustManager`/`checkServerTrusted`/
+  `HostnameVerifier`/`CertificatePinner` 零命中）。用户明确选择"纯 hook、不装系统 CA、不改手机环境"。
+- **为什么必须是 Java 侧**：Android 上 OkHttp / HttpsURLConnection 这一栈的信任决策在 Java 里做——
+  Conscrypt 用 `SSL_CTX_set_custom_verify` 把链交给 `com.android.org.conscrypt.TrustManagerImpl`，
+  最终走 Java PKIX。所以**钩 BoringSSL 的 `X509_verify_cert`/`SSL_get_verify_result` 对这类目标无效**
+  （实测：`getTrustedChain*` 钩子每次连接都命中，libssl 层钩子从不进入）。通用收窄点只有一处：
+  `com.android.org.conscrypt.Platform#checkServerTrusted`（两个重载，void）与 `#checkTrusted`
+  （boolean）——**所有** X509TrustManager（系统的、App 自己装的 pinning 实现）都从这里过。
+- **新增 `agent/src/hook/ssl_bypass.{c,h}`**：13 条 profile（`TrustManagerImpl.getTrustedChainForServer`
+  ×2、`SSLContext.init` 换 `@trustAllManagers`、`TrustManagerFactory.getTrustManagers`、
+  `Platform.checkServerTrusted` ×2 + `checkTrusted`、`ConscryptEngine.verifyCertificateChain`、
+  okhttp 的 `CertificatePinner.check` ×2 与两个 HostnameVerifier）。`TrustManagerImpl` 的每个信任决策
+  返回 `java.util.List`，所以 `skipOriginal` 单独用会把 Conscrypt 变成 null ⇒ 用 `@arg0List` 把**对端出示的
+  链**当可信链返回（真绕过，且完全不看证书内容）。
+- **启动期装钩是致命的（实测三次）**：任何 Java 钩子只要在目标还在链接类时落地，进程就在
+  `ClassLinker::SetupClass` 上 `SIGSEGV`（`pc` 落在不属于任何映射的空隙里）。**根因不是 `b=1`，而是
+  daemon 对每个新会话都会自动发 `capture_start`**（`service.ts startCaptureLoop`），于是"随会话自动布防"
+  约 1 秒就触发安装。修法：`SB_MIN_UPTIME_SEC = 10` 的**运行时长门禁** + 延迟线程在窗口过后**自动布防**
+  （外部抓包工具因此不需要任何 ADH 命令）；`capture_start` 路径仍幂等，早发等于空操作。代价如实写明：
+  `SSLContext.init` 只能改写**我们到达之后**构造的 context，但每次连接的决策点（Conscrypt 链检查、
+  okhttp pinner、hostname verifier）不受延迟影响。
+- **契约（刻意偏离既有模式）**：SSL 绕过**不是** capture family。六族是**被动采集**，缺键按"开"；
+  这一项是**主动篡改目标行为**，所以**缺键按"关"**（Kotlin `optBoolean("s", false)`、companion
+  `family_on(bypass,"s",0)`、agent `policy_flag_closed`）。`scope.json` 里它是**兄弟段** `{"b":{"s":true}}`
+  而不是第七个族键，`CaptureFamilies` 的文件头写明"别把 SSL 绕过加到这里"。`AdhProtocol.VERSION`
+  15 → **16** + 新增 `MIN_BYPASS_VERSION`：`RootScopeBinder.setScopeJson` 是 decode→re-encode，
+  低版本 daemon 会**静默丢掉 `b` 却照样回保存成功**（UI 会显示"已开"而目标仍在 pinning），所以
+  Manager 写入前门禁、低了如实报失败。
+- **回执（哪里能看到装没装上）**：`capture_start` 回包新增 `sslBypass`（`on N/M miss:<条目>`，
+  `miss` 就是该目标本来没有的类），daemon 侧 `recordCaptureHooks` 把它写回 `session.bypass`。
+  **hello 里的 `bypass` 结构上不可能是结论**（延迟安装，hello 早就发出去了），所以它只报
+  `off` 或 `pending: arms at 10s uptime`——`state.ts` 里那条"hello 时结论已知"的注释是错的，已改。
+- **本轮评审发现并修掉的缺陷**（两个评审 agent + 逐条复核）：
+  - **C1** `inspection.c` 的 `vesc_cap = strlen(vsrc) + 1` 会**丢掉每个字段值的最后一个字符**
+    （`json_escape` 允许增长到 2 倍，且循环条件是 `o + 2 < n`）→ 改 `* 2 + 1`，用从 `util.c` 逐字提取的
+    `escape_test` 验证（35 / 18 / 47 字节三例，旧式全缺尾字符）。
+  - **C2** 无 LSPlant 配置**编译不过**（调用点没护栏）→ `agent_main.c` 的 `#include` 移进
+    `#ifdef ADH_HAVE_LSPLANT`，加惰性占位；两种配置都编过（有 LSPlant 1,030,624 B / 无 703,640 B），
+    占位版现在会把"unavailable: no Java hook backend"如实写进回执，而不是留空。
+  - **C3（最严重）** `device/:core` 不认识 `b`，而 daemon 是 decode→re-encode ⇒ **任何一次 Manager
+    作用域保存都会抹掉手工加的 `b` 段**，而且 Manager 永远显示不出来。新增 `BypassFlags`、
+    `ScopeConfig.bypass` / `withBypass` / `bypassFor`、`ScopeJson` 编解码（稀疏写入，只在开时写 `b`）、
+    Manager 面板的开关 + 列表行红色徽标（文案中英同步）、`MIN_BYPASS_VERSION` 写入门禁。
+  - 清理：删掉死代码 `adh_ssl_bypass_install()`、修 `ssl_bypass.h` 自相矛盾的头注释（"启动时装"vs
+    "拒绝在启动窗口内装"）与 profile 重复编号、把产品源码注释里的真实目标名换成中性描述、
+    `install_now` 现在两波都重试（boot classpath 优先）。
+- **门禁**：新增 `tools/verify_v104_ssl_bypass.sh`（device）：两轮冷启动，**只差一个 `b` 键**——
+  `b.s=true` 必须让 hello 带 `,b=1` 且安装回执 `on N/M` 里**不含** `TrustManagerImpl`/`Platform`，
+  无 `b` 段（但有 capture 策略）必须回**正好 `off`**；同时断言 verdict 经 `capture_start` 回包
+  → `session.bypass` 真的到达会话。`verify_all.sh` 117 → **118（36 host + 82 device）**。
+  `verify_v87_mcp_operability` PASS（红线扫描零命中）；daemon `smoke` OK，`flow` 11/11；
+  `device` gradle `:core:test`/`:manager:testDebugUnitTest`/`:manager:assembleDebug` 全绿
+  （新增 6 条 `b` 相关单测，含"encode(decode(x)) 不能吞掉 `b`"的回归）。**真机端到端此前已验**：
+  手机未装任何 CA 的前提下，mini-mitm 解出 `POST /api/v549/user/login/password` 明文。
+- **真机收尾时抓到的第二个真 bug：作用域是按「进程名」匹配的，勾包名只覆盖主进程**。
+  在真机上（`aa165071`，三进程目标 `com.uxin.kilaaudio` / `:core` / `:player`）逐个名字单写进
+  allowlist 得到判决性结果：**只写 `com.x:core` → 只有 `:core` 拿到 agent；只写 `com.x` → 只有主进程拿到**。
+  根因：Zygisk 的 `nice_name` 是**进程名**，而落盘的作用域 / 逐包策略 / Manager 界面全都按**包名**，
+  注入器又拿 `nice_name` 去做字面匹配（companion 的 `scope` / `policy` 动词同一把 key）。
+  这与 `REQUIREMENTS` 的"支持多进程 App：每个进程独立 session"直接矛盾，且**目标的网络栈在哪个进程
+  决定了抓包成不成功**——正是"抓不到包"的一类真实成因。
+  **修法**（`injector/zygisk/jni/main.cpp`）：新增 `package_of()`，scope 与 policy 都**先按进程名、再按包名**
+  各问一次（窄的优先，保留"只想盯某一个进程"的用法）；hard-exclude 对两个 key 都判；
+  agent 侧 `report()` 把名字按 `:` 拆开，`hello.package` = 包名、`hello.process` = 进程名，
+  于是多进程 App 在 daemon/面板里**归到一个包**下、每个 session 仍可溯源到进程。
+  **验收（真机，刷模块+重启后）**：只写包名 `com.uxin.kilaaudio` → 主进程 / `:core` / `:player`
+  **三个进程全部拿到 agent**，且三个都拿到同一份 `b=1` 策略；只写 `:core` → 仍然只有 `:core`。
+  `verify_v104` 复跑仍 PASS。
+- **诚实记录：没有重现出"自动化冷启动 → 代理抓到明文"**。开着 `b`、三个进程都装好绕过（真机日志
+  `on 12/13`）、系统代理也已设成 `127.0.0.1:8899`（`adb reverse` 在），冷启动目标后
+  **代理侧 0 个连接**，而目标自己的 socket 直接打到 443（`/proc/net/tcp`，uid 10333，远端 443/6783/7001），
+  同时应用界面内容正常加载。即：**这一轮里目标没有走系统代理**。上一轮同机同代理确实抓到过登录请求
+  （`dumps/kilaaudio/mitm4-login-success.log`），所以它的代理行为是**随情境变化**的，而这不在 ADH 能控制的
+  范围里。结论要分开说：**绕过本身是有效的（真机可证）**；能否经代理看到明文还取决于目标愿不愿意用系统代理。
+  自己动手确认只需 30 秒：解锁手机 → 开目标 App → 等 15 秒（绕过在启动窗口后才武装）→ 点登录。
+- **签名预算收口（同日，上一轮被 API 400 打断）**：SSL 绕过最初把信任管理器写成 `AdhJavaHookBridge` 的内部类，
+  dex 里多出带这个类名的描述符，`scan_agent_signatures.sh` 的计数超过预算 10，`verify_v88` FAIL。
+  拆成同包独立类 `agent/java/com/adh/agent/TrustAllManager.java` 后，`AdhJavaHookBridge` 回到 10，
+  `com.adh.agent` 仍是 1。产物 **1,031,056 B / `1a2ff558…`**，与设备
+  `/data/adb/modules/adh/libadh_agent.so` 一致（17:46 写入，无需再刷模块：注入时按文件现读）。
+  **2026-10-13 18:25 复跑（`aa165071`）**：`v88` PASS；`v75` PASS（主进程过滤后仍能对上 `pidof`）；
+  `v42` PASS（沙盒模拟注入，LSPlant v6.4 / ART init）；`v102` 两轮 PASS（flag 行含 `b=0`）；
+  `v104` PASS（沙盒 `on 8/13`，缺的是 okhttp；无 `b` 段时正好 `off`）。
+  同一份 so 冷启动目标后，主进程 / `:core` / `:player` 三个会话都带到 `b=1`，
+  hello 在启动窗口内如实报 `deferred: uptime < 10s`。
+- **绕过回调不再走观察路径（同日晚，闪退）**：`b.s` 打开后三个进程都在 `ClassLinker::SetupClass`
+  跳进 zygote GC 位图中间的空洞（地址每次都是 `0x79c325500c`），进程活了几十秒才死，请求跟着没了。
+  观察回调每次命中都做 `getClass()` / `getReturnType()` / 拼字符串；类还在定义时这么做，入口会被写成那块空洞。
+  绕过改成 `bypassKind`：命中后直接返回装钩时定好的值（跳过 / `true` / 对端证书链 / trust-all 数组），
+  不反射、不拼字符串、不上报。产物 **1,031,728 B / `e79c88cb…`**。
+  这只去掉了快路径：21:21 冷启动后 90 秒没死，但 **22:24 原进程（uptime 3774 s）仍死在同一地址**，
+  栈是 `ClassLinker::VisiblyInitializedCallback::MarkVisiblyInitialized`。静默回调没有修掉。
+  已把该机 `scope.json` 的 `b` 段去掉（fail-closed），并 force-stop 目标，避免下次启动再装这批 Java 钩子。
+
+## 2026-10-12 —— `live_captures` 补 `encoding:"b64"`：捕获记录终于能**逐字节**还原
+
+
+- **症状（真机暴露）**：想拿 ADH 当"抓包工具"用（目标 App 有证书钉扎，代理走不通）时发现，
+  `live_captures {includeText:true}` 给的 `ascii` 是**有损**渲染 —— `asciiOf()` 把每个非可打印字节
+  换成 `.`，一个 `\r\n` 变成 `..`。结果是：能**读**JSON 正文，但**不能解析**：无法给 HTTP 分帧、
+  无法 gunzip（响应基本都带 `Content-Encoding: gzip`）、无法拿回二进制体。
+  另外 `ascii` 硬切在 4096 字符且**不报**，`inl` 与 `ascii.length` 对不上才知道被切了。
+- **修法**：`daemon/src/flow.ts` 加 `b64Of(hex)`（无损、字节级，奇数字节/非 hex 一律**拒绝**而不是编造）；
+  `live_captures` 加 `encoding`（`"ascii"` 默认，保持旧行为 / `"b64"` 精确字节，上限 65536 B）。
+  **不再有静默截断**：两条路径都回报 `bytes`（真实长度）与 `truncated`（只有被切才 true）。
+  单测 `test/flow.test.ts` 新增"b64Of 把 asciiOf 丢弃的字节原样还回来"（含 CRLF 往返、gzip 魔数、空/奇数/非 hex）。
+- **门禁**：`verify_v87_mcp_operability` PASS（红线扫描零命中）；`daemon` 单测 180/180；`smoke` OK。
+- **验证**：改完后用新字段跑通真机的请求/响应配对 —— `POST /api/v549/user/login/password`
+  （141 B 表单）+ gzip 响应解出 `{"h":{"code":1013,...}}`，主机名/长度/正文全部对得上。
+  顺带解释了上一轮"抓到的签名重放失败"的疑团：那个 `d17dc042…` 是**另一次**密码登录
+  （密码框里有 16 字符残留文本），不是密码登录那一路的参数，签名当然对不上。
+- 消费者的样板脚本在 `dumps/kilaaudio/netlog.mjs`（gitignored）。
+
+## 2026-10-12 —— 漫播登录协议整条还原：签名算法破译 + 独立客户端跑通到业务判定
+
+- **成果**：`com.uxin.kilaaudio` 1.6.18 的 `POST /api/v549/user/login/password` **完整实现**，
+  表单四字段（`mobile` / `password` / `source` / `sign`）与真机请求**逐字节相同**，
+  独立 Python 客户端（`dumps/kilaaudio/manbo_login.py`，仅标准库）发出的请求服务端**接受**。
+- **算法**（全部来自 `libanonymous.so` 静态符号 + 反汇编，再用线上请求对齐）：
+  - `mobile` = `base64(AES-128-CBC(key,iv,PKCS7)(手机号))`；`password` 同一对 key/iv；
+    `source` = 区号（观察值 `86`）。
+  - `sign` = `MD5( salt + mapToQuery(params) )`：参数按 key 升序拼 `k=v&k=v`（值不 URL 编码），
+    `salt = EncryptSalt("6zF0R8;/") = "3aU9I1;/"`（逐字符仿射变换，常量在 `.rodata`，可直接读文件）。
+  - 名字唬人的 `EncodeTool1` **实测就是标准 MD5**（IV 与 K 表原样），`EncodeTool2` 才是 SHA-256。
+- **pass/fail 信号**：随机号码从 `{"code":11,"msg":"http请求签名校验失败"}` 变成
+  `{"code":1013,"msg":"用户不存在"}` —— 协议层全过，只剩"这个号没注册"的业务判断。
+  真账号的端到端成功留给用户用自己的号验（目标里没有可用账号：`/data/data/<pkg>/` 无登录态存储）。
+- **方法论（可复用）**：① **载荷从 SSL 明文拿**（`live_captures` `category:'net'`），不需要任何 Java 钩子；
+  ② **别拿 hook 到的签名反推算法**——签名是参数的函数，载荷不对反推的方程就是错的（前一轮就栽在这）；
+  ③ 目标 so 没 strip 就先读符号再读反汇编，比在 Java 层猜拦截器快一个数量级。
+- **暴露的 ADH 缺陷（新）**：装 LSPlant Java 钩子（仅 `okio.RealBufferedSink#writeUtf8` 一处）后目标约 6 s 内
+  在 `ClassLinker::SetupClass` 路径上 `SIGSEGV`，`pc` 落在**不属于任何已加载 so 的 `<unknown>` 映射**
+  —— 指向被替换过的 ART。同一条时间线上 **native（GOT）钩子全程稳定**。已记入 `CASE_STUDIES.md` 待办：
+  在定位并修好这个崩溃点之前，能用 native 手段就不上 Java 钩子。
+- 文档：`docs/CASE_STUDIES.md` 案例 2 增加"签名算法"小节与缺陷 F/G；现场记录（含密钥/明文）
+  在 gitignored 的 `dumps/kilaaudio/ANALYSIS.md`。
 
 ## 2026-10-12 —— Zygisk Next 报"1 module(s) with issue: adh"：我们真在泄漏伴生 socket
 
@@ -52,7 +221,7 @@
   摘要(MD5/SHA)、HMAC、对称(AES)、非对称、TLS、AEAD。动机是 2026-10-11 的实测：某个轻度混淆的目标在钩子生效期间
   以 `SIGSEGV (SI_USER)`（注入信号，不是真崩）自杀，疑似完整性自检——**少装钩子就是少暴露面**。配置**存在手机上**
   （`/data/adb/adh/scope.json`），用户用 Manager 改、AI 用 adb 改**同一份文件**，两条路径看到的东西不分叉；没有 AI 时
-  用户自己也能用。**本版不做**：SSL 绕过开关（等 profile 收尾）、MD5/SHA 拆成两个开关（两者在本工具里走同一个
+  用户自己也能用。**本版不做**：SSL 绕过开关（等 profile 收尾；**已于 2026-10-13 做出，见上**）、MD5/SHA 拆成两个开关（两者在本工具里走同一个
   `EVP_DigestUpdate` 入口，拆开要额外读算法名）。
 - **契约（`device/:core`）**：`scope.json` 加**可选** `policy` 段，`version` 1 → 2；新增 `CaptureFamilies`（六布尔，
   缺省全开）与 `ScopeConfig.policy`，`ScopeJson` 走短键 `{"c":{"d":true,"h":false,…}}`（与 `InstalledAppsJson` 同理：

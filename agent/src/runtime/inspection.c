@@ -32,6 +32,29 @@ static jobject adh_find_field_walk(JNIEnv *env, jmethodID get_declared_field, jm
     return NULL;
 }
 
+// Field values are the whole reason a caller runs object_inspect, and they are frequently
+// structured (a List<DataPublicKey>, a cert chain, a key blob, a JSON config). The first version
+// copied them into `char value_buf[300]` and the reply buffer silently DROPPED any field that did
+// not fit - so a long value came back as 299 bytes with no indication it had been cut, and the
+// caller had no way to tell a short value from a clipped one. Measured 2026-10-13 on a target
+// whose pinned-key list lives in one such field: the list was unreadable.
+// Now: the value is measured, allocated to fit, capped only at a declared ceiling, and BOTH
+// clipping and dropping are reported in the reply. The escaped copy is sized 2L+1 because
+// json_escape grows escapes (see the allocation below).
+#define INSPECT_VALUE_CAP (64 * 1024)
+
+// Grow a caller-owned buffer to hold at least `need` bytes, keeping it NUL-addressable.
+// Returns the (possibly moved) pointer, or NULL on allocation failure - never a silent short buffer.
+static char *adh_grow(char *buf, size_t *cap, size_t need) {
+    if (*cap >= need) return buf;
+    size_t next = *cap ? *cap : 1024;
+    while (next < need) next *= 2;
+    char *p = realloc(buf, next);
+    if (!p) return NULL;
+    *cap = next;
+    return p;
+}
+
 void adh_cmd_object_inspect(int fd, const char *id, const char *class_name,
                             const char *field_name) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
@@ -42,6 +65,7 @@ void adh_cmd_object_inspect(int fd, const char *id, const char *class_name,
 
     size_t cap = 1 << 14; char *out = malloc(cap);
     int ok = 0; char err[128] = ""; char obj_class[160] = ""; int nfields = 0;
+    int nclipped = 0, ndropped = 0;   // reported, never silent
     char *recs = malloc(1 << 14); if (recs) recs[0] = 0; size_t rlen = 0, rcap = 1 << 14;   // room for the declaring-class field
 
     jclass cls_class = (*env)->FindClass(env, "java/lang/Class");
@@ -87,13 +111,53 @@ void adh_cmd_object_inspect(int fd, const char *id, const char *class_name,
         jobject value = (*env)->CallObjectMethod(env, field, field_get, obj);
         if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
         jstring value_string = (jstring)(*env)->CallStaticObjectMethod(env, str_class, value_of, value);
-        char name_buf[96] = "", value_buf[300] = "";
+        char name_buf[96] = "";
         if (name) { const char *s = (*env)->GetStringUTFChars(env, name, NULL); if (s) { strncpy(name_buf, s, sizeof(name_buf)-1); (*env)->ReleaseStringUTFChars(env, name, s); } }
-        if (value_string) { const char *s = (*env)->GetStringUTFChars(env, value_string, NULL); if (s) { strncpy(value_buf, s, sizeof(value_buf)-1); (*env)->ReleaseStringUTFChars(env, value_string, s); } }
-        char namej[120], valuej[600]; json_escape(name_buf, namej, sizeof(namej)); json_escape(value_buf, valuej, sizeof(valuej));
+
+        // Measure, then copy to fit. The ceiling is declared and every clip is counted.
+        char *value_buf = NULL; int clipped = 0;
+        if (value_string) {
+            jsize vlen = (*env)->GetStringUTFLength(env, value_string);
+            size_t vcap = ((size_t)vlen > INSPECT_VALUE_CAP) ? INSPECT_VALUE_CAP : (size_t)vlen;
+            value_buf = malloc(vcap + 1);
+            if (value_buf) {
+                const char *s = (*env)->GetStringUTFChars(env, value_string, NULL);
+                if (s) { memcpy(value_buf, s, vcap); (*env)->ReleaseStringUTFChars(env, value_string, s); }
+                else vcap = 0;
+                value_buf[vcap] = 0;
+                clipped = ((size_t)vlen > vcap);
+            }
+        }
+        if (value_string) (*env)->DeleteLocalRef(env, value_string);
+        if (value) (*env)->DeleteLocalRef(env, value);
+
+        const char *vsrc = value_buf ? value_buf : "";
+        // json_escape is allowed to GROW its input: it writes two bytes for every '"' and '\\', and
+        // its loop guard is `o + 2 < n`, so it needs n >= L + 2 just to emit L unchanged characters.
+        // Sizing this as L + 1 silently dropped the last character of EVERY field value - which is
+        // the very truncation this rewrite exists to remove, and it broke a device test that reads
+        // a two-digit value back. Worst case is 2L bytes plus the NUL; no scope for overflow.
+        size_t vesc_cap = strlen(vsrc) * 2 + 1;
+        char *valuej = malloc(vesc_cap);
+        if (valuej) json_escape(vsrc, valuej, vesc_cap);
+        char namej[120]; json_escape(name_buf, namej, sizeof(namej));
         char walkerj[200]; json_escape(walker_buf, walkerj, sizeof(walkerj));
-        char rec[900]; int written = snprintf(rec, sizeof(rec), "%s{\"name\":\"%s\",\"value\":\"%s\",\"class\":\"%s\"}", nfields ? "," : "", namej, valuej, walkerj);
-        if (written > 0 && rlen + (size_t)written + 1 < rcap) { memcpy(recs + rlen, rec, written); rlen += written; recs[rlen] = 0; nfields++; }
+        static const char *REC_FMT = "%s{\"name\":\"%s\",\"value\":\"%s\",\"class\":\"%s\"%s}";
+        const char *clipj = clipped ? ",\"valueTruncated\":true" : "";
+        int need = snprintf(NULL, 0, REC_FMT, nfields ? "," : "", namej, valuej ? valuej : "", walkerj, clipj) + 1;
+        char *grown = adh_grow(recs, &rcap, rlen + (size_t)need);
+        if (grown && need > 1) {
+            recs = grown;
+            snprintf(recs + rlen, (size_t)need, REC_FMT, nfields ? "," : "", namej, valuej ? valuej : "", walkerj, clipj);
+            rlen += (size_t)need - 1;
+            nfields++;
+            if (clipped) nclipped++;
+        } else {
+            ndropped++;                       // out of memory: counted, not silently skipped
+        }
+        free(valuej);
+        free(value_buf);
+        (*env)->DeleteLocalRef(env, name);
         (*env)->DeleteLocalRef(env, field);
     }
     walker = (*env)->CallObjectMethod(env, walker, inspect_get_superclass);
@@ -107,8 +171,22 @@ done:
     adh_jni_detach(did);
     if (out) {
         char classj[160], errorj[160]; json_escape(obj_class, classj, sizeof(classj)); json_escape(err, errorj, sizeof(errorj));
-        if (ok) snprintf(out, cap, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"object_inspect\",\"ok\":true,\"objectClass\":\"%s\",\"fieldCount\":%d,\"fields\":[%s]}\n", idj, classj, nfields, recs ? recs : "");
-        else snprintf(out, cap, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"object_inspect\",\"ok\":false,\"error\":\"%s\"}\n", idj, errorj);
+        if (ok) {
+            // Size the reply to the records we actually built. A fixed reply buffer here would just
+            // reintroduce one level up the silent truncation this function no longer does at the
+            // field level. If it cannot be allocated, say so instead of emitting clipped JSON.
+            size_t need = rlen + 2048;
+            char *bigger = adh_grow(out, &cap, need);
+            if (!bigger) {
+                snprintf(out, cap, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"object_inspect\",\"ok\":false,\"error\":\"reply too large to allocate\"}\n", idj);
+            } else {
+                out = bigger;
+                snprintf(out, cap, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"object_inspect\",\"ok\":true,\"objectClass\":\"%s\",\"fieldCount\":%d,\"truncatedValues\":%d,\"droppedFields\":%d,\"valueCapBytes\":%d,\"fields\":[%s]}\n",
+                         idj, classj, nfields, nclipped, ndropped, INSPECT_VALUE_CAP, recs ? recs : "");
+            }
+        } else {
+            snprintf(out, cap, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"object_inspect\",\"ok\":false,\"error\":\"%s\"}\n", idj, errorj);
+        }
         send_line(fd, out);
         free(out);
     }
