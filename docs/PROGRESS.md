@@ -3,6 +3,10 @@
 > 这是"我们现在在哪"的唯一真相。每个会话开始先读它，结束前更新它。
 > 详细规格见 `REQUIREMENTS.md`，路线与架构见 `DEVELOPMENT_PLAN.md`。
 
+## 2026-10-16 —— v0.3.14：KernelSU / Magisk 模块更新
+
+之前的 `module.prop` 没有 `updateJson`，所以 KernelSU、KernelSU Next 和 Magisk 的模块页不会出现更新。这一版加上公开地址 `injector/zygisk/update.json`（`version` / `versionCode` / `zipUrl` / `changelog`）。模块版本与 agent 一起升到 **v0.3.14 / versionCode 21**。已经装在手机上、且旧模块没有这个字段的，管理器仍然不会提示，需要手动刷入这一次。
+
 ## 2026-10-16 —— Java 层算法也进采集
 
 native 的 EVP 钩子看不到 `Cipher.getAlgorithm()`、密钥和 `doFinal` 的明文边界。注入之后，在 `javax.crypto.Cipher`、`javax.crypto.Mac`、`java.security.MessageDigest`、`java.security.Signature` 的 init / doFinal / digest / sign / verify 上装只观察的钩子，记进原来的 `jcaptures`。原方法照常执行。策略里关掉的族不装。
