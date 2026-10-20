@@ -41,13 +41,24 @@
   .status-dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--danger); flex-shrink:0; }
   .status-dot.ok { background:var(--green); animation:dh-pulse 2.4s ease-in-out infinite; }
   @keyframes dh-pulse { 0%,100%{opacity:1;} 50%{opacity:.5;} }
-  .header-process { position:relative; min-width:0; margin-left:auto; }
-  .process-trigger { display:grid; grid-template-columns:minmax(0,1fr) auto; grid-template-rows:auto auto; column-gap:10px; min-width:180px; max-width:300px; min-height:38px; padding:4px 10px; text-align:left; color:var(--ink-2); background:transparent; border:1px solid transparent; border-radius:4px; cursor:pointer; }
-  .process-trigger:hover { border-color:transparent; background:rgba(255,255,255,.04); color:var(--ink); }
-  .process-trigger .proc-primary { overflow:hidden; color:var(--ink); font-size:11px; font-weight:650; text-overflow:ellipsis; white-space:nowrap; }
+  .header-process { position:relative; display:flex; align-items:center; gap:7px; min-width:0; margin-left:auto; }
+  .app-switch { position:relative; min-width:0; }
+  .process-trigger { display:grid; grid-template-columns:minmax(0,1fr) auto; grid-template-rows:auto auto; column-gap:10px; min-width:180px; max-width:280px; min-height:38px; padding:4px 10px; text-align:left; color:var(--ink-2); background:transparent; border:1px solid transparent; border-radius:4px; cursor:pointer; }
+  .process-trigger:hover, .process-trigger[aria-expanded="true"] { border-color:transparent; background:rgba(255,255,255,.04); color:var(--ink); }
+  .process-trigger .proc-primary { overflow:hidden; color:var(--ink); font-size:13px; font-weight:650; text-overflow:ellipsis; white-space:nowrap; }
   .process-trigger .proc-secondary { grid-column:1; overflow:hidden; color:var(--muted); font:10px/1.3 ui-monospace,SFMono-Regular,Consolas,monospace; text-overflow:ellipsis; white-space:nowrap; }
   .process-trigger .menu-chevron { grid-column:2; grid-row:1 / 3; align-self:center; color:var(--muted); }
-  .process-popover { width:290px; padding:12px 14px; left:auto; right:0; }
+  .app-menu { width:280px; padding:6px; left:0; right:auto; }
+  .app-menu::before { left:18px; right:auto; }
+  .app-item { box-sizing:border-box; display:flex; flex-direction:column; align-items:flex-start; gap:2px; width:100%; min-height:44px; padding:7px 10px; color:var(--ink-2); background:transparent; border:0; border-radius:3px; text-align:left; cursor:pointer; }
+  .app-item:hover, .app-item.active { color:var(--ink); background:var(--surface-3); }
+  .app-item .app-name-row { display:flex; align-items:center; gap:8px; width:100%; min-width:0; }
+  .app-item .app-name { overflow:hidden; flex:1; min-width:0; color:var(--ink); font-size:13px; font-weight:650; text-overflow:ellipsis; white-space:nowrap; }
+  .app-item .app-state { flex:none; color:var(--muted); font-size:10px; }
+  .app-item .app-state.on { color:var(--green); }
+  .app-item .app-pkg { overflow:hidden; max-width:100%; color:var(--muted); font:10px/1.3 ui-monospace,SFMono-Regular,Consolas,monospace; text-overflow:ellipsis; white-space:nowrap; }
+  .app-empty { padding:8px 10px; color:var(--muted); font-size:12px; }
+  .process-popover { width:320px; padding:12px 14px; }
   .process-popover .proc-title { margin-bottom:10px; color:var(--ink); font-size:12px; font-weight:650; }
   .procinfo { display:grid; grid-template-columns:auto minmax(0,1fr); gap:8px 14px; margin:0; font:11px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace; }
   .procinfo dt { color:var(--muted); }
@@ -59,8 +70,8 @@
      blank. Give the popup an explicit opaque background/foreground pair. */
   select option { background:#11151c; color:var(--ink); }
   select option:checked { background:var(--surface-3); color:var(--ink); }
-  .sess-offline { display:flex; align-items:center; gap:6px; margin-top:8px; color:var(--muted); font-size:11px; }
-  .sess-offline input { min-height:0; margin:0; }
+  .app-events { margin-top:10px; max-height:132px; overflow:auto; color:var(--muted); font-size:11px; line-height:1.5; }
+  .app-events div { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .header-actions { display:flex; align-items:center; gap:7px; margin-left:0; flex-wrap:wrap; }
   .menu-wrap { position:relative; }
   .popover { display:none; position:absolute; top:calc(100% + 7px); right:0; z-index:80; min-width:210px; padding:6px; color:var(--ink-2); background:#11151c; border:1px solid #4a5260; border-radius:5px; box-shadow:0 18px 50px rgba(0,0,0,.58); }
@@ -157,6 +168,7 @@
   .row .ts { color:var(--muted); font-size:11px; margin-left:auto; flex-shrink:0; font-variant-numeric:tabular-nums; }
   .row .lens { color:var(--muted); font-size:11px; margin-top:2px; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .row .preview { margin-top:4px; color:#c7ccd5; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ex-note { padding:8px 12px 0; color:var(--muted); font-size:12px; line-height:1.4; }
   .row .lens-out { color:var(--cyan); }
   .io-section.raw-card { padding:0 0 2px 12px; background:transparent; border:0; border-radius:0; border-left:2px solid var(--cyan); }
   .io-label.raw { color:var(--cyan); background:transparent; }
@@ -356,20 +368,21 @@
   </div>
   <div class="stats" id="stats"><span class="status-dot" id="conn"></span><span id="status">连接中…</span></div>
   <div class="header-process">
-    <button type="button" class="process-trigger" id="processBtn" aria-expanded="false" aria-controls="processPopover" title="当前进程">
-      <span class="proc-primary" id="procPrimary">未连接目标</span>
-      <span class="proc-secondary" id="procSecondary">启动 App 后自动出现</span>
-      <span class="menu-chevron" aria-hidden="true">⌄</span>
-    </button>
-    <div class="popover process-popover" id="processPopover">
-      <div class="proc-title">当前进程</div>
-      <dl class="procinfo" id="procinfo"></dl>
-      <label class="sess-lab">会话
-        <select id="sess"><option value="">（最新在线）</option></select>
-      </label>
-      <label class="sess-offline">
-        <input type="checkbox" id="sessShowOffline"> 显示已断开的会话<span id="sessOfflineCount"></span>
-      </label>
+    <div class="menu-wrap app-switch">
+      <button type="button" class="process-trigger" id="appBtn" aria-expanded="false" aria-controls="appMenu" title="切换应用">
+        <span class="proc-primary" id="procPrimary">未选择应用</span>
+        <span class="proc-secondary" id="procSecondary">注入范围</span>
+        <span class="menu-chevron" aria-hidden="true">⌄</span>
+      </button>
+      <div class="popover app-menu" id="appMenu"></div>
+    </div>
+    <div class="menu-wrap">
+      <button type="button" class="compact-action" id="processBtn" aria-expanded="false" aria-controls="processPopover" title="查看当前应用的详情">详情</button>
+      <div class="popover process-popover" id="processPopover">
+        <div class="proc-title">详情</div>
+        <dl class="procinfo" id="procinfo"></dl>
+        <div class="app-events" id="appEvents"></div>
+      </div>
     </div>
   </div>
   <div class="header-actions">
@@ -464,7 +477,7 @@
       </div>
       <div class="splitter"></div>
       <div class="detail-pane" id="nt-detail">
-        <div class="detail-empty">TLS 明文：常驻 hook <code>SSL_write</code>(发送) / <code>SSL_read</code>(接收)，在加密前/解密后拿到明文。</div>
+        <div class="detail-empty">同一条 SSL 连接上的 HTTP/1.1 会配成一对。点开是请求和响应；gzip、deflate、br 已解开。HTTP/2 和没有连接号的记录仍按发送、接收分开。WebView 不在这里。</div>
       </div>
     </div>
   </div>
@@ -478,7 +491,7 @@
           <button type="button" id="filesUp" title="上一级">↑</button>
           <button type="button" id="filesRefresh">刷新</button>
         </div>
-        <div id="filesList" class="files-list"><div class="empty">选择会话后浏览目标私有目录</div></div>
+        <div id="filesList" class="files-list"><div class="empty">选择注入范围里的应用后浏览它的私有目录。</div></div>
       </aside>
       <div class="splitter"></div>
       <div class="detail-pane">
@@ -663,15 +676,22 @@ function mkTab([id,label,key],active){ const b=document.createElement('button');
   return b; }
 TABS_MAIN.forEach((t,i)=>nav.appendChild(mkTab(t,i===0)));
 const val=id=>document.getElementById(id).value.trim();
-const sessParam=()=>{ const s=val('sess'); return s?`?session=${s}`:''; };
+let chosenPkg='';
+function selectedPackage(){ return chosenPkg || pinnedPackage(); }
+function sessionsOf(pkg){ return [...agents.values()].filter(a=>a.package===pkg).sort((a,b)=>(a.connectedAt||0)-(b.connectedAt||0)); }
+function liveSession(){ return sessionsOf(selectedPackage()).filter(a=>a.online).pop()||null; }
+function liveSid(){ return liveSession()?.sessionId||''; }
+function sidQ(){ const s=liveSid(); return s?'&session='+encodeURIComponent(s):''; }
+function pkgQ(){ const p=selectedPackage(); return p?'&package='+encodeURIComponent(p):''; }
 
 // ---- 一键 Dump 所有 DEX ----
 async function loadDumps(){ const r=await (await fetch('/api/dumps')).json(); const tb=document.getElementById('dumps-rows');
-  const list=(Array.isArray(r)?r:[]).filter(d=>d.kind==='dex').slice().reverse();
+  const list=(Array.isArray(r)?r:[]).filter(d=>d.kind==='dex'&&(!selectedPackage()||d.package===selectedPackage())).slice().reverse();
   tb.innerHTML=list.map(d=>`<tr><td>${fmtSize(d.size)}</td><td class="symname">${escapeHtml((d.sha256||'').slice(0,16))}</td><td class="muted">${escapeHtml(d.source||'')}</td><td><a class="dl-link" href="/api/dumps/download?sha=${d.sha256}">⬇ 下载</a></td></tr>`).join('')||'<tr><td class="muted" colspan=4>暂无 DEX dump（点上方「一键 Dump 所有 DEX」）</td></tr>'; }
 async function dumpAllDex(){ const el=document.getElementById('dumpDone'), st=document.getElementById('dumpStat');
+  if(!liveSid()){ st.textContent=''; el.textContent=selectedPackage()?'这个应用当前没有在跑的进程，捕获记录仍可查看。':'注入范围里还没有勾选应用。'; return; }
   st.textContent='Dumping…'; el.textContent='';
-  try{ const r=await (await fetch('/api/unpack/dump-all',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session:val('sess')||undefined})})).json();
+  try{ const r=await (await fetch('/api/unpack/dump-all',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session:liveSid()||undefined})})).json();
     if(r.error){ st.textContent=''; el.textContent='错误: '+r.error; return; }
     st.textContent=`完成：${r.dumped}/${r.count} 个 DEX（去重 ${r.deduped}，失败 ${r.failed}）`;
     el.textContent=(r.dexes||[]).map(d=>d.error?`✗ ${d.begin||''} ${d.error}`:`✓ ${d.format||'dex'} ${fmtSize(d.size)} @ ${d.begin}  ${(d.sha256||'').slice(0,16)}${d.dedup?'（已存在）':''}`).join('\n');
@@ -699,16 +719,60 @@ function hexdump(hex){ hex=hex||''; let out='';
 
 const CAPPANELS={};
 let activeCapKey='cc';
-function applyFilter(p){ let items=capItems.filter(c=>p.cats.includes(c.category));
-  const sid=val('sess'); if(sid) items=items.filter(c=>!c.sessionId||c.sessionId===sid);
+function belongsToApp(c){
+  const pkg=selectedPackage(); if(!pkg) return false;
+  if(c.package) return c.package===pkg;
+  if(c.sessionId) return sessionsOf(pkg).some(a=>a.sessionId===c.sessionId);
+  return false;
+}
+function applyFilter(p){ let items=capItems.filter(c=>p.cats.includes(c.category)&&belongsToApp(c));
   const f=p.filter;
   if(f.q){ const q=f.q.toLowerCase(); items=items.filter(c=>((c.algo||'')+' '+(c.op||'')+' '+(c.preview||'')).toLowerCase().includes(q)); }
   if(f.min!=null) items=items.filter(c=>c.inl>=f.min);
   if(f.max!=null) items=items.filter(c=>c.inl<=f.max);
   if(p.key==='cc'&&f.cat>=0){ const want=CAT_BY_SEL[f.cat]; items=items.filter(c=>catClass(c)===want); }
   return items; }
+function httpListPreview(text){
+  const raw=String(text||'');
+  const lines=/[\r\n]/.test(raw)?raw.replace(/\r\n/g,'\n').replace(/\r/g,'\n').split('\n'):raw.split('..');
+  const line=(lines[0]||'').trim();
+  const req=line.match(/^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|TRACE)\s+(\S+)\s+HTTP\/\d(?:\.\d)?$/i);
+  if(req){
+    const method=req[1].toUpperCase();
+    const target=req[2];
+    if(/^https?:\/\//i.test(target)) return method+' '+target;
+    let host='';
+    for(const header of lines.slice(1)){
+      const found=header.match(/^Host:\s*(\S+)/i);
+      if(found){ host=found[1]; break; }
+    }
+    if(host && target.charAt(0)==='/') return method+' https://'+host+target;
+    return method+' '+target;
+  }
+  const status=line.match(/^HTTP\/\d(?:\.\d)?\s+\d{3}(?:\s+\S+)*/);
+  return status?status[0]:raw;
+}
+const netUrlQueue=[]; let netUrlActive=0;
+function ensureNetUrl(c){
+  if(!c || c._url || c._urlQueued) return;
+  c._urlQueued=true; netUrlQueue.push(c); pumpNetUrls();
+}
+function pumpNetUrls(){
+  while(netUrlActive<4 && netUrlQueue.length){
+    const c=netUrlQueue.shift(); netUrlActive++;
+    fetch('/api/captures/'+c.id).then(r=>r.json()).then(d=>{
+      const url=httpListPreview(d.text||'');
+      if(url) c._url=url;
+    }).catch(()=>{}).finally(()=>{ netUrlActive--; if(c._url) capRenderAll(); pumpNetUrls(); });
+  }
+}
 function rowLens(c){
-  if(c.category==='net'||c.category==='file'||c.category==='system')
+  if(c.category==='net'){
+    const shown=c._url||httpListPreview(c.preview);
+    if(!c._url && /^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|TRACE) \//.test(shown)) ensureNetUrl(c);
+    return escapeHtml(shown||('in:'+(c.inl||0)+'B'));
+  }
+  if(c.category==='file'||c.category==='system')
     return escapeHtml(c.preview||('in:'+(c.inl||0)+'B'));
   let meta='in:'+(c.inl||0)+'B';
   if(c.outl) meta+=' · out:'+c.outl+'B';
@@ -727,8 +791,7 @@ function jumpLatest(key){ const p=CAPPANELS[key]; if(!p) return;
 function makeCapPanel(key,cats){
   const p={key,cats,sel:0,filter:{q:'',min:null,max:null,cat:-2,paused:false},lastShown:0};
   p.render=function(force){ const box=document.getElementById(key+'-list'); if(!box) return;
-    const sid=val('sess');
-    const total=capItems.filter(c=>cats.includes(c.category)&&(!sid||!c.sessionId||c.sessionId===sid)).length;
+    const total=capItems.filter(c=>cats.includes(c.category)&&belongsToApp(c)).length;
     const badge=document.getElementById('n-'+key); if(badge) badge.textContent=total||'';
     const items=applyFilter(p);
     if(!force && (p.filter.paused || box.scrollTop>48)){
@@ -736,7 +799,7 @@ function makeCapPanel(key,cats){
       showBanner(key,n); if(activeCapKey===key) updateCount(p.lastShown,total); return; }
     p.lastShown=items.length; showBanner(key,0);
     const shown=items.slice(-capDisplayCap).slice().reverse();
-    box.innerHTML=shown.map(c=>rowHtml(key,p.sel,c)).join('')||'<div class="empty">该分类还没有记录…<br>在 App 里触发对应操作看看?</div>';
+    box.innerHTML=shown.map(c=>rowHtml(key,p.sel,c)).join('')||'<div class="empty">'+emptyCapText()+'</div>';
     if(activeCapKey===key) updateCount(items.length,total); };
   p.select=async function(id){ p.sel=id; p.render(true);
     const c=await (await fetch('/api/captures/'+id)).json(); renderCaptureDetail(key+'-detail',c); };
@@ -745,9 +808,102 @@ function makeCapPanel(key,cats){
 makeCapPanel('cc',['crypto']);
 makeCapPanel('sy',['system','file']);
 makeCapPanel('nt',['net']);
+let httpAssembly={exchanges:[],noConn:0,http2:0,caveat:''};
+let exchangeTimer=0;
+async function loadExchanges(){
+  const pkg=selectedPackage();
+  if(!pkg){ httpAssembly={exchanges:[],noConn:0,http2:0,caveat:''}; return; }
+  try{
+    const r=await (await fetch('/api/http/exchanges?package='+encodeURIComponent(pkg))).json();
+    if(r && Array.isArray(r.exchanges)) httpAssembly=r;
+  }catch(e){}
+}
+function scheduleExchanges(){
+  clearTimeout(exchangeTimer);
+  exchangeTimer=setTimeout(()=>{ loadExchanges().then(()=>capRenderAll()); }, 250);
+}
+function exchangeSelect(id){ const p=CAPPANELS.nt; if(!p) return; p.sel=id; p.render(true); }
+function renderExchangeDetail(detailId,ex){
+  const d=document.getElementById(detailId); if(!d||!ex) return;
+  const part=(title,cls,labelCls,p)=>{
+    if(!p) return '<div class="io-section '+cls+'"><div class="io-card-head"><div class="io-label '+labelCls+'">'+title+'</div></div>'+ioBlock('','（还没有）')+'</div>';
+    let body=p.bodyText||'';
+    if(p.binary) body='二进制 '+(p.bodyBytes||0)+' 字节';
+    else if(!body) body='（空）';
+    const meta=[p.complete?'':'未完成', (p.decoded&&p.contentEncoding)?('已解开 '+p.contentEncoding):'', (p.bodyBytes||0)+' bytes', p.note||''].filter(Boolean).join(' · ');
+    const text=(p.headerText?p.headerText+'\n\n':'')+body;
+    return '<div class="io-section '+cls+'"><div class="io-card-head"><div class="io-label '+labelCls+'">'+title+'</div><div class="io-meta">'+escapeHtml(meta)+'</div></div>'
+      +'<div class="io-block"><h3>'+escapeHtml(p.startLine||'')+'</h3>'+ioBlock('',text)+'</div></div>';
+  };
+  d.innerHTML='<div class="detail-head"><h2><span class="cat-dot net"></span>'+escapeHtml(ex.label||'')+'</h2>'
+    +'<div class="sub">'+escapeHtml([ex.status?('HTTP '+ex.status):'', ex.conn||''].filter(Boolean).join(' · '))+'</div></div>'
+    +part('请求','in-card','in',ex.request)+part('响应','out-card','out',ex.response)
+    +(ex.note?'<p class="sub">'+escapeHtml(ex.note)+'</p>':'');
+}
+function exchangeRow(sel,ex){
+  const status=ex.status?'<span class="op">'+escapeHtml(ex.status)+'</span>':'';
+  const lens=(ex.response&&ex.response.startLine)||(ex.request&&ex.request.startLine)||ex.note||'';
+  return '<div class="row cat-net'+(ex.id===sel?' selected':'')+'" data-ex="'+escapeHtml(ex.id)+'" onclick="exchangeSelect(this.getAttribute(\'data-ex\'))">'
+    +'<div class="top"><span class="pill net">网络</span><span class="algo">'+escapeHtml(ex.label||'')+'</span>'+status
+    +'<span class="ts">'+(ex.ts?new Date(ex.ts).toLocaleTimeString():'')+'</span></div>'
+    +'<div class="lens">'+escapeHtml(lens)+'</div></div>';
+}
+(function(){
+  const nt=CAPPANELS.nt;
+  const rawSelect=nt.select;
+  nt.render=function(force){
+    const box=document.getElementById('nt-list'); if(!box) return;
+    const local=capItems.filter(c=>c.category==='net'&&belongsToApp(c));
+    const localIds=new Set(local.map(c=>c.id));
+    const allEx=httpAssembly.exchanges||[];
+    const exchanges=allEx.filter(ex=>(ex.captureIds||[]).some(id=>localIds.has(id)));
+    const used=new Set(allEx.flatMap(ex=>ex.captureIds||[]));
+    const raw=applyFilter(nt).filter(c=>!used.has(c.id));
+    const q=(nt.filter.q||'').toLowerCase();
+    const matched=exchanges.filter(ex=>{
+      if(q){
+        const blob=[ex.label,ex.status,ex.note,ex.request&&ex.request.startLine,ex.request&&ex.request.headerText,ex.request&&ex.request.bodyText,ex.response&&ex.response.startLine,ex.response&&ex.response.headerText,ex.response&&ex.response.bodyText].join(' ').toLowerCase();
+        if(!blob.includes(q)) return false;
+      }
+      const n=(ex.request?ex.request.bodyBytes:0)+(ex.response?ex.response.bodyBytes:0);
+      if(nt.filter.min!=null && n<nt.filter.min) return false;
+      if(nt.filter.max!=null && n>nt.filter.max) return false;
+      return true;
+    });
+    const rows=[
+      ...matched.map(ex=>({ts:ex.ts||0, html:exchangeRow(nt.sel,ex)})),
+      ...raw.map(c=>({ts:c.ts||0, html:rowHtml('nt', typeof nt.sel==='number'?nt.sel:0, c)})),
+    ].sort((a,b)=>b.ts-a.ts);
+    const badge=document.getElementById('n-nt'); if(badge) badge.textContent=(matched.length+raw.length)||'';
+    if(!force && (nt.filter.paused || box.scrollTop>48)){
+      const n=Math.max(0, rows.length-nt.lastShown);
+      showBanner('nt', n);
+      if(activeCapKey==='nt') updateCount(nt.lastShown, local.length);
+      return;
+    }
+    nt.lastShown=rows.length; showBanner('nt',0);
+    const notes=[];
+    if(httpAssembly.http2) notes.push(httpAssembly.http2+' 条连接是 HTTP/2，仍按发送和接收分开显示');
+    if(httpAssembly.noConn) notes.push(httpAssembly.noConn+' 条记录没有连接号，仍按发送和接收分开显示');
+    const noteHtml=notes.length?'<div class="ex-note">'+escapeHtml(notes.join('。'))+'。</div>':'';
+    const empty=local.length?'这些明文还拼不成一对 HTTP/1.1。':emptyCapText();
+    box.innerHTML=noteHtml+(rows.length?rows.map(r=>r.html).join(''):'<div class="empty">'+empty+'</div>');
+    if(activeCapKey==='nt') updateCount(rows.length, local.length);
+    if(typeof nt.sel==='string'){
+      const ex=allEx.find(e=>e.id===nt.sel);
+      if(!ex) return;
+      const rev=nt.sel+'|'+(ex.request?ex.request.bodyBytes+'/'+ex.request.complete:'')+'|'+(ex.response?ex.response.bodyBytes+'/'+ex.response.complete:'')+'|'+(ex.note||'');
+      if(nt.detailRev!==rev){ nt.detailRev=rev; renderExchangeDetail('nt-detail', ex); }
+    }
+  };
+  nt.select=function(id){
+    if(typeof id==='string'){ nt.sel=id; nt.render(true); return; }
+    return rawSelect(id);
+  };
+})();
 function capRenderAll(){ for(const k in CAPPANELS) CAPPANELS[k].render(); }
 function capSelectP(key,id){ CAPPANELS[key].select(id); }
-function capPush(c){ const sid=val('sess'); if(sid && c.sessionId && c.sessionId!==sid) { if(c.id>capMaxId)capMaxId=c.id; return; }
+function capPush(c){ if(!belongsToApp(c)) { if(c.id>capMaxId)capMaxId=c.id; return; }
   capItems.push(c); if(capItems.length>800) capItems.shift(); if(c.id>capMaxId)capMaxId=c.id; }
 function capClearP(key){ const p=CAPPANELS[key]; const cats=p.cats;
   for(let i=capItems.length-1;i>=0;i--) if(cats.includes(capItems[i].category)) capItems.splice(i,1);
@@ -796,8 +952,11 @@ function renderCaptureDetail(detailId,c){ const d=document.getElementById(detail
   if(c.outHex) h+='<div class="io-section out-card"><div class="io-card-head"><div class="io-label out">'+outLabel+'</div><div class="io-meta">'+(c.outHex.length/2)+' bytes</div></div>'+ioBody(c.outHex,utf8FromHex(c.outHex))+'</div>';
   if(c.callStack) h+='<details class="callstack"><summary>调用栈 ('+String(c.callStack).split('\n').length+' 帧)</summary>'+ioBlock('',c.callStack)+'</details>';
   d.innerHTML=h; }
-async function capLoad(){ try{ const r=await (await fetch('/api/captures?since='+capMaxId+sidQ())).json();
-    (r.captures||[]).forEach(capPush); capRenderAll(); }catch(e){} }
+async function capLoad(){ const pkg=selectedPackage(); if(!pkg) return;
+  try{ const r=await (await fetch('/api/captures?since='+capMaxId+pkgQ())).json();
+    (r.captures||[]).forEach(c=>{ if(!c.package) c.package=pkg; capPush(c); });
+  }catch(e){}
+  await loadExchanges(); capRenderAll(); }
 
 // ---- 过滤工具栏（加解密/系统/网络共用，作用于当前活动的捕获面板）----
 function updateCount(shown,total){ const el=document.getElementById('count'); if(el) el.textContent=`${shown} / ${total} 条`; }
@@ -841,20 +1000,19 @@ function bindToolbar(){
 
 // ---- 会话辅助 ----
 function pinnedPackage(){ const seg=decodeURIComponent(location.pathname.replace(/^\//,'').split('/')[0]||''); return (seg && seg.indexOf('.')>=0) ? seg : ''; }
-function selectedAgent(){ const s=val('sess'); if(s && agents.get(s)) return agents.get(s);
-  const pin=pinnedPackage(); const all=[...agents.values()];
-  if(pin){
-    const on=all.filter(a=>a.online&&a.package===pin).pop(); if(on) return on;
-    const off=all.filter(a=>a.package===pin).pop(); if(off) return off;
-  }
-  return all.filter(x=>x.online).slice(-1)[0] || all.slice(-1)[0]; }
-function sidQ(){ const s=val('sess'); return s?'&session='+encodeURIComponent(s):''; }
-function curPkg(){ return selectedAgent()?.package||''; }
+function selectedAgent(){ return liveSession() || sessionsOf(selectedPackage()).slice(-1)[0] || null; }
+function curPkg(){ return selectedPackage(); }
 function agentOfflineHint(err){
   const s=String(err||'');
   if(/no (online )?agent session|no session/i.test(s)) return '目标已断开，重新打开 App 后再试';
   return s; }
 function capReset(){ capItems.length=0; capMaxId=0; capLoad(); }
+function emptyCapText(){
+  if(!selectedPackage()) return '注入范围里还没有勾选应用。';
+  if(!liveSid()) return '这个应用当前没有连上的进程。<br>在手机上打开它，记录会出现在这里。';
+  if(!captureOn) return '实时捕获关着。<br>打开右上角「设置」，把捕获打开。';
+  return '该分类还没有记录…<br>在 App 里触发对应操作看看?';
+}
 
 // ---- 文件浏览器（对齐 iOS：filesPath 相对沙盒根，空 path = GET 真实目录） ----
 let filesPath='';
@@ -889,9 +1047,8 @@ function filesUpNav(){ navigateFiles(filesParentOf(filesPath)); }
 function navigateFiles(rel){ filesPath=rel||''; filesResetPreview(); loadFilesBrowser(); }
 async function loadFilesBrowser(){
   const list=document.getElementById('filesList'); if(!list) return;
-  const home=sandboxHome();
   renderFilesBreadcrumb(filesPath);
-  if(!home){ list.innerHTML='<div class="empty">未连接目标 —— 启动 App 后浏览私有目录</div>'; return; }
+  if(!liveSid()){ list.innerHTML='<div class="empty">'+(selectedPackage()?'这个应用当前没有在跑的进程，捕获记录仍可查看。':'注入范围里还没有勾选应用。')+'</div>'; return; }
   list.innerHTML='<div class="empty">加载中…</div>';
   try{ const r=await (await fetch('/api/fs/list?path='+encodeURIComponent(filesAbs(filesPath))+sidQ())).json();
     if(!r.ok){ list.innerHTML='<div class="empty">'+escapeHtml(agentOfflineHint(r.error||'读取失败'))+'</div>'; return; }
@@ -914,7 +1071,7 @@ async function previewFile(path){
   const head=document.getElementById('filesPreviewHead'), body=document.getElementById('filesPreviewBody');
   head.innerHTML='<span class="path">'+escapeHtml(path)+'</span><a class="dl-link" href="#" data-files-download="'+escapeHtml(path)+'">下载</a>';
   body.textContent='加载中…';
-  try{ const r=await (await fetch('/api/fs/read',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session:val('sess')||undefined,path})})).json();
+  try{ const r=await (await fetch('/api/fs/read',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session:liveSid()||undefined,path})})).json();
     if(!r.ok){ body.textContent=''; head.innerHTML='<span class="path">'+escapeHtml(path)+'</span>'; body.innerHTML='<div class="detail-empty">'+escapeHtml(r.error||'读取失败')+'</div>'; return; }
     const sz=r.size||0, extra=r.truncated?` / 共 ${r.fsize}B（已截断）`:'';
     const text=r.text||'';
@@ -928,7 +1085,7 @@ async function previewFile(path){
     else body.textContent='（空文件）';
   }catch(e){ body.textContent=''; head.innerHTML='<span class="path">'+escapeHtml(path)+'</span>'; body.innerHTML='<div class="detail-empty">'+escapeHtml(String(e))+'</div>'; } }
 async function filesDownload(path){
-  try{ const r=await (await fetch('/api/fs/read',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session:val('sess')||undefined,path})})).json();
+  try{ const r=await (await fetch('/api/fs/read',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session:liveSid()||undefined,path})})).json();
     if(!r.ok||!r.b64){ toast('下载失败: '+(r.error||'空')); return; }
     const bin=atob(r.b64); const arr=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++)arr[i]=bin.charCodeAt(i);
     const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([arr])); a.download=path.split('/').pop()||'file';
@@ -1073,6 +1230,7 @@ async function postConfig(patch){
     if(r.error){ toast('保存失败: '+r.error); return; }
     if(r.stats){ document.getElementById('statCaptures').textContent=`${r.stats.captures} 条`+(r.stats.on?' · 捕获中':''); }
     if(patch.ui&&patch.ui.displayCap) capDisplayCap=r.settings.ui.displayCap;
+    if(r.settings&&r.settings.capture&&typeof r.settings.capture.enabled==='boolean'){ captureOn=r.settings.capture.enabled; capRenderAll(); }
     toast('已保存');
   }catch(e){ toast('保存失败: '+e); }
 }
@@ -1111,63 +1269,114 @@ async function saveRawCfg(){
 
 function escapeHtml(s){ return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
-// ---- agents / 进程栏 / WS ----
-const agents=new Map(); const sess=document.getElementById('sess');
-let lastFilterSid='';
-function render(){ const all=[...agents.values()].sort((a,b)=>a.connectedAt-b.connectedAt);
-  // Dead sessions pile up in the map between sweeps (and every restart adds one), so the picker
-  // lists ONLINE sessions by default and just reports how many offline ones it is hiding.
-  const showOffline=document.getElementById('sessShowOffline')?.checked===true;
-  const offline=all.filter(a=>!a.online);
-  const list=showOffline?all:all.filter(a=>a.online);
-  const offlineHint=document.getElementById('sessOfflineCount');
-  if(offlineHint) offlineHint.textContent=offline.length?`（已隐藏 ${offline.length} 个）`:'';
-  const pin=pinnedPackage(); const cur=sess.value;
-  sess.innerHTML='<option value="">（最新在线）</option>'+list.map(a=>`<option value="${a.sessionId}">${escapeHtml(a.package)} · ${a.pid}${a.online?'':' · 离线'}</option>`).join('');
-  if(pin){ const m=list.filter(a=>a.online&&a.package===pin).pop()||list.filter(a=>a.package===pin).pop(); sess.value=m?m.sessionId:cur; }
-  else sess.value=cur;
-  if(sess.selectedIndex<0) sess.value='';   // the selected session was hidden (offline) — fall back to the newest online
-  if(sess.value!==lastFilterSid){ lastFilterSid=sess.value; capReset(); }
-  const a=selectedAgent();
+// ---- agents / 应用栏 / WS ----
+const agents=new Map();
+let serverApps=[]; let scopeNote=''; let lastFilterPkg=''; let captureOn=true;
+function appOnline(pkg){ return sessionsOf(pkg).some(a=>a.online); }
+function appRecords(){
+  const seen=new Set();
+  const list=[];
+  for(const a of serverApps){
+    const pkg=a&&a.package;
+    if(!pkg||pkg==='?'||seen.has(pkg)) continue;
+    seen.add(pkg);
+    const label=String(a.label||'').trim();
+    list.push({package:pkg, label: label && label!==pkg ? label : ''});
+  }
+  return list;
+}
+function render(){
+  const list=appRecords();
+  const sig=list.map(a=>a.package+'='+a.label+'='+(appOnline(a.package)?'1':'0')).join('|')+'|'+scopeNote+'|'+(captureOn?'1':'0');
+  const pin=pinnedPackage();
+  let next=chosenPkg;
+  if(pin && list.some(a=>a.package===pin)) next=pin;
+  else if(!list.some(a=>a.package===next)) next=(list[0]||{}).package||'';
+  if(next!==chosenPkg) chosenPkg=next;
+  const pkg=chosenPkg;
+  if(pkg!==lastFilterPkg){ lastFilterPkg=pkg; capReset(); loadAppEvents(); }
+  const cur=list.find(a=>a.package===pkg);
   const primary=document.getElementById('procPrimary'), secondary=document.getElementById('procSecondary'), info=document.getElementById('procinfo');
-  if(a){
-    primary.textContent=a.package;
-    secondary.textContent=(a.online?'PID ':'已断开 · PID ')+a.pid+(a.abi?' · '+a.abi:'');
-    const rows=[['包名',a.package],['PID',String(a.pid)],['ABI',a.abi||'—'],['Android',a.android||'—'],['入口',a.entry||'—'],['maps',String(a.mapsCount||'—')],['状态',a.online?'在线':'已断开']];
-    info.innerHTML=rows.map(([k,v])=>'<dt>'+escapeHtml(k)+'</dt><dd>'+escapeHtml(v)+'</dd>').join('');
+  const menu=document.getElementById('appMenu');
+  if(cur){
+    const online=appOnline(pkg);
+    primary.textContent=cur.label||cur.package;
+    secondary.textContent=(cur.label?cur.package:'注入范围')+(online?' · 在线':' · 未连接');
+    info.innerHTML='<dt>应用</dt><dd>'+escapeHtml(cur.label||cur.package)+'</dd><dt>包名</dt><dd>'+escapeHtml(cur.package)+'</dd>';
   } else {
-    primary.textContent='未连接目标';
-    secondary.textContent='启动 App 后自动出现';
-    info.innerHTML='<dt>状态</dt><dd>进程信息不可用</dd>';
-  } }
+    primary.textContent='未选择应用';
+    secondary.textContent=scopeNote||'在手机上勾选注入范围';
+    info.innerHTML='<dt>状态</dt><dd>'+escapeHtml(scopeNote||'注入范围里没有勾选')+'</dd>';
+  }
+  if(menu && menu.dataset.sig!==sig){
+    menu.dataset.sig=sig;
+    menu.innerHTML=list.length?list.map(a=>{ const on=appOnline(a.package); return `<button type="button" class="app-item${a.package===pkg?' active':''}" data-pkg="${escapeHtml(a.package)}"><span class="app-name-row"><span class="app-name">${escapeHtml(a.label||a.package)}</span><span class="app-state${on?' on':''}">${on?'在线':'未连接'}</span></span>${a.label?`<span class="app-pkg">${escapeHtml(a.package)}</span>`:''}</button>`; }).join('')
+      : `<div class="app-empty">${escapeHtml(scopeNote||'注入范围里没有勾选')}</div>`;
+  } else if(menu){
+    menu.querySelectorAll('.app-item').forEach(el=>el.classList.toggle('active', el.dataset.pkg===pkg));
+  }
+}
+async function refreshApps(){
+  try{
+    const r=await (await fetch('/api/apps')).json();
+    if(Array.isArray(r.apps)) serverApps=r.apps;
+    if(typeof r.capture==='boolean' && r.capture!==captureOn){ captureOn=r.capture; capRenderAll(); }
+    scopeNote=r.error||'';
+  }catch(e){ scopeNote='读不到注入范围'; }
+  render();
+}
+async function loadAppEvents(){
+  const el=document.getElementById('appEvents'); const pkg=selectedPackage();
+  if(!el) return;
+  if(!pkg){ el.innerHTML=''; return; }
+  try{
+    const r=await (await fetch('/api/events?package='+encodeURIComponent(pkg)+'&limit=80')).json();
+    const rows=(r.events||[]).filter(e=>e.type!=='capture.new'&&e.type!=='agent.maps').slice(-8).reverse();
+    el.innerHTML=rows.length?rows.map(e=>{
+      const d=e.data||{};
+      let text=e.type;
+      if(e.type==='agent.hello') text='进程连上 · PID '+(d.pid??'');
+      else if(e.type==='agent.close') text='进程退出'+(d.pid?' · PID '+d.pid:'');
+      else if(e.type==='dump.new') text='Dump · '+(d.kind||d.tag||'');
+      return `<div>${new Date(e.ts).toLocaleTimeString()} ${escapeHtml(text)}</div>`;
+    }).join(''):'<div>这个应用还没有进程日志</div>';
+  }catch(e){ el.textContent=''; }
+}
 function upsert(a){ agents.set(a.sessionId,{...agents.get(a.sessionId),...a}); render(); }
 function setWsPill(s,cls){ const p=document.getElementById('dbg-ws'); if(p){p.textContent='ws: '+s;p.className='pill '+cls;} }
 function connect(){ const ws=new WebSocket(`ws://${location.host}/ws`); const conn=document.getElementById('conn'), st=document.getElementById('status');
-  ws.onopen=()=>{conn.className='status-dot ok';st.textContent='实时';setWsPill('live','on');dbg('WS','open');};
+  ws.onopen=()=>{conn.className='status-dot ok';st.textContent='实时';setWsPill('live','on');dbg('WS','open'); refreshApps();};
   ws.onclose=()=>{conn.className='status-dot';st.textContent='断开 — 重连中';setWsPill('down','no');dbg('WS','close');setTimeout(connect,1500);};
   ws.onmessage=e=>{const m=JSON.parse(e.data);
-    if(m.event==='snapshot'){agents.clear();(m.data||[]).forEach(upsert);}
-    else if(m.event==='agent.hello')upsert(m.data);
+    if(m.event==='snapshot'){agents.clear();(m.data||[]).forEach(a=>agents.set(a.sessionId,{...agents.get(a.sessionId),...a})); render();}
+    else if(m.event==='agent.hello'){ upsert(m.data); loadAppEvents(); }
     else if(m.event==='agent.maps'){const a=agents.get(m.data.sessionId);if(a){a.mapsCount=m.data.count;upsert(a);}}
-    else if(m.event==='agent.close'){const a=agents.get(m.data.sessionId);if(a){a.online=false;upsert(a);}}
-    else if(m.event==='capture.new'){ capPush(m.data); capRenderAll(); }
-    else if(m.event==='dump.new'){ if(document.getElementById('p-dump').classList.contains('active'))loadDumps(); }
+    else if(m.event==='agent.close'){const a=agents.get(m.data.sessionId);if(a){a.online=false;upsert(a); loadAppEvents();}}
+    else if(m.event==='capture.new'){ capPush(m.data); if(m.data&&m.data.category==='net') scheduleExchanges(); else capRenderAll(); }
+    else if(m.event==='dump.new'){ if(document.getElementById('p-dump').classList.contains('active'))loadDumps(); if(m.data&&m.data.package===selectedPackage()) loadAppEvents(); }
     dbg('WS←', m.event||'?');
   }; }
 connect();
-document.getElementById('sessShowOffline')?.addEventListener('change', render);
-sess.addEventListener('change', ()=>{
-  const a=agents.get(sess.value);
-  const next=a&&a.package ? '/'+encodeURIComponent(a.package) : '/';
+document.getElementById('appMenu').addEventListener('click', e=>{
+  const btn=e.target.closest('[data-pkg]');
+  if(!btn) return;
+  chosenPkg=btn.dataset.pkg||'';
+  const next=chosenPkg ? '/'+encodeURIComponent(chosenPkg) : '/';
   if(location.pathname!==next) history.pushState(null,'',next);
-  capReset(); render();
+  closePopovers();
+  render();
   filesPath=''; filesResetPreview();
   if(document.getElementById('p-files').classList.contains('active')) filesInit();
 });
-window.addEventListener('popstate', ()=>{ capReset(); render(); });
+window.addEventListener('popstate', ()=>{
+  chosenPkg=pinnedPackage();
+  render();
+  filesPath=''; filesResetPreview();
+  if(document.getElementById('p-files').classList.contains('active')) filesInit();
+});
 bindToolbar();
 onTabSwitch('p-crypto');
-capLoad(); setInterval(capLoad, 2000);   // 拉取实时捕获（WS + 轮询双保险）
+refreshApps(); setInterval(()=>{ refreshApps(); capLoad(); }, 2000);
 
 // ---- 分栏拖动（list-pane 宽度）----
 document.querySelectorAll('.splitter').forEach(sp=>{
@@ -1183,6 +1392,7 @@ document.querySelectorAll('[data-mcp-copy]').forEach(btn=>{
   btn.addEventListener('click', ()=>copyMcp(btn.getAttribute('data-mcp-copy'), btn));
 });
 document.getElementById('wechatBtn').addEventListener('click', e=>{ e.stopPropagation(); togglePopover('wechatPopover','wechatBtn'); });
+document.getElementById('appBtn').addEventListener('click', e=>{ e.stopPropagation(); togglePopover('appMenu','appBtn'); });
 document.getElementById('processBtn').addEventListener('click', e=>{ e.stopPropagation(); togglePopover('processPopover','processBtn'); });
 document.getElementById('wechatCopy').addEventListener('click', async ()=>{
   const name='DecryptHub';

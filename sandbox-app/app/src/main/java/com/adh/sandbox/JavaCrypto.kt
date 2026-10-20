@@ -2,9 +2,12 @@ package com.adh.sandbox
 
 import android.util.Base64
 import android.util.Log
+import java.security.KeyPair
 import java.security.KeyPairGenerator
 import java.security.MessageDigest
+import java.security.Provider
 import java.security.PublicKey
+import java.security.Security
 import java.security.Signature
 import javax.crypto.Cipher
 import javax.crypto.Mac
@@ -161,5 +164,71 @@ object JavaCrypto {
             cc.doFinal(AEAD_PLAINTEXT.toByteArray(Charsets.UTF_8)); chacha = true
         } catch (t: Throwable) { Log.w(TAG, "ChaCha20-Poly1305 unavailable: ${t.message}") }
         return "AEAD ops fired chacha=$chacha"
+    }
+
+    // Fixed vectors for the agent Java hooks (Cipher / Mac / MessageDigest / Signature).
+    // An explicit platform provider skips ADH-Intercept, so a java-source capture of these
+    // markers can only come from the plugin hook, not from this app's own reporter.
+    const val JHOOK_AES = "ADH_JHOOK_AES_v1"
+    const val JHOOK_GCM = "ADH_JHOOK_GCM_v1"
+    const val JHOOK_HMAC = "ADH_JHOOK_HMAC_v1"
+    const val JHOOK_DIGEST = "ADH_JHOOK_DIGEST_v1"
+    const val JHOOK_RSA = "ADH_JHOOK_RSA_v1"
+    const val JHOOK_SIGN = "ADH_JHOOK_SIGN_v1"
+
+    private val hookRsa: KeyPair by lazy {
+        KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair()
+    }
+
+    private fun platform(type: String, algorithm: String): Provider {
+        for (provider in Security.getProviders()) {
+            if (provider.name == "ADH-Intercept") continue
+            if (provider.getService(type, algorithm) != null) return provider
+        }
+        throw IllegalStateException("no platform $type $algorithm")
+    }
+
+    @JvmStatic
+    fun javaHookProbe(): String {
+        return try {
+            val aesPt = JHOOK_AES.toByteArray(Charsets.UTF_8)
+            val aes = Cipher.getInstance(AES_TRANSFORM, platform("Cipher", AES_TRANSFORM))
+            aes.init(Cipher.ENCRYPT_MODE, SecretKeySpec(AES_KEY16, "AES"), IvParameterSpec(IV))
+            val ct = aes.doFinal(aesPt)
+            val dec = Cipher.getInstance(AES_TRANSFORM, platform("Cipher", AES_TRANSFORM))
+            dec.init(Cipher.DECRYPT_MODE, SecretKeySpec(AES_KEY16, "AES"), IvParameterSpec(IV))
+            if (!dec.doFinal(ct).contentEquals(aesPt)) return "fail aes-roundtrip"
+
+            val gcmPt = JHOOK_GCM.toByteArray(Charsets.UTF_8)
+            val gcm = Cipher.getInstance("AES/GCM/NoPadding", platform("Cipher", "AES/GCM/NoPadding"))
+            gcm.init(Cipher.ENCRYPT_MODE, SecretKeySpec(AES_KEY16, "AES"), GCMParameterSpec(128, IV.copyOf(12)))
+            val gcmCt = gcm.doFinal(gcmPt)
+
+            val mac = Mac.getInstance(HMAC_ALG, platform("Mac", HMAC_ALG))
+            mac.init(SecretKeySpec(KEY, HMAC_ALG))
+            val macOut = mac.doFinal(JHOOK_HMAC.toByteArray(Charsets.UTF_8))
+
+            val dig = MessageDigest.getInstance("SHA-256", platform("MessageDigest", "SHA-256"))
+            val digOut = dig.digest(JHOOK_DIGEST.toByteArray(Charsets.UTF_8))
+
+            val rsa = Cipher.getInstance("RSA/ECB/PKCS1Padding", platform("Cipher", "RSA/ECB/PKCS1Padding"))
+            rsa.init(Cipher.ENCRYPT_MODE, hookRsa.public)
+            val rsaCt = rsa.doFinal(JHOOK_RSA.toByteArray(Charsets.UTF_8))
+
+            val msg = JHOOK_SIGN.toByteArray(Charsets.UTF_8)
+            val signer = Signature.getInstance("SHA256withRSA", platform("Signature", "SHA256withRSA"))
+            signer.initSign(hookRsa.private)
+            signer.update(msg)
+            val sig = signer.sign()
+            val verifier = Signature.getInstance("SHA256withRSA", platform("Signature", "SHA256withRSA"))
+            verifier.initVerify(hookRsa.public)
+            verifier.update(msg)
+            if (!verifier.verify(sig)) return "fail sign-verify"
+
+            "ok aes=${ct.size} gcm=${gcmCt.size} hmac=${macOut.size} digest=${digOut.size} rsa=${rsaCt.size} sign=${sig.size}"
+        } catch (t: Throwable) {
+            val why = "${t.javaClass.simpleName}: ${t.message ?: ""}"
+            if (why.length <= 140) "fail $why" else "fail ${why.substring(0, 140)}"
+        }
     }
 }

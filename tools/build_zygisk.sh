@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Build ADH Zygisk companion .so + Magisk module zip (adh-zygisk.zip).
-# Depends on libadh_agent.so (runs build_agent.sh if missing).
+# Depends on libadh_agent.so. Rebuilds it when missing or when agent sources are newer,
+# so a module zip cannot ship a stale agent.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/env.sh"
 
@@ -12,10 +13,17 @@ AGENT_SO="$ROOT/agent/build/libadh_agent.so"
 MANAGER_APK="$ROOT/device/manager/build/outputs/apk/debug/manager-debug.apk"
 DAEMON_APK="$ROOT/device/daemon/build/outputs/apk/debug/daemon-debug.apk"
 
-[ -f "$AGENT_SO" ] || {
-  echo ">> libadh_agent.so missing — building agent first"
+need_agent=0
+if [ ! -f "$AGENT_SO" ]; then
+  need_agent=1
+else
+  newer="$(find "$ROOT/agent/src" "$ROOT/agent/CMakeLists.txt" -type f -newer "$AGENT_SO" -print -quit 2>/dev/null || true)"
+  [ -n "$newer" ] && need_agent=1
+fi
+if [ "$need_agent" = 1 ]; then
+  echo ">> building libadh_agent.so (missing or older than agent sources)"
   bash "$ROOT/tools/build_agent.sh"
-}
+fi
 [ -f "$AGENT_SO" ] || { echo "!! agent .so still missing"; exit 1; }
 
 echo ">> building ADH Manager for daemon caller authentication"

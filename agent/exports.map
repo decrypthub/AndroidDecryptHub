@@ -3,6 +3,7 @@
     JNI_OnLoad;
     adh_agent_set_package;
     adh_agent_set_policy;
+    adh_agent_set_endpoint;
     adh_agent_start;
   local:
     *;

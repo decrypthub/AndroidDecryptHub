@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { captures, pushCapture, captureStoreStats, storeLossNote, settings } from '../src/state.ts';
+import { captures, pushCapture, captureStoreStats, storeLossNote, settings, knownApps, sessions, eventPackage } from '../src/state.ts';
 
 test('the capture store counts what it evicted instead of forgetting it', () => {
   const savedRetain = settings.capture.retain;
@@ -47,5 +47,23 @@ test('the store-loss note only fires when the window is actually affected', () =
   } finally {
     settings.capture.retain = savedRetain;
     captures.length = savedLength;
+  }
+});
+
+test('an app stays listed from its captures after the session is gone', () => {
+  const savedLength = captures.length;
+  const sid = 'app-view-session';
+  try {
+    sessions.set(sid, { sessionId: sid, package: 'com.example.kept', pid: 9, online: false, connectedAt: 1, lastSeen: 2 } as any);
+    pushCapture({ id: 880001, sessionId: sid, package: 'com.example.kept', ts: 880001, source: 'native', category: 'system', algo: 'Java Hook', op: '方法调用', func: 'JAVA_HOOK', hex: '' } as any);
+    sessions.delete(sid);
+    const hit = knownApps().find(a => a.package === 'com.example.kept');
+    assert.ok(hit, 'package remains selectable from retained captures');
+    assert.equal(hit?.online, false);
+    assert.equal(eventPackage({ sessionId: 'missing', package: 'com.example.kept' }), 'com.example.kept');
+    assert.equal(eventPackage({ sessionId: sid }), '');
+  } finally {
+    captures.length = savedLength;
+    sessions.delete(sid);
   }
 });

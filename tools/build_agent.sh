@@ -42,10 +42,19 @@ if [ -f "$BUILD_DIR/CMakeCache.txt" ] && grep -qE '^CMAKE_TOOLCHAIN_FILE:[^=]*=[
   echo ">> existing cache at $ROOT/agent/build is from another host — building in $BUILD_DIR"
 fi
 
+# flash_device.sh sets MSYS_NO_PATHCONV, so Windows cmake.exe will not rewrite
+# /c/... arguments. Hand it drive paths or it cannot spawn ninja.
+hostpath() {
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -w "$1"
+  else
+    printf '%s\n' "$1"
+  fi
+}
 echo ">> configuring agent ($ABI) with $CMAKE_BIN"
-"$CMAKE_BIN" -S "$ROOT/agent" -B "$BUILD_DIR" -G Ninja \
-  -DCMAKE_MAKE_PROGRAM="$NINJA_BIN" \
-  -DCMAKE_TOOLCHAIN_FILE="$TC" \
+"$CMAKE_BIN" -S "$(hostpath "$ROOT/agent")" -B "$(hostpath "$BUILD_DIR")" -G Ninja \
+  -DCMAKE_MAKE_PROGRAM="$(hostpath "$NINJA_BIN")" \
+  -DCMAKE_TOOLCHAIN_FILE="$(hostpath "$TC")" \
   -DANDROID_ABI="$ABI" \
   -DANDROID_PLATFORM=android-26 \
   -DANDROID_STL=c++_static \
@@ -82,7 +91,7 @@ echo ">> built $(ls -la "$SO" | awk '{print $5}') bytes -> $DEST/libadh_agent.so
 if [ "$BUILD_DIR" != "$ROOT/agent/build" ]; then echo ">> canonical copy -> agent/build/libadh_agent.so"; fi
 if [ -f "$DEBUG_SO" ]; then echo ">> unstripped debug copy -> $DEBUG_SO"; fi
 "$READELF" --dyn-syms "$SO" \
-  | grep -iE "adh_agent_set_package|adh_agent_start|JNI_OnLoad" | awk '{print "   export:", $8}'
+  | grep -iE "adh_agent_set_package|adh_agent_set_endpoint|adh_agent_start|JNI_OnLoad" | awk '{print "   export:", $8}'
 
 if [ "$DEPLOY" = "1" ]; then
   SERIAL="${ANDROID_SERIAL:-$(adb devices | awk 'NR==2{print $1}')}"

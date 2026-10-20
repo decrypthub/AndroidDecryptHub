@@ -14,6 +14,7 @@
 #include <sys/time.h>
 #include <sys/mman.h>   // MFD_CLOEXEC
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 
@@ -28,6 +29,7 @@
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 static constexpr const char *kScopePath = "/data/adb/adh/scope.json"; // == com.adh.core.AdhPaths.SCOPE_PATH
+static constexpr const char *kHostEndpointPath = "/data/adb/adh/host.endpoint"; // == com.adh.core.AdhPaths.HOST_ENDPOINT_PATH
 static constexpr const char *kLoaderMarker = "/data/adb/adh/zygisk_loaded"; // == com.adh.core.AdhPaths.LOADER_MARKER
 static constexpr const char *kManagerPkg = "com.adh.manager";         // == com.adh.core.AdhPaths.MANAGER_PKG
 static constexpr const char *kAgentName = "libadh_agent.so";          // == com.adh.core.AdhPaths.AGENT_SO_NAME
@@ -556,6 +558,65 @@ static void *dlopen_agent_fd(int fd, const std::string &where) {
     return nullptr;
 }
 
+// "a.b.c.d:port" from host.endpoint. Rejects loopback and link-local. Writes a canonical line.
+static bool parse_endpoint_line(const char *text, char *out, size_t out_n) {
+    if (!text || !out || out_n < 8) return false;
+    while (*text == ' ' || *text == '\t') text++;
+    char buf[64];
+    size_t n = 0;
+    while (text[n] && text[n] != '\n' && text[n] != '\r' && n + 1 < sizeof(buf)) {
+        buf[n] = text[n];
+        n++;
+    }
+    if (n == 0 || (text[n] && text[n] != '\n' && text[n] != '\r')) return false;
+    buf[n] = 0;
+    while (n > 0 && (buf[n - 1] == ' ' || buf[n - 1] == '\t')) buf[--n] = 0;
+    char *colon = strrchr(buf, ':');
+    if (!colon || colon == buf || colon[1] == 0) return false;
+    *colon = 0;
+    int octet[4];
+    const char *p = buf;
+    for (int i = 0; i < 4; i++) {
+        if (*p < '0' || *p > '9') return false;
+        int value = 0;
+        int digits = 0;
+        while (*p >= '0' && *p <= '9') {
+            value = value * 10 + (*p - '0');
+            if (++digits > 3 || value > 255) return false;
+            p++;
+        }
+        if (digits == 0) return false;
+        octet[i] = value;
+        if (i < 3) {
+            if (*p != '.') return false;
+            p++;
+        }
+    }
+    if (*p != 0) return false;
+    if (octet[0] == 0 || octet[0] == 127 || (octet[0] == 169 && octet[1] == 254)) return false;
+    int port = 0;
+    int port_digits = 0;
+    for (const char *q = colon + 1; *q; q++) {
+        if (*q < '0' || *q > '9') return false;
+        port = port * 10 + (*q - '0');
+        if (++port_digits > 5 || port > 65535) return false;
+    }
+    if (port_digits == 0 || port < 1) return false;
+    int wrote = snprintf(out, out_n, "%d.%d.%d.%d:%d", octet[0], octet[1], octet[2], octet[3], port);
+    return wrote > 0 && static_cast<size_t>(wrote) < out_n;
+}
+
+static bool read_host_endpoint(char *out, size_t n) {
+    int fd = open(kHostEndpointPath, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return false;
+    char buf[80];
+    ssize_t got = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (got <= 0) return false;
+    buf[got] = 0;
+    return parse_endpoint_line(buf, out, n);
+}
+
 class AdhModule : public zygisk::ModuleBase {
 public:
     void onLoad(zygisk::Api *api, JNIEnv *env) override {
@@ -574,6 +635,7 @@ public:
     void pre_specialize_inner(zygisk::AppSpecializeArgs *args) {
         should_inject = false;
         agent_path.clear();
+        host_endpoint.clear();
         if (!marker_requested) {
             marker_requested = true;
             int client = connect_companion();
@@ -664,6 +726,25 @@ public:
         }
         if (!policy_flags.empty()) note("policy pkg=%s %s", package.c_str(), policy_flags.c_str());
 
+        // Asked here: the companion socket does not survive specialization, and the agent
+        // needs the address before it starts dialing. Missing file → loopback only.
+        host_endpoint.clear();
+        int host_sock = connect_companion();
+        if (host_sock >= 0) {
+            char reply[80] = {0};
+            if (send_all(host_sock, "host\n", 5) &&
+                read_reply_line(host_sock, reply, sizeof(reply)) &&
+                strcmp(reply, "none") != 0 && strcmp(reply, "err") != 0 && reply[0]) {
+                host_endpoint = reply;
+            }
+            close(host_sock);
+        }
+        if (host_endpoint.empty()) {
+            char direct[64];
+            if (read_host_endpoint(direct, sizeof(direct))) host_endpoint = direct;
+        }
+        if (!host_endpoint.empty()) note("host endpoint %s", host_endpoint.c_str());
+
         should_inject = true;
         int src_fd = open_agent_fd(api, &agent_path);
         if (src_fd < 0) {
@@ -725,6 +806,18 @@ public:
             if (set_policy) set_policy(policy_flags.c_str());
             else LOGE("adh_agent_set_policy not found; agent keeps every family on");
         }
+        if (!host_endpoint.empty()) {
+            auto colon = host_endpoint.rfind(':');
+            using set_endpoint_fn = void (*)(const char *, int);
+            auto set_endpoint = reinterpret_cast<set_endpoint_fn>(dlsym(handle, "adh_agent_set_endpoint"));
+            if (colon != std::string::npos && set_endpoint) {
+                std::string ip = host_endpoint.substr(0, colon);
+                int port = atoi(host_endpoint.c_str() + colon + 1);
+                set_endpoint(ip.c_str(), port);
+            } else if (!set_endpoint) {
+                LOGE("adh_agent_set_endpoint not found; agent keeps loopback only");
+            }
+        }
         using start_fn = void (*)();
         auto start = reinterpret_cast<start_fn>(dlsym(handle, "adh_agent_start"));
         if (!start) {
@@ -745,6 +838,8 @@ private:
     std::string package_name;
     // Hook-family policy line for this package (empty = none configured → agent defaults to all on).
     std::string policy_flags;
+    // "ipv4:port" remembered by the Manager. Empty → the agent dials loopback only.
+    std::string host_endpoint;
 };
 
 REGISTER_ZYGISK_MODULE(AdhModule)
@@ -760,6 +855,7 @@ REGISTER_ZYGISK_MODULE(AdhModule)
 //                            package carries no policy at all. Capture families and SSL bypass
 //                            both default ON. b=0 is the explicit off switch.
 //   "log <line>\n"        -> appends to the root decision log, replies "ok\n"
+//   "host\n"              -> replies "ipv4:port\n", or "none\n" when no address is stored
 // Anything else - including a line that arrived truncated or over-long - is refused with "err\n":
 // the companion never guesses, so an incomplete request can no longer be mistaken for a "mark".
 static void companion_serve(int client) {
@@ -805,6 +901,19 @@ static void companion_serve(int client) {
             } else {
                 note("companion policy query pkg=%s -> default", pkg);
                 (void)send_all(client, "default\n", 8);
+            }
+            continue;
+        }
+        if (strcmp(req, "host") == 0) {
+            char endpoint[64];
+            if (read_host_endpoint(endpoint, sizeof(endpoint))) {
+                char reply[80];
+                snprintf(reply, sizeof(reply), "%s\n", endpoint);
+                note("companion host -> %s", endpoint);
+                (void)send_all(client, reply, strlen(reply));
+            } else {
+                note("companion host -> none");
+                (void)send_all(client, "none\n", 5);
             }
             continue;
         }

@@ -347,6 +347,26 @@ struct JavaHookContext {
 
 static JavaHookContext g_java_hooks[ADH_JAVA_MAX_HOOKS];
 static pthread_mutex_t g_java_hooks_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t g_install_lock;
+static pthread_once_t g_install_once = PTHREAD_ONCE_INIT;
+
+static void init_install_lock(void) {
+    pthread_mutexattr_t attr;
+    pthread_mutexattr_init(&attr);
+    pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+    pthread_mutex_init(&g_install_lock, &attr);
+    pthread_mutexattr_destroy(&attr);
+}
+
+extern "C" void adh_javahook_install_lock(void) {
+    pthread_once(&g_install_once, init_install_lock);
+    pthread_mutex_lock(&g_install_lock);
+}
+
+extern "C" void adh_javahook_install_unlock(void) {
+    pthread_once(&g_install_once, init_install_lock);
+    pthread_mutex_unlock(&g_install_lock);
+}
 static int g_next_java_hook_id = 1;
 
 static jclass g_bridge_class = nullptr;
@@ -906,6 +926,10 @@ extern "C" int adh_javahook_hook_method(JNIEnv *env, const char *class_name, con
         set_error(error, error_size, "missing class/method");
         return 0;
     }
+    adh_javahook_install_lock();
+    struct Unlock {
+        ~Unlock() { adh_javahook_install_unlock(); }
+    } unlock;
     if (!adh_javahook_init(env)) {
         set_error(error, error_size, "%s", adh_javahook_last_error());
         return 0;

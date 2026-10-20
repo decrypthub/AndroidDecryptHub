@@ -22,6 +22,8 @@
 #define AGENT_VER   "0.3.14"
 #define ADH_HOST    "127.0.0.1"
 #define ADH_PORT    8761
+// Loopback is always tried first (adb reverse). adh_agent_set_endpoint may name one extra
+// IPv4 the root companion already learned; connect_adhd uses it only after loopback fails.
 #define TAG         "rt.agent"
 #define LOGI(...)   __android_log_print(ANDROID_LOG_INFO,  TAG, __VA_ARGS__)
 #define LOGE(...)   __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
@@ -45,6 +47,7 @@ long long now_ns(void);
 
 // ---- io.c ----
 int connect_adhd(void);
+void adh_agent_set_endpoint(const char *host, int port);
 int send_all(int fd, const char *s, size_t len);
 int send_frame(int fd, unsigned char type, const char *payload, size_t len);
 int send_line(int fd, const char *s);

@@ -112,14 +112,15 @@ endif()
 
 add_library(adh_agent SHARED ${AGENT_SOURCES})
 
-# Release footprint: keep only the three bootstrap entry points in .dynsym.
-# Dobby/libc++/LSPlant internals stay local to this DSO; Zygisk resolves only
-# adh_agent_start and System.loadLibrary resolves JNI_OnLoad.
+# Release footprint: keep only the bootstrap entry points in .dynsym.
+# Dobby/libc++/LSPlant internals stay local to this DSO; Zygisk resolves the
+# adh_agent_* entries and System.loadLibrary resolves JNI_OnLoad.
 set(AGENT_EXPORT_MAP "${CMAKE_CURRENT_SOURCE_DIR}/exports.map")
 if(NOT EXISTS "${AGENT_EXPORT_MAP}")
   message(FATAL_ERROR "missing agent export map: ${AGENT_EXPORT_MAP}")
 endif()
 target_link_options(adh_agent PRIVATE "-Wl,--version-script=${AGENT_EXPORT_MAP}")
+set_property(TARGET adh_agent APPEND PROPERTY LINK_DEPENDS "${AGENT_EXPORT_MAP}")
 
 # No SONAME at all: the shipped .dynstr is readable by the target (it can walk its own mappings), so
 # the library name must not sit in there. Nothing needs it - the Zygisk loader and the gadget dlopen a PATH

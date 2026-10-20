@@ -338,7 +338,10 @@ public final class AdhJavaHookBridge extends X509ExtendedTrustManager implements
     }
 
     private String sigOp() {
-        return target != null && target.indexOf("verify") >= 0 ? "verify" : "sign";
+        // Method names are initVerify / verify. Match the lowercase form so initVerify is not
+        // stored as "sign" and then copied onto the later verify() call.
+        String name = target == null ? "" : target.toLowerCase();
+        return name.indexOf("verify") >= 0 ? "verify" : "sign";
     }
 
     private static String opMode(Object[] params) {

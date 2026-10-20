@@ -4,7 +4,7 @@ Guidance for Claude working in this repo. Keep this file short. Only rules that 
 
 ## What this is
 
-**ADH (Android DecryptHub)** — a general-purpose **Android runtime reverse-analysis** tool. **IDH** is the iOS counterpart ([ios-decrypt-helper](https://github.com/taisuii/ios-decrypt-helper)); do not use IDH as this project's product name. Injects a native agent into a target app, observes/dumps/hooks/traces at runtime, controlled from a browser + MCP. Targets are frequently **evasive** (anti-debug, root/signature detection, code obfuscation, encrypted traffic) — the design assumes hostile runtimes. Scope is **authorized reverse investigation**, not legal forensics and not evasion tooling for malicious use.
+**ADH (Android DecryptHub)** — a general-purpose **Android runtime reverse-analysis** tool. **IDH** is the iOS counterpart ([ios-decrypt-helper](https://github.com/taisuii/ios-decrypt-helper)); do not use IDH as this project's product name. Injects a native agent into a target app, observes/dumps/hooks/traces at runtime, controlled from a browser + MCP. Targets are frequently **evasive** (anti-debug, root/signature detection, code obfuscation, encrypted traffic) — the design assumes hostile runtimes.
 
 ## Source of truth (read before changing scope)
 
@@ -32,6 +32,15 @@ There is one plan. If something contradicts these docs, fix the docs in the same
 | **IDH** | iOS 参考项目（IOSDecryptHub / ios-decrypt-helper），仅作对照 |
 | `libadh_agent.so` | 本产品 agent `.so`（唯一交付名，随 Zygisk 模块与沙盒打包） |
 - 新代码/新文案使用 `ADH` / `Host ADH Daemon` / `adhd` / `adh_*`。不保留 IDH 名称兼容层：不再产出或接受 `libidh_agent.so`，不导出 `idh_agent_start`，不读取 `IDH_*` 环境变量，不兼容 `idhd-data/` 或 `libidhdetect.so`；IDH 仅指 iOS 参考项目。`com.idh.probe` / `IDH_PROBE_OK` 是 hash 绑定的固定 probe dex 例外。
+
+## Versioning (SemVer)
+
+打 bundle / 刷机 / 发 Release 时升版本（模块 `version`、Manager `versionName`、`update.json` 一致）：
+
+- **小补丁** → `+0.0.1`
+- **特性** → `+0.1.0`
+- **大更新或重构** → `+1.0.0`
+- `versionCode` 每次正式发版 **+1**（单调递增）。
 
 ## Architecture red line (do not cross)
 
@@ -140,5 +149,4 @@ Each layer has a `MAP.md` — read it before editing that layer:
 
 ## Boundaries
 
-- Authorized targets only. Anti-anti-debug "resilience" (module S) is diagnostic + survival for authorized analysis; default off, no self-hiding by default, dangerous ops need confirmation.
 - Never commit captured target data (keys, plaintext, dumps). `.gitignore` excludes `captures/`, `dumps/`, `adhd-data/`.

@@ -4,6 +4,7 @@ import http from 'node:http';
 import net from 'node:net';
 import { AGENT_PORT, HTTP_PORT, webUrls } from './config.ts';
 import { handleHttp } from './http/router.ts';
+import { ensureAdbReverse } from './scope_list.ts';
 import { startCaptureLoop, forgetCaptureSession, pruneArtifactsAndIndex } from './service.ts';
 import {
   agentSockets, broadcast, captureTimers, frameJson, FRAME_JSON, FRAME_MAX,
@@ -91,7 +92,7 @@ const agentServer = net.createServer((sock) => {
       const t = captureTimers.get(session.sessionId);
       if (t) { clearInterval(t); captureTimers.delete(session.sessionId); forgetCaptureSession(session.sessionId); }
       log(`agent CLOSE ${session.package} ${session.sessionId}`);
-      broadcast('agent.close', { sessionId: session.sessionId });
+      broadcast('agent.close', { sessionId: session.sessionId, package: session.package, pid: session.pid });
       pruneSessions();
     }
   });
@@ -131,7 +132,7 @@ httpServer.listen(HTTP_PORT, '0.0.0.0', () => {
     log('│  LAN   : (no LAN IPv4 found — console reachable locally only;');
     log(`│          the phone can still open it via \`adb reverse tcp:${HTTP_PORT}\`)`);
   }
-  log(`│  phone : also run 'adb reverse tcp:${AGENT_PORT} tcp:${AGENT_PORT}' + 'adb reverse tcp:${HTTP_PORT} tcp:${HTTP_PORT}'`);
+  log(`│  phone : adb reverse tcp:${AGENT_PORT} and tcp:${HTTP_PORT}, or the LAN address the Manager remembers for tcp:${AGENT_PORT}`);
   log('└─────────────────────────────────────────────────────────────');
 });
 
@@ -146,6 +147,12 @@ setInterval(() => {
   if (dropped.length) log(`session prune: dropped ${dropped.length} stale offline session(s)`);
   pruneArtifactsAndIndex();
 }, 60_000).unref();
+
+// The injected agent only reaches this process through adb reverse. Re-apply it on a
+// short interval so a USB reconnect does not leave the panel looking at a dead target.
+const keepReverse = () => ensureAdbReverse([AGENT_PORT, HTTP_PORT], (line) => log(line));
+keepReverse();
+setInterval(keepReverse, 15_000).unref();
 
 // Boot-time reconciliation: adopt what is already on disk (the module body of state.ts does the
 // load) and apply retention once, so a daemon that was down while files piled up starts bounded.

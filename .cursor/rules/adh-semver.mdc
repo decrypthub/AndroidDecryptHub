@@ -1,0 +1,20 @@
+---
+description: ADH 发布版本号升降规则（SemVer）
+alwaysApply: true
+---
+
+# ADH 版本号规则
+
+发版 / 刷模块 / 改 `module.prop` · Manager `versionName` · `update.json` 时按 SemVer 升版本：
+
+| 变更类型 | 升法 | 例子（当前 v0.3.14） |
+|---|---|---|
+| 小补丁（修 bug、文案、小改动） | **+0.0.1** | → v0.3.15 |
+| 特性（新能力、可感知功能） | **+0.1.0** | → v0.4.0 |
+| 大更新或重构（破坏性 / 架构级） | **+1.0.0** | → v1.0.0 |
+
+配套约定：
+
+- `versionCode` 每次正式发版 **+1**（与 SemVer 档位无关，单调递增）。
+- 模块 `version`、Manager `versionName`、`injector/zygisk/update.json` 的 `version` **保持一致**。
+- 未发版的日常开发不必每 commit 都 bump；**打 bundle / 刷机 / 发 Release 时再升**。

@@ -1,6 +1,9 @@
 package com.adh.manager.data
 
 import com.adh.core.AdhProtocol
+import com.adh.core.CaCert
+import com.adh.core.CaCertStore
+import com.adh.core.HostEndpoint
 import com.adh.core.InstalledApp
 import com.adh.core.InstalledAppsJson
 import com.adh.core.PackageControl
@@ -15,6 +18,12 @@ interface DaemonClient {
     val listApplicationsJson: String
     fun applicationIconPng(packageName: String): ByteArray
     fun controlPackage(packageName: String, action: String): String
+    fun getHostEndpoint(): String
+    fun setHostEndpoint(endpoint: String): Boolean
+    fun listCaCertsJson(): String
+    fun putCaCert(encoded: ByteArray): Int
+    fun deleteCaCert(fileName: String): Boolean
+    fun rebootDevice(): Boolean
     val modulePresent: Boolean
     val loaderActive: Boolean
     val moduleVersion: String
@@ -73,6 +82,44 @@ class DaemonScopeRepository(
         return runCatching { client.controlPackage(pkg, action) }
             .getOrDefault(PackageControl.RESULT_FAILED)
             .ifBlank { PackageControl.RESULT_FAILED }
+    }
+
+    override fun rememberHostEndpoint(host: String, port: Int): HostRemember {
+        val body = HostEndpoint.format(host, port) ?: return HostRemember.Unavailable
+        val client = clientProvider(CONNECT_TIMEOUT_MS) ?: return HostRemember.Unavailable
+        if (client.protocolVersion < AdhProtocol.MIN_HOST_ENDPOINT_VERSION) return HostRemember.Unsupported
+        val saved = runCatching { client.setHostEndpoint(body.trimEnd()) }.getOrDefault(false)
+        return if (saved) HostRemember.Saved else HostRemember.Unavailable
+    }
+
+    override fun supportsCaCerts(): Boolean {
+        val client = clientProvider(CONNECT_TIMEOUT_MS) ?: return false
+        return client.protocolVersion >= AdhProtocol.MIN_CA_CERT_VERSION
+    }
+
+    override fun listCaCerts(): List<CaCert> {
+        val client = clientProvider(CONNECT_TIMEOUT_MS) ?: return emptyList()
+        if (client.protocolVersion < AdhProtocol.MIN_CA_CERT_VERSION) return emptyList()
+        return runCatching { CaCertStore.decode(client.listCaCertsJson()) }.getOrDefault(emptyList())
+    }
+
+    override fun putCaCert(encoded: ByteArray): Int {
+        if (encoded.size > CaCertStore.MAX_BUNDLE_BYTES) return -1
+        val client = clientProvider(CONNECT_TIMEOUT_MS) ?: return -1
+        if (client.protocolVersion < AdhProtocol.MIN_CA_CERT_VERSION) return -1
+        return runCatching { client.putCaCert(encoded) }.getOrDefault(-1)
+    }
+
+    override fun deleteCaCert(fileName: String): Boolean {
+        val client = clientProvider(CONNECT_TIMEOUT_MS) ?: return false
+        if (client.protocolVersion < AdhProtocol.MIN_CA_CERT_VERSION) return false
+        return runCatching { client.deleteCaCert(fileName) }.getOrDefault(false)
+    }
+
+    override fun rebootDevice(): Boolean {
+        val client = clientProvider(CONNECT_TIMEOUT_MS) ?: return false
+        if (client.protocolVersion < AdhProtocol.MIN_CA_CERT_VERSION) return false
+        return runCatching { client.rebootDevice() }.getOrDefault(false)
     }
 
     override fun isModulePresent(): Boolean =

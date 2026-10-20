@@ -21,6 +21,12 @@ int adh_javahook_available(void);
 // Never initializes at JNI_OnLoad; the caller decides when to expose the backend.
 int adh_javahook_init(JNIEnv *env);
 
+// One installer at a time. Class.forName and lsplant::Hook from two threads fault this ROM's
+// ClassLinker::LinkCode (the entry it publishes is not mapped). The lock is recursive so a
+// batch can hold it across the per-method calls.
+void adh_javahook_install_lock(void);
+void adh_javahook_install_unlock(void);
+
 // Last initialization error, or "" when no error was recorded.
 const char *adh_javahook_last_error(void);
 

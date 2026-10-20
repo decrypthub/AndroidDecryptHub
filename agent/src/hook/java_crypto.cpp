@@ -15,6 +15,7 @@
 #define TAG "rt.agent"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 
+static int g_started = 0;
 static int g_finished = 0;
 
 struct Target {
@@ -153,6 +154,7 @@ static void collect_overloads(JNIEnv *env, jclass cls, const Target &target, std
 }
 
 static int install_all(JNIEnv *env) {
+    adh_javahook_install_lock();
     int digest = 1, hmac = 1, symmetric = 1, asymmetric = 1, tls = 1, aead = 1;
     adh_capture_get_families(&digest, &hmac, &symmetric, &asymmetric, &tls, &aead);
     std::vector<Job> jobs;
@@ -167,29 +169,15 @@ static int install_all(JNIEnv *env) {
         collect_overloads(env, cls, target, &jobs);
         env->DeleteLocalRef(cls);
     }
-    // One thread per method. A fault inside LSPlant kills that thread only; the
-    // rest of the overloads still get installed.
+    // One thread, one method at a time. A second LSPlant caller during Class.forName faults
+    // ClassLinker::LinkCode on this ROM, and that SIGSEGV takes the process with it.
     int installed = 0;
     for (Job &job : jobs) {
         if (installed >= 40) break;
-        // Heap copy: a stuck installer thread may still write the job after we move on.
-        Job *owned = new Job(job);
-        pthread_t thread;
-        if (pthread_create(&thread, nullptr, run_job, owned) != 0) {
-            delete owned;
-            continue;
-        }
-        for (int spin = 0; spin < 20 && !__atomic_load_n(&owned->finished, __ATOMIC_ACQUIRE); spin++)
-            usleep(50 * 1000);
-        if (!__atomic_load_n(&owned->finished, __ATOMIC_ACQUIRE)) {
-            LOGI("java crypto stuck %s#%s(%s)", owned->cls.c_str(), owned->method.c_str(), owned->params.c_str());
-            pthread_detach(thread);
-            continue;
-        }
-        pthread_join(thread, nullptr);
-        if (owned->installed) installed++;
-        delete owned;
+        run_job(&job);
+        if (job.installed) installed++;
     }
+    adh_javahook_install_unlock();
     LOGI("java crypto on %d", installed);
     return installed;
 }
@@ -213,12 +201,20 @@ static void *worker(void *) {
     return nullptr;
 }
 
+extern "C" int adh_java_crypto_started(void) {
+    return __atomic_load_n(&g_started, __ATOMIC_ACQUIRE);
+}
+
 extern "C" int adh_java_crypto_finished(void) {
     return __atomic_load_n(&g_finished, __ATOMIC_ACQUIRE);
 }
 
 extern "C" void adh_java_crypto_arm(void) {
+    if (__atomic_exchange_n(&g_started, 1, __ATOMIC_ACQ_REL)) return;
     pthread_t thread;
     if (pthread_create(&thread, nullptr, worker, nullptr) == 0) pthread_detach(thread);
-    else LOGI("java crypto thread failed");
+    else {
+        __atomic_store_n(&g_started, 0, __ATOMIC_RELEASE);
+        LOGI("java crypto thread failed");
+    }
 }

@@ -10,6 +10,7 @@ extern "C" {
 #endif
 
 void adh_java_crypto_arm(void);
+int adh_java_crypto_started(void);
 int adh_java_crypto_finished(void);
 
 #ifdef __cplusplus

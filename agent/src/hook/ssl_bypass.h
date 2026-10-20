@@ -1,8 +1,9 @@
 #ifndef ADH_AGENT_SSL_BYPASS_H
 #define ADH_AGENT_SSL_BYPASS_H
 
-// Java trust decisions for an injected process. The app being in the injection scope is the
-// opt-in (the same gesture as enabling an LSPosed module for that app). It stays on.
+// Java trust-manager hooks. Not installed at inject time: LSPlant rewrites ART, and an app
+// that already hooks ART GC dies in MarkCompact. Call adh_ssl_bypass_arm only when a session
+// has asked for the bypass.
 
 #ifdef __cplusplus
 extern "C" {

@@ -125,7 +125,9 @@ class ScopeJsonTest {
         assertFalse(apps[0].system)
         assertEquals("com.android.settings", apps[1].packageName)
         assertTrue(apps[1].system)
-        assertEquals(AdhProtocol.VERSION, 16)
+        assertEquals(AdhProtocol.VERSION, 18)
+        assertEquals(AdhProtocol.MIN_HOST_ENDPOINT_VERSION, 17)
+        assertEquals(AdhProtocol.MIN_CA_CERT_VERSION, 18)
         assertEquals(AdhProtocol.MIN_PROCESS_VERSION, 4)
         assertEquals(AdhProtocol.MIN_APP_OPEN_VERSION, 6)
     }
@@ -150,6 +152,7 @@ class ScopeJsonTest {
     @Test
     fun pathsAreStableContract() {
         assertEquals("/data/adb/adh/scope.json", AdhPaths.SCOPE_PATH)
+        assertEquals("/data/adb/adh/cacerts", AdhPaths.CACERTS_DIR)
         assertEquals("/data/adb/adh/zygisk_loaded", AdhPaths.LOADER_MARKER)
         assertEquals("/data/adb/modules/adh", AdhPaths.MODULE_DIR)
         assertEquals("com.adh.manager", AdhPaths.MANAGER_PKG)

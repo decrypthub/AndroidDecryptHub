@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import {
   frameJson, agentSockets, pending, nextCmdId, sessions, dumps, log,
   captureTimers, captureModules, settings, recentJavaIn,
-  pushCapture, broadcast, hexToPreview, classify, categoryOf, capStats, CAPTURES,
+  pushCapture, broadcast, hexToPreview, previewForCapture, classify, categoryOf, capStats, CAPTURES,
   pruneArtifacts,
 } from './state.ts';
 import type { AgentSession, DumpMeta, MapsRegion, Capture } from './state.ts';
@@ -469,17 +469,18 @@ export function startCaptureLoop(sid: string) {
     let busy = false;
     let drainErrLogged = false;   // fail-loud once per wedged-drain episode, not every 1.5s tick
     const processDrain = (r: any, now: number) => {
+      const pkg = sessions.get(sid)?.package ?? '';
       for (const c of (r.jcaptures ?? [])) {
         if (c.in) recentJavaIn.set(c.in, now);
         const entry: Capture = {
-          id: ++capSeq, sessionId: sid, source: 'java', func: c.op, algo: c.algo, op: c.op,
+          id: ++capSeq, sessionId: sid, package: pkg, source: 'java', func: c.op, algo: c.algo, op: c.op,
           category: 'crypto',
           inl: c.inl, tid: c.tid, tsNs: c.tsNs, ts: now,
           hex: c.in, preview: hexToPreview(c.in),
           keyHex: c.key || '', ivHex: c.iv || '', outHex: c.out || '',
         };
         if (pushCapture(entry))
-          broadcast('capture.new', { id: entry.id, sessionId: sid, source: 'java', category: entry.category, algo: entry.algo, op: entry.op, preview: entry.preview, inl: entry.inl, ts: entry.ts });
+          broadcast('capture.new', { id: entry.id, sessionId: sid, package: pkg, source: 'java', category: entry.category, algo: entry.algo, op: entry.op, preview: entry.preview, inl: entry.inl, ts: entry.ts });
       }
       for (const [k, t] of recentJavaIn) if (now - t > 2000) recentJavaIn.delete(k);
       for (const c of (r.captures ?? [])) {
@@ -487,16 +488,17 @@ export function startCaptureLoop(sid: string) {
         const { algo, op } = classify(c.func);
         const category = categoryOf(c.func);
         const entry: Capture = {
-          id: ++capSeq, sessionId: sid, source: 'native', func: c.func, algo, op,
+          id: ++capSeq, sessionId: sid, package: pkg, source: 'native', func: c.func, algo, op,
           category,
           inl: c.inl, tid: c.tid, tsNs: c.tsNs, ts: now,
-          hex: c.hex, preview: hexToPreview(c.hex),
+          hex: c.hex, preview: previewForCapture(c.func, c.hex),
           // Symmetric captures carry the key/IV the agent joined at EVP_CipherInit_ex; the Java
           // reporter path has always sent these, the native path only since that join exists.
           ...(c.key ? { keyHex: c.key } : {}), ...(c.iv ? { ivHex: c.iv } : {}),
+          ...(c.conn ? { conn: String(c.conn) } : {}),
         };
         if (pushCapture(entry))
-          broadcast('capture.new', { id: entry.id, sessionId: sid, source: 'native', category, algo, op, preview: entry.preview, inl: entry.inl, ts: entry.ts });
+          broadcast('capture.new', { id: entry.id, sessionId: sid, package: pkg, source: 'native', category, algo, op, preview: entry.preview, inl: entry.inl, ts: entry.ts });
       }
     };
     // One drain implementation for both the polling loop and explicit callers: concurrent requests

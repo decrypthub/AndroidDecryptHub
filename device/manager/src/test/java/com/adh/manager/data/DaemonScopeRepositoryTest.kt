@@ -2,6 +2,7 @@ package com.adh.manager.data
 
 import com.adh.core.AdhPaths
 import com.adh.core.AdhProtocol
+import com.adh.core.CaCertStore
 import com.adh.core.CaptureFamilies
 import com.adh.core.InstalledApp
 import com.adh.core.InstalledAppsJson
@@ -120,6 +121,58 @@ class DaemonScopeRepositoryTest {
         assertTrue(repository.save(ScopeConfig(packages = setOf("com.example.target"))).isSuccess)
     }
 
+    @Test
+    fun remembersTheComputerAnInjectedProcessShouldDial() {
+        val client = FakeDaemonClient()
+        val repository = DaemonScopeRepository { client }
+
+        assertEquals(HostRemember.Saved, repository.rememberHostEndpoint("192.168.200.108", 8761))
+        assertEquals("192.168.200.108:8761", client.savedEndpoint)
+    }
+
+    @Test
+    fun anOlderDaemonCannotStoreTheCallbackAddress() {
+        val client = FakeDaemonClient(protocol = 16)
+        val repository = DaemonScopeRepository { client }
+
+        assertEquals(HostRemember.Unsupported, repository.rememberHostEndpoint("192.168.200.108", 8761))
+        assertEquals(null, client.savedEndpoint)
+    }
+
+    @Test
+    fun aLoopbackAddressIsNotRemembered() {
+        val client = FakeDaemonClient()
+        val repository = DaemonScopeRepository { client }
+
+        assertEquals(HostRemember.Unavailable, repository.rememberHostEndpoint("127.0.0.1", 8761))
+        assertEquals(null, client.savedEndpoint)
+    }
+
+    @Test
+    fun caCertsRequireProtocolV18() {
+        val oldClient = FakeDaemonClient(protocol = 17)
+        val old = DaemonScopeRepository { oldClient }
+        assertFalse(old.supportsCaCerts())
+        assertTrue(old.listCaCerts().isEmpty())
+        assertEquals(-1, old.putCaCert(byteArrayOf(1)))
+        assertFalse(old.deleteCaCert("01234567.0"))
+        assertFalse(old.rebootDevice())
+        assertEquals(null, oldClient.lastPut)
+
+        val client = FakeDaemonClient()
+        val repository = DaemonScopeRepository { client }
+        client.caCertsJson = """[{"f":"b4b34236.0","s":"CN=ADH Test CA","b":1,"e":2,"a":false}]"""
+        assertTrue(repository.supportsCaCerts())
+        assertEquals("b4b34236.0", repository.listCaCerts().single().fileName)
+        assertEquals(1, repository.putCaCert(byteArrayOf(9)))
+        assertTrue(client.lastPut.contentEquals(byteArrayOf(9)))
+        assertTrue(repository.deleteCaCert("b4b34236.0"))
+        assertEquals("b4b34236.0", client.deletedCa)
+        assertTrue(repository.rebootDevice())
+        assertTrue(client.rebooted)
+        assertEquals(-1, repository.putCaCert(ByteArray(CaCertStore.MAX_BUNDLE_BYTES + 1)))
+    }
+
     private class FakeDaemonClient(
         protocol: Int = AdhProtocol.VERSION,
     ) : DaemonClient {
@@ -154,5 +207,28 @@ class DaemonScopeRepositoryTest {
         override val modulePresent = true
         override val loaderActive = true
         override val moduleVersion = "v0.3.0"
+        var savedEndpoint: String? = null
+        override fun getHostEndpoint(): String = savedEndpoint.orEmpty()
+        override fun setHostEndpoint(endpoint: String): Boolean {
+            savedEndpoint = endpoint
+            return true
+        }
+        var caCertsJson: String = "[]"
+        var lastPut: ByteArray? = null
+        var deletedCa: String? = null
+        var rebooted: Boolean = false
+        override fun listCaCertsJson(): String = caCertsJson
+        override fun putCaCert(encoded: ByteArray): Int {
+            lastPut = encoded
+            return 1
+        }
+        override fun deleteCaCert(fileName: String): Boolean {
+            deletedCa = fileName
+            return true
+        }
+        override fun rebootDevice(): Boolean {
+            rebooted = true
+            return true
+        }
     }
 }

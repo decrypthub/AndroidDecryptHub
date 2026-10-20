@@ -17,7 +17,7 @@ Magisk 打包仍在 `injector/zygisk/`。
 ```text
 Target App  →  agent/libadh_agent.so     collect only
 Zygisk      →  injector/zygisk           early inject by scope
-Device      →  device/:daemon+:manager   scope + module status + target process control + Host console link
+Device      →  device/:daemon+:manager   scope + module status + system CA certs + target process control + Host console link
 Host PC     →  daemon/ (ADH Daemon)      HTTP/WS/MCP/analysis
 ```
 
@@ -25,7 +25,16 @@ Never host HTTP/MCP services, a dex indexer, or heavy analysis in the Device Dae
 or Manager. AI agents interact with the handset through adb when needed.
 The Manager may still act as a bounded HTTP client for Host `/health`
 so it can display and open the Web UI address; that request never passes through
-the privileged Device Daemon.
+the privileged Device Daemon. Protocol v17: once the Manager has learned a LAN
+address, it asks the daemon to store `ipv4:port` at `/data/adb/adh/host.endpoint`.
+The daemon does not scan the network. Zygisk reads that line and hands it to the
+agent, which dials `127.0.0.1:8761` first and the remembered address second.
+Protocol v18: the Manager imports a PEM or DER file and the daemon stores CA
+certificates at `/data/adb/adh/cacerts/<subject_hash_old>.N`. `post-fs-data.sh`
+copies those into a tmpfs and bind-mounts it over the Conscrypt and `/system`
+trust stores in init's mount namespace before zygote starts. No imported
+certificate means the script does not mount anything. A reboot, confirmed in
+the Manager and performed by the daemon, is what makes a new certificate visible.
 
 Installed-app enumeration is privileged: the Device Daemon uses
 `ActivityThread.systemMain()` + `getSystemContext()` (uid 0) and returns a compact
@@ -106,6 +115,7 @@ The Manager also adopts Vector's compact status-first information hierarchy whil
 remaining a standalone ADH app. Default resources are Simplified Chinese, `values-en`
 follows English system locales, and Material You/light-dark colors follow the system.
 User-facing text is limited to module status, the Host Web UI address, scope actions,
-target process stop/restart, errors, and versions.
+system CA import, target process stop/restart, errors, and versions. Per-app hook policy is its own
+screen, opened from an app row. The version line sits under the home title.
 Module status distinguishes an unavailable Device Daemon from an absent or unloaded
 module. Both Home and Scope re-check when returning to the foreground.

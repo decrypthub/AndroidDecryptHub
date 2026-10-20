@@ -229,6 +229,9 @@ class MainActivity : Activity() {
                 mbutton("SHA-256") { trigger("SHA-256") { JavaCrypto.oneSha256(pt("SHA")) } },
                 mbutton("HmacSHA256") { trigger("HMAC") { JavaCrypto.oneHmac(pt("HMAC")) } },
             ))
+            addView(btnRow(
+                mbutton("Java 钩子探针") { trigger("Java钩子") { JavaCrypto.javaHookProbe() } },
+            ))
         })
     }
 

@@ -64,6 +64,7 @@ const MUST_BE_ABSENT = [
 const BUDGETED = [
   { token: 'adh_agent_start', budget: 1, why: 'export name resolved by the Zygisk loader (stage 2: rename it and drop this to 0)' },
   { token: 'adh_agent_set_package', budget: 1, why: 'same loader contract (stage 2: rename it and drop this to 0)' },
+  { token: 'adh_agent_set_endpoint', budget: 1, why: 'loader hands the remembered LAN address to the agent (stage 2: rename it with the other exports)' },
   { token: 'com.adh.agent', budget: 1, why: 'Java bridge class inside the embedded dex (stage 2: rename it and drop this to 0)' },
   { token: 'AdhJavaHookBridge', budget: 10, why: 'the class name in the dex type descriptor + 9 bridge diagnostics; stage 2 renames them together' },
   { token: 'adh_bridge.dex', budget: 1, why: 'code-cache dex file name for the same bridge (stage 2: rename it and drop this to 0)' },

@@ -1,5 +1,6 @@
 package com.adh.manager.data
 
+import com.adh.core.CaCert
 import com.adh.core.InstalledApp
 import com.adh.core.PackageControl
 import com.adh.core.ScopeConfig
@@ -27,4 +28,20 @@ interface ScopeRepository {
         PackageControl.RESULT_FAILED
     fun isModulePresent(): Boolean
     fun moduleStatus(): ModuleStatus = ModuleStatus(installed = isModulePresent())
+
+    /**
+     * Remember the computer an injected process should dial when USB reverse is absent.
+     * The address was already learned from Host `/health`; this only asks the root daemon to store it.
+     */
+    fun rememberHostEndpoint(host: String, port: Int): HostRemember = HostRemember.Unavailable
+
+    /** Protocol v18. False when the connected daemon predates certificate import. */
+    fun supportsCaCerts(): Boolean = false
+    fun listCaCerts(): List<CaCert> = emptyList()
+    /** How many CAs were stored, 0 when none qualify, -1 on reject. */
+    fun putCaCert(encoded: ByteArray): Int = -1
+    fun deleteCaCert(fileName: String): Boolean = false
+    fun rebootDevice(): Boolean = false
 }
+
+enum class HostRemember { Saved, Unsupported, Unavailable }

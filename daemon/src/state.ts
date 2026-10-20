@@ -383,7 +383,55 @@ export interface Capture {
   id: number; sessionId: string; source: 'java' | 'native'; func: string; algo: string; op: string;
   category: CapCategory;
   inl: number; tid: number; tsNs: number; ts: number; hex: string; preview: string;
+  /** SSL* for a TLS record (`0x…`). The host pairs HTTP/1.1 on this, per session. */
+  conn?: string;
+  /** Target package. Stamped at ingest so the record stays with the app after the process exits and its session is pruned. */
+  package?: string;
   keyHex?: string; ivHex?: string; outHex?: string;
+}
+/** Package a capture belongs to. Prefer the stamp; fall back to a session that is still in the registry. */
+export function capturePackage(c: { package?: string; sessionId?: string }): string {
+  if (c.package && c.package !== '?') return c.package;
+  if (c.sessionId) {
+    const pkg = sessions.get(c.sessionId)?.package;
+    if (pkg && pkg !== '?') return pkg;
+  }
+  return '';
+}
+export interface KnownApp {
+  package: string; online: boolean; pids: number[]; sessions: number; lastSeen: number;
+}
+/** Apps the viewer can switch to: every package that has a session or a retained capture. */
+export function knownApps(): KnownApp[] {
+  const by = new Map<string, KnownApp>();
+  const touch = (pkg: string): KnownApp | null => {
+    if (!pkg || pkg === '?') return null;
+    let cur = by.get(pkg);
+    if (!cur) {
+      cur = { package: pkg, online: false, pids: [], sessions: 0, lastSeen: 0 };
+      by.set(pkg, cur);
+    }
+    return cur;
+  };
+  for (const s of sessions.values()) {
+    const cur = touch(s.package);
+    if (!cur) continue;
+    cur.sessions++;
+    cur.lastSeen = Math.max(cur.lastSeen, s.lastSeen || s.connectedAt || 0);
+    if (s.online && !cur.pids.includes(s.pid)) cur.pids.push(s.pid);
+    if (s.online) cur.online = true;
+  }
+  for (const c of captures) {
+    const cur = touch(capturePackage(c));
+    if (!cur) continue;
+    cur.lastSeen = Math.max(cur.lastSeen, c.ts || 0);
+  }
+  for (const e of events) {
+    const cur = touch(eventPackage(e.data));
+    if (!cur) continue;
+    cur.lastSeen = Math.max(cur.lastSeen, e.ts || 0);
+  }
+  return [...by.values()].sort((a, b) => b.lastSeen - a.lastSeen || a.package.localeCompare(b.package));
 }
 export const captures: Capture[] = [];
 // Store accounting (v4.93): the in-memory list is capped by settings.capture.retain, and an
@@ -485,6 +533,51 @@ export function hexToPreview(hex: string, max = 80): string {
   }
   return s;
 }
+
+function hexHead(hex: string, maxBytes: number): string {
+  let s = '';
+  const n = Math.min(hex.length, maxBytes * 2);
+  for (let i = 0; i + 1 < n; i += 2) s += String.fromCharCode(parseInt(hex.slice(i, i + 2), 16));
+  return s;
+}
+
+/**
+ * Network-list label for one TLS plaintext.
+ * A request becomes `METHOD https://host/path` (path alone when the Host header is absent).
+ * A response becomes its status line. Anything else returns '' so the caller keeps the raw preview.
+ * `text` may be the real header block, or the dotted preview (`\\r\\n` already collapsed to `.`).
+ */
+export function httpCapturePreview(text: string): string {
+  if (!text) return '';
+  const lines = /[\r\n]/.test(text)
+    ? text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n')
+    : text.split('..');
+  const line = (lines[0] ?? '').trim();
+  const req = line.match(/^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|TRACE)\s+(\S+)\s+HTTP\/\d(?:\.\d)?$/i);
+  if (req) {
+    const method = req[1].toUpperCase();
+    const target = req[2];
+    if (/^https?:\/\//i.test(target)) return `${method} ${target}`;
+    let host = '';
+    for (const header of lines.slice(1)) {
+      const found = header.match(/^Host:\s*(\S+)/i);
+      if (found) { host = found[1]; break; }
+    }
+    if (host && target.startsWith('/')) return `${method} https://${host}${target}`;
+    return `${method} ${target}`;
+  }
+  const status = line.match(/^HTTP\/\d(?:\.\d)?\s+\d{3}(?:\s+\S+)*/);
+  return status ? status[0] : '';
+}
+
+/** Preview stored on a capture. TLS records prefer the URL / status line over a raw header dump. */
+export function previewForCapture(func: string, hex: string): string {
+  if (func === 'SSL_write' || func === 'SSL_read') {
+    const url = httpCapturePreview(hexHead(hex, 4096));
+    if (url) return url;
+  }
+  return hexToPreview(hex);
+}
 // Which UI axis a capture belongs to. Derived from the agent's func tag so the web can
 // split the single stream into 加解密 / 网络 / 文件 / 系统 master-detail panels. The agent
 // stamps func: EVP_*/HMAC_* (crypto), SSL_read/write (net), open*/read/write/close (file),
@@ -568,10 +661,29 @@ export function cryptoIdentify() {
 
 // ---- infra ---------------------------------------------------------------
 export const wss = new WebSocketServer({ noServer: true });
+/** Package carried by an event payload, either stamped or still resolvable from a live session. */
+export function eventPackage(data: unknown): string {
+  if (!data || typeof data !== 'object') return '';
+  const d = data as { package?: unknown; sessionId?: unknown };
+  if (typeof d.package === 'string' && d.package && d.package !== '?') return d.package;
+  if (typeof d.sessionId === 'string') {
+    const pkg = sessions.get(d.sessionId)?.package;
+    if (pkg && pkg !== '?') return pkg;
+  }
+  return '';
+}
+function stampPackage(data: unknown): unknown {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return data;
+  const d = data as Record<string, unknown>;
+  if (typeof d.package === 'string' && d.package) return data;
+  const pkg = eventPackage(d);
+  return pkg ? { ...d, package: pkg } : data;
+}
 export function broadcast(event: string, data: unknown) {
-  const msg = JSON.stringify({ event, data, ts: Date.now() });
+  const stamped = stampPackage(data);
+  const msg = JSON.stringify({ event, data: stamped, ts: Date.now() });
   for (const c of wss.clients) if (c.readyState === WebSocket.OPEN) c.send(msg);
-  if (event !== 'snapshot') recordEvent(event, data);   // persist for record/replay
+  if (event !== 'snapshot') recordEvent(event, stamped);   // persist for record/replay
 }
 export function log(...a: unknown[]) {
   console.log(`[adhd ${new Date().toISOString()}]`, ...a);

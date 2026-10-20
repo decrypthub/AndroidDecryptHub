@@ -121,12 +121,12 @@ NEW=/data/local/tmp/libadh_agent.current.so
 LIB=$(ls -d /data/app/*/com.adh.sandbox*/lib/arm64 2>/dev/null | head -1)
 if [ -n "$LIB" ]; then
   cp "$NEW" "$LIB/libadh_agent.so"
-  chcon u:object_r:apk_data_file:s0 "$LIB/libadh_agent.so" 2>/dev/null || restorecon "$LIB/libadh_agent.so" 2>/dev/null || true
+  /system/bin/chcon u:object_r:apk_data_file:s0 "$LIB/libadh_agent.so" 2>/dev/null || true
   echo "sandbox $(sha256sum "$LIB/libadh_agent.so" | cut -c1-16)"
 fi
 if [ -d /data/adb/modules/adh ]; then
   cp "$NEW" /data/adb/modules/adh/libadh_agent.so
-  chcon u:object_r:system_file:s0 /data/adb/modules/adh/libadh_agent.so 2>/dev/null || true
+  /system/bin/chcon u:object_r:system_lib_file:s0 /data/adb/modules/adh/libadh_agent.so 2>/dev/null || true
   echo "module $(sha256sum /data/adb/modules/adh/libadh_agent.so | cut -c1-16)"
 fi
 EOS

@@ -2,7 +2,6 @@
 
 > **产品定位**：**通用 Android 运行时逆向分析工具** — 不是 demo，也不是「手机版 jadx」。
 > 适用于任意 App 的运行时观测/dump/hook/trace，并**对高对抗目标（反调试、root/签名检测、代码混淆、加密传输）具备实战能力**。
-> **使用范围**：授权范围内的逆向调查与运行时分析；非法律取证，亦非面向未授权目标的规避工具。
 > **参考项目**：[taisuii/ios-decrypt-helper](https://github.com/taisuii/ios-decrypt-helper)（IOSDecryptHub）
 > **本文档范围**：本文档是**唯一权威功能规格**（模块 A–W；模块 X 手机 UI 自动化已于 2026-09-23 按产品范围决议退役）。开发步骤与排期见 `DEVELOPMENT_PLAN.md`。
 
@@ -1199,12 +1198,6 @@ Android 在此基础上增加：全套 dex 操作、Java hook、native trace、m
 - 导出可选脱敏模式
 - MCP 默认不返回完整明文，需显式参数
 
-### 20.4 授权声明
-
-- 仅限授权安全测试与自有 App
-- 脱壳/分发受版权保护的应用可能违法
-- 文档与 UI 中明确提示
-
 ---
 
 ## 21. R — 数据存储与导出
@@ -1506,7 +1499,6 @@ MCP              →  AI 可编程操控，与 HTTP 同源
   文件系统上的模块名、Zygisk 目录名、包名痕迹**明确不在范围**——不定义对手面这就是无界任务。
 - 不承诺绕过所有反调试/反注入
 - 默认不自我隐藏
-- 不提供面向未授权目标的通用规避能力
 - 韧性能力默认关闭，需在会话中显式开启并二次确认
 - 验证：sandbox `AntiDebugMockActivity` 作为工具自身稳定性回归
 
@@ -1559,32 +1551,6 @@ MCP              →  AI 可编程操控，与 HTTP 同源
 
 ---
 
-## 29. V — 反分析行为观测
-
-**目标**：观测**目标 App 自身**为检测分析环境所做的行为（与模块 S 互为镜像：S 让我们活下来，V 让我们看清对方的防御）。
-
-### 29.1 检测类别与观测点
-
-| 类别 | 目标常用手段（hook / 观测点） |
-|------|------------------------------|
-| 调试检测 | `ptrace(PTRACE_TRACEME)`、`/proc/self/status` TracerPid、`Debug.isDebuggerConnected`、JDWP 检查、fork+ptrace、时间差检测 |
-| Root 检测 | `su` 路径 `access/stat`、Magisk 痕迹、`Build.TAGS` test-keys、RootBeer、PackageManager 查已知 root 包、`getprop ro.debuggable/ro.secure` |
-| 签名检测 | `PackageManager.getPackageInfo(GET_SIGNATURES / GET_SIGNING_CERTIFICATES)`、`checkSignatures`、签名哈希比对 |
-| 模拟器检测 | `Build.*` 字段、`/proc/cpuinfo`、传感器、telephony、`qemu` 属性 |
-| 完整性/注入检测 | 读自身 maps、扫 frida/xposed、`.so` 哈希校验、GOT/序言校验 |
-
-### 29.2 输出
-
-- `DETECTION` 事件：类别、手段、目标读到的值/结果、调用方、调用栈
-- **检测手段清单**：该 App 一共用了哪些检测、各触发几次、在什么时机（启动/登录/关键操作）
-- **行为分叉标注**：检测命中后目标是否改走分支（配合 S 的分叉诊断）
-
-### 29.3 价值
-
-给调查员一张对方防御地图：「这个 App 启动时用 3 种方式查 root、登录前查签名」，据此决定用哪种注入路径与最小侵入配置。
-
----
-
 ## 30. W — 注入后端与打包
 
 **目标**：把「能否注入真实目标」这个高风险变量，与「每个功能模块是否正确」解耦，覆盖 root 与非 root，并保证 CI 可持续验证。
@@ -1633,7 +1599,7 @@ Agent → TCP 8761 → ADH Daemon（host，经 adb reverse）
 - Companion 应设置 `DLCLOSE_MODULE_LIBRARY`，post-specialize 后卸载自身映射；agent `.so` 保持加载服务会话。
 - **作用域按包名匹配，覆盖该包的每一个进程**。Zygisk 交给模块的是**进程名**（`nice_name`），次要进程形如 `com.example.app:core`；模块必须把它拆出包名，再按"先进程名、后包名"向 companion 问 `scope` / `policy`（窄的优先，于是"只想盯某一个进程"仍然可用），hard-exclude 对两个 key 都要判。agent 上报的 `hello.package` 是包名、`hello.process` 是进程名，因此多进程 App 在 daemon/面板里归到一个包下、每个 session 仍能溯源到进程。**这条不是可选的**：按字面匹配进程名时，勾一个包只能覆盖它的主进程，而目标的网络栈可能在 `:core` 之类的次要进程里——抓包成不成功由"你碰巧写的是哪个名字"决定（2026-10-13 真机判定，见下）。
 - 模块作者固定为 `decrypthub.com`；root 管理器中的模块描述只显示“等待重启 / 运行中 / 未加载”这类简洁工作状态，不展示内部路径、架构说明或开发备注。
-- ADH Manager 的设备控制能力只限注入作用域、模块状态，以及经 Device Daemon 终止/重启目标应用进程；界面默认中文，已有系统语言资源时跟随系统语言，并跟随系统深浅色主题。首页保留运行状态、Web UI 访问地址、作用域入口和版本信息。Manager 可直接探测 Host ADH Daemon `/health` 来显示并打开局域网优先的 Web UI 地址，但不得把该请求转交 Device Daemon，也不得在设备侧承载 HTTP 服务或分析逻辑。目标进程启停/打开必须走受认证 AIDL（`controlPackage`），当前 Device Daemon AIDL 为 v14（v15 增加逐包 Hook 策略、v16 增加 `b` 旁路段，都走同一个 scope JSON，不新增 AIDL 方法）；旧版 v7-v12 的 AccessibilityService、设备电源状态与受限 UI 输入方法已从当前协议删除。Manager 不得自己调用 `am`/`su`。不得对 Manager、Device Daemon、`system_server`、System UI 或 `android` 执行终止/重启。
+- ADH Manager 的设备控制能力只限注入作用域、模块状态、系统证书，以及经 Device Daemon 终止/重启目标应用进程；界面默认中文，已有系统语言资源时跟随系统语言，并跟随系统深浅色主题。首页保留运行状态、Web UI 访问地址、作用域入口和版本信息。Manager 可直接探测 Host ADH Daemon `/health` 来显示并打开局域网优先的 Web UI 地址，但不得把该请求转交 Device Daemon，也不得在设备侧承载 HTTP 服务或分析逻辑。目标进程启停/打开必须走受认证 AIDL（`controlPackage`），当前 Device Daemon AIDL 为 v18（v15 增加逐包 Hook 策略、v16 曾增加 `b` 旁路段，都走同一个 scope JSON；v17 新增 `setHostEndpoint`，把 Manager 已经从 `/health` 得到的 `ipv4:port` 写到 `/data/adb/adh/host.endpoint`，Device Daemon 自己不扫描网络；v18 让 Manager 导入 PEM/DER，Daemon 只把带 CA 标记的证书写到 `/data/adb/adh/cacerts/<subject_hash_old>.N`，`post-fs-data.sh` 在 zygote 起来前并入系统信任库，未导入时不挂载。重启须经用户确认后由 Daemon 执行）。旧版 v7-v12 的 AccessibilityService、设备电源状态与受限 UI 输入方法已从当前协议删除。Manager 不得自己调用 `am`/`su`。不得对 Manager、Device Daemon、`system_server`、System UI 或 `android` 执行终止/重启。
 - “运行中”必须来自本次启动中 Zygisk 实际加载模块的标记，不能仅以模块目录存在作为成功依据；标记由 root companion 写入，启动时先清除旧状态。
 - Manager 不得直接调用 `su` 或访问 `/data/adb`。模块以 root `app_process` 启动 Device Daemon，Manager 仅通过 AIDL Binder 读取状态和作用域；daemon 必须校验调用 UID、`com.adh.manager` 包归属和构建时固定的 APK 签名证书。
 - Binder 交接入口只接受 UID 0 发布，并核对 AIDL descriptor；Manager 必须区分 Device Daemon 未连接、模块未安装、模块已安装但未加载、运行中四种状态。服务未连接时不得用空配置冒充真实作用域，也不得显示“模块未安装”。

@@ -178,6 +178,20 @@ static void cmd_java_hook(int fd, const char *id, const char *action, const char
     char idj[64];
     json_escape(id, idj, sizeof(idj));
 #ifdef ADH_HAVE_LSPLANT
+    if (strcmp(action, "crypto") == 0 || strcmp(action, "bypass") == 0) {
+        if (strcmp(action, "crypto") == 0) adh_java_crypto_arm();
+        else {
+            adh_ssl_bypass_set_enabled(1);
+            adh_ssl_bypass_arm();
+        }
+        char out[240];
+        snprintf(out, sizeof(out),
+                 "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"java_hook\",\"ok\":true,\"action\":\"%s\"}\n",
+                 idj, action);
+        send_line(fd, out);
+        LOGI("java_hook: action=%s armed", action);
+        return;
+    }
     int did_attach = 0;
     JNIEnv *env = adh_jni_attach(&did_attach);
     if (!env) {
@@ -227,7 +241,7 @@ static void cmd_java_hook(int fd, const char *id, const char *action, const char
     } else if (strcmp(action, "status") == 0) {
         ok = 1;
     } else {
-        snprintf(error, sizeof(error), "java_hook requires action: hook | hook_all | unhook | status");
+        snprintf(error, sizeof(error), "java_hook requires action: hook | hook_all | unhook | status | crypto | bypass");
     }
 
     char *status = (char *)malloc(65536);
@@ -739,7 +753,7 @@ static void *agent_thread(void *arg) {
             continue;
         }
         if (failed == 0 || failed % 20 == 0)
-            LOGE("host daemon unreachable (attempt %d, need: adb reverse tcp:%d tcp:%d)", failed + 1, ADH_PORT, ADH_PORT);
+            LOGE("host unreachable (attempt %d, loopback tcp:%d failed)", failed + 1, ADH_PORT);
         failed++;
         usleep(500 * 1000);
     }
@@ -753,13 +767,13 @@ static void do_start(void) {
     // could pick without a caller is "scan every file-backed module", which the settings contract
     // warns against as a default. So: the policy travels companion → agent at specialize time and
     // decides the FAMILIES of the next install, while WHO installs stays the caller's decision.
+    //
+    // Java hooks (JCA capture and the trust-manager bypass) are also not armed here. LSPlant
+    // rewrites ART, and installing it while the process is still linking classes faults
+    // ClassLinker::LinkCode. A session asks for them with java_hook action crypto or bypass.
     pthread_t t;
     if (pthread_create(&t, NULL, agent_thread, NULL) == 0) pthread_detach(t);
     else LOGE("pthread_create failed");
-#ifdef ADH_HAVE_LSPLANT
-    adh_ssl_bypass_arm();
-    adh_java_crypto_arm();
-#endif
 }
 
 __attribute__((visibility("default")))
@@ -789,11 +803,6 @@ void adh_agent_set_policy(const char *flags) {
     adh_capture_set_families(
         policy_flag(g_policy, 'd'), policy_flag(g_policy, 'h'), policy_flag(g_policy, 's'),
         policy_flag(g_policy, 'a'), policy_flag(g_policy, 't'), policy_flag(g_policy, 'e'));
-#ifdef ADH_HAVE_LSPLANT
-    // The companion on this phone still sends b=0, which was the old default-off. An injected
-    // process is already the opt-in, so that flag must not disable the bypass.
-    adh_ssl_bypass_set_enabled(1);
-#endif
     LOGI("hook policy: %s", g_policy);
 }
 

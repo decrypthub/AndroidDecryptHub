@@ -1,8 +1,6 @@
 # Android DecryptHub
 
-Android DecryptHub（ADH）是一套授权范围内的 Android 运行时分析工具。它把一个轻量程序注入到你勾选的应用里，观察这个应用在运行时做了什么：网络、加密、Java 方法、native 函数、内存和 DEX。重的分析放在电脑上，不放进目标应用。
-
-只分析你拥有或已获授权的应用。
+Android DecryptHub（ADH）是一套 Android 运行时分析工具。它把一个轻量程序注入到你勾选的应用里，观察这个应用在运行时做了什么：网络、加密、Java 方法、native 函数、内存和 DEX。重的分析放在电脑上，不放进目标应用。
 
 ## 能做什么
 

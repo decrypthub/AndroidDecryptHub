@@ -205,6 +205,10 @@ SCRIPTS=(
   # closed, which is exactly "improper use of the Companion API" — every injected process carried a
   # dead fd for its lifetime. Needs a device with BOTH our module and Zygisk Next; SKIPs otherwise.
   "verify_v103_zygisk_companion.sh:device"
+  # v10.4 Java crypto hooks: the sandbox probe runs AES-CBC, AES-GCM, HMAC, SHA-256, RSA and
+  # SHA256withRSA on a platform provider (not the sandbox's own reporter). java-source captures
+  # of the fixed markers are the plugin hooks, and the probe return value shows the originals ran.
+  "verify_v104_java_hook.sh:device"
 )
 
 pass=0; fail=0; skip=0; FAILED=""

@@ -3,9 +3,79 @@
 > 这是"我们现在在哪"的唯一真相。每个会话开始先读它，结束前更新它。
 > 详细规格见 `REQUIREMENTS.md`，路线与架构见 `DEVELOPMENT_PLAN.md`。
 
+## 2026-10-20 —— 网络页按 SSL 连接把 HTTP/1.1 请求和响应配成一对
+
+`SSL_write` / `SSL_read` 仍是一条条明文，但 agent 在记录上带了 `SSL*`（字段 `conn`）。Host 按会话加这个指针把发送、接收各自拼回去，用 `Content-Length` 或 chunked 拆开，再按顺序配对；gzip、deflate、br 在这里解开。网页网络列表优先显示这一对，点开左边是请求、右边是响应。HTTP/2（客户端前言）和没有连接号的旧记录仍按发送、接收分开。WebView 不走这条通道。配对逻辑在 `daemon/src/http_exchange.ts`，单测 `daemon/test/http_exchange.test.ts`。要在真机上配成对，需要重新编译并注入带 `conn` 的 agent。排空缓冲区按整条 16 KiB 记录扩容，避免同一批里的第二条 TLS 明文被截短。
+
+## 2026-10-20 —— 版本号 v0.3.15
+
+网页按应用切换、网络列表显示 URL，按小补丁升到 **v0.3.15 / versionCode 22**。模块 `version`、Manager `versionName`、`update.json` 一致。公开仓库已发 [v0.3.15](https://github.com/decrypthub/AndroidDecryptHub/releases/tag/v0.3.15)：`adh-bundle-v0.3.15.zip`（20,424,795 B，SHA-256 `d83e60c7a928b37a00bc212e94c31f4580ebc0fba1fcb15b11bd9937c8c9f8a1`），匿名下载 200，`main` 上的 `update.json` 已是这一版。私有仓库工作区没有为此另做提交。
+
+## 2026-10-19 —— 网络列表预览改成 URL
+
+网络页左侧原来把 TLS 明文的开头整段贴出来。请求现在显示 `方法 + URL`（头里有 Host 就是 `https://主机/路径`，没有就只留路径），响应只留状态行。系统页仍然是空的：当前捕获只装了 `libjavacrypto.so` 上的加解密和 TLS，文件模块和系统模块都是空的，Java / Native 方法钩子也不会在注入时自动装，所以文件、ptrace、系统属性进不了「系统」。
+
+## 2026-10-19 —— 切到应用却没有记录：转发断了，捕获也关着
+
+网页名单本身是好的（前程无忧51Job、漫播、抖音）。`aa165071` 上 `adb reverse` 空了，进程里的 agent 连不上本机，所以切换之后一条记录都没有，Dump 和文件浏览也没有可用进程。Host 现在每 15 秒把 `tcp:8761` 和 `tcp:8088` 的 reverse 补上。另外 `adhd-data/settings.json` 里实时捕获是关的，加密模块名还是空的；已打开捕获，模块用回 `libjavacrypto.so`。顶栏每个应用标「在线 / 未连接」，列表为空时说明是没连上还是捕获关着。
+
+## 2026-10-19 —— 顶栏下拉直接切换应用，并显示应用名
+
+右上角不再套一层再选。下拉本身就是注入范围里的应用，一项一个名字（前程无忧51Job、漫播、抖音）和包名，点一下就切。详情单独一个按钮，里面是应用名、包名和进程日志，不再包着切换。名字从各应用 base.apk 的清单读出来，读不到时仍显示包名。
+
+## 2026-10-19 —— 网页右上角就是注入范围里勾选的应用
+
+右上角不再跟「有没有连上、进程还在不在」走。Host 用 adb 读手机上的 `/data/adb/adh/scope.json`，下拉里就是这份勾选名单，顺序与文件一致。当前 `aa165071` 上是 `com.job.android`、`com.uxin.kilaaudio`、`com.ss.android.ugc.aweme`。选中哪个就看哪个的捕获和进程日志，进程没开也能切过去。
+
+## 2026-10-19 —— Java 钩子改为点名安装，沙盒不再在启动时改 ART
+
+沙盒装 Java 钩子时死在 `ClassLinker::LinkCode`：算法钩子给每个重载开一条线程，和 `Class.forName` 叠在一起，跳进没映射的页。现在同一时刻只允许一个安装者，重载在同一条线程上逐个装。注入时不再调用 `adh_java_crypto_arm` / `adh_ssl_bypass_arm`，沙盒也不例外。会话用 `java_hook` 的 `action:crypto` 或 `action:bypass` 再装。`aa165071` 上新 so 换进沙盒后：v43 通过且进程还在；v104 装上 31 个算法钩子，探针 `ok aes=32 gcm=32 hmac=32 digest=32 rsa=256 sign=256`，进程还在；干净进程上 v28、v61、v66 通过。
+
+## 2026-10-19 —— 网页按应用看记录，不按会话
+
+外部界面的切换单位改成包名。选中一个应用后，加解密 / 系统 / 网络里是这个包所有进程留下的捕获；Java / Native hook 命中在「系统」里。进程退出后这条应用还在列表里，标成「已退出」，记录不跟着清。进程日志（连上、退出、Dump）写在应用菜单下面，按包过滤。文件浏览和 Dump 仍要有一个在线进程。应用列表来自已经连上过 Host 的包，外加内存里还留着捕获的包；手机上的注入范围决定谁会被注入，Host 不读那份范围文件。
+
+## 2026-10-19 —— 注入时不再用 LSPlant 改 ART
+
+抖音进程死在 `MarkCompact::UpdateLivenessInfo`，栈上有它自己的 `libnpth`。原因是 agent 一启动就 `adh_ssl_bypass_arm` + `adh_java_crypto_arm`：LSPlant 用 Dobby 改 ART 的 JIT/GC 移动，和 npth、jato 抢同一条回收路径。LSPosed 不会在进进程时做这件事。当天仍让沙盒在启动时装算法钩子；次日沙盒也改成命令安装，见上一条。其它进程只连上 Host，等 `capture_start` 再按名字装 GOT。证书绕过也不再在注入时打开。
+
+## 2026-10-18 —— 抖音请求抓到了，七神头在 HTTP/2 明文里
+
+`aa165071` 上把 `com.ss.android.ugc.aweme` 加回作用域，冷启动后对 `libsscronet.so` 做 `capture_start`。`SSL_write` / `SSL_read` 按符号名装上。这次 38 条发送、167 条接收，记录没有被 2048 字节截断。两条请求的头块解出全部七个签名头：`GET /common`（abtest）和 `POST /aweme/v2/commerce/bff/cold_start`。`crypto_identify` 把这轮记成 TLS 205、AEAD 56、Java MD5 56、SHA-1 44、SHA-256 2、RSA 2，密钥 0。Cronet 这条模块的摘要 / HMAC / EVP 对称钩子没装上（`notInstalled`），七神不是在这里算出来的。进程随后退出，不在了。
+
+## 2026-10-18 —— 抖音 TLS 明文：Cronet 的 SSL_write 不在系统 libssl
+
+`libsscronet.so` 的 `SSL_write` / `SSL_read` 从 `libttboringssl.so` 解析，按系统 `libssl.so` 的地址去对 GOT 对不上。指定单个模块时改为按符号名替换，并调用槽里原来的函数。抓包记录从 2048 字节提到 16384 字节，环仍是 128 条、约 2 MiB：2048 会把 HTTP/2 头块截在签名头之前。`aa165071` 上冷启动抖音能装上这两处钩子，明文是 HTTP/2。进程随后死在抖音自己的 GC 钩子（`libnpth` 插在 ART MarkCompact 里）。作用域里已去掉 `com.ss.android.ugc.aweme`，避免继续注入把应用打进安全模式。
+
+## 2026-10-18 —— 沙盒 Java 算法探针，验证插件能钩住并采集
+
+沙盒加了 `JavaCrypto.javaHookProbe`：AES-CBC 加密再解密、AES-GCM、HmacSHA256、SHA-256、RSA-2048、SHA256withRSA 签名并验签。这些调用指定平台 Provider，不经过沙盒自己的 `ADH-Intercept`。加解密页有「Java 钩子探针」按钮。
+
+`aa165071` 上 `tools/verify_v104_java_hook.sh` 通过：装上 31 个 Java 算法钩子，java 通道抓到上述明文、密钥和 `SHA256withRSA` 的 sign/verify，探针返回 `ok aes=32 gcm=32 hmac=32 digest=32 rsa=256 sign=256`，进程仍在。验签记录原先被标成 `sign`，因为 `initVerify` 里的 `Verify` 大小写对不上，后面的 `verify()` 又沿用了这个操作名。桥接类改为按小写方法名判断，重新生成 dex 并编进 agent 后，验签记录的操作名是 `verify`。
+
+## 2026-10-18 —— Manager 可导入系统 CA
+
+用户导入 PEM 或 DER 后，Device Daemon（协议 v18）只保存带 CA 标记的证书到 `/data/adb/adh/cacerts/<subject_hash_old>.N`。`post-fs-data.sh` 在 zygote 起来之前把它们和现有系统根证书拷进 tmpfs，再 bind 到 Conscrypt APEX 与 `/system/etc/security/cacerts`。没有导入的证书时不挂载。界面里确认后才由 Daemon 重启。`:core:test`、`:daemon:testDebugUnitTest`、`:manager:testDebugUnitTest` 通过。`aa165071` 已刷入 v0.3.14 并重启：模块状态「运行中」，`zygisk_loaded` 与 `device_daemon_ready` 都在。开机日志写的是 `no user certificates`，因为还没有导入证书。ColorOS 文件管理会把 `*/*` 选择器里的 `.pem` 置灰，导入改为按 `application/octet-stream` 打开。新的 Manager 已装到 `aa165071`，不用重启手机。
+
+## 2026-10-17 —— 注入范围：搜索收成图标，列表分已开启 / 全部
+
+注入范围页不再占一整行搜索框。右上角是搜索图标，点开后在顶栏输入，返回即退出。原来那一行是「已开启」和「全部」；已经有勾选时默认停在「已开启」。系统应用过滤只在「全部」里出现。
+
+## 2026-10-17 —— Manager：Hook 配置独立成页，版本收到顶栏
+
+应用列表里的 Hook 配置不再用底部弹层。从某一行进入单独一页，后面加能力有地方放。首页顶部固定三行：`ADH 运行中` / `ADH 运行异常`，下面是模块版本和应用版本。不再重复运行状态，也不写 Zygisk。Web UI 卡片只留在线状态和那一个地址。记住电脑地址仍在打开首页时静默写入，不在卡片上解释。
+
+## 2026-10-17 —— 勾选范围并打开应用后，网页仍显示未连接目标
+
+网页能用局域网打开，但注入进目标的进程一直只拨手机自己的 `127.0.0.1:8761`。没做 `adb reverse` 时它连不回电脑，网页上没有进程、没有日志，只写「未连接目标」。现在：Manager 从 `/health` 拿到电脑地址后，经 Device Daemon 记到 `/data/adb/adh/host.endpoint`（协议 v17，Daemon 自己不扫网）；Zygisk 在启动 agent 前把这个地址交进去。agent 仍先试回环，失败再拨记住的地址。`:core:test` 与 `:manager:testDebugUnitTest` 通过。`aa165071` 已刷入并重启：Manager 把电脑记成 `192.168.200.108:8761`，冷启动已勾选的应用后 Host 上出现在线会话（`entry=start`）。模块打包会在 agent 源码比 `.so` 新时重编，导出表包含 `adh_agent_set_endpoint`。
+
+## 2026-10-16 —— Manager 首页 Web UI 显示局域网地址
+
+手机和电脑在同一 Wi-Fi（`192.168.200.178` / `192.168.200.108`）时，浏览器能直接打开 `http://192.168.200.108:8088`。首页之前只探 `127.0.0.1:8088`；没做 `adb reverse` 就判未连接，卡片退回本机回环地址，手机浏览器打不开电脑。现在：同一网段的地址优先于 VMware / 虚拟网卡；回环探不到时，在手机所在的 Wi-Fi `/24` 上找 `service=adhd` 的 `/health`，找到就显示那条局域网地址。Daemon 上报的 LAN 列表也丢掉 APIPA 和 VMware / vEthernet（正在跑的进程要重启后才换列表）。`:manager:testDebugUnitTest` 与 `daemon/test/lan_address.test.ts` 通过。`aa165071` 装上 debug Manager 后首页为「Web UI 在线 / http://192.168.200.108:8088」。
+
 ## 2026-10-16 —— v0.3.14：KernelSU / Magisk 模块更新
 
-之前的 `module.prop` 没有 `updateJson`，所以 KernelSU、KernelSU Next 和 Magisk 的模块页不会出现更新。这一版加上公开地址 `injector/zygisk/update.json`（`version` / `versionCode` / `zipUrl` / `changelog`）。模块版本与 agent 一起升到 **v0.3.14 / versionCode 21**。已经装在手机上、且旧模块没有这个字段的，管理器仍然不会提示，需要手动刷入这一次。
+之前的 `module.prop` 没有 `updateJson`，所以 KernelSU、KernelSU Next 和 Magisk 的模块页不会出现更新。这一版加上公开地址 `injector/zygisk/update.json`（`version` / `versionCode` / `zipUrl` / `changelog`）。模块版本与 agent 一起升到 **v0.3.14 / versionCode 21**。已经装在手机上、且旧模块没有这个字段的，管理器仍然不会提示，需要手动刷入这一次。公开仓库 [v0.3.14](https://github.com/decrypthub/AndroidDecryptHub/releases/tag/v0.3.14) 已发布：`adh-bundle-v0.3.14.zip`（20,337,015 B，SHA-256 `15c5ccd9dd6b9f0ef04d196a35fbb326529a5ba9b4b360a763400cf257f2afb1`）匿名下载返回 200，`main` 上的 `injector/zygisk/update.json` 也是 200。公开源码树仍是 v0.3.12 快照加这份更新清单，不是私有仓库的完整历史。
 
 ## 2026-10-16 —— Java 层算法也进采集
 

@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -40,16 +41,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -60,14 +57,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.annotation.StringRes
 import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -86,11 +86,18 @@ data class AppRow(
     val isSystem: Boolean,
 )
 
+private enum class AppListFilter {
+    Enabled,
+    All,
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ScopeScreen(
     repository: ScopeRepository,
+    draft: ScopeDraft,
     onBack: () -> Unit,
+    onOpenHook: (String) -> Unit,
 ) {
     val context = LocalContext.current
     val snackbar = remember { SnackbarHostState() }
@@ -100,9 +107,13 @@ fun ScopeScreen(
     val controlDeniedMessage = stringResource(R.string.app_control_denied)
 
     var query by remember { mutableStateOf("") }
+    var searching by remember { mutableStateOf(false) }
+    var listFilter by remember { mutableStateOf(AppListFilter.Enabled) }
+    var filterReady by remember { mutableStateOf(false) }
     var showSystem by remember { mutableStateOf(false) }
+    val searchFocus = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
     var rows by remember { mutableStateOf<List<AppRow>>(emptyList()) }
-    var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
     var loading by remember { mutableStateOf(true) }
     var loadFailed by remember { mutableStateOf(false) }
     var catalogIncomplete by remember { mutableStateOf(false) }
@@ -110,10 +121,6 @@ fun ScopeScreen(
     var canControlPackages by remember { mutableStateOf(false) }
     var saving by remember { mutableStateOf(false) }
     var refreshVersion by remember { mutableStateOf(0) }
-    // Per-package hook policy being edited, keyed by package. Absent = DEFAULT (every family on).
-    var families by remember { mutableStateOf<Map<String, CaptureFamilies>>(emptyMap()) }
-    var editingPackage by remember { mutableStateOf<String?>(null) }
-
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { refreshVersion++ }
 
     LaunchedEffect(repository, refreshVersion) {
@@ -138,8 +145,14 @@ fun ScopeScreen(
             loading = false
             return@LaunchedEffect
         }
-        selected = loaded.packages
-        families = loaded.policy
+        if (!draft.dirty) {
+            draft.selected = loaded.packages
+            draft.families = loaded.policy
+        }
+        if (!filterReady) {
+            listFilter = if (draft.selected.isEmpty()) AppListFilter.All else AppListFilter.Enabled
+            filterReady = true
+        }
 
         val catalog = runCatching {
             withContext(Dispatchers.IO) { repository.listApplications() }
@@ -171,14 +184,25 @@ fun ScopeScreen(
         loading = false
     }
 
-    val filtered = remember(rows, query, showSystem) {
+    val selected = draft.selected
+    val filtered = remember(rows, query, showSystem, listFilter, selected) {
         val normalized = query.trim().lowercase()
         rows.filter { row ->
-            (showSystem || !row.isSystem) &&
-                (normalized.isEmpty() ||
-                    row.label.lowercase().contains(normalized) ||
-                    row.packageName.lowercase().contains(normalized))
+            val enabled = selected.contains(row.packageName)
+            val inTab = when (listFilter) {
+                AppListFilter.Enabled -> enabled
+                AppListFilter.All -> showSystem || !row.isSystem
+            }
+            inTab && (normalized.isEmpty() ||
+                row.label.lowercase().contains(normalized) ||
+                row.packageName.lowercase().contains(normalized))
         }
+    }
+
+    fun closeSearch() {
+        searching = false
+        query = ""
+        keyboard?.hide()
     }
 
     fun controlApp(row: AppRow, restart: Boolean) {
@@ -205,25 +229,85 @@ fun ScopeScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Column {
-                        Text(
-                            text = stringResource(R.string.scope_title),
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.SemiBold,
+                    if (searching) {
+                        BasicTextField(
+                            value = query,
+                            onValueChange = { query = it },
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.titleMedium.copy(
+                                color = MaterialTheme.colorScheme.onSurface,
+                            ),
+                            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .focusRequester(searchFocus),
+                            decorationBox = { inner ->
+                                Box(contentAlignment = Alignment.CenterStart) {
+                                    if (query.isEmpty()) {
+                                        Text(
+                                            text = stringResource(R.string.search_apps),
+                                            style = MaterialTheme.typography.titleMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                    inner()
+                                }
+                            },
                         )
-                        Text(
-                            text = stringResource(R.string.scope_selected, selected.size),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                    } else {
+                        Column {
+                            Text(
+                                text = stringResource(R.string.scope_title),
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text(
+                                text = stringResource(R.string.scope_selected, draft.selected.size),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = { if (searching) closeSearch() else onBack() }) {
                         Icon(
                             Icons.AutoMirrored.Rounded.ArrowBack,
                             contentDescription = stringResource(R.string.back),
                         )
+                    }
+                },
+                actions = {
+                    if (searching) {
+                        if (query.isNotEmpty()) {
+                            IconButton(onClick = { query = "" }) {
+                                Icon(
+                                    Icons.Rounded.Close,
+                                    contentDescription = stringResource(R.string.clear_search),
+                                )
+                            }
+                        }
+                    } else {
+                        if (listFilter == AppListFilter.All) {
+                            IconButton(onClick = { showSystem = !showSystem }) {
+                                Icon(
+                                    Icons.Rounded.FilterList,
+                                    contentDescription = stringResource(
+                                        if (showSystem) R.string.hide_system_apps else R.string.show_system_apps,
+                                    ),
+                                    tint = if (showSystem) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                        IconButton(onClick = { searching = true }) {
+                            Icon(
+                                Icons.Rounded.Search,
+                                contentDescription = stringResource(R.string.search_apps),
+                            )
+                        }
                     }
                 },
             )
@@ -240,12 +324,13 @@ fun ScopeScreen(
                                 // version/mode/policy on every save.
                                 repository.save(
                                     ScopeConfig(
-                                        packages = selected,
-                                        policy = families.filterKeys { selected.contains(it) },
+                                        packages = draft.selected,
+                                        policy = draft.families.filterKeys { draft.selected.contains(it) },
                                     ),
                                 )
                             }
                             saving = false
+                            if (result.isSuccess) draft.dirty = false
                             snackbar.showSnackbar(if (result.isSuccess) savedMessage else saveFailedMessage)
                         }
                     },
@@ -265,11 +350,16 @@ fun ScopeScreen(
                 .fillMaxSize()
                 .padding(padding),
         ) {
-            SearchField(
-                query = query,
-                onQueryChange = { query = it },
-                showSystem = showSystem,
-                onToggleSystem = { showSystem = !showSystem },
+            LaunchedEffect(searching) {
+                if (searching) {
+                    searchFocus.requestFocus()
+                    keyboard?.show()
+                }
+            }
+            ScopeFilterBar(
+                showEnabled = listFilter == AppListFilter.Enabled,
+                onShowEnabled = { listFilter = AppListFilter.Enabled },
+                onShowAll = { listFilter = AppListFilter.All },
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
             )
 
@@ -283,16 +373,23 @@ fun ScopeScreen(
                     title = stringResource(R.string.apps_load_failed),
                     body = stringResource(R.string.apps_load_failed_detail),
                 )
-                filtered.isEmpty() -> EmptyState(
-                    title = stringResource(
-                        if (catalogIncomplete && query.isBlank()) R.string.apps_catalog_empty
-                        else R.string.apps_empty,
-                    ),
-                    body = stringResource(
-                        if (catalogIncomplete && query.isBlank()) R.string.apps_catalog_empty_detail
-                        else R.string.apps_empty_detail,
-                    ),
-                )
+                filtered.isEmpty() -> {
+                    val enabledEmpty = listFilter == AppListFilter.Enabled && query.isBlank()
+                    val catalogEmpty = catalogIncomplete && query.isBlank() && listFilter == AppListFilter.All
+                    EmptyState(
+                        title = stringResource(
+                            when {
+                                catalogEmpty -> R.string.apps_catalog_empty
+                                enabledEmpty -> R.string.apps_enabled_empty
+                                else -> R.string.apps_empty
+                            },
+                        ),
+                        body = if (enabledEmpty) "" else stringResource(
+                            if (catalogEmpty) R.string.apps_catalog_empty_detail
+                            else R.string.apps_empty_detail,
+                        ),
+                    )
+                }
                 else -> Column(modifier = Modifier.weight(1f)) {
                     if (catalogIncomplete) {
                         Text(
@@ -310,14 +407,15 @@ fun ScopeScreen(
                         items(filtered, key = { it.packageName }) { row ->
                             AppRowItem(
                                 row = row,
-                                checked = selected.contains(row.packageName),
+                                checked = draft.selected.contains(row.packageName),
                                 onCheckedChange = { checked ->
-                                    selected = if (checked) selected + row.packageName
-                                    else selected - row.packageName
+                                    draft.selected = if (checked) draft.selected + row.packageName
+                                    else draft.selected - row.packageName
+                                    draft.dirty = true
                                 },
                                 canControl = canControlPackages,
-                                families = families[row.packageName] ?: CaptureFamilies.DEFAULT,
-                                onConfigure = { editingPackage = row.packageName },
+                                families = draft.families[row.packageName] ?: CaptureFamilies.DEFAULT,
+                                onConfigure = { onOpenHook(row.packageName) },
                                 onForceStop = { controlApp(row, restart = false) },
                                 onRestart = { controlApp(row, restart = true) },
                                 loadIcon = { pkg ->
@@ -336,108 +434,15 @@ fun ScopeScreen(
             }
         }
     }
-
-    editingPackage?.let { pkg ->
-        HookConfigSheet(
-            packageName = pkg,
-            label = rows.firstOrNull { it.packageName == pkg }?.label ?: pkg,
-            families = families[pkg] ?: CaptureFamilies.DEFAULT,
-            onChange = { families = families + (pkg to it) },
-            onReset = { families = families - pkg },
-            onDismiss = { editingPackage = null },
-        )
-    }
 }
 
 private const val TAG = "AdhScopeScreen"
 
-/**
- * Per-package hook policy. Unchecked families are not installed in this app at all — the point is a
- * smaller target-process footprint, not a quieter report (see [CaptureFamilies]).
- */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun HookConfigSheet(
-    packageName: String,
-    label: String,
-    families: CaptureFamilies,
-    onChange: (CaptureFamilies) -> Unit,
-    onReset: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 20.dp, end = 20.dp, bottom = 28.dp),
-        ) {
-            Text(
-                text = stringResource(R.string.hook_config_title),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-                text = label,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                text = stringResource(R.string.hook_config_hint),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 10.dp),
-            )
-            FamilyToggle(R.string.hook_family_digest, families.digest) { onChange(families.copy(digest = it)) }
-            FamilyToggle(R.string.hook_family_hmac, families.hmac) { onChange(families.copy(hmac = it)) }
-            FamilyToggle(R.string.hook_family_symmetric, families.symmetric) { onChange(families.copy(symmetric = it)) }
-            FamilyToggle(R.string.hook_family_asymmetric, families.asymmetric) { onChange(families.copy(asymmetric = it)) }
-            FamilyToggle(R.string.hook_family_tls, families.tls) { onChange(families.copy(tls = it)) }
-            FamilyToggle(R.string.hook_family_aead, families.aead) { onChange(families.copy(aead = it)) }
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                TextButton(onClick = onReset) { Text(stringResource(R.string.hook_config_reset)) }
-                Spacer(Modifier.weight(1f))
-                TextButton(onClick = onDismiss) { Text(stringResource(R.string.hook_config_done)) }
-            }
-            Text(
-                text = packageName,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
-
-@Composable
-private fun FamilyToggle(@StringRes labelRes: Int, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            text = stringResource(labelRes),
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.weight(1f),
-        )
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
-    }
-}
-
-@Composable
-private fun SearchField(
-    query: String,
-    onQueryChange: (String) -> Unit,
-    showSystem: Boolean,
-    onToggleSystem: () -> Unit,
+private fun ScopeFilterBar(
+    showEnabled: Boolean,
+    onShowEnabled: () -> Unit,
+    onShowAll: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Surface(
@@ -445,58 +450,45 @@ private fun SearchField(
         shape = RoundedCornerShape(28.dp),
         modifier = modifier.fillMaxWidth(),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Spacer(Modifier.width(16.dp))
-            Icon(
-                Icons.Rounded.Search,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        Row(modifier = Modifier.padding(4.dp)) {
+            ScopeFilterSegment(
+                text = stringResource(R.string.scope_filter_enabled),
+                selected = showEnabled,
+                onClick = onShowEnabled,
+                modifier = Modifier.weight(1f),
             )
-            Spacer(Modifier.width(12.dp))
-            BasicTextField(
-                value = query,
-                onValueChange = onQueryChange,
-                singleLine = true,
-                textStyle = MaterialTheme.typography.bodyLarge.copy(
-                    color = MaterialTheme.colorScheme.onSurface,
-                ),
-                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(vertical = 16.dp),
-                decorationBox = { inner ->
-                    if (query.isEmpty()) {
-                        Text(
-                            text = stringResource(R.string.search_apps),
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    inner()
-                },
+            ScopeFilterSegment(
+                text = stringResource(R.string.scope_filter_all),
+                selected = !showEnabled,
+                onClick = onShowAll,
+                modifier = Modifier.weight(1f),
             )
-            if (query.isNotEmpty()) {
-                IconButton(onClick = { onQueryChange("") }) {
-                    Icon(
-                        Icons.Rounded.Close,
-                        contentDescription = stringResource(R.string.clear_search),
-                    )
-                }
-            }
-            IconButton(onClick = onToggleSystem) {
-                Icon(
-                    Icons.Rounded.FilterList,
-                    contentDescription = stringResource(
-                        if (showSystem) R.string.hide_system_apps else R.string.show_system_apps
-                    ),
-                    tint = if (showSystem) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Spacer(Modifier.width(4.dp))
         }
+    }
+}
+
+@Composable
+private fun ScopeFilterSegment(
+    text: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .height(40.dp)
+            .clip(RoundedCornerShape(24.dp))
+            .background(if (selected) MaterialTheme.colorScheme.primary else Color.Transparent)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = if (selected) MaterialTheme.colorScheme.onPrimary
+            else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
@@ -520,12 +512,14 @@ private fun EmptyState(title: String, body: String) {
             style = MaterialTheme.typography.titleMedium,
             modifier = Modifier.padding(top = 14.dp),
         )
-        Text(
-            text = body,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 6.dp),
-        )
+        if (body.isNotEmpty()) {
+            Text(
+                text = body,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+        }
     }
 }
 

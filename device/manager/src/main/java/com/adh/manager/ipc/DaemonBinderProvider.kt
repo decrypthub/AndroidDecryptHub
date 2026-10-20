@@ -72,6 +72,12 @@ class DaemonBinderProvider : ContentProvider() {
                     service.getApplicationIconPng(packageName) ?: ByteArray(0)
                 override fun controlPackage(packageName: String, action: String): String =
                     service.controlPackage(packageName, action).orEmpty()
+                override fun getHostEndpoint(): String = service.hostEndpoint.orEmpty()
+                override fun setHostEndpoint(endpoint: String): Boolean = service.setHostEndpoint(endpoint)
+                override fun listCaCertsJson(): String = service.listCaCerts().orEmpty()
+                override fun putCaCert(encoded: ByteArray): Int = service.putCaCert(encoded)
+                override fun deleteCaCert(fileName: String): Boolean = service.deleteCaCert(fileName)
+                override fun rebootDevice(): Boolean = service.rebootDevice()
                 override val modulePresent: Boolean get() = service.isModulePresent
                 override val loaderActive: Boolean get() = service.isLoaderActive
                 override val moduleVersion: String get() = service.moduleVersion.orEmpty()

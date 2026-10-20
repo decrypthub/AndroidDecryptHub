@@ -4,12 +4,14 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { backendMatrix } from '../backends.ts';
-import { webUrls } from '../config.ts';
+import { assembleHttpExchanges, type TlsChunk } from '../http_exchange.ts';
+import { AGENT_PORT, webUrls } from '../config.ts';
 import { handleMcp, MCP_TOOLS } from '../mcp.ts';
+import { scopedApps } from '../scope_list.ts';
 import { applyCaptureEnabled } from '../service.ts';
 import {
-  broadcast, captureHealth, captures, captureTimers, configStats, cryptoIdentify,
-  dumps, events, EVENTS_FILE, hexToPreview, log, mergeSettings, readBody,
+  broadcast, captureHealth, capturePackage, captures, captureTimers, configStats, cryptoIdentify,
+  dumps, eventPackage, events, EVENTS_FILE, log, mergeSettings, previewForCapture, readBody,
   recentJavaIn, saveSettings, sessions, settings,
 } from '../state.ts';
 import type { Route, RouteContext } from './types.ts';
@@ -28,9 +30,14 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
     res.end(buf);
   };
   return [
+    { path: '/api/apps', handler: async () => {
+      const scope = await scopedApps();
+      return send(200, { apps: scope.apps, error: scope.error, capture: settings.capture.enabled });
+    } },
     { path: '/health', handler: () => send(200, {
       ok: true, service: 'adhd', name: 'ADH Daemon', version: '0.1.0',
       agents: sessions.size, uptime: process.uptime(), mcpTools: MCP_TOOLS.length, web: webUrls(),
+      agent: { port: AGENT_PORT },
       apps: [...sessions.values()].map(s => ({
         package: s.package, pid: s.pid, sessionId: s.sessionId, online: s.online,
       })),
@@ -41,6 +48,19 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
     { path: '/raven.svg', handler: servePublic('raven.svg', 'image/svg+xml') },
     { path: '/raven.png', handler: servePublic('raven.png', 'image/png') },
     { path: '/favicon.ico', handler: servePublic('raven.png', 'image/png') },
+    // HTTP/1.1 exchanges reassembled from SSL_read/SSL_write that share an SSL*.
+    { path: '/api/http/exchanges', handler: () => {
+      const session = url.searchParams.get('session');
+      const pkg = url.searchParams.get('package');
+      let list = captures.filter(c => c.category === 'net');
+      if (session) list = list.filter(c => c.sessionId === session);
+      if (pkg) list = list.filter(c => capturePackage(c) === pkg);
+      const records: TlsChunk[] = list.map(c => ({
+        id: c.id, sessionId: c.sessionId, func: c.func, hex: c.hex, inl: c.inl,
+        tsNs: c.tsNs, ts: c.ts, conn: c.conn,
+      }));
+      return send(200, assembleHttpExchanges(records));
+    } },
     // Live captures (auto-populated by the persistent hooks): GET /api/captures?since=&limit=
     { path: '/api/captures', handler: () => {
       const since = Number(url.searchParams.get('since') ?? 0);
@@ -49,10 +69,7 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       const pkg = url.searchParams.get('package');
       let list = captures.filter(c => c.id > since);
       if (session) list = list.filter(c => c.sessionId === session);
-      if (pkg) {
-        const sids = new Set([...sessions.values()].filter(s => s.package === pkg).map(s => s.sessionId));
-        list = list.filter(c => sids.has(c.sessionId));
-      }
+      if (pkg) list = list.filter(c => capturePackage(c) === pkg);
       // WS-C: `health` carries honest ring accounting — complete:false + dropped>0 when the
       // agent ring overflowed (no silent loss; the panel should show this in red). The health
       // fields are ALSO mirrored at the top level by SPREADING them, not by hand-copying a subset:
@@ -62,7 +79,7 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       return send(200, {
         total: captures.length, on: captureTimers.size > 0,
         ...health, health,
-        captures: list.slice(-limit).map(c => ({ id: c.id, source: c.source, category: c.category, algo: c.algo, op: c.op, func: c.func, inl: c.inl, outl: c.outHex ? c.outHex.length / 2 : 0, tid: c.tid, ts: c.ts, preview: c.preview })),
+        captures: list.slice(-limit).map(c => ({ id: c.id, sessionId: c.sessionId, package: capturePackage(c), source: c.source, category: c.category, algo: c.algo, op: c.op, func: c.func, inl: c.inl, outl: c.outHex ? c.outHex.length / 2 : 0, tid: c.tid, ts: c.ts, preview: c.category === 'net' ? previewForCapture(c.func, c.hex) : c.preview })),
       });
     } },
     { path: '/api/captures/', prefix: true, handler: () => {
@@ -79,7 +96,9 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       const type = url.searchParams.get('type');
       const since = Number(url.searchParams.get('since') ?? 0);
       const limit = Math.min(Number(url.searchParams.get('limit') ?? 500), 5000);
+      const pkg = url.searchParams.get('package');
       let list = events.filter(e => e.seq > since && (!type || e.type === type));
+      if (pkg) list = list.filter(e => eventPackage(e.data) === pkg);
       return send(200, { total: events.length, returned: Math.min(list.length, limit), events: list.slice(-limit) });
     } },
     // Diagnostic report / export (P/R) — metadata only, no captured keys/plaintext.

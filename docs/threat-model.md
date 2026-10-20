@@ -1,20 +1,6 @@
-# ADH (Android DecryptHub) — Threat Model & Use Policy
+# ADH (Android DecryptHub) — Threat Model
 
-> Scope of use, access control, and sensitive-data handling for the workbench.
-
-## Authorized use only
-
-ADH is a **general-purpose Android runtime reverse-analysis** tool intended for
-**authorized reverse investigation** — analyzing apps you own or are authorized to
-examine (e.g., investigating evasive gray-market apps). It is **not** for:
-
-- legal evidence/forensics (no chain-of-custody guarantees — this is investigation tooling);
-- circumventing protections on apps you are not authorized to analyze;
-- redistribution of extracted/unpacked copyrighted apps.
-
-The anti-analysis **neutralization** capability (e.g., suppressing `ptrace(PTRACE_TRACEME)`)
-is a survival/observation aid for authorized analysis of hostile targets — it is off by
-default per-op and is not a general evasion product.
+> Access control and sensitive-data handling for the workbench.
 
 ## Trust boundaries
 

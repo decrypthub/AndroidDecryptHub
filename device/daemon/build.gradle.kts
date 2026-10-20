@@ -12,7 +12,7 @@ android {
         minSdk = 26
         targetSdk = 34
         versionCode = 9
-        versionName = "0.3.14"
+        versionName = "0.3.15"
         buildConfigField(
             "String",
             "MANAGER_CERT_SHA256",

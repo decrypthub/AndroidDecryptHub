@@ -26,8 +26,9 @@
 // attempt (atomic), so the invariant
 //   g_cap_seq == (records ever drained) + (records still in ring) + g_cap_dropped
 // always holds, and adhd surfaces dropped>0 as complete:false.
-#define CAP_BYTES 2048
-#define CAP_RING  1024          // ~2 MiB; bounded agent memory (architecture red line)
+#define CAP_BYTES 16384
+#define CAP_RING  128           // 128 * 16 KiB = 2 MiB; one record fits a TLS plaintext write.
+                                // 2048 cut HTTP/2 header blocks before the trailing signature headers.
 // Symmetric key/IV ride along with the plaintext record they belong to. The key exists only at
 // EVP_CipherInit_ex; the payload exists only at EVP_CipherUpdate. The two are joined by
 // key_store()/key_lookup() below — without that a native AES capture carries the plaintext and no
@@ -38,6 +39,7 @@
 #define CAP_IV  32
 struct CapRec {
     char func[24]; int inl; int n; int tid; long long ts_ns;
+    unsigned long long conn;   // SSL* for SSL_read/SSL_write; 0 for every other capture
     int nkey; int niv; unsigned char key[CAP_KEY]; unsigned char iv[CAP_IV];
     unsigned char data[CAP_BYTES];
 };
@@ -54,7 +56,8 @@ static unsigned long long g_cap_dropped = 0;   // total dropped (ring full or lo
 static long long g_cap_first_drop_ns = 0, g_cap_last_drop_ns = 0;   // best-effort diagnostic ts
 static pthread_mutex_t g_cap_lock = PTHREAD_MUTEX_INITIALIZER;
 static void capture_keyed(const char *func, const unsigned char *in, int inl,
-                          const unsigned char *key, int nkey, const unsigned char *iv, int niv) {
+                          const unsigned char *key, int nkey, const unsigned char *iv, int niv,
+                          unsigned long long conn) {
     if (inl <= 0 || !in) return;
     // Runs on the target's own crypto/TLS thread — must NEVER block or sleep here (any
     // injected latency is an ANR risk and a timing-based anti-debug surface). Count every
@@ -72,7 +75,7 @@ static void capture_keyed(const char *func, const unsigned char *in, int inl,
         struct CapRec *r = &g_ring[g_ring_head];
         strncpy(r->func, func, sizeof(r->func) - 1); r->func[sizeof(r->func)-1]=0;
         r->inl = inl; r->n = inl < CAP_BYTES ? inl : CAP_BYTES;
-        r->tid = (int)gettid(); r->ts_ns = ts;
+        r->tid = (int)gettid(); r->ts_ns = ts; r->conn = conn;
         r->nkey = 0; r->niv = 0;
         if (key && nkey > 0) { r->nkey = nkey < CAP_KEY ? nkey : CAP_KEY; memcpy(r->key, key, r->nkey); }
         if (iv && niv > 0)   { r->niv  = niv  < CAP_IV  ? niv  : CAP_IV;  memcpy(r->iv,  iv,  r->niv); }
@@ -89,7 +92,13 @@ static void capture_keyed(const char *func, const unsigned char *in, int inl,
 
 // Keyless form — every pre-existing caller (digest/TLS/file/sys wrappers, push_text) keeps using it.
 static void capture(const char *func, const unsigned char *in, int inl) {
-    capture_keyed(func, in, inl, NULL, 0, NULL, 0);
+    capture_keyed(func, in, inl, NULL, 0, NULL, 0, 0);
+}
+// TLS records carry the SSL* so the host can concatenate one connection's plaintext.
+// The pointer is the same value Conscrypt passes into SSL_read / SSL_write (socket and
+// SSLEngine direct paths both end there). It is not a stable id across process restart.
+static void capture_conn(const char *func, const unsigned char *in, int inl, const void *ssl) {
+    capture_keyed(func, in, inl, NULL, 0, NULL, 0, (unsigned long long)(uintptr_t)ssl);
 }
 
 // Empty the ring (used by the one-shot probes in place of the old `g_ncaps = 0`). Discarded
@@ -127,6 +136,8 @@ static size_t emit_caprec(char *out, size_t len, size_t cap, const struct CapRec
         for (int b = 0; b < r->niv && len + 3 < cap; b++) len += snprintf(out + len, cap > len ? cap - len : 0, "%02x", r->iv[b]);
         len += snprintf(out + len, cap > len ? cap - len : 0, "\"");
     }
+    if (r->conn)
+        len += snprintf(out + len, cap > len ? cap - len : 0, ",\"conn\":\"0x%llx\"", r->conn);
     len += snprintf(out + len, cap > len ? cap - len : 0, "}");
     return len;
 }
@@ -201,7 +212,7 @@ static EVP_CipherUpdate_t g_evp_cipher_orig = NULL;
 // The key was seen at init, the payload is here: emit them on ONE record.
 static int my_EVP_CipherUpdate(void *ctx, unsigned char *out, int *outl, const unsigned char *in, int inl) {
     struct KeyBlob blob;
-    if (key_lookup(ctx, &blob)) capture_keyed("EVP_CipherUpdate", in, inl, blob.key, blob.nkey, blob.iv, blob.niv);
+    if (key_lookup(ctx, &blob)) capture_keyed("EVP_CipherUpdate", in, inl, blob.key, blob.nkey, blob.iv, blob.niv, 0);
     else capture("EVP_CipherUpdate", in, inl);
     return g_evp_cipher_orig(ctx, out, outl, in, inl);
 }
@@ -438,12 +449,12 @@ static void got_probe(int fd, const char *id, const char *opname, const char *na
 typedef int (*SSL_rw_t)(void *, void *, int);
 static SSL_rw_t g_orig_ssl_write = NULL, g_orig_ssl_read = NULL;
 static int my_SSL_write(void *ssl, void *buf, int num) {
-    if (num > 0) capture("SSL_write", (const unsigned char *)buf, num);   // outgoing plaintext
+    if (num > 0 && buf) capture_conn("SSL_write", (const unsigned char *)buf, num, ssl);
     return g_orig_ssl_write(ssl, buf, num);
 }
 static int my_SSL_read(void *ssl, void *buf, int num) {
     int ret = g_orig_ssl_read(ssl, buf, num);
-    if (ret > 0) capture("SSL_read", (const unsigned char *)buf, ret);    // incoming plaintext
+    if (ret > 0 && buf) capture_conn("SSL_read", (const unsigned char *)buf, ret, ssl);
     return ret;
 }
 
@@ -832,8 +843,26 @@ void adh_cmd_capture_start(int fd, const char *id, const char *cryptoModule, con
     int rd = (dig && on_dig)   ? adh_got_replace(g_crypto_mod, dig, (void *)my_EVP_DigestUpdate) : -1;
     int rh = (hm  && on_mac)   ? adh_got_replace(g_crypto_mod, hm,  (void *)my_HMAC_Update) : -1;
     int rs = (dsu && on_dsign) ? adh_got_replace(g_crypto_mod, dsu, (void *)my_EVP_DigestSignUpdate) : -1;
-    int rw = (ow  && on_tls)   ? adh_got_replace(g_crypto_mod, ow,  (void *)my_SSL_write) : -1;
-    int rr = (orr && on_tls)   ? adh_got_replace(g_crypto_mod, orr, (void *)my_SSL_read) : -1;
+    // A named module often imports SSL_write from its own BoringSSL, not from system
+    // libssl.so. Value-match only sees the system address, so the slot looks missing.
+    // Name-match and call the pointer that was already in that slot.
+    int rw = -1, rr = -1;
+    if (on_tls && g_crypto_mod[0]) {
+        void *old_w = NULL, *old_r = NULL;
+        int nw = adh_got_replace_by_name_ex(g_crypto_mod, "SSL_write", (void *)my_SSL_write, NULL, &old_w, NULL, 0);
+        int nr = adh_got_replace_by_name_ex(g_crypto_mod, "SSL_read", (void *)my_SSL_read, NULL, &old_r, NULL, 0);
+        int w_ok = nw == 1 && old_w && old_w != (void *)my_SSL_write;
+        int r_ok = nr == 1 && old_r && old_r != (void *)my_SSL_read;
+        if (!w_ok && nw > 0) adh_got_replace(g_crypto_mod, (void *)my_SSL_write, old_w ? old_w : ow);
+        if (!r_ok && nr > 0) adh_got_replace(g_crypto_mod, (void *)my_SSL_read, old_r ? old_r : orr);
+        if (w_ok) { g_orig_ssl_write = (SSL_rw_t)old_w; rw = nw; }
+        else if (ow) rw = adh_got_replace(g_crypto_mod, ow, (void *)my_SSL_write);
+        if (r_ok) { g_orig_ssl_read = (SSL_rw_t)old_r; rr = nr; }
+        else if (orr) rr = adh_got_replace(g_crypto_mod, orr, (void *)my_SSL_read);
+    } else {
+        rw = (ow && on_tls) ? adh_got_replace(g_crypto_mod, ow, (void *)my_SSL_write) : -1;
+        rr = (orr && on_tls) ? adh_got_replace(g_crypto_mod, orr, (void *)my_SSL_read) : -1;
+    }
     // Name-based, like the one-shot APIs below: a Cipher.init()/free() the app has not reached yet
     // leaves the PLT slot unbound, so value-match would silently report 0 for a genuinely imported
     // symbol.
@@ -1000,7 +1029,14 @@ void adh_cmd_capture_drain(int fd, const char *id) {
     pthread_mutex_lock(&g_cap_lock);
     int ncaps = 0;
     while (g_ring_count > 0 && ncaps < DRAIN_BATCH) {
-        if (len + 4200 > cap) { size_t nc = cap * 2; char *no = realloc(out, nc); if (!no) break; out = no; cap = nc; }
+        // One record is up to CAP_BYTES of hex (two chars each) plus the JSON wrapper.
+        // Growing by a flat 4200 truncated the second TLS record in a batch, which then
+        // looked like a short body and broke HTTP reassembly on the host.
+        if (len + (size_t)CAP_BYTES * 2 + 1024 > cap) {
+            size_t nc = cap * 2;
+            while (len + (size_t)CAP_BYTES * 2 + 1024 > nc) nc *= 2;
+            char *no = realloc(out, nc); if (!no) break; out = no; cap = nc;
+        }
         struct CapRec *r = &g_ring[g_ring_tail];
         len = emit_caprec(out, len, cap, r, ncaps == 0);
         g_ring_tail = (g_ring_tail + 1) % CAP_RING;

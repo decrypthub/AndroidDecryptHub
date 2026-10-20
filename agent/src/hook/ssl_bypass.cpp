@@ -15,6 +15,7 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 
 static int g_enabled = 1;
+static int g_started = 0;
 static int g_finished = 0;
 
 struct Scan {
@@ -167,6 +168,7 @@ static int install_overloads(JNIEnv *env, jclass cls, const Scan &scan, int *ins
 }
 
 static int install_all(JNIEnv *env) {
+    adh_javahook_install_lock();
     int installed = 0;
     std::string missing;
     const char *failed_class = nullptr;
@@ -187,13 +189,16 @@ static int install_all(JNIEnv *env) {
         if (matched == 0) LOGI("ssl bypass no overload %s#%s", scan.cls, scan.method);
     }
     LOGI("ssl bypass on %d miss:%s", installed, missing.c_str());
+    adh_javahook_install_unlock();
     return installed;
 }
 
 static void *worker(void *) {
-    // LSPlant is not safe from two threads. Algorithm hooks run first; this installer
-    // starts only after that one has returned.
-    for (int wait = 0; wait < 120 && !adh_java_crypto_finished(); wait++) usleep(100 * 1000);
+    // Algorithm hooks, when a session asked for them, run first. Waiting when nobody
+    // asked just delays this installer by the full timeout.
+    if (adh_java_crypto_started()) {
+        for (int wait = 0; wait < 120 && !adh_java_crypto_finished(); wait++) usleep(100 * 1000);
+    }
     if (!g_enabled) {
         LOGI("ssl bypass off");
         __atomic_store_n(&g_finished, 1, __ATOMIC_RELEASE);
@@ -226,7 +231,11 @@ extern "C" void adh_ssl_bypass_set_enabled(int on) {
 }
 
 extern "C" void adh_ssl_bypass_arm(void) {
+    if (__atomic_exchange_n(&g_started, 1, __ATOMIC_ACQ_REL)) return;
     pthread_t thread;
     if (pthread_create(&thread, nullptr, worker, nullptr) == 0) pthread_detach(thread);
-    else LOGI("ssl bypass thread failed");
+    else {
+        __atomic_store_n(&g_started, 0, __ATOMIC_RELEASE);
+        LOGI("ssl bypass thread failed");
+    }
 }

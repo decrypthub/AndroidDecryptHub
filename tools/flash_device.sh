@@ -47,7 +47,7 @@ resolve_serial() {
   if [ -n "${ANDROID_SERIAL:-}" ]; then echo "$ANDROID_SERIAL"; return 0; fi
   if [ -n "${ADH_SERIAL:-}" ]; then echo "$ADH_SERIAL"; return 0; fi
   local list
-  list="$("$ADB" devices | awk 'NR>1 && $2=="device" { print $1 }')"
+  list="$("$ADB" devices | tr -d '\r' | awk 'NR>1 && $2=="device" { print $1 }')"
   local n
   n="$(printf '%s\n' "$list" | awk 'NF{c++} END{print c+0}')"
   if [ "$n" -eq 0 ]; then
