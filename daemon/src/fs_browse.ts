@@ -1,9 +1,9 @@
-// Device filesystem browsing for MCP (list_dir / read_file).
+// Device filesystem browsing through the target process (list_dir / read_file).
 //
-// The REST surface and the web FS browser could already walk the device filesystem; MCP could not,
-// which meant an AI client had to ask for a base64 blob through another tool or give up. Both
-// entry points share this module so the two surfaces cannot drift (the op-level audit flags any
-// agent op that only one surface can reach).
+// The web file panel does not use this. It reads the app sandbox by package via sandbox_fs.ts,
+// so the directory is visible when the process is gone. This module is the in-process view
+// shared by MCP (fs_list / fs_read) and the session-only REST routes, including the device
+// checks that read /proc/self. One implementation, so the two agent surfaces cannot drift.
 //
 // Reading a target file is an analysis capability, not a convenience: shared_prefs, keystores,
 // certificates, config files and extraction scripts all live here. The agent caps a read at 1 MB

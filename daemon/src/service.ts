@@ -1,24 +1,31 @@
 // service.ts — ADH Daemon service layer: agent-command transport + dump engine + capture ops.
 // Imported by mcp.ts (MCP handlers) and index.ts (REST routes + agent TCP + boot).
-// Imports ONLY from state.ts (+ dex.ts pure layer + dex_index.ts for artifact retention +
-// node builtins) — no circular refs.
+// Imports ONLY from state.ts (+ dex.ts / so_select.ts pure layers + dex_index.ts for artifact
+// retention + node builtins) — no circular refs.
 import { readFile } from 'node:fs/promises';
-import { writeFileSync, existsSync } from 'node:fs';
+import { writeFileSync, existsSync, readFileSync, mkdirSync, copyFileSync, readdirSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import {
-  frameJson, agentSockets, pending, nextCmdId, sessions, dumps, log,
-  captureTimers, captureModules, settings, recentJavaIn,
+  frameJson, agentSockets, pending, nextCmdId, sessions, dumps, log, rememberDump,
+  captureTimers, captureModules, settings, recentJavaIn, captures,
   pushCapture, broadcast, hexToPreview, previewForCapture, classify, categoryOf, capStats, CAPTURES,
-  pruneArtifacts,
+  pruneArtifacts, DATA_DIR,
 } from './state.ts';
+import { shouldAutoArmPackage, scopedApps } from './scope_list.ts';
 import type { AgentSession, DumpMeta, MapsRegion, Capture } from './state.ts';
 // dex_index.ts imports state.ts, not this file, so this edge cannot form a cycle; it is here so
 // artifact retention can drop the index row of a dex it deletes.
 import { deleteDexDocument, ensureDexIndex } from './dex_index.ts';
-import { classifyDexArtifact } from './dex.ts';
+import { cryptoView, javaHook } from './crypto_view.ts';
+import { classifyDexArtifact, parseDex } from './dex.ts';
+import { appOwnedSoModules } from './so_select.ts';
+import { contiguousReadable, packageSoDirs, preferMainProcess, processFolderLabel } from './dump_inventory.ts';
+import { coldStartPackage, waitForFreshSessions } from './app_launch.ts';
+import { PACKAGE_FILE_READ_CAP, pullPackageFile } from './sandbox_fs.ts';
+import { buildStoredZip } from './zip_store.ts';
 
 // ---- agent command transport ---------------------------------------------
 // Issue a command to an agent and await its cmdResult (10s default timeout).
@@ -132,24 +139,29 @@ export async function reconstructSo(sid: string, baseHex: string): Promise<Buffe
 
   // pass 1: image size = max(p_vaddr + p_memsz) over PT_LOAD
   let imgSize = 0n;
-  const loads: { vaddr: bigint; memsz: bigint }[] = [];
+  const loads: { vaddr: bigint; filesz: bigint; memsz: bigint }[] = [];
   for (let i = 0; i < phnum; i++) {
     const p = phBuf.subarray(i * phentsize);
     if (p.readUInt32LE(0) !== 1) continue;              // PT_LOAD
-    const vaddr = p.readBigUInt64LE(16), memsz = p.readBigUInt64LE(40);
-    loads.push({ vaddr, memsz });
+    const vaddr = p.readBigUInt64LE(16);
+    const filesz = p.readBigUInt64LE(32);
+    const memsz = p.readBigUInt64LE(40);
+    if (filesz > memsz) throw new Error(`PT_LOAD at +0x${vaddr.toString(16)} filesz exceeds memsz`);
+    loads.push({ vaddr, filesz, memsz });
     if (vaddr + memsz > imgSize) imgSize = vaddr + memsz;
   }
   if (imgSize === 0n || imgSize > 512n * 1024n * 1024n) throw new Error('implausible image size');
   const image = Buffer.alloc(Number(imgSize));
 
-  // pass 2: copy each PT_LOAD's memory to file offset == vaddr. A segment that does not arrive
-  // in full is an error: Buffer.alloc already zero-filled the image, so a short read would look
-  // like a legitimate zero region and the "reconstructed" .so would be quietly wrong.
-  for (const { vaddr, memsz } of loads) {
-    const seg = await readMemEx(sid, base + vaddr, Number(memsz));
+  // pass 2: copy each PT_LOAD's file bytes to file offset == vaddr. p_memsz past p_filesz is BSS
+  // and stays the zeros Buffer.alloc already wrote. Reading memsz used to fail the whole module:
+  // the mapping ends on a page boundary, so the BSS tail comes back as a short read. A short read
+  // of the file bytes themselves is still an error — those zeros would look like real code.
+  for (const { vaddr, filesz } of loads) {
+    if (filesz === 0n) continue;
+    const seg = await readMemEx(sid, base + vaddr, Number(filesz));
     if (!seg.complete) {
-      throw new Error(`PT_LOAD at +0x${vaddr.toString(16)} short read: ${seg.read}/${seg.requested} bytes`
+      throw new Error(`PT_LOAD file bytes at +0x${vaddr.toString(16)} short read: ${seg.read}/${seg.requested} bytes`
         + (seg.error ? ` (${seg.error})` : ''));
     }
     seg.buf.copy(image, Number(vaddr));
@@ -169,6 +181,220 @@ export async function reconstructSo(sid: string, baseHex: string): Promise<Buffe
     image.writeBigUInt64LE(memsz, off + 32);  // p_filesz = p_memsz
   }
   return image;
+}
+
+const SO_REASSEMBLY_NOTE = 'reassembled from memory: offsets == vaddrs, section headers dropped, not byte-exact';
+
+const ELF_MAGIC = 0x464c457f;
+
+function sessionPackage(sid: string): string {
+  const pkg = sessions.get(sid)?.package ?? '';
+  if (!pkg || pkg === '?') throw new Error('session has no package');
+  return pkg;
+}
+
+async function loadMaps(sid: string): Promise<MapsRegion[]> {
+  const maps = await sendCmd(sid, 'maps', {}, 30_000);
+  if (!maps.ok) throw new Error(String(maps.error ?? 'maps failed'));
+  return Array.isArray(maps.regions) ? maps.regions : [];
+}
+
+// Four bytes at the load base. A failure leaves the row unknown instead of failing the inventory.
+async function elfAt(sid: string, base: string): Promise<boolean | null> {
+  try {
+    const mem = await readMemEx(sid, BigInt('0x' + base.replace(/^0x/i, '')), 4);
+    if (mem.buf.length < 4) return false;
+    return mem.buf.readUInt32LE(0) === ELF_MAGIC;
+  } catch {
+    return null;
+  }
+}
+
+export async function inventoryUnpack(sid: string) {
+  const pkg = sessionPackage(sid);
+  const regions = await loadMaps(sid);
+  const art = await sendCmd(sid, 'art_dexfiles', {}, 30_000);
+  const listed = Array.isArray(art.dexfiles) ? art.dexfiles : [];
+  const dexes = listed.map((dex: any) => {
+    const begin = String(dex.begin ?? '');
+    const declared = Number(dex.size ?? 0);
+    const readable = begin && declared > 0 ? contiguousReadable(regions, begin, declared) : 0;
+    const saved = [...dumps.values()].find((item) =>
+      item.package === pkg && (item.kind === 'dex' || item.kind === 'cdex') && item.complete === true
+      && String(item.addr ?? '').replace(/^0x/i, '') === begin.replace(/^0x/i, ''));
+    return {
+      begin, declared, readable,
+      format: dex.format ?? 'dex',
+      status: readable === declared && declared > 0 ? 'ready' : 'short',
+      ...(saved ? { sha256: saved.sha256, savedSize: saved.size } : {}),
+    };
+  });
+  const mods = appOwnedSoModules(modulesFromMaps(regions), pkg);
+  const loaded = [];
+  for (const mod of mods) {
+    const saved = [...dumps.values()].find((item) =>
+      item.package === pkg && item.kind === 'so' && item.complete === true && item.tag === mod.name);
+    loaded.push({
+      name: mod.name, path: mod.path, base: mod.base, size: mod.size,
+      elf: await elfAt(sid, mod.base),
+      ...(saved ? { sha256: saved.sha256, savedSize: saved.size } : {}),
+    });
+  }
+  const names = new Set(mods.map((mod) => mod.name));
+  const packaged = [];
+  const seen = new Set<string>();
+  for (const dir of packageSoDirs(mods.map((mod) => mod.path), pkg)) {
+    let entries: any[] = [];
+    try {
+      const listed = await sendCmd(sid, 'list_dir', { path: dir }, 15_000);
+      if (listed?.ok && Array.isArray(listed.entries)) entries = listed.entries;
+    } catch { /* a missing files dir is normal */ }
+    for (const entry of entries) {
+      if (entry?.type !== 'f' || !String(entry.name ?? '').endsWith('.so')) continue;
+      const path = `${dir}/${entry.name}`;
+      if (seen.has(path)) continue;
+      seen.add(path);
+      packaged.push({
+        name: String(entry.name), path, size: Number(entry.size ?? 0),
+        loaded: names.has(String(entry.name)),
+      });
+    }
+  }
+  packaged.sort((a, b) => a.name.localeCompare(b.name));
+  const session = sessions.get(sid);
+  return {
+    ok: true, session: sid, package: pkg, pid: session?.pid ?? 0, process: session?.process ?? pkg,
+    dexes, loaded, packaged,
+  };
+}
+
+// Read one declared dex. A short mapping is not stored. A standard dex is stored only after its
+// class table walks; a compact dex has no walker here, so a full read is stored and named cdex.
+export async function unpackOneDex(
+  sid: string, beginHex: string, size: number,
+  opts?: { tag?: string; note?: string },
+) {
+  const pkg = sessionPackage(sid);
+  const begin = beginHex.replace(/^0x/i, '');
+  if (!begin || !Number.isSafeInteger(size) || size <= 0 || size > (256 << 20)) {
+    return { begin, size, saved: false, error: 'invalid address/size' };
+  }
+  const mem = await readMemEx(sid, BigInt('0x' + begin), size);
+  if (!mem.complete) {
+    return { begin, size, readable: mem.read, saved: false, status: 'short' };
+  }
+  const magic = mem.buf.subarray(0, 4).toString('latin1');
+  let carrier: boolean | undefined;
+  let classes: number | undefined;
+  let methods: number | undefined;
+  if (magic === 'dex\n') {
+    try { parseDex(mem.buf); }
+    catch (e) { return { begin, size, readable: mem.read, saved: false, error: (e as Error).message }; }
+  } else if (magic !== 'cdex') {
+    return { begin, size, readable: mem.read, saved: false, error: 'not a dex' };
+  }
+  const { meta, dedup } = await persistArtifact(mem.buf, {
+    source: 'region', addr: begin, tag: opts?.tag || 'dex-all', sessionId: sid, package: pkg,
+  }, { requestedSize: size, complete: true, note: opts?.note });
+  if (magic === 'dex\n') {
+    try {
+      const doc = ensureDexIndex(mem.buf);
+      const shape = classifyDexArtifact(mem.buf.length, doc.counts?.classes ?? 0, doc.counts?.methods ?? 0);
+      carrier = shape.carrier; classes = shape.classes; methods = shape.methods;
+    } catch { /* the file is saved; the row simply has no class counts */ }
+  }
+  return {
+    begin, size, readable: mem.read, saved: true, dedup, sha256: meta.sha256, bytes: meta.size,
+    path: meta.path, format: meta.kind, ...(carrier === undefined ? {} : { carrier, classes, methods }),
+  };
+}
+
+/** Pull an on-disk package .so (APK lib/ or private files/) onto the host artifact store. */
+export async function pullPackageSo(pkg: string, path: string, name?: string) {
+  const label = (name || path.split('/').pop() || 'lib.so').trim() || 'lib.so';
+  const r = await pullPackageFile(pkg, path);
+  if (r.truncated || !r.b64) {
+    return {
+      saved: false, name: label, path,
+      error: `文件过大或未读到（上限 ${Math.floor(PACKAGE_FILE_READ_CAP / 1048576)} MiB，实际 ${r.fsize} B）`,
+      fsize: r.fsize,
+    };
+  }
+  const buf = Buffer.from(r.b64, 'base64');
+  const { meta, dedup } = await persistArtifact(buf, {
+    source: 'package-so', addr: '', tag: label, sessionId: '', package: pkg,
+  }, { note: path, requestedSize: r.fsize, complete: !r.truncated });
+  return {
+    saved: true, dedup, name: label, path,
+    sha256: meta.sha256, size: meta.size, kind: meta.kind, fsize: r.fsize,
+  };
+}
+
+export async function dumpOneAppSo(sid: string, base: string, name: string) {
+  const pkg = sessionPackage(sid);
+  try {
+    const buf = await reconstructSo(sid, base.replace(/^0x/i, ''));
+    const sha = createHash('sha256').update(buf).digest('hex');
+    const existing = dumps.get(sha);
+    if (existing) return { name, base, saved: true, dedup: true, sha256: sha, size: buf.length, elf: true };
+    const path = join(CAPTURES, `${sha.slice(0, 16)}.so`);
+    if (!existsSync(path)) await writeFile(path, buf);
+    const meta: DumpMeta = {
+      sha256: sha, size: buf.length, requestedSize: buf.length, complete: true,
+      source: 'so-reassembly', note: SO_REASSEMBLY_NOTE,
+      addr: base.replace(/^0x/i, ''), tag: name, sessionId: sid, package: pkg,
+      capturedAt: Date.now(), path, kind: 'so',
+    };
+    rememberDump(meta);
+    broadcast('dump.new', meta);
+    pruneArtifactsAndIndex(sha);
+    return { name, base, saved: true, dedup: false, sha256: sha, size: buf.length, elf: true };
+  } catch (e) {
+    const message = (e as Error).message;
+    return { name, base, saved: false, elf: message.includes('no ELF header') ? false : undefined, error: message };
+  }
+}
+
+// Dump the selected app's own loaded .so files. System libraries stay out (see appOwnedSoModules).
+// A segment that cannot be read in full is a failure for that file: nothing truncated is saved.
+export async function dumpAppSo(sid: string) {
+  const session = sessions.get(sid);
+  const pkg = session?.package ?? '';
+  if (!pkg || pkg === '?') throw new Error('session has no package');
+  const maps = await sendCmd(sid, 'maps', {}, 30_000);
+  if (!maps.ok) throw new Error(String(maps.error ?? 'maps failed'));
+  const mods = appOwnedSoModules(modulesFromMaps(maps.regions ?? []), pkg);
+  const modules: { name: string; path: string; sha256?: string; size?: number; dedup?: boolean; error?: string }[] = [];
+  let dumped = 0, deduped = 0, failed = 0;
+  for (const mod of mods) {
+    try {
+      const buf = await reconstructSo(sid, mod.base);
+      const sha = createHash('sha256').update(buf).digest('hex');
+      const existing = dumps.get(sha);
+      if (existing) {
+        dumped++; deduped++;
+        modules.push({ name: mod.name, path: mod.path, sha256: sha, size: buf.length, dedup: true });
+        continue;
+      }
+      const path = join(CAPTURES, `${sha.slice(0, 16)}.so`);
+      if (!existsSync(path)) await writeFile(path, buf);
+      const meta: DumpMeta = {
+        sha256: sha, size: buf.length, requestedSize: buf.length, complete: true,
+        source: 'so-reassembly', note: SO_REASSEMBLY_NOTE,
+        addr: mod.base, tag: mod.name, sessionId: sid, package: pkg, capturedAt: Date.now(), path, kind: 'so',
+      };
+      rememberDump(meta);
+      broadcast('dump.new', meta);
+      pruneArtifactsAndIndex(sha);
+      dumped++;
+      modules.push({ name: mod.name, path: mod.path, sha256: sha, size: buf.length, dedup: false });
+    } catch (e) {
+      failed++;
+      modules.push({ name: mod.name, path: mod.path, error: (e as Error).message });
+    }
+  }
+  log(`[dump] app so ${sid} ${pkg}: ${dumped}/${mods.length} (dedup ${deduped}, failed ${failed})`);
+  return { ok: true, session: sid, package: pkg, count: mods.length, dumped, deduped, failed, modules };
 }
 
 // ---- dex header repair ----------------------------------------------------
@@ -242,7 +468,7 @@ export async function persistArtifact(
     ...fields, capturedAt: Date.now(), path, kind,
     ...(opts.note ? { note: opts.note } : {}),
   };
-  dumps.set(sha, meta);
+  rememberDump(meta);
   broadcast('dump.new', meta);
   pruneArtifactsAndIndex(sha);     // a new file landed: enforce the on-disk budget now
   return { meta, dedup: false };
@@ -289,7 +515,7 @@ export async function dumpRegion(sid: string, addrHex: string, size: number, tag
     sha256: sha, size: buf.length, requestedSize: size, complete, source: 'region', addr: addrHex, tag,
     sessionId: sid, package: s?.package ?? '?', capturedAt: Date.now(), path, kind,
   };
-  dumps.set(sha, meta);
+  rememberDump(meta);
   broadcast('dump.new', meta);
   pruneArtifactsAndIndex(sha);     // a new file landed: enforce the on-disk budget now
   return { meta, dedup: false };
@@ -309,15 +535,29 @@ function recordCaptureHooks(sid: string, r: any) {
   s.captureHooks = r;
 }
 
-// Apply the capture.enabled toggle to already-connected sessions (start/stop the hooks).
+// Apply the capture.enabled toggle to already-connected sessions.
+// enabled=false → force-stop hooks everywhere. enabled=true → re-arm only packages that
+// should auto-arm (scope allowlist / sandbox), using setCapture for a clean drain→stop→start.
 export async function applyCaptureEnabled() {
+  if (!settings.capture.enabled) {
+    for (const s of sessions.values()) {
+      if (!s.online) continue;
+      try { await setCapture(s.sessionId, false); }
+      catch (e) { log(`[settings] capture_stop 会话 ${s.sessionId} 失败:`, (e as Error).message); }
+    }
+    return;
+  }
+  try { await scopedApps(); } catch { /* cache may still help */ }
   for (const s of sessions.values()) {
     if (!s.online) continue;
-    const cmd = settings.capture.enabled ? 'capture_start' : 'capture_stop';
-    const args = settings.capture.enabled ? captureModules() : {};
-    // Fail loud: a live session that rejects the toggle means the panel and the target disagree.
-    try { recordCaptureHooks(s.sessionId, await sendCmd(s.sessionId, cmd, args, 8_000)); }
-    catch (e) { log(`[settings] ${cmd} 会话 ${s.sessionId} 失败:`, (e as Error).message); }
+    if (!shouldAutoArmPackage(s.package)) continue;
+    // Skip just-unpacked / in-unpack packages — flipping the global switch must not crash SecNeo.
+    if (captureArmBlockedReason(s.package)) {
+      log(`[settings] capture_start skip ${s.sessionId} (unpack protect ${s.package})`);
+      continue;
+    }
+    try { await setCapture(s.sessionId, true); }
+    catch (e) { log(`[settings] capture_start 会话 ${s.sessionId} 失败:`, (e as Error).message); }
   }
 }
 
@@ -332,7 +572,7 @@ const NESTED_COUNTERS: [string, string[]][] = [
   ['aead', ['seal', 'open']],
   ['digestSignVerify', ['signInit', 'verifyInit', 'signFinal', 'verifyUpdate', 'verifyFinal']],
   ['file', ['open', 'openat', 'read', 'write', 'syscall', 'readChk', 'writeChk']],
-  ['sys', ['ptrace', 'access', 'prop']],
+  ['sys', ['ptrace', 'access', 'faccessat', 'prop', 'propread']],
 ];
 
 /** Flatten an install reply into {name: count} for exactly the symbol sets that were requested. */
@@ -354,7 +594,15 @@ export function captureInstallCounters(reply: any): { name: string; value: numbe
     if (!wanted(group)) continue;
     const g = reply[group];
     if (!g || typeof g !== 'object') continue;
-    for (const k of keys) if (k in g) out.push({ name: `${group}.${k}`, value: Number(g[k]) || 0 });
+    for (const k of keys) {
+      if (!(k in g)) continue;
+      const value = Number(g[k]);
+      if (!Number.isFinite(value)) continue;
+      // System hooks use -1 when libc does not export the symbol (nothing to install).
+      // Other groups keep a negative in the list: it is "asked for, not installed".
+      if (value < 0 && group === 'sys') continue;
+      out.push({ name: `${group}.${k}`, value });
+    }
   }
   return out;
 }
@@ -371,6 +619,8 @@ export interface CaptureToggle {
    *  session has no drain loop - then the stop throws away whatever was still in the ring). */
   drained?: number; drainedOk?: boolean; dropped?: number;
   drainLoop?: 'armed' | 'started' | 'none';
+  /** Set when arm was refused because one-click unpack is in progress or just finished. */
+  captureSuppressed?: boolean; captureProtected?: boolean; error?: string;
   reply: any;
 }
 
@@ -382,7 +632,11 @@ export interface CaptureToggle {
  * `off`: drain the ring FIRST (capture_stop resets it - stopping without draining destroys
  * whatever the target produced since the last tick), then stop.
  */
-export async function setCapture(sid: string, on: boolean, modules?: { cryptoModule?: string; fileModule?: string; sysModule?: string }): Promise<CaptureToggle> {
+export async function setCapture(
+  sid: string,
+  on: boolean,
+  modules?: { cryptoModule?: string; fileModule?: string; sysModule?: string; force?: boolean },
+): Promise<CaptureToggle> {
   const mods = { ...captureModules() };
   // Only keys the caller actually passed override the settings defaults (an explicit undefined
   // must not blank a module out - that would silently turn "hook this module" into "scan all").
@@ -391,31 +645,22 @@ export async function setCapture(sid: string, on: boolean, modules?: { cryptoMod
     if (typeof v === 'string' && v.length) mods[k] = v;
   }
   if (on) {
-    if (!captureTimers.has(sid)) startCaptureLoop(sid);   // no drain loop = nothing would stream
-    // RE-ARM FROM A CLEAN SLATE. adh_got_replace matches a GOT slot by VALUE, so an install that
-    // runs while our own wrapper already sits in the slot reports 0 for it - indistinguishable
-    // from "this symbol is not imported". Measured on the sandbox: a repeat capture_start said
-    // 14/27, a stop-then-start said 23/27, and the 4 remaining zeros are genuinely absent from
-    // libjavacore.so. So the verdict is only worth printing if the install started from the
-    // original pointers: drain (never lose what the ring holds), stop, then install.
-    const drained = await drainSession(sid);
-    try { await sendCmd(sid, 'capture_stop', {}, 8_000); } catch { /* not armed: nothing to restore */ }
-    const reply = await sendCmd(sid, 'capture_start', mods, 15_000);
-    recordCaptureHooks(sid, reply);
-    const counters = captureInstallCounters(reply);
-    const notInstalled = counters.filter((c) => c.value <= 0).map((c) => c.name);
-    const installed = counters.length - notInstalled.length;
-    const scannedAll = !String(mods.cryptoModule ?? '');
-    const ok = installed > 0 && (scannedAll ? notInstalled.length === 0 : true);
-    return {
-      ok, on: true, session: sid,
-      installed, attempted: counters.length, notInstalled,
-      partial: notInstalled.length > 0,
-      complete: ok && notInstalled.length === 0,
-      drainLoop: captureTimers.has(sid) ? 'armed' : 'started',
-      rearmed: true, drainedBeforeRearm: Number(drained.response?.count ?? 0) || 0,
-      reply,
-    };
+    const pkg = sessions.get(sid)?.package ?? '';
+    const blocked = modules?.force === true ? null : captureArmBlockedReason(pkg);
+    if (blocked) {
+      return {
+        ok: false, on: false, session: sid,
+        installed: 0, attempted: 0, notInstalled: [], partial: false,
+        complete: false, drainLoop: captureTimers.has(sid) ? 'armed' : 'none',
+        captureSuppressed: true, captureProtected: isCaptureArmProtected(pkg),
+        error: blocked, reply: { ok: false, error: blocked },
+      } as CaptureToggle;
+    }
+    if (modules?.force === true && pkg) clearCaptureArmProtect(pkg);
+    const verdict = await armCaptureHooks(sid, mods);
+    // Start the drain loop without a second arm (hello path arms itself after a short delay).
+    startCaptureLoop(sid, { skipArm: true });
+    return verdict;
   }
   const drained = await drainSession(sid);
   const reply = await sendCmd(sid, 'capture_stop', {}, 8_000);
@@ -432,10 +677,75 @@ export async function setCapture(sid: string, on: boolean, modules?: { cryptoMod
   };
 }
 
+/** Manager Hook policy `y=1` enables system detection. Absent / default → off. */
+export function policySystemOn(policy: string | undefined | null): boolean {
+  if (!policy || policy === 'default') return false;
+  const m = /(?:^|,)y=([01])(?:$|,)/.exec(policy);
+  return !!m && m[1] === '1';
+}
+
+/**
+ * Resolve sysModule for one arm: policy off → empty; policy on + empty config → detect_modules;
+ * policy on + configured → keep configured. Dynamic-import detect to avoid a load-time cycle.
+ */
+export async function resolveSysModuleForArm(
+  sid: string,
+  configured: string,
+): Promise<string> {
+  const s = sessions.get(sid);
+  if (!policySystemOn(s?.policy)) return '';
+  const named = (configured ?? '').trim();
+  if (named) return named;
+  const pkg = s?.package ?? '';
+  if (!pkg || pkg === '?') return '';
+  try {
+    const { planDetectModules } = await import('./detect.ts');
+    const plan = await planDetectModules(sid, pkg);
+    return String(plan.sysModule ?? '').trim();
+  } catch (e) {
+    log(`[capture] detect_modules for ${sid} failed:`, (e as Error).message);
+    return '';
+  }
+}
+
+/**
+ * Drain → stop → start so GOT install counters are honest. Does not start the drain loop
+ * (callers that need streaming must already have called startCaptureLoop / setCapture).
+ */
+async function armCaptureHooks(sid: string, mods: { cryptoModule: string; fileModule: string; sysModule: string }): Promise<CaptureToggle> {
+  // RE-ARM FROM A CLEAN SLATE. adh_got_replace matches a GOT slot by VALUE, so an install that
+  // runs while our own wrapper already sits in the slot reports 0 for it - indistinguishable
+  // from "this symbol is not imported". Measured on the sandbox: a repeat capture_start said
+  // 14/27, a stop-then-start said 23/27, and the 4 remaining zeros are genuinely absent from
+  // libjavacore.so. So the verdict is only worth printing if the install started from the
+  // original pointers: drain (never lose what the ring holds), stop, then install.
+  const drained = await drainSession(sid);
+  try { await sendCmd(sid, 'capture_stop', {}, 8_000); } catch { /* not armed: nothing to restore */ }
+  const sysModule = await resolveSysModuleForArm(sid, mods.sysModule);
+  const armedMods = { ...mods, sysModule };
+  const reply = await sendCmd(sid, 'capture_start', armedMods, 15_000);
+  recordCaptureHooks(sid, reply);
+  const counters = captureInstallCounters(reply);
+  const notInstalled = counters.filter((c) => c.value <= 0).map((c) => c.name);
+  const installed = counters.length - notInstalled.length;
+  const scannedAll = !String(armedMods.cryptoModule ?? '');
+  const ok = installed > 0 && (scannedAll ? notInstalled.length === 0 : true);
+  return {
+    ok, on: true, session: sid,
+    installed, attempted: counters.length, notInstalled,
+    partial: notInstalled.length > 0,
+    complete: ok && notInstalled.length === 0,
+    drainLoop: captureTimers.has(sid) ? 'armed' : 'started',
+    rearmed: true, drainedBeforeRearm: Number(drained.response?.count ?? 0) || 0,
+    reply,
+  };
+}
+
 // Install persistent hooks on connect, then poll capture_drain and stream each new record
 // into the store + over WS. Also auto-dump the app's DEX files so the panel can download
 // them. Mirrors the ios-decrypt-helper flow (hooks stay live, events fill the panel).
-let capSeq = 0;   // service-local — ++'d here; can't reassign an imported binding (ESM)
+// Seed from durable captures so ids stay unique across daemon restarts.
+let capSeq = captures.reduce((m, c) => Math.max(m, Number(c.id) || 0), 0);
 
 // The agent's capture_drain is POP semantics: whatever the response holds leaves the agent ring for
 // good. Only the code that puts it into the local store may therefore send it - a bare
@@ -459,28 +769,101 @@ export async function drainSession(sid: string): Promise<DrainOutcome> {
 
 export function forgetCaptureSession(sid: string) { captureDrainers.delete(sid); }
 
-export function startCaptureLoop(sid: string) {
-  setTimeout(async () => {
-    if (settings.capture.enabled) {
-      try { recordCaptureHooks(sid, await sendCmd(sid, 'capture_start', captureModules(), 15_000)); log(`capture_start ${sid}`); } catch (e) { log('capture_start failed', (e as Error).message); }
+const captureLoopPending = new Set<string>();
+
+/** Packages for which hello-time capture_start / autoDumpDex must not run (one-click unpack).
+ *  SecNeo targets (e.g. 学习通) suicide when GOT crypto hooks land on a fresh process —
+ *  measured 2026-10-20: HELLO → capture_stop/start → CLOSE within ~1.5s, before dump. */
+const unpackSuppressArm = new Set<string>();
+/** After unpack finishes, keep blocking *manual / settings* re-arm on the same live process
+ *  until the package hellos again (user restarted the app). Global toggle must not silently
+ *  re-arm a just-unpacked SecNeo target. */
+const unpackProtectArm = new Set<string>();
+export function suppressCaptureArmForUnpack(pkg: string) {
+  if (pkg && pkg !== '?') unpackSuppressArm.add(pkg);
+}
+export function resumeCaptureArmAfterUnpack(pkg: string) {
+  if (pkg) unpackSuppressArm.delete(pkg);
+}
+export function isCaptureArmSuppressed(pkg: string) {
+  return !!pkg && unpackSuppressArm.has(pkg);
+}
+export function protectCaptureArmAfterUnpack(pkg: string) {
+  if (pkg && pkg !== '?') unpackProtectArm.add(pkg);
+}
+/** Call on agent.hello so a fresh process can auto-arm again. */
+export function clearCaptureArmProtect(pkg: string) {
+  if (pkg) unpackProtectArm.delete(pkg);
+}
+export function isCaptureArmProtected(pkg: string) {
+  return !!pkg && unpackProtectArm.has(pkg);
+}
+export function listCaptureArmProtected(): string[] {
+  return [...unpackProtectArm];
+}
+const CAPTURE_ARM_BLOCKED = '本包脱壳后未装钩，请先重启 App（或 force:true）';
+function captureArmBlockedReason(pkg: string): string | null {
+  if (isCaptureArmSuppressed(pkg)) return '本包正在脱壳，暂不装钩';
+  if (isCaptureArmProtected(pkg)) return CAPTURE_ARM_BLOCKED;
+  return null;
+}
+
+export function startCaptureLoop(sid: string, opts?: { skipArm?: boolean }) {
+  if (captureTimers.has(sid)) return; // already streaming
+  if (!opts?.skipArm && captureLoopPending.has(sid)) return;
+  const pkgNow = sessions.get(sid)?.package ?? '';
+  // Unpack owns this process: do not arm hooks or auto-dump (unpack will dump itself).
+  if (!opts?.skipArm && isCaptureArmSuppressed(pkgNow)) {
+    log(`capture loop skip ${sid} (unpack in progress for ${pkgNow})`);
+    return;
+  }
+  const run = async () => {
+    captureLoopPending.delete(sid);
+    const pkg = sessions.get(sid)?.package ?? '';
+    if (isCaptureArmSuppressed(pkg)) {
+      log(`capture_start skip ${sid} (unpack in progress for ${pkg})`);
+      return;
     }
-    if (settings.capture.autoDumpDex) autoDumpDex(sid).catch((e) => log(`[capture] autoDumpDex ${sid} 失败:`, (e as Error).message));
+    // Refresh scope cache (best-effort) then auto-arm when capture is not force-stopped.
+    if (!opts?.skipArm && settings.capture.enabled) {
+      try { await scopedApps(); } catch { /* keep prior cache */ }
+      if (shouldAutoArmPackage(pkg)) {
+        try {
+          const verdict = await armCaptureHooks(sid, { ...captureModules() });
+          log(`capture_start ${sid} ok=${verdict.ok}`);
+        } catch (e) { log('capture_start failed', (e as Error).message); }
+      } else {
+        log(`capture_start skip ${sid} (package not in scope)`);
+      }
+    }
+    if (!opts?.skipArm && settings.capture.autoDumpDex) {
+      autoDumpDex(sid).catch((e) => log(`[capture] autoDumpDex ${sid} 失败:`, (e as Error).message));
+    }
     if (captureTimers.has(sid)) return;
     let busy = false;
     let drainErrLogged = false;   // fail-loud once per wedged-drain episode, not every 1.5s tick
     const processDrain = (r: any, now: number) => {
       const pkg = sessions.get(sid)?.package ?? '';
+      const announce = (entry: Capture) => {
+        const outl = entry.outHex ? entry.outHex.length / 2 : 0;
+        broadcast('capture.new', {
+          id: entry.id, sessionId: sid, package: pkg, source: entry.source, category: entry.category,
+          algo: entry.algo, op: entry.op, func: entry.func, preview: entry.preview, inl: entry.inl, outl,
+          hasKey: !!entry.keyHex, tid: entry.tid, ts: entry.ts,
+          ...(entry.category === 'crypto' ? { view: cryptoView(entry) } : {}),
+        });
+      };
       for (const c of (r.jcaptures ?? [])) {
         if (c.in) recentJavaIn.set(c.in, now);
+        const hasBody = Number(c.inl) > 0 || Number(c.outl) > 0 || (typeof c.out === 'string' && c.out.length > 0);
         const entry: Capture = {
-          id: ++capSeq, sessionId: sid, package: pkg, source: 'java', func: c.op, algo: c.algo, op: c.op,
+          id: ++capSeq, sessionId: sid, package: pkg, source: 'java', func: javaHook(String(c.op || ''), hasBody), algo: c.algo, op: c.op,
           category: 'crypto',
           inl: c.inl, tid: c.tid, tsNs: c.tsNs, ts: now,
           hex: c.in, preview: hexToPreview(c.in),
           keyHex: c.key || '', ivHex: c.iv || '', outHex: c.out || '',
         };
-        if (pushCapture(entry))
-          broadcast('capture.new', { id: entry.id, sessionId: sid, package: pkg, source: 'java', category: entry.category, algo: entry.algo, op: entry.op, preview: entry.preview, inl: entry.inl, ts: entry.ts });
+        if (pushCapture(entry)) announce(entry);
       }
       for (const [k, t] of recentJavaIn) if (now - t > 2000) recentJavaIn.delete(k);
       for (const c of (r.captures ?? [])) {
@@ -497,8 +880,7 @@ export function startCaptureLoop(sid: string) {
           ...(c.key ? { keyHex: c.key } : {}), ...(c.iv ? { ivHex: c.iv } : {}),
           ...(c.conn ? { conn: String(c.conn) } : {}),
         };
-        if (pushCapture(entry))
-          broadcast('capture.new', { id: entry.id, sessionId: sid, package: pkg, source: 'native', category, algo, op, preview: entry.preview, inl: entry.inl, ts: entry.ts });
+        if (pushCapture(entry)) announce(entry);
       }
     };
     // One drain implementation for both the polling loop and explicit callers: concurrent requests
@@ -562,7 +944,13 @@ export function startCaptureLoop(sid: string) {
       await runDrain().catch(() => null);   // the loop never propagates: it retries next tick
     }, 1500);
     captureTimers.set(sid, timer);
-  }, 1200);
+  };
+  if (opts?.skipArm) {
+    void run();
+    return;
+  }
+  captureLoopPending.add(sid);
+  setTimeout(() => { void run(); }, 1200);
 }
 
 // Enumerate the app's DEX files, dump each, and say what each one IS.
@@ -572,42 +960,47 @@ export function startCaptureLoop(sid: string) {
 // count alone makes that one look exactly like the real ones. Each entry is therefore classified
 // from its own class/method table and indexed in the same pass, so the dump is immediately
 // searchable and the carrier is named instead of having to be spotted by hand.
-export async function dumpAllDex(sid: string) {
+export async function dumpAllDex(sid: string, opts?: {
+  tag?: string;
+  notePrefix?: string;
+  onSaved?: (entry: Record<string, unknown>) => void | Promise<void>;
+}) {
   const r = await sendCmd(sid, 'art_dexfiles', {}, 30_000);
   const list = Array.isArray(r.dexfiles) ? r.dexfiles : [];
   if (!list.length) throw new Error('no loaded DexFile found (target may not have Java dex loaded yet)');
+  const regions = await loadMaps(sid);
   const dexes: any[] = [];
   let dumped = 0, deduped = 0, failed = 0, indexed = 0, indexReused = 0, carriers = 0, realBytes = 0;
   for (const d of list) {
     const begin = String(d.begin ?? '');
     const size = Number(d.size ?? 0);
+    const format = d.format ?? 'dex';
     if (!begin || !size || size > (256 << 20)) {
       failed++;
-      dexes.push({ begin, size, format: d.format ?? 'dex', error: 'invalid address/size' });
+      dexes.push({ begin, size, format, saved: false, error: 'invalid address/size' });
+      continue;
+    }
+    const readable = contiguousReadable(regions, begin, size);
+    if (readable !== size) {
+      failed++;
+      dexes.push({ begin, size, readable, format, saved: false, status: 'short' });
       continue;
     }
     try {
-      const { meta, dedup } = await dumpRegion(sid, begin.replace(/^0x/, ''), size, 'dex-all');
-      dumped++; if (dedup) deduped++;
-      const entry: any = { begin, size, format: d.format ?? 'dex', version: d.version ?? 0,
-        confidence: d.confidence ?? 0, sha256: meta.sha256, bytes: meta.size, dedup, path: meta.path };
-      // Classify + index from the stored bytes; a dex that will not parse is reported on its own
-      // entry rather than failing the run (the others are still worth having).
-      try {
-        const buf = await readFile(meta.path);
-        const doc = ensureDexIndex(buf);
-        indexed++; if (doc.cached) indexReused++;
-        const shape = classifyDexArtifact(buf.length, doc.counts?.classes ?? 0, doc.counts?.methods ?? 0);
-        Object.assign(entry, {
-          classes: shape.classes, methods: shape.methods, bytesPerClass: shape.bytesPerClass,
-          carrier: shape.carrier, shape: shape.reason,
-        });
-        if (shape.carrier) carriers++; else realBytes += meta.size;
-      } catch (e) { entry.classifyError = (e as Error).message; }
-      dexes.push(entry);
+      const entry = await unpackOneDex(sid, begin, size, {
+        tag: opts?.tag,
+        note: opts?.notePrefix,
+      });
+      if (!entry.saved) { failed++; dexes.push({ ...entry, format }); continue; }
+      dumped++; if (entry.dedup) deduped++;
+      if (entry.carrier) carriers++; else realBytes += Number(entry.bytes) || 0;
+      if (entry.classes !== undefined) indexed++;
+      const row = { ...entry, format, version: d.version ?? 0, confidence: d.confidence ?? 0 };
+      dexes.push(row);
+      if (opts?.onSaved) await opts.onSaved(row);
     } catch (e) {
       failed++;
-      dexes.push({ begin, size, format: d.format ?? 'dex', error: (e as Error).message });
+      dexes.push({ begin, size, format, saved: false, error: (e as Error).message });
     }
   }
   const carrierList = dexes.filter((x) => x.carrier)
@@ -636,4 +1029,380 @@ export async function dumpAllDex(sid: string) {
 export async function autoDumpDex(sid: string) {
   const r = await dumpAllDex(sid);
   log(`[capture] autoDumpDex ${sid}: ${r.dumped}/${r.count} dex (dedup ${r.deduped}, failed ${r.failed})`);
+}
+
+/** Online agent sessions for one package (main process first). */
+export function onlineSessionsForPackage(pkg: string): AgentSession[] {
+  const rows = [...sessions.values()].filter((s) => s.online && s.package === pkg);
+  const main = preferMainProcess(rows);
+  if (!main) return rows;
+  return [main, ...rows.filter((s) => s.sessionId !== main.sessionId)];
+}
+
+/**
+ * One-click unpack for a **package**: cold-start the app via adb (unless launch:false),
+ * wait for agents, dump every online process, dedupe by SHA-256, pack one ZIP.
+ */
+export async function runUnpackBundle(opts: {
+  package?: string; session?: string; launch?: boolean;
+  /** When true, always force-stop + relaunch. Default: reuse online sessions if any. */
+  forceRestart?: boolean;
+  launchTimeoutMs?: number; settleMs?: number;
+}) {
+  const sidHint = opts.session ? pickSid(opts.session) : undefined;
+  const pkg = (opts.package && opts.package !== '?')
+    ? opts.package
+    : (sidHint ? sessionPackage(sidHint) : '');
+  if (!pkg || pkg === '?') {
+    return { ok: false, error: '需要 package 或在线 session', package: pkg || null, bundle: null, included: [] };
+  }
+
+  // Must be set BEFORE cold start: hello races startCaptureLoop and would otherwise
+  // install crypto GOT hooks that kill SecNeo/Bangcle processes (学习通 2026-10-20).
+  suppressCaptureArmForUnpack(pkg);
+  let launchInfo: {
+    ok: boolean; mode: string; error?: string; waitedMs?: number; reusedOnline?: boolean;
+  } | null = null;
+
+  try {
+  const alreadyOnline = onlineSessionsForPackage(pkg);
+  const wantLaunch = opts.launch !== false;
+  const doLaunch = wantLaunch && (opts.forceRestart === true || alreadyOnline.length === 0);
+  if (wantLaunch && !doLaunch) {
+    launchInfo = {
+      ok: true, mode: 'reuse-online', reusedOnline: true,
+      waitedMs: 0,
+    };
+    log(`[unpack] ${pkg}: reuse ${alreadyOnline.length} online session(s), skip force-stop`);
+  } else if (doLaunch) {
+    const sinceMs = Date.now();
+    const started = await coldStartPackage(pkg);
+    if (!started.ok) {
+      return {
+        ok: false, error: started.error || '启动目标应用失败', package: pkg,
+        launch: started, bundle: null, included: [], processes: [],
+      };
+    }
+    const waited = await waitForFreshSessions(
+      () => onlineSessionsForPackage(pkg),
+      {
+        sinceMs,
+        timeoutMs: opts.launchTimeoutMs ?? 45_000,
+        // SecNeo needs a bit longer for real dex to finish loading after splash.
+        settleMs: opts.settleMs ?? 4_000,
+      },
+    );
+    launchInfo = { ok: waited.ok, mode: started.mode, waitedMs: waited.waitedMs, error: waited.error };
+    if (!waited.ok) {
+      return {
+        ok: false, error: waited.error || '等待注入超时', package: pkg,
+        launch: launchInfo, bundle: null, included: [], processes: [],
+      };
+    }
+  }
+
+  const targets = onlineSessionsForPackage(pkg);
+  if (!targets.length) {
+    return {
+      ok: false, error: '目标应用没有在线进程', package: pkg,
+      launch: launchInfo, bundle: null, included: [], processes: [],
+    };
+  }
+
+  const runId = `u_${Date.now().toString(36)}`;
+  const runDir = join(DATA_DIR, 'packages', pkg, 'unpack', runId);
+  mkdirSync(join(runDir, 'dex'), { recursive: true });
+  const sideEffects = {
+    captureArmSkipped: true,
+    forceStopped: !!(launchInfo && launchInfo.mode !== 'reuse-online'),
+    processCount: targets.length,
+    launchMode: launchInfo?.mode ?? (doLaunch ? 'cold' : 'reuse-online'),
+  };
+  broadcast('unpack.start', { runId, package: pkg, dir: runDir, launch: launchInfo, sideEffects });
+
+  const files: { name: string; data: Buffer }[] = [];
+  const included: {
+    name: string; sha256: string; size: number; carrier?: boolean;
+    process: string; pid: number; runId: string;
+  }[] = [];
+  const seenSha = new Set<string>();
+  const processes: {
+    session: string; process: string; pid: number; folder: string;
+    dumped: number; failed: number; realDexCount: number; carrierCount: number; error?: string;
+  }[] = [];
+  let dumped = 0, failed = 0, realDexCount = 0, carrierCount = 0;
+  let seq = 0;
+
+  for (const sess of targets) {
+    const folder = processFolderLabel(sess.process, pkg);
+    mkdirSync(join(runDir, 'dex', folder), { recursive: true });
+    let report: Awaited<ReturnType<typeof dumpAllDex>>;
+    try {
+      report = await dumpAllDex(sess.sessionId, {
+        tag: 'unpack-dex',
+        notePrefix: `${folder} · ${runId}`,
+        onSaved: async (entry) => {
+          const sha = String(entry.sha256 ?? '');
+          if (!sha || seenSha.has(sha)) return;
+          const meta = dumps.get(sha);
+          const srcPath = meta?.path || String(entry.path ?? '');
+          if (!srcPath || !existsSync(srcPath)) return;
+          seenSha.add(sha);
+          seq++;
+          const label = entry.carrier === true ? 'carrier' : 'classes';
+          const baseName = `${String(seq).padStart(2, '0')}_${label}_${sha.slice(0, 8)}.dex`;
+          const rel = `dex/${folder}/${baseName}`;
+          const dest = join(runDir, rel);
+          try { copyFileSync(srcPath, dest); } catch { /* still keep captures/ copy */ }
+          const size = Number(entry.bytes) || meta?.size || 0;
+          const note = `${folder} · ${label}${entry.classes != null ? ` · ${entry.classes} classes` : ''}`;
+          const data = readFileSync(existsSync(dest) ? dest : srcPath);
+          files.push({ name: rel, data });
+          included.push({
+            name: rel, sha256: sha, size, carrier: entry.carrier === true,
+            process: sess.process, pid: sess.pid, runId,
+          });
+          broadcast('unpack.dex', {
+            runId, package: pkg, kind: 'dex',
+            sha256: sha, size, name: rel, note, carrier: entry.carrier === true,
+            process: sess.process, pid: sess.pid, folder, seq,
+            capturedAt: Date.now(), path: existsSync(dest) ? dest : srcPath,
+          });
+        },
+      });
+    } catch (e) {
+      failed++;
+      processes.push({
+        session: sess.sessionId, process: sess.process, pid: sess.pid, folder,
+        dumped: 0, failed: 1, realDexCount: 0, carrierCount: 0, error: (e as Error).message,
+      });
+      broadcast('unpack.progress', {
+        runId, package: pkg, kind: 'process-error',
+        process: sess.process, pid: sess.pid, error: (e as Error).message,
+      });
+      continue;
+    }
+    dumped += Number(report.dumped) || 0;
+    failed += Number(report.failed) || 0;
+    realDexCount += Number(report.realDexCount) || 0;
+    carrierCount += Number(report.carrierCount) || 0;
+    processes.push({
+      session: sess.sessionId, process: sess.process, pid: sess.pid, folder,
+      dumped: Number(report.dumped) || 0, failed: Number(report.failed) || 0,
+      realDexCount: Number(report.realDexCount) || 0, carrierCount: Number(report.carrierCount) || 0,
+    });
+  }
+
+  if (!files.length) {
+    broadcast('unpack.done', {
+      runId, package: pkg, ok: false, error: '没有成功保存的 DEX', included: [],
+      sideEffects, captureNote: '本包未装钩，重启后再捕',
+    });
+    return {
+      ok: false, error: '没有成功保存的 DEX，无法打包',
+      package: pkg, runId, dir: runDir, launch: launchInfo, processes, dumped, failed, realDexCount, carrierCount,
+      bundle: null, included: [],
+      didSkipAutoArm: true,
+      captureNote: '本包未装钩，重启后再捕',
+    };
+  }
+
+  const primary = targets[0];
+  const manifest = {
+    package: pkg,
+    runId,
+    dir: runDir,
+    capturedAt: Date.now(),
+    launch: launchInfo,
+    processes,
+    dumped, failed, realDexCount, carrierCount,
+    files: included,
+  };
+  const manifestPath = join(runDir, 'manifest.json');
+  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+  files.push({ name: 'manifest.json', data: Buffer.from(JSON.stringify(manifest, null, 2), 'utf8') });
+  const zip = buildStoredZip(files);
+  const zipPath = join(runDir, 'bundle.zip');
+  writeFileSync(zipPath, zip);
+  const { meta, dedup } = await persistArtifact(zip, {
+    source: 'unpack', addr: '', tag: 'unpack-bundle', sessionId: primary.sessionId, package: pkg,
+  }, {
+    note: `${included.length} dex · ${processes.length} 进程 · real ${realDexCount} · carrier ${carrierCount} · ${runId}`,
+  });
+  const done = {
+    runId, package: pkg, ok: true as const,
+    dexCount: included.length, processes: processes.length,
+    bundle: { sha256: meta.sha256, size: meta.size },
+    dir: runDir,
+  };
+  broadcast('unpack.done', {
+    ...done,
+    sideEffects,
+    captureNote: '本包未装钩，重启后再捕',
+  });
+  return {
+    ok: true, package: pkg, session: primary.sessionId, runId, dir: runDir,
+    launch: launchInfo, processes, dumped, failed, realDexCount, carrierCount, included,
+    didSkipAutoArm: true,
+    sideEffects,
+    captureNote: '本包未装钩，重启后再捕',
+    bundle: {
+      sha256: meta.sha256, size: meta.size, path: meta.path, kind: meta.kind,
+      dedup, capturedAt: meta.capturedAt, note: meta.note,
+    },
+  };
+  } finally {
+    // Clear in-flight suppress. Keep protect so settings / MCP cannot re-arm this live process
+    // (SecNeo). Next agent.hello clears protect so a real restart can auto-arm again.
+    resumeCaptureArmAfterUnpack(pkg);
+    protectCaptureArmAfterUnpack(pkg);
+  }
+}
+
+const UNPACK_RUN_RE = /\b(u_[a-z0-9]+)\b/i;
+
+function unpackRunIdOf(note?: string, path?: string): string | null {
+  const fromNote = UNPACK_RUN_RE.exec(String(note || ''));
+  if (fromNote) return fromNote[1];
+  const fromPath = UNPACK_RUN_RE.exec(String(path || ''));
+  return fromPath ? fromPath[1] : null;
+}
+
+/** Flat dump rows (legacy). Prefer listUnpackRuns for product UI. */
+export function listUnpackBundles(pkg?: string) {
+  const rows = [...dumps.values()].filter((d) => {
+    if (pkg && d.package !== pkg) return false;
+    if (d.kind === 'zip' && d.tag === 'unpack-bundle') return true;
+    if (d.tag === 'unpack-dex') return true;
+    return false;
+  });
+  rows.sort((a, b) => (b.capturedAt || 0) - (a.capturedAt || 0));
+  return rows.map((d) => ({
+    sha256: d.sha256, package: d.package, size: d.size, capturedAt: d.capturedAt,
+    note: d.note || (d.tag === 'unpack-bundle' ? '脱壳包 zip' : 'DEX'),
+    path: d.path, kind: d.kind, tag: d.tag,
+    runId: unpackRunIdOf(d.note, d.path) || undefined,
+  }));
+}
+
+export interface UnpackRunFile {
+  sha256: string; name: string; size: number; carrier?: boolean; note?: string; path?: string;
+}
+export interface UnpackRun {
+  runId: string; package: string; capturedAt: number;
+  dexCount: number; size: number; processes?: number;
+  bundleSha256?: string; note?: string;
+  files: UnpackRunFile[];
+}
+
+/** One row per one-click unpack run; files[] are the DEX inside. */
+export function listUnpackRuns(pkg?: string): UnpackRun[] {
+  const byRun = new Map<string, UnpackRun>();
+
+  const ensure = (runId: string, packageName: string, capturedAt: number): UnpackRun => {
+    let run = byRun.get(runId);
+    if (!run) {
+      run = {
+        runId, package: packageName, capturedAt,
+        dexCount: 0, size: 0, files: [],
+      };
+      byRun.set(runId, run);
+    } else if (capturedAt > run.capturedAt) {
+      run.capturedAt = capturedAt;
+    }
+    return run;
+  };
+
+  // Authoritative: on-disk manifest from each unpack/<runId>/
+  const pkgs = pkg
+    ? [pkg]
+    : [...new Set([...dumps.values()].map((d) => d.package).filter((p) => p && p !== '?'))];
+  for (const p of pkgs) {
+    const root = join(DATA_DIR, 'packages', p, 'unpack');
+    if (!existsSync(root)) continue;
+    let dirs: string[] = [];
+    try { dirs = readdirSync(root); } catch { continue; }
+    for (const name of dirs) {
+      if (!name.startsWith('u_')) continue;
+      const manifestPath = join(root, name, 'manifest.json');
+      if (!existsSync(manifestPath)) continue;
+      try {
+        const m = JSON.parse(readFileSync(manifestPath, 'utf8'));
+        const runId = String(m.runId || name);
+        const run = ensure(runId, p, Number(m.capturedAt) || 0);
+        run.processes = Array.isArray(m.processes) ? m.processes.length : run.processes;
+        const files = Array.isArray(m.files) ? m.files : [];
+        for (const f of files) {
+          const sha = String(f.sha256 || '');
+          if (!sha || run.files.some((x) => x.sha256 === sha)) continue;
+          run.files.push({
+            sha256: sha,
+            name: String(f.name || sha.slice(0, 8) + '.dex'),
+            size: Number(f.size) || 0,
+            carrier: f.carrier === true,
+            note: undefined,
+            path: existsSync(join(root, name, String(f.name || ''))) ? join(root, name, String(f.name || '')) : undefined,
+          });
+        }
+        run.dexCount = run.files.length;
+      } catch { /* skip bad manifest */ }
+    }
+  }
+
+  for (const d of dumps.values()) {
+    if (pkg && d.package !== pkg) continue;
+    const runId = unpackRunIdOf(d.note, d.path);
+    if (!runId) {
+      // Orphan single-dex / zip without run id — each becomes its own pseudo-run.
+      if (d.tag === 'unpack-bundle' || d.tag === 'unpack-dex') {
+        const id = `legacy_${d.sha256.slice(0, 10)}`;
+        const run = ensure(id, d.package, d.capturedAt || 0);
+        if (d.tag === 'unpack-bundle' || d.kind === 'zip') {
+          run.bundleSha256 = d.sha256;
+          run.size = d.size || run.size;
+          run.note = d.note;
+        } else if (!run.files.some((x) => x.sha256 === d.sha256)) {
+          run.files.push({
+            sha256: d.sha256, name: basename(d.path || '') || d.sha256.slice(0, 8) + '.dex',
+            size: d.size || 0, note: d.note, path: d.path,
+          });
+          run.dexCount = run.files.length;
+          if (!run.bundleSha256) run.size = run.files.reduce((n, f) => n + (f.size || 0), 0);
+        }
+      }
+      continue;
+    }
+    const run = ensure(runId, d.package, d.capturedAt || 0);
+    if (d.tag === 'unpack-bundle' || d.kind === 'zip') {
+      run.bundleSha256 = d.sha256;
+      run.size = d.size || run.size;
+      run.note = d.note;
+      const m = /(\d+)\s*dex/i.exec(String(d.note || ''));
+      if (m) run.dexCount = Math.max(run.dexCount, Number(m[1]) || 0);
+      const pm = /(\d+)\s*进程/.exec(String(d.note || ''));
+      if (pm) run.processes = Number(pm[1]) || run.processes;
+    } else if (d.tag === 'unpack-dex') {
+      if (!run.files.some((x) => x.sha256 === d.sha256)) {
+        run.files.push({
+          sha256: d.sha256,
+          name: basename(d.path || '') || d.sha256.slice(0, 8) + '.dex',
+          size: d.size || 0,
+          carrier: /carrier/i.test(String(d.note || '')),
+          note: d.note,
+          path: d.path,
+        });
+      }
+      run.dexCount = Math.max(run.dexCount, run.files.length);
+      if (!run.bundleSha256) run.size = run.files.reduce((n, f) => n + (f.size || 0), 0);
+    }
+  }
+
+  const runs = [...byRun.values()];
+  for (const run of runs) {
+    run.files.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+    run.dexCount = Math.max(run.dexCount, run.files.length);
+    if (!run.size) run.size = run.files.reduce((n, f) => n + (f.size || 0), 0);
+  }
+  runs.sort((a, b) => (b.capturedAt || 0) - (a.capturedAt || 0));
+  return runs;
 }

@@ -1,5 +1,6 @@
 import {
-  dumpAllDex, dumpRegion, pickSid, sendCmd,
+  dumpAllDex, dumpAppSo, dumpOneAppSo, dumpRegion, inventoryUnpack, listUnpackBundles, listUnpackRuns,
+  pickSid, pullPackageSo, runUnpackBundle, sendCmd, unpackOneDex,
 } from '../service.ts';
 import { watchSyscalls } from '../syscall_watch.ts';
 import { nativeBacktrace } from '../backtrace.ts';
@@ -10,6 +11,7 @@ import { nativeHookAll, nativeUnhookAll } from '../native_hook_all.ts';
 import { normalizeThrottleMs } from '../native_hook_args.ts';
 import { agentPing, hookEngineSelftest, protocolSelfTest } from '../agent_probe.ts';
 import { listDeviceDir, readDeviceFile } from '../fs_browse.ts';
+import { listSandboxDir, readSandboxFile } from '../sandbox_fs.ts';
 import { jniFieldDigest } from '../jni_field_digest.ts';
 import { syscallTraceStart, syscallTraceDigest, syscallTraceStop } from '../syscall_trace.ts';
 import { liveDisasm , assertCallableAddress } from '../memory.ts';
@@ -342,22 +344,38 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
       try { const r = await sendCmd(sid, 'file_probe', {}, 20_000); return send(r.ok ? 200 : 502, r); }
       catch (e) { return send(504, { error: (e as Error).message }); }
     } },
+    // package= reads the app sandbox through root, with or without a live process.
+    // session= (no package) still goes through the agent: MCP fs_list and the device checks.
     { path: '/api/fs/list', handler: async () => {
-      const sid = pickSid(url.searchParams.get('session'));
-      if (!sid) return send(400, { error: 'no session' });
       const path = url.searchParams.get('path') || '';
       if (!path) return send(400, { error: 'need path' });
-      // Shared with the MCP tool fs_list.
+      const pkg = String(url.searchParams.get('package') || '').trim();
+      if (pkg) {
+        try { return send(200, await listSandboxDir(pkg, path)); }
+        catch (e) { return send(502, { ok: false, error: (e as Error).message }); }
+      }
+      const sid = pickSid(url.searchParams.get('session'));
+      if (!sid) return send(400, { error: 'no session' });
       try { return send(200, await listDeviceDir(sid, path)); }
       catch (e) { return send(502, { ok: false, error: (e as Error).message }); }
     } },
     { method: 'POST', path: '/api/fs/read', handler: async () => {
       const body = await readBody(req);
-      const { session, path } = JSON.parse(body || '{}');
-      const sid = pickSid(session);
-      if (!sid || !path) return send(400, { error: 'need session, path' });
+      const parsed = JSON.parse(body || '{}') as { session?: string; path?: string; package?: string };
+      const path = parsed.path;
+      const pkg = String(parsed.package || '').trim();
+      if (!path) return send(400, { error: 'need path' });
+      if (pkg) {
+        try {
+          const r = await readSandboxFile(pkg, String(path));
+          const text = Buffer.from(r.b64, 'base64').toString('utf8');
+          return send(200, { ...r, text });
+        } catch (e) { return send(502, { ok: false, error: (e as Error).message }); }
+      }
+      const sid = pickSid(parsed.session);
+      if (!sid) return send(400, { error: 'need session, path' });
       // Shared with the MCP tool fs_read; `text` is kept for the pre-existing consumers (the web
-      // file viewer and verify_v25_fsbrowser read /proc/self/cmdline through it).
+      // file viewer used to, and verify_v25_fsbrowser still reads /proc/self/cmdline through it).
       try {
         const r = await readDeviceFile(sid, String(path), { includeBase64: true });
         const text = Buffer.from(r.b64 ?? '', 'base64').toString('utf8');
@@ -419,11 +437,78 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
         return send(200, r);
       } catch (e) { return send(502, { error: (e as Error).message }); }
     } },
+    { path: '/api/unpack/inventory', handler: async () => {
+      const sid = pickSid(url.searchParams.get('session'));
+      if (!sid) return send(400, { error: 'no session' });
+      try { return send(200, await inventoryUnpack(sid)); }
+      catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
+    { method: 'POST', path: '/api/unpack/dump-one', handler: async () => {
+      const body = JSON.parse((await readBody(req)) || '{}');
+      const sid = pickSid(body.session);
+      const begin = String(body.begin ?? '');
+      const size = Number(body.size ?? 0);
+      if (!sid || !begin || !size) return send(400, { error: 'need session, begin, size' });
+      try { return send(200, await unpackOneDex(sid, begin, size)); }
+      catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
+    { method: 'POST', path: '/api/unpack/dump-so-one', handler: async () => {
+      const body = JSON.parse((await readBody(req)) || '{}');
+      const sid = pickSid(body.session);
+      const base = String(body.base ?? '');
+      const name = String(body.name ?? '');
+      if (!sid || !base || !name) return send(400, { error: 'need session, base, name' });
+      try { return send(200, await dumpOneAppSo(sid, base, name)); }
+      catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
+    { method: 'POST', path: '/api/unpack/pull-so', handler: async () => {
+      const body = JSON.parse((await readBody(req)) || '{}');
+      const pkg = String(body.package ?? '').trim();
+      const path = String(body.path ?? '').trim();
+      const name = String(body.name ?? '').trim();
+      if (!pkg || !path) return send(400, { error: 'need package + path' });
+      try { return send(200, await pullPackageSo(pkg, path, name || undefined)); }
+      catch (e) { return send(502, { saved: false, error: (e as Error).message }); }
+    } },
     { method: 'POST', path: '/api/unpack/dump-all', handler: async () => {
       const body = JSON.parse((await readBody(req)) || '{}');
       const sid = pickSid(body.session);
       if (!sid) return send(400, { error: 'no session' });
       try { return send(200, await dumpAllDex(sid)); }
+      catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
+    { method: 'POST', path: '/api/unpack/run', handler: async () => {
+      const body = JSON.parse((await readBody(req)) || '{}');
+      const pkg = typeof body.package === 'string' ? body.package.trim() : '';
+      const sid = body.session ? pickSid(body.session) : undefined;
+      if (!pkg && !sid) return send(400, { error: '需要 package 或在线 session — 目标应用需要在跑' });
+      try {
+        return send(200, await runUnpackBundle({
+          package: pkg || undefined,
+          session: sid,
+          launch: body.launch !== false,
+          forceRestart: body.forceRestart === true,
+          launchTimeoutMs: Number.isFinite(Number(body.launchTimeoutMs)) ? Number(body.launchTimeoutMs) : undefined,
+          settleMs: Number.isFinite(Number(body.settleMs)) ? Number(body.settleMs) : undefined,
+        }));
+      }
+      catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
+    { path: '/api/unpack/history', handler: () => {
+      const pkg = url.searchParams.get('package') || '';
+      const runs = listUnpackRuns(pkg || undefined);
+      return send(200, {
+        packages: pkg || undefined,
+        runs,
+        // legacy flat list kept for older clients
+        records: listUnpackBundles(pkg || undefined),
+      });
+    } },
+    { method: 'POST', path: '/api/unpack/dump-so', handler: async () => {
+      const body = JSON.parse((await readBody(req)) || '{}');
+      const sid = pickSid(body.session);
+      if (!sid) return send(400, { error: 'no session' });
+      try { return send(200, await dumpAppSo(sid)); }
       catch (e) { return send(504, { error: (e as Error).message }); }
     } },
     { method: 'POST', path: '/api/agent/load_so', handler: async () => {

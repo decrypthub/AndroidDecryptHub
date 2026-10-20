@@ -30,7 +30,7 @@
     <string name="hide_system_apps">Hide system apps</string>
     <string name="save">Save</string>
     <string name="saving">Saving</string>
-    <string name="scope_saved">Saved. Restart target apps to apply changes.</string>
+    <string name="scope_saved">Saved. The web app list updates; a newly checked app is injected the next time it opens.</string>
     <string name="scope_save_failed">Unable to save. Confirm the ADH device service is running.</string>
     <string name="apps_load_failed">Unable to read injection scope</string>
     <string name="apps_load_failed_detail">Confirm the ADH device service is running, then retry.</string>
@@ -51,12 +51,14 @@
     <string name="app_hook_config">Hook config</string>
     <string name="app_hooks_trimmed">Hooks trimmed</string>
     <string name="hook_config_title">Hook config</string>
+    <string name="hook_config_lead">These switches choose which capture families install on the next inject. Crypto defaults on; System detection defaults off and only then watches anti-debug / root checks. An off family is never installed. Web Settings → Live capture can still force-stop capture.</string>
     <string name="hook_family_digest">Digest (MD5/SHA)</string>
     <string name="hook_family_hmac">HMAC</string>
     <string name="hook_family_symmetric">Symmetric (AES/DES)</string>
     <string name="hook_family_asymmetric">Asymmetric (RSA/EC)</string>
     <string name="hook_family_tls">TLS plaintext</string>
     <string name="hook_family_aead">AEAD</string>
+    <string name="hook_family_system">System detection (anti-debug / root)</string>
     <string name="hook_config_reset">Reset</string>
     <string name="cert_title">System certificates</string>
     <string name="cert_count">%1$d imported</string>

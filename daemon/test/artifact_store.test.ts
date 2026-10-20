@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { artifactKindOf, planArtifactEviction } from '../src/artifacts.ts';
+import { artifactKindOf, parseArtifactProvenance, planArtifactEviction } from '../src/artifacts.ts';
 
 const MB = 1024 * 1024;
 const DAY = 86_400_000;
@@ -96,4 +96,18 @@ test('eviction: an artifact whose mtime cannot be read is kept, not guessed to b
   assert.deepEqual(aged.evict, []);
   const sized = planArtifactEviction(entries, { maxBytes: 10 * MB, maxAgeDays: 0 }, at(10_000));
   assert.deepEqual(sized.evict.map((e) => e.sha256), ['unknown']);
+});
+
+test('provenance: a matching dump record keeps the package, and ? stays unlabeled', () => {
+  const sha = 'ab'.repeat(32);
+  const ok = parseArtifactProvenance({
+    sha256: sha, package: 'com.job.android', source: 'region', tag: 'dex-all',
+    sessionId: 's_1', addr: '10', capturedAt: 5, requestedSize: 9, complete: false,
+  }, sha);
+  assert.equal(ok?.package, 'com.job.android');
+  assert.equal(ok?.complete, false);
+  assert.equal(ok?.requestedSize, 9);
+  assert.equal(parseArtifactProvenance({ sha256: sha, package: '?' }, sha)?.package, '');
+  assert.equal(parseArtifactProvenance({ sha256: 'nope', package: 'com.job.android' }, sha), null);
+  assert.equal(parseArtifactProvenance(null, sha), null);
 });

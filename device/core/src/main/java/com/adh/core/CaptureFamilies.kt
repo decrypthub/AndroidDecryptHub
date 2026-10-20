@@ -1,7 +1,7 @@
 package com.adh.core
 
 /**
- * Which crypto hook families the agent installs for ONE scoped package.
+ * Which crypto / system hook families the agent installs for ONE scoped package.
  *
  * This is install-time policy, not a display filter: an unchecked family means those hooks are
  * never installed in that process. That distinction is the point — measured 2026-10-11, a lightly
@@ -9,8 +9,8 @@ package com.adh.core
  * were live, so the surface a scoped app gets should be the surface the user actually asked for,
  * not "everything, then filter the records".
  *
- * Default is ALL ON, which is exactly the behaviour before this existed, so an absent entry in the
- * scope file changes nothing and an older reader stays correct.
+ * Crypto families default ON (pre-policy behaviour). [system] defaults OFF — Host historically left
+ * `sysModule` empty, and detection is opt-in from Manager Hook config.
  */
 data class CaptureFamilies(
     val digest: Boolean = true,
@@ -19,13 +19,14 @@ data class CaptureFamilies(
     val asymmetric: Boolean = true,
     val tls: Boolean = true,
     val aead: Boolean = true,
+    val system: Boolean = false,
 ) {
     val isDefault: Boolean get() = this == DEFAULT
 
     /**
      * One-line form for the Zygisk companion → target-process hop: the companion socket is
      * line-framed (no embedded newline) and the request budget is small, so the policy crosses as
-     * `d=1,h=0,…` rather than as JSON.
+     * `d=1,h=0,…,y=0` rather than as JSON.
      */
     fun toFlagString(): String = buildString {
         append(flag('d', digest)); append(',')
@@ -33,15 +34,16 @@ data class CaptureFamilies(
         append(flag('s', symmetric)); append(',')
         append(flag('a', asymmetric)); append(',')
         append(flag('t', tls)); append(',')
-        append(flag('e', aead))
+        append(flag('e', aead)); append(',')
+        append(flag('y', system))
     }
 
     companion object {
         val DEFAULT = CaptureFamilies()
 
         /**
-         * Tolerant parse of [toFlagString]. An absent or unparseable token keeps the DEFAULT (on),
-         * so a truncated/older flag line can only ever mean "hook more", never "hook less".
+         * Tolerant parse of [toFlagString]. Absent crypto tokens keep DEFAULT (on). Absent `y`
+         * keeps system OFF, so an older flag line cannot silently arm detection.
          */
         fun fromFlagString(raw: String): CaptureFamilies {
             if (raw.isBlank()) return DEFAULT
@@ -60,6 +62,7 @@ data class CaptureFamilies(
             return CaptureFamilies(
                 digest = on('d'), hmac = on('h'), symmetric = on('s'),
                 asymmetric = on('a'), tls = on('t'), aead = on('e'),
+                system = seen['y'] ?: false,
             )
         }
 

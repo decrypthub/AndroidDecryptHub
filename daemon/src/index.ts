@@ -5,7 +5,7 @@ import net from 'node:net';
 import { AGENT_PORT, HTTP_PORT, webUrls } from './config.ts';
 import { handleHttp } from './http/router.ts';
 import { ensureAdbReverse } from './scope_list.ts';
-import { startCaptureLoop, forgetCaptureSession, pruneArtifactsAndIndex } from './service.ts';
+import { startCaptureLoop, forgetCaptureSession, pruneArtifactsAndIndex, clearCaptureArmProtect } from './service.ts';
 import {
   agentSockets, broadcast, captureTimers, frameJson, FRAME_JSON, FRAME_MAX,
   log, nextId, pending, pruneSessions, sessions, wss,
@@ -65,6 +65,8 @@ const agentServer = net.createServer((sock) => {
       agentSockets.set(id, sock);
       log(`agent HELLO ${session.package} pid=${session.pid} abi=${session.abi} entry=${session.entry} self=${session.selfModule || '?'} -> ${id}`);
       sock.write(frameJson({ t: 'ack', sessionId: id }));
+      // Fresh process after unpack: allow auto-arm again (protect only blocks the live post-unpack session).
+      clearCaptureArmProtect(session.package);
       broadcast('agent.hello', session);
       startCaptureLoop(id);   // install persistent hooks + stream captures to the panel
     } else if (msg.t === 'maps' && session) {

@@ -4,15 +4,18 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { backendMatrix } from '../backends.ts';
+import { detectionReport } from '../detect.ts';
+import { cryptoView } from '../crypto_view.ts';
 import { assembleHttpExchanges, type TlsChunk } from '../http_exchange.ts';
 import { AGENT_PORT, webUrls } from '../config.ts';
 import { handleMcp, MCP_TOOLS } from '../mcp.ts';
 import { scopedApps } from '../scope_list.ts';
-import { applyCaptureEnabled } from '../service.ts';
+import { applyCaptureEnabled, listCaptureArmProtected } from '../service.ts';
 import {
-  broadcast, captureHealth, capturePackage, captures, captureTimers, configStats, cryptoIdentify,
-  dumps, eventPackage, events, EVENTS_FILE, log, mergeSettings, previewForCapture, readBody,
-  recentJavaIn, saveSettings, sessions, settings,
+  applyCaptureRetainCap, broadcast, captureHealth, capturePackage, captures, captureTimers,
+  clearCaptureStore, clearPackageCaptureStore, configStats, cryptoIdentify, dumps, eventPackage,
+  events, EVENTS_FILE, exportPackageCapturesJsonl, log, mergeSettings, packageCaptureDiskStats,
+  previewForCapture, readBody, saveSettings, sessions, settings,
 } from '../state.ts';
 import type { Route, RouteContext } from './types.ts';
 
@@ -32,7 +35,11 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
   return [
     { path: '/api/apps', handler: async () => {
       const scope = await scopedApps();
-      return send(200, { apps: scope.apps, error: scope.error, capture: settings.capture.enabled });
+      return send(200, {
+        apps: scope.apps, error: scope.error, capture: settings.capture.enabled,
+        // Packages that finished one-click unpack and will not be re-armed until next hello.
+        unpackProtected: listCaptureArmProtected(),
+      });
     } },
     { path: '/health', handler: () => send(200, {
       ok: true, service: 'adhd', name: 'ADH Daemon', version: '0.1.0',
@@ -79,7 +86,13 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       return send(200, {
         total: captures.length, on: captureTimers.size > 0,
         ...health, health,
-        captures: list.slice(-limit).map(c => ({ id: c.id, sessionId: c.sessionId, package: capturePackage(c), source: c.source, category: c.category, algo: c.algo, op: c.op, func: c.func, inl: c.inl, outl: c.outHex ? c.outHex.length / 2 : 0, tid: c.tid, ts: c.ts, preview: c.category === 'net' ? previewForCapture(c.func, c.hex) : c.preview })),
+        captures: list.slice(-limit).map(c => ({
+          id: c.id, sessionId: c.sessionId, package: capturePackage(c), source: c.source, category: c.category,
+          algo: c.algo, op: c.op, func: c.func, inl: c.inl, outl: c.outHex ? c.outHex.length / 2 : 0,
+          hasKey: !!c.keyHex, tid: c.tid, ts: c.ts,
+          preview: c.category === 'net' ? previewForCapture(c.func, c.hex) : c.preview,
+          ...(c.category === 'crypto' ? { view: cryptoView(c) } : {}),
+        })),
       });
     } },
     { path: '/api/captures/', prefix: true, handler: () => {
@@ -89,7 +102,7 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       // decode as UTF-8 so Chinese plaintext (gray-market payloads) is readable, not dotted
       let text = '';
       try { text = Buffer.from(c.hex, 'hex').toString('utf8'); } catch { text = hexToPreview(c.hex, 4096); }
-      return send(200, { ...c, text });
+      return send(200, { ...c, text, ...(c.category === 'crypto' ? { view: cryptoView(c) } : {}) });
     } },
     // Session events (record/replay): GET /api/events?type=&limit=&since=
     { path: '/api/events', handler: () => {
@@ -103,7 +116,7 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
     } },
     // Diagnostic report / export (P/R) — metadata only, no captured keys/plaintext.
     { path: '/api/export/report', handler: () => send(200, {
-      report: 'idh-diagnostic', version: '0.1.0', generatedAt: new Date().toISOString(), uptime: process.uptime(),
+      report: 'adh-diagnostic', version: '0.1.0', generatedAt: new Date().toISOString(), uptime: process.uptime(),
       agents: [...sessions.values()].map(s => ({ sessionId: s.sessionId, package: s.package, pid: s.pid, abi: s.abi, android: s.android, sdk: s.sdk, entry: s.entry, online: s.online, mapsCount: s.mapsCount })),
       dumps: [...dumps.values()].map(d => ({ sha256: d.sha256, kind: d.kind, size: d.size, source: d.source, tag: d.tag, capturedAt: d.capturedAt })),
       capabilities: { rest: true, websocket: true, mcp: true, mcpTools: MCP_TOOLS.length },
@@ -115,7 +128,7 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
         let patch: any = {};
         try { patch = JSON.parse((await readBody(req)) || '{}'); } catch { return send(400, { error: 'bad json' }); }
         const applied = mergeSettings(patch);
-        while (captures.length > settings.capture.retain) captures.shift();
+        applyCaptureRetainCap();
         applyCaptureEnabled().catch((e) => log('[settings] applyCaptureEnabled:', (e as Error).message));
         try { saveSettings(); }
         catch (e) { return send(500, { error: '设置已在内存生效，但写入磁盘失败(重启后丢失): ' + (e as Error).message, applied, settings, persisted: false }); }
@@ -130,31 +143,48 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       if (typeof obj !== 'object' || Array.isArray(obj)) return send(400, { error: '顶层必须是对象' });
       const applied = mergeSettings(obj);
       if (!applied.length) return send(400, { error: '没有可应用的板块(capture/ui/artifacts)' });
-      while (captures.length > settings.capture.retain) captures.shift();
+      applyCaptureRetainCap();
       applyCaptureEnabled().catch((e) => log('[settings] applyCaptureEnabled:', (e as Error).message));
       try { saveSettings(); }
       catch (e) { return send(500, { error: '导入已在内存生效，但写入磁盘失败(重启后丢失): ' + (e as Error).message, applied, settings, persisted: false }); }
       return send(200, { ok: true, applied, settings, persisted: true });
     } },
+    { path: '/api/captures/packages', handler: () => send(200, { packages: packageCaptureDiskStats() }) },
+    { path: '/api/captures/export', handler: () => {
+      const pkg = String(url.searchParams.get('package') || '');
+      if (!pkg) return send(400, { error: '需要 package' });
+      const body = exportPackageCapturesJsonl(pkg);
+      if (body == null) return send(404, { error: '该包还没有落盘捕获' });
+      res.writeHead(200, {
+        'content-type': 'application/x-ndjson; charset=utf-8',
+        'content-disposition': `attachment; filename="${pkg.replace(/[^\w.-]+/g, '_')}-captures.jsonl"`,
+      });
+      return res.end(body);
+    } },
     { method: 'POST', path: '/api/data/clear', handler: async () => {
       let body: any;
       try { body = JSON.parse((await readBody(req)) || '{}'); } catch { return send(400, { error: 'bad json' }); }
       const what = String(body.what || '');
+      const pkg = String(body.package || '').trim();
       const errors: string[] = [];
-      if (what === 'captures') { captures.length = 0; recentJavaIn.clear(); }
+      if (what === 'captures') {
+        if (pkg) errors.push(...clearPackageCaptureStore(pkg));
+        else errors.push(...clearCaptureStore());
+      }
       else if (what === 'events') {
         events.length = 0;
         try { writeFileSync(EVENTS_FILE, ''); } catch (e) { errors.push(`events 回放文件: ${(e as Error).message}`); }
       }
       else if (what === 'dumps') {
-        for (const d of dumps.values()) {
+        const victims = [...dumps.values()].filter(d => !pkg || d.package === pkg);
+        for (const d of victims) {
           try { if (existsSync(d.path)) unlinkSync(d.path); } catch (e) { errors.push(`${d.path}: ${(e as Error).message}`); }
+          dumps.delete(d.sha256);
         }
-        dumps.clear();
       } else return send(400, { error: 'what 必须是 captures|events|dumps' });
-      broadcast('data.cleared', { what });
+      broadcast('data.cleared', { what, package: pkg || undefined });
       if (errors.length) { log(`[data/clear] ${what} 部分磁盘删除失败:`, errors.join('; ')); return send(500, { error: `内存索引已清，但磁盘删除失败(${errors.length}项)`, cleared: what, errors, stats: configStats() }); }
-      return send(200, { ok: true, cleared: what, stats: configStats() });
+      return send(200, { ok: true, cleared: what, package: pkg || undefined, stats: configStats() });
     } },
     { path: '/api/mcp/doc', handler: () => {
       const cell = (value: unknown) => String(value ?? '—').replaceAll('|', '\\|').replace(/\r?\n/g, ' ');
@@ -164,6 +194,10 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       res.writeHead(200, { 'content-type': 'text/markdown; charset=utf-8' }); return res.end(md);
     } },
     { path: '/api/crypto/identify', handler: () => send(200, cryptoIdentify()) },
+    { path: '/api/detect/summary', handler: () => send(200, detectionReport({
+      package: url.searchParams.get('package') ?? '',
+      session: url.searchParams.get('session') ?? '',
+    })) },
     { path: '/api/mcp/config', handler: () => {
       const w = webUrls(); const lan = (w.lan[0] ?? w.local).replace(/^http/, 'http');
       const mcpUrl = `${lan}/mcp`;

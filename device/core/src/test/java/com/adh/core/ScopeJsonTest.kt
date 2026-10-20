@@ -27,12 +27,24 @@ class ScopeJsonTest {
             .withPolicy("com.example.target", CaptureFamilies(digest = true, hmac = false, symmetric = true, asymmetric = false, tls = true, aead = false))
         val back = ScopeJson.decode(ScopeJson.encode(cfg))
         assertEquals(
-            CaptureFamilies(digest = true, hmac = false, symmetric = true, asymmetric = false, tls = true, aead = false),
+            CaptureFamilies(digest = true, hmac = false, symmetric = true, asymmetric = false, tls = true, aead = false, system = false),
             back.familiesFor("com.example.target"),
         )
         // The flag line the Zygisk companion hands the target process must agree with the JSON.
-        assertEquals("d=1,h=0,s=1,a=0,t=1,e=0", back.familiesFor("com.example.target").toFlagString())
-        assertEquals(back.familiesFor("com.example.target"), CaptureFamilies.fromFlagString("d=1,h=0,s=1,a=0,t=1,e=0"))
+        assertEquals("d=1,h=0,s=1,a=0,t=1,e=0,y=0", back.familiesFor("com.example.target").toFlagString())
+        assertEquals(back.familiesFor("com.example.target"), CaptureFamilies.fromFlagString("d=1,h=0,s=1,a=0,t=1,e=0,y=0"))
+    }
+
+    @Test
+    fun systemDetectionDefaultsOffAndRoundTrips() {
+        assertFalse(CaptureFamilies.DEFAULT.system)
+        assertEquals(CaptureFamilies.DEFAULT, CaptureFamilies.fromFlagString("d=1,h=1,s=1,a=1,t=1,e=1"))
+        assertEquals(CaptureFamilies(system = true), CaptureFamilies.fromFlagString("y=1"))
+        val cfg = ScopeConfig(packages = setOf("com.example.target"))
+            .withPolicy("com.example.target", CaptureFamilies(system = true))
+        val back = ScopeJson.decode(ScopeJson.encode(cfg))
+        assertTrue(back.familiesFor("com.example.target").system)
+        assertEquals("d=1,h=1,s=1,a=1,t=1,e=1,y=1", back.familiesFor("com.example.target").toFlagString())
     }
 
     @Test

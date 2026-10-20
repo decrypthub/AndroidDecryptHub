@@ -111,6 +111,94 @@ test('a truncated capture stops the stream and does not glue the next request on
   assert.equal(out.exchanges[0].captureIds.includes(3), false);
 });
 
+function h2Frame(type: number, flags: number, stream: number, payload: Buffer): Buffer {
+  const h = Buffer.alloc(9 + payload.length);
+  h.writeUIntBE(payload.length, 0, 3);
+  h[3] = type;
+  h[4] = flags;
+  h.writeUInt32BE(stream & 0x7fffffff, 5);
+  payload.copy(h, 9);
+  return h;
+}
+
+test('HTTP/2 streams split across SSL records become whole requests, paired by stream id', () => {
+  seq = 1;
+  const preface = Buffer.from('PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n');
+  const settings = h2Frame(4, 0, 0, Buffer.alloc(0));
+  const authority = Buffer.from('418cf1e3c2e5f23a6ba0ab90f4ff', 'hex');
+  const postHeaders = Buffer.concat([
+    Buffer.from('8387', 'hex'),
+    Buffer.from([0x44, 0x08]), Buffer.from('/v1/feed'),
+    authority,
+  ]);
+  const post = h2Frame(1, 0x4, 1, postHeaders);
+  const postBody = h2Frame(0, 0x1, 1, Buffer.from('a=1&b=2'));
+  // Stream 3 reuses the dynamic-table :authority from stream 1 (index 62).
+  const getHeaders = Buffer.concat([
+    Buffer.from('8287be', 'hex'),
+    Buffer.from([0x44, 0x07]), Buffer.from('/health'),
+  ]);
+  const get = h2Frame(1, 0x5, 3, getHeaders);
+  const client = Buffer.concat([preface, settings, post, postBody, get]);
+  const cut = 40;
+  const gz = zlib.gzipSync(Buffer.from('{"ok":1}'));
+  const res1Headers = Buffer.concat([
+    Buffer.from([0x48, 0x03]), Buffer.from('201'),
+    Buffer.from([0x40, 0x10]), Buffer.from('content-encoding'),
+    Buffer.from([0x04]), Buffer.from('gzip'),
+  ]);
+  const server = Buffer.concat([
+    settings,
+    h2Frame(1, 0x5, 3, Buffer.from([0x88])),
+    h2Frame(1, 0x4, 1, res1Headers),
+    h2Frame(0, 0x1, 1, gz),
+  ]);
+  const out = assembleHttpExchanges([
+    chunk('SSL_write', client.subarray(0, cut), { tsNs: 1 }),
+    chunk('SSL_write', client.subarray(cut), { tsNs: 2 }),
+    chunk('SSL_read', server, { tsNs: 3 }),
+  ]);
+  assert.equal(out.http2, 1);
+  assert.equal(out.http2Idle, 0);
+  assert.equal(out.exchanges.length, 2);
+  const [first, second] = out.exchanges;
+  assert.equal(first.label, 'POST https://www.example.com/v1/feed');
+  assert.equal(first.status, '201');
+  assert.equal(first.request?.bodyText, 'a=1&b=2');
+  assert.equal(first.request?.complete, true);
+  assert.equal(first.response?.bodyText, '{"ok":1}');
+  assert.equal(first.response?.decoded, true);
+  assert.equal(second.label, 'GET https://www.example.com/health');
+  assert.equal(second.status, '200');
+  assert.equal(second.request?.complete, true);
+  assert.equal(second.response?.bodyBytes, 0);
+  assert.equal(out.consumedIds.length, 0);
+});
+
+test('an HTTP/2 connection that has not sent a request does not stay as raw frames', () => {
+  seq = 1;
+  const preface = Buffer.from('PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n');
+  const settings = Buffer.alloc(9);
+  settings[3] = 4;
+  const out = assembleHttpExchanges([
+    chunk('SSL_write', Buffer.concat([preface, settings]), { id: 7, tsNs: 1 }),
+  ]);
+  assert.equal(out.http2, 1);
+  assert.equal(out.http2Idle, 1);
+  assert.equal(out.exchanges.length, 0);
+  assert.deepEqual(out.consumedIds, [7]);
+});
+
+test('an HTTP/2 GOAWAY is not a request', () => {
+  seq = 1;
+  const goaway = Buffer.from('0000080700000000000000001300000000', 'hex');
+  const out = assembleHttpExchanges([
+    chunk('SSL_read', goaway, { id: 528, tsNs: 1 }),
+  ]);
+  assert.equal(out.exchanges.length, 0);
+  assert.deepEqual(out.consumedIds, [528]);
+});
+
 test('HTTP/2 preface is counted and not turned into a fake HTTP/1 exchange', () => {
   seq = 1;
   const preface = 'PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n';

@@ -7,6 +7,10 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import com.adh.core.ScopeConfig
+import com.adh.manager.data.ScopeWriter
+import kotlinx.coroutines.launch
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -43,6 +47,26 @@ fun AdhApp(repository: ScopeRepository, webUiRepository: WebUiRepository) {
     val nav = rememberNavController()
     val repo = remember { repository }
     val draft = remember { ScopeDraft() }
+    val writer = remember { ScopeWriter { repo.save(it) } }
+    val scope = rememberCoroutineScope()
+    fun currentConfig() = ScopeConfig(
+        packages = draft.selected,
+        policy = draft.families.filterKeys { draft.selected.contains(it) },
+    )
+    fun persist() {
+        val config = currentConfig()
+        draft.dirty = true
+        scope.launch {
+            val result = writer.submit(config)
+            if (result == null) return@launch
+            if (result.isSuccess) {
+                if (currentConfig() == config) draft.dirty = false
+                draft.persistFailed = false
+            } else {
+                draft.persistFailed = true
+            }
+        }
+    }
     NavHost(navController = nav, startDestination = Routes.HOME) {
         composable(Routes.HOME) {
             HomeScreen(
@@ -64,6 +88,7 @@ fun AdhApp(repository: ScopeRepository, webUiRepository: WebUiRepository) {
                 draft = draft,
                 onBack = { nav.popBackStack() },
                 onOpenHook = { nav.navigate(Routes.hook(it)) },
+                onPersist = { persist() },
             )
         }
         composable(
@@ -74,6 +99,7 @@ fun AdhApp(repository: ScopeRepository, webUiRepository: WebUiRepository) {
                 packageName = Uri.decode(entry.arguments?.getString("packageName").orEmpty()),
                 draft = draft,
                 onBack = { nav.popBackStack() },
+                onPersist = { persist() },
             )
         }
     }

@@ -36,6 +36,7 @@ fun HookConfigScreen(
     packageName: String,
     draft: ScopeDraft,
     onBack: () -> Unit,
+    onPersist: () -> Unit,
 ) {
     val context = LocalContext.current
     val label = remember(packageName) {
@@ -48,7 +49,7 @@ fun HookConfigScreen(
 
     fun update(next: CaptureFamilies) {
         draft.families = if (next.isDefault) draft.families - packageName else draft.families + (packageName to next)
-        draft.dirty = true
+        onPersist()
     }
 
     Scaffold(
@@ -93,11 +94,25 @@ fun HookConfigScreen(
                 .padding(padding),
         ) {
             item {
+                if (draft.persistFailed) {
+                    Text(
+                        text = stringResource(R.string.scope_save_failed),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+                    )
+                }
                 Text(
                     text = packageName,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+                )
+                Text(
+                    text = stringResource(R.string.hook_config_lead),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
                 )
             }
             item { FamilyRow(R.string.hook_family_digest, families.digest) { update(families.copy(digest = it)) } }
@@ -106,6 +121,7 @@ fun HookConfigScreen(
             item { FamilyRow(R.string.hook_family_asymmetric, families.asymmetric) { update(families.copy(asymmetric = it)) } }
             item { FamilyRow(R.string.hook_family_tls, families.tls) { update(families.copy(tls = it)) } }
             item { FamilyRow(R.string.hook_family_aead, families.aead) { update(families.copy(aead = it)) } }
+            item { FamilyRow(R.string.hook_family_system, families.system) { update(families.copy(system = it)) } }
         }
     }
 }

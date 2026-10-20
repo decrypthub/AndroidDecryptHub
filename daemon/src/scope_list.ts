@@ -142,12 +142,21 @@ async function resolveLabel(pkg: string): Promise<string> {
   }
 }
 
-function labelFor(pkg: string): Promise<string> {
-  const existing = labelJobs.get(pkg);
-  if (existing) return existing;
-  const job = resolveLabel(pkg).catch(() => pkg);
+const resolvedLabels = new Map<string, string>();
+
+/** Names already known. A package with no name yet is still listed; the lookup fills in later. */
+export function scopeSwitcherApps(packages: string[], labels: ReadonlyMap<string, string> = resolvedLabels): ScopedApp[] {
+  return packages.map(pkg => ({ package: pkg, label: labels.get(pkg) || pkg }));
+}
+
+function startLabel(pkg: string): void {
+  if (resolvedLabels.has(pkg) || labelJobs.has(pkg)) return;
+  const job = resolveLabel(pkg).then(label => {
+    resolvedLabels.set(pkg, label || pkg);
+  }).catch(() => {
+    resolvedLabels.set(pkg, pkg);
+  });
   labelJobs.set(pkg, job);
-  return job;
 }
 
 // The agent dials 127.0.0.1 on the phone. That only reaches this daemon while
@@ -183,6 +192,26 @@ export function ensureAdbReverse(ports: number[], log: (line: string) => void): 
   });
 }
 
+const SANDBOX_PKG = 'com.adh.sandbox';
+
+/** Cached allowlist packages only — never merge capture-disk history into this list. */
+export function cachedScopePackages(): string[] {
+  return cache?.packages ? [...cache.packages] : [];
+}
+
+/**
+ * Whether Host should auto-arm capture for this package.
+ * Sandbox is always allowed (模拟注入 may not be in scope.json).
+ * If scope has never been read successfully, allow (fail open) so Zygisk sessions still arm.
+ */
+export function shouldAutoArmPackage(pkg: string): boolean {
+  if (!pkg || pkg === '?') return false;
+  if (pkg === SANDBOX_PKG) return true;
+  if (!cache) return true;
+  if (cache.error && cache.packages.length === 0) return true;
+  return cache.packages.includes(pkg);
+}
+
 /** Packages currently checked on the attached phone, with launcher names. */
 export async function scopedApps(now = Date.now()): Promise<{ apps: ScopedApp[]; error: string | null }> {
   if (!cache || now - cache.at >= CACHE_MS) {
@@ -191,10 +220,11 @@ export async function scopedApps(now = Date.now()): Promise<{ apps: ScopedApp[];
       cache = { at: now, packages: parseScopePackages(stdout), error: null };
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
-      cache = { at: now, packages: [], error: message.split('\n')[0].slice(0, 240) };
+      // A failed read must not wipe the list the page is already showing.
+      cache = { at: now, packages: cache?.packages ?? [], error: message.split('\n')[0].slice(0, 240) };
     }
   }
-  const apps: ScopedApp[] = [];
-  for (const pkg of cache.packages) apps.push({ package: pkg, label: await labelFor(pkg) });
-  return { apps, error: cache.error };
+  for (const pkg of cache.packages) startLabel(pkg);
+  // Switcher truth = scope.json only. Capture history on disk must not invent checked apps.
+  return { apps: scopeSwitcherApps(cache.packages), error: cache.error };
 }

@@ -103,7 +103,7 @@ export const COMMANDS: Record<string, CommandSpec> = {
     handlerFlags: ['host', 'port', 'json', 'package', 'session', 'timeout', 'quiet'],
   },
   unpack: {
-    desc: 'one-shot dump_all_dex: dump every ART DexFile, classify each one, optionally save them',
+    desc: 'one-click package unpack (all online processes, suppress capture arm, zip bundle) — same as Web 一键脱壳',
     flags: [
       FLAG_PACKAGE,
       FLAG_SESSION,
@@ -396,8 +396,7 @@ async function cmdDoctor(ctx: Ctx): Promise<number> {
 
   say(ctx, 'backends');
   say(ctx, `  zygisk  ${backends.zygisk?.control ?? '?'}`);
-  const cached = backends.gadget?.cached ?? [];
-  say(ctx, `  gadget  ${cached.length} cached build(s)${cached.length ? `: ${cached.map((c: any) => `${c.version}/${c.abi}`).join(', ')}` : ''}`);
+  say(ctx, '  (Frida Gadget is not a product backend)');
 
   const ok = problems.length === 0;
   say(ctx, ok ? '✅ doctor: ok' : '❌ doctor: FAIL');
@@ -419,7 +418,7 @@ async function cmdTarget(ctx: Ctx): Promise<number> {
   const dex = await ctx.daemon.mcp('art_dexfiles', {}, a.sessionId, ctx.timeoutS);
 
   say(ctx, `target: ${a.package}  pid ${a.pid}  session ${a.sessionId}`);
-  say(ctx, `  ${a.online === false ? 'offline' : 'online'} · connected ${new Date(Number(a.connectedAt ?? 0)).toISOString()} · entry ${a.entry ?? '?'} (${a.entry === 'start' ? 'injected' : 'jni_onload: self-load / gadget'})`);
+  say(ctx, `  ${a.online === false ? 'offline' : 'online'} · connected ${new Date(Number(a.connectedAt ?? 0)).toISOString()} · entry ${a.entry ?? '?'} (${a.entry === 'start' ? 'injected (Zygisk)' : 'jni_onload: self-load / sandbox'})`);
   say(ctx, `  agent ${a.agentVer ?? probe.agentVer ?? '?'} · android ${a.android ?? '?'} sdk ${a.sdk ?? '?'} ${a.abi ?? ''}`);
   say(ctx, `  loaded as ${a.selfModule ?? '(unknown)'}${a.selfBase ? ` base ${a.selfBase}` : ''}`);
   say(ctx, `  ping ${ping.ok === true ? `ok ${ping.latencyMs ?? '?'}ms` : `FAILED ${ping.error ?? '?'}`}`);
@@ -449,37 +448,55 @@ async function cmdTarget(ctx: Ctx): Promise<number> {
 
 async function cmdUnpack(ctx: Ctx): Promise<number> {
   const agents: AgentSession[] = await ctx.daemon.json('/api/agents', { timeoutS: ctx.timeoutS });
-  const a = pickSession(agents, ctx.opts.package as string | undefined, ctx.opts.session as string | undefined);
+  const pkgOpt = ctx.opts.package as string | undefined;
+  const sidOpt = ctx.opts.session as string | undefined;
+  // Prefer package-level one-click unpack (Web parity). Fall back to picking a session's package.
+  let pkg = pkgOpt;
+  if (!pkg) {
+    const a = pickSession(agents, undefined, sidOpt);
+    pkg = a.package;
+  }
 
-  const report = await ctx.daemon.json('/api/unpack/dump-all', {
-    method: 'POST', body: JSON.stringify({ session: a.sessionId }), timeoutS: ctx.timeoutS,
+  const report = await ctx.daemon.json('/api/unpack/run', {
+    method: 'POST',
+    body: JSON.stringify({ package: pkg, session: sidOpt, launch: ctx.opts.launch !== false }),
+    timeoutS: ctx.timeoutS,
   });
 
-  say(ctx, `unpack: ${a.package} (session ${a.sessionId})`);
-  say(ctx, `  ${report.dexCount} DexFile → ${report.realDexCount} real · ${report.carrierCount} carrier  ·  ${fmtBytes(report.realBytes)} of real code (${fmtBytes(report.totalBytes)} total)`);
-  if (report.index) say(ctx, `  dex index ${report.index.built} built / ${report.index.reused} reused`);
-
-  const dexes: any[] = report.dexes ?? [];
-  say(ctx, 'dexes');
-  for (const [i, d] of dexes.entries()) {
-    // Three outcomes, not two: a dex that failed to classify is neither real code nor a carrier,
-    // and tagging it 'real' contradicted the warning printed below.
-    const tag = d.classifyError || d.error ? 'failed ' : d.carrier ? 'carrier' : 'real   ';
-    say(ctx, `  [${String(i).padStart(2)}] ${tag}  ${fmtBytes(d.bytes ?? d.size)}  classes ${d.classes}  methods ${d.methods}  ${String(d.sha256 ?? '').slice(0, 16)}`);
+  say(ctx, `unpack: ${pkg}`);
+  if (report.launch) {
+    say(ctx, `  launch ${report.launch.mode}${report.launch.reusedOnline ? ' (reused online)' : ''}${report.launch.waitedMs != null ? ` · waited ${report.launch.waitedMs}ms` : ''}`);
   }
-  for (const c of report.carriers ?? []) {
-    say(ctx, `  carrier detail: classes=${c.classes} · ${c.reason ?? ''}`);
+  if (report.didSkipAutoArm || report.captureNote) {
+    say(ctx, `  capture: ${report.captureNote || '本包未自动布防（防加固闪退）'}`);
   }
-  if (Number(report.unclassified ?? 0) > 0) {
-    say(ctx, `  ⚠ ${report.unclassified} of ${report.dexCount} dex(es) could not be classified — ${report.classifyError ?? 'see per-dex classifyError'}`);
+  const procs: any[] = report.processes ?? [];
+  say(ctx, `  processes ${procs.length} · dumped ${report.dumped ?? 0} · failed ${report.failed ?? 0} · real ${report.realDexCount ?? 0} · carrier ${report.carrierCount ?? 0}`);
+  for (const p of procs) {
+    say(ctx, `  · ${p.process || '?'} pid=${p.pid} dumped=${p.dumped} real=${p.realDexCount}${p.error ? ` ERR ${p.error}` : ''}`);
+  }
+  const included: any[] = report.included ?? [];
+  say(ctx, `dexes in bundle: ${included.length}`);
+  for (const [i, d] of included.entries()) {
+    say(ctx, `  [${String(i).padStart(2)}] ${d.carrier ? 'carrier' : 'real   '}  ${fmtBytes(d.size)}  ${String(d.sha256 ?? '').slice(0, 16)}  ${d.name || ''}`);
+  }
+  if (report.bundle) {
+    say(ctx, `  bundle ${fmtBytes(report.bundle.size)}  sha ${String(report.bundle.sha256 ?? '').slice(0, 16)}`);
   }
 
   let saved: { file: string; sha256: string; bytes: number }[] = [];
   const outDir = ctx.opts.out as string | undefined;
-  if (outDir) {
+  if (outDir && report.bundle?.sha256) {
+    mkdirSync(outDir, { recursive: true });
+    const bytes = await ctx.daemon.bytes(`/api/dumps/download?sha=${report.bundle.sha256}`, ctx.timeoutS);
+    const file = join(outDir, `unpack-${String(report.bundle.sha256).slice(0, 16)}.zip`);
+    writeFileSync(file, bytes);
+    saved.push({ file, sha256: report.bundle.sha256, bytes: bytes.length });
+    say(ctx, `  saved ${file} (${fmtBytes(bytes.length)})`);
+  } else if (outDir && included.length) {
     const wantCarriers = ctx.opts['include-carriers'] === true;
     mkdirSync(outDir, { recursive: true });
-    const chosen = dexes.filter((d) => (wantCarriers ? true : !d.carrier));
+    const chosen = included.filter((d) => (wantCarriers ? true : !d.carrier));
     for (const [i, d] of chosen.entries()) {
       const bytes = await ctx.daemon.bytes(`/api/dumps/download?sha=${d.sha256}`, ctx.timeoutS);
       const file = join(outDir, `${String(i).padStart(2, '0')}-${String(d.sha256).slice(0, 16)}.dex`);
@@ -490,34 +507,34 @@ async function cmdUnpack(ctx: Ctx): Promise<number> {
   }
 
   const problems: string[] = [];
+  if (report.ok === false || report.error) problems.push(String(report.error || 'unpack failed'));
   if (Number(report.failed ?? 0) > 0) problems.push(`${report.failed} dex failed to dump`);
-  // A dex the daemon ERRORED on is not a result — it is a failure that used to be absorbed, because
-  // realDexCount counted it as real and the error was dropped from the summary. Report it, fail loud.
-  if (Number(report.unclassified ?? 0) > 0) {
-    problems.push(`${report.unclassified} of ${report.dexCount} dex(es) could not be classified — ${report.classifyError ?? 'see per-dex classifyError'}`);
-  }
-  if (!dexes.length) problems.push('no DexFile was dumped');
-  if (outDir && saved.length !== dexes.filter((d) => ctx.opts['include-carriers'] === true || !d.carrier).length) {
-    problems.push('saved file count does not match the dex set');
-  }
-  const ok = problems.length === 0;
+  if (!included.length && report.ok !== false) problems.push('no DEX was packed');
+  const ok = problems.length === 0 && report.ok !== false;
   say(ctx, ok ? '✅ unpack: ok' : '❌ unpack: FAIL');
   for (const p of problems) say(ctx, `   - ${p}`);
-  return emit(ctx, { ok, status: ok ? 'ok' : 'fail', session: a.sessionId, package: a.package, report: reportSummary(report), saved, problems },
-    ok ? EXIT.ok : EXIT.fail);
+  return emit(ctx, {
+    ok, status: ok ? 'ok' : 'fail', package: pkg, session: report.session ?? null,
+    report: reportSummary(report), saved, problems,
+  }, ok ? EXIT.ok : EXIT.fail);
 }
 
 function reportSummary(report: any) {
   return {
-    dexCount: report.dexCount, realDexCount: report.realDexCount, carrierCount: report.carrierCount,
+    dexCount: (report.included ?? []).length, realDexCount: report.realDexCount, carrierCount: report.carrierCount,
+    dumped: report.dumped, failed: report.failed, processes: (report.processes ?? []).length,
+    didSkipAutoArm: report.didSkipAutoArm, captureNote: report.captureNote,
+    bundle: report.bundle ? { sha256: report.bundle.sha256, size: report.bundle.size } : null,
+    launch: report.launch ?? null,
     unclassified: report.unclassified, ...(report.classifyError ? { classifyError: report.classifyError } : {}),
-    dumped: report.dumped, failed: report.failed, totalBytes: report.totalBytes, realBytes: report.realBytes,
+    totalBytes: report.totalBytes, realBytes: report.realBytes,
     index: report.index,
     // `classifyError` / `error` MUST ride along. Projecting only the happy fields is how a run where
     // 3 of 4 dexes failed to index still looked like a clean success: the reason was on each entry
     // and this map dropped it, leaving `problems: []`.
-    dexes: (report.dexes ?? []).map((d: any) => ({
+    dexes: (report.dexes ?? report.included ?? []).map((d: any) => ({
       sha256: d.sha256, bytes: d.bytes ?? d.size, classes: d.classes, methods: d.methods, carrier: d.carrier, shape: d.shape,
+      name: d.name, process: d.process,
       ...(d.classifyError ? { classifyError: d.classifyError } : {}),
       ...(d.error ? { error: d.error } : {}),
     })),

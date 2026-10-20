@@ -25,6 +25,7 @@
     font-family:Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,'PingFang SC','Microsoft YaHei',sans-serif; }
   header, #nav, .filters { flex-shrink:0; }
   .muted { color:var(--muted); }
+  .detect-radar { font-size:12px; line-height:1.55; color:var(--muted); padding:10px 14px 0; white-space:pre-wrap; }
   .spacer { flex:1; }
   a.dl { color:var(--blue); text-decoration:none; } a.dl:hover { text-decoration:underline; }
   code { background:var(--surface-2); border:1px solid var(--line); border-radius:4px; padding:1px 5px; color:var(--ink-2); font-family:ui-monospace,SFMono-Regular,Consolas,monospace; }
@@ -168,6 +169,13 @@
   .row .ts { color:var(--muted); font-size:11px; margin-left:auto; flex-shrink:0; font-variant-numeric:tabular-nums; }
   .row .lens { color:var(--muted); font-size:11px; margin-top:2px; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .row .preview { margin-top:4px; color:#c7ccd5; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .row.crypto-row { min-height:0; }
+  .row.crypto-row .algo { flex:1; min-width:0; }
+  .row.crypto-row .sizes { color:var(--ink-2); font-size:12px; font-variant-numeric:tabular-nums; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; flex-shrink:0; }
+  .row.crypto-row .mark { color:var(--amber); font-size:11px; flex-shrink:0; }
+  .row.crypto-row .subline { display:flex; gap:12px; align-items:baseline; margin-top:4px; min-width:0; }
+  .row.crypto-row .subline .preview { margin-top:0; flex:1; min-width:0; }
+  .row.crypto-row .hook { margin-left:auto; color:var(--muted); font-size:11px; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; flex-shrink:0; }
   .ex-note { padding:8px 12px 0; color:var(--muted); font-size:12px; line-height:1.4; }
   .row .lens-out { color:var(--cyan); }
   .io-section.raw-card { padding:0 0 2px 12px; background:transparent; border:0; border-radius:0; border-left:2px solid var(--cyan); }
@@ -255,12 +263,34 @@
 
   /* ---- Dump（对齐 iOS dumppane：说明 + 两个主按钮 + 一张表） ---- */
   .dumppane { flex:1; overflow-y:auto; padding:24px; background:var(--bg); }
-  .dumpwrap { max-width:1080px; }
+  .dumpwrap { max-width:none; }
   .dumpwrap h2 { font-size:18px; margin:2px 0 10px; color:var(--ink); }
-  .dumpwrap h3 { font-size:13px; color:var(--ink-2); margin:22px 0 8px; font-weight:600; text-transform:none; letter-spacing:0; }
+  .dumpwrap h3 { font-size:13px; color:var(--ink-2); margin:4px 0 8px; font-weight:600; text-transform:none; letter-spacing:0; }
+  .dump-cols { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:28px; align-items:start; }
+  .dump-col { min-width:0; }
   .dumpwrap .note { color:var(--muted); font-size:12px; line-height:1.7; margin-bottom:14px; }
   .dumpwrap .note b { color:var(--ink); }
   .dumpwrap .warn-note { color:var(--amber); }
+  .dump-callout {
+    margin:0 0 14px; padding:10px 12px; border:1px solid rgba(255,200,92,.35);
+    border-radius:6px; background:rgba(255,200,92,.08); color:var(--ink-2); font-size:12px; line-height:1.65;
+  }
+  .dump-callout strong { color:var(--amber); font-weight:650; }
+  .dump-callout[hidden] { display:none; }
+  .dump-callout .muted { color:var(--muted); }
+  .cap-unpack-hint {
+    margin:0 14px 10px; padding:9px 12px; border:1px solid rgba(120,169,255,.35);
+    border-radius:6px; background:rgba(120,169,255,.08); color:var(--ink-2); font-size:12px; line-height:1.55;
+  }
+  .cap-unpack-hint[hidden] { display:none; }
+  .cap-unpack-hint strong { color:var(--blue); }
+  .cap-state-pill {
+    margin-left:8px; padding:2px 8px; border-radius:4px; font-size:11px; font-weight:600;
+    border:1px solid var(--line); color:var(--muted); background:transparent; white-space:nowrap;
+  }
+  .cap-state-pill.warn { color:var(--amber); border-color:rgba(255,200,92,.45); background:rgba(255,200,92,.1); }
+  .cap-state-pill.off { color:#f0a0a0; border-color:rgba(240,100,100,.35); background:rgba(240,100,100,.08); }
+  .cap-state-pill[hidden] { display:none; }
   .dump-done { margin:6px 0 14px; font-size:13px; color:var(--ink-2); white-space:pre-wrap; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; background:transparent; border:0; padding:0; }
   .dump-done:empty { display:none; }
   .dump-check { display:inline-flex; align-items:center; gap:6px; color:var(--muted); font-size:12px; }
@@ -269,11 +299,26 @@
   .dump-actions button:hover { color:var(--ink); background:rgba(255,255,255,.04); border-color:#646e7d; }
   .dump-actions button.primary { color:#07101f; background:var(--blue); border-color:var(--blue); font-weight:600; }
   .dump-actions button.primary:hover { background:#93bcff; }
-  .dump-table { width:100%; border-collapse:collapse; font-size:12px; margin-top:6px; }
-  .dump-table th, .dump-table td { text-align:left; padding:9px 10px; border-bottom:1px solid var(--line-soft); background:transparent; }
+  .dump-actions button:disabled { opacity:.45; cursor:default; }
+  .dump-proc { display:flex; gap:8px; flex-wrap:wrap; margin:0 0 16px; }
+  .dump-proc button.on { color:#07101f; background:var(--blue); border-color:var(--blue); font-weight:600; }
+  .dump-status.ok { color:var(--green); }
+  .dump-status.warn { color:var(--amber); }
+  .dump-status.bad { color:var(--danger); }
+  .dump-sub { margin-top:18px; }
+  .dump-table { width:100%; border-collapse:collapse; table-layout:fixed; font-size:12px; margin-top:6px; }
+  .dump-table th, .dump-table td { text-align:left; padding:9px 10px; border-bottom:1px solid var(--line-soft); background:transparent; vertical-align:top; }
   .dump-table th { color:var(--muted); font-weight:600; }
-  .dump-table td.symname { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; color:var(--ink); word-break:break-all; }
-  .dump-table th:last-child, .dump-table td:last-child { text-align:right; white-space:nowrap; }
+  /* Filenames must NOT use break-all — in a squeezed column it wraps one glyph per line. */
+  .dump-table td.symname { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; color:var(--ink); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .dump-table td.dump-path { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--muted); font:11px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace; }
+  .dump-table td.dump-size { width:72px; white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .dump-table th.dump-size, .dump-table td.dump-size { width:72px; }
+  .dump-table.pkg-so th:nth-child(1), .dump-table.pkg-so td:nth-child(1) { width:30%; }
+  .dump-table.pkg-so th:nth-child(2), .dump-table.pkg-so td:nth-child(2) { width:72px; }
+  .dump-table.pkg-so th:nth-child(3), .dump-table.pkg-so td:nth-child(3) { width:auto; }
+  .dump-table.pkg-so th:nth-child(4), .dump-table.pkg-so td:nth-child(4) { width:64px; text-align:right; white-space:nowrap; }
+  .dump-table th:last-child, .dump-table td:last-child { text-align:right; }
   .dl-link { display:inline-block; color:var(--blue); text-decoration:none; }
   .dl-link:hover { text-decoration:underline; }
 
@@ -347,6 +392,7 @@
   @media (max-width:980px) {
     header { flex-wrap:wrap; } .stats { order:3; }
     .workspace-name { display:none; }
+    .dump-cols { grid-template-columns:minmax(0,1fr); }
   }
   @media (max-width:760px) {
     .workspace { flex-direction:column; }
@@ -366,7 +412,7 @@
   <div class="brand-lockup">
     <h1><span class="hdr-mark"><img src="/raven.svg" alt=""></span>ADH</h1>
   </div>
-  <div class="stats" id="stats"><span class="status-dot" id="conn"></span><span id="status">连接中…</span></div>
+  <div class="stats" id="stats"><span class="status-dot" id="conn"></span><span id="status">连接中…</span><span class="cap-state-pill" id="capStatePill" hidden></span></div>
   <div class="header-process">
     <div class="menu-wrap app-switch">
       <button type="button" class="process-trigger" id="appBtn" aria-expanded="false" aria-controls="appMenu" title="切换应用">
@@ -377,9 +423,9 @@
       <div class="popover app-menu" id="appMenu"></div>
     </div>
     <div class="menu-wrap">
-      <button type="button" class="compact-action" id="processBtn" aria-expanded="false" aria-controls="processPopover" title="查看当前应用的详情">详情</button>
+      <button type="button" class="compact-action" id="processBtn" aria-expanded="false" aria-controls="processPopover" title="应用摘要：包名与最近进程事件">摘要</button>
       <div class="popover process-popover" id="processPopover">
-        <div class="proc-title">详情</div>
+        <div class="proc-title">应用摘要</div>
         <dl class="procinfo" id="procinfo"></dl>
         <div class="app-events" id="appEvents"></div>
       </div>
@@ -401,6 +447,7 @@
 
 <nav id="nav"></nav>
 
+<div class="cap-unpack-hint" id="capUnpackHint" hidden></div>
 <!-- 加解密/系统/网络 三个实时捕获 tab 共用这条过滤工具栏 -->
 <div class="filters" id="toolbar">
   <div class="toolbar-main">
@@ -408,12 +455,12 @@
     <button type="button" class="filter-toggle" id="filterToggleBtn" aria-expanded="false" aria-controls="advancedFilters">筛选<span class="filter-badge" id="filterBadge"></span><span class="menu-chevron" aria-hidden="true">⌄</span></button>
     <div class="toolbar-actions">
       <span id="count"></span>
-      <button type="button" id="tb-pause" class="pause-btn">暂停</button>
+      <button type="button" id="tb-pause" class="pause-btn" title="只停列表刷新">暂停刷新</button>
       <div class="menu-wrap">
         <button type="button" class="icon-button" id="toolbarMoreBtn" aria-label="当前板块更多操作" aria-expanded="false" aria-controls="toolbarMenu" title="更多">⋯</button>
         <div class="popover menu-popover" id="toolbarMenu">
-          <button type="button" id="tb-download">下载本类</button>
-          <button type="button" id="tb-clearcat" class="menu-danger">清空本类</button>
+          <button type="button" id="tb-download" title="当前筛选（内存）">下载本页</button>
+          <button type="button" id="tb-clearcat" class="menu-danger" title="不删磁盘">清空本页</button>
         </div>
       </div>
     </div>
@@ -449,7 +496,7 @@
       </div>
       <div class="splitter"></div>
       <div class="detail-pane" id="cc-detail">
-        <div class="detail-empty">实时加解密捕获（EVP/Digest/HMAC）。App 一跑加密就自动出现。<br>点任意一条查看 明文 / 密文 / 算法 / 线程 / 时间。</div>
+        <div class="detail-empty">应用里的加解密会列在这里。每行是算法、明文大小和钩子。<br>点开看密钥、IV 和完整内容。</div>
       </div>
     </div>
   </div>
@@ -458,12 +505,13 @@
   <div class="panel" id="p-system">
     <div class="workspace">
       <div class="list-pane">
+        <div id="sy-radar" class="detect-radar">选应用</div>
         <div class="new-banner" id="sy-banner"><span id="sy-banner-text"></span><button type="button" onclick="jumpLatest('sy')">跳到最新</button></div>
         <div id="sy-list"></div>
       </div>
       <div class="splitter"></div>
       <div class="detail-pane" id="sy-detail">
-        <div class="detail-empty">系统函数调用行为：反调试(ptrace)、路径探测(access)、读取手机信息(系统属性)，以及<b>文件读写</b>(open/read/write/close) 的常驻 hook 被动采集。</div>
+        <div class="detail-empty">系统与文件相关捕获。点左侧看详情。</div>
       </div>
     </div>
   </div>
@@ -477,7 +525,7 @@
       </div>
       <div class="splitter"></div>
       <div class="detail-pane" id="nt-detail">
-        <div class="detail-empty">同一条 SSL 连接上的 HTTP/1.1 会配成一对。点开是请求和响应；gzip、deflate、br 已解开。HTTP/2 和没有连接号的记录仍按发送、接收分开。WebView 不在这里。</div>
+        <div class="detail-empty">同一条 SSL 连接上的 HTTP/1.1 和 HTTP/2 会还原成完整请求。点开左边是请求、右边是响应；gzip、deflate、br 已解开。没有连接号的记录仍按发送、接收分开。WebView 不在这里。</div>
       </div>
     </div>
   </div>
@@ -487,7 +535,7 @@
     <div class="files-workspace">
       <aside class="list-pane files-list-pane">
         <div class="files-head">
-          <nav class="files-breadcrumb" id="filesBreadcrumb"><a href="#" data-files-nav="">沙盒根</a></nav>
+          <nav class="files-breadcrumb" id="filesBreadcrumb"><a href="#" data-files-nav="">应用私有目录</a></nav>
           <button type="button" id="filesUp" title="上一级">↑</button>
           <button type="button" id="filesRefresh">刷新</button>
         </div>
@@ -506,21 +554,52 @@
     </div>
   </div>
 
-  <!-- Dump（对齐 iOS：说明 + 刷新/一键脱壳 + 模块表 + 已保存 dump） -->
+  <!-- Dump：一键脱壳打包 + 记录下载 + SO（已加载 / 包内） -->
   <div class="panel" id="p-dump">
     <div class="dumppane">
       <div class="dumpwrap">
-        <h2>一键 Dump 所有 DEX</h2>
-        <div class="note">枚举当前进程 ART 已加载的 DexFile，逐个 dump 并按 SHA-256 去重。只处理<b>当前进程已映射</b>的 DEX。<br><span class="warn-note">⚠ 仅限授权安全测试与自有 App。</span></div>
-        <div class="dump-actions">
-          <button type="button" class="primary" onclick="dumpAllDex()">一键 Dump 所有 DEX</button>
-          <button type="button" onclick="loadDumps()">刷新已保存</button>
-          <span id="dumpStat" class="muted"></span>
+        <h2>脱壳</h2>
+        <div class="note">未在跑会冷启动（可能丢登录）；已在跑直接扫。DEX 边抠边进记录，最后打 zip。<br><span class="warn-note">⚠ 仅限授权测试与自有 App。</span></div>
+        <div class="dump-callout" id="unpackCapPolicy">脱壳期间本包不装捕获钩；要继续捕，重启 App。</div>
+        <div class="dump-callout" id="unpackCapLive" hidden></div>
+        <div class="dump-actions" style="margin:10px 0">
+          <button type="button" class="primary" id="btnUnpack" onclick="runOneClickUnpack()">一键脱壳</button>
+          <button type="button" onclick="refreshDumpPage()">刷新</button>
+          <span id="dexStat" class="muted"></span>
         </div>
-        <div id="dumpDone" class="dump-done"></div>
-        <h3>已保存 DEX</h3>
-        <table class="dump-table"><thead><tr><th>大小</th><th>SHA-256</th><th>来源</th><th>操作</th></tr></thead>
-          <tbody id="dumps-rows"></tbody></table>
+        <div class="dump-cols">
+          <section class="dump-col" id="unpackCol">
+            <div id="unpackListView">
+              <h3>脱壳记录</h3>
+              <table class="dump-table"><thead><tr><th>时间</th><th>说明</th><th>大小</th><th></th></tr></thead>
+                <tbody id="unpackRows"></tbody></table>
+            </div>
+            <div id="unpackDetailView" hidden>
+              <div class="dump-actions" style="margin:0 0 10px">
+                <button type="button" id="btnUnpackBack" onclick="closeUnpackDetail()">← 返回</button>
+                <button type="button" class="primary" id="btnUnpackZip" hidden>下载全部</button>
+                <span id="unpackDetailStat" class="muted"></span>
+              </div>
+              <table class="dump-table"><thead><tr><th>文件</th><th>大小</th><th></th></tr></thead>
+                <tbody id="unpackDetailRows"></tbody></table>
+            </div>
+          </section>
+          <section class="dump-col">
+            <h3>已加载 SO</h3>
+            <div class="dump-actions">
+              <button type="button" id="btnSo" onclick="exportLoadedSo()">导出已加载 SO</button>
+              <span id="soStat" class="muted"></span>
+            </div>
+            <table class="dump-table"><thead><tr><th>状态</th><th>文件</th><th>大小</th><th>操作</th></tr></thead>
+              <tbody id="loadedRows"></tbody></table>
+            <div class="dump-sub">
+              <h3>包内 / 私有目录 SO</h3>
+              <div class="note">来自 lib/arm64、files 等目录；可能仍是加密或未加载的副本。悬停可看完整路径。</div>
+              <table class="dump-table pkg-so"><thead><tr><th>文件</th><th class="dump-size">大小</th><th>位置</th><th>操作</th></tr></thead>
+                <tbody id="pkgRows"></tbody></table>
+            </div>
+          </section>
+        </div>
       </div>
     </div>
   </div>
@@ -572,27 +651,28 @@
       <div class="set-main">
         <div id="setPageCapture" class="set-page active">
           <h4>捕获</h4>
-          <p class="set-lead">控制实时加解密捕获的行为。家族过滤在控制台侧生效（决定保留/展示哪些家族），agent 仍照常 hook。</p>
+          <p class="set-lead">注入范围内应用上线自动装钩。关掉 = 卸掉所有在线钩子。一键脱壳不会关此开关。</p>
           <div class="set-toggle-row">
-            <div class="lab"><b>实时捕获</b><span>关闭后停止在目标进程内的持久 hook（EVP/Digest/HMAC/SSL），不再有新捕获</span></div>
+            <div class="lab"><b>自动布防</b><span>开：上线装钩；关：卸掉在线钩子</span></div>
             <label class="set-switch"><input type="checkbox" id="setCapEnabled"><span class="slider"></span></label>
           </div>
           <div class="set-toggle-row">
-            <div class="lab"><b>连接时自动 dump DEX</b><span>App 一连上就结构级 dump 全部 DEX，脱壳面板可直接下载</span></div>
+            <div class="lab"><b>上线时自动存 DEX</b><span>连上即 dump DEX，不是一键脱壳</span></div>
             <label class="set-switch"><input type="checkbox" id="setAutoDump"><span class="slider"></span></label>
           </div>
           <div class="set-section-title">家族过滤</div>
+          <p class="set-lead" style="margin-top:0">关掉 = 不入库，不是卸钩。</p>
           <div id="setFamilies"></div>
           <div class="set-section-title">容量</div>
           <div class="set-row">
-            <div class="lab"><b>内存保留条数</b><span>捕获列表最多保留多少条（超出丢最旧），改小立即裁剪</span></div>
+            <div class="lab"><b>每应用保留条数</b><span>内存 + 磁盘；改小立即裁剪</span></div>
             <select id="setRetain">
               <option value="500">500 条</option><option value="1000">1000 条</option>
               <option value="2000">2000 条</option><option value="5000">5000 条</option>
             </select>
           </div>
           <div class="set-row">
-            <div class="lab"><b>列表展示条数</b><span>左侧列表最多渲染多少行（仅影响显示）</span></div>
+            <div class="lab"><b>列表展示条数</b><span>仅影响左侧渲染</span></div>
             <select id="setDisplayCap">
               <option value="100">100 行</option><option value="150">150 行</option>
               <option value="300">300 行</option><option value="500">500 行</option>
@@ -601,18 +681,22 @@
         </div>
         <div id="setPageData" class="set-page">
           <h4>数据</h4>
-          <p class="set-lead">当前存储与清理。清空不可恢复；dumps 会连磁盘文件一起删。</p>
-          <div class="set-row"><div class="lab"><b>实时捕获</b></div><span class="val" id="statCaptures">—</span></div>
+          <p class="set-lead">当前存储与清理。清空不可恢复。右上角名单只跟手机注入范围，与这里的历史无关。</p>
+          <div class="set-row"><div class="lab"><b>捕获（内存）</b></div><span class="val" id="statCaptures">—</span></div>
+          <div class="set-row"><div class="lab"><b>捕获（磁盘按包）</b></div><span class="val" id="statCapDisk">—</span></div>
           <div class="set-row"><div class="lab"><b>DEX/so dump</b></div><span class="val" id="statDumps">—</span></div>
           <div class="set-row"><div class="lab"><b>会话事件</b></div><span class="val" id="statEvents">—</span></div>
           <div class="set-actions">
-            <button class="danger" onclick="clearData('captures')">清空捕获</button>
-            <button class="danger" onclick="clearData('dumps')">清空 dump</button>
+            <button class="danger" onclick="clearData('captures')">清空全部捕获</button>
+            <button class="danger" onclick="clearDataPkg('captures')">清空当前应用捕获</button>
+            <button class="danger" onclick="clearData('dumps')">清空全部 dump</button>
+            <button class="danger" onclick="clearDataPkg('dumps')">清空当前应用 dump</button>
             <button class="danger" onclick="clearData('events')">清空事件</button>
           </div>
           <div class="set-section-title">导出</div>
           <div class="set-actions">
             <a class="filebtn" href="/api/export/report" target="_blank">下载诊断报告（仅元数据）</a>
+            <button type="button" class="filebtn" onclick="exportPkgCaptures()">导出当前应用捕获 jsonl</button>
           </div>
         </div>
         <div id="setPageRawcfg" class="set-page">
@@ -632,11 +716,9 @@
         </div>
         <div id="setPageBackends" class="set-page">
           <h4>注入后端</h4>
-          <p class="set-lead">ADH 的注入后端现状与可选后端入口。Zygisk 的作用域由手机侧 <b>ADH Manager → Device Daemon</b> 管理；Frida Gadget 是主机侧可选后端（本守护进程没有 adb，只显示缓存与命令）。</p>
+          <p class="set-lead">官方注入路径只有 <b>Zygisk</b>（作用域由手机侧 ADH Manager → Device Daemon 管理）与开发用的 <b>模拟注入</b>。本页显示当前 agent 会话与设备侧后端指针。</p>
           <div class="set-section-title">当前 agent 会话</div>
           <div id="backendsAgents" class="muted">加载中…</div>
-          <div class="set-section-title">Frida Gadget（可选，高开销）</div>
-          <div id="backendsGadget" class="muted">加载中…</div>
           <div class="set-section-title">设备侧后端</div>
           <div id="backendsDevice" class="muted">加载中…</div>
           <div class="set-actions"><button onclick="renderBackends()">刷新</button></div>
@@ -650,7 +732,7 @@
 
 <script>
 // 顶栏五条主轴：加解密 / 系统 / 网络 / 文件 / Dump（对齐 iOS，不藏专家折叠）。
-const TABS_MAIN=[['p-crypto','加解密','cc'],['p-system','系统','sy'],['p-net','网络','nt'],['p-files','文件'],['p-dump','Dump']];
+const TABS_MAIN=[['p-crypto','加解密','cc'],['p-system','系统','sy'],['p-net','网络','nt'],['p-files','文件'],['p-dump','脱壳']];
 const CAP_TABS={'p-crypto':'cc','p-system':'sy','p-net':'nt'};
 
 // ---- 调试台：统一记录请求/WS ----
@@ -672,7 +754,8 @@ function mkTab([id,label,key],active){ const b=document.createElement('button');
   b.onclick=()=>{ document.querySelectorAll('#nav button').forEach(x=>x.classList.remove('active')); b.classList.add('active');
     document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active')); document.getElementById(id).classList.add('active');
     onTabSwitch(id);
-    if(id==='p-dump'){ loadDumps(); } if(id==='p-files') filesInit(); };
+    if(id==='p-system') scheduleDetect();
+    if(id==='p-dump'){ loadInventory(); } if(id==='p-files') filesInit(); };
   return b; }
 TABS_MAIN.forEach((t,i)=>nav.appendChild(mkTab(t,i===0)));
 const val=id=>document.getElementById(id).value.trim();
@@ -684,19 +767,200 @@ function liveSid(){ return liveSession()?.sessionId||''; }
 function sidQ(){ const s=liveSid(); return s?'&session='+encodeURIComponent(s):''; }
 function pkgQ(){ const p=selectedPackage(); return p?'&package='+encodeURIComponent(p):''; }
 
-// ---- 一键 Dump 所有 DEX ----
-async function loadDumps(){ const r=await (await fetch('/api/dumps')).json(); const tb=document.getElementById('dumps-rows');
-  const list=(Array.isArray(r)?r:[]).filter(d=>d.kind==='dex'&&(!selectedPackage()||d.package===selectedPackage())).slice().reverse();
-  tb.innerHTML=list.map(d=>`<tr><td>${fmtSize(d.size)}</td><td class="symname">${escapeHtml((d.sha256||'').slice(0,16))}</td><td class="muted">${escapeHtml(d.source||'')}</td><td><a class="dl-link" href="/api/dumps/download?sha=${d.sha256}">⬇ 下载</a></td></tr>`).join('')||'<tr><td class="muted" colspan=4>暂无 DEX dump（点上方「一键 Dump 所有 DEX」）</td></tr>'; }
-async function dumpAllDex(){ const el=document.getElementById('dumpDone'), st=document.getElementById('dumpStat');
-  if(!liveSid()){ st.textContent=''; el.textContent=selectedPackage()?'这个应用当前没有在跑的进程，捕获记录仍可查看。':'注入范围里还没有勾选应用。'; return; }
-  st.textContent='Dumping…'; el.textContent='';
-  try{ const r=await (await fetch('/api/unpack/dump-all',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session:liveSid()||undefined})})).json();
-    if(r.error){ st.textContent=''; el.textContent='错误: '+r.error; return; }
-    st.textContent=`完成：${r.dumped}/${r.count} 个 DEX（去重 ${r.deduped}，失败 ${r.failed}）`;
-    el.textContent=(r.dexes||[]).map(d=>d.error?`✗ ${d.begin||''} ${d.error}`:`✓ ${d.format||'dex'} ${fmtSize(d.size)} @ ${d.begin}  ${(d.sha256||'').slice(0,16)}${d.dedup?'（已存在）':''}`).join('\n');
-    loadDumps();
-  }catch(e){ st.textContent=''; el.textContent='错误: '+e; } }
+// ---- 脱壳：一键打包 + 记录 + SO ----
+let dumpSid='', dumpView=null, dumpBusy=false;
+function onlineProcs(){ return sessionsOf(selectedPackage()).filter(a=>a.online); }
+function mainProc(list){ return list.find(a=>!String(a.process||'').includes(':'))||list[0]||null; }
+function dumpDownload(sha){ return sha?`<td><a class="dl-link" href="/api/dumps/download?sha=${encodeURIComponent(sha)}">下载</a></td>`:'<td></td>'; }
+function soStatus(m){
+  if(m.sha256) return ['已导出','ok'];
+  if(m.elf===false) return ['内存里不是 ELF','warn'];
+  if(m.error) return ['导出失败','bad'];
+  if(m.elf===true) return ['可导出',''];
+  return ['待确认',''];
+}
+function fmtTs(ts){ if(!ts) return '—'; try{ return new Date(ts).toLocaleString(); }catch{ return String(ts); } }
+function renderSoTables(){
+  const v=dumpView;
+  const loadedBody=document.getElementById('loadedRows'), pkgBody=document.getElementById('pkgRows');
+  if(!v){ loadedBody.innerHTML=''; pkgBody.innerHTML=''; return; }
+  loadedBody.innerHTML=(v.loaded||[]).map(m=>{ const [text,cls]=soStatus(m); return `<tr><td class="dump-status ${cls}">${escapeHtml(text)}</td><td class="symname" title="${escapeHtml(m.name||'')}">${escapeHtml(m.name||'')}</td><td class="dump-size">${fmtSize(m.savedSize||m.size||0)}</td>${dumpDownload(m.sha256)}</tr>`; }).join('')||'<tr><td class="muted" colspan=4>没有已加载的应用 SO</td></tr>';
+  pkgBody.innerHTML=(v.packaged||[]).map((m,i)=>{
+    const path=String(m.path||'');
+    const loc=path+(m.loaded?' · 已加载':'');
+    const act=m.sha256
+      ? dumpDownload(m.sha256)
+      : `<td><button type="button" class="dl-link" data-pkg-so="${i}" onclick="pullPackagedSo(${i})">拉取</button></td>`;
+    return `<tr><td class="symname" title="${escapeHtml(m.name||'')}">${escapeHtml(m.name||'')}</td><td class="dump-size">${fmtSize(m.size||0)}</td><td class="dump-path" title="${escapeHtml(loc)}">${escapeHtml(loc)}</td>${act}</tr>`;
+  }).join('')||'<tr><td class="muted" colspan=4>没有列到包内 SO</td></tr>';
+}
+let unpackRuns=[];
+let unpackViewRunId=null;
+function unpackRunRowHtml(run){
+  const n=run.dexCount||(run.files||[]).length||0;
+  const label=(run.processes?run.processes+' 进程 · ':'')+n+' 个 DEX';
+  return `<tr class="unpack-run" data-run="${escapeHtml(run.runId)}" style="cursor:pointer">`
+    +`<td>${escapeHtml(fmtTs(run.capturedAt))}</td>`
+    +`<td class="muted">${escapeHtml(label)}</td>`
+    +`<td>${fmtSize(run.size||0)}</td>`
+    +`<td><button type="button" class="dl-link" data-open-run="${escapeHtml(run.runId)}">查看</button></td></tr>`;
+}
+function renderUnpackViews(){
+  const list=document.getElementById('unpackListView');
+  const detail=document.getElementById('unpackDetailView');
+  const body=document.getElementById('unpackRows');
+  if(!list||!detail||!body) return;
+  if(!unpackViewRunId){
+    list.hidden=false; detail.hidden=true;
+    body.innerHTML=unpackRuns.length
+      ? unpackRuns.map(unpackRunRowHtml).join('')
+      : '<tr><td class="muted" colspan=4>还没有脱壳记录</td></tr>';
+    return;
+  }
+  const run=unpackRuns.find(r=>r.runId===unpackViewRunId);
+  list.hidden=true; detail.hidden=false;
+  const stat=document.getElementById('unpackDetailStat');
+  const zipBtn=document.getElementById('btnUnpackZip');
+  const rows=document.getElementById('unpackDetailRows');
+  if(!run){
+    if(stat) stat.textContent='记录不存在';
+    if(rows) rows.innerHTML='';
+    if(zipBtn) zipBtn.hidden=true;
+    return;
+  }
+  if(stat) stat.textContent=fmtTs(run.capturedAt)+' · '+(run.dexCount||run.files.length)+' DEX'
+    +(run.processes?' · '+run.processes+' 进程':'');
+  if(zipBtn){
+    zipBtn.hidden=!run.bundleSha256;
+    zipBtn.onclick=()=>{ if(run.bundleSha256) window.open('/api/dumps/download?sha='+encodeURIComponent(run.bundleSha256),'_blank'); };
+  }
+  const files=run.files||[];
+  rows.innerHTML=files.length
+    ? files.map(f=>`<tr><td class="symname" title="${escapeHtml(f.note||f.name||'')}">${escapeHtml(f.name||f.sha256.slice(0,12))}${f.carrier?' <span class="pill">carrier</span>':''}</td><td class="dump-size">${fmtSize(f.size||0)}</td>${dumpDownload(f.sha256)}</tr>`).join('')
+    : '<tr><td class="muted" colspan=3>没有 DEX</td></tr>';
+}
+function openUnpackDetail(runId){ unpackViewRunId=runId||null; renderUnpackViews(); }
+function closeUnpackDetail(){ unpackViewRunId=null; renderUnpackViews(); }
+async function loadUnpackHistory(){
+  const pkg=selectedPackage();
+  const body=document.getElementById('unpackRows');
+  if(!pkg){
+    unpackRuns=[]; unpackViewRunId=null;
+    if(body) body.innerHTML='<tr><td class="muted" colspan=4>先在右上角选应用</td></tr>';
+    document.getElementById('unpackListView').hidden=false;
+    document.getElementById('unpackDetailView').hidden=true;
+    return;
+  }
+  try{
+    const r=await (await fetch('/api/unpack/history?package='+encodeURIComponent(pkg))).json();
+    unpackRuns=r.runs||[];
+    if(unpackViewRunId && !unpackRuns.some(x=>x.runId===unpackViewRunId)) unpackViewRunId=null;
+    renderUnpackViews();
+  }catch(e){
+    unpackRuns=[];
+    if(body) body.innerHTML=`<tr><td class="muted" colspan=4>读记录失败</td></tr>`;
+  }
+}
+document.getElementById('unpackRows')?.addEventListener('click', e=>{
+  const btn=e.target.closest('[data-open-run]');
+  const tr=e.target.closest('tr[data-run]');
+  const id=(btn&&btn.getAttribute('data-open-run'))||(tr&&tr.getAttribute('data-run'));
+  if(id) openUnpackDetail(id);
+});
+async function loadInventory(){ return refreshDumpPage(); }
+async function refreshDumpPage(){
+  const procs=onlineProcs();
+  dumpSid=(mainProc(procs)||{}).sessionId||'';
+  await loadUnpackHistory();
+  if(!dumpSid){
+    dumpView=null;
+    document.getElementById('loadedRows').innerHTML='<tr><td class="muted" colspan=4>进程不在线时无法列出已加载 SO</td></tr>';
+    document.getElementById('pkgRows').innerHTML='<tr><td class="muted" colspan=4>进程不在线时无法列包内 SO（打开应用后再刷新）</td></tr>';
+    if(!dumpBusy) document.getElementById('dexStat').textContent=selectedPackage()?'未在跑':'先选应用';
+    return;
+  }
+  if(!dumpBusy) document.getElementById('dexStat').textContent=`在线 ${procs.length} 个进程 · 正在刷新 SO…`;
+  try{
+    const r=await (await fetch('/api/unpack/inventory?session='+encodeURIComponent(dumpSid))).json();
+    if(r.error){ document.getElementById('dexStat').textContent=r.error; return; }
+    dumpView=r; renderSoTables();
+    if(!dumpBusy) document.getElementById('dexStat').textContent=`在线 ${procs.length} 个进程 · 已加载 SO ${(r.loaded||[]).length} · 包内 ${(r.packaged||[]).length}`;
+  }catch(e){ document.getElementById('dexStat').textContent='错误: '+e; }
+}
+let unpackLiveCount=0;
+async function runOneClickUnpack(){
+  if(dumpBusy) return;
+  const pkg=selectedPackage();
+  if(!pkg){ toast('先在右上角选目标应用'); return; }
+  const online=onlineProcs();
+  const willForceStop=online.length===0;
+  if(willForceStop){
+    if(!confirm(pkg+' 未在跑，将冷启动（可能丢登录）。继续？')) return;
+  }
+  dumpBusy=true; unpackLiveCount=0;
+  document.getElementById('btnUnpack').disabled=true;
+  document.getElementById('dexStat').textContent=willForceStop
+    ?'冷启动中…'
+    :`在线 ${online.length} 进程 · 抠 DEX…`;
+  setUnpackLiveHint('脱壳中 · 本包暂不装钩', true);
+  try{
+    const r=await (await fetch('/api/unpack/run',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({package:pkg})})).json();
+    if(r.error||r.ok===false){
+      document.getElementById('dexStat').textContent=r.error||'脱壳失败';
+      toast(r.error||'脱壳失败');
+      setUnpackLiveHint('', false);
+    } else {
+      const n=(r.included||[]).length;
+      const pc=(r.processes||[]).length;
+      const mode=r.launch&&r.launch.mode?` · ${r.launch.mode}`:'';
+      document.getElementById('dexStat').textContent=`完成：${n} DEX · ${pc} 进程`+(r.bundle?` · ${fmtSize(r.bundle.size)}`:'')+mode;
+      markUnpackSkippedArm(pkg);
+      setUnpackLiveHint('完成 · 本包未装钩，重启 App 后再捕', true);
+      toast('脱壳完成');
+    }
+  }catch(e){
+    document.getElementById('dexStat').textContent='错误: '+e; toast(String(e));
+    setUnpackLiveHint('', false);
+  }
+  dumpBusy=false; document.getElementById('btnUnpack').disabled=false;
+  await refreshDumpPage();
+  refreshCapUnpackHint();
+  updateCapStatePill();
+}
+async function exportLoadedSo(){
+  if(dumpBusy||!dumpView||!dumpSid) return;
+  const todo=(dumpView.loaded||[]).filter(m=>m.elf!==false&&!m.sha256);
+  if(!todo.length){ document.getElementById('soStat').textContent='没有新的可导出 SO（已导出的点右侧「下载」）'; return; }
+  dumpBusy=true; document.getElementById('btnSo').disabled=true;
+  let n=0, saved=0;
+  for(const m of todo){
+    document.getElementById('soStat').textContent=`正在导出 ${n}/${todo.length}`;
+    try{
+      const r=await (await fetch('/api/unpack/dump-so-one',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session:dumpSid,base:m.base,name:m.name})})).json();
+      if(r.saved){ m.sha256=r.sha256; m.savedSize=r.size; m.elf=true; m.error=''; saved++; }
+      else { m.error=r.error||'未保存'; if(r.elf===false) m.elf=false; }
+    }catch(e){ m.error=String(e); }
+    n++; renderSoTables();
+  }
+  dumpBusy=false; document.getElementById('btnSo').disabled=false;
+  document.getElementById('soStat').textContent=`已导出 ${saved}/${todo.length}`;
+}
+async function pullPackagedSo(i){
+  if(dumpBusy||!dumpView) return;
+  const m=(dumpView.packaged||[])[i];
+  const pkg=selectedPackage();
+  if(!m||!pkg||!m.path){ toast('没有可拉取的路径'); return; }
+  if(m.sha256){ toast('已经拉过，直接点下载'); return; }
+  dumpBusy=true;
+  document.getElementById('soStat').textContent=`正在拉取 ${m.name||''}…`;
+  try{
+    const r=await (await fetch('/api/unpack/pull-so',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({package:pkg,path:m.path,name:m.name})})).json();
+    if(r.saved){ m.sha256=r.sha256; m.size=r.size||m.size; toast('已拉取，可下载'); }
+    else toast(r.error||'拉取失败');
+  }catch(e){ toast(String(e)); }
+  dumpBusy=false; renderSoTables();
+  document.getElementById('soStat').textContent='';
+}
 
 // ---- 实时捕获：单一 capItems，多面板按 category 分流（加解密 crypto / 系统 system+file / 网络 net） ----
 const capItems=[]; let capMaxId=0, capDisplayCap=300;
@@ -725,9 +989,11 @@ function belongsToApp(c){
   if(c.sessionId) return sessionsOf(pkg).some(a=>a.sessionId===c.sessionId);
   return false;
 }
-function applyFilter(p){ let items=capItems.filter(c=>p.cats.includes(c.category)&&belongsToApp(c));
+function listedCap(c){ if(c.category!=='crypto') return true; return clientCryptoView(c).show!==false; }
+function applyFilter(p){ let items=capItems.filter(c=>p.cats.includes(c.category)&&belongsToApp(c)&&listedCap(c));
   const f=p.filter;
-  if(f.q){ const q=f.q.toLowerCase(); items=items.filter(c=>((c.algo||'')+' '+(c.op||'')+' '+(c.preview||'')).toLowerCase().includes(q)); }
+  if(f.q){ const q=f.q.toLowerCase(); items=items.filter(c=>{ const v=c.view||{};
+    return ((c.algo||'')+' '+(c.op||'')+' '+(c.preview||'')+' '+(v.title||'')+' '+(v.hook||'')+' '+(v.direction||'')).toLowerCase().includes(q); }); }
   if(f.min!=null) items=items.filter(c=>c.inl>=f.min);
   if(f.max!=null) items=items.filter(c=>c.inl<=f.max);
   if(p.key==='cc'&&f.cat>=0){ const want=CAT_BY_SEL[f.cat]; items=items.filter(c=>catClass(c)===want); }
@@ -777,7 +1043,76 @@ function rowLens(c){
   let meta='in:'+(c.inl||0)+'B';
   if(c.outl) meta+=' · out:'+c.outl+'B';
   return meta; }
-function rowHtml(key,sel,c){ const cc=catClass(c);
+const VAGUE_ALGO=/^(摘要 Digest|对称加解密|HMAC|RSA\/EC 签名|RSA\/EC 验签|RSA 非对称加密|RSA 非对称解密|AEAD 加密\(GCM\/ChaCha20-Poly1305\)|AEAD 解密\(GCM\/ChaCha20-Poly1305\)|TLS|Java Hook|Native Hook)$/;
+function clientJavaHook(op, hasBody){
+  if(op==='digest') return 'MessageDigest.digest';
+  if(op==='mac') return hasBody?'Mac.doFinal':'Mac.init';
+  if(op==='sign') return hasBody?'Signature.sign':'Signature.initSign';
+  if(op==='verify') return hasBody?'Signature.verify':'Signature.initVerify';
+  if(op==='init') return 'Cipher.init';
+  if(op==='encrypt'||op==='decrypt'||op==='wrap'||op==='unwrap'||op==='doFinal') return hasBody?'Cipher.doFinal':'Cipher.init';
+  return '';
+}
+function clientJavaDirection(op){
+  if(op==='encrypt'||op==='wrap') return '加密';
+  if(op==='decrypt'||op==='unwrap') return '解密';
+  if(op==='sign') return '签名';
+  if(op==='verify') return '验签';
+  if(op==='digest') return '哈希';
+  if(op==='mac') return '认证';
+  return '';
+}
+function clientNativeView(func){
+  const known={
+    EVP_DigestUpdate:['摘要 · 未识别','哈希'], HMAC_Update:['HMAC · 未识别','认证'],
+    EVP_DigestSignUpdate:['HMAC · 未识别','认证'], EVP_DigestVerifyUpdate:['HMAC · 未识别','认证'],
+    EVP_DSignUpdate_asym:['签名 · 未识别','签名'], EVP_DSignFinal_sig:['签名 · 未识别','签名'],
+    EVP_DVerifyUpdate_asym:['验签 · 未识别','验签'], EVP_DVerifyFinal_sig:['验签 · 未识别','验签'],
+    ECDSA_sign_digest:['签名 · 未识别','签名'], ECDSA_sign_sig:['签名 · 未识别','签名'],
+    ECDSA_verify_digest:['验签 · 未识别','验签'], ECDSA_verify_sig:['验签 · 未识别','验签'],
+    EVP_PKEY_encrypt_in:['RSA · 未识别','加密'], EVP_PKEY_encrypt_out:['RSA · 未识别','加密'],
+    EVP_PKEY_decrypt_in:['RSA · 未识别','解密'], EVP_PKEY_decrypt_out:['RSA · 未识别','解密'],
+    EVP_AEAD_seal_pt:['AEAD · 未识别','加密'], EVP_AEAD_seal_ct:['AEAD · 未识别','加密'],
+    EVP_AEAD_open_ct:['AEAD · 未识别','解密'], EVP_AEAD_open_pt:['AEAD · 未识别','解密']
+  };
+  if(known[func]) return {title:known[func][0], direction:known[func][1]};
+  if(func.startsWith('EVP_Encrypt')) return {title:'对称 · 未识别', direction:'加密'};
+  if(func.startsWith('EVP_Decrypt')) return {title:'对称 · 未识别', direction:'解密'};
+  if(func.startsWith('EVP_Cipher')) return {title:'对称 · 未识别', direction:''};
+  if(func.startsWith('EVP_Digest')) return {title:'摘要 · 未识别', direction:'哈希'};
+  return {title:func||'未识别', direction:''};
+}
+function clientCryptoView(c){
+  if(c.view) return c.view;
+  const stored=c.hex&&c.hex.length%2===0?c.hex.length/2:0;
+  const inBytes=c.inl>0?c.inl:stored;
+  const outBytes=c.outHex&&c.outHex.length%2===0?c.outHex.length/2:(typeof c.outl==='number'?c.outl:0);
+  const truncated=!!(c.inl>0&&c.hex&&inBytes>stored);
+  const hasBody=inBytes>0||outBytes>0;
+  const algo=(c.algo||'').trim();
+  const concrete=algo&&!VAGUE_ALGO.test(algo)?algo:'';
+  const native=clientNativeView(c.func||'');
+  const java=c.source==='java'||(c.func&&!c.func.includes('_')&&!c.func.includes('.'));
+  const hook=java?((c.func&&c.func.includes('.'))?c.func:clientJavaHook(c.op||'', hasBody)):(c.func||'');
+  const direction=java?clientJavaDirection(c.op||''):native.direction;
+  const preview=(c.preview||'').trim();
+  const readable=preview.replace(/[.\s]/g,'')?preview:'';
+  const input=inBytes>0?(inBytes+' B'+(truncated?' 截断':'')):'';
+  const output=outBytes>0?outBytes+' B':'';
+  return {title:concrete||(java?'未识别':native.title), direction, hook, sizeLabel:input&&output?input+' → '+output:(input||output),
+    truncated, hasKey:!!(c.hasKey||c.keyHex), preview:readable, show:hasBody};
+}
+function cryptoRow(key,sel,c){ const v=clientCryptoView(c); const cc=catClass(c);
+  const dir=v.direction?'<span class="op">'+escapeHtml(v.direction)+'</span>':'';
+  const size=v.sizeLabel?'<span class="sizes">'+escapeHtml(v.sizeLabel)+'</span>':'';
+  const mark=v.hasKey?'<span class="mark">有密钥</span>':'';
+  const prev=v.preview?'<span class="preview">'+escapeHtml(v.preview)+'</span>':'';
+  const hook=v.hook?'<span class="hook">'+escapeHtml(v.hook)+'</span>':'';
+  const sub=(prev||hook)?'<div class="subline">'+prev+hook+'</div>':'';
+  return `<div class="row crypto-row cat-${cc}${c.id===sel?' selected':''}" onclick="capSelectP('${key}',${c.id})">
+    <div class="top"><span class="algo">${escapeHtml(v.title||c.algo||'')}</span>${dir}${size}${mark}<span class="ts">${new Date(c.ts).toLocaleTimeString()}</span></div>
+    ${sub}</div>`; }
+function rowHtml(key,sel,c){ if(c.category==='crypto') return cryptoRow(key,sel,c); const cc=catClass(c);
   const isIo=c.category==='net'||c.category==='file'||c.category==='system';
   const preview=(!isIo && c.preview)?'<div class="preview">'+escapeHtml(c.preview)+'</div>':'';
   return `<div class="row cat-${cc}${c.id===sel?' selected':''}" onclick="capSelectP('${key}',${c.id})">
@@ -791,7 +1126,7 @@ function jumpLatest(key){ const p=CAPPANELS[key]; if(!p) return;
 function makeCapPanel(key,cats){
   const p={key,cats,sel:0,filter:{q:'',min:null,max:null,cat:-2,paused:false},lastShown:0};
   p.render=function(force){ const box=document.getElementById(key+'-list'); if(!box) return;
-    const total=capItems.filter(c=>cats.includes(c.category)&&belongsToApp(c)).length;
+    const total=capItems.filter(c=>cats.includes(c.category)&&belongsToApp(c)&&listedCap(c)).length;
     const badge=document.getElementById('n-'+key); if(badge) badge.textContent=total||'';
     const items=applyFilter(p);
     if(!force && (p.filter.paused || box.scrollTop>48)){
@@ -808,6 +1143,24 @@ function makeCapPanel(key,cats){
 makeCapPanel('cc',['crypto']);
 makeCapPanel('sy',['system','file']);
 makeCapPanel('nt',['net']);
+let detectTimer=0;
+function formatRadar(r){
+  if(!r) return '';
+  if(r.armed===false) return '未开';
+  if(r.armed==null) return '—';
+  const hit=(r.kinds||[]).filter(k=>(k.count||0)>0).map(k=>k.label+' '+k.count);
+  return hit.length ? ('已开 · '+hit.join(' · ')) : '已开 · 暂无';
+}
+async function loadDetect(){
+  const el=document.getElementById('sy-radar'); if(!el) return;
+  const pkg=selectedPackage();
+  if(!pkg){ el.textContent='选应用'; return; }
+  try{
+    const r=await (await fetch('/api/detect/summary?package='+encodeURIComponent(pkg))).json();
+    el.textContent=formatRadar(r);
+  }catch(e){ el.textContent='—'; }
+}
+function scheduleDetect(){ clearTimeout(detectTimer); detectTimer=setTimeout(loadDetect, 300); }
 let httpAssembly={exchanges:[],noConn:0,http2:0,caveat:''};
 let exchangeTimer=0;
 async function loadExchanges(){
@@ -828,7 +1181,7 @@ function renderExchangeDetail(detailId,ex){
   const part=(title,cls,labelCls,p)=>{
     if(!p) return '<div class="io-section '+cls+'"><div class="io-card-head"><div class="io-label '+labelCls+'">'+title+'</div></div>'+ioBlock('','（还没有）')+'</div>';
     let body=p.bodyText||'';
-    if(p.binary) body='二进制 '+(p.bodyBytes||0)+' 字节';
+    if(p.binary) body='二进制 '+(p.bodyBytes||0)+' 字节'+(p.bodyHex?'\n'+hexdump(p.bodyHex):'');
     else if(!body) body='（空）';
     const meta=[p.complete?'':'未完成', (p.decoded&&p.contentEncoding)?('已解开 '+p.contentEncoding):'', (p.bodyBytes||0)+' bytes', p.note||''].filter(Boolean).join(' · ');
     const text=(p.headerText?p.headerText+'\n\n':'')+body;
@@ -857,7 +1210,7 @@ function exchangeRow(sel,ex){
     const localIds=new Set(local.map(c=>c.id));
     const allEx=httpAssembly.exchanges||[];
     const exchanges=allEx.filter(ex=>(ex.captureIds||[]).some(id=>localIds.has(id)));
-    const used=new Set(allEx.flatMap(ex=>ex.captureIds||[]));
+    const used=new Set([...allEx.flatMap(ex=>ex.captureIds||[]), ...(httpAssembly.consumedIds||[])]);
     const raw=applyFilter(nt).filter(c=>!used.has(c.id));
     const q=(nt.filter.q||'').toLowerCase();
     const matched=exchanges.filter(ex=>{
@@ -870,11 +1223,8 @@ function exchangeRow(sel,ex){
       if(nt.filter.max!=null && n>nt.filter.max) return false;
       return true;
     });
-    const rows=[
-      ...matched.map(ex=>({ts:ex.ts||0, html:exchangeRow(nt.sel,ex)})),
-      ...raw.map(c=>({ts:c.ts||0, html:rowHtml('nt', typeof nt.sel==='number'?nt.sel:0, c)})),
-    ].sort((a,b)=>b.ts-a.ts);
-    const badge=document.getElementById('n-nt'); if(badge) badge.textContent=(matched.length+raw.length)||'';
+    const rows=matched.map(ex=>({ts:ex.ts||0, html:exchangeRow(nt.sel,ex)})).sort((a,b)=>b.ts-a.ts);
+    const badge=document.getElementById('n-nt'); if(badge) badge.textContent=matched.length||'';
     if(!force && (nt.filter.paused || box.scrollTop>48)){
       const n=Math.max(0, rows.length-nt.lastShown);
       showBanner('nt', n);
@@ -883,10 +1233,12 @@ function exchangeRow(sel,ex){
     }
     nt.lastShown=rows.length; showBanner('nt',0);
     const notes=[];
-    if(httpAssembly.http2) notes.push(httpAssembly.http2+' 条连接是 HTTP/2，仍按发送和接收分开显示');
-    if(httpAssembly.noConn) notes.push(httpAssembly.noConn+' 条记录没有连接号，仍按发送和接收分开显示');
+    if(httpAssembly.http2Idle) notes.push(httpAssembly.http2Idle+' 条 HTTP/2 连接还没有完整请求');
+    if(raw.length) notes.push(raw.length+' 条 TLS 记录不是 HTTP 请求（连接控制帧或拼不回去），已略过');
     const noteHtml=notes.length?'<div class="ex-note">'+escapeHtml(notes.join('。'))+'。</div>':'';
-    const empty=local.length?'这些明文还拼不成一对 HTTP/1.1。':emptyCapText();
+    const empty=local.length
+      ?('有 '+local.length+' 条 TLS，尚未拼成 HTTP。')
+      :emptyCapText();
     box.innerHTML=noteHtml+(rows.length?rows.map(r=>r.html).join(''):'<div class="empty">'+empty+'</div>');
     if(activeCapKey==='nt') updateCount(rows.length, local.length);
     if(typeof nt.sel==='string'){
@@ -905,10 +1257,23 @@ function capRenderAll(){ for(const k in CAPPANELS) CAPPANELS[k].render(); }
 function capSelectP(key,id){ CAPPANELS[key].select(id); }
 function capPush(c){ if(!belongsToApp(c)) { if(c.id>capMaxId)capMaxId=c.id; return; }
   capItems.push(c); if(capItems.length>800) capItems.shift(); if(c.id>capMaxId)capMaxId=c.id; }
-function capClearP(key){ const p=CAPPANELS[key]; const cats=p.cats;
-  for(let i=capItems.length-1;i>=0;i--) if(cats.includes(capItems[i].category)) capItems.splice(i,1);
+function capClearP(key){
+  const p=CAPPANELS[key]; if(!p) return;
+  const pkg=selectedPackage();
+  const scope=pkg?('当前应用 '+pkg):'全部应用';
+  if(!confirm('清空本页列表？（不删磁盘）\n'+scope)) return;
+  const cats=p.cats;
+  for(let i=capItems.length-1;i>=0;i--){
+    const c=capItems[i];
+    if(!cats.includes(c.category)) continue;
+    if(pkg && c.package && c.package!==pkg) continue;
+    if(pkg && !c.package && !belongsToApp(c)) continue;
+    capItems.splice(i,1);
+  }
   p.sel=0; capRenderAll();
-  const d=document.getElementById(key+'-detail'); if(d) d.innerHTML='<div class="detail-empty">已清空。</div>'; }
+  const d=document.getElementById(key+'-detail'); if(d) d.innerHTML='<div class="detail-empty">已清空。</div>';
+  toast('已清空本页');
+}
 const capDetailCache={};
 function copyCap(id,what){ const c=capDetailCache[id]; if(!c) return;
   if(what==='all') copyText(JSON.stringify(c,null,2));
@@ -940,8 +1305,16 @@ function renderCaptureDetail(detailId,c){ const d=document.getElementById(detail
   const isNet=c.category==='net';
   const isFile=c.category==='file'||c.category==='system';
   const acts='<div class="detail-actions"><button type="button" onclick="copyCap('+c.id+',\'all\')">复制整条</button></div>';
-  let h='<div class="detail-head"><h2><span class="cat-dot '+cc+'"></span>#'+c.id+'  '+escapeHtml(c.algo||c.func||'')+'</h2>'+
-    '<div class="sub">'+escapeHtml(c.op||c.func||'')+' · '+escapeHtml(new Date(c.ts).toLocaleString())+(c.tid?' · tid '+c.tid:'')+'</div>'+acts+'</div>';
+  let h;
+  if(c.category==='crypto'){
+    const v=clientCryptoView(c);
+    const bits=[v.hook, new Date(c.ts).toLocaleString(), c.tid?'tid '+c.tid:'', v.truncated?'输入已截断':''].filter(Boolean);
+    h='<div class="detail-head"><h2><span class="cat-dot '+cc+'"></span>'+escapeHtml(v.title)+(v.direction?' · '+escapeHtml(v.direction):'')+'</h2>'+
+      '<div class="sub">'+escapeHtml(bits.join(' · '))+'</div>'+acts+'</div>';
+  } else {
+    h='<div class="detail-head"><h2><span class="cat-dot '+cc+'"></span>#'+c.id+'  '+escapeHtml(c.algo||c.func||'')+'</h2>'+
+      '<div class="sub">'+escapeHtml(c.op||c.func||'')+' · '+escapeHtml(new Date(c.ts).toLocaleString())+(c.tid?' · tid '+c.tid:'')+'</div>'+acts+'</div>';
+  }
   if(isFile && (c.text||c.preview||c.func))
     h+='<div class="io-section kv-card"><div class="io-label kv">详情</div>'+ioBlock('',[c.func,c.op,c.preview||c.text].filter(Boolean).join('\n'))+'</div>';
   if(c.keyHex) h+=ioKV('KEY',c.keyHex.length/2,c.keyHex);
@@ -961,7 +1334,9 @@ async function capLoad(){ const pkg=selectedPackage(); if(!pkg) return;
 // ---- 过滤工具栏（加解密/系统/网络共用，作用于当前活动的捕获面板）----
 function updateCount(shown,total){ const el=document.getElementById('count'); if(el) el.textContent=`${shown} / ${total} 条`; }
 function updatePauseBtn(){ const b=document.getElementById('tb-pause'); const p=CAPPANELS[activeCapKey]; if(!b||!p) return;
-  b.textContent=p.filter.paused?'继续':'暂停'; b.classList.toggle('is-paused',p.filter.paused); }
+  b.textContent=p.filter.paused?'继续刷新':'暂停刷新';
+  b.title=p.filter.paused?'点此恢复列表刷新':'只停列表刷新';
+  b.classList.toggle('is-paused',p.filter.paused); }
 function updateFilterBadge(){ const p=CAPPANELS[activeCapKey]; const b=document.getElementById('filterBadge'); if(!p||!b) return;
   const f=p.filter; let n=0; if(f.q) n++; if(f.min!=null||f.max!=null) n++; if(p.key==='cc'&&f.cat>=0) n++; b.textContent=n||''; }
 function onTabSwitch(id){ const tb=document.getElementById('toolbar');
@@ -972,7 +1347,9 @@ function onTabSwitch(id){ const tb=document.getElementById('toolbar');
     document.getElementById('tb-cat').value=String(f.cat);
     document.getElementById('catWrap').style.display=(activeCapKey==='cc')?'':'none';
     updatePauseBtn(); updateFilterBadge(); CAPPANELS[activeCapKey].render(true);
-  } else tb.classList.remove('show'); }
+  } else tb.classList.remove('show');
+  refreshCapUnpackHint();
+}
 function bindToolbar(){
   const q=document.getElementById('tb-q'), mn=document.getElementById('tb-min'), mx=document.getElementById('tb-max'), cs=document.getElementById('tb-cat');
   const num=v=>{ v=String(v).trim(); return v===''?null:(Number.isFinite(+v)?+v:null); };
@@ -987,9 +1364,11 @@ function bindToolbar(){
     p.filter.paused=!p.filter.paused; updatePauseBtn(); p.render(true); });
   document.getElementById('tb-clearcat').addEventListener('click',()=>capClearP(activeCapKey));
   document.getElementById('tb-download').addEventListener('click',()=>{ const p=CAPPANELS[activeCapKey]; const items=applyFilter(p);
+    const pkg=selectedPackage()||'all';
     const blob=new Blob([JSON.stringify(items,null,2)],{type:'application/json'});
-    const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`adh-${activeCapKey}-captures.json`;
-    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href); toast(`已下载 ${items.length} 条`); });
+    const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`adh-${activeCapKey}-${pkg}-filtered.json`;
+    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href);
+    toast(`已下载 ${items.length} 条`); });
   document.getElementById('filterToggleBtn').addEventListener('click',()=>{
     const adv=document.getElementById('advancedFilters'); const open=adv.hasAttribute('hidden');
     if(open) adv.removeAttribute('hidden'); else adv.setAttribute('hidden','');
@@ -1002,19 +1381,68 @@ function bindToolbar(){
 function pinnedPackage(){ const seg=decodeURIComponent(location.pathname.replace(/^\//,'').split('/')[0]||''); return (seg && seg.indexOf('.')>=0) ? seg : ''; }
 function selectedAgent(){ return liveSession() || sessionsOf(selectedPackage()).slice(-1)[0] || null; }
 function curPkg(){ return selectedPackage(); }
-function agentOfflineHint(err){
-  const s=String(err||'');
-  if(/no (online )?agent session|no session/i.test(s)) return '目标已断开，重新打开 App 后再试';
-  return s; }
 function capReset(){ capItems.length=0; capMaxId=0; capLoad(); }
+/** Packages that skipped auto-arm after one-click unpack (client memory + server unpackProtected). */
+const unpackSkippedArm = new Set();
+let serverUnpackProtected = [];
+function markUnpackSkippedArm(pkg){
+  if(!pkg) return;
+  unpackSkippedArm.add(pkg);
+  try{ sessionStorage.setItem('adh.unpackSkippedArm.'+pkg,'1'); }catch{}
+  refreshCapUnpackHint();
+  updateCapStatePill();
+}
+function hadUnpackSkippedArm(pkg){
+  if(!pkg) return false;
+  if(unpackSkippedArm.has(pkg)) return true;
+  if(serverUnpackProtected.includes(pkg)) return true;
+  try{ return sessionStorage.getItem('adh.unpackSkippedArm.'+pkg)==='1'; }catch{ return false; }
+}
+function updateCapStatePill(){
+  const el=document.getElementById('capStatePill'); if(!el) return;
+  const pkg=selectedPackage();
+  if(!pkg){ el.hidden=true; el.textContent=''; return; }
+  if(!captureOn){
+    el.hidden=false; el.className='cap-state-pill off';
+    el.textContent='布防关'; el.title='自动布防已关';
+    return;
+  }
+  if(hadUnpackSkippedArm(pkg)){
+    el.hidden=false; el.className='cap-state-pill warn';
+    el.textContent='本包未装钩'; el.title='脱壳后未装钩，重启 App 后再捕';
+    return;
+  }
+  el.hidden=true; el.textContent='';
+}
+function refreshCapUnpackHint(){
+  const el=document.getElementById('capUnpackHint');
+  if(!el) return;
+  const pkg=selectedPackage();
+  const onCapTab=['p-crypto','p-system','p-net'].some(id=>{
+    const p=document.getElementById(id); return p&&p.classList.contains('active');
+  });
+  if(onCapTab&&pkg&&hadUnpackSkippedArm(pkg)&&captureOn){
+    el.hidden=false;
+    el.innerHTML='本包脱壳后未装钩 · 重启 App 后再捕';
+  }else{
+    el.hidden=true; el.textContent='';
+  }
+  updateCapStatePill();
+}
+function setUnpackLiveHint(html, show){
+  const el=document.getElementById('unpackCapLive');
+  if(!el) return;
+  if(!show){ el.hidden=true; el.textContent=''; return; }
+  el.hidden=false; el.textContent=html.replace(/<[^>]+>/g,'');
+}
 function emptyCapText(){
-  if(!selectedPackage()) return '注入范围里还没有勾选应用。';
-  if(!liveSid()) return '这个应用当前没有连上的进程。<br>在手机上打开它，记录会出现在这里。';
-  if(!captureOn) return '实时捕获关着。<br>打开右上角「设置」，把捕获打开。';
-  return '该分类还没有记录…<br>在 App 里触发对应操作看看?';
+  if(!selectedPackage()) return '先在右上角选应用。';
+  if(!captureOn) return '自动布防已关。';
+  if(hadUnpackSkippedArm(selectedPackage())) return '本包脱壳后未装钩 · 重启 App 后再捕。';
+  return '还没有记录。';
 }
 
-// ---- 文件浏览器（对齐 iOS：filesPath 相对沙盒根，空 path = GET 真实目录） ----
+// ---- 文件浏览器：沙盒目录按包名读，不看进程在不在 ----
 let filesPath='';
 let filesSelected=null;
 function sandboxHome(){ const pkg=curPkg(); return pkg?'/data/data/'+pkg:''; }
@@ -1023,7 +1451,7 @@ function filesAbs(rel){ const home=sandboxHome(); if(!home) return '';
 function filesParentOf(rel){ if(!rel) return ''; const i=String(rel).replace(/\/+$/,'').lastIndexOf('/'); return i<0?'':rel.slice(0,i); }
 function renderFilesBreadcrumb(rel){
   const el=document.getElementById('filesBreadcrumb'); if(!el) return;
-  let html='<a href="#" data-files-nav="">沙盒根</a>';
+  let html='<a href="#" data-files-nav="">应用私有目录</a>';
   const parts=rel?String(rel).split('/').filter(Boolean):[];
   let acc='';
   for(const p of parts){ acc=acc?acc+'/'+p:p;
@@ -1048,10 +1476,11 @@ function navigateFiles(rel){ filesPath=rel||''; filesResetPreview(); loadFilesBr
 async function loadFilesBrowser(){
   const list=document.getElementById('filesList'); if(!list) return;
   renderFilesBreadcrumb(filesPath);
-  if(!liveSid()){ list.innerHTML='<div class="empty">'+(selectedPackage()?'这个应用当前没有在跑的进程，捕获记录仍可查看。':'注入范围里还没有勾选应用。')+'</div>'; return; }
+  const pkg=selectedPackage();
+  if(!pkg){ list.innerHTML='<div class="empty">注入范围里还没有勾选应用。</div>'; return; }
   list.innerHTML='<div class="empty">加载中…</div>';
-  try{ const r=await (await fetch('/api/fs/list?path='+encodeURIComponent(filesAbs(filesPath))+sidQ())).json();
-    if(!r.ok){ list.innerHTML='<div class="empty">'+escapeHtml(agentOfflineHint(r.error||'读取失败'))+'</div>'; return; }
+  try{ const r=await (await fetch('/api/fs/list?package='+encodeURIComponent(pkg)+'&path='+encodeURIComponent(filesAbs(filesPath)))).json();
+    if(!r.ok){ list.innerHTML='<div class="empty">'+escapeHtml(r.error||'读取失败')+'</div>'; return; }
     const ents=(r.entries||[]).slice().sort((a,b)=>(a.type==='d'?0:1)-(b.type==='d'?0:1)||String(a.name).localeCompare(String(b.name)));
     if(!ents.length){ list.innerHTML='<div class="empty">空目录</div>'; return; }
     list.innerHTML=ents.map(e=>{
@@ -1071,7 +1500,7 @@ async function previewFile(path){
   const head=document.getElementById('filesPreviewHead'), body=document.getElementById('filesPreviewBody');
   head.innerHTML='<span class="path">'+escapeHtml(path)+'</span><a class="dl-link" href="#" data-files-download="'+escapeHtml(path)+'">下载</a>';
   body.textContent='加载中…';
-  try{ const r=await (await fetch('/api/fs/read',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session:liveSid()||undefined,path})})).json();
+  try{ const r=await (await fetch('/api/fs/read',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({package:selectedPackage(),path})})).json();
     if(!r.ok){ body.textContent=''; head.innerHTML='<span class="path">'+escapeHtml(path)+'</span>'; body.innerHTML='<div class="detail-empty">'+escapeHtml(r.error||'读取失败')+'</div>'; return; }
     const sz=r.size||0, extra=r.truncated?` / 共 ${r.fsize}B（已截断）`:'';
     const text=r.text||'';
@@ -1085,7 +1514,7 @@ async function previewFile(path){
     else body.textContent='（空文件）';
   }catch(e){ body.textContent=''; head.innerHTML='<span class="path">'+escapeHtml(path)+'</span>'; body.innerHTML='<div class="detail-empty">'+escapeHtml(String(e))+'</div>'; } }
 async function filesDownload(path){
-  try{ const r=await (await fetch('/api/fs/read',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session:liveSid()||undefined,path})})).json();
+  try{ const r=await (await fetch('/api/fs/read',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({package:selectedPackage(),path})})).json();
     if(!r.ok||!r.b64){ toast('下载失败: '+(r.error||'空')); return; }
     const bin=atob(r.b64); const arr=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++)arr[i]=bin.charCodeAt(i);
     const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([arr])); a.download=path.split('/').pop()||'file';
@@ -1157,7 +1586,7 @@ function togglePopover(id, btnId){
 }
 
 // ---- 设置 模态 ----
-const FAMILIES=[['digest','摘要 Digest'],['hmac','HMAC'],['symmetric','对称'],['asymmetric','非对称'],['tls','TLS'],['aead','AEAD(GCM/ChaCha20-Poly1305)']];
+const FAMILIES=[['digest','摘要'],['hmac','HMAC'],['symmetric','对称'],['asymmetric','非对称'],['tls','TLS'],['aead','AEAD']];
 function setSettingsPage(name){
   document.querySelectorAll('#setNav button').forEach(b=>b.classList.toggle('active',b.dataset.setpage===name));
   document.querySelectorAll('#setMask .set-page').forEach(p=>p.classList.remove('active'));
@@ -1165,6 +1594,7 @@ function setSettingsPage(name){
   if(name==='rawcfg') loadRawCfg(true);
   if(name==='backends') renderBackends();
 }
+// when switching main tabs, refresh the capture-vs-unpack hint
 function renderFamilies(fam){
   document.getElementById('setFamilies').innerHTML=FAMILIES.map(([k,label])=>
     `<div class="set-toggle-row"><div class="lab"><b>${label}</b></div>`+
@@ -1173,26 +1603,16 @@ function renderFamilies(fam){
     inp.addEventListener('change',()=>postConfig({capture:{families:{[inp.dataset.fam]:inp.checked}}})));
 }
 async function renderBackends(){
-  const aEl=document.getElementById('backendsAgents'), gEl=document.getElementById('backendsGadget'), dEl=document.getElementById('backendsDevice');
+  const aEl=document.getElementById('backendsAgents'), dEl=document.getElementById('backendsDevice');
   if(!aEl) return;
-  aEl.textContent='加载中…'; gEl.textContent='加载中…'; dEl.textContent='加载中…';
+  aEl.textContent='加载中…'; dEl.textContent='加载中…';
   let data; try{ data=await (await fetch('/api/backends')).json(); }catch(e){ aEl.textContent='读取失败: '+e; return; }
   const list=data.agents||[];
   aEl.innerHTML = list.length ? list.map(a=>
     `<div style="display:flex;gap:8px;align-items:center;justify-content:space-between;padding:3px 0">`
-    + `<span><b>${a.package}</b> <span class="muted">pid=${a.pid} · ${a.online?'在线':'离线'} · entry=${a.entry}</span></span>`
+    + `<span><b>${a.package}</b> <span class="muted">pid=${a.pid}${a.process&&a.process!==a.package?' · '+a.process:''} · ${a.online?'在线':'离线'} · entry=${a.entry}</span></span>`
     + `<button onclick="probeBackend('${a.session}','${a.package}')">检测注入方式</button></div>`).join('')
     : '<div class="muted">没有会话（先注入一个目标）</div>';
-  const g=data.gadget||{};
-  const cached=(g.cached||[]).map(c=>`${c.version}/${c.abi} · ${(c.bytes/1048576).toFixed(1)} MB`).join('<br>')||'（本机没有已下载的 Gadget）';
-  const pkg=(list.find(a=>a.online)||{}).package||'<目标包名>';
-  const ver=(g.pinned||[]).slice(-1)[0]||'latest';
-  const cmd=`bash ${g.loader||'tools/load_frida_gadget.sh'} hook.js --version ${ver} --package ${pkg} --marker /data/data/${pkg}/files/adh_frida_gadget_ok`;
-  gEl.innerHTML=`<div>固定版本：${(g.pinned||[]).join(', ')||'—'}</div><div style="margin-top:4px">已缓存：<br>${cached}</div>`
-    + `<div class="muted" style="margin-top:6px">加载命令（仓库根目录执行）：</div>`
-    + `<div style="display:flex;gap:8px;align-items:center;margin-top:4px"><code id="gadgetCmd" style="flex:1;overflow:auto">${cmd}</code>`
-    + `<button onclick="copyText(document.getElementById('gadgetCmd').textContent)">复制</button></div>`
-    + `<div class="muted" style="margin-top:4px">${g.note||''}</div>`;
   const z=data.zygisk||{};
   dEl.innerHTML=`<div><b>Zygisk</b> · ${z.module||''} — ${z.control||''}</div>`
     + `<div class="muted" style="margin-top:4px">验证：${(z.verify||[]).join(' · ')}</div>`;
@@ -1201,10 +1621,8 @@ async function probeBackend(session,pkg){
   try{
     const mods=await (await fetch('/api/modules?session='+encodeURIComponent(session))).json();
     const paths=(mods||[]).map(m=>String(m.path||m.name||''));
-    const hit=[];
+    const hit=['agent 本体'];
     if(paths.some(s=>s.includes('/data/adb/modules/adh/'))) hit.push('Zygisk 模块');
-    if(paths.some(s=>s.includes('libgadget.so')||s.toLowerCase().includes('frida'))) hit.push('Frida Gadget');
-    hit.unshift('agent 本体');
     toast(pkg+' → '+hit.join(' + '));
   }catch(e){ toast('检测失败: '+e); }
 }
@@ -1220,29 +1638,54 @@ async function loadConfig(){
     document.getElementById('setRetain').value=String(s.capture.retain);
     document.getElementById('setDisplayCap').value=String(s.ui.displayCap);
     renderFamilies(s.capture.families);
-    document.getElementById('statCaptures').textContent=`${st.captures} 条`+(st.on?' · 捕获中':'');
+    document.getElementById('statCaptures').textContent=`${st.captures} 条`+(st.on?' · 已装钩':' · 未装钩');
     document.getElementById('statDumps').textContent=`${st.dumps} 个`;
     document.getElementById('statEvents').textContent=`${st.events} 条`;
+    try{
+      const disk=await (await fetch('/api/captures/packages')).json();
+      const rows=disk.packages||[];
+      const bytes=rows.reduce((n,p)=>n+(p.bytes||0),0);
+      document.getElementById('statCapDisk').textContent=rows.length?`${rows.length} 包 · ${fmtSize(bytes)}`:'无';
+    }catch{ document.getElementById('statCapDisk').textContent='—'; }
   }catch(e){ toast('读取配置失败: '+e); }
 }
 async function postConfig(patch){
   try{ const r=await (await fetch('/api/config',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(patch)})).json();
     if(r.error){ toast('保存失败: '+r.error); return; }
-    if(r.stats){ document.getElementById('statCaptures').textContent=`${r.stats.captures} 条`+(r.stats.on?' · 捕获中':''); }
+    if(r.stats){ document.getElementById('statCaptures').textContent=`${r.stats.captures} 条`+(r.stats.on?' · 已装钩':' · 未装钩'); }
     if(patch.ui&&patch.ui.displayCap) capDisplayCap=r.settings.ui.displayCap;
-    if(r.settings&&r.settings.capture&&typeof r.settings.capture.enabled==='boolean'){ captureOn=r.settings.capture.enabled; capRenderAll(); }
+    if(r.settings&&r.settings.capture&&typeof r.settings.capture.enabled==='boolean'){
+      captureOn=r.settings.capture.enabled; capRenderAll(); refreshCapUnpackHint(); updateCapStatePill();
+    }
     toast('已保存');
   }catch(e){ toast('保存失败: '+e); }
 }
 async function clearData(what){
-  const names={captures:'实时捕获',dumps:'DEX/so dump',events:'会话事件'};
+  const names={captures:'全部捕获',dumps:'全部 DEX/so dump',events:'会话事件'};
   if(!confirm(`确定清空「${names[what]}」？不可恢复。`)) return;
   try{ const r=await (await fetch('/api/data/clear',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({what})})).json();
     if(r.error){ toast('失败: '+r.error); return; }
     toast('已清空 '+names[what]); loadConfig();
     if(what==='captures'){ capItems.length=0; capMaxId=0; for(const k in CAPPANELS) CAPPANELS[k].sel=0; capRenderAll(); }
-    if(what==='dumps') loadDumps();
+    if(what==='dumps') loadInventory();
   }catch(e){ toast('失败: '+e); }
+}
+async function clearDataPkg(what){
+  const pkg=selectedPackage();
+  if(!pkg){ toast('先在右上角选一个应用'); return; }
+  const names={captures:'该应用的捕获',dumps:'该应用的 dump'};
+  if(!confirm(`确定清空「${names[what]}」(${pkg})？不可恢复。`)) return;
+  try{ const r=await (await fetch('/api/data/clear',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({what,package:pkg})})).json();
+    if(r.error){ toast('失败: '+r.error); return; }
+    toast('已清空 '+names[what]); loadConfig();
+    if(what==='captures'){ for(let i=capItems.length-1;i>=0;i--) if(capItems[i].package===pkg) capItems.splice(i,1); capRenderAll(); }
+    if(what==='dumps') loadInventory();
+  }catch(e){ toast('失败: '+e); }
+}
+function exportPkgCaptures(){
+  const pkg=selectedPackage();
+  if(!pkg){ toast('先在右上角选一个应用'); return; }
+  window.open('/api/captures/export?package='+encodeURIComponent(pkg),'_blank');
 }
 // 配置 JSON 编辑器（export/import 按板块合并）
 async function loadRawCfg(force){
@@ -1294,7 +1737,7 @@ function render(){
   else if(!list.some(a=>a.package===next)) next=(list[0]||{}).package||'';
   if(next!==chosenPkg) chosenPkg=next;
   const pkg=chosenPkg;
-  if(pkg!==lastFilterPkg){ lastFilterPkg=pkg; capReset(); loadAppEvents(); }
+  if(pkg!==lastFilterPkg){ lastFilterPkg=pkg; unpackViewRunId=null; unpackRuns=[]; capReset(); loadAppEvents(); dumpSid=''; scheduleDetect(); if(document.getElementById('p-dump').classList.contains('active')) loadInventory(); refreshCapUnpackHint(); }
   const cur=list.find(a=>a.package===pkg);
   const primary=document.getElementById('procPrimary'), secondary=document.getElementById('procSecondary'), info=document.getElementById('procinfo');
   const menu=document.getElementById('appMenu');
@@ -1320,10 +1763,16 @@ async function refreshApps(){
   try{
     const r=await (await fetch('/api/apps')).json();
     if(Array.isArray(r.apps)) serverApps=r.apps;
+    if(Array.isArray(r.unpackProtected)){
+      serverUnpackProtected=r.unpackProtected;
+      for(const p of serverUnpackProtected) unpackSkippedArm.add(p);
+    }
     if(typeof r.capture==='boolean' && r.capture!==captureOn){ captureOn=r.capture; capRenderAll(); }
     scopeNote=r.error||'';
   }catch(e){ scopeNote='读不到注入范围'; }
   render();
+  refreshCapUnpackHint();
+  updateCapStatePill();
 }
 async function loadAppEvents(){
   const el=document.getElementById('appEvents'); const pkg=selectedPackage();
@@ -1349,11 +1798,48 @@ function connect(){ const ws=new WebSocket(`ws://${location.host}/ws`); const co
   ws.onclose=()=>{conn.className='status-dot';st.textContent='断开 — 重连中';setWsPill('down','no');dbg('WS','close');setTimeout(connect,1500);};
   ws.onmessage=e=>{const m=JSON.parse(e.data);
     if(m.event==='snapshot'){agents.clear();(m.data||[]).forEach(a=>agents.set(a.sessionId,{...agents.get(a.sessionId),...a})); render();}
-    else if(m.event==='agent.hello'){ upsert(m.data); loadAppEvents(); }
+    else if(m.event==='agent.hello'){
+      upsert(m.data); loadAppEvents();
+      // Fresh process after unpack: drop client "未装钩" memory (server clearCaptureArmProtect mirrors this).
+      // Skip while dumpBusy so cold-start hello mid-unpack does not wipe the in-progress hint.
+      if(!dumpBusy && m.data&&m.data.package){
+        unpackSkippedArm.delete(m.data.package);
+        try{ sessionStorage.removeItem('adh.unpackSkippedArm.'+m.data.package); }catch{}
+        serverUnpackProtected=serverUnpackProtected.filter(p=>p!==m.data.package);
+        refreshCapUnpackHint();
+      }
+      if(!dumpBusy && document.getElementById('p-dump').classList.contains('active') && m.data && m.data.package===selectedPackage()) loadInventory();
+    }
     else if(m.event==='agent.maps'){const a=agents.get(m.data.sessionId);if(a){a.mapsCount=m.data.count;upsert(a);}}
     else if(m.event==='agent.close'){const a=agents.get(m.data.sessionId);if(a){a.online=false;upsert(a); loadAppEvents();}}
-    else if(m.event==='capture.new'){ capPush(m.data); if(m.data&&m.data.category==='net') scheduleExchanges(); else capRenderAll(); }
-    else if(m.event==='dump.new'){ if(document.getElementById('p-dump').classList.contains('active'))loadDumps(); if(m.data&&m.data.package===selectedPackage()) loadAppEvents(); }
+    else if(m.event==='capture.new'){ capPush(m.data); if(m.data&&m.data.category==='net') scheduleExchanges(); else capRenderAll(); if(m.data&&(m.data.category==='system'||m.data.category==='file')) scheduleDetect(); }
+    else if(m.event==='dump.new'){ if(m.data&&m.data.package===selectedPackage()) loadAppEvents(); }
+    else if(m.event==='unpack.start'){
+      if(m.data&&m.data.package===selectedPackage()){
+        const se=m.data.sideEffects||{};
+        const mode=se.launchMode||(m.data.launch&&m.data.launch.mode)||'';
+        document.getElementById('dexStat').textContent=
+          mode==='reuse-online' ? '抠 DEX…' : (se.forceStopped ? '冷启后抠 DEX…' : '抠 DEX…');
+        unpackLiveCount=0;
+        markUnpackSkippedArm(m.data.package);
+      }
+    }
+    else if(m.event==='unpack.dex'){
+      if(m.data&&m.data.package===selectedPackage()){
+        unpackLiveCount++;
+        document.getElementById('dexStat').textContent=`已获取 ${unpackLiveCount} 个 DEX`;
+      }
+    }
+    else if(m.event==='unpack.done'){
+      if(m.data&&m.data.package===selectedPackage()){
+        if(m.data.didSkipAutoArm!==false) markUnpackSkippedArm(m.data.package);
+        if(!dumpBusy) document.getElementById('dexStat').textContent=m.data.ok
+          ?`完成：${m.data.dexCount||0} 个 DEX`+(m.data.bundle?` · ${fmtSize(m.data.bundle.size)}`:'')
+          :(m.data.error||'脱壳结束');
+        refreshCapUnpackHint();
+        loadUnpackHistory().then(()=>{ if(m.data.ok&&m.data.runId) openUnpackDetail(m.data.runId); });
+      }
+    }
     dbg('WS←', m.event||'?');
   }; }
 connect();
@@ -1361,6 +1847,7 @@ document.getElementById('appMenu').addEventListener('click', e=>{
   const btn=e.target.closest('[data-pkg]');
   if(!btn) return;
   chosenPkg=btn.dataset.pkg||'';
+  scheduleDetect();
   const next=chosenPkg ? '/'+encodeURIComponent(chosenPkg) : '/';
   if(location.pathname!==next) history.pushState(null,'',next);
   closePopovers();

@@ -86,7 +86,7 @@ Web UI（浏览器）：
 | [Dobby](https://github.com/jmpews/Dobby) | arm64 native inline hook（by address；静态链接） | Agent（`tools/fetch_dobby.sh`，已验证 v2.2/v28） |
 | [Capstone](https://github.com/capstone-engine/capstone) | 反汇编引擎 | Daemon 为主；Agent 可选轻量 wrapper |
 | [QBDI](https://github.com/QBDI/QBDI) | DBI 框架，指定范围 instruction trace | Agent **可选**（按需加载；起不来按 `SKIP:optional-dependency`） |
-| [Frida Gadget](https://frida.re) | **开发/调试用**：官方 so 由 agent `dlopen` 进目标；Frida 17 起 Java/ObjC 语言桥需自行打包 | `tools/load_frida_gadget.sh`（已落地，**不进发布物**） |
+| ~~Frida Gadget~~ | **已退出产品面**（2026-10-20） | 历史脚本可留在 `tools/`，不进 UI / 门禁 / 发布物 |
 | Zygisk (Magisk) | root early-inject 后端 | 注入器（root） |
 | MCP Streamable HTTP | 独立进程 HTTP POST/GET + SSE 流式 | Daemon |
 
@@ -593,14 +593,11 @@ v1 只对 `docs/FEATURE_STATUS.md §2` 的已验收能力做加固：捕获背�
 
 | 后端 | 新定位 | 重新考虑的条件 |
 |---|---|---|
-| Frida Gadget | **开发/调试用**（移出发布物）；独特价值只剩 JS 生态 | 出现明确的 Frida 脚本复用需求，或单独立项做去特征 |
+| ~~Frida Gadget~~ | **已退出产品面** | 不再作为注入后端；勿恢复 Web/MCP 入口 |
 | eCapture | **实验脚本**，不出现在发布物，且**移出 `verify_all.sh` 门禁**（覆盖由自带的 TLS/syscall 观测承担） | 需要内核级、目标进程外观测 |
 
-- **Frida Gadget（已落地，2026-09-15 真机验证）**：`tools/fetch_frida_gadget.sh`（官方 release、版本/ABI 可切、sha256 固定）
-  + `tools/compile_frida_script.sh`（Frida 17 起语言桥移出 runtime → esbuild + `frida-java-bridge` 打包）
-  + `tools/load_frida_gadget.sh`（落盘 `<pkg>/code_cache` → `load_so` dlopen → 等 `frida-gadget` 线程 → `--marker` 断言脚本真的跑通）。
-  验收脚本：`tools/verify_v30_fridagadget.sh`。
-- **注入中心（已落地，2026-09-15）**：主机 `GET /api/backends` + Web 控制台「注入后端」页给出会话分类、Gadget 缓存/命令与设备侧后端入口（每个会话可一键判定 Zygisk/Gadget/自加载，`tools/verify_v33_backends.sh`）。待办：Gadget 的一键下发（daemon 无 adb，当前只给命令模板）。
+- **Frida Gadget（已退出产品面，2026-10-20）**：历史脚本可留在 `tools/`（`fetch` / `compile` / `load` / `verify_v30`），不再进 Web、MCP `backends`、`verify_all` 或发布物。
+- **注入中心（已落地，2026-09-15；2026-10-20 去 Gadget）**：`GET /api/backends` + Web「注入后端」页只展示会话与 Zygisk 设备侧指针（`tools/verify_v33_backends.sh`）。
 - **eCapture（可选，root + eBPF，2026-09-16 真机验证）**：`tools/fetch_ecapture.sh`（官方发布、版本固定、sha256 取自官方 checksum 文件） / `tools/ecapture_capture.sh`（`--preflight-only` 给 root/内核/BPF/BTF 判定，运行后按 `probe started successfully` 给结论） / `tools/verify_v34_ecapture.sh`（MCP 驱动真实 HTTPS，断言 eCapture 抓到请求与响应明文）。门槛：root + aarch64 内核 ≥5.5 + eBPF；**BTF 非必需**（本机 5.10 / BTF=n 实测可用），故只作提示。
 - 红线：**Zygisk 之外的路径只在显式调用时启用**（默认注入路径不变）；目标进程内不得承载 HTTP/DB/分析；不 vendor 上游 GPL 代码。
 

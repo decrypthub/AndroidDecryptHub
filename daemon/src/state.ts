@@ -9,8 +9,15 @@ import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
-import { artifactKindOf, planArtifactEviction } from './artifacts.ts';
+import { artifactKindOf, artifactSidecarPath, parseArtifactProvenance, planArtifactEviction } from './artifacts.ts';
+import type { ArtifactProvenance } from './artifacts.ts';
 import type { ArtifactEntry } from './artifacts.ts';
+import {
+  appendCaptureLine, clearAllPersistedCaptures, clearPackagePersistedCaptures,
+  enforcePerPackageRetain, evictPackageFromMemory, listPackageCaptureStats,
+  loadCapturesFromDisk, pruneCapturesOlderThan, readPackageCapturesJsonl,
+  trimPackageCapturesFile,
+} from './capture_persist.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const CAPTURES = join(__dirname, '..', '..', 'captures');
@@ -126,6 +133,34 @@ export function pruneSessions(now = Date.now()): string[] {
   return dropped;
 }
 export const dumps = new Map<string, DumpMeta>();                        // sha256 -> meta (dedup)
+
+// Remember which app a dump belongs to. The file name only has 16 hex chars of the sha, so a
+// restart used to adopt the bytes with an empty package and the Dump page then hid them behind
+// the selected app. The sidecar is the recorded provenance, not a guess.
+export function rememberDump(meta: DumpMeta): void {
+  dumps.set(meta.sha256, meta);
+  const prov: ArtifactProvenance = {
+    sha256: meta.sha256, source: meta.source, addr: meta.addr, tag: meta.tag,
+    sessionId: meta.sessionId, package: meta.package === '?' ? '' : (meta.package || ''),
+    capturedAt: meta.capturedAt,
+    ...(typeof meta.requestedSize === 'number' ? { requestedSize: meta.requestedSize } : {}),
+    ...(typeof meta.complete === 'boolean' ? { complete: meta.complete } : {}),
+    ...(meta.note ? { note: meta.note } : {}),
+  };
+  try { writeFileSync(artifactSidecarPath(meta.path), JSON.stringify(prov)); }
+  catch (e) { log(`[artifacts] 来源未写入 ${meta.path}:`, (e as Error).message); }
+}
+
+function readDumpProvenance(path: string, sha: string): ArtifactProvenance | null {
+  const side = artifactSidecarPath(path);
+  try {
+    if (!existsSync(side)) return null;
+    return parseArtifactProvenance(JSON.parse(readFileSync(side, 'utf8')), sha);
+  } catch (e) {
+    log(`[artifacts] 来源读不了 ${side}:`, (e as Error).message);
+    return null;
+  }
+}
 export const agentSockets = new Map<string, net.Socket>();               // sessionId -> live socket
 export const pending = new Map<string, { resolve: (v: any) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }>();
 export let seq = 0;
@@ -166,10 +201,12 @@ export function recordEvent(type: string, data: any) {
 // Only touches the ADH Daemon / web layer — the agent .so is never reconfigured from here.
 export const SETTINGS_FILE = join(DATA_DIR, 'settings.json');
 export interface Settings {
-  capture: { enabled: boolean; autoDumpDex: boolean; retain: number; families: Record<string, boolean>; cryptoModule: string; fileModule: string; sysModule: string };
+  // retain = per-package cap for both the in-memory list and packages/<pkg>/captures.jsonl.
+  // maxAgeDays = drop capture log lines older than this (0 = no age prune). enabled = auto-arm
+  // when a session comes online; false = force-stop hooks on all online sessions.
+  capture: { enabled: boolean; autoDumpDex: boolean; retain: number; maxAgeDays: number; families: Record<string, boolean>; cryptoModule: string; fileModule: string; sysModule: string };
   ui: { displayCap: number };
-  // On-disk artifact retention (captures/). `capture.retain` above only bounds the in-memory
-  // capture list; the files themselves used to grow without limit (one packed-app run left ~1.1 GB).
+  // On-disk artifact retention (captures/ dump files). Capture event logs live under adhd-data/packages/.
   // maxAgeDays = 0 disables the age rule; the size budget still applies.
   artifacts: { maxBytes: number; maxAgeDays: number };
 }
@@ -187,7 +224,7 @@ export const DEFAULT_SETTINGS: Settings = {
   // installs nothing without failing, so a wrong default reads as "6 hooks silently missing" —
   // which is exactly what the sandbox-only defaults below used to do on every real app. The
   // sandbox self-test passes its own module explicitly (verify_v20_file.sh, verify_v05_detect.sh).
-  capture: { enabled: true, autoDumpDex: true, retain: 1000, families: { digest: true, hmac: true, symmetric: true, asymmetric: true, tls: true, aead: true }, cryptoModule: 'libjavacrypto.so', fileModule: '', sysModule: '' },
+  capture: { enabled: true, autoDumpDex: true, retain: 1000, maxAgeDays: 14, families: { digest: true, hmac: true, symmetric: true, asymmetric: true, tls: true, aead: true }, cryptoModule: 'libjavacrypto.so', fileModule: '', sysModule: '' },
   ui: { displayCap: 300 },
   artifacts: { maxBytes: 8 * 1024 ** 3, maxAgeDays: 14 },
 };
@@ -201,6 +238,7 @@ export function mergeSettings(patch: any): string[] {
     if (typeof c.enabled === 'boolean') settings.capture.enabled = c.enabled;
     if (typeof c.autoDumpDex === 'boolean') settings.capture.autoDumpDex = c.autoDumpDex;
     if (Number.isFinite(c.retain)) settings.capture.retain = Math.max(50, Math.min(100000, Math.floor(c.retain)));
+    if (Number.isFinite(c.maxAgeDays)) settings.capture.maxAgeDays = Math.max(0, Math.min(365, Math.floor(c.maxAgeDays)));
     if (typeof c.cryptoModule === 'string') settings.capture.cryptoModule = c.cryptoModule.trim();
     if (typeof c.fileModule === 'string') settings.capture.fileModule = c.fileModule.trim();
     if (typeof c.sysModule === 'string') settings.capture.sysModule = c.sysModule.trim();
@@ -243,9 +281,9 @@ export function saveSettings() { writeFileSync(SETTINGS_FILE, JSON.stringify(set
 //
 // Without this the map is empty after a restart: `dumps_list` / `/api/dumps` / download-by-sha /
 // `dex_index` all report "nothing here" while the bytes sit in captures/ — the artifacts survive,
-// only the daemon forgot them. The session, address and tag that produced a file are NOT on disk;
-// they are labelled 'disk-reload' rather than guessed, so nothing downstream reads a fabricated
-// provenance.
+// only the daemon forgot them. A sidecar written by rememberDump restores the package; a file
+// with no sidecar stays unlabeled (`disk-reload`) rather than being assigned to whichever app
+// happens to be selected.
 export function loadArtifactsFromDisk(): { loaded: number; skipped: number; bytes: number; ms: number } {
   const t0 = Date.now();
   let loaded = 0, skipped = 0, bytes = 0;
@@ -269,10 +307,19 @@ export function loadArtifactsFromDisk(): { loaded: number; skipped: number; byte
       finally { closeSync(fd); }
       const sha = h.digest('hex');
       if (dumps.has(sha)) { skipped++; continue; }   // already adopted (or produced this session)
+      const prov = readDumpProvenance(path, sha);
       dumps.set(sha, {
-        sha256: sha, size: st.size, source: 'disk-reload', addr: '', tag: 'disk-reload',
-        sessionId: '', package: '', capturedAt: Math.round(st.mtimeMs), path, kind,
-        requestedSize: st.size, complete: true,
+        sha256: sha, size: st.size,
+        source: prov?.source || 'disk-reload',
+        addr: prov?.addr ?? '',
+        tag: prov?.tag || (prov ? '' : 'disk-reload'),
+        sessionId: prov?.sessionId ?? '',
+        package: prov?.package ?? '',
+        capturedAt: prov?.capturedAt || Math.round(st.mtimeMs),
+        path, kind,
+        requestedSize: prov?.requestedSize ?? st.size,
+        complete: prov?.complete ?? true,
+        ...(prov?.note ? { note: prov.note } : {}),
       });
       loaded++; bytes += st.size;
     } catch (e) { skipped++; log(`[artifacts] 跳过 ${name}:`, (e as Error).message); }
@@ -301,14 +348,76 @@ export function pruneArtifacts(onDelete?: (sha: string) => void, protectSha?: st
       }
     }
     dumps.delete(e.sha256); onDelete?.(e.sha256);
+    try { unlinkSync(artifactSidecarPath(e.path)); }
+    catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') log(`[artifacts] 来源未删除 ${e.path}:`, (err as Error).message);
+    }
     removed++; bytesFreed += e.size;
   }
   return { removed, bytesFreed, remainingBytes: plan.remainingBytes, kept: dumps.size, failed };
 }
 
+// One pass over the event log for artifacts adopted without a package. dump.new already recorded
+// the real package; this writes it into the sidecar so the next boot does not scan again.
+function backfillUnlabeledDumps(): number {
+  const need = new Set<string>();
+  for (const d of dumps.values()) if (!d.package) need.add(d.sha256);
+  if (!need.size || !existsSync(EVENTS_FILE)) return 0;
+  const found = new Map<string, ArtifactProvenance>();
+  const fd = openSync(EVENTS_FILE, 'r');
+  const buf = Buffer.allocUnsafe(1 << 20);
+  let carry = '';
+  let done = false;
+  const take = (line: string) => {
+    if (done || !line.includes('"dump.new"')) return;
+    let rec: { type?: string; data?: unknown };
+    try { rec = JSON.parse(line); } catch { return; }
+    if (rec.type !== 'dump.new' || !rec.data || typeof rec.data !== 'object') return;
+    const sha = (rec.data as { sha256?: unknown }).sha256;
+    if (typeof sha !== 'string' || !need.has(sha) || found.has(sha)) return;
+    const prov = parseArtifactProvenance(rec.data, sha);
+    if (!prov?.package) return;
+    found.set(sha, prov);
+    if (found.size === need.size) done = true;
+  };
+  try {
+    let n: number;
+    while (!done && (n = readSync(fd, buf, 0, buf.length, null)) > 0) {
+      carry += buf.toString('utf8', 0, n);
+      let nl: number;
+      while ((nl = carry.indexOf('\n')) >= 0) {
+        const line = carry.slice(0, nl);
+        carry = carry.slice(nl + 1);
+        take(line);
+        if (done) break;
+      }
+    }
+    if (!done && carry) take(carry);
+  } finally { closeSync(fd); }
+  let labeled = 0;
+  for (const [sha, prov] of found) {
+    const meta = dumps.get(sha);
+    if (!meta || meta.package) continue;
+    meta.source = prov.source;
+    meta.addr = prov.addr;
+    meta.tag = prov.tag;
+    meta.sessionId = prov.sessionId;
+    meta.package = prov.package;
+    if (prov.capturedAt) meta.capturedAt = prov.capturedAt;
+    if (typeof prov.requestedSize === 'number') meta.requestedSize = prov.requestedSize;
+    if (typeof prov.complete === 'boolean') meta.complete = prov.complete;
+    if (prov.note) meta.note = prov.note;
+    rememberDump(meta);
+    labeled++;
+  }
+  return labeled;
+}
+
 { // re-adopt what is already on disk (see loadArtifactsFromDisk)
   const a = loadArtifactsFromDisk();
+  const labeled = backfillUnlabeledDumps();
   if (a.loaded || a.skipped) log(`[artifacts] 从磁盘恢复 ${a.loaded} 个工件（跳过 ${a.skipped}，${(a.bytes / 1048576).toFixed(1)} MiB，${a.ms}ms）`);
+  if (labeled) log(`[artifacts] 从事件日志补上 ${labeled} 个工件的包名`);
 }
 /** Retention accounting for the in-memory capture list. Pass a session for that session's view. */
 export function captureStoreStats(session?: string) {
@@ -355,20 +464,77 @@ export function familyOf(algo: string): 'tls' | 'asymmetric' | 'hmac' | 'digest'
   if (/MD5|SHA|摘要|Digest/i.test(algo)) return 'digest';
   return 'symmetric';
 }
-// Store a capture honoring the family filter + retention cap. Returns false if filtered out.
+// Store a capture honoring the family filter + per-package retention. Returns false if filtered out.
 // The family filter is a crypto-panel control only — net/file/system captures bypass it
 // (their algo doesn't map to a crypto family, so familyOf would misclassify them).
+// Durable truth: when the entry has a package, append the full record under
+// adhd-data/packages/<pkg>/captures.jsonl so a daemon restart can replay it.
 export function pushCapture(entry: Capture): boolean {
   if (entry.category === 'crypto' && settings.capture.families[familyOf(entry.algo)] === false) return false;
   captures.push(entry);
   capturePushed++;
   bumpSession(entry.sessionId, 'pushed');
-  while (captures.length > settings.capture.retain) {
-    const dropped = captures.shift();
+  const pkg = entry.package && entry.package !== '?' ? entry.package : '';
+  if (pkg) {
+    try { appendCaptureLine(DATA_DIR, entry); }
+    catch (err) { log(`[captures] 持久化失败 (${pkg}):`, (err as Error).message); }
+  }
+  const retain = settings.capture.retain;
+  const evicted = evictPackageFromMemory(captures, pkg, retain);
+  for (const dropped of evicted) {
     captureEvicted++;
-    if (dropped) bumpSession(dropped.sessionId, 'evicted');
+    bumpSession(dropped.sessionId, 'evicted');
+  }
+  if (pkg && evicted.length) {
+    try { trimPackageCapturesFile(DATA_DIR, pkg, retain); }
+    catch (err) { log(`[captures] 裁剪失败 (${pkg}):`, (err as Error).message); }
   }
   return true;
+}
+
+/** Drop in-memory captures and the on-disk packages/ tree. Returns disk errors (if any). */
+export function clearCaptureStore(): string[] {
+  captures.length = 0;
+  recentJavaIn.clear();
+  return clearAllPersistedCaptures(DATA_DIR);
+}
+
+/** Drop one package from memory and disk. */
+export function clearPackageCaptureStore(pkg: string): string[] {
+  for (let i = captures.length - 1; i >= 0; i--) {
+    if (capturePackage(captures[i]) === pkg) captures.splice(i, 1);
+  }
+  return clearPackagePersistedCaptures(DATA_DIR, pkg);
+}
+
+export function packageCaptureDiskStats() {
+  return listPackageCaptureStats(DATA_DIR);
+}
+
+export function exportPackageCapturesJsonl(pkg: string): string | null {
+  return readPackageCapturesJsonl(DATA_DIR, pkg);
+}
+
+/** After settings.retain / maxAgeDays change: enforce caps in memory and on disk. */
+export function applyCaptureRetainCap(): void {
+  try { pruneCapturesOlderThan(DATA_DIR, settings.capture.maxAgeDays); }
+  catch (err) { log(`[captures] 天龄裁剪失败:`, (err as Error).message); }
+  const retain = settings.capture.retain;
+  const pkgs = new Set<string>();
+  for (const c of captures) pkgs.add(c.package && c.package !== '?' ? c.package : '');
+  // Drop from memory anything older than maxAgeDays.
+  if (settings.capture.maxAgeDays > 0) {
+    const cutoff = Date.now() - settings.capture.maxAgeDays * 86400000;
+    for (let i = captures.length - 1; i >= 0; i--) {
+      if (Number(captures[i].ts) && Number(captures[i].ts) < cutoff) captures.splice(i, 1);
+    }
+  }
+  enforcePerPackageRetain(captures, retain);
+  for (const pkg of pkgs) {
+    if (!pkg) continue;
+    try { trimPackageCapturesFile(DATA_DIR, pkg, retain); }
+    catch (err) { log(`[captures] 裁剪失败 (${pkg}):`, (err as Error).message); }
+  }
 }
 // The persistent-hook target modules the agent should use. Sent with every capture_start so
 // the agent stays target-agnostic (no hardcoded modules). The Java rich-capture reporter class
@@ -434,9 +600,19 @@ export function knownApps(): KnownApp[] {
   return [...by.values()].sort((a, b) => b.lastSeen - a.lastSeen || a.package.localeCompare(b.package));
 }
 export const captures: Capture[] = [];
-// Store accounting (v4.93): the in-memory list is capped by settings.capture.retain, and an
-// evicted record is gone for every digest that runs later. Counting pushes and evictions lets
-// a digest admit that its window may be missing events instead of looking complete.
+// Replay durable captures so a daemon restart keeps hook history (per package).
+{
+  try {
+    const aged = pruneCapturesOlderThan(DATA_DIR, settings.capture.maxAgeDays);
+    if (aged) log(`[captures] 按天龄裁掉 ${aged} 条（>${settings.capture.maxAgeDays} 天）`);
+  } catch (e) { log(`[captures] 天龄裁剪失败:`, (e as Error).message); }
+  const loaded = loadCapturesFromDisk(DATA_DIR, settings.capture.retain);
+  for (const c of loaded) captures.push(c as Capture);
+  if (loaded.length) log(`[captures] 从磁盘恢复 ${loaded.length} 条（按包保留上限 ${settings.capture.retain}）`);
+}
+// Store accounting (v4.93): the in-memory list is capped by settings.capture.retain (per package
+// since 2026-10-20), and an evicted record is gone for every digest that runs later. Counting
+// pushes and evictions lets a digest admit that its window may be missing events.
 let capturePushed = 0;
 let captureEvicted = 0;
 // Per session as well: the store is one FIFO across sessions, so a digest that filters by
@@ -581,12 +757,12 @@ export function previewForCapture(func: string, hex: string): string {
 // Which UI axis a capture belongs to. Derived from the agent's func tag so the web can
 // split the single stream into 加解密 / 网络 / 文件 / 系统 master-detail panels. The agent
 // stamps func: EVP_*/HMAC_* (crypto), SSL_read/write (net), open*/read/write/close (file),
-// ptrace/access/sysprop (system) — see cmd_capture_start.
+// ptrace/access/faccessat/sysprop/propread (system) — see cmd_capture_start.
 export function categoryOf(func: string): CapCategory {
   if (func === 'JAVA_HOOK' || func === 'NATIVE_HOOK' || func === 'JNI_NATIVE' || func === 'JNI_ONLOAD' || func === 'JNI_ENV') return 'system';
   if (func === 'SSL_write' || func === 'SSL_read') return 'net';
   if (/^(open|openat|read|write|close)$/.test(func)) return 'file';
-  if (/^(ptrace|access|sysprop|__system_property_get|getprop)$/.test(func)) return 'system';
+  if (/^(ptrace|access|faccessat|sysprop|propread|__system_property_get|getprop)$/.test(func)) return 'system';
   return 'crypto';
 }
 export function classify(func: string): { algo: string; op: string } {
@@ -613,8 +789,8 @@ export function classify(func: string): { algo: string; op: string } {
   if (func === 'write') return { algo: '文件', op: '写入' };
   if (func === 'close') return { algo: '文件', op: '关闭' };
   if (func === 'ptrace') return { algo: 'ptrace', op: '反调试检测' };
-  if (func === 'access') return { algo: 'access', op: '路径探测' };
-  if (func === 'sysprop' || func === '__system_property_get') return { algo: '系统属性', op: '读取手机信息' };
+  if (func === 'access' || func === 'faccessat') return { algo: 'access', op: '路径探测' };
+  if (func === 'sysprop' || func === 'propread' || func === '__system_property_get') return { algo: '系统属性', op: '读取手机信息' };
   if (func === 'ECDSA_sign_digest')    return { algo: 'RSA/EC 签名', op: '待签名数据' };
   if (func === 'ECDSA_sign_sig')       return { algo: 'RSA/EC 签名', op: '签名结果' };
   if (func === 'ECDSA_verify_digest')  return { algo: 'RSA/EC 验签', op: '待验签数据' };

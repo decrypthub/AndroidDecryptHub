@@ -13,4 +13,5 @@ class ScopeDraft {
     var selected by mutableStateOf<Set<String>>(emptySet())
     var families by mutableStateOf<Map<String, CaptureFamilies>>(emptyMap())
     var dirty by mutableStateOf(false)
+    var persistFailed by mutableStateOf(false)
 }

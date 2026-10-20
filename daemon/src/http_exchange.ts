@@ -1,24 +1,23 @@
-// http_exchange.ts — pair TLS plaintext into HTTP/1.1 exchanges.
+// http_exchange.ts — pair TLS plaintext into whole HTTP requests.
 //
 // SSL_read and SSL_write are byte streams, one record per call. The agent stamps the SSL*
 // on each record (`conn`). This module concatenates one connection's writes and reads
-// separately, splits them on HTTP/1.1 framing (Content-Length or chunked), and pairs the
-// Nth request with the Nth response. gzip / deflate / br are decoded here.
-//
-// HTTP/2 is detected (the client preface) and left unpaired: framing that needs a stream
-// id and an HPACK table is a different parser. Records with no conn cannot be joined.
+// separately. HTTP/1.1 is split on Content-Length or chunked and paired in order.
+// HTTP/2 (client preface) is framed and HPACK-decoded, then paired by stream id.
+// gzip / deflate / br are decoded here. Records with no conn cannot be joined.
 //
 // Pure: no daemon state. Callers filter the capture store and pass the records in.
 import zlib from 'node:zlib';
+import { parseHttp2, type Http2Message } from './http2.ts';
 
 const TEXT_CAP = 65_536;
 const H2_PREFACE = Buffer.from('PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n');
-const REQUEST_LINE = /^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|TRACE|CONNECT) (\S+) HTTP\/1\.[01]$/;
-const STATUS_LINE = /^HTTP\/1\.[01] (\d{3})(?: |$)/;
+const REQUEST_LINE = /^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|TRACE|CONNECT) (\S+) HTTP\/(?:1\.[01]|2)$/;
+const STATUS_LINE = /^HTTP\/(?:1\.[01]|2) (\d{3})(?: |$)/;
 
 export const HTTP_EXCHANGE_CAVEAT =
-  '同一条 SSL 连接上，发送字节和接收字节各自按时间拼回去，再用 HTTP/1.1 的 Content-Length 或 chunked 拆开，按顺序配对。' +
-  'gzip、deflate、br 在这里解开。HTTP/2 和没有连接号的记录不配对。';
+  '同一条 SSL 连接上，发送字节和接收字节各自按时间拼回去。HTTP/1.1 用 Content-Length 或 chunked 拆开后按顺序配对；' +
+  'HTTP/2 按流还原成一条完整请求。gzip、deflate、br 在这里解开。没有连接号的记录拼不回去。';
 
 export interface TlsChunk {
   id: number;
@@ -41,6 +40,8 @@ export interface HttpPart {
   binary: boolean;
   complete: boolean;
   textTruncated: boolean;
+  /** Present when the body is not text. Capped; `bodyBytes` is the full length. */
+  bodyHex?: string;
   contentEncoding?: string;
   decoded: boolean;
   note?: string;
@@ -66,6 +67,13 @@ export interface HttpAssembly {
   noConn: number;
   /** Connections whose client bytes are an HTTP/2 preface. */
   http2: number;
+  /** HTTP/2 connections that did not contain a request or a response yet. */
+  http2Idle: number;
+  /**
+   * Capture ids folded into an exchange, or belonging to an HTTP/2 connection that has no
+   * message yet. The network list uses this so a SETTINGS frame is not shown as its own row.
+   */
+  consumedIds: number[];
   caveat: string;
 }
 
@@ -236,7 +244,13 @@ function toPart(msg: RawMsg): HttpPart {
     ? decodeBody(msg.body, encoding)
     : { body: msg.body, decoded: false, note: encoding && !msg.complete ? '正文还不完整，先不解压' : undefined };
   const text = asText(decoded.body);
-  const notes = [msg.note, decoded.note, text.textTruncated ? `正文只返回前 ${TEXT_CAP} 字符` : ''].filter(Boolean);
+  const hexCap = 4096;
+  const bodyHex = text.binary && decoded.body.length ? decoded.body.subarray(0, hexCap).toString('hex') : '';
+  const notes = [
+    msg.note, decoded.note,
+    text.textTruncated ? `正文只返回前 ${TEXT_CAP} 字符` : '',
+    bodyHex && decoded.body.length > hexCap ? `二进制正文只展示前 ${hexCap} 字节` : '',
+  ].filter(Boolean);
   return {
     startLine: msg.startLine,
     headerText: msg.headerText,
@@ -245,6 +259,7 @@ function toPart(msg: RawMsg): HttpPart {
     binary: text.binary,
     complete: msg.complete,
     textTruncated: text.textTruncated,
+    ...(bodyHex ? { bodyHex } : {}),
     ...(encoding ? { contentEncoding: encoding } : {}),
     decoded: decoded.decoded,
     ...(notes.length ? { note: notes.join('；') } : {}),
@@ -257,8 +272,9 @@ function requestLabel(startLine: string, headerText: string): string {
   const method = m[1].toUpperCase();
   const target = m[2];
   if (/^https?:\/\//i.test(target)) return `${method} ${target}`;
-  const host = headerText.match(/^host:\s*(\S+)/im)?.[1] ?? '';
-  if (host && target.startsWith('/')) return `${method} https://${host}${target}`;
+  const host = headerText.match(/^(?:host|:authority):\s*(\S+)/im)?.[1] ?? '';
+  const scheme = /:scheme:\s*http$/im.test(headerText) ? 'http' : 'https';
+  if (host && target.startsWith('/')) return `${method} ${scheme}://${host}${target}`;
   return `${method} ${target}`;
 }
 
@@ -300,12 +316,28 @@ function hasConn(conn: string | undefined): conn is string {
   return !!conn && conn !== '0' && conn !== '0x0' && conn !== '0x';
 }
 
+function rawFromHttp2(msg: Http2Message): RawMsg {
+  return {
+    startLine: msg.startLine,
+    headerText: msg.headerText,
+    headers: msg.headers,
+    body: msg.body,
+    complete: msg.complete,
+    ...(msg.note ? { note: msg.note } : {}),
+    ...(msg.method ? { method: msg.method } : {}),
+    ...(msg.status != null ? { status: msg.status } : {}),
+  };
+}
+
 /**
- * Pair HTTP/1.1 messages that share an SSL*. Order inside one direction is timestamp, then id.
+ * Pair messages that share an SSL*. HTTP/1.1 pairs in order. HTTP/2 pairs by stream id.
+ * Order inside one direction is timestamp, then id.
  */
 export function assembleHttpExchanges(records: TlsChunk[]): HttpAssembly {
   let noConn = 0;
   let http2 = 0;
+  let http2Idle = 0;
+  const consumedIds: number[] = [];
   const groups = new Map<string, TlsChunk[]>();
   for (const rec of records) {
     if (rec.func !== 'SSL_read' && rec.func !== 'SSL_write') continue;
@@ -322,10 +354,57 @@ export function assembleHttpExchanges(records: TlsChunk[]): HttpAssembly {
     const [sessionId, conn] = key.split('\n');
     const write = buildSide(chunks, 'SSL_write');
     const read = buildSide(chunks, 'SSL_read');
-    if (isH2(write.buf)) { http2++; continue; }
+    if (isH2(write.buf)) {
+      http2++;
+      const captureIds = [...write.ids, ...read.ids];
+      const reqP = parseHttp2(write.buf, 'client');
+      const resP = parseHttp2(read.buf, 'server');
+      const byStream = new Map<number, { req?: Http2Message; res?: Http2Message; order: number }>();
+      let order = 0;
+      for (const msg of reqP.messages) {
+        const row = byStream.get(msg.streamId) ?? { order: order++ };
+        row.req = msg;
+        byStream.set(msg.streamId, row);
+      }
+      for (const msg of resP.messages) {
+        const row = byStream.get(msg.streamId) ?? { order: order++ };
+        row.res = msg;
+        byStream.set(msg.streamId, row);
+      }
+      const rows = [...byStream.values()].sort((a, b) => a.order - b.order);
+      if (!rows.length) {
+        http2Idle++;
+        consumedIds.push(...captureIds);
+        continue;
+      }
+      const hole = [write.hole, read.hole, reqP.note, resP.note].filter(Boolean).join('；');
+      rows.forEach((row, i) => {
+        const req = row.req ? rawFromHttp2(row.req) : undefined;
+        const res = row.res ? rawFromHttp2(row.res) : undefined;
+        const notes = [i === rows.length - 1 ? hole : ''].filter(Boolean);
+        const sid = row.req?.streamId ?? row.res?.streamId ?? i;
+        exchanges.push({
+          id: `${sessionId}:${conn}:s${String(sid).padStart(8, '0')}`,
+          sessionId,
+          conn,
+          label: req ? requestLabel(req.startLine, req.headerText) : (res?.startLine ?? 'HTTP/2'),
+          status: res?.status != null ? String(res.status) : '',
+          ts: write.ts || read.ts,
+          tsNs: write.tsNs || read.tsNs,
+          captureIds,
+          request: req ? toPart(req) : null,
+          response: res ? toPart(res) : null,
+          ...(notes.length ? { note: [...new Set(notes)].join('；') } : {}),
+        });
+      });
+      continue;
+    }
     const requests = parseSide(write.buf, 'request', []);
     const responses = parseSide(read.buf, 'response', requests.messages.map((m) => m.method));
-    if (!requests.messages.length && !responses.messages.length) continue;
+    if (!requests.messages.length && !responses.messages.length) {
+      consumedIds.push(...write.ids, ...read.ids);
+      continue;
+    }
     const captureIds = [...write.ids, ...read.ids];
     const hole = [write.hole, read.hole].filter(Boolean).join('；');
     const n = Math.max(requests.messages.length, responses.messages.length);
@@ -353,5 +432,5 @@ export function assembleHttpExchanges(records: TlsChunk[]): HttpAssembly {
     }
   }
   exchanges.sort((a, b) => (a.tsNs - b.tsNs) || a.id.localeCompare(b.id));
-  return { exchanges, noConn, http2, caveat: HTTP_EXCHANGE_CAVEAT };
+  return { exchanges, noConn, http2, http2Idle, consumedIds, caveat: HTTP_EXCHANGE_CAVEAT };
 }

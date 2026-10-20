@@ -60,13 +60,14 @@ Path: `/data/adb/adh/scope.json`
 }
 ```
 
-`policy` is the **per-package hook policy** (`CaptureFamilies`): which crypto hook families the agent
-**installs** for that package — an unchecked family means those GOT hooks are never installed in that
-process, not that its records are filtered afterwards. Short keys are deliberate (same reason as
-`InstalledAppsJson`: the blob crosses Binder): `c` = capture section, `d/h/s/a/t/e` =
-digest / hmac / symmetric / asymmetric / tls / aead. The agent *holds* the policy but never arms
-itself — a GOT patch needs a module name and the agent carries none (WS-B red line), so the policy
-is applied by the next caller-issued install and its verdict comes back in that install's reply.
+`policy` is the **per-package hook policy** (`CaptureFamilies`): which crypto / system hook families
+the agent **installs** for that package — an unchecked family means those GOT hooks are never
+installed in that process, not that its records are filtered afterwards. Short keys are deliberate
+(same reason as `InstalledAppsJson`: the blob crosses Binder): `c` = capture section, `d/h/s/a/t/e/y` =
+digest / hmac / symmetric / asymmetric / tls / aead / system-detection. The agent *holds* the policy
+but never arms itself — a GOT patch needs a module name and the agent carries none (WS-B red line),
+so the policy is applied by the next caller-issued install and its verdict comes back in that
+install's reply.
 
 A leftover `b` object in an old scope file is ignored on read and dropped on the next write. The
 Java SSL-bypass switch that used it was removed: on this ROM it crashed the target inside ART class
@@ -77,12 +78,12 @@ the module a process name (`com.example.app:core`), so the injector tries the ex
 then the package prefix, asking the companion with each. A per-app policy therefore reaches every
 process of the app, which is what the UI promises (REQUIREMENTS §30.4).
 
-**Defaults are all-on, and absence means all-on.** A missing `policy` section, a missing package entry,
-or a missing family key all decode to `true`, so an old scope file, an old Manager and an old daemon
-stay correct by simply not writing the section — and `encode` drops entries that are default or whose
-package left the scope, so the section only ever holds non-defaults. Writers must gate on
-`AdhProtocol.MIN_POLICY_VERSION`: `RootScopeBinder.setScopeJson` decodes and re-encodes, so a daemon
-older than that would silently drop `policy` and still report success.
+**Crypto defaults on; system detection (`y`) defaults off.** A missing `policy` section, a missing
+package entry, or a missing crypto family key decode to crypto ON; missing `y` means system OFF. An
+old scope file therefore stays on the historical "sysModule empty" path. `encode` drops entries that
+are default or whose package left the scope. Writers must gate on `AdhProtocol.MIN_POLICY_VERSION`:
+`RootScopeBinder.setScopeJson` decodes and re-encodes, so a daemon older than that would silently drop
+`policy` and still report success.
 
 Constants live only in `:core` (`AdhPaths`, `ScopeConfig`, `CaptureFamilies`). Zygisk C++ mirrors the same path string (documented; keep in sync by hand until a codegen step exists).
 

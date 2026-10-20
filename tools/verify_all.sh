@@ -2,9 +2,13 @@
 # Master regression runner — runs every version acceptance script and reports a summary.
 # Ensures ADH Daemon + adb reverse are up first. Device-only scripts are skipped (not failed)
 # when no device is attached. Exit 0 only if all RUN scripts passed.
+#
+# ADH_VERIFY_MODE=host  — only :host scripts (daily / no phone). Prefer: tools/verify_host.sh
+# ADH_VERIFY_MODE=full  — host + device (default when unset)
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+MODE="${ADH_VERIFY_MODE:-full}"
 bash tools/dev_up.sh >/dev/null 2>&1
 STATE="$(adb get-state 2>/dev/null | tr -d '\r')"
 # name:needs_device
@@ -172,8 +176,7 @@ SCRIPTS=(
   "verify_v28_inlinehook.sh:device"
   "verify_v29_dexindex.sh:host"
   # Optional Frida Gadget backend (module W): official gadget → dlopen → bundled Java hook.
-  # SKIPs (exit 0) when the gadget asset / bundler deps are absent — both are gitignored caches.
-  "verify_v30_fridagadget.sh:device"
+  # Frida Gadget retired from product surface (2026-10-20); verify_v30_fridagadget.sh kept as archive-only.
   # Optional eCapture backend (module W): eBPF TLS plaintext capture. Needs root + eBPF kernel;
   # SKIPs with an explicit reason when the kernel cannot load eBPF programs.
   # verify_v34_ecapture.sh:device — REMOVED from the gate on 2026-10-01. eCapture was downgraded to
@@ -209,12 +212,19 @@ SCRIPTS=(
   # SHA256withRSA on a platform provider (not the sandbox's own reporter). java-source captures
   # of the fixed markers are the plugin hooks, and the probe return value shows the originals ran.
   "verify_v104_java_hook.sh:device"
+  # v10.5 detection checklist: system-capture lines become debug/root/signature/emulator/integrity
+  # counts, app-owned modules are selected, and the Java plan does not install without confirm.
+  "verify_v105_detect_summary.sh:host"
 )
 
 pass=0; fail=0; skip=0; FAILED=""
+echo "verify_all mode=$MODE (host=daily subset, full=host+device)"
 for entry in "${SCRIPTS[@]}"; do
   name="${entry%%:*}"; needs="${entry##*:}"
   [ -f "tools/$name" ] || continue
+  if [ "$MODE" = "host" ] && [ "$needs" = "device" ]; then
+    continue
+  fi
   if [ "$needs" = "device" ] && [ "$STATE" != "device" ]; then
     echo "SKIP  $name (no device)"; skip=$((skip+1)); continue
   fi

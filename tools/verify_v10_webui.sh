@@ -16,7 +16,7 @@ verify_chk "raven brand mark"      'grep -q "/raven.svg" <<<"$HTML" && ! grep -q
 verify_chk "tabs present (中文面板)" 'grep -q "加解密" <<<"$HTML" && grep -q "系统" <<<"$HTML" && grep -q "网络" <<<"$HTML" && grep -q "文件" <<<"$HTML" && grep -q "Dump" <<<"$HTML" && grep -q "MCP" <<<"$HTML"'
 verify_chk "no advanced fold / LAN URL" '! grep -q "id=\"access\"" <<<"$HTML" && ! grep -q "id=\"p-mem\"" <<<"$HTML" && ! grep -q "id=\"p-native\"" <<<"$HTML" && ! grep -q ">高级<" <<<"$HTML"'
 verify_chk "category-split panels"  'grep -q "makeCapPanel" <<<"$HTML" && grep -q "p-system" <<<"$HTML" && grep -q "p-net" <<<"$HTML"'
-verify_chk "file browser split pane" 'grep -q "files-workspace" <<<"$HTML" && grep -q "filesBreadcrumb" <<<"$HTML" && grep -q "沙盒根" <<<"$HTML" && grep -q "/api/fs/list" <<<"$HTML" && grep -q "/api/fs/read" <<<"$HTML"'
+verify_chk "file browser split pane" 'grep -q "files-workspace" <<<"$HTML" && grep -q "filesBreadcrumb" <<<"$HTML" && grep -q "沙盒根" <<<"$HTML" && grep -q "/api/fs/list?package=" <<<"$HTML" && grep -q "/api/fs/read" <<<"$HTML" && ! grep -q "没有连上的进程" <<<"$HTML" && ! grep -q "没有在跑的进程，捕获记录仍可查看" <<<"$HTML"'
 verify_chk "one-click dump-all wired" 'grep -q "/api/unpack/dump-all" <<<"$HTML" && grep -q "一键 Dump 所有 DEX" <<<"$HTML" && grep -q "dumpAllDex" <<<"$HTML"'
 verify_chk "live capture panel"    'grep -q "/api/captures" <<<"$HTML" && grep -q "capLoad" <<<"$HTML"'
 verify_chk "capture KEY/IV cards"  'grep -q "function ioKV" <<<"$HTML" && grep -q "输入 / INPUT" <<<"$HTML" && grep -q "输出 / OUTPUT" <<<"$HTML"'

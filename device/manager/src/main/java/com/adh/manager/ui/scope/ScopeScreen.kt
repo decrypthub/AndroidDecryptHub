@@ -73,7 +73,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.adh.core.CaptureFamilies
 import com.adh.core.PackageControl
-import com.adh.core.ScopeConfig
 import com.adh.manager.R
 import com.adh.manager.data.ScopeRepository
 import kotlinx.coroutines.Dispatchers
@@ -98,11 +97,11 @@ fun ScopeScreen(
     draft: ScopeDraft,
     onBack: () -> Unit,
     onOpenHook: (String) -> Unit,
+    onPersist: () -> Unit,
 ) {
     val context = LocalContext.current
     val snackbar = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
-    val savedMessage = stringResource(R.string.scope_saved)
     val saveFailedMessage = stringResource(R.string.scope_save_failed)
     val controlDeniedMessage = stringResource(R.string.app_control_denied)
 
@@ -119,9 +118,11 @@ fun ScopeScreen(
     var catalogIncomplete by remember { mutableStateOf(false) }
     var daemonUnavailable by remember { mutableStateOf(false) }
     var canControlPackages by remember { mutableStateOf(false) }
-    var saving by remember { mutableStateOf(false) }
     var refreshVersion by remember { mutableStateOf(0) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { refreshVersion++ }
+    LaunchedEffect(draft.persistFailed) {
+        if (draft.persistFailed) snackbar.showSnackbar(saveFailedMessage)
+    }
 
     LaunchedEffect(repository, refreshVersion) {
         loading = true
@@ -315,32 +316,15 @@ fun ScopeScreen(
         bottomBar = {
             Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
                 Button(
-                    enabled = !saving && !loading && !loadFailed && !daemonUnavailable,
-                    onClick = {
-                        coroutineScope.launch {
-                            saving = true
-                            val result = withContext(Dispatchers.IO) {
-                                // Carry the whole config: sending `selected` alone silently drops
-                                // version/mode/policy on every save.
-                                repository.save(
-                                    ScopeConfig(
-                                        packages = draft.selected,
-                                        policy = draft.families.filterKeys { draft.selected.contains(it) },
-                                    ),
-                                )
-                            }
-                            saving = false
-                            if (result.isSuccess) draft.dirty = false
-                            snackbar.showSnackbar(if (result.isSuccess) savedMessage else saveFailedMessage)
-                        }
-                    },
+                    enabled = !loading && !loadFailed && !daemonUnavailable,
+                    onClick = { onPersist() },
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 12.dp),
                 ) {
                     Icon(Icons.Rounded.Save, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
-                    Text(stringResource(if (saving) R.string.saving else R.string.save))
+                    Text(stringResource(R.string.save))
                 }
             }
         },
@@ -411,7 +395,7 @@ fun ScopeScreen(
                                 onCheckedChange = { checked ->
                                     draft.selected = if (checked) draft.selected + row.packageName
                                     else draft.selected - row.packageName
-                                    draft.dirty = true
+                                    onPersist()
                                 },
                                 canControl = canControlPackages,
                                 families = draft.families[row.packageName] ?: CaptureFamilies.DEFAULT,

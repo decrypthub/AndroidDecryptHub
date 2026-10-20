@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseScopePackages, applicationLabel } from '../src/scope_list.ts';
+import { parseScopePackages, applicationLabel, scopeSwitcherApps } from '../src/scope_list.ts';
 
 test('the web switcher is the checked scope list, in file order', () => {
   const raw = `{
@@ -21,6 +21,14 @@ test('scope noise and the manager package are dropped', () => {
   });
   assert.deepEqual(parseScopePackages(raw), ['com.example.target']);
   assert.deepEqual(parseScopePackages('   '), []);
+});
+
+test('a newly checked package is listed before its launcher name is known', () => {
+  const labels = new Map([['com.job.android', '前程无忧51Job']]);
+  assert.deepEqual(scopeSwitcherApps(['com.job.android', 'com.example.newapp'], labels), [
+    { package: 'com.job.android', label: '前程无忧51Job' },
+    { package: 'com.example.newapp', label: 'com.example.newapp' },
+  ]);
 });
 
 test('badging prefers the Chinese launcher name', () => {

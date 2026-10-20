@@ -49,8 +49,8 @@
 static pthread_once_t g_once = PTHREAD_ONCE_INIT;
 static char g_entry[16] = "start";
 static char g_package[512] = "";
-// Per-package hook policy line from the Zygisk companion ("d=1,h=0,…"); empty = no policy → every
-// family on, i.e. exactly the behaviour before per-app policy existed.
+// Per-package hook policy line from the Zygisk companion ("d=1,h=0,…,y=0"); empty = no policy →
+// crypto families on, system detection off.
 static char g_policy[64] = "";
 
 // ---- report + command loop ------------------------------------------------
@@ -633,7 +633,7 @@ static void command_loop(int fd) {
                 } else if (strcmp(op, "gothook_selftest") == 0) {
                     adh_cmd_gothook_selftest(fd, id);
                 } else if (strcmp(op, "capture_start") == 0) {
-                    char cmod[64] = "", fmod[64] = "", smod[64] = "";
+                    char cmod[64] = "", fmod[64] = "", smod[512] = "";
                     json_get_str(line, "cryptoModule", cmod, sizeof(cmod));
                     json_get_str(line, "fileModule", fmod, sizeof(fmod));
                     json_get_str(line, "sysModule", smod, sizeof(smod));
@@ -787,12 +787,13 @@ void adh_agent_set_package(const char *pkg) {
 // Per-package hook policy, handed over at load time by the Zygisk companion (its `policy` verb;
 // see injector/zygisk/jni/main.cpp). One line: "d=1,h=0,s=1,a=0,t=1,e=0". Anything missing or
 // unparseable keeps that family ON, so a truncated line can only ever mean "hook more".
-static int policy_flag(const char *flags, char key) {
+// Absent crypto keys default ON; absent `y` (system detection) defaults OFF.
+static int policy_flag(const char *flags, char key, int dflt) {
     for (const char *p = flags; (p = strchr(p, key)) != NULL; p++) {
         int at_token_start = (p == flags) || (p[-1] == ',');
         if (at_token_start && p[1] == '=') return (p[2] == '0') ? 0 : 1;
     }
-    return 1;
+    return dflt;
 }
 
 __attribute__((visibility("default")))
@@ -801,8 +802,9 @@ void adh_agent_set_policy(const char *flags) {
     strncpy(g_policy, flags, sizeof(g_policy) - 1);
     g_policy[sizeof(g_policy) - 1] = 0;
     adh_capture_set_families(
-        policy_flag(g_policy, 'd'), policy_flag(g_policy, 'h'), policy_flag(g_policy, 's'),
-        policy_flag(g_policy, 'a'), policy_flag(g_policy, 't'), policy_flag(g_policy, 'e'));
+        policy_flag(g_policy, 'd', 1), policy_flag(g_policy, 'h', 1), policy_flag(g_policy, 's', 1),
+        policy_flag(g_policy, 'a', 1), policy_flag(g_policy, 't', 1), policy_flag(g_policy, 'e', 1),
+        policy_flag(g_policy, 'y', 0));
     LOGI("hook policy: %s", g_policy);
 }
 

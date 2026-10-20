@@ -3,6 +3,116 @@
 > 这是"我们现在在哪"的唯一真相。每个会话开始先读它，结束前更新它。
 > 详细规格见 `REQUIREMENTS.md`，路线与架构见 `DEVELOPMENT_PLAN.md`。
 
+## 2026-10-20 —— v0.4.0 发版
+
+**v0.4.0 / versionCode 23**（Manager 同号；Device Daemon 11；`AGENT_VER` `0.4.0`）。本版相对 v0.3.15：一键脱壳产品化（冷启/全进程/边抠边显/一次一条记录）、脱壳期抑制本包装钩、Frida 退出产品面、捕获按包落盘与自动布防、系统检测 Manager 开关、Web UX 收短。产物 `adh-bundle-v0.4.0.zip`；`update.json` 指向公开 Release。
+
+## 2026-10-20 —— 脱壳记录改成「一次一条」
+
+脱壳历史不再把 zip + 每个 DEX 平铺：列表只显示每次脱壳一条，点进去看全部 DEX 并可「下载全部」。系统检测摘要收成「未开 / 已开 · 暂无 / 已开 · 计数」，去掉长篇说明。
+
+## 2026-10-20 —— 产品 UX：脱壳/捕获诚实提示
+
+扫出的 P0/P1 已落地一批：脱壳指引改为「重启 App」；「暂停刷新」；清空本页确认；顶栏本包未装钩；unpack protect；CLI/MCP 对齐一键脱壳。文案已再次收短。
+
+## 2026-10-20 —— 系统检测：白话摘要 + Manager 开关
+
+Web「系统」页检测摘要改成普通人能懂的中文（未开启 / 已开启暂无发现 / 计数），不再提 `sysModule`、GOT、`detect_modules`。Manager 每个应用的 Hook 配置新增「系统检测」（policy `y`，**默认关**）；打开后 agent 才装 ptrace/access/属性类钩子，Host 开捕时若全局 `sysModule` 为空则对该包跑 `detect_modules` 自动选库。关掉则强制不装。需重编 agent + Zygisk + Manager 后冷启动目标才生效。
+
+## 2026-10-20 —— 一键脱壳：加固目标防闪退
+
+学习通（SecNeo）实测：冷启动 HELLO 后自动 `capture_start` 装 GOT 钩 → ~1.5s 内进程自杀，脱壳根本没跑到。修复：unpack 全程 `suppressCaptureArmForUnpack`（hello 不布防、不 autoDump）；已有在线 session 时默认 reuse、不强杀；settle 提到 4s。脱壳结束后也不自动回布防。
+
+## 2026-10-20 —— 一键脱壳边抠边显
+
+每个 DEX 保存后立刻写入 `adhd-data/packages/<pkg>/unpack/<runId>/dex/…`，并经 WS `unpack.dex` 推到网页左侧记录（可下载）；跑完再写 `bundle.zip` + `unpack.done`。体感对齐 Frida dex dump 逐条刷出。
+
+## 2026-10-20 —— 一键脱壳：自动冷启动 + 扫全进程
+
+`POST /api/unpack/run`：adb `force-stop` → 打开 LAUNCHER → 等 agent 上线并短暂 settle → 对该包每个在线 session dump DEX → SHA 去重打 zip。用户不用先手动开 App。`launch:false` 可跳过启动（调试用）。
+
+## 2026-10-20 —— 一键脱壳扫全包所有在线进程
+
+不再让人手点主进程 / `:pushservice`。`POST /api/unpack/run` 收 `package`，对该包每个在线 session 跑 dump，按 SHA 去重，打进同一个 zip（`dex/main/`、`dex/pushservice/`… + manifest）。Dump 页去掉进程切换条。
+
+## 2026-10-20 —— Frida Gadget 退出产品面
+
+注入后端页去掉 Frida 缓存/加载命令；`/api/backends` 与 MCP `backends` 不再返回 `gadget`；`classifySession` 不再标 `frida_gadget`。`verify_all` 不再跑 `verify_v30_fridagadget`。官方路径只剩 Zygisk + 模拟注入。历史脚本可留在 `tools/`，不当交付入口。
+
+## 2026-10-20 —— 网络列表不再单列 TLS 控制帧
+
+`#528` 这种 17 字节的 `SSL_read` 是 HTTP/2 GOAWAY，不是请求。网络列表只留已经配成对的 HTTP 请求和响应。拼不成请求的 TLS 记录（控制帧、没有连接号）记一笔略过，不再各占一行。agent 侧同样不把「整段都是 SETTINGS / PING / GOAWAY / WINDOW_UPDATE / PRIORITY / RST_STREAM」的明文写入捕获环；带前言、HEADERS 或 DATA 的仍记。这一版 so 还没换进正在跑的进程。
+
+## 2026-10-20 —— Dump 页改成一键脱壳打包
+
+不再把「枚举 DEX 再逐个点」当主交互。`POST /api/unpack/run`：对在线进程跑完整 dump → 把成功保存的 DEX 打成 zip（`dex/*` + `manifest.json`），写入 captures，tag=`unpack-bundle`。网页左侧是脱壳记录（可下载），右侧是已加载 SO / 包内·私有目录 SO。包内目录含 `lib/`、`files/` 与 maps 里已映射路径的父目录。
+
+## 2026-10-20 —— v0.4.0：真源 + 自动布防 + 门禁瘦身
+
+- **捕获真源**：按包 `adhd-data/packages/<pkg>/captures.jsonl`；启动回放；每包 retain；maxAgeDays（默认 14）；按包清空/导出 jsonl；磁盘统计 API。
+- **自动布防**：scope 内（或沙盒）进程上线且未强制停 → `armCaptureHooks`（drain→stop→start）；网页开关语义改为强制停/恢复；名单仍只读 `scope.json`。
+- **Dump**：进程不在线时仍列出该包已落盘的 DEX/SO。
+- **门禁**：`tools/verify_host.sh` / `ADH_VERIFY_MODE=host` 只跑 host 子集；全量仍是默认 `verify_all`。
+- **清理**：Zygisk 去掉死字段 `b=`；模块 X/Xposed 历史见 `docs/archive/RETIRED_MODULE_X_AND_XPOSED.md`。
+- **版本**：v0.4.0 / versionCode 23（Manager 同号；Device Daemon 10）。刷机后生效 companion 与 Manager。
+
+## 2026-10-20 —— 捕获按包落盘（真源）+ 轻量清理
+
+（已并入上条 v0.4.0。）
+
+## 2026-10-20 —— 系统检测捕获补了结果、现代入口和清单
+
+`capture_start` 的 system 钩子以前只记下「调用发生了」：`ptrace` 没有返回值，`access` 没有 mode 和结果，`__system_property_get` 没有读到的值，进程里还有一块没人读的 64 条分类缓冲。现在这五条都是只观察再转发，文本里带返回值、路径或属性值、以及命中时的 `lr`：
+
+- `ptrace`、`access`、`faccessat`、`__system_property_get`、`__system_property_read_callback`
+- `sysModule` 可以是逗号分隔的多个模块，最多 8 个，多出来的在回执里标 `sysTruncated`
+- Host `GET /api/detect/summary` 和 MCP `detect_summary` 把这些事件收成反调试 / root / 签名 / 模拟器 / 完整性。普通文件打开不进清单；`JAVA_HOOK` / `NATIVE_HOOK` 也不进，除非是 `detect_java` 点名的那几个方法
+- `detect_modules` 只在当前包自己的 `.so` 里找上述导入，系统库排除。`detect_java` 必须 `confirm:true` 才会装；`File.exists` 要单独点名
+
+分类在 `daemon/src/detect.ts`，单测 `daemon/test/detect_summary.test.ts`。要在真机上看到新字段，需要重新编译并注入 agent。伪造 `PTRACE_TRACEME` 返回值仍然没有。
+
+## 2026-10-20 —— 网络列表记录完整 HTTP 请求
+
+`SSL_write` / `SSL_read` 仍是一段段明文。HTTP/1.1 按连接拼成一对。HTTP/2 现在在 Host 上按帧拆开、用 HPACK 解掉头块，再按流号把请求和响应配成一条。gzip、deflate、br 照旧在这里解开。二进制正文不再当成 UTF-8 贴出来，详情里给十六进制。还没出现请求的 HTTP/2 连接（只有前言和 SETTINGS）不单独占一行。没有 `conn` 的旧记录仍然拆不开。WebView 和 QUIC 还是不在这条通道上。
+
+## 2026-10-20 —— 加解密列表按算法、大小和钩子显示
+
+加解密列表一行是算法名、方向、输入到输出的字节数，第二行是明文开头和钩子。Java 记录用 `Cipher.getAlgorithm()` 的名字（`SHA-256`、`AES/CBC/PKCS5Padding`），钩子写成 `Cipher.doFinal` 这种。Native 的 `EVP_DigestUpdate` 分不出 MD5 和 SHA-256，行上写「摘要 · 未识别」，旁边是钩子名。有密钥只打标记。输入被截短时大小后面标「截断」。没有输入也没有输出的 init 不进列表。展示逻辑在 `daemon/src/crypto_view.ts`。多次 `Update` 仍然各占一行：记录里没有上下文编号，收成一条会把不同次调用拼在一起。
+
+## 2026-10-20 —— Dump 页的目标与改进计划
+
+Dump 页要做两件事。DEX：壳解密并交给 ART 之后，把正在执行的真实 DEX 脱出来；读不完的内存和壳本身不算脱出来。SO：同一页看清「包目录里有哪些」（磁盘上可能是加密或处理过的）和「哪些已经加载进内存」（导出的是内存映像）。
+
+当前页做不到：标题仍是「一键 Dump 所有 DEX」；左边是已保存文件的 SHA，20 个截断 DEX 和完整文件混在一起，完成行用的是头里的大小；右边只有导出成功的内存 SO，包内文件和「已加载但导不出」的库都看不见。多进程时静默用最后上线的 session。
+
+页面已按这个目标改完（Host + 网页，未改 agent，未刷机）。打开 Dump 清点：左列每个 DexFile 写连续可读长度和头里的大小；右列上「已加载」、下「包内文件」；默认主进程（进程名不含 `:`），其他进程可切换。脱壳只保存读满且类表能走完的 DEX，短读不落盘、行上不给下载。SO 仍按 `p_filesz` 读满才保存。单测 `daemon/test/dump_inventory.test.ts` 通过。网页在进程不在线时显示「没有在跑的进程」。前程无忧 pid 18486 的 agent 从更早一次导出后就不再读 socket（两条到 `8761` 的连接仍停着），这次清点没能在这个进程上跑出来。
+
+## 2026-10-20 —— 勾选和 Hook 开关当场写入注入范围
+
+网页右上角读的是手机上的 `/data/adb/adh/scope.json`。Manager 里的勾选和 Hook 家族开关以前只改内存里的草稿，要点「保存」才写文件；这份文件从 10 月 18 日后再没写过，所以新应用不会出现。现在这两处一改就写入同一份文件。`ScopeWriter` 单测通过。调试版 Manager 已装到 `aa165071`，没有重启、没有刷模块。上次那次勾选没进文件，要在新 Manager 里再勾一次。网页名单几秒内跟上；注入仍然要等目标应用下次打开。
+
+## 2026-10-20 —— 新勾选的应用不用等名字解析完才出现在切换里
+
+网页切换读的是手机上已经保存的 `/data/adb/adh/scope.json`。原先要等每个新包的应用名从 apk 里解出来，这一次 `/api/apps` 才返回，名单会停在旧的几项上。现在包名先进入列表，名字随后补上。读范围文件失败时保留上一份名单。
+
+## 2026-10-20 —— 文件页不看应用在不在跑
+
+沙盒目录在手机上，不在进程里。文件页按包名用 root 列 `/data/data/<包名>` 并读里面的文件，进程退出也能看。路径先限制在这个包的沙盒里，再交给 `adb` + `su`。加解密、系统、网络的已有记录同样不因为「未连接」被藏起来；顶栏只显示在线还是未连接。导出已加载的 DEX / SO 仍然要进程在，因为那些字节在内存里。
+
+## 2026-10-20 —— Dump 页可以导出当前应用已加载的 SO
+
+右边的 SO 列以前只有「已经保存过的 SO」。前程无忧没有存过，所以一直是空的。现在「导出已加载 SO」只取这个包自己目录里已映射的 `.so`（`/data/app/<包名>/lib` 和 `/data/data/<包名>`），系统库和 `libadh_agent.so` 不收。选择逻辑在 `daemon/src/so_select.ts`。
+
+主进程 pid 18486 上实测：39 个里 **7 个保存成功**（`libmmkv.so`、`libreact_render_core.so` 等），页面刷新后右边就是这 7 行。另外 28 个按段的 `p_memsz` 去读，在页边界短读（BSS 尾巴没有映射），4 个内存里没有 ELF 头（`libexec.so`、`libexecmain.so`、`libijm-emulator.so`、`libijmDataEncryption.so`），这 32 个没有落盘。重组改为只要求 `p_filesz` 读全，BSS 留零；文件字节本身读不全仍然失败。导出之后这个进程的 agent 不再应答，文件字节这条路径还没有对这 32 个重跑。
+
+## 2026-10-20 —— Dump 列表按包名找回已保存的文件
+
+Dump 页只显示包名等于当前应用的工件。Host 重启后这些文件被当成没有包名，所以选中任何一个应用都是「暂无」。现在每个工件旁边写一份来源（包名、是否完整）；已经落盘、事件日志里有记录的，启动时补上包名。读不完整的在大小后面标「不完整」。
+
+## 2026-10-20 —— Dump 页左右分列
+
+Dump 页已保存列表分成左右两列：左边 DEX（含 cdex），右边 SO。SO 用工件的 tag 显示文件名。仍只列出包名等于当前应用的工件。
+
 ## 2026-10-20 —— 网络页按 SSL 连接把 HTTP/1.1 请求和响应配成一对
 
 `SSL_write` / `SSL_read` 仍是一条条明文，但 agent 在记录上带了 `SSL*`（字段 `conn`）。Host 按会话加这个指针把发送、接收各自拼回去，用 `Content-Length` 或 chunked 拆开，再按顺序配对；gzip、deflate、br 在这里解开。网页网络列表优先显示这一对，点开左边是请求、右边是响应。HTTP/2（客户端前言）和没有连接号的旧记录仍按发送、接收分开。WebView 不走这条通道。配对逻辑在 `daemon/src/http_exchange.ts`，单测 `daemon/test/http_exchange.test.ts`。要在真机上配成对，需要重新编译并注入带 `conn` 的 agent。排空缓冲区按整条 16 KiB 记录扩容，避免同一批里的第二条 TLS 明文被截短。
@@ -372,14 +482,9 @@ native 的 EVP 钩子看不到 `Cipher.getAlgorithm()`、密钥和 `doFinal` 的
   **并不解**它登录字段里的那串密文——所以"拿到 key"与"看懂这条链路"是两件事，别把前者写成后者。
   （密钥与明文的原值只留在 gitignored 的 `dumps/kilaaudio/ANALYSIS.md`，不进仓库。）
 
-## 2026-10-11 —— 移除 Xposed 后端（用户决议"不做，让代码干净"）
+## 2026-10-11 —— 移除 Xposed 后端
 
-- **决定**：ADH 不再自带任何 Xposed 加载器。理由："用户一般都会自己装 LSPosed"，而本产品的重心是**把逆向能力提供给模型**（Host ADH Daemon 的 MCP / 分析面 + 设备侧注入 scope 与目标进程控制）；框架与模块不再是我们要交付或维护的东西。删除口径是**整段删除**，不留"曾作为社区/实验后端保留"的表述。
-- **删掉的**：`injector/xposed/`（薄加载器 APK + `api-stub/` + README）、`tools/{build,install}_xposed.sh`、`tools/verify_v31_xposed.sh`、`tools/verify_v32_backend_control.sh`；设备侧控制面 `XposedBackend.kt` 与 `XposedStatusJson.kt`、AIDL 的 `getXposedStatus/setXposedEnabled/setXposedScope`、`AdhDeviceDaemon` 的 root-only 一次性 CLI 与随之失效的 `requireRoot()`、Manager 的 Scope 卡片与"允许名单镜像进框架 scope"逻辑、9 条 `xposed_*` 字符串与 4 个 Xposed 单测；host 侧 `/api/backends` 的 `xposed` 键**和** `classifySession` 的 `xposed_module` 取值（连同 Web 控制台那一行与 `verify_v33` 上的真断言）；`agent/` 里 3 处把 Xposed 列为加载路径的注释。
-- **AIDL 协议 13 → 14**（惯例：AIDL 面变了就升），`MIN_XPOSED_VERSION` 删除；`REQUIREMENTS.md §30.4` 里"当前 AIDL 为 v13"同步改 v14。管理 App 与 Device Daemon 同包发布，无私版本兼容负担。
-- **门禁条目 117 → 115（36 host + 79 device）**：v31/v32 都是设备侧脚本（v31 是后端本体、v32 是它的控制面）。已同步 `CLAUDE.md`/`AGENTS.md`、`FEATURE_STATUS.md`、`HANDOVER.md` 的 live 计数；`PROGRESS.md` 与 `FEATURE_STATUS.md` 里 2026-10-01 那轮的历史数字（114 PASS / 1 FAIL / 2 SKIP、118 条基线）**原样保留**——它们是已记录的运行结果，改它们等于篡改。顺带修掉 `tools/MAP.md` 两处畸形行（`## Known flakes` 标题被吞、`verify_v08_*` flake bullet 粘在 v34 行尾）。
-- **保留**：Frida Gadget、eCapture、LSPlant（Java hook 引擎）、Zygisk 全部不动——多处段落把 Xposed 与它们写在同一句/同一张表里，本次只摘 Xposed。两处**描述"检测方会 grep 什么"**（`REQUIREMENTS.md` 的"扫 frida/xposed"、`scan_agent_signatures.sh` 的 detector token 表）也保留：那是目标侧词汇，不是我们的后端。
-- **验证**：`cd device && bash ./gradlew :core:test :manager:testDebugUnitTest :daemon:testDebugUnitTest :daemon:assembleDebug :manager:assembleDebug` → **BUILD SUCCESSFUL**（`DaemonScopeRepositoryTest` 9 → 5 个用例）；全仓 `git grep -i xposed` 只剩本文件的历史条目与 `docs/archive/`。**本轮没有跑真机门禁**，最近一次真机全量结果仍是 2026-10-01 的 **114 PASS / 1 FAIL / 2 SKIP**，不得把本轮写成新的真机通过。改动**尚未提交**。
+已整段删除；详情与删除清单见 [`docs/archive/RETIRED_MODULE_X_AND_XPOSED.md`](archive/RETIRED_MODULE_X_AND_XPOSED.md)。官方注入只留 Zygisk；Frida/eCapture 仍为实验脚本。
 
 ## 2026-10-11 —— v0.3.12 重建并真机刷入（含刷机脚本的 Windows 阻断修复）
 
@@ -1197,7 +1302,7 @@ RESULT:SKIP module APK stale and not rebuildable
 
 **已完成的修复**：QBDI `qbdi_addCodeCB()` 事件 ID 的失败哨兵判断修正；native hook 在限流时仍正确应用 `returnValue`；syscall 扫描验证前重启沙盒以清除仍驻留的软补丁；v50/v77/v80/v81/v85 验收断言和 v91 JNI 各探针卸钩/摘要时间窗修正。Device `:core:test :daemon:assembleDebug :manager:assembleDebug` 成功。
 
-**模块 X 退役边界**：已删除 Manager AccessibilityService / 通知监听、Device Daemon 的输入/电源/音量/剪贴板控制、Host 自动化桥和 `phone_*` MCP 工具、Web 设置入口以及相关验收脚本。保留 adb、Manager 注入 scope/模块状态/目标进程启停、Device Daemon 与 Xposed 管理能力。协议版本更新为 v13；HTTP/WS MCP 仍在 Host Daemon，设备侧不承载分析。
+**模块 X 退役边界**：已删除；摘要见 [`docs/archive/RETIRED_MODULE_X_AND_XPOSED.md`](archive/RETIRED_MODULE_X_AND_XPOSED.md)。保留 adb、Manager 注入 scope/模块状态/目标进程启停。协议当时升到 v13；HTTP/WS MCP 仍在 Host Daemon。
 
 **剩余验证/决策**：v84 native batch 的设备侧验收仍未纳入门禁；cdex/041 需要真实样本；agent TCP `8761` 无鉴权的 LAN 信任边界待定；DEX 重建保留旧副本导致文件增大仍是已记录限制。协议 v13 的 release bundle 还未重建或刷入。
 

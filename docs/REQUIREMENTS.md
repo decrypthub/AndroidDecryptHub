@@ -163,8 +163,8 @@ ADH (Android DecryptHub)
 **注入方式**（覆盖 root 与非 root 两条路径，用户按环境选择）：
 
 - **Root 路径 — Zygisk 插件**（主线，early inject）：随 Zygisk 模块在 zygote fork 后早期加载，抢在目标反调试布防之前。
-- **Frida Gadget 直载**：通过目标进程内的 `load_library` 加载官方 Gadget，运行 Frida JS hook，无需改写目标 APK。
 - **模拟注入**（开发/CI 主路径）：`sandbox-test-app` 自身 `dlopen` 加载 agent，无需真机对抗即可验证全部模块。
+- ~~Frida Gadget 直载~~：**已退出产品面**（不再作为官方注入后端；Web/MCP 不展示加载入口）。
 
 Agent 必须支持两种 bootstrap 入口且行为一致：被注入器加载（`JNI_OnLoad`/构造函数）与被宿主主动加载（导出唯一入口 `adh_agent_start()`）。
 
@@ -1475,9 +1475,14 @@ MCP              →  AI 可编程操控，与 HTTP 同源
 
 - **early-inject**：抢在目标反调试布防之前完成加载与关键 hook（配合 W 的 Zygisk 后端）
 - **与目标 ptrace 自附加共存**：目标 `PTRACE_TRACEME` 占位时的采集策略。
-  ⚠️ **现状（2026-10-01）**：**观测**这一半由持续捕获的 `system` 类提供（`ptrace`/`access`/`sysprop`
-  事件，默认只记录不改行为）；**中和**（伪造 TRACEME 返回值）**目前没有控制面** —— 唯一实现是
-  已删除的 `detect_watch`。要恢复必须显式设计一个默认关闭、需二次确认的 opt-in（见 `DEVELOPMENT_PLAN §6.9.1` WS-J）。
+  ⚠️ **现状**：**观测**由持续捕获的 `system` 类提供。Manager Hook 配置的「系统检测」（policy `y`，默认关）
+  打开后，`capture_start` 才装这些钩子；`sysModule`（逗号分隔，最多 8 个）为空时 Host 对该包跑
+  `detect_modules` 自动选库，按名改 `ptrace` / `access` / `faccessat` / `__system_property_get` /
+  `__system_property_read_callback` 的 GOT。事件带返回值、路径或属性值、以及调用点的 `lr`。
+  Host 的 `detect_summary` 把它们收成反调试 / root / 签名 / 模拟器 / 完整性清单（Web 用白话展示）；
+  `open`/`openat` 只有打到 `/proc/self/status|maps` 或 su 路径才计入。`detect_java` 在 `confirm:true`
+  时按调用方点名的 family 安装 Java 钩子（`File.exists` 不在默认 family 里）。**中和**（伪造 TRACEME
+  返回值）仍然没有控制面。
 - **最小侵入模式**：只启用 maps/dex/classloader/crypto 等低痕迹模块，关闭高痕迹 hook
 - **hook 自校验对抗**：应对目标周期性校验函数序言字节、检测 GOT 改写
 
@@ -1560,14 +1565,13 @@ MCP              →  AI 可编程操控，与 HTTP 同源
 | 后端 | 环境 | 说明 |
 |------|------|------|
 | **Zygisk 插件** | root（Magisk） | 主线，zygote fork 后 early-inject，配合 S 韧性；配套 **ADH Manager** 管理作用域白名单（`/data/adb/adh/scope.json`） |
-| **Frida Gadget**（可选，默认关） | 非 root / root | 官方 Gadget so 由 agent `dlopen` 进目标进程，运行 Frida JS hook；按版本/ABI 下载 + sha256 固定；高开销（~25 MB so、额外 maps 与线程），只有显式调用才启用 |
 | **模拟注入** | 无需 root | sandbox 自身 `dlopen` 加载 agent（开发/CI 主路径） |
+| ~~Frida Gadget~~ | — | **已退出产品面**（2026-10-20）；仓库可残留历史脚本，不进 UI / 门禁 / 发布物 |
 
 ### 30.2 打包交付物
 
 - `libadh_agent.so`（arm64-v8a 主线，设备 ABI）
 - Zygisk 模块包（root 版）+ ADH Manager APK（作用域：选哪些 App 注入）；另提供 Magisk 可直接安装、自动安装 Manager 的组合包
-- Gadget 工具链：`tools/fetch_frida_gadget.sh`（官方 release，按版本/ABI + sha256，`--list`/`--print-url`）、`tools/compile_frida_script.sh`（Frida 17 起语言桥移出 runtime，用 esbuild + `frida-java-bridge` 打包）、`tools/load_frida_gadget.sh`（落盘 → `load_so` dlopen → 等 `frida-gadget` 线程 → 可选 `--marker` 断言脚本真的跑通）
 - 双 bootstrap 入口：`JNI_OnLoad`/构造函数（被加载）与 `adh_agent_start()`（被宿主主动调用，唯一对外入口），行为一致
 
 ### 30.3 模拟注入回路（CI 主路径）

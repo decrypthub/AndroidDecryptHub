@@ -10,6 +10,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <string.h>
 #include <jni.h>
 #include <pthread.h>
 #include <stdarg.h>
@@ -448,13 +449,33 @@ static void got_probe(int fd, const char *id, const char *opname, const char *na
 // ---- network TLS-plaintext capture (SSL_read/SSL_write in the JCE provider library) ----
 typedef int (*SSL_rw_t)(void *, void *, int);
 static SSL_rw_t g_orig_ssl_write = NULL, g_orig_ssl_read = NULL;
+
+// HTTP/2 connection frames that carry no request or response: SETTINGS, PING, GOAWAY,
+// WINDOW_UPDATE, PRIORITY, RST_STREAM. A record is skipped only when every byte is one or
+// more of these frames. HEADERS, DATA, the client preface, and anything that does not
+// parse as a whole frame still get captured.
+static int tls_control_only(const unsigned char *p, int n) {
+    int off = 0;
+    if (n < 9) return 0;
+    if (n >= 24 && memcmp(p, "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n", 24) == 0) return 0;
+    while (off + 9 <= n) {
+        int len = ((int)p[off] << 16) | ((int)p[off + 1] << 8) | (int)p[off + 2];
+        int type = p[off + 3];
+        if (len < 0 || len > 16384 || off + 9 + len > n) return 0;
+        if (type != 0x2 && type != 0x3 && type != 0x4 && type != 0x6 && type != 0x7 && type != 0x8) return 0;
+        off += 9 + len;
+    }
+    return off == n;
+}
 static int my_SSL_write(void *ssl, void *buf, int num) {
-    if (num > 0 && buf) capture_conn("SSL_write", (const unsigned char *)buf, num, ssl);
+    if (num > 0 && buf && !tls_control_only((const unsigned char *)buf, num))
+        capture_conn("SSL_write", (const unsigned char *)buf, num, ssl);
     return g_orig_ssl_write(ssl, buf, num);
 }
 static int my_SSL_read(void *ssl, void *buf, int num) {
     int ret = g_orig_ssl_read(ssl, buf, num);
-    if (ret > 0 && buf) capture_conn("SSL_read", (const unsigned char *)buf, ret, ssl);
+    if (ret > 0 && buf && !tls_control_only((const unsigned char *)buf, ret))
+        capture_conn("SSL_read", (const unsigned char *)buf, ret, ssl);
     return ret;
 }
 
@@ -646,49 +667,154 @@ int adh_capture_register_reporter(JNIEnv *env, const char *reportClass) {
 
 // ---- anti-analysis / system-info hooks (module V) — defined here (above capture_start)
 //      so the persistent capture path can install them. GOT-hook the target's own
-//      detection / system-query calls to see WHAT it checks for, and stream each event into
-//      the unified capture() ring so the 系统 panel fills live. Observe-only by design:
-//      TRACEME neutralization (the old detect_watch's opt-in) has NO control surface now —
-//      restore it as an explicit, default-off opt-in before wiring anything to it. ----
-struct DetRec { char cat[16]; char detail[160]; };
-static struct DetRec g_dets[64];
-static int g_ndets = 0;
-static pthread_mutex_t g_det_lock = PTHREAD_MUTEX_INITIALIZER;
-static void det_record(const char *cat, const char *detail) {
-    pthread_mutex_lock(&g_det_lock);
-    if (g_ndets < 64) { struct DetRec *r = &g_dets[g_ndets++];
-        strncpy(r->cat, cat, sizeof(r->cat) - 1); r->cat[sizeof(r->cat)-1]=0;
-        strncpy(r->detail, detail, sizeof(r->detail) - 1); r->detail[sizeof(r->detail)-1]=0; }
-    pthread_mutex_unlock(&g_det_lock);
+//      detection / system-query calls and stream each event into the unified capture() ring.
+//      Observe-only: record the call, then forward it. Classification (debug / root / prop)
+//      happens on the host from the text below — a path substring check in here used to
+//      mis-label ordinary paths and nothing ever read the result.
+//      The line is tab-separated key=value. path / name / value are last and may contain
+//      spaces; tabs and newlines inside them are flattened so the host can split on tabs.
+//      lr is the caller's return address, read BEFORE the original call (that call clobbers LR).
+//      TRACEME neutralization has no control surface. ----
+static void scrub_field(char *s) {
+    for (; s && *s; s++) if (*s == '\t' || *s == '\n' || *s == '\r') *s = ' ';
+}
+static void cap_text(const char *func, const char *line) {
+    if (!func || !line || !line[0]) return;
+    capture(func, (const unsigned char *)line, (int)strlen(line));
 }
 
 typedef long (*ptrace_t)(int, void *, void *, void *);
 static ptrace_t g_orig_ptrace = NULL;
-static long my_ptrace(int req, void *a, void *b, void *c) {
-    char d[64]; snprintf(d, sizeof(d), "ptrace(request=%d%s)", req, req == 0 ? " PTRACE_TRACEME" : "");
-    det_record("debug", d);
-    capture("ptrace", (const unsigned char *)d, (int)strlen(d));
-    return g_orig_ptrace(req, a, b, c);
+static long my_ptrace(int req, void *pid, void *addr, void *data) {
+    unsigned long long lr = (unsigned long long)(uintptr_t)__builtin_return_address(0);
+    long ret = g_orig_ptrace(req, pid, addr, data);
+    char d[160];
+    snprintf(d, sizeof(d), "request=%d\tpid=%lld\tret=%ld\tlr=0x%llx%s",
+             req, (long long)(intptr_t)pid, ret, lr, req == 0 ? "\tnote=PTRACE_TRACEME" : "");
+    cap_text("ptrace", d);
+    return ret;
 }
 typedef int (*access_t)(const char *, int);
 static access_t g_orig_access = NULL;
 static int my_access(const char *p, int m) {
-    if (p) { det_record(strstr(p, "su") ? "root" : "file", p);
-             capture("access", (const unsigned char *)p, (int)strlen(p)); }
-    return g_orig_access(p, m);
+    unsigned long long lr = (unsigned long long)(uintptr_t)__builtin_return_address(0);
+    int ret = g_orig_access(p, m);
+    if (p) {
+        char path[192];
+        snprintf(path, sizeof(path), "%s", p);
+        scrub_field(path);
+        char d[280];
+        snprintf(d, sizeof(d), "mode=%d\tret=%d\tlr=0x%llx\tpath=%s", m, ret, lr, path);
+        cap_text("access", d);
+    }
+    return ret;
+}
+typedef int (*faccessat_t)(int, const char *, int, int);
+static faccessat_t g_orig_faccessat = NULL;
+static int my_faccessat(int dirfd, const char *p, int mode, int flags) {
+    unsigned long long lr = (unsigned long long)(uintptr_t)__builtin_return_address(0);
+    int ret = g_orig_faccessat(dirfd, p, mode, flags);
+    if (p) {
+        char path[192];
+        snprintf(path, sizeof(path), "%s", p);
+        scrub_field(path);
+        char d[320];
+        snprintf(d, sizeof(d), "dirfd=%d\tmode=%d\tflags=%d\tret=%d\tlr=0x%llx\tpath=%s",
+                 dirfd, mode, flags, ret, lr, path);
+        cap_text("faccessat", d);
+    }
+    return ret;
 }
 typedef int (*prop_t)(const char *, char *);
 static prop_t g_orig_prop = NULL;
 static int my_prop(const char *name, char *value) {
-    det_record("prop", name ? name : "?");
-    if (name) capture("sysprop", (const unsigned char *)name, (int)strlen(name));  // 读手机信息 ro.*
-    return g_orig_prop(name, value);
+    unsigned long long lr = (unsigned long long)(uintptr_t)__builtin_return_address(0);
+    int ret = g_orig_prop(name, value);
+    char nb[96], vb[96], d[280];
+    snprintf(nb, sizeof(nb), "%s", name ? name : "");
+    snprintf(vb, sizeof(vb), "%s", (ret > 0 && value) ? value : "");
+    scrub_field(nb);
+    scrub_field(vb);
+    snprintf(d, sizeof(d), "ret=%d\tlr=0x%llx\tname=%s\tvalue=%s", ret, lr, nb, vb);
+    cap_text("sysprop", d);
+    return ret;
+}
+// __system_property_read_callback delivers the name and value to a callback, synchronously,
+// before it returns. The hop lives on this stack frame for that call only.
+typedef void (*prop_cb_t)(void *, const char *, const char *, uint32_t);
+typedef void (*prop_read_t)(const void *, prop_cb_t, void *);
+static prop_read_t g_orig_prop_read = NULL;
+struct PropHop { prop_cb_t cb; void *cookie; unsigned long long lr; };
+static void my_prop_read_cb(void *cookie, const char *name, const char *value, uint32_t serial) {
+    struct PropHop *hop = (struct PropHop *)cookie;
+    char nb[96], vb[96], d[280];
+    snprintf(nb, sizeof(nb), "%s", name ? name : "");
+    snprintf(vb, sizeof(vb), "%s", value ? value : "");
+    scrub_field(nb);
+    scrub_field(vb);
+    snprintf(d, sizeof(d), "lr=0x%llx\tname=%s\tvalue=%s", hop->lr, nb, vb);
+    cap_text("propread", d);
+    if (hop->cb) hop->cb(hop->cookie, name, value, serial);
+}
+static void my_prop_read(const void *pi, prop_cb_t cb, void *cookie) {
+    unsigned long long lr = (unsigned long long)(uintptr_t)__builtin_return_address(0);
+    struct PropHop hop;
+    hop.cb = cb;
+    hop.cookie = cookie;
+    hop.lr = lr;
+    g_orig_prop_read(pi, my_prop_read_cb, &hop);
 }
 
 // Persistent-hook target modules (from adhd's capture_start params) — remembered so
 // capture_stop restores the exact GOT it patched. Empty = that category not installed.
 static char g_file_mod[64] = "";
-static char g_sys_mod[64] = "";
+// sysModule is a comma-separated list. Eight is the cap a single capture_start will patch;
+// more than that is reported as sysTruncated instead of being silently hooked halfway.
+#define SYS_MOD_MAX 8
+static char g_sys_mods[SYS_MOD_MAX][64];
+static int g_sys_nmods = 0;
+
+static void sys_restore(void) {
+    for (int i = 0; i < g_sys_nmods; i++) {
+        const char *m = g_sys_mods[i];
+        if (!m[0]) continue;
+        if (g_orig_ptrace) adh_got_replace_by_name(m, "ptrace", (void *)g_orig_ptrace);
+        if (g_orig_access) adh_got_replace_by_name(m, "access", (void *)g_orig_access);
+        if (g_orig_faccessat) adh_got_replace_by_name(m, "faccessat", (void *)g_orig_faccessat);
+        if (g_orig_prop) adh_got_replace_by_name(m, "__system_property_get", (void *)g_orig_prop);
+        if (g_orig_prop_read) adh_got_replace_by_name(m, "__system_property_read_callback", (void *)g_orig_prop_read);
+    }
+    g_sys_nmods = 0;
+}
+
+static int sys_mods_parse(const char *spec, int *truncated) {
+    int extra = 0;
+    g_sys_nmods = 0;
+    if (truncated) *truncated = 0;
+    if (!spec) return 0;
+    const char *p = spec;
+    while (*p) {
+        while (*p == ',' || *p == ' ' || *p == '\t') p++;
+        if (!*p) break;
+        const char *start = p;
+        while (*p && *p != ',') p++;
+        int n = (int)(p - start);
+        while (n > 0 && (start[n - 1] == ' ' || start[n - 1] == '\t')) n--;
+        if (n <= 0) continue;
+        if (g_sys_nmods >= SYS_MOD_MAX || n > 63) { extra++; if (g_sys_nmods >= SYS_MOD_MAX) continue; }
+        if (n > 63) n = 63;
+        memcpy(g_sys_mods[g_sys_nmods], start, (size_t)n);
+        g_sys_mods[g_sys_nmods][n] = 0;
+        g_sys_nmods++;
+    }
+    if (truncated) *truncated = extra > 0;
+    return g_sys_nmods;
+}
+
+static int sys_sum(int acc, int n) {
+    if (n > 0) return acc + n;
+    return acc;
+}
 // crypto/TLS caller module whose GOT holds the EVP/SSL pointers. Empty = scan ALL file-backed
 // modules (default): catches the JCE provider's Conscrypt AND non-Conscrypt BoringSSL callers
 // (cronet's bundled copy, renamed/statically-linked libs). adhd may pass a specific module.
@@ -706,25 +832,28 @@ static int g_capture_on = 0;
 // Unchecked means the hooks are NOT INSTALLED, never "installed then filtered": the point is a
 // smaller footprint inside the target (a hooked app can notice — measured 2026-10-11, a target
 // killed itself with SIGSEGV while our GOT hooks were live).
-struct CaptureFamilyFlags { int digest, hmac, symmetric, asymmetric, tls, aead; };
-static struct CaptureFamilyFlags g_families = { 1, 1, 1, 1, 1, 1 };
+struct CaptureFamilyFlags { int digest, hmac, symmetric, asymmetric, tls, aead, system; };
+// Crypto defaults ON; system detection defaults OFF (Manager opt-in).
+static struct CaptureFamilyFlags g_families = { 1, 1, 1, 1, 1, 1, 0 };
 
-void adh_capture_set_families(int digest, int hmac, int symmetric, int asymmetric, int tls, int aead) {
+void adh_capture_set_families(int digest, int hmac, int symmetric, int asymmetric, int tls, int aead, int system) {
     g_families.digest = digest ? 1 : 0;
     g_families.hmac = hmac ? 1 : 0;
     g_families.symmetric = symmetric ? 1 : 0;
     g_families.asymmetric = asymmetric ? 1 : 0;
     g_families.tls = tls ? 1 : 0;
     g_families.aead = aead ? 1 : 0;
+    g_families.system = system ? 1 : 0;
 }
 
-void adh_capture_get_families(int *digest, int *hmac, int *symmetric, int *asymmetric, int *tls, int *aead) {
+void adh_capture_get_families(int *digest, int *hmac, int *symmetric, int *asymmetric, int *tls, int *aead, int *system) {
     if (digest) *digest = g_families.digest;
     if (hmac) *hmac = g_families.hmac;
     if (symmetric) *symmetric = g_families.symmetric;
     if (asymmetric) *asymmetric = g_families.asymmetric;
     if (tls) *tls = g_families.tls;
     if (aead) *aead = g_families.aead;
+    if (system) *system = g_families.system;
 }
 
 static void copy_jstring(JNIEnv *env, jstring value, char *buf, size_t cap) {
@@ -830,6 +959,7 @@ void adh_cmd_capture_start(int fd, const char *id, const char *cryptoModule, con
     // either family — it is installed when at least one of them is on.
     const int on_dig = g_families.digest, on_mac = g_families.hmac, on_sym = g_families.symmetric;
     const int on_asym = g_families.asymmetric, on_tls = g_families.tls, on_aead = g_families.aead;
+    const int on_sys = g_families.system;
     const int on_dsign = (on_mac || on_asym) ? 1 : 0;
     char skipped[160]; skipped[0] = 0;
     if (!on_sym)   skip_add(skipped, sizeof(skipped), "evp,cipherInit,cipherCtxFree");
@@ -839,6 +969,7 @@ void adh_cmd_capture_start(int fd, const char *id, const char *cryptoModule, con
     if (!on_asym)  skip_add(skipped, sizeof(skipped), "pkey");
     if (!on_tls)   skip_add(skipped, sizeof(skipped), "sslWrite,sslRead");
     if (!on_aead)  skip_add(skipped, sizeof(skipped), "aead");
+    if (!on_sys)   skip_add(skipped, sizeof(skipped), "sys");
     int re = (evp && on_sym)   ? adh_got_replace(g_crypto_mod, evp, (void *)my_EVP_CipherUpdate) : -1;
     int rd = (dig && on_dig)   ? adh_got_replace(g_crypto_mod, dig, (void *)my_EVP_DigestUpdate) : -1;
     int rh = (hm  && on_mac)   ? adh_got_replace(g_crypto_mod, hm,  (void *)my_HMAC_Update) : -1;
@@ -909,46 +1040,60 @@ void adh_cmd_capture_start(int fd, const char *id, const char *cryptoModule, con
         frc = orc ? adh_got_replace(g_file_mod, orc, (void *)my_read_chk) : -1;
         fwc = owv ? adh_got_replace(g_file_mod, owv, (void *)my_write_chk): -1;
     }
-    // -- 系统: persistent detection/system-query hooks (ptrace/access/__system_property_get)
-    //    in sysModule. Observe-only: the hooks record, they never fake a return value.
-    //    Streams category=system. --
-    int sp=-1, sa=-1, sg=-1;
-    if (sysModule && sysModule[0]) {
-        strncpy(g_sys_mod, sysModule, sizeof(g_sys_mod)-1); g_sys_mod[sizeof(g_sys_mod)-1]=0;
+    // -- 系统: persistent detection/system-query hooks in each module named by sysModule
+    //    (comma-separated, up to SYS_MOD_MAX). Observe-only. A repeat start restores the
+    //    previous list first so a changed module list cannot leave a slot patched.
+    //    Name-based install: these are exactly the calls a target may not have made yet, so
+    //    the PLT slot can still be unbound and value-match finds nothing. --
+    int sp=-1, sa=-1, sf=-1, sg=-1, sr=-1;
+    int sys_truncated = 0;
+    sys_restore();
+    // Policy gate: Manager "系统检测" off → never patch, even if Host named a sysModule.
+    const char *sys_mod_use = (on_sys && sysModule) ? sysModule : "";
+    if (sys_mod_use[0]) {
+        sys_mods_parse(sys_mod_use, &sys_truncated);
         void *op=adh_resolve_sym("libc.so","ptrace"), *oa=adh_resolve_sym("libc.so","access");
+        void *ofa=adh_resolve_sym("libc.so","faccessat");
         void *og=adh_resolve_sym("libc.so","__system_property_get");
-        if (op) g_orig_ptrace = (ptrace_t)op; if (oa) g_orig_access = (access_t)oa; if (og) g_orig_prop = (prop_t)og;
-        // Name-based install: the detection trio is exactly what a target may not have called
-        // yet, so its PLT slot can still be unbound and value-match finds nothing (measured on
-        // the sandbox: capture_start reported sys p=0 a=0 g=0 while libadhdetect.so genuinely
-        // imports all three). Resolve the slot from the module's own relocations instead.
-        sp = op ? adh_got_replace_by_name(g_sys_mod, "ptrace", (void *)my_ptrace) : -1;
-        sa = oa ? adh_got_replace_by_name(g_sys_mod, "access", (void *)my_access) : -1;
-        sg = og ? adh_got_replace_by_name(g_sys_mod, "__system_property_get", (void *)my_prop) : -1;
+        void *ogr=adh_resolve_sym("libc.so","__system_property_read_callback");
+        if (op) g_orig_ptrace = (ptrace_t)op;
+        if (oa) g_orig_access = (access_t)oa;
+        if (ofa) g_orig_faccessat = (faccessat_t)ofa;
+        if (og) g_orig_prop = (prop_t)og;
+        if (ogr) g_orig_prop_read = (prop_read_t)ogr;
+        sp = op ? 0 : -1; sa = oa ? 0 : -1; sf = ofa ? 0 : -1; sg = og ? 0 : -1; sr = ogr ? 0 : -1;
+        for (int i = 0; i < g_sys_nmods; i++) {
+            const char *m = g_sys_mods[i];
+            if (op) sp = sys_sum(sp, adh_got_replace_by_name(m, "ptrace", (void *)my_ptrace));
+            if (oa) sa = sys_sum(sa, adh_got_replace_by_name(m, "access", (void *)my_access));
+            if (ofa) sf = sys_sum(sf, adh_got_replace_by_name(m, "faccessat", (void *)my_faccessat));
+            if (og) sg = sys_sum(sg, adh_got_replace_by_name(m, "__system_property_get", (void *)my_prop));
+            if (ogr) sr = sys_sum(sr, adh_got_replace_by_name(m, "__system_property_read_callback", (void *)my_prop_read));
+        }
     }
     g_capture_on = 1;
-    char cmj[80], fmj[80], smj[80];
+    char cmj[80], fmj[80], smj[640];
     json_escape(g_crypto_mod, cmj, sizeof(cmj));
     json_escape(fileModule ? fileModule : "", fmj, sizeof(fmj));
-    json_escape(sysModule ? sysModule : "", smj, sizeof(smj));
-    char out[1800];
+    json_escape(sys_mod_use, smj, sizeof(smj));
+    char out[4096];
     snprintf(out, sizeof(out),
         "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"capture_start\",\"ok\":true,\"cryptoModule\":\"%s\",\"evp\":%d,\"cipherInit\":%d,\"cipherCtxFree\":%d,\"digest\":%d,\"hmac\":%d,\"digestSign\":%d,\"sslWrite\":%d,\"sslRead\":%d,"
         "\"pkey\":{\"sign\":%d,\"verify\":%d,\"encrypt\":%d,\"decrypt\":%d},"
         "\"aead\":{\"seal\":%d,\"open\":%d},"
         "\"digestSignVerify\":{\"signInit\":%d,\"verifyInit\":%d,\"signFinal\":%d,\"verifyUpdate\":%d,\"verifyFinal\":%d},"
         "\"fileModule\":\"%s\",\"file\":{\"open\":%d,\"openat\":%d,\"read\":%d,\"write\":%d,\"syscall\":%d,\"readChk\":%d,\"writeChk\":%d},"
-        "\"sysModule\":\"%s\",\"sys\":{\"ptrace\":%d,\"access\":%d,\"prop\":%d},"
+        "\"sysModule\":\"%s\",\"sysModules\":%d,\"sysTruncated\":%s,\"sys\":{\"ptrace\":%d,\"access\":%d,\"faccessat\":%d,\"prop\":%d,\"propread\":%d},"
         "\"skipped\":\"%s\",\"on\":true}\n",
         idj, cmj, re, rci, rcf, rd, rh, rs, rw, rr,
         rpks, rpkv, rpke, rpkd, raes, raeo,
         rdsi, rdvi, rdsf, rdvu, rdvf,
-        fmj, fo, foa, frd, fwr, fsc, frc, fwc, smj, sp, sa, sg, skipped);
+        fmj, fo, foa, frd, fwr, fsc, frc, fwc, smj, g_sys_nmods, sys_truncated ? "true" : "false", sp, sa, sf, sg, sr, skipped);
     // fd < 0 would mean a caller with nobody waiting for the answer; no such caller exists today
     // (the self-arm path that used it was removed — see the note above adh_cmd_capture_start).
     if (fd >= 0) send_line(fd, out);
-    LOGI("capture_start: crypto[%s] evp=%d dig=%d hmac=%d dsu=%d sslw=%d sslr=%d dsi=%d dvi=%d dsf=%d dvu=%d dvf=%d | file[%s] oa=%d sc=%d rc=%d wc=%d | sys[%s] p=%d a=%d g=%d",
-         g_crypto_mod, re, rd, rh, rs, rw, rr, rdsi, rdvi, rdsf, rdvu, rdvf, g_file_mod, foa, fsc, frc, fwc, g_sys_mod, sp, sa, sg);
+    LOGI("capture_start: crypto[%s] evp=%d dig=%d hmac=%d dsu=%d sslw=%d sslr=%d dsi=%d dvi=%d dsf=%d dvu=%d dvf=%d | file[%s] oa=%d sc=%d rc=%d wc=%d | sys n=%d p=%d a=%d fa=%d g=%d r=%d",
+         g_crypto_mod, re, rd, rh, rs, rw, rr, rdsi, rdvi, rdsf, rdvu, rdvf, g_file_mod, foa, fsc, frc, fwc, g_sys_nmods, sp, sa, sf, sg, sr);
 }
 
 // Uninstall the persistent capture hooks and restore the original GOT pointers. Called by
@@ -991,12 +1136,7 @@ void adh_cmd_capture_stop(int fd, const char *id) {
         g_file_mod[0] = 0;
     }
     // restore persistent system/detection hooks
-    if (g_sys_mod[0]) {
-        if (g_orig_ptrace) adh_got_replace_by_name(g_sys_mod, "ptrace", (void *)g_orig_ptrace);
-        if (g_orig_access) adh_got_replace_by_name(g_sys_mod, "access", (void *)g_orig_access);
-        if (g_orig_prop)   adh_got_replace_by_name(g_sys_mod, "__system_property_get", (void *)g_orig_prop);
-        g_sys_mod[0] = 0;
-    }
+    sys_restore();
     g_capture_on = 0;
     cap_reset();
     // Keys outlive a single Cipher only until capture stops; drop the table so a later capture_start
@@ -1080,9 +1220,9 @@ void adh_cmd_capture_drain(int fd, const char *id) {
 }
 
 // The system/detection observation used to have a one-shot op (detect_watch). It is gone:
-// capture_start installs the same GOT hooks (by name, on the module the caller names) and
-// streams them as category=system, so the capability is the persistent path's, not a
-// probe's. The caller triggers the workload through java_call.
+// capture_start installs the GOT hooks (by name, on every module the caller names) and
+// streams them as category=system. The host turns those lines into the detection summary.
+// The caller triggers the workload through java_call.
 //
 // The inline-hook self-test op (inline_crypto_test) is gone too: native_hook mode=inline is
 // the tool-level path, and it takes module/symbol from the caller.

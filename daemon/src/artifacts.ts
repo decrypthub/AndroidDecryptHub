@@ -55,3 +55,48 @@ export function planArtifactEviction(
   }
   return { evict, overAge, overSize, remainingBytes: Math.max(0, total) };
 }
+
+// Provenance written beside an artifact (`<path>.meta.json`). The bytes stay the source of
+// identity; this file only remembers which app produced them, so a restart can put the dump
+// back under that app instead of an empty package.
+export interface ArtifactProvenance {
+  sha256: string;
+  source: string;
+  addr: string;
+  tag: string;
+  sessionId: string;
+  package: string;
+  capturedAt: number;
+  requestedSize?: number;
+  complete?: boolean;
+  note?: string;
+}
+
+export function artifactSidecarPath(artifactPath: string): string {
+  return artifactPath + '.meta.json';
+}
+
+function str(v: unknown): string | undefined {
+  return typeof v === 'string' ? v : undefined;
+}
+
+/** Accept a sidecar or a dump.new event only when it names this exact sha. `?` is unlabeled. */
+export function parseArtifactProvenance(raw: unknown, sha256: string): ArtifactProvenance | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  if (o.sha256 !== sha256) return null;
+  const pkg = str(o.package) ?? '';
+  const out: ArtifactProvenance = {
+    sha256,
+    source: str(o.source) || 'disk-reload',
+    addr: str(o.addr) ?? '',
+    tag: str(o.tag) ?? '',
+    sessionId: str(o.sessionId) ?? '',
+    package: pkg === '?' ? '' : pkg,
+    capturedAt: typeof o.capturedAt === 'number' && Number.isFinite(o.capturedAt) ? o.capturedAt : 0,
+  };
+  if (typeof o.requestedSize === 'number' && Number.isFinite(o.requestedSize)) out.requestedSize = o.requestedSize;
+  if (typeof o.complete === 'boolean') out.complete = o.complete;
+  if (typeof o.note === 'string' && o.note) out.note = o.note;
+  return out;
+}

@@ -19,7 +19,7 @@ object ScopeJson {
     }
 
     /**
-     * Per-package policy, short-keyed (`c` = capture, `d/h/s/a/t/e` = families) for the same reason
+     * Per-package policy, short-keyed (`c` = capture, `d/h/s/a/t/e/y` = families) for the same reason
      * [InstalledAppsJson] is: the same blob crosses Binder. Entries that are DEFAULT or whose
      * package left the scope are dropped, so the section only ever holds non-defaults.
      *
@@ -42,7 +42,8 @@ object ScopeJson {
                         .put("s", families.symmetric)
                         .put("a", families.asymmetric)
                         .put("t", families.tls)
-                        .put("e", families.aead),
+                        .put("e", families.aead)
+                        .put("y", families.system),
                 ),
             )
         }
@@ -78,9 +79,9 @@ object ScopeJson {
     }
 
     /**
-     * Missing section, missing package, or a missing family key all mean DEFAULT (on) — an old
-     * scope file and an old daemon both stay correct by simply not writing the section.
-     * A leftover `b` object (the removed SSL-bypass switch) is ignored.
+     * Missing section, missing package, or a missing crypto family key all mean DEFAULT (crypto on,
+     * system off) — an old scope file and an old daemon both stay correct by simply not writing the
+     * section. Missing `y` means system OFF. A leftover `b` object is ignored.
      */
     private fun decodePolicy(obj: JSONObject, inScope: Set<String>): Map<String, CaptureFamilies> {
         val raw = obj.optJSONObject("policy") ?: return emptyMap()
@@ -97,6 +98,7 @@ object ScopeJson {
                     asymmetric = capture.optBoolean("a", true),
                     tls = capture.optBoolean("t", true),
                     aead = capture.optBoolean("e", true),
+                    system = capture.optBoolean("y", false),
                 )
             }
         }

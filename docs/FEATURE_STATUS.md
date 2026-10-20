@@ -43,8 +43,10 @@
 |---|---|---|
 | `libadh_agent.so`（arm64-v8a，release 剥离，**1,019,520 B**，sha `b8dc7137…`） | `tools/build_agent.sh`（**2026-10-01 起也可在本机用 NDK r29 + cmake 构建，见 `HANDOVER §1.5`**） | ✅ 已验收（v01–v79 系列 + **v102**；2026-10-12 逐包 Hook 策略加入后重建，`v26_footprint` 断言动态导出恰好 4 个）。**2026-10-13 晚当前产物（1,021,856 B，sha `587bff9f…`）**：删掉 Java SSL 绕过 profile、`TrustAllManager`、`bypassKind`。已写入 `aa165071` 的模块目录（沙盒与模块路径同一 hash）。签名扫描 PASS。`v75` / `v42` / `v102` 没有在这份 so 上复跑。`v104` 随该功能删除 |
 | 2026-10-01 设备上的旧 Zygisk 模块 zip + ADH Manager APK（**v0.3.12**；与 2026-10-09 新发布包区分） | `tools/build_zygisk.sh` / `build_bundle.sh` / `flash_device.sh` | ✅ 模块 zip 与 APK 是 2026-09-29 那次刷机的产物（`manager.apk` `e0b2a83d…`、`daemon.apk` `87c2df98…`、`zygisk/arm64-v8a.so` `e565bfdc…`）。**agent 已于 2026-10-01 更新为 `78d9d20f…`**（本机 NDK r29 构建），同时写进设备的两条路径：沙盒 `…/lib/arm64/libadh_agent.so`（模拟注入）与 `/data/adb/modules/adh/libadh_agent.so`（Zygisk 注入）。这段记录只描述旧设备状态，不代表新 Release 已刷入。 |
-| 可选后端：Frida Gadget | `tools/fetch_frida_gadget.sh` + `load_frida_gadget.sh` | ⚠️ **开发/调试用，移出发布物**（2026-10-01 决议）；官方二进制（未魔改），v30 验收保留 |
-| 可选后端：eCapture | `tools/fetch_ecapture.sh` + `ecapture_capture.sh` | ⚠️ **实验脚本，已移出 `verify_all.sh` 门禁**（2026-10-01 决议）；需内核 eBPF，脚本手动可跑（本次改动后仍 PASS） |
+| ~~可选后端：Frida Gadget~~ | 历史脚本仍在 `tools/` | ❌ **已退出产品面**（2026-10-20）：Web/MCP 不展示；`verify_all` 不再跑 v30 |
+| 可选后端：eCapture | `tools/fetch_ecapture.sh` + `ecapture_capture.sh` | ⚠️ **实验脚本，不在门禁内**（`verify_v34` 仅手动）；需内核 eBPF |
+| Host 捕获落盘 | `daemon/src/capture_persist.ts` | ✅ 按包 jsonl；重启可回放；按包清空/导出（2026-10-20 v0.4.0） |
+| HTTP 整请求重组 | `http_exchange.ts` / MCP `http_exchanges` | ✅ 已接线 + 单测；**未进 verify_all / FEATURE 门禁表旧行** — 以 REST/MCP 手工验 |
 | 开发用（不随发布物交付） | `sandbox-app/`、`sandbox-native/`、`tools/`、`docs/`、`daemon/` | — |
 
 ## 0.5 能力分布
@@ -55,7 +57,7 @@
 | **Host ADH Daemon**（主机） | `daemon/` | **65 个 MCP 工具 + 84 条 HTTP 路由**（2026-10-01 计数，`grep -c` 可复算）：dex 解析/索引(SQLite)/搜索/xref、Capstone 反汇编与 syscall 归因/参数解码、trace 摘要、syscall 摘要、脱壳编排与重建、工件存储、Web UI、MCP server | TypeScript（含 20 个单测文件、**180 条用例**（2026-10-12 实测 `node --test` = 180 pass / 0 fail）） |
 | **Device**（手机侧） | `device/` | AIDL 作用域读写、模块状态、目标进程启停 —— **不做分析** | Kotlin |
 | **注入器** | `injector/zygisk` | 把 `.so` 送进目标进程（Zygisk 走 **memfd**，目标 maps 不出现模块路径）+ 传真实包名 | C++/Java |
-| **可选后端** | `tools/`（Gadget/eCapture） | 另一种进入/观测方式；**均为实验/调试用，不进发布物**（2026-10-01） | 脚本 |
+| **可选后端** | `tools/`（eCapture 等） | 实验/调试；**Frida Gadget 已退出产品面**（2026-10-20）；不进发布物 | 脚本 |
 
 ## 1. 测过的功能（按 verify_all 的脚本分组）
 
@@ -173,10 +175,10 @@
 
 ## 3. 发布结论
 
-- 当前代码范围为 `libadh_agent.so` + Zygisk/Manager；**官方注入路径只有 Zygisk**（CI 走模拟注入），
-  Gadget/eCapture 两个后端降级为开发调试/实验（2026-10-01 决议，见 `DEVELOPMENT_PLAN §6.10`）；
-  模块 X 已退役，AI 使用 adb 操作手机。
+- 当前代码范围为 `libadh_agent.so` + Zygisk/Manager；**官方注入路径只有 Zygisk**（CI 走模拟注入）。
+  **Frida Gadget 已退出产品面**（2026-10-20）：Web/MCP/CLI 不展示；历史脚本仅在 `tools/`。
+  eCapture 仍为实验/调试，不进发布物。模块 X 已退役，AI 使用 adb 操作手机。
 - **产品边界 = `arm64-v8a` only**（2026-10-01 决议）；Web UI 冻结为只读查看器；
   全量 syscall 拦截不做；cdex/041 需真实样本、不进排期。
 - 2026-10-01 设备门禁结果见 §2.1。2026-10-09 已在本机补齐 Android SDK 36 和 Gradle 8.9 wrapper 缓存，并从公开快照成功运行 Device `:core:test :daemon:assembleDebug :manager:assembleDebug`、重建协议 v13 对应的 v0.3.12 bundle、发布到 GitHub；**这个新 bundle 尚未刷入或验收**（见 `HANDOVER §1.5`）。
-- 已知边界：arm64-v8a only（产品边界）；**单目标最多 16 个并发 hook 槽**（Java/native 各计，超出 fail-loud 并给释放建议，见 `REQUIREMENTS §21.2`）；`-fomit-frame-pointer` 第三方库可能只能解析 1 帧；JNIEnv 表覆盖 228/229（唯一余项 `RegisterNatives` 由入口 inline hook 覆盖）；`FatalError` 事件为 best effort；高频事件可能受 capture ring 限流/丢弃；native_call 超时后目标调用无法取消；dex 重建会增大文件与内存峰值；Agent TCP `8761` 暂无鉴权；Gadget 使用官方二进制且默认关闭；`capture_start` 的**先归零再装**语义意味着它会短暂卸下再装回钩子（这段时间目标的事件不会被捕获）。
+- 已知边界：arm64-v8a only（产品边界）；**单目标最多 16 个并发 hook 槽**（Java/native 各计，超出 fail-loud 并给释放建议，见 `REQUIREMENTS §21.2`）；`-fomit-frame-pointer` 第三方库可能只能解析 1 帧；JNIEnv 表覆盖 228/229（唯一余项 `RegisterNatives` 由入口 inline hook 覆盖）；`FatalError` 事件为 best effort；高频事件可能受 capture ring 限流/丢弃；native_call 超时后目标调用无法取消；dex 重建会增大文件与内存峰值；Agent TCP `8761` 暂无鉴权；一键脱壳会抑制本包自动布防直至进程重启；`capture_start` 的**先归零再装**语义意味着它会短暂卸下再装回钩子（这段时间目标的事件不会被捕获）。

@@ -365,7 +365,7 @@ static int family_on(const char *obj, const char *key, int dflt) {
 // braces still balance overall. A whole-file balance check catches the truncation/typo class that
 // matters, and a file that fails it yields NO policy at all, which leaves the agent on families-ON.
 // A brace inside a string value would be a false positive, and no scope field can carry one
-// (packages, "c", "d".."e", "b", "s", true/false).
+// (packages, "c", "d".."e", "y", "b", "s", true/false).
 static bool scope_json_balances(const char *buf) {
     int depth = 0;
     for (const char *p = buf; *p; p++) {
@@ -396,10 +396,10 @@ static bool object_slice(const char *from, const char *key, char *out, size_t ca
     return true;
 }
 
-// Render one package's hook policy as the flag line the agent consumes ("d=1,h=0,…").
+// Render one package's hook policy as the flag line the agent consumes ("d=1,h=0,…,y=0").
 // false = this package carries no capture section, which leaves the agent on its own defaults
-// (every capture family on, and SSL bypass on). "b" is the bypass flag on the package object;
-// a missing key stays on.
+// (crypto families on, system detection off). A leftover "b" (old SSL-bypass) key in scope.json
+// is ignored — Manager no longer writes it, and the agent parses d/h/s/a/t/e/y.
 static bool policy_flags_for(const char *pkg, char *out, size_t cap) {
     if (!pkg || !pkg[0]) return false;
     int fd = open(kScopePath, O_RDONLY | O_CLOEXEC);
@@ -441,14 +441,14 @@ static bool policy_flags_for(const char *pkg, char *out, size_t cap) {
     char capture[512] = "";
     if (!object_slice(pkg_obj, "c", capture, sizeof(capture))) return false;
 
-    snprintf(out, cap, "d=%d,h=%d,s=%d,a=%d,t=%d,e=%d,b=%d",
+    snprintf(out, cap, "d=%d,h=%d,s=%d,a=%d,t=%d,e=%d,y=%d",
              family_on(capture, "d", 1),
              family_on(capture, "h", 1),
              family_on(capture, "s", 1),
              family_on(capture, "a", 1),
              family_on(capture, "t", 1),
              family_on(capture, "e", 1),
-             family_on(pkg_obj, "b", 1));
+             family_on(capture, "y", 0));
     return true;
 }
 
@@ -851,9 +851,8 @@ REGISTER_ZYGISK_MODULE(AdhModule)
 //
 //   "mark\n"              -> creates the loader marker, replies "ok\n"
 //   "scope <package>\n"   -> replies "1\n" (in allowlist) or "0\n"
-//   "policy <package>\n"  -> replies "d=1,h=0,s=1,a=1,t=1,e=0,b=1\n", or "default\n" when the
-//                            package carries no policy at all. Capture families and SSL bypass
-//                            both default ON. b=0 is the explicit off switch.
+//   "policy <package>\n"  -> replies "d=1,h=0,s=1,a=1,t=1,e=0\n", or "default\n" when the
+//                            package carries no policy at all. Capture families default ON.
 //   "log <line>\n"        -> appends to the root decision log, replies "ok\n"
 //   "host\n"              -> replies "ipv4:port\n", or "none\n" when no address is stored
 // Anything else - including a line that arrived truncated or over-long - is refused with "err\n":

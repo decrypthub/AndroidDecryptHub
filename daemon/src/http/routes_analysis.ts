@@ -15,7 +15,7 @@ import { ensureDexIndex, listDexReflections, searchDexIndex } from '../dex_index
 import {dumpBuf, dumpBufPath, modulesFromMaps, persistArtifact, pickSid, reconstructSo,
   repairDexHeader, sendCmd,} from '../service.ts';
 import { resolveModule, ModuleAmbiguousError } from '../memory.ts';
-import { broadcast, CAPTURES, dumps, readBody, sessions } from '../state.ts';
+import { broadcast, CAPTURES, dumps, readBody, rememberDump, sessions } from '../state.ts';
 import type { DumpMeta } from '../state.ts';
 import type { Route, RouteContext, SendResponse } from './types.ts';
 
@@ -128,7 +128,7 @@ export function analysisRoutes({ req, res, url, send }: RouteContext): Route[] {
         const path = join(CAPTURES, `${sha.slice(0, 16)}.so`);
         if (!existsSync(path)) await writeFile(path, buf);
         const meta: DumpMeta = { sha256: sha, size: buf.length, requestedSize: buf.length, complete: true, source: 'so-reassembly', note: 'reassembled from memory: offsets == vaddrs, section headers dropped, not byte-exact', addr: mod.base, tag: mod.name, sessionId: sid, package: s?.package ?? '?', capturedAt: Date.now(), path, kind: 'so' };
-        dumps.set(sha, meta);
+        rememberDump(meta);
         broadcast('dump.new', meta);
         return send(200, { ...meta, dedup: false, module: mod.name, segments: mod.segs });
       } catch (e) { return send(502, { error: (e as Error).message }); }
@@ -210,7 +210,7 @@ export function analysisRoutes({ req, res, url, send }: RouteContext): Route[] {
       const path = join(CAPTURES, `${outSha.slice(0, 16)}.dex`);
       if (!existsSync(path)) await writeFile(path, rb.dex);
       const meta: DumpMeta = { sha256: outSha, size: rb.dex.length, source: 'dex-recover', addr: '0', tag: 'recovered', sessionId: '', package: '', capturedAt: Date.now(), path, kind: 'dex' };
-      dumps.set(outSha, meta); broadcast('dump.new', meta);
+      rememberDump(meta); broadcast('dump.new', meta);
       return send(200, { ok: true, ...report, injected: rb.injected, classesRewritten: rb.classesRewritten, parseOk, sha256: outSha, size: rb.dex.length,
         mapRebuilt: rb.mapRebuilt, mapEntries: rb.mapEntries, relocatedCodeItems: rb.relocatedCodeItems, relocatedClassData: rb.relocatedClassData,
         unmatchedCaptures: rb.unmatchedCaptures, skippedCaptures: rb.skippedCaptures, duplicateCaptures: rb.duplicateCaptures, layout: rb.layout });
@@ -234,7 +234,7 @@ export function analysisRoutes({ req, res, url, send }: RouteContext): Route[] {
       const path = join(CAPTURES, `${outSha.slice(0, 16)}.dex`);
       if (!existsSync(path)) await writeFile(path, res.dex);
       const meta: DumpMeta = { sha256: outSha, size: res.dex.length, source: 'dex-rebuild', addr: '0', tag: 'rebuilt', sessionId: '', package: '', capturedAt: Date.now(), path, kind: 'dex' };
-      dumps.set(outSha, meta); broadcast('dump.new', meta);
+      rememberDump(meta); broadcast('dump.new', meta);
       return send(200, { ok: true, injected: res.injected, classesRewritten: res.classesRewritten, parseOk, methods, sha256: outSha, size: res.dex.length,
         mapRebuilt: res.mapRebuilt, mapEntries: res.mapEntries, relocatedCodeItems: res.relocatedCodeItems, relocatedClassData: res.relocatedClassData,
         unmatchedCaptures: res.unmatchedCaptures, skippedCaptures: res.skippedCaptures, duplicateCaptures: res.duplicateCaptures, layout: res.layout });

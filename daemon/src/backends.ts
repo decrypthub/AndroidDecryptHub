@@ -1,63 +1,24 @@
 // Injection-backend matrix (module W). Shared by the REST surface (GET /api/backends) and the MCP
 // tool `backends`, so an AI client and the browser console see exactly the same truth.
 //
-// The Host ADH Daemon has no adb: for Frida Gadget it reports what is cached on this machine plus
-// the loader command; the device-side backend (Zygisk scope) is driven through ADH Manager →
-// Device Daemon and is reported here as a pointer, not as an action.
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
+// Official paths: Zygisk (device scope via ADH Manager → Device Daemon) and sandbox self-load.
+// Frida Gadget is not a product backend — do not advertise cache/loader commands here.
 import { agentCmd, modulesFromMaps } from './service.ts';
 import { sessions } from './state.ts';
 
-const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-
-export interface GadgetCacheEntry { version: string; abi: string; bytes: number; path: string }
-
-/** Pinned versions (manifest) + what is actually downloaded under agent/third_party/frida. */
-export function gadgetCache(): { pinned: string[]; cached: GadgetCacheEntry[] } {
-  const cacheRoot = join(repoRoot, 'agent', 'third_party', 'frida');
-  const manifestFile = join(repoRoot, 'tools', 'frida_gadget_versions.json');
-  let pinned: string[] = [];
-  try {
-    const parsed = JSON.parse(readFileSync(manifestFile, 'utf8'));
-    pinned = Object.keys(parsed?.versions ?? {}).sort();
-  } catch { pinned = []; }
-  const cached: GadgetCacheEntry[] = [];
-  if (existsSync(cacheRoot)) {
-    for (const version of readdirSync(cacheRoot)) {
-      const versionDir = join(cacheRoot, version);
-      if (!statSync(versionDir).isDirectory()) continue;
-      for (const abi of readdirSync(versionDir)) {
-        const so = join(versionDir, abi, 'libfrida-gadget.so');
-        if (!existsSync(so)) continue;
-        cached.push({ version, abi, bytes: statSync(so).size, path: so });
-      }
-    }
-  }
-  return { pinned, cached };
-}
-
 export function backendMatrix() {
-  const { pinned, cached } = gadgetCache();
   return {
     agents: [...sessions.values()].map((s) => ({
       session: s.sessionId,
       package: s.package,
+      process: s.process,
       pid: s.pid,
       online: s.online,
       entry: s.entry,
       // Coarse host-side label; classifySession() below resolves one session precisely from the
-      // agent's own module list (the agent .so path tells Zygisk / gadget / self-load apart).
-      entryKind: s.entry === 'start' ? 'injected (adh_agent_start)' : 'jni_onload (self-load / gadget)',
+      // agent's own module list (the agent .so path tells Zygisk / self-load apart).
+      entryKind: s.entry === 'start' ? 'injected (adh_agent_start)' : 'jni_onload (self-load)',
     })),
-    gadget: {
-      pinned,
-      cached,
-      loader: 'tools/load_frida_gadget.sh',
-      note: 'optional high-footprint backend: the host tool stages it into <pkg>/code_cache and triggers load_so (MCP: load_library); the daemon itself has no adb.',
-    },
     zygisk: {
       module: 'injector/zygisk',
       control: 'device-side: ADH Manager -> Device Daemon (scope.json allowlist)',
@@ -78,7 +39,6 @@ export async function classifySession(session: string) {
   const paths = mods.map((m: any) => String(m?.path ?? m?.name ?? ''));
   const backends: string[] = ['adhd_agent'];
   if (paths.some((p) => p.includes('/data/adb/modules/adh/'))) backends.push('zygisk');
-  if (paths.some((p) => /libgadget\.so|frida/i.test(p))) backends.push('frida_gadget');
   if (paths.some((p) => /\/lib\/arm64\/libadh_agent\.so$/.test(p))) backends.push('self_load');
   return { session, moduleCount: mods.length, backends };
 }

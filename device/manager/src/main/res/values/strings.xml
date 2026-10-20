@@ -30,7 +30,7 @@
     <string name="hide_system_apps">隐藏系统应用</string>
     <string name="save">保存</string>
     <string name="saving">正在保存</string>
-    <string name="scope_saved">已保存。重新启动目标应用后生效。</string>
+    <string name="scope_saved">已保存。网页上的应用名单会更新；新勾选的应用要重新打开才会注入。</string>
     <string name="scope_save_failed">无法保存。请确认 ADH 设备服务正在运行。</string>
     <string name="apps_load_failed">无法读取注入范围</string>
     <string name="apps_load_failed_detail">请确认 ADH 设备服务正在运行后重试。</string>
@@ -51,12 +51,14 @@
     <string name="app_hook_config">Hook 配置</string>
     <string name="app_hooks_trimmed">已裁剪钩子</string>
     <string name="hook_config_title">Hook 配置</string>
+    <string name="hook_config_lead">这里决定下次注入时装哪些捕获。加解密默认开；「系统检测」默认关，打开后才会观察反调试、查 root 等行为。关掉的项不会装进进程。电脑网页「设置 → 实时捕获」仍可强制停捕。</string>
     <string name="hook_family_digest">摘要（MD5/SHA）</string>
     <string name="hook_family_hmac">HMAC</string>
     <string name="hook_family_symmetric">对称（AES/DES）</string>
     <string name="hook_family_asymmetric">非对称（RSA/EC）</string>
     <string name="hook_family_tls">TLS 明文</string>
     <string name="hook_family_aead">AEAD</string>
+    <string name="hook_family_system">系统检测（反调试 / root）</string>
     <string name="hook_config_reset">恢复默认</string>
     <string name="cert_title">系统证书</string>
     <string name="cert_count">已导入 %1$d 张</string>

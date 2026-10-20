@@ -97,7 +97,7 @@ class DaemonScopeRepositoryTest {
     fun perAppPolicySurvivesTheDaemonRoundTrip() {
         val client = FakeDaemonClient()
         val repository = DaemonScopeRepository { client }
-        val trimmed = CaptureFamilies(digest = true, hmac = false, symmetric = true, asymmetric = false, tls = true, aead = false)
+        val trimmed = CaptureFamilies(digest = true, hmac = false, symmetric = true, asymmetric = false, tls = true, aead = false, system = false)
         val config = ScopeConfig(packages = setOf("com.example.target"))
             .withPolicy("com.example.target", trimmed)
 

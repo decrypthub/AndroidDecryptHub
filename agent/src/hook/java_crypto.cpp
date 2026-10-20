@@ -155,8 +155,9 @@ static void collect_overloads(JNIEnv *env, jclass cls, const Target &target, std
 
 static int install_all(JNIEnv *env) {
     adh_javahook_install_lock();
-    int digest = 1, hmac = 1, symmetric = 1, asymmetric = 1, tls = 1, aead = 1;
-    adh_capture_get_families(&digest, &hmac, &symmetric, &asymmetric, &tls, &aead);
+    int digest = 1, hmac = 1, symmetric = 1, asymmetric = 1, tls = 1, aead = 1, system = 0;
+    adh_capture_get_families(&digest, &hmac, &symmetric, &asymmetric, &tls, &aead, &system);
+    (void)system;
     std::vector<Job> jobs;
     const char *failed = nullptr;
     for (const Target &target : kTargets) {

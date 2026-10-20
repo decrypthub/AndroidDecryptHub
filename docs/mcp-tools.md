@@ -5,7 +5,7 @@ Generated from the live ADH Daemon registry (65 tools). Endpoint: `POST /mcp` (J
 | Tool | Description | Args |
 |---|---|---|
 | `process_list` | List connected target agent sessions | — |
-| `backends` | Injection-backend matrix: sessions by entry, host-side Frida Gadget cache + loader command, device-side backend pointers. Pass session to classify which injection paths are really loaded in that process (zygisk / frida_gadget / self_load). | session |
+| `backends` | Injection-backend matrix: sessions by entry + Zygisk pointers. Pass session to classify zygisk / self_load. Frida Gadget is not a product backend. | session |
 | `dumps_list` | List captured dump artifacts (dex/so/region) | — |
 | `compat_probe` | Self-assess agent env + injection footprint: tracer/seccomp/backends/exec/anon/rwx | session |
 | `jni_onload` | List, hook, unhook, inspect or manually invoke JNI_OnLoad. hook/call work on an already-loaded module; watch arms a one-shot LOAD-TIME interception: the agent hooks the dlopen entry point and patches the JNI_OnLoad of that module as soon as it is mapped, before the VM calls it (skipOriginal+returnValue can then replace that load-time call). call is dangerous and requires confirm:true. Events are emitted as JNI_ONLOAD with phase=manual\|load. | session, action, module, confirm, skipOriginal, returnValue |
@@ -68,4 +68,4 @@ Generated from the live ADH Daemon registry (65 tools). Endpoint: `POST /mcp` (J
 | `protocol_selftest` | Command-channel integrity check: send one oversized frame whose tail marker sits past the old 8192-byte single-line cap and verify the tail survived and the whole frame arrived. Use it when replies look truncated or a session looks half-dead; kb is clamped to 1..4096. ok:false here means the channel (adb reverse / framing) is at fault, not the target. | session, kb |
 | `fs_list` | List a directory on the DEVICE through the target process, so it sees the sandbox the way the app does (its private /data/data/... dir, /data/local/tmp, /proc/self/...). Returns name/type/size/mode/mtime per entry plus count and truncated. Start here to find shared_prefs, databases, keystores or dropped scripts, then pull one with fs_read. | session, path |
 | `fs_read` | Read one device file through the target process. The agent caps a read at 1MB and reports truncated honestly. Returns size, byte count, a binary flag (NUL byte present), a printable preview and the line count, plus the whole text when the file is text and is at most 256KB. Binary or oversized files come back with textOmitted saying why; pass includeBase64:true for the raw bytes. | session, path, includeBase64, includeText, previewBytes |
-| `load_library` | 把任意 .so 加载进目标进程（如 frida-gadget，随后 gadget 会按 script 模式自动跑你的 frida 脚本）。可选 symbol 探测。dlopen from inside the target. | session, path, symbol |
+| `load_library` | 把任意 .so 加载进目标进程（agent 内 dlopen）。可选 symbol 探测。不是 Frida 注入入口。 | session, path, symbol |
