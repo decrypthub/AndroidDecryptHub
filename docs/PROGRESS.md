@@ -3,7 +3,58 @@
 > 这是"我们现在在哪"的唯一真相。每个会话开始先读它，结束前更新它。
 > 详细规格见 `REQUIREMENTS.md`，路线与架构见 `DEVELOPMENT_PLAN.md`。
 
-## 2026-10-22（第四十四轮）—— `hw_watch` 在这台设备上被**平台拒绝**：写入监视这条路是关的，不是坏的
+## 2026-10-22（第四十五轮）—— in-hook trace 的设计定稿（下一轮直接实现，不再讨论）
+
+这轮把最后一项能力的**接口、数据流和验收**定下来，避免下一轮从零讨论。
+
+### 接口
+
+`native_hook` 安装时多两个字段：
+
+```
+traceInsns: <int>      0 = 关（默认）。命中时就地跑这么多条 QBDI 指令。
+traceFrom:  "x<reg>"   可选。以该寄存器里的**代码地址**为起点；缺省则以被钩函数入口为起点。
+```
+
+事件记录里多一个字段：
+
+```
+"trace": { "insns": N, "seen": M, "stopReason": "completed|instruction-budget|time-budget|ran-away",
+           "mnemonics": [{"mnemonic":"ldr","count":12}, ...],   // 前 16 名
+           "first": ["0x…: ldr x0, [x1, #8]", …] }              // 前 32 条，每条 ≤ 48 字符
+```
+
+### 实现路径（复用已有件，不新写 VM）
+
+1. `agent/src/trace/qbdi_trace.c` 已经有完整的 VM 生命周期、exec-range 守卫、指令预算、墙钟上限。
+   抽出 `int adh_qbdi_run_from(uint64_t pc, const uint64_t *gpr, int budget, int time_ms,
+   qbdi_summary_t *out)`：initVM → allocateVirtualStack → setGPR（x0..x7 来自 `gpr`）→
+   `qbdi_call` 不可用（我们要从任意 pc 跑），改用 `qbdi_run(instance, start, stop)`——**已确认存在**
+   （`agent/third_party/qbdi/include/QBDI/VM_C.h:143`），配合 `qbdi_setGPRState` 先灌入命中的
+   x0..x7 即可从任意 pc 起跑；`stop=0` 表示跑到函数返回。
+2. `native_hooks.cpp` 在事件 JSON 组装完之后、`adh_capture_push_text` 之前调用它，把 summary
+   拼进同一个事件（**不要另发一条记录**：事件与它的 trace 必须在同一条里，否则又要靠 seq 配对，
+   而 memAfter 的教训已经证明"多一条记录就多一种配错"）。
+3. 预算默认 `traceInsns=200`、墙钟 300 ms：钩子跑在目标线程上，**必须假定它会跑飞**——
+   三条守卫（指令预算 / 墙钟 / exec-range）一个都不能省。
+4. 可重入与线程安全：QBDI 的 VM 是**每线程**的，钩子可能并发命中，所以 `adh_qbdi_run_from`
+   要用 `pthread_getspecific` 持有 per-thread VM，或用一个"每线程一次性"的小池；**绝不能用一把
+   全局锁**（会把目标线程串行化，等于给目标装了个隐形瓶颈）。
+
+### 验收（device）
+
+`tools/verify_v117_inhook_trace.sh`：
+- 钩沙盒里一个已知函数，`traceInsns: 32`，命中后事件里必须有 `trace`，且
+  `insns>0`、`stopReason` 在文档化集合内、`first[0]` 的地址等于被钩函数入口（或 traceFrom 指定的地址）；
+- 同一钩子再跑一次 `traceInsns: 0`，事件里**不得**出现 `trace` 键（回归：默认不许有开销）；
+- 目标存活。
+
+### 为什么这是唯一剩下的路（本会话已逐条排除）
+
+事后 trace 已释放上下文：必死；独立调 `0x101da0`：必死（依赖解释器帧）；种描述符驱动 formatter：
+必死（bank 指向的对象图无法重建）；硬件写入监视：平台拒绝 perf（errno 13）。**只剩"命中点就地"**。
+
+
 
 上一轮把"写入监视 arena 槽"列为剩下的第一条路，并说先在沙盒验证。验证结果很干脆：
 
