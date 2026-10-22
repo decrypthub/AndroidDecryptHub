@@ -239,6 +239,9 @@ SCRIPTS=(
   # none, so the documented (hookId, seq) join silently dropped every "what did it WRITE" record - and
   # the shape differed too (flat vs mem[]), which left the host preview blank.
   "verify_v113_memafter_seq.sh:device"
+  # v114: window-chained dereference ("@x0:8,@#1+0:8"): the second hop follows a pointer that an earlier
+  # window already copied, which is the shape of a formatter descriptor -> argument vector -> value.
+  "verify_v114_window_chain.sh:device"
 )
 
 pass=0; fail=0; skip=0; FAILED=""

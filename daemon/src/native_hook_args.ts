@@ -38,6 +38,8 @@ export interface MemWindow {
   len: number;
   /** `@x2+32:512`: read the u64 at (reg+offset) and copy the window from THAT address. */
   deref?: boolean;
+  /** `@#2+8:256`: read the u64 at +8 inside window 2's copy and copy from THAT address. */
+  fromWindow?: number;
 }
 
 /**
@@ -63,8 +65,32 @@ export function parseMemWindows(value: unknown): { windows: MemWindow[]; spec: s
   let total = 0;
   for (const raw of parts) {
     const part = raw.trim();
+    // Two shapes. "@#<n>[+<off>]:<len>" follows a pointer that an EARLIER window already copied - the
+    // second hop of a pointer chain, which is the shape of a formatter's argument vector (descriptor ->
+    // vector -> value). "<@>x<reg>[+<off>]:<len>" reads from a register, optionally following one
+    // pointer first.
+    const wm = /^@#([1-9][0-9]*)(?:\+([0-9]+))?:([0-9]+)$/.exec(part);
+    if (wm) {
+      const fromWindow = Number(wm[1]);
+      const offset = wm[2] === undefined ? 0 : Number(wm[2]);
+      const len = Number(wm[3]);
+      if (fromWindow > windows.length) {
+        throw new Error(`mem window @#${fromWindow} must reference an earlier window (1..${windows.length})`);
+      }
+      const prev = windows[fromWindow - 1];
+      if (!Number.isSafeInteger(offset) || offset < 0 || offset + 8 > prev.len) {
+        throw new Error(`mem window @#${fromWindow}+${offset} needs 8 bytes inside window ${fromWindow} (length ${prev.len})`);
+      }
+      if (!Number.isSafeInteger(len) || len < 1 || len > NATIVE_MEM_WIN_LEN) {
+        throw new Error(`mem length ${len} must be 1..${NATIVE_MEM_WIN_LEN}`);
+      }
+      total += len;
+      if (total > NATIVE_MEM_WIN_TOTAL) throw new Error(`mem total ${total} exceeds ${NATIVE_MEM_WIN_TOTAL}`);
+      windows.push({ reg: -1, offset, len, deref: true, fromWindow });
+      continue;
+    }
     const m = /^(@?)x([0-8])(?:\+([0-9]+))?:([0-9]+)$/.exec(part);
-    if (!m) throw new Error(`mem window must look like x0:64, x2+16:32 or @x2+32:512, got ${JSON.stringify(part)}`);
+    if (!m) throw new Error(`mem window must look like x0:64, x2+16:32, @x2+32:512 or @#2+8:256, got ${JSON.stringify(part)}`);
     const deref = m[1] === '@';
     const reg = Number(m[2]);
     const offset = m[3] === undefined ? 0 : Number(m[3]);
@@ -79,7 +105,11 @@ export function parseMemWindows(value: unknown): { windows: MemWindow[]; spec: s
     if (total > NATIVE_MEM_WIN_TOTAL) throw new Error(`mem total ${total} exceeds ${NATIVE_MEM_WIN_TOTAL}`);
     windows.push(deref ? { reg, offset, len, deref } : { reg, offset, len });
   }
-  const spec = windows.map((w) => `${w.deref ? '@' : ''}${w.offset ? `x${w.reg}+${w.offset}` : `x${w.reg}`}:${w.len}`).join(',');
+  const spec = windows
+    .map((w) => (w.fromWindow
+      ? `@#${w.fromWindow}${w.offset ? `+${w.offset}` : ''}:${w.len}`
+      : `${w.deref ? '@' : ''}${w.offset ? `x${w.reg}+${w.offset}` : `x${w.reg}`}:${w.len}`))
+    .join(',');
   return { windows, spec };
 }
 

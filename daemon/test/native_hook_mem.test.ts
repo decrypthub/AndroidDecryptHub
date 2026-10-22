@@ -42,6 +42,21 @@ test('@ follows one pointer and says so in both the window and the spec', () => 
   assert.throws(() => parseMemWindows('@:8'), /mem window must look like/);
 });
 
+test('@#n follows a pointer that an earlier window already copied', () => {
+  // The second hop of a pointer chain: a formatter descriptor points at an argument VECTOR, and the
+  // vector's slots point at the values. One deref reaches the vector; this reaches the value.
+  const parsed = parseMemWindows('@x2+24:32,@#1+8:128,@#1+16:128');
+  assert.equal(parsed.spec, '@x2+24:32,@#1+8:128,@#1+16:128');
+  assert.equal(parsed.windows.length, 3);
+  assert.deepEqual(parsed.windows[1], { reg: -1, offset: 8, len: 128, deref: true, fromWindow: 1 });
+  assert.equal(parsed.windows[2].fromWindow, 1);
+  // A reference must name an EARLIER window, and the 8-byte pointer must fit inside it.
+  assert.throws(() => parseMemWindows('@#1+0:16'), /must reference an earlier window \(1\.\.0\)/);
+  assert.throws(() => parseMemWindows('@x0:8,@#2+0:16'), /must reference an earlier window \(1\.\.1\)/);
+  assert.throws(() => parseMemWindows('@x0:8,@#1+4:16'), /needs 8 bytes inside window 1 \(length 8\)/);
+  assert.throws(() => parseMemWindows('@x0:8,@#1+0:0'), /mem length 0 must be 1\.\./);
+});
+
 test('the caps that the agent enforces are accepted on the boundary', () => {
   // Four windows at the per-window ceiling must exactly fill the total. Writing the numbers out by
   // hand is what let this test go stale the day the caps changed: derive the spec from the caps.

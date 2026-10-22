@@ -69,7 +69,9 @@ struct NativeHookContext {
         int reg;
         int offset;
         int len;
-        int deref;   // "@x2+32:512": copy from the pointer stored at (reg+offset), not from reg+offset
+        int deref;      // 1 = follow the pointer at (reg+offset), 2 = follow a pointer inside an
+                        // earlier window's copy (see from_win)
+        int from_win;   // 1-based earlier window holding the pointer when deref == 2
     } mem_win[ADH_MEM_WIN_MAX];
     int mem_nwin;
     char mem_spec[96];
@@ -230,7 +232,18 @@ struct WinSpec {
     int reg;
     int off;
     int len;
-    int deref;   // "@x2+32:512": read a u64 at (reg+off) and copy the window from THAT address
+    // 0 = plain window, 1 = follow one pointer from (reg+off), 2 = follow a pointer held INSIDE an
+    // earlier window's bytes ("@#2+8:256": take window 2's copy, read the u64 at +8 in it, and copy the
+    // window from THAT address).
+    //
+    // Why the second form has to exist: one level is not enough for the structures that matter. The
+    // measured case is a printf-style formatter whose descriptor (+0x18) points at an argument VECTOR,
+    // and the vector's slots point at the values being rendered. `@x2+24` reaches the vector, and then
+    // the values are one hop further - unreachable, because a plain deref can only start at a register.
+    // Chaining from a window's own bytes makes the second hop expressible without inventing a second
+    // grammar.
+    int deref;
+    int from_win;   // 1-based index of the earlier window that holds the pointer (deref == 2)
 };
 
 static int parse_window(const char **pp, int max_len, const char *label, WinSpec *w,
@@ -238,7 +251,28 @@ static int parse_window(const char **pp, int max_len, const char *label, WinSpec
     const char *p = *pp;
     while (*p == ' ') p++;
     w->deref = 0;
-    if (*p == '@') {
+    w->from_win = 0;
+    if (*p == '@' && p[1] == '#') {
+        // "@#<n>[+<off>]:<len>" - follow a pointer that an earlier window already copied.
+        p += 2;
+        if (*p < '1' || *p > '9') {
+            set_error(error, error_size, "%s window reference must be @#<n> with n >= 1", label);
+            return 0;
+        }
+        long long win = 0;
+        while (*p >= '0' && *p <= '9') {
+            win = win * 10 + (*p - '0');
+            if (win > ADH_MEM_WIN_MAX) {
+                set_error(error, error_size, "%s window reference exceeds %d", label, ADH_MEM_WIN_MAX);
+                return 0;
+            }
+            p++;
+        }
+        w->from_win = (int)win;
+        w->reg = -1;
+        w->off = 0;
+        w->deref = 2;
+    } else if (*p == '@') {
         // One level of indirection. A VM frame, a dispatch slot or a list head is a pointer OF a
         // pointer: the bytes that matter are not at the register, so a plain window can only ever
         // report the frame's own links. Measured on libjdg: the interpreter's current instruction
@@ -247,13 +281,15 @@ static int parse_window(const char **pp, int max_len, const char *label, WinSpec
         w->deref = 1;
         p++;
     }
-    if (p[0] != 'x' || p[1] < '0' || p[1] > '8') {
-        set_error(error, error_size, "%s window must look like x0:64, x2+16:32 or @x2+32:512", label);
-        return 0;
+    if (w->deref != 2) {
+        if (p[0] != 'x' || p[1] < '0' || p[1] > '8') {
+            set_error(error, error_size, "%s window must look like x0:64, x2+16:32, @x2+32:512 or @#2+8:256", label);
+            return 0;
+        }
+        w->reg = p[1] - '0';
+        p += 2;
+        w->off = 0;
     }
-    w->reg = p[1] - '0';
-    p += 2;
-    w->off = 0;
     if (*p == '+') {
         p++;
         if (*p < '0' || *p > '9') {
@@ -272,7 +308,7 @@ static int parse_window(const char **pp, int max_len, const char *label, WinSpec
         w->off = (int)off;
     }
     if (*p != ':') {
-        set_error(error, error_size, "%s window must look like x0:64, x2+16:32 or @x2+32:512", label);
+        set_error(error, error_size, "%s window must look like x0:64, x2+16:32, @x2+32:512 or @#2+8:256", label);
         return 0;
     }
     p++;
@@ -301,6 +337,10 @@ static int parse_window(const char **pp, int max_len, const char *label, WinSpec
 // Canonical spelling of a window: a zero offset is dropped. Printing it unconditionally produced
 // "x00:64", which looks like a typo in every log line and in status.
 static int format_window(char *buf, size_t n, const WinSpec *w) {
+    if (w->deref == 2) {
+        if (w->off) return snprintf(buf, n, "@#%d+%d:%d", w->from_win, w->off, w->len);
+        return snprintf(buf, n, "@#%d:%d", w->from_win, w->len);
+    }
     const char *at = w->deref ? "@" : "";
     if (w->off) return snprintf(buf, n, "%sx%d+%d:%d", at, w->reg, w->off, w->len);
     return snprintf(buf, n, "%sx%d:%d", at, w->reg, w->len);
@@ -309,7 +349,7 @@ static int format_window(char *buf, size_t n, const WinSpec *w) {
 // "auto", or "x0:64" / "x2+16:32", comma-separated. Canonical form drops a zero offset
 // and spaces. nout == -1 means auto (windows are chosen per hit). A bad spec fails the
 // install; it must not become "hook installed, window silently absent".
-static int parse_mem_spec(const char *spec, int *regs, int *offsets, int *lens, int *derefs, int *nout,
+static int parse_mem_spec(const char *spec, int *regs, int *offsets, int *lens, int *derefs, int *froms, int *nout,
                           char *canon, size_t canon_sz, char *error, size_t error_size) {
     if (nout) *nout = 0;
     if (canon && canon_sz) canon[0] = 0;
@@ -357,10 +397,24 @@ static int parse_mem_spec(const char *spec, int *regs, int *offsets, int *lens, 
             set_error(error, error_size, "mem total exceeds %d", ADH_MEM_WIN_TOTAL);
             return 0;
         }
+        // "@#n" must name a window that was already parsed, otherwise the pointer it is supposed to
+        // follow does not exist yet and the install would silently copy nothing.
+        if (w.from_win) {
+            if (w.from_win < 1 || w.from_win > n) {
+                set_error(error, error_size, "mem window @#%d must reference an earlier window (1..%d)", w.from_win, n);
+                return 0;
+            }
+            if (w.off < 0 || w.off + 8 > lens[w.from_win - 1]) {
+                set_error(error, error_size, "mem window @#%d+%d needs 8 bytes inside window %d (length %d)",
+                          w.from_win, w.off, w.from_win, lens[w.from_win - 1]);
+                return 0;
+            }
+        }
         regs[n] = w.reg;
         offsets[n] = w.off;
         lens[n] = w.len;
         if (derefs) derefs[n] = w.deref;
+        if (froms) froms[n] = w.from_win;
         char piece[32];
         int pn = format_window(piece, sizeof(piece), &w);
         if (pn < 0 || (size_t)pn >= sizeof(piece) || !canon || coff + (n ? 1 : 0) + (size_t)pn + 1 > canon_sz) {
@@ -570,6 +624,7 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id, uint64_t
     int mem_len[ADH_MEM_WIN_MAX];
     int mem_got[ADH_MEM_WIN_MAX];
     int mem_deref[ADH_MEM_WIN_MAX];
+    int mem_from[ADH_MEM_WIN_MAX];
     unsigned long long mem_ptr[ADH_MEM_WIN_MAX];
     const char *mem_err[ADH_MEM_WIN_MAX];
     unsigned char mem_bytes[ADH_MEM_WIN_MAX][ADH_MEM_WIN_LEN];
@@ -597,37 +652,63 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id, uint64_t
                 mem_off[w] = ctx.mem_win[w].offset;
                 mem_len[w] = ctx.mem_win[w].len;
                 mem_deref[w] = ctx.mem_win[w].deref;
+                mem_from[w] = ctx.mem_win[w].from_win;
                 mem_got[w] = 0;
                 mem_ptr[w] = 0;
                 mem_err[w] = "";
-                if (mem_reg[w] < 0 || mem_reg[w] > 8 || mem_len[w] < 1 || mem_len[w] > ADH_MEM_WIN_LEN) {
-                    mem_err[w] = "unreadable";
-                    continue;
-                }
-                uint64_t base = inreg[mem_reg[w]];
-                if ((uint64_t)mem_off[w] > ~0ull - base) {
-                    mem_err[w] = "overflow";
-                    continue;
-                }
-                uint64_t src = base + (uint64_t)mem_off[w];
-                if (mem_deref[w]) {
-                    // Follow one pointer. A frame's link field is not the bytes the caller wants, and
-                    // reading it as if it were produces a plausible-looking window that answers a
-                    // different question - so the resolved pointer is reported with the record.
-                    unsigned char slot[8];
-                    if (hook_mem_copy(src, slot, 8) != 8) {
-                        mem_err[w] = "unreadable";
+                uint64_t src = 0;
+                if (mem_deref[w] == 2) {
+                    // Follow a pointer that an EARLIER window already copied. Windows are processed in
+                    // order, so that copy exists here; the bounds were checked at install time and are
+                    // re-checked against what was actually read, because a short read shrinks it.
+                    const int fw = mem_from[w] - 1;
+                    if (fw < 0 || fw >= w || fw >= ADH_MEM_WIN_MAX) {
+                        mem_err[w] = "window-ref";
+                        continue;
+                    }
+                    if (mem_got[fw] < mem_off[w] + 8) {
+                        mem_err[w] = "window-short";
                         continue;
                     }
                     uint64_t target = 0;
-                    memcpy(&target, slot, 8);
+                    memcpy(&target, mem_bytes[fw] + mem_off[w], 8);
                     mem_ptr[w] = (unsigned long long)target;
                     if (target == 0) {
                         mem_err[w] = "null";
                         continue;
                     }
                     src = target;
+                } else {
+                    if (mem_reg[w] < 0 || mem_reg[w] > 8 || mem_len[w] < 1 || mem_len[w] > ADH_MEM_WIN_LEN) {
+                        mem_err[w] = "unreadable";
+                        continue;
+                    }
+                    uint64_t base = inreg[mem_reg[w]];
+                    if ((uint64_t)mem_off[w] > ~0ull - base) {
+                        mem_err[w] = "overflow";
+                        continue;
+                    }
+                    src = base + (uint64_t)mem_off[w];
+                    if (mem_deref[w]) {
+                        // Follow one pointer. A frame's link field is not the bytes the caller wants,
+                        // and reading it as if it were produces a plausible-looking window that answers
+                        // a different question - so the resolved pointer is reported with the record.
+                        unsigned char slot[8];
+                        if (hook_mem_copy(src, slot, 8) != 8) {
+                            mem_err[w] = "unreadable";
+                            continue;
+                        }
+                        uint64_t target = 0;
+                        memcpy(&target, slot, 8);
+                        mem_ptr[w] = (unsigned long long)target;
+                        if (target == 0) {
+                            mem_err[w] = "null";
+                            continue;
+                        }
+                        src = target;
+                    }
                 }
+                if (mem_len[w] < 1 || mem_len[w] > ADH_MEM_WIN_LEN) { mem_err[w] = "unreadable"; continue; }
                 int got = hook_mem_copy(src, mem_bytes[w], mem_len[w]);
                 if (got <= 0) mem_err[w] = "unreadable";
                 else mem_got[w] = got;
@@ -759,6 +840,9 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id, uint64_t
             if (mem_deref[w]) {
                 moff = adh_json_append(memjson, sizeof(memjson), moff, ",\"deref\":true,\"ptr\":\"0x%llx\"",
                                        mem_ptr[w]);
+                if (mem_deref[w] == 2) {
+                    moff = adh_json_append(memjson, sizeof(memjson), moff, ",\"from\":%d", mem_from[w]);
+                }
             }
             if (mem_err[w][0]) {
                 moff = adh_json_append(memjson, sizeof(memjson), moff, ",\"error\":\"%s\"}", mem_err[w]);
@@ -1144,9 +1228,10 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
     int mem_offs[ADH_MEM_WIN_MAX];
     int mem_lens[ADH_MEM_WIN_MAX];
     int mem_derefs[ADH_MEM_WIN_MAX];
+    int mem_froms[ADH_MEM_WIN_MAX];
     int mem_nwin = 0;
     char mem_canon[96];
-    if (!parse_mem_spec(mem_spec, mem_regs, mem_offs, mem_lens, mem_derefs, &mem_nwin, mem_canon, sizeof(mem_canon), error, error_size))
+    if (!parse_mem_spec(mem_spec, mem_regs, mem_offs, mem_lens, mem_derefs, mem_froms, &mem_nwin, mem_canon, sizeof(mem_canon), error, error_size))
         return 0;
     // Post-call window: exactly one, same syntax, no "auto" (after the call the "pointer-like"
     // guess is meaningless - the caller names the buffer the function wrote into).
@@ -1284,6 +1369,7 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
                 old.mem_win[w].offset = mem_offs[w];
                 old.mem_win[w].len = mem_lens[w];
                 old.mem_win[w].deref = mem_derefs[w];
+                old.mem_win[w].from_win = mem_froms[w];
             }
             copy_cstr(old.mem_spec, sizeof(old.mem_spec), mem_canon);
             // The post-call window and the hit-time filter must be re-applied too. They used to be
@@ -1430,6 +1516,7 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
         ctx.mem_win[w].offset = mem_offs[w];
         ctx.mem_win[w].len = mem_lens[w];
         ctx.mem_win[w].deref = mem_derefs[w];
+        ctx.mem_win[w].from_win = mem_froms[w];
     }
     copy_cstr(ctx.mem_spec, sizeof(ctx.mem_spec), mem_canon);
     ctx.after_arg = after_reg;
