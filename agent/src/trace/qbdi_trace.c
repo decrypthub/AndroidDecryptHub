@@ -9,6 +9,12 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
+// clock_gettime + CLOCK_MONOTONIC need the POSIX feature level declared before <time.h>; without it the
+// wall-clock bound below would silently fail to compile into the agent.
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+#include <time.h>
 #include "QBDI/Options.h"
 #include "QBDI/State.h"
 #include "QBDI/Callback.h"
@@ -55,8 +61,21 @@ static int g_runaway = 0;
 static unsigned long long g_runaway_pc = 0;
 static unsigned long long g_seen = 0;
 static int g_budget_hit = 0;
+static int g_time_hit = 0;
+static unsigned long long g_deadline_ms = 0;
 
 #define ADH_QTRACE_BUDGET 200000
+// Wall-clock bound. The instruction budget bounds the WORK, not the TIME: a synchronous interpreter
+// under QBDI was measured holding the command channel for the full 60 s client timeout with the budget
+// never reached, which the caller can only read as "timed out" - it cannot tell "still running" from
+// "hung". A time bound turns that into a reported verdict instead of a mystery.
+#define ADH_QTRACE_TIME_MS 4000
+
+static unsigned long long monotonic_ms(void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0;
+    return (unsigned long long)ts.tv_sec * 1000ull + (unsigned long long)(ts.tv_nsec / 1000000);
+}
 
 static void load_exec_ranges(void) {
     free(g_exec);
@@ -101,6 +120,11 @@ static VMAction qbdi_insn_cb(VMInstanceRef vm, GPRState *gpr, FPRState *fpr, voi
     (void)gpr; (void)fpr; (void)data;
     if (++g_seen > ADH_QTRACE_BUDGET) {
         g_budget_hit = 1;
+        return QBDI_STOP;
+    }
+    // Checked every 256 instructions: clock_gettime per instruction would dominate the trace itself.
+    if ((g_seen & 0xff) == 0 && g_deadline_ms && monotonic_ms() >= g_deadline_ms) {
+        g_time_hit = 1;
         return QBDI_STOP;
     }
     const InstAnalysis *a = NULL;
@@ -157,6 +181,8 @@ int adh_qbdi_trace(void *func, const unsigned long long *args, int argc, char *o
     g_runaway_pc = 0;
     g_seen = 0;
     g_budget_hit = 0;
+    g_time_hit = 0;
+    g_deadline_ms = monotonic_ms() + ADH_QTRACE_TIME_MS;
     load_exec_ranges();
     void *h = dlopen("libQBDI.so", RTLD_NOW);
     if (!h) { snprintf(out, outsz, "\"ok\":false,\"error\":\"libQBDI.so not available (dlopen)\""); return -1; }
@@ -225,14 +251,16 @@ int adh_qbdi_trace(void *func, const unsigned long long *args, int argc, char *o
     int truncated = g_qtrace_capped || fits < n ? 1 : 0;
     // A stopped run has no trustworthy return value: say so instead of handing back whatever x0 held
     // when the VM was halted. `stopReason` is the fact the caller acts on.
-    const char *stop_reason = g_runaway ? "ran-away" : (g_budget_hit ? "instruction-budget" : "completed");
-    int retval_valid = !g_runaway && !g_budget_hit;
+    const char *stop_reason = g_runaway ? "ran-away"
+                             : g_time_hit ? "time-budget"
+                             : g_budget_hit ? "instruction-budget" : "completed";
+    int retval_valid = !g_runaway && !g_budget_hit && !g_time_hit;
     int o = snprintf(out, outsz,
                      "\"ok\":true,\"retval\":%llu,\"retvalValid\":%s,\"stopReason\":\"%s\","
-                     "\"stopPc\":\"0x%llx\",\"budget\":%d,\"execRanges\":%d,"
+                     "\"stopPc\":\"0x%llx\",\"budget\":%d,\"timeBudgetMs\":%d,\"execRanges\":%d,"
                      "\"count\":%d,\"seen\":%d,\"cap\":%d,\"truncated\":%s,\"insns\":[",
                      (unsigned long long)ret, retval_valid ? "true" : "false", stop_reason,
-                     g_runaway_pc, ADH_QTRACE_BUDGET, g_exec_n,
+                     g_runaway_pc, ADH_QTRACE_BUDGET, ADH_QTRACE_TIME_MS, g_exec_n,
                      fits, n, QTRACE_MAX, truncated ? "true" : "false");
     if (o < 0 || o >= outsz) {
         snprintf(out, (size_t)(outsz > 0 ? outsz : 0), "\"ok\":false,\"error\":\"trace reply buffer too small for the header\"");

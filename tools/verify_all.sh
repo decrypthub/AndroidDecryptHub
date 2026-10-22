@@ -242,6 +242,10 @@ SCRIPTS=(
   # v114: window-chained dereference ("@x0:8,@#1+0:8"): the second hop follows a pointer that an earlier
   # window already copied, which is the shape of a formatter descriptor -> argument vector -> value.
   "verify_v114_window_chain.sh:device"
+  # v115: the tracer must bound TIME, not only instruction count. A synchronous interpreter was measured
+  # holding the command channel for the full 60 s client timeout with the instruction budget never
+  # reached, which the caller can only read as "timed out".
+  "verify_v115_trace_time_budget.sh:device"
 )
 
 pass=0; fail=0; skip=0; FAILED=""

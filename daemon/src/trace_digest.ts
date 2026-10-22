@@ -281,9 +281,11 @@ export interface TraceDigestResult {
    * description of the whole function; the other two mean the digest covers a prefix and the return
    * value is whatever the register happened to hold when the VM was halted.
    */
-  stopReason: 'completed' | 'instruction-budget' | 'ran-away' | 'unknown';
+  stopReason: 'completed' | 'instruction-budget' | 'time-budget' | 'ran-away' | 'unknown';
   /** The address the run tried to execute when it was stopped for being outside any exec mapping. */
   stopPc: string | null;
+  /** The wall-clock bound the run was given (ms). An instruction budget bounds work, not time. */
+  timeBudgetMs: number | null;
   /** false when the run was stopped by a guard (retval is then not a return value). */
   retvalValid: boolean;
   /** Instructions in the digest - always the length of the list that was analysed. */
@@ -347,7 +349,7 @@ export async function traceDigest(session: string, opts: { symLib?: string; symb
   // A guard-stopped run is NOT a short trace: it never reached the end of the function, so the
   // digest, the call counts and the "hottest instruction" ranking all describe a prefix. Say that in
   // the same place a clipped trace is reported, and never hand back `retval` as if it were a return.
-  const RAW_REASONS = ['completed', 'instruction-budget', 'ran-away'] as const;
+  const RAW_REASONS = ['completed', 'instruction-budget', 'time-budget', 'ran-away'] as const;
   const stopReason = (RAW_REASONS as readonly string[]).includes(String(raw.stopReason))
     ? (String(raw.stopReason) as TraceDigestResult['stopReason'])
     : 'unknown';
@@ -359,6 +361,9 @@ export async function traceDigest(session: string, opts: { symLib?: string; symb
       + 'The target was protected from a SIGBUS; the digest below covers the instructions before the jump only');
   } else if (stopReason === 'instruction-budget') {
     digest.notes.push(`trace stopped at the ${raw.budget ?? 'agent'} instruction budget - the function did not finish, the digest covers the prefix`);
+  } else if (stopReason === 'time-budget') {
+    digest.notes.push(`trace stopped at the ${raw.timeBudgetMs ?? 'agent'} ms wall-clock bound - the function did not finish within that time, `
+      + 'the digest covers the prefix (an instruction budget bounds work, not time)');
   } else if (stopReason === 'unknown') {
     digest.notes.push('the agent did not report why the run ended (older build?): treat the digest as a prefix');
   }
@@ -366,6 +371,7 @@ export async function traceDigest(session: string, opts: { symLib?: string; symb
     retval: raw.retval != null ? `0x${BigInt(raw.retval).toString(16)}` : null,
     stopReason,
     stopPc: raw.stopPc != null ? String(raw.stopPc) : null,
+    timeBudgetMs: raw.timeBudgetMs != null ? Number(raw.timeBudgetMs) : null,
     retvalValid,
     instructionCount: insns.length,
     seen,
