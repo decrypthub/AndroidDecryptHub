@@ -79,7 +79,11 @@ export function findReferences(
   readU32: (offset: number) => number,
   segments: readonly ElfSegment[],
   targetVa: number,
-  windowBytes = 512,
+  // EXACT by default. A non-zero window makes "near the table" look like "the table": with the old
+  // 512-byte default, a load of the `free` GOT slot at 0x1564a0 was reported as a read of the SHA-256
+  // K table at 0x1562a4, and the function it pointed at (libjdg+0x8c840) turned out to be a
+  // destructor. Callers that really do index past the first element pass a window explicitly.
+  windowBytes = 0,
   scanAhead = 4,
 ): ElfReference[] {
   const out: ElfReference[] = [];
