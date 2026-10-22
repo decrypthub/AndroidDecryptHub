@@ -653,8 +653,10 @@ export function nativeHookIdentity(func: string, hex: string): { hookId?: number
   // A NATIVE_HOOK event is ~900 bytes: the registers come first and `seq` is near the END, so a
   // "just the head" window silently lost the seq while still finding the hookId (caught in
   // verification, not in the unit test that used a 60-byte fixture). 4096 hex characters = 2048
-  // bytes covers every native-hook shape with room to spare, and slicing a hex string is cheap.
-  const head = Buffer.from(hex.slice(0, 4096), 'hex').toString('utf8');
+  // bytes covered every native-hook shape - until the in-hook trace added a sub-object of up to ~3 KB
+  // (32 disassembled instructions + a mnemonic histogram), which pushes `seq` past that window again.
+  // 16384 hex = 8 KB covers the traced shape with room to spare, and slicing a hex string is cheap.
+  const head = Buffer.from(hex.slice(0, 16384), 'hex').toString('utf8');
   const hookId = /\{"hookId":(\d+)/.exec(head)?.[1];
   const seq = /[,{]"seq":(\d+)/.exec(head)?.[1];
   const phase = /"phase":"([a-z]+)"/.exec(head)?.[1];
@@ -883,6 +885,24 @@ export function previewForCapture(func: string, hex: string): string {
   if (func === 'NATIVE_HOOK_MEM') {
     const line = memCapturePreview(Buffer.from(hex, 'hex').toString('utf8'));
     if (line) return line.slice(0, 180);
+  }
+  if (func === 'NATIVE_HOOK') {
+    // A traced event is ~4 KB: the raw-JSON preview would show registers and hide the one thing the
+    // operator asked for. Parsed only when the trace key is actually present.
+    const text = Buffer.from(hex, 'hex').toString('utf8');
+    if (text.includes('"trace":')) {
+      try {
+        const trace = (JSON.parse(text) as { trace?: Record<string, unknown> })?.trace;
+        if (trace && typeof trace === 'object') {
+          const top = Array.isArray(trace.mnemonics) && trace.mnemonics.length
+            ? String((trace.mnemonics[0] as { mnemonic?: unknown })?.mnemonic ?? '')
+            : '';
+          const seen = Number(trace.seen ?? 0);
+          const budget = Number(trace.insns ?? 0);
+          return `trace ${seen}/${budget} 条 · ${String(trace.stopReason ?? '')}${top ? ` · ${top} 最多` : ''}`.slice(0, 180);
+        }
+      } catch { /* fall through to the raw preview */ }
+    }
   }
   return hexToPreview(hex);
 }

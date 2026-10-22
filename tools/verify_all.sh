@@ -246,6 +246,11 @@ SCRIPTS=(
   # holding the command channel for the full 60 s client timeout with the instruction budget never
   # reached, which the caller can only read as "timed out".
   "verify_v115_trace_time_budget.sh:device"
+  # v117: in-hook trace. "Capture the arguments, then trace afterwards" runs into released memory on a
+  # request-scoped target, so the trace has to run AT THE HIT on the target thread. The gate asserts
+  # the trace sub-object travels in the SAME event (first[0] == the hooked entry), that traceInsns:0
+  # adds no key at all, and that the target survives both.
+  "verify_v117_inhook_trace.sh:device"
 )
 
 pass=0; fail=0; skip=0; FAILED=""

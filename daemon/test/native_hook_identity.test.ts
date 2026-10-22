@@ -43,3 +43,23 @@ test('seq is found even when it sits at the end of a full-size register event', 
   assert.ok(event.length > 600, 'fixture must be longer than the old head window');
   assert.deepEqual(nativeHookIdentity('NATIVE_HOOK', hexOf(event)), { hookId: 12, seq: 77 });
 });
+
+test('seq survives an event carrying an in-hook trace, which pushes it past 2 KB', () => {
+  // traceInsns adds up to ~3 KB of instruction text to the SAME record and `seq` still comes after it
+  // (the trace block is appended just before the closing brace). With the old 2048-byte head window
+  // the seq fell outside and the record became unjoinable from its NATIVE_HOOK_MEM twin - the exact
+  // regression v113 fixed, reintroduced by a bigger event.
+  const trace = {
+    insns: 200,
+    seen: 200,
+    stopReason: 'instruction-budget',
+    start: '0x7000123456',
+    stopPc: '0x70001234a0',
+    capped: false,
+    mnemonics: Array.from({ length: 16 }, (_, i) => ({ mnemonic: `m${i}`, count: 120 - i })),
+    first: Array.from({ length: 32 }, (_, i) => `0x700012${i.toString(16).padStart(4, '0')}: ldr x8, [x9, x10, lsl #3] ; step ${i} of run`),
+  };
+  const event = JSON.stringify({ hookId: 5, kind: 'inline', tid: 9, x0: '0x1', trace, seq: 31, memWindows: 1 });
+  assert.ok(event.length > 2048, 'fixture must be longer than the old head window');
+  assert.deepEqual(nativeHookIdentity('NATIVE_HOOK', hexOf(event)), { hookId: 5, seq: 31 });
+});

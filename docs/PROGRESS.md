@@ -3,6 +3,94 @@
 > 这是"我们现在在哪"的唯一真相。每个会话开始先读它，结束前更新它。
 > 详细规格见 `REQUIREMENTS.md`，路线与架构见 `DEVELOPMENT_PLAN.md`。
 
+## 2026-10-22（第四十七轮）—— in-hook trace 交付并上了门禁；JDG 侧拿到真实 trace，b5 的产地仍未定
+
+### 一、能力：`native_hook { traceInsns, traceFrom }`（agent + host + 门禁）
+
+**接口与语义**（`agent/src/trace/qbdi_trace.h` 是唯一规格，含"代价"清单）：
+
+- `traceInsns: N`（0 = 关，默认）→ 命中的 **那一条记录**里多一个 `trace` 子对象，不另发记录；
+  `traceInsns: 0` 时事件里**连键都没有**（"没开 trace" 与 "开了没看到" 必须可分）。
+- `traceFrom: "x0".."x9"|"x29"|"x30"` 用该寄存器里的代码地址当起点；缺省用被钩入口。
+  和 `skipOriginal`/`returnSet` **互斥**（trace 会执行原件，而那两项存在的意义就是不让它跑）。
+- `trace` 字段：`insns/seen/stopReason/start/stopPc/capped/error/mnemonics[{mnemonic,count}]/first["0x…: insn"]`。
+  `stopReason ∈ completed | instruction-budget | time-budget | ran-away | left-range | did-not-run | reentrant`。
+
+**实现里几个不显然的地方（都留了注释）**：
+
+- `adh_qbdi_run_from(pc, gpr, budget, time_ms, summary)` + `_ex(..., instrument_hint)`：
+  gpr 布局 = `x0..x8, x29, x30, x18`；**per-thread VM**（`pthread_getspecific`，析构里 terminateVM+对齐释放），
+  **没有全局锁**；三条守卫（指令预算 / 墙钟 300 ms / exec-range）在同一个回调里。
+- **exec-range 快照改成"不可变 + 原子发布"**：原来每次 trace 都原地 free/rebuild，钩子并发命中时会把
+  数组从另一个线程脚下抽走。现在只在"起始地址不在快照里"时重建，旧快照不释放（代价是"新代码出现"次数级的泄漏）。
+- **起点选择**：sites/got 用被钩入口；**inline 必须从 Dobby trampoline 起跑**——入口是我们自己的分支，
+  QBDI 跟过去就回不到模拟器（第 10 轮在 libjdg 上以 SIGBUS 收场）。同时把 `ctx.target` 所在模块加进
+  instrumented ranges，否则 trampoline 跳回函数体的第一条指令就被判 `left-range`。
+  （第一版把 hint 先交给 `addInstrumentedModuleFromAddr`，它返回 true，于是 trampoline 那一页**从没被加进去**，
+  现象是 `did-not-run`。）
+- **结束条件**：`pc == lr` 在 PREINST 里先停（"函数返回"不能靠 QBDI 自己），加上预算/墙钟/exec-range；
+  都不是的时候报 `left-range`（调用进了没插桩的模块），而不是谎称 `completed`。
+- **重入**：`__thread` 深度计数。被 trace 的函数又调到钩子时，那次命中记 `stopReason:"reentrant"`，
+  绝不在同一个线程上开第二个 run。
+- **mnemonic 用反汇编的第一个 token**（`ldr`），不是 `a->mnemonic`（LLVM 的 `LDRWui`）——而且 QBDI 的
+  反汇编串**以空格开头**，不先 trim 会得到空 mnemonic（第一版就是这样：trace 正常、直方图全空）。
+- host：`normalizeTraceInsns`（0..4096，非数字/负数抛错）/`normalizeTraceFrom`/`nativeTracePayload`
+  （**默认 payload 不含这两个键**，有单测）；`native_look read` 把 trace 合成一行；`state.ts` 的
+  `nativeHookIdentity` 头部窗口 4096 → 16384 hex（带 trace 的事件 ~3 KB，`seq` 会掉出旧窗口）。
+- 单测 330 → **339**（+`native_hook_trace.test.ts` 6 条、identity 1 条、native_look 2 条），`tsc` 0。
+
+**门禁**：`tools/verify_v117_inhook_trace.sh`（device，已注册 `verify_all.sh`）：
+
+- sites 钩 `adh_trace_target` + `traceInsns:32` → 事件有 `trace`，`seen=32`、`stopReason=instruction-budget`、
+  `mnemonics=[ldr×11 add×8 str×6 cmp×3]`、`first[0]` 地址 **== 被钩入口**；
+- inline 钩同一函数 + `traceInsns:32` → 起点是 trampoline（`start != target`），`first[0]` 地址 == `start`，
+  且能看到 `sub sp…` → `ldr x17,#8` → `br x17` 跳回函数体；
+- `traceInsns` 缺省 → 事件**没有** `trace` 键；`traceInsns + skipOriginal` 被拒；
+- 被钩函数返回值两次都还是 30（trace 只观察），目标存活。
+- 回归：`v110`（trace guard）、`v115`（墙钟）、`v10_qbdi`（独立 trace）、`v113`（memAfter seq）、
+  `v107`（mem 窗口）、`v114`（链式窗口）全 PASS —— 说明 `qbdi_trace.c` 的重构没有改变既有行为。
+
+### 二、JDG 侧：oracle + 真实 trace，b5 的产地仍未知
+
+**先说能复用的（下一轮直接抄）**：`Bridge.entry(101, [byte[], "-§§-…", eid, "1.0", e5, uuid, null])`
+用 `java_call {detach:true}` 回放，**在登录页也能签**，5 ms/次；同一输入 b5 恒定、改输入 b5 就变。
+于是"为一条请求等用户点屏幕"这件事过去了：`adhd-data/_verify/who_writes_x3.mjs` 是完整脚本。
+
+**本轮在现场量到的（都有脚本与 JSON，在 `adhd-data/_verify/`）**：
+
+- 每次签名，通用 hex 编码器（`0x98c1c`）被调 **2 次，src 是同一个 arena 槽**：一次 32 字节的 hex 就是
+  `b5`，另一次 32 字节的 hex 就是 `b6`。**b6 也是 64 hex = 32 字节**；`md5(signed JSON)`（现场算的，
+  与哈希驱动自己的输出一致）**不等于** b6 或其任何一半 → 交接文档里 "b6 = md5(JSON)" 在这条路径上不成立，
+  需要按"32 字节渲染值"重新验证（下一轮第一件事）。
+- `0x101da0` 的真实 trace（sites 模式，命中点就地 200 条，`stopReason=instruction-budget`）：
+  `mrs x22, TPIDR_EL0` 取线程私有结构、`ldr x8,[x22,#0x28]`、**`mov x26, x6`**（x6 才是 bank 基址）、
+  `mov x25,w5`、`mov x19,x4`（dst）、`mov x28,x3`（指令记录）、`mov x27,x2`/`mov x24,x1`（两个槽指针）、
+  随后 `ldrh w23,[x3]` / `ldrh w9,[x3,#6]` / `ldrsh w8,[x3,#8]` / `ldrh w20,[x3,#0xa]` 解指令记录，
+  `cmp w23,w0` / `b.lt` 做计数校验。
+- 编码器自己的 trace：`stp` 保存 x19–x26 → `cbz x0/x1` 守卫 → `bfi x23,x20,#1,#63`（2n+1）→
+  `bl 0xafd78`（分配）→ GOT 桩跳转。**是个纯函数**，钩它安全。
+- **QBDI 在真机目标里默认不可用**：`libQBDI.so not available (dlopen)`。需要
+  `push` 到 `/data/local/tmp` → `su cp` 进 app 私有目录（chown 成 app uid、`chcon u:object_r:app_data_file:s0`）
+  → `load_library {path, symbol:"qbdi_initVM"}`。做完这一步 trace 才真的跑起来。
+
+**没解决的**：X（b5 的 32 字节）由**谁**写进那个 arena 槽。本轮排除/定死了这些：
+
+- 不是 md5/sha1/sha256/sha512/sha3-256/ripemd160 的任何"可见材料"整串或其一半（请求行、签名 JSON、
+  JSON 去 b5、b4 原文与 base64 解码、b1..b7、eid、uuid；含两两拼接与 H(H(m)) 一层）。
+- 不是两次 md5（哈希驱动每次签名只被调 2 次，两个 out 都在 `src+0x50`，且都在 X 窗口之外）。
+- 槽里的值在渲染前就在了：`0x101da0` 只是把它读出来交给编码器，**它自己不是写入者**（trace 里没有向
+  `[x1]` 写 32 字节的序列；`x1` 是槽指针，`x4` 是另一个静态缓冲）。
+
+**下一轮的第一步（已定）**：找"生产这个 32 字节"的那条模板指令。可行路径：钩 `0xf65b0`（486 case）不行
+（`br` 跳表，sites 抓不到）；可行的是钩 `0x101da0` 的**上一层** `0xf65f8` 的调用者不可达时，改为
+"给 `0x101da0` 传进来的 x1 `memory_read` 前后对比"：在 `memAfter` 里读 `x1`（已有能力），配合
+`filter` 按 `x1` 值筛选——但 `filter` 只有 8 个寄存器且值必须绝对（arena 每线程不同，脚本里现学现用）。
+
+**一条重要的工具/目标事实（未定因，但可复现）**：给 libjdg **自己的函数**下 inline patch（例如编码器入口）后，
+签名时进程 SIGSEGV 在 `libjdg+0x10404c`（变参蹦床 `0x104000` 里），坏地址像被截断的指针；
+**只装 sites 钩（函数序言不动）时同一操作存活**。倾向"inline patch 触发了它自己的完整性检查"，
+本轮没有证明。**对这个目标一律用 `mode:sites`。**
+
 ## 2026-10-22（第四十六轮）—— 本轮只做状态核对；实现留给下一轮（附起步清单）
 
 工作区干净、`tsc` 0、330 条测试全过、`mem` 窗口已 6、六条 API 就绪（`@` / `@#n` / `memAfter`+seq /

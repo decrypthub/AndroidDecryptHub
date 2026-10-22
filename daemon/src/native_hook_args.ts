@@ -140,6 +140,59 @@ export interface NativeHookInstallOptions {
   argIndex?: number;
   argValue?: string;
   mem?: string;
+  /** In-hook QBDI trace: instructions to run at the hit (0 = off, the default). */
+  traceInsns?: number;
+  /** Register holding the code address to start the run from ("" = the hooked entry). */
+  traceFrom?: string;
+}
+
+// In-hook instruction trace. The ceiling mirrors ADH_QTRACE_INHOOK_MAX in
+// agent/src/trace/qbdi_trace.h: the run happens on the TARGET THREAD inside the hook callback, so the
+// request is bounded before it can become a second way to hang a target. The agent validates again.
+export const NATIVE_TRACE_MAX_INSNS = 4096;
+
+/**
+ * 0/missing = off. Anything else is a whole number of instructions, clamped to the agent's ceiling.
+ * A non-numeric value throws: silently treating a typo as "off" would look exactly like a hook that
+ * was never traced.
+ */
+export function normalizeTraceInsns(value: unknown): number {
+  if (value === undefined || value === null || value === '') return 0;
+  const n = Number(value);
+  if (!Number.isFinite(n) || !Number.isInteger(n)) {
+    throw new Error(`traceInsns must be a whole number of instructions, got ${JSON.stringify(value)}`);
+  }
+  if (n < 0) throw new Error(`traceInsns must be 0 (off) or positive, got ${n}`);
+  return n > NATIVE_TRACE_MAX_INSNS ? NATIVE_TRACE_MAX_INSNS : n;
+}
+
+/**
+ * "" = start at the hooked function's entry. Otherwise a register that holds a code address.
+ * Only registers the hook stub actually saves are usable: x0-x9, x29 (frame pointer), x30 (return
+ * address). Anything else would be read from a slot the stub never wrote.
+ */
+export function normalizeTraceFrom(value: unknown): string {
+  if (value === undefined || value === null || value === '') return '';
+  const text = String(value).trim().toLowerCase();
+  if (!/^x(?:[0-9]|29|30)$/.test(text)) {
+    throw new Error(`traceFrom must be x0..x9, x29 or x30 (a register holding a code address), got ${JSON.stringify(value)}`);
+  }
+  return text;
+}
+
+/**
+ * The trace fields an install may carry. ABSENT when the trace is off - a payload that names
+ * traceInsns:0 would still say "this hook was asked to trace", and the default install has to stay
+ * byte-identical to what it was before the feature existed.
+ */
+export function nativeTracePayload(insns: unknown, from: unknown): Record<string, string | number> {
+  const n = normalizeTraceInsns(insns);
+  const reg = normalizeTraceFrom(from);
+  if (n <= 0) {
+    if (reg) throw new Error('traceFrom needs traceInsns (nothing would read that register)');
+    return {};
+  }
+  return reg ? { traceInsns: n, traceFrom: reg } : { traceInsns: n };
 }
 
 /** The exact agent command payload for one address-mode inline hook. */
@@ -157,5 +210,6 @@ export function nativeHookInstallPayload(opts: NativeHookInstallOptions): Record
     argIndex: Number(opts.argIndex ?? -1),
     argValue: opts.argValue ?? '',
     mem: parseMemWindows(opts.mem).spec,
+    ...nativeTracePayload(opts.traceInsns, opts.traceFrom),
   };
 }

@@ -472,6 +472,45 @@ key 未知，但候选被精确排除（KSA 确定性：比 256 位全等）：`
 
 **这一轮最该记住的**：崩溃归因必须先做**对照组**（同地址、无补丁）。否则会把自己工具留下的状态写成"目标的特性"，然后基于错误结论去设计防护——第一版方案（"拒绝这类加固模块"）就是错的，真正的规则是"**别 trace 自己插过桩的地址**"。
 
+### 第十三轮：in-hook trace 交付，第一次在真目标里读到解释器内部
+
+第十轮之后 `trace` 仍然是"从函数入口起跑、事后执行"，而这条目标的关键状态是**请求作用域**的：
+先抓参数、事后再 trace，trace 真正跑起来时那块内存已经释放（第 4/5 轮反复踩到）。所以这一轮把
+trace 搬进**钩子回调**：`native_hook { traceInsns, traceFrom }`，命中点就地跑 N 条，summary 写进
+**同一条事件记录**的 `trace` 子对象（不另发记录——`memAfter` 的教训是"多一条记录就多一种配错"）。
+
+实现上的四件事（细节见 `PROGRESS.md` 第四十七轮）：per-thread VM（`pthread_getspecific`，**没有全局锁**）；
+三条守卫（指令预算 / 300 ms 墙钟 / exec-range）；**inline 钩必须从 Dobby trampoline 起跑**（入口是我们
+自己的分支，第十轮就是这么死的），并把函数所在模块一起加进插桩范围；`pc == lr` 在 PREINST 里先停，
+别指望 QBDI 自己收（不是这几个原因时就报 `left-range`，不谎称 `completed`）。
+
+**验收**（`tools/verify_v117_inhook_trace.sh`，已进 `verify_all.sh`）：sites 钩 `traceInsns:32` → 事件里
+`seen=32`、`stopReason=instruction-budget`、`mnemonics=[ldr×11 add×8 str×6 cmp×3]`、`first[0]` 地址
+**== 被钩入口**；inline 钩同一函数 → 起点是 trampoline 且能看到 `sub sp…` → `ldr x17,#8` → `br x17`
+跳回函数体；`traceInsns` 缺省 → 事件里**没有** `trace` 键；`traceInsns + skipOriginal` 被拒；
+两次调用返回值不变、目标存活。
+
+**在京东上用它读到了什么**（`libjdg` 无符号、混淆）：
+
+- `0x101da0`（486 号 hex 渲染指令调用的子解释器）入口 24 条：`mrs x22,TPIDR_EL0` 取线程私有结构、
+  **`mov x26, x6`**（bank 基址是第 7 个参数）、`mov x28,x3`（10 字节指令记录）、`mov x19,x4`（dst）、
+  `mov x27,x2`/`mov x24,x1`（两个槽指针），随后 `ldrh/ldrsh` 逐字段解指令记录、`cmp w23,w0` 校验计数。
+- `0x98c1c`（通用 hex 编码器）是**纯函数**：`bfi` 算 `2n+1` → `bl` 分配 → GOT 桩跳转；钩它安全。
+- **每次签名编码器被调两次、src 同一个 arena 槽**：一次 32 字节 = `b5` 的 X，一次 32 字节 = `b6`。
+  `b6` 也是 64 hex / 32 字节，而现场算出的 `md5(签名 JSON)` **不是**它 —— 第九轮"b6 = md5(JSON)"
+  的结论在这条路径上需要复核。
+- X（b5 的 32 字节）**不是** md5/sha1/sha256/sha512/sha3-256/ripemd160 的任何"可见材料"整串或一半
+  （请求行、签名 JSON、b4、b1..b7、eid、uuid，含两两拼接与 H(H(m))，共 1360 组）。产地仍未定，
+  所以 **b5 复现器这一轮没有交付**。
+
+**这一例暴露的工具事实**（都写进了交接文档）：① 真机目标默认**没有** `libQBDI.so`，必须先 push 到
+App 私有目录（chown/chcon）+ `load_library`，否则钩子里的 trace 只会回
+`did-not-run: libQBDI.so not available (dlopen)`；② 给 libjdg **自己的函数**下 inline patch 后签名，
+进程会 SIGSEGV 在 `libjdg+0x10404c`（变参蹦床里），只装 sites 钩时同一操作存活——疑为它自己的
+完整性检查，**对这个目标一律用 `mode:sites`**；③ `live_captures` 能看到什么取决于 daemon 的 drain
+循环是否已经 arm（hello 之后异步 arm），启动瞬间读会看到空 store，别读成"功能坏了"。
+
+
 
 
 

@@ -488,7 +488,7 @@ static void cmd_native_hook(int fd, const char *id, const char *action, const ch
                             const char *sites_scope, int allow_writable_slots, int want_backtrace,
                             int throttle_ms, const char *mem_spec, int write_reg, int write_off,
                             const char *write_hex, int set_errno, const char *after_spec,
-                            const char *filter_spec) {
+                            const char *filter_spec, int trace_insns, const char *trace_from) {
     char idj[64];
     json_escape(id, idj, sizeof(idj));
     char error[512] = "";
@@ -500,6 +500,7 @@ static void cmd_native_hook(int fd, const char *id, const char *action, const ch
                                     (uint64_t)strtoull(arg_value, NULL, 0), max_sites, sites_scope,
                                     allow_writable_slots, want_backtrace, throttle_ms, mem_spec,
                                     write_reg, write_off, write_hex, set_errno, after_spec, filter_spec,
+                                    trace_insns, trace_from,
                                     &new_id, error, sizeof(error));
     } else if (strcmp(action, "unhook") == 0) {
         ok = adh_native_hook_unhook((int)requested_id, hard, error, sizeof(error));
@@ -764,11 +765,17 @@ static void command_loop(int fd) {
                     long long nwreg = json_get_num(line, "writeReg");
                     long long nwoff = json_get_num(line, "writeOff");
                     long long nerrno = json_get_num(line, "errno");
+                    // In-hook trace (v117): 0/absent = off, so an old daemon's payload installs
+                    // exactly as before. The install validates the range and the register name.
+                    long long ntrinsns = json_get_num(line, "traceInsns");
+                    char ntrfrom[8] = "";
+                    json_get_str(line, "traceFrom", ntrfrom, sizeof(ntrfrom));
                     cmd_native_hook(fd, id, naction, nmode, nmodule, nsymbol, naddr, nskip_original,
                                     nreturn, nargindex, nargvalue, nid, nhard_flag, nsites_flag,
                                     nscope, slots_writable_flag, backtrace_flag, nthrottle_ms,
                                     nmem, (int)nwreg, (int)(nwoff > 0 ? nwoff : 0), nwritehex,
-                                    (int)(nerrno > 0 ? nerrno : 0), nafter, nfilter);
+                                    (int)(nerrno > 0 ? nerrno : 0), nafter, nfilter,
+                                    (int)(ntrinsns > 0 ? ntrinsns : 0), ntrfrom);
                 } else if (strcmp(op, "native_call") == 0) {
                     char cmodule[128] = "", csymbol[160] = "", caddr[32] = "", cargs[256] = "";
                     json_get_str(line, "module", cmodule, sizeof(cmodule));

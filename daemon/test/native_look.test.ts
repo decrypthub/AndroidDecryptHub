@@ -69,3 +69,31 @@ test('auto that copied two pointers says the extra window is another argument', 
   assert.match(look.note, /别的参数寄存器/);
   assert.equal(look.windows.length, 2);
 });
+
+test('an in-hook trace comes back with the hit, on the same line', () => {
+  const look = joinNativeLook([{
+    func: 'NATIVE_HOOK',
+    hex: hexOf({
+      hookId: 7, seq: 3, x0: '0x1000', memWindows: 1,
+      trace: {
+        insns: 32, seen: 32, stopReason: 'instruction-budget',
+        start: '0x70001000', stopPc: '0x70001040', capped: false,
+        mnemonics: [{ mnemonic: 'ldr', count: 12 }, { mnemonic: 'add', count: 7 }],
+        first: ['0x70001000: ldr x0, [x1, #8]'],
+      },
+    }),
+    id: 1,
+  }], 7);
+  assert.equal(look.hit, true);
+  assert.ok(look.trace);
+  assert.equal(look.trace?.seen, 32);
+  assert.equal(look.trace?.stopReason, 'instruction-budget');
+  assert.match(look.text, /就地 trace 32\/32 条/);
+  assert.match(look.text, /ldr×12/);
+});
+
+test('a hook without a trace reports no trace rather than an empty one', () => {
+  const look = joinNativeLook([{ func: 'NATIVE_HOOK', hex: hook(1), id: 1 }], 7);
+  assert.equal(look.trace, null);
+  assert.doesNotMatch(look.text, /就地 trace/);
+});

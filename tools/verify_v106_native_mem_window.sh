@@ -61,8 +61,18 @@ for (const [i, name] of want.entries()) {
   if (a == null || b == null) problems.push(`cap ${name}: could not read both sides (header ${a}, daemon ${b})`);
   else if (a !== b) problems.push(`cap ${name}: header ${a} != daemon ${b} (host would accept what the agent clamps)`);
 }
-if (num(header, 'ADH_MEM_WIN_MAX') * num(header, 'ADH_MEM_WIN_LEN') !== num(header, 'ADH_MEM_WIN_TOTAL')) {
-  problems.push('mem caps: WIN_MAX * WIN_LEN must equal WIN_TOTAL, otherwise the total guard can never fire');
+// The binding guard is the TOTAL, and it can only fire if at least one full window fits: MAX*LEN >= TOTAL.
+// This was an EQUALITY until the window count went 4 -> 6 (6 x 1024 = 6144 > 4096 is the intended state:
+// a formatter descriptor needs six pointers and the 4 KB total is what actually stops a caller). The
+// equality assertion was the very thing its own comment warned about - "it went red the moment they were
+// raised, while the thing it was meant to protect was still fine".
+const winMax = num(header, 'ADH_MEM_WIN_MAX');
+const winLen = num(header, 'ADH_MEM_WIN_LEN');
+const winTotal = num(header, 'ADH_MEM_WIN_TOTAL');
+if (winMax == null || winLen == null || winTotal == null) {
+  problems.push('mem caps: could not read ADH_MEM_WIN_{MAX,LEN,TOTAL} from the agent header');
+} else if (winMax * winLen < winTotal) {
+  problems.push(`mem caps: WIN_MAX*WIN_LEN (${winMax * winLen}) < WIN_TOTAL (${winTotal}) - one window cannot even fill the total budget`);
 }
 if (problems.length) {
   console.log(problems.join('\n'));

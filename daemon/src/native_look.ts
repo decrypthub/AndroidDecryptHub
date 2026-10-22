@@ -6,7 +6,7 @@
 import { captures as stateCaptures } from './state.ts';
 import { agentCmd, pickSid } from './service.ts';
 import { drainSession as serviceDrainSession } from './service.ts';
-import { memCapturePreview, parseMemWindows } from './native_hook_args.ts';
+import { memCapturePreview, nativeTracePayload, parseMemWindows } from './native_hook_args.ts';
 
 export interface LookRecord {
   func: string;
@@ -24,6 +24,20 @@ export interface NativeLookWindow {
   error: string;
 }
 
+export interface NativeLookTrace {
+  /** The instruction budget that was asked for. */
+  insns: number;
+  /** Instructions actually executed under QBDI. */
+  seen: number;
+  stopReason: string;
+  start: string;
+  stopPc: string;
+  capped: boolean;
+  error?: string;
+  mnemonics: Array<{ mnemonic: string; count: number }>;
+  first: string[];
+}
+
 export interface NativeLook {
   hit: boolean;
   hookId: number;
@@ -33,6 +47,8 @@ export interface NativeLook {
   windows: NativeLookWindow[];
   regs: Record<string, string>;
   note: string;
+  /** In-hook trace of this hit, when the hook was installed with traceInsns. Null otherwise. */
+  trace: NativeLookTrace | null;
 }
 
 interface MemEvent {
@@ -45,7 +61,15 @@ interface MemEvent {
 interface HookEvent {
   seq: number | null;
   regs: Record<string, string>;
+  trace: NativeLookTrace | null;
   order: number;
+}
+
+/** One readable line for an in-hook trace: how much ran, why it stopped, and what dominated. */
+export function traceLine(t: NativeLookTrace): string {
+  const top = (t.mnemonics ?? []).slice(0, 3).map((m) => `${m.mnemonic}×${m.count}`).join(' ');
+  const why = t.error ? ` · ${t.error}` : '';
+  return `就地 trace ${t.seen}/${t.insns} 条 · ${t.stopReason}${top ? ` · 主要指令 ${top}` : ''}${why}`;
 }
 
 export function decodeCaptureJson(hex: string): Record<string, unknown> | null {
@@ -79,10 +103,31 @@ function regsOf(event: Record<string, unknown>): Record<string, string> {
   return regs;
 }
 
+/** The optional in-hook trace sub-object of a NATIVE_HOOK event (absent unless the hook asked). */
+function traceOf(event: Record<string, unknown>): NativeLookTrace | null {
+  const raw = event.trace;
+  if (!raw || typeof raw !== 'object') return null;
+  const t = raw as Record<string, unknown>;
+  return {
+    insns: Number(t.insns ?? 0),
+    seen: Number(t.seen ?? 0),
+    stopReason: String(t.stopReason ?? ''),
+    start: String(t.start ?? ''),
+    stopPc: String(t.stopPc ?? ''),
+    capped: t.capped === true,
+    ...(typeof t.error === 'string' && t.error ? { error: t.error } : {}),
+    mnemonics: Array.isArray(t.mnemonics)
+      ? (t.mnemonics as Array<{ mnemonic?: unknown; count?: unknown }>)
+        .map((m) => ({ mnemonic: String(m?.mnemonic ?? '?'), count: Number(m?.count ?? 0) }))
+      : [],
+    first: Array.isArray(t.first) ? (t.first as unknown[]).map((s) => String(s)) : [],
+  };
+}
+
 /** Latest hit for one hook. Memory and registers that share a seq are one result. */
 export function joinNativeLook(records: LookRecord[], hookId: number): NativeLook {
   const empty: NativeLook = {
-    hit: false, hookId, seq: null, text: '还没有命中。在手机上做那一步之后再读一次。', windows: [], regs: {}, note: '',
+    hit: false, hookId, seq: null, text: '还没有命中。在手机上做那一步之后再读一次。', windows: [], regs: {}, note: '', trace: null,
   };
   const mems: MemEvent[] = [];
   const hooks: HookEvent[] = [];
@@ -98,7 +143,7 @@ export function joinNativeLook(records: LookRecord[], hookId: number): NativeLoo
         order,
       });
     } else if (record.func === 'NATIVE_HOOK') {
-      hooks.push({ seq: event.seq === undefined ? null : Number(event.seq), regs: regsOf(event), order });
+      hooks.push({ seq: event.seq === undefined ? null : Number(event.seq), regs: regsOf(event), trace: traceOf(event), order });
     }
   });
   if (!mems.length && !hooks.length) return empty;
@@ -110,9 +155,11 @@ export function joinNativeLook(records: LookRecord[], hookId: number): NativeLoo
     ? hooks.filter((h) => h.seq === mem.seq).pop() ?? hooks[hooks.length - 1]
     : hooks[hooks.length - 1];
   const windows = (mem?.mem ?? []).map(windowOf);
-  const text = mem
+  const base = mem
     ? (memCapturePreview(JSON.stringify({ auto: mem.auto, mem: mem.mem })) || '这次命中没有抄到可读的内存。')
     : '命中了，这次没有抄到内存。';
+  const trace = hook?.trace ?? null;
+  const text = trace ? `${base} | ${traceLine(trace)}` : base;
   const note = mem?.auto && windows.length > 1 ? '多出来的窗口是当时别的参数寄存器也指向一块能读的内存。' : '';
   return {
     hit: true,
@@ -122,6 +169,7 @@ export function joinNativeLook(records: LookRecord[], hookId: number): NativeLoo
     windows,
     regs: hook?.regs ?? {},
     note,
+    trace,
   };
 }
 
@@ -139,7 +187,7 @@ const defaultDeps: NativeLookDeps = {
 
 export async function nativeLookArm(
   session: string,
-  opts: { mode?: string; module?: string; symbol?: string; addr?: string; mem?: string; backtrace?: boolean },
+  opts: { mode?: string; module?: string; symbol?: string; addr?: string; mem?: string; backtrace?: boolean; traceInsns?: number; traceFrom?: string },
   deps: NativeLookDeps = defaultDeps,
 ): Promise<{ action: 'arm'; ok: true; hookId: number; mem: string; target: string; text: string }> {
   const sid = pickSid(session) ?? session;
@@ -163,6 +211,7 @@ export async function nativeLookArm(
     backtrace: opts.backtrace === false ? 'false' : 'true',
     throttleMs: 0,
     mem,
+    ...nativeTracePayload(opts.traceInsns, opts.traceFrom),
   }, 20_000);
   if (!installed?.ok) throw new Error(installed?.error ?? 'native hook install failed');
   const hookId = Number(installed.hookId);

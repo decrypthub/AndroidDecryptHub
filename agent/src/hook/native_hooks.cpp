@@ -8,6 +8,7 @@
 #include "site_hooks.h"
 #include "slot_hooks.h"
 #include "../capture/capture.h"
+#include "../trace/qbdi_trace.h"
 
 #include <android/log.h>
 #include <atomic>
@@ -105,6 +106,13 @@ struct NativeHookContext {
     // ("EACCES") and some of them branch on it. Set on the hit thread on every hit; meaningful with
     // skipOriginal:true, because a running original overwrites errno with its own result.
     int errno_set;               // 0 = off, otherwise the value written to *__errno_location()
+    // In-hook instruction trace (opt-in). trace_insns is the instruction budget per emitted event;
+    // trace_from_reg is -1 (= start at the hooked entry) or the STUB's saved-register index of the
+    // register holding the code address to start from (x0-x9 -> 0-9, x29 -> 10, x30 -> 11).
+    // Published before active=1, read with a relaxed load on the hit thread.
+    int trace_insns;
+    int trace_from_reg;
+    char trace_from[ADH_TRACE_FROM_MAX];
     int patched;             // inline stub remains installed (soft unhook / reactivation)
     unsigned char prologue[24];   // original bytes captured before the inline patch
     int prologue_len;             // 0 when not captured / not an inline hook
@@ -220,6 +228,35 @@ static size_t adh_json_append(char *out, size_t cap, size_t off, const char *for
     if (n < 0) return cap;
     size_t next = off + (size_t)n;
     return next < cap ? next : cap;
+}
+
+// Event JSON budget for the optional trace sub-object: 32 first instructions at up to 48 characters,
+// 16 mnemonic counters and the header come to ~3 KB worst case. The register object is ~1 KB, so the
+// event buffer below is sized as 3072 + this.
+#define ADH_TRACE_JSON_MAX 3584
+
+// `traceFrom` ("x0".."x9", "x29", "x30") -> the index of that register in the stub's saved bank.
+// The stub saves x0-x9 at regs[0..9], x29 at regs[10], x30 at regs[11] and x18 at regs[12]; nothing
+// else is saved, so a request for another register is refused instead of reading a stale slot.
+// Returns -1 for "not given", -2 for a bad name.
+static int trace_from_stub_index(const char *spec, char *canon, size_t canon_size) {
+    if (!spec || !spec[0]) return -1;
+    const char *p = spec;
+    while (*p == ' ') p++;
+    if (*p != 'x') return -2;
+    p++;
+    char *end = nullptr;
+    long n = strtol(p, &end, 10);
+    if (end == p) return -2;
+    while (*end == ' ') end++;
+    if (*end) return -2;
+    int idx;
+    if (n >= 0 && n <= 9) idx = (int)n;
+    else if (n == 29) idx = 10;
+    else if (n == 30) idx = 11;
+    else return -2;
+    if (canon && canon_size) snprintf(canon, canon_size, "x%ld", n);
+    return idx;
 }
 
 // One `x<reg>[+<off>]:<len>` window. `mem` (up to four), the single post-call `memAfter` window and
@@ -553,6 +590,10 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id, uint64_t
     // pointer and the return address AT THE HIT, i.e. exactly what a caller backtrace needs (the
     // host walks the x29 chain by reading the stack; see daemon/src/backtrace.ts).
     uint64_t in29 = regs[10], in30 = regs[11];
+    // The stub's saved bank, indexed the way `traceFrom` names registers: 0-9 = x0-x9, 10 = x29,
+    // 11 = x30. Kept here (not inside the window block) because the in-hook trace needs it too.
+    uint64_t in9 = regs[9];
+    const uint64_t saved_regs[12] = { in0, in1, in2, in3, in4, in5, in6, in7, in8, in9, in29, in30 };
     int arg_index = __atomic_load_n(&ctx.arg_index, __ATOMIC_RELAXED);
     uint64_t arg_value = __atomic_load_n(&ctx.arg_value, __ATOMIC_RELAXED);
     int return_set = __atomic_load_n(&ctx.return_set, __ATOMIC_RELAXED);
@@ -732,7 +773,9 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id, uint64_t
     for (int i = 0; i < 8 && !fp_any; i++) {
         if (regs[16 + i * 2] || regs[17 + i * 2]) fp_any = 1;
     }
-    char json[3072];
+    // The register object is bounded (~1 KB), the optional trace sub-object is the largest thing that
+    // can follow it, and the two must fit in ONE record (see the trace block below).
+    char json[3072 + ADH_TRACE_JSON_MAX];
     size_t joff = 0;
     joff = adh_json_append(json, sizeof(json), joff,
                            "{\"hookId\":%d,\"kind\":\"%s\",\"tid\":%d,\"throttleMs\":%d,\"throttled\":%llu,"
@@ -805,11 +848,65 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id, uint64_t
         joff = adh_json_append(json, sizeof(json), joff, ",\"errnoSet\":%d", errno_want);
     }
     if (mem_asked) {
-        joff = adh_json_append(json, sizeof(json), joff, ",\"seq\":%llu,\"memWindows\":%d}",
+        joff = adh_json_append(json, sizeof(json), joff, ",\"seq\":%llu,\"memWindows\":%d",
                                mem_seq, mem_nwin);
-    } else {
-        joff = adh_json_append(json, sizeof(json), joff, "}");
     }
+    // In-hook instruction trace. It runs HERE - after the hit-time copies above (so the bytes and the
+    // registers describe the moment the hook fired) and before the record is pushed - and its summary
+    // goes into THIS record, not a companion one: a companion would need a seq to be joinable, and
+    // (hookId, seq) pairing is where the memAfter work already went wrong once.
+    //
+    // The run happens on the target thread and executes the traced function, so the three guards in
+    // qbdi_trace.c (instruction budget / wall clock / exec range) are what keep a pathological
+    // function from taking the target down. traceInsns == 0 is the default and adds nothing at all -
+    // not even an empty key, so "not traced" is distinguishable from "traced, nothing seen".
+    const int trace_insns = __atomic_load_n(&ctx.trace_insns, __ATOMIC_RELAXED);
+    if (trace_insns > 0) {
+        char trace_json[ADH_TRACE_JSON_MAX];
+        uint64_t hint = (uint64_t)(uintptr_t)ctx.target;
+        uint64_t tpc = hint;
+        const int from_reg = __atomic_load_n(&ctx.trace_from_reg, __ATOMIC_RELAXED);
+        if (from_reg >= 0 && from_reg < (int)(sizeof(saved_regs) / sizeof(saved_regs[0]))) {
+            tpc = saved_regs[from_reg];
+        } else if (ctx.mode == 1 && __atomic_load_n(&ctx.patched, __ATOMIC_RELAXED) && ctx.original) {
+            // An inline hook's entry carries OUR branch. QBDI follows it into Dobby's trampoline and
+            // never comes back to the emulator (measured on libjdg: the run ended at pc=0x2a and the
+            // target died with SIGBUS). The trampoline holds the relocated ORIGINAL prologue and
+            // branches back into the function, so starting there traces the function's real body -
+            // it is also exactly what the stub calls for the real invocation.
+            tpc = (uint64_t)(uintptr_t)ctx.original;
+        }
+        qbdi_summary_t sum;
+        // gpr layout expected by adh_qbdi_run_from: x0-x8, x29, x30, x18.
+        const uint64_t tgpr[12] = { in0, in1, in2, in3, in4, in5, in6, in7, in8, in29, in30, in18 };
+        int patched_id = 0, patched_active = 0;
+        if (tpc == 0) {
+            adh_qbdi_summary_reset(&sum);
+            sum.insns = trace_insns;
+            sum.stop_reason = "did-not-run";
+            snprintf(sum.error, sizeof(sum.error), "traceFrom register is null");
+        } else if (from_reg >= 0 && adh_native_hook_at(tpc, &patched_id, &patched_active)) {
+            // Same rule as the standalone tracer: a start address that carries one of our patches
+            // sends QBDI into a trampoline it never returns from. Only checked for an explicit
+            // traceFrom (the default path never points at a patched address: an inline hook starts
+            // in the trampoline by construction), because this lookup takes the hook registry lock.
+            adh_qbdi_summary_reset(&sum);
+            sum.insns = trace_insns;
+            sum.start_pc = tpc;
+            sum.stop_reason = "did-not-run";
+            snprintf(sum.error, sizeof(sum.error),
+                     "traceFrom 0x%llx carries our inline patch (hook %d, %s)",
+                     (unsigned long long)tpc, patched_id, patched_active ? "active" : "soft-unhooked");
+        } else {
+            (void)adh_qbdi_run_from_ex(tpc, tgpr, trace_insns, ADH_QTRACE_INHOOK_TIME_MS, hint, &sum);
+        }
+        int tl = adh_qbdi_summary_json(&sum, trace_json, sizeof(trace_json));
+        if (tl > 0) joff = adh_json_append(json, sizeof(json), joff, ",\"trace\":%s", trace_json);
+        else joff = adh_json_append(json, sizeof(json), joff,
+                                    ",\"trace\":{\"insns\":%d,\"seen\":0,\"stopReason\":\"did-not-run\",\"clipped\":true}",
+                                    trace_insns);
+    }
+    joff = adh_json_append(json, sizeof(json), joff, "}");
     if (joff >= sizeof(json)) {
         // A half-written object is not JSON and the daemon cannot parse it, so replace it with a
         // valid event that says the record was truncated instead of pushing a broken line.
@@ -1143,6 +1240,9 @@ static void reset_context(NativeHookContext &ctx) {
     ctx.filter_reg = -1;      // ...nor its hit-time register filter
     ctx.filter_val = 0;
     ctx.filter_spec[0] = 0;
+    ctx.trace_insns = 0;      // ...nor its in-hook trace: a recycled slot must not trace unasked
+    ctx.trace_from_reg = -1;
+    ctx.trace_from[0] = 0;
     ctx.arg_value = 0;
     ctx.patched = 0;
 }
@@ -1162,12 +1262,40 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
                                         int write_reg, int write_off, const char *write_hex,
                                         int set_errno, const char *after_spec,
                                         const char *filter_spec,
+                                        int trace_insns, const char *trace_from,
                                         int *hook_id_out, char *error, size_t error_size) {
     if (hook_id_out) *hook_id_out = 0;
     // Effective (clamped) window: installed state and status must report what was really applied.
     const int effective_throttle_ms = clamp_throttle_ms(throttle_ms);
     if (set_errno < 0 || set_errno > 4095) {
         set_error(error, error_size, "errno must be 0 (off) or 1..4095");
+        return 0;
+    }
+    // In-hook trace, validated BEFORE a slot is reserved like every other option (a typo must not
+    // burn one of the sixteen slots). 0 means off and is the default: no key, no cost.
+    if (trace_insns < 0 || trace_insns > ADH_QTRACE_INHOOK_MAX) {
+        set_error(error, error_size, "traceInsns must be 0 (off) or 1..%d", ADH_QTRACE_INHOOK_MAX);
+        return 0;
+    }
+    int trace_from_reg = -1;
+    char trace_from_canon[ADH_TRACE_FROM_MAX] = "";
+    if (trace_from && trace_from[0]) {
+        if (trace_insns <= 0) {
+            set_error(error, error_size, "traceFrom needs traceInsns (nothing would read that register)");
+            return 0;
+        }
+        trace_from_reg = trace_from_stub_index(trace_from, trace_from_canon, sizeof(trace_from_canon));
+        if (trace_from_reg == -2) {
+            set_error(error, error_size, "traceFrom must be a register holding a code address: x0..x9, x29 or x30");
+            return 0;
+        }
+    }
+    if (trace_insns > 0 && (skip_original || return_set)) {
+        // The tracer EXECUTES the traced function (that is what a trace is). These two options exist
+        // to prevent exactly that, so combining them would silently undo what the caller asked for.
+        set_error(error, error_size,
+                  "traceInsns cannot be combined with skipOriginal/returnSet: the trace runs the "
+                  "original function, which those options are there to prevent");
         return 0;
     }
     // Hit-time register filter: "x2=0x7320abc0" or "x2=4660". Validated BEFORE a slot is reserved, so
@@ -1382,6 +1510,11 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
             old.filter_reg = filter_reg;
             old.filter_val = filter_val;
             copy_cstr(old.filter_spec, sizeof(old.filter_spec), filter_canon);
+            // The trace request belongs to this install too: reactivating an old target with a new
+            // traceInsns must not keep tracing (or stop tracing) because of the previous run.
+            old.trace_insns = trace_insns;
+            old.trace_from_reg = trace_from_reg;
+            copy_cstr(old.trace_from, sizeof(old.trace_from), trace_from_canon);
             old.arg_value = arg_value;
             // Reactivating a soft-unhooked target is a new hook for the operator: start its window
             // and its suppressed-hit counters from zero instead of inheriting the old run.
@@ -1510,6 +1643,9 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
     ctx.filter_reg = filter_reg;
     ctx.filter_val = filter_val;
     copy_cstr(ctx.filter_spec, sizeof(ctx.filter_spec), filter_canon);
+    ctx.trace_insns = trace_insns;
+    ctx.trace_from_reg = trace_from_reg;
+    copy_cstr(ctx.trace_from, sizeof(ctx.trace_from), trace_from_canon);
     memset(ctx.mem_win, 0, sizeof(ctx.mem_win));
     for (int w = 0; w < mem_nwin; w++) {
         ctx.mem_win[w].reg = mem_regs[w];
@@ -1751,7 +1887,8 @@ extern "C" int adh_native_hook_status_json(char *out, size_t out_size) {
                 snprintf(item, sizeof(item),
                          "%s{\"id\":%d,\"mode\":\"%s\",\"module\":\"%s\",\"symbol\":\"%s\","
                          "\"address\":\"0x%llx\",\"target\":\"0x%llx\",\"patched\":%s,"
-                         "\"mem\":\"%s\",\"memAfter\":\"%s\",\"filter\":\"%s\",\"state\":\"%s\"}",
+                         "\"mem\":\"%s\",\"memAfter\":\"%s\",\"filter\":\"%s\","
+                         "\"traceInsns\":%d,\"traceFrom\":\"%s\",\"state\":\"%s\"}",
                          dormant_count ? "," : "",
                          ctx.id,
                          ctx.mode == 0 ? "got" : (ctx.mode == 1 ? "inline" : (ctx.mode == 2 ? "sites" : "vtable")),
@@ -1760,6 +1897,7 @@ extern "C" int adh_native_hook_status_json(char *out, size_t out_size) {
                          (unsigned long long)(uintptr_t)ctx.target,
                          ctx.patched ? "true" : "false",
                          ctx.mem_spec, ctx.after_spec, ctx.filter_spec,
+                         ctx.trace_insns, ctx.trace_from,
                          ctx.patched ? "soft-unhooked" : "reserved");
                 dormant += item;
                 dormant_count++;
@@ -1815,7 +1953,7 @@ extern "C" int adh_native_hook_status_json(char *out, size_t out_size) {
         snprintf(item, sizeof(item),
                  "{\"id\":%d,\"mode\":\"%s\",\"module\":\"%s\",\"symbol\":\"%s\","
                  "\"address\":\"0x%llx\",\"target\":\"0x%llx\",\"original\":\"0x%llx\","
-                 "\"replacement\":\"0x%llx\",\"hits\":%llu,\"argIndex\":%d,\"argValue\":\"0x%llx\",\"skipOriginal\":%s,\"returnSet\":%s,\"returnValue\":\"0x%llx\",\"backtrace\":%s,\"throttleMs\":%d,\"throttled\":%llu,\"mem\":\"%s\",\"memAfter\":\"%s\",\"afterActive\":%s,\"filter\":\"%s\",\"write\":\"%s\",\"errno\":%d"
+                 "\"replacement\":\"0x%llx\",\"hits\":%llu,\"argIndex\":%d,\"argValue\":\"0x%llx\",\"skipOriginal\":%s,\"returnSet\":%s,\"returnValue\":\"0x%llx\",\"backtrace\":%s,\"throttleMs\":%d,\"throttled\":%llu,\"mem\":\"%s\",\"memAfter\":\"%s\",\"afterActive\":%s,\"filter\":\"%s\",\"write\":\"%s\",\"errno\":%d,\"traceInsns\":%d,\"traceFrom\":\"%s\""
                  ",\"slotsPatched\":%d,\"installedAtMs\":%llu,\"firstHitMs\":%llu,\"verdict\":\"%s\""
                  "%s%s}",
                  ctx.id, ctx.mode == 0 ? "got" : (ctx.mode == 1 ? "inline" : (ctx.mode == 2 ? "sites" : "vtable")), ctx.module, ctx.symbol,
@@ -1826,6 +1964,7 @@ extern "C" int adh_native_hook_status_json(char *out, size_t out_size) {
                  ctx.return_set ? "true" : "false", (unsigned long long)ctx.return_value,
                  ctx.want_backtrace ? "true" : "false", ctx.throttle_ms, throttled, ctx.mem_spec,
                  ctx.after_spec, ctx.after_len > 0 ? "true" : "false", ctx.filter_spec, writebuf, ctx.errno_set,
+                 ctx.trace_insns, ctx.trace_from,
                  slots_patched, (unsigned long long)ctx.installed_at_ms, (unsigned long long)first_hit,
                  verdict, gotbuf, sitebuf);
         hooks += item;

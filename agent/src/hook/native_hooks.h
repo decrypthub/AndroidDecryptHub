@@ -63,6 +63,22 @@ extern "C" {
 // switches that hook to a stub that calls the original, records, and returns its value unchanged.
 #define ADH_MEM_AFTER_MAX 512
 
+// Optional IN-HOOK instruction trace. trace_insns > 0 makes every EMITTED event of this hook carry a
+// "trace" sub-object in the SAME record (no companion record: a second record has to be paired, and
+// pairing by seq is exactly where this went wrong before). trace_insns == 0 is the default and adds
+// NOTHING to the event - a hook nobody asked to trace must not pay for the key, and a caller must be
+// able to tell "not traced" from "traced, nothing seen".
+//
+// The run happens on the target thread at the hit, because that is the only moment the state the
+// hook sees is still live. What it costs is documented in trace/qbdi_trace.h (the function is
+// executed by the emulator, so it runs twice per hit; register arguments are exact, stack-passed ones
+// are not; float arguments are not seeded). trace_from is "x0".."x9" | "x29" | "x30" and names the
+// register holding the CODE address to start from; empty means the hooked function's entry (for an
+// inline hook the run starts in the Dobby trampoline, because the entry carries our own branch).
+// Refused together with skipOriginal/returnSet: the tracer executes the original, which is the thing
+// those two options exist to prevent.
+#define ADH_TRACE_FROM_MAX 4
+
 int adh_native_hook_install(const char *mode, const char *module, const char *symbol,
                             const char *addr, int skip_original, int return_set,
                             uint64_t return_value, int arg_index, uint64_t arg_value,
@@ -70,6 +86,7 @@ int adh_native_hook_install(const char *mode, const char *module, const char *sy
                             int want_backtrace, int throttle_ms, const char *mem_spec,
                             int write_reg, int write_off, const char *write_hex,
                             int set_errno, const char *after_spec, const char *filter_spec,
+                            int trace_insns, const char *trace_from,
                             int *hook_id_out, char *error, size_t error_size);
 // hard=1 destroys the inline patch (DobbyDestroy) after a quiesce window and frees the slot;
 // hard=0 keeps the soft-unhook semantics (stub stays installed but inactive).
