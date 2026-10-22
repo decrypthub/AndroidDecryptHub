@@ -51,6 +51,24 @@ tid 25731: edf787fa82edfe74987cb88e8b98ebe3514eb98a
 2. 给 `+0x98c1c` 补 `memAfter`，用输出判定它到底是不是 hex 编码器（`*out_len == len*2`）；
 3. 若以上都指向"外部/Java 产出"，再回头验 `Bridge.entry` 的 oracle 回放（第八轮已知 `java_call {detach:true}` 3 ms 能拿回完整 jdgs）。
 
+### 四、第 1 步先跑掉了：**参数拼接口味 950 组全否**
+
+服务端签名最常见的是"参数按 key 排序后拼接"，而我此前只试过**原样顺序**，这是个明显的空格。补上：
+
+| 变体（× `sha256`/`md5`/`sha1`/`HMAC-SHA256(key,·)`/`sha256(key‖·)`） | 结果 |
+|---|---|
+| 原样、按 key 排序、值拼接、仅 key、`k=v` 小写化、带 `POST <path>` / 只带 path / 只带 method | 全否 |
+
+共 **950 组 × 19 个不同 b5**。**结论：b5 不是"对可见入参做排序/裁剪/改大小写后的普通摘要"。**
+
+### 五、顺带查到的两件事（有价值，但都不是 b5）
+
+- **`libcrypto.so`（Conscrypt BoringSSL）里的 `SHA256()` 一次性入口确实在签名线程上被调用**，入参以**会话 key 开头**：
+  - 一次是 ASCII 形式 `f9574f60dda83b2634898264e14a82db`（就是 KSA 那边见过的那个 32 字节 ASCII key）；
+  - 另一次是**裸的 20 字节 key** 后接 0。
+  两次的输出（`03a0d711…` / `ee2d7b78…`）**都不等于任何 b5**。所以"有一条 keyed SHA-256 路径"是真的，只是不是 b5 这条；同时它说明**"不走 Java JCA"并不能排除 BoringSSL 的一次性入口**——下一轮找 b5 时这条要一起钩。
+- 进程里除 `libjdg.so` 还有 `libWangyinCryptoLib.so`、`libjdJmaEncryptUtil.so`：b5 由**别的 so** 产出的可能性还没排除。
+
 ## 2026-10-22（第三十四轮）—— 工具打磨收尾 + **b6 破译：它是 jdgs 明文 JSON 的 MD5**
 
 ### 一、工具打磨（P2 全部清掉）
