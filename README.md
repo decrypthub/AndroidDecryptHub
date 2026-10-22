@@ -84,7 +84,10 @@ cd daemon
 node src/cli.ts doctor
 node src/cli.ts target --help
 node src/cli.ts unpack --help
+node src/cli.ts mcp            # MCP 接入命令（claude / codex / vscode / cursor / json）
 ```
+
+要让 AI 客户端用上 ADH，不用手写 JSON：`node src/cli.ts mcp` 会按本机装了哪些客户端，打印一行可以直接粘进终端的接入命令（`--client claude` 只看一条，`--package <包名>` 把端点固定到某个应用）。网页顶栏的 MCP 面板显示的是同一份内容。
 
 ## 各部分怎么分工
 

@@ -23,7 +23,7 @@ verify_chk "capture KEY/IV cards"  'grep -q "function ioKV" <<<"$HTML" && grep -
 verify_chk "wires dump download"   'grep -q "/api/dumps/download" <<<"$HTML" && grep -q "/api/unpack/dump-all" <<<"$HTML"'
 verify_chk "wires mcp"             'grep -q "/mcp" <<<"$HTML"'
 verify_chk "settings + mcp modals"  'grep -q "设置" <<<"$HTML" && grep -q "mcp-shell" <<<"$HTML" && grep -q "set-shell" <<<"$HTML"'
-verify_chk "wechat follow + MCP endpoint" 'grep -q "公众号" <<<"$HTML" && grep -q "mcpEndpoint" <<<"$HTML" && grep -q "wechat-follow.png" <<<"$HTML"'
+verify_chk "wechat follow + MCP install guide" 'grep -q "公众号" <<<"$HTML" && grep -q "mcpGuide" <<<"$HTML" && grep -q "mcpClientCmd" <<<"$HTML" && grep -q "mcpEndpoint" <<<"$HTML" && grep -q "wechat-follow.png" <<<"$HTML"'
 verify_chk "workbench chrome"     'grep -q "process-trigger" <<<"$HTML" && grep -q "block-copy" <<<"$HTML" && grep -q "jumpLatest" <<<"$HTML" && grep -q "dumpAllDex" <<<"$HTML" && grep -q "dumps-rows" <<<"$HTML"'
 # backing endpoints respond (HTTP 200; -F avoids treating [ as a regex)
 verify_chk "/api/captures responds" '[ "$(curl -s -o /dev/null -w %{http_code} "$BASE/api/captures")" = 200 ]'

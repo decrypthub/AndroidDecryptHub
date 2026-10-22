@@ -25,6 +25,9 @@
   `verify_v10_webui.sh` / `verify_v19_settings.sh` 的断言同步到新面板与 `clients`；`tsc` 0；全量单测跑过一次
   （唯一红的是并发会话正在改的 `memory.test.ts`，与本轮无关）。面板另用 headless Chrome 逐态截图核对（claude / JSON / 钉包）。
 - **没有重启用户正在跑的 8088 daemon**（上面有 6 个京东会话）——新路由要重启 `adhd` 才生效，旧 daemon 上页面会明确写"重启后出现"。
+- 顺手发现（**不是本轮引入**）：`v10_webui` 的 4 条旧断言（file browser / one-click dump-all / dump download /
+  workbench chrome）在 HEAD 上本来就红——`dumpAllDex` 和旧 dump 面板已在 937c3c9 随"一键脱壳"改版删除，断言没跟着改。
+  本轮没动它，避免和并发会话正在改的 dump 面板打架；下次动 Web 时一并修。
 
 下一步：重启 `adhd` 后刷新面板，确认显示的命令与 `adh mcp` 输出一致；再用 `adh mcp --client <id>` 真机接一遍 Claude/Codex。
 

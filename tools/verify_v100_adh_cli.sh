@@ -11,7 +11,8 @@
 #
 #  1. the commands work: doctor reports the daemon and the flashed-vs-source version pairing,
 #     target resolves one agent and reports its live facts, unpack dumps and classifies every
-#     DexFile and can write them to disk;
+#     DexFile and can write them to disk, and mcp prints the client install commands the Web panel
+#     shows (that half needs no phone at all, so it also runs on a host-only machine);
 #  2. **every declared flag has an observable effect.** A flag that is accepted and then ignored is
 #     worse than no flag at all: the command exits 0 having done something other than what was
 #     asked, and the operator trusts the result. That exact defect was found in a sibling project's
@@ -86,7 +87,7 @@ chk('the CLI imports nothing from the daemon internals (client only, no drift po
 // ---- 3. help + usage surface -----------------------------------------------------------------
 const help = run(['--help']);
 chk('`adh --help` exits 0 and lists every command',
-  help.code === 0 && ['doctor', 'target', 'unpack'].every((c) => help.out.includes(c)));
+  help.code === 0 && ['doctor', 'target', 'unpack', 'mcp'].every((c) => help.out.includes(c)));
 const cmdHelp = run(['target', '--help']);
 chk('`adh target --help` documents its own flags',
   cmdHelp.code === 0 && cmdHelp.out.includes('--package') && cmdHelp.out.includes('--session'));
@@ -97,6 +98,39 @@ chk('an unknown flag is a usage error (exit 2) naming what is accepted',
 const missingValue = run(['target', '--package']);
 chk('a value-carrying flag with no value is a usage error',
   missingValue.code === 2 && /needs a value/.test(missingValue.err), `exit=${missingValue.code}`);
+
+// ---- 3b. the MCP install guide (`mcp`) — daemon-only, so it is checkable without a phone ------
+// The Web panel renders the SAME payload, so a command that is wrong here is wrong on the page too.
+const ENDPOINT = `http://127.0.0.1:${http}/mcp`;
+const mcpGuide = run(['mcp', '--port', http]);
+chk('`adh mcp` prints a paste-able command for every client and the endpoint it targets',
+  mcpGuide.code === 0 && ['claude', 'codex', 'vscode', 'cursor', 'json'].every((id) => mcpGuide.out.includes(id)) &&
+  mcpGuide.out.includes(ENDPOINT), `exit=${mcpGuide.code} ${mcpGuide.err.trim().slice(0, 160)}`);
+const mcpClaude = run(['mcp', '--port', http, '--client', 'claude']);
+chk('--client is consumed: it prints exactly the one command for that client, nothing else',
+  mcpClaude.code === 0 && mcpClaude.out.trim() === `claude mcp add --transport http --scope user adh ${ENDPOINT}`,
+  `exit=${mcpClaude.code} ${JSON.stringify(mcpClaude.out.trim().slice(0, 160))}`);
+const mcpJson = run(['mcp', '--port', http, '--client', 'json']);
+let mcpJsonDoc = null;
+try { mcpJsonDoc = JSON.parse(mcpJson.out); } catch { /* reported below */ }
+chk('--client json prints a parseable mcpServers document (what a client config needs)',
+  mcpJson.code === 0 && mcpJsonDoc?.mcpServers?.adh?.url === ENDPOINT,
+  `exit=${mcpJson.code} url=${mcpJsonDoc?.mcpServers?.adh?.url ?? 'unparsable'}`);
+const mcpPinned = run(['mcp', '--port', http, '--package', 'com.adh.sandbox', '--client', 'claude']);
+chk('--package is consumed: the endpoint is pinned under the package',
+  mcpPinned.code === 0 && mcpPinned.out.includes(`/com.adh.sandbox/mcp`) && !mcpPinned.out.includes('/mcp?'),
+  `exit=${mcpPinned.code} ${JSON.stringify(mcpPinned.out.trim().slice(0, 160))}`);
+const mcpBadClient = run(['mcp', '--port', http, '--client', 'nope']);
+chk('an unknown client is a usage error (exit 2) listing the accepted ids',
+  mcpBadClient.code === 2 && /accepted: claude, codex, vscode, cursor, json/.test(mcpBadClient.err),
+  `exit=${mcpBadClient.code} ${mcpBadClient.err.trim().slice(0, 160)}`);
+const mcpMachine = run(['mcp', '--port', http, '--json']);
+let mcpCfg = null;
+try { mcpCfg = JSON.parse(mcpMachine.out); } catch { /* reported below */ }
+chk('--json exposes the same payload the Web panel receives (5 clients + endpoint)',
+  mcpMachine.code === 0 && mcpCfg?.clients?.length === 5 && mcpCfg?.endpoint === ENDPOINT &&
+  mcpCfg?.clients?.every((c) => typeof c.command === 'string' && c.command.includes(ENDPOINT)),
+  `exit=${mcpMachine.code} clients=${mcpCfg?.clients?.length ?? '?'}`);
 
 // ---- 4. the daemon side works ----------------------------------------------------------------
 const doc = run(['doctor']);

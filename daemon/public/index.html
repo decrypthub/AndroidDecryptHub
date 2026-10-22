@@ -346,8 +346,12 @@
   .mcp-step h4 { margin:0 0 8px; color:var(--muted); font-size:11px; font-weight:650; letter-spacing:.06em; text-transform:uppercase; }
   .mcp-fence { position:relative; display:flex; align-items:flex-start; gap:8px; padding:10px 52px 10px 12px; border-left:2px solid var(--line); }
   .mcp-prompt { flex:0 0 auto; color:var(--muted); font:12px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace; user-select:none; }
-  .mcp-fence code, .mcp-fence pre { flex:1; min-width:0; margin:0; padding:0; color:var(--ink); background:transparent; border:0; border-radius:0; font:12px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace; white-space:pre-wrap; word-break:break-all; }
-  .mcp-fence--json pre { white-space:pre; word-break:normal; overflow-x:auto; }
+  /* `overflow-wrap:break-word` keeps a command on whole words when it can and only splits a token
+     that cannot fit on a line of its own — `break-all`/`anywhere` split every URL mid-address, which
+     reads like a typo in a copy-paste line. */
+  .mcp-fence code, .mcp-fence pre { flex:1; min-width:0; margin:0; padding:0; color:var(--ink); background:transparent; border:0; border-radius:0; font:12px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace; white-space:pre-wrap; overflow-wrap:break-word; }
+  .mcp-fence--json pre { white-space:pre; overflow-wrap:normal; overflow-x:auto; }
+  .mcp-url { display:inline-block; max-width:100%; word-break:break-all; vertical-align:top; }
   .mcp-copy { position:absolute; top:8px; right:0; min-height:26px !important; padding:0 8px !important; color:var(--muted) !important; background:transparent !important; border:0 !important; font-size:11px !important; }
   .mcp-copy:hover { color:var(--ink) !important; }
   .mcp-copy.is-copied { color:var(--green) !important; }
@@ -1632,7 +1636,21 @@ function renderMcp(loading){
   const sel = mcpSelected();
   fence.hidden = false;
   fence.classList.toggle('mcp-fence--json', sel.multiline===true);
-  document.getElementById('mcpClientCmd').textContent = sel.command;
+  // `$` introduces a shell command; the generic JSON client prints a document, not a command.
+  const prompt = fence.querySelector('.mcp-prompt');
+  if(prompt) prompt.hidden = sel.multiline===true;
+  const cmdEl = document.getElementById('mcpClientCmd');
+  const url = cfg.endpoint || '';
+  const at = sel.multiline===true || !url ? -1 : String(sel.command).indexOf(url);
+  if(at >= 0){
+    // The endpoint is one long unbroken token: as an atomic inline-block it moves to the next line
+    // whole instead of being sliced mid-address (Chrome's break-word fills the line and splits it).
+    cmdEl.innerHTML = escapeHtml(String(sel.command).slice(0, at))
+      + `<span class="mcp-url">${escapeHtml(url)}</span>`
+      + escapeHtml(String(sel.command).slice(at + url.length));
+  } else {
+    cmdEl.textContent = sel.command;
+  }
   hint.className = 'mcp-hint';
   hint.textContent = sel.note || '';
 }
