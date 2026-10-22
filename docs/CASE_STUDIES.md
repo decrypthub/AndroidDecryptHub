@@ -412,6 +412,24 @@ key 未知，但候选被精确排除（KSA 确定性：比 256 位全等）：`
 
 结论已写进 `PROGRESS.md`：**凡"0 命中"必须同时打印"到底扫了多少条指令/字节"**，否则 0 只是一个沉默的谎。
 
+### 第十轮：trace 第一次真的用上——它先打死了目标，根因是我们自己的补丁
+
+到这一轮为止，`jdgs` 的分析全靠 hook + 静态 ELF 反查，**`qbdi_trace` / `trace_digest` 一次没用过**。补做时：
+
+| 调用 | 结果 |
+|---|---|
+| `trace_digest {symLib:"libc.so", symbol:"malloc"}` @ 沙盒 | ✅ 143 条指令，`retval` 正常 |
+| `trace_digest {addr: libjdg+0x8c1f8}` @ 京东 | ❌ 超时 → **SIGBUS（pc=0x2a, BUS_ADRALN）**，进程被杀（`tombstone_10`） |
+
+第一版归因是错的（"QBDI 的返回模型被目标的扁平化控制流带偏"）。修完再测才发现真相：**那个地址上刚被 soft unhook 的 `native_hook` 补丁还在**。soft unhook 的语义就是"补丁留在原地、只把开关关掉"（为了免 Dobby 重新激活），所以函数入口仍是 `b <trampoline>`；QBDI 忠实地跟着这条跳转进了 trampoline，**再也回不到模拟器**，最后落到 `pc=lr=0x2a`。在**同一个地址、不加钩子**的对照实验里：1327 条指令、1.2 s、`completed` —— libjdg 的 trace 本身没问题。
+
+两个修复（都已真机验收，`tools/verify_v110_trace_guard.sh`）：
+
+1. **拒绝**带我们自己补丁的地址，错误里点名 hook id 与状态（`active` / `soft-unhooked`）。判断用 `used && patched && target`，**不能用 `active`**——要抓的恰恰是 `active==0` 的 soft 状态。
+2. **纵深防御**：每条被插桩指令的地址都要落在"可执行映射快照"里（否则 `QBDI_STOP` + `stopReason:"ran-away"` + `stopPc`），外加 20 万条指令的执行预算（此前只有采集上限，执行没有上限，所以能跑到宿主超时）。宿主把 `stopReason` / `stopPc` / `retvalValid` 摆到结果顶层，被止损的 run **不再把 x0 冒充返回值**。
+
+**这一轮最该记住的**：崩溃归因必须先做**对照组**（同地址、无补丁）。否则会把自己工具留下的状态写成"目标的特性"，然后基于错误结论去设计防护——第一版方案（"拒绝这类加固模块"）就是错的，真正的规则是"**别 trace 自己插过桩的地址**"。
+
 
 
 

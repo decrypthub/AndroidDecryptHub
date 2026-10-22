@@ -69,6 +69,12 @@ int adh_native_hook_install(const char *mode, const char *module, const char *sy
 // hard=1 destroys the inline patch (DobbyDestroy) after a quiesce window and frees the slot;
 // hard=0 keeps the soft-unhook semantics (stub stays installed but inactive).
 int adh_native_hook_unhook(int hook_id, int hard, char *error, size_t error_size);
+// "Is this address currently carrying one of our inline patches?" - answers for a SOFT-UNHOOKED hook
+// too, because that state keeps the Dobby branch in the prologue on purpose (reactivation without a
+// Dobby call). The instruction tracer has to know: QBDI follows that branch into the trampoline and
+// the run never comes back to the emulator (measured: it ended at pc=0x2a and the target died with
+// SIGBUS). Returns 1 and fills the id/active pair when found.
+int adh_native_hook_at(uint64_t addr, int *hook_id_out, int *active_out);
 int adh_native_hook_status_json(char *out, size_t out_size);
 
 // Called by the fixed arm64 stubs. Observation-only and non-blocking.

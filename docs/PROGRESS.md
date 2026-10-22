@@ -52,25 +52,36 @@
 
 下一步指向 **HMAC-SHA256**：模块里确实带着 SHA-256 常量表（只是这条链不走），而 b5 恰好是 32 字节。要验它必须先有 20 字节会话 key —— 也就是要重启 App、在新线程首次签名时抓 KSA（上一轮记录过的手法）。
 
-### 四、trace 首次实测（本轮补做）：**沙盒能用；在 libjdg 上会打死目标**
+### 四、trace 实测 + 两个真缺陷（**修完并验证**）
 
-上一轮完全没用 trace（只有 hook + 静态 ELF 分析）。这一轮补做实测：
+上一轮完全没用 trace（只有 hook + 静态 ELF 分析）。这一轮补做，先撞上两个缺陷，都修了：
 
 | 调用 | 结果 |
 |---|---|
-| `trace_digest {symLib:"libc.so", symbol:"malloc", args:["64"]}` @ 沙盒 | ✅ `143` 条指令、`uniqueAddresses:143`、`retval` 正常、digest 完整 |
-| `trace_digest {addr: libjdg+0x8c1f8, args:[hexTable, "16", mallocBuf]}` @ 京东 | ❌ 先 `command timeout`，随后 **SIGBUS(pc=0x2a, BUS_ADRALN)**，进程被杀（`tombstone_10`, 15:59:48） |
+| `trace_digest {symLib:"libc.so", symbol:"malloc"}` @ 沙盒 | ✅ `143` 条指令、`retval` 正常 |
+| `trace_digest {addr: libjdg+0x8c1f8}` @ 京东 | ❌ `command timeout` → **SIGBUS(pc=0x2a, BUS_ADRALN)**，进程被杀（`tombstone_10`, 15:59:48） |
 
-所以 trace **不是坏的**，是**在这个目标上会跑飞到 0x2a**：被 trace 的函数返回时跳到了垃圾地址（`pc`/`lr` 都是 `0x2a`），说明 QBDI 的调用/返回模型被目标自己的控制流（扁平化 dispatcher + `br x8`）带偏了。**代价是目标进程**，这一点必须在工具层解决：
+**根因（不是"加固模块跑飞"，是我们自己留的补丁）**：那个地址上刚装过 `native_hook` 并被 **soft unhook** —— 而 soft unhook 的语义是"**补丁留在原地但停用**"（为了免 Dobby 重新激活）。于是函数入口仍是 `b <trampoline>`，QBDI 老老实实跟着这条跳转进了 trampoline，**再也回不到模拟器**，最后落到 `pc=0x2a`（`pc`/`lr` 都是它）。修完后在**没有补丁的同一个地址**上重测：`1327` 条指令、`stopReason:"completed"`、`retvalValid:true`、1.2 s —— **libjdg 的 trace 本身是好的**。
 
-- 给 trace 一个**可判定的止损**：超长/异常跳转要 fail-loud 收回来，而不是让进程跳到 `0x2a`；
-- 或者干脆**拒绝**这类模块（`addInstrumentedModuleFromAddr` 之后先做一次"能安全返回"的探针）；
-- 顺序也要守规矩：**先在沙盒上验，再上真目标**——这次是直接对京东下手，等于又浪费一次冷启（这已经是第四次因为工具把目标打死了）。
+**修复 1（真正的止损）**：`qbdi_trace` 现在**拒绝**带我们自己补丁的地址，并在错误里点名 hook id 与状态（`active` / `soft-unhooked`）。判断依据是 `used && patched && target`，**不能**用 `active`——要抓的恰恰是 `active==0` 的 soft 状态。
+
+**修复 2（纵深防御）**：每个被插桩的指令地址都要命中"可执行映射快照"（一次读 `/proc/self/maps`，二分查找），不在其中就 `QBDI_STOP` 并报 `stopReason:"ran-away"` + `stopPc`；另有 `200000` 条指令的执行预算（此前只有**采集**上限，执行没有上限，所以能跑到宿主超时）。宿主侧把这几个字段摆到结果顶层：`stopReason` / `stopPc` / `retvalValid`，非 `completed` 时 `truncated:true` 并写明"摘要只覆盖前缀"，**不再把 x0 冒充返回值**。
+
+**验收**：新增 `tools/verify_v110_trace_guard.sh`（device，已并入 `verify_all.sh`），真机 PASS：
+
+```
+clean (无补丁)        → stopReason=completed, 4 指令
+soft-unhooked (id=1)  → 502 拒绝，错误里含 "id 1"
+active       (id=2)   → 502 拒绝，错误里含 "id 2" + "active"
+hard unhook 之后再 trace → completed（地址能被重新追踪）
+沙盒进程              → 存活
+```
 
 ### 五、方法教训（都写进 CASE_STUDIES）
 
 - **扫描器"什么都没找到"和"真的没有"长得一模一样**：我的 ADRP 扫描一开始报 0 个引用，原因是 JS 里 `w & 0x9f000000` 是**有符号**的负值，跟 `0x90000000` 永远不相等。修正后同一文件立刻有 12342 条 ADRP。差一点据此得出"这些常量表没有代码引用"的错误结论。
 - **`Number.parseInt('0x41', 16)` 与我以为的不一样**：写死 radix 16 时前缀被吞，"找 65 字节分配"实际在找 101，于是又得到一次"0 处命中"。改成 `Number()`。
+- **"trace 把目标打死了"第一版归因是错的**：我当场写成"QBDI 的返回模型被目标的扁平化控制流带偏"，还据此说要"拒绝这类模块"。修完一测才发现**根因是我们自己 soft unhook 留下的补丁**——同一个符号不加钩子就能干净 trace 1327 条指令。**教训：崩溃归因必须先做一个"对照组"实验**（同地址、无补丁），否则会把我们自己的状态写成目标的特性。
 - 结论：**分析脚本也必须 fail-loud**——凡"0 命中"必须同时打印"我到底扫了多少条指令/多少个字节"，否则 0 只是一个沉默的谎。
 
 ## 2026-10-22（第三十三轮）—— 修好"软撤后重装"：reactivate 分支漏更新 after/filter

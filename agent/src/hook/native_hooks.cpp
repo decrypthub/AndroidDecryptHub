@@ -1408,6 +1408,27 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
 // Residual race (documented, not hidden): a thread that already read the patched branch can be a
 // few instructions inside the trampoline; the settle window bounds it but does not suspend
 // threads, so hard unhook stays opt-in while soft unhook remains the default.
+extern "C" int adh_native_hook_at(uint64_t addr, int *hook_id_out, int *active_out) {
+    if (hook_id_out) *hook_id_out = 0;
+    if (active_out) *active_out = 0;
+    if (addr == 0) return 0;
+    pthread_mutex_lock(&g_native_hooks_lock);
+    for (int i = 0; i < ADH_NATIVE_MAX_HOOKS; i++) {
+        NativeHookContext &c = g_native_hooks[i];
+        // NOT keyed on `active`: the soft-unhooked state we care about has active == 0 while the
+        // Dobby branch is still sitting in the target's prologue. `used && patched && target` is
+        // the state that means "there are bytes of ours at this address".
+        if (!c.used || !c.patched || !c.target) continue;
+        if ((uintptr_t)c.target != (uintptr_t)addr) continue;
+        if (hook_id_out) *hook_id_out = c.id;
+        if (active_out) *active_out = __atomic_load_n(&c.active, __ATOMIC_ACQUIRE) == 1 ? 1 : 0;
+        pthread_mutex_unlock(&g_native_hooks_lock);
+        return 1;
+    }
+    pthread_mutex_unlock(&g_native_hooks_lock);
+    return 0;
+}
+
 extern "C" int adh_native_hook_unhook(int hook_id, int hard, char *error, size_t error_size) {
     pthread_mutex_lock(&g_native_hooks_lock);
     NativeHookContext *ctx = find_hook_locked(hook_id);

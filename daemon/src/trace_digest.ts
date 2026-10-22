@@ -276,6 +276,16 @@ export function traceCompleteness(
 
 export interface TraceDigestResult {
   retval: string | null;
+  /**
+   * Why the run ended. "completed" is the only value that makes `retval` and the instruction list a
+   * description of the whole function; the other two mean the digest covers a prefix and the return
+   * value is whatever the register happened to hold when the VM was halted.
+   */
+  stopReason: 'completed' | 'instruction-budget' | 'ran-away' | 'unknown';
+  /** The address the run tried to execute when it was stopped for being outside any exec mapping. */
+  stopPc: string | null;
+  /** false when the run was stopped by a guard (retval is then not a return value). */
+  retvalValid: boolean;
   /** Instructions in the digest - always the length of the list that was analysed. */
   instructionCount: number;
   /** What the agent collected before the reply was built; > instructionCount means it was clipped. */
@@ -334,11 +344,32 @@ export async function traceDigest(session: string, opts: { symLib?: string; symb
     digest.notes.push(`trace was clipped: ${insns.length} of ${seen} instructions were recorded`
       + (cap ? ` (cap ${cap})` : '') + ' - the digest describes the recorded prefix only');
   }
+  // A guard-stopped run is NOT a short trace: it never reached the end of the function, so the
+  // digest, the call counts and the "hottest instruction" ranking all describe a prefix. Say that in
+  // the same place a clipped trace is reported, and never hand back `retval` as if it were a return.
+  const RAW_REASONS = ['completed', 'instruction-budget', 'ran-away'] as const;
+  const stopReason = (RAW_REASONS as readonly string[]).includes(String(raw.stopReason))
+    ? (String(raw.stopReason) as TraceDigestResult['stopReason'])
+    : 'unknown';
+  const retvalValid = raw.retvalValid !== false && stopReason === 'completed';
+  if (stopReason === 'ran-away') {
+    digest.notes.push(
+      `trace STOPPED before executing 0x${String(raw.stopPc ?? '').replace(/^0x/, '')} - that address is not in any executable mapping, `
+      + 'so the run had left real code (a flattened/modified control flow returning through a computed address does this). '
+      + 'The target was protected from a SIGBUS; the digest below covers the instructions before the jump only');
+  } else if (stopReason === 'instruction-budget') {
+    digest.notes.push(`trace stopped at the ${raw.budget ?? 'agent'} instruction budget - the function did not finish, the digest covers the prefix`);
+  } else if (stopReason === 'unknown') {
+    digest.notes.push('the agent did not report why the run ended (older build?): treat the digest as a prefix');
+  }
   return {
     retval: raw.retval != null ? `0x${BigInt(raw.retval).toString(16)}` : null,
+    stopReason,
+    stopPc: raw.stopPc != null ? String(raw.stopPc) : null,
+    retvalValid,
     instructionCount: insns.length,
     seen,
-    truncated,
+    truncated: truncated || stopReason !== 'completed',
     cap,
     digest,
     symbolNames,

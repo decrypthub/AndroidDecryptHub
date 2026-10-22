@@ -224,6 +224,12 @@ SCRIPTS=(
   # One readable native observation: the host joins the hook hit and its memory
   # copy into a single sentence. Host-only; the device bytes stay on v107.
   "verify_v108_native_look.sh:host"
+  # Trace safety: a target that still carries one of our inline patches (active OR
+  # soft-unhooked - the soft state keeps the Dobby branch in the prologue on purpose) must be
+  # refused with the hook id, and the same address must trace to completion again after a hard
+  # unhook. Before this the tracer followed the branch into its trampoline and the target died
+  # (SIGBUS at pc=0x2a, tombstone_10) with nothing in the message naming the hook.
+  "verify_v110_trace_guard.sh:device"
 )
 
 pass=0; fail=0; skip=0; FAILED=""
