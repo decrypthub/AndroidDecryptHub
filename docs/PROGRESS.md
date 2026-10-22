@@ -3,6 +3,24 @@
 > 这是"我们现在在哪"的唯一真相。每个会话开始先读它，结束前更新它。
 > 详细规格见 `REQUIREMENTS.md`，路线与架构见 `DEVELOPMENT_PLAN.md`。
 
+## 2026-10-22（第四十六轮）—— 本轮只做状态核对；实现留给下一轮（附起步清单）
+
+工作区干净、`tsc` 0、330 条测试全过、`mem` 窗口已 6、六条 API 就绪（`@` / `@#n` / `memAfter`+seq /
+`time-budget` / 断连立刻失败 / 6 窗口）。**in-hook trace 本轮没有动代码**：它是一个跨 `qbdi_trace.c`
+与 `native_hooks.cpp` 的改动（per-thread VM 生命周期 + JSON 预算 + 三条守卫），在剩余预算里硬写
+风险高于收益——宁可留给下一轮一次做完整并配 v117 验收。
+
+下一轮的起步顺序（照第四十五轮的设计走）：
+
+1. `adh_qbdi_run_from(pc, gpr, budget, time_ms, summary)` —— 从 `qbdi_trace.c` 抽出，用
+   `qbdi_setGPRState` + `qbdi_run(instance, pc, 0)`；
+2. per-thread VM（`pthread_getspecific`），**不引入全局锁**；
+3. `native_hook` 的 `traceInsns` / `traceFrom` 解析 → 事件 JSON 里追加 `trace` 子对象（**同一条记录**）；
+4. `tools/verify_v117_inhook_trace.sh`（32 条 / 0 条两种情形 + 目标存活）；
+5. 用它去读 `0x101da0`：命中点就地跑 200 条，看它到底调了什么、还算不算得下去。
+
+
+
 ## 2026-10-22（第四十五轮）—— in-hook trace 的设计定稿（下一轮直接实现，不再讨论）
 
 这轮把最后一项能力的**接口、数据流和验收**定下来，避免下一轮从零讨论。
