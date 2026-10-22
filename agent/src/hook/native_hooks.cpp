@@ -955,7 +955,11 @@ static int find_free_slot_locked() {
 
 static NativeHookContext *find_hook_locked(int id) {
     for (int i = 0; i < ADH_NATIVE_MAX_HOOKS; i++) {
-        if (g_native_hooks[i].active == 1 && g_native_hooks[i].id == id) return &g_native_hooks[i];
+        // Keyed on `used`, not on `active`. A soft-unhooked hook is inactive but still occupies a slot
+        // and still carries our patch, so keying on active made it un-hookable by id: status could not
+        // even list it before, and after it could be listed it still answered "no native hook with id
+        // N". A hard unhook is the only way to reclaim that slot, so it has to find it.
+        if (g_native_hooks[i].used && g_native_hooks[i].id == id) return &g_native_hooks[i];
     }
     return nullptr;
 }
@@ -1568,8 +1572,10 @@ extern "C" int adh_native_hook_unhook(int hook_id, int hard, char *error, size_t
 extern "C" int adh_native_hook_status_json(char *out, size_t out_size) {
     if (!out || !out_size) return 0;
     std::string hooks = "[";
+    std::string dormant = "[";
     int count = 0;
     int patched_count = 0;
+    int dormant_count = 0;
     // Per-mode usage: the host needs to know how much of the budget is left BEFORE it asks for a
     // batch of hooks, otherwise the 17th install just fails one symbol at a time.
     // `used` counts CONSUMED slots, not active hooks: a soft-unhooked inline hook keeps its stub
@@ -1581,7 +1587,33 @@ extern "C" int adh_native_hook_status_json(char *out, size_t out_size) {
     for (int i = 0; i < ADH_NATIVE_MAX_HOOKS; i++) {
         NativeHookContext &ctx = g_native_hooks[i];
         if (ctx.used) used_slots++;
-        if (ctx.active != 1) { if (ctx.patched) patched_count++; continue; }
+        if (ctx.active != 1) {
+            if (ctx.patched) patched_count++;
+            // A soft-unhooked hook keeps its slot, its stub and its patch, but used to be OMITTED from
+            // status entirely - so a caller enumerating `hooks` could neither see it nor unhook it, and
+            // the session quietly lost slots with no way to reclaim them (measured: `used:5` with an
+            // empty `hooks` list). Reported separately so `hooks` still means "live" while `inactive`
+            // means "occupying a slot, reachable by unhook".
+            if (ctx.used) {
+                char item[640];
+                snprintf(item, sizeof(item),
+                         "%s{\"id\":%d,\"mode\":\"%s\",\"module\":\"%s\",\"symbol\":\"%s\","
+                         "\"address\":\"0x%llx\",\"target\":\"0x%llx\",\"patched\":%s,"
+                         "\"mem\":\"%s\",\"memAfter\":\"%s\",\"filter\":\"%s\",\"state\":\"%s\"}",
+                         dormant_count ? "," : "",
+                         ctx.id,
+                         ctx.mode == 0 ? "got" : (ctx.mode == 1 ? "inline" : (ctx.mode == 2 ? "sites" : "vtable")),
+                         ctx.module, ctx.symbol,
+                         (unsigned long long)ctx.address,
+                         (unsigned long long)(uintptr_t)ctx.target,
+                         ctx.patched ? "true" : "false",
+                         ctx.mem_spec, ctx.after_spec, ctx.filter_spec,
+                         ctx.patched ? "soft-unhooked" : "reserved");
+                dormant += item;
+                dormant_count++;
+            }
+            continue;
+        }
         if (count) hooks += ",";
         if (ctx.mode >= 0 && ctx.mode < 4) by_mode[ctx.mode]++;
         unsigned long long hits = g_native_hook_hits[i].load(std::memory_order_relaxed);
@@ -1649,6 +1681,7 @@ extern "C" int adh_native_hook_status_json(char *out, size_t out_size) {
     }
     pthread_mutex_unlock(&g_native_hooks_lock);
     hooks += "]";
+    dormant += "]";
     char kept[96] = "";
     adh_site_hook_last_revert_json(kept, sizeof(kept));
     char slots[256];
@@ -1659,7 +1692,8 @@ extern "C" int adh_native_hook_status_json(char *out, size_t out_size) {
              by_mode[0], by_mode[1], by_mode[2], by_mode[3]);
     std::string json = "{" + std::string(slots) +
                        "\"count\":" + std::to_string(count) + ",\"patched\":" + std::to_string(patched_count) + "," +
-                       kept + "\"hooks\":" + hooks + "}";
+                       "\"inactiveCount\":" + std::to_string(dormant_count) + "," + kept +
+                       "\"hooks\":" + hooks + ",\"inactive\":" + dormant + "}";
     snprintf(out, out_size, "%s", json.c_str());
     out[out_size - 1] = 0;
     return 1;

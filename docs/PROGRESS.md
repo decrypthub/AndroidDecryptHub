@@ -324,6 +324,28 @@ reinstall   id=3 → trigger → hits=1，且新的 mem spec 生效（x0:8,x0+7:
 
 **重装是好的** —— 那个"0 命中"只是当时**没有签名流量**（App 停在登录页），我又一次把"没触发"读成了"没工作"。reactivate 路径本来就是"给操作者一个新 id"，而不是复用旧 id，这点也确认了。
 
+### 十八、`status` 现在列得出软撤的钩子，也撤得掉
+
+上一节说 `status.hooks[]` 只列 active、软撤的既看不见也释放不了。这一轮把它补完整 —— 而且发现是**两处**问题，缺一个都不算修好：
+
+1. **列表**：`adh_native_hook_status_json` 里 `if (ctx.active != 1) { ...; continue; }` 直接跳过它们。现在单独输出 `inactive[]`（`hooks[]` 仍只表示"活的"，语义不变）：
+
+```json
+{"slots":{"used":1,"active":0,...},"count":0,"inactiveCount":1,
+ "hooks":[],"inactive":[{"id":1,"mode":"inline","patched":true,"mem":"x0:8","state":"soft-unhooked"}]}
+```
+
+2. **释放**：`find_hook_locked` 只认 `active == 1`，所以**即使列出来了，按 id 撤也答"no native hook with id N"**。改成按 `used` 查（软撤的上下文仍带 `patched/target/replacement`，hard unhook 的路径本来就是齐的）。
+
+真机验收（沙盒）：
+
+```
+install id=1 -> soft unhook -> status: used=1 activeHooks=0 inactiveCount=1 inactive id=1 state=soft-unhooked
+-> 按 id hard unhook ok=true -> used=0 inactiveCount=0
+```
+
+**顺带纠正第三个误判**：我曾说"死进程仍被当成在线、被自动装 capture_start"。查了 `index.ts` 的 socket close 处理（会正确置 `online=false` 并停掉 drain）和实际 pid 列表后确认：那些 pid 是**京东自己的其它进程**（`jdpush` / `widgetProcess` / `manto0`…，这个包一共 7 个进程），**在线判定是对的**。真实现象只是"启动策略给**每个**进程都装了 `capture_start`"，代价是 5 条 drain 循环的噪音 —— 这是设计取舍，不是僵尸会话，**没有改**（要改得先定策略：只装主进程？还是设上限？这需要产品决定）。
+
 ## 2026-10-22（第三十四轮）—— 工具打磨收尾 + **b6 破译：它是 jdgs 明文 JSON 的 MD5**
 
 ### 一、工具打磨（P2 全部清掉）
