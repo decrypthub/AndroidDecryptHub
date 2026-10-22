@@ -40,7 +40,12 @@ extern "C" {
 // remaining arguments) is 1.5-2 KB, so the ONE buffer worth reading was the one the tool could not
 // show. A bigger cap costs nothing until somebody asks for it - the copy is bounded by the spec the
 // caller wrote, and the per-hit static cost is a 4 KB array.
-#define ADH_MEM_WIN_MAX 4
+// Up to six windows, but the TOTAL (4 KB) is the binding guard: a structure worth reading is often five
+// or six pointers deep (a formatter descriptor carries a literal pool, an argument vector, a compiled
+// program and a register bank in four separate allocations), and four windows could not express that -
+// which forced a choice between "copy the bank" and "copy the argument vector", and a half-copied
+// descriptor is worse than no descriptor.
+#define ADH_MEM_WIN_MAX 6
 #define ADH_MEM_WIN_LEN 1024
 #define ADH_MEM_WIN_TOTAL 4096
 #define ADH_MEM_WIN_OFF_MAX 65535

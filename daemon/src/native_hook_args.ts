@@ -27,7 +27,7 @@ export function normalizeThrottleMs(value: unknown): number {
 // the agent keep the argument registers that are readable pointers (64 bytes, up to 4) so a
 // caller does not have to name x0 first. The numbers are the same constants as ADH_MEM_WIN_*
 // in agent/src/hook/native_hooks.h.
-export const NATIVE_MEM_WIN_MAX = 4;
+export const NATIVE_MEM_WIN_MAX = 6;
 export const NATIVE_MEM_WIN_LEN = 1024;
 export const NATIVE_MEM_WIN_TOTAL = 4096;
 export const NATIVE_MEM_WIN_OFF_MAX = 65535;

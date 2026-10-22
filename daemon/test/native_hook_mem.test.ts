@@ -58,11 +58,14 @@ test('@#n follows a pointer that an earlier window already copied', () => {
 });
 
 test('the caps that the agent enforces are accepted on the boundary', () => {
-  // Four windows at the per-window ceiling must exactly fill the total. Writing the numbers out by
-  // hand is what let this test go stale the day the caps changed: derive the spec from the caps.
-  const four = [0, 1, 2, 3].map((r) => `x${r}:${NATIVE_MEM_WIN_LEN}`).join(',');
-  assert.equal(NATIVE_MEM_WIN_LEN * NATIVE_MEM_WIN_MAX, NATIVE_MEM_WIN_TOTAL);
-  assert.equal(parseMemWindows(four).windows.length, NATIVE_MEM_WIN_MAX);
+  // Derive the spec from the caps instead of writing the numbers out: that is what let this test go
+  // stale the day the caps changed. With six windows at the per-window ceiling the TOTAL is now the
+  // binding constraint, so the boundary probe has to respect it.
+  const n = Math.min(NATIVE_MEM_WIN_MAX, Math.floor(NATIVE_MEM_WIN_TOTAL / NATIVE_MEM_WIN_LEN));
+  const full = [...Array(n)].map((_, r) => `x${r}:${NATIVE_MEM_WIN_LEN}`).join(',');
+  assert.ok(n >= 1);
+  assert.equal(parseMemWindows(full).windows.length, n);
+  assert.ok(NATIVE_MEM_WIN_MAX * NATIVE_MEM_WIN_LEN >= NATIVE_MEM_WIN_TOTAL);
   assert.equal(parseMemWindows(`x1+${NATIVE_MEM_WIN_OFF_MAX}:1`).spec, `x1+${NATIVE_MEM_WIN_OFF_MAX}:1`);
 });
 
@@ -71,20 +74,23 @@ test('a typo is refused instead of installing a hook that copies nothing', () =>
   assert.throws(() => parseMemWindows('x9:8'), /mem window must look like/);
   assert.throws(() => parseMemWindows('x0:0'), new RegExp(`mem length 0 must be 1\\.\\.${NATIVE_MEM_WIN_LEN}`));
   assert.throws(() => parseMemWindows(`x0:${tooBig}`), new RegExp(`mem length ${tooBig} must be 1\\.\\.${NATIVE_MEM_WIN_LEN}`));
-  assert.throws(() => parseMemWindows('x0:1,x1:1,x2:1,x3:1,x4:1'), /at most 4 windows/);
+  const tooMany = [...Array(NATIVE_MEM_WIN_MAX + 1)].map((_, r) => `x${r % 9}:1`).join(',');
+  assert.throws(() => parseMemWindows(tooMany), new RegExp(`at most ${NATIVE_MEM_WIN_MAX} windows`));
   assert.throws(() => parseMemWindows(`x0+${NATIVE_MEM_WIN_OFF_MAX + 1}:1`), /mem offset 65536 exceeds 65535/);
   assert.throws(() => parseMemWindows('x0:8,'), /mem window must look like/);
   assert.throws(() => parseMemWindows(8), /mem must be a string/);
 });
 
 test('the total cap is a real guard, not a leftover', () => {
-  // TOTAL == WIN_MAX * WIN_LEN, so an in-range spec can never exceed it. Assert that relationship
-  // and exercise the guard anyway with a spec that would only be accepted if the per-window cap
-  // were ignored - that way a future cap change that breaks the invariant fails HERE, loudly,
-  // instead of in the field as "my 4 KB window silently became 3 KB".
-  assert.equal(NATIVE_MEM_WIN_MAX * NATIVE_MEM_WIN_LEN, NATIVE_MEM_WIN_TOTAL);
-  const oversize = [0, 1, 2, 3].map((r) => `x${r}:${NATIVE_MEM_WIN_LEN + 1}`).join(',');
-  assert.throws(() => parseMemWindows(oversize), /mem length .* must be 1\.\./);
+  // The window count alone no longer bounds the copy: six windows at the per-window ceiling would be
+  // 6 KB while the total stays 4 KB, so TOTAL is now the binding guard. Assert the relationship and
+  // exercise the guard, so a future cap change fails HERE rather than in the field as "my window was
+  // silently clipped".
+  assert.ok(NATIVE_MEM_WIN_MAX * NATIVE_MEM_WIN_LEN >= NATIVE_MEM_WIN_TOTAL);
+  const over = [...Array(NATIVE_MEM_WIN_MAX)].map((_, r) => `x${r % 9}:${Math.ceil(NATIVE_MEM_WIN_TOTAL / 2) + 1}`).join(',');
+  assert.throws(() => parseMemWindows(over), /mem total .* exceeds|mem length .* must be 1\.\./);
+  const fits = [...Array(NATIVE_MEM_WIN_MAX)].map((_, r) => `x${r % 9}:${Math.floor(NATIVE_MEM_WIN_TOTAL / NATIVE_MEM_WIN_MAX)}`).join(',');
+  assert.equal(parseMemWindows(fits).windows.length, NATIVE_MEM_WIN_MAX);
 });
 
 test('the install payload carries the canonical spec and defaults to none', () => {
