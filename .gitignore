@@ -36,6 +36,10 @@ adhd-data/
 *.sqlite
 *.sqlite-*
 
+# Scratch analysis scripts that must live under daemon/ to resolve capstone-wasm. Three of these were
+# swept into a commit by `git add -A`; the rule keeps that from happening again.
+daemon/tmp_*.mjs
+
 # Third-party checkouts (use submodules)
 agent/third_party/*/
 !agent/third_party/.gitkeep
