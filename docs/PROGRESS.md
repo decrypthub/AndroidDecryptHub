@@ -292,6 +292,38 @@ live_captures {hookId:999}   -> total 0
 
 **顺带发现（未修）**：`verify_v107` 在"刚重启沙盒、agent 还没连上"时会 `FAIL: command timeout`，紧接着重跑变 `SKIP`。它应该**先等 agent 上线再装钩子**（现在只是重启后固定 sleep）。这是验收脚本自身的时序缺陷，不是产品缺陷。
 
+### 十七、修好"命令通道被堵死"的**真根因**：hard unhook 的静默循环没有上界
+
+代码读出来的，不是猜的：
+
+```c
+for (int round = 0; round < 80 && !quiet; round++) {
+    ...
+    if (after == before && round >= 4) quiet = true;
+    else if (after != before) round = 0;      // ← 热钩子上命中一直在涨，round 永远被清零
+}
+```
+
+**热钩子（hex 编码器、malloc、main）上这个循环永不退出**；而它跑在 agent 的**命令线程**上，于是后续每条命令都排在后面 → `agent_ping` 也超时、只能重启目标。这一轮我撞了两次，都记成了"工具莫名失联"。
+
+修法：**加总时限**（1.5 s）+ 连续静默计数，超时后**照常恢复原始字节**并 `LOGE` 说明"没等到静默窗口"。安全性不变：恢复的是本函数自己的 prologue，而 trampoline 在**另一块永不释放的池**里，已经进去的线程不会被抽走地板（这条残余竞态本来就是 hard unhook 的既有说明）。
+
+真机验证（沙盒，`daemon/tmp_hook_lifecycle.mjs`）：
+
+```
+hot hook (malloc) → hard unhook ok=true，耗时 53 ms，之后 agent_ping 仍应答 ✅
+```
+
+**同时纠正我上一轮的一个错误结论**：我说过"在软撤过的地址上重装会造出死钩子（id=11、0 命中）"。用对照实验重测：
+
+```
+first install id=2 → trigger → hits=1
+soft unhook ok=true
+reinstall   id=3 → trigger → hits=1，且新的 mem spec 生效（x0:8,x0+7:1）
+```
+
+**重装是好的** —— 那个"0 命中"只是当时**没有签名流量**（App 停在登录页），我又一次把"没触发"读成了"没工作"。reactivate 路径本来就是"给操作者一个新 id"，而不是复用旧 id，这点也确认了。
+
 ## 2026-10-22（第三十四轮）—— 工具打磨收尾 + **b6 破译：它是 jdgs 明文 JSON 的 MD5**
 
 ### 一、工具打磨（P2 全部清掉）

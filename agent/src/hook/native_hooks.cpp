@@ -1504,14 +1504,38 @@ extern "C" int adh_native_hook_unhook(int hook_id, int hard, char *error, size_t
     pthread_mutex_unlock(&g_native_hooks_lock);
     // Quiesce: the trampoline is only reachable through our stub, so a hit counter that stays
     // still for a few milliseconds means nothing entered it during that window.
+    //
+    // BOUNDED ON PURPOSE. The first version reset its counter every time a hit arrived, so on a HOT
+    // hook the loop never terminated - and because this runs on the agent's command thread, the whole
+    // session stopped answering: `agent_ping` timed out and only restarting the target recovered it
+    // (measured twice, on the hex-encoder and malloc hooks). A hard unhook is an explicit request, so
+    // after a bounded wait we restore the bytes and SAY the quiet window was not achieved, instead of
+    // hanging the control channel. The residual race is the one already documented for hard unhook:
+    // a thread that already read the patched branch can be inside the trampoline, which lives in a
+    // separate pool this code never frees - so restoring the prologue does not pull it out from under
+    // that thread.
+    const uint64_t quiesce_started = adh_mono_ns();
+    const uint64_t quiesce_budget_ns = 1500ull * 1000000ull;   // hard ceiling: 1.5 s
     bool quiet = false;
-    for (int round = 0; round < 80 && !quiet; round++) {
+    int quiet_rounds = 0;
+    int rounds = 0;
+    while (true) {
         unsigned long long before = g_native_hook_hits[slot].load(std::memory_order_relaxed);
         struct timespec ts = { 0, 5 * 1000 * 1000 };
         nanosleep(&ts, nullptr);
         unsigned long long after = g_native_hook_hits[slot].load(std::memory_order_relaxed);
-        if (after == before && round >= 4) quiet = true;   // ~25 ms of silence before touching code
-        else if (after != before) round = 0;
+        rounds++;
+        if (after == before) {
+            if (++quiet_rounds >= 5) { quiet = true; break; }   // ~25 ms of silence
+        } else {
+            quiet_rounds = 0;
+        }
+        if (adh_mono_ns() - quiesce_started >= quiesce_budget_ns) break;
+    }
+    if (!quiet) {
+        LOGE("hard unhook id=%d: no quiet window after %d rounds (~%llu ms) - the hook is hot; "
+             "restoring anyway (trampoline pool is not freed, so an in-flight thread stays valid)",
+             hook_id, rounds, (unsigned long long)((adh_mono_ns() - quiesce_started) / 1000000ull));
     }
     pthread_mutex_lock(&g_native_hooks_lock);
     unsigned char prologue[24];
