@@ -352,6 +352,17 @@
   .mcp-copy:hover { color:var(--ink) !important; }
   .mcp-copy.is-copied { color:var(--green) !important; }
   .mcp-note { margin:18px 0 0; color:var(--muted); font-size:11px; }
+  /* 接入引导：`.mcp-fence` 是 flex，UA 的 [hidden]{display:none} 输给类选择器，所以自己写一条 */
+  .mcp-fence[hidden], .mcp-step[hidden] { display:none; }
+  .mcp-lead { margin:0 0 8px; color:var(--muted); font-size:11px; line-height:1.6; }
+  .mcp-lead code, .mcp-note code { padding:0; border:0; background:transparent; color:var(--ink-2); }
+  .mcp-chips { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 8px; }
+  .mcp-chip { min-height:26px; padding:0 9px; color:var(--muted); background:transparent; border:1px solid var(--line); border-radius:3px; font-size:11px; cursor:pointer; }
+  .mcp-chip:hover { color:var(--ink); border-color:#646e7d; }
+  .mcp-chip.active { color:var(--ink); border-color:var(--blue); }
+  .mcp-label { flex:0 0 auto; color:var(--muted); font-size:11px; line-height:1.65; user-select:none; }
+  .mcp-hint { margin:8px 0 0; color:var(--muted); font-size:11px; line-height:1.55; }
+  .mcp-hint.warn { color:var(--amber); }
   .set-shell { width:min(980px,95vw); height:min(88vh,760px); padding:0; position:relative; }
   .set-close-x { position:absolute; top:10px; right:12px; z-index:2; width:28px; height:28px; border:none; background:transparent; color:var(--muted); font-size:20px; line-height:1; cursor:pointer; border-radius:4px; }
   .set-close-x:hover { background:var(--surface-3); color:var(--ink); }
@@ -442,7 +453,7 @@
         </button>
       </div>
     </div>
-    <button type="button" class="compact-action" id="mcpBtn" title="MCP 接入配置 — 直接连接 Host ADH Daemon 的 HTTP MCP 端点">MCP</button>
+    <button type="button" class="compact-action" id="mcpBtn" title="MCP 接入 — 运行 adh mcp 把 Host ADH Daemon 接进 AI 客户端">MCP</button>
     <button type="button" class="compact-action" id="setBtn" title="捕获 / 数据 / 配置导入导出">设置</button>
   </div>
 </header>
@@ -607,34 +618,45 @@
   </div>
 </main>
 
-<!-- MCP 模态 -->
+<!-- MCP 模态：接入引导以我们的 CLI 为准（`adh mcp`），命令正文由 /api/mcp/config 提供，
+     与 daemon/src/mcp_onboarding.ts 同源，页面和终端不会各拼一套。 -->
 <div class="modal-mask" id="mcpMask">
   <div class="modal mcp-shell">
     <h3>MCP<span class="spacer"></span>
       <button type="button" onclick="closeModal('mcpMask')">关闭</button></h3>
     <div class="mcp-body">
       <section class="mcp-step">
-        <h4>MCP 端点</h4>
+        <h4>一步接入</h4>
+        <p class="mcp-lead">在 Host 终端运行它：按本机已装的客户端打印一行可直接执行的接入命令。</p>
+        <div class="mcp-fence">
+          <span class="mcp-prompt">$</span>
+          <code id="mcpGuide">adh mcp</code>
+          <button type="button" class="mcp-copy" data-mcp-copy="guide" title="复制">复制</button>
+        </div>
+      </section>
+      <section class="mcp-step">
+        <h4>客户端命令</h4>
+        <div class="mcp-chips" id="mcpClients"></div>
+        <div class="mcp-fence" id="mcpCmdFence">
+          <span class="mcp-prompt">$</span>
+          <pre id="mcpClientCmd"></pre>
+          <button type="button" class="mcp-copy" data-mcp-copy="client" title="复制">复制</button>
+        </div>
+        <p class="mcp-hint" id="mcpClientHint"></p>
+      </section>
+      <section class="mcp-step">
+        <h4>端点（手工配置时才需要）</h4>
         <div class="mcp-fence">
           <code id="mcpEndpoint">http://127.0.0.1:8088/mcp</code>
           <button type="button" class="mcp-copy" data-mcp-copy="endpoint" title="复制">复制</button>
         </div>
-      </section>
-      <section class="mcp-step">
-        <h4>按包固定</h4>
-        <div class="mcp-fence">
+        <div class="mcp-fence" id="mcpPinnedRow">
+          <span class="mcp-label">按包固定</span>
           <code id="mcpPinned">http://127.0.0.1:8088/&lt;package&gt;/mcp</code>
           <button type="button" class="mcp-copy" data-mcp-copy="pinned" title="复制">复制</button>
         </div>
       </section>
-      <section class="mcp-step">
-        <h4>JSON-RPC 示例</h4>
-        <div class="mcp-fence mcp-fence--json">
-          <pre id="mcpExample">{"jsonrpc":"2.0","id":1,"method":"tools/list"}</pre>
-          <button type="button" class="mcp-copy" data-mcp-copy="example" title="复制">复制</button>
-        </div>
-      </section>
-      <p class="mcp-note">仅限可信网络 · Host ADH Daemon 直接提供 MCP JSON-RPC；不需要额外 Python 网关。</p>
+      <p class="mcp-note" id="mcpNote">仅限可信网络 · MCP 由 Host ADH Daemon 直接提供，不经过额外网关；命令与 <code>adh mcp</code> 同源。</p>
     </div>
   </div>
 </div>
@@ -1565,17 +1587,76 @@ document.addEventListener('click', ev=>{
 function closeModal(id){ document.getElementById(id).classList.remove('show'); }
 
 // ---- MCP 模态（头部按钮）----
-function mcpEndpoint(){ return `http://${location.host}/mcp`; }
-function mcpPinned(){ const pin=pinnedPackage(); return pin ? `http://${location.host}/${pin}/mcp` : mcpEndpoint(); }
-function mcpExample(){ return JSON.stringify({ jsonrpc:'2.0', id:1, method:'tools/list' }, null, 2); }
+// 引导正文来自 daemon：/api/mcp/config 用 mcp_onboarding.ts 生成，和 `adh mcp` 打印的是同一份，
+// 这里只渲染/复制。页面不再自己拼端点或客户端命令，也就不会和 CLI 漂移。
+let mcpCfg = null, mcpClientId = '';
+function mcpFallback(){
+  const pin = pinnedPackage(), origin = location.origin;
+  return {
+    guide: 'adh mcp',
+    endpoint: `${origin}${pin ? '/'+pin : ''}/mcp`,
+    pinnedEndpoint: pin ? null : `${origin}/<package>/mcp`,
+    clients: [],
+  };
+}
+function mcpSelected(){ return ((mcpCfg && mcpCfg.clients) || []).find(c=>c.id===mcpClientId) || null; }
+function mcpText(kind){
+  const cfg = mcpCfg || mcpFallback();
+  if(kind==='guide') return cfg.guide || 'adh mcp';
+  if(kind==='client'){ const c=mcpSelected(); return c ? c.command : ''; }
+  if(kind==='pinned') return cfg.pinnedEndpoint || '';
+  return cfg.endpoint || '';
+}
+function renderMcp(loading){
+  const cfg = mcpCfg || mcpFallback();
+  document.getElementById('mcpGuide').textContent = cfg.guide || 'adh mcp';
+  document.getElementById('mcpEndpoint').textContent = cfg.endpoint || '';
+  const pinRow = document.getElementById('mcpPinnedRow');
+  pinRow.hidden = !cfg.pinnedEndpoint;
+  if(cfg.pinnedEndpoint) document.getElementById('mcpPinned').textContent = cfg.pinnedEndpoint;
+  const clients = cfg.clients || [];
+  const chips = document.getElementById('mcpClients');
+  const fence = document.getElementById('mcpCmdFence');
+  const hint = document.getElementById('mcpClientHint');
+  if(!clients.length){
+    chips.innerHTML = ''; fence.hidden = true;
+    hint.className = 'mcp-hint warn';
+    hint.textContent = loading ? '正在读取接入命令…'
+      : '守护进程没有返回接入命令（旧版本）：重启 Host ADH Daemon 后这里会出现，或先在终端运行 adh mcp。';
+    return;
+  }
+  if(!clients.some(c=>c.id===mcpClientId)) mcpClientId = clients[0].id;
+  chips.innerHTML = clients.map(c=>
+    `<button type="button" class="mcp-chip${c.id===mcpClientId?' active':''}" data-mcp-client="${escapeHtml(String(c.id))}">${escapeHtml(String(c.label||c.id))}</button>`
+  ).join('');
+  const sel = mcpSelected();
+  fence.hidden = false;
+  fence.classList.toggle('mcp-fence--json', sel.multiline===true);
+  document.getElementById('mcpClientCmd').textContent = sel.command;
+  hint.className = 'mcp-hint';
+  hint.textContent = sel.note || '';
+}
 function openMcp(){
-  document.getElementById('mcpEndpoint').textContent = mcpEndpoint();
-  document.getElementById('mcpPinned').textContent = mcpPinned();
-  document.getElementById('mcpExample').textContent = mcpExample();
+  mcpCfg = mcpCfg || mcpFallback();
+  renderMcp(!(mcpCfg.clients||[]).length);
   document.getElementById('mcpMask').classList.add('show');
+  loadMcp();
+}
+async function loadMcp(){
+  const pin = pinnedPackage();
+  const q = pin ? `?package=${encodeURIComponent(pin)}` : '';
+  try{
+    const r = await fetch(`/api/mcp/config${q}`, { cache:'no-store' });
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    mcpCfg = await r.json();
+  }catch(e){
+    if(!((mcpCfg && mcpCfg.clients) || []).length) mcpCfg = mcpFallback();
+  }
+  renderMcp(false);
 }
 function copyMcp(kind, btn){
-  const text = kind==='endpoint' ? mcpEndpoint() : kind==='pinned' ? mcpPinned() : mcpExample();
+  const text = mcpText(kind);
+  if(!text){ toast('暂无可复制内容'); return; }
   const done = ()=>{
     if(!btn){ toast('已复制'); return; }
     const prev = btn.textContent;
@@ -1590,6 +1671,10 @@ function copyMcp(kind, btn){
   if(navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done).catch(fallback);
   else fallback();
 }
+document.addEventListener('click', ev=>{
+  const chip = ev.target.closest('[data-mcp-client]'); if(!chip) return;
+  mcpClientId = chip.getAttribute('data-mcp-client'); renderMcp(false);
+});
 function closePopovers(){
   document.querySelectorAll('.popover.show').forEach(el=>el.classList.remove('show'));
   document.querySelectorAll('[aria-expanded="true"]').forEach(b=>b.setAttribute('aria-expanded','false'));
