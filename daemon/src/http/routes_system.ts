@@ -8,6 +8,7 @@ import { detectionReport } from '../detect.ts';
 import { cryptoView } from '../crypto_view.ts';
 import { assembleHttpExchanges, type TlsChunk } from '../http_exchange.ts';
 import { AGENT_PORT, webUrls } from '../config.ts';
+import { baseFromHost, isValidPackage, mcpOnboarding } from '../mcp_onboarding.ts';
 import { handleMcp, MCP_TOOLS } from '../mcp.ts';
 import { scopedApps } from '../scope_list.ts';
 import { applyCaptureEnabled, listCaptureArmProtected } from '../service.ts';
@@ -199,14 +200,14 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       session: url.searchParams.get('session') ?? '',
     })) },
     { path: '/api/mcp/config', handler: () => {
-      const w = webUrls(); const lan = (w.lan[0] ?? w.local).replace(/^http/, 'http');
-      const mcpUrl = `${lan}/mcp`;
-      const cfg = {
-        note: '把 HTTP MCP 端点配置进支持 JSON-RPC 的客户端；仅限可信网络，不要暴露到公网。',
-        endpoint: mcpUrl,
-        pinnedEndpoint: `${lan}/<package>/mcp`,
-        tools: MCP_TOOLS.length,
-        example: { jsonrpc: '2.0', id: 1, method: 'tools/list' },
+      // The guide's URLs must be the address the caller actually reached — LAN for the browser that
+      // opened the panel over Wi-Fi, loopback for `adh mcp` on the daemon host. The request Host is
+      // that truth; webUrls() is only the fallback for a client that sends no Host at all.
+      const rawPkg = url.searchParams.get('package') ?? '';
+      if (rawPkg && !isValidPackage(rawPkg)) return send(400, { error: 'package 必须是合法包名（字母数字 . _）' });
+      const base = baseFromHost(req.headers.host) ?? webUrls().lan[0] ?? webUrls().local;
+      return send(200, {
+        ...mcpOnboarding(base, { package: rawPkg || undefined, tools: MCP_TOOLS.length }),
         quickAsks: [
           '用 crypto_identify 看看这个 App 用了哪些加密算法和密钥',
           '用 dump_all_dex 一键 dump 所有 DEX，然后 dumps_list 给我下载链接',
@@ -214,8 +215,7 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
           '用 capture_start 打开持续捕获，再 java_call 触发目标的工作负载，然后 live_captures 看明文',
           '用 qbdi_trace 逐指令跟踪这个 native 函数',
         ],
-      };
-      return send(200, cfg);
+      });
     } },
     { path: '/api/agents', handler: () => send(200, [...sessions.values()]) },
     { path: '/api/backends', handler: () => send(200, backendMatrix()) },

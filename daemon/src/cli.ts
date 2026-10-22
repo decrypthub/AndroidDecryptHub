@@ -42,7 +42,7 @@ const DEFAULT_HOST = '127.0.0.1';
 /** Per-command default request budget. `unpack` on a packer-protected target really does take tens
  *  of seconds (a SecNeo unpack of 13 real dex measured 38s), so a short default would abort a run
  *  that was working. */
-const DEFAULT_TIMEOUT_S: Record<string, number> = { doctor: 10, target: 60, unpack: 180 };
+const DEFAULT_TIMEOUT_S: Record<string, number> = { doctor: 10, target: 60, unpack: 180, mcp: 10 };
 
 export const EXIT = { ok: 0, fail: 1, usage: 2, unavailable: 3 } as const;
 
@@ -74,6 +74,10 @@ const FLAG_HELP: FlagSpec = { name: 'help', kind: 'bool', desc: 'show help' };
 const FLAG_PACKAGE: FlagSpec = { name: 'package', kind: 'string', desc: 'target app package (required when more than one agent is online)' };
 const FLAG_SESSION: FlagSpec = { name: 'session', kind: 'string', desc: 'pin one agent session id instead of resolving by package' };
 const FLAG_TIMEOUT: FlagSpec = { name: 'timeout', kind: 'string', desc: 'request budget in seconds (overrides the per-command default)' };
+/** `mcp` asks about a CONNECTION, not about a target, so its --package means "pin the endpoint",
+ *  not "which agent" — same word, different question, hence its own declaration and description. */
+const FLAG_PACKAGE_PIN: FlagSpec = { name: 'package', kind: 'string', desc: 'pin the endpoint to one package (/<package>/mcp)' };
+const FLAG_CLIENT: FlagSpec = { name: 'client', kind: 'string', desc: 'print only one client command (claude|codex|vscode|cursor|json)' };
 /** What a shell script actually wants: the one value, on one line, with nothing to parse. Without it
  *  a caller has to pipe --json back through node/jq — i.e. re-hand-roll the very glue this CLI
  *  replaces. Only `target` has a single answer; commands without one do not declare it. */
@@ -113,6 +117,14 @@ export const COMMANDS: Record<string, CommandSpec> = {
     ],
     handlerFlags: ['host', 'port', 'json', 'package', 'session', 'timeout', 'out', 'include-carriers'],
   },
+  mcp: {
+    // The install guide for AI clients. It prints commands instead of mutating anyone's config: the
+    // client CLIs are the ones that own their formats, and a silent write into ~/.claude.json is not
+    // something this tool should do behind an operator's back. Same payload as the Web MCP panel
+    // (GET /api/mcp/config), so the page and the terminal cannot drift.
+    desc: 'MCP connection commands for this daemon (claude/codex/vscode/cursor/json)',
+    flags: [FLAG_CLIENT, FLAG_PACKAGE_PIN, FLAG_TIMEOUT],
+    handlerFlags: ['host', 'port', 'json', 'client', 'package', 'timeout'],  },
 };
 
 export interface ParsedArgs {
@@ -287,6 +299,39 @@ export function pickSession(agents: AgentSession[], pkg?: string, session?: stri
     throw new CliError(`ambiguous target (${candidates.length} agents online): ${list} — pass --package or --session`, EXIT.usage);
   }
   return candidates[0];
+}
+
+// ---------------------------------------------------------------------------------------------
+// local machine facts (client detection for `mcp`; injected in the unit test, no FS needed there)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Is this client CLI on PATH? Detection belongs to the side that runs the command: a daemon on
+ * another machine cannot know what is installed here, so the payload carries only the binary name.
+ *
+ * Windows: PATH entries can be quoted, and the executable is `claude.exe` / `code.cmd`, so the
+ * lookup must try PATHEXT — `join(dir, 'code')` alone reports "not installed" for a VS Code that is.
+ */
+export function findExecutable(
+  name: string,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+  fileExists: (path: string) => boolean = existsSync,
+): string | null {
+  const dirs = String(env.PATH ?? '')
+    .split(platform === 'win32' ? ';' : ':')
+    .map((d) => d.trim().replace(/^"(.*)"$/, '$1'))
+    .filter(Boolean);
+  const exts = platform === 'win32'
+    ? ['', ...String(env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').map((e) => e.trim().toUpperCase()).filter(Boolean)]
+    : [''];
+  for (const dir of dirs) {
+    for (const ext of exts) {
+      const candidate = join(dir, name + ext);
+      if (fileExists(candidate)) return candidate;
+    }
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -519,6 +564,50 @@ async function cmdUnpack(ctx: Ctx): Promise<number> {
   }, ok ? EXIT.ok : EXIT.fail);
 }
 
+async function cmdMcp(ctx: Ctx): Promise<number> {
+  const pkg = ctx.opts.package as string | undefined;
+  const query = pkg ? `?package=${encodeURIComponent(pkg)}` : '';
+  const cfg = await ctx.daemon.json(`/api/mcp/config${query}`, { timeoutS: ctx.timeoutS });
+  const clients: any[] = Array.isArray(cfg?.clients) ? cfg.clients : [];
+  // Fail loud on a daemon that predates the guide instead of printing a bare endpoint and letting
+  // the operator believe that IS the install instruction (the panel this replaced did exactly that).
+  if (!clients.length) {
+    throw new CliError('this daemon returned no MCP client commands (older build) — restart the Host ADH Daemon and retry', EXIT.fail);
+  }
+  const installed = new Map<string, boolean>(clients.map((c) => [String(c.id), c.bin ? findExecutable(String(c.bin)) !== null : false]));
+  const wanted = ctx.opts.client as string | undefined;
+
+  if (wanted) {
+    const hit = clients.find((c) => c.id === wanted);
+    if (!hit) throw new CliError(`unknown client '${wanted}' (accepted: ${clients.map((c) => c.id).join(', ')})`, EXIT.usage);
+    // One line, nothing to parse — this is the value a user copies into their own terminal.
+    say(ctx, String(hit.command));
+    return emit(ctx, {
+      ok: true, endpoint: cfg.endpoint, client: hit.id, installed: installed.get(String(hit.id)) === true, command: hit.command,
+    }, EXIT.ok);
+  }
+
+  say(ctx, `ADH MCP · ${Number(cfg.tools ?? 0)} tools · ${cfg.endpoint}`);
+  if (cfg.pinnedEndpoint) say(ctx, '  按包固定  adh mcp --package <package>');
+  say(ctx, '');
+  say(ctx, '接入（复制一行到本机终端；✓ = 本机已检测到该客户端）:');
+  for (const c of clients) {
+    const mark = installed.get(String(c.id)) ? '✓' : ' ';
+    // The generic JSON block is multi-line: show how to print it rather than dumping it in a table.
+    const shown = c.multiline === true ? `adh mcp --client ${c.id}    （通用 mcpServers 片段）` : String(c.command);
+    say(ctx, `  ${String(c.id).padEnd(7)} ${mark}  ${shown}`);
+  }
+  say(ctx, '');
+  say(ctx, `  只看一条：adh mcp --client ${String(clients[0]?.id ?? 'claude')}    ·    机器可读：--json`);
+  if (cfg.verify) say(ctx, `  ${cfg.verify}`);
+  return emit(ctx, {
+    ok: true, endpoint: cfg.endpoint, pinnedEndpoint: cfg.pinnedEndpoint ?? null, tools: cfg.tools ?? 0,
+    clients: clients.map((c) => ({
+      id: c.id, label: c.label, installed: installed.get(String(c.id)) === true, command: c.command,
+    })),
+  }, EXIT.ok);
+}
+
 function reportSummary(report: any) {
   return {
     dexCount: (report.included ?? []).length, realDexCount: report.realDexCount, carrierCount: report.carrierCount,
@@ -612,6 +701,7 @@ async function main(argv: string[]): Promise<number> {
     case 'doctor': return await cmdDoctor(ctx);
     case 'target': return await cmdTarget(ctx);
     case 'unpack': return await cmdUnpack(ctx);
+    case 'mcp': return await cmdMcp(ctx);
     default: return EXIT.usage;
   }
 }
