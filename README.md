@@ -84,10 +84,23 @@ cd daemon
 node src/cli.ts doctor
 node src/cli.ts target --help
 node src/cli.ts unpack --help
-node src/cli.ts mcp            # MCP 接入命令（claude / codex / vscode / cursor / json）
 ```
 
-要让 AI 客户端用上 ADH，不用手写 JSON：`node src/cli.ts mcp` 会按本机装了哪些客户端，打印一行可以直接粘进终端的接入命令（`--client claude` 只看一条，`--package <包名>` 把端点固定到某个应用）。网页顶栏的 MCP 面板显示的是同一份内容。
+要让 AI 客户端用上 ADH，用我们已开源的 `adh` CLI（PyPI 包 `android-decrypt-hub`，源码 [decrypthub/adh-cli](https://github.com/decrypthub/adh-cli)）：
+
+```bash
+pip install -U android-decrypt-hub
+adh connect 127.0.0.1:8088      # 存下这台 Host（按包固定：adh connect 127.0.0.1:8088/<包名>）
+adh devices                     # 确认 online
+```
+
+然后把客户端的 stdio 命令配成 `adh mcp`（它把 Host 的 `POST /mcp` 转成 stdio），例如：
+
+```json
+{ "mcpServers": { "adh": { "command": "adh", "args": ["mcp"] } } }
+```
+
+网页顶栏的 MCP 面板会按当前地址生成同样这几条命令。**不要把 HTTP `/mcp` 直接配进客户端**——客户端只认 stdio。
 
 ## 各部分怎么分工
 

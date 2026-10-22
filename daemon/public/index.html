@@ -338,20 +338,19 @@
   .modal h3 button:hover { background:var(--surface-2); border-color:#646e7d; }
   .modal pre { flex:1; overflow:auto; margin:0; border:none; border-radius:0; background:transparent; padding:14px 16px; color:var(--ink-2); }
   .diag-hint { padding:10px 16px; border-bottom:1px solid var(--line-soft); background:transparent; color:var(--muted); font-size:12px; line-height:1.55; }
-  #mcpMask .modal { height:auto; max-height:min(80vh,640px); width:min(520px,92vw); }
+  #mcpMask .modal { height:auto; max-height:min(86vh,680px); width:min(540px,92vw); }
   .mcp-shell { display:flex; flex-direction:column; }
-  .mcp-body { padding:4px 20px 22px; overflow-y:auto; }
-  .mcp-step { margin-top:18px; }
+  .mcp-body { padding:4px 20px 18px; overflow-y:auto; }
+  .mcp-step { margin-top:16px; }
   .mcp-step:first-child { margin-top:10px; }
   .mcp-step h4 { margin:0 0 8px; color:var(--muted); font-size:11px; font-weight:650; letter-spacing:.06em; text-transform:uppercase; }
-  .mcp-fence { position:relative; display:flex; align-items:flex-start; gap:8px; padding:10px 52px 10px 12px; border-left:2px solid var(--line); }
+  .mcp-fence { position:relative; display:flex; align-items:flex-start; gap:8px; padding:8px 52px 8px 12px; border-left:2px solid var(--line); }
   .mcp-prompt { flex:0 0 auto; color:var(--muted); font:12px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace; user-select:none; }
   /* `overflow-wrap:break-word` keeps a command on whole words when it can and only splits a token
      that cannot fit on a line of its own — `break-all`/`anywhere` split every URL mid-address, which
      reads like a typo in a copy-paste line. */
   .mcp-fence code, .mcp-fence pre { flex:1; min-width:0; margin:0; padding:0; color:var(--ink); background:transparent; border:0; border-radius:0; font:12px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace; white-space:pre-wrap; overflow-wrap:break-word; }
   .mcp-fence--json pre { white-space:pre; overflow-wrap:normal; overflow-x:auto; }
-  .mcp-url { display:inline-block; max-width:100%; word-break:break-all; vertical-align:top; }
   .mcp-copy { position:absolute; top:8px; right:0; min-height:26px !important; padding:0 8px !important; color:var(--muted) !important; background:transparent !important; border:0 !important; font-size:11px !important; }
   .mcp-copy:hover { color:var(--ink) !important; }
   .mcp-copy.is-copied { color:var(--green) !important; }
@@ -365,7 +364,8 @@
   .mcp-chip:hover { color:var(--ink); border-color:#646e7d; }
   .mcp-chip.active { color:var(--ink); border-color:var(--blue); }
   .mcp-label { flex:0 0 auto; color:var(--muted); font-size:11px; line-height:1.65; user-select:none; }
-  .mcp-hint { margin:8px 0 0; color:var(--muted); font-size:11px; line-height:1.55; }
+  .mcp-hint { margin:6px 0 0; color:var(--muted); font-size:11px; line-height:1.55; }
+  .mcp-hint code { padding:0; border:0; background:transparent; color:var(--ink-2); white-space:nowrap; }
   .mcp-hint.warn { color:var(--amber); }
   .set-shell { width:min(980px,95vw); height:min(88vh,760px); padding:0; position:relative; }
   .set-close-x { position:absolute; top:10px; right:12px; z-index:2; width:28px; height:28px; border:none; background:transparent; color:var(--muted); font-size:20px; line-height:1; cursor:pointer; border-radius:4px; }
@@ -622,8 +622,8 @@
   </div>
 </main>
 
-<!-- MCP 模态：接入引导以我们的 CLI 为准（`adh mcp`），命令正文由 /api/mcp/config 提供，
-     与 daemon/src/mcp_onboarding.ts 同源，页面和终端不会各拼一套。 -->
+<!-- MCP 模态：接入引导以已发布的 `adh` CLI 为准（adh connect → adh mcp → stdio 客户端），
+     命令正文由 /api/mcp/config 提供，与 daemon/src/mcp_onboarding.ts 同源，页面和终端不会各拼一套。 -->
 <div class="modal-mask" id="mcpMask">
   <div class="modal mcp-shell">
     <h3>MCP<span class="spacer"></span>
@@ -631,12 +631,18 @@
     <div class="mcp-body">
       <section class="mcp-step">
         <h4>一步接入</h4>
-        <p class="mcp-lead">在 Host 终端运行它：按本机已装的客户端打印一行可直接执行的接入命令。</p>
+        <p class="mcp-lead">客户端只认 stdio：先装我们的 <code>adh</code> CLI，把 Host 存进它，再把 <code>adh mcp</code> 配给客户端。</p>
         <div class="mcp-fence">
           <span class="mcp-prompt">$</span>
-          <code id="mcpGuide">adh mcp</code>
-          <button type="button" class="mcp-copy" data-mcp-copy="guide" title="复制">复制</button>
+          <code id="mcpInstall">python -m pip install -U android-decrypt-hub</code>
+          <button type="button" class="mcp-copy" data-mcp-copy="install" title="复制">复制</button>
         </div>
+        <div class="mcp-fence">
+          <span class="mcp-prompt">$</span>
+          <code id="mcpConnect">adh connect 127.0.0.1:8088</code>
+          <button type="button" class="mcp-copy" data-mcp-copy="connect" title="复制">复制</button>
+        </div>
+        <p class="mcp-hint" id="mcpConnectHint">已装过可跳过第一条（pipx：pipx install android-decrypt-hub）；换 Host 重跑第二条，<code>adh devices</code> 查看已保存地址。</p>
       </section>
       <section class="mcp-step">
         <h4>客户端命令</h4>
@@ -649,18 +655,18 @@
         <p class="mcp-hint" id="mcpClientHint"></p>
       </section>
       <section class="mcp-step">
-        <h4>端点（手工配置时才需要）</h4>
+        <h4>端点（脚本 / curl 用）</h4>
         <div class="mcp-fence">
           <code id="mcpEndpoint">http://127.0.0.1:8088/mcp</code>
           <button type="button" class="mcp-copy" data-mcp-copy="endpoint" title="复制">复制</button>
         </div>
-        <div class="mcp-fence" id="mcpPinnedRow">
+        <div class="mcp-fence" id="mcpPinnedConnectRow">
           <span class="mcp-label">按包固定</span>
-          <code id="mcpPinned">http://127.0.0.1:8088/&lt;package&gt;/mcp</code>
-          <button type="button" class="mcp-copy" data-mcp-copy="pinned" title="复制">复制</button>
+          <code id="mcpPinnedConnect">adh connect 127.0.0.1:8088/&lt;package&gt;</code>
+          <button type="button" class="mcp-copy" data-mcp-copy="pinnedConnect" title="复制">复制</button>
         </div>
       </section>
-      <p class="mcp-note" id="mcpNote">仅限可信网络 · MCP 由 Host ADH Daemon 直接提供，不经过额外网关；命令与 <code>adh mcp</code> 同源。</p>
+      <p class="mcp-note" id="mcpNote">仅限可信网络 · 不要把 HTTP /mcp 直接配进客户端；客户端只配 <code>adh mcp</code>，由 CLI 转 stdio。</p>
     </div>
   </div>
 </div>
@@ -1591,33 +1597,37 @@ document.addEventListener('click', ev=>{
 function closeModal(id){ document.getElementById(id).classList.remove('show'); }
 
 // ---- MCP 模态（头部按钮）----
-// 引导正文来自 daemon：/api/mcp/config 用 mcp_onboarding.ts 生成，和 `adh mcp` 打印的是同一份，
-// 这里只渲染/复制。页面不再自己拼端点或客户端命令，也就不会和 CLI 漂移。
+// 引导正文来自 daemon：/api/mcp/config 用 mcp_onboarding.ts 生成。产品入口是已发布的 `adh` CLI
+// （PyPI android-decrypt-hub）：`adh connect` 存 Host，`adh mcp` 把 POST /mcp 转 stdio——客户端里
+// 只配这条 stdio 命令，不配 HTTP 端点。页面只渲染/复制，不自己拼命令。
 let mcpCfg = null, mcpClientId = '';
 function mcpFallback(){
-  const pin = pinnedPackage(), origin = location.origin;
+  const pin = pinnedPackage(), origin = location.origin, host = location.host;
   return {
-    guide: 'adh mcp',
+    install: 'python -m pip install -U android-decrypt-hub',
+    connect: `adh connect ${host}${pin ? '/'+pin : ''}`,
     endpoint: `${origin}${pin ? '/'+pin : ''}/mcp`,
-    pinnedEndpoint: pin ? null : `${origin}/<package>/mcp`,
+    connectPinned: pin ? null : `adh connect ${host}/<package>`,
     clients: [],
   };
 }
 function mcpSelected(){ return ((mcpCfg && mcpCfg.clients) || []).find(c=>c.id===mcpClientId) || null; }
 function mcpText(kind){
   const cfg = mcpCfg || mcpFallback();
-  if(kind==='guide') return cfg.guide || 'adh mcp';
+  if(kind==='install') return cfg.install || '';
+  if(kind==='connect') return cfg.connect || '';
   if(kind==='client'){ const c=mcpSelected(); return c ? c.command : ''; }
-  if(kind==='pinned') return cfg.pinnedEndpoint || '';
+  if(kind==='pinnedConnect') return cfg.connectPinned || '';
   return cfg.endpoint || '';
 }
 function renderMcp(loading){
   const cfg = mcpCfg || mcpFallback();
-  document.getElementById('mcpGuide').textContent = cfg.guide || 'adh mcp';
+  document.getElementById('mcpInstall').textContent = cfg.install || '';
+  document.getElementById('mcpConnect').textContent = cfg.connect || '';
   document.getElementById('mcpEndpoint').textContent = cfg.endpoint || '';
-  const pinRow = document.getElementById('mcpPinnedRow');
-  pinRow.hidden = !cfg.pinnedEndpoint;
-  if(cfg.pinnedEndpoint) document.getElementById('mcpPinned').textContent = cfg.pinnedEndpoint;
+  const pinCliRow = document.getElementById('mcpPinnedConnectRow');
+  pinCliRow.hidden = !cfg.connectPinned;
+  if(cfg.connectPinned) document.getElementById('mcpPinnedConnect').textContent = cfg.connectPinned;
   const clients = cfg.clients || [];
   const chips = document.getElementById('mcpClients');
   const fence = document.getElementById('mcpCmdFence');
@@ -1626,7 +1636,7 @@ function renderMcp(loading){
     chips.innerHTML = ''; fence.hidden = true;
     hint.className = 'mcp-hint warn';
     hint.textContent = loading ? '正在读取接入命令…'
-      : '守护进程没有返回接入命令（旧版本）：重启 Host ADH Daemon 后这里会出现，或先在终端运行 adh mcp。';
+      : '守护进程没有返回接入命令（旧版本）：重启 Host ADH Daemon 后这里会出现。';
     return;
   }
   if(!clients.some(c=>c.id===mcpClientId)) mcpClientId = clients[0].id;
@@ -1639,18 +1649,7 @@ function renderMcp(loading){
   // `$` introduces a shell command; the generic JSON client prints a document, not a command.
   const prompt = fence.querySelector('.mcp-prompt');
   if(prompt) prompt.hidden = sel.multiline===true;
-  const cmdEl = document.getElementById('mcpClientCmd');
-  const url = cfg.endpoint || '';
-  const at = sel.multiline===true || !url ? -1 : String(sel.command).indexOf(url);
-  if(at >= 0){
-    // The endpoint is one long unbroken token: as an atomic inline-block it moves to the next line
-    // whole instead of being sliced mid-address (Chrome's break-word fills the line and splits it).
-    cmdEl.innerHTML = escapeHtml(String(sel.command).slice(0, at))
-      + `<span class="mcp-url">${escapeHtml(url)}</span>`
-      + escapeHtml(String(sel.command).slice(at + url.length));
-  } else {
-    cmdEl.textContent = sel.command;
-  }
+  document.getElementById('mcpClientCmd').textContent = sel.command;
   hint.className = 'mcp-hint';
   hint.textContent = sel.note || '';
 }

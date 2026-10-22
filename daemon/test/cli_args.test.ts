@@ -1,8 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { COMMANDS, GLOBAL_FLAGS, findExecutable, parseArgs, pickSession, repoVersions } from '../src/cli.ts';
-import { join } from 'node:path';
+import { COMMANDS, GLOBAL_FLAGS, parseArgs, pickSession, repoVersions } from '../src/cli.ts';
 
 // The ADH CLI's contract is mostly a *flag* contract, and its failure mode is quiet: a flag that is
 // accepted and then ignored leaves the operator believing a check ran that never ran. That exact
@@ -29,7 +28,7 @@ test('every declared flag is claimed by the handler that runs the command', () =
 test('every declared flag actually lands in opts when supplied', () => {
   const sample: Record<string, string> = {
     host: '127.0.0.1', port: '8088', timeout: '5', package: 'com.adh.sandbox',
-    session: 'sid', out: '/tmp/out', client: 'claude',
+    session: 'sid', out: '/tmp/out',
   };
   for (const [cmd, spec] of Object.entries(COMMANDS)) {
     for (const flag of [...spec.flags, ...GLOBAL_FLAGS]) {
@@ -112,33 +111,6 @@ test('an explicitly pinned session is honoured, and an offline pin fails loudly'
   assert.match(offline.message, /offline/);
   const missing = (() => { try { pickSession(agents, undefined, 'nope'); return null; } catch (e) { return e as any; } })();
   assert.match(missing.message, /no agent session 'nope'/);
-});
-
-// ---------------------------------------------------------------------------------------------
-// local client detection (`adh mcp` marks which client CLIs this machine actually has)
-// ---------------------------------------------------------------------------------------------
-
-test('findExecutable honours PATH order and, on Windows, PATHEXT', () => {
-  // Windows PATH entries are quoted more often than not, and the executable is code.CMD — looking
-  // only for a file literally named "code" reports "not installed" for a working VS Code.
-  const first = join('C:\\bin', 'code.CMD');
-  const second = join('C:\\other', 'code.CMD');
-  const win = findExecutable(
-    'code',
-    { PATH: '"C:\\bin";C:\\other', PATHEXT: '.EXE;.CMD' },
-    'win32',
-    (p) => p === first || p === second,
-  );
-  assert.equal(win, first, 'the first PATH hit wins and the quoted entry is unwrapped');
-
-  const posixPath = join('/opt/tools/bin', 'claude');
-  const posix = findExecutable('claude', { PATH: '/usr/bin:/opt/tools/bin' }, 'linux', (p) => p === posixPath);
-  assert.equal(posix, posixPath);
-});
-
-test('findExecutable reports a missing client as missing, not as the literal name', () => {
-  assert.equal(findExecutable('nope-not-installed', { PATH: '/usr/bin' }, 'linux', () => false), null);
-  assert.equal(findExecutable('claude', {}, 'linux', () => true), null, 'an empty PATH finds nothing');
 });
 
 // ---------------------------------------------------------------------------------------------

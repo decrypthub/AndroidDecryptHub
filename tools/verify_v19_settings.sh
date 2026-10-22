@@ -30,9 +30,9 @@ verify_chk "import applied ui"             'grep -q "\"ui\"" <<<"$IMP"'
 verify_chk "import readback displayCap"    '[ "$(curl -s "$BASE/api/config" | jget settings.ui.displayCap)" = "150" ]'
 verify_chk "import rejects empty segs"     '[ "$(curl -s -o /dev/null -w %{http_code} -X POST "$BASE/api/settings/import" -H "content-type: application/json" -d "{\"nope\":1}")" = "400" ]'
 
-# 4) MCP config carries the CLI-equivalent install commands (the panel renders these, not raw JSON-RPC)
+# 4) MCP config carries the CLI-onboarding payload (adh connect + adh mcp stdio, not a raw HTTP client)
 verify_chk "mcp config has HTTP endpoint"   'curl -s "$BASE/api/mcp/config" | grep -q "/mcp"'
-verify_chk "mcp config carries the CLI guide + client commands" 'curl -s "$BASE/api/mcp/config" | grep -q "adh mcp" && curl -s "$BASE/api/mcp/config" | grep -q "claude mcp add" && curl -s "$BASE/api/mcp/config" | grep -q "\"clients\""'
+verify_chk "mcp config carries the adh CLI guide + stdio client commands" 'curl -s "$BASE/api/mcp/config" | grep -q "android-decrypt-hub" && curl -s "$BASE/api/mcp/config" | grep -q "adh connect" && curl -s "$BASE/api/mcp/config" | grep -q "adh mcp" && curl -s "$BASE/api/mcp/config" | grep -q "\"clients\""'
 
 # 5) data clear endpoint validates input
 verify_chk "/api/data/clear bad what=400"  '[ "$(curl -s -o /dev/null -w %{http_code} -X POST "$BASE/api/data/clear" -H "content-type: application/json" -d "{\"what\":\"bogus\"}")" = "400" ]'

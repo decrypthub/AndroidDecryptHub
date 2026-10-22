@@ -104,9 +104,10 @@ bash tools/fetch_dobby.sh          # one-time: Dobby (verified native inline-hoo
 node src/index.ts                  # start (HTTP/WS 8088, agent TCP 8761); or: npm start
 node --watch src/index.ts          # dev; or: npm run dev
 node test/smoke.ts                 # smoke; or: npm run smoke
-node src/cli.ts --help             # `adh` CLI (npm run adh): doctor | target | unpack | mcp — the client of adhd,
+node src/cli.ts --help             # `adh` CLI (npm run adh): doctor | target | unpack — the client of adhd,
                                    # and the one implementation of "resolve the target agent" (see docs/PROGRESS.md)
-                                   # `adh mcp` prints the MCP install commands for claude/codex/vscode/cursor/json
+# MCP client onboarding is the PUBLISHED `adh` CLI (PyPI android-decrypt-hub, repo decrypthub/adh-cli):
+# `adh connect <host:8088>` then `adh mcp` (stdio). Clients never get the HTTP /mcp directly.
 
 # --- sandbox app (Kotlin, AGP 8.7.3 / Gradle 8.9 / compileSdk 36) — from sandbox-app/
 ./gradlew :app:assembleDebug       # build APK; install with install_apk_root (su + pm, not adb install)

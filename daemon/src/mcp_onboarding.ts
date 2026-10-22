@@ -1,24 +1,23 @@
 // MCP onboarding — the text behind "how do I connect an AI client?".
 //
-// Before this module the Web modal showed three raw artifacts (the endpoint, a package-pinned
-// endpoint, and a `tools/list` JSON-RPC body) and left the operator to translate them into a client
-// config by hand. That is an API dump, not an install guide: the thing that actually has to happen is
-// "run one command that registers this daemon with the client you use". The guide therefore starts
-// from our own CLI (`adh mcp`), and the command lines it prints are built HERE — one implementation
-// shared by the CLI (which renders them, see cli.ts `mcp`) and the Web modal (which shows them), so
-// the page and the terminal cannot drift apart.
+// The product's MCP entry point is the published `adh` CLI (PyPI `android-decrypt-hub`, source
+// `decrypthub/adh-cli`), not the HTTP endpoint. `adh connect <host>` saves this daemon; `adh mcp`
+// turns `POST /mcp` into stdio, which is what Cursor / Claude Desktop / Claude Code actually speak.
+// Its README is explicit: do not put the HTTP `/mcp` into a client directly.
 //
-// Two properties are deliberate:
-//   * every `command` is meant to be pasted as-is (the client's own CLI, not a config snippet), which
-//     is why the JSON argument for `code`/`cursor` is single-quoted: that form works in PowerShell and
-//     in bash/zsh (the screenshot-era modal sent people to hand-edit JSON instead);
-//   * `bin` is the executable the CLI checks on PATH to say "you have this client" — it is metadata,
-//     so detection stays on the side that runs the command (a daemon on another machine cannot know).
+// This panel used to show the endpoint, the package-pinned endpoint and a `tools/list` JSON-RPC
+// body — i.e. exactly what that README warns about — and a first version of this module replaced it
+// with HTTP `--transport` commands, which is still the wrong transport. So the guide is now:
 //
-// The list is intentionally short: one entry per client we can name a real command for. `json` is the
-// escape hatch for everything else (and for cmd.exe, where single quotes are not quoting).
+//   1. install the CLI, 2. `adh connect <this daemon>`, 3. register `adh mcp` as a stdio server.
+//
+// One implementation lives here; the Web panel renders it. Anything daemon-specific (the address,
+// the pinned form) is derived from the request's own Host, so a LAN browser and a loopback shell
+// each get an address that actually works. `adh-cli` 0.1.2 is the released CLI this text targets.
 
 export const MCP_SERVER_NAME = 'adh';
+export const CLI_NAME = 'adh';
+export const CLI_PYPI_PACKAGE = 'android-decrypt-hub';
 
 export type McpClientId = 'claude' | 'codex' | 'vscode' | 'cursor' | 'json';
 
@@ -26,8 +25,6 @@ export interface McpClientSpec {
   id: McpClientId;
   /** Human label for the Web chips. */
   label: string;
-  /** Executable whose presence means "this client is installed". null = no CLI to register with. */
-  bin: string | null;
   /** The command is a multi-line document (currently only the generic JSON block). */
   multiline: boolean;
   /** One line shown under the command; state the side effect, not marketing. */
@@ -40,11 +37,15 @@ export interface McpClientCommand extends McpClientSpec {
 
 export interface McpOnboarding {
   note: string;
-  /** The command the guide starts from. */
-  guide: string;
+  /** Install line for the CLI (the `pipx` alternative lives in the panel's hint). */
+  install: string;
+  /** `adh connect <host[:port][/package]>` for the address this payload was built for. */
+  connect: string;
   endpoint: string;
   /** `/mcp` of `<base>/<package>/mcp`, or null when the payload is already pinned. */
   pinnedEndpoint: string | null;
+  /** The CLI form of pinning, or null when the payload is already pinned. */
+  connectPinned: string | null;
   tools: number;
   verify: string;
   clients: McpClientCommand[];
@@ -52,24 +53,24 @@ export interface McpOnboarding {
 
 export const MCP_CLIENTS: McpClientSpec[] = [
   {
-    id: 'claude', label: 'Claude Code', bin: 'claude', multiline: false,
-    note: '写入用户级配置（所有项目可用）；去掉 --scope user 则只对当前项目生效',
+    id: 'claude', label: 'Claude Code', multiline: false,
+    note: '写入用户级配置（所有项目可用）；-- 之后是 stdio 命令，由 adh 转发到 Host',
   },
   {
-    id: 'codex', label: 'Codex', bin: 'codex', multiline: false,
-    note: 'Codex CLI 内置注册，--url 指向 Streamable HTTP 端点',
+    id: 'codex', label: 'Codex', multiline: false,
+    note: 'Codex CLI 的 stdio 注册；-- 之后是命令，不需要 --url',
   },
   {
-    id: 'vscode', label: 'VS Code', bin: 'code', multiline: false,
+    id: 'vscode', label: 'VS Code', multiline: false,
     note: '写入 VS Code 的用户级 MCP 配置；在装了 code 命令的终端里运行一次',
   },
   {
-    id: 'cursor', label: 'Cursor', bin: 'cursor', multiline: false,
-    note: '需要 Cursor 的 shell 命令（命令面板 → Install \'cursor\' command）',
+    id: 'cursor', label: 'Cursor', multiline: false,
+    note: '需要 Cursor 的 shell 命令（命令面板 → Install \'cursor\' command）；也可直接编辑 mcp.json',
   },
   {
-    id: 'json', label: 'JSON', bin: null, multiline: true,
-    note: '通用 mcpServers 片段：手工粘进任意客户端的配置文件（cmd.exe 用这个）',
+    id: 'json', label: 'JSON', multiline: true,
+    note: '通用 mcpServers 片段：command 是 adh，args 是 ["mcp"]（cmd.exe 用这个）',
   },
 ];
 
@@ -80,40 +81,51 @@ export function mcpEndpoint(base: string, pkg?: string): string {
   return pkg ? `${root}/${pkg}/mcp` : `${root}/mcp`;
 }
 
-/** The one JSON object every HTTP-capable client understands for this server. */
-function serverJson(url: string): string {
-  return JSON.stringify({ name: MCP_SERVER_NAME, type: 'http', url });
+/** `adh connect` takes `host[:port][/package]` (scheme optional); `adh-cli` turns the path into
+ *  `/<package>/mcp`, so pinning is a property of the saved connection, not of the command. */
+export function adhConnectTarget(base: string, pkg?: string): string {
+  const hostPort = base.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+  return pkg ? `${hostPort}/${pkg}` : hostPort;
 }
 
-export function mcpClientCommand(spec: McpClientSpec, url: string): string {
+/** The stdio server definition every JSON-config client uses. `adh mcp` reads the saved address and
+ *  streams JSON-RPC on stdout — no HTTP URL, no per-client transport differences. */
+function serverJson(): string {
+  return JSON.stringify({ name: MCP_SERVER_NAME, command: CLI_NAME, args: ['mcp'] });
+}
+
+export function mcpClientCommand(spec: McpClientSpec): string {
   switch (spec.id) {
     case 'claude':
-      // --scope user: a device-tool server is useful from every project, not only the cwd one.
-      return `claude mcp add --transport http --scope user ${MCP_SERVER_NAME} ${url}`;
+      // --scope user: a device tool is useful from every project, not only the cwd one.
+      return `claude mcp add --scope user ${MCP_SERVER_NAME} -- ${CLI_NAME} mcp`;
     case 'codex':
-      return `codex mcp add ${MCP_SERVER_NAME} --url ${url}`;
+      return `codex mcp add ${MCP_SERVER_NAME} -- ${CLI_NAME} mcp`;
     case 'vscode':
-      return `code --add-mcp '${serverJson(url)}'`;
+      return `code --add-mcp '${serverJson()}'`;
     case 'cursor':
-      return `cursor --add-mcp '${serverJson(url)}'`;
+      return `cursor --add-mcp '${serverJson()}'`;
     case 'json':
-      return JSON.stringify({ mcpServers: { [MCP_SERVER_NAME]: { type: 'http', url } } }, null, 2);
+      // Pretty-printed but compact on purpose: the panel shows this block inline, and a
+      // nine-line output pushed the rest of the guide below the fold for no extra meaning.
+      return `{\n  "mcpServers": {\n    "${MCP_SERVER_NAME}": { "command": "${CLI_NAME}", "args": ["mcp"] }\n  }\n}`;
   }
 }
 
 export function mcpOnboarding(base: string, opts: { package?: string; tools?: number } = {}): McpOnboarding {
   const pkg = opts.package?.trim() || undefined;
-  const endpoint = mcpEndpoint(base, pkg);
   const root = base.replace(/\/+$/, '');
   return {
-    note: '仅限可信网络：MCP 没有鉴权，不要把 8088 暴露到公网。接入命令由 `adh mcp` 生成，与命令行同源。',
-    guide: 'adh mcp',
-    endpoint,
-    // A pinned payload already IS the pinned endpoint; printing "<package>" again would be noise.
+    note: 'MCP 没有鉴权，只连可信网络。客户端里只配 `adh mcp` 这条 stdio 命令——不要把 HTTP /mcp 直接填进客户端。',
+    install: `python -m pip install -U ${CLI_PYPI_PACKAGE}`,
+    connect: `${CLI_NAME} connect ${adhConnectTarget(root, pkg)}`,
+    endpoint: mcpEndpoint(root, pkg),
+    // A pinned payload already IS the pinned form; printing "<package>" again would be noise.
     pinnedEndpoint: pkg ? null : `${root}/<package>/mcp`,
+    connectPinned: pkg ? null : `${CLI_NAME} connect ${adhConnectTarget(root)}/<package>`,
     tools: opts.tools ?? 0,
-    verify: '接好后让客户端调用 capabilities：能看到 agent 的能力面就说明通了。',
-    clients: MCP_CLIENTS.map((spec) => ({ ...spec, command: mcpClientCommand(spec, endpoint) })),
+    verify: '`adh devices` 显示 online 后，让客户端调用 capabilities：能看到 agent 的能力面就说明通了。',
+    clients: MCP_CLIENTS.map((spec) => ({ ...spec, command: mcpClientCommand(spec) })),
   };
 }
 

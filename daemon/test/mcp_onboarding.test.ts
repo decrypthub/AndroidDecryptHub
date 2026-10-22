@@ -2,84 +2,90 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  MCP_CLIENTS, MCP_SERVER_NAME, baseFromHost, isValidPackage, mcpClientCommand, mcpEndpoint, mcpOnboarding,
+  MCP_CLIENTS, MCP_SERVER_NAME, adhConnectTarget, baseFromHost, isValidPackage, mcpClientCommand, mcpEndpoint, mcpOnboarding,
 } from '../src/mcp_onboarding.ts';
 
 // The onboarding payload is what an operator pastes into a terminal, so these tests are about the
-// pasted result, not about our formatting: each client command must contain a URL that was actually
-// handed out, and the JSON-shaped ones must parse back into the object the client expects. A typo in
-// a flag is not caught by typechecking and, unlike a broken route, it fails at the user's prompt with
-// the client's own confusing error message.
+// pasted result. The invariant that matters most is the transport: the published `adh` CLI speaks
+// stdio (`adh mcp`), and its README says not to point a client at HTTP `/mcp`. A "helpful" HTTP URL
+// creeping back into a client command is exactly the regression this file exists to catch.
 
-const BASE = 'http://127.0.0.1:8088';
+const BASE = 'http://192.168.200.108:8088';
 const URL = `${BASE}/mcp`;
+const PKG = 'com.jingdong.app.mall';
 
-test('every client has a unique id and a paste-able command containing the endpoint', () => {
+test('every client has a unique id and registers the adh CLI, never an HTTP transport', () => {
   assert.deepEqual(MCP_CLIENTS.map((c) => c.id), ['claude', 'codex', 'vscode', 'cursor', 'json']);
   for (const spec of MCP_CLIENTS) {
-    const command = mcpClientCommand(spec, URL);
-    assert.ok(command.includes(URL), `${spec.id} does not carry the endpoint: ${command}`);
-    assert.ok(command.length > URL.length, `${spec.id} is only a URL, not an install command`);
+    const command = mcpClientCommand(spec);
+    assert.ok(command.includes('adh'), `${spec.id} does not invoke adh: ${command}`);
+    assert.ok(!command.includes('http://'), `${spec.id} leaks an HTTP endpoint into the client: ${command}`);
+    assert.ok(!command.includes('--transport http'), `${spec.id} still uses the HTTP transport: ${command}`);
   }
 });
 
-test('the claude line registers an HTTP server at user scope', () => {
-  const cmd = mcpClientCommand(MCP_CLIENTS.find((c) => c.id === 'claude')!, URL);
-  assert.equal(cmd, `claude mcp add --transport http --scope user ${MCP_SERVER_NAME} ${URL}`);
+test('claude and codex register `adh mcp` as a stdio command after --', () => {
+  assert.equal(mcpClientCommand(MCP_CLIENTS.find((c) => c.id === 'claude')!),
+    `claude mcp add --scope user ${MCP_SERVER_NAME} -- adh mcp`);
+  assert.equal(mcpClientCommand(MCP_CLIENTS.find((c) => c.id === 'codex')!),
+    `codex mcp add ${MCP_SERVER_NAME} -- adh mcp`);
 });
 
-test('the codex line uses its --url form (a stdio-style "codex mcp add adh <cmd>" would be wrong)', () => {
-  const cmd = mcpClientCommand(MCP_CLIENTS.find((c) => c.id === 'codex')!, URL);
-  assert.equal(cmd, `codex mcp add ${MCP_SERVER_NAME} --url ${URL}`);
-});
-
-test('code/cursor receive the server definition as parseable JSON, not as a sentence', () => {
+test('code/cursor receive a parseable stdio definition, not a sentence', () => {
   for (const [id, bin] of [['vscode', 'code'], ['cursor', 'cursor']] as const) {
-    const cmd = mcpClientCommand(MCP_CLIENTS.find((c) => c.id === id)!, URL);
+    const cmd = mcpClientCommand(MCP_CLIENTS.find((c) => c.id === id)!);
     // Single-quoted for PowerShell and bash alike; the JSON itself must survive the quoting.
     const quoted = /^(\S+) --add-mcp '(.*)'$/.exec(cmd);
     assert.ok(quoted, `${id}: unexpected shape: ${cmd}`);
     assert.equal(quoted[1], bin);
-    assert.deepEqual(JSON.parse(quoted[2]), { name: MCP_SERVER_NAME, type: 'http', url: URL });
+    assert.deepEqual(JSON.parse(quoted[2]), { name: MCP_SERVER_NAME, command: 'adh', args: ['mcp'] });
   }
 });
 
-test('the json client is a complete mcpServers document, parseable and name-keyed', () => {
+test('the json client is a complete mcpServers document with a stdio command', () => {
   const spec = MCP_CLIENTS.find((c) => c.id === 'json')!;
   assert.equal(spec.multiline, true);
-  const parsed = JSON.parse(mcpClientCommand(spec, URL));
-  assert.deepEqual(parsed, { mcpServers: { [MCP_SERVER_NAME]: { type: 'http', url: URL } } });
+  assert.deepEqual(JSON.parse(mcpClientCommand(spec)), {
+    mcpServers: { [MCP_SERVER_NAME]: { command: 'adh', args: ['mcp'] } },
+  });
 });
 
-test('the payload carries the endpoint, the pinned form and the live tool count', () => {
+test('the payload installs and connects the CLI, and keeps the live endpoint for scripts', () => {
   const cfg = mcpOnboarding(BASE, { tools: 79 });
-  assert.equal(cfg.guide, 'adh mcp');
+  assert.equal(cfg.install, 'python -m pip install -U android-decrypt-hub');
+  assert.equal(cfg.connect, `adh connect 192.168.200.108:8088`);
   assert.equal(cfg.endpoint, URL);
   assert.equal(cfg.pinnedEndpoint, `${BASE}/<package>/mcp`);
+  assert.equal(cfg.connectPinned, `adh connect 192.168.200.108:8088/<package>`);
   assert.equal(cfg.tools, 79);
   assert.equal(cfg.clients.length, MCP_CLIENTS.length);
-  // Every client is built against the SAME endpoint the panel shows — no client drifts to a
-  // different host, which is the failure that would silently point the AI at another machine.
-  for (const client of cfg.clients) assert.ok(client.command.includes(cfg.endpoint), client.id);
+  // The client commands do not depend on the address at all — that is the point of `adh connect`
+  // having saved it. If one starts embedding the endpoint, the two halves have drifted.
+  for (const client of cfg.clients) assert.ok(!client.command.includes(cfg.endpoint), client.id);
 });
 
-test('a pinned package rewrites the endpoint everywhere and drops the placeholder line', () => {
-  const cfg = mcpOnboarding(BASE, { package: 'com.jingdong.app.mall', tools: 79 });
-  assert.equal(cfg.endpoint, `${BASE}/com.jingdong.app.mall/mcp`);
+test('a pinned package pins BOTH the endpoint and the saved connection', () => {
+  const cfg = mcpOnboarding(BASE, { package: PKG, tools: 79 });
+  assert.equal(cfg.endpoint, `${BASE}/${PKG}/mcp`);
+  assert.equal(cfg.connect, `adh connect 192.168.200.108:8088/${PKG}`);
   assert.equal(cfg.pinnedEndpoint, null);
-  for (const client of cfg.clients) {
-    assert.ok(client.command.includes('/com.jingdong.app.mall/mcp'), `${client.id}: ${client.command}`);
-    assert.ok(!client.command.includes('<package>'), `${client.id} still carries the placeholder`);
-  }
-  // The JSON client must still be valid JSON after the URL substitution.
-  assert.equal(
-    JSON.parse(cfg.clients.find((c) => c.id === 'json')!.command).mcpServers.adh.url,
-    `${BASE}/com.jingdong.app.mall/mcp`,
-  );
+  assert.equal(cfg.connectPinned, null);
+  // Pinning must not change the client registration: `adh mcp` reads the saved address.
+  for (const client of cfg.clients) assert.ok(!client.command.includes(PKG), client.id);
 });
 
 test('an empty or whitespace package means "unpinned", not "/<empty>/mcp"', () => {
-  for (const pkg of ['', '   ']) assert.equal(mcpOnboarding(BASE, { package: pkg }).endpoint, URL);
+  for (const pkg of ['', '   ']) {
+    const cfg = mcpOnboarding(BASE, { package: pkg });
+    assert.equal(cfg.endpoint, URL);
+    assert.equal(cfg.connect, 'adh connect 192.168.200.108:8088');
+  }
+});
+
+test('the connect target drops the scheme and any trailing slash', () => {
+  assert.equal(adhConnectTarget(`${BASE}/`), '192.168.200.108:8088');
+  assert.equal(adhConnectTarget(`${BASE}//`, PKG), `192.168.200.108:8088/${PKG}`);
+  assert.equal(adhConnectTarget('http://[::1]:8088'), '[::1]:8088');
 });
 
 test('a trailing slash on the base never becomes a doubled slash', () => {
@@ -88,7 +94,7 @@ test('a trailing slash on the base never becomes a doubled slash', () => {
 });
 
 test('package names are validated before they reach a URL path', () => {
-  for (const ok of ['com.a', 'com.jingdong.app.mall', 'a_b.c1', 'x']) assert.equal(isValidPackage(ok), true, ok);
+  for (const ok of ['com.a', PKG, 'a_b.c1', 'x']) assert.equal(isValidPackage(ok), true, ok);
   for (const bad of ['', ' com.a', 'com.a ', 'com..a', 'com/a', 'com a', '../etc', 'com.a?x=1', '.com.a']) {
     assert.equal(isValidPackage(bad), false, bad);
   }
