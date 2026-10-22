@@ -10,27 +10,46 @@
 #include "qbdi_trace.h"
 
 void adh_cmd_qbdi_trace(int fd, const char *id, const char *symbol_library,
-                        const char *symbol, const char *args_csv) {
-    // The caller names both the library and the symbol. A fixture name must never be baked in
-    // here: the agent runs in arbitrary targets, so a hardcoded module/symbol is a coupling bug
-    // AND a signature the target can read straight out of our own memory. Fail loud instead of
-    // silently tracing whatever fixture happened to be loaded.
+                        const char *symbol, const char *args_csv, const char *addr_hex) {
+    // The caller names either a library+symbol, or an absolute ADDRESS. A fixture name must never
+    // be baked in here: the agent runs in arbitrary targets, so a hardcoded module/symbol is a
+    // coupling bug AND a signature the target can read straight out of our own memory. The address
+    // form exists because the interesting functions in a stripped, obfuscated library are not
+    // exported at all (`main` in libjdg is registered through RegisterNatives, so its address only
+    // comes from the static method table) — symbol-only tracing could not reach them.
     char idj[64];
     json_escape(id, idj, sizeof(idj));
-    if (!symbol_library[0] || !symbol[0]) {
-        char err[192];
+    void *function = NULL;
+    char target_label[96] = "";
+    unsigned long long addr = 0;
+    if (addr_hex && addr_hex[0]) {
+        char *end = NULL;
+        addr = strtoull(addr_hex, &end, 0);
+        if (!addr) {
+            char errline[192];
+            snprintf(errline, sizeof(errline),
+                     "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"qbdi_trace\",\"ok\":false,"
+                     "\"error\":\"addr did not parse (expected 0x…)\"}\n", idj);
+            send_line(fd, errline);
+            return;
+        }
+        function = (void *)(uintptr_t)addr;
+        snprintf(target_label, sizeof(target_label), "addr:%s", addr_hex);
+    } else if (symbol_library[0] && symbol[0]) {
+        function = adh_resolve_sym(symbol_library, symbol);
+        snprintf(target_label, sizeof(target_label), "%s!%s", symbol_library, symbol);
+    } else {
+        char err[224];
         snprintf(err, sizeof(err),
                  "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"qbdi_trace\","
-                 "\"ok\":false,\"error\":\"qbdi_trace needs symLib and symbol\"}\n",
+                 "\"ok\":false,\"error\":\"qbdi_trace needs symLib+symbol or addr\"}\n",
                  idj);
         send_line(fd, err);
         return;
     }
-    const char *library = symbol_library;
-    const char *target_symbol = symbol;
-    void *function = adh_resolve_sym(library, target_symbol);
+    const char *target_symbol = target_label;
     if (!function) {
-        char error[160];
+        char error[192];
         snprintf(error, sizeof(error),
                  "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"qbdi_trace\","
                  "\"ok\":false,\"error\":\"symbol not found\"}\n",

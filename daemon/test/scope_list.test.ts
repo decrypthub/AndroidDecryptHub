@@ -1,6 +1,25 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseScopePackages, applicationLabel, scopeSwitcherApps } from '../src/scope_list.ts';
+import { parseScopePackages, applicationLabel, scopeSwitcherApps, autoArmAllowed } from '../src/scope_list.ts';
+
+test('self-load arms without being in scope; a Zygisk session must be listed', () => {
+  const scope = { packages: ['com.example.target'], error: null };
+  // entry is how the agent says it was loaded: 'jni_onload' = the process loaded us itself
+  // (sandbox / simulated injection), 'start' = Zygisk. Keying on that instead of a package name
+  // keeps target identity out of the daemon.
+  assert.equal(autoArmAllowed('com.adh.sandbox', 'jni_onload', scope), true);
+  assert.equal(autoArmAllowed('com.example.other', 'jni_onload', scope), true);
+  assert.equal(autoArmAllowed('com.example.target', 'start', scope), true);
+  assert.equal(autoArmAllowed('com.example.other', 'start', scope), false);
+  assert.equal(autoArmAllowed('', 'start', scope), false);
+  assert.equal(autoArmAllowed('?', 'jni_onload', scope), false);
+});
+
+test('a scope that was never read fails open; an empty-but-successful one does not', () => {
+  assert.equal(autoArmAllowed('com.example.target', 'start', null), true);
+  assert.equal(autoArmAllowed('com.example.target', 'start', { packages: [], error: 'permission denied' }), true);
+  assert.equal(autoArmAllowed('com.example.target', 'start', { packages: [], error: null }), false);
+});
 
 test('the web switcher is the checked scope list, in file order', () => {
   const raw = `{

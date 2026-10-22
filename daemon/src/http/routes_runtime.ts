@@ -1,6 +1,6 @@
 import {
   dumpAllDex, dumpAppSo, dumpOneAppSo, dumpRegion, inventoryUnpack, listUnpackBundles, listUnpackRuns,
-  pickSid, pullPackageSo, runUnpackBundle, sendCmd, unpackOneDex,
+  pickSid, pullPackageSo, runUnpackBundle, sendCmd, unpackOneDex, writeMem, restoreMem, listWriteUndo, moduleLoads, autoAntiDebugEnabled,
 } from '../service.ts';
 import { watchSyscalls } from '../syscall_watch.ts';
 import { nativeBacktrace } from '../backtrace.ts';
@@ -8,20 +8,25 @@ import { traceDigest } from '../trace_digest.ts';
 import { syscallDigest } from '../syscall_digest.ts';
 import { javaTraceStart, javaTraceDigest, javaTraceStop } from '../java_trace.ts';
 import { nativeHookAll, nativeUnhookAll } from '../native_hook_all.ts';
-import { normalizeThrottleMs } from '../native_hook_args.ts';
+import { normalizeThrottleMs, parseMemWindows } from '../native_hook_args.ts';
 import { agentPing, hookEngineSelftest, protocolSelfTest } from '../agent_probe.ts';
 import { listDeviceDir, readDeviceFile } from '../fs_browse.ts';
 import { listSandboxDir, readSandboxFile } from '../sandbox_fs.ts';
 import { jniFieldDigest } from '../jni_field_digest.ts';
 import { syscallTraceStart, syscallTraceDigest, syscallTraceStop } from '../syscall_trace.ts';
 import { liveDisasm , assertCallableAddress } from '../memory.ts';
-import { readBody, sessions, settings } from '../state.ts';
+import { listRecipes, runRecipe } from '../recipes.ts';
+import { readBody, sessions, settings, MAX_BODY_BYTES } from '../state.ts';
 import type { Route, RouteContext } from './types.ts';
 
 // A non-numeric throttleMs is a caller error, not a device failure: answer 400 before the
 // sendCmd try/catch blocks below (which turn anything they catch into 502/504).
 function parseThrottleMs(value: unknown): { ms: number } | { error: string } {
   try { return { ms: normalizeThrottleMs(value) }; } catch (e) { return { error: (e as Error).message }; }
+}
+
+function parseMemSpec(value: unknown): { spec: string } | { error: string } {
+  try { return { spec: parseMemWindows(value).spec }; } catch (e) { return { error: (e as Error).message }; }
 }
 
 export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
@@ -80,7 +85,7 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
       catch (e) { return send(504, { error: (e as Error).message }); }
     } },    { method: 'POST', path: '/api/native/hook', handler: async () => {
       const body = await readBody(req);
-      const { session, action, hookId, mode, module, symbol, addr, skipOriginal, returnValue, argIndex, argValue, confirm, hard, sites, scope, slotsWritable, backtrace, throttleMs } = JSON.parse(body || '{}');
+      const { session, action, hookId, mode, module, symbol, addr, skipOriginal, returnValue, argIndex, argValue, confirm, hard, sites, scope, slotsWritable, backtrace, throttleMs, mem } = JSON.parse(body || '{}');
       const sid = pickSid(session);
       if (!sid || !action) return send(400, { error: 'need session, action' });
       if (mode === 'inline' && addr && confirm !== true) return send(400, { error: 'native_hook inline addr requires confirm:true' });
@@ -95,12 +100,19 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
       }
       const throttle = parseThrottleMs(throttleMs);
       if ('error' in throttle) return send(400, { error: throttle.error });
+      let memSpec = '';
+      if (action === 'hook') {
+        const parsed = parseMemSpec(mem);
+        if ('error' in parsed) return send(400, { error: parsed.error });
+        memSpec = parsed.spec;
+      }
       try {
         const r = await sendCmd(sid, 'native_hook', {
           action, hookId: Number(hookId ?? 0), mode: mode ?? '', module: module ?? '', symbol: symbol ?? '', addr: hookAddr,
           skipOriginal: skipOriginal ? 'true' : 'false', returnValue: returnValue ?? '',
           backtrace: backtrace ? 'true' : 'false',
           throttleMs: throttle.ms,
+          mem: memSpec,
           argIndex: Number(argIndex ?? -1), argValue: argValue ?? '', hard: hard ? 'true' : 'false',
           sites: Number(sites ?? 0),
           scope: typeof scope === 'string' ? scope : '',
@@ -422,6 +434,65 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
       if (!sid || !addr || !size) return send(400, { error: 'need session, addr(hex), size' });
       try {
         const r = await sendCmd(sid, 'read', { addr: String(addr), size: Number(size) });
+        return send(r.ok ? 200 : 502, r);
+      } catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
+    // Same implementations as the memory_write / memory_restore / capabilities MCP tools: the two
+    // surfaces must not be able to disagree about what a write does or what the agent supports.
+    { method: 'POST', path: '/api/memory/write', handler: async () => {
+      const body = await readBody(req);
+      const { session, addr, hex, force } = JSON.parse(body || '{}');
+      const sid = pickSid(session);
+      if (!sid) return send(400, { error: 'no session' });
+      try {
+        const r: any = await writeMem(sid, addr, hex, force === true);
+        return send(r.ok === true ? 200 : 400, r);
+      } catch (e) { return send(502, { error: (e as Error).message }); }
+    } },
+    { method: 'POST', path: '/api/memory/restore', handler: async () => {
+      const body = await readBody(req);
+      const { session, addr } = JSON.parse(body || '{}');
+      const sid = pickSid(session);
+      if (!sid) return send(400, { error: 'no session' });
+      if (!addr) return send(200, { undo: listWriteUndo(sid) });
+      try {
+        const r: any = await restoreMem(sid, addr);
+        return send(r.ok === true ? 200 : 400, r);
+      } catch (e) { return send(502, { error: (e as Error).message }); }
+    } },
+    { path: '/api/capabilities', handler: () => {
+      const sid = pickSid(url.searchParams.get('session'));
+      if (!sid) return send(400, { error: 'no session' });
+      const s = sessions.get(sid);
+      return send(200, { ok: true, session: sid, package: s?.package, agentVer: s?.agentVer, caps: s?.caps ?? null, startupHooks: s?.startupHooks ?? null, host: { bodyMaxBytes: MAX_BODY_BYTES, autoAntiDebug: autoAntiDebugEnabled(), preArmPackages: settings.startup.packages } });
+    } },
+    // Same implementation as the recipe MCP tool: one call, many steps, per-step ok/ms/error.
+    { path: '/api/recipes', handler: () => send(200, { ok: true, recipes: listRecipes() }) },
+    { method: 'POST', path: '/api/recipes/run', handler: async () => {
+      const body = await readBody(req);
+      const { session, name, options } = JSON.parse(body || '{}');
+      if (!name) return send(400, { error: 'need name (GET /api/recipes lists them)' });
+      try {
+        return send(200, await runRecipe(String(name), String(session ?? ''), (options && typeof options === 'object') ? options : {}));
+      } catch (e) { return send(400, { error: (e as Error).message }); }
+    } },
+    // Same implementation as the module_watch MCP tool (and the same MODULE_LOAD records the
+    // capture ring carries as category "system").
+    { method: 'POST', path: '/api/module/watch', handler: async () => {
+      const body = await readBody(req);
+      const { session, action, limit } = JSON.parse(body || '{}');
+      const sid = pickSid(session);
+      if (!sid) return send(400, { error: 'no session' });
+      const act = String(action ?? '');
+      if (!['start', 'stop', 'status', 'list'].includes(act)) {
+        return send(400, { error: 'action must be start|stop|status|list' });
+      }
+      if (act === 'list') {
+        const modules = moduleLoads(sid, Number(limit) || 50);
+        return send(200, { ok: true, count: modules.length, modules });
+      }
+      try {
+        const r = await sendCmd(sid, 'module_watch', { action: act });
         return send(r.ok ? 200 : 502, r);
       } catch (e) { return send(504, { error: (e as Error).message }); }
     } },

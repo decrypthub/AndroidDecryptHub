@@ -36,7 +36,16 @@ export async function disasmBytes(
   const cs = new Capstone(Const.CS_ARCH_ARM64, Const.CS_MODE_ARM);
   try {
     const limit = Math.max(1, Math.min(4096, Math.floor(count)));
-    const decoded = cs.disasm(bytes, { address: BigInt(address), count: limit });
+    let decoded: any[];
+    try {
+      decoded = cs.disasm(bytes, { address: BigInt(address), count: limit });
+    } catch {
+      // capstone-wasm THROWS when not a single instruction decodes, and its message prints the
+      // Capstone status code - "Failed to disassemble, error: OK (CS_ERR_OK)". A zero/padding page
+      // or a data blob is not an error: it is an answer ("no code here"), and the caller has to get
+      // that answer instead of a message that reads like a success.
+      return [];
+    }
     return decoded.map((i: any) => {
       const opStr = String(i.opStr ?? '');
       const mnemonic = String(i.mnemonic ?? '');

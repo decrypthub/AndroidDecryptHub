@@ -1,8 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { effectiveBatchLimit, selectExportSymbols } from '../src/native_hook_all.ts';
+import type { DynSymbol } from '../src/backtrace.ts';
 
-const sym = (name, addr, size, kind = 'func') => ({ name, addr, size, kind });
+// Fixture builder: DynSymbol.addr/size are bigint while the table below reads better with small
+// numbers, so `size` accepts either and is normalised here instead of at every call site.
+const sym = (name: string, addr: bigint, size: number | bigint, kind: DynSymbol['kind'] = 'func'): DynSymbol =>
+  ({ name, addr, size: BigInt(size), kind });
 
 const TABLE = [
   sym('EVP_EncryptInit_ex', 0x1000n, 40),

@@ -3,6 +3,9 @@
 #include "agent_internal.h"
 #include <fcntl.h>
 #include <errno.h>
+#include <pthread.h>
+#include <sys/mman.h>
+#include <stdint.h>
 
 // Build a JSON array of maps regions. limit<=0 = all. *total set to line count.
 // *truncated set to 1 iff the buffer could not grow (OOM data-loss) — distinct from the
@@ -47,6 +50,201 @@ char *build_maps_json(int limit, int *total, int *truncated) {
     return buf;
 }
 
+// ---- address -> region metadata -----------------------------------------------------------
+// Strict hex validation. hex2bytes stops at the first bad pair and returns what it got, which is
+// fine for a capture name and wrong for a write: a typo must refuse the whole operation, not patch
+// a prefix of the bytes the caller asked for.
+int adh_hex_strict(const char *hex, size_t *len_out) {
+    if (!hex) return 0;
+    size_t n = strlen(hex);
+    if (!n || (n & 1) || n > 4096 * 2) return 0;
+    for (size_t i = 0; i < n; i++) {
+        char c = hex[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) return 0;
+    }
+    if (len_out) *len_out = n / 2;
+    return 1;
+}
+
+// Address parsing shared by read/write. The host sends bare lowercase hex (no 0x) while a human or
+// an MCP client often writes 0x...; both must mean the same address, and a partial parse must be
+// refused (strtoull stops at the first bad character, so "0x1234zz" used to read as 0x1234).
+static int parse_mem_addr(const char *text, unsigned long long *out) {
+    if (!text || !text[0]) return 0;
+    const char *p = text;
+    if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) p += 2;
+    if (!*p) return 0;
+    errno = 0;
+    char *end = NULL;
+    unsigned long long v = strtoull(p, &end, 16);
+    if (end == p || (end && *end) || errno == ERANGE) return 0;
+    *out = v;
+    return 1;
+}
+
+// The ONE place that answers "what is at this address". /proc/self/maps is readable even for a
+// non-dumpable target (the maps command already relies on that), so a write never has to probe
+// with a signal handler first.
+int adh_mem_region_of(unsigned long long addr, char perms[5], unsigned long long *lo_out,
+                      unsigned long long *hi_out) {
+    FILE *m = fopen("/proc/self/maps", "r");
+    if (!m) return 0;
+    addr = adh_untag(addr);          // maps only lists canonical ranges
+    char line[1024];
+    int found = 0;
+    while (fgets(line, sizeof(line), m)) {
+        unsigned long long lo = 0, hi = 0;
+        char p[8] = "";
+        if (sscanf(line, "%llx-%llx %7s", &lo, &hi, p) != 3) continue;
+        if (addr < lo || addr >= hi) continue;
+        if (perms) snprintf(perms, 5, "%s", p);
+        if (lo_out) *lo_out = lo;
+        if (hi_out) *hi_out = hi;
+        found = 1;
+        break;
+    }
+    fclose(m);
+    return found;
+}
+
+// Copy bytes into the target ONLY inside one already-writable mapping. Called from the native-hook
+// recorder on an arbitrary target thread, so it must not mprotect and must not fault: a bad pointer
+// answers "no", and the event reports that the write did not land.
+int adh_mem_write_checked(unsigned long long addr, const void *src, size_t len) {
+    if (!src || !len) return 0;
+    if (addr + len < addr) return 0;              // wrap-around
+    addr = adh_untag(addr);
+    char perms[5] = "";
+    unsigned long long lo = 0, hi = 0;
+    if (!adh_mem_region_of(addr, perms, &lo, &hi)) return 0;
+    if (perms[1] != 'w') return 0;
+    if (addr + len > hi) return 0;                // leaves the mapping
+    memcpy((void *)(uintptr_t)addr, src, len);
+    return 1;
+}
+
+static int prot_from_perms(const char *perms) {
+    int p = 0;
+    if (perms[0] == 'r') p |= PROT_READ;
+    if (perms[1] == 'w') p |= PROT_WRITE;
+    if (perms[2] == 'x') p |= PROT_EXEC;
+    return p;
+}
+
+// Write bytes at an address: the deliberate, host-driven counterpart of adh_mem_write_checked.
+// It MAY patch a read-only page, but only when the caller says force:true; it restores the original
+// protection immediately, flushes the instruction cache for code pages, and returns the bytes it
+// replaced so the host can build an undo record. This is the primitive VMP handler tables, OLLVM
+// state variables and inline checks need: read-only observation cannot change a branch.
+void cmd_write(int fd, const char *id, const char *addr_hex, const char *hex, int force) {
+    char idj[64]; json_escape(id, idj, sizeof(idj));
+    char err[512];
+    unsigned long long addr = 0;
+    if (!parse_mem_addr(addr_hex, &addr) || addr == 0) {
+        snprintf(err, sizeof(err),
+                 "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"write\",\"ok\":false,"
+                 "\"error\":\"bad addr: expected a hex address like 0x7f12345678 or 7f12345678\"}\n", idj);
+        send_line(fd, err); return;
+    }
+    // A tagged pointer (Scudo top byte) is the same address; maps wants it canonical.
+    addr = adh_untag(addr);
+    size_t want = 0;
+    if (!adh_hex_strict(hex, &want) || want == 0) {
+        snprintf(err, sizeof(err),
+                 "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"write\",\"ok\":false,"
+                 "\"error\":\"bad hex: 1..4096 bytes, even-length, hex only\"}\n", idj);
+        send_line(fd, err); return;
+    }
+    unsigned char bytes[4096];
+    int len = hex2bytes(hex, bytes, (int)sizeof(bytes));
+    if (len <= 0 || (size_t)len != want) {
+        snprintf(err, sizeof(err),
+                 "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"write\",\"ok\":false,\"error\":\"hex decode failed\"}\n", idj);
+        send_line(fd, err); return;
+    }
+    char perms[5] = "";
+    unsigned long long lo = 0, hi = 0;
+    if (!adh_mem_region_of(addr, perms, &lo, &hi)) {
+        snprintf(err, sizeof(err),
+                 "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"write\",\"ok\":false,"
+                 "\"error\":\"addr 0x%llx is not in any mapping of this process\"}\n", idj, addr);
+        send_line(fd, err); return;
+    }
+    if (addr + (unsigned long long)len > hi) {
+        snprintf(err, sizeof(err),
+                 "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"write\",\"ok\":false,"
+                 "\"error\":\"write of %d bytes crosses the end of its mapping (region 0x%llx-0x%llx)\"}\n",
+                 idj, len, lo, hi);
+        send_line(fd, err); return;
+    }
+    const int writable = (perms[1] == 'w');
+    if (!writable && !force) {
+        snprintf(err, sizeof(err),
+                 "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"write\",\"ok\":false,"
+                 "\"error\":\"mapping is %s (not writable); pass force:true to patch it - the original protection is restored immediately\"}\n",
+                 idj, perms);
+        send_line(fd, err); return;
+    }
+    // Bytes being replaced, only when the page is readable (a --w mapping cannot be read from).
+    unsigned char before[4096];
+    int have_before = 0;
+    if (perms[0] == 'r') {
+        memcpy(before, (void *)(uintptr_t)addr, (size_t)len);
+        have_before = 1;
+    }
+    int mp_used = 0;
+    if (!writable) {
+        const long page = sysconf(_SC_PAGESIZE);
+        if (page <= 0) {
+            snprintf(err, sizeof(err),
+                     "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"write\",\"ok\":false,\"error\":\"cannot read page size\"}\n", idj);
+            send_line(fd, err); return;
+        }
+        const uintptr_t pstart = (uintptr_t)addr & ~((uintptr_t)page - 1);
+        const uintptr_t plast = ((uintptr_t)addr + (uintptr_t)len - 1) & ~((uintptr_t)page - 1);
+        const size_t span = (size_t)(plast - pstart) + (size_t)page;
+        const int prot = prot_from_perms(perms);
+        if (mprotect((void *)pstart, span, prot | PROT_WRITE) != 0) {
+            snprintf(err, sizeof(err),
+                     "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"write\",\"ok\":false,"
+                     "\"error\":\"mprotect(%s|w) failed: errno %d\"}\n", idj, perms, errno);
+            send_line(fd, err); return;
+        }
+        memcpy((void *)(uintptr_t)addr, bytes, (size_t)len);
+        mp_used = 1;
+        // Code pages: the target may fetch the old instructions from its I-cache.
+        if (perms[2] == 'x') __builtin___clear_cache((char *)(uintptr_t)addr, (char *)(uintptr_t)(addr + (unsigned long long)len));
+        if (mprotect((void *)pstart, span, prot) != 0) {
+            // The bytes are already written; report the weakened protection instead of claiming
+            // a clean patch. The host can retry/restore.
+            LOGE("cmd_write: restoring protection on %p failed (errno %d)", (void *)pstart, errno);
+        }
+    } else {
+        memcpy((void *)(uintptr_t)addr, bytes, (size_t)len);
+    }
+    char before_hex[8193];
+    before_hex[0] = 0;
+    if (have_before) {
+        static const char *hx = "0123456789abcdef";
+        for (int i = 0; i < len; i++) {
+            before_hex[i * 2] = hx[before[i] >> 4];
+            before_hex[i * 2 + 1] = hx[before[i] & 15];
+        }
+        before_hex[len * 2] = 0;
+    }
+    const size_t cap = 512 + (size_t)len * 2 + strlen(before_hex);
+    char *out = (char *)malloc(cap);
+    if (!out) { send_oom(fd, idj, "write"); return; }
+    snprintf(out, cap,
+             "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"write\",\"ok\":true,\"addr\":\"0x%llx\","
+             "\"wrote\":%d,\"permBefore\":\"%s\",\"mprotectUsed\":%s,\"beforeReadable\":%s,"
+             "\"before\":\"%s\"}\n",
+             idj, addr, len, perms, mp_used ? "true" : "false",
+             have_before ? "true" : "false", before_hex);
+    send_line(fd, out);
+    free(out);
+}
+
 // Read `size` bytes at hex `addr` and reply as base64 cmdResult. Uses the shared backend
 // (mem_read.c), so a target that refuses /proc/self/mem still reads through a direct copy.
 // `via` = "direct" forces the direct route for this one read, so the two routes can be
@@ -58,11 +256,20 @@ void cmd_read(int fd, const char *id, const char *addr_hex, long long size, cons
         snprintf(err, sizeof(err), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"read\",\"ok\":false,\"error\":\"bad size\"}\n", idj);
         send_line(fd, err); return;
     }
-    unsigned long long addr = strtoull(addr_hex, NULL, 16);
-    const char *shown = addr_hex;                       // accept "0x.." without echoing "0x0x.."
-    if (shown[0] == '0' && (shown[1] == 'x' || shown[1] == 'X')) shown += 2;
+    unsigned long long addr = 0;
+    if (!parse_mem_addr(addr_hex, &addr)) {
+        char err[200];
+        snprintf(err, sizeof(err),
+                 "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"read\",\"ok\":false,"
+                 "\"error\":\"bad addr: expected a hex address like 0x7f12345678 or 7f12345678\"}\n", idj);
+        send_line(fd, err); return;
+    }
     int direct = (via && strcmp(via, "direct") == 0);
     const char *route = direct ? "direct" : adh_mem_backend_name();
+    // Canonical echo: the caller may have sent 0x-prefixed or a tagged pointer, and both errors and
+    // the success reply must state the address that was actually used.
+    char addr_text[24];
+    snprintf(addr_text, sizeof(addr_text), "%llx", addr);
     unsigned char *raw = (unsigned char *)malloc((size_t)size);
     if (!raw) { send_oom(fd, idj, "read"); return; }
     ssize_t got = direct ? adh_mem_read_direct(raw, (size_t)size, addr)
@@ -74,10 +281,10 @@ void cmd_read(int fd, const char *id, const char *addr_hex, long long size, cons
         // errno only means something on the fd route; the direct route refused the range itself.
         if (direct || strcmp(route, "direct") == 0)
             snprintf(err, sizeof(err), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"read\",\"ok\":false,"
-                     "\"error\":\"unreadable at 0x%s (via direct)\"}\n", idj, shown);
+                     "\"error\":\"unreadable at 0x%s (via direct)\"}\n", idj, addr_text);
         else
             snprintf(err, sizeof(err), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"read\",\"ok\":false,"
-                     "\"error\":\"unreadable at 0x%s (via %s, errno %d)\"}\n", idj, shown, route, errno);
+                     "\"error\":\"unreadable at 0x%s (via %s, errno %d)\"}\n", idj, addr_text, route, errno);
         send_line(fd, err); return;
     }
     char *b64 = (char *)malloc((size_t)got * 4 / 3 + 8);
@@ -90,7 +297,7 @@ void cmd_read(int fd, const char *id, const char *addr_hex, long long size, cons
         snprintf(out, hlen,
             "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"read\",\"ok\":true,\"addr\":\"%s\",\"size\":%zd,"
             "\"requested\":%lld,\"short\":%s,\"via\":\"%s\",\"b64\":\"%s\"}\n",
-            idj, addr_hex, got, size, (got < size) ? "true" : "false", route, b64);
+            idj, addr_text, got, size, (got < size) ? "true" : "false", route, b64);
         send_line(fd, out);
         free(out);
     }
@@ -247,6 +454,27 @@ void cmd_search(int fd, const char *id, const char *pat_hex, int limit,
         // whatever happens to come first in address order.
         if (win_hi && start >= win_hi) continue;
         if (win_lo && end <= win_lo) continue;
+        // NEVER scan this thread's own stack. The pattern was just decoded into a buffer in this
+        // very function, so its bytes live in the frame we are standing in: every search would
+        // then "find" its own input at a fixed stack address, and such a hit is indistinguishable
+        // from a real one. Measured: a random 16-byte pattern that had never been sent anywhere
+        // returned exactly one hit, always at the same address, across processes and restarts.
+        {
+            static unsigned long long self_lo = 0, self_hi = 0;
+            if (!self_hi) {
+                pthread_attr_t ta;
+                if (pthread_getattr_np(pthread_self(), &ta) == 0) {
+                    void *saddr = NULL;
+                    size_t ssize = 0;
+                    if (pthread_attr_getstack(&ta, &saddr, &ssize) == 0 && ssize > 0) {
+                        self_lo = (unsigned long long)(uintptr_t)saddr;
+                        self_hi = self_lo + ssize;
+                    }
+                    pthread_attr_destroy(&ta);
+                }
+            }
+            if (self_hi && start < self_hi && end > self_lo) continue;
+        }
         unsigned long long rsize = end - start; if (rsize > PERREGION) { rsize = PERREGION; clipped = 1; }
         if (total >= TOTALCAP) break;
         unsigned long long o = 0; int carry = 0;

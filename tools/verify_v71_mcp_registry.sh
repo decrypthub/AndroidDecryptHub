@@ -6,11 +6,16 @@
 # (the type stripper is what fails), so the daemon just refuses to boot while every static check
 # stays green. This script actually imports the registry and checks the shape of every tool, which
 # turns that class of mistake into an immediate, loud failure.
+#
+# `--input-type=module` is required: the heredoc is fed to node's stdin, and stdin is evaluated as
+# CommonJS by default, so the top-level `await import(...)` below is a SyntaxError there. Measured
+# 2026-10-22: the gate reported FAIL with that SyntaxError for every run, i.e. it was red for a
+# reason that had nothing to do with the registry (and a broken registry would have looked the same).
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
 verify_resolve_env_host
 
-OUT="$(node - "$ROOT" <<'EOF'
+OUT="$(node --input-type=module - "$ROOT" <<'EOF'
 const [root] = process.argv.slice(2);
 const url = 'file:///' + String(root).replace(/\\/g, '/').replace(/^\//, '') + '/daemon/src/mcp.ts';
 let tools;

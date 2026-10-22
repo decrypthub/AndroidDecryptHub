@@ -105,6 +105,215 @@ export async function readMem(sid: string, addr: bigint, size: number): Promise<
   return (await readMemEx(sid, addr, size)).buf;
 }
 
+// ---- memory write + undo -------------------------------------------------------------------
+// The write side of readMem: 1..4096 bytes per call, with the agent returning the bytes it
+// replaced. The host remembers that reply, so `memory_restore` can undo a patch without the caller
+// keeping the original bytes: an operator (or an AI) that patches one branch to see what happens
+// needs ONE command to put it back, not a byte-tracking protocol. Bounded per session - this is a
+// convenience, not an audit log.
+const WRITE_UNDO_PER_SESSION = 64;
+interface WriteUndo { before: string; len: number; at: number; forced: boolean; }
+const writeUndo = new Map<string, WriteUndo>();
+const writeKey = (sid: string, addr: bigint) => `${sid}:${addr.toString(16)}`;
+
+function parseMemAddress(text: unknown): bigint | null {
+  const s = String(text ?? '').trim();
+  if (!s) return null;
+  try {
+    const v = BigInt(s);              // accepts 123 and 0x7f...
+    return v > 0n ? v : null;
+  } catch { return null; }
+}
+
+function rememberWrite(sid: string, addr: bigint, before: string, len: number, forced: boolean) {
+  const mine = [...writeUndo.keys()].filter((k) => k.startsWith(`${sid}:`));
+  while (mine.length >= WRITE_UNDO_PER_SESSION) writeUndo.delete(mine.shift()!);
+  writeUndo.set(writeKey(sid, addr), { before, len, at: Date.now(), forced });
+}
+
+/** Write bytes into the target. Returns the agent's reply; validation failures write nothing. */
+export async function writeMem(sid: string, addrText: unknown, hexText: unknown, force = false) {
+  const addr = parseMemAddress(addrText);
+  if (addr === null) return { ok: false, error: 'addr must be a positive number or 0x... string' };
+  const clean = String(hexText ?? '').trim().toLowerCase();
+  if (!clean || clean.length % 2 !== 0 || !/^[0-9a-f]+$/.test(clean)) {
+    return { ok: false, error: 'hex must be even-length hex (1..4096 bytes); nothing was written' };
+  }
+  if (clean.length > 8192) return { ok: false, error: 'hex max 4096 bytes per write' };
+  const r: any = await sendCmd(sid, 'write',
+    { addr: addr.toString(16), hex: clean, force: force ? 'true' : 'false' }, 20_000);
+  if (!r || r.ok !== true) return r ?? { ok: false, error: 'no reply from agent' };
+  const before = typeof r.before === 'string' ? r.before : '';
+  const trackable = r.beforeReadable === true && before.length > 0;
+  if (trackable) rememberWrite(sid, addr, before, Number(r.wrote) || clean.length / 2, force);
+  return { ...r, undoAvailable: trackable };
+}
+
+/** Put back the bytes the most recent write at this address replaced. */
+export async function restoreMem(sid: string, addrText: unknown) {
+  const addr = parseMemAddress(addrText);
+  if (addr === null) return { ok: false, error: 'addr must be a positive number or 0x... string' };
+  const key = writeKey(sid, addr);
+  const entry = writeUndo.get(key);
+  if (!entry) return { ok: false, error: `no write recorded at 0x${addr.toString(16)} for this session` };
+  // A non-writable page needed force the first time and needs it again: every forced write puts the
+  // original protection back before replying.
+  const r: any = await sendCmd(sid, 'write',
+    { addr: addr.toString(16), hex: entry.before, force: entry.forced ? 'true' : 'false' }, 20_000);
+  if (r && r.ok === true) writeUndo.delete(key);
+  return r ?? { ok: false, error: 'no reply from agent' };
+}
+
+// ---- startup policy (host-side pre-arm) ----------------------------------------------------
+// Applied the moment a session's hello arrives, before the capture loop starts. The host cannot
+// beat a check that runs in .init_array (that needs the Zygisk companion writing policy before
+// adh_agent_start), but it can beat "the operator types the command 30 seconds later", which is
+// the difference between a dead process and a usable session on a target that exits early.
+// Default OFF: neutralizing access()/faccessat() makes EVERY path check in the app fail.
+export interface AntiDebugTarget { symbol: string; returnValue: string; errno: number }
+// Startup uses the MINIMAL plan on purpose. Measured on the sandbox: hooking access()/faccessat()
+// with skipOriginal at hello makes EVERY path check fail during initialization too, and the app
+// died within ~0.5s of the hooks landing. ptrace is the one gate that is safe to fake that early
+// (returning 0 for TRACEME is harmless). The other two are opt-in per target via extraTargets, or
+// applied later with `recipe anti_debug` once the process is initialized.
+const ANTI_DEBUG_DEFAULTS: AntiDebugTarget[] = [
+  { symbol: 'ptrace', returnValue: '0', errno: 0 },
+];
+
+/** Settings + env → the startup policy for this daemon process. ADH_AUTO_ANTIDEBUG wins. */
+export function autoAntiDebugEnabled(env: NodeJS.ProcessEnv = process.env, startup = settings.startup): boolean {
+  const v = String(env.ADH_AUTO_ANTIDEBUG ?? '').toLowerCase();
+  if (v === '1' || v === 'true' || v === 'on') return true;
+  if (v === '0' || v === 'false' || v === 'off') return false;
+  return startup?.antiDebug === true;
+}
+
+/** The exact list applied at hello: the three libc checks plus caller-supplied extra symbols. */
+export function antiDebugTargets(startup = settings.startup): AntiDebugTarget[] {
+  const out = ANTI_DEBUG_DEFAULTS.map((t) => ({ ...t }));
+  for (const name of startup?.extraTargets ?? []) {
+    if (!out.some((t) => t.symbol === name)) out.push({ symbol: name, returnValue: '-1', errno: 13 });
+  }
+  return out;
+}
+
+/**
+ * Does the pre-arm apply to THIS package? Enabling it neutralizes path checks process-wide, so
+ * `startup.packages` (empty = all) is the safety valve: the daemon must not silently change how
+ * every other app behaves just because one target needs it.
+ */
+export function shouldPreArm(pkg: string, env: NodeJS.ProcessEnv = process.env, startup = settings.startup): boolean {
+  if (!autoAntiDebugEnabled(env, startup)) return false;
+  const list = startup?.packages ?? [];
+  return list.length === 0 || list.includes(pkg);
+}
+
+/**
+ * The delayed half of the policy. The checks that make path lookups fail are unsafe DURING
+ * initialization (measured: they killed the sandbox ~0.5 s after hello), so they are installed
+ * once the app has settled instead. Pure so the plan can be unit-tested without a device.
+ */
+export function startupWidenPlan(startup = settings.startup): { afterMs: number; targets: AntiDebugTarget[] } {
+  const afterMs = Math.max(0, Math.min(600_000, Number(startup?.widenAfterMs) || 0));
+  const seen = new Set<string>();
+  const targets: AntiDebugTarget[] = [];
+  for (const name of startup?.widenTargets ?? []) {
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    targets.push({ symbol: name, returnValue: '-1', errno: 13 });
+  }
+  return { afterMs, targets };
+}
+
+/**
+ * NOT WIRED: pre-arming the RegisterNatives hook at hello is measured-UNSAFE on the SDK 35
+ * reference target. An install at hello produced a SIGILL (ILL_ILLOPC at a page boundary) and a
+ * second run corrupted an ART ConcurrentCopying GC. The inline patch on libart is at fault, not
+ * the wrapper. The safe route to the same knowledge is static: disassemble the module's
+ * JNI_OnLoad, follow the RegisterNatives call to its JNINativeMethod array and read
+ * name/signature/fnPtr. Do not auto-arm `jni_hook`; it stays a manual command.
+ */
+
+async function installNeutralizers(sid: string, module: string, targets: AntiDebugTarget[]) {
+  const hookIds: number[] = [];
+  const failed: { symbol: string; error: string }[] = [];
+  for (const t of targets) {
+    try {
+      const r: any = await sendCmd(sid, 'native_hook', {
+        action: 'hook', mode: 'inline', module, symbol: t.symbol,
+        skipOriginal: 'true', returnValue: t.returnValue, errno: t.errno,
+      }, 20_000);
+      if (r?.ok === true && Number(r.hookId) > 0) hookIds.push(Number(r.hookId));
+      else failed.push({ symbol: t.symbol, error: String(r?.error ?? 'install failed') });
+    } catch (e) {
+      failed.push({ symbol: t.symbol, error: (e as Error).message });
+    }
+  }
+  return { hookIds, failed };
+}
+
+/** Second phase: install the checks that were unsafe at hello. Runs once per session. */
+export async function widenStartupHooks(sid: string): Promise<void> {
+  const s = sessions.get(sid);
+  if (!s || !s.online || !s.startupHooks || s.startupHooks.widenedAt) return;
+  const plan = startupWidenPlan();
+  if (!plan.targets.length) return;
+  const module = settings.startup.module || 'libc.so';
+  const { hookIds, failed } = await installNeutralizers(sid, module, plan.targets);
+  // Re-read the session: it may have closed while we were installing (each sendCmd waits).
+  const live = sessions.get(sid);
+  if (!live || !live.startupHooks || live.startupHooks.widenedAt) return;
+  live.startupHooks = {
+    ...live.startupHooks,
+    hookIds: [...live.startupHooks.hookIds, ...hookIds],
+    failed: [...live.startupHooks.failed, ...failed],
+    widenedAt: Date.now(),
+  };
+  log(`[startup] 延迟加宽 ${sid} ${live.package}: +${hookIds.length} 个钩子${failed.length ? `，失败 ${failed.map((f) => f.symbol).join(',')}` : ''}`);
+  broadcast('agent.startup.widen', { sessionId: sid, package: live.package, ...live.startupHooks });
+}
+
+export async function applyStartupHooks(sid: string): Promise<AgentSession['startupHooks'] | null> {
+  const s = sessions.get(sid);
+  if (!s || !s.online) return null;
+  if (s.startupHooks) return s.startupHooks;      // once per session: a reconnect is a new session
+  if (!shouldPreArm(s.package)) return null;
+  const module = settings.startup.module || 'libc.so';
+  const { hookIds, failed } = await installNeutralizers(sid, module, antiDebugTargets());
+  s.startupHooks = { appliedAt: Date.now(), module, hookIds, failed };
+  log(`[startup] anti-debug 已布防 ${sid} ${s.package}: ${hookIds.length} 个钩子${failed.length ? `，失败 ${failed.map((f) => f.symbol).join(',')}` : ''}`);
+  broadcast('agent.startup', { sessionId: sid, package: s.package, ...s.startupHooks });
+  // Delayed widening: an unref'd timer, so a pending widen can never hold the process open (or a
+  // test run). A session that closed before it fires is a no-op (checked inside).
+  const plan = startupWidenPlan();
+  if (plan.afterMs > 0 && plan.targets.length) {
+    const timer = setTimeout(() => { void widenStartupHooks(sid); }, plan.afterMs);
+    if (typeof timer.unref === 'function') timer.unref();
+  }
+  return s.startupHooks;
+}
+
+/** Writes this session can still undo (newest last). */
+export function listWriteUndo(sid: string) {
+  return [...writeUndo.entries()]
+    .filter(([k]) => k.startsWith(`${sid}:`))
+    .map(([k, v]) => ({ addr: '0x' + k.slice(sid.length + 1), len: v.len, forced: v.forced, at: v.at }));
+}
+
+// ---- module-load events -------------------------------------------------------------------
+// `module_watch start` makes the agent emit MODULE_LOAD for every library mapped afterwards. The
+// records arrive through the same capture ring as everything else; this reads the structured
+// payload back out of them so a caller does not have to hex-decode a capture by hand.
+export function moduleLoads(sid: string, limit = 50) {
+  return captures
+    .filter((c) => c.func === 'MODULE_LOAD' && c.sessionId === sid)
+    .slice(-Math.max(1, Math.min(500, limit)))
+    .map((c) => {
+      try { return JSON.parse(Buffer.from(c.hex, 'hex').toString('utf8')); }
+      catch { return { unparsed: c.hex.slice(0, 120) }; }
+    });
+}
+
 export interface ModuleInfo { name: string; path: string; base: string; end: string; size: number; segs: number; }
 export function modulesFromMaps(regions: MapsRegion[]): ModuleInfo[] {
   const by = new Map<string, MapsRegion[]>();
@@ -270,10 +479,20 @@ export async function inventoryUnpack(sid: string) {
 
 // Read one declared dex. A short mapping is not stored. A standard dex is stored only after its
 // class table walks; a compact dex has no walker here, so a full read is stored and named cdex.
+//
+// The return shape declares every field optional-on-some-branch (error/status on failure,
+// dedup/carrier/classes on success) instead of a union, because `strictNullChecks` is off and
+// callers read those fields after a plain `.saved` check.
+export interface UnpackedDexRow {
+  begin: string; size: number; saved: boolean; readable?: number;
+  error?: string; status?: string; dedup?: boolean; sha256?: string;
+  bytes?: number; path?: string; format?: string;
+  carrier?: boolean; classes?: number; methods?: number;
+}
 export async function unpackOneDex(
   sid: string, beginHex: string, size: number,
   opts?: { tag?: string; note?: string },
-) {
+): Promise<UnpackedDexRow> {
   const pkg = sessionPackage(sid);
   const begin = beginHex.replace(/^0x/i, '');
   if (!begin || !Number.isSafeInteger(size) || size <= 0 || size > (256 << 20)) {
@@ -550,7 +769,7 @@ export async function applyCaptureEnabled() {
   try { await scopedApps(); } catch { /* cache may still help */ }
   for (const s of sessions.values()) {
     if (!s.online) continue;
-    if (!shouldAutoArmPackage(s.package)) continue;
+    if (!shouldAutoArmPackage(s.package, s.entry)) continue;
     // Skip just-unpacked / in-unpack packages — flipping the global switch must not crash SecNeo.
     if (captureArmBlockedReason(s.package)) {
       log(`[settings] capture_start skip ${s.sessionId} (unpack protect ${s.package})`);
@@ -820,6 +1039,8 @@ export function startCaptureLoop(sid: string, opts?: { skipArm?: boolean }) {
   const run = async () => {
     captureLoopPending.delete(sid);
     const pkg = sessions.get(sid)?.package ?? '';
+    // How this process loaded us (agent hello): 'jni_onload' = self-load, 'start' = Zygisk.
+    const entry = sessions.get(sid)?.entry;
     if (isCaptureArmSuppressed(pkg)) {
       log(`capture_start skip ${sid} (unpack in progress for ${pkg})`);
       return;
@@ -827,7 +1048,7 @@ export function startCaptureLoop(sid: string, opts?: { skipArm?: boolean }) {
     // Refresh scope cache (best-effort) then auto-arm when capture is not force-stopped.
     if (!opts?.skipArm && settings.capture.enabled) {
       try { await scopedApps(); } catch { /* keep prior cache */ }
-      if (shouldAutoArmPackage(pkg)) {
+      if (shouldAutoArmPackage(pkg, entry)) {
         try {
           const verdict = await armCaptureHooks(sid, { ...captureModules() });
           log(`capture_start ${sid} ok=${verdict.ok}`);

@@ -205,3 +205,214 @@ Java 层只看到一次转发调用。破解路径值得记下来，因为**它�
   旁路有没有生效是 ADH 能负责的（真机可证），代理能不能看到明文还取决于目标愿不愿意用系统代理，
   后者不在 ADH 的控制范围内。**2026-10-13 晚：这张 13 条 Java 旁路已从产品里删掉。** 静默回调之后同一地址仍在
   `MarkVisiblyInitialized` 里把进程打死（uptime 约一小时）。TLS 明文继续走 native 的 `SSL_read`/`SSL_write`。
+
+---
+
+## 案例 3 — 中国移动（`com.greenpoint.android.mc10086.activity`）
+
+设备 OnePlus PGP110 `aa165071` / Android 15。日期 2026-10-21。主进程已登录；`:tools` 进程在线，但没有拼出 HTTP。
+
+### 拿到了什么
+
+登录之后的业务接口有两个签名头。用进程里 `EVP_DigestUpdate` 的原文重算，和头里的值比较：带这两个头的 **16 条全部对上，0 条对不上**。其中一条的输入形状也逐条对过（URL + `_` + JSON + 固定后缀）。另一条接口的 body 用捕获到的 AES-128-CBC 密钥解出 JSON，并且把那条明文重新加密后与 body **逐字节相同**（3 条）。
+
+短信登录请求不在这批交换里。业务接口的大 body 用已看到的密钥解不开（21 条）。响应 body 用这些密钥也解不开（26 条有 body，0 条解开）。
+
+采集环 `complete:false`，`dropped` 远大于窗口里还留着的条数。上面的数字只覆盖还留在交换列表里的 37 条，不覆盖进程一生发出的全部请求。
+
+### 这次暴露的 ADH 缺陷
+
+| # | 症状 | 根因 |
+|---|---|---|
+| A | 对签名要手写脚本，把摘要明文和某一条 HTTP 配在一起 | 没有「这条摘要命中了哪个头、对上几条」的结果 |
+| B | 解密方向只看到密文；部分 `EVP_CipherUpdate` 没有 key/iv | 钩子在入口抄输入。密钥来自更早的 Init，对不上就空着 |
+| C | 列表预览里经常没有 path | 预览截断在摘要前面的长字段上，必须逐条打开详情 |
+| D | `llvm-nm -D` / `readelf --dyn-syms` 对 dump 出来的 so 是空的 | 重建文件没有 section header，动态符号还在，只是工具不认 |
+| E | 结论容易说成「协议就是这些」 | 环溢出只在 health 里，分析结论不会自己带上「窗口不完整」 |
+
+## 案例 4 — 京东（`com.jingdong.app.mall` 16.1.50）：`jdgs` 这个头
+
+设备 OnePlus PGP110 `aa165071` / Android 15 / SDK 35，Zygisk 注入。日期 2026-10-22。目标没有壳，但签名库 `libjdg.so` 只导出 `JNI_OnLoad`，内部是自定义 VM。
+
+### 拿到了什么
+
+`jdgs` 是请求头里的一个 JSON：`b1` 设备 UUID、`b2` JDGuard 版本、`b3` 协议版本、`b4` Base64 载荷、`b5`/`b6` 两个 SHA-256、`b7` 时间戳。生成点是 `JDGuardHelper$1#genSign(URI, byte[], String, String, boolean)`，返回 `Map` 且只有 `jdgs` 一个键；调用链 `HttpSettingTool#doSignUsingJdGuard → ParamBuilderFor*#setupParams`。它给**每个**签名请求生成，不只是登录 SDK。
+
+`b4` 的输入拿到了：在 `libjdg.so` 的 GOT 上钩 zlib `compress`，命中的 `x2/x3` 就是压缩前的整段明文（371 B，`x3=0x173` 对得上），内容是 `{"e1":<eid>,"e2":"<版本>§§0§§<包名>|<32hex>|<客户端版本>§§-…","e3":<毫秒>,"e5":<33 B>,"e4":<uuid>}`——`e4` 每次不同（nonce），其余是设备/包/版本指纹。本地用同一份明文压缩得到 293 B，而 `b4` 解出来 296 B。
+
+**没还原的部分**：那 296 B 的二次变换。`native_crypto_const` 在库里只找到 SHA-256 / MD5 / SHA-1 / Base64，`crypto_variant_scan` 没有 AES 结构；`e5` 也不是标准 Base64。它是 libjdg 自己 VM 里的实现，不是 OpenSSL/JCA 边界上的调用，所以 `capture_start` 的 crypto 钩子（EVP/JCA）完全看不到它。
+
+### 这次暴露的 ADH 缺陷
+
+状态列：**已修** = 有代码 + 验收；**撤回** = 证明不安全后移除；**未修** = 已知、还没做（附可行的下一步）。
+
+| # | 症状 | 根因 | 状态 |
+|---|---|---|---|
+| A | Java hook 事件里参数是 `java.net.URI@30d92b0`、返回值是 `java.util.HashMap@20b20ae` | 桥只渲染 `args[0]`，对象一律降级成 `类名@hash`；协议分析等于没有参数 | **已修**（第一轮）：全参数 + `byte[]` hex、URI/Map/JSON `toString`；`MAX_ARG_BYTES` 64 → 2048 |
+| B | 想钩 `libjdg` 的 native，只能看到一个 `JNI_OnLoad` 导出 | 方法全是 `RegisterNatives` 动态注册；事后装 `jni_hook` 看不到已发生的注册 | **未修**。枚举这半边够用了（`java_enum` 会标 `native`，实测 `Bridge` 只有 `main` 是 native）；拿 fnPtr 要么读 `ArtMethod.data_`（按 API 解析 ART 布局），要么把 `JNI_OnLoad → RegisterNatives → ADRP/ADD 表地址` 这条静态链自动化。手动配方见 C 行 |
+| C | 试过在 hello 预装 `jni_hook`，App 5 分钟内 **SIGILL**，另一次 **ART GC 空指针** | 对 `libart.so` 的 `RegisterNatives` 做 inline patch；包装函数本身正常（晚装 40 s 稳定） | **撤回**：该能力已从启动策略移除。安全解法是静态读注册表：`native_disasm JNI_OnLoad` → 唯一 `RegisterNatives` 调用 → `memory_read` 方法表 → `{main, (I[Ljava/lang/Object;)[Ljava/lang/Object;, fnPtr}` |
+| D | `native_hook` 只能抓**调用前**内存，拿不到 `compress` 的输出 | 没有 `memAfter`；当时只能靠"下次命中前读 x0"，实测拿到的是全 0 | **已修**（第五轮）：`memAfter` 调用后窗口（1..512 B，`phase:"after"` + `ret`），真机把 `78 9c…` inflate 回 371 B 原文 |
+| E | `memory_disasm module+offset` 直接失败，报 `Failed to disassemble, error: OK (CS_ERR_OK)` | capstone-wasm 在**零条指令**时抛异常，错误分支把成功码当错误打印 | **已修**：返回 `count:0` + `undecodedBytes` + `note`，3 条单测 |
+| F | `native_analyze` 对 1.6 MB 的 so 回吐约 19 MB strings | 没有分页/长度截断，一次就把上下文打满 | **已修**（第七轮）：`maxStrings`/`stringsOffset` 分页 + 单条 `maxStringChars` 截断 + `nextOffset`/`longStrings`/`scanCapped` 说明漏了什么；顺带修了"EOF 结尾那条字符串被丢" |
+| G | 多目标时 `live_captures` 里沙盒自检数据和目标混在一条流 | 该工具没有 `session`/`package` 过滤（`http_exchanges` 有） | **已修**（第七轮）：同一套过滤语义（记录先按自己的 package 戳） |
+| H | 静态读 Java 逻辑仍要人肉 | `dex_method_code` 只回 bytecode 十六进制，没有 Dalvik 反汇编 | **已修**（第七轮）：`disasm:true` 走 SDK `dexdump -d`，流式解析、只留命中方法、每方法 `maxInsns` 上限；工具缺失/头校验过期时明说并保留原始 bytecode |
+
+### 第二轮：门面、opcode 与 oracle
+
+`Bridge`（`com.jd.security.jdguard.core.Bridge`）是 JDGuard 的 Java 门面，只暴露一个 `static native Object[] main(int, Object[])` 和一层 `entry(int, Object[])`。`getAppKey()` 返回的就是 `b1`（所以 `b1` 不是设备 UUID，是 JDGuard 给这个 App 的 key），`getJDGVN()` 给了 `b2` 的主干，`androidId()` 是请求里出现的那个 16 hex。
+
+hook `entry` 得到一个完整样本：`opcode=101`，参数是 `[byte[1727] "POST /client.action <md5(body)>…", <设备占位串>, <eid>, "1.0", <e5>, <nonce>, null]`，返回 `[jdgs JSON]`。**b4 的输入因此确定：请求行 + body 摘要 + 设备字段 + e5 + nonce**；上一轮抓到的压缩前明文就是 native 用这些字段拼出来的 JSON。
+
+想把它变成可反复查询的 oracle，先给 `java_call` 补了数组编组。第一次把第一个元素传成 `String`，目标在 `GetArrayLength` 上直接 abort（`not an array: java.lang.String`）——这反过来证明调用真的进了 `main`；改成 `byte[]` 后再调，**命令超时、进程随后被杀**。`entry` 依赖真实调用上下文，从 agent 的命令线程异地调用会挂死，而 `java_call` 没有隔离：一个阻塞的目标方法会把整条命令通道一起拖死。**oracle 这条路要先解决"在目标自己的线程上调用 + 超时后能放弃"**，不是加个参数就能通的。
+
+### 第三轮：`b4` 的结构
+
+把同一签名操作内的两次事件按 **tid** 配对（按时间戳会错：同一个毫秒里有 2 个并发签名），各自独立恢复出一条密钥流，两条在 **291/294 字节上一致（99%）**；换成其它任意两次调用只有 0–1.4%。由此定死：
+
+```
+b4 = base64( zlib(JSON) ⊕ keystream )
+```
+
+**第五轮用 `memAfter` 拿到目标自己的压缩输出后修正**：密文与压缩流**长度完全相等**（295/295、294/294、294/294、293/293），所以没有前缀，是**等长异或**；第三轮看到的"1 字节头"是本地 zlib 与目标 zlib 差一个字节造成的假象。排除项不变：同一操作内明文只差 4 字节（时间戳）时密文只差 6 字节且位置保持——**没有雪崩，不是 AES-CBC/ECB**；逐字节比对也不是纯 deflate；换成精确的压缩流后，任意两次调用的密钥流彼此 0–0.7% 一致。
+
+**密钥流带每次调用的盐**：同一个请求（同 `t=`、同 functionId）在同一次操作里的两次调用，`b4` **完全不同**——所以 K 不是只由请求决定，还混入了每次调用的量（最可能是 `e3` 时间戳）。
+
+顺带纠正：`e4`/`e5` 是装机常量（90 秒内 6 次调用全同），不是 nonce。剩下未知的是密钥流的派生——它对 `e3/e4/e5/e1/e2` 的 SHA256/MD5 与计数器模式都不匹配，属于 libjdg 自定义 VM 里的 PRG。
+
+### 第四轮：密钥流按请求派生
+
+把 `byte[]` 渲染上限提到 2048 后，hook `Bridge.entry` 直接看到签名输入本体（255 字节 ASCII）：`POST /client.action <40 hex digest>&area=…&build=…&client=android&clientVersion=…&ef=1&eid=…`。签名覆盖**请求行 + body 摘要 + 选定 query 参数**，这解释了 `b4` 逐请求变化。
+
+密钥流按请求派生：同一请求的两次调用，恢复出的 K 前缀一致；不同请求 0–1.4%。排除项：`rand`/`random`/`srand` 虽然被导入但签名路径 0 次调用；库里没有任何教科书 PRNG 常数；对请求做 `SHA256/SHA1/MD5/HMAC-SHA256`（分别拼 `e5`/`e4`/`eid`/`appKey`/`e2`，加 counter0，前后缀都试）共 53 种构造全部不匹配。剩下的是 VM 内的自定义 PRG。
+
+### 第六轮：把标准密码学排除干净
+
+有了同一次调用的精确 D 与 C，可以干净地试标准构造：`AES-128/256-CTR` 与 `ChaCha20`（12 种种子 × 5 种 IV，共 112 组）、`RC4`（12 种种子 × 5 种 drop，共 60 组）、以及 32 字节块之间的哈希链，**全部不中**。`e4` 修正为"每次会话"的标识（同进程稳定、重启即变）。
+
+顺带看到 jdguard 在用 `access()` 探测模拟器痕迹（`vboxguest.ko`/`vboxsf`/`qemu_pipe`/`goldfish`/`bluestacks`/`androVM`…）——这类行为本该由 `detect_summary` 的 sys 钩子汇总，本次是从 `access` 的 GOT 上顺带看见的；采样窗口里没有 `/dev/urandom` 读取。
+
+**这一例的教训**：目标把密码学搬进自己的 VM 之后，"在标准库边界上抓"和"扫标准常量"会同时失效；这时能救场的不是再猜算法，而是**输入侧**（压缩前明文已经拿到）和**输出侧**（`b4` 的字节结构）能不能对齐。ADH 的输入侧这次够用，输出侧缺 `memAfter`。
+
+### 第十二轮：打通——20 字节 key，b4 可完整还原
+
+```
+b4 = base64( RC4_key( zlib_compress(fingerprint JSON) ) )
+```
+key = 传给 `libjdg+0x89480`（KSA）的 **20 字节**。验证方式：用抓到的 key 跑 KSA+PRGA 作用于同一次调用的 b4 → 得到 `78 9c …` → **inflate 出 `{"e1":…,"e2":…,"e3":…,"e5":…,"e4":…}`**。
+
+关键节点：
+- 状态是**每线程缓存**（首次签名后状态地址不变、不再被写）→ KSA 只在**新线程第一次签名**时跑；因此必须"重启 App → 立刻抓"。
+- 无 `mem` 的 `0x89480` hook 命中 1 次且**不崩**；`mem:"x1:32"` 在调用当刻拷 key 才有效（事后读该指针已是复用垃圾）。
+- key 20 字节呈"固定盐 + 变动字节"结构（第 3–7、10–15、19 字节两次抓取相同，0–2/8–9/16–18 不同），像指针/时间戳字节拼进固定盐。
+- **禁用硬件观察点**：在京东上挂 perf 断点后目标第三次 SIGSEGV（JDGuard 反篡改会检测硬件断点）。后续一律用 hook/静态。
+
+**这一例的教训（更新）**：连续三次把混淆代码误判成算法（xor 比较、字符状态机、宽度存储表）之后，真正破局的是**数据流**：`memAfter` 拿压缩输出 → 观察点指出"谁碰它" → 找到 RC4 → 再顺着 `(state,key,len)` 的入参抓 key。不是读懂了 542 KB 的混淆体，而是让目标自己把关键数据交出来。
+
+### 第十一轮：b4 是 RC4（逐字节证明），只剩 key
+
+结论：`b4 = base64( RC4_{key}( zlib(fingerprint JSON) ) )`。不是自定义 VM 的 PRG，就是 RC4。
+
+怎么找到的（前面三次都猜错，这一条是靠观察点命中的）：
+
+| 位置 | 我曾以为是 | 实际是 |
+|---|---|---|
+| `0x97b78` `eor lsl #5/#29/#28` | xorshift PRG | 混淆比较 `cmp (a^(a<<5)),(b^(b<<5))` |
+| `0xf6474` `eor w9,w9,w23` | 密钥流循环 | 逐字符状态机（16 位值跳表） |
+| `0x1020a4` 11 项跳转表 | 字节码 VM | 按宽度存储的辅助（`strb/strh/str/w`） |
+| **`0x89608`** `ldrb w9,[x20,x22]` | — | **RC4 PRGA 读明文的那条指令** |
+
+证据链（都在一次调用内自洽）：
+1. GOT hook `compress` + `memAfter:"x0:512"` → 目标自己的压缩输出 D。
+2. 在 compress 返回瞬间用 `hw_watch action:"after"` 挂 rw 观察点（x0）→ 第一条访问 D 的指令 = `libjdg+0x89608`，其函数入口 `0x89574`，交换助手 `0x89560`。
+3. 在该入口挂 `mem:"x0:192,x0+192:66"` + `memAfter:"x2:192"` → 抓到 258 字节状态（`S[256]+i+j`，**是合法置换**，`i=j=0`）与同一次调用的输出前 192 字节。
+4. 用该状态跑 PRGA 覆盖 D → 与那 192 字节**逐字节相等**，且等于 `base64decode(b4)` 的前 192 字节。**RC4 + 状态都对上了。**
+
+key 未知，但候选被精确排除（KSA 确定性：比 256 位全等）：`e5`、`eid`、每次调用的 uuid、完整请求、`e5+eid`/`eid+e5`、它们的 `sha256`/`md5`、`sha256(JSON)`、`sha256(D)`、`md5(D)`、`appKey` —— 最好成绩 3/256（随机≈1）。
+
+下一步（已定）：状态缓冲的首字节地址从 `NATIVE_HOOK` 事件的 `x0` 取，挂观察点 → 下次调用命中 **KSA 的 `S[0]=0`** 那条写指令 → 反汇编 → key 指针/长度 → 抓 key。
+
+工具侧：`hw_watch` 是本轮新增（`perf_event_open` 断点 + 采样环 + 自动撤防，支持“hook 返回时按寄存器挂”）；两个坑写进 `PROGRESS.md`：必须显式 `IOC_ENABLE`，以及 SELinux 下 app 域 EACCES（`perf_event_paranoid=-1` 也不够）。**代价**：在 `0x89574` 装 `mem+memAfter` 的 inline hook 后目标 SIGSEGV 崩了一次（证据已先抓到）。
+
+### 第七轮：回头把这张表的 F/G/H 和 `java_call` 补掉
+
+分析收尾后按上表逐条改，改动与验收见 `PROGRESS.md` 的同日第七轮记录。这一轮新学到的两条目标知识：
+
+- **`java_call` 不再是"会把通道拖死"的调用**：agent 侧加了独立 attach 线程，`java_call {detach:true}` 立即回 `callId`，`java_call_result` 查状态。真机用 `Thread.sleep(15000)` 验证：启动 87 ms 返回，睡眠期间 `agent_ping` 3.17 ms，最终 `done elapsedMs=15007`。**这就是第二轮"`entry` oracle"卡住的那一半**——现在阻塞的方法只会占一条线程，不会占掉整个会话；剩下的一半是目标侧（`entry` 需要精确的 7 元素参数数组），属于目标工作，不是工具缺口。
+- **JDGuard 的状态是"按进程"的**：`Bridge.getAppKey()` 在主进程返回 36 字符的 appKey（与 jdgs 的 `b1` 一致），但在 `:jdpush` 进程里**返回 null**（`getJDGVN()` 两边都正常）。所以"注入到哪个进程"会直接改变 oracle 的答案——多进程目标（京东、微信这类）先 `process_list` 挑主进程，不要用 `capabilities` 的默认选择。
+
+顺带：`docs/mcp-tools.md` 一直是按 `/api/mcp/doc` 生成的，但文件头写着 65 tools 而实际早已 77——文档漂移了一个数量级没人发现。已重新生成（78 tools），`adhd-data/regen-mcp-doc.mjs` 就是生成器。
+
+### 第八轮：native 入口、opcode 分派与"可回放的签名"
+
+**静态钉死入口**（`libjdg.so` 1,631,472 B，sha `47dac66f…`，直接从 APK 的 `lib/arm64/` 拉）
+- `JNI_OnLoad`(0xa1770) 先拼出 `com/jd/security/jdguard/core/Bridge`（32 字节常量 + 栈上补 `idge`），再 `ldr x8,[x8,#0x6b8]`（JNIEnv idx 215 = RegisterNatives），`x2=0x159118`、`w3=1`：**只注册一个 native**。
+- 表在文件里全 0，必须读 `.rela.dyn` 的 addend：`name@0x5bda2="main"`、`sig@0x5bda7="(I[Ljava/lang/Object;)[Ljava/lang/Object;"`、**`fnPtr@0xa236c`**。这条把缺陷 B 对这类 so 闭合了——不用 hook，也不需要在加载时抢。
+- 同一个 `JNI_OnLoad` 还读一个**运行期解密的属性名**（0x1593cc 是密文，经 0xa2044 解），`atoi >= 28` 才走 API-28 分支。`strings` 捞不到它。
+
+**`main` 是 opcode 分派器**：`sub w8,w8,#0x65; cmp w8,#8; ldrh w11,[0x63e48+w8*2]; br x10`（表基址 0xa3858），**101..109** 走这里，`>998` 走 0xb3580。`entry` 是通用 RPC：101 签名 / 102 环境查询 / 104 / 106 摘要（`(int,"<32hex>&<e5>",long)` → 32 hex）。
+
+**完整的 101 向量**（之前只看到 524 字符，实际 3,318）：
+
+```
+[ byte[1530] "POST /client.action <40hex>&…&eid=…&ep=<urlenc JSON>&ext=<urlenc JSON>&…",
+  "-§§-§§-§§-§§-§§-§§-§§-", <eid>, "1.0", <e5>, <uuid>, null ]
+```
+
+元素 0 里带两个 URL 编码的 JSON（设备指纹 `ep`、扩展 `ext`），和 jdguard 自己的 `e2` 是两套；元素 5 是**每次调用一个 uuid**。
+
+**oracle（本轮的关键能力）**：用 `java_call {detach:true}` 原样回放这份向量，**3 ms** 拿回完整 jdgs。于是签名从"等目标自己发"变成可重复实验：
+- 同输入连调 3 次：`b4` 每次不同，`b5` **三次一致**，`b6` 每次都变。
+- 只改元素 5（uuid）：`b5` 不变，`b4` 变且**长度 408→396**——nonce 进了被压缩的明文，不只是密钥流。
+- `b5` ≠ `sha256(请求字节/请求 hex/40 hex 摘要/"/client.action")`；`b6` ≠ `sha256(base64decode(b4))`、≠ `sha256(b4 ascii)`。
+
+**native 链**（`compress` 命中当刻的 backtrace）：
+`main(0xa236c) → 0x97144 → 0x97828 → 0xf65f8 → 0x102108 → 0x102d40 → 0x103288(六参转发) → 0x104000(variadic thunk, blr x9) → zlib compress`，GOT hook 命中 1 次。注意 `0x9a240` 那组 `deflateInit_/deflate/deflateEnd` **不在** 101 路径上（inline hook 命中 0）——同一个 so 里有两套压缩代码，别串。
+
+**这轮暴露并修掉的工具缺陷**（每条都是被下一步卡住才发现的）
+| 症状 | 根因 | 状态 |
+|---|---|---|
+| dispatcher 的参数只看到第一个元素（524 字符） | `bounded(Object[])` 按**单值**上限 512 截整个数组 | 已修：数组用 `MAX_ARG_CHARS`，并 1600 → 4608；`byte[]` 的 hex 不再被 512 截 |
+| 回放报 `unterminated JSON string` | agent `jargs[2048]` 截断 3 KB args | 已修：16 KiB |
+| `Object[]` 里放不了 `byte[]` | JSON 数组没有类型 | 已修：`{"$bytes":…}` / `{"$bytesHex":…}` |
+| 返回 `[Ljava.lang.String;@ec1a0e7` | 返回值走 `String.valueOf(Object)` | 已修：数组逐元素渲染（上限 64 槽） |
+| hook 命中（hits=1）但 `native_backtrace` 说没有事件 | backtrace 只查 daemon 捕获库，库要靠 `capture_start` 的 drain 才有数据 | 未修（应在找不到时按需 drain 一次） |
+| 重启后按 `process_list` 选会话会打到刚死的进程 | 旧会话有几十秒 `online` 窗口 | 未修（脚本先 `agent_ping` 再选；工具层应自己保证） |
+| `qbdi_trace` 只能按导出符号，够不到 `main` | 命令层强制 `symLib+symbol`（agent 内部本来就是按函数指针工作） | 已修：`addr` 绝对地址入口，`trace_digest` 同步支持；真机把 `libQBDI.so` 推进 App 私有目录 + `load_library` 后，`qbdi_trace {addr: libjdg+0xf6430}` 返回 3 条指令、`retval` 正确 |
+| `memory_search` 会"命中"自己 | 它把请求里的 pattern 解码到**自己命令线程的栈**，然后又扫描这段栈 | 已修：扫描跳过当前线程栈。证据：从未发送过的随机 16 字节 pattern 也命中同一个固定地址 `74430168f0`；修后 0 命中 |
+| `hw_watch`（硬件写观察点）没有 | 无法回答"谁写了这块缓冲"（写者是未导出 VM handler；指令级 trace 又淹没在扁平化代码里） | 已加：`perf_event_open(PERF_TYPE_BREAKPOINT)` + 采样环，命中即报 `ip`+内核调用链并自动撤防。**平台约束**：SELinux Enforcing 下 app 域 `EACCES`（哪怕 `perf_event_paranoid=-1`）；`setenforce 0` 后可 arm |
+
+### 第九轮：b6 定案（`md5(明文 JSON)`），以及"工具读不到那块缓冲"
+
+第八轮把 `b5`/`b6` 当 SHA-256 试了 24 种 body 形状、19 种入参组合、HMAC/加盐/常串全否。这一轮换路子：**不猜输入，直接钩哈希本体**，并且先把"看不到整条输入"这个工具上限拆掉。
+
+**先修工具（这是能出结果的前提）**
+
+- `mem` 上限原本是 **192 B × 4 窗口 / 总计 512 B**，而这条签名链的 preimage 是 **1530–1636 字节**——也就是说"唯一值得看的那块缓冲"恰好是工具读不到的。提到 **1024 × 4 / 4096**，`NATIVE_HOOK_MEM` 的记录缓冲改成按上限推导，daemon 侧常量和单测一起改（单测原来把 192/512 写死）。
+- 事件里的 `fp`（8 个 vector 寄存器）约 600 B/条，128 条就是 75 KB 噪声，直接把一次采集顶满；改成 **q0–q7 全零就不发**。
+
+**定位**：常量扫描确认包里确有 SHA-256 的 IV/K 表（`+0x156284` / `+0x1562a4`），唯一引用 K 表的是 `+0x8c1f8` 这个函数；它只有一个调用者 `+0x98998`，而 `+0x98998` 只分配 **33 字节**（32 hex + NUL）——所以这条链是"16 字节摘要的 hex"，不是 SHA-256。
+
+**实测**：`+0x8c1f8` 上装 inline hook，`mem:"x0:1024,x0+1024:1024"` + `memAfter:"x2:32"`，一次拿全「输入 + 目标自己算的输出」。**52/52 次命中全是 MD5**，逐字节等于目标写出的 16 字节。每个请求两次调用：
+
+| preimage | 长度 | 内容 |
+|---|---|---|
+| A | ~1530–1636 | `POST /client.action <query/body>` |
+| B | ~564–568 | `{"b1":…,"b2":…,"b3":…,"b4":…,"b5":"<64 hex>","b7":…}`（**没有 b6**） |
+
+于是 `b6 = md5_hex(A 之后那条 B)`，而 `b5` 在 B 里**已经填好**、长度 64 hex = 32 字节。B 的键序固定 `b1,b2,b3,b4,b5,b7`。
+
+**`b5` 还没定**，但排除面已经很大：模块里**只有一个 hex 格式化器**（33 字节分配），**没有 65 字节分配**——libjdg 内部不存在"把 32 字节 hex 成 64 字符"的代码，所以 b5 要么是两个 32-hex 串拼接，要么由别的模块/Java 层产生。已否：`sha256(整条 args)`、`sha256(args 去掉方法和路径)`、`sha256(path+args)`、9 种 `md5(a)‖md5(b)` 组合、`sha256/md5(b4)`、`sha256(b4+b7)`、`sha256/md5(JSON 去掉 b5)`（两级签名假设）；b5 的任何 ≥8 字符子串都**不出现**在 args 字符串里。下一步指向 **HMAC-SHA256**（模块确实带 SHA-256 表，只是这条链不走；而 b5 正好 32 字节）——要先重启 App 抓 KSA 那 20 字节 key。
+
+**这一轮最该记住的教训：分析脚本自己也会"沉默地骗人"。**
+
+| 症状 | 根因 |
+|---|---|
+| ADRP 扫描报「0 个引用」，差一点据此写下"这些常量表没有代码引用" | JS 里 `w & 0x9f000000` 是**有符号**的负值，跟 `0x90000000` 永远不相等。修正后同一文件立刻有 **12342** 条 ADRP |
+| "找 65 字节分配 → 0 处" | `Number.parseInt('0x41', 16)` 与直觉不符，实际在找 101。改成 `Number()` 后立刻命中 |
+
+结论已写进 `PROGRESS.md`：**凡"0 命中"必须同时打印"到底扫了多少条指令/字节"**，否则 0 只是一个沉默的谎。
+
+
+
+
+

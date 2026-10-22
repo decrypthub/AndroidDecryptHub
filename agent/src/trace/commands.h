@@ -6,7 +6,7 @@ extern "C" {
 #endif
 
 void adh_cmd_qbdi_trace(int fd, const char *id, const char *symbol_library,
-                        const char *symbol, const char *args_csv);
+                        const char *symbol, const char *args_csv, const char *addr_hex);
 
 #ifdef __cplusplus
 }

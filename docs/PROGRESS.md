@@ -3,6 +3,1098 @@
 > 这是"我们现在在哪"的唯一真相。每个会话开始先读它，结束前更新它。
 > 详细规格见 `REQUIREMENTS.md`，路线与架构见 `DEVELOPMENT_PLAN.md`。
 
+## 2026-10-22（第三十四轮）—— 工具打磨收尾 + **b6 破译：它是 jdgs 明文 JSON 的 MD5**
+
+### 一、工具打磨（P2 全部清掉）
+
+1. **`mem` 上限 192×4 / 512 → 1024×4 / 4096**（本轮真正的阻塞点）
+   - 现象：签名前像（preimage）是 **1530–1636 字节**，旧上限单窗口 192、总计 512，于是**唯一值得看的那块缓冲恰恰是工具读不到的**——上一轮反复"候选全否"，有一半原因是只看到前 192 字节。
+   - 改法：`ADH_MEM_WIN_LEN 1024`、`ADH_MEM_WIN_TOTAL 4096`；`NATIVE_HOOK_MEM` 记录的缓冲改成按上限推导 `ADH_MEM_WIN_TOTAL*2+512`（以后再改上限不会静默截断）；daemon `native_hook_args.ts` 同步；单测改成**从常量推导**期望值（旧测试把 192/512 写死，改上限必然红，这次正是这么发现的）。
+2. **事件里的 `fp` 默认省略**：8 个 vector 寄存器约 600 B/条，128 条就是 75 KB 纯噪声。现在 **q0–q7 全零就不发 `fp`**，整对象要么全有要么全无 → 纯整数调用不再付这笔钱，真用 FP 的调用仍报八个（`0.0` 参数仍能与"未使用"区分）。
+3. **`mem` / `memAfter` 共用一套窗口语法**：抽出 `parse_window()` + `format_window()`，两处各自手写的解析（错误文案、offset 上限、canon 拼法**都已经漂移过**）合一；`memAfter` 只保留真实差异（单窗口 + 更大的长度上限）。
+4. **`hw_watch action:"hit"` 不再阻塞**：它和 `status` 一样是只读查询却走阻塞锁，正在 arm 时取不到命中链——而命中链**只有它一个出口**。改成 trylock，busy 时明确回 `busy`。
+5. **`docs/mcp-tools.md` 重新生成**：65 → **79** 个工具（漂移 14 个），`filter` / `since` 首次进文档；并补写 `live_captures.since`（采集游标，不是时间戳）、`capture_start.epoch`、`hw_watch.hit`、`native_hook` 的 `filter` / `writeHex` / `errno` / `fp` 语义——这些参数此前**只在 schema 里，描述里一个字没有**。
+
+验证：`tsc` 干净、`npm test` **298 pass / 0 fail**（比上一轮 +118 条，含新增断言）、agent 重新构建并部署（`sandbox`/`module` 两侧哈希一致）、JD 冷启后 hook 实测 60 / 132 次命中。
+
+### 二、b6 破译：**`b6 = md5_hex(明文 JSON 去掉 b6)`**
+
+上一轮把"body → jdgs JSON 的追加顺序"摸清了但没拿到收尾那一步。本轮换了思路：**不去猜输入，直接钩哈希本体**。
+
+- 静态定位：SHA-256 的 IV/K 表在 `libjdg+0x156284 / +0x1562a4`（常量扫描命中）；唯一引用 K 表的代码在 `+0x8c3f0`，属于 `+0x8c1f8` 开头的那个函数；它只有一个调用者 `+0x98998`，而 `+0x98998` 只分配 **33 字节**（32 hex + NUL）→ 说明这条链做的是 **16 字节摘要的 hex**，不是 SHA-256。
+- 运行时：在 `libjdg+0x8c1f8` 上装 inline hook，`mem:"x0:1024,x0+1024:1024"` + `memAfter:"x2:32"`，一次拿到「完整输入 + 目标自己算出的输出」。
+- 结果：**52/52 次命中全部是 MD5**（`md5(前 x1 字节)` 逐字节等于目标写出的 16 字节），一次请求两次调用：
+
+| preimage | 长度 | 内容 | 我们的 MD5 | 目标输出 | |
+|---|---|---|---|---|---|
+| A | 1530 / 1536 / 1629 | `POST /client.action <query/body>` | `f481e601…` / `a4195d07…` / `a6ccc9ca…` | 完全一致 | ✅ |
+| B | 568 / 564 | `{"b1":…,"b2":…,"b3":…,"b4":…,"b5":"<64 hex>","b7":…}` | `5a1587c1…` / `31fd151e…` / `a84fdb44…` | 完全一致 | ✅ |
+
+所以：
+
+- **`b6` = `md5_hex(jdgs 明文 JSON)`，而这个 JSON 里还没有 b6**（键序固定 `b1,b2,b3,b4,b5,b7`）；
+- 一次请求**另有**一次 `md5_hex("POST <path> <args>")`（32 hex），用途未定位；
+- `b5` 在被哈希之前**已经填好**，长度 **64 hex = 32 字节**。
+
+### 三、b5 仍未定，但排除了一大片
+
+`b5` 的产出点不在 `+0x8c1f8` 这条链上（52/52 全是 md5），而全模块**只有一个 hex 格式化器**（33 字节分配，即 32 hex），**没有 65 字节分配**——也就是说 libjdg 内部没有"把 32 字节 hex 成 64 字符"的代码。因此 b5 要么是**两个 32-hex 串拼接**，要么由**别的模块/Java 层**产生。已逐条否掉：
+
+- `sha256("POST <path> <args>")`、`sha256(args 去掉方法与路径)`、`sha256(path+args)`；
+- `md5(args)‖md5(json)`、`md5(json)‖md5(args)`、`md5(args)‖md5(args)` 等 9 种两段组合；
+- `sha256/patch(b4)`、`sha256(b1+b4+b7)`、`sha256(b4+b7)`；
+- `sha256(JSON 去掉 b5)` / `md5(JSON 去掉 b5)`（两级签名假设）；
+- b5 的任何 ≥8 字符子串**都不出现**在 args 字符串里（不是"从入参里搬过来的"）。
+
+下一步指向 **HMAC-SHA256**：模块里确实带着 SHA-256 常量表（只是这条链不走），而 b5 恰好是 32 字节。要验它必须先有 20 字节会话 key —— 也就是要重启 App、在新线程首次签名时抓 KSA（上一轮记录过的手法）。
+
+### 四、方法教训（都写进 CASE_STUDIES）
+
+- **扫描器"什么都没找到"和"真的没有"长得一模一样**：我的 ADRP 扫描一开始报 0 个引用，原因是 JS 里 `w & 0x9f000000` 是**有符号**的负值，跟 `0x90000000` 永远不相等。修正后同一文件立刻有 12342 条 ADRP。差一点据此得出"这些常量表没有代码引用"的错误结论。
+- **`Number.parseInt('0x41', 16)` 与我以为的不一样**：写死 radix 16 时前缀被吞，"找 65 字节分配"实际在找 101，于是又得到一次"0 处命中"。改成 `Number()`。
+- 结论：**分析脚本也必须 fail-loud**——凡"0 命中"必须同时打印"我到底扫了多少条指令/多少个字节"，否则 0 只是一个沉默的谎。
+
+## 2026-10-22（第三十三轮）—— 修好"软撤后重装"：reactivate 分支漏更新 after/filter
+
+### 根因
+
+`adh_native_hook_install` 里有一条 **reuse/reactivate** 路径（软撤之后重新 hook 同一地址时复用已安装的 stub，不再碰 Dobby）。它更新了 `mem_*`、`write_*`、`errno`、`throttle`，**唯独没有更新 `after_*` 和 `filter_*`**：
+
+```cpp
+copy_cstr(old.mem_spec, ..., mem_canon);   // ← 到这里就结束了
+// after_arg/after_len/after_spec、filter_reg/filter_val/filter_spec 都还是上一轮的旧值
+```
+
+后果：软撤后用新的 `filter`/`memAfter` 重装，**照旧按旧配置观测**，而且不报错——正是"改了没效果"那类最难查的问题。
+
+### 修复
+
+1. reactivate 分支补齐：`after_arg/after_off/after_len/after_spec` 与 `filter_reg/filter_val/filter_spec` 全部按本次参数重写；
+2. reuse 匹配增加**stub 形态一致性**判断（`(after_len > 0) != (old.after_len > 0)` 就不复用）：post-call stub 与普通 stub 是两个不同的桩，不能在没有 Dobby 的情况下互换；
+3. 这样"软撤 → 换 filter → 重装"就**不需要重启目标**（此前每次都要重启 App，已经为它重启过三次）。
+
+### 真机验证（同一进程，无重启）
+
+```
+install A:  id=1  filter=x2=0x7317e8dbb0   ok=True
+soft unhook: ok=True
+reinstall B: id=2  filter=x2=0x7317edd4b8  ok=True      ← 换了过滤值
+status:      id=2  filter=x2=0x7317edd4b8  hits=166  verdict=fired
+capture(since=epoch): 99 条 native 事件
+```
+
+- **抑制**（上一轮）：不匹配时 0 事件；
+- **命中**（本轮）：匹配时 `hits=166`、事件正常落库。
+
+两个方向都验证过，目标过滤才算真正可用。
+
+## 2026-10-22（第三十二轮）—— 工具打磨：采集游标 + `status` 可观测 + 目标过滤**验证生效**
+
+按复盘清单开工，三条 P0 里两条已落地并真机验证。
+
+### P0-1 采集游标（`epoch` / `since`）
+
+- `capture_start` 现在返回 `epoch`（当前捕获流的最大 `Capture.id`）；
+- `live_captures` 新增 `since`：只回 `id > since` 的记录。
+- 真机：`capture_start` → `epoch=45230`；随后用 `since:45230` 只拿到本次采集的 13 条记录。
+
+**这条解决了本轮反复踩的坑**：以前"这轮有没有新记录"无法判断，读到的是跨会话累积的旧数据（实测混入过 107 条）。
+
+### P0-3 `status` 暴露生效配置
+
+`native_hook status` 的每条记录现在带 `afterActive` 与 `filter`：
+
+```
+filter=x2=0x73186ee574  afterActive=False  hits=0
+```
+
+以前只能靠"有没有记录"反推配置有没有生效，现在直接可读。
+
+### P0（目标过滤）：**抑制已验证**
+
+同一个 thunk hook、同一次签名：
+
+| | 未过滤（此前） | 加 `filter` 后 |
+|---|---|---|
+| native 事件数 | 128+（环被打满） | **0** |
+
+说明：不匹配的命中被丢弃（不计数、不发事件、原函数照常执行），目标过滤按设计工作。
+
+### 顺带纠正一个假设
+
+~~过滤用的 `x2` 取的是 RC4 入口（`base+0x89574`），结果 0 命中——而观察到的 `x2` 实际值是 `0x7321f88808` 一类。说明**宿主调用 thunk 的 `x2` 不是被调函数指针**（此前第三轮据此推断"x2=目标"是错的）。~~
+
+**上面这段是错的，已撤回。** 用**当前会话**的基址重算后，`x2` 全部落在 libjdg 内，就是被调函数指针（第三轮的推断是对的）：
+
+```
+14 x 0x731e6f3bb0 → libjdg+0x94bb0     13 x …54b8 → +0x964b8
+10 x …3724 → +0x94724                  8 x …a268 → +0x12b268
+ 8 x …caf0 → +0x8daf0                   6 x …98a8 → +0x12a8a8
+```
+
+教训：**换算偏移必须用当次会话的基址**（进程重启后基址会变），否则会得出完全相反的结论——上一次就是这么错的。
+
+而 RC4 入口（`+0x89574`）不在前 128 条里，说明环只留下了这次签名的**前段**调用（或 PRGA 走的是另一条入口）。下一轮用 `filter` 逐个命中上面这些目标（先 `+0x94bb0`，14 次），看哪个是"body → 摘要"那条链。
+
+### P0-2 native 事件带上 `tid`
+
+事件 JSON 头部加了 `"tid":%d`（`gettid()`），daemon 侧的 `Capture.tid` 从此有值。真机：
+
+```
+capture_start → epoch=45670
+live_captures {since: 45670} → id=45671..45674 func=NATIVE_HOOK tid=15741（全部同线程，符合预期）
+```
+
+这解决了"两个 hook 在不同线程命中、只能按顺序配对"的老问题（早前 `RC4(state,D)≠C` 就是配错对造成的）。
+
+### 验证方式
+
+agent 链接通过、`tsc` 干净；真机状态与计数见上表。
+
+### 剩余（下一步）
+
+1. **P1-7 daemon 热重载**：改用 `node --watch src/index.ts`，避免"改了 `mcp.ts` 不生效"再白跑一轮；
+2. **确定 jdgs 的过滤值**：先跑一次未过滤的 thunk hook，统计 `x2` 分布（现在有 `since`，一次采集就能干净统计），再用真实值过滤；
+3. 回到 `b5`/`b6`：按 `tid` + `since` 抓 `0x102260` 的 body→jdgs 追加序列。
+
+## 2026-10-22（第三十一轮）—— 追加序列是「body → jdgs JSON」，且存在两条 body 路径
+
+对 `0x102260` 的记录做**内容过滤**（只留 `POST` / `{"` 这类可读前缀），一次签名 266 条里有 14 条是真正的追加：
+
+```
+POST /client.action 1c820f9e3171c89cc741…     ← 本次请求的 body
+POST /client.action 1c820f9e3171c89cc741…
+{"b1":"68dd5803-07c3-44d7-8881-0b213bf81b51","b2":"3.6.5_0",…   ← jdgs 输出 JSON
+POST /client.action 44136fa355b3678a1146…     ← 另一条路径的 body
+…
+```
+
+两个关键事实：
+
+1. **顺序固定**：先 body、后 jdgs JSON，且在多次签名里稳定重复（不是随机顺序）。
+2. **存在两条 body 路径**：`1c820f9e…` 与 `44136fa3…` 同时出现 —— 说明 `0x102260` 被多处复用，分析时必须**按本次 body 前缀筛选**，否则会把两种逻辑混在一起（这也是上一轮"前 40 条全是游标快照"的成因：记录里混着对象快照与不同路径的追加）。
+
+**对公式的收窄**：
+- `b6` 很可能就是"body + jdgs 文本"这个对象的滚动摘要；
+- `b5` 只吃 body —— 对应序列里"只有 body、没有 jdgs"的那几次调用。
+
+**下一步**：按 `1c820f9e…` 前缀筛出属于本次签名的调用 → 用已修好的 `memAfter` 抓该对象追加完成后的状态 → 若仍无 32 字节，就 hook 追加之后的收尾调用。
+
+## 2026-10-22（第三十轮）—— **找到 b5/b6 的输入构造点：`0x102260` 把 body 和 jdgs JSON 追加进同一对象**
+
+在 `libjdg+0x102260`（`0x975c0` 里逐个字段追加用的那个函数）上挂 `mem:"x1:96"`，一次签名抓到 **118 条**记录，其中两条是决定性的——`x1` 指向被追加的内容：
+
+```
+504f5354202f636c69656e742e616374   |  "POST /client.action 1c820f9e3171c89cc741f55dadee40b97ae0645f…"
+7b226231223a2236386464353830332d   |  "{\"b1\":\"68dd5803-07c3-44d7-8881-0b213bf81b51\",\"b2\":\"3.6.5_0\",…"
+```
+
+也就是说这条链**把请求 body（1530 B）和 jdgs JSON 的内容追加进同一个对象**。这正好对应之前定性出来的覆盖面：
+
+- `b5` = f(body)
+- `b6` = f(body + 其余入参)
+
+→ **`0x975c0` + `0x102260` 就是 `b5`/`b6` 的输入构造点**，不再是"猜"。之前排除 `0xf643c`（4 阶段游标机）也与此相容：游标机在这条链上是"推进/收尾"，真正的数据是经 `0x102260` 追加进去的。
+
+**下一步（很具体）**：把 `0x102260` 的**完整追加序列**按顺序抓下来（每次的 `x1` 内容 + `x2` 长度），看：
+1. 除了 body 与 jdgs 之外还追加了什么（时间戳/nonce/盐）；
+2. 追加完之后是否有 `init/update/final` 形态的调用（那才是哈希本体），或摘要直接由游标机边追加边混合（那样 `b5`/`b6` 就是该对象内部的滚动状态）。
+
+### 现场顺带确认
+
+- 118 条记录里既有 `x2:64` 的对象快照（`36010000…` 那批），也有大量 `x1` 的追加内容（body、`{"b1":…`、`1.0`/`32` 这类字段值），说明 `0x102260` 被复用于多种追加。
+- 这条 hook 是 inline 且**没有崩目标**，可以放心继续在这条链上做实验。
+
+## 2026-10-22（第二十九轮）—— `0xf643c` 是 4 阶段游标机，不是摘要；并现场验证两条工具缺陷
+
+用第 28 轮修好的 `memAfter` 做了干净的前后对比（`mem:"x2:64"` + `memAfter:"x2:64"`，一次签名命中 4 次，`pre=4 post=4` 逐对可比）：
+
+```
+#0 pre (310,568,4462)  → post (435,992,10522)
+#1 pre (435,992,10522) → post (732,672,6622)
+#2 pre (732,672,6622)  → post (732,672,6622)   ← 不变
+#3 pre (732,672,6622)  → post (310,568,4462)   ← 回到起点
+```
+
+- `post[#i] == pre[#i+1]`，4 个阶段轮转 → 这是**同一个对象按阶段推进**，不是"每次独立计算"；
+- 每次 `ret=0x0`，头三个整数（像 offset/length/count），其余是堆指针，**没有 32 字节摘要、没有 hex 字符**。
+
+→ `f643c` 排除，`b5`/`b6` 不在它这里产生。
+
+### 现场确认的两条工具缺陷（已进复盘清单）
+
+1. **hard unhook 毒化地址**：`target was hard-unhooked earlier in this process: its backend state is stale, restart the target before hooking it again` —— 同一进程内无法重新 hook，只能重启 App。代价高，应支持"软 unhook 优先"或"原地重装"。
+2. **采集存储跨会话累积**：安装失败那次仍读到 **107 条**旧记录，没有 `since`/游标就分不清本轮与上一轮。这是 P0-4。
+
+## 2026-10-22（第二十八轮）—— **修好 `memAfter`：`slot_ids` 映射在首次安装时没写**
+
+### 根因（终于定位）
+
+`adh_native_hook_after`（`native_hooks.cpp` L679-680）靠 `g_native_hook_slot_ids[slot]` 把内部 slot
+翻译成对外 id，取不到就 `return`：
+
+```cpp
+int hook_uid = g_native_hook_slot_ids[hook_id].load(...);
+if (hook_uid <= 0) return retval;          // ← 静默，没有任何记录
+```
+
+而这个映射**只有两条路径会写**：reset（写 0）和 reactivate（写 id）。**首次安装成功的那条路径
+从来没写过它**，所以 `hook_uid` 恒为 0 → after 路径直接返回。
+
+这解释了全部现象：`install ok:true`、stub 选了 after 版、`afterSpec` 解析正确，但**一条 after 记录都没有**；
+而 pre 记录不受影响，因为它的 id 是 stub 里 `mov x1, #N` 直接传的，不查这张表。
+
+### 修复
+
+在发布 `active = 1` **之前**无条件写入映射（`native_hooks.cpp`，`reset_throttle_counters(slot)` 之后）：
+
+```cpp
+g_native_hook_slot_ids[slot].store(id, std::memory_order_relaxed);
+```
+
+另外补了一条安装日志，让"配置是否真的到了 install"一眼可见：
+
+```
+native_hook install id=1 slot=0 mode=inline stub=after afterSpec="x00:64" arg=0 off=0 len=64
+```
+
+### 验证（真机）
+
+| | 修复前 | 修复后 |
+|---|---|---|
+| `NATIVE_HOOK_MEM` 总数 | 4 | 8 |
+| 其中 `phase:"after"` | **0** | **4** |
+
+修复后的记录样例（`mem:"x2:8"` + `memAfter:"x0:64"`，挂在 `libjdg+0xf643c`）：
+
+```json
+{"hookId":1,"phase":"after","ret":"0x0","reg":"x0","offset":0,"requested":64,"got":64,
+ "hex":"c0a5ae217300000008d8b72173000000…"}
+```
+
+### 顺带发现（待办）
+
+1. `afterSpec` 规范化成了 `x00:64`（`off=0` 时格式串多打一个 0）——只是显示瑕疵，解析结果 `arg=0 off=0 len=64` 是对的。
+2. `0xf643c` 的返回值是 **0**（`ret:"0x0"`），所以 `memAfter:"x0:64"` 读到的不是摘要。抓它的产物要看**返回后的 `x2` 对象**（`memAfter:"x2:64"`），或跟踪它内部写 hex 的指令。
+
+## jdgs 分析总结（截至第二十三轮，交接用）
+
+### 已完全确定并逐字节验证
+
+```
+b4 = base64( RC4_key( zlib.compress(fingerprint_json, 6) ) )
+b1 = Bridge.getAppKey()     36 字符 UUID
+b2 = "3.6.5_0"              b3 = "3.0"
+b7 = 调用时刻毫秒时间戳
+fingerprint_json = {"e1":<eid>, "e2":"1.0§§0§§<包名>|<32hex>|<版本>§§…", "e3":<ms>, "e5":<e5>, "e4":…}
+key  = 传给 libjdg+0x89480（RC4 KSA）的 20 字节，每线程一份、缓存复用
+```
+
+- 验证方式：抓同一次调用的 key + `b4`，`RC4(key)` 解出 `78 9c …` → inflate → 指纹 JSON；再用 `jdgs_gen.py`（CPython zlib level 6）从明文重新生成 `b4`，**412/412 字符完全一致**。
+- key 结构：`[2]=0x60`、`[3..7]=fa82edfe74`、`[10..15]=5f8e8b98ebe3`、`[18..19]=5e8a` 恒定；`[0..1]`/`[8..9]`/`[16..17]` 三个 16 位字段变动。
+
+### 已定性、公式未得
+
+- `b5` = f(请求 body)，`b6` = f(body + 其余全部入参)；两者**不是**可见字节的直接 SHA-256（24 种 body 形状 + 19 种入参 + HMAC/加盐/固定串全否）。
+- 计算层：**不是** Java JCA（31 个 hook 零命中）、**不是**宿主调用 thunk（256 条调用里无 1530/32 长度参数、无一次性目标）→ **libjdg 内联**。
+- 已知路径：jdgs 输出组装点 `libjdg+0x975c0`（读 `x3` 得到 `[{"b1":…`）→ 参数处理器 `libjdg+0xf643c`（`x3=29` 与 body 参数个数一致、`x4=379`、`x0=libjdg+0x14d420` 运行期指针表；一次签名命中 4 次，**hook 不崩目标**）。
+
+### 工具经验（避免重走）
+
+- 京东上**禁用 `hw_watch`**：perf 硬件断点会被反篡改检测，已三次 SIGSEGV。
+- `live_captures` 必须在 `java_call_result` 后**等 ≥2 s** 再读，否则读到空环。
+- PRGA（`0x89574`）**只装无 `mem` 的纯观测 hook 是安全的**；带 `mem`/`memAfter` 会崩。
+- RC4 状态每线程缓存 → KSA 只在新线程首次签名时跑；抓 key 必须"重启 App → 立刻抓"。
+- 目标压缩用 **zlib level 6**；Node 的 zlib（zlib-ng）产不出同样字节，用 CPython。
+
+### 未完成
+
+1. `b5`/`b6` 的确切公式（下一步：`0xf643c` 的返回值或其内部写 hex 的指令）；
+2. key 里三个 16 位字段的语义（与 `e3`/nonce 的相关性）。
+
+## 2026-10-22（第二十七轮）—— `memAfter` 解析没问题：怀疑落在 inline 模式的 after-stub
+
+读了 `native_hooks.cpp` L994–1051 的 `memAfter` 解析器，对 `x0:64` 完全合法：
+
+```
+p[0]=='x' && p[1]=='0' && p[2]==':'   → ok
+after_reg = 0
+':' 后读十进制 64，上限 ADH_MEM_AFTER_MAX（64 不超）
+canon = "x0:64"，after_len = 64
+```
+
+随后 L1085 用 `after_len > 0` 选择 `after_stub_for_id(slot)`，所以 **stub 是 after 版本**。也就是说：**spec 没被拒、stub 也选了 after 版，但命中后没有记录**。
+
+剩下两个可能，按可能性排序：
+
+1. **inline 模式下 after-stub 不被调用**（早前能工作的那次是 `compress` 的 **GOT** hook；最近的失败全是 **inline**）——这是最像的；
+2. `ctx.after_arg/after_len` 的赋值时机在 hook 激活之后，命中时读到 -1（L1283 在 activate 之后的话就会这样）。
+
+**判断方法（下一轮直接做 A/B）**：用同一个 `memAfter:"x0:512"` 分别装 **got**（compress）和 **inline**（`0xf643c`）两种 hook，各触发一次签名：
+- got 有 after 记录、inline 没有 → 结论 1 成立，修 after-stub 的 inline 路径；
+- 两者都没有 → 是回归，对照 `git log -p` 找差异。
+
+## 2026-10-22（第二十六轮）—— 更正：只留一个 hook 也没有 after 记录；怀疑与 `agent_main.c` 重建有关
+
+上一轮把 `memAfter` 失效归因于"after 配置是全局单份、被后续 install 重置"。本轮做了**只保留一个 hook** 的干净实验（撤掉全部 → 只装 `0xf643c`，`mem:"x2:8"` + `memAfter:"x0:64"`）：
+
+- `installed:` 为空（说明撤干净了），新 hook `id=10`，`ok=true`；
+- 签名正常（`b5=88682d91274d382c4f36…`）；
+- 记录：`mine=4`，**仍然全是 pre 侧**（`x2` 快照），**after 依旧 0 条**。
+
+→ 上一轮的"全局 ctx 被覆盖"**不是**充分原因（单 hook 也失败）。after 路径在当前 agent 构建上就是没工作。
+
+**新的怀疑方向（重要）**：早前 `compress` 的 `memAfter:"x0:512"` 是**能**产出 `phase:"after"` 记录的，那次发生在我**重建 `agent/src/bootstrap/agent_main.c` 之前**。重建时 `cmd_native_hook` 的参数是我按 `native_hooks.h` 的签名补的（`mem/memAfter/writeReg/writeOff/writeHex/errno`），**很可能某处没接对**（JSON 键名、参数顺序或 after_spec 未透传），导致现在 `memAfter` 到了 native 侧就是空串。
+
+**下一步（优先级最高）**：核对 `agent_main.c` 里 `cmd_native_hook` 的实参顺序与 `native_hooks.h` 里 `adh_native_hook_install` 的形参顺序是否一一对应（尤其 `after_spec` 是第 20 个参数、在 `&hook_id` 之前），以及 dispatch 里 `json_get_str(line, "memAfter", …)` 的键名与 daemon 发送的键名一致。**这条不修，`b5`/`b6` 的返回值就抓不到。**
+
+## 2026-10-22（第二十五轮）—— `memAfter` 不产记录的根因：after 配置是**全局单份**，被后续 hook 覆盖
+
+读 `agent/src/hook/native_hooks.cpp` 定位到具体机制：
+
+- after 配置存在**一个全局 `ctx`** 里：`ctx.after_arg` / `ctx.after_len` / `ctx.after_spec`（L78/80/81）。
+- 每次 `adh_native_hook_install` 都会把它们**重置**：`ctx.after_arg = -1; ctx.after_len = 0; ctx.after_spec[0] = 0;`（L929-932）。
+- 命中时 `adh_native_hook_after(retval, regs, hook_id)` 虽然**拿到了 `hook_id`**，但读的仍是那个全局 `ctx`（L675-676）；`after_arg < 0` 就直接返回（L678），**不产生任何记录**。
+
+所以真实序列是：我先装了带 `memAfter` 的 hook，之后又装了别的 hook（compress/thunk/0x975c0…），**后一次 install 把 after 配置清成 -1**，等签名跑起来时 after 路径看到 arg=-1 就静默返回了。这解释了"早前 compress 的 `memAfter` 能用（当时只有它一个 hook）、现在不行（多 hook）"。
+
+**缺陷定性**：after 窗口的参数应当是**每 hook 一份**（按 `hook_id`/slot 索引的数组），而不是全局单份。修复点：
+1. `ctx.after_arg/after_len` → `after_arg[ADH_NATIVE_MAX_HOOKS]`、`after_len[...]`；
+2. install 只写自己 slot 的那一项，不重置全局；
+3. `adh_native_hook_after` 用 `hook_id` 索引取值（它已经有这个参数）。
+
+**规避**（当前可用）：**先撤掉所有别的 hook，只留带 `memAfter` 的那一个**，再触发签名。
+
+## 2026-10-22（第二十四轮）—— 发现 `memAfter` 单独使用不产生记录（插件缺陷）
+
+为了抓 `0xf643c` 的**返回值**（很可能就是 b5/b6 的 32 字节摘要或其 hex 缓冲），在它上面只装 `memAfter:"x0:64"`（不带 `mem`），并做了"清空采集 → 装 hook → 重放 → `capture_stop` → 再读"的干净循环：
+
+- hook 安装成功（`hook=8`），签名正常（`b5=88682d91274d382c`）；
+- 读 `live_captures` 并按 `hookId 8` 过滤：**0 条**（`total=24` 全是上一轮 hook 5 的陈旧记录）。
+
+**这暴露出一个真实的插件缺陷**：`native_hook` 只给 `memAfter` 不给 `mem` 时，命中不产生 `NATIVE_HOOK_MEM` 记录——after 记录应当独立于 pre 记录存在。要修的地方在 `agent/src/hook/native_hooks.cpp` 的 after 路径（只为 `mem_spec` 建 per-hook 快照，`memAfter` 单独设置时没有上下文可写）。
+
+规避方式（当前可用）：同时给 `mem` 和 `memAfter`（上一轮实测两者同给时 hook 5 有记录），即 `mem:"x2:8", memAfter:"x0:64"`。
+
+## 2026-10-22（第二十三轮）—— `0xf643c` 的对象不是摘要缓冲
+
+给 `0xf643c` 挂 `mem:"x2:64"` + `memAfter:"x2:64"`（一次签名命中 4 次，`call ok`，`memRecs=4`，**目标没崩**）。这 4 次的前 64 字节：
+
+```
+seq1: 310, 568, 4462, 0, 指针…
+seq2: 435, 992, 10522, 0, 指针…
+seq3: 732, 672, 6622, 0, 指针…
+seq4: 与 seq3 相同
+```
+
+- 头三个是整数（像是**偏移/长度/游标**：310/568/4462、435/992/10522、732/672/6622），后面是堆指针；**不是 32 字节摘要，也没有 64 位 hex**。
+- `memAfter` 没有产生独立记录（after 记录按 `phase` 区分，这批只有 pre），所以"函数往这个对象写了什么"还没观测到。
+- 结论：`x2` 是**工作对象**（游标+缓冲描述符），摘要不在它的前 64 字节里。要抓输出得看它**返回后**写到哪儿（`x0` 返回值 / 对象里的指针目标）。
+
+**下一步**：在 `0xf643c` 返回时用 `returnValue` 或对返回值指向的内存做 `mem` 观测；或直接 hook 它内部调用的写入点（`strb/str` 到 hex 缓冲）。这条路径安全（本轮 4 次命中未崩）。
+
+## 2026-10-22（第二十二轮）—— `0xf643c` 的入参对上了 body 的参数个数
+
+hook `libjdg+0xf643c`（`0x975c0` 在组装完 7 个字段后调用的那个函数），一次签名命中 **4 次**，入参：
+
+```
+x0=0x7320399420 → libjdg+0x14d420（运行期填好的指针表）
+x1=0x10  = 16
+x2=0x72d66397c0   对象指针
+x3=0x1d  = 29     ← 正好等于请求 body 的参数个数（29 个）
+x4=0x17b = 379
+x5=0x70b3b7b46e   5 字节值
+x30=libjdg+0x976ec（0x975c0 里的返回地址）
+```
+
+- `x0` 换算后正是那张**运行期填充的指针表**（`0x14d420`），`x3 = 29` 与 body 参数个数吻合、`x4 = 379` 像一个长度。
+- 说明 `0xf643c` 是**按表逐项处理 body 参数**的函数（喂给摘要/序列化），这正是 `b5` 覆盖 body、`b6` 覆盖 body+入参 的实现位置。
+- 一次签名里它被调 4 次 → 分别对应 body、参数、以及两次收尾。
+
+**下一步（已具体到寄存器）**：在 `0xf643c` 上挂 `mem`（`x2` 对象、`x5` 那 5 字节），把每次调用的输入/输出都抓下来；再对齐"哪一次的输出等于 b5/b6"。这条路径不需要硬件观察点，也不会崩目标。
+
+## 2026-10-22（第二十一轮）—— 定位到 jdgs JSON 的组装点（b5/b6 就在这条路径上）
+
+在 `libjdg+0x975c0`（此前认为的"7 字段序列化器"）上装 hook，一次签名命中 **1 次**，入参：
+
+```
+x0=0x74400fb710 x1=0x74400fb700 x2=0x74400fb770
+x3=0x733354f600 x4=0x5fa(1530) x5=0x74400fb720 x6/x7=libjdg 数据指针
+```
+
+读 `x3` 指向的缓冲：内容是 **`[{"b1":"68d…`** —— 即**正在组装的 jdgs 结果数组**。
+
+所以 `0x975c0` 不是"指纹序列化器"，而是 **jdgs 输出 JSON 的组装点**；`b5`/`b6` 就在这条路径上被写进这个缓冲。这是目前离 `b5`/`b6` 最近的一个确定位置（比之前"猜输入"强得多）。
+
+**下一步**（已具体化）：在该缓冲上做 `mem` 观测，或 hook `0x975c0` 的**下游调用**（它内部经 `0x102500`/`0x102260`/`0xf643c` 组装），把"写 32 字节 hex 到缓冲"的那一步抓出来；`x4=1530` 与 body 长度一致这一点也值得单独确认（可能是同一套缓冲复用）。
+
+## 2026-10-22（第二十轮）—— 宿主调用里没有 b5/b6 的生产者
+
+修掉上一轮的时序问题（读 `live_captures` 前固定 `Start-Sleep 2`），同一实验抓到 **256 条宿主调用**事件，按目标地址与参数筛：
+
+- 参数里出现 `1530`（body 长度）/`64`/`32`/`20`（摘要长度）的调用：**0 条**；
+- 目标地址**只出现一次**的调用（"一次性的生产者"特征）：**0 个**（每个目标都重复多次）。
+
+→ `b5`/`b6` 不是通过 `0x104000` 那个"宿主调用"机制算的，而是 **`libjdg` 内部内联计算**的。这也和"RC4 是唯一走宿主调用的密码学"这一观察一致。
+
+**工具侧确认的坑**（两次踩到，已写进操作习惯）：`live_captures` 必须在 `java_call_result` 之后**等 drain**（≥2 s）再读，否则读到空环/被覆盖的环。
+
+**下一步**：既然不是宿主调用，就在 101 分支内部找写入点——用 `mem` 窗口在 `main` 的返回路径上抓 32 字节 hex 字符串的生成，或对 body 指针下"读观察"（原生 hook 的 `mem` 只支持写前/写后快照，读观察要靠 `hw_watch`，但它在京东上会崩目标，**此路不通**）。现实可行的只剩：在 `0x975c0`（7 字段序列化器）与 `0xf643c`（逐字符状态机）这条链上做定点 `mem` 观测。
+
+## 2026-10-22（第十九轮）—— b5 又 10 种形状落空：猜测这条路走完了
+
+在第十七轮 14 种之后，再补 10 种"实现上合理"的 body 形态（含 URL 解码、UTF-16LE、大小写归一、成对重编码），4 种算法 + 2 种 HMAC 全部落空：
+
+| 形状 | 长度 | sha256 前 8 |
+|---|---|---|
+| body 原始 | 1530 | `09246ae9` |
+| query 解码后 | 1244 | `374c4703` |
+| body 解码后 | 1264 | `15b362bf` |
+| query UTF-16LE | 3020 | `2db98803` |
+| body UTF-16LE | 3060 | `5133b48b` |
+| `+`→空格 / `%20`→空格 | 1510 | `d0c6c8be`（与 query 相同） |
+| query 全小写 / 全大写 | 1510 | `16d208b6` / `841c6f5e` |
+| 成对重编码 | 1776 | `e989e7f6` |
+| **目标 b5** | | **`88682d91`** |
+
+**合计 24 种 body 形状 + 19 种入参候选 + HMAC/加盐/固定串，全部落空。** 结论：`b5` 的输入不是"可见字节的某种直接拼接"，继续枚举没有信息量——必须**抓生产者**（原生侧），这是唯一剩下的路。
+
+## 2026-10-22（第十八轮）—— JCA 捕获 0 命中：b5/b6 不走 Java 密码学
+
+用 `java_hook action:"crypto"` 装 JCA 捕获（`Cipher`/`Mac`/`MessageDigest`/`Signature`，**31 个 hook 全部安装成功**，`backend=art v6.4`，`available=true`），然后做一次签名并抓 `JAVA_HOOK` 事件：
+
+- 事件数 **0**；`status` 里 `patched=0`、各 hook `hits=0`。
+- 同时 `b5`/`b6` 正常产出（`88682d91…` / `509c5b72…`）。
+
+→ **`b5`/`b6` 不是 Java 侧 `MessageDigest`/`Mac` 算的**，结合"进程内存里没有 SHA-256 常量表"，可以判定：这两个 64-hex 字段由 **libjdg 的原生（混淆）实现**产出，和 RC4/key 那套是同一层。
+
+这一步的价值是把"去 Java 层找"这条分支彻底关掉——之前它看起来最像（64-hex、Android 常见做法），实测是 0 命中。
+
+**下一步**：在原生侧找"谁读了那 1530 字节的 body"或"谁写了 b5/b6 的 32 字节"。可行手段只剩 hook（硬件观察点在京东上会崩目标）：在 `main` 的 101 分支附近下 `mem` 窗口，或用已有的"宿主调用"thunk（`0x104000`）按目标过滤做定点观测。
+
+## 2026-10-22（第十七轮）—— b5 对 body 的 14 种形状全部落空
+
+在"`b5` 覆盖请求 body"的基础上，用**同一份 body**（1530 B，29 个参数）扫了 14 种"实现上合理"的形状，4 种算法（sha256/sha1/sha512/md5）+ 2 种 HMAC 全否：
+
+| 形状 | sha256 前 8 字节 |
+|---|---|
+| body 原始 | `09246ae9` |
+| query（去掉 `POST /client.action `） | `d0c6c8be` |
+| 参数排序后 `k=v&…` | `d0c6c8be`（**与 query 相同**——这个请求的参数本来就是字母序，排序是空操作） |
+| 参数排序后拼接 `kv…` | `c231d155` |
+| 只取参数值 | `0683e52b` |
+| `/client.action <query>` | `53732e3c` |
+| `POST/client.action<query>` | `69bf7b8b` |
+| 末尾加 `\n` / `\0` | `c3533256` / `873e6573` |
+| 排序后 `&\n` | `fc3e876a` |
+| `sorted&+key` / `key+sorted&` | `2c4843af` / `fde3f946` |
+| `body+key` / `key+body` | `3e9c6861` / `bc020d28` |
+| **目标 b5** | **`88682d91`** |
+
+结论：`b5` 不是"把 body（或它的常见归一化形式）直接哈希"得到的。要么还有一层 **salt/密钥 + 变换**（不在这些形状里），要么计算发生在混淆层/Java 侧。**继续猜拼接方式已经没有信息量**，下一步必须抓生产者：hook `MessageDigest.digest()`／`Mac.doFinal()`（Java 侧），或在 native 侧按"谁读了这 1530 字节"下观察点。
+
+## 2026-10-22（第十六轮）—— **修正：b5 不是常量，它覆盖请求 body**
+
+只改请求 body 里的一个参数（`area=1_72_55674_0` → `1_72_55674_1`，其余字节不变）：
+
+| 改动 | b4 长度 | b5 | b6 |
+|---|---|---|---|
+| baseline | 392 | `88682d91274d` | 基线 |
+| body 的 area 值 +1 | 392 | **CHANGED**（`fd288d771fdd`） | CHANGED |
+
+**修正第十四轮的结论**：`b5` 并非"构建级固定常量"，而是**对请求 body（`element[0]`，1530 字节的 `POST /client.action …`）敏感**；它对 nonce/version/eid/e5/拼接串不敏感、跨进程相同，是因为这些实验里 **body 一直没变**（body 里的 `ts=` 也只是每次回放同一份）。
+
+所以目前的分工是：
+- **`b5` = f(body)**（只覆盖请求体）
+- **`b6` = f(body + 其余全部入参)**（覆盖更宽）
+- 两者都**不是**对可见字节直接 SHA-256（第 13 轮 19 个候选 + HMAC/加盐 + 固定串全否），说明还有 salt/变换，或走 Java 侧非标准实现。
+
+下一步：把 body 拆成 `ep`/`ext`/`ts` 分别改，定位 `b5` 的确切覆盖范围与是否有密钥参与。
+
+## 2026-10-22（第十五轮）—— **生成侧逐字节复现成功**（zlib level 6）
+
+```
+b4 = base64( RC4_key( zlib.compress(fingerprint_json, 6) ) )
+```
+
+用抓到的 20 字节 key + 解密出的指纹明文，`zlib.compress(level=6)` → RC4 → base64，生成的 `b4` 与京东返回的**完全一致**（412/412 字符，`PASS`）。
+
+**关键坑**：压缩实现必须匹配。Node 自带的 zlib（zlib-ng）从第 3 字节起就不同，**CPython 的 zlib 1.3.2 在 level 6 下逐字节相同**。参数扫描（level 1–9 × memLevel 5–9 × windowBits 9–15 × 5 种 strategy）在 Node 里全部落空，换成 CPython 一次通过。
+
+**交付物**（都在 gitignore 的 `adhd-data/_verify/` 内，密钥/明文不入库）：
+- `jdgs_gen.py` —— 生成器：`python jdgs_gen.py <key.hex> <plaintext.json> [captured_b4.txt]`，带第四个参数就做逐字节比对并用退出码报告（本轮 `PASS 412 vs 412`）。
+- `jdgs_repro.mjs` —— 验证器：解密 / inflate / JSON / RC4 回环 / 本地压缩 五项检查；前四项 PASS（RC4 层逐字节精确），第五项按预期 FAIL（Node zlib 与目标不同，已由 `jdgs_gen.py` 补上）。
+
+**补充**：`b5` 的 32 字节值与它的 hex 字符串都**不在 `libjdg.so` 里**（静态搜索三者全 -1）→ 它不是硬编码常量，而是运行时算出来的（但对入参不敏感、跨进程恒定）。
+
+## 2026-10-22（第十四轮）—— b5 是**固定常量**，b6 是**全入参摘要**
+
+**差分实验（一次只改一个入参，其余不变）**：
+
+| 改动 | b4 长度 | b5 | b6 |
+|---|---|---|---|
+| baseline | 396 | `88682d91274d` | 基线 |
+| nonce `[5]` | 396 | **same** | CHANGED |
+| version `[3]` | 396 | **same** | CHANGED |
+| eid `[2]` | 392 | **same** | CHANGED |
+| e5 `[4]` | 392 | **same** | CHANGED |
+| 拼接串 `[1]` | 400 | **same** | CHANGED |
+
+**结论**：
+- `b5` **不随任何入参变化**，而且**跨进程重启完全相同**（`88682d91274d382c…`）→ 是**构建/设备级固定常量**（不是会话密钥，也不是请求摘要）。
+- `b6` **对每个入参都敏感** → 是**覆盖全部入参的整性摘要**（每调用一份）。
+- 这解释了之前"同输入重复调用 b5 相同、b6 不同"的旧观察：b6 里还混了时间/nonce 一类每次变化的东西。
+
+**其它排查**：
+- 进程内存里**没有任何 SHA-256 常量表**（`memory_search` 命中 0），而 `libjdg.so` 里有 **SHA-1 的 H 常量**（文件偏移 `0x5abb0`）→ 64 hex 的那两个字段不是"进程内标准 SHA-256 实现"算的，更像 Java 层或走混淆实现。
+- 候选测试全部为负：19 个直接输入、HMAC（3 算法 × 3 key × 12 消息）、key/消息两种顺序的加盐摘要、以及 14 个固定字符串（包名/版本/appId/`jdgs`/`checkAccessRights` 等）→ 没有一把中 b5。
+
+**下一步**：只改请求字节（`element[0]` 里改一个参数值）看 b6 是否变化，以确定 b6 是否覆盖 body；再用 `java_call` 直接调 Java 的 `MessageDigest`/`Mac` 路径做对照，或 hook Java 侧摘要调用点。
+
+## 2026-10-22（第十三轮）—— b5 / b6 的 19 个候选全否；key 二次验证通过
+
+**key 再次端到端验证**：换一次调用重新抓 key（`603d63fa82edfe7415b65c8e8b98ebe3dc845d8a`）+ 同次 `b4`（412 字符 → 307 字节），`RC4(key)` 解出 `78 9c 95 8e …`，inflate 出 385 字符的指纹 JSON。说明"20 字节 key + RC4 + zlib"这条链路稳定复现，不是一次侥幸。
+
+**b5 / b6 的排查（19 个候选全否）**：同一次调用的数据里，把下面这些都做了 SHA-256 并和目标比对，一个都没中：
+`D`（压缩流）、指纹明文 JSON、`C`（b4 字节）、`b4` ascii、请求字节（1530 B）、`e5`、`eid`、`b1/appKey`（含去横线）、40hex、`key`、`b7`、以及 `D+key`/`key+D`/`b4+key`/`plain+e5`/`e5+plain`/`req+e5`/`e5+req`。
+（目标 `b5=88682d91…`、`b6=264c658b…`。）→ b5/b6 不是"对可见数据直接 SHA-256"，更可能是**带 salt/HMAC**，或走 Bridge 的另一个 opcode（之前见过 opcode 106：`(int,"<32hex>&<e5>",long) → 32-hex`）。下一步从 opcode 106 的 native 实现入手，而不是继续猜拼接方式。
+
+## 2026-10-22（第十二轮）—— **jdgs 打通：20 字节 key 找到，b4 可完整还原**
+**结论（已逐字节验证）**：
+```
+b4 = base64( RC4_key( zlib_compress(fingerprint JSON) ) )
+key = 传给 libjdg+0x89480（KSA）的 20 字节
+fingerprint JSON = {"e1":<eid>,"e2":"1.0§§0§§<包名>|<32hex>|<版本>§§…","e3":<ms>,"e5":…,"e4":…}
+```
+
+**怎么拿到的**
+1. 上一轮发现状态是**每线程缓存**（后几次调用状态地址不变且不再被写）→ KSA 只在**新线程的第一次签名**里跑。
+2. `0x89480`（另一个 RC4 入口，经 thunk 调用）的入参就是 KSA 的：`(state, keyPtr, 20)` —— 无 `mem` 的 hook 只命中 1 次、进程存活。
+3. 给它加 `mem:"x1:32"` 在调用当刻拷 key（事后读 key 指针只会拿到被复用的垃圾）。重启 App 制造新线程后一次性抓到：key20=`e89361fa82edfe749d185e8e8b98ebe3542a5f8a`，同一次调用的 b4（C=305 B）。
+4. 离线：`KSA(key20)` → PRGA 作用于 C → 首字节 `78 9c …` → **inflate 成功** → 指纹 JSON，键为 `e1,e2,e3,e5,e4`。
+
+**key 的结构（初步）**：两次抓取对比
+```
+7d1366 fa82edfe74 08 98 598e8b98ebe3 c1aa58 8a
+e89361 fa82edfe74 9d 18 5e8e8b98ebe3 542a5f 8a
+```
+第 3–7 字节、10–15 字节、最后一字节恒定；0–2、8–9、16–18 每次不同（像**指针/时间戳字节 + 固定盐**拼成的 20 字节结构）。同一线程内缓存复用 → 每线程一次。
+
+**下一步**：把 key 的 20 字节按字段拆开（在 KSA 调用点抓 `x1` 前后内存、或用它作为"已知明文"反推字段），以及 `b5/b6` 的输入；最后写复现器对 oracle 逐字节比对。
+
+**补充（同一轮后续）**
+- 一次进程里连做 5 次签名，抓到 **5 个 20 字节 key**（每线程一次），结构稳定：
+  ```
+  a0da60 fa82edfe74 d551 5f8e8b98ebe3 1c63 5e8a
+  61d860 fa82edfe74 1453 5f8e8b98ebe3 dd61 5e8a
+  3fd660 fa82edfe74 4a5d 5f8e8b98ebe3 836f 5e8a
+  f9d760 fa82edfe74 8c5c 5f8e8b98ebe3 456e 5e8a
+  b8d560 fa82edfe74 cd5e 5f8e8b98ebe3 046c 5e8a
+  ```
+  恒定：`[2]=0x60`、`[3..7]=fa82edfe74`、`[10..15]=5f8e8b98ebe3`、`[18..19]=5e8a`；变动的是 `[0..1]`、`[8..9]`、`[16..17]` 三个 16 位字段（像"固定盐 + 三个字段"的结构，不是随机 key）。
+- 同一个 hook 还抓到一条 **ASCII 形态的 key**：`A26be459823ecfe7453357ae`（32 hex 字符）——说明 `0x89480` 是被多处复用的"带 key 的 RC4 通用函数"，我们抓到的是其中两次不同用途的调用。
+- **压缩侧不可离线复现**：把解出的明文用 Node zlib 重压，9 个 level 得到的长度是 306/307，目标是 **305**；level 6 头两字节对得上（`78 9c`）但从第 3 字节起就不同 → 目标用的是**另一套 zlib（版本/参数不同）**。所以"逐字节生成 b4"要么匹配目标的 zlib 参数（还要再试 memLevel/strategy/windowBits），要么直接取设备自己的压缩输出。
+
+## 2026-10-22（第十一轮）—— **b4 的密码本体找到了：RC4**（密钥流不再是未知）
+
+这一轮把"密钥流是什么"从黑盒变成了具体算法，证据是**逐字节**的。
+
+**1. 怎么命中的：观察点（`hw_watch`）+ 在 hook 返回那一刻 arm**
+- 之前所有静态线索都是假的：`0x97b78` 的 `eor lsl #5/#29/#28` 是混淆比较，`0xf6474` 的 `eor` 是逐字符状态机，`0x1020a4` 的 11 项跳转表是**按宽度存储**的辅助（`strb/strh/str/w`）。连续三次误判，教训写进案例 4。
+- 真正有效的是：GOT hook `compress`（带 `memAfter`）拿到目标自己的压缩输出 **D**；再在 `compress` 返回的瞬间，用 `x0`（目标缓冲）挂一个 **rw 硬件观察点**（新能力 `hw_watch action:"after"`）。**压缩结束后第一条碰 D 的指令**就是答案：
+  ```
+  libjdg.so+0x89608  ldrb w9,[x20,x22]      ← 观察点命中的就是这一行（读明文）
+  libjdg.so+0x89610  eor  w8,w8,w9
+  libjdg.so+0x89614  strb w8,[x19,x22]
+  ```
+- 它所在的函数入口 **0x89574**，上方 0x89560 是一个 4 条指令的**原地交换**助手；0x895ec 通过重定位指针调用它。
+
+**2. 这就是 RC4（教科书式 PRGA）**
+```
+i = (i+1)&0xff;  j = (j + S[i]) & 0xff;  swap(S[i], S[j]);
+out[n] = in[n] ^ S[(S[i]+S[j]) & 0xff];
+```
+状态结构 258 字节：`S[256]` + `i`(0x100) + `j`(0x101)。
+
+**3. 抓住了 KSA 之后的完整状态，并自证**
+在 `0x89574` 挂 `mem:"x0:192,x0+192:66"`（+ `memAfter:"x2:192"` 拿同一次调用的输出）：
+- 抓到的 258 字节里 **S 是 0..255 的合法置换**，`i=0 j=0`（KSA 刚结束的特征）。
+- 用这个状态跑 PRGA 覆盖 D，结果与同一次调用 PRGA 写出的 192 字节**逐字节相等**；该前缀又与 `base64decode(b4)` 的前 192 字节相等。
+- 结论钉死：**`b4 = base64( RC4_{KSA(key)}( zlib(fingerprint JSON) ) )`**，等长、无前缀，之前所有"等长异或"的观察都是 RC4 的输出。
+
+**4. 密钥还没拿到，但候选被**精确**排除**
+KSA 是确定性的，所以"猜 key"可以严格判定（比较 256 字节置换，全等才算中）。已排除：`e5`、`eid`、每次调用的 uuid、完整请求字节（1530 B）、`e5+eid`/`eid+e5`，以及它们各自的 `sha256`/`md5`、`sha256(JSON)`、`sha256(D)`、`md5(D)`、`appKey`(含去横线版) —— **最好候选只有 3/256 位吻合（随机水平≈1）**。
+- 下一步（已定）：把观察点挂在**状态缓冲的首字节**上（地址用 `NATIVE_HOOK` 事件里的 `x0`），下一次调用会命中 KSA 的 `S[0]=0` 那条写指令 → 反汇编它 → 拿到 `key` 指针与长度 → 用 `mem` 抓 key（若 key 是运行时派生，再往上一层）。
+
+**6. key 的排查（两轮的结果）**
+- 包装函数的形状（`0xdebf0`，帧 0x160）：同一个**栈上状态** `sp+8` 先喂 `0x89480`、再喂 `0x89574`；前面有一次 `memset(dst,0,len)` + `memcpy(dst, 压缩数据, len)`。曾据此假设"key 就是 D 本身"——**离线证伪**：`KSA(D[0:n])`（n=8..512、`sha256(D)`/`md5(D)`/明文 JSON）与抓到的 S 最好只吻合 **2/256**。
+- 因此状态是在更外层初始化好再传进来的；且同进程两次调用 S 不同 → **key 每次调用都变**（很可能含时间戳/nonce）。
+- 包装函数**没有直接 `bl` 调用者**（`0xdeb74` 的"最近序言"其实是 `write_all`，真入口是 `0xdebf0`；其内部全是 `ldr x8,[table]; br x8` 的间接分支）→ 静态跟不动。
+- PRGA（`0x89574`）的 4 个 `bl 0x95878` 调用点（`0x963f8`、`0x965e0`、`0xded74`、`0xdeed4`）**逐个挂 hook 全部 0 命中** → 它实际是通过 `.data.rel.ro` 里的函数指针被调的（`0x14d5a8 → r_addend 0x95878`），不是直接调用。这条也解释了为什么静态调用图是断的。
+- 未解决的工具问题：**`hw_watch status` 在出现 hit 之后会超时**（lock 已改成不跨锁 + arm 独立加锁，仍未根治）；命中结果已存在槽里、日志也能看到，但 status 拿不到——下一次先修这个，再看 `hit.chain`（18 帧）里 PRGA 的真正调用者。
+- **已修**（同一轮后续）：`status` 改 `pthread_mutex_trylock`，拿不到锁就回 `busy`；命中路径不再往采集环 push（环满会把 watcher 卡住），链改由 `LOGI` 落 logcat。真机验证：命中后 `status` 正常返回 `slot0 active=false pollRc=1 revents=1`。新增 `action:"hit"`（小回复）仍有一个阻塞 bug，暂用 logcat 取链。
+- **18 帧链已拿到**（logcat `hw_watch hit ... chain=[…]`，换算成 libjdg 偏移）：
+  ```
+  #0 +0x89608   PRGA 读明文那条指令
+  #1 +0x104050  ← 可变参数 thunk (0x104000) 的返回地址
+  #2 +0x10328c  ← compress 调用点 (0x103288) 的返回
+  #3 +0x102d44  #4 +0x10212c  #5 +0xf65fc  #6 +0x9782c  #7 +0x97148
+  #8 +0x104050  #9 +0x10328c  …（同一组再出现一次）
+  #15 +0xa6b40
+  ```
+  结论：**PRGA 和 compress 都是经同一个"宿主函数调用" thunk（0x104000）被调的**——这就是为什么 4 个 `bl 0x95878` 调用点全部 0 命中（调用走的是 x2 里的函数指针）。下一步：hook `0x104000`，用事件里的 **x2 = 目标地址**列出一次签名里的全部宿主调用，KSA 一定在其中（它紧挨着 RC4 之前）。
+- **已读**：`0x14d420` 在运行时是**指针表**（读回 `0x7325ec45c0`、`0x7325f58708`、`0x7325ec1bb0` …），不是 16 字节密钥；`w1=0x10` 是条目数。所以 `0xf643c` 那一步是"按表处理"，不是 key 派生。
+- **规模问题记一笔**：一次签名 422 次宿主调用 vs 128 条采集环 → RC4 那两条被冲掉。要枚举宿主调用，需要给 `native_hook` 加"按目标地址过滤"（只记录 x2 命中白名单的调用），否则环永远不够。
+- **不用 `mem` 的 PRGA hook 是安全的**：`0x89574` 只观测（无 mem/memAfter）时命中 1 次、进程存活，事件直接给出 RC4 调用的入参：**`x0`=状态（栈）、`x1`=`x2`=同一缓冲区（原地加解密）、`x3`=长度（本次 303）、`x30`=`+0x104050`（thunk 返回地址）**。
+- 状态地址**按线程不同**（工作线程池：`0x744267e620` / `0x72f1c60350` / `0x743f0fa620` …）；在状态地址上挂**写观察点后，后续两次调用都没有写命中** → 状态很可能是**每线程初始化一次并缓存复用**（这也意味着同一线程内 S 恒定，key 是会话/线程级的静态材料，不是每调用变化——之前"每次调用不同"的印象来自跨进程比较，需要重新校准）。
+- **危险结论**：在 JD 上挂硬件观察点（perf 断点）后目标**第三次 SIGSEGV**（`13:43:04 pid=24370 reason=5 APP CRASH(NATIVE)`）。JDGuard 是反篡改库，硬件断点很可能被它检测到并主动崩。**后续在京东上禁用 `hw_watch`**，改用 hook/静态分析。
+- 另一个环境事实：`setenforce 0` 不持久——期间自己回到过 `Enforcing`，每次 arm 前都要重新确认。
+- 沿着 18 帧链往上走（静态）：`+0xa6b3c bl 0x96fec` → `0x96fec` 是**六参转发 trampoline**（存参后 `br x8`）→ `0x975c0` 是**7 字段序列化器**（`0x102500` 构造 + 逐个 `0x102260`/`0x102230` append；错误码 11）。序列化完在 `0x976d8` 调 `0xf643c(0x14d420, 16, obj)` —— 即以 `.data.rel.ro` 的一个 **16 字节常量**为输入跑那个"逐字符状态机"函数（1,714 条 `eor` 的那个）。这一层是不是 key 派生，下一轮验证（读 `0x14d420` 的 16 字节、hook `0x975c0` 看 7 个字段到底是什么）。
+- 因此状态是在**更外层**初始化好再传进来的（这个包装只负责用它做两段 RC4），KSA 在它的调用者里；且同一进程两次调用的 S 不同 → key 每次调用都变（很可能含时间戳/nonce）。
+- 下一步：hook 这个包装函数的**调用者**（或 `0x89480` 的调用点），拿到 KSA 的入参 `(state, key, keylen)`；若 key 来自 `0x15705c` 一类**加密常量**（已在 `.data.rel.ro` 见到密文），就再跟一层解密函数（`0x96dbc(ptr, 4)` / `0x96e0c(ptr, 5)` 那种形态）。
+- **注意**：在 `0x89574` 上装带 `mem`/`memAfter` 的 inline hook **两次把京东打崩**（SIGSEGV, APP CRASH(NATIVE)）。该地址后续只在必要时用软钩/短时实验，先取现场再动手。
+
+**7. 这一轮的插件改动**
+- 新增 `hw_watch`：`perf_event_open(PERF_TYPE_BREAKPOINT)` + 采样环，命中给 `ip` + 内核调用链，**单次触发后自动撤防**；两种 arm 方式：绝对地址，或 `action:"after"`（某个 native hook 返回时按 `<reg>+<off>` 挂）。内核 5.10 没有 `sigtrap`，所以走采样环而不是信号；**必须先 `PERF_EVENT_IOC_ENABLE`**，否则事件永远不计数（实测：不 enable 时强制写目标地址也不出记录）。
+- 平台边界：`kernel.perf_event_paranoid=-1` 也**不够**，SELinux Enforcing 下 app 域 `perf_event_open` 仍返回 EACCES；`setenforce 0` 后可 arm。
+- 修掉一个**误报类**缺陷：`memory_search` 会匹配到它自己解码 pattern 的那段栈（随机 pattern 也命中同一固定地址），现在跳过本线程栈。
+- 修掉两个把工具自身拖死的问题：`hw_watch status` 在持锁时 `pthread_create` 导致命令超时（改成不跨锁 + trylock）；`hw_watch` 回复超过 900 B 被截成非法 JSON（缓冲 4096/4300）。
+- **事故（必须记）**：在 `0x89574` 上装 `mem+memAfter` 的 inline hook 后，京东主进程 **SIGSEGV 崩了一次**（`exit-info` reason=5 APP CRASH(NATIVE)，13:30:40）。RC4 证据在崩之前已抓到；下次在该地址做实验要优先用 GOT/软钩或先备份现场。
+
+## 2026-10-22（第十轮）—— 硬件观察点落地；并抓到一个"搜索匹配自己"的假阳性
+
+按第九轮的分级继续走 ①（粗粒度数据流）→ ②（观察点）。这一轮把 ② 的工具做出来了，同时在 ① 里被一个**假阳性**带偏，纠正过程本身值得记。
+
+**新增能力：`hw_watch`（进程内硬件观察点）**
+- `perf_event_open(PERF_TYPE_BREAKPOINT)`（pid=0、cpu=-1），`PERF_SAMPLE_IP|TID|CALLCHAIN`，mmap 一个 8 页环 + 一个 poll 线程；**命中一次就上报并自动撤防**，记录 `ip`（真正写那条指令）、`tid/pid`、内核调用链，写成 `HW_WATCH` 采集记录。`action:set/clear/status`，4 个槽。
+- 内核 5.10 **没有** `perf_event_attr.sigtrap`（5.13 才有），所以走采样环而不是信号——这反而更好：调用链由内核直接给，不用自己从 ucontext 走 x29。
+- 真机实测：`setenforce 0` 后 `perf_event_open` **成功**（`ok:true, slot:0`）；SELinux 保持 Enforcing 时返回 **EACCES（errno 13）**，虽然这台机器 `kernel.perf_event_paranoid=-1`——**限制来自 SELinux 的 app 域，不是 perf 参数**。这条要写进工具文档，否则下一个人会以为是 sysctl。
+- 结论：观察点在"root 可置 permissive 的测试机"上可用；在普通 app 上不可用（除非目标域被允许）。`hw_watch` 的回复里带 errno，不假装成功。
+
+**① 的意外收获：`memory_search` 会匹配到自己的输入**
+- 用 `memAfter` 拿到目标自己的压缩输出 D（`78 9c…`，512 字节窗口），`K = C ⊕ D` 得到 305 字节密钥流；随后 `memory_search` 找 K 的前 16 字节，命中 `74430168f0`（`[anon:stack_and_tls:…]`）。
+- 但这个地址在**两个不同进程里完全相同**，而且那块内存里有 `c17z`（agent 自己的命令 id）。用**从未发送过的随机 16 字节 pattern** 再搜一次——**同样命中同一个地址**。
+- 根因：`cmd_search` 把请求里的 hex 解码到自己的栈缓冲区，然后扫描所有可读区间，**包括自己正在用的这段栈**，于是"命中自己的输入"。
+- 影响：任何一次搜索都可能返回一个固定栈地址的假命中，读起来和真命中一模一样。前面"K 在栈上"的推断就是它导致的，**已纠正**。
+- 修复：扫描时跳过 agent 当前线程的栈（`pthread_getattr_np` 取范围）。修完随机 pattern **0 命中**；再找 K → **K 在调用结束后已不在内存里**（缓冲区随帧/堆释放）——这才是诚实的答案。
+
+**下一步（已定，按此继续）**
+- K 只在调用期间存在，观察点必须在**写入前**就挂上，所以要先拿到"K 缓冲区的地址"：
+  1. `NATIVE_HOOK_MEM` 记录目前只有 `reg/offset/requested/got/hex`，**不带绝对地址**；补上 `addr` 后就能知道 D 落在哪。
+  2. 用链上 `0x102d40` / `0x102108` 的 `mem:"auto"`（x0–x8 指针各 64 字节）看参数怎么流；哪一层收到 `(缓冲区, 长度)`，哪一层就是 PRG/XOR。
+  3. 拿到地址后 `hw_watch mode:"rw"` 挂上去（读也会触发），一次调用就能指到异或那条指令。
+- 备选：QBDI 的 memory-access 回调（只记录触碰某地址的指令），不依赖 perf/SELinux。
+
+**验证**：`tsc` 干净、`npm test` **297/297**；agent 已部署；现场已清（钩子撤、捕获停、watch 清、SELinux 恢复 Enforcing）。
+
+## 2026-10-22（第九轮）—— 判断"要不要上 trace"，并把 trace 的入口补成按地址
+
+先回答"是不是只能 trace"：**不是只能，但 trace 确实是最后一级；而在上它之前还有两级更便宜的。** 顺着这个判断把最后一级先修通。
+
+**先做的两个静态否决（省掉了两次无效 trace）**
+- 链上 `0x97b78` 那组 `eor w8,w21,w21,lsl #5` / `#29` / `#28` 看着像 xorshift，实际是**混淆比较**：`cmp (a^(a<<5)), (b^(b<<5))` + `cset eq`，扁平化 CFG 的条件求值。
+- `0xf6474` 的 `eor w9,w9,w23` 是**逐字符状态机**（`ldrh` + `eor` + 按 16 位值 0x23a 项跳表），混淆过的字符串函数，不是密钥流。
+- 结论：在这段代码里"grep eor 找 PRG"是负收益——必须按数据流定位，而不是按助记符。
+
+**trace 原来缺两样，现在都补上了**
+1. `qbdi_trace` / `trace_digest` 只收 `symLib+symbol`，而 `main` 是 RegisterNatives 注册的**非导出**函数。agent 的 `adh_qbdi_trace(void *func, …)` 本来就是按函数指针工作的，所以只改命令层：新增 `addr`（绝对地址），`symLib+symbol` 与 `addr` 二选一；`trace_digest` 同样接受。
+2. QBDI 要靠 `dlopen("libQBDI.so")`，目标进程里没有这个库。做法：`adb push` 到 `/data/local/tmp` → `su -c cp` 进 App 私有目录并 `chown` 成 App uid → `load_library`（agent 的 `load_so`）注入。
+
+**真机验证（`aa165071`，京东主进程）**
+```
+load_library /data/data/com.jingdong.app.mall/libqb.so  → ok, qbdi_initVM found
+qbdi_trace {addr: libjdg+0xf6430}  → ok, 3 条指令 adrp/add/ret，retval 正确
+trace_digest {addr: …}             → ok, 3 条指令的 digest
+```
+（顺带发现：daemon 重启后 agent 会自己重连，不用重启 App。）
+
+**上 trace 之前还剩的两级（下一轮的顺序）**
+- ① 粗粒度数据流：`native_hook mode=got symbol=compress` + `memAfter:"x0:512"` 拿到目标自己的压缩输出 D，配合 oracle 算出 K = C ⊕ D；再 `memory_search` 找 K 还活着的那块缓冲。
+- ② 定位"谁写了 K"：现在缺的是**硬件观察点**（`perf_event_open(PERF_TYPE_BREAKPOINT)`，进程内 4 个槽，命中 SIGTRAP 带 backtrace）。这是比 trace 更准的那把刀，ADH 还没有；QBDI 的 memory-access 回调（只记录触碰某地址的指令）是它的替代方案，agent 也没暴露。
+- ③ 才是指令级 trace：对 `main`（0x11000 字节、扁平化）不现实；对几十条指令的叶子函数（PRG 候选）正合适。
+
+## 2026-10-22（第八轮）—— native 入口、opcode 分派、真 oracle；顺手补掉 4 个 agent 上限
+
+目标：接着啃 `jdgs` 的算法入口 / native 流程 / VM 入口。这一轮拿到了前三样，并把「回放一次签名」变成可重复的实验台。
+
+**1. 静态把 native 入口钉死**（`libjdg.so` 1,631,472 B，sha `47dac66f…`，从 APK 的 `lib/arm64/` 直接拉，命令行工具跑的）
+- 导出只有 `JNI_OnLoad`（0xa1770）。它建 `com/jd/security/jdguard/core/Bridge` 的类名（32 字节来自 0x5b05f，末尾 4 字节在栈上补成 `idge`），然后 `ldr x8,[x8,#0x6b8]` = JNIEnv idx 215 = **RegisterNatives**，`x2=0x159118`（方法表）、`w3=1`（**只注册一个 native**）。
+- 表在文件里是全 0（`.bss`/重定位区），从 `.rela.dyn` 拿 addend 才看得到：`name@0x5bda2="main"`、`sig@0x5bda7="(I[Ljava/lang/Object;)[Ljava/lang/Object;"`、`fnPtr@0xa236c`。**这条以后不用再靠 hook 猜**（案例 4 的缺陷 B 对这类 so 就算闭合了）。
+- 顺带看清：`JNI_OnLoad` 还读一个**加密字符串**（0x1593cc）→ `__system_property_get`，`atoi >= 28` 才走 API-28+ 分支——字符串在库里是密文，别指望 `strings` 能捞到。
+
+**2. opcode 分派**（`main` 0xa236c，函数体约 0x11000 字节，控制流扁平化）
+```
+sub w8, w8, #0x65      ; 101
+cmp w8, #8             ; 101..109
+ldrh w11, [0x63e48 + w8*2]
+br x10                 ; 跳转表基址 0xa3858
+```
+`cmp w8,#0x3e6; b.gt 0xb3580` → 大于 998 的 opcode 走另一条路。case 101（签名）从 **0xa3858** 开始。`entry` 是**通用 RPC**：101 签名、102 环境查询（`[7,1]`/`[17]`… 回 `s1=0;…|h1=0;…`、路径）、106 摘要（`(int, "<32hex>&<e5>", long)` → 32 字节 hex）。
+
+**3. 第一次看到完整的 101 调用向量**（3,318 字符，之前只有 524）
+```
+[ byte[1530] "POST /client.action <40hex>&area=…&eid=…&ep=<urlenc JSON>&ext=<urlenc JSON>&…",
+  "-§§-§§-§§-§§-§§-§§-§§-", <eid>, "1.0", "@A0K5NOx…=", <uuid>, null ]
+```
+- 元素 0 = 完整签名输入（含 `ep=`/`ext=` 两个 **URL 编码的 JSON**：设备指纹与扩展字段，和 jdguard 自己的 `e2` 是两套）。
+- 元素 4 = `e5`（44 字符 base64，33 字节）；元素 5 = 每次调用一个 uuid；元素 6 = null。
+
+**4. oracle 打通（这是本轮的钥匙）**
+把同一份向量用 `java_call {detach:true}` 原样回放，**3 ms** 返回完整 jdgs：
+```
+b1=68dd5803-…（= getAppKey()，装内 UUID） b2=3.6.5_0 b3=3.0
+b4=base64(…)=408 字符 b5/b6=sha256 hex b7=<调用时刻 ms>
+```
+于是「签名」从"只能等目标自己发"变成"可以任意重复的实验"。
+
+**5. oracle 给出的第一批硬结论**
+| 实验 | 结果 |
+|---|---|
+| 同输入连调 3 次（间隔 ~50 ms） | `b4` **每次不同**；`b5` 三次完全一致；`b6` 每次都变 |
+| 只改 nonce（元素 5） | `b5` 不变；**`b4` 变了且长度 408→396 字符** → nonce 进了被压缩的明文，不只是密钥流 |
+| `b5` 候选输入 | `sha256(请求字节)`、`sha256(请求十六进制文本)`、`sha256(40 hex body 摘要)`、`sha256("/client.action")` **全不中** |
+| `b6` 候选输入 | `sha256(base64decode(b4))`、`sha256(b4 ascii)` **都不中** |
+
+**6. native 调用链（`compress` 命中当刻的 8 帧，backtrace 抓的）**
+```
+main(0xa236c) → 0x97144 → 0x97828 → 0xf65f8 → 0x102108 → 0x102d40
+             → 0x103288（六参转发助手）→ 0x104000（可变参 thunk, blr x9）→ zlib compress
+```
+- `native_hook mode=got module=libjdg.so symbol=compress` 命中 1 次（slot `0x7322583588`），证明 **101 路径确实调 libz `compress`**。
+- 注意：`0x9a240` 那组 `deflateInit_/deflate/deflateEnd` **不是** 101 的路径（在那条地址上 inline hook 命中 0 次）；同一个 so 里两套压缩代码，别混。
+- `0x103288` 是个把 6 个参数塞栈再 `blr` 的转发器（`0x104000` 里 `ldp x0..x7,[sp]` + `blr x9`），所以静态 call graph 在 deflate 收尾处又断一次。
+
+**7. 这轮修掉的 agent 上限（都是"工具挡住了下一步"，不是顺手改的）**
+| 症状 | 根因 | 处理 |
+|---|---|---|
+| `Bridge.entry` 的参数只看到 524 字符，只能看到第一个元素 | `bounded(Object[])` 用**单值**上限 `MAX_VALUE_CHARS=512` 截整个数组 | 数组参数改用 `MAX_ARG_CHARS`，并把它 1600 → 4608；`byte[]` 的 hex 不再被 512 截（注释写的 2048 字节这才生效） |
+| `java_call` 回放报 `unterminated JSON string` | `agent_main.c` 的 `jargs[2048]` 截断 3 KB 的 args JSON | 改 16 KiB，并注明原因 |
+| `Object[]` 里放不了 `byte[]`（`entry` 的第一个元素就是） | JSON 数组只能表达字符串/数字 | 新增 `{"$bytes":"<utf8>"}` / `{"$bytesHex":"<hex>"}` 包装，`make_java_arg_typed` 优先按它造 `byte[]` |
+| `entry` 返回 `[Ljava.lang.String;@ec1a0e7` | 返回值用 `String.valueOf(Object)`，数组变身份串 | 数组返回值逐元素渲染（上限 64 槽，超出标 `…(N slots)`） |
+
+**8. 还没修的两条（记下来）**
+- `native_backtrace` 只从 daemon 的捕获库里找事件，而库要靠 `capture_start` 的 drain 环才有数据：**没开捕获时 hook 明明命中（hits=1），backtrace 却报 "no NATIVE_HOOK event"**。应该在找不到时按需 drain 一次。
+- 重启后 `process_list` 还列着刚被 kill 的旧会话（`online` 有几十秒窗口），按它选会话会打到死进程。脚本里现在先 `agent_ping` 再选；工具层应该自己保证（或 `pickSid` 校验 liveness）。
+
+**验证**：`tsc` 干净、`npm test` 全绿；agent 已重建并部署（1,086,624 B，`v26` 导出集仍是 5 个）；真机实验全部在 `aa165071` 上完成；撤钩子 + 停捕获已做。
+
+## 2026-10-22（第七轮）—— 回头补插件缺口：分页、过滤、Dalvik 反汇编、`java_call` 隔离
+
+第六轮之后把案例 4 的缺陷表（A–H）过了一遍，逐条改剩下的。**改了 4 处（F/G/H + `java_call` 隔离），另有 2 条明确不改**，每处都有可复现的验收信号。
+
+**F：`native_analyze` 输出治理**（`analysis.ts`，原来无任何截断）
+- 1.6 MB 的混淆 so 一次回吐约 19 MB strings，等于把调用方的上下文打满。现在：`maxStrings`（默认 500，1..5000）分页 + `stringsOffset` 翻页，回包里 `stringsTotal` / `stringsReturned` / `nextOffset` / `longStrings` / `scanCapped` 说清漏了什么；单条超 `maxStringChars`（默认 200）截断并计数；符号每向 4000 上限，`exportsTruncated` / `importsTruncated` 带真实数量。
+- 顺手修了个真 bug：扫描循环到 `buf.length` 就停，**EOF 结尾的那条字符串一直丢**（现在的单测直接断言它）。
+- 验收：`daemon/test/analyze_strings.test.ts` 5 条（分页/截断/去重/minLen/越界）。
+
+**G：`live_captures` 加 `session` / `package` 过滤**（`state.ts` 的纯函数 `filterLiveCaptures` + `mcp.ts`）
+- 原来只有 `category`，沙盒自检记录和目标记录混在一条流里，只能靠读每条记录去分辨；`http_exchanges` 早就有这两个过滤，现在是同一套语义（记录先按自己的 package 戳，进程退出后仍可归属）。
+- 验收：`daemon/test/capture_filter.test.ts` 5 条（含"无戳记录不靠猜归属"）。
+
+**H：`dex_method_code` 加 Dalvik 反汇编**（新模块 `daemon/src/dalvik.ts`）
+- 不自己写指令表：Dalvik 有约 15 种指令宽度，写错一条后面全程错位、但输出仍然"像对的"。改为在 host 上调 SDK 的 `dexdump -d`，输出重定向到临时文件后**流式解析**（大 dex 的反汇编比 dex 本身大得多，不能进 maxBuffer），只保留命中的方法，每方法 `maxInsns`（默认 400）+ `insnsTruncated`。
+- 踩到的坑：这台机器 build-tools 的 `dexdump -o` 直接报 `Can't open …: Invalid argument`（四种版本都一样），所以用 spawn + 继承 fd 把 stdout 写进文件，不走管道也不走 `-o`。
+- 工具缺失/不属于 dex/头校验过期时回 `available:false` + 具体原因（提示先 `dex_repair`），**原始 bytecode 照旧返回**。
+- 验收：`daemon/test/dalvik_disasm.test.ts` 7 条，其中一条真跑 `dexdump` 解本仓库自带的 `adh_java_hook_bridge.dex`（无 dexdump 的机器自动 skip）。
+
+**`java_call` 隔离（新能力：`detach` + `java_call_result`）**
+- 症状：`Bridge.entry` 这类"等自己线程"的方法一调就把整条命令通道拖死，daemon 只看到超时，连"还在跑还是死了"都问不出来。
+- 做法：agent 侧新增独立 attach 线程（`java_enum.cpp`：`adh_java_call_async_start` / `_status` / `_list`，保留最近 16 个 job），`java_call` 带 `detach:true` 立即回 `callId`；新 op `java_call_result` 查 `running | done | failed`（带 `elapsedMs`、目标方法、结果或目标自己的异常文本），`callId:0` 列全部。host 侧 `java_call_result` 多了 `waitMs`（0..30000，250 ms 一poll），省得调用方自己写轮询。
+- 真机验收（`aa165071`，`com.jingdong.app.mall` 主进程 `s_1bp1`）：`Thread.sleep(15000)` 以 `detach` 启动 **87 ms 返回**；睡眠期间 `agent_ping` **3.17 ms**（改动前会一起卡死）；1.6 s 时查到 `running`；最后 `done elapsedMs=15007`。抛异常的用例 `Integer.parseInt("zz")` 回 `failed` + `java.lang.NumberFormatException: For input string: "zz"`。
+- 防呆：旧 agent 没有这个 op 时 `detach` 会被静默忽略而退回同步调用，所以 host 先查 `caps.ops`，缺 `java_call_result` 就报错，不允许"看起来 detach 了其实没 detach"。
+
+**明确不改的两条**
+- **B（动态注册的 native 看不到）**：`java_enum` 至少能标出 `native`（实测 `Bridge` 只有 `main` 是 native），但拿到 fnPtr 要么读 `ArtMethod.data_`（按 API 版本解析 ART 布局）、要么把 `JNI_OnLoad → RegisterNatives → ADRP/ADD 表地址` 这条静态链自动化。两条都是正经特性，不是顺手能改的；手动配方仍在案例 4 的 C 行。
+- **C（hello 预装 `jni_hook`）**：不是没修，是**证明不安全后撤回**（SIGILL + ART GC 空指针），已从启动策略移除。
+
+**顺带发现的两件事（写进案例 4）**
+- `Bridge.getAppKey()` 在 **`:jdpush` 进程里返回 null**，主进程里才是那个 36 字符的 appKey——JDGuard 的状态是**按进程**的，注入到哪个进程会直接改变 oracle 的答案。
+- `docs/mcp-tools.md` 是从 `/api/mcp/doc` 生成的，但文件头写着 65 tools，实际早已 77——**文档已漂移**；已重新生成（78 tools），以后加工具就重跑 `adhd-data/regen-mcp-doc.mjs`。
+
+**顺带修好两条坏掉的门禁**（都是"验收脚本本身也是代码"那一类）
+- `tools/verify_v71_mcp_registry.sh`：把 heredoc 喂给 `node` 的 stdin 时默认按 **CommonJS** 求值，而脚本正文有顶层 `await import(...)`，于是**每次运行都报 SyntaxError 并 FAIL**——跟 registry 有没有坏无关。加 `--input-type=module` 修好；同一组断言用 Windows node 24 实跑：`tools=78 problems=0`（这台机器的 `bash` 是 WSL、其 node 加载不了 `.ts`，那部分是环境限制，不是脚本问题）。
+- `tools/verify_v26_footprint.sh`：`llvm-readelf` 不可用时它不报"缺工具"，而是把空输出当成 `defined-exports=none` 判产物失败——**假红**，读起来和真的足迹回退一模一样。现在预检：不可用就 `RESULT:SKIP` + `⏭`（与 v90/v101 一致）。这两条都实测过：v26 现在 SKIP，v71 的断言组 PASS。
+- 顺带核对：新 agent 的动态导出仍是脚本要求的 **5 个**（`JNI_OnLoad` + 4 个 `adh_agent_*`），新加的 `adh_java_call_async_*` 全部 hidden，没有扩大足迹。`FEATURE_STATUS` 里写的"4 个"是旧数，已改。
+
+**验证**：`tsc` 干净；`node test/run.mjs` **297/297**（280 + 17 条新增）；device 侧改动全部真机回归（上面 `java_call` 那段的数字）。**没跑** `verify_all.sh`（按"改什么跑什么"）。
+
+## 2026-10-22（第六轮）—— 把"标准密码学"这一层彻底排除
+
+用 `memAfter` 拿到**同一次调用的精确 D 与 C**后，可以干净地试标准构造（不再有本地 zlib 噪声）：
+
+| 候选 | 结果 |
+|---|---|
+| `AES-128/256-CTR`、`ChaCha20` × `{e5 ascii / e5 各种 base64 解码 / sha256(e3) / sha256(e3+e5) / md5(e3+e5)}` × `{zero / e3 / e4 / sha256(e3)[:16]}` | **112 种组合全不中** |
+| `RC4`（无表常量，最符合"扫描不到结构"的特征）× 12 种种子 × 5 种 drop（0/256/768/1024/3072） | **60 种全不中** |
+| K 的 32 字节块之间是否有哈希链（`K[i]=sha256(K[i-1])`、带 counter） | 无 |
+
+**另一个修正是 `e4`**：它在同一次 App 进程内稳定，但**重启后会变**（上一轮是 `cfed316d…`，本轮是 `91c61d85…`）——所以它是"每次会话"的标识，不是"每次调用"的 nonce。
+
+**顺带看到的（目标行为，不是我们的工具）**：签名链路里 jdguard 会 `access()` 一长串模拟器痕迹（`vboxguest.ko`、`vboxsf`、`qemu_pipe`、`goldfish`、`bluestacks`、`androVM`…）。这类探测正是 `detect_summary` 的 `sysModule` 钩子能直接汇总的东西；本次没有开 sys 钩子，是从 `access` 的 GOT 上顺带看见的。整段采样里**没有** `/dev/urandom` 之类的随机源读取。
+
+**结论**：`keystream` 既不是 AES/ChaCha/RC4，也不是请求或设备字段的直接哈希；它是 libjdg 自定义 VM 里的 PRG，且每次调用都换一条。要再往下走，需要能进 VM 的观测手段（非导出地址的指令级跟踪 / VM 字节码提取），这已经超出"在边界上抓"的范畴。
+
+## 2026-10-22（第五轮）—— `memAfter` 落地，并用它把模型修正成"等长异或"
+
+**插件新能力：`native_hook` 的 `memAfter`**（agent `hook/native_hooks.cpp`）
+- 语义：安装后选"调用原函数再回来"的 stub（而不是尾跳），在主函数返回后复制**一个**窗口（`x0:256` / `x2+16:32`，1..512 字节），事件带 `phase:"after"` + `ret`，与调用前的 `mem` 记录区分开。
+- 只对要 after 的 hook 生效；其它 hook 仍是尾跳（连 x0/s0 的返回值都不碰）。寄存器/返回值原样交回（stub 里额外保存 q0-q3，避免浮点/向量返回值被后置回调破坏）。
+- 主机侧 `memAfter` 有独立语法与上限（1..512），不复用 `mem` 的 192×4 上限；agent 侧也独立解析，避免"上限不一致"。
+- **自验证**：对 zlib `compress` 装 `memAfter:"x0:320"`，抓到的 `78 9c …` 用 `inflate` 解回来**正好是那 371 字节指纹 JSON**（真机 `aa165071`）。
+
+**模型修正（重要）**：用目标自己的压缩输出重算，`|C| == |D|` 精确成立（295/295、294/294、294/294、293/293）。所以
+
+```
+b4 = base64( zlib_compress(JSON) ⊕ keystream )     // 等长，无前缀
+```
+
+第三轮那句"1 字节前缀"是本地 zlib 与目标 zlib 差一个字节造成的假象，已改。
+
+**新证据：密钥流带"每次调用的盐"**。同一个请求（同 `t=`、同 functionId）在同一次操作里的两次调用，`b4` 完全不同；换成精确压缩流后任意两次调用的 K 只有 0–0.7% 一致。所以 K 不只由请求决定，还混入了每次调用的量（最可能是 `e3` 时间戳）——这与"服务端能解"是自洽的（服务端知道设备密钥 + 大致时间）。
+
+## 2026-10-22（第四轮）—— 密钥流"按请求"派生，但 PRG 是自定义的
+
+**拿到签名输入本体**：把 `byte[]` 的渲染上限临时提到 2048 后，hook `Bridge.entry` 直接看到 native `main(101, …)` 的第一个参数（255 字节的 ASCII）：
+
+```
+POST /client.action <40 hex digest>&area=1_72_55674_0&build=102918&client=android&
+clientVersion=16.1.50&ef=1&eid=<eid>…
+```
+
+也就是说**签名覆盖请求行 + body 摘要 + 选定的 query 参数**——这解释了为什么 `b4` 每次请求都不同，而同一请求的两次调用会共享密钥流（本轮实测：同请求两对 K 前缀一致；不同请求 0–1.4%）。
+
+**排除项（本轮新增）**
+- `libjdg` 虽然导入了 `rand`/`random`/`srand`，但签名路径**一次都没调用**（`srand`/`rand` GOT 钩子 40 秒内 0 命中），所以密钥流不是 libc 随机数。
+- 库里没有任何教科书 PRNG 常数（Java LCG、MSVC、splitmix64、xorshift*、golden ratio、RC4 初始化表）——只有 SHA-256 的 K 表。
+- 对 `SHA256 / SHA1 / MD5 / HMAC-SHA256` × `{请求, 请求+e5, 请求+e4, 请求+eid, 请求+appKey, 请求+e2}` × `{前缀, 后缀, counter0}` 共 53 种构造，**全部不匹配**。
+
+**卡点**：密钥流是 libjdg 自定义 VM 里的 PRG，种子至少包含请求内容与某个设备侧秘密（`e5` 稳定、`e4` 稳定，都没有直接作为密钥出现）。要再进一步，需要的不是猜公式，而是**能在 VM 内部落脚的观测手段**（见下）。
+
+**插件改动**：`AdhJavaHookBridge.MAX_ARG_BYTES` 64 → 2048（协议分析时 `byte[]` 往往就是签名输入/请求体，截断后无法哈希或重放；单次事件变大是可控代价）。
+
+## 2026-10-22（第三轮）—— `b4` 的结构定死了：流式异或，不是块加密
+
+**结论（真机采样 + 离线复算）**
+
+```
+b4 = base64( 1 字节前缀 ‖ ( zlib_compress(fingerprint JSON) ⊕ keystream ) )
+```
+
+`b4` 解出来 295 字节 = 1 字节前缀 + 294 字节载荷；载荷与 `zlib(JSON)` 等长，逐字节满足 `C[1+i] = D[i] ⊕ K[i]`。
+
+**证据**
+- 同一签名操作内的两次事件（`tid=4156` 与 `tid=3919`，同批次）各自独立恢复出的密钥流 **291/294 字节一致（99.0%）**；其余任意两两只有 **0.0%–1.4%**。一个错误的模型不可能给出 99% 的一致。
+- 3 个不一致字节来自本地 zlib 与目标实现（Android zlib）压缩输出的微小差异，不是密钥流。
+- 排除项：**不是 AES-CBC/ECB**——同一操作内明文只差 4 字节（e3 时间戳），密文只差 6 字节且位置保持（216..221），没有任何雪崩；**也不是纯 deflate**（逐字节比对 0/295 命中）；**也不是固定密钥流**（跨操作 0% 一致）。
+
+**顺带纠正两个前几轮的误判**
+- `e4`、`e5` 不是 nonce：6 次调用（跨约 90 秒）**完全不变**，是装机/会话常量。
+- 按时间戳把 `NATIVE_HOOK_MEM`(compress) 和 `JAVA_HOOK`(genSign) 配对会错——同一个毫秒里会有 2 个并发签名，必须按 **tid** 配对。这也是本轮的采样方法学教训。
+
+**仍未知**：`keystream` 怎么派生。同一时刻的调用共享它，跨 30 秒就完全不同，说明它按"操作/时间窗"生成，且不来自 `e4`/`e5`/`e3` 的简单哈希（对 `SHA256/MD5(e3/e4/e5/e1/e2/组合)` 与计数器模式都试过，全部不匹配）。剩下的是 libjdg 自定义 VM 里的 PRG，静态侧只有 `JNI_OnLoad` 可以落脚。
+
+**本轮没有改插件代码**；代价最大的一步是配对方法，已被 `tid` 解决（`live_captures` 记录本来就带 `tid`，不需要改工具）。
+
+## 2026-10-22（第二轮）—— 把 JDGuard 的门面挖开，并补上两个真缺口
+
+**新拿到的（都在真机 `aa165071` 上验过）**
+- `Bridge` 就是 JDGuard 的 Java 门面：`com.jd.security.jdguard.core.Bridge`。它只暴露 `static native Object[] main(int, Object[])` 和一层 `entry(int, Object[])`，其余是 `getAppKey/getJDGVN/androidId/getBizNum/setContext/...`。
+- **`b1` 不是设备 UUID，是 JDGuard 的 appKey**：`Bridge.getAppKey()` 返回的就是 jdgs 里那个值；`b2 = getJDGVN()+"_0"`（`3.6.5_0`），`b3` 固定 `3.0`，`b7` 毫秒时间戳。`Bridge.androidId()` = 请求 body 里出现的那个 16 hex。
+- **签名输入全看到了**：hook `Bridge.entry`（`stack:true`）拿到 `opcode=101` 和完整参数数组：
+
+  ```
+  [ byte[1727] "POST /client.action <md5(body)>…", "<设备占位串>", <eid>, "1.0", <e5>, <nonce-uuid>, null ]
+  ret = [ "{\"b1\"…\"b4\"…\"b5\"…}" ]
+  ```
+
+  也就是说 **b4 的输入 = 请求行 + body 摘要 + 设备字段 + e5 + 每次不同的 nonce**，native 负责拼 JSON、zlib 压缩、二次变换、Base64。配合上一轮抓到的压缩前明文，整条链的边界已经闭合，只剩那 296 字节的变换在 libjdg 的 VM 里。
+
+**插件改动**
+- **`java_call` 支持数组**（agent `runtime/java_enum.cpp`）：`T[]` 参数按 JSON 数组逐元素编组，`byte[]` 参数按 JSON 字符串的 UTF-8 字节编组；参数类型名同时接受 `java.lang.Object[]` 和 `Class.getName()` 的 `[Ljava.lang.Object;` 描述符形式。没有它，`main(int, Object[])` 这类分发器根本调不动（这正是"把签名器变成可查询 oracle"的前提）。实测 `String.format("%s-%s", ["a","b"])` → `a-b`。
+- **`memory_disasm` 的"零页"失败修掉**：`capstone-wasm` 在**一条指令都解不出来**时抛异常，且把成功码打进文案（`Failed to disassemble, error: OK (CS_ERR_OK)`）。现在返回 `count:0` + `undecodedBytes` + `note`（"不是 AArch64 代码：填充/字面量池/数据"）。真机复验：同一 `module+offset`（`libjdg.so+0x103f80`）从报错变成明确回答。新增 `daemon/test/capstone_disasm.test.ts`（零页 / 0xff / 真指令三种），`npm test` **280/280**。
+
+**撞到的目标侧约束（也是插件的边界）**
+- 用 `java_call` 直接调 `Bridge.entry(101, …)` 复现签名：第一次传 `String` 当第一个元素 → 目标在 `GetArrayLength` 上 **abort**（`JNI DETECTED ERROR … not an array: java.lang.String`），说明调用确实进了 `main`；改成 `byte[]` 后再调 → **命令超时、随后进程被杀**。
+- 结论：`entry` 依赖真实调用上下文（初始化/线程/Looper 或有效 nonce），**从 agent 的命令线程异地调用会挂死**；而 `java_call` 没有隔离——一个阻塞的目标方法会把整条命令通道一起拖死。这条要写进工具说明（已写 `docs/mcp-tools.md`），下一轮若要 oracle，得先加"调用跑在目标自己的线程 + 超时后可放弃"的机制，或改为**驱动真实请求**再读回参。
+
+## 2026-10-22 —— 真机实战：京东 `jdgs` 逆向（插件能力的第一次"硬目标"体检）
+
+目标 `com.jingdong.app.mall` 16.1.50（`aa165071`，SDK 35，Zygisk 注入）。目的不是"抓到一个参数"，而是**用一次难目标把插件缺什么暴露出来**。
+
+**走通的链路（全部通过 ADH，没有 Frida/手工 IDA）**
+1. `scope.json` 加包 → 重启 App → agent 自动注入（`s_xxxx` 在线）；`triage` 一把过（2690 regions / 11 dex / 19 个 TLS hook）。
+2. **抓包**：`capture_start` 自动锁定 `libjavacrypto.so`，`SSL_write/SSL_read` 明文直出；`http_exchanges` 拼出完整请求。`jdgs` 是**请求头里的 JSON**：`{"b1","b2","b3","b4","b5","b6","b7"}`。
+3. **定位生成点**（静态索引）：`dump_all_dex`（11 dex / 87 MB）→ `dex_index_search` 命中 `HttpSettingTool#doSignUsingJdGuard`、`JDGuardHelper$1#genSign`、`DongSigninHelper#getJDGS`，调用链直接给到 `ParamBuilderFor*#setupParams`。
+4. **动态确认**：`java_hook genSign(URI,byte[],String,String,boolean)` + `stack:true`，返回 Map 就是 `{jdgs={...}}`——`jdgs` 为**每个签名请求**生成，不止登录 SDK。
+5. **拿明文**：`libjdg.so` 无 EVP/AES 常量（`native_crypto_const` 只报 SHA-256/MD5/SHA-1/Base64），改用 `native_hook mode=got module=libjdg.so symbol=compress`（zlib 的 `compress(dest,destLen,src,srcLen)`），`mem:"x2:192,x2+192:192"` 两次窗口拼回**压缩前 371 字节明文**（`x3=0x173` 对得上）：`{"e1":<eid>,"e2":"1.0§§0§§<pkg>|<32hex>|<ver>§§-…§§32","e3":<ms>,"e5":<33B>,"e4":<uuid>}`。
+6. **静态补证**：`native_analyze` 显示 `libjdg.so` 只导出 `JNI_OnLoad`；`native_disasm symbol=JNI_OnLoad` 找到唯一的 `RegisterNatives` 调用 → 方法表 `vaddr 0x159118` → `memory_read` 读出 `{name:"main", sig:"(I[Ljava/lang/Object;)[Ljava/lang/Object;", fnPtr}`。即**整套 native 只有一个 opcode 分发入口**，且 libjdg 内部是自定义 VM/解释器（这也是为什么标准常量扫描看不见它的密码学）。
+
+**结论边界（不吹）**：`b4` = 371 字节 JSON → zlib `compress`（本地同输入算出 293 B）→ 二次变换（296 B）→ Base64。二次变换**不是**标准 AES/ChaCha/zlib：`crypto_variant_scan` 无 AES 结构，`e5` 也不是标准 Base64。它在 libjdg 的 VM 里，本轮**未还原**；`b5/b6` 是标准 SHA-256（64 hex）但哈希输入未定。已确认的字段语义：`b1` 设备 UUID、`b2` JDGuard 版本、`b3` 协议版本、`b7` 时间戳、`e3` 时间戳、`e4` 每次不同的 nonce。
+
+**插件改动（本轮）**
+- `agent/java/.../AdhJavaHookBridge.java`：Java hook 事件原来只渲染 `args[0]` 且对象一律 `类名@hash`。改为**全参数 + 类型感知**：`byte[]` → 前 64 字节 hex + 真实长度、`URI/URL/CharSequence` → 字符串、`Map/Collection/JSON` → `toString`、原生数组 → 紧凑展开；单参数保持旧格式（兼容 `lastArg` 断言）。实测 `genSign` 一次事件即给出完整 URI、body hex、content-type、method。
+- 撤销一个**危险特性**：曾加过 `settings.startup.jni`（hello 阶段预装 `jni_hook`），真机上 5 分钟内让京东 **SIGILL**（`ILL_ILLOPC`，页边界）并出现 **ART ConcurrentCopying GC 空指针**；根因是对 `libart.so` 的 `RegisterNatives` 做 inline patch，包装函数本身没问题（晚装 40s 存活、hits=0）。已从启动策略移除并写进 `CASE_STUDIES`，`jni_hook` 保持手动命令。
+- 回归：`tsc` 0 错、`npm test` **277/277**。**未跑** `verify_all.sh`（本轮无该必要，且 device 全量=82 条冷启）。
+
+**下一轮该补的（按性价比排）**
+1. `native_hook` 缺**调用后内存**：拿 `compress` 的输出只能靠"下一次调用前抓 x0"，实测是 0。应加 `memAfter:"x0:293"`（原函数返回后复制），这是"输出侧"的通用缺口。
+2. `memory_disasm` 的 `module+offset` 路径直接失败且错误文案自相矛盾（`Failed to disassemble, error: OK (CS_ERR_OK)`）；本轮只能先用 maps 算绝对地址绕过。另：`memory_read` 对代码页偶发返回全 0（同地址换 `via` 仍 0），需要判"读不到"而不是"内容就是 0"。
+3. `native_analyze` 的 `strings` 对 1.6 MB 的库回吐 ~19 MB（一次就把上下文打爆），需要分页/过滤/长度截断。
+4. `live_captures` **不按 session/package 过滤**，多目标时沙盒的 `ADH_LIVE_*` 与目标混在一条流里（`http_exchanges` 有 `package`，`live_captures` 没有）。
+5. `dex_method_code` 只给 bytecode 十六进制，没有 Dalvik 反汇编 → 静态读 Java 逻辑仍然要人肉。
+6. 建议把本轮手工做的 **JNI 注册表静态还原** 固化成工具（`jni_table`）：解析 `JNI_OnLoad` → 找 `RegisterNatives` → 读 `JNINativeMethod[]`，全程不碰目标运行时——这才是"库只导出 JNI_OnLoad"的安全解法。
+
+## 2026-10-21 —— `verify_pick.mjs`：别为了一次改动跑 121 条
+
+用户点名的问题：验收脚本不可全信，而 AI 为了稳妥会把 121 条（39 host + 82 device）全跑一遍，既费时间也费 token——device 每条都要冷启一次沙盒，其中 9 条还会重装 APK。
+
+- 新增 `tools/verify_pick.mjs`：按 `git status` 的改动反查候选。默认**只打印、只列 host**；`--device` 才列真机脚本，`--run` 才执行。强规则（改了 `daemon/` → v71+v87）+ 文件名 token 反查（`native_hooks.cpp` → `native_hook`），并有**文档频率过滤**（出现在 >1/4 脚本里的词自动剔除，`agent`/`package`/`memory` 这类不再制造噪声）。
+- 已知抖动（`v72`/`v22_capture`/`v08_xref`/`v01`）标 ⚠：同一条最多复跑一次。
+- 规则写进 `AGENTS.md` / `CLAUDE.md`（同步）与 `tools/MAP.md`：纯文档改动只跑 `tsc + npm test`；全量只在发版/刷机/用户明确要求时跑一次；**脚本断言也是代码，失败先读断言，别默认产品坏了**。
+- 实测：`daemon/` 改动 → 2 条 host；`native_hooks.cpp` → 2 host + 10 device 候选；纯文档 → "没有定向规则" + 最便宜的确认命令。
+
+
+## 2026-10-21 —— 冷启动前置布防（host 侧，无 Zygisk 也能抢时间窗）
+
+**做了什么**：`settings.startup` 启动策略。会话 hello 到达时、capture loop 启动**之前**，daemon 按策略自动装中和器；`session.startupHooks` 带 hookIds，`/api/agents` 和 `capabilities` 都看得到。开关：`startup.antiDebug` + `startup.packages`（空=全部）+ `ADH_AUTO_ANTIDEBUG=1/0` 覆盖。MCP 新增 `settings`（get/patch），AI 不用切 REST 就能配。
+
+**真机验收（`aa165071`）**
+- 开启策略（只限 `com.adh.sandbox`）→ 重启沙盒（**不发任何命令**）→ `startupHooks={"hookIds":[1],"failed":[]}`；`ptrace` 由 `-1` 变 **0**；`access` 仍 `ENOENT`；进程存活。
+- 关闭策略 → 重启 → 无 `startupHooks`，`ptrace` 恢复 `-1`。
+
+**撞出来的关键事实（已写进默认值）**：第一版启动计划是 ptrace + access + faccessat 三个。真机上**3 个钩子装完后约 0.5 秒沙盒死亡**——在初始化阶段把 `access`/`faccessat` 全部改成 EACCES，App 自己的路径检查也被打断了。所以启动期默认只装 **ptrace**（TRACEME 返回 0 无害），`access`/`faccessat` 改为 opt-in（`extraTargets`）或等启动完成后再用 `recipe anti_debug`。这是"更早"和"更安全"的边界，不是实现缺陷。
+
+**顺带修掉的测试基建问题**：并行全量仍会随机红（每次不同文件、~2.7s、测试数变少）。根因是**每个测试进程都在写同一个 `adhd-data/`**，Windows 上第二个写者让第一个报共享冲突。现在 `ADH_SKIP_ARTIFACT_LOAD=1` 同时把 `CAPTURES`/`DATA_DIR` 指到按 pid 隔离的临时目录。**连跑 4 次 274/274**（新加 3 条 startup 策略单测后 275）。
+
+**延迟加宽（同日追加）**：`startup.widenAfterMs` + `widenTargets`。启动期只装 ptrace；等 `widenAfterMs` 毫秒后（unref 定时器、每会话一次）自动补 `access`/`faccessat`，App 已初始化完，不会打断它自己的路径检查。真机：hello 时 `hookIds=[1]`、`access` → `ENOENT`；5 秒后 `hookIds=[1,2,3]`、`widenedAt` 有值、`access` → `EACCES`、`ptrace` → `0`、进程存活。单测 **277** 条。
+
+
+## 2026-10-21 —— recipes 扩到 5 个 + 测试不再依赖开发机工件
+
+**recipes**（host 编排，agent 不变）
+- `triage` 现在在采集窗口里**同时开 `module_watch`**，窗口结束 drain 一次再读，summary 多出 `modulesLoaded`（运行中才出现的库）。
+- 新增 `http_capture`：布防 TLS →（可选）调用方给一个 Java 触发器 → 等 → drain → **把明文拼成整条 HTTP 请求**，返回 method/path/host/status 样本。0 记录时 summary 明确写"QUIC 或私有 TLS 栈的常见结果"，不让空列表读成"这个 App 没发请求"。
+- 新增 `anti_debug`：不带 `confirm:true` 只返回计划；带上则一次装好 `ptrace`（返回 0）、`access`/`faccessat`（返回 -1 + `EACCES`），返回 hookIds；`undoHookIds` 一次卸掉。**返回值与 errno 成对中和**。
+
+**真机验收（`aa165071`，agent `20c5d307…`）**
+- `anti_debug` 应用后：`Os.access("/nope")` 由 `ENOENT` 变 `EACCES`；`ptrace` 由 `-1` 变 `0`；`undoHookIds:[1,2,3]` 后两者**逐字恢复**。
+- `http_capture`：4 步 ok，records 0 + hint（沙盒没有 TLS 流量，如实说明）。
+- `triage`：11 步全 ok（含 module_watch start/stop），crypto 14。
+
+**测试基建（修的是"门禁靠运气"）**
+- 并行跑全量时 `syscall_digest.test.ts` 偶发红（约 1/3），单跑 15/15。根因：每个测试进程在 import 时扫描开发机 `captures/` 约 **1.2 GiB**，十几个进程并发读盘。
+- 修法：`state.ts` 支持 `ADH_SKIP_ARTIFACT_LOAD=1` 跳过启动期工件采纳；`npm test` 改走 `test/run.mjs`（先设环境再 spawn `node --test`，`stdio:inherit`）。测试从此**不依赖开发机数据**，也快了一个数量级。**连跑 3 次 271/271**。
+
+**没做**：Zygisk 预置 responder —— 本机 Git Bash 起不来，`build_zygisk.sh` / `flash_device.sh` 无法执行，改了也刷不进、验不了。留给能跑那两个脚本的机器。
+
+
+## 2026-10-21 —— 加载期可见 + errno 中和 + recipes（"一句话"入口）
+
+同一方向的第二片：**看得见运行中才出现的东西**、**能中和成对的检查**、**把多步编排收成一个调用**。
+
+**agent**
+- **`module_watch`**：dlopen watch 从"只服务 JNI_OnLoad、只挂一个入口"改成**两个入口都挂**（`dlopen` 与 `android_dlopen_ext`/`__loader_` 别名，各自保留 trampoline），并按需广播 `MODULE_LOAD` 事件（path/handle/base/size）。踩过的坑：只挂第一个解析到的入口时，agent 自己的 `load_so`（走 `dlopen`）完全不触发，事件是空的——两槽修复后真机抓到 `liblog.so`（base/size 正确）。
+- **`native_hook` 新增 `errno`**：命中线程上写 errno（throttled 命中同样生效）。和 `skipOriginal`+`returnValue` 配对使用，才能中和"返回值和 errno 一起看"的检查（`access`/`faccessat`）。用 `errno = v` 而不是 `__errno_location()`——后者在 API 26 的 bionic 里没有符号。
+- **`java_call` 报 cause**：原来只回 `java.lang.reflect.InvocationTargetException`，AI 拿不到任何可操作信息；现在解包到 cause。这条同时是 errno 的观测器。
+
+**host**
+- **`recipes.ts`**：`triage` / `capture_window` / `unpack`。每步报 `ok/ms/error`，一步失败不中断其余；步骤只回小摘要。MCP `recipe` + REST `/api/recipes`、`/api/recipes/run`。
+- `module_watch` MCP/REST（`start|stop|status|list`）；`MODULE_LOAD` 归到 `system` 分类，现有视图直接可见。
+- `service.ts` 的 `moduleLoads()` 把 MODULE_LOAD 记录解回结构化对象。
+
+**真机验收（`aa165071`，agent sha `20c5d307…`）**
+- `module_watch start` → `load_library /system/lib64/liblog.so` → `list` 得到 `{path, handle, base, size:69632, mapped:true}`。
+- **errno**：`android.system.Os.access("/nope")` 基线报 `ErrnoException: ENOENT (No such file or directory)`；挂 `access`（`skipOriginal:true, returnValue:-1, errno:13`）后同一调用报 `EACCES (Permission denied)`；卸钩后恢复。这是"返回值+errno 成对中和"第一次被端到端证明。
+- **recipes**：`triage` 7 步全 ok（2579 regions、9 条 crypto、topAlgos 有 AES-CBC/CTR/GCM 等）；`capture_window` 带 `JavaCrypto.run` 触发器 → crypto 9 → 14，trigger 步 5ms；REST 同实现同结果。
+- MCP 工具 76 个；单测 **271** 条（+agent_caps 3、recipes 3）。
+
+**没做**：Zygisk 预置 responder（要在 `injector/zygisk` 里把策略随 companion 下发，且本机 Git Bash 起不来、无法构建/刷入模块——留给能跑 `build_zygisk.sh`/`flash_device.sh` 的机器）。
+
+
+## 2026-10-21 —— AI 可自描述 + 能改运行时状态（write / 命中写指针 / caps）
+
+方向：把判断交给 AI，agent 只提供安全、通用、可自纠的原语。本轮补上两样它没有的东西——**写**，和**知道自己能做什么**。
+
+**agent 新增**
+- **`write` 命令**（1..4096 字节，`addr`/`hex`/`force`）：`force:true` 才可改只读页，改完立刻恢复原保护、代码页刷 I-cache、回吐被替换字节。地址不在映射内、跨映射、hex 非法一律拒绝，不写前缀。`parse_mem_addr` 同时接受 `0x…` 与裸 hex，并拒绝部分解析（`0x1234zz` 以前会读成 `0x1234`）。
+- **命中时写指针参数**：`native_hook` 新增 `writeReg`/`writeOff`/`writeHex`，在命中线程、原函数运行前、寄存器改写之前写入 `*(xN+off)`，且**只写已可写映射**（`adh_mem_write_checked`，绝不 fault 目标）。事件带 `write:{reg,offset,len,ok}`，status 带规格（`x0+0:8`）。这是让出参型反调试可伪造的那一步：`__system_property_get(name, buf)`、调用方传进来的 key 缓冲区。
+- **`caps` 帧**：hello 之后立即上报 34 个 op + limits（hookSlots/memWindows/writeMax/frameMax）。`ADH_AGENT_OPS` 与 `strcmp` 派发是两份手写清单，新增 `daemon/test/agent_caps.test.ts` 解析两边源码做契约测试——加 op 忘了另一边会红。
+
+**host 新增**
+- MCP `capabilities`（读 agent 自己的 caps，不读文档）、`memory_write`、`memory_restore`（host 记住被替换字节，按地址一键回滚，每会话上限 64 条）。
+- REST `/api/capabilities`、`/api/memory/write`、`/api/memory/restore`，与 MCP **共用同一实现**。
+- `AgentSession.caps` + `agent CAPS` 日志/广播。
+
+**真机验收（`aa165071`，agent sha `85e21b93…`，模块与沙盒两条路径同 hash）**
+- `capabilities`：34 op，`write` 在列，limits 正确。
+- **写→读→还原→再读**：`malloc(64)` 得 `0xb4000074422941c0` → 写 `41424344` → 读回 `QUJDRA==`（"ABCD"）→ restore → 读回原字节 `c0fd3479`。
+- **只读代码页**：不带 `force` 被拒并报 `r-xp`；`force:true` 成功（`mprotectUsed:true`），`adh_bt_target` 仍返回 `0x40`。
+- **命中写**：hook `adh_mem_window_target`（`writeReg:0`, 8 字节全零）后 `memWindowProbe` 由 **48653 → 65280**（正好等于 8 字节清零后的结果），事件 `"write":{... "ok":true}`，status `write:"x0+0:8"`, `verdict:"fired"`。
+
+**顺带修掉的真 bug（都是这轮验证撞出来的）**
+- **带 tag 的堆指针读不了**：Scudo 的堆指针顶字节非零（`0xb4…`），`/proc/self/mem` 的 `off_t` 把它当巨大偏移 → `EINVAL`，所以 `memory_read` 对**任何堆地址**都失败。现在 `adh_mem_pread` / `adh_mem_region_end` / `adh_mem_region_of` 统一 `adh_untag()`（用户态拷贝保留 tag，MTE 下仍可用）。
+- `cmd_read` 声称支持 `0x…`，实际 `strtoull(...,16)` 遇到 `0x` 直接解析成 0；与 `write` 统一走 `parse_mem_addr`。
+
+**没做**：`setErrno`（`access` 这类只看 errno 的检查还伪造不了）、`MODULE_LOAD` 广播、Zygisk 预置 responder 策略；`write` 的 4096 字节单次上限没有提高（大块 patch 需多次调用，host 侧可循环）。
+
+
+## 2026-10-21 —— 证据链补强：类型检查 + CI + 门禁修复 + 两个真机 bug
+
+审计的结论是"门禁全绿是手工产物"。本轮把其中可机检的部分补上，并修掉审计抓到的缺陷。
+
+**新增**
+- `daemon/tsconfig.json` + `npm run typecheck`（`tsc --noEmit`，先 `strict:false`）。第一次跑出 47 个错，其中 **4 个是调用即 `ReferenceError` 的真 bug**：`mcp.ts` 缺 `flowCorrelate` / `asciiOf` / `b64Of` 的 import（`flow_correlate` 与 `live_captures encoding:"b64"` 一调就炸）、`routes_system.ts` 缺 `hexToPreview`。真机复验：`flow_correlate` 正常返回 correlations/reason；`live_captures` b64 拿回 `ADH_CRYPTO_PLAINTEXT_v1` 的 base64。
+- `.github/workflows/host.yml`：`npm ci` → typecheck → `npm test` → `bash tools/verify_v87_mcp_operability.sh`。此前仓库**没有 CI**，红测试就是这样签进 v0.4.0 的。
+- `npm test` 改为 `node --test "test/*.test.ts"`：目录形式会把 `test/smoke.ts` 当测试跑并失败。
+
+**修复**
+- `verify_v87` 红线门禁：`walkSrc` 对 daemon 树（100% TS）也套 `.c/.cpp/.h` 过滤，**daemon 半边永远扫 0 个文件**。v0.4.0 因此把 `com.adh.sandbox` 加回 `scope_list.ts:195` 而门禁仍绿。现在每棵树声明自己的扩展名，并加"扫到 <40 文件即失败"的下限。**负对照**：往 `daemon/src` 植入一行 `com.adh.sandbox` → `hits=1` 且点名文件；移除 → `scanned=100, hits=0`。
+- 目标耦合改按注入方式判定：`autoArmAllowed(pkg, entry, scope)`，`entry === 'jni_onload'`（self-load / 沙盒）总是允许布防，Zygisk 仍要求 scope.json；`SANDBOX_PKG` 常量删除。真机：沙盒会话 `entry=jni_onload` 自动布防，`captureHooks.on=true`、evp/digest/hmac=1/1/1。
+- `agent_main.c`：`jni_env_hook` 的非法 `setValue` 分支原来 `return;` 出 `command_loop`，会关掉 agent 唯一的控制连接，agent 重连成**新 session**。真机 A/B：旧 agent 发 `setValue:"abc"` → `s_2piq` 掉线、新 `s_32v5` 出现；新 agent（sha `1ab114f8…`，已换入模块与沙盒两条路径）同一操作 → 报 `ok:false` 且 `s_4v9h` 全程在线（前后 ping ≈7ms）。
+- `readBody` 加上限（8MB）：原来无上限、且按块独立解码（多字节字符跨块会变 U+FFFD）。9MB POST 现在返回 **413**、daemon 存活，不再是连接重置。
+
+**数据修正（以运行时为准）**：`/health` 报 `mcpTools: 71`（文档写 65/67/69）；`verify_all.sh` 实际登记 **121** 条（39 host + 82 device，文档写 118/117）；单测 **265** 条（文档写 180）。
+
+**没做**：Git Bash 在本机起不来（MSYS `NtCreateDirectoryObject` 被拒），`tools/*.sh` 未执行；CI 尚未在 GitHub 真跑；全量设备门禁没跑（只做了针对性真机验证）。
+
+## 2026-10-21 —— 协议分析必须先核验
+
+中国移动主进程（已登录）窗口里带两个签名头的 16 条请求，用 `EVP_DigestUpdate` 原文重算后与头一致，0 条不符。另一接口 3 条 body 用捕获到的 AES-128-CBC 密钥解开，明文再加密与 body 逐字节相同。短信登录不在这批交换里；业务大 body 21 条、响应 body 26 条用已看到的密钥解不开。采集环 `complete:false`，结论只覆盖还留在列表里的 37 条。`AGENTS.md` / `CLAUDE.md` 增加「协议分析」：能对上的公式先对上，写出对上几条，没看到的跳单独写明。案例记在 `docs/CASE_STUDIES.md` 案例 3。密钥和明文不进仓库。
+
+## 2026-10-21 —— 原生观察收成一条结果
+
+`native_look` 是看一个原生函数时的正门。`arm` 在函数门口等着（默认 `mem: auto`），`read` 把同一次命中的寄存器和抄到的内存收成一条 `text`，`stop` 默认软卸，这个地址还能再挂。零件 `native_hook` / `NATIVE_HOOK` / `NATIVE_HOOK_MEM` 还在下面。主机门禁 `verify_v108_native_look.sh` 已通过。`aa165071` 沙盒上 `arm` → `memWindowProbe` → `read` 的 `text` 含 `x0 64字节 ADHMEM01`，软卸之后这个函数还可以再挂。总图改成现在在跑的三层：浏览器只读，任务走 MCP，agent 经 TCP 8761 连上来，反汇编留在主机。Host Daemon 已用这份代码重启。
+
+## 2026-10-21 —— 内存窗改成不用先猜寄存器
+
+上一刀的 `mem` 要调用方自己写成 `x0:64`，抓到的字节又落在「加解密」里、标题是 `NATIVE_HOOK_MEM`。那是验收能过的形状，拿去拆目标时用不上。现在 `mem` 可以写 `auto`：命中时从 x0–x8 里挑读得动的指针，每个抄 64 字节，最多 4 个，整数跳过。列表归到「系统」，标题是「函数参数 / 入口内容」，预览是抄到的文本。显式 `x0:64` 仍可用。`aa165071` 上沙盒 `memWindowProbe` 用 `auto` 命中，预览是 `x0 64字节 ADHMEM01...`，函数返回值仍是 48653。抄的仍是进门时的内容；函数跑完写回去的结果还要另做返回时再抄，那一步要改返回地址，改错会把目标进程打死，这次没做。Host Daemon 已用这份代码重启，agent so `9556f89050c304f2` 已换进沙盒和模块目录。已经在跑的其它目标要冷启动才吃到新 so。
+
+## 2026-10-21 —— native hook 命中当时的内存窗
+
+强防护目标上，指针指向的缓冲区经常在函数返回前就被复用，事后 `memory_read` 读到的是下一轮。`native_hook` 增加可选 `mem`（`x0:64` 或 `x0+16:32,x2:8`，寄存器只允许 x0–x8，最多 4 窗、每窗 192 字节、合计 512、偏移 ≤65535）。命中线程在调用原函数之前用 `process_vm_readv` 拷贝（不换 SIGSEGV 处理函数；syscall 被 seccomp 挡住时才退到 `/proc/self/mem`）。字节进单独的 `NATIVE_HOOK_MEM`，用 `seq` 和当条 `NATIVE_HOOK` 配对。坏地址记 `unreadable`，不把进程打死。被 `throttleMs` 压掉的命中不拷。坏规格在主机和 agent 两边都拒绝安装。Capstone 仍在主机；QBDI 不进这次改动。
+
+主机门禁 `tools/verify_v106_native_mem_window.sh` 已通过。真机 `aa165071` 上 `tools/verify_v107_native_mem_window.sh` 已通过：沙盒 `Detection.memWindowProbe` 在 `adh_mem_window_target` 返回前把首字节异或掉，窗口仍是进入时的 `4144484d454d3031`，偏移窗是 `31`；`adh_add_target` 的 x0 是整数 20，窗口报 `unreadable`，`siteProbe` 仍返回 84，进程还在。沙盒 APK 已 `pm install -r`，agent so 已换进沙盒和模块目录（`b21e3d6cffdbc958`）。已经在跑的其它目标要冷启动才吃到新 so。Host Daemon 已用这份代码重启。
+
+## 2026-10-21 —— v0.4.1 刷入
+
+首页状态条重组随 **v0.4.1 / versionCode 24** 刷入 `aa165071` 并已重启（Manager、模块、`update.json`、`AGENT_VER` 同号；Device Daemon 仍为 versionCode 11）。重启后 `zygisk_loaded=YES`，`device_daemon_ready=YES`，模块描述为「运行中」。公开 Release 的 zip 还没上传。
+
+## 2026-10-21 —— 首页状态条重组
+
+状态图标改成圆形徽章，标题下加一行原因（模块版本 / 设备服务未连接 / 加载器未激活 / 模块未安装）。语言切换在说明行右侧，是一条等宽胶囊，用固定的中性色，不再跟着异常色走。刷新与标题同一行。首页卡片与顶栏底角统一为 16 dp。
+
+## 2026-10-21 —— 首页状态放大、动画、中英文
+
+首页状态仍是一条横栏，标题用 headlineSmall。进首页时整条淡入上移一次，然后停住。中英文切换留在标题右侧。调试版已装到 `aa165071`。
+
+## 2026-10-21 —— Manager 底部三页
+
+Manager 改成底部 Tab：**首页**（运行状态、模块/应用版本、型号、Android、架构、对照公开 `update.json` 是否有更新、Web UI）、**应用**（注入范围）、**证书**。Hook 配置仍从应用行进入，盖住底栏。勾选仍当场写入，应用页不再放单独的保存按钮。调试版已装到 `aa165071`。
+
+## 2026-10-21 —— Manager Hook 配置按功能分页
+
+Hook 配置从一列开关改成三页：**加解密**（摘要 / HMAC / 对称 / 非对称 / AEAD）、**系统抓包**（TLS 明文）、**系统检测**（反调试 / root / 属性）。页上不放说明段落，只留 tab 和开关。右上角是应用名和包名，点一下复制包名；没有「恢复默认」。开关仍是同一份 `CaptureFamilies`，关掉的族下次注入不装。未改策略协议。调试版 Manager 已 `pm install -r` 到 `aa165071`。
+
 ## 2026-10-20 —— v0.4.0 发版
 
 **v0.4.0 / versionCode 23**（Manager 同号；Device Daemon 11；`AGENT_VER` `0.4.0`）。本版相对 v0.3.15：一键脱壳产品化（冷启/全进程/边抠边显/一次一条记录）、脱壳期抑制本包装钩、Frida 退出产品面、捕获按包落盘与自动布防、系统检测 Manager 开关、Web UX 收短。产物 `adh-bundle-v0.4.0.zip`；`update.json` 指向公开 Release。

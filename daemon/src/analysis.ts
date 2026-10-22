@@ -37,8 +37,23 @@ function llvmTool(name: string, override?: string): string {
 export const OBJDUMP = llvmTool('llvm-objdump', process.env.ADH_OBJDUMP);
 const READELF = llvmTool('llvm-readelf', process.env.ADH_READELF);
 
+// Reply caps. `native_analyze` on a 1.6 MB obfuscated .so once returned ~19 MB of strings, which
+// is not an analysis answer — it is a way to fill the caller's context in one call. Every list is
+// therefore paged and every page says how much it left behind: a cut reply is fine, a cut reply
+// that looks complete is not.
+export const ANALYZE_MAX_STRINGS = 500;          // strings per page (default)
+export const ANALYZE_MAX_STRING_CHARS = 200;     // longest single string kept
+export const ANALYZE_MAX_SYMBOLS = 4000;         // exports and imports, each
+const STRING_SCAN_CAP = 200_000;                 // runs collected before the scan is called off
+export interface AnalyzeSoOptions {
+  maxStrings?: number;      // 1..5000, page size
+  stringsOffset?: number;   // index of the first string of the page (feed back nextOffset)
+  minLen?: number;          // minimum printable run length, >= 4
+  maxStringChars?: number;  // per-string cut, >= 16
+}
+
 // Dynamic symbols (exports/imports), NEEDED libs, and printable strings of an ELF .so.
-export async function analyzeSo(path: string): Promise<any> {
+export async function analyzeSo(path: string, opts: AnalyzeSoOptions = {}): Promise<any> {
   const exports: string[] = [], imports: string[] = [];
   let readelfError = '';   // fail-loud: an absent/failing readelf must not masquerade as "no symbols"
   try {
@@ -57,17 +72,53 @@ export async function analyzeSo(path: string): Promise<any> {
     const { stdout } = await execFileP(READELF, ['-d', path], { maxBuffer: 8 * 1024 * 1024 });
     for (const line of stdout.split('\n')) { const m = line.match(/\(NEEDED\).*\[(.+?)\]/); if (m) needed.push(m[1]); }
   } catch (e) { if (!readelfError) readelfError = `readelf -d failed: ${(e as Error).message}`; }
-  // printable string runs (>=4)
+  // printable string runs: collected whole, then paged. The scan is linear and cheap; the reply is
+  // what costs the caller, so the cap belongs on the page, not on what the scan is allowed to see.
   const buf = await readFile(path);
-  const strings: string[] = []; let cur = '';
-  for (let i = 0; i < buf.length && strings.length < 5000; i++) {
+  const minLen = Math.max(4, Math.min(4096, opts.minLen ?? 4));
+  const maxChars = Math.max(16, Math.min(65536, opts.maxStringChars ?? ANALYZE_MAX_STRING_CHARS));
+  const pageSize = Math.max(1, Math.min(5000, Math.floor(opts.maxStrings ?? ANALYZE_MAX_STRINGS)));
+  const offset0 = Math.max(0, Math.min(STRING_SCAN_CAP, Math.floor(opts.stringsOffset ?? 0)));
+  const runs: string[] = []; const seen = new Set<string>();
+  let cur = ''; let longStrings = 0; let scanCapped = false;
+  const push = (s: string) => {
+    if (s.length < minLen) return;
+    const cut = s.length > maxChars ? s.slice(0, maxChars) : s;
+    if (cut.length !== s.length) longStrings++;
+    if (seen.has(cut)) return;
+    seen.add(cut); runs.push(cut);
+  };
+  for (let i = 0; i < buf.length; i++) {
     const b = buf[i];
     if (b >= 0x20 && b < 0x7f) cur += String.fromCharCode(b);
-    else { if (cur.length >= 4) strings.push(cur); cur = ''; }
+    else { push(cur); cur = ''; }
+    if (runs.length >= STRING_SCAN_CAP) { scanCapped = true; break; }
   }
-  return { exports: [...new Set(exports)], imports: [...new Set(imports)], needed, strings: [...new Set(strings)],
+  // Flush the run that ended at EOF: the old loop stopped at buf.length and silently dropped it.
+  if (!scanCapped) push(cur);
+  const uniqExports = [...new Set(exports)], uniqImports = [...new Set(imports)];
+  const page = runs.slice(offset0, offset0 + pageSize);
+  const nextOffset = offset0 + page.length < runs.length ? offset0 + page.length : null;
+  return {
+    exports: uniqExports.slice(0, ANALYZE_MAX_SYMBOLS),
+    imports: uniqImports.slice(0, ANALYZE_MAX_SYMBOLS),
+    needed,
+    strings: page,
+    stringsTotal: runs.length,
+    stringsReturned: page.length,
+    stringsOffset: offset0,
+    nextOffset,
+    maxStringChars: maxChars,
+    longStrings,
+    ...(scanCapped ? { scanCapped } : {}),
+    ...(uniqExports.length > ANALYZE_MAX_SYMBOLS ? { exportsTruncated: uniqExports.length } : {}),
+    ...(uniqImports.length > ANALYZE_MAX_SYMBOLS ? { importsTruncated: uniqImports.length } : {}),
     ...(readelfError ? { readelfError } : {}),
-    counts: { exports: exports.length, imports: imports.length, needed: needed.length, strings: strings.length } };
+    counts: { exports: uniqExports.length, imports: uniqImports.length, needed: needed.length, strings: runs.length },
+    ...(nextOffset !== null || longStrings
+      ? { note: `${page.length} of ${runs.length} unique strings${nextOffset !== null ? ` — pass stringsOffset:${nextOffset} for the next page` : ''}${longStrings ? `; ${longStrings} run(s) longer than ${maxChars} chars were cut (longStrings)` : ''}` }
+      : {}),
+  };
 }
 
 // Known crypto constant signatures (byte patterns) — locate algorithms in stripped

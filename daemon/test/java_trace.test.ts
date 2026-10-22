@@ -2,10 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { callerOfStack, digestJavaTrace, javaTraceDigest, javaTraceStop } from '../src/java_trace.ts';
 
-const sample = (hookId, target, ts, tid, arg, ret, extra = {}) => ({ hookId, target, ts, tid, arg, ret, error: '', ...extra });
+// The fixture rows are deliberately loose: the digest reads a capture's `text`/`hex` payload and
+// the shape of JAVA_HOOK rows, not a typed record. `any` keeps the fixtures readable.
+const sample = (hookId: number, target: string, ts: number, tid: number, arg: string, ret: string, extra: any = {}): any =>
+  ({ hookId, target, ts, tid, arg, ret, error: '', ...extra });
 
 // --- the three-phase assembly (the pure digest alone let the drain bug slip through) ---------
-function fakeDeps({ captures = [], drain = { ok: true }, send = [] } = {}) {
+function fakeDeps({ captures = [], drain = { ok: true }, send = [] }: any = {}) {
   return {
     deps: {
       sendCmd: async (session, op, args) => { send.push({ session, op, args }); return { ok: true, hookId: 1, hookIds: [1], matched: 1 }; },

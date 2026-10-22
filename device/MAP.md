@@ -116,7 +116,10 @@ The Manager also adopts Vector's compact status-first information hierarchy whil
 remaining a standalone ADH app. Default resources are Simplified Chinese, `values-en`
 follows English system locales, and Material You/light-dark colors follow the system.
 User-facing text is limited to module status, the Host Web UI address, scope actions,
-system CA import, target process stop/restart, errors, and versions. Per-app hook policy is its own
-screen, opened from an app row. The version line sits under the home title.
+system CA import, target process stop/restart, errors, and versions. The Manager shell is three
+bottom tabs: Home (running status, module/app version, device model, Android release, ABI, and
+whether `update.json` is newer), Apps (injection scope), and Certificates. Per-app hook policy is
+its own screen, opened from an app row. Home compares `BuildConfig.VERSION_CODE` with the published
+manifest at the same URL as `module.prop` `updateJson`.
 Module status distinguishes an unavailable Device Daemon from an absent or unloaded
 module. Both Home and Scope re-check when returning to the foreground.

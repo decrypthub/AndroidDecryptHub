@@ -73,6 +73,20 @@ Build **`libadh_agent.so` functionality** and self-test via 模拟注入 (sandbo
 - Real-target integration uses the attached device (see below) via Zygisk / gadget injection.
 - Every module must have a deterministic **input → expected-output** check (sandbox activity + acceptance script). Prefer running the check and reading its output over eyeballing.
 
+### 测试选择：别全跑（省时间，也是省别人的 token）
+
+`tools/verify_all.sh` 有 **121 个脚本（39 host + 82 device）**，其中 9 个会重装 APK / 重启 App，device 每条都要冷启一次沙盒。全量是**发版/刷机前**的动作。
+
+- **改什么跑什么**：`node tools/verify_pick.mjs`（按 `git status` 的改动反查候选，默认只打印、默认只列 host）。`--device` 才列真机脚本，`--run` 才执行。
+- 纯文档/注释改动：`cd daemon && npm run typecheck && npm test` 就够，不碰验收脚本。
+- device 只跑命中的那几条；**全量 `verify_all.sh` 只在发版、刷机、或用户明确要求时跑一次**。
+- **已知抖动**（`v72` / `v22_capture` / `v08_xref` / `v01`，picker 会标 ⚠）：同一条最多复跑一次，仍红就记"未定因"，不要耗在它身上。
+- **验收脚本本身也是代码**，断言可能是上一轮 AI 的判断。失败时先读断言在测什么，再判断是产品坏了还是断言过时——两者都要修，但别默认"产品坏了"然后全量重跑。
+
+## 协议分析
+
+拆目标协议时，能用捕获对上的公式必须对过再写出来。把同一次请求的摘要明文或密文明文和这条请求的头、body 配在一起，写出对上几条、没对上几条。捕获里没有的跳（例如登录）单独写明没看到。只列头字段不算算法。采集环 `complete:false` 或 `dropped>0` 时，结论只覆盖还留在窗口里的请求。密钥、token、明文不进仓库。
+
 ## Commands
 
 Bash (Git Bash / WSL) — the `tools/*.sh` scripts assume it. `node 24` runs `.ts` directly (no build/transpile step). Agent build needs `ANDROID_SDK_ROOT` + NDK `28.2.13676358` + SDK `cmake/3.22.1` (scripts default `ANDROID_SDK_ROOT=$HOME/AppData/Local/Android/Sdk`).

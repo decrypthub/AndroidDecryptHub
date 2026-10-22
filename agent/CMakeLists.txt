@@ -19,6 +19,7 @@ set(AGENT_SOURCES
     src/hook/slot_hooks.c
     src/hook/stealth_pool.c
     src/hook/native_hooks.cpp
+    src/hook/hw_watch.cpp
     src/runtime/actions.c
     src/runtime/fp_call.S
     src/runtime/art.c

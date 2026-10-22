@@ -113,12 +113,7 @@ public final class AdhJavaHookBridge extends X509ExtendedTrustManager implements
         }
         int first = isStatic ? 0 : 1;
         try {
-            if (args != null && args.length > first) {
-                Object value = args[first];
-                lastArg = bounded(value);
-            } else {
-                lastArg = "";
-            }
+            lastArg = renderArgs(args, first);
         } catch (Throwable t) {
             lastArg = "<toString failed>";
         }
@@ -233,6 +228,16 @@ public final class AdhJavaHookBridge extends X509ExtendedTrustManager implements
     }
 
     private static final int MAX_VALUE_CHARS = 512;
+    // A byte[] argument is usually a request body or a plaintext buffer: 128 hex chars identify it
+    // against a capture without turning every hit into a multi-KB event. Raised to 2048 bytes for
+    // protocol work: a signing input can be ~1.7 KB, and a truncated one cannot be hashed/replayed.
+    private static final int MAX_ARG_BYTES = 2048;
+    // The joined multi-argument line is allowed more room than one value, because five short
+    // protocol fields otherwise push the interesting one past the cap. Sized so ONE full byte[]
+    // (MAX_ARG_BYTES of hex) plus the neighbouring fields still survives: a truncated signing
+    // vector cannot be replayed or hashed, which is the whole point of hooking the dispatcher.
+    private static final int MAX_ARG_CHARS = 4608;
+    private static final char[] HEX = "0123456789abcdef".toCharArray();
     private static final int MAX_STACK_FRAMES = 12;
     private static final int MAX_STACK_CHARS = 512;
 
@@ -264,16 +269,84 @@ public final class AdhJavaHookBridge extends X509ExtendedTrustManager implements
 
     private static String bounded(Object value) {
         if (value == null) return "null";
-        if (value instanceof String) {
-            String text = (String) value;
-            return text.length() <= MAX_VALUE_CHARS ? text : text.substring(0, MAX_VALUE_CHARS) + "...";
-        }
+        if (value instanceof String) return cap((String) value);
         if (value instanceof Number || value instanceof Boolean || value instanceof Character) {
-            String text = String.valueOf(value);
-            return text.length() <= MAX_VALUE_CHARS ? text : text.substring(0, MAX_VALUE_CHARS) + "...";
+            return cap(String.valueOf(value));
         }
-        return value.getClass().getName() + "@" + Integer.toHexString(System.identityHashCode(value));
+        // A protocol analysis is blocked by "byte[]@1234abc": the body/plaintext IS the answer,
+        // so render a bounded hex head plus the true length instead of an identity string.
+        if (value instanceof byte[]) {
+            byte[] raw = (byte[]) value;
+            int n = Math.min(raw.length, MAX_ARG_BYTES);
+            StringBuilder sb = new StringBuilder(n * 2 + 16);
+            for (int i = 0; i < n; i++) {
+                int b = raw[i] & 0xff;
+                sb.append(HEX[b >>> 4]).append(HEX[b & 0x0f]);
+            }
+            return sb.append(raw.length > n ? "...(" : "(").append(raw.length).append("B)").toString();
+        }
+        if (value instanceof char[]) return cap(new String((char[]) value));
+        if (value instanceof int[]) return cap(Arrays.toString((int[]) value));
+        if (value instanceof long[]) return cap(Arrays.toString((long[]) value));
+        if (value instanceof short[]) return cap(Arrays.toString((short[]) value));
+        // An ARRAY argument is the normal shape of a JNI dispatcher call (Bridge.entry takes an
+        // Object[]), so it must be budgeted like the joined argument line, not like one value:
+        // capping the whole array at MAX_VALUE_CHARS showed only its first element -- which is how
+        // a 7-element signing vector was previously inferred from a 512-char window.
+        if (value instanceof Object[]) return cap(renderArray((Object[]) value), MAX_ARG_CHARS);
+        if (value instanceof java.net.URI || value instanceof java.net.URL) return cap(String.valueOf(value));
+        if (value instanceof CharSequence) return cap(String.valueOf(value));
+        if (value instanceof java.util.Map || value instanceof java.util.Collection) {
+            try {
+                return cap(String.valueOf(value));
+            } catch (Throwable ignored) {
+                return value.getClass().getName();
+            }
+        }
+        if (value instanceof Throwable) return cap(String.valueOf(value));
+        // org.json objects are the shape most request payloads take; their toString is the payload.
+        String name = value.getClass().getName();
+        if (name.startsWith("org.json.")) {
+            try {
+                return cap(String.valueOf(value));
+            } catch (Throwable ignored) {
+                return name;
+            }
+        }
+        return name + "@" + Integer.toHexString(System.identityHashCode(value));
     }
+
+    /** All call arguments, receiver excluded. One argument keeps the historical bare-value form. */
+    private static String renderArgs(Object[] args, int from) {
+        if (args == null || args.length <= from) return "";
+        int count = args.length - from;
+        if (count == 1) return bounded(args[from]);
+        StringBuilder sb = new StringBuilder();
+        for (int i = from; i < args.length; i++) {
+            if (sb.length() > 0) sb.append(", ");
+            sb.append(i - from).append('=').append(bounded(args[i]));
+            if (sb.length() >= MAX_ARG_CHARS) break;
+        }
+        return cap(sb.toString(), MAX_ARG_CHARS);
+    }
+
+    private static String renderArray(Object[] values) {
+        StringBuilder sb = new StringBuilder("[");
+        int n = Math.min(values.length, 8);
+        for (int i = 0; i < n; i++) {
+            if (i > 0) sb.append(", ");
+            sb.append(bounded(values[i]));
+        }
+        if (values.length > n) sb.append(", ...(").append(values.length).append(')');
+        return sb.append(']').toString();
+    }
+
+    private static String cap(String text) { return cap(text, MAX_VALUE_CHARS); }
+
+    private static String cap(String text, int limit) {
+        return text.length() <= limit ? text : text.substring(0, limit) + "...";
+    }
+
     private static long parseLongValue(String value) {
         String v = value == null ? "" : value.trim();
         return (v.startsWith("0x") || v.startsWith("0X"))

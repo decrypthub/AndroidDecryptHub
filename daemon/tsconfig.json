@@ -1,0 +1,23 @@
+{
+  // Type checking only: Node 24 strips the types at run time, so this file never emits.
+  // `allowImportingTsExtensions` matches how the source imports itself (`./state.ts`), which is
+  // what Node's type stripping requires.
+  //
+  // Start loose (`strict: false`, `noImplicitAny: false`) so the first gate is "does the code
+  // even type-check", not "rewrite 74 `any`s". Ratchet per directory once this is green in CI.
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "strict": false,
+    "noImplicitAny": false,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "forceConsistentCasingInFileNames": true,
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}

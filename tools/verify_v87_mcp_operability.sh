@@ -121,26 +121,40 @@ notes.push(`MCP tools=${names.length} (agent_ping, engine_selftest, protocol_sel
 // Two couplings used to hide here: the agent hardcoded the JCE provider module at 10 call
 // sites (inside the one-shot probe ops) and the daemon carried the sandbox trigger classes in
 // state.ts. Neither was visible to any gate. This is that gate.
-function walkSrc(dir, out = []) {
+//
+// Each tree declares its OWN extensions. The first version filtered `.c/.cpp/.h` for both trees,
+// so the daemon half (100% TypeScript) scanned zero files and the gate could never fail on it:
+// v0.4.0 added the sandbox package constant back into scope_list.ts and this gate stayed green.
+function walkSrc(dir, re, out = []) {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
     const p = `${dir}/${e.name}`;
-    if (e.isDirectory()) walkSrc(p, out);
-    else if (/\.(c|cpp|h)$/.test(e.name)) out.push(p);
+    if (e.isDirectory()) walkSrc(p, re, out);
+    else if (re.test(e.name)) out.push(p);
   }
   return out;
 }
+const SRC_TREES = [
+  { dir: `${root}/daemon/src`, re: /\.ts$/ },
+  { dir: `${root}/agent/src`, re: /\.(c|cpp|h)$/ },
+];
 const BANNED_OPS = ['crypto_hook_test', 'net_hook_test', 'file_hook_test', 'flow_watch', 'detect_watch', 'trace_run', 'inline_crypto_test', 'crypto_probe', 'jni_probe'];
 const backAgain = BANNED_OPS.filter((o) => agentOps.includes(o));
 if (backAgain.length) problems.push(`sandbox-coupled one-shot ops are back in the agent dispatch: ${backAgain.join(', ')}`);
 const nameHits = [];
-for (const rel of [...walkSrc(`${root}/daemon/src`), ...walkSrc(`${root}/agent/src`)]) {
-  const src = read(rel.replace(`${root}/`, ''));
-  const where = rel.replace(`${root}/`, '');
-  if (src.includes('com.adh.sandbox')) nameHits.push(`${where}: com.adh.sandbox`);
-  if (/\.(c|cpp|h)$/.test(where) && src.includes('libjavacrypto')) nameHits.push(`${where}: libjavacrypto`);
+let scanned = 0;
+for (const tree of SRC_TREES) {
+  for (const rel of walkSrc(tree.dir, tree.re)) {
+    scanned++;
+    const src = read(rel.replace(`${root}/`, ''));
+    const where = rel.replace(`${root}/`, '');
+    if (src.includes('com.adh.sandbox')) nameHits.push(`${where}: com.adh.sandbox`);
+    if (/\.(c|cpp|h)$/.test(where) && src.includes('libjavacrypto')) nameHits.push(`${where}: libjavacrypto`);
+  }
 }
 if (nameHits.length) problems.push(`target-specific names in product code (red line, agent AND daemon): ${nameHits.join(', ')}`);
-notes.push(`red line: agent dispatch ops=${agentOps.length}, banned one-shot ops present=${backAgain.length}, target-name hits=${nameHits.length}`);
+// A gate that scanned nothing must not pass: both trees have to contribute files.
+if (scanned < 40) problems.push(`red-line scan covered only ${scanned} source files (expected >= 40 across daemon/src + agent/src) - the walker is broken again`);
+notes.push(`red line: scanned=${scanned} files, agent dispatch ops=${agentOps.length}, banned one-shot ops present=${backAgain.length}, target-name hits=${nameHits.length}`);
 
 // ---- capture_start/stop must go through the ONE implementation (no second copy to drift) ----
 const mcpSrc = read('daemon/src/mcp.ts');

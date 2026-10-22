@@ -87,12 +87,14 @@ test('only the named Java detection methods join the checklist', () => {
 
 test('an empty store says whether the hooks were armed', () => {
   const off = summarizeDetection([], false);
-  assert.match(off.reason, /还未开启应用防护检测/);
+  assert.match(off.reason, /^未开$/);
   assert.ok(off.unchecked.includes('反调试'));
   const on = summarizeDetection([], true);
-  assert.match(on.reason, /暂时没有发现可疑行为/);
+  assert.match(on.reason, /^已开 · 暂无$/);
+  // "no reply yet" must not collapse into the same empty string as "nothing to say": the old
+  // fallthrough rendered an unknown state as nothing at all.
   const unknown = summarizeDetection([], null);
-  assert.match(unknown.reason, /检测状态还不确定/);
+  assert.match(unknown.reason, /^状态未知$/);
   assert.match(on.caveat, /直接读手机型号/);
 });
 

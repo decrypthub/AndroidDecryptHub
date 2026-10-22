@@ -5,7 +5,7 @@ import net from 'node:net';
 import { AGENT_PORT, HTTP_PORT, webUrls } from './config.ts';
 import { handleHttp } from './http/router.ts';
 import { ensureAdbReverse } from './scope_list.ts';
-import { startCaptureLoop, forgetCaptureSession, pruneArtifactsAndIndex, clearCaptureArmProtect } from './service.ts';
+import { startCaptureLoop, forgetCaptureSession, pruneArtifactsAndIndex, clearCaptureArmProtect, applyStartupHooks } from './service.ts';
 import {
   agentSockets, broadcast, captureTimers, frameJson, FRAME_JSON, FRAME_MAX,
   log, nextId, pending, pruneSessions, sessions, wss,
@@ -68,7 +68,24 @@ const agentServer = net.createServer((sock) => {
       // Fresh process after unpack: allow auto-arm again (protect only blocks the live post-unpack session).
       clearCaptureArmProtect(session.package);
       broadcast('agent.hello', session);
-      startCaptureLoop(id);   // install persistent hooks + stream captures to the panel
+      // Startup policy BEFORE the capture loop: on a target that checks for a debugger early, the
+      // difference between "hooks installed now" and "installed after the first command round
+      // trip" is often the difference between a live process and an exit. Fire-and-forget with
+      // `finally` so a slow or failing install can never stop capture from starting.
+      applyStartupHooks(id)
+        .catch((e) => log(`[startup] anti-debug 布防失败 ${id}:`, (e as Error).message))
+        .finally(() => startCaptureLoop(id));   // install persistent hooks + stream captures
+    } else if (msg.t === 'caps' && session) {
+      // Arrives right after the hello (before the maps sample). Stored on the session, never
+      // merged from another session: two processes of the same app can run different builds.
+      session.caps = {
+        ops: Array.isArray(msg.ops) ? msg.ops : [],
+        limits: (msg.limits && typeof msg.limits === 'object') ? msg.limits : {},
+        ...(msg.error ? { error: msg.error } : {}),
+      };
+      session.lastSeen = Date.now();
+      log(`agent CAPS ${session.package} ops=${session.caps.ops?.length ?? 0}${msg.error ? ` error=${msg.error}` : ''}`);
+      broadcast('agent.caps', { sessionId: session.sessionId, caps: session.caps });
     } else if (msg.t === 'maps' && session) {
       session.mapsCount = msg.count;
       session.regionsSample = (msg.regions ?? []).slice(0, 50);
@@ -101,12 +118,21 @@ const agentServer = net.createServer((sock) => {
   sock.on('error', (e) => log('agent sock error:', (e as Error).message));
 });
 // Top-level error net: no request may crash the daemon. An uncaught JSON.parse throws SyntaxError
-// -> 400; typed errors carry their own status (e.g. dumpBuf 404/400); anything else -> 500.
+// -> 400; typed errors carry their own status (e.g. readBody's 413, dumpBuf's 404/400); anything
+// else -> 500.
 const httpServer = http.createServer((req, res) => {
   handleHttp(req, res).catch((e: any) => {
     if (res.writableEnded) return;
     const status = e?.status ?? (e instanceof SyntaxError ? 400 : 500);
-    try { res.writeHead(status, { 'content-type': 'application/json', 'access-control-allow-origin': '*' }); res.end(JSON.stringify({ error: e?.message ?? 'internal error' })); } catch {}
+    try {
+      // A body refused mid-upload cannot be drained: tell the peer to close so the response is not
+      // interleaved with the rest of an upload we will never read.
+      if (status === 413) res.setHeader('connection', 'close');
+      res.writeHead(status, { 'content-type': 'application/json', 'access-control-allow-origin': '*' });
+      res.end(JSON.stringify({ error: e?.message ?? 'internal error' }));
+    } catch {}
+    // Only now drop the unread remainder, so the 413 above had its chance to go out.
+    if (status === 413) { try { req.destroy(); } catch {} }
   });
 });
 

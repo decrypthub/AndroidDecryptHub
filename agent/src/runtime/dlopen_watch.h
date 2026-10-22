@@ -17,6 +17,13 @@ extern "C" {
 int adh_dlopen_watch_install(char *error, size_t error_size);
 int adh_dlopen_watch_installed(void);
 
+// Module-load broadcast (opt-in). `start` installs the same dlopen hook if needed and makes the
+// wrapper emit a MODULE_LOAD capture event for every library mapped afterwards: path, handle,
+// base, size. This is what catches a payload that decrypts itself into a fresh mapping after the
+// process started - the JNI_OnLoad watch is one-shot and per-name, this one reports all of them.
+void adh_cmd_module_watch(int fd, const char *id, const char *action);
+int adh_module_watch_on(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -30,6 +30,7 @@
 #include "../runtime/java_enum.h"
 #include "../trace/commands.h"
 #include "../hook/native_hooks.h"
+#include "../hook/hw_watch.h"
 #include "../hook/stealth_pool.h"
 #include "../hook/site_hooks.h"
 
@@ -54,6 +55,41 @@ static char g_package[512] = "";
 static char g_policy[64] = "";
 
 // ---- report + command loop ------------------------------------------------
+
+// ---- capability manifest ----------------------------------------------------------------
+// What this build can ACTUALLY do, sent right after the hello. A client plans from this list
+// instead of guessing (or reading the docs of a different build); daemon/test/agent_caps.test.ts
+// parses both this array and the strcmp dispatch chain below and fails when they disagree, so an
+// op cannot ship advertised-but-unhandled (or handled-but-invisible).
+static const char *ADH_AGENT_OPS[] = {
+    "maps", "read", "write", "jni_hook", "jni_onload", "jni_env_hook",
+    "java_hook", "java_enum", "java_call", "java_call_result", "hw_watch", "native_hook",
+    "native_call", "got_enum", "stealth", "javahook_probe", "gothook_selftest", "capture_start",
+    "capture_drain", "capture_stop", "trigger", "load_so", "file_probe", "qbdi_trace",
+    "compat_probe", "object_inspect", "object_set", "object_invoke", "art_dexfiles", "list_dir",
+    "read_file", "scan_magic", "mem_backend", "search", "frame_echo", "ping",
+};
+
+static void send_caps(int fd) {
+    char ops[1400];
+    size_t n = 0;
+    int overflow = 0;
+    ops[0] = 0;
+    const size_t count = sizeof(ADH_AGENT_OPS) / sizeof(ADH_AGENT_OPS[0]);
+    for (size_t i = 0; i < count; i++) {
+        int w = snprintf(ops + n, sizeof(ops) - n, "%s\"%s\"", i ? "," : "", ADH_AGENT_OPS[i]);
+        if (w < 0 || (size_t)w >= sizeof(ops) - n) { overflow = 1; break; }
+        n += (size_t)w;
+    }
+    char frame[1700];
+    snprintf(frame, sizeof(frame),
+             "{\"t\":\"caps\",%s\"ops\":[%s],\"limits\":{\"hookSlots\":%d,\"memWindows\":%d,"
+             "\"memWindowBytes\":%d,\"memWindowTotal\":%d,\"writeMax\":%d,\"frameMax\":%u}}\n",
+             overflow ? "\"error\":\"ops list truncated\"," : "", ops,
+             ADH_NATIVE_MAX_HOOKS, ADH_MEM_WIN_MAX, ADH_MEM_WIN_LEN, ADH_MEM_WIN_TOTAL,
+             4096, (unsigned)FRAME_MAX_IN);
+    send_line(fd, frame);
+}
 
 static void report(int fd) {
     char cmd[512];
@@ -97,6 +133,9 @@ static void report(int fd) {
         abi[0] ? abi : "?", rel[0] ? rel : "?", sdk[0] ? sdk : "0", g_entry,
         selfj, self_start, g_policy[0] ? g_policy : "default");
     if (send_line(fd, hello) != 0) { LOGE("send hello failed"); return; }
+    // The manifest goes immediately after the hello so a client can plan from what this build
+    // can actually do before it issues any command.
+    send_caps(fd);
 
     int total = 0;
     char *sample = build_maps_json(40, &total, NULL);
@@ -343,9 +382,32 @@ static void cmd_java_enum(int fd, const char *id, const char *class_name) {
     }
 }
 static void cmd_java_call(int fd, const char *id, const char *class_name, const char *method_name,
-                          const char *params, const char *field_name, const char *args_json) {
+                          const char *params, const char *field_name, const char *args_json,
+                          int detach) {
     char idj[64];
     json_escape(id, idj, sizeof(idj));
+    // Detached: start the invocation on its own thread and answer at once. See java_enum.cpp —
+    // a blocking target method used to hold the command channel until the daemon timed out.
+    if (detach) {
+        char derror[512] = "";
+        int call_id = adh_java_call_async_start(class_name, method_name, params, field_name, args_json,
+                                                derror, sizeof(derror));
+        char out[1024];
+        if (call_id > 0) {
+            snprintf(out, sizeof(out),
+                     "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"java_call\",\"ok\":true,\"detached\":true,\"callId\":%d,"
+                     "\"state\":\"running\",\"note\":\"poll with java_call_result; the call runs on its own thread\"}\n",
+                     idj, call_id);
+        } else {
+            char errj[768];
+            json_escape(derror, errj, sizeof(errj));
+            snprintf(out, sizeof(out),
+                     "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"java_call\",\"ok\":false,\"error\":\"%s\"}\n",
+                     idj, errj);
+        }
+        send_line(fd, out);
+        return;
+    }
     int did_attach = 0;
     JNIEnv *env = adh_jni_attach(&did_attach);
     if (!env) {
@@ -385,12 +447,48 @@ static void cmd_java_call(int fd, const char *id, const char *class_name, const 
         if (json) adh_java_enum_free(json);
     }
 }
+// Poll a detached java_call. callId > 0 answers one job (running / done / failed, with the same
+// result shape a synchronous java_call returns); callId 0 lists every retained job, which is the
+// answer to "what happened to my call" when the id was lost.
+static void cmd_java_call_result(int fd, const char *id, int call_id) {
+    char idj[64];
+    json_escape(id, idj, sizeof(idj));
+    char *json = call_id > 0 ? adh_java_call_async_status(call_id) : adh_java_call_async_list();
+    if (!json) {
+        char out[360];
+        snprintf(out, sizeof(out),
+                 "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"java_call_result\",\"ok\":false,"
+                 "\"error\":\"unknown callId %d (only the last 16 jobs are kept; poll while it runs)\"}\n",
+                 idj, call_id);
+        send_line(fd, out);
+        return;
+    }
+    size_t len = strlen(json) + 400;
+    char *out = (char *)malloc(len);
+    if (!out) {
+        adh_java_enum_free(json);
+        send_oom(fd, idj, "java_call_result");
+        return;
+    }
+    if (call_id > 0) {
+        snprintf(out, len, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"java_call_result\",\"ok\":true,\"call\":%s}\n",
+                 idj, json);
+    } else {
+        snprintf(out, len, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"java_call_result\",\"ok\":true,\"calls\":%s}\n",
+                 idj, json);
+    }
+    send_line(fd, out);
+    free(out);
+    adh_java_enum_free(json);
+}
 static void cmd_native_hook(int fd, const char *id, const char *action, const char *mode,
                             const char *module, const char *symbol, const char *addr,
                             int skip_original, const char *return_value, long long arg_index,
                             const char *arg_value, long long requested_id, int hard, int max_sites,
                             const char *sites_scope, int allow_writable_slots, int want_backtrace,
-                            int throttle_ms) {
+                            int throttle_ms, const char *mem_spec, int write_reg, int write_off,
+                            const char *write_hex, int set_errno, const char *after_spec,
+                            const char *filter_spec) {
     char idj[64];
     json_escape(id, idj, sizeof(idj));
     char error[512] = "";
@@ -400,7 +498,9 @@ static void cmd_native_hook(int fd, const char *id, const char *action, const ch
         ok = adh_native_hook_install(mode, module, symbol, addr, skip_original, return_value[0] ? 1 : 0,
                                     (uint64_t)strtoull(return_value, NULL, 0), (int)arg_index,
                                     (uint64_t)strtoull(arg_value, NULL, 0), max_sites, sites_scope,
-                                    allow_writable_slots, want_backtrace, throttle_ms, &new_id, error, sizeof(error));
+                                    allow_writable_slots, want_backtrace, throttle_ms, mem_spec,
+                                    write_reg, write_off, write_hex, set_errno, after_spec, filter_spec,
+                                    &new_id, error, sizeof(error));
     } else if (strcmp(action, "unhook") == 0) {
         ok = adh_native_hook_unhook((int)requested_id, hard, error, sizeof(error));
     } else if (strcmp(action, "status") == 0) {
@@ -490,6 +590,14 @@ static void command_loop(int fd) {
                     json_get_str(line, "via", via, sizeof(via));
                     long long size = json_get_num(line, "size");
                     cmd_read(fd, id, addr, size, via);
+                } else if (strcmp(op, "write") == 0) {
+                    // 4096-byte payload cap (advertised as limits.writeMax) = 8192 hex chars.
+                    static char waddr[40] = "", whex[9216] = "", wforce[8] = "";
+                    json_get_str(line, "addr", waddr, sizeof(waddr));
+                    json_get_str(line, "hex", whex, sizeof(whex));
+                    json_get_str(line, "force", wforce, sizeof(wforce));
+                    cmd_write(fd, id, waddr, whex,
+                              strcmp(wforce, "true") == 0 || strcmp(wforce, "1") == 0);
                 } else if (strcmp(op, "jni_hook") == 0) {
                     char jaction[16] = "";
                     json_get_str(line, "action", jaction, sizeof(jaction));
@@ -563,13 +671,48 @@ static void command_loop(int fd) {
                     json_get_str(line, "className", jcls, sizeof(jcls));
                     cmd_java_enum(fd, id, jcls);
                 } else if (strcmp(op, "java_call") == 0) {
-                    char jcls[256] = "", jmethod[128] = "", jparams[512] = "", jfield[128] = "", jargs[2048] = "";
+                    // 16 KiB of args JSON, not 2 KiB: replaying a protocol dispatcher means handing it
+                    // the payload the target itself used (Bridge.entry's signing input is ~1.5 KB, and
+                    // as {"$bytesHex":…} it doubles). A 2 KiB buffer truncated it mid-string and the
+                    // reply was "unterminated JSON string" — a parser error that reads like bad input.
+                    static char jargs[16384];
+                    char jcls[256] = "", jmethod[128] = "", jparams[512] = "", jfield[128] = "";
+                    char jdetach[8] = "";
                     json_get_str(line, "className", jcls, sizeof(jcls));
                     json_get_str(line, "method", jmethod, sizeof(jmethod));
                     json_get_str(line, "params", jparams, sizeof(jparams));
                     json_get_str(line, "field", jfield, sizeof(jfield));
                     json_get_str(line, "args", jargs, sizeof(jargs));
-                    cmd_java_call(fd, id, jcls, jmethod, jparams, jfield, jargs);
+                    json_get_str(line, "detach", jdetach, sizeof(jdetach));
+                    int jdet = (strcmp(jdetach, "true") == 0 || strcmp(jdetach, "1") == 0);
+                    cmd_java_call(fd, id, jcls, jmethod, jparams, jfield, jargs, jdet);
+                } else if (strcmp(op, "java_call_result") == 0) {
+                    cmd_java_call_result(fd, id, (int)json_get_num(line, "callId"));
+                } else if (strcmp(op, "hw_watch") == 0) {
+                    // Hardware watchpoint: either an absolute address now, or "arm when native hook
+                    // N returns" (the only moment a function's output buffer is both known and
+                    // live). One shot per arm; the hit is served by action:"status".
+                    char hact[16] = "", haddr[32] = "", hmode[8] = "", hbody[4096] = "", hspec[32] = "";
+                    json_get_str(line, "action", hact, sizeof(hact));
+                    json_get_str(line, "addr", haddr, sizeof(haddr));
+                    json_get_str(line, "mode", hmode, sizeof(hmode));
+                    json_get_str(line, "spec", hspec, sizeof(hspec));
+                    long long hlen = json_get_num(line, "len");
+                    long long hslot = json_get_num(line, "slot");
+                    long long hhook = json_get_num(line, "hookId");
+                    char hidj[64];
+                    json_escape(id, hidj, sizeof(hidj));
+                    if (strcmp(hact, "after") == 0) {
+                        adh_hw_watch_config_after((int)hhook, hspec, hbody, sizeof(hbody));
+                    } else {
+                        adh_hw_watch_cmd(hact, haddr, (int)(hlen > 0 ? hlen : 8), hmode, (int)hslot,
+                                         hbody, sizeof(hbody));
+                    }
+                    char hresp[4300];
+                    snprintf(hresp, sizeof(hresp),
+                             "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"hw_watch\",\"result\":%s}\n",
+                             hidj, hbody);
+                    send_line(fd, hresp);
                 } else if (strcmp(op, "native_hook") == 0) {
                     char naction[16] = "", nmode[16] = "", nmodule[128] = "", nsymbol[160] = "", naddr[32] = "";
                     char nskip[8] = "", nreturn[64] = "", nargvalue[64] = "";
@@ -611,7 +754,21 @@ static void command_loop(int fd) {
                     long long nthrottle = json_get_num(line, "throttleMs");
                     int nthrottle_ms = nthrottle > ADH_NATIVE_THROTTLE_MAX_MS ? ADH_NATIVE_THROTTLE_MAX_MS
                                        : (nthrottle > 0 ? (int)nthrottle : 0);
-                    cmd_native_hook(fd, id, naction, nmode, nmodule, nsymbol, naddr, nskip_original, nreturn, nargindex, nargvalue, nid, nhard_flag, nsites_flag, nscope, slots_writable_flag, backtrace_flag, nthrottle_ms);
+                    // Hit-time windows (mem before the call, memAfter after it), the pointer write
+                    // and the errno neutralization: parsed here, validated again by the install.
+                    char nmem[256] = "", nafter[64] = "", nwritehex[600] = "", nfilter[48] = "";
+                    json_get_str(line, "mem", nmem, sizeof(nmem));
+                    json_get_str(line, "memAfter", nafter, sizeof(nafter));
+                    json_get_str(line, "writeHex", nwritehex, sizeof(nwritehex));
+                    json_get_str(line, "filter", nfilter, sizeof(nfilter));
+                    long long nwreg = json_get_num(line, "writeReg");
+                    long long nwoff = json_get_num(line, "writeOff");
+                    long long nerrno = json_get_num(line, "errno");
+                    cmd_native_hook(fd, id, naction, nmode, nmodule, nsymbol, naddr, nskip_original,
+                                    nreturn, nargindex, nargvalue, nid, nhard_flag, nsites_flag,
+                                    nscope, slots_writable_flag, backtrace_flag, nthrottle_ms,
+                                    nmem, (int)nwreg, (int)(nwoff > 0 ? nwoff : 0), nwritehex,
+                                    (int)(nerrno > 0 ? nerrno : 0), nafter, nfilter);
                 } else if (strcmp(op, "native_call") == 0) {
                     char cmodule[128] = "", csymbol[160] = "", caddr[32] = "", cargs[256] = "";
                     json_get_str(line, "module", cmodule, sizeof(cmodule));
@@ -656,11 +813,12 @@ static void command_loop(int fd) {
                 } else if (strcmp(op, "file_probe") == 0) {
                     adh_cmd_file_probe(fd, id);
                 } else if (strcmp(op, "qbdi_trace") == 0) {
-                    char sl[64] = "", sy[80] = "", targs[256] = "";
+                    char sl[64] = "", sy[80] = "", targs[256] = "", taddr[40] = "";
                     json_get_str(line, "symLib", sl, sizeof(sl));
                     json_get_str(line, "symbol", sy, sizeof(sy));
                     json_get_str(line, "args", targs, sizeof(targs));
-                    adh_cmd_qbdi_trace(fd, id, sl, sy, targs);
+                    json_get_str(line, "addr", taddr, sizeof(taddr));
+                    adh_cmd_qbdi_trace(fd, id, sl, sy, targs, taddr);
                 } else if (strcmp(op, "compat_probe") == 0) {
                     adh_cmd_compat_probe(fd, id);
                 } else if (strcmp(op, "object_inspect") == 0) {

@@ -1,0 +1,40 @@
+name: host
+
+# The project's only gate used to be `tools/verify_all.sh` run by hand on one machine with a
+# rooted phone. That is why a red unit test (detect_summary) shipped inside the v0.4.0 release and
+# why the red-line walker in verify_v87 could scan zero daemon files for three weeks unnoticed.
+#
+# This workflow is the part of the gate that needs no device: the daemon's type check, its unit
+# suite, and the host-only operability gate (which includes the WS-B red line). Device scripts
+# still run manually — they need a rooted phone — but a change can no longer be merged with a
+# broken type or a failing unit test.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  host:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: daemon/package-lock.json
+      - name: Install
+        working-directory: daemon
+        run: npm ci
+      # Node 24 strips the types at run time and never checks them; this is the only place a
+      # missing import or a wrong property name becomes a failure instead of a runtime throw.
+      - name: Type check
+        working-directory: daemon
+        run: npm run typecheck
+      - name: Unit tests
+        working-directory: daemon
+        run: npm test
+      # Host-only, no device: every agent op must remain reachable from the MCP import graph, and
+      # no target-specific name (com.adh.sandbox / libjavacrypto) may reappear in product code.
+      - name: Operability + red line
+        run: bash tools/verify_v87_mcp_operability.sh

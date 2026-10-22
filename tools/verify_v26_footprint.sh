@@ -16,6 +16,15 @@ if [ ! -f "$SO" ]; then
   echo "FAIL  agent .so missing: $SO (run tools/build_agent.sh)"
   exit 1
 fi
+# A readelf that cannot run must SKIP, not FAIL: with no tool the script has no evidence at all,
+# yet it used to print `defined-exports=none` and label the artifact as having no bootstrap
+# exports — a false red that reads exactly like a real footprint regression. Measured 2026-10-22
+# in WSL against a Windows SDK: env.sh falls back to the bare name and nothing is on PATH.
+if ! command -v "$READELF" >/dev/null 2>&1 && [ ! -x "$READELF" ]; then
+  echo "RESULT:SKIP llvm-readelf not usable (READELF='${READELF:-<unset>}' — set ADH_READELF or ANDROID_SDK_ROOT)"
+  echo "⏭ static injection footprint SKIP"
+  exit 0
+fi
 
 SECTIONS="$("$READELF" -SW "$SO")"
 DYNSYM="$("$READELF" --dyn-syms --wide "$SO")"

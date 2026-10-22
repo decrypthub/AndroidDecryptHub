@@ -179,11 +179,16 @@ export function summarizeDetection(records: readonly DetectRecord[], armed: bool
   }));
   const unchecked = KIND_LABEL.filter((k) => k.core && (counts.get(k.id) ?? 0) === 0).map((k) => k.label);
   const total = hits.length;
-  let reason = '';
+  // Short labels (the Web summary line, 2026-10-20). `armed === null` means "no capture_start
+  // reply seen yet" and used to fall through to an empty string, which made "we do not know"
+  // indistinguishable from "nothing to say" for every consumer of this payload.
+  let reason = '状态未知';
   if (armed === false) reason = '未开';
   else if (armed === true && total === 0) reason = '已开 · 暂无';
   else if (armed === true) reason = '已开';
-  return { armed, reason, caveat: '', unchecked, kinds, hits: hits.slice(-40) };
+  // The caveat stays on the payload even though the Web summary line no longer renders it: an MCP
+  // consumer reading `detect_summary` still has to know what this view cannot see.
+  return { armed, reason, caveat: CAVEAT, unchecked, kinds, hits: hits.slice(-40) };
 }
 
 /** True when a capture_start reply shows at least one system hook installed. null = no reply yet. */

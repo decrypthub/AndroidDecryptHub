@@ -28,12 +28,44 @@ extern "C" {
 // never mistaken for a quiet target. The throttle suppresses EVENTS ONLY: the argument/return
 // rewrite and the "do not call the original" answer are applied to throttled hits as well. Values
 // are clamped to 0..60000 ms (0 = every hit emits), and status echoes the effective value.
+// mem_spec is an optional hit-time memory window list. "auto" copies 64 bytes from
+// each of x0-x8 that is a readable pointer (integers are skipped, at most 4 windows).
+// An explicit list is "x0:64" or "x0+16:32,x2:64" (registers x0-x8 only). Empty means
+// no copy. Caps match daemon/src/native_hook_args.ts: at most 4 windows, each 1..1024
+// bytes, 4096 bytes total, offset 0..65535. The copy happens on the hit thread BEFORE
+// the original runs, and only for hits that emit an event. A bad spec refuses the install.
+//
+// The ceiling used to be 192 bytes per window and 512 total, which turned out to be the wrong
+// number for the case that matters: a signature preimage ("POST /path " + a body hash + the
+// remaining arguments) is 1.5-2 KB, so the ONE buffer worth reading was the one the tool could not
+// show. A bigger cap costs nothing until somebody asks for it - the copy is bounded by the spec the
+// caller wrote, and the per-hit static cost is a 4 KB array.
+#define ADH_MEM_WIN_MAX 4
+#define ADH_MEM_WIN_LEN 1024
+#define ADH_MEM_WIN_TOTAL 4096
+#define ADH_MEM_WIN_OFF_MAX 65535
+
+// Hard ceiling of concurrent native hooks. Lives here (not native_hooks.cpp) so the hello `caps`
+// message cannot advertise a different number than the install path enforces.
+#define ADH_NATIVE_MAX_HOOKS 16
+// Hit-time pointer write: at most this many bytes copied into one x0-x8 argument per hit.
+#define ADH_HOOK_WRITE_MAX 256
+
+// after_spec is an optional POST-CALL memory window, same syntax as mem_spec ("x0:256" or
+// "x0+16:32"), at most ONE window of 1..512 bytes. It is copied after the original returns, which is
+// the only way to see what a function WROTE: a compressor's output buffer, a decrypted plaintext, a
+// PRG's keystream. An empty spec keeps the fast path (a tail jump to the original); a non-empty one
+// switches that hook to a stub that calls the original, records, and returns its value unchanged.
+#define ADH_MEM_AFTER_MAX 512
+
 int adh_native_hook_install(const char *mode, const char *module, const char *symbol,
                             const char *addr, int skip_original, int return_set,
                             uint64_t return_value, int arg_index, uint64_t arg_value,
                             int max_sites, const char *sites_scope, int allow_writable_slots,
-                            int want_backtrace, int throttle_ms, int *hook_id_out, char *error,
-                            size_t error_size);
+                            int want_backtrace, int throttle_ms, const char *mem_spec,
+                            int write_reg, int write_off, const char *write_hex,
+                            int set_errno, const char *after_spec, const char *filter_spec,
+                            int *hook_id_out, char *error, size_t error_size);
 // hard=1 destroys the inline patch (DobbyDestroy) after a quiesce window and frees the slot;
 // hard=0 keeps the soft-unhook semantics (stub stays installed but inactive).
 int adh_native_hook_unhook(int hook_id, int hard, char *error, size_t error_size);

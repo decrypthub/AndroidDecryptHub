@@ -215,6 +215,15 @@ SCRIPTS=(
   # v10.5 detection checklist: system-capture lines become debug/root/signature/emulator/integrity
   # counts, app-owned modules are selected, and the Java plan does not install without confirm.
   "verify_v105_detect_summary.sh:host"
+  # Hit-time memory windows: the host grammar (caps, canonical spec, typo refuses the
+  # install) and the wiring into MCP/REST/agent. The device half is v107.
+  "verify_v106_native_mem_window.sh:host"
+  # Device half: the companion record matches the buffer from BEFORE the hooked function
+  # flips it, and a small integer register is reported unreadable without killing the process.
+  "verify_v107_native_mem_window.sh:device"
+  # One readable native observation: the host joins the hook hit and its memory
+  # copy into a single sentence. Host-only; the device bytes stay on v107.
+  "verify_v108_native_look.sh:host"
 )
 
 pass=0; fail=0; skip=0; FAILED=""

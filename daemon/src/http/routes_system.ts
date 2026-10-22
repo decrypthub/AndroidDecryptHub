@@ -14,7 +14,7 @@ import { applyCaptureEnabled, listCaptureArmProtected } from '../service.ts';
 import {
   applyCaptureRetainCap, broadcast, captureHealth, capturePackage, captures, captureTimers,
   clearCaptureStore, clearPackageCaptureStore, configStats, cryptoIdentify, dumps, eventPackage,
-  events, EVENTS_FILE, exportPackageCapturesJsonl, log, mergeSettings, packageCaptureDiskStats,
+  events, EVENTS_FILE, exportPackageCapturesJsonl, hexToPreview, log, mergeSettings, packageCaptureDiskStats,
   previewForCapture, readBody, saveSettings, sessions, settings,
 } from '../state.ts';
 import type { Route, RouteContext } from './types.ts';

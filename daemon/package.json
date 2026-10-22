@@ -8,13 +8,17 @@
     "start": "node src/index.ts",
     "dev": "node --watch src/index.ts",
     "smoke": "node test/smoke.ts",
-    "adh": "node src/cli.ts"
+    "adh": "node src/cli.ts",
+    "test": "node test/run.mjs \"test/*.test.ts\"",
+    "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
     "capstone-wasm": "^1.0.3",
     "ws": "^8.18.0"
   },
   "devDependencies": {
-    "selfsigned": "^5.5.0"
+    "@types/node": "^24.19.2",
+    "selfsigned": "^5.5.0",
+    "typescript": "^5.9.3"
   }
 }

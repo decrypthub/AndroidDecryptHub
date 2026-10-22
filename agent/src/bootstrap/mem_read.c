@@ -86,6 +86,8 @@ int adh_mem_open_errno(void) {
 int adh_mem_region_end(unsigned long long addr, unsigned long long *end) {
     FILE *m = fopen("/proc/self/maps", "r");
     if (!m) return 0;
+    // maps lists canonical ranges; a tagged heap pointer would sort past every of them.
+    addr = adh_untag(addr);
     char line[1024];
     int found = 0;
     while (fgets(line, sizeof(line), m)) {
@@ -169,7 +171,10 @@ static ssize_t adh_mem_copy_guarded(void *dst, const void *src, size_t n) {
 ssize_t adh_mem_pread(void *dst, size_t n, unsigned long long addr) {
     if (!dst || n == 0) return 0;
     int fd = adh_mem_fd();
-    if (fd >= 0) return pread(fd, dst, n, (off_t)addr);
+    // The tag (Scudo top byte) is not part of the address and is not a valid file offset: passing
+    // it to pread answered EINVAL for EVERY heap pointer, so read/heap traces silently failed on
+    // targets whose allocator tags pointers.
+    if (fd >= 0) return pread(fd, dst, n, (off_t)adh_untag(addr));
     return adh_mem_read_direct(dst, n, addr);
 }
 

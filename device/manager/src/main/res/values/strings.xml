@@ -1,6 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">AndroidDecryptHub</string>
+    <string name="tab_home">首页</string>
+    <string name="tab_apps">应用</string>
+    <string name="tab_certs">证书</string>
+    <string name="apps_title">应用列表</string>
+    <string name="fact_module">模块</string>
+    <string name="fact_app">应用</string>
+    <string name="fact_model">型号</string>
+    <string name="fact_system">系统</string>
+    <string name="fact_abi">架构</string>
+    <string name="fact_update">更新</string>
+    <string name="system_line">Android %1$s · API %2$d</string>
+    <string name="update_checking">正在检查</string>
+    <string name="update_failed">检查失败</string>
+    <string name="update_current">已是最新</string>
+    <string name="update_available">有更新 %1$s</string>
     <string name="section_configuration">配置</string>
     <string name="section_web_ui">Web UI</string>
     <string name="version_module">模块 %1$s</string>
@@ -8,6 +23,9 @@
     <string name="status_title_running">ADH 运行中</string>
     <string name="status_title_checking">ADH 检查中</string>
     <string name="status_title_abnormal">ADH 运行异常</string>
+    <string name="status_detail_checking">正在检查设备服务</string>
+    <string name="status_detail_loader_inactive">加载器未激活</string>
+    <string name="status_detail_not_installed">模块未安装</string>
     <string name="scope_title">注入范围</string>
     <string name="scope_count">已选择 %1$d 个应用</string>
     <string name="scope_selected">已选择 %1$d 个应用</string>
@@ -51,15 +69,17 @@
     <string name="app_hook_config">Hook 配置</string>
     <string name="app_hooks_trimmed">已裁剪钩子</string>
     <string name="hook_config_title">Hook 配置</string>
-    <string name="hook_config_lead">这里决定下次注入时装哪些捕获。加解密默认开；「系统检测」默认关，打开后才会观察反调试、查 root 等行为。关掉的项不会装进进程。电脑网页「设置 → 实时捕获」仍可强制停捕。</string>
+    <string name="hook_tab_crypto">加解密</string>
+    <string name="hook_tab_capture">系统抓包</string>
+    <string name="hook_tab_system">系统检测</string>
     <string name="hook_family_digest">摘要（MD5/SHA）</string>
     <string name="hook_family_hmac">HMAC</string>
     <string name="hook_family_symmetric">对称（AES/DES）</string>
     <string name="hook_family_asymmetric">非对称（RSA/EC）</string>
     <string name="hook_family_tls">TLS 明文</string>
     <string name="hook_family_aead">AEAD</string>
-    <string name="hook_family_system">系统检测（反调试 / root）</string>
-    <string name="hook_config_reset">恢复默认</string>
+    <string name="hook_family_system">反调试 / root / 属性</string>
+    <string name="hook_copy_package">复制包名</string>
     <string name="cert_title">系统证书</string>
     <string name="cert_count">已导入 %1$d 张</string>
     <string name="cert_hint">导入 CA，重启后进入系统信任库</string>

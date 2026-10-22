@@ -2,6 +2,7 @@
 // They deliberately live in the daemon: the agent only reads bytes.
 import { CAPSTONE_VERSION, disasmBytes } from './capstone.ts';
 import { modulesFromMaps, sendCmd } from './service.ts';
+import type { MapsRegion } from './state.ts';
 
 export interface LiveDisasmOptions {
   addr?: string | number;
@@ -51,7 +52,13 @@ export interface AddressClass { mapped: boolean; executable: boolean; path?: str
  * must be mapped AND executable before the agent is asked to call it. Kept here so the two paths
  * cannot drift - the REST route used to skip the check the MCP tool performed.
  */
-export async function assertCallableAddress(sid: string, addr: unknown): Promise<{ ok: true; addr: string } | { ok: false; error: string }> {
+// Shape note: optional fields instead of a `{ok:true}|{ok:false}` discriminated union. With
+// `strictNullChecks` off (tsconfig), TypeScript does not narrow a boolean-literal discriminant, so
+// the union form produced a false "property 'error' does not exist" at every caller. The runtime
+// shape is unchanged; re-tighten this once strictNullChecks is enabled.
+export async function assertCallableAddress(
+  sid: string, addr: unknown,
+): Promise<{ ok: boolean; addr?: string; error?: string }> {
   // A missing address (undefined / null / '' / 0) means "use module+symbol"; anything else is text.
   // JSON callers that send addr:0 with module+symbol used to have it stringified into "0" and
   // rejected as unmapped instead of falling back to the symbol path.
@@ -159,7 +166,7 @@ export async function liveDisasm(sid: string, opts: LiveDisasmOptions): Promise<
     Math.min(4096, Math.floor(usableLength / 4)),
   );
   const decodedBytes = instructions.reduce((n, i) => n + Math.floor(i.bytes.length / 2), 0);
-  return {
+  const out: any = {
     addr: hexAddress(address),
     resolvedFrom,
     requestedSize: aligned,
@@ -173,4 +180,11 @@ export async function liveDisasm(sid: string, opts: LiveDisasmOptions): Promise<
     undecodedBytes: raw.length - decodedBytes,
     instructions,
   };
+  if (!instructions.length) {
+    // An empty list is a real answer, not a failure: the address holds no AArch64 instruction
+    // (alignment padding between functions, a literal pool, a data page). Say that, so nobody
+    // reads "0 instructions" as "the tool is broken" and re-runs it forever.
+    out.note = 'no instruction decoded at this address: the bytes are not AArch64 code (padding, literal pool or data)';
+  }
+  return out;
 }

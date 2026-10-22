@@ -1,6 +1,7 @@
 {
-  "version": "v0.4.0",
-  "versionCode": 23,
-  "zipUrl": "https://github.com/decrypthub/AndroidDecryptHub/releases/download/v0.4.0/adh-bundle-v0.4.0.zip",
-  "changelog": "https://github.com/decrypthub/AndroidDecryptHub/releases/tag/v0.4.0"
+  "version": "v0.4.1",
+  "versionCode": 24,
+  "zipUrl": "https://github.com/decrypthub/AndroidDecryptHub/releases/download/v0.4.1/adh-bundle-v0.4.1.zip",
+  "changelog": "https://github.com/decrypthub/AndroidDecryptHub/releases/tag/v0.4.1",
+  "verifiedAt": "2026-10-21T04:52:00Z"
 }

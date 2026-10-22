@@ -69,6 +69,16 @@ translation — kept separate).
    picking the newest session: a test that resolves a different process than it names is worse than
    one that fails.
 
+## `verify_pick.mjs` — 按改动选测试（别全跑）
+
+`node tools/verify_pick.mjs` 读 `git status` 的改动文件，反查最相关的验收脚本，**默认只打印、默认只列 host**。
+`--device` 才列真机脚本，`--run` 才执行（需要能跑的 bash），`--files a,b` 可显式指定，`--all` 取消 12 条截断。
+
+- 强规则在文件头的 `CURATED`（改了 `daemon/` → `v71` + `v87`；改 `native_hooks` → `v84`），其余靠改动文件名去脚本正文里反查（`native_hooks.cpp` → `native_hook`）。
+- 文档里挂着"偶发/未定因"的脚本带 ⚠ 标记（`v72` / `v22_capture` / `v08_xref` / `v01`）：**同一条失败最多复跑一次**。
+- 选不中时它明确说"没有定向规则"，并给最便宜的确认（`npm run typecheck && npm test`），而不是让你去跑全量。
+- **全量 `verify_all.sh` 只在发版、刷机、或用户明确要求时跑一次**（121 条：39 host + 82 device，device 每条都要冷启沙盒）。
+
 ## `verify_all.sh` — the regression runner
 
 - Runs `dev_up.sh` first, then each script in `SCRIPTS` (sequential; `:device` scripts force-stop + relaunch `com.adh.sandbox/.MainActivity` + sleep 4 first).

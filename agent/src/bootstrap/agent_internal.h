@@ -19,7 +19,7 @@
 // .so, so "which agent is flashed?" and "which module is flashed?" must not be two different
 // answers. Reported by compat_probe and in the hello; the string is already compiled in either
 // way, so surfacing it adds no new string to the release image (v88 unaffected).
-#define AGENT_VER   "0.4.0"
+#define AGENT_VER   "0.4.1"
 #define ADH_HOST    "127.0.0.1"
 #define ADH_PORT    8761
 // Loopback is always tried first (adb reverse). adh_agent_set_endpoint may name one extra
@@ -57,6 +57,28 @@ int read_full(int fd, unsigned char *buf, size_t n);
 // ---- mem.c ----
 char *build_maps_json(int limit, int *total, int *truncated);
 void cmd_read(int fd, const char *id, const char *addr_hex, long long size, const char *via);
+// Deliberate host-driven write (up to 4096 bytes). force:1 may patch a non-writable page; the
+// original protection is restored immediately, code pages get an I-cache flush, and the reply
+// carries the bytes that were replaced so the host can undo it. No force + a read-only page is
+// refused with the mapping's perms in the error, not attempted.
+void cmd_write(int fd, const char *id, const char *addr_hex, const char *hex, int force);
+// Strict even-length hex validation (hex2bytes stops at the first bad pair; a write may not).
+int adh_hex_strict(const char *hex, size_t *len_out);
+// The one "what is at this address" query (reads /proc/self/maps). perms is "rwx"-shaped, 5 bytes.
+int adh_mem_region_of(unsigned long long addr, char perms[5], unsigned long long *lo_out,
+                      unsigned long long *hi_out);
+// Copy into the target ONLY inside one already-writable mapping; never faults the caller's thread.
+// Used by the native-hook hit-time write.
+int adh_mem_write_checked(unsigned long long addr, const void *src, size_t len);
+
+// arm64 TBI / MTE: Scudo hands out heap pointers with a non-zero top byte (0xb4... on this ROM).
+// The tag is NOT part of the address: user VA is <= 56 bits. A direct dereference ignores it under
+// TBI, but the kernel interfaces do not - /proc/self/mem takes an off_t (a tagged value becomes a
+// huge/negative offset -> EINVAL) and /proc/self/maps only lists canonical ranges. Mask the top
+// byte for every kernel lookup; keep it for user-space copies so an MTE-tagged pointer still works.
+static inline unsigned long long adh_untag(unsigned long long addr) {
+    return addr & 0x00ffffffffffffffull;
+}
 // win_lo/win_hi bound the scan to [lo, hi) (0 = unbounded); regions outside are skipped, and the
 // reply echoes the window so a partial scan cannot read like a full one.
 void cmd_scan_magic(int fd, const char *id, unsigned long long win_lo, unsigned long long win_hi);

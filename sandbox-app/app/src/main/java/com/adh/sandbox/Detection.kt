@@ -9,6 +9,9 @@ object Detection {
     @JvmStatic external fun run(): Int
     @JvmStatic external fun staticCrypto(): Int
     @JvmStatic external fun nativeHookProbe(): Int
+    // Restores a known 8-byte buffer, calls adh_mem_window_target (which then flips byte 0),
+    // and returns (mutatedByte << 8) | sum. The hit-time window must still show the original bytes.
+    @JvmStatic external fun memWindowProbe(): Int
     @JvmStatic external fun jniRegisterProbe(): Int
     @JvmStatic external fun jniRegisteredProbe(): Int
     // v4.18 JNIEnv table probe: native code calls FindClass / GetMethodID / GetStaticMethodID /

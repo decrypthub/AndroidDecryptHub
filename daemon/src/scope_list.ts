@@ -43,7 +43,8 @@ export function applicationLabel(badging: string): string {
 }
 
 let cache: { at: number; packages: string[]; error: string | null } | null = null;
-const labelJobs = new Map<string, Promise<string>>();
+// The job's value is the label write, not the label: `resolveLabel` is consumed inside the .then.
+const labelJobs = new Map<string, Promise<void>>();
 
 function adbBase(): string[] {
   const serial = process.env.ANDROID_SERIAL || process.env.ADH_SERIAL || '';
@@ -192,24 +193,39 @@ export function ensureAdbReverse(ports: number[], log: (line: string) => void): 
   });
 }
 
-const SANDBOX_PKG = 'com.adh.sandbox';
-
 /** Cached allowlist packages only — never merge capture-disk history into this list. */
 export function cachedScopePackages(): string[] {
   return cache?.packages ? [...cache.packages] : [];
 }
 
 /**
- * Whether Host should auto-arm capture for this package.
- * Sandbox is always allowed (模拟注入 may not be in scope.json).
- * If scope has never been read successfully, allow (fail open) so Zygisk sessions still arm.
+ * Pure rule: may the Host auto-arm capture for this session?
+ *
+ * - `entry === 'jni_onload'` is the self-load path (the sandbox dlopens the agent): always
+ *   allowed, because 模拟注入 targets are usually not in scope.json.
+ * - a scope that was never read successfully fails open, so Zygisk sessions still arm.
+ * - otherwise the package must be in the checked scope list.
+ *
+ * This used to special-case the sandbox PACKAGE NAME, which put a target's identity inside the
+ * daemon; the red-line gate could not see it (it only scanned C/C++ in the daemon tree). The
+ * agent already reports HOW it was loaded, so keying on that is both target-agnostic and truer:
+ * any process that loaded the agent itself is a deliberate self-injection.
  */
-export function shouldAutoArmPackage(pkg: string): boolean {
+export function autoArmAllowed(
+  pkg: string,
+  entry: string | undefined,
+  scope: { packages: string[]; error: string | null } | null,
+): boolean {
   if (!pkg || pkg === '?') return false;
-  if (pkg === SANDBOX_PKG) return true;
-  if (!cache) return true;
-  if (cache.error && cache.packages.length === 0) return true;
-  return cache.packages.includes(pkg);
+  if (entry === 'jni_onload') return true;
+  if (!scope) return true;
+  if (scope.error && scope.packages.length === 0) return true;
+  return scope.packages.includes(pkg);
+}
+
+/** Whether Host should auto-arm capture for this package. */
+export function shouldAutoArmPackage(pkg: string, entry?: string): boolean {
+  return autoArmAllowed(pkg, entry, cache);
 }
 
 /** Packages currently checked on the attached phone, with launcher names. */

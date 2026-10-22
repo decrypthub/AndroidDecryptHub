@@ -5,7 +5,9 @@
 export interface HpackField { name: string; value: string }
 
 export interface HpackDecoder {
-  decode(block: Buffer): { ok: true; fields: HpackField[] } | { ok: false; error: string };
+  // Optional fields instead of a discriminated union: `strictNullChecks` is off, so a
+  // boolean-literal discriminant does not narrow (see tsconfig.json).
+  decode(block: Buffer): { ok: boolean; fields?: HpackField[]; error?: string };
 }
 
 const STATIC: HpackField[] = [

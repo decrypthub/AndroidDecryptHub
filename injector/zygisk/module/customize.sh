@@ -28,8 +28,11 @@ if unzip -l "$ZIPFILE" 'manager.apk' >/dev/null 2>&1; then
   unzip -o "$ZIPFILE" 'manager.apk' 'manager.apk.sha256' -d "$MODPATH" >&2
   set_perm "$MODPATH/manager.apk" 0 0 0644
   set_perm "$MODPATH/manager.apk.sha256" 0 0 0644
+  # Accept both "hash  manager.apk" and legacy GNU "hash *manager.apk" (busybox ok, toybox not).
   if ! (cd "$MODPATH" && sha256sum -c -s manager.apk.sha256); then
-    abort "! Bundled AndroidDecryptHub checksum verification failed"
+    if ! (cd "$MODPATH" && sed 's/ \*/  /' manager.apk.sha256 | sha256sum -c -s); then
+      abort "! Bundled AndroidDecryptHub checksum verification failed"
+    fi
   fi
   ui_print "- Verified AndroidDecryptHub APK"
   if [ "$BOOTMODE" = true ] && [ -x /system/bin/pm ]; then

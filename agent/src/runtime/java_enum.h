@@ -21,6 +21,18 @@ int adh_java_call_json(JNIEnv *env, const char *class_name, const char *method_n
                        const char *params, const char *field_name, const char *args_json,
                        char **out_json, char *error, size_t error_size);
 
+// Detached call: run the same invocation on its own attached thread and return a job id (>0), or
+// -1 with a reason. A target method that blocks then parks that thread instead of the command
+// channel, so the session stays answerable. Poll it with adh_java_call_async_status.
+int adh_java_call_async_start(const char *class_name, const char *method_name, const char *params,
+                              const char *field_name, const char *args_json,
+                              char *error, size_t error_size);
+// JSON for one job ("running" | "done" | "failed", with call/error), or NULL if the id is unknown.
+// Free with adh_java_enum_free. Safe to call repeatedly.
+char *adh_java_call_async_status(int id);
+// JSON array summarising every retained job (no results). Free with adh_java_enum_free.
+char *adh_java_call_async_list(void);
+
 #ifdef __cplusplus
 }
 #endif

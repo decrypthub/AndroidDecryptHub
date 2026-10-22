@@ -171,6 +171,28 @@ long adh_sub_target(long a, long b) {
 long adh_add_target(long a, long b) {
     return (a + b) * 2;
 }
+
+// Hit-time memory window fixture. The probe restores a known 8-byte buffer, then calls this.
+// The function flips byte 0 on the way out, so a copy taken AFTER the call would not match
+// the bytes the hook is required to have captured at entry.
+static unsigned char g_mem_window_bytes[8];
+
+__attribute__((noinline, used, visibility("default")))
+int adh_mem_window_target(unsigned char *p) {
+    if (!p) return -1;
+    int sum = 0;
+    for (int i = 0; i < 8; i++) sum = (sum + p[i]) & 0xff;
+    p[0] = (unsigned char)(p[0] ^ 0xff);
+    return sum;
+}
+
+JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_memWindowProbe(JNIEnv *env, jclass clazz) {
+    (void)env; (void)clazz;
+    static const unsigned char k[8] = { 0x41, 0x44, 0x48, 0x4d, 0x45, 0x4d, 0x30, 0x31 };
+    memcpy(g_mem_window_bytes, k, 8);
+    int sum = adh_mem_window_target(g_mem_window_bytes);
+    return (sum & 0xff) | (((int)g_mem_window_bytes[0]) << 8);
+}
 // Deterministic trigger for the generic native-hook manager: an explicit JNI call into
 // adh_trace_target() lets the acceptance script install an inline/GOT hook and observe it.
 JNIEXPORT jint JNICALL Java_com_adh_sandbox_Detection_nativeHookProbe(JNIEnv *env, jclass clazz) {

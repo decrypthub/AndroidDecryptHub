@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { syscallTraceStart, syscallTraceDigest, syscallTraceStop } from '../src/syscall_trace.ts';
 
-function fakeDeps({ watch, digest, unhook } = {}) {
+// Untyped injection point on purpose: each test overrides only the phase it exercises.
+function fakeDeps({ watch, digest, unhook }: any = {}) {
   const calls = { watch: [], digest: [], unhook: [] };
   return {
     calls,

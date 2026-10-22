@@ -10,13 +10,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -28,11 +26,9 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.FilterList
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.RestartAlt
-import androidx.compose.material.icons.rounded.Save
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.Tune
-import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -95,7 +91,6 @@ private enum class AppListFilter {
 fun ScopeScreen(
     repository: ScopeRepository,
     draft: ScopeDraft,
-    onBack: () -> Unit,
     onOpenHook: (String) -> Unit,
     onPersist: () -> Unit,
 ) {
@@ -260,7 +255,7 @@ fun ScopeScreen(
                     } else {
                         Column {
                             Text(
-                                text = stringResource(R.string.scope_title),
+                                text = stringResource(R.string.apps_title),
                                 style = MaterialTheme.typography.titleLarge,
                                 fontWeight = FontWeight.SemiBold,
                             )
@@ -273,11 +268,13 @@ fun ScopeScreen(
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = { if (searching) closeSearch() else onBack() }) {
-                        Icon(
-                            Icons.AutoMirrored.Rounded.ArrowBack,
-                            contentDescription = stringResource(R.string.back),
-                        )
+                    if (searching) {
+                        IconButton(onClick = { closeSearch() }) {
+                            Icon(
+                                Icons.AutoMirrored.Rounded.ArrowBack,
+                                contentDescription = stringResource(R.string.back),
+                            )
+                        }
                     }
                 },
                 actions = {
@@ -312,21 +309,6 @@ fun ScopeScreen(
                     }
                 },
             )
-        },
-        bottomBar = {
-            Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
-                Button(
-                    enabled = !loading && !loadFailed && !daemonUnavailable,
-                    onClick = { onPersist() },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                ) {
-                    Icon(Icons.Rounded.Save, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text(stringResource(R.string.save))
-                }
-            }
         },
     ) { padding ->
         Column(

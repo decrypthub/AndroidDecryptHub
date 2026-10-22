@@ -859,8 +859,11 @@ export function codeItemOf(buf: Buffer, midx: number): string {
   const r = codeItemOfDetailed(buf, midx);
   return r.ok ? r.hex : '';
 }
+// Optional fields, not a discriminated union: with `strictNullChecks` off (tsconfig) TypeScript
+// does not narrow a boolean-literal discriminant, so `if (ci.ok) ... else ci.reason` did not
+// type-check even though the runtime shape is exactly a union. Same runtime, re-tighten later.
 export function codeItemOfDetailed(buf: Buffer, midx: number):
-    { ok: true; hex: string; size: number; tries: number } | { ok: false; reason: string } {
+    { ok: boolean; hex?: string; size?: number; tries?: number; reason?: string } {
   const u32 = (o: number) => buf.readUInt32LE(o);
   if (buf.length < 112) return { ok: false, reason: 'not a dex (too short)' };
   const classDefsSize = u32(96), classDefsOff = u32(100);

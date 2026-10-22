@@ -7,6 +7,7 @@ import type { IncomingMessage } from 'node:http';
 import { mkdirSync, writeFileSync, existsSync, appendFileSync, readFileSync, readdirSync, statSync, unlinkSync, openSync, readSync, closeSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
 import { artifactKindOf, artifactSidecarPath, parseArtifactProvenance, planArtifactEviction } from './artifacts.ts';
@@ -18,9 +19,15 @@ import {
   loadCapturesFromDisk, pruneCapturesOlderThan, readPackageCapturesJsonl,
   trimPackageCapturesFile,
 } from './capture_persist.ts';
+import { memCapturePreview } from './native_hook_args.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-export const CAPTURES = join(__dirname, '..', '..', 'captures');
+// The test runner gives every test FILE its own process (test/run.mjs sets ADH_SKIP_ARTIFACT_LOAD).
+// Without a private root they all write the same captures/ and adhd-data/ files; on Windows a second
+// writer makes the first fail with a sharing violation, which surfaced as a random test file failing
+// at ~2.7s with fewer tests counted. Under the flag everything goes to OS temp instead of the checkout.
+const _testRoot = process.env.ADH_SKIP_ARTIFACT_LOAD === '1' ? join(tmpdir(), `adh-test-${process.pid}`) : '';
+export const CAPTURES = _testRoot ? join(_testRoot, 'captures') : join(__dirname, '..', '..', 'captures');
 mkdirSync(CAPTURES, { recursive: true });
 
 // ---- wire framing (v2.0, WS-D): [u32 len BE][u8 type][payload] -------------
@@ -64,6 +71,14 @@ export interface AgentSession {
   // captureHooks below (`captureHooks.skipped`). The agent cannot pre-empt it: it carries no module
   // name to arm with (see the note above adh_cmd_capture_start in agent/src/capture/capture.c).
   policy?: string;
+  // What THIS build says it can do (hello + the `caps` frame right after it): every op it
+  // dispatches plus the limits that decide whether a plan is feasible. Served verbatim by the
+  // `capabilities` tool so a client plans from the running agent, not from a document.
+  caps?: { ops?: string[]; limits?: Record<string, number>; error?: string };
+  // Startup policy that actually ran for this session (see settings.startup). Present only when
+  // the policy was enabled AND applied; the hookIds are what `recipe anti_debug undoHookIds`
+  // needs, so a caller never has to guess which hooks the daemon installed by itself.
+  startupHooks?: { appliedAt: number; module: string; hookIds: number[]; failed: { symbol: string; error: string }[]; widenedAt?: number };
   connectedAt: number;
   lastSeen: number;
   online: boolean;
@@ -78,6 +93,7 @@ export type AgentMsg =
   | ({ t: 'hello' } & Partial<AgentSession>)
   | { t: 'maps'; count: number; regions?: MapsRegion[] }
   | { t: 'ping'; ts?: number }
+  | { t: 'caps'; ops?: string[]; limits?: Record<string, number>; error?: string }
   | { t: 'cmdResult'; id: string; op: string; ok: boolean; [k: string]: unknown };
 
 export interface DumpMeta {
@@ -176,7 +192,7 @@ const _dataRoot = join(__dirname, '..', '..');
 // two machines, and on SMB the corrupt file could not even be renamed away from Linux (`mv` →
 // "device or resource busy") because the other host still held it. Point ADH_DATA_DIR at local disk
 // on any machine sharing this checkout. Default is unchanged for single-machine use.
-export const DATA_DIR = process.env.ADH_DATA_DIR ?? join(_dataRoot, 'adhd-data');
+export const DATA_DIR = process.env.ADH_DATA_DIR ?? (_testRoot ? join(_testRoot, 'adhd-data') : join(_dataRoot, 'adhd-data'));
 mkdirSync(DATA_DIR, { recursive: true });
 export const EVENTS_FILE = join(DATA_DIR, 'events.jsonl');
 interface Ev { seq: number; ts: number; type: string; data: any }
@@ -209,6 +225,12 @@ export interface Settings {
   // On-disk artifact retention (captures/ dump files). Capture event logs live under adhd-data/packages/.
   // maxAgeDays = 0 disables the age rule; the size budget still applies.
   artifacts: { maxBytes: number; maxAgeDays: number };
+  // Startup policy: applied the moment a session's hello arrives, before the agent starts the
+  // capture loop and before the host waits for any command round trip. This is the host-side
+  // approximation of the Zygisk pre-arm: it loses to a check that runs in .init_array, but wins
+  // over "someone types the command 30 seconds later". OFF by default because neutralizing
+  // access()/faccessat() makes every path check in the app fail - a deliberate choice per target.
+  startup: { antiDebug: boolean; module: string; extraTargets: string[]; packages: string[]; widenAfterMs: number; widenTargets: string[] };
 }
 export const DEFAULT_SETTINGS: Settings = {
   // cryptoModule: which module's GOT holds the EVP/SSL calls the agent hooks. The agent bakes
@@ -227,6 +249,7 @@ export const DEFAULT_SETTINGS: Settings = {
   capture: { enabled: true, autoDumpDex: true, retain: 1000, maxAgeDays: 14, families: { digest: true, hmac: true, symmetric: true, asymmetric: true, tls: true, aead: true }, cryptoModule: 'libjavacrypto.so', fileModule: '', sysModule: '' },
   ui: { displayCap: 300 },
   artifacts: { maxBytes: 8 * 1024 ** 3, maxAgeDays: 14 },
+  startup: { antiDebug: false, module: 'libc.so', extraTargets: [], packages: [], widenAfterMs: 0, widenTargets: ['access', 'faccessat'] },
 };
 export let settings: Settings = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
 // section-merge (like IDH /api/settings/import): only the segments present in `patch` apply.
@@ -256,6 +279,34 @@ export function mergeSettings(patch: any): string[] {
     if (Number.isFinite(a.maxBytes)) settings.artifacts.maxBytes = Math.max(256 * 1024 ** 2, Math.min(512 * 1024 ** 3, Math.floor(a.maxBytes)));
     if (Number.isFinite(a.maxAgeDays)) settings.artifacts.maxAgeDays = Math.max(0, Math.min(365, Math.floor(a.maxAgeDays)));
     applied.push('artifacts');
+  }
+  if (patch.startup && typeof patch.startup === 'object') {
+    const s = patch.startup;
+    if (typeof s.antiDebug === 'boolean') settings.startup.antiDebug = s.antiDebug;
+    if (typeof s.module === 'string') settings.startup.module = s.module.trim() || 'libc.so';
+    if (Array.isArray(s.extraTargets)) {
+      // Only symbol names: the return/errno pair is a policy decision made in service.ts, not
+      // something a settings patch can invent.
+      settings.startup.extraTargets = s.extraTargets
+        .filter((x: unknown) => typeof x === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(x))
+        .slice(0, 16);
+    }
+    if (Array.isArray(s.packages)) {
+      // Empty = every package. A non-empty list is the safe form: pre-arming neutralizes path
+      // checks process-wide, so it is a per-target choice, not a daemon-wide default.
+      settings.startup.packages = s.packages
+        .filter((x: unknown) => typeof x === 'string' && /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$/.test(x))
+        .slice(0, 32);
+    }
+    // Delayed widening: install the checks that are unsafe during initialization once the app has
+    // settled (see service.ts startupWidenPlan). 0 = off, max 10 minutes.
+    if (Number.isFinite(s.widenAfterMs)) settings.startup.widenAfterMs = Math.max(0, Math.min(600000, Math.floor(s.widenAfterMs)));
+    if (Array.isArray(s.widenTargets)) {
+      settings.startup.widenTargets = s.widenTargets
+        .filter((x: unknown) => typeof x === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(x))
+        .slice(0, 8);
+    }
+    applied.push('startup');
   }
   return applied;
 }
@@ -414,10 +465,18 @@ function backfillUnlabeledDumps(): number {
 }
 
 { // re-adopt what is already on disk (see loadArtifactsFromDisk)
-  const a = loadArtifactsFromDisk();
-  const labeled = backfillUnlabeledDumps();
-  if (a.loaded || a.skipped) log(`[artifacts] 从磁盘恢复 ${a.loaded} 个工件（跳过 ${a.skipped}，${(a.bytes / 1048576).toFixed(1)} MiB，${a.ms}ms）`);
-  if (labeled) log(`[artifacts] 从事件日志补上 ${labeled} 个工件的包名`);
+  // Tests (and CI) must not depend on whatever sits in the developer's captures/ directory: every
+  // test process would scan ~1.2 GiB at import, which made the parallel suite flaky under I/O
+  // contention (a file would occasionally fail with no useful output). `npm test` runs through
+  // test/run.mjs, which sets this before the runner spawns the per-file processes.
+  if (process.env.ADH_SKIP_ARTIFACT_LOAD === '1') {
+    log('[artifacts] ADH_SKIP_ARTIFACT_LOAD=1 - starting with an empty artifact store');
+  } else {
+    const a = loadArtifactsFromDisk();
+    const labeled = backfillUnlabeledDumps();
+    if (a.loaded || a.skipped) log(`[artifacts] 从磁盘恢复 ${a.loaded} 个工件（跳过 ${a.skipped}，${(a.bytes / 1048576).toFixed(1)} MiB，${a.ms}ms）`);
+    if (labeled) log(`[artifacts] 从事件日志补上 ${labeled} 个工件的包名`);
+  }
 }
 /** Retention accounting for the in-memory capture list. Pass a session for that session's view. */
 export function captureStoreStats(session?: string) {
@@ -563,6 +622,22 @@ export function capturePackage(c: { package?: string; sessionId?: string }): str
     if (pkg && pkg !== '?') return pkg;
   }
   return '';
+}
+/**
+ * Narrow the live capture store the way `http_exchanges` already does. Kept pure and exported
+ * because "the sandbox self-check records and the target's records are one undifferentiated
+ * stream" was a real defect: a caller could only tell them apart by reading every record.
+ * `package` is resolved per record (its own stamp first), so a target's records stay attributable
+ * after its process exits and the session is pruned.
+ */
+export function filterLiveCaptures<T extends { category: string; package?: string; sessionId: string }>(
+  list: readonly T[], opts: { category?: string; session?: string; package?: string },
+): T[] {
+  let out = list as readonly T[];
+  if (opts.category) out = out.filter((c) => c.category === opts.category);
+  if (opts.session) out = out.filter((c) => c.sessionId === opts.session);
+  if (opts.package) out = out.filter((c) => capturePackage(c) === opts.package);
+  return out as T[];
 }
 export interface KnownApp {
   package: string; online: boolean; pids: number[]; sessions: number; lastSeen: number;
@@ -752,6 +827,10 @@ export function previewForCapture(func: string, hex: string): string {
     const url = httpCapturePreview(hexHead(hex, 4096));
     if (url) return url;
   }
+  if (func === 'NATIVE_HOOK_MEM') {
+    const line = memCapturePreview(Buffer.from(hex, 'hex').toString('utf8'));
+    if (line) return line.slice(0, 180);
+  }
   return hexToPreview(hex);
 }
 // Which UI axis a capture belongs to. Derived from the agent's func tag so the web can
@@ -759,7 +838,10 @@ export function previewForCapture(func: string, hex: string): string {
 // stamps func: EVP_*/HMAC_* (crypto), SSL_read/write (net), open*/read/write/close (file),
 // ptrace/access/faccessat/sysprop/propread (system) — see cmd_capture_start.
 export function categoryOf(func: string): CapCategory {
-  if (func === 'JAVA_HOOK' || func === 'NATIVE_HOOK' || func === 'JNI_NATIVE' || func === 'JNI_ONLOAD' || func === 'JNI_ENV') return 'system';
+  if (func === 'JAVA_HOOK' || func === 'NATIVE_HOOK' || func === 'NATIVE_HOOK_MEM' || func === 'JNI_NATIVE' || func === 'JNI_ONLOAD' || func === 'JNI_ENV') return 'system';
+  // A library mapped at runtime belongs with the system/hook observations: it is context for the
+  // other records (what appeared, and when), not a payload of its own.
+  if (func === 'MODULE_LOAD') return 'system';
   if (func === 'SSL_write' || func === 'SSL_read') return 'net';
   if (/^(open|openat|read|write|close)$/.test(func)) return 'file';
   if (/^(ptrace|access|faccessat|sysprop|propread|__system_property_get|getprop)$/.test(func)) return 'system';
@@ -768,6 +850,7 @@ export function categoryOf(func: string): CapCategory {
 export function classify(func: string): { algo: string; op: string } {
   if (func === 'JAVA_HOOK') return { algo: 'Java Hook', op: '方法调用' };
   if (func === 'NATIVE_HOOK') return { algo: 'Native Hook', op: '函数调用' };
+  if (func === 'NATIVE_HOOK_MEM') return { algo: '函数参数', op: '入口内容' };
   if (func === 'JNI_NATIVE') return { algo: 'JNI Hook', op: 'RegisterNatives' };
   if (func === 'JNI_ONLOAD') return { algo: 'JNI Hook', op: 'JNI_OnLoad' };
   if (func === 'JNI_ENV') return { algo: 'JNI Hook', op: 'JNIEnv' };
@@ -864,10 +947,42 @@ export function broadcast(event: string, data: unknown) {
 export function log(...a: unknown[]) {
   console.log(`[adhd ${new Date().toISOString()}]`, ...a);
 }
-export function readBody(req: IncomingMessage): Promise<string> {
-  return new Promise((resolve) => {
-    let b = '';
-    req.on('data', (c: Buffer) => (b += c));
-    req.on('end', () => resolve(b));
+// Requests are small: MCP JSON, a package name, a path. The old implementation concatenated an
+// unbounded string (and decoded each chunk on its own, so a multi-byte character split across a
+// chunk boundary became U+FFFD). With the server on 0.0.0.0 and no auth, any peer that can reach
+// the port could grow the heap until the daemon died. Cap it; the top-level error net in
+// index.ts maps `status` to the response code, so this answers 413 instead of hanging.
+export const MAX_BODY_BYTES = 8 * 1024 * 1024;
+export function readBody(req: IncomingMessage, cap = MAX_BODY_BYTES): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    let settled = false;
+    const parts: Buffer[] = [];
+    const fail = (e: Error & { status?: number }) => {
+      if (settled) return;
+      settled = true;
+      // Do NOT destroy the socket here: that turns the answer into a bare TCP reset, so a caller
+      // sending an oversized body sees "connection closed" instead of 413. Stop consuming, let the
+      // top-level error net write the 413 (it sets Connection: close for this case) and drop the
+      // rest of the stream after the response.
+      try { req.pause(); } catch { /* already ended */ }
+      reject(e);
+    };
+    req.on('data', (c: Buffer) => {
+      if (settled) return;
+      size += c.length;
+      if (size > cap) {
+        const e: Error & { status?: number } = new Error(`request body too large (> ${cap} bytes)`);
+        e.status = 413;
+        return fail(e);
+      }
+      parts.push(c);
+    });
+    req.on('end', () => {
+      if (settled) return;
+      settled = true;
+      resolve(Buffer.concat(parts).toString('utf8'));
+    });
+    req.on('error', fail);
   });
 }

@@ -23,7 +23,9 @@ mkdir -p "$STAGE"
 trap 'rm -rf "$STAGE"' EXIT
 cp -R "$ZY/.stage/." "$STAGE/"
 cp "$APK" "$STAGE/manager.apk"
-(cd "$STAGE" && sha256sum manager.apk > manager.apk.sha256)
+# Text mode ("hash  name"), not GNU binary ("hash *name"): Android toybox sha256sum -c
+# rejects the asterisk form and would abort customize.sh on Magisk/ROMs without busybox.
+(cd "$STAGE" && sha256sum manager.apk | awk '{print $1 "  manager.apk"}' > manager.apk.sha256)
 cat > "$STAGE/INSTALL.txt" <<'EOF'
 ADH combined Magisk installer
 

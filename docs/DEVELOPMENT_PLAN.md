@@ -18,7 +18,7 @@
   HTTP / WebSocket / MCP / 数据库 / 索引 / 任务调度 / 反汇编缓存 / 重分析
 
 Web UI（浏览器）：
-  局域网观测台 —— 搜索、下发任务、查看 trace/dump/反汇编结果
+  只读查看器 —— 看记录、搜索、看反汇编结果。下任务走 MCP，不在浏览器里配钩子。
 ```
 
 **禁止**：把 HTTP 服务、WebSocket、MCP、数据库、反编译、Capstone、QBDI 全塞进目标 App 进程。
@@ -37,38 +37,27 @@ Web UI（浏览器）：
 ```text
 ┌────────────────────────────────────────────┐
 │              Web UI / Browser              │
-│  http://手机IP:端口                         │
-│  - 进程列表 / Dex / SO 列表                │
-│  - Trace 视图 / Dump 管理                │
-│  - 反汇编 / 搜索 / 跳转 / Hook 配置        │
+│  只读：看记录 / 搜索 / 反汇编结果           │
 └─────────────────────▲──────────────────────┘
                       │ HTTP / WebSocket
-                      │ MCP Streamable HTTP
+                      │ MCP（下任务走这里）
 ┌─────────────────────┴──────────────────────┐
 │                 adhd 守护进程               │
-│  - HTTP Server + WebSocket                 │
-│  - MCP Server (Streamable HTTP + SSE)      │
-│  - Session Manager + Task Scheduler        │
-│  - SQLite / RocksDB                        │
-│  - Dex Indexer + Trace Store + Dump Store  │
-│  - Capstone Disasm Cache                   │
-│  - Service Layer（HTTP 与 MCP 共享）        │
+│  - HTTP + WebSocket + MCP                  │
+│  - 会话、索引、脱壳、Capstone 反汇编        │
+│  - native_look：一次原生观察收成一条结果    │
 └─────────────────────▲──────────────────────┘
-                      │ Unix Domain Socket
-                      │ Shared Memory RingBuffer
-                      │ Binder 可选
+                      │ TCP 8761（adb reverse）
 ┌─────────────────────┴──────────────────────┐
 │         目标 App 进程：libadh_agent.so      │
-│  - JavaVM / JNIEnv 管理                    │
-│  - ClassLoader 记录                          │
-│  - Native Hook Backend                     │
-│  - QBDI Trace Backend                      │
-│  - Memory Dump Backend                     │
-│  - /proc/self/maps Scanner                 │
-│  - Capstone 本地快速反汇编（可选、轻量）    │
-│  - Event Sender + Command Receiver         │
+│  - hook / 命中时拷贝 / dump / 轻量 RPC      │
+│  - 不做 HTTP、数据库、反汇编                │
 └────────────────────────────────────────────┘
 ```
+
+手机侧还有一层，不在这条数据通路里：`device/` 的 Manager 管注入范围和目标进程启停，不做分析。
+
+下面 §4 里仍有早期草图（进程内 Capstone、浏览器里配钩子、QBDI 按地址范围跟踪）。那些不是现在在跑的设计。QBDI 的现行口径在 §6.9.1 WS-H：可选，起不来就跳过；真实调用点用 `native_hook`。
 
 ### 1.1 三层职责边界
 

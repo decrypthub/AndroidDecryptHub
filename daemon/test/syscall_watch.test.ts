@@ -91,7 +91,9 @@ test('stops at cbz and at br as well', () => {
   for (const [label, branch] of [['cbz', CBZ_X0], ['br', BR_X8]]) {
     const words = [movz(63), SVC, branch, SVC, RET];
     const buf = Buffer.alloc(words.length * 4);
-    words.forEach((w, i) => buf.writeUInt32LE(w >>> 0, i * 4));
+    // The instruction helpers mix number and bigint literals (`0xd4000001` vs `0x…n`); normalise
+    // before writing so the fixture does not depend on which one a constant happens to be.
+    words.forEach((w, i) => buf.writeUInt32LE(Number(w) >>> 0, i * 4));
     const r = attributeSite(buf, 3 * 4);
     assert.equal(r.nr, null, `${label}: expected no attribution across a branch`);
     assert.ok(r.insns.some((s) => s.startsWith('stop@')), `${label}: expected a stop marker`);

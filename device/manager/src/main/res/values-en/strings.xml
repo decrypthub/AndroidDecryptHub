@@ -1,6 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">AndroidDecryptHub</string>
+    <string name="tab_home">Home</string>
+    <string name="tab_apps">Apps</string>
+    <string name="tab_certs">Certs</string>
+    <string name="apps_title">Apps</string>
+    <string name="fact_module">Module</string>
+    <string name="fact_app">App</string>
+    <string name="fact_model">Model</string>
+    <string name="fact_system">System</string>
+    <string name="fact_abi">ABI</string>
+    <string name="fact_update">Update</string>
+    <string name="system_line">Android %1$s · API %2$d</string>
+    <string name="update_checking">Checking</string>
+    <string name="update_failed">Check failed</string>
+    <string name="update_current">Up to date</string>
+    <string name="update_available">Update %1$s</string>
     <string name="section_configuration">Configuration</string>
     <string name="section_web_ui">Web UI</string>
     <string name="version_module">Module %1$s</string>
@@ -8,6 +23,9 @@
     <string name="status_title_running">ADH running</string>
     <string name="status_title_checking">ADH checking</string>
     <string name="status_title_abnormal">ADH unavailable</string>
+    <string name="status_detail_checking">Checking device service</string>
+    <string name="status_detail_loader_inactive">Loader inactive</string>
+    <string name="status_detail_not_installed">Module not installed</string>
     <string name="scope_title">Injection scope</string>
     <string name="scope_count">%1$d selected apps</string>
     <string name="scope_selected">%1$d selected apps</string>
@@ -51,15 +69,17 @@
     <string name="app_hook_config">Hook config</string>
     <string name="app_hooks_trimmed">Hooks trimmed</string>
     <string name="hook_config_title">Hook config</string>
-    <string name="hook_config_lead">These switches choose which capture families install on the next inject. Crypto defaults on; System detection defaults off and only then watches anti-debug / root checks. An off family is never installed. Web Settings → Live capture can still force-stop capture.</string>
+    <string name="hook_tab_crypto">Crypto</string>
+    <string name="hook_tab_capture">Traffic</string>
+    <string name="hook_tab_system">Detect</string>
     <string name="hook_family_digest">Digest (MD5/SHA)</string>
     <string name="hook_family_hmac">HMAC</string>
     <string name="hook_family_symmetric">Symmetric (AES/DES)</string>
     <string name="hook_family_asymmetric">Asymmetric (RSA/EC)</string>
     <string name="hook_family_tls">TLS plaintext</string>
     <string name="hook_family_aead">AEAD</string>
-    <string name="hook_family_system">System detection (anti-debug / root)</string>
-    <string name="hook_config_reset">Reset</string>
+    <string name="hook_family_system">Anti-debug / root / properties</string>
+    <string name="hook_copy_package">Copy package name</string>
     <string name="cert_title">System certificates</string>
     <string name="cert_count">%1$d imported</string>
     <string name="cert_hint">Import a CA. It joins the system trust store after reboot</string>

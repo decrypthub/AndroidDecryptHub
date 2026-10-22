@@ -263,7 +263,9 @@ export async function pullPackageFile(
       ok: true, path: abs, size: 0, fsize, truncated: true, b64: '',
     };
   }
-  let buf = Buffer.alloc(0);
+  // Explicit `Buffer` (not the inferred `Buffer<ArrayBuffer>`): the adb helper returns
+  // `Buffer<ArrayBufferLike>`, which is not assignable to the narrower inferred generic.
+  let buf: Buffer = Buffer.alloc(0);
   if (fsize > 0) {
     try {
       buf = await deps.execOut(packageFileReadCommand(real, PACKAGE_FILE_READ_CAP));
@@ -311,7 +313,7 @@ export async function readSandboxFile(pkg: string, raw: string, deps: SandboxDep
   const real = requireReal(p, parsed, text);
   const fsize = parsed.size ?? 0;
   if (fsize < 0) throw new Error('读沙盒失败：没有文件大小');
-  let buf = Buffer.alloc(0);
+  let buf: Buffer = Buffer.alloc(0);
   if (fsize > 0) {
     try { buf = await deps.execOut(sandboxReadCommand(real)); }
     catch (e) { throw explainAdb(e); }
