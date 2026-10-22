@@ -200,22 +200,13 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       session: url.searchParams.get('session') ?? '',
     })) },
     { path: '/api/mcp/config', handler: () => {
-      // The guide's URLs must be the address the caller actually reached — LAN for the browser that
-      // opened the panel over Wi-Fi, loopback for `adh mcp` on the daemon host. The request Host is
-      // that truth; webUrls() is only the fallback for a client that sends no Host at all.
+      // The guide's address must be the one the caller actually reached — LAN for the browser on the
+      // phone's Wi-Fi, loopback for a shell on the daemon host. The request Host is that truth;
+      // webUrls() is only the fallback for a client that sends no Host at all.
       const rawPkg = url.searchParams.get('package') ?? '';
       if (rawPkg && !isValidPackage(rawPkg)) return send(400, { error: 'package 必须是合法包名（字母数字 . _）' });
       const base = baseFromHost(req.headers.host) ?? webUrls().lan[0] ?? webUrls().local;
-      return send(200, {
-        ...mcpOnboarding(base, { package: rawPkg || undefined, tools: MCP_TOOLS.length }),
-        quickAsks: [
-          '用 crypto_identify 看看这个 App 用了哪些加密算法和密钥',
-          '用 dump_all_dex 一键 dump 所有 DEX，然后 dumps_list 给我下载链接',
-          '用 live_captures 看实时加解密，挑一条用 capture_detail 展开明文',
-          '用 capture_start 打开持续捕获，再 java_call 触发目标的工作负载，然后 live_captures 看明文',
-          '用 qbdi_trace 逐指令跟踪这个 native 函数',
-        ],
-      });
+      return send(200, mcpOnboarding(base, { package: rawPkg || undefined }));
     } },
     { path: '/api/agents', handler: () => send(200, [...sessions.values()]) },
     { path: '/api/backends', handler: () => send(200, backendMatrix()) },

@@ -3,31 +3,26 @@
 > 这是"我们现在在哪"的唯一真相。每个会话开始先读它，结束前更新它。
 > 详细规格见 `REQUIREMENTS.md`，路线与架构见 `DEVELOPMENT_PLAN.md`。
 
-## 2026-10-22 —— MCP 接入引导改走已开源的 `adh` CLI（`adh connect` + `adh mcp` stdio）
+## 2026-10-22 —— MCP 面板收成三段：安装 / 连接 / 配置（跟 iOS 面板同形）
 
-用户反馈（带截图）：Web 的 MCP 面板列着「端点 / 按包固定 / `{"jsonrpc":...}` 示例」，这不是安装引导。真正要做的是
-"把 Host ADH Daemon 接进我在用的 AI 客户端"，而这一步产品里**已经有 CLI**：`adh`（PyPI `android-decrypt-hub`，
-源码 `decrypthub/adh-cli`）——`adh connect <host>` 存地址，`adh mcp` 把 `POST /mcp` 转成 stdio。它的 README 写得很清楚：
-**不要把 HTTP `/mcp` 直接配进 MCP 客户端**。
+用户给了 iOS 版的面板截图（安装 `pip install ios-decrypt-hub` → 连接 `idh connect <host>` → 配置 `mcpServers` 片段），
+一句话点评本轮之前的实现：「跟写作文一样」。结论：**不要把客户端怎么配置讲一遍**，三段就够——
+`adh`（PyPI `android-decrypt-hub`，源码 `decrypthub/adh-cli`）是产品入口，`adh connect` 存地址，`adh mcp` 把
+`POST /mcp` 转 stdio；客户端要的只是那 8 行 JSON。
 
-**第一版做错了（已在本轮返工）**：我在 `daemon/src/cli.ts` 里加了一个同名 `mcp` 子命令（语义却是"打印别人的客户端命令"），
-面板也还在把 HTTP 端点塞给客户端。两个 `adh mcp` 语义冲突，而且本机 PATH 上的 `adh` 就是那个 Python CLI——
-照着面板敲 `adh mcp` 会跑错程序。返工内容：
+本轮返工（前两版都错了：先是面板摊 HTTP 端点 + JSON-RPC，再是我给开发侧 CLI 加了个同名 `mcp` 子命令、面板列五个客户端命令）：
 
-- `daemon/src/cli.ts` 删除 `mcp` 子命令与其 `--client`/`--package`/PATH 探测（`cli_args.test.ts` 回到 10 项，
-  `verify_v100` 的 7 条 `mcp` 断言一并删除）。开发侧 CLI 仍是 doctor / target / unpack；MAP 里写明**不许再加 `mcp`**。
-- `daemon/src/mcp_onboarding.ts` 重写为**唯一实现**：`install`（`python -m pip install -U android-decrypt-hub`）、
-  `connect`（`adh connect host[:port][/package]`）、五个客户端的 stdio 注册命令（`claude mcp add --scope user adh -- adh mcp`、
-  `codex mcp add adh -- adh mcp`、`code --add-mcp '{"name":"adh","command":"adh","args":["mcp"]}'`、cursor 同形、通用 `mcpServers`），
-  外加 `endpoint`/`pinnedEndpoint`（仅供脚本/调试）与 `connectPinned`。**不变式（单测钉住）：客户端命令里不许出现 `http://`**。
-- `GET /api/mcp/config` 用请求自身的 Host 生成地址（LAN 浏览器 / loopback 都拿到刚连通的地址），`?package=` 同时钉
-  endpoint 和 connect 目标，非法包名 400。
-- Web 面板：`一步接入`（pip 安装 + `adh connect 192.168.200.108:8088`）→ 客户端 chips + 一行 stdio 命令 → `端点（脚本 / curl 用）`
-  ＋按包固定的 CLI/URL 两行。文案里直说"不要把 HTTP /mcp 配进客户端"。
-- 验收：`mcp_onboarding` 11 条单测（stdio 不变式、code/cursor JSON 可解析、钉包同时改 connect 与 endpoint、包名/Host 校验）；
-  `tsc` 0；临时实例上 `/api/mcp/config` 五客户端 + `adh connect` + `adh mcp` + 400 全部符合；`verify_v19_settings` PASS；
-  面板 headless 截图逐态核对（Claude / JSON / 钉包）。`verify_v100` 回到原来的 doctor/target/unpack 断言。
-- **没有重启用户正在跑的 8088 daemon**（上面有 6 个京东会话）——新路由要重启 `adhd` 才生效；旧 daemon 上面板会明确写"重启后出现"。
+- `daemon/src/mcp_onboarding.ts` 只剩四个字段：`note`（"仅限可信网络"）、`install`（`pip install android-decrypt-hub`）、
+  `connect`（`adh connect host[:port][/package]`）、`config`（`mcpServers` 块，`args` 写成一行）。删掉
+  `MCP_CLIENTS`/per-client 命令/endpoint/pinned/clients/tools/verify —— 面板不用的就不生成。
+- `GET /api/mcp/config` 用请求 Host 生成 connect 地址，`?package=` 让 connect 带上包名，非法包名 400；payload 不再夹 `quickAsks`。
+- 面板：`安装` / `连接` / `配置` 三段，各一个复制按钮，页脚只有"仅限可信网络"。配置块在 HTML 里有默认值（断网/旧 daemon 也能看），
+  由 API 覆盖；**单测逐字节比对 HTML 默认值与 `adhClientConfig()`**，防两边漂移。
+- 验收：`mcp_onboarding` 8 条单测（三字段形态、JSON 可解析且不含 http、钉包只改 connect、HTML 默认值一致、包名/Host 校验）；
+  `tsc` 0；临时实例 `/api/mcp/config` 三段内容正确、`?package=` 与 400 正确；`verify_v19_settings` PASS；
+  面板 headless 截图核对（普通 + 钉包两态）。
+- **没有重启用户正在跑的 8088 daemon**（上面有 6 个京东会话）——新路由要重启 `adhd` 才生效；旧 daemon 上配置块显示 HTML 默认值，
+  安装/连接仍按当前页面地址生成。
 - 顺手发现（**不是本轮引入**）：`v10_webui` 的 4 条旧断言（file browser / one-click dump-all / dump download /
   workbench chrome）在 HEAD 上本来就红——`dumpAllDex` 和旧 dump 面板已在 937c3c9 随"一键脱壳"改版删除，断言没跟着改。
   本轮没动它，避免和并发会话正在改的 dump 面板打架；下次动 Web 时一并修。

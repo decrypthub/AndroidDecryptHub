@@ -86,21 +86,27 @@ node src/cli.ts target --help
 node src/cli.ts unpack --help
 ```
 
-要让 AI 客户端用上 ADH，用我们已开源的 `adh` CLI（PyPI 包 `android-decrypt-hub`，源码 [decrypthub/adh-cli](https://github.com/decrypthub/adh-cli)）：
+用我们已开源的 `adh` CLI 接 AI 客户端（PyPI 包 `android-decrypt-hub`，源码 [decrypthub/adh-cli](https://github.com/decrypthub/adh-cli)）：
 
 ```bash
-pip install -U android-decrypt-hub
-adh connect 127.0.0.1:8088      # 存下这台 Host（按包固定：adh connect 127.0.0.1:8088/<包名>）
-adh devices                     # 确认 online
+pip install android-decrypt-hub
+adh connect 127.0.0.1:8088      # 按包固定：adh connect 127.0.0.1:8088/<包名>
 ```
 
-然后把客户端的 stdio 命令配成 `adh mcp`（它把 Host 的 `POST /mcp` 转成 stdio），例如：
+客户端的 MCP 配置（`adh mcp` 把 Host 的 `POST /mcp` 转成 stdio，客户端只认这个）：
 
 ```json
-{ "mcpServers": { "adh": { "command": "adh", "args": ["mcp"] } } }
+{
+  "mcpServers": {
+    "adh": {
+      "command": "adh",
+      "args": ["mcp"]
+    }
+  }
+}
 ```
 
-网页顶栏的 MCP 面板会按当前地址生成同样这几条命令。**不要把 HTTP `/mcp` 直接配进客户端**——客户端只认 stdio。
+网页顶栏的 MCP 面板就是这三段，地址按当前页面生成。
 
 ## 各部分怎么分工
 

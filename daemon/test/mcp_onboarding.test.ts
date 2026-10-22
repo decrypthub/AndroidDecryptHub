@@ -1,84 +1,50 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import {
-  MCP_CLIENTS, MCP_SERVER_NAME, adhConnectTarget, baseFromHost, isValidPackage, mcpClientCommand, mcpEndpoint, mcpOnboarding,
+  MCP_SERVER_NAME, adhClientConfig, adhConnectTarget, baseFromHost, isValidPackage, mcpOnboarding,
 } from '../src/mcp_onboarding.ts';
 
 // The onboarding payload is what an operator pastes into a terminal, so these tests are about the
-// pasted result. The invariant that matters most is the transport: the published `adh` CLI speaks
-// stdio (`adh mcp`), and its README says not to point a client at HTTP `/mcp`. A "helpful" HTTP URL
-// creeping back into a client command is exactly the regression this file exists to catch.
+// pasted result. Two invariants matter: the client config must be a stdio command (`adh mcp`), never
+// an HTTP URL — the `adh` CLI's README forbids pointing a client at `/mcp` — and the panel's
+// hard-coded default block must stay byte-identical to what the API generates, or the two halves
+// drift the moment one is edited.
 
 const BASE = 'http://192.168.200.108:8088';
-const URL = `${BASE}/mcp`;
 const PKG = 'com.jingdong.app.mall';
 
-test('every client has a unique id and registers the adh CLI, never an HTTP transport', () => {
-  assert.deepEqual(MCP_CLIENTS.map((c) => c.id), ['claude', 'codex', 'vscode', 'cursor', 'json']);
-  for (const spec of MCP_CLIENTS) {
-    const command = mcpClientCommand(spec);
-    assert.ok(command.includes('adh'), `${spec.id} does not invoke adh: ${command}`);
-    assert.ok(!command.includes('http://'), `${spec.id} leaks an HTTP endpoint into the client: ${command}`);
-    assert.ok(!command.includes('--transport http'), `${spec.id} still uses the HTTP transport: ${command}`);
-  }
+test('the guide is three blocks: install, connect, config (and one footer line)', () => {
+  const cfg = mcpOnboarding(BASE);
+  assert.deepEqual(Object.keys(cfg).sort(), ['config', 'connect', 'install', 'note']);
+  assert.equal(cfg.note, '仅限可信网络');
+  assert.equal(cfg.install, 'pip install android-decrypt-hub');
+  assert.equal(cfg.connect, 'adh connect 192.168.200.108:8088');
 });
 
-test('claude and codex register `adh mcp` as a stdio command after --', () => {
-  assert.equal(mcpClientCommand(MCP_CLIENTS.find((c) => c.id === 'claude')!),
-    `claude mcp add --scope user ${MCP_SERVER_NAME} -- adh mcp`);
-  assert.equal(mcpClientCommand(MCP_CLIENTS.find((c) => c.id === 'codex')!),
-    `codex mcp add ${MCP_SERVER_NAME} -- adh mcp`);
-});
-
-test('code/cursor receive a parseable stdio definition, not a sentence', () => {
-  for (const [id, bin] of [['vscode', 'code'], ['cursor', 'cursor']] as const) {
-    const cmd = mcpClientCommand(MCP_CLIENTS.find((c) => c.id === id)!);
-    // Single-quoted for PowerShell and bash alike; the JSON itself must survive the quoting.
-    const quoted = /^(\S+) --add-mcp '(.*)'$/.exec(cmd);
-    assert.ok(quoted, `${id}: unexpected shape: ${cmd}`);
-    assert.equal(quoted[1], bin);
-    assert.deepEqual(JSON.parse(quoted[2]), { name: MCP_SERVER_NAME, command: 'adh', args: ['mcp'] });
-  }
-});
-
-test('the json client is a complete mcpServers document with a stdio command', () => {
-  const spec = MCP_CLIENTS.find((c) => c.id === 'json')!;
-  assert.equal(spec.multiline, true);
-  assert.deepEqual(JSON.parse(mcpClientCommand(spec)), {
+test('the client config is a stdio server, parseable, and carries no HTTP endpoint', () => {
+  const cfg = mcpOnboarding(BASE);
+  assert.ok(!cfg.config.includes('http'), 'an endpoint leaked into the client config');
+  assert.deepEqual(JSON.parse(cfg.config), {
     mcpServers: { [MCP_SERVER_NAME]: { command: 'adh', args: ['mcp'] } },
   });
+  // The label is what a human recognises in the client's MCP list.
+  assert.equal(MCP_SERVER_NAME, 'adh');
 });
 
-test('the payload installs and connects the CLI, and keeps the live endpoint for scripts', () => {
-  const cfg = mcpOnboarding(BASE, { tools: 79 });
-  assert.equal(cfg.install, 'python -m pip install -U android-decrypt-hub');
-  assert.equal(cfg.connect, `adh connect 192.168.200.108:8088`);
-  assert.equal(cfg.endpoint, URL);
-  assert.equal(cfg.pinnedEndpoint, `${BASE}/<package>/mcp`);
-  assert.equal(cfg.connectPinned, `adh connect 192.168.200.108:8088/<package>`);
-  assert.equal(cfg.tools, 79);
-  assert.equal(cfg.clients.length, MCP_CLIENTS.length);
-  // The client commands do not depend on the address at all — that is the point of `adh connect`
-  // having saved it. If one starts embedding the endpoint, the two halves have drifted.
-  for (const client of cfg.clients) assert.ok(!client.command.includes(cfg.endpoint), client.id);
+test('a pinned package changes the connect target, and nothing else', () => {
+  const plain = mcpOnboarding(BASE);
+  const pinned = mcpOnboarding(BASE, { package: PKG });
+  assert.equal(pinned.connect, `adh connect 192.168.200.108:8088/${PKG}`);
+  assert.equal(pinned.install, plain.install);
+  // `adh mcp` reads the saved address, so the client config cannot depend on the pin.
+  assert.equal(pinned.config, plain.config);
 });
 
-test('a pinned package pins BOTH the endpoint and the saved connection', () => {
-  const cfg = mcpOnboarding(BASE, { package: PKG, tools: 79 });
-  assert.equal(cfg.endpoint, `${BASE}/${PKG}/mcp`);
-  assert.equal(cfg.connect, `adh connect 192.168.200.108:8088/${PKG}`);
-  assert.equal(cfg.pinnedEndpoint, null);
-  assert.equal(cfg.connectPinned, null);
-  // Pinning must not change the client registration: `adh mcp` reads the saved address.
-  for (const client of cfg.clients) assert.ok(!client.command.includes(PKG), client.id);
-});
-
-test('an empty or whitespace package means "unpinned", not "/<empty>/mcp"', () => {
+test('an empty or whitespace package means "unpinned"', () => {
   for (const pkg of ['', '   ']) {
-    const cfg = mcpOnboarding(BASE, { package: pkg });
-    assert.equal(cfg.endpoint, URL);
-    assert.equal(cfg.connect, 'adh connect 192.168.200.108:8088');
+    assert.equal(mcpOnboarding(BASE, { package: pkg }).connect, 'adh connect 192.168.200.108:8088');
   }
 });
 
@@ -88,9 +54,15 @@ test('the connect target drops the scheme and any trailing slash', () => {
   assert.equal(adhConnectTarget('http://[::1]:8088'), '[::1]:8088');
 });
 
-test('a trailing slash on the base never becomes a doubled slash', () => {
-  assert.equal(mcpEndpoint(`${BASE}/`), URL);
-  assert.equal(mcpEndpoint(`${BASE}//`, 'com.a'), `${BASE}/com.a/mcp`);
+test('the panel ships the same config block the API generates', () => {
+  // The `<pre>` is filled from the API, but it also has a default so the panel still shows the paste
+  // block before the fetch lands (or against a daemon that predates this route). A silent drift here
+  // would hand the operator two different configs depending on timing.
+  const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+  // Line endings are not the contract: the checked-in page may use CRLF, and the browser normalises
+  // `\r\n` to `\n` inside a <pre> anyway, so compare the text the operator would actually see.
+  const block = (/<pre id="mcpConfig">([\s\S]*?)<\/pre>/.exec(html)?.[1] ?? '').replace(/\r\n/g, '\n');
+  assert.equal(block, adhClientConfig());
 });
 
 test('package names are validated before they reach a URL path', () => {
