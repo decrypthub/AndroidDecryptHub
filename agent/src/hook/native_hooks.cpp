@@ -69,6 +69,7 @@ struct NativeHookContext {
         int reg;
         int offset;
         int len;
+        int deref;   // "@x2+32:512": copy from the pointer stored at (reg+offset), not from reg+offset
     } mem_win[ADH_MEM_WIN_MAX];
     int mem_nwin;
     char mem_spec[96];
@@ -229,14 +230,25 @@ struct WinSpec {
     int reg;
     int off;
     int len;
+    int deref;   // "@x2+32:512": read a u64 at (reg+off) and copy the window from THAT address
 };
 
 static int parse_window(const char **pp, int max_len, const char *label, WinSpec *w,
                         char *error, size_t error_size) {
     const char *p = *pp;
     while (*p == ' ') p++;
+    w->deref = 0;
+    if (*p == '@') {
+        // One level of indirection. A VM frame, a dispatch slot or a list head is a pointer OF a
+        // pointer: the bytes that matter are not at the register, so a plain window can only ever
+        // report the frame's own links. Measured on libjdg: the interpreter's current instruction
+        // record is at *[x2+0x20], and without this the bytecode was unreadable at the one moment it
+        // was live.
+        w->deref = 1;
+        p++;
+    }
     if (p[0] != 'x' || p[1] < '0' || p[1] > '8') {
-        set_error(error, error_size, "%s window must look like x0:64 or x2+16:32", label);
+        set_error(error, error_size, "%s window must look like x0:64, x2+16:32 or @x2+32:512", label);
         return 0;
     }
     w->reg = p[1] - '0';
@@ -260,7 +272,7 @@ static int parse_window(const char **pp, int max_len, const char *label, WinSpec
         w->off = (int)off;
     }
     if (*p != ':') {
-        set_error(error, error_size, "%s window must look like x0:64 or x2+16:32", label);
+        set_error(error, error_size, "%s window must look like x0:64, x2+16:32 or @x2+32:512", label);
         return 0;
     }
     p++;
@@ -289,14 +301,15 @@ static int parse_window(const char **pp, int max_len, const char *label, WinSpec
 // Canonical spelling of a window: a zero offset is dropped. Printing it unconditionally produced
 // "x00:64", which looks like a typo in every log line and in status.
 static int format_window(char *buf, size_t n, const WinSpec *w) {
-    if (w->off) return snprintf(buf, n, "x%d+%d:%d", w->reg, w->off, w->len);
-    return snprintf(buf, n, "x%d:%d", w->reg, w->len);
+    const char *at = w->deref ? "@" : "";
+    if (w->off) return snprintf(buf, n, "%sx%d+%d:%d", at, w->reg, w->off, w->len);
+    return snprintf(buf, n, "%sx%d:%d", at, w->reg, w->len);
 }
 
 // "auto", or "x0:64" / "x2+16:32", comma-separated. Canonical form drops a zero offset
 // and spaces. nout == -1 means auto (windows are chosen per hit). A bad spec fails the
 // install; it must not become "hook installed, window silently absent".
-static int parse_mem_spec(const char *spec, int *regs, int *offsets, int *lens, int *nout,
+static int parse_mem_spec(const char *spec, int *regs, int *offsets, int *lens, int *derefs, int *nout,
                           char *canon, size_t canon_sz, char *error, size_t error_size) {
     if (nout) *nout = 0;
     if (canon && canon_sz) canon[0] = 0;
@@ -347,6 +360,7 @@ static int parse_mem_spec(const char *spec, int *regs, int *offsets, int *lens, 
         regs[n] = w.reg;
         offsets[n] = w.off;
         lens[n] = w.len;
+        if (derefs) derefs[n] = w.deref;
         char piece[32];
         int pn = format_window(piece, sizeof(piece), &w);
         if (pn < 0 || (size_t)pn >= sizeof(piece) || !canon || coff + (n ? 1 : 0) + (size_t)pn + 1 > canon_sz) {
@@ -444,7 +458,7 @@ static int adh_walk_x29(uint64_t fp, uint64_t *out, int max) {
 // thunk whether it may still call the real function (skipOriginal and returnSet both answer from
 // the saved frame instead).
 extern "C" uint64_t adh_native_hook_record_site(uint64_t *regs, int hook_id) {
-    adh_native_hook_record(regs, hook_id);
+    adh_native_hook_record(regs, hook_id, nullptr);
     if (hook_id < 0 || hook_id >= ADH_NATIVE_MAX_HOOKS) return 1;
     NativeHookContext &ctx = g_native_hooks[hook_id];
     if (__atomic_load_n(&ctx.skip_original, __ATOMIC_RELAXED)) return 1;
@@ -457,7 +471,13 @@ extern "C" unsigned long long adh_native_hook_hits(int hook_id) {
     return g_native_hook_hits[hook_id].load(std::memory_order_relaxed);
 }
 
-extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id) {
+// `seq_out` (may be NULL) receives the seq of the mem record this hit pushed, so the after-stub can
+// stamp its own record with the SAME seq. Without that the after record carries no seq at all, and a
+// reader joining on (hookId, seq) - the documented way to pair a register event with its memory
+// record - silently drops every post-call copy. Measured cost of that bug: three separate analysis
+// rounds on this target concluded "memAfter produced nothing" when the records were there, unjoinable.
+extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id, uint64_t *seq_out) {
+    if (seq_out) *seq_out = 0;
     if (!regs || hook_id < 0 || hook_id >= ADH_NATIVE_MAX_HOOKS) return 0;
     NativeHookContext &ctx = g_native_hooks[hook_id];
     if (__atomic_load_n(&ctx.active, __ATOMIC_ACQUIRE) != 1) return 0;
@@ -549,6 +569,8 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id) {
     int mem_off[ADH_MEM_WIN_MAX];
     int mem_len[ADH_MEM_WIN_MAX];
     int mem_got[ADH_MEM_WIN_MAX];
+    int mem_deref[ADH_MEM_WIN_MAX];
+    unsigned long long mem_ptr[ADH_MEM_WIN_MAX];
     const char *mem_err[ADH_MEM_WIN_MAX];
     unsigned char mem_bytes[ADH_MEM_WIN_MAX][ADH_MEM_WIN_LEN];
     int mem_nwin = 0;
@@ -563,6 +585,8 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id) {
                 mem_off[mem_nwin] = 0;
                 mem_len[mem_nwin] = 64;
                 mem_got[mem_nwin] = got;
+                mem_deref[mem_nwin] = 0;
+                mem_ptr[mem_nwin] = inreg[r];
                 mem_err[mem_nwin] = "";
                 mem_nwin++;
             }
@@ -572,7 +596,9 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id) {
                 mem_reg[w] = ctx.mem_win[w].reg;
                 mem_off[w] = ctx.mem_win[w].offset;
                 mem_len[w] = ctx.mem_win[w].len;
+                mem_deref[w] = ctx.mem_win[w].deref;
                 mem_got[w] = 0;
+                mem_ptr[w] = 0;
                 mem_err[w] = "";
                 if (mem_reg[w] < 0 || mem_reg[w] > 8 || mem_len[w] < 1 || mem_len[w] > ADH_MEM_WIN_LEN) {
                     mem_err[w] = "unreadable";
@@ -583,12 +609,32 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id) {
                     mem_err[w] = "overflow";
                     continue;
                 }
-                int got = hook_mem_copy(base + (uint64_t)mem_off[w], mem_bytes[w], mem_len[w]);
+                uint64_t src = base + (uint64_t)mem_off[w];
+                if (mem_deref[w]) {
+                    // Follow one pointer. A frame's link field is not the bytes the caller wants, and
+                    // reading it as if it were produces a plausible-looking window that answers a
+                    // different question - so the resolved pointer is reported with the record.
+                    unsigned char slot[8];
+                    if (hook_mem_copy(src, slot, 8) != 8) {
+                        mem_err[w] = "unreadable";
+                        continue;
+                    }
+                    uint64_t target = 0;
+                    memcpy(&target, slot, 8);
+                    mem_ptr[w] = (unsigned long long)target;
+                    if (target == 0) {
+                        mem_err[w] = "null";
+                        continue;
+                    }
+                    src = target;
+                }
+                int got = hook_mem_copy(src, mem_bytes[w], mem_len[w]);
                 if (got <= 0) mem_err[w] = "unreadable";
                 else mem_got[w] = got;
             }
         }
         mem_seq = g_native_hook_mem_seq[hook_id].fetch_add(1, std::memory_order_relaxed) + 1;
+        if (seq_out) *seq_out = mem_seq;
     }
     // v4.31: the stub saved q0-q7 at regs[16..31] (low/high lane per 128-bit register), so float,
     // double and vector arguments are visible too. Every lane is rendered twice - as the double
@@ -707,6 +753,13 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id) {
                                    "%s{\"reg\":\"x%d\",\"offset\":%d,\"requested\":%d,\"got\":%d,\"short\":%s",
                                    w ? "," : "", mem_reg[w], mem_off[w], mem_len[w], mem_got[w],
                                    short_read ? "true" : "false");
+            // A deref window must SAY so: the same bytes read with and without the indirection answer
+            // different questions, and a reader that cannot tell them apart will believe the pointer
+            // value is the payload.
+            if (mem_deref[w]) {
+                moff = adh_json_append(memjson, sizeof(memjson), moff, ",\"deref\":true,\"ptr\":\"0x%llx\"",
+                                       mem_ptr[w]);
+            }
             if (mem_err[w][0]) {
                 moff = adh_json_append(memjson, sizeof(memjson), moff, ",\"error\":\"%s\"}", mem_err[w]);
             } else {
@@ -728,7 +781,7 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id) {
 // a NATIVE_HOOK_MEM record tagged phase:"after", so a reader can tell what the function was GIVEN
 // (untagged record, copied before the call) from what it PRODUCED. The return value is handed back
 // unchanged: this observes, it does not rewrite. An unreadable buffer is reported, never guessed.
-extern "C" uint64_t adh_native_hook_after(uint64_t retval, uint64_t *regs, int hook_id) {
+extern "C" uint64_t adh_native_hook_after(uint64_t retval, uint64_t *regs, int hook_id, uint64_t seq) {
     if (!regs || hook_id < 0 || hook_id >= ADH_NATIVE_MAX_HOOKS) return retval;
     NativeHookContext &ctx = g_native_hooks[hook_id];
     if (__atomic_load_n(&ctx.active, __ATOMIC_ACQUIRE) != 1) return retval;
@@ -744,18 +797,24 @@ extern "C" uint64_t adh_native_hook_after(uint64_t retval, uint64_t *regs, int h
     unsigned char buf[ADH_MEM_AFTER_MAX];
     int got = hook_mem_copy(addr, buf, len);
     if (got < 0) got = 0;
+    // Same SHAPE as the pre-call record: mem:[{reg,offset,requested,got,short[,hex|error]}], plus
+    // phase/ret at the top. The old flat shape ({reg,offset,got,hex} at the top level) had two costs
+    // that looked like something else: the host preview reads obj.mem, so a post-call copy showed as
+    // an EMPTY preview, and a reader written against the pre-call shape had to special-case it.
     char hex[ADH_MEM_AFTER_MAX * 2 + 1];
-    char json[ADH_MEM_AFTER_MAX * 2 + 512];
+    char json[ADH_MEM_AFTER_MAX * 2 + 640];
     size_t joff = 0;
+    const int short_read = (got > 0 && got < len) ? 1 : 0;
     joff = adh_json_append(json, sizeof(json), joff,
-                           "{\"hookId\":%d,\"phase\":\"after\",\"ret\":\"0x%llx\","
-                           "\"reg\":\"x%d\",\"offset\":%d,\"requested\":%d,\"got\":%d",
-                           hook_uid, (unsigned long long)retval, arg, off, len, got);
+                           "{\"hookId\":%d,\"seq\":%llu,\"phase\":\"after\",\"ret\":\"0x%llx\",\"mem\":["
+                           "{\"reg\":\"x%d\",\"offset\":%d,\"requested\":%d,\"got\":%d,\"short\":%s",
+                           hook_uid, (unsigned long long)seq, (unsigned long long)retval, arg, off, len, got,
+                           short_read ? "true" : "false");
     if (got > 0) {
         hex_encode(buf, got, hex);
-        joff = adh_json_append(json, sizeof(json), joff, ",\"hex\":\"%s\"}", hex);
+        joff = adh_json_append(json, sizeof(json), joff, ",\"hex\":\"%s\"}]}", hex);
     } else {
-        joff = adh_json_append(json, sizeof(json), joff, ",\"error\":\"unreadable\"}");
+        joff = adh_json_append(json, sizeof(json), joff, ",\"error\":\"unreadable\"}]}");
     }
     (void)joff;
     adh_capture_push_text("NATIVE_HOOK_MEM", json);
@@ -782,6 +841,7 @@ extern "C" void adh_native_stub_##N(void) { \
         "stp q2, q3, [sp, #160]\n" \
         "stp q4, q5, [sp, #192]\n" \
         "stp q6, q7, [sp, #224]\n" \
+        "add x2, sp, #240\n" \
         "mov x0, sp\n" \
         "mov x1, #" #N "\n" \
         "bl adh_native_hook_record\n" \
@@ -830,7 +890,7 @@ ADH_NATIVE_STUB(15, 120)
 // that asked for `memAfter` needs the opposite shape: call the original, copy the window it wrote,
 // then hand its return value back. Only those hooks pay for this; every other hook keeps the tail
 // jump, which also leaves the float/vector return registers untouched.
-extern "C" uint64_t adh_native_hook_after(uint64_t retval, uint64_t *regs, int hook_id);
+extern "C" uint64_t adh_native_hook_after(uint64_t retval, uint64_t *regs, int hook_id, uint64_t seq);
 
 #define ADH_NATIVE_STUB_AFTER(N, OFF) \
 extern "C" void adh_native_stub_after_##N(void) __attribute__((naked)); \
@@ -848,6 +908,7 @@ extern "C" void adh_native_stub_after_##N(void) { \
         "stp q2, q3, [sp, #160]\n" \
         "stp q4, q5, [sp, #192]\n" \
         "stp q6, q7, [sp, #224]\n" \
+        "add x2, sp, #240\n" \
         "mov x0, sp\n" \
         "mov x1, #" #N "\n" \
         "bl adh_native_hook_record\n" \
@@ -870,6 +931,7 @@ extern "C" void adh_native_stub_after_##N(void) { \
         "blr x17\n" \
         "stp q0, q1, [sp, #128]\n" \
         "stp q2, q3, [sp, #160]\n" \
+        "ldr x3, [sp, #240]\n" \
         "mov x1, sp\n" \
         "mov x2, #" #N "\n" \
         "bl adh_native_hook_after\n" \
@@ -1081,9 +1143,10 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
     int mem_regs[ADH_MEM_WIN_MAX];
     int mem_offs[ADH_MEM_WIN_MAX];
     int mem_lens[ADH_MEM_WIN_MAX];
+    int mem_derefs[ADH_MEM_WIN_MAX];
     int mem_nwin = 0;
     char mem_canon[96];
-    if (!parse_mem_spec(mem_spec, mem_regs, mem_offs, mem_lens, &mem_nwin, mem_canon, sizeof(mem_canon), error, error_size))
+    if (!parse_mem_spec(mem_spec, mem_regs, mem_offs, mem_lens, mem_derefs, &mem_nwin, mem_canon, sizeof(mem_canon), error, error_size))
         return 0;
     // Post-call window: exactly one, same syntax, no "auto" (after the call the "pointer-like"
     // guess is meaningless - the caller names the buffer the function wrote into).
@@ -1220,6 +1283,7 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
                 old.mem_win[w].reg = mem_regs[w];
                 old.mem_win[w].offset = mem_offs[w];
                 old.mem_win[w].len = mem_lens[w];
+                old.mem_win[w].deref = mem_derefs[w];
             }
             copy_cstr(old.mem_spec, sizeof(old.mem_spec), mem_canon);
             // The post-call window and the hit-time filter must be re-applied too. They used to be
@@ -1365,6 +1429,7 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
         ctx.mem_win[w].reg = mem_regs[w];
         ctx.mem_win[w].offset = mem_offs[w];
         ctx.mem_win[w].len = mem_lens[w];
+        ctx.mem_win[w].deref = mem_derefs[w];
     }
     copy_cstr(ctx.mem_spec, sizeof(ctx.mem_spec), mem_canon);
     ctx.after_arg = after_reg;

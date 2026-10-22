@@ -24,6 +24,24 @@ test('a single window and a spaced list become the canonical spec', () => {
   assert.equal(parseMemWindows('x8+0:1').spec, 'x8:1');
 });
 
+test('@ follows one pointer and says so in both the window and the spec', () => {
+  // A pointer-of-pointer is the only way to read a VM frame's current instruction record or a
+  // dispatch slot's target: the bytes that matter are at *(reg+offset), not at reg+offset.
+  assert.deepEqual(parseMemWindows('@x2+32:512'), {
+    windows: [{ reg: 2, offset: 32, len: 512, deref: true }],
+    spec: '@x2+32:512',
+  });
+  assert.equal(parseMemWindows('@x0:8').spec, '@x0:8');
+  // Both forms in one spec, and the plain one must NOT gain a deref flag.
+  const mixed = parseMemWindows('x2:256,@x2+32:512');
+  assert.equal(mixed.spec, 'x2:256,@x2+32:512');
+  assert.equal(mixed.windows.length, 2);
+  assert.equal(mixed.windows[0].deref, undefined);
+  assert.equal(mixed.windows[1].deref, true);
+  assert.throws(() => parseMemWindows('@x9:8'), /mem window must look like/);
+  assert.throws(() => parseMemWindows('@:8'), /mem window must look like/);
+});
+
 test('the caps that the agent enforces are accepted on the boundary', () => {
   // Four windows at the per-window ceiling must exactly fill the total. Writing the numbers out by
   // hand is what let this test go stale the day the caps changed: derive the spec from the caps.

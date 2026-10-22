@@ -230,6 +230,15 @@ SCRIPTS=(
   # unhook. Before this the tracer followed the branch into its trampoline and the target died
   # (SIGBUS at pc=0x2a, tombstone_10) with nothing in the message naming the hook.
   "verify_v110_trace_guard.sh:device"
+  # v112: indirect (pointer-of-pointer) memory windows. `mem "@x2+32:512"` must resolve the pointer at
+  # hit time and copy the bytes it names, report deref:true + the resolved ptr, and leave the plain
+  # window showing the pointer VALUE. Without this, a VM frame's instruction record, a dispatch slot's
+  # target or a list head's node is unreadable exactly when it is live.
+  "verify_v112_indirect_window.sh:device"
+  # v113: a post-call (memAfter) record must carry the SAME seq as its pre-call twin. It used to carry
+  # none, so the documented (hookId, seq) join silently dropped every "what did it WRITE" record - and
+  # the shape differed too (flat vs mem[]), which left the host preview blank.
+  "verify_v113_memafter_seq.sh:device"
 )
 
 pass=0; fail=0; skip=0; FAILED=""

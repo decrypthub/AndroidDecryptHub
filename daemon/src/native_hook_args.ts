@@ -36,11 +36,13 @@ export interface MemWindow {
   reg: number;
   offset: number;
   len: number;
+  /** `@x2+32:512`: read the u64 at (reg+offset) and copy the window from THAT address. */
+  deref?: boolean;
 }
 
 /**
  * Parse a memory-window spec. Empty means "do not copy". "auto" copies pointer-like
- * argument registers at the hit. Anything else must be `x0:64` or `x2+16:32`,
+ * argument registers at the hit. Anything else must be `x0:64`, `x2+16:32` or `@x2+32:512`,
  * comma-separated, registers x0-x8 only. The returned `spec` is the canonical string
  * the agent stores and echoes. A typo throws: installing the hook without the window
  * would look like a quiet read.
@@ -61,11 +63,12 @@ export function parseMemWindows(value: unknown): { windows: MemWindow[]; spec: s
   let total = 0;
   for (const raw of parts) {
     const part = raw.trim();
-    const m = /^x([0-8])(?:\+([0-9]+))?:([0-9]+)$/.exec(part);
-    if (!m) throw new Error(`mem window must look like x0:64 or x2+16:32, got ${JSON.stringify(part)}`);
-    const reg = Number(m[1]);
-    const offset = m[2] === undefined ? 0 : Number(m[2]);
-    const len = Number(m[3]);
+    const m = /^(@?)x([0-8])(?:\+([0-9]+))?:([0-9]+)$/.exec(part);
+    if (!m) throw new Error(`mem window must look like x0:64, x2+16:32 or @x2+32:512, got ${JSON.stringify(part)}`);
+    const deref = m[1] === '@';
+    const reg = Number(m[2]);
+    const offset = m[3] === undefined ? 0 : Number(m[3]);
+    const len = Number(m[4]);
     if (!Number.isSafeInteger(offset) || offset > NATIVE_MEM_WIN_OFF_MAX) {
       throw new Error(`mem offset ${offset} exceeds ${NATIVE_MEM_WIN_OFF_MAX}`);
     }
@@ -74,9 +77,9 @@ export function parseMemWindows(value: unknown): { windows: MemWindow[]; spec: s
     }
     total += len;
     if (total > NATIVE_MEM_WIN_TOTAL) throw new Error(`mem total ${total} exceeds ${NATIVE_MEM_WIN_TOTAL}`);
-    windows.push({ reg, offset, len });
+    windows.push(deref ? { reg, offset, len, deref } : { reg, offset, len });
   }
-  const spec = windows.map((w) => (w.offset ? `x${w.reg}+${w.offset}:${w.len}` : `x${w.reg}:${w.len}`)).join(',');
+  const spec = windows.map((w) => `${w.deref ? '@' : ''}${w.offset ? `x${w.reg}+${w.offset}` : `x${w.reg}`}:${w.len}`).join(',');
   return { windows, spec };
 }
 

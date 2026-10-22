@@ -78,7 +78,9 @@ int adh_native_hook_at(uint64_t addr, int *hook_id_out, int *active_out);
 int adh_native_hook_status_json(char *out, size_t out_size);
 
 // Called by the fixed arm64 stubs. Observation-only and non-blocking.
-uint64_t adh_native_hook_record(uint64_t *regs, int hook_id);
+// seq_out (may be NULL) receives the seq of the mem record this hit pushed, so a post-call copy can
+// carry the SAME seq and stay joinable on (hookId, seq).
+uint64_t adh_native_hook_record(uint64_t *regs, int hook_id, uint64_t *seq_out);
 // Called by the site thunks: same recording, but the return value means "do not call the original"
 // (set for skipOriginal and for returnSet, which both answer from the saved frame).
 uint64_t adh_native_hook_record_site(uint64_t *regs, int hook_id);
