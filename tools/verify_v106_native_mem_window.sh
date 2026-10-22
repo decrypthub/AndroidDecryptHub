@@ -40,9 +40,30 @@ has(agent, 'NATIVE_HOOK_MEM', 'agent companion event');
 has(agent, 'memcmp(spec, "auto", 4)', 'agent auto spec');
 has(state, "func === 'NATIVE_HOOK_MEM'", 'capture category');
 has(state, 'memCapturePreview', 'capture preview');
-has(header, 'ADH_MEM_WIN_MAX 4', 'agent cap');
-has(header, 'ADH_MEM_WIN_LEN 192', 'agent cap');
-has(header, 'ADH_MEM_WIN_TOTAL 512', 'agent cap');
+// The caps are asserted as a CROSS-CHECK, not as literals: the agent header and the daemon constant
+// must agree, because a mismatch means the host accepts a window the agent silently clamps (or the
+// reverse). Hard-coding 192/512 here only proved that nobody had changed the caps yet - it went red
+// the moment they were raised, while the thing it was meant to protect was still fine.
+const num = (text, name) => {
+  // `#define NAME 4` in the C header and `export const NAME = 4;` in TypeScript: one pattern has no
+  // `=` at all, and assuming it does is how this check first reported "could not read both sides".
+  const m = new RegExp(`(?:#define\\s+${name}\\s+|${name}\\s*=\\s*)(\\d+)`).exec(text);
+  return m ? Number(m[1]) : null;
+};
+const caps = ['ADH_MEM_WIN_MAX', 'ADH_MEM_WIN_LEN', 'ADH_MEM_WIN_TOTAL'];
+for (const name of caps) has(header, `#define ${name} `, 'agent cap');
+const want = ['NATIVE_MEM_WIN_MAX', 'NATIVE_MEM_WIN_LEN', 'NATIVE_MEM_WIN_TOTAL'];
+const argsTs = read('daemon/src/native_hook_args.ts');
+for (const name of want) has(argsTs, `export const ${name}`, 'daemon cap');
+for (const [i, name] of want.entries()) {
+  const a = num(header, caps[i]);
+  const b = num(argsTs, `export const ${name}`);
+  if (a == null || b == null) problems.push(`cap ${name}: could not read both sides (header ${a}, daemon ${b})`);
+  else if (a !== b) problems.push(`cap ${name}: header ${a} != daemon ${b} (host would accept what the agent clamps)`);
+}
+if (num(header, 'ADH_MEM_WIN_MAX') * num(header, 'ADH_MEM_WIN_LEN') !== num(header, 'ADH_MEM_WIN_TOTAL')) {
+  problems.push('mem caps: WIN_MAX * WIN_LEN must equal WIN_TOTAL, otherwise the total guard can never fire');
+}
 if (problems.length) {
   console.log(problems.join('\n'));
   console.log('RESULT:FAIL');
