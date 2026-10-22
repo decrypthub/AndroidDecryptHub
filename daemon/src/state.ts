@@ -178,7 +178,29 @@ function readDumpProvenance(path: string, sha: string): ArtifactProvenance | nul
   }
 }
 export const agentSockets = new Map<string, net.Socket>();               // sessionId -> live socket
-export const pending = new Map<string, { resolve: (v: any) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }>();
+export const pending = new Map<string, { resolve: (v: any) => void; reject: (e: Error) => void; timer: NodeJS.Timeout; sessionId?: string }>();
+
+/**
+ * Fail every command still waiting on one session, with a reason instead of a timeout.
+ *
+ * A command whose target disappears mid-flight (a trace of code that dereferences freed memory kills the
+ * process; so does a hook on a function the runtime calls everywhere) used to leave the caller waiting out
+ * the full timeout and then report "command timeout", which reads exactly like a slow target. Measured: 60
+ * s of silence for a target that had already died.
+ *
+ * Returns how many were failed, so the caller can log a real number.
+ */
+export function failPendingFor(sessionId: string, reason: string): number {
+  let n = 0;
+  for (const [id, p] of [...pending.entries()]) {
+    if (p.sessionId !== sessionId) continue;
+    clearTimeout(p.timer);
+    pending.delete(id);
+    p.reject(new Error(reason));
+    n++;
+  }
+  return n;
+}
 export let seq = 0;
 export let cmdSeq = 0;
 export const nextId = () => `s_${(++seq).toString(36)}${Date.now().toString(36).slice(-3)}`;

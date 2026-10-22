@@ -7,7 +7,7 @@ import { handleHttp } from './http/router.ts';
 import { ensureAdbReverse } from './scope_list.ts';
 import { startCaptureLoop, forgetCaptureSession, pruneArtifactsAndIndex, clearCaptureArmProtect, applyStartupHooks } from './service.ts';
 import {
-  agentSockets, broadcast, captureTimers, frameJson, FRAME_JSON, FRAME_MAX,
+  agentSockets, broadcast, captureTimers, failPendingFor, frameJson, FRAME_JSON, FRAME_MAX,
   log, nextId, pending, pruneSessions, sessions, wss,
 }
 from './state.ts';
@@ -108,6 +108,11 @@ const agentServer = net.createServer((sock) => {
       session.online = false;
       session.lastSeen = Date.now();
       agentSockets.delete(session.sessionId);
+      // Commands still waiting on this session can never be answered: fail them NOW with a reason, so a
+      // caller sees "the target disconnected while this command was running" instead of a timeout that
+      // looks like a slow target.
+      const failed = failPendingFor(session.sessionId, 'the target disconnected while this command was running (it may have crashed)');
+      if (failed) log(`agent CLOSE ${session.package} ${session.sessionId}: failed ${failed} pending command(s)`);
       const t = captureTimers.get(session.sessionId);
       if (t) { clearInterval(t); captureTimers.delete(session.sessionId); forgetCaptureSession(session.sessionId); }
       log(`agent CLOSE ${session.package} ${session.sessionId}`);

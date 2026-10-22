@@ -3,6 +3,34 @@
 > 这是"我们现在在哪"的唯一真相。每个会话开始先读它，结束前更新它。
 > 详细规格见 `REQUIREMENTS.md`，路线与架构见 `DEVELOPMENT_PLAN.md`。
 
+## 2026-10-22（第四十轮）—— 目标在命令执行中死掉时，立刻给出**有名字的失败**
+
+上一轮给 trace 加了墙钟上限，但这一轮再试"拿现场参数去 trace 子解释器 `0x101da0`"时仍然是
+**60 秒静默 + 目标重启**。真因不在预算：**参数指向的 bank 已经释放**，被 trace 的代码解引用垃圾指针，
+进程当场死了。trace 的预算只能约束"跑多久"，管不了"跑的时候会不会炸"。
+
+但这次静默本身是个必须修的缺陷：**调用方分不清"慢"和"死"**。修法在 daemon 侧：
+
+- `pending` 的每条命令带上 `sessionId`；
+- 新增 `failPendingFor(sessionId, reason)`：清理定时器、删表、以带原因的错误 reject；
+- agent socket `close` 时调用它——日志实测：`agent CLOSE com.jingdong.app.mall s_78i4: failed 2 pending command(s)`。
+
+于是同一次崩溃现在立刻返回：
+`the target disconnected while this command was running (it may have crashed)`，
+而不是等满超时再报 `command timeout`。
+
+- 单测 `daemon/test/pending_disconnect.test.ts`：只失败该会话的命令（另一个会话的命令保留），
+  并且清掉了定时器（否则测试进程会被 timer 拖住）。**2 条全过，typecheck 0。**
+- device 实测：`trace_sub.mjs` 触发同一次崩溃 → daemon 日志里出现上面那行，不再有 60s 静默。
+
+### 顺带记录：这条路暂时走不通（结论，不是猜测）
+
+拿**已释放**的 bank 去 trace 子解释器，进程必死（本轮复现 3 次）。要让这条路可用，必须
+"种一份仍然有效的 bank"——即把参数指向的内存**整族**复制到 malloc 出来的缓冲区，并重写其中所有
+指针。这是可行的（`@`/`@#n` 已经能把整族读出来），但工作量比一个 round 大，留给后续。
+
+
+
 ## 2026-10-22（第三十九轮）—— 渲染指令的参数编码**用现场数据校正了**：`x1` 就是寄存器堆基址
 
 上一轮我怀疑"`x26` 不是我以为的基址"。这一轮用一次现场命中把编码定死（`slots.mjs`）：

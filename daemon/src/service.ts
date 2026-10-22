@@ -36,7 +36,11 @@ export function sendCmd(sessionId: string, op: string, args: Record<string, unkn
     if (!sock || sock.destroyed) return reject(new Error('agent not connected'));
     const id = nextCmdId();
     const timer = setTimeout(() => { pending.delete(id); reject(new Error('command timeout')); }, timeoutMs);
-    pending.set(id, { resolve, reject, timer });
+    // The session id is carried with the pending entry so a DISCONNECT can fail exactly the commands it
+    // owned. Without it, a target that dies mid-command (a trace of code that dereferences freed memory
+    // does this) leaves the caller waiting for the full timeout with no explanation - measured: 60 s of
+    // silence, answered only by "command timeout".
+    pending.set(id, { resolve, reject, timer, sessionId });
     sock.write(frameJson({ ...args, t: 'cmd', id, op }));
   });
 }
