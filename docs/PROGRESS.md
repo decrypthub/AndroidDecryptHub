@@ -32,6 +32,20 @@ tid=822 同样 words、同样 A=0/B=0x138，x1-A == x2-B ✓
 下一轮重试并在失败时把 `native_call` 的返回/目标存活状态都打印出来（上一轮已验证：目标在命令中死亡
 现在会立刻返回带原因的错误，不会再静默 60 秒）。
 
+第二次重试同样在**第一步**（`capture_stop` / 装钩子）就被 `ECONNRESET` 打断，而 daemon `/health`
+是 200、进程活着。日志给了线索：
+
+```
+cmdResult op=capture_drain id=cku matched=true bytes=1650712
+[capture] session s_1f05k DROPPING - ring full: dropped=927 seq=1183 (complete:false)
+```
+
+即一次 drain 的回复有 **1.6 MB**。这不是"目标崩了"，而是**客户端在这条大回复上被重置**。
+下一轮先处理这个：`capture_stop` 的调用方不该被一次 1.6 MB 的 drain 拖死（daemon 只用到其中的
+`count`/`dropped`，却把整包留在链路上），要么在 daemon 侧限制单次 drain 的字节数、要么让 MCP 回复
+只带计数——这属于"工具该打磨的地方"，比继续硬推分析更优先。
+
+
 
 
 ## 2026-10-22（第四十轮）—— 目标在命令执行中死掉时，立刻给出**有名字的失败**
