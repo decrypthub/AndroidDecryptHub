@@ -3,6 +3,32 @@
 > 这是"我们现在在哪"的唯一真相。每个会话开始先读它，结束前更新它。
 > 详细规格见 `REQUIREMENTS.md`，路线与架构见 `DEVELOPMENT_PLAN.md`。
 
+## 2026-10-22（第四十四轮）—— `hw_watch` 在这台设备上被**平台拒绝**：写入监视这条路是关的，不是坏的
+
+上一轮把"写入监视 arena 槽"列为剩下的第一条路，并说先在沙盒验证。验证结果很干脆：
+
+```
+沙盒:  perf_event_open failed: Permission denied (errno 13)
+       - perf events are usually forbidden for apps (perf_event_paranoid=2/3),
+         and SELinux can deny them even when the sysctl allows it
+真机:  同样的 errno 13
+```
+
+**结论：`perf_event_open` 在这个 domain 里没有权限**，两个进程一致。所以：
+
+- 这不是"hw_watch 有 bug"，是**平台不允许**；`hw_watch` 的报错文本已经把原因写清楚了
+  （这正是好错误信息该有的样子：说清"为什么"而不只是"失败了"）。
+- **顺带纠正一条历史记录**：案例里写的"`hw_watch` 在这个目标上反复把进程搞死"，真因更可能是
+  **arm 路径在权限失败后的处理**，而不是"断点触发把目标打死"——断点从未真正装上。
+  这条纠正很重要，否则后面还会有人去"修 hw_watch 的崩溃"。
+
+于是剩下的路只有一条：**在钩子命中点就地跑 N 条 QBDI 指令（in-hook trace）**。
+它解决的是本会话反复踩到的同一件事：**"先抓参数、事后再 trace" 时，参数指向的内存已经失效**
+（bank/值对象/程序块都是请求作用域）。第 4 轮加的墙钟上限已经让"就地 trace 即使跑飞也能收住"
+在机制上成立，这是下一步唯一需要的产品能力。
+
+
+
 ## 2026-10-22（第四十三轮）—— 窗口上限提到 6；种描述符驱动 formatter **确认为不可行**（原因是对象图）
 
 ### 一、能力：`mem` 窗口 4 → 6（总数 4 KB 变成真正的闸门）
