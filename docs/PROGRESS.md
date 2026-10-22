@@ -3,6 +3,23 @@
 > 这是"我们现在在哪"的唯一真相。每个会话开始先读它，结束前更新它。
 > 详细规格见 `REQUIREMENTS.md`，路线与架构见 `DEVELOPMENT_PLAN.md`。
 
+## 2026-10-22 —— Web「系统」页：检测摘要不再撑满半屏
+
+截图反馈：`系统` 页左侧上半屏是空白，5 条记录挤在底部。根因是 `#sy-radar`（`.detect-radar`）和列表一样是
+`.list-pane` 的直接子元素，吃到了 `.list-pane > div { flex:1 }`，一行摘要被拉成半个窗格。修法一行：
+`.list-pane > .detect-radar { flex:0 0 auto; overflow:visible }`——两个类选择器压过 `div`，不依赖书写顺序。
+
+顺带两处显示修正（同一张截图里的「看不懂」）：
+
+- 摘要从裸「未开」改成「系统检测：未开」，细则进 `title`：写清去 Manager → 应用 → Hook 配置 → 系统检测 打开，
+  并列出 `caveat` 与 `unchecked` 的未覆盖项（这两个字段接口一直返回，之前直接丢掉了）。
+- 列表时间统一 24 小时制（新增 `fmtTime()`，`hour12:false`）：`toLocaleTimeString()` 跟浏览器 locale，
+  中文界面里显示成 `5:35:08 PM`。
+
+回归守卫 `daemon/test/web_system_pane.test.ts`（5 条）：读 `public/index.html` 断言 opt-out 规则存在且压过
+`.list-pane > div`、`#sy-radar` 仍在 banner/列表之前、摘要文案与 `title`、没有裸 `toLocaleTimeString()`、内联脚本可解析。
+本机沙箱里 `npm test` 的 `node --test` 子进程 spawn 被拒（EPERM），单文件用 `node test/web_system_pane.test.ts` 直接跑（5 pass）。
+
 ## 2026-10-22（第三十五轮）—— **密钥可按需抓取并逐位置验证**；b5 又排除 816 种构造
 
 ### 一、能力：20 字节会话 key 现在**随手可取**
