@@ -1,6 +1,6 @@
 # ADH MCP Tools
 
-Generated from the live ADH Daemon registry (79 tools). Endpoint: `POST /mcp` (JSON-RPC 2.0).
+Generated from the live ADH Daemon registry (80 tools). Endpoint: `POST /mcp` (JSON-RPC 2.0).
 
 | Tool | Description | Args |
 |---|---|---|
@@ -52,6 +52,7 @@ Generated from the live ADH Daemon registry (79 tools). Endpoint: `POST /mcp` (J
 | `dex_reflections` | List statically resolved Class.forName targets and their callers from an indexed dex | sha, limit |
 | `dex_xref` | Find callers of a method in a dex (b64\|sha) | b64, sha, method |
 | `dex_crypto_scan` | Static crypto scan of a dex (API refs + algorithm strings) | b64, sha |
+| `native_xref` | Find the code that REFERENCES an address inside an ELF .so (b64\|sha): the answer to "which function reads this constant table / jump table / state slot". offset is a MODULE offset (virtual address); if it lands in no segment it is retried as a file offset and the reply says which interpretation matched. Three forms are reported, because a strict ADRP+ADD matcher silently misses two of them and "no reference" then reads as "unused table" (that wrong conclusion cost a detour twice on a VMP-obfuscated module): add (imm12 exact), add-lsl12 (imm12 shifted by 12, how a table a few KiB away is reached), ldr/ldr32/ldr128 (page + scaled load, 4/8/16 bytes per imm12 unit) and adrp-only (the page is loaded but consumed later, e.g. through a register shuffle). An empty refs list carries a note explaining what that does and does not mean; it never pretends the table is unused. | b64, sha, offset, window |
 | `native_disasm` | Disassemble an ELF .so (b64\|sha) by symbol | b64, sha, symbol |
 | `native_analyze` | Exports/imports/NEEDED/printable strings of an ELF .so (b64\|sha). The reply is PAGED, because a 1.6 MB obfuscated library can hold ~19 MB of strings and one unpaged call then costs more context than the analysis is worth: strings returns maxStrings entries starting at stringsOffset, with stringsTotal / nextOffset / longStrings / scanCapped describing exactly what was left out, and each entry cut at maxStringChars (default 200). Symbols are capped at 4000 per direction (exportsTruncated/importsTruncated carry the real count). counts.strings is the number of UNIQUE runs found, not the page size. minLen raises the printable-run threshold (default 4). | b64, sha, maxStrings, stringsOffset, minLen, maxStringChars |
 | `native_crypto_const` | Locate crypto by constant signatures in a stripped .so (b64\|sha). Standard constants only — for a target that implements the algorithm itself and mutates it (rewritten IV / alphabet / polynomial), those signatures are absent by construction: use crypto_variant_scan instead | b64, sha |
