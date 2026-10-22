@@ -3,6 +3,42 @@
 > 这是"我们现在在哪"的唯一真相。每个会话开始先读它，结束前更新它。
 > 详细规格见 `REQUIREMENTS.md`，路线与架构见 `DEVELOPMENT_PLAN.md`。
 
+## 2026-10-22（第四十二轮）—— 独立调用 `0x101da0`：**确定不行**（不是崩溃猜测，是有原因的失败）
+
+先把上一轮那个"未定"结掉：
+
+1. 上一轮怀疑的 1.6 MB drain 回复**不影响客户端**——实测 `capture_stop` 的 HTTP 回复只有 **938 字节**
+   （`status=200`，`drained=0 drainedOk=true complete=true`）。那两次 `ECONNRESET` 是**目标重启窗口里的
+   偶发**，不是稳定缺陷。测量结果否掉了我自己的假设，记在这里以免下一轮再顺着它走。
+2. 给 harness 的 `post()` 加了"网络错误重试 3 次"（只改 gitignored 的 `_verify/_lib.mjs`，
+   不掩盖产品错误：`ok:false` 仍然照原样返回）。加完之后同一条命令一次跑通。
+
+3. **独立驱动渲染指令 = 致命**：自己 `malloc` bank/dst/指令副本，按已校验的调用约定
+   `native_call 0x101da0(0x10, bank, bank+0x138, ins, dst, 0, 0)`，目标是**当场死亡**：
+
+```
+native_call -> ok=false error: the target disconnected while this command was running (it may have crashed)
+alive: NONE
+```
+
+注意这条错误文本本身是**上一轮修的成果**：以前这里会是 60 秒静默 + `command timeout`，现在立刻
+说出真因。结论：`0x101da0` 不是可独立调用的函数，它依赖解释器帧（`x26/x27` 之外还有帧内状态），
+**这条路封死**，不必再试。
+
+### 于是 X 的产地只剩两条路
+
+- **(A) 写入监视**：arena 槽（`hash out - 0x50`，同线程稳定）已知，用 `hw_watch` 抓写者。
+  历史记录里 `hw_watch` 在这个目标上多次致死，但现在有 `filter` + 立刻失败的错误通道，
+  值得**先用一个安全目标（沙盒）验证 `hw_watch` 本身是否已修好**，再上真机。
+- **(B) 种一份"活"的描述符去驱动 formatter `0xf643c`**（不是 `0x101da0`）：它是正规入口
+  `f(dst, cap, descriptor)`，而描述符布局已全部读出（+0x10 常量池 / +0x18 参数向量 / +0x20 模板程序
+  / +0x28 寄存器堆 / +0x30 参数向量）。把这几块都 malloc 出来、抄进去、改指向自己的副本，
+  就能得到一个"给输入看输出"的渲染 oracle——**这条比 (A) 更安全**，因为它不依赖已释放的帧。
+
+下一轮先做 (B)：先把 formatter 自己驱动起来（哪怕只渲染一个常量），再逐步把 32 字节喂进去。
+
+
+
 ## 2026-10-22（第四十一轮）—— 操作数模型用两份真实命中**过了可证伪检验**；独立调用 oracle 暂未成立
 
 上一轮给出了一个假说：`A = word@pc+4 ^ key2`、`B = word@pc+2`（B 不异或），且 `x1 = base + A`、
