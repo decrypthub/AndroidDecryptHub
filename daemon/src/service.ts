@@ -16,6 +16,7 @@ import {
 } from './state.ts';
 import { shouldAutoArmPackage, scopedApps } from './scope_list.ts';
 import type { AgentSession, DumpMeta, MapsRegion, Capture } from './state.ts';
+import { nativeHookIdentity } from './state.ts';
 // dex_index.ts imports state.ts, not this file, so this edge cannot form a cycle; it is here so
 // artifact retention can drop the index row of a dex it deletes.
 import { deleteDexDocument, ensureDexIndex } from './dex_index.ts';
@@ -1100,6 +1101,9 @@ export function startCaptureLoop(sid: string, opts?: { skipArm?: boolean }) {
           // reporter path has always sent these, the native path only since that join exists.
           ...(c.key ? { keyHex: c.key } : {}), ...(c.iv ? { ivHex: c.iv } : {}),
           ...(c.conn ? { conn: String(c.conn) } : {}),
+          // Which hook produced this record, and which of its three parts it is. Lifted at ingest so
+          // the caller can filter/join on it instead of parsing the payload itself.
+          ...nativeHookIdentity(c.func, c.hex ?? ''),
         };
         if (pushCapture(entry)) announce(entry);
       }

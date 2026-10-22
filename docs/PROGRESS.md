@@ -3,6 +3,31 @@
 > 这是"我们现在在哪"的唯一真相。每个会话开始先读它，结束前更新它。
 > 详细规格见 `REQUIREMENTS.md`，路线与架构见 `DEVELOPMENT_PLAN.md`。
 
+## 2026-10-22 —— MCP 接入引导改成 `adh mcp` 打命令，不再摊裸端点 + JSON-RPC
+
+用户反馈（带截图）：Web 的 MCP 面板列着「端点 / 按包固定 / `{"jsonrpc":...}` 示例」，这不是安装引导。真正要做的是
+"把 Host ADH Daemon 注册进我在用的 AI 客户端"，这一步应该由我们的 CLI 说出来，而不是让人自己把端点翻译成客户端配置。
+
+- 新增 `daemon/src/mcp_onboarding.ts`（**唯一实现**）：`MCP_CLIENTS` = claude / codex / vscode / cursor / json，
+  每项带一条可直接粘贴的注册命令、用于 PATH 探测的 `bin`、以及"副作用是什么"的说明；
+  `mcpOnboarding(base,{package,tools})` 产出端点、按包固定形式与全部命令。
+- `GET /api/mcp/config` 改由它生成，**base 取请求自身的 Host**（浏览器走 LAN、CLI 走 loopback，各自拿到"刚连通过"的地址），
+  支持 `?package=` 钉包、非法包名 400；原来那行 `example`（JSON-RPC 示例）删除。
+- `adh mcp`（新子命令；仍是纯客户端，只 import `config.ts`）：默认打印五行接入命令 + 本机是否装了该客户端（PATH/PATHEXT 探测），
+  `--client <id>` 只回一条（`--client json` 回可解析的 `mcpServers` 文档），`--package` 钉包，`--json` 给脚本；
+  未知 client 是用法错（exit 2）并列出可选项；旧 daemon 没有这个字段时 fail-loud 提示重启——而不是打印一个裸端点假装那就是引导。
+- Web 面板：`一步接入（$ adh mcp）` → 客户端 chips + 一行命令（URL 作为原子 inline-block 换行，不再从 `http://192.` 劈开）
+  → 端点 / 按包固定（标注"手工配置时才需要"）。命令正文全部来自 `/api/mcp/config`，页面不再自己拼命令。
+- 验收：`daemon/test/mcp_onboarding.test.ts` 11 条（每个 client 的命令都含端点、code/cursor 的 JSON 参数可解析、
+  json 是完整 `mcpServers`、钉包重写、包名/Host 校验）；`cli_args.test.ts` 12 条（新增 `mcp` 的 flag 契约 + PATH/PATHEXT 探测）；
+  `tools/verify_v100_adh_cli.sh` 新增 7 条**不需要手机**的 `mcp` 断言，在 18099 的临时实例上 **7/7 PASS**
+  （帮助列出 mcp、五客户端+端点、`--client claude` 恰一行、`--client json` 可解析、`--package` 钉包、未知 client exit 2、`--json` 5 clients）；
+  `verify_v10_webui.sh` / `verify_v19_settings.sh` 的断言同步到新面板与 `clients`；`tsc` 0；全量单测跑过一次
+  （唯一红的是并发会话正在改的 `memory.test.ts`，与本轮无关）。面板另用 headless Chrome 逐态截图核对（claude / JSON / 钉包）。
+- **没有重启用户正在跑的 8088 daemon**（上面有 6 个京东会话）——新路由要重启 `adhd` 才生效，旧 daemon 上页面会明确写"重启后出现"。
+
+下一步：重启 `adhd` 后刷新面板，确认显示的命令与 `adh mcp` 输出一致；再用 `adh mcp --client <id>` 真机接一遍 Claude/Codex。
+
 ## 2026-10-22 —— Web「系统」页：检测摘要不再撑满半屏
 
 截图反馈：`系统` 页左侧上半屏是空白，5 条记录挤在底部。根因是 `#sy-radar`（`.detect-radar`）和列表一样是
@@ -223,6 +248,46 @@ X 是 32 字节、`b5 = hex(X)`，所以"b5 的公式"这个问题现在等价�
 - libjdg 自带的 SHA-256（读 `0x1562a4` 那条 `0x8c3f0`）签名期间 **0 命中**；libcrypto 的 `SHA256()` 输出 **不等于 X**。
 
 所以下一步是：**钩 `+0x9796c` 所在函数的入口，用 `mem` 把上下文里的 32 字节字段定位出来**，然后看这个字段是被谁写的 —— 也就是接着往上走一级。必要时用 `trace_digest` 跑 `+0xf643c` 一次（现在有止损，不会杀进程）确认它到底读上下文的哪些偏移。
+
+### 十六、产品打磨（本轮先把工具补好）
+
+**① 原生钩子记录带上身份：`hookId` / `seq` / `phase`**
+
+`NATIVE_HOOK` / `NATIVE_HOOK_MEM` 的身份以前只存在于**载荷 JSON 内部**，而 `seq` 是**按钩子各自编号**的 —— 于是"把寄存器和它的内存副本配对"只能由调用方自己拼，拼错也不报错。这一轮我就是这么错了两次（把 md5 的记录读成 SHA256 的）。现在：
+
+- 入库时把 `hookId` / `seq` / `phase` 抬成独立字段（`state.ts::nativeHookIdentity`）；
+- `live_captures` 新增 **`hookId`** 过滤，描述里写明"配对必须 `(hookId, seq)` 双键"；
+- 响应投影也带上这三个字段（第一次实现时**投影把它们丢了**：过滤生效但读不到，属于同一种"看起来对"的错）。
+
+**实现时踩到的第二个坑**：提取窗口只取前 256 字节，而 `NATIVE_HOOK` 事件约 900 字节、`seq` 在末尾 —— 结果 `hookId` 拿到了、`seq` 丢了。现在窗口 4096 字符，并加了一条**故意超过 600 字节**的单测把它钉住（原来的短 fixture 根本测不出来）。
+
+真机（沙盒）验证：
+
+```
+live_captures {hookId:1}     -> total 2
+  NATIVE_HOOK      hookId=1 seq=1
+  NATIVE_HOOK_MEM  hookId=1 seq=1
+live_captures {hookId:999}   -> total 0
+```
+
+**② `native_hook` 回显"这个地址落在哪个模块+偏移"**
+
+我两次把 `base+0x8c1f8` 算错，而工具**照装不误**、随后 0 命中 —— 读起来和"这段代码不在路径上"一模一样，为此浪费了两轮。现在安装成功后会回显：
+
+```
+正确:  install ok=true   resolved: libjdg.so 0x8c1f8
+错误:  install ok=true   resolved: libjdg.so 0xb1f8     ← 现在一眼可见
+```
+
+实现：`classifyAddress` 增加 `moduleOffset`（**从同一文件的最低映射算起**，不是从所在段算——否则会报成段内偏移），`assertCallableAddress` 一并返回模块名/偏移。
+
+**③ 纠正一条我自己的误判**
+
+上一节把"daemon 崩了两次"记成了产品缺陷。复查后：daemon 一直活着（`/health` 200），那两次 `exit code 1` 是我用 `Select-Object -First 200` **截断了它的 stdout 管道**。**这条不算产品的账**，已从缺陷清单移除；真正值得记的只有"死进程会被当成在线并被自动装 capture_start"这一点（待办，未修）。
+
+**验证汇总**：`tsc` 干净、`npm test` **324 pass / 0 fail**（较上轮 +2）、`verify_v107` 真机 PASS。
+
+**顺带发现（未修）**：`verify_v107` 在"刚重启沙盒、agent 还没连上"时会 `FAIL: command timeout`，紧接着重跑变 `SKIP`。它应该**先等 agent 上线再装钩子**（现在只是重启后固定 sleep）。这是验收脚本自身的时序缺陷，不是产品缺陷。
 
 ## 2026-10-22（第三十四轮）—— 工具打磨收尾 + **b6 破译：它是 jdgs 明文 JSON 的 MD5**
 

@@ -41,3 +41,30 @@ test('no filter returns the store untouched, and filtering never mutates it', ()
   filterLiveCaptures(store, { package: 'com.adh.sandbox' });
   assert.equal(store.length, before);
 });
+
+// The reason hookId exists: `seq` is numbered PER HOOK, so two hooks both have a seq=1 record. A
+// consumer that pairs a register event with its memory copy by seq alone silently joins two
+// different hooks - that produced two wrong conclusions during the jdgs analysis before anyone
+// noticed. The filter is what makes the correct pairing expressible.
+type HookRec = { category: string; sessionId: string; hookId?: number; seq?: number; phase?: string };
+const hookStore: HookRec[] = [
+  { category: 'system', sessionId: 's1', hookId: 1, seq: 1 },                  // hook 1, register event
+  { category: 'system', sessionId: 's1', hookId: 1, seq: 1 },                  // hook 1, its memory copy
+  { category: 'system', sessionId: 's1', hookId: 2, seq: 1 },                  // hook 2, SAME seq
+  { category: 'system', sessionId: 's1', hookId: 2, seq: 2, phase: 'after' },  // hook 2, post-call
+  { category: 'system', sessionId: 's1' },                                     // not a hook record at all
+];
+
+test('hookId separates two hooks that both use seq 1', () => {
+  assert.equal(filterLiveCaptures(hookStore, { hookId: 1 }).length, 2);
+  assert.equal(filterLiveCaptures(hookStore, { hookId: 2 }).length, 2);
+  const after = filterLiveCaptures(hookStore, { hookId: 2 }).filter((r) => r.phase === 'after');
+  assert.equal(after.length, 1);
+  assert.equal(after[0].seq, 2);
+});
+
+test('hookId 0 selects nothing instead of falling back to "all"', () => {
+  // Ids start at 1, so 0 is a caller mistake; returning the whole store would hide it.
+  assert.equal(filterLiveCaptures(hookStore, { hookId: 0 }).length, 0);
+  assert.equal(filterLiveCaptures(hookStore, { hookId: undefined }).length, hookStore.length);
+});

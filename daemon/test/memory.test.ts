@@ -22,11 +22,28 @@ test('an address is classified against the live maps before anything is called',
     { start: '7000000000', end: '7000100000', perms: 'r-xp', offset: '0', dev: '00:00', inode: 0, path: '/system/lib64/libc.so' },
     { start: '7100000000', end: '7100001000', perms: 'rw-p', offset: '0', dev: '00:00', inode: 0, path: '[anon]' },
   ];
-  assert.deepEqual(classifyAddress(regions, '0x7000001000'), { mapped: true, executable: true, path: '/system/lib64/libc.so' });
-  assert.deepEqual(classifyAddress(regions, '0x7100000000'), { mapped: true, executable: false, path: '[anon]' });
+  // moduleOffset is part of the answer now: it is what makes a one-digit-off address visible
+  // (libjdg+0xb1f8 instead of the meant libjdg+0x8c1f8 installs fine and then never fires).
+  assert.deepEqual(classifyAddress(regions, '0x7000001000'), {
+    mapped: true, executable: true, path: '/system/lib64/libc.so', moduleOffset: '0x1000',
+  });
+  assert.deepEqual(classifyAddress(regions, '0x7100000000'), {
+    mapped: true, executable: false, path: '[anon]', moduleOffset: '0x0',
+  });
   assert.equal(classifyAddress(regions, '0x6000000000').mapped, false);          // not mapped at all
   assert.equal(classifyAddress(regions, '0x7000100000').mapped, false);          // end is exclusive
   assert.equal(classifyAddress(regions, 'not-an-address').mapped, false);        // garbage never maps
+});
+
+test('module offset is measured from the lowest mapping of that same file', () => {
+  // A real module is several mappings: measuring from the containing one would report an offset
+  // inside a segment (r--p starts at file offset 0x14000) instead of the module offset.
+  const regions = [
+    { start: '730001b000', end: '7300165000', perms: 'r-xp', offset: '0', dev: '00:00', inode: 1, path: '/data/app/libjdg.so' },
+    { start: '7300168000', end: '730016d000', perms: 'r--p', offset: '149000', dev: '00:00', inode: 1, path: '/data/app/libjdg.so' },
+  ];
+  assert.equal(classifyAddress(regions, '0x7300021000').moduleOffset, '0x6000');
+  assert.equal(classifyAddress(regions, '0x7300168000').moduleOffset, '0x14d000');
 });
 
 test('the address handed to the agent is the one the guard checked', () => {

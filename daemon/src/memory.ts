@@ -45,7 +45,16 @@ export function normalizeAddressForAgent(addr: string): string {
  * executable? Used before an arbitrary native call so a stale address (unloaded module, typo) fails
  * here instead of jumping into unmapped memory inside the target.
  */
-export interface AddressClass { mapped: boolean; executable: boolean; path?: string; }
+export interface AddressClass {
+  mapped: boolean; executable: boolean; path?: string;
+  /**
+   * Module-relative offset when the address sits inside a file-backed mapping, as `0x…`.
+   * Reported by the guard so a caller can SEE that it asked for `libjdg+0xb1f8` when it meant
+   * `libjdg+0x8c1f8`: a wrong-but-mapped address installs happily and then never fires, which reads
+   * exactly like "this code is not on the path" (that cost two runs during the jdgs analysis).
+   */
+  moduleOffset?: string;
+}
 
 /**
  * Host-side guard shared by every native_call entry point (MCP tool and REST route): a raw address
@@ -58,7 +67,7 @@ export interface AddressClass { mapped: boolean; executable: boolean; path?: str
 // shape is unchanged; re-tighten this once strictNullChecks is enabled.
 export async function assertCallableAddress(
   sid: string, addr: unknown,
-): Promise<{ ok: boolean; addr?: string; error?: string }> {
+): Promise<{ ok: boolean; addr?: string; error?: string; module?: string; moduleOffset?: string }> {
   // A missing address (undefined / null / '' / 0) means "use module+symbol"; anything else is text.
   // JSON callers that send addr:0 with module+symbol used to have it stringified into "0" and
   // rejected as unmapped instead of falling back to the symbol path.
@@ -76,7 +85,12 @@ export async function assertCallableAddress(
   // 10_000_000_000 to this guard and 0x40000000 to strtoull). The normalized 0x form is
   // unambiguous for both sides, and it also drops the surrounding whitespace that used to send a
   // padded string into the agent's addr branch instead of the module+symbol path.
-  return { ok: true, addr: normalizeAddressForAgent(trimmed) };
+  return {
+    ok: true,
+    addr: normalizeAddressForAgent(trimmed),
+    ...(cls.path ? { module: cls.path.split('/').pop() || cls.path } : {}),
+    ...(cls.moduleOffset ? { moduleOffset: cls.moduleOffset } : {}),
+  };
 }
 
 export function classifyAddress(regions: MapsRegion[], addr: string | bigint | number): AddressClass {
@@ -90,7 +104,20 @@ export function classifyAddress(regions: MapsRegion[], addr: string | bigint | n
     const start = BigInt('0x' + String(r.start).replace(/^0x/i, ''));
     const end = BigInt('0x' + String(r.end).replace(/^0x/i, ''));
     if (value >= start && value < end) {
-      return { mapped: true, executable: String(r.perms ?? '').includes('x'), path: r.path || undefined };
+      const out: AddressClass = { mapped: true, executable: String(r.perms ?? '').includes('x'), path: r.path || undefined };
+      // Module offset = distance from the base of the FIRST mapping of this same file. Using the
+      // containing mapping's own start would report the offset inside a segment instead, which is
+      // not what any caller means by "libfoo.so+0x1234".
+      if (out.path) {
+        let base: bigint | null = null;
+        for (const b of regions) {
+          if ((b.path || '') !== out.path) continue;
+          const bs = BigInt('0x' + String(b.start).replace(/^0x/i, ''));
+          if (base === null || bs < base) base = bs;
+        }
+        if (base !== null && value >= base) out.moduleOffset = '0x' + (value - base).toString(16);
+      }
+      return out;
     }
   }
   return { mapped: false, executable: false };

@@ -613,6 +613,34 @@ export interface Capture {
   /** Target package. Stamped at ingest so the record stays with the app after the process exits and its session is pruned. */
   package?: string;
   keyHex?: string; ivHex?: string; outHex?: string;
+  /**
+   * Identity of a native-hook record, lifted out of its own payload at ingest (NATIVE_HOOK /
+   * NATIVE_HOOK_MEM only). `seq` is numbered PER HOOK, so pairing a register event with its memory
+   * record by seq alone silently mixes two hooks - that mistake produced two wrong conclusions during
+   * the jdgs analysis. With hookId here, the pair is queryable instead of reconstructed by hand.
+   */
+  hookId?: number;
+  seq?: number;
+  /** "after" on the post-call memory record; absent on the register event and the pre-call copy. */
+  phase?: string;
+}
+
+/** Pull the native-hook identity out of a record's own JSON head. Pure; unknown shapes yield {}. */
+export function nativeHookIdentity(func: string, hex: string): { hookId?: number; seq?: number; phase?: string } {
+  if (func !== 'NATIVE_HOOK' && func !== 'NATIVE_HOOK_MEM') return {};
+  // A NATIVE_HOOK event is ~900 bytes: the registers come first and `seq` is near the END, so a
+  // "just the head" window silently lost the seq while still finding the hookId (caught in
+  // verification, not in the unit test that used a 60-byte fixture). 4096 hex characters = 2048
+  // bytes covers every native-hook shape with room to spare, and slicing a hex string is cheap.
+  const head = Buffer.from(hex.slice(0, 4096), 'hex').toString('utf8');
+  const hookId = /\{"hookId":(\d+)/.exec(head)?.[1];
+  const seq = /[,{]"seq":(\d+)/.exec(head)?.[1];
+  const phase = /"phase":"([a-z]+)"/.exec(head)?.[1];
+  return {
+    ...(hookId ? { hookId: Number(hookId) } : {}),
+    ...(seq ? { seq: Number(seq) } : {}),
+    ...(phase ? { phase } : {}),
+  };
 }
 /** Package a capture belongs to. Prefer the stamp; fall back to a session that is still in the registry. */
 export function capturePackage(c: { package?: string; sessionId?: string }): string {
@@ -630,13 +658,16 @@ export function capturePackage(c: { package?: string; sessionId?: string }): str
  * `package` is resolved per record (its own stamp first), so a target's records stay attributable
  * after its process exits and the session is pruned.
  */
-export function filterLiveCaptures<T extends { category: string; package?: string; sessionId: string }>(
-  list: readonly T[], opts: { category?: string; session?: string; package?: string },
+export function filterLiveCaptures<T extends { category: string; package?: string; sessionId: string; hookId?: number }>(
+  list: readonly T[], opts: { category?: string; session?: string; package?: string; hookId?: number },
 ): T[] {
   let out = list as readonly T[];
   if (opts.category) out = out.filter((c) => c.category === opts.category);
   if (opts.session) out = out.filter((c) => c.sessionId === opts.session);
   if (opts.package) out = out.filter((c) => capturePackage(c) === opts.package);
+  // hookId is a number, so "unset" must not be tested with truthiness alone: hookId 0 is not a thing
+  // (ids start at 1) but a caller passing 0 by mistake should get no records rather than all of them.
+  if (opts.hookId !== undefined && opts.hookId !== null) out = out.filter((c) => c.hookId === opts.hookId);
   return out as T[];
 }
 export interface KnownApp {
