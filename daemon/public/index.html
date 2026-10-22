@@ -135,6 +135,8 @@
   .list-pane { width:42%; min-width:220px; max-width:70%; flex-shrink:0; display:flex; flex-direction:column; min-height:0; background:var(--bg); }
   .list-pane > div { flex:1; overflow-y:auto; min-height:0; }
   .list-pane > .new-banner { flex:0 0 auto; overflow:visible; }
+  /* 检测摘要是一行标题，不是可拉伸的列表区：否则 flex:1 会把它撑成半屏，列表被挤到底部 */
+  .list-pane > .detect-radar { flex:0 0 auto; overflow:visible; }
   .splitter { width:5px; flex-shrink:0; background:transparent; border-left:1px solid var(--line-soft); border-right:1px solid var(--line-soft); cursor:col-resize; transition:background .15s; }
   .splitter:hover, .splitter.dragging { background:var(--blue); }
   .detail-pane { flex:1; min-width:240px; overflow-y:auto; padding:0 20px 30px; background:var(--bg); }
@@ -505,7 +507,7 @@
   <div class="panel" id="p-system">
     <div class="workspace">
       <div class="list-pane">
-        <div id="sy-radar" class="detect-radar">选应用</div>
+        <div id="sy-radar" class="detect-radar">系统检测</div>
         <div class="new-banner" id="sy-banner"><span id="sy-banner-text"></span><button type="button" onclick="jumpLatest('sy')">跳到最新</button></div>
         <div id="sy-list"></div>
       </div>
@@ -980,6 +982,8 @@ function hexdump(hex){ hex=hex||''; let out='';
       ascii+=(b>=0x20&&b<0x7f)?String.fromCharCode(b):'.'; }
     out+=off+': '+hp.padEnd(50)+' |'+ascii+'|\n'; }
   return out; }
+// 时间统一走 24 小时制：toLocaleTimeString() 默认跟浏览器 locale，中文界面里会冒出「5:35:08 PM」。
+function fmtTime(ts){ if(!ts) return ''; try{ return new Date(ts).toLocaleTimeString(undefined,{hour12:false}); }catch(e){ return ''; } }
 
 const CAPPANELS={};
 let activeCapKey='cc';
@@ -1110,13 +1114,13 @@ function cryptoRow(key,sel,c){ const v=clientCryptoView(c); const cc=catClass(c)
   const hook=v.hook?'<span class="hook">'+escapeHtml(v.hook)+'</span>':'';
   const sub=(prev||hook)?'<div class="subline">'+prev+hook+'</div>':'';
   return `<div class="row crypto-row cat-${cc}${c.id===sel?' selected':''}" onclick="capSelectP('${key}',${c.id})">
-    <div class="top"><span class="algo">${escapeHtml(v.title||c.algo||'')}</span>${dir}${size}${mark}<span class="ts">${new Date(c.ts).toLocaleTimeString()}</span></div>
+    <div class="top"><span class="algo">${escapeHtml(v.title||c.algo||'')}</span>${dir}${size}${mark}<span class="ts">${fmtTime(c.ts)}</span></div>
     ${sub}</div>`; }
 function rowHtml(key,sel,c){ if(c.category==='crypto') return cryptoRow(key,sel,c); const cc=catClass(c);
   const isIo=c.category==='net'||c.category==='file'||c.category==='system';
   const preview=(!isIo && c.preview)?'<div class="preview">'+escapeHtml(c.preview)+'</div>':'';
   return `<div class="row cat-${cc}${c.id===sel?' selected':''}" onclick="capSelectP('${key}',${c.id})">
-    <div class="top"><span class="seq">#${c.id}</span><span class="pill ${cc}">${CATLABEL[cc]}</span><span class="algo">${escapeHtml(c.algo)}</span><span class="op">${escapeHtml(c.op)}</span><span class="ts">${new Date(c.ts).toLocaleTimeString()}</span></div>
+    <div class="top"><span class="seq">#${c.id}</span><span class="pill ${cc}">${CATLABEL[cc]}</span><span class="algo">${escapeHtml(c.algo)}</span><span class="op">${escapeHtml(c.op)}</span><span class="ts">${fmtTime(c.ts)}</span></div>
     <div class="lens">${rowLens(c)}</div>${preview}</div>`; }
 function showBanner(key,n){ const b=document.getElementById(key+'-banner'), t=document.getElementById(key+'-banner-text');
   if(!b) return; if(n>0){ t.textContent=n+' 条新记录'; b.classList.add('show'); } else b.classList.remove('show'); }
@@ -1151,14 +1155,26 @@ function formatRadar(r){
   const hit=(r.kinds||[]).filter(k=>(k.count||0)>0).map(k=>k.label+' '+k.count);
   return hit.length ? ('已开 · '+hit.join(' · ')) : '已开 · 暂无';
 }
+// 「未开 / 已开 · 计数」只是一个词，光看它不知道是什么没开：补上主语，并把细则放进 title。
+function radarDetail(r){
+  if(!r) return '';
+  const parts=[];
+  if(r.armed===false) parts.push('该包的系统检测未开启：在 Manager → 应用 → Hook 配置 → 系统检测 里打开');
+  if(r.caveat) parts.push(r.caveat);
+  const un=(r.unchecked||[]);
+  if(un.length) parts.push('未覆盖：'+un.join('、'));
+  return parts.join('\n');
+}
 async function loadDetect(){
   const el=document.getElementById('sy-radar'); if(!el) return;
   const pkg=selectedPackage();
-  if(!pkg){ el.textContent='选应用'; return; }
+  if(!pkg){ el.textContent='系统检测'; el.title='选择应用后显示该包的检测摘要'; return; }
   try{
     const r=await (await fetch('/api/detect/summary?package='+encodeURIComponent(pkg))).json();
-    el.textContent=formatRadar(r);
-  }catch(e){ el.textContent='—'; }
+    const state=formatRadar(r);
+    el.textContent=state?('系统检测：'+state):'系统检测';
+    el.title=radarDetail(r);
+  }catch(e){ el.textContent='系统检测：—'; el.title='摘要读取失败'; }
 }
 function scheduleDetect(){ clearTimeout(detectTimer); detectTimer=setTimeout(loadDetect, 300); }
 let httpAssembly={exchanges:[],noConn:0,http2:0,caveat:''};
@@ -1198,7 +1214,7 @@ function exchangeRow(sel,ex){
   const lens=(ex.response&&ex.response.startLine)||(ex.request&&ex.request.startLine)||ex.note||'';
   return '<div class="row cat-net'+(ex.id===sel?' selected':'')+'" data-ex="'+escapeHtml(ex.id)+'" onclick="exchangeSelect(this.getAttribute(\'data-ex\'))">'
     +'<div class="top"><span class="pill net">网络</span><span class="algo">'+escapeHtml(ex.label||'')+'</span>'+status
-    +'<span class="ts">'+(ex.ts?new Date(ex.ts).toLocaleTimeString():'')+'</span></div>'
+    +'<span class="ts">'+fmtTime(ex.ts)+'</span></div>'
     +'<div class="lens">'+escapeHtml(lens)+'</div></div>';
 }
 (function(){
@@ -1787,7 +1803,7 @@ async function loadAppEvents(){
       if(e.type==='agent.hello') text='进程连上 · PID '+(d.pid??'');
       else if(e.type==='agent.close') text='进程退出'+(d.pid?' · PID '+d.pid:'');
       else if(e.type==='dump.new') text='Dump · '+(d.kind||d.tag||'');
-      return `<div>${new Date(e.ts).toLocaleTimeString()} ${escapeHtml(text)}</div>`;
+      return `<div>${fmtTime(e.ts)} ${escapeHtml(text)}</div>`;
     }).join(''):'<div>这个应用还没有进程日志</div>';
   }catch(e){ el.textContent=''; }
 }
