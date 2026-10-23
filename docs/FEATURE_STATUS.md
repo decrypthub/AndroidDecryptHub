@@ -37,6 +37,8 @@
 
 ## 0. 发布物
 
+> **2026-10-23：v0.5.0 候选包已构建**（本机）。`injector/zygisk/dist/adh-bundle-v0.5.0.zip`，**20,490,341 B**，SHA-256 `2e11ead13372d597d33388b56a9126759383a22b9bec3103db06db01b8672a69`；模块 zip `adh-zygisk.zip` SHA-256 `85a0facd…`。同号：`module.prop` v0.5.0/25、`update.json` v0.5.0/25、Manager `0.5.0`/25、Device Daemon `0.5.0`/12、`AGENT_VER` `0.5.0`；模块内 `libadh_agent.so` 与 `agent/build/libadh_agent.so` 同 hash（`f22ed299…`）。**已刷入 `aa165071` 的 agent 是这一版**；本次新增能力的真机门禁见 §2.3。公开 Release 的 zip 尚未上传。
+
 > **2026-10-09 补记**：公开仓库已发布 [v0.3.12 可刷入预发布包](https://github.com/decrypthub/AndroidDecryptHub/releases/tag/v0.3.12)，包含 Zygisk 模块、Agent、Root Device Daemon 和 Manager；ZIP SHA-256 为 `8c09b1ace579b6a4d84bea06523151729f547f12b88eee685cb0a6e351c73695`。本次只通过构建、ZIP/签名/架构主机检查，**未刷入专用 root 设备，未跑新一轮设备门禁**。下表的旧设备 hash 与设备验收结果仍是 2026-10-01 的历史状态。
 
 | 交付物 | 来源 | 状态 |
@@ -97,6 +99,36 @@
 | 单元测试（host） | v76, v80, v81, v83, v84, v85, **v86**, **v87** | syscall 归因/参数解码/一站式装配、trace 摘要、backtrace dynsym、Java trace（含三阶段装配与 drain 守卫）、native 批量选择、native 限流（默认/夹紧/拒绝垃圾值 + 安装回路真实 payload）、探针判定与设备文件读取（二进制/超大/截断/坏 base64）：**169 条** `node --test` 用例（2026-09-29 实测；旧记 121 已过时） |
 
 ## 2. 真机验收结果与当前遗留项
+
+### 2.3 本轮（2026-10-23，v0.5.0）新增能力与门禁
+
+> 设备 `aa165071`（PGP110 / Android 15 / arm64-v8a / root），agent `f22ed299…`（= 模块内 `.so`）。
+
+| 能力 | 门禁 | 真机结果 |
+|---|---|---|
+| 命中点内联 trace（`traceInsns`/`traceFrom`） | `verify_v117_inhook_trace.sh` | ✅ PASS（`first[0]` == 被钩入口；inline 从 trampoline 起跑；0 条时无 `trace` 键；`+skipOriginal` 被拒） |
+| 命中点窗口往回读（负偏移） | `verify_v118_negative_window.sh` | ✅ PASS（`x0-8:16` 取到指针之前的 16 字节，status 回显） |
+| 窗口读**绝对地址**（"此刻这块内存是什么"） | `verify_v118_negative_window.sh` | ✅ PASS（`reg:"abs"`、地址、字节全对） |
+| **写观察点** `traceWatch`（谁写了这块内存） | `verify_v119_trace_watch.sh` | ✅ PASS（命中 `strb w9,[x0]`、`addr==buf`、`size 1`、`value 0xbe`；寄存器/绝对两种形式；不带时无该键） |
+| **`oracle` 可控回放 + 差分** | `verify_v120_oracle_diff.sh` | ✅ PASS（baseline/replay/diff 三步 + 两参数都进 `sensitive` + 空补丁进 `insensitive`） |
+| MCP 工具面（81 tools） | `verify_v71_mcp_registry.sh` + 表面 smoke | ✅ PASS（握手、schema、描述、REST、在线会话调用、错误路径共 26/26） |
+| Host 单测 | `cd daemon && npm test` | ✅ **351 pass / 0 fail**，`tsc` 0 |
+
+**未测 / 已知边界**：`traceInsns` 上限 64k 与 300 ms 墙钟（谁先到谁停）；写观察点只覆盖**本次 run 内**的写；`memAfter` 仍只接受寄存器窗口；全量块级 trace 与 host 查询**尚未实现**（见 `PROGRESS` 第五十轮）。
+
+**全量门禁（2026-10-23，130 条）**：套件跑出 **112 PASS / 18 FAIL / 0 SKIP**。逐条单独复跑后：
+
+- **2 条是本版改动引起的，已修并复跑 PASS**：`v86`（安装签名长了 → 源码锚点过期，改成按参数名断言，并新增“被节流的命中不得 trace”这条不变量）、`v87`（`module_watch` 在 agent 里**只有实现、没有接进分派**，MCP 工具实际是死的；已接线 + 进 caps，ops 36→37）。
+- **2 条单独复跑即 PASS**（套件内的状态抖动）：`v04_dexparse`、`v22_capture`。
+- **14 条与本版改动无关，本版未修**，按原因分三类：
+  | 原因 | 脚本 | 说明 |
+  |---|---|---|
+  | 大 dex 超过 8 MB 请求体上限（`MAX_BODY_BYTES`） | `v02_dexrepair`、`v12_rebuild`、`v29_dexindex`（+ 同因的 `v08_xref`/`v95`/`v13` 待复核） | 夹具是 9,604,000 B 的真 dex，POST 回 `/api/dex/*` 被 413 拒；**真实缺陷**（真实 dex 就是这么大），需要按路由放宽上限 |
+  | 设备上的 Zygisk 模块/companion 未按本版源码重刷 | `v102_policy`、`v103_zygisk_companion` | companion 多回了一个策略族 `y=0`，说明设备上的模块与源码不同步；需 `flash_device.sh --reboot` |
+  | UI/报告形状与 Dobby 洗签预算 | `v10_webui`、`v35_sessions`、`v10_export`（report shape）、`v88`（Dobby x3 / stage-2 预算） | 面向前端冻结面与预编译 Dobby 的既有欠账；与本版 diff 无交集 |
+  | 需要真实目标进程 | `v05_detect` | 依赖目标 app 的 system 类持续捕获 |
+
+
 
 ### 2.1 本轮（2026-10-01）改动后的全量门禁
 

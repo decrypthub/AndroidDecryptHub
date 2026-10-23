@@ -3,6 +3,30 @@
 > 这是"我们现在在哪"的唯一真相。每个会话开始先读它，结束前更新它。
 > 详细规格见 `REQUIREMENTS.md`，路线与架构见 `DEVELOPMENT_PLAN.md`。
 
+## 2026-10-23（第五十一轮）—— 工具面全量核对 + v0.5.0 发版
+
+### 一、发版前核对（全部有信号）
+
+| 项 | 结果 |
+|---|---|
+| MCP 握手 / 注册表 | `initialize` ok；`tools/list` **81 tools**；`native_hook` schema 含 `traceInsns`/`traceFrom`/`traceWatch`/`mem`/`memAfter`，描述里写明写观察点；`oracle` 暴露 record/replay/diff |
+| MCP 表面 smoke（自写 26 项） | **26/26 PASS**：REST `/health`·`/api/agents`、`capabilities`、`process_list`、`native_hook status`、`oracle list`、`live_captures`、`memory_read` 错误路径、无目标安装被拒 |
+| daemon 单测 | `npm test` **351 pass / 0 fail**，`tsc` 0 |
+| daemon smoke（TCP 注册/断开） | `SMOKE OK` |
+| `adh` CLI | `doctor` 起初 FAIL —— 5 个京东进程仍跑 **0.4.1**（真话：新 agent 只进了沙盒与模块目录）；清掉残留进程后 **`doctor: ok`**，版本配对 in-sync |
+
+### 二、v0.5.0（特性升版，`versionCode` 24→25）
+
+- `module.prop` v0.5.0 / 25、`update.json` v0.5.0 / 25、Manager `0.5.0` / 25、Device Daemon `0.5.0` / 12、`AGENT_VER` `0.5.0`；
+- 产物：`adh-bundle-v0.5.0.zip` **20,490,341 B**，SHA-256 `2e11ead1…`；`adh-zygisk.zip` SHA-256 `85a0facd…`；模块内 `libadh_agent.so` 与 `agent/build/libadh_agent.so` 同 hash `f22ed299…`；
+- 已 `--deploy` 到 `aa165071`（沙盒 + 模块目录），`doctor` 确认设备上跑的就是这一版；
+- 公开 Release 的 zip **尚未上传**（本轮只做构建与真机部署）。
+
+### 三、这一版新增的东西（都在上一轮实现，本轮验证）
+
+`traceInsns`/`traceFrom`（命中点内联 trace）、`mem` 负偏移与**绝对地址**窗口、`traceWatch` 写观察点（寄存器/绝对两种形式）、`oracle` 可控回放 + 差分矩阵；`traceInsns` 上限 4096 → 65536。
+
+
 ## 2026-10-23（第五十轮）—— `oracle`（可控回放 + 差分）上线：把"未知参数"变成依赖矩阵
 
 这一轮把两件"每个真实协议分析都要手写一遍"的东西固化成工具，**都不含任何目标专属知识**：

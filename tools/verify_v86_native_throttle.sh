@@ -56,7 +56,11 @@ if (normalizeThrottleMs) {
 
 // ---- 2. agent side: clamp, gate placement, counters, status ----
 const hdr = read('agent/src/hook/native_hooks.h');
-has(hdr, 'int throttle_ms, int *hook_id_out', 'native_hooks.h install signature');
+// The install signature grew (mem/trace options sit between the throttle and the id), so assert the two
+// arguments by name rather than as one adjacent substring: an anchor that pins the whole parameter list
+// turns every new option into a false failure, which is how this check went red when traceWatch landed.
+has(hdr, 'int throttle_ms', 'native_hooks.h has the throttle argument');
+has(hdr, 'int *hook_id_out', 'native_hooks.h install returns the hook id');
 has(hdr, 'suppresses EVENTS ONLY', 'native_hooks.h must state that only the event is suppressed');
 
 const hooks = read('agent/src/hook/native_hooks.cpp');
@@ -72,10 +76,15 @@ has(hooks, 'ctx.throttle_ms = 0;', 'native_hooks.cpp must clear the window on sl
 // suppressed path returns BEFORE any JSON is built (no event, but the rewrite already happened).
 before(hooks, 'if (arg_index >= 0 && arg_index < 8) regs[arg_index] = arg_value;',
        'const int throttle_ms = __atomic_load_n(&ctx.throttle_ms', 'throttle gate placement');
-before(hooks, 'const int throttle_ms = __atomic_load_n(&ctx.throttle_ms', 'char json[3072]', 'throttle gate must precede the event build');
-const gate = hooks.slice(hooks.indexOf('const int throttle_ms = __atomic_load_n(&ctx.throttle_ms'), hooks.indexOf('char json[3072]'));
+// The event buffer is sized from the caps, so its declaration carries the trace allowance now. Match the
+// prefix instead of the old literal: the ORDERING is what matters, not the buffer size.
+before(hooks, 'const int throttle_ms = __atomic_load_n(&ctx.throttle_ms', 'char json[3072', 'throttle gate must precede the event build');
+const gate = hooks.slice(hooks.indexOf('const int throttle_ms = __atomic_load_n(&ctx.throttle_ms'), hooks.indexOf('char json[3072'));
 if (!/return \(?skip_original \|\| return_set\)? \? 1 : 0;/.test(gate)) problems.push('a suppressed hit must return either the configured replacement or the original-skip result for the site backend');
 if (!/fetch_add\(1, std::memory_order_relaxed\)/.test(gate)) problems.push('a suppressed hit must be counted, not dropped silently');
+// And the in-hook trace (which EXECUTES the traced function) must also sit behind the gate: a suppressed
+// hit must not pay for a run, let alone emit one.
+before(hooks, 'const int throttle_ms = __atomic_load_n(&ctx.throttle_ms', 'adh_qbdi_run_from_watch', 'a suppressed hit must not trace');
 // The per-event delta is the one subtle piece: load+store would let two concurrent emitters both
 // claim the same suppressed hits (the totals would still add up, the deltas would lie).
 has(hooks, 'exchange(total, std::memory_order_relaxed)', 'the suppressed delta must be taken with exchange');

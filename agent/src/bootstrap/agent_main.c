@@ -67,7 +67,7 @@ static const char *ADH_AGENT_OPS[] = {
     "native_call", "got_enum", "stealth", "javahook_probe", "gothook_selftest", "capture_start",
     "capture_drain", "capture_stop", "trigger", "load_so", "file_probe", "qbdi_trace",
     "compat_probe", "object_inspect", "object_set", "object_invoke", "art_dexfiles", "list_dir",
-    "read_file", "scan_magic", "mem_backend", "search", "frame_echo", "ping",
+    "read_file", "scan_magic", "mem_backend", "search", "frame_echo", "ping", "module_watch",
 };
 
 static void send_caps(int fd) {
@@ -799,6 +799,14 @@ static void command_loop(int fd) {
                     cmd_javahook_probe(fd, id);
                 } else if (strcmp(op, "gothook_selftest") == 0) {
                     adh_cmd_gothook_selftest(fd, id);
+                } else if (strcmp(op, "module_watch") == 0) {
+                    // The dlopen watch was implemented and documented but never WIRED: the daemon's
+                    // module_watch tool called this op and got "unknown op" back, so the MCP tool was
+                    // dead while docs/mcp-tools.md advertised it (v87 caught it). Both directions of the
+                    // manifest (this branch and ADH_AGENT_OPS) are asserted by agent_caps.test.ts.
+                    char waction[16] = "";
+                    json_get_str(line, "action", waction, sizeof(waction));
+                    adh_cmd_module_watch(fd, id, waction);
                 } else if (strcmp(op, "capture_start") == 0) {
                     char cmod[64] = "", fmod[64] = "", smod[512] = "";
                     json_get_str(line, "cryptoModule", cmod, sizeof(cmod));
