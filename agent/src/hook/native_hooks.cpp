@@ -73,6 +73,11 @@ struct NativeHookContext {
         int deref;      // 1 = follow the pointer at (reg+offset), 2 = follow a pointer inside an
                         // earlier window's copy (see from_win)
         int from_win;   // 1-based earlier window holding the pointer when deref == 2
+        // An ABSOLUTE window names the address itself ("0x7443113690:32"). That is the only way to ask
+        // "what does this memory hold NOW" for a buffer learned earlier (a signature's value slot, a
+        // kernel structure, a decrypted blob): at the next hit no register still points at it.
+        int absolute;
+        unsigned long long abs_addr;
     } mem_win[ADH_MEM_WIN_MAX];
     int mem_nwin;
     char mem_spec[96];
@@ -447,7 +452,8 @@ static int format_window(char *buf, size_t n, const WinSpec *w) {
 // "auto", or "x0:64" / "x2+16:32", comma-separated. Canonical form drops a zero offset
 // and spaces. nout == -1 means auto (windows are chosen per hit). A bad spec fails the
 // install; it must not become "hook installed, window silently absent".
-static int parse_mem_spec(const char *spec, int *regs, int *offsets, int *lens, int *derefs, int *froms, int *nout,
+static int parse_mem_spec(const char *spec, int *regs, int *offsets, int *lens, int *derefs, int *froms,
+                          unsigned long long *abs_addrs, int *is_abs, int *nout,
                           char *canon, size_t canon_sz, char *error, size_t error_size) {
     if (nout) *nout = 0;
     if (canon && canon_sz) canon[0] = 0;
@@ -478,10 +484,12 @@ static int parse_mem_spec(const char *spec, int *regs, int *offsets, int *lens, 
         }
         WinSpec w;
         if (!parse_window(&p, ADH_MEM_WIN_LEN, "mem", &w, error, error_size)) return 0;
-        if (w.absolute) {
-            // A copied window has to be re-read from a live register on every hit; an absolute address here
-            // would silently pin one hit's buffer. Only traceWatch accepts the absolute form.
-            set_error(error, error_size, "mem windows start at a register (x0:64); an absolute address is only accepted by traceWatch");
+        // An absolute window is allowed here (unlike memAfter): reading "what does this address hold at
+        // this hit" is exactly how a value's origin is bisected, and the address is re-read per hit like
+        // any other window. No deref/from_win combination is allowed with it - there is no register to
+        // take the offset from.
+        if (w.absolute && (w.deref || w.from_win)) {
+            set_error(error, error_size, "an absolute mem window cannot also dereference (0xADDR:len)");
             return 0;
         }
         while (*p == ' ') p++;
@@ -519,6 +527,8 @@ static int parse_mem_spec(const char *spec, int *regs, int *offsets, int *lens, 
         lens[n] = w.len;
         if (derefs) derefs[n] = w.deref;
         if (froms) froms[n] = w.from_win;
+        if (is_abs) is_abs[n] = w.absolute;
+        if (abs_addrs) abs_addrs[n] = w.abs_addr;
         char piece[32];
         int pn = format_window(piece, sizeof(piece), &w);
         if (pn < 0 || (size_t)pn >= sizeof(piece) || !canon || coff + (n ? 1 : 0) + (size_t)pn + 1 > canon_sz) {
@@ -733,6 +743,8 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id, uint64_t
     int mem_got[ADH_MEM_WIN_MAX];
     int mem_deref[ADH_MEM_WIN_MAX];
     int mem_from[ADH_MEM_WIN_MAX];
+    int mem_abs[ADH_MEM_WIN_MAX];
+    unsigned long long mem_abs_addr[ADH_MEM_WIN_MAX];
     unsigned long long mem_ptr[ADH_MEM_WIN_MAX];
     const char *mem_err[ADH_MEM_WIN_MAX];
     unsigned char mem_bytes[ADH_MEM_WIN_MAX][ADH_MEM_WIN_LEN];
@@ -749,6 +761,8 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id, uint64_t
                 mem_len[mem_nwin] = 64;
                 mem_got[mem_nwin] = got;
                 mem_deref[mem_nwin] = 0;
+                mem_abs[mem_nwin] = 0;
+                mem_abs_addr[mem_nwin] = 0;
                 mem_ptr[mem_nwin] = inreg[r];
                 mem_err[mem_nwin] = "";
                 mem_nwin++;
@@ -761,6 +775,8 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id, uint64_t
                 mem_len[w] = ctx.mem_win[w].len;
                 mem_deref[w] = ctx.mem_win[w].deref;
                 mem_from[w] = ctx.mem_win[w].from_win;
+                mem_abs[w] = ctx.mem_win[w].absolute;
+                mem_abs_addr[w] = ctx.mem_win[w].abs_addr;
                 mem_got[w] = 0;
                 mem_ptr[w] = 0;
                 mem_err[w] = "";
@@ -787,6 +803,11 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id, uint64_t
                     }
                     src = target;
                 } else {
+                    if (mem_abs[w]) {
+                        // "What does this address hold NOW": the address came from an earlier hit, so no
+                        // register is involved and nothing here can be stale.
+                        src = mem_abs_addr[w];
+                    } else {
                     if (mem_reg[w] < 0 || mem_reg[w] > 8 || mem_len[w] < 1 || mem_len[w] > ADH_MEM_WIN_LEN) {
                         mem_err[w] = "unreadable";
                         continue;
@@ -827,6 +848,7 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id, uint64_t
                         }
                         src = target;
                     }
+                    }   // end of the register/offset form
                 }
                 if (mem_len[w] < 1 || mem_len[w] > ADH_MEM_WIN_LEN) { mem_err[w] = "unreadable"; continue; }
                 int got = hook_mem_copy(src, mem_bytes[w], mem_len[w]);
@@ -1070,10 +1092,19 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id, uint64_t
         char hex[ADH_MEM_WIN_LEN * 2 + 1];
         for (int w = 0; w < mem_nwin; w++) {
             int short_read = (mem_got[w] > 0 && mem_got[w] < mem_len[w]) ? 1 : 0;
-            moff = adh_json_append(memjson, sizeof(memjson), moff,
-                                   "%s{\"reg\":\"x%d\",\"offset\":%d,\"requested\":%d,\"got\":%d,\"short\":%s",
-                                   w ? "," : "", mem_reg[w], mem_off[w], mem_len[w], mem_got[w],
-                                   short_read ? "true" : "false");
+            if (mem_abs[w]) {
+                // An absolute window has no register: report the address it read, otherwise "reg":"x-1"
+                // would look like a broken register window instead of what was asked for.
+                moff = adh_json_append(memjson, sizeof(memjson), moff,
+                                       "%s{\"reg\":\"abs\",\"addr\":\"0x%llx\",\"requested\":%d,\"got\":%d,\"short\":%s",
+                                       w ? "," : "", mem_abs_addr[w], mem_len[w], mem_got[w],
+                                       short_read ? "true" : "false");
+            } else {
+                moff = adh_json_append(memjson, sizeof(memjson), moff,
+                                       "%s{\"reg\":\"x%d\",\"offset\":%d,\"requested\":%d,\"got\":%d,\"short\":%s",
+                                       w ? "," : "", mem_reg[w], mem_off[w], mem_len[w], mem_got[w],
+                                       short_read ? "true" : "false");
+            }
             // A deref window must SAY so: the same bytes read with and without the indirection answer
             // different questions, and a reader that cannot tell them apart will believe the pointer
             // value is the payload.
@@ -1535,9 +1566,12 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
     int mem_lens[ADH_MEM_WIN_MAX];
     int mem_derefs[ADH_MEM_WIN_MAX];
     int mem_froms[ADH_MEM_WIN_MAX];
+    int mem_is_abs[ADH_MEM_WIN_MAX];
+    unsigned long long mem_abs[ADH_MEM_WIN_MAX];
     int mem_nwin = 0;
     char mem_canon[96];
-    if (!parse_mem_spec(mem_spec, mem_regs, mem_offs, mem_lens, mem_derefs, mem_froms, &mem_nwin, mem_canon, sizeof(mem_canon), error, error_size))
+    if (!parse_mem_spec(mem_spec, mem_regs, mem_offs, mem_lens, mem_derefs, mem_froms, mem_abs, mem_is_abs,
+                        &mem_nwin, mem_canon, sizeof(mem_canon), error, error_size))
         return 0;
     // Post-call window: exactly one, same syntax, no "auto" (after the call the "pointer-like"
     // guess is meaningless - the caller names the buffer the function wrote into).
@@ -1680,6 +1714,8 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
                 old.mem_win[w].len = mem_lens[w];
                 old.mem_win[w].deref = mem_derefs[w];
                 old.mem_win[w].from_win = mem_froms[w];
+                old.mem_win[w].absolute = mem_is_abs[w];
+                old.mem_win[w].abs_addr = mem_abs[w];
             }
             copy_cstr(old.mem_spec, sizeof(old.mem_spec), mem_canon);
             // The post-call window and the hit-time filter must be re-applied too. They used to be
@@ -1849,6 +1885,8 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
         ctx.mem_win[w].len = mem_lens[w];
         ctx.mem_win[w].deref = mem_derefs[w];
         ctx.mem_win[w].from_win = mem_froms[w];
+        ctx.mem_win[w].absolute = mem_is_abs[w];
+        ctx.mem_win[w].abs_addr = mem_abs[w];
     }
     copy_cstr(ctx.mem_spec, sizeof(ctx.mem_spec), mem_canon);
     ctx.after_arg = after_reg;

@@ -145,3 +145,15 @@ test('a negative offset reads BEFORE the register and keeps its sign', () => {
   // A reference into an earlier window indexes BYTES, so a negative index there is a different question.
   assert.throws(() => parseMemWindows('x0:8,@#1-8:8'), /must look like/);
 });
+
+test('an ABSOLUTE address names memory instead of a register', () => {
+  // "What does this hold NOW": the address came from an earlier hit, so no register points at it. This is
+  // how a value's origin gets bisected (read the slot at this hit vs at that one).
+  assert.equal(parseMemWindows('0x7443113690:32').spec, '0x7443113690:32');
+  assert.deepEqual(parseMemWindows('0x7443113690:32').windows, [{ reg: -1, offset: 0, len: 32, addr: '0x7443113690' }]);
+  assert.equal(parseMemWindows('7443113690:32').spec, '0x7443113690:32');
+  assert.equal(parseMemWindows('0x1000:8,x0:8').spec, '0x1000:8,x0:8');   // mixed is allowed: six windows total
+  assert.equal(nativeHookInstallPayload({ addr: '0x10', mem: '0x7443113690:32' }).mem, '0x7443113690:32');
+  assert.throws(() => parseMemWindows('0x0:8'), /must not be 0/);
+  assert.throws(() => parseMemWindows('0x1000:9999'), /must be 1\.\.1024/);
+});

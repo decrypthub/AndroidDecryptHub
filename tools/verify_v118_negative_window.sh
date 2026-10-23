@@ -131,7 +131,32 @@ try {
 
   const alive = await mcp('agent_ping', { session }).catch((e) => ({ ok: false, error: String(e.message ?? e) }));
   if (alive.ok !== true) fail('the target is not answering after the negative-window copy', alive);
-  console.log(JSON.stringify({ hookId, buf: '0x' + buf.toString(16), window: win, statusEcho: st.mem, alive: alive.ok }));
+
+  // (2) the ABSOLUTE form: "what does this address hold NOW". The address is one the caller learned earlier
+  // (here: a buffer it allocated), so no register is involved. A soft unhook lets the same target take a
+  // new window, which is also how a real analysis re-reads a slot at a different hit.
+  await mcp('native_hook', { session, action: 'unhook', hookId, hard: false });
+  hookId = 0;
+  const absAddr = '0x' + (buf + 8n).toString(16);
+  const absHook = await mcp('native_hook', { session, action: 'hook', mode: 'inline', ...FIXTURE, mem: `${absAddr}:8`, confirm: true });
+  if (!absHook.ok) fail('install with an absolute mem window failed', absHook);
+  else {
+    hookId = Number(absHook.hookId);
+    const ast = (absHook.status?.hooks ?? []).find((h) => Number(h.id) === hookId) ?? {};
+    if (ast.mem !== `${absAddr}:8`) fail(`status did not echo the absolute window (mem=${JSON.stringify(ast.mem)})`, ast);
+    // The fixture flips buf[0] on every call, so re-seed before this phase: an expectation that ignores
+    // the previous call would fail for the wrong reason (this assertion already did once).
+    const reseed = await mcp('memory_write', { session, addr: '0x' + buf.toString(16), hex: pattern });
+    if (!reseed.ok) fail('could not re-seed the buffer before the absolute phase', reseed);
+    const call2 = await mcp('native_call', { session, ...FIXTURE, args: [absAddr], confirm: true });
+    if (!call2.ok) fail('the absolute-window call did not answer', call2);
+    const recs2 = await recordsFor(hookId);
+    const win2 = (recs2.mems[0]?.mem ?? [])[0] ?? {};
+    if (win2.reg !== 'abs') fail(`the record does not say it is an absolute window (reg=${JSON.stringify(win2.reg)})`, win2);
+    if (String(win2.addr).toLowerCase() !== absAddr.toLowerCase()) fail(`the record says address ${win2.addr}, expected ${absAddr}`, win2);
+    if (String(win2.hex ?? '') !== '3132333400000000') fail('the absolute window did not read the seeded bytes', { want: '3132333400000000', got: win2.hex });
+    console.log(JSON.stringify({ hookId, buf: '0x' + buf.toString(16), window: win, statusEcho: st.mem, absoluteWindow: win2, alive: alive.ok }));
+  }
 } catch (e) {
   fail('exception', String(e.message ?? e));
 } finally {

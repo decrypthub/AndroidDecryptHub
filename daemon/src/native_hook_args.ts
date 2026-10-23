@@ -33,6 +33,7 @@ export const NATIVE_MEM_WIN_TOTAL = 4096;
 export const NATIVE_MEM_WIN_OFF_MAX = 65535;
 
 export interface MemWindow {
+  /** -1 for an absolute window (see addr). */
   reg: number;
   offset: number;
   len: number;
@@ -40,6 +41,8 @@ export interface MemWindow {
   deref?: boolean;
   /** `@#2+8:256`: read the u64 at +8 inside window 2's copy and copy from THAT address. */
   fromWindow?: number;
+  /** `0x7443113690:32`: the window names memory, not a register ("what does this hold NOW"). */
+  addr?: string;
 }
 
 /**
@@ -65,6 +68,21 @@ export function parseMemWindows(value: unknown): { windows: MemWindow[]; spec: s
   let total = 0;
   for (const raw of parts) {
     const part = raw.trim();
+    // Absolute form first: "0x7443113690:32". A value learned from an earlier hit IS an address, and at
+    // the next hit no register necessarily still points at it - that is the whole use case.
+    const abs = /^(?:0x)?([0-9a-f]+):([0-9]+)$/i.exec(part);
+    if (abs) {
+      const address = BigInt(`0x${abs[1]}`);
+      const absLen = Number(abs[2]);
+      if (address === 0n) throw new Error('mem absolute address must not be 0');
+      if (!Number.isSafeInteger(absLen) || absLen < 1 || absLen > NATIVE_MEM_WIN_LEN) {
+        throw new Error(`mem length ${absLen} must be 1..${NATIVE_MEM_WIN_LEN}`);
+      }
+      total += absLen;
+      if (total > NATIVE_MEM_WIN_TOTAL) throw new Error(`mem total ${total} exceeds ${NATIVE_MEM_WIN_TOTAL}`);
+      windows.push({ reg: -1, offset: 0, len: absLen, addr: `0x${address.toString(16)}` });
+      continue;
+    }
     // Two shapes. "@#<n>[+<off>]:<len>" follows a pointer that an EARLIER window already copied - the
     // second hop of a pointer chain, which is the shape of a formatter's argument vector (descriptor ->
     // vector -> value). "<@>x<reg>[+<off>]:<len>" reads from a register, optionally following one
@@ -110,9 +128,11 @@ export function parseMemWindows(value: unknown): { windows: MemWindow[]; spec: s
     windows.push(deref ? { reg, offset, len, deref } : { reg, offset, len });
   }
   const spec = windows
-    .map((w) => (w.fromWindow
-      ? `@#${w.fromWindow}${w.offset ? `+${w.offset}` : ''}:${w.len}`
-      : `${w.deref ? '@' : ''}x${w.reg}${w.offset > 0 ? `+${w.offset}` : w.offset < 0 ? `-${-w.offset}` : ''}:${w.len}`))
+    .map((w) => (w.addr
+      ? `${w.addr}:${w.len}`
+      : w.fromWindow
+        ? `@#${w.fromWindow}${w.offset ? `+${w.offset}` : ''}:${w.len}`
+        : `${w.deref ? '@' : ''}x${w.reg}${w.offset > 0 ? `+${w.offset}` : w.offset < 0 ? `-${-w.offset}` : ''}:${w.len}`))
     .join(',');
   return { windows, spec };
 }
