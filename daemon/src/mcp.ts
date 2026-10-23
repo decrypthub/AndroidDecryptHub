@@ -24,6 +24,7 @@ import { javaTraceStart, javaTraceDigest, javaTraceStop } from './java_trace.ts'
 import { nativeHookAll, nativeUnhookAll } from './native_hook_all.ts';
 import { normalizeThrottleMs, parseMemWindows, nativeTracePayload } from './native_hook_args.ts';
 import { nativeLookArm, nativeLookRead, nativeLookStop } from './native_look.ts';
+import { dropOracle, listOracles, oracleDiff, oracleRecord, oracleReplay } from './oracle.ts';
 import { agentPing, hookEngineSelftest, protocolSelfTest } from './agent_probe.ts';
 import { listDeviceDir, readDeviceFile } from './fs_browse.ts';
 import { finiteNumber, cursorNumber } from './num.ts';
@@ -271,6 +272,27 @@ export const MCP_TOOLS: { name: string; description: string; inputSchema: any; h
   { name: 'fs_list', description: 'List a directory on the DEVICE through the target process, so it sees the sandbox the way the app does (its private /data/data/... dir, /data/local/tmp, /proc/self/...). Returns name/type/size/mode/mtime per entry plus count and truncated. Start here to find shared_prefs, databases, keystores or dropped scripts, then pull one with fs_read.', inputSchema: { type: 'object', properties: { session: S, path: S }, required: ['session', 'path'] }, handler: async (a) => { const sid = pickSid(a.session); if (!sid) throw new Error('no session'); return listDeviceDir(sid, String(a.path ?? '')); } },
   { name: 'fs_read', description: 'Read one device file through the target process. The agent caps a read at 1MB and reports truncated honestly. Returns size, byte count, a binary flag (NUL byte present), a printable preview and the line count, plus the whole text when the file is text and is at most 256KB. Binary or oversized files come back with textOmitted saying why; pass includeBase64:true for the raw bytes.', inputSchema: { type: 'object', properties: { session: S, path: S, includeBase64: { type: 'boolean' }, includeText: { type: 'boolean' }, previewBytes: N }, required: ['session', 'path'] }, handler: async (a) => { const sid = pickSid(a.session); if (!sid) throw new Error('no session'); return readDeviceFile(sid, String(a.path ?? ''), { includeBase64: a.includeBase64 === true, includeText: a.includeText !== false, previewBytes: a.previewBytes }); } },
   { name: 'load_library', description: '把任意 .so 加载进目标进程（agent 内 dlopen）。可选 symbol 探测。不是 Frida 注入入口。', inputSchema: { type: 'object', properties: { session: S, path: S, symbol: S }, required: ['path'] }, handler: (a) => agentCmd(a.session, 'load_so', { path: a.path, symbol: a.symbol ?? '' }, 30_000) },
+  { name: 'oracle', description: 'Controlled invocation of the TARGET\'S OWN entry point, and the differential harness on top of it - the primitive that turns "unknown parameter" into a small search space without knowing anything about the target. action:record calls the entry ONCE (detached java_call, so a blocking method parks one thread instead of the session) and keeps its arguments as a reusable template; extract is the path in the reply of the value to watch (default result), and a string that looks like JSON is parsed while walking, so result[0].b5 works for a facade that returns a JSON string. action:replay re-runs the template with patches applied to its RECORDED arguments (byte payloads stay {\"$bytesHex\":...}, so [1][0].$bytesHex is a normal patch path), and answers value + changed. action:diff runs one replay per variant and returns the dependency matrix: sensitive lists the input fields whose change moved the observed value, insensitive those that never did - that is the answer to "which input is this digest over". action:list and action:drop manage the templates. Paths are dotted/bracketed JSON paths (`args[1][0].$bytesHex`, `[0].b5`). Nothing here is target-specific: the caller names a facade it already knows how to call.', inputSchema: { type: 'object', properties: { session: S, action: { type: 'string', enum: ['record', 'replay', 'diff', 'list', 'drop'] }, id: N, className: S, method: S, params: S, field: S, args: { type: 'array' }, extract: S, patches: { type: 'array' }, variants: { type: 'array' }, timeoutMs: N }, required: ['action'] }, handler: async (a) => {
+    const sid = pickSid(a.session);
+    if (!sid) throw new Error('no session');
+    if (a.action === 'list') return { ok: true, oracles: listOracles() };
+    if (a.action === 'drop') return { ok: dropOracle(Number(a.id)) };
+    if (a.action === 'record') {
+      return oracleRecord(sid, {
+        className: String(a.className ?? ''), method: String(a.method ?? ''),
+        params: a.params ? String(a.params) : '', field: a.field ? String(a.field) : '',
+        args: Array.isArray(a.args) ? a.args : [], extract: a.extract ? String(a.extract) : 'result',
+        timeoutMs: Number(a.timeoutMs) > 0 ? Number(a.timeoutMs) : undefined,
+      });
+    }
+    if (a.action === 'replay') {
+      return oracleReplay(sid, { id: Number(a.id), patches: Array.isArray(a.patches) ? a.patches : [], timeoutMs: Number(a.timeoutMs) > 0 ? Number(a.timeoutMs) : undefined });
+    }
+    if (a.action === 'diff') {
+      return oracleDiff(sid, { id: Number(a.id), variants: Array.isArray(a.variants) ? a.variants : [], timeoutMs: Number(a.timeoutMs) > 0 ? Number(a.timeoutMs) : undefined });
+    }
+    throw new Error('action must be record | replay | diff | list | drop');
+  } },
 ];
 
 export const MCP_MAP = new Map(MCP_TOOLS.map(t => [t.name, t]));

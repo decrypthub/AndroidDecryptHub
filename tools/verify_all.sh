@@ -260,6 +260,11 @@ SCRIPTS=(
   # a fixture flip a known byte and requires the event to name that store (address/size/value/insn), then
   # requires the key to be absent when the watch is not requested.
   "verify_v119_trace_watch.sh:device"
+  # v120: the oracle + differential harness. Record one call of a facade, replay it with ONE field changed,
+  # and get the dependency matrix back - the primitive that turns "unknown parameter" into a small search
+  # space without any target knowledge. Fixture: a static facade whose return value is a function of its
+  # two arguments, so a patch to either must move the output and a patch to an unused position must not.
+  "verify_v120_oracle_diff.sh:device"
 )
 
 pass=0; fail=0; skip=0; FAILED=""

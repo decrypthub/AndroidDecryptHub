@@ -3,6 +3,26 @@
 > 这是"我们现在在哪"的唯一真相。每个会话开始先读它，结束前更新它。
 > 详细规格见 `REQUIREMENTS.md`，路线与架构见 `DEVELOPMENT_PLAN.md`。
 
+## 2026-10-23（第五十轮）—— `oracle`（可控回放 + 差分）上线：把"未知参数"变成依赖矩阵
+
+这一轮把两件"每个真实协议分析都要手写一遍"的东西固化成工具，**都不含任何目标专属知识**：
+
+1. `oracle record/replay/diff`（MCP，81 tools）。`record` 用 detached `java_call` 调目标自己的门面，
+   把**当次参数**存成模板（`extract` 指观察值路径，路径行走时遇到像 JSON 的字符串会先解析）；
+   `replay` 把补丁打到**记录下来的参数**上；`diff` 每个 variant 跑一次，回**依赖矩阵**
+   （`sensitive` = 单字段改动会移动观察值 → 该字段是 preimage 的一部分；`insensitive` = 改了不动）。
+   沙盒验收（`verify_v120`）：`JniCallStatics.staticCombine(label,count)` → baseline `S:ADH:7`、
+   `[1]=8 → S:ADH:8`、两个 variant 都进 `sensitive`、无变化补丁进 `insensitive`，PASS。
+   纯函数 `getPath`/`setPath`/`summarizeDiff` 6 条单测，**349 通过**。
+2. （上一轮）`traceWatch`（写观察点）——"谁写了这块内存"的事实。
+
+**这两个合起来，就是"别的 Agent 不看文章也能走到的位置"**：先用 oracle 把目标自己的门面变成可反复
+调用的实验台，再用 diff 把输入面钉死（哪些字段进、哪些不进），最后用 `traceWatch` 回答"那个值是谁
+写的"。剩下的通用缺口按顺序是：动态密码学台账、块级全量 trace + host 查询、以及一个**参考挑战**夹具
+把"能分析同等难度"变成可跑的 PASS/FAIL。
+
+
+
 ## 2026-10-23（第四十九轮）—— 写观察点（`traceWatch`）落地：工具第一次用事实回答"谁写了这块内存"
 
 ### 一、能力：`native_hook { traceWatch: "x0:32" }`（agent + host + 门禁）
