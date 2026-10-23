@@ -265,6 +265,8 @@ SCRIPTS=(
   # space without any target knowledge. Fixture: a static facade whose return value is a function of its
   # two arguments, so a patch to either must move the output and a patch to an unused position must not.
   "verify_v120_oracle_diff.sh:device"
+  # Root-side perf collection (optional helper): actual GPR/stack records, bounded scope and accounting.
+  "verify_v121_root_watch.sh:device"
 )
 
 pass=0; fail=0; skip=0; FAILED=""

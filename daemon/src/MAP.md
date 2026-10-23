@@ -58,6 +58,13 @@ Adding a crypto hook once meant reading the whole file; the REST surface was inl
 
 ## Adding a new capability
 
+`root_watch.ts` owns the optional external-root perf collector: build/upload/self-test, explicit
+session PID/UID and existing-TID checks, bounded child lifetime, raw files under
+`ADH_DATA_DIR/root-watch/`, and paged GPR/kernel-stack queries. It imports no agent transport or
+device analysis. `tools/native/root_watch.c` only records kernel samples; it never replays target
+functions or reads a target heap asynchronously. The device acceptance drives the real sandbox
+through the existing daemon and serves the new MCP handler over an isolated HTTP listener.
+
 - **MCP tool**: add one `{ name, description, inputSchema, handler }` to `MCP_TOOLS` in `mcp.ts`. Handler calls `agentCmd`/`dumpBuf`/`dumpRegion`/… from `service.ts`. Done — `tools/list` + `tools/call` pick it up automatically.
 - **REST route**: add one table entry to the owning `http/routes_*.ts` domain. Preserve domain composition order in `http/router.ts` when paths overlap.
 - **Agent command op**: handled in the agent C `command_loop` (Phase 3 — table-driven after refactor).

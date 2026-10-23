@@ -1,238 +1,130 @@
-# 交接：京东 jdgs 的 `b5`（新会话从这里开始）
+# 京东 jdgs b5 / b6：当前交接（2026-10-23，第五十二轮）
 
-> 用途：把这件工作从**一个上下文耗尽**的会话完整交出去。文档只写本会话实际验证过的东西；
-> 凡是"没验证"的地方都明确标注为未验证。工作中的现场数据（密钥、明文、抓包）在 gitignored 的
-> `adhd-data/`、`captures/`、`dumps/` 下，**不要提交**。
+## 1. 当前结论与交付范围
 
-## 0. 一句话状态
+**计算链已经独立复现**。同一份设备/库参数配置下，13 组新 oracle 调用的 b5、b6 各 **13/13**
+逐字节对上；另有历史完整真机捕获的请求行 **12/12**、签名 JSON **13/13** 对上。
+复现器使用标准 MD5、HMAC-SHA256 和两组逐字节变换，计算时不调用目标，不查询已捕获的输出。
 
-`b5 = hex(X)`，X 是 32 字节；**渲染链路已完全解开**，**X 的产地未找到**。第四十七轮把
-**in-hook trace 做完并上了门禁**（`native_hook { traceInsns, traceFrom }`、`verify_v117`），
-并用它读到了 `0x101da0` 的真实指令流；同时拿到了**不登录也能签名的 oracle**，b5 现在可以按需取样。
-仍然没解的是"X 由谁写进那个 arena 槽"，所以 **b5 复现器还没交付**。
+必须分清范围：**参数的运行时取值已取得，初始化/派生链尚未全部还原**。
+36 字节 HMAC key、16/32 字节变换各自的两组参数来自本机取证，不能据此宣称所有设备、所有库版本
+共用这些值。不同请求与多个历史进程的验证说明本配置跨请求/进程稳定，不是跨设备验证。
 
-## 1. 已确定的事实（都有证据，不是推断）
+本机私有交付（均 gitignored，**不要提交或公开内容**）：
 
-| 结论 | 证据 |
+- `dumps/jdgs-b5/reproduce.mjs`：纯离线计算器，CLI 接受 profile JSON + 原始消息文件。
+- `dumps/jdgs-b5/profile.json`：本机参数配置，含密钥；必须与代码分开保管。
+- `dumps/jdgs-b5/validation.json`：13 组受控调用与复算结果。
+- `dumps/jdgs-b5/historical-validation.json`：历史捕获的匹配/缺配对统计。
+- `adhd-data/_verify/codex_*.mjs/json`：本轮实验与原始证据；不是产品代码。
+
+## 2. 实测公式
+
+令 `T_n(v)[i] = ((v[i] + A_n[i]) mod 256) XOR B_n[i]`。
+`A_16/B_16` 与 `A_32/B_32` 是不同的参数数组，不要混用。
+
+```
+H = MD5(message)                       // 16 个原始字节，不是 hex 文本
+P = T_16(H)                           // 16 个原始字节
+Q = HMAC_SHA256(K, P)                  // K 为本路径的 36 字节原始 key
+result = lowercase_hex(T_32(Q))        // 64 个 hex 字符
+
+b5 = result(原始请求行字节)
+b6 = result(不含 b6 的签名 JSON 的原始字节)
+```
+
+b6 的 JSON 顺序、大小写、空白和编码都是输入的一部分。本轮从目标实际送入 MD5 的 JSON
+取证核对；新 oracle 的 JSON 顺序为 `b1,b2,b3,b4,b5,b7`，不带空白。
+**旧结论“b6 = md5(JSON)”错误**：那是中间原语的输出，不是最终 b6。
+
+13 组验证包含 8 条不同请求、一次重复请求，以及分别只改变 eid 独立参数、e5、uuid、第二参数。
+上述独立参数保持请求行字节不变时，b5 不变；**此前同时改 eid 参数和请求行 `eid=`，不能证明二者
+分别进入 preimage**。当前证据支持本路径 b5 直接以请求行作为消息，不能扩展成对所有入口的声明。
+
+历史证据：
+
+| 捕获 | 完整请求行 → b5 | 完整签名 JSON → b6 | 限制 |
+|---|---|---|---|
+| `b5full.json`，旧 pid 434 | 12/12 | 13/13 | 同 tid 的编码器记录精确匹配 |
+| `hash_out.json`，旧 pid 32041 | 请求行被截断，未纳入 | 6/6 | 不用截断输入得出否定结论 |
+| `b5after.json`，旧 pid 6228 | 6 条有精确匹配 | 6 条有精确匹配 | 另外 4 个完整输入没有可配对编码器记录，不能算算法不匹配 |
+
+## 3. 找到它的证据链
+
+1. `native_hook` 观察 MD5 边界、HMAC 边界、hex 编码器；用 `(pid, tid, hookId, seq)` 对齐。
+2. app 域 `perf_event_open` 的 errno 13 不代表 root 域也不可用。
+   本轮在 **SELinux Enforcing** 下，从独立 root 进程成功观察真实写入，没有降低安全策略。
+3. 数据观察点定位到 `libjdg+0xff40c: strb w9,[x8]`。两段程序交替写同一字节，最后写入的
+   前 8 字节分别与同次 b5/b6 **8/8** 对上。
+4. `PERF_SAMPLE_REGS_USER` + `PERF_SAMPLE_STACK_USER` 给出内核在事件处保存的寄存器和线程栈。
+   栈中的三段 32 字节材料经字节加法、模 256、异或，与 b5 **32/32** 对上；换请求后两组参数不变。
+5. `libjdg+0x8b408` 是六参数 HMAC 包装入口：key/keyLen、message/messageLen、out/outLen。
+   本路径分别观察到 keyLen=36、messageLen=16；标准 HMAC-SHA256 对该次实际参数与输出完全一致。
+6. 对 HMAC 的 16 字节输入另设观察点；内核栈中的原始消息正是同次 `MD5(请求行)`，经过另一组
+   16 字节变换后 **16/16** 对上。随后写离线计算器并做未参与推导的新请求验证。
+
+库偏移只属于这份已分析版本，不进任何产品默认值：
+
+| 偏移 | 实测用途 |
 |---|---|
-| `b4 = base64(RC4_key20(zlib.compress(fingerprint_json,6)))` | 412/412 字节对上 |
-| `b5 = hex(X)`，X 32 字节 | 正面识别：钩通用 hex 编码器，输入 hex 后等于目标自己写进 JSON 的 b5 |
-| `libjdg+0xf643c` 是 **printf 式模板解释器**，不是 VM | 描述符四块缓冲分离：+0x10 常量池（含 `====`/`%s_%s`/`0.3.0`/`%lld`/`b1..b6`）、+0x18 参数向量、+0x20 编译后的模板程序、+0x28 寄存器堆、+0x30 同一份向量 |
-| 486 号 opcode = **hex 渲染指令** | case `0xf65b0..0xf664c` 内含 `bl 0x101da0`（0xf65f8），其返回地址 `0xf65fc` 正是每次 hex 编码器命中的栈帧 |
-| 486 的调用约定 | `0x101da0(count, &REG[A], &REG[B], pc, dst, w5, bank)`；`x1 = bank + (word@pc+4 ^ key2)`、`x2 = bank + word@pc+2`（**B 不异或**）、槽位**字节**寻址、key2 = `0x00b9`；**第四十七轮 trace 现场确认 `mov x26, x6` —— bank 基址是第 7 个参数 x6** |
-| 上面这条经过**可证伪检验** | 两份独立现场命中：`A=0`、`B=0x138`、`x2-x1=0x138`、`x1-A == x2-B` |
-| `0x101da0` 的入口 | trace 前 24 条：`sub sp,#0xc0` → 保存 x19–x28/x29/x30 → `mrs x22,TPIDR_EL0`、`ldr x8,[x22,#0x28]` → `mov x26,x6` / `mov x25,w5` / `mov x19,x4` / `mov x28,x3` / `mov x27,x2` / `mov x24,x1` → `ldrh w23,[x3]`、`ldrh w9,[x3,#6]`、`ldrsh w8,[x3,#8]`、`ldrh w20,[x3,#0xa]`（解 10 字节指令记录）→ `cmp w23,w0` / `b.lt` |
-| `0x98c1c` 是**纯函数** | trace：`stp` 保存 x19–x26 → `cbz x0`/`cbz x1` 守卫 → `bfi x23,x20,#1,#63`（2n+1）→ `bl 0xafd78`（分配）→ GOT 桩跳转；钩它不改变行为 |
-| 每次签名编码器被调 **2 次，src 同一槽** | 一次 32 字节 = b5 的 X，一次 32 字节 = b6；**b6 也是 64 hex / 32 字节**，而 `md5(签名 JSON)` ≠ b6 的任何一半 —— §2.1 的"b6 = md5(JSON)"**在本路径上不成立，待复核** |
+| `0x8c1f8` | MD5 包装，不能把它当作全部摘要原语的普查点 |
+| `0x8b408` | HMAC 包装（6 个寄存器参数） |
+| `0x98c1c` | hex 编码器 |
+| `0xff40c` | 解释器的字节写指令，具体操作由程序数据决定 |
+| `0xf643c` | printf 式模板解释器；“不是格式化器”的早期记录已被后续实验纠正 |
 
+## 4. 本轮新增的通用能力
 
-## 2. 关键地址与常量（相对 libjdg 模块基址）
+`root_watch`（Host MCP，源注册表第 82 个工具）由 Host 启动独立 root collector：
 
 ```
-0xf643c   渲染入口 f(dst, cap, descriptor)
-0xf65b0   486 号 opcode 的 handler（hex 渲染）
-0x101da0  子解释器（486 调它，内部再经 0x102d10 → 0x102d50 → 0x103270 → 0x104000 蹦床
-          → 0x98c1c hex 编码器）
-0x98c1c   通用 hex 编码器，签名 (src, 32, &outLen)
-0x8c1f8   哈希驱动 (buf, len, out)，5 状态派发，实为 md5
-0x156240  派发表    0x156270 派发状态   0x156284 SHA-256 IV   0x1562a4 SHA-256 K
-          （IV/K 是**标准值但按小端逐字存放**：读出 67 e6 09 6a … / 98 2f 8a 42 …）
+bash tools/build_root_watch.sh
+root_watch { action: "prepare", serial: "<设备>" }
+root_watch { action: "start", session: "<明确会话>", tid: <已有线程>,
+             addr: "0x...", width: 8, mode: "w", durationMs: 5000,
+             maxEvents: 128, stackBytes: 8192 }
+root_watch { action: "status", id: "..." }
+root_watch { action: "read", id: "...", afterSeq: 0, limit: 8,
+             registers: true, stackAddress: "0x...", stackSize: 128 }
+root_watch { action: "stop", id: "..." }
 ```
 
-**arena 槽位关系（很强的结构线索）**：`encoder.src = hash.out - 0x50`，在每次捕获里都是主导差值
-（76/92/34 次）。第四十七轮的现场数据把这条写得更准：**每次签名编码器被调两次，src 是同一个槽**
-（先 b5 的 32 字节，再 b6 的 32 字节），而两次 md5 的 out 都落在 `src+0x50`（不是两个不同槽）。
-**没有任何一次哈希驱动调用写这个槽本身**（filter 钩子验证过，第四十七轮同样没看到）。
+- 只覆盖**一个已存在的 TID**，不继承未来线程。Host 独立核对 session 的真实 PID/进程名/UID。
+- 不用 ptrace、不改目标代码、不重放函数、不改 SELinux；不在 Agent 或 Device Daemon 中做分析。
+- 只保存内核事件中的 GPR/调用链/栈；**异步读 heap 不是命中时快照**，本轮已遇到对象释放后
+  被 Java 渲染缓冲复用的例子，所以产品没有把这种读法伪装成原子证据。
+- 有时间/事件数/内存边界；丢失、节流、损坏、主动停止及事件上限均明说。
+  `event-limit` 的 `complete` 为 false；时间结束先关事件、再最终 drain。
+- 真机 `verify_v121_root_watch.sh` PASS：独立硬件自检、沙盒实际 2 次写、GPR/栈、分页、停止、
+  事件上限、错误 TID；r/rw 未单独验，x 在本轮探索中未捕获到命中，不能承诺可用。
 
-## 3. 已排除（每条都有方法 + 结果）
+**当前运行状态**：源代码/独立 HTTP MCP listener 的 82 工具接线已验；现有 8088 daemon 仍是
+旧进程，自动审批拒绝了结束其 PID 的操作，尚未重启加载新工具。没有发布新 bundle/公开 Release。
 
-| 假设 / 路线 | 方法 | 结果 |
-|---|---|---|
-| `b5 = sha256(请求行/JSON)` | 钩哈希驱动抓全部消息（两窗口 = 2048B，覆盖 1563–1663B） | 不匹配 |
-| 换算法 | md5/sha1/sha512/sha512-256/sha3-256/blake2s/sm3 × {BE, LE32, LE64, REV} | 6080 组全不匹配 |
-| `b5 = sha256(JSON 去掉 b5)` | 三种文本切法 | 不匹配 |
-| `b5 = RC4 密钥流` | 钩 KSA 拿 20 字节 key，用已 256/256 验证的教科书 KSA 重放，扫 4096 字节 × 3 字节序 | 不匹配 |
-| X 含线程 md5 | 三份捕获、38 个 X，`X[0..16]`/`X[16..32]` 比对 | 0 命中 |
-| X 是 md5/sha1/sha256/sha512/sha3-256/ripemd160 的"可见材料"整串或其一半 | 第四十七轮：oracle 现取 b5/b6 + 现场抓的请求行/签名 JSON/JSON 去 b5/b4 原文与 base64 解码/b1..b7/eid/uuid，含两两拼接与 H(H(m)) 一层，共 1360 组 | 全部不匹配 |
-| X 是两次 md5 的拼接 | 哈希驱动每次签名只被调 2 次，两个 out 都在 `src+0x50`，都在 X 窗口外 | 排除 |
-| X 是渲染的参数之一 | 链式窗口读整片参数对象簇（400B） | X 不在其中 |
-| 事后 trace 已释放上下文 | 抓参数 → hard unhook → trace | **必死**（复现 3 次） |
-| 独立 `native_call 0x101da0` | 自建 bank/dst/指令副本 | **必死**（依赖解释器帧） |
-| 种描述符驱动 formatter | 五块缓冲全拷、五个指针全改指向副本、程序尾部填非法 opcode | **必死**（bank 里是指向值对象的指针，对象图无法重建） |
-| 硬件写入监视 | `hw_watch set`（沙盒 + 真机） | `perf_event_open` **errno 13**，平台拒绝；**并据此纠正"hw_watch 触发打死目标"的旧记录——断点从未装上，是 arm 路径的问题** |
+## 5. 必须撤回的历史排除与操作坑
 
-## 4. in-hook trace：已交付（第四十七轮），下面是**实际接口**与它读到的东西
+- 现有 in-hook QBDI 是**虚拟栈重放**，之后原函数还会再跑一次，不是原始执行的完整录制。
+  它没有完整的调用点寄存器/栈；`0x97144` 的反汇编实际以 `bl` 开头，是函数中段。
+  不能把这些重放里“未见写入”提升为对真实整条路径的排除。
+- `memory_read` 返回 **`b64`**。旧分析 helper 只看 `hex`，把成功读取报成 `no hex`；这些失败不能
+  用作“内存失效/平台拒绝”的证据。具体错误与 `short/requested` 仍必须逐次读。
+- `native_call` 在**短命 watchdog worker** 上执行，调用 `gettid` 得到的线程随后会退出。
+  root 观察点若要配受控调用，用同步 `java_call` 的持久命令线程；`android.os.Process.myTid()` 可确认。
+- 命中后再从 root 读 heap 会竞争：本轮内核寄存器里的 bank 地址，等 root 读时内容已经变成
+  Java 类名文本。只能使用内核寄存器/栈、或另有时序保证的现场拷贝。
+- 暂停式 ptrace 原型出现未正确处理的 `TRAP_HWBKPT`，导致目标退出；未纳入产品。不能归因为
+  “京东完整性校验/反调试”，产品实现仅使用不接管信号的 perf 路径。
+- 后台冻结会使 session socket 看似在线但命令不回应；本轮 `wchan=do_freezer_trap`、
+  `TracerPid=0`，前台启动目标后恢复。不要把它当作 agent 死锁。
+- 原有身份、捕获完整性规则仍适用：按 `(hookId, seq)` 配对，先对计数/输入长度，丢失窗口内
+  只能报告留下来的记录；真实数据不进仓库。
 
-### 4.1 接口（与设计一致，已落地）
+## 6. 真正剩下的工作
 
-```
-traceInsns: 200     0 = 关（默认）。命中时就地跑这么多条 QBDI 指令（上限 4096）
-traceFrom:  "x0"    可选；x0..x9 | x29 | x30，用该寄存器里的代码地址当起点；缺省用被钩入口
-```
-
-事件记录里追加**同一条记录内**的子对象；`traceInsns: 0` 时**连键都没有**：
-
-```json
-"trace": { "insns": 200, "seen": 200, "stopReason": "instruction-budget",
-           "start": "0x…", "stopPc": "0x…", "capped": false,
-           "mnemonics": [{"mnemonic":"ldr","count":12}, …],
-           "first": ["0x…: ldr x0, [x1, #8]", …] }
-```
-
-`stopReason`：`completed | instruction-budget | time-budget | ran-away | left-range | did-not-run | reentrant`。
-细节与"代价清单"见 `agent/src/trace/qbdi_trace.h`（trace 会**执行**被 trace 的函数、栈参数与浮点参数不保证、
-VM 每线程常驻）。
-
-### 4.2 用它读 `0x101da0` 读到了什么
-
-sites 模式（函数序言不动）+ `traceInsns: 200`，命中点就地跑满 200 条（`instruction-budget`）：
-
-```
-+0x101da0  sub sp, sp, #0xc0          ; 标准大帧
-+0x101da4  stp x28, x27, [sp, #0x60]  ; 保存 x19–x28
-+0x101dc0  mrs x22, TPIDR_EL0         ; 线程私有结构
-+0x101dc4  ldr x8, [x22, #0x28]
-+0x101dc8  mov x26, x6                ; ★ bank 基址 = 第 7 个参数
-+0x101dcc  mov w25, w5
-+0x101dd0  mov x19, x4                ; dst
-+0x101dd8  ldrh w23, [x3]             ; 指令记录（10 字节）逐字段解析
-+0x101ddc  ldrh w9,  [x3, #0x6]
-+0x101de0  ldrsh w8, [x3, #0x8]
-+0x101de4  ldrh w20, [x3, #0xa]
-+0x101df0  mov x24, x1                ; &REG[A]
-+0x101dec  mov x27, x2                ; &REG[B]
-+0x101df8  cmp w23, w0  / b.lt        ; 计数校验
-```
-
-**它不写那 32 字节**：trace 里没有向 `[x1]` 写 32 字节的序列；`x1` 只是被读出来交给编码器
-（`x4` 是另一个静态缓冲，前后各 32 字节在 `memAfter` 里变化与 X 无关）。所以"X 由谁写进槽"的答案
-在**上游的另一条模板指令**里，不在 `0x101da0` 内部。
-
-### 4.4 第十四轮（2026-10-23）：把"猜 preimage"换成"问出来"，并纠正两个模型错误
-
-这一轮没有再猜算法，先做了两件"便宜且能定死范围"的事。
-
-**(a) oracle 差分：b5 到底依赖什么**（`adhd-data/_verify/b5_deps.mjs`）
-
-| 改哪一个输入 | b5 |
-|---|---|
-| 请求行（追加 `&n=1` / `area` 的 `_0`→`_1`） | **变** |
-| eid（元素 2 与请求行里的 `eid=` 同时改） | **变** |
-| e5（元素 4） | **不变** |
-| uuid（元素 5） | **不变** |
-| 同一输入重复签 | **不变**（确定） |
-
-所以 b5 的 preimage 只可能来自 **请求行 + eid**（+ 库内常量）。上一轮那 6080 组搜索是在
-"不知道 preimage 由哪些字段组成"的前提下撒网，**eid 从来没进过材料集**。
-
-**(b) 两个模型错误，必须替换掉**
-
-1. **"每次签名哈希驱动被调 2 次"是幸存者偏差**：钩子计数 `hits=12` 而落到 store 的只有 4 条
-   （采集环被挤掉）。单独一个哈希钩、无节流、并强制 drain 重测：一次签名里 `md5(请求行)` 与
-   `md5(签名 JSON)` **都写同一个 out** = `encoder.src + 0x50`。那个 32 字节块 =
-   `digest(16) || state(16 = 指针 + 计数)`，和 X / D **没有任何关系**（`md5(X)`、`md5(X[0:16])`、
-   `X[0:16]==digest` 等 7 种关系全否）。所以 **X/D 不是这条哈希驱动的输出**。
-2. **bank 槽里是指向值对象的指针**，不是内联值：`@x1`（deref 窗口）直接读出了 `"1"`、`"3.6.5_0"`、
-   `"3.0\0%lld\0b1\0b2…"`、appKey 片段。因此 **`x1` 不可能等于编码器的 src**（那是 *解引用后* 的对象
-   地址）——此前两次"按 `x1 == encoder.src` 过滤"必然 0 命中，原因就在这里。
-
-**(c) 现场结构（新）**
-
-- `0x101da0` 有**两个**调用点（相隔 0xa0，都在 libjdg，`form=bl`），sites 钩默认**同时补**两处；
-  两个点的 **x6 都是 0**（不是 bank）——"bank 基址 = x6"只在不带此参数的路径上成立。
-- `sites: N` 只补**地址最低的 N 个**；想只留 486 那一条，可先补两个、再用
-  `memory_write {force:true}` 把不要的那个点的 `orig` 写回（钩子仍以为它补着，代码已不跳 thunk）。
-  实测：只留一个点后，该点每个签名命中 **478 次**（模板每个字段都要渲染一次）。
-- 10 字节指令记录按 u16 LE 读是 `[index][位移(0x120/0x138)][A^0xb9][len][0xffff]`，且
-  **`x2 - x1` 恰好等于 `word@pc+2`（B）**、`A = word@pc+4 ^ 0xb9`；实测 index 1..115、len 1..11。
-  `x1 - A` 不是常数（每次渲染的值栈基址不同），所以不能靠它反推 bank。
-
-**(d) 现在真正的障碍：容量**
-
-486 点每签名 478 次命中，而采集环只有 **128** 条 → "在 478 次里按值找出哪一次是 b5"会在
-记录落盘前被挤掉。判别量目前一个都没有：`count(x0)` 恒 `0x10`、`dst(x4)` 恒定、A/B 每字段不同。
-**这就是下一步要解决的第一件事**（放环 / 过滤 / 或只对单次命中做定向 dump）。
-
-**(e) 下一轮的具体做法（按顺序）**
-
-1. **给 `mem` 加负偏移窗口**（`x3-40:40`，agent 解析 + host 文法 + 单测）。理由：记录是 10 字节连续
-   数组，**前一条指令记录就在 `x3-10`**；生产那 32 字节的 opcode 极可能就在紧邻的那条。没有负偏移，
-   "往后看"永远看不到生产者。
-2. 容量：用 `traceInsns` 时只留一个窗口；对 478 次/签名的钩子，把 `mem` 压到 `x3-40:40,x3:10`（50 B），
-   再把采集环**临时**放大到 1024（`CAP_RING`，仅分析构建），或者在 oracle 前先 `capture_stop` 并让
-   `native_look read` 每 100 ms 强制 drain 一次。
-3. 拿到前一条记录后，按 `[index][位移][A][len]` 的语义找"写 32 字节"的那条（`len=0x20` 的候选），
-   再对它的操作数做同样的 deref 读取——直到出现 X 的来源。
-4. 另一条并行路线：`0xf643c`（单步解释器）的 `traceInsns`，预算 2000–4000，从 486 case 命中点往前
-   无法走，但可以从"上一条记录的 pc"起跑（`traceFrom` 某寄存器若正好指向它）。
-
-### 4.5 验收（已注册进 `tools/verify_all.sh`）
-
-`tools/verify_v117_inhook_trace.sh`（device）：sites 钩 `traceInsns:32` → 事件有 `trace`、`seen=32`、
-`stopReason` 在文档化集合内、`mnemonics` 非空、`first[0]` 地址 **== 被钩入口**；inline 钩同一函数 →
-起点是 Dobby trampoline 且 `first[0] == start`、能看见 `sub sp…` → `ldr x17,#8` → `br x17` 跳回函数体；
-`traceInsns` 缺省 → 事件**没有** `trace` 键；`traceInsns + skipOriginal` 被拒；两次调用返回值不变、目标存活。
-
-### 4.4 下一轮的第一步
-
-1. **X 的产地未定**（b5 复现器因此没有交付）：具体做法见 §4.4(e)。一句话：给 `mem` 加负偏移窗口，
-   把命中点**前一条**指令记录读出来，顺着它找"写 32 字节"的 opcode。
-2. 复核 §1 的 b6 结论：现场数据里 b6 = hex(32 字节)，而 md5(签名 JSON) 不是它。要么 b6 的含义不是
-   md5(JSON)，要么 oracle 这条路径与 App 真实路径不同——先用真实 App 的一次签名对照一下。
-3. 需要更长的 trace 时直接加 `traceInsns`（上限 4096），墙钟 300 ms 在钩子里，别指望跑完一个完整的
-   解释器循环。
-
-## 5. 工具用法备忘（三轮踩过的坑，能省你几个小时）
-
-- **两个模型错误（第十四轮纠正，务必按新的来）**：① **bank 槽里存的是指向值对象的指针**，不是内联值
-  （`@x1` deref 能直接读出 `"1"`、`"3.6.5_0"`、appKey 片段），所以"`x1` == 编码器 src"这种假设必然
-  0 命中；② 钩子的 `hits` 与收到的记录数**不是一回事**（一次 `hits=12` 只有 4 条落地），任何
-  "每次签名调用 N 次"的结论都必须先确认没有记录被环挤掉。
-- **`0x101da0` 有两个调用点**，sites 钩默认两个都补；只有 `sites:N` 能限数量，且**按地址从低到高**。
-  想只留 486 那一条：先补两个，再用 `memory_write {force:true}` 把另一个点的 `orig` 写回去。
-- **热点钩 vs 采集环**：486 点每签名命中 **478** 次，环只有 **128** 条。要么 `filter`（但没有可用判别量），
-  要么临时放大环，要么把 `mem` 压到 1–2 个窗口并强制 drain（`native_look read` 会走 `drainSession`）。
-- **不登录也能签名（最有用的一条）**：`java_call {detach:true}` 回放
-  `Bridge.entry(101, [byte[] "POST /client.action <40hex>&area=…&eid=…", "-§§-…", eid, "1.0", e5, uuid, null])`，
-  5 ms 一次，返回完整 jdgs；同一输入 b5 恒定、改输入 b5 就变、**改 e5/uuid 不变**。脚本：
-  `adhd-data/_verify/who_writes_x3.mjs`、差分用 `b5_deps.mjs`（登录页也能用）。
-- **QBDI 在真机目标里要先装**：`libQBDI.so not available (dlopen)`。`adb push` 到 `/data/local/tmp`
-  → `su cp` 进 `/data/data/<pkg>/files/`（`chown` 成 app uid、`chcon u:object_r:app_data_file:s0`）
-  → `load_library {path, symbol:"qbdi_initVM"}`。沙盒自带这个库，所以沙盒门禁不会暴露这条。
-- **对这个目标用 `mode:sites`，不要 inline**：给 libjdg 自己的函数下 inline patch 后，签名时进程
-  SIGSEGV 在 `libjdg+0x10404c`（变参蹦床里），坏地址像被截断的指针；只装 sites 钩时同一操作存活。
-  疑为它自己的完整性检查，本轮未证明（记录在 PROGRESS 第四十七轮）。
-- **"谁写了这块内存"现在有答案了（第四十九轮）**：`native_hook { traceInsns: N, traceWatch: "x0:32" }`
-  → 事件里 `traceWatch.hits[0] = {pc, insn, addr, size, value}`。范围在命中当刻由寄存器算出、只在该次
-  run 内生效；`traceWatch` 不配 `traceInsns` 会被拒。这是 `hw_watch`（perf 被拒）的软件替代，
-  也是回答"X 由谁写进槽"的**直接**工具：先 `mem`/`traceWatch` 找到写者，再跟它的输入一层。
-- **`memory_read` 的参数是 `size`，不是 `len`**。传错时每个地址都回 `bad size`，看起来像权限问题。
-- **记录能不能读，取决于 daemon 的 drain 循环**：每条会话的 drain 是 hello 之后**异步** arm 的，
-  启动瞬间读 `live_captures` 会看到空 store（`capture_stop` 回的 `drainLoop:"none"` 就是这个）。脚本
-  要先等 `drainLoop:"armed"`（v117 的做法），别把"还没 arm"读成"功能坏了"。
-- 装钩子前先 `capture_stop`；App 自己在登录页就会签上千次（真实请求行 1.5–1.7 KB），等它安静下来
-  再做 oracle 实验，否则记录会被它的流量挤掉。
-- 记录连接必须用 `(hookId, seq)`；`seq` 是**每钩子**编号。`memAfter` 带同一个 seq 且形状归一。
-- **`native_call` 传 NULL 目的指针会直接杀目标**。要调"会写输出"的函数，先 `malloc`。
-- 钩**极热**的函数（如 `strlen`）本身就会打死目标，与 stub 无关。
-- `hw_watch` 在这台设备上被平台拒绝（errno 13），别再去"修"它。
-- **含非 ASCII 的源码不要走 PowerShell 的 `Get-Content | Set-Content` 往返**（会把中文写成乱码）；
-  用 edit 工具。
-- trace 有 **4 秒墙钟上限**（独立 trace）/ **300 ms**（钩子内）；目标在命令中死亡会**立刻**返回
-  `the target disconnected while this command was running`，不再静默 60 秒。
-- 京东有 ~7 个进程，启动捕获策略会对每个都 arm，日志里 `dropped=` 是设计行为。
-- 硬解（hard unhook）过的 inline 目标**在本进程内不能再挂**（Dobby 池状态），要换 sites 或重启 App。
-
-## 6. 仓库状态与验收
-
-- 工作区干净；`cd daemon && npm run typecheck` 为 0；`npm test` **339 通过**。
-- 已注册的 device 门禁：`verify_v112_indirect_window`、`verify_v113_memafter_seq`、
-  `verify_v114_window_chain`、`verify_v115_trace_time_budget`、**`verify_v117_inhook_trace`**。
-- 第四十七轮新增：in-hook trace（`traceInsns`/`traceFrom`、per-thread VM、三条守卫、同记录内
-  `trace` 子对象）、host 侧规范化与默认 payload 无 trace 键、`native_look` 显示 trace、
-  `nativeHookIdentity` 头部窗口放大（trace 事件 ~3 KB）、exec-range 快照改不可变发布。
-- 现场数据（密钥、b5 样本、捕获 JSON、oracle 脚本）在 `adhd-data/_verify/` 下，gitignored。本轮新增：
-  `who_writes_x*.mjs`（oracle + 编码器/子解释器对拍）、`arena_block.mjs`、`arena_dump.mjs`、
-  `pair_structure.mjs`、`x_search.mjs`、`sub_pair.mjs`、`sub_trace.mjs`、`qbdi_in_target.mjs`
-  （装 QBDI + 真 trace）、`trace_budget.mjs`（预算阶梯）。
-
+1. 继续还原 K 与两组长度参数的初始化/派生，验证换设备/换 b1/换库版本时哪些值变化。
+   当前计算器依赖私有 profile，这一限制不能隐去。
+2. 将本机私有参数提取流程整理成可重复取证步骤；产品保持通用，不能内置京东偏移或参数。
+3. 经允许重启正常 8088 daemon 后，确认日常客户端可直接发现 `root_watch`。新 helper 尚未
+   纳入旧 v0.5.0 发布包，下一次正式发版需按仓库版本规则打包。
+4. 块级全量 trace、host 查询、动态密码学台账、参考挑战仍未实现。
+   它们不再是本例计算链复现的前置条件，但没有因此被宣称已完成。

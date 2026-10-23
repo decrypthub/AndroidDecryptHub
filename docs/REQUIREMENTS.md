@@ -15,6 +15,23 @@
 
 ---
 
+## 当前 trace 补充规格（v4.121，2026-10-23）
+
+`root_watch` 是模块 E 的可选外部 root 采集后端，由 Host 管理独立 arm64 helper，不向 Agent 或
+Device Daemon/Manager 加入分析。只观察明确 session PID/UID 下的一个**已有 TID**，不声称覆盖未来
+线程。perf 事件保存 pc、33 个 arm64 GPR、调用链与可选内核线程栈；不使用 ptrace、函数重放、
+目标代码补丁或 SELinux 修改。Host 负责落盘、分页与分析。
+
+MCP 提供 prepare/start/status/read/stop；prepare 要有本机构建的 helper，并以真正的硬件自检证明
+可用。start 校验 PID/进程名/UID、TID 归属、地址对齐、宽度及资源边界：30 秒、2048 个事件、
+每事件最多 16 KiB 栈；read 默认只给元数据，显式展开寄存器和至多 2048 字节栈窗口。
+丢失、节流、损坏记录、主动停止、事件上限都必须如实返回；结束时先 disable 后最终 drain。
+不把异步读取 heap 当作事件时的快照，也不把 root 路径失败静默降级成不完整 QBDI 重放。
+
+验收 `verify_v121_root_watch.sh`：独立硬件自检、沙盒真实 2 次写、GPR/栈、MCP 分页、上限、停止及
+错 TID 拒绝。当前只验过参考 ROM 的 w；r/rw 未验，x 探索未见命中，不能承诺。现有 in-hook QBDI
+仍是带副作用和不完整调用上下文的重放；不能把其未见写入等同于真实整条执行路径的排除。
+
 ## 0. 与 iOS 参考项目的关系
 
 [ios-decrypt-helper](https://github.com/taisuii/ios-decrypt-helper) 是一个注入目标 App 的 dylib + 内嵌 Web 面板的 iOS 行为监控平台。它的能力边界受 iOS 平台限制，但产品形态和工程思路值得继承。

@@ -3,6 +3,68 @@
 > 这是"我们现在在哪"的唯一真相。每个会话开始先读它，结束前更新它。
 > 详细规格见 `REQUIREMENTS.md`，路线与架构见 `DEVELOPMENT_PLAN.md`。
 
+## 2026-10-23（第五十二轮）—— b5/b6 独立计算链复现；root 侧真实写入取证
+
+### 结果与范围
+
+本轮接读 DeepSeek harness 的 `session-80bdafe4-2365-4387-bef9-8af4df25a2fd` 与
+`session-f9a7bde4-1511-439b-b544-32280ab2f159`，再以代码、现场和独立复算核对历史结论。
+基线 `tsc` 0、351 单测通过；设备仍为 `aa165071` / SDK35 / KernelSU，SELinux Enforcing。
+新启动的京东进程实际报告 agent **0.5.0**，与本机构建 hash `3747d68f…` 一致；模块元数据仍是
+0.4.1，不能据此说新进程仍跑旧 agent，也不需要为本轮 Host/root collector 改动重刷设备。
+
+以 `T_n(v)[i] = ((v[i] + A_n[i]) mod 256) XOR B_n[i]` 表示两组长度不同的字节变换：
+
+```
+result(message) = hex(T_32(HMAC_SHA256(K_36, T_16(MD5(message)))))
+b5: message = 原始请求行字节
+b6: message = 不含 b6 的签名 JSON 原始字节
+```
+
+- 先以外部 root perf 定位真实写入，再以内核保存的 GPR/线程栈证明 32 字节和 16 字节两层变换。
+  字节写者为 `libjdg+0xff40c`；HMAC 六参数边界为 `+0x8b408`，标准 HMAC-SHA256 与现场输出一致。
+- 独立计算器 `dumps/jdgs-b5/reproduce.mjs` 不调用目标、不查询捕获值；新 oracle **b5 13/13、b6 13/13**。
+  含 8 条不同请求、重复调用、分别只改 eid 独立参数/e5/uuid/第二参数。
+- 历史真机完整输入：`b5full.json` **请求行 12/12、JSON 13/13**；`hash_out.json` 的完整 JSON **6/6**。
+  `b5after.json` 有 6+6 条精确匹配，另 4 个完整输入缺可配对编码器记录，不把缺记录算成算法失败。
+- 范围限制：当前复现依赖本机提取的私有 profile（K、四个参数数组）。初始化/派生链、跨设备、换库版本
+  未完成；不能把本机参数写进产品或提交。详细当前交接已重写在 `HANDOVER_JDGS_B5.md`。
+
+### 改正的历史判断
+
+1. `b6 = md5(JSON)` 是中间原语被当作最终字段，现已用完整链取代。
+2. 旧 eid 实验同时改独立参数和请求行，是混杂实验；新实验保持请求行不变单改 eid 参数，b5 不变。
+3. in-hook QBDI 是虚拟栈重放、之后原函数仍执行，不是完整原始执行；`0x97144` 实际为函数中段。
+   这些窗口里的“未见写入”不能作为真实全路径的排除。
+4. `memory_read` 的成功回复是 `b64`，旧 helper 只认 `hex`，错报 `no hex`；不是全部都读失败。
+5. app 域 perf 被拒不等于 root 域被拒；本轮没有降低 SELinux，成功取得真实事件。
+   异步 heap 拷贝会读到已经复用的内容，所以产品仅采内核 GPR/栈，不伪称 heap 原子快照。
+6. 暂停式 ptrace 私有原型产生未正确处理的 SIGTRAP，目标因此重启，不能归因为目标反调试；
+   未纳入产品。另一次命令无响应实测为 `do_freezer_trap`，前台启动目标后恢复。
+
+### 通用工具交付（不含任何目标偏移/常量）
+
+- `tools/native/root_watch.c` + `build_root_watch.sh`：arm64 外部 root perf collector，无 ptrace、无函数重放、
+  无目标代码补丁、无 SELinux 修改。只观察一个已有 TID；保存 pc/GPR/调用链/内核栈，
+  在时间结束时先 disable 再最终 drain，如实报 lost/throttles/malformed/event-limit。
+- `daemon/src/root_watch.ts` + MCP `root_watch`：prepare/start/status/read/stop；Host 验证真实 PID/进程名/UID、
+  管理有界子进程、落盘与分页。默认不展开寄存器/栈原文；显式查询只返回有界窗口。
+- `verify_v121_root_watch.sh` 已注册：真实硬件自检 + 沙盒实际 **2/2** 写入、内核寄存器/栈、分页、
+  事件上限、停止、错误 TID 拒绝均 PASS。新代码经独立 HTTP/MCP listener 验接线；目标命令由现有
+  daemon 驱动，输入真实 agent 元数据且由 collector 独立核对，没有模拟目标或硬件响应。
+- r/rw 未单独验收，x 探索时未见命中；全量块级 trace/动态原语台账/参考挑战依然未实现。
+- 正常 8088 daemon 的重启操作被自动审批拦截（结束旧 PID，返回 blocked by policy），旧服务未变更；
+  日常客户端尚不能从该进程发现第 82 个工具。没有新 bundle、没有公开 Release 上传。
+
+最终验证：root collector `-Wall -Wextra -Werror` 构建通过；`tsc` 0，**353 单测通过**；
+`verify_v121_root_watch.sh` 在最终实现（协作式停止、先 disable 后最终 drain）上 PASS。
+只运行命中的验收，没有重跑 130 条全量门禁。
+
+### 下一步
+
+继续还原私有 profile 初始化/派生与跨设备边界；获得正常服务重启条件后加载新工具。
+不要再从已被证伪的“纯哈希等于 b5”或不完整 QBDI 重放窗口重新猜起。
+
 ## 2026-10-23（第五十一轮）—— 工具面全量核对 + v0.5.0 发版
 
 ### 一、发版前核对（全部有信号）

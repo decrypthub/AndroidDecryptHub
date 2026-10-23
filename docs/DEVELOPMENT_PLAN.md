@@ -10,6 +10,13 @@
 
 ## 0. 核心原则（架构红线）
 
+2026-10-23 补充（模块 E / WS-H）：真实写入追踪可使用可选 `root_watch`。Host 编排外部 root perf
+collector，helper 只采内核事件，不放进 Agent 或 Device Daemon/Manager。源码、构建和验收见
+`tools/native/root_watch.c`、`tools/build_root_watch.sh`、`verify_v121_root_watch.sh`。
+这一片已完成参考设备的 w 验收；不改变“完整 syscall 拦截不做”的决议，也不声称做完块级全量 trace。
+先有数据观察点/GPR/内核栈/原语边界的确定证据，再决定是否需要更大 trace；不能把不完整虚拟栈重放
+当成真实执行完整录制。京东案例已用这条路径完成带私有参数配置的独立 b5/b6 计算，参数初始化仍待续。
+
 ```text
 目标 App 进程（libadh_agent.so）：
   最小侵入、低内存、低阻塞 —— hook / trace / dump / 事件采集 / 轻量 RPC

@@ -1,9 +1,10 @@
 # ADH MCP Tools
 
-Generated from the live ADH Daemon registry (81 tools). Endpoint: `POST /mcp` (JSON-RPC 2.0).
+Generated from the source ADH Daemon registry (82 tools). Endpoint: `POST /mcp` (JSON-RPC 2.0). Restart an existing daemon to load updated tools.
 
 | Tool | Description | Args |
 |---|---|---|
+| `root_watch` | Optional ROOT-SIDE hardware observation, for an existing target thread when app-domain perf is denied. prepare uploads the locally built collector (bash tools/build_root_watch.sh) and runs a deterministic hardware self-test. start needs an explicit session, tid, addr and width (1/2/4/8, aligned); mode w/r/rw watches data, x requires width 4 and watches execution. This uses perf from a separate root process: no ptrace, target patches, function replay or SELinux changes. The KERNEL records pc, x0..x30/sp/pc, callchain and optional user-stack bytes at the event; there are no asynchronous heap snapshots. Scope is ONE EXISTING TID, not future threads or the whole process. durationMs <=30000, maxEvents <=2048, stackBytes <=16384. start returns promptly with an id; status reports running/lost/throttles/complete and stopReason (event-limit is incomplete). read pages by afterSeq/limit, exposes registers only with registers:true, and returns a bounded stack window with stackAddress/stackSize <=2048. Raw records stay under ADH_DATA_DIR/root-watch. stop terminates only the collector. Root/SELinux/kernel failures are explicit; hardware watchpoints and execution breakpoints are not guaranteed on every ROM. | action, session, serial, id, tid, addr, width, mode, durationMs, maxEvents, stackBytes, afterSeq, limit, registers, stackAddress, stackSize |
 | `process_list` | List connected target agent sessions | — |
 | `backends` | Injection-backend matrix: sessions by entry + device-side Zygisk pointers. Pass session to classify which paths are really loaded (zygisk / self_load). Frida Gadget is not a product backend. | session |
 | `dumps_list` | List captured dump artifacts (dex/so/region) | — |

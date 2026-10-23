@@ -47,6 +47,12 @@ translation — kept separate).
 
 ## Adding a new verify script (recipe)
 
+`native/root_watch.c` is an optional arm64 root-side **collector**, built by
+`build_root_watch.sh` into `agent/build/adh-root-watch`. Host `root_watch prepare` uploads and
+self-tests it; no agent/APK rebuild or SELinux change is required. `verify_v121_root_watch.sh`
+checks the real hardware path, two known sandbox writes, kernel GPR/stack bytes, cursor paging,
+event-limit accounting, explicit stop and wrong-TID refusal. It does not run the full suite.
+
 1. Copy `verify_v04_crypto.sh` as the closest template (device) or `verify_v10_webui.sh` (host-chk).
 2. Source `lib/verify_common.sh`, call `verify_resolve_env` (device) or `verify_resolve_env_host` (host).
 3. Write the unique test as a `node - "$HTTP" [args] <<'EOF' … EOF` heredoc that prints exactly one `RESULT:PASS` or `RESULT:FAIL` line (use `process.exit(0)` on the fail path so `set +e` isn't needed... but keep `set +e` before the `OUT=$(…)` capture anyway — node may throw).

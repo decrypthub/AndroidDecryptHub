@@ -25,6 +25,7 @@ import { nativeHookAll, nativeUnhookAll } from './native_hook_all.ts';
 import { normalizeThrottleMs, parseMemWindows, nativeTracePayload } from './native_hook_args.ts';
 import { nativeLookArm, nativeLookRead, nativeLookStop } from './native_look.ts';
 import { dropOracle, listOracles, oracleDiff, oracleRecord, oracleReplay } from './oracle.ts';
+import { prepareRootWatch, startRootWatch, rootWatchStatus, readRootWatch, stopRootWatch } from './root_watch.ts';
 import { agentPing, hookEngineSelftest, protocolSelfTest } from './agent_probe.ts';
 import { listDeviceDir, readDeviceFile } from './fs_browse.ts';
 import { finiteNumber, cursorNumber } from './num.ts';
@@ -46,6 +47,19 @@ const S = { type: 'string' }, N = { type: 'number' };
  *  encoding. Either way the record carries {bytes, truncated} so a cut is never silent. */
 const TEXT_CAP_ASCII = 4096, TEXT_CAP_B64 = 65536;
 export const MCP_TOOLS: { name: string; description: string; inputSchema: any; handler: (a: any) => Promise<any>; raw?: boolean }[] = [
+  { name: 'root_watch', description: 'Optional ROOT-SIDE hardware observation, for an existing target thread when app-domain perf is denied. prepare uploads the locally built collector (bash tools/build_root_watch.sh) and runs a deterministic hardware self-test. start needs an explicit session, tid, addr and width (1/2/4/8, aligned); mode w/r/rw watches data, x requires width 4 and watches execution. This uses perf from a separate root process: no ptrace, target patches, function replay or SELinux changes. The KERNEL records pc, x0..x30/sp/pc, callchain and optional user-stack bytes at the event; there are no asynchronous heap snapshots. Scope is ONE EXISTING TID, not future threads or the whole process. durationMs <=30000, maxEvents <=2048, stackBytes <=16384. start returns promptly with an id; status reports running/lost/throttles/complete and stopReason (event-limit is incomplete). read pages by afterSeq/limit, exposes registers only with registers:true, and returns a bounded stack window with stackAddress/stackSize <=2048. Raw records stay under ADH_DATA_DIR/root-watch. stop terminates only the collector. Root/SELinux/kernel failures are explicit; hardware watchpoints and execution breakpoints are not guaranteed on every ROM.', inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['prepare', 'start', 'status', 'read', 'stop'] }, session: S, serial: S, id: S, tid: N, addr: S, width: N, mode: { type: 'string', enum: ['w', 'r', 'rw', 'x'] }, durationMs: N, maxEvents: N, stackBytes: N, afterSeq: N, limit: N, registers: { type: 'boolean' }, stackAddress: S, stackSize: N }, required: ['action'] }, handler: async (a) => {
+    if (a.action === 'prepare') return prepareRootWatch(a.serial);
+    if (a.action === 'start') {
+      const s = sessions.get(String(a.session ?? ''));
+      if (!s?.online) throw new Error('root_watch start needs an explicit online session');
+      return startRootWatch({ sessionId: s.sessionId, pid: s.pid, uid: s.uid, package: s.package, process: s.process }, a, DATA_DIR);
+    }
+    if (!a.id) throw new Error('root_watch requires id for status/read/stop');
+    if (a.action === 'status') return rootWatchStatus(a.id);
+    if (a.action === 'read') return readRootWatch(a.id, a);
+    if (a.action === 'stop') return stopRootWatch(a.id);
+    throw new Error('root_watch action must be prepare/start/status/read/stop');
+  } },
   { name: 'process_list', description: 'List connected target agent sessions', inputSchema: { type: 'object', properties: {} }, handler: async () => [...sessions.values()] },
   { name: 'backends', description: 'Injection-backend matrix: sessions by entry + device-side Zygisk pointers. Pass session to classify which paths are really loaded (zygisk / self_load). Frida Gadget is not a product backend.', inputSchema: { type: 'object', properties: { session: S } }, handler: async (a) => { const m = backendMatrix(); return a.session ? { ...m, sessionBackends: await classifySession(a.session) } : m; } },
   { name: 'dumps_list', description: 'List captured dump artifacts (dex/so/region)', inputSchema: { type: 'object', properties: {} }, handler: async () => [...dumps.values()] },
