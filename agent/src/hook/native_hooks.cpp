@@ -113,6 +113,14 @@ struct NativeHookContext {
     int trace_insns;
     int trace_from_reg;
     char trace_from[ADH_TRACE_FROM_MAX];
+    // Write watch for the in-hook run (opt-in). watch_reg < 0 = off; otherwise [reg+off] (deref once when
+    // watch_deref) is the watched base and watch_len its size. Resolved at the hit, so the caller names a
+    // register, not an address that would be stale by then.
+    int watch_reg;
+    int watch_off;
+    int watch_len;
+    int watch_deref;
+    char watch_spec[48];
     int patched;             // inline stub remains installed (soft unhook / reactivation)
     unsigned char prologue[24];   // original bytes captured before the inline patch
     int prologue_len;             // 0 when not captured / not an inline hook
@@ -905,6 +913,52 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id, uint64_t
         qbdi_summary_t sum;
         // gpr layout expected by adh_qbdi_run_from: x0-x8, x29, x30, x18.
         const uint64_t tgpr[12] = { in0, in1, in2, in3, in4, in5, in6, in7, in8, in29, in30, in18 };
+        // Write watch: resolve the range NOW (on the hit thread, from the hit's registers) and arm it for
+        // this run only. A pointer that cannot be resolved is reported, never silently dropped - "the
+        // watch saw nothing" and "the watch was never armed" must not look alike.
+        const int wreg = __atomic_load_n(&ctx.watch_reg, __ATOMIC_RELAXED);
+        const int woff = __atomic_load_n(&ctx.watch_off, __ATOMIC_RELAXED);
+        const int wlen = __atomic_load_n(&ctx.watch_len, __ATOMIC_RELAXED);
+        const int wderef = __atomic_load_n(&ctx.watch_deref, __ATOMIC_RELAXED);
+        const int watch_cfg = (wreg >= 0 && wlen > 0) ? 1 : 0;
+        qbdi_watch_t watch;
+        adh_qbdi_watch_reset(&watch);
+        uint64_t wlo = 0, whi = 0;
+        if (watch_cfg) {
+            watch.lo = 0;
+            watch.hi = 0;
+            uint64_t wbase = (wreg < (int)(sizeof(saved_regs) / sizeof(saved_regs[0]))) ? saved_regs[wreg] : 0;
+            const uint64_t back = woff < 0 ? (uint64_t)(-(int64_t)woff) : 0;
+            if (woff < 0 && back > wbase) {
+                snprintf(watch.error, sizeof(watch.error), "traceWatch address underflow");
+            } else if (woff >= 0 && (uint64_t)woff > ~0ull - wbase) {
+                snprintf(watch.error, sizeof(watch.error), "traceWatch address overflow");
+            } else {
+                wbase = (uint64_t)((int64_t)wbase + (int64_t)woff);
+                if (wderef) {
+                    uint64_t target = 0;
+                    unsigned char slot[8];
+                    if (hook_mem_copy(wbase, slot, 8) != 8) {
+                        snprintf(watch.error, sizeof(watch.error), "traceWatch pointer unreadable");
+                        wbase = 0;
+                    } else {
+                        memcpy(&target, slot, sizeof(target));
+                        if (target == 0) {
+                            snprintf(watch.error, sizeof(watch.error), "traceWatch pointer is null");
+                            wbase = 0;
+                        } else {
+                            wbase = target;
+                        }
+                    }
+                }
+                if (wbase && (uint64_t)wlen <= ~0ull - wbase) {
+                    wlo = wbase;
+                    whi = wbase + (uint64_t)wlen;
+                } else if (!watch.error[0]) {
+                    snprintf(watch.error, sizeof(watch.error), "traceWatch range overflow");
+                }
+            }
+        }
         int patched_id = 0, patched_active = 0;
         if (tpc == 0) {
             adh_qbdi_summary_reset(&sum);
@@ -924,13 +978,21 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id, uint64_t
                      "traceFrom 0x%llx carries our inline patch (hook %d, %s)",
                      (unsigned long long)tpc, patched_id, patched_active ? "active" : "soft-unhooked");
         } else {
-            (void)adh_qbdi_run_from_ex(tpc, tgpr, trace_insns, ADH_QTRACE_INHOOK_TIME_MS, hint, &sum);
+            (void)adh_qbdi_run_from_watch(tpc, tgpr, trace_insns, ADH_QTRACE_INHOOK_TIME_MS, hint,
+                                          wlo, whi, &sum, watch_cfg ? &watch : NULL);
         }
         int tl = adh_qbdi_summary_json(&sum, trace_json, sizeof(trace_json));
         if (tl > 0) joff = adh_json_append(json, sizeof(json), joff, ",\"trace\":%s", trace_json);
         else joff = adh_json_append(json, sizeof(json), joff,
                                     ",\"trace\":{\"insns\":%d,\"seen\":0,\"stopReason\":\"did-not-run\",\"clipped\":true}",
                                     trace_insns);
+        if (watch_cfg) {
+            char wjson[640];
+            int wl = adh_qbdi_watch_json(&watch, wjson, sizeof(wjson));
+            if (wl > 0) joff = adh_json_append(json, sizeof(json), joff, ",\"traceWatch\":%s", wjson);
+            else joff = adh_json_append(json, sizeof(json), joff,
+                                        ",\"traceWatch\":{\"count\":0,\"truncated\":true,\"error\":\"watch json did not fit\"}");
+        }
     }
     joff = adh_json_append(json, sizeof(json), joff, "}");
     if (joff >= sizeof(json)) {
@@ -1269,6 +1331,11 @@ static void reset_context(NativeHookContext &ctx) {
     ctx.trace_insns = 0;      // ...nor its in-hook trace: a recycled slot must not trace unasked
     ctx.trace_from_reg = -1;
     ctx.trace_from[0] = 0;
+    ctx.watch_reg = -1;       // ...nor its write watch
+    ctx.watch_off = 0;
+    ctx.watch_len = 0;
+    ctx.watch_deref = 0;
+    ctx.watch_spec[0] = 0;
     ctx.arg_value = 0;
     ctx.patched = 0;
 }
@@ -1288,7 +1355,7 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
                                         int write_reg, int write_off, const char *write_hex,
                                         int set_errno, const char *after_spec,
                                         const char *filter_spec,
-                                        int trace_insns, const char *trace_from,
+                                        int trace_insns, const char *trace_from, const char *trace_watch,
                                         int *hook_id_out, char *error, size_t error_size) {
     if (hook_id_out) *hook_id_out = 0;
     // Effective (clamped) window: installed state and status must report what was really applied.
@@ -1323,6 +1390,30 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
                   "traceInsns cannot be combined with skipOriginal/returnSet: the trace runs the "
                   "original function, which those options are there to prevent");
         return 0;
+    }
+    // Write watch for the run: the same window grammar as `mem` (a register, an optional signed offset
+    // and an optional one-level dereference), because the caller knows a register, not an address.
+    int watch_reg = -1, watch_off = 0, watch_len = 0, watch_deref = 0;
+    char watch_canon[48] = "";
+    if (trace_watch && trace_watch[0]) {
+        if (trace_insns <= 0) {
+            set_error(error, error_size, "traceWatch needs traceInsns (the watch lives for the run only)");
+            return 0;
+        }
+        WinSpec w;
+        const char *wp = trace_watch;
+        while (*wp == ' ') wp++;
+        if (!parse_window(&wp, ADH_WATCH_LEN_MAX, "traceWatch", &w, error, error_size)) return 0;
+        while (*wp == ' ') wp++;
+        if (*wp) {
+            set_error(error, error_size, "traceWatch must be exactly one window, e.g. x0:32");
+            return 0;
+        }
+        watch_reg = w.reg;
+        watch_off = w.off;
+        watch_len = w.len;
+        watch_deref = w.deref ? 1 : 0;
+        format_window(watch_canon, sizeof(watch_canon), &w);
     }
     // Hit-time register filter: "x2=0x7320abc0" or "x2=4660". Validated BEFORE a slot is reserved, so
     // a typo cannot burn one of the sixteen slots. A non-matching hit is not counted and not
@@ -1541,6 +1632,11 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
             old.trace_insns = trace_insns;
             old.trace_from_reg = trace_from_reg;
             copy_cstr(old.trace_from, sizeof(old.trace_from), trace_from_canon);
+            old.watch_reg = watch_reg;
+            old.watch_off = watch_off;
+            old.watch_len = watch_len;
+            old.watch_deref = watch_deref;
+            copy_cstr(old.watch_spec, sizeof(old.watch_spec), watch_canon);
             old.arg_value = arg_value;
             // Reactivating a soft-unhooked target is a new hook for the operator: start its window
             // and its suppressed-hit counters from zero instead of inheriting the old run.
@@ -1672,6 +1768,11 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
     ctx.trace_insns = trace_insns;
     ctx.trace_from_reg = trace_from_reg;
     copy_cstr(ctx.trace_from, sizeof(ctx.trace_from), trace_from_canon);
+    ctx.watch_reg = watch_reg;
+    ctx.watch_off = watch_off;
+    ctx.watch_len = watch_len;
+    ctx.watch_deref = watch_deref;
+    copy_cstr(ctx.watch_spec, sizeof(ctx.watch_spec), watch_canon);
     memset(ctx.mem_win, 0, sizeof(ctx.mem_win));
     for (int w = 0; w < mem_nwin; w++) {
         ctx.mem_win[w].reg = mem_regs[w];
@@ -1914,7 +2015,7 @@ extern "C" int adh_native_hook_status_json(char *out, size_t out_size) {
                          "%s{\"id\":%d,\"mode\":\"%s\",\"module\":\"%s\",\"symbol\":\"%s\","
                          "\"address\":\"0x%llx\",\"target\":\"0x%llx\",\"patched\":%s,"
                          "\"mem\":\"%s\",\"memAfter\":\"%s\",\"filter\":\"%s\","
-                         "\"traceInsns\":%d,\"traceFrom\":\"%s\",\"state\":\"%s\"}",
+                         "\"traceInsns\":%d,\"traceFrom\":\"%s\",\"traceWatch\":\"%s\",\"state\":\"%s\"}",
                          dormant_count ? "," : "",
                          ctx.id,
                          ctx.mode == 0 ? "got" : (ctx.mode == 1 ? "inline" : (ctx.mode == 2 ? "sites" : "vtable")),
@@ -1923,7 +2024,7 @@ extern "C" int adh_native_hook_status_json(char *out, size_t out_size) {
                          (unsigned long long)(uintptr_t)ctx.target,
                          ctx.patched ? "true" : "false",
                          ctx.mem_spec, ctx.after_spec, ctx.filter_spec,
-                         ctx.trace_insns, ctx.trace_from,
+                         ctx.trace_insns, ctx.trace_from, ctx.watch_spec,
                          ctx.patched ? "soft-unhooked" : "reserved");
                 dormant += item;
                 dormant_count++;
@@ -1979,7 +2080,7 @@ extern "C" int adh_native_hook_status_json(char *out, size_t out_size) {
         snprintf(item, sizeof(item),
                  "{\"id\":%d,\"mode\":\"%s\",\"module\":\"%s\",\"symbol\":\"%s\","
                  "\"address\":\"0x%llx\",\"target\":\"0x%llx\",\"original\":\"0x%llx\","
-                 "\"replacement\":\"0x%llx\",\"hits\":%llu,\"argIndex\":%d,\"argValue\":\"0x%llx\",\"skipOriginal\":%s,\"returnSet\":%s,\"returnValue\":\"0x%llx\",\"backtrace\":%s,\"throttleMs\":%d,\"throttled\":%llu,\"mem\":\"%s\",\"memAfter\":\"%s\",\"afterActive\":%s,\"filter\":\"%s\",\"write\":\"%s\",\"errno\":%d,\"traceInsns\":%d,\"traceFrom\":\"%s\""
+                 "\"replacement\":\"0x%llx\",\"hits\":%llu,\"argIndex\":%d,\"argValue\":\"0x%llx\",\"skipOriginal\":%s,\"returnSet\":%s,\"returnValue\":\"0x%llx\",\"backtrace\":%s,\"throttleMs\":%d,\"throttled\":%llu,\"mem\":\"%s\",\"memAfter\":\"%s\",\"afterActive\":%s,\"filter\":\"%s\",\"write\":\"%s\",\"errno\":%d,\"traceInsns\":%d,\"traceFrom\":\"%s\",\"traceWatch\":\"%s\""
                  ",\"slotsPatched\":%d,\"installedAtMs\":%llu,\"firstHitMs\":%llu,\"verdict\":\"%s\""
                  "%s%s}",
                  ctx.id, ctx.mode == 0 ? "got" : (ctx.mode == 1 ? "inline" : (ctx.mode == 2 ? "sites" : "vtable")), ctx.module, ctx.symbol,
@@ -1990,7 +2091,7 @@ extern "C" int adh_native_hook_status_json(char *out, size_t out_size) {
                  ctx.return_set ? "true" : "false", (unsigned long long)ctx.return_value,
                  ctx.want_backtrace ? "true" : "false", ctx.throttle_ms, throttled, ctx.mem_spec,
                  ctx.after_spec, ctx.after_len > 0 ? "true" : "false", ctx.filter_spec, writebuf, ctx.errno_set,
-                 ctx.trace_insns, ctx.trace_from,
+                 ctx.trace_insns, ctx.trace_from, ctx.watch_spec,
                  slots_patched, (unsigned long long)ctx.installed_at_ms, (unsigned long long)first_hit,
                  verdict, gotbuf, sitebuf);
         hooks += item;

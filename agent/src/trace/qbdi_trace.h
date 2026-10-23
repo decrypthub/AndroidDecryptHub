@@ -42,6 +42,30 @@ int adh_qbdi_trace(void *func, const unsigned long long *args, int argc, char *o
 #define ADH_QTRACE_INHOOK_MAX 4096
 // Wall clock per in-hook run. Short on purpose: this runs on a target thread at a function entry.
 #define ADH_QTRACE_INHOOK_TIME_MS 300
+// How many writes a single watched range may report per hit. A range that is written in a loop is worth
+// seeing a few times; past this the count says so instead of the list growing without bound.
+#define ADH_QTRACE_WATCH_MAX 8
+
+// Memory-write watch for ONE range, armed only for the duration of an in-hook run.
+//
+// This is the software replacement for a hardware watchpoint: `perf_event_open(PERF_TYPE_BREAKPOINT)` is
+// denied to app domains on the devices we use (errno 13), so "who wrote this buffer" had no answer at all -
+// an instruction trace alone knows which code ran, never which store landed where. QBDI can report the
+// memory accesses of every executed instruction, so the same question becomes a fact: this pc, this
+// address, this value.
+typedef struct {
+    int count;                  // writes matched inside [lo, hi)
+    int truncated;              // more than ADH_QTRACE_WATCH_MAX writes were seen
+    char error[64];             // set when the watch could not be armed (never silently ignored)
+    uint64_t lo, hi;            // the range as resolved on the hit thread
+    struct {
+        uint64_t pc;            // the instruction that wrote
+        uint64_t addr;          // the address it wrote
+        uint64_t value;         // what it wrote (little-endian, up to 8 bytes)
+        int size;
+        char insn[ADH_QTRACE_TEXT_MAX + 1];
+    } hits[ADH_QTRACE_WATCH_MAX];
+} qbdi_watch_t;
 
 // stop_reason values (documented set; the device gate accepts exactly these):
 //   completed           the run reached the return address (or QBDI ended it at the function's return)
@@ -85,6 +109,20 @@ int adh_qbdi_run_from(uint64_t pc, const uint64_t *gpr, int budget, int time_ms,
 // the function).
 int adh_qbdi_run_from_ex(uint64_t pc, const uint64_t *gpr, int budget, int time_ms,
                          uint64_t instrument_hint, qbdi_summary_t *out);
+
+// Same as _ex, plus a WRITE watch on [watch_lo, watch_hi) for the duration of this run only (the
+// per-thread VM outlives the run, so the instrumentation is removed again before returning). Writes seen
+// while executing fill *watch; the run itself is not shortened by them.
+int adh_qbdi_run_from_watch(uint64_t pc, const uint64_t *gpr, int budget, int time_ms,
+                            uint64_t instrument_hint, uint64_t watch_lo, uint64_t watch_hi,
+                            qbdi_summary_t *out, qbdi_watch_t *watch);
+
+// Reset a watch to "nothing seen" and clear its range.
+void adh_qbdi_watch_reset(qbdi_watch_t *w);
+
+// Render a watch as the JSON OBJECT a NATIVE_HOOK event carries under "traceWatch". Returns the length
+// written, or -1 when it does not fit.
+int adh_qbdi_watch_json(const qbdi_watch_t *w, char *out, size_t cap);
 
 // Reset a summary to "no run yet" (insns/seen zero, stop_reason NULL).
 void adh_qbdi_summary_reset(qbdi_summary_t *s);

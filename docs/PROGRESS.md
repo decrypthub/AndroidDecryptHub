@@ -3,6 +3,52 @@
 > 这是"我们现在在哪"的唯一真相。每个会话开始先读它，结束前更新它。
 > 详细规格见 `REQUIREMENTS.md`，路线与架构见 `DEVELOPMENT_PLAN.md`。
 
+## 2026-10-23（第四十九轮）—— 写观察点（`traceWatch`）落地：工具第一次用事实回答"谁写了这块内存"
+
+### 一、能力：`native_hook { traceWatch: "x0:32" }`（agent + host + 门禁）
+
+硬件观察点在这台设备的 app 域被平台拒绝（`perf_event_open` **errno 13**），所以"哪条 store 写了这块
+内存"此前**没有任何答案**——指令 trace 只知道跑了哪些代码，不知道哪次写落在哪。现在：
+
+- 窗口文法与 `mem` 完全一致（寄存器 + **有符号偏移** + 可选 `@` 一层解引用），因为调用方在命中当刻
+  手里只有寄存器，绝对地址会过期；
+- 范围**命中当刻**算出，**只在该次 run 内**挂 `qbdi_addMemRangeCB(QBDI_MEMORY_WRITE)`，
+  run 结束立刻 `qbdi_deleteInstrumentation`（per-thread VM 跨命中复用，不删就会让下一次命中替上一次付钱）；
+- 事件里追加 `traceWatch {lo, hi, count, truncated, hits:[{pc, insn, addr, size, value}], error?}`，
+  与 `trace` 在同一条记录里；`traceWatch` 不配 `traceInsns` 直接拒（"装了钩却从不观察"是最坏的谎）；
+- status 回显 `traceWatch`；host `normalizeTraceWatch` 只接受**恰好一个窗口**，默认 payload 不带该键。
+
+验收（`tools/verify_v119_trace_watch.sh`，device，通用夹具"读 8 字节 + `buf[0]^=0xff`"）**PASS**：
+
+```
+{"count":1,"hit":{"pc":"0x747958a204","insn":"strb w9, [x0]","addr":"0xb4000073df1fd800",
+                  "size":1,"value":"0xbe"}}
+```
+
+—— 写入指令、地址、宽度、值全是 QBDI 报的访存事实；同一钩子不带 `traceWatch` 重新激活时事件里
+**没有**该键且 `trace` 仍在。Host 343 测试（+3）、`tsc` 0；回归 `v117/v118/v114` 全绿。
+
+### 二、外部资料（公开分析，2024 版）给的形状，与我们的现场数据交叉验证
+
+公开分析把 b5 描述为 `sha1(请求行 + " " + AES_CBC(md5(xor(请求行, key)), key, iv))`，其中
+`key = f(b1 .jdg.xbt 文件名, 固定 IV 串)`；样例里 b5/b6 是 **40 hex（SHA-1）**。
+
+- **对得上**：b5 只依赖请求行（element 0）、与 e5/uuid 无关、同输入恒定——正是该形状的必然结果；
+- **对不上**：该形状要求最后有一次摘要（40 hex），而我们干净单钩普查（`hits=2`，全捕获）只有
+  两次 md5（请求行 161B / JSON 440B，输出都落在 `encoder.src+0x50`），**没有任何 sha1/sha256 调用**；
+  且我们的 b5/b6 是 **64 hex（32 字节）**。→ 这一版把最后一步换成了 **VM 内联实现**（不走哈希驱动），
+  或 32 字节 = 两段摘要拼接。缺的仍然是"这 32 字节由谁写"——正好是上面那件工具要回答的。
+
+### 三、下一步（工具侧，按"别的 Agent 不看文章也能干"排序）
+
+1. `traceWatch` 已可用 → 下一步把它用在"值的产地"上（**generic**：先 `mem`/`traceWatch` 找到写者，
+   再跟它的输入一层）；
+2. **把 oracle 与差分固化成工具命令**（这一轮还是手写脚本）：`oracle.record/replay` + `diff_params`
+   （自动依赖矩阵、文本字段二分到字节）——这是"新 Agent 上手"的门槛；
+3. **动态密码学台账**：自动挂已知原语并标注 {alg, in, out, caller, tid, 次序}，把"这个参数到底由哪些
+   标准算法拼出来"从手工 Findcrypt 变成一条命令；
+4. 沙盒加一个**参考挑战**目标（形态像 libjdg、算法由我们控制），把"能分析同等难度"变成可跑的 PASS/FAIL。
+
 ## 2026-10-23（第四十八轮）—— 命中点窗口能往回读（v118）；b5 的输入面被差分钉死，两个模型错误被纠正
 
 ### 一、能力：`mem` 支持负偏移（`x3-40:40`）

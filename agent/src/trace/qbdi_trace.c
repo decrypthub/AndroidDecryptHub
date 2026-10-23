@@ -39,6 +39,10 @@ typedef bool (*p_run_t)(VMInstanceRef, rword, rword);
 typedef bool (*p_call_t)(VMInstanceRef, rword *, rword, uint32_t, ...);
 typedef const InstAnalysis *(*p_getInstAnalysis_t)(VMInstanceRef, AnalysisType);
 typedef void (*p_alignedFree_t)(void *);
+// Memory-write watch: the software stand-in for a hardware watchpoint (perf is denied to app domains).
+typedef uint32_t (*p_addMemRangeCB_t)(VMInstanceRef, rword, rword, MemoryAccessType, InstCallback, void *);
+typedef bool (*p_delInstr_t)(VMInstanceRef, uint32_t);
+typedef MemoryAccess *(*p_getInstMemAccess_t)(VMInstanceRef, size_t *);
 
 // One resolved library. Both paths resolve the same symbol set; only the lifetime of the handle
 // differs (the standalone path unloads, the in-hook path keeps it because a per-thread VM must stay
@@ -56,6 +60,9 @@ struct QbdiApi {
     p_call_t call;
     p_getInstAnalysis_t getInstAnalysis;
     p_alignedFree_t alignedFree;
+    p_addMemRangeCB_t addMemRangeCB;
+    p_delInstr_t deleteInstrumentation;
+    p_getInstMemAccess_t getInstMemoryAccess;
 };
 
 static int api_load(struct QbdiApi *api, const char *libname, char *err, size_t errsz) {
@@ -76,6 +83,11 @@ static int api_load(struct QbdiApi *api, const char *libname, char *err, size_t 
     api->call = (p_call_t)dlsym(api->handle, "qbdi_call");
     api->getInstAnalysis = (p_getInstAnalysis_t)dlsym(api->handle, "qbdi_getInstAnalysis");
     api->alignedFree = (p_alignedFree_t)dlsym(api->handle, "qbdi_alignedFree");
+    // Optional: a watch needs these, plain tracing does not. A build without them keeps tracing and
+    // refuses the watch loudly instead of pretending to watch.
+    api->addMemRangeCB = (p_addMemRangeCB_t)dlsym(api->handle, "qbdi_addMemRangeCB");
+    api->deleteInstrumentation = (p_delInstr_t)dlsym(api->handle, "qbdi_deleteInstrumentation");
+    api->getInstMemoryAccess = (p_getInstMemAccess_t)dlsym(api->handle, "qbdi_getInstMemoryAccess");
     if (!api->initVM || !api->terminateVM || !api->getGPRState || !api->allocateVirtualStack ||
         !api->addInstrumentedModuleFromAddr || !api->addInstrumentedRange || !api->addCodeCB ||
         !api->run || !api->call || !api->getInstAnalysis || !api->alignedFree) {
@@ -222,6 +234,8 @@ struct RunCtx {
     int n_insns;
     // In-hook sink.
     qbdi_summary_t *sum;
+    // Optional write watch for this run only.
+    qbdi_watch_t *watch;
     struct { char name[ADH_QTRACE_MNEM_MAX]; int count; } mnem[QTRACE_MNEM_SLOTS];
     int nmnem;
 };
@@ -483,12 +497,91 @@ static void summary_from_ctx(const struct RunCtx *c, qbdi_summary_t *out) {
     out->capped = c->capped || out->mnem_n < n;
 }
 
+void adh_qbdi_watch_reset(qbdi_watch_t *w) {
+    if (!w) return;
+    memset(w, 0, sizeof(*w));
+}
+
+// One callback per executed instruction that touches the watched range (QBDI gates on the range, so this
+// fires only for accesses there). Reads are ignored: the question is who WROTE the buffer.
+static VMAction qbdi_watch_cb(VMInstanceRef vm, GPRState *gpr, FPRState *fpr, void *data) {
+    (void)vm; (void)gpr; (void)fpr;
+    struct RunCtx *c = (struct RunCtx *)data;
+    if (!c || !c->watch || !c->api || !c->api->getInstMemoryAccess) return QBDI_CONTINUE;
+    size_t n = 0;
+    MemoryAccess *ma = c->api->getInstMemoryAccess(vm, &n);
+    if (!ma || !n) return QBDI_CONTINUE;
+    for (size_t i = 0; i < n; i++) {
+        if (!(ma[i].type & QBDI_MEMORY_WRITE)) continue;
+        if (ma[i].accessAddress < c->watch->lo || ma[i].accessAddress >= c->watch->hi) continue;
+        if (c->watch->count >= ADH_QTRACE_WATCH_MAX) {
+            c->watch->truncated = 1;
+            continue;
+        }
+        int k = c->watch->count++;
+        c->watch->hits[k].pc = (uint64_t)ma[i].instAddress;
+        c->watch->hits[k].addr = (uint64_t)ma[i].accessAddress;
+        c->watch->hits[k].value = (uint64_t)ma[i].value;
+        c->watch->hits[k].size = (int)ma[i].size;
+        const char *text = "";
+        if (c->api->getInstAnalysis) {
+            const InstAnalysis *a = c->api->getInstAnalysis(vm, QBDI_ANALYSIS_INSTRUCTION | QBDI_ANALYSIS_DISASSEMBLY);
+            const char *p = a && a->disassembly && a->disassembly[0] ? a->disassembly : (a ? a->mnemonic : "");
+            while (p && (*p == ' ' || *p == '\t')) p++;
+            text = p ? p : "";
+        }
+        sanitize_text(c->watch->hits[k].insn, sizeof(c->watch->hits[k].insn), text);
+    }
+    return QBDI_CONTINUE;
+}
+
+int adh_qbdi_watch_json(const qbdi_watch_t *w, char *out, size_t cap) {
+    if (!w || !out || cap < 64) return -1;
+    int n = snprintf(out, cap, "{\"lo\":\"0x%llx\",\"hi\":\"0x%llx\",\"count\":%d,\"truncated\":%s%s%s",
+                     (unsigned long long)w->lo, (unsigned long long)w->hi, w->count,
+                     w->truncated ? "true" : "false",
+                     w->error[0] ? ",\"error\":\"" : "", w->error[0] ? w->error : "");
+    if (n < 0 || (size_t)n >= cap) return -1;
+    size_t off = (size_t)n;
+    if (w->count > 0) {
+        n = snprintf(out + off, cap - off, ",\"hits\":[");
+        if (n < 0 || (size_t)n >= cap - off) return -1;
+        off += (size_t)n;
+        for (int i = 0; i < w->count; i++) {
+            n = snprintf(out + off, cap - off,
+                         "%s{\"pc\":\"0x%llx\",\"insn\":\"%s\",\"addr\":\"0x%llx\",\"size\":%d,\"value\":\"0x%llx\"}",
+                         i ? "," : "", (unsigned long long)w->hits[i].pc, w->hits[i].insn,
+                         (unsigned long long)w->hits[i].addr, w->hits[i].size,
+                         (unsigned long long)w->hits[i].value);
+            if (n < 0 || (size_t)n >= cap - off) return -1;
+            off += (size_t)n;
+        }
+        n = snprintf(out + off, cap - off, "]");
+        if (n < 0 || (size_t)n >= cap - off) return -1;
+        off += (size_t)n;
+    }
+    n = snprintf(out + off, cap - off, "}");
+    if (n < 0 || (size_t)n >= cap - off) return -1;
+    return (int)(off + (size_t)n);
+}
+
 int adh_qbdi_run_from(uint64_t pc, const uint64_t *gpr, int budget, int time_ms, qbdi_summary_t *out) {
     return adh_qbdi_run_from_ex(pc, gpr, budget, time_ms, pc, out);
 }
 
 int adh_qbdi_run_from_ex(uint64_t pc, const uint64_t *gpr, int budget, int time_ms,
                          uint64_t instrument_hint, qbdi_summary_t *out) {
+    return adh_qbdi_run_from_watch(pc, gpr, budget, time_ms, instrument_hint, 0, 0, out, NULL);
+}
+
+int adh_qbdi_run_from_watch(uint64_t pc, const uint64_t *gpr, int budget, int time_ms,
+                            uint64_t instrument_hint, uint64_t watch_lo, uint64_t watch_hi,
+                            qbdi_summary_t *out, qbdi_watch_t *watch) {
+    if (watch) {
+        adh_qbdi_watch_reset(watch);
+        watch->lo = watch_lo;
+        watch->hi = watch_hi;
+    }
     if (!out) return -1;
     adh_qbdi_summary_reset(out);
     out->insns = budget;
@@ -570,6 +663,20 @@ int adh_qbdi_run_from_ex(uint64_t pc, const uint64_t *gpr, int budget, int time_
     ctx.stop_pc = (unsigned long long)gpr[10];
     ctx.deadline_ms = monotonic_ms() + (unsigned long long)(time_ms > 0 ? time_ms : ADH_QTRACE_INHOOK_TIME_MS);
     ctx.sum = out;
+    ctx.watch = watch;
+    uint32_t watch_cb = QBDI_INVALID_EVENTID;
+    if (watch && watch->hi > watch->lo) {
+        // Arm for THIS run only. The VM is per-thread and outlives the run, so leaving the callback
+        // installed would make the next hit pay for (and report) the previous run's range.
+        if (!api->addMemRangeCB || !api->getInstMemoryAccess || !api->deleteInstrumentation) {
+            snprintf(watch->error, sizeof(watch->error), "this libQBDI build has no memory-access API");
+        } else {
+            watch_cb = api->addMemRangeCB(tv->vm, (rword)watch->lo, (rword)watch->hi,
+                                          QBDI_MEMORY_WRITE, qbdi_watch_cb, &ctx);
+            if (watch_cb == QBDI_INVALID_EVENTID)
+                snprintf(watch->error, sizeof(watch->error), "qbdi_addMemRangeCB failed (range not instrumentable?)");
+        }
+    }
     out->first_n = 0;
     out->mnem_n = 0;
     out->capped = 0;
@@ -578,6 +685,10 @@ int adh_qbdi_run_from_ex(uint64_t pc, const uint64_t *gpr, int budget, int time_
     bool ran = api->run(tv->vm, (rword)pc, 0);
     t_qbdi_depth--;
     tv->run = NULL;
+    if (watch_cb != QBDI_INVALID_EVENTID && api->deleteInstrumentation) {
+        (void)api->deleteInstrumentation(tv->vm, watch_cb);
+        watch_cb = QBDI_INVALID_EVENTID;
+    }
 
     unsigned long long endpc = (unsigned long long)tv->gpr->pc;
     // The VM may not write the state back after a stop; a "pc" that is still the start address is

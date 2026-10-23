@@ -6,6 +6,7 @@ import {
   nativeTracePayload,
   normalizeTraceFrom,
   normalizeTraceInsns,
+  normalizeTraceWatch,
 } from '../src/native_hook_args.ts';
 
 // In-hook trace (v117) changes what a hook RECORD carries, and it runs on the target thread, so the
@@ -57,4 +58,27 @@ test('only registers the hook stub saves are accepted, and the name is canonical
 test('traceFrom without a budget is refused rather than silently ignored', () => {
   assert.throws(() => nativeTracePayload(0, 'x0'), /traceFrom needs traceInsns/);
   assert.throws(() => nativeHookInstallPayload({ addr: '0x10', traceFrom: 'x0' }), /traceFrom needs traceInsns/);
+});
+
+// The write watch: "who wrote this buffer" as a fact. Same window grammar as mem, because the caller
+// knows a register at the hit, not an address that will be stale by the time a command runs.
+test('a write watch rides along with the trace and is absent when off', () => {
+  assert.equal('traceWatch' in nativeHookInstallPayload({ addr: '0x10' }), false);
+  const p = nativeHookInstallPayload({ addr: '0x10', traceInsns: 64, traceWatch: 'x0:8' });
+  assert.equal(p.traceInsns, 64);
+  assert.equal(p.traceWatch, 'x0:8');
+  assert.deepEqual(nativeTracePayload(32, '', 'x0+0:32'), { traceInsns: 32, traceWatch: 'x0:32' });
+  assert.deepEqual(nativeTracePayload(32, '', ''), { traceInsns: 32 });
+});
+
+test('the watch keeps the signed-offset grammar and refuses more than one window', () => {
+  assert.equal(normalizeTraceWatch('x3-40:40'), 'x3-40:40');
+  assert.equal(normalizeTraceWatch('@x1:64'), '@x1:64');
+  assert.throws(() => normalizeTraceWatch('x0:8,x1:8'), /exactly one window/);
+  assert.throws(() => normalizeTraceWatch('sp:8'), /mem window must look like/);
+});
+
+test('a watch without a budget is refused instead of installing a hook that never watches', () => {
+  assert.throws(() => nativeTracePayload(0, '', 'x0:8'), /traceWatch needs traceInsns/);
+  assert.throws(() => nativeHookInstallPayload({ addr: '0x10', traceWatch: 'x0:8' }), /traceWatch needs traceInsns/);
 });

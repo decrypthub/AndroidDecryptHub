@@ -187,7 +187,7 @@ const defaultDeps: NativeLookDeps = {
 
 export async function nativeLookArm(
   session: string,
-  opts: { mode?: string; module?: string; symbol?: string; addr?: string; mem?: string; backtrace?: boolean; traceInsns?: number; traceFrom?: string },
+  opts: { mode?: string; module?: string; symbol?: string; addr?: string; mem?: string; backtrace?: boolean; traceInsns?: number; traceFrom?: string; traceWatch?: string },
   deps: NativeLookDeps = defaultDeps,
 ): Promise<{ action: 'arm'; ok: true; hookId: number; mem: string; target: string; text: string }> {
   const sid = pickSid(session) ?? session;
@@ -211,7 +211,7 @@ export async function nativeLookArm(
     backtrace: opts.backtrace === false ? 'false' : 'true',
     throttleMs: 0,
     mem,
-    ...nativeTracePayload(opts.traceInsns, opts.traceFrom),
+    ...nativeTracePayload(opts.traceInsns, opts.traceFrom, opts.traceWatch),
   }, 20_000);
   if (!installed?.ok) throw new Error(installed?.error ?? 'native hook install failed');
   const hookId = Number(installed.hookId);

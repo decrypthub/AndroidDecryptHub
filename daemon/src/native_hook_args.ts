@@ -148,6 +148,8 @@ export interface NativeHookInstallOptions {
   traceInsns?: number;
   /** Register holding the code address to start the run from ("" = the hooked entry). */
   traceFrom?: string;
+  /** One `mem`-style window to watch for WRITES during the run ("" = no watch). */
+  traceWatch?: string;
 }
 
 // In-hook instruction trace. The ceiling mirrors ADH_QTRACE_INHOOK_MAX in
@@ -185,18 +187,41 @@ export function normalizeTraceFrom(value: unknown): string {
 }
 
 /**
+ * The write watch for an in-hook trace: ONE window in the same grammar as `mem`, naming the memory to
+ * observe for writes while the traced run executes ("x0:32", "x2-8:8", "@x1:64"). Empty = off.
+ *
+ * This is the software stand-in for a hardware watchpoint (perf_event_open is denied to app domains on
+ * the devices we use), and it is what turns "which code ran" into "which store landed where": the event
+ * comes back with the writing instruction, the address and the value. It needs traceInsns because the
+ * watch lives only for that run.
+ */
+export function normalizeTraceWatch(value: unknown): string {
+  if (value === undefined || value === null || String(value).trim() === '') return '';
+  const { windows, spec } = parseMemWindows(String(value).trim());
+  if (windows.length !== 1) {
+    throw new Error(`traceWatch must be exactly one window, e.g. x0:32 (got ${windows.length})`);
+  }
+  return spec;
+}
+
+/**
  * The trace fields an install may carry. ABSENT when the trace is off - a payload that names
  * traceInsns:0 would still say "this hook was asked to trace", and the default install has to stay
  * byte-identical to what it was before the feature existed.
  */
-export function nativeTracePayload(insns: unknown, from: unknown): Record<string, string | number> {
+export function nativeTracePayload(insns: unknown, from: unknown, watch?: unknown): Record<string, string | number> {
   const n = normalizeTraceInsns(insns);
   const reg = normalizeTraceFrom(from);
+  const watchSpec = normalizeTraceWatch(watch);
   if (n <= 0) {
     if (reg) throw new Error('traceFrom needs traceInsns (nothing would read that register)');
+    if (watchSpec) throw new Error('traceWatch needs traceInsns (the watch lives for the run only)');
     return {};
   }
-  return reg ? { traceInsns: n, traceFrom: reg } : { traceInsns: n };
+  const out: Record<string, string | number> = { traceInsns: n };
+  if (reg) out.traceFrom = reg;
+  if (watchSpec) out.traceWatch = watchSpec;
+  return out;
 }
 
 /** The exact agent command payload for one address-mode inline hook. */
@@ -214,6 +239,6 @@ export function nativeHookInstallPayload(opts: NativeHookInstallOptions): Record
     argIndex: Number(opts.argIndex ?? -1),
     argValue: opts.argValue ?? '',
     mem: parseMemWindows(opts.mem).spec,
-    ...nativeTracePayload(opts.traceInsns, opts.traceFrom),
+    ...nativeTracePayload(opts.traceInsns, opts.traceFrom, opts.traceWatch),
   };
 }

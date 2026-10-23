@@ -255,6 +255,11 @@ SCRIPTS=(
   # instruction records are one contiguous array, so "what produced the value I am about to render" lives
   # at pc-10 - unreachable with a forward-only grammar.
   "verify_v118_negative_window.sh:device"
+  # v119: a write watch inside the in-hook trace (`traceWatch`). Hardware watchpoints are denied to app
+  # domains (perf_event_open: errno 13), so "which store wrote this buffer" had no answer; the gate makes
+  # a fixture flip a known byte and requires the event to name that store (address/size/value/insn), then
+  # requires the key to be absent when the watch is not requested.
+  "verify_v119_trace_watch.sh:device"
 )
 
 pass=0; fail=0; skip=0; FAILED=""

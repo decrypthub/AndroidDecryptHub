@@ -77,7 +77,15 @@ extern "C" {
 // inline hook the run starts in the Dobby trampoline, because the entry carries our own branch).
 // Refused together with skipOriginal/returnSet: the tracer executes the original, which is the thing
 // those two options exist to prevent.
+//
+// trace_watch (optional, needs trace_insns > 0) is a `mem`-style window naming the memory to WATCH FOR
+// WRITES during that run ("x0:32", "x2-8:8", "@x1:64"). The answer is a fact, not a guess: which
+// instruction wrote it, to which address, with which value. It exists because a hardware watchpoint is
+// not available to app domains (perf_event_open: errno 13), which left "who wrote this buffer"
+// unanswerable - an instruction trace alone says which code ran, never which store landed where.
 #define ADH_TRACE_FROM_MAX 4
+// Watch range ceiling: one range; a buffer worth watching is a structure, not a payload.
+#define ADH_WATCH_LEN_MAX 4096
 
 int adh_native_hook_install(const char *mode, const char *module, const char *symbol,
                             const char *addr, int skip_original, int return_set,
@@ -86,7 +94,7 @@ int adh_native_hook_install(const char *mode, const char *module, const char *sy
                             int want_backtrace, int throttle_ms, const char *mem_spec,
                             int write_reg, int write_off, const char *write_hex,
                             int set_errno, const char *after_spec, const char *filter_spec,
-                            int trace_insns, const char *trace_from,
+                            int trace_insns, const char *trace_from, const char *trace_watch,
                             int *hook_id_out, char *error, size_t error_size);
 // hard=1 destroys the inline patch (DobbyDestroy) after a quiesce window and frees the slot;
 // hard=0 keeps the soft-unhook semantics (stub stays installed but inactive).

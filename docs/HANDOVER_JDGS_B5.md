@@ -202,6 +202,10 @@ sites 模式（函数序言不动）+ `traceInsns: 200`，命中点就地跑满 
 - **对这个目标用 `mode:sites`，不要 inline**：给 libjdg 自己的函数下 inline patch 后，签名时进程
   SIGSEGV 在 `libjdg+0x10404c`（变参蹦床里），坏地址像被截断的指针；只装 sites 钩时同一操作存活。
   疑为它自己的完整性检查，本轮未证明（记录在 PROGRESS 第四十七轮）。
+- **"谁写了这块内存"现在有答案了（第四十九轮）**：`native_hook { traceInsns: N, traceWatch: "x0:32" }`
+  → 事件里 `traceWatch.hits[0] = {pc, insn, addr, size, value}`。范围在命中当刻由寄存器算出、只在该次
+  run 内生效；`traceWatch` 不配 `traceInsns` 会被拒。这是 `hw_watch`（perf 被拒）的软件替代，
+  也是回答"X 由谁写进槽"的**直接**工具：先 `mem`/`traceWatch` 找到写者，再跟它的输入一层。
 - **`memory_read` 的参数是 `size`，不是 `len`**。传错时每个地址都回 `bad size`，看起来像权限问题。
 - **记录能不能读，取决于 daemon 的 drain 循环**：每条会话的 drain 是 hello 之后**异步** arm 的，
   启动瞬间读 `live_captures` 会看到空 store（`capture_stop` 回的 `drainLoop:"none"` 就是这个）。脚本
