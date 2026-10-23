@@ -38,8 +38,10 @@ int adh_qbdi_trace(void *func, const unsigned long long *args, int argc, char *o
 #define ADH_QTRACE_TEXT_MAX 48
 #define ADH_QTRACE_MNEM_MAX 12
 // Ceiling for traceInsns. A hit stops the target thread for the whole run, so the request is bounded
-// (the instruction budget is the first guard, not the only one).
-#define ADH_QTRACE_INHOOK_MAX 4096
+// (the instruction budget is the first guard, not the only one). The ceiling itself is a policy number,
+// not a technical one: 4096 was too small to reach past a parser into the code that follows it, and the
+// wall clock (300 ms) is what actually protects the target - whichever binds first stops the run.
+#define ADH_QTRACE_INHOOK_MAX 65536
 // Wall clock per in-hook run. Short on purpose: this runs on a target thread at a function entry.
 #define ADH_QTRACE_INHOOK_TIME_MS 300
 // How many writes a single watched range may report per hit. A range that is written in a loop is worth

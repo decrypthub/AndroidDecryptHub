@@ -34,7 +34,7 @@ test('a trace install sends exactly the two fields the agent parses', () => {
 });
 
 test('the instruction budget is clamped to the ceiling the agent enforces', () => {
-  assert.equal(NATIVE_TRACE_MAX_INSNS, 4096);
+  assert.equal(NATIVE_TRACE_MAX_INSNS, 65536);
   assert.equal(normalizeTraceInsns(200), 200);
   assert.equal(normalizeTraceInsns(999999), NATIVE_TRACE_MAX_INSNS);
 });
@@ -76,6 +76,18 @@ test('the watch keeps the signed-offset grammar and refuses more than one window
   assert.equal(normalizeTraceWatch('@x1:64'), '@x1:64');
   assert.throws(() => normalizeTraceWatch('x0:8,x1:8'), /exactly one window/);
   assert.throws(() => normalizeTraceWatch('sp:8'), /mem window must look like/);
+});
+
+test('a watch may name an absolute address, which is how a learned buffer is watched', () => {
+  // The buffer a signature renders comes from a previous hit; at the next hook there is no register that
+  // still points at it, so the watch has to accept the address itself.
+  assert.equal(normalizeTraceWatch('0x7443113690:32'), '0x7443113690:32');
+  assert.equal(normalizeTraceWatch('7443113690:32'), '0x7443113690:32');
+  assert.equal(normalizeTraceWatch('0X7443113690:32'), '0x7443113690:32');
+  assert.throws(() => normalizeTraceWatch('0x0:32'), /must not be 0/);
+  assert.throws(() => normalizeTraceWatch('0x1000:9999'), /must be 1\.\.4096/);
+  const p = nativeHookInstallPayload({ addr: '0x10', traceInsns: 2000, traceWatch: '0x7443113690:32' });
+  assert.equal(p.traceWatch, '0x7443113690:32');
 });
 
 test('a watch without a budget is refused instead of installing a hook that never watches', () => {

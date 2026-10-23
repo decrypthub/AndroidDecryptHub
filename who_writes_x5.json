@@ -1,0 +1,180 @@
+{
+ "pid": "18846",
+ "entry": "0x73150af828",
+ "trace": 16000,
+ "src": "0x7443113690",
+ "encSrc2": [
+  "20861:0x7443113690"
+ ],
+ "sameArena": true,
+ "found": 0,
+ "events": [
+  {
+   "func": "NATIVE_HOOK",
+   "id": 205499,
+   "ts": 1792729892878,
+   "hookId": 3,
+   "kind": "inline",
+   "tid": 20861,
+   "throttleMs": 0,
+   "throttled": 0,
+   "x0": "0x7315165420",
+   "x1": "0x32",
+   "x2": "0x72cd300780",
+   "x3": "0x22",
+   "x4": "0x11b",
+   "x5": "0x7330fa581a",
+   "x6": "0x73151adcf8",
+   "x7": "0x73151add00",
+   "x8": "0x72cd300780",
+   "x18": "0x0",
+   "x29": "0x7443113d50",
+   "x30": "0x73150af7e8",
+   "fp": {
+    "d0": "1.27632e-303",
+    "s0": "1.65307e-37",
+    "q0hi": "0x100b902e0000f",
+    "d1": "2.75911e-306",
+    "s1": "1.8367e-40",
+    "q1hi": "0xa900eb021100a9",
+    "d2": "2.78132e-309",
+    "s2": "9.20947e-41",
+    "q2hi": "0x21902610107000b",
+    "d3": "3.56172e-305",
+    "s3": "1.37791e-39",
+    "q3hi": "0xb0001ffff0001",
+    "d4": "2.78132e-309",
+    "s4": "9.20947e-41",
+    "q4hi": "0x20102610107000b",
+    "d5": "3.56172e-305",
+    "s5": "1.37791e-39",
+    "q5hi": "0xb0001ffff0001",
+    "d6": "0",
+    "s6": "0",
+    "q6hi": "0x0",
+    "d7": "0",
+    "s7": "0",
+    "q7hi": "0x0"
+   },
+   "argIndex": -1,
+   "argValue": "0x0",
+   "skipOriginal": false,
+   "returnSet": false,
+   "returnValue": "0x0",
+   "trace": {
+    "insns": 16000,
+    "seen": 16000,
+    "stopReason": "instruction-budget",
+    "start": "0x753344c018",
+    "stopPc": "0x731511a0ac",
+    "capped": true,
+    "mnemonics": [
+     {
+      "mnemonic": "ldr",
+      "count": 1956
+     },
+     {
+      "mnemonic": "add",
+      "count": 1710
+     },
+     {
+      "mnemonic": "ldur",
+      "count": 1453
+     },
+     {
+      "mnemonic": "mov",
+      "count": 1100
+     },
+     {
+      "mnemonic": "str",
+      "count": 981
+     },
+     {
+      "mnemonic": "stur",
+      "count": 799
+     },
+     {
+      "mnemonic": "b",
+      "count": 786
+     },
+     {
+      "mnemonic": "ldrh",
+      "count": 717
+     },
+     {
+      "mnemonic": "sub",
+      "count": 485
+     },
+     {
+      "mnemonic": "and",
+      "count": 428
+     },
+     {
+      "mnemonic": "eor",
+      "count": 420
+     },
+     {
+      "mnemonic": "sxth",
+      "count": 420
+     },
+     {
+      "mnemonic": "br",
+      "count": 411
+     },
+     {
+      "mnemonic": "cmp",
+      "count": 331
+     },
+     {
+      "mnemonic": "stp",
+      "count": 323
+     },
+     {
+      "mnemonic": "bl",
+      "count": 303
+     }
+    ],
+    "first": [
+     "0x753344c018: ldr x17, #0x18",
+     "0x753344c01c: blr x17",
+     "0x731510e43c: stp x28, x27, [sp, #-0x60]!",
+     "0x731510e440: stp x26, x25, [sp, #0x10]",
+     "0x731510e444: stp x24, x23, [sp, #0x20]",
+     "0x731510e448: stp x22, x21, [sp, #0x30]",
+     "0x731510e44c: stp x20, x19, [sp, #0x40]",
+     "0x731510e450: stp x29, x30, [sp, #0x50]",
+     "0x731510e454: add x29, sp, #0x50",
+     "0x731510e458: sub sp, sp, #0x10",
+     "0x731510e45c: mrs x22, TPIDR_EL0",
+     "0x731510e460: ldr x8, [x22, #0x28]",
+     "0x731510e464: stur x8, [x29, #-0x58]",
+     "0x731510e468: ldr x8, [x2, #0x20]",
+     "0x731510e46c: ldrh w23, [x8, #0x4]",
+     "0x731510e470: ldrh w9, [x8, #0x8]",
+     "0x731510e474: eor w9, w9, w23",
+     "0x731510e478: and w10, w9, #0xffff",
+     "0x731510e47c: cmp w10, #0x23a",
+     "0x731510e480: b.hi #0x48",
+     "0x731510e484: adrp x20, #-598016",
+     "0x731510e488: sxth x9, w9",
+     "0x731510e48c: add x20, x20, #0x320",
+     "0x731510e490: ldr x9, [x20, x9, lsl #3]",
+     "0x731510e494: ldrh w24, [x8, #0x6]",
+     "0x731510e498: ldr x26, [x2, #0x28]",
+     "0x731510e49c: ldr x27, [x2, #0x10]",
+     "0x731510e4a0: adrp x28, #0",
+     "0x731510e4a4: add x28, x28, #0x4bc",
+     "0x731510e4a8: add x9, x28, x9",
+     "0x731510e4ac: mov w19, w1",
+     "0x731510e4b0: mov x25, x0"
+    ]
+   },
+   "traceWatch": {
+    "lo": "0x7443113690",
+    "hi": "0x74431136b0",
+    "count": 0,
+    "truncated": false
+   }
+  }
+ ]
+}

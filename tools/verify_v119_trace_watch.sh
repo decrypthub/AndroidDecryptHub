@@ -137,7 +137,29 @@ try {
     console.log(JSON.stringify({ hookId, buf: wantAddr, count: tw.count, hit }));
   }
 
-  // (2) the same hook without the watch: the key must be ABSENT (the default costs nothing). A soft
+  // (2) the ABSOLUTE form: an address learned from an earlier hit, with no register that points at it.
+  //     This is the normal case for "who writes this buffer" once the buffer's address is known.
+  await mcp('native_hook', { session, action: 'unhook', hookId, hard: false });
+  hookId = 0;
+  const absHook = await mcp('native_hook', {
+    session, action: 'hook', mode: 'inline', ...FIXTURE,
+    mem: 'x0:8', traceInsns: 200, traceWatch: `0x${buf.toString(16)}:8`, confirm: true,
+  });
+  if (!absHook.ok) fail('install with an absolute traceWatch failed', absHook);
+  else {
+    hookId = Number(absHook.hookId);
+    const ast = (absHook.status?.hooks ?? []).find((h) => Number(h.id) === hookId) ?? {};
+    if (ast.traceWatch !== `0x${buf.toString(16)}:8`) fail(`status did not echo the absolute watch (got ${JSON.stringify(ast.traceWatch)})`, ast);
+    const call2 = await mcp('native_call', { session, ...FIXTURE, args: ['0x' + buf.toString(16)], confirm: true });
+    if (!call2.ok) fail('the absolute-watch call did not answer', call2);
+    const evs2 = await eventsFor(hookId);
+    const aev = evs2[evs2.length - 1] ?? {};
+    const atw = aev.traceWatch;
+    if (!atw || !(Number(atw.count) > 0)) fail('the absolute watch saw no write', atw ?? { keys: Object.keys(aev) });
+    else if (String((atw.hits ?? [])[0]?.addr) !== '0x' + buf.toString(16)) fail('the absolute watch reported another address', atw);
+  }
+
+  // (3) the same hook without the watch: the key must be ABSENT (the default costs nothing). A soft
   //     unhook keeps the stub installed, so the same address can be reactivated with a new request.
   await mcp('native_hook', { session, action: 'unhook', hookId, hard: false });
   hookId = 0;
@@ -148,11 +170,11 @@ try {
     hookId = qid;
     const qst = (quiet.status?.hooks ?? []).find((h) => Number(h.id) === qid) ?? {};
     if (String(qst.traceWatch ?? '') !== '') fail('status still echoes a traceWatch after reactivating without it', qst);
-    const call2 = await mcp('native_call', { session, ...FIXTURE, args: ['0x' + buf.toString(16)], confirm: true });
-    if (!call2.ok) fail('the untraced-watch call did not answer', call2);
-    const evs2 = await eventsFor(qid);
-    if (!evs2.length) fail('no event arrived for the hook without a watch');
-    for (const e of evs2) {
+    const call3 = await mcp('native_call', { session, ...FIXTURE, args: ['0x' + buf.toString(16)], confirm: true });
+    if (!call3.ok) fail('the untraced-watch call did not answer', call3);
+    const evs3 = await eventsFor(qid);
+    if (!evs3.length) fail('no event arrived for the hook without a watch');
+    for (const e of evs3) {
       if ('traceWatch' in e) fail('an event of a hook installed without traceWatch carries the key', { keys: Object.keys(e) });
       if (!e.trace) fail('the event lost its trace when the watch was removed', { keys: Object.keys(e) });
     }

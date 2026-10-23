@@ -1,0 +1,180 @@
+{
+ "pid": "25871",
+ "entry": "0x73072e2144",
+ "trace": 64000,
+ "src": "0x7443113690",
+ "encSrc2": [
+  "27862:0x7443113690"
+ ],
+ "sameArena": true,
+ "found": 0,
+ "events": [
+  {
+   "func": "NATIVE_HOOK",
+   "id": 206333,
+   "ts": 1792730090222,
+   "hookId": 3,
+   "kind": "inline",
+   "tid": 27862,
+   "throttleMs": 0,
+   "throttled": 0,
+   "x0": "0x7443114100",
+   "x1": "0x7443114110",
+   "x2": "0x7443116770",
+   "x3": "0x1a1670a3ff7",
+   "x4": "0x73073e0d08",
+   "x5": "0x73073e0d20",
+   "x6": "0x73073e0cf8",
+   "x7": "0x73073e0d00",
+   "x8": "0x73072e2110",
+   "x18": "0x0",
+   "x29": "0x7443113dc0",
+   "x30": "0x730734f050",
+   "fp": {
+    "d0": "0",
+    "s0": "0",
+    "q0hi": "0x0",
+    "d1": "2.46707e-312",
+    "s1": "145.235",
+    "q1hi": "0xffffff80ffffffd0",
+    "d2": "2.46707e-312",
+    "s2": "145.235",
+    "q2hi": "0xffffff80ffffffd0",
+    "d3": "4.18031e-62",
+    "s3": "6.3007e-10",
+    "q3hi": "0x31356231386662",
+    "d4": "3.44902e-307",
+    "s4": "1.55203e-38",
+    "q4hi": "0x1b1007100a100a9",
+    "d5": "1.51305e-306",
+    "s5": "0",
+    "q5hi": "0x100000041",
+    "d6": "0",
+    "s6": "0",
+    "q6hi": "0x0",
+    "d7": "0",
+    "s7": "0",
+    "q7hi": "0x0"
+   },
+   "argIndex": -1,
+   "argValue": "0x0",
+   "skipOriginal": false,
+   "returnSet": false,
+   "returnValue": "0x0",
+   "trace": {
+    "insns": 64000,
+    "seen": 64000,
+    "stopReason": "instruction-budget",
+    "start": "0x75335f4018",
+    "stopPc": "0x730734d688",
+    "capped": true,
+    "mnemonics": [
+     {
+      "mnemonic": "ldrb",
+      "count": 31738
+     },
+     {
+      "mnemonic": "cmp",
+      "count": 15694
+     },
+     {
+      "mnemonic": "b.lo",
+      "count": 15629
+     },
+     {
+      "mnemonic": "orr",
+      "count": 184
+     },
+     {
+      "mnemonic": "strb",
+      "count": 180
+     },
+     {
+      "mnemonic": "add",
+      "count": 148
+     },
+     {
+      "mnemonic": "lsr",
+      "count": 120
+     },
+     {
+      "mnemonic": "mov",
+      "count": 99
+     },
+     {
+      "mnemonic": "sub",
+      "count": 61
+     },
+     {
+      "mnemonic": "b.gt",
+      "count": 59
+     },
+     {
+      "mnemonic": "stp",
+      "count": 15
+     },
+     {
+      "mnemonic": "adrp",
+      "count": 12
+     },
+     {
+      "mnemonic": "bl",
+      "count": 11
+     },
+     {
+      "mnemonic": "ldr",
+      "count": 10
+     },
+     {
+      "mnemonic": "str",
+      "count": 9
+     },
+     {
+      "mnemonic": "br",
+      "count": 8
+     }
+    ],
+    "first": [
+     "0x75335f4018: ldr x17, #0x18",
+     "0x75335f401c: blr x17",
+     "0x73072e26f4: stp x29, x30, [sp, #-0x60]!",
+     "0x73072e26f8: stp x28, x27, [sp, #0x10]",
+     "0x73072e26fc: stp x26, x25, [sp, #0x20]",
+     "0x73072e2700: stp x24, x23, [sp, #0x30]",
+     "0x73072e2704: stp x22, x21, [sp, #0x40]",
+     "0x73072e2708: stp x20, x19, [sp, #0x50]",
+     "0x73072e270c: mov x29, sp",
+     "0x73072e2710: mov x22, x5",
+     "0x73072e2714: mov x25, x3",
+     "0x73072e2718: adrp x3, #-233472",
+     "0x73072e271c: adrp x5, #-221184",
+     "0x73072e2720: mov x23, x4",
+     "0x73072e2724: mov x26, x2",
+     "0x73072e2728: mov x27, x1",
+     "0x73072e272c: mov x28, x0",
+     "0x73072e2730: add x3, x3, #0x380",
+     "0x73072e2734: add x5, x5, #0x900",
+     "0x73072e2738: mov w0, #0x9",
+     "0x73072e273c: mov w1, #0x2e0",
+     "0x73072e2740: mov w2, #0x281a",
+     "0x73072e2744: mov w4, #0xb3",
+     "0x73072e2748: mov x20, x7",
+     "0x73072e274c: mov x21, x6",
+     "0x73072e2750: mov w24, #0x9",
+     "0x73072e2754: bl #0x6adac",
+     "0x730734d500: str x27, [sp, #-0x60]!",
+     "0x730734d504: stp x26, x25, [sp, #0x10]",
+     "0x730734d508: stp x24, x23, [sp, #0x20]",
+     "0x730734d50c: stp x22, x21, [sp, #0x30]",
+     "0x730734d510: stp x20, x19, [sp, #0x40]"
+    ]
+   },
+   "traceWatch": {
+    "lo": "0x7443113690",
+    "hi": "0x74431136b0",
+    "count": 0,
+    "truncated": false
+   }
+  }
+ ]
+}

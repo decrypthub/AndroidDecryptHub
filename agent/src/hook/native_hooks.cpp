@@ -120,6 +120,8 @@ struct NativeHookContext {
     int watch_off;
     int watch_len;
     int watch_deref;
+    int watch_abs;                 // 1 = the range IS watch_abs_addr (learned from an earlier hit)
+    unsigned long long watch_abs_addr;
     char watch_spec[48];
     int patched;             // inline stub remains installed (soft unhook / reactivation)
     unsigned char prologue[24];   // original bytes captured before the inline patch
@@ -277,6 +279,11 @@ struct WinSpec {
     int reg;
     int off;
     int len;
+    // A window may also name an ABSOLUTE address ("0x7443113690:32"). That is what a write watch needs
+    // when the buffer was learned from a previous hit (an address, not a register): the whole point is to
+    // ask "who writes THIS", and the answer must not depend on some register still holding it.
+    int absolute;
+    unsigned long long abs_addr;
     // 0 = plain window, 1 = follow one pointer from (reg+off), 2 = follow a pointer held INSIDE an
     // earlier window's bytes ("@#2+8:256": take window 2's copy, read the u64 at +8 in it, and copy the
     // window from THAT address).
@@ -297,6 +304,8 @@ static int parse_window(const char **pp, int max_len, const char *label, WinSpec
     while (*p == ' ') p++;
     w->deref = 0;
     w->from_win = 0;
+    w->absolute = 0;
+    w->abs_addr = 0;
     if (*p == '@' && p[1] == '#') {
         // "@#<n>[+<off>]:<len>" - follow a pointer that an earlier window already copied.
         p += 2;
@@ -327,13 +336,42 @@ static int parse_window(const char **pp, int max_len, const char *label, WinSpec
         p++;
     }
     if (w->deref != 2) {
-        if (p[0] != 'x' || p[1] < '0' || p[1] > '8') {
-            set_error(error, error_size, "%s window must look like x0:64, x2+16:32, x3-40:40, @x2+32:512 or @#2+8:256", label);
-            return 0;
+        // Absolute form: "0x7443113690:32". Only the write watch accepts it (a `mem` window must start at a
+        // register); it is what lets a caller watch an address learned from an earlier hit.
+        const char *q = p;
+        int is_abs = 0;
+        if (q[0] == '0' && (q[1] == 'x' || q[1] == 'X')) { q += 2; is_abs = 1; }
+        else if (q[0] >= '0' && q[0] <= '9') { is_abs = 1; }
+        if (is_abs) {
+            unsigned long long addr = 0;
+            int digits = 0;
+            while ((*q >= '0' && *q <= '9') || (*q >= 'a' && *q <= 'f') || (*q >= 'A' && *q <= 'F')) {
+                int d = (*q <= '9') ? (*q - '0') : ((*q | 0x20) - 'a' + 10);
+                if (digits >= 16) break;
+                addr = (addr << 4) | (unsigned long long)d;
+                digits++;
+                q++;
+            }
+            if (digits < 1) {
+                set_error(error, error_size, "%s window must look like x0:64, x2+16:32, x3-40:40 or 0xADDR:32", label);
+                return 0;
+            }
+            w->absolute = 1;
+            w->abs_addr = addr;
+            w->reg = -1;
+            w->off = 0;
+            p = q;
+        } else {
+            if (p[0] != 'x' || p[1] < '0' || p[1] > '8') {
+                set_error(error, error_size, "%s window must look like x0:64, x2+16:32, x3-40:40, @x2+32:512 or @#2+8:256", label);
+                return 0;
+            }
+            w->absolute = 0;
+            w->abs_addr = 0;
+            w->reg = p[1] - '0';
+            p += 2;
+            w->off = 0;
         }
-        w->reg = p[1] - '0';
-        p += 2;
-        w->off = 0;
     }
     if (*p == '+' || *p == '-') {
         // A NEGATIVE offset is what makes "what did the code do just before this" readable: a template
@@ -398,6 +436,7 @@ static int format_window(char *buf, size_t n, const WinSpec *w) {
         return snprintf(buf, n, "@#%d:%d", w->from_win, w->len);
     }
     const char *at = w->deref ? "@" : "";
+    if (w->absolute) return snprintf(buf, n, "0x%llx:%d", w->abs_addr, w->len);
     // A negative offset keeps its sign in the canonical spelling ("x3-40:40"): the status echo is what a
     // caller re-reads to know whether a window looks backwards, and "+-40" would be unparseable.
     if (w->off > 0) return snprintf(buf, n, "%sx%d+%d:%d", at, w->reg, w->off, w->len);
@@ -439,6 +478,12 @@ static int parse_mem_spec(const char *spec, int *regs, int *offsets, int *lens, 
         }
         WinSpec w;
         if (!parse_window(&p, ADH_MEM_WIN_LEN, "mem", &w, error, error_size)) return 0;
+        if (w.absolute) {
+            // A copied window has to be re-read from a live register on every hit; an absolute address here
+            // would silently pin one hit's buffer. Only traceWatch accepts the absolute form.
+            set_error(error, error_size, "mem windows start at a register (x0:64); an absolute address is only accepted by traceWatch");
+            return 0;
+        }
         while (*p == ' ') p++;
         if (*p == ',') {
             p++;
@@ -920,11 +965,21 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id, uint64_t
         const int woff = __atomic_load_n(&ctx.watch_off, __ATOMIC_RELAXED);
         const int wlen = __atomic_load_n(&ctx.watch_len, __ATOMIC_RELAXED);
         const int wderef = __atomic_load_n(&ctx.watch_deref, __ATOMIC_RELAXED);
-        const int watch_cfg = (wreg >= 0 && wlen > 0) ? 1 : 0;
+        const int wabs = __atomic_load_n(&ctx.watch_abs, __ATOMIC_RELAXED);
+        const uint64_t wabs_addr = ctx.watch_abs_addr;
+        const int watch_cfg = ((wabs || wreg >= 0) && wlen > 0) ? 1 : 0;
         qbdi_watch_t watch;
         adh_qbdi_watch_reset(&watch);
         uint64_t wlo = 0, whi = 0;
-        if (watch_cfg) {
+        if (watch_cfg && wabs) {
+            // An address learned from an earlier hit: no register involved, so nothing can be stale.
+            if ((uint64_t)wlen <= ~0ull - wabs_addr) {
+                wlo = wabs_addr;
+                whi = wabs_addr + (uint64_t)wlen;
+            } else {
+                snprintf(watch.error, sizeof(watch.error), "traceWatch range overflow");
+            }
+        } else if (watch_cfg) {
             watch.lo = 0;
             watch.hi = 0;
             uint64_t wbase = (wreg < (int)(sizeof(saved_regs) / sizeof(saved_regs[0]))) ? saved_regs[wreg] : 0;
@@ -1335,6 +1390,8 @@ static void reset_context(NativeHookContext &ctx) {
     ctx.watch_off = 0;
     ctx.watch_len = 0;
     ctx.watch_deref = 0;
+    ctx.watch_abs = 0;
+    ctx.watch_abs_addr = 0;
     ctx.watch_spec[0] = 0;
     ctx.arg_value = 0;
     ctx.patched = 0;
@@ -1394,6 +1451,8 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
     // Write watch for the run: the same window grammar as `mem` (a register, an optional signed offset
     // and an optional one-level dereference), because the caller knows a register, not an address.
     int watch_reg = -1, watch_off = 0, watch_len = 0, watch_deref = 0;
+    int watch_abs = 0;
+    unsigned long long watch_abs_addr = 0;
     char watch_canon[48] = "";
     if (trace_watch && trace_watch[0]) {
         if (trace_insns <= 0) {
@@ -1409,10 +1468,12 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
             set_error(error, error_size, "traceWatch must be exactly one window, e.g. x0:32");
             return 0;
         }
-        watch_reg = w.reg;
+        watch_reg = w.absolute ? -1 : w.reg;
         watch_off = w.off;
         watch_len = w.len;
         watch_deref = w.deref ? 1 : 0;
+        watch_abs = w.absolute;
+        watch_abs_addr = w.abs_addr;
         format_window(watch_canon, sizeof(watch_canon), &w);
     }
     // Hit-time register filter: "x2=0x7320abc0" or "x2=4660". Validated BEFORE a slot is reserved, so
@@ -1496,6 +1557,10 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
         }
         WinSpec w;
         if (!parse_window(&p, ADH_MEM_AFTER_MAX, "memAfter", &w, error, error_size)) return 0;
+        if (w.absolute) {
+            set_error(error, error_size, "memAfter starts at a register (x0:256); an absolute address is only accepted by traceWatch");
+            return 0;
+        }
         while (*p == ' ') p++;
         if (*p != 0) {
             set_error(error, error_size, "memAfter must be exactly one window, e.g. x0:256");
@@ -1636,6 +1701,8 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
             old.watch_off = watch_off;
             old.watch_len = watch_len;
             old.watch_deref = watch_deref;
+            old.watch_abs = watch_abs;
+            old.watch_abs_addr = watch_abs_addr;
             copy_cstr(old.watch_spec, sizeof(old.watch_spec), watch_canon);
             old.arg_value = arg_value;
             // Reactivating a soft-unhooked target is a new hook for the operator: start its window
@@ -1772,6 +1839,8 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
     ctx.watch_off = watch_off;
     ctx.watch_len = watch_len;
     ctx.watch_deref = watch_deref;
+    ctx.watch_abs = watch_abs;
+    ctx.watch_abs_addr = watch_abs_addr;
     copy_cstr(ctx.watch_spec, sizeof(ctx.watch_spec), watch_canon);
     memset(ctx.mem_win, 0, sizeof(ctx.mem_win));
     for (int w = 0; w < mem_nwin; w++) {

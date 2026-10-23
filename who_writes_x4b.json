@@ -1,0 +1,180 @@
+{
+ "pid": "13280",
+ "base": "0x731200e000",
+ "entry": "0x73120a5828",
+ "mode": "inline",
+ "src": "0x7443113690",
+ "traceInsns": 16000,
+ "hits": 1,
+ "events": [
+  {
+   "func": "NATIVE_HOOK",
+   "id": 205003,
+   "ts": 1792729786950,
+   "hookId": 3,
+   "kind": "inline",
+   "tid": 15956,
+   "throttleMs": 0,
+   "throttled": 0,
+   "x0": "0x731215b420",
+   "x1": "0x32",
+   "x2": "0x72ccca5b00",
+   "x3": "0x22",
+   "x4": "0x71",
+   "x5": "0x707a7fb81a",
+   "x6": "0x73121a3cf8",
+   "x7": "0x73121a3d00",
+   "x8": "0x72ccca5b00",
+   "x18": "0x0",
+   "x29": "0x7443113d50",
+   "x30": "0x73120a57e8",
+   "fp": {
+    "d0": "1.27632e-303",
+    "s0": "1.65307e-37",
+    "q0hi": "0x100b902e0000f",
+    "d1": "2.75911e-306",
+    "s1": "1.8367e-40",
+    "q1hi": "0xa900eb021100a9",
+    "d2": "2.78132e-309",
+    "s2": "9.20947e-41",
+    "q2hi": "0x21902610107000b",
+    "d3": "3.56172e-305",
+    "s3": "1.37791e-39",
+    "q3hi": "0xb0001ffff0001",
+    "d4": "2.78132e-309",
+    "s4": "9.20947e-41",
+    "q4hi": "0x20102610107000b",
+    "d5": "3.56172e-305",
+    "s5": "1.37791e-39",
+    "q5hi": "0xb0001ffff0001",
+    "d6": "0",
+    "s6": "0",
+    "q6hi": "0x0",
+    "d7": "0",
+    "s7": "0",
+    "q7hi": "0x0"
+   },
+   "argIndex": -1,
+   "argValue": "0x0",
+   "skipOriginal": false,
+   "returnSet": false,
+   "returnValue": "0x0",
+   "trace": {
+    "insns": 4096,
+    "seen": 4096,
+    "stopReason": "instruction-budget",
+    "start": "0x75335f4018",
+    "stopPc": "0x73121569cc",
+    "capped": true,
+    "mnemonics": [
+     {
+      "mnemonic": "add",
+      "count": 603
+     },
+     {
+      "mnemonic": "ldr",
+      "count": 396
+     },
+     {
+      "mnemonic": "ldrh",
+      "count": 345
+     },
+     {
+      "mnemonic": "mov",
+      "count": 314
+     },
+     {
+      "mnemonic": "and",
+      "count": 287
+     },
+     {
+      "mnemonic": "sub",
+      "count": 284
+     },
+     {
+      "mnemonic": "eor",
+      "count": 230
+     },
+     {
+      "mnemonic": "sxth",
+      "count": 229
+     },
+     {
+      "mnemonic": "str",
+      "count": 200
+     },
+     {
+      "mnemonic": "ldur",
+      "count": 166
+     },
+     {
+      "mnemonic": "br",
+      "count": 135
+     },
+     {
+      "mnemonic": "cmp",
+      "count": 124
+     },
+     {
+      "mnemonic": "b.hi",
+      "count": 117
+     },
+     {
+      "mnemonic": "stur",
+      "count": 92
+     },
+     {
+      "mnemonic": "neg",
+      "count": 86
+     },
+     {
+      "mnemonic": "b",
+      "count": 73
+     }
+    ],
+    "first": [
+     "0x75335f4018: ldr x17, #0x18",
+     "0x75335f401c: blr x17",
+     "0x731210443c: stp x28, x27, [sp, #-0x60]!",
+     "0x7312104440: stp x26, x25, [sp, #0x10]",
+     "0x7312104444: stp x24, x23, [sp, #0x20]",
+     "0x7312104448: stp x22, x21, [sp, #0x30]",
+     "0x731210444c: stp x20, x19, [sp, #0x40]",
+     "0x7312104450: stp x29, x30, [sp, #0x50]",
+     "0x7312104454: add x29, sp, #0x50",
+     "0x7312104458: sub sp, sp, #0x10",
+     "0x731210445c: mrs x22, TPIDR_EL0",
+     "0x7312104460: ldr x8, [x22, #0x28]",
+     "0x7312104464: stur x8, [x29, #-0x58]",
+     "0x7312104468: ldr x8, [x2, #0x20]",
+     "0x731210446c: ldrh w23, [x8, #0x4]",
+     "0x7312104470: ldrh w9, [x8, #0x8]",
+     "0x7312104474: eor w9, w9, w23",
+     "0x7312104478: and w10, w9, #0xffff",
+     "0x731210447c: cmp w10, #0x23a",
+     "0x7312104480: b.hi #0x48",
+     "0x7312104484: adrp x20, #-598016",
+     "0x7312104488: sxth x9, w9",
+     "0x731210448c: add x20, x20, #0x320",
+     "0x7312104490: ldr x9, [x20, x9, lsl #3]",
+     "0x7312104494: ldrh w24, [x8, #0x6]",
+     "0x7312104498: ldr x26, [x2, #0x28]",
+     "0x731210449c: ldr x27, [x2, #0x10]",
+     "0x73121044a0: adrp x28, #0",
+     "0x73121044a4: add x28, x28, #0x4bc",
+     "0x73121044a8: add x9, x28, x9",
+     "0x73121044ac: mov w19, w1",
+     "0x73121044b0: mov x25, x0"
+    ]
+   },
+   "traceWatch": {
+    "lo": "0x7443113690",
+    "hi": "0x74431136b0",
+    "count": 0,
+    "truncated": false
+   }
+  }
+ ],
+ "found": 0,
+ "X": "e09b4acc6279999d2c6eaedca3cd9d3b71eb092960e29aede719502c441cae21"
+}

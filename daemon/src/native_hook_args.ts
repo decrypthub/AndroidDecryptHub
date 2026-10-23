@@ -155,7 +155,9 @@ export interface NativeHookInstallOptions {
 // In-hook instruction trace. The ceiling mirrors ADH_QTRACE_INHOOK_MAX in
 // agent/src/trace/qbdi_trace.h: the run happens on the TARGET THREAD inside the hook callback, so the
 // request is bounded before it can become a second way to hang a target. The agent validates again.
-export const NATIVE_TRACE_MAX_INSNS = 4096;
+// 4096 was too small to get past a parser into the code that follows it; the wall clock (300 ms) is what
+// actually protects the target, so the budget can be generous.
+export const NATIVE_TRACE_MAX_INSNS = 65536;
 
 /**
  * 0/missing = off. Anything else is a whole number of instructions, clamped to the agent's ceiling.
@@ -187,19 +189,31 @@ export function normalizeTraceFrom(value: unknown): string {
 }
 
 /**
- * The write watch for an in-hook trace: ONE window in the same grammar as `mem`, naming the memory to
- * observe for writes while the traced run executes ("x0:32", "x2-8:8", "@x1:64"). Empty = off.
+ * The write watch for an in-hook trace: ONE window naming the memory to observe for writes while the
+ * traced run executes. Two forms, both needed:
+ *   - `x0:32` / `x2-8:8` / `@x1:64` - the same grammar as `mem`, for a buffer the hit's registers point at;
+ *   - `0x7443113690:32` - an ABSOLUTE address, which is the common case when the buffer was learned from a
+ *     previous hit (an address, not a register).
+ * Empty = off. Needs traceInsns: the watch lives only for that run.
  *
  * This is the software stand-in for a hardware watchpoint (perf_event_open is denied to app domains on
  * the devices we use), and it is what turns "which code ran" into "which store landed where": the event
- * comes back with the writing instruction, the address and the value. It needs traceInsns because the
- * watch lives only for that run.
+ * comes back with the writing instruction, the address and the value.
  */
 export function normalizeTraceWatch(value: unknown): string {
   if (value === undefined || value === null || String(value).trim() === '') return '';
-  const { windows, spec } = parseMemWindows(String(value).trim());
+  const text = String(value).trim();
+  const abs = /^(?:0x)?([0-9a-f]+):([0-9]+)$/i.exec(text);
+  if (abs) {
+    const addr = BigInt(`0x${abs[1]}`);
+    const len = Number(abs[2]);
+    if (addr === 0n) throw new Error('traceWatch address must not be 0');
+    if (!Number.isSafeInteger(len) || len < 1 || len > 4096) throw new Error(`traceWatch length ${len} must be 1..4096`);
+    return `0x${addr.toString(16)}:${len}`;
+  }
+  const { windows, spec } = parseMemWindows(text);
   if (windows.length !== 1) {
-    throw new Error(`traceWatch must be exactly one window, e.g. x0:32 (got ${windows.length})`);
+    throw new Error(`traceWatch must be exactly one window, e.g. x0:32 or 0x7443113690:32 (got ${windows.length})`);
   }
   return spec;
 }
