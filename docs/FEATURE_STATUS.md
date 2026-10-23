@@ -37,7 +37,7 @@
 
 ## 0. 发布物
 
-> **2026-10-23：v0.5.0 候选包已构建**（本机）。`injector/zygisk/dist/adh-bundle-v0.5.0.zip`，**20,490,341 B**，SHA-256 `2e11ead13372d597d33388b56a9126759383a22b9bec3103db06db01b8672a69`；模块 zip `adh-zygisk.zip` SHA-256 `85a0facd…`。同号：`module.prop` v0.5.0/25、`update.json` v0.5.0/25、Manager `0.5.0`/25、Device Daemon `0.5.0`/12、`AGENT_VER` `0.5.0`；模块内 `libadh_agent.so` 与 `agent/build/libadh_agent.so` 同 hash（`f22ed299…`）。**已刷入 `aa165071` 的 agent 是这一版**；本次新增能力的真机门禁见 §2.3。公开 Release 的 zip 尚未上传。
+> **2026-10-23：v0.5.0 候选包已构建**（本机）。`injector/zygisk/dist/adh-bundle-v0.5.0.zip`，**20,490,741 B**，SHA-256 `c1d5610aed98c6c2ff4f28b0fd00e0f896ced7548dd094e6d2143af4220f5f28`；模块 zip `adh-zygisk.zip` SHA-256 `e1ba5a9e6457ea6e945f9d80d1bd8d1c5f45f33e2021cb39e3f310de84fcfee0`。同号：`module.prop` v0.5.0/25、`update.json` v0.5.0/25、Manager `0.5.0`/25、Device Daemon `0.5.0`/12、`AGENT_VER` `0.5.0`；**包内 `libadh_agent.so` 与 `agent/build/libadh_agent.so` 同 hash（`3747d68f…`）**——第一次打包后又修了 `module_watch` 的接线，所以包是**重新打过的**，上面就是最终数字。**已部署到 `aa165071` 的 sandbox/模块目录的就是这一版**；公开 Release 的 zip 尚未上传。
 
 > **2026-10-09 补记**：公开仓库已发布 [v0.3.12 可刷入预发布包](https://github.com/decrypthub/AndroidDecryptHub/releases/tag/v0.3.12)，包含 Zygisk 模块、Agent、Root Device Daemon 和 Manager；ZIP SHA-256 为 `8c09b1ace579b6a4d84bea06523151729f547f12b88eee685cb0a6e351c73695`。本次只通过构建、ZIP/签名/架构主机检查，**未刷入专用 root 设备，未跑新一轮设备门禁**。下表的旧设备 hash 与设备验收结果仍是 2026-10-01 的历史状态。
 
