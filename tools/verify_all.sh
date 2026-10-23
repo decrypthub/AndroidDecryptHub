@@ -251,6 +251,10 @@ SCRIPTS=(
   # the trace sub-object travels in the SAME event (first[0] == the hooked entry), that traceInsns:0
   # adds no key at all, and that the target survives both.
   "verify_v117_inhook_trace.sh:device"
+  # v118: a hit-time window may read BEFORE the register's address (`x0-8:16`). A template interpreter's
+  # instruction records are one contiguous array, so "what produced the value I am about to render" lives
+  # at pc-10 - unreachable with a forward-only grammar.
+  "verify_v118_negative_window.sh:device"
 )
 
 pass=0; fail=0; skip=0; FAILED=""

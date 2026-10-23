@@ -89,14 +89,18 @@ export function parseMemWindows(value: unknown): { windows: MemWindow[]; spec: s
       windows.push({ reg: -1, offset, len, deref: true, fromWindow });
       continue;
     }
-    const m = /^(@?)x([0-8])(?:\+([0-9]+))?:([0-9]+)$/.exec(part);
-    if (!m) throw new Error(`mem window must look like x0:64, x2+16:32, @x2+32:512 or @#2+8:256, got ${JSON.stringify(part)}`);
+    // "<@>x<reg>[+-<off>]:<len>" reads from a register, optionally following one pointer first. A
+    // NEGATIVE offset reads BEFORE the register: a template interpreter keeps its instruction records in
+    // one contiguous array, so the record that produced a value sits at `pc - 10`, i.e. before the pointer
+    // the handler was handed. Without it a hit-time window can only look forward.
+    const m = /^(@?)x([0-8])(?:([+-])([0-9]+))?:([0-9]+)$/.exec(part);
+    if (!m) throw new Error(`mem window must look like x0:64, x2+16:32, x2-8:8, @x2+32:512 or @#2+8:256, got ${JSON.stringify(part)}`);
     const deref = m[1] === '@';
     const reg = Number(m[2]);
-    const offset = m[3] === undefined ? 0 : Number(m[3]);
-    const len = Number(m[4]);
-    if (!Number.isSafeInteger(offset) || offset > NATIVE_MEM_WIN_OFF_MAX) {
-      throw new Error(`mem offset ${offset} exceeds ${NATIVE_MEM_WIN_OFF_MAX}`);
+    const offset = m[4] === undefined ? 0 : (m[3] === '-' ? -1 : 1) * Number(m[4]);
+    const len = Number(m[5]);
+    if (!Number.isSafeInteger(offset) || Math.abs(offset) > NATIVE_MEM_WIN_OFF_MAX) {
+      throw new Error(`mem offset ${offset} exceeds ±${NATIVE_MEM_WIN_OFF_MAX}`);
     }
     if (!Number.isSafeInteger(len) || len < 1 || len > NATIVE_MEM_WIN_LEN) {
       throw new Error(`mem length ${len} must be 1..${NATIVE_MEM_WIN_LEN}`);
@@ -108,7 +112,7 @@ export function parseMemWindows(value: unknown): { windows: MemWindow[]; spec: s
   const spec = windows
     .map((w) => (w.fromWindow
       ? `@#${w.fromWindow}${w.offset ? `+${w.offset}` : ''}:${w.len}`
-      : `${w.deref ? '@' : ''}${w.offset ? `x${w.reg}+${w.offset}` : `x${w.reg}`}:${w.len}`))
+      : `${w.deref ? '@' : ''}x${w.reg}${w.offset > 0 ? `+${w.offset}` : w.offset < 0 ? `-${-w.offset}` : ''}:${w.len}`))
     .join(',');
   return { windows, spec };
 }

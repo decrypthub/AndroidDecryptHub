@@ -320,14 +320,19 @@ static int parse_window(const char **pp, int max_len, const char *label, WinSpec
     }
     if (w->deref != 2) {
         if (p[0] != 'x' || p[1] < '0' || p[1] > '8') {
-            set_error(error, error_size, "%s window must look like x0:64, x2+16:32, @x2+32:512 or @#2+8:256", label);
+            set_error(error, error_size, "%s window must look like x0:64, x2+16:32, x3-40:40, @x2+32:512 or @#2+8:256", label);
             return 0;
         }
         w->reg = p[1] - '0';
         p += 2;
         w->off = 0;
     }
-    if (*p == '+') {
+    if (*p == '+' || *p == '-') {
+        // A NEGATIVE offset is what makes "what did the code do just before this" readable: a template
+        // interpreter keeps its instruction records in one contiguous array, so the record that produced
+        // the value a handler is about to render sits at `pc - 10`, i.e. BEFORE the pointer the handler
+        // was given. Without this, a hit-time window can only ever look forward.
+        const int negative = (*p == '-');
         p++;
         if (*p < '0' || *p > '9') {
             set_error(error, error_size, "%s offset must be a decimal number", label);
@@ -342,10 +347,16 @@ static int parse_window(const char **pp, int max_len, const char *label, WinSpec
             }
             p++;
         }
-        w->off = (int)off;
+        // @#<n> offsets index into an earlier window's BYTES, so they stay unsigned: a negative index
+        // there would be a different (and meaningless) question.
+        if (negative && w->deref == 2) {
+            set_error(error, error_size, "%s window reference offset must be positive (@#<n>+<off>)", label);
+            return 0;
+        }
+        w->off = negative ? -(int)off : (int)off;
     }
     if (*p != ':') {
-        set_error(error, error_size, "%s window must look like x0:64, x2+16:32, @x2+32:512 or @#2+8:256", label);
+        set_error(error, error_size, "%s window must look like x0:64, x2+16:32, x3-40:40, @x2+32:512 or @#2+8:256", label);
         return 0;
     }
     p++;
@@ -379,7 +390,10 @@ static int format_window(char *buf, size_t n, const WinSpec *w) {
         return snprintf(buf, n, "@#%d:%d", w->from_win, w->len);
     }
     const char *at = w->deref ? "@" : "";
-    if (w->off) return snprintf(buf, n, "%sx%d+%d:%d", at, w->reg, w->off, w->len);
+    // A negative offset keeps its sign in the canonical spelling ("x3-40:40"): the status echo is what a
+    // caller re-reads to know whether a window looks backwards, and "+-40" would be unparseable.
+    if (w->off > 0) return snprintf(buf, n, "%sx%d+%d:%d", at, w->reg, w->off, w->len);
+    if (w->off < 0) return snprintf(buf, n, "%sx%d-%d:%d", at, w->reg, -w->off, w->len);
     return snprintf(buf, n, "%sx%d:%d", at, w->reg, w->len);
 }
 
@@ -422,11 +436,11 @@ static int parse_mem_spec(const char *spec, int *regs, int *offsets, int *lens, 
             p++;
             while (*p == ' ') p++;
             if (!*p) {
-                set_error(error, error_size, "mem window must look like x0:64 or x2+16:32");
+                set_error(error, error_size, "mem window must look like x0:64, x2+16:32 or x3-40:40");
                 return 0;
             }
         } else if (*p) {
-            set_error(error, error_size, "mem window must look like x0:64 or x2+16:32");
+            set_error(error, error_size, "mem window must look like x0:64, x2+16:32 or x3-40:40");
             return 0;
         }
         total += w.len;
@@ -725,11 +739,23 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id, uint64_t
                         continue;
                     }
                     uint64_t base = inreg[mem_reg[w]];
-                    if ((uint64_t)mem_off[w] > ~0ull - base) {
-                        mem_err[w] = "overflow";
-                        continue;
+                    // Signed offset: negative reads BEFORE the register's address (the instruction record
+                    // before the current one). A negative that would wrap below 0 is refused as
+                    // "underflow" instead of becoming a huge address that reads unmapped memory.
+                    if (mem_off[w] < 0) {
+                        const uint64_t back = (uint64_t)(-(int64_t)mem_off[w]);
+                        if (back > base) {
+                            mem_err[w] = "underflow";
+                            continue;
+                        }
+                        src = base - back;
+                    } else {
+                        if ((uint64_t)mem_off[w] > ~0ull - base) {
+                            mem_err[w] = "overflow";
+                            continue;
+                        }
+                        src = base + (uint64_t)mem_off[w];
                     }
-                    src = base + (uint64_t)mem_off[w];
                     if (mem_deref[w]) {
                         // Follow one pointer. A frame's link field is not the bytes the caller wants,
                         // and reading it as if it were produces a plausible-looking window that answers

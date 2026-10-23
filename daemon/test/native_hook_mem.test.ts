@@ -76,7 +76,7 @@ test('a typo is refused instead of installing a hook that copies nothing', () =>
   assert.throws(() => parseMemWindows(`x0:${tooBig}`), new RegExp(`mem length ${tooBig} must be 1\\.\\.${NATIVE_MEM_WIN_LEN}`));
   const tooMany = [...Array(NATIVE_MEM_WIN_MAX + 1)].map((_, r) => `x${r % 9}:1`).join(',');
   assert.throws(() => parseMemWindows(tooMany), new RegExp(`at most ${NATIVE_MEM_WIN_MAX} windows`));
-  assert.throws(() => parseMemWindows(`x0+${NATIVE_MEM_WIN_OFF_MAX + 1}:1`), /mem offset 65536 exceeds 65535/);
+  assert.throws(() => parseMemWindows(`x0+${NATIVE_MEM_WIN_OFF_MAX + 1}:1`), /mem offset 65536 exceeds ±65535/);
   assert.throws(() => parseMemWindows('x0:8,'), /mem window must look like/);
   assert.throws(() => parseMemWindows(8), /mem must be a string/);
 });
@@ -128,4 +128,20 @@ test('memory windows do not disturb the rest of the hook payload', () => {
   assert.equal(p.backtrace, 'true');
   assert.equal(p.mode, 'inline');
   assert.equal(p.argIndex, -1);
+});
+
+test('a negative offset reads BEFORE the register and keeps its sign', () => {
+  // A template interpreter keeps its instruction records in one contiguous array, so the record that
+  // produced the value a handler renders sits at pc-10. Without a negative offset the grammar can only
+  // look forward, which is why this exists at all.
+  assert.equal(parseMemWindows('x3-40:40').spec, 'x3-40:40');
+  assert.deepEqual(parseMemWindows('x3-40:40').windows, [{ reg: 3, offset: -40, len: 40 }]);
+  assert.equal(parseMemWindows('x0:8,x0-8:8').spec, 'x0:8,x0-8:8');
+  assert.equal(parseMemWindows('@x1-8:16').spec, '@x1-8:16');
+  assert.equal(parseMemWindows('x0-0:8').spec, 'x0:8');            // -0 is 0: no sign in the canonical spec
+  assert.equal(nativeHookInstallPayload({ addr: '0x1000', mem: 'x3-40:40' }).mem, 'x3-40:40');
+  // The total still bounds the list, and the offset ceiling applies to the magnitude, not the sign.
+  assert.throws(() => parseMemWindows('x3-70000:8'), /mem offset -70000 exceeds/);
+  // A reference into an earlier window indexes BYTES, so a negative index there is a different question.
+  assert.throws(() => parseMemWindows('x0:8,@#1-8:8'), /must look like/);
 });
