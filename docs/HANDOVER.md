@@ -98,6 +98,8 @@ SELinux Enforcing；只对它运行新建的 UUID 目录原生自加载测试宿
 自动审批拒绝替换已安装沙盒的库并重启应用，最终 v123/v125/v126 改用独立 `com.adh.nativefixture`。
 这个宿主不是产品注入入口、不含 JavaVM，不能将其通过等同于 Android/ART 集成通过。
 它有 300 秒生命周期与协作停止/清理；新工具服务为独立 18088/18761，旧 8088 未重启。
+同日第五十四轮后续：日常 8088/8761 已成功切换新版（85 工具），root_watch prepare 硬件自检通过；
+此前的旧服务未重启限制已解除。设备 App/模块的 agent 未因此更新，详见 PROGRESS 第五十四轮。
 Agent 使用 WSL SDK `/home/r/Android/Sdk` 的 NDK `29.0.13113456` 与 CMake `3.22.1`，
 新缓存 `agent/build/analysis-20261023`；旧 `build-wsl` 缓存可能锁定较老编译器，不可仅凭 toolchain 参数推断实际版本。
 Host 验收使用 Git Bash + Windows Node24，系统 `bash.exe` 指向 WSL/Node16，不能用于 TS 验收。

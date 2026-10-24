@@ -3,6 +3,24 @@
 > 这是"我们现在在哪"的唯一真相。每个会话开始先读它，结束前更新它。
 > 详细规格见 `REQUIREMENTS.md`，路线与架构见 `DEVELOPMENT_PLAN.md`。
 
+## 2026-10-24（第五十四轮）—— 日常 8088 切换新版，root_watch 现场启用
+
+用户手动启动 `node src/index.ts` 遇到 `EADDRINUSE :8761`。现场确认旧 ADH PID85932
+仍同时监听 8088/8761，MCP 仅 81 工具、不含 root_watch；不是进程消失后的残留监听。
+在端口归属与进程命令行复核一致后，成功停止这一旧进程，原端口启动当前源码的新 Host ADH Daemon。
+这次操作已成功，前两轮“旧服务重启被自动审批拒绝、尚未切换”的运行状态限制已解除。
+
+- 日常端口：HTTP 8088 / Agent 8761，正常 `adhd-data`，不使用 tool-hardening 测试数据目录。
+- 新进程 PID53832（仅现场事实；以后操作仍按端口重新核对，不硬编码旧 PID）。
+- 实际 HTTP MCP `tools/list`：**85 工具，root_watch 存在**；已有 **1 个在线设备会话**自动重连。
+- 实际通过日常 8088 调用 `root_watch prepare`，指定专用 root 机 aa165071：上传/版本校验、
+  独立硬件自检 **selfTest=true / complete=true / samples=1**，不操作现有目标 App。
+- 新服务后台运行，日志在 gitignored `adhd-data/daemon-current.stdout.log` / `.stderr.log`。
+  没有更新已安装 App 的 agent、刷模块或打新 bundle；第五十三轮的 ABI/ART/发布范围限制仍适用。
+
+其他 AI 客户端继续连接原来的日常服务地址，刷新 MCP 工具列表并重新选择会话即可；
+不要再在 8088/8761 上启动第二份 `node src/index.ts`。本轮是服务切换与现场验接线，没有产品代码变更。
+
 ## 2026-10-24（第五十三轮）—— 通用逆向取证短板补齐与真实 ARM64 验收
 
 用户要求继续补足同类复杂样本的分析能力。本轮以第五十二轮为基线，工作在

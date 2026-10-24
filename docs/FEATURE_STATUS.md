@@ -116,7 +116,8 @@
 | 没测 | 新 agent 在已安装 Android Sandbox / Zygisk 目标中的本轮部署 | APK 库替换与沙盒重启被自动审批拒绝；v122 与 v70/72/73/74 的 Android 集成断言本轮未执行；独立原生宿主不能替代 ART/Java 验收 |
 | 没测 | 任意栈参数 ABI、C++ 异常展开、其它 ROM 的退休/观察点行为 | FP8、双寄存器返回的通过只覆盖明确验收的形态；r/rw/x 状态仍沿用 §2.4 |
 | 半成品 | 原始执行全路径录制、完整内存污点、未知 VM 自动还原、私有参数初始化 | active-call trace 使用虚拟栈；in-hook 仍重放且上下文不全；保守切片在 memory/call/未知指令处停止；未把参考挑战说成未知二进制盲解 |
-| 半成品 | 日常服务与发布集成 | 旧 8088 未重启，新 85 工具仅由独立测试服务加载；没有升版、打新 bundle、刷模块或推送远端 |
+| 测过 | 日常服务加载新工具（第五十四轮补记） | 8088/8761 已切换当前源码，实际 MCP 返回 85 工具且包含 root_watch；1 个已有设备会话重连；从日常 8088 调用 prepare 的真实硬件自检 complete=true、samples=1 |
+| 半成品 | 发布包与目标 agent 更新 | 没有升版、打新 bundle、刷模块、替换已安装 App 的 agent 或推送远端；日常 Host 已加载新工具不等于 APK/模块 agent 已更新 |
 
 已暴露的 native hook 物理槽保留到进程退出；sites/vtable 的 RX 页也退休保留。
 `slots.retired/free`、`patchesRestored` 和 `resourcesReclaimed:false` 明示预算，耗尽 16 槽要求新目标进程。

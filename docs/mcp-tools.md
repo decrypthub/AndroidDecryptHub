@@ -1,6 +1,6 @@
 # ADH MCP Tools
 
-Generated from the source ADH Daemon registry (85 tools). The dedicated verification daemon on port 18088 loads this registry; an older running daemon needs its own restart to load it. MCP clients connect using the published adh CLI.
+Generated from the source ADH Daemon registry (85 tools). On 2026-10-24 the normal daemon on port 8088 was switched to this registry and root_watch hardware preparation passed; the verification daemon on port 18088 also loads it. Existing MCP clients need to refresh their tool list. MCP clients connect using the published adh CLI.
 
 | Tool | Description | Args |
 |---|---|---|
