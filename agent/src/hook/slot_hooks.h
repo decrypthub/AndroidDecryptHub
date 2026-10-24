@@ -28,10 +28,14 @@ extern "C" {
 // not model (e.g. hand-rolled jump tables built at runtime) are out of scope.
 // allow_writable=0 (the default the Host uses) skips slots in writable mappings: a writable word that
 // merely equals the target is as likely to be a constant as a call target. 1 includes them.
+// Published pages and context slots are never freed/reused until process exit, including rollback
+// after a partially published install. Unhook restores pointers then retires that physical slot.
 int adh_slot_hook_apply(int slot, void *target, int max_slots, const char *scope,
                         int allow_writable, char *error, size_t error_size);
 int adh_slot_hook_revert(int slot, char *error, size_t error_size);
 int adh_slot_hook_count(int slot);
+int adh_slot_hook_retained_pages(int slot);
+int adh_slot_hook_patches_restored(int slot);
 void *adh_slot_hook_page(int slot);
 void adh_slot_hook_slots_json(int slot, char *out, size_t out_size, size_t *used);
 

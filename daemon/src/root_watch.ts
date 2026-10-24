@@ -6,14 +6,16 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { assertProcessGeneration } from './proc_identity.ts';
 
 const exec = promisify(execFile);
 const HELPER = '/data/local/tmp/adh-root-watch-v1';
 const VERSION = 'ADH_ROOT_WATCH_V1';
 const localHelper = fileURLToPath(new URL('../../agent/build/adh-root-watch', import.meta.url));
-type Target = { sessionId: string; pid: number; process?: string; package: string; uid: number };
+type Target = { sessionId: string; pid: number; process?: string; package: string; uid: number; starttimeTicks?: string };
 type Run = { id: string; serial: string; target: Target; file: string; running: boolean; collectorPid?: number;
-  stopFile: string; ready?: any; summary?: any; error?: string; stderr: string; samples: number; exitCode?: number | null };
+  stopFile: string; ready?: any; summary?: any; error?: string; stderr: string; samples: number; exitCode?: number | null;
+  starttimeTicks: string; sessionGenerationVerified: boolean };
 const runs = new Map<string, Run>();
 
 function integer(value: unknown, fallback: number, lo: number, hi: number, name: string): number {
@@ -51,6 +53,8 @@ async function selectSerial(requested?: string) {
   if (devices.length !== 1) throw new Error('root_watch needs serial when ADB does not have exactly one online device');
   return devices[0];
 }
+// Shared by read-only runtime diagnostics; never choose an ambiguous device.
+export { adb as rootAdb, selectSerial as selectRootSerial };
 export async function prepareRootWatch(requested?: string) {
   const serial = await selectSerial(requested);
   if (!existsSync(localHelper)) throw new Error('Root collector not built: run bash tools/build_root_watch.sh first');
@@ -75,12 +79,13 @@ export async function startRootWatch(target: Target, a: Record<string, any>, dat
   const status = await adb(serial, ['shell', 'su', '-c', `cat /proc/${target.pid}/status`]);
   const uid = Number(/^Uid:\s+(\d+)/m.exec(status)?.[1]);
   if (uid !== target.uid) throw new Error('Device PID UID does not match the selected agent');
+  const generation = assertProcessGeneration(await adb(serial, ['shell', 'su', '-c', `cat /proc/${target.pid}/stat`]), target.pid, target.starttimeTicks);
   if ((await adb(serial, ['shell', 'su', '-c', `${HELPER} --version`])).trim() !== VERSION) throw new Error('Run root_watch action:prepare first');
   const id = randomUUID();
   const file = join(resolve(dataDir), 'root-watch', `${id}.jsonl`);
   mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, '', { mode: 0o600 });
   const stopFile = `/data/local/tmp/adh-root-watch-stop-${id}`;
-  const run: Run = { id, serial, target, file, stopFile, running: true, stderr: '', samples: 0 };
+  const run: Run = { id, serial, target, file, stopFile, running: true, stderr: '', samples: 0, ...generation };
   runs.set(id, run);
   const command = `${HELPER} ${target.pid} ${spec.tid} ${spec.addr} ${spec.width} ${spec.mode} ${spec.durationMs} ${spec.maxEvents} ${spec.stackBytes} ${stopFile}`;
   const child = spawn('adb', ['-s', serial, 'shell', 'su', '-c', command], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -115,14 +120,26 @@ export async function startRootWatch(target: Target, a: Record<string, any>, dat
       if (!run.ready) reject(new Error(run.error || 'Collector exited before readiness'));
     });
   });
-  return { ok: true, id, serial, session: target.sessionId, pid: target.pid, ...spec,
+  try {
+    // Recheck after perf readiness: a process may exit while ADB starts the
+    // helper. Its own TID/Tgid check is necessary but not a generation check.
+    assertProcessGeneration(await adb(serial, ['shell', 'su', '-c', `cat /proc/${target.pid}/stat`]), target.pid, generation.starttimeTicks);
+  } catch (error) {
+    run.error = `Target generation changed during collector startup: ${String(error)}`;
+    try { await adb(serial, ['shell', 'su', '-c', `touch ${stopFile}`]); }
+    catch (stopError) { run.error += `; cooperative stop failed, collector remains duration-bounded: ${String(stopError)}`; }
+    throw new Error(run.error);
+  }
+  return { ok: true, id, serial, session: target.sessionId, pid: target.pid, ...spec, ...generation,
+    identityScope: generation.sessionGenerationVerified ? 'Matches agent hello generation and collector startup.' : 'Stable during startup; legacy agent did not report session generation.',
     scope: 'one-existing-thread', output: file, note: 'Only the named TID is observed. New threads are not inherited. Query read/status for loss and event-limit accounting.' };
 }
 function getRun(id: string) { const r = runs.get(id); if (!r) throw new Error('Unknown root-watch run (run registry is local to this daemon lifetime)'); return r; }
 export function rootWatchStatus(id: string) {
   const r = getRun(id);
   return { id, running: r.running, samples: r.samples, complete: !r.running && !r.error && r.exitCode === 0 && r.summary?.complete === true,
-    summary: r.summary ?? null, error: r.error, output: r.file, serial: r.serial, pid: r.target.pid };
+    summary: r.summary ?? null, error: r.error, output: r.file, serial: r.serial, pid: r.target.pid,
+    starttimeTicks: r.starttimeTicks, sessionGenerationVerified: r.sessionGenerationVerified };
 }
 export function projectRootSample(record: any, a: Record<string, any>) {
   const { regs, stack, ...event } = record;

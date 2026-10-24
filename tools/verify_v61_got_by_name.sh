@@ -85,7 +85,7 @@ const mechAfter = {
   slotUnchanged: String(after1.slot) === String(installed?.slot),
 };
 const mechAfterOk = Object.values(mechAfter).every(Boolean);
-// Soft unhook keeps the slot patched but inactive: the trigger must still work and must NOT
+// GOT unhook restores the relocation pointer and retires its context: the trigger must still work and must NOT
 // produce a new event. Compare the newest matching capture id instead of a count, because the
 // capture list is a bounded window that scrolls.
 async function newestMatching() {

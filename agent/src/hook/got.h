@@ -43,6 +43,7 @@ void *adh_resolve_sym_prefix(const char *module, const char *prefix);
 // resolved value. This works for imported symbols (e.g. open) even when the symbol is not
 // defined by the module itself.
 int adh_got_slot_value(const char *module, const char *symbol, void **slot_out, void **value_out);
+int adh_got_unique_slot(const char *module, const char *symbol, void **slot_out, void **value_out);
 // Enumerate relocation/GOT entries for one loaded module. filter may be empty/NULL to
 // list all entries. Returns a malloc-backed JSON object through out_json; callers free it.
 int adh_got_enum_json(const char *module, const char *filter, char **out_json,

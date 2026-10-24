@@ -4,6 +4,12 @@
 
 ## Layout
 
+2026-10-24: `trace/qbdi_trace.c` additionally owns one explicitly requested, <=65536-instruction
+paged command-thread recording (allocated on request, released after Host drain); `qbdi_read`
+never mixes trace IDs. The hook-time path remains replay with incomplete context, explicitly tagged.
+`hook/native_event_budget.h` owns lock-free observation selection/accounting shared by native hooks;
+`bootstrap/process_identity.h` reads exact `/proc/self/stat` starttime for hello generation checks.
+
 | Path | Responsibility |
 |---|---|
 | `bootstrap/agent_main.c` | Dual entry, first-loaded-copy owner guard, late reporter binding, hello/report, command dispatch, and lifecycle. Also sends the `caps` frame right after the hello: `ADH_AGENT_OPS` + the limits (`hookSlots`/`memWindows`/`writeMax`/`frameMax`), which the daemon's `capabilities` tool serves verbatim. That array and the `strcmp(op, …)` dispatch are two hand-written lists, so `daemon/test/agent_caps.test.ts` parses both and fails when they differ. |

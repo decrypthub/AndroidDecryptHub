@@ -9,6 +9,7 @@
 // "log nothing useful" setting, so it is clamped instead of rejected and the effective value is
 // echoed back in status. The host mirrors this number in daemon/src/native_hook_args.ts.
 #define ADH_NATIVE_THROTTLE_MAX_MS 60000
+#define ADH_NATIVE_EVENT_LIMIT_MAX 1000000
 
 #ifdef __cplusplus
 extern "C" {
@@ -87,6 +88,14 @@ extern "C" {
 // Watch range ceiling: one range; a buffer worth watching is a structure, not a payload.
 #define ADH_WATCH_LEN_MAX 4096
 
+// Optional selection and observation controls. tid_filter/return_address (exact entry x30) select
+// calls alongside filter_spec BEFORE replacement: nonmatching calls execute unchanged.
+// sample_every keeps the first matching hit then every Nth. max_events limits PRIMARY events,
+// with memory companions admitted only for those events. Both affect events only, so selected
+// calls still receive arg/return/memory writes and skipOriginal even when recording is suppressed.
+// Status separately reports hits/filtered/selected/sampledOut/throttled/limited/emitted; emitted
+// means submitted to the bounded capture ring and does NOT promise delivery or retention.
+
 int adh_native_hook_install(const char *mode, const char *module, const char *symbol,
                             const char *addr, int skip_original, int return_set,
                             uint64_t return_value, int arg_index, uint64_t arg_value,
@@ -95,9 +104,11 @@ int adh_native_hook_install(const char *mode, const char *module, const char *sy
                             int write_reg, int write_off, const char *write_hex,
                             int set_errno, const char *after_spec, const char *filter_spec,
                             int trace_insns, const char *trace_from, const char *trace_watch,
+                            int max_events, int sample_every, int tid_filter, const char *return_address,
                             int *hook_id_out, char *error, size_t error_size);
-// hard=1 destroys the inline patch (DobbyDestroy) after a quiesce window and frees the slot;
-// hard=0 keeps the soft-unhook semantics (stub stays installed but inactive).
+// hard=1 restores original bytes and permanently retires the exposed slot/backend;
+// hard=0 keeps same-target soft-inline reactivation. GOT/sites/vtable always restore+retire.
+// No exposed physical context is ever reused for a different target before process exit.
 int adh_native_hook_unhook(int hook_id, int hard, char *error, size_t error_size);
 // "Is this address currently carrying one of our inline patches?" - answers for a SOFT-UNHOOKED hook
 // too, because that state keeps the Dobby branch in the prologue on purpose (reactivation without a
@@ -108,14 +119,18 @@ int adh_native_hook_at(uint64_t addr, int *hook_id_out, int *active_out);
 int adh_native_hook_status_json(char *out, size_t out_size);
 
 // Called by the fixed arm64 stubs. Observation-only and non-blocking.
-// seq_out (may be NULL) receives the seq of the mem record this hit pushed, so a post-call copy can
-// carry the SAME seq and stay joinable on (hookId, seq).
+// seq_out (may be NULL) points to TWO uint64_t words: seq and installation id. The after stub
+// reserves them past q7 at frame+256, so the copy can pair by seq and reject an expired install.
 uint64_t adh_native_hook_record(uint64_t *regs, int hook_id, uint64_t *seq_out);
 // Called by the site thunks: same recording, but the return value means "do not call the original"
 // (set for skipOriginal and for returnSet, which both answer from the saved frame).
 uint64_t adh_native_hook_record_site(uint64_t *regs, int hook_id);
 // Hit counter of one slot (used by the site backend's quiesce window).
 unsigned long long adh_native_hook_hits(int hook_id);
+unsigned long long adh_native_hook_inflight(int slot);
+void adh_native_hook_leave_site(int slot);
+void adh_native_site_epilogue(void);
+int adh_native_hook_wait_quiet(int slot, int timeout_ms);
 
 #ifdef __cplusplus
 }

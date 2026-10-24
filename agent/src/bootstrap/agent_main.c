@@ -46,6 +46,7 @@
 // Common macros (AGENT_VER/ADH_HOST/ADH_PORT/TAG/LOGI/LOGE/FRAME_*) + cross-module prototypes
 // Shared bootstrap helpers live in agent_internal.h.
 #include "agent_internal.h"
+#include "process_identity.h"
 
 static pthread_once_t g_once = PTHREAD_ONCE_INIT;
 static char g_entry[16] = "start";
@@ -65,7 +66,7 @@ static const char *ADH_AGENT_OPS[] = {
     "maps", "read", "write", "jni_hook", "jni_onload", "jni_env_hook",
     "java_hook", "java_enum", "java_call", "java_call_result", "hw_watch", "native_hook",
     "native_call", "got_enum", "stealth", "javahook_probe", "gothook_selftest", "capture_start",
-    "capture_drain", "capture_stop", "trigger", "load_so", "file_probe", "qbdi_trace",
+    "capture_drain", "capture_stop", "trigger", "load_so", "file_probe", "qbdi_trace", "qbdi_read",
     "compat_probe", "object_inspect", "object_set", "object_invoke", "art_dexfiles", "list_dir",
     "read_file", "scan_magic", "mem_backend", "search", "frame_echo", "ping", "module_watch",
 };
@@ -123,13 +124,17 @@ static void report(int fd) {
     unsigned long long self_start = 0, self_end = 0;
     if (!adh_self_image_bounds(&self_start, &self_end)) self_start = 0;
 
-    char hello[1600];
+    char ticks[24], generation[64] = "";
+    if (adh_self_starttime_ticks(ticks, sizeof(ticks)))
+        snprintf(generation, sizeof(generation), "\"starttimeTicks\":\"%s\",", ticks);
+
+    char hello[2048];
     snprintf(hello, sizeof(hello),
         "{\"t\":\"hello\",\"agentVer\":\"%s\",\"pid\":%d,\"uid\":%d,"
-        "\"package\":\"%s\",\"process\":\"%s\",\"abi\":\"%s\",\"android\":\"%s\",\"sdk\":%s,"
+        "%s\"package\":\"%s\",\"process\":\"%s\",\"abi\":\"%s\",\"android\":\"%s\",\"sdk\":%s,"
         "\"entry\":\"%s\",\"selfModule\":\"%s\",\"selfBase\":\"0x%llx\","
         "\"policy\":\"%s\"}\n",
-        AGENT_VER, getpid(), getuid(), pkgj, pkg,
+        AGENT_VER, getpid(), getuid(), generation, pkgj, pkg,
         abi[0] ? abi : "?", rel[0] ? rel : "?", sdk[0] ? sdk : "0", g_entry,
         selfj, self_start, g_policy[0] ? g_policy : "default");
     if (send_line(fd, hello) != 0) { LOGE("send hello failed"); return; }
@@ -489,7 +494,8 @@ static void cmd_native_hook(int fd, const char *id, const char *action, const ch
                             int throttle_ms, const char *mem_spec, int write_reg, int write_off,
                             const char *write_hex, int set_errno, const char *after_spec,
                             const char *filter_spec, int trace_insns, const char *trace_from,
-                            const char *trace_watch) {
+                            const char *trace_watch, int max_events, int sample_every,
+                            int tid_filter, const char *return_address) {
     char idj[64];
     json_escape(id, idj, sizeof(idj));
     char error[512] = "";
@@ -502,6 +508,7 @@ static void cmd_native_hook(int fd, const char *id, const char *action, const ch
                                     allow_writable_slots, want_backtrace, throttle_ms, mem_spec,
                                     write_reg, write_off, write_hex, set_errno, after_spec, filter_spec,
                                     trace_insns, trace_from, trace_watch,
+                                    max_events, sample_every, tid_filter, return_address,
                                     &new_id, error, sizeof(error));
     } else if (strcmp(action, "unhook") == 0) {
         ok = adh_native_hook_unhook((int)requested_id, hard, error, sizeof(error));
@@ -773,12 +780,25 @@ static void command_loop(int fd) {
                     json_get_str(line, "traceFrom", ntrfrom, sizeof(ntrfrom));
                     char ntrwatch[48] = "";
                     json_get_str(line, "traceWatch", ntrwatch, sizeof(ntrwatch));
+                    long long nmaxevents = json_get_num(line, "maxEvents");
+                    long long nsample = json_get_num(line, "sampleEvery");
+                    long long ntid = json_get_num(line, "tid");
+                    char ncaller[32] = "";
+                    json_get_str(line, "returnAddress", ncaller, sizeof(ncaller));
+                    // Keep wide values invalid instead of wrapping them into a different valid
+                    // setting. Missing numeric keys answer -1; defaults preserve old callers.
+                    int max_events = nmaxevents == -1 ? 0 :
+                                     (nmaxevents >= 0 && nmaxevents <= ADH_NATIVE_EVENT_LIMIT_MAX ? (int)nmaxevents : -1);
+                    int sample_every = nsample == -1 ? 1 :
+                                       (nsample >= 1 && nsample <= ADH_NATIVE_EVENT_LIMIT_MAX ? (int)nsample : -1);
+                    int tid_filter = ntid == -1 ? 0 : (ntid >= 0 && ntid <= 2147483647 ? (int)ntid : -1);
                     cmd_native_hook(fd, id, naction, nmode, nmodule, nsymbol, naddr, nskip_original,
                                     nreturn, nargindex, nargvalue, nid, nhard_flag, nsites_flag,
                                     nscope, slots_writable_flag, backtrace_flag, nthrottle_ms,
                                     nmem, (int)nwreg, (int)(nwoff > 0 ? nwoff : 0), nwritehex,
                                     (int)(nerrno > 0 ? nerrno : 0), nafter, nfilter,
-                                    (int)(ntrinsns > 0 ? ntrinsns : 0), ntrfrom, ntrwatch);
+                                    (int)(ntrinsns > 0 ? ntrinsns : 0), ntrfrom, ntrwatch,
+                                    max_events, sample_every, tid_filter, ncaller);
                 } else if (strcmp(op, "native_call") == 0) {
                     char cmodule[128] = "", csymbol[160] = "", caddr[32] = "", cargs[256] = "";
                     json_get_str(line, "module", cmodule, sizeof(cmodule));
@@ -836,7 +856,14 @@ static void command_loop(int fd) {
                     json_get_str(line, "symbol", sy, sizeof(sy));
                     json_get_str(line, "args", targs, sizeof(targs));
                     json_get_str(line, "addr", taddr, sizeof(taddr));
-                    adh_cmd_qbdi_trace(fd, id, sl, sy, targs, taddr);
+                    char paged[8] = ""; json_get_str(line, "paged", paged, sizeof(paged));
+                    adh_cmd_qbdi_trace(fd, id, sl, sy, targs, taddr,
+                        strcmp(paged, "true") == 0, (int)json_get_num(line, "budget"),
+                        (int)json_get_num(line, "timeMs"), (int)json_get_num(line, "capacity"));
+                } else if (strcmp(op, "qbdi_read") == 0) {
+                    char release[8] = ""; json_get_str(line, "release", release, sizeof(release));
+                    adh_cmd_qbdi_read(fd, id, (unsigned long long)json_get_num(line, "traceId"),
+                        (int)json_get_num(line, "offset"), (int)json_get_num(line, "limit"), strcmp(release, "true") == 0);
                 } else if (strcmp(op, "compat_probe") == 0) {
                     adh_cmd_compat_probe(fd, id);
                 } else if (strcmp(op, "object_inspect") == 0) {

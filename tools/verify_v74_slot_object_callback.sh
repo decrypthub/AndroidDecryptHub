@@ -93,7 +93,7 @@ const objEntryAfter = await readHex(objFn, 24);
 const objUnhook = await mcp('native_hook', { action: 'unhook', hookId: objInfo?.id, hard: true });
 const objSlotRestored = objSlot ? await readPtr(objSlot.at) : null;
 const rsAfterObj = await regions();
-const objPagesGone = rsAfterObj.length > 0 && objSlots.every((s) => mappingOf(rsAfterObj, s.thunk) == null);
+const objPagesRetained = rsAfterObj.length > 0 && objSlots.every((s) => mappingOf(rsAfterObj, s.thunk) != null && !String(mappingOf(rsAfterObj, s.thunk).perms).includes('w'));
 const objCallAfter = Number(await jc('objCall'));
 
 // ---- B: function pointer in writable data (opt-in) ---------------------------------------
@@ -113,7 +113,7 @@ const cbUnhook = await mcp('native_hook', { action: 'unhook', hookId: cbInfo?.id
 const cbSlotRestored = cbSlot ? await readPtr(cbSlot.at) : null;
 const cbEntryAfter = await readHex(cbAddr, 24);
 const rsAfterCb = await regions();
-const cbPagesGone = rsAfterCb.length > 0 && cbSlots.every((s) => mappingOf(rsAfterCb, s.thunk) == null);
+const cbPagesRetained = rsAfterCb.length > 0 && cbSlots.every((s) => mappingOf(rsAfterCb, s.thunk) != null && !String(mappingOf(rsAfterCb, s.thunk).perms).includes('w'));
 const cbCallAfter = Number(await jc('cbCall'));
 const alive = pidOfSandbox().length > 0;
 
@@ -126,7 +126,7 @@ const pass =
   objSlot.now !== objSlot.orig && /^\/memfd:jit-cache/.test(objThunkPath) &&
   objCallHooked === 84 && objHits >= 1 &&                    // the OBJECT vcall entered the thunk
   objEntryAfter === objBase.entry &&                        // no code written anywhere
-  objUnhook.ok === true && objSlotRestored === objSlot.orig && objPagesGone && objCallAfter === 84 &&
+  objUnhook.ok === true && objSlotRestored === objSlot.orig && objPagesRetained && objCallAfter === 84 &&
   cbBase === 304 &&
   cbDefault.ok === false && /writable slots were skipped/.test(String(cbDefault.error || '')) &&
   cbOptIn.ok === true && cbSlots.length >= 1 &&
@@ -136,19 +136,19 @@ const pass =
   /^\/memfd:jit-cache/.test(cbThunkPath) &&
   cbEntryAfter === cbEntryBefore &&                       // the callback target code is untouched too
   cbCallHooked === 304 && cbHits >= 1 &&
-  cbUnhook.ok === true && cbSlotRestored === cbSlot.orig && cbPagesGone && cbCallAfter === 304 &&
+  cbUnhook.ok === true && cbSlotRestored === cbSlot.orig && cbPagesRetained && cbCallAfter === 304 &&
   alive;
 
 console.log(JSON.stringify({
   object: { vtable: objVt, fn: objFn, baselineCall: objBase.call, install: { ok: objHook.ok, error: objHook.error, slotCount: objInfo?.slotCount },
             slot: objSlot && { at: objSlot.at, kind: objSlot.kind, perms: objSlot.perms, orig: objSlot.orig, now: objSlot.now },
             slotRead: objSlotRead, thunkPath: objThunkPath, callHooked: objCallHooked, hits: objHits, entryUnchanged: objEntryAfter === objBase.entry,
-            unhook: objUnhook.ok, slotRestored: objSlotRestored, pagesGone: objPagesGone, callAfter: objCallAfter },
+            unhook: objUnhook.ok, slotRestored: objSlotRestored, pagesRetained: objPagesRetained, callAfter: objCallAfter },
   writable: { target: cbAddr, baselineCall: cbBase, defaultHook: { ok: cbDefault.ok, error: cbDefault.error },
               optIn: { ok: cbOptIn.ok, error: cbOptIn.error, slotCount: cbInfo?.slotCount },
               slot: cbSlot && { at: cbSlot.at, kind: cbSlot.kind, perms: cbSlot.perms, orig: cbSlot.orig, now: cbSlot.now },
               slotRead: cbSlotRead, thunkPath: cbThunkPath, entryUnchanged: cbEntryAfter === cbEntryBefore,
-              callHooked: cbCallHooked, hits: cbHits, pagesGone: cbPagesGone,
+              callHooked: cbCallHooked, hits: cbHits, pagesRetained: cbPagesRetained,
               unhook: cbUnhook.ok, slotRestored: cbSlotRestored, callAfter: cbCallAfter },
   alive,
 }));

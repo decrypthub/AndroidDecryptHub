@@ -13,7 +13,9 @@ extern "C" {
 // comparing its own prologue with the copy it took at startup (the sandbox audit reports exactly
 // that as prologueDiffers/entryBranchesOutside). This backend never writes the function: it patches
 // the B/BL instructions that CALL it, so the prologue stays byte-identical - and because the patch
-// is the agent's own (not Dobby's state machine), install/unhook are reversible and repeatable.
+// is the agent's own (not Dobby's state machine), original call-site bytes can be restored.
+// Published thunk pages and contexts permanently consume their physical slot until process exit;
+// a new install may consume another of the shared 16 slots, never reuse the retired context.
 //
 // Scope: "module" (default) scans only the target's own module; "all" scans every file-backed
 // executable mapping of the process (the operator can also pass a module name/basename to scan just
@@ -34,6 +36,8 @@ int adh_site_hook_apply(int slot, void *target, int max_sites, const char *scope
                         char *error, size_t error_size);
 int adh_site_hook_revert(int slot, char *error, size_t error_size);
 int adh_site_hook_count(int slot);
+int adh_site_hook_retained_pages(int slot);
+int adh_site_hook_patches_restored(int slot);
 // JSON fragment (name/value pairs) describing the last revert that had to keep a thunk page mapped.
 void adh_site_hook_last_revert_json(char *out, size_t out_size);
 // Base of the first thunk page (what status shows as the "replacement"), or NULL when idle.

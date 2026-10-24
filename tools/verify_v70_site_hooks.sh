@@ -146,7 +146,8 @@ const pass =
   unhook.ok === true &&
   siteWordRestored === site0?.orig &&
   ((h0?.sites ?? []).length < 2 || siteWordRestoredBl === h0.sites[1].orig) &&
-  thunkGone == null &&
+  thunkGone != null && !String(thunkGone.perms).includes('w') &&
+  unhook.status?.inactive?.some(h => h.id === h0?.id && h.state === 'retired' && h.patchesRestored && h.resourcesReclaimed === false) &&
   valueAfterUnhook === 84 && hooksAfterUnhook === 0 &&
   reinstallSame.ok === true && Number(hSame?.siteCount) >= 1 && valueSame === 84 && hitsSame >= 1 && unhookSame.ok === true &&
   install2.ok === true && Number(h2?.siteCount) >= 1 && valueSecond === 84 && hitsSecond >= 1 &&

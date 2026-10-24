@@ -32,6 +32,7 @@ struct slot_entry {
     void **at;
     void *orig;
     void *thunk;
+    int exposed;
     char mod[96];
     char perms[8];
     int kind_got;        // 1 = a relocation (GOT) slot, 0 = plain data (vtable / callback table)
@@ -45,6 +46,8 @@ struct slot_ctx {
     long long scanned;
     int truncated;
     int skipped_writable;      // slots skipped because they live in writable data
+    int retired;
+    int patches_restored;
     struct slot_entry entries[ADH_SLOT_MAX_ENTRIES];
 };
 
@@ -208,7 +211,14 @@ int adh_slot_hook_apply(int slot, void *target, int max_slots, const char *scope
         snprintf(error, error_size, "could not resolve the module of target %p", target);
         return 0;
     }
-    if ((!scope || !scope[0] || strcmp(scope, "all") == 0) && !self_module[0]) {
+    unsigned long long self_start = 0, self_end = 0;
+    const int self_bounds = adh_self_image_bounds(&self_start, &self_end);
+    if (self_bounds) {
+        for (int i = 0; i < n; i++) {
+            if (rs[i].start < self_end && rs[i].end > self_start) rs[i].read = 0;
+        }
+    }
+    if (scope && strcmp(scope, "all") == 0 && !self_module[0] && !self_bounds) {
         free(rs);
         snprintf(error, error_size, "cannot resolve the agent module name; scope=all would be unsafe");
         return 0;
@@ -287,8 +297,22 @@ int adh_slot_hook_apply(int slot, void *target, int max_slots, const char *scope
             break;
         }
         ctx->entries[i].thunk = thunk;
+    }
+    // Finish executable code before publishing any pointer to it. An unpublished allocation may
+    // still be freed; after publication even a failed installation consumes one retired slot.
+    int emitted = 0;
+    for (int i=0; i<count; i++) if (ctx->entries[i].thunk) emitted++;
+    if (emitted != count || mprotect(page, ADH_SLOT_PAGE_LEN, PROT_READ | PROT_EXEC) != 0) {
+        munmap(page, ADH_SLOT_PAGE_LEN);
+        pthread_mutex_lock(&g_slot_lock); memset(ctx, 0, sizeof(*ctx)); pthread_mutex_unlock(&g_slot_lock);
+        free(rs);
+        if (!error[0]) snprintf(error, error_size, "could not prepare executable thunks (errno=%d)", errno);
+        return 0;
+    }
+    for (int i = 0; i < count; i++) {
         // A slot lives in data (often in a RELRO page), so the swap goes through the RO-page helper.
-        if (!adh_swap_pointer_in_ro_page(ctx->entries[i].at, thunk)) {
+        ctx->entries[i].exposed = 1;
+        if (!adh_swap_pointer_in_ro_page(ctx->entries[i].at, ctx->entries[i].thunk)) {
             snprintf(error, error_size, "could not patch data slot %p (errno=%d)", ctx->entries[i].at, errno);
             break;
         }
@@ -297,33 +321,23 @@ int adh_slot_hook_apply(int slot, void *target, int max_slots, const char *scope
     if (done != count) {
         // Roll back what we wrote. A slot we could NOT restore still points at the thunk page, so the
         // page must stay mapped (never unmap the landing pad of live code) and be reported.
-        int kept = 0;
-        for (int i = 0; i < done; i++) {
-            if (adh_swap_pointer_in_ro_page(ctx->entries[i].at, ctx->entries[i].orig) &&
-                *ctx->entries[i].at == ctx->entries[i].orig) {
-                ctx->entries[i].at = NULL;
-            } else {
+        int restored = 1;
+        for (int i = 0; i < count; i++) {
+            if (!ctx->entries[i].exposed) continue;
+            if (*ctx->entries[i].at == ctx->entries[i].thunk &&
+                (!adh_swap_pointer_in_ro_page(ctx->entries[i].at, ctx->entries[i].orig) ||
+                 *ctx->entries[i].at != ctx->entries[i].orig)) {
                 g_slot_last_kept_page = page;
                 g_slot_last_kept_slot = slot;
-                kept = 1;
+                restored = 0;
             }
         }
-        if (!kept) munmap(page, ADH_SLOT_PAGE_LEN);
         pthread_mutex_lock(&g_slot_lock);
-        memset(ctx, 0, sizeof(*ctx));
+        ctx->target=target; ctx->count=count; ctx->page=page;
+        ctx->retired=1; ctx->patches_restored=restored;
         pthread_mutex_unlock(&g_slot_lock);
         free(rs);
         if (!error[0]) snprintf(error, error_size, "vtable hook aborted after %d/%d slots", done, count);
-        return 0;
-    }
-    if (mprotect(page, ADH_SLOT_PAGE_LEN, PROT_READ | PROT_EXEC) != 0) {
-        for (int i = 0; i < done; i++) adh_swap_pointer_in_ro_page(ctx->entries[i].at, ctx->entries[i].orig);
-        munmap(page, ADH_SLOT_PAGE_LEN);
-        pthread_mutex_lock(&g_slot_lock);
-        memset(ctx, 0, sizeof(*ctx));
-        pthread_mutex_unlock(&g_slot_lock);
-        free(rs);
-        snprintf(error, error_size, "could not make the thunk page executable (errno=%d)", errno);
         return 0;
     }
 
@@ -352,7 +366,9 @@ int adh_slot_hook_revert(int slot, char *error, size_t error_size) {
     int restored = 0;
     int changed_by_target = 0;
     for (int i = 0; i < count; i++) {
+        if (!ctx->entries[i].exposed) continue;
         void *now = *ctx->entries[i].at;
+        if (now == ctx->entries[i].orig) continue; // a retry after an earlier pending unhook
         if (now != ctx->entries[i].thunk) {
             // The target rewrote this slot itself (typical for a writable callback): leave ITS value
             // alone and report it instead of clobbering it with our stale original.
@@ -368,29 +384,21 @@ int adh_slot_hook_revert(int slot, char *error, size_t error_size) {
         restored++;
     }
     if (changed_by_target) { g_slot_last_changed_by_target = changed_by_target; g_slot_last_changed_slot = slot; }
-    memset(ctx, 0, sizeof(*ctx));
+    ctx->patches_restored = 1;
+    ctx->retired = 1;
+    g_slot_last_kept_page=page;g_slot_last_kept_slot=slot;
     pthread_mutex_unlock(&g_slot_lock);
 
-    int quiet = 0;
-    for (int round = 0; round < 80 && !quiet; round++) {
-        unsigned long long before = adh_native_hook_hits(slot);
-        struct timespec ts = { 0, 5 * 1000 * 1000 };
-        nanosleep(&ts, NULL);
-        unsigned long long after = adh_native_hook_hits(slot);
-        if (after == before && round >= 4) quiet = 1;
-        else if (after != before) round = 0;
-    }
+    const int quiet = adh_native_hook_wait_quiet(slot, 1500);
     if (quiet) {
-        if (munmap(page, ADH_SLOT_PAGE_LEN) != 0) {
-            snprintf(error, error_size, "slots restored but the thunk page could not be unmapped (errno=%d)", errno);
-            return 0;
-        }
+        // A paused pre-entry thread is invisible to counters. Retire the RX page permanently.
     } else {
         pthread_mutex_lock(&g_slot_lock);
         g_slot_last_kept_page = page;
         g_slot_last_kept_slot = slot;
         pthread_mutex_unlock(&g_slot_lock);
-        TLOGE("vtable thunk page %p kept mapped: hits kept moving during the quiesce window", page);
+        snprintf(error, error_size, "not-unhooked: pointer slots restored but a thunk is still in flight after 1500 ms; page and slot retained, retry later");
+        return 0;
     }
     TLOGI("vtable hook reverted slot=%d slots=%d quiet=%d", slot, restored, quiet);
     return 1;
@@ -399,6 +407,12 @@ int adh_slot_hook_revert(int slot, char *error, size_t error_size) {
 int adh_slot_hook_count(int slot) {
     if (slot < 0 || slot >= ADH_SLOT_MAX_SLOTS_CTX) return 0;
     return g_slot_ctx[slot].count;
+}
+int adh_slot_hook_retained_pages(int slot) {
+    return slot >= 0 && slot < ADH_SLOT_MAX_SLOTS_CTX && g_slot_ctx[slot].page ? 1 : 0;
+}
+int adh_slot_hook_patches_restored(int slot) {
+    return slot >= 0 && slot < ADH_SLOT_MAX_SLOTS_CTX && g_slot_ctx[slot].patches_restored;
 }
 
 void *adh_slot_hook_page(int slot) {

@@ -88,7 +88,10 @@ test('an in-hook trace comes back with the hit, on the same line', () => {
   assert.ok(look.trace);
   assert.equal(look.trace?.seen, 32);
   assert.equal(look.trace?.stopReason, 'instruction-budget');
-  assert.match(look.text, /就地 trace 32\/32 条/);
+  assert.match(look.text, /重放 trace 32\/32 条/);
+  assert.equal(look.trace?.execution, 'replay');
+  assert.equal(look.trace?.coverage, 'instrumented-module');
+  assert.equal(look.trace?.contextComplete, false);
   assert.match(look.text, /ldr×12/);
 });
 

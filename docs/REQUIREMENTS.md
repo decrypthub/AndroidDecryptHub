@@ -32,6 +32,31 @@ MCP 提供 prepare/start/status/read/stop；prepare 要有本机构建的 helper
 错 TID 拒绝。当前只验过参考 ROM 的 w；r/rw 未验，x 探索未见命中，不能承诺。现有 in-hook QBDI
 仍是带副作用和不完整调用上下文的重放；不能把其未见写入等同于真实整条执行路径的排除。
 
+## 通用取证补充（2026-10-24，模块 E/I/V）
+
+- `native_hook` / `native_hook_all` / `native_look` 同一套观察控制：`tid`、精确入口 `returnAddress`、
+  `sampleEvery`、`maxEvents`。过滤决定哪些调用接受改写；抽样、时间节流、总量只限制观察。
+  静止时满足 `hits = filtered + selected`、`selected = sampledOut + throttled + limited + emitted`。
+  `emitted` 只指提交捕获环，送达/保留和丢失另行核对。
+  非默认新控制必须先得到 agent status 的 `observationControlsVersion>=1`；旧 agent 或查询失败
+  必须在安装前拒绝，所有安装入口共用检查，不能默默忽略调用者的限额或线程筛选。
+  卸载不能用安静窗口证明任意暂停线程已经离开 thunk：已暴露的 GOT/sites/vtable/hard-inline
+  物理上下文永久退休，sites/vtable RX 页也保留到进程退出。共享 16 槽预算、退休数量和恢复状态
+  必须可见，耗尽要求新目标进程，不自动重启。只有 soft-inline 可在同目标、同 stub 形态重新启用。
+- `trace_session` 主动调用使用虚拟栈，最多保留 65536 条模块内指令，执行预算最多 1000000 条，
+  指令处协作时间预算最多 10000ms；每页最多 128 条。Host 落盘并支持按序号/PC/地址范围/助记符查询、
+  全记录摘要、保守寄存器反向依赖切片。执行结束、记录完整、传输完整必须分开；截断不可伪装为完整。
+  此路径不覆盖原始 App 全执行和外部模块，不承诺硬中断外部阻塞 native call。
+- `crypto_evidence` 核验明确配对的摘要/HMAC、显式参数变换和编码，区分中间阶段与最终字段，
+  按真实参数 fingerprint 分组。缺失/截断/错身份记 unavailable，不记算法不匹配；整块字节相等仅作内容链接，
+  不作为因果证明。原始字节与参数只落 DATA_DIR，默认回复为来源和有界摘要。
+- `runtime_diagnostics` 无需 agent 回应，通过 root 只读读取进程/线程/freezer/TracerPid；核对 PID/UID/
+  cmdline 和代际，枚举已有线程。新 hello 带 `starttimeTicks`，`root_watch` 在准备前和 perf ready 后独立核对；
+  旧会话缺代际时须明示未验证。诊断不自动解冻/起停目标，不改 SELinux。
+
+验收为 v123（真实 ARM64 指令分页）、v124（Host 参数变化挑战）、v125（原生 ABI/控制）、
+v126（真实 root 硬件事件）。独立原生宿主覆盖组件行为，不等于 Android App/未知混淆二进制的完整盲解。
+
 ## 0. 与 iOS 参考项目的关系
 
 [ios-decrypt-helper](https://github.com/taisuii/ios-decrypt-helper) 是一个注入目标 App 的 dylib + 内嵌 Web 面板的 iOS 行为监控平台。它的能力边界受 iOS 平台限制，但产品形态和工程思路值得继承。

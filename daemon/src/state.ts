@@ -53,6 +53,9 @@ export interface AgentSession {
   sessionId: string;
   pid: number;
   uid: number;
+  // Decimal /proc/self/stat field 22, supplied by current agents at hello.
+  // Binds this session to a process generation even after the PID is reused.
+  starttimeTicks?: string;
   package: string;
   process: string;
   abi: string;

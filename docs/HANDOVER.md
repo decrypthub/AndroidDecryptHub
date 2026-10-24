@@ -93,6 +93,15 @@ adb -s <serial> shell getprop ro.build.version.sdk   # 记下 API level（见 §
 | **B 组 · Linux 接管机**（工作树是 SMB 共享 `//Russell.lan/X`，见 §1.5） | `aa165071` | OnePlus PGP110（`OP5551L1`，`PGP110_15.0.0.1901(CN01)`） | 15 / **35** | arm64-v8a | **KernelSU**（`su` → `uid=0(root)`） | 2026-09-29 |
 | A 组 · 原始 Windows 工作站（日常机，**不可动**） | `a22fecdd` | OnePlus PGP110 | 15 / 35 | arm64-v8a | **无** | 2026-09-29 |
 
+**2026-10-24 Windows 工作站复核**：本轮接的是专用 root 机 `aa165071`，SDK35 / arm64 / KernelSU，
+SELinux Enforcing；只对它运行新建的 UUID 目录原生自加载测试宿主，没有操作日常机。
+自动审批拒绝替换已安装沙盒的库并重启应用，最终 v123/v125/v126 改用独立 `com.adh.nativefixture`。
+这个宿主不是产品注入入口、不含 JavaVM，不能将其通过等同于 Android/ART 集成通过。
+它有 300 秒生命周期与协作停止/清理；新工具服务为独立 18088/18761，旧 8088 未重启。
+Agent 使用 WSL SDK `/home/r/Android/Sdk` 的 NDK `29.0.13113456` 与 CMake `3.22.1`，
+新缓存 `agent/build/analysis-20261023`；旧 `build-wsl` 缓存可能锁定较老编译器，不可仅凭 toolchain 参数推断实际版本。
+Host 验收使用 Git Bash + Windows Node24，系统 `bash.exe` 指向 WSL/Node16，不能用于 TS 验收。
+
 `aa165071` 这个 serial **就是 2026-09-23 那次 113 PASS / 0 FAIL / 0 SKIP 全量门禁的同一台机器**——
 所以它是"已知全绿"的参考设备，不是新设备。
 

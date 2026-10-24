@@ -1,7 +1,7 @@
-# ADH 功能状态（2026-10-13 新增：SSL 绕过开关 + 多进程作用域修复；2026-10-12 新增：逐包 Hook 策略；2026-10-11 范围变更：可选注入后端收窄；全量设备验收仍以 2026-10-01 为准）
+# ADH 功能状态（2026-10-24 更新：通用原生分析与证据核验；各轮实测范围见 §2）
 
 > 这份文件回答一个问题：**现在到底有什么、什么是验证过的、什么是没验证的、什么还没做完。**
-> 判定只认 `tools/verify_all.sh`（**118 个脚本 = 36 host + 82 device**），不认"看起来能跑"。
+> 判定要有可复跑的 pass/fail 信号；优先跑命中的验收。`tools/verify_all.sh` 当前注册 **136 个脚本 = 40 host + 96 device**，这个数字不代表本轮全量通过。
 > 规格见 `REQUIREMENTS.md`，架构与排期见 `DEVELOPMENT_PLAN.md`，跨会话进度见 `PROGRESS.md`。
 >
 > ### ✅ 2026-10-01 本轮：范围收口 + 沙盒耦合清零
@@ -99,6 +99,29 @@
 | 单元测试（host） | v76, v80, v81, v83, v84, v85, **v86**, **v87** | syscall 归因/参数解码/一站式装配、trace 摘要、backtrace dynsym、Java trace（含三阶段装配与 drain 守卫）、native 批量选择、native 限流（默认/夹紧/拒绝垃圾值 + 安装回路真实 payload）、探针判定与设备文件读取（二进制/超大/截断/坏 base64）：**169 条** `node --test` 用例（2026-09-29 实测；旧记 121 已过时） |
 
 ## 2. 真机验收结果与当前遗留项
+
+### 2.5 2026-10-24，第五十三轮：通用原生分析与证据核验
+
+使用独立 HTTP `18088` / Agent `18761`，在专用设备 `aa165071` / SDK35 / KernelSU / SELinux Enforcing
+运行有界 ARM64 自加载宿主 `com.adh.nativefixture`（shell UID2000、memfd agent）。
+它只加载到新建的自身进程，没有替换已安装 APK 的库，也没有重启现有应用。
+
+| 类别 | 项目 | 证据 / 限制 |
+|---|---|---|
+| 测过 | Host 工具与接线 | 400 单测、tsc 0；v71 注册 85 工具；v87 的 38 agent ops 均从 MCP 导入图可达 |
+| 测过 | native 观察控制、ABI 与四后端退休 | v125：FP8=204、双寄存器返回=30、RELRO 指针槽=353；忙碌卸载约 1.51 秒有界失败后重试；旧 sites/GOT/hard-inline/vtable stub 迟到调用无串代/无新事件，16 槽耗尽明确拒绝；旧 agent 缺 observationControlsVersion 时在安装前拒绝非默认新控制 |
+| 测过 | `trace_session` 记录、分页、查询、统计、保守寄存器切片 | v123：真实 ARM64 随机输入、独立 BigInt 期望值，32,813 指令全部排空；旧单包仅 2,183 指令；capacity=8 与 budget=16 均如实报不完整 |
+| 测过 | `runtime_diagnostics` 与 `root_watch` 代际校验 | v123 procfs/hello starttime 一致；v126 真实 2 次硬件写事件、33 GPR、512 字节栈、分页、事件上限、协作停止、错 TID 拒绝 |
+| 测过 | `crypto_evidence` 来源配对、原语核验与私有台账 | v124 新 seed：4 种组合链、6 参数 profile、62 条记录 = 54 匹配 / 2 不匹配 / 6 不可验证；另已走真实 HTTP MCP save/read/drop；参数与配对依据由输入给定 |
+| 没测 | 新 agent 在已安装 Android Sandbox / Zygisk 目标中的本轮部署 | APK 库替换与沙盒重启被自动审批拒绝；v122 与 v70/72/73/74 的 Android 集成断言本轮未执行；独立原生宿主不能替代 ART/Java 验收 |
+| 没测 | 任意栈参数 ABI、C++ 异常展开、其它 ROM 的退休/观察点行为 | FP8、双寄存器返回的通过只覆盖明确验收的形态；r/rw/x 状态仍沿用 §2.4 |
+| 半成品 | 原始执行全路径录制、完整内存污点、未知 VM 自动还原、私有参数初始化 | active-call trace 使用虚拟栈；in-hook 仍重放且上下文不全；保守切片在 memory/call/未知指令处停止；未把参考挑战说成未知二进制盲解 |
+| 半成品 | 日常服务与发布集成 | 旧 8088 未重启，新 85 工具仅由独立测试服务加载；没有升版、打新 bundle、刷模块或推送远端 |
+
+已暴露的 native hook 物理槽保留到进程退出；sites/vtable 的 RX 页也退休保留。
+`slots.retired/free`、`patchesRestored` 和 `resourcesReclaimed:false` 明示预算，耗尽 16 槽要求新目标进程。
+`retiredPages/Bytes` 只计 sites/vtable 自管页，不是包括 Dobby 池、QBDI 在内的总内存上限。
+完整工作流见 [ANALYSIS_WORKFLOW.md](ANALYSIS_WORKFLOW.md)。本节没有对任意同等复杂样本必解作承诺。
 
 ### 2.4 2026-10-23，第五十二轮：root 侧观察点与计算链复现
 

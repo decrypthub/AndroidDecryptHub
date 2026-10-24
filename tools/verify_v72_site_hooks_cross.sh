@@ -98,7 +98,7 @@ const wordsRestored = [];
 for (const s of sites) wordsRestored.push(await readWord(s.at));
 const rs2 = await regions();
 const mapsReadAfterUnhook = rs2.length;
-const pagesGone = rs2.length > 0 && sites.every((s) => mappingOf(rs2, s.thunk) == null);
+const pagesRetained = rs2.length > 0 && sites.every((s) => mappingOf(rs2, s.thunk) != null && !String(mappingOf(rs2, s.thunk).perms).includes('w'));
 const after = { plugin: Number(await jc('pluginProbe')), same: Number(await jc('siteProbe')) };
 
 // 3) a named module scope selects only that module
@@ -124,7 +124,7 @@ const pass =
   thunkPaths.every((p) => /^\/memfd:jit-cache/.test(p)) &&
   wordsHooked.every((w, i) => w === sites[i].now) &&
   unhookAll.ok === true &&
-  wordsRestored.every((w, i) => w === sites[i].orig) && pagesGone &&
+  wordsRestored.every((w, i) => w === sites[i].orig) && pagesRetained &&
   after.plugin === 84 && after.same === 84 &&
   named.ok === true && namedModules.length === 1 && namedModules[0] === 'libadhplugin_a.so' &&
   namedValue === 84 && namedHits >= 1 && unhookNamed.ok === true &&
@@ -135,7 +135,7 @@ console.log(JSON.stringify({
   scopeAll: { ok: all.ok, error: all.error, siteCount: sites.length, modules, forms, scanned: hAll?.scanned, truncated: hAll?.truncated,
               sites: sites.map((s) => ({ at: s.at, form: s.form, module: s.module, orig: s.orig, now: s.now, page: s.page })) },
   hookedProbes: hooked, hits, auditWhileHooked: { prologueDiffers: a1.prologueDiffers, entryBranchesOutside: a1.entryBranchesOutside, anonExec: a1.anonExec },
-  thunkPaths, wordsHooked, pageKeptField: hAll?.pageKept, mapsReadAfterUnhook, unhookAll: unhookAll.ok, wordsRestored, pagesGone, after,
+  thunkPaths, wordsHooked, pageKeptField: hAll?.pageKept, mapsReadAfterUnhook, unhookAll: unhookAll.ok, wordsRestored, pagesRetained, after,
   scopeNamed: { ok: named.ok, error: named.error, modules: namedModules, value: namedValue, hits: namedHits, unhookOk: unhookNamed.ok },
   alive,
 }));

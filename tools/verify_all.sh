@@ -267,6 +267,11 @@ SCRIPTS=(
   "verify_v120_oracle_diff.sh:device"
   # Root-side perf collection (optional helper): actual GPR/stack records, bounded scope and accounting.
   "verify_v121_root_watch.sh:device"
+  "verify_v122_native_controls.sh:device"
+  "verify_v123_trace_session.sh:device"
+  "verify_v124_crypto_evidence.sh:host"
+  "verify_v125_native_abi.sh:device"
+  "verify_v126_root_watch_native.sh:device"
 )
 
 pass=0; fail=0; skip=0; FAILED=""

@@ -1,0 +1,19 @@
+{
+  "note": "Synthetic, sanitized procfs archive using Linux stat/status formats; no captured target data.",
+  "target": { "sessionId": "offline-session", "pid": 101, "uid": 10234, "package": "com.example.probe" },
+  "process": {
+    "exists": true,
+    "status": "Name:\tprobe\nState:\tS (sleeping)\nTgid:\t101\nPid:\t101\nTracerPid:\t0\nUid:\t10234\t10234\t10234\t10234\nThreads:\t3\n",
+    "stat": "101 (probe) S 1 101 101 0 -1 4194560 42 0 0 0 2 1 0 0 20 0 3 0 123456 1048576 32 18446744073709551615 1 2 3 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n",
+    "cmdline": "com.example.probe\u0000--argument\u0000",
+    "wchan": "futex_wait_queue_me\n"
+  },
+  "thread": {
+    "tid": 102,
+    "status": "Name:\tprobe (worker)\nState:\tD (disk sleep)\nTgid:\t101\nPid:\t102\nTracerPid:\t0\nUid:\t10234\t10234\t10234\t10234\nThreads:\t3\n",
+    "stat": "102 (probe (worker)) D 1 101 101 0 -1 4194560 42 0 0 0 2 1 0 0 20 0 3 0 123460 1048576 32 18446744073709551615 1 2 3 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n",
+    "wchan": "do_freezer_trap\n"
+  },
+  "cgroup": "0::/uid_10234/pid_101\n",
+  "mountinfo": "35 29 0:28 / /sys/fs/cgroup rw,nosuid,nodev,noexec,relatime - cgroup2 cgroup rw\n"
+}

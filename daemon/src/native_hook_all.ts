@@ -3,9 +3,9 @@
 //
 // The symbol list comes from the module dump (module_symbols keeps working on memory
 // reconstructions), the runtime address is base + st_value, and the install loop is bounded by the
-// agent's 16 concurrent native slots, reporting matched vs installed so truncation is visible.
+// agent's 16 physical native slots, reporting matched vs installed so truncation is visible.
 import { sendCmd } from './service.ts';
-import { nativeHookInstallPayload, normalizeThrottleMs } from './native_hook_args.ts';
+import { nativeHookInstallPayload, normalizeThrottleMs, nativeObservationPayload, ensureNativeObservationSupport, type NativeObservationOptions } from './native_hook_args.ts';
 import { loadModuleTable, parseHex, hex } from './module_symbols.ts';
 import { parseDynSymbols, type DynSymbol } from './backtrace.ts';
 import { reconstructSo } from './service.ts';
@@ -19,17 +19,17 @@ export interface SymbolChoice { name: string; address: string; offset: string; s
  */
 export function effectiveBatchLimit(requested: number, freeSlots: number | null): { limit: number; reason: string; blocked: boolean } {
   const want = Math.max(1, Math.min(16, Math.trunc(Number(requested) || 8)));
-  if (freeSlots == null || !Number.isFinite(Number(freeSlots))) {
+  if (freeSlots == null) {
     return { limit: want, reason: `the agent did not report a slot budget (older payload): assuming the requested ${want}`, blocked: false };
   }
-  const raw = Math.trunc(Number(freeSlots));
-  if (raw < 0) {
+  const raw = Number(freeSlots);
+  if (!Number.isFinite(raw) || !Number.isInteger(raw) || raw < 0 || raw > 16) {
     // A negative budget is a corrupt/overflowed report: saying "0 free" would put words in the
     // agent mouth, so refuse and say what was actually received.
     return { limit: 0, reason: `the agent reported a corrupt slot budget (free=${raw})`, blocked: true };
   }
   const free = raw;
-  if (free === 0) return { limit: 0, reason: 'the agent reports 0 free hook slots: unhook something first', blocked: true };
+  if (free === 0) return { limit: 0, reason: 'the agent reports 0 free hook slots: retired slots require a new target process', blocked: true };
   if (free < want) return { limit: free, reason: `only ${free} of the requested ${want} hooks fit (agent reports ${free} free slot(s))`, blocked: false };
   return { limit: want, reason: `${free} slot(s) free, installing up to ${want}`, blocked: false };
 }
@@ -47,9 +47,10 @@ export async function installSymbolHooks(
   session: string,
   base: bigint,
   selected: SymbolChoice[],
-  opts: { throttleMs?: number; backtrace?: boolean; skipOriginal?: boolean; returnValue?: string; argIndex?: number; argValue?: string },
+  opts: NativeObservationOptions & { throttleMs?: number; backtrace?: boolean; skipOriginal?: boolean; returnValue?: string; argIndex?: number; argValue?: string },
   send: typeof sendCmd = sendCmd,
 ): Promise<{ hooks: InstalledHook[]; failures: HookFailure[] }> {
+  const observation = await ensureNativeObservationSupport(session, opts, send);
   const hooks: InstalledHook[] = [];
   const failures: HookFailure[] = [];
   for (const sym of selected) {
@@ -60,6 +61,7 @@ export async function installSymbolHooks(
       addr: hex(runtime), throttleMs: opts.throttleMs, backtrace: opts.backtrace,
       skipOriginal: opts.skipOriginal, returnValue: opts.returnValue,
       argIndex: opts.argIndex, argValue: opts.argValue,
+      ...observation,
     }), 20_000).catch((e) => ({ ok: false, error: (e as Error).message }));
     if (r?.ok && Number(r.hookId) > 0) hooks.push({ hookId: Number(r.hookId), symbol: sym.name, address: hex(runtime) });
     else failures.push({ symbol: sym.name, error: String(r?.error ?? 'install failed') });
@@ -108,12 +110,13 @@ export interface NativeHookAllResult {
   installedCount: number;
   /** Effective per-hook event throttle (0 = every hit emits). */
   throttleMs: number;
+  observation: Record<string, string | number>;
   /**
    * Slot budget the agent reported before the batch (null = older payload that does not report it).
-   * used = CONSUMED slots (a soft-unhooked inline hook keeps its slot until a hard unhook), active =
+   * used = CONSUMED slots (hard unhook retires exposed slots until process exit), active =
    * hooks currently installed.
    */
-  slots: { max: number; used: number; active?: number; free: number; byMode?: Record<string, number> } | null;
+  slots: { max: number; used: number; active?: number; free: number; retired?: number; byMode?: Record<string, number> } | null;
   /** Why the batch was (or was not) truncated - the agent slot budget, not a guess. */
   limitReason: string;
   /** The limit that was actually used, next to what the caller asked for. */
@@ -125,7 +128,7 @@ export interface NativeHookAllResult {
   note: string;
 }
 
-export async function nativeHookAll(session: string, opts: {
+export async function nativeHookAll(session: string, opts: NativeObservationOptions & {
   module: string;
   prefix?: string;
   contains?: string;
@@ -153,7 +156,7 @@ export async function nativeHookAll(session: string, opts: {
   // reason, not rejected symbol by symbol.
   const status = await sendCmd(session, 'native_hook', { action: 'status' }, 15_000).catch(() => null);
   const slotsRaw = status?.status?.slots ?? null;
-  const freeSlots = slotsRaw && Number.isFinite(Number(slotsRaw.free)) ? Number(slotsRaw.free) : null;
+  const freeSlots = slotsRaw && 'free' in slotsRaw ? Number(slotsRaw.free) : null;
   const budget = effectiveBatchLimit(opts.limit ?? 8, freeSlots);
   if (budget.blocked) throw new Error(`native_hook_all: ${budget.reason}`);
   const { selected, matched } = selectExportSymbols(symbols, { ...opts, limit: budget.limit });
@@ -170,10 +173,12 @@ export async function nativeHookAll(session: string, opts: {
     matched,
     installedCount: hooks.length,
     throttleMs,
+    observation: nativeObservationPayload(opts),
     slots: slotsRaw && Number.isFinite(Number(slotsRaw.max))
       ? {
           max: Number(slotsRaw.max), used: Number(slotsRaw.used), free: Number(slotsRaw.free),
           ...(Number.isFinite(Number(slotsRaw.active)) ? { active: Number(slotsRaw.active) } : {}),
+          ...(Number.isFinite(Number(slotsRaw.retired)) ? { retired: Number(slotsRaw.retired) } : {}),
           ...(slotsRaw.byMode ? { byMode: slotsRaw.byMode } : {}),
         }
       : null,

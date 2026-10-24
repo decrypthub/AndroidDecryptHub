@@ -3,6 +3,66 @@
 > 这是"我们现在在哪"的唯一真相。每个会话开始先读它，结束前更新它。
 > 详细规格见 `REQUIREMENTS.md`，路线与架构见 `DEVELOPMENT_PLAN.md`。
 
+## 2026-10-24（第五十三轮）—— 通用逆向取证短板补齐与真实 ARM64 验收
+
+用户要求继续补足同类复杂样本的分析能力。本轮以第五十二轮为基线，工作在
+`codex/jdgs-b5-root-watch`；不把本例的私有常量/偏移放进产品，也不宣称任意样本必解。
+
+### 实现
+
+- Hook：三种 MCP 入口统一接入 `tid/returnAddress/sampleEvery/maxEvents`；分项计数区分筛选、
+  抽样、节流和额度，采样只限制观察、不关闭已选调用的改写。修复 memfd 自身范围排除、
+  suppressed hit 的 seq=0 after 孤儿事件、`native_look` 不同 seq 借用寄存器和丢掉 after 窗口。
+  非默认新参数安装前查询 `observationControlsVersion>=1`，MCP/REST/look/batch 共用检查；
+  旧 agent、坏版本或查询失败都在安装前拒绝，默认参数保留兼容，不静默丢掉限制。
+- ABI：普通 stub 不再把 seq 写进保存的 q7；after stub 保留 d7 与 x1 双寄存器返回。
+  卸载保留覆盖整个原函数的 in-flight lease，1500ms 有界等待；忙碌时明确 not-unhooked。
+  安静计数不能排除暂停于入口的线程，所以已暴露物理槽永不改派其它目标，sites/vtable 页永久退休。
+  部分发布失败也消耗槽；status 报 restored/retired/free，16 槽耗尽要求新进程。
+  `retiredPages/Bytes` 只计 sites/vtable 自管页，不能称为含 Dobby/QBDI 的总内存上限。
+- `trace_session`：Agent 有界记录（最多 65536 条 / 4MiB，工作预算 1000000 条），新增 `qbdi_read`
+  每页 128 条；Host 落盘、SHA、按序号/PC/地址范围/助记符查询、全记录统计和保守寄存器切片。
+  校验 traceId/offset/seq/total，排空最多 30 秒，成功或失败均尝试释放；不完整输送不算完整。
+  `retvalHex/retvalValid` 分开报告，指令文本截断也计入完整性。明确 active-call 与 in-hook replay。
+- `runtime_diagnostics`：root 只读 PID/UID/cmdline/starttime、线程/wchan/TracerPid/cgroup freeze；
+  不能从单线程状态推断全部 agent。hello 保留 starttime 十进制字符串，root_watch 开始前后独立校验。
+  实测发现 MCP adapter 漏传 ticks 已修复，并加 AST 回归检查。
+- `crypto_evidence`：来源配对、精确窗口选择、长度与完整性、14 类标准原语/显式字节变换核验，
+  参数 fingerprint 与精确内容链接；中间结果不冒充最终字段，已知捕获丢失不允许被 complete:true 覆盖。
+  私有台账支持 save/read/list/drop，普通响应只有摘要与来源，原始数据需显式展开。
+
+### 验收信号
+
+测试服务独立 HTTP `18088` / Agent `18761`、独立 `adhd-data/tool-hardening`，旧 `8088` 未终止。
+Agent NDK r29 构建 **1,140,376 B**，本轮实际测试二进制 SHA-256
+`ed608791a3b7dc0e5dfd9b9aaa1e8d777f105491d187df226c7c950541e3c47a`。
+设备为专用 root 机 `aa165071` / SDK35 / arm64 / KernelSU / SELinux Enforcing。
+使用新建 shell UID2000 的 ARM64 `com.adh.nativefixture`，自身 memfd 加载 agent，300 秒上限；
+末尾协作停止、exit 0，UUID 目录已清理，没有改已安装 APK/现有应用。
+
+| 检查 | 结果 |
+|---|---|
+| Host | `npm test` **400/400**，`npm run typecheck` 0；C process identity 解析与真实 procfs 自读 PASS |
+| v71 / v87 | **85 工具**、0 注册问题；38 agent ops 可由 MCP 导入图到达，红线扫描 114 文件无禁用 op/目标常量 |
+| v123，真实 QBDI | 随机 seed `35860739818746470`，256 轮，独立 BigInt 期望值一致；**32,813** 指令完整落盘，旧单包 2,183；capacity=8 / budget=16 如实不完整；诊断 running、sessionGenerationVerified=true |
+| v124，随机组合证据 | seed `4e2ad2fda6f255c02dc936208b1ea5b559359a004428ffb0f116c94ba93247cb`；4 链、6 profile、62 记录 = **54 匹配 / 2 不匹配 / 6 不可验证**；另真实 HTTP MCP save/read/drop 通过 |
+| v125，真实 hook | FP8=204、双寄存器返回=30、RELRO 指针槽=353；忙碌卸载 **1514ms** 返回 not-unhooked、重试恢复；sites/GOT/hard-inline/vtable 旧 stub 迟到调用仍是原函数且无新事件/无新 hook 混代；最终 16 槽占满、12 退休、retiredBytes=40960，预算耗尽明确拒绝 |
+| v126，真实 root perf | **2 次写**、33 GPR、512 字节栈、分页、代际 verified；事件上限不完整、协作停止与错 TID 拒绝均 PASS |
+
+只跑命中的门禁，没有全量重跑当前注册的 136 条（40 host + 96 device）。
+`v122` 和 `v70/72/73/74` 的 Android 集成断言本轮未运行；后四条仅将旧回收断言改为恢复补丁且保留 RX。
+当前能力、复跑流程和真实限制见 `FEATURE_STATUS §2.5` / `ANALYSIS_WORKFLOW.md`。
+
+### 尚未完成与交付边界
+
+替换已安装沙盒库并 force-stop/start 的操作被自动审批拒绝（仅返回 blocked by policy），所以改用
+独立新进程自加载验收；没有借此部署到旧应用。旧 8088 仍未加载 85 工具；未升版、打 bundle、刷机或推远端。
+不能把原生宿主通过推成 ART/Java/其它 ROM 均已验证。
+
+完整原始调用全路径录制、完整内存污点、未知 VM 自动还原、任意栈参数 ABI/C++ 异常展开尚未完成。
+外部阻塞函数不能被指令处协作时间预算硬中断。参考挑战给定参数和配对依据，不是未知二进制盲解。
+京东私有 profile 初始化/跨设备派生仍是第五十二轮的边界，没有新增结论；原始材料仍在忽略目录。
+
 ## 2026-10-23（第五十二轮）—— b5/b6 独立计算链复现；root 侧真实写入取证
 
 ### 结果与范围
@@ -1781,7 +1841,7 @@ hook `libjdg+0xf643c`（`0x975c0` 在组装完 7 个字段后调用的那个函�
 ```
 x0=0x7320399420 → libjdg+0x14d420（运行期填好的指针表）
 x1=0x10  = 16
-x2=0x72d66397c0   对象指针
+x2=0x72d66400c0   对象指针
 x3=0x1d  = 29     ← 正好等于请求 body 的参数个数（29 个）
 x4=0x17b = 379
 x5=0x70b3b7b46e   5 字节值

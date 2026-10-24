@@ -4,6 +4,12 @@ ADH Daemon / `adhd` (Node 24 + TypeScript, runs `.ts` directly, no build step). 
 
 ## Module layout (post-split)
 
+Analysis additions (2026-10-24): `trace_store.ts` drains bounded `qbdi_read` pages into Host JSONL,
+then queries/stats/slices the stored instructions (active-call, instrumented-module coverage).
+`crypto_evidence.ts` verifies explicitly paired bytes, keeps private raw material on disk and returns
+paged fingerprints/provenance. `runtime_diagnostics.ts` reads root procfs without agent RPC;
+`proc_identity.ts` shares exact PID starttime parsing with `root_watch.ts`. MCP owns their adapters.
+
 | File | Role | Imports |
 |---|---|---|
 | `config.ts` | **Process configuration.** ADH port env vars plus Host LAN/local Web UI URL discovery. | node only |

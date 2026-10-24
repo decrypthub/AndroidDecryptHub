@@ -11,6 +11,12 @@ extern "C" {
 #endif
 
 int adh_qbdi_trace(void *func, const unsigned long long *args, int argc, char *out, int out_size);
+// Explicit command-thread collection. One bounded recording is retained until released/replaced;
+// replies carry metadata only, and qbdi_read retrieves <=128 instructions per page.
+int adh_qbdi_trace_paged(void *func, const unsigned long long *args, int argc,
+                         int budget, int time_ms, int capacity, char *out, int out_size);
+int adh_qbdi_read(unsigned long long trace_id, int offset, int limit, int release,
+                  char *out, int out_size);
 
 // --- in-hook trace -------------------------------------------------------------------------------
 //

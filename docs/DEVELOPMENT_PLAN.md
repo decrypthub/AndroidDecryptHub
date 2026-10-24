@@ -10,6 +10,13 @@
 
 ## 0. 核心原则（架构红线）
 
+2026-10-24 补充：模块 E/I/V 本轮采用同一分层：Agent 有界采集分页指令与观察计数，
+Host 的 `trace_store.ts` / `crypto_evidence.ts` 负责持久化、查询、参数分组和分析；
+`runtime_diagnostics.ts` / `proc_identity.ts` 负责只读诊断与代际校验。Web 保持只读。
+v123/v125/v126 使用独立 ARM64 memfd 自加载宿主验收，v124 使用可重放的新随机参数挑战。
+实际 Android 安装包的更新被自动审批拒绝，不能把原生宿主通过写成已更新 APK/真实目标。
+这一片补了有界模块指令记录和 Host 查询；完整内存污点、未知虚拟机自动解码、参数初始化盲定位仍待独立验收。
+
 2026-10-23 补充（模块 E / WS-H）：真实写入追踪可使用可选 `root_watch`。Host 编排外部 root perf
 collector，helper 只采内核事件，不放进 Agent 或 Device Daemon/Manager。源码、构建和验收见
 `tools/native/root_watch.c`、`tools/build_root_watch.sh`、`verify_v121_root_watch.sh`。

@@ -89,11 +89,13 @@ test('the batch limit comes from the agent slot budget, not from a guess', () =>
   const none = effectiveBatchLimit(8, 0);
   assert.equal(none.blocked, true);
   assert.equal(none.limit, 0);
-  assert.match(none.reason, /unhook something first/);
+  assert.match(none.reason, /retired slots require a new target process/);
 
   // plenty free: keep the request; an absurd request still clamps to the agent ceiling
-  assert.equal(effectiveBatchLimit(8, 64).limit, 8);
-  assert.equal(effectiveBatchLimit(1000, 64).limit, 16);
+  assert.equal(effectiveBatchLimit(8, 16).limit, 8);
+  assert.equal(effectiveBatchLimit(1000, 16).limit, 16);
+  assert.equal(effectiveBatchLimit(8, 64).blocked, true);
+  assert.equal(effectiveBatchLimit(8, 1.5).blocked, true);
 });
 
 test('a corrupt or oddly-typed slot budget is handled explicitly', () => {
@@ -105,6 +107,6 @@ test('a corrupt or oddly-typed slot budget is handled explicitly', () => {
   assert.match(negative.reason, /corrupt slot budget \(free=-3\)/);
   // NaN falls back to the request with a note (older payloads and broken producers look the same)
   const nan = effectiveBatchLimit(8, Number.NaN);
-  assert.equal(nan.limit, 8);
-  assert.match(nan.reason, /did not report a slot budget/);
+  assert.equal(nan.blocked, true);
+  assert.match(nan.reason, /corrupt slot budget/);
 });

@@ -5,6 +5,15 @@ script or touching `verify_all.sh`.**
 
 ## Shared libraries (source these, don't execute)
 
+2026-10-24 analysis checks: `verify_v122_native_controls.sh` uses an existing Android sandbox (not
+run on the new agent this round); v123 verifies real paged QBDI and diagnostics; v124 verifies
+random-parameter crypto evidence; v125 verifies native controls/FP8/aggregate returns/unhook;
+v126 verifies kernel write events/GPR/stack/generation. v123/v125/v126 can use the dedicated
+`com.adh.nativefixture` self-load host; no APK or existing target process is modified.
+`build_trace_challenge.sh` and `build_native_controls_fixture.sh` build verification-only fixtures;
+`run_native_fixture.mjs SERIAL` runs the native host for <=300 seconds with cooperative stop-file
+cleanup. The host uses a UUID directory and memfd and is not an injection path for product targets.
+
 ### `lib/verify_common.sh` — verify-script helpers
 Dedups the boilerplate hand-copied across ~26 `verify_vXX_*.sh` scripts. Source it:
 ```bash
@@ -124,9 +133,9 @@ event-limit accounting, explicit stop and wrong-TID refusal. It does not run the
 - `verify_v69_stealth_pool.sh` — **去特征 / 反注入痕迹**：重启沙盒取干净进程 → 目标自己的 `Detection.antiHookProbe` 审计基线（`anonExec=0`、序言完整、入口不外跳）→ 装 inline hook（stealth 关）→ 审计看得见（`anonExec=2`、`prologueDiffers`、`entryBranchesOutside`，trampoline 在匿名页）→ hard unhook 后序言/入口恢复 → 重开进程 + `stealth on` → 同一 hook 下 **`anonExec=0`**、trampoline 落在 `/memfd:jit-cache (deleted)`、hook 仍返回 84 → `stealth off` 还原 mmap GOT 槽。
 - `verify_v70_site_hooks.sh` — **call-site hooking（入口零改写）**：重启沙盒取干净进程 → 装 `mode=sites`（断言 `siteCount>=1`、site 的 `now != orig`、thunk 页在 `/memfd:jit-cache`）→ 调 `Detection.siteProbe` 返回 84 且 `hits>=1`，同时目标自己的 `antiHookProbe` 仍报 `prologueDiffers=false / entryBranchesOutside=false` → hard unhook 后逐位读回调用点 == `orig`、status 清空、调用仍 84 → 重开进程再装一次成功（证明无 Dobby 式陈旧状态）。
 - `verify_v71_mcp_registry.sh` — **MCP 注册表 host 自检**（<1s、不需设备）：直接 import `daemon/src/mcp.ts` 并逐个校验 name/description/inputSchema/handler，专门拦"描述里一个撇号把整个模块搞挂、而 `node --check` 看不出来"这类事故（本轮真的踩到过：daemon 起不来、所有静态检查全绿）。
-- `verify_v72_site_hooks_cross.sh` — **跨模块 call-site hooking**：加载插件库（跨模块调用 adh_add_target）→ `scope=all` 断言 3 站点/2 模块（`b`+`bl`）、三个探针都 84 且 `hits>=3`、目标审计 `prologueDiffers/entryBranchesOutside=false`、`anonExec=0`、三张 thunk 页都在 `/memfd:jit-cache` → hard unhook 后逐位读回 == `orig` 且三页全部 munmap → `scope=<plugin>` 只选中该模块。
-- `verify_v73_vtable_hook.sh` — **指针槽（vtable）hook**：`mode=vtable` 后断言 `slotCount>=1`、vtable 槽 `kind=data`、模块 PLT 槽 `kind=got`、**直接读函数地址的 24 字节安装前后逐位相同**、相邻槽未被改、`slotProbe()` 仍 84 且 `hits>=1`（间接调用被拦）、thunk 页在 `/memfd:jit-cache`、hard unhook 后 16 字节槽位区逐位还原 + 页 munmap；同时把"审计因 GOT 槽被换而报 prologueDiffers"这个副作用原样打印。
-- `verify_v74_slot_object_callback.sh` — **对象虚调用 + 可写函数指针**：对象侧断言只改对象表那一个槽（`kind=data`/`r--`/`orig`==函数地址）、**只调对象探针**时 `hits>=1`、函数 24 字节前后逐位相同、unhook 后槽位读回 == 原值且 thunk 页消失；可写侧断言默认 **fail-loud**（"writable slots were skipped"）、`slotsWritable:true` 后命中 `rw-` 槽且探针命中，unhook 后还原。
+- `verify_v72_site_hooks_cross.sh` — **跨模块 call-site hooking**：加载插件库（跨模块调用 adh_add_target）→ `scope=all` 断言 3 站点/2 模块（`b`+`bl`）、三个探针都 84 且 `hits>=3`、目标审计 `prologueDiffers/entryBranchesOutside=false`、`anonExec=0`、三张 thunk 页都在 `/memfd:jit-cache` → hard unhook 后逐位读回 == `orig` 且三页退休保留 RX → `scope=<plugin>` 只选中该模块。
+- `verify_v73_vtable_hook.sh` — **指针槽（vtable）hook**：`mode=vtable` 后断言 `slotCount>=1`、vtable 槽 `kind=data`、模块 PLT 槽 `kind=got`、**直接读函数地址的 24 字节安装前后逐位相同**、相邻槽未被改、`slotProbe()` 仍 84 且 `hits>=1`（间接调用被拦）、thunk 页在 `/memfd:jit-cache`、hard unhook 后 16 字节槽位区逐位还原 + 页退休保留 RX；同时把"审计因 GOT 槽被换而报 prologueDiffers"这个副作用原样打印。
+- `verify_v74_slot_object_callback.sh` — **对象虚调用 + 可写函数指针**：对象侧断言只改对象表那一个槽（`kind=data`/`r--`/`orig`==函数地址）、**只调对象探针**时 `hits>=1`、函数 24 字节前后逐位相同、unhook 后槽位读回 == 原值且 thunk 页退休保留 RX；可写侧断言默认 **fail-loud**（"writable slots were skipped"）、`slotsWritable:true` 后命中 `rw-` 槽且探针命中，unhook 后还原。
 - `verify_v47_got_enum.sh` — 枚举 `libadhdetect.so` 的 GOT/relocation，断言导入符号可见（deploy new agent；未部署时 SKIP）。
 - `verify_v48_memory_disasm.sh` — 真机地址 → agent 读内存 → Host Capstone 5 WASM 反汇编；覆盖绝对地址与 module+offset 两条路径（deploy new daemon/agent；未部署时 SKIP）。
 - `verify_v49_native_call.sh` — `adh_add_target` 按 module+symbol 和绝对地址主动调用，断言返回值与 confirm 门禁（deploy new agent/daemon；未部署时 SKIP）。
@@ -146,7 +155,7 @@ event-limit accounting, explicit stop and wrong-TID refusal. It does not run the
 - `verify_v63_jni_array_writeback.sh` — byte[] 原地回写：Set/GetByteArrayRegion、Get/ReleaseByteArrayElements(mode 0)、Get/ReleasePrimitiveArrayCritical，触发 `Detection.jniArrayWriteProbe()` 写入 0xA0../0xB0.. 再读回，断言事件里出现 `writeback hex=a0a1…`、`writeback hex=b0b1…` 与探针位掩码，再 uninstall 验还原。（补上评审指出的 in-place 解密回写盲区。）
 - `verify_v64_jni_call_types.sh` — Call* 全族覆盖 + 通配安装：`function:"*"` 一次装 76 个槽位（断言 `applied=76 failed=0`，每个槽位过 ABI 偏移守卫），触发 `Detection.jniCallTypesProbe()` 断言 Boolean/Byte/Char/Short/Long/Float/Double（实例 A 形态 + 静态 varargs 形态）每族命中且 `status.last` 里能看到解析后的 `class#method(sig)`，再全量卸载证明还原。
 - `verify_v65_java_ctor_inherited.sh` — java_hook 完整性：hook 构造器 `JniCtorTarget.<init>(int)`（断言回调看到实参 21、对象仍被正确构造 total=42、`skipOriginal/returnValue` 被 fail-loud 拒绝）+ hook 继承成员 `JniDerived.baseValue`（解析到声明类 `JniBase.baseValue()`），再逐个 unhook 并复查行为不变。
-- `verify_v66_native_hard_unhook.sh` — native **hard unhook**：inline hook → 命中/调用正常 → `hard:true` 卸载（回写保存的原始序言、释放槽位、不动 Dobby 池）→ 行为恢复、status `count/patched=0`、无 RWX、anon 足迹稳定不泄漏、同地址再 hook 被明确拒绝（Dobby 状态已陈旧，需重启目标）。
+- `verify_v66_native_hard_unhook.sh` — native **hard unhook**：inline hook → 命中/调用正常 → `hard:true` 卸载（回写保存的原始序言、退休槽位、不动 Dobby 池）→ 行为恢复、status `count/patched=0`、无 RWX、anon 足迹稳定不泄漏、同地址再 hook 被明确拒绝（Dobby 状态已陈旧，需重启目标）。
 - `verify_v67_jni_onload_watch.sh` — **load-time JNI_OnLoad 拦截**：`jni_onload watch` 装 dlopen 钩子 → 两个运行时才加载的插件库各走一遍：A 观察（事件 `phase:"load"`、插件 JNI_OnLoad 真的跑过 count=1）；unhook（真还原字节）后 watch B 用 `skipOriginal+returnValue` **替换** load-time 调用（事件 `skipped:true`、插件计数 0、`System.loadLibrary` 仍成功）。
 - `verify_v47_got_enum.sh` — 枚举 `libadhdetect.so` 的 GOT/relocation，断言导入符号可见（deploy new agent；未部署时 SKIP）。
 - `verify_v97_memread_direct.sh` — **内存读取后端**（device）：重启沙盒取干净进程 → 以只读代码映射为锚点，`memory_read` 的自动路径与 `via:"direct"` 路径返回**逐字节相同**的数据且回复各自点明 `via` → 对一个 `---p` 区间直读必须**干净失败**且目标仍活（`agent_ping`）→ `compat_probe` 报出 `memBackend`/`memOpenErrno`/`libartJniGetVms`（能力不再静默降级）→ 命令结束后目标进程 `/proc/<pid>/fd` 里**没有**遗留的 `/proc/self/mem`。信号守卫本身（拷贝途中映射消失）无法在此确定性触发，脚本不声称覆盖它。

@@ -75,7 +75,7 @@ Build **`libadh_agent.so` functionality** and self-test via 模拟注入 (sandbo
 
 ### 测试选择：别全跑（省时间，也是省别人的 token）
 
-`tools/verify_all.sh` 有 **121 个脚本（39 host + 82 device）**，其中 9 个会重装 APK / 重启 App，device 每条都要冷启一次沙盒。全量是**发版/刷机前**的动作。
+`tools/verify_all.sh` 有 **136 个脚本（40 host + 96 device）**，其中 9 个会重装 APK / 重启 App，device 每条都要冷启一次沙盒。全量是**发版/刷机前**的动作。
 
 - **改什么跑什么**：`node tools/verify_pick.mjs`（按 `git status` 的改动反查候选，默认只打印、默认只列 host）。`--device` 才列真机脚本，`--run` 才执行。
 - 纯文档/注释改动：`cd daemon && npm run typecheck && npm test` 就够，不碰验收脚本。
@@ -145,7 +145,7 @@ Each layer has a `MAP.md` — read it before editing that layer:
 
 - **The handover machine gets a rooted, flashable phone from the user.** With it the normal path is open:
   `tools/flash_device.sh` (KernelSU/Magisk), `install_apk_root` (`su` + `pm install`), and the full
-  `tools/verify_all.sh` (118 = 36 host + 82 device). **Record the device facts** (model / API level / ABI /
+  `tools/verify_all.sh` (136 = 40 host + 96 device). **Record the device facts** (model / API level / ABI /
   root method / serial) in `docs/HANDOVER.md` §1.3 — the ART structure resolver is validated on **SDK 35
   (primary) / 36 (secondary)**, so a different API level means "extend the resolver" is your first task,
   not "the tool is broken".

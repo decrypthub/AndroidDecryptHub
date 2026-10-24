@@ -3,11 +3,11 @@
 #
 # Soft unhook keeps the Dobby stub/trampoline installed (re-activatable, but the patch and its
 # pool page stay). Hard unhook writes the SAVED ORIGINAL PROLOGUE back over the patch after a
-# quiesce window, frees the hook slot and deliberately does NOT call DobbyDestroy (on this Dobby
+# bounded in-flight wait, retires the hook slot and deliberately does NOT call DobbyDestroy (on this Dobby
 # build destroying frees the trampoline pool in a way that makes the next DobbyHook crash inside
 # Dobby's memcpy - reproduced on device). Consequences asserted here:
 #   * after hard unhook the target behaves exactly as before and no longer emits events;
-#   * status shows the hook gone (count/patched 0) and the slot is reusable for a DIFFERENT target;
+#   * status shows no active patch (count/patched 0); later targets use different free physical slots;
 #   * re-hooking the SAME address is refused loudly (Dobby state is stale for it);
 #   * no RWX page, and the anon-exec footprint stays stable (Dobby pool is retained, not leaked per hook).
 set -uo pipefail

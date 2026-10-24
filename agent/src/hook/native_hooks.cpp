@@ -2,6 +2,7 @@
 // stub per slot. The recorder only formats a bounded JSON event and pushes it into the
 // existing capture ring; no allocation or blocking happens on the target thread.
 #include "native_hooks.h"
+#include "native_event_budget.h"
 #include "hw_watch.h"
 #include "got.h"
 #include "native_inline.h"
@@ -48,8 +49,12 @@ extern "C" int adh_mem_write_checked(unsigned long long addr, const void *src, s
 
 struct NativeHookContext {
     int id;
-    int active;              // 0 free, 1 active, 2 reserved
-    int used;                // slots are never reused after unhook (race safety)
+    int active;              // 0 inactive/unused, 1 observing, 2 installation reserved
+    int used;                // physical slot consumed; exposed slots never move to a different target
+    int unhook_pending;      // original sites restored, but outstanding callbacks still own this slot
+    int retired;             // permanent generation: a pre-entry thread may still reach the old thunk
+    int exposed;
+    int patches_restored;
     int mode;                // 0 got, 1 inline
     void *target;
     void *original;
@@ -64,6 +69,10 @@ struct NativeHookContext {
     uint64_t arg_value;
     int want_backtrace;      // capture the caller chain in each event (opt-in, per hook)
     int throttle_ms;         // 0 = every hit emits; >0 = at most one event per window (per hook)
+    int max_events;          // 0 = unlimited capture admission; never changes replacement behavior
+    int sample_every;        // 1 = every selected hit; N = first and every Nth matching hit
+    int tid_filter;          // 0 = any thread; like register filter, unmatched calls run untouched
+    uint64_t return_address; // 0 = any caller; otherwise exact entry x30
     // Hit-time memory windows (x0-x8 + offset). Copied on the hitting thread before the
     // original runs. Empty when the install did not ask. Written before active=1 is published.
     struct {
@@ -161,6 +170,20 @@ static void remember_hard_restored(void *target) {
 static int g_next_native_hook_id = 1;
 static std::atomic<unsigned long long> g_native_hook_hits[ADH_NATIVE_MAX_HOOKS];
 static std::atomic<int> g_native_hook_slot_ids[ADH_NATIVE_MAX_HOOKS];
+static AdhNativeEventBudget g_native_hook_budget[ADH_NATIVE_MAX_HOOKS];
+// A site/vtable thunk CALLS the original, so it can still be a live return address after the
+// recorder itself finished. Its shared epilogue releases this lease only after the original returns.
+static std::atomic<unsigned long long> g_native_hook_inflight[ADH_NATIVE_MAX_HOOKS];
+struct NativeRecorderLease {
+    int slot;
+    explicit NativeRecorderLease(int s) : slot(s) { g_native_hook_inflight[slot].fetch_add(1, std::memory_order_acquire); }
+    ~NativeRecorderLease() { g_native_hook_inflight[slot].fetch_sub(1, std::memory_order_release); }
+};
+struct NativeErrnoGuard {
+    int saved;
+    NativeErrnoGuard() : saved(errno) {}
+    ~NativeErrnoGuard() { errno = saved; }
+};
 
 // Per-hook event throttle state (v4.48). The recorder sits on the target thread, so this is
 // lock-free and allocation-free: one relaxed timestamp load in the common case, one relaxed store
@@ -191,7 +214,7 @@ static int clamp_throttle_ms(int requested) {
     return requested > ADH_NATIVE_THROTTLE_MAX_MS ? ADH_NATIVE_THROTTLE_MAX_MS : requested;
 }
 
-// Slot reuse / reactivation must start from a clean window: inheriting the previous hook's
+// A virgin slot or same-target soft-inline reactivation starts from a clean window: inheriting the previous hook's
 // timestamp would suppress the first events of a brand new hook for no reason.
 static void reset_throttle_counters(int slot) {
     if (slot < 0 || slot >= ADH_NATIVE_MAX_HOOKS) return;
@@ -199,6 +222,7 @@ static void reset_throttle_counters(int slot) {
     g_native_hook_throttled_total[slot].store(0, std::memory_order_relaxed);
     g_native_hook_throttled_reported[slot].store(0, std::memory_order_relaxed);
     g_native_hook_mem_seq[slot].store(0, std::memory_order_relaxed);
+    g_native_hook_budget[slot].reset();
 }
 
 // Window clock. On Android CLOCK_MONOTONIC is served from the vDSO, i.e. this is a user-space read
@@ -626,11 +650,49 @@ static int adh_walk_x29(uint64_t fp, uint64_t *out, int max) {
 // thunk whether it may still call the real function (skipOriginal and returnSet both answer from
 // the saved frame instead).
 extern "C" uint64_t adh_native_hook_record_site(uint64_t *regs, int hook_id) {
-    adh_native_hook_record(regs, hook_id, nullptr);
-    if (hook_id < 0 || hook_id >= ADH_NATIVE_MAX_HOOKS) return 1;
-    NativeHookContext &ctx = g_native_hooks[hook_id];
-    if (__atomic_load_n(&ctx.skip_original, __ATOMIC_RELAXED)) return 1;
-    if (__atomic_load_n(&ctx.return_set, __ATOMIC_RELAXED)) return 1;
+    if (hook_id < 0 || hook_id >= ADH_NATIVE_MAX_HOOKS) return 0;
+    g_native_hook_inflight[hook_id].fetch_add(1, std::memory_order_acquire);
+    return adh_native_hook_record(regs, hook_id, nullptr);
+}
+extern "C" void adh_native_hook_leave_site(int slot) {
+    if (slot >= 0 && slot < ADH_NATIVE_MAX_HOOKS)
+        g_native_hook_inflight[slot].fetch_sub(1, std::memory_order_release);
+}
+// A thunk must LEAVE its disposable page before dropping the lease. Returning from a C release
+// callback into that page leaves a UAF window between counter==0 and the final ret instructions.
+// This epilogue lives in the resident agent image; the thunk BRs here while its lease is held.
+extern "C" void adh_native_site_epilogue(void) __attribute__((naked));
+extern "C" void adh_native_site_epilogue(void) {
+    __asm__ volatile(
+        "stp x0, x1, [sp, #0]\n"
+        "stp q0, q1, [sp, #128]\n"
+        "stp q2, q3, [sp, #160]\n"
+        "mov x0, x16\n"
+        "bl adh_native_hook_leave_site\n"
+        "ldp x0, x1, [sp, #0]\n"
+        "ldp q0, q1, [sp, #128]\n"
+        "ldp q2, q3, [sp, #160]\n"
+        "ldp x29, x30, [sp, #80]\n"
+        "ldr x18, [sp, #96]\n"
+        "add sp, sp, #256\n"
+        "ret\n");
+}
+extern "C" unsigned long long adh_native_hook_inflight(int slot) {
+    if (slot < 0 || slot >= ADH_NATIVE_MAX_HOOKS) return 0;
+    return g_native_hook_inflight[slot].load(std::memory_order_acquire);
+}
+extern "C" int adh_native_hook_wait_quiet(int slot, int timeout_ms) {
+    if (slot < 0 || slot >= ADH_NATIVE_MAX_HOOKS || timeout_ms < 1) return 0;
+    const uint64_t deadline = adh_mono_ns() + (uint64_t)timeout_ms * 1000000ull;
+    int quiet_rounds = 0;
+    while (adh_mono_ns() < deadline) {
+        const auto before = adh_native_hook_hits(slot);
+        struct timespec ts = {0, 5 * 1000 * 1000};
+        nanosleep(&ts, nullptr);
+        if (before == adh_native_hook_hits(slot) && adh_native_hook_inflight(slot) == 0) {
+            if (++quiet_rounds >= 5) return 1;
+        } else quiet_rounds = 0;
+    }
     return 0;
 }
 
@@ -645,19 +707,26 @@ extern "C" unsigned long long adh_native_hook_hits(int hook_id) {
 // record - silently drops every post-call copy. Measured cost of that bug: three separate analysis
 // rounds on this target concluded "memAfter produced nothing" when the records were there, unjoinable.
 extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id, uint64_t *seq_out) {
-    if (seq_out) *seq_out = 0;
+    if (seq_out) { seq_out[0] = 0; seq_out[1] = 0; }
     if (!regs || hook_id < 0 || hook_id >= ADH_NATIVE_MAX_HOOKS) return 0;
+    NativeErrnoGuard errno_guard;
+    NativeRecorderLease lease(hook_id);
+    if (seq_out) seq_out[1] = (uint64_t)g_native_hook_slot_ids[hook_id].load(std::memory_order_relaxed);
     NativeHookContext &ctx = g_native_hooks[hook_id];
     if (__atomic_load_n(&ctx.active, __ATOMIC_ACQUIRE) != 1) return 0;
-
-    // Hit-time register filter. A shared dispatch site (one thunk serving 400+ calls per signing)
-    // otherwise fills the bounded capture ring with calls nobody asked about, and the interesting one
-    // is evicted before the reader gets there. A non-matching hit is treated as "not a hit": no
-    // counter, no event, and the original still runs (return 0 keeps the stub's tail-jump).
+    g_native_hook_hits[hook_id].fetch_add(1, std::memory_order_relaxed);
+    if (g_native_hook_first_hit_ms[hook_id].load(std::memory_order_relaxed) == 0)
+        g_native_hook_first_hit_ms[hook_id].store(wall_ms(), std::memory_order_relaxed);
+    // Filters select calls BEFORE rewrites, preserving the existing reg=value semantics: an
+    // unmatched call runs untouched. Count it, so a quiet observation is not mistaken for no calls.
     const int filter_reg = __atomic_load_n(&ctx.filter_reg, __ATOMIC_RELAXED);
-    if (filter_reg >= 0) {
-        const unsigned long long want = __atomic_load_n(&ctx.filter_val, __ATOMIC_RELAXED);
-        if (filter_reg > 8 || (unsigned long long)regs[filter_reg] != want) return 0;
+    const int hit_tid = (int)gettid();
+    const int tid_filter = __atomic_load_n(&ctx.tid_filter, __ATOMIC_RELAXED);
+    const uint64_t caller_filter = __atomic_load_n(&ctx.return_address, __ATOMIC_RELAXED);
+    if ((filter_reg >= 0 && (filter_reg > 8 || regs[filter_reg] != ctx.filter_val)) ||
+        (tid_filter > 0 && tid_filter != hit_tid) || (caller_filter && caller_filter != regs[11])) {
+        g_native_hook_budget[hook_id].filtered.fetch_add(1, std::memory_order_relaxed);
+        return 0;
     }
 
     uint64_t in0 = regs[0], in1 = regs[1], in2 = regs[2], in3 = regs[3];
@@ -681,7 +750,7 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id, uint64_t
     // thread-local macro, so this writes the HIT thread's slot (an explicit __errno_location does
     // not exist at the API levels this agent supports).
     const int errno_want = __atomic_load_n(&ctx.errno_set, __ATOMIC_RELAXED);
-    if (errno_want > 0) errno = errno_want;
+    if (errno_want > 0) { errno_guard.saved = errno_want; errno = errno_want; }
 
     // Hit-time pointer write. Runs BEFORE the original and BEFORE any register rewrite, so the
     // address comes from what the target actually passed in. Only a range that already sits in a
@@ -705,29 +774,31 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id, uint64_t
     // hookId that no install ever returned, so stay silent (the argument/return rewrite above has
     // already been applied either way).
     if (hook_uid <= 0) return (skip_original || return_set) ? 1 : 0;
-    g_native_hook_hits[hook_id].fetch_add(1, std::memory_order_relaxed);
-    if (g_native_hook_first_hit_ms[hook_id].load(std::memory_order_relaxed) == 0)
-        g_native_hook_first_hit_ms[hook_id].store(wall_ms(), std::memory_order_relaxed);
+    // Sampling and quotas affect observations ONLY. The rewrites above have already happened.
+    if (!g_native_hook_budget[hook_id].sample((unsigned)ctx.sample_every))
+        return (skip_original || return_set) ? 1 : 0;
     // Per-hook event throttle. The rewrite above has already been applied, so dropping the EVENT
     // never changes what the target does - it only stops a hot site (read/write/futex) from
     // overflowing the capture ring and making the digest look quiet. Suppressed hits are counted and
-    // reported, so a thinned log is never mistaken for a quiet target. Best effort by design: two
-    // threads can pass the window check together (one extra event), and nothing ever blocks.
+    // reported, so a thinned log is never mistaken for a quiet target. A single CAS closes the
+    // concurrent-emitter race without waiting on another target thread.
     const int throttle_ms = __atomic_load_n(&ctx.throttle_ms, __ATOMIC_RELAXED);
     unsigned long long throttled = 0;
     if (throttle_ms > 0) {
         const uint64_t now = adh_mono_ns();
-        const uint64_t last = g_native_hook_throttle_last_ns[hook_id].load(std::memory_order_relaxed);
-        if (last != 0 && now - last < (uint64_t)throttle_ms * 1000000ull) {
+        uint64_t last = g_native_hook_throttle_last_ns[hook_id].load(std::memory_order_relaxed);
+        if ((last != 0 && now - last < (uint64_t)throttle_ms * 1000000ull) ||
+            !g_native_hook_throttle_last_ns[hook_id].compare_exchange_strong(last, now, std::memory_order_relaxed)) {
             g_native_hook_throttled_total[hook_id].fetch_add(1, std::memory_order_relaxed);
             return (skip_original || return_set) ? 1 : 0;
         }
-        g_native_hook_throttle_last_ns[hook_id].store(now, std::memory_order_relaxed);
         const unsigned long long total = g_native_hook_throttled_total[hook_id].load(std::memory_order_relaxed);
         // exchange, not load+store: two emitters racing here must not both claim the same delta.
         const unsigned long long seen = g_native_hook_throttled_reported[hook_id].exchange(total, std::memory_order_relaxed);
         throttled = total > seen ? total - seen : 0;
     }
+    if (!g_native_hook_budget[hook_id].reserve((unsigned)ctx.max_events))
+        return (skip_original || return_set) ? 1 : 0;
     // Windows are the bytes the target passed in, taken from the entry registers (before any
     // argIndex rewrite) and before the original function runs. Throttled hits skip this: the
     // companion record is paired with an emitted event, and a hot site must not pay a copy it
@@ -856,9 +927,11 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id, uint64_t
                 else mem_got[w] = got;
             }
         }
-        mem_seq = g_native_hook_mem_seq[hook_id].fetch_add(1, std::memory_order_relaxed) + 1;
-        if (seq_out) *seq_out = mem_seq;
     }
+    // Every admitted event has an identity, even without pre-call windows. seq=0 means this hit
+    // was suppressed, so the after-stub must not copy or emit a stray memAfter record for it.
+    mem_seq = g_native_hook_mem_seq[hook_id].fetch_add(1, std::memory_order_relaxed) + 1;
+    if (seq_out) *seq_out = mem_seq;
     // v4.31: the stub saved q0-q7 at regs[16..31] (low/high lane per 128-bit register), so float,
     // double and vector arguments are visible too. Every lane is rendered twice - as the double
     // (d0-d7) and as the float (s0-s7) it would be - because a float argument only fills the low
@@ -884,7 +957,7 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id, uint64_t
                            "\"x3\":\"0x%llx\",\"x4\":\"0x%llx\",\"x5\":\"0x%llx\",\"x6\":\"0x%llx\","
                            "\"x7\":\"0x%llx\",\"x8\":\"0x%llx\",\"x18\":\"0x%llx\","
                            "\"x29\":\"0x%llx\",\"x30\":\"0x%llx\",",
-                           hook_uid, kind_name(hook_id), (int)gettid(), throttle_ms, throttled,
+                           hook_uid, kind_name(hook_id), hit_tid, throttle_ms, throttled,
                            (unsigned long long)in0, (unsigned long long)in1,
                            (unsigned long long)in2, (unsigned long long)in3,
                            (unsigned long long)in4, (unsigned long long)in5,
@@ -948,10 +1021,8 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id, uint64_t
     if (errno_want > 0) {
         joff = adh_json_append(json, sizeof(json), joff, ",\"errnoSet\":%d", errno_want);
     }
-    if (mem_asked) {
-        joff = adh_json_append(json, sizeof(json), joff, ",\"seq\":%llu,\"memWindows\":%d",
-                               mem_seq, mem_nwin);
-    }
+    joff = adh_json_append(json, sizeof(json), joff, ",\"seq\":%llu,\"memWindows\":%d",
+                           mem_seq, mem_nwin);
     // In-hook instruction trace. It runs HERE - after the hit-time copies above (so the bytes and the
     // registers describe the moment the hook fired) and before the record is pushed - and its summary
     // goes into THIS record, not a companion one: a companion would need a seq to be joinable, and
@@ -1080,6 +1151,7 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id, uint64_t
                  hook_uid, sizeof(json));
     }
     adh_capture_push_text("NATIVE_HOOK", json);
+    g_native_hook_budget[hook_id].emitted.fetch_add(1, std::memory_order_relaxed);
     if (mem_asked) {
         // Separate record: the copied windows do not fit beside the register object, and a later
         // memory_read would see whatever the original function wrote over the buffer. Sized from
@@ -1136,8 +1208,11 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id, uint64_t
 // a NATIVE_HOOK_MEM record tagged phase:"after", so a reader can tell what the function was GIVEN
 // (untagged record, copied before the call) from what it PRODUCED. The return value is handed back
 // unchanged: this observes, it does not rewrite. An unreadable buffer is reported, never guessed.
-extern "C" uint64_t adh_native_hook_after(uint64_t retval, uint64_t *regs, int hook_id, uint64_t seq) {
+extern "C" uint64_t adh_native_hook_after(uint64_t retval, uint64_t *regs, int hook_id, uint64_t seq, uint64_t expected_id) {
+    if (!seq) return retval;
     if (!regs || hook_id < 0 || hook_id >= ADH_NATIVE_MAX_HOOKS) return retval;
+    NativeErrnoGuard errno_guard;
+    NativeRecorderLease lease(hook_id);
     NativeHookContext &ctx = g_native_hooks[hook_id];
     if (__atomic_load_n(&ctx.active, __ATOMIC_ACQUIRE) != 1) return retval;
     const int arg = __atomic_load_n(&ctx.after_arg, __ATOMIC_RELAXED);
@@ -1145,7 +1220,7 @@ extern "C" uint64_t adh_native_hook_after(uint64_t retval, uint64_t *regs, int h
     const int off = __atomic_load_n(&ctx.after_off, __ATOMIC_RELAXED);
     if (arg < 0 || arg > 8 || len <= 0 || len > ADH_MEM_AFTER_MAX) return retval;
     int hook_uid = g_native_hook_slot_ids[hook_id].load(std::memory_order_relaxed);
-    if (hook_uid <= 0) return retval;
+    if (hook_uid <= 0 || (uint64_t)hook_uid != expected_id) return retval;
 
     const uint64_t base = regs[arg];
     const uint64_t addr = base + (uint64_t)off;
@@ -1196,7 +1271,7 @@ extern "C" void adh_native_stub_##N(void) { \
         "stp q2, q3, [sp, #160]\n" \
         "stp q4, q5, [sp, #192]\n" \
         "stp q6, q7, [sp, #224]\n" \
-        "add x2, sp, #240\n" \
+        "mov x2, xzr\n" \
         "mov x0, sp\n" \
         "mov x1, #" #N "\n" \
         "bl adh_native_hook_record\n" \
@@ -1245,13 +1320,13 @@ ADH_NATIVE_STUB(15, 120)
 // that asked for `memAfter` needs the opposite shape: call the original, copy the window it wrote,
 // then hand its return value back. Only those hooks pay for this; every other hook keeps the tail
 // jump, which also leaves the float/vector return registers untouched.
-extern "C" uint64_t adh_native_hook_after(uint64_t retval, uint64_t *regs, int hook_id, uint64_t seq);
+extern "C" uint64_t adh_native_hook_after(uint64_t retval, uint64_t *regs, int hook_id, uint64_t seq, uint64_t expected_id);
 
 #define ADH_NATIVE_STUB_AFTER(N, OFF) \
 extern "C" void adh_native_stub_after_##N(void) __attribute__((naked)); \
 extern "C" void adh_native_stub_after_##N(void) { \
     __asm__ volatile( \
-        "sub sp, sp, #256\n" \
+        "sub sp, sp, #288\n" \
         "stp x0, x1, [sp, #0]\n" \
         "stp x2, x3, [sp, #16]\n" \
         "stp x4, x5, [sp, #32]\n" \
@@ -1263,7 +1338,7 @@ extern "C" void adh_native_stub_after_##N(void) { \
         "stp q2, q3, [sp, #160]\n" \
         "stp q4, q5, [sp, #192]\n" \
         "stp q6, q7, [sp, #224]\n" \
-        "add x2, sp, #240\n" \
+        "add x2, sp, #256\n" \
         "mov x0, sp\n" \
         "mov x1, #" #N "\n" \
         "bl adh_native_hook_record\n" \
@@ -1286,18 +1361,21 @@ extern "C" void adh_native_stub_after_##N(void) { \
         "blr x17\n" \
         "stp q0, q1, [sp, #128]\n" \
         "stp q2, q3, [sp, #160]\n" \
-        "ldr x3, [sp, #240]\n" \
+        "str x1, [sp, #272]\n" \
+        "ldr x3, [sp, #256]\n" \
+        "ldr x4, [sp, #264]\n" \
         "mov x1, sp\n" \
         "mov x2, #" #N "\n" \
         "bl adh_native_hook_after\n" \
+        "ldr x1, [sp, #272]\n" \
         "ldp q0, q1, [sp, #128]\n" \
         "ldp q2, q3, [sp, #160]\n" \
         "ldp x29, x30, [sp, #80]\n" \
         "ldr x18, [sp, #96]\n" \
-        "add sp, sp, #256\n" \
+        "add sp, sp, #288\n" \
         "ret\n" \
         "2:\n" \
-        "add sp, sp, #256\n" \
+        "add sp, sp, #288\n" \
         "ret\n" \
     ); \
 }
@@ -1375,7 +1453,7 @@ static NativeHookContext *find_hook_locked(int id) {
         // Keyed on `used`, not on `active`. A soft-unhooked hook is inactive but still occupies a slot
         // and still carries our patch, so keying on active made it un-hookable by id: status could not
         // even list it before, and after it could be listed it still answered "no native hook with id
-        // N". A hard unhook is the only way to reclaim that slot, so it has to find it.
+        // N". Retired slots remain addressable by id for idempotent restore/status; they are not reclaimed.
         if (g_native_hooks[i].used && g_native_hooks[i].id == id) return &g_native_hooks[i];
     }
     return nullptr;
@@ -1385,6 +1463,10 @@ static void reset_context(NativeHookContext &ctx) {
     ctx.prologue_len = 0;
     ctx.id = 0;
     ctx.active = 0;
+    ctx.unhook_pending = 0;
+    ctx.retired = 0;
+    ctx.exposed = 0;
+    ctx.patches_restored = 0;
     ctx.mode = 0;
     ctx.target = nullptr;
     ctx.original = nullptr;
@@ -1402,8 +1484,12 @@ static void reset_context(NativeHookContext &ctx) {
     ctx.write_ok = 0;
     memset(ctx.write_bytes, 0, sizeof(ctx.write_bytes));
     ctx.errno_set = 0;
-    ctx.want_backtrace = 0;   // slot reuse must not inherit the previous hook's capture choice
+    ctx.want_backtrace = 0;   // an unexposed reservation must not inherit stale configuration
     ctx.throttle_ms = 0;      // ...nor the previous hook's throttle window
+    ctx.max_events = 0;
+    ctx.sample_every = 1;
+    ctx.tid_filter = 0;
+    ctx.return_address = 0;
     ctx.mem_nwin = 0;         // ...nor the previous hook's memory windows
     ctx.mem_spec[0] = 0;
     memset(ctx.mem_win, 0, sizeof(ctx.mem_win));
@@ -1444,10 +1530,32 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
                                         int set_errno, const char *after_spec,
                                         const char *filter_spec,
                                         int trace_insns, const char *trace_from, const char *trace_watch,
+                                        int max_events, int sample_every, int tid_filter, const char *return_address,
                                         int *hook_id_out, char *error, size_t error_size) {
     if (hook_id_out) *hook_id_out = 0;
     // Effective (clamped) window: installed state and status must report what was really applied.
     const int effective_throttle_ms = clamp_throttle_ms(throttle_ms);
+    if (after_spec && after_spec[0] && mode &&
+        (strcmp(mode, "sites") == 0 || strcmp(mode, "vtable") == 0)) {
+        set_error(error, error_size, "memAfter requires mode=inline or got; sites/vtable do not use the after stub");
+        return 0;
+    }
+    if (max_events < 0 || max_events > ADH_NATIVE_EVENT_LIMIT_MAX ||
+        sample_every < 1 || sample_every > ADH_NATIVE_EVENT_LIMIT_MAX || tid_filter < 0) {
+        set_error(error, error_size, "maxEvents must be 0..%d, sampleEvery 1..%d, tid >= 0",
+                  ADH_NATIVE_EVENT_LIMIT_MAX, ADH_NATIVE_EVENT_LIMIT_MAX);
+        return 0;
+    }
+    uint64_t caller_filter = 0;
+    if (return_address && return_address[0]) {
+        char *end = nullptr;
+        errno = 0;
+        caller_filter = strtoull(return_address, &end, 16);
+        if (errno || end == return_address || *end || !caller_filter || return_address[0] == '-') {
+            set_error(error, error_size, "returnAddress must be a nonzero hexadecimal entry x30 address");
+            return 0;
+        }
+    }
     if (set_errno < 0 || set_errno > 4095) {
         set_error(error, error_size, "errno must be 0 (off) or 1..4095");
         return 0;
@@ -1617,11 +1725,30 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
         g_native_hook_slot_ids[slot].store(id, std::memory_order_relaxed);
     }
     pthread_mutex_unlock(&g_native_hooks_lock);
-    if (slot < 0) return (set_error(error, error_size, "too many native hooks (max %d)", ADH_NATIVE_MAX_HOOKS), 0);
+    if (slot < 0) return (set_error(error, error_size, "native hook slot budget exhausted (max %d); retired slots cannot be reused until a new target process", ADH_NATIVE_MAX_HOOKS), 0);
 
     auto fail = [&](const char *message) -> int {
         pthread_mutex_lock(&g_native_hooks_lock);
         if (g_native_hooks[slot].active == 2) {
+            const int is_site = strcmp(mode, "sites") == 0, is_slot = strcmp(mode, "vtable") == 0;
+            const int retained = is_site ? adh_site_hook_retained_pages(slot) : is_slot ? adh_slot_hook_retained_pages(slot) : 0;
+            if (retained) {
+                NativeHookContext &failed = g_native_hooks[slot];
+                failed.mode=is_site?2:3; failed.target=g_native_hook_originals[slot]; failed.original=failed.target;
+                failed.replacement=is_site?adh_site_hook_page(slot):adh_slot_hook_page(slot);
+                failed.site_count=is_site?adh_site_hook_count(slot):adh_slot_hook_count(slot);
+                failed.retired=1; failed.patched=0;
+                failed.unhook_pending=!(is_site?adh_site_hook_patches_restored(slot):adh_slot_hook_patches_restored(slot));
+                copy_cstr(failed.module,sizeof(failed.module),module); copy_cstr(failed.symbol,sizeof(failed.symbol),symbol);
+                failed.address=(uintptr_t)failed.target;
+                __atomic_store_n(&failed.active,0,__ATOMIC_RELEASE);
+                if (hook_id_out) *hook_id_out=id;
+            } else if (g_native_hooks[slot].exposed) {
+                NativeHookContext &failed=g_native_hooks[slot];
+                failed.retired=1; failed.unhook_pending=!failed.patches_restored;
+                __atomic_store_n(&failed.active,0,__ATOMIC_RELEASE);
+                if(hook_id_out)*hook_id_out=id;
+            } else {
             // The slot was only RESERVED here (active==2 means it was never published, so no hit can
             // be in flight - the recorder bails out unless active==1). Hand it back instead of
             // burning it: before this, sixteen failed installs (a typo, a missing symbol, an
@@ -1632,6 +1759,7 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
             g_native_hook_slot_ids[slot].store(0, std::memory_order_relaxed);
             g_native_hook_hits[slot].store(0ULL, std::memory_order_relaxed);
             g_native_hook_first_hit_ms[slot].store(0ULL, std::memory_order_relaxed);
+            }
         }
         pthread_mutex_unlock(&g_native_hooks_lock);
         set_error(error, error_size, "%s", message);
@@ -1661,19 +1789,32 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
         void *slot_addr = nullptr;
         void *slot_value = nullptr;
         char perms_before[8] = "";
-        int replaced = adh_got_replace_by_name_ex(module, symbol, stub, &slot_addr, &slot_value,
-                                                  perms_before, sizeof(perms_before));
+        int replaced = adh_got_unique_slot(module, symbol, &slot_addr, &slot_value);
         if (replaced != 1 || !slot_addr || !slot_value) {
-            g_native_hook_originals[slot] = nullptr;
             return fail(replaced == 0 ? "GOT target symbol/slot not found"
                                       : "GOT target matched multiple slots; use an exact module path");
         }
+        pthread_mutex_lock(&g_native_hooks_lock);
+        int conflict=0;
+        for(int i=0;i<ADH_NATIVE_MAX_HOOKS;i++) if(i!=slot&&g_native_hooks[i].active==1&&
+            (g_native_hooks[i].target==slot_value||g_native_hooks[i].slot_addr==(uintptr_t)slot_addr)){conflict=g_native_hooks[i].id;break;}
+        pthread_mutex_unlock(&g_native_hooks_lock);
+        if(conflict)return fail("GOT slot or target is already hooked");
+        adh_perms_of_addr(slot_addr,perms_before,sizeof(perms_before));
         target = slot_value;
         g_native_hook_originals[slot] = target;
         original = target;
         hook_mode = 0;
         got_slot_addr = (uintptr_t)slot_addr;
         copy_cstr(got_perms_before, sizeof(got_perms_before), perms_before);
+        NativeHookContext &pending=g_native_hooks[slot];
+        pending.mode=0;pending.target=target;pending.original=original;pending.replacement=stub;
+        pending.address=(uintptr_t)target;pending.slot_addr=got_slot_addr;pending.exposed=1;
+        copy_cstr(pending.module,sizeof(pending.module),module);copy_cstr(pending.symbol,sizeof(pending.symbol),symbol);
+        if(!adh_swap_pointer_in_ro_page((void **)slot_addr,stub)){
+            pending.patches_restored=adh_swap_pointer_in_ro_page((void **)slot_addr,target)&&*(void **)slot_addr==target;
+            return fail("GOT publication failed; exposed slot retained for process lifetime");
+        }
     } else if (strcmp(mode, "inline") == 0) {
         if (addr && addr[0]) {
             target = (void *)(uintptr_t)strtoull(addr, nullptr, 0);
@@ -1688,10 +1829,19 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
         for (int i = 0; i < ADH_NATIVE_MAX_HOOKS; i++) {
             NativeHookContext &old = g_native_hooks[i];
             if (i == slot || old.active != 0 || old.target != target || (old.mode != 1 && old.mode != 2 && old.mode != 3) || !old.replacement) continue;
+            if (old.retired) continue;
             // Post-call and plain hooks use DIFFERENT stubs, and the installed one cannot be swapped
             // without touching Dobby again. Only reuse the slot when the shape matches; otherwise let
             // the normal install path report that this target is already patched.
             if ((after_len > 0) != (old.after_len > 0)) continue;
+            if (old.unhook_pending) {
+                pthread_mutex_unlock(&g_native_hooks_lock);
+                return fail("previous unhook is pending; retry unhook before installing again");
+            }
+            if (adh_native_hook_inflight(i) != 0) {
+                pthread_mutex_unlock(&g_native_hooks_lock);
+                return fail("previous hook callback is still in flight; retry reactivation after it finishes");
+            }
             old.id = id;
             old.skip_original = skip_original ? 1 : 0;
             old.return_set = return_set ? 1 : 0;
@@ -1706,6 +1856,10 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
             old.errno_set = set_errno;
             old.want_backtrace = want_backtrace ? 1 : 0;
             old.throttle_ms = effective_throttle_ms;
+            old.max_events = max_events;
+            old.sample_every = sample_every;
+            old.tid_filter = tid_filter;
+            old.return_address = caller_filter;
             old.mem_nwin = mem_nwin;
             memset(old.mem_win, 0, sizeof(old.mem_win));
             for (int w = 0; w < mem_nwin; w++) {
@@ -1761,6 +1915,15 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
             return 1;
         }
         pthread_mutex_unlock(&g_native_hooks_lock);
+        pthread_mutex_lock(&g_native_hooks_lock);
+        int existing_active=0, existing_retired=0;
+        for(int i=0;i<ADH_NATIVE_MAX_HOOKS;i++) if(i!=slot&&g_native_hooks[i].target==target){
+            if(g_native_hooks[i].active==1)existing_active=1;
+            if(g_native_hooks[i].retired&&g_native_hooks[i].mode==1)existing_retired=1;
+        }
+        pthread_mutex_unlock(&g_native_hooks_lock);
+        if(existing_active)return fail("target already hooked; no second inline patch was attempted");
+        if(existing_retired)return fail("target was hard-unhooked earlier in this process; its retired backend cannot be reinstalled");
         if (target_was_hard_restored(target)) {
             return fail("target was hard-unhooked earlier in this process: its backend state is stale, restart the target before hooking it again");
         }
@@ -1768,10 +1931,17 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
         // to free its trampoline pool (DobbyDestroy breaks later DobbyHook calls on this build).
         unsigned char prologue[24];
         memcpy(prologue, target, sizeof(prologue));
-        if (!adh_inline_hook(target, stub, &original)) return fail("inline hook installation failed");
+        NativeHookContext &pending=g_native_hooks[slot];
+        pending.mode=1;pending.target=target;pending.replacement=stub;pending.exposed=1;
+        pending.address=(uintptr_t)target;pending.prologue_len=(int)sizeof(prologue);
+        memcpy(pending.prologue,prologue,sizeof(prologue));
+        copy_cstr(pending.module,sizeof(pending.module),module);copy_cstr(pending.symbol,sizeof(pending.symbol),symbol);
+        int installed=adh_inline_hook(target,stub,&g_native_hook_originals[slot]);
+        original=g_native_hook_originals[slot];pending.original=original;
+        if(!installed){pending.patches_restored=memcmp(prologue,target,sizeof(prologue))==0;return fail("inline hook installation failed; attempted slot retained");}
         if (memcmp(prologue, target, 4) == 0) {
             // Dobby reported success but the entry is unchanged: never claim a hook that is not there.
-            (void)adh_inline_unhook(target);
+            pending.patches_restored=1;
             return fail("inline patch did not change the target entry (stale backend state?)");
         }
         pthread_mutex_lock(&g_native_hooks_lock);
@@ -1864,6 +2034,10 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
     ctx.errno_set = set_errno;
     ctx.want_backtrace = want_backtrace ? 1 : 0;
     ctx.throttle_ms = effective_throttle_ms;
+    ctx.max_events = max_events;
+    ctx.sample_every = sample_every;
+    ctx.tid_filter = tid_filter;
+    ctx.return_address = caller_filter;
     ctx.mem_nwin = mem_nwin;
     ctx.filter_reg = filter_reg;
     ctx.filter_val = filter_val;
@@ -1909,10 +2083,13 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
     ctx.installed_at_ms = wall_ms();
     copy_cstr(ctx.sites_scope, sizeof(ctx.sites_scope), (hook_mode == 2 && sites_scope) ? sites_scope : "");
     ctx.patched = (hook_mode == 1 || hook_mode == 2 || hook_mode == 3) ? 1 : 0;
-    // Hard unhook frees the slot for reuse but leaves the throttle atomics behind, so clear them
-    // BEFORE publishing active: otherwise the first hits of a new hook on a recycled slot could be
-    // suppressed by the previous hook's timestamp (and their count wiped by this reset).
+    ctx.exposed = 1;
+    ctx.patches_restored = 0;
+    // Initialize the virgin physical slot BEFORE publishing active. Exposed retired slots never
+    // reach this path; only same-target soft-inline reactivation uses its existing backend above.
     reset_throttle_counters(slot);
+    g_native_hook_hits[slot].store(0ULL, std::memory_order_relaxed);
+    g_native_hook_first_hit_ms[slot].store(0ULL, std::memory_order_relaxed);
     // The post-call path resolves the external id through this map (adh_native_hook_after looks up
     // g_native_hook_slot_ids[slot] and bails when it is <= 0). A FIRST-time install used to leave it
     // at 0 - only the reset and the reactivate paths wrote it - so `memAfter` silently produced no
@@ -1920,20 +2097,16 @@ extern "C" int adh_native_hook_install(const char *mode, const char *module, con
     g_native_hook_slot_ids[slot].store(id, std::memory_order_relaxed);
     __atomic_store_n(&ctx.active, 1, __ATOMIC_RELEASE);
     pthread_mutex_unlock(&g_native_hooks_lock);
-    g_native_hook_hits[slot].store(0ULL, std::memory_order_relaxed);
-    g_native_hook_first_hit_ms[slot].store(0ULL, std::memory_order_relaxed);
     if (hook_id_out) *hook_id_out = id;
     LOGI("native_hook installed id=%d mode=%s target=%p original=%p", id, mode, target, original);
     return 1;
 }
 
-// hard=1 performs a REAL inline unhook: deactivate, quiesce (wait until the hit counter stops
-// moving, so nothing entered the stub/trampoline during a settle window), then DobbyDestroy the
-// patch and free the slot for reuse. DobbyDestroy restores the original prologue and releases
-// the trampoline - that is what removes the RWX/anon-exec footprint a soft unhook leaves behind.
-// Residual race (documented, not hidden): a thread that already read the patched branch can be a
-// few instructions inside the trampoline; the settle window bounds it but does not suspend
-// threads, so hard unhook stays opt-in while soft unhook remains the default.
+// Hard-inline, GOT, sites and vtable unhook restore the published entry/slot/call-site bytes and
+// retire the physical context until process exit. Quiet counters never prove reclamation safe:
+// a thread can pause before entry accounting. We retain stubs, original pointers and backend pages.
+// Only soft-inline may reactivate the SAME target/backend, without an absolute observation-generation
+// boundary for a paused thread. The fixed 16-slot budget includes both active and retired contexts.
 extern "C" int adh_native_hook_at(uint64_t addr, int *hook_id_out, int *active_out) {
     if (hook_id_out) *hook_id_out = 0;
     if (active_out) *active_out = 0;
@@ -1963,23 +2136,34 @@ extern "C" int adh_native_hook_unhook(int hook_id, int hard, char *error, size_t
         return (set_error(error, error_size, "no native hook with id %d", hook_id), 0);
     }
     int slot = (int)(ctx - g_native_hooks);
+    if (ctx->retired && !ctx->unhook_pending) {
+        pthread_mutex_unlock(&g_native_hooks_lock);
+        return 1; // idempotent restore+retire, never a promise of resource reclamation
+    }
     if (ctx->mode == 0) {
-        int restored = adh_got_replace(ctx->module, ctx->replacement, ctx->original);
-        if (restored <= 0) {
+        int restored=ctx->slot_addr && (*(void **)ctx->slot_addr==ctx->original ||
+            (adh_swap_pointer_in_ro_page((void **)ctx->slot_addr,ctx->original) && *(void **)ctx->slot_addr==ctx->original));
+        if (!restored) {
             pthread_mutex_unlock(&g_native_hooks_lock);
             return (set_error(error, error_size, "native unhook failed id=%d", hook_id), 0);
         }
-        g_native_hook_hits[slot].store(0ULL, std::memory_order_relaxed);
-        g_native_hook_first_hit_ms[slot].store(0ULL, std::memory_order_relaxed);
         __atomic_store_n(&ctx->active, 0, __ATOMIC_RELEASE);
-        reset_context(*ctx);
-        ctx->used = 0;   // GOT restore is a real, safe unhook: free the slot
+        ctx->unhook_pending = 1;
+        ctx->retired = 1;
+        pthread_mutex_unlock(&g_native_hooks_lock);
+        if (!adh_native_hook_wait_quiet(slot, 1500))
+            return (set_error(error, error_size, "not-unhooked: GOT restored but a callback is still in flight; slot retained, retry later"), 0);
+        pthread_mutex_lock(&g_native_hooks_lock);
+        ctx->retired=1;ctx->patches_restored=1;ctx->unhook_pending=0;ctx->patched=0;
         pthread_mutex_unlock(&g_native_hooks_lock);
         LOGI("native_hook removed id=%d (got)", hook_id);
         return 1;
     }
     if (ctx->mode == 3) {
         // A vtable hook writes data pointers only; hard unhook = put the original pointers back.
+        __atomic_store_n(&ctx->active, 0, __ATOMIC_RELEASE);
+        ctx->unhook_pending = 1;
+        ctx->retired = 1;
         pthread_mutex_unlock(&g_native_hooks_lock);
         char slot_error[192] = "";
         if (!adh_slot_hook_revert(slot, slot_error, sizeof(slot_error))) {
@@ -1987,15 +2171,18 @@ extern "C" int adh_native_hook_unhook(int hook_id, int hard, char *error, size_t
             return 0;
         }
         pthread_mutex_lock(&g_native_hooks_lock);
-        reset_context(*ctx);
-        ctx->used = 0;
+        ctx->unhook_pending = 0;
+        ctx->patched = 0;
         pthread_mutex_unlock(&g_native_hooks_lock);
         LOGI("native_hook hard-unhooked id=%d (vtable slots restored)", hook_id);
         return 1;
     }
     if (ctx->mode == 2) {
-        // A sites hook has no Dobby state: hard unhook = write the original BLs back, verify, and
-        // free the thunk page after a quiet window. Fully repeatable (re-hooking works again).
+        // Restore original B/BL instructions, then permanently retire the RX pages and context.
+        // Another installation may consume a different virgin physical slot; this one is never reused.
+        __atomic_store_n(&ctx->active, 0, __ATOMIC_RELEASE);
+        ctx->unhook_pending = 1;
+        ctx->retired = 1;
         pthread_mutex_unlock(&g_native_hooks_lock);
         char site_error[192] = "";
         if (!adh_site_hook_revert(slot, site_error, sizeof(site_error))) {
@@ -2003,8 +2190,8 @@ extern "C" int adh_native_hook_unhook(int hook_id, int hard, char *error, size_t
             return 0;
         }
         pthread_mutex_lock(&g_native_hooks_lock);
-        reset_context(*ctx);
-        ctx->used = 0;
+        ctx->unhook_pending = 0;
+        ctx->patched = 0;
         pthread_mutex_unlock(&g_native_hooks_lock);
         LOGI("native_hook hard-unhooked id=%d (sites restored)", hook_id);
         return 1;
@@ -2014,12 +2201,8 @@ extern "C" int adh_native_hook_unhook(int hook_id, int hard, char *error, size_t
         return (set_error(error, error_size, "inline patch state unavailable for id=%d", hook_id), 0);
     }
     void *target = ctx->target;
-    g_native_hook_hits[slot].store(0ULL, std::memory_order_relaxed);
-    g_native_hook_first_hit_ms[slot].store(0ULL, std::memory_order_relaxed);
     __atomic_store_n(&ctx->active, 0, __ATOMIC_RELEASE);
-    ctx->skip_original = 0;
-    ctx->return_set = 0;
-    ctx->arg_index = -1;
+    if (hard) { ctx->unhook_pending = 1; ctx->retired=1; }
     if (!hard) {
         // Soft unhook: leave the installed stub in place, deactivated, and keep the slot
         // patched for safe reactivation (never frees a trampoline a thread may still use).
@@ -2028,40 +2211,23 @@ extern "C" int adh_native_hook_unhook(int hook_id, int hard, char *error, size_t
         return 1;
     }
     pthread_mutex_unlock(&g_native_hooks_lock);
-    // Quiesce: the trampoline is only reachable through our stub, so a hit counter that stays
-    // still for a few milliseconds means nothing entered it during that window.
+    // The bounded wait reports callbacks already in flight. It is not a reclamation proof and
+    // does not authorize freeing or reassigning a context after a quiet interval.
     //
     // BOUNDED ON PURPOSE. The first version reset its counter every time a hit arrived, so on a HOT
     // hook the loop never terminated - and because this runs on the agent's command thread, the whole
     // session stopped answering: `agent_ping` timed out and only restarting the target recovered it
     // (measured twice, on the hex-encoder and malloc hooks). A hard unhook is an explicit request, so
-    // after a bounded wait we restore the bytes and SAY the quiet window was not achieved, instead of
-    // hanging the control channel. The residual race is the one already documented for hard unhook:
+    // after a bounded wait we return not-unhooked and retain the inactive patch/slot instead of
+    // hanging the control channel or pretending that live callbacks finished. The residual race is
+    // the one already documented for hard unhook:
     // a thread that already read the patched branch can be inside the trampoline, which lives in a
     // separate pool this code never frees - so restoring the prologue does not pull it out from under
     // that thread.
-    const uint64_t quiesce_started = adh_mono_ns();
-    const uint64_t quiesce_budget_ns = 1500ull * 1000000ull;   // hard ceiling: 1.5 s
-    bool quiet = false;
-    int quiet_rounds = 0;
-    int rounds = 0;
-    while (true) {
-        unsigned long long before = g_native_hook_hits[slot].load(std::memory_order_relaxed);
-        struct timespec ts = { 0, 5 * 1000 * 1000 };
-        nanosleep(&ts, nullptr);
-        unsigned long long after = g_native_hook_hits[slot].load(std::memory_order_relaxed);
-        rounds++;
-        if (after == before) {
-            if (++quiet_rounds >= 5) { quiet = true; break; }   // ~25 ms of silence
-        } else {
-            quiet_rounds = 0;
-        }
-        if (adh_mono_ns() - quiesce_started >= quiesce_budget_ns) break;
-    }
+    const bool quiet = adh_native_hook_wait_quiet(slot, 1500) != 0;
     if (!quiet) {
-        LOGE("hard unhook id=%d: no quiet window after %d rounds (~%llu ms) - the hook is hot; "
-             "restoring anyway (trampoline pool is not freed, so an in-flight thread stays valid)",
-             hook_id, rounds, (unsigned long long)((adh_mono_ns() - quiesce_started) / 1000000ull));
+        set_error(error, error_size, "not-unhooked: callback still in flight after 1500 ms; inactive patch and slot retained, retry later");
+        return 0;
     }
     pthread_mutex_lock(&g_native_hooks_lock);
     unsigned char prologue[24];
@@ -2084,8 +2250,7 @@ extern "C" int adh_native_hook_unhook(int hook_id, int hard, char *error, size_t
     pthread_mutex_lock(&g_native_hooks_lock);
     void *stale_stub = ctx->replacement;
     unsigned long long stale_id = (unsigned long long)ctx->id;
-    reset_context(*ctx);
-    ctx->used = 0;
+    ctx->retired=1;ctx->patches_restored=1;ctx->unhook_pending=0;ctx->patched=0;
     pthread_mutex_unlock(&g_native_hooks_lock);
     LOGI("native_hook hard-unhooked id=%llu target=%p (quiet=%d, original bytes restored, stub=%p parked)", stale_id, target, quiet ? 1 : 0, stale_stub);
     return 1;
@@ -2101,28 +2266,33 @@ extern "C" int adh_native_hook_status_json(char *out, size_t out_size) {
     // Per-mode usage: the host needs to know how much of the budget is left BEFORE it asks for a
     // batch of hooks, otherwise the 17th install just fails one symbol at a time.
     // `used` counts CONSUMED slots, not active hooks: a soft-unhooked inline hook keeps its stub
-    // installed (race safety) and the slot stays burned until a hard unhook frees it, so
-    // free = max - used is the number that actually matters. `active` is reported next to it.
+    // installed, and a hard unhook permanently retires that slot. free=max-used is the remaining
+    // physical budget for this process; unhook does not replenish exposed slots.
     int by_mode[4] = {0, 0, 0, 0};
     int used_slots = 0;
+    int retired_slots = 0, retired_pages = 0;
     pthread_mutex_lock(&g_native_hooks_lock);
     for (int i = 0; i < ADH_NATIVE_MAX_HOOKS; i++) {
         NativeHookContext &ctx = g_native_hooks[i];
         if (ctx.used) used_slots++;
+        const int pages = ctx.mode==2?adh_site_hook_retained_pages(i):ctx.mode==3?adh_slot_hook_retained_pages(i):0;
+        const int patches_restored = ctx.mode==2?adh_site_hook_patches_restored(i):ctx.mode==3?adh_slot_hook_patches_restored(i):ctx.patches_restored;
+        if (ctx.retired) { retired_slots++; retired_pages+=pages; }
         if (ctx.active != 1) {
             if (ctx.patched) patched_count++;
             // A soft-unhooked hook keeps its slot, its stub and its patch, but used to be OMITTED from
             // status entirely - so a caller enumerating `hooks` could neither see it nor unhook it, and
             // the session quietly lost slots with no way to reclaim them (measured: `used:5` with an
-            // empty `hooks` list). Reported separately so `hooks` still means "live" while `inactive`
-            // means "occupying a slot, reachable by unhook".
+            // empty `hooks` list). `inactive` also reports permanently retired physical contexts,
+            // including restored bytes, retained resources and an idempotent unhook handle.
             if (ctx.used) {
-                char item[640];
+                char item[1536];
                 snprintf(item, sizeof(item),
                          "%s{\"id\":%d,\"mode\":\"%s\",\"module\":\"%s\",\"symbol\":\"%s\","
                          "\"address\":\"0x%llx\",\"target\":\"0x%llx\",\"patched\":%s,"
                          "\"mem\":\"%s\",\"memAfter\":\"%s\",\"filter\":\"%s\","
-                         "\"traceInsns\":%d,\"traceFrom\":\"%s\",\"traceWatch\":\"%s\",\"state\":\"%s\"}",
+                         "\"traceInsns\":%d,\"traceFrom\":\"%s\",\"traceWatch\":\"%s\",\"state\":\"%s\",\"inFlight\":%llu,"
+                         "\"patchesRestored\":%s,\"resourcesReclaimed\":false,\"retiredPages\":%d,\"retiredBytes\":%d}",
                          dormant_count ? "," : "",
                          ctx.id,
                          ctx.mode == 0 ? "got" : (ctx.mode == 1 ? "inline" : (ctx.mode == 2 ? "sites" : "vtable")),
@@ -2132,7 +2302,8 @@ extern "C" int adh_native_hook_status_json(char *out, size_t out_size) {
                          ctx.patched ? "true" : "false",
                          ctx.mem_spec, ctx.after_spec, ctx.filter_spec,
                          ctx.trace_insns, ctx.trace_from, ctx.watch_spec,
-                         ctx.patched ? "soft-unhooked" : "reserved");
+                         ctx.unhook_pending ? "unhook-pending" : ctx.retired ? "retired" : ctx.patched ? "soft-unhooked" : "reserved",
+                         adh_native_hook_inflight(i), patches_restored?"true":"false", ctx.retired?pages:0, ctx.retired?pages*4096:0);
                 dormant += item;
                 dormant_count++;
             }
@@ -2151,9 +2322,24 @@ extern "C" int adh_native_hook_status_json(char *out, size_t out_size) {
             if (used >= sizeof(sitebuf)) used = 0;
             adh_site_hook_sites_json(i, sitebuf, sizeof(sitebuf), &used);
         }
-        // hits counts EVERY hit; throttled counts the hits whose event was suppressed inside the
-        // window, so emitted events = hits - throttled and a quiet log stays explainable.
+        // At quiescence: hits = filtered + selected, selected = sampledOut + throttled +
+        // limited + emitted. A live concurrent snapshot may have callbacks still in flight.
         unsigned long long throttled = g_native_hook_throttled_total[i].load(std::memory_order_relaxed);
+        const auto &budget = g_native_hook_budget[i];
+        const auto selected = budget.selected.load(std::memory_order_relaxed);
+        const auto filtered = budget.filtered.load(std::memory_order_relaxed);
+        const auto sampled_out = budget.sampled_out.load(std::memory_order_relaxed);
+        const auto limited = budget.limited.load(std::memory_order_relaxed);
+        const auto emitted = budget.emitted.load(std::memory_order_relaxed);
+        char budgetbuf[560];
+        snprintf(budgetbuf, sizeof(budgetbuf),
+                 ",\"maxEvents\":%d,\"sampleEvery\":%d,\"tid\":%d,\"returnAddress\":\"0x%llx\","
+                 "\"selected\":%llu,\"filtered\":%llu,\"sampledOut\":%llu,\"limited\":%llu,\"emitted\":%llu,"
+                 "\"budgetReached\":%s,\"observationSuppressed\":%s,\"emittedMeaning\":\"submitted-to-capture-ring\",\"inFlight\":%llu",
+                 ctx.max_events, ctx.sample_every, ctx.tid_filter, (unsigned long long)ctx.return_address,
+                 selected, filtered, sampled_out, limited, emitted,
+                 ctx.max_events > 0 && emitted >= (unsigned)ctx.max_events ? "true" : "false",
+                 filtered || sampled_out || limited || throttled ? "true" : "false", adh_native_hook_inflight(i));
         // mode 0 mechanism facts. address/target/original are all the slot's pre-patch VALUE for a
         // got hook, so they say nothing about which slot was touched; these do. A hook that installs
         // and never fires otherwise looks exactly like a target with no traffic to observe.
@@ -2189,7 +2375,7 @@ extern "C" int adh_native_hook_status_json(char *out, size_t out_size) {
                  "\"address\":\"0x%llx\",\"target\":\"0x%llx\",\"original\":\"0x%llx\","
                  "\"replacement\":\"0x%llx\",\"hits\":%llu,\"argIndex\":%d,\"argValue\":\"0x%llx\",\"skipOriginal\":%s,\"returnSet\":%s,\"returnValue\":\"0x%llx\",\"backtrace\":%s,\"throttleMs\":%d,\"throttled\":%llu,\"mem\":\"%s\",\"memAfter\":\"%s\",\"afterActive\":%s,\"filter\":\"%s\",\"write\":\"%s\",\"errno\":%d,\"traceInsns\":%d,\"traceFrom\":\"%s\",\"traceWatch\":\"%s\""
                  ",\"slotsPatched\":%d,\"installedAtMs\":%llu,\"firstHitMs\":%llu,\"verdict\":\"%s\""
-                 "%s%s}",
+                 "%s%s%s}",
                  ctx.id, ctx.mode == 0 ? "got" : (ctx.mode == 1 ? "inline" : (ctx.mode == 2 ? "sites" : "vtable")), ctx.module, ctx.symbol,
                  (unsigned long long)ctx.address, (unsigned long long)(uintptr_t)ctx.target,
                  (unsigned long long)(uintptr_t)ctx.original,
@@ -2200,7 +2386,7 @@ extern "C" int adh_native_hook_status_json(char *out, size_t out_size) {
                  ctx.after_spec, ctx.after_len > 0 ? "true" : "false", ctx.filter_spec, writebuf, ctx.errno_set,
                  ctx.trace_insns, ctx.trace_from, ctx.watch_spec,
                  slots_patched, (unsigned long long)ctx.installed_at_ms, (unsigned long long)first_hit,
-                 verdict, gotbuf, sitebuf);
+                 verdict, gotbuf, sitebuf, budgetbuf);
         hooks += item;
         count++;
     }
@@ -2209,13 +2395,14 @@ extern "C" int adh_native_hook_status_json(char *out, size_t out_size) {
     dormant += "]";
     char kept[96] = "";
     adh_site_hook_last_revert_json(kept, sizeof(kept));
-    char slots[256];
+    char slots[512];
     snprintf(slots, sizeof(slots),
-             "\"slots\":{\"max\":%d,\"used\":%d,\"active\":%d,\"free\":%d,"
-             "\"byMode\":{\"got\":%d,\"inline\":%d,\"sites\":%d,\"vtable\":%d}},",
-             ADH_NATIVE_MAX_HOOKS, used_slots, count, ADH_NATIVE_MAX_HOOKS - used_slots,
-             by_mode[0], by_mode[1], by_mode[2], by_mode[3]);
-    std::string json = "{" + std::string(slots) +
+             "\"slots\":{\"max\":%d,\"used\":%d,\"active\":%d,\"free\":%d,\"retired\":%d,"
+             "\"byMode\":{\"got\":%d,\"inline\":%d,\"sites\":%d,\"vtable\":%d}},"
+             "\"retiredPages\":%d,\"retiredBytes\":%d,\"retirementPolicy\":\"process-lifetime-no-slot-reuse\",",
+             ADH_NATIVE_MAX_HOOKS, used_slots, count, ADH_NATIVE_MAX_HOOKS - used_slots, retired_slots,
+             by_mode[0], by_mode[1], by_mode[2], by_mode[3], retired_pages, retired_pages*4096);
+    std::string json = "{\"observationControlsVersion\":1," + std::string(slots) +
                        "\"count\":" + std::to_string(count) + ",\"patched\":" + std::to_string(patched_count) + "," +
                        "\"inactiveCount\":" + std::to_string(dormant_count) + "," + kept +
                        "\"hooks\":" + hooks + ",\"inactive\":" + dormant + "}";

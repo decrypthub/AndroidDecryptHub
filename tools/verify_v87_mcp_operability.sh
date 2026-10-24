@@ -34,6 +34,13 @@ if (passed < 22) problems.push(`expected >=22 probe/fs/flow unit tests, saw ${pa
 if (failed !== 0) problems.push(`probe/fs/flow unit tests report ${failed} failures`);
 notes.push(`probe + filesystem + flow unit tests: pass=${passed} fail=${failed}`);
 
+// The paged trace uses cmd(op,args), injected by the MCP handler. Prove the actual
+// import/closure with AST checks before accepting operations sent through it.
+const closureTest = spawnSync(process.execPath, ['--test', `${root}/daemon/test/mcp_native_reachability.test.ts`], { encoding: 'utf8' });
+const closureOutput = `${closureTest.stdout ?? ''}${closureTest.stderr ?? ''}`;
+const closurePass = closureTest.status === 0 && Number(/fail (\d+)/.exec(closureOutput)?.[1] ?? -1) === 0 && Number(/pass (\d+)/.exec(closureOutput)?.[1] ?? 0) >= 4;
+if (!closurePass) problems.push('MCP callback/import reachability AST checks failed: ' + closureOutput.slice(-1200));
+
 // ---- agent ops ----
 const agentSrc = read('agent/src/bootstrap/agent_main.c');
 const agentOps = [...agentSrc.matchAll(/strcmp\(op, "([a-z0-9_]+)"\)/g)].map((m) => m[1]);
@@ -80,6 +87,9 @@ const opsFromFiles = (files) => {
     // deps.send is the injected-sender form used by the extracted helpers; a bare `.send(` on any other
     // receiver would be a false positive that could mask a genuinely unreachable op, so it is not accepted.
     for (const m of src.matchAll(/(?:\bsendCmd|\bagentCmd|\b(?:deps|opts)\.send)\([^,]+,\s*'([a-z0-9_]+)'/g)) ops.add(m[1]);
+    if (closurePass && rel === 'daemon/src/trace_store.ts') {
+      for (const m of src.matchAll(/\bcmd\(\s*'([a-z0-9_]+)'/g)) ops.add(m[1]);
+    }
   }
   return ops;
 };

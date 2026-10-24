@@ -155,7 +155,59 @@ export function memCapturePreview(jsonText: string): string {
   }).join(' | ');
 }
 
-export interface NativeHookInstallOptions {
+export interface NativeObservationOptions {
+  maxEvents?: number;
+  sampleEvery?: number;
+  tid?: number;
+  returnAddress?: string;
+}
+
+export const NATIVE_EVENT_LIMIT_MAX = 1_000_000;
+
+function boundedWhole(value: unknown, name: string, fallback: number, min: number, max: number): number {
+  if (value === undefined || value === null || value === '') return fallback;
+  const n = Number(value);
+  if (typeof value === 'boolean' || !Number.isSafeInteger(n) || n < min || n > max) {
+    throw new Error(`${name} must be a whole number in ${min}..${max}`);
+  }
+  return n;
+}
+
+/** Shared wire fields. Defaults are explicit so all install paths agree with the agent. */
+export function nativeObservationPayload(opts: NativeObservationOptions): Record<string, string | number> {
+  const maxEvents = boundedWhole(opts.maxEvents, 'maxEvents', 0, 0, NATIVE_EVENT_LIMIT_MAX);
+  const sampleEvery = boundedWhole(opts.sampleEvery, 'sampleEvery', 1, 1, NATIVE_EVENT_LIMIT_MAX);
+  const tid = boundedWhole(opts.tid, 'tid', 0, 0, 2_147_483_647);
+  let returnAddress = String(opts.returnAddress ?? '').trim();
+  if (returnAddress) {
+    if (!/^(?:0x)?[0-9a-f]+$/i.test(returnAddress)) throw new Error('returnAddress must be a nonzero hexadecimal entry x30 address');
+    const addr = BigInt(`0x${returnAddress.replace(/^0x/i, '')}`);
+    if (addr <= 0n || addr > 0xffff_ffff_ffff_ffffn) throw new Error('returnAddress must be a nonzero 64-bit hexadecimal entry x30 address');
+    returnAddress = `0x${addr.toString(16)}`;
+  }
+  return { maxEvents, sampleEvery, tid, returnAddress };
+}
+
+type NativeObservationSender = (session: string, op: string, args: Record<string, unknown>, timeout?: number) => Promise<any>;
+
+/** Old agents silently ignore unknown fields. Require an explicit capability before a new
+ * non-default control can install anything; default calls retain the old zero-RPC behavior. */
+export async function ensureNativeObservationSupport(
+  session: string, opts: NativeObservationOptions, send: NativeObservationSender,
+): Promise<Record<string, string | number>> {
+  const payload = nativeObservationPayload(opts);
+  if (payload.maxEvents === 0 && payload.sampleEvery === 1 && payload.tid === 0 && payload.returnAddress === '') return payload;
+  let reply;
+  try { reply = await send(session, 'native_hook', { action: 'status' }, 10_000); }
+  catch (e) { throw new Error(`cannot verify native observation controls: ${(e as Error).message}; no hook installed`); }
+  const version = reply?.status?.observationControlsVersion;
+  if (reply?.ok !== true || typeof version !== 'number' || !Number.isSafeInteger(version) || version < 1) {
+    throw new Error(`target agent does not support native observation controls version 1; deploy current agent before installing${reply?.error ? ` (${reply.error})` : ''}`);
+  }
+  return payload;
+}
+
+export interface NativeHookInstallOptions extends NativeObservationOptions {
   addr: string;
   throttleMs?: number;
   backtrace?: boolean;
@@ -273,6 +325,7 @@ export function nativeHookInstallPayload(opts: NativeHookInstallOptions): Record
     argIndex: Number(opts.argIndex ?? -1),
     argValue: opts.argValue ?? '',
     mem: parseMemWindows(opts.mem).spec,
+    ...nativeObservationPayload(opts),
     ...nativeTracePayload(opts.traceInsns, opts.traceFrom, opts.traceWatch),
   };
 }

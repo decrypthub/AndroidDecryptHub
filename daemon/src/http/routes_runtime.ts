@@ -8,7 +8,7 @@ import { traceDigest } from '../trace_digest.ts';
 import { syscallDigest } from '../syscall_digest.ts';
 import { javaTraceStart, javaTraceDigest, javaTraceStop } from '../java_trace.ts';
 import { nativeHookAll, nativeUnhookAll } from '../native_hook_all.ts';
-import { normalizeThrottleMs, parseMemWindows } from '../native_hook_args.ts';
+import { normalizeThrottleMs, nativeObservationPayload, ensureNativeObservationSupport, parseMemWindows } from '../native_hook_args.ts';
 import { agentPing, hookEngineSelftest, protocolSelfTest } from '../agent_probe.ts';
 import { listDeviceDir, readDeviceFile } from '../fs_browse.ts';
 import { listSandboxDir, readSandboxFile } from '../sandbox_fs.ts';
@@ -85,7 +85,7 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
       catch (e) { return send(504, { error: (e as Error).message }); }
     } },    { method: 'POST', path: '/api/native/hook', handler: async () => {
       const body = await readBody(req);
-      const { session, action, hookId, mode, module, symbol, addr, skipOriginal, returnValue, argIndex, argValue, confirm, hard, sites, scope, slotsWritable, backtrace, throttleMs, mem } = JSON.parse(body || '{}');
+      const { session, action, hookId, mode, module, symbol, addr, skipOriginal, returnValue, argIndex, argValue, confirm, hard, sites, scope, slotsWritable, backtrace, throttleMs, mem, maxEvents, sampleEvery, tid, returnAddress } = JSON.parse(body || '{}');
       const sid = pickSid(session);
       if (!sid || !action) return send(400, { error: 'need session, action' });
       if (mode === 'inline' && addr && confirm !== true) return send(400, { error: 'native_hook inline addr requires confirm:true' });
@@ -101,10 +101,13 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
       const throttle = parseThrottleMs(throttleMs);
       if ('error' in throttle) return send(400, { error: throttle.error });
       let memSpec = '';
+      let observation: Record<string, string | number> = {};
       if (action === 'hook') {
         const parsed = parseMemSpec(mem);
         if ('error' in parsed) return send(400, { error: parsed.error });
         memSpec = parsed.spec;
+        try { observation = await ensureNativeObservationSupport(sid, { maxEvents, sampleEvery, tid, returnAddress }, sendCmd); }
+        catch (e) { return send(400, { error: (e as Error).message }); }
       }
       try {
         const r = await sendCmd(sid, 'native_hook', {
@@ -113,6 +116,7 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
           backtrace: backtrace ? 'true' : 'false',
           throttleMs: throttle.ms,
           mem: memSpec,
+          ...observation,
           argIndex: Number(argIndex ?? -1), argValue: argValue ?? '', hard: hard ? 'true' : 'false',
           sites: Number(sites ?? 0),
           scope: typeof scope === 'string' ? scope : '',
@@ -171,7 +175,7 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
     } },
     { method: 'POST', path: '/api/native/hook_all', handler: async () => {
       const body = await readBody(req);
-      const { session, action, module, prefix, contains, exact, exclude, limit, backtrace, skipOriginal, returnValue, argIndex, argValue, hookIds, confirm, throttleMs } = JSON.parse(body || '{}');
+      const { session, action, module, prefix, contains, exact, exclude, limit, backtrace, skipOriginal, returnValue, argIndex, argValue, hookIds, confirm, throttleMs, maxEvents, sampleEvery, tid, returnAddress } = JSON.parse(body || '{}');
       const sid = pickSid(session);
       if (!sid || !action) return send(400, { error: 'need session, action' });
       try {
@@ -180,7 +184,9 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
         if (confirm !== true) return send(400, { error: 'native_hook_all requires confirm:true (it installs inline hooks in the target)' });
         const throttle = parseThrottleMs(throttleMs);
         if ('error' in throttle) return send(400, { error: throttle.error });
-        return send(200, await nativeHookAll(sid, { module, prefix, contains, exact, exclude, limit, backtrace, throttleMs: throttle.ms, skipOriginal, returnValue, argIndex, argValue }));
+        try { nativeObservationPayload({ maxEvents, sampleEvery, tid, returnAddress }); }
+        catch (e) { return send(400, { error: (e as Error).message }); }
+        return send(200, await nativeHookAll(sid, { module, prefix, contains, exact, exclude, limit, backtrace, throttleMs: throttle.ms, skipOriginal, returnValue, argIndex, argValue, maxEvents, sampleEvery, tid, returnAddress }));
       } catch (e) { return send(502, { error: (e as Error).message }); }
     } },
     { method: 'POST', path: '/api/java/trace', handler: async () => {

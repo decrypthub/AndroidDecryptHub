@@ -198,6 +198,11 @@ struct QInsn { unsigned long long addr; char text[56]; };
 // Standalone collection buffer. Kept for the command-thread path only: an in-hook run fills a small
 // summary instead, because 512 KB of static array is not something to hand to every target thread.
 static struct QInsn g_qtrace[QTRACE_MAX];
+// Allocated only by an explicit paged command (<=4 MiB), never on a target hook thread.
+// No instruction analysis/index lives here: the Host drains and persists the record.
+static struct QInsn *g_paged = NULL;
+static int g_paged_count = 0;
+static unsigned long long g_paged_id = 0;
 
 // Hard bound for the standalone path. The collector cap alone never stopped execution.
 #define ADH_QTRACE_BUDGET 200000
@@ -227,7 +232,7 @@ struct RunCtx {
     unsigned long long seen;
     unsigned long long last_pc;
     unsigned long long runaway_pc;
-    int budget_hit, time_hit, runaway, returned, capped;
+    int budget_hit, time_hit, runaway, returned, capped, text_clipped;
     // Standalone sink.
     struct QInsn *insns;
     int max_insns;
@@ -248,7 +253,7 @@ static void sanitize_text(char *dst, size_t cap, const char *src) {
     if (src) {
         for (; src[o] && o + 1 < cap; o++) {
             unsigned char ch = (unsigned char)src[o];
-            dst[o] = (ch < 0x20 || ch >= 0x7f) ? ' ' : (char)ch;
+            dst[o] = (ch < 0x20 || ch >= 0x7f || ch == '"' || ch == '\\') ? ' ' : (char)ch;
         }
     }
     dst[o] = 0;
@@ -281,7 +286,6 @@ static VMAction run_step(struct RunCtx *c, VMInstanceRef vm) {
         c->budget_hit = 1;
         return QBDI_STOP;
     }
-    c->seen++;
     // Wall clock, checked every 256 instructions: clock_gettime per instruction would dominate the
     // trace itself. A run shorter than that cannot be slow enough to matter.
     if (c->deadline_ms && (c->seen & 0xff) == 0 && monotonic_ms() >= c->deadline_ms) {
@@ -310,6 +314,7 @@ static VMAction run_step(struct RunCtx *c, VMInstanceRef vm) {
         }
         c->last_pc = pc;
     }
+    c->seen++;
     if (c->sum) {
         // QBDI's disassembly text starts with a space ("  ldr x0, [x1, #8]"), so every consumer here
         // trims before using it: taking the first token of the raw string yields an EMPTY mnemonic,
@@ -341,6 +346,7 @@ static VMAction run_step(struct RunCtx *c, VMInstanceRef vm) {
             struct QInsn *r = &c->insns[c->n_insns++];
             r->addr = pc;
             const char *s = a && a->disassembly ? a->disassembly : (a && a->mnemonic ? a->mnemonic : "");
+            if (!pc || !s[0] || strlen(s) >= sizeof(r->text)) c->text_clipped++;
             sanitize_text(r->text, sizeof(r->text), s);
         }
     }
@@ -537,10 +543,11 @@ static VMAction qbdi_watch_cb(VMInstanceRef vm, GPRState *gpr, FPRState *fpr, vo
 
 int adh_qbdi_watch_json(const qbdi_watch_t *w, char *out, size_t cap) {
     if (!w || !out || cap < 64) return -1;
-    int n = snprintf(out, cap, "{\"lo\":\"0x%llx\",\"hi\":\"0x%llx\",\"count\":%d,\"truncated\":%s%s%s",
+    char error[sizeof(w->error)]; sanitize_text(error, sizeof(error), w->error);
+    int n = snprintf(out, cap, "{\"lo\":\"0x%llx\",\"hi\":\"0x%llx\",\"count\":%d,\"truncated\":%s%s%s%s",
                      (unsigned long long)w->lo, (unsigned long long)w->hi, w->count,
                      w->truncated ? "true" : "false",
-                     w->error[0] ? ",\"error\":\"" : "", w->error[0] ? w->error : "");
+                     error[0] ? ",\"error\":\"" : "", error, error[0] ? "\"" : "");
     if (n < 0 || (size_t)n >= cap) return -1;
     size_t off = (size_t)n;
     if (w->count > 0) {
@@ -740,13 +747,13 @@ int adh_qbdi_summary_json(const qbdi_summary_t *s, char *out, size_t cap) {
     if (errbuf[0]) {
         // Why there is no run is part of the answer: "did-not-run" without a reason is a dead end.
         n = snprintf(out, cap,
-                     "{\"insns\":%d,\"seen\":%d,\"stopReason\":\"%s\",\"start\":\"0x%llx\",\"stopPc\":\"0x%llx\","
+                     "{\"execution\":\"replay\",\"coverage\":\"instrumented-module\",\"contextComplete\":false,\"insns\":%d,\"seen\":%d,\"stopReason\":\"%s\",\"start\":\"0x%llx\",\"stopPc\":\"0x%llx\","
                      "\"capped\":%s,\"error\":\"%s\",\"mnemonics\":[",
                      s->insns, s->seen, reason, (unsigned long long)s->start_pc,
                      (unsigned long long)s->stop_pc, s->capped ? "true" : "false", errbuf);
     } else {
         n = snprintf(out, cap,
-                     "{\"insns\":%d,\"seen\":%d,\"stopReason\":\"%s\",\"start\":\"0x%llx\",\"stopPc\":\"0x%llx\","
+                     "{\"execution\":\"replay\",\"coverage\":\"instrumented-module\",\"contextComplete\":false,\"insns\":%d,\"seen\":%d,\"stopReason\":\"%s\",\"start\":\"0x%llx\",\"stopPc\":\"0x%llx\","
                      "\"capped\":%s,\"mnemonics\":[",
                      s->insns, s->seen, reason, (unsigned long long)s->start_pc,
                      (unsigned long long)s->stop_pc, s->capped ? "true" : "false");
@@ -775,7 +782,7 @@ int adh_qbdi_summary_json(const qbdi_summary_t *s, char *out, size_t cap) {
 compact:
     // The instruction list is the part worth showing even when the whole object does not fit: a
     // clipped trace must arrive with the counts it kept, not as a broken record.
-    n = snprintf(out, cap, "{\"insns\":%d,\"seen\":%d,\"stopReason\":\"%s\",\"start\":\"0x%llx\","
+    n = snprintf(out, cap, "{\"execution\":\"replay\",\"coverage\":\"instrumented-module\",\"contextComplete\":false,\"insns\":%d,\"seen\":%d,\"stopReason\":\"%s\",\"start\":\"0x%llx\","
                            "\"stopPc\":\"0x%llx\",\"capped\":true,\"clipped\":true}",
                  s->insns, s->seen, reason, (unsigned long long)s->start_pc, (unsigned long long)s->stop_pc);
     return (n > 0 && (size_t)n < cap) ? n : -1;
@@ -785,7 +792,8 @@ compact:
 
 // Trace `func` (invoked with no args) via QBDI. Writes JSON FIELDS (no outer braces)
 // into out — the caller wraps them in the cmdResult object. Returns insn count / -1.
-int adh_qbdi_trace(void *func, const unsigned long long *args, int argc, char *out, int outsz) {
+static int trace_collect(void *func, const unsigned long long *args, int argc, char *out, int outsz,
+                          int paged, int budget, int time_ms, int capacity) {
     // Refuse a target that still carries one of our own inline patches. A SOFT unhook leaves the
     // Dobby branch in the prologue by design (that is what makes reactivation free), so the first
     // bytes QBDI sees are a jump into the hook trampoline in an anonymous executable page. QBDI
@@ -812,6 +820,10 @@ int adh_qbdi_trace(void *func, const unsigned long long *args, int argc, char *o
         return -1;
     }
     struct ExecMap *map = exec_map_for((unsigned long long)(uintptr_t)func);
+    if (paged && (!map || map->n == 0 || !exec_contains(map, (unsigned long long)(uintptr_t)func))) {
+        snprintf(out, outsz, "\"ok\":false,\"error\":\"paged trace needs an executable mapping snapshot covering the entry\"");
+        return -1;
+    }
     struct QbdiApi api;
     char apierr[128];
     if (!api_load(&api, "libQBDI.so", apierr, sizeof(apierr))) {
@@ -822,10 +834,10 @@ int adh_qbdi_trace(void *func, const unsigned long long *args, int argc, char *o
     memset(&ctx, 0, sizeof(ctx));
     ctx.api = &api;
     ctx.map = map;
-    ctx.budget = ADH_QTRACE_BUDGET;
-    ctx.deadline_ms = monotonic_ms() + ADH_QTRACE_TIME_MS;
-    ctx.insns = g_qtrace;
-    ctx.max_insns = QTRACE_MAX;
+    ctx.budget = budget;
+    ctx.deadline_ms = monotonic_ms() + (unsigned long long)time_ms;
+    ctx.insns = paged ? g_paged : g_qtrace;
+    ctx.max_insns = capacity;
 
     VMInstanceRef vm = NULL;
     api.initVM(&vm, NULL, NULL, (Options)0);
@@ -850,19 +862,20 @@ int adh_qbdi_trace(void *func, const unsigned long long *args, int argc, char *o
         api.alignedFree(stack); api.terminateVM(vm); (void)dlclose(api.handle); return -1;
     }
     rword ret = 0;
+    bool called = false;
     if (argc < 0) argc = 0;
     if (argc > 8) argc = 8;
     t_qbdi_depth++;
     switch (argc) {
-        case 0: api.call(vm, &ret, (rword)(uintptr_t)func, 0); break;
-        case 1: api.call(vm, &ret, (rword)(uintptr_t)func, 1, (rword)args[0]); break;
-        case 2: api.call(vm, &ret, (rword)(uintptr_t)func, 2, (rword)args[0], (rword)args[1]); break;
-        case 3: api.call(vm, &ret, (rword)(uintptr_t)func, 3, (rword)args[0], (rword)args[1], (rword)args[2]); break;
-        case 4: api.call(vm, &ret, (rword)(uintptr_t)func, 4, (rword)args[0], (rword)args[1], (rword)args[2], (rword)args[3]); break;
-        case 5: api.call(vm, &ret, (rword)(uintptr_t)func, 5, (rword)args[0], (rword)args[1], (rword)args[2], (rword)args[3], (rword)args[4]); break;
-        case 6: api.call(vm, &ret, (rword)(uintptr_t)func, 6, (rword)args[0], (rword)args[1], (rword)args[2], (rword)args[3], (rword)args[4], (rword)args[5]); break;
-        case 7: api.call(vm, &ret, (rword)(uintptr_t)func, 7, (rword)args[0], (rword)args[1], (rword)args[2], (rword)args[3], (rword)args[4], (rword)args[5], (rword)args[6]); break;
-        default: api.call(vm, &ret, (rword)(uintptr_t)func, 8, (rword)args[0], (rword)args[1], (rword)args[2], (rword)args[3], (rword)args[4], (rword)args[5], (rword)args[6], (rword)args[7]); break;
+        case 0: called = api.call(vm, &ret, (rword)(uintptr_t)func, 0); break;
+        case 1: called = api.call(vm, &ret, (rword)(uintptr_t)func, 1, (rword)args[0]); break;
+        case 2: called = api.call(vm, &ret, (rword)(uintptr_t)func, 2, (rword)args[0], (rword)args[1]); break;
+        case 3: called = api.call(vm, &ret, (rword)(uintptr_t)func, 3, (rword)args[0], (rword)args[1], (rword)args[2]); break;
+        case 4: called = api.call(vm, &ret, (rword)(uintptr_t)func, 4, (rword)args[0], (rword)args[1], (rword)args[2], (rword)args[3]); break;
+        case 5: called = api.call(vm, &ret, (rword)(uintptr_t)func, 5, (rword)args[0], (rword)args[1], (rword)args[2], (rword)args[3], (rword)args[4]); break;
+        case 6: called = api.call(vm, &ret, (rword)(uintptr_t)func, 6, (rword)args[0], (rword)args[1], (rword)args[2], (rword)args[3], (rword)args[4], (rword)args[5]); break;
+        case 7: called = api.call(vm, &ret, (rword)(uintptr_t)func, 7, (rword)args[0], (rword)args[1], (rword)args[2], (rword)args[3], (rword)args[4], (rword)args[5], (rword)args[6]); break;
+        default: called = api.call(vm, &ret, (rword)(uintptr_t)func, 8, (rword)args[0], (rword)args[1], (rword)args[2], (rword)args[3], (rword)args[4], (rword)args[5], (rword)args[6], (rword)args[7]); break;
     }
     t_qbdi_depth--;
     int n = ctx.n_insns;
@@ -884,15 +897,29 @@ int adh_qbdi_trace(void *func, const unsigned long long *args, int argc, char *o
     // when the VM was halted. `stopReason` is the fact the caller acts on.
     const char *stop_reason = ctx.runaway ? "ran-away"
                              : ctx.time_hit ? "time-budget"
-                             : ctx.budget_hit ? "instruction-budget" : "completed";
-    int retval_valid = !ctx.runaway && !ctx.budget_hit && !ctx.time_hit;
+                             : ctx.budget_hit ? "instruction-budget"
+                             : !called || ctx.seen == 0 ? "did-not-run" : "completed";
+    int retval_valid = called && ctx.seen > 0 && !ctx.runaway && !ctx.budget_hit && !ctx.time_hit;
+    if (paged) {
+        g_paged_count = n;
+        snprintf(out, outsz,
+            "\"ok\":%s,\"traceId\":%llu,\"execution\":\"active-call\",\"virtualStack\":true,"
+            "\"coverage\":\"instrumented-module\",\"complete\":%s,\"retval\":%llu,\"retvalHex\":\"0x%llx\",\"retvalValid\":%s,"
+            "\"stopReason\":\"%s\",\"stopPc\":\"0x%llx\",\"budget\":%d,\"timeBudgetMs\":%d,"
+            "\"count\":%d,\"seen\":%llu,\"cap\":%d,\"truncated\":%s,\"textTruncatedCount\":%d",
+            ctx.seen ? "true" : "false", g_paged_id, retval_valid && !ctx.capped && !ctx.text_clipped ? "true" : "false",
+            (unsigned long long)ret, (unsigned long long)ret, retval_valid ? "true" : "false", stop_reason,
+            ctx.runaway ? ctx.runaway_pc : ctx.last_pc, budget, time_ms, n, ctx.seen,
+            capacity, ctx.capped ? "true" : "false", ctx.text_clipped);
+        return n;
+    }
     int o = snprintf(out, outsz,
                      "\"ok\":true,\"retval\":%llu,\"retvalValid\":%s,\"stopReason\":\"%s\","
                      "\"stopPc\":\"0x%llx\",\"budget\":%d,\"timeBudgetMs\":%d,\"execRanges\":%d,"
                      "\"count\":%d,\"seen\":%d,\"cap\":%d,\"truncated\":%s,\"insns\":[",
                      (unsigned long long)ret, retval_valid ? "true" : "false", stop_reason,
                      ctx.runaway_pc, ADH_QTRACE_BUDGET, ADH_QTRACE_TIME_MS, map ? map->n : 0,
-                     fits, n, QTRACE_MAX, truncated ? "true" : "false");
+                     fits, (int)ctx.seen, QTRACE_MAX, truncated ? "true" : "false");
     if (o < 0 || o >= outsz) {
         snprintf(out, (size_t)(outsz > 0 ? outsz : 0), "\"ok\":false,\"error\":\"trace reply buffer too small for the header\"");
         return -1;
@@ -902,7 +929,7 @@ int adh_qbdi_trace(void *func, const unsigned long long *args, int argc, char *o
         o += snprintf(out + o, outsz - o, "%s{\"addr\":\"%llx\",\"text\":\"%s\"}", i ? "," : "", g_qtrace[i].addr, g_qtrace[i].text);
     if (emitted < fits) truncated = 1;                // belt and braces: the array is the truth
     if (emitted < fits) {
-        char fix[64];
+        char fix[160];
         const char *at = strstr(out, "\"count\":");
         if (at) {
             char *list = strstr((char *)at, "\"insns\":[");
@@ -918,4 +945,50 @@ int adh_qbdi_trace(void *func, const unsigned long long *args, int argc, char *o
     }
     snprintf(out + o, outsz - o, "]");
     return emitted;
+}
+
+int adh_qbdi_trace(void *func, const unsigned long long *args, int argc, char *out, int outsz) {
+    return trace_collect(func, args, argc, out, outsz, 0, ADH_QTRACE_BUDGET, ADH_QTRACE_TIME_MS, QTRACE_MAX);
+}
+
+int adh_qbdi_trace_paged(void *func, const unsigned long long *args, int argc,
+                         int budget, int time_ms, int capacity, char *out, int outsz) {
+    if (!budget) budget = ADH_QTRACE_BUDGET;
+    if (!time_ms) time_ms = ADH_QTRACE_TIME_MS;
+    if (!capacity) capacity = 65536;
+    if (budget < 1 || budget > 1000000 || time_ms < 1 || time_ms > 10000 || capacity < 1 || capacity > 65536) {
+        snprintf(out, outsz, "\"ok\":false,\"error\":\"budget 1..1000000, timeMs 1..10000, capacity 1..65536 required\"");
+        return -1;
+    }
+    struct QInsn *next = calloc((size_t)capacity, sizeof(*next));
+    if (!next) { snprintf(out, outsz, "\"ok\":false,\"error\":\"trace allocation failed\""); return -1; }
+    free(g_paged); g_paged = next; g_paged_count = 0; g_paged_id++;
+    int result = trace_collect(func, args, argc, out, outsz, 1, budget, time_ms, capacity);
+    if (result < 0) { free(g_paged); g_paged = NULL; g_paged_count = 0; }
+    return result;
+}
+
+int adh_qbdi_read(unsigned long long trace_id, int offset, int limit, int release, char *out, int outsz) {
+    if (!g_paged || !trace_id || trace_id != g_paged_id) {
+        snprintf(out, outsz, "\"ok\":false,\"error\":\"trace expired, released or replaced; do not join pages from different runs\""); return -1;
+    }
+    if (release) {
+        free(g_paged); g_paged = NULL; g_paged_count = 0;
+        return snprintf(out, outsz, "\"ok\":true,\"released\":true,\"traceId\":%llu", trace_id);
+    }
+    if (offset < 0 || offset > g_paged_count || limit < 1 || limit > 128) {
+        snprintf(out, outsz, "\"ok\":false,\"error\":\"offset outside recording or limit outside 1..128\""); return -1;
+    }
+    int end = offset + limit; if (end > g_paged_count) end = g_paged_count;
+    int o = snprintf(out, outsz, "\"ok\":true,\"traceId\":%llu,\"offset\":%d,\"nextOffset\":%d,\"total\":%d,\"insns\":[",
+        trace_id, offset, end, g_paged_count);
+    for (int i = offset; i < end; i++) {
+        int n = snprintf(out + o, (size_t)(outsz - o), "%s{\"seq\":%d,\"addr\":\"0x%llx\",\"text\":\"%s\"}",
+            i == offset ? "" : ",", i, g_paged[i].addr, g_paged[i].text);
+        if (n < 0 || n >= outsz - o - 2) {
+            snprintf(out, outsz, "\"ok\":false,\"error\":\"trace page does not fit\""); return -1;
+        }
+        o += n;
+    }
+    return o + snprintf(out + o, (size_t)(outsz - o), "]");
 }

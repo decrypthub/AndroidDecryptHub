@@ -470,6 +470,28 @@ static int module_path_matches(const char *path, const char *wanted) {
     return strcmp(bn, wanted) == 0;
 }
 
+// Resolve an exact-module GOT slot WITHOUT publishing a replacement. Multiple matches are an
+// error before any target pointer changes, rather than a half-installed multi-module hook.
+int adh_got_unique_slot(const char *module, const char *symbol, void **slot_out, void **value_out) {
+    if (slot_out) *slot_out=NULL;
+    if (value_out) *value_out=NULL;
+    FILE *maps=fopen("/proc/self/maps","r"); if (!maps) return -1;
+    char line[512], previous[400]=""; int count=0; void *found=NULL;
+    while(fgets(line,sizeof(line),maps)) {
+        unsigned long long start=0,end=0,off=0,inode=0; char perms[8],dev[16],path[400]="";
+        if(sscanf(line,"%llx-%llx %7s %llx %15s %llu %399[^\n]",&start,&end,perms,&off,dev,&inode,path)<7) continue;
+        char *p=path; while(*p==' ')p++;
+        if(!module_path_matches(p,module)||strcmp(p,previous)==0)continue;
+        snprintf(previous,sizeof(previous),"%s",p);
+        unsigned long long base=module_base_of(p); if(!base)continue;
+        void *slot=find_reloc_slot_by_symbol(base,symbol);
+        if(slot&&slot!=found){count++;found=slot;}
+    }
+    fclose(maps);
+    if(count==1){if(slot_out)*slot_out=found;if(value_out)*value_out=*(void **)found;}
+    return count;
+}
+
 // Same module-scan shape as got_replace, but resolves the slot by symbol name instead of by
 // value — works for symbols whose PLT slot hasn't been lazily bound yet. Returns the number
 // of matching modules actually replaced; the first replaced slot's address and previous value

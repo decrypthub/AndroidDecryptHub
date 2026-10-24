@@ -106,7 +106,7 @@ const slotsRestored = await readHex(vtable, 16);
 const slotReadsRestored = [];
 for (const sl of slots) slotReadsRestored.push(await readHex(sl.at, 8));
 const rs2 = await regions();
-const pagesGone = rs2.length > 0 && slots.every((s) => mappingOf(rs2, s.thunk) == null);
+const pagesRetained = rs2.length > 0 && slots.every((s) => mappingOf(rs2, s.thunk) != null && !String(mappingOf(rs2, s.thunk).perms).includes('w'));
 const probeAfter = Number(await jc('slotProbe'));
 const alive = pidOfSandbox().length > 0;
 
@@ -129,7 +129,7 @@ const pass =
   vtableSlot.orig === fn &&
   audit.entryBranchesOutside === false &&
   thunkPaths.every((p) => /^\/memfd:jit-cache/.test(p)) &&
-  unhook.ok === true && slotsRestored === slotsBefore && pagesGone && probeAfter === 84 &&
+  unhook.ok === true && slotsRestored === slotsBefore && pagesRetained && probeAfter === 84 &&
   alive;
 
 console.log(JSON.stringify({
@@ -142,7 +142,7 @@ console.log(JSON.stringify({
   probeHooked, hitsAfterIndirect, directStill, hits, slotReadsAfter, slotReadsRestored,
   auditView: { prologueDiffers: audit.prologueDiffers, entryBranchesOutside: audit.entryBranchesOutside,
                note: 'the audit reads the symbol through the patched GOT slot; the direct 24-byte read above is the code truth' },
-  thunkPaths, unhook: unhook.ok, slotsRestored, pagesGone, probeAfter, alive,
+  thunkPaths, unhook: unhook.ok, slotsRestored, pagesRetained, probeAfter, alive,
 }));
 console.log(pass ? 'RESULT:PASS' : 'RESULT:FAIL');
 EOF

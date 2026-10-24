@@ -10,7 +10,8 @@
 #include "qbdi_trace.h"
 
 void adh_cmd_qbdi_trace(int fd, const char *id, const char *symbol_library,
-                        const char *symbol, const char *args_csv, const char *addr_hex) {
+                        const char *symbol, const char *args_csv, const char *addr_hex,
+                        int paged, int budget, int time_ms, int capacity) {
     // The caller names either a library+symbol, or an absolute ADDRESS. A fixture name must never
     // be baked in here: the agent runs in arbitrary targets, so a hardcoded module/symbol is a
     // coupling bug AND a signature the target can read straight out of our own memory. The address
@@ -79,14 +80,15 @@ void adh_cmd_qbdi_trace(int fd, const char *id, const char *symbol_library,
         send_oom(fd, idj, "qbdi_trace");
         return;
     }
-    trace[0] = 0;
-    adh_qbdi_trace(function, args, argc, trace, (1 << 18) - 64);
     char *message = malloc((1 << 18) + 128);
     if (!message) {
         free(trace);
         send_oom(fd, idj, "qbdi_trace");
         return;
     }
+    trace[0] = 0;
+    if (paged) adh_qbdi_trace_paged(function, args, argc, budget, time_ms, capacity, trace, (1 << 18) - 64);
+    else adh_qbdi_trace(function, args, argc, trace, (1 << 18) - 64);
     snprintf(message, (1 << 18) + 128,
              "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"qbdi_trace\",%s}\n",
              idj, trace);
@@ -94,4 +96,13 @@ void adh_cmd_qbdi_trace(int fd, const char *id, const char *symbol_library,
     free(message);
     free(trace);
     LOGI("qbdi_trace %s -> done", target_symbol);
+}
+
+void adh_cmd_qbdi_read(int fd, const char *id, unsigned long long trace_id, int offset, int limit, int release) {
+    char idj[64]; json_escape(id, idj, sizeof(idj));
+    char *body = malloc(24576), *message = malloc(24832);
+    if (!body || !message) { free(body); free(message); send_oom(fd, idj, "qbdi_read"); return; }
+    adh_qbdi_read(trace_id, offset, limit, release, body, 24576);
+    snprintf(message, 24832, "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"qbdi_read\",%s}\n", idj, body);
+    send_line(fd, message); free(message); free(body);
 }

@@ -47,6 +47,7 @@ struct site_entry {
     unsigned int orig;       // original instruction word
     void *thunk;             // this site's thunk
     void *page;              // this site's thunk page (memfd, r-x)
+    int exposed;            // publication attempted: never unmap/reuse this page before process exit
     char mod[96];            // basename of the module that owns the call site
 };
 
@@ -55,6 +56,8 @@ struct site_ctx {
     int count;
     void *target;
     int page_kept;           // a site page had to stay mapped (thread was inside a thunk)
+    int retired;
+    int patches_restored;
     long long scanned;       // bytes actually scanned
     int truncated;           // the byte budget stopped the scan early
     struct site_entry sites[ADH_SITE_MAX_SITES];
@@ -70,7 +73,6 @@ struct mod_range { unsigned long long start, end; int exec, read; int is_file; c
 
 // ---- AArch64 encoders (verified against llvm-mc) ----------------------------------------
 static unsigned int enc_sub_sp(int imm) { return 0xD1000000u | ((unsigned)imm << 10) | (31u << 5) | 31u; }
-static unsigned int enc_add_sp(int imm) { return 0x91000000u | ((unsigned)imm << 10) | (31u << 5) | 31u; }
 static unsigned int enc_mov_sp_to_x0(void) { return 0x91000000u | (31u << 5) | 0u; }
 static unsigned int enc_stp_x(int rt, int rt2, int rn, int off) {
     return 0xA9000000u | (((unsigned)(off / 8) & 0x7Fu) << 15) | ((unsigned)rt2 << 10) | ((unsigned)rn << 5) | (unsigned)rt;
@@ -96,7 +98,6 @@ static unsigned int enc_ldr_lit(int rt, int at_idx, int lit_idx) {
     return 0x58000000u | (((unsigned)imm19 & 0x7FFFFu) << 5) | (unsigned)rt;
 }
 static const unsigned int kBlrX16 = 0xD63F0200u;
-static const unsigned int kRet = 0xD65F03C0u;
 static unsigned int enc_cbnz_x(int rt, int at_idx, int target_idx) {
     int imm19 = target_idx - at_idx;
     return 0xB5000000u | (((unsigned)imm19 & 0x7FFFFu) << 5) | (unsigned)rt;
@@ -153,22 +154,28 @@ static int emit_thunk(unsigned int *c, int cap, void *recorder, void *original, 
     const int skip_block = n;
     c[n++] = enc_ldr_x(0, 31, FR_X0);            // skip path: the recorder wrote the answer into the frame
     const int epilogue = n;
-    c[n++] = enc_ldr_x(30, 31, FR_X29 + 8);      // restore the return address this thunk must use
-    c[n++] = enc_add_sp(FR_FRAME);
-    c[n++] = kRet;
+    // Leave the disposable page BEFORE releasing the whole-invocation lease. A C callback that
+    // returned here after decrementing the counter would still have a live PC in this page.
+    c[n++] = enc_movz_x(16, (unsigned)hook_slot);
+    const int lit3 = n; c[n++] = 0;
+    c[n++] = 0xD61F0220u;                       // br x17 -> resident agent epilogue
     // 64-bit literals, 8-byte aligned. Check the room instead of trusting the current count.
-    if (n + 6 > cap) return 0;
+    if (n + 8 > cap) return 0;
     while (n & 1) c[n++] = 0xD503201Fu;          // nop padding keeps the pool 8-byte aligned
-    if (n + 4 > cap) return 0;
+    if (n + 6 > cap) return 0;
     const int pool = n;
     uint64_t rec = (uint64_t)(uintptr_t)recorder;
     uint64_t org = (uint64_t)(uintptr_t)original;
+    uint64_t leave = (uint64_t)(uintptr_t)&adh_native_site_epilogue;
     c[n++] = (unsigned)(rec & 0xFFFFFFFFu);
     c[n++] = (unsigned)(rec >> 32);
     c[n++] = (unsigned)(org & 0xFFFFFFFFu);
     c[n++] = (unsigned)(org >> 32);
+    c[n++] = (unsigned)(leave & 0xFFFFFFFFu);
+    c[n++] = (unsigned)(leave >> 32);
     c[lit1] = enc_ldr_lit(16, lit1, pool);
     c[lit2] = enc_ldr_lit(16, lit2, pool + 2);
+    c[lit3] = enc_ldr_lit(17, lit3, pool + 4);
     c[skip_branch] = enc_cbnz_x(0, skip_branch, skip_block);
     // NOTE: index math on purpose here. enc_branch() takes BYTE addresses (it patches call sites);
     // passing instruction indices to it emitted a branch to itself and the target spun forever.
@@ -179,6 +186,8 @@ static int emit_thunk(unsigned int *c, int cap, void *recorder, void *original, 
     if ((int)((c[lit1] >> 5) & 0x7FFFFu) != pool - lit1) return 0;
     if ((c[lit2] & 0xFF000000u) != 0x58000000u) return 0;
     if ((int)((c[lit2] >> 5) & 0x7FFFFu) != (pool + 2) - lit2) return 0;
+    if ((c[lit3] & 0xFF000000u) != 0x58000000u) return 0;
+    if ((int)((c[lit3] >> 5) & 0x7FFFFu) != (pool + 4) - lit3) return 0;
     if ((c[skip_branch] & 0xFF000000u) != 0xB5000000u) return 0;
     if ((int)((c[skip_branch] >> 5) & 0x7FFFFu) != skip_block - skip_branch) return 0;
     const unsigned int b_word = c[branch_over_skip];
@@ -481,7 +490,16 @@ int adh_site_hook_apply(int slot, void *target, int max_sites, const char *scope
     }
     char self_module[96] = "";
     module_of_addr(ranges, all_n, (unsigned long long)(uintptr_t)&adh_site_hook_apply, self_module, sizeof(self_module));
-    if ((!scope || !scope[0] || strcmp(scope, "all") == 0) && !self_module[0]) {
+    unsigned long long self_start = 0, self_end = 0;
+    const int self_bounds = adh_self_image_bounds(&self_start, &self_end);
+    // memfd agents are deliberately absent from collect_ranges; a missing basename therefore
+    // does not mean scope=all is unsafe. Exclude our image by identity when the bounds are known.
+    if (self_bounds) {
+        for (int i = 0; i < all_n; i++) {
+            if (ranges[i].start < self_end && ranges[i].end > self_start) ranges[i].is_file = 0;
+        }
+    }
+    if (scope && strcmp(scope, "all") == 0 && !self_module[0] && !self_bounds) {
         // Without our own module name the scanner cannot exclude the agent, and "all" would then be
         // free to rewrite the agent's own calls. Fail loud instead of hooking ourselves.
         free(ranges);
@@ -585,6 +603,7 @@ int adh_site_hook_apply(int slot, void *target, int max_sites, const char *scope
         }
         const int was_bl = (ctx->sites[i].orig & 0xFC000000u) == 0x94000000u;
         unsigned int patched = enc_branch(site, (int64_t)(uintptr_t)thunk, was_bl);
+        ctx->sites[i].exposed = 1;
         if (!adh_patch_code_bytes(ctx->sites[i].at, &patched, 4)) {
             snprintf(error, error_size, "could not patch call site %p (errno=%d)", ctx->sites[i].at, errno);
             break;
@@ -597,21 +616,28 @@ int adh_site_hook_apply(int slot, void *target, int max_sites, const char *scope
         // Rollback: restore what we patched. If a restore FAILS the site still branches into that
         // thunk, so the page must stay mapped (never unmap the landing pad of live code) and the
         // kept page is recorded for status.
-        for (int i = 0; i < done; i++) {
+        int retained = 0, all_restored = 1;
+        for (int i = 0; i < count; i++) {
             int restored = 1;
-            if (ctx->sites[i].at) {
+            if (ctx->sites[i].at && ctx->sites[i].exposed) {
                 restored = adh_patch_code_bytes(ctx->sites[i].at, &ctx->sites[i].orig, 4) &&
                            *ctx->sites[i].at == ctx->sites[i].orig;
             }
-            if (ctx->sites[i].page && restored) {
+            if (ctx->sites[i].page && !ctx->sites[i].exposed) {
                 munmap(ctx->sites[i].page, ADH_SITE_PAGE_LEN);
+                ctx->sites[i].page = NULL;
             } else if (ctx->sites[i].page) {
+                retained++;
                 g_last_kept_page = ctx->sites[i].page;
                 g_last_kept_slot = slot;
             }
+            if (!restored) all_restored = 0;
         }
         pthread_mutex_lock(&g_site_lock);
-        memset(ctx, 0, sizeof(*ctx));
+        if (retained) {
+            ctx->target = target; ctx->count = count; ctx->retired = 1;
+            ctx->page_kept = 1; ctx->patches_restored = all_restored;
+        } else memset(ctx, 0, sizeof(*ctx));
         pthread_mutex_unlock(&g_site_lock);
         free(ranges);
         if (!error[0]) snprintf(error, error_size, "site hook installation aborted after %d/%d sites", done, count);
@@ -622,6 +648,8 @@ int adh_site_hook_apply(int slot, void *target, int max_sites, const char *scope
     ctx->target = target;
     ctx->count = count;
     ctx->page_kept = 0;
+    ctx->retired = 0;
+    ctx->patches_restored = 0;
     pthread_mutex_unlock(&g_site_lock);
     free(ranges);
     SLOGI("site hook installed slot=%d target=%p sites=%d scope=%s scanned=%lld truncated=%d",
@@ -639,9 +667,9 @@ int adh_site_hook_revert(int slot, char *error, size_t error_size) {
         return 0;
     }
     int count = ctx->count;
-    unsigned long long hits_before = adh_native_hook_hits(slot);
     int restored = 0;
     for (int i = 0; i < count; i++) {
+        if (!ctx->sites[i].exposed) continue;
         // Write the original instruction back and prove it landed: a failed restore must never be
         // reported as a clean unhook.
         if (!adh_patch_code_bytes(ctx->sites[i].at, &ctx->sites[i].orig, 4) || *ctx->sites[i].at != ctx->sites[i].orig) {
@@ -651,38 +679,30 @@ int adh_site_hook_revert(int slot, char *error, size_t error_size) {
         }
         restored++;
     }
+    ctx->patches_restored = 1;
+    ctx->retired = 1;
+    ctx->page_kept = 1;
     void *pages[ADH_SITE_MAX_SITES];
     int page_count = 0;
     for (int i = 0; i < count; i++) {
         if (ctx->sites[i].page) pages[page_count++] = ctx->sites[i].page;
     }
-    memset(ctx, 0, sizeof(*ctx));
+    g_last_kept_page=page_count?pages[0]:NULL;g_last_kept_slot=slot;
     pthread_mutex_unlock(&g_site_lock);
 
-    // A thread that already entered a thunk may still be inside it; pages stay mapped until a quiet
-    // window proves otherwise (same policy as the hard unhook quiesce).
-    int quiet = 0;
-    for (int round = 0; round < 80 && !quiet; round++) {
-        unsigned long long before = adh_native_hook_hits(slot);
-        struct timespec ts = { 0, 5 * 1000 * 1000 };
-        nanosleep(&ts, NULL);
-        unsigned long long after = adh_native_hook_hits(slot);
-        if (after == before && round >= 4) quiet = 1;
-        else if (after != before) round = 0;
-    }
-    if (quiet || hits_before == 0) {
-        for (int i = 0; i < page_count; i++) {
-            if (munmap(pages[i], ADH_SITE_PAGE_LEN) != 0) {
-                snprintf(error, error_size, "sites restored but a thunk page could not be unmapped (errno=%d)", errno);
-                return 0;
-            }
-        }
+    // Waiting bounds the user-visible busy verdict only; it is NEVER a reclamation proof.
+    const int quiet = adh_native_hook_wait_quiet(slot, 1500);
+    if (quiet) {
+        // Zero counters cannot exclude a thread paused BEFORE entry++. Keep every exposed RX
+        // page and its immutable context for the process lifetime, even after a quiet window.
     } else {
         pthread_mutex_lock(&g_site_lock);
         g_last_kept_page = page_count ? pages[0] : NULL;
         g_last_kept_slot = slot;
+        ctx->page_kept = 1;
         pthread_mutex_unlock(&g_site_lock);
-        SLOGE("thunk pages kept mapped: hits kept moving during the quiesce window");
+        snprintf(error, error_size, "not-unhooked: call sites restored but a thunk is still in flight after 1500 ms; pages and slot retained, retry later");
+        return 0;
     }
     SLOGI("site hook reverted slot=%d sites=%d quiet=%d", slot, restored, quiet);
     return 1;
@@ -701,6 +721,15 @@ int adh_site_thunk_write(void *page, void *recorder, void *original, int hook_sl
 int adh_site_hook_count(int slot) {
     if (slot < 0 || slot >= ADH_SITE_MAX_SLOTS) return 0;
     return g_site_ctx[slot].count;
+}
+int adh_site_hook_retained_pages(int slot) {
+    if (slot < 0 || slot >= ADH_SITE_MAX_SLOTS) return 0;
+    int n = 0;
+    for (int i=0; i<g_site_ctx[slot].count; i++) if (g_site_ctx[slot].sites[i].page) n++;
+    return n;
+}
+int adh_site_hook_patches_restored(int slot) {
+    return slot >= 0 && slot < ADH_SITE_MAX_SLOTS && g_site_ctx[slot].patches_restored;
 }
 
 void *adh_site_hook_page(int slot) {

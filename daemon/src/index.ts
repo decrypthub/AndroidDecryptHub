@@ -12,6 +12,7 @@ import {
 }
 from './state.ts';
 import type { AgentMsg, AgentSession } from './state.ts';
+import { normalizeStarttimeTicks } from './proc_identity.ts';
 
 // ---- Agent TCP server (NDJSON) -------------------------------------------
 
@@ -44,6 +45,7 @@ const agentServer = net.createServer((sock) => {
         sessionId: id,
         pid: msg.pid ?? 0,
         uid: msg.uid ?? 0,
+        starttimeTicks: normalizeStarttimeTicks(msg.starttimeTicks),
         package: msg.package ?? '?',
         process: msg.process ?? msg.package ?? '?',
         abi: msg.abi ?? '?',
