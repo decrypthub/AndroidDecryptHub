@@ -10,6 +10,10 @@
 
 ## 0. 核心原则（架构红线）
 
+2026-10-24 接入补充：Host `analysis_guide.ts` 提供可查询的工作流模板及 MCP 初始化说明，
+让远程 Agent 无需读仓库即可选择真实写入/证据核验/有界追踪/卡点诊断路线。指南只返回元数据，
+不自动运行工具、不把分析流程放进 Agent/Device。可达性验收走实际 `adh mcp` stdio 代理。
+
 2026-10-24 补充：模块 E/I/V 本轮采用同一分层：Agent 有界采集分页指令与观察计数，
 Host 的 `trace_store.ts` / `crypto_evidence.ts` 负责持久化、查询、参数分组和分析；
 `runtime_diagnostics.ts` / `proc_identity.ts` 负责只读诊断与代际校验。Web 保持只读。

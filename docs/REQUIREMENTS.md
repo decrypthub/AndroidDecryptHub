@@ -34,6 +34,9 @@ MCP 提供 prepare/start/status/read/stop；prepare 要有本机构建的 helper
 
 ## 通用取证补充（2026-10-24，模块 E/I/V）
 
+- MCP 接入必须提供可由远程 Agent 直接获取的入门路线：initialize instructions + `analysis_guide`，
+  包含 start/writer/crypto/trace/stuck 的前置条件、调用顺序、参数模板、变量来源、结果检查与失败分支。
+  指南读取不依赖在线目标或本地仓库、不执行目标操作；模板不得被当作已取得的地址、线程或证据。
 - `native_hook` / `native_hook_all` / `native_look` 同一套观察控制：`tid`、精确入口 `returnAddress`、
   `sampleEvery`、`maxEvents`。过滤决定哪些调用接受改写；抽样、时间节流、总量只限制观察。
   静止时满足 `hits = filtered + selected`、`selected = sampledOut + throttled + limited + emitted`。

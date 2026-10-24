@@ -9,6 +9,9 @@ then queries/stats/slices the stored instructions (active-call, instrumented-mod
 `crypto_evidence.ts` verifies explicitly paired bytes, keeps private raw material on disk and returns
 paged fingerprints/provenance. `runtime_diagnostics.ts` reads root procfs without agent RPC;
 `proc_identity.ts` shares exact PID starttime parsing with `root_watch.ts`. MCP owns their adapters.
+`analysis_guide.ts` owns the MCP initialization instructions and five on-demand workflow guides
+(start/writer/crypto/trace/stuck). It is Host-only metadata: no target calls or repository access
+are required to read it. Tool-call templates are not executed; variables must come from live facts.
 
 | File | Role | Imports |
 |---|---|---|

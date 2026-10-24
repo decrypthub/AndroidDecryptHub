@@ -3,6 +3,30 @@
 > 这是"我们现在在哪"的唯一真相。每个会话开始先读它，结束前更新它。
 > 详细规格见 `REQUIREMENTS.md`，路线与架构见 `DEVELOPMENT_PLAN.md`。
 
+## 2026-10-24（第五十五轮）—— 远程 AI 可发现的入门路线与任务指南
+
+用户询问“有工具描述，AI 直接接入是否会不会用”。实际检查发现 initialize 没有 instructions，
+现有工具描述偏单项参数，仓库中的完整流程不能被远程 MCP 客户端直接查询。
+
+- 新增 Host-only `analysis_guide.ts`：全局接入说明 + start/writer/crypto/trace/stuck 五条路线，
+  提供前置条件、顺序、变量来源、工具调用模板、结果检查与失败分支，不执行任何目标操作。
+- MCP initialize 返回全局说明；新增 `analysis_guide`，无需在线 session 或 root 即可读取。
+  process_list/root_watch/crypto_evidence/trace_session 描述指向对应指南；模板明确要求用现场结果
+  替换 `$variables` 的正确类型，不能猜地址/TID，也不能把线程候选当作写者证明。
+- writer 明示短命 native_call worker 的 TID 不适合作持久观察线程；crypto 给出可实际核验的
+  公开格式示例并区分中间/最终；trace 明示主动调用与 replay 的副作用/覆盖边界；stuck 解释冻结、
+  丢失、过滤、额度与永久退休槽，失败不静默降级。
+- 已从本机安装的正式 `adh mcp --endpoint http://127.0.0.1:8088` 验实际 stdio 代理：
+  **86 工具**、initialize instructions 透传、五条指南均能读取，已有 **6 个在线会话**重连；
+  此测试只读取帮助，没有执行模板里的目标调用，也未改已保存的客户端连接配置。
+- `analysis_guide.test.ts` 5 项通过：初始化/工具发现、离线可读、模板工具/字段/类型约束、
+  真实 handler 核验公开 MD5 格式例、无效 topic 拒绝与模板副本隔离。Host **405/405**、tsc 0；
+  v71 **86 工具/0 问题**；v87 **38 ops 可达/115 文件红线通过**。
+
+日常 Host 已重载本轮源码，日志 `adhd-data/daemon-guide.stdout.log` / `.stderr.log`；
+手机 Agent/模块未更新、未打新 bundle、未发版。MCP 客户端需重新连接刷新工具列表及初始化说明。
+这证明指南能送达实际客户端，未做新 AI 对未知复杂样本的盲解验收，不能承诺任何模型必然正确使用。
+
 ## 2026-10-24（第五十四轮）—— 日常 8088 切换新版，root_watch 现场启用
 
 用户手动启动 `node src/index.ts` 遇到 `EADDRINUSE :8761`。现场确认旧 ADH PID85932
