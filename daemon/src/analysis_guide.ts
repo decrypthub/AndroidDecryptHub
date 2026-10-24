@@ -5,6 +5,8 @@ export type AnalysisGuideTopic = typeof ANALYSIS_GUIDE_TOPICS[number];
 
 export const MCP_INSTRUCTIONS = 'ADH is an Android runtime analysis workbench. Start with analysis_guide(topic="start"), ' +
   'then process_list and capabilities for one explicit session; sessions change after reconnect. ' +
+  'When context is missing, call analysis_guide(action="assess",topic="stuck",session=theSelectedId,hookId=theActualIdIfKnown). ' +
+  'Assessment reads current Host evidence and at most one bounded native-hook status query, then returns facts, missing evidence, one proposed next call and a resumable identifier checkpoint; it installs nothing. ' +
   'Use analysis_guide(topic="writer") to find who writes a known buffer via root_watch; ' +
   'topic="crypto" for paired input/output evidence, "trace" for bounded instruction records, and "stuck" for failures. ' +
   'Guides return ordered tool-call templates, prerequisites, checks and failure branches, without executing target operations. ' +
@@ -36,7 +38,7 @@ const guides: Record<AnalysisGuideTopic, Guide> = {
     steps: [
       { goal: 'Choose the intended process explicitly.', tool: 'process_list', arguments: {}, check: 'Use sessionId, package, process, online and PID; never silently choose another process.' },
       { goal: 'Read capabilities of that running build.', tool: 'capabilities', arguments: { session: '$session' }, check: 'Inspect caps.ops and limits. Different processes may run different agent builds.' },
-      { goal: 'Choose the next route.', tool: 'analysis_guide', arguments: { topic: 'writer' }, check: 'writer: known buffer to real writer; crypto: verify paired bytes; trace: bounded active call; stuck: diagnose failures. Ask for that topic; this example selects writer.' },
+      { goal: 'Assess actual retained evidence without reconstructing the full conversation.', tool: 'analysis_guide', arguments: { action: 'assess', topic: 'start', session: '$session' }, check: 'Read stage/facts/missingEvidence/doNotConclude and the proposed next call. Then choose writer, crypto, trace or stuck for the intended task.' },
     ],
     limits: ['Guidance is not an automatic algorithm solver.', 'No session: diagnose connection/injection setup; do not fabricate a session.', 'Purpose-built recipes are listed by recipe(action="list"); inspect their effects and prerequisites before running one.'],
   },
@@ -94,6 +96,7 @@ const guides: Record<AnalysisGuideTopic, Guide> = {
     prerequisites: ['Retain the explicit session and actual error text; do not guess that every timeout is anti-debugging.'],
     variables: { session: 'Known sessionId, including an offline one for runtime_diagnostics.', hookId: 'id of the hook you actually armed.' },
     steps: [
+      { goal: 'Interpret current counters and retained records first.', tool: 'analysis_guide', arguments: { action: 'assess', topic: 'stuck', session: '$session', hookId: '$hookId' }, check: 'Read facts and missingEvidence. Assessment performs at most one bounded read-only native hook status query; it does not install, drain or trigger anything. A proposed next call is not an executed call.' },
       { goal: 'Inspect process facts independently of the agent channel.', tool: 'runtime_diagnostics', arguments: { session: '$session', limit: 32 }, check: 'Distinguish frozen, traced, process-exited, identity-mismatch, running and unknown. Check errors and completeness of thread paging.' },
       { goal: 'Read stored hook evidence and observation counts.', tool: 'native_look', arguments: { action: 'read', session: '$session', hookId: '$hookId' }, check: 'Distinguish hits=0 from filtered/sampledOut/throttled/limited, stored record loss, drainError and observationError.', onFailure: 'Unknown hook/session: re-list sessions and actual hook status. Do not invent a replacement hookId.' },
       { goal: 'Inspect current physical hook budget when the agent responds.', tool: 'native_hook', arguments: { action: 'status', session: '$session' }, check: 'Non-default new observation controls require observationControlsVersion>=1. Retired slots are not reclaimed by unhook; exhausted 16-slot budget requires a new target process, never an automatic restart.' },

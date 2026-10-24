@@ -3,6 +3,28 @@
 > 这是"我们现在在哪"的唯一真相。每个会话开始先读它，结束前更新它。
 > 详细规格见 `REQUIREMENTS.md`，路线与架构见 `DEVELOPMENT_PLAN.md`。
 
+## 2026-10-24（第五十六轮）—— 从工具说明推进到低上下文状态评估
+
+用户强调其它 AI 不具备本次逆向经历和上下文。新增 Host `analysis_assist.ts`，接入原
+`analysis_guide action=assess`，工具数量仍 **86**。返回 stage/facts/missingEvidence/doNotConclude，
+一条 next 的目的/效果/期望/时机，以及可交给另一 Agent 重跑的标识 checkpoint。
+
+- 显式 session 决定作用域；未知/离线 session 不替选另一进程。当前窗口至多检查最近 64 条引用、
+  健康与丢失元数据，默认不返回原始字节/密钥。checkpoint 不是完整案件历史，重连须重建地址/TID 证据。
+- 必要时仅一次 native_hook status（3 秒预算）；不布防、不 drain、不触发、不上传 helper、不重放/重启。
+  超时和明确拒绝回复分开；零命中、过滤、抽样/额度抑制、在途回调、提交但无保留记录与退休预算分开。
+- writer 地址/TID 明示调用者提供的候选；trace 先验 qbdi_read；密码学边界不因收到 outHex 就认定
+  长度已知。场景测试起初误期望缺长度也应匹配，已纠正：缺独立原始长度应 unavailable；
+  公开 MD5 向量补入独立已知 16 字节后才匹配，采集健康仍未知，未放宽完整性规则。
+
+验证：10 项新场景测试，Host **415/415**、tsc 0；v71 86 工具/0 问题；v87 38 ops 可达、
+116 文件红线通过。通过正式安装的 adh mcp → 日常 8088 实测：无会话返回 choose-session/process_list；
+对原有目标的明确主进程 session 返回 evidence-not-yet-retained，只读查询 1 次、checkpoint 存在、
+executedMutations=false。没有执行建议里的目标操作，没有新增算法结论。
+
+日常 Host 已重载，日志 `adhd-data/daemon-assess.stdout.log` / `.stderr.log`；手机 Agent/模块未改，
+未打 bundle/发版。客户端重新连接刷新 schema；新 AI 对未知复杂样本的盲测仍未做。
+
 ## 2026-10-24（第五十五轮）—— 远程 AI 可发现的入门路线与任务指南
 
 用户询问“有工具描述，AI 直接接入是否会不会用”。实际检查发现 initialize 没有 instructions，

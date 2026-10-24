@@ -12,6 +12,9 @@ paged fingerprints/provenance. `runtime_diagnostics.ts` reads root procfs withou
 `analysis_guide.ts` owns the MCP initialization instructions and five on-demand workflow guides
 (start/writer/crypto/trace/stuck). It is Host-only metadata: no target calls or repository access
 are required to read it. Tool-call templates are not executed; variables must come from live facts.
+`analysis_assist.ts` implements `analysis_guide(action=assess)`: current-session capture references,
+health and at most one bounded read-only hook-status request become a stage, evidence gaps,
+forbidden conclusions, one proposed next call and an identifier checkpoint. No proposal is executed.
 
 | File | Role | Imports |
 |---|---|---|

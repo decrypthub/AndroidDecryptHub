@@ -24,6 +24,23 @@ crypto 中的公开 abc→MD5 只演示参数格式，不能冒充目标证据�
 
 ## 1. 锁定身份，先区分没运行与没观察到
 
+缺少历史上下文时先调用同一入口的状态评估：
+
+```json
+{"action":"assess","topic":"stuck","session":"<实际 sessionId>","hookId":7}
+```
+
+hookId 是可选的，必须替换为当前会话真实编号。没有 session 时返回选目标建议，不替选进程。
+topic 仍为 start/writer/crypto/trace/stuck；writer 可额外提供已观察到的 buffer 和 tid。
+返回 stage/summary、facts/missingEvidence/doNotConclude，以及一条 next 调用的目的、效果、期望和时机。
+checkpoint 可交给另一个 Agent 重跑，但只携带标识参数，不是完整案件历史，不含原始字节/密钥。
+
+评估读取当前会话最近至多 64 条 Host 保留记录，必要时做一次 3 秒预算的 native_hook status。
+它不布防、触发、重放、重启、drain 或上传 helper；下一条建议可能具有明确标示的效果，尚未执行。
+它区分零命中、过滤、抽样/额度抑制、在途回调、提交未保留，以及超时和明确拒绝回复。
+已知丢失与过期健康快照保持显式。whole-capture 的 output/key 缺原始长度时，核验仍会 unavailable：
+须独立建立长度依据，不能拿收到的前缀长度升级完整性。提供的地址/TID 也只是候选，不自动证明真实写者。
+
 用 `process_list` 选定一个明确 session，读取 `capabilities`。不要在多进程目标里默认选最后一个进程。
 `runtime_diagnostics` 可在 agent 无回应时从 root procfs 核对身份、代际、冻结事实与现存线程：
 
