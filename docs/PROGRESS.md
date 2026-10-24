@@ -3,6 +3,49 @@
 > 这是"我们现在在哪"的唯一真相。每个会话开始先读它，结束前更新它。
 > 详细规格见 `REQUIREMENTS.md`，路线与架构见 `DEVELOPMENT_PLAN.md`。
 
+## 2026-10-24（第五十七轮）—— v0.6.0 发版：升版、打包、门禁与一条真缺陷
+
+用户要求"发布最新版本"。本轮把 `FEATURE_STATUS §2.5` 记的那笔发版欠账（"没有升版、打新 bundle、
+刷模块、替换已安装 App 的 agent 或推送远端"）做完：**升版 + 打包 + 主机/设备门禁 + 提交推送**，
+但**不刷模块**——刷机要 `--reboot`，会打断在跑的分析目标，这个决定留给用户。
+
+### 升版（五处一致，可 `git grep 0\.6\.0` 复核）
+
+- v0.5.0 → **v0.6.0**，versionCode 25 → 26；Device Daemon 12 → 13。
+- 为什么是 minor：v0.5.0 之后全是特性（`root_watch`、`trace_session`、`crypto_evidence`、
+  `runtime_diagnostics`、MCP 首连指南、`analysis_guide action=assess`），按 SemVer 规则 +0.1.0。
+
+### 打包
+
+- **顺序坑**：`build_bundle.sh` 只拷贝、不构建两个 APK，必须先
+  `cd device && ./gradlew :core:test :daemon:assembleDebug :manager:assembleDebug`。
+- 结果：bundle **20,496,578 B**（`f48c6120…`）；模块 zip **1,439,054 B**（`5eb1db37…`）；
+  agent `.so` **1,127,248 B**（`df1b93af…`，与包内同 hash）；manager `bb956bf5…`、daemon `711f915c…`。
+- **host shell 坑**：PATH 上的 `bash` 是 WSL（`pwd` = `/mnt/x/...`），`env.sh` 会误判成 Linux
+  去要 `cmake`（无 `.exe`）。必须显式用 `C:\Program Files\Git\bin\bash.exe`（MINGW64 →
+  `windows-x86_64` + `.exe` + `cygpath`）。`pwd` 一行就能分辨，别靠猜。
+
+### 门禁（136 条：121 PASS / 14 FAIL / 1 SKIP）
+
+- **v100 抓到一条真缺陷**：`adh unpack --out` 自 v0.4.0 起优先下载服务端 bundle zip，
+  于是 `--include-carriers` **静默失效**（帮助文本还写着"写入 dexes / 也下载 carrier"）。
+  修 `daemon/src/cli.ts`：逐 dex 条目优先落盘，bundle 只作兜底 → 4 个真 dex 全部落盘，
+  `--include-carriers` 恢复语义，v100 PASS。
+- **v100 的两条 doctor 断言过时**：原断言要求 `doctor` 退出 0，而升版后在跑目标仍是旧 agent 时
+  doctor 是**按设计**非零退出的（版本配对报警）。改成"必须报告配对，且非零时理由必须是配对"。
+- **`verify_all.sh:304` 的 `grep -m1E` 是非法参数**（`-m` 把 `1E` 当计数），把 v126 的跳过原因
+  吞成 `()`。改成 `-m1 -E`。
+- 其余 13 条 FAIL 与 §2.3 同因：大 dex 超 8 MB 请求体上限 6、模块未按本版重刷 2、
+  UI/报告形状与 Dobby 洗签 4、需要真实目标 1。**没有一条由本版 diff 引起。**
+- v126 SKIP 是前置条件未满足（没起 `com.adh.nativefixture` 专用宿主），不是失败。
+- Host `415/415`，`tsc` 0。
+
+### 没做 / 留给下一轮
+
+- **未刷 Zygisk 模块**（所以 `v102`/`v103` 仍红）、**未重启在跑目标**（京东 5 个进程仍 0.5.0）。
+  刷入后应重跑这两条 + `v126`。
+- v0.5.0 从未公开上传，所以 v0.6.0 的 Release 说明覆盖 v0.4.0 → v0.6.0 的全部改动。
+
 ## 2026-10-24（第五十六轮）—— 从工具说明推进到低上下文状态评估
 
 用户强调其它 AI 不具备本次逆向经历和上下文。新增 Host `analysis_assist.ts`，接入原

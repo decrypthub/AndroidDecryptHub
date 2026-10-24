@@ -71,3 +71,6 @@ injector/zygisk/.stage/
 
 # harness/session state
 .claude/
+
+# Local website screenshot/build cache (holds a full Edge profile: cookies, login data, history)
+website/.cache/

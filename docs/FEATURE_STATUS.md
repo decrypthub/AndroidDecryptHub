@@ -37,6 +37,19 @@
 
 ## 0. 发布物
 
+> **2026-10-24：v0.6.0 已构建并发布**（本机）。`injector/zygisk/dist/adh-bundle-v0.6.0.zip`，
+> **20,496,578 B**，SHA-256 `f48c61201186e4b24827048a4d6e40c143cdea2ed00bf3cb0eb4865787b3531d`；
+> 模块 zip `adh-zygisk.zip` **1,439,054 B**，SHA-256 `5eb1db371efc27c095168aabc1f9648f9f67e39af3eb00d91cb28af2bddbab5e`。
+> 同号：`module.prop` v0.6.0/26、`update.json` v0.6.0/26、Manager `0.6.0`/26、Device Daemon `0.6.0`/13、
+> `AGENT_VER` `0.6.0`。包内 `libadh_agent.so`（1,127,248 B，`df1b93af…`）与 `agent/build/libadh_agent.so`
+> **同 hash**；`manager.apk` `bb956bf5…`（20,510,012 B）、`daemon.apk` `711f915c…`（891,207 B）。
+> **构建顺序有坑**：`build_bundle.sh` 只拷贝不构建两个 APK，所以必须先跑
+> `cd device && ./gradlew :core:test :daemon:assembleDebug :manager:assembleDebug`，再 `bash tools/build_bundle.sh`。
+> 本版内容 = **v0.5.0 的全部改动（v0.5.0 本身从未公开上传）+ 之后 5 个提交**：root 侧硬件观察点
+> `root_watch`（w 模式 / kernel GPR+栈 / 分页 / 协作停止 / 代际校验）、`trace_session` 记录与查询、
+> `crypto_evidence` 证据核验、`runtime_diagnostics`、native 观察控制与 ABI 加固、MCP 首连指南与
+> `analysis_guide action=assess`。设备门禁与遗留项见 §2.8。
+
 > **2026-10-23：v0.5.0 候选包已构建**（本机）。`injector/zygisk/dist/adh-bundle-v0.5.0.zip`，**20,490,741 B**，SHA-256 `c1d5610aed98c6c2ff4f28b0fd00e0f896ced7548dd094e6d2143af4220f5f28`；模块 zip `adh-zygisk.zip` SHA-256 `e1ba5a9e6457ea6e945f9d80d1bd8d1c5f45f33e2021cb39e3f310de84fcfee0`。同号：`module.prop` v0.5.0/25、`update.json` v0.5.0/25、Manager `0.5.0`/25、Device Daemon `0.5.0`/12、`AGENT_VER` `0.5.0`；**包内 `libadh_agent.so` 与 `agent/build/libadh_agent.so` 同 hash（`3747d68f…`）**——第一次打包后又修了 `module_watch` 的接线，所以包是**重新打过的**，上面就是最终数字。**已部署到 `aa165071` 的 sandbox/模块目录的就是这一版**；公开 Release 的 zip 尚未上传。
 
 > **2026-10-09 补记**：公开仓库已发布 [v0.3.12 可刷入预发布包](https://github.com/decrypthub/AndroidDecryptHub/releases/tag/v0.3.12)，包含 Zygisk 模块、Agent、Root Device Daemon 和 Manager；ZIP SHA-256 为 `8c09b1ace579b6a4d84bea06523151729f547f12b88eee685cb0a6e351c73695`。本次只通过构建、ZIP/签名/架构主机检查，**未刷入专用 root 设备，未跑新一轮设备门禁**。下表的旧设备 hash 与设备验收结果仍是 2026-10-01 的历史状态。
@@ -99,6 +112,28 @@
 | 单元测试（host） | v76, v80, v81, v83, v84, v85, **v86**, **v87** | syscall 归因/参数解码/一站式装配、trace 摘要、backtrace dynsym、Java trace（含三阶段装配与 drain 守卫）、native 批量选择、native 限流（默认/夹紧/拒绝垃圾值 + 安装回路真实 payload）、探针判定与设备文件读取（二进制/超大/截断/坏 base64）：**169 条** `node --test` 用例（2026-09-29 实测；旧记 121 已过时） |
 
 ## 2. 真机验收结果与当前遗留项
+
+### 2.8 2026-10-24，第五十七轮：v0.6.0 打包与发版门禁
+
+> 设备 `aa165071`（PGP110 / Android 15 / SDK 35 / arm64-v8a / KernelSU）。本版升版 v0.5.0 → **v0.6.0**
+> （versionCode 25 → 26；Device Daemon 12 → 13）。五个版本点同时改：`agent_internal.h` 的 `AGENT_VER`、
+> `module.prop`、`update.json`、Manager 与 Device Daemon 的 `build.gradle.kts`；`git grep 0\.6\.0` 可现场复核。
+
+| 类别 | 项目 | 证据 / 限制 |
+|---|---|---|
+| 测过 | 构建链 | `build_agent.sh` 产出 1,127,248 B（`df1b93af…`，stripped，导出恰好 `JNI_OnLoad` + 4 个 `adh_agent_*`）；`:core:test` 与两个 APK 构建成功；bundle 20,496,578 B，包内 `.so` 与 `agent/build` 同 hash |
+| 测过 | Host 单测 / 类型 | `node test/run.mjs "test/*.test.ts"` **415/415**；`tsc -p tsconfig.json` 0 |
+| 测过 | 全量门禁 | 136 条 **121 PASS / 14 FAIL / 1 SKIP**，逐条结论见下面四行 |
+| 修掉 | v100 `adh unpack --out` | **真缺陷**：自 v0.4.0 起 `--out` 优先下载服务端 bundle zip，`--include-carriers` 因此**静默失效**（帮助文本仍写"写入 dexes / 也下载 carrier"）——正是该脚本专门要抓的"声明了但没消费"。改为「有逐 dex 条目就逐 dex 落盘，bundle 仅作兜底」；修后 4 个真 dex 全部落盘、`--include-carriers` 恢复语义，v100 **PASS** |
+| 修掉 | v100 的两条 doctor 断言 | 原断言要求 `doctor` 退出 0。升版后在跑目标仍是旧 agent 时 doctor **按设计**非零退出（版本配对报警），断言把环境状态当成了 CLI 缺陷。改为：必须报告 daemon/配对/后端，且非零退出时理由必须是 `runs agent X but this checkout builds Y` 这一类；`--json` 改为断言形状加了 exit/status 一致性 |
+| 修掉 | `tools/verify_all.sh` 的 SKIP 原因 | `grep -m1E` 是非法参数（`-m` 把 `1E` 当成计数），导致 v126 的跳过原因被吞成 `()` |
+| 未定因 / 既有欠账 | 其余 13 条 FAIL | 与 §2.3 记录同因，无一由本次 diff 引起：大 dex 超 8 MB 请求体上限 6 条（`v02_dexrepair`/`v08_xref`/`v12_rebuild`/`v13_recover`/`v29_dexindex`/`v95`）；设备上的 Zygisk 模块未按本版重刷 2 条（`v102_policy`/`v103_zygisk_companion`，companion 多回一个 `y=0`）；UI/报告形状与 Dobby 洗签预算 4 条（`v10_webui`/`v35_sessions`/`v10_export`/`v88`）；需要真实目标进程 1 条（`v05_detect`） |
+| 没测 | Zygisk 模块本体 | 本版**只构建、未刷入**（未跑 `flash_device.sh --reboot`），所以 `v102`/`v103` 仍按旧模块判定；刷入后应重跑这两条 |
+| 没测 | `v126` 原生硬件观察点 | 需要 `com.adh.nativefixture` 在线专用宿主，本轮未起该宿主，脚本按前置条件 SKIP（不是失败） |
+
+设备上的 sandbox agent 已由 `v01` 刷新为 0.6.0（会话 `agentVer 0.6.0`）；在跑的 5 个京东进程仍是 0.5.0——
+**没有重启用户的分析目标**，所以 `doctor` 会如实报 `runs agent 0.5.0 but this checkout builds 0.6.0`。
+这是版本配对在工作，不是构建问题。
 
 ### 2.7 2026-10-24，第五十六轮：低上下文状态评估
 

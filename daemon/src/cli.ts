@@ -486,14 +486,12 @@ async function cmdUnpack(ctx: Ctx): Promise<number> {
 
   let saved: { file: string; sha256: string; bytes: number }[] = [];
   const outDir = ctx.opts.out as string | undefined;
-  if (outDir && report.bundle?.sha256) {
-    mkdirSync(outDir, { recursive: true });
-    const bytes = await ctx.daemon.bytes(`/api/dumps/download?sha=${report.bundle.sha256}`, ctx.timeoutS);
-    const file = join(outDir, `unpack-${String(report.bundle.sha256).slice(0, 16)}.zip`);
-    writeFileSync(file, bytes);
-    saved.push({ file, sha256: report.bundle.sha256, bytes: bytes.length });
-    say(ctx, `  saved ${file} (${fmtBytes(bytes.length)})`);
-  } else if (outDir && included.length) {
+  // Per-dex downloads FIRST: --out is documented as "directory to write the dumped dexes into" and
+  // --include-carriers as "also download carrier dexes", and both only hold in this branch. Preferring
+  // the bundle zip (as this did from v0.4.0) made --include-carriers a silent no-op — a flag that is
+  // accepted and then ignored, which is exactly what v100 exists to catch. The bundle stays as the
+  // fallback for when the report carries no per-dex entries.
+  if (outDir && included.length) {
     const wantCarriers = ctx.opts['include-carriers'] === true;
     mkdirSync(outDir, { recursive: true });
     const chosen = included.filter((d) => (wantCarriers ? true : !d.carrier));
@@ -504,6 +502,13 @@ async function cmdUnpack(ctx: Ctx): Promise<number> {
       saved.push({ file, sha256: d.sha256, bytes: bytes.length });
       say(ctx, `  saved ${file} (${fmtBytes(bytes.length)})`);
     }
+  } else if (outDir && report.bundle?.sha256) {
+    mkdirSync(outDir, { recursive: true });
+    const bytes = await ctx.daemon.bytes(`/api/dumps/download?sha=${report.bundle.sha256}`, ctx.timeoutS);
+    const file = join(outDir, `unpack-${String(report.bundle.sha256).slice(0, 16)}.zip`);
+    writeFileSync(file, bytes);
+    saved.push({ file, sha256: report.bundle.sha256, bytes: bytes.length });
+    say(ctx, `  saved ${file} (${fmtBytes(bytes.length)})`);
   }
 
   const problems: string[] = [];

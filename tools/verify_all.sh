@@ -301,7 +301,7 @@ for entry in "${SCRIPTS[@]}"; do
     last_line="$(grep -v '^[[:space:]]*$' /tmp/vr.log | tail -1)"
     if [[ "$last_line" == SKIP* ]] || grep -q '^RESULT:SKIP' /tmp/vr.log; then
       reason="$(grep -m1 'SKIP (' /tmp/vr.log | sed -e 's/^[[:space:]]*//' -e 's/^[^A-Za-z0-9]*//')"
-      [ -n "$reason" ] || reason="$(grep -m1E '^(SKIP|RESULT:SKIP)' /tmp/vr.log | sed -e 's/^RESULT:SKIP[[:space:]]*//' -e 's/^SKIP[[:space:]]*//')"
+      [ -n "$reason" ] || reason="$(grep -m1 -E '^(SKIP|RESULT:SKIP)' /tmp/vr.log | sed -e 's/^RESULT:SKIP[[:space:]]*//' -e 's/^SKIP[[:space:]]*//')"
       echo "SKIP  $name ($reason)"; skip=$((skip+1))
     else
       echo "PASS  $name"; pass=$((pass+1))

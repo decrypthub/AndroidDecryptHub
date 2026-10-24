@@ -100,14 +100,21 @@ chk('a value-carrying flag with no value is a usage error',
 
 // ---- 4. the daemon side works ----------------------------------------------------------------
 const doc = run(['doctor']);
-chk('doctor exits 0 and reports the daemon, the version pairing and the backends',
-  doc.code === 0 && doc.out.includes('doctor: ok') && doc.out.includes('version pairing') &&
-  doc.out.includes('source AGENT_VER'), doc.out.split('\n').slice(0, 3).join(' | '));
+// Exit 0 means "the daemon is healthy AND every live target runs this exact build". A target left
+// running from a previous build makes doctor exit nonzero ON PURPOSE — that is the version pairing
+// doing its job, not a CLI defect. So the contract checked here is that doctor REPORTS the pairing
+// (and, when it fails, fails for that stated reason), not that the environment happens to be clean.
+const reportsPairing = doc.out.includes('version pairing') && doc.out.includes('source AGENT_VER');
+chk('doctor reports the daemon, the version pairing and the backends',
+  reportsPairing && doc.out.includes('mcp tools') &&
+  (doc.code === 0 ? doc.out.includes('doctor: ok') : /runs agent \S+ but this checkout builds/.test(doc.out)),
+  `exit=${doc.code} ${doc.out.split('\n').slice(0, 3).join(' | ')}`);
 const docJson = run(['doctor', '--json']);
 let docParsed = null;
 try { docParsed = JSON.parse(docJson.out); } catch { /* reported below */ }
 chk('--json changes the output shape (machine-readable, one object)',
-  docJson.code === 0 && docParsed?.status === 'ok' && !!docParsed?.repo?.agentVer,
+  !!docParsed && (docParsed.status === 'ok' || docParsed.status === 'fail') && !!docParsed?.repo?.agentVer &&
+  ((docJson.code === 0) === (docParsed.status === 'ok')),
   `exit=${docJson.code} status=${docParsed?.status ?? 'unparsable'}`);
 chk('the default output is NOT json (so --json is really doing something)',
   !(() => { try { JSON.parse(doc.out); return true; } catch { return false; } })());
