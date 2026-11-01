@@ -1,0 +1,379 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADH / Android 运行时分析</title>
+<meta name="description" content="ADH 把一枚轻量 agent 注入你勾选的 Android 应用，在运行时读取密钥、方法与内存。索引、反汇编与数据库都留在电脑上，浏览器与 MCP 都可查。">
+<meta name="theme-color" content="#ffffff">
+<meta property="og:type" content="website">
+<meta property="og:title" content="ADH / 它只在运行时说出真话">
+<meta property="og:description" content="Android 运行时分析工具。轻量 agent 进入目标进程，重的分析留在电脑上。">
+<meta property="og:image" content="assets/img/og.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%230d0d0d'/%3E%3Crect x='26' y='26' width='12' height='12' rx='2' fill='%2310a37f'/%3E%3C/svg%3E">
+<link rel="preload" href="assets/fonts/sans-400.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="assets/fonts/sans-600.woff2" as="font" type="font/woff2" crossorigin>
+<script>document.documentElement.classList.add("js");</script>
+<link rel="stylesheet" href="assets/css/site.css">
+<script src="assets/js/site.js" defer></script>
+</head>
+<body id="top">
+
+<a class="skip" href="#main">跳到正文</a>
+
+<header class="masthead">
+  <div class="wrap nav-inner">
+    <a class="brand" href="#top" aria-label="ADH 首页">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-name">ADH</span>
+    </a>
+    <nav class="nav" aria-label="主导航">
+      <a href="#capabilities">能力</a>
+      <a href="#how">机理</a>
+      <a href="#record">记录</a>
+      <a href="#limits">边界</a>
+    </nav>
+    <a class="btn btn-dark btn-sm" href="#start">开始使用</a>
+  </div>
+</header>
+
+<main id="main">
+
+  <section class="hero">
+    <div class="wrap hero-grid">
+      <div class="hero-copy">
+        <p class="kicker">Android 运行时分析</p>
+        <h1 class="display">它只在运行时<br>说出真话。</h1>
+        <p class="sub">ADH 把一枚轻量 agent 注入你勾选的 Android <span class="nb">应用</span>。密钥、方法与内存从运行时读出来；索引、反汇编和数据库都留在电脑上。</p>
+        <div class="actions">
+          <a class="btn btn-dark" href="#start">开始使用</a>
+          <a class="link-arrow" href="#how">看它怎么工作</a>
+        </div>
+      </div>
+
+      <div class="hero-panel">
+        <div class="console" role="img" aria-label="ADH 界面示意：一个注入会话，以及三条 Cipher 与摘要记录。">
+          <div class="console-bar">
+            <span class="console-dot" aria-hidden="true"></span>
+            <span class="console-name">adhd</span>
+            <span class="console-path">127.0.0.1:8088</span>
+            <span class="console-live"><i aria-hidden="true"></i>LIVE</span>
+          </div>
+          <div class="console-tabs">
+            <span class="tab is-active">com.example.app</span>
+            <span class="tab">:core</span>
+          </div>
+          <div class="console-body">
+            <div class="stream-head">
+              <span>captures <b>1,204</b></span>
+              <span>dropped <b>0</b></span>
+            </div>
+            <div class="event">
+              <span class="ev-time">12:04:21.318</span>
+              <span class="ev-tag">Cipher</span>
+              <span class="ev-name">AES/CBC/PKCS5Padding</span>
+              <span class="ev-meta">ENCRYPT_MODE · key 16 B · iv 16 B · in 32 B · out 48 B</span>
+            </div>
+            <div class="event">
+              <span class="ev-time">12:04:21.402</span>
+              <span class="ev-tag">Cipher</span>
+              <span class="ev-name">AES/GCM/NoPadding</span>
+              <span class="ev-meta">DECRYPT_MODE · key 16 B · iv 12 B · in 64 B · out 48 B</span>
+            </div>
+            <div class="event">
+              <span class="ev-time">12:04:21.517</span>
+              <span class="ev-tag">Digest</span>
+              <span class="ev-name">SHA-256</span>
+              <span class="ev-meta">digest · in 1.2 KB · out 32 B</span>
+            </div>
+            <div class="stream-foot">
+              <span>ring 12%</span>
+              <span>按包落盘为 jsonl</span>
+            </div>
+          </div>
+        </div>
+        <p class="console-cap">界面示意：注入后的会话，与一条 Cipher 记录的字段。</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="stats band" aria-label="概要">
+    <div class="wrap stats-grid" data-reveal>
+      <div class="stat"><span class="stat-k">注入面</span><span class="stat-v">约 1 MB 的 libadh_agent.so</span></div>
+      <div class="stat"><span class="stat-k">分析面</span><span class="stat-v">电脑上的 Host ADH Daemon</span></div>
+      <div class="stat"><span class="stat-k">控制面</span><span class="stat-v">浏览器与 MCP</span></div>
+      <div class="stat"><span class="stat-k">许可</span><span class="stat-v">MIT，只碰勾选的包</span></div>
+    </div>
+  </section>
+
+  <section class="why">
+    <div class="wrap">
+      <h2 data-reveal>加固防的是磁盘，<br>不是运行时。</h2>
+      <div class="why-cols" data-reveal>
+        <p class="lead-p">抽壳、字符串加密、控制流混淆，说的是同一句话：别在磁盘上读我。可程序总要跑起来，密钥要展开，明文要进出，方法要执行。</p>
+        <div>
+          <p>ADH 不试着把加壳的程序静态读懂。它只把一支很小的 agent 放进进程，钩住该钩的地方，把发生的事转述出来。索引、反汇编、数据库，都留在你的电脑上。</p>
+          <p class="note">目标进程不该因为被看着，就变慢、变胖、变得好认。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="capabilities" class="caps band">
+    <div class="wrap">
+      <header class="sec-head" data-reveal>
+        <h2>在进程里，能看见什么</h2>
+        <p class="sec-lede">六族能力，逐包开关。关掉的族在目标进程里根本不装钩子，不是记录时再过滤。</p>
+      </header>
+
+      <div class="cap-grid">
+        <article class="cap-card" data-reveal>
+          <span class="tag">crypto</span>
+          <h3>加解密现场</h3>
+          <p>注入后观察 <code>Cipher</code>、<code>Mac</code>、<code>MessageDigest</code> 与 <code>Signature</code> 的 init、doFinal、digest、sign、verify。原方法照常执行，记录里带算法、操作、密钥、IV、输入与输出。</p>
+          <p class="cap-spec"><span>AES/CBC</span><span>AES/GCM</span><span>RSA</span><span>HmacSHA256</span><span>SHA-256</span></p>
+        </article>
+
+        <article class="cap-card" data-reveal>
+          <span class="tag">hook</span>
+          <h3>方法与调用</h3>
+          <p>Java 方法可改参数、换返回值、跳过原函数，也可一次装全类。JNI 覆盖 RegisterNatives 与 JNIEnv 表；native 覆盖 GOT、inline、调用点与函数指针槽。</p>
+          <p class="cap-spec"><span>LSPlant</span><span>Dobby</span><span>16 槽</span></p>
+        </article>
+
+        <article class="cap-card" data-reveal>
+          <span class="tag">trace</span>
+          <h3>指令与系统调用</h3>
+          <p>函数参数、线程、时间戳；QBDI 指令级 trace；直接 <code>svc #0</code> 的捕获，以及 libc 站点的静态归因。只装命中的站点，不铺满整个进程。</p>
+          <p class="cap-spec"><span>QBDI</span><span>svc</span><span>libc</span></p>
+        </article>
+
+        <article class="cap-card" data-reveal>
+          <span class="tag">memory</span>
+          <h3>内存与活体对象</h3>
+          <p>搜索、读取、导出、写回；活体对象字段读写；硬件写观察点回答「谁写了这块缓冲」，给出真正执行写入的那条指令。</p>
+          <p class="cap-spec"><span>perf_event</span><span>对象字段</span></p>
+        </article>
+
+        <article class="cap-card" data-reveal>
+          <span class="tag">dex</span>
+          <h3>DEX 与 so</h3>
+          <p>枚举、dump、按 SHA-256 去重，标出诱饵壳与真代码；修复、重建、读方法字节码。电脑侧建索引、搜索、xref、反汇编。</p>
+          <p class="cap-spec"><span>SQLite</span><span>Capstone</span><span>变异识别</span></p>
+        </article>
+
+        <article class="cap-card" data-reveal>
+          <span class="tag">mcp</span>
+          <h3>给分析程序的门</h3>
+          <p>浏览器只读查看采集结果；MCP 让分析程序直接提问。<code>adh</code> CLI 把 Host 转成 stdio，客户端不接触 HTTP 端点。</p>
+          <p class="cap-spec"><span>adh connect</span><span>adh mcp</span></p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section id="how" class="how">
+    <div class="wrap">
+      <header class="sec-head" data-reveal>
+        <h2>四层，各做各的</h2>
+        <p class="sec-lede">重的东西不放进目标进程。这不是优化，是设计前提。</p>
+      </header>
+
+      <ol class="flow" data-reveal role="list">
+        <li class="flow-step">
+          <span class="flow-num">01</span>
+          <h3>送进去</h3>
+          <p>Zygisk 从 memfd 把 .so 送进目标进程，目标 maps 里不出现模块路径。只注入勾选的包。</p>
+        </li>
+        <li class="flow-step">
+          <span class="flow-num">02</span>
+          <h3>只看与转述</h3>
+          <p>agent 约 1 MB，只做钩、读、转述。没有网页，没有数据库，没有反汇编。</p>
+        </li>
+        <li class="flow-step">
+          <span class="flow-num">03</span>
+          <h3>在电脑上分析</h3>
+          <p>Host ADH Daemon 接收、落盘、建索引、反汇编，提供 HTTP 与 MCP。</p>
+        </li>
+        <li class="flow-step">
+          <span class="flow-num">04</span>
+          <h3>你来提问</h3>
+          <p>浏览器只读；分析程序走 <code>adh mcp</code>，拿到同一批事实。</p>
+        </li>
+      </ol>
+
+      <figure class="code-block" data-reveal>
+        <div class="code-bar">
+          <span class="code-lang">bash</span>
+          <button class="copy" type="button" data-copy>复制</button>
+        </div>
+<pre><code>bash tools/build_bundle.sh
+bash tools/flash_device.sh --reboot
+bash tools/dev_up.sh
+adh connect 127.0.0.1:8088
+adh mcp</code></pre>
+        <figcaption>从源码到一条能查询的连接。</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section id="record" class="record">
+    <div class="wrap">
+      <header class="sec-head" data-reveal>
+        <h2>一次加密，七个字段</h2>
+        <p class="sec-lede">算法、密钥、IV、明文、密文在同一行里。要复算，不必再猜。同一套字段也用在 Mac、MessageDigest 与 Signature 上。</p>
+      </header>
+
+      <div class="record-panel" data-reveal>
+        <div class="record-bar">
+          <span>capture</span>
+          <span class="record-bar-mid">javax.crypto.Cipher</span>
+          <span>jsonl</span>
+        </div>
+        <dl class="fields">
+          <div class="field"><dt>接口</dt><dd>javax.crypto.Cipher</dd></div>
+          <div class="field"><dt>算法</dt><dd>AES/CBC/PKCS5Padding</dd></div>
+          <div class="field"><dt>操作</dt><dd>ENCRYPT_MODE</dd></div>
+          <div class="field"><dt>密钥</dt><dd>16 B</dd></div>
+          <div class="field"><dt>IV</dt><dd>16 B</dd></div>
+          <div class="field"><dt>输入</dt><dd>32 B</dd></div>
+          <div class="field"><dt>输出</dt><dd>48 B</dd></div>
+        </dl>
+        <p class="record-note">字段固定，值随目标而变。界面示意。</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="limits" class="limits band">
+    <div class="wrap">
+      <header class="sec-head" data-reveal>
+        <h2>凡例</h2>
+        <p class="sec-lede">工具的边界写在明处，省得你在错的地方找答案。</p>
+      </header>
+
+      <dl class="limits-grid" data-reveal>
+        <div class="limit"><dt>设备</dt><dd>一台已 root 并开启 Zygisk 的手机，KernelSU 或 Magisk 均可。正式支持的 ABI 只有 arm64-v8a。</dd></div>
+        <div class="limit"><dt>作用域</dt><dd>只注入勾选的包，主进程与 :core 一类子进程一起。没勾选的应用不会被碰。</dd></div>
+        <div class="limit"><dt>密钥</dt><dd>密钥放在 Android Keystore 里时，<code>getEncoded()</code> 为空，记录里的密钥字段就是空的。</dd></div>
+        <div class="limit"><dt>分片</dt><dd><code>update()</code> 分片再空参收尾的，输出在、输入不在；写进调用方自己缓冲区的重载，反过来。</dd></div>
+        <div class="limit"><dt>缺口</dt><dd>wrap 与 unwrap、密钥协商、PBKDF2 与 HKDF 没有钩；应用自己实现的算法、直接走 libcrypto 的路径，也不在这四个接口里。</dd></div>
+        <div class="limit"><dt>观察点</dt><dd>硬件写观察点在 SELinux Enforcing 的 app 域会被内核拒绝，需要 permissive 才能布防。</dd></div>
+        <div class="limit"><dt>槽位</dt><dd>单目标最多 16 个并发 hook 槽，超出直接报错，不静默丢事件。</dd></div>
+        <div class="limit"><dt>网络</dt><dd>Web 与 MCP 默认 8088，agent 用 8761。两个端口都没有登录验证，并且监听所有网卡，只在你信得过的网络里开。</dd></div>
+      </dl>
+    </div>
+  </section>
+
+  <section id="start" class="start">
+    <div class="wrap">
+      <header class="sec-head" data-reveal>
+        <h2>从这里开始</h2>
+        <p class="sec-lede">一条命令一条命令地走。从源码构建需要 Android SDK、NDK 28.2.13676358 与 Node 24。</p>
+      </header>
+
+      <div class="start-grid">
+        <ol class="steps" data-reveal role="list">
+          <li>
+            <span class="step-num">01</span>
+            <div class="step-body">
+              <h3>刷入</h3>
+              <div class="code-mini">
+                <pre><code>bash tools/build_bundle.sh
+bash tools/flash_device.sh --reboot</code></pre>
+                <button class="copy" type="button" data-copy>复制</button>
+              </div>
+              <p>也可以在 root 管理器里选「从本地安装」，装 <code>injector/zygisk/dist/</code> 下的 bundle zip，然后重启。</p>
+            </div>
+          </li>
+          <li>
+            <span class="step-num">02</span>
+            <div class="step-body">
+              <h3>勾选</h3>
+              <p>打开 ADH Manager，在「注入范围」里勾选应用，需要的话再调该应用的 Hook 配置，保存。重新打开目标应用。</p>
+            </div>
+          </li>
+          <li>
+            <span class="step-num">03</span>
+            <div class="step-body">
+              <h3>连上</h3>
+              <div class="code-mini">
+                <pre><code>bash tools/dev_up.sh</code></pre>
+                <button class="copy" type="button" data-copy>复制</button>
+              </div>
+              <p>它会启动 Host ADH Daemon 并设好 <code>adb reverse</code>。浏览器打开 <code>http://&lt;局域网地址&gt;:8088/&lt;包名&gt;</code>。</p>
+            </div>
+          </li>
+          <li>
+            <span class="step-num">04</span>
+            <div class="step-body">
+              <h3>接 AI</h3>
+              <div class="code-mini">
+                <pre><code>pip install android-decrypt-hub
+adh connect 127.0.0.1:8088
+adh mcp</code></pre>
+                <button class="copy" type="button" data-copy>复制</button>
+              </div>
+              <p>客户端只认 <code>adh mcp</code> 转出来的 stdio，不直接接触 HTTP 端点。</p>
+            </div>
+          </li>
+        </ol>
+
+        <aside class="req-card" data-reveal aria-label="需要什么">
+          <h3>需要什么</h3>
+          <ul role="list">
+            <li>已 root、开启 Zygisk 的手机，arm64-v8a</li>
+            <li>一台能跑 Node 24 的电脑</li>
+            <li><code>adb</code>，以及手机与电脑之间的连接</li>
+            <li>只在你拥有或获得授权分析的应用上使用</li>
+          </ul>
+          <div class="req-links">
+            <a class="link-arrow" href="https://github.com/decrypthub/AndroidDecryptHub">仓库</a>
+            <a class="link-arrow" href="https://github.com/decrypthub/AndroidDecryptHub/tree/main/docs">文档</a>
+            <a class="link-arrow" href="https://github.com/decrypthub/AndroidDecryptHub/blob/main/docs/mcp-tools.md">MCP 工具清单</a>
+          </div>
+        </aside>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="foot">
+  <div class="wrap foot-top">
+    <div class="foot-brand">
+      <a class="brand" href="#top" aria-label="ADH 首页">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-name">ADH</span>
+      </a>
+      <p class="foot-full">Android DecryptHub</p>
+      <p class="foot-line">观察留在你的机器上。</p>
+    </div>
+    <div class="foot-col">
+      <h4>产品</h4>
+      <a href="#capabilities">能力</a>
+      <a href="#how">机理</a>
+      <a href="#record">记录</a>
+      <a href="#limits">边界</a>
+    </div>
+    <div class="foot-col">
+      <h4>资源</h4>
+      <a href="https://github.com/decrypthub/AndroidDecryptHub">仓库</a>
+      <a href="https://github.com/decrypthub/AndroidDecryptHub/tree/main/docs">文档</a>
+      <a href="https://github.com/decrypthub/AndroidDecryptHub/blob/main/docs/mcp-tools.md">MCP 工具清单</a>
+    </div>
+    <div class="foot-col foot-meta">
+      <h4>说明</h4>
+      <p>MIT 许可。第三方组件见 <a class="inline-link" href="https://github.com/decrypthub/AndroidDecryptHub/blob/main/NOTICE">NOTICE</a>。</p>
+      <p>仅用于你拥有或获得授权分析的应用。</p>
+    </div>
+  </div>
+  <div class="wrap foot-bottom">
+    <span>ADH · Android DecryptHub</span>
+    <span>运行时分析，留在本机</span>
+  </div>
+</footer>
+
+</body>
+</html>
