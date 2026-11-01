@@ -272,6 +272,11 @@ SCRIPTS=(
   "verify_v124_crypto_evidence.sh:host"
   "verify_v125_native_abi.sh:device"
   "verify_v126_root_watch_native.sh:device"
+  # v127: one module's dynamic symbol table (name/offset/size/kind), paged, with archive-mapped
+  # libraries reported as symbol-less instead of guessed. Host-only: the device half of this path is
+  # already covered by v84 (native_hook_all resolves exports through the same maps+dump+parse chain);
+  # what is new is the paging/filter/archive contract and the refusal to add an agent op for it.
+  "verify_v127_symbols.sh:host"
 )
 
 pass=0; fail=0; skip=0; FAILED=""

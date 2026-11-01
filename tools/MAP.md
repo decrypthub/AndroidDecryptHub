@@ -14,6 +14,16 @@ v126 verifies kernel write events/GPR/stack/generation. v123/v125/v126 can use t
 `run_native_fixture.mjs SERIAL` runs the native host for <=300 seconds with cooperative stop-file
 cleanup. The host uses a UUID directory and memfd and is not an injection path for product targets.
 
+`verify_v127_symbols.sh` (host) is the newest slice: `native_symbols` — one module's dynamic symbol
+table (name / module-relative offset / size / kind), filterable by `kind` and name substring, paged
+with `total`/`returned`/`nextOffset`. It gates the 12-case unit file first (floor 11, because the
+real-ELF case skips without `sandbox-native/build/libadhdetect.so`) and then walks a real `.so`'s
+61 dynsym rows page by page, checks `func+object == total`, the clamp (`limit` 1..5000, negative
+offset → 0, unknown `kind` → `any`), the archive-mapped predicate, and that the registry has 87 tools
+with no new agent op. It is **host-only on purpose**: the device half of the same maps+dump+parse
+chain is already covered by `v84`, so a `:device` entry here would spend a sandbox cold start to
+re-prove nothing.
+
 ### `lib/verify_common.sh` — verify-script helpers
 Dedups the boilerplate hand-copied across ~26 `verify_vXX_*.sh` scripts. Source it:
 ```bash

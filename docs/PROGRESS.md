@@ -3,6 +3,38 @@
 > 这是"我们现在在哪"的唯一真相。每个会话开始先读它，结束前更新它。
 > 详细规格见 `REQUIREMENTS.md`，路线与架构见 `DEVELOPMENT_PLAN.md`。
 
+## 2026-11-01（第五十八轮）—— `native_symbols`：一个模块的动态符号表，分页且不猜
+
+用户要求"把目标进程里某个 .so 的动态符号表导出来"。新工具落在 Host Daemon，**agent 一行没动**
+（ops 仍 38），MCP 工具 86 → **87**。
+
+- 新增 `daemon/src/module_symbols.ts` 的 `moduleSymbols()`：`loadModuleTable` 拿 maps →
+  `reconstructSo` dump → `parseDynSymbols`（PT_DYNAMIC，重建映像没有 section table 也能读）。
+  这条链与 `native_hook_all` 解析导出符号用的是**同一条**，所以"这个工具能列出的符号"就是
+  "那个工具能 hook 的符号"，不是两套实现。
+- 纯函数 `pageModuleSymbols()` 负责过滤 + 分页：`total` 是**命中数**、`returned` 是**本页数**、
+  `nextOffset` 走到底为 null，`limit` 夹在 1..5000（不夹就是本次要消灭的"未分页倾倒"）。
+  在真实 `libadhdetect.so` 上实测 61 条 dynsym 全表逐页走完（func 52 / object 9，无重复行）。
+- `resolveModule()`：精确名 → 精确路径 → 路径尾 → 唯一子串；**歧义时报候选名而不是挑第一个**
+  （解析错库是一个"看起来正确的错误答案"）。
+- 从 APK 直接映射的库走 `fromArchive()` 分支，**在 dump 之前短路**，回 `symbolSource='archive-mapped'`
+  且 0 条符号 —— 内存里没有独立 ELF 映像，读 zip 切片只会得到垃圾，如实说没有比猜名字好。
+- MCP 条目注册在 `MCP_TOOLS` 的 `native_backtrace` 与 `native_call` 之间（单行、描述里撇号已转义）。
+- **没加 agent op**：符号解析是 Host 的活。加了就要同步 `agent_main.c` 的两处手写清单，否则
+  `agent_caps.test.ts` 与 `verify_v87` 红线直接红。
+
+验证（真实输出）：`npm run typecheck` rc=0；`npm test` **427 pass / 0 fail / 0 skip**（基线 415 + 新 12）；
+`verify_v71` `tools=87 problems=0`；`verify_v87` ops 38/38 可达、红线扫 116 文件 0 命中、
+`pass=27 fail=0`；新增 `verify_v127_symbols.sh` PASS（unit 12/12、61 行全表走完）。
+`verify_v127` 的 unit floor 写 **11 而不是 12**：真实 ELF 那一条在没有
+`sandbox-native/build/libadhdetect.so` 的机器（新 clone / CI）会自己 skip，floor 卡 12 就成了
+"只在建过 fixture 的机器上绿"的假门禁——与 `backtrace.test.ts` 在 CI 上 3 pass / 1 skip 同理。
+
+现场未动：8088 上的 daemon（pid 52308）没重启，两个 `com.shizhuang.duapp` 会话仍在
+（`/health` 仍报 `mcpTools: 86`，即那是**旧**进程的注册表，不是本轮代码的）。没跑 `dev_up.sh`、
+没跑全量 `verify_all.sh`、没碰任何 `:device` 脚本、没对目标做启停。新工具要生效需用户自己重启
+daemon 或重连客户端。
+
 ## 2026-10-24（第五十七轮）—— v0.6.0 发版：升版、打包、门禁与一条真缺陷
 
 用户要求"发布最新版本"。本轮把 `FEATURE_STATUS §2.5` 记的那笔发版欠账（"没有升版、打新 bundle、
