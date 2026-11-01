@@ -13,7 +13,23 @@ export const MCP_INSTRUCTIONS = 'ADH is an Android runtime analysis workbench. S
   'Replace $variables from live results, never guess an address, TID, key or invocation pairing. ' +
   'An online socket does not prove responsiveness; use runtime_diagnostics when commands hang. ' +
   'Check capture loss and completeness before making claims. In-hook QBDI is replay with side effects and incomplete context; ' +
-  'active-call traces cover the instrumented module, not the original whole execution. A primitive match does not prove a final signature.';
+  'active-call traces cover the instrumented module, not the original whole execution. A primitive match does not prove a final signature. ' +
+  // The device is reachable outside the MCP tool list. Saying so prevents the most common
+  // misattribution: a privacy dialog or login screen misread as an anti-debug defense.
+  '\n\nDEVICE ACCESS: adb is the supported operator/AI channel to the connected phone and is not limited to the tools above. ' +
+  'When adb is available on the Host (ANDROID_SERIAL / ADH_SERIAL selects the device), use it directly for: logcat; ' +
+  'the foreground activity (dumpsys activity activities); launching or force-stopping the package (am start / am force-stop / monkey); ' +
+  'the UI hierarchy (uiautomator dump) and screenshots (screencap); and taps, swipes and text input (input tap / swipe / text / keyevent). ' +
+  'Use these to confirm what the app is actually showing instead of inferring it. ' +
+  '\n\nATTRIBUTION: a screen that does not progress is not by itself evidence of anti-debugging, hardening or injection detection. ' +
+  'Check in order: (1) is the app just showing a normal gate - privacy consent, permission prompt, login, SMS/captcha, onboarding? ' +
+  'Read the UI hierarchy or a screenshot to find out. (2) did the command reach the device and return (adb exit status and stderr)? ' +
+  '(3) is the process alive with unchanged identity (runtime_diagnostics)? ' +
+  'Claim detection only with matching evidence: a hit detection point, abnormal TracerPid/seccomp/frozen state, or a concrete crash stack or error code. ' +
+  'Otherwise report the state as unknown and name the observation that would distinguish the cases. ' +
+  'When a gate needs the user (account, SMS code, manual consent), say what is missing and stop; ' +
+  'do not change hooks, restart the process or repeat the same tap. ' +
+  'Derive tap coordinates from the UI hierarchy or screenshot you just read, never from screen size, and re-read the state after each interaction.';
 
 interface Step {
   goal: string;
@@ -22,10 +38,19 @@ interface Step {
   check: string;
   onFailure?: string;
 }
+// adb is the operator/AI channel rather than an MCP tool, so device observations carry an
+// explicit command instead of a tool call and are never validated as templates.
+interface DeviceCheck {
+  goal: string;
+  command: string;
+  check: string;
+  onFailure?: string;
+}
 interface Guide {
   title: string;
   prerequisites: string[];
   variables: Record<string, string>;
+  deviceChecks?: DeviceCheck[];
   steps: Step[];
   limits: string[];
 }
@@ -93,15 +118,28 @@ const guides: Record<AnalysisGuideTopic, Guide> = {
   },
   stuck: {
     title: 'Diagnose missing events and unresponsive commands',
-    prerequisites: ['Retain the explicit session and actual error text; do not guess that every timeout is anti-debugging.'],
-    variables: { session: 'Known sessionId, including an offline one for runtime_diagnostics.', hookId: 'id of the hook you actually armed.' },
+    prerequisites: ['Retain the explicit session and actual error text; do not guess that every timeout is anti-debugging.',
+      'Rule out the ordinary explanations first: a normal user-interaction gate (privacy consent, permission, login, SMS code, onboarding), a command that never reached the device, and a target that is simply idle. A stalled screen is a state, not a diagnosis.'],
+    variables: { session: 'Known sessionId, including an offline one for runtime_diagnostics.', hookId: 'id of the hook you actually armed.', pkg: 'Package name of the target, for foreground-activity and UI checks.' },
+    // adb is the operator/AI channel, not an MCP tool, so it cannot appear as a template step.
+    // These are ordered observations to run on the Host before attributing anything to defense.
+    deviceChecks: [
+      { goal: 'Name the resumed activity before blaming the app.', command: 'adb shell dumpsys activity activities', check: 'Compare the resumed activity (mResumedActivity / topResumedActivity) with the screen you expected. A splash, consent, login or permission activity explains the stall with no defensive mechanism involved.' },
+      { goal: 'Read the actual UI instead of inferring it.', command: 'adb shell uiautomator dump /sdcard/adh-ui.xml && adb pull /sdcard/adh-ui.xml', check: 'Name the visible control and its bounds. A button such as "同意并继续" or a login form is an ordinary user gate. Derive tap coordinates from this dump or from a screenshot, never from screen size.', onFailure: 'An empty or refused dump can also mean the window is not drawn yet; wait briefly and retry before concluding anything about detection.' },
+      { goal: 'Capture what the screen really shows.', command: 'adb exec-out screencap -p > screen.png', check: 'Use the image to confirm the gate. Do not describe a screen you have not read.' },
+      { goal: 'Confirm the command reached the device at all.', command: 'adb shell echo "$?" and adb devices -l', check: 'A local failure, missing adb, or an offline device is an environment problem, not target behavior.' },
+    ],
     steps: [
       { goal: 'Interpret current counters and retained records first.', tool: 'analysis_guide', arguments: { action: 'assess', topic: 'stuck', session: '$session', hookId: '$hookId' }, check: 'Read facts and missingEvidence. Assessment performs at most one bounded read-only native hook status query; it does not install, drain or trigger anything. A proposed next call is not an executed call.' },
       { goal: 'Inspect process facts independently of the agent channel.', tool: 'runtime_diagnostics', arguments: { session: '$session', limit: 32 }, check: 'Distinguish frozen, traced, process-exited, identity-mismatch, running and unknown. Check errors and completeness of thread paging.' },
       { goal: 'Read stored hook evidence and observation counts.', tool: 'native_look', arguments: { action: 'read', session: '$session', hookId: '$hookId' }, check: 'Distinguish hits=0 from filtered/sampledOut/throttled/limited, stored record loss, drainError and observationError.', onFailure: 'Unknown hook/session: re-list sessions and actual hook status. Do not invent a replacement hookId.' },
       { goal: 'Inspect current physical hook budget when the agent responds.', tool: 'native_hook', arguments: { action: 'status', session: '$session' }, check: 'Non-default new observation controls require observationControlsVersion>=1. Retired slots are not reclaimed by unhook; exhausted 16-slot budget requires a new target process, never an automatic restart.' },
     ],
-    limits: ['No hardware events can also mean wrong address/TID, no trigger, a frozen thread, or an unsupported kernel; absence alone proves none of these.', 'Missing facts stay unknown; report the failed prerequisite instead of silently dropping filters or substituting replay.', 'Read diagnostics first; target restarts and other changes require an authorized workflow.'],
+    limits: ['No hardware events can also mean wrong address/TID, no trigger, a frozen thread, or an unsupported kernel; absence alone proves none of these.',
+      'A non-progressing screen, a failed local command and a blocked request each have ordinary causes. Claim anti-debugging, hardening or injection detection only with matching evidence (hit detection point, abnormal TracerPid/seccomp/frozen state, concrete crash stack or error code); otherwise keep the state unknown and name the next distinguishing observation.',
+      'When the gate needs the user (account, SMS code, manual consent), state exactly what is missing and stop. Do not change hooks, restart the process or repeat the same tap to work around it.',
+      'Missing facts stay unknown; report the failed prerequisite instead of silently dropping filters or substituting replay.',
+      'Read diagnostics first; target restarts and other changes require an authorized workflow.'],
   },
 };
 
