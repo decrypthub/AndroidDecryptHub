@@ -58,7 +58,7 @@ export function normalizeRootWatch(a: Record<string, any>) {
   // time the sampled registers still describe the state the instruction operated on.
   const rawMem = a.mem === undefined ? [] : typeof a.mem === 'string' ? [a.mem] : a.mem;
   if (!Array.isArray(rawMem) || rawMem.length > 4) throw new Error('mem must be a string or an array of at most 4 specs');
-  const MEM_SPEC = /^@{0,2}(x([0-9]|[12][0-9]|30)|sp|lr|pc)([+-](0x[0-9a-f]+|\d+))?(:([1-9][0-9]*|0x[1-9a-f][0-9a-f]{0,2}))?$/i;
+  const MEM_SPEC = /^@{0,3}(x([0-9]|[12][0-9]|30)|sp|lr|pc)([+-](0x[0-9a-f]+|\d+))?(@(0x[0-9a-f]+|\d+))*(:([1-9][0-9]*|0x[1-9a-f][0-9a-f]{0,2}))?$/i;
   const mem = rawMem.map((spec: unknown, index: number) => {
     if (typeof spec !== 'string' || spec.length === 0 || spec.length > 60 || !MEM_SPEC.test(spec))
       throw new Error(`mem[${index}] must look like [@[@]]REG[+/-OFFSET][:LEN] with REG=x0..x30, sp, lr or pc`);

@@ -60,7 +60,7 @@ static uint64_t u64(const unsigned char *p) { uint64_t n; memcpy(&n, p, 8); retu
 //   "x13:32"       bytes at the address held in x13
 //   "@x12+0x40:16" dereference (x12+0x40), then read 16 bytes at that pointer
 // REG is x0..x30, sp, lr or pc. OFFSET accepts 0x.. or decimal. LEN defaults to 16.
-struct memspec { char text[64]; int reg; int64_t off; int depth; unsigned len; };
+struct memspec { char text[64]; int reg; int depth; unsigned len; int64_t off[4]; };
 static struct memspec mems[MAX_MEM];
 static int mem_count;
 
@@ -80,18 +80,37 @@ static int parse_mem(const char *text) {
     struct memspec m; memset(&m, 0, sizeof(m));
     snprintf(m.text, sizeof(m.text), "%s", text);
     const char *p = text;
-    while (*p == '@' && m.depth < 2) { m.depth++; p++; }
+    while (*p == '@' && m.depth < 3) { m.depth++; p++; }
     const char *colon = strchr(p, ':');
     size_t head_len = colon ? (size_t)(colon - p) : strlen(p);
-    const char *sign = NULL;
-    for (size_t i = 0; i < head_len; i++) if (p[i] == '+' || p[i] == '-') { sign = p + i; break; }
-    size_t reg_len = sign ? (size_t)(sign - p) : head_len;
-    m.reg = reg_of(p, reg_len);
-    if (m.reg < 0) return 0;
-    if (sign) {
-        char *end = NULL; errno = 0;
-        m.off = strtoll(sign, &end, 0);
-        if (errno || !end || end != colon) return 0;
+    // Grammar with per-hop offsets: @@x12@8:64  ->  addr=x12; addr=*(addr+0); addr=*(addr+8)
+    // The first segment carries the register and its own offset (REG[+/-OFF]); every later
+    // '@'-separated segment is the offset added before that hop's dereference.
+    size_t seg_start = 0;
+    for (int hop = 0; hop <= m.depth; hop++) {
+        size_t seg_end = seg_start;
+        while (seg_end < head_len && p[seg_end] != '@') seg_end++;
+        size_t seg_len = seg_end - seg_start;
+        if (hop == 0) {
+            const char *sign = NULL;
+            for (size_t i = 0; i < seg_len; i++) if (p[i] == '+' || p[i] == '-') { sign = p + i; break; }
+            size_t reg_len = sign ? (size_t)(sign - seg_start) : seg_len;
+            m.reg = reg_of(p + seg_start, reg_len);
+            if (m.reg < 0) return 0;
+            if (sign) {
+                char *end = NULL; errno = 0;
+                m.off[0] = strtoll(sign, &end, 0);
+                if (errno || !end || end != p + seg_end) return 0;
+            }
+        } else {
+            if (seg_len == 0) { m.off[hop] = 0; }
+            else {
+                char *end = NULL; errno = 0;
+                m.off[hop] = strtoll(p + seg_start, &end, 0);
+                if (errno || !end || end != p + seg_end) return 0;
+            }
+        }
+        seg_start = seg_end + 1;
     }
     m.len = 16;
     if (colon) {
@@ -165,13 +184,13 @@ static void emit_mem(pid_t pid, const uint64_t *regs) {
     printf(",\"mem\":[");
     for (int i = 0; i < mem_count; i++) {
         struct memspec *m = &mems[i];
-        uint64_t addr = (uint64_t)((int64_t)regs[m->reg] + m->off);
+        uint64_t addr = (uint64_t)((int64_t)regs[m->reg] + m->off[0]);
         const char *err = NULL;
         for (int d = 0; d < m->depth && !err; d++) {
             uint64_t ptr = 0;
             if (read_target(pid, addr, &ptr, 8)) err = "unreadable-pointer";
             else if (!ptr) err = "null-pointer";
-            else addr = ptr;
+            else addr = (uint64_t)((int64_t)ptr + m->off[d + 1]);
         }
         unsigned char buf[MAX_MEM_BYTES];
         if (!err && read_target(pid, addr, buf, m->len)) err = "unreadable";
@@ -255,6 +274,9 @@ int main(int argc, char **argv) {
         // value at a known address, so a window on x0 must read it back.
         if (!parse_mem("x0:8")) return fail("self-test-mem");
         if (!parse_mem("@@x0:8")) return fail("self-test-mem2");
+        // per-hop offsets: [[x0]+8] must resolve to fixture_value through fixture_ptr2
+        if (!parse_mem("@@x0@8:8")) return fail("self-test-mem3");
+        if (mems[mem_count - 1].off[1] != 8) return fail("self-test-mem3-off");
 
         self_test_read = 1;
         first_extra = 2;

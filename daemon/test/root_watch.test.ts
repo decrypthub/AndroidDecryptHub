@@ -19,10 +19,10 @@ test('extra hardware slots and memory windows are validated, not passed through'
   const spec = normalizeRootWatch({
     tid: 7, addr: '0x1000', mode: 'x', width: 4,
     breakpoints: [{ addr: '0x2000', mode: 'x' }, { addr: '0x3000', width: 8, mode: 'rw' }],
-    mem: ['x13:16', '@x12+0x40:8', '@@x29-0x30:8', 'x29-0x30:0x20'],
+    mem: ['x13:16', '@x12+0x40:8', '@@x29-0x30:8', '@@x12@8:0x40'],
   });
   assert.deepEqual(spec.breakpoints, ['bp=0x2000:4:x', 'bp=0x3000:8:rw']);
-  assert.deepEqual(spec.mem, ['x13:16', '@x12+0x40:8', '@@x29-0x30:8', 'x29-0x30:0x20']);
+  assert.deepEqual(spec.mem, ['x13:16', '@x12+0x40:8', '@@x29-0x30:8', '@@x12@8:0x40']);
   for (const bad of [
     { breakpoints: [{ addr: '0x2001', mode: 'x' }] },
     { breakpoints: [{ addr: '0x2000', mode: 'x', width: 8 }] },
