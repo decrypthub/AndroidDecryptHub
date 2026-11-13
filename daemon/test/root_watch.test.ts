@@ -5,6 +5,7 @@ import { normalizeRootWatch, projectRootSample } from '../src/root_watch.ts';
 test('root watch validates exact addresses without rounding and preserves single-thread scope', () => {
   assert.deepEqual(normalizeRootWatch({ tid: 42, addr: '0XABCDEF10' }), {
     tid: 42, addr: '0xabcdef10', width: 8, mode: 'w', durationMs: 5000, maxEvents: 128, stackBytes: 8192,
+    breakpoints: [], mem: [],
   });
   assert.equal(normalizeRootWatch({ tid: 1, addr: '0x1004', mode: 'x' }).width, 4);
   for (const args of [
@@ -13,6 +14,27 @@ test('root watch validates exact addresses without rounding and preserves single
     { durationMs: 30001 }, { maxEvents: 2049 }, { stackBytes: 16385 }, { stackBytes: 7 },
   ]) assert.throws(() => normalizeRootWatch({ tid: 42, addr: '0x1000', ...args }));
 });
+
+test('extra hardware slots and memory windows are validated, not passed through', () => {
+  const spec = normalizeRootWatch({
+    tid: 7, addr: '0x1000', mode: 'x', width: 4,
+    breakpoints: [{ addr: '0x2000', mode: 'x' }, { addr: '0x3000', width: 8, mode: 'rw' }],
+    mem: ['x13:16', '@x12+0x40:8', '@@x29-0x30:8', 'x29-0x30:0x20'],
+  });
+  assert.deepEqual(spec.breakpoints, ['bp=0x2000:4:x', 'bp=0x3000:8:rw']);
+  assert.deepEqual(spec.mem, ['x13:16', '@x12+0x40:8', '@@x29-0x30:8', 'x29-0x30:0x20']);
+  for (const bad of [
+    { breakpoints: [{ addr: '0x2001', mode: 'x' }] },
+    { breakpoints: [{ addr: '0x2000', mode: 'x', width: 8 }] },
+    { breakpoints: [{ addr: '0x2000', width: 3 }] },
+    { breakpoints: [1] },
+    { breakpoints: [{ addr: '0x1000' }, { addr: '0x2000' }, { addr: '0x3000' }, { addr: '0x4000' }] },
+    { mem: ['r13:16'] }, { mem: ['x99:8'] }, { mem: ['x1:0'] }, { mem: ['x1:257'] },
+    { mem: ['x1+zz:8'] }, { mem: ['x1;id'] }, { mem: [1] },
+    { mem: ['x0', 'x1', 'x2', 'x3', 'x4'] },
+  ]) assert.throws(() => normalizeRootWatch({ tid: 42, addr: '0x1000', ...bad }));
+});
+
 
 test('kernel stack windows are bounded and cannot silently read another address', () => {
   const record = { seq: 1, ip: '0x2000', regs: ['0xdead'], stack: { addr: '0x1000', requested: 8, got: 4, hex: '41424344' } };

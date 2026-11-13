@@ -179,3 +179,6 @@ event-limit accounting, explicit stop and wrong-TID refusal. It does not run the
 - `build_crypto_variants.sh` — 构建变异算法检测的**靶子库**（`fixtures/crypto-variants/{std,variant}.c` → `fixtures/crypto-variants/build/libadhcrypto_{std,variant}.so`，NDK clang `--target=aarch64-linux-android26 -O0`）。两个库构成 A/B：`std` 是教科书常量（负对照），`variant` 携带参考仓库真实出货的那几种变异（MD5 init 被改写、SHA1 轮常量被改写、base64 码表被置换，另加运行时生成的码表与多项式）。**必须是编译产物**：检测器的全部主张就是"能从二进制真正含有的字节里认出变异"，拿测试自己拼的 Buffer 去测只能证明测试会拼常量。`-O0` 是刻意的——优化会把表折进立即数，靶子就不再含有自己的常量了。
 - `verify_v101_crypto_variants.sh` — **变异算法识别**（host）：先跑 `daemon/test/crypto_variants.test.ts`（13 项，向量取自参考仓库的真实变异字节），再编译靶子并**经 daemon 的 REST 面**扫这两个库：负对照（教科书库必须一条 variant 判定都没有）→ MD5 变异（由未被改动的 K 表锚定、缺席的 init 作为证据、报告的 `12/16` 说明"标准 init 被原位改写"）→ SHA1 变异（从**另一端**锚定：IV 未动、轮常量被改）→ 置换码表按**形状**找到且漂移量计数为 54 → CRC-32C 被如实报成"另一套标准"而非变异 → `limits` 三条（运行时生成的表、连锚点一起改的变异）**必须存在**（扫描器要说得出自己在哪瞎）。
   最关键的一条断言是**度量出来的缺口**：旧的标准常量扫描对两个库返回**完全相同的算法名**（`status` 一样），而且在变异库上仍然报 `MD5-init`——那是 SHA1 init 的前 8 字节撞上的**假阳性**。即旧工具不是安静地瞎，是会主动误导；这条断言把"新层加了什么"钉成了可复跑的事实。
+
+
+- `verify_v131_root_watch_mem.sh` ? root_watch ?**??? + ???????**???device?fixture App ??? SKIP???? TID ? 2 ????????? `x0:8` ? `@x0:8`??? 4 ????`bp` ???? 0/1???????????????????? 0x1122? / 0x8877???? `root_watch.test.ts`?3 ????????? spec ?????????

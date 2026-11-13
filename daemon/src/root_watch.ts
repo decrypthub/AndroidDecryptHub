@@ -40,7 +40,35 @@ export function normalizeRootWatch(a: Record<string, any>) {
   const maxEvents = integer(a.maxEvents, 128, 1, 2048, 'maxEvents');
   const stackBytes = integer(a.stackBytes, 8192, 0, 16384, 'stackBytes');
   if (stackBytes % 8) throw new Error('stackBytes must be a multiple of 8');
-  return { tid, addr: '0x' + addr.toString(16), width, mode, durationMs, maxEvents, stackBytes };
+  // Extra hardware slots on the SAME thread. A stateful VM normally needs two or three
+  // stops (fetch / dispatch / tail) to see one operation, which one slot cannot express.
+  const rawBps = a.breakpoints === undefined ? [] : a.breakpoints;
+  if (!Array.isArray(rawBps) || rawBps.length > 3) throw new Error('breakpoints must be an array of at most 3 extra slots');
+  const breakpoints = rawBps.map((value: Record<string, any>, index: number) => {
+    if (!value || typeof value !== 'object') throw new Error(`breakpoints[${index}] must be an object`);
+    const modeOf = value.mode ?? 'x';
+    if (!['w', 'r', 'rw', 'x'].includes(modeOf)) throw new Error(`breakpoints[${index}].mode must be w, r, rw or x`);
+    const widthOf = integer(value.width, modeOf === 'x' ? 4 : 8, 1, 8, `breakpoints[${index}].width`);
+    const addrOf = address(value.addr, `breakpoints[${index}].addr`);
+    if (![1, 2, 4, 8].includes(widthOf) || addrOf % BigInt(widthOf) || (modeOf === 'x' && widthOf !== 4))
+      throw new Error(`breakpoints[${index}] width must be 1/2/4/8 and address aligned; execution breakpoints need width 4`);
+    return `bp=0x${addrOf.toString(16)}:${widthOf}:${modeOf}`;
+  });
+  // Memory windows are read by the collector at the moment of the hit; that is the only
+  // time the sampled registers still describe the state the instruction operated on.
+  const rawMem = a.mem === undefined ? [] : typeof a.mem === 'string' ? [a.mem] : a.mem;
+  if (!Array.isArray(rawMem) || rawMem.length > 4) throw new Error('mem must be a string or an array of at most 4 specs');
+  const MEM_SPEC = /^@{0,2}(x([0-9]|[12][0-9]|30)|sp|lr|pc)([+-](0x[0-9a-f]+|\d+))?(:([1-9][0-9]*|0x[1-9a-f][0-9a-f]{0,2}))?$/i;
+  const mem = rawMem.map((spec: unknown, index: number) => {
+    if (typeof spec !== 'string' || spec.length === 0 || spec.length > 60 || !MEM_SPEC.test(spec))
+      throw new Error(`mem[${index}] must look like [@[@]]REG[+/-OFFSET][:LEN] with REG=x0..x30, sp, lr or pc`);
+    if (spec.includes(':')) {
+      const size = Number(spec.slice(spec.lastIndexOf(':') + 1));
+      if (!Number.isInteger(size) || size < 1 || size > 256) throw new Error(`mem[${index}] length must be 1..256`);
+    }
+    return spec;
+  });
+  return { tid, addr: '0x' + addr.toString(16), width, mode, durationMs, maxEvents, stackBytes, breakpoints, mem };
 }
 async function adb(serial: string, args: string[], timeout = 10000) {
   return (await exec('adb', ['-s', serial, ...args], { timeout, maxBuffer: 1024 * 1024, windowsHide: true })).stdout;
@@ -87,7 +115,9 @@ export async function startRootWatch(target: Target, a: Record<string, any>, dat
   const stopFile = `/data/local/tmp/adh-root-watch-stop-${id}`;
   const run: Run = { id, serial, target, file, stopFile, running: true, stderr: '', samples: 0, ...generation };
   runs.set(id, run);
-  const command = `${HELPER} ${target.pid} ${spec.tid} ${spec.addr} ${spec.width} ${spec.mode} ${spec.durationMs} ${spec.maxEvents} ${spec.stackBytes} ${stopFile}`;
+  const command = `${HELPER} ${target.pid} ${spec.tid} ${spec.addr} ${spec.width} ${spec.mode} ${spec.durationMs} ${spec.maxEvents} ${spec.stackBytes} ${stopFile}`
+    + spec.breakpoints.map((extra: string) => ` ${extra}`).join('')
+    + spec.mem.map((window: string) => ` mem=${window}`).join('');
   const child = spawn('adb', ['-s', serial, 'shell', 'su', '-c', command], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   let pending = '';
   await new Promise<void>((resolveReady, reject) => {
