@@ -93,7 +93,7 @@ export async function prepareRootWatch(requested?: string) {
   if (version !== VERSION) throw new Error(`Unexpected root collector version: ${version}`);
   const text = await adb(serial, ['shell', 'su', '-c', `${HELPER} --self-test`]);
   const result = text.trim().split(/\r?\n/).map(line => JSON.parse(line)).at(-1);
-  if (result?.selfTest !== true || result?.complete !== true || result?.samples !== 1) throw new Error(`Root watch self-test failed: ${JSON.stringify(result)}`);
+  if (result?.selfTest !== true || result?.complete !== true || typeof result?.samples !== "number" || result.samples < 2) throw new Error(`Root watch self-test failed: ${JSON.stringify(result)}`);
   return { ok: true, serial, version, sha256: createHash('sha256').update(readFileSync(localHelper)).digest('hex'), selfTest: result };
 }
 export async function startRootWatch(target: Target, a: Record<string, any>, dataDir: string) {
