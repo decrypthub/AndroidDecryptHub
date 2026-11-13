@@ -218,11 +218,15 @@ static int handle_sample(int bp_index, unsigned char *body, size_t n,
     for (size_t j = 0; j < captured; j++) printf("%02x", body[stackoff + 8 + j]);
     puts("\"}}"); fflush(stdout);
     if (self_test && regs[0] == addr && regs[1] == (uint64_t)(uintptr_t)&fixture_value) *self_ok = 1;
+    if (self_test && bp_index == 1) *self_ok |= 2;
     return 1;
 }
 
 __attribute__((naked, noinline)) static void fixture(volatile uint64_t *p, uint64_t value) {
     __asm__ volatile("str x1, [x0]\nret");
+}
+__attribute__((naked, noinline)) static void fixture_load(volatile uint64_t *p) {
+    __asm__ volatile("ldr x0, [x0]\nret");
 }
 
 int main(int argc, char **argv) {
@@ -233,6 +237,7 @@ int main(int argc, char **argv) {
     uint32_t type;
     int test_child = -1, gate[2] = {-1, -1};
     int self_test = argc == 2 && !strcmp(argv[1], "--self-test");
+    int self_test_read = 0;
     int first_extra = argc;
     if (self_test) {
         if (pipe(gate)) return fail("self-test-pipe");
@@ -240,16 +245,18 @@ int main(int argc, char **argv) {
         if (test_child < 0) return fail("self-test-fork");
         if (!test_child) {
             close(gate[1]); char b;
-            if (read(gate[0], &b, 1) == 1) { fixture(&fixture_value, UINT64_C(0x1122334455667788)); fixture(&fixture_ptr, (uint64_t)(uintptr_t)&fixture_value); }
+            if (read(gate[0], &b, 1) == 1) { fixture(&fixture_value, UINT64_C(0x1122334455667788)); fixture(&fixture_ptr, (uint64_t)(uintptr_t)&fixture_value); fixture_load(&fixture_value); }
             close(gate[0]); usleep(200000); _exit(0);
         }
         close(gate[0]); gate[0] = -1;
         pid = tid = (uint64_t)test_child; addr = (uintptr_t)&fixture_ptr;
-        width = 8; duration = 1000; maximum = 2; stack_bytes = 256; type = HW_BREAKPOINT_W;
+        width = 8; duration = 1000; maximum = 3; stack_bytes = 256; type = HW_BREAKPOINT_W;
         // Self-test also proves the memory-window path: the fixture stores a known
         // value at a known address, so a window on x0 must read it back.
         if (!parse_mem("x0:8")) return fail("self-test-mem");
         if (!parse_mem("@@x0:8")) return fail("self-test-mem2");
+
+        self_test_read = 1;
         first_extra = 2;
     } else {
         if (argc < 9 || !number(argv[1], &pid) || !number(argv[2], &tid) ||
@@ -284,6 +291,7 @@ int main(int argc, char **argv) {
     }
     bps[0].addr = addr; bps[0].width = (uint32_t)width; bps[0].type = type; bps[0].fd = -1;
     bp_count = 1;
+    if (self_test_read) { bps[1].addr = (uintptr_t)&fixture_value; bps[1].width = 8; bps[1].type = HW_BREAKPOINT_R; bps[1].fd = -1; bp_count = 2; }
     for (int i = first_extra; i < argc; i++) {
         const char *arg = argv[i];
         if (!strncmp(arg, "mem=", 4)) {
@@ -380,5 +388,5 @@ int main(int argc, char **argv) {
            (unsigned long long)samples, (unsigned long long)lost, (unsigned long long)throttles, (unsigned long long)malformed,
            !lost && !throttles && !malformed && !capped && !stopping ? "true" : "false",
            stopping ? "stopped" : capped ? "event-limit" : thread_exited ? "thread-exited" : "time-budget", self_test ? (self_ok ? "true" : "false") : "null");
-    return self_test && !self_ok ? 1 : 0;
+    return self_test && self_ok != 3 ? 1 : 0;
 }
