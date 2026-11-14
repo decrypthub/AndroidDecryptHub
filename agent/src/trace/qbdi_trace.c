@@ -15,12 +15,16 @@
 #include "../hook/native_hooks.h"
 
 #include <dlfcn.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/syscall.h>
 #include <time.h>
+#include <unistd.h>
 
 #include "QBDI/Options.h"
 #include "QBDI/State.h"
@@ -65,12 +69,81 @@ struct QbdiApi {
     p_getInstMemAccess_t getInstMemoryAccess;
 };
 
+// Delivery fd handed over by the Zygisk companion through adh_agent_set_qbdi_fd(): it is opened from
+// the module directory BEFORE the uid/domain switch, because /data/adb is not readable from the app
+// domain. -1 means "QBDI is off for this target" - nothing is loaded, nothing is mapped.
+static int g_qbdi_source_fd = -1;
+
+void adh_qbdi_set_source_fd(int fd) {
+    g_qbdi_source_fd = fd;
+}
+
+// Copy the delivered fd into a memfd created HERE (after specialization, so the app-domain linker can
+// stat it) and load from /proc/self/fd. The memfd is closed right after dlopen: the mapping is what
+// matters, and the source fd stays open so a second trace does not need a new delivery.
+static void *qbdi_dlopen_from_source(char *err, size_t errsz) {
+    if (errsz) err[0] = 0;
+    if (g_qbdi_source_fd < 0) return NULL;
+    int mfd = (int)syscall(__NR_memfd_create, "jit-cache", 1 /* MFD_CLOEXEC */);
+    if (mfd < 0) {
+        snprintf(err, errsz, "memfd_create failed: %s", strerror(errno));
+        return NULL;
+    }
+    if (lseek(g_qbdi_source_fd, 0, SEEK_SET) != 0) {
+        snprintf(err, errsz, "lseek(qbdi fd) failed: %s", strerror(errno));
+        close(mfd);
+        return NULL;
+    }
+    char buf[65536];
+    for (;;) {
+        ssize_t n = read(g_qbdi_source_fd, buf, sizeof(buf));
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            snprintf(err, errsz, "read(qbdi fd) failed: %s", strerror(errno));
+            close(mfd);
+            return NULL;
+        }
+        if (n == 0) break;
+        ssize_t off = 0;
+        while (off < n) {
+            ssize_t w = write(mfd, buf + off, (size_t)(n - off));
+            if (w <= 0) {
+                if (w < 0 && errno == EINTR) continue;
+                snprintf(err, errsz, "write(qbdi memfd) failed: %s", strerror(errno));
+                close(mfd);
+                return NULL;
+            }
+            off += w;
+        }
+    }
+    if (lseek(mfd, 0, SEEK_SET) != 0) {
+        snprintf(err, errsz, "lseek(qbdi memfd) failed: %s", strerror(errno));
+        close(mfd);
+        return NULL;
+    }
+    char path[64];
+    snprintf(path, sizeof(path), "/proc/self/fd/%d", mfd);
+    void *handle = dlopen(path, RTLD_NOW);
+    if (!handle) snprintf(err, errsz, "dlopen(qbdi memfd) failed: %s", dlerror());
+    close(mfd);
+    return handle;
+}
+
 static int api_load(struct QbdiApi *api, const char *libname, char *err, size_t errsz) {
     memset(api, 0, sizeof(*api));
     api->handle = dlopen(libname, RTLD_NOW);
     if (!api->handle) {
-        snprintf(err, errsz, "%s not available (dlopen)", libname);
-        return 0;
+        // Second route: the injector delivered a source fd. This is how a REAL target gets QBDI -
+        // the app domain cannot read /data/adb, so an inherited fd is the only way in, and copying
+        // it here (after specialization) is what makes the memfd loadable by the app linker.
+        api->handle = qbdi_dlopen_from_source(err, errsz);
+        if (!api->handle) {
+            size_t used = strlen(err);
+            snprintf(err + used, errsz > used ? errsz - used : 0,
+                     "%s not available (dlopen); QBDI delivery is off for this target "
+                     "(enable it in the module, then restart the target)", libname);
+            return 0;
+        }
     }
     api->initVM = (p_initVM_t)dlsym(api->handle, "qbdi_initVM");
     api->terminateVM = (p_terminateVM_t)dlsym(api->handle, "qbdi_terminateVM");
@@ -636,29 +709,53 @@ int adh_qbdi_run_from_watch(uint64_t pc, const uint64_t *gpr, int budget, int ti
     // one, otherwise the run would end the instant the trampoline branches back into the function.
     // (Getting this order wrong is invisible until the run reports "executed nothing": asking QBDI to
     // instrument the HINT first answers true, so the trampoline page was never added.)
+    //
+    // An anonymous executable MAPPING is added WHOLE, not just the page holding pc. A VM interpreter
+    // keeps its dispatch table and every handler in one such mapping and reaches them through `br x8`;
+    // instrumenting one page leaves the branch target uninstrumented, and the run then either stops at
+    // the edge of the page or takes the target down with it. The mapping is bounded, so adding all of
+    // it is cheap and is the only way an indirect dispatch survives instrumentation.
     if (!api->addInstrumentedModuleFromAddr(tv->vm, (rword)pc)) {
-        uint64_t page = pc & ~(uint64_t)0xfff;
-        api->addInstrumentedRange(tv->vm, (rword)page, (rword)(page + 0x1000));
+        uint64_t lo = pc & ~(uint64_t)0xfff, hi = lo + 0x1000;
+        if (map && map->n > 0) {
+            for (int i = 0; i < map->n; i++) {
+                if (pc < map->r[i].lo || pc >= map->r[i].hi) continue;
+                lo = map->r[i].lo & ~(uint64_t)0xfff;
+                hi = (map->r[i].hi + 0xfff) & ~(uint64_t)0xfff;
+                break;
+            }
+        }
+        api->addInstrumentedRange(tv->vm, (rword)lo, (rword)hi);
     }
     if (instrument_hint && instrument_hint != pc)
         (void)api->addInstrumentedModuleFromAddr(tv->vm, (rword)instrument_hint);
 
-    // Seed the hit's registers. x29/x30/x18 are passed in because they are what the callee would
-    // actually see (frame pointer, return address, platform register). x9-x17 and x19-x28 are
-    // callee-saved/scratch and must not carry stale values from a previous run: a function is
-    // entitled to treat them as its own once it saved them.
+    // Seed the hit's registers from the real values the caller captured.
+    //
+    // x0..x8 are the argument/scratch bank, x29/x30 the frame and return address, x18 the platform
+    // register. x19..x28 are CALLEE-SAVED: in the real execution the traced function already saved them
+    // in its prologue and is entitled to read them as its own, so a run that starts inside the function
+    // must see the same values. Zeroing them (the old behaviour) made any function that keeps its state
+    // pointer in that bank fault on first dereference - measured on a VM interpreter holding its context
+    // in x19/x21. A caller that does not know a slot passes ADH_QTRACE_GPR_UNKNOWN, which zeroes it.
     GPRState *st = tv->gpr;
     st->x0 = (rword)gpr[0]; st->x1 = (rword)gpr[1]; st->x2 = (rword)gpr[2]; st->x3 = (rword)gpr[3];
     st->x4 = (rword)gpr[4]; st->x5 = (rword)gpr[5]; st->x6 = (rword)gpr[6]; st->x7 = (rword)gpr[7];
     st->x8 = (rword)gpr[8];
-    st->x9 = st->x10 = st->x11 = st->x12 = st->x13 = st->x14 = st->x15 = 0;
-    st->x16 = st->x17 = 0;
     st->x18 = (rword)gpr[11];
-    st->x19 = st->x20 = st->x21 = st->x22 = st->x23 = st->x24 = st->x25 = st->x26 = 0;
-    st->x27 = st->x28 = 0;
+    st->x19 = (rword)gpr[12]; st->x20 = (rword)gpr[13]; st->x21 = (rword)gpr[14]; st->x22 = (rword)gpr[15];
+    st->x23 = (rword)gpr[16]; st->x24 = (rword)gpr[17]; st->x25 = (rword)gpr[18]; st->x26 = (rword)gpr[19];
+    st->x27 = (rword)gpr[20]; st->x28 = (rword)gpr[21];
+    st->x9 = (rword)gpr[22];
+    st->x10 = st->x11 = st->x12 = st->x13 = st->x14 = st->x15 = 0;
+    st->x16 = st->x17 = 0;
     st->x29 = (rword)gpr[9];
     st->lr = (rword)gpr[10];
-    st->sp = (rword)(((uintptr_t)tv->stack + ADH_QTRACE_VSTACK - 64) & ~(uintptr_t)15);
+    // sp: an explicit value from the caller when it has one (an in-hook trace of a function whose frame
+    // is live), otherwise the private virtual stack this VM allocated.
+    st->sp = gpr[23] != ADH_QTRACE_GPR_UNKNOWN
+        ? (rword)gpr[23]
+        : (rword)(((uintptr_t)tv->stack + ADH_QTRACE_VSTACK - 64) & ~(uintptr_t)15);
     st->nzcv = 0;
     st->pc = (rword)pc;
 
@@ -804,7 +901,7 @@ static int trace_collect(void *func, const unsigned long long *args, int argc, c
     if (adh_native_hook_at((uint64_t)(uintptr_t)func, &hooked_id, &hooked_active)) {
         snprintf(out, outsz,
                  "\"ok\":false,\"error\":\"refusing to trace: this address carries an ADH inline hook "
-                 "(id %d, %s). A soft unhook leaves the Dobby branch in the prologue, so the tracer "
+                 "(id %d, %s). A soft unhook leaves the inline-hook branch in the prologue, so the tracer "
                  "follows it into the trampoline and the run never returns (measured: SIGBUS at "
                  "pc=0x2a, target killed). Hard-unhook it, or restart the target, then trace.\","
                  "\"hookedId\":%d,\"hookedActive\":%s",

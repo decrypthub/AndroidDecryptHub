@@ -26,6 +26,18 @@ if [ "$need_agent" = 1 ]; then
 fi
 [ -f "$AGENT_SO" ] || { echo "!! agent .so still missing"; exit 1; }
 
+# Version pairing is an invariant, not a convention: the agent reports AGENT_VER at hello and the
+# host compares it with module.prop, so a stale AGENT_VER ships a module that lies about its own
+# contents. Fail the build instead of discovering it after a flash.
+MOD_VER="$(awk -F= '$1 == "version" { print $2 }' "$MOD/module.prop" | tr -d '\r')"
+AGENT_VER="$(sed -n 's/^#define AGENT_VER[[:space:]]*"\(.*\)"/\1/p' "$ROOT/agent/src/bootstrap/agent_internal.h" | head -n 1 | tr -d '\r')"
+if [ "v$AGENT_VER" != "$MOD_VER" ]; then
+  echo "!! version mismatch: module.prop=$MOD_VER but agent AGENT_VER=$AGENT_VER"
+  echo "   bump both (and update.json / Manager / Device Daemon) or fix the one that is stale"
+  exit 1
+fi
+echo ">> version pairing ok: $MOD_VER"
+
 echo ">> building ADH Manager for daemon caller authentication"
 (
   cd "$ROOT/device"
@@ -90,6 +102,15 @@ cp "$MOD/META-INF/com/google/android/update-binary" "$STAGE/META-INF/com/google/
 cp "$MOD/META-INF/com/google/android/updater-script" "$STAGE/META-INF/com/google/android/"
 cp "$COMPANION" "$STAGE/zygisk/$ABI.so"
 cp "$AGENT_SO" "$STAGE/libadh_agent.so"
+# Optional tracer payload: shipped in the MODULE (never in the sandbox APK - a real target does not
+# carry it). The companion hands an fd to allowlisted processes only when /data/adb/adh/qbdi.enabled
+# exists, so the default injection carries no QBDI code, mapping or string at runtime.
+QBDI_SO="$ROOT/agent/third_party/qbdi/lib/libQBDI.so"
+if [ -f "$QBDI_SO" ]; then
+  cp "$QBDI_SO" "$STAGE/libQBDI.so"
+else
+  echo "!! libQBDI.so absent - the module will ship without the optional tracer (run tools/fetch_qbdi.sh)"
+fi
 cp "$DAEMON_APK" "$STAGE/daemon.apk"
 
 mkdir -p "$DIST"

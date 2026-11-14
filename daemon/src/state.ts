@@ -183,6 +183,12 @@ function readDumpProvenance(path: string, sha: string): ArtifactProvenance | nul
 export const agentSockets = new Map<string, net.Socket>();               // sessionId -> live socket
 export const pending = new Map<string, { resolve: (v: any) => void; reject: (e: Error) => void; timer: NodeJS.Timeout; sessionId?: string }>();
 
+// In-flight command bookkeeping for the live progress channel. It lives here, next to `pending`,
+// because the SAME disconnect path must clear both: an entry left behind would keep reporting a
+// heartbeat for a command whose socket is already gone.
+export interface CmdTracker { cmdId: string; op: string; sessionId: string; startedAt: number; timeoutMs: number; beat?: NodeJS.Timeout; }
+export const inflight = new Map<string, CmdTracker>();
+
 /**
  * Fail every command still waiting on one session, with a reason instead of a timeout.
  *
@@ -199,6 +205,12 @@ export function failPendingFor(sessionId: string, reason: string): number {
     if (p.sessionId !== sessionId) continue;
     clearTimeout(p.timer);
     pending.delete(id);
+    const t = inflight.get(id);
+    if (t) {
+      if (t.beat) clearInterval(t.beat);
+      inflight.delete(id);
+      broadcastLive('cmd.done', { cmdId: id, op: t.op, sessionId, ok: false, elapsedMs: Date.now() - t.startedAt, reason });
+    }
     p.reject(new Error(reason));
     n++;
   }
@@ -1019,6 +1031,15 @@ export function broadcast(event: string, data: unknown) {
   const msg = JSON.stringify({ event, data: stamped, ts: Date.now() });
   for (const c of wss.clients) if (c.readyState === WebSocket.OPEN) c.send(msg);
   if (event !== 'snapshot') recordEvent(event, stamped);   // persist for record/replay
+}
+// Live-only channel for high-frequency progress. Same socket and envelope as broadcast, but it is
+// never written to EVENTS_FILE: a trace that reports every 200 instructions would otherwise append
+// thousands of lines per second and turn a diagnostic into disk pressure. Progress is only useful
+// while a command is in flight, so losing it on reconnect costs nothing.
+export function broadcastLive(event: string, data: unknown) {
+  if (wss.clients.size === 0) return;                       // nobody listening: skip the work entirely
+  const msg = JSON.stringify({ event, data, ts: Date.now() });
+  for (const c of wss.clients) if (c.readyState === WebSocket.OPEN) c.send(msg);
 }
 export function log(...a: unknown[]) {
   console.log(`[adhd ${new Date().toISOString()}]`, ...a);

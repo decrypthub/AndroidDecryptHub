@@ -10,6 +10,12 @@
 extern "C" {
 #endif
 
+// Delivery handle for the tracer library. The Zygisk companion opens libQBDI.so from the module
+// directory BEFORE the uid/domain switch (the app domain cannot read /data/adb) and hands the plain
+// fd over; the agent copies it into a memfd the first time a trace actually runs. No fd means the
+// feature is off for this target: nothing is loaded and nothing is mapped.
+void adh_qbdi_set_source_fd(int fd);
+
 int adh_qbdi_trace(void *func, const unsigned long long *args, int argc, char *out, int out_size);
 // Explicit command-thread collection. One bounded recording is retained until released/replaced;
 // replies carry metadata only, and qbdi_read retrieves <=128 instructions per page.
@@ -107,8 +113,16 @@ typedef struct {
 } qbdi_summary_t;
 
 // Run from an arbitrary pc with the hit's registers, on the current thread's VM.
-// gpr layout: [0..8] = x0..x8, [9] = x29 (fp), [10] = x30 (lr), [11] = x18.
-// Returns the number of instructions executed, or -1 when no run happened (out->error says why).
+// gpr layout: [0..8] = x0..x8, [9] = x29 (fp), [10] = x30 (lr), [11] = x18,
+//             [12..21] = x19..x28 (callee-saved), [22] = x9, [23] = sp.
+// The callee-saved bank matters for an IN-HOOK trace: the traced function is entitled to read x19..x28
+// as its own (it saved them in its prologue in the real execution, and this run starts after that
+// prologue). Leaving them zeroed made any function that keeps a state pointer in x19..x28 fault the
+// moment it dereferenced it - measured on a VM interpreter that keeps its context in x19/x21.
+// Callers that do not know a register pass ADH_QTRACE_GPR_UNKNOWN and the value is zeroed, which is the
+// old behaviour for that slot.
+#define ADH_QTRACE_GPR_LEN 24
+#define ADH_QTRACE_GPR_UNKNOWN 0ULL
 int adh_qbdi_run_from(uint64_t pc, const uint64_t *gpr, int budget, int time_ms, qbdi_summary_t *out);
 
 // Same, but also names the module to instrument when the start pc is NOT inside one (the Dobby

@@ -277,6 +277,11 @@ SCRIPTS=(
   # already covered by v84 (native_hook_all resolves exports through the same maps+dump+parse chain);
   # what is new is the paging/filter/archive contract and the refusal to add an agent op for it.
   "verify_v127_symbols.sh:host"
+  # v129: the QBDI payload on a REAL target (not the sandbox APK): default refuses with an actionable
+  # error and delivers no fd; opt-in delivers the fd, traces, and releases the library afterwards.
+  "verify_v129_qbdi_delivery.sh:device"
+  # v130: scope merge rules + the analyze_app/scope_* MCP tool contract (host only, no device write).
+  "verify_v130_scope_analyze.sh:host"
 )
 
 pass=0; fail=0; skip=0; FAILED=""

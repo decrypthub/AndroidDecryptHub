@@ -33,6 +33,8 @@ static constexpr const char *kHostEndpointPath = "/data/adb/adh/host.endpoint"; 
 static constexpr const char *kLoaderMarker = "/data/adb/adh/zygisk_loaded"; // == com.adh.core.AdhPaths.LOADER_MARKER
 static constexpr const char *kManagerPkg = "com.adh.manager";         // == com.adh.core.AdhPaths.MANAGER_PKG
 static constexpr const char *kAgentName = "libadh_agent.so";          // == com.adh.core.AdhPaths.AGENT_SO_NAME
+static constexpr const char *kQbdiName = "libQBDI.so";                // optional tracer, delivered on demand
+static constexpr const char *kQbdiFlagPath = "/data/adb/adh/qbdi.enabled"; // presence = deliver the tracer
 
 #include <cstdarg>
 static zygisk::Api *g_api_for_log = nullptr;   // set in onLoad, used to relay logs (see note())
@@ -452,7 +454,7 @@ static bool policy_flags_for(const char *pkg, char *out, size_t cap) {
     return true;
 }
 
-static int open_agent_fd(zygisk::Api *api, std::string *where) {
+static int open_agent_fd(zygisk::Api *api, std::string *where, int *qbdi_out) {
     // Open the agent while we are still in the pre-specialize window. Calling
     // getModuleDir() from postAppSpecialize deadlocks on Zygisk Next, so keep
     // the daemon interaction here and pass only the plain fd to the linker.
@@ -463,6 +465,17 @@ static int open_agent_fd(zygisk::Api *api, std::string *where) {
     }
     int fd = openat(dirfd, kAgentName, O_RDONLY | O_CLOEXEC);
     int saved_errno = errno;
+    // The optional tracer is opened in the same window for the same reason: /data/adb is not
+    // readable from the app domain, and an inherited fd is the only way to hand a real target a
+    // library it can load. Failure is not fatal - the agent just keeps QBDI off for this process.
+    if (qbdi_out) {
+        *qbdi_out = -1;
+        int qfd = openat(dirfd, kQbdiName, O_RDONLY | O_CLOEXEC);
+        int qerr = errno;
+        if (qfd >= 0) *qbdi_out = qfd;
+        else note("openat(module dir, %s) failed: %s - QBDI stays off for this process",
+                  kQbdiName, strerror(qerr));
+    }
     close(dirfd);
     if (fd < 0) {
         LOGE("openat(module dir, %s) failed: %s", kAgentName, strerror(saved_errno));
@@ -745,8 +758,23 @@ public:
         }
         if (!host_endpoint.empty()) note("host endpoint %s", host_endpoint.c_str());
 
+        // QBDI is an opt-in payload: the flag file is root-written, and the companion (root) is the
+        // only side that can see it. No flag = no fd = no library, no mapping, no cost.
+        qbdi_enabled = false;
+        {
+            int qsock = connect_companion();
+            if (qsock >= 0) {
+                char reply[8] = {0};
+                if (send_all(qsock, "qbdi\n", 5) && read_reply_line(qsock, reply, sizeof(reply))) {
+                    qbdi_enabled = (reply[0] == '1');
+                }
+                close(qsock);
+            }
+        }
+        if (qbdi_enabled) note("qbdi delivery enabled pkg=%s", package.c_str());
+
         should_inject = true;
-        int src_fd = open_agent_fd(api, &agent_path);
+        int src_fd = open_agent_fd(api, &agent_path, qbdi_enabled ? &qbdi_fd : nullptr);
         if (src_fd < 0) {
             should_inject = false;
             return;
@@ -818,6 +846,20 @@ public:
                 LOGE("adh_agent_set_endpoint not found; agent keeps loopback only");
             }
         }
+        // Hand the tracer over before start() so the very first qbdi_trace already has it. The agent
+        // owns the fd from here on (it re-reads it on every trace), so the companion must not close it.
+        if (qbdi_fd >= 0) {
+            using set_qbdi_fn = void (*)(int);
+            auto set_qbdi = reinterpret_cast<set_qbdi_fn>(dlsym(handle, "adh_agent_set_qbdi_fd"));
+            if (set_qbdi) {
+                set_qbdi(qbdi_fd);
+                qbdi_fd = -1;
+            } else {
+                close(qbdi_fd);
+                qbdi_fd = -1;
+                LOGE("adh_agent_set_qbdi_fd not found; QBDI stays off for this process");
+            }
+        }
         using start_fn = void (*)();
         auto start = reinterpret_cast<start_fn>(dlsym(handle, "adh_agent_start"));
         if (!start) {
@@ -834,6 +876,8 @@ private:
     bool should_inject = false;
     bool marker_requested = false;
     int agent_fd = -1;
+    int qbdi_fd = -1;
+    bool qbdi_enabled = false;
     std::string agent_path;
     std::string package_name;
     // Hook-family policy line for this package (empty = none configured → agent defaults to all on).
@@ -854,6 +898,7 @@ REGISTER_ZYGISK_MODULE(AdhModule)
 //   "policy <package>\n"  -> replies "d=1,h=0,s=1,a=1,t=1,e=0\n", or "default\n" when the
 //                            package carries no policy at all. Capture families default ON.
 //   "log <line>\n"        -> appends to the root decision log, replies "ok\n"
+//   "qbdi\n"              -> replies "1\n" when /data/adb/adh/qbdi.enabled exists, else "0\n"
 //   "host\n"              -> replies "ipv4:port\n", or "none\n" when no address is stored
 // Anything else - including a line that arrived truncated or over-long - is refused with "err\n":
 // the companion never guesses, so an incomplete request can no longer be mistaken for a "mark".
@@ -901,6 +946,14 @@ static void companion_serve(int client) {
                 note("companion policy query pkg=%s -> default", pkg);
                 (void)send_all(client, "default\n", 8);
             }
+            continue;
+        }
+        if (strcmp(req, "qbdi") == 0) {
+            // Opt-in payload switch. Only the root companion can see /data/adb, so the instance asks
+            // it and opens the tracer fd only when the answer is yes. No flag file = QBDI off.
+            bool on = (access(kQbdiFlagPath, F_OK) == 0);
+            note("companion qbdi -> %d", on ? 1 : 0);
+            (void)send_all(client, on ? "1\n" : "0\n", 2);
             continue;
         }
         if (strcmp(req, "host") == 0) {

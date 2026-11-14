@@ -16,7 +16,7 @@ import {
 } from './state.ts';
 import { shouldAutoArmPackage, scopedApps } from './scope_list.ts';
 import type { AgentSession, DumpMeta, MapsRegion, Capture } from './state.ts';
-import { nativeHookIdentity } from './state.ts';
+import { broadcastLive, inflight, nativeHookIdentity } from './state.ts';
 // dex_index.ts imports state.ts, not this file, so this edge cannot form a cycle; it is here so
 // artifact retention can drop the index row of a dex it deletes.
 import { deleteDexDocument, ensureDexIndex } from './dex_index.ts';
@@ -30,24 +30,74 @@ import { buildStoredZip } from './zip_store.ts';
 
 // ---- agent command transport ---------------------------------------------
 // Issue a command to an agent and await its cmdResult (10s default timeout).
+//
+// A command that outlives a few seconds is the normal case for the analysis primitives (a QBDI trace
+// runs to its budget, root_watch waits out its window, a dump walks a large mapping). Over plain
+// request/response the caller sees NOTHING until it either returns or times out, which is
+// indistinguishable from a wedged target - measured: a 6 s trace and a dead agent looked identical.
+// So every in-flight command reports a heartbeat on the live WebSocket channel (`cmd.progress`) and a
+// terminal `cmd.done`. The heartbeat carries elapsed time and the caller's own deadline, never a
+// fabricated percentage: the daemon cannot know how far into a trace the agent is, and inventing
+// progress is worse than reporting none.
 export function sendCmd(sessionId: string, op: string, args: Record<string, unknown> = {}, timeoutMs = 10_000): Promise<any> {
   return new Promise((resolve, reject) => {
     const sock = agentSockets.get(sessionId);
     if (!sock || sock.destroyed) return reject(new Error('agent not connected'));
     const id = nextCmdId();
-    const timer = setTimeout(() => { pending.delete(id); reject(new Error('command timeout')); }, timeoutMs);
+    const startedAt = Date.now();
+    // Report while the command is in flight. Unref'd so a pending heartbeat can never keep the
+    // process alive, and cleared on BOTH paths below so a finished command stops reporting.
+    const beat = setInterval(() => {
+      const t = inflight.get(id);
+      if (!t) return;
+      broadcastLive('cmd.progress', {
+        cmdId: id, op, sessionId,
+        elapsedMs: Date.now() - startedAt,
+        remainingMs: Math.max(0, timeoutMs - (Date.now() - startedAt)),
+      });
+    }, 1000);
+    if (typeof beat.unref === 'function') beat.unref();
+    inflight.set(id, { cmdId: id, op, sessionId, startedAt, timeoutMs, beat });
+    broadcastLive('cmd.start', { cmdId: id, op, sessionId, timeoutMs });
+    const finish = (ok: boolean) => {
+      clearInterval(beat);
+      const t = inflight.get(id);
+      // Whoever removes the tracker owns the terminal event. failPendingFor removes it before
+      // rejecting, so a disconnect reports cmd.done exactly once (with its reason) and this path
+      // stays silent instead of emitting a second, reasonless copy.
+      if (!t) return;
+      if (t.beat) clearInterval(t.beat);
+      inflight.delete(id);
+      broadcastLive('cmd.done', { cmdId: id, op, sessionId, ok, elapsedMs: Date.now() - startedAt });
+    };
+    const timer = setTimeout(() => { pending.delete(id); finish(false); reject(new Error('command timeout')); }, timeoutMs);
     // The session id is carried with the pending entry so a DISCONNECT can fail exactly the commands it
     // owned. Without it, a target that dies mid-command (a trace of code that dereferences freed memory
     // does this) leaves the caller waiting for the full timeout with no explanation - measured: 60 s of
     // silence, answered only by "command timeout".
-    pending.set(id, { resolve, reject, timer, sessionId });
+    pending.set(id, {
+      resolve: (v: any) => { clearTimeout(timer); finish(true); resolve(v); },
+      reject: (e: any) => { clearTimeout(timer); finish(false); reject(e); },
+      timer, sessionId,
+    });
     sock.write(frameJson({ ...args, t: 'cmd', id, op }));
   });
 }
 
-export const pickSid = (sid?: string) => sid ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
-export const sessionForPackage = (pkg: string) =>
-  [...sessions.values()].filter(s => s.online && s.package === pkg).pop()?.sessionId;
+export const pickSid = (sid?: string) => {
+  if (sid) return sid;
+  const online = [...sessions.values()].filter((s) => s.online);
+  if (!online.length) return undefined;
+  // The main process wins. The previous `.pop()` took whichever session was inserted last, which on a
+  // multi-process target can be a renderer/push child: the tool then fails with an empty result and
+  // no hint that the wrong process was chosen (field report: ClassNotFound in :normal_render_proc0
+  // while the main process was online). A child is used only when it is the only thing online.
+  return (online.find((s) => !s.process.includes(':')) ?? online[online.length - 1]).sessionId;
+};
+export const sessionForPackage = (pkg: string) => {
+  const rows = [...sessions.values()].filter((s) => s.online && s.package === pkg);
+  return (rows.find((s) => !s.process.includes(':')) ?? rows[rows.length - 1])?.sessionId;
+};
 export async function agentCmd(sid: string | undefined, op: string, args: Record<string, unknown> = {}, timeout = 15_000) {
   const s = pickSid(sid); if (!s) throw new Error('no online agent session');
   return sendCmd(s, op, args, timeout);
@@ -889,6 +939,16 @@ export async function setCapture(
   const drained = await drainSession(sid);
   const reply = await sendCmd(sid, 'capture_stop', {}, 8_000);
   recordCaptureHooks(sid, reply);
+  // Disarm the periodic drain as part of stopping. Leaving it armed made the loop issue
+  // capture_drain every 1.5 s against an already-stopped capture, which showed up in the field as
+  // endless `[capture] … DROPPING — ring full` lines after the hooks were restored (observed on
+  // com.chaoxing.mobile, 2026-11-13). The drainer itself stays registered so an explicit
+  // drainSession() still works; only the timer that nobody asked to keep polling is cancelled.
+  const timer = captureTimers.get(sid);
+  if (timer) {
+    clearInterval(timer);
+    captureTimers.delete(sid);
+  }
   const drainedCount = Number(drained.response?.count ?? 0) || 0;
   const dropped = Number(drained.response?.dropped ?? 0) || 0;
   return {

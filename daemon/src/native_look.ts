@@ -136,11 +136,13 @@ function traceOf(event: Record<string, unknown>): NativeLookTrace | null {
   };
 }
 
-/** Latest hit for one hook. Memory and registers that share a seq are one result. */
-export function joinNativeLook(records: LookRecord[], hookId: number): NativeLook {
-  const empty: NativeLook = {
-    hit: false, hookId, seq: null, text: '还没有命中。在手机上做那一步之后再读一次。', windows: [], regs: {}, note: '', trace: null,
-  };
+const QUIET = '还没有命中。在手机上做那一步之后再读一次。';
+
+function emptyLook(hookId: number, text = QUIET): NativeLook {
+  return { hit: false, hookId, seq: null, text, windows: [], regs: {}, note: '', trace: null };
+}
+
+function collect(records: LookRecord[], hookId: number): { mems: MemEvent[]; hooks: HookEvent[] } {
   const mems: MemEvent[] = [];
   const hooks: HookEvent[] = [];
   records.forEach((record, index) => {
@@ -159,16 +161,14 @@ export function joinNativeLook(records: LookRecord[], hookId: number): NativeLoo
       hooks.push({ seq: event.seq === undefined ? null : Number(event.seq), regs: regsOf(event), trace: traceOf(event), order });
     }
   });
-  if (!mems.length && !hooks.length) return empty;
-
   mems.sort((a, b) => (a.seq - b.seq) || (a.order - b.order));
   hooks.sort((a, b) => ((a.seq ?? -1) - (b.seq ?? -1)) || (a.order - b.order));
-  const lastSeq = Math.max(0, ...mems.map((m) => m.seq), ...hooks.map((h) => h.seq ?? 0));
-  const matchedMems = mems.filter((m) => m.seq === lastSeq);
+  return { mems, hooks };
+}
+
+/** Pair one already-chosen hook record with the memory records of the same hit. */
+function assemble(hookId: number, matchedMems: MemEvent[], hook: HookEvent | undefined): NativeLook {
   const mem = matchedMems.length ? matchedMems[matchedMems.length - 1] : null;
-  // A missing companion is evidence of an incomplete observation. Never borrow the registers
-  // from a different hit merely because the capture ring retained those registers.
-  const hook = lastSeq > 0 ? hooks.filter((h) => h.seq === lastSeq).pop() : hooks[hooks.length - 1];
   const windows = matchedMems.flatMap((m) => m.mem.map((w) => ({ ...windowOf(w), phase: m.phase })));
   const base = mem
     ? matchedMems.map((m) => `${matchedMems.length > 1 ? `${m.phase}: ` : ''}${memCapturePreview(JSON.stringify({ auto: m.auto, mem: m.mem })) || '这次命中没有抄到可读的内存。'}`).join(' | ')
@@ -189,6 +189,94 @@ export function joinNativeLook(records: LookRecord[], hookId: number): NativeLoo
     note,
     trace,
     pairing: mem ? (hook ? 'paired' : 'memory-only') : 'hook-only',
+  };
+}
+
+/** One seq, pairing only records that share it. A missing companion is never filled from another hit. */
+function lookAt(hookId: number, mems: MemEvent[], hooks: HookEvent[], seq: number): NativeLook {
+  const matchedMems = mems.filter((m) => m.seq === seq);
+  const hook = hooks.filter((h) => h.seq === seq).pop();
+  return assemble(hookId, matchedMems, hook);
+}
+
+function positiveSeqs(mems: MemEvent[], hooks: HookEvent[]): number[] {
+  const set = new Set<number>();
+  for (const m of mems) if (m.seq > 0) set.add(m.seq);
+  for (const h of hooks) if (h.seq && h.seq > 0) set.add(h.seq);
+  return [...set].sort((a, b) => a - b);
+}
+
+/** Latest hit for one hook. Memory and registers that share a seq are one result. */
+export function joinNativeLook(records: LookRecord[], hookId: number): NativeLook {
+  const { mems, hooks } = collect(records, hookId);
+  if (!mems.length && !hooks.length) return emptyLook(hookId);
+  const lastSeq = Math.max(0, ...mems.map((m) => m.seq), ...hooks.map((h) => h.seq ?? 0));
+  if (lastSeq > 0) return lookAt(hookId, mems, hooks, lastSeq);
+  // Events that never carried a seq still have one newest hook record. Do not invent a seq for them.
+  const hook = hooks[hooks.length - 1];
+  const matchedMems = mems.filter((m) => m.seq === 0);
+  if (!hook && !matchedMems.length) return emptyLook(hookId);
+  return assemble(hookId, matchedMems, hook);
+}
+
+export interface NativeLookQuery {
+  /** One retained hit. Mutually exclusive with beforeSeq. */
+  seq?: number;
+  /** Page hits whose seq is strictly older than this. Use retained.nextBeforeSeq from the previous read. */
+  beforeSeq?: number;
+  /** Page size 1..50. Defaults to 20 when beforeSeq is set and limit is omitted. */
+  limit?: number;
+}
+
+export interface NativeLookSelection {
+  look: NativeLook;
+  retained: { total: number; oldestSeq: number | null; newestSeq: number | null; nextBeforeSeq: number | null };
+  /** Present only when the caller asked for seq, beforeSeq or limit. Ascending seq. */
+  hits?: NativeLook[];
+}
+
+function pagingQuery(query: NativeLookQuery): void {
+  if (query.seq !== undefined && query.beforeSeq !== undefined) throw new Error('pass seq or beforeSeq, not both');
+  if (query.seq !== undefined && (!Number.isSafeInteger(query.seq) || query.seq < 1)) throw new Error('seq must be a positive integer');
+  if (query.beforeSeq !== undefined && (!Number.isSafeInteger(query.beforeSeq) || query.beforeSeq < 1)) throw new Error('beforeSeq must be a positive integer');
+  if (query.limit !== undefined && (!Number.isSafeInteger(query.limit) || query.limit < 1 || query.limit > 50)) throw new Error('limit must be an integer 1..50');
+}
+
+/**
+ * Newest hit by default. `seq` selects one earlier hit. `beforeSeq` plus `limit` pages older hits
+ * already retained for this hook. Nothing here installs a hook or re-runs the target.
+ */
+export function selectNativeLook(records: LookRecord[], hookId: number, query: NativeLookQuery = {}): NativeLookSelection {
+  pagingQuery(query);
+  const { mems, hooks } = collect(records, hookId);
+  const seqs = positiveSeqs(mems, hooks);
+  const newestSeq = seqs.length ? seqs[seqs.length - 1] : null;
+  const oldestSeq = seqs.length ? seqs[0] : null;
+  const asked = query.seq !== undefined || query.beforeSeq !== undefined || query.limit !== undefined;
+  let chosen: number[] = [];
+  if (query.seq !== undefined) {
+    if (seqs.includes(query.seq)) chosen = [query.seq];
+  } else if (asked) {
+    const limit = query.limit ?? 20;
+    const pool = query.beforeSeq === undefined ? seqs : seqs.filter((s) => s < (query.beforeSeq as number));
+    chosen = pool.slice(-limit);
+  } else if (newestSeq !== null) {
+    chosen = [newestSeq];
+  }
+  const hits = chosen.map((seq) => lookAt(hookId, mems, hooks, seq));
+  const nextBeforeSeq = chosen.length && seqs.some((s) => s < chosen[0]) ? chosen[0] : (asked ? null : (seqs.length > 1 ? newestSeq : null));
+  let look: NativeLook;
+  if (query.seq !== undefined && !chosen.length) {
+    look = emptyLook(hookId, `没有 seq=${query.seq}。已保留的 seq：${seqs.length ? seqs.join(',') : '无'}。`);
+  } else if (hits.length) {
+    look = hits[hits.length - 1];
+  } else {
+    look = joinNativeLook(records, hookId);
+  }
+  return {
+    look,
+    retained: { total: seqs.length, oldestSeq, newestSeq, nextBeforeSeq },
+    ...(asked ? { hits } : {}),
   };
 }
 
@@ -248,13 +336,14 @@ export async function nativeLookArm(
   };
 }
 
-export async function nativeLookRead(session: string, hookId: number, deps: NativeLookDeps = defaultDeps): Promise<NativeLook & { action: 'read' }> {
+export async function nativeLookRead(session: string, hookId: number, deps: NativeLookDeps = defaultDeps, query: NativeLookQuery = {}): Promise<NativeLook & { action: 'read' } & Pick<NativeLookSelection, 'retained' | 'hits'>> {
   if (!Number.isFinite(hookId) || hookId <= 0) throw new Error('need the hookId that arm returned');
   const sid = pickSid(session) ?? session;
   let drainError = '', observationError = '';
   try { await deps.drainSession(sid); } catch (e) { drainError = (e as Error).message; }
   const records = deps.captures.filter((c) => c.sessionId === sid);
-  const look = joinNativeLook(records, hookId);
+  const selected = selectNativeLook(records, hookId, query);
+  const look = selected.look;
   let observation;
   try {
     const reply = await deps.sendCmd(sid, 'native_hook', { action: 'status' }, 10_000);
@@ -263,12 +352,12 @@ export async function nativeLookRead(session: string, hookId: number, deps: Nati
     if (hook && Number.isFinite(hook.emitted)) {
       observation = Object.fromEntries(['hits', 'selected', 'filtered', 'sampledOut', 'throttled', 'limited', 'emitted', 'maxEvents', 'sampleEvery', 'budgetReached', 'emittedMeaning']
         .map((name) => [name, hook[name]]));
-      if (!look.hit && hook.hits > 0) look.text = `已触发 ${hook.hits} 次，符合筛选 ${hook.selected} 次，提交捕获事件 ${hook.emitted} 条；当前捕获窗口没有保留对应事件。`;
+      if (!look.hit && hook.hits > 0 && look.text === QUIET) look.text = `已触发 ${hook.hits} 次，符合筛选 ${hook.selected} 次，提交捕获事件 ${hook.emitted} 条；当前捕获窗口没有保留对应事件。`;
     }
     if (!hook) observationError = 'hook is absent from active status; retained records remain readable';
     else if (!Number.isFinite(hook.emitted)) observationError = 'deployed agent does not expose observation counters';
   } catch (e) { observationError = (e as Error).message; }
-  return { action: 'read', ...look, ...(observation ? { observation } : {}),
+  return { action: 'read', ...look, retained: selected.retained, ...(selected.hits ? { hits: selected.hits } : {}), ...(observation ? { observation } : {}),
     ...(observationError ? { observationError } : {}), ...(drainError ? { drainError } : {}) };
 }
 

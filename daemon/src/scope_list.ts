@@ -244,3 +244,91 @@ export async function scopedApps(now = Date.now()): Promise<{ apps: ScopedApp[];
   // Switcher truth = scope.json only. Capture history on disk must not invent checked apps.
   return { apps: scopeSwitcherApps(cache.packages), error: cache.error };
 }
+
+// --- scope write (host = the AI/operator channel) ------------------------------------------------
+// The Zygisk companion reads scope.json at process specialization, so a package added here is only
+// injected after its next cold start. The device daemon owns the file at runtime; writing it through
+// adb+su is the host-side equivalent of the Manager switch and keeps "analyze any app" scriptable.
+
+const PKG_RE = /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$/;
+
+export interface ScopeFile { packages: string[]; version: number; mode: string; error: string | null }
+
+/** Full scope.json (packages + version/mode), read through root. Never throws: errors are reported. */
+export async function readScopeFile(): Promise<ScopeFile> {
+  try {
+    const raw = await adbShell(`su -c 'cat ${SCOPE_PATH}'`);
+    const start = raw.indexOf('{');
+    const end = raw.lastIndexOf('}');
+    const text = (start >= 0 && end > start ? raw.slice(start, end + 1) : raw).trim();
+    const obj = text ? JSON.parse(text) as { packages?: unknown; version?: unknown; mode?: unknown } : {};
+    return {
+      packages: parseScopePackages(raw),
+      version: Number(obj.version) || 2,
+      mode: typeof obj.mode === 'string' && obj.mode ? obj.mode : 'allowlist',
+      error: null,
+    };
+  } catch (e) {
+    return { packages: [], version: 2, mode: 'allowlist', error: (e instanceof Error ? e.message : String(e)).split('\n')[0].slice(0, 240) };
+  }
+}
+
+/** Pure merge: `add` wins over `remove`? No — an explicit remove in the same call wins. */
+export function mergeScope(current: string[], op: { add?: unknown[]; remove?: unknown[] }): string[] {
+  const clean = (list: unknown[] | undefined) => (list ?? [])
+    .map((p) => String(p ?? '').trim())
+    .filter((p) => PKG_RE.test(p) && p !== MANAGER_PKG);
+  const out = new Set(current.filter((p) => PKG_RE.test(p)));
+  for (const p of clean(op.add)) out.add(p);
+  for (const p of clean(op.remove)) out.delete(p);
+  return [...out];
+}
+
+export async function packageInstalled(pkg: string): Promise<boolean> {
+  if (!PKG_RE.test(pkg)) return false;
+  try {
+    const out = await adbShell(`pm path ${pkg}`);
+    return /^package:/m.test(out);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Replace the allowlist. Read back after writing: a silent half-write would mean the next cold start
+ * is not injected and the analysis then looks like "the app refused the agent" (a false negative we
+ * cannot afford). The file's SELinux label is part of the write, not an afterthought.
+ */
+export async function writeScopePackages(
+  packages: string[],
+  meta: { version?: number; mode?: string } = {},
+): Promise<{ ok: boolean; packages: string[]; error?: string }> {
+  const clean = [...new Set(packages.map((p) => p.trim()).filter((p) => PKG_RE.test(p)))];
+  const body = `${JSON.stringify({ version: meta.version ?? 2, mode: meta.mode ?? 'allowlist', packages: clean }, null, 2)}\n`;
+  const dir = mkdtempSync(join(tmpdir(), 'adh-scope-'));
+  const local = join(dir, 'scope.json');
+  try {
+    writeFileSync(local, body, 'utf8');
+    await execFileP('adb', [...adbBase(), 'push', local, '/data/local/tmp/adh-scope.json'], {
+      timeout: 20000, windowsHide: true, maxBuffer: 1024 * 1024,
+    });
+    await adbShell("su -c 'cp /data/local/tmp/adh-scope.json /data/adb/adh/scope.json'");
+    await adbShell("su -c 'chown root:root /data/adb/adh/scope.json && chmod 644 /data/adb/adh/scope.json'");
+    // Label is explicit: `cp` may otherwise inherit the temp file's label and the companion's read
+    // then fails closed (no injection, no error the operator can see).
+    await adbShell("su -c 'chcon u:object_r:adb_data_file:s0 /data/adb/adh/scope.json'");
+    await adbShell("rm -f /data/local/tmp/adh-scope.json");
+    const back = await adbShell(`su -c 'cat ${SCOPE_PATH}'`);
+    const got = parseScopePackages(back);
+    if (JSON.stringify(got) !== JSON.stringify(clean)) {
+      return { ok: false, packages: clean, error: `scope write did not stick (wrote ${clean.length}, read back ${got.length})` };
+    }
+    cache = { at: Date.now(), packages: got, error: null };
+    return { ok: true, packages: got };
+  } catch (e) {
+    return { ok: false, packages: clean, error: (e instanceof Error ? e.message : String(e)).split('\n')[0].slice(0, 240) };
+  } finally {
+    try { rmSync(dir, { recursive: true, force: true }); } catch { /* temp cleanup only */ }
+  }
+}
+

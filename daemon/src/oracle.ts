@@ -251,3 +251,56 @@ export async function oracleDiff(
   }
   return { ok: true, id: t.id, extract: t.extract, diff: summarizeDiff(t.baseline, rows) };
 }
+
+/** First path where two JSON values differ; null when equal. Used by the stability report. */
+export function firstDifference(a: unknown, b: unknown, path = ''): string | null {
+  if (a === b) return null;
+  if (typeof a !== typeof b || a === null || b === null) return path || '<root>';
+  if (Array.isArray(a) && Array.isArray(b)) {
+    const n = Math.max(a.length, b.length);
+    for (let i = 0; i < n; i++) {
+      const d = firstDifference(a[i], b[i], `${path}[${i}]`);
+      if (d) return d;
+    }
+    return null;
+  }
+  if (typeof a === 'object' && typeof b === 'object') {
+    const left = a as Record<string, unknown>, right = b as Record<string, unknown>;
+    for (const key of new Set([...Object.keys(left), ...Object.keys(right)])) {
+      const d = firstDifference(left[key], right[key], path ? `${path}.${key}` : key);
+      if (d) return d;
+    }
+    return null;
+  }
+  return path || '<root>';
+}
+
+/**
+ * Determinism check: replay the SAME arguments `repeat` times and report whether the observed value
+ * is stable. A pure function answers the same bytes every time; a hidden counter / clock / random
+ * input does not. This is the first question a black-box search must answer (the field report from a
+ * VMP target: "the non-purity of dhw was discovered only by hand, after four rounds of key guessing"),
+ * and it must not require a hand-written double replay.
+ */
+export async function oracleStability(
+  session: string,
+  opts: { id: number; repeat?: number; patches?: Patch[]; timeoutMs?: number },
+  deps: OracleDeps = defaultDeps,
+): Promise<{ ok: boolean; id?: number; repeat?: number; runs?: number; distinct?: number; stable?: boolean; values?: unknown[]; extract?: string; firstDiff?: string | null; error?: string }> {
+  const t = templates.get(Number(opts.id));
+  if (!t) return { ok: false, error: `unknown oracle id ${opts.id} (record one first)` };
+  const repeat = Math.max(1, Math.min(8, Number(opts.repeat) > 0 ? Number(opts.repeat) : 3));
+  const values: unknown[] = [];
+  for (let i = 0; i < repeat; i++) {
+    const r = await oracleReplay(session, { id: t.id, patches: opts.patches, timeoutMs: opts.timeoutMs }, deps);
+    if (!r.ok) return { ok: false, error: `run ${i + 1}: ${r.error}` };
+    values.push(r.value);
+  }
+  const serialized = values.map((v) => JSON.stringify(v));
+  const distinct = new Set(serialized).size;
+  let firstDiff: string | null = null;
+  for (let i = 1; i < values.length && !firstDiff; i++) {
+    if (serialized[i] !== serialized[0]) firstDiff = firstDifference(values[0], values[i]);
+  }
+  return { ok: true, id: t.id, repeat, runs: values.length, distinct, stable: distinct === 1, values, extract: t.extract, firstDiff };
+}

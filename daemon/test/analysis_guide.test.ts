@@ -40,7 +40,8 @@ test('every guide can be read through MCP without a session and returns a bounde
 test('guide templates bind only declared variables and refer to actual tool schemas', () => {
   // Synthetic typed substitutions validate call shapes only. No example target call is executed.
   const values: Record<string, any> = { session: 'guide-test-no-agent', tid: 7, buffer: '0x1000', runId: 'synthetic-run', pc: '0x1000',
-    captureId: 7, hookId: 7, qbdiPath: '/synthetic/libQBDI.so', entry: '0x1000', integerArgs: ['1', '2'], traceId: 'synthetic-trace' };
+    captureId: 7, hookId: 7, qbdiPath: '/synthetic/libQBDI.so', entry: '0x1000', integerArgs: ['1', '2'], traceId: 'synthetic-trace',
+    className: 'synthetic.Facade', method: 'sign', params: 'java.lang.String', oracleArgs: ['synthetic'] };
   for (const topic of ANALYSIS_GUIDE_TOPICS) {
     const guide = analysisGuide(topic);
     for (const step of guide.steps) {

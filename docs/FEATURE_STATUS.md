@@ -211,6 +211,43 @@ in-hook QBDI 仍是虚拟栈重放后再原生执行，不能把某个窗口未�
 
 **未测 / 已知边界**：`traceInsns` 上限 64k 与 300 ms 墙钟（谁先到谁停）；写观察点只覆盖**本次 run 内**的写；`memAfter` 仍只接受寄存器窗口；全量块级 trace 与 host 查询**尚未实现**（见 `PROGRESS` 第五十轮）。
 
+### 2.4 v0.7.0（2026-11-12）QBDI 载荷投递
+
+> 设备 `aa165071`（PGP110 / Android 15 / arm64-v8a / root），agent `5ea3f25c…`（= 模块内 `.so`），真实第三方 App `com.uxin.kilaaudio` 1.6.18。
+
+| 能力 | 门禁 | 真机结果 |
+|---|---|---|
+| QBDI 默认关闭面 | `verify_v129_qbdi_delivery.sh`（A 段） | ✅ PASS（`delivery is off` 可操作报错；`/proc/<pid>/fd` 无 QBDI fd） |
+| QBDI 显式开启后真实目标 trace | `verify_v129_qbdi_delivery.sh`（B 段） | ✅ PASS（companion 交付 fd；`qbdi_trace libc:getpid` → `retval`=目标 pid、8 条指令；trace 后 maps 无 QBDI） |
+| 沙盒不再自带追踪库 | `tools/fetch_qbdi.sh` | ✅ 默认不 stage（仅 `ADH_STAGE_SANDBOX_QBDI=1` 显式恢复旧行为） |
+
+**已知成本**：开启后每个被注入进程在 specialization 时多一个指向 `/data/adb/modules/adh/libQBDI.so` 的 fd（目标可 readlink 看到路径）；QBDI 运行期映射约 6MB `r-xp` + RSS +27MB（同一进程实测），standalone trace 结束 `dlclose` 释放。默认关闭时以上都不存在。
+
+### 2.5 v0.8.0（2026-11-12）作用域可编程 + 一把抓分析
+
+| 能力 | 门禁 | 真机结果 |
+|---|---|---|
+| 作用域读写（`scope_list` / `scope_set`） | `verify_v130_scope_analyze.sh`（host） | ✅ PASS（merge/拒绝非法包名/主进程选择/tool 形状 8/8）；真机写盘回读一致（7→8 包） |
+| 一把抓分析 `analyze_app` | `verify_v130` + 真机 | ✅ PASS（麦当劳 51s triage；中国移动 37s，13 组 HTTP exchange、163 条 crypto 记录） |
+| 沙盒 APK 不再内置追踪库 | 重装后设备 `lib/arm64` 列表 | ✅ 只剩 `libadh_agent.so` + fixtures |
+| agent 签名门禁 | `verify_v88_agent_signatures.sh` | ✅ PASS（错误文案去掉 `Dobby` 字面量后 token 3→2） |
+| 沙盒未运行时的 So 重组 | `verify_v02_so.sh` | ⏭ SKIP（原先是 FAIL，属环境性假红，已改为 clear SKIP） |
+
+**接口**：`POST /api/analyze-app` 与 MCP `analyze_app` 同源；`GET|POST /api/scope` 与 `scope_list`/`scope_set` 同源。`analyze_app` 只接受已安装的第三方包（系统包与 ADH 自己的包被拒绝），把包加入作用域这一动作会在回复的 `scopeAdded` 里如实报告。
+
+### 2.6 v0.8.1（2026-11-12）实战痛点第一批修复
+
+> 依据 `X:\DH_Project` 的真实使用记录（20 条缺口清单 + 三轮改进建议 + 86 工具实测）。设备 `aa165071`，agent 0.8.0，目标 `com.mcdonalds.gma.cn`。
+
+| 能力 | 门禁 | 真机结果 |
+|---|---|---|
+| `maps_query`（段过滤 + 地址解析） | `verify_v71`（registry）+ 真机 | ✅ PASS（2737 段；`libc.so` 命中 6 段、truncated 如实；`0x704cca7010` → libc.so + fileOffset 0x10） |
+| `oracle action:stability`（确定性判定） | `daemon/test/oracle_stability.test.ts` + 真机 | ✅ PASS（`System.currentTimeMillis` 三次重放：stable=false、distinct=3） |
+| 统一错误码（十类，含返回式失败） | `daemon/test/error_codes.test.ts` + 真机 | ✅ PASS（`memory_write` 无 0x、`native_hook` 缺 mode → `code:BAD_ARG`） |
+| 默认会话主进程优先 | `daemon/test/session_pick.test.ts` | ✅ PASS（主进程优先，子进程仅在其唯一在线时使用） |
+
+**对应关系**：`maps_query` ≈ DH_Project B3 的“段导航”一半（快照 diff 未做）；`stability` = B2；错误码 = A12；`pickSid` = A10。仍未做：PC 历史环 / hook 事件分页（缺口清单 P0-1/2）、`entry_capture`（B1）、结论台账（B6）。
+
 **全量门禁（2026-10-23，130 条）**：套件跑出 **112 PASS / 18 FAIL / 0 SKIP**。逐条单独复跑后：
 
 - **2 条是本版改动引起的，已修并复跑 PASS**：`v86`（安装签名长了 → 源码锚点过期，改成按参数名断言，并新增“被节流的命中不得 trace”这条不变量）、`v87`（`module_watch` 在 agent 里**只有实现、没有接进分派**，MCP 工具实际是死的；已接线 + 进 caps，ops 36→37）。

@@ -29,6 +29,7 @@
 #include "../runtime/dlopen_watch.h"
 #include "../runtime/java_enum.h"
 #include "../trace/commands.h"
+#include "../trace/qbdi_trace.h"
 #include "../hook/native_hooks.h"
 #include "../hook/hw_watch.h"
 #include "../hook/stealth_pool.h"
@@ -964,6 +965,15 @@ static void *agent_thread(void *arg) {
 }
 
 static void do_start(void) {
+    // Optional bootstrap hook: registrations that happen before the host's first command are the
+    // interesting ones on a hardened target (they name the VM's native entry points). Off by
+    // default; `setprop adh.jni_early 1` (root) arms it for the NEXT process start.
+    {
+        char early[PROP_VALUE_MAX] = "";
+        if (__system_property_get("adh.jni_early", early) > 0 && early[0] == '1') {
+            adh_jni_hook_install_early();
+        }
+    }
     // The per-package policy is applied by whatever install comes next — it is NOT armed here.
     // Arming would mean the agent picking a module for its own GOT patch, and the agent carries no
     // module name by design (WS-B red line, tools/verify_v87_mcp_operability.sh); the only module it
@@ -1009,6 +1019,16 @@ void adh_agent_set_policy(const char *flags) {
         policy_flag(g_policy, 'a', 1), policy_flag(g_policy, 't', 1), policy_flag(g_policy, 'e', 1),
         policy_flag(g_policy, 'y', 0));
     LOGI("hook policy: %s", g_policy);
+}
+
+// QBDI delivery: the Zygisk companion opens the tracer from the module directory before the
+// uid/domain switch and hands the fd over here. The agent keeps it and copies it into a memfd the
+// first time a trace actually runs (see trace/qbdi_trace.c). No fd = feature off for this target:
+// nothing is loaded and nothing is mapped, so "not using it" really costs nothing.
+__attribute__((visibility("default")))
+void adh_agent_set_qbdi_fd(int fd) {
+    adh_qbdi_set_source_fd(fd);
+    LOGI("qbdi delivery fd=%d", fd);
 }
 
 // More than one backend can load this .so into one process (Zygisk + self-load + Frida Gadget).
@@ -1165,4 +1185,20 @@ JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *reserved) {
     if (have_env && !bind_reporter_from_prop(env)) start_reporter_watch();
     pthread_once(&g_once, do_start);
     return JNI_VERSION_1_6;
+}
+
+// Handed the JavaVM by the loader that already has one.
+//
+// Zygisk's ModuleBase::onLoad(api, env) receives a live JNIEnv, so the loader can give us the VM
+// before adh_agent_start() runs. That removes the agent's only reason to call
+// JNI_GetCreatedJavaVMs at all: resolving it out of the already-mapped libart.so and CALLING it
+// crashed the target process at startup (SIGSEGV/SEGV_ACCERR at libart's
+// JNI_GetCreatedJavaVMs+0) because the call happens from a freshly-loaded memfd DSO on a thread
+// ART has not set up for it. Preferring the handed-over VM is therefore both cheaper and safer;
+// the in-memory lookup stays as the fallback for loaders that cannot provide one.
+JNIEXPORT void adh_agent_set_vm(void *vm) {
+    if (!vm) return;
+    if (!current_agent_copy_is_owner()) return;
+    adh_jni_set_vm((JavaVM *)vm);
+    LOGI("JavaVM handed over by loader (no symbol lookup needed)");
 }

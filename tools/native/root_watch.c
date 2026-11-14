@@ -94,7 +94,7 @@ static int parse_mem(const char *text) {
         if (hop == 0) {
             const char *sign = NULL;
             for (size_t i = 0; i < seg_len; i++) if (p[i] == '+' || p[i] == '-') { sign = p + i; break; }
-            size_t reg_len = sign ? (size_t)(sign - seg_start) : seg_len;
+            size_t reg_len = sign ? (size_t)(sign - p) : seg_len;
             m.reg = reg_of(p + seg_start, reg_len);
             if (m.reg < 0) return 0;
             if (sign) {

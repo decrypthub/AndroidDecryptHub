@@ -29,6 +29,12 @@ console.log('DUMP_PATH='+d.path);
 EOF
 )"
 echo "$OUT"
+# No sandbox process = no target to reassemble. That is an environment state, not a regression: the
+# gate must not report "no reassembled file" for an app the operator simply did not start.
+if echo "$OUT" | grep -q 'NO_AGENT'; then
+  echo "⏭  SKIP: com.adh.sandbox is not running (start it, or run this after verify_v01)"
+  echo "RESULT:SKIP"; exit 0
+fi
 echo "$OUT" | grep -q 'RESULT' # noop
 DUMP_PATH="$(echo "$OUT" | sed -n 's/^DUMP_PATH=//p')"
 if [ -z "$DUMP_PATH" ] || [ ! -f "$DUMP_PATH" ]; then echo "❌ no reassembled file"; echo "RESULT:FAIL"; exit 1; fi

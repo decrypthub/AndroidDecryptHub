@@ -10,7 +10,8 @@ import { assembleHttpExchanges, type TlsChunk } from '../http_exchange.ts';
 import { AGENT_PORT, webUrls } from '../config.ts';
 import { baseFromHost, isValidPackage, mcpOnboarding } from '../mcp_onboarding.ts';
 import { handleMcp, MCP_TOOLS } from '../mcp.ts';
-import { scopedApps } from '../scope_list.ts';
+import { scopedApps, mergeScope, readScopeFile, writeScopePackages } from '../scope_list.ts';
+import { analyzePackage } from '../app_analyze.ts';
 import { applyCaptureEnabled, listCaptureArmProtected } from '../service.ts';
 import {
   applyCaptureRetainCap, broadcast, captureHealth, capturePackage, captures, captureTimers,
@@ -41,6 +42,49 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
         // Packages that finished one-click unpack and will not be re-armed until next hello.
         unpackProtected: listCaptureArmProtected(),
       });
+    } },
+    // Host-side allowlist control (the AI/operator channel): the companion reads scope.json at
+    // process specialization, so an added package is injected on its next cold start.
+    { method: 'GET', path: '/api/scope', handler: async () => {
+      const s = await readScopeFile();
+      return send(200, { ok: s.error === null, packages: s.packages, version: s.version, mode: s.mode, error: s.error });
+    } },
+    { method: 'POST', path: '/api/scope', handler: async () => {
+      let body: any;
+      try { body = JSON.parse((await readBody(req)) || '{}'); } catch { return send(400, { error: 'bad json' }); }
+      const cur = await readScopeFile();
+      if (cur.error) return send(503, { ok: false, error: cur.error });
+      const before = cur.packages;
+      const next = Array.isArray(body.set)
+        ? mergeScope([], { add: body.set })
+        : mergeScope(before, { add: body.add, remove: body.remove });
+      const w = await writeScopePackages(next, { version: cur.version, mode: cur.mode });
+      if (!w.ok) return send(502, { ok: false, error: w.error, packages: before });
+      return send(200, {
+        ok: true, packages: w.packages,
+        added: w.packages.filter((p) => !before.includes(p)),
+        removed: before.filter((p) => !w.packages.includes(p)),
+        note: 'cold start the target to apply',
+      });
+    } },
+    // One call from a package name to a report — the "analyze any app" entry point.
+    { method: 'POST', path: '/api/analyze-app', handler: async () => {
+      let body: any;
+      try { body = JSON.parse((await readBody(req)) || '{}'); } catch { return send(400, { error: 'bad json' }); }
+      const pkg = String(body.package ?? '').trim();
+      if (!pkg) return send(400, { error: 'need package' });
+      try {
+        const out = await analyzePackage(pkg, {
+          autoScope: body.autoScope !== false,
+          forceRestart: body.forceRestart === true,
+          captureMs: Number(body.captureMs) > 0 ? Number(body.captureMs) : undefined,
+          unpack: body.unpack === true,
+          httpCaptureMs: Number(body.httpCaptureMs) > 0 ? Number(body.httpCaptureMs) : 0,
+          timeoutMs: Number(body.timeoutMs) > 0 ? Number(body.timeoutMs) : undefined,
+          settleMs: Number(body.settleMs) > 0 ? Number(body.settleMs) : undefined,
+        });
+        return send(out.ok ? 200 : 502, out);
+      } catch (e) { return send(500, { ok: false, error: (e as Error).message }); }
     } },
     { path: '/health', handler: () => send(200, {
       ok: true, service: 'adhd', name: 'ADH Daemon', version: '0.1.0',

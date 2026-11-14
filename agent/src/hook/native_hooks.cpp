@@ -275,8 +275,9 @@ static size_t adh_json_append(char *out, size_t cap, size_t off, const char *for
 #define ADH_TRACE_JSON_MAX 3584
 
 // `traceFrom` ("x0".."x9", "x29", "x30") -> the index of that register in the stub's saved bank.
-// The stub saves x0-x9 at regs[0..9], x29 at regs[10], x30 at regs[11] and x18 at regs[12]; nothing
-// else is saved, so a request for another register is refused instead of reading a stale slot.
+// The stub saves x0-x9 at regs[0..9], x29 at regs[10], x30 at regs[11] and x18 at regs[12]; the real
+// sp at regs[32] and x19-x28 at regs[33..42]. traceFrom names only the argument bank, so a request for
+// another register is refused instead of reading a stale slot.
 // Returns -1 for "not given", -2 for a bad name.
 static int trace_from_stub_index(const char *spec, char *canon, size_t canon_size) {
     if (!spec || !spec[0]) return -1;
@@ -739,6 +740,14 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id, uint64_t
     // The stub's saved bank, indexed the way `traceFrom` names registers: 0-9 = x0-x9, 10 = x29,
     // 11 = x30. Kept here (not inside the window block) because the in-hook trace needs it too.
     uint64_t in9 = regs[9];
+    // Callee-saved bank and the real stack pointer, saved by the stub at fixed offsets past the
+    // x0..x18 block. An in-hook instruction trace starts INSIDE the traced function, after its own
+    // prologue saved these, so it must see the real values - zeros make any function that keeps its
+    // state pointer here fault on first dereference.
+    const uint64_t in_sp = regs[32];
+    const uint64_t in19 = regs[33], in20 = regs[34], in21 = regs[35], in22 = regs[36];
+    const uint64_t in23 = regs[37], in24 = regs[38], in25 = regs[39], in26 = regs[40];
+    const uint64_t in27 = regs[41], in28 = regs[42];
     const uint64_t saved_regs[12] = { in0, in1, in2, in3, in4, in5, in6, in7, in8, in9, in29, in30 };
     int arg_index = __atomic_load_n(&ctx.arg_index, __ATOMIC_RELAXED);
     uint64_t arg_value = __atomic_load_n(&ctx.arg_value, __ATOMIC_RELAXED);
@@ -1049,8 +1058,21 @@ extern "C" uint64_t adh_native_hook_record(uint64_t *regs, int hook_id, uint64_t
             tpc = (uint64_t)(uintptr_t)ctx.original;
         }
         qbdi_summary_t sum;
-        // gpr layout expected by adh_qbdi_run_from: x0-x8, x29, x30, x18.
-        const uint64_t tgpr[12] = { in0, in1, in2, in3, in4, in5, in6, in7, in8, in29, in30, in18 };
+        // gpr layout expected by adh_qbdi_run_from: [0..8]=x0-x8, [9]=x29, [10]=x30, [11]=x18,
+        // [12..21]=x19-x28, [22]=x9, [23]=sp.
+        //
+        // x19..x28 must carry the values the function actually has: this run starts INSIDE it, after
+        // its prologue saved them, so it is entitled to read them as its own. Passing zeros made any
+        // function that keeps a state pointer in that bank fault on first dereference - measured on a
+        // VM interpreter holding its context in x19/x21, where the trace died instantly.
+        // sp is the real stack pointer for the same reason: the function's own frame is live.
+        const uint64_t tgpr[ADH_QTRACE_GPR_LEN] = {
+            in0, in1, in2, in3, in4, in5, in6, in7, in8,
+            in29, in30, in18,
+            in19, in20, in21, in22, in23, in24, in25, in26, in27, in28,
+            in9,
+            in_sp,
+        };
         // Write watch: resolve the range NOW (on the hit thread, from the hit's registers) and arm it for
         // this run only. A pointer that cannot be resolved is reported, never silently dropped - "the
         // watch saw nothing" and "the watch was never armed" must not look alike.
@@ -1259,7 +1281,7 @@ extern "C" uint64_t adh_native_hook_after(uint64_t retval, uint64_t *regs, int h
 extern "C" void adh_native_stub_##N(void) __attribute__((naked)); \
 extern "C" void adh_native_stub_##N(void) { \
     __asm__ volatile( \
-        "sub sp, sp, #256\n" \
+        "sub sp, sp, #352\n" \
         "stp x0, x1, [sp, #0]\n" \
         "stp x2, x3, [sp, #16]\n" \
         "stp x4, x5, [sp, #32]\n" \
@@ -1271,6 +1293,13 @@ extern "C" void adh_native_stub_##N(void) { \
         "stp q2, q3, [sp, #160]\n" \
         "stp q4, q5, [sp, #192]\n" \
         "stp q6, q7, [sp, #224]\n" \
+        "add x9, sp, #352\n" \
+        "str x9, [sp, #256]\n" \
+        "stp x19, x20, [sp, #264]\n" \
+        "stp x21, x22, [sp, #280]\n" \
+        "stp x23, x24, [sp, #296]\n" \
+        "stp x25, x26, [sp, #312]\n" \
+        "stp x27, x28, [sp, #328]\n" \
         "mov x2, xzr\n" \
         "mov x0, sp\n" \
         "mov x1, #" #N "\n" \
@@ -1287,7 +1316,12 @@ extern "C" void adh_native_stub_##N(void) { \
         "ldp q2, q3, [sp, #160]\n" \
         "ldp q4, q5, [sp, #192]\n" \
         "ldp q6, q7, [sp, #224]\n" \
-        "add sp, sp, #256\n" \
+        "ldp x19, x20, [sp, #264]\n" \
+        "ldp x21, x22, [sp, #280]\n" \
+        "ldp x23, x24, [sp, #296]\n" \
+        "ldp x25, x26, [sp, #312]\n" \
+        "ldp x27, x28, [sp, #328]\n" \
+        "add sp, sp, #352\n" \
         "cbnz x16, 1f\n" \
         "adrp x17, g_native_hook_originals+" #OFF "\n" \
         "add x17, x17, :lo12:g_native_hook_originals+" #OFF "\n" \

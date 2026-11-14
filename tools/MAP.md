@@ -14,6 +14,17 @@ v126 verifies kernel write events/GPR/stack/generation. v123/v125/v126 can use t
 `run_native_fixture.mjs SERIAL` runs the native host for <=300 seconds with cooperative stop-file
 cleanup. The host uses a UUID directory and memfd and is not an injection path for product targets.
 
+`qbdi_toggle.sh` switches the optional QBDI payload: the tracer ships inside the module
+(`libQBDI.so`), the root companion answers a `qbdi` query by checking `/data/adb/adh/qbdi.enabled`,
+and only when it is set does the instance open the library fd pre-specialize and hand it to the agent
+(`adh_agent_set_qbdi_fd`). The agent copies that fd into a memfd on the first `qbdi_trace`, so the
+default injection surface is unchanged (no library, no mapping, no fd) and a standalone trace releases
+the mapping again. `verify_v129_qbdi_delivery.sh` (device) is the acceptance on a REAL third-party app
+(default `com.uxin.kilaaudio`, override with `ADH_QBDI_TEST_PKG`): flag off → actionable refusal and no
+fd; flag on → fd delivered, `qbdi_trace libc:getpid` returns the target pid, and the library is gone
+from `/proc/<pid>/maps` afterwards.
+`verify_v130_scope_analyze.sh` (host) gates the programmable scope and the one-call analysis: the allowlist merge rules (names the C++ companion will parse), the main-process pick, and the `analyze_app` / `scope_list` / `scope_set` MCP tool shapes. It never writes scope.json or starts an app — those are product actions covered by real-device acceptance.
+
 `verify_v127_symbols.sh` (host) is the newest slice: `native_symbols` — one module's dynamic symbol
 table (name / module-relative offset / size / kind), filterable by `kind` and name substring, paged
 with `total`/`returned`/`nextOffset`. It gates the 12-case unit file first (floor 11, because the
