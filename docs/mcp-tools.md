@@ -99,3 +99,5 @@ Generated from the live ADH Daemon registry (91 tools). Endpoint: `POST /mcp` (J
 ## root_watch 内存窗口时序（2026-11-16）
 
 `root_watch` 的寄存器、调用链及 `stackWindow` 来自 perf 的内核采样。`mem` 只有在整个窗口及全部指针解引用均被同一内核栈快照覆盖时，才返回 `source: "kernel-stack-sample"`、`snapshotConsistent: true`。其余 `mem` 来自 collector 收到事件后的进程读取，标为 `source: "process-memory-after-sample"`、`snapshotConsistent: false`，不能据此判定某个堆字段在事件时刻的值。`read.limit` 为 1–32；用 `nextSeq`/`hasMore` 分页。
+
+多硬件槽各有独立 perf ring；`seq` 是 collector 读出顺序的分页游标，不能表示槽之间的执行先后。跨槽分析应读完所有页面，再按 `timeNs` 排序；分页继续使用原 `nextSeq`。
