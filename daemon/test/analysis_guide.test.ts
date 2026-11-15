@@ -24,6 +24,47 @@ test('initialize sends a usable entry route and the tool list also exposes help'
   assert.deepEqual(help.inputSchema.properties.topic.enum, ANALYSIS_GUIDE_TOPICS);
 });
 
+test('initialize tells the client that adb is a usable device channel and forbids guessing defenses', async () => {
+  const init = await rpc('initialize');
+  const text = init.result.instructions;
+  // 设备可达性：不写这一条，模型会把「工具列表里没有点击能力」当成「点不到手机」。
+  assert.match(text, /DEVICE ACCESS/);
+  assert.match(text, /adb is the supported operator\/AI channel/);
+  for (const capability of ['logcat', 'dumpsys activity activities', 'uiautomator dump', 'screencap', 'input tap'])
+    assert.ok(text.includes(capability), 'missing adb capability: ' + capability);
+  // 归因纪律：卡住不能直接等于反调试。
+  assert.match(text, /ATTRIBUTION/);
+  assert.match(text, /not by itself evidence of anti-debugging/);
+  assert.match(text, /privacy consent/);
+  assert.match(text, /Claim detection only with matching evidence/);
+  // 需要用户介入时要停下来，而不是改注入或反复点同一处。
+  assert.match(text, /say what is missing and stop/);
+  assert.match(text, /never from screen size/);
+});
+
+test('the stuck guide offers adb device checks before any defense conclusion', () => {
+  const guide = analysisGuide('stuck');
+  assert.ok(guide.deviceChecks && guide.deviceChecks.length >= 3, 'stuck must start from device facts');
+  const commands = guide.deviceChecks!.map(c => c.command).join('\n');
+  for (const expected of ['dumpsys activity activities', 'uiautomator dump', 'screencap']) assert.ok(commands.includes(expected), expected);
+  // 每个 check 都要说明「这属于普通原因」而不是检测。
+  assert.ok(guide.deviceChecks!.some(c => /consent|login|permission/i.test(c.check)));
+  // adb 不是 MCP 工具，不能混进模板步骤里被当作可调用工具校验。
+  assert.equal(guide.steps.some(s => s.tool === 'adb'), false);
+  assert.match(guide.limits.join(' '), /A non-progressing screen, a failed local command and a blocked request each have ordinary causes/);
+  assert.match(guide.prerequisites.join(' '), /A stalled screen is a state, not a diagnosis/);
+});
+
+test('assessment output states that a stalled screen is not a diagnosis', async () => {
+  const { assessAnalysis } = await import('../src/analysis_assist.ts');
+  const report = await assessAnalysis({ topic: 'stuck', session: 'nope' }, {
+    now: () => 1, sessions: new Map(), captures: [], stats: new Map(), storeLoss: () => null,
+    readHookStatus: async () => { throw new Error('not used'); },
+  } as any);
+  assert.match(report.limits.join(' '), /A stalled screen or a hung command is a state, not a diagnosis/);
+  assert.match(report.limits.join(' '), /adb \(dumpsys activity activities, uiautomator dump, screencap\)/);
+});
+
 test('every guide can be read through MCP without a session and returns a bounded workflow', async () => {
   for (const topic of ANALYSIS_GUIDE_TOPICS) {
     const response = await rpc('tools/call', { name: 'analysis_guide', arguments: { topic } });
