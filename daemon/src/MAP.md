@@ -100,3 +100,7 @@ through the existing daemon and serves the new MCP handler over an isolated HTTP
 ### backends.ts (module W)
 
 Shared injection-backend matrix: `backendMatrix()` (sessions by entry + Zygisk pointers) and `classifySession()` (zygisk / self_load from the agent's maps). Frida Gadget is not advertised. Used by REST `GET /api/backends` and MCP `backends`.
+
+### root_watch 内存时序
+
+`projectRootSample` 优先使用同条 perf 记录的用户栈解析 `mem`，所有指针跳与目标字节均在快照范围内时才标 `snapshotConsistent:true`。其他窗口保留异步进程读数并标 `false`。不能把 collector 处理记录时读到的堆值当作事件时刻状态。回归测试覆盖已经变化的栈、部分栈、堆指针和带偏移的指针链。

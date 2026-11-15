@@ -2,10 +2,10 @@
 // function replay, SELinux change, or in-process agent dependency is involved.
 //
 // 2026-11-13: a run may watch up to four hardware slots on the same thread and, on every
-// event, snapshot small memory windows derived from the sampled registers. The second part
-// is what makes a stateful VM tractable: the kernel record keeps the registers of the hit,
-// and the collector reads the fields they point at *at the moment of the hit*, instead of
-// leaving the caller to re-read memory after the target has moved on.
+// event, read small memory windows derived from the sampled registers. These process reads
+// happen AFTER perf delivers the record; the target has already resumed. Only the register
+// set and PERF_SAMPLE_STACK_USER are kernel snapshots of the hit. The Host can resolve
+// windows wholly covered by that stack snapshot; heap reads are asynchronous evidence.
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
@@ -194,7 +194,7 @@ static void emit_mem(pid_t pid, const uint64_t *regs) {
         }
         unsigned char buf[MAX_MEM_BYTES];
         if (!err && read_target(pid, addr, buf, m->len)) err = "unreadable";
-        printf("%s{\"spec\":\"%s\",\"addr\":\"0x%llx\"", i ? "," : "", m->text, (unsigned long long)addr);
+        printf("%s{\"spec\":\"%s\",\"addr\":\"0x%llx\",\"source\":\"process-memory-after-sample\",\"snapshotConsistent\":false", i ? "," : "", m->text, (unsigned long long)addr);
         if (err) printf(",\"error\":\"%s\"}", err);
         else { printf(",\"hex\":\""); print_hex(buf, m->len); printf("\"}"); }
     }

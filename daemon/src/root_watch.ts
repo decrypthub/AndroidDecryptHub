@@ -171,8 +171,47 @@ export function rootWatchStatus(id: string) {
     summary: r.summary ?? null, error: r.error, output: r.file, serial: r.serial, pid: r.target.pid,
     starttimeTicks: r.starttimeTicks, sessionGenerationVerified: r.sessionGenerationVerified };
 }
+// perf snapshots registers and the user stack in the kernel. In contrast, the
+// helper's process_vm_readv happens later, after the target has resumed. Recover
+// windows from the kernel stack when every dereference and byte is covered;
+// never label an asynchronous heap read as an event-time snapshot.
+function projectMemoryWindow(window: any, regs: string[], stack: any) {
+  const delayed = { ...window, source: 'process-memory-after-sample', snapshotConsistent: false };
+  const match = /^(@{0,3})(x(?:[0-9]|[12][0-9]|30)|sp|lr|pc)([+-](?:0x[0-9a-f]+|\d+))?((?:@(?:0x[0-9a-f]+|\d+))*)(?::(0x[0-9a-f]+|\d+))?$/i.exec(window.spec ?? '');
+  if (!match || !Array.isArray(regs) || typeof stack?.hex !== 'string') return delayed;
+  const reg = match[2].toLowerCase();
+  const index = reg === 'sp' ? 31 : reg === 'pc' ? 32 : reg === 'lr' ? 30 : Number(reg.slice(1));
+  if (typeof regs[index] !== 'string' || !/^0x[0-9a-f]+$/i.test(regs[index])) return delayed;
+  const bytes = Buffer.from(stack.hex, 'hex');
+  const available = Math.min(bytes.length, Number(stack.got) || 0);
+  const base = BigInt(stack.addr);
+  const read = (at: bigint, size: number): Buffer | null => {
+    const offset = at - base;
+    return offset >= 0n && offset + BigInt(size) <= BigInt(available)
+      ? bytes.subarray(Number(offset), Number(offset) + size) : null;
+  };
+  const offsetText = match[3];
+  const initialOffset = !offsetText ? 0n : (offsetText[0] === '-' ? -1n : 1n) * BigInt(offsetText.slice(1));
+  let at = BigInt.asUintN(64, BigInt(regs[index]) + initialOffset);
+  const hops = match[4] ? match[4].slice(1).split('@').map(value => BigInt(value)) : [];
+  if (hops.length > match[1].length) return delayed;
+  for (let i = 0; i < match[1].length; i++) {
+    const pointer = read(at, 8);
+    if (!pointer || pointer.readBigUInt64LE() === 0n) return delayed;
+    at = BigInt.asUintN(64, pointer.readBigUInt64LE() + (hops[i] ?? 0n));
+  }
+  const size = match[5] ? Number(match[5]) : 16;
+  if (!Number.isSafeInteger(size) || size < 1 || size > 256) return delayed;
+  const captured = read(at, size);
+  if (!captured) return delayed;
+  const { error: _error, ...original } = window;
+  return { ...original, addr: '0x' + at.toString(16), hex: captured.toString('hex'),
+    source: 'kernel-stack-sample', snapshotConsistent: true };
+}
+
 export function projectRootSample(record: any, a: Record<string, any>) {
   const { regs, stack, ...event } = record;
+  if (Array.isArray(record.mem)) event.mem = record.mem.map((window: any) => projectMemoryWindow(window, regs, stack));
   if (a.registers === true) event.regs = regs;
   const size = integer(a.stackSize, 0, 0, 2048, 'stackSize');
   event.stack = { addr: stack.addr, requested: stack.requested, got: stack.got, short: stack.got < stack.requested };

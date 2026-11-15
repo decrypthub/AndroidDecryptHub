@@ -50,3 +50,38 @@ test('kernel stack windows are bounded and cannot silently read another address'
   assert.throws(() => projectRootSample(record, { stackSize: 2049 }));
   assert.equal(record.stack.hex, '41424344');
 });
+
+test('event-time stack bytes replace stale process reads without mutating the raw evidence', () => {
+  const record = { regs: ['0x1001'], stack: { addr: '0x1000', got: 4, requested: 4, hex: '00656600' },
+    mem: [{ spec: 'x0:2', addr: '0x1001', hex: '2020' }] };
+  const projected = projectRootSample(record, {});
+  assert.deepEqual(projected.mem, [{ spec: 'x0:2', addr: '0x1001', hex: '6566',
+    source: 'kernel-stack-sample', snapshotConsistent: true }]);
+  assert.equal(record.mem[0].hex, '2020');
+  assert.equal(projected.regs, undefined);
+});
+
+test('heap reads and partially captured windows remain explicitly asynchronous', () => {
+  const record = { regs: ['0x2000', '0x1003'],
+    stack: { addr: '0x1000', got: 4, requested: 16, hex: '00656600' },
+    mem: [{ spec: 'x0:1', addr: '0x2000', hex: 'aa' }, { spec: 'x1:2', addr: '0x1003', hex: 'bbcc' }] };
+  const { mem } = projectRootSample(record, {});
+  assert.deepEqual(mem.map((window: any) => [window.hex, window.source, window.snapshotConsistent]),
+    [['aa', 'process-memory-after-sample', false], ['bbcc', 'process-memory-after-sample', false]]);
+});
+
+test('pointer chains use only captured stack pointers and honor hop offsets', () => {
+  const bytes = Buffer.alloc(48);
+  bytes.writeBigUInt64LE(0x1008n, 0);
+  bytes.writeBigUInt64LE(0x1020n, 16);
+  bytes[32] = 0x61;
+  const record = { regs: ['0x1000'],
+    stack: { addr: '0x1000', got: bytes.length, requested: bytes.length, hex: bytes.toString('hex') },
+    mem: [{ spec: '@@x0@8:1', addr: '0x9000', error: 'unreadable' }] };
+  const projected = projectRootSample(record, {});
+  assert.deepEqual(projected.mem[0], { spec: '@@x0@8:1', addr: '0x1020', hex: '61',
+    source: 'kernel-stack-sample', snapshotConsistent: true });
+  bytes.writeBigUInt64LE(0x2000n, 0);
+  record.stack.hex = bytes.toString('hex');
+  assert.equal(projectRootSample(record, {}).mem[0].snapshotConsistent, false);
+});
