@@ -128,3 +128,7 @@ Shared injection-backend matrix: `backendMatrix()` (sessions by entry + Zygisk p
 ### root_watch 内存时序
 
 `projectRootSample` 优先使用同条 perf 记录的用户栈解析 `mem`，所有指针跳与目标字节均在快照范围内时才标 `snapshotConsistent:true`。其他窗口保留异步进程读数并标 `false`。不能把 collector 处理记录时读到的堆值当作事件时刻状态。回归测试覆盖已经变化的栈、部分栈、堆指针和带偏移的指针链。
+
+### P3 设备域
+
+`devices.ts` 持久保存安装身份并管理临时连接，`device_protocol.ts` 提供 adh.device/1 codec/签名与预算，`transport/adb_device.ts` 只负责显式发现、固定 ADB transport、USB bootstrap 和自有 forward。`device_host.ts` 延迟初始化；MCP devices / `http/routes_devices.ts` 共用它与 operation_registry。`operations.ts` 的 device:UUID 范围不等于旧 target session；二者未关联时保守互斥，人类持有与 unknown 都不能跨边界绕过。见 docs/P3_DEVICE_DOMAIN.md。不要把 legacy agent 的 serial 或 Host 上唯一设备当成已验证身份。

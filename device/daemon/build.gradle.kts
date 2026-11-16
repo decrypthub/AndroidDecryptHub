@@ -37,4 +37,17 @@ android {
 dependencies {
     implementation(project(":core"))
     testImplementation(libs.junit)
+    testImplementation(libs.org.json)
+}
+
+// Explicit host-only interoperability fixture. No APK install, app_process or device command.
+tasks.register("writeDeviceRpcFixtureClasspath") {
+    dependsOn("compileDebugUnitTestKotlin", "processDebugUnitTestJavaRes")
+    doLast {
+        val testTask = tasks.named<Test>("testDebugUnitTest").get()
+        val files = (testTask.classpath + testTask.testClassesDirs).files.map { it.absolutePath }
+        val output = layout.buildDirectory.file("device-rpc-fixture-classpath.json").get().asFile
+        output.parentFile.mkdirs()
+        output.writeText(files.joinToString(",", "[", "]") { "\"" + it.replace("\\", "\\\\").replace("\"", "\\\"") + "\"" })
+    }
 }

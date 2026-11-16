@@ -1,5 +1,6 @@
+import {deviceMethodMode} from './device_protocol.ts';
 export type Mode = 'read' | 'analysis' | 'write';
-export interface OperationSpec { name: string; mode: Mode; session?: string; global?: boolean }
+export interface OperationSpec { name: string; mode: Mode; session?: string; global?: boolean; deviceId?: string }
 const readTools = new Set([
   'analysis_guide','process_list','backends','capabilities','dumps_list','runtime_diagnostics','agent_ping',
   'memory_maps','maps_query','memory_read','memory_disasm','memory_search','memory_scan_magic','got_enum',
@@ -20,6 +21,11 @@ const readActions: Record<string, readonly string[]> = {
   oracle:['list'],stealth:['status'],
 };
 export function describeTool(name: string, args: Record<string, any> = {}): OperationSpec {
+  if(name==='devices'){
+    const action=args.action||'list';
+    const mode:Mode=['list','discover','info','capabilities'].includes(action)?'read':action==='call'?deviceMethodMode(args.method):'write';
+    return {name,mode,deviceId:['connect','list','discover'].includes(action)?undefined:args.deviceId,global:action==='connect'||!args.deviceId};
+  }
   let mode: Mode = readTools.has(name) ? 'read' : analysisTools.has(name) ? 'analysis' : 'write';
   if (Object.hasOwn(readActions,name) && readActions[name].includes(args.action)) mode = 'read';
   if (name === 'settings') mode = args.action === 'get' || args.action === 'maintenance' && args.dryRun !== false ? 'read' : 'write';
@@ -51,6 +57,7 @@ const analysisPaths = new Set(['/api/native/syscall_scan','/api/native/crypto_co
   '/api/dex/strip','/api/dex/rebuild','/api/dex/repair','/api/art/dump','/api/memory/dump',
   '/api/unpack/dump-one','/api/unpack/dump-so-one','/api/unpack/pull-so','/api/unpack/dump-all','/api/unpack/dump-so']);
 export function describeHttp(path: string, method: string, args: Record<string, any> = {}): OperationSpec {
+  if(path==='/api/devices')return describeTool('devices',args);
   const alias = routeTools[path];
   if (path === '/api/config') return describeTool('settings', { ...args, action: method === 'POST' ? 'patch' : 'get' });
   if (path === '/api/scope') return describeTool(method === 'POST' ? 'scope_set' : 'scope_list', args);

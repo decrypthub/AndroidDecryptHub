@@ -22,8 +22,10 @@ function canonical(value: any): string {
 const fail = (code: string, message: string): never => { throw new OperationError(code, message); };
 function touchTask(task: Task) { task.revision=(task.revision ?? 0)+1;task.updatedAt=Date.now(); }
 function validResource(resource: string) {
-  if(resource!=='host' && !/^target:[\w:.-]{1,400}$/.test(resource))fail('INVALID_RESOURCE','invalid control resource');
+  if(resource!=='host' && !/^target:[\w:.-]{1,400}$/.test(resource) && !/^device:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(resource))fail('INVALID_RESOURCE','invalid control resource');
 }
+function resourcesConflict(a:string,b:string){return a==='host'||b==='host'||a===b||a.startsWith('device:')&&b.startsWith('target:')||b.startsWith('device:')&&a.startsWith('target:');}
+function crossHeld(data:Ledger,resource:string){return Object.entries(data.controls).some(([key,c])=>(c.owner==='operator'||c.paused)&&(resource.startsWith('device:')&&key.startsWith('target:')||resource.startsWith('target:')&&key.startsWith('device:')));}
 export function operationFailure(error: unknown) {
   return { ok: false, code: (error as any)?.code || 'OPERATION_FAILED', error: (error as Error)?.message || String(error) };
 }
@@ -72,7 +74,12 @@ export class Operations {
     const data = this.store.read(), control = data.controls[resource] ?? freshControl();
     return { resource, ...control, hostEpoch: data.controls.host.epoch };
   }
-  resource(spec: OperationSpec) { return spec.global || !spec.session ? 'host' : this.targetResource(spec.session); }
+  resource(spec: OperationSpec) {const resource=spec.deviceId?'device:'+spec.deviceId:spec.global || !spec.session ? 'host' : this.targetResource(spec.session);validResource(resource);return resource;}
+  invalidateResource(resource:string){
+    validResource(resource);this.store.update(data=>{const c=data.controls[resource]??=freshControl();c.epoch++;c.revision++;
+      for(const op of Object.values(data.operations))if(op.resource===resource&&op.state==='queued'){op.state='failed';op.settled=true;op.updatedAt=Date.now();op.error={code:'TARGET_CHANGED',message:'verified device generation changed; old work is not rebound'};data.tasks[op.taskId].state='paused';touchTask(data.tasks[op.taskId]);}
+    });this.pump();
+  }
   createTask(title: string, principal: Principal, implicit = false): Task {
     return this.store.update(data => {
       const task: Task = { id: randomUUID(), title: String(title || 'analysis').slice(0,256), owner: principal.role,
@@ -94,6 +101,7 @@ export class Operations {
     if(resource==='host' && principal.role!=='operator' && Object.values(data.controls).some(c=>c.owner==='operator'||c.paused)) {
       fail('CONTROL_HELD','a target is operator-held; Host-wide AI mutations are blocked');
     }
+    if(principal.role!=='operator'&&crossHeld(data,resource))fail('CONTROL_HELD','unassociated legacy targets/device control are operator-held; no identity is guessed');
   }
   private take(data: Ledger, resource: string) {
     const control = data.controls[resource] ??= freshControl();
@@ -296,7 +304,7 @@ export class Operations {
       if (op.cancelRequested) { this.finish(op.id,'cancelled'); continue; }
       if (Date.now() >= op.deadline) { this.finish(op.id,'failed',undefined,{code:'DEADLINE_EXCEEDED',message:'deadline expired before dispatch'}); continue; }
       if (data.tasks[op.taskId].state === 'paused') continue;
-      const busy = Object.entries(data.controls).some(([key,c]) => c.active && (op.resource === 'host' || key === 'host' || key === op.resource));
+      const busy = Object.entries(data.controls).some(([key,c]) => c.active && resourcesConflict(op.resource,key));
       if (op.mode === 'write' && (busy || rootWaiting)) { if(op.resource === 'host')rootWaiting=true; continue; }
       this.queue = this.queue.filter(x => x.id !== item.id);
       void this.run(item).catch(error => {
@@ -315,8 +323,8 @@ export class Operations {
       if (op.mode === 'write') {
         this.assertVersion(data,op.resource,{role:op.owner,id:op.actorId,source:op.source},op);
         const control = data.controls[op.resource] ??= freshControl();
-        if(Object.entries(data.controls).some(([key,c])=>c.active && (op.resource==='host'||key==='host'||key===op.resource)))fail('OPERATION_BUSY','resource is in use by another Host operation');
-        if (control.uncertain || data.controls.host.uncertain || op.resource === 'host' && Object.values(data.controls).some(c => c.uncertain)) fail('UNKNOWN_EXECUTION','resource has unresolved side effects; inspect and resolve first');
+        if(Object.entries(data.controls).some(([key,c])=>c.active && resourcesConflict(op.resource,key)))fail('OPERATION_BUSY','resource is in use by another Host operation');
+        if (Object.entries(data.controls).some(([key,c])=>c.uncertain && resourcesConflict(op.resource,key))) fail('UNKNOWN_EXECUTION','resource has unresolved side effects; inspect and resolve first');
         control.revision++; control.active=op.id; op.appliedRevision=control.revision;
       }
       op.state='running'; op.startedAt=Date.now();op.updatedAt=Date.now(); return op;
@@ -325,6 +333,7 @@ export class Operations {
     const targetEpochs = new Map<string,{resource:string;epoch:number}>();
     const initial = this.store.read();
     const context: ExecutionContext = {
+      operationId:op.id,resource:op.resource,principalRole:op.owner,remainingMs:()=>Math.max(1,op.deadline-Date.now()),
       checkpoint: session => {
         if(this.closed)fail('HOST_CLOSED','coordinator closed');
         const data=this.store.read(), current=data.operations[op.id];
@@ -332,6 +341,7 @@ export class Operations {
         if(current.cancelRequested)fail('CANCEL_REQUESTED','operation cancellation requested; no further effects');
         if(Date.now()>=current.deadline || terminal.has(current.state))fail('DEADLINE_EXCEEDED','operation deadline/state no longer permits effects');
         if(op.mode==='write') {
+          if(op.owner!=='operator'&&crossHeld(data,op.resource))fail('STALE_CONTROL','operator changed control across an unverified legacy/device boundary');
           const control=data.controls[op.resource] ?? freshControl();
           if(control.epoch!==op.controlEpoch || control.revision!==op.appliedRevision || data.controls.host.epoch!==op.hostEpoch)fail('STALE_CONTROL','control changed during operation; later effects blocked');
           if(op.resource==='host' && op.owner!=='operator' && Object.values(data.controls).some(c=>c.owner==='operator'||c.paused))fail('STALE_CONTROL','operator took target control; later Host-wide effects blocked');

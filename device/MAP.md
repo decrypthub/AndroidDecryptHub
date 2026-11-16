@@ -123,3 +123,9 @@ its own screen, opened from an app row. Home compares `BuildConfig.VERSION_CODE`
 manifest at the same URL as `module.prop` `updateJson`.
 Module status distinguishes an unavailable Device Daemon from an absent or unloaded
 module. Both Home and Scope re-check when returning to the foreground.
+
+## P3 device domain (2026-11-16)
+
+`core/DeviceRpc.kt` pins adh.device/1, bounded framing and the method-effect contract. AIDL v19 appends info/capabilities/scope CAS without renumbering previous transactions. `daemon/AndroidDeviceBackend.kt` owns Android business operations; `RootScopeBinder` enforces the existing caller verifier then delegates to the same `device/DeviceOperations` as USB RPC. That package owns installation identity, atomic files, the bounded revision/operation journal, process generations, scope preservation and a stream dispatcher. `LocalDeviceRpcServer` adds only an authenticated abstract UDS; no phone HTTP/MCP/TCP/analysis server. DeviceDaemon holds a process lock for identity/journal ownership.
+
+JVM `DeviceDomainTest` tests recovery/CAS/storage errors; `DeviceRpcFixture` exposes the production identity/domain/codec over an OS-temp loopback socket with a synthetic backend. `:daemon:writeDeviceRpcFixtureClasspath` explicitly builds its ignored classpath manifest for Host interoperability tests; it never starts a real Android service. See docs/P3_DEVICE_DOMAIN.md for limits and the separate unverified Android/SELinux boundary.

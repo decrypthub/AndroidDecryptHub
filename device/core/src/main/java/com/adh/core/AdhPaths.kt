@@ -10,6 +10,9 @@ object AdhPaths {
     /** One line `ipv4:port`. The agent dials this after `127.0.0.1:8761` fails. */
     const val HOST_ENDPOINT_PATH = "/data/adb/adh/host.endpoint"
     const val SCOPE_DIR = "/data/adb/adh"
+    const val DEVICE_RPC_DIR = "/data/adb/adh/device-rpc"
+    const val DEVICE_IDENTITY_PATH = "/data/adb/adh/device-rpc/identity.json"
+    const val DEVICE_USB_ACCESS_PATH = "/data/adb/adh/device-rpc/usb-access.json"
     /** DER CA files named `<subject_hash_old>.N`. Mounted by post-fs-data, not by magic mount. */
     const val CACERTS_DIR = "/data/adb/adh/cacerts"
     const val LOADER_MARKER = "/data/adb/adh/zygisk_loaded"

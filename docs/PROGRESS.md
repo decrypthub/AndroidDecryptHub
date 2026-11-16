@@ -4984,3 +4984,20 @@ v71 另触发的 1000 条历史捕获尚未完整恢复：现存事件日志缺�
 浏览器用 ego-browser 对随机 loopback 端口、临时数据目录与合成 agent 实测：任务详情/结果/下载，结果 HTML 作为纯文本，任务暂停恢复及 STALE_TASK，unknown/晚到结果/显式人工核对，接管交还，配置 STALE_CONTROL 后草稿仍保留，再核对提交仅改人类字段且保留 AI 同时改过的其他字段。另测导入只改草稿、导出已读配置、独立/现场入口不叠开旧设置、390px 窄屏。实际查看截图并修复了嵌入页 main 全局样式冲突；关闭了浏览器任务并只停止本轮自建 UI fixture。
 
 完整范围、迁移/API 和限制见 [P2_WORKBENCH.md](P2_WORKBENCH.md)，同步 REQUIREMENTS、DEVELOPMENT_PLAN、FEATURE_STATUS、MAP 和 MCP 清单。未部署、未推送、未发布安装包；未启动正式 index、修改 adb reverse、运行设备门禁、启停目标或重启当前服务。当前 8088 仍是原非 watch 进程。P2 面板需要配套 P2 Host；副作用日志有界且不等同完整目标审计，设备域服务、USB/LAN 新 RPC、TLS 和目标侧撤销仍属后续阶段。
+
+
+## 2026-11-16：P3 设备域、稳定安装身份与 USB/ADB RPC
+
+在 P2 提交 91be0f5 上建立独立 worktree/分支 feat/adh-p3-device-domain-20261116。原 Android 工作目录继续保留 P1 且干净，P2 worktree 不改；没有加载本轮源码到当前分析服务或其 public 目录。
+
+- Device Daemon 提取 AndroidDeviceBackend 与 DeviceOperations，签名校验后的 Binder 与 adh.device/1 RPC 共用业务、持久 revision 和写入锁；AIDL v19 末尾追加身份/能力/作用域 CAS，旧 Manager 写入也推进同一版本。手机不增加 HTTP/MCP/数据库/分析。
+- 安装 UUID + RSA 身份密钥持久保存，bootstrap 不含私钥。Host 验证 nonce/能力/身份签名与指纹，分开 deviceId、bootId、daemonInstanceId、connectionId、ADB transport 和旧 session。多连接去重，代际变化失效旧 Host 指令；不靠 serial 推断目标归属。
+- Host Devices 统一缓存/显式发现/信息/能力/调用。USB 固定 transport_id、只创建 tcp:0 自有 forward，清理重新核对映射；断线保留清理句柄，映射被替换返回未知且不删除。没有 reverse、remove-all、安装、启停真实 App 或隐式故障切换。
+- MCP devices 与 REST /api/devices 共用执行器，公共 Python CLI 现有 call/run 直接复用。写入要求 Host 控制版本 + device:UUID 资源 + 设备代际/revision，scope 另带内容哈希。人类持有与 unknown 在旧 target/新设备未关联时保守互锁；两个已验证设备仍可并行。
+- 设备日志先落盘再派发，意图去重，不存请求凭据/参数原文，不重放；预留失败不执行，结果保存失败与重启恢复为 unknown。容量/结果有界，不自动清理历史。修复进程命令在 waitFor 前 readText 导致的无效超时，输出有界，派发后超时明确未知。
+
+验证：Host 类型检查通过，完整 **538 passed / 0 failed / 0 skipped**（P2 525 + 新增 13），其中跨语言测试运行生产 Kotlin 身份/域/持久化/codec 与 Node ADB loopback 模拟；包含双设备、USB 别名、版本冲突、代际、超时后实际结果、清理归属、人类接管及 MCP/REST/真实 Python CLI。Android 离线 core/daemon/Manager JVM **61 passed / 0 failed / 0 skipped**，Device Daemon debug 构建和 Manager Kotlin 编译通过，构建只用隔离全零测试 pin。v71 **93 tools / 0 problems / PASS**。新增可复现 MCP 文档生成器，--check 通过；git whitespace 检查按既有 CRLF 使用 cr-at-eol。
+
+局限如实保留：Android abstract UDS/peer UID/SELinux 可达性及真实 Binder、证书挂载、第三方进程效果没有真机验证；旧审计 P3 的 agent 本地 UDS/fd 原型尚未交付。LAN/TLS/配对/撤销、bulk、agent 路由和旧 ADB-only 诊断/helper/fs 迁移仍待 P4；现有 agent 通道明确 legacy/unverified，不宣称全能力 LAN 对等。完整 API、身份语义、未知核对顺序与迁移见 [P3_DEVICE_DOMAIN.md](P3_DEVICE_DOMAIN.md)。
+
+未部署、未推送、未发布或安装产物，未启动正式 index、未请求当前 8088 业务接口、未操作真机/当前会话或重启服务；只启动并清理 OS 临时目录里的 JVM/HTTP 测试夹具。

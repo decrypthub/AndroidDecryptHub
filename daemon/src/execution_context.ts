@@ -5,6 +5,10 @@ export class OperationError extends Error {
   constructor(code: string, message: string, uncertain = false) { super(message); this.code=code;this.uncertain=uncertain; }
 }
 export interface ExecutionContext {
+  operationId?: string;
+  resource?: string;
+  principalRole?: 'ai' | 'operator';
+  remainingMs?(): number;
   checkpoint(session?: string): void;
   dispatched(description?: EffectDescription): string | void;
   acknowledged(uncertain: boolean, id?: string | void, failed?: boolean): void;

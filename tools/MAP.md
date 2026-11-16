@@ -197,3 +197,7 @@ event-limit accounting, explicit stop and wrong-TID refusal. It does not run the
 ### root_watch 内存窗口时序补充（2026-11-16）
 
 `native/root_watch.c` 的 `emit_mem` 在收到 perf 事件后读取目标进程，不是内核事件时刻的堆快照；原始窗口明确标为 `source=process-memory-after-sample`、`snapshotConsistent:false`。同事件内核栈可用时，由 Host `projectRootSample` 恢复确定的栈窗口。自测的固定内存值通过不能证明动态目标的异步窗口同步正确。
+
+## MCP registry documentation
+
+`node tools/generate_mcp_docs.mjs` regenerates docs/mcp-tools.md from the source registry; `--check` validates it. It uses isolated, pure imports and performs no Host initialization, discovery or ADB operation. The generator is tracked so fresh clones do not depend on an ignored adhd-data script.

@@ -166,3 +166,7 @@ Each layer has a `MAP.md` — read it before editing that layer:
 ## Boundaries
 
 - Never commit captured target data (keys, plaintext, dumps). `.gitignore` excludes `captures/`, `dumps/`, `adhd-data/`.
+
+## P3 device-domain boundary (2026-11-16 user direction)
+
+The existing Device Daemon now shares device control between authenticated Binder and adh.device/1 USB RPC. Installation identity, module/app/process discovery, scope, certificates and the Host endpoint remain device coordination, never analysis. The phone exposes only an authenticated abstract UDS in this slice, no HTTP/MCP/database/TCP listener. Host device:UUID controls fence writes; legacy target sessions have no inferred device association. See docs/P3_DEVICE_DOMAIN.md for capability limits and explicit unverified Android/SELinux paths. P4 pairing/TLS and agent local routing are not delivered by the P3 JVM tests. Keep current sessions and their transport mappings untouched during host-only validation.

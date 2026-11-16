@@ -32,4 +32,9 @@ interface IAdhScopeService {
     boolean deleteCaCert(String fileName);
     /** Reboot. The caller must already have confirmed with the user. Protocol v18. */
     boolean rebootDevice();
+    /** v19: the same device-domain information and CAS used by USB RPC. */
+    String getDeviceInfoJson();
+    String getDeviceCapabilitiesJson();
+    String getScopeSnapshotJson();
+    String setScopeVersionedJson(String json, String scopeRevision, long stateRevision);
 }

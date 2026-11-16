@@ -1,3 +1,4 @@
+import {deviceAction} from './device_host.ts';
 import { executeManaged, getOperations, manageOperations } from './operation_host.ts';
 import { describeTool } from './operation_registry.ts';
 import { operationFailure, type Principal } from './operations.ts';
@@ -404,6 +405,7 @@ export const MCP_TOOLS: { name: string; description: string; inputSchema: any; h
 ];
 
 // Optional at schema level because reads need no control token; writes enforce it at dispatch.
+MCP_TOOLS.push({name:'devices',description:'Device-domain discovery, verified installation identities and USB/ADB RPC. list is cached/offline-safe; discover lists ADB transports without attaching targets; connect requires an explicit serial/transportId and creates only its own ADB forward. info/capabilities query a verified deviceId. call uses advertised device methods; writes require observed bootId, daemonInstanceId, expectedDeviceRevision plus Host _operation versions. Read scope.get before scope.patch and supply params.scopeRevision. Device and connection ids are distinct from legacy agent session ids; no association or ADB fallback is guessed. TLS/LAN, agent routing and arbitrary shell are unsupported in P3. Unknown effects must be inspected, never replayed.',inputSchema:{type:'object',properties:{action:{type:'string',enum:['list','discover','connect','disconnect','info','capabilities','call']},serial:S,transportId:S,expectedDeviceId:S,deviceId:S,connectionId:S,method:S,params:{type:'object'},bootId:S,daemonInstanceId:S,expectedDeviceRevision:{type:'integer'},budgetMs:{type:'integer'}}},handler:deviceAction});
 for (const tool of MCP_TOOLS) {
   const metadata=(tool.inputSchema as any).properties._operation ??= { type:'object' };
   metadata.properties ??= { expectedRevision:{type:'integer'},controlEpoch:{type:'integer'},hostEpoch:{type:'integer'},taskId:{type:'string'},idempotencyKey:{type:'string'},timeoutMs:{type:'integer'},expectedTaskRevision:{type:'integer'} };

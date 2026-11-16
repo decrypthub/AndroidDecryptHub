@@ -1,5 +1,7 @@
 # ADH (Android DecryptHub) — 开发计划
 
+> **2026-11-16 P3 实施**：设备域服务、安装身份、能力查询与 USB/ADB RPC 已在独立 worktree 实现。Binder/RPC 共用业务与 revision；Host 设备范围接入 P1 控制权，MCP/REST/公共 CLI 共用操作。详见 [P3_DEVICE_DOMAIN.md](P3_DEVICE_DOMAIN.md)。P4 配对/TLS、旧 ADB-only 能力迁移及 agent 本地路由未实施；原审计 P3 的真机 UDS/fd/SELinux 原型仍待独立设备验证，当前现场不升级。
+
 > **2026-11-16 P2 实施**：完成同一工作台的独立/现场入口、任务详情/结果/副作用、配置草稿/并发冲突核对、任务 CAS 与暂停恢复、显式接管/交还及 unknown 核对。AI 规划与执行继续由外部 Harness 主导，面板不要求预先接管或固定 recipe。模块/边界见 [P2_WORKBENCH.md](P2_WORKBENCH.md)；P3/P4 的设备域与新传输仍未实施，当前分析实例不升级。
 
 > **2026-11-16 P1 实施**：共享执行器、持久任务、状态版本/控制 epoch、人类接管、真实超时/取消反馈与最小面板控制入口已落地，见 [P1_OPERATIONS.md](P1_OPERATIONS.md)。P2 仍需完整任务工作台/编辑体验；P3/P4 的稳定设备身份和 USB/LAN 新 RPC、配对/TLS 尚未实现。本轮不替换当前运行实例。

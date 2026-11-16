@@ -12,6 +12,7 @@ import { describeHttp } from '../operation_registry.ts';
 import { executeManaged, getOperations, operationsRoot, resolveSpec } from '../operation_host.ts';
 import { requestPrincipal } from '../access_context.ts';
 import { operationFailure } from '../operations.ts';
+import {deviceRoutes} from './routes_devices.ts';
 
 export async function handleHttp(req: http.IncomingMessage, res: http.ServerResponse) {
   const url = new URL(req.url ?? '/', 'http://localhost');
@@ -26,6 +27,7 @@ export async function handleHttp(req: http.IncomingMessage, res: http.ServerResp
   const context: RouteContext = { req, res, url, send };
   const routes = [
     ...operationsRoutes(context),
+    ...deviceRoutes(context),
     ...systemRoutes(context),
     ...runtimeRoutes(context),
     ...analysisRoutes(context),

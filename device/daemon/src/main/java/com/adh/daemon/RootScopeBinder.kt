@@ -1,154 +1,40 @@
 package com.adh.daemon
 
-import android.content.Context
-import android.system.Os
-import com.adh.core.AdhPaths
 import com.adh.core.AdhProtocol
-import com.adh.core.CaCertStore
-import com.adh.core.HostEndpoint
-import com.adh.core.ScopeConfig
-import com.adh.core.ScopeJson
-import java.io.File
-import java.io.FileOutputStream
-import java.io.StringReader
-import java.nio.file.Files
-import java.nio.file.StandardCopyOption
-import java.util.Properties
+import com.adh.daemon.device.DeviceOperations
+import org.json.JSONObject
+import java.util.Base64
 
-internal class RootScopeBinder(
-    private val verifier: ManagerCallerVerifier,
-    private val context: Context,
-) : IAdhScopeService.Stub() {
-    override fun getProtocolVersion(): Int {
+/** Binder authentication stays here; business operations are shared with device RPC. */
+internal class RootScopeBinder(private val verifier: ManagerCallerVerifier, private val operations: DeviceOperations) : IAdhScopeService.Stub() {
+    private fun read(method: String, params: JSONObject = JSONObject()): JSONObject { verifier.enforce(); return operations.managerRead(method, params) }
+    private fun write(method: String, params: JSONObject): JSONObject {
         verifier.enforce()
-        return AdhProtocol.VERSION
+        val record = operations.managerWrite(method, params)
+        check(record.getString("state") == "succeeded") { "device operation ${record.optString("code", "failed")}" }
+        return record.getJSONObject("result")
     }
-
-    override fun getScopeJson(): String {
+    override fun getProtocolVersion(): Int { verifier.enforce(); return AdhProtocol.VERSION }
+    override fun getScopeJson(): String = read("scope.get").getJSONObject("document").toString()
+    override fun setScopeJson(json: String?): Boolean { verifier.enforce(); return runCatching { write("scope.replace", JSONObject().put("document", JSONObject(json ?: ""))).getBoolean("ok") }.getOrDefault(false) }
+    override fun isModulePresent(): Boolean = read("module.status").getBoolean("present")
+    override fun isLoaderActive(): Boolean = read("module.status").getBoolean("loaderActive")
+    override fun getModuleVersion(): String = read("module.status").getString("version")
+    override fun listApplications(): String = read("legacy.applications").getJSONArray("applications").toString()
+    override fun getApplicationIconPng(packageName: String?): ByteArray = Base64.getDecoder().decode(read("legacy.icon", JSONObject().put("package", packageName ?: "")).getString("base64"))
+    override fun controlPackage(packageName: String?, action: String?): String { verifier.enforce(); return runCatching { write("legacy.process", JSONObject().put("package", packageName ?: "").put("action", action ?: "")).getString("verdict") }.getOrDefault("failed") }
+    override fun getHostEndpoint(): String = read("host.get").getString("endpoint")
+    override fun setHostEndpoint(endpoint: String?): Boolean { verifier.enforce(); return runCatching { write("host.set", JSONObject().put("endpoint", endpoint ?: "")).getBoolean("ok") }.getOrDefault(false) }
+    override fun listCaCerts(): String = read("certificates.list").getJSONArray("certificates").toString()
+    override fun putCaCert(encoded: ByteArray?): Int { verifier.enforce(); return runCatching { write("certificates.put", JSONObject().put("base64", Base64.getEncoder().encodeToString(encoded ?: byteArrayOf()))).getInt("stored") }.getOrDefault(-1) }
+    override fun deleteCaCert(fileName: String?): Boolean { verifier.enforce(); return runCatching { write("certificates.delete", JSONObject().put("fileName", fileName ?: "")).getBoolean("ok") }.getOrDefault(false) }
+    override fun rebootDevice(): Boolean { verifier.enforce(); return runCatching { write("legacy.reboot", JSONObject()).getBoolean("ok") }.getOrDefault(false) }
+    override fun getDeviceInfoJson(): String = read("device.info").toString()
+    override fun getDeviceCapabilitiesJson(): String = read("device.capabilities").toString()
+    override fun getScopeSnapshotJson(): String = read("scope.get").toString()
+    override fun setScopeVersionedJson(json: String?, scopeRevision: String?, stateRevision: Long): String {
         verifier.enforce()
-        val file = File(AdhPaths.SCOPE_PATH)
-        if (!file.exists()) return ScopeJson.encode(ScopeConfig.EMPTY)
-        return ScopeJson.encode(ScopeJson.decode(file.readText()))
+        return runCatching { operations.write("scope.replace", JSONObject().put("document", JSONObject(json ?: "")).put("scopeRevision", scopeRevision ?: ""), java.util.UUID.randomUUID().toString(), stateRevision, "operator", 60000).toString() }
+            .getOrElse { JSONObject().put("state", "failed").put("code", (it as? com.adh.daemon.device.DeviceFault)?.code ?: "DEVICE_ERROR").toString() }
     }
-
-    override fun setScopeJson(json: String?): Boolean {
-        verifier.enforce()
-        if (json.isNullOrBlank()) return false
-        val encoded = ScopeJson.encode(ScopeJson.decode(json))
-        return runCatching { atomicWrite(File(AdhPaths.SCOPE_PATH), encoded) }.isSuccess
-    }
-
-    override fun isModulePresent(): Boolean {
-        verifier.enforce()
-        return File(AdhPaths.MODULE_DIR).isDirectory || File(AdhPaths.MODULE_PROP).isFile
-    }
-
-    override fun isLoaderActive(): Boolean {
-        verifier.enforce()
-        return File(AdhPaths.LOADER_MARKER).isFile
-    }
-
-    override fun getModuleVersion(): String {
-        verifier.enforce()
-        val raw = runCatching { File(AdhPaths.MODULE_PROP).readText() }.getOrNull() ?: return ""
-        val properties = Properties()
-        return runCatching {
-            properties.load(StringReader(raw))
-            properties.getProperty("version").orEmpty()
-        }.getOrDefault("")
-    }
-
-    override fun listApplications(): String {
-        verifier.enforce()
-        return PackageCatalog.listJson(context)
-    }
-
-    override fun getApplicationIconPng(packageName: String?): ByteArray {
-        verifier.enforce()
-        return PackageCatalog.iconPng(context, packageName)
-    }
-
-    override fun controlPackage(packageName: String?, action: String?): String {
-        verifier.enforce()
-        return AppProcessControl.run(context, packageName, action)
-    }
-
-    override fun getHostEndpoint(): String {
-        verifier.enforce()
-        val text = runCatching { File(AdhPaths.HOST_ENDPOINT_PATH).readText() }.getOrNull() ?: return ""
-        val parsed = HostEndpoint.parse(text) ?: return ""
-        return "${parsed.first}:${parsed.second}"
-    }
-
-    override fun setHostEndpoint(endpoint: String?): Boolean {
-        verifier.enforce()
-        val parsed = HostEndpoint.parse(endpoint ?: return false) ?: return false
-        val body = HostEndpoint.format(parsed.first, parsed.second) ?: return false
-        return runCatching { atomicWrite(File(AdhPaths.HOST_ENDPOINT_PATH), body) }.isSuccess
-    }
-
-    override fun listCaCerts(): String {
-        verifier.enforce()
-        return runCatching {
-            CaCertStore.encode(CaCertStore.list(File(AdhPaths.CACERTS_DIR), ::caVisible))
-        }.getOrDefault("[]")
-    }
-
-    override fun putCaCert(encoded: ByteArray?): Int {
-        verifier.enforce()
-        if (encoded == null || encoded.size > CaCertStore.MAX_BUNDLE_BYTES) return -1
-        val dir = File(AdhPaths.CACERTS_DIR)
-        val count = runCatching { CaCertStore.install(dir, encoded) }.getOrElse { return -1 }
-        if (count > 0) {
-            runCatching {
-                Os.chmod(dir.path, 0b111101101)
-                dir.listFiles()?.forEach { file ->
-                    if (file.isFile) Os.chmod(file.path, 0b110100100)
-                }
-            }
-        }
-        return count
-    }
-
-    override fun deleteCaCert(fileName: String?): Boolean {
-        verifier.enforce()
-        return CaCertStore.delete(File(AdhPaths.CACERTS_DIR), fileName)
-    }
-
-    override fun rebootDevice(): Boolean {
-        verifier.enforce()
-        return runCatching {
-            Runtime.getRuntime().exec(arrayOf("/system/bin/reboot"))
-            true
-        }.getOrDefault(false)
-    }
-
-    private fun caVisible(name: String): Boolean =
-        File("/apex/com.android.conscrypt/cacerts", name).isFile ||
-            File("/system/etc/security/cacerts", name).isFile
-
-    private fun atomicWrite(target: File, content: String) {
-        target.parentFile?.mkdirs()
-        val temp = File(target.parentFile, ".${target.name}.${android.os.Process.myPid()}.tmp")
-        try {
-            FileOutputStream(temp).use { output ->
-                output.write(content.toByteArray(Charsets.UTF_8))
-                output.fd.sync()
-            }
-            try {
-                Files.move(
-                    temp.toPath(),
-                    target.toPath(),
-                    StandardCopyOption.ATOMIC_MOVE,
-                    StandardCopyOption.REPLACE_EXISTING,
-                )
-            } catch (_: Exception) {
-                check(temp.renameTo(target)) { "rename ${temp.path} -> ${target.path} failed" }
-            }
-            Os.chmod(target.path, 0b110100100)
-        } finally {
-            temp.delete()
-        }
-    }
-
 }

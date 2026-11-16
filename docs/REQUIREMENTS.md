@@ -1,5 +1,7 @@
 # ADH (Android DecryptHub) — 功能需求说明
 
+> **2026-11-16 P3 设备契约**：稳定安装 UUID/密钥与 boot/daemon 代际，设备发现、信息/能力、作用域/进程/证书/Host 地址由同一设备域服务提供，Binder 与 USB RPC 共用持久 revision。所有远程写经过 Host 设备资源控制及设备 CAS，派发后未知不重试。新协议与现有 agent session 显式区分，未验证的归属不猜测；局域网 TLS、配对和旧 ADB 能力迁移留待后续。范围和验证边界见 [P3_DEVICE_DOMAIN.md](P3_DEVICE_DOMAIN.md)。本轮不部署、不改变当前分析现场。
+
 > **2026-11-16 P2 人类工作台**：任务搜索/分页、详情/结果/副作用、人类暂停恢复、接管/交还、unknown 核对和配置编辑已接入同一执行层。草稿保留原版本，冲突并列核对，显式 rebase 只保留本来修改的字段，不自动提交；任务状态修改使用 task revision。默认观察不改变 AI 工作。范围、兼容性与验证见 [P2_WORKBENCH.md](P2_WORKBENCH.md)。本轮在独立 worktree 实现，当前服务不升级，原静态目录保留 P1 提交内容。
 
 > **2026-11-16 P1 操作契约**：MCP、REST、公共/开发 CLI 和人类面板通过同一 Host 执行层；写入必须携带 revision/controlEpoch/hostEpoch，人类接管与修改阻止旧 AI 操作继续写。任务持久保存，不自动重放；取消区分 requested 与确认，派发后超时/断连保留 unknown 和晚到证据。operator 凭据控制接管，不以请求 JSON 的自报角色授权。实现、迁移与边界见 [P1_OPERATIONS.md](P1_OPERATIONS.md)。人类面板可修改/接管的用户决议取代下文历史只读冻结口径；不将 Host 门禁视为真机或新传输验收。

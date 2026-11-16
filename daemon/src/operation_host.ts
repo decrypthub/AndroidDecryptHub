@@ -26,7 +26,7 @@ export async function runAutomatic(session: string, name: string, meta: ReturnTy
   } catch(error) { return operationFailure(error); }
 }
 export function resolveSpec(spec: OperationSpec, args: any) {
-  if(spec.mode==='write' && !spec.global && !spec.session) {
+  if(spec.mode==='write' && !spec.global && !spec.session && !spec.deviceId) {
     const online=[...sessions.values()].filter(s=>s.online);
     if(online.length!==1)throw new OperationError('TARGET_REQUIRED','choose an explicit session; targets are ambiguous or offline');
     spec={...spec,session:online[0].sessionId};

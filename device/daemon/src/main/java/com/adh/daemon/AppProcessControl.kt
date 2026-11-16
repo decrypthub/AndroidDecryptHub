@@ -7,6 +7,8 @@ import android.util.Log
 import com.adh.core.PackageControl
 import java.io.File
 import java.util.concurrent.TimeUnit
+import java.io.ByteArrayOutputStream
+import com.adh.daemon.device.DeviceFault
 
 /**
  * Privileged stop/restart of a target app. Runs as uid 0 via the Device Daemon.
@@ -99,15 +101,24 @@ internal object AppProcessControl {
             Log.w(TAG, "cmd failed to start: ${args.joinToString(" ")}", it)
             return false
         }
-        val output = runCatching {
-            proc.inputStream.bufferedReader().use { it.readText() }
-        }.getOrDefault("")
+        // Drain while waiting: readText() before waitFor() made the timeout ineffective.
+        val captured = ByteArrayOutputStream()
+        val collector = Thread {
+            runCatching { proc.inputStream.use { input ->
+                val chunk = ByteArray(4096)
+                while (true) { val count = input.read(chunk); if (count < 0) break
+                    synchronized(captured) { val keep = minOf(count, 4096 - captured.size()); if (keep > 0) captured.write(chunk, 0, keep) }
+                }
+            } }
+        }.apply { isDaemon = true; name = "adh-process-output"; start() }
         val finished = runCatching { proc.waitFor(8, TimeUnit.SECONDS) }.getOrDefault(false)
         if (!finished) {
             proc.destroyForcibly()
             Log.w(TAG, "cmd timed out: ${args.joinToString(" ")}")
-            return false
+            throw DeviceFault("PROCESS_CONTROL_TIMEOUT", "process control timed out after dispatch; effects require inspection", true)
         }
+        collector.join(100)
+        val output = synchronized(captured) { captured.toString("UTF-8") }
         val code = runCatching { proc.exitValue() }.getOrDefault(-1)
         if (code != 0) {
             Log.w(TAG, "cmd exit $code: ${args.joinToString(" ")} ${output.take(200)}")

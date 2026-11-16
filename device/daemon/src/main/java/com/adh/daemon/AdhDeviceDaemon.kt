@@ -7,10 +7,17 @@ import android.os.Process
 import android.util.Log
 import com.adh.core.AdhPaths
 import java.io.File
+import com.adh.daemon.device.DeviceFiles
+import com.adh.daemon.device.DeviceIdentity
+import com.adh.daemon.device.DeviceOperations
+import com.adh.daemon.device.LocalDeviceRpcServer
+import android.system.Os
 
 object AdhDeviceDaemon {
     private const val TAG = "AdhDeviceDaemon"
     private const val PUBLISH_INTERVAL_MS = 1_000L
+    private var rpc: LocalDeviceRpcServer? = null
+    private var domainLock: java.nio.channels.FileLock? = null
 
     @JvmStatic
     fun main(args: Array<String>) {
@@ -26,7 +33,18 @@ object AdhDeviceDaemon {
 
         Looper.prepareMainLooper()
         val context = SystemContext.create()
-        val service = RootScopeBinder(ManagerCallerVerifier(context), context)
+        val files = DeviceFiles(File(AdhPaths.DEVICE_RPC_DIR), { file, mode -> Os.chmod(file.path, mode) }, { directory ->
+            val fd = Os.open(directory.path, android.system.OsConstants.O_RDONLY, 0)
+            try { Os.fsync(fd) } finally { Os.close(fd) }
+        })
+        files.initialize()
+        val lockChannel = java.io.RandomAccessFile(File(files.directory, "daemon.lock"), "rw").channel
+        domainLock = checkNotNull(lockChannel.tryLock()) { "another device domain instance owns this installation" }
+        val identity = DeviceIdentity(files, File("/proc/sys/kernel/random/boot_id").readText().trim())
+        val operations = DeviceOperations(identity, files, AndroidDeviceBackend(context, files))
+        val service = RootScopeBinder(ManagerCallerVerifier(context), operations)
+        // RPC availability never tears down the pre-existing authenticated Binder service.
+        runCatching { rpc = LocalDeviceRpcServer(operations) }.onFailure { Log.e(TAG, "USB RPC unavailable; Binder remains available", it) }
         File(AdhPaths.SCOPE_DIR).mkdirs()
         File(AdhPaths.DAEMON_PID_PATH).writeText(Process.myPid().toString())
         File(AdhPaths.DAEMON_READY_MARKER).writeText("1\n")
