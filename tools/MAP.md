@@ -211,3 +211,7 @@ event-limit accounting, explicit stop and wrong-TID refusal. It does not run the
 ### P5 最终沙盒入口（2026-11-16）
 
 `verify_p5_device.ts SERIAL TRANSPORT_ID PRIVATE_ASSETS NEW_PRIVATE_OUTPUT final` 显式执行 stdio/2 的256种长度往返、七族 capture_start、全禁用、UID变化与Agent替换，共11项；细节在 p5_final_cases.ts。拒绝已有测试包/占用端口，不走 verify_all 的共享沙盒启停。通过、失败、unknown、现场和自有资源清理分别记录，超时不重发。原始报告与产物不提交，见 docs/P5_ANDROID_ACCEPTANCE.md。
+
+## P5 真实 Zygisk 显式入口（2026-11-16）
+
+`build_p5_zygisk.sh NONCE PRIVATE_OUTPUT` 无ADB；`verify_p5_zygisk.ts SERIAL PRIVATE_ASSETS NEW_PRIVATE_OUTPUT --allow-device-reboot` 在专用授权手机安装仅自身包作用域的临时模块，加载/卸载各重启一次，验证6项真实链路并检查原Host/文件/映射和自身清理。缺少重启opt-in/日常机在任何状态或ADB前被拒绝。该入口不注册到verify_all自动执行。原始产物和报告不提交；详情见 docs/P5_ZYGISK_ACCEPTANCE.md。

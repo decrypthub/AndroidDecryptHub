@@ -15,15 +15,17 @@ import java.io.DataInputStream
 /** Debug APK only. Own namespace and root, no Binder publisher or AndroidDeviceBackend. */
 object P5DeviceFixture {
     @JvmStatic fun main(args:Array<String>){
-        check(Process.myUid()==0);require(args.size==2)
+        check(Process.myUid()==0);require(args.size==2||args.size==3)
         val root=File(args[0]).canonicalFile;val name=args[1]
         require(root.path.matches(Regex("/data/local/tmp/adh-p5-[a-f0-9]{12}"))&&name.matches(Regex("adh_p5_[a-f0-9]{12}")))
         Thread.setDefaultUncaughtExceptionHandler { _,error->File(root,"crash.txt").writeText(error.stackTraceToString());kotlin.system.exitProcess(1) }
         Looper.prepareMainLooper();val context=SystemContext.create()
         val app=context.packageManager.getApplicationInfo("com.adh.p5sandbox",0)
-        val agent=File(app.nativeLibraryDir,"libadh_agent.so");check(agent.isFile)
+        val moduleId=args.getOrNull(2)?.also{require(it=="adh_p5_"+root.name.removePrefix("adh-p5-"))}
+        val stateRoot=if(moduleId==null)root else File("/data/adb/adh-p5-"+root.name.removePrefix("adh-p5-"))
+        val agent=if(moduleId==null)File(app.nativeLibraryDir,"libadh_agent.so")else File("/data/adb/modules/$moduleId/libadh_agent.so");check(agent.isFile)
         val files=DeviceFiles(File(root,"domain"),{f,m->Os.chmod(f.path,m)},{directory->val fd=Os.open(directory.path,OsConstants.O_RDONLY,0);try{Os.fsync(fd)}finally{Os.close(fd)}});files.initialize()
-        val scope=ScopeDocuments(File(root,"scope.json"),files)
+        val scope=ScopeDocuments(File(stateRoot,"scope.json"),files)
         val identity=DeviceIdentity(files,File("/proc/sys/kernel/random/boot_id").readText().trim())
         val operations=DeviceOperations(identity,files,DeviceBackend { method,params->when(method){
             "device.info"->JSONObject().put("model",android.os.Build.MODEL).put("sdk",android.os.Build.VERSION.SDK_INT).put("isolatedFixture",true).put("padding",params.optString("padding").also{require(it.length<=512)})
@@ -31,7 +33,7 @@ object P5DeviceFixture {
             "scope.patch"->scope.patch(params)
             else->throw DeviceFault("UNSUPPORTED_METHOD","fixture never dispatches Android device control")
         }})
-        val probe=HookBindingProbe { name->val installed=context.packageManager.getApplicationInfo(name,0);AndroidHookBinding(context,File(installed.nativeLibraryDir,"libadh_agent.so")).inspect(name) }
+        val probe=HookBindingProbe { name->val installed=context.packageManager.getApplicationInfo(name,0);AndroidHookBinding(context,if(moduleId==null)File(installed.nativeLibraryDir,"libadh_agent.so")else agent).inspect(name) }
         val cache=HookPlanCache(operations,files,scope,probe)
         val network=DeviceNetwork(operations,files,allowEphemeral=true)
         val broker=EarlyPlanBroker(cache,name+"_early");val rpc=LocalDeviceRpcServer(operations,name){it.printStackTrace()}

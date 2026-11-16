@@ -1,0 +1,3 @@
+// Generated only for the explicit opt-in real Zygisk fixture. No production path writes.
+#define ADH_STATE_DIR "/data/adb/adh-p5-@ADH_P5_NONCE@"
+#define ADH_EARLY_BROKER "adh_p5_@ADH_P5_NONCE@_early"

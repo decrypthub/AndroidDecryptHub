@@ -27,20 +27,27 @@
 // Injection decisions must be auditable after the fact: logd is not reliably reachable in the
 // pre-specialize window, and a silent "no inject" is impossible to debug from outside. Every
 // decision is written to a root-readable file as well as to logcat.
-#define ADH_DECISION_LOG "/data/adb/adh/zygisk_inject.log"
+// Defaults are the Device/core contract. Only the opt-in test build overrides its namespace.
+#ifndef ADH_STATE_DIR
+#define ADH_STATE_DIR "/data/adb/adh"
+#endif
+#ifndef ADH_EARLY_BROKER
+#define ADH_EARLY_BROKER "adh_early_plans_v1"
+#endif
+#define ADH_DECISION_LOG ADH_STATE_DIR "/zygisk_inject.log"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
-static constexpr const char *kScopePath = "/data/adb/adh/scope.json"; // == com.adh.core.AdhPaths.SCOPE_PATH
-static constexpr const char *kHostEndpointPath = "/data/adb/adh/host.endpoint"; // == com.adh.core.AdhPaths.HOST_ENDPOINT_PATH
-static constexpr const char *kLoaderMarker = "/data/adb/adh/zygisk_loaded"; // == com.adh.core.AdhPaths.LOADER_MARKER
+static constexpr const char *kScopePath = ADH_STATE_DIR "/scope.json"; // == com.adh.core.AdhPaths.SCOPE_PATH
+static constexpr const char *kHostEndpointPath = ADH_STATE_DIR "/host.endpoint"; // == com.adh.core.AdhPaths.HOST_ENDPOINT_PATH
+static constexpr const char *kLoaderMarker = ADH_STATE_DIR "/zygisk_loaded"; // == com.adh.core.AdhPaths.LOADER_MARKER
 
 static bool read_exact_early(int fd,void* data,size_t n){auto* p=static_cast<unsigned char*>(data);while(n){ssize_t got=read(fd,p,n);if(got<=0)return false;p+=got;n-=size_t(got);}return true;}
 static std::vector<unsigned char> read_early_packet(int fd){unsigned char size[4];if(!read_exact_early(fd,size,4))return{};size_t n=(size_t(size[0])<<24)|(size_t(size[1])<<16)|(size_t(size[2])<<8)|size[3];if(!n||n>ADH_EARLY_MAX)return{};std::vector<unsigned char> data(n);return read_exact_early(fd,data.data(),n)?data:std::vector<unsigned char>{};}
 static std::vector<unsigned char> root_early_plan(const char* package,int uid){
     if(!package||uid<=0)return{};int fd=socket(AF_UNIX,SOCK_STREAM|SOCK_CLOEXEC,0);if(fd<0)return{};
     timeval timeout{0,250000};setsockopt(fd,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(timeout));setsockopt(fd,SOL_SOCKET,SO_SNDTIMEO,&timeout,sizeof(timeout));
-    sockaddr_un address{};address.sun_family=AF_UNIX;const char* name="adh_early_plans_v1";memcpy(address.sun_path+1,name,strlen(name));
+    sockaddr_un address{};address.sun_family=AF_UNIX;const char* name=ADH_EARLY_BROKER;memcpy(address.sun_path+1,name,strlen(name));
     if(connect(fd,reinterpret_cast<sockaddr*>(&address),socklen_t(offsetof(sockaddr_un,sun_path)+1+strlen(name)))!=0){close(fd);return{};}
     ucred peer{};socklen_t length=sizeof(peer);if(getsockopt(fd,SOL_SOCKET,SO_PEERCRED,&peer,&length)!=0||peer.uid!=0){close(fd);return{};}
     char request[512];int n=snprintf(request,sizeof(request),"%s %d\n",package,uid);if(n<=0||size_t(n)>=sizeof(request)||write(fd,request,size_t(n))!=n){close(fd);return{};}
@@ -49,7 +56,7 @@ static std::vector<unsigned char> root_early_plan(const char* package,int uid){
 static constexpr const char *kManagerPkg = "com.adh.manager";         // == com.adh.core.AdhPaths.MANAGER_PKG
 static constexpr const char *kAgentName = "libadh_agent.so";          // == com.adh.core.AdhPaths.AGENT_SO_NAME
 static constexpr const char *kQbdiName = "libQBDI.so";                // optional tracer, delivered on demand
-static constexpr const char *kQbdiFlagPath = "/data/adb/adh/qbdi.enabled"; // presence = deliver the tracer
+static constexpr const char *kQbdiFlagPath = ADH_STATE_DIR "/qbdi.enabled"; // presence = deliver the tracer
 
 #include <cstdarg>
 static zygisk::Api *g_api_for_log = nullptr;   // set in onLoad, used to relay logs (see note())
@@ -677,7 +684,7 @@ public:
             }
         }
         if (!g_debug_pkg[0]) {
-            g_debug_verbose = (access("/data/adb/adh/zygisk_debug", F_OK) == 0);
+            g_debug_verbose = (access(ADH_STATE_DIR "/zygisk_debug", F_OK) == 0);
         }
         note("preAppSpecialize uid=%d debug=%d", (int)getuid(), g_debug_verbose ? 1 : 0);
         if (!args || !args->nice_name) return;
@@ -841,7 +848,7 @@ public:
             using early_fn=int(*)(const void*,size_t,const char*,const char*);
             auto apply_early=reinterpret_cast<early_fn>(dlsym(handle,"adh_agent_apply_early_v1"));
             const auto target=package_of(package_name);
-            if(apply_early)apply_early(early_packet.data(),early_packet.size(),target.c_str(),actual_agent_sha.c_str());
+            if(apply_early){int applied=apply_early(early_packet.data(),early_packet.size(),target.c_str(),actual_agent_sha.c_str());note("early post-specialize pkg=%s uid=%d bytes=%zu result=%d before_agent_start=1",target.c_str(),int(getuid()),early_packet.size(),applied);}
             else LOGE("early-plan/1 unsupported by loaded agent; cache not applied");
         }
         early_packet.clear();
@@ -946,7 +953,7 @@ static void companion_serve(int client) {
         }
         if(strncmp(req,"early ",6)==0){char pkg[256]{};int uid=0;char extra=0;std::vector<unsigned char> data;
             if(sscanf(req+6,"%255s %d %c",pkg,&uid,&extra)==2)data=root_early_plan(pkg,uid);
-            size_t n=data.size();unsigned char header[4]={static_cast<unsigned char>(n>>24),static_cast<unsigned char>(n>>16),static_cast<unsigned char>(n>>8),static_cast<unsigned char>(n)};
+            size_t n=data.size();note("early companion pkg=%s uid=%d bytes=%zu",pkg,uid,n);unsigned char header[4]={static_cast<unsigned char>(n>>24),static_cast<unsigned char>(n>>16),static_cast<unsigned char>(n>>8),static_cast<unsigned char>(n)};
             if(send_all(client,reinterpret_cast<char*>(header),4)&&n)send_all(client,reinterpret_cast<char*>(data.data()),n);continue;
         }
         if (strncmp(req, "policy ", 7) == 0) {

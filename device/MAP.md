@@ -145,3 +145,7 @@ JVM `DeviceDomainTest` tests recovery/CAS/storage errors; `DeviceRpcFixture` exp
 ### P5 stdio/2 与最终验收（2026-11-16）
 
 `:core` 的 DeviceStdio.kt 只做有界帧/外层 Base64 编解码，供 :daemon 的 root DeviceRpcRelay 使用，处理 Windows ADB 的 CRLF 转换；不承载分析。DeviceIdentity 保留身份/凭据并标记 stdioVersion=2。opt-in p5Fixture 和 p5sandbox 的隔离边界、真实七族探针及绑定拒绝见 docs/P5_ANDROID_ACCEPTANCE.md；普通 APK 不含 P5 fixture。
+
+## P5 正式注入夹具（2026-11-16）
+
+opt-in P5DeviceFixture 可选 nonce 约束的临时模块ID，绑定该模块Agent及私有/data/adb状态，不改默认路径。p5sandbox 的 ProbeApplication 记录首次Os.getpid窗口；ProbeActivity仅给真实Zygisk模式保持自身前台/常亮，ProbeService在zygiskOnly分支不执行任何Agent自加载。普通APK排除这些fixture类。见 docs/P5_ZYGISK_ACCEPTANCE.md。

@@ -5036,3 +5036,11 @@ v71 另触发的 1000 条历史捕获尚未完整恢复：现存事件日志缺�
 修复 HMAC/非对称共用 DigestSign 回调越过禁用策略输出数据；增加有界 lastCaptureInstall 证据。复跑发现 Windows adb shell 转换二进制 LF 帧头造成已执行却回包超时，改为显式 stdio/2 Base64 传输（内层 RPC/认证/账本不变，旧版 unsupported），不重发 unknown；新增 Kotlin/Node 大帧、碎片、控制字节、CRLF 和错误边界回归及真机256种长度低字节往返。夹具检查失败和 unknown 均独立保留，增加自身清理的可验证结果。
 
 最终 run-08/09 各 **11/11**，sceneUnchanged/cleanupVerified=true；Host **560/560**、Android JVM **73/73**，无 skip，类型/构建/MCP门禁通过。测试包已卸载、自建服务/映射清理；原服务未重启，当前业务现场的会话/PID/模块配置哈希/映射保持一致。P5 **沙盒阶段**已按范围收口；正式 Zygisk 整链、整机重启、生产升级、其他 ROM 和穷举算法组合继续未验证，Java/inline early 继续 unsupported。详情与所有失败记录口径见 [P5_ANDROID_ACCEPTANCE.md](P5_ANDROID_ACCEPTANCE.md)。
+
+## 2026-11-16 — P5 正式 Zygisk 调用链隔离真机验收
+
+用户本轮明确允许 aa165071 重启后，在独立 worktree/临时模块/状态目录/broker/Host/测试包上实测真实 Zygisk callbacks、companion 获取、模块FD→post-specialize memfd/实际SHA校验、Application首次 Os.getpid 调用窗口命中。测试 App 不自加载 Agent，当前GOT槽值和事件主线程/纳秒窗口均核对。最终私有 run-05 **6/6**：正例、TTL、显式撤销、实际UID更换、仅模块Agent文件更换、broker不可用。临时模块已删除并重启卸载，测试包/自建服务清理，原Host PID/启动时间与六个原配置/模块文件SHA、原映射一致。手机原进程因获授权的重启而终止，不再沿用此前“不重启手机”的现场承诺。
+
+改进临时模块SELinux标签、post/companion审计和默认路径契约构建。实际识别 libandroid_runtime GOT 后续被覆盖，改用预载libjavacore并检验当前槽及首次Application事件，未伪报历史hits为持续命中。后台采集失败的内核栈确认为所有线程do_freezer_trap，夹具使用自身前台窗口常亮；不修改系统冻结策略，不自动重装Hook。失败/采集未确认记录均保留，未计通过。
+
+Host **561/561**、JVM **73/73** 无skip，类型、默认/隔离构建、94项MCP门禁通过；测试so原目录重建逐字节一致。此设备的正式调用链已收口；默认生产部署/升级、其他ROM/Root/Zygisk、真实业务App、正式capture_start各族及LAN grant撤销组合等仍未验证。详见 [P5_ZYGISK_ACCEPTANCE.md](P5_ZYGISK_ACCEPTANCE.md)。

@@ -35,3 +35,7 @@ bash tools/build_zygisk.sh     # -> injector/zygisk/dist/adh-zygisk.zip
 bash tools/build_bundle.sh     # -> injector/zygisk/dist/adh-bundle-vX.Y.Z.zip
 bash tools/flash_device.sh --reboot  # KernelSU ksud / Magisk install + reboot
 ```
+
+## P5 真实 Zygisk 隔离验收（2026-11-16）
+
+`zygisk/fixture` 只在显式构建中给同一 main.cpp 覆盖状态目录/broker；默认宏仍是 Device/core 契约。额外默认契约构建不安装。`tools/build_p5_zygisk.sh` 只构建，`tools/verify_p5_zygisk.ts` 显式 opt-in 负责私有模块/包与两次手机重启；不调用生产 installer/service 脚本。companion/post 增加有界元数据审计，无缓存正文。实测与默认部署未验证边界见 docs/P5_ZYGISK_ACCEPTANCE.md。

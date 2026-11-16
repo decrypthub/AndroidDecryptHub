@@ -2,6 +2,8 @@
 
 首轮独立验收 **7 PASS / 0 FAIL**；最后一轮 capture/绑定验收与沙盒阶段收口见本文末节。设备为 PGP110、Android 15 / API 35、arm64-v8a、KernelSU，SELinux 保持 enforcing。使用独立 worktree，未安装或替换生产 Zygisk 模块、Manager、Device Daemon，未重启现有服务。
 
+后续用户授权手机重启后，已完成[真实 Zygisk 调用链的隔离真机验收](P5_ZYGISK_ACCEPTANCE.md)。本文“不重启”与“正式链未验证”均是当轮 self-load 沙盒的历史边界，不代表后续验收没有执行。默认生产部署/升级继续未验证。
+
 ## 实测证据与边界
 
 | 项目 | 实测结果 |
@@ -33,7 +35,7 @@ stdio 通过 `adb shell -T` 保持双向原始流。连接前只读检查 su 帮
 
 ## 隔离设施与复现
 
-- `device/p5sandbox` 是 opt-in Gradle 模块，只有 `-PadhP5Sandbox=true` 才加入。使用新包名和前台 Service，没有 Activity，不抢占原分析 App 的界面。
+- `device/p5sandbox` 是 opt-in Gradle 模块，只有 `-PadhP5Sandbox=true` 才加入。self-load 入口使用新包名和前台 Service，不启动 Activity；后续真实 Zygisk 入口另用自身 Activity 保持前台/常亮，适用本轮用户的手机操作授权。
 - `device/daemon/src/p5Fixture` 只有同一 opt-in 属性启用时编入测试 APK；不进入普通 bundle。它运行独立 root 进程，不发布 Binder，不使用 AndroidDeviceBackend，不能调生产启停/证书/宿主设置。
 - 每次创建 `/data/local/tmp/adh-p5-<随机值>`、独立数据和 UDS 名；身份/授权/迁移账本在 root 私有 domain 目录。Host 使用独立数据、18088/18761。正式 8088/8761 映射不改写。
 - 专用 Agent 构建把默认连接端口编为 18761；运行前核对 CMakeCache 和 APK 内实际 Agent SHA，防止新沙盒误连正式 Host。`build_agent.sh` 拒绝把自定义端口 Agent 用 `--deploy` 推出。

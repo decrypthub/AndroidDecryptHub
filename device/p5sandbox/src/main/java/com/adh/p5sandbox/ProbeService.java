@@ -13,7 +13,7 @@ import javax.crypto.spec.*;
 import javax.net.ssl.*;
 import org.json.JSONObject;
 
-/** Opt-in test APK, no Activity and no production configuration access. */
+/** Opt-in test APK. Only its own fixture UI/service, no production configuration access. */
 public final class ProbeService extends Service {
     private boolean started=false;
     private static native String bootstrap(String directory,String wire,String sha,boolean deferred);
@@ -42,6 +42,11 @@ public final class ProbeService extends Service {
         NotificationManager manager=getSystemService(NotificationManager.class);manager.createNotificationChannel(new NotificationChannel("p5-test","P5 isolated verification",NotificationManager.IMPORTANCE_LOW));
         startForeground(5,new Notification.Builder(this,"p5-test").setContentTitle("ADH P5 isolated test").setSmallIcon(android.R.drawable.ic_menu_info_details).build());
         if(!started){started=true;new Thread(()->{try{
+            if(intent.getBooleanExtra("zygiskOnly",false)){
+                JSONObject receipt=new JSONObject(new String(Files.readAllBytes(new File(getFilesDir(),"p5-zygisk-application.json").toPath()),StandardCharsets.UTF_8));
+                receipt.put("selfLoad",false).put("servicePid",android.os.Process.myPid());
+                Files.write(new File(getFilesDir(),"p5-result.json").toPath(),receipt.toString().getBytes(StandardCharsets.UTF_8));return;
+            }
             String marker=intent.getStringExtra("marker");boolean capture=marker!=null;if(capture)crypto("warmup");System.loadLibrary("p5fixture");
             JSONObject result=new JSONObject(bootstrap(getApplicationInfo().nativeLibraryDir,new File(getFilesDir(),"p5-wire.bin").getPath(),intent.getStringExtra("agentSha"),capture));
             if(capture){JSONObject probes=crypto(marker);probes.put("system",systemProbe("/data/local/tmp/"+marker+"_system")==-1);probes.put("tls",tls(marker,intent.getIntExtra("tlsPort",0)));result.put("probes",probes).put("marker",marker).put("allProbesBeforeAgentStart",true);startAgent();}
