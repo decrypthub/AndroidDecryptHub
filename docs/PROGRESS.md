@@ -5028,3 +5028,11 @@ v71 另触发的 1000 条历史捕获尚未完整恢复：现存事件日志缺�
 修复 early GOT 默认 errno=-1（改为0并保留失败原因）、Android org.json 斜杠转义导致的 LAN 挑战签名字节差异。enforcing ROM 的 adbd→su UDS connectto 拒绝通过新增显式 USB stdio/1 传输处理：同一协议/身份/账本，旧能力返回 unsupported，无自动回退/重发，不放宽 SELinux。沙盒 Agent 使用独立构建/产物端口18761，不能 --deploy，也不覆盖正常8761产物。默认 APK 排除所有 p5Fixture 类。
 
 回归：Host typecheck、**558/558**；Android JVM **70/70**（23/18/29）；普通/opt-in APK、原生默认/隔离端口构建、v132 host gate、94项MCP注册和生成文档检查通过。实测证据与正式 Zygisk、capture_start/其他绑定组合等未验证边界见 [P5_ANDROID_ACCEPTANCE.md](P5_ANDROID_ACCEPTANCE.md)。没有把模拟自加载扩写为已验证整个 Zygisk 时序。
+
+## 2026-11-16 — P5 最后一轮沙盒验收收口
+
+在独立 `feat/adh-p5-final-sandbox-20261116`（基座 f7d726e）补齐七族 capture_start 真命中/禁用、全禁用、实际 UID 更换和仅 Agent 文件替换。各进程先应用正式 early cache，再于 Agent 启动前执行全部实际 JCA/TLS/access 探针；同时验证专用安装计数、唯一标记、完整无丢失捕获窗口。两种绑定失效均检查 Root broker 返回0及直接投递旧 wire 被 Agent 拒绝，native Hook 为0。
+
+修复 HMAC/非对称共用 DigestSign 回调越过禁用策略输出数据；增加有界 lastCaptureInstall 证据。复跑发现 Windows adb shell 转换二进制 LF 帧头造成已执行却回包超时，改为显式 stdio/2 Base64 传输（内层 RPC/认证/账本不变，旧版 unsupported），不重发 unknown；新增 Kotlin/Node 大帧、碎片、控制字节、CRLF 和错误边界回归及真机256种长度低字节往返。夹具检查失败和 unknown 均独立保留，增加自身清理的可验证结果。
+
+最终 run-08/09 各 **11/11**，sceneUnchanged/cleanupVerified=true；Host **560/560**、Android JVM **73/73**，无 skip，类型/构建/MCP门禁通过。测试包已卸载、自建服务/映射清理；原服务未重启，当前业务现场的会话/PID/模块配置哈希/映射保持一致。P5 **沙盒阶段**已按范围收口；正式 Zygisk 整链、整机重启、生产升级、其他 ROM 和穷举算法组合继续未验证，Java/inline early 继续 unsupported。详情与所有失败记录口径见 [P5_ANDROID_ACCEPTANCE.md](P5_ANDROID_ACCEPTANCE.md)。

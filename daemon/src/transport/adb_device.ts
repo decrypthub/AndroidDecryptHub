@@ -1,3 +1,4 @@
+import {armoredStdio} from './stdio_armor.ts';
 import { execFile,spawn } from 'node:child_process';
 import { Duplex } from 'node:stream';
 import { promisify } from 'node:util';
@@ -44,11 +45,11 @@ export class AdbDeviceTransport {
     const prefix=selected.transportId?['-t',selected.transportId]:['-s',selected.serial];
     checkpoint();const bootstrap=parseBootstrap(await this.run([...prefix,'exec-out','su','-c',`cat ${DEVICE_BOOTSTRAP}`],{maxBuffer:8192}));
     if(usbMode==='stdio'){
-      if(bootstrap.stdioVersion!==1)deviceFail('UNSUPPORTED_TRANSPORT','device does not advertise USB stdio/1; no fallback attempted');
+      if(bootstrap.stdioVersion!==2)deviceFail('UNSUPPORTED_TRANSPORT','device does not advertise USB stdio/2; no fallback attempted');
       // KernelSU's fd wrapper can transform binary control bytes. Negotiate before any RPC.
       const help=await this.run([...prefix,'exec-out','su','--help']);const suFlags=help.includes('--no-wrapper')?['-W']:[];
       const ctx=executionContext.getStore();checkpoint();const effect=ctx?.dispatched({kind:'adb',action:'device.stdio.connect'});let rpc:DeviceRpcClient|undefined;
-      try{rpc=new DeviceRpcClient(this.stdio([...prefix,'shell','-T','su',...suFlags,'-c',"'"+DEVICE_STDIO_COMMAND+"'"]),onClose);const id=randomUUID(),nonce=randomBytes(32).toString('hex');const reply=await rpc.request('device.hello',{clientNonce:nonce,authentication:{type:'usb-token',credential:bootstrap.token}},undefined,undefined,5000,id);const peer=verifyHello(reply,bootstrap,id,nonce);ctx?.acknowledged(false,effect);
+      try{rpc=new DeviceRpcClient(armoredStdio(this.stdio([...prefix,'shell','-T','su',...suFlags,'-c',"'"+DEVICE_STDIO_COMMAND+"'"])),onClose);const id=randomUUID(),nonce=randomBytes(32).toString('hex');const reply=await rpc.request('device.hello',{clientNonce:nonce,authentication:{type:'usb-token',credential:bootstrap.token}},undefined,undefined,5000,id);const peer=verifyHello(reply,bootstrap,id,nonce);ctx?.acknowledged(false,effect);
         return {id:randomUUID(),transport:'adb',usbMode,serial:selected.serial,transportId:selected.transportId,port:0,peer,rpc,close:async()=>{rpc!.close();return {removed:true,confirmed:true,reason:'owned stdio stream closed; no forward created'};}};
       }catch(error){rpc?.close();ctx?.acknowledged(false,effect,true);throw error;}
     }

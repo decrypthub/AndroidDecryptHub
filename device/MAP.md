@@ -141,3 +141,7 @@ JVM `DeviceDomainTest` tests recovery/CAS/storage errors; `DeviceRpcFixture` exp
 ## P4 authenticated LAN (2026-11-16)
 
 `DeviceTls` builds a self-signed installation certificate using public JCA/JSSE, independent of imported system CAs. `DeviceNetwork` restores only explicitly enabled TLS configuration; its default is disabled. `DevicePairings` persists bounded public grants and revocations, closes revoked streams and fails closed on storage errors. The same DeviceRpcSession negotiates USB-token or LAN client-signature authentication, then dispatches through DeviceOperations with a per-request authorization guard inside the domain lock. Capabilities are filtered by grant; no TCP plaintext, remote root shell, HTTP/MCP, database or analysis is introduced. Existing Binder numbering stays v19; its API was not changed this slice. See docs/P4_LAN_AUTH.md for USB-first enrollment, permissions, recovery and unsupported legacy capabilities. Real Android TLS/SELinux and device effects remain a separate hardware gate.
+
+### P5 stdio/2 与最终验收（2026-11-16）
+
+`:core` 的 DeviceStdio.kt 只做有界帧/外层 Base64 编解码，供 :daemon 的 root DeviceRpcRelay 使用，处理 Windows ADB 的 CRLF 转换；不承载分析。DeviceIdentity 保留身份/凭据并标记 stdioVersion=2。opt-in p5Fixture 和 p5sandbox 的隔离边界、真实七族探针及绑定拒绝见 docs/P5_ANDROID_ACCEPTANCE.md；普通 APK 不含 P5 fixture。

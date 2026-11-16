@@ -7,4 +7,4 @@ if [ ! -f device/daemon/build/device-rpc-fixture-classpath.json ]; then
   exit 0
 fi
 (cd daemon && node test/run.mjs test/device_stdio.test.ts)
-echo 'RESULT:PASS P5 USB stdio protocol/auth/large frames/unsupported'
+echo 'RESULT:PASS P5 USB stdio/2 auth/CRLF/large frames/legacy unsupported'

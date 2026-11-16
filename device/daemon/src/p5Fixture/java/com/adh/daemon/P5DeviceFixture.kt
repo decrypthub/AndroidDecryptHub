@@ -26,7 +26,7 @@ object P5DeviceFixture {
         val scope=ScopeDocuments(File(root,"scope.json"),files)
         val identity=DeviceIdentity(files,File("/proc/sys/kernel/random/boot_id").readText().trim())
         val operations=DeviceOperations(identity,files,DeviceBackend { method,params->when(method){
-            "device.info"->JSONObject().put("model",android.os.Build.MODEL).put("sdk",android.os.Build.VERSION.SDK_INT).put("isolatedFixture",true)
+            "device.info"->JSONObject().put("model",android.os.Build.MODEL).put("sdk",android.os.Build.VERSION.SDK_INT).put("isolatedFixture",true).put("padding",params.optString("padding").also{require(it.length<=512)})
             "scope.get"->scope.snapshot()
             "scope.patch"->scope.patch(params)
             else->throw DeviceFault("UNSUPPORTED_METHOD","fixture never dispatches Android device control")
@@ -37,7 +37,9 @@ object P5DeviceFixture {
         val broker=EarlyPlanBroker(cache,name+"_early");val rpc=LocalDeviceRpcServer(operations,name){it.printStackTrace()}
         File(root,"ready.json").writeText(JSONObject().put("pid",Process.myPid()).put("uid",app.uid).put("agentPath",agent.path).put("deviceId",identity.deviceId).toString())
         val deadline=System.nanoTime()+900_000_000_000L;val handler=Handler(Looper.getMainLooper())
-        val stop=object:Runnable {override fun run(){if(File(root,"stop").exists()||System.nanoTime()>deadline){rpc.close();broker.close();network.close();kotlin.system.exitProcess(0)};handler.postDelayed(this,250)}};handler.post(stop)
+        val stop=object:Runnable {override fun run(){
+            val request=File(root,"stacks-request");if(request.exists()){request.delete();File(root,"stacks.txt").writeText(Thread.getAllStackTraces().entries.joinToString("\n\n"){(thread,stack)->thread.name+" "+thread.state+"\n"+stack.joinToString("\n")})}
+            if(File(root,"stop").exists()||System.nanoTime()>deadline){rpc.close();broker.close();network.close();kotlin.system.exitProcess(0)};handler.postDelayed(this,250)}};handler.post(stop)
         Looper.loop()
     }
 }

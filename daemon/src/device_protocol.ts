@@ -13,7 +13,7 @@ export const uuid=(value:unknown):value is string=>typeof value==='string'&&/^[a
 export class DeviceError extends OperationError {}
 export function deviceFail(code:string,message:string,uncertain=false):never{throw new DeviceError(code,message,uncertain);}
 export function deviceMethodMode(method:string){if(DEVICE_READ_METHODS.has(method))return 'read';if(DEVICE_WRITE_METHODS.has(method))return 'write';return deviceFail('UNSUPPORTED_METHOD','device method is not supported; no shell/ADB fallback was attempted');}
-export const DEVICE_STDIO_COMMAND='CLASSPATH=/data/adb/modules/adh/daemon.apk app_process /system/bin com.adh.daemon.device.DeviceRpcRelay';
+export const DEVICE_STDIO_COMMAND='CLASSPATH=/data/adb/modules/adh/daemon.apk app_process /system/bin com.adh.daemon.device.DeviceRpcRelay --base64';
 export interface Bootstrap {schemaVersion:1;deviceId:string;identityFingerprint:string;token:string;stdioVersion?:number}
 export interface DevicePeer {deviceId:string;bootId:string;daemonInstanceId:string;identityFingerprint:string;info:any;capabilities:{methods:Record<string,string>;[key:string]:any};protocol:string}
 export function parseBootstrap(raw:string):Bootstrap {

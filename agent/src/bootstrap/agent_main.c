@@ -130,7 +130,7 @@ static void report(int fd) {
     if (adh_self_starttime_ticks(ticks, sizeof(ticks)))
         snprintf(generation, sizeof(generation), "\"starttimeTicks\":\"%s\",", ticks);
 
-    char hello[4096];
+    char hello[8192];
     snprintf(hello, sizeof(hello),
         "{\"t\":\"hello\",\"agentVer\":\"%s\",\"pid\":%d,\"uid\":%d,"
         "%s\"package\":\"%s\",\"process\":\"%s\",\"abi\":\"%s\",\"android\":\"%s\",\"sdk\":%s,"

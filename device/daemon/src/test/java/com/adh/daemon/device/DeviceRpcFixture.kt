@@ -50,3 +50,14 @@ object DeviceRpcFixture {
         while (!server.isClosed) { val client = server.accept(); workers.execute { client.use { try { DeviceRpcSession(operations).serve(it.getInputStream(), it.getOutputStream()) } catch (_: Exception) { } } } }
     }
 }
+
+/** Pure JVM stdio/2 peer. Uses the production armor codec, only connects to the owned loopback fixture. */
+object DeviceStdioFixture {
+    @JvmStatic fun main(args:Array<String>){
+        require(args.size==1);val port=args[0].toInt();require(port in 1..65535)
+        java.net.Socket("127.0.0.1",port).use{socket->
+            Thread({try{val input=java.io.BufferedInputStream(System.`in`);while(true){val frame=com.adh.core.DeviceStdio.read(input)?:break;socket.getOutputStream().write(frame)};socket.shutdownOutput()}catch(_:Exception){socket.close()}},"stdio-fixture-input").apply{isDaemon=true;start()}
+            val input=java.io.BufferedInputStream(socket.getInputStream());while(true){val frame=com.adh.core.DeviceStdio.frame(input)?:break;com.adh.core.DeviceStdio.write(System.out,frame)}
+        }
+    }
+}

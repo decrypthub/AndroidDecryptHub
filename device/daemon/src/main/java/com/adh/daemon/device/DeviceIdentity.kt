@@ -49,7 +49,7 @@ internal class DeviceIdentity(private val files: DeviceFiles, val bootId: String
         check(access.getInt("schemaVersion") == 1 && access.getString("deviceId") == deviceId && access.getString("identityFingerprint") == fingerprint) { "USB bootstrap identity mismatch" }
         token = access.getString("token"); check(Regex("[a-f0-9]{64}").matches(token))
         // Preserve identity and credential when adding transport capability metadata.
-        if(access.optInt("stdioVersion")!=1)files.write(accessFile,access.put("stdioVersion",1).toString())
+        if(access.optInt("stdioVersion")!=2)files.write(accessFile,access.put("stdioVersion",2).toString())
     }
     fun authenticated(candidate: String): Boolean = java.security.MessageDigest.isEqual(token.toByteArray(), candidate.toByteArray())
     fun sign(bytes: ByteArray): ByteArray = Signature.getInstance("SHA256withRSA").run { initSign(privateKey); update(bytes); sign() }

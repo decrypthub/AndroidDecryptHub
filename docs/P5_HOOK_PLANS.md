@@ -61,6 +61,8 @@ MCP：`hook_plans`。REST：`GET/POST /api/hook-plans`。发布版 Python CLI �
 
 阶段是 **post-specialize / before-agent-start**，不是 `.init_array` 之前、不是 pre-specialize，也不是 Java 类加载前保证。支持 1..16 步的具名模块 `capture_start` 和只观测的 GOT `native_hook`；拒绝等待、Java、inline、改参数/返回值、主动调用或重放。该边界只覆盖此缓存格式，完整实时方案仍保留已有原语自由度。
 
+早期 hello 的 `lastCaptureInstall` 仅记录最后一条 capture_start 的有界原始计数，不把 ok:true 当作成功，也不是所有步骤的 Hook 清单。专用导入按 family 决定布防；HMAC/非对称共用 DigestSign 槽，回调还按实际上下文的族资格过滤事件。禁用族不能借共享 Hook 输出数据。七族真实沙盒、全禁用和 UID/Agent 替换证据见 [P5_ANDROID_ACCEPTANCE.md](P5_ANDROID_ACCEPTANCE.md)。
+
 流程：
 
 1. `migration-preview` 返回完整原 scope 原文及 hash；`import-legacy` 生成 Host 方案版本。

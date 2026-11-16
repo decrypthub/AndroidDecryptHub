@@ -207,3 +207,7 @@ event-limit accounting, explicit stop and wrong-TID refusal. It does not run the
 ## MCP registry documentation
 
 `node tools/generate_mcp_docs.mjs` regenerates docs/mcp-tools.md from the source registry; `--check` validates it. It uses isolated, pure imports and performs no Host initialization, discovery or ADB operation. The generator is tracked so fresh clones do not depend on an ignored adhd-data script.
+
+### P5 最终沙盒入口（2026-11-16）
+
+`verify_p5_device.ts SERIAL TRANSPORT_ID PRIVATE_ASSETS NEW_PRIVATE_OUTPUT final` 显式执行 stdio/2 的256种长度往返、七族 capture_start、全禁用、UID变化与Agent替换，共11项；细节在 p5_final_cases.ts。拒绝已有测试包/占用端口，不走 verify_all 的共享沙盒启停。通过、失败、unknown、现场和自有资源清理分别记录，超时不重发。原始报告与产物不提交，见 docs/P5_ANDROID_ACCEPTANCE.md。

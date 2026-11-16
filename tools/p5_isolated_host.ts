@@ -17,6 +17,11 @@ const run=async(args:string[])=>{
   else if(args[2]!=='forward'||!['--list','--remove'].includes(args[3]))throw Error('fixture allows only owned forwarding and bootstrap reads');
   const output=(await exec(adb,args,{windowsHide:true,timeout:10000})).stdout;return output.replaceAll('localabstract:'+socket,'localabstract:'+DEVICE_SOCKET);
 };
-const stdio=(args:string[])=>{if(args[0]!=='-t'||args[1]!==transport||args[2]!=='shell'||args[3]!=='-T'||args[4]!=='su')throw Error('invalid stdio request');const command=`CLASSPATH=${remote}/daemon.apk app_process /system/bin --nice-name=adh-p5-usb-relay com.adh.daemon.device.DeviceRpcRelay ${socket}`;const child=spawn(adb,[...args.slice(0,-1),"'"+command+"'"],{windowsHide:true,stdio:['pipe','pipe','pipe']});const stream=Duplex.from({readable:child.stdout,writable:child.stdin});child.stderr.resume();child.on('error',error=>stream.destroy(error));child.on('close',()=>stream.destroy());stream.on('close',()=>{if(child.exitCode===null)child.kill();});return stream;};
+const stdio=(args:string[])=>{if(args[0]!=='-t'||args[1]!==transport||args[2]!=='shell'||args[3]!=='-T'||args[4]!=='su')throw Error('invalid stdio request');const command=`CLASSPATH=${remote}/daemon.apk app_process /system/bin --nice-name=adh-p5-usb-relay com.adh.daemon.device.DeviceRpcRelay --base64 ${socket}`;const child=spawn(adb,[...args.slice(0,-1),"'"+command+"'"],{windowsHide:true,stdio:['pipe','pipe','pipe']});const stream=Duplex.from({readable:child.stdout,writable:child.stdin});child.stderr.resume();child.on('error',error=>stream.destroy(error));child.on('close',()=>stream.destroy());stream.on('close',()=>{if(child.exitCode===null)child.kill();});return stream;};
 setDevicesForTests(new Devices(join(root,'devices.json'),new AdbDeviceTransport(run,undefined,stdio)));
 await import('../daemon/src/index.ts');
+
+// Read-only cumulative ring metadata for the opt-in acceptance runner, never capture payloads.
+const {capStats}=await import('../daemon/src/state.ts');
+const {writeFileSync,renameSync}=await import('node:fs');
+setInterval(()=>{const path=join(root,'p5-capture-health.json');writeFileSync(path+'.tmp',JSON.stringify({at:Date.now(),sessions:Object.fromEntries(capStats)}));renameSync(path+'.tmp',path);},300).unref();
