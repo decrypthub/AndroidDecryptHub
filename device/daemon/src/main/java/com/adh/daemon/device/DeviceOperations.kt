@@ -18,6 +18,7 @@ internal class DeviceOperations(val identity: DeviceIdentity, private val files:
     private var state: JSONObject
     private var storageUnavailable = false
     var network: DeviceNetwork? = null
+    var hookCache: HookPlanCache? = null
     init {
         check(!stateFile.exists() || stateFile.length() <= 2 * 1024 * 1024) { "device operation ledger exceeds limit" }
         state = if (stateFile.exists()) JSONObject(stateFile.readText()) else JSONObject().put("schemaVersion", 1).put("revision", 0L).put("operations", JSONObject())
@@ -37,8 +38,8 @@ internal class DeviceOperations(val identity: DeviceIdentity, private val files:
         .put("methods", JSONObject().also { methods -> DeviceRpc.READ_METHODS.filter { available(it) }.forEach { methods.put(it, "read") }; DeviceRpc.WRITE_METHODS.filter { available(it) }.forEach { methods.put(it, "write") } })
         .put("transports", JSONObject().put("usb", true).put("lanTls", network != null))
         .put("unsupported", JSONObject().put("agent.route", "legacy target channel retained; not associated by serial").put("agent.hook", "target agent routing not migrated").put("agent.memory", "target agent routing not migrated").put("agent.trace", "target agent routing not migrated").put("diagnostics", "legacy ADB-only; no LAN fallback").put("fs", "not migrated").put("root.helper", "not migrated").put("shell", "no arbitrary remote root shell").put("reboot", "Manager-only").put("bulk", "not implemented"))
-    private fun available(method: String) = method !in setOf("lan.status", "lan.configure", "pairings.list", "pairings.grant", "pairings.revoke") || network != null
-    private fun execute(method: String, params: JSONObject): JSONObject = if (method in (network?.methods ?: emptySet())) network!!.execute(method, params) else backend.execute(method, params)
+    private fun available(method: String) = if(method.startsWith("early.")||method.startsWith("hooks.migration."))hookCache!=null else method !in setOf("lan.status", "lan.configure", "pairings.list", "pairings.grant", "pairings.revoke") || network != null
+    private fun execute(method: String, params: JSONObject,sourceGrant:String?=null): JSONObject = if(method in(hookCache?.methods?:emptySet()))hookCache!!.execute(method,params,sourceGrant)else if (method in (network?.methods ?: emptySet())) network!!.execute(method, params) else backend.execute(method, params)
     fun read(method: String, params: JSONObject = JSONObject(), authorize: () -> Unit = {}): JSONObject = synchronized(lock) {
         authorize()
         when (method) {
@@ -61,7 +62,7 @@ internal class DeviceOperations(val identity: DeviceIdentity, private val files:
             else -> execute(method, params).put("stateRevision", revision())
         }
     }
-    fun write(method: String, params: JSONObject, operationId: String, expectedRevision: Long, actor: String, budgetMs: Long, receivedAt: Long = System.nanoTime(), authorize: () -> Unit = {}): JSONObject = synchronized(lock) {
+    fun write(method: String, params: JSONObject, operationId: String, expectedRevision: Long, actor: String, budgetMs: Long, receivedAt: Long = System.nanoTime(), authorize: () -> Unit = {},sourceGrant:String?=null): JSONObject = synchronized(lock) {
         authorize()
         require(Regex("[A-Za-z0-9_-]{1,128}").matches(operationId))
         if (storageUnavailable) throw DeviceFault("DEVICE_LEDGER_UNAVAILABLE", "ledger persistence failed; writes disabled until inspected restart")
@@ -74,13 +75,13 @@ internal class DeviceOperations(val identity: DeviceIdentity, private val files:
         if ((System.nanoTime() - receivedAt) / 1_000_000 >= budgetMs) throw DeviceFault("DEADLINE_EXCEEDED", "expired before device dispatch")
         if (expectedRevision != revision()) throw DeviceFault("STALE_DEVICE_STATE", "device was modified; observe again, do not retry old intent")
         val unresolved = records().keys().asSequence().map { records().getJSONObject(it) }.filter { it.optString("state") == "unknown" && !it.has("resolvedAt") }.toList()
-        val securityOnly = method == "pairings.revoke" || method == "lan.configure" && params.opt("enabled") == false
+        val securityOnly = method=="early.revoke"||method == "pairings.revoke" || method == "lan.configure" && params.opt("enabled") == false
         if (unresolved.isNotEmpty() && method != "operations.resolve" && !securityOnly) throw DeviceFault("UNKNOWN_EXECUTION", "device has unresolved side effects")
         if (method == "operations.resolve" && (actor != "operator" || !params.optBoolean("acknowledge"))) throw DeviceFault("OPERATOR_REQUIRED", "explicit operator inspection required")
         if (method == "operations.resolve") {
             val old = records().optJSONObject(params.optString("operationId")) ?: throw DeviceFault("OPERATION_NOT_FOUND", "no uncertain operation")
             if (old.optString("state") != "unknown" || old.has("resolvedAt")) throw DeviceFault("INVALID_STATE", "operation is not unresolved unknown")
-        } else if (method in (network?.methods ?: emptySet())) network!!.validate(method, params) else backend.validate(method, params)
+        } else if(method in(hookCache?.methods?:emptySet()))hookCache!!.validate(method,params)else if (method in (network?.methods ?: emptySet())) network!!.validate(method, params) else backend.validate(method, params)
         if (records().length() >= 1024) throw DeviceFault("LEDGER_FULL", "device ledger needs explicit archival; nothing dispatched")
         val record = JSONObject().put("operationId", operationId).put("method", method).put("bootId", identity.bootId).put("fingerprint", fingerprint)
             .put("actor", actor).put("state", "running").put("mayHaveExecuted", true).put("startedAt", System.currentTimeMillis())
@@ -97,7 +98,7 @@ internal class DeviceOperations(val identity: DeviceIdentity, private val files:
                 val old = records().optJSONObject(params.getString("operationId")) ?: throw DeviceFault("OPERATION_NOT_FOUND", "no uncertain operation")
                 if (old.optString("state") != "unknown") throw DeviceFault("INVALID_STATE", "operation is not unknown")
                 old.put("resolvedAt", System.currentTimeMillis()); JSONObject().put("ok", true).put("originalState", "unknown")
-            } else execute(method, params)
+            } else execute(method, params,sourceGrant)
             val encoded = result.toString().toByteArray()
             record.put("result", if (encoded.size <= 32 * 1024) result else JSONObject().put("omitted", true).put("bytes", encoded.size).put("sha256", DeviceRpc.sha256(encoded)))
             record.put("state", if (result.optBoolean("ok", true)) "succeeded" else "failed")

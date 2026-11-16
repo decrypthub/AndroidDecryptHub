@@ -84,11 +84,12 @@ async function via(entry: string, patch: unknown): Promise<{ status: number; bod
 }
 
 for (const entry of ['mcp', '/api/config', '/api/settings/import']) {
-  test(`${entry}: enable installs on the simulated scoped target`, async () => {
+  test(`${entry}: enable resumes draining without installing legacy Hook defaults`, async () => {
     reset(); settings.capture.enabled = false; const calls = fakeAgent();
     const result = await via(entry, { capture: { enabled: true } });
     assert.equal(result.body.ok, true); assert.equal(result.body.runtimeApplied, true);
-    assert.ok(calls.includes('capture_start')); assert.equal(result.body.runtime.targets[0].ok, true);
+    assert.deepEqual(calls, []); assert.equal(result.body.runtime.targets[0].ok, true);
+    assert.equal(result.body.runtime.targets[0].skipped, 'drain-only; explicit hook plan required');
     assert.equal(settings.capture.enabled, true);
   });
 
@@ -112,7 +113,7 @@ for (const entry of ['mcp', '/api/config', '/api/settings/import']) {
   });
 
   test(`${entry}: persist failure changes neither live settings nor target`, async () => {
-    reset(); mkdirSync(SETTINGS_FILE, { recursive: true }); const calls = fakeAgent();
+    reset(); settings.capture.enabled = true; mkdirSync(SETTINGS_FILE, { recursive: true }); const calls = fakeAgent();
     const result = await via(entry, { capture: { enabled: false } });
     assert.equal(result.body.ok, false); assert.equal(result.body.persisted, false);
     assert.equal(settings.capture.enabled, true); assert.deepEqual(calls, []);

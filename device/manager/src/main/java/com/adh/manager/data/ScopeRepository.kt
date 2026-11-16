@@ -42,6 +42,8 @@ interface ScopeRepository {
     fun putCaCert(encoded: ByteArray): Int = -1
     fun deleteCaCert(fileName: String): Boolean = false
     fun rebootDevice(): Boolean = false
+    fun hookPlanState(packageName:String):String? = null
+    fun revokeHookPlan(packageName:String,deploymentId:String,cacheRevision:Long,stateRevision:Long):Result<Unit> = Result.failure(UnsupportedOperationException("Host plans unavailable"))
 }
 
 enum class HostRemember { Saved, Unsupported, Unavailable }

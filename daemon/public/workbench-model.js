@@ -3,8 +3,8 @@
   const clone=value=>JSON.parse(JSON.stringify(value));
   const fields=[
     ['ui.displayCap','列表显示上限','number',50,5000,'视图'],
-    ['capture.enabled','启用捕获','boolean',0,0,'捕获'],
-    ['capture.autoDumpDex','自动保存 DEX','boolean',0,0,'捕获'],
+    ['capture.enabled','启用捕获流（不安装 Hook）','boolean',0,0,'捕获'],
+    ['capture.autoDumpDex','旧自动 DEX 配置（仅存档）','boolean',0,0,'捕获'],
     ['capture.retain','捕获保留条数','number',50,100000,'保留策略'],
     ['capture.maxAgeDays','捕获保留天数','number',0,365,'保留策略'],
     ['artifacts.maxBytes','工件容量上限（字节）','number',268435456,549755813888,'保留策略'],
@@ -13,12 +13,12 @@
     ['capture.fileModule','文件模块','string',0,0,'捕获'],
     ['capture.sysModule','系统模块','string',0,0,'捕获'],
     ...['digest','hmac','symmetric','asymmetric','tls','aead'].map(name=>['capture.families.'+name,name,'boolean',0,0,'捕获类型']),
-    ['startup.antiDebug','启用启动策略','boolean',0,0,'启动策略'],
-    ['startup.module','启动策略模块','string',0,0,'启动策略'],
-    ['startup.packages','适用包名（每行一个，留空为全部）','packages',0,32,'启动策略'],
-    ['startup.extraTargets','附加符号（每行一个）','symbols',0,16,'启动策略'],
-    ['startup.widenAfterMs','延迟扩展（毫秒，0 为关闭）','number',0,600000,'启动策略'],
-    ['startup.widenTargets','扩展符号（每行一个）','symbols',0,8,'启动策略'],
+    ['startup.antiDebug','旧启动策略（仅迁移模板）','boolean',0,0,'旧启动方案模板（不自动应用）'],
+    ['startup.module','启动策略模块','string',0,0,'旧启动方案模板（不自动应用）'],
+    ['startup.packages','适用包名（每行一个，留空为全部）','packages',0,32,'旧启动方案模板（不自动应用）'],
+    ['startup.extraTargets','附加符号（每行一个）','symbols',0,16,'旧启动方案模板（不自动应用）'],
+    ['startup.widenAfterMs','延迟扩展（毫秒，0 为关闭）','number',0,600000,'旧启动方案模板（不自动应用）'],
+    ['startup.widenTargets','扩展符号（每行一个）','symbols',0,8,'旧启动方案模板（不自动应用）'],
   ].map(([path,label,type,min,max,group])=>({path,label,type,min,max,group}));
   const get=(obj,path)=>path.split('.').reduce((value,key)=>value?.[key],obj);
   function set(obj,path,value) {const keys=path.split('.');let node=obj;for(const key of keys.slice(0,-1))node=node[key]??={};node[keys.at(-1)]=clone(value);}

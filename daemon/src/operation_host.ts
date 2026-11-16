@@ -26,6 +26,7 @@ export async function runAutomatic(session: string, name: string, meta: ReturnTy
   } catch(error) { return operationFailure(error); }
 }
 export function resolveSpec(spec: OperationSpec, args: any) {
+  if(spec.name==='hook_plans'&&spec.mode==='write'&&!spec.global&&!spec.deviceId&&!spec.session)throw new OperationError('TARGET_REQUIRED','hook plan apply/undo needs an explicit session or device');
   if(spec.mode==='write' && !spec.global && !spec.session && !spec.deviceId) {
     const online=[...sessions.values()].filter(s=>s.online);
     if(online.length!==1)throw new OperationError('TARGET_REQUIRED','choose an explicit session; targets are ambiguous or offline');

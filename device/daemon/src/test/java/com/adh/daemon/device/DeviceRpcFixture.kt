@@ -19,13 +19,14 @@ object DeviceRpcFixture {
         val counter = java.util.concurrent.atomic.AtomicInteger(if (countFile.exists()) countFile.readText().toInt() else 0)
         var endpoint = ""
         val certificates = org.json.JSONArray()
+        var cache:HookPlanCache?=null
         val backend = DeviceBackend { method, params ->
             when (method) {
                 "device.info" -> JSONObject().put("model", "JVM fixture").put("synthetic", true)
                 "scope.get" -> scopes.snapshot()
                 "scope.patch" -> scopes.patch(params)
                 "scope.replace" -> scopes.replace(params.getJSONObject("document").toString(), params.getString("scopeRevision"))
-                "module.status" -> JSONObject().put("synthetic", true).put("calls", counter.get())
+                "module.status" -> JSONObject().put("synthetic", true).put("calls", counter.get()).put("earlyEligible",params.optString("package").takeIf{it.isNotEmpty()}?.let{cache?.forProcess(it,params.optInt("uid"))!=null}?:false)
                 "applications.list" -> JSONObject().put("applications", org.json.JSONArray()).put("total", 0)
                 "processes.list" -> JSONObject().put("processes", org.json.JSONArray()).put("complete", true).put("total", 0)
                 "host.get" -> JSONObject().put("endpoint", endpoint)
@@ -38,6 +39,10 @@ object DeviceRpcFixture {
             }
         }
         val operations = DeviceOperations(identity, files, backend)
+        cache=HookPlanCache(operations,files,scopes,HookBindingProbe { name ->
+            val bindingFile=File(root,"hook-binding.json")
+            if(bindingFile.exists())JSONObject(bindingFile.readText()) else JSONObject().put("package",name).put("uid",10001).put("versionCode","1").put("signers",org.json.JSONArray().put("b".repeat(64))).put("source",org.json.JSONArray().put(JSONObject().put("path","fixture.apk").put("size",100).put("inode",1).put("mtime",1))).put("agentSha256","a".repeat(64)).put("earlySupported",true)
+        })
         val network = DeviceNetwork(operations, files, allowEphemeral = true)
         val server = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1")); val workers = Executors.newFixedThreadPool(4)
         File(root, "ready.json").writeText(JSONObject().put("port", server.localPort).put("deviceId", identity.deviceId).put("lanPort", network.execute("lan.status", JSONObject()).opt("port")).toString())

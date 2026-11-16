@@ -17,6 +17,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <vector>
+#include <sys/un.h>
+#include "../../../agent/src/bootstrap/early_wire.h"
 
 #include "zygisk.hpp"
 
@@ -31,6 +34,18 @@
 static constexpr const char *kScopePath = "/data/adb/adh/scope.json"; // == com.adh.core.AdhPaths.SCOPE_PATH
 static constexpr const char *kHostEndpointPath = "/data/adb/adh/host.endpoint"; // == com.adh.core.AdhPaths.HOST_ENDPOINT_PATH
 static constexpr const char *kLoaderMarker = "/data/adb/adh/zygisk_loaded"; // == com.adh.core.AdhPaths.LOADER_MARKER
+
+static bool read_exact_early(int fd,void* data,size_t n){auto* p=static_cast<unsigned char*>(data);while(n){ssize_t got=read(fd,p,n);if(got<=0)return false;p+=got;n-=size_t(got);}return true;}
+static std::vector<unsigned char> read_early_packet(int fd){unsigned char size[4];if(!read_exact_early(fd,size,4))return{};size_t n=(size_t(size[0])<<24)|(size_t(size[1])<<16)|(size_t(size[2])<<8)|size[3];if(!n||n>ADH_EARLY_MAX)return{};std::vector<unsigned char> data(n);return read_exact_early(fd,data.data(),n)?data:std::vector<unsigned char>{};}
+static std::vector<unsigned char> root_early_plan(const char* package,int uid){
+    if(!package||uid<=0)return{};int fd=socket(AF_UNIX,SOCK_STREAM|SOCK_CLOEXEC,0);if(fd<0)return{};
+    timeval timeout{0,250000};setsockopt(fd,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(timeout));setsockopt(fd,SOL_SOCKET,SO_SNDTIMEO,&timeout,sizeof(timeout));
+    sockaddr_un address{};address.sun_family=AF_UNIX;const char* name="adh_early_plans_v1";memcpy(address.sun_path+1,name,strlen(name));
+    if(connect(fd,reinterpret_cast<sockaddr*>(&address),socklen_t(offsetof(sockaddr_un,sun_path)+1+strlen(name)))!=0){close(fd);return{};}
+    ucred peer{};socklen_t length=sizeof(peer);if(getsockopt(fd,SOL_SOCKET,SO_PEERCRED,&peer,&length)!=0||peer.uid!=0){close(fd);return{};}
+    char request[512];int n=snprintf(request,sizeof(request),"%s %d\n",package,uid);if(n<=0||size_t(n)>=sizeof(request)||write(fd,request,size_t(n))!=n){close(fd);return{};}
+    auto data=read_early_packet(fd);close(fd);return data;
+}
 static constexpr const char *kManagerPkg = "com.adh.manager";         // == com.adh.core.AdhPaths.MANAGER_PKG
 static constexpr const char *kAgentName = "libadh_agent.so";          // == com.adh.core.AdhPaths.AGENT_SO_NAME
 static constexpr const char *kQbdiName = "libQBDI.so";                // optional tracer, delivered on demand
@@ -649,6 +664,7 @@ public:
         should_inject = false;
         agent_path.clear();
         host_endpoint.clear();
+        early_packet.clear();
         if (!marker_requested) {
             marker_requested = true;
             int client = connect_companion();
@@ -717,26 +733,9 @@ public:
         // Which hook families this package is allowed to see installed. Asked here because the
         // companion socket does not survive specialization; the agent applies it when it starts.
         // Same two-key rule, narrow first: a policy written for one process beats the app's.
-        policy_flags.clear();
-        for (int i = 0; i < n_keys && policy_flags.empty(); i++) {
-            int sock = connect_companion();
-            if (sock >= 0) {
-                char req[320];
-                int len = snprintf(req, sizeof(req), "policy %s\n", keys[i].c_str());
-                char reply[80] = {0};
-                if (len > 0 && send_all(sock, req, (size_t)len) &&
-                    read_reply_line(sock, reply, sizeof(reply))) {
-                    if (reply[0] && strncmp(reply, "default", 7) != 0) policy_flags = reply;
-                }
-                close(sock);
-            }
-            if (policy_flags.empty()) {
-                // Same fallback order as the scope query: a direct read works when this instance
-                // happens to be root, and silence simply leaves the agent on its defaults.
-                char direct[64];
-                if (policy_flags_for(keys[i].c_str(), direct, sizeof(direct))) policy_flags = direct;
-            }
-        }
+        // P5: legacy family fields remain reversible data, never install authority. The Host
+        // or an explicitly staged, validated cache provides the complete policy.
+        policy_flags="d=0,h=0,s=0,a=0,t=0,e=0,y=0";
         if (!policy_flags.empty()) note("policy pkg=%s %s", package.c_str(), policy_flags.c_str());
 
         // Asked here: the companion socket does not survive specialization, and the agent
@@ -784,6 +783,7 @@ public:
         // (zygote) domain and the app-domain linker cannot even stat /proc/self/fd/N for it
         // ("unable to stat file for the library ... Permission denied", measured on the device).
         agent_fd = src_fd;
+        {int sock=connect_companion();if(sock>=0){timeval timeout{0,350000};setsockopt(sock,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(timeout));char req[512];int n=snprintf(req,sizeof(req),"early %s %d\n",pkg_name.c_str(),int(args->uid));if(n>0&&size_t(n)<sizeof(req)&&send_all(sock,req,size_t(n)))early_packet=read_early_packet(sock);close(sock);}}
         agent_path += " (module-dir fd, copied into a memfd after specialization)";
         note("will inject pkg=%s via %s (fd=%d)", package.c_str(), agent_path.c_str(), agent_fd);
     }
@@ -806,12 +806,15 @@ public:
         // linker. Copy the already-open source fd (opened pre-specialize, as required) into it.
         int memfd = copy_agent_to_memfd(agent_fd);
         void *handle = nullptr;
+        std::string actual_agent_sha;
         if (memfd >= 0) {
+            if(!early_packet.empty())actual_agent_sha=adh_sha_fd(memfd);
             handle = dlopen_agent_fd(memfd, "memfd:jit-cache");
             close(memfd);
             if (handle) agent_path += " -> memfd:jit-cache (loaded)";
         }
         if (!handle) {
+            if(!early_packet.empty())actual_agent_sha=adh_sha_fd(agent_fd);
             note("memfd load failed pkg=%s; loading from the module path instead", package_name.c_str());
             handle = dlopen_agent_fd(agent_fd, agent_path + " (module path)");
         }
@@ -834,6 +837,14 @@ public:
             if (set_policy) set_policy(policy_flags.c_str());
             else LOGE("adh_agent_set_policy not found; agent keeps every family on");
         }
+        if(!early_packet.empty()&&!actual_agent_sha.empty()){
+            using early_fn=int(*)(const void*,size_t,const char*,const char*);
+            auto apply_early=reinterpret_cast<early_fn>(dlsym(handle,"adh_agent_apply_early_v1"));
+            const auto target=package_of(package_name);
+            if(apply_early)apply_early(early_packet.data(),early_packet.size(),target.c_str(),actual_agent_sha.c_str());
+            else LOGE("early-plan/1 unsupported by loaded agent; cache not applied");
+        }
+        early_packet.clear();
         if (!host_endpoint.empty()) {
             auto colon = host_endpoint.rfind(':');
             using set_endpoint_fn = void (*)(const char *, int);
@@ -884,6 +895,7 @@ private:
     std::string policy_flags;
     // "ipv4:port" remembered by the Manager. Empty → the agent dials loopback only.
     std::string host_endpoint;
+    std::vector<unsigned char> early_packet;
 };
 
 REGISTER_ZYGISK_MODULE(AdhModule)
@@ -931,6 +943,11 @@ static void companion_serve(int client) {
             note("companion scope query pkg=%s -> %c", pkg, reply[0]);
             (void)send_all(client, reply, 2);
             continue;
+        }
+        if(strncmp(req,"early ",6)==0){char pkg[256]{};int uid=0;char extra=0;std::vector<unsigned char> data;
+            if(sscanf(req+6,"%255s %d %c",pkg,&uid,&extra)==2)data=root_early_plan(pkg,uid);
+            size_t n=data.size();unsigned char header[4]={static_cast<unsigned char>(n>>24),static_cast<unsigned char>(n>>16),static_cast<unsigned char>(n>>8),static_cast<unsigned char>(n)};
+            if(send_all(client,reinterpret_cast<char*>(header),4)&&n)send_all(client,reinterpret_cast<char*>(data.data()),n);continue;
         }
         if (strncmp(req, "policy ", 7) == 0) {
             // Per-package hook policy. "default" (not a flag line) means this package carries none,

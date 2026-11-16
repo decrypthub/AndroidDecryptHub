@@ -825,9 +825,8 @@ export async function applyCaptureEnabled(): Promise<{
   ok: boolean; targets: { session: string; ok: boolean; skipped?: string; error?: string }[]; error?: string;
 }> {
   const on = settings.capture.enabled;
-  if (on) { try { await scopedApps(); } catch { /* cache may still help */ } }
   const targets = await Promise.all([...sessions.values()].filter(s => s.online).map(async s => {
-    if (on && !shouldAutoArmPackage(s.package, s.entry)) return { session: s.sessionId, ok: true, skipped: 'outside scope' };
+    if (on) { startCaptureLoop(s.sessionId,{skipArm:true});return {session:s.sessionId,ok:true,skipped:'drain-only; explicit hook plan required'}; }
     const blocked = on ? captureArmBlockedReason(s.package) : null;
     if (blocked) return { session: s.sessionId, ok: true, skipped: blocked };
     try {
@@ -915,11 +914,11 @@ export async function setCapture(
   modules?: { cryptoModule?: string; fileModule?: string; sysModule?: string; force?: boolean },
 ): Promise<CaptureToggle> {
   const mods = { ...captureModules() };
-  // Only keys the caller actually passed override the settings defaults (an explicit undefined
-  // must not blank a module out - that would silently turn "hook this module" into "scan all").
+  // Omitted keys use the legacy template. An explicit empty string is an intentional
+  // all-module scan (crypto) or disabled module family (file/system), as in plan JSON.
   for (const k of ['cryptoModule', 'fileModule', 'sysModule'] as const) {
     const v = modules?.[k];
-    if (typeof v === 'string' && v.length) mods[k] = v;
+    if (typeof v === 'string') mods[k] = v;
   }
   if (on) {
     const pkg = sessions.get(sid)?.package ?? '';
@@ -934,7 +933,7 @@ export async function setCapture(
       } as CaptureToggle;
     }
     if (modules?.force === true && pkg) clearCaptureArmProtect(pkg);
-    const verdict = await armCaptureHooks(sid, mods);
+    const verdict = await armCaptureHooks(sid, mods, typeof modules?.sysModule === 'string');
     // Start the drain loop without a second arm (hello path arms itself after a short delay).
     startCaptureLoop(sid, { skipArm: true });
     return verdict;
@@ -999,7 +998,7 @@ export async function resolveSysModuleForArm(
  * Drain → stop → start so GOT install counters are honest. Does not start the drain loop
  * (callers that need streaming must already have called startCaptureLoop / setCapture).
  */
-async function armCaptureHooks(sid: string, mods: { cryptoModule: string; fileModule: string; sysModule: string }): Promise<CaptureToggle> {
+async function armCaptureHooks(sid: string, mods: { cryptoModule: string; fileModule: string; sysModule: string }, exactSystemModule=false): Promise<CaptureToggle> {
   // RE-ARM FROM A CLEAN SLATE. adh_got_replace matches a GOT slot by VALUE, so an install that
   // runs while our own wrapper already sits in the slot reports 0 for it - indistinguishable
   // from "this symbol is not imported". Measured on the sandbox: a repeat capture_start said
@@ -1008,7 +1007,7 @@ async function armCaptureHooks(sid: string, mods: { cryptoModule: string; fileMo
   // original pointers: drain (never lose what the ring holds), stop, then install.
   const drained = await drainSession(sid);
   try { await sendCmd(sid, 'capture_stop', {}, 8_000); } catch { /* not armed: nothing to restore */ }
-  const sysModule = await resolveSysModuleForArm(sid, mods.sysModule);
+  const sysModule = exactSystemModule ? (policySystemOn(sessions.get(sid)?.policy)?mods.sysModule:'') : await resolveSysModuleForArm(sid, mods.sysModule);
   const armedMods = { ...mods, sysModule };
   const reply = await sendCmd(sid, 'capture_start', armedMods, 15_000);
   recordCaptureHooks(sid, reply);
@@ -1028,9 +1027,7 @@ async function armCaptureHooks(sid: string, mods: { cryptoModule: string; fileMo
   };
 }
 
-// Install persistent hooks on connect, then poll capture_drain and stream each new record
-// into the store + over WS. Also auto-dump the app's DEX files so the panel can download
-// them. Mirrors the ios-decrypt-helper flow (hooks stay live, events fill the panel).
+// Connect only starts draining. Installation/dumps require explicit Host operations.
 // Seed from durable captures so ids stay unique across daemon restarts.
 let capSeq = captures.reduce((m, c) => Math.max(m, Number(c.id) || 0), 0);
 
@@ -1115,21 +1112,8 @@ export function startCaptureLoop(sid: string, opts?: { skipArm?: boolean }) {
       log(`capture_start skip ${sid} (unpack in progress for ${pkg})`);
       return;
     }
-    // Refresh scope cache (best-effort) then auto-arm when capture is not force-stopped.
-    if (!opts?.skipArm && settings.capture.enabled) {
-      try { await scopedApps(); } catch { /* keep prior cache */ }
-      if (shouldAutoArmPackage(pkg, entry)) {
-        try {
-          const verdict = await armCaptureHooks(sid, { ...captureModules() });
-          log(`capture_start ${sid} ok=${verdict.ok}`);
-        } catch (e) { log('capture_start failed', (e as Error).message); }
-      } else {
-        log(`capture_start skip ${sid} (package not in scope)`);
-      }
-    }
-    if (!opts?.skipArm && settings.capture.autoDumpDex) {
-      autoDumpDex(sid).catch((e) => log(`[capture] autoDumpDex ${sid} 失败:`, (e as Error).message));
-    }
+    // P5: draining existing observations never installs hooks or dumps dex. Legacy settings
+    // remain exportable migration input, not authorization for a new process generation.
     if (captureTimers.has(sid)) return;
     let busy = false;
     let drainErrLogged = false;   // fail-loud once per wedged-drain episode, not every 1.5s tick

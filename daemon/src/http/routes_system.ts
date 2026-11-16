@@ -43,6 +43,7 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
     { path:'/operation-client.js',handler:servePublic('operation-client.js','text/javascript; charset=utf-8') },
     { path:'/workbench-model.js',handler:servePublic('workbench-model.js','text/javascript; charset=utf-8') },
     { path:'/workbench.js',handler:servePublic('workbench.js','text/javascript; charset=utf-8') },
+    { path:'/hook-plans-panel.js',handler:servePublic('hook-plans-panel.js','text/javascript; charset=utf-8') },
     { path:'/operations.js',handler:servePublic('operations.js','text/javascript; charset=utf-8') },
     { path: '/api/apps', handler: async () => {
       const scope = await scopedApps();

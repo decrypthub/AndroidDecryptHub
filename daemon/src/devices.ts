@@ -107,7 +107,7 @@ export class Devices {
     if(mode==='write'){
       if(!ctx?.operationId)deviceFail('OPERATION_REQUIRED','device mutations must enter the shared Host operation coordinator');
       if(ctx.connectionOnly)deviceFail('OPERATION_REQUIRED','connection recovery cannot dispatch device mutations');
-      if(ctx.securityOnly&&!(args.method==='pairings.revoke'||args.method==='lan.configure'&&args.params?.enabled===false))deviceFail('OPERATION_REQUIRED','quarantined security control can only revoke grants or disable LAN');
+      if(ctx.securityOnly&&!(args.method==='early.revoke'||args.method==='pairings.revoke'||args.method==='lan.configure'&&args.params?.enabled===false))deviceFail('OPERATION_REQUIRED','quarantined security control can only revoke grants/cache or disable LAN');
       if(ctx.resource!=='device:'+args.deviceId)deviceFail('TARGET_CHANGED','Host operation is bound to another resource; no cross-device dispatch');
       if(args.bootId!==c.peer.bootId||args.daemonInstanceId!==c.peer.daemonInstanceId)deviceFail('TARGET_CHANGED','send the observed device bootId and daemonInstanceId; no automatic rebinding');
       if(!Number.isSafeInteger(args.expectedDeviceRevision)||args.expectedDeviceRevision < 0)deviceFail('DEVICE_VERSION_REQUIRED','send the observed device stateRevision');

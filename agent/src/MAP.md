@@ -65,3 +65,6 @@ the build you think you flashed. Both the module zip and the agent must be rebui
 - `tools/build_agent.sh` keeps `libadh_agent.so.debug` locally and stages only a stripped `.so`.
 - `exports.map` restricts `.dynsym` to `JNI_OnLoad`, `adh_agent_set_package`, `adh_agent_set_policy`, and `adh_agent_start`.
 - `compat_probe` reports bootstrap vs current exec/anon-exec/RWX counters; base injection and GOT hooks must not add true anonymous executable pages.
+# P5 early-plan/1 addition
+
+`bootstrap/early_wire.h` is the shared bounded native validator and SHA implementation; `bootstrap/early_plan.cpp` consumes only verified named capture/GOT observation steps before `adh_agent_start`, stops on an unconfirmed installation and adds agent-reported receipts to hello. `capture_policy` explicitly sets/reads family eligibility. No .init_array timing guarantee. Full contract: [P5_HOOK_PLANS.md](../../docs/P5_HOOK_PLANS.md).

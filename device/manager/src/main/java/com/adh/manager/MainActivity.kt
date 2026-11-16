@@ -149,7 +149,7 @@ fun AdhApp(repository: ScopeRepository, webUiRepository: WebUiRepository) {
                 packageName = Uri.decode(entry.arguments?.getString("packageName").orEmpty()),
                 draft = draft,
                 onBack = { nav.popBackStack() },
-                onPersist = { persist() },
+                repository = repo,
             )
         }
     }

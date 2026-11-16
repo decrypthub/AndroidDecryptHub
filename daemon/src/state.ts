@@ -82,6 +82,7 @@ export interface AgentSession {
   // evp/digest/hmac/pkey/aead/file/sys). Without it "capture_start returned ok" is the
   // only visible signal for whether the persistent hooks actually installed.
   captureHooks?: Record<string, any>;
+  earlyPlan?: any; // target-reported receipt; never a verified device/session association
 }
 export type AgentMsg =
   | ({ t: 'hello' } & Partial<AgentSession>)
@@ -246,8 +247,8 @@ export interface Settings {
 }
 export const DEFAULT_SETTINGS: Settings = {
   // cryptoModule: which module's GOT holds the EVP/SSL calls the agent hooks. The agent bakes
-  // in NO module name (target-agnostic); this value drives it. Default 'libjavacrypto.so' =
-  // Conscrypt, the app-level JCE/TLS path present in every app — safe and isolated from
+  // in NO module name. P5 keeps this field as a legacy template; fresh installs use ''.
+  // A named Conscrypt module can narrow an explicit invocation away from
   // framework internals. Set '' to scan ALL file-backed modules (advanced: catches cronet's
   // bundled BoringSSL / renamed libs, but also hooks framework crypto on the main thread during
   // init and can destabilize startup — opt in per target, don't use as the default).
@@ -258,7 +259,7 @@ export const DEFAULT_SETTINGS: Settings = {
   // installs nothing without failing, so a wrong default reads as "6 hooks silently missing" —
   // which is exactly what the sandbox-only defaults below used to do on every real app. The
   // sandbox self-test passes its own module explicitly (verify_v20_file.sh, verify_v05_detect.sh).
-  capture: { enabled: true, autoDumpDex: true, retain: 1000, maxAgeDays: 14, families: { digest: true, hmac: true, symmetric: true, asymmetric: true, tls: true, aead: true }, cryptoModule: 'libjavacrypto.so', fileModule: '', sysModule: '' },
+  capture: { enabled: false, autoDumpDex: false, retain: 1000, maxAgeDays: 14, families: { digest: true, hmac: true, symmetric: true, asymmetric: true, tls: true, aead: true }, cryptoModule: '', fileModule: '', sysModule: '' },
   ui: { displayCap: 300 },
   artifacts: { maxBytes: 8 * 1024 ** 3, maxAgeDays: 14 },
   startup: { antiDebug: false, module: 'libc.so', extraTargets: [], packages: [], widenAfterMs: 0, widenTargets: ['access', 'faccessat'] },

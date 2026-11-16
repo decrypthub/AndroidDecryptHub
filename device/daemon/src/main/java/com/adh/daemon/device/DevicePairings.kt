@@ -66,7 +66,7 @@ internal class DevicePairings(private val files: DeviceFiles) {
         if (unavailable) throw DeviceFault("AUTH_STORAGE_UNAVAILABLE", "authorization storage requires inspection")
         val grant = grants().optJSONObject(grantId) ?: throw DeviceFault("AUTH_REVOKED", "grant unavailable")
         if (grant.has("revokedAt")) throw DeviceFault("AUTH_REVOKED", "grant revoked")
-        val needed = if (method in setOf("lan.configure", "pairings.list", "pairings.grant", "pairings.revoke", "operations.resolve")) "manage" else if (method in DeviceRpc.WRITE_METHODS) "write" else "read"
+        val needed = if (method in setOf("early.stage","early.revoke","hooks.migration.apply","hooks.migration.rollback","lan.configure", "pairings.list", "pairings.grant", "pairings.revoke", "operations.resolve")) "manage" else if (method in DeviceRpc.WRITE_METHODS) "write" else "read"
         if (needed !in permissions(grant.getJSONArray("permissions"))) throw DeviceFault("PERMISSION_DENIED", "grant does not permit this capability")
     }
     @Synchronized fun authenticate(auth: JSONObject, message: ByteArray): String {

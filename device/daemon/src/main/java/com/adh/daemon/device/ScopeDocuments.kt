@@ -8,6 +8,8 @@ import org.json.JSONObject
 import java.io.File
 
 internal class ScopeDocuments(private val file: File, private val files: DeviceFiles) {
+    fun raw():String {check(!file.exists()||file.length()<=512*1024);return (if(file.exists())file.readText()else ScopeJson.encode(ScopeConfig.EMPTY)).also{ScopeJson.decode(it)}}
+    fun restoreExact(raw:String,expected:String){if(snapshot().getString("scopeRevision")!=expected)throw DeviceFault("STALE_SCOPE","scope changed before exact restore");ScopeJson.decode(raw);files.write(file,raw,420)}
     fun snapshot(): JSONObject {
         check(!file.exists() || file.length() <= 512 * 1024) { "scope document too large" }
         val raw = if (file.exists()) file.readText() else ScopeJson.encode(ScopeConfig.EMPTY)
@@ -36,6 +38,13 @@ internal class ScopeDocuments(private val file: File, private val files: DeviceF
         val before = snapshot()
         if (expected != null && expected != before.getString("scopeRevision")) throw DeviceFault("STALE_SCOPE", "scope changed outside this request")
         val input = JSONObject(raw)
+        val original=JSONObject(before.getJSONObject("document").toString())
+        val authorities=original.optJSONObject("hookPlans")?:JSONObject()
+        if(input.has("hookPlans")&&DeviceRpc.canonical(input.get("hookPlans"))!=DeviceRpc.canonical(authorities))throw DeviceFault("HOOK_PLANS_MANAGED","authority changes require reversible Host migration")
+        for(pkg in authorities.keys()){
+            val beforeConfig=ScopeJson.decode(original.toString());val nextConfig=ScopeJson.decode(raw)
+            if(beforeConfig.contains(pkg)&&nextConfig.contains(pkg)&&beforeConfig.familiesFor(pkg)!=nextConfig.familiesFor(pkg))throw DeviceFault("HOOK_PLANS_MANAGED","fixed phone Hook policy is managed by Host plans")
+        }
         val normalized = JSONObject(ScopeJson.encode(ScopeJson.decode(raw)))
         val merged = before.getJSONObject("document")
         for (key in input.keys()) if (key !in setOf("version", "mode", "packages", "policy")) merged.put(key, input.get(key))
@@ -74,6 +83,7 @@ internal class ScopeDocuments(private val file: File, private val files: DeviceF
             policy.put(pkg, entry.put("c", c))
         }
         if (policy.length() > 0) merged.put("policy", policy) else merged.remove("policy")
+        for(pkg in authorities.keys())original.optJSONObject("policy")?.opt(pkg)?.let{val current=merged.optJSONObject("policy")?:JSONObject();current.put(pkg,it);merged.put("policy",current)}
         files.write(file, merged.toString(2), 420)
         return snapshot().put("ok", true)
     }

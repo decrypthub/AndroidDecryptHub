@@ -21,7 +21,7 @@ export async function deviceAction(a:any){
     case 'reconcile':{
       const engine=getOperations(),ids=a.operationIds;
       if(!Array.isArray(ids)||ids.length<1||ids.length>100)return deviceFail('INVALID_ARGUMENT','select 1..100 Host device mutation ids');
-      for(const id of ids){const op=engine.getOperation(id);if(op.resource!=='device:'+a.deviceId||op.name!=='devices'||op.mode!=='write'||op.connectionOnly)return deviceFail('TARGET_CHANGED','operation belongs to another device or is not a device mutation');}
+      for(const id of ids){const op=engine.getOperation(id);if(op.resource!=='device:'+a.deviceId||!['devices','hook_plans'].includes(op.name)||op.mode!=='write'||op.connectionOnly)return deviceFail('TARGET_CHANGED','operation belongs to another device or is not a device mutation');}
       const result=await service.reconcile(a.deviceId,ids,a.connectionId);
       const rows=result.result?.operations;
       if(!Array.isArray(rows)||rows.length!==ids.length||new Set(rows.map((r:any)=>r.operationId)).size!==ids.length||rows.some((r:any)=>!ids.includes(r.operationId)))return deviceFail('RECONCILIATION_INVALID','device did not return the exact requested operation set; no evidence attached');

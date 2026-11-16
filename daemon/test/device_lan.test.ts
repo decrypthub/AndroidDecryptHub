@@ -11,9 +11,24 @@ import {Operations,type Principal} from '../src/operations.ts';
 import {describeTool} from '../src/operation_registry.ts';
 import {DeviceRpcClient,DEVICE_PROTOCOL} from '../src/device_protocol.ts';
 import {startDeviceFixture,FakeAdb,jvmManifest,pause} from './device_fixture.ts';
+import {canonical,digest,FAMILY_KEYS} from '../src/hook_plans.ts';
 
 const ai:Principal={role:'ai',id:'lan-fixture',source:'test'},human:Principal={role:'operator',id:'human',source:'test'};
 const skip=existsSync(jvmManifest)?false:'offline Kotlin fixture unavailable; never use a real device';
+
+test('LAN early cache carries its grant and stops future delivery after USB authorization revocation',{skip},async()=>{
+  const f=await fixture();try{const {usb,lan,grant}=await f.setup(),pkg='com.fixture.early';
+    const scope=await f.one.read(usb,'scope.get');assert.equal((await f.one.write(usb,'scope.patch',{scopeRevision:scope.result.scopeRevision,add:[pkg]})).state,'succeeded');
+    const plan={schemaVersion:1,id:'lan-early',title:'LAN early fixture',package:pkg,families:Object.fromEntries(FAMILY_KEYS.map(k=>[k,k==='digest'])),steps:[{id:'got',tool:'native_hook',arguments:{action:'hook',mode:'got',module:'libfixture.so',symbol:'read'}}]};
+    const preview=await f.one.read(usb,'hooks.migration.preview',{package:pkg});const migration=await f.one.write(usb,'hooks.migration.apply',{package:pkg,scopeRevision:preview.result.scopeRevision,planDigest:digest(plan)});assert.equal(migration.state,'succeeded');
+    const prepared=(await f.one.read(lan,'early.prepare',{package:pkg})).result;
+    const staged=await f.one.write(lan,'early.stage',{plan,canonicalPlan:canonical(plan),digest:digest(plan),binding:prepared.binding,expectedCacheRevision:prepared.cacheRevision,expiresAt:Math.floor(Date.now()/1000)+3600,offline:'keep-until-expiry'});assert.equal(staged.state,'succeeded',JSON.stringify(staged));
+    assert.equal(staged.result.result.result.entry.sourceGrant,grant.grantId);
+    const eligible=async()=>(await f.one.read(usb,'module.status',{package:pkg,uid:prepared.binding.uid})).result.earlyEligible;assert.equal(await eligible(),true);
+    assert.equal((await f.one.write(usb,'pairings.revoke',{grantId:grant.grantId})).state,'succeeded');assert.equal(await eligible(),false);
+    assert.equal((await f.one.read(usb,'early.status',{package:pkg})).result.entry.state,'validated-cache','historical staging state must not claim runtime installation or renewed authorization');
+  }finally{await f.close();}
+});
 const meta=(engine:Operations,resource:string)=>{const s=engine.snapshot(resource);return {expectedRevision:s.revision,controlEpoch:s.epoch,hostEpoch:s.hostEpoch};};
 async function fixture(){
   const phone=await startDeviceFixture(),adb=new FakeAdb();adb.add('usb-TLS','1',phone);

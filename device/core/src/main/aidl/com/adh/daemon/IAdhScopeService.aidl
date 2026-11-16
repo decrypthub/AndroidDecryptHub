@@ -37,4 +37,8 @@ interface IAdhScopeService {
     String getDeviceCapabilitiesJson();
     String getScopeSnapshotJson();
     String setScopeVersionedJson(String json, String scopeRevision, long stateRevision);
+    /** v20: Host plan state/local revocation; Manager scope edits are package-only CAS. */
+    String getHookPlanStateJson(String packageName);
+    String revokeHookPlanJson(String packageName, String deploymentId, long cacheRevision, long stateRevision);
+    String patchScopePackagesJson(String packagesJson, String scopeRevision, long stateRevision);
 }

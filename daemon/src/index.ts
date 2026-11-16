@@ -5,9 +5,9 @@ import net from 'node:net';
 import { AGENT_PORT, HTTP_PORT, webUrls } from './config.ts';
 import { handleHttp } from './http/router.ts';
 import { ensureAdbReverse } from './scope_list.ts';
-import { startCaptureLoop, forgetCaptureSession, clearCaptureArmProtect, applyStartupHooks } from './service.ts';
+import { startCaptureLoop, forgetCaptureSession, clearCaptureArmProtect } from './service.ts';
 import { initializeHost } from './host_lifecycle.ts';
-import { automaticSnapshot, initializeOperations, runAutomatic } from './operation_host.ts';
+import { initializeOperations } from './operation_host.ts';
 import {
   agentSockets, broadcast, captureTimers, failPendingFor, frameJson, FRAME_JSON, FRAME_MAX,
   log, nextId, pending, pruneSessions, sessions, wss,
@@ -58,6 +58,7 @@ const agentServer = net.createServer((sock) => {
         selfModule: msg.selfModule ?? '',
         selfBase: msg.selfBase ?? '',
         policy: msg.policy ?? '',
+        earlyPlan: msg.earlyPlan ?? null,
         connectedAt: Date.now(),
         lastSeen: Date.now(),
         online: true,
@@ -72,13 +73,9 @@ const agentServer = net.createServer((sock) => {
       // Fresh process after unpack: allow auto-arm again (protect only blocks the live post-unpack session).
       clearCaptureArmProtect(session.package);
       broadcast('agent.hello', session);
-      // Startup policy BEFORE the capture loop: on a target that checks for a debugger early, the
-      // difference between "hooks installed now" and "installed after the first command round
-      // trip" is often the difference between a live process and an exit. Fire-and-forget with
-      // `finally` so a slow or failing install can never stop capture from starting.
-      runAutomatic(id,'automatic-startup',automaticSnapshot(id),()=>applyStartupHooks(id))
-        .catch((e) => log(`[startup] anti-debug 布防失败 ${id}:`, (e as Error).message))
-        .finally(() => startCaptureLoop(id));   // install persistent hooks + stream captures
+      // Connection/reconnection observes only. Installs require an explicit plan/primitive;
+      // an authorized early cache already ran before this hello and reports its own receipts.
+      startCaptureLoop(id,{skipArm:true});
     } else if (msg.t === 'caps' && session) {
       // Arrives right after the hello (before the maps sample). Stored on the session, never
       // merged from another session: two processes of the same app can run different builds.

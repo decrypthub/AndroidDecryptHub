@@ -196,7 +196,7 @@ export class Operations {
     return out;
   }
   recordDeviceReconciliation(id:string,deviceId:string,evidence:any){
-    const op=this.getOperation(id);if(op.resource!=='device:'+deviceId||op.name!=='devices'||op.mode!=='write'||op.connectionOnly)fail('TARGET_CHANGED','reconciliation must name a device mutation on this device');
+    const op=this.getOperation(id);if(op.resource!=='device:'+deviceId||!['devices','hook_plans'].includes(op.name)||op.mode!=='write'||op.connectionOnly)fail('TARGET_CHANGED','reconciliation must name a device mutation on this device');
     const file=this.saveResult(`${id}.reconcile.${randomUUID()}`,evidence);
     this.store.update(data=>{const current=data.operations[id];(current.reconciliations??=[]).push({at:Date.now(),deviceId,file});if(current.reconciliations.length>8)current.reconciliations.shift();current.updatedAt=Date.now();touchTask(data.tasks[current.taskId]);});
     return this.getOperation(id,true); // preserve unknown/error/control history

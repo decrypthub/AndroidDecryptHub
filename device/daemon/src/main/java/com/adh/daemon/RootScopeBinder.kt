@@ -32,6 +32,13 @@ internal class RootScopeBinder(private val verifier: ManagerCallerVerifier, priv
     override fun getDeviceInfoJson(): String = read("device.info").toString()
     override fun getDeviceCapabilitiesJson(): String = read("device.capabilities").toString()
     override fun getScopeSnapshotJson(): String = read("scope.get").toString()
+    override fun getHookPlanStateJson(packageName:String?):String = read("early.status",JSONObject().put("package",packageName?:"")).toString()
+    override fun revokeHookPlanJson(packageName:String?,deploymentId:String?,cacheRevision:Long,stateRevision:Long):String {
+        verifier.enforce();return operations.write("early.revoke",JSONObject().put("package",packageName?:"").put("deploymentId",deploymentId?:"").put("expectedCacheRevision",cacheRevision),java.util.UUID.randomUUID().toString(),stateRevision,"operator",60000).toString()
+    }
+    override fun patchScopePackagesJson(packagesJson:String?,scopeRevision:String?,stateRevision:Long):String {
+        verifier.enforce();return operations.write("scope.patch",JSONObject().put("set",org.json.JSONArray(packagesJson?:"[]")).put("scopeRevision",scopeRevision?:""),java.util.UUID.randomUUID().toString(),stateRevision,"operator",60000).toString()
+    }
     override fun setScopeVersionedJson(json: String?, scopeRevision: String?, stateRevision: Long): String {
         verifier.enforce()
         return runCatching { operations.write("scope.replace", JSONObject().put("document", JSONObject(json ?: "")).put("scopeRevision", scopeRevision ?: ""), java.util.UUID.randomUUID().toString(), stateRevision, "operator", 60000).toString() }

@@ -61,7 +61,7 @@ internal class DeviceRpcSession(private val operations: DeviceOperations) {
                         val budget = meta.getLong("budgetMs"); require(budget in 1..DeviceRpc.MAX_BUDGET_MS)
                         // A full replacement must carry scope CAS, even on authenticated RPC.
                         if (method in setOf("scope.patch", "scope.replace")) require(Regex("[a-f0-9]{64}").matches(arguments.optString("scopeRevision")))
-                        operations.write(method, arguments, meta.getString("operationId"), meta.getLong("expectedRevision"), meta.optString("actor", "ai"), budget, received, authorize = { check(method) })
+                        operations.write(method, arguments, meta.getString("operationId"), meta.getLong("expectedRevision"), meta.optString("actor", "ai"), budget, received, authorize = { check(method) },sourceGrant=grantId)
                     }
                     else -> throw DeviceFault("UNSUPPORTED_METHOD", "method not advertised by this device protocol")
                 }

@@ -7,7 +7,8 @@ object AdhProtocol {
      *  v16 briefly carried an SSL-bypass section; that section was removed and a leftover `b` key
      *  is ignored. v17 stores the host address an injected process dials when adb reverse is absent.
      *  v18 stores user CA certificates that post-fs-data mounts into the system trust store. */
-    const val VERSION = 19
+    const val VERSION = 20
+    const val MIN_HOST_PLANS_VERSION = 20
     /** v19 adds a shared device domain, stable installation identity and USB RPC. */
     const val MIN_DEVICE_DOMAIN_VERSION = 19
     const val MIN_SCOPE_VERSION = 1

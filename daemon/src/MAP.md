@@ -4,6 +4,14 @@ ADH Daemon / `adhd` (Node 24 + TypeScript, runs `.ts` directly, no build step). 
 
 ## P2 human workbench (2026-11-16)
 
+## P5 Host Hook plans (2026-11-16)
+
+- `hook_plans.ts` owns immutable JSON plan versions, library CAS, explicit target preflight, coordinated steps/receipts and ownership-checked undo. `hook_plan_host.ts` dispatches the same actions for MCP, REST and published Python CLI. No hello/settings auto-install.
+- `public/hook-plans-panel.js` mounts inside the shared workbench; drafts, frozen submit versions, persistent tasks and intent-key recovery use `operation-client.js`.
+- Device early cache and reversible scope migration use the P3/P4 verified device RPC, never legacy target identity inference or ADB fallback. See [P5_HOOK_PLANS.md](../../docs/P5_HOOK_PLANS.md).
+
+## P2 human workbench details
+
 - `public/workbench.js`, `workbench.css`, `workbench.html`: the SAME task/configuration UI embedded in the live viewer and served at `/workbench`. `public/operations.js` is the thin live-view adapter; `operation-client.js` owns the shared credential/transport and legacy fetch guard. `workbench-model.js` isolates draft diff/validation/explicit rebase without DOM/I/O.
 - Task get includes revision, resources and operation counts; panel task changes use `_operation.expectedTaskRevision`. Filtered lists expose independent task/operation pagination. Intent-key get is read-only recovery, never replay.
 - `execution_context.ts` assigns bounded effect IDs so concurrent dispatch/acknowledgement pairs remain correct; `operations.ts` persists up to 64 metadata-only effect rows and omission counts. New operation timestamps are factual; missing legacy data stays missing. Do not include payloads/keys or turn an acknowledgement into proof of target success.

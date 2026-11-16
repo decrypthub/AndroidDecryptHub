@@ -6,6 +6,12 @@ Magisk 打包仍在 `injector/zygisk/`。
 
 ## Modules
 
+## P5 additions (2026-11-16)
+
+`core/EarlyPlanWire.kt` encodes the bounded early-plan/1 wire. `daemon/device/HookPlanCache.kt` owns validated, expiring app/Agent-bound cache and exact legacy backups through DeviceOperations. `AndroidHookBinding.kt` validates installed identity/ABI; `EarlyPlanBroker.kt` serves root companions only. Manager Binder v20 adds package-only CAS and Hook cache read/revoke; the fixed family editor is now a read-only legacy snapshot. Authoritative programmable editing stays on Host. No automatic app restart. See [P5_HOOK_PLANS.md](../docs/P5_HOOK_PLANS.md).
+
+## Modules reference
+
 | Gradle | Package | Role |
 |---|---|---|
 | `:core` | `com.adh.core` | Scope 契约单一真相：路径常量、JSON 编解码、逐包 Hook 策略（`CaptureFamilies`）、`IAdhScopeService` AIDL、已安装应用目录 JSON、进程控制允许清单 |

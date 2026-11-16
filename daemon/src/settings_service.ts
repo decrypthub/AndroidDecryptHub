@@ -25,10 +25,9 @@ export function patchSettings(patch: unknown, applyCapture = applyCaptureEnabled
     checkpoint();
     Object.assign(settings, candidate);
     const capture = (patch as Record<string, any>).capture;
-    // Output filters apply on ingestion; startup/auto-dump changes apply at the next
-    // explicit start/hello. A UI-only or retention patch must not re-install hooks.
-    const needsCaptureApply = typeof capture?.enabled === 'boolean'
-      || ['cryptoModule', 'fileModule', 'sysModule'].some(key => typeof capture?.[key] === 'string');
+    // Output filters apply on ingestion; legacy startup/auto-dump fields are migration
+    // templates. Neither hello nor a settings patch installs hooks or dumps DEX.
+    const needsCaptureApply = typeof capture?.enabled === 'boolean';
     let runtime: Awaited<ReturnType<typeof applyCaptureEnabled>> = { ok: true, targets: [] };
     if (needsCaptureApply) {
       try { runtime = await applyCapture(); }
@@ -37,8 +36,8 @@ export function patchSettings(patch: unknown, applyCapture = applyCaptureEnabled
     return {
       ok: runtime.ok, applied, persisted: true, runtimeApplied: runtime.ok, runtime,
       settings: structuredClone(settings), stats: configStats(), autoAntiDebug: autoAntiDebugEnabled(),
-      deferred: [ ...(applied.includes('startup') ? ['startup:next-hello'] : []),
-        ...(typeof capture?.autoDumpDex === 'boolean' ? ['autoDumpDex:next-automatic-capture-loop'] : []) ],
+      deferred: [ ...(applied.includes('startup') ? ['startup:hook-plan-template-only'] : []),
+        ...(['autoDumpDex','cryptoModule','fileModule','sysModule'].some(key=>Object.hasOwn(capture||{},key)) ? ['legacy-capture:hook-plan-template-only'] : []) ],
       maintenanceRequired: applied.includes('artifacts') || !!capture && ['retain', 'maxAgeDays'].some(key => Object.hasOwn(capture, key)),
       ...(!runtime.ok ? { code: 'SETTINGS_APPLY_FAILED', error: runtime.error || 'settings saved; some target operations failed' } : {}),
     };

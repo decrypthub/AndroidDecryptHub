@@ -12,6 +12,8 @@ Writes require \`_operation\` state/control versions: [P1_OPERATIONS.md](P1_OPER
 
 Verified installation identities and USB RPC: [P3_DEVICE_DOMAIN.md](P3_DEVICE_DOMAIN.md). Paired LAN/TLS, permissions, revocation, the capability parity matrix and durable reconciliation: [P4_LAN_AUTH.md](P4_LAN_AUTH.md). Legacy target sessions remain unassociated; unmigrated device/LAN routes fail explicitly.
 
+Host-owned Hook plans, early-cache limits and reversible legacy migration: [P5_HOOK_PLANS.md](P5_HOOK_PLANS.md).
+
 | Tool | Description | Args |
 |---|---|---|
 `;

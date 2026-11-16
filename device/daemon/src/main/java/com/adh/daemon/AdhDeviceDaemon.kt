@@ -12,6 +12,9 @@ import com.adh.daemon.device.DeviceIdentity
 import com.adh.daemon.device.DeviceOperations
 import com.adh.daemon.device.LocalDeviceRpcServer
 import com.adh.daemon.device.DeviceNetwork
+import com.adh.daemon.device.HookPlanCache
+import com.adh.daemon.device.ScopeDocuments
+import com.adh.daemon.device.EarlyPlanBroker
 import android.system.Os
 
 object AdhDeviceDaemon {
@@ -19,6 +22,7 @@ object AdhDeviceDaemon {
     private const val PUBLISH_INTERVAL_MS = 1_000L
     private var rpc: LocalDeviceRpcServer? = null
     private var network: DeviceNetwork? = null
+    private var earlyBroker:EarlyPlanBroker?=null
     private var domainLock: java.nio.channels.FileLock? = null
 
     @JvmStatic
@@ -45,6 +49,8 @@ object AdhDeviceDaemon {
         val identity = DeviceIdentity(files, File("/proc/sys/kernel/random/boot_id").readText().trim())
         val operations = DeviceOperations(identity, files, AndroidDeviceBackend(context, files))
         network = DeviceNetwork(operations, files) // default disabled; restore only explicitly saved TLS configuration
+        val cache=HookPlanCache(operations,files,ScopeDocuments(File(AdhPaths.SCOPE_PATH),files),AndroidHookBinding(context))
+        runCatching{earlyBroker=EarlyPlanBroker(cache)}.onFailure{Log.e(TAG,"early broker unavailable; cache delivery disabled",it)}
         val service = RootScopeBinder(ManagerCallerVerifier(context), operations)
         // RPC availability never tears down the pre-existing authenticated Binder service.
         runCatching { rpc = LocalDeviceRpcServer(operations) }.onFailure { Log.e(TAG, "USB RPC unavailable; Binder remains available", it) }

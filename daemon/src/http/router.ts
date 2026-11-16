@@ -13,6 +13,7 @@ import { executeManaged, getOperations, operationsRoot, resolveSpec } from '../o
 import { requestPrincipal } from '../access_context.ts';
 import { operationFailure } from '../operations.ts';
 import {deviceRoutes} from './routes_devices.ts';
+import {hookPlanRoutes} from './routes_hook_plans.ts';
 
 export async function handleHttp(req: http.IncomingMessage, res: http.ServerResponse) {
   const url = new URL(req.url ?? '/', 'http://localhost');
@@ -28,6 +29,7 @@ export async function handleHttp(req: http.IncomingMessage, res: http.ServerResp
   const routes = [
     ...operationsRoutes(context),
     ...deviceRoutes(context),
+    ...hookPlanRoutes(context),
     ...systemRoutes(context),
     ...runtimeRoutes(context),
     ...analysisRoutes(context),

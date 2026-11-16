@@ -9,6 +9,7 @@ set(CMAKE_C_VISIBILITY_PRESET hidden)
 set(AGENT_SOURCES
     src/capture/capture.c
     src/bootstrap/agent_main.c
+    src/bootstrap/early_plan.cpp
     src/bootstrap/util.c
     src/bootstrap/io.c
     src/bootstrap/mem.c

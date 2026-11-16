@@ -24,6 +24,10 @@ interface DaemonClient {
     fun putCaCert(encoded: ByteArray): Int
     fun deleteCaCert(fileName: String): Boolean
     fun rebootDevice(): Boolean
+    val scopeSnapshotJson:String get()=""
+    fun patchScopePackages(packagesJson:String,scopeRevision:String,stateRevision:Long):String = ""
+    fun hookPlanState(packageName:String):String = ""
+    fun revokeHookPlan(packageName:String,deploymentId:String,cacheRevision:Long,stateRevision:Long):String = ""
     val modulePresent: Boolean
     val loaderActive: Boolean
     val moduleVersion: String
@@ -32,13 +36,21 @@ interface DaemonClient {
 class DaemonScopeRepository(
     private val clientProvider: (Long) -> DaemonClient? = DaemonBinderProvider::awaitClient,
 ) : ScopeRepository {
+    private var observed:org.json.JSONObject?=null
     override fun load(): ScopeConfig {
         val client = requireClient()
+        if(client.protocolVersion>=AdhProtocol.MIN_HOST_PLANS_VERSION){val snapshot=org.json.JSONObject(client.scopeSnapshotJson);observed=snapshot;return ScopeJson.decode(snapshot.getJSONObject("document").toString())}
         return ScopeJson.decode(client.scopeJson)
     }
 
     override fun save(config: ScopeConfig): Result<Unit> = runCatching {
         val client = requireClient()
+        if(client.protocolVersion>=AdhProtocol.MIN_HOST_PLANS_VERSION){
+            val snapshot=checkNotNull(observed){"load scope before editing"}
+            val reply=org.json.JSONObject(client.patchScopePackages(org.json.JSONArray(config.packages.sorted()).toString(),snapshot.getString("scopeRevision"),snapshot.getLong("stateRevision")))
+            check(reply.getString("state")=="succeeded"){"scope changed or write unconfirmed; reload before editing"}
+            observed=reply.getJSONObject("result").put("stateRevision",reply.getLong("stateRevision"));return@runCatching
+        }
         if (config.policy.isNotEmpty()) {
             // An older daemon decodes into its own :core and re-encodes from it, so it drops a
             // policy it does not know AND still answers true — the UI would report "saved" for a
@@ -55,6 +67,11 @@ class DaemonScopeRepository(
         if (client.protocolVersion < AdhProtocol.MIN_CATALOG_VERSION) return emptyList()
         return runCatching { InstalledAppsJson.decode(client.listApplicationsJson) }
             .getOrDefault(emptyList())
+    }
+    override fun hookPlanState(packageName:String):String?{val client=requireClient();return if(client.protocolVersion>=AdhProtocol.MIN_HOST_PLANS_VERSION)client.hookPlanState(packageName) else null}
+    override fun revokeHookPlan(packageName:String,deploymentId:String,cacheRevision:Long,stateRevision:Long):Result<Unit> = runCatching {
+        val client=requireClient();check(client.protocolVersion>=AdhProtocol.MIN_HOST_PLANS_VERSION)
+        check(org.json.JSONObject(client.revokeHookPlan(packageName,deploymentId,cacheRevision,stateRevision)).getString("state")=="succeeded"){"revocation not confirmed; refresh actual state"}
     }
 
     override fun applicationIcon(packageName: String): ByteArray? {
