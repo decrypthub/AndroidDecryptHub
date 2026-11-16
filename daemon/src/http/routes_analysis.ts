@@ -1,3 +1,4 @@
+import { captureFile } from '../storage.ts';
 import { createHash } from 'node:crypto';
 import { createReadStream, existsSync, unlinkSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
@@ -15,7 +16,7 @@ import { ensureDexIndex, listDexReflections, searchDexIndex } from '../dex_index
 import {dumpBuf, dumpBufPath, modulesFromMaps, persistArtifact, pickSid, reconstructSo,
   repairDexHeader, sendCmd,} from '../service.ts';
 import { resolveModule, ModuleAmbiguousError } from '../memory.ts';
-import { broadcast, CAPTURES, dumps, readBody, rememberDump, sessions } from '../state.ts';
+import { broadcast, dumps, readBody, rememberDump, sessions } from '../state.ts';
 import type { DumpMeta } from '../state.ts';
 import type { Route, RouteContext, SendResponse } from './types.ts';
 
@@ -125,7 +126,7 @@ export function analysisRoutes({ req, res, url, send }: RouteContext): Route[] {
           size: buf.length, requestedSize: buf.length, complete: true, addr: mod.base, tag: mod.name,
           sessionId: sid, package: sessions.get(sid)?.package ?? existing.package ?? '?' });
         const s = sessions.get(sid);
-        const path = join(CAPTURES, `${sha.slice(0, 16)}.so`);
+        const path = captureFile(`${sha.slice(0, 16)}.so`);
         if (!existsSync(path)) await writeFile(path, buf);
         const meta: DumpMeta = { sha256: sha, size: buf.length, requestedSize: buf.length, complete: true, source: 'so-reassembly', note: 'reassembled from memory: offsets == vaddrs, section headers dropped, not byte-exact', addr: mod.base, tag: mod.name, sessionId: sid, package: s?.package ?? '?', capturedAt: Date.now(), path, kind: 'so' };
         rememberDump(meta);
@@ -207,7 +208,7 @@ export function analysisRoutes({ req, res, url, send }: RouteContext): Route[] {
       let rb; try { rb = rebuildStandardDex(base, captures); } catch (e) { return send(422, { error: (e as Error).message }); }
       let parseOk = true; try { parseDex(rb.dex); } catch { parseOk = false; }
       const outSha = createHash('sha256').update(rb.dex).digest('hex');
-      const path = join(CAPTURES, `${outSha.slice(0, 16)}.dex`);
+      const path = captureFile(`${outSha.slice(0, 16)}.dex`);
       if (!existsSync(path)) await writeFile(path, rb.dex);
       const meta: DumpMeta = { sha256: outSha, size: rb.dex.length, source: 'dex-recover', addr: '0', tag: 'recovered', sessionId: '', package: '', capturedAt: Date.now(), path, kind: 'dex' };
       rememberDump(meta); broadcast('dump.new', meta);
@@ -231,7 +232,7 @@ export function analysisRoutes({ req, res, url, send }: RouteContext): Route[] {
       let parseOk = true, methods = 0;
       try { const pd = parseDex(res.dex); methods = pd.counts.methods; } catch { parseOk = false; }
       const outSha = createHash('sha256').update(res.dex).digest('hex');
-      const path = join(CAPTURES, `${outSha.slice(0, 16)}.dex`);
+      const path = captureFile(`${outSha.slice(0, 16)}.dex`);
       if (!existsSync(path)) await writeFile(path, res.dex);
       const meta: DumpMeta = { sha256: outSha, size: res.dex.length, source: 'dex-rebuild', addr: '0', tag: 'rebuilt', sessionId: '', package: '', capturedAt: Date.now(), path, kind: 'dex' };
       rememberDump(meta); broadcast('dump.new', meta);

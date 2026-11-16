@@ -1,3 +1,5 @@
+import { patchSettings, settingsHttpStatus } from '../settings_service.ts';
+import { maintainData } from '../maintenance.ts';
 import { existsSync, unlinkSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -12,12 +14,12 @@ import { baseFromHost, isValidPackage, mcpOnboarding } from '../mcp_onboarding.t
 import { handleMcp, MCP_TOOLS } from '../mcp.ts';
 import { scopedApps, mergeScope, readScopeFile, writeScopePackages } from '../scope_list.ts';
 import { analyzePackage } from '../app_analyze.ts';
-import { applyCaptureEnabled, listCaptureArmProtected } from '../service.ts';
+import { listCaptureArmProtected } from '../service.ts';
 import {
-  applyCaptureRetainCap, broadcast, captureHealth, capturePackage, captures, captureTimers,
+  broadcast, captureHealth, capturePackage, captures, captureTimers,
   clearCaptureStore, clearPackageCaptureStore, configStats, cryptoIdentify, dumps, eventPackage,
-  events, EVENTS_FILE, exportPackageCapturesJsonl, hexToPreview, log, mergeSettings, packageCaptureDiskStats,
-  previewForCapture, readBody, saveSettings, sessions, settings,
+  events, EVENTS_FILE, exportPackageCapturesJsonl, hexToPreview, log, packageCaptureDiskStats,
+  previewForCapture, readBody, sessions, settings,
 } from '../state.ts';
 import type { Route, RouteContext } from './types.ts';
 
@@ -172,12 +174,8 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       if (req.method === 'POST') {
         let patch: any = {};
         try { patch = JSON.parse((await readBody(req)) || '{}'); } catch { return send(400, { error: 'bad json' }); }
-        const applied = mergeSettings(patch);
-        applyCaptureRetainCap();
-        applyCaptureEnabled().catch((e) => log('[settings] applyCaptureEnabled:', (e as Error).message));
-        try { saveSettings(); }
-        catch (e) { return send(500, { error: '设置已在内存生效，但写入磁盘失败(重启后丢失): ' + (e as Error).message, applied, settings, persisted: false }); }
-        return send(200, { ok: true, applied, settings, stats: configStats(), persisted: true });
+        const result = await patchSettings(patch);
+        return send(settingsHttpStatus(result), result);
       }
       return send(200, { settings, stats: configStats() });
     } },
@@ -186,13 +184,15 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       let obj: any;
       try { obj = JSON.parse((await readBody(req)) || '{}'); } catch { return send(400, { error: 'JSON 格式错误' }); }
       if (typeof obj !== 'object' || Array.isArray(obj)) return send(400, { error: '顶层必须是对象' });
-      const applied = mergeSettings(obj);
-      if (!applied.length) return send(400, { error: '没有可应用的板块(capture/ui/artifacts)' });
-      applyCaptureRetainCap();
-      applyCaptureEnabled().catch((e) => log('[settings] applyCaptureEnabled:', (e as Error).message));
-      try { saveSettings(); }
-      catch (e) { return send(500, { error: '导入已在内存生效，但写入磁盘失败(重启后丢失): ' + (e as Error).message, applied, settings, persisted: false }); }
-      return send(200, { ok: true, applied, settings, persisted: true });
+      const result = await patchSettings(obj);
+      return send(settingsHttpStatus(result), result);
+    } },
+    { method: 'GET', path: '/api/maintenance', handler: () => send(200, maintainData()) },
+    { method: 'POST', path: '/api/maintenance', handler: async () => {
+      let body: any;
+      try { body = JSON.parse((await readBody(req)) || '{}'); } catch { return send(400, { error: 'bad json' }); }
+      const result = maintainData(body ?? {});
+      return send(result.ok ? 200 : 400, result);
     } },
     { path: '/api/captures/packages', handler: () => send(200, { packages: packageCaptureDiskStats() }) },
     { path: '/api/captures/export', handler: () => {

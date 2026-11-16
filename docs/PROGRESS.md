@@ -4940,3 +4940,16 @@ v71 另触发的 1000 条历史捕获尚未完整恢复：现存事件日志缺�
 拟议 P0–P5：数据/配置保护 → Host 共享操作与持久任务 → 人工修改/接管最小闭环 → 设备域服务和 USB RPC → TLS LAN 与完整 ADB 能力迁移 → Hook 方案/启动缓存和公共入口收敛。AI 规划仍由外部 Harness 决定，recipe 可选；人类修改靠 revision/控制 epoch 阻止旧操作覆盖，取消不伪造停止，旧运行会话保留旧后端。
 
 验证：静态清单/来源哈希/链接/分组与 F01/F02 结构证据 **9 passed / 0 failed**；`npm run typecheck` rc=0；`npm test` **464 passed / 0 failed / 0 skipped**（子进程设置 ADH_SKIP_ARTIFACT_LOAD=1、移除继承 ADH_DATA_DIR，使用既有每测试进程临时根）；`git diff --check` 通过。没有运行设备门禁或启动服务；没有改变作用域契约、默认端口、stdio onboarding、桌面 status schema 或已部署服务。
+
+
+## 2026-11-16：P0 作用域策略保留、共享设置与初始化/清理分离
+
+用户要求从 P0 实现三项修复，用隔离环境验证并提交，不重启服务、不影响分析现场。实现集中于 Host，没有更改 agent、设备 APK/协议、默认端口、stdio 配置或目标 App。
+
+- scope_list 的生产 writer 先读完整文档，仅改 packages，保留 false family policy 和未知字段；root 临时文件设标签后 rename，完整 JSON 回读拒绝策略丢失。增加 ScopeIO 合成测试，不调用 ADB。跨 Host/手机并发 CAS 仍待后续。
+- settings_service 统一 MCP patch、面板 config 与导入：候选配置→原子保存→发布→等待逐目标应用；保存失败不改内存/目标，应用失败不再伪报成功。提交串行，UI/retention 不重装 Hook，startup/autoDumpDex 延后生效字段可见；工具 ok:false 会标 isError。
+- storage + host_lifecycle 提供纯路径解析和显式恢复；state/MCP 导入不建目录/重放/裁剪/打开 SQLite，DEX 索引改为按需打开。恢复只补内存来源，不重写 sidecar；采集 ID 在恢复后继续递增。
+- 移除 import、启动、会话 sweep、新 dump、设置保存、捕获追加时的磁盘自动清理。maintenance 默认预览，执行需要 dryRun:false + confirm:true；内存视图仍有界，显式维护更新淘汰计数。DATA_DIR 显式隔离时 captures 同根，旧自定义布局可用 ADH_CAPTURES_DIR 显式选择，不移动删除旧数据。
+- 测试 launcher 移除继承的操作者 data/captures 根。新回归使用临时文件、fake ScopeIO、fake agent/进程接口和 loopback 随机测试端口；纯导入 fixture 禁止监听和设备子进程，过期证据/损坏索引都是合成数据。
+
+源码/迁移/维护入口见 docs/P0_HOST_STATE.md。旧审计清单保留为基线快照。验证：新增隔离回归 25 项全部通过；完整 Host 回归 **489 passed / 0 failed / 0 skipped**；`npm run typecheck` rc=0；v71 注册表 **91 tools / 0 problems / PASS**；`git diff --check` 通过。当前 8088 的原非 watch Node 进程仍在；未运行 dev_up、设备门禁、刷机、目标启停或服务重启，没有把修复注入运行现场。

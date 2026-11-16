@@ -5,7 +5,8 @@ import net from 'node:net';
 import { AGENT_PORT, HTTP_PORT, webUrls } from './config.ts';
 import { handleHttp } from './http/router.ts';
 import { ensureAdbReverse } from './scope_list.ts';
-import { startCaptureLoop, forgetCaptureSession, pruneArtifactsAndIndex, clearCaptureArmProtect, applyStartupHooks } from './service.ts';
+import { startCaptureLoop, forgetCaptureSession, clearCaptureArmProtect, applyStartupHooks } from './service.ts';
+import { initializeHost } from './host_lifecycle.ts';
 import {
   agentSockets, broadcast, captureTimers, failPendingFor, frameJson, FRAME_JSON, FRAME_MAX,
   log, nextId, pending, pruneSessions, sessions, wss,
@@ -154,6 +155,7 @@ httpServer.on('upgrade', (req, socket, head) => {
 
 // ---- boot -----------------------------------------------------------------
 
+initializeHost();
 agentServer.listen(AGENT_PORT, '0.0.0.0', () => log(`ADH Daemon agent TCP listening on :${AGENT_PORT}`));
 httpServer.listen(HTTP_PORT, '0.0.0.0', () => {
   const w = webUrls();
@@ -174,13 +176,10 @@ httpServer.listen(HTTP_PORT, '0.0.0.0', () => {
 process.on('SIGINT', () => { log('shutting down'); process.exit(0); });
 
 // Periodic session sweep: closes can be missed (kill -9, lost sockets), so bound the map anyway.
-// The same tick enforces artifact retention: the dump helpers prune right after they write, but a
-// few routes write artifacts directly, so a periodic sweep is what keeps captures/ bounded no
-// matter which path produced the file.
+// Data retention is an explicit maintenance operation, never part of startup/session sweeps.
 setInterval(() => {
   const dropped = pruneSessions();
   if (dropped.length) log(`session prune: dropped ${dropped.length} stale offline session(s)`);
-  pruneArtifactsAndIndex();
 }, 60_000).unref();
 
 // The injected agent only reaches this process through adb reverse. Re-apply it on a
@@ -188,7 +187,3 @@ setInterval(() => {
 const keepReverse = () => ensureAdbReverse([AGENT_PORT, HTTP_PORT], (line) => log(line));
 keepReverse();
 setInterval(keepReverse, 15_000).unref();
-
-// Boot-time reconciliation: adopt what is already on disk (the module body of state.ts does the
-// load) and apply retention once, so a daemon that was down while files piled up starts bounded.
-pruneArtifactsAndIndex();

@@ -2,10 +2,11 @@
 // (/data/adb/adh/scope.json). That file is root-only; adb is how the host reads it.
 // Display names come from each base APK's manifest (aapt), cached per package.
 import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
+import { isDeepStrictEqual, promisify } from 'node:util';
 import { crc32 } from 'node:zlib';
 
 const execFileP = promisify(execFile);
@@ -254,6 +255,48 @@ const PKG_RE = /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$/;
 
 export interface ScopeFile { packages: string[]; version: number; mode: string; error: string | null }
 
+/** Keep the complete document: phone policy and future fields are not Host-owned. */
+export function parseScopeDocument(raw: string): Record<string, any> {
+  const start = raw.indexOf('{'), end = raw.lastIndexOf('}');
+  const text = (start >= 0 && end > start ? raw.slice(start, end + 1) : raw).trim();
+  const doc = JSON.parse(text);
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc) || !Array.isArray(doc.packages)) {
+    throw new Error('scope JSON has no packages array');
+  }
+  return doc;
+}
+
+export function scopeWithPackages(raw: string, packages: string[], meta: { version?: number; mode?: string } = {}) {
+  const doc = parseScopeDocument(raw);
+  return {
+    version: meta.version ?? 2, mode: meta.mode ?? 'allowlist', ...doc,
+    packages: [...new Set(packages.map(p => p.trim()).filter(p => PKG_RE.test(p) && p !== MANAGER_PKG))],
+  };
+}
+
+export interface ScopeIO { read(): Promise<string>; write(body: string): Promise<void> }
+const scopeIO: ScopeIO = {
+  read: () => adbShell(`su -c 'cat ${SCOPE_PATH}'`),
+  async write(body) {
+    const dir = mkdtempSync(join(tmpdir(), 'adh-scope-'));
+    const local = join(dir, 'scope.json');
+    const token = randomUUID();
+    const uploaded = `/data/local/tmp/adh-scope-${token}.json`;
+    const staged = `/data/adb/adh/.scope-${token}.tmp`;
+    try {
+      writeFileSync(local, body, 'utf8');
+      await execFileP('adb', [...adbBase(), 'push', local, uploaded], {
+        timeout: 20000, windowsHide: true, maxBuffer: 1024 * 1024,
+      });
+      // Set ownership/label BEFORE the atomic rename; never expose a truncated scope file.
+      await adbShell(`su -c 'cp ${uploaded} ${staged} && chown root:root ${staged} && chmod 644 ${staged} && chcon u:object_r:adb_data_file:s0 ${staged} && mv -f ${staged} ${SCOPE_PATH}'`);
+    } finally {
+      try { await adbShell(`su -c 'rm -f ${uploaded} ${staged}'`); } catch { /* staging only */ }
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+};
+
 /** Full scope.json (packages + version/mode), read through root. Never throws: errors are reported. */
 export async function readScopeFile(): Promise<ScopeFile> {
   try {
@@ -302,33 +345,21 @@ export async function packageInstalled(pkg: string): Promise<boolean> {
 export async function writeScopePackages(
   packages: string[],
   meta: { version?: number; mode?: string } = {},
+  io: ScopeIO = scopeIO,
 ): Promise<{ ok: boolean; packages: string[]; error?: string }> {
-  const clean = [...new Set(packages.map((p) => p.trim()).filter((p) => PKG_RE.test(p)))];
-  const body = `${JSON.stringify({ version: meta.version ?? 2, mode: meta.mode ?? 'allowlist', packages: clean }, null, 2)}\n`;
-  const dir = mkdtempSync(join(tmpdir(), 'adh-scope-'));
-  const local = join(dir, 'scope.json');
+  const clean = [...new Set(packages.map((p) => p.trim()).filter((p) => PKG_RE.test(p) && p !== MANAGER_PKG))];
   try {
-    writeFileSync(local, body, 'utf8');
-    await execFileP('adb', [...adbBase(), 'push', local, '/data/local/tmp/adh-scope.json'], {
-      timeout: 20000, windowsHide: true, maxBuffer: 1024 * 1024,
-    });
-    await adbShell("su -c 'cp /data/local/tmp/adh-scope.json /data/adb/adh/scope.json'");
-    await adbShell("su -c 'chown root:root /data/adb/adh/scope.json && chmod 644 /data/adb/adh/scope.json'");
-    // Label is explicit: `cp` may otherwise inherit the temp file's label and the companion's read
-    // then fails closed (no injection, no error the operator can see).
-    await adbShell("su -c 'chcon u:object_r:adb_data_file:s0 /data/adb/adh/scope.json'");
-    await adbShell("rm -f /data/local/tmp/adh-scope.json");
-    const back = await adbShell(`su -c 'cat ${SCOPE_PATH}'`);
+    // Re-read immediately before writing. Missing/corrupt/unreadable input refuses the update.
+    const next = scopeWithPackages(await io.read(), clean, meta);
+    await io.write(`${JSON.stringify(next, null, 2)}\n`);
+    const back = await io.read();
     const got = parseScopePackages(back);
-    if (JSON.stringify(got) !== JSON.stringify(clean)) {
-      return { ok: false, packages: clean, error: `scope write did not stick (wrote ${clean.length}, read back ${got.length})` };
+    if (!isDeepStrictEqual(parseScopeDocument(back), next)) {
+      return { ok: false, packages: got, error: 'scope write did not stick: complete document differs (including hook policy)' };
     }
     cache = { at: Date.now(), packages: got, error: null };
     return { ok: true, packages: got };
   } catch (e) {
     return { ok: false, packages: clean, error: (e instanceof Error ? e.message : String(e)).split('\n')[0].slice(0, 240) };
-  } finally {
-    try { rmSync(dir, { recursive: true, force: true }); } catch { /* temp cleanup only */ }
   }
 }
-

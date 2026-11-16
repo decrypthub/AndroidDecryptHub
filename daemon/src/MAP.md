@@ -2,6 +2,16 @@
 
 ADH Daemon / `adhd` (Node 24 + TypeScript, runs `.ts` directly, no build step). HTTP/WS `8088`, agent TCP `8761`. App pin: `GET /<package>` and `POST /<package>/mcp`.
 
+## P0 Host lifecycle / shared settings (2026-11-16)
+
+- `storage.ts`: pure path resolution; explicit ADH_DATA_DIR isolates captures too; optional ADH_CAPTURES_DIR for legacy layouts. Atomic settings/text writes use temporary files, fsync and rename.
+- `host_lifecycle.ts`: index.ts explicitly initializes recovery before listening. state/MCP imports do not create directories, load history, clean data or open the DEX SQLite cache. Recovery is idempotent and does not rewrite provenance sidecars.
+- `settings_service.ts`: the SAME serialized save→publish→runtime-apply path for MCP settings, panel config and settings import. Persistence failure leaves memory/targets untouched; per-target errors are returned, not fire-and-forgotten. UI/retention patches do not re-arm hooks.
+- `maintenance.ts`: explicit preview/confirmed retention. No age/size deletion at import, boot, periodic session sweep, settings save, dump write or capture append. Memory views remain bounded; disk maintenance is opt-in through settings(action=maintenance) or /api/maintenance.
+- `scope_list.ts`: re-read and preserve the COMPLETE scope document, replace only packages, stage/rename on device, verify full readback. ScopeIO enables host regression tests without ADB. This does not add cross-writer CAS or change the phone schema.
+
+Behavior, migration and test boundaries: [`docs/P0_HOST_STATE.md`](../../docs/P0_HOST_STATE.md). The 2026-11-16 capability inventory is a historical baseline, not a live source-hash gate.
+
 ## Module layout (post-split)
 
 Analysis additions (2026-10-24): `trace_store.ts` drains bounded `qbdi_read` pages into Host JSONL,

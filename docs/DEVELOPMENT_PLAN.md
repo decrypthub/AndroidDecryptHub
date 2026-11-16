@@ -1,5 +1,7 @@
 # ADH (Android DecryptHub) — 开发计划
 
+> **2026-11-16 P0 实施**：F01 作用域策略保留、F02 共享设置应用、F04 非破坏性显式恢复与独立清理已在 Host 源码落地，见 [P0 实现与迁移](P0_HOST_STATE.md)。当前分析现场不升级；设备身份、人工接管与 USB/LAN 新协议仍为后续工作。
+
 > **定位**：**通用 Android 运行时逆向分析工具** — 对高对抗目标（反调试/root/签名检测/混淆/加密传输）具备实战能力。
 > **功能需求**：见 [`REQUIREMENTS.md`](REQUIREMENTS.md)（唯一权威规格，模块 A–W；本文档只管架构与排期）。
 > **跨会话进度**：见 [`PROGRESS.md`](PROGRESS.md)。

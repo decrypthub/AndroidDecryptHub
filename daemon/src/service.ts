@@ -1,3 +1,4 @@
+import { captureFile } from './storage.ts';
 // service.ts — ADH Daemon service layer: agent-command transport + dump engine + capture ops.
 // Imported by mcp.ts (MCP handlers) and index.ts (REST routes + agent TCP + boot).
 // Imports ONLY from state.ts (+ dex.ts / so_select.ts pure layers + dex_index.ts for artifact
@@ -11,7 +12,7 @@ import { basename, join } from 'node:path';
 import {
   frameJson, agentSockets, pending, nextCmdId, sessions, dumps, log, rememberDump,
   captureTimers, captureModules, settings, recentJavaIn, captures,
-  pushCapture, broadcast, hexToPreview, previewForCapture, classify, categoryOf, capStats, CAPTURES,
+  pushCapture, broadcast, hexToPreview, previewForCapture, classify, categoryOf, capStats,
   pruneArtifacts, DATA_DIR,
 } from './state.ts';
 import { shouldAutoArmPackage, scopedApps } from './scope_list.ts';
@@ -611,7 +612,7 @@ export async function dumpOneAppSo(sid: string, base: string, name: string) {
     const sha = createHash('sha256').update(buf).digest('hex');
     const existing = dumps.get(sha);
     if (existing) return { name, base, saved: true, dedup: true, sha256: sha, size: buf.length, elf: true };
-    const path = join(CAPTURES, `${sha.slice(0, 16)}.so`);
+    const path = captureFile(`${sha.slice(0, 16)}.so`);
     if (!existsSync(path)) await writeFile(path, buf);
     const meta: DumpMeta = {
       sha256: sha, size: buf.length, requestedSize: buf.length, complete: true,
@@ -621,7 +622,7 @@ export async function dumpOneAppSo(sid: string, base: string, name: string) {
     };
     rememberDump(meta);
     broadcast('dump.new', meta);
-    pruneArtifactsAndIndex(sha);
+
     return { name, base, saved: true, dedup: false, sha256: sha, size: buf.length, elf: true };
   } catch (e) {
     const message = (e as Error).message;
@@ -650,7 +651,7 @@ export async function dumpAppSo(sid: string) {
         modules.push({ name: mod.name, path: mod.path, sha256: sha, size: buf.length, dedup: true });
         continue;
       }
-      const path = join(CAPTURES, `${sha.slice(0, 16)}.so`);
+      const path = captureFile(`${sha.slice(0, 16)}.so`);
       if (!existsSync(path)) await writeFile(path, buf);
       const meta: DumpMeta = {
         sha256: sha, size: buf.length, requestedSize: buf.length, complete: true,
@@ -659,7 +660,7 @@ export async function dumpAppSo(sid: string) {
       };
       rememberDump(meta);
       broadcast('dump.new', meta);
-      pruneArtifactsAndIndex(sha);
+
       dumped++;
       modules.push({ name: mod.name, path: mod.path, sha256: sha, size: buf.length, dedup: false });
     } catch (e) {
@@ -697,9 +698,8 @@ export function repairDexHeader(buf: Buffer): { fileSize: number; checksum: stri
   return { fileSize, checksum: checksum.toString(16).padStart(8, '0'), signature: sig.toString('hex'), magicOk };
 }
 
-// Artifact retention, wired to the dex index. Called after a NEW artifact lands (a dedup hit kept
-// the file that was already there, so there is nothing to reclaim) and once at boot. Retention
-// failing must never break a dump that already succeeded, but it must not be silent either.
+// Explicit artifact maintenance, wired to the dex index. Never called by import, startup,
+// settings patches or artifact writes. Failures remain observable to the maintenance caller.
 export function pruneArtifactsAndIndex(protectSha?: string) {
   try {
     const r = pruneArtifacts((sha) => {
@@ -733,7 +733,7 @@ export async function persistArtifact(
   const existing = dumps.get(sha);
   if (existing) return { meta: existing, dedup: true };
   const kind = inferKind(buf);
-  const path = join(CAPTURES, `${sha.slice(0, 16)}.${kind}.bin`);
+  const path = captureFile(`${sha.slice(0, 16)}.${kind}.bin`);
   if (!existsSync(path)) await writeFile(path, buf);
   const meta: DumpMeta = {
     sha256: sha, size: buf.length,
@@ -744,7 +744,7 @@ export async function persistArtifact(
   };
   rememberDump(meta);
   broadcast('dump.new', meta);
-  pruneArtifactsAndIndex(sha);     // a new file landed: enforce the on-disk budget now
+
   return { meta, dedup: false };
 }
 
@@ -782,7 +782,7 @@ export async function dumpRegion(sid: string, addrHex: string, size: number, tag
   }
   const s = sessions.get(sid);
   const kind = inferKind(buf);
-  const path = join(CAPTURES, `${sha.slice(0, 16)}.${kind}.bin`);
+  const path = captureFile(`${sha.slice(0, 16)}.${kind}.bin`);
   if (!existsSync(path)) await writeFile(path, buf);
   const complete = buf.length === size;
   const meta: DumpMeta = {
@@ -791,7 +791,7 @@ export async function dumpRegion(sid: string, addrHex: string, size: number, tag
   };
   rememberDump(meta);
   broadcast('dump.new', meta);
-  pruneArtifactsAndIndex(sha);     // a new file landed: enforce the on-disk budget now
+
   return { meta, dedup: false };
 }
 
@@ -812,27 +812,21 @@ function recordCaptureHooks(sid: string, r: any) {
 // Apply the capture.enabled toggle to already-connected sessions.
 // enabled=false → force-stop hooks everywhere. enabled=true → re-arm only packages that
 // should auto-arm (scope allowlist / sandbox), using setCapture for a clean drain→stop→start.
-export async function applyCaptureEnabled() {
-  if (!settings.capture.enabled) {
-    for (const s of sessions.values()) {
-      if (!s.online) continue;
-      try { await setCapture(s.sessionId, false); }
-      catch (e) { log(`[settings] capture_stop 会话 ${s.sessionId} 失败:`, (e as Error).message); }
-    }
-    return;
-  }
-  try { await scopedApps(); } catch { /* cache may still help */ }
-  for (const s of sessions.values()) {
-    if (!s.online) continue;
-    if (!shouldAutoArmPackage(s.package, s.entry)) continue;
-    // Skip just-unpacked / in-unpack packages — flipping the global switch must not crash SecNeo.
-    if (captureArmBlockedReason(s.package)) {
-      log(`[settings] capture_start skip ${s.sessionId} (unpack protect ${s.package})`);
-      continue;
-    }
-    try { await setCapture(s.sessionId, true); }
-    catch (e) { log(`[settings] capture_start 会话 ${s.sessionId} 失败:`, (e as Error).message); }
-  }
+export async function applyCaptureEnabled(): Promise<{
+  ok: boolean; targets: { session: string; ok: boolean; skipped?: string; error?: string }[]; error?: string;
+}> {
+  const on = settings.capture.enabled;
+  if (on) { try { await scopedApps(); } catch { /* cache may still help */ } }
+  const targets = await Promise.all([...sessions.values()].filter(s => s.online).map(async s => {
+    if (on && !shouldAutoArmPackage(s.package, s.entry)) return { session: s.sessionId, ok: true, skipped: 'outside scope' };
+    const blocked = on ? captureArmBlockedReason(s.package) : null;
+    if (blocked) return { session: s.sessionId, ok: true, skipped: blocked };
+    try {
+      const result = await setCapture(s.sessionId, on);
+      return { session: s.sessionId, ok: result.ok, ...(!result.ok ? { error: String((result as any).error || (result as any).reply?.error || 'capture operation failed') } : {}) };
+    } catch (error) { return { session: s.sessionId, ok: false, error: (error as Error).message }; }
+  }));
+  return { ok: targets.every(t => t.ok), targets };
 }
 
 // ---- capture_start / capture_stop (the tools' one implementation) --------------------------
@@ -1093,6 +1087,8 @@ function captureArmBlockedReason(pkg: string): string | null {
 }
 
 export function startCaptureLoop(sid: string, opts?: { skipArm?: boolean }) {
+  // Recovery now happens explicitly after module imports; resume above restored IDs.
+  capSeq = captures.reduce((max, capture) => Math.max(max, Number(capture.id) || 0), capSeq);
   if (captureTimers.has(sid)) return; // already streaming
   if (!opts?.skipArm && captureLoopPending.has(sid)) return;
   const pkgNow = sessions.get(sid)?.package ?? '';

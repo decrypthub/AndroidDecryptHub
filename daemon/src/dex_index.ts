@@ -2,7 +2,7 @@
 // injected agent only supplies bytes. Rows are keyed by dex SHA + parser version so stale
 // indexes are rebuilt explicitly instead of returning plausible but mismatched results.
 import { createHash } from 'node:crypto';
-import { unlinkSync } from 'node:fs';
+import { mkdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { DATA_DIR, log } from './state.ts';
@@ -52,6 +52,7 @@ function discardIndexFile(reason: string): void {
 }
 
 function openIndexDb(): DatabaseSync {
+  mkdirSync(DATA_DIR, { recursive: true });
   const opened = new DatabaseSync(DEX_INDEX_FILE);
   try { createSchema(opened); return opened; }
   catch (error) {
@@ -129,8 +130,8 @@ function createSchema(target: DatabaseSync) {
 `);
 }
 
-let db = openIndexDb();
-let getDocument = db.prepare('SELECT * FROM dex_documents WHERE sha = ?');
+let db: DatabaseSync | undefined;
+let getDocument: ReturnType<DatabaseSync['prepare']>;
 
 /**
  * Run one index operation against the live handle. SQLite can report corruption at query time (see
@@ -138,6 +139,7 @@ let getDocument = db.prepare('SELECT * FROM dex_documents WHERE sha = ?');
  * the schema, and give the caller one clean attempt. Non-corruption errors are rethrown untouched.
  */
 function withIndex<T>(operation: (database: DatabaseSync) => T): T {
+  if (!db) { db = openIndexDb(); getDocument = db.prepare('SELECT * FROM dex_documents WHERE sha = ?'); }
   try { return operation(db); }
   catch (error) {
     if (!isCorruptDbError(error)) throw error;

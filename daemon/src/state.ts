@@ -3,12 +3,11 @@
 // Imported by everyone. Everything that holds runtime state or is a leaf helper lives here;
 // functions that issue agent commands (sendCmd/capture loop/unpack/dump) live in service.ts.
 import net from 'node:net';
+import { atomicWriteJson, storagePaths } from './storage.ts';
 import type { IncomingMessage } from 'node:http';
 import { mkdirSync, writeFileSync, existsSync, appendFileSync, readFileSync, readdirSync, statSync, unlinkSync, openSync, readSync, closeSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { fileURLToPath } from 'node:url';
-import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
 import { artifactKindOf, artifactSidecarPath, parseArtifactProvenance, planArtifactEviction } from './artifacts.ts';
 import type { ArtifactProvenance } from './artifacts.ts';
@@ -16,19 +15,11 @@ import type { ArtifactEntry } from './artifacts.ts';
 import {
   appendCaptureLine, clearAllPersistedCaptures, clearPackagePersistedCaptures,
   enforcePerPackageRetain, evictPackageFromMemory, listPackageCaptureStats,
-  loadCapturesFromDisk, pruneCapturesOlderThan, readPackageCapturesJsonl,
-  trimPackageCapturesFile,
+  loadCapturesFromDisk, readPackageCapturesJsonl,
 } from './capture_persist.ts';
 import { memCapturePreview } from './native_hook_args.ts';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-// The test runner gives every test FILE its own process (test/run.mjs sets ADH_SKIP_ARTIFACT_LOAD).
-// Without a private root they all write the same captures/ and adhd-data/ files; on Windows a second
-// writer makes the first fail with a sharing violation, which surfaced as a random test file failing
-// at ~2.7s with fewer tests counted. Under the flag everything goes to OS temp instead of the checkout.
-const _testRoot = process.env.ADH_SKIP_ARTIFACT_LOAD === '1' ? join(tmpdir(), `adh-test-${process.pid}`) : '';
-export const CAPTURES = _testRoot ? join(_testRoot, 'captures') : join(__dirname, '..', '..', 'captures');
-mkdirSync(CAPTURES, { recursive: true });
+export const CAPTURES = storagePaths.capturesDir;
 
 // ---- wire framing (v2.0, WS-D): [u32 len BE][u8 type][payload] -------------
 // Control/cmd/cmdResult ride as FRAME_JSON; binary/bulk types reserved for later
@@ -222,31 +213,15 @@ export const nextId = () => `s_${(++seq).toString(36)}${Date.now().toString(36).
 export const nextCmdId = () => `c${(++cmdSeq).toString(36)}`;
 
 // ---- event store (session record/replay) ---------------------------------
-const _dataRoot = join(__dirname, '..', '..');
-// Where artifacts, the event log, settings and the dex index live. Overridable because this tree is
-// worked from a SHARED SMB folder, and that is a bad home for a SQLite database: measured
-// 2026-09-30, `adhd-data/dex-index.sqlite` came back SQLITE_CORRUPT while the same tree was open on
-// two machines, and on SMB the corrupt file could not even be renamed away from Linux (`mv` →
-// "device or resource busy") because the other host still held it. Point ADH_DATA_DIR at local disk
-// on any machine sharing this checkout. Default is unchanged for single-machine use.
-export const DATA_DIR = process.env.ADH_DATA_DIR ?? (_testRoot ? join(_testRoot, 'adhd-data') : join(_dataRoot, 'adhd-data'));
-mkdirSync(DATA_DIR, { recursive: true });
+export const DATA_DIR = storagePaths.dataDir;
 export const EVENTS_FILE = join(DATA_DIR, 'events.jsonl');
 interface Ev { seq: number; ts: number; type: string; data: any }
 export const events: Ev[] = [];
 export let evSeq = 0;
-try {   // replay: load persisted events on startup so a session survives restarts
-  if (existsSync(EVENTS_FILE)) {
-    const lines = readFileSync(EVENTS_FILE, 'utf8').split('\n').filter(Boolean).slice(-5000);
-    let corrupt = 0;
-    for (const l of lines) { try { const e = JSON.parse(l); events.push(e); if (e.seq > evSeq) evSeq = e.seq; } catch { corrupt++; } }
-    if (corrupt) log(`[events] replay: ${corrupt}/${lines.length} 行损坏已跳过 (${EVENTS_FILE})`);
-  }
-} catch (e) { log(`[events] replay 失败 (${EVENTS_FILE}) — 从空事件起步:`, (e as Error).message); }
 export function recordEvent(type: string, data: any) {
   const e: Ev = { seq: ++evSeq, ts: Date.now(), type, data };
   events.push(e); if (events.length > 5000) events.shift();
-  try { appendFileSync(EVENTS_FILE, JSON.stringify(e) + '\n'); }
+  try { mkdirSync(DATA_DIR, { recursive: true }); appendFileSync(EVENTS_FILE, JSON.stringify(e) + '\n'); }
   catch (err) { log(`[events] 持久化失败 (${EVENTS_FILE}):`, (err as Error).message); }
 }
 
@@ -290,56 +265,56 @@ export const DEFAULT_SETTINGS: Settings = {
 };
 export let settings: Settings = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
 // section-merge (like IDH /api/settings/import): only the segments present in `patch` apply.
-export function mergeSettings(patch: any): string[] {
+export function mergeSettings(patch: any, target: Settings = settings): string[] {
   const applied: string[] = [];
   if (!patch || typeof patch !== 'object') return applied;
   if (patch.capture && typeof patch.capture === 'object') {
     const c = patch.capture;
-    if (typeof c.enabled === 'boolean') settings.capture.enabled = c.enabled;
-    if (typeof c.autoDumpDex === 'boolean') settings.capture.autoDumpDex = c.autoDumpDex;
-    if (Number.isFinite(c.retain)) settings.capture.retain = Math.max(50, Math.min(100000, Math.floor(c.retain)));
-    if (Number.isFinite(c.maxAgeDays)) settings.capture.maxAgeDays = Math.max(0, Math.min(365, Math.floor(c.maxAgeDays)));
-    if (typeof c.cryptoModule === 'string') settings.capture.cryptoModule = c.cryptoModule.trim();
-    if (typeof c.fileModule === 'string') settings.capture.fileModule = c.fileModule.trim();
-    if (typeof c.sysModule === 'string') settings.capture.sysModule = c.sysModule.trim();
+    if (typeof c.enabled === 'boolean') target.capture.enabled = c.enabled;
+    if (typeof c.autoDumpDex === 'boolean') target.capture.autoDumpDex = c.autoDumpDex;
+    if (Number.isFinite(c.retain)) target.capture.retain = Math.max(50, Math.min(100000, Math.floor(c.retain)));
+    if (Number.isFinite(c.maxAgeDays)) target.capture.maxAgeDays = Math.max(0, Math.min(365, Math.floor(c.maxAgeDays)));
+    if (typeof c.cryptoModule === 'string') target.capture.cryptoModule = c.cryptoModule.trim();
+    if (typeof c.fileModule === 'string') target.capture.fileModule = c.fileModule.trim();
+    if (typeof c.sysModule === 'string') target.capture.sysModule = c.sysModule.trim();
     if (c.families && typeof c.families === 'object')
-      for (const k of Object.keys(settings.capture.families))
-        if (typeof c.families[k] === 'boolean') settings.capture.families[k] = c.families[k];
+      for (const k of Object.keys(target.capture.families))
+        if (typeof c.families[k] === 'boolean') target.capture.families[k] = c.families[k];
     applied.push('capture');
   }
   if (patch.ui && typeof patch.ui === 'object') {
-    if (Number.isFinite(patch.ui.displayCap)) settings.ui.displayCap = Math.max(50, Math.min(5000, Math.floor(patch.ui.displayCap)));
+    if (Number.isFinite(patch.ui.displayCap)) target.ui.displayCap = Math.max(50, Math.min(5000, Math.floor(patch.ui.displayCap)));
     applied.push('ui');
   }
   if (patch.artifacts && typeof patch.artifacts === 'object') {
     const a = patch.artifacts;
-    if (Number.isFinite(a.maxBytes)) settings.artifacts.maxBytes = Math.max(256 * 1024 ** 2, Math.min(512 * 1024 ** 3, Math.floor(a.maxBytes)));
-    if (Number.isFinite(a.maxAgeDays)) settings.artifacts.maxAgeDays = Math.max(0, Math.min(365, Math.floor(a.maxAgeDays)));
+    if (Number.isFinite(a.maxBytes)) target.artifacts.maxBytes = Math.max(256 * 1024 ** 2, Math.min(512 * 1024 ** 3, Math.floor(a.maxBytes)));
+    if (Number.isFinite(a.maxAgeDays)) target.artifacts.maxAgeDays = Math.max(0, Math.min(365, Math.floor(a.maxAgeDays)));
     applied.push('artifacts');
   }
   if (patch.startup && typeof patch.startup === 'object') {
     const s = patch.startup;
-    if (typeof s.antiDebug === 'boolean') settings.startup.antiDebug = s.antiDebug;
-    if (typeof s.module === 'string') settings.startup.module = s.module.trim() || 'libc.so';
+    if (typeof s.antiDebug === 'boolean') target.startup.antiDebug = s.antiDebug;
+    if (typeof s.module === 'string') target.startup.module = s.module.trim() || 'libc.so';
     if (Array.isArray(s.extraTargets)) {
       // Only symbol names: the return/errno pair is a policy decision made in service.ts, not
       // something a settings patch can invent.
-      settings.startup.extraTargets = s.extraTargets
+      target.startup.extraTargets = s.extraTargets
         .filter((x: unknown) => typeof x === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(x))
         .slice(0, 16);
     }
     if (Array.isArray(s.packages)) {
       // Empty = every package. A non-empty list is the safe form: pre-arming neutralizes path
       // checks process-wide, so it is a per-target choice, not a daemon-wide default.
-      settings.startup.packages = s.packages
+      target.startup.packages = s.packages
         .filter((x: unknown) => typeof x === 'string' && /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$/.test(x))
         .slice(0, 32);
     }
     // Delayed widening: install the checks that are unsafe during initialization once the app has
     // settled (see service.ts startupWidenPlan). 0 = off, max 10 minutes.
-    if (Number.isFinite(s.widenAfterMs)) settings.startup.widenAfterMs = Math.max(0, Math.min(600000, Math.floor(s.widenAfterMs)));
+    if (Number.isFinite(s.widenAfterMs)) target.startup.widenAfterMs = Math.max(0, Math.min(600000, Math.floor(s.widenAfterMs)));
     if (Array.isArray(s.widenTargets)) {
-      settings.startup.widenTargets = s.widenTargets
+      target.startup.widenTargets = s.widenTargets
         .filter((x: unknown) => typeof x === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(x))
         .slice(0, 8);
     }
@@ -347,22 +322,8 @@ export function mergeSettings(patch: any): string[] {
   }
   return applied;
 }
-// Load persisted settings. Fail LOUD: if the file is present but corrupt/unreadable we must not
-// silently run on defaults (that masks lost config as "working"). Absent file is normal (defaults).
-try {
-  if (existsSync(SETTINGS_FILE)) mergeSettings(JSON.parse(readFileSync(SETTINGS_FILE, 'utf8')));
-} catch (e) {
-  log(`[settings] ${SETTINGS_FILE} 载入失败，已回退默认值 — 磁盘上的配置未生效:`, (e as Error).message);
-}
-// Migrate ONE legacy default: before 2026-10-11 the daemon defaulted sysModule to
-// 'libadhdetect.so' — the SANDBOX's mock detector lib, built by tools/build_detect.sh. Nothing
-// outside the sandbox ships that name, so a persisted value equal to it can only have come from
-// that default (a target-specific choice would be a real lib). Keeping it would make every real
-// target report six zero-installs for hooks nobody asked for. fileModule's old default
-// ('libjavacore.so') is a genuine Android lib, so it is left alone — only the default changes.
-if (settings.capture.sysModule === 'libadhdetect.so') settings.capture.sysModule = '';
 // Persist. Throws on failure — callers MUST surface it so the UI never claims "已保存" on a failed write.
-export function saveSettings() { writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2)); }
+export function saveSettings(next: Settings = settings) { atomicWriteJson(SETTINGS_FILE, next); }
 
 // ---- on-disk artifact store --------------------------------------------------------------
 // Adopt artifacts that are already on disk into the runtime map.
@@ -420,13 +381,17 @@ export function loadArtifactsFromDisk(): { loaded: number; skipped: number; byte
 // on disk, so a failed delete is reported rather than quietly forgotten.
 // `onDelete` lets a caller drop related state it owns (the dex index row) without state.ts having to
 // import the indexer, which would be a cycle (dex_index.ts imports this file).
-export function pruneArtifacts(onDelete?: (sha: string) => void, protectSha?: string): { removed: number; bytesFreed: number; remainingBytes: number; kept: number; failed: number } {
+export function previewArtifactRetention(protectSha?: string) {
   const mtimeOf = (p: string) => { try { return Math.round(statSync(p).mtimeMs); } catch { return 0; } };
   const entries: ArtifactEntry[] = [...dumps.values()].map((m) => ({
     sha256: m.sha256, path: m.path, size: Number(m.size) || 0,
     mtime: mtimeOf(m.path) || Number(m.capturedAt) || 0,
   }));
-  const plan = planArtifactEviction(entries, settings.artifacts, Date.now(), protectSha);
+  return planArtifactEviction(entries, settings.artifacts, Date.now(), protectSha);
+}
+
+export function pruneArtifacts(onDelete?: (sha: string) => void, protectSha?: string): { removed: number; bytesFreed: number; remainingBytes: number; kept: number; failed: number } {
+  const plan = previewArtifactRetention(protectSha);
   let removed = 0, bytesFreed = 0, failed = 0;
   for (const e of plan.evict) {
     try { unlinkSync(e.path); }
@@ -446,7 +411,7 @@ export function pruneArtifacts(onDelete?: (sha: string) => void, protectSha?: st
 }
 
 // One pass over the event log for artifacts adopted without a package. dump.new already recorded
-// the real package; this writes it into the sidecar so the next boot does not scan again.
+// the real package; recovery updates memory only, never rewrites evidence during initialization.
 function backfillUnlabeledDumps(): number {
   const need = new Set<string>();
   for (const d of dumps.values()) if (!d.package) need.add(d.sha256);
@@ -495,26 +460,11 @@ function backfillUnlabeledDumps(): number {
     if (typeof prov.requestedSize === 'number') meta.requestedSize = prov.requestedSize;
     if (typeof prov.complete === 'boolean') meta.complete = prov.complete;
     if (prov.note) meta.note = prov.note;
-    rememberDump(meta);
     labeled++;
   }
   return labeled;
 }
 
-{ // re-adopt what is already on disk (see loadArtifactsFromDisk)
-  // Tests (and CI) must not depend on whatever sits in the developer's captures/ directory: every
-  // test process would scan ~1.2 GiB at import, which made the parallel suite flaky under I/O
-  // contention (a file would occasionally fail with no useful output). `npm test` runs through
-  // test/run.mjs, which sets this before the runner spawns the per-file processes.
-  if (process.env.ADH_SKIP_ARTIFACT_LOAD === '1') {
-    log('[artifacts] ADH_SKIP_ARTIFACT_LOAD=1 - starting with an empty artifact store');
-  } else {
-    const a = loadArtifactsFromDisk();
-    const labeled = backfillUnlabeledDumps();
-    if (a.loaded || a.skipped) log(`[artifacts] 从磁盘恢复 ${a.loaded} 个工件（跳过 ${a.skipped}，${(a.bytes / 1048576).toFixed(1)} MiB，${a.ms}ms）`);
-    if (labeled) log(`[artifacts] 从事件日志补上 ${labeled} 个工件的包名`);
-  }
-}
 /** Retention accounting for the in-memory capture list. Pass a session for that session's view. */
 export function captureStoreStats(session?: string) {
   if (session) {
@@ -581,10 +531,6 @@ export function pushCapture(entry: Capture): boolean {
     captureEvicted++;
     bumpSession(dropped.sessionId, 'evicted');
   }
-  if (pkg && evicted.length) {
-    try { trimPackageCapturesFile(DATA_DIR, pkg, retain); }
-    catch (err) { log(`[captures] 裁剪失败 (${pkg}):`, (err as Error).message); }
-  }
   return true;
 }
 
@@ -611,25 +557,20 @@ export function exportPackageCapturesJsonl(pkg: string): string | null {
   return readPackageCapturesJsonl(DATA_DIR, pkg);
 }
 
-/** After settings.retain / maxAgeDays change: enforce caps in memory and on disk. */
+/** Explicit maintenance of the bounded in-memory view; disk cleanup is separate. */
 export function applyCaptureRetainCap(): void {
-  try { pruneCapturesOlderThan(DATA_DIR, settings.capture.maxAgeDays); }
-  catch (err) { log(`[captures] 天龄裁剪失败:`, (err as Error).message); }
-  const retain = settings.capture.retain;
-  const pkgs = new Set<string>();
-  for (const c of captures) pkgs.add(c.package && c.package !== '?' ? c.package : '');
-  // Drop from memory anything older than maxAgeDays.
+  const before = captures.slice();
   if (settings.capture.maxAgeDays > 0) {
     const cutoff = Date.now() - settings.capture.maxAgeDays * 86400000;
     for (let i = captures.length - 1; i >= 0; i--) {
       if (Number(captures[i].ts) && Number(captures[i].ts) < cutoff) captures.splice(i, 1);
     }
   }
-  enforcePerPackageRetain(captures, retain);
-  for (const pkg of pkgs) {
-    if (!pkg) continue;
-    try { trimPackageCapturesFile(DATA_DIR, pkg, retain); }
-    catch (err) { log(`[captures] 裁剪失败 (${pkg}):`, (err as Error).message); }
+  enforcePerPackageRetain(captures, settings.capture.retain);
+  const kept = new Set(captures);
+  for (const capture of before) {
+    if (kept.has(capture)) continue;
+    captureEvicted++; bumpSession(capture.sessionId, 'evicted');
   }
 }
 // The persistent-hook target modules the agent should use. Sent with every capture_start so
@@ -745,16 +686,6 @@ export function knownApps(): KnownApp[] {
   return [...by.values()].sort((a, b) => b.lastSeen - a.lastSeen || a.package.localeCompare(b.package));
 }
 export const captures: Capture[] = [];
-// Replay durable captures so a daemon restart keeps hook history (per package).
-{
-  try {
-    const aged = pruneCapturesOlderThan(DATA_DIR, settings.capture.maxAgeDays);
-    if (aged) log(`[captures] 按天龄裁掉 ${aged} 条（>${settings.capture.maxAgeDays} 天）`);
-  } catch (e) { log(`[captures] 天龄裁剪失败:`, (e as Error).message); }
-  const loaded = loadCapturesFromDisk(DATA_DIR, settings.capture.retain);
-  for (const c of loaded) captures.push(c as Capture);
-  if (loaded.length) log(`[captures] 从磁盘恢复 ${loaded.length} 条（按包保留上限 ${settings.capture.retain}）`);
-}
 // Store accounting (v4.93): the in-memory list is capped by settings.capture.retain (per package
 // since 2026-10-20), and an evicted record is gone for every digest that runs later. Counting
 // pushes and evictions lets a digest admit that its window may be missing events.
@@ -1082,4 +1013,42 @@ export function readBody(req: IncomingMessage, cap = MAX_BODY_BYTES): Promise<st
     });
     req.on('error', fail);
   });
+}
+
+// Explicit, idempotent recovery. Merely importing state/MCP never touches disk.
+let restored: { events: number; captures: number; artifacts: number } | undefined;
+export function restoreHostState() {
+  if (restored) return { ...restored, alreadyInitialized: true };
+  mkdirSync(DATA_DIR, { recursive: true });
+  mkdirSync(CAPTURES, { recursive: true });
+  try {   // replay: load persisted events on startup so a session survives restarts
+    if (existsSync(EVENTS_FILE)) {
+      const lines = readFileSync(EVENTS_FILE, 'utf8').split('\n').filter(Boolean).slice(-5000);
+      let corrupt = 0;
+      for (const l of lines) { try { const e = JSON.parse(l); events.push(e); if (e.seq > evSeq) evSeq = e.seq; } catch { corrupt++; } }
+      if (corrupt) log(`[events] replay: ${corrupt}/${lines.length} 行损坏已跳过 (${EVENTS_FILE})`);
+    }
+  } catch (e) { log(`[events] replay 失败 (${EVENTS_FILE}) — 从空事件起步:`, (e as Error).message); }
+  // Load persisted settings. Fail LOUD: if the file is present but corrupt/unreadable we must not
+  // silently run on defaults (that masks lost config as "working"). Absent file is normal (defaults).
+  try {
+    if (existsSync(SETTINGS_FILE)) mergeSettings(JSON.parse(readFileSync(SETTINGS_FILE, 'utf8')));
+  } catch (e) {
+    log(`[settings] ${SETTINGS_FILE} 载入失败，已回退默认值 — 磁盘上的配置未生效:`, (e as Error).message);
+  }
+  // Migrate ONE legacy default: before 2026-10-11 the daemon defaulted sysModule to
+  // 'libadhdetect.so' — the SANDBOX's mock detector lib, built by tools/build_detect.sh. Nothing
+  // outside the sandbox ships that name, so a persisted value equal to it can only have come from
+  // that default (a target-specific choice would be a real lib). Keeping it would make every real
+  // target report six zero-installs for hooks nobody asked for. fileModule's old default
+  // ('libjavacore.so') is a genuine Android lib, so it is left alone — only the default changes.
+  if (settings.capture.sysModule === 'libadhdetect.so') settings.capture.sysModule = '';
+
+  if (process.env.ADH_SKIP_ARTIFACT_LOAD !== '1') {
+    loadArtifactsFromDisk();
+    backfillUnlabeledDumps();
+  }
+  captures.push(...loadCapturesFromDisk(DATA_DIR, settings.capture.retain) as Capture[]);
+  restored = { events: events.length, captures: captures.length, artifacts: dumps.size };
+  return { ...restored, alreadyInitialized: false };
 }

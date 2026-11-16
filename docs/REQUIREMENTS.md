@@ -1,5 +1,7 @@
 # ADH (Android DecryptHub) — 功能需求说明
 
+> **2026-11-16 P0 可靠性口径**：作用域包名单更新必须保留完整 Hook policy/未知字段；MCP 与面板设置共用原子保存和逐目标应用结果；模块导入与历史恢复不删除或裁剪磁盘证据。保留策略通过显式维护预览/确认执行，旧文中启动/追加时自动磁盘清理的描述由此更正；内存容量限制保持。实现与升级路径见 [P0 Host 状态说明](P0_HOST_STATE.md)。本轮 Host 验证不等于当前服务已部署或真机验收。
+
 > **产品定位**：**通用 Android 运行时逆向分析工具** — 不是 demo，也不是「手机版 jadx」。
 > 适用于任意 App 的运行时观测/dump/hook/trace，并**对高对抗目标（反调试、root/签名检测、代码混淆、加密传输）具备实战能力**。
 > **参考项目**：[taisuii/ios-decrypt-helper](https://github.com/taisuii/ios-decrypt-helper)（IOSDecryptHub）
