@@ -4927,3 +4927,16 @@ Host 现在优先从同条 perf 内核栈记录解析内存窗口，且每次指
 首次默认服务启动期间，历史工件加载数从 41 降到 27，最近缺失的 14 份 DEX 共 166.81 MiB，与过期回收条件对应。已用仓外已有副本恢复全部 14 份；其中 2 份补齐原始零填充后得到完全相同的 SHA-256。逐份重新验证完整 SHA-256、长度和原事件来源元数据，14/14 通过。没有把目标转储纳入版本控制。
 
 v71 另触发的 1000 条历史捕获尚未完整恢复：现存事件日志缺原始捕获字段，未用元数据伪造原记录；本机无可用卷影副本。隔离修复的操作者目录哨兵验证通过。算法交付包已在独立目录、Python 隔离模式下通过 76 条原生 fixture、标准 SM4 向量、空输入和 CLI 验收。
+
+
+## 2026-11-16：AI 优先、人工可接管与 USB/LAN 统一的代码审计
+
+用户要求先梳理 ADH 现有代码，交付能力对照、状态/副作用清单、具体模块和实施顺序，不影响当前分析现场。本轮只读源码/AST，不调用 ADH 或 ADB、不请求运行服务、不重启/部署/改 reverse，不读取目标捕获与转储内容。
+
+新增 `docs/AI_FIRST_REFACTOR_AUDIT.md` 与 `docs/AI_FIRST_CAPABILITY_INVENTORY.json`；开发计划链接此审计附录。静态完整清点 91 MCP 工具、106 路由表项（含资源/首页/前缀）、38 宣告 agent op、15 AIDL 方法、7 公共 CLI 子命令；20 组覆盖所有 MCP 项。计数不代表当前运行服务支持或真机验收通过。
+
+确认两处优先一致性问题：Host `writeScopePackages` 只保留 version/mode/packages，会覆盖 Device 保存的非默认 policy；MCP settings merge/save 与 REST 的即时 applyCaptureEnabled/retain 行为不同。另记录状态 import/启动回收、hello 自动布防、超时/取消语义、缺少 deviceId 与全局 serial、只读 UI 文档与实际写入口、部分副作用 GET、双 CLI 和桌面 status v1 消费边界。均未在本轮修改运行实现。
+
+拟议 P0–P5：数据/配置保护 → Host 共享操作与持久任务 → 人工修改/接管最小闭环 → 设备域服务和 USB RPC → TLS LAN 与完整 ADB 能力迁移 → Hook 方案/启动缓存和公共入口收敛。AI 规划仍由外部 Harness 决定，recipe 可选；人类修改靠 revision/控制 epoch 阻止旧操作覆盖，取消不伪造停止，旧运行会话保留旧后端。
+
+验证：静态清单/来源哈希/链接/分组与 F01/F02 结构证据 **9 passed / 0 failed**；`npm run typecheck` rc=0；`npm test` **464 passed / 0 failed / 0 skipped**（子进程设置 ADH_SKIP_ARTIFACT_LOAD=1、移除继承 ADH_DATA_DIR，使用既有每测试进程临时根）；`git diff --check` 通过。没有运行设备门禁或启动服务；没有改变作用域契约、默认端口、stdio onboarding、桌面 status schema 或已部署服务。

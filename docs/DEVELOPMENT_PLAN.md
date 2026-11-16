@@ -3,6 +3,7 @@
 > **定位**：**通用 Android 运行时逆向分析工具** — 对高对抗目标（反调试/root/签名检测/混淆/加密传输）具备实战能力。
 > **功能需求**：见 [`REQUIREMENTS.md`](REQUIREMENTS.md)（唯一权威规格，模块 A–W；本文档只管架构与排期）。
 > **跨会话进度**：见 [`PROGRESS.md`](PROGRESS.md)。
+> **2026-11-16 用户确定的后续方向**：AI 自主规划分析，人类电脑面板可查看、修改和接管，USB/LAN 共用设备能力。现状对照、状态/副作用、具体模块与 P0–P5 实施顺序见本计划的[代码审计附录](AI_FIRST_REFACTOR_AUDIT.md)，逐项入口见[静态清单](AI_FIRST_CAPABILITY_INVENTORY.json)。附录区分当前实现与拟议设计；下面旧“只读面板”等描述属于待迁移基线，不代表本轮已完成运行改造。进入实施阶段同步需求与工程规则，仍保持 agent 轻量、分析在 Host；本轮不改当前分析现场。
 > **参考项目**：[`REFERENCE_IOS.md`](REFERENCE_IOS.md)（[ios-decrypt-helper](https://github.com/taisuii/ios-decrypt-helper)）。
 > **一句话**：运行在目标进程内的 native agent，配合本机 daemon、Web UI 和 MCP Server，实现运行时 dex/so/memory dump、ART 结构级脱壳、Java/native hook、明文边界加密观测、活体对象自省、反分析行为观测、函数/指令 trace、Capstone 反汇编与搜索；Zygisk / Gadget 多种注入方式。
 
