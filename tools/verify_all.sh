@@ -282,6 +282,7 @@ SCRIPTS=(
   "verify_v129_qbdi_delivery.sh:device"
   # v130: scope merge rules + the analyze_app/scope_* MCP tool contract (host only, no device write).
   "verify_v130_scope_analyze.sh:host"
+  "verify_v132_p5_stdio.sh:host"
 )
 
 pass=0; fail=0; skip=0; FAILED=""

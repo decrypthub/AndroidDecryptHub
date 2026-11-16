@@ -5020,3 +5020,11 @@ v71 另触发的 1000 条历史捕获尚未完整恢复：现存事件日志缺�
 边界：只完成隔离 JVM TLS/模拟 ADB 路径与构建；真实 Android JSSE/provider、UDS/SELinux/防火墙/无线网络、真实 Binder/进程和系统 CA 效果未验证。没有 agent 本地路由、bulk、广播发现、无 USB 首次配对/手机配对 UI、在线证书轮换/归档；未迁能力继续如实 unsupported。完整协议/权限、能力矩阵、配对/恢复顺序和数据文件见 [P4_LAN_AUTH.md](P4_LAN_AUTH.md)。
 
 未部署、未推送、未发布安装包、未执行真实 ADB、未启停目标、未改 reverse/forward、未重启当前分析服务；交付本轮源码提交。
+
+## 2026-11-16 — P5 真机隔离验收与修复
+
+在 `feat/adh-p5-device-acceptance-20261116`（基座 P5 de9d134）实现并验收独立 Android 沙盒。新包、opt-in 构建、私有 root 数据/UDS/Host 端口，不替换模块、Manager 或现有 daemon，不重启任何原服务。最终两次独立运行各 **7/7**，包含 before-Agent-start GOT getpid 命中、真实 TTL 过期、实际 APK v1→v2 绑定失效、LAN TLS1.3 grant 撤销、缓存撤销、并发回滚冲突拒绝与 scope 原文精确 hash 恢复；原会话、PID、模块/配置 hash、ADB 映射前后一致。
+
+修复 early GOT 默认 errno=-1（改为0并保留失败原因）、Android org.json 斜杠转义导致的 LAN 挑战签名字节差异。enforcing ROM 的 adbd→su UDS connectto 拒绝通过新增显式 USB stdio/1 传输处理：同一协议/身份/账本，旧能力返回 unsupported，无自动回退/重发，不放宽 SELinux。沙盒 Agent 使用独立构建/产物端口18761，不能 --deploy，也不覆盖正常8761产物。默认 APK 排除所有 p5Fixture 类。
+
+回归：Host typecheck、**558/558**；Android JVM **70/70**（23/18/29）；普通/opt-in APK、原生默认/隔离端口构建、v132 host gate、94项MCP注册和生成文档检查通过。实测证据与正式 Zygisk、capture_start/其他绑定组合等未验证边界见 [P5_ANDROID_ACCEPTANCE.md](P5_ANDROID_ACCEPTANCE.md)。没有把模拟自加载扩写为已验证整个 Zygisk 时序。

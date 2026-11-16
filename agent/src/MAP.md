@@ -67,4 +67,6 @@ the build you think you flashed. Both the module zip and the agent must be rebui
 - `compat_probe` reports bootstrap vs current exec/anon-exec/RWX counters; base injection and GOT hooks must not add true anonymous executable pages.
 # P5 early-plan/1 addition
 
+Real Android acceptance caught and fixed an invalid errno default in the early GOT consumer; failures now include a bounded reason. The explicit CMake `ADH_AGENT_CONNECT_PORT` defaults to 8761; port 18761 is used only in sandbox builds, and custom-port `--deploy` is refused. Before-agent-connect GOT hits are verified on Android, full Zygisk delivery is still unverified. See [P5_ANDROID_ACCEPTANCE.md](../../docs/P5_ANDROID_ACCEPTANCE.md).
+
 `bootstrap/early_wire.h` is the shared bounded native validator and SHA implementation; `bootstrap/early_plan.cpp` consumes only verified named capture/GOT observation steps before `adh_agent_start`, stops on an unconfirmed installation and adds agent-reported receipts to hello. `capture_policy` explicitly sets/reads family eligibility. No .init_array timing guarantee. Full contract: [P5_HOOK_PLANS.md](../../docs/P5_HOOK_PLANS.md).

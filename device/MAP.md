@@ -8,6 +8,8 @@ Magisk 打包仍在 `injector/zygisk/`。
 
 ## P5 additions (2026-11-16)
 
+Real Android follow-up: `core/DeviceRpc.lanProof` fixes Android/JVM authentication-byte differences. `daemon/device/DeviceRpcRelay` is a root-only raw USB relay with unchanged dispatcher; isolated socket parameters default to production names. `daemon/src/p5Fixture` and the separate `:p5sandbox` module require `adhP5Sandbox=true` and are absent from the normal bundle graph. See [P5_ANDROID_ACCEPTANCE.md](../docs/P5_ANDROID_ACCEPTANCE.md).
+
 `core/EarlyPlanWire.kt` encodes the bounded early-plan/1 wire. `daemon/device/HookPlanCache.kt` owns validated, expiring app/Agent-bound cache and exact legacy backups through DeviceOperations. `AndroidHookBinding.kt` validates installed identity/ABI; `EarlyPlanBroker.kt` serves root companions only. Manager Binder v20 adds package-only CAS and Hook cache read/revoke; the fixed family editor is now a read-only legacy snapshot. Authoritative programmable editing stays on Host. No automatic app restart. See [P5_HOOK_PLANS.md](../docs/P5_HOOK_PLANS.md).
 
 ## Modules reference

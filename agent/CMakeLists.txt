@@ -1,6 +1,13 @@
 cmake_minimum_required(VERSION 3.22)
 project(adh_agent C CXX ASM)
 
+# Explicit sandbox builds may select an owned port, never dial the active analysis Host.
+set(ADH_AGENT_CONNECT_PORT "8761" CACHE STRING "Agent loopback RPC port")
+if(NOT ADH_AGENT_CONNECT_PORT MATCHES "^[0-9]+$" OR ADH_AGENT_CONNECT_PORT LESS 1 OR ADH_AGENT_CONNECT_PORT GREATER 65535)
+    message(FATAL_ERROR "ADH_AGENT_CONNECT_PORT must be 1..65535")
+endif()
+add_compile_definitions(ADH_PORT=${ADH_AGENT_CONNECT_PORT})
+
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

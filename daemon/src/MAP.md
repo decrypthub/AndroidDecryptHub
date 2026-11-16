@@ -6,6 +6,8 @@ ADH Daemon / `adhd` (Node 24 + TypeScript, runs `.ts` directly, no build step). 
 
 ## P5 Host Hook plans (2026-11-16)
 
+- P5 real Android follow-up: explicit `devices connect usbMode=stdio` uses the same RPC/identity/ledger on a root byte stream when SELinux denies adbd-to-su UDS forward. `transport/adb_device.ts` negotiates raw transport before authentication, never falls back or replays. See [P5_ANDROID_ACCEPTANCE.md](../../docs/P5_ANDROID_ACCEPTANCE.md).
+
 - `hook_plans.ts` owns immutable JSON plan versions, library CAS, explicit target preflight, coordinated steps/receipts and ownership-checked undo. `hook_plan_host.ts` dispatches the same actions for MCP, REST and published Python CLI. No hello/settings auto-install.
 - `public/hook-plans-panel.js` mounts inside the shared workbench; drafts, frozen submit versions, persistent tasks and intent-key recovery use `operation-client.js`.
 - Device early cache and reversible scope migration use the P3/P4 verified device RPC, never legacy target identity inference or ADB fallback. See [P5_HOOK_PLANS.md](../../docs/P5_HOOK_PLANS.md).

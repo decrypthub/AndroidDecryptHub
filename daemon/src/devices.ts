@@ -27,13 +27,13 @@ export class Devices {
   list(){return {devices:Object.values(this.records).map(record=>({deviceId:record.deviceId,identityFingerprint:record.identityFingerprint,lastSeen:record.lastSeen,lastKnown:record.lastPeer,pairing:record.pairing?{...record.pairing,authorization:'cached enrollment; device rechecks every LAN request'}:undefined,lanEndpoint:record.lanEndpoint,
     online:[...this.connections.values()].some(c=>c.peer.deviceId===record.deviceId&&!c.rpc.stream.destroyed),connections:[...this.connections.values()].filter(c=>c.peer.deviceId===record.deviceId).map(c=>this.connectionView(c))})),
     legacyAgentAssociation:'unverified; no session is assigned by ADB serial',discoveryIsExplicit:true};}
-  private connectionView(c:DeviceConnection){return {connectionId:c.id,transport:c.transport,serial:c.serial,transportId:c.transportId,address:c.address,port:c.transport==='lan'?c.port:undefined,grantId:c.grantId,tlsVersion:c.tlsVersion,deviceId:c.peer.deviceId,bootId:c.peer.bootId,daemonInstanceId:c.peer.daemonInstanceId,identityVerified:true,online:!c.rpc.stream.destroyed};}
+  private connectionView(c:DeviceConnection){return {connectionId:c.id,transport:c.transport,usbMode:c.transport==='adb'?(c.usbMode||'forward'):undefined,serial:c.serial,transportId:c.transportId,address:c.address,port:c.transport==='lan'?c.port:undefined,grantId:c.grantId,tlsVersion:c.tlsVersion,deviceId:c.peer.deviceId,bootId:c.peer.bootId,daemonInstanceId:c.peer.daemonInstanceId,identityVerified:true,online:!c.rpc.stream.destroyed};}
   async discover(transport='adb'){
     if(transport==='lan')return {transports:Object.values(this.records).filter(r=>r.lanEndpoint).map(r=>({transport:'lan',deviceId:r.deviceId,...r.lanEndpoint,state:'last-known; not probed'})),...this.list()};
     if(transport!=='adb')deviceFail('UNSUPPORTED_TRANSPORT','only adb and paired LAN are implemented');return {transports:await this.adapter.discover(),...this.list()};
   }
-  async connect(serial:string,transportId?:string,expectedDeviceId?:string){
-    const connection=await this.adapter.connect(serial,transportId);
+  async connect(serial:string,transportId?:string,expectedDeviceId?:string,usbMode:'forward'|'stdio'='forward'){
+    const connection=await this.adapter.connect(serial,transportId,undefined,usbMode);
     return this.register(connection,expectedDeviceId);
   }
   async connectLan(deviceId:string,address?:string,port?:number){

@@ -15,7 +15,7 @@ export async function deviceAction(a:any){
     case 'connect':{
       if(a.transport==='lan')return service.connectLan(a.deviceId,a.address,a.port);
       if(a.transport&&a.transport!=='adb')return deviceFail('UNSUPPORTED_TRANSPORT','only adb and paired LAN are implemented');
-      return service.connect(String(a.serial||''),a.transportId,a.expectedDeviceId);
+      return service.connect(String(a.serial||''),a.transportId,a.expectedDeviceId,a.usbMode);
     }
     case 'pair':return service.pair(a);
     case 'reconcile':{

@@ -28,7 +28,7 @@ internal class DeviceRpcSession(private val operations: DeviceOperations) {
             else {
                 require(auth.optString("type") == "client-signature")
                 val identity = operations.identity
-                val proof = org.json.JSONArray(listOf(DeviceRpc.PROTOCOL, "lan-auth/1", identity.deviceId, identity.bootId, identity.instanceId, challenge, nonce, helloId, auth.getString("clientId"), auth.getString("grantId"))).toString().toByteArray(Charsets.UTF_8)
+                val proof = DeviceRpc.lanProof(listOf(DeviceRpc.PROTOCOL, "lan-auth/1", identity.deviceId, identity.bootId, identity.instanceId, challenge, nonce, helloId, auth.getString("clientId"), auth.getString("grantId")))
                 grantId = pairings.authenticate(auth, proof); authenticated(checkNotNull(grantId))
             }
             true

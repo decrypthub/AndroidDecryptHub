@@ -33,6 +33,15 @@ object DeviceRpc {
         DataOutputStream(output).apply { writeInt(payload.size); write(payload); flush() }
     }
     fun sha256(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+    // Android's org.json escapes '/', desktop org.json and JSON.stringify do not.
+    // Keep the authentication transcript byte-identical without changing persisted op hashes.
+    fun lanProof(values:List<String>):ByteArray = values.joinToString(",","[","]"){wireQuote(it)}.toByteArray(Charsets.UTF_8)
+    private fun wireQuote(value:String):String = buildString {
+        append('"');for((i,c) in value.withIndex())when(c){
+            '"'->append("\\\"");'\\'->append("\\\\");'\b'->append("\\b");'\u000c'->append("\\f");'\n'->append("\\n");'\r'->append("\\r");'\t'->append("\\t")
+            else->{val loneHigh=c.isHighSurrogate()&&(i+1==value.length||!value[i+1].isLowSurrogate());val loneLow=c.isLowSurrogate()&&(i==0||!value[i-1].isHighSurrogate());if(c.code<32||loneHigh||loneLow)append("\\u"+c.code.toString(16).padStart(4,'0'))else append(c)}
+        };append('"')
+    }
     fun canonical(value: Any?): String = when (value) {
         null, JSONObject.NULL -> "null"
         is JSONObject -> value.keys().asSequence().toList().sorted().joinToString(",", "{", "}") { JSONObject.quote(it) + ":" + canonical(value.get(it)) }

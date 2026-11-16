@@ -7,8 +7,8 @@ import java.util.concurrent.TimeUnit
 import java.io.DataOutputStream
 
 /** Root companion only. A timeout/missing broker denies cache delivery, never arms defaults. */
-internal class EarlyPlanBroker(private val cache:HookPlanCache):AutoCloseable{
-    private val server=LocalServerSocket("adh_early_plans_v1")
+internal class EarlyPlanBroker(private val cache:HookPlanCache,socketName:String="adh_early_plans_v1"):AutoCloseable{
+    private val server=LocalServerSocket(socketName)
     private val workers=ThreadPoolExecutor(2,2,30,TimeUnit.SECONDS,ArrayBlockingQueue(2))
     private val thread=Thread({while(!server.isClosedCompat()){
         val socket=try{server.accept()}catch(_:Exception){break}

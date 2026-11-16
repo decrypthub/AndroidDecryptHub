@@ -23,6 +23,7 @@ android {
     buildFeatures {
         buildConfig = true
     }
+    if(providers.gradleProperty("adhP5Sandbox").orNull=="true") sourceSets["debug"].java.srcDir("src/p5Fixture/java")
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

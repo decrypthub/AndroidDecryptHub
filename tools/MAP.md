@@ -5,6 +5,12 @@ script or touching `verify_all.sh`.**
 
 ## Shared libraries (source these, don't execute)
 
+## P5 isolated Android acceptance (2026-11-16)
+
+`verify_p5_device.ts SERIAL TRANSPORT_ID PRIVATE_ASSETS NEW_PRIVATE_OUTPUT` is explicit real-device acceptance with a new package, private root domain, UDS, Host ports/data and cleanup/protection checks. It never flashes a module or restarts the running service. Build `:p5sandbox` and `:daemon` with `-PadhP5Sandbox=true` and an Agent built for port 18761. `p5_isolated_host.ts` maps only the private fixture endpoints into the production dispatcher. `verify_v132_p5_stdio.sh` is the registered host-only Kotlin interoperability gate; missing offline fixture is SKIP, never real-device fallback. Details and real/unverified boundaries: [P5_ANDROID_ACCEPTANCE.md](../docs/P5_ANDROID_ACCEPTANCE.md).
+
+## Shared library reference
+
 2026-10-24 analysis checks: `verify_v122_native_controls.sh` uses an existing Android sandbox (not
 run on the new agent this round); v123 verifies real paged QBDI and diagnostics; v124 verifies
 random-parameter crypto evidence; v125 verifies native controls/FP8/aggregate returns/unhook;
