@@ -1,5 +1,7 @@
 # ADH 功能状态（2026-10-24 更新：通用原生分析与证据核验；各轮实测范围见 §2）
 
+> **2026-11-16 P2**：人类任务工作台已在隔离 Host/浏览器验收，含任务搜索分页、详情/结果/下载、有限副作用日志、配置草稿与显式冲突核对、暂停恢复、接管/交还与 unknown。完整 Host **525 passed / 0 failed / 0 skipped**；模块与限制见 [P2_WORKBENCH.md](P2_WORKBENCH.md)。交付在独立 worktree；原工作目录保留 P1，当前服务与真实设备未部署或升级。
+
 > **2026-11-16 P1**：统一操作执行层、SQLite 持久任务、revision/epoch 控制权、人类修改防旧写、超时 unknown/晚到证据、真实取消状态与最小面板已在隔离 Host 验证。公共 adh-cli 同步提供 run/tasks/control，尚未发布或替换本机安装包。接口/限制见 [P1_OPERATIONS.md](P1_OPERATIONS.md)；完整计数见 PROGRESS.md。源码未加载到当前分析服务，USB/LAN 新协议与真机效果不在本轮验收范围。
 
 > **2026-11-16 P0**：Host 作用域完整保留、MCP/面板共享设置、显式非破坏性初始化与独立维护已实现并纳入隔离回归；详情与验证见 [P0_HOST_STATE.md](P0_HOST_STATE.md) / PROGRESS.md。未部署、未重启当前服务、未执行真机升级验收；不要将源码状态当成当前运行实例状态。

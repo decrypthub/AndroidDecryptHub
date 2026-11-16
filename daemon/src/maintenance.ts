@@ -9,12 +9,12 @@ export function maintainData(options: { dryRun?: boolean; confirm?: boolean } = 
   if (!dryRun && options.confirm !== true) return { ok: false, dryRun, error: 'retention requires confirm:true; preview first' };
   if(!dryRun)checkpoint();
   const plan = previewArtifactRetention();
-  const captures = dryRun ? retainCaptureFiles(DATA_DIR, settings.capture, true) : localEffect(() => retainCaptureFiles(DATA_DIR, settings.capture, false));
+  const captures = dryRun ? retainCaptureFiles(DATA_DIR, settings.capture, true) : localEffect(() => retainCaptureFiles(DATA_DIR, settings.capture, false),{kind:'host',action:'maintenance.captures'});
   if (dryRun) return {
     ok: captures.errors.length === 0, dryRun, policy: structuredClone({ capture: settings.capture, artifacts: settings.artifacts }),
     artifacts: { count: plan.evict.length, bytes: plan.evict.reduce((n, a) => n + a.size, 0), remainingBytes: plan.remainingBytes }, captures,
   };
-  const artifacts = localEffect(() => pruneArtifactsAndIndex());
+  const artifacts = localEffect(() => pruneArtifactsAndIndex(),{kind:'host',action:'maintenance.artifacts'});
   applyCaptureRetainCap();
   return { ok: !!artifacts && artifacts.failed === 0 && captures.errors.length === 0, dryRun, artifacts, captures };
 }

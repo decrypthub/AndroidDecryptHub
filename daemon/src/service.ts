@@ -85,7 +85,7 @@ export function sendCmd(sessionId: string, op: string, args: Record<string, unkn
       timer, sessionId,
     });
     sock.write(frameJson({ ...args, t: 'cmd', id, op }));
-  }),sessionId);
+  }),sessionId,{kind:'agent',action:op,session:sessionId});
 }
 
 export const pickSid = (sid?: string) => {

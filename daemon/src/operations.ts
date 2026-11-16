@@ -11,6 +11,7 @@ export interface Principal { role: Role; id: string; source: string }
 export interface OperationMeta {
   expectedRevision?: number; controlEpoch?: number; hostEpoch?: number;
   idempotencyKey?: string; taskId?: string; timeoutMs?: number;
+  expectedTaskRevision?: number;
 }
 const terminal = new Set(['succeeded','failed','cancelled','unknown']);
 function canonical(value: any): string {
@@ -19,6 +20,7 @@ function canonical(value: any): string {
   return JSON.stringify(value) ?? 'null';
 }
 const fail = (code: string, message: string): never => { throw new OperationError(code, message); };
+function touchTask(task: Task) { task.revision=(task.revision ?? 0)+1;task.updatedAt=Date.now(); }
 function validResource(resource: string) {
   if(resource!=='host' && !/^target:[\w:.-]{1,400}$/.test(resource))fail('INVALID_RESOURCE','invalid control resource');
 }
@@ -56,10 +58,11 @@ export class Operations {
         op.state = op.state === 'queued' ? 'cancelled' : 'unknown';
         op.error = { code: 'HOST_RESTARTED', message: 'Host stopped; execution is not replayed' };
         op.updatedAt = Date.now();
+        for(const effect of op.effects || [])if(effect.state==='dispatched'){effect.state='unknown';effect.uncertainAt=Date.now();}
         let control = data.controls[op.resource];
         if (control?.active === op.id) delete control.active;
         if (op.mode === 'write' && op.state === 'unknown') (control ??= data.controls[op.resource] = freshControl()).uncertain = op.id;
-        if (data.tasks[op.taskId]) data.tasks[op.taskId].state = op.state === 'unknown' ? 'unknown' : 'paused';
+        if (data.tasks[op.taskId]) {data.tasks[op.taskId].state = op.state === 'unknown' ? 'unknown' : 'paused';touchTask(data.tasks[op.taskId]);}
       }
       data.hosts[this.host] = { pid: process.pid, hostname: hostname(), active: true };
     });
@@ -73,7 +76,7 @@ export class Operations {
   createTask(title: string, principal: Principal, implicit = false): Task {
     return this.store.update(data => {
       const task: Task = { id: randomUUID(), title: String(title || 'analysis').slice(0,256), owner: principal.role,
-        state: 'active', createdAt: Date.now(), updatedAt: Date.now(), implicit };
+        state: 'active', createdAt: Date.now(), updatedAt: Date.now(), implicit, revision:0,createdBy:principal.id,source:principal.source };
       data.tasks[task.id] = task; return task;
     });
   }
@@ -98,8 +101,8 @@ export class Operations {
     for (const op of Object.values(data.operations)) {
       if (op.owner !== 'ai' || op.state !== 'queued' || resource !== 'host' && op.resource !== resource) continue;
       op.state = 'failed'; op.error = { code: 'STALE_CONTROL', message: 'operator changed control before dispatch' };
-      op.updatedAt = Date.now();
-      if (data.tasks[op.taskId]) data.tasks[op.taskId].state = 'paused';
+      op.updatedAt = Date.now();op.finishedAt=Date.now();op.settled=true;
+      if (data.tasks[op.taskId]) {data.tasks[op.taskId].state = 'paused';touchTask(data.tasks[op.taskId]);}
     }
     return control;
   }
@@ -118,7 +121,7 @@ export class Operations {
         if (uncertain && !uncertain.settled && data.hosts[uncertain.host]?.active) fail('OPERATION_RUNNING','a timed-out handler is still awaiting target completion');
         delete control.uncertain; control.epoch++; control.revision++;
         if(uncertain)uncertain.resolvedAt=Date.now();
-        if(uncertain && data.tasks[uncertain.taskId]?.state==='unknown')data.tasks[uncertain.taskId].state='paused';
+        if(uncertain && data.tasks[uncertain.taskId]?.state==='unknown'){data.tasks[uncertain.taskId].state='paused';touchTask(data.tasks[uncertain.taskId]);}
       } else fail('INVALID_ACTION', 'control action must be takeover|pause|release|resolve');
       return { resource, ...control, hostEpoch: data.controls.host.epoch };
     });
@@ -152,7 +155,7 @@ export class Operations {
       if (meta.taskId && !task) fail('TASK_NOT_FOUND', 'task does not exist');
       if (task && (task.owner !== principal.role && principal.role !== 'operator' || task.state !== 'active')) fail('TASK_PAUSED', 'task is not active or is owned by the operator');
       if (!task) {
-        task = { id: randomUUID(), title: spec.name, owner: principal.role, state: 'active', createdAt: Date.now(), updatedAt: Date.now(), implicit: true };
+        task = { id: randomUUID(), title: spec.name, owner: principal.role, state: 'active', createdAt: Date.now(), updatedAt: Date.now(), implicit: true,revision:0,createdBy:principal.id,source:principal.source };
         data.tasks[task.id] = task;
       }
       const timeout = meta.timeoutMs ?? 120000;
@@ -160,7 +163,7 @@ export class Operations {
       const op: Operation = { id: randomUUID(), taskId: task.id, name: spec.name, resource, mode: spec.mode, owner: principal.role,
         actorId: principal.id, source: principal.source, host: this.host, state: 'queued', createdAt: Date.now(), updatedAt: Date.now(),
         deadline: Date.now() + timeout, ...expected, key, fingerprint, mayHaveExecuted: false, inFlight: 0,
-        uncertainEffect: false, cancelRequested: false, settled: false };
+        uncertainEffect: false, cancelRequested: false, settled: false,effects:[],effectsDropped:0 };
       data.operations[op.id] = op; return op;
     });
     if (operation.host === this.host && operation.state === 'queued' && !this.completions.has(operation.id)) {
@@ -184,16 +187,35 @@ export class Operations {
     if (includeResult && op.lateResultFile) out.lateResult = JSON.parse(readFileSync(op.lateResultFile, 'utf8'));
     return out;
   }
-  list(taskId?: string, limit = 50, offset = 0) {
+  findOperation(key: string, principal: Principal, includeResult = false) {
+    const op=Object.values(this.store.read().operations).find(op=>op.key===key && op.owner===principal.role);
+    if(!op)fail('OPERATION_NOT_FOUND','no operation is recorded for this intent key; pending transport is not proof of non-execution');
+    return this.getOperation(op.id,includeResult);
+  }
+  getTask(id: string) {
+    const data=this.store.read(),task=Object.hasOwn(data.tasks,id)?data.tasks[id]:undefined;
+    if(!task)fail('TASK_NOT_FOUND','task does not exist');
+    const ops=Object.values(data.operations).filter(op=>op.taskId===id),counts:Record<string,number>={};
+    for(const op of ops)counts[op.state]=(counts[op.state]||0)+1;
+    return {...task,revision:task.revision ?? 0,operationCounts:counts,totalOperations:ops.length,
+      resources:[...new Set(ops.map(op=>op.resource))],unresolved:ops.filter(op=>op.state==='unknown'&&!op.resolvedAt).length};
+  }
+  list(taskId?: string, limit = 50, offset = 0, filters: {q?:string;state?:string;owner?:string} = {}) {
     const data = this.store.read();
-    const tasks=Object.values(data.tasks).sort((a,b) => b.createdAt-a.createdAt || b.id.localeCompare(a.id));
-    const operations=Object.values(data.operations).filter(op => !taskId || op.taskId === taskId).sort((a,b) => b.createdAt-a.createdAt || b.id.localeCompare(a.id));
+    const query=String(filters.q||'').slice(0,256).toLowerCase();
+    const tasks=Object.values(data.tasks).filter(t=>(!taskId||t.id===taskId)&&(!query||[t.title,t.id,t.source,t.createdBy].join(' ').toLowerCase().includes(query))&&(!filters.state||t.state===filters.state)&&(!filters.owner||t.owner===filters.owner))
+      .sort((a,b) => b.createdAt-a.createdAt || b.id.localeCompare(a.id)).map(t=>({...t,revision:t.revision ?? 0}));
+    const selected=new Set(tasks.map(t=>t.id));
+    const operations=Object.values(data.operations).filter(op => selected.has(op.taskId)).sort((a,b) => b.createdAt-a.createdAt || b.id.localeCompare(a.id));
     return {tasks:tasks.slice(offset,offset+limit),operations:operations.slice(offset,offset+limit),totalTasks:tasks.length,totalOperations:operations.length,
+      nextTaskOffset:offset+limit<tasks.length?offset+limit:null,nextOperationOffset:offset+limit<operations.length?offset+limit:null,
       nextOffset:offset+limit<Math.max(tasks.length,operations.length)?offset+limit:null};
   }
-  taskAction(id: string, action: string, principal: Principal) {
+  taskAction(id: string, action: string, principal: Principal, expectedRevision?: number) {
     const out = this.store.update(data => {
       const task = Object.hasOwn(data.tasks,id)?data.tasks[id]:undefined; if (!task) fail('TASK_NOT_FOUND', 'task does not exist');
+      if(expectedRevision!==undefined && (!Number.isSafeInteger(expectedRevision)||expectedRevision<0))fail('INVALID_TASK_VERSION','expectedTaskRevision must be a non-negative integer');
+      if(expectedRevision!==undefined && expectedRevision!==(task.revision ?? 0))fail('STALE_TASK','task version changed; reload and review before changing its state');
       if (principal.role !== 'operator' && task.owner !== principal.role) fail('OPERATOR_REQUIRED', 'task is owned by operator');
       if(principal.role!=='operator' && task.heldByOperator)fail('OPERATOR_REQUIRED','operator paused this task; explicit operator resume required');
       if(principal.role!=='operator' && Object.values(data.operations).some(op=>op.taskId===id && op.owner==='operator' && (!terminal.has(op.state)||op.state==='unknown'&&!op.resolvedAt)))fail('OPERATOR_REQUIRED','task contains unfinished operator work');
@@ -218,7 +240,7 @@ export class Operations {
         if (Object.values(data.operations).some(op=>op.taskId===id && op.state==='unknown' && !op.resolvedAt))task.state='unknown';
         else if (!Object.values(data.operations).some(op => op.taskId === id && !terminal.has(op.state))) task.state = 'cancelled';
       } else fail('INVALID_ACTION', 'task action must be pause|resume|cancel|complete');
-      task.updatedAt = Date.now(); return task;
+      touchTask(task); return task;
     });
     this.pump(); return out;
   }
@@ -231,7 +253,7 @@ export class Operations {
       current.cancelRequested=true;
       if(current.state==='queued'){current.state='cancelled';current.settled=true;}else current.state='cancel_requested';
       current.updatedAt=Date.now();
-      if(data.tasks[current.taskId].implicit)data.tasks[current.taskId].state=current.state==='cancelled'?'cancelled':'cancel_requested';
+      if(data.tasks[current.taskId].implicit){data.tasks[current.taskId].state=current.state==='cancelled'?'cancelled':'cancel_requested';touchTask(data.tasks[current.taskId]);}
     });
     this.pump();return this.getOperation(id);
   }
@@ -249,6 +271,9 @@ export class Operations {
     catch (failure) { state = 'unknown'; error = { code: 'RESULT_PERSIST_FAILED', message: (failure as Error).message }; }
     this.store.update(data => {
       const op = data.operations[id]; op.state = state; op.updatedAt = Date.now(); op.error = error; op.resultFile = file;
+      if(!this.running.has(id)&&!op.inFlight)op.settled=true;
+      op.finishedAt=Date.now();
+      if(state==='unknown')for(const effect of op.effects || [])if(effect.state==='dispatched'){effect.state='unknown';effect.uncertainAt=Date.now();}
       const control = data.controls[op.resource];
       if (control?.active === id) delete control.active;
       if (op.mode === 'write' && state === 'unknown') (data.controls[op.resource] ??= freshControl()).uncertain = id;
@@ -258,7 +283,7 @@ export class Operations {
         task.state=Object.values(data.operations).some(x=>x.taskId===task.id && x.state==='unknown' && !x.resolvedAt)?'unknown':task.implicit && state==='succeeded'?'completed':'cancelled';
       }
       else if (task.implicit && task.state === 'active') task.state = 'completed';
-      task.updatedAt = Date.now();
+      touchTask(task);
     });
     this.notify(id);
   }
@@ -294,7 +319,7 @@ export class Operations {
         if (control.uncertain || data.controls.host.uncertain || op.resource === 'host' && Object.values(data.controls).some(c => c.uncertain)) fail('UNKNOWN_EXECUTION','resource has unresolved side effects; inspect and resolve first');
         control.revision++; control.active=op.id; op.appliedRevision=control.revision;
       }
-      op.state='running'; op.updatedAt=Date.now(); return op;
+      op.state='running'; op.startedAt=Date.now();op.updatedAt=Date.now(); return op;
     });
     this.running.add(op.id);
     const targetEpochs = new Map<string,{resource:string;epoch:number}>();
@@ -321,8 +346,17 @@ export class Operations {
           }
         }
       },
-      dispatched: () => this.store.update(data => { const x=data.operations[op.id]; x.mayHaveExecuted=true; x.inFlight++; }),
-      acknowledged: uncertain => { if(!this.closed)this.store.update(data => { const x=data.operations[op.id]; x.inFlight=Math.max(0,x.inFlight-1); x.uncertainEffect ||= uncertain; }); },
+      dispatched: description => this.store.update(data => {
+        const x=data.operations[op.id];x.mayHaveExecuted=true;x.inFlight++;
+        if((x.effects?.length||0)>=64){x.effectsDropped=(x.effectsDropped||0)+1;return;}
+        const id=randomUUID();(x.effects??=[]).push({id,kind:String(description?.kind||'external').slice(0,40),action:String(description?.action||'external request').slice(0,160),
+          session:description?.session,state:'dispatched',startedAt:Date.now()});return id;
+      }),
+      acknowledged: (uncertain,id,failed) => { if(!this.closed)this.store.update(data => {
+        const x=data.operations[op.id];x.inFlight=Math.max(0,x.inFlight-1);x.uncertainEffect ||= uncertain;
+        const effect=id&&x.effects?.find(effect=>effect.id===id);
+        if(effect){effect.state=uncertain?'unknown':failed?'failed':'acknowledged';effect.completedAt=Date.now();if(uncertain)effect.uncertainAt=Date.now();}
+      }); },
     };
     const timer=setTimeout(() => {
       if(this.closed)return;

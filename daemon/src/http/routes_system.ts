@@ -32,12 +32,17 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
     const buf = await readFile(file);
     res.writeHead(200, {
       'content-type': contentType,
-      'cache-control': 'public, max-age=86400',
+      'cache-control': 'no-cache',
       'access-control-allow-origin': '*',
     });
     res.end(buf);
   };
   return [
+    { path:'/workbench',handler:servePublic('workbench.html','text/html; charset=utf-8') },
+    { path:'/workbench.css',handler:servePublic('workbench.css','text/css; charset=utf-8') },
+    { path:'/operation-client.js',handler:servePublic('operation-client.js','text/javascript; charset=utf-8') },
+    { path:'/workbench-model.js',handler:servePublic('workbench-model.js','text/javascript; charset=utf-8') },
+    { path:'/workbench.js',handler:servePublic('workbench.js','text/javascript; charset=utf-8') },
     { path:'/operations.js',handler:servePublic('operations.js','text/javascript; charset=utf-8') },
     { path: '/api/apps', handler: async () => {
       const scope = await scopedApps();

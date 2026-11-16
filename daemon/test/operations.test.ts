@@ -108,6 +108,7 @@ test('timeout records unknown, blocks retries and preserves late evidence withou
     release();await until(()=>f.engine.getOperation(result.id).settled);
     const observed=f.engine.getOperation(result.id,true);
     assert.equal(observed.state,'unknown');assert.equal(observed.lateResult.value,'late');
+    assert.equal(observed.effects[0].state,'acknowledged');assert.ok(observed.effects[0].uncertainAt,'late acknowledgement must preserve prior uncertainty');
     f.engine.control('resolve','target:one',human,metadata(f.engine),true);
     assert.equal((await f.engine.execute(spec,{},ai,metadata(f.engine),async()=>({ok:true}))).state,'succeeded');
   }finally{f.close();}
@@ -203,6 +204,7 @@ test('queued deadline expiration confirms nothing was sent, including while the 
     await until(()=>f.engine.getOperation(op.id).state==='failed');
     assert.equal(f.engine.getOperation(op.id).error.code,'DEADLINE_EXCEEDED');
     assert.equal(f.engine.getOperation(op.id).mayHaveExecuted,false);
+    assert.equal(f.engine.getOperation(op.id).settled,true,'no Host handler was started for queued expiration');
   }finally{f.close();}
 });
 

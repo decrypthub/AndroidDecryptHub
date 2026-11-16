@@ -4967,3 +4967,20 @@ v71 另触发的 1000 条历史捕获尚未完整恢复：现存事件日志缺�
 验证：`npm run typecheck` 通过；完整 Host **511 passed / 0 failed / 0 skipped**（P0 基线 489 + P1 新增 22）；v71 **92 tools / 0 problems / PASS**。公共 CLI 源码 **14 passed**（新增 6），包括旧版本不刷新、角色凭据显式性与异步提交。Host 合成 TCP agent 夹具先禁设备子进程，实际跑 REST/MCP、Python CLI、开发 CLI、断连和取消；执行器另测恢复、双 Host 共享控制、损坏保护、排队 deadline、局部副作用和晚到失败。只读动作逐工具明确列出，oracle diff/stability、批量 Hook 不会因伪造 status/plan 字段绕过写保护；未知 POST 动作默认受保护。
 
 面板通过独立随机端口、OS 临时数据目录与合成 agent 实测：查看任务，接入合成 operator 凭据，取消未派发任务，接管/释放，以及修改 ui.displayCap 形成 succeeded 操作。浏览器检查用 ego-browser，本轮自建 UI 夹具已停止。原 8088 非 watch 进程保持原 PID/启动时间；没有请求其业务接口、启动正式 index、修改 adb reverse、运行设备门禁、启停目标、发布安装包或重启服务。P1 Host fencing 不提供目标侧撤销、完整设备身份、USB/LAN 新 RPC 或 TLS；这些仍属后续阶段。
+
+
+## 2026-11-16：P2 人类任务工作台与配置冲突核对
+
+按用户授权继续 P2，以 AI 自主分析为主，补齐人类查看、修改、暂停恢复和接管。交付位于独立分支/worktree，原工作目录保留 P1 提交且干净。运行中服务会动态读取 public 静态文件，不能仅靠“不重启 Node”保护现场；因此本轮不把 P2 静态文件放进其工作目录。
+
+- 现场“任务工作台”和独立 /workbench 共用一套视图；“设置”打开同一配置编辑器，原数据维护入口保留。支持全库搜索、负责人/状态过滤、任务/操作独立分页、任务版本与状态详情、来源/目标/控制版本、原始/晚到结果及已保存 JSON 下载。默认观察或编辑本地草稿不改变控制权。
+- Task 增加兼容旧记录的 revision、创建来源；面板 pause/resume/cancel/complete 使用 expectedTaskRevision 做 CAS。旧观察被拒绝且保留人类暂停，恢复任务不自动重放失效操作；人类接管与任务暂停分别控制，不把交还 AI 当作自动恢复全部任务。
+- 实际副作用边界保存最多 64 条元数据日志，独立 ID 对应并行派发/响应；超出报告 effectsDropped。只记录 agent 命令名或 Host 动作及派发/确认时间，不记录参数、密钥和 shell 文本。新空日志与旧缺失日志分开显示；acknowledged 不是目标业务成功，unknown/曾经未知/晚到结果持续如实保留。
+- 配置草稿固定编辑版本，提交仅包含变化字段；冲突并列展示编辑时、当前值和草稿意图。显式 rebase 保留本来修改的字段，并采用其他字段的最新值，不自动提交。导入先校验并进入草稿，导出已读 Host 配置。提交等待期间冻结本份草稿，独立跟踪实际结果；传输未确认时保留意图键供只读查询，不重发。
+- 切换控制范围先清空旧快照，读取失败不会误操作旧目标；接管/交还/unknown 核对都使用已显示版本。操作员凭据只在页面内存，连接不自动接管。工作台关闭只停本地轮询，不取消任务、不自动释放控制权。
+
+验证：新增回归 14 项；完整 Host **525 passed / 0 failed / 0 skipped**，类型检查通过，v71 **92 tools / 0 problems / PASS**，git diff --check 通过。隔离 worktree 显式 ADH_CLI_SOURCE 继续实测公共 Python CLI 和开发 CLI；复用未改动依赖，复制校验一致的 sandbox ELF，不依赖真实设备或分析产物。回归覆盖任务 CAS、旧记录、分页、并行/有界日志、意图查询、配置差异/rebase/校验、未确认传输和真实 HTTP 入口。
+
+浏览器用 ego-browser 对随机 loopback 端口、临时数据目录与合成 agent 实测：任务详情/结果/下载，结果 HTML 作为纯文本，任务暂停恢复及 STALE_TASK，unknown/晚到结果/显式人工核对，接管交还，配置 STALE_CONTROL 后草稿仍保留，再核对提交仅改人类字段且保留 AI 同时改过的其他字段。另测导入只改草稿、导出已读配置、独立/现场入口不叠开旧设置、390px 窄屏。实际查看截图并修复了嵌入页 main 全局样式冲突；关闭了浏览器任务并只停止本轮自建 UI fixture。
+
+完整范围、迁移/API 和限制见 [P2_WORKBENCH.md](P2_WORKBENCH.md)，同步 REQUIREMENTS、DEVELOPMENT_PLAN、FEATURE_STATUS、MAP 和 MCP 清单。未部署、未推送、未发布安装包；未启动正式 index、修改 adb reverse、运行设备门禁、启停目标或重启当前服务。当前 8088 仍是原非 watch 进程。P2 面板需要配套 P2 Host；副作用日志有界且不等同完整目标审计，设备域服务、USB/LAN 新 RPC、TLS 和目标侧撤销仍属后续阶段。

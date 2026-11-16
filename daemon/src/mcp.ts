@@ -405,8 +405,13 @@ export const MCP_TOOLS: { name: string; description: string; inputSchema: any; h
 
 // Optional at schema level because reads need no control token; writes enforce it at dispatch.
 for (const tool of MCP_TOOLS) {
-  (tool.inputSchema as any).properties._operation ??= { type:'object', properties:{ expectedRevision:{type:'integer'},controlEpoch:{type:'integer'},hostEpoch:{type:'integer'},taskId:{type:'string'},idempotencyKey:{type:'string'},timeoutMs:{type:'integer'} } };
+  const metadata=(tool.inputSchema as any).properties._operation ??= { type:'object' };
+  metadata.properties ??= { expectedRevision:{type:'integer'},controlEpoch:{type:'integer'},hostEpoch:{type:'integer'},taskId:{type:'string'},idempotencyKey:{type:'string'},timeoutMs:{type:'integer'},expectedTaskRevision:{type:'integer'} };
 }
+Object.assign(MCP_TOOLS.find(t=>t.name==='operations')!.inputSchema.properties,{
+  q:{type:'string'},state:{type:'string'},owner:{type:'string',enum:['ai','operator']},idempotencyKey:{type:'string'},
+});
+MCP_TOOLS.find(t=>t.name==='operations')!.description+=' Task get returns revision, operationCounts and resources; task state actions may supply _operation.expectedTaskRevision for CAS (the human workbench always does). list supports q/state/owner and separate task/operation pagination. get can recover the current role\'s operation by idempotencyKey without resubmitting. Effects contain bounded dispatch/acknowledgement metadata, not command payloads or proof of target outcome.';
 const requestOperations = new Map<string,string>();
 export const MCP_MAP = new Map(MCP_TOOLS.map(t => [t.name, t]));
 

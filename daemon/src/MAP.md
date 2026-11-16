@@ -2,6 +2,13 @@
 
 ADH Daemon / `adhd` (Node 24 + TypeScript, runs `.ts` directly, no build step). HTTP/WS `8088`, agent TCP `8761`. App pin: `GET /<package>` and `POST /<package>/mcp`.
 
+## P2 human workbench (2026-11-16)
+
+- `public/workbench.js`, `workbench.css`, `workbench.html`: the SAME task/configuration UI embedded in the live viewer and served at `/workbench`. `public/operations.js` is the thin live-view adapter; `operation-client.js` owns the shared credential/transport and legacy fetch guard. `workbench-model.js` isolates draft diff/validation/explicit rebase without DOM/I/O.
+- Task get includes revision, resources and operation counts; panel task changes use `_operation.expectedTaskRevision`. Filtered lists expose independent task/operation pagination. Intent-key get is read-only recovery, never replay.
+- `execution_context.ts` assigns bounded effect IDs so concurrent dispatch/acknowledgement pairs remain correct; `operations.ts` persists up to 64 metadata-only effect rows and omission counts. New operation timestamps are factual; missing legacy data stays missing. Do not include payloads/keys or turn an acknowledgement into proof of target success.
+- UI is validated against a synthetic loopback Host, never the active service. Worktree isolation protects dynamically served static assets too. See [`docs/P2_WORKBENCH.md`](../../docs/P2_WORKBENCH.md).
+
 ## P1 execution / durable tasks / operator control (2026-11-16)
 
 - `operation_registry.ts` classifies effects/resources for MCP and REST; `operation_host.ts` resolves target generations and shared API responses. `operations.ts` owns versions, scheduling, idempotency, cancellation, deadline/unknown/recovery and takeover. `task_store.ts` is an authoritative SQLite ledger, never a rebuildable cache.

@@ -18,7 +18,7 @@ export function patchSettings(patch: unknown, applyCapture = applyCaptureEnabled
     const applied = mergeSettings(patch, candidate);
     if (!applied.length) return { ok: false, code: 'INVALID_SETTINGS', error: 'no supported settings sections', persisted: false, applied };
     checkpoint();
-    try { localEffect(() => saveSettings(candidate)); }
+    try { localEffect(() => saveSettings(candidate),{kind:'host',action:'settings.save'}); }
     catch (error) {
       return { ok: false, code: 'SETTINGS_PERSIST_FAILED', error: `settings were not saved or applied: ${(error as Error).message}`, persisted: false, applied: [] as string[], settings: structuredClone(settings) };
     }

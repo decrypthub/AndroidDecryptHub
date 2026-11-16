@@ -64,19 +64,18 @@ export async function manageOperations(a:any,principal:Principal,lookup?:ToolLoo
     return {ok:true,...engine.snapshot(a.resource || engine.resource(spec)),role:principal.role};
   }
   if(a.action==='create')return {ok:true,task:engine.createTask(a.title,principal)};
-  if(a.action==='list')return {ok:true,...engine.list(a.taskId,Math.max(1,Math.min(100,Number(a.limit)||50)),Math.max(0,Math.min(10000,Number(a.offset)||0)))};
+  const page=()=>({limit:Math.max(1,Math.min(100,Math.floor(Number(a.limit)||50))),offset:Math.max(0,Math.min(10000,Math.floor(Number(a.offset)||0)))});
+  if(a.action==='list')return {ok:true,...engine.list(a.taskId,page().limit,page().offset,{q:a.q,state:a.state,owner:a.owner})};
   if(a.action==='get') {
     if(a.taskId) {
-      const tasks=engine.store.read().tasks;
-      const task=Object.hasOwn(tasks,a.taskId)?tasks[a.taskId]:undefined;
-      if(!task)throw new OperationError('TASK_NOT_FOUND','task does not exist');
-      return {ok:true,task,...engine.list(a.taskId)};
+      return {ok:true,task:engine.getTask(a.taskId),...engine.list(a.taskId,page().limit,page().offset)};
     }
+    if(a.idempotencyKey)return {ok:true,operation:engine.findOperation(String(a.idempotencyKey),principal,a.includeResult===true)};
     return {ok:true,operation:engine.getOperation(a.id,a.includeResult===true)};
   }
   if(['pause','resume','cancel','complete'].includes(a.action)) {
     if(a.id && a.action==='cancel')return {ok:true,operation:engine.cancelOperation(a.id,principal)};
-    return {ok:true,task:engine.taskAction(a.taskId,a.action,principal)};
+    return {ok:true,task:engine.taskAction(a.taskId,a.action,principal,a._operation?.expectedTaskRevision)};
   }
   if(['takeover','release','resolve','hold'].includes(a.action)) {
     return {ok:true,...engine.control(a.action==='hold'?'pause':a.action,a.resource || (a.session?targetResource(a.session):'host'),principal,a._operation || {},a.acknowledge===true)};

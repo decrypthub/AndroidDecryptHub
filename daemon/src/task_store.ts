@@ -9,6 +9,14 @@ export interface Task {
   id: string; title: string; owner: Role; state: 'active' | 'paused' | 'cancel_requested' | 'cancelled' | 'completed' | 'unknown';
   createdAt: number; updatedAt: number; implicit: boolean;
   heldByOperator?: boolean;
+  revision?: number;
+  createdBy?: string;
+  source?: string;
+}
+export interface Effect {
+  id: string; kind: string; action: string; session?: string;
+  state: 'dispatched' | 'acknowledged' | 'failed' | 'unknown';
+  startedAt: number; completedAt?: number; uncertainAt?: number;
 }
 export interface Operation {
   id: string; taskId: string; name: string; resource: string; mode: 'read' | 'analysis' | 'write'; owner: Role;
@@ -19,6 +27,7 @@ export interface Operation {
   lateResultFile?: string; partialEffects?: boolean;
   appliedRevision?: number;
   resolvedAt?: number;
+  startedAt?: number; finishedAt?: number; effects?: Effect[]; effectsDropped?: number;
 }
 export interface Ledger {
   schemaVersion: 1; controls: Record<string, Control>; tasks: Record<string, Task>; operations: Record<string, Operation>;

@@ -6,21 +6,22 @@ export class OperationError extends Error {
 }
 export interface ExecutionContext {
   checkpoint(session?: string): void;
-  dispatched(): void;
-  acknowledged(uncertain: boolean): void;
+  dispatched(description?: EffectDescription): string | void;
+  acknowledged(uncertain: boolean, id?: string | void, failed?: boolean): void;
 }
+export interface EffectDescription { kind: string; action: string; session?: string }
 export const executionContext = new AsyncLocalStorage<ExecutionContext>();
 export function checkpoint(session?: string) { executionContext.getStore()?.checkpoint(session); }
 export function detached<T>(fn: () => T): T { return executionContext.exit(fn); }
-export async function trackedEffect<T>(fn: () => Promise<T>, session?: string): Promise<T> {
+export async function trackedEffect<T>(fn: () => Promise<T>, session?: string, description?: EffectDescription): Promise<T> {
   const context = executionContext.getStore();
-  context?.checkpoint(session); context?.dispatched();
-  try { const value = await fn(); context?.acknowledged(false); return value; }
-  catch (error) { context?.acknowledged(true); throw error; }
+  context?.checkpoint(session); const id=context?.dispatched(description);
+  try { const value = await fn(); context?.acknowledged(false,id); return value; }
+  catch (error) { context?.acknowledged(true,id,true); throw error; }
 }
-export function localEffect<T>(fn: () => T): T {
+export function localEffect<T>(fn: () => T, description?: EffectDescription): T {
   const context = executionContext.getStore();
-  context?.checkpoint(); context?.dispatched();
-  try { const value = fn(); context?.acknowledged(false); return value; }
-  catch (error) { context?.acknowledged(false); throw error; }
+  context?.checkpoint(); const id=context?.dispatched(description || {kind:'host',action:'local mutation'});
+  try { const value = fn(); context?.acknowledged(false,id); return value; }
+  catch (error) { context?.acknowledged(false,id,true); throw error; }
 }

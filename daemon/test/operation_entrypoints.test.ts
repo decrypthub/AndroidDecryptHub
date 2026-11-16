@@ -5,6 +5,7 @@ import cp from 'node:child_process';
 import {promisify} from 'node:util';
 import {syncBuiltinESMExports} from 'node:module';
 import {resolve,join} from 'node:path';
+import {existsSync} from 'node:fs';
 
 const executeChild=promisify(cp.execFile),oldExec=cp.execFile,oldSpawn=cp.spawn;
 cp.execFile=(()=>{throw Error('device subprocess forbidden in P1 fixture');}) as unknown as typeof cp.execFile;
@@ -109,9 +110,11 @@ test('MCP cancellation notification binds to the client request and reports a ru
 });
 
 test('public Python CLI submits to this same Host, reads durable results and never upgrades AI using an inherited operator key',async t=>{
+  const cliSource=process.env.ADH_CLI_SOURCE||resolve('../..','adh-cli','src');
+  if(!existsSync(join(cliSource,'adh','__init__.py'))){t.skip('adjacent adh-cli source unavailable; set ADH_CLI_SOURCE in isolated worktrees');return;}
   try{await executeChild('python',['--version'],{timeout:5000,windowsHide:true});}catch(error){if((error as any).code==='ENOENT'){t.skip('Python unavailable');return;}throw error;}
   const session='entry-cli',fake=fakeSession(session);
-  const env={...process.env,PYTHONPATH:resolve('../..','adh-cli','src'),ADH_CONFIG_PATH:join(DATA_DIR,'cli-fixture.json'),PYTHONIOENCODING:'utf-8',ADH_OPERATOR_TOKEN:key};
+  const env={...process.env,PYTHONPATH:cliSource,ADH_CONFIG_PATH:join(DATA_DIR,'cli-fixture.json'),PYTHONIOENCODING:'utf-8',ADH_OPERATOR_TOKEN:key};
   async function cli(args:string[]) {
     const result=await executeChild('python',['-m','adh',...args,'--endpoint',base,'--json'],{env,timeout:15000,windowsHide:true});
     return JSON.parse(String(result.stdout));
