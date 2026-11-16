@@ -10,7 +10,7 @@ Generated from the source registry (${MCP_TOOLS.length} tools). Endpoint: \`POST
 
 Writes require \`_operation\` state/control versions: [P1_OPERATIONS.md](P1_OPERATIONS.md). Human workbench, task CAS, intent lookup and effect metadata: [P2_WORKBENCH.md](P2_WORKBENCH.md). Read queries remain compatible; unversioned writes fail closed.
 
-Verified installation identities, device capabilities and USB/ADB RPC: [P3_DEVICE_DOMAIN.md](P3_DEVICE_DOMAIN.md). Legacy target sessions remain unassociated; LAN/TLS are not implemented.
+Verified installation identities and USB RPC: [P3_DEVICE_DOMAIN.md](P3_DEVICE_DOMAIN.md). Paired LAN/TLS, permissions, revocation, the capability parity matrix and durable reconciliation: [P4_LAN_AUTH.md](P4_LAN_AUTH.md). Legacy target sessions remain unassociated; unmigrated device/LAN routes fail explicitly.
 
 | Tool | Description | Args |
 |---|---|---|

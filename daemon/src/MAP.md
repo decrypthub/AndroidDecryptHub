@@ -132,3 +132,7 @@ Shared injection-backend matrix: `backendMatrix()` (sessions by entry + Zygisk p
 ### P3 设备域
 
 `devices.ts` 持久保存安装身份并管理临时连接，`device_protocol.ts` 提供 adh.device/1 codec/签名与预算，`transport/adb_device.ts` 只负责显式发现、固定 ADB transport、USB bootstrap 和自有 forward。`device_host.ts` 延迟初始化；MCP devices / `http/routes_devices.ts` 共用它与 operation_registry。`operations.ts` 的 device:UUID 范围不等于旧 target session；二者未关联时保守互斥，人类持有与 unknown 都不能跨边界绕过。见 docs/P3_DEVICE_DOMAIN.md。不要把 legacy agent 的 serial 或 Host 上唯一设备当成已验证身份。
+
+### P4 LAN 与对账
+
+`transport/device_transport.ts` 抽象认证流，`lan_device.ts` 强制 TLS/SPKI 固定与客户端挑战证明，不导入 ADB。`device_client_identity.ts` 在显式 pair 时排他发布持久密钥，禁止自动轮换；私钥不进入任务或设备缓存。`device_host.ts` 的 reconcile 校验操作归属/完整结果集合，再由 operations 保存独立证据文件，原终态和控制隔离保留。operation_registry 静态区分 connectionOnly/securityOnly，恢复与安全收缩不能变成普通设备写入；给旧工具/路由添加设备/LAN 选择会明确 unsupported。工作台显示最近对账及多个 unknown，元数据版本变化清除人工确认。详见 docs/P4_LAN_AUTH.md；LAN 发现仅列已知端点，不扫描。

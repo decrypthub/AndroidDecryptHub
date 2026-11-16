@@ -19,8 +19,8 @@ export async function startDeviceFixture(existingRoot?:string){
   let metadata:any;
   for(let n=0;n<300;n++){if(child.exitCode!==null)throw Error('JVM fixture exited: '+failure);if(existsSync(ready)){try{metadata=JSON.parse(readFileSync(ready,'utf8'));break;}catch{}}await pause(50);}
   if(!metadata){child.kill();throw Error('JVM fixture did not become ready: '+failure);}
-  const stop=async()=>{if(child.exitCode===null){const done=new Promise<void>(r=>child.once('exit',()=>r()));child.kill();await done;}};
-  return {root,port:metadata.port as number,deviceId:metadata.deviceId as string,child,stop,async close(){await stop();rmSync(checkedRoot(root),{recursive:true,force:true});}};
+  const stop=async()=>{if(child.exitCode===null&&child.signalCode===null){const done=new Promise<void>(r=>child.once('exit',()=>r()));child.kill();await done;}};
+  return {root,port:metadata.port as number,lanPort:metadata.lanPort as number|undefined,deviceId:metadata.deviceId as string,child,stop,async close(){await stop();rmSync(checkedRoot(root),{recursive:true,force:true});}};
 }
 type Fixture=Awaited<ReturnType<typeof startDeviceFixture>>;
 export class FakeAdb {

@@ -11,12 +11,14 @@ import com.adh.daemon.device.DeviceFiles
 import com.adh.daemon.device.DeviceIdentity
 import com.adh.daemon.device.DeviceOperations
 import com.adh.daemon.device.LocalDeviceRpcServer
+import com.adh.daemon.device.DeviceNetwork
 import android.system.Os
 
 object AdhDeviceDaemon {
     private const val TAG = "AdhDeviceDaemon"
     private const val PUBLISH_INTERVAL_MS = 1_000L
     private var rpc: LocalDeviceRpcServer? = null
+    private var network: DeviceNetwork? = null
     private var domainLock: java.nio.channels.FileLock? = null
 
     @JvmStatic
@@ -42,6 +44,7 @@ object AdhDeviceDaemon {
         domainLock = checkNotNull(lockChannel.tryLock()) { "another device domain instance owns this installation" }
         val identity = DeviceIdentity(files, File("/proc/sys/kernel/random/boot_id").readText().trim())
         val operations = DeviceOperations(identity, files, AndroidDeviceBackend(context, files))
+        network = DeviceNetwork(operations, files) // default disabled; restore only explicitly saved TLS configuration
         val service = RootScopeBinder(ManagerCallerVerifier(context), operations)
         // RPC availability never tears down the pre-existing authenticated Binder service.
         runCatching { rpc = LocalDeviceRpcServer(operations) }.onFailure { Log.e(TAG, "USB RPC unavailable; Binder remains available", it) }

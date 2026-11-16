@@ -7,6 +7,8 @@ export class OperationError extends Error {
 export interface ExecutionContext {
   operationId?: string;
   resource?: string;
+  connectionOnly?: boolean;
+  securityOnly?: boolean;
   principalRole?: 'ai' | 'operator';
   remainingMs?(): number;
   checkpoint(session?: string): void;

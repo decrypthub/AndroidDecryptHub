@@ -51,14 +51,19 @@
     $('awRefresh').onclick=()=>work(refresh);$('awScope').onchange=()=>work(async()=>{$('awAck').checked=false;await refreshControl();});$('awAck').onchange=permissions;
     async function refreshControl(){const resource=$('awScope').value,generation=++controlGeneration;
       if(s.control?.resource!==resource){s.control=null;$('awControlText').textContent='正在读取所选范围的控制状态…';$('awUncertain').hidden=true;permissions();}
-      const value=await client.management({action:'snapshot',resource});if(resource!==$('awScope').value||generation!==controlGeneration)return;s.control=value;
+      const value=await client.management({action:'snapshot',resource});if(resource!==$('awScope').value||generation!==controlGeneration)return;
+      if(s.control&&(s.control.revision!==value.revision||s.control.epoch!==value.epoch||s.control.hostEpoch!==value.hostEpoch))$('awAck').checked=false;s.control=value;
       $('awControlText').textContent=`${value.owner==='operator'?'人类持有控制':'AI 拥有控制'}${value.uncertain?' · 写入已隔离':''} · 状态版本 ${value.revision} · 控制代次 ${value.epoch} · Host 代次 ${value.hostEpoch}`;
+      let unknowns=$('awUnknownOperations');if(!unknowns){unknowns=element('div',undefined,'aw-row aw-spaced');unknowns.id='awUnknownOperations';$('awUncertain').append(unknowns);}
+      unknowns.replaceChildren(...(value.uncertainOperations||[]).map((id,n)=>button(`查看未知操作 ${n+1} · ${id.slice(0,8)}`,()=>work(()=>goOperation(id)))));
+      $('awAck').parentElement.lastChild.textContent='我已核对本范围全部未知操作的实际状态';
       $('awUncertain').hidden=!value.uncertain;permissions();}
     async function control(action){const observed=s.control;if(!observed)throw Error('请先读取控制状态');await client.controlAction(observed,action,$('awAck').checked);$('awAck').checked=false;notice(action==='release'?'已交还 AI':action==='resolve'?'已记录人工核对':'已接管所选范围',action==='release'?'已失效的旧指令不会自动重放。被人工暂停的任务仍需单独恢复。':action==='resolve'?'原 unknown 记录仍保留；这不证明目标命令已停止。':'旧 AI 写入已受版本约束；查询仍可继续。','','success');await refresh();}
     $('awTake').onclick=()=>work(()=>control('takeover'));$('awRelease').onclick=()=>work(()=>control('release'));$('awResolve').onclick=()=>work(()=>control('resolve'));
     $('awUnknownDetail').onclick=()=>work(()=>goOperation(s.control.uncertain));
     function addScope(resource,label){if(![...$('awScope').options].some(o=>o.value===resource))$('awScope').add(new Option(label||resource,resource));}
-    async function refreshAgents(){const {value}=await client.request('/api/agents');for(const a of value.filter(a=>a.online))addScope(`target:${a.sessionId}:${a.pid}:${a.uid}:${a.starttimeTicks||'legacy'}`,`${a.process||a.package} · PID ${a.pid}`);}
+    async function refreshAgents(){const {value}=await client.request('/api/agents');for(const a of value.filter(a=>a.online))addScope(`target:${a.sessionId}:${a.pid}:${a.uid}:${a.starttimeTicks||'legacy'}`,`${a.process||a.package} · PID ${a.pid}`);
+      const devices=await client.request('/api/devices');for(const d of devices.value.devices)addScope('device:'+d.deviceId,`设备 · ${d.deviceId.slice(0,8)} · ${d.online?'已连接':'离线缓存'}`);}
     async function refreshList(){const generation=++s.listGeneration;const value=await client.management({action:'list',limit:25,offset:s.listOffset,...filters()});if(generation!==s.listGeneration)return;
       $('awTaskCount').textContent=`${value.totalTasks} 项任务 · 第 ${Math.floor(s.listOffset/25)+1} 页`;$('awTaskPrev').disabled=s.listOffset===0;$('awTaskNext').disabled=value.nextTaskOffset===null;
       const signature=json(value.tasks)+'|'+s.taskId;if(signature===lastListRender)return;lastListRender=signature;
@@ -90,9 +95,9 @@
     async function goOperation(id){const {operation}=await client.management({action:'get',id});view('tasks');if(s.taskId!==operation.taskId)await selectTask(operation.taskId);await selectOperation(id);}
     async function selectOperation(id){s.opId=id;for(const row of $('awOperationRows').querySelectorAll('[data-operation]'))row.setAttribute('aria-selected',String(row.dataset.operation===id));s.op=null;s.resultLoaded=false;s.resultSignature='';lastOpRender='';await refreshOperation();}
     async function refreshOperation(force=false){if(!s.opId)return;const id=s.opId,generation=++s.operationGeneration;let {operation}=await client.management({action:'get',id});if(id!==s.opId||generation!==s.operationGeneration)return;
-      const signature=(operation.resultFile||'')+'|'+(operation.lateResultFile||'');
+      const signature=(operation.resultFile||'')+'|'+(operation.lateResultFile||'')+'|'+(operation.reconciliations||[]).map(r=>r.file).join('|');
       if(s.resultLoaded&&(force||signature!==s.resultSignature)){({operation}=await client.management({action:'get',id,includeResult:true}));if(id!==s.opId||generation!==s.operationGeneration)return;s.resultSignature=signature;}
-      else if(s.resultLoaded){operation.result=s.op?.result;operation.lateResult=s.op?.lateResult;}
+      else if(s.resultLoaded){operation.result=s.op?.result;operation.lateResult=s.op?.lateResult;operation.reconciliations=s.op?.reconciliations;}
       s.op=operation;const renderSignature=json(operation)+'|'+s.resultLoaded;if(renderSignature!==lastOpRender){lastOpRender=renderSignature;renderOperation();}
     }
     function facts(parent,pairs){const list=element('dl',undefined,'aw-facts');for(const [label,value]of pairs){const item=element('div');item.append(element('dt',label),element('dd',value));list.append(item);}parent.append(list);}
@@ -110,6 +115,8 @@
       if(op.effectsDropped)effects.append(element('p',`日志达到 64 条上限；另有 ${op.effectsDropped} 条派发步骤未逐条保存，不能把当前列表当成全部证据。`,'aw-muted aw-spaced'));area.append(effects);
       const results=element('section',undefined,'aw-detail-section');results.append(element('h3','已保存结果与晚到证据'));if(!s.resultLoaded)results.append(button('加载已保存结果',()=>work(async()=>{s.resultLoaded=true;await refreshOperation(true);}),'aw-spaced'));
       else {for(const [key,label]of [['result','原始结果'],['lateResult','晚到结果（不改变原终态）']]){const box=element('div',undefined,'aw-result-block');box.append(element('h3',label));if(op[key]===undefined)box.append(element('p','尚无已保存内容；不代表目标没有执行。'));else {const raw=json(op[key]);box.append(element('pre',raw.length>120000?raw.slice(0,120000)+'\n…界面预览已截断':raw));if(raw.length>120000)box.append(element('p','界面预览限制 120000 字符，下载可查看全部已保存内容。'));if(op[key]?.omitted)box.append(element('p','Host 只保存了结果摘要，下载文件也不包含被省略的原始数据。'));box.append(button('下载'+label,()=>download(op[key],`${op.id}-${key}.json`)));}results.append(box);}}
+      if(op.reconciliations?.length){results.append(element('p',`已保存 ${op.reconciliations.length} 次设备对账；查询没有重放指令，也不改变 Host 原终态。`,'aw-muted aw-spaced'));
+        if(s.resultLoaded)for(const [index,record]of op.reconciliations.entries()){const box=element('div',undefined,'aw-result-block');box.append(element('h3',`设备对账证据 ${index+1}（保留原终态）`));const raw=json(record.evidence);box.append(element('pre',raw.length>120000?raw.slice(0,120000)+'\n…界面预览已截断':raw));box.append(button('下载设备对账证据',()=>download(record,`${op.id}-reconciliation-${index+1}.json`)));results.append(box);}}
       area.append(results);permissions();
     }
     function buildFields(){const groups=new Map();for(const field of M.fields){if(!groups.has(field.group)){const fieldset=element('fieldset');fieldset.append(element('legend',field.group));const content=element('div',undefined,'aw-fields');fieldset.append(content);groups.set(field.group,{fieldset,content});}

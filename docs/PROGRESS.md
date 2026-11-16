@@ -5001,3 +5001,22 @@ v71 另触发的 1000 条历史捕获尚未完整恢复：现存事件日志缺�
 局限如实保留：Android abstract UDS/peer UID/SELinux 可达性及真实 Binder、证书挂载、第三方进程效果没有真机验证；旧审计 P3 的 agent 本地 UDS/fd 原型尚未交付。LAN/TLS/配对/撤销、bulk、agent 路由和旧 ADB-only 诊断/helper/fs 迁移仍待 P4；现有 agent 通道明确 legacy/unverified，不宣称全能力 LAN 对等。完整 API、身份语义、未知核对顺序与迁移见 [P3_DEVICE_DOMAIN.md](P3_DEVICE_DOMAIN.md)。
 
 未部署、未推送、未发布或安装产物，未启动正式 index、未请求当前 8088 业务接口、未操作真机/当前会话或重启服务；只启动并清理 OS 临时目录里的 JVM/HTTP 测试夹具。
+
+
+## 2026-11-16：P4 LAN TLS、配对授权、撤销与持久对账
+
+从 P3 258e69a 新建独立 worktree/分支 feat/adh-p4-lan-20261116，不把源码或静态页面放进原分析实例工作目录。当前 Android 主工作区仍为 P1、P2/P3 worktree 均保留干净，公共 adh-cli 源码未修改或发布。
+
+- 设备新增默认关闭的 TLS listener；公共 JCA/JSSE 签发与安装身份密钥一致的自签证书，限定 TLS1.2/1.3 与 AEAD/ECDHE 套件。可信 USB 登记 Host 公钥，LAN 只接受挑战签名，拒绝 USB token；Host 在发送证明前检查 SPKI 固定值/证书签名/有效期。仍复用 adh.device/1 dispatcher、业务、代际与持久日志，没有新增分析/HTTP/MCP/数据库。
+- grant 持久保存 read/write/manage 权限和撤销历史；每次派发在域锁内检查权限，撤销持久化后关闭既有流，重启不恢复授权。密钥/授权损坏不自动重建；并发 Host 初次创建同一客户端密钥不能互相覆盖。配对不明确时可经 USB 采用已观察的有效 grant，避免再授权。
+- Host 认证连接抽象分开 ADB 与 LAN adapter，同一 deviceId 去重、多连接明确选择。缓存登记不等于实时授权。LAN list/discover 仅返回已知缓存端点，不扫描。未迁的 agent Hook/内存/trace/dump、diagnostics/fs/root helper/bulk 明确 unsupported；旧 MCP/REST 接口收到设备/LAN 选择也明确拒绝，不默默忽略后走 ADB。
+- 新设备 operations.reconcile 有界查询实际结果，not-found 不当成未发送；Host 验证归属和结果集合后持久附加证据，更新任务元数据但不改变原 unknown/控制权，不重放。连接恢复与撤销/关闭 LAN 属于静态、受限的 connectionOnly/securityOnly，允许在 unknown 下恢复查询或收缩权限，禁止伪装成普通设备写入。
+- 多个 unknown 保留全部 ID，新增未知推进版本，人工核对要求当前快照且所有 Host handler 已结束。工作台列出设备范围、多个未知及对账预览/下载，版本变化清除人工确认；解除隔离只保留原记录并暂停任务，不自动恢复或重试。
+
+验证：完整 Host **547 passed / 0 failed / 0 skipped**，类型检查通过（P3 538 + P4 9）；真实 Node↔生产 Kotlin TLS 流、TLS1.2/1.3、USB/LAN 身份和能力一致，撤去模拟 ADB 后仍可查询/修改已迁能力。包含撤销旧连接及重启持久化、只读授权、错误证书/明文/重放/USB-token 拒绝、响应丢失和设备退出后的只读对账、派发计数为 1、Host 密钥并发创建，以及实际公共 Python CLI 配对、REST/MCP 控制/对账/撤销与旧路由拒绝。Android 离线 JVM **66 passed / 0 failed / 0 skipped**（core22/daemon16/Manager28）；Device Daemon debug 构建与 Manager 编译通过，只用全零测试 pin。v71 **93 tools / 0 problems / PASS**，MCP 文档生成器 --check 通过，whitespace 按既有 CRLF 用 cr-at-eol 检查。
+
+浏览器使用 ego-browser 对独立随机 loopback Host 与合成证据实测：保留 unknown、HTML 文本无执行、完整下载、多未知入口、版本改变清除确认、人工核对与交还 AI 不自动恢复任务。实际看过截图；浏览器空间关闭，只停止本轮自建 fixture，未触及当前 8088。
+
+边界：只完成隔离 JVM TLS/模拟 ADB 路径与构建；真实 Android JSSE/provider、UDS/SELinux/防火墙/无线网络、真实 Binder/进程和系统 CA 效果未验证。没有 agent 本地路由、bulk、广播发现、无 USB 首次配对/手机配对 UI、在线证书轮换/归档；未迁能力继续如实 unsupported。完整协议/权限、能力矩阵、配对/恢复顺序和数据文件见 [P4_LAN_AUTH.md](P4_LAN_AUTH.md)。
+
+未部署、未推送、未发布安装包、未执行真实 ADB、未启停目标、未改 reverse/forward、未重启当前分析服务；交付本轮源码提交。

@@ -25,6 +25,9 @@ export interface Operation {
   key: string; fingerprint: string; mayHaveExecuted: boolean; inFlight: number; uncertainEffect: boolean;
   cancelRequested: boolean; settled: boolean; error?: { code: string; message: string }; resultFile?: string;
   lateResultFile?: string; partialEffects?: boolean;
+  connectionOnly?: boolean;
+  securityOnly?: boolean;
+  reconciliations?: {at:number;deviceId:string;file:string}[];
   appliedRevision?: number;
   resolvedAt?: number;
   startedAt?: number; finishedAt?: number; effects?: Effect[]; effectsDropped?: number;

@@ -50,6 +50,8 @@ internal class DeviceIdentity(private val files: DeviceFiles, val bootId: String
         token = access.getString("token"); check(Regex("[a-f0-9]{64}").matches(token))
     }
     fun authenticated(candidate: String): Boolean = java.security.MessageDigest.isEqual(token.toByteArray(), candidate.toByteArray())
+    fun sign(bytes: ByteArray): ByteArray = Signature.getInstance("SHA256withRSA").run { initSign(privateKey); update(bytes); sign() }
+    fun tlsKey(): java.security.PrivateKey = privateKey // internal TLS key manager only; never an RPC field
     fun descriptor(): JSONObject = JSONObject().put("deviceId", deviceId).put("bootId", bootId).put("daemonInstanceId", instanceId).put("identityFingerprint", fingerprint)
     fun signHello(requestId: String, nonce: String, info: JSONObject, capabilities: JSONObject): JSONObject {
         val payload = descriptor().put("protocol", DeviceRpc.PROTOCOL).put("requestId", requestId).put("clientNonce", nonce).put("info", info).put("capabilities", capabilities).toString().toByteArray(Charsets.UTF_8)

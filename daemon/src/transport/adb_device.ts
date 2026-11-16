@@ -4,6 +4,7 @@ import net from 'node:net';
 import { randomBytes,randomUUID } from 'node:crypto';
 import { DEVICE_BOOTSTRAP,DEVICE_SOCKET,DeviceRpcClient,parseBootstrap,verifyHello,deviceFail,DeviceError,type DevicePeer } from '../device_protocol.ts';
 import { checkpoint,executionContext } from '../execution_context.ts';
+import type {DeviceConnection} from './device_transport.ts';
 
 export interface AdbDevice {serial:string;state:string;transportId?:string;model?:string;link:'usb'|'adb-tcp'|'unknown'}
 export type AdbRunner=(args:string[],options?:{timeout?:number;maxBuffer?:number})=>Promise<string>;
@@ -21,7 +22,7 @@ export function parseAdbDevices(raw:string):AdbDevice[]{
     rows.push({serial,state,transportId:/^\d+$/.test(props.transport_id||'')?props.transport_id:undefined,model:props.model,link:props.usb?'usb':serial.includes(':')?'adb-tcp':'unknown'});
   }return rows;
 }
-export interface AdbConnection {id:string;transport:'adb';serial:string;transportId?:string;port:number;peer:DevicePeer;rpc:DeviceRpcClient;close:()=>Promise<{removed:boolean;confirmed:boolean;reason?:string}>}
+export interface AdbConnection extends DeviceConnection {transport:'adb';serial:string}
 export class AdbDeviceTransport {
   readonly run:AdbRunner;private dial:(port:number)=>Promise<net.Socket>;
   constructor(run:AdbRunner=realAdbRunner,dial:(port:number)=>Promise<net.Socket>=port=>new Promise((resolve,reject)=>{

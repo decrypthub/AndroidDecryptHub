@@ -1,6 +1,7 @@
 import {deviceMethodMode} from './device_protocol.ts';
+import {OperationError} from './execution_context.ts';
 export type Mode = 'read' | 'analysis' | 'write';
-export interface OperationSpec { name: string; mode: Mode; session?: string; global?: boolean; deviceId?: string }
+export interface OperationSpec { name: string; mode: Mode; session?: string; global?: boolean; deviceId?: string; connectionOnly?:boolean; securityOnly?:boolean }
 const readTools = new Set([
   'analysis_guide','process_list','backends','capabilities','dumps_list','runtime_diagnostics','agent_ping',
   'memory_maps','maps_query','memory_read','memory_disasm','memory_search','memory_scan_magic','got_enum',
@@ -23,9 +24,10 @@ const readActions: Record<string, readonly string[]> = {
 export function describeTool(name: string, args: Record<string, any> = {}): OperationSpec {
   if(name==='devices'){
     const action=args.action||'list';
-    const mode:Mode=['list','discover','info','capabilities'].includes(action)?'read':action==='call'?deviceMethodMode(args.method):'write';
-    return {name,mode,deviceId:['connect','list','discover'].includes(action)?undefined:args.deviceId,global:action==='connect'||!args.deviceId};
+    const mode:Mode=['list','discover','info','capabilities'].includes(action)?'read':action==='reconcile'?'analysis':action==='call'?deviceMethodMode(args.method):'write';
+    return {name,mode,deviceId:['list','discover'].includes(action)||action==='connect'&&args.transport!=='lan'?undefined:args.deviceId,global:action==='connect'&&args.transport!=='lan'||!args.deviceId,connectionOnly:['connect','disconnect'].includes(action),securityOnly:action==='call'&&(args.method==='pairings.revoke'||args.method==='lan.configure'&&args.params?.enabled===false)};
   }
+  if(name!=='operations'&&(Object.hasOwn(args,'deviceId')||Object.hasOwn(args,'connectionId')||args.transport==='lan'))throw new OperationError('UNSUPPORTED_DEVICE_ROUTING','this legacy tool has no verified device/LAN route; use devices capabilities, never fall back to ADB');
   let mode: Mode = readTools.has(name) ? 'read' : analysisTools.has(name) ? 'analysis' : 'write';
   if (Object.hasOwn(readActions,name) && readActions[name].includes(args.action)) mode = 'read';
   if (name === 'settings') mode = args.action === 'get' || args.action === 'maintenance' && args.dryRun !== false ? 'read' : 'write';
@@ -58,6 +60,7 @@ const analysisPaths = new Set(['/api/native/syscall_scan','/api/native/crypto_co
   '/api/unpack/dump-one','/api/unpack/dump-so-one','/api/unpack/pull-so','/api/unpack/dump-all','/api/unpack/dump-so']);
 export function describeHttp(path: string, method: string, args: Record<string, any> = {}): OperationSpec {
   if(path==='/api/devices')return describeTool('devices',args);
+  if(Object.hasOwn(args,'deviceId')||Object.hasOwn(args,'connectionId')||args.transport==='lan')throw new OperationError('UNSUPPORTED_DEVICE_ROUTING','this legacy route has no verified device/LAN route; no ADB fallback');
   const alias = routeTools[path];
   if (path === '/api/config') return describeTool('settings', { ...args, action: method === 'POST' ? 'patch' : 'get' });
   if (path === '/api/scope') return describeTool(method === 'POST' ? 'scope_set' : 'scope_list', args);

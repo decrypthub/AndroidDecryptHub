@@ -63,7 +63,7 @@ export class Operations {
         for(const effect of op.effects || [])if(effect.state==='dispatched'){effect.state='unknown';effect.uncertainAt=Date.now();}
         let control = data.controls[op.resource];
         if (control?.active === op.id) delete control.active;
-        if (op.mode === 'write' && op.state === 'unknown') (control ??= data.controls[op.resource] = freshControl()).uncertain = op.id;
+        if (op.mode === 'write' && op.state === 'unknown') {control ??= data.controls[op.resource]=freshControl();control.uncertain ||= op.id;control.revision++;}
         if (data.tasks[op.taskId]) {data.tasks[op.taskId].state = op.state === 'unknown' ? 'unknown' : 'paused';touchTask(data.tasks[op.taskId]);}
       }
       data.hosts[this.host] = { pid: process.pid, hostname: hostname(), active: true };
@@ -72,7 +72,7 @@ export class Operations {
   snapshot(resource = 'host') {
     validResource(resource);
     const data = this.store.read(), control = data.controls[resource] ?? freshControl();
-    return { resource, ...control, hostEpoch: data.controls.host.epoch };
+    return { resource, ...control, hostEpoch: data.controls.host.epoch,uncertainOperations:Object.values(data.operations).filter(op=>op.resource===resource&&op.mode==='write'&&op.state==='unknown'&&!op.resolvedAt).map(op=>op.id) };
   }
   resource(spec: OperationSpec) {const resource=spec.deviceId?'device:'+spec.deviceId:spec.global || !spec.session ? 'host' : this.targetResource(spec.session);validResource(resource);return resource;}
   invalidateResource(resource:string){
@@ -125,11 +125,10 @@ export class Operations {
       else if (action === 'resolve') {
         if (!acknowledge) fail('ACKNOWLEDGEMENT_REQUIRED', 'inspect actual state and acknowledge unknown side effects explicitly');
         if (control.active) fail('OPERATION_RUNNING', 'a Host handler is still running; its later effects cannot be released');
-        const uncertain = control.uncertain && data.operations[control.uncertain];
-        if (uncertain && !uncertain.settled && data.hosts[uncertain.host]?.active) fail('OPERATION_RUNNING','a timed-out handler is still awaiting target completion');
+        const unknowns = Object.values(data.operations).filter(op=>op.resource===resource&&op.mode==='write'&&op.state==='unknown'&&!op.resolvedAt);
+        if (unknowns.some(op=>!op.settled&&data.hosts[op.host]?.active)) fail('OPERATION_RUNNING','a timed-out handler is still awaiting target completion');
         delete control.uncertain; control.epoch++; control.revision++;
-        if(uncertain)uncertain.resolvedAt=Date.now();
-        if(uncertain && data.tasks[uncertain.taskId]?.state==='unknown'){data.tasks[uncertain.taskId].state='paused';touchTask(data.tasks[uncertain.taskId]);}
+        for(const uncertain of unknowns){uncertain.resolvedAt=Date.now();if(data.tasks[uncertain.taskId]?.state==='unknown'){data.tasks[uncertain.taskId].state='paused';touchTask(data.tasks[uncertain.taskId]);}}
       } else fail('INVALID_ACTION', 'control action must be takeover|pause|release|resolve');
       return { resource, ...control, hostEpoch: data.controls.host.epoch };
     });
@@ -171,7 +170,7 @@ export class Operations {
       const op: Operation = { id: randomUUID(), taskId: task.id, name: spec.name, resource, mode: spec.mode, owner: principal.role,
         actorId: principal.id, source: principal.source, host: this.host, state: 'queued', createdAt: Date.now(), updatedAt: Date.now(),
         deadline: Date.now() + timeout, ...expected, key, fingerprint, mayHaveExecuted: false, inFlight: 0,
-        uncertainEffect: false, cancelRequested: false, settled: false,effects:[],effectsDropped:0 };
+        uncertainEffect: false, cancelRequested: false, settled: false,effects:[],effectsDropped:0,connectionOnly:spec.connectionOnly===true,securityOnly:spec.securityOnly===true };
       data.operations[op.id] = op; return op;
     });
     if (operation.host === this.host && operation.state === 'queued' && !this.completions.has(operation.id)) {
@@ -193,7 +192,14 @@ export class Operations {
     const out: any = structuredClone(op);
     if (includeResult && op.resultFile) out.result = JSON.parse(readFileSync(op.resultFile, 'utf8'));
     if (includeResult && op.lateResultFile) out.lateResult = JSON.parse(readFileSync(op.lateResultFile, 'utf8'));
+    if (includeResult && op.reconciliations) out.reconciliations=op.reconciliations.map(r=>({...r,evidence:JSON.parse(readFileSync(r.file,'utf8'))}));
     return out;
+  }
+  recordDeviceReconciliation(id:string,deviceId:string,evidence:any){
+    const op=this.getOperation(id);if(op.resource!=='device:'+deviceId||op.name!=='devices'||op.mode!=='write'||op.connectionOnly)fail('TARGET_CHANGED','reconciliation must name a device mutation on this device');
+    const file=this.saveResult(`${id}.reconcile.${randomUUID()}`,evidence);
+    this.store.update(data=>{const current=data.operations[id];(current.reconciliations??=[]).push({at:Date.now(),deviceId,file});if(current.reconciliations.length>8)current.reconciliations.shift();current.updatedAt=Date.now();touchTask(data.tasks[current.taskId]);});
+    return this.getOperation(id,true); // preserve unknown/error/control history
   }
   findOperation(key: string, principal: Principal, includeResult = false) {
     const op=Object.values(this.store.read().operations).find(op=>op.key===key && op.owner===principal.role);
@@ -284,7 +290,7 @@ export class Operations {
       if(state==='unknown')for(const effect of op.effects || [])if(effect.state==='dispatched'){effect.state='unknown';effect.uncertainAt=Date.now();}
       const control = data.controls[op.resource];
       if (control?.active === id) delete control.active;
-      if (op.mode === 'write' && state === 'unknown') (data.controls[op.resource] ??= freshControl()).uncertain = id;
+      if (op.mode === 'write' && state === 'unknown') {const c=data.controls[op.resource]??=freshControl();c.uncertain ||= id;c.revision++;}
       const task = data.tasks[op.taskId];
       if (state === 'unknown') task.state = 'unknown';
       else if (task.state === 'cancel_requested' && !Object.values(data.operations).some(x => x.taskId === task.id && !terminal.has(x.state))) {
@@ -324,7 +330,7 @@ export class Operations {
         this.assertVersion(data,op.resource,{role:op.owner,id:op.actorId,source:op.source},op);
         const control = data.controls[op.resource] ??= freshControl();
         if(Object.entries(data.controls).some(([key,c])=>c.active && resourcesConflict(op.resource,key)))fail('OPERATION_BUSY','resource is in use by another Host operation');
-        if (Object.entries(data.controls).some(([key,c])=>c.uncertain && resourcesConflict(op.resource,key))) fail('UNKNOWN_EXECUTION','resource has unresolved side effects; inspect and resolve first');
+        if (!op.connectionOnly && !op.securityOnly && Object.entries(data.controls).some(([key,c])=>c.uncertain && resourcesConflict(op.resource,key))) fail('UNKNOWN_EXECUTION','resource has unresolved side effects; inspect and resolve first');
         control.revision++; control.active=op.id; op.appliedRevision=control.revision;
       }
       op.state='running'; op.startedAt=Date.now();op.updatedAt=Date.now(); return op;
@@ -333,7 +339,7 @@ export class Operations {
     const targetEpochs = new Map<string,{resource:string;epoch:number}>();
     const initial = this.store.read();
     const context: ExecutionContext = {
-      operationId:op.id,resource:op.resource,principalRole:op.owner,remainingMs:()=>Math.max(1,op.deadline-Date.now()),
+      operationId:op.id,resource:op.resource,connectionOnly:op.connectionOnly,securityOnly:op.securityOnly,principalRole:op.owner,remainingMs:()=>Math.max(1,op.deadline-Date.now()),
       checkpoint: session => {
         if(this.closed)fail('HOST_CLOSED','coordinator closed');
         const data=this.store.read(), current=data.operations[op.id];
