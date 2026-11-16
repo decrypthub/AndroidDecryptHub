@@ -4953,3 +4953,17 @@ v71 另触发的 1000 条历史捕获尚未完整恢复：现存事件日志缺�
 - 测试 launcher 移除继承的操作者 data/captures 根。新回归使用临时文件、fake ScopeIO、fake agent/进程接口和 loopback 随机测试端口；纯导入 fixture 禁止监听和设备子进程，过期证据/损坏索引都是合成数据。
 
 源码/迁移/维护入口见 docs/P0_HOST_STATE.md。旧审计清单保留为基线快照。验证：新增隔离回归 25 项全部通过；完整 Host 回归 **489 passed / 0 failed / 0 skipped**；`npm run typecheck` rc=0；v71 注册表 **91 tools / 0 problems / PASS**；`git diff --check` 通过。当前 8088 的原非 watch Node 进程仍在；未运行 dev_up、设备门禁、刷机、目标启停或服务重启，没有把修复注入运行现场。
+
+## 2026-11-16：P1 共享执行、持久任务与人类接管
+
+按用户授权继续 P1，在独立分支实现，保留当前服务和真机分析现场。Host 的 MCP、包固定 MCP、REST、面板和两种 CLI 共用 Operations；新增第 92 个 MCP 工具 operations。普通读取保持兼容，旧无版本写入拒绝执行。操作使用 taskId、idempotencyKey 与 revision/controlEpoch/hostEpoch，目标绑定 session/PID/UID/starttime 代际；Host 全局与目标写互斥，不同目标写可并行。
+
+- 权威 SQLite 保存任务、操作、控制权、派发/确认状态，结果/晚到证据原子落盘；重启只恢复状态，不重放指令，损坏不自动重建。具名 task 与单次 operation 分开取消，完成/取消任务不复活。容量限制和省略结果明确返回。
+- 私有 operator 凭据识别人类请求，JSON 角色伪造无效。人类首次修改自动接管，接管使旧排队操作失效并阻止运行任务后续副作用；全局写不能绕开被接管目标，释放必须显式执行。延迟自动策略绑定旧 epoch，接管/释放后不会自动复活。
+- 超时前未派发为 failed；派发后 deadline/断连为 unknown、隔离写作用域；晚到成功/失败单独保留，人工检查后显式 resolve。运行中取消是 cancel_requested，已经完成则保留 succeeded + cancelRequested；中断多步操作标明 partialEffects。命令 cmd.done 不再暗示目标已停止。
+- 面板新增“任务与控制权”，可看状态/来源/版本、接管、释放、取消、核对 unknown。已有修改按钮通过共享准备/执行接口使用读取版本，不自动重试旧编辑。公共 adh-cli 新增 run/tasks/control、call --operation、显式 --operator；默认与 stdio 代理不继承人类权限。开发 CLI 的工具检查和脱壳也走版本契约。
+- 同步 REQUIREMENTS、DEVELOPMENT_PLAN、FEATURE_STATUS、MAP、MCP 清单、P0 迁移说明；按此次用户方向同步 AGENTS/CLAUDE 的面板可修改/接管范围。完整模块/API/限制见 [P1_OPERATIONS.md](P1_OPERATIONS.md)。
+
+验证：`npm run typecheck` 通过；完整 Host **511 passed / 0 failed / 0 skipped**（P0 基线 489 + P1 新增 22）；v71 **92 tools / 0 problems / PASS**。公共 CLI 源码 **14 passed**（新增 6），包括旧版本不刷新、角色凭据显式性与异步提交。Host 合成 TCP agent 夹具先禁设备子进程，实际跑 REST/MCP、Python CLI、开发 CLI、断连和取消；执行器另测恢复、双 Host 共享控制、损坏保护、排队 deadline、局部副作用和晚到失败。只读动作逐工具明确列出，oracle diff/stability、批量 Hook 不会因伪造 status/plan 字段绕过写保护；未知 POST 动作默认受保护。
+
+面板通过独立随机端口、OS 临时数据目录与合成 agent 实测：查看任务，接入合成 operator 凭据，取消未派发任务，接管/释放，以及修改 ui.displayCap 形成 succeeded 操作。浏览器检查用 ego-browser，本轮自建 UI 夹具已停止。原 8088 非 watch 进程保持原 PID/启动时间；没有请求其业务接口、启动正式 index、修改 adb reverse、运行设备门禁、启停目标、发布安装包或重启服务。P1 Host fencing 不提供目标侧撤销、完整设备身份、USB/LAN 新 RPC 或 TLS；这些仍属后续阶段。

@@ -1,3 +1,6 @@
+import { executeManaged, getOperations, manageOperations } from './operation_host.ts';
+import { describeTool } from './operation_registry.ts';
+import { operationFailure, type Principal } from './operations.ts';
 import { patchSettings } from './settings_service.ts';
 import { maintainData } from './maintenance.ts';
 import { captureFile } from './storage.ts';
@@ -396,20 +399,34 @@ export const MCP_TOOLS: { name: string; description: string; inputSchema: any; h
 { name: 'analyze_app', description: 'One call from a package name to a bounded report: adds the package to the phone injection allowlist when needed (reported as scopeAdded), cold starts it, waits for the Zygisk-injected agent, then runs triage (caps / maps size / dex files / capture window / module loads / detection surface) plus optional unpack (dump every DEX) and httpCaptureMs (a TLS traffic window). Use it when the caller knows only the app name, not a session id. Every phase reports ok/error and one failed phase does not discard the others. The target must be an installed third-party app: system packages and the ADH manager are refused.', inputSchema: { type: 'object', properties: { package: S, autoScope: { type: 'boolean' }, forceRestart: { type: 'boolean' }, captureMs: N, unpack: { type: 'boolean' }, httpCaptureMs: N, timeoutMs: N, settleMs: N }, required: ['package'] }, handler: async (a) => analyzePackage(String(a.package ?? ''), { autoScope: a.autoScope !== false, forceRestart: a.forceRestart === true, captureMs: Number(a.captureMs) > 0 ? Number(a.captureMs) : undefined, unpack: a.unpack === true, httpCaptureMs: Number(a.httpCaptureMs) > 0 ? Number(a.httpCaptureMs) : 0, timeoutMs: Number(a.timeoutMs) > 0 ? Number(a.timeoutMs) : undefined, settleMs: Number(a.settleMs) > 0 ? Number(a.settleMs) : undefined }) },
 { name: 'scope_list', description: 'The phone injection allowlist (scope.json): the packages the Zygisk companion is allowed to inject. Read through root, so it is the device truth rather than a cached page. A package not listed here is never injected, no matter how many tools are called.', inputSchema: { type: 'object', properties: {} }, handler: async () => { const s = await readScopeFile(); return { ok: s.error === null, packages: s.packages, version: s.version, mode: s.mode, error: s.error }; } },
 { name: 'scope_set', description: 'Change the phone injection allowlist: pass add / remove / set (arrays of package names). The file is written through root and read back, so a silent half-write cannot pass as success. A newly added package is injected only on its next cold start; analyze_app does the cold start for you.', inputSchema: { type: 'object', properties: { add: { type: 'array', items: S }, remove: { type: 'array', items: S }, set: { type: 'array', items: S } } }, handler: async (a) => { const cur = await readScopeFile(); if (cur.error) return { ok: false, error: cur.error }; const before = cur.packages; const next = Array.isArray(a.set) ? mergeScope([], { add: a.set }) : mergeScope(before, { add: a.add, remove: a.remove }); const w = await writeScopePackages(next, { version: cur.version, mode: cur.mode }); if (!w.ok) return { ok: false, error: w.error, packages: before }; return { ok: true, packages: w.packages, added: w.packages.filter((p) => !before.includes(p)), removed: before.filter((p) => !w.packages.includes(p)), note: 'cold start the target to apply' }; } },
+  { name: 'operations', description: 'Shared durable Host tasks and control. snapshot returns resource/revision/epoch/hostEpoch. Writes require _operation.expectedRevision, controlEpoch and hostEpoch; missing/stale values never auto-refresh. create/list/get/submit manage analysis tasks; pause/resume/cancel/complete manage taskId, cancel can use operation id. submit runs an existing tool asynchronously and returns an operation id. get includeResult:true reads a stored result. takeover/release/resolve require the operator credential at the transport boundary, never actor JSON. Cancel requested is not confirmed cancellation; unknown effects block writes until inspected/resolved.', inputSchema: { type: 'object', properties: { action: { type:'string', enum:['snapshot','create','list','get','submit','pause','resume','cancel','complete','takeover','release','resolve','hold'] }, id:S, taskId:S, session:S, resource:S, title:S, tool:S, arguments:{type:'object'}, _operation:{type:'object'}, includeResult:{type:'boolean'}, acknowledge:{type:'boolean'}, limit:N, offset:N }, required:['action'] }, handler: async a => manageOperations(a,{role:'ai',id:'direct',source:'direct'},name=>MCP_MAP.get(name)) },
+
 ];
 
+// Optional at schema level because reads need no control token; writes enforce it at dispatch.
+for (const tool of MCP_TOOLS) {
+  (tool.inputSchema as any).properties._operation ??= { type:'object', properties:{ expectedRevision:{type:'integer'},controlEpoch:{type:'integer'},hostEpoch:{type:'integer'},taskId:{type:'string'},idempotencyKey:{type:'string'},timeoutMs:{type:'integer'} } };
+}
+const requestOperations = new Map<string,string>();
 export const MCP_MAP = new Map(MCP_TOOLS.map(t => [t.name, t]));
 
-export async function handleMcp(reqBody: string, res: ServerResponse, opts?: { package?: string }) {
+export async function handleMcp(reqBody: string, res: ServerResponse, opts?: { package?: string; principal?: Principal }) {
   let msg: any;
   try { msg = JSON.parse(reqBody); } catch { res.writeHead(400).end('bad json'); return; }
   const pin = opts?.package;
+  const principal=opts?.principal ?? {role:'ai' as const,id:'legacy',source:'mcp'};
+  const requestKey=principal.id+':'+JSON.stringify(msg.id);
   const reply = (result?: unknown, error?: unknown) => {
     const body = JSON.stringify({ jsonrpc: '2.0', id: msg.id, ...(error ? { error } : { result }) });
     res.writeHead(200, { 'content-type': 'application/json' }); res.end(body);
   };
   if (msg.method === 'initialize') return reply({ protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'adhd', version: '0.1.0' }, instructions: MCP_INSTRUCTIONS });
-  if (msg.method === 'notifications/initialized' || msg.method === 'notifications/cancelled') { res.writeHead(202).end(); return; }
+  if (msg.method === 'notifications/cancelled') {
+    const operation=requestOperations.get(principal.id+':'+JSON.stringify(msg.params?.requestId));
+    if(operation)getOperations().cancelOperation(operation,principal);
+    res.writeHead(202).end(); return;
+  }
+  if (msg.method === 'notifications/initialized') { res.writeHead(202).end(); return; }
   if (msg.method === 'ping') return reply({});
   if (msg.method === 'tools/list') return reply({ tools: MCP_TOOLS.map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })) });
   if (msg.method === 'tools/call') {
@@ -426,7 +443,18 @@ export async function handleMcp(reqBody: string, res: ServerResponse, opts?: { p
       if (sid) args.session = sid;
     }
     try {
-      const out = await t.handler(args);
+      const rawArgs={...args};delete rawArgs._operation;
+      const spec=describeTool(name,rawArgs);
+      let out:any;
+      if(name==='operations')out=await manageOperations(args,principal,key=>MCP_MAP.get(key));
+      else if(spec.mode==='read' && !args._operation?.taskId)out=await executeManaged(spec,args,principal,()=>t.handler(rawArgs));
+      else {
+        const {resolveSpec,responseForOperation}=await import('./operation_host.ts');
+        const resolved=resolveSpec(spec,args); if(args.session)rawArgs.session=args.session;
+        const engine=getOperations(),op=engine.submit(resolved,args,principal,args._operation||{},()=>t.handler(rawArgs));
+        requestOperations.set(requestKey,op.id);
+        out=responseForOperation(await engine.execute(resolved,args,principal,{...(args._operation||{}),idempotencyKey:op.key},()=>t.handler(rawArgs)));
+      }
       // A tool may answer with its own { ok:false, error } object instead of throwing (memory_write
       // validates its argument this way). Without this branch those failures have no machine-readable
       // class, which is exactly the inconsistency the field reports complained about: the same kind of
@@ -437,7 +465,7 @@ export async function handleMcp(reqBody: string, res: ServerResponse, opts?: { p
       if (t.raw) return reply(coded);
       return reply({ content: [{ type: 'text', text: JSON.stringify(coded, null, 2) }],
         ...((coded as any)?.ok === false ? { isError: true } : {}) });
-    } catch (e) { return reply({ content: [{ type: 'text', text: JSON.stringify(errorPayload(e)) }], isError: true }); }
+    } catch (e) { return reply({ content: [{ type: 'text', text: JSON.stringify({...errorPayload(e),...operationFailure(e)}) }], isError: true }); } finally { requestOperations.delete(requestKey); }
   }
   return reply(undefined, { code: -32601, message: `method not found: ${msg.method}` });
 }

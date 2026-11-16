@@ -1,5 +1,6 @@
 import { patchSettings, settingsHttpStatus } from '../settings_service.ts';
 import { maintainData } from '../maintenance.ts';
+import { localEffect } from '../execution_context.ts';
 import { existsSync, unlinkSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -37,6 +38,7 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
     res.end(buf);
   };
   return [
+    { path:'/operations.js',handler:servePublic('operations.js','text/javascript; charset=utf-8') },
     { path: '/api/apps', handler: async () => {
       const scope = await scopedApps();
       return send(200, {
@@ -212,21 +214,24 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       const what = String(body.what || '');
       const pkg = String(body.package || '').trim();
       const errors: string[] = [];
-      if (what === 'captures') {
-        if (pkg) errors.push(...clearPackageCaptureStore(pkg));
-        else errors.push(...clearCaptureStore());
-      }
-      else if (what === 'events') {
-        events.length = 0;
-        try { writeFileSync(EVENTS_FILE, ''); } catch (e) { errors.push(`events 回放文件: ${(e as Error).message}`); }
-      }
-      else if (what === 'dumps') {
-        const victims = [...dumps.values()].filter(d => !pkg || d.package === pkg);
-        for (const d of victims) {
-          try { if (existsSync(d.path)) unlinkSync(d.path); } catch (e) { errors.push(`${d.path}: ${(e as Error).message}`); }
-          dumps.delete(d.sha256);
+      if (!['captures', 'events', 'dumps'].includes(what)) return send(400, { error: 'what 必须是 captures|events|dumps' });
+      localEffect(() => {
+        if (what === 'captures') {
+          if (pkg) errors.push(...clearPackageCaptureStore(pkg));
+          else errors.push(...clearCaptureStore());
         }
-      } else return send(400, { error: 'what 必须是 captures|events|dumps' });
+        else if (what === 'events') {
+          events.length = 0;
+          try { writeFileSync(EVENTS_FILE, ''); } catch (e) { errors.push(`events 回放文件: ${(e as Error).message}`); }
+        }
+        else if (what === 'dumps') {
+          const victims = [...dumps.values()].filter(d => !pkg || d.package === pkg);
+          for (const d of victims) {
+            try { if (existsSync(d.path)) unlinkSync(d.path); } catch (e) { errors.push(`${d.path}: ${(e as Error).message}`); }
+            dumps.delete(d.sha256);
+          }
+        }
+      });
       broadcast('data.cleared', { what, package: pkg || undefined });
       if (errors.length) { log(`[data/clear] ${what} 部分磁盘删除失败:`, errors.join('; ')); return send(500, { error: `内存索引已清，但磁盘删除失败(${errors.length}项)`, cleared: what, errors, stats: configStats() }); }
       return send(200, { ok: true, cleared: what, package: pkg || undefined, stats: configStats() });

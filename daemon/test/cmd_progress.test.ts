@@ -75,6 +75,8 @@ test('a timeout reports done with ok:false instead of only throwing', async () =
   assert.equal(done.length, 1);
   assert.equal(done[0].data.ok, false);
   assert.equal(done[0].data.op, 'root_watch');
+  assert.equal(done[0].data.state, 'unknown');
+  assert.equal(done[0].data.targetStopped, false);
   assert.equal([...state.inflight.values()].filter(t => t.sessionId === 's_timeout').length, 0);
   state.agentSockets.delete('s_timeout'); drop();
 });

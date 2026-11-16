@@ -31,7 +31,8 @@ export const MCP_INSTRUCTIONS = 'ADH is an Android runtime analysis workbench. S
   'Otherwise report the state as unknown and name the observation that would distinguish the cases. ' +
   'When a gate needs the user (account, SMS code, manual consent), say what is missing and stop; ' +
   'do not change hooks, restart the process or repeat the same tap. ' +
-  'Derive tap coordinates from the UI hierarchy or screenshot you just read, never from screen size, and re-read the state after each interaction.';
+  'Derive tap coordinates from the UI hierarchy or screenshot you just read, never from screen size, and re-read the state after each interaction.' +
+  '\n\nP1 CONTROL: use operations(snapshot) and _operation expectedRevision/controlEpoch/hostEpoch for writes. AI cannot overwrite operator-held control. Use operations submit/get for durable tasks; cancellation requests and timeouts do not prove the target stopped.';
 
 interface Step {
   goal: string;

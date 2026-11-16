@@ -1,3 +1,4 @@
+import { checkpoint, trackedEffect } from './execution_context.ts';
 // The app sandbox lives on the phone at /data/data/<package> (often a symlink to
 // /data/user/0/<package>). Reading it does not need the app process: the host
 // daemon lists and reads it through adb + su. The web file panel uses this.
@@ -214,16 +215,16 @@ function adbBase(): string[] {
 }
 
 async function adbShell(command: string): Promise<string> {
-  const { stdout } = await execFileP('adb', [...adbBase(), 'shell', command], {
+  const { stdout } = await trackedEffect(() => execFileP('adb', [...adbBase(), 'shell', command], {
     timeout: 20000, windowsHide: true, maxBuffer: 8 * 1024 * 1024,
-  });
+  }));
   return String(stdout ?? '');
 }
 
 async function adbOut(command: string, maxBuffer = 2 * 1024 * 1024): Promise<Buffer> {
-  const { stdout } = await execFileP('adb', [...adbBase(), 'exec-out', command], {
+  const { stdout } = await trackedEffect(() => execFileP('adb', [...adbBase(), 'exec-out', command], {
     timeout: 120_000, windowsHide: true, maxBuffer, encoding: 'buffer',
-  });
+  }));
   return stdout as Buffer;
 }
 

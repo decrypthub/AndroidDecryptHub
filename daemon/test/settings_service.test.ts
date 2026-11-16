@@ -22,6 +22,9 @@ syncBuiltinESMExports();
 const { handleHttp } = await import('../src/http/router.ts');
 const { handleMcp } = await import('../src/mcp.ts');
 const { patchSettings } = await import('../src/settings_service.ts');
+const { getOperations, operationsRoot } = await import('../src/operation_host.ts');
+const { initializeOperatorAccess } = await import('../src/access_context.ts');
+const operatorKey=initializeOperatorAccess(operationsRoot);
 const { drainSession, forgetCaptureSession, startCaptureLoop } = await import('../src/service.ts');
 const { appendCaptureLine } = await import('../src/capture_persist.ts');
 const { agentSockets, captureTimers, captures, DATA_DIR, DEFAULT_SETTINGS, pending, sessions, SETTINGS_FILE, settings } = await import('../src/state.ts');
@@ -68,13 +71,15 @@ function fakeAgent(fail = false, native: any[] = []) {
 }
 
 async function via(entry: string, patch: unknown): Promise<{ status: number; body: any; isError?: boolean }> {
+  const snapshot=getOperations().snapshot('host');
+  const metadata={expectedRevision:snapshot.revision,controlEpoch:snapshot.epoch,hostEpoch:snapshot.hostEpoch};
   if (entry === 'mcp') {
     let output: any;
     const response = { writeHead() { return this; }, end(text: string) { output = JSON.parse(text); } };
-    await handleMcp(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'settings', arguments: { action: 'patch', patch } } }), response as any);
+    await handleMcp(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'settings', arguments: { action: 'patch', patch, _operation:metadata } } }), response as any,{principal:{role:'operator',id:'test',source:'mcp-test'}});
     return { status: 200, body: JSON.parse(output.result.content[0].text), isError: output.result.isError };
   }
-  const response = await fetch(address + entry, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) });
+  const response = await fetch(address + entry, { method: 'POST', headers: { 'Content-Type': 'application/json','X-Adh-Operator-Key':operatorKey,'X-Adh-Operation':JSON.stringify(metadata) }, body: JSON.stringify(patch) });
   return { status: response.status, body: await response.json() };
 }
 
@@ -174,6 +179,7 @@ test('MCP and HTTP maintenance default to preview; deleting requires explicit co
   }
   const preview = await (await fetch(address + '/api/maintenance')).json() as { dryRun: boolean; ok: boolean };
   assert.equal(preview.dryRun, true); assert.equal(preview.ok, true);
-  const refused = await fetch(address + '/api/maintenance', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"dryRun":false}' });
+  const snapshot=getOperations().snapshot('host');
+  const refused = await fetch(address + '/api/maintenance', { method: 'POST', headers: { 'Content-Type': 'application/json','X-Adh-Operator-Key':operatorKey,'X-Adh-Operation':JSON.stringify({expectedRevision:snapshot.revision,controlEpoch:snapshot.epoch,hostEpoch:snapshot.hostEpoch}) }, body: '{"dryRun":false}' });
   assert.equal(refused.status, 400); assert.deepEqual(readFileSync(path), bytes); assert.deepEqual(calls, []);
 });

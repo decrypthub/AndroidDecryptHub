@@ -7,6 +7,7 @@ import { handleHttp } from './http/router.ts';
 import { ensureAdbReverse } from './scope_list.ts';
 import { startCaptureLoop, forgetCaptureSession, clearCaptureArmProtect, applyStartupHooks } from './service.ts';
 import { initializeHost } from './host_lifecycle.ts';
+import { automaticSnapshot, initializeOperations, runAutomatic } from './operation_host.ts';
 import {
   agentSockets, broadcast, captureTimers, failPendingFor, frameJson, FRAME_JSON, FRAME_MAX,
   log, nextId, pending, pruneSessions, sessions, wss,
@@ -75,7 +76,7 @@ const agentServer = net.createServer((sock) => {
       // difference between "hooks installed now" and "installed after the first command round
       // trip" is often the difference between a live process and an exit. Fire-and-forget with
       // `finally` so a slow or failing install can never stop capture from starting.
-      applyStartupHooks(id)
+      runAutomatic(id,'automatic-startup',automaticSnapshot(id),()=>applyStartupHooks(id))
         .catch((e) => log(`[startup] anti-debug 布防失败 ${id}:`, (e as Error).message))
         .finally(() => startCaptureLoop(id));   // install persistent hooks + stream captures
     } else if (msg.t === 'caps' && session) {
@@ -156,6 +157,7 @@ httpServer.on('upgrade', (req, socket, head) => {
 // ---- boot -----------------------------------------------------------------
 
 initializeHost();
+initializeOperations();
 agentServer.listen(AGENT_PORT, '0.0.0.0', () => log(`ADH Daemon agent TCP listening on :${AGENT_PORT}`));
 httpServer.listen(HTTP_PORT, '0.0.0.0', () => {
   const w = webUrls();

@@ -1,3 +1,5 @@
+import { checkpoint, detached, localEffect, trackedEffect } from './execution_context.ts';
+import { automaticSnapshot, runAutomatic } from './operation_host.ts';
 import { captureFile } from './storage.ts';
 // service.ts — ADH Daemon service layer: agent-command transport + dump engine + capture ops.
 // Imported by mcp.ts (MCP handlers) and index.ts (REST routes + agent TCP + boot).
@@ -41,9 +43,10 @@ import { buildStoredZip } from './zip_store.ts';
 // fabricated percentage: the daemon cannot know how far into a trace the agent is, and inventing
 // progress is worse than reporting none.
 export function sendCmd(sessionId: string, op: string, args: Record<string, unknown> = {}, timeoutMs = 10_000): Promise<any> {
-  return new Promise((resolve, reject) => {
-    const sock = agentSockets.get(sessionId);
-    if (!sock || sock.destroyed) return reject(new Error('agent not connected'));
+  checkpoint(sessionId);
+  const sock = agentSockets.get(sessionId);
+  if (!sock || sock.destroyed) return Promise.reject(new Error('agent not connected'));
+  return trackedEffect(() => new Promise((resolve, reject) => {
     const id = nextCmdId();
     const startedAt = Date.now();
     // Report while the command is in flight. Unref'd so a pending heartbeat can never keep the
@@ -60,7 +63,7 @@ export function sendCmd(sessionId: string, op: string, args: Record<string, unkn
     if (typeof beat.unref === 'function') beat.unref();
     inflight.set(id, { cmdId: id, op, sessionId, startedAt, timeoutMs, beat });
     broadcastLive('cmd.start', { cmdId: id, op, sessionId, timeoutMs });
-    const finish = (ok: boolean) => {
+    const finish = (ok: boolean, state = ok ? 'responded' : 'failed') => {
       clearInterval(beat);
       const t = inflight.get(id);
       // Whoever removes the tracker owns the terminal event. failPendingFor removes it before
@@ -69,9 +72,9 @@ export function sendCmd(sessionId: string, op: string, args: Record<string, unkn
       if (!t) return;
       if (t.beat) clearInterval(t.beat);
       inflight.delete(id);
-      broadcastLive('cmd.done', { cmdId: id, op, sessionId, ok, elapsedMs: Date.now() - startedAt });
+      broadcastLive('cmd.done', { cmdId: id, op, sessionId, ok, state, targetStopped: false, elapsedMs: Date.now() - startedAt });
     };
-    const timer = setTimeout(() => { pending.delete(id); finish(false); reject(new Error('command timeout')); }, timeoutMs);
+    const timer = setTimeout(() => { pending.delete(id); finish(false,'unknown'); reject(Object.assign(new Error('command timeout'),{code:'COMMAND_TIMEOUT',uncertain:true})); }, timeoutMs);
     // The session id is carried with the pending entry so a DISCONNECT can fail exactly the commands it
     // owned. Without it, a target that dies mid-command (a trace of code that dereferences freed memory
     // does this) leaves the caller waiting for the full timeout with no explanation - measured: 60 s of
@@ -82,7 +85,7 @@ export function sendCmd(sessionId: string, op: string, args: Record<string, unkn
       timer, sessionId,
     });
     sock.write(frameJson({ ...args, t: 'cmd', id, op }));
-  });
+  }),sessionId);
 }
 
 export const pickSid = (sid?: string) => {
@@ -343,7 +346,8 @@ export async function applyStartupHooks(sid: string): Promise<AgentSession['star
   // test run). A session that closed before it fires is a no-op (checked inside).
   const plan = startupWidenPlan();
   if (plan.afterMs > 0 && plan.targets.length) {
-    const timer = setTimeout(() => { void widenStartupHooks(sid); }, plan.afterMs);
+    const expected=automaticSnapshot(sid);
+    const timer = detached(()=>setTimeout(() => { void runAutomatic(sid,'automatic-startup-widen',expected,()=>widenStartupHooks(sid)); }, plan.afterMs));
     if (typeof timer.unref === 'function') timer.unref();
   }
   return s.startupHooks;
@@ -612,6 +616,7 @@ export async function dumpOneAppSo(sid: string, base: string, name: string) {
     const sha = createHash('sha256').update(buf).digest('hex');
     const existing = dumps.get(sha);
     if (existing) return { name, base, saved: true, dedup: true, sha256: sha, size: buf.length, elf: true };
+    checkpoint();
     const path = captureFile(`${sha.slice(0, 16)}.so`);
     if (!existsSync(path)) await writeFile(path, buf);
     const meta: DumpMeta = {
@@ -651,7 +656,8 @@ export async function dumpAppSo(sid: string) {
         modules.push({ name: mod.name, path: mod.path, sha256: sha, size: buf.length, dedup: true });
         continue;
       }
-      const path = captureFile(`${sha.slice(0, 16)}.so`);
+      checkpoint();
+    const path = captureFile(`${sha.slice(0, 16)}.so`);
       if (!existsSync(path)) await writeFile(path, buf);
       const meta: DumpMeta = {
         sha256: sha, size: buf.length, requestedSize: buf.length, complete: true,
@@ -701,6 +707,7 @@ export function repairDexHeader(buf: Buffer): { fileSize: number; checksum: stri
 // Explicit artifact maintenance, wired to the dex index. Never called by import, startup,
 // settings patches or artifact writes. Failures remain observable to the maintenance caller.
 export function pruneArtifactsAndIndex(protectSha?: string) {
+  checkpoint();
   try {
     const r = pruneArtifacts((sha) => {
       try { deleteDexDocument(sha); }
@@ -733,6 +740,7 @@ export async function persistArtifact(
   const existing = dumps.get(sha);
   if (existing) return { meta: existing, dedup: true };
   const kind = inferKind(buf);
+  checkpoint();
   const path = captureFile(`${sha.slice(0, 16)}.${kind}.bin`);
   if (!existsSync(path)) await writeFile(path, buf);
   const meta: DumpMeta = {
@@ -782,6 +790,7 @@ export async function dumpRegion(sid: string, addrHex: string, size: number, tag
   }
   const s = sessions.get(sid);
   const kind = inferKind(buf);
+  checkpoint();
   const path = captureFile(`${sha.slice(0, 16)}.${kind}.bin`);
   if (!existsSync(path)) await writeFile(path, buf);
   const complete = buf.length === size;
@@ -1224,10 +1233,10 @@ export function startCaptureLoop(sid: string, opts?: { skipArm?: boolean }) {
       try { return await inFlight; } finally { inFlight = null; }
     };
     captureDrainers.set(sid, runDrain);
-    const timer = setInterval(async () => {
+    const timer = detached(() => setInterval(async () => {
       if (busy || !sessions.get(sid)?.online) return;
       await runDrain().catch(() => null);   // the loop never propagates: it retries next tick
-    }, 1500);
+    }, 1500));
     captureTimers.set(sid, timer);
   };
   if (opts?.skipArm) {
@@ -1235,7 +1244,10 @@ export function startCaptureLoop(sid: string, opts?: { skipArm?: boolean }) {
     return;
   }
   captureLoopPending.add(sid);
-  setTimeout(() => { void run(); }, 1200);
+  const expected=automaticSnapshot(sid);
+  detached(()=>setTimeout(() => {
+    void runAutomatic(sid,'automatic-capture-start',expected,run).finally(()=>captureLoopPending.delete(sid));
+  }, 1200));
 }
 
 // Enumerate the app's DEX files, dump each, and say what each one IS.

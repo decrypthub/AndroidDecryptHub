@@ -8,7 +8,7 @@
 import { spawn } from 'node:child_process';
 
 const args = ['--test', ...process.argv.slice(2)];
-const { ADH_DATA_DIR, ADH_CAPTURES_DIR, ...isolatedEnv } = process.env;
+const { ADH_DATA_DIR, ADH_CAPTURES_DIR, ADH_OPERATOR_TOKEN, ...isolatedEnv } = process.env;
 const child = spawn(process.execPath, args, {
   stdio: 'inherit',
   env: { ...isolatedEnv, ADH_SKIP_ARTIFACT_LOAD: '1' },

@@ -1,3 +1,4 @@
+import { checkpoint, localEffect } from './execution_context.ts';
 import { applyCaptureEnabled, autoAntiDebugEnabled } from './service.ts';
 import { configStats, mergeSettings, saveSettings, settings } from './state.ts';
 
@@ -16,10 +17,12 @@ export function patchSettings(patch: unknown, applyCapture = applyCaptureEnabled
     const candidate = structuredClone(settings);
     const applied = mergeSettings(patch, candidate);
     if (!applied.length) return { ok: false, code: 'INVALID_SETTINGS', error: 'no supported settings sections', persisted: false, applied };
-    try { saveSettings(candidate); }
+    checkpoint();
+    try { localEffect(() => saveSettings(candidate)); }
     catch (error) {
       return { ok: false, code: 'SETTINGS_PERSIST_FAILED', error: `settings were not saved or applied: ${(error as Error).message}`, persisted: false, applied: [] as string[], settings: structuredClone(settings) };
     }
+    checkpoint();
     Object.assign(settings, candidate);
     const capture = (patch as Record<string, any>).capture;
     // Output filters apply on ingestion; startup/auto-dump changes apply at the next

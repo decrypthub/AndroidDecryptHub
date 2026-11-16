@@ -1,3 +1,4 @@
+import { checkpoint, trackedEffect } from './execution_context.ts';
 // Host orchestration for the optional root-side perf collector. This process owns
 // files and queries; the helper only collects kernel samples outside the app.
 import { execFile, spawn } from 'node:child_process';
@@ -71,10 +72,10 @@ export function normalizeRootWatch(a: Record<string, any>) {
   return { tid, addr: '0x' + addr.toString(16), width, mode, durationMs, maxEvents, stackBytes, breakpoints, mem };
 }
 async function adb(serial: string, args: string[], timeout = 10000) {
-  return (await exec('adb', ['-s', serial, ...args], { timeout, maxBuffer: 1024 * 1024, windowsHide: true })).stdout;
+  return (await trackedEffect(() => exec('adb', ['-s', serial, ...args], { timeout, maxBuffer: 1024 * 1024, windowsHide: true }))).stdout;
 }
 async function selectSerial(requested?: string) {
-  const devices = (await exec('adb', ['devices'], { timeout: 10000, windowsHide: true })).stdout
+  const devices = (await trackedEffect(() => exec('adb', ['devices'], { timeout: 10000, windowsHide: true }))).stdout
     .split(/\r?\n/).map(line => /^(\S+)\s+device$/.exec(line.trim())?.[1]).filter((x): x is string => !!x);
   const serial = requested ?? process.env.ADH_SERIAL ?? process.env.ANDROID_SERIAL;
   if (serial) { if (!devices.includes(serial)) throw new Error(`ADB device ${serial} is not online`); return serial; }
@@ -118,6 +119,7 @@ export async function startRootWatch(target: Target, a: Record<string, any>, dat
   const command = `${HELPER} ${target.pid} ${spec.tid} ${spec.addr} ${spec.width} ${spec.mode} ${spec.durationMs} ${spec.maxEvents} ${spec.stackBytes} ${stopFile}`
     + spec.breakpoints.map((extra: string) => ` ${extra}`).join('')
     + spec.mem.map((window: string) => ` mem=${window}`).join('');
+  checkpoint();
   const child = spawn('adb', ['-s', serial, 'shell', 'su', '-c', command], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   let pending = '';
   await new Promise<void>((resolveReady, reject) => {

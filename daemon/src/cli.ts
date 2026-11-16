@@ -32,6 +32,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import * as http from 'node:http';
+import { randomUUID } from 'node:crypto';
 import { dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -184,6 +185,7 @@ interface AgentSession {
 }
 
 class Daemon {
+  private readonly clientId = randomUUID();
   readonly host: string;
   readonly port: number;
   readonly base: string;
@@ -203,18 +205,19 @@ class Daemon {
    * answer (this CLI runs inside scripts; "printed an error and then hung" is the worst behaviour it
    * could have).
    */
-  private request(method: string, path: string, opts: { body?: string; timeoutS: number }): Promise<{ status: number; buf: Buffer }> {
+  private request(method: string, path: string, opts: { body?: string; timeoutS: number; operation?: object }): Promise<{ status: number; buf: Buffer }> {
     const { timeoutS } = opts;
     const body = opts.body;
     return new Promise((resolve, reject) => {
-      const headers: Record<string, string> = {};
+      const headers: Record<string, string> = { 'X-Adh-Client-Id': this.clientId };
+      if (opts.operation) headers['X-Adh-Operation'] = JSON.stringify(opts.operation);
       if (body !== undefined) {
         headers['content-type'] = 'application/json';
         headers['content-length'] = String(Buffer.byteLength(body));
       }
       let settled = false;
       const finish = (fn: () => void) => { if (!settled) { settled = true; clearTimeout(timer); fn(); } };
-      const timer = setTimeout(() => req.destroy(new Error(`timed out after ${timeoutS}s`)), timeoutS * 1000);
+      const timer = setTimeout(() => req.destroy(new Error(`timed out after ${timeoutS}s${opts.operation ? `; execution is unconfirmed, do not replay; operation key ${(opts.operation as any).idempotencyKey}` : ''}`)), timeoutS * 1000);
       const req = http.request({ host: this.host, port: this.port, path, method, headers }, (res) => {
         const chunks: Buffer[] = [];
         res.on('data', (c: Buffer) => chunks.push(c));
@@ -231,7 +234,16 @@ class Daemon {
   }
 
   async json(path: string, opts: { method?: string; body?: string; timeoutS: number }): Promise<any> {
-    const { status, buf } = await this.request(opts.method ?? 'GET', path, opts);
+    let operation: object | undefined;
+    if ((opts.method ?? 'GET') !== 'GET' && path.startsWith('/api/') && !path.startsWith('/api/operations')) {
+      const snapshot = await this.json('/api/operations/prepare', { method: 'POST', timeoutS: opts.timeoutS,
+        body: JSON.stringify({ path, method: opts.method, arguments: JSON.parse(opts.body || '{}') }) });
+      operation = { expectedRevision: snapshot.revision, controlEpoch: snapshot.epoch, hostEpoch: snapshot.hostEpoch,
+        idempotencyKey: randomUUID(), timeoutMs: Math.min(600000, opts.timeoutS * 1000) };
+    } else if (path === '/mcp' && opts.body) {
+      operation = JSON.parse(opts.body)?.params?.arguments?._operation;
+    }
+    const { status, buf } = await this.request(opts.method ?? 'GET', path, { ...opts, operation });
     const text = buf.toString('utf8');
     if (status < 200 || status >= 300) throw new CliError(`${path} -> HTTP ${status}: ${text.slice(0, 300)}`, EXIT.fail);
     try {
@@ -250,9 +262,18 @@ class Daemon {
   /** One agent command through the MCP surface — the same implementation the AI tools call, so the
    *  CLI cannot exercise a different code path than the one under test elsewhere. */
   async mcp(name: string, args: Record<string, unknown>, session: string, timeoutS: number): Promise<any> {
+    const snapshotReply = await this.json('/mcp', { method: 'POST', timeoutS, body: JSON.stringify({
+      jsonrpc: '2.0', id: randomUUID(), method: 'tools/call',
+      params: { name: 'operations', arguments: { action: 'snapshot', tool: name, arguments: { session, ...args } } },
+    }) });
+    const snapshot = JSON.parse(snapshotReply?.result?.content?.[0]?.text || '{}');
+    if (!snapshot.ok) throw new CliError(`MCP control snapshot: ${snapshot.error || 'P1 operation support required'}`, EXIT.fail);
     const body = JSON.stringify({
       jsonrpc: '2.0', id: 1, method: 'tools/call',
-      params: { name, arguments: { session, ...args } },
+      params: { name, arguments: { session, ...args, _operation: {
+        expectedRevision: snapshot.revision, controlEpoch: snapshot.epoch, hostEpoch: snapshot.hostEpoch,
+        idempotencyKey: randomUUID(), timeoutMs: Math.min(600000, timeoutS * 1000),
+      } } },
     });
     const r = await this.json('/mcp', { method: 'POST', body, timeoutS });
     const text = r?.result?.content?.[0]?.text;

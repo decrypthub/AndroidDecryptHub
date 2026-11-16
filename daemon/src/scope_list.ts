@@ -1,3 +1,4 @@
+import { checkpoint, detached, trackedEffect } from './execution_context.ts';
 // The web switcher lists the packages checked in the phone's injection scope
 // (/data/adb/adh/scope.json). That file is root-only; adb is how the host reads it.
 // Display names come from each base APK's manifest (aapt), cached per package.
@@ -53,16 +54,16 @@ function adbBase(): string[] {
 }
 
 async function adbShell(command: string): Promise<string> {
-  const { stdout } = await execFileP('adb', [...adbBase(), 'shell', command], {
+  const { stdout } = await trackedEffect(() => execFileP('adb', [...adbBase(), 'shell', command], {
     timeout: 15000, windowsHide: true, maxBuffer: 4 * 1024 * 1024,
-  });
+  }));
   return String(stdout ?? '');
 }
 
 async function adbOut(command: string): Promise<Buffer> {
-  const { stdout } = await execFileP('adb', [...adbBase(), 'exec-out', command], {
+  const { stdout } = await trackedEffect(() => execFileP('adb', [...adbBase(), 'exec-out', command], {
     timeout: 30000, windowsHide: true, maxBuffer: 80 * 1024 * 1024, encoding: 'buffer',
-  });
+  }));
   return stdout as Buffer;
 }
 
@@ -135,9 +136,9 @@ async function resolveLabel(pkg: string): Promise<string> {
       { name: 'AndroidManifest.xml', data: manifest },
       { name: 'resources.arsc', data: arsc },
     ]));
-    const { stdout } = await execFileP(aapt, ['dump', 'badging', zipPath], {
+    const { stdout } = await trackedEffect(() => execFileP(aapt, ['dump', 'badging', zipPath], {
       timeout: 20000, windowsHide: true, maxBuffer: 4 * 1024 * 1024,
-    });
+    }));
     return applicationLabel(String(stdout ?? '')) || pkg;
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -153,7 +154,7 @@ export function scopeSwitcherApps(packages: string[], labels: ReadonlyMap<string
 
 function startLabel(pkg: string): void {
   if (resolvedLabels.has(pkg) || labelJobs.has(pkg)) return;
-  const job = resolveLabel(pkg).then(label => {
+  const job = detached(()=>resolveLabel(pkg)).then(label => {
     resolvedLabels.set(pkg, label || pkg);
   }).catch(() => {
     resolvedLabels.set(pkg, pkg);
@@ -285,9 +286,9 @@ const scopeIO: ScopeIO = {
     const staged = `/data/adb/adh/.scope-${token}.tmp`;
     try {
       writeFileSync(local, body, 'utf8');
-      await execFileP('adb', [...adbBase(), 'push', local, uploaded], {
+      await trackedEffect(() => execFileP('adb', [...adbBase(), 'push', local, uploaded], {
         timeout: 20000, windowsHide: true, maxBuffer: 1024 * 1024,
-      });
+      }));
       // Set ownership/label BEFORE the atomic rename; never expose a truncated scope file.
       await adbShell(`su -c 'cp ${uploaded} ${staged} && chown root:root ${staged} && chmod 644 ${staged} && chcon u:object_r:adb_data_file:s0 ${staged} && mv -f ${staged} ${SCOPE_PATH}'`);
     } finally {

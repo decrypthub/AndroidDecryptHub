@@ -1,3 +1,4 @@
+import { checkpoint, trackedEffect } from './execution_context.ts';
 // Host-side cold start of a target package via adb (same path verify scripts use).
 // Device Daemon also has controlPackage(open|restart); the Host cannot speak AIDL, so adb is the
 // operator/AI channel — see REQUIREMENTS module W / retired module X.
@@ -16,9 +17,9 @@ function adbBase(): string[] {
 
 async function adb(args: string[], timeoutMs = 20_000): Promise<{ ok: boolean; stdout: string; stderr: string }> {
   try {
-    const { stdout, stderr } = await execFileP('adb', [...adbBase(), ...args], {
+    const { stdout, stderr } = await trackedEffect(() => execFileP('adb', [...adbBase(), ...args], {
       timeout: timeoutMs, windowsHide: true, maxBuffer: 4 * 1024 * 1024,
-    });
+    }));
     return { ok: true, stdout: String(stdout ?? ''), stderr: String(stderr ?? '') };
   } catch (e: any) {
     return {

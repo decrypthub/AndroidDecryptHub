@@ -1,0 +1,32 @@
+// Standalone UI fixture. Never imports index.ts or connects to a phone.
+import cp from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
+import { promisify } from 'node:util';
+import { mkdtempSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import http from 'node:http';
+process.env.ADH_DATA_DIR=mkdtempSync(join(tmpdir(),'adh-p1-panel-'));
+delete process.env.ADH_CAPTURES_DIR;
+process.env.ADH_SKIP_ARTIFACT_LOAD='1';
+process.env.ADH_OPERATOR_TOKEN='synthetic-panel-operator-key';
+cp.execFile=(()=>{throw Error('device execution forbidden in panel fixture');}) as unknown as typeof cp.execFile;
+Object.defineProperty(cp.execFile,promisify.custom,{value:async(file:string,args:string[])=>{
+  if(file==='adb' && args.some(a=>a.includes('cat /data/adb/adh/scope.json')))return {stdout:'{"packages":["com.example.fixture"]}',stderr:''};
+  throw Error('subprocess forbidden in panel fixture');
+}});
+syncBuiltinESMExports();
+const {handleHttp}=await import('../../src/http/router.ts');
+const {sessions,agentSockets,pending}=await import('../../src/state.ts');
+const {getOperations,targetResource}=await import('../../src/operation_host.ts');
+const sid='panel-fixture';
+sessions.set(sid,{sessionId:sid,package:'com.example.fixture',process:'com.example.fixture',pid:42,uid:10001,starttimeTicks:'1',online:true,agentVer:'fixture',abi:'arm64-v8a',android:'15',sdk:35,entry:'fixture'} as any);
+agentSockets.set(sid,{destroyed:false,write(frame:Buffer){const m=JSON.parse(frame.subarray(5).toString());queueMicrotask(()=>pending.get(m.id)?.resolve({ok:true,before:'00',beforeReadable:true,wrote:1,regions:[]}));return true;}} as any);
+const engine=getOperations(),principal={role:'ai' as const,id:'fixture',source:'fixture'};
+await engine.execute({name:'offline evidence validation',mode:'analysis'},{},principal,{},async()=>({ok:true,matched:16}));
+const task=engine.createTask('Paused fixture task',principal),control=engine.snapshot(targetResource(sid));
+engine.submit({name:'queued hook experiment',mode:'write',session:sid},{},principal,{taskId:task.id,expectedRevision:control.revision,controlEpoch:control.epoch,hostEpoch:control.hostEpoch},async()=>({ok:true}));
+engine.taskAction(task.id,'pause',principal);
+const server=http.createServer((req,res)=>{handleHttp(req,res).catch(error=>{res.writeHead(500);res.end(JSON.stringify({error:String(error)}));});});
+server.listen(0,'127.0.0.1',()=>console.log('P1_PANEL_URL=http://127.0.0.1:'+(server.address() as any).port));
+process.on('SIGINT',()=>{server.close();engine.close();process.exit(0);});

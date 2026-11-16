@@ -200,9 +200,9 @@ export function failPendingFor(sessionId: string, reason: string): number {
     if (t) {
       if (t.beat) clearInterval(t.beat);
       inflight.delete(id);
-      broadcastLive('cmd.done', { cmdId: id, op: t.op, sessionId, ok: false, elapsedMs: Date.now() - t.startedAt, reason });
+      broadcastLive('cmd.done', { cmdId: id, op: t.op, sessionId, ok: false, state:'unknown',targetStopped:false,elapsedMs: Date.now() - t.startedAt, reason });
     }
-    p.reject(new Error(reason));
+    p.reject(Object.assign(new Error(reason),{code:'CONNECTION_LOST',uncertain:true}));
     n++;
   }
   return n;
@@ -981,7 +981,13 @@ export function log(...a: unknown[]) {
 // the port could grow the heap until the daemon died. Cap it; the top-level error net in
 // index.ts maps `status` to the response code, so this answers 413 instead of hanging.
 export const MAX_BODY_BYTES = 8 * 1024 * 1024;
+const requestBodies = new WeakMap<IncomingMessage,Promise<string>>();
 export function readBody(req: IncomingMessage, cap = MAX_BODY_BYTES): Promise<string> {
+  let result=requestBodies.get(req);
+  if(!result) {result=readBodyOnce(req,cap);requestBodies.set(req,result);}
+  return result;
+}
+function readBodyOnce(req: IncomingMessage, cap = MAX_BODY_BYTES): Promise<string> {
   return new Promise((resolve, reject) => {
     let size = 0;
     let settled = false;

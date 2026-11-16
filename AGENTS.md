@@ -49,7 +49,7 @@ Never merge these layers.
 - `libadh_agent.so` (in target process) — **collect / execute only**: hook, trace, dump, maps scan, light RPC. Keep it minimal, low-memory, non-blocking.
 - **Host ADH Daemon** (`daemon/`, npm `adhd`) — HTTP / WebSocket / MCP / DB / index / disasm cache / analysis.
 - **Device** (`device/`: `:core` + `:daemon` + `:manager`) — injection scope + module status + target process stop/restart. No analysis.
-- Web UI (browser) — observe / search / visualize (frozen as a READ-ONLY viewer, 2026-10-01).
+- Web UI (browser) — observe / search / visualize and, per the 2026-11-16 user direction, edit / take control through the shared Host operation layer. P1 versions and operator credentials fence old AI writes; see docs/P1_OPERATIONS.md. The former read-only freeze is superseded for this scope.
 
 **Never** put HTTP, MCP, a database, the dex indexer, or Capstone/QBDI heavy analysis inside the agent `.so` or the Device Daemon/Manager. That causes target OOM/ANR and is easy to detect.
 

@@ -2,6 +2,13 @@
 
 ADH Daemon / `adhd` (Node 24 + TypeScript, runs `.ts` directly, no build step). HTTP/WS `8088`, agent TCP `8761`. App pin: `GET /<package>` and `POST /<package>/mcp`.
 
+## P1 execution / durable tasks / operator control (2026-11-16)
+
+- `operation_registry.ts` classifies effects/resources for MCP and REST; `operation_host.ts` resolves target generations and shared API responses. `operations.ts` owns versions, scheduling, idempotency, cancellation, deadline/unknown/recovery and takeover. `task_store.ts` is an authoritative SQLite ledger, never a rebuildable cache.
+- `execution_context.ts` carries checkpoints and dispatch/acknowledgement across async boundaries into agent/ADB/file mutations. Delayed automatic policy is epoch-bound. Never silently refresh an old AI request after conflict.
+- `access_context.ts` initializes a private operator credential explicitly; JSON roles cannot grant authority. `http/routes_operations.ts`, MCP `operations`, both CLIs and `public/operations.js` use the same coordinator. This is Host coordination, not a replacement USB/LAN authentication protocol.
+- See [`docs/P1_OPERATIONS.md`](../../docs/P1_OPERATIONS.md) for states, migration, API, limits and isolation boundaries. Plain reads stay compatible; legacy unversioned writes fail closed. `initializeOperations()` is explicit at boot, not import-time.
+
 ## P0 Host lifecycle / shared settings (2026-11-16)
 
 - `storage.ts`: pure path resolution; explicit ADH_DATA_DIR isolates captures too; optional ADH_CAPTURES_DIR for legacy layouts. Atomic settings/text writes use temporary files, fsync and rename.
