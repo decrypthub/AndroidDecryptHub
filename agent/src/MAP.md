@@ -4,6 +4,10 @@
 
 ## Layout
 
+2026-11-17后续：全模块扫描改用当前映射linker身份，处理RELRO填充区，按名称匹配支持空模块；
+值匹配验证APS2函数重定位。原生夹具11/11，crypto/TLS/文件隔离实测通过，见
+[捕获扫描验收](../../docs/CAPTURE_SCAN_ACCEPTANCE_2026-11-17.md)。
+
 2026-11-17发布准备：`hook/got.c`的值匹配只接受linker加载ELF的函数重定位槽，安全按页读取，
 禁止不可信重定位退回任意文件扫描。真机原生夹具9/9；全模块capture_start仍超时，
 未宣称完整修复，见[发布准备收尾](../../docs/RELEASE_PREPARATION_CLOSEOUT_2026-11-17.md)。

@@ -139,7 +139,9 @@ void adh_perms_of_addr(void *addr, char *out, int out_size) {
 // .so a coincidental data word == the function address would be clobbered into a wrapper ->
 // memory corruption / crash. These helpers enumerate the module's REAL GOT/PLT relocation
 // slots (.rela.plt + .rela.dyn) so we only ever patch genuine relocation entries.
-#define RSET_MAX 262144   // per-module reloc-slot cap (~2 MiB transient); truncation -> fallback
+#define RSET_MAX 262144   // per-module reloc-slot cap (~2 MiB transient); truncation -> refuse
+static int packed_reloc_slots(unsigned long long base, unsigned long long address,
+                              unsigned long long size, unsigned long long *out, int max);
 
 // Module base lookup. Accepts a basename ("libadhdetect.so") or a full /proc/self/maps
 // path: the reloc scan below feeds it a maps path while the command layer passes a bare
@@ -200,6 +202,7 @@ static int reloc_slots(unsigned long long base, unsigned long long *out, int max
     }
     if (!dyn_vaddr) return -1;
     unsigned long long jmprel = 0, pltrelsz = 0, rela = 0, relasz = 0, relaent = 24;
+    unsigned long long android_rela = 0, android_relasz = 0;
     unsigned long long *d = (unsigned long long *)(base + dyn_vaddr);
     for (; d[0] != 0; d += 2) {                 // Elf64_Dyn: {d_tag, d_val}
         if (d[0] == 23) jmprel = d[1];          // DT_JMPREL   (.rela.plt)
@@ -207,6 +210,8 @@ static int reloc_slots(unsigned long long base, unsigned long long *out, int max
         else if (d[0] == 7)  rela = d[1];       // DT_RELA     (.rela.dyn)
         else if (d[0] == 8)  relasz = d[1];     // DT_RELASZ
         else if (d[0] == 9)  relaent = d[1];    // DT_RELAENT
+        else if (d[0] == 0x60000011ULL) android_rela = d[1];
+        else if (d[0] == 0x60000012ULL) android_relasz = d[1];
     }
     if (relaent == 0) relaent = 24;
     int n = 0;
@@ -224,6 +229,13 @@ static int reloc_slots(unsigned long long base, unsigned long long *out, int max
             out[n++] = r_offset < base ? base + r_offset : r_offset;
         }
     }
+    if (android_rela) {
+        if (android_rela < base) android_rela += base;
+        int packed = packed_reloc_slots(base, android_rela, android_relasz, out + n, max - n);
+        if (packed < 0) return -1;
+        if (packed >= max - n) return RSET_MAX;
+        n += packed;
+    }
     return n;
 }
 
@@ -231,6 +243,15 @@ static int compare_slot_address(const void *left, const void *right) {
     unsigned long long a = *(const unsigned long long *)left;
     unsigned long long b = *(const unsigned long long *)right;
     return a < b ? -1 : a > b ? 1 : 0;
+}
+
+// Ask the linker about the mapping already being visited. Reopening/parsing the entire
+// maps file for every filename made an all-module install quadratic in ART mappings.
+// It also confused multiple images inside one APK, and a memfd with ART's JIT cache.
+static unsigned long long mapped_image_base(unsigned long long address) {
+    Dl_info image;
+    if (!dladdr((void *)(uintptr_t)address, &image) || !image.dli_fbase) return 0;
+    return (unsigned long long)(uintptr_t)image.dli_fbase;
 }
 
 // Hook the real slot in EVERY matching caller module (not just the first). Exactly one
@@ -248,6 +269,7 @@ int adh_got_replace(const char *module_substr, void *orig, void *wrapper) {
     unsigned char *page_bytes = (unsigned char *)malloc((size_t)pagesz);
     if (!page_bytes) { fclose(m); return -1; }
     char cur_mod[400] = "";
+    unsigned long long cur_base = 0;
     int hooked_this_mod = 0;
     unsigned long long *rset = NULL; int nrset = -1;   // cur_mod reloc slots (-1 = unavailable)
     while (fgets(line, sizeof(line), m)) {
@@ -260,13 +282,21 @@ int adh_got_replace(const char *module_substr, void *orig, void *wrapper) {
         // linker image. Never fall back to scanning arbitrary file or anonymous data.
         if (pp[0] != '/') continue;
         if (!strstr(pp, module_substr)) continue;
-        if (strcmp(pp, cur_mod) != 0) {
+        unsigned long long start = strtoull(sa, NULL, 16), end = strtoull(ea, NULL, 16);
+        if (end <= start) continue;
+        unsigned long long mb = mapped_image_base(start);
+        // A mapping can begin in padding before its PT_LOAD (notably RELRO), where
+        // dladdr returns no image. Reuse this path's validated header base; the rset
+        // still restricts reads/writes to exact relocation addresses inside this map.
+        if (!mb && strcmp(pp, cur_mod) == 0) mb = cur_base;
+        if (!mb) continue;
+        if (mb != cur_base || strcmp(pp, cur_mod) != 0) {
+            cur_base = mb;
             snprintf(cur_mod, sizeof(cur_mod), "%s", pp); hooked_this_mod = 0;
             // (re)compute this module's real relocation slots, so we never clobber a
             // coincidental data word == orig. Untrusted/truncated metadata is never scanned.
             free(rset); rset = NULL; nrset = -1;
             const char *bn = strrchr(cur_mod, '/'); bn = bn ? bn + 1 : cur_mod;
-            unsigned long long mb = module_base_of(bn);
             if (mb) {
                 rset = (unsigned long long *)malloc(sizeof(unsigned long long) * RSET_MAX);
                 if (rset) {
@@ -280,8 +310,6 @@ int adh_got_replace(const char *module_substr, void *orig, void *wrapper) {
         if (nrset <= 0) continue;
         if (hooked_this_mod) continue;                    // one slot per module already done
         if (strstr(perms, "x")) continue;
-        unsigned long long start = strtoull(sa, NULL, 16), end = strtoull(ea, NULL, 16);
-        if (end <= start) continue;
         unsigned long long cached_page = 0;
         ssize_t cached_size = 0;
         for (int i = 0; i < nrset && !hooked_this_mod; i++) {
@@ -335,6 +363,58 @@ static long long sleb128_decode(unsigned char **pp, unsigned char *end) {
     if (shift < 64 && (byte & 0x40)) result |= (~0ULL << shift);
     *pp = p;
     return (long long)result;
+}
+
+// The value matcher must validate packed GLOB_DAT imports too; skipping APS2 would
+// silently lose file/crypto hooks, while a raw memory fallback would reintroduce SIGBUS.
+static int read_sleb_checked(const unsigned char **cursor, const unsigned char *end, long long *out) {
+    unsigned long long value = 0;
+    unsigned int shift = 0;
+    while (*cursor < end && shift < 64) {
+        unsigned char byte = *(*cursor)++;
+        if (shift == 63 && byte != 0 && byte != 0x7f) return 0;
+        value |= (unsigned long long)(byte & 0x7f) << shift;
+        shift += 7;
+        if (!(byte & 0x80)) {
+            if (shift < 64 && (byte & 0x40)) value |= ~0ULL << shift;
+            *out = (long long)value;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int packed_reloc_slots(unsigned long long base, unsigned long long address,
+                              unsigned long long size, unsigned long long *out, int max) {
+    if (size < 4 || size > 64 * 1024 * 1024 || address > UINT64_MAX - size) return -1;
+    const unsigned char *p = (const unsigned char *)(uintptr_t)address, *end = p + size;
+    if (memcmp(p, "APS2", 4)) return -1;
+    p += 4;
+    long long count = 0, offset = 0;
+    if (!read_sleb_checked(&p, end, &count) || count < 0 || count > 16LL * RSET_MAX ||
+        !read_sleb_checked(&p, end, &offset)) return -1;
+    unsigned long long current_offset = (unsigned long long)offset;
+    int written = 0;
+    for (long long done = 0; done < count;) {
+        long long group = 0, flags = 0, delta = 0, info = 0, unused = 0;
+        if (!read_sleb_checked(&p, end, &group) || group <= 0 || group > count - done ||
+            !read_sleb_checked(&p, end, &flags) || flags < 0 || flags > 15) return -1;
+        if ((flags & 2) && !read_sleb_checked(&p, end, &delta)) return -1;
+        if ((flags & 1) && !read_sleb_checked(&p, end, &info)) return -1;
+        if ((flags & 8) && (flags & 4) && !read_sleb_checked(&p, end, &unused)) return -1;
+        for (long long item = 0; item < group; item++, done++) {
+            if (!(flags & 2) && !read_sleb_checked(&p, end, &delta)) return -1;
+            current_offset += (unsigned long long)delta;
+            if (!(flags & 1) && !read_sleb_checked(&p, end, &info)) return -1;
+            if ((flags & 8) && !(flags & 4) && !read_sleb_checked(&p, end, &unused)) return -1;
+            unsigned int kind = (unsigned int)info;
+            if (kind != R_AARCH64_GLOB_DAT && kind != R_AARCH64_JUMP_SLOT) continue;
+            if (written >= max) return RSET_MAX;
+            if (current_offset < base && current_offset > UINT64_MAX - base) return -1;
+            out[written++] = current_offset < base ? base + current_offset : current_offset;
+        }
+    }
+    return written;
 }
 
 // AOSP system libs (the JCE provider's native library among them) pack .rela.dyn (GLOB_DAT-relocated
@@ -555,6 +635,7 @@ int adh_got_replace_by_name_ex(const char *module_name, const char *sym_name, vo
     int replaced = 0;
     long pagesz = sysconf(_SC_PAGESIZE);
     char cur_mod[400] = "";
+    unsigned long long cur_base = 0;
     while (fgets(line, sizeof(line), m)) {
         char sa[32], ea[32], perms[8], off[32], dev[16], path[400] = "";
         unsigned long long inode = 0;
@@ -562,11 +643,14 @@ int adh_got_replace_by_name_ex(const char *module_name, const char *sym_name, vo
         if (nf < 6) continue;
         char *pp = path; while (*pp == ' ') pp++;
         if (pp[0] != '/') continue;
-        if (!module_path_matches(pp, module_name)) continue;
-        if (strcmp(pp, cur_mod) == 0) continue;   // already handled this module (multiple mappings per .so)
-        snprintf(cur_mod, sizeof(cur_mod), "%s", pp);
-        unsigned long long mb = module_base_of(cur_mod);
+        // Empty filter intentionally means all loaded callers for capture_start.
+        // Exact-module native Hook resolution continues to require a module name.
+        if (module_name && module_name[0] && !module_path_matches(pp, module_name)) continue;
+        unsigned long long mb = mapped_image_base(strtoull(sa, NULL, 16));
         if (!mb) continue;
+        if (mb == cur_base && strcmp(pp, cur_mod) == 0) continue;
+        cur_base = mb;
+        snprintf(cur_mod, sizeof(cur_mod), "%s", pp);
         void *slot_addr = find_reloc_slot_by_symbol(mb, sym_name);
         if (!slot_addr) continue;
         char permsOf[8]; perms_of_addr((unsigned long long)slot_addr, permsOf, sizeof(permsOf));

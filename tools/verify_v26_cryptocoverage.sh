@@ -37,6 +37,11 @@ const a=agents.filter(x=>x.package==='com.adh.sandbox'&&x.online).sort((x,y)=>y.
 if(!a){console.log('NO_AGENT');console.log('RESULT:FAIL');process.exit(0);}
 const sid=a.sessionId;
 
+// P5 never arms hooks at hello. This acceptance client explicitly chooses its caller module.
+const armedRpc=await (await fetch(base+'/mcp',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:'arm-native-coverage',method:'tools/call',params:{name:'capture_start',arguments:{session:sid,cryptoModule:'libjavacrypto.so'}}})})).json();
+const armed=JSON.parse(armedRpc.result?.content?.[0]?.text||'null');
+if(!armed?.ok){console.log('capture_start failed',JSON.stringify(armed||armedRpc.error));console.log('RESULT:FAIL');process.exitCode=1;throw Error('explicit native capture install failed');}
+
 const base0=await J('/api/captures?limit=1');
 console.log(`baseline: on=${base0.on} total=${base0.total}`);
 if(base0.on!==true){console.log('RESULT:FAIL (capture not on)');process.exit(0);}
@@ -90,7 +95,7 @@ const allInvoked = sig.invoked===true && aead.invoked===true;
 // the per-hook install counters. The capture *record* for a native AEAD seal can be deduped
 // away by the Java-channel rule, so installation is asserted here and the plaintext marker
 // below is accepted from either channel.
-const h = a.captureHooks||{};
+const h = armed.reply||{};
 const nativeHooksOk = h.on===true && h.cryptoModule==='libjavacrypto.so' && Number(h.evp)>=1 && Number(h.aead&&h.aead.seal)>=1;
 console.log(`native hooks: crypto=${h.cryptoModule} evp=${h.evp} aead.seal=${h.aead&&h.aead.seal} ok=${nativeHooksOk}`);
 if(!allInvoked){console.log('RESULT:FAIL (one or more demo methods not invoked)');process.exit(0);}

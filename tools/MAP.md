@@ -17,6 +17,8 @@ Windows收紧ACL，保留root端回滚副本。`install_apk_root`不再附带部
 最新实测与未完成门禁见[发布准备收尾](../docs/RELEASE_PREPARATION_CLOSEOUT_2026-11-17.md)。
 
 `build_got_restore_fixture.sh` builds a short-lived ARM64 executable linked to production `got.c`;
+it requires an actual APS2 relocation table. The current native acceptance has 11 checks,
+including all-module install/hit/value restore and packed GLOB_DAT slot restore.
 it never calls ADB. `verify_got_restore.ts TEST_SERIAL BUILT_BINARY NEW_PRIVATE_OUTPUT` explicitly
 runs it in a UUID directory, rejects the daily device, and removes only its own executable/directory.
 It does not start a Host, install an APK, change reverse mappings, flash or reboot a device.

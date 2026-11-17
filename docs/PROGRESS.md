@@ -1,5 +1,11 @@
 # PROGRESS — 跨会话进度看板
 
+2026-11-17 捕获阻塞修复：运行中栈定位maps二次扫描，改用linker image身份，补上空模块名
+按名称扫描和RELRO填充区/APS2值匹配。原生GOT11/11、v01、crypto19/19、签名/AEAD、
+TLS双向明文、文件实际读写全部通过；文件仍如实partial22/26。Host567/567、类型检查通过，
+默认六文件SHA未变。仅更新隔离沙盒APK，未默认升级/发布；详情见
+[CAPTURE_SCAN_ACCEPTANCE_2026-11-17.md](CAPTURE_SCAN_ACCEPTANCE_2026-11-17.md)。大DEX和其他发布门禁仍待处理。
+
 2026-11-17 发布准备收尾：按用户要求停止扩展。移除APK安装附带的正式Agent部署，
 加入隔离runner/状态版本适配与有归属的进程管理；GOT扫描拒绝非linker ELF/不可信重定位。
 源码版本准备为1.0.0，但未发布/未默认升级，旧候选ZIP已隔离。

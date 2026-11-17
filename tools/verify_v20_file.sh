@@ -22,7 +22,9 @@ const a=agents.filter(x=>x.package==='com.adh.sandbox'&&x.online).sort((x,y)=>y.
 if(!a){console.log('NO_AGENT');console.log('RESULT:FAIL');process.exit(0);}
 const sid=a.sessionId;
 try{
-  const on=await call('capture_start',{session:sid,fileModule:'libjavacore.so'});
+  // Both callers are explicit. A named file module legitimately lacks openat/read/write;
+  // report that partial install and still require real open/readChk/writeChk hits below.
+  const on=await call('capture_start',{session:sid,cryptoModule:'libjavacrypto.so',fileModule:'libjavacore.so',sysModule:''});
   const f=on.reply?.file ?? {};
   console.log(`capture_start: ok=${on.ok} installed=${on.installed}/${on.attempted} file=${JSON.stringify(f)}`);
   if(!on.ok){ console.log('FAIL capture_start did not install the hook set'); console.log('RESULT:FAIL'); process.exit(0); }
