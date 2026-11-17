@@ -3,10 +3,13 @@
 用户要求继续完成剩余工作。阶段收尾不等于全部目标完成；以下按当前代码、外部运行状态和
 实际报告更新。P0–P5历史提交入口见[AI_FIRST_CLOSEOUT.md](AI_FIRST_CLOSEOUT.md)。
 
+当前用户要求先收尾，停止继续扩展。候选源码与隔离资源已收口，发布仍被回归阻塞；
+详见[发布准备收尾](RELEASE_PREPARATION_CLOSEOUT_2026-11-17.md)。1.0.0是准备中的源码版本。
+
 | 工作 | 当前状态 | 完成所需证据 |
 | --- | --- | --- |
 | 正式Zygisk扩展 | 已实测完成指定代表性范围 | 七族单启用、全部禁用、LAN grant撤销及原六项，共15/15；expanded-02清理和原环境保护通过，见[P5_ZYGISK_EXTENDED_ACCEPTANCE.md](P5_ZYGISK_EXTENDED_ACCEPTANCE.md) |
-| GOT卸载保护 | 底层恢复函数完成；状态链已复测 | 原生8/8；最新Agent全链slotOwned/首次调用通过。尚未执行失去所有权后的卸载RPC集成用例 |
+| GOT卸载保护 | 底层恢复函数完成；状态链已复测 | 原生新增尾页用例后9/9；此前指定构建全链slotOwned/首次调用通过。失去所有权后的卸载RPC集成未验证 |
 | ADH与adh-cli分支集成 | 已完成 | [ADH PR1](https://github.com/decrypthub/AndroidDecryptHub/pull/1)合并为fe2d2c2；[CLI PR2](https://github.com/decrypthub/adh-cli/pull/2)合并为f394dc8。两者远端PR检查成功，保留原提交历史；原工作区仍未切换/覆盖 |
 | CLI与桌面组件发布 | 已完成 | [PyPI0.2.0](https://pypi.org/project/android-decrypt-hub/0.2.0/)、[CLI Release](https://github.com/decrypthub/adh-cli/releases/tag/v0.2.0)、[组件Release](https://github.com/decrypthub/adh-cli/releases/tag/decrypthub-v0.2.0)均已发布于f394dc8；源码14/14、隔离wheel运行时13/13、build/twine检查、公开PyPI下载导入及组件逐文件SHA核对通过。未升级本机全局安装 |
 | ADH打包与发布 | 未完成 | 一致且递增的版本、默认产物构建、发布门禁、可下载Release与对应提交；不发布opt-in测试APK或捕获数据 |
@@ -21,5 +24,7 @@ init_array前或未加载模块的提前Hook。它们不能被文档换名为“
 
 P0–P5实现已进入远端main。后续ADH发布准备位于同一独立worktree的`release/adh-ai-first-1.0.0`，
 基座fe2d2c2；CLI发布提交f394dc8，独立worktree为`release/adh-cli-0.2.0`。
-原AndroidDecryptHub工作区仍在P1分支；本次没有启停默认Host或默认部署。运行态会变化，
+原AndroidDecryptHub工作区仍在P1分支；本次未升级默认部署。旧辅助函数曾附带替换正式Agent，
+已从核验备份恢复，原六文件SHA再次核对相等。隔离进程已停止，测试APK/私有备份及unknown记录保留。
+运行态会变化，
 下一步必须重新检查；这些不是可复用的固定环境前提。

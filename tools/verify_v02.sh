@@ -11,7 +11,12 @@ AGENT="${ADH_AGENT_PORT:-8761}"
 JAVA_HOME="${JAVA_HOME:-C:\\Program Files\\Android\\Android Studio\\jbr}"; export JAVA_HOME
 PKG=com.adh.sandbox
 
-bash "$ROOT/tools/build_agent.sh" >/dev/null
+AGENT_BUILD="$ROOT/agent/build"
+[ "$AGENT" = 8761 ] || AGENT_BUILD="$ROOT/agent/build-isolated-$AGENT"
+ADH_AGENT_CONNECT_PORT="$AGENT" ADH_BUILD_DIR="$AGENT_BUILD" bash "$ROOT/tools/build_agent.sh" >/dev/null || exit 1
+mkdir -p "$ROOT/sandbox-app/app/src/main/jniLibs/$ABI"
+cp "$AGENT_BUILD/libadh_agent.so" "$ROOT/sandbox-app/app/src/main/jniLibs/$ABI/libadh_agent.so" || exit 1
+if [ -f "$ROOT/agent/third_party/qbdi/lib/libQBDI.so" ]; then cp "$ROOT/agent/third_party/qbdi/lib/libQBDI.so" "$ROOT/sandbox-app/app/src/main/jniLibs/$ABI/libQBDI.so"; fi
 ( cd "$ROOT/sandbox-app" && ./gradlew :app:assembleDebug --console=plain >/dev/null )
 APK="$ROOT/sandbox-app/app/build/outputs/apk/debug/app-debug.apk"
 adb -s "$SERIAL" reverse tcp:$AGENT tcp:$AGENT >/dev/null

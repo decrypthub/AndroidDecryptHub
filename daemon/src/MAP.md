@@ -2,6 +2,9 @@
 
 ADH Daemon / `adhd` (Node 24 + TypeScript, runs `.ts` directly, no build step). HTTP/WS `8088`, agent TCP `8761`. App pin: `GET /<package>` and `POST /<package>/mcp`.
 
+`version.ts` reads the Host package version for health and MCP initialization; diagnostic report format
+version stays independent and includes `hostVersion`. `tools/check_release_versions.mjs` fences bundle source versions.
+
 ## P2 human workbench (2026-11-16)
 
 ## P5 Host Hook plans (2026-11-16)

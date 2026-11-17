@@ -184,6 +184,10 @@ static unsigned long long module_base_of(const char *name) {
 // Elf64_Rela = { r_offset(8), r_info(8), r_addend(8) } = 24 bytes.
 static int reloc_slots(unsigned long long base, unsigned long long *out, int max) {
     if (!base) return -1;
+    // A readable file mapping can be DEX, APK data or even a page past EOF (SIGBUS).
+    // Only the dynamic linker's actual loaded images may supply relocation metadata.
+    Dl_info image;
+    if (!dladdr((void *)(uintptr_t)base, &image) || image.dli_fbase != (void *)(uintptr_t)base) return -1;
     unsigned char *p = (unsigned char *)base;
     if (memcmp(p, "\x7f""ELF", 4) != 0) return -1;
     unsigned long long phoff = *(unsigned long long *)(p + 32);
@@ -213,6 +217,9 @@ static int reloc_slots(unsigned long long base, unsigned long long *out, int max
         if (off < base) off += base;                 // link-time vaddr -> runtime
         for (unsigned long long e = off; e + relaent <= off + sz; e += relaent) {
             if (n >= max) return RSET_MAX;           // truncated -> untrusted
+            unsigned long long info = *(unsigned long long *)(e + 8);
+            unsigned int kind = (unsigned int)info;
+            if (kind != R_AARCH64_GLOB_DAT && kind != R_AARCH64_JUMP_SLOT) continue;
             unsigned long long r_offset = *(unsigned long long *)e;
             out[n++] = r_offset < base ? base + r_offset : r_offset;
         }
@@ -220,9 +227,10 @@ static int reloc_slots(unsigned long long base, unsigned long long *out, int max
     return n;
 }
 
-static int slot_in_set(unsigned long long a, const unsigned long long *set, int n) {
-    for (int i = 0; i < n; i++) if (set[i] == a) return 1;
-    return 0;
+static int compare_slot_address(const void *left, const void *right) {
+    unsigned long long a = *(const unsigned long long *)left;
+    unsigned long long b = *(const unsigned long long *)right;
+    return a < b ? -1 : a > b ? 1 : 0;
 }
 
 // Hook the real slot in EVERY matching caller module (not just the first). Exactly one
@@ -236,6 +244,9 @@ int adh_got_replace(const char *module_substr, void *orig, void *wrapper) {
     char line[512];
     int replaced = 0;
     long pagesz = sysconf(_SC_PAGESIZE);
+    if (pagesz <= 0 || pagesz > 65536) { fclose(m); return -1; }
+    unsigned char *page_bytes = (unsigned char *)malloc((size_t)pagesz);
+    if (!page_bytes) { fclose(m); return -1; }
     char cur_mod[400] = "";
     int hooked_this_mod = 0;
     unsigned long long *rset = NULL; int nrset = -1;   // cur_mod reloc slots (-1 = unavailable)
@@ -245,17 +256,14 @@ int adh_got_replace(const char *module_substr, void *orig, void *wrapper) {
         int nf = sscanf(line, "%31[0-9a-f]-%31[0-9a-f] %7s %31s %15s %llu %399[^\n]", sa, ea, perms, off, dev, &inode, path);
         if (nf < 6 || perms[0] != 'r') continue;
         char *pp = path; while (*pp == ' ') pp++;
-        // Only file-backed ELF modules (absolute path) hold GOT/reloc slots. Skip anonymous
-        // / [stack] / [anon:*] / JIT regions — matters when module_substr=="" (scan all
-        // modules): reloc validation is unavailable for pathless regions, so the value-match
-        // fallback could clobber a coincidental data word == orig. Named-module callers are
-        // unaffected (their matches were already absolute paths).
+        // Absolute paths are candidates only; reloc_slots also requires an actual loaded
+        // linker image. Never fall back to scanning arbitrary file or anonymous data.
         if (pp[0] != '/') continue;
         if (!strstr(pp, module_substr)) continue;
         if (strcmp(pp, cur_mod) != 0) {
             snprintf(cur_mod, sizeof(cur_mod), "%s", pp); hooked_this_mod = 0;
             // (re)compute this module's real relocation slots, so we never clobber a
-            // coincidental data word == orig. If unparsable/truncated, fall back (logged).
+            // coincidental data word == orig. Untrusted/truncated metadata is never scanned.
             free(rset); rset = NULL; nrset = -1;
             const char *bn = strrchr(cur_mod, '/'); bn = bn ? bn + 1 : cur_mod;
             unsigned long long mb = module_base_of(bn);
@@ -264,29 +272,44 @@ int adh_got_replace(const char *module_substr, void *orig, void *wrapper) {
                 if (rset) {
                     nrset = reloc_slots(mb, rset, RSET_MAX);
                     if (nrset < 0 || nrset >= RSET_MAX) { free(rset); rset = NULL; nrset = -1; }
+                    else qsort(rset, (size_t)nrset, sizeof(*rset), compare_slot_address);
                 }
             }
-            if (nrset < 0) LOGI("got_replace: reloc validation unavailable for %s — value-match fallback", bn);
+            if (nrset < 0) LOGI("got_replace: reloc validation unavailable for %s — skipped", bn);
         }
+        if (nrset <= 0) continue;
         if (hooked_this_mod) continue;                    // one slot per module already done
         if (strstr(perms, "x")) continue;
-        int orig_prot = perms_to_prot(perms);
         unsigned long long start = strtoull(sa, NULL, 16), end = strtoull(ea, NULL, 16);
         if (end <= start) continue;
-        for (unsigned long long a = start; a + sizeof(void *) <= end && !hooked_this_mod; a += sizeof(void *)) {
+        unsigned long long cached_page = 0;
+        ssize_t cached_size = 0;
+        for (int i = 0; i < nrset && !hooked_this_mod; i++) {
+            unsigned long long a = rset[i];
+            if (a < start || a > end - sizeof(void *) || a % sizeof(void *)) continue;
             void **slot = (void **)a;
-            if (*slot != orig) continue;
-            // cross-verify this is a genuine relocation slot (skip coincidental data words).
-            // When reloc parsing was unavailable (nrset<0) we accept the value match as before.
-            if (nrset >= 0 && !slot_in_set(a, rset, nrset)) continue;
-            if (got_write_slot(slot, wrapper, orig_prot, pagesz)) {
+            unsigned long long page = a - (a % (unsigned long long)pagesz);
+            if (page != cached_page) {
+                cached_page = page;
+                size_t count = (size_t)(end - page);
+                if (count > (size_t)pagesz) count = (size_t)pagesz;
+                cached_size = adh_mem_read_in_region(page_bytes, count, page, end);
+            }
+            void *current = NULL;
+            size_t offset = (size_t)(a - page);
+            if (cached_size < 0 || offset + sizeof(current) > (size_t)cached_size) continue;
+            memcpy(&current, page_bytes + offset, sizeof(current));
+            if (current != orig) continue;
+            if (adh_restore_pointer_if_owned(slot, orig, wrapper) == 1) {
                 replaced++; hooked_this_mod = 1;
                 g_dbg_slot = a; snprintf(g_dbg_orig_perms, sizeof(g_dbg_orig_perms), "%s", perms);
             }
         }
     }
     free(rset);
+    free(page_bytes);
     fclose(m);
+    adh_mem_fd_release();
     return replaced;
 }
 

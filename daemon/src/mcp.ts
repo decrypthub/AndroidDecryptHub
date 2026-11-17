@@ -1,4 +1,5 @@
 import {hookPlanAction} from './hook_plan_host.ts';
+import { HOST_VERSION } from './version.ts';
 import {deviceAction} from './device_host.ts';
 import { executeManaged, getOperations, manageOperations } from './operation_host.ts';
 import { describeTool } from './operation_registry.ts';
@@ -430,7 +431,7 @@ export async function handleMcp(reqBody: string, res: ServerResponse, opts?: { p
     const body = JSON.stringify({ jsonrpc: '2.0', id: msg.id, ...(error ? { error } : { result }) });
     res.writeHead(200, { 'content-type': 'application/json' }); res.end(body);
   };
-  if (msg.method === 'initialize') return reply({ protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'adhd', version: '0.1.0' }, instructions: MCP_INSTRUCTIONS });
+  if (msg.method === 'initialize') return reply({ protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'adhd', version: HOST_VERSION }, instructions: MCP_INSTRUCTIONS });
   if (msg.method === 'notifications/cancelled') {
     const operation=requestOperations.get(principal.id+':'+JSON.stringify(msg.params?.requestId));
     if(operation)getOperations().cancelOperation(operation,principal);

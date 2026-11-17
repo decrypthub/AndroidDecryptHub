@@ -1,5 +1,9 @@
 # ADH 功能状态（2026-10-24 更新：通用原生分析与证据核验；各轮实测范围见 §2）
 
+> 2026-11-17发布准备：源码1.0.0尚未发布/默认升级，完整回归仍有失败，不能据旧门禁对外承诺。
+> Host复核566/566，后续定向6/6；原生GOT9/9、v01装载通过，但全模块capture_start仍超时/unknown。
+> 收尾和发布阻塞见[RELEASE_PREPARATION_CLOSEOUT_2026-11-17.md](RELEASE_PREPARATION_CLOSEOUT_2026-11-17.md)。
+
 > **2026-11-16 P4**：LAN TLS、可信 USB 配对、客户端公钥证明、权限/撤销和持久对账已在隔离真实 Node↔Kotlin TLS 流验证。Host **547 passed / 0 failed / 0 skipped**，Android JVM **66 passed**，构建/类型检查通过；MCP 仍 **93**。禁模拟 ADB 后设备域查询、scope/进程/证书/地址 RPC 可独立走 LAN；设备实际效果由合成 backend 验证传输，**真实 Android JSSE/UDS/SELinux/无线链路及真实应用/CA 效果未验证**。agent/diagnostics/fs/helper/bulk 明确未迁移，无隐式 ADB fallback。工作台对账、下载和多 unknown 已浏览器实测。详见 [P4_LAN_AUTH.md](P4_LAN_AUTH.md)。独立 worktree 交付，不部署当前现场。
 
 > **2026-11-16 P3**：设备域、稳定安装身份、能力查询及 USB/ADB RPC 已实现，Binder/RPC 共享业务与状态版本，MCP 增至 **93**。隔离生产 Kotlin/Node 协议、双设备、超时/结果追踪、人类控制与公共 CLI 路径均已测；Android JVM **61 passed**，Device Daemon 构建及 Manager 编译通过。完整 Host 结果见 PROGRESS.md。**真机 Android UDS/SELinux、真实应用/证书效果尚未验证**；LAN/TLS/配对、agent 本地路由、bulk 与 ADB-only 能力迁移未实施，不能宣称 USB/LAN 全能力对等。见 [P3_DEVICE_DOMAIN.md](P3_DEVICE_DOMAIN.md)。源码仅在独立 worktree，不替换当前实例。

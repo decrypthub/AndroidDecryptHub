@@ -4,6 +4,10 @@
 
 ## Layout
 
+2026-11-17发布准备：`hook/got.c`的值匹配只接受linker加载ELF的函数重定位槽，安全按页读取，
+禁止不可信重定位退回任意文件扫描。真机原生夹具9/9；全模块capture_start仍超时，
+未宣称完整修复，见[发布准备收尾](../../docs/RELEASE_PREPARATION_CLOSEOUT_2026-11-17.md)。
+
 2026-11-17: `hook/got.c` also owns `adh_restore_pointer_if_owned`: native GOT unhook uses
 atomic compare/exchange and refuses another writer's pointer. Status reports `slotOwned` and
 `ownership-lost`/`slot-unreadable` before interpreting historical hits. See

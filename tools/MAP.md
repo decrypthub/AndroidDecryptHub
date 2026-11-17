@@ -3,7 +3,18 @@
 Navigation index for the build + verify scripts. **Read this before adding a verify
 script or touching `verify_all.sh`.**
 
+Release follow-up: `check_release_versions.mjs` validates module/Agent/Manager/RootDaemon/Host/update
+versions before packaging. `verify_all.sh` host mode never bootstraps/discovers ADB; full mode supports
+`ADH_VERIFY_BOOTSTRAP=skip` for an already prepared owned Host, selects one explicit device and refuses
+the daily device before bootstrap. `ADH_VERIFY_LOG_DIR` must be new; each script keeps its own log.
+
 ## Shared libraries (source these, don't execute)
+
+`backup_device_upgrade.ts TEST_SERIAL NEW_PRIVATE_OUTPUT`快照模块、root状态和Manager/Sandbox APK与数据，
+校验归档SHA/目标清单及关键文件前后哈希；不执行升级或恢复。含凭据的输出必须在源码仓外，
+Windows收紧ACL，保留root端回滚副本。`install_apk_root`不再附带部署Agent。
+`lib/verify_fetch.mjs`仅适配显式启用的stdin验收客户端，观察一次版本，不重试/提权。
+最新实测与未完成门禁见[发布准备收尾](../docs/RELEASE_PREPARATION_CLOSEOUT_2026-11-17.md)。
 
 `build_got_restore_fixture.sh` builds a short-lived ARM64 executable linked to production `got.c`;
 it never calls ADB. `verify_got_restore.ts TEST_SERIAL BUILT_BINARY NEW_PRIVATE_OUTPUT` explicitly

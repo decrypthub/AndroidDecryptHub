@@ -22,6 +22,10 @@
 #
 # SKIPs (exit 0, no RESULT:PASS) when a precondition is missing: no device, no root manager, no adh
 # module, no adb reverse tunnel (tools/dev_up.sh), or the target package is not installed.
+# P5 deliberately retired scope-driven fixed Hook policy. The stronger seven-family real-hit,
+# disabled-family and all-off replacement lives in verify_p5_zygisk.ts / p5_zygisk_cases.ts.
+echo 'RESULT:SKIP retired scope-driven policy contract; run the explicit P5 Host-plan family matrix'
+exit 0
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
 verify_resolve_env

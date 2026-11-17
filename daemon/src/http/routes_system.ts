@@ -1,4 +1,5 @@
 import { patchSettings, settingsHttpStatus } from '../settings_service.ts';
+import { HOST_VERSION } from '../version.ts';
 import { maintainData } from '../maintenance.ts';
 import { localEffect } from '../execution_context.ts';
 import { existsSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -97,7 +98,7 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       } catch (e) { return send(500, { ok: false, error: (e as Error).message }); }
     } },
     { path: '/health', handler: () => send(200, {
-      ok: true, service: 'adhd', name: 'ADH Daemon', version: '0.1.0',
+      ok: true, service: 'adhd', name: 'ADH Daemon', version: HOST_VERSION,
       agents: sessions.size, uptime: process.uptime(), mcpTools: MCP_TOOLS.length, web: webUrls(),
       agent: { port: AGENT_PORT },
       apps: [...sessions.values()].map(s => ({
@@ -171,7 +172,7 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
     } },
     // Diagnostic report / export (P/R) — metadata only, no captured keys/plaintext.
     { path: '/api/export/report', handler: () => send(200, {
-      report: 'adh-diagnostic', version: '0.1.0', generatedAt: new Date().toISOString(), uptime: process.uptime(),
+      report: 'adh-diagnostic', version: '0.1.0', hostVersion: HOST_VERSION, generatedAt: new Date().toISOString(), uptime: process.uptime(),
       agents: [...sessions.values()].map(s => ({ sessionId: s.sessionId, package: s.package, pid: s.pid, abi: s.abi, android: s.android, sdk: s.sdk, entry: s.entry, online: s.online, mapsCount: s.mapsCount })),
       dumps: [...dumps.values()].map(d => ({ sha256: d.sha256, kind: d.kind, size: d.size, source: d.source, tag: d.tag, capturedAt: d.capturedAt })),
       capabilities: { rest: true, websocket: true, mcp: true, mcpTools: MCP_TOOLS.length },

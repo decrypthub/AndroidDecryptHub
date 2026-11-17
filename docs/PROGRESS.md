@@ -1,5 +1,13 @@
 # PROGRESS — 跨会话进度看板
 
+2026-11-17 发布准备收尾：按用户要求停止扩展。移除APK安装附带的正式Agent部署，
+加入隔离runner/状态版本适配与有归属的进程管理；GOT扫描拒绝非linker ELF/不可信重定位。
+源码版本准备为1.0.0，但未发布/未默认升级，旧候选ZIP已隔离。
+Host复核566/566，最后新增定向6/6；原生GOT9/9、v01装载40/40通过。
+新候选全模块capture_start仍超时/unknown，完整发布回归未通过。
+已停止隔离进程/沙盒并恢复reverse；原正式Agent曾被旧辅助函数替换，已恢复，六文件SHA复核相等。
+详情见[发布准备收尾](RELEASE_PREPARATION_CLOSEOUT_2026-11-17.md)。
+
 2026-11-17 集成/CLI发布：ADH PR1、adh-cli PR2远端CI通过后均合并，分别为fe2d2c2/f394dc8，
 保留阶段提交历史。CLI0.2.0已发布PyPI、v0.2.0和桌面组件decrypthub-v0.2.0；源码14/14、
 独立wheel运行时13/13、build/twine、公开PyPI下载导入和组件文件清单SHA验证通过。

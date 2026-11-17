@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Master regression runner — runs every version acceptance script and reports a summary.
-# Ensures ADH Daemon + adb reverse are up first. Device-only scripts are skipped (not failed)
+# Full mode can bootstrap ADH Daemon + adb reverse. Host mode never bootstraps or discovers ADB.
+# ADH_VERIFY_BOOTSTRAP=skip uses an already prepared, owned environment for full verification.
+# Device-only scripts are skipped (not failed)
 # when no device is attached. Exit 0 only if all RUN scripts passed.
 #
 # ADH_VERIFY_MODE=host  — only :host scripts (daily / no phone). Prefer: tools/verify_host.sh
@@ -9,8 +11,38 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 MODE="${ADH_VERIFY_MODE:-full}"
-bash tools/dev_up.sh >/dev/null 2>&1
-STATE="$(adb get-state 2>/dev/null | tr -d '\r')"
+case "$MODE" in host|full) ;; *) echo 'invalid ADH_VERIFY_MODE (host/full required)' >&2; exit 2 ;; esac
+BOOTSTRAP="${ADH_VERIFY_BOOTSTRAP:-auto}"
+case "$BOOTSTRAP" in auto|skip) ;; *) echo 'invalid ADH_VERIFY_BOOTSTRAP (auto/skip required)' >&2; exit 2 ;; esac
+source "$ROOT/tools/lib/verify_common.sh"
+STATE=offline
+if [ "$MODE" = full ]; then
+  SERIAL="${ANDROID_SERIAL:-${ADH_SERIAL:-}}"
+  if [ -z "$SERIAL" ]; then
+    DEVICES="$(adb devices 2>/dev/null | tr -d '\r' | awk 'NR>1 && $2=="device" {print $1}')"
+    COUNT="$(printf '%s\n' "$DEVICES" | awk 'NF{n++} END{print n+0}')"
+    [ "$COUNT" -le 1 ] || { echo 'multiple devices: set ANDROID_SERIAL explicitly' >&2; exit 2; }
+    SERIAL="$DEVICES"
+  fi
+  [ "$SERIAL" != a22fecdd ] || { echo 'daily device a22fecdd refused before bootstrap' >&2; exit 2; }
+  if [ -n "$SERIAL" ]; then
+    export ANDROID_SERIAL="$SERIAL"
+    STATE="$(adb -s "$SERIAL" get-state 2>/dev/null | tr -d '\r')"
+  fi
+  if [ "$BOOTSTRAP" = auto ]; then
+    [ -n "${ADH_VERIFY_OWNED_ROOT:-}" ] && [ -n "${ADH_DATA_DIR:-}" ] || { echo 'full bootstrap requires ADH_VERIFY_OWNED_ROOT and isolated ADH_DATA_DIR' >&2; exit 2; }
+    existing="$(daemon_pid_on_port "${ADH_HTTP_PORT:-8088}")"
+    if [ -n "$existing" ] && ! verify_pid_owned "$existing"; then echo 'refuse bootstrap over an unowned Host' >&2; exit 2; fi
+    bash tools/dev_up.sh >/dev/null 2>&1
+  fi
+fi
+if [ -n "${ADH_VERIFY_LOG_DIR:-}" ]; then
+  [ ! -e "$ADH_VERIFY_LOG_DIR" ] || { echo 'ADH_VERIFY_LOG_DIR must be new' >&2; exit 2; }
+  mkdir -p "$ADH_VERIFY_LOG_DIR" || exit 2
+  LOG_DIR="$ADH_VERIFY_LOG_DIR"
+else
+  LOG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/adh-verify.XXXXXX")" || exit 2
+fi
 # name:needs_device
 SCRIPTS=(
   "verify_v01.sh:device"
@@ -286,22 +318,56 @@ SCRIPTS=(
 )
 
 pass=0; fail=0; skip=0; FAILED=""
+SERVICE_READY=''
+service_ready() {
+  [ -n "${ADH_VERIFY_OWNED_ROOT:-}" ] || return 1
+  if [ -z "$SERVICE_READY" ]; then
+    local listener; listener="$(daemon_pid_on_port "${ADH_HTTP_PORT:-8088}")"
+    if [ -n "$listener" ] && verify_pid_owned "$listener" && curl --fail --silent --max-time 2 "http://127.0.0.1:${ADH_HTTP_PORT:-8088}/health" >/dev/null 2>&1; then SERVICE_READY=yes; else SERVICE_READY=no; fi
+  fi
+  [ "$SERVICE_READY" = yes ]
+}
 echo "verify_all mode=$MODE (host=daily subset, full=host+device)"
+echo "logs=$LOG_DIR"
+if [ -n "${ADH_VERIFY_OWNED_ROOT:-}" ]; then
+  SHIM_URL="$(node --input-type=module -e "import {pathToFileURL} from 'node:url';process.stdout.write(pathToFileURL(process.argv[1]).href)" "$ROOT/tools/lib/verify_fetch.mjs")" || exit 2
+  export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--import=$SHIM_URL"
+  export ADH_VERIFY_FETCH_COORDINATED=1
+  export ADH_VERIFY_FETCH_BASE="http://127.0.0.1:${ADH_HTTP_PORT:-8088}"
+fi
 for entry in "${SCRIPTS[@]}"; do
   name="${entry%%:*}"; needs="${entry##*:}"
   [ -f "tools/$name" ] || continue
   if [ "$MODE" = "host" ] && [ "$needs" = "device" ]; then
     continue
   fi
+  # A host-only gate may still need a prepared local HTTP service or build fixture.
+  # Missing external prerequisites are SKIP, while a failing assertion remains FAIL.
+  case "$name" in
+    verify_v02_dexrepair.sh|verify_v04_dexparse.sh|verify_v08_dexsearch.sh|verify_v08_xref.sh|verify_v09_methodcode.sh|verify_v95_dex_trycatch.sh|verify_v96_dex_map.sh|verify_v12_rebuild.sh|verify_v13_recover.sh|verify_v29_dexindex.sh)
+      if [ ! -f "$ROOT/sandbox-app/app/build/outputs/apk/debug/app-debug.apk" ]; then echo "SKIP  $name (sandbox APK not built)"; skip=$((skip+1)); continue; fi ;;
+  esac
+  case "$name" in
+    verify_v02_dexrepair.sh|verify_v04_dexparse.sh|verify_v08_dexsearch.sh|verify_v08_disasm.sh|verify_v08_analyze.sh|verify_v08_xref.sh|verify_v09_cryptoconst.sh|verify_v09_syscall.sh|verify_v09_methodcode.sh|verify_v10_mcp.sh|verify_v10_webui.sh|verify_v33_backends.sh|verify_v35_sessions.sh|verify_v10_export.sh|verify_v12_rebuild.sh|verify_v13_recover.sh|verify_v19_settings.sh|verify_v29_dexindex.sh)
+      if ! service_ready; then echo "SKIP  $name (prepare an owned Host on ADH_HTTP_PORT with ADH_VERIFY_OWNED_ROOT; host mode never starts it)"; skip=$((skip+1)); continue; fi ;;
+  esac
   if [ "$needs" = "device" ] && [ "$STATE" != "device" ]; then
     echo "SKIP  $name (no device)"; skip=$((skip+1)); continue
   fi
+  if [ "$needs" = "device" ] && ! service_ready; then echo "SKIP  $name (prepared Host unavailable)"; skip=$((skip+1)); continue; fi
+  case "$name" in
+    verify_v27_zygisk.sh|verify_v75_zygisk_memfd.sh|verify_v98_injected_java_surface.sh|verify_v103_zygisk_companion.sh|verify_v129_qbdi_delivery.sh)
+      source_version="$(awk -F= '$1=="version"{gsub(/\r/,"",$2);print $2}' "$ROOT/injector/zygisk/module/module.prop")"
+      deployed_version="$(adb -s "$SERIAL" exec-out su -c 'cat /data/adb/modules/adh/module.prop' 2>/dev/null | tr -d '\r' | awk -F= '$1=="version"{print $2}')"
+      if [ "$source_version" != "$deployed_version" ]; then echo "SKIP  $name (source $source_version is not the deployed module $deployed_version; rerun after upgrade)"; skip=$((skip+1)); continue; fi ;;
+  esac
   # device scripts need the sandbox running + agent connected; (re)launch first
   if [ "$needs" = "device" ]; then
-    adb shell am force-stop com.adh.sandbox >/dev/null 2>&1
-    adb shell am start -n com.adh.sandbox/.MainActivity >/dev/null 2>&1; sleep 4
+    adb -s "$SERIAL" shell am force-stop com.adh.sandbox >/dev/null 2>&1
+    adb -s "$SERIAL" shell am start -n com.adh.sandbox/.MainActivity >/dev/null 2>&1; sleep 4
   fi
-  if bash "tools/$name" >/tmp/vr.log 2>&1; then
+  LOG="$LOG_DIR/$name.log"
+  if bash "tools/$name" >"$LOG" 2>&1 && ! grep -qE '^RESULT:FAIL([[:space:]]|$)' "$LOG"; then
     # A capability script whose precondition is missing exits 0 WITHOUT the RESULT:PASS sentinel: it
     # prints either a top-level "SKIP ..." line (verify_v75) or "RESULT:SKIP" (verify_v30/34).
     # Counting those as passes would report an acceptance that never ran; counting RESULT:SKIP as a
@@ -309,17 +375,21 @@ for entry in "${SCRIPTS[@]}"; do
     # A skip must be the script's FINAL result: the last non-empty line starts with SKIP (v75 style)
     # or the script ends with the RESULT:SKIP sentinel (v30/34 style). Matching any line in the
     # log would turn a script that merely mentions an internal skip into a skip itself.
-    last_line="$(grep -v '^[[:space:]]*$' /tmp/vr.log | tail -1)"
-    if [[ "$last_line" == SKIP* ]] || grep -q '^RESULT:SKIP' /tmp/vr.log; then
-      reason="$(grep -m1 'SKIP (' /tmp/vr.log | sed -e 's/^[[:space:]]*//' -e 's/^[^A-Za-z0-9]*//')"
-      [ -n "$reason" ] || reason="$(grep -m1 -E '^(SKIP|RESULT:SKIP)' /tmp/vr.log | sed -e 's/^RESULT:SKIP[[:space:]]*//' -e 's/^SKIP[[:space:]]*//')"
+    last_line="$(grep -v '^[[:space:]]*$' "$LOG" | tail -1)"
+    if { [[ "$last_line" == SKIP* ]] || grep -qE '^RESULT:SKIP([[:space:]]|$)' "$LOG"; } &&
+       ! grep -qE '^RESULT:PASS([[:space:]]|$)' "$LOG"; then
+      reason="$(grep -m1 'SKIP (' "$LOG" | sed -e 's/^[[:space:]]*//' -e 's/^[^A-Za-z0-9]*//')"
+      [ -n "$reason" ] || reason="$(grep -m1 -E '^(SKIP|RESULT:SKIP)' "$LOG" | sed -e 's/^RESULT:SKIP[[:space:]]*//' -e 's/^SKIP[[:space:]]*//')"
       echo "SKIP  $name ($reason)"; skip=$((skip+1))
     else
       echo "PASS  $name"; pass=$((pass+1))
     fi
   else
     echo "FAIL  $name"; fail=$((fail+1)); FAILED="$FAILED $name"
-    tail -6 /tmp/vr.log | sed 's/^/        /'
+    tail -6 "$LOG" | cut -c1-360 | sed 's/^/        /'
+    echo "        full details: $LOG"
+    case "$name" in verify_v01.sh|verify_v02.sh) echo 'ABORT full verification: sandbox bootstrap prerequisite failed'; break ;; esac
+    if grep -q CONTROL_REQUIRED "$LOG"; then echo 'ABORT full verification: acceptance client violated the required control-version contract'; break; fi
   fi
 done
 echo "----"

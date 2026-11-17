@@ -1,6 +1,8 @@
 #include "../src/hook/got.h"
 #include <assert.h>
 #include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
 #include <stdio.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -45,6 +47,15 @@ int main(void) {
     assert(munmap(slot, size) == 0);
     assert(adh_restore_pointer_if_owned(slot, ours, original) == 0);
     puts("PASS unmapped-rejected");
-    puts("ADH_GOT_RESTORE_PASS 8");
+    char path[]="/data/local/tmp/adh-got-sigbus-XXXXXX";
+    int file=mkstemp(path);assert(file>=0);assert(ftruncate(file,(off_t)size)==0);
+    void *mapped=mmap(NULL,size*2,PROT_READ,MAP_PRIVATE,file,0);assert(mapped!=MAP_FAILED);
+    printf("SIGBUS_PROBE_FILE=%s\n",path);fflush(stdout);
+    // The second page is listed as readable but any direct access raises SIGBUS.
+    // A non-ELF data file never has a validated GOT; do not scan it for pointer values.
+    assert(adh_got_replace(strrchr(path,'/')+1,ours,original)==0);
+    assert(munmap(mapped,size*2)==0);assert(close(file)==0);assert(unlink(path)==0);
+    puts("PASS non-ELF-mapping-with-SIGBUS-tail-is-not-scanned");
+    puts("ADH_GOT_RESTORE_PASS 9");
     return 0;
 }

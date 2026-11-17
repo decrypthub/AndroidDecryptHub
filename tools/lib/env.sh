@@ -96,13 +96,8 @@ install_apk_root() {
   if [ -n "${saved}" ]; then export MSYS_NO_PATHCONV="$saved"; else unset MSYS_NO_PATHCONV; fi
   printf '%s\n' "$out"
   grep -q 'Success' <<<"$out" || return 1
-  # A reinstall of the sandbox APK RESETS the agent .so to the copy baked into that APK, which can
-  # be many revisions behind agent/build/. Every device acceptance script after `verify_v01` then
-  # silently tests the wrong agent - measured 2026-10-01: the gate had been running an agent three
-  # rebuilds old (82e0cfb5 vs 78d9d20f) while the tree said otherwise. So the install step puts our
-  # build back. The sandbox extracts native libs at install time, so this is a plain file copy (no
-  # APK rebuild, no gradle); the Zygisk module path gets the same file.
-  refresh_agent_so "$serial"
+  # Installing one APK must not also replace extracted libraries or the production module.
+  # Build/stage the intended Agent into the APK first; explicit --deploy remains separate.
 }
 
 # Put agent/build/libadh_agent.so into the installed sandbox (and the flashed module) so the device
@@ -111,8 +106,18 @@ refresh_agent_so() {
   local serial="${1:-${SERIAL:-${ANDROID_SERIAL:-}}}"
   local adb_cmd="${ADB:-adb}"
   local so="$ROOT/agent/build/libadh_agent.so"
-  [ -n "$serial" ] || return 0
-  [ -f "$so" ] || return 0
+  [ -n "$serial" ] || { echo 'explicit serial required for Agent deployment' >&2; return 1; }
+  [ "$serial" != a22fecdd ] || { echo 'daily device refused' >&2; return 1; }
+  [ -f "$so" ] || { echo 'Agent build missing' >&2; return 1; }
+  local expected deployed deployed_prop
+  expected="$(sed -n 's/^#define AGENT_VER[[:space:]]*"\(.*\)"/\1/p' "$ROOT/agent/src/bootstrap/agent_internal.h" | tr -d '\r')"
+  deployed_prop="$("$adb_cmd" -s "$serial" exec-out su -c 'cat /data/adb/modules/adh/module.prop' 2>/dev/null)" || { echo 'cannot verify installed module; use an APK or version-paired bundle' >&2; return 1; }
+  deployed="$(printf '%s\n' "$deployed_prop" | tr -d '\r' | awk -F= '$1=="version"{print $2}')"
+  [ -n "$deployed" ] && [ -n "$expected" ] || { echo 'module/Agent version unavailable; refusing deployment' >&2; return 1; }
+  if [ "$deployed" != "v$expected" ]; then
+    echo "refuse Agent-only deploy into $deployed; install the version-paired bundle v$expected" >&2
+    return 1
+  fi
   local script="/data/local/tmp/adh_agent_refresh.sh"
   cat > /tmp/adh_agent_refresh.sh <<'EOS'
 #!/system/bin/sh

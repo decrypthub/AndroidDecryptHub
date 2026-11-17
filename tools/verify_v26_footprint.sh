@@ -34,13 +34,13 @@ PROGRAM="$("$READELF" -l "$SO")"
 # sorts BEFORE `JNI_OnLoad` and a hardcoded order fails while the set is correct. Pinning the
 # collation makes the comparison say what it means, on any host.
 DEFINED="$(awk '$1 ~ /^[0-9]+:$/ && $7 != "UND" {print $8}' <<<"$DYNSYM" | LC_ALL=C sort -u | tr '\n' ' ')"
-EXPECTED="$(printf '%s\n' JNI_OnLoad adh_agent_set_package adh_agent_set_policy adh_agent_set_endpoint adh_agent_start | LC_ALL=C sort | tr '\n' ' ')"
+EXPECTED="$(printf '%s\n' JNI_OnLoad adh_agent_set_package adh_agent_set_policy adh_agent_set_endpoint adh_agent_set_qbdi_fd adh_agent_set_vm adh_agent_apply_early_v1 adh_agent_start | LC_ALL=C sort | tr '\n' ' ')"
 BYTES="$(wc -c < "$SO" | tr -d '[:space:]')"
 DEBUG_SO="$ROOT/agent/build/libadh_agent.so.debug"
 
 echo "agent=${BYTES}B defined-exports=${DEFINED:-none}"
 verify_chk "release .so has no .symtab/.debug sections" '! grep -qE "\\.(symtab|debug_)" <<<"$SECTIONS"'
-verify_chk "release .dynsym defined set is exactly the five bootstrap entries" '[ "$DEFINED" = "$EXPECTED" ]'
+verify_chk "release .dynsym defined set is exactly the eight approved bootstrap entries" '[ "$DEFINED" = "$EXPECTED" ]'
 verify_chk "release ELF has no RWX LOAD segment" '! grep -qE "LOAD.*(RWE|RWX)" <<<"$PROGRAM"'
 verify_chk "release .so is smaller than the local debug copy" '[ -f "$DEBUG_SO" ] && [ "$BYTES" -lt "$(wc -c < "$DEBUG_SO" | tr -d "[:space:]")" ]'
-verify_host_finish "v2.6 WS-J static injection footprint (strip + 5-entry whitelist + no RWX)"
+verify_host_finish "v2.6 WS-J static injection footprint (strip + 8-entry whitelist + no RWX)"

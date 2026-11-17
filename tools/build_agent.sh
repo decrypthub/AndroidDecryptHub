@@ -12,7 +12,8 @@
 # path is looking at what was just built.
 #
 # --deploy: after a successful build, push the .so into the installed sandbox (and the flashed
-#           Zygisk module) so the device runs this build. Same code path install_apk_root uses.
+#           same-version Zygisk module) so the device runs this build. APK installation
+#           never implicitly deploys the Agent.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/env.sh"
 

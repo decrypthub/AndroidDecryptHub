@@ -4,6 +4,7 @@
 # so a module zip cannot ship a stale agent.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/env.sh"
+node "$ROOT/tools/check_release_versions.mjs"
 
 ZY="$ROOT/injector/zygisk"
 JNI="$ZY/jni"

@@ -21,9 +21,9 @@ try{
   await adb(['shell','mkdir',remote]);owned=true;
   await adb(['push',resolve(binary),remote+'/verify']);await adb(['shell','chmod','700',remote+'/verify']);
   const stdout=await adb(['shell',remote+'/verify']);writeFileSync(join(dir,'stdout.txt'),stdout+'\n');
-  assert.match(stdout,/ADH_GOT_RESTORE_PASS 8/);
-  assert.equal(stdout.split(/\r?\n/).filter(s=>s.startsWith('PASS ')).length,8);
-  report.passed=8;
+  assert.match(stdout,/ADH_GOT_RESTORE_PASS 9/);
+  assert.equal(stdout.split(/\r?\n/).filter(s=>s.startsWith('PASS ')).length,9);
+  report.passed=9;
 }catch(error){report.failure=(error as Error).message;process.exitCode=1;}
 finally{
   try{if(owned){const files=await adb(['shell','ls','-A',remote]);assert.ok(files===''||files==='verify','unexpected fixture files; retain for inspection');await adb(['shell','rm','-f',remote+'/verify']);await adb(['shell','rmdir',remote]);}report.cleanupVerified=true;}

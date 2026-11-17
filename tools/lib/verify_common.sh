@@ -100,8 +100,18 @@ daemon_pid_on_port() {
 
 # Stop one PID. PowerShell on Windows (taskkill /F gets mangled under MSYS_NO_PATHCONV and fails
 # silently, which would fake a pass by leaving the daemon running); kill elsewhere.
+verify_pid_owned() {
+  local pid="$1"
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 2
+  [ -n "${ADH_VERIFY_OWNED_ROOT:-}" ] || { echo 'refuse to stop a service without ADH_VERIFY_OWNED_ROOT' >&2; return 2; }
+  case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) powershell -NoProfile -Command "\$p=Get-CimInstance Win32_Process -Filter 'ProcessId=$pid'; if (\$null -eq \$p -or !\$p.CommandLine.Replace('\\','/').ToLowerInvariant().Contains(\$env:ADH_VERIFY_OWNED_ROOT.Replace('\\','/').TrimEnd('/').ToLowerInvariant())) { exit 2 }" >/dev/null 2>&1 ;;
+    *) local cmdline; cmdline="$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null)"; [[ "$cmdline" == *"$ADH_VERIFY_OWNED_ROOT"* ]] ;;
+  esac
+}
 verify_stop_pid() {
   local pid="$1"
+  verify_pid_owned "$pid" || return 2
   case "$(uname -s 2>/dev/null)" in
     MINGW*|MSYS*|CYGWIN*) powershell -NoProfile -Command "Stop-Process -Id $pid -Force" >/dev/null 2>&1 ;;
     *) kill "$pid" 2>/dev/null ;;
@@ -115,7 +125,7 @@ verify_stop_pid() {
 verify_kill_port() {
   local port="$1" pid killed=0
   pid="$(daemon_pid_on_port "$port")"
-  if [ -n "$pid" ]; then verify_stop_pid "$pid"; killed=1; sleep 1; fi
+  if [ -n "$pid" ]; then verify_stop_pid "$pid" || { echo 'RESULT:FAIL refusing to replace an unowned port listener' >&2; exit 2; }; killed=1; sleep 1; fi
   printf '%s' "$killed"
 }
 
@@ -126,10 +136,13 @@ verify_kill_port() {
 # never ends up waiting on the daemon it just launched.
 verify_start_daemon() {
   local port="${1:-8088}" budget="${2:-240}" waited=0
+  [ -z "$(daemon_pid_on_port "$port")" ] || { echo 'refuse to start over an existing listener' >&2; return 2; }
+  local logfile="${ADH_VERIFY_DAEMON_LOG:-$(mktemp "${TMPDIR:-/tmp}/adhd-verify.XXXXXX.log")}";
+  export ADH_HTTP_PORT="$port"
   if command -v setsid >/dev/null 2>&1; then
-    ( cd "$ROOT/daemon" && setsid nohup node src/index.ts >/tmp/adhd.log 2>&1 </dev/null & ) >/dev/null 2>&1
+    ( cd "$ROOT/daemon" && setsid nohup node "$ROOT/daemon/src/index.ts" >>"$logfile" 2>&1 </dev/null & ) >/dev/null 2>&1
   else
-    ( cd "$ROOT/daemon" && nohup node src/index.ts >/tmp/adhd.log 2>&1 </dev/null & ) >/dev/null 2>&1
+    ( cd "$ROOT/daemon" && nohup node "$ROOT/daemon/src/index.ts" >>"$logfile" 2>&1 </dev/null & ) >/dev/null 2>&1
   fi
   while [ "$waited" -lt "$budget" ]; do
     curl -s -m 2 "http://127.0.0.1:$port/health" >/dev/null 2>&1 && return 0
@@ -142,6 +155,12 @@ verify_gate() {
   local label="$1"
   local require_alive="${2:-1}"
   local ok=0
+  # A missing optional fixture is not a product failure. Never hide an earlier
+  # explicit PASS/FAIL behind a later SKIP marker.
+  if grep -qE '^RESULT:SKIP([[:space:]]|$)' <<<"$OUT" &&
+     ! grep -qE '^RESULT:(PASS|FAIL)([[:space:]]|$)' <<<"$OUT"; then
+    echo "⏭ $label SKIP"; return 0
+  fi
   if grep -q 'RESULT:PASS' <<<"$OUT"; then
     if [ "$require_alive" = "1" ] && [ -z "$ALIVE" ]; then ok=0; else ok=1; fi
   fi
@@ -176,7 +195,7 @@ verify_grep_q() { grep -q "$2" <<<"$1"; }
 verify_unit_pass() {
   local label="$1" testfile="$2" min_pass="${3:-0}"
   local raw rc clean passes fails
-  raw="$(cd "$ROOT/daemon" && node --test "test/$testfile" 2>&1)"; rc=$?
+  raw="$(cd "$ROOT/daemon" && node test/run.mjs "test/$testfile" 2>&1)"; rc=$?
   # Strip ANSI: a TTY or a forced colour level makes the spec reporter wrap its lines.
   clean="$(printf '%s\n' "$raw" | sed $'s/\033\\[[0-9;]*[a-zA-Z]//g')"
   passes="$(grep -m1 -oE '^(#|ℹ) pass [0-9]+$' <<<"$clean")"; passes="${passes##* }"
