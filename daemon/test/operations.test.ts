@@ -29,6 +29,7 @@ test('read effect classification is exact per tool and unclassified actions fail
   assert.equal(describeTool('java_trace',{action:'digest'}).mode,'read');
   assert.equal(describeHttp('/api/native/future-mutation','POST',{}).mode,'write');
   assert.equal(describeHttp('/api/native/analyze','POST',{}).mode,'analysis');
+  assert.equal(describeHttp('/api/data/clear','POST',{}).global,true,'legacy Host cleanup must share the Host control domain');
 });
 
 test('writes require current state; idempotency never dispatches a target twice',async()=>{

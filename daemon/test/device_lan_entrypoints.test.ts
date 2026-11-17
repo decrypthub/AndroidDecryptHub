@@ -48,7 +48,9 @@ test('public CLI pairing, MCP LAN recovery and REST revocation share durable rec
     await rpc('operations',{action:'takeover',resource,_operation:meta(resource)},true);
     const blocked=await rpc('devices',{...await intent(recovered,'host.set',{endpoint:'192.0.2.2:8761'}),_operation:meta(resource)});assert.equal(blocked.code,'CONTROL_HELD');
     await rpc('operations',{action:'release',resource,_operation:meta(resource)},true);
-    const grant=devices.list().devices[0].pairing!;const revoked=await rest(await intent(recovered,'pairings.revoke',{grantId:grant.grantId}),resource);assert.equal(revoked.status,504);assert.equal(revoked.body._operation.state,'unknown');
+    const grant=devices.list().devices.find(device=>device.deviceId===usb.deviceId)?.pairing;
+    assert.ok(grant,'the explicitly paired fixture must retain its enrollment');
+    const revoked=await rest(await intent(recovered,'pairings.revoke',{grantId:grant.grantId}),resource);assert.equal(revoked.status,504);assert.equal(revoked.body._operation.state,'unknown');
     const denied=await rpc('devices',{action:'connect',transport:'lan',deviceId:usb.deviceId,address:'127.0.0.1',port,_operation:meta(resource)});assert.equal(denied.code,'AUTH_FAILED');assert.equal(forbidden,0);
   }finally{devices.close();await new Promise<void>(r=>server.close(()=>r()));engine.close();await adb.close();await phone.close();}
 });

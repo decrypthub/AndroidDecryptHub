@@ -13,6 +13,7 @@
 
 #include "qbdi_trace.h"
 #include "../hook/native_hooks.h"
+#include "../bootstrap/agent_internal.h"
 
 #include <dlfcn.h>
 #include <errno.h>
@@ -314,6 +315,7 @@ struct RunCtx {
     qbdi_summary_t *sum;
     // Optional write watch for this run only.
     qbdi_watch_t *watch;
+    uint64_t stack_source_lo, stack_shadow_lo, stack_span;
     struct { char name[ADH_QTRACE_MNEM_MAX]; int count; } mnem[QTRACE_MNEM_SLOTS];
     int nmnem;
 };
@@ -592,14 +594,17 @@ static VMAction qbdi_watch_cb(VMInstanceRef vm, GPRState *gpr, FPRState *fpr, vo
     if (!ma || !n) return QBDI_CONTINUE;
     for (size_t i = 0; i < n; i++) {
         if (!(ma[i].type & QBDI_MEMORY_WRITE)) continue;
-        if (ma[i].accessAddress < c->watch->lo || ma[i].accessAddress >= c->watch->hi) continue;
+        uint64_t address = (uint64_t)ma[i].accessAddress;
+        if (c->stack_span && address >= c->stack_shadow_lo && address - c->stack_shadow_lo < c->stack_span)
+            address = c->stack_source_lo + (address - c->stack_shadow_lo);
+        if (address < c->watch->lo || address >= c->watch->hi) continue;
         if (c->watch->count >= ADH_QTRACE_WATCH_MAX) {
             c->watch->truncated = 1;
             continue;
         }
         int k = c->watch->count++;
         c->watch->hits[k].pc = (uint64_t)ma[i].instAddress;
-        c->watch->hits[k].addr = (uint64_t)ma[i].accessAddress;
+        c->watch->hits[k].addr = address;
         c->watch->hits[k].value = (uint64_t)ma[i].value;
         c->watch->hits[k].size = (int)ma[i].size;
         const char *text = "";
@@ -617,9 +622,9 @@ static VMAction qbdi_watch_cb(VMInstanceRef vm, GPRState *gpr, FPRState *fpr, vo
 int adh_qbdi_watch_json(const qbdi_watch_t *w, char *out, size_t cap) {
     if (!w || !out || cap < 64) return -1;
     char error[sizeof(w->error)]; sanitize_text(error, sizeof(error), w->error);
-    int n = snprintf(out, cap, "{\"lo\":\"0x%llx\",\"hi\":\"0x%llx\",\"count\":%d,\"truncated\":%s%s%s%s",
+    int n = snprintf(out, cap, "{\"lo\":\"0x%llx\",\"hi\":\"0x%llx\",\"count\":%d,\"truncated\":%s,\"addressSpace\":\"%s\"%s%s%s",
                      (unsigned long long)w->lo, (unsigned long long)w->hi, w->count,
-                     w->truncated ? "true" : "false",
+                     w->truncated ? "true" : "false", w->stack_shadow ? "replay-stack" : "target",
                      error[0] ? ",\"error\":\"" : "", error, error[0] ? "\"" : "");
     if (n < 0 || (size_t)n >= cap) return -1;
     size_t off = (size_t)n;
@@ -751,11 +756,48 @@ int adh_qbdi_run_from_watch(uint64_t pc, const uint64_t *gpr, int budget, int ti
     st->x16 = st->x17 = 0;
     st->x29 = (rword)gpr[9];
     st->lr = (rword)gpr[10];
-    // sp: an explicit value from the caller when it has one (an in-hook trace of a function whose frame
-    // is live), otherwise the private virtual stack this VM allocated.
-    st->sp = gpr[23] != ADH_QTRACE_GPR_UNKNOWN
-        ? (rword)gpr[23]
-        : (rword)(((uintptr_t)tv->stack + ADH_QTRACE_VSTACK - 64) & ~(uintptr_t)15);
+    // Never execute a replay on the real SP: the guest's prologue overwrites the
+    // hook stub and callback frames below it, corrupting the real return path.
+    // Keep room below SP for guest calls and copy a bounded live frame above it.
+    memset(tv->stack, 0, ADH_QTRACE_VSTACK);
+    uint64_t stack_source_lo = 0, stack_shadow_lo = 0, stack_span = 0;
+    if (gpr[23] != ADH_QTRACE_GPR_UNKNOWN) {
+        const uint64_t source_sp = gpr[23];
+        unsigned long long source_end = 0;
+        const size_t capacity = ADH_QTRACE_VSTACK / 2 - 64;
+        const uintptr_t guest_sp = ((uintptr_t)tv->stack + ADH_QTRACE_VSTACK / 2) & ~(uintptr_t)15;
+        out->stack_shadow = 1;
+        if ((source_sp & 15) || !adh_mem_region_end(source_sp, &source_end) || source_end <= source_sp) {
+            snprintf(out->error, sizeof(out->error), "live SP is not an aligned readable stack range");
+            out->stop_reason = "did-not-run";
+            return -1;
+        }
+        const size_t available = (size_t)(source_end - source_sp);
+        const size_t copied = available < capacity ? available : capacity;
+        if (adh_mem_pread((void *)guest_sp, copied, source_sp) != (ssize_t)copied) {
+            snprintf(out->error, sizeof(out->error), "live stack snapshot was not completely readable");
+            out->stop_reason = "did-not-run";
+            return -1;
+        }
+        out->stack_bytes = (unsigned int)copied;
+        out->stack_truncated = available > copied;
+        st->sp = (rword)guest_sp;
+        const uint64_t below = source_sp < ADH_QTRACE_VSTACK / 2 ? 0 : ADH_QTRACE_VSTACK / 2;
+        stack_source_lo = source_sp - below;
+        stack_shadow_lo = guest_sp - below;
+        stack_span = below + copied;
+        if (gpr[9] >= source_sp && gpr[9] < source_end) {
+            if (gpr[9] - source_sp >= copied) {
+                snprintf(out->error, sizeof(out->error), "live FP leaves the bounded stack snapshot");
+                out->stop_reason = "did-not-run";
+                return -1;
+            }
+            st->x29 = (rword)(guest_sp + (uintptr_t)(gpr[9] - source_sp));
+        }
+    } else {
+        st->sp = (rword)(((uintptr_t)tv->stack + ADH_QTRACE_VSTACK - 64) & ~(uintptr_t)15);
+        st->x29 = st->sp;
+    }
     st->nzcv = 0;
     st->pc = (rword)pc;
 
@@ -768,6 +810,9 @@ int adh_qbdi_run_from_watch(uint64_t pc, const uint64_t *gpr, int budget, int ti
     ctx.deadline_ms = monotonic_ms() + (unsigned long long)(time_ms > 0 ? time_ms : ADH_QTRACE_INHOOK_TIME_MS);
     ctx.sum = out;
     ctx.watch = watch;
+    ctx.stack_source_lo = stack_source_lo;
+    ctx.stack_shadow_lo = stack_shadow_lo;
+    ctx.stack_span = stack_span;
     uint32_t watch_cb = QBDI_INVALID_EVENTID;
     if (watch && watch->hi > watch->lo) {
         // Arm for THIS run only. The VM is per-thread and outlives the run, so leaving the callback
@@ -775,7 +820,19 @@ int adh_qbdi_run_from_watch(uint64_t pc, const uint64_t *gpr, int budget, int ti
         if (!api->addMemRangeCB || !api->getInstMemoryAccess || !api->deleteInstrumentation) {
             snprintf(watch->error, sizeof(watch->error), "this libQBDI build has no memory-access API");
         } else {
-            watch_cb = api->addMemRangeCB(tv->vm, (rword)watch->lo, (rword)watch->hi,
+            uint64_t mapped_lo = watch->lo, mapped_hi = watch->hi;
+            if (stack_span && watch->lo >= stack_source_lo &&
+                watch->hi > watch->lo && watch->hi - stack_source_lo <= stack_span) {
+                mapped_lo = stack_shadow_lo + (watch->lo - stack_source_lo);
+                mapped_hi = stack_shadow_lo + (watch->hi - stack_source_lo);
+                watch->stack_shadow = 1;
+            } else if (stack_span && watch->lo < stack_source_lo + stack_span && watch->hi > stack_source_lo) {
+                snprintf(out->error, sizeof(out->error), "watch leaves the bounded stack snapshot");
+                out->stop_reason = "did-not-run";
+                snprintf(watch->error, sizeof(watch->error), "watch crosses stack snapshot boundary");
+                return -1;
+            }
+            watch_cb = api->addMemRangeCB(tv->vm, (rword)mapped_lo, (rword)mapped_hi,
                                           QBDI_MEMORY_WRITE, qbdi_watch_cb, &ctx);
             if (watch_cb == QBDI_INVALID_EVENTID)
                 snprintf(watch->error, sizeof(watch->error), "qbdi_addMemRangeCB failed (range not instrumentable?)");
@@ -845,15 +902,17 @@ int adh_qbdi_summary_json(const qbdi_summary_t *s, char *out, size_t cap) {
         // Why there is no run is part of the answer: "did-not-run" without a reason is a dead end.
         n = snprintf(out, cap,
                      "{\"execution\":\"replay\",\"coverage\":\"instrumented-module\",\"contextComplete\":false,\"insns\":%d,\"seen\":%d,\"stopReason\":\"%s\",\"start\":\"0x%llx\",\"stopPc\":\"0x%llx\","
-                     "\"capped\":%s,\"error\":\"%s\",\"mnemonics\":[",
+                     "\"capped\":%s,\"stack\":{\"mode\":\"%s\",\"copied\":%u,\"truncated\":%s},\"error\":\"%s\",\"mnemonics\":[",
                      s->insns, s->seen, reason, (unsigned long long)s->start_pc,
-                     (unsigned long long)s->stop_pc, s->capped ? "true" : "false", errbuf);
+                     (unsigned long long)s->stop_pc, s->capped ? "true" : "false",
+                     s->stack_shadow ? "shadow-copy" : "virtual", s->stack_bytes, s->stack_truncated ? "true" : "false", errbuf);
     } else {
         n = snprintf(out, cap,
                      "{\"execution\":\"replay\",\"coverage\":\"instrumented-module\",\"contextComplete\":false,\"insns\":%d,\"seen\":%d,\"stopReason\":\"%s\",\"start\":\"0x%llx\",\"stopPc\":\"0x%llx\","
-                     "\"capped\":%s,\"mnemonics\":[",
+                     "\"capped\":%s,\"stack\":{\"mode\":\"%s\",\"copied\":%u,\"truncated\":%s},\"mnemonics\":[",
                      s->insns, s->seen, reason, (unsigned long long)s->start_pc,
-                     (unsigned long long)s->stop_pc, s->capped ? "true" : "false");
+                     (unsigned long long)s->stop_pc, s->capped ? "true" : "false",
+                     s->stack_shadow ? "shadow-copy" : "virtual", s->stack_bytes, s->stack_truncated ? "true" : "false");
     }
     if (n < 0) return -1;
     off = (size_t)n;

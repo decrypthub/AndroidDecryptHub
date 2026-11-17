@@ -73,6 +73,8 @@
   select option:checked { background:var(--surface-3); color:var(--ink); }
   .app-events { margin-top:10px; max-height:132px; overflow:auto; color:var(--muted); font-size:11px; line-height:1.5; }
   .app-events div { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .session-rows { margin-top:8px; max-height:150px; overflow:auto; color:var(--muted); font-size:11px; }
+  .session-row { display:flex; justify-content:space-between; gap:8px; padding:4px 0; }
   .header-actions { display:flex; align-items:center; gap:7px; margin-left:0; flex-wrap:wrap; }
   .menu-wrap { position:relative; }
   .popover { display:none; position:absolute; top:calc(100% + 7px); right:0; z-index:80; min-width:210px; padding:6px; color:var(--ink-2); background:#11151c; border:1px solid #4a5260; border-radius:5px; box-shadow:0 18px 50px rgba(0,0,0,.58); }
@@ -435,6 +437,8 @@
       <div class="popover process-popover" id="processPopover">
         <div class="proc-title">应用摘要</div>
         <dl class="procinfo" id="procinfo"></dl>
+        <label class="sess-lab"><input type="checkbox" id="sessShowOffline">显示离线会话 <span id="sessHidden" aria-live="polite"></span></label>
+        <div class="session-rows" id="sessRows" aria-label="当前应用会话"></div>
         <div class="app-events" id="appEvents"></div>
       </div>
     </div>
@@ -1784,6 +1788,15 @@ function escapeHtml(s){ return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':
 const agents=new Map();
 let serverApps=[]; let scopeNote=''; let lastFilterPkg=''; let captureOn=true;
 function appOnline(pkg){ return sessionsOf(pkg).some(a=>a.online); }
+function renderSessions(){
+  const all=sessionsOf(selectedPackage()).slice().reverse();
+  const showOffline=document.getElementById('sessShowOffline').checked;
+  const visible=showOffline?all:all.filter(a=>a.online);
+  document.getElementById('sessHidden').textContent=showOffline?'':`已隐藏 ${all.length-visible.length} 个`;
+  document.getElementById('sessRows').innerHTML=visible.length?visible.map(a=>
+    `<div class="session-row"><span>PID ${escapeHtml(a.pid)} · ${escapeHtml(a.sessionId)}</span><span>${a.online?'在线':'离线'}</span></div>`
+  ).join(''):'<div>没有可显示的会话</div>';
+}
 function appRecords(){
   const seen=new Set();
   const list=[];
@@ -1826,6 +1839,7 @@ function render(){
   } else if(menu){
     menu.querySelectorAll('.app-item').forEach(el=>el.classList.toggle('active', el.dataset.pkg===pkg));
   }
+  renderSessions();
 }
 async function refreshApps(){
   try{
@@ -1911,6 +1925,7 @@ function connect(){ const ws=new WebSocket(`ws://${location.host}/ws`); const co
     dbg('WS←', m.event||'?');
   }; }
 connect();
+document.getElementById('sessShowOffline').addEventListener('change',renderSessions);
 document.getElementById('appMenu').addEventListener('click', e=>{
   const btn=e.target.closest('[data-pkg]');
   if(!btn) return;

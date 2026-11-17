@@ -30,6 +30,28 @@ if [ -z "$DAEMON_PID" ]; then
   exit 0
 fi
 
+if [ -z "${ADH_DATA_DIR:-}" ] || [ -z "${ADH_CAPTURES_DIR:-}" ] || ! verify_pid_owned "$DAEMON_PID"; then
+  echo 'RESULT:SKIP artifact acceptance requires an explicitly isolated, owned Host/data/captures root'
+  exit 0
+fi
+# Deterministic restart inputs: both unlabeled legacy bytes and labeled provenance.
+# Leave these tiny inputs in the private verification root while its Host indexes them.
+node --input-type=module - "$ROOT" <<'EOF'
+import {mkdirSync,writeFileSync} from 'node:fs';
+import {join} from 'node:path';
+import {pathToFileURL} from 'node:url';
+import {randomUUID,createHash} from 'node:crypto';
+const [root]=process.argv.slice(2);
+const {resolveStoragePaths}=await import(pathToFileURL(join(root,'daemon/src/storage.ts')).href);
+const directory=resolveStoragePaths().capturesDir;mkdirSync(directory,{recursive:true});
+for(const labeled of [false,true]){
+  const bytes=Buffer.from('ADH_OWNED_RELOAD_FIXTURE:'+randomUUID()),sha256=createHash('sha256').update(bytes).digest('hex');
+  const file=join(directory,sha256.slice(0,16)+'.region.bin');writeFileSync(file,bytes,{flag:'wx'});
+  if(labeled)writeFileSync(file+'.meta.json',JSON.stringify({sha256,source:'acceptance-fixture',package:'com.adh.fixture',sessionId:'fixture-history',addr:'',tag:'owned-fixture',capturedAt:Date.now()}),{flag:'wx'});
+}
+EOF
+if [ "$?" -ne 0 ]; then echo 'RESULT:FAIL could not prepare owned artifact fixtures'; exit 1; fi
+
 echo ">> restarting adhd (pid $DAEMON_PID)"
 # verify_stop_pid: PowerShell on Windows, kill elsewhere - either way the stop is verified below
 # (with the port still bound, the test would silently keep the warm daemon and fake a pass).
@@ -55,7 +77,9 @@ OUT="$(node - "$BASE" "$ROOT" <<'EOF'
 const [base, root] = process.argv.slice(2);
 const fs = await import('node:fs');
 const path = await import('node:path');
-const captures = path.join(root, 'captures');
+const {pathToFileURL}=await import('node:url');
+const {resolveStoragePaths}=await import(pathToFileURL(path.join(root,'daemon/src/storage.ts')).href);
+const captures = resolveStoragePaths(process.env).capturesDir;
 
 // Same naming scheme as daemon/src/artifacts.ts — kept literal here so the test would catch a
 // change in either place rather than silently matching nothing.
@@ -66,7 +90,7 @@ for (const name of fs.readdirSync(captures)) {
   if (!m) continue;
   const p = path.join(captures, name);
   if (!fs.statSync(p).isFile()) continue;
-  disk.push({ prefix: m[1], kind: m[3] === 'bin' ? (m[2] ?? 'region') : m[3], size: fs.statSync(p).size });
+  disk.push({ prefix: m[1], kind: m[3] === 'bin' ? (m[2] ?? 'region') : m[3], size: fs.statSync(p).size, path:p });
 }
 
 const dumped = await (await fetch(`${base}/api/dumps`)).json();
@@ -75,6 +99,13 @@ const settingsBody = await (await fetch(`${base}/api/settings/export`)).json();
 const byPrefix = new Map(dumped.map((d) => [String(d.sha256).slice(0, 16), d]));
 const missing = disk.filter((f) => !byPrefix.has(f.prefix));
 const reloaded = dumped.filter((d) => d.source === 'disk-reload');
+const wrongProvenance=disk.filter(f=>{
+  const d=byPrefix.get(f.prefix);if(!d)return false;
+  let raw;try{raw=JSON.parse(fs.readFileSync(f.path+'.meta.json','utf8'));}catch{}
+  const valid=raw?.sha256===d.sha256;
+  return d.source!==(valid?(raw.source||'disk-reload'):'disk-reload')
+    || d.package!==(valid?(raw.package||''):'');
+});
 // Every listed entry must point at a file that is really there — a reload that invents paths would
 // make download-by-sha fail later, which is the failure this whole check exists to prevent.
 const dangling = dumped.filter((d) => !fs.existsSync(d.path));
@@ -89,7 +120,8 @@ if (missing.length) console.log(`MISSING from /api/dumps: ${missing.slice(0, 5).
 if (dangling.length) console.log(`DANGLING paths: ${dangling.slice(0, 3).map((d) => d.path).join(', ')}`);
 
 const pass = disk.length > 0 && dumped.length > 0 && missing.length === 0 && dangling.length === 0 &&
-  reloaded.length > 0 && !!budgetOk;
+  reloaded.length > 0 && wrongProvenance.length===0 && !!budgetOk;
+console.log('provenance mismatches: '+wrongProvenance.length);
 console.log(`checks: disk>0=${disk.length > 0} listed>0=${dumped.length > 0} allDiskListed=${missing.length === 0} noDangling=${dangling.length === 0} reloadLabelled=${reloaded.length > 0} budgetExposed=${!!budgetOk}`);
 console.log(pass ? 'RESULT:PASS' : 'RESULT:FAIL');
 EOF

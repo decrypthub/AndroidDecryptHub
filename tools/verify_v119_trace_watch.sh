@@ -41,29 +41,26 @@ for (let i = 0; i < 15 && !agent; i++) { await sleep(1000); agent = await pick()
 if (!agent) { console.log('SKIP  verify_v119_trace_watch (no online sandbox agent)'); process.exit(0); }
 const session = agent.sessionId;
 
-const mcp = async (name, args) => {
+const mcp = async (name, args, allowFailure=false) => {
   const res = await fetch(`${base}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }) });
   const payload = await res.json();
   const text = payload.result?.content?.find((c) => c.type === 'text')?.text ?? '';
   if (payload.error) throw new Error(JSON.stringify(payload.error));
-  if (payload.result?.isError) throw new Error(text);
+  if (payload.result?.isError && !allowFailure) throw new Error(text);
   return JSON.parse(text);
 };
 const failures = [];
 const fail = (m, d) => failures.push(d === undefined ? m : `${m}: ${JSON.stringify(d).slice(0, 400)}`);
 const FIXTURE = { module: 'libadhdetect.so', symbol: 'adh_mem_window_target' };
 
-const waitDrainLoop = async () => {
-  for (let i = 0; i < 40; i++) {
-    const stop = await mcp('capture_stop', { session }).catch(() => null);
-    if (stop?.drainLoop === 'armed' && stop?.drainedOk === true) return true;
-    await sleep(500);
-  }
-  return false;
+const drainBeforeHook = async () => {
+  const stop=await mcp('capture_stop',{session});
+  return stop?.drainLoop==='none'&&stop?.drainedOk===true;
 };
 const eventsFor = async (hookId) => {
   for (let i = 0; i < 20; i++) {
+    await mcp('capture_stop', {session});
     const caps = await mcp('live_captures', { session, limit: 400, includeText: true, encoding: 'b64' });
     const rows = caps.captures ?? caps;
     const out = [];
@@ -81,10 +78,10 @@ const eventsFor = async (hookId) => {
 
 let hookId = 0;
 try {
-  if (!(await waitDrainLoop())) fail('the session never armed its capture drain loop');
+  if (!(await drainBeforeHook())) fail('explicit Host drain/stop did not complete');
 
   // (0) the watch needs a run: refused without traceInsns, instead of installing a hook that never watches.
-  const noRun = await mcp('native_hook', { session, action: 'hook', mode: 'inline', ...FIXTURE, traceWatch: 'x0:8', confirm: true });
+  const noRun = await mcp('native_hook', { session, action: 'hook', mode: 'inline', ...FIXTURE, traceWatch: 'x0:8', confirm: true }, true);
   if (noRun.ok !== false) fail('traceWatch without traceInsns was accepted', noRun);
   else if (!/traceWatch needs traceInsns/.test(String(noRun.error ?? ''))) fail('the refusal does not say why', noRun.error);
 

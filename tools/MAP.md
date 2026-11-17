@@ -237,6 +237,11 @@ event-limit accounting, explicit stop and wrong-TID refusal. It does not run the
 
 ## MCP registry documentation
 
+`build_qbdi_stack_fixture.sh`编译生产tracer的独立ARM64夹具（无ADB）；
+`verify_v133_qbdi_stack.sh`显式序列号运行，验证私有栈保护、逻辑地址watch及执行前拒绝。
+`verify_qbdi_stack.ts`负责UUID远端目录、超时和仅自有文件的清理；结果与范围见
+[工具沙盒收尾](../docs/TOOL_SANDBOX_CLOSEOUT_2026-11-17.md)。
+
 `node tools/generate_mcp_docs.mjs` regenerates docs/mcp-tools.md from the source registry; `--check` validates it. It uses isolated, pure imports and performs no Host initialization, discovery or ADB operation. The generator is tracked so fresh clones do not depend on an ignored adhd-data script.
 
 ### P5 最终沙盒入口（2026-11-16）

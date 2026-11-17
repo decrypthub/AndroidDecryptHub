@@ -6,12 +6,13 @@
 //
 // `stdio: 'inherit'` (not a pipe) matters: the harness forbids capturing a child's piped output.
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 
 const args = ['--test', ...process.argv.slice(2)];
 const { ADH_DATA_DIR, ADH_CAPTURES_DIR, ADH_OPERATOR_TOKEN, ...isolatedEnv } = process.env;
 const child = spawn(process.execPath, args, {
   stdio: 'inherit',
-  env: { ...isolatedEnv, ADH_SKIP_ARTIFACT_LOAD: '1' },
+  env: { ...isolatedEnv, ADH_SKIP_ARTIFACT_LOAD: '1', ADH_TEST_RUN_ID: randomUUID() },
 });
 child.on('error', (e) => {
   console.error(`test launcher: failed to start node --test: ${e.message}`);

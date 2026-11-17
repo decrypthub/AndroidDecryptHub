@@ -24,6 +24,10 @@
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
 verify_resolve_env
+if ! verify_restart_sandbox; then
+  echo 'RESULT:SKIP could not start the owned Sandbox fixture'
+  exit 0
+fi
 
 set +e
 OUT="$(node - "$HTTP" <<'EOF'
@@ -34,6 +38,17 @@ const agents=await J('/api/agents');
 const a=agents.filter(x=>x.package==='com.adh.sandbox'&&x.online).sort((x,y)=>y.connectedAt-x.connectedAt)[0];
 if(!a){console.log('NO_AGENT');console.log('RESULT:FAIL');process.exit(0);}
 const sid=a.sessionId;
+const call=async(name,args)=>{
+  const result=await J('/mcp',{jsonrpc:'2.0',id:1,method:'tools/call',params:{name,arguments:args}});
+  if(result.error||result.result?.isError)throw Error(name+' refused: '+JSON.stringify(result.error||result.result.content));
+  return JSON.parse(result.result.content[0].text);
+};
+let pass=false;
+try{
+// P5 does not arm on hello. This test explicitly requests the persistent capture set.
+const armed=await call('capture_start',{session:sid,cryptoModule:'libjavacrypto.so'});
+console.log(`explicit capture_start: installed=${armed.installed}/${armed.attempted} ok=${armed.ok}`);
+if(!armed.ok)throw Error('persistent crypto Hooks were not installed');
 
 // baseline (capture must be on so the persistent EVP hook feeds the ring)
 const c0=await J('/api/captures');
@@ -42,7 +57,7 @@ console.log(`baseline: on=${c0.on} seq=${c0.seq} total=${c0.total}`);
 // fire the burst from outside — class name is a parameter, agent has no BurstProbe knowledge
 const trg=await J(`/api/unpack/trigger?session=${sid}&class=com.adh.sandbox.BurstProbe&method=run&level=3`);
 console.log(`trigger: loaded=${trg.loaded} invoked=${trg.invoked} result=${trg.result} reason=${trg.reason||''}`);
-if(!trg.invoked){ console.log('RESULT:FAIL (burst not invoked)'); process.exit(0); }
+if(!trg.invoked)throw Error('burst not invoked');
 
 // poll until seq stops growing (burst finished + drained)
 let h, stable=0, last=-1;
@@ -68,7 +83,12 @@ const agentClean = Number(h.agentResidual ?? 0) === 0 && Number(h.agentLost ?? 0
 const ingestClean = Number(h.daemonLost ?? 0) === 0;
 const flagHonest = h.complete === (h.dropped===0 && h.jdropped===0);
 console.log(`checks: seqLarge=${seqLarge} accounted(emitted+backlog+dropped==seq)=${accounted} agentResidual=${h.agentResidual} agentLost=${h.agentLost} daemonLost=${h.daemonLost} liveSessions=${h.liveSessions} staleSessions=${h.staleSessions} flagHonest=${flagHonest}`);
-const pass = seqLarge && accounted && agentClean && ingestClean && flagHonest;
+pass = seqLarge && accounted && agentClean && ingestClean && flagHonest;
+}catch(error){console.log('FAIL '+error.message);}
+finally{
+  try{const stopped=await call('capture_stop',{session:sid});if(stopped.drainedOk!==true||stopped.drainLoop!=='none'){pass=false;console.log('FAIL capture stop/drain unconfirmed');}}
+  catch(error){pass=false;console.log('FAIL capture cleanup: '+error.message);}
+}
 console.log(pass?'RESULT:PASS':'RESULT:FAIL');
 EOF
 )"

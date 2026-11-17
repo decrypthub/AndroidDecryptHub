@@ -4,6 +4,10 @@
 
 ## Layout
 
+2026-11-17工具收尾：`trace/qbdi_trace.c`的Hook内回放始终使用私有栈/有界快照，
+栈watch显式标记replay-stack。原生4/4、v51/v117/v118/v119通过；回放仍是不完整上下文，
+不等于完整进程快照。见[沙盒收尾](../../docs/TOOL_SANDBOX_CLOSEOUT_2026-11-17.md)。
+
 2026-11-17后续：全模块扫描改用当前映射linker身份，处理RELRO填充区，按名称匹配支持空模块；
 值匹配验证APS2函数重定位。原生夹具11/11，crypto/TLS/文件隔离实测通过，见
 [捕获扫描验收](../../docs/CAPTURE_SCAN_ACCEPTANCE_2026-11-17.md)。

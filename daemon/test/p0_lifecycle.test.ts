@@ -39,6 +39,12 @@ test('path resolution isolates all storage with ADH_DATA_DIR and preserves the l
   const isolated = resolveStoragePaths({ ADH_DATA_DIR: join(tmpdir(), 'adh-isolated') });
   assert.equal(isolated.capturesDir, join(isolated.dataDir, 'captures'));
   assert.equal(resolveStoragePaths({}).capturesDir, resolve('..', 'captures'));
+  const first = { ADH_SKIP_ARTIFACT_LOAD: '1', ADH_TEST_RUN_ID: '00000000-0000-4000-8000-000000000001' };
+  const second = { ...first, ADH_TEST_RUN_ID: '00000000-0000-4000-8000-000000000002' };
+  assert.notEqual(resolveStoragePaths(first).dataDir, resolveStoragePaths(second).dataDir);
+  assert.deepEqual(resolveStoragePaths(first), resolveStoragePaths(first));
+  assert.equal(resolveStoragePaths({ ...first, ADH_TEST_RUN_ID: '../outside' }).dataDir,
+    resolveStoragePaths({ ADH_SKIP_ARTIFACT_LOAD: '1' }).dataDir);
 });
 
 test('importing MCP into an absent data root creates no files, dirs, database, listener or device calls', () => {

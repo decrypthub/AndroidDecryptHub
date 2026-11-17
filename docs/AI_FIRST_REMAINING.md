@@ -3,22 +3,30 @@
 用户要求继续完成剩余工作。阶段收尾不等于全部目标完成；以下按当前代码、外部运行状态和
 实际报告更新。P0–P5历史提交入口见[AI_FIRST_CLOSEOUT.md](AI_FIRST_CLOSEOUT.md)。
 
+2026-11-17用户收窄范围：**不分析真实App，只完善工具**。后续仅使用自有Sandbox/nativefixture
+等验证ADH，停止得物算法与其他真实App逆向；不运行以第三方App为目标的默认验收。
+
 阶段收尾已提交d0e2e47，后续继续修复发布阻塞。全模块capture_start扫描已定位并通过
 [针对性实测](CAPTURE_SCAN_ACCEPTANCE_2026-11-17.md)；大DEX输入/持久结果和10条相关门禁也已
 [修复实测](LARGE_ARTIFACT_ACCEPTANCE_2026-11-17.md)，完整发布回归仍待处理。
 1.0.0是准备中的源码版本，未发布或默认升级。
 
+本轮工具沙盒收尾已完成：[报告](TOOL_SANDBOX_CLOSEOUT_2026-11-17.md)。QBDI私有栈、
+写监视与相关4条真机门禁、配置/来源恢复、离线会话面板和高频捕获记账均通过；
+Host574/574、0skip、类型检查通过。当前Agent已不同于历史Zygisk报告构建，
+不可把其15/15直接继承给最新二进制。以下发布/升级与额外环境项仍按原边界保留。
+
 | 工作 | 当前状态 | 完成所需证据 |
 | --- | --- | --- |
-| 正式Zygisk扩展 | 已实测完成指定代表性范围 | 七族单启用、全部禁用、LAN grant撤销及原六项，共15/15；expanded-02清理和原环境保护通过，见[P5_ZYGISK_EXTENDED_ACCEPTANCE.md](P5_ZYGISK_EXTENDED_ACCEPTANCE.md) |
+| 正式Zygisk扩展 | 历史构建指定范围15/15；最新Agent未复跑 | 七族单启用、全部禁用、LAN grant撤销及原六项；expanded-02清理和原环境保护通过，见[P5_ZYGISK_EXTENDED_ACCEPTANCE.md](P5_ZYGISK_EXTENDED_ACCEPTANCE.md)。最新沙盒通过不替代正式链复核 |
 | GOT卸载保护 | 底层与真实Agent RPC指定范围已完成 | 原生11/11；v61真实安装/命中、模拟外来槽值、ownership-lost、卸载拒绝且不覆写/保留上下文、确认自有值后恢复与卸载无残留均通过。实际覆盖写入方仍未定位 |
 | ADH与adh-cli分支集成 | 已完成 | [ADH PR1](https://github.com/decrypthub/AndroidDecryptHub/pull/1)合并为fe2d2c2；[CLI PR2](https://github.com/decrypthub/adh-cli/pull/2)合并为f394dc8。两者远端PR检查成功，保留原提交历史；原工作区仍未切换/覆盖 |
 | CLI与桌面组件发布 | 已完成 | [PyPI0.2.0](https://pypi.org/project/android-decrypt-hub/0.2.0/)、[CLI Release](https://github.com/decrypthub/adh-cli/releases/tag/v0.2.0)、[组件Release](https://github.com/decrypthub/adh-cli/releases/tag/decrypthub-v0.2.0)均已发布于f394dc8；源码14/14、隔离wheel运行时13/13、build/twine检查、公开PyPI下载导入及组件逐文件SHA核对通过。未升级本机全局安装 |
 | ADH打包与发布 | 未完成 | 一致且递增的版本、默认产物构建、发布门禁、可下载Release与对应提交；不发布opt-in测试APK或捕获数据 |
 | 默认设备环境升级 | 未完成 | 原模块/Manager/Root状态可恢复备份；默认目录启动、身份/配对状态保留、USB/LAN共用RPC、正式缓存投递的实际结果；独立设备授权仍只适用aa165071 |
-| GOT覆盖成因 | 未定位 | 实际覆盖写入方或等价强证据；不能用其他Zygisk实现源码类比就声称已定位本机Zygisk Next |
+| GOT覆盖成因 | 仅保留通用工具/自有沙盒范围 | 真实App个案不继续调查；不能用其他Zygisk实现源码类比声称已定位本机Zygisk Next |
 | 其他环境覆盖 | 未验证 | 第二个实际ROM/Root/架构环境的独立报告；当前仅一台API35 arm64设备，不能用JVM或同ROM多用户冒充另一环境 |
-| 得物dhw纯算法 | 未交付 | 同次请求输入/输出配对、多样本逐字节对拍、独立可运行实现和已知边界；不得把工具验收或只列参数当作算法还原 |
+| 得物dhw纯算法 | 按用户新范围停止，未交付 | 仅保留历史状态，不属于后续工具交付；不把工具验收当作算法还原 |
 
 仍是既定产品边界：未迁移设备RPC明确unsupported；Java/inline early仍unsupported；不承诺
 init_array前或未加载模块的提前Hook。它们不能被文档换名为“已支持”，也不要求伪造不存在的验证。

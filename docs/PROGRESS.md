@@ -1,5 +1,14 @@
 # PROGRESS — 跨会话进度看板
 
+2026-11-17工具沙盒收尾：仅自有Sandbox/nativefixture，不分析真实App/得物dhw。
+QBDI真实SP覆盖Hook返回帧导致的SIGBUS已修复：私有栈/有界快照和明确replay-stack写监视；
+原生4/4、v51/v117/v118/v119全部实测PASS，旧失败证据/unknown保留。v19/v99配置与来源恢复、
+v35离线会话及浏览器开关往返通过；v22显式布防19/19、20,000次AES压测严格对账，
+如实报告丢弃与complete:false。测试根目录加入每轮UUID防PID复用旧账本，Host574/574、
+0skip、类型检查通过。隔离Host/沙盒与新增reverse已清理，原六文件SHA与原reverse一致。
+本轮未发版/默认升级，最新Agent的正式Zygisk全链和完整发布回归仍未验证，见
+[工具沙盒收尾](TOOL_SANDBOX_CLOSEOUT_2026-11-17.md)。
+
 2026-11-17发布门禁准备：trace/native-controls/root-watch三套夹具已在本机成功构建。
 trace构建脚本原先假定NDK有aarch64-linux-android26-clang.exe，Windows实际没有，
 已统一使用clang --target；这是构建修复，不等于QBDI/Root watch真机用例已通过。

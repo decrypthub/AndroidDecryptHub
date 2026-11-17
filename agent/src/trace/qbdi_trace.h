@@ -35,8 +35,9 @@ int adh_qbdi_read(unsigned long long trace_id, int offset, int limit, int releas
 //   * the traced function is EXECUTED by the emulator (that is what a trace is), so a hooked function
 //     runs twice per hit - once under QBDI, once for real. Harmless for a formatter/hasher; a
 //     function with side effects (allocation, I/O, a counter in the target) must not be traced.
-//   * it runs on a VIRTUAL stack (QBDI's), so stack-passed arguments (x8 and beyond) and reads of
-//     caller stack slots see the virtual stack, not the caller's. Register arguments are exact.
+//   * it runs on a private stack with a bounded copy above the supplied SP and rebased FP.
+//     Other register pointers still reference target memory: this is not a complete snapshot.
+//     Stack watches map logical source addresses and disclose replay-stack, not live writes.
 //   * FPR state is not seeded: do not in-hook trace a function whose arguments are float/vector.
 //   * the QBDI VM is PER THREAD (pthread_getspecific). A global lock would serialise the target's
 //     threads, which is exactly the "agent must not slow the target down" line we do not cross.
@@ -70,6 +71,7 @@ int adh_qbdi_read(unsigned long long trace_id, int offset, int limit, int releas
 typedef struct {
     int count;                  // writes matched inside [lo, hi)
     int truncated;              // more than ADH_QTRACE_WATCH_MAX writes were seen
+    int stack_shadow;           // reported logical addresses refer to replayed stack bytes
     char error[64];             // set when the watch could not be armed (never silently ignored)
     uint64_t lo, hi;            // the range as resolved on the hit thread
     struct {
@@ -97,6 +99,9 @@ typedef struct {
     int insns;                       // the budget that was requested
     int seen;                        // instructions actually executed
     int capped;                      // first[] / mnemonics[] were clipped by the summary limits
+    int stack_shadow;                // replay uses a bounded copy, never the hook's real SP
+    unsigned int stack_bytes;
+    int stack_truncated;
     const char *stop_reason;         // one of the values above
     uint64_t start_pc;               // where the run started (the traceFrom / entry address)
     uint64_t stop_pc;                // where it stopped (last pc for a guard, return address otherwise)
@@ -113,6 +118,8 @@ typedef struct {
 } qbdi_summary_t;
 
 // Run from an arbitrary pc with the hit's registers, on the current thread's VM.
+// A known SP/FP is copied/rebased into private stack storage (<=128 KiB); pointers
+// in other registers still refer to target memory. This is explicitly incomplete replay.
 // gpr layout: [0..8] = x0..x8, [9] = x29 (fp), [10] = x30 (lr), [11] = x18,
 //             [12..21] = x19..x28 (callee-saved), [22] = x9, [23] = sp.
 // The callee-saved bank matters for an IN-HOOK trace: the traced function is entitled to read x19..x28

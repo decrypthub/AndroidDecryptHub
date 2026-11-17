@@ -1,49 +1,68 @@
 #!/usr/bin/env bash
-# v1.9 Settings / config / import-export (HOST-ONLY). Verifies the ADH-style 设置 surface:
-# /api/config roundtrip + disk persist, /api/settings export→import section-merge, /api/data/clear,
-# and the web page wires the modals. Exit 0 = PASS.
+# Host-only settings/import/persistence acceptance through current P1 version fences.
 set -uo pipefail
-source "$(dirname "${BASH_SOURCE[0]}")/lib/verify_common.sh"
+source "$(dirname "$0")/lib/verify_common.sh"
 verify_resolve_env_host
-verify_data_dir
-verify_host_begin
-
-jget(){ node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);let v=j;for(const k of process.argv[1].split("."))v=v?.[k];console.log(typeof v==="object"?JSON.stringify(v):v)}catch(e){console.log("ERR")}})' "$1"; }
-
-# 1) GET /api/config exposes the settings schema
-CFG="$(curl -s "$BASE/api/config")"
-verify_chk "GET /api/config 200 + schema"  '[ "$(echo "$CFG" | jget settings.capture.retain)" != "ERR" ] && [ -n "$(echo "$CFG" | jget settings.capture.retain)" ]'
-verify_chk "config has family filter"      '[ "$(echo "$CFG" | jget settings.capture.families.digest)" != "ERR" ]'
-verify_chk "config has stats"             '[ "$(echo "$CFG" | jget stats.captures)" != "ERR" ]'
-
-# 2) POST /api/config {capture:{retain:2000}} → persist + readback
-POST="$(curl -s -X POST "$BASE/api/config" -H 'content-type: application/json' -d '{"capture":{"retain":2000}}')"
-verify_chk "POST applies capture"          '[ "$(echo "$POST" | jget applied)" = "[\"capture\"]" ]'
-verify_chk "POST reports persisted (honest)" '[ "$(echo "$POST" | jget persisted)" = "true" ]'  # fail-loud: success must be disk-confirmed, not assumed
-verify_chk "readback retain == 2000"       '[ "$(curl -s "$BASE/api/config" | jget settings.capture.retain)" = "2000" ]'
-verify_chk "persisted to settings.json"    '[ "$(cat "${ADH_DATA:-$ROOT/adhd-data}/settings.json" | jget capture.retain)" = "2000" ]'
-
-# 3) settings export / import (section-merge on ui)
-verify_chk "GET /api/settings/export 200"  '[ "$(curl -s "$BASE/api/settings/export" | jget ui.displayCap)" != "ERR" ]'
-IMP="$(curl -s -X POST "$BASE/api/settings/import" -H 'content-type: application/json' -d '{"ui":{"displayCap":150}}')"
-verify_chk "import applied ui"             'grep -q "\"ui\"" <<<"$IMP"'
-verify_chk "import readback displayCap"    '[ "$(curl -s "$BASE/api/config" | jget settings.ui.displayCap)" = "150" ]'
-verify_chk "import rejects empty segs"     '[ "$(curl -s -o /dev/null -w %{http_code} -X POST "$BASE/api/settings/import" -H "content-type: application/json" -d "{\"nope\":1}")" = "400" ]'
-
-# 4) MCP config is the three-block CLI guide (install / connect / config), not a raw HTTP client setup
-verify_chk "mcp config is the adh CLI guide" 'curl -s "$BASE/api/mcp/config" | grep -q "pip install android-decrypt-hub" && curl -s "$BASE/api/mcp/config" | grep -q "adh connect" && curl -s "$BASE/api/mcp/config" | grep -q "mcpServers"'
-
-# 5) data clear endpoint validates input
-verify_chk "/api/data/clear bad what=400"  '[ "$(curl -s -o /dev/null -w %{http_code} -X POST "$BASE/api/data/clear" -H "content-type: application/json" -d "{\"what\":\"bogus\"}")" = "400" ]'
-
-# 6) web wires the modals — use here-strings (grep <<<"$HTML"), NOT `echo "$HTML" | grep -q`:
-# under `pipefail` a >64KB page makes grep -q exit early on match → echo SIGPIPE(141) → false FAIL.
-HTML="$(curl -s "$BASE/")"
-verify_chk "web has settings modal"        'grep -q "set-shell" <<<"$HTML" && grep -q "set-switch" <<<"$HTML"'
-verify_chk "web has mcp modal"             'grep -q "mcpMask" <<<"$HTML"'
-verify_chk "web wires import/export"        'grep -q "settings/export" <<<"$HTML" && grep -q "settings/import" <<<"$HTML"'
-
-# reset to defaults so downstream/repeat runs are stable
-curl -s -X POST "$BASE/api/config" -H 'content-type: application/json' -d '{"capture":{"retain":1000},"ui":{"displayCap":300}}' >/dev/null
-
-verify_host_finish "v1.9 Settings/config (config 回读+落盘 · export/import 板块合并 · MCP CLI · 模态已接线)"
+if [ -z "$(printenv ADH_VERIFY_OWNED_ROOT)" ] || [ -z "$(printenv ADH_DATA_DIR)" ] ||
+   ! verify_pid_owned "$(daemon_pid_on_port "$HTTP")"; then
+  echo 'RESULT:SKIP settings acceptance requires an explicitly isolated, owned Host/data root'
+  exit 0
+fi
+OUT="$(node --input-type=module - "$ROOT" "$BASE" <<'EOF'
+import {readFile} from 'node:fs/promises';
+import {join} from 'node:path';
+import {pathToFileURL} from 'node:url';
+import {randomUUID} from 'node:crypto';
+const [root,base]=process.argv.slice(2),client=randomUUID(),failures=[];
+const chk=(label,ok)=>{console.log((ok?'PASS ':'FAIL ')+label);if(!ok)failures.push(label);};
+async function get(path){return (await fetch(base+path,{headers:{'x-adh-client-id':client}})).json();}
+async function post(path,body){
+  const headers={'content-type':'application/json','x-adh-client-id':client};
+  const prepared=await (await fetch(base+'/api/operations/prepare',{method:'POST',headers,body:JSON.stringify({path,method:'POST',arguments:body})})).json();
+  if(!prepared.ok)throw Error('operation preparation refused for '+path);
+  headers['x-adh-operation']=JSON.stringify({expectedRevision:prepared.revision,controlEpoch:prepared.epoch,hostEpoch:prepared.hostEpoch,idempotencyKey:randomUUID()});
+  const response=await fetch(base+path,{method:'POST',headers,body:JSON.stringify(body)});
+  return {status:response.status,body:await response.json()};
+}
+const original=await get('/api/config');
+chk('GET config schema, family filters and stats',!!original.settings?.capture?.families&&!!original.stats);
+const retain=original.settings.capture.retain===2000?2100:2000;
+const displayCap=original.settings.ui.displayCap===150?175:150;
+try{
+  const changed=await post('/api/config',{capture:{retain}});
+  chk('POST applies capture and confirms persistence',changed.status===200&&changed.body.persisted===true&&changed.body.applied?.includes('capture'));
+  chk('config readback matches changed retain',(await get('/api/config')).settings.capture.retain===retain);
+  const {resolveStoragePaths}=await import(pathToFileURL(join(root,'daemon/src/storage.ts')).href);
+  const disk=JSON.parse(await readFile(join(resolveStoragePaths().dataDir,'settings.json'),'utf8'));
+  chk('isolated settings.json matches readback',disk.capture.retain===retain);
+  const exported=await get('/api/settings/export');
+  chk('export keeps settings schema',typeof exported.ui?.displayCap==='number');
+  const imported=await post('/api/settings/import',{ui:{displayCap}});
+  chk('import merges and persists the requested section',imported.status===200&&imported.body.persisted===true&&imported.body.applied?.includes('ui'));
+  chk('import readback matches display cap',(await get('/api/config')).settings.ui.displayCap===displayCap);
+  const rejected=await post('/api/settings/import',{nope:1});
+  chk('unsupported import is rejected',rejected.status===400&&rejected.body.code==='INVALID_SETTINGS');
+  const cleared=await post('/api/data/clear',{what:'bogus'});
+  chk('invalid legacy cleanup is rejected without clearing',cleared.status===400&&cleared.body.ok!==true);
+  const guide=await (await fetch(base+'/api/mcp/config')).text();
+  chk('MCP config uses the published CLI guide',['pip install android-decrypt-hub','adh connect','mcpServers'].every(s=>guide.includes(s)));
+  const html=await (await fetch(base+'/')).text();
+  chk('web keeps settings/MCP/import-export entries',['set-shell','set-switch','mcpMask','settings/export','settings/import'].every(s=>html.includes(s)));
+}catch(error){chk('settings roundtrip threw: '+error.message,false);}
+finally{
+  // Restore only fields still holding our values; never replace a later human edit.
+  try{
+    const current=(await get('/api/config')).settings,patch={};
+    if(current.capture.retain===retain)patch.capture={retain:original.settings.capture.retain};
+    else chk('retain changed independently; leave it intact',current.capture.retain===original.settings.capture.retain);
+    if(current.ui.displayCap===displayCap)patch.ui={displayCap:original.settings.ui.displayCap};
+    else chk('display cap changed independently; leave it intact',current.ui.displayCap===original.settings.ui.displayCap);
+    if(Object.keys(patch).length){const restored=await post('/api/config',patch);chk('restore owned settings changes',restored.status===200&&restored.body.persisted===true);}
+  }catch(error){chk('settings restore refused: '+error.message,false);}
+}
+console.log(failures.length?'RESULT:FAIL':'RESULT:PASS');
+process.exitCode=failures.length?1:0;
+EOF
+)"
+echo "$OUT"
+verify_gate 'v1.9 settings: shared versions, persistence, import and owned restore' 0

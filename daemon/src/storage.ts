@@ -7,7 +7,9 @@ import { fileURLToPath } from 'node:url';
 
 export function resolveStoragePaths(env: NodeJS.ProcessEnv = process.env) {
   const repository = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
-  const testRoot = env.ADH_SKIP_ARTIFACT_LOAD === '1' ? join(tmpdir(), `adh-test-${process.pid}`) : '';
+  // PIDs are reused on Windows: one long test session must not inherit another run's device ledger.
+  const runId = /^[a-f0-9-]{36}$/.test(env.ADH_TEST_RUN_ID || '') ? env.ADH_TEST_RUN_ID + '-' : '';
+  const testRoot = env.ADH_SKIP_ARTIFACT_LOAD === '1' ? join(tmpdir(), `adh-test-${runId}${process.pid}`) : '';
   const dataDir = resolve(env.ADH_DATA_DIR || (testRoot ? join(testRoot, 'adhd-data') : join(repository, 'adhd-data')));
   // Preserve the old default layout; an explicitly isolated data root isolates dumps too.
   const capturesDir = resolve(env.ADH_CAPTURES_DIR || (env.ADH_DATA_DIR ? join(dataDir, 'captures')

@@ -40,31 +40,27 @@ for (let i = 0; i < 15 && !agent; i++) { await sleep(1000); agent = await pick()
 if (!agent) { console.log('SKIP  verify_v118_negative_window (no online sandbox agent)'); process.exit(0); }
 const session = agent.sessionId;
 
-const mcp = async (name, args) => {
+const mcp = async (name, args, allowFailure=false) => {
   const res = await fetch(`${base}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }) });
   const payload = await res.json();
   const text = payload.result?.content?.find((c) => c.type === 'text')?.text ?? '';
   if (payload.error) throw new Error(JSON.stringify(payload.error));
-  if (payload.result?.isError) throw new Error(text);
+  if (payload.result?.isError && !allowFailure) throw new Error(text);
   return JSON.parse(text);
 };
 const failures = [];
 const fail = (m, d) => failures.push(d === undefined ? m : `${m}: ${JSON.stringify(d).slice(0, 300)}`);
 
-// Records only reach the store through the session's drain loop, which is armed asynchronously after
-// hello; read before that and the store looks empty while nothing is wrong.
-const waitDrainLoop = async () => {
-  for (let i = 0; i < 40; i++) {
-    const stop = await mcp('capture_stop', { session }).catch(() => null);
-    if (stop?.drainLoop === 'armed' && stop?.drainedOk === true) return true;
-    await sleep(500);
-  }
-  return false;
+// P5 never auto-arms on hello. Explicitly drain pending observations without installing capture Hooks.
+const drainBeforeHook = async () => {
+  const stop=await mcp('capture_stop',{session});
+  return stop?.drainLoop==='none'&&stop?.drainedOk===true;
 };
 const recordsFor = async (hookId) => {
   const out = { events: [], mems: [] };
   for (let i = 0; i < 16; i++) {
+    await mcp('capture_stop', {session});
     const caps = await mcp('live_captures', { session, limit: 400, includeText: true, encoding: 'b64' });
     const rows = caps.captures ?? caps;
     out.events.length = 0;
@@ -86,14 +82,14 @@ const recordsFor = async (hookId) => {
 const FIXTURE = { module: 'libadhdetect.so', symbol: 'adh_mem_window_target' };
 let hookId = 0;
 try {
-  if (!(await waitDrainLoop())) fail('the session never armed its capture drain loop');
+  if (!(await drainBeforeHook())) fail('explicit Host drain/stop did not complete');
 
   // (0) the grammar refuses an offset beyond the documented ceiling, and a negative reference into an
   //     earlier window is meaningless (that index selects a BYTE inside a copy).
-  const tooFar = await mcp('native_hook', { session, action: 'hook', mode: 'inline', ...FIXTURE, mem: 'x0-70000:8', confirm: true });
+  const tooFar = await mcp('native_hook', { session, action: 'hook', mode: 'inline', ...FIXTURE, mem: 'x0-70000:8', confirm: true }, true);
   if (tooFar.ok !== false) fail('mem offset -70000 was accepted; the ceiling is not enforced', tooFar);
   else if (!/exceeds/.test(String(tooFar.error ?? ''))) fail('the offset refusal does not say why', tooFar.error);
-  const badRef = await mcp('native_hook', { session, action: 'hook', mode: 'inline', ...FIXTURE, mem: 'x0:8,@#1-8:8', confirm: true });
+  const badRef = await mcp('native_hook', { session, action: 'hook', mode: 'inline', ...FIXTURE, mem: 'x0:8,@#1-8:8', confirm: true }, true);
   if (badRef.ok !== false) fail('a negative @#<n> reference was accepted', badRef);
 
   // (1) a known 16-byte pattern, then a call whose x0 points INSIDE it (buf+8), so `x0-8` must land on

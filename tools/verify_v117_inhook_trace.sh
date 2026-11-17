@@ -45,13 +45,13 @@ for (let i = 0; i < 15 && !agent; i++) { await sleep(1000); agent = await pick()
 if (!agent) { console.log('SKIP  verify_v117_inhook_trace (no online sandbox agent)'); process.exit(0); }
 const session = agent.sessionId;
 
-const mcp = async (name, args) => {
+const mcp = async (name, args, allowFailure=false) => {
   const res = await fetch(`${base}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }) });
   const payload = await res.json();
   const text = payload.result?.content?.find((c) => c.type === 'text')?.text ?? '';
   if (payload.error) throw new Error(JSON.stringify(payload.error));
-  if (payload.result?.isError) throw new Error(text);
+  if (payload.result?.isError && !allowFailure) throw new Error(text);
   return JSON.parse(text);
 };
 const failures = [];
@@ -69,13 +69,11 @@ const firstAddr = (trace) => {
 };
 // Every NATIVE_HOOK event for one hook, newest last.
 //
-// Records only reach the store through the session's drain loop, which the daemon arms
-// asynchronously after hello (startup hooks first, then capture_start). A script that reads
-// live_captures before that loop exists sees an empty store and would call a working feature broken,
-// so the wait below is part of the gate, not politeness.
+// P5 never auto-arms on hello. Explicitly drain pending observations without installing capture Hooks.
 const eventsFor = async (hookId) => {
   const out = [];
   for (let i = 0; i < 30; i++) {
+    await mcp('capture_stop', {session}); // explicit Host drain, no automatic re-arm
     const caps = await mcp('live_captures', { session, limit: 400, includeText: true, encoding: 'b64' });
     const rows = caps.captures ?? caps;
     for (const r of rows) {
@@ -93,24 +91,20 @@ const eventsFor = async (hookId) => {
 const unhook = async (hookId) => { try { await mcp('native_hook', { session, action: 'unhook', hookId, hard: true }); } catch {} };
 // Wait for the drain loop, draining (and stopping the crypto hook set) as a side effect: the handover
 // says to capture_stop before installing a hot hook, and this is the same call.
-const waitDrainLoop = async () => {
-  for (let i = 0; i < 40; i++) {
-    const stop = await mcp('capture_stop', { session }).catch(() => null);
-    if (stop?.drainLoop === 'armed' && stop?.drainedOk === true) return true;
-    await sleep(500);
-  }
-  return false;
+const drainBeforeHook = async () => {
+  const stop=await mcp('capture_stop',{session});
+  return stop?.drainLoop==='none'&&stop?.drainedOk===true;
 };
 
 let hookA = 0, hookB = 0;
 try {
-  if (!(await waitDrainLoop())) {
-    fail('the session never armed its capture drain loop, so no hook event could reach the store');
+  if (!(await drainBeforeHook())) {
+    fail('explicit Host drain/stop did not complete');
   }
 
   // (0) the refusal that protects skipOriginal: a trace EXECUTES the original, so the two cannot
   //     mean what they say together.
-  const refused = await mcp('native_hook', { session, action: 'hook', mode: 'sites', module: 'libadhdetect.so', symbol: 'adh_add_target', sites: 2, traceInsns: 16, skipOriginal: true });
+  const refused = await mcp('native_hook', { session, action: 'hook', mode: 'sites', module: 'libadhdetect.so', symbol: 'adh_add_target', sites: 2, traceInsns: 16, skipOriginal: true }, true);
   if (refused.ok !== false) fail('traceInsns + skipOriginal was accepted; the trace would run the function the caller asked to skip', refused);
   else if (!/traceInsns cannot be combined/.test(String(refused.error ?? ''))) fail('the refusal does not name the reason', refused.error);
 
@@ -133,6 +127,7 @@ try {
   if (!tr || typeof tr !== 'object') {
     fail('the event carries no trace sub-object (traceInsns:32 was dropped)', { keys: Object.keys(evA ?? {}), traceSkipped: evA?.traceSkipped });
   } else {
+    if(tr.stack?.mode!=='shadow-copy'||!(tr.stack?.copied>0)||tr.contextComplete!==false)fail('trace must disclose its private stack snapshot and incomplete context',tr);
     if (Number(tr.insns) !== 32) fail(`trace.insns is ${tr.insns}, expected the requested 32`, tr);
     if (!(Number(tr.seen) > 0)) fail('trace.seen is 0: the run did not execute anything', tr);
     if (Number(tr.seen) > 32) fail(`trace.seen ${tr.seen} exceeds the 32-instruction budget`, tr);

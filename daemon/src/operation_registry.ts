@@ -71,7 +71,7 @@ export function describeHttp(path: string, method: string, args: Record<string, 
   if (path === '/api/config') return describeTool('settings', { ...args, action: method === 'POST' ? 'patch' : 'get' });
   if (path === '/api/scope') return describeTool(method === 'POST' ? 'scope_set' : 'scope_list', args);
   if (path === '/api/settings/import') return describeTool('settings', { ...args, action: 'patch' });
-  if (path === '/api/maintenance') return describeTool('settings', { ...args, action: 'maintenance' });
+  if (path === '/api/maintenance' || path === '/api/data/clear') return describeTool('settings', { ...args, action: 'maintenance' });
   if (alias) return describeTool(alias, args);
   if (readPaths.has(path)) return { name: `http:${path}`, mode: 'read', session: args.session };
   if (method === 'GET' && !['/api/hook/selftest','/api/java/probe','/api/compat/probe','/api/debug/frame_echo'].includes(path)) {
