@@ -5,6 +5,11 @@ script or touching `verify_all.sh`.**
 
 ## Shared libraries (source these, don't execute)
 
+`build_got_restore_fixture.sh` builds a short-lived ARM64 executable linked to production `got.c`;
+it never calls ADB. `verify_got_restore.ts TEST_SERIAL BUILT_BINARY NEW_PRIVATE_OUTPUT` explicitly
+runs it in a UUID directory, rejects the daily device, and removes only its own executable/directory.
+It does not start a Host, install an APK, change reverse mappings, flash or reboot a device.
+
 ## P5 isolated Android acceptance (2026-11-16)
 
 `verify_p5_device.ts SERIAL TRANSPORT_ID PRIVATE_ASSETS NEW_PRIVATE_OUTPUT` is explicit real-device acceptance with a new package, private root domain, UDS, Host ports/data and cleanup/protection checks. It never flashes a module or restarts the running service. Build `:p5sandbox` and `:daemon` with `-PadhP5Sandbox=true` and an Agent built for port 18761. `p5_isolated_host.ts` maps only the private fixture endpoints into the production dispatcher. `verify_v132_p5_stdio.sh` is the registered host-only Kotlin interoperability gate; missing offline fixture is SKIP, never real-device fallback. Details and real/unverified boundaries: [P5_ANDROID_ACCEPTANCE.md](../docs/P5_ANDROID_ACCEPTANCE.md).

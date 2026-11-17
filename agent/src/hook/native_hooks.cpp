@@ -2175,11 +2175,13 @@ extern "C" int adh_native_hook_unhook(int hook_id, int hard, char *error, size_t
         return 1; // idempotent restore+retire, never a promise of resource reclamation
     }
     if (ctx->mode == 0) {
-        int restored=ctx->slot_addr && (*(void **)ctx->slot_addr==ctx->original ||
-            (adh_swap_pointer_in_ro_page((void **)ctx->slot_addr,ctx->original) && *(void **)ctx->slot_addr==ctx->original));
-        if (!restored) {
+        const int restored = adh_restore_pointer_if_owned((void **)ctx->slot_addr,
+                                                          ctx->replacement, ctx->original);
+        if (restored != 1) {
             pthread_mutex_unlock(&g_native_hooks_lock);
-            return (set_error(error, error_size, "native unhook failed id=%d", hook_id), 0);
+            return (set_error(error, error_size, restored < 0
+                ? "not-unhooked: GOT ownership lost id=%d; current slot left untouched, stub retained"
+                : "not-unhooked: GOT restore/protection unconfirmed id=%d; stub retained", hook_id), 0);
         }
         __atomic_store_n(&ctx->active, 0, __ATOMIC_RELEASE);
         ctx->unhook_pending = 1;
@@ -2377,11 +2379,14 @@ extern "C" int adh_native_hook_status_json(char *out, size_t out_size) {
         // mode 0 mechanism facts. address/target/original are all the slot's pre-patch VALUE for a
         // got hook, so they say nothing about which slot was touched; these do. A hook that installs
         // and never fires otherwise looks exactly like a target with no traffic to observe.
-        char gotbuf[288] = "";
+        char gotbuf[384] = "";
+        int got_owned = 1;
         if (ctx.mode == 0 && ctx.slot_addr) {
             char perms_now[8] = "?";
             adh_perms_of_addr((void *)ctx.slot_addr, perms_now, sizeof(perms_now));
-            void *cur = *(void **)ctx.slot_addr;
+            const int readable = perms_now[0] == 'r';
+            void *cur = readable ? __atomic_load_n((void **)ctx.slot_addr, __ATOMIC_ACQUIRE) : NULL;
+            got_owned = readable ? (cur == ctx.replacement ? 1 : 0) : -1;
             // got_write_slot puts the page protection back; comparing the live value with the one we
             // recorded before the write is what proves it. Leaving a RELRO page writable is a
             // footprint a target can see.
@@ -2389,21 +2394,23 @@ extern "C" int adh_native_hook_status_json(char *out, size_t out_size) {
                                       strncmp(perms_now, ctx.slot_perms_before, 3) == 0;
             snprintf(gotbuf, sizeof(gotbuf),
                      ",\"slot\":\"0x%llx\",\"slotCurrent\":\"0x%llx\",\"pageProtRestored\":%s,"
-                     "\"pagePermsBefore\":\"%s\",\"pagePermsNow\":\"%s\"",
+                     "\"pagePermsBefore\":\"%s\",\"pagePermsNow\":\"%s\",\"slotOwned\":%s",
                      (unsigned long long)ctx.slot_addr, (unsigned long long)(uintptr_t)cur,
-                     prot_restored ? "true" : "false", ctx.slot_perms_before, perms_now);
+                     prot_restored ? "true" : "false", ctx.slot_perms_before, perms_now,
+                     got_owned < 0 ? "null" : got_owned ? "true" : "false");
         }
         // got rewrites exactly one relocation slot (its install refuses anything else); sites/vtable
         // report how many they rewrote. Inline patches a function entry rather than a slot.
         const int slots_patched = (ctx.mode == 0) ? (ctx.slot_addr ? 1 : 0) : ctx.site_count;
         const uint64_t first_hit = g_native_hook_first_hit_ms[i].load(std::memory_order_relaxed);
-        const char *verdict = hits > 0 ? "fired" : "installed-never-fired";
+        const char *verdict = got_owned < 0 ? "slot-unreadable" : !got_owned ? "ownership-lost" :
+                              hits > 0 ? "fired" : "installed-never-fired";
         // "x1+0:8" = the hit writes 8 bytes at *(x1). Empty when the hook does not write.
         char writebuf[24] = "";
         if (ctx.write_len > 0) {
             snprintf(writebuf, sizeof(writebuf), "x%d+%d:%d", ctx.write_arg, ctx.write_off, ctx.write_len);
         }
-        char item[4096];   // sitebuf is 1400 and gotbuf 288; 2048 truncated the JSON for a sites hook
+        char item[4096];   // sitebuf is 1400 and gotbuf 384; 2048 truncated the JSON for a sites hook
         snprintf(item, sizeof(item),
                  "{\"id\":%d,\"mode\":\"%s\",\"module\":\"%s\",\"symbol\":\"%s\","
                  "\"address\":\"0x%llx\",\"target\":\"0x%llx\",\"original\":\"0x%llx\","

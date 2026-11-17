@@ -4,6 +4,11 @@
 
 ## Layout
 
+2026-11-17: `hook/got.c` also owns `adh_restore_pointer_if_owned`: native GOT unhook uses
+atomic compare/exchange and refuses another writer's pointer. Status reports `slotOwned` and
+`ownership-lost`/`slot-unreadable` before interpreting historical hits. See
+[NATIVE_GOT_CLOSEOUT.md](../../docs/NATIVE_GOT_CLOSEOUT.md) for the exact runtime coverage.
+
 2026-10-24: `trace/qbdi_trace.c` additionally owns one explicitly requested, <=65536-instruction
 paged command-thread recording (allocated on request, released after Host drain); `qbdi_read`
 never mixes trace IDs. The hook-time path remains replay with incomplete context, explicitly tagged.

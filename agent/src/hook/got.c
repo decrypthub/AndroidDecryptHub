@@ -78,6 +78,30 @@ int adh_swap_pointer_in_ro_page(void **slot, void *newval) {
     return got_write_slot(slot, newval, perms_to_prot(perms), pagesz);
 }
 
+int adh_restore_pointer_if_owned(void **slot, void *replacement, void *original) {
+    if (!slot || (uintptr_t)slot % sizeof(void *)) return 0;
+    char perms[8];
+    perms_of_addr((unsigned long long)(uintptr_t)slot, perms, sizeof(perms));
+    if (perms[0] != 'r') return 0;
+    void *current = __atomic_load_n(slot, __ATOMIC_ACQUIRE);
+    if (current == original) return 1;
+    if (current != replacement) return -1;
+    long pagesz = sysconf(_SC_PAGESIZE);
+    if (pagesz <= 0) pagesz = 4096;
+    void *page = (void *)((uintptr_t)slot & ~((uintptr_t)pagesz - 1));
+    const int writable = perms[1] == 'w';
+    const int prot = perms_to_prot(perms);
+    if (!writable && mprotect(page, pagesz, prot | PROT_WRITE) != 0) return 0;
+    // The slot may have changed after our first read or while making RELRO writable.
+    // A check followed by an unconditional store would still erase that writer's value.
+    void *expected = replacement;
+    const int swapped = __atomic_compare_exchange_n(slot, &expected, original, 0,
+                                                    __ATOMIC_SEQ_CST, __ATOMIC_ACQUIRE);
+    const int protected_again = writable || mprotect(page, pagesz, prot) == 0;
+    if (!protected_again) return 0;
+    return swapped || expected == original ? 1 : -1;
+}
+
 // Patch raw code bytes in place: make every page covering [addr, addr+len) writable (keeping X),
 // memcpy, flush the instruction cache and restore the original protection. Used to write a saved
 // original prologue back over an inline hook without asking Dobby to free its trampoline pool

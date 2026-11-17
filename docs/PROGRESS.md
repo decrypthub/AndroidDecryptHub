@@ -1,6 +1,11 @@
 # PROGRESS — 跨会话进度看板
 
-2026-11-17 收尾入口：[AI_FIRST_CLOSEOUT.md](AI_FIRST_CLOSEOUT.md)。P0–P5 实现与约定隔离验收已提交，完整代码基准 e58f2ba；本次核对测试运行残留并补齐交付索引，不继续扩验或部署。分支集成/发布、默认部署、正式 capture_start 各族/LAN 撤销组合及已知 GOT 覆盖成因等仍按索引保留，未标成已完成。
+2026-11-17 收尾补丁：在独立 `feat/adh-completion-20261117` 补上 GOT 卸载的原子所有权检查，
+避免覆盖 runtime/人类/其他工具的新指针；状态区分历史命中和当前槽所有权。
+原生生产恢复函数真机隔离夹具8/8、清理通过；未重跑正式 Zygisk 全链，未发布或部署。
+详情：[NATIVE_GOT_CLOSEOUT.md](NATIVE_GOT_CLOSEOUT.md)。
+
+此前阶段收尾入口：[AI_FIRST_CLOSEOUT.md](AI_FIRST_CLOSEOUT.md)。P0–P5 实现与约定隔离验收已提交，正式链验收代码基准 e58f2ba；50b4cda 核对测试运行残留并补齐交付索引。分支集成/发布、默认部署、正式 capture_start 各族/LAN 撤销组合及已知 GOT 覆盖成因等仍按索引保留，未标成已完成。
 
 > 这是"我们现在在哪"的唯一真相。每个会话开始先读它，结束前更新它。
 > 详细规格见 `REQUIREMENTS.md`，路线与架构见 `DEVELOPMENT_PLAN.md`。
