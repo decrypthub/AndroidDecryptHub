@@ -79,7 +79,7 @@ adh control snapshot --session SESSION --endpoint 127.0.0.1:18088
 
 operator 证明请求意图，不构成本机 OS 管理员权限隔离，也不是完整 LAN 配对/TLS 认证。稳定设备身份、USB/LAN 统一 RPC、目标侧撤销协议仍待后续阶段。已有监听与数据文件未在本轮升级。
 
-账本 schemaVersion=1，元数据最多 32 MiB / 10000 operations；满时拒绝新增，不自动删历史。结果与 lateResult 原子保存到 results/，超过 8 MiB 的响应以 omitted/bytes/sha256 摘要保存，调用方必须检查省略标记，不把它当完整证据。结果可能包含私有分析材料，目录不得提交或公开；备份应包含整个 operations/。权威 SQLite 损坏时停止写入并报告，不能按 DEX 缓存逻辑删库重建。当前没有自动归档、跨机 HA 或任意分析代码的持久续跑。
+账本 schemaVersion=1，元数据最多 32 MiB / 10000 operations；满时拒绝新增，不自动删历史。结果与 lateResult 原子保存到 results/，超过64 MiB的响应以omitted/bytes/sha256摘要保存（2026-11-17由8 MiB调整，包含HTTP envelope）。省略结果明确返回RESULT_OMITTED/HTTP422；unknown仍504，不改变已执行/未知状态、不自动重放。历史已省略输出不能恢复。实测见[LARGE_ARTIFACT_ACCEPTANCE_2026-11-17.md](LARGE_ARTIFACT_ACCEPTANCE_2026-11-17.md)。结果可能包含私有分析材料，目录不得提交或公开；备份应包含整个 operations/。权威 SQLite 损坏时停止写入并报告，不能按 DEX 缓存逻辑删库重建。当前没有自动归档、跨机 HA 或任意分析代码的持久续跑。
 
 后台 Hook/collector 的 start 操作成功表示配置/启动确认，并不表示后台采集已经结束；停止仍走原工具 stop。取消 start operation 不是自动停止已启动的 collector。
 

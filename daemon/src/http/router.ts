@@ -1,7 +1,8 @@
 import type http from 'node:http';
 
 import { handleMcp } from '../mcp.ts';
-import { readBody, sessions } from '../state.ts';
+import { sessions } from '../state.ts';
+import {readRequestBody} from './request_body.ts';
 import { packageFromPath } from './package_path.ts';
 import { analysisRoutes, serveDashboard } from './routes_analysis.ts';
 import { runtimeRoutes } from './routes_runtime.ts';
@@ -43,8 +44,8 @@ export async function handleHttp(req: http.IncomingMessage, res: http.ServerResp
     if (matches) {
       if(!url.pathname.startsWith('/api/') || url.pathname.startsWith('/api/operations')) {
         if(url.pathname==='/mcp') {
-          try{return await handleMcp(await readBody(req),res,{principal:requestPrincipal(req.headers,'mcp',operationsRoot)});}
-          catch(error){return send(403,operationFailure(error));}
+          try{return await handleMcp(await readRequestBody(req,'mcp'),res,{principal:requestPrincipal(req.headers,'mcp',operationsRoot)});}
+          catch(error){if((error as any)?.status===413)throw error;return send(403,operationFailure(error));}
         }
         return await route.handler();
       }
@@ -52,7 +53,7 @@ export async function handleHttp(req: http.IncomingMessage, res: http.ServerResp
         const principal=requestPrincipal(req.headers,'panel',operationsRoot);
         const args:any={...Object.fromEntries(url.searchParams)};
         if(['POST','PUT','PATCH','DELETE'].includes(req.method||'')) {
-          const text=await readBody(req);
+          const text=await readRequestBody(req);
           if(text)Object.assign(args,JSON.parse(text));
         }
         if(req.headers['x-adh-operation'])args._operation=JSON.parse(String(req.headers['x-adh-operation']));
@@ -71,6 +72,7 @@ export async function handleHttp(req: http.IncomingMessage, res: http.ServerResp
         }
         return send(result._operation?.state==='unknown'?504:result._operation?.state==='queued'?202:409,result);
       } catch(error) {
+        if((error as any)?.status===413)throw error;
         buffered=false;const failure=operationFailure(error);
         return send(failure.code==='AUTH_FAILED'?403:failure.code==='CONTROL_REQUIRED'||failure.code==='STALE_CONTROL'||failure.code==='CONTROL_HELD'?409:400,failure);
       }
@@ -80,8 +82,8 @@ export async function handleHttp(req: http.IncomingMessage, res: http.ServerResp
   const pkg = packageFromPath(url.pathname);
   if (pkg) {
     if (req.method === 'POST' && url.pathname === `/${pkg}/mcp`) {
-      try{return await handleMcp(await readBody(req), res, { package: pkg,principal:requestPrincipal(req.headers,'mcp',operationsRoot) });}
-      catch(error){return send(403,operationFailure(error));}
+      try{return await handleMcp(await readRequestBody(req,'mcp'), res, { package: pkg,principal:requestPrincipal(req.headers,'mcp',operationsRoot) });}
+      catch(error){if((error as any)?.status===413)throw error;return send(403,operationFailure(error));}
     }
     if (url.pathname === `/${pkg}` || url.pathname === `/${pkg}/`) {
       return await serveDashboard(send);

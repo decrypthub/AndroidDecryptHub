@@ -4,6 +4,7 @@ import http from 'node:http';
 import net from 'node:net';
 import { AGENT_PORT, HTTP_PORT, webUrls } from './config.ts';
 import { handleHttp } from './http/router.ts';
+import { sendHttpError } from './http/response_error.ts';
 import { ensureAdbReverse } from './scope_list.ts';
 import { startCaptureLoop, forgetCaptureSession, clearCaptureArmProtect } from './service.ts';
 import { initializeHost } from './host_lifecycle.ts';
@@ -127,19 +128,7 @@ const agentServer = net.createServer((sock) => {
 // -> 400; typed errors carry their own status (e.g. readBody's 413, dumpBuf's 404/400); anything
 // else -> 500.
 const httpServer = http.createServer((req, res) => {
-  handleHttp(req, res).catch((e: any) => {
-    if (res.writableEnded) return;
-    const status = e?.status ?? (e instanceof SyntaxError ? 400 : 500);
-    try {
-      // A body refused mid-upload cannot be drained: tell the peer to close so the response is not
-      // interleaved with the rest of an upload we will never read.
-      if (status === 413) res.setHeader('connection', 'close');
-      res.writeHead(status, { 'content-type': 'application/json', 'access-control-allow-origin': '*' });
-      res.end(JSON.stringify({ error: e?.message ?? 'internal error' }));
-    } catch {}
-    // Only now drop the unread remainder, so the 413 above had its chance to go out.
-    if (status === 413) { try { req.destroy(); } catch {} }
-  });
+  handleHttp(req, res).catch(error=>sendHttpError(req,res,error));
 });
 
 httpServer.on('upgrade', (req, socket, head) => {

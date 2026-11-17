@@ -7,6 +7,11 @@ version stays independent and includes `hostVersion`. `tools/check_release_versi
 
 ## P2 human workbench (2026-11-16)
 
+`http/request_body.ts`区分8 MiB控制请求与64 MiB产物分析/任务信封；REST、普通/包固定MCP
+统一入口。`http/response_error.ts`负责有界排空后的413响应。`operations.ts`将64 MiB内结果
+完整持久化，`operation_host.ts`对旧/超限omitted明确返回错误，保留执行状态且不重放。
+实测范围见[大产物验收](../../docs/LARGE_ARTIFACT_ACCEPTANCE_2026-11-17.md)。
+
 ## P5 Host Hook plans (2026-11-16)
 
 - P5 real Android follow-up: explicit `devices connect usbMode=stdio` uses the same RPC/identity/ledger on a root byte stream when SELinux denies adbd-to-su UDS forward. `transport/adb_device.ts` negotiates raw transport before authentication, never falls back or replays. See [P5_ANDROID_ACCEPTANCE.md](../../docs/P5_ANDROID_ACCEPTANCE.md).

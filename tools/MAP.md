@@ -10,6 +10,9 @@ the daily device before bootstrap. `ADH_VERIFY_LOG_DIR` must be new; each script
 
 ## Shared libraries (source these, don't execute)
 
+2026-11-17：原有v02 dexrepair/v04 dexparse/v08 search/xref/v09 methodcode/v95/v96/v12/v13/v29
+已用9.6 MB沙盒DEX通过Host64 MiB输入/结果链，见[大产物验收](../docs/LARGE_ARTIFACT_ACCEPTANCE_2026-11-17.md)。
+
 `backup_device_upgrade.ts TEST_SERIAL NEW_PRIVATE_OUTPUT`快照模块、root状态和Manager/Sandbox APK与数据，
 校验归档SHA/目标清单及关键文件前后哈希；不执行升级或恢复。含凭据的输出必须在源码仓外，
 Windows收紧ACL，保留root端回滚副本。`install_apk_root`不再附带部署Agent。

@@ -40,6 +40,15 @@ export function responseForOperation(op: any,transport:'mcp'|'http'='mcp') {
     cancelRequested:op.cancelRequested,inFlight:op.inFlight,revision:op.appliedRevision,controlEpoch:op.controlEpoch };
   if(op.result!==undefined) {
     const stored=op.result;
+    // Older ledgers may already contain an 8 MiB omission marker. Never present
+    // one as the tool's successful response, and never replay an executed intent.
+    if(stored?.omitted===true&&typeof stored.bytes==='number'&&typeof stored.sha256==='string') {
+      const unknown=op.state==='unknown';
+      const body={ok:false,code:unknown?'UNKNOWN_EXECUTION':'RESULT_OMITTED',
+        error:'full result was not retained; inspect the operation size and hash; do not replay automatically',
+        resultOmitted:true,bytes:stored.bytes,sha256:stored.sha256};
+      return {...(transport==='http'?{httpStatus:unknown?504:422,body,contentType:'application/json'}:body),_operation:metadata};
+    }
     const envelope=stored && typeof stored==='object' && typeof stored.httpStatus==='number' && Object.hasOwn(stored,'body');
     const result=transport==='http' ? envelope?stored:{httpStatus:stored?.ok===false?400:200,body:stored,contentType:'application/json'} : envelope?stored.body:stored;
     const failure=op.state==='unknown'?{ok:false,code:'UNKNOWN_EXECUTION',error:'some effects remain unconfirmed; inspect the durable operation'}:{};

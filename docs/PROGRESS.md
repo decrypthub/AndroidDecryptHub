@@ -1,5 +1,11 @@
 # PROGRESS — 跨会话进度看板
 
+2026-11-17 大DEX阻塞修复：指定分析/对应MCP和持久任务信封支持64 MiB JSON，普通控制仍8 MiB；
+超限上传有界排空后返回413。持久结果64 MiB内完整保留，旧省略结果明确RESULT_OMITTED，
+不伪装完整输出、不重放。Host572/572，最新定向5/5；真实沙盒9.6 MB DEX的修复、解析、
+搜索、xref、方法体、try/catch、map、重建、恢复和索引10条门禁均通过。
+详见[LARGE_ARTIFACT_ACCEPTANCE_2026-11-17.md](LARGE_ARTIFACT_ACCEPTANCE_2026-11-17.md)。完整发布门禁仍未完成。
+
 2026-11-17 捕获阻塞修复：运行中栈定位maps二次扫描，改用linker image身份，补上空模块名
 按名称扫描和RELRO填充区/APS2值匹配。原生GOT11/11、v01、crypto19/19、签名/AEAD、
 TLS双向明文、文件实际读写全部通过；文件仍如实partial22/26。Host567/567、类型检查通过，

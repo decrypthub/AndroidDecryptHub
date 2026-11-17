@@ -2,10 +2,14 @@ import { createHash, randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { readFileSync } from 'node:fs';
+
 import { atomicWriteJson } from './storage.ts';
 import { executionContext, OperationError, type ExecutionContext } from './execution_context.ts';
 import { freshControl, TaskStore, type Control, type Ledger, type Operation, type Role, type Task } from './task_store.ts';
 import type { OperationSpec } from './operation_registry.ts';
+
+// Includes the HTTP envelope. Result bytes live in private files, never in the ledger.
+export const MAX_OPERATION_RESULT_BYTES=64*1024*1024;
 
 export interface Principal { role: Role; id: string; source: string }
 export interface OperationMeta {
@@ -274,7 +278,7 @@ export class Operations {
   private saveResult(id: string, value: any, late = false) {
     const text = JSON.stringify(value ?? null);
     const file = join(this.store.root, 'results', `${id}${late ? '.late' : ''}.json`);
-    atomicWriteJson(file, Buffer.byteLength(text) > 8*1024*1024
+    atomicWriteJson(file, Buffer.byteLength(text) > MAX_OPERATION_RESULT_BYTES
       ? { omitted: true, bytes: Buffer.byteLength(text), sha256: createHash('sha256').update(text).digest('hex') } : value ?? null);
     return file;
   }

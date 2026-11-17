@@ -996,10 +996,11 @@ function readBodyOnce(req: IncomingMessage, cap = MAX_BODY_BYTES): Promise<strin
     const fail = (e: Error & { status?: number }) => {
       if (settled) return;
       settled = true;
+      parts.length = 0;
       // Do NOT destroy the socket here: that turns the answer into a bare TCP reset, so a caller
       // sending an oversized body sees "connection closed" instead of 413. Stop consuming, let the
-      // top-level error net write the 413 (it sets Connection: close for this case) and drop the
-      // rest of the stream after the response.
+      // top-level error net drain without retaining for a bounded interval and write 413
+      // before closing. Immediate destruction can hide that response behind a TCP reset.
       try { req.pause(); } catch { /* already ended */ }
       reject(e);
     };

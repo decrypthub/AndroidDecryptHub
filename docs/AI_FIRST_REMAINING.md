@@ -4,7 +4,8 @@
 实际报告更新。P0–P5历史提交入口见[AI_FIRST_CLOSEOUT.md](AI_FIRST_CLOSEOUT.md)。
 
 阶段收尾已提交d0e2e47，后续继续修复发布阻塞。全模块capture_start扫描已定位并通过
-[针对性实测](CAPTURE_SCAN_ACCEPTANCE_2026-11-17.md)；大DEX等完整回归仍待处理。
+[针对性实测](CAPTURE_SCAN_ACCEPTANCE_2026-11-17.md)；大DEX输入/持久结果和10条相关门禁也已
+[修复实测](LARGE_ARTIFACT_ACCEPTANCE_2026-11-17.md)，完整发布回归仍待处理。
 1.0.0是准备中的源码版本，未发布或默认升级。
 
 | 工作 | 当前状态 | 完成所需证据 |
