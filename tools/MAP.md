@@ -47,6 +47,7 @@ random-parameter crypto evidence; v125 verifies native controls/FP8/aggregate re
 v126 verifies kernel write events/GPR/stack/generation. v123/v125/v126 can use the dedicated
 `com.adh.nativefixture` self-load host; no APK or existing target process is modified.
 `build_trace_challenge.sh` and `build_native_controls_fixture.sh` build verification-only fixtures;
+the trace builder uses `clang --target=aarch64-linux-android26` on both hosts (the Windows NDK wrapper is not an `.exe`).
 `run_native_fixture.mjs SERIAL` runs the native host for <=300 seconds with cooperative stop-file
 cleanup. The host uses a UUID directory and memfd and is not an injection path for product targets.
 

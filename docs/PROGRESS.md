@@ -1,5 +1,9 @@
 # PROGRESS — 跨会话进度看板
 
+2026-11-17发布门禁准备：trace/native-controls/root-watch三套夹具已在本机成功构建。
+trace构建脚本原先假定NDK有aarch64-linux-android26-clang.exe，Windows实际没有，
+已统一使用clang --target；这是构建修复，不等于QBDI/Root watch真机用例已通过。
+
 2026-11-17 GOT所有权RPC：扩展既有v61，真Agent安装/命中后模拟外来槽写入，状态ownership-lost，
 卸载明确failed、不覆盖新值、保留上下文；读取确认后恢复自己的测试改动，再正常卸载，
 活动Hook0、调用仍30且无新增事件，已实测PASS。并未定位真实getpid覆盖写入方。
