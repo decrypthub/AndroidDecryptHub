@@ -1,5 +1,9 @@
 # ADH P0–P5 收尾索引（2026-11-17）
 
+最新集成/发布状态：[AI_FIRST_REMAINING.md](AI_FIRST_REMAINING.md)。ADH和CLI已合并远端main，
+CLI0.2.0及桌面组件已发布并下载核对；ADH默认部署和正式模块发布仍未完成。
+以下各段保留对应收尾时点，不把当时“未推送/未集成”误当成当前状态。
+
 后续推进：正式Zygisk原六项、capture_start七族/全部禁用、真实LAN grant撤销已在新Agent上
 完整15/15实测，清理和原环境保护通过；见[P5_ZYGISK_EXTENDED_ACCEPTANCE.md](P5_ZYGISK_EXTENDED_ACCEPTANCE.md)。
 以下历史“正式链扩展覆盖尚未实测”条目已由这次指定探针覆盖更新，全部算法/模块组合仍未验证。

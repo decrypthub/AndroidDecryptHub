@@ -1,5 +1,11 @@
 # PROGRESS — 跨会话进度看板
 
+2026-11-17 集成/CLI发布：ADH PR1、adh-cli PR2远端CI通过后均合并，分别为fe2d2c2/f394dc8，
+保留阶段提交历史。CLI0.2.0已发布PyPI、v0.2.0和桌面组件decrypthub-v0.2.0；源码14/14、
+独立wheel运行时13/13、build/twine、公开PyPI下载导入和组件文件清单SHA验证通过。
+默认Host/全局CLI/生产设备模块未升级。ADH后续发布准备从远端main开始于独立分支
+`release/adh-ai-first-1.0.0`，剩余清单见[AI_FIRST_REMAINING.md](AI_FIRST_REMAINING.md)。
+
 2026-11-17 正式Zygisk扩展：最新Agent在真实companion/post-specialize链中完成七族capture_start
 单族启用命中、其他族禁用不布防和全部禁用，以及真实Wi-Fi LAN grant撤销后的旧缓存拒绝；
 原六项失效/GOT窗口正例也重跑，总15/15，清理/原六文件/reverse/原Host状态保护通过。
