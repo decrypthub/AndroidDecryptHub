@@ -21,7 +21,7 @@ public final class ProbeService extends Service {
     private static native int systemProbe(String path);
     public IBinder onBind(Intent intent){return null;}
     private static byte[] data(String marker,String family){return (marker+"_"+family).getBytes(StandardCharsets.UTF_8);}
-    private static JSONObject crypto(String marker) throws Exception {
+    static JSONObject crypto(String marker) throws Exception {
         JSONObject result=new JSONObject();
         byte[] digest=MessageDigest.getInstance("SHA-256","AndroidOpenSSL").digest(data(marker,"digest"));result.put("digest",digest.length==32);
         Mac mac=Mac.getInstance("HmacSHA256","AndroidOpenSSL");mac.init(new SecretKeySpec(new byte[32],"HmacSHA256"));result.put("hmac",mac.doFinal(data(marker,"hmac")).length==32);
@@ -29,7 +29,7 @@ public final class ProbeService extends Service {
         KeyPairGenerator gen=KeyPairGenerator.getInstance("EC","AndroidOpenSSL");gen.initialize(256);KeyPair pair=gen.generateKeyPair();Signature sig=Signature.getInstance("SHA256withECDSA","AndroidOpenSSL");sig.initSign(pair.getPrivate());sig.update(data(marker,"asymmetric"));byte[] signed=sig.sign();sig.initVerify(pair.getPublic());sig.update(data(marker,"asymmetric"));result.put("asymmetric",sig.verify(signed));
         plain=data(marker,"aead");c=Cipher.getInstance("AES/GCM/NoPadding","AndroidOpenSSL");c.init(Cipher.ENCRYPT_MODE,key,new GCMParameterSpec(128,new byte[12]));enc=c.doFinal(plain);c.init(Cipher.DECRYPT_MODE,key,new GCMParameterSpec(128,new byte[12]));result.put("aead",Arrays.equals(plain,c.doFinal(enc)));return result;
     }
-    private static boolean tls(String marker,int port) throws Exception {
+    static boolean tls(String marker,int port) throws Exception {
         // Fixture loopback only. No external network or changes to the device trust store.
         TrustManager[] trust={new X509TrustManager(){public X509Certificate[] getAcceptedIssuers(){return new X509Certificate[0];}public void checkClientTrusted(X509Certificate[] c,String a){}public void checkServerTrusted(X509Certificate[] c,String a){}}};
         SSLContext context=SSLContext.getInstance("TLS");context.init(null,trust,new SecureRandom());

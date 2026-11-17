@@ -1,5 +1,9 @@
 # P5：真实 Zygisk 投递链隔离验收（2026-11-16）
 
+2026-11-17 后续：最新Agent重跑原六项，并新增正式链七族捕获、全部禁用和LAN grant撤销，
+最终15/15、清理与原环境保护通过，见[P5_ZYGISK_EXTENDED_ACCEPTANCE.md](P5_ZYGISK_EXTENDED_ACCEPTANCE.md)。
+下文保留2026-11-16六项的原始范围与失败历史，不以新结果倒改旧记录。
+
 最终 **6 PASS / 0 FAIL**，`cleanupVerified=true`、`originalHostAndFilesUnchanged=true`。设备为用户本轮明确授权可重启的 aa165071，PGP110 / Android 15 API35 / arm64-v8a / KernelSU，Zygisk Next 1.5.2，SELinux 保持 enforcing。使用独立 `feat/adh-p5-zygisk-e2e-20261116` worktree，基座 efe8e78。
 
 这是**真实 Zygisk 回调、companion、Root broker、Agent 消费与命中链路**的实测；不是测试 App 主动 dlopen Agent。默认生产目录的部署/升级仍未进行。此前 self-load 沙盒结果保留于 [P5_ANDROID_ACCEPTANCE.md](P5_ANDROID_ACCEPTANCE.md)。

@@ -1,5 +1,11 @@
 # PROGRESS — 跨会话进度看板
 
+2026-11-17 正式Zygisk扩展：最新Agent在真实companion/post-specialize链中完成七族capture_start
+单族启用命中、其他族禁用不布防和全部禁用，以及真实Wi-Fi LAN grant撤销后的旧缓存拒绝；
+原六项失效/GOT窗口正例也重跑，总15/15，清理/原六文件/reverse/原Host状态保护通过。
+Host561/561（0 skip）。失败首轮保留并修复测试App主线程网络及清理判定问题；
+详见[P5_ZYGISK_EXTENDED_ACCEPTANCE.md](P5_ZYGISK_EXTENDED_ACCEPTANCE.md)。发布/默认部署尚未执行。
+
 2026-11-17 收尾补丁：在独立 `feat/adh-completion-20261117` 补上 GOT 卸载的原子所有权检查，
 避免覆盖 runtime/人类/其他工具的新指针；状态区分历史命中和当前槽所有权。
 原生生产恢复函数真机隔离夹具8/8、清理通过；未重跑正式 Zygisk 全链，未发布或部署。

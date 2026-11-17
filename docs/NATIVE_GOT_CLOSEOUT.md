@@ -1,5 +1,9 @@
 # GOT 卸载所有权收尾（2026-11-17）
 
+后续：含本补丁的Agent已通过正式Zygisk扩展15/15，包含当前GOT槽所有权与首次调用证据。
+见[P5_ZYGISK_EXTENDED_ACCEPTANCE.md](P5_ZYGISK_EXTENDED_ACCEPTANCE.md)；
+本页后文“未重跑”指原收尾时点，GOT卸载冲突RPC仍未由后续全链触发。
+
 收尾审查发现：原生 GOT Hook 卸载先检查是否为 original，否则直接写回旧 original。
 若槽已被 runtime、人类或另一个工具改写，这会覆盖对方的新值。这里修复的是卸载的
 所有权检查，**没有定位**此前 libandroid_runtime/getpid 后续被覆盖的具体成因。
