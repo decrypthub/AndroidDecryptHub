@@ -85,6 +85,36 @@ const mechAfter = {
   slotUnchanged: String(after1.slot) === String(installed?.slot),
 };
 const mechAfterOk = Object.values(mechAfter).every(Boolean);
+// Simulate another writer in this fixture only. Do not call the probe until the
+// slot is restored. The failed unhook must retain its context and our foreign word.
+const foreign = slotValue(installed.original) + 4n;
+if (foreign === slotValue(installed.replacement)) throw Error('fixture foreign pointer collides with stub');
+async function writeSlot(value) {
+  const bytes=Buffer.alloc(8);bytes.writeBigUInt64LE(value);
+  const changed=await post('/api/memory/write',{session,addr:installed.slot,hex:bytes.toString('hex'),force:true});
+  if(changed.body.ok!==true)throw Error('fixture slot write failed');
+}
+let foreignWritten=false,ownershipLostOk=false;
+try {
+  await writeSlot(foreign);foreignWritten=true;
+  const lost=await post('/api/native/hook',{session,action:'status'});
+  const lostHook=(lost.body.status?.hooks||[]).find(h=>h.id===hookId);
+  const refused=await post('/api/native/hook',{session,action:'unhook',hookId});
+  const checked=await post('/api/native/hook',{session,action:'status'});
+  const retained=(checked.body.status?.hooks||[]).find(h=>h.id===hookId);
+  ownershipLostOk=lostHook?.slotOwned===false&&lostHook?.verdict==='ownership-lost'
+    &&refused.body.ok===false&&/ownership lost/.test(String(refused.body.error))
+    &&refused.body._operation?.state==='failed'&&checked.body.status?.count===1
+    &&retained?.slotOwned===false&&slotValue(retained?.slotCurrent)===foreign;
+  console.log('ownership lost: refused='+ownershipLostOk+' state='+refused.body._operation?.state+' retained='+checked.body.status?.count);
+} finally {
+  if(foreignWritten){
+    const observed=await post('/api/native/hook',{session,action:'status'});
+    const current=(observed.body.status?.hooks||[]).find(h=>h.id===hookId);
+    if(slotValue(current?.slotCurrent)!==foreign)throw Error('fixture slot changed again; refuse to overwrite another writer');
+    await writeSlot(slotValue(installed.original));
+  }
+}
 // GOT unhook restores the relocation pointer and retires its context: the trigger must still work and must NOT
 // produce a new event. Compare the newest matching capture id instead of a count, because the
 // capture list is a bounded window that scrolls.
@@ -102,7 +132,7 @@ const idAfter = await newestMatching();
 const events2 = idAfter - idBefore;
 const alive = (await (await fetch(`${base}/api/agents`)).json()).some((x) => x.online && x.package === 'com.adh.sandbox');
 const callOk = Number(call1.value) === EXPECT_CALL && Number(call2.value) === EXPECT_CALL;
-const pass = installOk && mechBeforeOk && mechAfterOk && call1.ok === true && event != null && hits1 >= 1 &&
+const pass = installOk && mechBeforeOk && mechAfterOk && ownershipLostOk && call1.ok === true && event != null && hits1 >= 1 &&
   unhook.body.ok === true && Number(status2.body.status?.count) === 0 && callOk && events2 === 0 && alive;
 console.log(JSON.stringify({
   hookId, installOk, mechBefore, mechAfter,

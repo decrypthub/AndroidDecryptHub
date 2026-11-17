@@ -1,5 +1,10 @@
 # PROGRESS — 跨会话进度看板
 
+2026-11-17 GOT所有权RPC：扩展既有v61，真Agent安装/命中后模拟外来槽写入，状态ownership-lost，
+卸载明确failed、不覆盖新值、保留上下文；读取确认后恢复自己的测试改动，再正常卸载，
+活动Hook0、调用仍30且无新增事件，已实测PASS。并未定位真实getpid覆盖写入方。
+详情见[NATIVE_GOT_CLOSEOUT.md](NATIVE_GOT_CLOSEOUT.md)。
+
 2026-11-17 大DEX阻塞修复：指定分析/对应MCP和持久任务信封支持64 MiB JSON，普通控制仍8 MiB；
 超限上传有界排空后返回413。持久结果64 MiB内完整保留，旧省略结果明确RESULT_OMITTED，
 不伪装完整输出、不重放。Host572/572，最新定向5/5；真实沙盒9.6 MB DEX的修复、解析、

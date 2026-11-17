@@ -1,5 +1,14 @@
 # GOT 卸载所有权收尾（2026-11-17）
 
+后续RPC实测：`verify_v61_got_by_name.sh`已在专用沙盒真实Agent中完成安装/命中后，
+用独立memory_write意图把GOT槽改为合成外来值（期间不调用该槽），状态转ownership-lost，
+卸载返回ownership lost/持久操作failed，槽仍是外来值、上下文仍保留。随后先读取确认仍为
+自己的合成值，再恢复原值，以新意图卸载；活动Hook为0，探针仍返回30且没有新增Hook事件。
+这是模拟外来写入，不是定位libandroid_runtime/getpid的实际覆盖方。
+日志在聚合工作区私有`.tmp/adh-capture-timeout-20261117-01/got-ownership-rpc.txt`，
+底层夹具最新11/11（含APS2），见[捕获扫描验收](CAPTURE_SCAN_ACCEPTANCE_2026-11-17.md)。
+下文未验证标记保留为早期收尾时点的历史记录。
+
 后续：含本补丁的Agent已通过正式Zygisk扩展15/15，包含当前GOT槽所有权与首次调用证据。
 见[P5_ZYGISK_EXTENDED_ACCEPTANCE.md](P5_ZYGISK_EXTENDED_ACCEPTANCE.md)；
 本页后文“未重跑”指原收尾时点，GOT卸载冲突RPC仍未由后续全链触发。

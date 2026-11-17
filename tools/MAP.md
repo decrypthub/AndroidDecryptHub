@@ -10,6 +10,9 @@ the daily device before bootstrap. `ADH_VERIFY_LOG_DIR` must be new; each script
 
 ## Shared libraries (source these, don't execute)
 
+`verify_v61_got_by_name.sh`现覆盖模拟外来GOT槽值后的status/卸载拒绝RPC，并在确认仍为
+自己的测试值后恢复、再卸载，验证无新增事件。仅com.adh.sandbox夹具，槽被改写期间不触发探针。
+
 2026-11-17：原有v02 dexrepair/v04 dexparse/v08 search/xref/v09 methodcode/v95/v96/v12/v13/v29
 已用9.6 MB沙盒DEX通过Host64 MiB输入/结果链，见[大产物验收](../docs/LARGE_ARTIFACT_ACCEPTANCE_2026-11-17.md)。
 

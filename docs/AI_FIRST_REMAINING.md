@@ -11,7 +11,7 @@
 | 工作 | 当前状态 | 完成所需证据 |
 | --- | --- | --- |
 | 正式Zygisk扩展 | 已实测完成指定代表性范围 | 七族单启用、全部禁用、LAN grant撤销及原六项，共15/15；expanded-02清理和原环境保护通过，见[P5_ZYGISK_EXTENDED_ACCEPTANCE.md](P5_ZYGISK_EXTENDED_ACCEPTANCE.md) |
-| GOT卸载保护 | 底层恢复函数完成；状态链已复测 | 原生11/11，含尾页、全模块安装/恢复及APS2；此前指定构建全链slotOwned/首次调用通过。失去所有权后的卸载RPC集成未验证 |
+| GOT卸载保护 | 底层与真实Agent RPC指定范围已完成 | 原生11/11；v61真实安装/命中、模拟外来槽值、ownership-lost、卸载拒绝且不覆写/保留上下文、确认自有值后恢复与卸载无残留均通过。实际覆盖写入方仍未定位 |
 | ADH与adh-cli分支集成 | 已完成 | [ADH PR1](https://github.com/decrypthub/AndroidDecryptHub/pull/1)合并为fe2d2c2；[CLI PR2](https://github.com/decrypthub/adh-cli/pull/2)合并为f394dc8。两者远端PR检查成功，保留原提交历史；原工作区仍未切换/覆盖 |
 | CLI与桌面组件发布 | 已完成 | [PyPI0.2.0](https://pypi.org/project/android-decrypt-hub/0.2.0/)、[CLI Release](https://github.com/decrypthub/adh-cli/releases/tag/v0.2.0)、[组件Release](https://github.com/decrypthub/adh-cli/releases/tag/decrypthub-v0.2.0)均已发布于f394dc8；源码14/14、隔离wheel运行时13/13、build/twine检查、公开PyPI下载导入及组件逐文件SHA核对通过。未升级本机全局安装 |
 | ADH打包与发布 | 未完成 | 一致且递增的版本、默认产物构建、发布门禁、可下载Release与对应提交；不发布opt-in测试APK或捕获数据 |
