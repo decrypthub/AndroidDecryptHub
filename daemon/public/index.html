@@ -413,6 +413,7 @@
     .set-main { padding:24px 18px; }
   }
 </style>
+<link rel="stylesheet" href="/workbench.css">
 </head>
 <body>
 <header>
@@ -448,6 +449,7 @@
       </div>
     </div>
     <button type="button" class="compact-action" id="mcpBtn" title="MCP 接入（adh CLI：安装 / 连接 / 配置）">MCP</button>
+    <button type="button" class="compact-action" id="opBtn">任务与控制权</button>
     <button type="button" class="compact-action" id="setBtn" title="捕获 / 数据 / 配置导入导出">设置</button>
   </div>
 </header>
@@ -747,6 +749,10 @@
 
 <div class="toast" id="toast"></div>
 
+<script src="/operation-client.js"></script>
+<script src="/workbench-model.js"></script>
+<script src="/hook-plans-panel.js"></script><script src="/workbench.js"></script>
+<script src="/operations.js"></script>
 <script>
 // 顶栏五条主轴：加解密 / 系统 / 网络 / 文件 / Dump（对齐 iOS，不藏专家折叠）。
 const TABS_MAIN=[['p-crypto','加解密','cc'],['p-system','系统','sy'],['p-net','网络','nt'],['p-files','文件'],['p-dump','脱壳']];

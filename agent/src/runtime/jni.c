@@ -4,8 +4,13 @@
 #include "jni_env_hooks.h"
 #include "../hook/got.h"
 
+#include <android/log.h>
 #include <dlfcn.h>
 #include <string.h>
+#include <time.h>
+
+#define ADH_JNI_TAG "adh_jni"
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, ADH_JNI_TAG, __VA_ARGS__)
 
 static JavaVM *g_vm = NULL;
 
@@ -51,14 +56,45 @@ int adh_jni_libart_symbol_resolves(void) {
     return adh_resolve_sym("libart.so", "JNI_GetCreatedJavaVMs") != NULL;
 }
 
+// Only ever call a JNI_GetCreatedJavaVMs that is in an executable mapping, and give the loader a
+// moment to make it one.
+//
+// Observed on a OnePlus/Android-15 target: the in-memory resolve returned a plausible libart
+// address (correct libart base + the symbol's own st_value, and 0xa0e894 really is inside libart's
+// executable PT_LOAD in the file), yet the process died with SIGSEGV/SEGV_ACCERR where pc == fault
+// addr == that address. The address was right; the mapping was not executable YET — libart's text
+// is demand-paged out of the APEX, and a freshly memfd-loaded agent can be asking before the
+// segment has been faulted in.
+//
+// So: wait (bounded) for the page to become executable instead of calling into it blind. Callers
+// still get NULL on timeout, which surfaces as the honest "no JavaVM" instead of a dead app.
+#define ADH_JNI_EXEC_WAIT_MS 1500
+
+static void *libart_jni_get_created_vms_safe(void) {
+    void *f = libart_jni_get_created_vms();
+    if (!f) return NULL;
+    if (adh_addr_is_executable(f)) return f;
+
+    // Not executable yet: poll briefly rather than dereference it.
+    for (int waited = 0; waited < ADH_JNI_EXEC_WAIT_MS; waited += 25) {
+        struct timespec ts = { 0, 25 * 1000 * 1000 };
+        nanosleep(&ts, NULL);
+        if (adh_addr_is_executable(f)) return f;
+    }
+    LOGI("JNI_GetCreatedJavaVMs at %p never became executable; not calling it", f);
+    return NULL;
+}
 JNIEnv *adh_jni_attach(int *did_attach) {
     *did_attach = 0;
     if (!g_vm) {
         typedef jint (*GetVMs)(JavaVM **, jsize, jsize *);
-        GetVMs f = (GetVMs)libart_jni_get_created_vms();
+        GetVMs f = (GetVMs)libart_jni_get_created_vms_safe();
         if (f) {
             JavaVM *vm = NULL;
             jsize n = 0;
+            // Calling into ART before it is ready is what killed the target; only do it when the
+            // symbol resolved to executable code. Callers see NULL and report "no JavaVM", which
+            // is the honest answer and keeps the process alive.
             if (f(&vm, 1, &n) == 0 && n > 0) g_vm = vm;
         }
         if (!g_vm) return NULL;

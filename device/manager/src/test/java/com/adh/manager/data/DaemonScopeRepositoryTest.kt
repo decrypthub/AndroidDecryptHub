@@ -173,8 +173,32 @@ class DaemonScopeRepositoryTest {
         assertEquals(-1, repository.putCaCert(ByteArray(CaCertStore.MAX_BUNDLE_BYTES + 1)))
     }
 
+    @Test fun hostPlanManagerUsesFrozenVersionsAndPackageOnlyPatch() {
+        val base=FakeDaemonClient(protocol=20)
+        val original=org.json.JSONObject().put("version",20).put("mode","allowlist").put("packages",org.json.JSONArray().put("com.example.target")).put("policy",org.json.JSONObject().put("com.example.target",org.json.JSONObject().put("c",org.json.JSONObject().put("d",false))))
+        var revision=3L;var snapshot=org.json.JSONObject().put("document",original).put("scopeRevision","scope-before").put("stateRevision",revision)
+        var legacyWrites=0;var packagePatches=0
+        val client=object:DaemonClient by base {
+            override val scopeSnapshotJson:String get()=snapshot.toString()
+            override fun setScopeJson(json:String):Boolean {legacyWrites++;return false}
+            override fun patchScopePackages(packagesJson:String,scopeRevision:String,stateRevision:Long):String {
+                packagePatches++;if(stateRevision!=revision||scopeRevision!=snapshot.getString("scopeRevision"))return org.json.JSONObject().put("state","failed").put("code","STALE_SCOPE").toString()
+                original.put("packages",org.json.JSONArray(packagesJson));revision++;snapshot=org.json.JSONObject().put("document",original).put("scopeRevision","scope-after").put("stateRevision",revision)
+                return org.json.JSONObject().put("state","succeeded").put("stateRevision",revision).put("result",snapshot).toString()
+            }
+            override fun hookPlanState(packageName:String)="{\"entry\":null,\"cacheRevision\":2,\"stateRevision\":4}"
+            override fun revokeHookPlan(packageName:String,deploymentId:String,cacheRevision:Long,stateRevision:Long):String {assertEquals(2L,cacheRevision);assertEquals(4L,stateRevision);return "{\"state\":\"succeeded\"}"}
+        }
+        val repository=DaemonScopeRepository{client};val loaded=repository.load()
+        assertTrue(repository.save(loaded.copy(packages=setOf("com.example.target","com.example.other"))).isSuccess)
+        assertFalse(original.getJSONObject("policy").getJSONObject("com.example.target").getJSONObject("c").getBoolean("d"))
+        revision++
+        assertTrue(repository.save(loaded).isFailure);assertEquals(0,legacyWrites);assertEquals(2,packagePatches)
+        assertTrue(repository.hookPlanState("com.example.target")!!.contains("cacheRevision"));assertTrue(repository.revokeHookPlan("com.example.target","fixture",2,4).isSuccess)
+    }
+
     private class FakeDaemonClient(
-        protocol: Int = AdhProtocol.VERSION,
+        protocol: Int = 19,
     ) : DaemonClient {
         override val protocolVersion = protocol
         override var scopeJson = ScopeJson.encode(ScopeConfig.EMPTY)

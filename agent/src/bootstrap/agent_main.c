@@ -29,6 +29,7 @@
 #include "../runtime/dlopen_watch.h"
 #include "../runtime/java_enum.h"
 #include "../trace/commands.h"
+#include "../trace/qbdi_trace.h"
 #include "../hook/native_hooks.h"
 #include "../hook/hw_watch.h"
 #include "../hook/stealth_pool.h"
@@ -54,6 +55,7 @@ static char g_package[512] = "";
 // Per-package hook policy line from the Zygisk companion ("d=1,h=0,…,y=0"); empty = no policy →
 // crypto families on, system detection off.
 static char g_policy[64] = "";
+extern const char *adh_early_status_json(void);
 
 // ---- report + command loop ------------------------------------------------
 
@@ -68,7 +70,7 @@ static const char *ADH_AGENT_OPS[] = {
     "native_call", "got_enum", "stealth", "javahook_probe", "gothook_selftest", "capture_start",
     "capture_drain", "capture_stop", "trigger", "load_so", "file_probe", "qbdi_trace", "qbdi_read",
     "compat_probe", "object_inspect", "object_set", "object_invoke", "art_dexfiles", "list_dir",
-    "read_file", "scan_magic", "mem_backend", "search", "frame_echo", "ping", "module_watch",
+    "read_file", "scan_magic", "mem_backend", "search", "frame_echo", "ping", "module_watch", "capture_policy",
 };
 
 static void send_caps(int fd) {
@@ -128,15 +130,15 @@ static void report(int fd) {
     if (adh_self_starttime_ticks(ticks, sizeof(ticks)))
         snprintf(generation, sizeof(generation), "\"starttimeTicks\":\"%s\",", ticks);
 
-    char hello[2048];
+    char hello[8192];
     snprintf(hello, sizeof(hello),
         "{\"t\":\"hello\",\"agentVer\":\"%s\",\"pid\":%d,\"uid\":%d,"
         "%s\"package\":\"%s\",\"process\":\"%s\",\"abi\":\"%s\",\"android\":\"%s\",\"sdk\":%s,"
         "\"entry\":\"%s\",\"selfModule\":\"%s\",\"selfBase\":\"0x%llx\","
-        "\"policy\":\"%s\"}\n",
+        "\"policy\":\"%s\",\"earlyPlan\":%s}\n",
         AGENT_VER, getpid(), getuid(), generation, pkgj, pkg,
         abi[0] ? abi : "?", rel[0] ? rel : "?", sdk[0] ? sdk : "0", g_entry,
-        selfj, self_start, g_policy[0] ? g_policy : "default");
+        selfj, self_start, g_policy[0] ? g_policy : "default",adh_early_status_json());
     if (send_line(fd, hello) != 0) { LOGE("send hello failed"); return; }
     // The manifest goes immediately after the hello so a client can plan from what this build
     // can actually do before it issues any command.
@@ -827,6 +829,12 @@ static void command_loop(int fd) {
                     char waction[16] = "";
                     json_get_str(line, "action", waction, sizeof(waction));
                     adh_cmd_module_watch(fd, id, waction);
+                } else if (strcmp(op, "capture_policy") == 0) {
+                    char flags[64]="",action[16]="",idj[128];json_get_str(line,"families",flags,sizeof(flags));json_get_str(line,"action",action,sizeof(action));json_escape(id,idj,sizeof(idj));
+                    int valid=strlen(flags)==27;
+                    const char *keys="dhsatey";for(int i=0;i<7&&valid;i++)if(flags[i*4]!=keys[i]||flags[i*4+1]!='='||(flags[i*4+2]!='0'&&flags[i*4+2]!='1')||(i<6&&flags[i*4+3]!=','))valid=0;
+                    if(strcmp(action,"status")==0)valid=1;else if(valid){extern void adh_agent_set_policy(const char*);adh_agent_set_policy(flags);}
+                    char reply[256];snprintf(reply,sizeof(reply),"{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"capture_policy\",\"ok\":%s,\"policy\":\"%s\"}",idj,valid?"true":"false",g_policy[0]?g_policy:"d=1,h=1,s=1,a=1,t=1,e=1,y=0");send_line(fd,reply);
                 } else if (strcmp(op, "capture_start") == 0) {
                     char cmod[64] = "", fmod[64] = "", smod[512] = "";
                     json_get_str(line, "cryptoModule", cmod, sizeof(cmod));
@@ -964,6 +972,15 @@ static void *agent_thread(void *arg) {
 }
 
 static void do_start(void) {
+    // Optional bootstrap hook: registrations that happen before the host's first command are the
+    // interesting ones on a hardened target (they name the VM's native entry points). Off by
+    // default; `setprop adh.jni_early 1` (root) arms it for the NEXT process start.
+    {
+        char early[PROP_VALUE_MAX] = "";
+        if (__system_property_get("adh.jni_early", early) > 0 && early[0] == '1') {
+            adh_jni_hook_install_early();
+        }
+    }
     // The per-package policy is applied by whatever install comes next — it is NOT armed here.
     // Arming would mean the agent picking a module for its own GOT patch, and the agent carries no
     // module name by design (WS-B red line, tools/verify_v87_mcp_operability.sh); the only module it
@@ -1009,6 +1026,16 @@ void adh_agent_set_policy(const char *flags) {
         policy_flag(g_policy, 'a', 1), policy_flag(g_policy, 't', 1), policy_flag(g_policy, 'e', 1),
         policy_flag(g_policy, 'y', 0));
     LOGI("hook policy: %s", g_policy);
+}
+
+// QBDI delivery: the Zygisk companion opens the tracer from the module directory before the
+// uid/domain switch and hands the fd over here. The agent keeps it and copies it into a memfd the
+// first time a trace actually runs (see trace/qbdi_trace.c). No fd = feature off for this target:
+// nothing is loaded and nothing is mapped, so "not using it" really costs nothing.
+__attribute__((visibility("default")))
+void adh_agent_set_qbdi_fd(int fd) {
+    adh_qbdi_set_source_fd(fd);
+    LOGI("qbdi delivery fd=%d", fd);
 }
 
 // More than one backend can load this .so into one process (Zygisk + self-load + Frida Gadget).
@@ -1084,6 +1111,7 @@ static int current_agent_copy_is_owner(void) {
 }
 
 static void start_reporter_watch(void);   // defined below
+int adh_agent_copy_owner(void) { return current_agent_copy_is_owner(); }
 
 __attribute__((visibility("default")))
 void adh_agent_start(void) {
@@ -1165,4 +1193,20 @@ JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *reserved) {
     if (have_env && !bind_reporter_from_prop(env)) start_reporter_watch();
     pthread_once(&g_once, do_start);
     return JNI_VERSION_1_6;
+}
+
+// Handed the JavaVM by the loader that already has one.
+//
+// Zygisk's ModuleBase::onLoad(api, env) receives a live JNIEnv, so the loader can give us the VM
+// before adh_agent_start() runs. That removes the agent's only reason to call
+// JNI_GetCreatedJavaVMs at all: resolving it out of the already-mapped libart.so and CALLING it
+// crashed the target process at startup (SIGSEGV/SEGV_ACCERR at libart's
+// JNI_GetCreatedJavaVMs+0) because the call happens from a freshly-loaded memfd DSO on a thread
+// ART has not set up for it. Preferring the handed-over VM is therefore both cheaper and safer;
+// the in-memory lookup stays as the fallback for loaders that cannot provide one.
+JNIEXPORT void adh_agent_set_vm(void *vm) {
+    if (!vm) return;
+    if (!current_agent_copy_is_owner()) return;
+    adh_jni_set_vm((JavaVM *)vm);
+    LOGI("JavaVM handed over by loader (no symbol lookup needed)");
 }

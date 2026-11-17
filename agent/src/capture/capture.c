@@ -307,8 +307,11 @@ static int my_EVP_DigestVerifyInit(void *ctx, void **pctx, const void *type, voi
     return rc;
 }
 
+// DigestSign imports are shared by two families; installed does not imply both may emit.
+static int dsign_capture_allowed(int asymmetric);
 static int my_EVP_DigestSignUpdate(void *ctx, const void *data, size_t len) {
-    capture(dsign_ctx_get(ctx) ? "EVP_DSignUpdate_asym" : "EVP_DigestSignUpdate", (const unsigned char *)data, (int)len);
+    int asymmetric = dsign_ctx_get(ctx);
+    if (dsign_capture_allowed(asymmetric)) capture(asymmetric ? "EVP_DSignUpdate_asym" : "EVP_DigestSignUpdate", (const unsigned char *)data, (int)len);
     return g_orig_digest_sign(ctx, data, len);
 }
 
@@ -316,20 +319,21 @@ typedef int (*digest_sign_final_t)(void *ctx, unsigned char *sig, size_t *sig_le
 static digest_sign_final_t g_orig_dsign_final = NULL;
 static int my_EVP_DigestSignFinal(void *ctx, unsigned char *sig, size_t *sig_len) {
     int rc = g_orig_dsign_final(ctx, sig, sig_len);
-    if (rc == 1 && sig && sig_len && dsign_ctx_get(ctx)) capture("EVP_DSignFinal_sig", sig, (int)*sig_len);  // skip the sig==NULL length-query call
+    if (rc == 1 && sig && sig_len && dsign_ctx_get(ctx) && dsign_capture_allowed(1)) capture("EVP_DSignFinal_sig", sig, (int)*sig_len);  // skip the sig==NULL length-query call
     return rc;
 }
 
 static update3_t g_orig_digest_verify = NULL;
 static int my_EVP_DigestVerifyUpdate(void *ctx, const void *data, size_t len) {
-    capture(dsign_ctx_get(ctx) ? "EVP_DVerifyUpdate_asym" : "EVP_DigestVerifyUpdate", (const unsigned char *)data, (int)len);
+    int asymmetric = dsign_ctx_get(ctx);
+    if (dsign_capture_allowed(asymmetric)) capture(asymmetric ? "EVP_DVerifyUpdate_asym" : "EVP_DigestVerifyUpdate", (const unsigned char *)data, (int)len);
     return g_orig_digest_verify(ctx, data, len);
 }
 
 typedef int (*digest_verify_final_t)(void *ctx, const unsigned char *sig, size_t sig_len);
 static digest_verify_final_t g_orig_dverify_final = NULL;
 static int my_EVP_DigestVerifyFinal(void *ctx, const unsigned char *sig, size_t sig_len) {
-    if (dsign_ctx_get(ctx) && sig) capture("EVP_DVerifyFinal_sig", sig, (int)sig_len);   // presented signature, captured regardless of pass/fail
+    if (dsign_ctx_get(ctx) && sig && dsign_capture_allowed(1)) capture("EVP_DVerifyFinal_sig", sig, (int)sig_len);   // presented signature, captured regardless of pass/fail
     return g_orig_dverify_final(ctx, sig, sig_len);
 }
 
@@ -835,6 +839,7 @@ static int g_capture_on = 0;
 struct CaptureFamilyFlags { int digest, hmac, symmetric, asymmetric, tls, aead, system; };
 // Crypto defaults ON; system detection defaults OFF (Manager opt-in).
 static struct CaptureFamilyFlags g_families = { 1, 1, 1, 1, 1, 1, 0 };
+static int dsign_capture_allowed(int asymmetric) { return asymmetric ? g_families.asymmetric : g_families.hmac; }
 
 void adh_capture_set_families(int digest, int hmac, int symmetric, int asymmetric, int tls, int aead, int system) {
     g_families.digest = digest ? 1 : 0;

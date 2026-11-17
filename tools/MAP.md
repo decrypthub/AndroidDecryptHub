@@ -5,6 +5,23 @@ script or touching `verify_all.sh`.**
 
 ## Shared libraries (source these, don't execute)
 
+`build_got_restore_fixture.sh` builds a short-lived ARM64 executable linked to production `got.c`;
+it never calls ADB. `verify_got_restore.ts TEST_SERIAL BUILT_BINARY NEW_PRIVATE_OUTPUT` explicitly
+runs it in a UUID directory, rejects the daily device, and removes only its own executable/directory.
+It does not start a Host, install an APK, change reverse mappings, flash or reboot a device.
+
+## P5 isolated Android acceptance (2026-11-16)
+
+2026-11-17: `verify_p5_zygisk.ts` + `p5_zygisk_cases.ts` also verify all seven capture families in
+the first Application callback via the real Zygisk path, all-off, and real Wi-Fi grant revocation.
+The original Host may be absent; an existing Host must be inspectable/idle and retain its identity.
+Cleanup errors are collected per step without skipping other owned cleanup. See
+[P5_ZYGISK_EXTENDED_ACCEPTANCE.md](../docs/P5_ZYGISK_EXTENDED_ACCEPTANCE.md).
+
+`verify_p5_device.ts SERIAL TRANSPORT_ID PRIVATE_ASSETS NEW_PRIVATE_OUTPUT` is explicit real-device acceptance with a new package, private root domain, UDS, Host ports/data and cleanup/protection checks. It never flashes a module or restarts the running service. Build `:p5sandbox` and `:daemon` with `-PadhP5Sandbox=true` and an Agent built for port 18761. `p5_isolated_host.ts` maps only the private fixture endpoints into the production dispatcher. `verify_v132_p5_stdio.sh` is the registered host-only Kotlin interoperability gate; missing offline fixture is SKIP, never real-device fallback. Details and real/unverified boundaries: [P5_ANDROID_ACCEPTANCE.md](../docs/P5_ANDROID_ACCEPTANCE.md).
+
+## Shared library reference
+
 2026-10-24 analysis checks: `verify_v122_native_controls.sh` uses an existing Android sandbox (not
 run on the new agent this round); v123 verifies real paged QBDI and diagnostics; v124 verifies
 random-parameter crypto evidence; v125 verifies native controls/FP8/aggregate returns/unhook;
@@ -13,6 +30,17 @@ v126 verifies kernel write events/GPR/stack/generation. v123/v125/v126 can use t
 `build_trace_challenge.sh` and `build_native_controls_fixture.sh` build verification-only fixtures;
 `run_native_fixture.mjs SERIAL` runs the native host for <=300 seconds with cooperative stop-file
 cleanup. The host uses a UUID directory and memfd and is not an injection path for product targets.
+
+`qbdi_toggle.sh` switches the optional QBDI payload: the tracer ships inside the module
+(`libQBDI.so`), the root companion answers a `qbdi` query by checking `/data/adb/adh/qbdi.enabled`,
+and only when it is set does the instance open the library fd pre-specialize and hand it to the agent
+(`adh_agent_set_qbdi_fd`). The agent copies that fd into a memfd on the first `qbdi_trace`, so the
+default injection surface is unchanged (no library, no mapping, no fd) and a standalone trace releases
+the mapping again. `verify_v129_qbdi_delivery.sh` (device) is the acceptance on a REAL third-party app
+(default `com.uxin.kilaaudio`, override with `ADH_QBDI_TEST_PKG`): flag off → actionable refusal and no
+fd; flag on → fd delivered, `qbdi_trace libc:getpid` returns the target pid, and the library is gone
+from `/proc/<pid>/maps` afterwards.
+`verify_v130_scope_analyze.sh` (host) gates the programmable scope and the one-call analysis: the allowlist merge rules (names the C++ companion will parse), the main-process pick, and the `analyze_app` / `scope_list` / `scope_set` MCP tool shapes. It never writes scope.json or starts an app — those are product actions covered by real-device acceptance.
 
 `verify_v127_symbols.sh` (host) is the newest slice: `native_symbols` — one module's dynamic symbol
 table (name / module-relative offset / size / kind), filterable by `kind` and name substring, paged
@@ -179,3 +207,22 @@ event-limit accounting, explicit stop and wrong-TID refusal. It does not run the
 - `build_crypto_variants.sh` — 构建变异算法检测的**靶子库**（`fixtures/crypto-variants/{std,variant}.c` → `fixtures/crypto-variants/build/libadhcrypto_{std,variant}.so`，NDK clang `--target=aarch64-linux-android26 -O0`）。两个库构成 A/B：`std` 是教科书常量（负对照），`variant` 携带参考仓库真实出货的那几种变异（MD5 init 被改写、SHA1 轮常量被改写、base64 码表被置换，另加运行时生成的码表与多项式）。**必须是编译产物**：检测器的全部主张就是"能从二进制真正含有的字节里认出变异"，拿测试自己拼的 Buffer 去测只能证明测试会拼常量。`-O0` 是刻意的——优化会把表折进立即数，靶子就不再含有自己的常量了。
 - `verify_v101_crypto_variants.sh` — **变异算法识别**（host）：先跑 `daemon/test/crypto_variants.test.ts`（13 项，向量取自参考仓库的真实变异字节），再编译靶子并**经 daemon 的 REST 面**扫这两个库：负对照（教科书库必须一条 variant 判定都没有）→ MD5 变异（由未被改动的 K 表锚定、缺席的 init 作为证据、报告的 `12/16` 说明"标准 init 被原位改写"）→ SHA1 变异（从**另一端**锚定：IV 未动、轮常量被改）→ 置换码表按**形状**找到且漂移量计数为 54 → CRC-32C 被如实报成"另一套标准"而非变异 → `limits` 三条（运行时生成的表、连锚点一起改的变异）**必须存在**（扫描器要说得出自己在哪瞎）。
   最关键的一条断言是**度量出来的缺口**：旧的标准常量扫描对两个库返回**完全相同的算法名**（`status` 一样），而且在变异库上仍然报 `MD5-init`——那是 SHA1 init 的前 8 字节撞上的**假阳性**。即旧工具不是安静地瞎，是会主动误导；这条断言把"新层加了什么"钉成了可复跑的事实。
+
+
+- `verify_v131_root_watch_mem.sh` ? root_watch ?**??? + ???????**???device?fixture App ??? SKIP???? TID ? 2 ????????? `x0:8` ? `@x0:8`??? 4 ????`bp` ???? 0/1???????????????????? 0x1122? / 0x8877???? `root_watch.test.ts`?3 ????????? spec ?????????
+
+### root_watch 内存窗口时序补充（2026-11-16）
+
+`native/root_watch.c` 的 `emit_mem` 在收到 perf 事件后读取目标进程，不是内核事件时刻的堆快照；原始窗口明确标为 `source=process-memory-after-sample`、`snapshotConsistent:false`。同事件内核栈可用时，由 Host `projectRootSample` 恢复确定的栈窗口。自测的固定内存值通过不能证明动态目标的异步窗口同步正确。
+
+## MCP registry documentation
+
+`node tools/generate_mcp_docs.mjs` regenerates docs/mcp-tools.md from the source registry; `--check` validates it. It uses isolated, pure imports and performs no Host initialization, discovery or ADB operation. The generator is tracked so fresh clones do not depend on an ignored adhd-data script.
+
+### P5 最终沙盒入口（2026-11-16）
+
+`verify_p5_device.ts SERIAL TRANSPORT_ID PRIVATE_ASSETS NEW_PRIVATE_OUTPUT final` 显式执行 stdio/2 的256种长度往返、七族 capture_start、全禁用、UID变化与Agent替换，共11项；细节在 p5_final_cases.ts。拒绝已有测试包/占用端口，不走 verify_all 的共享沙盒启停。通过、失败、unknown、现场和自有资源清理分别记录，超时不重发。原始报告与产物不提交，见 docs/P5_ANDROID_ACCEPTANCE.md。
+
+## P5 真实 Zygisk 显式入口（2026-11-16）
+
+`build_p5_zygisk.sh NONCE PRIVATE_OUTPUT` 无ADB；`verify_p5_zygisk.ts SERIAL PRIVATE_ASSETS NEW_PRIVATE_OUTPUT --allow-device-reboot` 在专用授权手机安装仅自身包作用域的临时模块，加载/卸载各重启一次，验证6项真实链路并检查原Host/文件/映射和自身清理。缺少重启opt-in/日常机在任何状态或ADB前被拒绝。该入口不注册到verify_all自动执行。原始产物和报告不提交；详情见 docs/P5_ZYGISK_ACCEPTANCE.md。

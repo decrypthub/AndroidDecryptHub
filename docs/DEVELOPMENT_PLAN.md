@@ -1,8 +1,19 @@
 # ADH (Android DecryptHub) — 开发计划
 
+> **2026-11-16 P4 实施**：P3 设备 RPC 已增加 opt-in LAN TLS、可信 USB 配对、持久 read/write/manage 授权与撤销，USB/LAN 共用设备业务。断线后显式恢复连接并持久对账，不重放、不自动解除 unknown；工作台展示证据及多个未知操作。迁移矩阵、初次配对、密钥与实机限制见 [P4_LAN_AUTH.md](P4_LAN_AUTH.md)。agent 本地路由、bulk 与旧 ADB-only 诊断/fs/helper 未迁移，明确 unsupported；当前分析实例不升级。
+
+> **2026-11-16 P3 实施**：设备域服务、安装身份、能力查询与 USB/ADB RPC 已在独立 worktree 实现。Binder/RPC 共用业务与 revision；Host 设备范围接入 P1 控制权，MCP/REST/公共 CLI 共用操作。详见 [P3_DEVICE_DOMAIN.md](P3_DEVICE_DOMAIN.md)。P4 配对/TLS、旧 ADB-only 能力迁移及 agent 本地路由未实施；原审计 P3 的真机 UDS/fd/SELinux 原型仍待独立设备验证，当前现场不升级。
+
+> **2026-11-16 P2 实施**：完成同一工作台的独立/现场入口、任务详情/结果/副作用、配置草稿/并发冲突核对、任务 CAS 与暂停恢复、显式接管/交还及 unknown 核对。AI 规划与执行继续由外部 Harness 主导，面板不要求预先接管或固定 recipe。模块/边界见 [P2_WORKBENCH.md](P2_WORKBENCH.md)；P3/P4 的设备域与新传输仍未实施，当前分析实例不升级。
+
+> **2026-11-16 P1 实施**：共享执行器、持久任务、状态版本/控制 epoch、人类接管、真实超时/取消反馈与最小面板控制入口已落地，见 [P1_OPERATIONS.md](P1_OPERATIONS.md)。P2 仍需完整任务工作台/编辑体验；P3/P4 的稳定设备身份和 USB/LAN 新 RPC、配对/TLS 尚未实现。本轮不替换当前运行实例。
+
+> **2026-11-16 P0 实施记录**：F01 作用域策略保留、F02 共享设置应用、F04 非破坏性显式恢复与独立清理已在 Host 源码落地，见 [P0 实现与迁移](P0_HOST_STATE.md)。当前分析现场不升级；人工接管后续进展以上方 P1 条目为准。
+
 > **定位**：**通用 Android 运行时逆向分析工具** — 对高对抗目标（反调试/root/签名检测/混淆/加密传输）具备实战能力。
 > **功能需求**：见 [`REQUIREMENTS.md`](REQUIREMENTS.md)（唯一权威规格，模块 A–W；本文档只管架构与排期）。
 > **跨会话进度**：见 [`PROGRESS.md`](PROGRESS.md)。
+> **2026-11-16 用户确定的后续方向**：AI 自主规划分析，人类电脑面板可查看、修改和接管，USB/LAN 共用设备能力。现状对照、状态/副作用、具体模块与 P0–P5 实施顺序见本计划的[代码审计附录](AI_FIRST_REFACTOR_AUDIT.md)，逐项入口见[静态清单](AI_FIRST_CAPABILITY_INVENTORY.json)。附录区分当前实现与拟议设计；下面旧“只读面板”等描述属于待迁移基线，不代表本轮已完成运行改造。进入实施阶段同步需求与工程规则，仍保持 agent 轻量、分析在 Host；本轮不改当前分析现场。
 > **参考项目**：[`REFERENCE_IOS.md`](REFERENCE_IOS.md)（[ios-decrypt-helper](https://github.com/taisuii/ios-decrypt-helper)）。
 > **一句话**：运行在目标进程内的 native agent，配合本机 daemon、Web UI 和 MCP Server，实现运行时 dex/so/memory dump、ART 结构级脱壳、Java/native hook、明文边界加密观测、活体对象自省、反分析行为观测、函数/指令 trace、Capstone 反汇编与搜索；Zygisk / Gadget 多种注入方式。
 

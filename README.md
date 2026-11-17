@@ -2,13 +2,17 @@
 
 Android DecryptHub（ADH）是一套 Android 运行时分析工具。它把一个轻量程序注入到你勾选的应用里，观察这个应用在运行时做了什么：网络、加密、Java 方法、native 函数、内存和 DEX。重的分析放在电脑上，不放进目标应用。
 
+P5 分支将 Hook 方案和编辑器迁到 Host。MCP `hook_plans`、Python CLI `adh call/run hook_plans` 和任务工作台共用执行层。保存、暂存和实际安装分别报告，连接不自动套用旧捕获/启动默认值。迁移与兼容边界见 [P5_HOOK_PLANS.md](docs/P5_HOOK_PLANS.md)。此分支尚未部署到现有分析现场。
+
+P5 后续已完成真实 Android 独立沙盒验收，并在正式 Zygisk 回调/companion/post-specialize 的隔离命名空间中完成七族代表性捕获、全部禁用、LAN 授权撤销及 UID/Agent/过期等拒绝，共15/15。详见[正式链验收与未验证边界](docs/P5_ZYGISK_EXTENDED_ACCEPTANCE.md)；默认模块/Manager/生产 RootDaemon 的部署升级仍待验证。
+
 ## 能做什么
 
 **只影响勾选的应用。** 在手机上的 ADH Manager 里勾选注入范围并保存，然后重新打开该应用。主进程和 `:core` 这类子进程都会注入。没勾选的应用不会注入。
 
-**用代理看 HTTPS。** 应用被注入之后，Java 侧的证书校验会放行。配合你自己的抓包代理（系统代理或 VPN），可以看到这个应用发出的 HTTPS。native 的 `SSL_read` / `SSL_write` 明文是另一项，要在电脑上开始采集才会装，Manager 里的「TLS 明文」开关管的是这一项。
+**用代理看 HTTPS。** 手机负责系统 CA 管理；Java trust-manager bypass 由 Host 显式执行 `java_hook action=bypass`。native 的 `SSL_read` / `SSL_write` 明文由显式捕获方案控制。注入与连接本身不会自动安装这些 Hook。
 
-**记录 Java 加密。** 注入后自动观察这些接口，原来的方法照常执行：
+**记录 Java 加密。** Host 可显式执行 `java_hook action=crypto`，或用方案中的 Java 方法步骤观察这些接口；原来的方法照常执行：
 
 | 接口 | 记下什么 |
 | --- | --- |
@@ -17,7 +21,7 @@ Android DecryptHub（ADH）是一套 Android 运行时分析工具。它把一�
 | `java.security.MessageDigest` | `digest`。例如 MD5、SHA-256 |
 | `java.security.Signature` | `initSign`、`initVerify`、`sign`、`verify`。例如 SHA256withRSA |
 
-每条记录包含算法名、操作（加密、解密、摘要、签名等）、密钥、IV、输入和输出。Manager 里可以按应用关掉某一族（摘要、HMAC、对称、非对称、AEAD）；关掉的族不会安装钩子。保存后要重启该应用。RSA 加解密跟着「对称」或 AEAD，RSA 签名跟着「非对称」。
+每条记录按接口能力包含算法名、操作、密钥、IV、输入和输出。方案中的 family 控制后续 native 捕获安装资格；Manager 保留旧配置快照和缓存撤销入口，编辑方案在 Host 完成。Java 原语的覆盖边界以工具返回和实际事件为准。
 
 这些情况记不到，或只能记到一部分：
 

@@ -1,0 +1,4453 @@
+{
+  "schemaVersion": 1,
+  "auditDate": "2026-11-16",
+  "method": "Static TypeScript AST and source-text inspection only; no ADH module imported and no device/service calls. Endpoint coverage is syntactic, not proof of execution or semantic parity.",
+  "baseCommit": "ca4f92ec99e8ec13fc13fbc7f0a24a5919248d6a",
+  "cliCommit": "3cf83996cd8a0221b3248048025870f785cd5852",
+  "counts": {
+    "mcp": 91,
+    "routeEntries": 106,
+    "uiLiteralFetches": 26,
+    "publicCliCommands": 7,
+    "deviceAidlMethods": 15,
+    "agentAdvertisedOps": 38
+  },
+  "tools": [
+    {
+      "name": "analysis_guide",
+      "source": "daemon/src/mcp.ts",
+      "line": 60,
+      "properties": [
+        "action",
+        "topic",
+        "session",
+        "hookId",
+        "buffer",
+        "tid"
+      ],
+      "required": [],
+      "handlerCalls": [
+        "analysisGuide",
+        "assessAnalysis",
+        "sendCmd"
+      ],
+      "directAgentOps": [
+        "native_hook"
+      ],
+      "group": "guidance"
+    },
+    {
+      "name": "crypto_evidence",
+      "source": "daemon/src/mcp.ts",
+      "line": 68,
+      "properties": [
+        "action",
+        "observations",
+        "candidates",
+        "loss",
+        "label",
+        "id",
+        "offset",
+        "limit",
+        "includePayload"
+      ],
+      "required": [
+        "action"
+      ],
+      "handlerCalls": [
+        "Array.isArray",
+        "Math.max",
+        "Object.hasOwn",
+        "String",
+        "[a.loss?.note,...unknown].filter",
+        "[a.loss?.note,...unknown].filter(Boolean).join",
+        "[a.loss?.storeLoss,...notes].filter",
+        "[a.loss?.storeLoss,...notes].filter(Boolean).join",
+        "a.observations.map",
+        "analyzeCryptoEvidence",
+        "bytes",
+        "capStats.get",
+        "dropCryptoEvidence",
+        "listCryptoEvidence",
+        "liveSessions.add",
+        "notes.push",
+        "readCryptoEvidence",
+        "saveCryptoEvidence",
+        "selectCaptureBytes",
+        "storeLossNote",
+        "unknown.push",
+        "v.map"
+      ],
+      "directAgentOps": [],
+      "group": "evidence"
+    },
+    {
+      "name": "runtime_diagnostics",
+      "source": "daemon/src/mcp.ts",
+      "line": 99,
+      "properties": [
+        "session",
+        "serial",
+        "afterTid",
+        "limit",
+        "timeoutMs"
+      ],
+      "required": [
+        "session"
+      ],
+      "handlerCalls": [
+        "String",
+        "diagnoseRuntime",
+        "sessions.get"
+      ],
+      "directAgentOps": [],
+      "group": "diagnostics"
+    },
+    {
+      "name": "trace_session",
+      "source": "daemon/src/mcp.ts",
+      "line": 103,
+      "properties": [
+        "action",
+        "session",
+        "id",
+        "path",
+        "confirm",
+        "addr",
+        "symLib",
+        "symbol",
+        "args",
+        "budget",
+        "timeMs",
+        "capacity",
+        "afterSeq",
+        "limit",
+        "pc",
+        "minPc",
+        "maxPc",
+        "mnemonic",
+        "register",
+        "beforeSeq",
+        "maxScan"
+      ],
+      "required": [
+        "action"
+      ],
+      "handlerCalls": [
+        "String",
+        "agentCmd",
+        "assertCallableAddress",
+        "dropTrace",
+        "listTraces",
+        "queryTrace",
+        "recordTrace",
+        "sessions.get",
+        "sliceTrace",
+        "target.caps?.ops?.includes",
+        "traceStats"
+      ],
+      "directAgentOps": [
+        "load_so"
+      ],
+      "group": "watch_and_trace"
+    },
+    {
+      "name": "root_watch",
+      "source": "daemon/src/mcp.ts",
+      "line": 121,
+      "properties": [
+        "action",
+        "session",
+        "serial",
+        "id",
+        "tid",
+        "addr",
+        "width",
+        "mode",
+        "breakpoints",
+        "mem",
+        "durationMs",
+        "maxEvents",
+        "stackBytes",
+        "afterSeq",
+        "limit",
+        "registers",
+        "stackAddress",
+        "stackSize"
+      ],
+      "required": [
+        "action"
+      ],
+      "handlerCalls": [
+        "String",
+        "prepareRootWatch",
+        "readRootWatch",
+        "rootWatchStatus",
+        "sessions.get",
+        "startRootWatch",
+        "stopRootWatch"
+      ],
+      "directAgentOps": [],
+      "group": "watch_and_trace"
+    },
+    {
+      "name": "process_list",
+      "source": "daemon/src/mcp.ts",
+      "line": 134,
+      "properties": [],
+      "required": [],
+      "handlerCalls": [
+        "sessions.values"
+      ],
+      "directAgentOps": [],
+      "group": "inventory"
+    },
+    {
+      "name": "backends",
+      "source": "daemon/src/mcp.ts",
+      "line": 135,
+      "properties": [
+        "session"
+      ],
+      "required": [],
+      "handlerCalls": [
+        "backendMatrix",
+        "classifySession"
+      ],
+      "directAgentOps": [],
+      "group": "inventory"
+    },
+    {
+      "name": "dumps_list",
+      "source": "daemon/src/mcp.ts",
+      "line": 136,
+      "properties": [],
+      "required": [],
+      "handlerCalls": [
+        "dumps.values"
+      ],
+      "directAgentOps": [],
+      "group": "artifacts"
+    },
+    {
+      "name": "compat_probe",
+      "source": "daemon/src/mcp.ts",
+      "line": 137,
+      "properties": [
+        "session"
+      ],
+      "required": [],
+      "handlerCalls": [
+        "agentCmd"
+      ],
+      "directAgentOps": [
+        "compat_probe"
+      ],
+      "group": "diagnostics"
+    },
+    {
+      "name": "jni_onload",
+      "source": "daemon/src/mcp.ts",
+      "line": 138,
+      "properties": [
+        "session",
+        "action",
+        "module",
+        "confirm",
+        "skipOriginal",
+        "returnValue"
+      ],
+      "required": [
+        "action"
+      ],
+      "handlerCalls": [
+        "Promise.resolve",
+        "String",
+        "agentCmd"
+      ],
+      "directAgentOps": [
+        "jni_onload"
+      ],
+      "group": "jni"
+    },
+    {
+      "name": "jni_hook",
+      "source": "daemon/src/mcp.ts",
+      "line": 139,
+      "properties": [
+        "session",
+        "action"
+      ],
+      "required": [
+        "action"
+      ],
+      "handlerCalls": [
+        "agentCmd"
+      ],
+      "directAgentOps": [
+        "jni_hook"
+      ],
+      "group": "jni"
+    },
+    {
+      "name": "jni_env_hook",
+      "source": "daemon/src/mcp.ts",
+      "line": 140,
+      "properties": [
+        "session",
+        "setValue",
+        "action",
+        "function"
+      ],
+      "required": [
+        "action"
+      ],
+      "handlerCalls": [
+        "agentCmd"
+      ],
+      "directAgentOps": [
+        "jni_env_hook"
+      ],
+      "group": "jni"
+    },
+    {
+      "name": "javahook_probe",
+      "source": "daemon/src/mcp.ts",
+      "line": 141,
+      "properties": [
+        "session"
+      ],
+      "required": [],
+      "handlerCalls": [
+        "agentCmd"
+      ],
+      "directAgentOps": [
+        "javahook_probe"
+      ],
+      "group": "java"
+    },
+    {
+      "name": "java_hook",
+      "source": "daemon/src/mcp.ts",
+      "line": 142,
+      "properties": [
+        "session",
+        "action",
+        "hookId",
+        "className",
+        "method",
+        "params",
+        "skipOriginal",
+        "returnValue",
+        "argIndex",
+        "argValue",
+        "stack",
+        "limit"
+      ],
+      "required": [
+        "action"
+      ],
+      "handlerCalls": [
+        "agentCmd"
+      ],
+      "directAgentOps": [
+        "java_hook"
+      ],
+      "group": "java"
+    },
+    {
+      "name": "java_enum",
+      "source": "daemon/src/mcp.ts",
+      "line": 143,
+      "properties": [
+        "session",
+        "className"
+      ],
+      "required": [
+        "className"
+      ],
+      "handlerCalls": [
+        "agentCmd"
+      ],
+      "directAgentOps": [
+        "java_enum"
+      ],
+      "group": "java"
+    },
+    {
+      "name": "java_call",
+      "source": "daemon/src/mcp.ts",
+      "line": 144,
+      "properties": [
+        "session",
+        "className",
+        "method",
+        "params",
+        "field",
+        "args",
+        "detach"
+      ],
+      "required": [
+        "className",
+        "method"
+      ],
+      "handlerCalls": [
+        "JSON.stringify",
+        "agentCmd",
+        "ops.includes",
+        "pickSid",
+        "sessions.get"
+      ],
+      "directAgentOps": [
+        "java_call"
+      ],
+      "group": "java"
+    },
+    {
+      "name": "java_call_result",
+      "source": "daemon/src/mcp.ts",
+      "line": 145,
+      "properties": [
+        "session",
+        "callId",
+        "waitMs"
+      ],
+      "required": [
+        "session"
+      ],
+      "handlerCalls": [
+        "Date.now",
+        "Math.max",
+        "Math.min",
+        "Number",
+        "agentCmd",
+        "pickSid",
+        "setTimeout"
+      ],
+      "directAgentOps": [
+        "java_call_result"
+      ],
+      "group": "java"
+    },
+    {
+      "name": "hw_watch",
+      "source": "daemon/src/mcp.ts",
+      "line": 146,
+      "properties": [
+        "session",
+        "action",
+        "addr",
+        "len",
+        "mode",
+        "slot",
+        "hookId",
+        "spec"
+      ],
+      "required": [
+        "session"
+      ],
+      "handlerCalls": [
+        "Number",
+        "agentCmd"
+      ],
+      "directAgentOps": [
+        "hw_watch"
+      ],
+      "group": "watch_and_trace"
+    },
+    {
+      "name": "native_hook",
+      "source": "daemon/src/mcp.ts",
+      "line": 147,
+      "properties": [
+        "session",
+        "action",
+        "hookId",
+        "mode",
+        "module",
+        "symbol",
+        "addr",
+        "skipOriginal",
+        "returnValue",
+        "argIndex",
+        "argValue",
+        "confirm",
+        "hard",
+        "sites",
+        "scope",
+        "slotsWritable",
+        "backtrace",
+        "throttleMs",
+        "maxEvents",
+        "sampleEvery",
+        "tid",
+        "returnAddress",
+        "mem",
+        "memAfter",
+        "filter",
+        "writeReg",
+        "writeOff",
+        "writeHex",
+        "errno",
+        "traceInsns",
+        "traceFrom",
+        "traceWatch"
+      ],
+      "required": [
+        "action"
+      ],
+      "handlerCalls": [
+        "/^[0-9a-fA-F]+$/.test",
+        "/^x([0-8])(?:\\+(\\d{1,5}))?:(\\d{1,4})$/.exec",
+        "/^x([0-8])\\s*=\\s*(0x[0-9a-fA-F]+|[0-9]+)$/.exec",
+        "BigInt",
+        "BigInt(m[2]).toString",
+        "Math.max",
+        "Math.trunc",
+        "Number",
+        "Number.isFinite",
+        "Number.isInteger",
+        "String",
+        "String((a as any).filter).trim",
+        "String(a.memAfter).trim",
+        "agentCmd",
+        "assertCallableAddress",
+        "classifyAddress",
+        "cls.path.split",
+        "cls.path.split('/').pop",
+        "ensureNativeObservationSupport",
+        "nativeTracePayload",
+        "normalizeThrottleMs",
+        "parseMemWindows",
+        "pickSid",
+        "sendCmd"
+      ],
+      "directAgentOps": [
+        "maps",
+        "native_hook"
+      ],
+      "group": "native_runtime"
+    },
+    {
+      "name": "recipe",
+      "source": "daemon/src/mcp.ts",
+      "line": 251,
+      "properties": [
+        "session",
+        "action",
+        "name",
+        "options"
+      ],
+      "required": [
+        "action"
+      ],
+      "handlerCalls": [
+        "String",
+        "listRecipes",
+        "runRecipe"
+      ],
+      "directAgentOps": [],
+      "group": "host_control"
+    },
+    {
+      "name": "module_watch",
+      "source": "daemon/src/mcp.ts",
+      "line": 255,
+      "properties": [
+        "session",
+        "action",
+        "limit"
+      ],
+      "required": [
+        "action"
+      ],
+      "handlerCalls": [
+        "Number",
+        "agentCmd",
+        "moduleLoads",
+        "pickSid"
+      ],
+      "directAgentOps": [
+        "module_watch"
+      ],
+      "group": "module"
+    },
+    {
+      "name": "memory_write",
+      "source": "daemon/src/mcp.ts",
+      "line": 264,
+      "properties": [
+        "session",
+        "addr",
+        "hex",
+        "force"
+      ],
+      "required": [
+        "addr",
+        "hex"
+      ],
+      "handlerCalls": [
+        "pickSid",
+        "writeMem"
+      ],
+      "directAgentOps": [],
+      "group": "memory"
+    },
+    {
+      "name": "memory_restore",
+      "source": "daemon/src/mcp.ts",
+      "line": 265,
+      "properties": [
+        "session",
+        "addr"
+      ],
+      "required": [],
+      "handlerCalls": [
+        "listWriteUndo",
+        "pickSid",
+        "restoreMem"
+      ],
+      "directAgentOps": [],
+      "group": "memory"
+    },
+    {
+      "name": "capabilities",
+      "source": "daemon/src/mcp.ts",
+      "line": 266,
+      "properties": [
+        "session"
+      ],
+      "required": [],
+      "handlerCalls": [
+        "autoAntiDebugEnabled",
+        "pickSid",
+        "sessions.get"
+      ],
+      "directAgentOps": [],
+      "group": "inventory"
+    },
+    {
+      "name": "settings",
+      "source": "daemon/src/mcp.ts",
+      "line": 267,
+      "properties": [
+        "action",
+        "patch"
+      ],
+      "required": [
+        "action"
+      ],
+      "handlerCalls": [
+        "autoAntiDebugEnabled",
+        "mergeSettings",
+        "saveSettings"
+      ],
+      "directAgentOps": [],
+      "group": "host_control"
+    },
+    {
+      "name": "native_look",
+      "source": "daemon/src/mcp.ts",
+      "line": 274,
+      "properties": [
+        "session",
+        "action",
+        "hookId",
+        "seq",
+        "beforeSeq",
+        "limit",
+        "mode",
+        "module",
+        "symbol",
+        "addr",
+        "confirm",
+        "mem",
+        "backtrace",
+        "hard",
+        "maxEvents",
+        "sampleEvery",
+        "tid",
+        "returnAddress",
+        "traceInsns",
+        "traceFrom",
+        "traceWatch"
+      ],
+      "required": [
+        "action"
+      ],
+      "handlerCalls": [
+        "Number",
+        "String",
+        "assertCallableAddress",
+        "nativeLookArm",
+        "nativeLookRead",
+        "nativeLookStop",
+        "pickSid"
+      ],
+      "directAgentOps": [],
+      "group": "native_runtime"
+    },
+    {
+      "name": "syscall_digest",
+      "source": "daemon/src/mcp.ts",
+      "line": 291,
+      "properties": [
+        "session",
+        "hookIds",
+        "expected",
+        "sinceMs",
+        "limit",
+        "maxGroups",
+        "decode",
+        "decodeLimit"
+      ],
+      "required": [],
+      "handlerCalls": [
+        "pickSid",
+        "syscallDigest"
+      ],
+      "directAgentOps": [],
+      "group": "watch_and_trace"
+    },
+    {
+      "name": "java_trace",
+      "source": "daemon/src/mcp.ts",
+      "line": 292,
+      "properties": [
+        "session",
+        "action",
+        "className",
+        "method",
+        "params",
+        "limit",
+        "stack",
+        "hookIds",
+        "sinceCaptureId",
+        "maxTimeline",
+        "maxMethods",
+        "maxCallers"
+      ],
+      "required": [
+        "action"
+      ],
+      "handlerCalls": [
+        "String",
+        "javaTraceDigest",
+        "javaTraceStart",
+        "javaTraceStop",
+        "pickSid"
+      ],
+      "directAgentOps": [],
+      "group": "java"
+    },
+    {
+      "name": "native_hook_all",
+      "source": "daemon/src/mcp.ts",
+      "line": 293,
+      "properties": [
+        "session",
+        "action",
+        "module",
+        "prefix",
+        "contains",
+        "exact",
+        "exclude",
+        "limit",
+        "backtrace",
+        "throttleMs",
+        "maxEvents",
+        "sampleEvery",
+        "tid",
+        "returnAddress",
+        "skipOriginal",
+        "returnValue",
+        "argIndex",
+        "argValue",
+        "hookIds",
+        "confirm"
+      ],
+      "required": [
+        "action"
+      ],
+      "handlerCalls": [
+        "String",
+        "nativeHookAll",
+        "nativeUnhookAll",
+        "pickSid"
+      ],
+      "directAgentOps": [],
+      "group": "native_runtime"
+    },
+    {
+      "name": "syscall_trace",
+      "source": "daemon/src/mcp.ts",
+      "line": 294,
+      "properties": [
+        "session",
+        "action",
+        "module",
+        "syscalls",
+        "limit",
+        "throttleMs",
+        "hookIds",
+        "expected",
+        "sinceMs",
+        "decode",
+        "decodeLimit",
+        "maxGroups"
+      ],
+      "required": [
+        "action"
+      ],
+      "handlerCalls": [
+        "String",
+        "pickSid",
+        "syscallTraceDigest",
+        "syscallTraceStart",
+        "syscallTraceStop"
+      ],
+      "directAgentOps": [],
+      "group": "watch_and_trace"
+    },
+    {
+      "name": "trace_digest",
+      "source": "daemon/src/mcp.ts",
+      "line": 295,
+      "properties": [
+        "session",
+        "symLib",
+        "symbol",
+        "addr",
+        "args"
+      ],
+      "required": [
+        "session"
+      ],
+      "handlerCalls": [
+        "String",
+        "pickSid",
+        "traceDigest"
+      ],
+      "directAgentOps": [],
+      "group": "watch_and_trace"
+    },
+    {
+      "name": "native_backtrace",
+      "source": "daemon/src/mcp.ts",
+      "line": 296,
+      "properties": [
+        "session",
+        "hookId",
+        "fp",
+        "lr",
+        "maxFrames"
+      ],
+      "required": [],
+      "handlerCalls": [
+        "nativeBacktrace",
+        "pickSid"
+      ],
+      "directAgentOps": [],
+      "group": "native_runtime"
+    },
+    {
+      "name": "native_symbols",
+      "source": "daemon/src/mcp.ts",
+      "line": 297,
+      "properties": [
+        "session",
+        "module",
+        "kind",
+        "contains",
+        "limit",
+        "offset"
+      ],
+      "required": [
+        "module"
+      ],
+      "handlerCalls": [
+        "String",
+        "moduleSymbols",
+        "pickSid"
+      ],
+      "directAgentOps": [],
+      "group": "native_runtime"
+    },
+    {
+      "name": "native_call",
+      "source": "daemon/src/mcp.ts",
+      "line": 298,
+      "properties": [
+        "session",
+        "module",
+        "symbol",
+        "addr",
+        "args",
+        "confirm"
+      ],
+      "required": [],
+      "handlerCalls": [
+        "(a.args ?? []).map",
+        "(a.args ?? []).map((v: any) => String(v)).join",
+        "String",
+        "agentCmd",
+        "assertCallableAddress",
+        "pickSid"
+      ],
+      "directAgentOps": [
+        "native_call"
+      ],
+      "group": "native_runtime"
+    },
+    {
+      "name": "stealth",
+      "source": "daemon/src/mcp.ts",
+      "line": 308,
+      "properties": [
+        "session",
+        "action",
+        "confirm"
+      ],
+      "required": [
+        "action"
+      ],
+      "handlerCalls": [
+        "Promise.resolve",
+        "String",
+        "agentCmd"
+      ],
+      "directAgentOps": [
+        "stealth"
+      ],
+      "group": "native_runtime"
+    },
+    {
+      "name": "syscall_watch",
+      "source": "daemon/src/mcp.ts",
+      "line": 309,
+      "properties": [
+        "session",
+        "module",
+        "limit",
+        "throttleMs",
+        "syscalls"
+      ],
+      "required": [
+        "module"
+      ],
+      "handlerCalls": [
+        "pickSid",
+        "watchSyscalls"
+      ],
+      "directAgentOps": [],
+      "group": "watch_and_trace"
+    },
+    {
+      "name": "got_enum",
+      "source": "daemon/src/mcp.ts",
+      "line": 310,
+      "properties": [
+        "session",
+        "module",
+        "filter"
+      ],
+      "required": [
+        "module"
+      ],
+      "handlerCalls": [
+        "agentCmd"
+      ],
+      "directAgentOps": [
+        "got_enum"
+      ],
+      "group": "native_runtime"
+    },
+    {
+      "name": "memory_maps",
+      "source": "daemon/src/mcp.ts",
+      "line": 311,
+      "properties": [
+        "session"
+      ],
+      "required": [],
+      "handlerCalls": [
+        "agentCmd"
+      ],
+      "directAgentOps": [
+        "maps"
+      ],
+      "group": "memory"
+    },
+    {
+      "name": "maps_query",
+      "source": "daemon/src/mcp.ts",
+      "line": 312,
+      "properties": [
+        "session",
+        "path",
+        "perm",
+        "exec",
+        "anon",
+        "minSize",
+        "maxSize",
+        "limit",
+        "addr"
+      ],
+      "required": [],
+      "handlerCalls": [
+        "Array.isArray",
+        "Number",
+        "String",
+        "agentCmd",
+        "pickSid",
+        "queryMaps"
+      ],
+      "directAgentOps": [
+        "maps"
+      ],
+      "group": "memory"
+    },
+    {
+      "name": "mem_backend",
+      "source": "daemon/src/mcp.ts",
+      "line": 313,
+      "properties": [
+        "session",
+        "backend"
+      ],
+      "required": [
+        "backend"
+      ],
+      "handlerCalls": [
+        "agentCmd"
+      ],
+      "directAgentOps": [
+        "mem_backend"
+      ],
+      "group": "memory"
+    },
+    {
+      "name": "memory_read",
+      "source": "daemon/src/mcp.ts",
+      "line": 314,
+      "properties": [
+        "session",
+        "addr",
+        "size",
+        "via"
+      ],
+      "required": [
+        "addr",
+        "size"
+      ],
+      "handlerCalls": [
+        "agentCmd"
+      ],
+      "directAgentOps": [
+        "read"
+      ],
+      "group": "memory"
+    },
+    {
+      "name": "memory_disasm",
+      "source": "daemon/src/mcp.ts",
+      "line": 315,
+      "properties": [
+        "session",
+        "addr",
+        "size",
+        "module",
+        "offset"
+      ],
+      "required": [],
+      "handlerCalls": [
+        "liveDisasm",
+        "pickSid"
+      ],
+      "directAgentOps": [],
+      "group": "memory"
+    },
+    {
+      "name": "memory_search",
+      "source": "daemon/src/mcp.ts",
+      "line": 316,
+      "properties": [
+        "session",
+        "hex",
+        "text",
+        "limit",
+        "minAddr",
+        "maxAddr"
+      ],
+      "required": [],
+      "handlerCalls": [
+        "Buffer.from",
+        "Buffer.from(String(a.text ?? ''), 'utf8').toString",
+        "String",
+        "agentCmd"
+      ],
+      "directAgentOps": [
+        "search"
+      ],
+      "group": "memory"
+    },
+    {
+      "name": "memory_scan_magic",
+      "source": "daemon/src/mcp.ts",
+      "line": 317,
+      "properties": [
+        "session",
+        "minAddr",
+        "maxAddr"
+      ],
+      "required": [],
+      "handlerCalls": [
+        "agentCmd"
+      ],
+      "directAgentOps": [
+        "scan_magic"
+      ],
+      "group": "memory"
+    },
+    {
+      "name": "art_dexfiles",
+      "source": "daemon/src/mcp.ts",
+      "line": 318,
+      "properties": [
+        "session"
+      ],
+      "required": [],
+      "handlerCalls": [
+        "agentCmd"
+      ],
+      "directAgentOps": [
+        "art_dexfiles"
+      ],
+      "group": "dex_analysis"
+    },
+    {
+      "name": "capture_start",
+      "source": "daemon/src/mcp.ts",
+      "line": 319,
+      "properties": [
+        "session",
+        "cryptoModule",
+        "fileModule",
+        "sysModule",
+        "force"
+      ],
+      "required": [],
+      "handlerCalls": [
+        "pickSid",
+        "setCapture"
+      ],
+      "directAgentOps": [],
+      "group": "capture_and_network"
+    },
+    {
+      "name": "capture_stop",
+      "source": "daemon/src/mcp.ts",
+      "line": 320,
+      "properties": [
+        "session"
+      ],
+      "required": [],
+      "handlerCalls": [
+        "pickSid",
+        "setCapture"
+      ],
+      "directAgentOps": [],
+      "group": "capture_and_network"
+    },
+    {
+      "name": "file_probe",
+      "source": "daemon/src/mcp.ts",
+      "line": 321,
+      "properties": [
+        "session"
+      ],
+      "required": [],
+      "handlerCalls": [
+        "agentCmd"
+      ],
+      "directAgentOps": [
+        "file_probe"
+      ],
+      "group": "capture_and_network"
+    },
+    {
+      "name": "object_inspect",
+      "source": "daemon/src/mcp.ts",
+      "line": 322,
+      "properties": [
+        "session",
+        "className",
+        "field"
+      ],
+      "required": [
+        "className",
+        "field"
+      ],
+      "handlerCalls": [
+        "agentCmd"
+      ],
+      "directAgentOps": [
+        "object_inspect"
+      ],
+      "group": "objects"
+    },
+    {
+      "name": "dex_search",
+      "source": "daemon/src/mcp.ts",
+      "line": 323,
+      "properties": [
+        "b64",
+        "sha",
+        "query",
+        "kinds"
+      ],
+      "required": [
+        "query"
+      ],
+      "handlerCalls": [
+        "dumpBuf",
+        "parseDex",
+        "searchDex"
+      ],
+      "directAgentOps": [],
+      "group": "dex_analysis"
+    },
+    {
+      "name": "dex_index",
+      "source": "daemon/src/mcp.ts",
+      "line": 324,
+      "properties": [
+        "b64",
+        "sha"
+      ],
+      "required": [],
+      "handlerCalls": [
+        "dumpBuf",
+        "ensureDexIndex"
+      ],
+      "directAgentOps": [],
+      "group": "dex_analysis"
+    },
+    {
+      "name": "dex_index_search",
+      "source": "daemon/src/mcp.ts",
+      "line": 325,
+      "properties": [
+        "sha",
+        "query",
+        "limit"
+      ],
+      "required": [
+        "sha",
+        "query"
+      ],
+      "handlerCalls": [
+        "String",
+        "searchDexIndex"
+      ],
+      "directAgentOps": [],
+      "group": "dex_analysis"
+    },
+    {
+      "name": "dex_reflections",
+      "source": "daemon/src/mcp.ts",
+      "line": 326,
+      "properties": [
+        "sha",
+        "limit"
+      ],
+      "required": [
+        "sha"
+      ],
+      "handlerCalls": [
+        "String",
+        "listDexReflections"
+      ],
+      "directAgentOps": [],
+      "group": "dex_analysis"
+    },
+    {
+      "name": "dex_xref",
+      "source": "daemon/src/mcp.ts",
+      "line": 327,
+      "properties": [
+        "b64",
+        "sha",
+        "method"
+      ],
+      "required": [
+        "method"
+      ],
+      "handlerCalls": [
+        "String",
+        "String(a.method).toLowerCase",
+        "c.toLowerCase",
+        "c.toLowerCase().includes",
+        "cs.slice",
+        "dumpBuf",
+        "invokeXref",
+        "parseDex"
+      ],
+      "directAgentOps": [],
+      "group": "dex_analysis"
+    },
+    {
+      "name": "dex_crypto_scan",
+      "source": "daemon/src/mcp.ts",
+      "line": 328,
+      "properties": [
+        "b64",
+        "sha"
+      ],
+      "required": [],
+      "handlerCalls": [
+        "cryptoScan",
+        "dumpBuf",
+        "parseDex"
+      ],
+      "directAgentOps": [],
+      "group": "dex_analysis"
+    },
+    {
+      "name": "native_xref",
+      "source": "daemon/src/mcp.ts",
+      "line": 329,
+      "properties": [
+        "b64",
+        "sha",
+        "offset",
+        "window"
+      ],
+      "required": [
+        "offset"
+      ],
+      "handlerCalls": [
+        "Number",
+        "Number.isFinite",
+        "Number.parseInt",
+        "String",
+        "String(a.offset).replace",
+        "dumpBuf",
+        "dv.getUint32",
+        "elfSegments",
+        "findReferences",
+        "r.site.toString",
+        "r.value.toString",
+        "refs.map",
+        "s.fileOffset.toString",
+        "s.fileSize.toString",
+        "s.vaddr.toString",
+        "segs.find",
+        "segs.map",
+        "segs.some",
+        "target.toString"
+      ],
+      "directAgentOps": [],
+      "group": "native_analysis"
+    },
+    {
+      "name": "native_disasm",
+      "source": "daemon/src/mcp.ts",
+      "line": 330,
+      "properties": [
+        "b64",
+        "sha",
+        "symbol"
+      ],
+      "required": [
+        "symbol"
+      ],
+      "handlerCalls": [
+        "Date.now",
+        "disasmSo",
+        "dumpBuf",
+        "join",
+        "tmpdir",
+        "unlinkSync",
+        "writeFileSync"
+      ],
+      "directAgentOps": [],
+      "group": "native_analysis"
+    },
+    {
+      "name": "native_analyze",
+      "source": "daemon/src/mcp.ts",
+      "line": 331,
+      "properties": [
+        "b64",
+        "sha",
+        "maxStrings",
+        "stringsOffset",
+        "minLen",
+        "maxStringChars"
+      ],
+      "required": [],
+      "handlerCalls": [
+        "Date.now",
+        "analyzeSo",
+        "dumpBuf",
+        "join",
+        "tmpdir",
+        "unlinkSync",
+        "writeFileSync"
+      ],
+      "directAgentOps": [],
+      "group": "native_analysis"
+    },
+    {
+      "name": "native_crypto_const",
+      "source": "daemon/src/mcp.ts",
+      "line": 332,
+      "properties": [
+        "b64",
+        "sha"
+      ],
+      "required": [],
+      "handlerCalls": [
+        "cryptoConstScan",
+        "dumpBuf"
+      ],
+      "directAgentOps": [],
+      "group": "native_analysis"
+    },
+    {
+      "name": "crypto_variant_scan",
+      "source": "daemon/src/mcp.ts",
+      "line": 333,
+      "properties": [
+        "b64",
+        "sha"
+      ],
+      "required": [],
+      "handlerCalls": [
+        "dumpBuf",
+        "scanCryptoVariants"
+      ],
+      "directAgentOps": [],
+      "group": "native_analysis"
+    },
+    {
+      "name": "native_syscall_scan",
+      "source": "daemon/src/mcp.ts",
+      "line": 334,
+      "properties": [
+        "b64",
+        "sha"
+      ],
+      "required": [],
+      "handlerCalls": [
+        "BigInt",
+        "Number",
+        "attributeSite",
+        "dumpBuf",
+        "hits.filter",
+        "scan.hits.map",
+        "svcScan",
+        "syscallName"
+      ],
+      "directAgentOps": [],
+      "group": "native_analysis"
+    },
+    {
+      "name": "memory_dump",
+      "source": "daemon/src/mcp.ts",
+      "line": 335,
+      "properties": [
+        "session",
+        "addr",
+        "size"
+      ],
+      "required": [
+        "addr",
+        "size"
+      ],
+      "handlerCalls": [
+        "Number",
+        "String",
+        "String(a.addr).replace",
+        "dumpRegion",
+        "pickSid"
+      ],
+      "directAgentOps": [],
+      "group": "artifacts"
+    },
+    {
+      "name": "http_exchanges",
+      "source": "daemon/src/mcp.ts",
+      "line": 336,
+      "properties": [
+        "session",
+        "package"
+      ],
+      "required": [],
+      "handlerCalls": [
+        "String",
+        "assembleHttpExchanges",
+        "capturePackage",
+        "captures.filter",
+        "list.filter",
+        "list.map",
+        "pickSid"
+      ],
+      "directAgentOps": [],
+      "group": "capture_and_network"
+    },
+    {
+      "name": "flow_correlate",
+      "source": "daemon/src/mcp.ts",
+      "line": 343,
+      "properties": [
+        "session",
+        "sinceMs",
+        "sinceCaptureId",
+        "maxPairs"
+      ],
+      "required": [],
+      "handlerCalls": [
+        "flowCorrelate",
+        "pickSid"
+      ],
+      "directAgentOps": [],
+      "group": "capture_and_network"
+    },
+    {
+      "name": "object_set",
+      "source": "daemon/src/mcp.ts",
+      "line": 344,
+      "properties": [
+        "session",
+        "className",
+        "field",
+        "targetField",
+        "value"
+      ],
+      "required": [
+        "session",
+        "className",
+        "field",
+        "targetField",
+        "value"
+      ],
+      "handlerCalls": [
+        "String",
+        "agentCmd"
+      ],
+      "directAgentOps": [
+        "object_set"
+      ],
+      "group": "objects"
+    },
+    {
+      "name": "jni_field_digest",
+      "source": "daemon/src/mcp.ts",
+      "line": 345,
+      "properties": [
+        "session",
+        "sinceMs",
+        "limit",
+        "maxGroups"
+      ],
+      "required": [],
+      "handlerCalls": [
+        "jniFieldDigest",
+        "pickSid"
+      ],
+      "directAgentOps": [],
+      "group": "jni"
+    },
+    {
+      "name": "object_invoke",
+      "source": "daemon/src/mcp.ts",
+      "line": 346,
+      "properties": [
+        "session",
+        "className",
+        "field",
+        "method"
+      ],
+      "required": [
+        "className",
+        "field",
+        "method"
+      ],
+      "handlerCalls": [
+        "agentCmd"
+      ],
+      "directAgentOps": [
+        "object_invoke"
+      ],
+      "group": "objects"
+    },
+    {
+      "name": "dex_method_code",
+      "source": "daemon/src/mcp.ts",
+      "line": 347,
+      "properties": [
+        "b64",
+        "sha",
+        "class",
+        "method",
+        "disasm",
+        "maxInsns"
+      ],
+      "required": [
+        "class"
+      ],
+      "handlerCalls": [
+        "String",
+        "disassembleDex",
+        "dumpBuf",
+        "extractMethodCode",
+        "parseDex"
+      ],
+      "directAgentOps": [],
+      "group": "dex_analysis"
+    },
+    {
+      "name": "dex_repair",
+      "source": "daemon/src/mcp.ts",
+      "line": 348,
+      "properties": [
+        "b64",
+        "sha"
+      ],
+      "required": [],
+      "handlerCalls": [
+        "dumpBuf",
+        "persistArtifact",
+        "repairDexHeader"
+      ],
+      "directAgentOps": [],
+      "group": "dex_analysis"
+    },
+    {
+      "name": "crypto_identify",
+      "source": "daemon/src/mcp.ts",
+      "line": 350,
+      "properties": [],
+      "required": [],
+      "handlerCalls": [
+        "cryptoIdentify"
+      ],
+      "directAgentOps": [],
+      "group": "capture_and_network"
+    },
+    {
+      "name": "detect_summary",
+      "source": "daemon/src/mcp.ts",
+      "line": 351,
+      "properties": [
+        "session",
+        "package"
+      ],
+      "required": [],
+      "handlerCalls": [
+        "detectionReport"
+      ],
+      "directAgentOps": [],
+      "group": "detection"
+    },
+    {
+      "name": "detect_modules",
+      "source": "daemon/src/mcp.ts",
+      "line": 352,
+      "properties": [
+        "session",
+        "package"
+      ],
+      "required": [
+        "package"
+      ],
+      "handlerCalls": [
+        "String",
+        "pickSid",
+        "planDetectModules"
+      ],
+      "directAgentOps": [],
+      "group": "detection"
+    },
+    {
+      "name": "detect_java",
+      "source": "daemon/src/mcp.ts",
+      "line": 353,
+      "properties": [
+        "session",
+        "confirm",
+        "families"
+      ],
+      "required": [],
+      "handlerCalls": [
+        "Array.isArray",
+        "String",
+        "String(a.families ?? '').split",
+        "String(a.families ?? '').split(',').map",
+        "String(a.families ?? '').split(',').map((s: string) => s.trim()).filter",
+        "armDetectJava",
+        "detectJavaPlan",
+        "pickSid",
+        "s.trim"
+      ],
+      "directAgentOps": [],
+      "group": "detection"
+    },
+    {
+      "name": "live_captures",
+      "source": "daemon/src/mcp.ts",
+      "line": 354,
+      "properties": [
+        "limit",
+        "category",
+        "session",
+        "package",
+        "since",
+        "hookId",
+        "includeText",
+        "encoding"
+      ],
+      "required": [],
+      "handlerCalls": [
+        "Number",
+        "String",
+        "all.filter",
+        "asciiOf",
+        "asciiOf(c.hex).slice",
+        "b64Of",
+        "c.hex.slice",
+        "filterLiveCaptures",
+        "list.slice",
+        "list.slice(-(Number(a.limit) || 50)).map",
+        "pickSid"
+      ],
+      "directAgentOps": [],
+      "group": "capture_and_network"
+    },
+    {
+      "name": "capture_detail",
+      "source": "daemon/src/mcp.ts",
+      "line": 355,
+      "properties": [
+        "id"
+      ],
+      "required": [
+        "id"
+      ],
+      "handlerCalls": [
+        "Buffer.from",
+        "Buffer.from(c.hex, 'hex').toString",
+        "Number",
+        "captures.find"
+      ],
+      "directAgentOps": [],
+      "group": "capture_and_network"
+    },
+    {
+      "name": "dex_coverage",
+      "source": "daemon/src/mcp.ts",
+      "line": 357,
+      "properties": [
+        "b64",
+        "sha"
+      ],
+      "required": [],
+      "handlerCalls": [
+        "analyzeCoverage",
+        "dumpBuf",
+        "parseDex"
+      ],
+      "directAgentOps": [],
+      "group": "dex_analysis"
+    },
+    {
+      "name": "dump_all_dex",
+      "source": "daemon/src/mcp.ts",
+      "line": 358,
+      "properties": [
+        "session"
+      ],
+      "required": [],
+      "handlerCalls": [
+        "dumpAllDex",
+        "pickSid"
+      ],
+      "directAgentOps": [],
+      "group": "artifacts"
+    },
+    {
+      "name": "unpack_package",
+      "source": "daemon/src/mcp.ts",
+      "line": 359,
+      "properties": [
+        "package",
+        "session",
+        "launch",
+        "forceRestart"
+      ],
+      "required": [],
+      "handlerCalls": [
+        "runUnpackBundle"
+      ],
+      "directAgentOps": [],
+      "group": "artifacts"
+    },
+    {
+      "name": "dex_recover",
+      "source": "daemon/src/mcp.ts",
+      "line": 360,
+      "properties": [
+        "baseB64",
+        "baseSha",
+        "restoredB64",
+        "restoredSha"
+      ],
+      "required": [],
+      "handlerCalls": [
+        "Date.now",
+        "createHash",
+        "createHash('sha256').update",
+        "createHash('sha256').update(rb.dex).digest",
+        "dumpBuf",
+        "existsSync",
+        "join",
+        "outSha.slice",
+        "parseDex",
+        "rebuildStandardDex",
+        "recoverFromSnapshots",
+        "rememberDump",
+        "writeFileSync"
+      ],
+      "directAgentOps": [],
+      "group": "dex_analysis"
+    },
+    {
+      "name": "trigger",
+      "source": "daemon/src/mcp.ts",
+      "line": 362,
+      "properties": [
+        "session",
+        "class",
+        "method",
+        "level"
+      ],
+      "required": [
+        "class"
+      ],
+      "handlerCalls": [
+        "Number",
+        "agentCmd"
+      ],
+      "directAgentOps": [
+        "trigger"
+      ],
+      "group": "active_trigger"
+    },
+    {
+      "name": "qbdi_trace",
+      "source": "daemon/src/mcp.ts",
+      "line": 363,
+      "properties": [
+        "session",
+        "symLib",
+        "symbol",
+        "addr",
+        "args"
+      ],
+      "required": [
+        "session"
+      ],
+      "handlerCalls": [
+        "(a.args ?? []).map",
+        "(a.args ?? []).map((v: any) => String(v)).join",
+        "String",
+        "agentCmd"
+      ],
+      "directAgentOps": [
+        "qbdi_trace"
+      ],
+      "group": "watch_and_trace"
+    },
+    {
+      "name": "agent_ping",
+      "source": "daemon/src/mcp.ts",
+      "line": 364,
+      "properties": [
+        "session"
+      ],
+      "required": [
+        "session"
+      ],
+      "handlerCalls": [
+        "agentPing",
+        "pickSid"
+      ],
+      "directAgentOps": [],
+      "group": "diagnostics"
+    },
+    {
+      "name": "engine_selftest",
+      "source": "daemon/src/mcp.ts",
+      "line": 365,
+      "properties": [
+        "session"
+      ],
+      "required": [
+        "session"
+      ],
+      "handlerCalls": [
+        "hookEngineSelftest",
+        "pickSid"
+      ],
+      "directAgentOps": [],
+      "group": "diagnostics"
+    },
+    {
+      "name": "protocol_selftest",
+      "source": "daemon/src/mcp.ts",
+      "line": 366,
+      "properties": [
+        "session",
+        "kb"
+      ],
+      "required": [
+        "session"
+      ],
+      "handlerCalls": [
+        "pickSid",
+        "protocolSelfTest"
+      ],
+      "directAgentOps": [],
+      "group": "diagnostics"
+    },
+    {
+      "name": "fs_list",
+      "source": "daemon/src/mcp.ts",
+      "line": 367,
+      "properties": [
+        "session",
+        "path"
+      ],
+      "required": [
+        "session",
+        "path"
+      ],
+      "handlerCalls": [
+        "String",
+        "listDeviceDir",
+        "pickSid"
+      ],
+      "directAgentOps": [],
+      "group": "filesystem"
+    },
+    {
+      "name": "fs_read",
+      "source": "daemon/src/mcp.ts",
+      "line": 368,
+      "properties": [
+        "session",
+        "path",
+        "includeBase64",
+        "includeText",
+        "previewBytes"
+      ],
+      "required": [
+        "session",
+        "path"
+      ],
+      "handlerCalls": [
+        "String",
+        "pickSid",
+        "readDeviceFile"
+      ],
+      "directAgentOps": [],
+      "group": "filesystem"
+    },
+    {
+      "name": "load_library",
+      "source": "daemon/src/mcp.ts",
+      "line": 369,
+      "properties": [
+        "session",
+        "path",
+        "symbol"
+      ],
+      "required": [
+        "path"
+      ],
+      "handlerCalls": [
+        "agentCmd"
+      ],
+      "directAgentOps": [
+        "load_so"
+      ],
+      "group": "module"
+    },
+    {
+      "name": "oracle",
+      "source": "daemon/src/mcp.ts",
+      "line": 370,
+      "properties": [
+        "session",
+        "action",
+        "id",
+        "className",
+        "method",
+        "params",
+        "field",
+        "args",
+        "extract",
+        "patches",
+        "variants",
+        "repeat",
+        "timeoutMs"
+      ],
+      "required": [
+        "action"
+      ],
+      "handlerCalls": [
+        "Array.isArray",
+        "Number",
+        "String",
+        "dropOracle",
+        "listOracles",
+        "oracleDiff",
+        "oracleRecord",
+        "oracleReplay",
+        "oracleStability",
+        "pickSid"
+      ],
+      "directAgentOps": [],
+      "group": "evidence"
+    },
+    {
+      "name": "analyze_app",
+      "source": "daemon/src/mcp.ts",
+      "line": 394,
+      "properties": [
+        "package",
+        "autoScope",
+        "forceRestart",
+        "captureMs",
+        "unpack",
+        "httpCaptureMs",
+        "timeoutMs",
+        "settleMs"
+      ],
+      "required": [
+        "package"
+      ],
+      "handlerCalls": [
+        "Number",
+        "String",
+        "analyzePackage"
+      ],
+      "directAgentOps": [],
+      "group": "scope_and_launch"
+    },
+    {
+      "name": "scope_list",
+      "source": "daemon/src/mcp.ts",
+      "line": 395,
+      "properties": [],
+      "required": [],
+      "handlerCalls": [
+        "readScopeFile"
+      ],
+      "directAgentOps": [],
+      "group": "scope_and_launch"
+    },
+    {
+      "name": "scope_set",
+      "source": "daemon/src/mcp.ts",
+      "line": 396,
+      "properties": [
+        "add",
+        "remove",
+        "set"
+      ],
+      "required": [],
+      "handlerCalls": [
+        "Array.isArray",
+        "before.filter",
+        "before.includes",
+        "mergeScope",
+        "readScopeFile",
+        "w.packages.filter",
+        "w.packages.includes",
+        "writeScopePackages"
+      ],
+      "directAgentOps": [],
+      "group": "scope_and_launch"
+    }
+  ],
+  "routes": [
+    {
+      "path": "/api/apps",
+      "method": "*",
+      "prefix": false,
+      "source": "daemon/src/http/routes_system.ts",
+      "line": 38,
+      "handlerCalls": [
+        "listCaptureArmProtected",
+        "scopedApps",
+        "send"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/scope",
+      "method": "GET",
+      "prefix": false,
+      "source": "daemon/src/http/routes_system.ts",
+      "line": 48,
+      "handlerCalls": [
+        "readScopeFile",
+        "send"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/scope",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_system.ts",
+      "line": 52,
+      "handlerCalls": [
+        "Array.isArray",
+        "JSON.parse",
+        "before.filter",
+        "before.includes",
+        "mergeScope",
+        "readBody",
+        "readScopeFile",
+        "send",
+        "w.packages.filter",
+        "w.packages.includes",
+        "writeScopePackages"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/analyze-app",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_system.ts",
+      "line": 71,
+      "handlerCalls": [
+        "JSON.parse",
+        "Number",
+        "String",
+        "String(body.package ?? '').trim",
+        "analyzePackage",
+        "readBody",
+        "send"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/health",
+      "method": "*",
+      "prefix": false,
+      "source": "daemon/src/http/routes_system.ts",
+      "line": 89,
+      "handlerCalls": [
+        "[...sessions.values()].map",
+        "process.uptime",
+        "send",
+        "sessions.values",
+        "webUrls"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/mcp",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_system.ts",
+      "line": 98,
+      "handlerCalls": [
+        "handleMcp",
+        "readBody"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/wechat-follow.png",
+      "method": "*",
+      "prefix": false,
+      "source": "daemon/src/http/routes_system.ts",
+      "line": 99,
+      "handlerCalls": [
+        "servePublic"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/raven.svg",
+      "method": "*",
+      "prefix": false,
+      "source": "daemon/src/http/routes_system.ts",
+      "line": 100,
+      "handlerCalls": [
+        "servePublic"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/raven.png",
+      "method": "*",
+      "prefix": false,
+      "source": "daemon/src/http/routes_system.ts",
+      "line": 101,
+      "handlerCalls": [
+        "servePublic"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/favicon.ico",
+      "method": "*",
+      "prefix": false,
+      "source": "daemon/src/http/routes_system.ts",
+      "line": 102,
+      "handlerCalls": [
+        "servePublic"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/http/exchanges",
+      "method": "*",
+      "prefix": false,
+      "source": "daemon/src/http/routes_system.ts",
+      "line": 104,
+      "handlerCalls": [
+        "assembleHttpExchanges",
+        "capturePackage",
+        "captures.filter",
+        "list.filter",
+        "list.map",
+        "send",
+        "url.searchParams.get"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/captures",
+      "method": "*",
+      "prefix": false,
+      "source": "daemon/src/http/routes_system.ts",
+      "line": 117,
+      "handlerCalls": [
+        "Math.min",
+        "Number",
+        "captureHealth",
+        "capturePackage",
+        "captures.filter",
+        "cryptoView",
+        "list.filter",
+        "list.slice",
+        "list.slice(-limit).map",
+        "previewForCapture",
+        "send",
+        "url.searchParams.get"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/captures/",
+      "method": "*",
+      "prefix": true,
+      "source": "daemon/src/http/routes_system.ts",
+      "line": 143,
+      "handlerCalls": [
+        "Buffer.from",
+        "Buffer.from(c.hex, 'hex').toString",
+        "Number",
+        "captures.find",
+        "cryptoView",
+        "hexToPreview",
+        "send",
+        "url.pathname.slice"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/events",
+      "method": "*",
+      "prefix": false,
+      "source": "daemon/src/http/routes_system.ts",
+      "line": 153,
+      "handlerCalls": [
+        "Math.min",
+        "Number",
+        "eventPackage",
+        "events.filter",
+        "list.filter",
+        "list.slice",
+        "send",
+        "url.searchParams.get"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/export/report",
+      "method": "*",
+      "prefix": false,
+      "source": "daemon/src/http/routes_system.ts",
+      "line": 163,
+      "handlerCalls": [
+        "[...dumps.values()].map",
+        "[...sessions.values()].map",
+        "dumps.values",
+        "new Date().toISOString",
+        "process.uptime",
+        "send",
+        "sessions.values"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/config",
+      "method": "*",
+      "prefix": false,
+      "source": "daemon/src/http/routes_system.ts",
+      "line": 171,
+      "handlerCalls": [
+        "JSON.parse",
+        "applyCaptureEnabled",
+        "applyCaptureEnabled().catch",
+        "applyCaptureRetainCap",
+        "configStats",
+        "log",
+        "mergeSettings",
+        "readBody",
+        "saveSettings",
+        "send"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/settings/export",
+      "method": "*",
+      "prefix": false,
+      "source": "daemon/src/http/routes_system.ts",
+      "line": 184,
+      "handlerCalls": [
+        "send"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/settings/import",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_system.ts",
+      "line": 185,
+      "handlerCalls": [
+        "Array.isArray",
+        "JSON.parse",
+        "applyCaptureEnabled",
+        "applyCaptureEnabled().catch",
+        "applyCaptureRetainCap",
+        "log",
+        "mergeSettings",
+        "readBody",
+        "saveSettings",
+        "send"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/captures/packages",
+      "method": "*",
+      "prefix": false,
+      "source": "daemon/src/http/routes_system.ts",
+      "line": 197,
+      "handlerCalls": [
+        "packageCaptureDiskStats",
+        "send"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/captures/export",
+      "method": "*",
+      "prefix": false,
+      "source": "daemon/src/http/routes_system.ts",
+      "line": 198,
+      "handlerCalls": [
+        "String",
+        "exportPackageCapturesJsonl",
+        "pkg.replace",
+        "res.end",
+        "res.writeHead",
+        "send",
+        "url.searchParams.get"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/data/clear",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_system.ts",
+      "line": 209,
+      "handlerCalls": [
+        "JSON.parse",
+        "String",
+        "String(body.package || '').trim",
+        "[...dumps.values()].filter",
+        "broadcast",
+        "clearCaptureStore",
+        "clearPackageCaptureStore",
+        "configStats",
+        "dumps.delete",
+        "dumps.values",
+        "errors.join",
+        "errors.push",
+        "existsSync",
+        "log",
+        "readBody",
+        "send",
+        "unlinkSync",
+        "writeFileSync"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/mcp/doc",
+      "method": "*",
+      "prefix": false,
+      "source": "daemon/src/http/routes_system.ts",
+      "line": 234,
+      "handlerCalls": [
+        "MCP_TOOLS.map",
+        "Object.keys",
+        "Object.keys(t.inputSchema.properties ?? {}).join",
+        "String",
+        "String(value ?? '—').replaceAll",
+        "String(value ?? '—').replaceAll('|', '\\\\|').replace",
+        "['# ADH MCP Tools', '', `Generated from the live ADH Daemon registry (${MCP_TOOLS.length} tools). Endpoint: \\`POST /mcp\\` (JSON-RPC 2.0).`, '',\n        '| Tool | Description | Args |', '|---|---|---|',\n        ...MCP_TOOLS.map(t => `| \\`${t.name}\\` | ${cell(t.description)} | ${cell(Object.keys(t.inputSchema.properties ?? {}).join(', ') || '—')} |`), ''].join",
+        "cell",
+        "res.end",
+        "res.writeHead"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/crypto/identify",
+      "method": "*",
+      "prefix": false,
+      "source": "daemon/src/http/routes_system.ts",
+      "line": 241,
+      "handlerCalls": [
+        "cryptoIdentify",
+        "send"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/detect/summary",
+      "method": "*",
+      "prefix": false,
+      "source": "daemon/src/http/routes_system.ts",
+      "line": 242,
+      "handlerCalls": [
+        "detectionReport",
+        "send",
+        "url.searchParams.get"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/mcp/config",
+      "method": "*",
+      "prefix": false,
+      "source": "daemon/src/http/routes_system.ts",
+      "line": 246,
+      "handlerCalls": [
+        "baseFromHost",
+        "isValidPackage",
+        "mcpOnboarding",
+        "send",
+        "url.searchParams.get",
+        "webUrls"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/agents",
+      "method": "*",
+      "prefix": false,
+      "source": "daemon/src/http/routes_system.ts",
+      "line": 255,
+      "handlerCalls": [
+        "send",
+        "sessions.values"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/backends",
+      "method": "*",
+      "prefix": false,
+      "source": "daemon/src/http/routes_system.ts",
+      "line": 256,
+      "handlerCalls": [
+        "backendMatrix",
+        "send"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/agents/",
+      "method": "*",
+      "prefix": true,
+      "source": "daemon/src/http/routes_system.ts",
+      "line": 257,
+      "handlerCalls": [
+        "send",
+        "sessions.get",
+        "url.pathname.split"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/debug/frame_echo",
+      "method": "*",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 36,
+      "handlerCalls": [
+        "Math.max",
+        "Math.min",
+        "Number",
+        "pickSid",
+        "protocolSelfTest",
+        "send",
+        "url.searchParams.get"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/agent/ping",
+      "method": "*",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 47,
+      "handlerCalls": [
+        "agentPing",
+        "pickSid",
+        "send",
+        "url.searchParams.get"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/process/maps",
+      "method": "*",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 53,
+      "handlerCalls": [
+        "pickSid",
+        "send",
+        "sendCmd",
+        "sessions.get",
+        "url.searchParams.get"
+      ],
+      "directAgentOps": [
+        "maps"
+      ]
+    },
+    {
+      "path": "/api/java/probe",
+      "method": "*",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 62,
+      "handlerCalls": [
+        "pickSid",
+        "send",
+        "sendCmd",
+        "url.searchParams.get"
+      ],
+      "directAgentOps": [
+        "javahook_probe"
+      ]
+    },
+    {
+      "path": "/api/java/call",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 68,
+      "handlerCalls": [
+        "JSON.parse",
+        "JSON.stringify",
+        "pickSid",
+        "readBody",
+        "send",
+        "sendCmd"
+      ],
+      "directAgentOps": [
+        "java_call"
+      ]
+    },
+    {
+      "path": "/api/native/got_enum",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 79,
+      "handlerCalls": [
+        "JSON.parse",
+        "pickSid",
+        "readBody",
+        "send",
+        "sendCmd"
+      ],
+      "directAgentOps": [
+        "got_enum"
+      ]
+    },
+    {
+      "path": "/api/native/hook",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 86,
+      "handlerCalls": [
+        "JSON.parse",
+        "Number",
+        "assertCallableAddress",
+        "ensureNativeObservationSupport",
+        "parseMemSpec",
+        "parseThrottleMs",
+        "pickSid",
+        "readBody",
+        "send",
+        "sendCmd"
+      ],
+      "directAgentOps": [
+        "native_hook"
+      ]
+    },
+    {
+      "path": "/api/native/call",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 127,
+      "handlerCalls": [
+        "Array.isArray",
+        "JSON.parse",
+        "String",
+        "args.map",
+        "args.map((v: any) => String(v)).join",
+        "assertCallableAddress",
+        "pickSid",
+        "readBody",
+        "send",
+        "sendCmd"
+      ],
+      "directAgentOps": [
+        "native_call"
+      ]
+    },
+    {
+      "path": "/api/native/stealth",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 145,
+      "handlerCalls": [
+        "JSON.parse",
+        "String",
+        "pickSid",
+        "readBody",
+        "send",
+        "sendCmd"
+      ],
+      "directAgentOps": [
+        "stealth"
+      ]
+    },
+    {
+      "path": "/api/syscall/trace",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 160,
+      "handlerCalls": [
+        "JSON.parse",
+        "parseThrottleMs",
+        "pickSid",
+        "readBody",
+        "send",
+        "syscallTraceDigest",
+        "syscallTraceStart",
+        "syscallTraceStop"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/native/hook_all",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 176,
+      "handlerCalls": [
+        "JSON.parse",
+        "nativeHookAll",
+        "nativeObservationPayload",
+        "nativeUnhookAll",
+        "parseThrottleMs",
+        "pickSid",
+        "readBody",
+        "send"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/java/trace",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 192,
+      "handlerCalls": [
+        "JSON.parse",
+        "String",
+        "javaTraceDigest",
+        "javaTraceStart",
+        "javaTraceStop",
+        "pickSid",
+        "readBody",
+        "send"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/jni/field_digest",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 204,
+      "handlerCalls": [
+        "JSON.parse",
+        "jniFieldDigest",
+        "pickSid",
+        "readBody",
+        "send"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/syscall/digest",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 212,
+      "handlerCalls": [
+        "JSON.parse",
+        "pickSid",
+        "readBody",
+        "send",
+        "syscallDigest"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/trace/digest",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 221,
+      "handlerCalls": [
+        "JSON.parse",
+        "pickSid",
+        "readBody",
+        "send",
+        "traceDigest"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/native/backtrace",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 230,
+      "handlerCalls": [
+        "JSON.parse",
+        "nativeBacktrace",
+        "pickSid",
+        "readBody",
+        "send"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/native/syscall_watch",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 239,
+      "handlerCalls": [
+        "JSON.parse",
+        "parseThrottleMs",
+        "pickSid",
+        "readBody",
+        "send",
+        "watchSyscalls"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/jni/onload",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 250,
+      "handlerCalls": [
+        "JSON.parse",
+        "String",
+        "pickSid",
+        "readBody",
+        "send",
+        "sendCmd"
+      ],
+      "directAgentOps": [
+        "jni_onload"
+      ]
+    },
+    {
+      "path": "/api/jni/hook",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 260,
+      "handlerCalls": [
+        "JSON.parse",
+        "pickSid",
+        "readBody",
+        "send",
+        "sendCmd"
+      ],
+      "directAgentOps": [
+        "jni_hook"
+      ]
+    },
+    {
+      "path": "/api/jni/env_hook",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 269,
+      "handlerCalls": [
+        "JSON.parse",
+        "pickSid",
+        "readBody",
+        "send",
+        "sendCmd"
+      ],
+      "directAgentOps": [
+        "jni_env_hook"
+      ]
+    },
+    {
+      "path": "/api/java/enum",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 280,
+      "handlerCalls": [
+        "JSON.parse",
+        "pickSid",
+        "readBody",
+        "send",
+        "sendCmd"
+      ],
+      "directAgentOps": [
+        "java_enum"
+      ]
+    },
+    {
+      "path": "/api/java/hook",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 287,
+      "handlerCalls": [
+        "JSON.parse",
+        "Number",
+        "pickSid",
+        "readBody",
+        "send",
+        "sendCmd"
+      ],
+      "directAgentOps": [
+        "java_hook"
+      ]
+    },
+    {
+      "path": "/api/object/inspect",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 309,
+      "handlerCalls": [
+        "JSON.parse",
+        "pickSid",
+        "readBody",
+        "send",
+        "sendCmd"
+      ],
+      "directAgentOps": [
+        "object_inspect"
+      ]
+    },
+    {
+      "path": "/api/object/set",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 317,
+      "handlerCalls": [
+        "JSON.parse",
+        "String",
+        "pickSid",
+        "readBody",
+        "send",
+        "sendCmd"
+      ],
+      "directAgentOps": [
+        "object_set"
+      ]
+    },
+    {
+      "path": "/api/object/invoke",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 328,
+      "handlerCalls": [
+        "JSON.parse",
+        "pickSid",
+        "readBody",
+        "send",
+        "sendCmd"
+      ],
+      "directAgentOps": [
+        "object_invoke"
+      ]
+    },
+    {
+      "path": "/api/compat/probe",
+      "method": "*",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 336,
+      "handlerCalls": [
+        "pickSid",
+        "send",
+        "sendCmd",
+        "url.searchParams.get"
+      ],
+      "directAgentOps": [
+        "compat_probe"
+      ]
+    },
+    {
+      "path": "/api/trace/qbdi",
+      "method": "*",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 342,
+      "handlerCalls": [
+        "pickSid",
+        "send",
+        "sendCmd",
+        "url.searchParams.get"
+      ],
+      "directAgentOps": [
+        "qbdi_trace"
+      ]
+    },
+    {
+      "path": "/api/file/probe",
+      "method": "*",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 359,
+      "handlerCalls": [
+        "pickSid",
+        "send",
+        "sendCmd",
+        "url.searchParams.get"
+      ],
+      "directAgentOps": [
+        "file_probe"
+      ]
+    },
+    {
+      "path": "/api/fs/list",
+      "method": "*",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 367,
+      "handlerCalls": [
+        "String",
+        "String(url.searchParams.get('package') || '').trim",
+        "listDeviceDir",
+        "listSandboxDir",
+        "pickSid",
+        "send",
+        "url.searchParams.get"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/fs/read",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 380,
+      "handlerCalls": [
+        "Buffer.from",
+        "Buffer.from(r.b64 ?? '', 'base64').toString",
+        "Buffer.from(r.b64, 'base64').toString",
+        "JSON.parse",
+        "String",
+        "String(parsed.package || '').trim",
+        "pickSid",
+        "readBody",
+        "readDeviceFile",
+        "readSandboxFile",
+        "send"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/hook/selftest",
+      "method": "*",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 406,
+      "handlerCalls": [
+        "hookEngineSelftest",
+        "pickSid",
+        "send",
+        "url.searchParams.get"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/art/dexfiles",
+      "method": "*",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 412,
+      "handlerCalls": [
+        "pickSid",
+        "send",
+        "sendCmd",
+        "url.searchParams.get"
+      ],
+      "directAgentOps": [
+        "art_dexfiles"
+      ]
+    },
+    {
+      "path": "/api/art/dump",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 418,
+      "handlerCalls": [
+        "JSON.parse",
+        "Number",
+        "String",
+        "String(begin).replace",
+        "dumpRegion",
+        "pickSid",
+        "readBody",
+        "send"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/memory/scan_magic",
+      "method": "*",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 428,
+      "handlerCalls": [
+        "pickSid",
+        "send",
+        "sendCmd",
+        "url.searchParams.get"
+      ],
+      "directAgentOps": [
+        "scan_magic"
+      ]
+    },
+    {
+      "path": "/api/memory/read",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 436,
+      "handlerCalls": [
+        "JSON.parse",
+        "Number",
+        "String",
+        "pickSid",
+        "readBody",
+        "send",
+        "sendCmd"
+      ],
+      "directAgentOps": [
+        "read"
+      ]
+    },
+    {
+      "path": "/api/memory/write",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 448,
+      "handlerCalls": [
+        "JSON.parse",
+        "pickSid",
+        "readBody",
+        "send",
+        "writeMem"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/memory/restore",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 458,
+      "handlerCalls": [
+        "JSON.parse",
+        "listWriteUndo",
+        "pickSid",
+        "readBody",
+        "restoreMem",
+        "send"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/capabilities",
+      "method": "*",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 469,
+      "handlerCalls": [
+        "autoAntiDebugEnabled",
+        "pickSid",
+        "send",
+        "sessions.get",
+        "url.searchParams.get"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/recipes",
+      "method": "*",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 476,
+      "handlerCalls": [
+        "listRecipes",
+        "send"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/recipes/run",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 477,
+      "handlerCalls": [
+        "JSON.parse",
+        "String",
+        "readBody",
+        "runRecipe",
+        "send"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/module/watch",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 487,
+      "handlerCalls": [
+        "JSON.parse",
+        "Number",
+        "String",
+        "['start', 'stop', 'status', 'list'].includes",
+        "moduleLoads",
+        "pickSid",
+        "readBody",
+        "send",
+        "sendCmd"
+      ],
+      "directAgentOps": [
+        "module_watch"
+      ]
+    },
+    {
+      "path": "/api/memory/disasm",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 505,
+      "handlerCalls": [
+        "JSON.parse",
+        "liveDisasm",
+        "pickSid",
+        "readBody",
+        "send"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/unpack/inventory",
+      "method": "*",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 517,
+      "handlerCalls": [
+        "inventoryUnpack",
+        "pickSid",
+        "send",
+        "url.searchParams.get"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/unpack/dump-one",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 523,
+      "handlerCalls": [
+        "JSON.parse",
+        "Number",
+        "String",
+        "pickSid",
+        "readBody",
+        "send",
+        "unpackOneDex"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/unpack/dump-so-one",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 532,
+      "handlerCalls": [
+        "JSON.parse",
+        "String",
+        "dumpOneAppSo",
+        "pickSid",
+        "readBody",
+        "send"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/unpack/pull-so",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 541,
+      "handlerCalls": [
+        "JSON.parse",
+        "String",
+        "String(body.name ?? '').trim",
+        "String(body.package ?? '').trim",
+        "String(body.path ?? '').trim",
+        "pullPackageSo",
+        "readBody",
+        "send"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/unpack/dump-all",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 550,
+      "handlerCalls": [
+        "JSON.parse",
+        "dumpAllDex",
+        "pickSid",
+        "readBody",
+        "send"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/unpack/run",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 557,
+      "handlerCalls": [
+        "JSON.parse",
+        "Number",
+        "Number.isFinite",
+        "body.package.trim",
+        "pickSid",
+        "readBody",
+        "runUnpackBundle",
+        "send"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/unpack/history",
+      "method": "*",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 574,
+      "handlerCalls": [
+        "listUnpackBundles",
+        "listUnpackRuns",
+        "send",
+        "url.searchParams.get"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/unpack/dump-so",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 584,
+      "handlerCalls": [
+        "JSON.parse",
+        "dumpAppSo",
+        "pickSid",
+        "readBody",
+        "send"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/agent/load_so",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 591,
+      "handlerCalls": [
+        "JSON.parse",
+        "pickSid",
+        "readBody",
+        "send",
+        "sendCmd"
+      ],
+      "directAgentOps": [
+        "load_so"
+      ]
+    },
+    {
+      "path": "/api/unpack/trigger",
+      "method": "*",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 598,
+      "handlerCalls": [
+        "Number",
+        "pickSid",
+        "send",
+        "sendCmd",
+        "url.searchParams.get"
+      ],
+      "directAgentOps": [
+        "trigger"
+      ]
+    },
+    {
+      "path": "/api/memory/search",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 609,
+      "handlerCalls": [
+        "Buffer.from",
+        "Buffer.from(String(text), 'utf8').toString",
+        "JSON.parse",
+        "Number",
+        "String",
+        "pickSid",
+        "readBody",
+        "send",
+        "sendCmd"
+      ],
+      "directAgentOps": [
+        "search"
+      ]
+    },
+    {
+      "path": "/api/memory/dump",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_runtime.ts",
+      "line": 620,
+      "handlerCalls": [
+        "JSON.parse",
+        "Number",
+        "String",
+        "String(addr).replace",
+        "dumpRegion",
+        "pickSid",
+        "readBody",
+        "send"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/native/syscall_scan",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_analysis.ts",
+      "line": 33,
+      "handlerCalls": [
+        "JSON.parse",
+        "dumpBuf",
+        "r.hits.slice",
+        "readBody",
+        "send",
+        "svcScan"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/native/crypto_const",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_analysis.ts",
+      "line": 41,
+      "handlerCalls": [
+        "JSON.parse",
+        "Object.keys",
+        "cryptoConstScan",
+        "dumpBuf",
+        "readBody",
+        "send"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/native/crypto_variants",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_analysis.ts",
+      "line": 54,
+      "handlerCalls": [
+        "JSON.parse",
+        "dumpBuf",
+        "readBody",
+        "scanCryptoVariants",
+        "send"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/native/analyze",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_analysis.ts",
+      "line": 61,
+      "handlerCalls": [
+        "JSON.parse",
+        "String",
+        "a.exports.filter",
+        "a.exports.slice",
+        "a.imports.filter",
+        "a.imports.slice",
+        "a.strings.filter",
+        "a.strings.slice",
+        "analyzeSo",
+        "dumpBufPath",
+        "readBody",
+        "rx.test",
+        "send",
+        "unlinkSync"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/native/disasm",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_analysis.ts",
+      "line": 78,
+      "handlerCalls": [
+        "JSON.parse",
+        "disasmSo",
+        "dumpBufPath",
+        "insns.slice",
+        "readBody",
+        "send",
+        "unlinkSync"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/modules",
+      "method": "*",
+      "prefix": false,
+      "source": "daemon/src/http/routes_analysis.ts",
+      "line": 89,
+      "handlerCalls": [
+        "modulesFromMaps",
+        "pickSid",
+        "send",
+        "sendCmd",
+        "url.searchParams.get"
+      ],
+      "directAgentOps": [
+        "maps"
+      ]
+    },
+    {
+      "path": "/api/module/dump",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_analysis.ts",
+      "line": 98,
+      "handlerCalls": [
+        "Date.now",
+        "JSON.parse",
+        "String",
+        "broadcast",
+        "createHash",
+        "createHash('sha256').update",
+        "createHash('sha256').update(buf).digest",
+        "dumps.get",
+        "existsSync",
+        "join",
+        "modulesFromMaps",
+        "pickSid",
+        "readBody",
+        "reconstructSo",
+        "rememberDump",
+        "resolveModule",
+        "send",
+        "sendCmd",
+        "sessions.get",
+        "sha.slice",
+        "writeFile"
+      ],
+      "directAgentOps": [
+        "maps"
+      ]
+    },
+    {
+      "path": "/api/dex/method_code",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_analysis.ts",
+      "line": 136,
+      "handlerCalls": [
+        "JSON.parse",
+        "Math.max",
+        "Math.min",
+        "Math.trunc",
+        "Number",
+        "String",
+        "codes.filter",
+        "codes.slice",
+        "dumpBuf",
+        "extractMethodCode",
+        "parseDex",
+        "readBody",
+        "send"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/dex/index",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_analysis.ts",
+      "line": 154,
+      "handlerCalls": [
+        "JSON.parse",
+        "dumpBuf",
+        "ensureDexIndex",
+        "readBody",
+        "send"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/dex/index/search",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_analysis.ts",
+      "line": 161,
+      "handlerCalls": [
+        "JSON.parse",
+        "String",
+        "readBody",
+        "searchDexIndex",
+        "send"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/dex/index/reflections",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_analysis.ts",
+      "line": 167,
+      "handlerCalls": [
+        "JSON.parse",
+        "String",
+        "listDexReflections",
+        "readBody",
+        "send"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/dex/xref",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_analysis.ts",
+      "line": 173,
+      "handlerCalls": [
+        "JSON.parse",
+        "Object.keys",
+        "String",
+        "String(method).toLowerCase",
+        "callee.toLowerCase",
+        "callee.toLowerCase().includes",
+        "callers.slice",
+        "dumpBuf",
+        "invokeXref",
+        "parseDex",
+        "readBody",
+        "send"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/dex/coverage",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_analysis.ts",
+      "line": 186,
+      "handlerCalls": [
+        "(cov.recoveryRate * 100).toFixed",
+        "JSON.parse",
+        "Number",
+        "analyzeCoverage",
+        "cov.missing.slice",
+        "dumpBuf",
+        "parseDex",
+        "readBody",
+        "send"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/dex/recover",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_analysis.ts",
+      "line": 196,
+      "handlerCalls": [
+        "Date.now",
+        "JSON.parse",
+        "Promise.resolve",
+        "broadcast",
+        "createHash",
+        "createHash('sha256').update",
+        "createHash('sha256').update(rb.dex).digest",
+        "dumpBuf",
+        "dumps.get",
+        "existsSync",
+        "join",
+        "load",
+        "outSha.slice",
+        "parseDex",
+        "readBody",
+        "rebuildStandardDex",
+        "recoverFromSnapshots",
+        "rememberDump",
+        "send",
+        "writeFile"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/dex/strip",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_analysis.ts",
+      "line": 218,
+      "handlerCalls": [
+        "JSON.parse",
+        "Number",
+        "dumpBuf",
+        "readBody",
+        "send",
+        "stripMethodCode",
+        "stripped.toString"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/dex/rebuild",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_analysis.ts",
+      "line": 225,
+      "handlerCalls": [
+        "Array.isArray",
+        "Date.now",
+        "JSON.parse",
+        "broadcast",
+        "createHash",
+        "createHash('sha256').update",
+        "createHash('sha256').update(res.dex).digest",
+        "dumpBuf",
+        "existsSync",
+        "join",
+        "outSha.slice",
+        "parseDex",
+        "readBody",
+        "rebuildStandardDex",
+        "rememberDump",
+        "send",
+        "writeFile"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/dex/parse",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_analysis.ts",
+      "line": 243,
+      "handlerCalls": [],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/dex/crypto_scan",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_analysis.ts",
+      "line": 244,
+      "handlerCalls": [],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/dex/search",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_analysis.ts",
+      "line": 245,
+      "handlerCalls": [],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/dex/repair",
+      "method": "POST",
+      "prefix": false,
+      "source": "daemon/src/http/routes_analysis.ts",
+      "line": 246,
+      "handlerCalls": [
+        "JSON.parse",
+        "dumpBuf",
+        "persistArtifact",
+        "readBody",
+        "repairDexHeader",
+        "send"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/dumps",
+      "method": "*",
+      "prefix": false,
+      "source": "daemon/src/http/routes_analysis.ts",
+      "line": 256,
+      "handlerCalls": [
+        "dumps.values",
+        "send"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/api/dumps/download",
+      "method": "*",
+      "prefix": false,
+      "source": "daemon/src/http/routes_analysis.ts",
+      "line": 257,
+      "handlerCalls": [
+        "createReadStream",
+        "createReadStream(m.path).pipe",
+        "dumps.get",
+        "res.writeHead",
+        "send",
+        "sha.slice",
+        "url.searchParams.get"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/",
+      "method": "*",
+      "prefix": false,
+      "source": "daemon/src/http/routes_analysis.ts",
+      "line": 264,
+      "handlerCalls": [
+        "serveDashboard"
+      ],
+      "directAgentOps": []
+    },
+    {
+      "path": "/index.html",
+      "method": "*",
+      "prefix": false,
+      "source": "daemon/src/http/routes_analysis.ts",
+      "line": 265,
+      "handlerCalls": [
+        "serveDashboard"
+      ],
+      "directAgentOps": []
+    }
+  ],
+  "uiLiteralFetches": [
+    {
+      "path": "/api/unpack/history?package=",
+      "line": 872
+    },
+    {
+      "path": "/api/unpack/inventory?session=",
+      "line": 901
+    },
+    {
+      "path": "/api/unpack/run",
+      "line": 924
+    },
+    {
+      "path": "/api/unpack/dump-so-one",
+      "line": 956
+    },
+    {
+      "path": "/api/unpack/pull-so",
+      "line": 974
+    },
+    {
+      "path": "/api/captures/",
+      "line": 1048
+    },
+    {
+      "path": "/api/captures/",
+      "line": 1159
+    },
+    {
+      "path": "/api/detect/summary?package=",
+      "line": 1188
+    },
+    {
+      "path": "/api/http/exchanges?package=",
+      "line": 1201
+    },
+    {
+      "path": "/api/captures?since=",
+      "line": 1360
+    },
+    {
+      "path": "/api/fs/list?package=",
+      "line": 1513
+    },
+    {
+      "path": "/api/fs/read",
+      "line": 1534
+    },
+    {
+      "path": "/api/fs/read",
+      "line": 1548
+    },
+    {
+      "path": "/api/mcp/config${q}",
+      "line": 1614
+    },
+    {
+      "path": "/api/backends",
+      "line": 1671
+    },
+    {
+      "path": "/api/modules?session=",
+      "line": 1684
+    },
+    {
+      "path": "/api/config",
+      "line": 1697
+    },
+    {
+      "path": "/api/captures/packages",
+      "line": 1707
+    },
+    {
+      "path": "/api/config",
+      "line": 1715
+    },
+    {
+      "path": "/api/data/clear",
+      "line": 1728
+    },
+    {
+      "path": "/api/data/clear",
+      "line": 1740
+    },
+    {
+      "path": "/api/settings/export",
+      "line": 1756
+    },
+    {
+      "path": "/api/settings/import",
+      "line": 1768
+    },
+    {
+      "path": "/api/apps",
+      "line": 1826
+    },
+    {
+      "path": "/api/events?package=",
+      "line": 1844
+    },
+    {
+      "path": "/api/config",
+      "line": 1971
+    }
+  ],
+  "publicCliCommands": [
+    {
+      "name": "connect",
+      "line": 27
+    },
+    {
+      "name": "disconnect",
+      "line": 33
+    },
+    {
+      "name": "devices",
+      "line": 37
+    },
+    {
+      "name": "status",
+      "line": 41
+    },
+    {
+      "name": "tools",
+      "line": 46
+    },
+    {
+      "name": "mcp",
+      "line": 50
+    },
+    {
+      "name": "call",
+      "line": 53
+    }
+  ],
+  "deviceAidlMethods": [
+    {
+      "name": "getProtocolVersion",
+      "returns": "int",
+      "arguments": "",
+      "source": "device/core/src/main/aidl/com/adh/daemon/IAdhScopeService.aidl",
+      "line": 3
+    },
+    {
+      "name": "getScopeJson",
+      "returns": "String",
+      "arguments": "",
+      "source": "device/core/src/main/aidl/com/adh/daemon/IAdhScopeService.aidl",
+      "line": 4
+    },
+    {
+      "name": "setScopeJson",
+      "returns": "boolean",
+      "arguments": "String json",
+      "source": "device/core/src/main/aidl/com/adh/daemon/IAdhScopeService.aidl",
+      "line": 5
+    },
+    {
+      "name": "isModulePresent",
+      "returns": "boolean",
+      "arguments": "",
+      "source": "device/core/src/main/aidl/com/adh/daemon/IAdhScopeService.aidl",
+      "line": 6
+    },
+    {
+      "name": "isLoaderActive",
+      "returns": "boolean",
+      "arguments": "",
+      "source": "device/core/src/main/aidl/com/adh/daemon/IAdhScopeService.aidl",
+      "line": 7
+    },
+    {
+      "name": "getModuleVersion",
+      "returns": "String",
+      "arguments": "",
+      "source": "device/core/src/main/aidl/com/adh/daemon/IAdhScopeService.aidl",
+      "line": 8
+    },
+    {
+      "name": "listApplications",
+      "returns": "String",
+      "arguments": "",
+      "source": "device/core/src/main/aidl/com/adh/daemon/IAdhScopeService.aidl",
+      "line": 10
+    },
+    {
+      "name": "getApplicationIconPng",
+      "returns": "byte[]",
+      "arguments": "String packageName",
+      "source": "device/core/src/main/aidl/com/adh/daemon/IAdhScopeService.aidl",
+      "line": 12
+    },
+    {
+      "name": "controlPackage",
+      "returns": "String",
+      "arguments": "String packageName, String action",
+      "source": "device/core/src/main/aidl/com/adh/daemon/IAdhScopeService.aidl",
+      "line": 18
+    },
+    {
+      "name": "getHostEndpoint",
+      "returns": "String",
+      "arguments": "",
+      "source": "device/core/src/main/aidl/com/adh/daemon/IAdhScopeService.aidl",
+      "line": 20
+    },
+    {
+      "name": "setHostEndpoint",
+      "returns": "boolean",
+      "arguments": "String endpoint",
+      "source": "device/core/src/main/aidl/com/adh/daemon/IAdhScopeService.aidl",
+      "line": 22
+    },
+    {
+      "name": "listCaCerts",
+      "returns": "String",
+      "arguments": "",
+      "source": "device/core/src/main/aidl/com/adh/daemon/IAdhScopeService.aidl",
+      "line": 24
+    },
+    {
+      "name": "putCaCert",
+      "returns": "int",
+      "arguments": "in byte[] encoded",
+      "source": "device/core/src/main/aidl/com/adh/daemon/IAdhScopeService.aidl",
+      "line": 29
+    },
+    {
+      "name": "deleteCaCert",
+      "returns": "boolean",
+      "arguments": "String fileName",
+      "source": "device/core/src/main/aidl/com/adh/daemon/IAdhScopeService.aidl",
+      "line": 31
+    },
+    {
+      "name": "rebootDevice",
+      "returns": "boolean",
+      "arguments": "",
+      "source": "device/core/src/main/aidl/com/adh/daemon/IAdhScopeService.aidl",
+      "line": 33
+    }
+  ],
+  "agentAdvertisedOps": [
+    "maps",
+    "read",
+    "write",
+    "jni_hook",
+    "jni_onload",
+    "jni_env_hook",
+    "java_hook",
+    "java_enum",
+    "java_call",
+    "java_call_result",
+    "hw_watch",
+    "native_hook",
+    "native_call",
+    "got_enum",
+    "stealth",
+    "javahook_probe",
+    "gothook_selftest",
+    "capture_start",
+    "capture_drain",
+    "capture_stop",
+    "trigger",
+    "load_so",
+    "file_probe",
+    "qbdi_trace",
+    "qbdi_read",
+    "compat_probe",
+    "object_inspect",
+    "object_set",
+    "object_invoke",
+    "art_dexfiles",
+    "list_dir",
+    "read_file",
+    "scan_magic",
+    "mem_backend",
+    "search",
+    "frame_echo",
+    "ping",
+    "module_watch"
+  ],
+  "sourceSha256": {
+    "daemon/src/mcp.ts": "aec283d8da3cbdb0fb4948b39ae46ae6488d7276b943d02de36bee14b548598e",
+    "daemon/src/http/routes_system.ts": "fbb0268791a40073019f497e1587d108af0359cab88a4d0b968fad6e97bf1c25",
+    "daemon/src/http/routes_runtime.ts": "29c20d803b6503995a4548f3c723fd06838940dc978001f971b072e7d67c1db7",
+    "daemon/src/http/routes_analysis.ts": "c06e9d7918054c9be7297fb3645fa886fce2a0a07b02bc0f19cc8f15350cb68f",
+    "daemon/public/index.html": "df0cec2903f5a4ec166a75a203946ef21df49e91ac8bb9743e6bcc412a15e44a",
+    "../adh-cli/src/adh/cli.py": "bbd6ab4aa1711d51b1372a33b50ab1408f5904f260125fb2e736d7c3e4457789",
+    "device/core/src/main/aidl/com/adh/daemon/IAdhScopeService.aidl": "7e15a818a7cf78520cd7f2b864dc1c5e1adbc08dfcde240728ef684cfba8d656",
+    "agent/src/bootstrap/agent_main.c": "e0a4810f171dfd35cfc5758184acb5310572a77eebd030649c16436482af3675",
+    "daemon/src/index.ts": "5388d3af0ae3d7b7dc8cc8dfa4a06300b9ba63135824220839f8657e84970b78",
+    "daemon/src/state.ts": "adb5718de31b4a1edf5f9a7680f634bc1f4032cddf66520e9a2fee4979366143",
+    "daemon/src/service.ts": "b8e4e149c08fc2e63b8473d9e6feed609c11f53e12f6e2a8988c01c240e71ce9",
+    "daemon/src/scope_list.ts": "d2efb1b8eb41f8c85166783c81932e48a7821ff88b8ae40943d177f659194ab3",
+    "daemon/src/app_launch.ts": "d721087b4b784f2a02d0adf97b22f393a3a81f3c5e334f37b69d85adf9fdec0c",
+    "daemon/src/app_analyze.ts": "cb45780827f5a53be689f031b17879e4836559bd5e9ce15ba8c7ac14ba1aa14f",
+    "daemon/src/memory.ts": "1d5198a5b0e73bc036fadcf23330d8c53f1006adc1a76df2437ac3ab70bdfa5d",
+    "daemon/src/root_watch.ts": "9d60ec4bde00e5a9152c83bc9b93e09251611ca35a671872acf68c169f96ce59",
+    "daemon/src/trace_store.ts": "c676e816ea941a936182d7f79431050c405f35c9e651658def6771d061f2e990",
+    "daemon/src/crypto_evidence.ts": "3930d37e40dbddd8a73da843c7f29d4274de348c9864aa811700c317019599c3",
+    "daemon/src/capture_persist.ts": "7b04bafb93240685eebdd328f93cb46de69fcb20144eee55f85c2587cd7ca43d",
+    "daemon/src/analysis_assist.ts": "2ca8eaa02aafa5020eb82b21637c84e46e689d6553bd8c3a4ae1a359ac9d40da",
+    "daemon/src/recipes.ts": "e3853b9da21862b3cee37e754fd89373f5b3102380f81c8e0671383f7567b202",
+    "agent/src/bootstrap/io.c": "e1ca358db6975f0520a566a86cc1e03b672994361d1217a6334fe26a135bb479",
+    "device/daemon/src/main/java/com/adh/daemon/RootScopeBinder.kt": "8fa2e3042ee297065f9167a25349d41e25c8b6cd6ea0eed815f3a18202ddabcc",
+    "device/core/src/main/java/com/adh/core/AdhPaths.kt": "5ae854640c47bb2156eda1d8bf701e2b176ae6800bcfa5355f86c57ee21747f6",
+    "device/core/src/main/java/com/adh/core/CaptureFamilies.kt": "b8da7286cd28ca714f74281a880d2b74d8be501b129e8cd0f8a75f0d4928cf2a",
+    "device/core/src/main/java/com/adh/core/ScopeJson.kt": "aada14c8477dbb1ef7700d8e59877a8989352fe94401259f821cc6475cdddbd8",
+    "injector/zygisk/jni/main.cpp": "f286420af1edeb8607e99b06c152fc95db936a6f7044f3f416c547152c19ffee",
+    "injector/zygisk/module/post-fs-data.sh": "7c313e58cbd76d50aba8ed54ccf4e95a5c31bf5a4cf33f8341fc699274658cce",
+    "injector/zygisk/module/service.sh": "ec60d07cc2b4c19f01c6ae753a67296dedd2f10fa5e8e4295bae2303ef4b9153",
+    "../adh-cli/src/adh/status.py": "1f7a466681462bc76370ac26f3df17f366c5bf718af513454d5d6f14c72bdb83",
+    "../adh-cli/src/adh/stdio.py": "d4c0a521b1a3e069e1005179ae2cf63bc436a28988f953228c6290200ad8d1a4",
+    "../adh-cli/src/adh/config.py": "2a2e39fb73d9320b0a99f6530ec41bcd55bc5d5cec18ee060b18ce660bee3368",
+    "daemon/src/trace_digest.ts": "a122788cfca30801b14edf6fd07c101743cf48e02a3b0f8a81200572c33d410c",
+    "daemon/src/oracle.ts": "b0428378dbe2e4683b973a8d689a534fa3797bee956e6e3b0da54969a62a92ed",
+    "daemon/src/native_hook_all.ts": "34cc9bbf20b8c97fba2b181c69cf1ed9580c1f1180746778d5337e94d72a46b3",
+    "daemon/src/error_codes.ts": "e9dbbcc25d4b5affdf4d15d24c3f80a6ab354635da0a6428602028e9343b962d",
+    "daemon/src/http/router.ts": "3fc7a7c7867c56b3362d418829d6754a29ab332e4f9026695aceccde614b536f",
+    "device/daemon/src/main/java/com/adh/daemon/AdhDeviceDaemon.kt": "2efb463c6ee2c54437735688c62a0aff8ca592063d77fb9bfd5fd6dc5df54ac0",
+    "device/daemon/src/main/java/com/adh/daemon/CallerAuthorizer.kt": "c902d1ec65546fa43bdb5f7a006d6781fe8c4f7bd112be509d0bcc2680092286",
+    "device/manager/src/main/java/com/adh/manager/data/DaemonScopeRepository.kt": "dc91f0199edeed0290b5d11f9660f774b8eb1eb99bd73d20d75beabb2e84722b",
+    "device/manager/src/main/java/com/adh/manager/ui/scope/HookConfigScreen.kt": "674c771d83280c3066fb0f4a290727e29640c3fe1a954ac2d35ca133fefbb188",
+    "../adh-cli/src/adh/endpoint.py": "67d3e3e13580a64aa3807e9f3ee586e0576194a38623c5f8c64e2a8664608d5f",
+    "../DecryptHub-DSH/packages/mcp/decrypthub-components/src/inventory.ts": "31224a5c9ec1084f1251d96fd7e9e975bef5b25dada83a1e6a64631b9d92bc50",
+    "../DecryptHub-DSH/packages/mcp/decrypthub-components/src/index.ts": "ddd7b31777648c76370d719bbeca9fddc9540c4b1f72eacfc44fa36a52076881",
+    "../DecryptHub-DSH/packages/mcp/decrypthub-components/src/types.ts": "ba1aae44b14ea9942588fa83ceb381bfbbbc5a61a7defccc5da584ed9acaf0ab"
+  },
+  "capabilityGroups": {
+    "guidance": [
+      "analysis_guide"
+    ],
+    "inventory": [
+      "process_list",
+      "backends",
+      "capabilities"
+    ],
+    "diagnostics": [
+      "compat_probe",
+      "runtime_diagnostics",
+      "agent_ping",
+      "engine_selftest",
+      "protocol_selftest"
+    ],
+    "scope_and_launch": [
+      "analyze_app",
+      "scope_list",
+      "scope_set"
+    ],
+    "capture_and_network": [
+      "capture_start",
+      "capture_stop",
+      "live_captures",
+      "capture_detail",
+      "http_exchanges",
+      "flow_correlate",
+      "file_probe",
+      "crypto_identify"
+    ],
+    "detection": [
+      "detect_summary",
+      "detect_modules",
+      "detect_java"
+    ],
+    "java": [
+      "javahook_probe",
+      "java_hook",
+      "java_enum",
+      "java_call",
+      "java_call_result",
+      "java_trace"
+    ],
+    "jni": [
+      "jni_onload",
+      "jni_hook",
+      "jni_env_hook",
+      "jni_field_digest"
+    ],
+    "native_runtime": [
+      "native_hook",
+      "native_hook_all",
+      "native_look",
+      "native_call",
+      "native_backtrace",
+      "native_symbols",
+      "got_enum",
+      "stealth"
+    ],
+    "memory": [
+      "memory_maps",
+      "maps_query",
+      "mem_backend",
+      "memory_read",
+      "memory_disasm",
+      "memory_search",
+      "memory_scan_magic",
+      "memory_write",
+      "memory_restore"
+    ],
+    "watch_and_trace": [
+      "trace_session",
+      "root_watch",
+      "hw_watch",
+      "qbdi_trace",
+      "syscall_trace",
+      "syscall_watch",
+      "syscall_digest",
+      "trace_digest"
+    ],
+    "module": [
+      "module_watch",
+      "load_library"
+    ],
+    "objects": [
+      "object_inspect",
+      "object_set",
+      "object_invoke"
+    ],
+    "dex_analysis": [
+      "art_dexfiles",
+      "dex_search",
+      "dex_index",
+      "dex_index_search",
+      "dex_reflections",
+      "dex_xref",
+      "dex_crypto_scan",
+      "dex_method_code",
+      "dex_repair",
+      "dex_coverage",
+      "dex_recover"
+    ],
+    "native_analysis": [
+      "native_xref",
+      "native_disasm",
+      "native_analyze",
+      "native_crypto_const",
+      "crypto_variant_scan",
+      "native_syscall_scan"
+    ],
+    "artifacts": [
+      "dumps_list",
+      "memory_dump",
+      "dump_all_dex",
+      "unpack_package"
+    ],
+    "evidence": [
+      "crypto_evidence",
+      "oracle"
+    ],
+    "host_control": [
+      "settings",
+      "recipe"
+    ],
+    "filesystem": [
+      "fs_list",
+      "fs_read"
+    ],
+    "active_trigger": [
+      "trigger"
+    ]
+  },
+  "uiLiteralApiReferences": [
+    {
+      "path": "/api/export/report",
+      "line": 715
+    },
+    {
+      "path": "/api/dumps/download?sha=${encodeURIComponent(sha)}",
+      "line": 791
+    },
+    {
+      "path": "/api/dumps/download?sha=",
+      "line": 852
+    },
+    {
+      "path": "/api/unpack/history?package=",
+      "line": 872
+    },
+    {
+      "path": "/api/unpack/inventory?session=",
+      "line": 901
+    },
+    {
+      "path": "/api/unpack/run",
+      "line": 924
+    },
+    {
+      "path": "/api/unpack/dump-so-one",
+      "line": 956
+    },
+    {
+      "path": "/api/unpack/pull-so",
+      "line": 974
+    },
+    {
+      "path": "/api/captures/",
+      "line": 1048
+    },
+    {
+      "path": "/api/captures/",
+      "line": 1159
+    },
+    {
+      "path": "/api/detect/summary?package=",
+      "line": 1188
+    },
+    {
+      "path": "/api/http/exchanges?package=",
+      "line": 1201
+    },
+    {
+      "path": "/api/captures?since=",
+      "line": 1360
+    },
+    {
+      "path": "/api/fs/list?package=",
+      "line": 1513
+    },
+    {
+      "path": "/api/fs/read",
+      "line": 1534
+    },
+    {
+      "path": "/api/fs/read",
+      "line": 1548
+    },
+    {
+      "path": "/api/mcp/config${q}",
+      "line": 1614
+    },
+    {
+      "path": "/api/backends",
+      "line": 1671
+    },
+    {
+      "path": "/api/modules?session=",
+      "line": 1684
+    },
+    {
+      "path": "/api/config",
+      "line": 1697
+    },
+    {
+      "path": "/api/captures/packages",
+      "line": 1707
+    },
+    {
+      "path": "/api/config",
+      "line": 1715
+    },
+    {
+      "path": "/api/data/clear",
+      "line": 1728
+    },
+    {
+      "path": "/api/data/clear",
+      "line": 1740
+    },
+    {
+      "path": "/api/captures/export?package=",
+      "line": 1750
+    },
+    {
+      "path": "/api/settings/export",
+      "line": 1756
+    },
+    {
+      "path": "/api/settings/import",
+      "line": 1768
+    },
+    {
+      "path": "/api/apps",
+      "line": 1826
+    },
+    {
+      "path": "/api/events?package=",
+      "line": 1844
+    },
+    {
+      "path": "/api/config",
+      "line": 1971
+    }
+  ],
+  "limitations": [
+    "Tool/route presence is static, not live availability or passing integration evidence.",
+    "Literal UI references omit dynamic API expressions; neither fetch count nor string references prove a rendered control.",
+    "Route method * means no method property in the table; handlers may still branch by method.",
+    "Handler calls and direct agent ops are lexical within that handler, not a transitive execution graph.",
+    "Package-pinned /<package>/mcp and dashboard fallbacks are router branches outside the 106 static route entries."
+  ],
+  "validation": {
+    "staticChecks": {
+      "passed": 9,
+      "failed": 0
+    },
+    "hostTypecheck": {
+      "exitCode": 0
+    },
+    "hostTests": {
+      "passed": 464,
+      "failed": 0,
+      "skipped": 0,
+      "exitCode": 0
+    },
+    "isolation": "ADH_SKIP_ARTIFACT_LOAD=1 and inherited ADH_DATA_DIR removed in child shell; existing launcher assigns per-test-process temporary data roots. No live service/device calls or dynamic ADH imports for inventory.",
+    "scope": "Static audit plus unchanged Host regression suite, not device/USB/LAN integration acceptance."
+  },
+  "desktopConsumerCommit": "7b2f2c0814933215fe43767f418314a99cf8b540"
+}

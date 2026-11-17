@@ -1,3 +1,4 @@
+import { atomicWriteText } from './storage.ts';
 // Package-scoped capture log on disk. Agent still only rings+drains; Host owns the durable store.
 // Layout: {dataDir}/packages/<package>/captures.jsonl — one JSON object per line.
 import {
@@ -60,6 +61,35 @@ export function trimPackageCapturesFile(dataDir: string, pkg: string, retain: nu
   const tmp = path + '.tmp';
   writeFileSync(tmp, kept.join('\n') + '\n');
   renameSync(tmp, path);
+}
+
+/** Preview or explicitly enforce both disk rules. Read failures are reported, never success. */
+export function retainCaptureFiles(dataDir: string, policy: { retain: number; maxAgeDays: number }, dryRun = true, now = Date.now()) {
+  const packages: { package: string; before: number; remaining: number; removed: number }[] = [];
+  const errors: string[] = [];
+  const root = join(dataDir, 'packages');
+  if (!existsSync(root)) return { packages, removed: 0, errors };
+  for (const name of readdirSync(root)) {
+    if (!safePackageDirName(name)) continue;
+    const path = join(root, name, 'captures.jsonl');
+    if (!existsSync(path)) continue;
+    try {
+      const lines = readFileSync(path, 'utf8').split('\n').filter(Boolean);
+      const cutoff = policy.maxAgeDays > 0 ? now - policy.maxAgeDays * 86400000 : 0;
+      let kept = lines.filter(line => {
+        try { const ts = Number(JSON.parse(line).ts) || 0; return !cutoff || !ts || ts >= cutoff; }
+        catch { return true; }
+      });
+      if (policy.retain > 0) kept = kept.slice(-policy.retain);
+      const removed = lines.length - kept.length;
+      if (!dryRun && removed) {
+        if (kept.length) atomicWriteText(path, kept.join('\n') + '\n');
+        else unlinkSync(path);
+      }
+      packages.push({ package: name, before: lines.length, remaining: kept.length, removed });
+    } catch (error) { errors.push(`${name}: ${(error as Error).message}`); }
+  }
+  return { packages, removed: packages.reduce((n, p) => n + p.removed, 0), errors };
 }
 
 // Load durable captures from every packages/<pkg>/captures.jsonl (newest retain lines each).

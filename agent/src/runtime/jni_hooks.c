@@ -14,6 +14,7 @@
 #include <jni.h>
 #include <pthread.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <stdio.h>
 
 typedef jint (*register_natives_fn)(JNIEnv *, jclass, const JNINativeMethod *, jint);
@@ -26,6 +27,31 @@ static unsigned long long g_jni_hook_hits = 0;
 static int g_jni_hook_last_count = 0;
 static char g_jni_hook_error[256] = "";
 static __thread int g_jni_hook_in_wrapper = 0;
+
+// A registration is a one-shot event: it happens during library init, usually before capture is
+// armed, so pushing it only as a capture record loses it exactly when the caller needs it (the
+// field report: "hook installed, hits=6, but nothing to read"). Keep the last N registrations in a
+// bounded ring here and expose them through jni_hook action:list.
+#define ADH_JNI_REG_SLOTS 256
+typedef struct {
+    unsigned int seq;
+    char cls[192];
+    char method[64];
+    char signature[256];
+    unsigned long long fn;
+} adh_jni_registration;
+static adh_jni_registration g_jni_regs[ADH_JNI_REG_SLOTS];
+static unsigned int g_jni_reg_seq = 0;
+
+static void remember_registration(const char *cls, const char *method, const char *signature, void *fn) {
+    unsigned int seq = __atomic_add_fetch(&g_jni_reg_seq, 1, __ATOMIC_RELAXED);
+    adh_jni_registration *slot = &g_jni_regs[(seq - 1) % ADH_JNI_REG_SLOTS];
+    snprintf(slot->cls, sizeof(slot->cls), "%s", cls ? cls : "");
+    snprintf(slot->method, sizeof(slot->method), "%s", method ? method : "");
+    snprintf(slot->signature, sizeof(slot->signature), "%s", signature ? signature : "");
+    slot->fn = (unsigned long long)(uintptr_t)fn;
+    __atomic_store_n(&slot->seq, seq, __ATOMIC_RELEASE);
+}
 
 static void set_jni_error(const char *message) {
     snprintf(g_jni_hook_error, sizeof(g_jni_hook_error), "%s", message ? message : "");
@@ -59,12 +85,42 @@ static jint JNICALL register_natives_wrapper(JNIEnv *env, jclass clazz,
                      class_escaped, name_escaped, signature_escaped,
                      (unsigned long long)(uintptr_t)methods[i].fnPtr, i, (int)nMethods);
             adh_capture_push_text("JNI_NATIVE", event);
+            remember_registration(class_name, methods[i].name, methods[i].signature, methods[i].fnPtr);
         }
     }
 
     jint result = original(env, clazz, methods, nMethods);
     g_jni_hook_in_wrapper = 0;
     return result;
+}
+
+void adh_jni_hook_install_early(void) {
+#ifdef ADH_HAVE_INLINE_HOOK
+    pthread_mutex_lock(&g_jni_hook_lock);
+    int already = g_jni_hook_installed;
+    pthread_mutex_unlock(&g_jni_hook_lock);
+    if (already) return;
+    int did_attach = 0;
+    JNIEnv *env = adh_jni_attach(&did_attach);
+    if (!env) return;
+    void *target = (void *)(*env)->RegisterNatives;
+    adh_jni_detach(did_attach);
+    if (!target) return;
+    __atomic_store_n(&g_jni_hook_original_ptr, (void *)target, __ATOMIC_RELEASE);
+    void *original = NULL;
+    if (!adh_inline_hook(target, (void *)register_natives_wrapper, &original) || !original) {
+        __atomic_store_n(&g_jni_hook_original_ptr, NULL, __ATOMIC_RELEASE);
+        return;
+    }
+    __atomic_store_n(&g_jni_hook_original_ptr, original, __ATOMIC_RELEASE);
+    pthread_mutex_lock(&g_jni_hook_lock);
+    g_jni_hook_target = target;
+    g_jni_hook_installed = 1;
+    g_jni_hook_hits = 0;
+    g_jni_hook_last_count = 0;
+    set_jni_error("");
+    pthread_mutex_unlock(&g_jni_hook_lock);
+#endif
 }
 
 static void send_jni_hook_result(int fd, const char *id, const char *action, int ok,
@@ -160,6 +216,38 @@ void adh_cmd_jni_hook(int fd, const char *id, const char *action) {
         }
         pthread_mutex_unlock(&g_jni_hook_lock);
         send_jni_hook_result(fd, id, action, ok ? 1 : 0, ok ? "" : "inline unhook failed");
+        return;
+    }
+    if (strcmp(action, "list") == 0) {
+        unsigned int total = __atomic_load_n(&g_jni_reg_seq, __ATOMIC_ACQUIRE);
+        unsigned int count = total < ADH_JNI_REG_SLOTS ? total : ADH_JNI_REG_SLOTS;
+        size_t cap = (size_t)count * 720 + 512;
+        char *out = (char *)malloc(cap);
+        if (!out) { send_jni_hook_result(fd, id, action, 0, "out of memory"); return; }
+        size_t len = 0;
+        len += snprintf(out + len, cap - len,
+                        "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"jni_hook\",\"ok\":true,"
+                        "\"action\":\"list\",\"installed\":%s,\"total\":%u,\"count\":%u,"
+                        "\"registrations\":[",
+                        id, g_jni_hook_installed ? "true" : "false", total, count);
+        int written = 0;
+        for (unsigned int i = 0; i < count; i++) {
+            /* Oldest first: seq numbers run (total-count+1)..total. */
+            unsigned int seq = total - count + 1 + i;
+            adh_jni_registration *r = &g_jni_regs[(seq - 1) % ADH_JNI_REG_SLOTS];
+            if (__atomic_load_n(&r->seq, __ATOMIC_ACQUIRE) != seq) continue;
+            char cls_escaped[400], method_escaped[160], signature_escaped[560];
+            json_escape(r->cls, cls_escaped, sizeof(cls_escaped));
+            json_escape(r->method, method_escaped, sizeof(method_escaped));
+            json_escape(r->signature, signature_escaped, sizeof(signature_escaped));
+            len += snprintf(out + len, cap > len ? cap - len : 0,
+                            "%s{\"seq\":%u,\"class\":\"%s\",\"method\":\"%s\",\"signature\":\"%s\",\"fnPtr\":\"0x%llx\"}",
+                            written ? "," : "", seq, cls_escaped, method_escaped, signature_escaped, r->fn);
+            written++;
+        }
+        len += snprintf(out + len, cap > len ? cap - len : 0, "]}\n");
+        send_line(fd, out);
+        free(out);
         return;
     }
     if (strcmp(action, "status") == 0) {

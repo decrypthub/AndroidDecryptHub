@@ -12,8 +12,8 @@ android {
         applicationId = "com.adh.manager"
         minSdk = 26
         targetSdk = 34
-        versionCode = 26
-        versionName = "0.6.0"
+        versionCode = 30
+        versionName = "0.8.0"
     }
 
     buildTypes {

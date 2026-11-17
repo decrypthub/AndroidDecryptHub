@@ -18,6 +18,12 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/env.sh"
 
 DEPLOY=0
 for arg in "$@"; do case "$arg" in --deploy) DEPLOY=1 ;; *) echo "unknown flag: $arg" >&2; exit 2 ;; esac; done
+CONNECT_PORT="${ADH_AGENT_CONNECT_PORT:-8761}"
+if [[ ! "$CONNECT_PORT" =~ ^[1-9][0-9]{0,4}$ ]] || [ "$CONNECT_PORT" -gt 65535 ]; then echo 'invalid ADH_AGENT_CONNECT_PORT' >&2; exit 2; fi
+if [ "$DEPLOY" = 1 ] && [ "$CONNECT_PORT" != 8761 ]; then
+  echo "custom-port agents are sandbox-only; refusing --deploy" >&2
+  exit 2
+fi
 
 # ---- toolchain: pinned Windows paths first, host fallbacks second --------------------------
 TC="$TOOLCHAIN"
@@ -36,9 +42,12 @@ STRIP="$NDK/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-strip.exe"
 [ -n "$STRIP" ] && [ -x "$STRIP" ] || { echo "missing strip tool (neither the pinned NDK nor the host NDK provides llvm-strip)"; exit 1; }
 
 # ---- build dir: never reuse the other host's cache ----------------------------------------
-BUILD_DIR="${ADH_BUILD_DIR:-$ROOT/agent/build}"
-if [ -f "$BUILD_DIR/CMakeCache.txt" ] && grep -qE '^CMAKE_TOOLCHAIN_FILE:[^=]*=[A-Za-z]:[/\\]' "$BUILD_DIR/CMakeCache.txt"; then
-  BUILD_DIR="$ROOT/agent/build-$(uname -s | tr 'A-Z' 'a-z')"
+DEFAULT_BUILD_DIR="$ROOT/agent/build"
+if [ "$CONNECT_PORT" != 8761 ]; then DEFAULT_BUILD_DIR="$ROOT/agent/build-isolated-$CONNECT_PORT"; fi
+BUILD_DIR="${ADH_BUILD_DIR:-$DEFAULT_BUILD_DIR}"
+if [ "$CONNECT_PORT" != 8761 ] && [ "$BUILD_DIR" = "$ROOT/agent/build" ]; then echo 'isolated port cannot overwrite canonical agent/build' >&2; exit 2; fi
+if ! command -v cygpath >/dev/null 2>&1 && [ -f "$BUILD_DIR/CMakeCache.txt" ] && grep -qE '^CMAKE_TOOLCHAIN_FILE:[^=]*=[A-Za-z]:[/\\]' "$BUILD_DIR/CMakeCache.txt"; then
+  BUILD_DIR="$DEFAULT_BUILD_DIR-$(uname -s | tr 'A-Z' 'a-z')"
   echo ">> existing cache at $ROOT/agent/build is from another host — building in $BUILD_DIR"
 fi
 
@@ -58,7 +67,8 @@ echo ">> configuring agent ($ABI) with $CMAKE_BIN"
   -DANDROID_ABI="$ABI" \
   -DANDROID_PLATFORM=android-26 \
   -DANDROID_STL=c++_static \
-  -DCMAKE_BUILD_TYPE=Release >/dev/null
+  -DCMAKE_BUILD_TYPE=Release \
+  -DADH_AGENT_CONNECT_PORT="${ADH_AGENT_CONNECT_PORT:-8761}" >/dev/null
 
 echo ">> building"
 # Do NOT hide build output — a hidden compile error once shipped a stale .so.
@@ -67,6 +77,7 @@ if ! "$CMAKE_BIN" --build "$BUILD_DIR"; then echo "!! AGENT BUILD FAILED"; exit 
 SO="$BUILD_DIR/libadh_agent.so"
 DEBUG_SO="$BUILD_DIR/libadh_agent.so.debug"
 DEST="$ROOT/sandbox-app/app/src/main/jniLibs/$ABI"
+if [ "$CONNECT_PORT" != 8761 ]; then DEST="$ROOT/device/p5sandbox/src/main/jniLibs/$ABI"; fi
 
 # Keep debug info locally (gitignored) for crash symbolication, but ship a
 # stripped .so: an unstripped agent carries thousands of internal names and
@@ -83,12 +94,12 @@ mkdir -p "$DEST"
 cp "$SO" "$DEST/libadh_agent.so"
 # The canonical artifact path: host-side gates (verify_v26_footprint, verify_v88_agent_signatures)
 # read agent/build/libadh_agent.so, so on a host-suffixed build dir it must still hold THIS build.
-if [ "$BUILD_DIR" != "$ROOT/agent/build" ]; then
+if [ "$CONNECT_PORT" = 8761 ] && [ "$BUILD_DIR" != "$ROOT/agent/build" ]; then
   mkdir -p "$ROOT/agent/build"
   cp "$SO" "$ROOT/agent/build/libadh_agent.so"
 fi
 echo ">> built $(ls -la "$SO" | awk '{print $5}') bytes -> $DEST/libadh_agent.so"
-if [ "$BUILD_DIR" != "$ROOT/agent/build" ]; then echo ">> canonical copy -> agent/build/libadh_agent.so"; fi
+if [ "$CONNECT_PORT" = 8761 ] && [ "$BUILD_DIR" != "$ROOT/agent/build" ]; then echo ">> canonical copy -> agent/build/libadh_agent.so"; fi
 if [ -f "$DEBUG_SO" ]; then echo ">> unstripped debug copy -> $DEBUG_SO"; fi
 "$READELF" --dyn-syms "$SO" \
   | grep -iE "adh_agent_set_package|adh_agent_set_endpoint|adh_agent_start|JNI_OnLoad" | awk '{print "   export:", $8}'

@@ -19,9 +19,11 @@
 // .so, so "which agent is flashed?" and "which module is flashed?" must not be two different
 // answers. Reported by compat_probe and in the hello; the string is already compiled in either
 // way, so surfacing it adds no new string to the release image (v88 unaffected).
-#define AGENT_VER   "0.6.0"
+#define AGENT_VER   "0.8.0"
 #define ADH_HOST    "127.0.0.1"
+#ifndef ADH_PORT
 #define ADH_PORT    8761
+#endif
 // Loopback is always tried first (adb reverse). adh_agent_set_endpoint may name one extra
 // IPv4 the root companion already learned; connect_adhd uses it only after loopback fails.
 #define TAG         "rt.agent"

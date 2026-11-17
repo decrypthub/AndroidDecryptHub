@@ -25,5 +25,13 @@ else
   echo ">> extracted headers + libQBDI.so ($(wc -c < "$DEST/lib/libQBDI.so") bytes)"
 fi
 mkdir -p "$JNILIBS"
-cp "$DEST/lib/libQBDI.so" "$JNILIBS/libQBDI.so"
-echo ">> staged libQBDI.so into sandbox jniLibs"
+if [ "${ADH_STAGE_SANDBOX_QBDI:-0}" = "1" ]; then
+  # Explicitly opt-in only: a sandbox APK that ships the tracer is NOT a product-shaped test - a
+  # real target never carries it. The product path is module payload + companion fd delivery.
+  cp "$DEST/lib/libQBDI.so" "$JNILIBS/libQBDI.so"
+  echo ">> WARNING: staged libQBDI.so into the sandbox jniLibs (ADH_STAGE_SANDBOX_QBDI=1)."
+  echo "   This makes the sandbox pass regardless of the real injection path - do not use it as"
+  echo "   product acceptance; tools/verify_v10_qbdi.sh delivers the library at runtime instead."
+else
+  echo ">> NOT staging libQBDI.so into the sandbox APK (product-shaped: targets do not carry it)"
+fi

@@ -66,9 +66,9 @@
     <string name="app_no_launcher">已终止 %1$s，但没有可启动的界面</string>
     <string name="app_control_denied">不允许终止或重启该应用</string>
     <string name="app_control_failed">无法操作 %1$s</string>
-    <string name="app_hook_config">Hook 配置</string>
+    <string name="app_hook_config">Host Hook 方案</string>
     <string name="app_hooks_trimmed">已裁剪钩子</string>
-    <string name="hook_config_title">Hook 配置</string>
+    <string name="hook_config_title">Host Hook 方案</string>
     <string name="hook_tab_crypto">加解密</string>
     <string name="hook_tab_capture">系统抓包</string>
     <string name="hook_tab_system">系统检测</string>
@@ -108,4 +108,13 @@
     <string name="cert_reboot_failed">无法重启设备</string>
     <string name="cert_delete_failed">无法删除证书</string>
     <string name="cancel">取消</string>
+    <string name="host_plan_title">Host Hook 方案</string>
+    <string name="host_plan_guidance">Hook 方案由 Host 的 AI、CLI 或工作台管理。手机只查看状态和停用未来启动缓存。</string>
+    <string name="host_plan_legacy">旧配置快照（只读）：</string>
+    <string name="host_plan_unavailable">当前服务不支持方案状态，或连接不可用。请在 Host 核对，不能据此判断已安装。</string>
+    <string name="host_plan_no_cache">本包没有早期缓存。请在 Host 保存、验证并明确部署方案。</string>
+    <string name="host_plan_not_installed">缓存已保存不等于 Hook 已安装；实际运行结果请在 Host 查看。</string>
+    <string name="host_plan_refresh">刷新状态</string>
+    <string name="host_plan_revoke">停用本包早期缓存</string>
+    <string name="host_plan_revoke_note">仅阻止之后获取缓存的启动，不停止当前进程，也不撤回已经安装的 Hook。</string>
 </resources>

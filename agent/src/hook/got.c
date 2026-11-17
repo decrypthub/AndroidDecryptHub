@@ -78,6 +78,30 @@ int adh_swap_pointer_in_ro_page(void **slot, void *newval) {
     return got_write_slot(slot, newval, perms_to_prot(perms), pagesz);
 }
 
+int adh_restore_pointer_if_owned(void **slot, void *replacement, void *original) {
+    if (!slot || (uintptr_t)slot % sizeof(void *)) return 0;
+    char perms[8];
+    perms_of_addr((unsigned long long)(uintptr_t)slot, perms, sizeof(perms));
+    if (perms[0] != 'r') return 0;
+    void *current = __atomic_load_n(slot, __ATOMIC_ACQUIRE);
+    if (current == original) return 1;
+    if (current != replacement) return -1;
+    long pagesz = sysconf(_SC_PAGESIZE);
+    if (pagesz <= 0) pagesz = 4096;
+    void *page = (void *)((uintptr_t)slot & ~((uintptr_t)pagesz - 1));
+    const int writable = perms[1] == 'w';
+    const int prot = perms_to_prot(perms);
+    if (!writable && mprotect(page, pagesz, prot | PROT_WRITE) != 0) return 0;
+    // The slot may have changed after our first read or while making RELRO writable.
+    // A check followed by an unconditional store would still erase that writer's value.
+    void *expected = replacement;
+    const int swapped = __atomic_compare_exchange_n(slot, &expected, original, 0,
+                                                    __ATOMIC_SEQ_CST, __ATOMIC_ACQUIRE);
+    const int protected_again = writable || mprotect(page, pagesz, prot) == 0;
+    if (!protected_again) return 0;
+    return swapped || expected == original ? 1 : -1;
+}
+
 // Patch raw code bytes in place: make every page covering [addr, addr+len) writable (keeping X),
 // memcpy, flush the instruction cache and restore the original protection. Used to write a saved
 // original prologue back over an inline hook without asking Dobby to free its trampoline pool
@@ -735,29 +759,15 @@ void adh_cmd_gothook_selftest(int fd, const char *id) {
 
 // Resolve an exported symbol in an already-loaded module by parsing its in-memory
 // dynamic symbol table (namespace-independent; works when dlopen is blocked).
-static void *resolve_sym_ex(const char *mod_substr, const char *symbol, int prefix) {
-    unsigned long long base = 0;
-    FILE *m = fopen("/proc/self/maps", "r");
-    if (!m) return NULL;
-    char line[512];
-    while (fgets(line, sizeof(line), m)) {
-        char sa[32], ea[32], perms[8], off[32], dev[16], path[400] = "";
-        unsigned long long inode = 0;
-        if (sscanf(line, "%31[0-9a-f]-%31[0-9a-f] %7s %31s %15s %llu %399[^\n]", sa, ea, perms, off, dev, &inode, path) < 6) continue;
-        char *pp = path; while (*pp == ' ') pp++;
-        const char *bn = strrchr(pp, '/'); bn = bn ? bn + 1 : pp;
-        if (strcmp(bn, mod_substr) != 0) continue;                   // exact basename match
-        if (strcmp(off, "0") && strcmp(off, "00000000")) continue;   // want the mapping at file offset 0 (ELF header)
-        unsigned long long s = strtoull(sa, NULL, 16);
-        if (base == 0 || s < base) base = s;
-    }
-    fclose(m);
-    if (!base) return NULL;
+// Parse one candidate image and look the symbol up. Returns the runtime address or NULL.
+// `base` must be the address where the ELF header is mapped (offset 0 mapping).
+static void *resolve_in_image(unsigned long long base, const char *symbol, int prefix) {
     unsigned char *p = (unsigned char *)base;
     if (memcmp(p, "\x7f""ELF", 4) != 0) return NULL;
     unsigned long long phoff = *(unsigned long long *)(p + 32);
     unsigned short phentsize = *(unsigned short *)(p + 54);
     unsigned short phnum = *(unsigned short *)(p + 56);
+    if (phentsize != 56 || phnum == 0 || phnum > 512) return NULL;
     unsigned long long dyn_vaddr = 0;
     for (int i = 0; i < phnum; i++) {
         unsigned char *ph = p + phoff + (unsigned long long)i * phentsize;
@@ -813,6 +823,49 @@ static void *resolve_sym_ex(const char *mod_substr, const char *symbol, int pref
             return (void *)(base + st_value);
     }
     return NULL;
+}
+
+// Resolve `symbol` in `mod_substr` by parsing an in-memory image.
+//
+// Picking the base is the hard part on Android 15: the same APEX library shows up at offset 0
+// SEVERAL times in /proc/self/maps - the real r--p image, plus one or more r--s "shared"
+// mappings that a previous version mistook for the image. Picking by address or by perms kept
+// producing a base whose base+st_value landed in a non-executable mapping, which surfaced as
+// either SEGV_ACCERR (before the executable check existed) or a permanent "no JavaVM".
+//
+// So do not guess: try every offset-0 candidate and keep a result only if the resolved address
+// is really executable. That is a property of the answer, not of the guess.
+static void *resolve_sym_ex(const char *mod_substr, const char *symbol, int prefix) {
+    unsigned long long cands[16];
+    int ncand = 0;
+    FILE *m = fopen("/proc/self/maps", "r");
+    if (!m) return NULL;
+    char line[512];
+    while (fgets(line, sizeof(line), m)) {
+        char sa[32], ea[32], perms[8], off[32], dev[16], path[400] = "";
+        unsigned long long inode = 0;
+        if (sscanf(line, "%31[0-9a-f]-%31[0-9a-f] %7s %31s %15s %llu %399[^\n]",
+                   sa, ea, perms, off, dev, &inode, path) < 6) continue;
+        char *pp = path; while (*pp == ' ') pp++;
+        const char *bn = strrchr(pp, '/'); bn = bn ? bn + 1 : pp;
+        if (strcmp(bn, mod_substr) != 0) continue;
+        if (strcmp(off, "0") && strcmp(off, "00000000")) continue;
+        unsigned long long s = strtoull(sa, NULL, 16);
+        if (ncand < (int)(sizeof(cands) / sizeof(cands[0]))) cands[ncand++] = s;
+    }
+    fclose(m);
+    if (ncand == 0) return NULL;
+
+    // Prefer an answer that is executable; fall back to any parse that succeeded (the caller
+    // applies its own guard, and some symbols legitimately live in non-executable data).
+    void *fallback = NULL;
+    for (int i = 0; i < ncand; i++) {
+        void *f = resolve_in_image(cands[i], symbol, prefix);
+        if (!f) continue;
+        if (adh_addr_is_executable(f)) return f;
+        if (!fallback) fallback = f;
+    }
+    return fallback;
 }
 // Exact-match resolver (original behavior) plus a prefix variant used for symbols whose
 // mangled spelling varies across ROM/ABI versions.

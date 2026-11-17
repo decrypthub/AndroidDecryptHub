@@ -41,7 +41,7 @@ try{
  adb(['push',fixture,lib]);
  await call('load_library',{path:lib});
  const prepared=await root({action:'prepare',serial});
- assert.equal(prepared.selfTest.selfTest,true);assert.equal(prepared.selfTest.complete,true);assert.equal(prepared.selfTest.samples,1);
+ assert.equal(prepared.selfTest.selfTest,true);assert.equal(prepared.selfTest.complete,true);assert.ok(prepared.selfTest.samples>=2);
  const tid=Number(uint(await native('adh_watch_start')));started=true;
  assert.ok(Number.isSafeInteger(tid)&&tid>0);
  const address='0x'+uint(await native('adh_watch_address')).toString(16);

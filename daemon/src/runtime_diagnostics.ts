@@ -1,6 +1,7 @@
 // Read-only procfs diagnostics independent of agent transport. A frozen agent
 // cannot answer commands; it must not be diagnosed by sending it another RPC.
 import { posix } from 'node:path';
+import { trackedEffect } from './execution_context.ts';
 import { rootAdb, selectRootSerial } from './root_watch.ts';
 import { parseProcStat, normalizeStarttimeTicks } from './proc_identity.ts';
 export { parseProcStat } from './proc_identity.ts';
@@ -179,7 +180,7 @@ export async function diagnoseRuntime(target: RuntimeTarget, a: Record<string, a
   const observedAt = new Date().toISOString();
   // adb shell rebuilds a remote shell command from argv. Quote the complete
   // script for that shell so metacharacters/functions reach su -c as ONE arg.
-  const root = (script: string) => deps.adb(serial, ['shell', 'su', '-c', quote(script)], spec.timeoutMs);
+  const root = (script: string) => trackedEffect(()=>deps.adb(serial, ['shell', 'su', '-c', quote(script)], spec.timeoutMs),target.sessionId);
   // Root is checked before inspecting another UID. No executable/helper is uploaded.
   if ((await root('id -u')).trim() !== '0') throw new Error('runtime_diagnostics requires root for exact cross-UID procfs reads; no device state was changed');
   const initial = decodeWire(await root(prologue + procScript(target.pid) +

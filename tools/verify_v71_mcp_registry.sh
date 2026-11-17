@@ -17,6 +17,11 @@ verify_resolve_env_host
 
 OUT="$(node --input-type=module - "$ROOT" <<'EOF'
 const [root] = process.argv.slice(2);
+// Importing state.ts loads settings and enforces capture retention. A registry
+// shape check must never load/prune the operator's real analysis data, including
+// when the invoking shell happens to have a production ADH_DATA_DIR configured.
+process.env.ADH_SKIP_ARTIFACT_LOAD = '1';
+delete process.env.ADH_DATA_DIR;
 const url = 'file:///' + String(root).replace(/\\/g, '/').replace(/^\//, '') + '/daemon/src/mcp.ts';
 let tools;
 try {

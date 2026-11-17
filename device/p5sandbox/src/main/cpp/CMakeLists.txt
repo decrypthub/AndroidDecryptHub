@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.22)
+project(p5fixture C CXX)
+set(CMAKE_CXX_STANDARD 17)
+add_library(p5target SHARED target.c)
+target_compile_options(p5target PRIVATE -fno-builtin)
+add_library(p5fixture SHARED fixture.cpp)
+target_include_directories(p5fixture PRIVATE ../../../../../agent/src/bootstrap)
+target_link_libraries(p5fixture dl log)

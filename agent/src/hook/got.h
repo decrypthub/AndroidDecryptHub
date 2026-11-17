@@ -52,6 +52,10 @@ int adh_addr_is_executable(void *addr);
 // Swap one pointer-sized slot in a (possibly read-only/RELRO) page and restore the
 // original protection. Returns 1 on success. Used by the JNIEnv function-table hooks.
 int adh_swap_pointer_in_ro_page(void **slot, void *newval);
+// Restore only our own published pointer (atomic compare/exchange), or accept an already
+// restored slot. 1 = restored, -1 = another writer owns the slot (left untouched),
+// 0 = invalid/unreadable slot or protection failure. Never reclaims the old stub.
+int adh_restore_pointer_if_owned(void **slot, void *replacement, void *original);
 // Copy the /proc/self/maps permission string ("r--p") of the mapping containing addr,
 // or "?" when unmapped. Used to prove a temporarily-writable page was restored.
 void adh_perms_of_addr(void *addr, char *out, int out_size);

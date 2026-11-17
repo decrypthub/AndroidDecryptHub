@@ -1,19 +1,38 @@
 // Host-only help, served through MCP so remote clients need no repository access.
 // Templates are instructions, never executed here; all $variables need live evidence.
-export const ANALYSIS_GUIDE_TOPICS = ['start', 'writer', 'crypto', 'trace', 'stuck'] as const;
+export const ANALYSIS_GUIDE_TOPICS = ['start', 'callgraph', 'writer', 'crypto', 'trace', 'stuck'] as const;
 export type AnalysisGuideTopic = typeof ANALYSIS_GUIDE_TOPICS[number];
 
 export const MCP_INSTRUCTIONS = 'ADH is an Android runtime analysis workbench. Start with analysis_guide(topic="start"), ' +
   'then process_list and capabilities for one explicit session; sessions change after reconnect. ' +
   'When context is missing, call analysis_guide(action="assess",topic="stuck",session=theSelectedId,hookId=theActualIdIfKnown). ' +
   'Assessment reads current Host evidence and at most one bounded native-hook status query, then returns facts, missing evidence, one proposed next call and a resumable identifier checkpoint; it installs nothing. ' +
+  'Use analysis_guide(topic="callgraph") FIRST when you do not yet know which functions matter: it turns the kernel callchain that root_watch already records into a runtime call graph, so you stop guessing addresses. ' +
   'Use analysis_guide(topic="writer") to find who writes a known buffer via root_watch; ' +
   'topic="crypto" for paired input/output evidence, "trace" for bounded instruction records, and "stuck" for failures. ' +
   'Guides return ordered tool-call templates, prerequisites, checks and failure branches, without executing target operations. ' +
   'Replace $variables from live results, never guess an address, TID, key or invocation pairing. ' +
+  'native_look read returns the newest hit and retained.total; pass seq, or beforeSeq plus limit, for earlier hits of that same hook. ' +
   'An online socket does not prove responsiveness; use runtime_diagnostics when commands hang. ' +
   'Check capture loss and completeness before making claims. In-hook QBDI is replay with side effects and incomplete context; ' +
-  'active-call traces cover the instrumented module, not the original whole execution. A primitive match does not prove a final signature.';
+  'active-call traces cover the instrumented module, not the original whole execution. A primitive match does not prove a final signature. ' +
+  // The device is reachable outside the MCP tool list. Saying so prevents the most common
+  // misattribution: a privacy dialog or login screen misread as an anti-debug defense.
+  '\n\nDEVICE ACCESS: adb is the supported operator/AI channel to the connected phone and is not limited to the tools above. ' +
+  'When adb is available on the Host (ANDROID_SERIAL / ADH_SERIAL selects the device), use it directly for: logcat; ' +
+  'the foreground activity (dumpsys activity activities); launching or force-stopping the package (am start / am force-stop / monkey); ' +
+  'the UI hierarchy (uiautomator dump) and screenshots (screencap); and taps, swipes and text input (input tap / swipe / text / keyevent). ' +
+  'Use these to confirm what the app is actually showing instead of inferring it. ' +
+  '\n\nATTRIBUTION: a screen that does not progress is not by itself evidence of anti-debugging, hardening or injection detection. ' +
+  'Check in order: (1) is the app just showing a normal gate - privacy consent, permission prompt, login, SMS/captcha, onboarding? ' +
+  'Read the UI hierarchy or a screenshot to find out. (2) did the command reach the device and return (adb exit status and stderr)? ' +
+  '(3) is the process alive with unchanged identity (runtime_diagnostics)? ' +
+  'Claim detection only with matching evidence: a hit detection point, abnormal TracerPid/seccomp/frozen state, or a concrete crash stack or error code. ' +
+  'Otherwise report the state as unknown and name the observation that would distinguish the cases. ' +
+  'When a gate needs the user (account, SMS code, manual consent), say what is missing and stop; ' +
+  'do not change hooks, restart the process or repeat the same tap. ' +
+  'Derive tap coordinates from the UI hierarchy or screenshot you just read, never from screen size, and re-read the state after each interaction.' +
+  '\n\nP1 CONTROL: use operations(snapshot) and _operation expectedRevision/controlEpoch/hostEpoch for writes. AI cannot overwrite operator-held control. Use operations submit/get for durable tasks; cancellation requests and timeouts do not prove the target stopped.';
 
 interface Step {
   goal: string;
@@ -22,10 +41,19 @@ interface Step {
   check: string;
   onFailure?: string;
 }
+// adb is the operator/AI channel rather than an MCP tool, so device observations carry an
+// explicit command instead of a tool call and are never validated as templates.
+interface DeviceCheck {
+  goal: string;
+  command: string;
+  check: string;
+  onFailure?: string;
+}
 interface Guide {
   title: string;
   prerequisites: string[];
   variables: Record<string, string>;
+  deviceChecks?: DeviceCheck[];
   steps: Step[];
   limits: string[];
 }
@@ -40,7 +68,30 @@ const guides: Record<AnalysisGuideTopic, Guide> = {
       { goal: 'Read capabilities of that running build.', tool: 'capabilities', arguments: { session: '$session' }, check: 'Inspect caps.ops and limits. Different processes may run different agent builds.' },
       { goal: 'Assess actual retained evidence without reconstructing the full conversation.', tool: 'analysis_guide', arguments: { action: 'assess', topic: 'start', session: '$session' }, check: 'Read stage/facts/missingEvidence/doNotConclude and the proposed next call. Then choose writer, crypto, trace or stuck for the intended task.' },
     ],
-    limits: ['Guidance is not an automatic algorithm solver.', 'No session: diagnose connection/injection setup; do not fabricate a session.', 'Purpose-built recipes are listed by recipe(action="list"); inspect their effects and prerequisites before running one.'],
+    limits: ['Guidance is not an automatic algorithm solver.', 'No session: diagnose connection/injection setup; do not fabricate a session.', 'Purpose-built recipes are listed by recipe(action="list"); inspect their effects and prerequisites before running one.', 'A native hook keeps earlier hits. native_look read reports retained.total for the newest; pass seq or beforeSeq+limit to read an older one instead of re-running the call.', 'argIndex/argValue on native_hook rewrites that argument. filter is one equality on x0-x8 (x2=16). Memory windows dereference with @x0:16 and a second hop @#1+8:16; registers only x0-x8.', 'A callable Java facade is recorded with oracle action record, then compared with action diff. Do not hand-write a replay script for that.', 'When you do not yet know which functions matter, read topic=callgraph before probing addresses: root_watch already records the runtime caller chain.', 'Two skills ship with the docs and cover the failure modes that cost the most time: docs/SKILL-callgraph-first.md (get the call graph before guessing breakpoints) and docs/SKILL-evidence-hygiene.md (per-byte sensitivity scans, dynamic normalisation parameters, proving that static code actually executes).'],
+  },
+  callgraph: {
+    title: 'Map what actually runs before guessing addresses',
+    prerequisites: ['A rooted supported device and an online session with a known hot instruction or entry point.', 'Do this BEFORE probing candidate functions: root_watch already records the kernel callchain on every event, so the runtime call graph is free evidence you would otherwise guess.'],
+    variables: {
+      session: 'Selected online sessionId.',
+      tid: 'Thread that actually executes the work, from android.os.Process.myTid via java_call when the target is Java-driven; a native_call worker TID is not a persistent executor.',
+      entry: 'Verified hot address, e.g. a dispatch branch, a function entry, or an address returned by native_backtrace. Never a guessed address.',
+      runId: 'id returned by root_watch start (not sessionId, not hookId).',
+      pc: 'A caller frame address taken from a previous chain, used as the next anchor.',
+    },
+    steps: [
+      { goal: 'Arm an execution breakpoint on the anchor with no extra work.', tool: 'root_watch', arguments: { action: 'start', session: '$session', tid: '$tid', addr: '$entry', width: 4, mode: 'x', durationMs: 5000, maxEvents: 128, stackBytes: 0 }, check: 'Keep id. Trigger the intended operation after start succeeds.', onFailure: 'Zero events means the anchor never executed on that thread: the address is wrong or the work runs elsewhere. Do not conclude "no code here" from a zero count alone.' },
+      { goal: 'Read events and symbolise the chain field.', tool: 'root_watch', arguments: { action: 'read', id: '$runId', afterSeq: 0, limit: 8, registers: true }, check: 'Every event carries chain[]: the kernel-recorded caller chain, already the runtime call graph. Map each address into its module range to get module+offset. A chain of length 1 means the kernel could not unwind further, not that the caller is the root.' },
+      { goal: 'Confirm the frame order is stable before trusting it.', tool: 'root_watch', arguments: { action: 'read', id: '$runId', afterSeq: 8, limit: 32, registers: true }, check: 'The same operation should produce the same chain every time. A chain that changes between identical triggers means you are sampling different work, not one call path.' },
+      { goal: 'Pick the next anchor from the chain, not from a static guess.', tool: 'root_watch', arguments: { action: 'start', session: '$session', tid: '$tid', addr: '$pc', width: 4, mode: 'x', durationMs: 5000, maxEvents: 64, stackBytes: 0 }, check: 'Walk outward frame by frame: entry, then its caller, then the caller caller. Stop when the frame belongs to another module or to the runtime.' },
+    ],
+    limits: [
+      'chain is kernel-collected. It survives stack-pointer obfuscation that breaks frame-pointer walking, so prefer chain over native_backtrace when the target mutates sp.',
+      'A single-frame chain is real evidence of a missing unwind entry, not proof of a direct call.',
+      'root_watch watches ONE existing TID. Work on another thread needs its own run.',
+      'Anchors must come from observed evidence. A static disassembly address that never fires is not a call graph edge.',
+    ],
   },
   writer: {
     title: 'Find the real writer of a known buffer',
@@ -65,10 +116,19 @@ const guides: Record<AnalysisGuideTopic, Guide> = {
   crypto: {
     title: 'Verify paired bytes without promoting an intermediate match to the final algorithm',
     prerequisites: ['Complete input/output bytes, an explicit pairing basis, and actual key/mask bytes for candidates that need them.'],
-    variables: { captureId: 'Exact capture id returned by live_captures; identify the particular mem window with reg/offset rather than nearest timestamp.' },
+    variables: {
+      captureId: 'Exact capture id returned by live_captures; identify the particular mem window with reg/offset rather than nearest timestamp.',
+      session: 'Selected online sessionId.',
+      className: 'Java class of a facade that is already callable.',
+      method: 'Method name on that class.',
+      params: 'Comma-separated Java parameter types; empty means no-arg.',
+      oracleArgs: 'JSON array of one real call\'s arguments, using {"$bytesHex":"..."} for a byte[].',
+    },
     steps: [
       { goal: 'Inspect supported candidates.', tool: 'crypto_evidence', arguments: { action: 'algorithms' }, check: 'Use known candidates and observed parameters; the tool does not derive an unknown key or mask.' },
       { goal: 'Inspect one exact record before choosing its fields.', tool: 'capture_detail', arguments: { id: '$captureId' }, check: 'Check session/PID/TID, hookId/seq/callId, original length, phase, requested/got and truncation. Same TID/time alone does not prove pairing.' },
+      { goal: 'Capture JCA input and output with the built-in hooks.', tool: 'java_hook', arguments: { action: 'crypto', session: '$session' }, check: 'Arms Cipher, Mac, MessageDigest and Signature only. Nothing is installed at inject. Read the resulting captures before writing your own hook.', onFailure: 'no JavaVM: report that this session has no Java capture, and do not keep reinstalling the hook.' },
+      { goal: 'Record one real facade call so a later diff can name the input that moves the output.', tool: 'oracle', arguments: { action: 'record', session: '$session', className: '$className', method: '$method', params: '$params', args: '$oracleArgs', extract: 'result' }, check: 'Keep the returned id. action diff with variants is the comparison. Do not hand-write a replay script that rebuilds this.', onFailure: 'No such method: the facade is not known yet. Find it before recording; do not invent arguments.' },
       { goal: 'Learn the complete observation shape with a public format-only vector.', tool: 'crypto_evidence', arguments: {
         action: 'analyze', observations: [{ id: 'public-format-example', role: 'intermediate', algorithms: ['md5'],
           pairing: { basis: 'analyst', note: 'Public abc MD5 vector demonstrates input format only; this is not target evidence.' },
@@ -77,7 +137,7 @@ const guides: Record<AnalysisGuideTopic, Guide> = {
         }],
       }, check: 'This example should match once. For real data replace the entire observation with actual sources; a selector can be {captureId,field:"mem",reg:"x0",offset:0}. Whole-capture selectors also support payload/key/output. Use key or params:{add,xor} when required.' },
     ],
-    limits: ['Select exactly one hex/b64/utf8 encoding per explicit field; preserve raw JSON/request bytes.', 'Missing/truncated/mispaired bytes are unavailable, not a mismatch. Never relabel a prefix complete or override known capture loss.', 'Inspect analysisComplete and captureCollectionComplete separately. Matching one intermediate stage does not prove the final field, initialization, causality or cross-device derivation.', 'Use action save/read/list/drop for the private ledger. Ordinary read is bounded; includePayload=true explicitly expands raw material.'],
+    limits: ['Select exactly one hex/b64/utf8 encoding per explicit field; preserve raw JSON/request bytes.', 'Missing/truncated/mispaired bytes are unavailable, not a mismatch. Never relabel a prefix complete or override known capture loss.', 'Inspect analysisComplete and captureCollectionComplete separately. Matching one intermediate stage does not prove the final field, initialization, causality or cross-device derivation.', 'Use action save/read/list/drop for the private ledger. Ordinary read is bounded; includePayload=true explicitly expands raw material.', 'When the facade is already callable, oracle action record then action diff answers which input moved the output. Do not hand-write that differential.'],
   },
   trace: {
     title: 'Record and query a bounded active-call instruction trace',
@@ -93,15 +153,28 @@ const guides: Record<AnalysisGuideTopic, Guide> = {
   },
   stuck: {
     title: 'Diagnose missing events and unresponsive commands',
-    prerequisites: ['Retain the explicit session and actual error text; do not guess that every timeout is anti-debugging.'],
-    variables: { session: 'Known sessionId, including an offline one for runtime_diagnostics.', hookId: 'id of the hook you actually armed.' },
+    prerequisites: ['Retain the explicit session and actual error text; do not guess that every timeout is anti-debugging.',
+      'Rule out the ordinary explanations first: a normal user-interaction gate (privacy consent, permission, login, SMS code, onboarding), a command that never reached the device, and a target that is simply idle. A stalled screen is a state, not a diagnosis.'],
+    variables: { session: 'Known sessionId, including an offline one for runtime_diagnostics.', hookId: 'id of the hook you actually armed.', pkg: 'Package name of the target, for foreground-activity and UI checks.' },
+    // adb is the operator/AI channel, not an MCP tool, so it cannot appear as a template step.
+    // These are ordered observations to run on the Host before attributing anything to defense.
+    deviceChecks: [
+      { goal: 'Name the resumed activity before blaming the app.', command: 'adb shell dumpsys activity activities', check: 'Compare the resumed activity (mResumedActivity / topResumedActivity) with the screen you expected. A splash, consent, login or permission activity explains the stall with no defensive mechanism involved.' },
+      { goal: 'Read the actual UI instead of inferring it.', command: 'adb shell uiautomator dump /sdcard/adh-ui.xml && adb pull /sdcard/adh-ui.xml', check: 'Name the visible control and its bounds. A button such as "同意并继续" or a login form is an ordinary user gate. Derive tap coordinates from this dump or from a screenshot, never from screen size.', onFailure: 'An empty or refused dump can also mean the window is not drawn yet; wait briefly and retry before concluding anything about detection.' },
+      { goal: 'Capture what the screen really shows.', command: 'adb exec-out screencap -p > screen.png', check: 'Use the image to confirm the gate. Do not describe a screen you have not read.' },
+      { goal: 'Confirm the command reached the device at all.', command: 'adb shell echo "$?" and adb devices -l', check: 'A local failure, missing adb, or an offline device is an environment problem, not target behavior.' },
+    ],
     steps: [
       { goal: 'Interpret current counters and retained records first.', tool: 'analysis_guide', arguments: { action: 'assess', topic: 'stuck', session: '$session', hookId: '$hookId' }, check: 'Read facts and missingEvidence. Assessment performs at most one bounded read-only native hook status query; it does not install, drain or trigger anything. A proposed next call is not an executed call.' },
       { goal: 'Inspect process facts independently of the agent channel.', tool: 'runtime_diagnostics', arguments: { session: '$session', limit: 32 }, check: 'Distinguish frozen, traced, process-exited, identity-mismatch, running and unknown. Check errors and completeness of thread paging.' },
-      { goal: 'Read stored hook evidence and observation counts.', tool: 'native_look', arguments: { action: 'read', session: '$session', hookId: '$hookId' }, check: 'Distinguish hits=0 from filtered/sampledOut/throttled/limited, stored record loss, drainError and observationError.', onFailure: 'Unknown hook/session: re-list sessions and actual hook status. Do not invent a replacement hookId.' },
+      { goal: 'Read stored hook evidence and observation counts.', tool: 'native_look', arguments: { action: 'read', session: '$session', hookId: '$hookId' }, check: 'Distinguish hits=0 from filtered/sampledOut/throttled/limited, stored record loss, drainError and observationError. retained.total counts numbered hits still stored; pass seq or beforeSeq+limit for an earlier one instead of re-running the call.', onFailure: 'Unknown hook/session: re-list sessions and actual hook status. Do not invent a replacement hookId.' },
       { goal: 'Inspect current physical hook budget when the agent responds.', tool: 'native_hook', arguments: { action: 'status', session: '$session' }, check: 'Non-default new observation controls require observationControlsVersion>=1. Retired slots are not reclaimed by unhook; exhausted 16-slot budget requires a new target process, never an automatic restart.' },
     ],
-    limits: ['No hardware events can also mean wrong address/TID, no trigger, a frozen thread, or an unsupported kernel; absence alone proves none of these.', 'Missing facts stay unknown; report the failed prerequisite instead of silently dropping filters or substituting replay.', 'Read diagnostics first; target restarts and other changes require an authorized workflow.'],
+    limits: ['No hardware events can also mean wrong address/TID, no trigger, a frozen thread, or an unsupported kernel; absence alone proves none of these.',
+      'A non-progressing screen, a failed local command and a blocked request each have ordinary causes. Claim anti-debugging, hardening or injection detection only with matching evidence (hit detection point, abnormal TracerPid/seccomp/frozen state, concrete crash stack or error code); otherwise keep the state unknown and name the next distinguishing observation.',
+      'When the gate needs the user (account, SMS code, manual consent), state exactly what is missing and stop. Do not change hooks, restart the process or repeat the same tap to work around it.',
+      'Missing facts stay unknown; report the failed prerequisite instead of silently dropping filters or substituting replay.',
+      'Read diagnostics first; target restarts and other changes require an authorized workflow.'],
   },
 };
 

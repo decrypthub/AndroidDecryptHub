@@ -1,5 +1,15 @@
 # ADH (Android DecryptHub) — 功能需求说明
 
+> **2026-11-16 P4 传输/授权契约**：手机经显式配置才能监听 LAN TLS；首次 Host 配对经可信 USB，TLS 固定安装公钥，客户端挑战证明绑定设备/代际/流/grant。每次派发检查持久权限，撤销关闭既有流且重启不恢复。设备域已迁能力 USB/LAN 共用同一实现，未迁能力和旧路由选择明确拒绝。断线对账只读取实际结果并保存证据，保留 unknown、人工控制和无重放原则。范围与验收见 [P4_LAN_AUTH.md](P4_LAN_AUTH.md)，无当前服务或真机升级。
+
+> **2026-11-16 P3 设备契约**：稳定安装 UUID/密钥与 boot/daemon 代际，设备发现、信息/能力、作用域/进程/证书/Host 地址由同一设备域服务提供，Binder 与 USB RPC 共用持久 revision。所有远程写经过 Host 设备资源控制及设备 CAS，派发后未知不重试。新协议与现有 agent session 显式区分，未验证的归属不猜测；局域网 TLS、配对和旧 ADB 能力迁移留待后续。范围和验证边界见 [P3_DEVICE_DOMAIN.md](P3_DEVICE_DOMAIN.md)。本轮不部署、不改变当前分析现场。
+
+> **2026-11-16 P2 人类工作台**：任务搜索/分页、详情/结果/副作用、人类暂停恢复、接管/交还、unknown 核对和配置编辑已接入同一执行层。草稿保留原版本，冲突并列核对，显式 rebase 只保留本来修改的字段，不自动提交；任务状态修改使用 task revision。默认观察不改变 AI 工作。范围、兼容性与验证见 [P2_WORKBENCH.md](P2_WORKBENCH.md)。本轮在独立 worktree 实现，当前服务不升级，原静态目录保留 P1 提交内容。
+
+> **2026-11-16 P1 操作契约**：MCP、REST、公共/开发 CLI 和人类面板通过同一 Host 执行层；写入必须携带 revision/controlEpoch/hostEpoch，人类接管与修改阻止旧 AI 操作继续写。任务持久保存，不自动重放；取消区分 requested 与确认，派发后超时/断连保留 unknown 和晚到证据。operator 凭据控制接管，不以请求 JSON 的自报角色授权。实现、迁移与边界见 [P1_OPERATIONS.md](P1_OPERATIONS.md)。人类面板可修改/接管的用户决议取代下文历史只读冻结口径；不将 Host 门禁视为真机或新传输验收。
+
+> **2026-11-16 P0 可靠性口径**：作用域包名单更新必须保留完整 Hook policy/未知字段；MCP 与面板设置共用原子保存和逐目标应用结果；模块导入与历史恢复不删除或裁剪磁盘证据。保留策略通过显式维护预览/确认执行，旧文中启动/追加时自动磁盘清理的描述由此更正；内存容量限制保持。实现与升级路径见 [P0 Host 状态说明](P0_HOST_STATE.md)。本轮 Host 验证不等于当前服务已部署或真机验收。
+
 > **产品定位**：**通用 Android 运行时逆向分析工具** — 不是 demo，也不是「手机版 jadx」。
 > 适用于任意 App 的运行时观测/dump/hook/trace，并**对高对抗目标（反调试、root/签名检测、代码混淆、加密传输）具备实战能力**。
 > **参考项目**：[taisuii/ios-decrypt-helper](https://github.com/taisuii/ios-decrypt-helper)（IOSDecryptHub）

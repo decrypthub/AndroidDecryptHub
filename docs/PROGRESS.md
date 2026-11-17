@@ -1,5 +1,18 @@
 # PROGRESS — 跨会话进度看板
 
+2026-11-17 正式Zygisk扩展：最新Agent在真实companion/post-specialize链中完成七族capture_start
+单族启用命中、其他族禁用不布防和全部禁用，以及真实Wi-Fi LAN grant撤销后的旧缓存拒绝；
+原六项失效/GOT窗口正例也重跑，总15/15，清理/原六文件/reverse/原Host状态保护通过。
+Host561/561（0 skip）。失败首轮保留并修复测试App主线程网络及清理判定问题；
+详见[P5_ZYGISK_EXTENDED_ACCEPTANCE.md](P5_ZYGISK_EXTENDED_ACCEPTANCE.md)。发布/默认部署尚未执行。
+
+2026-11-17 收尾补丁：在独立 `feat/adh-completion-20261117` 补上 GOT 卸载的原子所有权检查，
+避免覆盖 runtime/人类/其他工具的新指针；状态区分历史命中和当前槽所有权。
+原生生产恢复函数真机隔离夹具8/8、清理通过；未重跑正式 Zygisk 全链，未发布或部署。
+详情：[NATIVE_GOT_CLOSEOUT.md](NATIVE_GOT_CLOSEOUT.md)。
+
+此前阶段收尾入口：[AI_FIRST_CLOSEOUT.md](AI_FIRST_CLOSEOUT.md)。P0–P5 实现与约定隔离验收已提交，正式链验收代码基准 e58f2ba；50b4cda 核对测试运行残留并补齐交付索引。分支集成/发布、默认部署、正式 capture_start 各族/LAN 撤销组合及已知 GOT 覆盖成因等仍按索引保留，未标成已完成。
+
 > 这是"我们现在在哪"的唯一真相。每个会话开始先读它，结束前更新它。
 > 详细规格见 `REQUIREMENTS.md`，路线与架构见 `DEVELOPMENT_PLAN.md`。
 
@@ -4857,8 +4870,190 @@ RESULT:SKIP module APK stale and not rebuildable
 - [~] v2.6 WS-I 确定性关联（**未做**：当前是 `flow.ts` 的 tid+时间窗关联，带 caveat 自述）；WS-J 反检测动态面（首切片已落地；**TRACEME 中和在 2026-10-01 失去唯一控制面**，恢复需显式 opt-in）
 - [~] 贯穿 WS-K 架构拆分（进行中）；**多架构不做**（2026-10-01 决议）
 
+- [x] **QBDI 载荷投递（v0.7.0，2026-11-12，真实第三方 App 验收）**：
+      · 问题：模块从不携带 `libQBDI.so`，真实目标里 agent 的 `dlopen("libQBDI.so")` 必然失败；沙盒 APK 自带该库，所以沙盒验收一直 PASS —— 那是自欺，不是产品可用。
+      · 修复：模块 stage 增加 `libQBDI.so`；companion 新增 `qbdi` 应答（`/data/adb/adh/qbdi.enabled` 存在=开启），在 pre-specialize 打开库 fd 并在 post-specialize 交给 agent（新导出 `adh_agent_set_qbdi_fd`）；agent 首次 trace 时把该 fd 复制进 specialization 之后创建的 memfd 再 `dlopen`，standalone trace 结束照旧 `dlclose`。
+      · 默认面不变：flag 缺失时不开 fd、不加载、不映射；开启时进程 `/proc/<pid>/fd` 可见 `/data/adb/modules/adh/libQBDI.so`（显式 opt-in 的既定成本，未落盘、无 app 私有目录文件）。
+      · 真机验收 `verify_v129_qbdi_delivery.sh`（真实第三方 App com.uxin.kilaaudio）：关 → `delivery is off` 且无 fd；开 → fd 交付、`qbdi_trace libc:getpid` 返回目标 pid（8 条真实指令）、trace 后 maps 无 QBDI。
+      · 版本配对：module / Manager / Device Daemon / agent `AGENT_VER` 同步 v0.7.0（29 / 29 / 16 / 0.7.0）；`build_zygisk.sh` 增加 AGENT_VER↔module.prop 一致性门禁；`fetch_qbdi.sh` 不再默认把库 stage 进沙盒 APK（`ADH_STAGE_SANDBOX_QBDI=1` 才保留旧行为）。
+
+- [x] **v0.8.0：作用域可编程 + 一把抓分析任意 App（2026-11-12，真实 App 实测）**：
+      · 新 MCP 工具 / REST：`scope_list` / `scope_set` / `analyze_app`（`GET|POST /api/scope`、`POST /api/analyze-app`）。scope 写盘走 adb+su，写完回读校验，SELinux label 显式设成 `adb_data_file`（写错 label 会 fail-closed：不注入且没有可见错误）。
+      · `analyze_app`：只给包名 → 按需加入 scope（回复里报 `scopeAdded`）→ 冷启 → 等 Zygisk agent → `triage` → 可选 `unpack` / TLS 抓包窗口；每阶段独立 ok/error。
+      · 真机实测（aa165071 / agent 0.8.0）：`com.mcdonalds.gma.cn` 51s 完成 triage（38 ops / 4159 regions）；`com.greenpoint.android.mc10086.activity` 37s，13 组 HTTP exchange、163 条 crypto 记录（摘要 82 / 对称加解密 81）。
+      · 沙盒 APK 不再自带 `libQBDI.so`（重装后 `lib/arm64` 只剩 agent + fixtures），QBDI 只走模块投递。
+      · 门禁：v88 由红转绿（错误文案去掉 `Dobby` 字面量，token 3→2）；v02 在沙盒未运行时改为 SKIP 而不是 FAIL；新增 `verify_v130_scope_analyze.sh`（host，8/8）并注册；daemon typecheck 0、`npm test` 439 pass；`docs/mcp-tools.md` 由活 daemon 重生成（90 tools）。
+
+- [x] **v0.8.1 可用性补丁（2026-11-12，针对 DH_Project 实战痛点的第一批修复）**：
+      · `maps_query`：maps 过滤（path/perm/exec/anon/size/limit）+ 地址解析（所属段 + 模块内文件偏移），回包带 `total/matched/returned/truncated`；真机 2737 段里 `libc.so` 命中 6 段，`0x704cca7010` 解析为 `libc.so` 区间 + `fileOffset=0x10`。
+      · `oracle action:stability`：同一参数重复 replay（默认 3，夹紧 8），回答 stable/distinct/firstDiff/extract；真机 `java.lang.System.currentTimeMillis` 三次重放 → `stable=false, distinct=3`（时间依赖一眼可见，不用手写两遍比对）。
+      · 错误码：抛异常与“返回 `{ok:false}`”两种失败形态统一补 `code`（BAD_ARG/NO_SESSION/SESSION_OFFLINE/AGENT_TIMEOUT/UNSUPPORTED_OP/TARGET_CRASHED/CAPTURE_LOSS/HELPER_MISSING/DEVICE_UNAVAILABLE/UNKNOWN）；实测 `memory_write` 地址不带 0x、`native_hook` 缺 mode 均返回 `code:BAD_ARG`。
+      · `pickSid` / `sessionForPackage` 改为主进程优先（旧实现 `.pop()` 可能落到渲染子进程且无提示，A10）。
+      · 门禁：`npm run typecheck` 0；`npm test` **453 pass / 0 fail**（新增 14 条：错误分类、maps 过滤/解析、oracle stability、会话选择）；`verify_v71` 91 tools / 0 problems；`verify_v130` 8/8；`docs/mcp-tools.md` 由活 daemon 重生成（91 tools）。
+
 ---
 
 ## 历史归档
 
 v0.2–v1.0 的阶段状态与逐轮日志已移至 [`archive/PROGRESS_V0.2_V1.0.md`](archive/PROGRESS_V0.2_V1.0.md)。归档仅供追溯，不是当前计划或待办来源。
+
+
+- [x] **root_watch ??? + ????????2026-11-13?P0 ?????**?
+      ? ????????/VM ???????????????????????????? VM ?????? `[state+0x28]`?`[cursor]`?????????????????????????????????????????
+      ? ??? `tools/native/root_watch.c`?????? TID ??? 4 ?????? addr + `bp=ADDR:WIDTH:MODE` ?? 3 ??????? `bp` ????? 4 ????? `mem=[@]REG[+/-OFFSET][:LEN]`?x0..x30 / sp / lr / pc??? 16 ????? 256??collector ? `process_vm_readv`??? `/proc/pid/mem`??????????? `mem:[{spec,addr,hex|error}]`?????? `unreadable/null-pointer`?????
+      ? Host `daemon/src/root_watch.ts`?`breakpoints`??3?????/??/???? `mem`??4???????????? collector?????????MCP schema ???
+      ? ?????????????? `base+0x1925c` + ?? `base+0x192fc` ??? + `mem=x13:16` / `@x12+0x40:8`??? `IL([38,...])` ?? 64 ???????????`bp=[0,1]`?`x13` ?????????? `cc58ae0c?`?Host ??? `startRootWatch/readRootWatch` ??????? 32 ???2 ????????
+      ? ???`daemon npm run typecheck` 0?`node --test test/root_watch.test.ts` 3/3??? `tools/verify_v131_root_watch_mem.sh`?fixture App ???? SKIP??? unit ?? 3/3??
+      ? ???????????????? ROM?`@deref` ?????????????????????? ptrace??? perf + root ????
+
+- [ ] **P2 ???????????????trace_on_signal?2026-11-13?**
+      ? ??????????? patch ???????????????????????????????? + ???????????? VM handler ??????????
+      ? ???agent ??????? SIGUSR2 handler?host ????????? `java_call IL(...)`??? `tgkill(pid, tid, SIGUSR2)`?handler ?????????? ucontext ? PC/SP/?????? QBDI?`setGPRState` + `run(pc, pc+limit)`???????????/?/??/??/????? N ???? 20000??? 200000???? ucontext ???
+      ? ?????
+        - ?? handler ???????????????????? PC/?????????????QBDI ??????????????????????????
+        - ????????/??handler ??????????????QBDI VM ??????? thread_local ???
+        - ???????? VM ?????? PC ??????/???host ????????????????
+        - ? root_watch ???root_watch ???????????/????trace_on_signal ?????? N ???
+      ? ???sandbox ?????????`adh_add_target` ? Detection ? Java ????????????????pc ???????????????????????????????????????trace ??????
+      ? ???QBDI ????/????????stopReason=ran-away?????????????????????????????????????????
+
+      ? **??????2026-11-13?**?agent ???????????`agent/src/runtime/mem_read.c` ?? `sigaction`+`SA_SIGINFO` handler?SIGSEGV/SIGBUS??? fault ????`agent/src/trace/qbdi_trace.c` + `commands.c` ?? QBDI ???/??/??????????P2 ??????`SIGUSR2` handler?`SA_SIGINFO`?? `ucontext_t`???????? QBDI VM?`setGPRState` ? ucontext ? pc/sp ????????? ??? agent ???? `trace_hit`?? tid/limit/timebudget??host ? MCP ????????? ?docs/mcp-tools.md ?????????agent ?? 400?600 ? C?host ?? 150?250 ? TS??? sandbox ???
+
+## 2026-11-16：root_watch 内存窗口的事件时序修正
+
+在用户授权的真实目标分析中，同一次返回值的 55 次字符写入全部出现异步 `mem` 与内核栈字节不符；内核栈字节可逐字节重建返回值。根因已核对：perf 同步保存寄存器与用户栈，collector 收到记录后才调用 `process_vm_readv`/`pread`，目标早已继续执行。此前将这些进程内存读取描述为命中瞬间快照不准确。
+
+Host 现在优先从同条 perf 内核栈记录解析内存窗口，且每次指针解引用也必须完全位于该快照；成功时标 `source=kernel-stack-sample`、`snapshotConsistent:true`。其他窗口保留为异步读取并明确标 `snapshotConsistent:false`；原始记录不覆盖。原生 collector 同样标注异步读取来源。MCP 描述改为准确时序，并声明分页上限 32。目标特有数据与运行时地址保留在仓外，本节不复制。验证结果在本轮完成后追加。
+
+本轮验证：Host 类型检查通过；完整单测 **464 passed / 0 failed / 0 skipped**；MCP 注册表门禁通过（91 工具 / 0 问题）；root collector 构建与专用 root 机硬件自测通过（2 样本、无丢失/限流）；仓外真实采样重放 **55/55 个窗口修正后与原始返回值一致**。运行中的 Host 保留现有会话，分析侧直接使用修复后的投影函数处理原始采样，未为热更新而重启 Host。
+
+同时修复 v71 注册表门禁的隔离：导入 MCP 会触发 state 的历史捕获保留策略，原版门禁本轮曾报告按 14 天策略裁掉 1000 条旧捕获。现于子进程导入前启用测试存储并清除继承的 ADH_DATA_DIR；带有过期捕获的操作者目录哨兵已验证逐字节保留。历史 events.jsonl 仍在，但事件中缺少完整原始捕获字段，不能声称已恢复被裁记录；未以不完整元数据伪造捕获。
+
+## 2026-11-16：用户授权目标的独立算法验收
+
+已在当前得物 6.3.0（1162）定位实际 native 入口，完成当前构建的纯 Python 计算路径：加盐 MD5、标准 SM4、显式 nonce 与 nibble 封装。76 条完整原生样本在两个进程逐字节一致，其中 10 条 nonce 来自编码前的内核栈，未由输出反推；覆盖 UTF-8、边界长度和 Android ID 后缀变化，另验空输入行为与标准 SM4 向量。交付实现、合成测试输入和说明保存在用户指定仓外分析工作区，未将目标密钥、转储或请求数据放入本仓。结论限定当前构建与已验证检测位，不承诺其他版本或服务端验证。
+
+多槽采样分析还核到另一项语义：原生 collector 逐 perf fd 排空 ring 后分配 seq，跨槽 seq 不是执行顺序。已在 MCP 描述与说明中要求完整分页后按 timeNs 排序；没有更改分页游标含义。
+
+### 同日保留策略审计与恢复
+
+首次默认服务启动期间，历史工件加载数从 41 降到 27，最近缺失的 14 份 DEX 共 166.81 MiB，与过期回收条件对应。已用仓外已有副本恢复全部 14 份；其中 2 份补齐原始零填充后得到完全相同的 SHA-256。逐份重新验证完整 SHA-256、长度和原事件来源元数据，14/14 通过。没有把目标转储纳入版本控制。
+
+v71 另触发的 1000 条历史捕获尚未完整恢复：现存事件日志缺原始捕获字段，未用元数据伪造原记录；本机无可用卷影副本。隔离修复的操作者目录哨兵验证通过。算法交付包已在独立目录、Python 隔离模式下通过 76 条原生 fixture、标准 SM4 向量、空输入和 CLI 验收。
+
+
+## 2026-11-16：AI 优先、人工可接管与 USB/LAN 统一的代码审计
+
+用户要求先梳理 ADH 现有代码，交付能力对照、状态/副作用清单、具体模块和实施顺序，不影响当前分析现场。本轮只读源码/AST，不调用 ADH 或 ADB、不请求运行服务、不重启/部署/改 reverse，不读取目标捕获与转储内容。
+
+新增 `docs/AI_FIRST_REFACTOR_AUDIT.md` 与 `docs/AI_FIRST_CAPABILITY_INVENTORY.json`；开发计划链接此审计附录。静态完整清点 91 MCP 工具、106 路由表项（含资源/首页/前缀）、38 宣告 agent op、15 AIDL 方法、7 公共 CLI 子命令；20 组覆盖所有 MCP 项。计数不代表当前运行服务支持或真机验收通过。
+
+确认两处优先一致性问题：Host `writeScopePackages` 只保留 version/mode/packages，会覆盖 Device 保存的非默认 policy；MCP settings merge/save 与 REST 的即时 applyCaptureEnabled/retain 行为不同。另记录状态 import/启动回收、hello 自动布防、超时/取消语义、缺少 deviceId 与全局 serial、只读 UI 文档与实际写入口、部分副作用 GET、双 CLI 和桌面 status v1 消费边界。均未在本轮修改运行实现。
+
+拟议 P0–P5：数据/配置保护 → Host 共享操作与持久任务 → 人工修改/接管最小闭环 → 设备域服务和 USB RPC → TLS LAN 与完整 ADB 能力迁移 → Hook 方案/启动缓存和公共入口收敛。AI 规划仍由外部 Harness 决定，recipe 可选；人类修改靠 revision/控制 epoch 阻止旧操作覆盖，取消不伪造停止，旧运行会话保留旧后端。
+
+验证：静态清单/来源哈希/链接/分组与 F01/F02 结构证据 **9 passed / 0 failed**；`npm run typecheck` rc=0；`npm test` **464 passed / 0 failed / 0 skipped**（子进程设置 ADH_SKIP_ARTIFACT_LOAD=1、移除继承 ADH_DATA_DIR，使用既有每测试进程临时根）；`git diff --check` 通过。没有运行设备门禁或启动服务；没有改变作用域契约、默认端口、stdio onboarding、桌面 status schema 或已部署服务。
+
+
+## 2026-11-16：P0 作用域策略保留、共享设置与初始化/清理分离
+
+用户要求从 P0 实现三项修复，用隔离环境验证并提交，不重启服务、不影响分析现场。实现集中于 Host，没有更改 agent、设备 APK/协议、默认端口、stdio 配置或目标 App。
+
+- scope_list 的生产 writer 先读完整文档，仅改 packages，保留 false family policy 和未知字段；root 临时文件设标签后 rename，完整 JSON 回读拒绝策略丢失。增加 ScopeIO 合成测试，不调用 ADB。跨 Host/手机并发 CAS 仍待后续。
+- settings_service 统一 MCP patch、面板 config 与导入：候选配置→原子保存→发布→等待逐目标应用；保存失败不改内存/目标，应用失败不再伪报成功。提交串行，UI/retention 不重装 Hook，startup/autoDumpDex 延后生效字段可见；工具 ok:false 会标 isError。
+- storage + host_lifecycle 提供纯路径解析和显式恢复；state/MCP 导入不建目录/重放/裁剪/打开 SQLite，DEX 索引改为按需打开。恢复只补内存来源，不重写 sidecar；采集 ID 在恢复后继续递增。
+- 移除 import、启动、会话 sweep、新 dump、设置保存、捕获追加时的磁盘自动清理。maintenance 默认预览，执行需要 dryRun:false + confirm:true；内存视图仍有界，显式维护更新淘汰计数。DATA_DIR 显式隔离时 captures 同根，旧自定义布局可用 ADH_CAPTURES_DIR 显式选择，不移动删除旧数据。
+- 测试 launcher 移除继承的操作者 data/captures 根。新回归使用临时文件、fake ScopeIO、fake agent/进程接口和 loopback 随机测试端口；纯导入 fixture 禁止监听和设备子进程，过期证据/损坏索引都是合成数据。
+
+源码/迁移/维护入口见 docs/P0_HOST_STATE.md。旧审计清单保留为基线快照。验证：新增隔离回归 25 项全部通过；完整 Host 回归 **489 passed / 0 failed / 0 skipped**；`npm run typecheck` rc=0；v71 注册表 **91 tools / 0 problems / PASS**；`git diff --check` 通过。当前 8088 的原非 watch Node 进程仍在；未运行 dev_up、设备门禁、刷机、目标启停或服务重启，没有把修复注入运行现场。
+
+## 2026-11-16：P1 共享执行、持久任务与人类接管
+
+按用户授权继续 P1，在独立分支实现，保留当前服务和真机分析现场。Host 的 MCP、包固定 MCP、REST、面板和两种 CLI 共用 Operations；新增第 92 个 MCP 工具 operations。普通读取保持兼容，旧无版本写入拒绝执行。操作使用 taskId、idempotencyKey 与 revision/controlEpoch/hostEpoch，目标绑定 session/PID/UID/starttime 代际；Host 全局与目标写互斥，不同目标写可并行。
+
+- 权威 SQLite 保存任务、操作、控制权、派发/确认状态，结果/晚到证据原子落盘；重启只恢复状态，不重放指令，损坏不自动重建。具名 task 与单次 operation 分开取消，完成/取消任务不复活。容量限制和省略结果明确返回。
+- 私有 operator 凭据识别人类请求，JSON 角色伪造无效。人类首次修改自动接管，接管使旧排队操作失效并阻止运行任务后续副作用；全局写不能绕开被接管目标，释放必须显式执行。延迟自动策略绑定旧 epoch，接管/释放后不会自动复活。
+- 超时前未派发为 failed；派发后 deadline/断连为 unknown、隔离写作用域；晚到成功/失败单独保留，人工检查后显式 resolve。运行中取消是 cancel_requested，已经完成则保留 succeeded + cancelRequested；中断多步操作标明 partialEffects。命令 cmd.done 不再暗示目标已停止。
+- 面板新增“任务与控制权”，可看状态/来源/版本、接管、释放、取消、核对 unknown。已有修改按钮通过共享准备/执行接口使用读取版本，不自动重试旧编辑。公共 adh-cli 新增 run/tasks/control、call --operation、显式 --operator；默认与 stdio 代理不继承人类权限。开发 CLI 的工具检查和脱壳也走版本契约。
+- 同步 REQUIREMENTS、DEVELOPMENT_PLAN、FEATURE_STATUS、MAP、MCP 清单、P0 迁移说明；按此次用户方向同步 AGENTS/CLAUDE 的面板可修改/接管范围。完整模块/API/限制见 [P1_OPERATIONS.md](P1_OPERATIONS.md)。
+
+验证：`npm run typecheck` 通过；完整 Host **511 passed / 0 failed / 0 skipped**（P0 基线 489 + P1 新增 22）；v71 **92 tools / 0 problems / PASS**。公共 CLI 源码 **14 passed**（新增 6），包括旧版本不刷新、角色凭据显式性与异步提交。Host 合成 TCP agent 夹具先禁设备子进程，实际跑 REST/MCP、Python CLI、开发 CLI、断连和取消；执行器另测恢复、双 Host 共享控制、损坏保护、排队 deadline、局部副作用和晚到失败。只读动作逐工具明确列出，oracle diff/stability、批量 Hook 不会因伪造 status/plan 字段绕过写保护；未知 POST 动作默认受保护。
+
+面板通过独立随机端口、OS 临时数据目录与合成 agent 实测：查看任务，接入合成 operator 凭据，取消未派发任务，接管/释放，以及修改 ui.displayCap 形成 succeeded 操作。浏览器检查用 ego-browser，本轮自建 UI 夹具已停止。原 8088 非 watch 进程保持原 PID/启动时间；没有请求其业务接口、启动正式 index、修改 adb reverse、运行设备门禁、启停目标、发布安装包或重启服务。P1 Host fencing 不提供目标侧撤销、完整设备身份、USB/LAN 新 RPC 或 TLS；这些仍属后续阶段。
+
+
+## 2026-11-16：P2 人类任务工作台与配置冲突核对
+
+按用户授权继续 P2，以 AI 自主分析为主，补齐人类查看、修改、暂停恢复和接管。交付位于独立分支/worktree，原工作目录保留 P1 提交且干净。运行中服务会动态读取 public 静态文件，不能仅靠“不重启 Node”保护现场；因此本轮不把 P2 静态文件放进其工作目录。
+
+- 现场“任务工作台”和独立 /workbench 共用一套视图；“设置”打开同一配置编辑器，原数据维护入口保留。支持全库搜索、负责人/状态过滤、任务/操作独立分页、任务版本与状态详情、来源/目标/控制版本、原始/晚到结果及已保存 JSON 下载。默认观察或编辑本地草稿不改变控制权。
+- Task 增加兼容旧记录的 revision、创建来源；面板 pause/resume/cancel/complete 使用 expectedTaskRevision 做 CAS。旧观察被拒绝且保留人类暂停，恢复任务不自动重放失效操作；人类接管与任务暂停分别控制，不把交还 AI 当作自动恢复全部任务。
+- 实际副作用边界保存最多 64 条元数据日志，独立 ID 对应并行派发/响应；超出报告 effectsDropped。只记录 agent 命令名或 Host 动作及派发/确认时间，不记录参数、密钥和 shell 文本。新空日志与旧缺失日志分开显示；acknowledged 不是目标业务成功，unknown/曾经未知/晚到结果持续如实保留。
+- 配置草稿固定编辑版本，提交仅包含变化字段；冲突并列展示编辑时、当前值和草稿意图。显式 rebase 保留本来修改的字段，并采用其他字段的最新值，不自动提交。导入先校验并进入草稿，导出已读 Host 配置。提交等待期间冻结本份草稿，独立跟踪实际结果；传输未确认时保留意图键供只读查询，不重发。
+- 切换控制范围先清空旧快照，读取失败不会误操作旧目标；接管/交还/unknown 核对都使用已显示版本。操作员凭据只在页面内存，连接不自动接管。工作台关闭只停本地轮询，不取消任务、不自动释放控制权。
+
+验证：新增回归 14 项；完整 Host **525 passed / 0 failed / 0 skipped**，类型检查通过，v71 **92 tools / 0 problems / PASS**，git diff --check 通过。隔离 worktree 显式 ADH_CLI_SOURCE 继续实测公共 Python CLI 和开发 CLI；复用未改动依赖，复制校验一致的 sandbox ELF，不依赖真实设备或分析产物。回归覆盖任务 CAS、旧记录、分页、并行/有界日志、意图查询、配置差异/rebase/校验、未确认传输和真实 HTTP 入口。
+
+浏览器用 ego-browser 对随机 loopback 端口、临时数据目录与合成 agent 实测：任务详情/结果/下载，结果 HTML 作为纯文本，任务暂停恢复及 STALE_TASK，unknown/晚到结果/显式人工核对，接管交还，配置 STALE_CONTROL 后草稿仍保留，再核对提交仅改人类字段且保留 AI 同时改过的其他字段。另测导入只改草稿、导出已读配置、独立/现场入口不叠开旧设置、390px 窄屏。实际查看截图并修复了嵌入页 main 全局样式冲突；关闭了浏览器任务并只停止本轮自建 UI fixture。
+
+完整范围、迁移/API 和限制见 [P2_WORKBENCH.md](P2_WORKBENCH.md)，同步 REQUIREMENTS、DEVELOPMENT_PLAN、FEATURE_STATUS、MAP 和 MCP 清单。未部署、未推送、未发布安装包；未启动正式 index、修改 adb reverse、运行设备门禁、启停目标或重启当前服务。当前 8088 仍是原非 watch 进程。P2 面板需要配套 P2 Host；副作用日志有界且不等同完整目标审计，设备域服务、USB/LAN 新 RPC、TLS 和目标侧撤销仍属后续阶段。
+
+
+## 2026-11-16：P3 设备域、稳定安装身份与 USB/ADB RPC
+
+在 P2 提交 91be0f5 上建立独立 worktree/分支 feat/adh-p3-device-domain-20261116。原 Android 工作目录继续保留 P1 且干净，P2 worktree 不改；没有加载本轮源码到当前分析服务或其 public 目录。
+
+- Device Daemon 提取 AndroidDeviceBackend 与 DeviceOperations，签名校验后的 Binder 与 adh.device/1 RPC 共用业务、持久 revision 和写入锁；AIDL v19 末尾追加身份/能力/作用域 CAS，旧 Manager 写入也推进同一版本。手机不增加 HTTP/MCP/数据库/分析。
+- 安装 UUID + RSA 身份密钥持久保存，bootstrap 不含私钥。Host 验证 nonce/能力/身份签名与指纹，分开 deviceId、bootId、daemonInstanceId、connectionId、ADB transport 和旧 session。多连接去重，代际变化失效旧 Host 指令；不靠 serial 推断目标归属。
+- Host Devices 统一缓存/显式发现/信息/能力/调用。USB 固定 transport_id、只创建 tcp:0 自有 forward，清理重新核对映射；断线保留清理句柄，映射被替换返回未知且不删除。没有 reverse、remove-all、安装、启停真实 App 或隐式故障切换。
+- MCP devices 与 REST /api/devices 共用执行器，公共 Python CLI 现有 call/run 直接复用。写入要求 Host 控制版本 + device:UUID 资源 + 设备代际/revision，scope 另带内容哈希。人类持有与 unknown 在旧 target/新设备未关联时保守互锁；两个已验证设备仍可并行。
+- 设备日志先落盘再派发，意图去重，不存请求凭据/参数原文，不重放；预留失败不执行，结果保存失败与重启恢复为 unknown。容量/结果有界，不自动清理历史。修复进程命令在 waitFor 前 readText 导致的无效超时，输出有界，派发后超时明确未知。
+
+验证：Host 类型检查通过，完整 **538 passed / 0 failed / 0 skipped**（P2 525 + 新增 13），其中跨语言测试运行生产 Kotlin 身份/域/持久化/codec 与 Node ADB loopback 模拟；包含双设备、USB 别名、版本冲突、代际、超时后实际结果、清理归属、人类接管及 MCP/REST/真实 Python CLI。Android 离线 core/daemon/Manager JVM **61 passed / 0 failed / 0 skipped**，Device Daemon debug 构建和 Manager Kotlin 编译通过，构建只用隔离全零测试 pin。v71 **93 tools / 0 problems / PASS**。新增可复现 MCP 文档生成器，--check 通过；git whitespace 检查按既有 CRLF 使用 cr-at-eol。
+
+局限如实保留：Android abstract UDS/peer UID/SELinux 可达性及真实 Binder、证书挂载、第三方进程效果没有真机验证；旧审计 P3 的 agent 本地 UDS/fd 原型尚未交付。LAN/TLS/配对/撤销、bulk、agent 路由和旧 ADB-only 诊断/helper/fs 迁移仍待 P4；现有 agent 通道明确 legacy/unverified，不宣称全能力 LAN 对等。完整 API、身份语义、未知核对顺序与迁移见 [P3_DEVICE_DOMAIN.md](P3_DEVICE_DOMAIN.md)。
+
+未部署、未推送、未发布或安装产物，未启动正式 index、未请求当前 8088 业务接口、未操作真机/当前会话或重启服务；只启动并清理 OS 临时目录里的 JVM/HTTP 测试夹具。
+
+
+## 2026-11-16：P4 LAN TLS、配对授权、撤销与持久对账
+
+从 P3 258e69a 新建独立 worktree/分支 feat/adh-p4-lan-20261116，不把源码或静态页面放进原分析实例工作目录。当前 Android 主工作区仍为 P1、P2/P3 worktree 均保留干净，公共 adh-cli 源码未修改或发布。
+
+- 设备新增默认关闭的 TLS listener；公共 JCA/JSSE 签发与安装身份密钥一致的自签证书，限定 TLS1.2/1.3 与 AEAD/ECDHE 套件。可信 USB 登记 Host 公钥，LAN 只接受挑战签名，拒绝 USB token；Host 在发送证明前检查 SPKI 固定值/证书签名/有效期。仍复用 adh.device/1 dispatcher、业务、代际与持久日志，没有新增分析/HTTP/MCP/数据库。
+- grant 持久保存 read/write/manage 权限和撤销历史；每次派发在域锁内检查权限，撤销持久化后关闭既有流，重启不恢复授权。密钥/授权损坏不自动重建；并发 Host 初次创建同一客户端密钥不能互相覆盖。配对不明确时可经 USB 采用已观察的有效 grant，避免再授权。
+- Host 认证连接抽象分开 ADB 与 LAN adapter，同一 deviceId 去重、多连接明确选择。缓存登记不等于实时授权。LAN list/discover 仅返回已知缓存端点，不扫描。未迁的 agent Hook/内存/trace/dump、diagnostics/fs/root helper/bulk 明确 unsupported；旧 MCP/REST 接口收到设备/LAN 选择也明确拒绝，不默默忽略后走 ADB。
+- 新设备 operations.reconcile 有界查询实际结果，not-found 不当成未发送；Host 验证归属和结果集合后持久附加证据，更新任务元数据但不改变原 unknown/控制权，不重放。连接恢复与撤销/关闭 LAN 属于静态、受限的 connectionOnly/securityOnly，允许在 unknown 下恢复查询或收缩权限，禁止伪装成普通设备写入。
+- 多个 unknown 保留全部 ID，新增未知推进版本，人工核对要求当前快照且所有 Host handler 已结束。工作台列出设备范围、多个未知及对账预览/下载，版本变化清除人工确认；解除隔离只保留原记录并暂停任务，不自动恢复或重试。
+
+验证：完整 Host **547 passed / 0 failed / 0 skipped**，类型检查通过（P3 538 + P4 9）；真实 Node↔生产 Kotlin TLS 流、TLS1.2/1.3、USB/LAN 身份和能力一致，撤去模拟 ADB 后仍可查询/修改已迁能力。包含撤销旧连接及重启持久化、只读授权、错误证书/明文/重放/USB-token 拒绝、响应丢失和设备退出后的只读对账、派发计数为 1、Host 密钥并发创建，以及实际公共 Python CLI 配对、REST/MCP 控制/对账/撤销与旧路由拒绝。Android 离线 JVM **66 passed / 0 failed / 0 skipped**（core22/daemon16/Manager28）；Device Daemon debug 构建与 Manager 编译通过，只用全零测试 pin。v71 **93 tools / 0 problems / PASS**，MCP 文档生成器 --check 通过，whitespace 按既有 CRLF 用 cr-at-eol 检查。
+
+浏览器使用 ego-browser 对独立随机 loopback Host 与合成证据实测：保留 unknown、HTML 文本无执行、完整下载、多未知入口、版本改变清除确认、人工核对与交还 AI 不自动恢复任务。实际看过截图；浏览器空间关闭，只停止本轮自建 fixture，未触及当前 8088。
+
+边界：只完成隔离 JVM TLS/模拟 ADB 路径与构建；真实 Android JSSE/provider、UDS/SELinux/防火墙/无线网络、真实 Binder/进程和系统 CA 效果未验证。没有 agent 本地路由、bulk、广播发现、无 USB 首次配对/手机配对 UI、在线证书轮换/归档；未迁能力继续如实 unsupported。完整协议/权限、能力矩阵、配对/恢复顺序和数据文件见 [P4_LAN_AUTH.md](P4_LAN_AUTH.md)。
+
+未部署、未推送、未发布安装包、未执行真实 ADB、未启停目标、未改 reverse/forward、未重启当前分析服务；交付本轮源码提交。
+
+## 2026-11-16 — P5 真机隔离验收与修复
+
+在 `feat/adh-p5-device-acceptance-20261116`（基座 P5 de9d134）实现并验收独立 Android 沙盒。新包、opt-in 构建、私有 root 数据/UDS/Host 端口，不替换模块、Manager 或现有 daemon，不重启任何原服务。最终两次独立运行各 **7/7**，包含 before-Agent-start GOT getpid 命中、真实 TTL 过期、实际 APK v1→v2 绑定失效、LAN TLS1.3 grant 撤销、缓存撤销、并发回滚冲突拒绝与 scope 原文精确 hash 恢复；原会话、PID、模块/配置 hash、ADB 映射前后一致。
+
+修复 early GOT 默认 errno=-1（改为0并保留失败原因）、Android org.json 斜杠转义导致的 LAN 挑战签名字节差异。enforcing ROM 的 adbd→su UDS connectto 拒绝通过新增显式 USB stdio/1 传输处理：同一协议/身份/账本，旧能力返回 unsupported，无自动回退/重发，不放宽 SELinux。沙盒 Agent 使用独立构建/产物端口18761，不能 --deploy，也不覆盖正常8761产物。默认 APK 排除所有 p5Fixture 类。
+
+回归：Host typecheck、**558/558**；Android JVM **70/70**（23/18/29）；普通/opt-in APK、原生默认/隔离端口构建、v132 host gate、94项MCP注册和生成文档检查通过。实测证据与正式 Zygisk、capture_start/其他绑定组合等未验证边界见 [P5_ANDROID_ACCEPTANCE.md](P5_ANDROID_ACCEPTANCE.md)。没有把模拟自加载扩写为已验证整个 Zygisk 时序。
+
+## 2026-11-16 — P5 最后一轮沙盒验收收口
+
+在独立 `feat/adh-p5-final-sandbox-20261116`（基座 f7d726e）补齐七族 capture_start 真命中/禁用、全禁用、实际 UID 更换和仅 Agent 文件替换。各进程先应用正式 early cache，再于 Agent 启动前执行全部实际 JCA/TLS/access 探针；同时验证专用安装计数、唯一标记、完整无丢失捕获窗口。两种绑定失效均检查 Root broker 返回0及直接投递旧 wire 被 Agent 拒绝，native Hook 为0。
+
+修复 HMAC/非对称共用 DigestSign 回调越过禁用策略输出数据；增加有界 lastCaptureInstall 证据。复跑发现 Windows adb shell 转换二进制 LF 帧头造成已执行却回包超时，改为显式 stdio/2 Base64 传输（内层 RPC/认证/账本不变，旧版 unsupported），不重发 unknown；新增 Kotlin/Node 大帧、碎片、控制字节、CRLF 和错误边界回归及真机256种长度低字节往返。夹具检查失败和 unknown 均独立保留，增加自身清理的可验证结果。
+
+最终 run-08/09 各 **11/11**，sceneUnchanged/cleanupVerified=true；Host **560/560**、Android JVM **73/73**，无 skip，类型/构建/MCP门禁通过。测试包已卸载、自建服务/映射清理；原服务未重启，当前业务现场的会话/PID/模块配置哈希/映射保持一致。P5 **沙盒阶段**已按范围收口；正式 Zygisk 整链、整机重启、生产升级、其他 ROM 和穷举算法组合继续未验证，Java/inline early 继续 unsupported。详情与所有失败记录口径见 [P5_ANDROID_ACCEPTANCE.md](P5_ANDROID_ACCEPTANCE.md)。
+
+## 2026-11-16 — P5 正式 Zygisk 调用链隔离真机验收
+
+用户本轮明确允许 aa165071 重启后，在独立 worktree/临时模块/状态目录/broker/Host/测试包上实测真实 Zygisk callbacks、companion 获取、模块FD→post-specialize memfd/实际SHA校验、Application首次 Os.getpid 调用窗口命中。测试 App 不自加载 Agent，当前GOT槽值和事件主线程/纳秒窗口均核对。最终私有 run-05 **6/6**：正例、TTL、显式撤销、实际UID更换、仅模块Agent文件更换、broker不可用。临时模块已删除并重启卸载，测试包/自建服务清理，原Host PID/启动时间与六个原配置/模块文件SHA、原映射一致。手机原进程因获授权的重启而终止，不再沿用此前“不重启手机”的现场承诺。
+
+改进临时模块SELinux标签、post/companion审计和默认路径契约构建。实际识别 libandroid_runtime GOT 后续被覆盖，改用预载libjavacore并检验当前槽及首次Application事件，未伪报历史hits为持续命中。后台采集失败的内核栈确认为所有线程do_freezer_trap，夹具使用自身前台窗口常亮；不修改系统冻结策略，不自动重装Hook。失败/采集未确认记录均保留，未计通过。
+
+Host **561/561**、JVM **73/73** 无skip，类型、默认/隔离构建、94项MCP门禁通过；测试so原目录重建逐字节一致。此设备的正式调用链已收口；默认生产部署/升级、其他ROM/Root/Zygisk、真实业务App、正式capture_start各族及LAN grant撤销组合等仍未验证。详见 [P5_ZYGISK_ACCEPTANCE.md](P5_ZYGISK_ACCEPTANCE.md)。

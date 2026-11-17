@@ -1,11 +1,13 @@
+import { checkpoint, detached, trackedEffect } from './execution_context.ts';
 // The web switcher lists the packages checked in the phone's injection scope
 // (/data/adb/adh/scope.json). That file is root-only; adb is how the host reads it.
 // Display names come from each base APK's manifest (aapt), cached per package.
 import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
+import { isDeepStrictEqual, promisify } from 'node:util';
 import { crc32 } from 'node:zlib';
 
 const execFileP = promisify(execFile);
@@ -52,16 +54,16 @@ function adbBase(): string[] {
 }
 
 async function adbShell(command: string): Promise<string> {
-  const { stdout } = await execFileP('adb', [...adbBase(), 'shell', command], {
+  const { stdout } = await trackedEffect(() => execFileP('adb', [...adbBase(), 'shell', command], {
     timeout: 15000, windowsHide: true, maxBuffer: 4 * 1024 * 1024,
-  });
+  }));
   return String(stdout ?? '');
 }
 
 async function adbOut(command: string): Promise<Buffer> {
-  const { stdout } = await execFileP('adb', [...adbBase(), 'exec-out', command], {
+  const { stdout } = await trackedEffect(() => execFileP('adb', [...adbBase(), 'exec-out', command], {
     timeout: 30000, windowsHide: true, maxBuffer: 80 * 1024 * 1024, encoding: 'buffer',
-  });
+  }));
   return stdout as Buffer;
 }
 
@@ -134,9 +136,9 @@ async function resolveLabel(pkg: string): Promise<string> {
       { name: 'AndroidManifest.xml', data: manifest },
       { name: 'resources.arsc', data: arsc },
     ]));
-    const { stdout } = await execFileP(aapt, ['dump', 'badging', zipPath], {
+    const { stdout } = await trackedEffect(() => execFileP(aapt, ['dump', 'badging', zipPath], {
       timeout: 20000, windowsHide: true, maxBuffer: 4 * 1024 * 1024,
-    });
+    }));
     return applicationLabel(String(stdout ?? '')) || pkg;
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -152,7 +154,7 @@ export function scopeSwitcherApps(packages: string[], labels: ReadonlyMap<string
 
 function startLabel(pkg: string): void {
   if (resolvedLabels.has(pkg) || labelJobs.has(pkg)) return;
-  const job = resolveLabel(pkg).then(label => {
+  const job = detached(()=>resolveLabel(pkg)).then(label => {
     resolvedLabels.set(pkg, label || pkg);
   }).catch(() => {
     resolvedLabels.set(pkg, pkg);
@@ -243,4 +245,122 @@ export async function scopedApps(now = Date.now()): Promise<{ apps: ScopedApp[];
   for (const pkg of cache.packages) startLabel(pkg);
   // Switcher truth = scope.json only. Capture history on disk must not invent checked apps.
   return { apps: scopeSwitcherApps(cache.packages), error: cache.error };
+}
+
+// --- scope write (host = the AI/operator channel) ------------------------------------------------
+// The Zygisk companion reads scope.json at process specialization, so a package added here is only
+// injected after its next cold start. The device daemon owns the file at runtime; writing it through
+// adb+su is the host-side equivalent of the Manager switch and keeps "analyze any app" scriptable.
+
+const PKG_RE = /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$/;
+
+export interface ScopeFile { packages: string[]; version: number; mode: string; error: string | null }
+
+/** Keep the complete document: phone policy and future fields are not Host-owned. */
+export function parseScopeDocument(raw: string): Record<string, any> {
+  const start = raw.indexOf('{'), end = raw.lastIndexOf('}');
+  const text = (start >= 0 && end > start ? raw.slice(start, end + 1) : raw).trim();
+  const doc = JSON.parse(text);
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc) || !Array.isArray(doc.packages)) {
+    throw new Error('scope JSON has no packages array');
+  }
+  return doc;
+}
+
+export function scopeWithPackages(raw: string, packages: string[], meta: { version?: number; mode?: string } = {}) {
+  const doc = parseScopeDocument(raw);
+  return {
+    version: meta.version ?? 2, mode: meta.mode ?? 'allowlist', ...doc,
+    packages: [...new Set(packages.map(p => p.trim()).filter(p => PKG_RE.test(p) && p !== MANAGER_PKG))],
+  };
+}
+
+export interface ScopeIO { read(): Promise<string>; write(body: string): Promise<void> }
+const scopeIO: ScopeIO = {
+  read: () => adbShell(`su -c 'cat ${SCOPE_PATH}'`),
+  async write(body) {
+    const dir = mkdtempSync(join(tmpdir(), 'adh-scope-'));
+    const local = join(dir, 'scope.json');
+    const token = randomUUID();
+    const uploaded = `/data/local/tmp/adh-scope-${token}.json`;
+    const staged = `/data/adb/adh/.scope-${token}.tmp`;
+    try {
+      writeFileSync(local, body, 'utf8');
+      await trackedEffect(() => execFileP('adb', [...adbBase(), 'push', local, uploaded], {
+        timeout: 20000, windowsHide: true, maxBuffer: 1024 * 1024,
+      }));
+      // Set ownership/label BEFORE the atomic rename; never expose a truncated scope file.
+      await adbShell(`su -c 'cp ${uploaded} ${staged} && chown root:root ${staged} && chmod 644 ${staged} && chcon u:object_r:adb_data_file:s0 ${staged} && mv -f ${staged} ${SCOPE_PATH}'`);
+    } finally {
+      try { await adbShell(`su -c 'rm -f ${uploaded} ${staged}'`); } catch { /* staging only */ }
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+};
+
+/** Full scope.json (packages + version/mode), read through root. Never throws: errors are reported. */
+export async function readScopeFile(): Promise<ScopeFile> {
+  try {
+    const raw = await adbShell(`su -c 'cat ${SCOPE_PATH}'`);
+    const start = raw.indexOf('{');
+    const end = raw.lastIndexOf('}');
+    const text = (start >= 0 && end > start ? raw.slice(start, end + 1) : raw).trim();
+    const obj = text ? JSON.parse(text) as { packages?: unknown; version?: unknown; mode?: unknown } : {};
+    return {
+      packages: parseScopePackages(raw),
+      version: Number(obj.version) || 2,
+      mode: typeof obj.mode === 'string' && obj.mode ? obj.mode : 'allowlist',
+      error: null,
+    };
+  } catch (e) {
+    return { packages: [], version: 2, mode: 'allowlist', error: (e instanceof Error ? e.message : String(e)).split('\n')[0].slice(0, 240) };
+  }
+}
+
+/** Pure merge: `add` wins over `remove`? No — an explicit remove in the same call wins. */
+export function mergeScope(current: string[], op: { add?: unknown[]; remove?: unknown[] }): string[] {
+  const clean = (list: unknown[] | undefined) => (list ?? [])
+    .map((p) => String(p ?? '').trim())
+    .filter((p) => PKG_RE.test(p) && p !== MANAGER_PKG);
+  const out = new Set(current.filter((p) => PKG_RE.test(p)));
+  for (const p of clean(op.add)) out.add(p);
+  for (const p of clean(op.remove)) out.delete(p);
+  return [...out];
+}
+
+export async function packageInstalled(pkg: string): Promise<boolean> {
+  if (!PKG_RE.test(pkg)) return false;
+  try {
+    const out = await adbShell(`pm path ${pkg}`);
+    return /^package:/m.test(out);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Replace the allowlist. Read back after writing: a silent half-write would mean the next cold start
+ * is not injected and the analysis then looks like "the app refused the agent" (a false negative we
+ * cannot afford). The file's SELinux label is part of the write, not an afterthought.
+ */
+export async function writeScopePackages(
+  packages: string[],
+  meta: { version?: number; mode?: string } = {},
+  io: ScopeIO = scopeIO,
+): Promise<{ ok: boolean; packages: string[]; error?: string }> {
+  const clean = [...new Set(packages.map((p) => p.trim()).filter((p) => PKG_RE.test(p) && p !== MANAGER_PKG))];
+  try {
+    // Re-read immediately before writing. Missing/corrupt/unreadable input refuses the update.
+    const next = scopeWithPackages(await io.read(), clean, meta);
+    await io.write(`${JSON.stringify(next, null, 2)}\n`);
+    const back = await io.read();
+    const got = parseScopePackages(back);
+    if (!isDeepStrictEqual(parseScopeDocument(back), next)) {
+      return { ok: false, packages: got, error: 'scope write did not stick: complete document differs (including hook policy)' };
+    }
+    cache = { at: Date.now(), packages: got, error: null };
+    return { ok: true, packages: got };
+  } catch (e) {
+    return { ok: false, packages: clean, error: (e instanceof Error ? e.message : String(e)).split('\n')[0].slice(0, 240) };
+  }
 }

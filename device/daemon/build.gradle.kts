@@ -11,8 +11,8 @@ android {
         applicationId = "com.adh.daemon"
         minSdk = 26
         targetSdk = 34
-        versionCode = 13
-        versionName = "0.6.0"
+        versionCode = 17
+        versionName = "0.8.0"
         buildConfigField(
             "String",
             "MANAGER_CERT_SHA256",
@@ -23,6 +23,7 @@ android {
     buildFeatures {
         buildConfig = true
     }
+    if(providers.gradleProperty("adhP5Sandbox").orNull=="true") sourceSets["debug"].java.srcDir("src/p5Fixture/java")
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -37,4 +38,17 @@ android {
 dependencies {
     implementation(project(":core"))
     testImplementation(libs.junit)
+    testImplementation(libs.org.json)
+}
+
+// Explicit host-only interoperability fixture. No APK install, app_process or device command.
+tasks.register("writeDeviceRpcFixtureClasspath") {
+    dependsOn("compileDebugUnitTestKotlin", "processDebugUnitTestJavaRes")
+    doLast {
+        val testTask = tasks.named<Test>("testDebugUnitTest").get()
+        val files = (testTask.classpath + testTask.testClassesDirs).files.map { it.absolutePath }
+        val output = layout.buildDirectory.file("device-rpc-fixture-classpath.json").get().asFile
+        output.parentFile.mkdirs()
+        output.writeText(files.joinToString(",", "[", "]") { "\"" + it.replace("\\", "\\\\").replace("\"", "\\\"") + "\"" })
+    }
 }

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { joinNativeLook } from '../src/native_look.ts';
+import { joinNativeLook, selectNativeLook, nativeLookRead } from '../src/native_look.ts';
 
 function hexOf(obj: unknown): string {
   return Buffer.from(JSON.stringify(obj), 'utf8').toString('hex');
@@ -99,4 +99,62 @@ test('a hook without a trace reports no trace rather than an empty one', () => {
   const look = joinNativeLook([{ func: 'NATIVE_HOOK', hex: hook(1), id: 1 }], 7);
   assert.equal(look.trace, null);
   assert.doesNotMatch(look.text, /就地 trace/);
+});
+
+test('seq selects an earlier hit and does not borrow the newest registers', () => {
+  const records = [
+    { func: 'NATIVE_HOOK', hex: hook(1, '0x1111'), id: 1 },
+    { func: 'NATIVE_HOOK_MEM', hex: mem(1), id: 2 },
+    { func: 'NATIVE_HOOK', hex: hook(14, '0xeeee'), id: 3 },
+    { func: 'NATIVE_HOOK_MEM', hex: mem(14), id: 4 },
+  ];
+  const latest = selectNativeLook(records, 7);
+  assert.equal(latest.look.seq, 14);
+  assert.equal(latest.look.regs.x0, '0xeeee');
+  assert.equal(latest.retained.total, 2);
+  assert.equal(latest.retained.nextBeforeSeq, 14);
+  assert.equal(latest.hits, undefined);
+
+  const earlier = selectNativeLook(records, 7, { seq: 1 });
+  assert.equal(earlier.look.seq, 1);
+  assert.equal(earlier.look.regs.x0, '0x1111');
+  assert.equal(earlier.hits?.length, 1);
+  assert.equal(earlier.retained.nextBeforeSeq, null);
+
+  const page = selectNativeLook(records, 7, { beforeSeq: 14, limit: 50 });
+  assert.deepEqual(page.hits?.map((h) => h.seq), [1]);
+  assert.equal(page.look.regs.x0, '0x1111');
+});
+
+test('a missing seq names the hits that are still stored', () => {
+  const selected = selectNativeLook([
+    { func: 'NATIVE_HOOK', hex: hook(2), id: 1 },
+  ], 7, { seq: 9 });
+  assert.equal(selected.look.hit, false);
+  assert.match(selected.look.text, /没有 seq=9/);
+  assert.match(selected.look.text, /2/);
+  assert.equal(selected.retained.total, 1);
+  assert.deepEqual(selected.hits, []);
+});
+
+test('beforeSeq and limit reject a bad page and a mixed cursor', () => {
+  assert.throws(() => selectNativeLook([], 7, { limit: 51 }), /limit must be an integer 1\.\.50/);
+  assert.throws(() => selectNativeLook([], 7, { seq: 1, beforeSeq: 2 }), /not both/);
+});
+
+test('read keeps a stored earlier hit when the agent status query fails', async () => {
+  const look = await nativeLookRead('s1', 7, {
+    captures: [
+      { sessionId: 's1', func: 'NATIVE_HOOK', hex: hook(1, '0x1111'), id: 1 },
+      { sessionId: 's1', func: 'NATIVE_HOOK', hex: hook(2, '0x2222'), id: 2 },
+    ],
+    drainSession: async () => {},
+    sendCmd: async () => { throw new Error('agent disconnected'); },
+  }, { seq: 1 });
+  assert.equal(look.seq, 1);
+  assert.equal(look.regs.x0, '0x1111');
+  assert.equal(look.retained.total, 2);
+  assert.equal(look.hits?.length, 1);
+  assert.equal(look.drainError, undefined);
+  assert.equal(look.observationError, 'agent disconnected');
 });

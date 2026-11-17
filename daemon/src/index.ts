@@ -5,7 +5,9 @@ import net from 'node:net';
 import { AGENT_PORT, HTTP_PORT, webUrls } from './config.ts';
 import { handleHttp } from './http/router.ts';
 import { ensureAdbReverse } from './scope_list.ts';
-import { startCaptureLoop, forgetCaptureSession, pruneArtifactsAndIndex, clearCaptureArmProtect, applyStartupHooks } from './service.ts';
+import { startCaptureLoop, forgetCaptureSession, clearCaptureArmProtect } from './service.ts';
+import { initializeHost } from './host_lifecycle.ts';
+import { initializeOperations } from './operation_host.ts';
 import {
   agentSockets, broadcast, captureTimers, failPendingFor, frameJson, FRAME_JSON, FRAME_MAX,
   log, nextId, pending, pruneSessions, sessions, wss,
@@ -56,6 +58,7 @@ const agentServer = net.createServer((sock) => {
         selfModule: msg.selfModule ?? '',
         selfBase: msg.selfBase ?? '',
         policy: msg.policy ?? '',
+        earlyPlan: msg.earlyPlan ?? null,
         connectedAt: Date.now(),
         lastSeen: Date.now(),
         online: true,
@@ -70,13 +73,9 @@ const agentServer = net.createServer((sock) => {
       // Fresh process after unpack: allow auto-arm again (protect only blocks the live post-unpack session).
       clearCaptureArmProtect(session.package);
       broadcast('agent.hello', session);
-      // Startup policy BEFORE the capture loop: on a target that checks for a debugger early, the
-      // difference between "hooks installed now" and "installed after the first command round
-      // trip" is often the difference between a live process and an exit. Fire-and-forget with
-      // `finally` so a slow or failing install can never stop capture from starting.
-      applyStartupHooks(id)
-        .catch((e) => log(`[startup] anti-debug 布防失败 ${id}:`, (e as Error).message))
-        .finally(() => startCaptureLoop(id));   // install persistent hooks + stream captures
+      // Connection/reconnection observes only. Installs require an explicit plan/primitive;
+      // an authorized early cache already ran before this hello and reports its own receipts.
+      startCaptureLoop(id,{skipArm:true});
     } else if (msg.t === 'caps' && session) {
       // Arrives right after the hello (before the maps sample). Stored on the session, never
       // merged from another session: two processes of the same app can run different builds.
@@ -154,6 +153,8 @@ httpServer.on('upgrade', (req, socket, head) => {
 
 // ---- boot -----------------------------------------------------------------
 
+initializeHost();
+initializeOperations();
 agentServer.listen(AGENT_PORT, '0.0.0.0', () => log(`ADH Daemon agent TCP listening on :${AGENT_PORT}`));
 httpServer.listen(HTTP_PORT, '0.0.0.0', () => {
   const w = webUrls();
@@ -174,13 +175,10 @@ httpServer.listen(HTTP_PORT, '0.0.0.0', () => {
 process.on('SIGINT', () => { log('shutting down'); process.exit(0); });
 
 // Periodic session sweep: closes can be missed (kill -9, lost sockets), so bound the map anyway.
-// The same tick enforces artifact retention: the dump helpers prune right after they write, but a
-// few routes write artifacts directly, so a periodic sweep is what keeps captures/ bounded no
-// matter which path produced the file.
+// Data retention is an explicit maintenance operation, never part of startup/session sweeps.
 setInterval(() => {
   const dropped = pruneSessions();
   if (dropped.length) log(`session prune: dropped ${dropped.length} stale offline session(s)`);
-  pruneArtifactsAndIndex();
 }, 60_000).unref();
 
 // The injected agent only reaches this process through adb reverse. Re-apply it on a
@@ -188,7 +186,3 @@ setInterval(() => {
 const keepReverse = () => ensureAdbReverse([AGENT_PORT, HTTP_PORT], (line) => log(line));
 keepReverse();
 setInterval(keepReverse, 15_000).unref();
-
-// Boot-time reconciliation: adopt what is already on disk (the module body of state.ts does the
-// load) and apply retention once, so a daemon that was down while files piled up starts bounded.
-pruneArtifactsAndIndex();

@@ -1,5 +1,15 @@
 # ADH 功能状态（2026-10-24 更新：通用原生分析与证据核验；各轮实测范围见 §2）
 
+> **2026-11-16 P4**：LAN TLS、可信 USB 配对、客户端公钥证明、权限/撤销和持久对账已在隔离真实 Node↔Kotlin TLS 流验证。Host **547 passed / 0 failed / 0 skipped**，Android JVM **66 passed**，构建/类型检查通过；MCP 仍 **93**。禁模拟 ADB 后设备域查询、scope/进程/证书/地址 RPC 可独立走 LAN；设备实际效果由合成 backend 验证传输，**真实 Android JSSE/UDS/SELinux/无线链路及真实应用/CA 效果未验证**。agent/diagnostics/fs/helper/bulk 明确未迁移，无隐式 ADB fallback。工作台对账、下载和多 unknown 已浏览器实测。详见 [P4_LAN_AUTH.md](P4_LAN_AUTH.md)。独立 worktree 交付，不部署当前现场。
+
+> **2026-11-16 P3**：设备域、稳定安装身份、能力查询及 USB/ADB RPC 已实现，Binder/RPC 共享业务与状态版本，MCP 增至 **93**。隔离生产 Kotlin/Node 协议、双设备、超时/结果追踪、人类控制与公共 CLI 路径均已测；Android JVM **61 passed**，Device Daemon 构建及 Manager 编译通过。完整 Host 结果见 PROGRESS.md。**真机 Android UDS/SELinux、真实应用/证书效果尚未验证**；LAN/TLS/配对、agent 本地路由、bulk 与 ADB-only 能力迁移未实施，不能宣称 USB/LAN 全能力对等。见 [P3_DEVICE_DOMAIN.md](P3_DEVICE_DOMAIN.md)。源码仅在独立 worktree，不替换当前实例。
+
+> **2026-11-16 P2**：人类任务工作台已在隔离 Host/浏览器验收，含任务搜索分页、详情/结果/下载、有限副作用日志、配置草稿与显式冲突核对、暂停恢复、接管/交还与 unknown。完整 Host **525 passed / 0 failed / 0 skipped**；模块与限制见 [P2_WORKBENCH.md](P2_WORKBENCH.md)。交付在独立 worktree；原工作目录保留 P1，当前服务与真实设备未部署或升级。
+
+> **2026-11-16 P1**：统一操作执行层、SQLite 持久任务、revision/epoch 控制权、人类修改防旧写、超时 unknown/晚到证据、真实取消状态与最小面板已在隔离 Host 验证。公共 adh-cli 同步提供 run/tasks/control，尚未发布或替换本机安装包。接口/限制见 [P1_OPERATIONS.md](P1_OPERATIONS.md)；完整计数见 PROGRESS.md。源码未加载到当前分析服务，USB/LAN 新协议与真机效果不在本轮验收范围。
+
+> **2026-11-16 P0**：Host 作用域完整保留、MCP/面板共享设置、显式非破坏性初始化与独立维护已实现并纳入隔离回归；详情与验证见 [P0_HOST_STATE.md](P0_HOST_STATE.md) / PROGRESS.md。未部署、未重启当前服务、未执行真机升级验收；不要将源码状态当成当前运行实例状态。
+
 > 这份文件回答一个问题：**现在到底有什么、什么是验证过的、什么是没验证的、什么还没做完。**
 > 判定要有可复跑的 pass/fail 信号；优先跑命中的验收。`tools/verify_all.sh` 当前注册 **136 个脚本 = 40 host + 96 device**，这个数字不代表本轮全量通过。
 > 规格见 `REQUIREMENTS.md`，架构与排期见 `DEVELOPMENT_PLAN.md`，跨会话进度见 `PROGRESS.md`。
@@ -210,6 +220,43 @@ in-hook QBDI 仍是虚拟栈重放后再原生执行，不能把某个窗口未�
 | Host 单测 | `cd daemon && npm test` | ✅ **351 pass / 0 fail**，`tsc` 0 |
 
 **未测 / 已知边界**：`traceInsns` 上限 64k 与 300 ms 墙钟（谁先到谁停）；写观察点只覆盖**本次 run 内**的写；`memAfter` 仍只接受寄存器窗口；全量块级 trace 与 host 查询**尚未实现**（见 `PROGRESS` 第五十轮）。
+
+### 2.4 v0.7.0（2026-11-12）QBDI 载荷投递
+
+> 设备 `aa165071`（PGP110 / Android 15 / arm64-v8a / root），agent `5ea3f25c…`（= 模块内 `.so`），真实第三方 App `com.uxin.kilaaudio` 1.6.18。
+
+| 能力 | 门禁 | 真机结果 |
+|---|---|---|
+| QBDI 默认关闭面 | `verify_v129_qbdi_delivery.sh`（A 段） | ✅ PASS（`delivery is off` 可操作报错；`/proc/<pid>/fd` 无 QBDI fd） |
+| QBDI 显式开启后真实目标 trace | `verify_v129_qbdi_delivery.sh`（B 段） | ✅ PASS（companion 交付 fd；`qbdi_trace libc:getpid` → `retval`=目标 pid、8 条指令；trace 后 maps 无 QBDI） |
+| 沙盒不再自带追踪库 | `tools/fetch_qbdi.sh` | ✅ 默认不 stage（仅 `ADH_STAGE_SANDBOX_QBDI=1` 显式恢复旧行为） |
+
+**已知成本**：开启后每个被注入进程在 specialization 时多一个指向 `/data/adb/modules/adh/libQBDI.so` 的 fd（目标可 readlink 看到路径）；QBDI 运行期映射约 6MB `r-xp` + RSS +27MB（同一进程实测），standalone trace 结束 `dlclose` 释放。默认关闭时以上都不存在。
+
+### 2.5 v0.8.0（2026-11-12）作用域可编程 + 一把抓分析
+
+| 能力 | 门禁 | 真机结果 |
+|---|---|---|
+| 作用域读写（`scope_list` / `scope_set`） | `verify_v130_scope_analyze.sh`（host） | ✅ PASS（merge/拒绝非法包名/主进程选择/tool 形状 8/8）；真机写盘回读一致（7→8 包） |
+| 一把抓分析 `analyze_app` | `verify_v130` + 真机 | ✅ PASS（麦当劳 51s triage；中国移动 37s，13 组 HTTP exchange、163 条 crypto 记录） |
+| 沙盒 APK 不再内置追踪库 | 重装后设备 `lib/arm64` 列表 | ✅ 只剩 `libadh_agent.so` + fixtures |
+| agent 签名门禁 | `verify_v88_agent_signatures.sh` | ✅ PASS（错误文案去掉 `Dobby` 字面量后 token 3→2） |
+| 沙盒未运行时的 So 重组 | `verify_v02_so.sh` | ⏭ SKIP（原先是 FAIL，属环境性假红，已改为 clear SKIP） |
+
+**接口**：`POST /api/analyze-app` 与 MCP `analyze_app` 同源；`GET|POST /api/scope` 与 `scope_list`/`scope_set` 同源。`analyze_app` 只接受已安装的第三方包（系统包与 ADH 自己的包被拒绝），把包加入作用域这一动作会在回复的 `scopeAdded` 里如实报告。
+
+### 2.6 v0.8.1（2026-11-12）实战痛点第一批修复
+
+> 依据 `X:\DH_Project` 的真实使用记录（20 条缺口清单 + 三轮改进建议 + 86 工具实测）。设备 `aa165071`，agent 0.8.0，目标 `com.mcdonalds.gma.cn`。
+
+| 能力 | 门禁 | 真机结果 |
+|---|---|---|
+| `maps_query`（段过滤 + 地址解析） | `verify_v71`（registry）+ 真机 | ✅ PASS（2737 段；`libc.so` 命中 6 段、truncated 如实；`0x704cca7010` → libc.so + fileOffset 0x10） |
+| `oracle action:stability`（确定性判定） | `daemon/test/oracle_stability.test.ts` + 真机 | ✅ PASS（`System.currentTimeMillis` 三次重放：stable=false、distinct=3） |
+| 统一错误码（十类，含返回式失败） | `daemon/test/error_codes.test.ts` + 真机 | ✅ PASS（`memory_write` 无 0x、`native_hook` 缺 mode → `code:BAD_ARG`） |
+| 默认会话主进程优先 | `daemon/test/session_pick.test.ts` | ✅ PASS（主进程优先，子进程仅在其唯一在线时使用） |
+
+**对应关系**：`maps_query` ≈ DH_Project B3 的“段导航”一半（快照 diff 未做）；`stability` = B2；错误码 = A12；`pickSid` = A10。仍未做：PC 历史环 / hook 事件分页（缺口清单 P0-1/2）、`entry_capture`（B1）、结论台账（B6）。
 
 **全量门禁（2026-10-23，130 条）**：套件跑出 **112 PASS / 18 FAIL / 0 SKIP**。逐条单独复跑后：
 

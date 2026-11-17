@@ -66,6 +66,10 @@ class DaemonBinderProvider : ContentProvider() {
             val adapter = object : DaemonClient {
                 override val protocolVersion: Int get() = service.protocolVersion
                 override val scopeJson: String get() = service.scopeJson
+                override val scopeSnapshotJson:String get()=service.scopeSnapshotJson
+                override fun patchScopePackages(packagesJson:String,scopeRevision:String,stateRevision:Long):String=service.patchScopePackagesJson(packagesJson,scopeRevision,stateRevision)
+                override fun hookPlanState(packageName:String):String=service.getHookPlanStateJson(packageName)
+                override fun revokeHookPlan(packageName:String,deploymentId:String,cacheRevision:Long,stateRevision:Long):String=service.revokeHookPlanJson(packageName,deploymentId,cacheRevision,stateRevision)
                 override fun setScopeJson(json: String): Boolean = service.setScopeJson(json)
                 override val listApplicationsJson: String get() = service.listApplications()
                 override fun applicationIconPng(packageName: String): ByteArray =

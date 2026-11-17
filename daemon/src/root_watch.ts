@@ -1,3 +1,4 @@
+import { checkpoint, trackedEffect } from './execution_context.ts';
 // Host orchestration for the optional root-side perf collector. This process owns
 // files and queries; the helper only collects kernel samples outside the app.
 import { execFile, spawn } from 'node:child_process';
@@ -40,13 +41,41 @@ export function normalizeRootWatch(a: Record<string, any>) {
   const maxEvents = integer(a.maxEvents, 128, 1, 2048, 'maxEvents');
   const stackBytes = integer(a.stackBytes, 8192, 0, 16384, 'stackBytes');
   if (stackBytes % 8) throw new Error('stackBytes must be a multiple of 8');
-  return { tid, addr: '0x' + addr.toString(16), width, mode, durationMs, maxEvents, stackBytes };
+  // Extra hardware slots on the SAME thread. A stateful VM normally needs two or three
+  // stops (fetch / dispatch / tail) to see one operation, which one slot cannot express.
+  const rawBps = a.breakpoints === undefined ? [] : a.breakpoints;
+  if (!Array.isArray(rawBps) || rawBps.length > 3) throw new Error('breakpoints must be an array of at most 3 extra slots');
+  const breakpoints = rawBps.map((value: Record<string, any>, index: number) => {
+    if (!value || typeof value !== 'object') throw new Error(`breakpoints[${index}] must be an object`);
+    const modeOf = value.mode ?? 'x';
+    if (!['w', 'r', 'rw', 'x'].includes(modeOf)) throw new Error(`breakpoints[${index}].mode must be w, r, rw or x`);
+    const widthOf = integer(value.width, modeOf === 'x' ? 4 : 8, 1, 8, `breakpoints[${index}].width`);
+    const addrOf = address(value.addr, `breakpoints[${index}].addr`);
+    if (![1, 2, 4, 8].includes(widthOf) || addrOf % BigInt(widthOf) || (modeOf === 'x' && widthOf !== 4))
+      throw new Error(`breakpoints[${index}] width must be 1/2/4/8 and address aligned; execution breakpoints need width 4`);
+    return `bp=0x${addrOf.toString(16)}:${widthOf}:${modeOf}`;
+  });
+  // Memory windows are read by the collector at the moment of the hit; that is the only
+  // time the sampled registers still describe the state the instruction operated on.
+  const rawMem = a.mem === undefined ? [] : typeof a.mem === 'string' ? [a.mem] : a.mem;
+  if (!Array.isArray(rawMem) || rawMem.length > 4) throw new Error('mem must be a string or an array of at most 4 specs');
+  const MEM_SPEC = /^@{0,3}(x([0-9]|[12][0-9]|30)|sp|lr|pc)([+-](0x[0-9a-f]+|\d+))?(@(0x[0-9a-f]+|\d+))*(:([1-9][0-9]*|0x[1-9a-f][0-9a-f]{0,2}))?$/i;
+  const mem = rawMem.map((spec: unknown, index: number) => {
+    if (typeof spec !== 'string' || spec.length === 0 || spec.length > 60 || !MEM_SPEC.test(spec))
+      throw new Error(`mem[${index}] must look like [@[@]]REG[+/-OFFSET][:LEN] with REG=x0..x30, sp, lr or pc`);
+    if (spec.includes(':')) {
+      const size = Number(spec.slice(spec.lastIndexOf(':') + 1));
+      if (!Number.isInteger(size) || size < 1 || size > 256) throw new Error(`mem[${index}] length must be 1..256`);
+    }
+    return spec;
+  });
+  return { tid, addr: '0x' + addr.toString(16), width, mode, durationMs, maxEvents, stackBytes, breakpoints, mem };
 }
 async function adb(serial: string, args: string[], timeout = 10000) {
-  return (await exec('adb', ['-s', serial, ...args], { timeout, maxBuffer: 1024 * 1024, windowsHide: true })).stdout;
+  return (await trackedEffect(() => exec('adb', ['-s', serial, ...args], { timeout, maxBuffer: 1024 * 1024, windowsHide: true }))).stdout;
 }
 async function selectSerial(requested?: string) {
-  const devices = (await exec('adb', ['devices'], { timeout: 10000, windowsHide: true })).stdout
+  const devices = (await trackedEffect(() => exec('adb', ['devices'], { timeout: 10000, windowsHide: true }))).stdout
     .split(/\r?\n/).map(line => /^(\S+)\s+device$/.exec(line.trim())?.[1]).filter((x): x is string => !!x);
   const serial = requested ?? process.env.ADH_SERIAL ?? process.env.ANDROID_SERIAL;
   if (serial) { if (!devices.includes(serial)) throw new Error(`ADB device ${serial} is not online`); return serial; }
@@ -65,7 +94,7 @@ export async function prepareRootWatch(requested?: string) {
   if (version !== VERSION) throw new Error(`Unexpected root collector version: ${version}`);
   const text = await adb(serial, ['shell', 'su', '-c', `${HELPER} --self-test`]);
   const result = text.trim().split(/\r?\n/).map(line => JSON.parse(line)).at(-1);
-  if (result?.selfTest !== true || result?.complete !== true || result?.samples !== 1) throw new Error(`Root watch self-test failed: ${JSON.stringify(result)}`);
+  if (result?.selfTest !== true || result?.complete !== true || typeof result?.samples !== "number" || result.samples < 2) throw new Error(`Root watch self-test failed: ${JSON.stringify(result)}`);
   return { ok: true, serial, version, sha256: createHash('sha256').update(readFileSync(localHelper)).digest('hex'), selfTest: result };
 }
 export async function startRootWatch(target: Target, a: Record<string, any>, dataDir: string) {
@@ -87,7 +116,10 @@ export async function startRootWatch(target: Target, a: Record<string, any>, dat
   const stopFile = `/data/local/tmp/adh-root-watch-stop-${id}`;
   const run: Run = { id, serial, target, file, stopFile, running: true, stderr: '', samples: 0, ...generation };
   runs.set(id, run);
-  const command = `${HELPER} ${target.pid} ${spec.tid} ${spec.addr} ${spec.width} ${spec.mode} ${spec.durationMs} ${spec.maxEvents} ${spec.stackBytes} ${stopFile}`;
+  const command = `${HELPER} ${target.pid} ${spec.tid} ${spec.addr} ${spec.width} ${spec.mode} ${spec.durationMs} ${spec.maxEvents} ${spec.stackBytes} ${stopFile}`
+    + spec.breakpoints.map((extra: string) => ` ${extra}`).join('')
+    + spec.mem.map((window: string) => ` mem=${window}`).join('');
+  checkpoint();
   const child = spawn('adb', ['-s', serial, 'shell', 'su', '-c', command], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   let pending = '';
   await new Promise<void>((resolveReady, reject) => {
@@ -141,8 +173,47 @@ export function rootWatchStatus(id: string) {
     summary: r.summary ?? null, error: r.error, output: r.file, serial: r.serial, pid: r.target.pid,
     starttimeTicks: r.starttimeTicks, sessionGenerationVerified: r.sessionGenerationVerified };
 }
+// perf snapshots registers and the user stack in the kernel. In contrast, the
+// helper's process_vm_readv happens later, after the target has resumed. Recover
+// windows from the kernel stack when every dereference and byte is covered;
+// never label an asynchronous heap read as an event-time snapshot.
+function projectMemoryWindow(window: any, regs: string[], stack: any) {
+  const delayed = { ...window, source: 'process-memory-after-sample', snapshotConsistent: false };
+  const match = /^(@{0,3})(x(?:[0-9]|[12][0-9]|30)|sp|lr|pc)([+-](?:0x[0-9a-f]+|\d+))?((?:@(?:0x[0-9a-f]+|\d+))*)(?::(0x[0-9a-f]+|\d+))?$/i.exec(window.spec ?? '');
+  if (!match || !Array.isArray(regs) || typeof stack?.hex !== 'string') return delayed;
+  const reg = match[2].toLowerCase();
+  const index = reg === 'sp' ? 31 : reg === 'pc' ? 32 : reg === 'lr' ? 30 : Number(reg.slice(1));
+  if (typeof regs[index] !== 'string' || !/^0x[0-9a-f]+$/i.test(regs[index])) return delayed;
+  const bytes = Buffer.from(stack.hex, 'hex');
+  const available = Math.min(bytes.length, Number(stack.got) || 0);
+  const base = BigInt(stack.addr);
+  const read = (at: bigint, size: number): Buffer | null => {
+    const offset = at - base;
+    return offset >= 0n && offset + BigInt(size) <= BigInt(available)
+      ? bytes.subarray(Number(offset), Number(offset) + size) : null;
+  };
+  const offsetText = match[3];
+  const initialOffset = !offsetText ? 0n : (offsetText[0] === '-' ? -1n : 1n) * BigInt(offsetText.slice(1));
+  let at = BigInt.asUintN(64, BigInt(regs[index]) + initialOffset);
+  const hops = match[4] ? match[4].slice(1).split('@').map(value => BigInt(value)) : [];
+  if (hops.length > match[1].length) return delayed;
+  for (let i = 0; i < match[1].length; i++) {
+    const pointer = read(at, 8);
+    if (!pointer || pointer.readBigUInt64LE() === 0n) return delayed;
+    at = BigInt.asUintN(64, pointer.readBigUInt64LE() + (hops[i] ?? 0n));
+  }
+  const size = match[5] ? Number(match[5]) : 16;
+  if (!Number.isSafeInteger(size) || size < 1 || size > 256) return delayed;
+  const captured = read(at, size);
+  if (!captured) return delayed;
+  const { error: _error, ...original } = window;
+  return { ...original, addr: '0x' + at.toString(16), hex: captured.toString('hex'),
+    source: 'kernel-stack-sample', snapshotConsistent: true };
+}
+
 export function projectRootSample(record: any, a: Record<string, any>) {
   const { regs, stack, ...event } = record;
+  if (Array.isArray(record.mem)) event.mem = record.mem.map((window: any) => projectMemoryWindow(window, regs, stack));
   if (a.registers === true) event.regs = regs;
   const size = integer(a.stackSize, 0, 0, 2048, 'stackSize');
   event.stack = { addr: stack.addr, requested: stack.requested, got: stack.got, short: stack.got < stack.requested };

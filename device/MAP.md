@@ -6,6 +6,14 @@ Magisk 打包仍在 `injector/zygisk/`。
 
 ## Modules
 
+## P5 additions (2026-11-16)
+
+Real Android follow-up: `core/DeviceRpc.lanProof` fixes Android/JVM authentication-byte differences. `daemon/device/DeviceRpcRelay` is a root-only raw USB relay with unchanged dispatcher; isolated socket parameters default to production names. `daemon/src/p5Fixture` and the separate `:p5sandbox` module require `adhP5Sandbox=true` and are absent from the normal bundle graph. See [P5_ANDROID_ACCEPTANCE.md](../docs/P5_ANDROID_ACCEPTANCE.md).
+
+`core/EarlyPlanWire.kt` encodes the bounded early-plan/1 wire. `daemon/device/HookPlanCache.kt` owns validated, expiring app/Agent-bound cache and exact legacy backups through DeviceOperations. `AndroidHookBinding.kt` validates installed identity/ABI; `EarlyPlanBroker.kt` serves root companions only. Manager Binder v20 adds package-only CAS and Hook cache read/revoke; the fixed family editor is now a read-only legacy snapshot. Authoritative programmable editing stays on Host. No automatic app restart. See [P5_HOOK_PLANS.md](../docs/P5_HOOK_PLANS.md).
+
+## Modules reference
+
 | Gradle | Package | Role |
 |---|---|---|
 | `:core` | `com.adh.core` | Scope 契约单一真相：路径常量、JSON 编解码、逐包 Hook 策略（`CaptureFamilies`）、`IAdhScopeService` AIDL、已安装应用目录 JSON、进程控制允许清单 |
@@ -123,3 +131,21 @@ its own screen, opened from an app row. Home compares `BuildConfig.VERSION_CODE`
 manifest at the same URL as `module.prop` `updateJson`.
 Module status distinguishes an unavailable Device Daemon from an absent or unloaded
 module. Both Home and Scope re-check when returning to the foreground.
+
+## P3 device domain (2026-11-16)
+
+`core/DeviceRpc.kt` pins adh.device/1, bounded framing and the method-effect contract. AIDL v19 appends info/capabilities/scope CAS without renumbering previous transactions. `daemon/AndroidDeviceBackend.kt` owns Android business operations; `RootScopeBinder` enforces the existing caller verifier then delegates to the same `device/DeviceOperations` as USB RPC. That package owns installation identity, atomic files, the bounded revision/operation journal, process generations, scope preservation and a stream dispatcher. `LocalDeviceRpcServer` adds only an authenticated abstract UDS; no phone HTTP/MCP/TCP/analysis server. DeviceDaemon holds a process lock for identity/journal ownership.
+
+JVM `DeviceDomainTest` tests recovery/CAS/storage errors; `DeviceRpcFixture` exposes the production identity/domain/codec over an OS-temp loopback socket with a synthetic backend. `:daemon:writeDeviceRpcFixtureClasspath` explicitly builds its ignored classpath manifest for Host interoperability tests; it never starts a real Android service. See docs/P3_DEVICE_DOMAIN.md for limits and the separate unverified Android/SELinux boundary.
+
+## P4 authenticated LAN (2026-11-16)
+
+`DeviceTls` builds a self-signed installation certificate using public JCA/JSSE, independent of imported system CAs. `DeviceNetwork` restores only explicitly enabled TLS configuration; its default is disabled. `DevicePairings` persists bounded public grants and revocations, closes revoked streams and fails closed on storage errors. The same DeviceRpcSession negotiates USB-token or LAN client-signature authentication, then dispatches through DeviceOperations with a per-request authorization guard inside the domain lock. Capabilities are filtered by grant; no TCP plaintext, remote root shell, HTTP/MCP, database or analysis is introduced. Existing Binder numbering stays v19; its API was not changed this slice. See docs/P4_LAN_AUTH.md for USB-first enrollment, permissions, recovery and unsupported legacy capabilities. Real Android TLS/SELinux and device effects remain a separate hardware gate.
+
+### P5 stdio/2 与最终验收（2026-11-16）
+
+`:core` 的 DeviceStdio.kt 只做有界帧/外层 Base64 编解码，供 :daemon 的 root DeviceRpcRelay 使用，处理 Windows ADB 的 CRLF 转换；不承载分析。DeviceIdentity 保留身份/凭据并标记 stdioVersion=2。opt-in p5Fixture 和 p5sandbox 的隔离边界、真实七族探针及绑定拒绝见 docs/P5_ANDROID_ACCEPTANCE.md；普通 APK 不含 P5 fixture。
+
+## P5 正式注入夹具（2026-11-16）
+
+opt-in P5DeviceFixture 可选 nonce 约束的临时模块ID，绑定该模块Agent及私有/data/adb状态，不改默认路径。p5sandbox 的 ProbeApplication 记录首次Os.getpid窗口；ProbeActivity仅给真实Zygisk模式保持自身前台/常亮，ProbeService在zygiskOnly分支不执行任何Agent自加载。普通APK排除这些fixture类。见 docs/P5_ZYGISK_ACCEPTANCE.md。

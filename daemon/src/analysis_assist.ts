@@ -50,7 +50,8 @@ export async function assessAnalysis(options: AssessmentOptions, deps: Assessmen
       note: 'Re-run to refresh live facts. This checkpoint carries identifiers, not keys, plaintext or a complete case history. A new session must be selected after reconnect.' },
     limits: ['Only current Host-retained records are inspected (at most 64); records and hook counters may cover different windows.',
       'No automatic trigger, hook install/unhook, restart, replay, root upload, or algorithm conclusion is performed.',
-      'Proposed next calls may have the explicitly stated effects; execute them only within the authorized task.'],
+      'Proposed next calls may have the explicitly stated effects; execute them only within the authorized task.',
+      'A stalled screen or a hung command is a state, not a diagnosis. Before this assessment is used to claim anti-debugging, hardening or injection detection, the ordinary causes must be ruled out on the device: a normal user-interaction gate (privacy consent, permission, login, SMS code, onboarding), a command that never reached the device, and a target that is simply idle. adb (dumpsys activity activities, uiautomator dump, screencap) is the supported channel for that check.'],
   };
   const finish = (stage: string, summary: string, next: Next | null, missing: string[] = [], forbidden: string[] = []) => {
     report.stage = stage; report.summary = summary; report.next = next;

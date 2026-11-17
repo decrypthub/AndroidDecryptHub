@@ -1,3 +1,6 @@
+import { patchSettings, settingsHttpStatus } from '../settings_service.ts';
+import { maintainData } from '../maintenance.ts';
+import { localEffect } from '../execution_context.ts';
 import { existsSync, unlinkSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -10,13 +13,14 @@ import { assembleHttpExchanges, type TlsChunk } from '../http_exchange.ts';
 import { AGENT_PORT, webUrls } from '../config.ts';
 import { baseFromHost, isValidPackage, mcpOnboarding } from '../mcp_onboarding.ts';
 import { handleMcp, MCP_TOOLS } from '../mcp.ts';
-import { scopedApps } from '../scope_list.ts';
-import { applyCaptureEnabled, listCaptureArmProtected } from '../service.ts';
+import { scopedApps, mergeScope, readScopeFile, writeScopePackages } from '../scope_list.ts';
+import { analyzePackage } from '../app_analyze.ts';
+import { listCaptureArmProtected } from '../service.ts';
 import {
-  applyCaptureRetainCap, broadcast, captureHealth, capturePackage, captures, captureTimers,
+  broadcast, captureHealth, capturePackage, captures, captureTimers,
   clearCaptureStore, clearPackageCaptureStore, configStats, cryptoIdentify, dumps, eventPackage,
-  events, EVENTS_FILE, exportPackageCapturesJsonl, hexToPreview, log, mergeSettings, packageCaptureDiskStats,
-  previewForCapture, readBody, saveSettings, sessions, settings,
+  events, EVENTS_FILE, exportPackageCapturesJsonl, hexToPreview, log, packageCaptureDiskStats,
+  previewForCapture, readBody, sessions, settings,
 } from '../state.ts';
 import type { Route, RouteContext } from './types.ts';
 
@@ -28,12 +32,19 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
     const buf = await readFile(file);
     res.writeHead(200, {
       'content-type': contentType,
-      'cache-control': 'public, max-age=86400',
+      'cache-control': 'no-cache',
       'access-control-allow-origin': '*',
     });
     res.end(buf);
   };
   return [
+    { path:'/workbench',handler:servePublic('workbench.html','text/html; charset=utf-8') },
+    { path:'/workbench.css',handler:servePublic('workbench.css','text/css; charset=utf-8') },
+    { path:'/operation-client.js',handler:servePublic('operation-client.js','text/javascript; charset=utf-8') },
+    { path:'/workbench-model.js',handler:servePublic('workbench-model.js','text/javascript; charset=utf-8') },
+    { path:'/workbench.js',handler:servePublic('workbench.js','text/javascript; charset=utf-8') },
+    { path:'/hook-plans-panel.js',handler:servePublic('hook-plans-panel.js','text/javascript; charset=utf-8') },
+    { path:'/operations.js',handler:servePublic('operations.js','text/javascript; charset=utf-8') },
     { path: '/api/apps', handler: async () => {
       const scope = await scopedApps();
       return send(200, {
@@ -41,6 +52,49 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
         // Packages that finished one-click unpack and will not be re-armed until next hello.
         unpackProtected: listCaptureArmProtected(),
       });
+    } },
+    // Host-side allowlist control (the AI/operator channel): the companion reads scope.json at
+    // process specialization, so an added package is injected on its next cold start.
+    { method: 'GET', path: '/api/scope', handler: async () => {
+      const s = await readScopeFile();
+      return send(200, { ok: s.error === null, packages: s.packages, version: s.version, mode: s.mode, error: s.error });
+    } },
+    { method: 'POST', path: '/api/scope', handler: async () => {
+      let body: any;
+      try { body = JSON.parse((await readBody(req)) || '{}'); } catch { return send(400, { error: 'bad json' }); }
+      const cur = await readScopeFile();
+      if (cur.error) return send(503, { ok: false, error: cur.error });
+      const before = cur.packages;
+      const next = Array.isArray(body.set)
+        ? mergeScope([], { add: body.set })
+        : mergeScope(before, { add: body.add, remove: body.remove });
+      const w = await writeScopePackages(next, { version: cur.version, mode: cur.mode });
+      if (!w.ok) return send(502, { ok: false, error: w.error, packages: before });
+      return send(200, {
+        ok: true, packages: w.packages,
+        added: w.packages.filter((p) => !before.includes(p)),
+        removed: before.filter((p) => !w.packages.includes(p)),
+        note: 'cold start the target to apply',
+      });
+    } },
+    // One call from a package name to a report — the "analyze any app" entry point.
+    { method: 'POST', path: '/api/analyze-app', handler: async () => {
+      let body: any;
+      try { body = JSON.parse((await readBody(req)) || '{}'); } catch { return send(400, { error: 'bad json' }); }
+      const pkg = String(body.package ?? '').trim();
+      if (!pkg) return send(400, { error: 'need package' });
+      try {
+        const out = await analyzePackage(pkg, {
+          autoScope: body.autoScope !== false,
+          forceRestart: body.forceRestart === true,
+          captureMs: Number(body.captureMs) > 0 ? Number(body.captureMs) : undefined,
+          unpack: body.unpack === true,
+          httpCaptureMs: Number(body.httpCaptureMs) > 0 ? Number(body.httpCaptureMs) : 0,
+          timeoutMs: Number(body.timeoutMs) > 0 ? Number(body.timeoutMs) : undefined,
+          settleMs: Number(body.settleMs) > 0 ? Number(body.settleMs) : undefined,
+        });
+        return send(out.ok ? 200 : 502, out);
+      } catch (e) { return send(500, { ok: false, error: (e as Error).message }); }
     } },
     { path: '/health', handler: () => send(200, {
       ok: true, service: 'adhd', name: 'ADH Daemon', version: '0.1.0',
@@ -128,12 +182,8 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       if (req.method === 'POST') {
         let patch: any = {};
         try { patch = JSON.parse((await readBody(req)) || '{}'); } catch { return send(400, { error: 'bad json' }); }
-        const applied = mergeSettings(patch);
-        applyCaptureRetainCap();
-        applyCaptureEnabled().catch((e) => log('[settings] applyCaptureEnabled:', (e as Error).message));
-        try { saveSettings(); }
-        catch (e) { return send(500, { error: '设置已在内存生效，但写入磁盘失败(重启后丢失): ' + (e as Error).message, applied, settings, persisted: false }); }
-        return send(200, { ok: true, applied, settings, stats: configStats(), persisted: true });
+        const result = await patchSettings(patch);
+        return send(settingsHttpStatus(result), result);
       }
       return send(200, { settings, stats: configStats() });
     } },
@@ -142,13 +192,15 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       let obj: any;
       try { obj = JSON.parse((await readBody(req)) || '{}'); } catch { return send(400, { error: 'JSON 格式错误' }); }
       if (typeof obj !== 'object' || Array.isArray(obj)) return send(400, { error: '顶层必须是对象' });
-      const applied = mergeSettings(obj);
-      if (!applied.length) return send(400, { error: '没有可应用的板块(capture/ui/artifacts)' });
-      applyCaptureRetainCap();
-      applyCaptureEnabled().catch((e) => log('[settings] applyCaptureEnabled:', (e as Error).message));
-      try { saveSettings(); }
-      catch (e) { return send(500, { error: '导入已在内存生效，但写入磁盘失败(重启后丢失): ' + (e as Error).message, applied, settings, persisted: false }); }
-      return send(200, { ok: true, applied, settings, persisted: true });
+      const result = await patchSettings(obj);
+      return send(settingsHttpStatus(result), result);
+    } },
+    { method: 'GET', path: '/api/maintenance', handler: () => send(200, maintainData()) },
+    { method: 'POST', path: '/api/maintenance', handler: async () => {
+      let body: any;
+      try { body = JSON.parse((await readBody(req)) || '{}'); } catch { return send(400, { error: 'bad json' }); }
+      const result = maintainData(body ?? {});
+      return send(result.ok ? 200 : 400, result);
     } },
     { path: '/api/captures/packages', handler: () => send(200, { packages: packageCaptureDiskStats() }) },
     { path: '/api/captures/export', handler: () => {
@@ -168,21 +220,24 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       const what = String(body.what || '');
       const pkg = String(body.package || '').trim();
       const errors: string[] = [];
-      if (what === 'captures') {
-        if (pkg) errors.push(...clearPackageCaptureStore(pkg));
-        else errors.push(...clearCaptureStore());
-      }
-      else if (what === 'events') {
-        events.length = 0;
-        try { writeFileSync(EVENTS_FILE, ''); } catch (e) { errors.push(`events 回放文件: ${(e as Error).message}`); }
-      }
-      else if (what === 'dumps') {
-        const victims = [...dumps.values()].filter(d => !pkg || d.package === pkg);
-        for (const d of victims) {
-          try { if (existsSync(d.path)) unlinkSync(d.path); } catch (e) { errors.push(`${d.path}: ${(e as Error).message}`); }
-          dumps.delete(d.sha256);
+      if (!['captures', 'events', 'dumps'].includes(what)) return send(400, { error: 'what 必须是 captures|events|dumps' });
+      localEffect(() => {
+        if (what === 'captures') {
+          if (pkg) errors.push(...clearPackageCaptureStore(pkg));
+          else errors.push(...clearCaptureStore());
         }
-      } else return send(400, { error: 'what 必须是 captures|events|dumps' });
+        else if (what === 'events') {
+          events.length = 0;
+          try { writeFileSync(EVENTS_FILE, ''); } catch (e) { errors.push(`events 回放文件: ${(e as Error).message}`); }
+        }
+        else if (what === 'dumps') {
+          const victims = [...dumps.values()].filter(d => !pkg || d.package === pkg);
+          for (const d of victims) {
+            try { if (existsSync(d.path)) unlinkSync(d.path); } catch (e) { errors.push(`${d.path}: ${(e as Error).message}`); }
+            dumps.delete(d.sha256);
+          }
+        }
+      });
       broadcast('data.cleared', { what, package: pkg || undefined });
       if (errors.length) { log(`[data/clear] ${what} 部分磁盘删除失败:`, errors.join('; ')); return send(500, { error: `内存索引已清，但磁盘删除失败(${errors.length}项)`, cleared: what, errors, stats: configStats() }); }
       return send(200, { ok: true, cleared: what, package: pkg || undefined, stats: configStats() });

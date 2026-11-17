@@ -1,3 +1,6 @@
+import { checkpoint, detached, localEffect, trackedEffect } from './execution_context.ts';
+import { automaticSnapshot, runAutomatic } from './operation_host.ts';
+import { captureFile } from './storage.ts';
 // service.ts — ADH Daemon service layer: agent-command transport + dump engine + capture ops.
 // Imported by mcp.ts (MCP handlers) and index.ts (REST routes + agent TCP + boot).
 // Imports ONLY from state.ts (+ dex.ts / so_select.ts pure layers + dex_index.ts for artifact
@@ -11,12 +14,12 @@ import { basename, join } from 'node:path';
 import {
   frameJson, agentSockets, pending, nextCmdId, sessions, dumps, log, rememberDump,
   captureTimers, captureModules, settings, recentJavaIn, captures,
-  pushCapture, broadcast, hexToPreview, previewForCapture, classify, categoryOf, capStats, CAPTURES,
+  pushCapture, broadcast, hexToPreview, previewForCapture, classify, categoryOf, capStats,
   pruneArtifacts, DATA_DIR,
 } from './state.ts';
 import { shouldAutoArmPackage, scopedApps } from './scope_list.ts';
 import type { AgentSession, DumpMeta, MapsRegion, Capture } from './state.ts';
-import { nativeHookIdentity } from './state.ts';
+import { broadcastLive, inflight, nativeHookIdentity } from './state.ts';
 // dex_index.ts imports state.ts, not this file, so this edge cannot form a cycle; it is here so
 // artifact retention can drop the index row of a dex it deletes.
 import { deleteDexDocument, ensureDexIndex } from './dex_index.ts';
@@ -30,24 +33,75 @@ import { buildStoredZip } from './zip_store.ts';
 
 // ---- agent command transport ---------------------------------------------
 // Issue a command to an agent and await its cmdResult (10s default timeout).
+//
+// A command that outlives a few seconds is the normal case for the analysis primitives (a QBDI trace
+// runs to its budget, root_watch waits out its window, a dump walks a large mapping). Over plain
+// request/response the caller sees NOTHING until it either returns or times out, which is
+// indistinguishable from a wedged target - measured: a 6 s trace and a dead agent looked identical.
+// So every in-flight command reports a heartbeat on the live WebSocket channel (`cmd.progress`) and a
+// terminal `cmd.done`. The heartbeat carries elapsed time and the caller's own deadline, never a
+// fabricated percentage: the daemon cannot know how far into a trace the agent is, and inventing
+// progress is worse than reporting none.
 export function sendCmd(sessionId: string, op: string, args: Record<string, unknown> = {}, timeoutMs = 10_000): Promise<any> {
-  return new Promise((resolve, reject) => {
-    const sock = agentSockets.get(sessionId);
-    if (!sock || sock.destroyed) return reject(new Error('agent not connected'));
+  checkpoint(sessionId);
+  const sock = agentSockets.get(sessionId);
+  if (!sock || sock.destroyed) return Promise.reject(new Error('agent not connected'));
+  return trackedEffect(() => new Promise((resolve, reject) => {
     const id = nextCmdId();
-    const timer = setTimeout(() => { pending.delete(id); reject(new Error('command timeout')); }, timeoutMs);
+    const startedAt = Date.now();
+    // Report while the command is in flight. Unref'd so a pending heartbeat can never keep the
+    // process alive, and cleared on BOTH paths below so a finished command stops reporting.
+    const beat = setInterval(() => {
+      const t = inflight.get(id);
+      if (!t) return;
+      broadcastLive('cmd.progress', {
+        cmdId: id, op, sessionId,
+        elapsedMs: Date.now() - startedAt,
+        remainingMs: Math.max(0, timeoutMs - (Date.now() - startedAt)),
+      });
+    }, 1000);
+    if (typeof beat.unref === 'function') beat.unref();
+    inflight.set(id, { cmdId: id, op, sessionId, startedAt, timeoutMs, beat });
+    broadcastLive('cmd.start', { cmdId: id, op, sessionId, timeoutMs });
+    const finish = (ok: boolean, state = ok ? 'responded' : 'failed') => {
+      clearInterval(beat);
+      const t = inflight.get(id);
+      // Whoever removes the tracker owns the terminal event. failPendingFor removes it before
+      // rejecting, so a disconnect reports cmd.done exactly once (with its reason) and this path
+      // stays silent instead of emitting a second, reasonless copy.
+      if (!t) return;
+      if (t.beat) clearInterval(t.beat);
+      inflight.delete(id);
+      broadcastLive('cmd.done', { cmdId: id, op, sessionId, ok, state, targetStopped: false, elapsedMs: Date.now() - startedAt });
+    };
+    const timer = setTimeout(() => { pending.delete(id); finish(false,'unknown'); reject(Object.assign(new Error('command timeout'),{code:'COMMAND_TIMEOUT',uncertain:true})); }, timeoutMs);
     // The session id is carried with the pending entry so a DISCONNECT can fail exactly the commands it
     // owned. Without it, a target that dies mid-command (a trace of code that dereferences freed memory
     // does this) leaves the caller waiting for the full timeout with no explanation - measured: 60 s of
     // silence, answered only by "command timeout".
-    pending.set(id, { resolve, reject, timer, sessionId });
+    pending.set(id, {
+      resolve: (v: any) => { clearTimeout(timer); finish(true); resolve(v); },
+      reject: (e: any) => { clearTimeout(timer); finish(false); reject(e); },
+      timer, sessionId,
+    });
     sock.write(frameJson({ ...args, t: 'cmd', id, op }));
-  });
+  }),sessionId,{kind:'agent',action:op,session:sessionId});
 }
 
-export const pickSid = (sid?: string) => sid ?? [...sessions.values()].filter(s => s.online).pop()?.sessionId;
-export const sessionForPackage = (pkg: string) =>
-  [...sessions.values()].filter(s => s.online && s.package === pkg).pop()?.sessionId;
+export const pickSid = (sid?: string) => {
+  if (sid) return sid;
+  const online = [...sessions.values()].filter((s) => s.online);
+  if (!online.length) return undefined;
+  // The main process wins. The previous `.pop()` took whichever session was inserted last, which on a
+  // multi-process target can be a renderer/push child: the tool then fails with an empty result and
+  // no hint that the wrong process was chosen (field report: ClassNotFound in :normal_render_proc0
+  // while the main process was online). A child is used only when it is the only thing online.
+  return (online.find((s) => !s.process.includes(':')) ?? online[online.length - 1]).sessionId;
+};
+export const sessionForPackage = (pkg: string) => {
+  const rows = [...sessions.values()].filter((s) => s.online && s.package === pkg);
+  return (rows.find((s) => !s.process.includes(':')) ?? rows[rows.length - 1])?.sessionId;
+};
 export async function agentCmd(sid: string | undefined, op: string, args: Record<string, unknown> = {}, timeout = 15_000) {
   const s = pickSid(sid); if (!s) throw new Error('no online agent session');
   return sendCmd(s, op, args, timeout);
@@ -292,7 +346,8 @@ export async function applyStartupHooks(sid: string): Promise<AgentSession['star
   // test run). A session that closed before it fires is a no-op (checked inside).
   const plan = startupWidenPlan();
   if (plan.afterMs > 0 && plan.targets.length) {
-    const timer = setTimeout(() => { void widenStartupHooks(sid); }, plan.afterMs);
+    const expected=automaticSnapshot(sid);
+    const timer = detached(()=>setTimeout(() => { void runAutomatic(sid,'automatic-startup-widen',expected,()=>widenStartupHooks(sid)); }, plan.afterMs));
     if (typeof timer.unref === 'function') timer.unref();
   }
   return s.startupHooks;
@@ -561,7 +616,8 @@ export async function dumpOneAppSo(sid: string, base: string, name: string) {
     const sha = createHash('sha256').update(buf).digest('hex');
     const existing = dumps.get(sha);
     if (existing) return { name, base, saved: true, dedup: true, sha256: sha, size: buf.length, elf: true };
-    const path = join(CAPTURES, `${sha.slice(0, 16)}.so`);
+    checkpoint();
+    const path = captureFile(`${sha.slice(0, 16)}.so`);
     if (!existsSync(path)) await writeFile(path, buf);
     const meta: DumpMeta = {
       sha256: sha, size: buf.length, requestedSize: buf.length, complete: true,
@@ -571,7 +627,7 @@ export async function dumpOneAppSo(sid: string, base: string, name: string) {
     };
     rememberDump(meta);
     broadcast('dump.new', meta);
-    pruneArtifactsAndIndex(sha);
+
     return { name, base, saved: true, dedup: false, sha256: sha, size: buf.length, elf: true };
   } catch (e) {
     const message = (e as Error).message;
@@ -600,7 +656,8 @@ export async function dumpAppSo(sid: string) {
         modules.push({ name: mod.name, path: mod.path, sha256: sha, size: buf.length, dedup: true });
         continue;
       }
-      const path = join(CAPTURES, `${sha.slice(0, 16)}.so`);
+      checkpoint();
+    const path = captureFile(`${sha.slice(0, 16)}.so`);
       if (!existsSync(path)) await writeFile(path, buf);
       const meta: DumpMeta = {
         sha256: sha, size: buf.length, requestedSize: buf.length, complete: true,
@@ -609,7 +666,7 @@ export async function dumpAppSo(sid: string) {
       };
       rememberDump(meta);
       broadcast('dump.new', meta);
-      pruneArtifactsAndIndex(sha);
+
       dumped++;
       modules.push({ name: mod.name, path: mod.path, sha256: sha, size: buf.length, dedup: false });
     } catch (e) {
@@ -647,10 +704,10 @@ export function repairDexHeader(buf: Buffer): { fileSize: number; checksum: stri
   return { fileSize, checksum: checksum.toString(16).padStart(8, '0'), signature: sig.toString('hex'), magicOk };
 }
 
-// Artifact retention, wired to the dex index. Called after a NEW artifact lands (a dedup hit kept
-// the file that was already there, so there is nothing to reclaim) and once at boot. Retention
-// failing must never break a dump that already succeeded, but it must not be silent either.
+// Explicit artifact maintenance, wired to the dex index. Never called by import, startup,
+// settings patches or artifact writes. Failures remain observable to the maintenance caller.
 export function pruneArtifactsAndIndex(protectSha?: string) {
+  checkpoint();
   try {
     const r = pruneArtifacts((sha) => {
       try { deleteDexDocument(sha); }
@@ -683,7 +740,8 @@ export async function persistArtifact(
   const existing = dumps.get(sha);
   if (existing) return { meta: existing, dedup: true };
   const kind = inferKind(buf);
-  const path = join(CAPTURES, `${sha.slice(0, 16)}.${kind}.bin`);
+  checkpoint();
+  const path = captureFile(`${sha.slice(0, 16)}.${kind}.bin`);
   if (!existsSync(path)) await writeFile(path, buf);
   const meta: DumpMeta = {
     sha256: sha, size: buf.length,
@@ -694,7 +752,7 @@ export async function persistArtifact(
   };
   rememberDump(meta);
   broadcast('dump.new', meta);
-  pruneArtifactsAndIndex(sha);     // a new file landed: enforce the on-disk budget now
+
   return { meta, dedup: false };
 }
 
@@ -732,7 +790,8 @@ export async function dumpRegion(sid: string, addrHex: string, size: number, tag
   }
   const s = sessions.get(sid);
   const kind = inferKind(buf);
-  const path = join(CAPTURES, `${sha.slice(0, 16)}.${kind}.bin`);
+  checkpoint();
+  const path = captureFile(`${sha.slice(0, 16)}.${kind}.bin`);
   if (!existsSync(path)) await writeFile(path, buf);
   const complete = buf.length === size;
   const meta: DumpMeta = {
@@ -741,7 +800,7 @@ export async function dumpRegion(sid: string, addrHex: string, size: number, tag
   };
   rememberDump(meta);
   broadcast('dump.new', meta);
-  pruneArtifactsAndIndex(sha);     // a new file landed: enforce the on-disk budget now
+
   return { meta, dedup: false };
 }
 
@@ -762,27 +821,20 @@ function recordCaptureHooks(sid: string, r: any) {
 // Apply the capture.enabled toggle to already-connected sessions.
 // enabled=false → force-stop hooks everywhere. enabled=true → re-arm only packages that
 // should auto-arm (scope allowlist / sandbox), using setCapture for a clean drain→stop→start.
-export async function applyCaptureEnabled() {
-  if (!settings.capture.enabled) {
-    for (const s of sessions.values()) {
-      if (!s.online) continue;
-      try { await setCapture(s.sessionId, false); }
-      catch (e) { log(`[settings] capture_stop 会话 ${s.sessionId} 失败:`, (e as Error).message); }
-    }
-    return;
-  }
-  try { await scopedApps(); } catch { /* cache may still help */ }
-  for (const s of sessions.values()) {
-    if (!s.online) continue;
-    if (!shouldAutoArmPackage(s.package, s.entry)) continue;
-    // Skip just-unpacked / in-unpack packages — flipping the global switch must not crash SecNeo.
-    if (captureArmBlockedReason(s.package)) {
-      log(`[settings] capture_start skip ${s.sessionId} (unpack protect ${s.package})`);
-      continue;
-    }
-    try { await setCapture(s.sessionId, true); }
-    catch (e) { log(`[settings] capture_start 会话 ${s.sessionId} 失败:`, (e as Error).message); }
-  }
+export async function applyCaptureEnabled(): Promise<{
+  ok: boolean; targets: { session: string; ok: boolean; skipped?: string; error?: string }[]; error?: string;
+}> {
+  const on = settings.capture.enabled;
+  const targets = await Promise.all([...sessions.values()].filter(s => s.online).map(async s => {
+    if (on) { startCaptureLoop(s.sessionId,{skipArm:true});return {session:s.sessionId,ok:true,skipped:'drain-only; explicit hook plan required'}; }
+    const blocked = on ? captureArmBlockedReason(s.package) : null;
+    if (blocked) return { session: s.sessionId, ok: true, skipped: blocked };
+    try {
+      const result = await setCapture(s.sessionId, on);
+      return { session: s.sessionId, ok: result.ok, ...(!result.ok ? { error: String((result as any).error || (result as any).reply?.error || 'capture operation failed') } : {}) };
+    } catch (error) { return { session: s.sessionId, ok: false, error: (error as Error).message }; }
+  }));
+  return { ok: targets.every(t => t.ok), targets };
 }
 
 // ---- capture_start / capture_stop (the tools' one implementation) --------------------------
@@ -862,11 +914,11 @@ export async function setCapture(
   modules?: { cryptoModule?: string; fileModule?: string; sysModule?: string; force?: boolean },
 ): Promise<CaptureToggle> {
   const mods = { ...captureModules() };
-  // Only keys the caller actually passed override the settings defaults (an explicit undefined
-  // must not blank a module out - that would silently turn "hook this module" into "scan all").
+  // Omitted keys use the legacy template. An explicit empty string is an intentional
+  // all-module scan (crypto) or disabled module family (file/system), as in plan JSON.
   for (const k of ['cryptoModule', 'fileModule', 'sysModule'] as const) {
     const v = modules?.[k];
-    if (typeof v === 'string' && v.length) mods[k] = v;
+    if (typeof v === 'string') mods[k] = v;
   }
   if (on) {
     const pkg = sessions.get(sid)?.package ?? '';
@@ -881,7 +933,7 @@ export async function setCapture(
       } as CaptureToggle;
     }
     if (modules?.force === true && pkg) clearCaptureArmProtect(pkg);
-    const verdict = await armCaptureHooks(sid, mods);
+    const verdict = await armCaptureHooks(sid, mods, typeof modules?.sysModule === 'string');
     // Start the drain loop without a second arm (hello path arms itself after a short delay).
     startCaptureLoop(sid, { skipArm: true });
     return verdict;
@@ -889,6 +941,16 @@ export async function setCapture(
   const drained = await drainSession(sid);
   const reply = await sendCmd(sid, 'capture_stop', {}, 8_000);
   recordCaptureHooks(sid, reply);
+  // Disarm the periodic drain as part of stopping. Leaving it armed made the loop issue
+  // capture_drain every 1.5 s against an already-stopped capture, which showed up in the field as
+  // endless `[capture] … DROPPING — ring full` lines after the hooks were restored (observed on
+  // com.chaoxing.mobile, 2026-11-13). The drainer itself stays registered so an explicit
+  // drainSession() still works; only the timer that nobody asked to keep polling is cancelled.
+  const timer = captureTimers.get(sid);
+  if (timer) {
+    clearInterval(timer);
+    captureTimers.delete(sid);
+  }
   const drainedCount = Number(drained.response?.count ?? 0) || 0;
   const dropped = Number(drained.response?.dropped ?? 0) || 0;
   return {
@@ -936,7 +998,7 @@ export async function resolveSysModuleForArm(
  * Drain → stop → start so GOT install counters are honest. Does not start the drain loop
  * (callers that need streaming must already have called startCaptureLoop / setCapture).
  */
-async function armCaptureHooks(sid: string, mods: { cryptoModule: string; fileModule: string; sysModule: string }): Promise<CaptureToggle> {
+async function armCaptureHooks(sid: string, mods: { cryptoModule: string; fileModule: string; sysModule: string }, exactSystemModule=false): Promise<CaptureToggle> {
   // RE-ARM FROM A CLEAN SLATE. adh_got_replace matches a GOT slot by VALUE, so an install that
   // runs while our own wrapper already sits in the slot reports 0 for it - indistinguishable
   // from "this symbol is not imported". Measured on the sandbox: a repeat capture_start said
@@ -945,7 +1007,7 @@ async function armCaptureHooks(sid: string, mods: { cryptoModule: string; fileMo
   // original pointers: drain (never lose what the ring holds), stop, then install.
   const drained = await drainSession(sid);
   try { await sendCmd(sid, 'capture_stop', {}, 8_000); } catch { /* not armed: nothing to restore */ }
-  const sysModule = await resolveSysModuleForArm(sid, mods.sysModule);
+  const sysModule = exactSystemModule ? (policySystemOn(sessions.get(sid)?.policy)?mods.sysModule:'') : await resolveSysModuleForArm(sid, mods.sysModule);
   const armedMods = { ...mods, sysModule };
   const reply = await sendCmd(sid, 'capture_start', armedMods, 15_000);
   recordCaptureHooks(sid, reply);
@@ -965,9 +1027,7 @@ async function armCaptureHooks(sid: string, mods: { cryptoModule: string; fileMo
   };
 }
 
-// Install persistent hooks on connect, then poll capture_drain and stream each new record
-// into the store + over WS. Also auto-dump the app's DEX files so the panel can download
-// them. Mirrors the ios-decrypt-helper flow (hooks stay live, events fill the panel).
+// Connect only starts draining. Installation/dumps require explicit Host operations.
 // Seed from durable captures so ids stay unique across daemon restarts.
 let capSeq = captures.reduce((m, c) => Math.max(m, Number(c.id) || 0), 0);
 
@@ -1033,6 +1093,8 @@ function captureArmBlockedReason(pkg: string): string | null {
 }
 
 export function startCaptureLoop(sid: string, opts?: { skipArm?: boolean }) {
+  // Recovery now happens explicitly after module imports; resume above restored IDs.
+  capSeq = captures.reduce((max, capture) => Math.max(max, Number(capture.id) || 0), capSeq);
   if (captureTimers.has(sid)) return; // already streaming
   if (!opts?.skipArm && captureLoopPending.has(sid)) return;
   const pkgNow = sessions.get(sid)?.package ?? '';
@@ -1050,21 +1112,8 @@ export function startCaptureLoop(sid: string, opts?: { skipArm?: boolean }) {
       log(`capture_start skip ${sid} (unpack in progress for ${pkg})`);
       return;
     }
-    // Refresh scope cache (best-effort) then auto-arm when capture is not force-stopped.
-    if (!opts?.skipArm && settings.capture.enabled) {
-      try { await scopedApps(); } catch { /* keep prior cache */ }
-      if (shouldAutoArmPackage(pkg, entry)) {
-        try {
-          const verdict = await armCaptureHooks(sid, { ...captureModules() });
-          log(`capture_start ${sid} ok=${verdict.ok}`);
-        } catch (e) { log('capture_start failed', (e as Error).message); }
-      } else {
-        log(`capture_start skip ${sid} (package not in scope)`);
-      }
-    }
-    if (!opts?.skipArm && settings.capture.autoDumpDex) {
-      autoDumpDex(sid).catch((e) => log(`[capture] autoDumpDex ${sid} 失败:`, (e as Error).message));
-    }
+    // P5: draining existing observations never installs hooks or dumps dex. Legacy settings
+    // remain exportable migration input, not authorization for a new process generation.
     if (captureTimers.has(sid)) return;
     let busy = false;
     let drainErrLogged = false;   // fail-loud once per wedged-drain episode, not every 1.5s tick
@@ -1168,10 +1217,10 @@ export function startCaptureLoop(sid: string, opts?: { skipArm?: boolean }) {
       try { return await inFlight; } finally { inFlight = null; }
     };
     captureDrainers.set(sid, runDrain);
-    const timer = setInterval(async () => {
+    const timer = detached(() => setInterval(async () => {
       if (busy || !sessions.get(sid)?.online) return;
       await runDrain().catch(() => null);   // the loop never propagates: it retries next tick
-    }, 1500);
+    }, 1500));
     captureTimers.set(sid, timer);
   };
   if (opts?.skipArm) {
@@ -1179,7 +1228,10 @@ export function startCaptureLoop(sid: string, opts?: { skipArm?: boolean }) {
     return;
   }
   captureLoopPending.add(sid);
-  setTimeout(() => { void run(); }, 1200);
+  const expected=automaticSnapshot(sid);
+  detached(()=>setTimeout(() => {
+    void runAutomatic(sid,'automatic-capture-start',expected,run).finally(()=>captureLoopPending.delete(sid));
+  }, 1200));
 }
 
 // Enumerate the app's DEX files, dump each, and say what each one IS.

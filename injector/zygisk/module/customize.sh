@@ -5,6 +5,11 @@ ui_print "- Installing ADH Zygisk module"
 unzip -o "$ZIPFILE" 'module.prop' -d "$MODPATH" >&2
 unzip -o "$ZIPFILE" 'zygisk/*' -d "$MODPATH" >&2
 unzip -o "$ZIPFILE" 'libadh_agent.so' -d "$MODPATH" >&2
+# Optional QBDI tracer payload. Absent from adh-zygisk.zip when tools/fetch_qbdi.sh has not run.
+if unzip -l "$ZIPFILE" 'libQBDI.so' >/dev/null 2>&1; then
+  unzip -o "$ZIPFILE" 'libQBDI.so' -d "$MODPATH" >&2
+  set_perm "$MODPATH/libQBDI.so" 0 0 0644
+fi
 unzip -o "$ZIPFILE" 'daemon.apk' -d "$MODPATH" >&2
 unzip -o "$ZIPFILE" 'LICENSE' 'NOTICE' 'third_party_licenses/*' -d "$MODPATH" >&2
 unzip -o "$ZIPFILE" 'device-daemon' -d "$MODPATH" >&2
