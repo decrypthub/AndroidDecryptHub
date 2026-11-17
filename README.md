@@ -4,7 +4,7 @@ Android DecryptHub（ADH）是一套 Android 运行时分析工具。它把一�
 
 P5 分支将 Hook 方案和编辑器迁到 Host。MCP `hook_plans`、Python CLI `adh call/run hook_plans` 和任务工作台共用执行层。保存、暂存和实际安装分别报告，连接不自动套用旧捕获/启动默认值。迁移与兼容边界见 [P5_HOOK_PLANS.md](docs/P5_HOOK_PLANS.md)。此分支尚未部署到现有分析现场。
 
-P5 后续已完成真实 Android 独立沙盒的早期 GOT、过期、APK 绑定失效、LAN 授权撤销、缓存撤销和精确回滚验收，并修复早期参数与 Android 认证编码问题。详见 [实测与未验证清单](docs/P5_ANDROID_ACCEPTANCE.md)；正式 Zygisk 全链仍未部署验证。
+P5 后续已完成真实 Android 独立沙盒验收，并在正式 Zygisk 回调/companion/post-specialize 的隔离命名空间中完成七族代表性捕获、全部禁用、LAN 授权撤销及 UID/Agent/过期等拒绝，共15/15。详见[正式链验收与未验证边界](docs/P5_ZYGISK_EXTENDED_ACCEPTANCE.md)；默认模块/Manager/生产 RootDaemon 的部署升级仍待验证。
 
 ## 能做什么
 
