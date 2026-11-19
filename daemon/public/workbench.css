@@ -27,3 +27,13 @@
 @media(prefers-reduced-motion:reduce){.adh-workbench button{transition:none}}
 
 @media(max-width:850px){.aw-tabs{flex-wrap:wrap}.aw-tabs button{white-space:nowrap;flex-shrink:0}.aw-tabs .aw-check{flex:1 0 180px}}
+
+.adh-workbench .aw-quick { max-width: 800px; }
+.aw-quick-steps { margin: 12px 0 0; padding-inline-start: 24px; }
+.aw-quick-steps li { border-top: 1px solid var(--aw-line); padding: 16px 0; }
+.aw-quick-steps li::marker { color: var(--aw-accent); font-weight: 600; }
+.aw-quick-steps li > * + * { margin-top: 8px; }
+.aw-quick-steps p:empty { display: none; }
+.aw-quick-steps label { min-width: 0; }
+.aw-quick-steps select { margin-inline-start: 4px; }
+@media (max-width: 850px) { .adh-workbench .aw-quick { padding-inline: 16px; } }

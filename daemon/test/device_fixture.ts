@@ -14,7 +14,9 @@ export async function startDeviceFixture(existingRoot?:string){
   const root=checkedRoot(existingRoot||mkdtempSync(join(tmpdir(),'adh-p3-jvm-')));
   const ready=join(root,'ready.json');if(existsSync(ready))unlinkSync(ready);
   const cp=JSON.parse(readFileSync(jvmManifest,'utf8')) as string[];
-  const child=spawn(process.env.JAVA_HOME?join(process.env.JAVA_HOME,'bin','java.exe'):'java',['-cp',cp.join(delimiter),'com.adh.daemon.device.DeviceRpcFixture',root],{windowsHide:true,stdio:['ignore','pipe','pipe']});
+  const executable=process.platform==='win32'?'java.exe':'java';
+  const java=process.env.JAVA_HOME?join(process.env.JAVA_HOME,'bin',executable):executable;
+  const child=spawn(java,['-cp',cp.join(delimiter),'com.adh.daemon.device.DeviceRpcFixture',root],{windowsHide:true,stdio:['ignore','pipe','pipe']});
   let failure='';child.stderr?.on('data',chunk=>{failure=(failure+chunk).slice(-4000);});child.on('error',e=>{failure=e.message;});
   let metadata:any;
   for(let n=0;n<300;n++){if(child.exitCode!==null)throw Error('JVM fixture exited: '+failure);if(existsSync(ready)){try{metadata=JSON.parse(readFileSync(ready,'utf8'));break;}catch{}}await pause(50);}

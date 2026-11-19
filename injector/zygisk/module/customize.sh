@@ -17,6 +17,7 @@ unzip -o "$ZIPFILE" 'action.sh' -d "$MODPATH" >&2
 unzip -o "$ZIPFILE" 'post-fs-data.sh' -d "$MODPATH" >&2
 unzip -o "$ZIPFILE" 'sepolicy.rule' -d "$MODPATH" >&2
 unzip -o "$ZIPFILE" 'service.sh' -d "$MODPATH" >&2
+unzip -o "$ZIPFILE" 'init-scope.sh' -d "$MODPATH" >&2 || abort "! Missing ADH scope initializer"
 unzip -o "$ZIPFILE" 'customize.sh' -d "$TMPDIR" >&2
 set_perm_recursive "$MODPATH" 0 0 0755 0644
 set_perm "$MODPATH/action.sh" 0 0 0755
@@ -53,9 +54,7 @@ if unzip -l "$ZIPFILE" 'manager.apk' >/dev/null 2>&1; then
   fi
 fi
 
-# Ensure /data/adb/adh exists for Manager scope file
-mkdir -p /data/adb/adh
-[ -f /data/adb/adh/scope.json ] || printf '%s\n' '{"version":1,"mode":"allowlist","packages":[]}' > /data/adb/adh/scope.json
+sh "$MODPATH/init-scope.sh" /data/adb/adh || abort "! Cannot initialize ADH scope"
 if [ "$MANAGER_BUNDLED" = 1 ]; then
   ui_print "- Done. Open AndroidDecryptHub, pick apps, then reboot targets."
 else

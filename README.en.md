@@ -48,7 +48,15 @@ npm ci
 npm start
 ```
 
-The default HTTP/WebSocket/MCP port is `8088`; agent TCP uses `8761`. From `daemon/`, run `node src/cli.ts doctor` or use `target --help` and `unpack --help`. Host unit tests run with `node --test test/*.test.ts`. `tools/verify_all.sh` controls the connected device, so run it only with an explicitly selected, dedicated test device.
+The default HTTP/WebSocket/MCP port is `8088` and agent TCP uses `8761`. From `daemon/`, run `node src/cli.ts doctor` to check the Host and `npm test` for Host unit tests. `tools/verify_all.sh` controls the connected device, so run it only with an explicitly selected, dedicated test device.
+
+## Upgrade and first result
+
+1. Back up the existing Host data directory and `/data/adb/adh/` on the device, then upgrade in place with matching Host, module, and Manager versions. Use a Manager signed with the same certificate and reuse the original `ADH_DATA_DIR`. Verify the app scope in ADH Manager and the Host settings at `/workbench?view=quick-start` → **查看 Host 配置**.
+2. Establish a verified [device connection](README.md#2-确认设备连接) with the companion `adh` CLI. Click **检查设备连接** and select a connection if more than one is online.
+3. Click **读取诊断结果** to see the device ID, connection ID, model, and state revision. Diagnostic reads are available in observation mode. Sandbox receipts are labeled **隔离沙盒**.
+
+To rehearse from 0.6.0-format state, build `:daemon:writeDeviceRpcFixtureClasspath` in `device/` and run `node test/fixtures/upgrade_quick_start.ts` from `daemon/`. Pass `--serve` to follow the same steps from the printed workbench URL. The rehearsal uses temporary files and a loopback JVM device. On-device package deployment and upgrade have separate acceptance checks. See the [Chinese quick start](README.md#快速开始) for commands and storage details.
 
 ## Safety and license
 

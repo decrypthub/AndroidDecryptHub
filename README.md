@@ -2,7 +2,7 @@
 
 Android DecryptHub（ADH）是一套 Android 运行时分析工具。它把一个轻量程序注入到你勾选的应用里，观察这个应用在运行时做了什么：网络、加密、Java 方法、native 函数、内存和 DEX。重的分析放在电脑上，不放进目标应用。
 
-P5 分支将 Hook 方案和编辑器迁到 Host。MCP `hook_plans`、Python CLI `adh call/run hook_plans` 和任务工作台共用执行层。保存、暂存和实际安装分别报告，连接不自动套用旧捕获/启动默认值。迁移与兼容边界见 [P5_HOOK_PLANS.md](docs/P5_HOOK_PLANS.md)。此分支尚未部署到现有分析现场。
+在电脑的任务工作台编辑 Hook 方案。MCP `hook_plans`、Python CLI `adh call/run hook_plans` 和工作台共用执行层，分别报告保存、暂存与实际安装的状态。迁移与兼容边界见 [P5_HOOK_PLANS.md](docs/P5_HOOK_PLANS.md)。
 
 P5 后续已完成真实 Android 独立沙盒验收，并在正式 Zygisk 回调/companion/post-specialize 的隔离命名空间中完成七族代表性捕获、全部禁用、LAN 授权撤销及 UID/Agent/过期等拒绝，共15/15。详见[正式链验收与未验证边界](docs/P5_ZYGISK_EXTENDED_ACCEPTANCE.md)；默认模块/Manager/生产 RootDaemon 的部署升级仍待验证。
 
@@ -41,54 +41,56 @@ P5 后续已完成真实 Android 独立沙盒验收，并在正式 Zygisk 回调
 ## 环境
 
 - 一台已 root、并开启 Zygisk 的手机（KernelSU 或 Magisk）。正式支持的 ABI 是 **arm64-v8a**。
-- 一台运行 Host ADH Daemon 的电脑。手机通过 `adb reverse` 连到这台电脑。
+- 一台运行 Host ADH Daemon 的电脑。设备管理支持 USB 和已配对的 LAN。
 - 从源码构建时还需要 Android SDK、NDK `28.2.13676358`、CMake、JDK 17 和 Node.js 24。脚本在 Git Bash 或 Linux 下运行。
 
-## 安装和使用
+## 快速开始
 
-1. 构建安装包并刷入手机，然后重启，让 Zygisk 和手机侧服务起来：
+### 1. 核对旧配置
 
-   ```bash
-   bash tools/fetch_dobby.sh
-   bash tools/fetch_lsplant.sh
-   bash tools/build_bundle.sh
-   bash tools/flash_device.sh --reboot
-   ```
+升级前备份原 Host 数据目录（默认是旧工作目录里的 `adhd-data/`）和手机上的 `/data/adb/adh/`。手机备份包含应用范围 `scope.json`、Host 地址 `host.endpoint` 及已有的设备身份和配对资料，请私下保存。旧 Host 使用外置采集目录时，同时保留原 `ADH_CAPTURES_DIR`。
 
-   也可以在 root 管理器里选择「从本地安装」，安装 `injector/zygisk/dist/` 下的 bundle zip，然后重启。
+用同一版本的 Host、模块和 ADH Manager，就地更新并保留应用数据。Manager 的签名须与已安装版本一致。切换 Host 工作目录时，将 `ADH_DATA_DIR` 指向原目录。启动后在 ADH Manager 核对应用范围，在任务工作台点击「快速开始 → 查看 Host 配置」对照备份。方案编辑的入口是工作台「Hook 方案」。源码安装见[构建指南](docs/BUILDING.md)，保留目录的细节见 [P0 存储说明](docs/P0_HOST_STATE.md#初始化与存储)。
 
-2. 打开 **ADH Manager**。在「注入范围」勾选要分析的应用，需要的话再调整该应用的 Hook 配置，保存。
+### 2. 确认设备连接
 
-3. 重新打开目标应用。
-
-4. 在电脑上启动守护进程，并把端口转到手机：
-
-   ```bash
-   bash tools/dev_up.sh
-   ```
-
-   这条命令会启动 Host ADH Daemon，并设置 `adb reverse`。也可以自己启动：
-
-   ```bash
-   cd daemon
-   npm ci
-   npm start
-   adb reverse tcp:8088 tcp:8088
-   adb reverse tcp:8761 tcp:8761
-   ```
-
-5. 用浏览器打开 `http://<电脑的局域网地址>:8088/<应用包名>`。Web 界面用来查看和搜索，不在网页里改目标。
-
-抓包时，先让抓包工具在手机上生效，再操作已经注入的应用。算法记录在应用进程里产生，电脑上的守护进程连上之后才会出现在采集结果里。
-
-命令行可以检查连通和导出 DEX：
+在电脑上运行以下命令启动配套 Host ADH Daemon。
 
 ```bash
 cd daemon
-node src/cli.ts doctor
-node src/cli.ts target --help
-node src/cli.ts unpack --help
+npm ci
+npm start
 ```
+
+用配套 `adh` CLI 发现 USB 设备，将返回的 `serial`、`transportId` 填入连接命令，然后用 `adh tasks get` 查看连接操作状态。示例用电脑上的默认 Host 地址。
+
+```bash
+adh call devices --arguments '{"action":"discover","transport":"adb"}' --endpoint http://127.0.0.1:8088
+adh run devices --arguments '{"action":"connect","transport":"adb","serial":"SERIAL","transportId":"TRANSPORT_ID"}' --endpoint http://127.0.0.1:8088
+adh tasks get OPERATION_ID --endpoint http://127.0.0.1:8088
+```
+
+连接操作显示 `succeeded` 后，打开 Host 地址下的 `/workbench?view=quick-start`，点击「检查设备连接」。有多条在线连接时，选定要核对的那条。已有配对的设备也可按 [LAN 说明](docs/P4_LAN_AUTH.md#公共调用顺序)连接。
+
+### 3. 读取首条诊断结果
+
+点击「读取诊断结果」，核对回执中的设备 ID、连接 ID、设备型号和状态版本。这个页面可在观察模式下使用。设备断开后，重新检查连接再读一次。先在隔离沙盒做一遍，可以看到带「隔离沙盒」来源标记的 `JVM fixture` 回执。
+
+### 在隔离沙盒复验
+
+准备 Node.js 24、JDK 17、Android SDK 和 Git Bash（Windows）。在仓库执行以下命令。Windows 使用 Git Bash 的 `./gradlew` 或 PowerShell 的 `.\gradlew.bat`。
+
+```bash
+cd device
+./gradlew :daemon:writeDeviceRpcFixtureClasspath
+cd ../daemon
+npm ci
+node test/fixtures/upgrade_quick_start.ts
+```
+
+脚本在临时目录放入 0.6.0 格式的旧配置，执行安装包共用的范围初始化，再通过 Host 的实际 HTTP 路由及 JVM 设备沙盒验证旧值、身份连接和诊断回执。给最后一条命令加 `--serve`，打开终端输出的 `QUICK_START_URL` 可以走同一套工作台步骤。输入 `stop` 可关闭沙盒并清理临时文件。沙盒使用回环连接，默认安装包在 Android 上的部署和升级另行验收。
+
+## MCP 客户端
 
 用我们已开源的 `adh` CLI 接 AI 客户端（PyPI 包 `android-decrypt-hub`，源码 [decrypthub/adh-cli](https://github.com/decrypthub/adh-cli)）：
 
@@ -128,7 +130,7 @@ adh connect 127.0.0.1:8088      # 按包固定：adh connect 127.0.0.1:8088/<包
 
 模块信息里有一条 `updateJson`。KernelSU、KernelSU Next 和 Magisk 会读取这个地址。远端的 `versionCode` 比手机上已安装的更高时，模块页面会出现更新。点更新会安装新的 zip，并在安装脚本里重新安装附带的 ADH Manager。已经勾选的注入范围留在 `/data/adb/adh/scope.json`，不会被清空。更新后重启手机。
 
-现在手机上如果装的是还没有 `updateJson` 的旧模块，管理器不会出现这个更新按钮。需要手动刷入一次 v0.3.14，之后的版本就可以在管理器里更新。
+没有 `updateJson` 的旧模块使用管理器里的「从本地安装」。按[快速开始](#快速开始)备份并核对旧配置。
 
 ## 许可证
 
