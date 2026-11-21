@@ -43,7 +43,7 @@
         if(method!=='GET'||active.has(url.pathname)) {
           let args=Object.fromEntries(url.searchParams);if(typeof init.body==='string'){try{args={...args,...JSON.parse(init.body)};}catch{}}
           const prepared=await this.managementPrepare(url.pathname,method,args);
-          if(prepared.spec.mode==='write'){this.requireOperator();outgoing.headers.set('X-Adh-Operation',JSON.stringify(this.metadata(this.versions.get(prepared.resource)||prepared)));}
+          if(prepared.spec.mode==='write'){if(!humanPanelWrite(url.pathname,args))this.requireOperator();outgoing.headers.set('X-Adh-Operation',JSON.stringify(this.metadata(this.versions.get(prepared.resource)||prepared)));}
         }
         const response=await this.fetcher(input,outgoing),raw=response.headers.get('x-adh-control');
         if(raw){try{const value=JSON.parse(raw);this.versions.set(value.resource,value);}catch{}}
@@ -51,6 +51,14 @@
       };
     }
     async managementPrepare(path,method,args){return (await this.request('/api/operations/prepare',{path,method,arguments:args})).value;}
+  }
+  const FAMILY_KEYS=['digest','hmac','symmetric','asymmetric','tls','aead'];
+  function humanPanelWrite(pathname,args){
+    if(pathname==='/api/unpack/run')return true;
+    if(pathname!=='/api/capture/families'||Object.keys(args).length!==3)return false;
+    const {package:pkg,family,enabled}=args;
+    return typeof pkg==='string'&&/^[A-Za-z0-9_][A-Za-z0-9_.]*$/.test(pkg)&&!pkg.includes('..')
+      &&FAMILY_KEYS.includes(family)&&typeof enabled==='boolean';
   }
   scope.AdhOperationClient=Client;scope.AdhClientError=ClientError;
 })(globalThis);

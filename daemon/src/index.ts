@@ -6,12 +6,13 @@ import { AGENT_PORT, HTTP_PORT, webUrls } from './config.ts';
 import { handleHttp } from './http/router.ts';
 import { sendHttpError } from './http/response_error.ts';
 import { ensureAdbReverse } from './scope_list.ts';
-import { applySelectedFamilies, startCaptureLoop, forgetCaptureSession, clearCaptureArmProtect } from './service.ts';
+import { startCaptureLoop, forgetCaptureSession, clearCaptureArmProtect } from './service.ts';
+import { applyCaptureSettingsOnConnect } from './settings_service.ts';
 import { initializeHost } from './host_lifecycle.ts';
 import { initializeOperations } from './operation_host.ts';
 import {
   agentSockets, broadcast, captureTimers, failPendingFor, frameJson, FRAME_JSON, FRAME_MAX,
-  log, nextId, pending, pruneSessions, sessions, settings, wss,
+  log, nextId, pending, pruneSessions, sessions, wss,
 }
 from './state.ts';
 import type { AgentMsg, AgentSession } from './state.ts';
@@ -77,9 +78,9 @@ const agentServer = net.createServer((sock) => {
       // Draining starts immediately. The algorithms checked in the panel are installed here,
       // on this process, so a restarted app keeps the same hooks.
       startCaptureLoop(id,{skipArm:true});
-      if (settings.capture.enabled) {
-        void applySelectedFamilies(id).catch((error) => log(`[capture] family arm ${id}:`, (error as Error).message));
-      }
+      void applyCaptureSettingsOnConnect(id).then(result => {
+        if (result?.ok === false) log(`[capture] family arm ${id}:`, result.error || 'capture settings not applied');
+      }).catch(error => log(`[capture] family arm ${id}:`, (error as Error).message));
     } else if (msg.t === 'caps' && session) {
       // Arrives right after the hello (before the maps sample). Stored on the session, never
       // merged from another session: two processes of the same app can run different builds.

@@ -68,7 +68,9 @@ export function describeHttp(path: string, method: string, args: Record<string, 
   if(path==='/api/hook-plans')return describeTool('hook_plans',args);
   if(Object.hasOwn(args,'deviceId')||Object.hasOwn(args,'connectionId')||args.transport==='lan')throw new OperationError('UNSUPPORTED_DEVICE_ROUTING','this legacy route has no verified device/LAN route; no ADB fallback');
   const alias = routeTools[path];
-  if (path === '/api/config') return describeTool('settings', { ...args, action: method === 'POST' ? 'patch' : 'get' });
+  if (path === '/api/config' || path === '/api/capture/families') {
+    return describeTool('settings', { ...args, action: method === 'POST' ? 'patch' : 'get' });
+  }
   if (path === '/api/scope') return describeTool(method === 'POST' ? 'scope_set' : 'scope_list', args);
   if (path === '/api/settings/import') return describeTool('settings', { ...args, action: 'patch' });
   if (path === '/api/maintenance' || path === '/api/data/clear') return describeTool('settings', { ...args, action: 'maintenance' });

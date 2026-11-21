@@ -15,7 +15,7 @@ import {
   frameJson, agentSockets, pending, nextCmdId, sessions, dumps, log, rememberDump,
   captureTimers, captureModules, settings, recentJavaIn, captures,
   pushCapture, broadcast, hexToPreview, previewForCapture, classify, categoryOf, capStats,
-  pruneArtifacts, DATA_DIR,
+  pruneArtifacts, DATA_DIR, captureSettingsForPackage, CRYPTO_FAMILY_KEYS, packageFamilies,
 } from './state.ts';
 import { shouldAutoArmPackage, scopedApps } from './scope_list.ts';
 import type { AgentSession, DumpMeta, MapsRegion, Capture } from './state.ts';
@@ -818,34 +818,53 @@ function recordCaptureHooks(sid: string, r: any) {
   s.captureHooks = r;
 }
 
-const CRYPTO_FAMILY_KEYS = ['digest', 'hmac', 'symmetric', 'asymmetric', 'tls', 'aead'] as const;
 const CRYPTO_FAMILY_FLAGS = ['d', 'h', 's', 'a', 't', 'e'] as const;
 
 /** The six crypto families a person can check, plus the session's existing system bit. */
-export function selectedFamilyFlags(system: boolean): string {
-  const families = settings.capture.families;
+function selectedFamilyFlags(families: ReturnType<typeof captureSettingsForPackage>['families'], system: boolean): string {
   const parts = CRYPTO_FAMILY_KEYS.map((key, index) => `${CRYPTO_FAMILY_FLAGS[index]}=${families[key] === false ? '0' : '1'}`);
   parts.push(`y=${system ? '1' : '0'}`);
   return parts.join(',');
 }
 
-function sessionSystemOn(policy: string | undefined): boolean {
-  return /(?:^|,)y=1(?:$|,)/.test(policy || '');
+interface CaptureSettingsScope {
+  packageName?: string;
+  sessionId?: string;
+  held?: ReadonlySet<string>;
+}
+
+function captureSettingsTargets({ packageName, sessionId }: CaptureSettingsScope) {
+  return [...sessions.values()].filter(session => session.online && (
+    sessionId !== undefined ? session.sessionId === sessionId :
+      packageName !== undefined ? session.package === packageName : !packageFamilies(session.package)
+  ));
 }
 
 /**
  * Push the checked crypto families to online agents and, when capture is on, install that set.
+ * Sessions in `held` keep the policy already applied by an open Hook plan.
  * An enable-only settings patch does not call this: checking an algorithm is the human action.
  */
-export async function applySelectedFamilies(onlySid?: string): Promise<{
+export async function applySelectedFamilies(scope: CaptureSettingsScope & { stopIfDisabled?: boolean } = {}): Promise<{
   ok: boolean; targets: { session: string; ok: boolean; armed?: boolean; skipped?: string; error?: string }[]; error?: string;
 }> {
-  const arm = settings.capture.enabled && CRYPTO_FAMILY_KEYS.some((key) => settings.capture.families[key] !== false);
-  const targets = [...sessions.values()].filter((s) => s.online && (!onlySid || s.sessionId === onlySid));
   const out: { session: string; ok: boolean; armed?: boolean; skipped?: string; error?: string }[] = [];
-  for (const s of targets) {
-    const flags = selectedFamilyFlags(sessionSystemOn(s.policy));
+  for (const s of captureSettingsTargets(scope)) {
+    if (scope.held?.has(s.sessionId)) {
+      out.push({ session: s.sessionId, ok: true, armed: false, skipped: 'hook-plan' });
+      continue;
+    }
+    const capture = captureSettingsForPackage(s.package);
+    const arm = capture.enabled && CRYPTO_FAMILY_KEYS.some(key => capture.families[key]);
+    const flags = selectedFamilyFlags(capture.families, policySystemOn(s.policy));
     try {
+      if (!arm && scope.stopIfDisabled) {
+        const stopped = await setCapture(s.sessionId, false);
+        if (!stopped.ok) {
+          out.push({ session: s.sessionId, ok: false, error: stopped.reply?.error || 'capture stop failed' });
+          continue;
+        }
+      }
       const policy = await agentCmd(s.sessionId, 'capture_policy', { families: flags });
       if (policy?.ok !== true) {
         out.push({ session: s.sessionId, ok: false, armed: false, error: String(policy?.error || 'agent refused family policy') });
@@ -869,17 +888,15 @@ export async function applySelectedFamilies(onlySid?: string): Promise<{
   return { ok: out.every((row) => row.ok), targets: out };
 }
 
-// Apply the capture.enabled toggle to already-connected sessions.
-// enabled=false → force-stop hooks everywhere. enabled=true → resume draining only.
-// Checking an algorithm calls applySelectedFamilies, which is what installs that set.
-export async function applyCaptureEnabled(): Promise<{
+// Apply the legacy capture.enabled toggle to sessions using the Host defaults.
+// enabled=false → force-stop hooks on sessions that are not in `held`. enabled=true → resume draining only.
+export async function applyCaptureEnabled(held: ReadonlySet<string> = new Set()): Promise<{
   ok: boolean; targets: { session: string; ok: boolean; skipped?: string; error?: string }[]; error?: string;
 }> {
   const on = settings.capture.enabled;
-  const targets = await Promise.all([...sessions.values()].filter(s => s.online).map(async s => {
+  const targets = await Promise.all(captureSettingsTargets({}).map(async s => {
+    if (held.has(s.sessionId)) return { session: s.sessionId, ok: true, skipped: 'hook-plan' };
     if (on) { startCaptureLoop(s.sessionId,{skipArm:true});return {session:s.sessionId,ok:true,skipped:'drain-only; explicit hook plan required'}; }
-    const blocked = on ? captureArmBlockedReason(s.package) : null;
-    if (blocked) return { session: s.sessionId, ok: true, skipped: blocked };
     try {
       const result = await setCapture(s.sessionId, on);
       return { session: s.sessionId, ok: result.ok, ...(!result.ok ? { error: String((result as any).error || (result as any).reply?.error || 'capture operation failed') } : {}) };

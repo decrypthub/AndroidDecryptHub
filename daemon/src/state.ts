@@ -18,6 +18,7 @@ import {
   loadCapturesFromDisk, readPackageCapturesJsonl,
 } from './capture_persist.ts';
 import { memCapturePreview } from './native_hook_args.ts';
+import { isValidPackage } from './mcp_onboarding.ts';
 
 export const CAPTURES = storagePaths.capturesDir;
 
@@ -229,11 +230,17 @@ export function recordEvent(type: string, data: any) {
 // ---- user settings (persisted; tunable from the web 设置 panel; ADH-style) --------
 // Only touches the ADH Daemon / web layer — the agent .so is never reconfigured from here.
 export const SETTINGS_FILE = join(DATA_DIR, 'settings.json');
+export const CRYPTO_FAMILY_KEYS = ['digest', 'hmac', 'symmetric', 'asymmetric', 'tls', 'aead'] as const;
+export type CryptoFamily = (typeof CRYPTO_FAMILY_KEYS)[number];
+export type CryptoFamilies = Record<CryptoFamily, boolean>;
 export interface Settings {
   // retain = per-package cap for both the in-memory list and packages/<pkg>/captures.jsonl.
-  // maxAgeDays = drop capture log lines older than this (0 = no age prune). enabled = auto-arm
-  // when a session comes online; false = force-stop hooks on all online sessions.
-  capture: { enabled: boolean; autoDumpDex: boolean; retain: number; maxAgeDays: number; families: Record<string, boolean>; cryptoModule: string; fileModule: string; sysModule: string };
+  // enabled and families are the legacy defaults for packages without a saved selection.
+  capture: {
+    enabled: boolean; autoDumpDex: boolean; retain: number; maxAgeDays: number;
+    families: CryptoFamilies; familiesByPackage: Record<string, CryptoFamilies>;
+    cryptoModule: string; fileModule: string; sysModule: string;
+  };
   ui: { displayCap: number };
   // On-disk artifact retention (captures/ dump files). Capture event logs live under adhd-data/packages/.
   // maxAgeDays = 0 disables the age rule; the size budget still applies.
@@ -259,12 +266,37 @@ export const DEFAULT_SETTINGS: Settings = {
   // installs nothing without failing, so a wrong default reads as "6 hooks silently missing" —
   // which is exactly what the sandbox-only defaults below used to do on every real app. The
   // sandbox self-test passes its own module explicitly (verify_v20_file.sh, verify_v05_detect.sh).
-  capture: { enabled: false, autoDumpDex: false, retain: 1000, maxAgeDays: 14, families: { digest: true, hmac: true, symmetric: true, asymmetric: true, tls: true, aead: true }, cryptoModule: '', fileModule: '', sysModule: '' },
+  capture: { enabled: false, autoDumpDex: false, retain: 1000, maxAgeDays: 14, families: { digest: true, hmac: true, symmetric: true, asymmetric: true, tls: true, aead: true }, familiesByPackage: {}, cryptoModule: '', fileModule: '', sysModule: '' },
   ui: { displayCap: 300 },
   artifacts: { maxBytes: 8 * 1024 ** 3, maxAgeDays: 14 },
   startup: { antiDebug: false, module: 'libc.so', extraTargets: [], packages: [], widenAfterMs: 0, widenTargets: ['access', 'faccessat'] },
 };
 export let settings: Settings = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
+
+export function hostSettingsSnapshot() {
+  const { familiesByPackage, ...capture } = settings.capture;
+  return structuredClone({ ...settings, capture });
+}
+
+export function packageFamilies(pkg: string): CryptoFamilies | undefined {
+  const stored = settings.capture.familiesByPackage;
+  return Object.hasOwn(stored, pkg) ? stored[pkg] : undefined;
+}
+
+export function captureSettingsForPackage(pkg = '') {
+  const families = packageFamilies(pkg);
+  return families
+    ? { enabled: CRYPTO_FAMILY_KEYS.some(key => families[key]), families }
+    : { enabled: settings.capture.enabled, families: settings.capture.families };
+}
+
+function restorePackageFamilies(saved: unknown): Record<string, CryptoFamilies> {
+  if (!saved || typeof saved !== 'object' || Array.isArray(saved)) return {};
+  return Object.fromEntries(Object.entries(saved).filter(([pkg, families]) =>
+    isValidPackage(pkg) && families && typeof families === 'object' && !Array.isArray(families)
+    && CRYPTO_FAMILY_KEYS.every(key => Object.hasOwn(families, key) && typeof families[key] === 'boolean')));
+}
+
 // section-merge (like IDH /api/settings/import): only the segments present in `patch` apply.
 export function mergeSettings(patch: any, target: Settings = settings): string[] {
   const applied: string[] = [];
@@ -279,7 +311,7 @@ export function mergeSettings(patch: any, target: Settings = settings): string[]
     if (typeof c.fileModule === 'string') target.capture.fileModule = c.fileModule.trim();
     if (typeof c.sysModule === 'string') target.capture.sysModule = c.sysModule.trim();
     if (c.families && typeof c.families === 'object')
-      for (const k of Object.keys(target.capture.families))
+      for (const k of CRYPTO_FAMILY_KEYS)
         if (typeof c.families[k] === 'boolean') target.capture.families[k] = c.families[k];
     applied.push('capture');
   }
@@ -501,8 +533,7 @@ export function artifactStats() {
   return { count: dumps.size, bytes, maxBytes: settings.artifacts.maxBytes, maxAgeDays: settings.artifacts.maxAgeDays };
 }
 export function configStats() { return { captures: captures.length, dumps: dumps.size, events: events.length, on: captureTimers.size > 0, agents: sessions.size, capture: captureHealth(), artifacts: artifactStats() }; }
-// Which crypto family a capture belongs to. The panel's algorithm checkboxes also push this
-// set to the agent; this filter drops a record when that family is unchecked.
+// Which crypto family a capture belongs to for the legacy Host filter.
 export function familyOf(algo: string): 'tls' | 'asymmetric' | 'hmac' | 'digest' | 'symmetric' | 'aead' {
   if (/TLS/.test(algo)) return 'tls';
   if (/AEAD/i.test(algo)) return 'aead';
@@ -517,7 +548,10 @@ export function familyOf(algo: string): 'tls' | 'asymmetric' | 'hmac' | 'digest'
 // Durable truth: when the entry has a package, append the full record under
 // adhd-data/packages/<pkg>/captures.jsonl so a daemon restart can replay it.
 export function pushCapture(entry: Capture): boolean {
-  if (entry.category === 'crypto' && settings.capture.families[familyOf(entry.algo)] === false) return false;
+  // Explicit app selections are applied at the agent. Keep observations produced by a Hook
+  // plan even when the app's panel selection is different.
+  if (entry.category === 'crypto' && !packageFamilies(entry.package ?? '')
+    && settings.capture.families[familyOf(entry.algo)] === false) return false;
   captures.push(entry);
   capturePushed++;
   bumpSession(entry.sessionId, 'pushed');
@@ -1040,7 +1074,11 @@ export function restoreHostState() {
   // Load persisted settings. Fail LOUD: if the file is present but corrupt/unreadable we must not
   // silently run on defaults (that masks lost config as "working"). Absent file is normal (defaults).
   try {
-    if (existsSync(SETTINGS_FILE)) mergeSettings(JSON.parse(readFileSync(SETTINGS_FILE, 'utf8')));
+    if (existsSync(SETTINGS_FILE)) {
+      const saved = JSON.parse(readFileSync(SETTINGS_FILE, 'utf8'));
+      mergeSettings(saved);
+      settings.capture.familiesByPackage = restorePackageFamilies(saved?.capture?.familiesByPackage);
+    }
   } catch (e) {
     log(`[settings] ${SETTINGS_FILE} 载入失败，已回退默认值 — 磁盘上的配置未生效:`, (e as Error).message);
   }

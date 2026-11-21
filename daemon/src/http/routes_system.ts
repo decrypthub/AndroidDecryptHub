@@ -1,4 +1,4 @@
-import { patchSettings, settingsHttpStatus } from '../settings_service.ts';
+import { patchAppCaptureFamily, patchSettings, settingsHttpStatus } from '../settings_service.ts';
 import { HOST_VERSION } from '../version.ts';
 import { maintainData } from '../maintenance.ts';
 import { localEffect } from '../execution_context.ts';
@@ -18,9 +18,9 @@ import { scopedApps, mergeScope, readScopeFile, writeScopePackages } from '../sc
 import { analyzePackage } from '../app_analyze.ts';
 import { listCaptureArmProtected } from '../service.ts';
 import {
-  broadcast, captureHealth, capturePackage, captures, captureTimers,
+  broadcast, captureHealth, capturePackage, captures, captureSettingsForPackage, captureTimers,
   clearCaptureStore, clearPackageCaptureStore, configStats, cryptoIdentify, dumps, eventPackage,
-  events, EVENTS_FILE, exportPackageCapturesJsonl, hexToPreview, log, packageCaptureDiskStats,
+  events, EVENTS_FILE, exportPackageCapturesJsonl, hexToPreview, hostSettingsSnapshot, log, packageCaptureDiskStats,
   previewForCapture, readBody, sessions, settings,
 } from '../state.ts';
 import type { Route, RouteContext } from './types.ts';
@@ -51,6 +51,8 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       const scope = await scopedApps();
       return send(200, {
         apps: scope.apps, error: scope.error, capture: settings.capture.enabled,
+        captureByPackage: Object.fromEntries(Object.keys(settings.capture.familiesByPackage)
+          .map(pkg => [pkg, captureSettingsForPackage(pkg).enabled])),
         // Packages that finished one-click unpack and will not be re-armed until next hello.
         unpackProtected: listCaptureArmProtected(),
       });
@@ -179,7 +181,18 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       capabilities: { rest: true, websocket: true, mcp: true, mcpTools: MCP_TOOLS.length },
       note: 'metadata only — captured key/plaintext content is never in diagnostic reports',
     }) },
-    // ---- settings / config (web 设置面板；IDH 交互) ----
+    { method: 'GET', path: '/api/capture/families', handler: () => {
+      const pkg = url.searchParams.get('package') || '';
+      if (!isValidPackage(pkg)) return send(400, { ok: false, error: '需要有效的包名' });
+      return send(200, { ok: true, package: pkg, capture: captureSettingsForPackage(pkg) });
+    } },
+    { method: 'POST', path: '/api/capture/families', handler: async () => {
+      let patch: unknown;
+      try { patch = JSON.parse(await readBody(req)); } catch { return send(400, { ok: false, error: 'JSON 格式错误' }); }
+      const result = await patchAppCaptureFamily(patch);
+      return send(settingsHttpStatus(result), result);
+    } },
+    // ---- legacy settings / config ----
     { path: '/api/config', handler: async () => {
       if (req.method === 'POST') {
         let patch: any = {};
@@ -187,9 +200,9 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
         const result = await patchSettings(patch);
         return send(settingsHttpStatus(result), result);
       }
-      return send(200, { settings, stats: configStats() });
+      return send(200, { settings: hostSettingsSnapshot(), stats: configStats() });
     } },
-    { path: '/api/settings/export', handler: () => send(200, settings) },
+    { path: '/api/settings/export', handler: () => send(200, hostSettingsSnapshot()) },
     { method: 'POST', path: '/api/settings/import', handler: async () => {
       let obj: any;
       try { obj = JSON.parse((await readBody(req)) || '{}'); } catch { return send(400, { error: 'JSON 格式错误' }); }

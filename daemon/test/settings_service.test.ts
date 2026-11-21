@@ -4,7 +4,7 @@ import http from 'node:http';
 import cp from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 import { promisify } from 'node:util';
-import { mkdirSync, existsSync, readFileSync, rmSync, statSync, unlinkSync } from 'node:fs';
+import { mkdirSync, existsSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 const realExec = cp.execFile;
@@ -21,13 +21,13 @@ syncBuiltinESMExports();
 // Block subprocesses BEFORE service modules capture/promisify the builtin bindings.
 const { handleHttp } = await import('../src/http/router.ts');
 const { handleMcp } = await import('../src/mcp.ts');
-const { patchSettings } = await import('../src/settings_service.ts');
+const { applyCaptureSettingsOnConnect, patchSettings } = await import('../src/settings_service.ts');
 const { getOperations, operationsRoot } = await import('../src/operation_host.ts');
 const { initializeOperatorAccess } = await import('../src/access_context.ts');
 const operatorKey=initializeOperatorAccess(operationsRoot);
 const { drainSession, forgetCaptureSession, startCaptureLoop } = await import('../src/service.ts');
 const { appendCaptureLine } = await import('../src/capture_persist.ts');
-const { agentSockets, captureTimers, captures, DATA_DIR, DEFAULT_SETTINGS, pending, sessions, SETTINGS_FILE, settings } = await import('../src/state.ts');
+const { agentSockets, captureTimers, captures, DATA_DIR, DEFAULT_SETTINGS, pending, restoreHostState, sessions, SETTINGS_FILE, settings } = await import('../src/state.ts');
 
 const server = http.createServer((req, res) => { handleHttp(req, res).catch(error => { res.writeHead(500); res.end(String(error)); }); });
 let address: string;
@@ -45,7 +45,8 @@ after(async () => {
 
 function reset() {
   for (const timer of captureTimers.values()) clearInterval(timer);
-  captureTimers.clear(); forgetCaptureSession('fixture');
+  captureTimers.clear();
+  for (const sid of sessions.keys()) forgetCaptureSession(sid);
   Object.assign(settings, structuredClone(DEFAULT_SETTINGS));
   sessions.clear(); agentSockets.clear(); captures.length = 0;
   if (existsSync(SETTINGS_FILE)) {
@@ -55,10 +56,10 @@ function reset() {
   }
 }
 
-function fakeAgent(fail = false, native: any[] = []) {
+function fakeAgent(fail = false, native: any[] = [], { sid = 'fixture', pkg = 'com.example.fixture' } = {}) {
   const calls: string[] = [];
-  sessions.set('fixture', { sessionId: 'fixture', online: true, package: 'com.example.fixture', process: 'com.example.fixture', pid: 1 } as any);
-  agentSockets.set('fixture', { destroyed: false, write(frame: Buffer) {
+  sessions.set(sid, { sessionId: sid, online: true, package: pkg, process: pkg, pid: sessions.size + 1, uid: 10001, starttimeTicks: '1' } as any);
+  agentSockets.set(sid, { destroyed: false, write(frame: Buffer) {
     const msg = JSON.parse(frame.subarray(5).toString('utf8')); calls.push(msg.op);
     queueMicrotask(() => pending.get(msg.id)?.resolve(msg.op === 'capture_drain'
       ? { ok: true, jcaptures: [], captures: native, count: native.length, complete: true, dropped: 0, seq: native.length, backlog: 0, drained: native.length }
@@ -66,11 +67,11 @@ function fakeAgent(fail = false, native: any[] = []) {
       : msg.op === 'capture_start' ? { ok: true, evp: 1 } : { ok: true }));
     return true;
   } } as any);
-  startCaptureLoop('fixture', { skipArm: true });
+  startCaptureLoop(sid, { skipArm: true });
   return calls;
 }
 
-async function via(entry: string, patch: unknown): Promise<{ status: number; body: any; isError?: boolean }> {
+async function via(entry: string, patch: unknown, withOperator = true): Promise<{ status: number; body: any; isError?: boolean }> {
   const snapshot=getOperations().snapshot('host');
   const metadata={expectedRevision:snapshot.revision,controlEpoch:snapshot.epoch,hostEpoch:snapshot.hostEpoch};
   if (entry === 'mcp') {
@@ -79,7 +80,7 @@ async function via(entry: string, patch: unknown): Promise<{ status: number; bod
     await handleMcp(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'settings', arguments: { action: 'patch', patch, _operation:metadata } } }), response as any,{principal:{role:'operator',id:'test',source:'mcp-test'}});
     return { status: 200, body: JSON.parse(output.result.content[0].text), isError: output.result.isError };
   }
-  const response = await fetch(address + entry, { method: 'POST', headers: { 'Content-Type': 'application/json','X-Adh-Operator-Key':operatorKey,'X-Adh-Operation':JSON.stringify(metadata) }, body: JSON.stringify(patch) });
+  const response = await fetch(address + entry, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Adh-Operation': JSON.stringify(metadata), ...(withOperator ? { 'X-Adh-Operator-Key': operatorKey } : {}) }, body: JSON.stringify(patch) });
   return { status: response.status, body: await response.json() };
 }
 
@@ -157,6 +158,61 @@ for (const entry of ['mcp', '/api/config', '/api/settings/import']) {
   });
 }
 
+test('the first algorithm check stores only that family', async () => {
+  reset(); settings.capture.enabled = false; const calls = fakeAgent();
+  const result = await patchSettings({ capture: { families: { symmetric: true } } });
+  assert.equal(result.ok, true);
+  assert.equal(settings.capture.enabled, true);
+  assert.equal(settings.capture.families.symmetric, true);
+  assert.equal(settings.capture.families.digest, false);
+  assert.equal(settings.capture.families.hmac, false);
+  assert.ok(calls.includes('capture_policy'));
+  assert.ok(calls.includes('capture_start'));
+});
+
+test('an open hook plan keeps its session when another algorithm is checked', async () => {
+  reset(); const calls = fakeAgent();
+  sessions.set('planned', { sessionId: 'planned', online: true, package: 'com.example.planned', process: 'planned', pid: 2, policy: 'd=1,h=0,s=0,a=0,t=0,e=0,y=0' } as any);
+  agentSockets.set('planned', { destroyed: false, write(frame: Buffer) {
+    const msg = JSON.parse(frame.subarray(5).toString('utf8')); calls.push('planned:' + msg.op);
+    queueMicrotask(() => pending.get(msg.id)?.resolve({ ok: true }));
+    return true;
+  } } as any);
+  const dir = join(DATA_DIR, 'hook-plans', 'runs');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'run-1.json'), JSON.stringify({ session: 'planned', state: 'applied' }));
+  const result = await patchSettings({ capture: { enabled: true, families: { digest: false, hmac: false, symmetric: true, asymmetric: false, tls: false, aead: false } } });
+  assert.equal(result.ok, true);
+  assert.equal(calls.filter(call => call.startsWith('planned:')).length, 0);
+  assert.ok('runtime' in result && result.runtime);
+  assert.equal(result.runtime.targets.find((row: { session: string }) => row.session === 'planned').skipped, 'hook-plan');
+  assert.ok(calls.includes('capture_policy'));
+});
+
+test('clearing the last algorithm does not stop a session owned by an open hook plan', async () => {
+  reset(); settings.capture.enabled = true;
+  for (const key of Object.keys(settings.capture.families)) settings.capture.families[key] = false;
+  settings.capture.families.symmetric = true;
+  const calls = fakeAgent();
+  sessions.set('planned', { sessionId: 'planned', online: true, package: 'com.example.planned', process: 'planned', pid: 2 } as any);
+  agentSockets.set('planned', { destroyed: false, write(frame: Buffer) {
+    const msg = JSON.parse(frame.subarray(5).toString('utf8')); calls.push('planned:' + msg.op);
+    queueMicrotask(() => pending.get(msg.id)?.resolve({ ok: true }));
+    return true;
+  } } as any);
+  const dir = join(DATA_DIR, 'hook-plans', 'runs');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'run-clear.json'), JSON.stringify({ session: 'planned', state: 'applied' }));
+  const result = await patchSettings({ capture: { families: { symmetric: false } } });
+  assert.equal(result.ok, true);
+  assert.equal(settings.capture.enabled, false);
+  assert.equal(calls.filter(call => call.startsWith('planned:')).length, 0);
+  assert.ok('runtime' in result && result.runtime);
+  assert.equal(result.runtime.targets.find((row: { session: string }) => row.session === 'planned').skipped, 'hook-plan');
+  assert.ok(calls.includes('capture_stop'));
+  assert.ok(calls.includes('capture_policy'));
+});
+
 test('overlapping settings patches serialize persistence and runtime application', async () => {
   reset();
   let release!: () => void; let started!: () => void;
@@ -206,4 +262,117 @@ test('MCP and HTTP maintenance default to preview; deleting requires explicit co
   const snapshot=getOperations().snapshot('host');
   const refused = await fetch(address + '/api/maintenance', { method: 'POST', headers: { 'Content-Type': 'application/json','X-Adh-Operator-Key':operatorKey,'X-Adh-Operation':JSON.stringify({expectedRevision:snapshot.revision,controlEpoch:snapshot.epoch,hostEpoch:snapshot.hostEpoch}) }, body: '{"dryRun":false}' });
   assert.equal(refused.status, 400); assert.deepEqual(readFileSync(path), bytes); assert.deepEqual(calls, []);
+});
+
+const appFamiliesRoute = '/api/capture/families';
+const appA = 'com.example.alpha';
+const appB = 'com.example.beta';
+
+function setOperatorControl(action: 'takeover' | 'release') {
+  const engine = getOperations();
+  const control = engine.snapshot('host');
+  engine.control(action, 'host', { role: 'operator', id: 'test', source: 'settings-test' }, {
+    expectedRevision: control.revision, controlEpoch: control.epoch, hostEpoch: control.hostEpoch,
+  });
+}
+
+async function readAppFamilies(pkg: string) {
+  const response = await fetch(address + appFamiliesRoute + '?package=' + encodeURIComponent(pkg));
+  assert.equal(response.status, 200);
+  const body = await response.json() as { package: string; capture: { enabled: boolean; families: Record<string, boolean> } };
+  assert.equal(body.package, pkg);
+  return body.capture;
+}
+
+test('an app family write requires a package and a single supported boolean', async () => {
+  reset(); const calls = fakeAgent();
+  setOperatorControl('takeover');
+  const held = await via(appFamiliesRoute, { package: appA, family: 'digest', enabled: true }, false);
+  assert.equal(held.body.code, 'CONTROL_HELD');
+  setOperatorControl('release');
+  for (const patch of [
+    { family: 'digest', enabled: true },
+    { package: '../wrong', family: 'digest', enabled: true },
+    { package: appA, family: 'unknown', enabled: true },
+    { package: appA, family: 'digest', enabled: 'false' },
+    { package: appA, family: 'digest', enabled: true, capture: { enabled: true } },
+  ]) {
+    const result = await via(appFamiliesRoute, patch, false);
+    assert.equal(result.status, 400);
+    assert.equal(result.body.code, 'INVALID_SETTINGS');
+  }
+  assert.deepEqual(calls, []);
+  assert.equal(existsSync(SETTINGS_FILE), false);
+});
+
+test('app family switches persist independently and dispatch only to that app', async () => {
+  reset();
+  const alpha = fakeAgent(false, [], { sid: 'alpha', pkg: appA });
+  const alphaWorker = fakeAgent(false, [], { sid: 'alpha-worker', pkg: appA });
+  const beta = fakeAgent(false, [], { sid: 'beta', pkg: appB });
+  const betaBefore = await readAppFamilies(appB);
+
+  const alphaResult = await via(appFamiliesRoute, { package: appA, family: 'digest', enabled: true }, false);
+  assert.equal(alphaResult.status, 200, alphaResult.body.error);
+  assert.deepEqual(alphaResult.body.runtime.targets.map(row => row.session), ['alpha', 'alpha-worker']);
+  assert.deepEqual(alpha, ['capture_policy', 'capture_drain', 'capture_stop', 'capture_start']);
+  assert.deepEqual(alphaWorker, alpha);
+  assert.deepEqual(beta, []);
+  assert.deepEqual(await readAppFamilies(appB), betaBefore);
+  assert.equal(sessions.get('alpha')?.policy, 'd=1,h=0,s=0,a=0,t=0,e=0,y=0');
+
+  const alphaBefore = await readAppFamilies(appA);
+  const alphaCalls = [...alpha];
+  const betaResult = await via(appFamiliesRoute, { package: appB, family: 'hmac', enabled: true }, false);
+  assert.equal(betaResult.status, 200);
+  assert.deepEqual(betaResult.body.runtime.targets.map(row => row.session), ['beta']);
+  assert.deepEqual(await readAppFamilies(appA), alphaBefore);
+  assert.deepEqual(alpha, alphaCalls);
+  assert.equal(sessions.get('beta')?.policy, 'd=0,h=1,s=0,a=0,t=0,e=0,y=0');
+
+  const dir = join(DATA_DIR, 'hook-plans', 'runs');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'alpha-worker.json'), JSON.stringify({ session: 'alpha-worker', state: 'applied' }));
+  const betaCalls = [...beta];
+  const stopped = await via(appFamiliesRoute, { package: appA, family: 'digest', enabled: false }, false);
+  assert.equal(stopped.status, 200);
+  assert.equal(stopped.body.runtime.targets.find(row => row.session === 'alpha-worker')?.skipped, 'hook-plan');
+  assert.deepEqual(alpha.slice(alphaCalls.length), ['capture_drain', 'capture_stop', 'capture_policy']);
+  assert.deepEqual(alphaWorker, alphaCalls);
+  assert.deepEqual(beta, betaCalls);
+  assert.equal(captureTimers.has('beta'), true);
+  assert.equal(captureTimers.has('alpha-worker'), true);
+  assert.equal((await readAppFamilies(appA)).enabled, false);
+  const betaCapture = await readAppFamilies(appB);
+  assert.equal(betaCapture.enabled, true);
+  assert.equal(betaCapture.families.hmac, true);
+
+  const disk = JSON.parse(readFileSync(SETTINGS_FILE, 'utf8'));
+  assert.equal(disk.capture.enabled, false);
+  assert.deepEqual(disk.capture.families, DEFAULT_SETTINGS.capture.families);
+  assert.deepEqual(disk.capture.familiesByPackage[appA], stopped.body.capture.families);
+  assert.deepEqual(disk.capture.familiesByPackage[appB], betaCapture.families);
+  const legacyConfig = await (await fetch(address + '/api/config')).json() as { settings: { capture: object } };
+  assert.equal(Object.hasOwn(legacyConfig.settings.capture, 'familiesByPackage'), false);
+});
+
+test('app selections restore before reconnect and retain an explicit all-off choice', async () => {
+  reset();
+  assert.equal((await via(appFamiliesRoute, { package: appA, family: 'digest', enabled: true }, false)).status, 200);
+  assert.equal((await via(appFamiliesRoute, { package: appB, family: 'aead', enabled: true }, false)).status, 200);
+  assert.equal((await via(appFamiliesRoute, { package: appB, family: 'aead', enabled: false }, false)).status, 200);
+  const legacy = await via('/api/config', { capture: { enabled: true } }, false);
+  assert.equal(legacy.status, 200);
+  Object.assign(settings, structuredClone(DEFAULT_SETTINGS));
+  restoreHostState();
+
+  const alpha = fakeAgent(false, [], { sid: 'alpha-reconnected', pkg: appA });
+  const beta = fakeAgent(false, [], { sid: 'beta-reconnected', pkg: appB });
+  assert.equal((await applyCaptureSettingsOnConnect('alpha-reconnected'))?.ok, true);
+  await applyCaptureSettingsOnConnect('beta-reconnected');
+  assert.deepEqual(alpha, ['capture_policy', 'capture_drain', 'capture_stop', 'capture_start']);
+  assert.equal(sessions.get('alpha-reconnected')?.policy, 'd=1,h=0,s=0,a=0,t=0,e=0,y=0');
+  assert.deepEqual(beta, []);
+  assert.equal((await readAppFamilies(appB)).enabled, false);
+  assert.equal((await readAppFamilies('com.example.legacy')).enabled, true);
 });

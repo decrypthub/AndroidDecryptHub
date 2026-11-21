@@ -592,14 +592,14 @@
   <div class="modal set-shell">
     <button class="set-close-x" onclick="closeModal('setMask')" title="关闭">×</button>
     <div class="set-main">
-      <h4>算法</h4>
+      <h4 id="familyHeading">算法</h4>
       <div id="setFamilies">
-        <div class="set-toggle-row"><div class="lab"><b>摘要</b></div><label class="set-switch"><input type="checkbox" data-fam="digest"><span class="slider"></span></label></div>
-        <div class="set-toggle-row"><div class="lab"><b>HMAC</b></div><label class="set-switch"><input type="checkbox" data-fam="hmac"><span class="slider"></span></label></div>
-        <div class="set-toggle-row"><div class="lab"><b>对称</b></div><label class="set-switch"><input type="checkbox" data-fam="symmetric"><span class="slider"></span></label></div>
-        <div class="set-toggle-row"><div class="lab"><b>非对称</b></div><label class="set-switch"><input type="checkbox" data-fam="asymmetric"><span class="slider"></span></label></div>
-        <div class="set-toggle-row"><div class="lab"><b>TLS</b></div><label class="set-switch"><input type="checkbox" data-fam="tls"><span class="slider"></span></label></div>
-        <div class="set-toggle-row"><div class="lab"><b>AEAD</b></div><label class="set-switch"><input type="checkbox" data-fam="aead"><span class="slider"></span></label></div>
+        <div class="set-toggle-row"><div class="lab"><b>摘要</b></div><label class="set-switch"><input type="checkbox" aria-label="摘要" data-fam="digest"><span class="slider"></span></label></div>
+        <div class="set-toggle-row"><div class="lab"><b>HMAC</b></div><label class="set-switch"><input type="checkbox" aria-label="HMAC" data-fam="hmac"><span class="slider"></span></label></div>
+        <div class="set-toggle-row"><div class="lab"><b>对称</b></div><label class="set-switch"><input type="checkbox" aria-label="对称" data-fam="symmetric"><span class="slider"></span></label></div>
+        <div class="set-toggle-row"><div class="lab"><b>非对称</b></div><label class="set-switch"><input type="checkbox" aria-label="非对称" data-fam="asymmetric"><span class="slider"></span></label></div>
+        <div class="set-toggle-row"><div class="lab"><b>TLS</b></div><label class="set-switch"><input type="checkbox" aria-label="TLS" data-fam="tls"><span class="slider"></span></label></div>
+        <div class="set-toggle-row"><div class="lab"><b>AEAD</b></div><label class="set-switch"><input type="checkbox" aria-label="AEAD" data-fam="aead"><span class="slider"></span></label></div>
       </div>
     </div>
   </div>
@@ -1299,7 +1299,7 @@ function updateCapStatePill(){
   if(!pkg){ el.hidden=true; el.textContent=''; return; }
   if(!captureOn){
     el.hidden=false; el.className='cap-state-pill off';
-    el.textContent='未钩'; el.title='';
+    el.textContent='算法未选'; el.title='';
     return;
   }
   if(hadUnpackSkippedArm(pkg)){
@@ -1454,40 +1454,76 @@ function togglePopover(id, btnId){
   if(open && pop){ pop.classList.add('show'); btn?.setAttribute('aria-expanded','true'); }
 }
 
-// ---- 设置：勾选算法即装上对应 hook ----
+// ---- 算法设置按当前应用读取和保存 ----
+const familyInputs=document.querySelectorAll('#setFamilies input[data-fam]');
+let familyView=null;
 let familySaving=false;
-function familyOn(settings, key){
-  return !!settings.capture.enabled && settings.capture.families[key]!==false;
+function renderFamilies(){
+  const capture=familyView?.capture;
+  for(const input of familyInputs){
+    input.checked=!!capture?.enabled && capture.families[input.dataset.fam]===true;
+    input.disabled=!capture || familySaving;
+  }
 }
-function renderFamilies(settings){
-  document.querySelectorAll('#setFamilies input[data-fam]').forEach(inp=>{ inp.checked=familyOn(settings, inp.dataset.fam); });
-}
-document.querySelectorAll('#setFamilies input[data-fam]').forEach(inp=>inp.addEventListener('change', saveFamilies));
-async function openSettings(){
-  await loadConfig();
-  document.getElementById('setMask').classList.add('show');
-}
-async function loadConfig(){
-  try{ const r=await (await fetch('/api/config')).json(); renderFamilies(r.settings); }
-  catch(e){ toast('读取配置失败'); }
-}
-async function saveFamilies(){
-  if(familySaving) return;
-  familySaving=true;
-  const families={};
-  document.querySelectorAll('#setFamilies input[data-fam]').forEach(inp=>{ families[inp.dataset.fam]=inp.checked; inp.disabled=true; });
-  const enabled=Object.values(families).some(Boolean);
+for(const input of familyInputs) input.addEventListener('change', ()=>saveFamilies(input));
+async function loadAppFamilies(view){
+  const before=view.capture;
   try{
-    const r=await (await fetch('/api/config',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({capture:{enabled,families}})})).json();
-    if(r.settings&&r.settings.capture&&typeof r.settings.capture.enabled==='boolean'){
-      captureOn=r.settings.capture.enabled; capRenderAll(); refreshCapUnpackHint(); updateCapStatePill();
+    const result=await (await fetch('/api/capture/families?package='+encodeURIComponent(view.pkg))).json();
+    if(!result.ok || result.package!==view.pkg || !result.capture) throw Error('读取配置失败');
+    if(familyView===view && view.capture===before) view.capture=result.capture;
+  }catch(error){
+    if(familyView===view) toast('读取应用设置失败');
+  }
+  if(familyView===view) renderFamilies();
+}
+async function openSettings(){
+  const pkg=selectedPackage();
+  if(!pkg){ toast('请先选择应用'); return; }
+  const label=serverApps.find(app=>app.package===pkg)?.label || pkg;
+  const view={pkg, label, capture:null};
+  familyView=view;
+  document.getElementById('familyHeading').textContent='算法 · '+label;
+  renderFamilies();
+  document.getElementById('setMask').classList.add('show');
+  await loadAppFamilies(view);
+}
+async function saveFamilies(input){
+  const view=familyView;
+  if(familySaving || !view?.capture || view.pkg!==selectedPackage()){ renderFamilies(); return; }
+  const patch={package:view.pkg, family:input.dataset.fam, enabled:input.checked};
+  const report=message=>toast(view.label+' · '+message);
+  familySaving=true;
+  for(const checkbox of familyInputs) checkbox.disabled=true;
+  try{
+    const result=await (await fetch('/api/capture/families',{
+      method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify(patch),
+    })).json();
+    if(result.package===view.pkg && result.capture){
+      serverCaptureVersion++;
+      serverCaptureByPackage={...serverCaptureByPackage,[view.pkg]:result.capture.enabled};
+      if(familyView?.pkg===view.pkg) familyView.capture=result.capture;
+      render();
     }
-    if(!r.ok){ toast(r.error||'没有装上'); await loadConfig(); }
-    else toast((r.runtime&&r.runtime.targets||[]).some(t=>t.armed)?'已装上':'已记下');
-  }catch(e){ toast('没有装上'); await loadConfig(); }
-  finally{
+    if(view.pkg!==selectedPackage()) return;
+    if(!result.ok){
+      report(result.error||'应用设置未生效');
+      if(familyView?.pkg===view.pkg && !result.capture) await loadAppFamilies(familyView);
+    }else{
+      const targets=result.runtime?.targets||[];
+      const skipped=targets.find(target=>target.skipped);
+      if(skipped) report(skipped.skipped==='hook-plan'?'已保存，会话正在使用 Hook 方案':'已保存，部分会话暂未应用');
+      else if(targets.length) report(result.capture.enabled?'已应用':'已关闭');
+      else report('已保存，应用连接后生效');
+    }
+  }catch(error){
+    if(view.pkg===selectedPackage()){
+      report(error.message||'应用设置未生效');
+      if(familyView?.pkg===view.pkg) await loadAppFamilies(familyView);
+    }
+  }finally{
     familySaving=false;
-    document.querySelectorAll('#setFamilies input[data-fam]').forEach(inp=>{ inp.disabled=false; });
+    renderFamilies();
   }
 }
 
@@ -1495,7 +1531,8 @@ function escapeHtml(s){ return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':
 
 // ---- agents / 应用栏 / WS ----
 const agents=new Map();
-let serverApps=[]; let scopeNote=''; let lastFilterPkg=''; let captureOn=true;
+let serverApps=[]; let scopeNote=''; let lastFilterPkg=''; let captureOn=false;
+let serverCaptureDefault=false, serverCaptureByPackage={}, serverCaptureVersion=0;
 function appOnline(pkg){ return sessionsOf(pkg).some(a=>a.online); }
 function renderSessions(){
   const all=sessionsOf(selectedPackage()).slice().reverse();
@@ -1520,13 +1557,17 @@ function appRecords(){
 }
 function render(){
   const list=appRecords();
-  const sig=list.map(a=>a.package+'='+a.label+'='+(appOnline(a.package)?'1':'0')).join('|')+'|'+scopeNote+'|'+(captureOn?'1':'0');
+  const sig=list.map(a=>a.package+'='+a.label+'='+(appOnline(a.package)?'1':'0')).join('|')+'|'+scopeNote;
   const pin=pinnedPackage();
   let next=chosenPkg;
   if(pin && list.some(a=>a.package===pin)) next=pin;
   else if(!list.some(a=>a.package===next)) next=(list[0]||{}).package||'';
   if(next!==chosenPkg) chosenPkg=next;
   const pkg=chosenPkg;
+  const selected=selectedPackage();
+  if(familyView && familyView.pkg!==selected){ familyView=null; closeModal('setMask'); }
+  const nextCaptureOn=!!selected && (Object.hasOwn(serverCaptureByPackage,selected)?serverCaptureByPackage[selected]:serverCaptureDefault);
+  if(nextCaptureOn!==captureOn){ captureOn=nextCaptureOn; capRenderAll(); refreshCapUnpackHint(); }
   if(pkg!==lastFilterPkg){ lastFilterPkg=pkg; unpackViewRunId=null; unpackRuns=[]; capReset(); loadAppEvents(); dumpSid=''; scheduleDetect(); if(document.getElementById('p-dump').classList.contains('active')) loadInventory(); refreshCapUnpackHint(); }
   const cur=list.find(a=>a.package===pkg);
   const primary=document.getElementById('procPrimary'), secondary=document.getElementById('procSecondary'), info=document.getElementById('procinfo');
@@ -1551,6 +1592,7 @@ function render(){
   renderSessions();
 }
 async function refreshApps(){
+  const captureVersion=serverCaptureVersion;
   try{
     const r=await (await fetch('/api/apps')).json();
     if(Array.isArray(r.apps)) serverApps=r.apps;
@@ -1558,7 +1600,10 @@ async function refreshApps(){
       serverUnpackProtected=r.unpackProtected;
       for(const p of serverUnpackProtected) unpackSkippedArm.add(p);
     }
-    if(typeof r.capture==='boolean' && r.capture!==captureOn){ captureOn=r.capture; capRenderAll(); }
+    if(captureVersion===serverCaptureVersion){
+      if(typeof r.capture==='boolean') serverCaptureDefault=r.capture;
+      serverCaptureByPackage=r.captureByPackage||{};
+    }
     scopeNote=r.error||'';
   }catch(e){ scopeNote='读不到注入范围'; }
   render();
