@@ -359,7 +359,8 @@
   .mcp-note { margin:18px 0 0; color:var(--muted); font-size:11px; }
   .mcp-note code { padding:0; border:0; background:transparent; color:var(--ink-2); }
   .mcp-hint.warn { color:var(--amber); }
-  .set-shell { width:min(980px,95vw); height:min(88vh,760px); padding:0; position:relative; }
+  .set-shell { width:min(420px,92vw); height:auto; max-height:min(88vh,640px); padding:0; position:relative; }
+  .set-shell .set-main { flex:none; overflow:visible; padding:36px 28px 22px; }
   .set-close-x { position:absolute; top:10px; right:12px; z-index:2; width:28px; height:28px; border:none; background:transparent; color:var(--muted); font-size:20px; line-height:1; cursor:pointer; border-radius:4px; }
   .set-close-x:hover { background:var(--surface-3); color:var(--ink); }
   .set-layout { display:flex; flex:1; min-height:0; }
@@ -454,7 +455,7 @@
     </div>
     <button type="button" class="compact-action" id="mcpBtn" title="MCP 接入（adh CLI：安装 / 连接 / 配置）">MCP</button>
     <button type="button" class="compact-action" id="opBtn">任务与控制权</button>
-    <button type="button" class="compact-action" id="setBtn" title="捕获 / 数据 / 配置导入导出">设置</button>
+    <button type="button" class="compact-action" id="setBtn" title="算法">设置</button>
   </div>
 </header>
 
@@ -660,92 +661,19 @@
   </div>
 </div>
 
-<!-- 设置 模态 -->
+<!-- 设置：勾选要 hook 的算法 -->
 <div class="modal-mask" id="setMask">
   <div class="modal set-shell">
     <button class="set-close-x" onclick="closeModal('setMask')" title="关闭">×</button>
-    <div class="set-layout">
-      <nav class="set-nav" id="setNav">
-        <button data-setpage="capture" class="active">捕获</button>
-        <button data-setpage="data">数据</button>
-        <button data-setpage="rawcfg">配置 JSON</button>
-        <button data-setpage="backends">注入后端</button>
-      </nav>
-      <div class="set-main">
-        <div id="setPageCapture" class="set-page active">
-          <h4>捕获</h4>
-          <p class="set-lead">注入范围内应用上线自动装钩。关掉 = 卸掉所有在线钩子。一键脱壳不会关此开关。</p>
-          <div class="set-toggle-row">
-            <div class="lab"><b>自动布防</b><span>开：上线装钩；关：卸掉在线钩子</span></div>
-            <label class="set-switch"><input type="checkbox" id="setCapEnabled"><span class="slider"></span></label>
-          </div>
-          <div class="set-toggle-row">
-            <div class="lab"><b>上线时自动存 DEX</b><span>连上即 dump DEX，不是一键脱壳</span></div>
-            <label class="set-switch"><input type="checkbox" id="setAutoDump"><span class="slider"></span></label>
-          </div>
-          <div class="set-section-title">家族过滤</div>
-          <p class="set-lead" style="margin-top:0">关掉 = 不入库，不是卸钩。</p>
-          <div id="setFamilies"></div>
-          <div class="set-section-title">容量</div>
-          <div class="set-row">
-            <div class="lab"><b>每应用保留条数</b><span>内存 + 磁盘；改小立即裁剪</span></div>
-            <select id="setRetain">
-              <option value="500">500 条</option><option value="1000">1000 条</option>
-              <option value="2000">2000 条</option><option value="5000">5000 条</option>
-            </select>
-          </div>
-          <div class="set-row">
-            <div class="lab"><b>列表展示条数</b><span>仅影响左侧渲染</span></div>
-            <select id="setDisplayCap">
-              <option value="100">100 行</option><option value="150">150 行</option>
-              <option value="300">300 行</option><option value="500">500 行</option>
-            </select>
-          </div>
-        </div>
-        <div id="setPageData" class="set-page">
-          <h4>数据</h4>
-          <p class="set-lead">当前存储与清理。清空不可恢复。右上角名单只跟手机注入范围，与这里的历史无关。</p>
-          <div class="set-row"><div class="lab"><b>捕获（内存）</b></div><span class="val" id="statCaptures">—</span></div>
-          <div class="set-row"><div class="lab"><b>捕获（磁盘按包）</b></div><span class="val" id="statCapDisk">—</span></div>
-          <div class="set-row"><div class="lab"><b>DEX/so dump</b></div><span class="val" id="statDumps">—</span></div>
-          <div class="set-row"><div class="lab"><b>会话事件</b></div><span class="val" id="statEvents">—</span></div>
-          <div class="set-actions">
-            <button class="danger" onclick="clearData('captures')">清空全部捕获</button>
-            <button class="danger" onclick="clearDataPkg('captures')">清空当前应用捕获</button>
-            <button class="danger" onclick="clearData('dumps')">清空全部 dump</button>
-            <button class="danger" onclick="clearDataPkg('dumps')">清空当前应用 dump</button>
-            <button class="danger" onclick="clearData('events')">清空事件</button>
-          </div>
-          <div class="set-section-title">导出</div>
-          <div class="set-actions">
-            <a class="filebtn" href="/api/export/report" target="_blank">下载诊断报告（仅元数据）</a>
-            <button type="button" class="filebtn" onclick="exportPkgCaptures()">导出当前应用捕获 jsonl</button>
-          </div>
-        </div>
-        <div id="setPageRawcfg" class="set-page">
-          <h4>配置 JSON</h4>
-          <p class="set-lead">直接编辑全部配置并按板块合并保存 —— JSON 里有哪段(capture/ui)就应用哪段，删掉某段则保持不变。可下载/从文件载入，在多台机器间搬运配置。</p>
-          <div class="set-actions">
-            <button onclick="loadRawCfg(true)">重新载入</button>
-            <button onclick="copyText(document.getElementById('rawCfgText').value)">复制</button>
-            <button onclick="downloadRawCfg()">下载</button>
-            <label class="filebtn">从文件载入<input id="rawFile" type="file" accept=".json,application/json" style="display:none"></label>
-          </div>
-          <textarea id="rawCfgText" spellcheck="false"></textarea>
-          <div class="set-actions">
-            <button class="save" onclick="saveRawCfg()">保存并应用</button>
-            <span id="rawHint" class="muted"></span>
-          </div>
-        </div>
-        <div id="setPageBackends" class="set-page">
-          <h4>注入后端</h4>
-          <p class="set-lead">官方注入路径只有 <b>Zygisk</b>（作用域由手机侧 ADH Manager → Device Daemon 管理）与开发用的 <b>模拟注入</b>。本页显示当前 agent 会话与设备侧后端指针。</p>
-          <div class="set-section-title">当前 agent 会话</div>
-          <div id="backendsAgents" class="muted">加载中…</div>
-          <div class="set-section-title">设备侧后端</div>
-          <div id="backendsDevice" class="muted">加载中…</div>
-          <div class="set-actions"><button onclick="renderBackends()">刷新</button></div>
-        </div>
+    <div class="set-main">
+      <h4>算法</h4>
+      <div id="setFamilies">
+        <div class="set-toggle-row"><div class="lab"><b>摘要</b></div><label class="set-switch"><input type="checkbox" data-fam="digest"><span class="slider"></span></label></div>
+        <div class="set-toggle-row"><div class="lab"><b>HMAC</b></div><label class="set-switch"><input type="checkbox" data-fam="hmac"><span class="slider"></span></label></div>
+        <div class="set-toggle-row"><div class="lab"><b>对称</b></div><label class="set-switch"><input type="checkbox" data-fam="symmetric"><span class="slider"></span></label></div>
+        <div class="set-toggle-row"><div class="lab"><b>非对称</b></div><label class="set-switch"><input type="checkbox" data-fam="asymmetric"><span class="slider"></span></label></div>
+        <div class="set-toggle-row"><div class="lab"><b>TLS</b></div><label class="set-switch"><input type="checkbox" data-fam="tls"><span class="slider"></span></label></div>
+        <div class="set-toggle-row"><div class="lab"><b>AEAD</b></div><label class="set-switch"><input type="checkbox" data-fam="aead"><span class="slider"></span></label></div>
       </div>
     </div>
   </div>
@@ -755,8 +683,7 @@
 
 <script src="/operation-client.js"></script>
 <script src="/workbench-model.js"></script>
-<script src="/quick-start.js"></script>
-<script src="/hook-plans-panel.js"></script><script src="/workbench.js"></script>
+<script src="/workbench.js"></script>
 <script src="/operations.js"></script>
 <script>
 // 顶栏五条主轴：加解密 / 系统 / 网络 / 文件 / Dump（对齐 iOS，不藏专家折叠）。
@@ -1446,7 +1373,7 @@ function updateCapStatePill(){
   if(!pkg){ el.hidden=true; el.textContent=''; return; }
   if(!captureOn){
     el.hidden=false; el.className='cap-state-pill off';
-    el.textContent='布防关'; el.title='自动布防已关';
+    el.textContent='未钩'; el.title='';
     return;
   }
   if(hadUnpackSkippedArm(pkg)){
@@ -1479,7 +1406,7 @@ function setUnpackLiveHint(html, show){
 }
 function emptyCapText(){
   if(!selectedPackage()) return '先在右上角选应用。';
-  if(!captureOn) return '自动布防已关。';
+  if(!captureOn) return '还没有记录。';
   if(hadUnpackSkippedArm(selectedPackage())) return '本包脱壳后未装钩 · 重启 App 后再捕。';
   return '还没有记录。';
 }
@@ -1658,129 +1585,41 @@ function togglePopover(id, btnId){
   if(open && pop){ pop.classList.add('show'); btn?.setAttribute('aria-expanded','true'); }
 }
 
-// ---- 设置 模态 ----
-const FAMILIES=[['digest','摘要'],['hmac','HMAC'],['symmetric','对称'],['asymmetric','非对称'],['tls','TLS'],['aead','AEAD']];
-function setSettingsPage(name){
-  document.querySelectorAll('#setNav button').forEach(b=>b.classList.toggle('active',b.dataset.setpage===name));
-  document.querySelectorAll('#setMask .set-page').forEach(p=>p.classList.remove('active'));
-  document.getElementById('setPage'+name.charAt(0).toUpperCase()+name.slice(1)).classList.add('active');
-  if(name==='rawcfg') loadRawCfg(true);
-  if(name==='backends') renderBackends();
+// ---- 设置：勾选算法即装上对应 hook ----
+let familySaving=false;
+function familyOn(settings, key){
+  return !!settings.capture.enabled && settings.capture.families[key]!==false;
 }
-// when switching main tabs, refresh the capture-vs-unpack hint
-function renderFamilies(fam){
-  document.getElementById('setFamilies').innerHTML=FAMILIES.map(([k,label])=>
-    `<div class="set-toggle-row"><div class="lab"><b>${label}</b></div>`+
-    `<label class="set-switch"><input type="checkbox" data-fam="${k}" ${fam[k]!==false?'checked':''}><span class="slider"></span></label></div>`).join('');
-  document.querySelectorAll('#setFamilies input[data-fam]').forEach(inp=>
-    inp.addEventListener('change',()=>postConfig({capture:{families:{[inp.dataset.fam]:inp.checked}}})));
+function renderFamilies(settings){
+  document.querySelectorAll('#setFamilies input[data-fam]').forEach(inp=>{ inp.checked=familyOn(settings, inp.dataset.fam); });
 }
-async function renderBackends(){
-  const aEl=document.getElementById('backendsAgents'), dEl=document.getElementById('backendsDevice');
-  if(!aEl) return;
-  aEl.textContent='加载中…'; dEl.textContent='加载中…';
-  let data; try{ data=await (await fetch('/api/backends')).json(); }catch(e){ aEl.textContent='读取失败: '+e; return; }
-  const list=data.agents||[];
-  aEl.innerHTML = list.length ? list.map(a=>
-    `<div style="display:flex;gap:8px;align-items:center;justify-content:space-between;padding:3px 0">`
-    + `<span><b>${a.package}</b> <span class="muted">pid=${a.pid}${a.process&&a.process!==a.package?' · '+a.process:''} · ${a.online?'在线':'离线'} · entry=${a.entry}</span></span>`
-    + `<button onclick="probeBackend('${a.session}','${a.package}')">检测注入方式</button></div>`).join('')
-    : '<div class="muted">没有会话（先注入一个目标）</div>';
-  const z=data.zygisk||{};
-  dEl.innerHTML=`<div><b>Zygisk</b> · ${z.module||''} — ${z.control||''}</div>`
-    + `<div class="muted" style="margin-top:4px">验证：${(z.verify||[]).join(' · ')}</div>`;
-}
-async function probeBackend(session,pkg){
-  try{
-    const mods=await (await fetch('/api/modules?session='+encodeURIComponent(session))).json();
-    const paths=(mods||[]).map(m=>String(m.path||m.name||''));
-    const hit=['agent 本体'];
-    if(paths.some(s=>s.includes('/data/adb/modules/adh/'))) hit.push('Zygisk 模块');
-    toast(pkg+' → '+hit.join(' + '));
-  }catch(e){ toast('检测失败: '+e); }
-}
+document.querySelectorAll('#setFamilies input[data-fam]').forEach(inp=>inp.addEventListener('change', saveFamilies));
 async function openSettings(){
   await loadConfig();
-  setSettingsPage('capture');
   document.getElementById('setMask').classList.add('show');
 }
 async function loadConfig(){
-  try{ const r=await (await fetch('/api/config')).json(); const s=r.settings, st=r.stats;
-    document.getElementById('setCapEnabled').checked=s.capture.enabled;
-    document.getElementById('setAutoDump').checked=s.capture.autoDumpDex;
-    document.getElementById('setRetain').value=String(s.capture.retain);
-    document.getElementById('setDisplayCap').value=String(s.ui.displayCap);
-    renderFamilies(s.capture.families);
-    document.getElementById('statCaptures').textContent=`${st.captures} 条`+(st.on?' · 已装钩':' · 未装钩');
-    document.getElementById('statDumps').textContent=`${st.dumps} 个`;
-    document.getElementById('statEvents').textContent=`${st.events} 条`;
-    try{
-      const disk=await (await fetch('/api/captures/packages')).json();
-      const rows=disk.packages||[];
-      const bytes=rows.reduce((n,p)=>n+(p.bytes||0),0);
-      document.getElementById('statCapDisk').textContent=rows.length?`${rows.length} 包 · ${fmtSize(bytes)}`:'无';
-    }catch{ document.getElementById('statCapDisk').textContent='—'; }
-  }catch(e){ toast('读取配置失败: '+e); }
+  try{ const r=await (await fetch('/api/config')).json(); renderFamilies(r.settings); }
+  catch(e){ toast('读取配置失败'); }
 }
-async function postConfig(patch){
-  try{ const r=await (await fetch('/api/config',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(patch)})).json();
-    if(r.error){ toast('保存失败: '+r.error); return; }
-    if(r.stats){ document.getElementById('statCaptures').textContent=`${r.stats.captures} 条`+(r.stats.on?' · 已装钩':' · 未装钩'); }
-    if(patch.ui&&patch.ui.displayCap) capDisplayCap=r.settings.ui.displayCap;
+async function saveFamilies(){
+  if(familySaving) return;
+  familySaving=true;
+  const families={};
+  document.querySelectorAll('#setFamilies input[data-fam]').forEach(inp=>{ families[inp.dataset.fam]=inp.checked; inp.disabled=true; });
+  const enabled=Object.values(families).some(Boolean);
+  try{
+    const r=await (await fetch('/api/config',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({capture:{enabled,families}})})).json();
     if(r.settings&&r.settings.capture&&typeof r.settings.capture.enabled==='boolean'){
       captureOn=r.settings.capture.enabled; capRenderAll(); refreshCapUnpackHint(); updateCapStatePill();
     }
-    toast('已保存');
-  }catch(e){ toast('保存失败: '+e); }
-}
-async function clearData(what){
-  const names={captures:'全部捕获',dumps:'全部 DEX/so dump',events:'会话事件'};
-  if(!confirm(`确定清空「${names[what]}」？不可恢复。`)) return;
-  try{ const r=await (await fetch('/api/data/clear',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({what})})).json();
-    if(r.error){ toast('失败: '+r.error); return; }
-    toast('已清空 '+names[what]); loadConfig();
-    if(what==='captures'){ capItems.length=0; capMaxId=0; for(const k in CAPPANELS) CAPPANELS[k].sel=0; capRenderAll(); }
-    if(what==='dumps') loadInventory();
-  }catch(e){ toast('失败: '+e); }
-}
-async function clearDataPkg(what){
-  const pkg=selectedPackage();
-  if(!pkg){ toast('先在右上角选一个应用'); return; }
-  const names={captures:'该应用的捕获',dumps:'该应用的 dump'};
-  if(!confirm(`确定清空「${names[what]}」(${pkg})？不可恢复。`)) return;
-  try{ const r=await (await fetch('/api/data/clear',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({what,package:pkg})})).json();
-    if(r.error){ toast('失败: '+r.error); return; }
-    toast('已清空 '+names[what]); loadConfig();
-    if(what==='captures'){ for(let i=capItems.length-1;i>=0;i--) if(capItems[i].package===pkg) capItems.splice(i,1); capRenderAll(); }
-    if(what==='dumps') loadInventory();
-  }catch(e){ toast('失败: '+e); }
-}
-function exportPkgCaptures(){
-  const pkg=selectedPackage();
-  if(!pkg){ toast('先在右上角选一个应用'); return; }
-  window.open('/api/captures/export?package='+encodeURIComponent(pkg),'_blank');
-}
-// 配置 JSON 编辑器（export/import 按板块合并）
-async function loadRawCfg(force){
-  const ta=document.getElementById('rawCfgText');
-  if(!force && ta.value.trim()) return;
-  try{ const j=await (await fetch('/api/settings/export')).json(); ta.value=JSON.stringify(j,null,2); document.getElementById('rawHint').textContent=''; }
-  catch(e){ document.getElementById('rawHint').textContent='载入失败: '+e; }
-}
-function downloadRawCfg(){
-  const blob=new Blob([document.getElementById('rawCfgText').value],{type:'application/json'});
-  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='adh-settings.json';
-  document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href); toast('已下载 adh-settings.json');
-}
-async function saveRawCfg(){
-  const raw=document.getElementById('rawCfgText').value.trim(); const hint=document.getElementById('rawHint');
-  if(!raw){ toast('配置为空'); return; }
-  let obj; try{ obj=JSON.parse(raw); }catch(e){ hint.textContent='JSON 错误: '+e.message; toast('JSON 格式错误'); return; }
-  try{ const r=await (await fetch('/api/settings/import',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(obj)})).json();
-    if(r.error){ hint.textContent='应用失败: '+r.error; toast('应用失败'); return; }
-    hint.textContent='已应用: '+((r.applied||[]).join(' / ')||'无'); toast('已保存并应用');
-    loadConfig(); loadRawCfg(true);
-  }catch(e){ hint.textContent='应用失败: '+e; toast('应用失败'); }
+    if(!r.ok){ toast(r.error||'没有装上'); await loadConfig(); }
+    else toast((r.runtime&&r.runtime.targets||[]).some(t=>t.armed)?'已装上':'已记下');
+  }catch(e){ toast('没有装上'); await loadConfig(); }
+  finally{
+    familySaving=false;
+    document.querySelectorAll('#setFamilies input[data-fam]').forEach(inp=>{ inp.disabled=false; });
+  }
 }
 
 function escapeHtml(s){ return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
@@ -1980,13 +1819,6 @@ document.addEventListener('keydown', e=>{
   if(e.key==='Escape') closePopovers();
 });
 document.getElementById('setBtn').addEventListener('click', openSettings);
-document.getElementById('setNav').addEventListener('click', e=>{ const p=e.target.dataset&&e.target.dataset.setpage; if(p) setSettingsPage(p); });
-document.getElementById('setCapEnabled').addEventListener('change', e=>postConfig({capture:{enabled:e.target.checked}}));
-document.getElementById('setAutoDump').addEventListener('change', e=>postConfig({capture:{autoDumpDex:e.target.checked}}));
-document.getElementById('setRetain').addEventListener('change', e=>postConfig({capture:{retain:Number(e.target.value)}}));
-document.getElementById('setDisplayCap').addEventListener('change', e=>postConfig({ui:{displayCap:Number(e.target.value)}}));
-document.getElementById('rawFile').addEventListener('change', ev=>{ const f=ev.target.files&&ev.target.files[0]; if(!f) return;
-  const rd=new FileReader(); rd.onload=()=>{ document.getElementById('rawCfgText').value=rd.result; document.getElementById('rawHint').textContent='已载入文件，检查后点保存并应用'; }; rd.readAsText(f); ev.target.value=''; });
 // 点遮罩空白处关闭模态
 for(const id of ['mcpMask','setMask']) document.getElementById(id).addEventListener('click', e=>{ if(e.target.id===id) closeModal(id); });
 // 初始化 displayCap（不打开设置也让列表按配置渲染）

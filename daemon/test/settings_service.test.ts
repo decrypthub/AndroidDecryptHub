@@ -121,6 +121,29 @@ for (const entry of ['mcp', '/api/config', '/api/settings/import']) {
     rmSync(SETTINGS_FILE, { recursive: true });
   });
 
+  test(`${entry}: checking one algorithm installs that family`, async () => {
+    reset(); const calls = fakeAgent();
+    const result = await via(entry, { capture: { enabled: true, families: { digest: false, hmac: false, symmetric: true, asymmetric: false, tls: false, aead: false } } });
+    assert.equal(result.body.ok, true);
+    assert.equal(settings.capture.enabled, true);
+    assert.equal(settings.capture.families.symmetric, true);
+    assert.equal(settings.capture.families.digest, false);
+    assert.ok(calls.includes('capture_policy'));
+    assert.ok(calls.includes('capture_start'));
+    assert.ok(calls.indexOf('capture_policy') < calls.indexOf('capture_start'));
+  });
+
+  test(`${entry}: clearing every algorithm records the empty policy and does not install`, async () => {
+    reset(); settings.capture.enabled = true; const calls = fakeAgent();
+    const result = await via(entry, { capture: { enabled: false, families: { digest: false, hmac: false, symmetric: false, asymmetric: false, tls: false, aead: false } } });
+    assert.equal(result.body.ok, true);
+    assert.equal(settings.capture.enabled, false);
+    assert.equal(settings.capture.families.symmetric, false);
+    assert.ok(calls.includes('capture_stop'));
+    assert.ok(calls.includes('capture_policy'));
+    assert.equal(calls.includes('capture_start'), false);
+  });
+
   test(`${entry}: retention/UI patch preserves disk evidence and does not reinstall hooks`, async () => {
     reset(); const calls = fakeAgent();
     const pkg = 'com.example.retention';

@@ -818,9 +818,60 @@ function recordCaptureHooks(sid: string, r: any) {
   s.captureHooks = r;
 }
 
+const CRYPTO_FAMILY_KEYS = ['digest', 'hmac', 'symmetric', 'asymmetric', 'tls', 'aead'] as const;
+const CRYPTO_FAMILY_FLAGS = ['d', 'h', 's', 'a', 't', 'e'] as const;
+
+/** The six crypto families a person can check, plus the session's existing system bit. */
+export function selectedFamilyFlags(system: boolean): string {
+  const families = settings.capture.families;
+  const parts = CRYPTO_FAMILY_KEYS.map((key, index) => `${CRYPTO_FAMILY_FLAGS[index]}=${families[key] === false ? '0' : '1'}`);
+  parts.push(`y=${system ? '1' : '0'}`);
+  return parts.join(',');
+}
+
+function sessionSystemOn(policy: string | undefined): boolean {
+  return /(?:^|,)y=1(?:$|,)/.test(policy || '');
+}
+
+/**
+ * Push the checked crypto families to online agents and, when capture is on, install that set.
+ * An enable-only settings patch does not call this: checking an algorithm is the human action.
+ */
+export async function applySelectedFamilies(onlySid?: string): Promise<{
+  ok: boolean; targets: { session: string; ok: boolean; armed?: boolean; skipped?: string; error?: string }[]; error?: string;
+}> {
+  const arm = settings.capture.enabled && CRYPTO_FAMILY_KEYS.some((key) => settings.capture.families[key] !== false);
+  const targets = [...sessions.values()].filter((s) => s.online && (!onlySid || s.sessionId === onlySid));
+  const out: { session: string; ok: boolean; armed?: boolean; skipped?: string; error?: string }[] = [];
+  for (const s of targets) {
+    const flags = selectedFamilyFlags(sessionSystemOn(s.policy));
+    try {
+      const policy = await agentCmd(s.sessionId, 'capture_policy', { families: flags });
+      if (policy?.ok !== true) {
+        out.push({ session: s.sessionId, ok: false, armed: false, error: String(policy?.error || 'agent refused family policy') });
+        continue;
+      }
+      s.policy = flags;
+      if (!arm) {
+        out.push({ session: s.sessionId, ok: true, armed: false });
+        continue;
+      }
+      const armed = await setCapture(s.sessionId, true);
+      if (armed.captureSuppressed || armed.captureProtected) {
+        out.push({ session: s.sessionId, ok: true, armed: false, skipped: armed.error });
+        continue;
+      }
+      out.push({ session: s.sessionId, ok: armed.ok, armed: armed.ok, ...(!armed.ok ? { error: armed.error || 'capture operation failed' } : {}) });
+    } catch (error) {
+      out.push({ session: s.sessionId, ok: false, armed: false, error: (error as Error).message });
+    }
+  }
+  return { ok: out.every((row) => row.ok), targets: out };
+}
+
 // Apply the capture.enabled toggle to already-connected sessions.
-// enabled=false → force-stop hooks everywhere. enabled=true → re-arm only packages that
-// should auto-arm (scope allowlist / sandbox), using setCapture for a clean drain→stop→start.
+// enabled=false → force-stop hooks everywhere. enabled=true → resume draining only.
+// Checking an algorithm calls applySelectedFamilies, which is what installs that set.
 export async function applyCaptureEnabled(): Promise<{
   ok: boolean; targets: { session: string; ok: boolean; skipped?: string; error?: string }[]; error?: string;
 }> {

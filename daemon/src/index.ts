@@ -6,12 +6,12 @@ import { AGENT_PORT, HTTP_PORT, webUrls } from './config.ts';
 import { handleHttp } from './http/router.ts';
 import { sendHttpError } from './http/response_error.ts';
 import { ensureAdbReverse } from './scope_list.ts';
-import { startCaptureLoop, forgetCaptureSession, clearCaptureArmProtect } from './service.ts';
+import { applySelectedFamilies, startCaptureLoop, forgetCaptureSession, clearCaptureArmProtect } from './service.ts';
 import { initializeHost } from './host_lifecycle.ts';
 import { initializeOperations } from './operation_host.ts';
 import {
   agentSockets, broadcast, captureTimers, failPendingFor, frameJson, FRAME_JSON, FRAME_MAX,
-  log, nextId, pending, pruneSessions, sessions, wss,
+  log, nextId, pending, pruneSessions, sessions, settings, wss,
 }
 from './state.ts';
 import type { AgentMsg, AgentSession } from './state.ts';
@@ -74,9 +74,12 @@ const agentServer = net.createServer((sock) => {
       // Fresh process after unpack: allow auto-arm again (protect only blocks the live post-unpack session).
       clearCaptureArmProtect(session.package);
       broadcast('agent.hello', session);
-      // Connection/reconnection observes only. Installs require an explicit plan/primitive;
-      // an authorized early cache already ran before this hello and reports its own receipts.
+      // Draining starts immediately. The algorithms checked in the panel are installed here,
+      // on this process, so a restarted app keeps the same hooks.
       startCaptureLoop(id,{skipArm:true});
+      if (settings.capture.enabled) {
+        void applySelectedFamilies(id).catch((error) => log(`[capture] family arm ${id}:`, (error as Error).message));
+      }
     } else if (msg.t === 'caps' && session) {
       // Arrives right after the hello (before the maps sample). Stored on the session, never
       // merged from another session: two processes of the same app can run different builds.

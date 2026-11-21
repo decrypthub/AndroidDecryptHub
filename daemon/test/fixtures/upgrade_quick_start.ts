@@ -145,7 +145,7 @@ try {
 
   await connectAndRead();
   if (process.argv.includes('--serve')) {
-    console.log('QUICK_START_URL=' + url + '/workbench?view=quick-start');
+    console.log('WORKBENCH_URL=' + url + '/workbench');
     const input = createInterface({input: process.stdin});
     const stop = () => input.close();
     process.once('SIGINT', stop);

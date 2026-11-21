@@ -501,8 +501,8 @@ export function artifactStats() {
   return { count: dumps.size, bytes, maxBytes: settings.artifacts.maxBytes, maxAgeDays: settings.artifacts.maxAgeDays };
 }
 export function configStats() { return { captures: captures.length, dumps: dumps.size, events: events.length, on: captureTimers.size > 0, agents: sessions.size, capture: captureHealth(), artifacts: artifactStats() }; }
-// Which crypto family a capture belongs to (mirrors cryptoIdentify's buckets) — used by the
-// Daemon-side family filter (panel-level; the agent still hooks everything).
+// Which crypto family a capture belongs to. The panel's algorithm checkboxes also push this
+// set to the agent; this filter drops a record when that family is unchecked.
 export function familyOf(algo: string): 'tls' | 'asymmetric' | 'hmac' | 'digest' | 'symmetric' | 'aead' {
   if (/TLS/.test(algo)) return 'tls';
   if (/AEAD/i.test(algo)) return 'aead';

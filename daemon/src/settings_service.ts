@@ -1,5 +1,5 @@
 import { checkpoint, localEffect } from './execution_context.ts';
-import { applyCaptureEnabled, autoAntiDebugEnabled } from './service.ts';
+import { applyCaptureEnabled, applySelectedFamilies, autoAntiDebugEnabled } from './service.ts';
 import { configStats, mergeSettings, saveSettings, settings } from './state.ts';
 
 // Serialize save→publish→apply across MCP and HTTP. A second patch cannot change the
@@ -25,13 +25,27 @@ export function patchSettings(patch: unknown, applyCapture = applyCaptureEnabled
     checkpoint();
     Object.assign(settings, candidate);
     const capture = (patch as Record<string, any>).capture;
-    // Output filters apply on ingestion; legacy startup/auto-dump fields are migration
-    // templates. Neither hello nor a settings patch installs hooks or dumps DEX.
+    // A families patch is the panel's algorithm choice and installs that set.
+    // An enable-only patch only resumes draining. Legacy module fields stay templates.
     const needsCaptureApply = typeof capture?.enabled === 'boolean';
+    const familiesChosen = !!capture && Object.hasOwn(capture, 'families');
     let runtime: Awaited<ReturnType<typeof applyCaptureEnabled>> = { ok: true, targets: [] };
     if (needsCaptureApply) {
       try { runtime = await applyCapture(); }
       catch (error) { runtime = { ok: false, targets: [], error: (error as Error).message }; }
+    }
+    // The algorithm checkboxes are the human hook action. An enable-only patch stays drain-only.
+    if (familiesChosen) {
+      try {
+        const hooked = await applySelectedFamilies();
+        runtime = {
+          ok: runtime.ok && hooked.ok,
+          targets: [...runtime.targets, ...hooked.targets],
+          ...(hooked.error ? { error: hooked.error } : {}),
+        };
+      } catch (error) {
+        runtime = { ok: false, targets: runtime.targets, error: (error as Error).message };
+      }
     }
     return {
       ok: runtime.ok, applied, persisted: true, runtimeApplied: runtime.ok, runtime,

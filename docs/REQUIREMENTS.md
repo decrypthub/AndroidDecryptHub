@@ -1699,7 +1699,7 @@ Agent → TCP 8761 → ADH Daemon（host，经 adb reverse）
 - 验收：`tools/verify_v34_ecapture.sh`（真机：官方二进制 → 预检 → 对 sandbox 起 probe → **用 MCP `net_capture` 驱动一次真实 HTTPS** → 断言抓到 `ADH_NET_MARKER_v1` 请求明文与 `ADH_NET_RESPONSE_v1` 响应明文）；内核不支持时 SKIP 并给出原因。
 
 **控制面（注入中心）**
-- 注入中心（已落地，2026-09-15）：主机侧 `GET /api/backends` + Web 控制台"注入后端"页给出会话分类、Gadget 缓存/命令与设备侧后端入口（每个会话可一键判定 Zygisk/Gadget/自加载）；验收 `tools/verify_v33_backends.sh`。
+- 注入中心（已落地，2026-09-15；2026-11-21 起不进人用设置）：主机侧 `GET /api/backends` 给出会话分类与设备侧后端；人用设置只勾选算法。验收 `tools/verify_v33_backends.sh`。
 - MCP 面（2026-09-16）：`backends` 工具与 REST *同源*（`daemon/src/backends.ts`）；带 `session` 参数按 agent 自身 maps 判定该进程真实存在的注入路径（`zygisk`/`frida_gadget`/`self_load`）—— AI 客户端与控制台看到的是同一份真相；验收并入 `tools/verify_v33_backends.sh`。
 - Gadget 在控制台里只做"命令模板 + 检测"，一键下发仍走主机工具（daemon 无 adb）。
 ---

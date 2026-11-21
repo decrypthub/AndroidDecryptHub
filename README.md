@@ -2,7 +2,7 @@
 
 Android DecryptHub（ADH）是一套 Android 运行时分析工具。它把一个轻量程序注入到你勾选的应用里，观察这个应用在运行时做了什么：网络、加密、Java 方法、native 函数、内存和 DEX。重的分析放在电脑上，不放进目标应用。
 
-在电脑的任务工作台编辑 Hook 方案。MCP `hook_plans`、Python CLI `adh call/run hook_plans` 和工作台共用执行层，分别报告保存、暂存与实际安装的状态。迁移与兼容边界见 [P5_HOOK_PLANS.md](docs/P5_HOOK_PLANS.md)。
+细粒度 Hook 方案由 MCP `hook_plans` 与 Python CLI `adh call/run hook_plans` 提交，共用同一执行层，分别报告保存、暂存与实际安装的状态。任务工作台只显示已提交的任务。迁移与兼容边界见 [P5_HOOK_PLANS.md](docs/P5_HOOK_PLANS.md)。
 
 P5 后续已完成真实 Android 独立沙盒验收，并在正式 Zygisk 回调/companion/post-specialize 的隔离命名空间中完成七族代表性捕获、全部禁用、LAN 授权撤销及 UID/Agent/过期等拒绝，共15/15。详见[正式链验收与未验证边界](docs/P5_ZYGISK_EXTENDED_ACCEPTANCE.md)；默认模块/Manager/生产 RootDaemon 的部署升级仍待验证。
 
@@ -50,7 +50,7 @@ P5 后续已完成真实 Android 独立沙盒验收，并在正式 Zygisk 回调
 
 升级前备份原 Host 数据目录（默认是旧工作目录里的 `adhd-data/`）和手机上的 `/data/adb/adh/`。手机备份包含应用范围 `scope.json`、Host 地址 `host.endpoint` 及已有的设备身份和配对资料，请私下保存。旧 Host 使用外置采集目录时，同时保留原 `ADH_CAPTURES_DIR`。
 
-用同一版本的 Host、模块和 ADH Manager，就地更新并保留应用数据。Manager 的签名须与已安装版本一致。切换 Host 工作目录时，将 `ADH_DATA_DIR` 指向原目录。启动后在 ADH Manager 核对应用范围，在任务工作台点击「快速开始 → 查看 Host 配置」对照备份。方案编辑的入口是工作台「Hook 方案」。源码安装见[构建指南](docs/BUILDING.md)，保留目录的细节见 [P0 存储说明](docs/P0_HOST_STATE.md#初始化与存储)。
+用同一版本的 Host、模块和 ADH Manager，就地更新并保留应用数据。Manager 的签名须与已安装版本一致。切换 Host 工作目录时，将 `ADH_DATA_DIR` 指向原目录。启动后在 ADH Manager 核对应用范围。细粒度 Hook 方案用 `adh run hook_plans` 提交。源码安装见[构建指南](docs/BUILDING.md)，保留目录的细节见 [P0 存储说明](docs/P0_HOST_STATE.md#初始化与存储)。
 
 ### 2. 确认设备连接
 
@@ -70,11 +70,19 @@ adh run devices --arguments '{"action":"connect","transport":"adb","serial":"SER
 adh tasks get OPERATION_ID --endpoint http://127.0.0.1:8088
 ```
 
-连接操作显示 `succeeded` 后，打开 Host 地址下的 `/workbench?view=quick-start`，点击「检查设备连接」。有多条在线连接时，选定要核对的那条。已有配对的设备也可按 [LAN 说明](docs/P4_LAN_AUTH.md#公共调用顺序)连接。
+连接操作显示 `succeeded` 后，列出已验证连接。已有配对的设备也可按 [LAN 说明](docs/P4_LAN_AUTH.md#公共调用顺序)连接。
+
+```bash
+adh call devices --arguments '{"action":"list"}' --endpoint http://127.0.0.1:8088
+```
 
 ### 3. 读取首条诊断结果
 
-点击「读取诊断结果」，核对回执中的设备 ID、连接 ID、设备型号和状态版本。这个页面可在观察模式下使用。设备断开后，重新检查连接再读一次。先在隔离沙盒做一遍，可以看到带「隔离沙盒」来源标记的 `JVM fixture` 回执。
+用上一步返回的 `deviceId` 和 `connectionId` 读取诊断，核对设备型号和状态版本。设备断开后重新连接再读一次。隔离沙盒的回执带 `synthetic: true`。
+
+```bash
+adh call devices --arguments '{"action":"info","deviceId":"DEVICE_ID","connectionId":"CONNECTION_ID"}' --endpoint http://127.0.0.1:8088
+```
 
 ### 在隔离沙盒复验
 
@@ -88,7 +96,7 @@ npm ci
 node test/fixtures/upgrade_quick_start.ts
 ```
 
-脚本在临时目录放入 0.6.0 格式的旧配置，执行安装包共用的范围初始化，再通过 Host 的实际 HTTP 路由及 JVM 设备沙盒验证旧值、身份连接和诊断回执。给最后一条命令加 `--serve`，打开终端输出的 `QUICK_START_URL` 可以走同一套工作台步骤。输入 `stop` 可关闭沙盒并清理临时文件。沙盒使用回环连接，默认安装包在 Android 上的部署和升级另行验收。
+脚本在临时目录放入 0.6.0 格式的旧配置，执行安装包共用的范围初始化，再通过 Host 的实际 HTTP 路由及 JVM 设备沙盒验证旧值、身份连接和诊断回执。给最后一条命令加 `--serve`，打开终端输出的 `WORKBENCH_URL` 可以查看这次留下的任务。输入 `stop` 可关闭沙盒并清理临时文件。沙盒使用回环连接，默认安装包在 Android 上的部署和升级另行验收。
 
 ## MCP 客户端
 

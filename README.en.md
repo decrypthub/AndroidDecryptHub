@@ -52,11 +52,11 @@ The default HTTP/WebSocket/MCP port is `8088` and agent TCP uses `8761`. From `d
 
 ## Upgrade and first result
 
-1. Back up the existing Host data directory and `/data/adb/adh/` on the device, then upgrade in place with matching Host, module, and Manager versions. Use a Manager signed with the same certificate and reuse the original `ADH_DATA_DIR`. Verify the app scope in ADH Manager and the Host settings at `/workbench?view=quick-start` → **查看 Host 配置**.
-2. Establish a verified [device connection](README.md#2-确认设备连接) with the companion `adh` CLI. Click **检查设备连接** and select a connection if more than one is online.
-3. Click **读取诊断结果** to see the device ID, connection ID, model, and state revision. Diagnostic reads are available in observation mode. Sandbox receipts are labeled **隔离沙盒**.
+1. Back up the existing Host data directory and `/data/adb/adh/` on the device, then upgrade in place with matching Host, module, and Manager versions. Use a Manager signed with the same certificate and reuse the original `ADH_DATA_DIR`. Verify the app scope in ADH Manager. Submit fine-grained Hook plans with `adh run hook_plans`.
+2. Establish a verified [device connection](README.md#2-确认设备连接) with the companion `adh` CLI, then list verified connections with `adh call devices` and `{"action":"list"}`.
+3. Read the diagnostic with `adh call devices` and `{"action":"info","deviceId":"...","connectionId":"..."}`. Check the model and state revision in the receipt. A sandbox receipt has `synthetic: true`.
 
-To rehearse from 0.6.0-format state, build `:daemon:writeDeviceRpcFixtureClasspath` in `device/` and run `node test/fixtures/upgrade_quick_start.ts` from `daemon/`. Pass `--serve` to follow the same steps from the printed workbench URL. The rehearsal uses temporary files and a loopback JVM device. On-device package deployment and upgrade have separate acceptance checks. See the [Chinese quick start](README.md#快速开始) for commands and storage details.
+To rehearse from 0.6.0-format state, build `:daemon:writeDeviceRpcFixtureClasspath` in `device/` and run `node test/fixtures/upgrade_quick_start.ts` from `daemon/`. Pass `--serve` to open the printed `WORKBENCH_URL` and see the tasks left by that rehearsal. The rehearsal uses temporary files and a loopback JVM device. On-device package deployment and upgrade have separate acceptance checks. See the [Chinese quick start](README.md#快速开始) for commands and storage details.
 
 ## Safety and license
 
