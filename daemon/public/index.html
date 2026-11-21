@@ -83,10 +83,6 @@
   .menu-popover a,.menu-popover button { box-sizing:border-box; display:flex; width:100%; min-height:35px; align-items:center; gap:9px; padding:0 10px; color:var(--ink-2); background:transparent; border:0; border-radius:3px; text-align:left; text-decoration:none; white-space:nowrap; cursor:pointer; }
   .menu-popover a:hover,.menu-popover button:hover { color:var(--ink); background:var(--surface-3); }
   .menu-popover .menu-danger { color:var(--danger); }
-  .wechat-popover { width:min(360px, calc(100vw - 28px)); padding:8px; }
-  .wechat-copy { display:block; width:100%; padding:0 !important; min-height:0 !important; border:0 !important; background:transparent !important; cursor:pointer; border-radius:4px; }
-  .wechat-copy:hover { background:transparent !important; border:0 !important; }
-  .wechat-copy img { display:block; width:100%; height:auto; }
   select, input, textarea, button { font:inherit; letter-spacing:0; }
   select, input, textarea { min-height:32px; background:transparent; color:var(--ink); border:1px solid var(--line); border-radius:4px; padding:5px 8px; font-size:12px; }
   select:focus, input:focus, textarea:focus { outline:2px solid rgba(120,169,255,.22); outline-offset:0; border-color:var(--blue); }
@@ -340,25 +336,6 @@
   .modal h3 button:hover { background:var(--surface-2); border-color:#646e7d; }
   .modal pre { flex:1; overflow:auto; margin:0; border:none; border-radius:0; background:transparent; padding:14px 16px; color:var(--ink-2); }
   .diag-hint { padding:10px 16px; border-bottom:1px solid var(--line-soft); background:transparent; color:var(--muted); font-size:12px; line-height:1.55; }
-  #mcpMask .modal { height:auto; max-height:min(80vh,640px); width:min(540px,92vw); }
-  .mcp-shell { display:flex; flex-direction:column; }
-  .mcp-body { padding:4px 20px 18px; overflow-y:auto; }
-  .mcp-step { margin-top:16px; }
-  .mcp-step:first-child { margin-top:10px; }
-  .mcp-step h4 { margin:0 0 8px; color:var(--muted); font-size:11px; font-weight:650; letter-spacing:.06em; text-transform:uppercase; }
-  .mcp-fence { position:relative; display:flex; align-items:flex-start; gap:8px; padding:8px 52px 8px 12px; border-left:2px solid var(--line); }
-  .mcp-prompt { flex:0 0 auto; color:var(--muted); font:12px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace; user-select:none; }
-  /* `overflow-wrap:break-word` keeps a command on whole words when it can and only splits a token
-     that cannot fit on a line of its own — `break-all`/`anywhere` split every URL mid-address, which
-     reads like a typo in a copy-paste line. */
-  .mcp-fence code, .mcp-fence pre { flex:1; min-width:0; margin:0; padding:0; color:var(--ink); background:transparent; border:0; border-radius:0; font:12px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace; white-space:pre-wrap; overflow-wrap:break-word; }
-  .mcp-fence--json pre { white-space:pre; overflow-wrap:normal; overflow-x:auto; }
-  .mcp-copy { position:absolute; top:8px; right:0; min-height:26px !important; padding:0 8px !important; color:var(--muted) !important; background:transparent !important; border:0 !important; font-size:11px !important; }
-  .mcp-copy:hover { color:var(--ink) !important; }
-  .mcp-copy.is-copied { color:var(--green) !important; }
-  .mcp-note { margin:18px 0 0; color:var(--muted); font-size:11px; }
-  .mcp-note code { padding:0; border:0; background:transparent; color:var(--ink-2); }
-  .mcp-hint.warn { color:var(--amber); }
   .set-shell { width:min(420px,92vw); height:auto; max-height:min(88vh,640px); padding:0; position:relative; }
   .set-shell .set-main { flex:none; overflow:visible; padding:36px 28px 22px; }
   .set-close-x { position:absolute; top:10px; right:12px; z-index:2; width:28px; height:28px; border:none; background:transparent; color:var(--muted); font-size:20px; line-height:1; cursor:pointer; border-radius:4px; }
@@ -445,17 +422,8 @@
     </div>
   </div>
   <div class="header-actions">
-    <div class="menu-wrap">
-      <button type="button" class="compact-action" id="wechatBtn" aria-expanded="false" aria-controls="wechatPopover" title="微信搜一搜 DecryptHub">公众号</button>
-      <div class="popover wechat-popover" id="wechatPopover">
-        <button type="button" class="wechat-copy" id="wechatCopy" title="复制公众号名称 DecryptHub">
-          <img src="/wechat-follow.png" alt="微信搜一搜 DecryptHub" width="1000" height="308">
-        </button>
-      </div>
-    </div>
-    <button type="button" class="compact-action" id="mcpBtn" title="MCP 接入（adh CLI：安装 / 连接 / 配置）">MCP</button>
-    <button type="button" class="compact-action" id="opBtn">任务与控制权</button>
-    <button type="button" class="compact-action" id="setBtn" title="算法">设置</button>
+    <button type="button" class="compact-action" id="setBtn">算法设置</button>
+    <button type="button" class="compact-action" id="opBtn">任务</button>
   </div>
 </header>
 
@@ -618,48 +586,6 @@
     </div>
   </div>
 </main>
-
-<!-- MCP 模态：三段——安装 / 连接 / 配置（与 iOS 面板同形）。命令和 JSON 由 /api/mcp/config 提供，
-     `#mcpConfig` 的默认值必须与 daemon/src/mcp_onboarding.ts 一致（单测会逐字节比对）。 -->
-<div class="modal-mask" id="mcpMask">
-  <div class="modal mcp-shell">
-    <h3>MCP<span class="spacer"></span>
-      <button type="button" onclick="closeModal('mcpMask')">关闭</button></h3>
-    <div class="mcp-body">
-      <section class="mcp-step">
-        <h4>安装</h4>
-        <div class="mcp-fence">
-          <span class="mcp-prompt">$</span>
-          <code id="mcpInstall">pip install android-decrypt-hub</code>
-          <button type="button" class="mcp-copy" data-mcp-copy="install" title="复制">复制</button>
-        </div>
-      </section>
-      <section class="mcp-step">
-        <h4>连接</h4>
-        <div class="mcp-fence">
-          <span class="mcp-prompt">$</span>
-          <code id="mcpConnect">adh connect 127.0.0.1:8088</code>
-          <button type="button" class="mcp-copy" data-mcp-copy="connect" title="复制">复制</button>
-        </div>
-      </section>
-      <section class="mcp-step">
-        <h4>配置</h4>
-        <div class="mcp-fence mcp-fence--json">
-          <pre id="mcpConfig">{
-  "mcpServers": {
-    "adh": {
-      "command": "adh",
-      "args": ["mcp"]
-    }
-  }
-}</pre>
-          <button type="button" class="mcp-copy" data-mcp-copy="config" title="复制">复制</button>
-        </div>
-      </section>
-      <p class="mcp-note" id="mcpNote">仅限可信网络</p>
-    </div>
-  </div>
-</div>
 
 <!-- 设置：勾选要 hook 的算法 -->
 <div class="modal-mask" id="setMask">
@@ -1517,63 +1443,6 @@ document.addEventListener('click', ev=>{
 });
 function closeModal(id){ document.getElementById(id).classList.remove('show'); }
 
-// ---- MCP 模态（头部按钮）----
-// 三段：安装 / 连接 / 配置。产品入口是已发布的 `adh` CLI（PyPI android-decrypt-hub）：
-// `adh connect` 存 Host，`adh mcp` 把 POST /mcp 转 stdio；客户端只配这条 stdio 命令。
-// 地址按当前页面的 Host 生成；配置块由 /api/mcp/config 覆盖（默认值在 HTML 里，断网也能看）。
-let mcpCfg = null;
-function mcpFallback(){
-  const pin = pinnedPackage();
-  return {
-    install: 'pip install android-decrypt-hub',
-    connect: `adh connect ${location.host}${pin ? '/'+pin : ''}`,
-  };
-}
-function mcpText(kind){
-  if(kind==='config') return document.getElementById('mcpConfig').textContent;
-  const cfg = mcpCfg || {};
-  return (kind==='connect' ? cfg.connect : cfg.install) || mcpFallback()[kind] || '';
-}
-function renderMcp(){
-  const cfg = mcpCfg || {};
-  document.getElementById('mcpInstall').textContent = cfg.install || mcpFallback().install;
-  document.getElementById('mcpConnect').textContent = cfg.connect || mcpFallback().connect;
-  if(cfg.config) document.getElementById('mcpConfig').textContent = cfg.config;
-}
-function openMcp(){
-  renderMcp();
-  document.getElementById('mcpMask').classList.add('show');
-  loadMcp();
-}
-async function loadMcp(){
-  const pin = pinnedPackage();
-  const q = pin ? `?package=${encodeURIComponent(pin)}` : '';
-  try{
-    const r = await fetch(`/api/mcp/config${q}`, { cache:'no-store' });
-    if(!r.ok) throw new Error('HTTP '+r.status);
-    mcpCfg = await r.json();
-  }catch(e){
-    mcpCfg = null;
-  }
-  renderMcp();
-}
-function copyMcp(kind, btn){
-  const text = mcpText(kind);
-  if(!text){ toast('暂无可复制内容'); return; }
-  const done = ()=>{
-    if(!btn){ toast('已复制'); return; }
-    const prev = btn.textContent;
-    btn.textContent = '已复制';
-    btn.classList.add('is-copied');
-    setTimeout(()=>{ btn.textContent = prev; btn.classList.remove('is-copied'); }, 1200);
-  };
-  const fallback = ()=>{
-    const ta=document.createElement('textarea'); ta.value=text; document.body.appendChild(ta); ta.select();
-    document.execCommand('copy'); ta.remove(); done();
-  };
-  if(navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done).catch(fallback);
-  else fallback();
-}
 function closePopovers(){
   document.querySelectorAll('.popover.show').forEach(el=>el.classList.remove('show'));
   document.querySelectorAll('[aria-expanded="true"]').forEach(b=>b.setAttribute('aria-expanded','false'));
@@ -1797,21 +1666,8 @@ document.querySelectorAll('.splitter').forEach(sp=>{
 });
 
 // ---- 头部按钮 / 模态 / 设置 事件绑定 ----
-document.getElementById('mcpBtn').addEventListener('click', openMcp);
-document.querySelectorAll('[data-mcp-copy]').forEach(btn=>{
-  btn.addEventListener('click', ()=>copyMcp(btn.getAttribute('data-mcp-copy'), btn));
-});
-document.getElementById('wechatBtn').addEventListener('click', e=>{ e.stopPropagation(); togglePopover('wechatPopover','wechatBtn'); });
 document.getElementById('appBtn').addEventListener('click', e=>{ e.stopPropagation(); togglePopover('appMenu','appBtn'); });
 document.getElementById('processBtn').addEventListener('click', e=>{ e.stopPropagation(); togglePopover('processPopover','processBtn'); });
-document.getElementById('wechatCopy').addEventListener('click', async ()=>{
-  const name='DecryptHub';
-  try{ await navigator.clipboard.writeText(name); }catch(_){
-    const ta=document.createElement('textarea'); ta.value=name; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();
-  }
-  toast('已复制公众号名称 DecryptHub');
-  closePopovers();
-});
 document.addEventListener('click', e=>{
   if(!e.target.closest('.menu-wrap') && !e.target.closest('.header-process')) closePopovers();
 });
@@ -1820,7 +1676,7 @@ document.addEventListener('keydown', e=>{
 });
 document.getElementById('setBtn').addEventListener('click', openSettings);
 // 点遮罩空白处关闭模态
-for(const id of ['mcpMask','setMask']) document.getElementById(id).addEventListener('click', e=>{ if(e.target.id===id) closeModal(id); });
+document.getElementById('setMask').addEventListener('click', e=>{ if(e.target.id==='setMask') closeModal('setMask'); });
 // 初始化 displayCap（不打开设置也让列表按配置渲染）
 fetch('/api/config').then(r=>r.json()).then(r=>{ if(r.settings?.ui?.displayCap) capDisplayCap=r.settings.ui.displayCap; }).catch(()=>{});
 </script>

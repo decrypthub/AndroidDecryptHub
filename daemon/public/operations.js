@@ -5,13 +5,12 @@
   const dialog=document.createElement('dialog');dialog.className='aw-overlay';dialog.id='operationsDialog';
   const root=document.createElement('main');dialog.append(root);document.body.append(dialog);
   let workspace;
-  function open(view='tasks') {
+  function open() {
     if(!dialog.open)dialog.showModal();
-    workspace??=AdhWorkbench.mount(root,client,{close:()=>dialog.close()});
-    workspace.open(view);
+    if(workspace)workspace.open();
+    else workspace=AdhWorkbench.mount(root,client,{close:()=>dialog.close()});
   }
   dialog.addEventListener('close',()=>workspace?.pause());
-  document.getElementById('opBtn').textContent='任务工作台';
   document.getElementById('opBtn').onclick=()=>open();
   window.adhOperations={open,refresh:()=>workspace?.refresh(),setOperatorKey:key=>client.connect(String(key||''))};
 })();

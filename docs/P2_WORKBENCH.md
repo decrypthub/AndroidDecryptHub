@@ -1,21 +1,20 @@
 # P2：人类任务工作台（2026-11-16）
 
-P2 在 P1 的统一执行层上补齐人类工作台。AI 仍默认自主规划和执行。人类在这个窗口里查看、搜索、下载结果。暂停、取消、接管和操作员连接不在窗口上，这些写入仍走 CLI / MCP。
+任务窗口读取 P1 执行层保存的任务和结果。人在窗口里查看、搜索、下载结果。AI 通过 CLI / MCP 提交任务，任务控制也走这两个入口。
 
 本次源码位于独立 worktree，原工作目录保持 P1 提交。原因是运行中的 Host 会按需读取 public 静态文件：仅保持 Node 进程不重启，仍不足以保护刷新中的现有面板。P2 没有部署到当前实例，没有更改真机或 USB/LAN 协议。
 
-工作台需要配套 P2 Host，不能只替换静态资源；缺少 task revision 时面板拒绝修改任务。
-
 ## 人类工作流
 
-- 现场页“任务工作台”打开任务列表；也可直接访问 `/workbench`。2026-11-21 起这里只显示已提交任务和结果。配置表单、Hook 方案编辑器、操作员连接、接管、交还、暂停和取消都不在这个窗口里。现场“设置”是六类算法勾选。细粒度方案和写入走 CLI / MCP。
-- 任务列表支持全库搜索、负责人/状态筛选及分页。任务详情显示名称、ID、版本、负责人、人工暂停标记、创建/更新时间和操作总数；操作记录独立分页，支持查看实际终态、来源、目标代际、deadline 和版本。
-- 操作详情按需读取已保存结果与 lateResult，可下载 JSON。界面最多预览 120000 字符，下载的是全部“已保存内容”；如果 Host 只保存了省略摘要，界面明确说明下载也无法恢复被省略的数据。未加载、尚无结果与执行未知分别呈现。结果/任务文本用 textContent 渲染，不解释目标提供的 HTML。
-暂停、取消、接管和解除隔离仍由 CLI / MCP 走同一执行层。窗口只显示任务状态、未知条数和已保存结果，不提供这些按钮。
+- 现场页从「任务」打开列表，也可直接访问 `/workbench`。现场的「算法设置」提供六类采集开关，读取 Host `capture.families`。程序化 Hook 方案由 MCP 和配套 `adh` CLI 管理。
+- 保存算法设置和一键脱壳需要现有的操作员授权。查看任务使用普通读取权限。
+- 任务列表支持搜索、负责人和状态筛选及分页。任务与其中的操作显示标题、状态和时间。AI 提交的操作随原任务展示，点击「查看结果」按需读取。
+- 已保存的原始结果和晚到结果均可下载 JSON。页面最多预览 120000 字符，下载包含全部已保存内容。Host 只保存摘要时，页面会标明。任务标题和结果以纯文本显示。
+- 操作员身份、控制代次、意图键和副作用步骤可通过 `adh tasks get` 检索。
 
-## 配置编辑与冲突
+## P2 初版配置编辑与冲突处理
 
-2026-11-21：下面的草稿规则仍由 `workbench-model.js` 实现，供测试与设置服务使用。人类工作台不再渲染这份表单。
+下面记录 P2 初版的配置编辑交互。`workbench-model.js` 中的草稿比较和校验仍有独立回归测试。
 
 配置表单覆盖当前 Settings 的视图、捕获/类型/模块、保留策略和启动策略，继续调用共享 settings 服务。导入只合并进草稿；提交前校验已知字段、类型、范围、包名和符号，拒绝未知或会被静默过滤的值。导出的是最后读到的 Host 配置，未提交草稿不会混入导出。
 
@@ -29,7 +28,7 @@ P2 在 P1 的统一执行层上补齐人类工作台。AI 仍默认自主规划�
 
 | 模块 | 增量 |
 |---|---|
-| `public/workbench.js` / `.css` / `.html` | 独立/嵌入两种工作台；任务、控制权、结果和副作用。配置表单与 Hook 方案编辑器不在人类窗口里 |
+| `public/workbench.js` / `.css` / `.html` | 独立和嵌入的任务列表，显示状态、时间及已保存结果 |
 | `public/workbench-model.js` | 草稿差异、校验、并列比较与显式 rebase；无 DOM/I/O，可直接回归 |
 | `public/operation-client.js` | 页面内存凭据、统一 HTTP 传输、明确的未确认响应、版本提交；现场旧动作也经过相同 guard |
 | `public/operations.js` | 现场页薄适配；挂载同一工作台、共享 client，关闭时停止本地轮询 |
@@ -40,12 +39,12 @@ P2 在 P1 的统一执行层上补齐人类工作台。AI 仍默认自主规划�
 
 - `list`: q/state/owner，全量过滤后分页；nextTaskOffset、nextOperationOffset 分别表示两种列表，保留旧 nextOffset。
 - `get(taskId, limit, offset)`: task 含 revision、operationCounts、resources、unresolved；操作独立分页。
-- 任务 pause/resume/cancel/complete: `_operation.expectedTaskRevision` 可做 CAS，冲突返回 STALE_TASK，不改变任务。面板始终携带；旧 CLI/MCP 省略时保持 P1 兼容，但人类暂停/未完成 operator 子操作的角色保护继续强制执行。
+- 任务 pause/resume/cancel/complete: CLI/MCP 可用 `_operation.expectedTaskRevision` 做 CAS，冲突返回 STALE_TASK。省略时保持 P1 兼容，角色保护仍适用于人工暂停和未完成的操作员子操作。
 - `get(idempotencyKey)`: 在当前调用角色的命名空间只读查找原 operation，支持未收到提交响应后的核对；不重新执行。
 
 TaskStore schemaVersion 保持 1，增量字段可选。旧任务按 revision=0 读取，不为展示而重写历史；没有日志或开始/结束时间的旧操作明确标“未记录”。新操作初始化空 effects，区分“无受跟踪步骤”和“旧记录没有逐步日志”。Task 状态变化更新 revision；执行完成导致状态/汇总变化时也可能使旧面板观察失效。
 
-startedAt/finishedAt 是 Host 开始处理和记录终态的时间。deadline 时记录终态不代表 handler 或目标已经停止；界面分别显示 settled、inFlight 和 unknown。
+startedAt/finishedAt 是 Host 开始处理和记录终态的时间。CLI / MCP 可进一步核对 settled、inFlight 和 unknown。
 
 副作用日志每项最多 **64 条**，超出记录 effectsDropped；派发有独立 ID，异步并行响应不会对错步骤。状态 dispatched/acknowledged/failed/unknown 描述 Host 的派发/响应事实；acknowledged 不证明业务成功，operation/result 仍提供实际业务结论。deadline 或恢复后的不确定性保留 uncertainAt，晚到确认不删除此前的未知事实。没有参数、内存字节、密钥或 shell 命令文本。通用 external 日志和未埋点内部步骤不构成完整副作用审计；日志不是目标状态证明，也不提供回滚。
 
