@@ -43,6 +43,7 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
     { path:'/workbench.css',handler:servePublic('workbench.css','text/css; charset=utf-8') },
     { path:'/operation-client.js',handler:servePublic('operation-client.js','text/javascript; charset=utf-8') },
     { path:'/workbench-model.js',handler:servePublic('workbench-model.js','text/javascript; charset=utf-8') },
+    { path:'/algorithm-observations.js',handler:servePublic('algorithm-observations.js','text/javascript; charset=utf-8') },
     { path:'/workbench.js',handler:servePublic('workbench.js','text/javascript; charset=utf-8') },
     { path:'/quick-start.js',handler:servePublic('quick-start.js','text/javascript; charset=utf-8') },
     { path:'/hook-plans-panel.js',handler:servePublic('hook-plans-panel.js','text/javascript; charset=utf-8') },

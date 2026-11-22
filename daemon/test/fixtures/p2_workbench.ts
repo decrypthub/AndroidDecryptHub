@@ -17,7 +17,7 @@ Object.defineProperty(cp.execFile,promisify.custom,{value:async(file:string,args
 }});
 cp.spawn=(()=>{throw Error('spawn forbidden in P2 fixture');}) as unknown as typeof cp.spawn;syncBuiltinESMExports();
 const {handleHttp}=await import('../../src/http/router.ts');
-const {sessions,agentSockets,pending,readBody,wss}=await import('../../src/state.ts');
+const {sessions,agentSockets,pending,readBody,wss,pushCapture}=await import('../../src/state.ts');
 const {getOperations,targetResource}=await import('../../src/operation_host.ts');
 const {trackedEffect}=await import('../../src/execution_context.ts');
 const {patchSettings}=await import('../../src/settings_service.ts');
@@ -34,6 +34,19 @@ for(const [sid,pid]of [['p2-fixture',42],['p2-uncertain',43]] as const){
     queueMicrotask(()=>pending.get(msg.id)?.resolve({ok:true,before:'00',beforeReadable:true,wrote:1,regions:[],evp:1}));
     return true;
   }} as any);
+}
+if(appCapture && process.argv.includes('--sample-algorithms')) {
+  const samples = [
+    {pkg:alpha, sid:'p2-fixture', labels:['SHA-256','SHA256','HmacSHA256','AES/GCM/NoPadding','HKDF']},
+    {pkg:beta, sid:'p2-uncertain', labels:['SHA-512','X25519','SecureRandom','PBKDF2']},
+  ];
+  let id = 0;
+  for (const {pkg, sid, labels} of samples) {
+    for (const algo of labels) {
+      pushCapture({id:++id, sessionId:sid, package:pkg, source:'java', func:'fixture',
+        category:'crypto', algo, op:'合成样例', inl:0, tid:0, tsNs:0, ts:Date.now()-9000+id*1000, hex:'', preview:''});
+    }
+  }
 }
 const engine=getOperations();
 const meta=(resource='host')=>{const c=engine.snapshot(resource);return {expectedRevision:c.revision,controlEpoch:c.epoch,hostEpoch:c.hostEpoch};};

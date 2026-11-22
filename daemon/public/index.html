@@ -371,6 +371,21 @@
   .set-status { min-height:18px; margin:8px 0 0; color:var(--muted); font-size:12px; }
   .set-status[data-error="true"] { color:var(--danger); }
   #setFamilies { min-inline-size:0; margin:0; padding:0; border:0; }
+  .set-algorithm-nav { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:14px 0 10px; }
+  .set-algorithm-nav button[aria-pressed="true"] { background:var(--surface-2); color:var(--blue); border-color:var(--blue); }
+  .set-family-count { margin-left:auto; color:var(--muted); font-size:12px; }
+  .set-algorithm-group + .set-algorithm-group { margin-top:10px; }
+  .set-algorithm-group h4 { margin:0; color:var(--muted); font-size:12px; font-weight:600; }
+  #setFamilies .set-toggle-row { min-height:40px; padding:7px 0; }
+  .set-observation-filters { display:flex; flex-wrap:wrap; gap:8px; margin:12px 0; }
+  .set-observation-filters input,.set-observation-filters select { padding:7px 10px; border:1px solid var(--line); border-radius:4px; background:var(--surface-2); color:inherit; font:inherit; }
+  .set-observation-filters input { flex:1 1 130px; min-width:0; }
+  .set-observation-list { margin:8px 0 0; padding:0; list-style:none; }
+  .set-observation-list li { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:9px 0; border-top:1px solid var(--line-soft); }
+  .set-observation-list strong { display:block; color:var(--ink-2); font-weight:600; }
+  .set-observation-list span { color:var(--muted); font-size:12px; }
+  .set-observation-list .observation-count { white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .set-observation-empty { margin:18px 0; color:var(--muted); font-size:12px; }
   .set-section-title { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.06em; margin:20px 0 8px; padding-top:4px; border-top:1px solid var(--line); }
   .set-toggle-row { display:flex; align-items:center; justify-content:space-between; gap:16px; min-height:48px; padding:10px 0; border-bottom:1px solid var(--line-soft); cursor:pointer; }
   .set-toggle-row .lab { flex:1; min-width:0; }
@@ -630,15 +645,41 @@
       <section id="setCapturePage" class="set-page" aria-labelledby="setCaptureTitle">
         <h3 id="setCaptureTitle">算法采集</h3>
         <p class="set-app">当前应用 <strong id="familyHeading">未选择应用</strong></p>
-        <p class="set-status" id="setCaptureStatus" role="status"></p>
-        <fieldset id="setFamilies" aria-labelledby="setCaptureTitle">
-          <label class="set-toggle-row"><span class="lab"><b>摘要</b></span><span class="set-switch"><input type="checkbox" data-fam="digest" disabled><span class="slider"></span></span></label>
-          <label class="set-toggle-row"><span class="lab"><b>HMAC</b></span><span class="set-switch"><input type="checkbox" data-fam="hmac" disabled><span class="slider"></span></span></label>
-          <label class="set-toggle-row"><span class="lab"><b>对称</b></span><span class="set-switch"><input type="checkbox" data-fam="symmetric" disabled><span class="slider"></span></span></label>
-          <label class="set-toggle-row"><span class="lab"><b>非对称</b></span><span class="set-switch"><input type="checkbox" data-fam="asymmetric" disabled><span class="slider"></span></span></label>
-          <label class="set-toggle-row"><span class="lab"><b>TLS</b></span><span class="set-switch"><input type="checkbox" data-fam="tls" disabled><span class="slider"></span></span></label>
-          <label class="set-toggle-row"><span class="lab"><b>AEAD</b></span><span class="set-switch"><input type="checkbox" data-fam="aead" disabled><span class="slider"></span></span></label>
-        </fieldset>
+        <div class="set-algorithm-nav" role="group" aria-label="算法采集视图">
+          <button type="button" id="setAlgorithmControlTab" class="set-small-button" aria-controls="setAlgorithmControls" aria-pressed="true">采集开关</button>
+          <button type="button" id="setObservedTab" class="set-small-button" aria-controls="setObservedAlgorithms" aria-pressed="false">已观测算法</button>
+          <span class="set-family-count" id="setFamilyCount"></span>
+        </div>
+        <section id="setAlgorithmControls" aria-label="采集开关">
+          <p class="set-status" id="setCaptureStatus" role="status"></p>
+          <fieldset id="setFamilies" aria-labelledby="setAlgorithmControlTab">
+            <div class="set-algorithm-group" role="group" aria-labelledby="setDigestGroup">
+              <h4 id="setDigestGroup">摘要与认证</h4>
+              <label class="set-toggle-row"><span class="lab"><b>摘要</b></span><span class="set-switch"><input type="checkbox" data-fam="digest" disabled><span class="slider"></span></span></label>
+              <label class="set-toggle-row"><span class="lab"><b>HMAC</b></span><span class="set-switch"><input type="checkbox" data-fam="hmac" disabled><span class="slider"></span></span></label>
+            </div>
+            <div class="set-algorithm-group" role="group" aria-labelledby="setEncryptionGroup">
+              <h4 id="setEncryptionGroup">加密与签名</h4>
+              <label class="set-toggle-row"><span class="lab"><b>对称</b></span><span class="set-switch"><input type="checkbox" data-fam="symmetric" disabled><span class="slider"></span></span></label>
+              <label class="set-toggle-row"><span class="lab"><b>非对称</b></span><span class="set-switch"><input type="checkbox" data-fam="asymmetric" disabled><span class="slider"></span></span></label>
+              <label class="set-toggle-row"><span class="lab"><b>AEAD</b></span><span class="set-switch"><input type="checkbox" data-fam="aead" disabled><span class="slider"></span></span></label>
+            </div>
+            <div class="set-algorithm-group" role="group" aria-labelledby="setTransportGroup">
+              <h4 id="setTransportGroup">传输</h4>
+              <label class="set-toggle-row"><span class="lab"><b>TLS</b></span><span class="set-switch"><input type="checkbox" data-fam="tls" disabled><span class="slider"></span></span></label>
+            </div>
+          </fieldset>
+        </section>
+        <section id="setObservedAlgorithms" aria-label="已观测算法" hidden>
+          <p class="set-app">统计当前应用已载入的算法记录。</p>
+          <div class="set-observation-filters">
+            <input type="search" id="setObservationQuery" aria-label="搜索算法" placeholder="搜索算法">
+            <select id="setObservationFamily" aria-label="观测类别"><option value="">全部类别</option></select>
+          </div>
+          <p class="set-status" id="setObservationCount" role="status"></p>
+          <ul class="set-observation-list" id="setObservationList"></ul>
+          <p class="set-observation-empty" id="setObservationEmpty" hidden></p>
+        </section>
       </section>
       <section id="setDisplayPage" class="set-page" aria-labelledby="setDisplayTitle" hidden>
         <h3 id="setDisplayTitle">显示</h3>
@@ -696,6 +737,7 @@
 <div class="toast" id="toast"></div>
 
 <script src="/operation-client.js"></script>
+<script src="/algorithm-observations.js"></script>
 <script src="/workbench-model.js"></script>
 <script src="/workbench.js"></script>
 <script src="/operations.js"></script>
@@ -1570,6 +1612,13 @@ const settingsNav=document.getElementById('setNav');
 const capturePage=document.getElementById('setCapturePage');
 const statusPage=document.getElementById('setStatusPage');
 const familyInputs=document.querySelectorAll('#setFamilies input[data-fam]');
+const familyCount=document.getElementById('setFamilyCount');
+const algorithmControlTab=document.getElementById('setAlgorithmControlTab');
+const observedTab=document.getElementById('setObservedTab');
+const observedPage=document.getElementById('setObservedAlgorithms');
+const observationQuery=document.getElementById('setObservationQuery');
+const observationFamily=document.getElementById('setObservationFamily');
+const algorithmObservations=window.AdhAlgorithmObservations;
 const displayCapSelect=document.getElementById('setDisplayCap');
 const timeFormatSelect=document.getElementById('setTimeFormat');
 const densitySelect=document.getElementById('setRowDensity');
@@ -1583,10 +1632,13 @@ function setFamilyStatus(message, error=false){
 }
 function renderFamilies(){
   const capture=familyView?.capture;
+  let selected=0;
   for(const input of familyInputs){
     input.checked=!!capture?.enabled && capture.families[input.dataset.fam]===true;
     input.disabled=!capture || familySaving;
+    if(input.checked) selected++;
   }
+  familyCount.textContent=capture?`已选 ${selected} / ${familyInputs.length} 类`:'';
 }
 for(const input of familyInputs) input.addEventListener('change', ()=>saveFamilies(input));
 async function loadAppFamilies(view){
@@ -1614,6 +1666,52 @@ async function openCaptureSettings(){
   renderFamilies();
   setFamilyStatus(pkg ? '正在读取设置…' : '在主界面选中应用后，即可设置采集算法。');
   if(pkg && await loadAppFamilies(view) && familyView===view) setFamilyStatus('');
+}
+function renderAlgorithmObservations(){
+  const pkg=selectedPackage();
+  const observations=pkg && algorithmObservations ? algorithmObservations.summarize(capItems.filter(belongsToApp)) : [];
+  const searchText=value=>value.toLowerCase().replace(/[\s_-]+/g,'');
+  const query=searchText(observationQuery.value);
+  const family=observationFamily.value;
+  const visible=observations.filter(item=>{
+    const label=algorithmObservations.families[item.family];
+    return (!family || family===item.family) && searchText(`${item.name} ${label}`).includes(query);
+  });
+  const total=visible.reduce((sum,item)=>sum+item.count,0);
+  document.getElementById('setObservationCount').textContent=visible.length?`${visible.length} 项 · ${total} 条记录`:'';
+  const list=document.getElementById('setObservationList');
+  const rows=visible.map(item=>{
+    const row=document.createElement('li');
+    const title=document.createElement('div');
+    const label=document.createElement('strong');
+    label.textContent=item.name;
+    const time=fmtTime(item.latest);
+    const familyLabel=algorithmObservations.families[item.family];
+    const detail=[familyLabel!==item.name?familyLabel:'',time?'最近 '+time:''].filter(Boolean).join(' · ');
+    title.append(label);
+    if(detail){
+      const meta=document.createElement('span');
+      meta.textContent=detail;
+      title.append(meta);
+    }
+    const count=document.createElement('span');
+    count.className='observation-count';
+    count.textContent=item.count+' 条';
+    row.append(title,count);
+    return row;
+  });
+  list.replaceChildren(...rows);
+  const empty=document.getElementById('setObservationEmpty');
+  empty.hidden=visible.length>0;
+  empty.textContent=!pkg?'请选择一个应用。':!algorithmObservations?'暂时无法读取算法统计。':observations.length?'没有符合条件的算法。':'当前应用暂无已载入的算法记录。';
+}
+function showAlgorithmView(observed){
+  algorithmControlTab.setAttribute('aria-pressed',String(!observed));
+  observedTab.setAttribute('aria-pressed',String(observed));
+  document.getElementById('setAlgorithmControls').hidden=observed;
+  observedPage.hidden=!observed;
+  familyCount.hidden=observed;
+  if(observed) renderAlgorithmObservations();
 }
 function renderDisplaySettings(){
   document.getElementById('setDisplayDefault').textContent=`跟随服务默认（${hostDisplayCap} 条）`;
@@ -1700,7 +1798,7 @@ function showSettingsPage(page){
   document.querySelector('.set-main').scrollTop=0;
   if(page==='records'){ window.adhOperations.showRecords(); return; }
   window.adhOperations.pause();
-  if(page==='capture') void openCaptureSettings();
+  if(page==='capture'){ showAlgorithmView(false); void openCaptureSettings(); }
   if(page==='display') renderDisplaySettings();
   if(page==='status') void refreshPanelStatus();
 }
@@ -1817,6 +1915,7 @@ function render(){
   }
   renderSessions();
   if(settingsDialog.open && !statusPage.hidden) renderStatusApp();
+  if(settingsDialog.open && !capturePage.hidden && !observedPage.hidden) renderAlgorithmObservations();
 }
 async function refreshApps(){
   const captureVersion=serverCaptureVersion;
@@ -1952,6 +2051,16 @@ settingsNav.addEventListener('click', e=>{
   const button=e.target.closest('button[data-settings]');
   if(button && button.getAttribute('aria-pressed')!=='true') showSettingsPage(button.dataset.settings);
 });
+for(const [key,label] of Object.entries(algorithmObservations?.families??{})){
+  const option=document.createElement('option');
+  option.value=key;
+  option.textContent=label;
+  observationFamily.append(option);
+}
+algorithmControlTab.addEventListener('click', ()=>showAlgorithmView(false));
+observedTab.addEventListener('click', ()=>showAlgorithmView(true));
+observationQuery.addEventListener('input',renderAlgorithmObservations);
+observationFamily.addEventListener('change',renderAlgorithmObservations);
 displayCapSelect.addEventListener('change', ()=>savePanelDisplay({...panelDisplay,limit:Number(displayCapSelect.value)}));
 timeFormatSelect.addEventListener('change', ()=>savePanelDisplay({...panelDisplay,time:timeFormatSelect.value}));
 densitySelect.addEventListener('change', ()=>savePanelDisplay({...panelDisplay,density:densitySelect.value}));

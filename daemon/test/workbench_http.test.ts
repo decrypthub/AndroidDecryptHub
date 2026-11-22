@@ -19,7 +19,7 @@ async function call(value:any,operator=false){const response=await fetch(base+'/
 const metadata=()=>{const c=engine.snapshot();return {expectedRevision:c.revision,controlEpoch:c.epoch,hostEpoch:c.hostEpoch};};
 
 test('workbench assets load from the same isolated router without exposing an operator secret',async()=>{
-  for(const path of ['/workbench','/workbench.css','/operation-client.js','/workbench-model.js','/workbench.js','/operations.js']){
+  for(const path of ['/workbench','/workbench.css','/operation-client.js','/workbench-model.js','/workbench.js','/operations.js','/algorithm-observations.js']){
     const response=await fetch(base+path);assert.equal(response.status,200);assert.equal(response.headers.get('cache-control'),'no-cache');
     const body=await response.text();assert.ok(!body.includes(key));
   }
