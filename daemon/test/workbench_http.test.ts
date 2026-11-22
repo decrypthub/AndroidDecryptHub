@@ -19,10 +19,20 @@ async function call(value:any,operator=false){const response=await fetch(base+'/
 const metadata=()=>{const c=engine.snapshot();return {expectedRevision:c.revision,controlEpoch:c.epoch,hostEpoch:c.hostEpoch};};
 
 test('workbench assets load from the same isolated router without exposing an operator secret',async()=>{
-  for(const path of ['/workbench','/workbench.css','/operation-client.js','/workbench-model.js','/workbench.js','/operations.js','/algorithm-observations.js']){
+  for(const path of ['/workbench.css','/operation-client.js','/workbench-model.js','/workbench.js','/operations.js','/algorithm-observations.js']){
     const response=await fetch(base+path);assert.equal(response.status,200);assert.equal(response.headers.get('cache-control'),'no-cache');
     const body=await response.text();assert.ok(!body.includes(key));
   }
+});
+
+test('browser task history is unmounted and old deep links lead back to the viewer',async()=>{
+  const legacy=await fetch(base+'/workbench?taskId=fixture&operationId=fixture',{redirect:'manual'});
+  assert.equal(legacy.status,302);
+  assert.equal(legacy.headers.get('location'),'/');
+  assert.equal(legacy.headers.get('cache-control'),'no-store');
+  const landing=await (await fetch(base+'/workbench?taskId=fixture')).text();
+  assert.match(landing,/id="setHookControls"/);
+  assert.doesNotMatch(landing,/setRecordsTab|setRecordsPage|workbench(?:-model)?\.js/);
 });
 
 test('task CAS, pagination and explicit operator resume have the same HTTP contract as MCP',async()=>{

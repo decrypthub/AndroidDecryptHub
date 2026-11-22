@@ -37,15 +37,25 @@ for(const [sid,pid]of [['p2-fixture',42],['p2-uncertain',43]] as const){
 }
 if(appCapture && process.argv.includes('--sample-algorithms')) {
   const samples = [
-    {pkg:alpha, sid:'p2-fixture', labels:['SHA-256','SHA256','HmacSHA256','AES/GCM/NoPadding','HKDF']},
-    {pkg:beta, sid:'p2-uncertain', labels:['SHA-512','X25519','SecureRandom','PBKDF2']},
+    {pkg:alpha, sid:'p2-fixture', labels:[['SHA-256','Fixture.digest'],['SHA256','Fixture.digest'],['HmacSHA256','Fixture.mac'],['AES/GCM/NoPadding','Fixture.cipher'],['HKDF','Fixture.derive']]},
+    {pkg:beta, sid:'p2-uncertain', labels:[['SHA-512','Fixture.digest'],['X25519','Fixture.agreement'],['SecureRandom','Fixture.random'],['PBKDF2','Fixture.derive']]},
   ];
   let id = 0;
   for (const {pkg, sid, labels} of samples) {
-    for (const algo of labels) {
-      pushCapture({id:++id, sessionId:sid, package:pkg, source:'java', func:'fixture',
-        category:'crypto', algo, op:'合成样例', inl:0, tid:0, tsNs:0, ts:Date.now()-9000+id*1000, hex:'', preview:''});
+    for (const [algo,func] of labels) {
+      pushCapture({id:++id, sessionId:sid, package:pkg, source:'java', func,
+        category:'crypto', algo, op:'合成样例', inl:1, tid:0, tsNs:0, ts:Date.now()-12000+id*1000, hex:'61', preview:''});
     }
+    pushCapture({id:++id, sessionId:sid, package:pkg, source:'native', func:'Fixture.startup',
+      category:'system', algo:'启动样本', op:'合成样例', inl:0, tid:0, tsNs:0, ts:Date.now(), hex:'', preview:''});
+    pushCapture({id:++id, sessionId:sid, package:pkg, source:'native', func:'Fixture.file',
+      category:'file', algo:'文件样本', op:'合成样例', inl:0, tid:0, tsNs:0, ts:Date.now(), hex:'', preview:''});
+  }
+  const request=Buffer.from('GET /fixture HTTP/1.1\r\nHost: example.test\r\n\r\n');
+  const response=Buffer.from('HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n');
+  for (const [func,bytes] of [['SSL_write',request],['SSL_read',response]] as const) {
+    pushCapture({id:++id, sessionId:'p2-fixture', package:alpha, source:'native', func, conn:'fixture',
+      category:'net', algo:'TLS', op:'合成样例', inl:bytes.length, tid:0, tsNs:id, ts:Date.now(), hex:bytes.toString('hex'), preview:''});
   }
 }
 const engine=getOperations();

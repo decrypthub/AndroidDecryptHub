@@ -338,16 +338,20 @@
   .modal h3 button:hover { background:var(--surface-2); border-color:#646e7d; }
   .modal pre { flex:1; overflow:auto; margin:0; border:none; border-radius:0; background:transparent; padding:14px 16px; color:var(--ink-2); }
   .diag-hint { padding:10px 16px; border-bottom:1px solid var(--line-soft); background:transparent; color:var(--muted); font-size:12px; line-height:1.55; }
-  .set-shell { width:min(860px,calc(100vw - 44px)); max-width:none; height:min(566px,calc(100dvh - 44px)); max-height:none; padding:0; overflow:hidden; border:1px solid var(--line); border-radius:10px; background:var(--surface); color:var(--ink); }
+  .set-shell { width:min(880px,calc(100vw - 44px)); max-width:none; height:min(610px,calc(100dvh - 44px)); max-height:none; padding:0; overflow:hidden; border:1px solid var(--line); border-radius:10px; background:var(--surface); color:var(--ink); }
   .set-shell[open] { display:flex; flex-direction:column; }
   .set-shell::backdrop { background:rgba(6,7,10,.78); }
   .set-header { display:flex; align-items:center; justify-content:space-between; flex:none; padding:12px 18px; border-bottom:1px solid var(--line-soft); }
   .set-header h2 { margin:0; font-size:15px; font-weight:650; }
+  .set-header > div { min-width:0; }
+  .set-header .set-app { margin-top:4px; }
   .set-close-x { width:30px; height:30px; border:0; background:transparent; color:var(--muted); font-size:22px; line-height:1; cursor:pointer; border-radius:4px; }
   .set-close-x:hover { background:var(--surface-3); color:var(--ink); }
   .set-shell :focus-visible { outline:2px solid var(--blue); outline-offset:2px; }
   .set-layout { display:flex; flex:1; min-height:0; }
   .set-nav { width:160px; flex-shrink:0; border-right:1px solid var(--line-soft); padding:14px 10px; display:flex; flex-direction:column; gap:4px; }
+  .set-nav-group { padding:4px 12px; color:var(--muted); font-size:11px; }
+  .set-nav-group:not(:first-child) { margin-top:12px; }
   .set-nav button { display:block; width:100%; text-align:left; min-height:38px; padding:8px 12px; border:none; border-left:3px solid transparent; background:transparent; color:var(--muted); border-radius:3px; font-size:13px; cursor:pointer; }
   .set-nav button:hover { background:var(--surface-2); color:var(--ink); }
   .set-nav button[aria-pressed="true"] { background:var(--surface-2); color:var(--ink); border-left-color:var(--blue); font-weight:600; }
@@ -371,12 +375,20 @@
   .set-status { min-height:18px; margin:8px 0 0; color:var(--muted); font-size:12px; }
   .set-status[data-error="true"] { color:var(--danger); }
   #setFamilies { min-inline-size:0; margin:0; padding:0; border:0; }
-  .set-algorithm-nav { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:14px 0 10px; }
-  .set-algorithm-nav button[aria-pressed="true"] { background:var(--surface-2); color:var(--blue); border-color:var(--blue); }
+  .set-lead { max-width:58ch; margin:0 0 12px; font-size:12px; color:var(--muted); }
+  .set-observation-nav { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:14px 0 10px; }
+  .set-observation-nav button[aria-pressed="true"] { background:var(--surface-2); color:var(--blue); border-color:var(--blue); }
   .set-family-count { margin-left:auto; color:var(--muted); font-size:12px; }
   .set-algorithm-group + .set-algorithm-group { margin-top:10px; }
   .set-algorithm-group h4 { margin:0; color:var(--muted); font-size:12px; font-weight:600; }
   #setFamilies .set-toggle-row { min-height:40px; padding:7px 0; }
+  .set-hook-summary { display:flex; justify-content:space-between; align-items:center; gap:8px; margin:8px 0; }
+  .set-hook-summary .set-status { margin:0; min-width:0; }
+  .set-hook-group { margin-top:16px; }
+  .set-hook-group h4 { margin:0; color:var(--muted); font-size:12px; font-weight:600; }
+  .set-hook-group .set-toggle-row { min-height:42px; padding:6px 0; }
+  .set-hook-group .lab b { overflow-wrap:anywhere; font:600 12px/1.45 ui-monospace,Consolas,monospace; }
+  .set-hook-group .lab span { margin-top:2px; }
   .set-observation-filters { display:flex; flex-wrap:wrap; gap:8px; margin:12px 0; }
   .set-observation-filters input,.set-observation-filters select { padding:7px 10px; border:1px solid var(--line); border-radius:4px; background:var(--surface-2); color:inherit; font:inherit; }
   .set-observation-filters input { flex:1 1 130px; min-width:0; }
@@ -403,6 +415,7 @@
     .set-shell { width:calc(100vw - 20px); height:min(580px,calc(100dvh - 20px)); }
     .set-layout { flex-direction:column; }
     .set-nav { width:100%; flex-direction:row; padding:0 8px; gap:0; overflow-x:auto; border-right:0; border-bottom:1px solid var(--line-soft); }
+    .set-nav-group { display:none; }
     .set-nav button { width:auto; padding:8px; white-space:nowrap; border-left:0; border-bottom:2px solid transparent; border-radius:0; }
     .set-nav button[aria-pressed="true"] { border-bottom-color:var(--blue); background:transparent; }
     .set-main { padding:16px; }
@@ -436,7 +449,6 @@
     .filters input[type=search] { flex:1; width:auto; }
   }
 </style>
-<link rel="stylesheet" href="/workbench.css">
 </head>
 <body>
 <header>
@@ -631,47 +643,44 @@
 
 <dialog id="setMask" class="set-shell" aria-labelledby="setTitle">
   <div class="set-header">
-    <h2 id="setTitle">设置</h2>
+    <div>
+      <h2 id="setTitle">设置</h2>
+      <p class="set-app">当前应用 <strong id="setActiveApp">未选择应用</strong></p>
+    </div>
     <button type="button" class="set-close-x" id="setClose" aria-label="关闭设置">×</button>
   </div>
   <div class="set-layout">
     <nav class="set-nav" id="setNav" aria-label="设置分类">
-      <button type="button" id="setCaptureTab" data-settings="capture" aria-controls="setCapturePage" aria-pressed="true">算法采集</button>
+      <span class="set-nav-group">当前应用</span>
+      <button type="button" id="setHooksTab" data-settings="hooks" aria-controls="setHooksPage" aria-pressed="true">Hook 记录</button>
+      <button type="button" id="setCaptureTab" data-settings="capture" aria-controls="setCapturePage" aria-pressed="false">算法采集</button>
+      <span class="set-nav-group">面板</span>
       <button type="button" id="setDisplayTab" data-settings="display" aria-controls="setDisplayPage" aria-pressed="false">显示</button>
       <button type="button" id="setStatusTab" data-settings="status" aria-controls="setStatusPage" aria-pressed="false">连接与数据</button>
-      <button type="button" id="setRecordsTab" data-settings="records" aria-controls="setRecordsPage" aria-pressed="false">执行记录</button>
     </nav>
     <div class="set-main">
-      <section id="setCapturePage" class="set-page" aria-labelledby="setCaptureTitle">
-        <h3 id="setCaptureTitle">算法采集</h3>
-        <p class="set-app">当前应用 <strong id="familyHeading">未选择应用</strong></p>
-        <div class="set-algorithm-nav" role="group" aria-label="算法采集视图">
-          <button type="button" id="setAlgorithmControlTab" class="set-small-button" aria-controls="setAlgorithmControls" aria-pressed="true">采集开关</button>
+      <section id="setHooksPage" class="set-page" aria-labelledby="setHooksTitle">
+        <h3 id="setHooksTitle">Hook 记录</h3>
+        <p class="set-lead">按已载入的 Hook 分组。开关只控制当前应用的列表显示。</p>
+        <div class="set-observation-nav" role="group" aria-label="观测视图">
+          <button type="button" id="setHookListTab" class="set-small-button" aria-controls="setHookControls" aria-pressed="true">Hook 显示开关</button>
           <button type="button" id="setObservedTab" class="set-small-button" aria-controls="setObservedAlgorithms" aria-pressed="false">已观测算法</button>
-          <span class="set-family-count" id="setFamilyCount"></span>
         </div>
-        <section id="setAlgorithmControls" aria-label="采集开关">
-          <p class="set-status" id="setCaptureStatus" role="status"></p>
-          <fieldset id="setFamilies" aria-labelledby="setAlgorithmControlTab">
-            <div class="set-algorithm-group" role="group" aria-labelledby="setDigestGroup">
-              <h4 id="setDigestGroup">摘要与认证</h4>
-              <label class="set-toggle-row"><span class="lab"><b>摘要</b></span><span class="set-switch"><input type="checkbox" data-fam="digest" disabled><span class="slider"></span></span></label>
-              <label class="set-toggle-row"><span class="lab"><b>HMAC</b></span><span class="set-switch"><input type="checkbox" data-fam="hmac" disabled><span class="slider"></span></span></label>
-            </div>
-            <div class="set-algorithm-group" role="group" aria-labelledby="setEncryptionGroup">
-              <h4 id="setEncryptionGroup">加密与签名</h4>
-              <label class="set-toggle-row"><span class="lab"><b>对称</b></span><span class="set-switch"><input type="checkbox" data-fam="symmetric" disabled><span class="slider"></span></span></label>
-              <label class="set-toggle-row"><span class="lab"><b>非对称</b></span><span class="set-switch"><input type="checkbox" data-fam="asymmetric" disabled><span class="slider"></span></span></label>
-              <label class="set-toggle-row"><span class="lab"><b>AEAD</b></span><span class="set-switch"><input type="checkbox" data-fam="aead" disabled><span class="slider"></span></span></label>
-            </div>
-            <div class="set-algorithm-group" role="group" aria-labelledby="setTransportGroup">
-              <h4 id="setTransportGroup">传输</h4>
-              <label class="set-toggle-row"><span class="lab"><b>TLS</b></span><span class="set-switch"><input type="checkbox" data-fam="tls" disabled><span class="slider"></span></span></label>
-            </div>
-          </fieldset>
+        <section id="setHookControls" aria-label="Hook 显示开关">
+          <div class="set-observation-filters">
+            <input type="search" id="setHookQuery" aria-label="搜索 Hook" placeholder="按名称搜索 Hook">
+            <select id="setHookCategory" aria-label="Hook 类别"><option value="">全部类别</option></select>
+          </div>
+          <div class="set-hook-summary">
+            <p class="set-status" id="setHookCount"></p>
+            <button type="button" id="setHookReset" class="set-small-button" disabled>恢复全部显示</button>
+          </div>
+          <p class="set-status" id="setHookStatus" role="status" hidden></p>
+          <div id="setHookGroups"></div>
+          <p class="set-observation-empty" id="setHookEmpty" hidden></p>
         </section>
         <section id="setObservedAlgorithms" aria-label="已观测算法" hidden>
-          <p class="set-app">统计当前应用已载入的算法记录。</p>
+          <p class="set-lead">按算法汇总当前应用已载入的记录。</p>
           <div class="set-observation-filters">
             <input type="search" id="setObservationQuery" aria-label="搜索算法" placeholder="搜索算法">
             <select id="setObservationFamily" aria-label="观测类别"><option value="">全部类别</option></select>
@@ -680,6 +689,31 @@
           <ul class="set-observation-list" id="setObservationList"></ul>
           <p class="set-observation-empty" id="setObservationEmpty" hidden></p>
         </section>
+      </section>
+      <section id="setCapturePage" class="set-page" aria-labelledby="setCaptureTitle" hidden>
+        <div class="set-page-head">
+          <h3 id="setCaptureTitle">算法采集</h3>
+          <span class="set-family-count" id="setFamilyCount"></span>
+        </div>
+        <p class="set-lead">六类采集策略按应用保存在电脑服务中。</p>
+        <p class="set-status" id="setCaptureStatus" role="status"></p>
+        <fieldset id="setFamilies" aria-labelledby="setCaptureTitle">
+          <div class="set-algorithm-group" role="group" aria-labelledby="setDigestGroup">
+            <h4 id="setDigestGroup">摘要与认证</h4>
+            <label class="set-toggle-row"><span class="lab"><b>摘要</b></span><span class="set-switch"><input type="checkbox" data-fam="digest" disabled><span class="slider"></span></span></label>
+            <label class="set-toggle-row"><span class="lab"><b>HMAC</b></span><span class="set-switch"><input type="checkbox" data-fam="hmac" disabled><span class="slider"></span></span></label>
+          </div>
+          <div class="set-algorithm-group" role="group" aria-labelledby="setEncryptionGroup">
+            <h4 id="setEncryptionGroup">加密与签名</h4>
+            <label class="set-toggle-row"><span class="lab"><b>对称</b></span><span class="set-switch"><input type="checkbox" data-fam="symmetric" disabled><span class="slider"></span></span></label>
+            <label class="set-toggle-row"><span class="lab"><b>非对称</b></span><span class="set-switch"><input type="checkbox" data-fam="asymmetric" disabled><span class="slider"></span></span></label>
+            <label class="set-toggle-row"><span class="lab"><b>AEAD</b></span><span class="set-switch"><input type="checkbox" data-fam="aead" disabled><span class="slider"></span></span></label>
+          </div>
+          <div class="set-algorithm-group" role="group" aria-labelledby="setTransportGroup">
+            <h4 id="setTransportGroup">传输</h4>
+            <label class="set-toggle-row"><span class="lab"><b>TLS</b></span><span class="set-switch"><input type="checkbox" data-fam="tls" disabled><span class="slider"></span></span></label>
+          </div>
+        </fieldset>
       </section>
       <section id="setDisplayPage" class="set-page" aria-labelledby="setDisplayTitle" hidden>
         <h3 id="setDisplayTitle">显示</h3>
@@ -729,7 +763,6 @@
         </dl>
         <p id="setStatusMessage" class="set-status" role="status"></p>
       </section>
-      <section id="setRecordsPage" class="set-page" aria-label="执行记录" hidden></section>
     </div>
   </div>
 </dialog>
@@ -738,8 +771,6 @@
 
 <script src="/operation-client.js"></script>
 <script src="/algorithm-observations.js"></script>
-<script src="/workbench-model.js"></script>
-<script src="/workbench.js"></script>
 <script src="/operations.js"></script>
 <script>
 // 顶栏五条主轴：加解密 / 系统 / 网络 / 文件 / Dump（对齐 iOS，不藏专家折叠）。
@@ -976,6 +1007,8 @@ async function pullPackagedSo(i){
 // ---- 实时捕获：单一 capItems，多面板按 category 分流（加解密 crypto / 系统 system+file / 网络 net） ----
 const capItems=[];
 const CAP_BUFFER_LIMIT=800;
+const algorithmObservations=window.AdhAlgorithmObservations;
+const hookDisplay=algorithmObservations?.hookDisplayPreferences(()=>localStorage);
 const PANEL_DISPLAY_KEY='adh.panel.display';
 const panelDisplayCaps=[...document.getElementById('setDisplayCap').options].filter(option=>option.value).map(option=>Number(option.value));
 function normalizePanelDisplay(value){
@@ -1024,7 +1057,11 @@ function belongsToApp(c){
   return false;
 }
 function listedCap(c){ if(c.category!=='crypto') return true; return clientCryptoView(c).show!==false; }
-function applyFilter(p){ let items=capItems.filter(c=>p.cats.includes(c.category)&&belongsToApp(c)&&listedCap(c));
+function visibleForHooks(records){
+  const hidden=hookDisplay?.hidden(selectedPackage());
+  return hidden?.size ? records.filter(record=>!hidden.has(algorithmObservations.hookKey(record))) : records;
+}
+function applyFilter(p){ let items=visibleForHooks(capItems.filter(c=>p.cats.includes(c.category)&&belongsToApp(c)&&listedCap(c)));
   const f=p.filter;
   if(f.q){ const q=f.q.toLowerCase(); items=items.filter(c=>{ const v=c.view||{};
     return ((c.algo||'')+' '+(c.op||'')+' '+(c.preview||'')+' '+(v.title||'')+' '+(v.hook||'')+' '+(v.direction||'')).toLowerCase().includes(q); }); }
@@ -1168,10 +1205,11 @@ function makeCapPanel(key,cats){
       showBanner(key,n); if(activeCapKey===key) updateCount(box.querySelectorAll('.row').length,total); return; }
     p.lastShown=items.length; showBanner(key,0);
     const shown=items.slice(-capDisplayCap).slice().reverse();
-    box.innerHTML=shown.map(c=>rowHtml(key,p.sel,c)).join('')||'<div class="empty">'+emptyCapText()+'</div>';
+    box.innerHTML=shown.map(c=>rowHtml(key,p.sel,c)).join('')||'<div class="empty">'+(total?'没有符合筛选条件的记录。':emptyCapText())+'</div>';
     if(activeCapKey===key) updateCount(shown.length,total); };
-  p.select=async function(id){ p.sel=id; p.render(true);
-    const c=await (await fetch('/api/captures/'+id)).json(); renderCaptureDetail(key+'-detail',c); };
+  p.select=async function(id){ const pkg=selectedPackage(); p.sel=id; p.render(true);
+    const c=await (await fetch('/api/captures/'+id)).json();
+    if(p.sel===id && selectedPackage()===pkg) renderCaptureDetail(key+'-detail',c); };
   CAPPANELS[key]=p; return p;
 }
 makeCapPanel('cc',['crypto']);
@@ -1253,7 +1291,8 @@ function exchangeRow(sel,ex){
   nt.render=function(force){
     const box=document.getElementById('nt-list'); if(!box) return;
     const local=capItems.filter(c=>c.category==='net'&&belongsToApp(c));
-    const localIds=new Set(local.map(c=>c.id));
+    const visibleLocal=visibleForHooks(local);
+    const localIds=new Set(visibleLocal.map(c=>c.id));
     const allEx=httpAssembly.exchanges||[];
     const exchanges=allEx.filter(ex=>(ex.captureIds||[]).some(id=>localIds.has(id)));
     const used=new Set([...allEx.flatMap(ex=>ex.captureIds||[]), ...(httpAssembly.consumedIds||[])]);
@@ -1282,13 +1321,17 @@ function exchangeRow(sel,ex){
     if(httpAssembly.http2Idle) notes.push(httpAssembly.http2Idle+' 条 HTTP/2 连接还没有完整请求');
     if(raw.length) notes.push(raw.length+' 条 TLS 记录不是 HTTP 请求（连接控制帧或拼不回去），已略过');
     const noteHtml=notes.length?'<div class="ex-note">'+escapeHtml(notes.join('。'))+'。</div>':'';
-    const empty=local.length
-      ?('有 '+local.length+' 条 TLS，尚未拼成 HTTP。')
-      :emptyCapText();
+    const empty=exchanges.length || (local.length && !visibleLocal.length)
+      ?'没有符合筛选条件的网络记录。'
+      :visibleLocal.length ? '有 '+visibleLocal.length+' 条 TLS，尚未拼成 HTTP。' : emptyCapText();
     const shown=rows.slice(0,capDisplayCap);
     box.innerHTML=noteHtml+(shown.length?shown.map(ex=>exchangeRow(nt.sel,ex)).join(''):'<div class="empty">'+empty+'</div>');
     if(activeCapKey==='nt') updateCount(shown.length, local.length);
     if(typeof nt.sel==='string'){
+      if(visibleLocal.length!==local.length && !exchanges.some(item=>item.id===nt.sel)){
+        clearHiddenSelection(nt);
+        return;
+      }
       const ex=allEx.find(e=>e.id===nt.sel);
       if(!ex) return;
       const rev=nt.sel+'|'+(ex.request?ex.request.bodyBytes+'/'+ex.request.complete:'')+'|'+(ex.response?ex.response.bodyBytes+'/'+ex.response.complete:'')+'|'+(ex.note||'');
@@ -1300,7 +1343,10 @@ function exchangeRow(sel,ex){
     return rawSelect(id);
   };
 })();
-function capRenderAll(){ for(const k in CAPPANELS) CAPPANELS[k].render(); }
+function capRenderAll(){
+  for(const k in CAPPANELS) CAPPANELS[k].render();
+  scheduleObservationRefresh();
+}
 function capSelectP(key,id){ CAPPANELS[key].select(id); }
 function capPush(c){ if(!belongsToApp(c)) { if(c.id>capMaxId)capMaxId=c.id; return; }
   capItems.push(c); if(capItems.length>CAP_BUFFER_LIMIT) capItems.shift(); if(c.id>capMaxId)capMaxId=c.id; }
@@ -1374,6 +1420,7 @@ function renderCaptureDetail(detailId,c){ const d=document.getElementById(detail
   d.innerHTML=h; }
 async function capLoad(){ const pkg=selectedPackage(); if(!pkg) return;
   try{ const r=await (await fetch('/api/captures?since='+capMaxId+pkgQ())).json();
+    if(selectedPackage()!==pkg) return;
     (r.captures||[]).forEach(c=>{ if(!c.package) c.package=pkg; capPush(c); });
   }catch(e){}
   await loadExchanges(); capRenderAll(); }
@@ -1609,16 +1656,21 @@ function togglePopover(id, btnId){
 // ---- 算法设置按当前应用读取和保存 ----
 const settingsDialog=document.getElementById('setMask');
 const settingsNav=document.getElementById('setNav');
+const hooksPage=document.getElementById('setHooksPage');
 const capturePage=document.getElementById('setCapturePage');
 const statusPage=document.getElementById('setStatusPage');
 const familyInputs=document.querySelectorAll('#setFamilies input[data-fam]');
 const familyCount=document.getElementById('setFamilyCount');
-const algorithmControlTab=document.getElementById('setAlgorithmControlTab');
+const hookListTab=document.getElementById('setHookListTab');
+const hookControls=document.getElementById('setHookControls');
+const hookQuery=document.getElementById('setHookQuery');
+const hookCategory=document.getElementById('setHookCategory');
+const hookReset=document.getElementById('setHookReset');
+const hookGroups=document.getElementById('setHookGroups');
 const observedTab=document.getElementById('setObservedTab');
 const observedPage=document.getElementById('setObservedAlgorithms');
 const observationQuery=document.getElementById('setObservationQuery');
 const observationFamily=document.getElementById('setObservationFamily');
-const algorithmObservations=window.AdhAlgorithmObservations;
 const displayCapSelect=document.getElementById('setDisplayCap');
 const timeFormatSelect=document.getElementById('setTimeFormat');
 const densitySelect=document.getElementById('setRowDensity');
@@ -1658,14 +1710,113 @@ async function loadAppFamilies(view){
 }
 async function openCaptureSettings(){
   const pkg=selectedPackage();
-  const label=serverApps.find(app=>app.package===pkg)?.label || pkg;
-  const view={pkg, label, capture:null};
+  const view={pkg, capture:null};
   familyView=view;
-  document.getElementById('familyHeading').textContent=label || '未选择应用';
   document.getElementById('setFamilies').hidden=!pkg;
   renderFamilies();
   setFamilyStatus(pkg ? '正在读取设置…' : '在主界面选中应用后，即可设置采集算法。');
   if(pkg && await loadAppFamilies(view) && familyView===view) setFamilyStatus('');
+}
+function renderSettingsScope(){
+  const pkg=selectedPackage();
+  const app=document.getElementById('setActiveApp');
+  if(app.dataset.package!==pkg){
+    app.dataset.package=pkg;
+    hookQuery.value=hookCategory.value=observationQuery.value=observationFamily.value='';
+    document.getElementById('setHookStatus').hidden=true;
+  }
+  const label=serverApps.find(entry=>entry.package===pkg)?.label;
+  app.textContent=label && label!==pkg ? label+' · '+pkg : pkg || '未选择应用';
+}
+let hookSignature='';
+function renderHookControls(){
+  const pkg=selectedPackage();
+  const entries=pkg && algorithmObservations ? algorithmObservations.summarizeHooks(capItems.filter(belongsToApp)) : [];
+  const hidden=hookDisplay?.hidden(pkg) ?? new Set();
+  const query=hookQuery.value.trim().toLowerCase();
+  const category=hookCategory.value;
+  const shown=entries.filter(item=>(!category || category===item.category) && item.name.toLowerCase().includes(query));
+  const count=entries.filter(item=>!hidden.has(item.key)).length;
+  document.getElementById('setHookCount').textContent=entries.length?'显示 '+count+' / '+entries.length+' 项':'';
+  hookReset.disabled=!pkg || !hidden.size;
+  const empty=document.getElementById('setHookEmpty');
+  empty.hidden=shown.length>0;
+  empty.textContent=!pkg?'请先在主界面选择应用。':!algorithmObservations?'暂时无法读取观测项。':entries.length?'没有符合条件的 Hook。':'当前应用暂无带 Hook 名称的记录。';
+  const signature=JSON.stringify([pkg,panelDisplay.time,shown,[...hidden]]);
+  if(hookSignature===signature) return;
+  hookSignature=signature;
+  const focused=document.activeElement?.dataset.hookKey;
+  const fragment=document.createDocumentFragment();
+  let focusTarget;
+  for(const [group, name] of Object.entries(algorithmObservations?.hookGroups ?? {})){
+    const items=shown.filter(item=>item.category===group);
+    if(!items.length) continue;
+    const section=document.createElement('section');
+    section.className='set-hook-group';
+    section.dataset.hookGroup=group;
+    section.setAttribute('aria-labelledby','set-hook-group-'+group);
+    const heading=document.createElement('h4');
+    heading.id='set-hook-group-'+group;
+    heading.textContent=name+' · '+items.length;
+    section.append(heading);
+    for(const item of items){
+      const row=document.createElement('label');
+      row.className='set-toggle-row';
+      const lab=document.createElement('span');
+      lab.className='lab';
+      const title=document.createElement('b');
+      title.textContent=item.name;
+      const meta=document.createElement('span');
+      const time=fmtTime(item.latest);
+      const source=item.source==='java'?'Java':item.source==='native'?'Native':'';
+      meta.textContent=[source,item.count+' 条',time&&'最近 '+time].filter(Boolean).join(' · ');
+      lab.append(title,meta);
+      const control=document.createElement('span');
+      control.className='set-switch';
+      const toggle=document.createElement('input');
+      toggle.type='checkbox';
+      toggle.setAttribute('role','switch');
+      toggle.setAttribute('aria-label','显示 '+item.name+' · '+name+(source?' · '+source:''));
+      toggle.dataset.hookKey=item.key;
+      toggle.checked=!hidden.has(item.key);
+      if(item.key===focused) focusTarget=toggle;
+      const slider=document.createElement('span');
+      slider.className='slider';
+      slider.setAttribute('aria-hidden','true');
+      control.append(toggle,slider);
+      row.append(lab,control);
+      section.append(row);
+    }
+    fragment.append(section);
+  }
+  hookGroups.dataset.package=pkg;
+  hookGroups.replaceChildren(fragment);
+  focusTarget?.focus({preventScroll:true});
+}
+function clearHiddenSelection(panel){
+  panel.sel=0;
+  panel.detailRev=null;
+  const message=document.createElement('div');
+  message.className='detail-empty';
+  message.textContent='这条记录当前已隐藏。';
+  document.getElementById(panel.key+'-detail')?.replaceChildren(message);
+}
+function saveHookDisplay(hidden){
+  const pkg=selectedPackage();
+  if(!pkg || !hookDisplay) return;
+  const saved=hookDisplay.save(pkg,hidden);
+  for(const panel of Object.values(CAPPANELS)){
+    const selected=panel.sel && capItems.find(item=>item.id===panel.sel && belongsToApp(item));
+    if(selected && hidden.has(algorithmObservations.hookKey(selected))) clearHiddenSelection(panel);
+    panel.render(true);
+  }
+  renderHookControls();
+  const status=document.getElementById('setHookStatus');
+  status.hidden=false;
+  status.textContent=saved
+    ? hidden.size?'已保存当前应用的显示设置。':'已恢复当前应用的全部显示。'
+    :'浏览器无法保存，当前页面已应用。';
+  status.dataset.error=String(!saved);
 }
 function renderAlgorithmObservations(){
   const pkg=selectedPackage();
@@ -1705,13 +1856,24 @@ function renderAlgorithmObservations(){
   empty.hidden=visible.length>0;
   empty.textContent=!pkg?'请选择一个应用。':!algorithmObservations?'暂时无法读取算法统计。':observations.length?'没有符合条件的算法。':'当前应用暂无已载入的算法记录。';
 }
-function showAlgorithmView(observed){
-  algorithmControlTab.setAttribute('aria-pressed',String(!observed));
+function renderObservationSettings(){
+  if(hookControls.hidden) renderAlgorithmObservations();
+  else renderHookControls();
+}
+let observationRefresh=0;
+function scheduleObservationRefresh(){
+  if(!settingsDialog.open || hooksPage.hidden || observationRefresh) return;
+  observationRefresh=setTimeout(()=>{
+    observationRefresh=0;
+    if(settingsDialog.open && !hooksPage.hidden) renderObservationSettings();
+  },240);
+}
+function showObservationView(observed){
+  hookListTab.setAttribute('aria-pressed',String(!observed));
   observedTab.setAttribute('aria-pressed',String(observed));
-  document.getElementById('setAlgorithmControls').hidden=observed;
+  hookControls.hidden=observed;
   observedPage.hidden=!observed;
-  familyCount.hidden=observed;
-  if(observed) renderAlgorithmObservations();
+  renderObservationSettings();
 }
 function renderDisplaySettings(){
   document.getElementById('setDisplayDefault').textContent=`跟随服务默认（${hostDisplayCap} 条）`;
@@ -1796,13 +1958,13 @@ function showSettingsPage(page){
     document.getElementById(button.getAttribute('aria-controls')).hidden=!selected;
   }
   document.querySelector('.set-main').scrollTop=0;
-  if(page==='records'){ window.adhOperations.showRecords(); return; }
-  window.adhOperations.pause();
-  if(page==='capture'){ showAlgorithmView(false); void openCaptureSettings(); }
+  renderSettingsScope();
+  if(page==='hooks') showObservationView(false);
+  if(page==='capture') void openCaptureSettings();
   if(page==='display') renderDisplaySettings();
   if(page==='status') void refreshPanelStatus();
 }
-function openSettings(page='capture'){
+function openSettings(page='hooks'){
   closePopovers();
   if(!settingsDialog.open) settingsDialog.showModal();
   showSettingsPage(page);
@@ -1915,7 +2077,10 @@ function render(){
   }
   renderSessions();
   if(settingsDialog.open && !statusPage.hidden) renderStatusApp();
-  if(settingsDialog.open && !capturePage.hidden && !observedPage.hidden) renderAlgorithmObservations();
+  if(settingsDialog.open){
+    renderSettingsScope();
+    scheduleObservationRefresh();
+  }
 }
 async function refreshApps(){
   const captureVersion=serverCaptureVersion;
@@ -2051,14 +2216,23 @@ settingsNav.addEventListener('click', e=>{
   const button=e.target.closest('button[data-settings]');
   if(button && button.getAttribute('aria-pressed')!=='true') showSettingsPage(button.dataset.settings);
 });
-for(const [key,label] of Object.entries(algorithmObservations?.families??{})){
-  const option=document.createElement('option');
-  option.value=key;
-  option.textContent=label;
-  observationFamily.append(option);
+for(const [select, labels] of [[observationFamily,algorithmObservations?.families],[hookCategory,algorithmObservations?.hookGroups]]){
+  for(const [key,label] of Object.entries(labels??{})) select.add(new Option(label,key));
 }
-algorithmControlTab.addEventListener('click', ()=>showAlgorithmView(false));
-observedTab.addEventListener('click', ()=>showAlgorithmView(true));
+hookListTab.addEventListener('click', ()=>showObservationView(false));
+observedTab.addEventListener('click', ()=>showObservationView(true));
+hookQuery.addEventListener('input',renderHookControls);
+hookCategory.addEventListener('change',renderHookControls);
+hookReset.addEventListener('click',()=>saveHookDisplay(new Set()));
+hookGroups.addEventListener('change',e=>{
+  const toggle=e.target;
+  const pkg=selectedPackage();
+  if(!pkg || !hookDisplay || hookGroups.dataset.package!==pkg || !toggle.dataset.hookKey) return;
+  const hidden=new Set(hookDisplay.hidden(pkg));
+  if(toggle.checked) hidden.delete(toggle.dataset.hookKey);
+  else hidden.add(toggle.dataset.hookKey);
+  saveHookDisplay(hidden);
+});
 observationQuery.addEventListener('input',renderAlgorithmObservations);
 observationFamily.addEventListener('change',renderAlgorithmObservations);
 displayCapSelect.addEventListener('change', ()=>savePanelDisplay({...panelDisplay,limit:Number(displayCapSelect.value)}));
@@ -2068,7 +2242,7 @@ displayReset.addEventListener('click', ()=>savePanelDisplay());
 document.getElementById('setStatusRefresh').addEventListener('click', refreshPanelStatus);
 settingsDialog.addEventListener('click', e=>{ if(e.target===settingsDialog) settingsDialog.close(); });
 settingsDialog.addEventListener('close', ()=>{
-  if(!settingsDialog.open){ familyView=null; window.adhOperations.pause(); }
+  if(!settingsDialog.open) familyView=null;
 });
 // Browser overrides take precedence over the Host's view default.
 readPanelJson('/api/config').then(updateHostDisplayCap).catch(()=>{});

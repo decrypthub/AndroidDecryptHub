@@ -1,4 +1,4 @@
-// Classify algorithm labels already loaded by the panel. Observation rows never carry payloads.
+// Summaries and display preferences for loaded observations. Never read capture payloads.
 ((scope) => {
   const families = Object.freeze({
     digest:'摘要', mac:'消息认证', symmetric:'对称加密', asymmetric:'非对称与签名',
@@ -48,5 +48,55 @@
     return [...counts.values()].sort((a,b) => b.latest - a.latest || b.count - a.count || a.name.localeCompare(b.name));
   }
 
-  scope.AdhAlgorithmObservations = {families, summarize};
+  const hookGroups = Object.freeze({crypto:'加解密', system:'系统', file:'文件', net:'网络'});
+  const symbol = value => typeof value === 'string' && /^[\p{L}\p{N}_.$:@+<>-]{1,120}$/u.test(value) ? value : '';
+
+  function hookIdentity(record) {
+    const category = record?.category;
+    if (!Object.hasOwn(hookGroups, category)) return;
+    const name = symbol(record.func) || symbol(record.view?.hook);
+    if (!name) return;
+    const source = record.source === 'java' || record.source === 'native' ? record.source : '';
+    return {key:JSON.stringify([category,source,name]), category, source, name};
+  }
+
+  function summarizeHooks(records) {
+    const items = new Map();
+    for (const record of records) {
+      const hook = hookIdentity(record);
+      if (!hook) continue;
+      const previous = items.get(hook.key);
+      const ts = Number.isFinite(record.ts) && record.ts > 0 ? record.ts : 0;
+      items.set(hook.key, {...hook, count:(previous?.count ?? 0)+1, latest:Math.max(previous?.latest ?? 0, ts)});
+    }
+    return [...items.values()].sort((a,b) => a.name.localeCompare(b.name) || a.source.localeCompare(b.source));
+  }
+
+  function hookDisplayPreferences(storage) {
+    const keyFor = pkg => 'adh.panel.hidden-hooks.v1:' + pkg;
+    const byPackage = new Map();
+    return {
+      hidden(pkg) {
+        if (!pkg) return new Set();
+        if (!byPackage.has(pkg)) {
+          let saved = [];
+          try { saved = JSON.parse(storage().getItem(keyFor(pkg))); } catch {}
+          byPackage.set(pkg,new Set(Array.isArray(saved) ? saved.filter(key => typeof key === 'string' && key.length < 160) : []));
+        }
+        return byPackage.get(pkg);
+      },
+      save(pkg, hidden) {
+        if (!pkg) return false;
+        byPackage.set(pkg,new Set(hidden));
+        try {
+          if (hidden.size) storage().setItem(keyFor(pkg),JSON.stringify([...hidden]));
+          else storage().removeItem(keyFor(pkg));
+          return true;
+        } catch { return false; }
+      },
+    };
+  }
+
+  scope.AdhAlgorithmObservations = {families, summarize, hookGroups, summarizeHooks,
+    hookKey: record => hookIdentity(record)?.key, hookDisplayPreferences};
 })(globalThis);

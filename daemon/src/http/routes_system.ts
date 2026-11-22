@@ -39,7 +39,11 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
     res.end(buf);
   };
   return [
-    { path:'/workbench',handler:servePublic('workbench.html','text/html; charset=utf-8') },
+    // Temporarily retire the browser history view without discarding stored operations.
+    { path:'/workbench',handler:() => {
+      res.writeHead(302, { location:'/', 'cache-control':'no-store' });
+      res.end();
+    } },
     { path:'/workbench.css',handler:servePublic('workbench.css','text/css; charset=utf-8') },
     { path:'/operation-client.js',handler:servePublic('operation-client.js','text/javascript; charset=utf-8') },
     { path:'/workbench-model.js',handler:servePublic('workbench-model.js','text/javascript; charset=utf-8') },
