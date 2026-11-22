@@ -176,6 +176,8 @@
   .row.crypto-row .subline { display:flex; gap:12px; align-items:baseline; margin-top:4px; min-width:0; }
   .row.crypto-row .subline .preview { margin-top:0; flex:1; min-width:0; }
   .row.crypto-row .hook { margin-left:auto; color:var(--muted); font-size:11px; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; flex-shrink:0; }
+  .compact-captures :is(#cc-list,#sy-list,#nt-list) .row { min-height:0; padding:5px 12px; }
+  .compact-captures :is(#cc-list,#sy-list,#nt-list) .row .subline { margin-top:2px; }
   .ex-note { padding:8px 12px 0; color:var(--muted); font-size:12px; line-height:1.4; }
   .row .lens-out { color:var(--cyan); }
   .io-section.raw-card { padding:0 0 2px 12px; background:transparent; border:0; border-radius:0; border-left:2px solid var(--cyan); }
@@ -352,6 +354,18 @@
   .set-main { flex:1; min-width:0; overflow:auto; padding:24px 28px; }
   .set-page[hidden] { display:none; }
   .set-page > h3 { margin:0 0 8px; font-size:18px; font-weight:650; color:var(--ink); text-transform:none; letter-spacing:normal; }
+  .set-page-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:10px; }
+  .set-page-head h3 { margin:0; font-size:18px; font-weight:650; color:var(--ink); text-transform:none; letter-spacing:normal; }
+  .set-preferences { margin-top:12px; }
+  .set-preferences .set-row { border-bottom-color:var(--line-soft); }
+  .set-preferences select { width:min(188px,62%); padding:6px 10px; border:1px solid var(--line); border-radius:4px; background:var(--surface-2); color:inherit; font:inherit; }
+  .set-meta { margin:0; }
+  .set-meta > div { display:grid; grid-template-columns:minmax(100px,1fr) minmax(0,2fr); column-gap:12px; align-items:baseline; padding:11px 0; border-bottom:1px solid var(--line-soft); }
+  .set-meta dt { color:var(--muted); font-size:12px; }
+  .set-meta dd { margin:0; color:var(--ink-2); overflow-wrap:anywhere; font-variant-numeric:tabular-nums; }
+  .set-shell .set-small-button { padding:6px 10px; min-height:32px; border:1px solid var(--line); border-radius:4px; color:var(--ink-2); background:transparent; font:inherit; cursor:pointer; white-space:nowrap; }
+  .set-shell .set-small-button:hover:not(:disabled) { background:var(--surface-2); }
+  .set-shell .set-small-button:disabled { opacity:.55; cursor:default; }
   .set-app { margin:0; display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; color:var(--muted); font-size:12px; }
   .set-app strong { font-weight:550; color:var(--ink-2); overflow-wrap:anywhere; }
   .set-status { min-height:18px; margin:8px 0 0; color:var(--muted); font-size:12px; }
@@ -373,8 +387,8 @@
   @media (max-width:620px) {
     .set-shell { width:calc(100vw - 20px); height:min(580px,calc(100dvh - 20px)); }
     .set-layout { flex-direction:column; }
-    .set-nav { width:100%; flex-direction:row; padding:0 12px; border-right:0; border-bottom:1px solid var(--line-soft); }
-    .set-nav button { width:auto; border-left:0; border-bottom:2px solid transparent; border-radius:0; }
+    .set-nav { width:100%; flex-direction:row; padding:0 8px; gap:0; overflow-x:auto; border-right:0; border-bottom:1px solid var(--line-soft); }
+    .set-nav button { width:auto; padding:8px; white-space:nowrap; border-left:0; border-bottom:2px solid transparent; border-radius:0; }
     .set-nav button[aria-pressed="true"] { border-bottom-color:var(--blue); background:transparent; }
     .set-main { padding:16px; }
   }
@@ -606,9 +620,11 @@
     <button type="button" class="set-close-x" id="setClose" aria-label="关闭设置">×</button>
   </div>
   <div class="set-layout">
-    <nav class="set-nav" aria-label="设置分类">
-      <button type="button" id="setCaptureTab" aria-controls="setCapturePage" aria-pressed="true">算法采集</button>
-      <button type="button" id="setRecordsTab" aria-controls="setRecordsPage" aria-pressed="false">执行记录</button>
+    <nav class="set-nav" id="setNav" aria-label="设置分类">
+      <button type="button" id="setCaptureTab" data-settings="capture" aria-controls="setCapturePage" aria-pressed="true">算法采集</button>
+      <button type="button" id="setDisplayTab" data-settings="display" aria-controls="setDisplayPage" aria-pressed="false">显示</button>
+      <button type="button" id="setStatusTab" data-settings="status" aria-controls="setStatusPage" aria-pressed="false">连接与数据</button>
+      <button type="button" id="setRecordsTab" data-settings="records" aria-controls="setRecordsPage" aria-pressed="false">执行记录</button>
     </nav>
     <div class="set-main">
       <section id="setCapturePage" class="set-page" aria-labelledby="setCaptureTitle">
@@ -623,6 +639,54 @@
           <label class="set-toggle-row"><span class="lab"><b>TLS</b></span><span class="set-switch"><input type="checkbox" data-fam="tls" disabled><span class="slider"></span></span></label>
           <label class="set-toggle-row"><span class="lab"><b>AEAD</b></span><span class="set-switch"><input type="checkbox" data-fam="aead" disabled><span class="slider"></span></span></label>
         </fieldset>
+      </section>
+      <section id="setDisplayPage" class="set-page" aria-labelledby="setDisplayTitle" hidden>
+        <h3 id="setDisplayTitle">显示</h3>
+        <p class="set-app">仅影响当前浏览器的采集列表。</p>
+        <div class="set-preferences">
+          <label class="set-row">
+            <span class="lab"><b>列表显示条数</b></span>
+            <select id="setDisplayCap">
+              <option value="" id="setDisplayDefault">跟随服务默认</option>
+              <option value="100">100 条</option>
+              <option value="200">200 条</option>
+              <option value="300">300 条</option>
+              <option value="500">500 条</option>
+              <option value="800">800 条</option>
+            </select>
+          </label>
+          <label class="set-row">
+            <span class="lab"><b>时间格式</b></span>
+            <select id="setTimeFormat">
+              <option value="time">只显示时间</option>
+              <option value="date">日期和时间</option>
+            </select>
+          </label>
+          <label class="set-row">
+            <span class="lab"><b>列表间距</b></span>
+            <select id="setRowDensity">
+              <option value="standard">标准</option>
+              <option value="compact">紧凑</option>
+            </select>
+          </label>
+        </div>
+        <div class="set-actions"><button type="button" id="setDisplayReset" class="set-small-button">恢复默认</button></div>
+        <p class="set-status" id="setDisplayStatus" role="status"></p>
+      </section>
+      <section id="setStatusPage" class="set-page" aria-labelledby="setStatusTitle" hidden>
+        <div class="set-page-head">
+          <h3 id="setStatusTitle">连接与数据</h3>
+          <button type="button" id="setStatusRefresh" class="set-small-button">刷新</button>
+        </div>
+        <dl class="set-meta">
+          <div><dt>面板地址</dt><dd id="setPanelAddress">—</dd></div>
+          <div><dt>电脑服务版本</dt><dd id="setHostStatus">—</dd></div>
+          <div><dt>当前应用</dt><dd id="setStatusApp">—</dd></div>
+          <div><dt>已载入记录</dt><dd id="setLoadedRecords">—</dd></div>
+          <div><dt>记录保留规则</dt><dd id="setRetention">—</dd></div>
+          <div><dt>已登记文件</dt><dd id="setArtifactUsage">—</dd></div>
+        </dl>
+        <p id="setStatusMessage" class="set-status" role="status"></p>
       </section>
       <section id="setRecordsPage" class="set-page" aria-label="执行记录" hidden></section>
     </div>
@@ -868,7 +932,24 @@ async function pullPackagedSo(i){
 }
 
 // ---- 实时捕获：单一 capItems，多面板按 category 分流（加解密 crypto / 系统 system+file / 网络 net） ----
-const capItems=[]; let capMaxId=0, capDisplayCap=300;
+const capItems=[];
+const CAP_BUFFER_LIMIT=800;
+const PANEL_DISPLAY_KEY='adh.panel.display';
+const panelDisplayCaps=[...document.getElementById('setDisplayCap').options].filter(option=>option.value).map(option=>Number(option.value));
+function normalizePanelDisplay(value){
+  return {
+    limit:panelDisplayCaps.includes(value?.limit)?value.limit:null,
+    time:value?.time==='date'?'date':'time',
+    density:value?.density==='compact'?'compact':'standard',
+  };
+}
+function readPanelDisplay(){
+  try{ return normalizePanelDisplay(JSON.parse(localStorage.getItem(PANEL_DISPLAY_KEY))); }
+  catch{ return normalizePanelDisplay(); }
+}
+let capMaxId=0, hostDisplayCap=300, panelDisplay=readPanelDisplay();
+let capDisplayCap=panelDisplay.limit??hostDisplayCap;
+document.body.classList.toggle('compact-captures',panelDisplay.density==='compact');
 // 分类色（对齐 IDH）：crypto 再按算法细分 digest/hmac/sym/asym；net/file/system 直接映射。
 function catClass(c){ if(!c) return 'other';
   if(c.category==='net') return 'net'; if(c.category==='file') return 'file'; if(c.category==='system') return 'sys';
@@ -886,7 +967,11 @@ function hexdump(hex){ hex=hex||''; let out='';
     out+=off+': '+hp.padEnd(50)+' |'+ascii+'|\n'; }
   return out; }
 // 时间统一走 24 小时制：toLocaleTimeString() 默认跟浏览器 locale，中文界面里会冒出「5:35:08 PM」。
-function fmtTime(ts){ if(!ts) return ''; try{ return new Date(ts).toLocaleTimeString(undefined,{hour12:false}); }catch(e){ return ''; } }
+function fmtTime(ts){ if(!ts) return ''; const options={hour12:false};
+  const date=new Date(ts);
+  if(!Number.isFinite(date.getTime())) return '';
+  return panelDisplay.time==='date'?date.toLocaleString(undefined,options):date.toLocaleTimeString(undefined,options);
+}
 
 const CAPPANELS={};
 let activeCapKey='cc';
@@ -1038,11 +1123,11 @@ function makeCapPanel(key,cats){
     const items=applyFilter(p);
     if(!force && (p.filter.paused || box.scrollTop>48)){
       const n=Math.max(0, items.length-p.lastShown);
-      showBanner(key,n); if(activeCapKey===key) updateCount(p.lastShown,total); return; }
+      showBanner(key,n); if(activeCapKey===key) updateCount(box.querySelectorAll('.row').length,total); return; }
     p.lastShown=items.length; showBanner(key,0);
     const shown=items.slice(-capDisplayCap).slice().reverse();
     box.innerHTML=shown.map(c=>rowHtml(key,p.sel,c)).join('')||'<div class="empty">'+emptyCapText()+'</div>';
-    if(activeCapKey===key) updateCount(items.length,total); };
+    if(activeCapKey===key) updateCount(shown.length,total); };
   p.select=async function(id){ p.sel=id; p.render(true);
     const c=await (await fetch('/api/captures/'+id)).json(); renderCaptureDetail(key+'-detail',c); };
   CAPPANELS[key]=p; return p;
@@ -1142,12 +1227,12 @@ function exchangeRow(sel,ex){
       if(nt.filter.max!=null && n>nt.filter.max) return false;
       return true;
     });
-    const rows=matched.map(ex=>({ts:ex.ts||0, html:exchangeRow(nt.sel,ex)})).sort((a,b)=>b.ts-a.ts);
+    const rows=matched.sort((a,b)=>(b.ts||0)-(a.ts||0));
     const badge=document.getElementById('n-nt'); if(badge) badge.textContent=matched.length||'';
     if(!force && (nt.filter.paused || box.scrollTop>48)){
       const n=Math.max(0, rows.length-nt.lastShown);
       showBanner('nt', n);
-      if(activeCapKey==='nt') updateCount(nt.lastShown, local.length);
+      if(activeCapKey==='nt') updateCount(box.querySelectorAll('.row').length, local.length);
       return;
     }
     nt.lastShown=rows.length; showBanner('nt',0);
@@ -1158,8 +1243,9 @@ function exchangeRow(sel,ex){
     const empty=local.length
       ?('有 '+local.length+' 条 TLS，尚未拼成 HTTP。')
       :emptyCapText();
-    box.innerHTML=noteHtml+(rows.length?rows.map(r=>r.html).join(''):'<div class="empty">'+empty+'</div>');
-    if(activeCapKey==='nt') updateCount(rows.length, local.length);
+    const shown=rows.slice(0,capDisplayCap);
+    box.innerHTML=noteHtml+(shown.length?shown.map(ex=>exchangeRow(nt.sel,ex)).join(''):'<div class="empty">'+empty+'</div>');
+    if(activeCapKey==='nt') updateCount(shown.length, local.length);
     if(typeof nt.sel==='string'){
       const ex=allEx.find(e=>e.id===nt.sel);
       if(!ex) return;
@@ -1175,7 +1261,7 @@ function exchangeRow(sel,ex){
 function capRenderAll(){ for(const k in CAPPANELS) CAPPANELS[k].render(); }
 function capSelectP(key,id){ CAPPANELS[key].select(id); }
 function capPush(c){ if(!belongsToApp(c)) { if(c.id>capMaxId)capMaxId=c.id; return; }
-  capItems.push(c); if(capItems.length>800) capItems.shift(); if(c.id>capMaxId)capMaxId=c.id; }
+  capItems.push(c); if(capItems.length>CAP_BUFFER_LIMIT) capItems.shift(); if(c.id>capMaxId)capMaxId=c.id; }
 function capClearP(key){
   const p=CAPPANELS[key]; if(!p) return;
   const pkg=selectedPackage();
@@ -1480,11 +1566,14 @@ function togglePopover(id, btnId){
 
 // ---- 算法设置按当前应用读取和保存 ----
 const settingsDialog=document.getElementById('setMask');
+const settingsNav=document.getElementById('setNav');
 const capturePage=document.getElementById('setCapturePage');
-const recordsPage=document.getElementById('setRecordsPage');
-const captureTab=document.getElementById('setCaptureTab');
-const recordsTab=document.getElementById('setRecordsTab');
+const statusPage=document.getElementById('setStatusPage');
 const familyInputs=document.querySelectorAll('#setFamilies input[data-fam]');
+const displayCapSelect=document.getElementById('setDisplayCap');
+const timeFormatSelect=document.getElementById('setTimeFormat');
+const densitySelect=document.getElementById('setRowDensity');
+const displayReset=document.getElementById('setDisplayReset');
 let familyView=null;
 let familySaving=false;
 function setFamilyStatus(message, error=false){
@@ -1526,15 +1615,94 @@ async function openCaptureSettings(){
   setFamilyStatus(pkg ? '正在读取设置…' : '在主界面选中应用后，即可设置采集算法。');
   if(pkg && await loadAppFamilies(view) && familyView===view) setFamilyStatus('');
 }
+function renderDisplaySettings(){
+  document.getElementById('setDisplayDefault').textContent=`跟随服务默认（${hostDisplayCap} 条）`;
+  displayCapSelect.value=panelDisplay.limit??'';
+  timeFormatSelect.value=panelDisplay.time;
+  densitySelect.value=panelDisplay.density;
+  displayReset.disabled=panelDisplay.limit===null && panelDisplay.time==='time' && panelDisplay.density==='standard';
+}
+function applyPanelDisplay(){
+  capDisplayCap=panelDisplay.limit??hostDisplayCap;
+  document.body.classList.toggle('compact-captures',panelDisplay.density==='compact');
+  for(const panel of Object.values(CAPPANELS)){
+    if(!panel.filter.paused) panel.render(true);
+  }
+  renderDisplaySettings();
+}
+function savePanelDisplay(value){
+  panelDisplay=normalizePanelDisplay(value);
+  applyPanelDisplay();
+  const status=document.getElementById('setDisplayStatus');
+  try{
+    localStorage.setItem(PANEL_DISPLAY_KEY,JSON.stringify(panelDisplay));
+    status.textContent='已保存到当前浏览器。';
+    status.dataset.error='false';
+  }catch{
+    status.textContent='浏览器无法保存偏好，当前页面已应用。';
+    status.dataset.error='true';
+  }
+}
+async function readPanelJson(path){
+  const response=await fetch(path,{signal:AbortSignal.timeout(8000)});
+  if(!response.ok) throw Error('读取失败');
+  return response.json();
+}
+function updateHostDisplayCap(data){
+  const cap=data?.settings?.ui?.displayCap;
+  if(!Number.isSafeInteger(cap) || cap<1) return;
+  hostDisplayCap=Math.min(cap,CAP_BUFFER_LIMIT);
+  if(panelDisplay.limit===null && capDisplayCap!==hostDisplayCap) applyPanelDisplay();
+  else renderDisplaySettings();
+}
+function renderStatusApp(){
+  const pkg=selectedPackage();
+  const label=serverApps.find(app=>app.package===pkg)?.label || pkg;
+  const live=sessionsOf(pkg).filter(session=>session.online).length;
+  document.getElementById('setStatusApp').textContent=pkg?`${label} · ${live} 个在线会话`:'未选择应用';
+  const loaded=capItems.filter(belongsToApp).length;
+  document.getElementById('setLoadedRecords').textContent=pkg?`${loaded.toLocaleString('zh-CN')} 条`:'—';
+}
+async function refreshPanelStatus(){
+  const refresh=document.getElementById('setStatusRefresh');
+  if(refresh.disabled) return;
+  refresh.disabled=true;
+  const status=document.getElementById('setStatusMessage');
+  status.textContent='正在读取连接和数据状态…';
+  status.dataset.error='false';
+  document.getElementById('setPanelAddress').textContent=location.origin;
+  renderStatusApp();
+  const [health,config]=await Promise.allSettled([readPanelJson('/health'),readPanelJson('/api/config')]);
+  const service=health.status==='fulfilled' && health.value?.ok===true ? health.value : null;
+  const data=config.status==='fulfilled' ? config.value : null;
+  const capture=data?.settings?.capture;
+  const artifacts=data?.stats?.artifacts;
+  const hasVersion=typeof service?.version==='string' && service.version.length>0;
+  const hasRetention=Number.isSafeInteger(capture?.retain) && Number.isSafeInteger(capture?.maxAgeDays);
+  const hasArtifacts=Number.isSafeInteger(artifacts?.count) && Number.isFinite(artifacts?.bytes);
+  document.getElementById('setHostStatus').textContent=hasVersion?service.version:'未读取';
+  document.getElementById('setRetention').textContent=hasRetention
+    ? `${capture.retain.toLocaleString('zh-CN')} 条 / 应用 · ${capture.maxAgeDays ? capture.maxAgeDays+' 天清理规则' : '不限天数'}` : '未读取';
+  document.getElementById('setArtifactUsage').textContent=hasArtifacts
+    ? `${artifacts.count.toLocaleString('zh-CN')} 个 · ${fmtSize(artifacts.bytes)}` : '未读取';
+  updateHostDisplayCap(data);
+  const complete=hasVersion && hasRetention && hasArtifacts;
+  status.textContent=complete?'':'部分信息读取失败，可点「刷新」重试。';
+  status.dataset.error=String(!complete);
+  refresh.disabled=false;
+}
 function showSettingsPage(page){
-  const showRecords=page==='records';
-  capturePage.hidden=showRecords;
-  recordsPage.hidden=!showRecords;
-  captureTab.setAttribute('aria-pressed',String(!showRecords));
-  recordsTab.setAttribute('aria-pressed',String(showRecords));
+  for(const button of settingsNav.querySelectorAll('button[data-settings]')){
+    const selected=button.dataset.settings===page;
+    button.setAttribute('aria-pressed',String(selected));
+    document.getElementById(button.getAttribute('aria-controls')).hidden=!selected;
+  }
   document.querySelector('.set-main').scrollTop=0;
-  if(showRecords){ window.adhOperations.showRecords(); }
-  else { window.adhOperations.pause(); void openCaptureSettings(); }
+  if(page==='records'){ window.adhOperations.showRecords(); return; }
+  window.adhOperations.pause();
+  if(page==='capture') void openCaptureSettings();
+  if(page==='display') renderDisplaySettings();
+  if(page==='status') void refreshPanelStatus();
 }
 function openSettings(page='capture'){
   closePopovers();
@@ -1648,6 +1816,7 @@ function render(){
     menu.querySelectorAll('.app-item').forEach(el=>el.classList.toggle('active', el.dataset.pkg===pkg));
   }
   renderSessions();
+  if(settingsDialog.open && !statusPage.hidden) renderStatusApp();
 }
 async function refreshApps(){
   const captureVersion=serverCaptureVersion;
@@ -1779,14 +1948,21 @@ document.addEventListener('keydown', e=>{
 });
 document.getElementById('setBtn').addEventListener('click', ()=>openSettings());
 document.getElementById('setClose').addEventListener('click', ()=>settingsDialog.close());
-captureTab.addEventListener('click', ()=>{ if(capturePage.hidden) showSettingsPage('capture'); });
-recordsTab.addEventListener('click', ()=>{ if(recordsPage.hidden) showSettingsPage('records'); });
+settingsNav.addEventListener('click', e=>{
+  const button=e.target.closest('button[data-settings]');
+  if(button && button.getAttribute('aria-pressed')!=='true') showSettingsPage(button.dataset.settings);
+});
+displayCapSelect.addEventListener('change', ()=>savePanelDisplay({...panelDisplay,limit:Number(displayCapSelect.value)}));
+timeFormatSelect.addEventListener('change', ()=>savePanelDisplay({...panelDisplay,time:timeFormatSelect.value}));
+densitySelect.addEventListener('change', ()=>savePanelDisplay({...panelDisplay,density:densitySelect.value}));
+displayReset.addEventListener('click', ()=>savePanelDisplay());
+document.getElementById('setStatusRefresh').addEventListener('click', refreshPanelStatus);
 settingsDialog.addEventListener('click', e=>{ if(e.target===settingsDialog) settingsDialog.close(); });
 settingsDialog.addEventListener('close', ()=>{
   if(!settingsDialog.open){ familyView=null; window.adhOperations.pause(); }
 });
-// 初始化 displayCap（不打开设置也让列表按配置渲染）
-fetch('/api/config').then(r=>r.json()).then(r=>{ if(r.settings?.ui?.displayCap) capDisplayCap=r.settings.ui.displayCap; }).catch(()=>{});
+// Browser overrides take precedence over the Host's view default.
+readPanelJson('/api/config').then(updateHostDisplayCap).catch(()=>{});
 </script>
 </body>
 </html>
