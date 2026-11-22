@@ -31,3 +31,18 @@ test('local observer permits only the read-only, package-scoped Web viewer route
   }
   assert.equal(allows('/api/config', 'POST'), false);
 });
+
+test('optional debug-App files route cannot select another target or request a write', () => {
+  const path='/api/observer/app-files';
+  const url=(q:string)=>new URL(path+'?'+q,'http://127.0.0.1');
+  const opted={...observer,ownFilesSerial:'usb-selected'};
+  assert.equal(localViewAllows(observer,'GET',url('action=list')),false);
+  assert.equal(localViewAllows(opted,'GET',url('action=list')),true);
+  assert.equal(localViewAllows(opted,'GET',url('action=preview&path=readme.txt')),true);
+  assert.equal(localViewAllows(opted,'POST',url('action=list')),false);
+  assert.equal(localViewAllows(opted,'GET',url('action=remove&path=readme.txt')),false);
+  assert.equal(localViewAllows(opted,'GET',url('action=list&package=com.example.other')),false);
+  assert.equal(localViewAllows(opted,'GET',url('action=list&serial=other')),false);
+  assert.equal(localViewAllows(opted,'GET',url('action=list&action=preview')),false);
+  assert.equal(localViewAllows(opted,'GET',url('action=list&path=a&path=b')),false);
+});

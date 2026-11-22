@@ -178,9 +178,11 @@ test('file read/write events belong to system; files is a directory view, not an
 test('system type selection and directory availability refer to different data', () => {
   const kindFn=html.match(/(function matchesPanelKind\([\s\S]*?\r?\n})\r?\nfunction defaultRecordFilter/)?.[1];
   const dirFn=html.match(/(function appDirectoryStatus\([\s\S]*?\r?\n})\r?\nfunction renderAppDirectory/)?.[1];
-  assert.ok(kindFn&&dirFn);
+  const accessFn=html.match(/(function hasAppDirectory\([\s\S]*?\r?\n})\r?\nfunction appDirectoryStatus/)?.[1];
+  assert.ok(kindFn&&dirFn&&accessFn);
   const matches=vm.runInNewContext('('+kindFn+')');
-  const directory=vm.runInNewContext('('+dirFn+')');
+  const hasAppDirectory=vm.runInNewContext('('+accessFn+')');
+  const directory=vm.runInNewContext('('+dirFn+')',{hasAppDirectory});
   const system={key:'sy',cats:['system','file'],filter:{kind:'all'}};
   assert.equal(matches(system,'file'),true);
   assert.equal(matches(system,'system'),true);
@@ -191,6 +193,9 @@ test('system type selection and directory availability refer to different data',
   assert.match(directory({kind:'local',online:true},'com.example.a'),/未接入目录读取.*目录内容未知/);
   assert.match(directory({kind:'local',online:false},'com.example.a'),/设备未连接/);
   assert.doesNotMatch(directory({kind:'local',online:true},'com.example.a'),/未上报|空目录/);
+  assert.equal(hasAppDirectory({kind:'local',online:true,appFiles:true},'com.example.a'),true);
+  assert.equal(hasAppDirectory({kind:'device',online:true,appFiles:true},'com.example.a'),false);
+  assert.match(directory({kind:'local',online:true,appFiles:true},'com.example.a'),/授权的 APP files/);
 });
 
 test('artifact metadata requires the exact package and a known session', () => {

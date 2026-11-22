@@ -185,6 +185,26 @@
   .record-library .dump-table { margin-top:16px; }
   .record-library td { overflow-wrap:anywhere; }
   .record-library .empty { border:1px solid var(--line-soft); border-radius:6px; margin-top:16px; }
+  .app-directory { flex:1; min-width:0; overflow:auto; padding:20px; }
+  .app-directory-inner { max-width:1080px; margin:0 auto; }
+  .app-directory h2 { margin:0 0 4px; }
+  .directory-tools { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin:15px 0 10px; }
+  .directory-path { display:flex; min-width:0; flex:1; flex-wrap:wrap; align-items:center; gap:4px; overflow-wrap:anywhere; }
+  .directory-crumb { padding:3px 5px; border:0; background:none; color:var(--blue); font-size:12px; cursor:pointer; }
+  .directory-crumb[aria-current] { color:var(--ink); font-weight:600; cursor:default; }
+  .directory-workspace { display:grid; grid-template-columns:minmax(0,1.05fr) minmax(0,1fr); border:1px solid var(--line-soft); border-radius:6px; min-height:280px; overflow:hidden; }
+  .directory-workspace[hidden] { display:none; }
+  .directory-list { min-width:0; background:var(--bg); }
+  .directory-list-table { width:100%; table-layout:fixed; font-variant-numeric:tabular-nums; }
+  .directory-list-table th,.directory-list-table td { padding:7px 9px; border-bottom:1px solid var(--line-soft); text-align:left; }
+  .directory-list-table tbody tr:hover { background:var(--surface); }
+  .directory-list-table th:nth-child(2) { width:70px; }
+  .directory-list-table th:nth-child(3) { width:126px; }
+  .directory-entry { max-width:100%; border:none; padding:0; background:none; text-align:left; color:var(--ink); overflow-wrap:anywhere; cursor:pointer; }
+  .directory-entry[data-directory="true"] { color:var(--blue); }
+  .directory-preview { min-width:0; padding:12px; border-left:1px solid var(--line-soft); background:var(--surface); }
+  .directory-preview h3 { margin:0 0 8px; overflow-wrap:anywhere; text-transform:none; letter-spacing:0; }
+  .directory-preview pre { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; min-width:0; }
   .list-pane > .system-kinds { flex:none; display:flex; flex-wrap:wrap; gap:6px; padding:8px 12px; border-bottom:1px solid var(--line-soft); }
   .system-kinds button { min-height:28px; padding:0 8px; border:1px solid var(--line-soft); border-radius:4px; background:var(--chrome); color:var(--muted); cursor:pointer; font-size:11px; }
   .system-kinds button[aria-pressed="true"] { color:var(--blue); border-color:var(--line); background:var(--surface-2); }
@@ -546,6 +566,10 @@
     .header-context { position:relative; flex:1 1 100%; }
     .device-picker { position:static; }
     .device-picker .device-menu { left:0; right:0; width:auto; max-width:none; }
+    .app-directory { padding:14px; }
+    .directory-workspace { grid-template-columns:minmax(0,1fr); }
+    .directory-preview { border-left:0; border-top:1px solid var(--line-soft); }
+    .directory-tools .directory-path { flex-basis:100%; }
     .header-actions { position:relative; flex:1 1 100%; justify-content:space-between; }
     .app-context { position:static; }
     .app-context .popover { left:0; right:0; width:auto; max-width:none; }
@@ -720,16 +744,29 @@
 
   <!-- APP 目录和文件内容独立于已上报的文件读写事件。 -->
   <div class="panel" id="p-files">
-    <section class="record-library" aria-label="APP 目录">
-      <div class="record-library-inner">
+    <section class="app-directory" aria-label="APP 文件浏览器">
+      <div class="app-directory-inner">
         <h2>文件 · APP 目录</h2>
-        <p class="set-lead">这里查看选定设备上的 APP 目录和文件内容。文件读写事件在「系统」。</p>
-        <dl class="set-meta">
-          <div><dt>设备</dt><dd id="directoryDevice">未选择设备</dd></div>
-          <div><dt>APP</dt><dd id="directoryApp">未选择 APP</dd></div>
-        </dl>
-        <p class="empty" id="directoryState" role="status">正在读取查看范围…</p>
-        <button type="button" class="compact-action" id="viewFileActivity">在系统中查看文件读写</button>
+        <p class="set-lead"><strong id="directoryDevice">未选择设备</strong> · <strong id="directoryApp">未选择 APP</strong></p>
+        <div class="directory-tools">
+          <nav class="directory-path" id="appDirectoryPath" aria-label="当前文件目录"></nav>
+          <button type="button" class="compact-action" id="appDirectoryRefresh" disabled>刷新目录</button>
+          <button type="button" class="compact-action" id="viewFileActivity">在系统中查看文件读写</button>
+        </div>
+        <p class="set-status" id="directoryState" role="status">正在读取查看范围…</p>
+        <div class="directory-workspace" id="appDirectoryWorkspace" hidden>
+          <div class="directory-list">
+            <table class="directory-list-table" aria-label="APP 文件和目录">
+              <thead><tr><th>名称</th><th>大小</th><th>修改时间</th></tr></thead>
+              <tbody id="appDirectoryEntries"></tbody>
+            </table>
+          </div>
+          <section class="directory-preview" aria-label="文件预览">
+            <h3 id="appPreviewTitle">文件预览</h3>
+            <p id="appPreviewStatus" class="set-status" role="status">选择文件后预览文本内容。</p>
+            <pre id="appPreviewText" hidden></pre>
+          </section>
+        </div>
       </div>
     </section>
     <div class="files-workspace workspace-hidden" hidden>
@@ -758,8 +795,9 @@
   <div class="panel" id="p-dump">
     <section class="record-library" aria-label="dump 产物记录">
       <div class="record-library-inner">
-        <h2>dump · 产物记录</h2>
-        <p class="set-lead">仅查看当前 APP 会话已上报的产物信息；打开此页不会发起设备操作。</p>
+        <h2>dump · 运行时产物</h2>
+        <p class="set-lead">查看当前会话已登记的 DEX、SO 等运行时产物。这不是 APP 目录或日志导出。</p>
+        <p class="set-status">此连接仅能查看已登记产物，不能发起 dump。</p>
         <p class="empty" id="artifactEmpty">正在读取当前会话的产物记录…</p>
         <table class="dump-table" id="artifactTable" hidden>
           <thead><tr><th>时间</th><th>类型</th><th>名称</th><th>大小</th><th>来源会话</th></tr></thead>
@@ -1913,20 +1951,123 @@ function emptyCapText(key){
   return '当前会话尚未上报'+label+'记录。';
 }
 
+let appDirectoryView={scope:'',path:'',state:'idle',entries:[],limited:false,message:'',listVersion:0,preview:null};
+let directorySequence=0;
+function hasAppDirectory(device,pkg){
+  return !!pkg&&device?.kind==='local'&&device.online&&device.appFiles===true;
+}
 function appDirectoryStatus(device,pkg){
   if(!device) return '先在顶栏选择设备。';
   if(!device.online) return '设备未连接，未读取 APP 目录。';
   if(!pkg) return '先选择要查看目录的 APP。';
   if(device.kind==='legacy') return '无法核验此 APP 的设备归属，未读取目录。';
+  if(hasAppDirectory(device,pkg)) return '仅浏览经过授权的 APP files 目录。';
   if(device.kind==='local') return '本次 USB 观测连接未接入目录读取。目录内容未知。';
   return '当前连接未提供此 APP 的目录读取入口。目录内容未知。';
 }
 function renderAppDirectory(){
-  const device=currentDevice(), pkg=selectedPackage();
+  const device=currentDevice(), pkg=selectedPackage(), scope=appScopeKey();
+  if(appDirectoryView.scope!==scope){
+    appDirectoryView={scope,path:'',state:'idle',entries:[],limited:false,message:'',listVersion:++directorySequence,preview:null};
+  }
+  const view=appDirectoryView, ready=hasAppDirectory(device,pkg);
   document.getElementById('directoryDevice').textContent=device?.name||'未选择设备';
   document.getElementById('directoryApp').textContent=pkg||'未选择 APP';
-  document.getElementById('directoryState').textContent=appDirectoryStatus(device,pkg);
   document.getElementById('viewFileActivity').disabled=!pkg;
+  document.getElementById('appDirectoryRefresh').disabled=!ready||view.state==='loading';
+  document.getElementById('appDirectoryWorkspace').hidden=!ready;
+  const path=document.getElementById('appDirectoryPath');
+  path.hidden=!ready;
+  path.style.display=ready?'':'none';
+  const note=document.getElementById('directoryState');
+  note.textContent=!ready?appDirectoryStatus(device,pkg):
+    view.state==='loading'?'正在读取 APP 目录…':
+    view.state==='error'?view.message:
+    view.state==='ready'?(view.entries.length?(view.entries.length+' 项'+(view.limited?' · 仅显示首批':'')+' · 只读'):'此目录为空。'):
+      appDirectoryStatus(device,pkg);
+  if(!ready) return;
+  const entries=document.getElementById('appDirectoryEntries');
+  const key=String(view.listVersion);
+  if(entries.dataset.version!==key){
+    entries.dataset.version=key;
+    const parts=view.path?view.path.split('/'):[];
+    const crumbs=['files',...parts].map((name,index)=>{
+      const button=document.createElement('button');
+      button.type='button'; button.className='directory-crumb'; button.textContent=name;
+      button.dataset.path=parts.slice(0,index).join('/');
+      if(index===parts.length){ button.disabled=true; button.setAttribute('aria-current','location'); }
+      return button;
+    });
+    path.replaceChildren(...crumbs.flatMap((button,index)=>index?[document.createTextNode('›'),button]:[button]));
+    entries.replaceChildren(...view.entries.map(entry=>{
+      const row=document.createElement('tr'), name=document.createElement('td'), size=document.createElement('td'), time=document.createElement('td');
+      const button=document.createElement('button');
+      button.type='button'; button.className='directory-entry';
+      button.dataset.directory=String(entry.type==='directory');
+      button.dataset.file=entry.name;
+      button.textContent=entry.name+(entry.type==='directory'?'/':'');
+      name.append(button);
+      size.textContent=entry.size==null?'—':fmtSize(entry.size);
+      time.textContent=Number.isFinite(entry.modifiedAt)?new Date(entry.modifiedAt).toLocaleString():'—';
+      row.append(name,size,time);
+      return row;
+    }));
+  }
+  const preview=view.preview, text=document.getElementById('appPreviewText');
+  document.getElementById('appPreviewTitle').textContent=preview?.name||'文件预览';
+  document.getElementById('appPreviewStatus').textContent=preview?.message||'选择文件后预览文本内容。';
+  text.hidden=typeof preview?.text!=='string';
+  text.textContent=preview?.text??'';
+  if(view.state==='idle'&&document.getElementById('p-files').classList.contains('active')) void loadAppDirectory('');
+}
+async function queryOwnedAppFile(action,path,packageName){
+  const query=new URLSearchParams({action,path});
+  const response=await fetch('/api/observer/app-files?'+query,{signal:AbortSignal.timeout(14000)});
+  const payload=await response.json();
+  if(!response.ok||payload?.ok!==true) throw Error(typeof payload?.error==='string'?payload.error:'读取 APP 文件失败。');
+  if(payload.package!==packageName||payload.path!==path) throw Error('文件结果不属于当前 APP 或目录。');
+  return payload;
+}
+async function loadAppDirectory(path){
+  const pkg=selectedPackage(), scope=appScopeKey();
+  if(!hasAppDirectory(currentDevice(),pkg)) return;
+  const view={scope,path,state:'loading',entries:[],limited:false,message:'',listVersion:++directorySequence,preview:null};
+  appDirectoryView=view;
+  renderAppDirectory();
+  try{
+    const data=await queryOwnedAppFile('list',path,pkg);
+    if(appDirectoryView!==view||appScopeKey()!==scope) return;
+    if(!Array.isArray(data.entries)) throw Error('目录列表格式无效。');
+    view.entries=data.entries.filter(e=>typeof e?.name==='string'&&e.name&&!e.name.includes('/')&&['directory','file'].includes(e.type));
+    view.limited=data.limited===true;
+    view.state='ready';
+  }catch(e){
+    if(appDirectoryView!==view||appScopeKey()!==scope) return;
+    view.state='error'; view.message=e?.message||'读取目录失败。';
+  }
+  view.listVersion=++directorySequence;
+  renderAppDirectory();
+}
+async function selectAppDirectoryEntry(name){
+  const view=appDirectoryView,pkg=selectedPackage();
+  if(view.scope!==appScopeKey()||view.state!=='ready'||!hasAppDirectory(currentDevice(),pkg)) return;
+  const entry=view.entries.find(item=>item.name===name);
+  if(!entry) return;
+  const path=[view.path,name].filter(Boolean).join('/');
+  if(entry.type==='directory'){ await loadAppDirectory(path); return; }
+  const preview={name,message:'正在读取文本…'};
+  view.preview=preview;
+  renderAppDirectory();
+  try{
+    const data=await queryOwnedAppFile('preview',path,pkg);
+    if(appDirectoryView!==view||view.preview!==preview||appScopeKey()!==view.scope) return;
+    if(typeof data.text!=='string') throw Error('文件不是可预览文本。');
+    view.preview={name,text:data.text,message:data.truncated?'仅预览前 32 KiB。':fmtSize(entry.size||0)+' · 只读'};
+  }catch(e){
+    if(appDirectoryView!==view||view.preview!==preview||appScopeKey()!==view.scope) return;
+    view.preview={name,message:e?.message||'文件预览失败。'};
+  }
+  renderAppDirectory();
 }
 
 // ---- 文件浏览器：沙盒目录按包名读，不看进程在不在 ----
@@ -2465,7 +2606,7 @@ function panelDeviceCatalog(data){
   if(data?.ok!==true||!Array.isArray(data.devices)) return [];
   if(data.localUsb){
     const model=typeof data.localUsb.model==='string'?data.localUsb.model.trim().slice(0,64):'';
-    return [{key:'local',kind:'local',name:model||'USB 设备',link:'USB',online:data.localUsb.online===true}];
+    return [{key:'local',kind:'local',name:model||'USB 设备',link:'USB',online:data.localUsb.online===true,appFiles:data.localUsb.appFiles===true}];
   }
   const catalog=new Map();
   for(const record of data.devices){
@@ -2482,7 +2623,7 @@ function panelDeviceCatalog(data){
     link:data.demo===true?'非真机':'设备归属未核验',online:true,demo:data.demo===true}];
 }
 function panelDeviceStamp(device){
-  return device ? JSON.stringify([device.key,device.online,device.connectionId,device.boot]) : '';
+  return device ? JSON.stringify([device.key,device.online,device.connectionId,device.boot,device.appFiles]) : '';
 }
 function panelAppRoster(inventory,scope){
   const isPackage=name=>typeof name==='string'&&name.length<=240&&/^[\w]+(?:\.[\w]+)+$/.test(name);
@@ -2880,6 +3021,17 @@ document.getElementById('systemKinds').addEventListener('click',e=>{
 document.getElementById('viewFileActivity').addEventListener('click',()=>{
   document.querySelector('#nav [data-panel="p-system"]').click();
   chooseSystemKind('file');
+});
+document.getElementById('appDirectoryPath').addEventListener('click',e=>{
+  const path=e.target.closest('button[data-path]')?.dataset.path;
+  if(typeof path==='string') void loadAppDirectory(path);
+});
+document.getElementById('appDirectoryRefresh').addEventListener('click',()=>{
+  void loadAppDirectory(appDirectoryView.path);
+});
+document.getElementById('appDirectoryEntries').addEventListener('click',e=>{
+  const file=e.target.closest('button[data-file]')?.dataset.file;
+  if(file) void selectAppDirectoryEntry(file);
 });
 document.getElementById('appMenu').addEventListener('click', e=>{
   const btn=e.target.closest('[data-pkg]');

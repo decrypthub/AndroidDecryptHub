@@ -9,6 +9,7 @@ export interface LocalObserver {
   package: string;
   pid: number;
   model: string;
+  ownFilesSerial?: string;
 }
 
 function readLocalObserver(): LocalObserver | null {
@@ -40,11 +41,13 @@ function readLocalObserver(): LocalObserver | null {
   const m = device('reverse', '--list').split(/\r?\n/)
     .some(line => line.trim().split(/\s+/).slice(-2).join(' ') === port + ' ' + port);
   if (!m) throw Error('Expected the existing matching USB reverse; no routes were changed');
-  return { package: pkg, pid, model: model.slice(0, 64) };
+  const ownFilesSerial = process.env.ADH_OBSERVE_OWN_FILES === '1' ? serial : undefined;
+  return { package: pkg, pid, model: model.slice(0, 64), ownFilesSerial };
 }
 
 export const localObserver = readLocalObserver();
 export const localObserverHost = '127.0.0.1:' + HTTP_PORT;
+export const OWN_APP_FILES_ROUTE = '/api/observer/app-files';
 
 export function acceptsLocalHello(observer: LocalObserver, message: {
   t?: string; package?: string; pid?: number; entry?: string;
@@ -61,12 +64,18 @@ const APP_READ_ROUTES = new Set([
   '/api/captures', '/api/events', '/api/http/exchanges', '/api/detect/summary',
 ]);
 
-/** No operator endpoints, file/memory reads, or mutation routes in local observation mode. */
+/** No operator endpoints or mutations. The optional App directory uses only that debug App's UID. */
 export function localViewAllows(observer: LocalObserver, method: string | undefined, url: URL): boolean {
   if (method !== 'GET') return false;
   const path = url.pathname;
   if (VIEW_ROUTES.has(path) || path === '/' + observer.package || /^\/api\/captures\/[1-9]\d*$/.test(path)) return true;
   if (path === '/api/devices') return url.searchParams.get('action') === 'list';
+  if (path === OWN_APP_FILES_ROUTE) {
+    const query=url.searchParams;
+    return !!observer.ownFilesSerial && query.getAll('action').length===1 &&
+      (query.get('action')==='list'||query.get('action')==='preview') &&
+      query.getAll('path').length<=1 && [...query.keys()].every(k=>k==='action'||k==='path');
+  }
   return APP_READ_ROUTES.has(path) && url.searchParams.getAll('package').length === 1 &&
     url.searchParams.get('package') === observer.package;
 }
