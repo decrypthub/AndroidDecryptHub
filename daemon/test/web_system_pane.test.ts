@@ -110,5 +110,9 @@ test('the device display distinguishes verified connections, missing attribution
   assert.deepEqual(summarize({ok:true,devices:[{...peer,connections:[{online:true,identityVerified:false}]}]}),
     {name:'无在线设备',link:'有登记记录'});
   assert.deepEqual(summarize({ok:true,demo:true,devices:[]}),{name:'演示设备',link:'非真机',demo:true});
+  assert.deepEqual(summarize({ok:true,devices:[],localUsb:{model:'甲型测试设备',online:true}}),
+    {name:'甲型测试设备',link:'USB · 只读',local:true});
+  assert.deepEqual(summarize({ok:true,devices:[],localUsb:{model:'甲型测试设备',online:false}}),
+    {name:'等待 USB 会话',link:'未连接',local:true});
   assert.deepEqual(summarize(null),{name:'设备状态未知',link:'读取失败'});
 });

@@ -17,6 +17,7 @@ import { handleMcp, MCP_TOOLS } from '../mcp.ts';
 import { scopedApps, mergeScope, readScopeFile, writeScopePackages } from '../scope_list.ts';
 import { analyzePackage } from '../app_analyze.ts';
 import { listCaptureArmProtected } from '../service.ts';
+import { localObserver } from '../local_observer.ts';
 import {
   broadcast, captureHealth, capturePackage, captures, captureSettingsForPackage, captureTimers,
   clearCaptureStore, clearPackageCaptureStore, configStats, cryptoIdentify, dumps, eventPackage,
@@ -53,6 +54,16 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
     { path:'/hook-plans-panel.js',handler:servePublic('hook-plans-panel.js','text/javascript; charset=utf-8') },
     { path:'/operations.js',handler:servePublic('operations.js','text/javascript; charset=utf-8') },
     { path: '/api/apps', handler: async () => {
+      if (localObserver) {
+        const pkg = localObserver.package;
+        const online = [...sessions.values()].some(s => s.online && s.package === pkg && s.pid === localObserver.pid);
+        return send(200, {
+          apps: online ? [{ package: pkg, label: pkg }] : [],
+          error: online ? null : '正在等待当前 USB 应用的会话',
+          capture: false,
+          localObservation: true,
+        });
+      }
       const scope = await scopedApps();
       return send(200, {
         apps: scope.apps, error: scope.error, capture: settings.capture.enabled,

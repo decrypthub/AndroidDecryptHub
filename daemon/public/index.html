@@ -102,6 +102,7 @@
   #nav { display:flex; gap:0; height:51px; padding:0 12px; background:var(--bg); border-bottom:1px solid var(--line-soft); overflow-x:auto; overflow-y:hidden; scrollbar-width:none; }
   #nav button { position:relative; background:none; border:none; color:var(--muted); padding:0 16px; font-size:12px; cursor:pointer; border-bottom:2px solid transparent; white-space:nowrap; }
   #nav button:hover { color:var(--ink); background:transparent; }
+  #nav button:disabled,.set-nav button:disabled { color:var(--muted); opacity:.5; cursor:default; }
   #nav button.active { color:var(--ink); background:transparent; border-bottom-color:var(--blue); font-weight:600; }
   #nav button .n { display:inline; min-width:0; height:auto; margin-left:6px; color:var(--muted); background:transparent; font-size:11px; font-variant-numeric:tabular-nums; }
   #nav button .n:empty { display:none; }
@@ -582,7 +583,7 @@
     <div class="toolbar-search capture-toolbar">
       <label class="search-field">
         <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5"/><path d="m12.2 12.2 4.2 4.2"/></svg>
-        <input id="tb-q" type="search" aria-label="搜索当前类别记录" placeholder="搜索算法、操作、预览…">
+        <input id="tb-q" type="search" aria-label="搜索当前类别记录" placeholder="搜索序号、算法、操作、预览…">
       </label>
       <button type="button" class="filter-toggle" id="filterToggleBtn" aria-expanded="false" aria-controls="advancedFilters">筛选<span class="filter-badge" id="filterBadge"></span><span class="menu-chevron" aria-hidden="true">⌄</span></button>
     </div>
@@ -930,6 +931,7 @@ window.fetch=async function(input,init){ const method=(init&&init.method)||'GET'
 
 const nav=document.getElementById('nav');
 function mkTab([id,label,key],active){ const b=document.createElement('button');
+  b.dataset.panel=id;
   b.innerHTML='<svg class="module-icon" viewBox="0 0 20 20" aria-hidden="true">'+MODULE_ICONS[id]+'</svg>'+label+(key?` <span class="n" id="n-${key}"></span>`:'');
   if(active)b.className='active';
   b.onclick=()=>{ document.querySelectorAll('#nav button').forEach(x=>x.classList.remove('active')); b.classList.add('active');
@@ -1202,7 +1204,7 @@ function visibleForHooks(records){
 }
 function applyFilter(p){ let items=visibleForHooks(capItems.filter(c=>p.cats.includes(c.category)&&belongsToApp(c)&&listedCap(c)));
   const f=p.filter;
-  if(f.q){ const q=f.q.toLowerCase(); items=items.filter(c=>{ const v=c.view||{};
+  if(f.q){ const q=f.q.toLowerCase(); items=items.filter(c=>{ if(/^#\d+$/.test(q)) return String(c.id)===q.slice(1); const v=c.view||{};
     return ((c.algo||'')+' '+(c.op||'')+' '+(c.preview||'')+' '+(v.title||'')+' '+(v.hook||'')+' '+(v.direction||'')).toLowerCase().includes(q); }); }
   if(f.min!=null) items=items.filter(c=>c.inl>=f.min);
   if(f.max!=null) items=items.filter(c=>c.inl<=f.max);
@@ -1646,7 +1648,8 @@ function renderCaptureDetail(detailId,c){ const d=document.getElementById(detail
   renderRecordDetail(detailId,'capture:'+c.id,h,views);
 }
 async function capLoad(){ const pkg=selectedPackage(); if(!pkg) return;
-  try{ const r=await (await fetch('/api/captures?since='+capMaxId+pkgQ())).json();
+  const initialLimit=localObservation&&capMaxId===0?'&limit='+CAP_BUFFER_LIMIT:'';
+  try{ const r=await (await fetch('/api/captures?since='+capMaxId+pkgQ()+initialLimit)).json();
     if(selectedPackage()!==pkg) return;
     (r.captures||[]).forEach(c=>{ if(!c.package) c.package=pkg; capPush(c); });
   }catch(e){}
@@ -1745,6 +1748,7 @@ function updateCapStatePill(){
   const el=document.getElementById('capStatePill'); if(!el) return;
   const pkg=selectedPackage();
   if(!pkg){ el.hidden=true; el.textContent=''; return; }
+  if(localObservation){ el.hidden=false; el.className='cap-state-pill'; el.textContent='只读观测'; el.title='不修改手机采集策略'; return; }
   if(!captureOn){
     el.hidden=false; el.className='cap-state-pill off';
     el.textContent='算法未选'; el.title='';
@@ -2240,6 +2244,13 @@ async function readPanelJson(path){
 function describePanelDevices(data){
   if(data?.ok!==true || !Array.isArray(data.devices)) return {name:'设备状态未知',link:'读取失败'};
   if(data.demo===true) return {name:'演示设备',link:'非真机',demo:true};
+  if(data.localUsb){
+    const model=data.localUsb.model;
+    if(data.localUsb.online===true && typeof model==='string' && model.trim()){
+      return {name:model.trim().slice(0,64),link:'USB · 只读',local:true};
+    }
+    return {name:'等待 USB 会话',link:'未连接',local:true};
+  }
   const connected=[];
   for(const device of data.devices){
     if(device?.online!==true || !Array.isArray(device.connections)) continue;
@@ -2259,7 +2270,8 @@ function renderPanelDeviceContext(context){
   document.getElementById('deviceTitle').textContent=context.name;
   document.getElementById('deviceLink').textContent=context.link;
   document.getElementById('setDeviceStatus').textContent=[context.name,context.link].filter(Boolean).join(' · ');
-  document.getElementById('appAffiliation').textContent=context.demo?'示例 APP · 无真机会话':'当前 Host 会话 · 设备归属未核验';
+  document.getElementById('appAffiliation').textContent=context.demo?'示例 APP · 无真机会话':
+    context.local?'选定的本地 USB APP · 只读':'当前 Host 会话 · 设备归属未核验';
 }
 let readingPanelDevices=false;
 async function refreshPanelDevices(){
@@ -2381,7 +2393,18 @@ function escapeHtml(s){ return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':
 
 // ---- agents / 应用栏 / WS ----
 const agents=new Map();
-let serverApps=[]; let scopeNote=''; let lastFilterPkg=''; let captureOn=false;
+let serverApps=[]; let scopeNote=''; let lastFilterPkg=''; let captureOn=false; let localObservation=false;
+function updateObservationMode(readOnly){
+  if(readOnly===localObservation) return;
+  localObservation=readOnly;
+  const controls=document.querySelectorAll('#setCaptureTab, #nav [data-panel="p-files"], #nav [data-panel="p-dump"]');
+  for(const button of controls){
+    button.disabled=readOnly;
+    if(readOnly) button.title='当前为 USB 只读观测，不操作设备';
+    else button.title=button.getAttribute('aria-label')||'';
+  }
+  if(readOnly && settingsDialog.open && !capturePage.hidden) showSettingsPage('hooks');
+}
 let serverCaptureDefault=false, serverCaptureByPackage={}, serverCaptureVersion=0;
 function appOnline(pkg){ return sessionsOf(pkg).some(a=>a.online); }
 function renderSessions(){
@@ -2456,6 +2479,7 @@ async function refreshApps(){
   const captureVersion=serverCaptureVersion;
   try{
     const r=await (await fetch('/api/apps')).json();
+    updateObservationMode(r.localObservation===true);
     if(Array.isArray(r.apps)) serverApps=r.apps;
     if(Array.isArray(r.unpackProtected)){
       serverUnpackProtected=r.unpackProtected;
