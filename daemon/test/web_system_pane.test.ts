@@ -57,19 +57,44 @@ test('the page script still parses as a classic script', () => {
 
 test('device and APP context are separate and do not claim a legacy session binding', () => {
   const header=html.match(/<header>([\s\S]*?)<\/header>/)?.[1] ?? '';
-  const app=html.match(/<section class="app-context"[^>]*>([\s\S]*?)<\/section>/)?.[1] ?? '';
-  assert.match(header,/id="deviceContext"/);
-  assert.doesNotMatch(header,/id="appBtn"|id="capStatePill"/);
+  const connection=header.match(/class="header-context">([\s\S]*?)class="header-actions">/)?.[1] ?? '';
+  const app=header.match(/<section class="app-context"[^>]*>([\s\S]*?)<\/section>/)?.[1] ?? '';
+  assert.match(connection,/id="deviceContext"/);
+  assert.doesNotMatch(connection,/id="appBtn"|id="capStatePill"/);
   assert.match(app,/id="appBtn"/);
+  assert.match(app,/id="appChoices"[\s\S]*?当前 APP 会话[\s\S]*?id="sessRows"/);
   assert.match(app,/id="capStatePill"/);
   assert.match(app,/设备归属未核验/);
+  assert.doesNotMatch(html,/id="processBtn"|id="processPopover"/);
+  assert.match(html,/const menu=document\.getElementById\('appChoices'\)/);
   assert.match(html,/readPanelJson\('\/api\/devices\?action=list'\)/);
 });
 
-test('capture workbench places search, APP context and list tools in one toolbar', () => {
-  assert.match(html,/<div class="filters" id="toolbar">[\s\S]*?id="tb-q"[\s\S]*?id="appContext"[\s\S]*?class="toolbar-actions capture-toolbar"/);
-  assert.match(declared('.filters:not(.show) .capture-toolbar,.filters:not(.show) .advanced-filters'),/display:none/);
+test('the narrow capture toolbar only filters the list and leaves APP scope in the header', () => {
+  const toolbar=html.substring(html.indexOf('<div class="filters" id="toolbar">'),html.indexOf('<main>'));
+  assert.match(toolbar,/id="tb-q"[\s\S]*?class="toolbar-actions capture-toolbar"/);
+  assert.doesNotMatch(toolbar,/id="appContext"|id="appBtn"/);
+  assert.match(declared('.filters'),/display:none/);
+  assert.match(declared('.filters.show'),/display:flex/);
   assert.equal([...html.matchAll(/data-capture-back="(?:cc|sy|nt)"/g)].length,3);
+});
+
+test('record detail defaults to data, keeps an active view on refresh and resets on a new record', () => {
+  const fn=html.match(/(function renderRecordDetail\([\s\S]*?\r?\n})\r?\nfunction selectRecordView/)?.[1];
+  assert.ok(fn);
+  const detail={dataset:{detailRecord:'',detailView:''},innerHTML:''};
+  const render=vm.runInNewContext('('+fn+')',{document:{getElementById:()=>detail}});
+  const views=[['data','数据详情','示例内容'],['event','事件信息','示例字段']];
+  render('cc-detail','capture:1','',views);
+  assert.equal(detail.dataset.detailView,'data');
+  assert.match(detail.innerHTML,/data-record-view="data"[^>]*aria-selected="true"/);
+  assert.match(detail.innerHTML,/data-record-panel="event"[^>]*hidden>示例字段/);
+  assert.doesNotMatch(detail.innerHTML,/data-record-view="stack"/);
+  detail.dataset.detailView='event';
+  render('cc-detail','capture:1','',views);
+  assert.match(detail.innerHTML,/data-record-view="event"[^>]*aria-selected="true"/);
+  render('cc-detail','capture:2','',views);
+  assert.equal(detail.dataset.detailView,'data');
 });
 
 test('the device display distinguishes verified connections, missing attribution data and a demo', () => {
