@@ -75,7 +75,7 @@
       .sort((a,b) => b.latest - a.latest || b.count - a.count || a.name.localeCompare(b.name));
   }
 
-  const hookGroups = Object.freeze({crypto:'加解密', system:'系统', file:'文件', net:'网络'});
+  const hookGroups = Object.freeze({crypto:'加解密', system:'系统调用', file:'文件读写', net:'网络'});
   const symbol = value => typeof value === 'string' && /^[\p{L}\p{N}_.$:@+<>-]{1,120}$/u.test(value) ? value : '';
   const sourceOf = record => record.source === 'java' || record.source === 'native' ? record.source : '';
   const javaIdentifier = /^[\p{L}_$][\p{L}\p{N}_$]*$/u;

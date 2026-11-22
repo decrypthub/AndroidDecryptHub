@@ -32,7 +32,7 @@ test('the detect summary opts out of the flex:1 the list needs', () => {
 
 test('#sy-radar still sits above the banner and the list inside .list-pane', () => {
   assert.match(html,
-    /<div class="list-pane">\s*<div class="capture-list-head">[\s\S]{0,160}?<\/div>\s*<div id="sy-radar"[^>]*>系统检测<\/div>\s*<div class="new-banner" id="sy-banner">[\s\S]{0,400}?<div id="sy-list"[^>]*><\/div>/);
+    /<div class="list-pane">\s*<div class="capture-list-head">[\s\S]{0,160}?<\/div>\s*<div id="sy-radar"[^>]*>系统检测<\/div>\s*<div id="systemKinds"[\s\S]{0,510}?<\/div>\s*<div class="new-banner" id="sy-banner">[\s\S]{0,400}?<div id="sy-list"[^>]*><\/div>/);
 });
 
 test('the summary says what it is, and keeps the details in its tooltip', () => {
@@ -76,7 +76,7 @@ test('the narrow capture toolbar only filters the list and leaves APP scope in t
   assert.doesNotMatch(toolbar,/id="appContext"|id="appBtn"/);
   assert.match(declared('.filters'),/display:none/);
   assert.match(declared('.filters.show'),/display:flex/);
-  assert.equal([...html.matchAll(/data-capture-back="(?:cc|sy|nt|fl)"/g)].length,4);
+  assert.equal([...html.matchAll(/data-capture-back="(?:cc|sy|nt)"/g)].length,3);
 });
 
 test('record detail defaults to data, keeps an active view on refresh and resets on a new record', () => {
@@ -161,15 +161,36 @@ test('late app and scope results do not bind to the next selected device', async
   assert.equal(renders,0);
 });
 
-test('file activity and artifact views open without automatically listing device files or issuing a device action', () => {
+test('file read/write events belong to system; files is a directory view, not an activity list', () => {
   const tab=html.match(/function mkTab\([\s\S]*?\r?\nTABS_MAIN\.forEach/)?.[0]??'';
   assert.match(tab,/loadArtifactLedger\(\)/);
   assert.doesNotMatch(tab,/loadInventory\(|filesInit\(|runOneClickUnpack\(/);
-  assert.match(html,/makeCapPanel\('sy',\['system'\]\)/);
-  assert.match(html,/makeCapPanel\('fl',\['file'\]\)/);
+  assert.match(html,/makeCapPanel\('sy',\['system','file'\]\)/);
+  assert.doesNotMatch(html,/makeCapPanel\('fl'|id="fl-list"/);
+  assert.match(html,/id="systemKinds"[\s\S]{0,450}?data-system-kind="file"[^>]*>文件读写/);
+  assert.match(html,/id="p-files"[\s\S]{0,250}?文件 · APP 目录/);
+  assert.match(html,/id="directoryState" role="status"/);
   assert.match(html,/id="setScopeTab"[^>]*aria-label="分析范围"/);
   assert.match(html,/id="setCaptureTab"[^>]*aria-label="功能与 Hook 状态"/);
   assert.match(html,/id="setHooksTab"[^>]*aria-label="记录显示"/);
+});
+
+test('system type selection and directory availability refer to different data', () => {
+  const kindFn=html.match(/(function matchesPanelKind\([\s\S]*?\r?\n})\r?\nfunction defaultRecordFilter/)?.[1];
+  const dirFn=html.match(/(function appDirectoryStatus\([\s\S]*?\r?\n})\r?\nfunction renderAppDirectory/)?.[1];
+  assert.ok(kindFn&&dirFn);
+  const matches=vm.runInNewContext('('+kindFn+')');
+  const directory=vm.runInNewContext('('+dirFn+')');
+  const system={key:'sy',cats:['system','file'],filter:{kind:'all'}};
+  assert.equal(matches(system,'file'),true);
+  assert.equal(matches(system,'system'),true);
+  assert.equal(matches(system,'net'),false);
+  system.filter.kind='file';
+  assert.equal(matches(system,'system'),false);
+  assert.equal(matches(system,'file'),true);
+  assert.match(directory({kind:'local',online:true},'com.example.a'),/未接入目录读取.*目录内容未知/);
+  assert.match(directory({kind:'local',online:false},'com.example.a'),/设备未连接/);
+  assert.doesNotMatch(directory({kind:'local',online:true},'com.example.a'),/未上报|空目录/);
 });
 
 test('artifact metadata requires the exact package and a known session', () => {

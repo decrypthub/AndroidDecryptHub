@@ -185,6 +185,9 @@
   .record-library .dump-table { margin-top:16px; }
   .record-library td { overflow-wrap:anywhere; }
   .record-library .empty { border:1px solid var(--line-soft); border-radius:6px; margin-top:16px; }
+  .list-pane > .system-kinds { flex:none; display:flex; flex-wrap:wrap; gap:6px; padding:8px 12px; border-bottom:1px solid var(--line-soft); }
+  .system-kinds button { min-height:28px; padding:0 8px; border:1px solid var(--line-soft); border-radius:4px; background:var(--chrome); color:var(--muted); cursor:pointer; font-size:11px; }
+  .system-kinds button[aria-pressed="true"] { color:var(--blue); border-color:var(--line); background:var(--surface-2); }
   .workspace-hidden[hidden] { display:none !important; }
   .capture-workspace .io-section:is(.in-card,.out-card,.kv-card,.raw-card) { padding:12px; border:1px solid var(--line-soft); border-radius:7px; background:var(--bg); overflow:hidden; }
   .capture-workspace .io-section.in-card { border-left-color:var(--blue); }
@@ -671,12 +674,17 @@
     </div>
   </div>
 
-  <!-- 系统（category=system） -->
+  <!-- 系统活动：系统调用及已上报的文件读写事件。 -->
   <div class="panel" id="p-system">
     <div class="workspace capture-workspace" data-capture-key="sy">
       <div class="list-pane">
-        <div class="capture-list-head"><h2>系统 · 事件记录</h2><span id="sy-list-count">0 条</span></div>
+        <div class="capture-list-head"><h2>系统 · 活动记录</h2><span id="sy-list-count">0 条</span></div>
         <div id="sy-radar" class="detect-radar">系统检测</div>
+        <div id="systemKinds" class="system-kinds" role="group" aria-label="系统活动类型">
+          <button type="button" data-system-kind="all" aria-pressed="true">全部活动</button>
+          <button type="button" data-system-kind="system" aria-pressed="false">系统调用</button>
+          <button type="button" data-system-kind="file" aria-pressed="false">文件读写</button>
+        </div>
         <div class="new-banner" id="sy-banner"><span id="sy-banner-text"></span><button type="button" onclick="jumpLatest('sy')">跳到最新</button></div>
         <div id="sy-list" tabindex="0" aria-label="系统记录列表"></div>
         <div class="capture-list-foot"><span id="sy-list-mode">列表刷新中</span><span>最新优先</span></div>
@@ -710,21 +718,20 @@
     </div>
   </div>
 
-  <!-- 文件活动独立于系统。切页不会请求设备目录。 -->
+  <!-- APP 目录和文件内容独立于已上报的文件读写事件。 -->
   <div class="panel" id="p-files">
-    <div class="workspace capture-workspace" data-capture-key="fl">
-      <div class="list-pane">
-        <div class="capture-list-head"><h2>文件 · 活动记录</h2><span id="fl-list-count">0 条</span></div>
-        <div class="new-banner" id="fl-banner"><span id="fl-banner-text"></span><button type="button" onclick="jumpLatest('fl')">跳到最新</button></div>
-        <div id="fl-list" tabindex="0" aria-label="文件活动记录列表"></div>
-        <div class="capture-list-foot"><span id="fl-list-mode">列表刷新中</span><span>仅已上报记录</span></div>
+    <section class="record-library" aria-label="APP 目录">
+      <div class="record-library-inner">
+        <h2>文件 · APP 目录</h2>
+        <p class="set-lead">这里查看选定设备上的 APP 目录和文件内容。文件读写事件在「系统」。</p>
+        <dl class="set-meta">
+          <div><dt>设备</dt><dd id="directoryDevice">未选择设备</dd></div>
+          <div><dt>APP</dt><dd id="directoryApp">未选择 APP</dd></div>
+        </dl>
+        <p class="empty" id="directoryState" role="status">正在读取查看范围…</p>
+        <button type="button" class="compact-action" id="viewFileActivity">在系统中查看文件读写</button>
       </div>
-      <div class="splitter"></div>
-      <section class="capture-detail-shell" aria-label="文件活动详情">
-        <div class="capture-detail-nav"><button type="button" class="compact-action" data-capture-back="fl">‹ 返回列表</button></div>
-        <div id="fl-detail" class="detail-pane"><div class="detail-empty"><strong>文件活动</strong><span>从左侧选择一条已上报的记录。打开此页不会读取设备目录。</span></div></div>
-      </section>
-    </div>
+    </section>
     <div class="files-workspace workspace-hidden" hidden>
       <aside class="list-pane files-list-pane">
         <div class="files-head">
@@ -887,9 +894,9 @@
           <div><dt>设备采集策略</dt><dd id="setPolicyState">未读取</dd></div>
           <div><dt>Hook 生效状态</dt><dd id="setHookApplyState">未上报</dd></div>
           <div><dt>加解密</dt><dd id="setFeature-crypto">—</dd></div>
-          <div><dt>系统</dt><dd id="setFeature-system">—</dd></div>
+          <div><dt>系统调用</dt><dd id="setFeature-system">—</dd></div>
+          <div><dt>文件读写（系统）</dt><dd id="setFeature-file">—</dd></div>
           <div><dt>网络</dt><dd id="setFeature-net">—</dd></div>
-          <div><dt>文件</dt><dd id="setFeature-file">—</dd></div>
           <div><dt>dump</dt><dd id="setFeature-dump">—</dd></div>
         </dl>
         <p class="set-status">仅查看状态；列表筛选在「记录显示」。</p>
@@ -980,8 +987,8 @@
 <script src="/operations.js"></script>
 <script>
 // 顶栏五条主轴：加解密 / 系统 / 网络 / 文件 / Dump（对齐 iOS，不藏专家折叠）。
-const TABS_MAIN=[['p-crypto','加解密','cc'],['p-system','系统','sy'],['p-net','网络','nt'],['p-files','文件','fl'],['p-dump','dump']];
-const CAP_TABS={'p-crypto':'cc','p-system':'sy','p-net':'nt','p-files':'fl'};
+const TABS_MAIN=[['p-crypto','加解密','cc'],['p-system','系统','sy'],['p-net','网络','nt'],['p-files','文件'],['p-dump','dump']];
+const CAP_TABS={'p-crypto':'cc','p-system':'sy','p-net':'nt'};
 const MODULE_ICONS={
   'p-crypto':'<rect x="4" y="8" width="12" height="9" rx="2"/><path d="M7 8V6a3 3 0 0 1 6 0v2m-3 4v2"/>',
   'p-system':'<rect x="4" y="4" width="12" height="12" rx="2"/><rect x="8" y="8" width="4" height="4"/><path d="M7 2v2m6-2v2M7 16v2m6-2v2M2 7h2m-2 6h2m12-6h2m-2 6h2"/>',
@@ -1013,6 +1020,7 @@ function mkTab([id,label,key],active){ const b=document.createElement('button');
     document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active')); document.getElementById(id).classList.add('active');
     onTabSwitch(id);
     if(id==='p-system') scheduleDetect();
+    if(id==='p-files') renderAppDirectory();
     if(id==='p-dump') void loadArtifactLedger(); };
   return b; }
 TABS_MAIN.forEach((t,i)=>nav.appendChild(mkTab(t,i===0)));
@@ -1266,7 +1274,7 @@ function catClass(c){ if(!c) return 'other';
   const a=c.algo||''; if(/AEAD/i.test(a)) return 'aead';
   if(/Hmac|HMAC/i.test(a)) return 'hmac'; if(/MD5|SHA|摘要|Digest/i.test(a)) return 'digest';
   if(/RSA|EC|DSA|非对称/i.test(a)) return 'asym'; return 'sym'; }
-const CATLABEL={digest:'摘要',hmac:'HMAC',sym:'对称',asym:'非对称',aead:'AEAD',file:'文件',sys:'系统',net:'网络',other:'其它'};
+const CATLABEL={digest:'摘要',hmac:'HMAC',sym:'对称',asym:'非对称',aead:'AEAD',file:'文件读写',sys:'系统',net:'网络',other:'其它'};
 const CAT_BY_SEL={0:'digest',1:'hmac',2:'sym',3:'asym',4:'aead'};   // 分类下拉 → catClass
 // HexDump：16 字节/行  偏移: 十六进制  |ascii|
 function hexdump(hex){ hex=hex||''; let out='';
@@ -1299,7 +1307,12 @@ function visibleForHooks(records){
   const hidden=hookDisplay?.hidden(recordPreferenceKey());
   return hidden?.size ? records.filter(record=>algorithmObservations.recordVisible(record,hidden)) : records;
 }
-function applyFilter(p){ let items=visibleForHooks(capItems.filter(c=>p.cats.includes(c.category)&&belongsToApp(c)&&listedCap(c)));
+const SYSTEM_KIND_LABELS={all:'系统调用或文件读写',system:'系统调用',file:'文件读写'};
+function matchesPanelKind(panel,type){
+  return panel.cats.includes(type)&&(panel.key!=='sy'||panel.filter.kind==='all'||type===panel.filter.kind);
+}
+function defaultRecordFilter(){ return {q:'',min:null,max:null,cat:-2,paused:false,kind:'all'}; }
+function applyFilter(p){ let items=visibleForHooks(capItems.filter(c=>matchesPanelKind(p,c.category)&&belongsToApp(c)&&listedCap(c)));
   const f=p.filter;
   if(f.q){ const q=f.q.toLowerCase(); items=items.filter(c=>{ if(/^#\d+$/.test(q)) return String(c.id)===q.slice(1); const v=c.view||{};
     return ((c.algo||'')+' '+(c.op||'')+' '+(c.preview||'')+' '+(v.title||'')+' '+(v.hook||'')+' '+(v.direction||'')).toLowerCase().includes(q); }); }
@@ -1459,9 +1472,11 @@ function captureDetailNotice(key,title,description=''){
   detail.replaceChildren(state);
 }
 function makeCapPanel(key,cats){
-  const p={key,cats,sel:0,filter:{q:'',min:null,max:null,cat:-2,paused:false},lastShown:0};
+  const p={key,cats,sel:0,filter:defaultRecordFilter(),lastShown:0};
   p.render=function(force){ const box=document.getElementById(key+'-list'); if(!box) return;
-    const total=capItems.filter(c=>cats.includes(c.category)&&belongsToApp(c)&&listedCap(c)).length;
+    const scoped=capItems.filter(c=>cats.includes(c.category)&&belongsToApp(c)&&listedCap(c));
+    const total=scoped.length;
+    const kindTotal=key==='sy'?scoped.filter(c=>matchesPanelKind(p,c.category)).length:total;
     const badge=document.getElementById('n-'+key); if(badge) badge.textContent=total||'';
     const items=applyFilter(p);
     if(!force && (p.filter.paused || box.scrollTop>48)){
@@ -1469,10 +1484,10 @@ function makeCapPanel(key,cats){
       showBanner(key,n); if(activeCapKey===key) updateCount(box.querySelectorAll('.row').length,total); return; }
     p.lastShown=items.length; showBanner(key,0);
     const shown=items.slice(-capDisplayCap).slice().reverse();
-    box.innerHTML=shown.map(c=>rowHtml(key,p.sel,c)).join('')||'<div class="empty">'+(total?'没有符合筛选条件的记录。':escapeHtml(emptyCapText(key)))+'</div>';
+    box.innerHTML=shown.map(c=>rowHtml(key,p.sel,c)).join('')||'<div class="empty">'+(kindTotal?'没有符合筛选条件的记录。':escapeHtml(emptyCapText(key)))+'</div>';
     if(activeCapKey===key) updateCount(shown.length,total); };
   p.select=async function(id){
-    if(!usesHostSessions()||!capItems.some(c=>c.id===id&&belongsToApp(c)&&cats.includes(c.category))) return;
+    if(!usesHostSessions()||!capItems.some(c=>c.id===id&&belongsToApp(c)&&matchesPanelKind(p,c.category))) return;
     const scope=appScopeKey();
     p.sel=id;
     p.render(true);
@@ -1491,9 +1506,8 @@ function makeCapPanel(key,cats){
   CAPPANELS[key]=p; return p;
 }
 makeCapPanel('cc',['crypto']);
-makeCapPanel('sy',['system']);
+makeCapPanel('sy',['system','file']);
 makeCapPanel('nt',['net']);
-makeCapPanel('fl',['file']);
 let detectTimer=0;
 function formatRadar(r){
   if(!r) return '';
@@ -1643,10 +1657,9 @@ function capClearP(key){
   const pkg=selectedPackage();
   const scope=pkg?('当前应用 '+pkg):'全部应用';
   if(!confirm('清空本页列表？（不删磁盘）\n'+scope)) return;
-  const cats=p.cats;
   for(let i=capItems.length-1;i>=0;i--){
     const c=capItems[i];
-    if(!cats.includes(c.category)) continue;
+    if(!matchesPanelKind(p,c.category)) continue;
     if(pkg && c.package && c.package!==pkg) continue;
     if(pkg && !c.package && !belongsToApp(c)) continue;
     capItems.splice(i,1);
@@ -1774,6 +1787,25 @@ function updatePauseBtn(){ const b=document.getElementById('tb-pause'); const p=
   b.classList.toggle('is-paused',p.filter.paused); }
 function updateFilterBadge(){ const p=CAPPANELS[activeCapKey]; const b=document.getElementById('filterBadge'); if(!p||!b) return;
   const f=p.filter; let n=0; if(f.q) n++; if(f.min!=null||f.max!=null) n++; if(p.key==='cc'&&f.cat>=0) n++; b.textContent=n||''; }
+function syncSystemKinds(){
+  for(const btn of document.querySelectorAll('#systemKinds [data-system-kind]')){
+    btn.setAttribute('aria-pressed',String(btn.dataset.systemKind===CAPPANELS.sy.filter.kind));
+  }
+}
+function chooseSystemKind(kind){
+  if(!Object.hasOwn(SYSTEM_KIND_LABELS,kind)) return;
+  const panel=CAPPANELS.sy;
+  panel.filter.kind=kind;
+  const selected=capItems.find(c=>c.id===panel.sel&&belongsToApp(c));
+  if(panel.sel&&(!selected||!matchesPanelKind(panel,selected.category))){
+    panel.sel=0;
+    captureDetailNotice('sy','记录详情','从列表选择一条系统活动。');
+    setCaptureDetailOpen('sy',false);
+  }
+  document.getElementById('sy-list').scrollTop=0;
+  syncSystemKinds();
+  panel.render(true);
+}
 function onTabSwitch(id){ const tb=document.getElementById('toolbar');
   if(CAP_TABS[id]){ activeCapKey=CAP_TABS[id]; tb.classList.add('show'); const f=CAPPANELS[activeCapKey].filter;
     document.getElementById('tb-q').value=f.q||'';
@@ -1781,6 +1813,7 @@ function onTabSwitch(id){ const tb=document.getElementById('toolbar');
     document.getElementById('tb-max').value=f.max==null?'':f.max;
     document.getElementById('tb-cat').value=String(f.cat);
     document.getElementById('catWrap').style.display=(activeCapKey==='cc')?'':'none';
+    if(id==='p-system') syncSystemKinds();
     updatePauseBtn(); updateFilterBadge(); CAPPANELS[activeCapKey].render(true);
   } else tb.classList.remove('show');
   refreshCapUnpackHint();
@@ -1827,7 +1860,7 @@ function capReset(){
   for(const panel of Object.values(CAPPANELS)){
     panel.sel=0;
     panel.detailRev=null;
-    panel.filter={q:'',min:null,max:null,cat:-2,paused:false};
+    panel.filter=defaultRecordFilter();
     captureDetailNotice(panel.key,'记录详情','从列表选择一条记录查看详情。');
     setCaptureDetailOpen(panel.key,false);
     panel.render(true);
@@ -1876,8 +1909,24 @@ function emptyCapText(key){
   if(!selectedPackage()) return '先在顶栏选择当前设备上的 APP。';
   if(!usesHostSessions()) return '此设备未绑定观测会话。不显示设备归属未核验的旧记录。';
   if(!liveSession()) return '当前 APP 没有在线观测会话。';
-  const label={cc:'加解密',sy:'系统',nt:'网络',fl:'文件活动'}[key]||'';
+  const label=key==='sy'?SYSTEM_KIND_LABELS[CAPPANELS.sy.filter.kind]:({cc:'加解密',nt:'网络'}[key]||'');
   return '当前会话尚未上报'+label+'记录。';
+}
+
+function appDirectoryStatus(device,pkg){
+  if(!device) return '先在顶栏选择设备。';
+  if(!device.online) return '设备未连接，未读取 APP 目录。';
+  if(!pkg) return '先选择要查看目录的 APP。';
+  if(device.kind==='legacy') return '无法核验此 APP 的设备归属，未读取目录。';
+  if(device.kind==='local') return '本次 USB 观测连接未接入目录读取。目录内容未知。';
+  return '当前连接未提供此 APP 的目录读取入口。目录内容未知。';
+}
+function renderAppDirectory(){
+  const device=currentDevice(), pkg=selectedPackage();
+  document.getElementById('directoryDevice').textContent=device?.name||'未选择设备';
+  document.getElementById('directoryApp').textContent=pkg||'未选择 APP';
+  document.getElementById('directoryState').textContent=appDirectoryStatus(device,pkg);
+  document.getElementById('viewFileActivity').disabled=!pkg;
 }
 
 // ---- 文件浏览器：沙盒目录按包名读，不看进程在不在 ----
@@ -2711,6 +2760,7 @@ function render(){
     button.setAttribute('aria-current',String(current));
   }
   renderSessions();
+  renderAppDirectory();
   document.getElementById('appAffiliation').textContent=device?.kind==='local'?'选定的本地 USB 会话':
     device?.kind==='device'?(registryScopeError||'查看此设备的范围；不混入 Host 旧会话'):
     device?.kind==='legacy'?'当前 Host 会话 · 设备归属未核验':'未选择设备';
@@ -2823,6 +2873,14 @@ void refreshPanelDevices();
 setInterval(refreshPanelDevices,10000);
 document.getElementById('sessShowOffline').addEventListener('change',renderSessions);
 document.getElementById('appSearch').addEventListener('input',render);
+document.getElementById('systemKinds').addEventListener('click',e=>{
+  const kind=e.target.closest('[data-system-kind]')?.dataset.systemKind;
+  if(kind) chooseSystemKind(kind);
+});
+document.getElementById('viewFileActivity').addEventListener('click',()=>{
+  document.querySelector('#nav [data-panel="p-system"]').click();
+  chooseSystemKind('file');
+});
 document.getElementById('appMenu').addEventListener('click', e=>{
   const btn=e.target.closest('[data-pkg]');
   if(!btn||!appRecords().some(a=>a.package===btn.dataset.pkg)) return;
