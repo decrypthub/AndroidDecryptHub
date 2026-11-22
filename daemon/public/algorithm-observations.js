@@ -28,37 +28,86 @@
     const tag = typeof record?.algo === 'string' ? record.algo.slice(0, 96).replace(/[\s_/-]+/g, '').toUpperCase() : '';
     if (record?.category === 'net') return /^(?:TLS|SSL)/.test(tag) ? ['tls','TLS'] : undefined;
     if (record?.category !== 'crypto') return;
+    // Legacy family labels can list possibilities, not the algorithm that actually ran.
+    if (/^RSAEC(?:签名|验签)$/.test(tag)) return ['asymmetric','签名与验签'];
+    if (/^AEAD(?:加密|解密)\(/.test(tag)) return ['aead','AEAD'];
+    const hmac = /^HMAC(?:WITH)?(SHA3(?:224|256|384|512)|SHA(?:1|224|256|384|512)|MD5)$/.exec(tag);
+    if (hmac) {
+      const hash = hmac[1].replace(/^SHA3(\d{3})$/, 'SHA-3-$1').replace(/^SHA(\d+)$/, 'SHA-$1');
+      return ['mac','HMAC-'+hash];
+    }
+    const sha3 = /^SHA3(224|256|384|512)$/.exec(tag);
+    if (sha3) return ['digest','SHA-3-'+sha3[1]];
+    const aesMode = /^AES(?:128|192|256)?(CBC|CTR|CFB(?:8|128)?|OFB|ECB|XTS)(?:NOPADDING|PKCS[57]PADDING|ISO10126PADDING)?$/.exec(tag);
+    if (aesMode) return ['symmetric','AES-'+aesMode[1]];
     const match = rules.find(([, , pattern]) => pattern.test(tag));
     return match ? [match[0], match[1]] : ['other','未识别算法'];
   }
 
-  function summarize(records) {
-    const counts = new Map();
+  const algorithmKeyFor = ([family,name]) => 'algo:'+family+':'+name;
+  function algorithmKey(record) {
+    const type = identify(record);
+    return type && algorithmKeyFor(type);
+  }
+  const timeOf = record => Number.isFinite(record.ts) && record.ts > 0 ? record.ts : 0;
+
+  function summarize(records, hidden = new Set()) {
+    const entries = new Map();
     for (const record of records) {
       const type = identify(record);
       if (!type) continue;
       const [family, name] = type;
-      const key = family + ':' + name;
-      const previous = counts.get(key);
-      const ts = Number.isFinite(record.ts) && record.ts > 0 ? record.ts : 0;
-      counts.set(key, {
-        family, name, count:(previous?.count ?? 0) + 1, latest:Math.max(previous?.latest ?? 0, ts),
-      });
+      const key = algorithmKeyFor(type);
+      if (!entries.has(key)) entries.set(key,{key,family,name,count:0,shown:0,latest:0,methods:new Map()});
+      const entry = entries.get(key);
+      const shown = !hidden.has(key) && !hidden.has(hookKey(record));
+      entry.count++;
+      if (shown) entry.shown++;
+      entry.latest = Math.max(entry.latest,timeOf(record));
+      const method = recordedMethod(record);
+      const methodKey = JSON.stringify(method);
+      const previous = entry.methods.get(methodKey);
+      entry.methods.set(methodKey,{...method,count:(previous?.count ?? 0)+1});
     }
-    return [...counts.values()].sort((a,b) => b.latest - a.latest || b.count - a.count || a.name.localeCompare(b.name));
+    return [...entries.values()]
+      .map(entry => ({...entry,methods:[...entry.methods.values()].sort((a,b)=>
+        a.className.localeCompare(b.className) || a.member.localeCompare(b.member) || a.label.localeCompare(b.label))}))
+      .sort((a,b) => b.latest - a.latest || b.count - a.count || a.name.localeCompare(b.name));
   }
 
   const hookGroups = Object.freeze({crypto:'加解密', system:'系统', file:'文件', net:'网络'});
   const symbol = value => typeof value === 'string' && /^[\p{L}\p{N}_.$:@+<>-]{1,120}$/u.test(value) ? value : '';
+  const sourceOf = record => record.source === 'java' || record.source === 'native' ? record.source : '';
+  const javaIdentifier = /^[\p{L}_$][\p{L}\p{N}_$]*$/u;
+  function recordedMethod(record) {
+    const source = sourceOf(record);
+    const name = symbol(record.func);
+    if (source === 'native') return {source,className:'',member:name,label:''};
+    if (source === 'java') {
+      const parts = name.split('.');
+      const tail = parts.pop();
+      const valid = javaIdentifier.test(tail) || tail === '<init>' || tail === '<clinit>';
+      if (valid && parts.length && parts.every(part=>javaIdentifier.test(part))) {
+        return {source,className:parts.join('.'),member:tail,label:''};
+      }
+      // view.hook can be a UI alias derived from the operation, not a recorded class.
+      const member = valid && !parts.length ? tail : '';
+      const label = (name && !member ? name : '') || symbol(record.view?.hook);
+      return {source,className:'',member,label:label===member?'':label};
+    }
+    return {source,className:'',member:'',label:name};
+  }
 
   function hookIdentity(record) {
     const category = record?.category;
     if (!Object.hasOwn(hookGroups, category)) return;
     const name = symbol(record.func) || symbol(record.view?.hook);
     if (!name) return;
-    const source = record.source === 'java' || record.source === 'native' ? record.source : '';
+    const source = sourceOf(record);
     return {key:JSON.stringify([category,source,name]), category, source, name};
   }
+  const hookKey = record => hookIdentity(record)?.key;
+  const recordVisible = (record,hidden) => !hidden.has(hookKey(record)) && !hidden.has(algorithmKey(record));
 
   function summarizeHooks(records) {
     const items = new Map();
@@ -66,7 +115,7 @@
       const hook = hookIdentity(record);
       if (!hook) continue;
       const previous = items.get(hook.key);
-      const ts = Number.isFinite(record.ts) && record.ts > 0 ? record.ts : 0;
+      const ts = timeOf(record);
       items.set(hook.key, {...hook, count:(previous?.count ?? 0)+1, latest:Math.max(previous?.latest ?? 0, ts)});
     }
     return [...items.values()].sort((a,b) => a.name.localeCompare(b.name) || a.source.localeCompare(b.source));
@@ -98,5 +147,5 @@
   }
 
   scope.AdhAlgorithmObservations = {families, summarize, hookGroups, summarizeHooks,
-    hookKey: record => hookIdentity(record)?.key, hookDisplayPreferences};
+    algorithmKey, hookKey, recordVisible, hookDisplayPreferences};
 })(globalThis);

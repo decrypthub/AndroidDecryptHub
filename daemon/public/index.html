@@ -392,11 +392,21 @@
   .set-observation-filters { display:flex; flex-wrap:wrap; gap:8px; margin:12px 0; }
   .set-observation-filters input,.set-observation-filters select { padding:7px 10px; border:1px solid var(--line); border-radius:4px; background:var(--surface-2); color:inherit; font:inherit; }
   .set-observation-filters input { flex:1 1 130px; min-width:0; }
-  .set-observation-list { margin:8px 0 0; padding:0; list-style:none; }
-  .set-observation-list li { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:9px 0; border-top:1px solid var(--line-soft); }
-  .set-observation-list strong { display:block; color:var(--ink-2); font-weight:600; }
-  .set-observation-list span { color:var(--muted); font-size:12px; }
-  .set-observation-list .observation-count { white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .set-algorithm-entry { position:relative; border-bottom:1px solid var(--line-soft); }
+  .set-algorithm-entry .set-switch { position:absolute; top:11px; right:0; cursor:pointer; }
+  .set-algorithm-entry summary { display:flex; align-items:flex-start; gap:8px; margin-right:56px; padding:8px 0; min-height:44px; list-style:none; border-radius:3px; }
+  .set-algorithm-entry summary::-webkit-details-marker { display:none; }
+  .set-algorithm-entry summary::before { content:'›'; color:var(--muted); font-size:16px; line-height:1.2; }
+  .set-algorithm-entry details[open] > summary::before { transform:rotate(90deg); }
+  .set-algorithm-entry summary:hover strong { color:var(--blue); }
+  .set-algorithm-entry summary strong { display:block; overflow-wrap:anywhere; font-weight:650; }
+  .set-algorithm-meta { display:block; color:var(--muted); font-size:11px; }
+  .set-algorithm-methods { list-style:none; margin:0 0 8px 15px; padding:0 9px; border-left:1px solid var(--line); }
+  .set-algorithm-methods li { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:6px; padding:6px 0; }
+  .set-algorithm-methods li + li { border-top:1px solid var(--line-soft); }
+  .set-algorithm-methods dl { display:grid; grid-template-columns:max-content minmax(0,1fr); gap:2px 8px; margin:0; }
+  .set-algorithm-methods dt,.set-algorithm-method-count { color:var(--muted); font-size:11px; white-space:nowrap; }
+  .set-algorithm-methods dd { margin:0; color:var(--ink-2); font:12px/1.45 ui-monospace,Consolas,monospace; overflow-wrap:anywhere; }
   .set-observation-empty { margin:18px 0; color:var(--muted); font-size:12px; }
   .set-section-title { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.06em; margin:20px 0 8px; padding-top:4px; border-top:1px solid var(--line); }
   .set-toggle-row { display:flex; align-items:center; justify-content:space-between; gap:16px; min-height:48px; padding:10px 0; border-bottom:1px solid var(--line-soft); cursor:pointer; }
@@ -652,7 +662,7 @@
   <div class="set-layout">
     <nav class="set-nav" id="setNav" aria-label="设置分类">
       <span class="set-nav-group">当前应用</span>
-      <button type="button" id="setHooksTab" data-settings="hooks" aria-controls="setHooksPage" aria-pressed="true">Hook 记录</button>
+      <button type="button" id="setHooksTab" data-settings="hooks" aria-controls="setHooksPage" aria-pressed="true">算法与 Hook</button>
       <button type="button" id="setCaptureTab" data-settings="capture" aria-controls="setCapturePage" aria-pressed="false">算法采集</button>
       <span class="set-nav-group">面板</span>
       <button type="button" id="setDisplayTab" data-settings="display" aria-controls="setDisplayPage" aria-pressed="false">显示</button>
@@ -660,13 +670,27 @@
     </nav>
     <div class="set-main">
       <section id="setHooksPage" class="set-page" aria-labelledby="setHooksTitle">
-        <h3 id="setHooksTitle">Hook 记录</h3>
-        <p class="set-lead">按已载入的 Hook 分组。开关只控制当前应用的列表显示。</p>
+        <h3 id="setHooksTitle">算法与 Hook</h3>
+        <p class="set-lead">展开已观测算法，查看类和方法。勾选只控制当前应用的列表显示，不修改采集。</p>
         <div class="set-observation-nav" role="group" aria-label="观测视图">
-          <button type="button" id="setHookListTab" class="set-small-button" aria-controls="setHookControls" aria-pressed="true">Hook 显示开关</button>
-          <button type="button" id="setObservedTab" class="set-small-button" aria-controls="setObservedAlgorithms" aria-pressed="false">已观测算法</button>
+          <button type="button" id="setAlgorithmListTab" class="set-small-button" aria-controls="setObservedAlgorithms" aria-pressed="true">按算法</button>
+          <button type="button" id="setHookListTab" class="set-small-button" aria-controls="setHookControls" aria-pressed="false">按 Hook</button>
         </div>
-        <section id="setHookControls" aria-label="Hook 显示开关">
+        <p class="set-status" id="setHookStatus" role="status" hidden></p>
+        <section id="setObservedAlgorithms" aria-label="按算法显示">
+          <div class="set-observation-filters">
+            <input type="search" id="setObservationQuery" aria-label="搜索算法、类或方法" placeholder="搜索算法、类或方法">
+            <select id="setObservationFamily" aria-label="算法类别"><option value="">全部类别</option></select>
+          </div>
+          <div class="set-hook-summary">
+            <p class="set-status" id="setObservationCount"></p>
+            <button type="button" id="setObservationReset" class="set-small-button" disabled>恢复全部显示</button>
+          </div>
+          <div id="setObservationList"></div>
+          <p class="set-observation-empty" id="setObservationEmpty" hidden></p>
+        </section>
+        <section id="setHookControls" aria-label="按 Hook 显示" hidden>
+          <p class="set-lead">可按具体 Hook 再筛一层；两种显示筛选同时生效。</p>
           <div class="set-observation-filters">
             <input type="search" id="setHookQuery" aria-label="搜索 Hook" placeholder="按名称搜索 Hook">
             <select id="setHookCategory" aria-label="Hook 类别"><option value="">全部类别</option></select>
@@ -675,19 +699,8 @@
             <p class="set-status" id="setHookCount"></p>
             <button type="button" id="setHookReset" class="set-small-button" disabled>恢复全部显示</button>
           </div>
-          <p class="set-status" id="setHookStatus" role="status" hidden></p>
           <div id="setHookGroups"></div>
           <p class="set-observation-empty" id="setHookEmpty" hidden></p>
-        </section>
-        <section id="setObservedAlgorithms" aria-label="已观测算法" hidden>
-          <p class="set-lead">按算法汇总当前应用已载入的记录。</p>
-          <div class="set-observation-filters">
-            <input type="search" id="setObservationQuery" aria-label="搜索算法" placeholder="搜索算法">
-            <select id="setObservationFamily" aria-label="观测类别"><option value="">全部类别</option></select>
-          </div>
-          <p class="set-status" id="setObservationCount" role="status"></p>
-          <ul class="set-observation-list" id="setObservationList"></ul>
-          <p class="set-observation-empty" id="setObservationEmpty" hidden></p>
         </section>
       </section>
       <section id="setCapturePage" class="set-page" aria-labelledby="setCaptureTitle" hidden>
@@ -1059,7 +1072,7 @@ function belongsToApp(c){
 function listedCap(c){ if(c.category!=='crypto') return true; return clientCryptoView(c).show!==false; }
 function visibleForHooks(records){
   const hidden=hookDisplay?.hidden(selectedPackage());
-  return hidden?.size ? records.filter(record=>!hidden.has(algorithmObservations.hookKey(record))) : records;
+  return hidden?.size ? records.filter(record=>algorithmObservations.recordVisible(record,hidden)) : records;
 }
 function applyFilter(p){ let items=visibleForHooks(capItems.filter(c=>p.cats.includes(c.category)&&belongsToApp(c)&&listedCap(c)));
   const f=p.filter;
@@ -1667,10 +1680,12 @@ const hookQuery=document.getElementById('setHookQuery');
 const hookCategory=document.getElementById('setHookCategory');
 const hookReset=document.getElementById('setHookReset');
 const hookGroups=document.getElementById('setHookGroups');
-const observedTab=document.getElementById('setObservedTab');
+const algorithmListTab=document.getElementById('setAlgorithmListTab');
 const observedPage=document.getElementById('setObservedAlgorithms');
 const observationQuery=document.getElementById('setObservationQuery');
 const observationFamily=document.getElementById('setObservationFamily');
+const observationList=document.getElementById('setObservationList');
+const observationReset=document.getElementById('setObservationReset');
 const displayCapSelect=document.getElementById('setDisplayCap');
 const timeFormatSelect=document.getElementById('setTimeFormat');
 const densitySelect=document.getElementById('setRowDensity');
@@ -1723,10 +1738,26 @@ function renderSettingsScope(){
   if(app.dataset.package!==pkg){
     app.dataset.package=pkg;
     hookQuery.value=hookCategory.value=observationQuery.value=observationFamily.value='';
+    expandedAlgorithms.clear();
     document.getElementById('setHookStatus').hidden=true;
   }
   const label=serverApps.find(entry=>entry.package===pkg)?.label;
   app.textContent=label && label!==pkg ? label+' · '+pkg : pkg || '未选择应用';
+}
+function observationSwitch(key,label,checked,tag='span'){
+  const control=document.createElement(tag);
+  control.className='set-switch';
+  const toggle=document.createElement('input');
+  toggle.type='checkbox';
+  toggle.setAttribute('role','switch');
+  toggle.setAttribute('aria-label',label);
+  toggle.dataset.observationKey=key;
+  toggle.checked=checked;
+  const slider=document.createElement('span');
+  slider.className='slider';
+  slider.setAttribute('aria-hidden','true');
+  control.append(toggle,slider);
+  return control;
 }
 let hookSignature='';
 function renderHookControls(){
@@ -1745,7 +1776,7 @@ function renderHookControls(){
   const signature=JSON.stringify([pkg,panelDisplay.time,shown,[...hidden]]);
   if(hookSignature===signature) return;
   hookSignature=signature;
-  const focused=document.activeElement?.dataset.hookKey;
+  const focused=document.activeElement?.dataset.observationKey;
   const fragment=document.createDocumentFragment();
   let focusTarget;
   for(const [group, name] of Object.entries(algorithmObservations?.hookGroups ?? {})){
@@ -1771,19 +1802,8 @@ function renderHookControls(){
       const source=item.source==='java'?'Java':item.source==='native'?'Native':'';
       meta.textContent=[source,item.count+' 条',time&&'最近 '+time].filter(Boolean).join(' · ');
       lab.append(title,meta);
-      const control=document.createElement('span');
-      control.className='set-switch';
-      const toggle=document.createElement('input');
-      toggle.type='checkbox';
-      toggle.setAttribute('role','switch');
-      toggle.setAttribute('aria-label','显示 '+item.name+' · '+name+(source?' · '+source:''));
-      toggle.dataset.hookKey=item.key;
-      toggle.checked=!hidden.has(item.key);
-      if(item.key===focused) focusTarget=toggle;
-      const slider=document.createElement('span');
-      slider.className='slider';
-      slider.setAttribute('aria-hidden','true');
-      control.append(toggle,slider);
+      const control=observationSwitch(item.key,'显示 '+item.name+' · '+name+(source?' · '+source:''),!hidden.has(item.key));
+      if(item.key===focused) focusTarget=control.firstElementChild;
       row.append(lab,control);
       section.append(row);
     }
@@ -1807,10 +1827,10 @@ function saveHookDisplay(hidden){
   const saved=hookDisplay.save(pkg,hidden);
   for(const panel of Object.values(CAPPANELS)){
     const selected=panel.sel && capItems.find(item=>item.id===panel.sel && belongsToApp(item));
-    if(selected && hidden.has(algorithmObservations.hookKey(selected))) clearHiddenSelection(panel);
+    if(selected && !algorithmObservations.recordVisible(selected,hidden)) clearHiddenSelection(panel);
     panel.render(true);
   }
-  renderHookControls();
+  renderObservationSettings();
   const status=document.getElementById('setHookStatus');
   status.hidden=false;
   status.textContent=saved
@@ -1818,43 +1838,101 @@ function saveHookDisplay(hidden){
     :'浏览器无法保存，当前页面已应用。';
   status.dataset.error=String(!saved);
 }
+let algorithmSignature='';
+const expandedAlgorithms=new Map();
+function methodMarkup(method){
+  const row=document.createElement('li');
+  const fields=document.createElement('dl');
+  const append=(name,value)=>{
+    const label=document.createElement('dt'), text=document.createElement('dd');
+    label.textContent=name;
+    text.textContent=value || '未记录';
+    fields.append(label,text);
+  };
+  if(method.source==='java'){
+    append('类',method.className);
+    append('方法',method.member);
+    if(method.label) append('参考标签',method.label);
+  }else if(method.source==='native'){
+    append('Native 函数',method.member);
+  }else{
+    append('入口标签',method.label);
+  }
+  const count=document.createElement('span');
+  count.className='set-algorithm-method-count';
+  count.textContent=method.count+' 条';
+  row.append(fields,count);
+  return row;
+}
 function renderAlgorithmObservations(){
   const pkg=selectedPackage();
-  const observations=pkg && algorithmObservations ? algorithmObservations.summarize(capItems.filter(belongsToApp)) : [];
-  const searchText=value=>value.toLowerCase().replace(/[\s_-]+/g,'');
+  const hidden=hookDisplay?.hidden(pkg) ?? new Set();
+  const observations=pkg && algorithmObservations ? algorithmObservations.summarize(capItems.filter(belongsToApp),hidden) : [];
+  const searchText=value=>value.toLowerCase().replace(/[\s._-]+/g,'');
   const query=searchText(observationQuery.value);
   const family=observationFamily.value;
   const visible=observations.filter(item=>{
     const label=algorithmObservations.families[item.family];
-    return (!family || family===item.family) && searchText(`${item.name} ${label}`).includes(query);
+    return (!family || family===item.family) && (!query || searchText(item.name+' '+label).includes(query) ||
+      item.methods.some(method=>[method.className,method.member,method.label,method.className+'.'+method.member]
+        .some(value=>searchText(value).includes(query))));
   });
-  const total=visible.reduce((sum,item)=>sum+item.count,0);
-  document.getElementById('setObservationCount').textContent=visible.length?`${visible.length} 项 · ${total} 条记录`:'';
-  const list=document.getElementById('setObservationList');
-  const rows=visible.map(item=>{
-    const row=document.createElement('li');
-    const title=document.createElement('div');
-    const label=document.createElement('strong');
-    label.textContent=item.name;
-    const time=fmtTime(item.latest);
-    const familyLabel=algorithmObservations.families[item.family];
-    const detail=[familyLabel!==item.name?familyLabel:'',time?'最近 '+time:''].filter(Boolean).join(' · ');
-    title.append(label);
-    if(detail){
-      const meta=document.createElement('span');
-      meta.textContent=detail;
-      title.append(meta);
-    }
-    const count=document.createElement('span');
-    count.className='observation-count';
-    count.textContent=item.count+' 条';
-    row.append(title,count);
-    return row;
-  });
-  list.replaceChildren(...rows);
+  const checked=observations.filter(item=>!hidden.has(item.key)).length;
+  document.getElementById('setObservationCount').textContent=observations.length?'已勾选 '+checked+' / '+observations.length+' 项':'';
+  observationReset.disabled=!pkg || !hidden.size;
   const empty=document.getElementById('setObservationEmpty');
   empty.hidden=visible.length>0;
-  empty.textContent=!pkg?'请选择一个应用。':!algorithmObservations?'暂时无法读取算法统计。':observations.length?'没有符合条件的算法。':'当前应用暂无已载入的算法记录。';
+  empty.textContent=!pkg?'请选择一个应用。':!algorithmObservations?'暂时无法读取算法统计。':observations.length?'没有匹配的算法、类或方法。':'当前应用暂无已载入的算法记录。';
+  const signature=JSON.stringify([pkg,panelDisplay.time,query,visible,[...hidden]]);
+  if(algorithmSignature===signature) return;
+  algorithmSignature=signature;
+  const focus=document.activeElement?.dataset;
+  const fragment=document.createDocumentFragment();
+  let first=true, focusTarget;
+  for(const [group, label] of Object.entries(algorithmObservations?.families ?? {})){
+    const items=visible.filter(item=>item.family===group).sort((a,b)=>a.name.localeCompare(b.name,'zh-CN',{numeric:true}));
+    if(!items.length) continue;
+    const section=document.createElement('section');
+    section.className='set-hook-group';
+    const heading=document.createElement('h4');
+    heading.textContent=label;
+    section.append(heading);
+    for(const item of items){
+      const row=document.createElement('div');
+      row.className='set-algorithm-entry';
+      row.dataset.algorithm=item.name;
+      const details=document.createElement('details');
+      details.open=expandedAlgorithms.get(item.key) ?? (first || !!query);
+      first=false;
+      details.addEventListener('toggle',()=>{ if(details.isConnected) expandedAlgorithms.set(item.key,details.open); });
+      const summary=document.createElement('summary');
+      summary.dataset.algorithmSummary=item.key;
+      const text=document.createElement('span');
+      const name=document.createElement('strong');
+      name.textContent=item.name;
+      const meta=document.createElement('span');
+      meta.className='set-algorithm-meta';
+      const methodCount=item.methods.filter(method=>method.member || method.label).length;
+      const time=fmtTime(item.latest);
+      meta.textContent=[item.count+' 条',methodCount ? methodCount+' 个入口' : '入口未记录',
+        item.shown<item.count && ('筛选后 '+item.shown+' 条'),time && ('最近 '+time)].filter(Boolean).join(' · ');
+      text.append(name,meta);
+      summary.append(text);
+      const methods=document.createElement('ul');
+      methods.className='set-algorithm-methods';
+      methods.append(...item.methods.map(methodMarkup));
+      details.append(summary,methods);
+      const control=observationSwitch(item.key,'显示 '+item.name,!hidden.has(item.key),'label');
+      if(item.key===focus?.observationKey) focusTarget=control.firstElementChild;
+      if(item.key===focus?.algorithmSummary) focusTarget=summary;
+      row.append(details,control);
+      section.append(row);
+    }
+    fragment.append(section);
+  }
+  observationList.dataset.package=pkg;
+  observationList.replaceChildren(fragment);
+  focusTarget?.focus({preventScroll:true});
 }
 function renderObservationSettings(){
   if(hookControls.hidden) renderAlgorithmObservations();
@@ -1868,11 +1946,11 @@ function scheduleObservationRefresh(){
     if(settingsDialog.open && !hooksPage.hidden) renderObservationSettings();
   },240);
 }
-function showObservationView(observed){
-  hookListTab.setAttribute('aria-pressed',String(!observed));
-  observedTab.setAttribute('aria-pressed',String(observed));
-  hookControls.hidden=observed;
-  observedPage.hidden=!observed;
+function showObservationView(byAlgorithm){
+  algorithmListTab.setAttribute('aria-pressed',String(byAlgorithm));
+  hookListTab.setAttribute('aria-pressed',String(!byAlgorithm));
+  hookControls.hidden=byAlgorithm;
+  observedPage.hidden=!byAlgorithm;
   renderObservationSettings();
 }
 function renderDisplaySettings(){
@@ -1959,7 +2037,7 @@ function showSettingsPage(page){
   }
   document.querySelector('.set-main').scrollTop=0;
   renderSettingsScope();
-  if(page==='hooks') showObservationView(false);
+  if(page==='hooks') showObservationView(true);
   if(page==='capture') void openCaptureSettings();
   if(page==='display') renderDisplaySettings();
   if(page==='status') void refreshPanelStatus();
@@ -2219,20 +2297,23 @@ settingsNav.addEventListener('click', e=>{
 for(const [select, labels] of [[observationFamily,algorithmObservations?.families],[hookCategory,algorithmObservations?.hookGroups]]){
   for(const [key,label] of Object.entries(labels??{})) select.add(new Option(label,key));
 }
+algorithmListTab.addEventListener('click', ()=>showObservationView(true));
 hookListTab.addEventListener('click', ()=>showObservationView(false));
-observedTab.addEventListener('click', ()=>showObservationView(true));
 hookQuery.addEventListener('input',renderHookControls);
 hookCategory.addEventListener('change',renderHookControls);
-hookReset.addEventListener('click',()=>saveHookDisplay(new Set()));
-hookGroups.addEventListener('change',e=>{
-  const toggle=e.target;
-  const pkg=selectedPackage();
-  if(!pkg || !hookDisplay || hookGroups.dataset.package!==pkg || !toggle.dataset.hookKey) return;
-  const hidden=new Set(hookDisplay.hidden(pkg));
-  if(toggle.checked) hidden.delete(toggle.dataset.hookKey);
-  else hidden.add(toggle.dataset.hookKey);
-  saveHookDisplay(hidden);
-});
+for(const reset of [hookReset,observationReset]) reset.addEventListener('click',()=>saveHookDisplay(new Set()));
+for(const list of [hookGroups,observationList]){
+  list.addEventListener('change',e=>{
+    const toggle=e.target;
+    const pkg=selectedPackage();
+    const key=toggle.dataset.observationKey;
+    if(!pkg || !hookDisplay || list.dataset.package!==pkg || !key) return;
+    const hidden=new Set(hookDisplay.hidden(pkg));
+    if(toggle.checked) hidden.delete(key);
+    else hidden.add(key);
+    saveHookDisplay(hidden);
+  });
+}
 observationQuery.addEventListener('input',renderAlgorithmObservations);
 observationFamily.addEventListener('change',renderAlgorithmObservations);
 displayCapSelect.addEventListener('change', ()=>savePanelDisplay({...panelDisplay,limit:Number(displayCapSelect.value)}));

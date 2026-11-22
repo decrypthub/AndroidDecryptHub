@@ -22,7 +22,7 @@ version stays independent and includes `hostVersion`. `tools/check_release_versi
 
 ## P2 human workbench details
 
-- The viewer groups already loaded Hook names in Settings; `public/algorithm-observations.js` summarizes metadata and remembers per-app display settings in the browser. The filter does not modify collection. `/workbench` redirects to the viewer; the existing workbench sources are retained without a mounted task view. `public/operations.js` keeps the shared fetch guard.
+- The viewer groups loaded records by algorithm and shows recorded classes and methods in Settings. `public/algorithm-observations.js` summarizes metadata and remembers per-app algorithm and Hook display filters in the browser, without modifying collection. `/workbench` redirects to the viewer; the existing workbench sources are retained without a mounted task view. `public/operations.js` keeps the shared fetch guard.
 - Task get includes revision, resources and operation counts. CLI / MCP task controls can use `_operation.expectedTaskRevision`. Filtered lists expose independent task and operation pagination. Intent-key get looks up a previously submitted operation.
 - `execution_context.ts` assigns bounded effect IDs so concurrent dispatch/acknowledgement pairs remain correct; `operations.ts` persists up to 64 metadata-only effect rows and omission counts. New operation timestamps are factual; missing legacy data stays missing. Do not include payloads/keys or turn an acknowledgement into proof of target success.
 - UI is validated against a synthetic loopback Host, never the active service. Worktree isolation protects dynamically served static assets too. See [`docs/P2_WORKBENCH.md`](../../docs/P2_WORKBENCH.md).

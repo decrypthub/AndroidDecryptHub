@@ -3,10 +3,13 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
-interface Observation { family: string; name: string; count: number; latest: number }
+interface Method { source: string; className: string; member: string; label: string; count: number }
+interface Observation { key: string; family: string; name: string; count: number; shown: number; latest: number; methods: Method[] }
 const context = vm.createContext({});
 vm.runInContext(readFileSync(new URL('../public/algorithm-observations.js', import.meta.url), 'utf8'), context);
-const summarize = (records: unknown[]): Observation[] => JSON.parse(JSON.stringify(context.AdhAlgorithmObservations.summarize(records)));
+const summarize = (records: unknown[], hidden?: Set<string>): Observation[] =>
+  JSON.parse(JSON.stringify(context.AdhAlgorithmObservations.summarize(records,hidden)));
+const names = (records: unknown[]) => summarize(records).map(({family,name,count,latest})=>({family,name,count,latest}));
 
 test('typed observations combine spelling variants and keep the most recent occurrence', () => {
   const records = [
@@ -16,10 +19,10 @@ test('typed observations combine spelling variants and keep the most recent occu
     {category:'crypto', algo:'AES/GCM/NoPadding', ts:30},
     {category:'crypto', algo:'SHA3-256', ts:35},
   ];
-  assert.deepEqual(summarize(records), [
-    {family:'digest', name:'SHA-3', count:1, latest:35},
+  assert.deepEqual(names(records), [
+    {family:'digest', name:'SHA-3-256', count:1, latest:35},
     {family:'aead', name:'AES-GCM', count:1, latest:30},
-    {family:'mac', name:'HMAC', count:1, latest:25},
+    {family:'mac', name:'HMAC-SHA-256', count:1, latest:25},
     {family:'digest', name:'SHA-256', count:2, latest:20},
   ]);
 });
@@ -35,7 +38,7 @@ test('derived categories report only observations, ignoring non-algorithm record
     {category:'crypto', algo:'unclassified-input', preview:'another private sample', ts:70},
     {category:'crypto', algo:'unknown', ts:'invalid time'},
   ];
-  assert.deepEqual(summarize(records), [
+  assert.deepEqual(names(records), [
     {family:'other', name:'未识别算法', count:2, latest:70},
     {family:'tls', name:'TLS', count:1, latest:40},
     {family:'random', name:'随机数', count:1, latest:30},
@@ -43,6 +46,51 @@ test('derived categories report only observations, ignoring non-algorithm record
     {family:'kdf', name:'HKDF', count:1, latest:10},
   ]);
   assert.deepEqual(summarize([]), []);
+});
+
+test('one algorithm keeps all recorded class/method pairs and separates non-authoritative labels', () => {
+  const record = {category:'crypto',source:'java',algo:'SHA-256',func:'fixture.crypto.Digest.digest'};
+  const [item]=summarize([
+    record,{...record,algo:'SHA256',ts:20},{...record,func:'fixture.crypto.Outer$Fallback.digest',ts:30},
+    {...record,func:'digest',view:{hook:'MessageDigest.digest'}},
+    {...record,source:'native',func:'fixture_digest'},
+    {...record,func:'/not-a-method',text:'do not use this as a class'},
+  ]);
+  assert.equal(item.name,'SHA-256');
+  assert.equal(item.count,6);
+  assert.equal(item.latest,30);
+  assert.deepEqual(item.methods,[
+    {source:'java',className:'',member:'',label:'',count:1},
+    {source:'java',className:'',member:'digest',label:'MessageDigest.digest',count:1},
+    {source:'native',className:'',member:'fixture_digest',label:'',count:1},
+    {source:'java',className:'fixture.crypto.Digest',member:'digest',label:'',count:2},
+    {source:'java',className:'fixture.crypto.Outer$Fallback',member:'digest',label:'',count:1},
+  ]);
+});
+
+test('algorithm selection separates known variants without choosing an algorithm from legacy family labels', () => {
+  const api=context.AdhAlgorithmObservations;
+  const key=(algo:string)=>api.algorithmKey({category:'crypto',algo});
+  assert.equal(key('HmacSHA256'),key('HMAC-SHA-256'));
+  assert.notEqual(key('HmacSHA256'),key('HmacSHA512'));
+  assert.notEqual(key('AES/CBC/PKCS5Padding'),key('AES/ECB/NoPadding'));
+  assert.notEqual(key('RSA/EC 签名'),key('RSA'));
+  assert.notEqual(key('AEAD 加密(GCM/ChaCha20-Poly1305)'),key('ChaCha20-Poly1305'));
+});
+
+test('an algorithm filter affects that algorithm across methods, and composes with a legacy Hook filter', () => {
+  const api=context.AdhAlgorithmObservations;
+  const a={category:'crypto',source:'java',algo:'SHA-256',func:'fixture.crypto.Digest.digest'};
+  const b={...a,func:'fixture.crypto.Fallback.digest'};
+  const c={...a,algo:'SHA-512'};
+  const hidden=new Set([api.algorithmKey(a)]);
+  assert.equal(api.recordVisible(a,hidden),false);
+  assert.equal(api.recordVisible(b,hidden),false);
+  assert.equal(api.recordVisible(c,hidden),true);
+  assert.equal(summarize([a,b,c],hidden).find(item=>item.name==='SHA-256')?.shown,0);
+  hidden.delete(api.algorithmKey(a));
+  hidden.add(api.hookKey(b));
+  assert.equal(summarize([a,b,c],hidden).find(item=>item.name==='SHA-256')?.shown,1);
 });
 
 test('Hook inventory groups only symbolic record metadata and separates equal names by kind and source', () => {

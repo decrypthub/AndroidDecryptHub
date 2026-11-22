@@ -37,14 +37,21 @@ for(const [sid,pid]of [['p2-fixture',42],['p2-uncertain',43]] as const){
 }
 if(appCapture && process.argv.includes('--sample-algorithms')) {
   const samples = [
-    {pkg:alpha, sid:'p2-fixture', labels:[['SHA-256','Fixture.digest'],['SHA256','Fixture.digest'],['HmacSHA256','Fixture.mac'],['AES/GCM/NoPadding','Fixture.cipher'],['HKDF','Fixture.derive']]},
-    {pkg:beta, sid:'p2-uncertain', labels:[['SHA-512','Fixture.digest'],['X25519','Fixture.agreement'],['SecureRandom','Fixture.random'],['PBKDF2','Fixture.derive']]},
+    {pkg:alpha, sid:'p2-fixture', labels:[
+      ['SHA-256','fixture.crypto.Digest.digest'],['SHA256','fixture.crypto.Digest.digest'],
+      ['SHA-256','fixture.crypto.FallbackDigest.digest'],['SHA-512','fixture.crypto.Digest.digest'],
+      ['HmacSHA256','fixture.crypto.Mac.finish'],['AES/GCM/NoPadding','doFinal','encrypt'],['HKDF','fixture.crypto.Kdf.derive'],
+    ]},
+    {pkg:beta, sid:'p2-uncertain', labels:[
+      ['SHA-256','fixture.beta.crypto.Digest.digest'],['SHA-512','fixture.beta.crypto.Digest.digest'],
+      ['X25519','Fixture.agreement'],['SecureRandom','Fixture.random'],['PBKDF2','Fixture.derive'],
+    ]},
   ];
   let id = 0;
   for (const {pkg, sid, labels} of samples) {
-    for (const [algo,func] of labels) {
+    for (const [algo,func,op='合成样例'] of labels) {
       pushCapture({id:++id, sessionId:sid, package:pkg, source:'java', func,
-        category:'crypto', algo, op:'合成样例', inl:1, tid:0, tsNs:0, ts:Date.now()-12000+id*1000, hex:'61', preview:''});
+        category:'crypto', algo, op, inl:1, tid:0, tsNs:0, ts:Date.now()-12000+id*1000, hex:'61', preview:''});
     }
     pushCapture({id:++id, sessionId:sid, package:pkg, source:'native', func:'Fixture.startup',
       category:'system', algo:'启动样本', op:'合成样例', inl:0, tid:0, tsNs:0, ts:Date.now(), hex:'', preview:''});
