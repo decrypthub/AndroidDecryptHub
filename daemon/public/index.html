@@ -336,30 +336,49 @@
   .modal h3 button:hover { background:var(--surface-2); border-color:#646e7d; }
   .modal pre { flex:1; overflow:auto; margin:0; border:none; border-radius:0; background:transparent; padding:14px 16px; color:var(--ink-2); }
   .diag-hint { padding:10px 16px; border-bottom:1px solid var(--line-soft); background:transparent; color:var(--muted); font-size:12px; line-height:1.55; }
-  .set-shell { width:min(420px,92vw); height:auto; max-height:min(88vh,640px); padding:0; position:relative; }
-  .set-shell .set-main { flex:none; overflow:visible; padding:36px 28px 22px; }
-  .set-close-x { position:absolute; top:10px; right:12px; z-index:2; width:28px; height:28px; border:none; background:transparent; color:var(--muted); font-size:20px; line-height:1; cursor:pointer; border-radius:4px; }
+  .set-shell { width:min(860px,calc(100vw - 44px)); max-width:none; height:min(566px,calc(100dvh - 44px)); max-height:none; padding:0; overflow:hidden; border:1px solid var(--line); border-radius:10px; background:var(--surface); color:var(--ink); }
+  .set-shell[open] { display:flex; flex-direction:column; }
+  .set-shell::backdrop { background:rgba(6,7,10,.78); }
+  .set-header { display:flex; align-items:center; justify-content:space-between; flex:none; padding:12px 18px; border-bottom:1px solid var(--line-soft); }
+  .set-header h2 { margin:0; font-size:15px; font-weight:650; }
+  .set-close-x { width:30px; height:30px; border:0; background:transparent; color:var(--muted); font-size:22px; line-height:1; cursor:pointer; border-radius:4px; }
   .set-close-x:hover { background:var(--surface-3); color:var(--ink); }
+  .set-shell :focus-visible { outline:2px solid var(--blue); outline-offset:2px; }
   .set-layout { display:flex; flex:1; min-height:0; }
-  .set-nav { width:190px; flex-shrink:0; border-right:1px solid var(--line-soft); padding:48px 10px 14px; display:flex; flex-direction:column; gap:2px; background:transparent; }
+  .set-nav { width:160px; flex-shrink:0; border-right:1px solid var(--line-soft); padding:14px 10px; display:flex; flex-direction:column; gap:4px; }
   .set-nav button { display:block; width:100%; text-align:left; min-height:38px; padding:8px 12px; border:none; border-left:3px solid transparent; background:transparent; color:var(--muted); border-radius:3px; font-size:13px; cursor:pointer; }
-  .set-nav button:hover { background:rgba(255,255,255,.04); color:var(--ink); }
-  .set-nav button.active { background:transparent; color:var(--ink); border-left-color:var(--blue); font-weight:600; }
-  .set-main { flex:1; min-width:0; overflow-y:auto; padding:44px 32px 28px; }
-  .set-page { display:none; } .set-page.active { display:block; }
-  .set-page h4 { margin:0 0 6px; font-size:18px; font-weight:600; color:var(--ink); }
-  .set-lead { margin:0 0 18px; font-size:12px; color:var(--muted); line-height:1.6; }
+  .set-nav button:hover { background:var(--surface-2); color:var(--ink); }
+  .set-nav button[aria-pressed="true"] { background:var(--surface-2); color:var(--ink); border-left-color:var(--blue); font-weight:600; }
+  .set-main { flex:1; min-width:0; overflow:auto; padding:24px 28px; }
+  .set-page[hidden] { display:none; }
+  .set-page > h3 { margin:0 0 8px; font-size:18px; font-weight:650; color:var(--ink); text-transform:none; letter-spacing:normal; }
+  .set-app { margin:0; display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; color:var(--muted); font-size:12px; }
+  .set-app strong { font-weight:550; color:var(--ink-2); overflow-wrap:anywhere; }
+  .set-status { min-height:18px; margin:8px 0 0; color:var(--muted); font-size:12px; }
+  .set-status[data-error="true"] { color:var(--danger); }
+  #setFamilies { min-inline-size:0; margin:0; padding:0; border:0; }
   .set-section-title { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.06em; margin:20px 0 8px; padding-top:4px; border-top:1px solid var(--line); }
-  .set-toggle-row { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding:12px 0; border-bottom:1px solid var(--line); }
+  .set-toggle-row { display:flex; align-items:center; justify-content:space-between; gap:16px; min-height:48px; padding:10px 0; border-bottom:1px solid var(--line-soft); cursor:pointer; }
   .set-toggle-row .lab { flex:1; min-width:0; }
   .set-toggle-row .lab b { display:block; font-size:13px; font-weight:600; color:var(--ink); }
   .set-toggle-row .lab span { display:block; font-size:11px; color:var(--muted); margin-top:4px; line-height:1.55; }
-  .set-switch { position:relative; display:inline-block; width:44px; height:24px; flex-shrink:0; margin-top:2px; }
-  .set-switch input { opacity:0; width:0; height:0; position:absolute; }
-  .set-switch .slider { position:absolute; inset:0; background:#414958; border-radius:12px; cursor:pointer; transition:background .2s; }
+  .set-switch { position:relative; display:inline-block; width:44px; height:24px; flex-shrink:0; }
+  .set-switch input { opacity:0; width:100%; height:100%; margin:0; position:absolute; inset:0; cursor:inherit; }
+  .set-switch .slider { position:absolute; inset:0; background:#414958; border-radius:12px; pointer-events:none; transition:background .2s; }
   .set-switch .slider:before { content:''; position:absolute; width:18px; height:18px; left:3px; top:3px; background:var(--ink); border-radius:50%; transition:transform .2s; box-shadow:0 1px 2px rgba(0,0,0,.25); }
   .set-switch input:checked + .slider { background:var(--blue); }
   .set-switch input:checked + .slider:before { transform:translateX(20px); }
+  .set-switch input:focus-visible + .slider { outline:2px solid var(--blue); outline-offset:3px; }
+  .set-switch input:disabled + .slider { opacity:.55; }
+  @media (max-width:620px) {
+    .set-shell { width:calc(100vw - 20px); height:min(580px,calc(100dvh - 20px)); }
+    .set-layout { flex-direction:column; }
+    .set-nav { width:100%; flex-direction:row; padding:0 12px; border-right:0; border-bottom:1px solid var(--line-soft); }
+    .set-nav button { width:auto; border-left:0; border-bottom:2px solid transparent; border-radius:0; }
+    .set-nav button[aria-pressed="true"] { border-bottom-color:var(--blue); background:transparent; }
+    .set-main { padding:16px; }
+  }
+  @media (prefers-reduced-motion:reduce) { .set-switch .slider,.set-switch .slider:before { transition:none; } }
   .set-row { display:flex; align-items:center; gap:12px; padding:11px 0; border-bottom:1px solid var(--line); }
   .set-row .lab { flex:1; }
   .set-row .lab b { display:block; color:var(--ink); font-size:13px; font-weight:600; }
@@ -386,11 +405,6 @@
     .list-pane { width:100% !important; height:42%; border-bottom:1px solid var(--line); }
     .splitter { display:none; }
     .filters input[type=search] { flex:1; width:auto; }
-    .set-layout { display:block; }
-    .set-nav { width:100%; padding:46px 8px 8px; flex-direction:row; overflow-x:auto; border-right:0; border-bottom:1px solid var(--line); }
-    .set-nav button { width:auto; min-width:max-content; border-left:0; border-bottom:2px solid transparent; }
-    .set-nav button.active { border-bottom-color:var(--blue); border-left-color:transparent; }
-    .set-main { padding:24px 18px; }
   }
 </style>
 <link rel="stylesheet" href="/workbench.css">
@@ -422,8 +436,7 @@
     </div>
   </div>
   <div class="header-actions">
-    <button type="button" class="compact-action" id="setBtn">算法设置</button>
-    <button type="button" class="compact-action" id="opBtn">任务</button>
+    <button type="button" class="compact-action" id="setBtn" aria-haspopup="dialog" aria-controls="setMask">设置</button>
   </div>
 </header>
 
@@ -587,23 +600,34 @@
   </div>
 </main>
 
-<!-- 设置：勾选要 hook 的算法 -->
-<div class="modal-mask" id="setMask">
-  <div class="modal set-shell">
-    <button class="set-close-x" onclick="closeModal('setMask')" title="关闭">×</button>
+<dialog id="setMask" class="set-shell" aria-labelledby="setTitle">
+  <div class="set-header">
+    <h2 id="setTitle">设置</h2>
+    <button type="button" class="set-close-x" id="setClose" aria-label="关闭设置">×</button>
+  </div>
+  <div class="set-layout">
+    <nav class="set-nav" aria-label="设置分类">
+      <button type="button" id="setCaptureTab" aria-controls="setCapturePage" aria-pressed="true">算法采集</button>
+      <button type="button" id="setRecordsTab" aria-controls="setRecordsPage" aria-pressed="false">执行记录</button>
+    </nav>
     <div class="set-main">
-      <h4 id="familyHeading">算法</h4>
-      <div id="setFamilies">
-        <div class="set-toggle-row"><div class="lab"><b>摘要</b></div><label class="set-switch"><input type="checkbox" aria-label="摘要" data-fam="digest"><span class="slider"></span></label></div>
-        <div class="set-toggle-row"><div class="lab"><b>HMAC</b></div><label class="set-switch"><input type="checkbox" aria-label="HMAC" data-fam="hmac"><span class="slider"></span></label></div>
-        <div class="set-toggle-row"><div class="lab"><b>对称</b></div><label class="set-switch"><input type="checkbox" aria-label="对称" data-fam="symmetric"><span class="slider"></span></label></div>
-        <div class="set-toggle-row"><div class="lab"><b>非对称</b></div><label class="set-switch"><input type="checkbox" aria-label="非对称" data-fam="asymmetric"><span class="slider"></span></label></div>
-        <div class="set-toggle-row"><div class="lab"><b>TLS</b></div><label class="set-switch"><input type="checkbox" aria-label="TLS" data-fam="tls"><span class="slider"></span></label></div>
-        <div class="set-toggle-row"><div class="lab"><b>AEAD</b></div><label class="set-switch"><input type="checkbox" aria-label="AEAD" data-fam="aead"><span class="slider"></span></label></div>
-      </div>
+      <section id="setCapturePage" class="set-page" aria-labelledby="setCaptureTitle">
+        <h3 id="setCaptureTitle">算法采集</h3>
+        <p class="set-app">当前应用 <strong id="familyHeading">未选择应用</strong></p>
+        <p class="set-status" id="setCaptureStatus" role="status"></p>
+        <fieldset id="setFamilies" aria-labelledby="setCaptureTitle">
+          <label class="set-toggle-row"><span class="lab"><b>摘要</b></span><span class="set-switch"><input type="checkbox" data-fam="digest" disabled><span class="slider"></span></span></label>
+          <label class="set-toggle-row"><span class="lab"><b>HMAC</b></span><span class="set-switch"><input type="checkbox" data-fam="hmac" disabled><span class="slider"></span></span></label>
+          <label class="set-toggle-row"><span class="lab"><b>对称</b></span><span class="set-switch"><input type="checkbox" data-fam="symmetric" disabled><span class="slider"></span></span></label>
+          <label class="set-toggle-row"><span class="lab"><b>非对称</b></span><span class="set-switch"><input type="checkbox" data-fam="asymmetric" disabled><span class="slider"></span></span></label>
+          <label class="set-toggle-row"><span class="lab"><b>TLS</b></span><span class="set-switch"><input type="checkbox" data-fam="tls" disabled><span class="slider"></span></span></label>
+          <label class="set-toggle-row"><span class="lab"><b>AEAD</b></span><span class="set-switch"><input type="checkbox" data-fam="aead" disabled><span class="slider"></span></span></label>
+        </fieldset>
+      </section>
+      <section id="setRecordsPage" class="set-page" aria-label="执行记录" hidden></section>
     </div>
   </div>
-</div>
+</dialog>
 
 <div class="toast" id="toast"></div>
 
@@ -1455,9 +1479,19 @@ function togglePopover(id, btnId){
 }
 
 // ---- 算法设置按当前应用读取和保存 ----
+const settingsDialog=document.getElementById('setMask');
+const capturePage=document.getElementById('setCapturePage');
+const recordsPage=document.getElementById('setRecordsPage');
+const captureTab=document.getElementById('setCaptureTab');
+const recordsTab=document.getElementById('setRecordsTab');
 const familyInputs=document.querySelectorAll('#setFamilies input[data-fam]');
 let familyView=null;
 let familySaving=false;
+function setFamilyStatus(message, error=false){
+  const status=document.getElementById('setCaptureStatus');
+  status.textContent=message;
+  status.dataset.error=String(error);
+}
 function renderFamilies(){
   const capture=familyView?.capture;
   for(const input of familyInputs){
@@ -1471,29 +1505,51 @@ async function loadAppFamilies(view){
   try{
     const result=await (await fetch('/api/capture/families?package='+encodeURIComponent(view.pkg))).json();
     if(!result.ok || result.package!==view.pkg || !result.capture) throw Error('读取配置失败');
-    if(familyView===view && view.capture===before) view.capture=result.capture;
+    if(familyView!==view || view.capture!==before) return false;
+    view.capture=result.capture;
+    return true;
   }catch(error){
-    if(familyView===view) toast('读取应用设置失败');
+    if(familyView===view) setFamilyStatus('读取设置失败，请重新打开设置。',true);
+    return false;
+  }finally{
+    if(familyView===view) renderFamilies();
   }
-  if(familyView===view) renderFamilies();
 }
-async function openSettings(){
+async function openCaptureSettings(){
   const pkg=selectedPackage();
-  if(!pkg){ toast('请先选择应用'); return; }
   const label=serverApps.find(app=>app.package===pkg)?.label || pkg;
   const view={pkg, label, capture:null};
   familyView=view;
-  document.getElementById('familyHeading').textContent='算法 · '+label;
+  document.getElementById('familyHeading').textContent=label || '未选择应用';
+  document.getElementById('setFamilies').hidden=!pkg;
   renderFamilies();
-  document.getElementById('setMask').classList.add('show');
-  await loadAppFamilies(view);
+  setFamilyStatus(pkg ? '正在读取设置…' : '在主界面选中应用后，即可设置采集算法。');
+  if(pkg && await loadAppFamilies(view) && familyView===view) setFamilyStatus('');
+}
+function showSettingsPage(page){
+  const showRecords=page==='records';
+  capturePage.hidden=showRecords;
+  recordsPage.hidden=!showRecords;
+  captureTab.setAttribute('aria-pressed',String(!showRecords));
+  recordsTab.setAttribute('aria-pressed',String(showRecords));
+  document.querySelector('.set-main').scrollTop=0;
+  if(showRecords){ window.adhOperations.showRecords(); }
+  else { window.adhOperations.pause(); void openCaptureSettings(); }
+}
+function openSettings(page='capture'){
+  closePopovers();
+  if(!settingsDialog.open) settingsDialog.showModal();
+  showSettingsPage(page);
 }
 async function saveFamilies(input){
   const view=familyView;
   if(familySaving || !view?.capture || view.pkg!==selectedPackage()){ renderFamilies(); return; }
   const patch={package:view.pkg, family:input.dataset.fam, enabled:input.checked};
-  const report=message=>toast(view.label+' · '+message);
+  const report=(message,error=false)=>{
+    if(familyView?.pkg===view.pkg) setFamilyStatus(message,error);
+  };
   familySaving=true;
+  report('正在保存…');
   for(const checkbox of familyInputs) checkbox.disabled=true;
   try{
     const result=await (await fetch('/api/capture/families',{
@@ -1507,7 +1563,7 @@ async function saveFamilies(input){
     }
     if(view.pkg!==selectedPackage()) return;
     if(!result.ok){
-      report(result.error||'应用设置未生效');
+      report(result.error||'应用设置未生效',true);
       if(familyView?.pkg===view.pkg && !result.capture) await loadAppFamilies(familyView);
     }else{
       const targets=result.runtime?.targets||[];
@@ -1518,7 +1574,7 @@ async function saveFamilies(input){
     }
   }catch(error){
     if(view.pkg===selectedPackage()){
-      report(error.message||'应用设置未生效');
+      report(error.message||'应用设置未生效',true);
       if(familyView?.pkg===view.pkg) await loadAppFamilies(familyView);
     }
   }finally{
@@ -1565,7 +1621,9 @@ function render(){
   if(next!==chosenPkg) chosenPkg=next;
   const pkg=chosenPkg;
   const selected=selectedPackage();
-  if(familyView && familyView.pkg!==selected){ familyView=null; closeModal('setMask'); }
+  if(settingsDialog.open && !capturePage.hidden && familyView && familyView.pkg!==selected){
+    void openCaptureSettings();
+  }
   const nextCaptureOn=!!selected && (Object.hasOwn(serverCaptureByPackage,selected)?serverCaptureByPackage[selected]:serverCaptureDefault);
   if(nextCaptureOn!==captureOn){ captureOn=nextCaptureOn; capRenderAll(); refreshCapUnpackHint(); }
   if(pkg!==lastFilterPkg){ lastFilterPkg=pkg; unpackViewRunId=null; unpackRuns=[]; capReset(); loadAppEvents(); dumpSid=''; scheduleDetect(); if(document.getElementById('p-dump').classList.contains('active')) loadInventory(); refreshCapUnpackHint(); }
@@ -1719,9 +1777,14 @@ document.addEventListener('click', e=>{
 document.addEventListener('keydown', e=>{
   if(e.key==='Escape') closePopovers();
 });
-document.getElementById('setBtn').addEventListener('click', openSettings);
-// 点遮罩空白处关闭模态
-document.getElementById('setMask').addEventListener('click', e=>{ if(e.target.id==='setMask') closeModal('setMask'); });
+document.getElementById('setBtn').addEventListener('click', ()=>openSettings());
+document.getElementById('setClose').addEventListener('click', ()=>settingsDialog.close());
+captureTab.addEventListener('click', ()=>{ if(capturePage.hidden) showSettingsPage('capture'); });
+recordsTab.addEventListener('click', ()=>{ if(recordsPage.hidden) showSettingsPage('records'); });
+settingsDialog.addEventListener('click', e=>{ if(e.target===settingsDialog) settingsDialog.close(); });
+settingsDialog.addEventListener('close', ()=>{
+  if(!settingsDialog.open){ familyView=null; window.adhOperations.pause(); }
+});
 // 初始化 displayCap（不打开设置也让列表按配置渲染）
 fetch('/api/config').then(r=>r.json()).then(r=>{ if(r.settings?.ui?.displayCap) capDisplayCap=r.settings.ui.displayCap; }).catch(()=>{});
 </script>

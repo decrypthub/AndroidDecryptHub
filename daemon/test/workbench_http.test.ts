@@ -51,3 +51,22 @@ test('a stale configuration submit is rejected without changing settings; accept
   assert.equal((await call({action:'get',idempotencyKey:'reviewed-human-intent'})).body.code,'OPERATION_NOT_FOUND');
   config=await (await fetch(base+'/api/config')).json() as any;assert.equal(config.settings.ui.displayCap,411);
 });
+
+test('history can hide successful panel settings saves without hiding failures or API tasks',async()=>{
+  const panel = {role:'ai' as const, id:'panel-fixture', source:'panel'};
+  const settingsOp = {name:'settings', mode:'analysis' as const};
+  const saved = await engine.execute(settingsOp, {}, panel, {}, async () => ({ok:true}));
+  const failed = await engine.execute(settingsOp, {}, panel, {}, async () => ({ok:false}));
+  const ai = await engine.execute(settingsOp, {}, {...panel, source:'mcp'}, {}, async () => ({ok:true}));
+  assert.equal(saved.state,'succeeded');
+  assert.equal(failed.state,'failed');
+
+  const list = async(taskId:string,hideSettingSaves:boolean) => (await call({
+    action:'list', taskId, limit:1, hideSettingSaves,
+  })).body;
+  assert.equal((await list(saved.taskId,true)).totalTasks,0);
+  assert.equal((await list(saved.taskId,false)).tasks[0].id,saved.taskId);
+  assert.equal((await list(failed.taskId,true)).tasks[0].id,failed.taskId);
+  assert.equal((await list(ai.taskId,true)).tasks[0].id,ai.taskId);
+  assert.equal((await call({action:'get',id:saved.id,includeResult:true})).body.operation.result.ok,true);
+});

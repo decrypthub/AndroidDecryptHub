@@ -1,180 +1,301 @@
 ((scope) => {
-  const M=scope.AdhWorkbenchModel;
-  const element=(tag,text,className)=>{const node=document.createElement(tag);if(text!==undefined)node.textContent=String(text);if(className)node.className=className;return node;};
-  const button=(text,fn,className)=>{const node=element('button',text,className);node.type='button';node.onclick=fn;return node;};
-  const badge=state=>{const node=element('span',M.states[state]||state,'aw-state');node.dataset.state=state;node.title=state;return node;};
-  const json=value=>JSON.stringify(value,null,2);
-  function download(value,name){const url=URL.createObjectURL(new Blob([json(value)],{type:'application/json;charset=utf-8'}));const link=element('a');link.href=url;link.download=name;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
-  function mount(root,client,options={}) {
-    root.classList.add('adh-workbench');
-    root.innerHTML=`<header class="aw-header"><div><h1>任务</h1></div><div class="aw-row"><button id="awClose">返回分析现场</button></div></header>
-      <nav class="aw-tabs" aria-label="任务刷新"><label class="aw-check"><input id="awAuto" type="checkbox" checked>自动刷新（5 秒）</label><button id="awRefresh">刷新状态</button></nav>
-      <section id="awNotice" class="aw-notice" data-tone="error" role="alert" hidden><h3>读取任务失败</h3><p id="awNoticeText"></p><button id="awNoticeDismiss">关闭提示</button></section>
-      <section id="awTasksView" class="aw-task-grid"><aside class="aw-task-nav" aria-label="任务列表"><div class="aw-search"><input id="awSearch" type="search" aria-label="搜索全部任务" placeholder="搜索任务名称或 ID"><div class="aw-row"><select id="awState" aria-label="按任务状态筛选"><option value="">全部状态</option><option value="active">分析中</option><option value="paused">已暂停</option><option value="unknown">结果未知</option><option value="cancel_requested">已请求取消</option><option value="completed">已完成</option><option value="cancelled">已取消</option></select><select id="awOwner" aria-label="按负责人筛选"><option value="">全部负责人</option><option value="ai">AI</option><option value="operator">人类</option></select></div></div><p id="awTaskCount" class="aw-muted aw-spaced">正在读取任务…</p><div id="awTaskList" class="aw-task-list" aria-live="polite"></div><div class="aw-row"><button id="awTaskPrev">上一页任务</button><button id="awTaskNext">下一页任务</button></div></aside>
-      <section class="aw-detail"><div id="awTaskHead" class="aw-empty"><strong>选择一项任务</strong></div><section id="awOperationsSection" class="aw-detail-section" hidden><div class="aw-row aw-between"><h3>操作结果</h3><span id="awOperationCount" class="aw-muted"></span></div><div class="aw-table-wrap"><table class="aw-table"><thead><tr><th>标题</th><th>状态</th><th>创建时间</th><th>结果</th></tr></thead><tbody id="awOperationRows"></tbody></table></div><div class="aw-row aw-spaced"><button id="awOpPrev">上一页操作</button><button id="awOpNext">下一页操作</button></div></section><article id="awOperationDetail" class="aw-detail-section" hidden></article></section></section>
-    `;
-    const $=id=>root.querySelector('#'+id);
-    const s={visible:true,busy:false,refreshing:false,listOffset:0,opOffset:0,taskId:null,opId:null,savedResults:null,listGeneration:0,detailGeneration:0,operationGeneration:0};
-    let timer,searchTimer,lastOpRender='',lastTaskRender='',lastListRender='',lastRowsRender='';
-    function report(error){
-      $('awNoticeText').textContent=error.message;
-      $('awNotice').hidden=false;
+  const M = scope.AdhWorkbenchModel;
+  const PAGE_SIZE = 25;
+  const titles = new Map([
+    ['settings', '保存设置'],
+    ['automatic-capture-families', '应用采集设置'],
+    ['unpack_package', '一键脱壳'],
+  ]);
+  const sources = new Map([['panel', '面板'], ['mcp', 'AI 客户端'], ['automatic', '自动执行']]);
+  const titleFor = name => titles.get(name) || name;
+  const json = value => JSON.stringify(value, null, 2);
+  function element(tag, text, className) {
+    const node = document.createElement(tag);
+    if (text !== undefined) node.textContent = String(text);
+    if (className) node.className = className;
+    return node;
+  }
+  function button(text, fn, className) {
+    const node = element('button', text, className);
+    node.type = 'button';
+    node.onclick = fn;
+    return node;
+  }
+  function badge(state, implicit = false) {
+    const label = implicit && state === 'completed' ? '已结束' : M.states[state] || state;
+    const node = element('span', label, 'aw-state');
+    node.dataset.state = state;
+    return node;
+  }
+  function download(value, name) {
+    const url = URL.createObjectURL(new Blob([json(value)], {type:'application/json;charset=utf-8'}));
+    const link = element('a');
+    link.href = url;
+    link.download = name;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  function mount(root, client, options = {}) {
+    root.classList.add('adh-workbench', 'aw-history');
+    root.innerHTML = `
+      ${options.embedded ? '' : '<header class="aw-header"><h1>执行记录</h1><button type="button" id="awClose">返回分析现场</button></header>'}
+      <section id="awNotice" class="aw-history-notice" role="alert" hidden>
+        <p id="awNoticeText"></p><button type="button" id="awNoticeDismiss">关闭提示</button>
+      </section>
+      <section id="awListView">
+        <div class="aw-history-heading">
+          ${options.embedded ? '<h3>执行记录</h3>' : ''}
+          <button type="button" id="awRefresh" class="aw-refresh">刷新</button>
+        </div>
+        <div class="aw-history-controls">
+          <input id="awSearch" type="search" aria-label="搜索记录" placeholder="搜索记录">
+          <select id="awState" aria-label="按状态筛选">
+            <option value="">全部状态</option><option value="active">分析中</option>
+            <option value="paused">已暂停</option><option value="unknown">结果未知</option>
+            <option value="cancel_requested">取消中</option><option value="completed">已结束</option>
+            <option value="cancelled">已取消</option>
+          </select>
+          <label class="aw-check"><input id="awShowSettingSaves" type="checkbox">显示设置修改</label>
+        </div>
+        <div id="awTaskList" class="aw-history-list" aria-live="polite">
+          <p class="aw-history-empty">正在读取执行记录…</p>
+        </div>
+        <div class="aw-row aw-history-pages" id="awTaskPages" hidden>
+          <button type="button" id="awTaskPrev">上一页</button><button type="button" id="awTaskNext">下一页</button>
+        </div>
+      </section>
+      <section id="awDetailView" hidden>
+        <button type="button" class="aw-back" id="awListBack">‹ 返回执行记录</button>
+        <div id="awTaskHead" class="aw-task-heading"></div>
+        <section id="awOperationsSection" hidden>
+          <div id="awOperationRows" class="aw-history-list"></div>
+          <div class="aw-row aw-history-pages" id="awOpPages" hidden>
+            <button type="button" id="awOpPrev">上页操作</button><button type="button" id="awOpNext">下页操作</button>
+          </div>
+        </section>
+        <article id="awOperationDetail" class="aw-detail-section" hidden></article>
+      </section>`;
+    const $ = id => root.querySelector('#' + id);
+    const state = {
+      visible:true, busy:false, refreshing:false, listOffset:0, opOffset:0,
+      taskId:null, opId:null, savedResults:null, listGeneration:0, detailGeneration:0, operationGeneration:0,
+    };
+    let timer, searchTimer, lastListRender = '', lastTaskRender = '', lastRowsRender = '', lastOpRender = '';
+
+    function report(error) {
+      $('awNoticeText').textContent = error?.message || '读取执行记录失败';
+      $('awNotice').hidden = false;
     }
-    async function work(fn){if(s.busy)return;s.busy=true;permissions();try{await fn();}catch(error){report(error);}finally{s.busy=false;permissions();}}
-    function permissions(){
-      for(const node of root.querySelectorAll('[data-navigate]'))node.disabled=s.busy;
-      $('awRefresh').disabled=s.busy;
+    function permissions() {
+      $('awRefresh').disabled = state.busy;
+      for (const node of root.querySelectorAll('[data-navigate]')) node.disabled = state.busy;
     }
-    $('awNoticeDismiss').onclick=()=>{$('awNotice').hidden=true;};
-    $('awClose').onclick=()=>options.close?options.close():location.assign('/');
-    const filters=()=>({q:$('awSearch').value,state:$('awState').value,owner:$('awOwner').value});
-    function filter(){s.listOffset=0;refreshList().catch(report);}
-    $('awSearch').oninput=()=>{clearTimeout(searchTimer);searchTimer=setTimeout(filter,250);};$('awState').onchange=filter;$('awOwner').onchange=filter;
-    $('awTaskPrev').onclick=()=>{s.listOffset=Math.max(0,s.listOffset-25);refreshList().catch(report);};$('awTaskNext').onclick=()=>{s.listOffset+=25;refreshList().catch(report);};
-    $('awOpPrev').onclick=()=>{s.opOffset=Math.max(0,s.opOffset-25);refreshTask().catch(report);};$('awOpNext').onclick=()=>{s.opOffset+=25;refreshTask().catch(report);};
-    $('awRefresh').onclick=()=>work(refresh);
-    async function refreshList(){const generation=++s.listGeneration;const value=await client.management({action:'list',limit:25,offset:s.listOffset,...filters()});if(generation!==s.listGeneration)return;
-      $('awTaskCount').textContent=`${value.totalTasks} 项任务 · 第 ${Math.floor(s.listOffset/25)+1} 页`;$('awTaskPrev').disabled=s.listOffset===0;$('awTaskNext').disabled=value.nextTaskOffset===null;
-      const signature=json(value.tasks)+'|'+s.taskId;if(signature===lastListRender)return;lastListRender=signature;
-      const rows=value.tasks.map(task=>{
-        const node=button('',()=>work(()=>selectTask(task.id)));
-        node.dataset.navigate='';
-        node.setAttribute('aria-current',String(task.id===s.taskId));
-        const meta=element('span',undefined,'aw-task-meta');
-        meta.append(badge(task.state),element('time',M.time(task.updatedAt??task.createdAt)));
-        node.append(element('span',task.title,'aw-task-title'),meta);
-        return node;
+    async function work(fn) {
+      if (state.busy) return;
+      state.busy = true;
+      $('awNotice').hidden = true;
+      permissions();
+      try { await fn(); }
+      catch (error) { report(error); }
+      finally { state.busy = false; permissions(); }
+    }
+    function formatMeta(record) {
+      return [sources.get(record.source), M.time(record.updatedAt ?? record.createdAt)].filter(Boolean).join(' · ');
+    }
+    function entry(title, meta, status, select) {
+      const row = button('', select, 'aw-history-row');
+      row.dataset.navigate = '';
+      const content = element('span', undefined, 'aw-history-content');
+      content.append(element('span', title, 'aw-task-title'), element('span', meta, 'aw-task-meta'));
+      row.append(content, status, element('span', '›', 'aw-chevron'));
+      row.lastChild.setAttribute('aria-hidden', 'true');
+      return row;
+    }
+    function setPaging(prefix, offset, next) {
+      $(prefix + 'Pages').hidden = offset === 0 && next == null;
+      $(prefix + 'Prev').disabled = offset === 0;
+      $(prefix + 'Next').disabled = next == null;
+    }
+    function filter() {
+      state.listOffset = 0;
+      refreshList().catch(report);
+    }
+    $('awNoticeDismiss').onclick = () => { $('awNotice').hidden = true; };
+    const close = $('awClose');
+    if (close) close.onclick = () => options.close ? options.close() : location.assign('/');
+    $('awSearch').oninput = () => { clearTimeout(searchTimer); searchTimer = setTimeout(filter, 250); };
+    $('awState').onchange = filter;
+    $('awShowSettingSaves').onchange = filter;
+    $('awRefresh').onclick = () => work(refreshList);
+    $('awTaskPrev').onclick = () => { state.listOffset = Math.max(0, state.listOffset - PAGE_SIZE); refreshList().catch(report); };
+    $('awTaskNext').onclick = () => { state.listOffset += PAGE_SIZE; refreshList().catch(report); };
+    $('awOpPrev').onclick = () => { state.opOffset = Math.max(0, state.opOffset - PAGE_SIZE); refreshTask().catch(report); };
+    $('awOpNext').onclick = () => { state.opOffset += PAGE_SIZE; refreshTask().catch(report); };
+
+    async function refreshList() {
+      const generation = ++state.listGeneration;
+      const query = $('awSearch').value.trim();
+      const alias = [...titles].find(([, label]) => label === query)?.[0];
+      const value = await client.management({
+        action:'list', limit:PAGE_SIZE, offset:state.listOffset,
+        q:alias || query, state:$('awState').value, hideSettingSaves:!$('awShowSettingSaves').checked,
       });
-      if(!rows.length)rows.push(element('p',value.totalTasks?'当前页没有任务':'没有匹配任务。AI 提交任务后会在此显示。','aw-empty'));
-      $('awTaskList').replaceChildren(...rows);permissions();
+      if (generation !== state.listGeneration) return;
+      setPaging('awTask', state.listOffset, value.nextTaskOffset);
+      const signature = json(value.tasks);
+      if (signature === lastListRender) return;
+      lastListRender = signature;
+      const rows = value.tasks.map(task => entry(titleFor(task.title), formatMeta(task), badge(task.state, task.implicit), () => work(() => selectTask(task.id))));
+      if (!rows.length) rows.push(element('p', '没有符合条件的执行记录。', 'aw-history-empty'));
+      $('awTaskList').replaceChildren(...rows);
+      permissions();
     }
-    async function selectTask(id){
-      s.taskId=id;
-      s.opId=null;
-      s.opOffset=0;
-      s.savedResults=null;
-      lastTaskRender='';
-      $('awTaskHead').replaceChildren();
-      $('awOperationsSection').hidden=true;
-      $('awOperationDetail').hidden=true;
-      await refreshTask();
-      await refreshList();
+    $('awListBack').onclick = () => {
+      state.taskId = null;
+      state.opId = null;
+      state.detailGeneration++;
+      state.operationGeneration++;
+      $('awDetailView').hidden = true;
+      $('awListView').hidden = false;
+      $('awSearch').focus({preventScroll:true});
+      refreshList().catch(report);
+    };
+
+    async function selectTask(id, openSingle = true) {
+      state.taskId = id;
+      state.opId = null;
+      state.opOffset = 0;
+      state.savedResults = null;
+      lastTaskRender = '';
+      lastRowsRender = '';
+      $('awListView').hidden = true;
+      $('awDetailView').hidden = false;
+      $('awTaskHead').replaceChildren(element('p', '正在读取结果…', 'aw-muted'));
+      $('awOperationsSection').hidden = true;
+      $('awOperationDetail').hidden = true;
+      $('awListBack').focus({preventScroll:true});
+      const value = await refreshTask();
+      if (openSingle && value?.totalOperations === 1) await selectOperation(value.operations[0].id);
     }
-    async function refreshTask(){if(!s.taskId)return;const id=s.taskId,generation=++s.detailGeneration;const value=await client.management({action:'get',taskId:id,limit:25,offset:s.opOffset});if(id!==s.taskId||generation!==s.detailGeneration)return;
-      const {task}=value;
-      const signature=json([task.title,task.state,task.createdAt,task.updatedAt]);
-      if(signature!==lastTaskRender){
-        lastTaskRender=signature;
-        const head=element('div',undefined,'aw-task-heading');
-        const row=element('div',undefined,'aw-row');
-        row.append(element('h2',task.title),badge(task.state));
-        head.append(row,element('p',`创建 ${M.time(task.createdAt)} · 更新 ${M.time(task.updatedAt)}`,'aw-muted'));
-        $('awTaskHead').className='';$('awTaskHead').replaceChildren(head);
+    async function refreshTask() {
+      if (!state.taskId) return;
+      const id = state.taskId, generation = ++state.detailGeneration;
+      const value = await client.management({action:'get', taskId:id, limit:PAGE_SIZE, offset:state.opOffset});
+      if (id !== state.taskId || generation !== state.detailGeneration) return;
+      const {task} = value;
+      const signature = json([task.title, task.state, task.updatedAt]);
+      if (signature !== lastTaskRender) {
+        lastTaskRender = signature;
+        const heading = element('div', undefined, 'aw-row');
+        heading.append(element('h2', titleFor(task.title)), badge(task.state, task.implicit));
+        $('awTaskHead').replaceChildren(heading, element('p', formatMeta(task), 'aw-muted'));
       }
-      $('awOperationsSection').hidden=false;$('awOperationCount').textContent=`${value.totalOperations} 条 · 第 ${Math.floor(s.opOffset/25)+1} 页`;$('awOpPrev').disabled=s.opOffset===0;$('awOpNext').disabled=value.nextOperationOffset===null;
-      const rowsSignature=json(value.operations)+'|'+s.opId;
-      if(rowsSignature!==lastRowsRender){lastRowsRender=rowsSignature;
-        const rows=value.operations.map(op=>{
-          const row=element('tr');
-          row.dataset.operation=op.id;
-          row.setAttribute('aria-selected',String(op.id===s.opId));
-          const status=element('td');
-          status.append(badge(op.state));
-          const result=element('td');
-          const open=button('查看结果',()=>work(()=>selectOperation(op.id)));
-          open.dataset.navigate='';
-          result.append(open);
-          row.append(element('td',op.name),status,element('td',M.time(op.createdAt)),result);
+      $('awOperationsSection').hidden = false;
+      setPaging('awOp', state.opOffset, value.nextOperationOffset);
+      const rowsSignature = json(value.operations) + '|' + state.opId;
+      if (rowsSignature !== lastRowsRender) {
+        lastRowsRender = rowsSignature;
+        const rows = value.operations.map(op => {
+          const row = entry(titleFor(op.name), M.time(op.finishedAt ?? op.createdAt), badge(op.state), () => work(() => selectOperation(op.id)));
+          row.dataset.operation = op.id;
+          row.setAttribute('aria-pressed', String(op.id === state.opId));
           return row;
         });
-        if(!rows.length){
-          const cell=element('td','任务还没有操作记录。');
-          cell.colSpan=4;
-          const row=element('tr');
-          row.append(cell);
-          rows.push(row);
-        }
+        if (!rows.length) rows.push(element('p', '这项记录还没有执行结果。', 'aw-history-empty'));
         $('awOperationRows').replaceChildren(...rows);
       }
       permissions();
-      if(s.opId)await refreshOperation();
+      if (state.opId) await refreshOperation();
+      return value;
     }
-    async function goOperation(id){
-      const {operation}=await client.management({action:'get',id});
-      if(s.taskId!==operation.taskId)await selectTask(operation.taskId);
+    async function goOperation(id) {
+      const {operation} = await client.management({action:'get', id});
+      if (state.taskId !== operation.taskId) await selectTask(operation.taskId, false);
       await selectOperation(id);
     }
-    async function selectOperation(id){
-      s.opId=id;
-      s.savedResults=null;
-      lastOpRender='';
-      for(const row of $('awOperationRows').querySelectorAll('[data-operation]')){
-        row.setAttribute('aria-selected',String(row.dataset.operation===id));
+    async function selectOperation(id) {
+      state.opId = id;
+      state.savedResults = null;
+      lastOpRender = '';
+      for (const row of $('awOperationRows').querySelectorAll('[data-operation]')) {
+        row.setAttribute('aria-pressed', String(row.dataset.operation === id));
       }
-      $('awOperationDetail').hidden=true;
+      $('awOperationDetail').hidden = true;
       await refreshOperation();
     }
-    const resultSignature=operation=>json([operation.resultFile,operation.lateResultFile]);
-    async function refreshOperation(){
-      const id=s.opId,generation=++s.operationGeneration;
-      const current=()=>id===s.opId&&generation===s.operationGeneration;
-      let includeResult=s.savedResults===null;
-      let {operation}=await client.management({action:'get',id,includeResult});
-      if(!current())return;
-      if(!includeResult&&resultSignature(operation)!==s.savedResults.signature){
-        includeResult=true;
-        ({operation}=await client.management({action:'get',id,includeResult}));
-        if(!current())return;
+    const resultSignature = operation => json([operation.resultFile, operation.lateResultFile]);
+    async function refreshOperation() {
+      const id = state.opId, generation = ++state.operationGeneration;
+      const current = () => id === state.opId && generation === state.operationGeneration;
+      let includeResult = state.savedResults === null;
+      let {operation} = await client.management({action:'get', id, includeResult});
+      if (!current()) return;
+      if (!includeResult && resultSignature(operation) !== state.savedResults.signature) {
+        includeResult = true;
+        ({operation} = await client.management({action:'get', id, includeResult}));
+        if (!current()) return;
       }
-      if(includeResult){
-        s.savedResults={signature:resultSignature(operation),result:operation.result,lateResult:operation.lateResult};
+      if (includeResult) {
+        state.savedResults = {signature:resultSignature(operation), result:operation.result, lateResult:operation.lateResult};
       }
-      const {name,state,createdAt,startedAt,finishedAt,error}=operation;
-      const renderSignature=json([id,name,state,createdAt,startedAt,finishedAt,error?.message,s.savedResults.signature]);
-      if(renderSignature!==lastOpRender){
-        lastOpRender=renderSignature;
+      const signature = json([id, operation.state, operation.error?.message, state.savedResults.signature]);
+      if (signature !== lastOpRender) {
+        lastOpRender = signature;
         renderOperation(operation);
       }
     }
-    function renderOperation(op){
-      const area=$('awOperationDetail');
-      area.hidden=false;
-      area.replaceChildren();
-      const heading=element('div',undefined,'aw-row aw-between');
-      heading.append(element('h2',op.name),badge(op.state));
-      area.append(heading,element('p',`创建 ${M.time(op.createdAt)} · 开始 ${M.time(op.startedAt)} · 结束 ${M.time(op.finishedAt)}`,'aw-muted'));
-      const results=element('section',undefined,'aw-detail-section');
-      results.append(element('h3','已保存结果'));
-      if(op.error?.message)results.append(element('p',op.error.message,'aw-muted'));
-      if(s.savedResults.result===undefined&&s.savedResults.lateResult===undefined){
-        results.append(element('p','尚无已保存结果。','aw-muted'));
+    function renderOperation(op) {
+      const area = $('awOperationDetail');
+      area.hidden = false;
+      const heading = element('div', undefined, 'aw-row');
+      heading.append(element('h3', '执行结果'), badge(op.state));
+      area.replaceChildren(heading);
+      if (op.error?.message) area.append(element('p', op.error.message, 'aw-history-empty'));
+      if (state.savedResults.result === undefined && state.savedResults.lateResult === undefined && !op.error?.message) {
+        area.append(element('p', '还没有可查看的结果。', 'aw-history-empty'));
       }
-      for(const [key,label] of [['result','原始结果'],['lateResult','晚到结果']]){
-        const value=s.savedResults[key];
-        if(value===undefined)continue;
-        const box=element('div',undefined,'aw-result-block');
-        const raw=json(value);
-        box.append(element('h3',label),element('pre',raw.length>120000?raw.slice(0,120000)+'\n…界面预览已截断':raw));
-        if(raw.length>120000)box.append(element('p','界面预览限制 120000 字符，可下载全部已保存内容。'));
-        if(value?.omitted)box.append(element('p','Host 只保存了结果摘要。'));
-        box.append(button('下载'+label,()=>download(value,`${op.id}-${key}.json`)));
-        results.append(box);
+      for (const [key, label] of [['result', '原始结果'], ['lateResult', '晚到结果']]) {
+        const value = state.savedResults[key];
+        if (value === undefined) continue;
+        const payload = value?.body ?? value;
+        const message = [payload?.summary, payload?.message, payload?.note, payload?.error]
+          .find(text => typeof text === 'string' && text.length <= 300 && text.trim());
+        if (message) area.append(element('p', message, 'aw-result-summary'));
+        const details = element('details', undefined, 'aw-result-block');
+        const raw = json(value);
+        details.append(element('summary', label), element('pre', raw.length > 120000 ? raw.slice(0, 120000) + '\n…界面预览已截断' : raw));
+        if (value?.omitted) details.append(element('p', '仅保存了结果摘要。'));
+        details.append(button('下载' + label, () => download(value, op.id + '-' + key + '.json')));
+        area.append(details);
       }
-      area.append(results);permissions();
     }
-    async function refresh(){await refreshList();await refreshTask();}
-    function start(){s.visible=true;if(timer)return;timer=setInterval(()=>{
-      if(!s.visible||document.hidden||!$('awAuto').checked||s.busy||s.refreshing)return;
-      if(root.contains(document.activeElement)&&document.activeElement?.matches('input,textarea,select'))return;
-      s.refreshing=true;refresh().catch(report).finally(()=>s.refreshing=false);
-    },5000);}
-    permissions();start();refresh().catch(report);
+    async function refresh() {
+      if (state.taskId) await refreshTask();
+      else await refreshList();
+    }
+    function start() {
+      state.visible = true;
+      if (timer) return;
+      timer = setInterval(() => {
+        if (!state.visible || document.hidden || state.busy || state.refreshing) return;
+        if (root.contains(document.activeElement) && document.activeElement?.matches('input,textarea,select')) return;
+        state.refreshing = true;
+        refresh().catch(report).finally(() => state.refreshing = false);
+      }, 5000);
+    }
+    start();
+    refresh().catch(report);
     if (options.standalone) {
       const params = new URLSearchParams(location.search);
       if (params.get('operation')) work(() => goOperation(params.get('operation')));
       else if (params.get('task')) work(() => selectTask(params.get('task')));
     }
-    return {open(){start();refresh().catch(report);},pause(){s.visible=false;clearInterval(timer);clearTimeout(searchTimer);timer=undefined;},refresh};
+    return {
+      open() { start(); refresh().catch(report); },
+      pause() { state.visible = false; clearInterval(timer); clearTimeout(searchTimer); timer = undefined; },
+      refresh,
+    };
   }
-  scope.AdhWorkbench={mount};
+  scope.AdhWorkbench = {mount};
 })(globalThis);

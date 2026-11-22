@@ -21,7 +21,8 @@ verify_chk "one-click unpack wired" 'grep -qF "/api/unpack/run" <<<"$HTML" && gr
 verify_chk "live capture panel"    'grep -q "/api/captures" <<<"$HTML" && grep -q "capLoad" <<<"$HTML"'
 verify_chk "capture KEY/IV cards"  'grep -q "function ioKV" <<<"$HTML" && grep -q "输入 / INPUT" <<<"$HTML" && grep -q "输出 / OUTPUT" <<<"$HTML"'
 verify_chk "wires dump download"   'grep -qF "/api/dumps/download" <<<"$HTML" && grep -qF "unpackDetailRows" <<<"$HTML"'
-verify_chk "header keeps app, summary, algorithms and tasks" 'grep -q "id=\"appBtn\"" <<<"$HTML" && grep -q "id=\"processBtn\"" <<<"$HTML" && grep -q "id=\"setBtn\">算法设置</button>" <<<"$HTML" && grep -q "id=\"opBtn\">任务</button>" <<<"$HTML"'
+verify_chk "header keeps app, summary and one settings entry" 'grep -q "id=\"appBtn\"" <<<"$HTML" && grep -q "id=\"processBtn\"" <<<"$HTML" && grep -q "id=\"setBtn\"[^>]*>设置</button>" <<<"$HTML" && ! grep -q "id=\"opBtn\"" <<<"$HTML"'
+verify_chk "settings contains algorithms and execution history" 'grep -q "id=\"setCaptureTab\"[^>]*>算法采集</button>" <<<"$HTML" && grep -q "id=\"setRecordsTab\"[^>]*>执行记录</button>" <<<"$HTML"'
 verify_chk "analysis omits WeChat, MCP onboarding and Hook editor" '! grep -qE "wechat(Btn|Popover)|wechat-follow\.png|公众号|mcp(Btn|Mask|Install|Connect|Config)|/api/mcp/config|hook-plans-panel\.js|AdhHookPlansPanel" <<<"$HTML"'
 verify_chk "workbench chrome"     'grep -q "process-trigger" <<<"$HTML" && grep -q "block-copy" <<<"$HTML" && grep -q "jumpLatest" <<<"$HTML" && grep -q "unpackRows" <<<"$HTML"'
 # backing endpoints respond (HTTP 200; -F avoids treating [ as a regex)
