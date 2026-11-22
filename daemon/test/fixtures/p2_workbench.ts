@@ -80,6 +80,7 @@ release();await new Promise(r=>setTimeout(r,20));
 const server=http.createServer((req,res)=>{
   const finish=(status:number,value:any)=>{res.writeHead(status,{'content-type':'application/json'});res.end(JSON.stringify(value));};
   (async()=>{
+    if(appCapture && req.method==='GET' && req.url==='/api/devices?action=list')return finish(200,{ok:true,demo:true,devices:[]});
     if(req.url==='/__fixture/state')return finish(200,{task:task.id,paused:paused.id,unknown:unknown?.id,root:process.env.ADH_DATA_DIR});
     if(appCapture&&req.url==='/__fixture/capture-commands')return finish(200,captureCommands);
     if(req.url==='/__fixture/ai-config'&&req.method==='POST'){

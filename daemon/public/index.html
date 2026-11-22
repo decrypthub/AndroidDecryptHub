@@ -23,7 +23,7 @@
   body { display:flex; flex-direction:column; height:100vh; overflow:hidden; min-width:320px;
     background:var(--bg); color:var(--ink); line-height:1.5; font-size:13px; letter-spacing:0;
     font-family:Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,'PingFang SC','Microsoft YaHei',sans-serif; }
-  header, #nav, .filters { flex-shrink:0; }
+  header, #nav, .app-context, .filters { flex-shrink:0; }
   .muted { color:var(--muted); }
   .detect-radar { font-size:12px; line-height:1.55; color:var(--muted); padding:10px 14px 0; white-space:pre-wrap; }
   .spacer { flex:1; }
@@ -42,7 +42,10 @@
   .status-dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--danger); flex-shrink:0; }
   .status-dot.ok { background:var(--green); animation:dh-pulse 2.4s ease-in-out infinite; }
   @keyframes dh-pulse { 0%,100%{opacity:1;} 50%{opacity:.5;} }
-  .header-process { position:relative; display:flex; align-items:center; gap:7px; min-width:0; margin-left:auto; }
+  .app-context { position:relative; display:flex; align-items:center; flex-wrap:wrap; gap:7px 12px; padding:5px 14px; border-bottom:1px solid var(--line-soft); }
+  .context-label { color:var(--muted); font-size:11px; white-space:nowrap; }
+  .header-process { display:flex; align-items:center; gap:7px; min-width:0; }
+  .app-affiliation { margin-left:auto; color:var(--muted); font-size:11px; }
   .app-switch { position:relative; min-width:0; }
   .process-trigger { display:grid; grid-template-columns:minmax(0,1fr) auto; grid-template-rows:auto auto; column-gap:10px; min-width:180px; max-width:280px; min-height:38px; padding:4px 10px; text-align:left; color:var(--ink-2); background:transparent; border:1px solid transparent; border-radius:4px; cursor:pointer; }
   .process-trigger:hover, .process-trigger[aria-expanded="true"] { border-color:transparent; background:rgba(255,255,255,.04); color:var(--ink); }
@@ -75,11 +78,17 @@
   .app-events div { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .session-rows { margin-top:8px; max-height:150px; overflow:auto; color:var(--muted); font-size:11px; }
   .session-row { display:flex; justify-content:space-between; gap:8px; padding:4px 0; }
-  .header-actions { display:flex; align-items:center; gap:7px; margin-left:0; flex-wrap:wrap; }
+  .header-actions { display:flex; align-items:center; gap:8px; margin-left:auto; min-width:0; }
+  .device-context { display:flex; align-items:center; gap:6px; min-width:0; max-width:280px; padding:5px 8px; border:1px solid var(--line-soft); border-radius:5px; color:var(--muted); font-size:11px; }
+  .device-context strong { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--ink-2); font-size:12px; font-weight:600; }
+  .device-context .device-link { white-space:nowrap; }
   .menu-wrap { position:relative; }
   .popover { display:none; position:absolute; top:calc(100% + 7px); right:0; z-index:80; min-width:210px; padding:6px; color:var(--ink-2); background:#11151c; border:1px solid #4a5260; border-radius:5px; box-shadow:0 18px 50px rgba(0,0,0,.58); }
   .popover.show { display:block; }
   .popover::before { content:''; position:absolute; top:-5px; right:14px; width:8px; height:8px; background:#11151c; border-top:1px solid #4a5260; border-left:1px solid #4a5260; transform:rotate(45deg); }
+  .app-context .menu-wrap { position:static; }
+  .app-context .popover { left:14px; right:auto; top:calc(100% + 5px); max-width:calc(100vw - 28px); }
+  .app-context .popover::before { display:none; }
   .menu-popover a,.menu-popover button { box-sizing:border-box; display:flex; width:100%; min-height:35px; align-items:center; gap:9px; padding:0 10px; color:var(--ink-2); background:transparent; border:0; border-radius:3px; text-align:left; text-decoration:none; white-space:nowrap; cursor:pointer; }
   .menu-popover a:hover,.menu-popover button:hover { color:var(--ink); background:var(--surface-3); }
   .menu-popover .menu-danger { color:var(--danger); }
@@ -345,6 +354,7 @@
   .set-header h3 { margin:0; color:var(--ink); font-size:18px; font-weight:650; text-transform:none; letter-spacing:normal; }
   .set-header > div { min-width:0; }
   .set-header .set-app { margin-top:4px; }
+  .set-header .set-app[hidden] { display:none; }
   .set-close-x { width:30px; height:30px; flex:none; border:0; background:transparent; color:var(--muted); font-size:22px; line-height:1; cursor:pointer; border-radius:4px; }
   .set-close-x:hover { background:var(--surface-3); color:var(--ink); }
   .set-shell :focus-visible { outline:2px solid var(--blue); outline-offset:2px; }
@@ -482,7 +492,21 @@
   <div class="brand-lockup">
     <h1><span class="hdr-mark"><img src="/raven.svg" alt=""></span>ADH</h1>
   </div>
-  <div class="stats" id="stats"><span class="status-dot" id="conn"></span><span id="status">连接中…</span><span class="cap-state-pill" id="capStatePill" hidden></span></div>
+  <div class="stats" id="stats"><span class="status-dot" id="conn"></span><span id="status">正在连接电脑服务…</span></div>
+  <div class="header-actions">
+    <div class="device-context" id="deviceContext" aria-label="设备连接">
+      <span class="context-label">设备</span>
+      <strong id="deviceTitle">读取中…</strong>
+      <span class="device-link" id="deviceLink"></span>
+    </div>
+    <button type="button" class="compact-action" id="setBtn" aria-haspopup="dialog" aria-controls="setMask">设置</button>
+  </div>
+</header>
+
+<nav id="nav"></nav>
+
+<section class="app-context" id="appContext" aria-label="APP 与会话">
+  <strong class="context-label">APP</strong>
   <div class="header-process">
     <div class="menu-wrap app-switch">
       <button type="button" class="process-trigger" id="appBtn" aria-expanded="false" aria-controls="appMenu" title="切换应用">
@@ -493,9 +517,9 @@
       <div class="popover app-menu" id="appMenu"></div>
     </div>
     <div class="menu-wrap">
-      <button type="button" class="compact-action" id="processBtn" aria-expanded="false" aria-controls="processPopover" title="应用摘要：包名与最近进程事件">摘要</button>
+      <button type="button" class="compact-action" id="processBtn" aria-expanded="false" aria-controls="processPopover" title="查看当前 APP 的进程会话">会话</button>
       <div class="popover process-popover" id="processPopover">
-        <div class="proc-title">应用摘要</div>
+        <div class="proc-title">APP 会话与摘要</div>
         <dl class="procinfo" id="procinfo"></dl>
         <label class="sess-lab"><input type="checkbox" id="sessShowOffline">显示离线会话 <span id="sessHidden" aria-live="polite"></span></label>
         <div class="session-rows" id="sessRows" aria-label="当前应用会话"></div>
@@ -503,12 +527,9 @@
       </div>
     </div>
   </div>
-  <div class="header-actions">
-    <button type="button" class="compact-action" id="setBtn" aria-haspopup="dialog" aria-controls="setMask">设置</button>
-  </div>
-</header>
-
-<nav id="nav"></nav>
+  <span class="cap-state-pill" id="capStatePill" hidden></span>
+  <span class="app-affiliation" id="appAffiliation">当前 Host 会话 · 设备归属未核验</span>
+</section>
 
 <div class="cap-unpack-hint" id="capUnpackHint" hidden></div>
 <!-- 加解密/系统/网络 三个实时捕获 tab 共用这条过滤工具栏 -->
@@ -697,7 +718,7 @@
       <div class="set-header">
         <div>
           <h3 id="setPanelTitle">算法与 Hook</h3>
-          <p class="set-app">当前应用 <strong id="setActiveApp">未选择应用</strong></p>
+          <p class="set-app" id="setAppContext">当前 APP <strong id="setActiveApp">未选择应用</strong></p>
         </div>
         <button type="button" class="set-close-x" id="setClose" aria-label="关闭设置">×</button>
       </div>
@@ -788,6 +809,7 @@
           <button type="button" id="setStatusRefresh" class="set-small-button">刷新</button>
         </div>
         <dl class="set-meta">
+          <div><dt>设备连接</dt><dd id="setDeviceStatus">读取中…</dd></div>
           <div><dt>面板地址</dt><dd id="setPanelAddress">—</dd></div>
           <div><dt>电脑服务版本</dt><dd id="setHostStatus">—</dd></div>
           <div><dt>当前应用</dt><dd id="setStatusApp">—</dd></div>
@@ -2030,6 +2052,39 @@ async function readPanelJson(path){
   if(!response.ok) throw Error('读取失败');
   return response.json();
 }
+function describePanelDevices(data){
+  if(data?.ok!==true || !Array.isArray(data.devices)) return {name:'设备状态未知',link:'读取失败'};
+  if(data.demo===true) return {name:'演示设备',link:'非真机',demo:true};
+  const connected=[];
+  for(const device of data.devices){
+    if(device?.online!==true || !Array.isArray(device.connections)) continue;
+    const verified=device.connections.filter(connection=>connection?.identityVerified===true && connection.online===true);
+    if(!verified.length) continue;
+    const model=device.lastKnown?.info?.model;
+    connected.push({
+      name:typeof model==='string' && model.trim() ? model.trim().slice(0,64) : '已核验设备',
+      link:[...new Set(verified.map(connection=>connection.transport==='adb'?'USB':connection.transport==='lan'?'LAN':'已核验'))].join(' / '),
+    });
+  }
+  if(connected.length===1) return connected[0];
+  if(connected.length>1) return {name:'已核验 '+connected.length+' 台',link:'在线'};
+  return data.devices.length ? {name:'无在线设备',link:'有登记记录'} : {name:'设备未核验',link:''};
+}
+function renderPanelDeviceContext(context){
+  document.getElementById('deviceTitle').textContent=context.name;
+  document.getElementById('deviceLink').textContent=context.link;
+  document.getElementById('setDeviceStatus').textContent=[context.name,context.link].filter(Boolean).join(' · ');
+  document.getElementById('appAffiliation').textContent=context.demo?'示例 APP · 无真机会话':'当前 Host 会话 · 设备归属未核验';
+}
+let readingPanelDevices=false;
+async function refreshPanelDevices(){
+  if(readingPanelDevices) return;
+  readingPanelDevices=true;
+  // Read the verified connection cache only. Legacy APP sessions have no verified device binding.
+  try{ renderPanelDeviceContext(describePanelDevices(await readPanelJson('/api/devices?action=list'))); }
+  catch{ renderPanelDeviceContext(describePanelDevices()); }
+  finally{ readingPanelDevices=false; }
+}
 function updateHostDisplayCap(data){
   const cap=data?.settings?.ui?.displayCap;
   if(!Number.isSafeInteger(cap) || cap<1) return;
@@ -2053,6 +2108,7 @@ async function refreshPanelStatus(){
   status.textContent='正在读取连接和数据状态…';
   status.dataset.error='false';
   document.getElementById('setPanelAddress').textContent=location.origin;
+  void refreshPanelDevices();
   renderStatusApp();
   const [health,config]=await Promise.allSettled([readPanelJson('/health'),readPanelJson('/api/config')]);
   const service=health.status==='fulfilled' && health.value?.ok===true ? health.value : null;
@@ -2081,6 +2137,7 @@ function showSettingsPage(page){
     if(selected) settingsTitle.textContent=button.getAttribute('aria-label');
   }
   observationFooter.hidden=page!=='hooks';
+  document.getElementById('setAppContext').hidden=page!=='hooks' && page!=='capture';
   document.querySelector('.set-main').scrollTop=0;
   renderSettingsScope();
   if(page==='hooks') showObservationView(true);
@@ -2245,8 +2302,8 @@ async function loadAppEvents(){
 function upsert(a){ agents.set(a.sessionId,{...agents.get(a.sessionId),...a}); render(); }
 function setWsPill(s,cls){ const p=document.getElementById('dbg-ws'); if(p){p.textContent='ws: '+s;p.className='pill '+cls;} }
 function connect(){ const ws=new WebSocket(`ws://${location.host}/ws`); const conn=document.getElementById('conn'), st=document.getElementById('status');
-  ws.onopen=()=>{conn.className='status-dot ok';st.textContent='实时';setWsPill('live','on');dbg('WS','open'); refreshApps();};
-  ws.onclose=()=>{conn.className='status-dot';st.textContent='断开 — 重连中';setWsPill('down','no');dbg('WS','close');setTimeout(connect,1500);};
+  ws.onopen=()=>{conn.className='status-dot ok';st.textContent='电脑服务在线';setWsPill('live','on');dbg('WS','open'); refreshApps();};
+  ws.onclose=()=>{conn.className='status-dot';st.textContent='电脑服务重连中…';setWsPill('down','no');dbg('WS','close');setTimeout(connect,1500);};
   ws.onmessage=e=>{const m=JSON.parse(e.data);
     if(m.event==='snapshot'){agents.clear();(m.data||[]).forEach(a=>agents.set(a.sessionId,{...agents.get(a.sessionId),...a})); render();}
     else if(m.event==='agent.hello'){
@@ -2294,6 +2351,8 @@ function connect(){ const ws=new WebSocket(`ws://${location.host}/ws`); const co
     dbg('WS←', m.event||'?');
   }; }
 connect();
+void refreshPanelDevices();
+setInterval(refreshPanelDevices,10000);
 document.getElementById('sessShowOffline').addEventListener('change',renderSessions);
 document.getElementById('appMenu').addEventListener('click', e=>{
   const btn=e.target.closest('[data-pkg]');

@@ -54,3 +54,30 @@ test('the page script still parses as a classic script', () => {
     assert.doesNotThrow(() => new vm.Script(src, { filename: `inline-${i}.js` }));
   }
 });
+
+test('device and APP context are separate and do not claim a legacy session binding', () => {
+  const header=html.match(/<header>([\s\S]*?)<\/header>/)?.[1] ?? '';
+  const app=html.match(/<section class="app-context"[^>]*>([\s\S]*?)<\/section>/)?.[1] ?? '';
+  assert.match(header,/id="deviceContext"/);
+  assert.doesNotMatch(header,/id="appBtn"|id="capStatePill"/);
+  assert.match(app,/id="appBtn"/);
+  assert.match(app,/id="capStatePill"/);
+  assert.match(app,/设备归属未核验/);
+  assert.match(html,/readPanelJson\('\/api\/devices\?action=list'\)/);
+});
+
+test('the device display distinguishes verified connections, missing attribution data and a demo', () => {
+  const fn=html.match(/(function describePanelDevices\(data\)\{[\s\S]*?\r?\n})\r?\nfunction renderPanelDeviceContext/)?.[1];
+  assert.ok(fn);
+  const describe=vm.runInNewContext('('+fn+')');
+  const summarize=(data:unknown)=>JSON.parse(JSON.stringify(describe(data)));
+  const peer={online:true,lastKnown:{info:{model:'甲型测试设备'}},
+    connections:[{online:true,identityVerified:true,transport:'adb'}]};
+  assert.deepEqual(summarize({ok:true,devices:[]}),{name:'设备未核验',link:''});
+  assert.deepEqual(summarize({ok:true,devices:[peer]}),{name:'甲型测试设备',link:'USB'});
+  assert.deepEqual(summarize({ok:true,devices:[peer,{...peer}]}),{name:'已核验 2 台',link:'在线'});
+  assert.deepEqual(summarize({ok:true,devices:[{...peer,connections:[{online:true,identityVerified:false}]}]}),
+    {name:'无在线设备',link:'有登记记录'});
+  assert.deepEqual(summarize({ok:true,demo:true,devices:[]}),{name:'演示设备',link:'非真机',demo:true});
+  assert.deepEqual(summarize(null),{name:'设备状态未知',link:'读取失败'});
+});
