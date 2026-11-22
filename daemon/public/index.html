@@ -82,6 +82,13 @@
   .device-context { display:flex; align-items:center; gap:6px; min-width:0; max-width:280px; padding:5px 8px; border:1px solid var(--line-soft); border-radius:5px; color:var(--muted); font-size:11px; }
   .device-context strong { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--ink-2); font-size:12px; font-weight:600; }
   .device-context .device-link { white-space:nowrap; }
+  .device-picker { position:relative; min-width:0; }
+  .device-picker > .device-context { padding:5px 8px; min-height:30px; background:var(--surface); border-color:var(--line-soft); text-align:left; }
+  .device-picker > .device-context:hover, .device-picker > .device-context[aria-expanded="true"] { border-color:var(--line); }
+  .device-picker .device-menu { left:auto; right:0; width:310px; max-width:calc(100vw - 24px); max-height:50dvh; overflow:auto; }
+  .device-picker .device-menu::before { display:none; }
+  .device-menu-label { margin:4px 7px 7px; color:var(--muted); font-size:11px; font-weight:600; }
+  .app-menu-search { width:calc(100% - 12px); margin:0 6px 7px; background:var(--surface); }
   .menu-wrap { position:relative; }
   .popover { display:none; position:absolute; top:calc(100% + 7px); right:0; z-index:80; min-width:210px; padding:6px; color:var(--ink-2); background:#11151c; border:1px solid #4a5260; border-radius:5px; box-shadow:0 18px 50px rgba(0,0,0,.58); }
   .popover.show { display:block; }
@@ -172,6 +179,13 @@
   .record-tab-panel > .detail-empty { padding-block:34px; align-items:flex-start; text-align:left; }
   .capture-workspace .detail-empty { display:flex; align-items:center; flex-direction:column; gap:6px; }
   .capture-workspace .detail-empty strong { color:var(--ink-2); font-size:15px; font-weight:600; }
+  .record-library { flex:1; min-width:0; overflow:auto; padding:20px; }
+  .record-library-inner { max-width:1000px; margin:0 auto; }
+  .record-library h2 { margin:0 0 3px; }
+  .record-library .dump-table { margin-top:16px; }
+  .record-library td { overflow-wrap:anywhere; }
+  .record-library .empty { border:1px solid var(--line-soft); border-radius:6px; margin-top:16px; }
+  .workspace-hidden[hidden] { display:none !important; }
   .capture-workspace .io-section:is(.in-card,.out-card,.kv-card,.raw-card) { padding:12px; border:1px solid var(--line-soft); border-radius:7px; background:var(--bg); overflow:hidden; }
   .capture-workspace .io-section.in-card { border-left-color:var(--blue); }
   .capture-workspace .io-section.out-card { border-left-color:var(--coral); }
@@ -422,6 +436,11 @@
   .set-shell .set-small-button { padding:6px 10px; min-height:32px; border:1px solid var(--line); border-radius:4px; color:var(--ink-2); background:transparent; font:inherit; cursor:pointer; white-space:nowrap; }
   .set-shell .set-small-button:hover:not(:disabled) { background:var(--surface-2); }
   .set-shell .set-small-button:disabled { opacity:.55; cursor:default; }
+  .set-record-controls { margin:0 0 14px; border:1px solid var(--line-soft); border-radius:6px; }
+  .set-record-controls legend { padding:0 6px; color:var(--ink-2); font-size:12px; font-weight:600; }
+  .set-record-controls label { margin:4px 9px 2px 0; display:inline-flex; gap:5px; align-items:center; color:var(--muted); white-space:nowrap; }
+  .set-record-controls input { min-height:0; }
+  .set-scope .set-lead { margin-top:14px; }
   .set-app { margin:0; display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; color:var(--muted); font-size:12px; }
   .set-app strong { font-weight:550; color:var(--ink-2); overflow-wrap:anywhere; }
   .set-status { min-height:18px; margin:8px 0 0; color:var(--muted); font-size:12px; }
@@ -521,7 +540,9 @@
   }
   @media (max-width:760px) {
     header { gap:7px; padding:8px 12px; }
-    .header-context { flex:1 1 100%; }
+    .header-context { position:relative; flex:1 1 100%; }
+    .device-picker { position:static; }
+    .device-picker .device-menu { left:0; right:0; width:auto; max-width:none; }
     .header-actions { position:relative; flex:1 1 100%; justify-content:space-between; }
     .app-context { position:static; }
     .app-context .popover { left:0; right:0; width:auto; max-width:none; }
@@ -544,11 +565,18 @@
       <h1><span class="hdr-mark"><img src="/raven.svg" alt=""></span>ADH</h1>
     </div>
     <div class="stats" id="stats"><span class="status-dot" id="conn"></span><span id="status">正在连接电脑服务…</span></div>
-    <div class="device-context" id="deviceContext" aria-label="设备连接">
-      <span class="context-label">设备</span>
-      <strong id="deviceTitle">读取中…</strong>
-      <span class="device-link" id="deviceLink"></span>
-    </div>
+    <section class="device-picker" aria-label="设备选择">
+      <button type="button" class="device-context" id="deviceContext" aria-expanded="false" aria-controls="deviceMenu" title="切换设备">
+        <span class="context-label">设备</span>
+        <strong id="deviceTitle">读取中…</strong>
+        <span class="device-link" id="deviceLink"></span>
+        <span class="menu-chevron" aria-hidden="true">⌄</span>
+      </button>
+      <div class="popover device-menu" id="deviceMenu">
+        <div class="device-menu-label">网关设备</div>
+        <div id="deviceChoices"></div>
+      </div>
+    </section>
   </div>
   <div class="header-actions">
     <section class="app-context" id="appContext" aria-label="APP 与会话">
@@ -559,6 +587,7 @@
       </button>
       <div class="popover app-menu" id="appMenu">
         <div class="proc-title">切换 APP</div>
+        <input class="app-menu-search" id="appSearch" type="search" placeholder="搜索 APP 或包名" aria-label="搜索当前设备的 APP">
         <div class="app-choices" id="appChoices"></div>
         <div class="app-sessions">
           <div class="proc-title">当前 APP 会话</div>
@@ -642,7 +671,7 @@
     </div>
   </div>
 
-  <!-- 系统（category=system + file） -->
+  <!-- 系统（category=system） -->
   <div class="panel" id="p-system">
     <div class="workspace capture-workspace" data-capture-key="sy">
       <div class="list-pane">
@@ -681,9 +710,22 @@
     </div>
   </div>
 
-  <!-- 文件（对齐 iOS：左列表 + 面包屑，右预览） -->
+  <!-- 文件活动独立于系统。切页不会请求设备目录。 -->
   <div class="panel" id="p-files">
-    <div class="files-workspace">
+    <div class="workspace capture-workspace" data-capture-key="fl">
+      <div class="list-pane">
+        <div class="capture-list-head"><h2>文件 · 活动记录</h2><span id="fl-list-count">0 条</span></div>
+        <div class="new-banner" id="fl-banner"><span id="fl-banner-text"></span><button type="button" onclick="jumpLatest('fl')">跳到最新</button></div>
+        <div id="fl-list" tabindex="0" aria-label="文件活动记录列表"></div>
+        <div class="capture-list-foot"><span id="fl-list-mode">列表刷新中</span><span>仅已上报记录</span></div>
+      </div>
+      <div class="splitter"></div>
+      <section class="capture-detail-shell" aria-label="文件活动详情">
+        <div class="capture-detail-nav"><button type="button" class="compact-action" data-capture-back="fl">‹ 返回列表</button></div>
+        <div id="fl-detail" class="detail-pane"><div class="detail-empty"><strong>文件活动</strong><span>从左侧选择一条已上报的记录。打开此页不会读取设备目录。</span></div></div>
+      </section>
+    </div>
+    <div class="files-workspace workspace-hidden" hidden>
       <aside class="list-pane files-list-pane">
         <div class="files-head">
           <nav class="files-breadcrumb" id="filesBreadcrumb"><a href="#" data-files-nav="">应用私有目录</a></nav>
@@ -705,9 +747,20 @@
     </div>
   </div>
 
-  <!-- Dump：一键脱壳打包 + 记录下载 + SO（已加载 / 包内） -->
+  <!-- dump 只展示已有会话产物的登记信息。打开页签不执行设备上的操作。 -->
   <div class="panel" id="p-dump">
-    <div class="dumppane">
+    <section class="record-library" aria-label="dump 产物记录">
+      <div class="record-library-inner">
+        <h2>dump · 产物记录</h2>
+        <p class="set-lead">仅查看当前 APP 会话已上报的产物信息；打开此页不会发起设备操作。</p>
+        <p class="empty" id="artifactEmpty">正在读取当前会话的产物记录…</p>
+        <table class="dump-table" id="artifactTable" hidden>
+          <thead><tr><th>时间</th><th>类型</th><th>名称</th><th>大小</th><th>来源会话</th></tr></thead>
+          <tbody id="artifactRows"></tbody>
+        </table>
+      </div>
+    </section>
+    <div class="dumppane workspace-hidden" hidden>
       <div class="dumpwrap">
         <h2>脱壳</h2>
         <div class="note">未在跑会冷启动（可能丢登录）；已在跑直接扫。DEX 边抠边进记录，最后打 zip。<br><span class="warn-note">⚠ 仅限授权测试与自有 App。</span></div>
@@ -762,13 +815,17 @@
       <h2 id="setTitle">设置</h2>
       <nav class="set-nav" id="setNav" aria-label="设置分类">
         <span class="set-nav-group">当前应用</span>
-        <button type="button" id="setHooksTab" data-settings="hooks" aria-controls="setHooksPage" aria-pressed="true" aria-label="算法与 Hook" title="算法与 Hook">
-          <svg class="set-nav-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M7 4 2.5 10 7 16m6-12 4.5 6-4.5 6m-2-12-2 12"/></svg>
-          <span class="set-nav-label">算法与 Hook</span><span class="set-nav-compact" aria-hidden="true">算法</span>
+        <button type="button" id="setScopeTab" data-settings="scope" aria-controls="setScopePage" aria-pressed="true" aria-label="分析范围" title="分析范围">
+          <svg class="set-nav-icon" viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3" width="14" height="14" rx="2"/><path d="m6 10 3 3 5-6"/></svg>
+          <span class="set-nav-label">分析范围</span><span class="set-nav-compact" aria-hidden="true">范围</span>
         </button>
-        <button type="button" id="setCaptureTab" data-settings="capture" aria-controls="setCapturePage" aria-pressed="false" aria-label="算法采集" title="算法采集">
+        <button type="button" id="setCaptureTab" data-settings="capture" aria-controls="setCapturePage" aria-pressed="false" aria-label="功能与 Hook 状态" title="功能与 Hook 状态">
           <svg class="set-nav-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="6.5"/><circle cx="10" cy="10" r="2.5"/></svg>
-          <span class="set-nav-label">算法采集</span><span class="set-nav-compact" aria-hidden="true">采集</span>
+          <span class="set-nav-label">功能与 Hook 状态</span><span class="set-nav-compact" aria-hidden="true">状态</span>
+        </button>
+        <button type="button" id="setHooksTab" data-settings="hooks" aria-controls="setHooksPage" aria-pressed="false" aria-label="记录显示" title="记录显示">
+          <svg class="set-nav-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M7 4 2.5 10 7 16m6-12 4.5 6-4.5 6m-2-12-2 12"/></svg>
+          <span class="set-nav-label">记录显示</span><span class="set-nav-compact" aria-hidden="true">记录</span>
         </button>
         <span class="set-nav-group">面板</span>
         <button type="button" id="setDisplayTab" data-settings="display" aria-controls="setDisplayPage" aria-pressed="false" aria-label="显示" title="显示">
@@ -784,14 +841,24 @@
     <div class="set-content">
       <div class="set-header">
         <div>
-          <h3 id="setPanelTitle">算法与 Hook</h3>
-          <p class="set-app" id="setAppContext">当前 APP <strong id="setActiveApp">未选择应用</strong></p>
+          <h3 id="setPanelTitle">分析范围</h3>
+          <p class="set-app" id="setAppContext"><span>设备 <strong id="setActiveDevice">未选择</strong></span><span>APP <strong id="setActiveApp">未选择应用</strong></span></p>
         </div>
         <button type="button" class="set-close-x" id="setClose" aria-label="关闭设置">×</button>
       </div>
     <div class="set-main">
-      <section id="setHooksPage" class="set-page" aria-label="算法与 Hook">
-        <p class="set-lead">展开算法查看类和方法。勾选只调整当前应用的列表显示。</p>
+      <section id="setScopePage" class="set-page set-scope" aria-label="分析范围">
+        <dl class="set-meta">
+          <div><dt>当前设备</dt><dd id="scopeDevice">未选择</dd></div>
+          <div><dt>当前 APP</dt><dd id="scopeApp">未选择</dd></div>
+          <div><dt>设备范围</dt><dd id="scopeMembership">未读取</dd></div>
+          <div><dt>观测会话</dt><dd id="scopeSession">未连接</dd></div>
+        </dl>
+        <p class="set-lead">顶栏选设备及 APP 只切换查看对象，不会修改设备上的分析范围。</p>
+      </section>
+      <section id="setHooksPage" class="set-page" aria-label="记录显示" hidden>
+        <p class="set-lead">按类别、算法或 Hook 筛选列表。这里不改手机上的采集策略。</p>
+        <fieldset class="set-record-controls" id="setRecordCategories"><legend>记录类别</legend></fieldset>
         <div class="set-observation-nav" role="group" aria-label="观测视图">
           <button type="button" id="setAlgorithmListTab" class="set-small-button" aria-controls="setObservedAlgorithms" aria-pressed="true">按算法</button>
           <button type="button" id="setHookListTab" class="set-small-button" aria-controls="setHookControls" aria-pressed="false">按 Hook</button>
@@ -814,13 +881,21 @@
           <p class="set-observation-empty" id="setHookEmpty" hidden></p>
         </section>
       </section>
-      <section id="setCapturePage" class="set-page" aria-label="算法采集" hidden>
-        <div class="set-page-head">
-          <p class="set-app">六类采集策略按应用保存在电脑服务中。</p>
-          <span class="set-family-count" id="setFamilyCount"></span>
-        </div>
-        <p class="set-status" id="setCaptureStatus" role="status"></p>
-        <fieldset id="setFamilies" aria-label="算法采集开关">
+      <section id="setCapturePage" class="set-page" aria-label="功能与 Hook 状态" hidden>
+        <p class="set-lead">收到记录不等于设备策略已生效。这里分别显示已上报的事件和已核验的配置状态。</p>
+        <dl class="set-meta">
+          <div><dt>设备采集策略</dt><dd id="setPolicyState">未读取</dd></div>
+          <div><dt>Hook 生效状态</dt><dd id="setHookApplyState">未上报</dd></div>
+          <div><dt>加解密</dt><dd id="setFeature-crypto">—</dd></div>
+          <div><dt>系统</dt><dd id="setFeature-system">—</dd></div>
+          <div><dt>网络</dt><dd id="setFeature-net">—</dd></div>
+          <div><dt>文件</dt><dd id="setFeature-file">—</dd></div>
+          <div><dt>dump</dt><dd id="setFeature-dump">—</dd></div>
+        </dl>
+        <p class="set-status">仅查看状态；列表筛选在「记录显示」。</p>
+        <span id="setFamilyCount" hidden></span>
+        <p class="set-status" id="setCaptureStatus" role="status" hidden></p>
+        <fieldset id="setFamilies" class="workspace-hidden" aria-label="算法采集开关" hidden>
           <div class="set-algorithm-group" role="group" aria-labelledby="setDigestGroup">
             <h4 id="setDigestGroup">摘要与认证</h4>
             <label class="set-toggle-row"><span class="lab"><b>摘要</b></span><span class="set-switch"><input type="checkbox" data-fam="digest" disabled><span class="slider"></span></span></label>
@@ -882,7 +957,7 @@
           <div><dt>当前应用</dt><dd id="setStatusApp">—</dd></div>
           <div><dt>已载入记录</dt><dd id="setLoadedRecords">—</dd></div>
           <div><dt>记录保留规则</dt><dd id="setRetention">—</dd></div>
-          <div><dt>已登记文件</dt><dd id="setArtifactUsage">—</dd></div>
+          <div><dt>Host 已登记文件</dt><dd id="setArtifactUsage">—</dd></div>
         </dl>
         <p id="setStatusMessage" class="set-status" role="status"></p>
       </section>
@@ -905,8 +980,8 @@
 <script src="/operations.js"></script>
 <script>
 // 顶栏五条主轴：加解密 / 系统 / 网络 / 文件 / Dump（对齐 iOS，不藏专家折叠）。
-const TABS_MAIN=[['p-crypto','加解密','cc'],['p-system','系统','sy'],['p-net','网络','nt'],['p-files','文件'],['p-dump','dump']];
-const CAP_TABS={'p-crypto':'cc','p-system':'sy','p-net':'nt'};
+const TABS_MAIN=[['p-crypto','加解密','cc'],['p-system','系统','sy'],['p-net','网络','nt'],['p-files','文件','fl'],['p-dump','dump']];
+const CAP_TABS={'p-crypto':'cc','p-system':'sy','p-net':'nt','p-files':'fl'};
 const MODULE_ICONS={
   'p-crypto':'<rect x="4" y="8" width="12" height="9" rx="2"/><path d="M7 8V6a3 3 0 0 1 6 0v2m-3 4v2"/>',
   'p-system':'<rect x="4" y="4" width="12" height="12" rx="2"/><rect x="8" y="8" width="4" height="4"/><path d="M7 2v2m6-2v2M7 16v2m6-2v2M2 7h2m-2 6h2m12-6h2m-2 6h2"/>',
@@ -938,13 +1013,32 @@ function mkTab([id,label,key],active){ const b=document.createElement('button');
     document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active')); document.getElementById(id).classList.add('active');
     onTabSwitch(id);
     if(id==='p-system') scheduleDetect();
-    if(id==='p-dump'){ loadInventory(); } if(id==='p-files') filesInit(); };
+    if(id==='p-dump') void loadArtifactLedger(); };
   return b; }
 TABS_MAIN.forEach((t,i)=>nav.appendChild(mkTab(t,i===0)));
 const val=id=>document.getElementById(id).value.trim();
 let chosenPkg='';
-function selectedPackage(){ return chosenPkg || pinnedPackage(); }
-function sessionsOf(pkg){ return [...agents.values()].filter(a=>a.package===pkg).sort((a,b)=>(a.connectedAt||0)-(b.connectedAt||0)); }
+let panelDevices=[], panelDeviceKey='', panelDeviceState='loading';
+let registryApps=[], registryScopeError='', rosterGeneration=0;
+let appEventsState={key:'',loaded:false,failed:false,artifacts:[]};
+function currentDevice(){ return panelDevices.find(device=>device.key===panelDeviceKey)??null; }
+function usesHostSessions(){
+  const device=currentDevice();
+  return !!device?.online && (device.kind==='local'||device.kind==='legacy');
+}
+function selectedPackage(){ return chosenPkg; }
+function appScopeKey(){ return JSON.stringify([panelDeviceKey,selectedPackage(),rosterGeneration]); }
+function sessionsOf(pkg){ return usesHostSessions() && pkg ? [...agents.values()].filter(a=>a.package===pkg).sort((a,b)=>(a.connectedAt||0)-(b.connectedAt||0)) : []; }
+function recordPreferenceKey(){
+  const pkg=selectedPackage(), device=currentDevice();
+  if(!pkg||!device) return '';
+  if(device.kind==='local'){
+    // The observer doesn't issue a persistent Device ID. Don't reuse preferences after a host reconnects to different hardware.
+    const session=liveSession();
+    return session?.sessionId ? JSON.stringify(['local',session.sessionId,session.connectedAt??0,pkg]) : '';
+  }
+  return JSON.stringify([device.key,pkg]);
+}
 function liveSession(){ return sessionsOf(selectedPackage()).filter(a=>a.online).pop()||null; }
 function liveSid(){ return liveSession()?.sessionId||''; }
 function sidQ(){ const s=liveSid(); return s?'&session='+encodeURIComponent(s):''; }
@@ -1192,14 +1286,17 @@ function fmtTime(ts){ if(!ts) return ''; const options={hour12:false};
 const CAPPANELS={};
 let activeCapKey='cc';
 function belongsToApp(c){
-  const pkg=selectedPackage(); if(!pkg) return false;
+  const pkg=selectedPackage(); if(!usesHostSessions()||!pkg) return false;
+  if(currentDevice()?.kind==='local'){
+    return (!c.package||c.package===pkg)&&sessionsOf(pkg).some(a=>a.sessionId===c.sessionId);
+  }
   if(c.package) return c.package===pkg;
   if(c.sessionId) return sessionsOf(pkg).some(a=>a.sessionId===c.sessionId);
   return false;
 }
 function listedCap(c){ if(c.category!=='crypto') return true; return clientCryptoView(c).show!==false; }
 function visibleForHooks(records){
-  const hidden=hookDisplay?.hidden(selectedPackage());
+  const hidden=hookDisplay?.hidden(recordPreferenceKey());
   return hidden?.size ? records.filter(record=>algorithmObservations.recordVisible(record,hidden)) : records;
 }
 function applyFilter(p){ let items=visibleForHooks(capItems.filter(c=>p.cats.includes(c.category)&&belongsToApp(c)&&listedCap(c)));
@@ -1372,20 +1469,21 @@ function makeCapPanel(key,cats){
       showBanner(key,n); if(activeCapKey===key) updateCount(box.querySelectorAll('.row').length,total); return; }
     p.lastShown=items.length; showBanner(key,0);
     const shown=items.slice(-capDisplayCap).slice().reverse();
-    box.innerHTML=shown.map(c=>rowHtml(key,p.sel,c)).join('')||'<div class="empty">'+(total?'没有符合筛选条件的记录。':emptyCapText())+'</div>';
+    box.innerHTML=shown.map(c=>rowHtml(key,p.sel,c)).join('')||'<div class="empty">'+(total?'没有符合筛选条件的记录。':escapeHtml(emptyCapText(key)))+'</div>';
     if(activeCapKey===key) updateCount(shown.length,total); };
   p.select=async function(id){
-    const pkg=selectedPackage();
+    if(!usesHostSessions()||!capItems.some(c=>c.id===id&&belongsToApp(c)&&cats.includes(c.category))) return;
+    const scope=appScopeKey();
     p.sel=id;
     p.render(true);
     captureDetailNotice(key,'正在读取记录…');
     setCaptureDetailOpen(key,true);
-    const isCurrent=()=>p.sel===id && selectedPackage()===pkg;
+    const isCurrent=()=>p.sel===id && appScopeKey()===scope;
     try{
       const response=await fetch('/api/captures/'+id);
       if(!response.ok) throw Error('读取失败');
       const c=await response.json();
-      if(isCurrent()) renderCaptureDetail(key+'-detail',c);
+      if(isCurrent() && belongsToApp(c)) renderCaptureDetail(key+'-detail',c);
     }catch{
       if(isCurrent()) captureDetailNotice(key,'无法读取这条记录','返回列表后可重试。');
     }
@@ -1393,8 +1491,9 @@ function makeCapPanel(key,cats){
   CAPPANELS[key]=p; return p;
 }
 makeCapPanel('cc',['crypto']);
-makeCapPanel('sy',['system','file']);
+makeCapPanel('sy',['system']);
 makeCapPanel('nt',['net']);
+makeCapPanel('fl',['file']);
 let detectTimer=0;
 function formatRadar(r){
   if(!r) return '';
@@ -1416,23 +1515,26 @@ function radarDetail(r){
 async function loadDetect(){
   const el=document.getElementById('sy-radar'); if(!el) return;
   const pkg=selectedPackage();
-  if(!pkg){ el.textContent='系统检测'; el.title='选择应用后显示该包的检测摘要'; return; }
+  const scope=appScopeKey();
+  if(!pkg||!usesHostSessions()){ el.textContent='系统检测：未上报'; el.title='只有当前观测会话的摘要会在此显示'; return; }
   try{
     const r=await (await fetch('/api/detect/summary?package='+encodeURIComponent(pkg))).json();
+    if(appScopeKey()!==scope) return;
     const state=formatRadar(r);
     el.textContent=state?('系统检测：'+state):'系统检测';
     el.title=radarDetail(r);
-  }catch(e){ el.textContent='系统检测：—'; el.title='摘要读取失败'; }
+  }catch(e){ if(appScopeKey()===scope){ el.textContent='系统检测：—'; el.title='摘要读取失败'; } }
 }
 function scheduleDetect(){ clearTimeout(detectTimer); detectTimer=setTimeout(loadDetect, 300); }
 let httpAssembly={exchanges:[],noConn:0,http2:0,caveat:''};
 let exchangeTimer=0;
 async function loadExchanges(){
   const pkg=selectedPackage();
-  if(!pkg){ httpAssembly={exchanges:[],noConn:0,http2:0,caveat:''}; return; }
+  const scope=appScopeKey();
+  if(!pkg||!usesHostSessions()){ httpAssembly={exchanges:[],noConn:0,http2:0,caveat:''}; return; }
   try{
     const r=await (await fetch('/api/http/exchanges?package='+encodeURIComponent(pkg))).json();
-    if(selectedPackage()===pkg && r && Array.isArray(r.exchanges)) httpAssembly=r;
+    if(appScopeKey()===scope && r && Array.isArray(r.exchanges)) httpAssembly=r;
   }catch(e){}
 }
 function scheduleExchanges(){
@@ -1506,7 +1608,7 @@ function exchangeRow(sel,ex){
     const noteHtml=notes.length?'<div class="ex-note">'+escapeHtml(notes.join('。'))+'。</div>':'';
     const empty=exchanges.length || (local.length && !visibleLocal.length)
       ?'没有符合筛选条件的网络记录。'
-      :visibleLocal.length ? '有 '+visibleLocal.length+' 条 TLS，尚未拼成 HTTP。' : emptyCapText();
+      :visibleLocal.length ? '有 '+visibleLocal.length+' 条 TLS，尚未拼成 HTTP。' : emptyCapText('nt');
     const shown=rows.slice(0,capDisplayCap);
     box.innerHTML=noteHtml+(shown.length?shown.map(ex=>exchangeRow(nt.sel,ex)).join(''):'<div class="empty">'+empty+'</div>');
     if(activeCapKey==='nt') updateCount(shown.length, local.length);
@@ -1529,10 +1631,13 @@ function exchangeRow(sel,ex){
 function capRenderAll(){
   for(const k in CAPPANELS) CAPPANELS[k].render();
   scheduleObservationRefresh();
+  if(settingsDialog.open && !capturePage.hidden) renderCapabilityStatus();
 }
 function capSelectP(key,id){ CAPPANELS[key].select(id); }
-function capPush(c){ if(!belongsToApp(c)) { if(c.id>capMaxId)capMaxId=c.id; return; }
-  capItems.push(c); if(capItems.length>CAP_BUFFER_LIMIT) capItems.shift(); if(c.id>capMaxId)capMaxId=c.id; }
+function capPush(c){
+  if(!belongsToApp(c)||capItems.some(row=>row.id===c.id)) return;
+  capItems.push(c); if(capItems.length>CAP_BUFFER_LIMIT) capItems.shift(); if(c.id>capMaxId)capMaxId=c.id;
+}
 function capClearP(key){
   const p=CAPPANELS[key]; if(!p) return;
   const pkg=selectedPackage();
@@ -1647,11 +1752,12 @@ function renderCaptureDetail(detailId,c){ const d=document.getElementById(detail
   if(c.callStack) views.push(['stack','调用栈','<div class="stack-section">'+ioBlock('',c.callStack)+'</div>']);
   renderRecordDetail(detailId,'capture:'+c.id,h,views);
 }
-async function capLoad(){ const pkg=selectedPackage(); if(!pkg) return;
+async function capLoad(){ const pkg=selectedPackage(); if(!pkg||!usesHostSessions()) return;
+  const scope=appScopeKey();
   const initialLimit=localObservation&&capMaxId===0?'&limit='+CAP_BUFFER_LIMIT:'';
   try{ const r=await (await fetch('/api/captures?since='+capMaxId+pkgQ()+initialLimit)).json();
-    if(selectedPackage()!==pkg) return;
-    (r.captures||[]).forEach(c=>{ if(!c.package) c.package=pkg; capPush(c); });
+    if(appScopeKey()!==scope) return;
+    (r.captures||[]).forEach(capPush);
   }catch(e){}
   await loadExchanges(); capRenderAll(); }
 
@@ -1721,11 +1827,14 @@ function capReset(){
   for(const panel of Object.values(CAPPANELS)){
     panel.sel=0;
     panel.detailRev=null;
+    panel.filter={q:'',min:null,max:null,cat:-2,paused:false};
     captureDetailNotice(panel.key,'记录详情','从列表选择一条记录查看详情。');
     setCaptureDetailOpen(panel.key,false);
     panel.render(true);
   }
   for(const id of Object.keys(capDetailCache)) delete capDetailCache[id];
+  const active=document.querySelector('#nav button.active');
+  if(active) onTabSwitch(active.dataset.panel);
   capLoad();
 }
 /** Packages that skipped auto-arm after one-click unpack (client memory + server unpackProtected). */
@@ -1745,35 +1854,15 @@ function hadUnpackSkippedArm(pkg){
   try{ return sessionStorage.getItem('adh.unpackSkippedArm.'+pkg)==='1'; }catch{ return false; }
 }
 function updateCapStatePill(){
-  const el=document.getElementById('capStatePill'); if(!el) return;
-  const pkg=selectedPackage();
-  if(!pkg){ el.hidden=true; el.textContent=''; return; }
-  if(localObservation){ el.hidden=false; el.className='cap-state-pill'; el.textContent='只读观测'; el.title='不修改手机采集策略'; return; }
-  if(!captureOn){
-    el.hidden=false; el.className='cap-state-pill off';
-    el.textContent='算法未选'; el.title='';
-    return;
-  }
-  if(hadUnpackSkippedArm(pkg)){
-    el.hidden=false; el.className='cap-state-pill warn';
-    el.textContent='本包未装钩'; el.title='脱壳后未装钩，重启 App 后再捕';
-    return;
-  }
-  el.hidden=true; el.textContent='';
+  const el=document.getElementById('capStatePill');
+  if(!selectedPackage()){ el.hidden=true; el.textContent=''; return; }
+  el.hidden=false; el.className='cap-state-pill';
+  el.textContent=!usesHostSessions()?'未绑定观测会话':liveSession()?'会话在线':'暂无在线会话';
+  el.title='会话在线不等于采集策略已生效';
 }
 function refreshCapUnpackHint(){
   const el=document.getElementById('capUnpackHint');
-  if(!el) return;
-  const pkg=selectedPackage();
-  const onCapTab=['p-crypto','p-system','p-net'].some(id=>{
-    const p=document.getElementById(id); return p&&p.classList.contains('active');
-  });
-  if(onCapTab&&pkg&&hadUnpackSkippedArm(pkg)&&captureOn){
-    el.hidden=false;
-    el.innerHTML='本包脱壳后未装钩 · 重启 App 后再捕';
-  }else{
-    el.hidden=true; el.textContent='';
-  }
+  if(el){ el.hidden=true; el.textContent=''; }
   updateCapStatePill();
 }
 function setUnpackLiveHint(html, show){
@@ -1782,11 +1871,13 @@ function setUnpackLiveHint(html, show){
   if(!show){ el.hidden=true; el.textContent=''; return; }
   el.hidden=false; el.textContent=html.replace(/<[^>]+>/g,'');
 }
-function emptyCapText(){
-  if(!selectedPackage()) return '先在右上角选应用。';
-  if(!captureOn) return '还没有记录。';
-  if(hadUnpackSkippedArm(selectedPackage())) return '本包脱壳后未装钩 · 重启 App 后再捕。';
-  return '还没有记录。';
+function emptyCapText(key){
+  if(!currentDevice()) return '先在顶栏选择设备。';
+  if(!selectedPackage()) return '先在顶栏选择当前设备上的 APP。';
+  if(!usesHostSessions()) return '此设备未绑定观测会话。不显示设备归属未核验的旧记录。';
+  if(!liveSession()) return '当前 APP 没有在线观测会话。';
+  const label={cc:'加解密',sy:'系统',nt:'网络',fl:'文件活动'}[key]||'';
+  return '当前会话尚未上报'+label+'记录。';
 }
 
 // ---- 文件浏览器：沙盒目录按包名读，不看进程在不在 ----
@@ -1978,18 +2069,70 @@ async function openCaptureSettings(){
   if(pkg && await loadAppFamilies(view) && familyView===view) setFamilyStatus('');
 }
 function renderSettingsScope(){
-  const pkg=selectedPackage();
+  const pkg=selectedPackage(), device=currentDevice(), preference=recordPreferenceKey(), scope=appScopeKey();
   const app=document.getElementById('setActiveApp');
-  if(app.dataset.package!==pkg){
-    app.dataset.package=pkg;
+  if(app.dataset.scope!==scope || app.dataset.preference!==preference){
+    app.dataset.scope=scope;
+    app.dataset.preference=preference;
     hookQuery.value=hookCategory.value=observationQuery.value=observationFamily.value='';
     expandedAlgorithms.clear();
-    observationStatus.textContent=pkg?'勾选后即时保存':'选择应用后可勾选';
+    observationStatus.textContent=preference?'只更新此查看范围的显示偏好':'选择 APP 或等待观测会话后可调整显示';
     delete observationStatus.dataset.error;
   }
-  const label=serverApps.find(entry=>entry.package===pkg)?.label;
-  app.textContent=label && label!==pkg ? label+' · '+pkg : pkg || '未选择应用';
+  const entry=appRecords().find(item=>item.package===pkg);
+  const name=entry?.label && entry.label!==pkg ? entry.label+' · '+pkg : pkg||'未选择 APP';
+  const online=sessionsOf(pkg).filter(a=>a.online);
+  app.textContent=name;
+  document.getElementById('setActiveDevice').textContent=device?.name||'未选择设备';
+  document.getElementById('scopeDevice').textContent=device?.name||'未选择设备';
+  document.getElementById('scopeApp').textContent=name;
+  document.getElementById('scopeMembership').textContent=!pkg?'未选择 APP':device?.kind==='local'
+    ? '本次 USB 观测目标；未读取手机的分析范围'
+    : device?.kind==='legacy'?'此 APP 在 Host 范围列表中，设备归属未核验'
+    : entry?.configured===true?'已在此设备的分析范围':entry?.configured===false?'未加入此设备的分析范围':'设备范围未核验';
+  document.getElementById('scopeSession').textContent=online.length
+    ? online.length+' 个在线 · '+online.map(a=>'PID '+a.pid).join(' / ')
+    :device?.kind==='device'?'未绑定观测会话':'暂无在线会话';
 }
+function renderAbilityValue(key,text){
+  document.getElementById(key).textContent=text;
+}
+function renderCapabilityStatus(){
+  const pkg=selectedPackage(), device=currentDevice();
+  const haveSession=sessionsOf(pkg).some(a=>a.online);
+  renderAbilityValue('setPolicyState',!pkg?'未选择 APP':device?.kind==='legacy'
+    ?(captureOn?'Host 配置为开启；设备端未核验':'Host 配置未开启；不代表设备端状态')
+    :'未读取手机上的采集策略');
+  renderAbilityValue('setHookApplyState',haveSession?'会话在线，未上报 Hook 生效清单':device?.kind==='device'
+    ?'未绑定观测会话':'暂无在线会话');
+  const counts={crypto:0,system:0,net:0,file:0};
+  for(const c of capItems) if(belongsToApp(c)&&Object.hasOwn(counts,c.category)) counts[c.category]++;
+  for(const [key,count] of Object.entries(counts)){
+    renderAbilityValue('setFeature-'+key,count?count+' 条已载入记录':haveSession?'当前会话未上报':'没有可核验的会话记录');
+  }
+  const state=appEventsState.key===appScopeKey()?appEventsState:null;
+  renderAbilityValue('setFeature-dump',state?.artifacts.length?state.artifacts.length+' 条已上报的产物记录':
+    state?.loaded?'未上报产物':'未读取产物清单，可在 dump 页查看');
+}
+function renderRecordCategories(){
+  const field=document.getElementById('setRecordCategories'), pref=recordPreferenceKey();
+  const hidden=hookDisplay?.hidden(pref)??new Set();
+  if(!algorithmObservations) return;
+  if(!field.querySelector('input')){
+    for(const [category,label] of Object.entries(algorithmObservations.hookGroups)){
+      const control=document.createElement('label'), toggle=document.createElement('input');
+      toggle.type='checkbox'; toggle.dataset.category=category;
+      control.append(toggle,document.createTextNode(label));
+      field.append(control);
+    }
+  }
+  field.dataset.preference=pref;
+  for(const input of field.querySelectorAll('input')){
+    input.checked=!hidden.has(algorithmObservations.categoryKey(input.dataset.category));
+    input.disabled=!pref;
+  }
+}
+
 function observationSwitch(key,label,checked,tag='span'){
   const control=document.createElement(tag);
   control.className='set-switch';
@@ -2033,17 +2176,18 @@ function observationGroup(group,view){
 let hookSignature='';
 function renderHookControls(){
   const pkg=selectedPackage();
+  const pref=recordPreferenceKey();
   const entries=pkg && algorithmObservations ? algorithmObservations.summarizeHooks(capItems.filter(belongsToApp)) : [];
-  const hidden=hookDisplay?.hidden(pkg) ?? new Set();
+  const hidden=hookDisplay?.hidden(pref) ?? new Set();
   const query=hookQuery.value.trim().toLowerCase();
   const category=hookCategory.value;
   const groups=algorithmObservations?.choiceGroups(entries,algorithmObservations.hookGroups,'category',hidden,
     item=>(!category || category===item.category) && item.name.toLowerCase().includes(query)) ?? [];
-  setObservationFooter(entries,hidden,pkg);
+  setObservationFooter(entries,hidden,pref);
   const empty=document.getElementById('setHookEmpty');
   empty.hidden=groups.length>0;
   empty.textContent=!pkg?'请先在主界面选择应用。':!algorithmObservations?'暂时无法读取观测项。':entries.length?'没有符合条件的 Hook。':'当前应用暂无带 Hook 名称的记录。';
-  const signature=JSON.stringify([pkg,panelDisplay.time,groups,[...hidden]]);
+  const signature=JSON.stringify([pref,pkg,panelDisplay.time,groups,[...hidden]]);
   if(hookSignature===signature) return;
   hookSignature=signature;
   const focused=document.activeElement?.dataset.observationKey;
@@ -2070,7 +2214,7 @@ function renderHookControls(){
     }
     fragment.append(section);
   }
-  hookGroups.dataset.package=pkg;
+  hookGroups.dataset.preference=pref;
   hookGroups.replaceChildren(fragment);
   focusTarget?.focus({preventScroll:true});
 }
@@ -2081,9 +2225,9 @@ function clearHiddenSelection(panel){
   setCaptureDetailOpen(panel.key,false);
 }
 function saveHookDisplay(hidden){
-  const pkg=selectedPackage();
-  if(!pkg || !hookDisplay) return;
-  const saved=hookDisplay.save(pkg,hidden);
+  const pref=recordPreferenceKey();
+  if(!pref || !hookDisplay) return;
+  const saved=hookDisplay.save(pref,hidden);
   for(const panel of Object.values(CAPPANELS)){
     const selected=panel.sel && capItems.find(item=>item.id===panel.sel && belongsToApp(item));
     if(selected && !algorithmObservations.recordVisible(selected,hidden)) clearHiddenSelection(panel);
@@ -2091,7 +2235,7 @@ function saveHookDisplay(hidden){
   }
   renderObservationSettings();
   observationStatus.textContent=saved
-    ? hidden.size?'已保存当前应用的显示设置。':'已恢复当前应用的全部显示。'
+    ? hidden.size?'已保存此查看范围的显示设置。':'已恢复此查看范围的全部显示。'
     :'浏览器无法保存，当前页面已应用。';
   observationStatus.dataset.error=String(!saved);
 }
@@ -2129,7 +2273,8 @@ function methodMarkup(method){
 }
 function renderAlgorithmObservations(){
   const pkg=selectedPackage();
-  const hidden=hookDisplay?.hidden(pkg) ?? new Set();
+  const pref=recordPreferenceKey();
+  const hidden=hookDisplay?.hidden(pref) ?? new Set();
   const observations=pkg && algorithmObservations ? algorithmObservations.summarize(capItems.filter(belongsToApp),hidden) : [];
   const searchText=value=>value.toLowerCase().replace(/[\s._-]+/g,'');
   const query=searchText(observationQuery.value);
@@ -2139,11 +2284,11 @@ function renderAlgorithmObservations(){
       item.methods.some(method=>[method.className,method.member,method.label,method.className+'.'+method.member]
         .some(value=>searchText(value).includes(query))));
   }) ?? [];
-  setObservationFooter(observations,hidden,pkg);
+  setObservationFooter(observations,hidden,pref);
   const empty=document.getElementById('setObservationEmpty');
   empty.hidden=groups.length>0;
   empty.textContent=!pkg?'请选择一个应用。':!algorithmObservations?'暂时无法读取算法统计。':observations.length?'没有匹配的算法、类或方法。':'当前应用暂无已载入的算法记录。';
-  const signature=JSON.stringify([pkg,panelDisplay.time,query,groups,[...hidden]]);
+  const signature=JSON.stringify([pref,pkg,panelDisplay.time,query,groups,[...hidden]]);
   if(algorithmSignature===signature) return;
   algorithmSignature=signature;
   const focus=document.activeElement?.dataset;
@@ -2185,11 +2330,12 @@ function renderAlgorithmObservations(){
     }
     fragment.append(section);
   }
-  observationList.dataset.package=pkg;
+  observationList.dataset.preference=pref;
   observationList.replaceChildren(fragment);
   focusTarget?.focus({preventScroll:true});
 }
 function renderObservationSettings(){
+  renderRecordCategories();
   if(hookControls.hidden) renderAlgorithmObservations();
   else renderHookControls();
 }
@@ -2266,20 +2412,112 @@ function describePanelDevices(data){
   if(connected.length>1) return {name:'已核验 '+connected.length+' 台',link:'在线'};
   return data.devices.length ? {name:'无在线设备',link:'有登记记录'} : {name:'设备未核验',link:''};
 }
-function renderPanelDeviceContext(context){
-  document.getElementById('deviceTitle').textContent=context.name;
-  document.getElementById('deviceLink').textContent=context.link;
-  document.getElementById('setDeviceStatus').textContent=[context.name,context.link].filter(Boolean).join(' · ');
-  document.getElementById('appAffiliation').textContent=context.demo?'示例 APP · 无真机会话':
-    context.local?'选定的本地 USB APP · 只读':'当前 Host 会话 · 设备归属未核验';
+function panelDeviceCatalog(data){
+  if(data?.ok!==true||!Array.isArray(data.devices)) return [];
+  if(data.localUsb){
+    const model=typeof data.localUsb.model==='string'?data.localUsb.model.trim().slice(0,64):'';
+    return [{key:'local',kind:'local',name:model||'USB 设备',link:'USB',online:data.localUsb.online===true}];
+  }
+  const catalog=new Map();
+  for(const record of data.devices){
+    const id=record?.deviceId;
+    if(typeof id!=='string'||!/^[A-Za-z0-9-]{1,80}$/.test(id)||catalog.has(id)) continue;
+    const verified=record.online===true&&Array.isArray(record.connections)
+      ?record.connections.filter(c=>c?.deviceId===id&&c.identityVerified===true&&c.online===true&&typeof c.connectionId==='string'&&c.connectionId):[];
+    const name=String(record.lastKnown?.info?.model||'已登记设备').trim().slice(0,64)||'已登记设备';
+    const link=[...new Set(verified.map(c=>c.transport==='adb'?'USB':c.transport==='lan'?'LAN':'已核验'))].join(' / ');
+    catalog.set(id,{key:'device:'+id,kind:'device',id,name,link,online:verified.length>0,
+      connectionId:verified.length===1?verified[0].connectionId:'',boot:verified.length===1?verified[0].bootId||'':''});
+  }
+  return [...catalog.values(),{key:'legacy',kind:'legacy',name:data.demo===true?'演示设备':'Host 旧会话',
+    link:data.demo===true?'非真机':'设备归属未核验',online:true,demo:data.demo===true}];
+}
+function panelDeviceStamp(device){
+  return device ? JSON.stringify([device.key,device.online,device.connectionId,device.boot]) : '';
+}
+function panelAppRoster(inventory,scope){
+  const isPackage=name=>typeof name==='string'&&name.length<=240&&/^[\w]+(?:\.[\w]+)+$/.test(name);
+  const scopeKnown=Array.isArray(scope?.document?.packages);
+  const allowed=new Set(scopeKnown?scope.document.packages.filter(isPackage):[]);
+  const peers=new Map();
+  for(const app of Array.isArray(inventory?.applications)?inventory.applications:[]){
+    const pkg=typeof app==='string'?app:app?.package??app?.packageName;
+    if(!isPackage(pkg)) continue;
+    const label=typeof app?.label==='string'?app.label.trim().slice(0,100):'';
+    peers.set(pkg,{package:pkg,label,configured:scopeKnown?allowed.has(pkg):null});
+  }
+  for(const pkg of allowed) if(!peers.has(pkg)) peers.set(pkg,{package:pkg,label:'',configured:true});
+  return [...peers.values()].sort((a,b)=>(Number(b.configured===true)-Number(a.configured===true))||
+    (a.label||a.package).localeCompare(b.label||b.package));
+}
+function renderDeviceChrome(){
+  const device=currentDevice();
+  const name=device?.name||(panelDeviceState==='loading'?'读取中…':panelDeviceState==='failed'?'读取失败':'未选择');
+  const link=device?.online?device.link:device?'离线':'';
+  document.getElementById('deviceTitle').textContent=name;
+  document.getElementById('deviceLink').textContent=link;
+  document.getElementById('setDeviceStatus').textContent=[name,link].filter(Boolean).join(' · ');
+  const choices=document.getElementById('deviceChoices');
+  const signature=JSON.stringify([panelDevices,panelDeviceKey,panelDeviceState]);
+  if(choices.dataset.signature!==signature){
+    choices.dataset.signature=signature;
+    choices.innerHTML=panelDevices.length?panelDevices.map(d=>`<button type="button" class="app-item${d.key===panelDeviceKey?' active':''}" data-device-key="${escapeHtml(d.key)}" aria-current="${d.key===panelDeviceKey}"><span class="app-name-row"><span class="app-name">${escapeHtml(d.name)}</span><span class="app-state${d.online?' on':''}">${escapeHtml(d.online?(d.link||'在线'):'离线')}</span></span>${d.id?'<span class="app-pkg">'+escapeHtml(d.id.slice(-12))+'</span>':''}</button>`).join('')
+      :'<p class="app-empty">'+(panelDeviceState==='failed'?'设备清单读取失败。':'正在读取网关设备…')+'</p>';
+  }
+}
+async function readRegisteredRoster(device,generation){
+  if(!device?.connectionId) return;
+  const read=async method=>{
+    const query=new URLSearchParams({action:'call',deviceId:device.id,connectionId:device.connectionId,method});
+    const out=await readPanelJson('/api/devices?'+query);
+    if(out?.ok!==true||out.deviceId!==device.id||out.connectionId!==device.connectionId||
+       (device.boot&&out.bootId!==device.boot)) throw Error('当前设备没有返回已核验的结果');
+    return out.result;
+  };
+  // These are directory/scope reads on the selected verified connection; no fallback to global ADB.
+  const [inventory,scope]=await Promise.allSettled([read('applications.list'),read('scope.get')]);
+  if(generation!==rosterGeneration||panelDeviceStamp(device)!==panelDeviceStamp(currentDevice())) return;
+  const seen=inventory.status==='fulfilled'?inventory.value:null;
+  const flags=scope.status==='fulfilled'?scope.value:null;
+  registryApps=panelAppRoster(seen,flags);
+  registryScopeError=!seen&&!flags?'读取此设备的应用和范围失败':
+    !flags?'设备范围未读取':!seen?'仅显示设备范围内的应用':
+    seen.nextOffset!=null?'设备只返回了首批应用，已补列分析范围内的应用':'';
+  render();
+}
+function selectPanelDevice(key,force=false){
+  if(!force&&panelDeviceKey===key) return;
+  panelDeviceKey=key;
+  const generation=++rosterGeneration;
+  const device=currentDevice();
+  chosenPkg=''; serverApps=[]; registryApps=[]; serverCaptureByPackage={}; serverCaptureDefault=false;
+  document.getElementById('appSearch').value='';
+  scopeNote=''; registryScopeError=device?.online
+    ?(device.kind==='device'?(device.connectionId?'正在读取此设备的 APP':'请先指定此设备的连接'):'正在读取当前 APP')
+    :'';
+  renderDeviceChrome();
+  render();
+  if(usesHostSessions()) void refreshApps();
+  if(device?.online&&device.kind==='device'&&device.connectionId) void readRegisteredRoster(device,generation);
 }
 let readingPanelDevices=false;
 async function refreshPanelDevices(){
   if(readingPanelDevices) return;
   readingPanelDevices=true;
-  // Read the verified connection cache only. Legacy APP sessions have no verified device binding.
-  try{ renderPanelDeviceContext(describePanelDevices(await readPanelJson('/api/devices?action=list'))); }
-  catch{ renderPanelDeviceContext(describePanelDevices()); }
+  try{
+    const stamp=panelDeviceStamp(currentDevice());
+    const data=await readPanelJson('/api/devices?action=list');
+    panelDevices=panelDeviceCatalog(data);
+    panelDeviceState=data?.ok===true?'ready':'failed';
+    const current=currentDevice();
+    const next=current?.key||(panelDevices.length===1?panelDevices[0].key:'');
+    if(next!==panelDeviceKey||stamp!==panelDeviceStamp(current)) selectPanelDevice(next,true);
+    else renderDeviceChrome();
+  }catch{
+    panelDeviceState='failed';
+    panelDevices=[];
+    selectPanelDevice('',true);
+  }
   finally{ readingPanelDevices=false; }
 }
 function updateHostDisplayCap(data){
@@ -2334,15 +2572,15 @@ function showSettingsPage(page){
     if(selected) settingsTitle.textContent=button.getAttribute('aria-label');
   }
   observationFooter.hidden=page!=='hooks';
-  document.getElementById('setAppContext').hidden=page!=='hooks' && page!=='capture';
+  document.getElementById('setAppContext').hidden=!['scope','hooks','capture'].includes(page);
   document.querySelector('.set-main').scrollTop=0;
   renderSettingsScope();
-  if(page==='hooks') showObservationView(true);
-  if(page==='capture') void openCaptureSettings();
+  if(page==='hooks'){ showObservationView(true); renderRecordCategories(); }
+  if(page==='capture') renderCapabilityStatus();
   if(page==='display') renderDisplaySettings();
   if(page==='status') void refreshPanelStatus();
 }
-function openSettings(page='hooks'){
+function openSettings(page='scope'){
   closePopovers();
   if(!settingsDialog.open) settingsDialog.showModal();
   showSettingsPage(page);
@@ -2393,74 +2631,79 @@ function escapeHtml(s){ return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':
 
 // ---- agents / 应用栏 / WS ----
 const agents=new Map();
-let serverApps=[]; let scopeNote=''; let lastFilterPkg=''; let captureOn=false; let localObservation=false;
-function updateObservationMode(readOnly){
-  if(readOnly===localObservation) return;
-  localObservation=readOnly;
-  const controls=document.querySelectorAll('#setCaptureTab, #nav [data-panel="p-files"], #nav [data-panel="p-dump"]');
-  for(const button of controls){
-    button.disabled=readOnly;
-    if(readOnly) button.title='当前为 USB 只读观测，不操作设备';
-    else button.title=button.getAttribute('aria-label')||'';
-  }
-  if(readOnly && settingsDialog.open && !capturePage.hidden) showSettingsPage('hooks');
-}
+let serverApps=[]; let scopeNote=''; let lastFilterScope=''; let captureOn=false; let localObservation=false;
+let readingHostRoster=-1;
 let serverCaptureDefault=false, serverCaptureByPackage={}, serverCaptureVersion=0;
 function appOnline(pkg){ return sessionsOf(pkg).some(a=>a.online); }
 function renderSessions(){
   const all=sessionsOf(selectedPackage()).slice().reverse();
   const showOffline=document.getElementById('sessShowOffline').checked;
   const visible=showOffline?all:all.filter(a=>a.online);
-  document.getElementById('sessHidden').textContent=showOffline?'':`已隐藏 ${all.length-visible.length} 个`;
+  document.getElementById('sessHidden').textContent=showOffline||!all.length?'':'已隐藏 '+(all.length-visible.length)+' 个';
   document.getElementById('sessRows').innerHTML=visible.length?visible.map(a=>
-    `<div class="session-row"><span>PID ${escapeHtml(a.pid)} · ${escapeHtml(a.sessionId)}</span><span>${a.online?'在线':'离线'}</span></div>`
+    '<div class="session-row"><span>PID '+escapeHtml(a.pid)+' · '+escapeHtml(a.sessionId)+'</span><span>'+(a.online?'在线':'离线')+'</span></div>'
   ).join(''):'<div>没有可显示的会话</div>';
 }
 function appRecords(){
+  const device=currentDevice();
+  if(!device) return [];
+  if(device.kind==='device') return registryApps;
   const seen=new Set();
   const list=[];
   for(const a of serverApps){
-    const pkg=a&&a.package;
-    if(!pkg||pkg==='?'||seen.has(pkg)) continue;
+    const pkg=a?.package;
+    if(typeof pkg!=='string'||!/^[\w]+(?:\.[\w]+)+$/.test(pkg)||seen.has(pkg)) continue;
     seen.add(pkg);
     const label=String(a.label||'').trim();
-    list.push({package:pkg, label: label && label!==pkg ? label : ''});
+    list.push({package:pkg,label:label!==pkg?label:''});
   }
   return list;
 }
 function render(){
+  const device=currentDevice();
   const list=appRecords();
-  const sig=list.map(a=>a.package+'='+a.label+'='+(appOnline(a.package)?'1':'0')).join('|')+'|'+scopeNote;
-  const pin=pinnedPackage();
-  let next=chosenPkg;
-  if(pin && list.some(a=>a.package===pin)) next=pin;
-  else if(!list.some(a=>a.package===next)) next=(list[0]||{}).package||'';
-  if(next!==chosenPkg) chosenPkg=next;
-  const pkg=chosenPkg;
-  const selected=selectedPackage();
-  if(settingsDialog.open && !capturePage.hidden && familyView && familyView.pkg!==selected){
-    void openCaptureSettings();
+  const note=!device?'先选择设备':!device.online?'设备未连接':device.kind==='device'?registryScopeError:scopeNote;
+  const flag=a=>device.kind==='device'
+    ?(a.configured===true?'已在范围':a.configured===false?'未加入范围':'范围未知')
+    :(appOnline(a.package)?'在线':'无在线会话');
+  const query=document.getElementById('appSearch').value.trim().toLowerCase();
+  const visible=query?list.filter(a=>(a.package+' '+a.label).toLowerCase().includes(query)):list;
+  const sig=JSON.stringify([panelDeviceKey,note,query,visible.map(a=>[a.package,a.label,flag(a)])]);
+  const pin=usesHostSessions()?pinnedPackage():'';
+  if(pin && list.some(a=>a.package===pin)) chosenPkg=pin;
+  else if(!list.some(a=>a.package===chosenPkg)) chosenPkg=usesHostSessions()?(list[0]?.package||''):'';
+  const pkg=selectedPackage();
+  const scope=appScopeKey();
+  const nextCaptureOn=usesHostSessions()&&!!pkg&&(Object.hasOwn(serverCaptureByPackage,pkg)?serverCaptureByPackage[pkg]:serverCaptureDefault);
+  if(nextCaptureOn!==captureOn){ captureOn=nextCaptureOn; capRenderAll(); }
+  if(scope!==lastFilterScope){
+    lastFilterScope=scope;
+    appEventsState={key:scope,loaded:false,failed:false,artifacts:[]};
+    capReset();
+    void loadAppEvents(true);
+    scheduleDetect();
+    if(document.getElementById('p-dump').classList.contains('active')) void loadArtifactLedger();
   }
-  const nextCaptureOn=!!selected && (Object.hasOwn(serverCaptureByPackage,selected)?serverCaptureByPackage[selected]:serverCaptureDefault);
-  if(nextCaptureOn!==captureOn){ captureOn=nextCaptureOn; capRenderAll(); refreshCapUnpackHint(); }
-  if(pkg!==lastFilterPkg){ lastFilterPkg=pkg; unpackViewRunId=null; unpackRuns=[]; capReset(); loadAppEvents(true); dumpSid=''; scheduleDetect(); if(document.getElementById('p-dump').classList.contains('active')) loadInventory(); refreshCapUnpackHint(); }
   const cur=list.find(a=>a.package===pkg);
   const primary=document.getElementById('procPrimary'), secondary=document.getElementById('procSecondary'), info=document.getElementById('procinfo');
-  const menu=document.getElementById('appChoices');
   if(cur){
     const online=sessionsOf(pkg).filter(a=>a.online).length;
     primary.textContent=cur.label||cur.package;
-    secondary.textContent=(cur.label?cur.package+' · ':'')+(online?online+' 个在线会话':'无在线会话');
+    secondary.textContent=(cur.label?cur.package+' · ':'')+(device.kind==='device'?'未绑定观测会话':online?online+' 个在线会话':'无在线会话');
     info.innerHTML='<dt>应用</dt><dd>'+escapeHtml(cur.label||cur.package)+'</dd><dt>包名</dt><dd>'+escapeHtml(cur.package)+'</dd>';
-  } else {
+  }else{
     primary.textContent='未选择 APP';
-    secondary.textContent=scopeNote||'在手机上勾选注入范围';
-    info.innerHTML='<dt>状态</dt><dd>'+escapeHtml(scopeNote||'注入范围里没有勾选')+'</dd>';
+    secondary.textContent=note||(list.length?'点此选择 APP':'没有可查看的 APP');
+    info.innerHTML='<dt>状态</dt><dd>'+escapeHtml(secondary.textContent)+'</dd>';
   }
-  if(menu && menu.dataset.sig!==sig){
+  const menu=document.getElementById('appChoices');
+  if(menu.dataset.sig!==sig){
     menu.dataset.sig=sig;
-    menu.innerHTML=list.length?list.map(a=>{ const on=appOnline(a.package); return `<button type="button" class="app-item${a.package===pkg?' active':''}" data-pkg="${escapeHtml(a.package)}"><span class="app-name-row"><span class="app-name">${escapeHtml(a.label||a.package)}</span><span class="app-state${on?' on':''}">${on?'在线':'未连接'}</span></span>${a.label?`<span class="app-pkg">${escapeHtml(a.package)}</span>`:''}</button>`; }).join('')
-      : `<div class="app-empty">${escapeHtml(scopeNote||'注入范围里没有勾选')}</div>`;
+    menu.innerHTML=visible.length?visible.map(a=>
+      '<button type="button" class="app-item" data-pkg="'+escapeHtml(a.package)+'"><span class="app-name-row"><span class="app-name">'+
+      escapeHtml(a.label||a.package)+'</span><span class="app-state'+(appOnline(a.package)?' on':'')+'">'+escapeHtml(flag(a))+'</span></span>'+
+      (a.label?'<span class="app-pkg">'+escapeHtml(a.package)+'</span>':'')+'</button>'
+    ).join(''):'<div class="app-empty">'+escapeHtml(list.length?'没有匹配的 APP':note||'没有可查看的 APP')+'</div>';
   }
   for(const button of menu.querySelectorAll('.app-item')){
     const current=button.dataset.pkg===pkg;
@@ -2468,51 +2711,96 @@ function render(){
     button.setAttribute('aria-current',String(current));
   }
   renderSessions();
+  document.getElementById('appAffiliation').textContent=device?.kind==='local'?'选定的本地 USB 会话':
+    device?.kind==='device'?(registryScopeError||'查看此设备的范围；不混入 Host 旧会话'):
+    device?.kind==='legacy'?'当前 Host 会话 · 设备归属未核验':'未选择设备';
   updateCapStatePill();
+  renderArtifactLedger();
   if(settingsDialog.open && !statusPage.hidden) renderStatusApp();
   if(settingsDialog.open){
     renderSettingsScope();
+    if(!capturePage.hidden) renderCapabilityStatus();
     scheduleObservationRefresh();
   }
 }
 async function refreshApps(){
+  if(!usesHostSessions()||readingHostRoster===rosterGeneration) return;
+  const generation=rosterGeneration;
+  readingHostRoster=generation;
   const captureVersion=serverCaptureVersion;
   try{
-    const r=await (await fetch('/api/apps')).json();
-    updateObservationMode(r.localObservation===true);
-    if(Array.isArray(r.apps)) serverApps=r.apps;
-    if(Array.isArray(r.unpackProtected)){
-      serverUnpackProtected=r.unpackProtected;
-      for(const p of serverUnpackProtected) unpackSkippedArm.add(p);
-    }
+    const r=await readPanelJson('/api/apps');
+    if(generation!==rosterGeneration||!usesHostSessions()) return;
+    if((r.localObservation===true)!==(currentDevice()?.kind==='local')) throw Error('APP 列表与设备来源不一致');
+    if(!Array.isArray(r.apps)) throw Error('APP 列表无效');
+    serverApps=r.apps;
     if(captureVersion===serverCaptureVersion){
-      if(typeof r.capture==='boolean') serverCaptureDefault=r.capture;
+      serverCaptureDefault=r.capture===true;
       serverCaptureByPackage=r.captureByPackage||{};
     }
     scopeNote=r.error||'';
-  }catch(e){ scopeNote='读不到注入范围'; }
+  }catch(e){
+    if(generation!==rosterGeneration) return;
+    serverApps=[];
+    scopeNote='当前 APP 列表读取失败';
+  }finally{
+    if(readingHostRoster===generation) readingHostRoster=-1;
+  }
   render();
-  refreshCapUnpackHint();
 }
 async function loadAppEvents(clear=false){
-  const el=document.getElementById('appEvents'); const pkg=selectedPackage();
-  if(!el) return;
-  if(clear || !pkg) el.textContent='';
-  if(!pkg) return;
+  const el=document.getElementById('appEvents'), pkg=selectedPackage();
+  const scope=appScopeKey();
+  if(clear||!pkg) el.textContent='';
+  if(!pkg||!usesHostSessions()) return;
   try{
-    const r=await (await fetch('/api/events?package='+encodeURIComponent(pkg)+'&limit=80')).json();
-    if(selectedPackage()!==pkg) return;
-    const rows=(r.events||[]).filter(e=>e.type!=='capture.new'&&e.type!=='agent.maps').slice(-8).reverse();
-    el.innerHTML=rows.length?rows.map(e=>{
-      const d=e.data||{};
-      let text=e.type;
-      if(e.type==='agent.hello') text='进程连上 · PID '+(d.pid??'');
-      else if(e.type==='agent.close') text='进程退出'+(d.pid?' · PID '+d.pid:'');
-      else if(e.type==='dump.new') text='Dump · '+(d.kind||d.tag||'');
-      return `<div>${fmtTime(e.ts)} ${escapeHtml(text)}</div>`;
-    }).join(''):'<div>这个应用还没有进程日志</div>';
-  }catch(e){ if(selectedPackage()===pkg) el.textContent=''; }
+    const r=await readPanelJson('/api/events?package='+encodeURIComponent(pkg)+'&limit=80');
+    if(appScopeKey()!==scope) return;
+    const allowedSessions=new Set(sessionsOf(pkg).map(a=>a.sessionId));
+    const rows=(r.events||[]).filter(e=>['agent.hello','agent.close'].includes(e.type)&&allowedSessions.has(e.data?.sessionId)).slice(-8).reverse();
+    el.innerHTML=rows.map(e=>'<div>'+escapeHtml(fmtTime(e.ts))+' '+(e.type==='agent.hello'?'进程连上':'进程退出')+'</div>').join('');
+  }catch(e){ if(appScopeKey()===scope) el.textContent=''; }
 }
+function scopedArtifactRows(events,pkg,sessionIds){
+  if(!pkg||!Array.isArray(events)) return [];
+  const sessions=new Set(sessionIds);
+  return events.flatMap(e=>{
+    const d=e?.data;
+    if(e?.type!=='dump.new'||d?.package!==pkg||!sessions.has(d.sessionId)) return [];
+    return [{kind:String(d.kind||'诊断产物'),tag:String(d.tag||'未命名'),
+      ts:Number(d.capturedAt||e.ts)||0,size:Number.isSafeInteger(d.size)&&d.size>=0?d.size:null,sessionId:d.sessionId}];
+  }).reverse();
+}
+async function loadArtifactLedger(){
+  const pkg=selectedPackage(), key=appScopeKey();
+  const sessionIds=sessionsOf(pkg).map(a=>a.sessionId);
+  if(!pkg||!usesHostSessions()||!sessionIds.length){ renderArtifactLedger(); return; }
+  try{
+    const r=await readPanelJson('/api/events?type=dump.new&limit=80&package='+encodeURIComponent(pkg));
+    if(appScopeKey()!==key) return;
+    appEventsState={key,loaded:true,failed:false,artifacts:scopedArtifactRows(r.events,pkg,sessionIds)};
+  }catch{
+    if(appScopeKey()!==key) return;
+    appEventsState={key,loaded:false,failed:true,artifacts:[]};
+  }
+  renderArtifactLedger();
+  if(settingsDialog.open&&!capturePage.hidden) renderCapabilityStatus();
+}
+function renderArtifactLedger(){
+  const empty=document.getElementById('artifactEmpty'), table=document.getElementById('artifactTable');
+  const scoped=appEventsState.key===appScopeKey();
+  const ready=usesHostSessions()&&!!selectedPackage()&&sessionsOf(selectedPackage()).length>0;
+  const rows=ready&&scoped?appEventsState.artifacts:[];
+  empty.hidden=rows.length>0;
+  table.hidden=!rows.length;
+  document.getElementById('artifactRows').innerHTML=rows.map(r=>'<tr><td>'+escapeHtml(r.ts?new Date(r.ts).toLocaleString():'未记录')+
+    '</td><td>'+escapeHtml(r.kind)+'</td><td>'+escapeHtml(r.tag)+'</td><td>'+escapeHtml(r.size===null?'未记录':fmtSize(r.size))+
+    '</td><td>'+escapeHtml(r.sessionId)+'</td></tr>').join('');
+  if(!rows.length) empty.textContent=!ready?emptyCapText():
+    (scoped&&appEventsState.failed?'产物清单读取失败，切回此页可重试。':
+      scoped&&appEventsState.loaded?'当前 APP 会话没有已上报的 dump 产物。':'正在读取当前会话的产物记录…');
+}
+
 function upsert(a){ agents.set(a.sessionId,{...agents.get(a.sessionId),...a}); render(); }
 function setWsPill(s,cls){ const p=document.getElementById('dbg-ws'); if(p){p.textContent='ws: '+s;p.className='pill '+cls;} }
 function connect(){ const ws=new WebSocket(`ws://${location.host}/ws`); const conn=document.getElementById('conn'), st=document.getElementById('status');
@@ -2520,71 +2808,42 @@ function connect(){ const ws=new WebSocket(`ws://${location.host}/ws`); const co
   ws.onclose=()=>{conn.className='status-dot';st.textContent='电脑服务重连中…';setWsPill('down','no');dbg('WS','close');setTimeout(connect,1500);};
   ws.onmessage=e=>{const m=JSON.parse(e.data);
     if(m.event==='snapshot'){agents.clear();(m.data||[]).forEach(a=>agents.set(a.sessionId,{...agents.get(a.sessionId),...a})); render();}
-    else if(m.event==='agent.hello'){
-      upsert(m.data); loadAppEvents();
-      // Fresh process after unpack: drop client "未装钩" memory (server clearCaptureArmProtect mirrors this).
-      // Skip while dumpBusy so cold-start hello mid-unpack does not wipe the in-progress hint.
-      if(!dumpBusy && m.data&&m.data.package){
-        unpackSkippedArm.delete(m.data.package);
-        try{ sessionStorage.removeItem('adh.unpackSkippedArm.'+m.data.package); }catch{}
-        serverUnpackProtected=serverUnpackProtected.filter(p=>p!==m.data.package);
-        refreshCapUnpackHint();
-      }
-      if(!dumpBusy && document.getElementById('p-dump').classList.contains('active') && m.data && m.data.package===selectedPackage()) loadInventory();
-    }
+    else if(m.event==='agent.hello'){ upsert(m.data); void loadAppEvents(); }
     else if(m.event==='agent.maps'){const a=agents.get(m.data.sessionId);if(a){a.mapsCount=m.data.count;upsert(a);}}
-    else if(m.event==='agent.close'){const a=agents.get(m.data.sessionId);if(a){a.online=false;upsert(a); loadAppEvents();}}
-    else if(m.event==='capture.new'){ capPush(m.data); if(m.data&&m.data.category==='net') scheduleExchanges(); else capRenderAll(); if(m.data&&(m.data.category==='system'||m.data.category==='file')) scheduleDetect(); }
-    else if(m.event==='dump.new'){ if(m.data&&m.data.package===selectedPackage()) loadAppEvents(); }
-    else if(m.event==='unpack.start'){
-      if(m.data&&m.data.package===selectedPackage()){
-        const se=m.data.sideEffects||{};
-        const mode=se.launchMode||(m.data.launch&&m.data.launch.mode)||'';
-        document.getElementById('dexStat').textContent=
-          mode==='reuse-online' ? '抠 DEX…' : (se.forceStopped ? '冷启后抠 DEX…' : '抠 DEX…');
-        unpackLiveCount=0;
-        markUnpackSkippedArm(m.data.package);
-      }
+    else if(m.event==='agent.close'){const a=agents.get(m.data.sessionId);if(a){a.online=false;upsert(a);void loadAppEvents();}}
+    else if(m.event==='capture.new'&&m.data&&belongsToApp(m.data)){
+      capPush(m.data); if(m.data.category==='net') scheduleExchanges(); else capRenderAll();
+      if(m.data.category==='system') scheduleDetect();
     }
-    else if(m.event==='unpack.dex'){
-      if(m.data&&m.data.package===selectedPackage()){
-        unpackLiveCount++;
-        document.getElementById('dexStat').textContent=`已获取 ${unpackLiveCount} 个 DEX`;
-      }
-    }
-    else if(m.event==='unpack.done'){
-      if(m.data&&m.data.package===selectedPackage()){
-        if(m.data.didSkipAutoArm!==false) markUnpackSkippedArm(m.data.package);
-        if(!dumpBusy) document.getElementById('dexStat').textContent=m.data.ok
-          ?`完成：${m.data.dexCount||0} 个 DEX`+(m.data.bundle?` · ${fmtSize(m.data.bundle.size)}`:'')
-          :(m.data.error||'脱壳结束');
-        refreshCapUnpackHint();
-        loadUnpackHistory().then(()=>{ if(m.data.ok&&m.data.runId) openUnpackDetail(m.data.runId); });
-      }
-    }
+    else if(m.event==='dump.new'&&m.data?.package===selectedPackage()&&document.getElementById('p-dump').classList.contains('active')) void loadArtifactLedger();
     dbg('WS←', m.event||'?');
   }; }
 connect();
 void refreshPanelDevices();
 setInterval(refreshPanelDevices,10000);
 document.getElementById('sessShowOffline').addEventListener('change',renderSessions);
+document.getElementById('appSearch').addEventListener('input',render);
 document.getElementById('appMenu').addEventListener('click', e=>{
   const btn=e.target.closest('[data-pkg]');
-  if(!btn) return;
-  chosenPkg=btn.dataset.pkg||'';
-  scheduleDetect();
-  const next=chosenPkg ? '/'+encodeURIComponent(chosenPkg) : '/';
-  if(location.pathname!==next) history.pushState(null,'',next);
+  if(!btn||!appRecords().some(a=>a.package===btn.dataset.pkg)) return;
+  chosenPkg=btn.dataset.pkg;
+  const next='/'+encodeURIComponent(chosenPkg);
+  if(usesHostSessions()&&location.pathname!==next) history.pushState(null,'',next);
   closePopovers();
   render();
-  filesPath=''; filesResetPreview();
-  if(document.getElementById('p-files').classList.contains('active')) filesInit();
 });
 window.addEventListener('popstate', ()=>{
-  chosenPkg=pinnedPackage();
-  render();
-  filesPath=''; filesResetPreview();
-  if(document.getElementById('p-files').classList.contains('active')) filesInit();
+  if(usesHostSessions()){ chosenPkg=pinnedPackage(); render(); }
+});
+document.getElementById('deviceContext').addEventListener('click',e=>{
+  e.stopPropagation(); togglePopover('deviceMenu','deviceContext');
+});
+document.getElementById('deviceChoices').addEventListener('click',e=>{
+  const key=e.target.closest('[data-device-key]')?.dataset.deviceKey;
+  if(!key||!panelDevices.some(d=>d.key===key)) return;
+  closePopovers();
+  if(key!==panelDeviceKey&&location.pathname!=='/') history.replaceState(null,'','/');
+  selectPanelDevice(key);
 });
 bindToolbar();
 onTabSwitch('p-crypto');
@@ -2603,7 +2862,7 @@ document.getElementById('appBtn').addEventListener('click', e=>{ e.stopPropagati
 document.addEventListener('click', e=>{
   const recordTab=e.target.closest('.record-tabs [data-record-view]');
   if(recordTab) selectRecordView(recordTab);
-  if(!e.target.closest('.menu-wrap') && !e.target.closest('.app-context')) closePopovers();
+  if(!e.target.closest('.menu-wrap,.app-context,.device-picker')) closePopovers();
 });
 document.addEventListener('keydown', e=>{
   if(e.key==='Escape') closePopovers();
@@ -2631,13 +2890,21 @@ hookListTab.addEventListener('click', ()=>showObservationView(false));
 hookQuery.addEventListener('input',renderHookControls);
 hookCategory.addEventListener('change',renderHookControls);
 observationReset.addEventListener('click',()=>saveHookDisplay(new Set()));
+document.getElementById('setRecordCategories').addEventListener('change',e=>{
+  const pref=recordPreferenceKey(), category=e.target.dataset.category;
+  const key=algorithmObservations?.categoryKey(category);
+  if(!pref||!hookDisplay||e.currentTarget.dataset.preference!==pref||!key) return;
+  const hidden=new Set(hookDisplay.hidden(pref));
+  if(e.target.checked) hidden.delete(key); else hidden.add(key);
+  saveHookDisplay(hidden);
+});
 for(const list of [hookGroups,observationList]){
   list.addEventListener('change',e=>{
     const toggle=e.target;
-    const pkg=selectedPackage();
+    const pref=recordPreferenceKey();
     const key=toggle.dataset.observationKey;
-    if(!pkg || !hookDisplay || list.dataset.package!==pkg || !key) return;
-    const hidden=new Set(hookDisplay.hidden(pkg));
+    if(!pref || !hookDisplay || list.dataset.preference!==pref || !key) return;
+    const hidden=new Set(hookDisplay.hidden(pref));
     if(toggle.checked) hidden.delete(key);
     else hidden.add(key);
     saveHookDisplay(hidden);

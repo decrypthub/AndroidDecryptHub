@@ -76,7 +76,7 @@ test('the narrow capture toolbar only filters the list and leaves APP scope in t
   assert.doesNotMatch(toolbar,/id="appContext"|id="appBtn"/);
   assert.match(declared('.filters'),/display:none/);
   assert.match(declared('.filters.show'),/display:flex/);
-  assert.equal([...html.matchAll(/data-capture-back="(?:cc|sy|nt)"/g)].length,3);
+  assert.equal([...html.matchAll(/data-capture-back="(?:cc|sy|nt|fl)"/g)].length,4);
 });
 
 test('record detail defaults to data, keeps an active view on refresh and resets on a new record', () => {
@@ -97,22 +97,89 @@ test('record detail defaults to data, keeps an active view on refresh and resets
   assert.equal(detail.dataset.detailView,'data');
 });
 
-test('the device display distinguishes verified connections, missing attribution data and a demo', () => {
-  const fn=html.match(/(function describePanelDevices\(data\)\{[\s\S]*?\r?\n})\r?\nfunction renderPanelDeviceContext/)?.[1];
+test('same-model devices remain separate, mismatched connections stay offline and USB scope stays local', () => {
+  const fn=html.match(/(function panelDeviceCatalog\(data\)\{[\s\S]*?\r?\n})\r?\nfunction panelDeviceStamp/)?.[1];
   assert.ok(fn);
-  const describe=vm.runInNewContext('('+fn+')');
-  const summarize=(data:unknown)=>JSON.parse(JSON.stringify(describe(data)));
-  const peer={online:true,lastKnown:{info:{model:'甲型测试设备'}},
-    connections:[{online:true,identityVerified:true,transport:'adb'}]};
-  assert.deepEqual(summarize({ok:true,devices:[]}),{name:'设备未核验',link:''});
-  assert.deepEqual(summarize({ok:true,devices:[peer]}),{name:'甲型测试设备',link:'USB'});
-  assert.deepEqual(summarize({ok:true,devices:[peer,{...peer}]}),{name:'已核验 2 台',link:'在线'});
-  assert.deepEqual(summarize({ok:true,devices:[{...peer,connections:[{online:true,identityVerified:false}]}]}),
-    {name:'无在线设备',link:'有登记记录'});
-  assert.deepEqual(summarize({ok:true,demo:true,devices:[]}),{name:'演示设备',link:'非真机',demo:true});
-  assert.deepEqual(summarize({ok:true,devices:[],localUsb:{model:'甲型测试设备',online:true}}),
-    {name:'甲型测试设备',link:'USB · 只读',local:true});
-  assert.deepEqual(summarize({ok:true,devices:[],localUsb:{model:'甲型测试设备',online:false}}),
-    {name:'等待 USB 会话',link:'未连接',local:true});
-  assert.deepEqual(summarize(null),{name:'设备状态未知',link:'读取失败'});
+  const catalog=vm.runInNewContext('('+fn+')');
+  const device=(id:string,conn:Record<string,unknown>={})=>({
+    deviceId:id,online:true,lastKnown:{info:{model:'同型号'}},
+    connections:[{deviceId:id,connectionId:'connection-'+id,online:true,identityVerified:true,transport:'adb',...conn}],
+  });
+  const choices=catalog({ok:true,devices:[device('one'),device('two'),device('three',{deviceId:'wrong'})]});
+  assert.equal(choices.length,4);
+  assert.equal(choices[0].key,'device:one');
+  assert.equal(choices[1].key,'device:two');
+  assert.equal(choices[0].name,choices[1].name);
+  assert.equal(choices[0].connectionId,'connection-one');
+  assert.equal(choices[2].connectionId,'');
+  assert.equal(choices[3].kind,'legacy');
+  const local=catalog({ok:true,devices:[device('elsewhere')],localUsb:{model:'PGP110',online:true}});
+  assert.equal(local.length,1);
+  assert.equal(local[0].kind,'local');
+  assert.equal(catalog(null).length,0);
+});
+
+test('device roster separates installed APPs and confirmed analysis scope membership', () => {
+  const fn=html.match(/(function panelAppRoster\([\s\S]*?\r?\n})\r?\nfunction renderDeviceChrome/)?.[1];
+  assert.ok(fn);
+  const roster=vm.runInNewContext('('+fn+')');
+  const list={applications:[{packageName:'com.example.a',label:'A'},{package:'com.example.b',label:'B'}]};
+  const items=roster(list,{document:{packages:['com.example.b','com.example.scoped']}});
+  assert.equal(items.find((item:any)=>item.package==='com.example.a').configured,false);
+  assert.equal(items.find((item:any)=>item.package==='com.example.b').configured,true);
+  assert.equal(items.find((item:any)=>item.package==='com.example.scoped').configured,true);
+  assert.equal(roster(list,null)[0].configured,null);
+});
+
+test('late app and scope results do not bind to the next selected device', async () => {
+  const fn=html.match(/(async function readRegisteredRoster\([\s\S]*?\r?\n})\r?\nfunction selectPanelDevice/)?.[1];
+  assert.ok(fn);
+  const a={key:'device:a',id:'a',connectionId:'conn-a',boot:'boot-a'};
+  const b={key:'device:b',id:'b',connectionId:'conn-b',boot:'boot-b'};
+  const pending:Array<() => void>=[];
+  let active=a, renders=0;
+  const c={
+    URLSearchParams, registryApps:[] as unknown[], registryScopeError:'', rosterGeneration:1,
+    currentDevice:()=>active, panelDeviceStamp:(d:typeof a)=>JSON.stringify(d),
+    panelAppRoster:()=>[1], render:()=>{renders++},
+    readPanelJson:(url:string)=>new Promise(resolve=>{
+      const query=new URL(url,'http://localhost').searchParams;
+      assert.equal(query.get('deviceId'),'a');
+      assert.equal(query.get('connectionId'),'conn-a');
+      assert.ok(['applications.list','scope.get'].includes(query.get('method')??''));
+      pending.push(()=>resolve({ok:true,deviceId:'a',connectionId:'conn-a',bootId:'boot-a',result:{}}));
+    }),
+  };
+  const read=vm.runInNewContext('('+fn+')',c);
+  const request=read(a,1);
+  assert.equal(pending.length,2);
+  active=b;
+  c.rosterGeneration++;
+  pending.forEach(resolve=>resolve());
+  await request;
+  assert.deepEqual(c.registryApps,[]);
+  assert.equal(renders,0);
+});
+
+test('file activity and artifact views open without automatically listing device files or issuing a device action', () => {
+  const tab=html.match(/function mkTab\([\s\S]*?\r?\nTABS_MAIN\.forEach/)?.[0]??'';
+  assert.match(tab,/loadArtifactLedger\(\)/);
+  assert.doesNotMatch(tab,/loadInventory\(|filesInit\(|runOneClickUnpack\(/);
+  assert.match(html,/makeCapPanel\('sy',\['system'\]\)/);
+  assert.match(html,/makeCapPanel\('fl',\['file'\]\)/);
+  assert.match(html,/id="setScopeTab"[^>]*aria-label="分析范围"/);
+  assert.match(html,/id="setCaptureTab"[^>]*aria-label="功能与 Hook 状态"/);
+  assert.match(html,/id="setHooksTab"[^>]*aria-label="记录显示"/);
+});
+
+test('artifact metadata requires the exact package and a known session', () => {
+  const fn=html.match(/(function scopedArtifactRows\([\s\S]*?\r?\n})\r?\nasync function loadArtifactLedger/)?.[1];
+  assert.ok(fn);
+  const rows=vm.runInNewContext('('+fn+')');
+  const e=(p:string,s:string)=>({type:'dump.new',ts:10,data:{package:p,sessionId:s,kind:'sample',size:17,tag:'owned',path:'unneeded'}});
+  const result=rows([e('com.example.a','one'),e('com.example.b','one'),e('com.example.a','other')],'com.example.a',['one']);
+  assert.equal(result.length,1);
+  assert.equal(result[0].sessionId,'one');
+  assert.equal(result[0].size,17);
+  assert.equal(result[0].path,undefined);
 });

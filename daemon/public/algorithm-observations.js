@@ -107,7 +107,9 @@
     return {key:JSON.stringify([category,source,name]), category, source, name};
   }
   const hookKey = record => hookIdentity(record)?.key;
-  const recordVisible = (record,hidden) => !hidden.has(hookKey(record)) && !hidden.has(algorithmKey(record));
+  const categoryKey = category => Object.hasOwn(hookGroups,category) ? JSON.stringify(['category',category]) : null;
+  const recordVisible = (record,hidden) =>
+    !hidden.has(categoryKey(record?.category)) && !hidden.has(hookKey(record)) && !hidden.has(algorithmKey(record));
 
   function summarizeHooks(records) {
     const items = new Map();
@@ -159,5 +161,5 @@
   }
 
   scope.AdhAlgorithmObservations = {families, summarize, hookGroups, summarizeHooks, choiceGroups,
-    algorithmKey, hookKey, recordVisible, hookDisplayPreferences};
+    algorithmKey, hookKey, categoryKey, recordVisible, hookDisplayPreferences};
 })(globalThis);
