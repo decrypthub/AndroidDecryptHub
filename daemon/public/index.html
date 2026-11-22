@@ -338,28 +338,36 @@
   .modal h3 button:hover { background:var(--surface-2); border-color:#646e7d; }
   .modal pre { flex:1; overflow:auto; margin:0; border:none; border-radius:0; background:transparent; padding:14px 16px; color:var(--ink-2); }
   .diag-hint { padding:10px 16px; border-bottom:1px solid var(--line-soft); background:transparent; color:var(--muted); font-size:12px; line-height:1.55; }
-  .set-shell { width:min(880px,calc(100vw - 44px)); max-width:none; height:min(610px,calc(100dvh - 44px)); max-height:none; padding:0; overflow:hidden; border:1px solid var(--line); border-radius:10px; background:var(--surface); color:var(--ink); }
+  .set-shell { width:min(940px,calc(100vw - 44px)); max-width:none; height:min(670px,calc(100dvh - 44px)); max-height:none; padding:0; overflow:hidden; border:1px solid var(--line); border-radius:10px; background:var(--surface); color:var(--ink); }
   .set-shell[open] { display:flex; flex-direction:column; }
   .set-shell::backdrop { background:rgba(6,7,10,.78); }
-  .set-header { display:flex; align-items:center; justify-content:space-between; flex:none; padding:12px 18px; border-bottom:1px solid var(--line-soft); }
-  .set-header h2 { margin:0; font-size:15px; font-weight:650; }
+  .set-header { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; flex:none; padding:16px 24px; border-bottom:1px solid var(--line-soft); }
+  .set-header h3 { margin:0; color:var(--ink); font-size:18px; font-weight:650; text-transform:none; letter-spacing:normal; }
   .set-header > div { min-width:0; }
   .set-header .set-app { margin-top:4px; }
-  .set-close-x { width:30px; height:30px; border:0; background:transparent; color:var(--muted); font-size:22px; line-height:1; cursor:pointer; border-radius:4px; }
+  .set-close-x { width:30px; height:30px; flex:none; border:0; background:transparent; color:var(--muted); font-size:22px; line-height:1; cursor:pointer; border-radius:4px; }
   .set-close-x:hover { background:var(--surface-3); color:var(--ink); }
   .set-shell :focus-visible { outline:2px solid var(--blue); outline-offset:2px; }
   .set-layout { display:flex; flex:1; min-height:0; }
-  .set-nav { width:160px; flex-shrink:0; border-right:1px solid var(--line-soft); padding:14px 10px; display:flex; flex-direction:column; gap:4px; }
+  .set-sidebar { flex:none; width:184px; min-height:0; overflow:auto; border-right:1px solid var(--line-soft); }
+  .set-sidebar h2 { margin:0; padding:18px 22px 10px; font-size:15px; font-weight:650; }
+  .set-nav { padding:10px; display:flex; flex-direction:column; gap:4px; }
   .set-nav-group { padding:4px 12px; color:var(--muted); font-size:11px; }
   .set-nav-group:not(:first-child) { margin-top:12px; }
-  .set-nav button { display:block; width:100%; text-align:left; min-height:38px; padding:8px 12px; border:none; border-left:3px solid transparent; background:transparent; color:var(--muted); border-radius:3px; font-size:13px; cursor:pointer; }
+  .set-nav button { display:flex; align-items:center; gap:9px; width:100%; text-align:left; min-height:38px; padding:8px 10px; border:none; border-left:3px solid transparent; background:transparent; color:var(--muted); border-radius:5px; font-size:13px; cursor:pointer; }
+  .set-nav-icon { width:16px; height:16px; flex:none; fill:none; stroke:currentColor; stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round; }
+  .set-nav-compact { display:none; }
   .set-nav button:hover { background:var(--surface-2); color:var(--ink); }
   .set-nav button[aria-pressed="true"] { background:var(--surface-2); color:var(--ink); border-left-color:var(--blue); font-weight:600; }
-  .set-main { flex:1; min-width:0; overflow:auto; padding:24px 28px; }
+  .set-content { display:flex; flex:1; flex-direction:column; min-width:0; min-height:0; }
+  .set-main { flex:1; min-width:0; min-height:0; overflow:auto; padding:18px 24px 24px; }
+  .set-footer { display:flex; flex:none; justify-content:space-between; align-items:center; gap:12px; min-height:58px; padding:8px 24px; border-top:1px solid var(--line-soft); }
+  .set-footer[hidden] { display:none; }
+  .set-footer-state { min-width:0; }
+  .set-footer .set-status { min-height:0; margin:0; font-size:11px; }
+  .set-footer-count { margin:0 0 2px; color:var(--ink-2); font-size:12px; font-variant-numeric:tabular-nums; }
   .set-page[hidden] { display:none; }
-  .set-page > h3 { margin:0 0 8px; font-size:18px; font-weight:650; color:var(--ink); text-transform:none; letter-spacing:normal; }
   .set-page-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:10px; }
-  .set-page-head h3 { margin:0; font-size:18px; font-weight:650; color:var(--ink); text-transform:none; letter-spacing:normal; }
   .set-preferences { margin-top:12px; }
   .set-preferences .set-row { border-bottom-color:var(--line-soft); }
   .set-preferences select { width:min(188px,62%); padding:6px 10px; border:1px solid var(--line); border-radius:4px; background:var(--surface-2); color:inherit; font:inherit; }
@@ -376,16 +384,18 @@
   .set-status[data-error="true"] { color:var(--danger); }
   #setFamilies { min-inline-size:0; margin:0; padding:0; border:0; }
   .set-lead { max-width:58ch; margin:0 0 12px; font-size:12px; color:var(--muted); }
-  .set-observation-nav { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:14px 0 10px; }
+  .set-observation-nav { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:0 0 10px; }
   .set-observation-nav button[aria-pressed="true"] { background:var(--surface-2); color:var(--blue); border-color:var(--blue); }
   .set-family-count { margin-left:auto; color:var(--muted); font-size:12px; }
   .set-algorithm-group + .set-algorithm-group { margin-top:10px; }
   .set-algorithm-group h4 { margin:0; color:var(--muted); font-size:12px; font-weight:600; }
   #setFamilies .set-toggle-row { min-height:40px; padding:7px 0; }
-  .set-hook-summary { display:flex; justify-content:space-between; align-items:center; gap:8px; margin:8px 0; }
-  .set-hook-summary .set-status { margin:0; min-width:0; }
-  .set-hook-group { margin-top:16px; }
-  .set-hook-group h4 { margin:0; color:var(--muted); font-size:12px; font-weight:600; }
+  .set-choice-group { border:1px solid var(--line-soft); border-radius:7px; margin:0 0 12px; }
+  .set-group-head { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:9px 13px; border-bottom:1px solid var(--line-soft); border-radius:6px 6px 0 0; background:var(--surface-2); }
+  .set-group-head h4 { margin:0; color:var(--ink-2); font-size:13px; font-weight:650; }
+  .set-group-count { color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .set-group-items { padding:0 13px; }
+  .set-group-items > :last-child { border-bottom:0; }
   .set-hook-group .set-toggle-row { min-height:42px; padding:6px 0; }
   .set-hook-group .lab b { overflow-wrap:anywhere; font:600 12px/1.45 ui-monospace,Consolas,monospace; }
   .set-hook-group .lab span { margin-top:2px; }
@@ -422,13 +432,20 @@
   .set-switch input:focus-visible + .slider { outline:2px solid var(--blue); outline-offset:3px; }
   .set-switch input:disabled + .slider { opacity:.55; }
   @media (max-width:620px) {
-    .set-shell { width:calc(100vw - 20px); height:min(580px,calc(100dvh - 20px)); }
-    .set-layout { flex-direction:column; }
-    .set-nav { width:100%; flex-direction:row; padding:0 8px; gap:0; overflow-x:auto; border-right:0; border-bottom:1px solid var(--line-soft); }
+    .set-shell { width:calc(100vw - 16px); height:min(690px,calc(100dvh - 16px)); }
+    .set-sidebar { width:59px; }
+    .set-sidebar h2 { padding:16px 0 9px; text-align:center; font-size:13px; }
+    .set-nav { padding:5px 4px; }
     .set-nav-group { display:none; }
-    .set-nav button { width:auto; padding:8px; white-space:nowrap; border-left:0; border-bottom:2px solid transparent; border-radius:0; }
-    .set-nav button[aria-pressed="true"] { border-bottom-color:var(--blue); background:transparent; }
-    .set-main { padding:16px; }
+    .set-nav button { flex-direction:column; gap:3px; justify-content:center; min-height:47px; padding:5px 2px 5px 0; font-size:10px; }
+    .set-nav-label { display:none; }
+    .set-nav-compact { display:block; }
+    .set-header,.set-main,.set-footer { padding-inline:12px; }
+    .set-header { padding-block:11px; }
+    .set-header h3 { font-size:16px; }
+    .set-main { padding-block:12px; }
+    .set-footer { gap:7px; }
+    .set-group-head,.set-group-items { padding-inline:9px; }
   }
   @media (prefers-reduced-motion:reduce) { .set-switch .slider,.set-switch .slider:before { transition:none; } }
   .set-row { display:flex; align-items:center; gap:12px; padding:11px 0; border-bottom:1px solid var(--line); }
@@ -652,39 +669,49 @@
 </main>
 
 <dialog id="setMask" class="set-shell" aria-labelledby="setTitle">
-  <div class="set-header">
-    <div>
-      <h2 id="setTitle">设置</h2>
-      <p class="set-app">当前应用 <strong id="setActiveApp">未选择应用</strong></p>
-    </div>
-    <button type="button" class="set-close-x" id="setClose" aria-label="关闭设置">×</button>
-  </div>
   <div class="set-layout">
-    <nav class="set-nav" id="setNav" aria-label="设置分类">
-      <span class="set-nav-group">当前应用</span>
-      <button type="button" id="setHooksTab" data-settings="hooks" aria-controls="setHooksPage" aria-pressed="true">算法与 Hook</button>
-      <button type="button" id="setCaptureTab" data-settings="capture" aria-controls="setCapturePage" aria-pressed="false">算法采集</button>
-      <span class="set-nav-group">面板</span>
-      <button type="button" id="setDisplayTab" data-settings="display" aria-controls="setDisplayPage" aria-pressed="false">显示</button>
-      <button type="button" id="setStatusTab" data-settings="status" aria-controls="setStatusPage" aria-pressed="false">连接与数据</button>
-    </nav>
+    <aside class="set-sidebar">
+      <h2 id="setTitle">设置</h2>
+      <nav class="set-nav" id="setNav" aria-label="设置分类">
+        <span class="set-nav-group">当前应用</span>
+        <button type="button" id="setHooksTab" data-settings="hooks" aria-controls="setHooksPage" aria-pressed="true" aria-label="算法与 Hook" title="算法与 Hook">
+          <svg class="set-nav-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M7 4 2.5 10 7 16m6-12 4.5 6-4.5 6m-2-12-2 12"/></svg>
+          <span class="set-nav-label">算法与 Hook</span><span class="set-nav-compact" aria-hidden="true">算法</span>
+        </button>
+        <button type="button" id="setCaptureTab" data-settings="capture" aria-controls="setCapturePage" aria-pressed="false" aria-label="算法采集" title="算法采集">
+          <svg class="set-nav-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="6.5"/><circle cx="10" cy="10" r="2.5"/></svg>
+          <span class="set-nav-label">算法采集</span><span class="set-nav-compact" aria-hidden="true">采集</span>
+        </button>
+        <span class="set-nav-group">面板</span>
+        <button type="button" id="setDisplayTab" data-settings="display" aria-controls="setDisplayPage" aria-pressed="false" aria-label="显示" title="显示">
+          <svg class="set-nav-icon" viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4" width="14" height="10" rx="1.5"/><path d="M7 17h6m-3-3v3"/></svg>
+          <span class="set-nav-label">显示</span><span class="set-nav-compact" aria-hidden="true">显示</span>
+        </button>
+        <button type="button" id="setStatusTab" data-settings="status" aria-controls="setStatusPage" aria-pressed="false" aria-label="连接与数据" title="连接与数据">
+          <svg class="set-nav-icon" viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4" width="14" height="5" rx="1"/><rect x="3" y="11" width="14" height="5" rx="1"/><path d="M6 6.5h.5m-.5 7h.5"/></svg>
+          <span class="set-nav-label">连接与数据</span><span class="set-nav-compact" aria-hidden="true">连接</span>
+        </button>
+      </nav>
+    </aside>
+    <div class="set-content">
+      <div class="set-header">
+        <div>
+          <h3 id="setPanelTitle">算法与 Hook</h3>
+          <p class="set-app">当前应用 <strong id="setActiveApp">未选择应用</strong></p>
+        </div>
+        <button type="button" class="set-close-x" id="setClose" aria-label="关闭设置">×</button>
+      </div>
     <div class="set-main">
-      <section id="setHooksPage" class="set-page" aria-labelledby="setHooksTitle">
-        <h3 id="setHooksTitle">算法与 Hook</h3>
-        <p class="set-lead">展开已观测算法，查看类和方法。勾选只控制当前应用的列表显示，不修改采集。</p>
+      <section id="setHooksPage" class="set-page" aria-label="算法与 Hook">
+        <p class="set-lead">展开算法查看类和方法。勾选只调整当前应用的列表显示。</p>
         <div class="set-observation-nav" role="group" aria-label="观测视图">
           <button type="button" id="setAlgorithmListTab" class="set-small-button" aria-controls="setObservedAlgorithms" aria-pressed="true">按算法</button>
           <button type="button" id="setHookListTab" class="set-small-button" aria-controls="setHookControls" aria-pressed="false">按 Hook</button>
         </div>
-        <p class="set-status" id="setHookStatus" role="status" hidden></p>
         <section id="setObservedAlgorithms" aria-label="按算法显示">
           <div class="set-observation-filters">
-            <input type="search" id="setObservationQuery" aria-label="搜索算法、类或方法" placeholder="搜索算法、类或方法">
+            <input type="search" id="setObservationQuery" aria-label="搜索算法、类或方法" placeholder="算法、类或方法">
             <select id="setObservationFamily" aria-label="算法类别"><option value="">全部类别</option></select>
-          </div>
-          <div class="set-hook-summary">
-            <p class="set-status" id="setObservationCount"></p>
-            <button type="button" id="setObservationReset" class="set-small-button" disabled>恢复全部显示</button>
           </div>
           <div id="setObservationList"></div>
           <p class="set-observation-empty" id="setObservationEmpty" hidden></p>
@@ -695,22 +722,17 @@
             <input type="search" id="setHookQuery" aria-label="搜索 Hook" placeholder="按名称搜索 Hook">
             <select id="setHookCategory" aria-label="Hook 类别"><option value="">全部类别</option></select>
           </div>
-          <div class="set-hook-summary">
-            <p class="set-status" id="setHookCount"></p>
-            <button type="button" id="setHookReset" class="set-small-button" disabled>恢复全部显示</button>
-          </div>
           <div id="setHookGroups"></div>
           <p class="set-observation-empty" id="setHookEmpty" hidden></p>
         </section>
       </section>
-      <section id="setCapturePage" class="set-page" aria-labelledby="setCaptureTitle" hidden>
+      <section id="setCapturePage" class="set-page" aria-label="算法采集" hidden>
         <div class="set-page-head">
-          <h3 id="setCaptureTitle">算法采集</h3>
+          <p class="set-app">六类采集策略按应用保存在电脑服务中。</p>
           <span class="set-family-count" id="setFamilyCount"></span>
         </div>
-        <p class="set-lead">六类采集策略按应用保存在电脑服务中。</p>
         <p class="set-status" id="setCaptureStatus" role="status"></p>
-        <fieldset id="setFamilies" aria-labelledby="setCaptureTitle">
+        <fieldset id="setFamilies" aria-label="算法采集开关">
           <div class="set-algorithm-group" role="group" aria-labelledby="setDigestGroup">
             <h4 id="setDigestGroup">摘要与认证</h4>
             <label class="set-toggle-row"><span class="lab"><b>摘要</b></span><span class="set-switch"><input type="checkbox" data-fam="digest" disabled><span class="slider"></span></span></label>
@@ -728,8 +750,7 @@
           </div>
         </fieldset>
       </section>
-      <section id="setDisplayPage" class="set-page" aria-labelledby="setDisplayTitle" hidden>
-        <h3 id="setDisplayTitle">显示</h3>
+      <section id="setDisplayPage" class="set-page" aria-label="显示" hidden>
         <p class="set-app">仅影响当前浏览器的采集列表。</p>
         <div class="set-preferences">
           <label class="set-row">
@@ -761,9 +782,9 @@
         <div class="set-actions"><button type="button" id="setDisplayReset" class="set-small-button">恢复默认</button></div>
         <p class="set-status" id="setDisplayStatus" role="status"></p>
       </section>
-      <section id="setStatusPage" class="set-page" aria-labelledby="setStatusTitle" hidden>
+      <section id="setStatusPage" class="set-page" aria-label="连接与数据" hidden>
         <div class="set-page-head">
-          <h3 id="setStatusTitle">连接与数据</h3>
+          <p class="set-app">服务信息与当前应用的记录。</p>
           <button type="button" id="setStatusRefresh" class="set-small-button">刷新</button>
         </div>
         <dl class="set-meta">
@@ -776,6 +797,14 @@
         </dl>
         <p id="setStatusMessage" class="set-status" role="status"></p>
       </section>
+    </div>
+      <footer class="set-footer" id="setObservationFooter" aria-label="显示设置状态">
+        <div class="set-footer-state">
+          <p class="set-footer-count" id="setObservationCount"></p>
+          <p class="set-status" id="setHookStatus" role="status">勾选后即时保存</p>
+        </div>
+        <button type="button" id="setObservationReset" class="set-small-button" disabled>恢复全部显示</button>
+      </footer>
     </div>
   </div>
 </dialog>
@@ -1669,6 +1698,7 @@ function togglePopover(id, btnId){
 // ---- 算法设置按当前应用读取和保存 ----
 const settingsDialog=document.getElementById('setMask');
 const settingsNav=document.getElementById('setNav');
+const settingsTitle=document.getElementById('setPanelTitle');
 const hooksPage=document.getElementById('setHooksPage');
 const capturePage=document.getElementById('setCapturePage');
 const statusPage=document.getElementById('setStatusPage');
@@ -1678,14 +1708,16 @@ const hookListTab=document.getElementById('setHookListTab');
 const hookControls=document.getElementById('setHookControls');
 const hookQuery=document.getElementById('setHookQuery');
 const hookCategory=document.getElementById('setHookCategory');
-const hookReset=document.getElementById('setHookReset');
 const hookGroups=document.getElementById('setHookGroups');
 const algorithmListTab=document.getElementById('setAlgorithmListTab');
 const observedPage=document.getElementById('setObservedAlgorithms');
 const observationQuery=document.getElementById('setObservationQuery');
 const observationFamily=document.getElementById('setObservationFamily');
 const observationList=document.getElementById('setObservationList');
+const observationFooter=document.getElementById('setObservationFooter');
+const observationCount=document.getElementById('setObservationCount');
 const observationReset=document.getElementById('setObservationReset');
+const observationStatus=document.getElementById('setHookStatus');
 const displayCapSelect=document.getElementById('setDisplayCap');
 const timeFormatSelect=document.getElementById('setTimeFormat');
 const densitySelect=document.getElementById('setRowDensity');
@@ -1739,7 +1771,8 @@ function renderSettingsScope(){
     app.dataset.package=pkg;
     hookQuery.value=hookCategory.value=observationQuery.value=observationFamily.value='';
     expandedAlgorithms.clear();
-    document.getElementById('setHookStatus').hidden=true;
+    observationStatus.textContent=pkg?'勾选后即时保存':'选择应用后可勾选';
+    delete observationStatus.dataset.error;
   }
   const label=serverApps.find(entry=>entry.package===pkg)?.label;
   app.textContent=label && label!==pkg ? label+' · '+pkg : pkg || '未选择应用';
@@ -1759,6 +1792,31 @@ function observationSwitch(key,label,checked,tag='span'){
   control.append(toggle,slider);
   return control;
 }
+function setObservationFooter(items,hidden,pkg){
+  const selected=items.filter(item=>!hidden.has(item.key)).length;
+  observationCount.textContent=items.length?'已选 '+selected+' / '+items.length+' 项':'无可勾选项';
+  observationReset.disabled=!pkg || !hidden.size;
+}
+function observationGroup(group,view){
+  const section=document.createElement('section');
+  section.className='set-choice-group'+(view==='hook'?' set-hook-group':'');
+  section.dataset.settingsGroup=group.id;
+  const header=document.createElement('div');
+  header.className='set-group-head';
+  const heading=document.createElement('h4');
+  heading.id='set-'+view+'-group-'+group.id;
+  heading.textContent=group.name;
+  section.setAttribute('aria-labelledby',heading.id);
+  const count=document.createElement('span');
+  count.className='set-group-count';
+  count.textContent='已选 '+group.selected+' / '+group.total;
+  count.title='按该类别的全部项目计数';
+  header.append(heading,count);
+  const body=document.createElement('div');
+  body.className='set-group-items';
+  section.append(header,body);
+  return {section,body};
+}
 let hookSignature='';
 function renderHookControls(){
   const pkg=selectedPackage();
@@ -1766,31 +1824,21 @@ function renderHookControls(){
   const hidden=hookDisplay?.hidden(pkg) ?? new Set();
   const query=hookQuery.value.trim().toLowerCase();
   const category=hookCategory.value;
-  const shown=entries.filter(item=>(!category || category===item.category) && item.name.toLowerCase().includes(query));
-  const count=entries.filter(item=>!hidden.has(item.key)).length;
-  document.getElementById('setHookCount').textContent=entries.length?'显示 '+count+' / '+entries.length+' 项':'';
-  hookReset.disabled=!pkg || !hidden.size;
+  const groups=algorithmObservations?.choiceGroups(entries,algorithmObservations.hookGroups,'category',hidden,
+    item=>(!category || category===item.category) && item.name.toLowerCase().includes(query)) ?? [];
+  setObservationFooter(entries,hidden,pkg);
   const empty=document.getElementById('setHookEmpty');
-  empty.hidden=shown.length>0;
+  empty.hidden=groups.length>0;
   empty.textContent=!pkg?'请先在主界面选择应用。':!algorithmObservations?'暂时无法读取观测项。':entries.length?'没有符合条件的 Hook。':'当前应用暂无带 Hook 名称的记录。';
-  const signature=JSON.stringify([pkg,panelDisplay.time,shown,[...hidden]]);
+  const signature=JSON.stringify([pkg,panelDisplay.time,groups,[...hidden]]);
   if(hookSignature===signature) return;
   hookSignature=signature;
   const focused=document.activeElement?.dataset.observationKey;
   const fragment=document.createDocumentFragment();
   let focusTarget;
-  for(const [group, name] of Object.entries(algorithmObservations?.hookGroups ?? {})){
-    const items=shown.filter(item=>item.category===group);
-    if(!items.length) continue;
-    const section=document.createElement('section');
-    section.className='set-hook-group';
-    section.dataset.hookGroup=group;
-    section.setAttribute('aria-labelledby','set-hook-group-'+group);
-    const heading=document.createElement('h4');
-    heading.id='set-hook-group-'+group;
-    heading.textContent=name+' · '+items.length;
-    section.append(heading);
-    for(const item of items){
+  for(const group of groups){
+    const {section,body}=observationGroup(group,'hook');
+    for(const item of group.items){
       const row=document.createElement('label');
       row.className='set-toggle-row';
       const lab=document.createElement('span');
@@ -1802,10 +1850,10 @@ function renderHookControls(){
       const source=item.source==='java'?'Java':item.source==='native'?'Native':'';
       meta.textContent=[source,item.count+' 条',time&&'最近 '+time].filter(Boolean).join(' · ');
       lab.append(title,meta);
-      const control=observationSwitch(item.key,'显示 '+item.name+' · '+name+(source?' · '+source:''),!hidden.has(item.key));
+      const control=observationSwitch(item.key,'显示 '+item.name+' · '+group.name+(source?' · '+source:''),!hidden.has(item.key));
       if(item.key===focused) focusTarget=control.firstElementChild;
       row.append(lab,control);
-      section.append(row);
+      body.append(row);
     }
     fragment.append(section);
   }
@@ -1831,26 +1879,30 @@ function saveHookDisplay(hidden){
     panel.render(true);
   }
   renderObservationSettings();
-  const status=document.getElementById('setHookStatus');
-  status.hidden=false;
-  status.textContent=saved
+  observationStatus.textContent=saved
     ? hidden.size?'已保存当前应用的显示设置。':'已恢复当前应用的全部显示。'
     :'浏览器无法保存，当前页面已应用。';
-  status.dataset.error=String(!saved);
+  observationStatus.dataset.error=String(!saved);
 }
 let algorithmSignature='';
 const expandedAlgorithms=new Map();
 function methodMarkup(method){
   const row=document.createElement('li');
   const fields=document.createElement('dl');
-  const append=(name,value)=>{
+  const append=(name,value,breakDots=false)=>{
     const label=document.createElement('dt'), text=document.createElement('dd');
     label.textContent=name;
-    text.textContent=value || '未记录';
+    if(breakDots && value){
+      const parts=value.split('.');
+      for(const [index,part] of parts.entries()){
+        if(index) text.append('.',document.createElement('wbr'));
+        text.append(part);
+      }
+    }else text.textContent=value || '未记录';
     fields.append(label,text);
   };
   if(method.source==='java'){
-    append('类',method.className);
+    append('类',method.className,true);
     append('方法',method.member);
     if(method.label) append('参考标签',method.label);
   }else if(method.source==='native'){
@@ -1871,32 +1923,24 @@ function renderAlgorithmObservations(){
   const searchText=value=>value.toLowerCase().replace(/[\s._-]+/g,'');
   const query=searchText(observationQuery.value);
   const family=observationFamily.value;
-  const visible=observations.filter(item=>{
-    const label=algorithmObservations.families[item.family];
+  const groups=algorithmObservations?.choiceGroups(observations,algorithmObservations.families,'family',hidden,(item,label)=>{
     return (!family || family===item.family) && (!query || searchText(item.name+' '+label).includes(query) ||
       item.methods.some(method=>[method.className,method.member,method.label,method.className+'.'+method.member]
         .some(value=>searchText(value).includes(query))));
-  });
-  const checked=observations.filter(item=>!hidden.has(item.key)).length;
-  document.getElementById('setObservationCount').textContent=observations.length?'已勾选 '+checked+' / '+observations.length+' 项':'';
-  observationReset.disabled=!pkg || !hidden.size;
+  }) ?? [];
+  setObservationFooter(observations,hidden,pkg);
   const empty=document.getElementById('setObservationEmpty');
-  empty.hidden=visible.length>0;
+  empty.hidden=groups.length>0;
   empty.textContent=!pkg?'请选择一个应用。':!algorithmObservations?'暂时无法读取算法统计。':observations.length?'没有匹配的算法、类或方法。':'当前应用暂无已载入的算法记录。';
-  const signature=JSON.stringify([pkg,panelDisplay.time,query,visible,[...hidden]]);
+  const signature=JSON.stringify([pkg,panelDisplay.time,query,groups,[...hidden]]);
   if(algorithmSignature===signature) return;
   algorithmSignature=signature;
   const focus=document.activeElement?.dataset;
   const fragment=document.createDocumentFragment();
   let first=true, focusTarget;
-  for(const [group, label] of Object.entries(algorithmObservations?.families ?? {})){
-    const items=visible.filter(item=>item.family===group).sort((a,b)=>a.name.localeCompare(b.name,'zh-CN',{numeric:true}));
-    if(!items.length) continue;
-    const section=document.createElement('section');
-    section.className='set-hook-group';
-    const heading=document.createElement('h4');
-    heading.textContent=label;
-    section.append(heading);
+  for(const group of groups){
+    const items=group.items.sort((a,b)=>a.name.localeCompare(b.name,'zh-CN',{numeric:true}));
+    const {section,body}=observationGroup(group,'algorithm');
     for(const item of items){
       const row=document.createElement('div');
       row.className='set-algorithm-entry';
@@ -1926,7 +1970,7 @@ function renderAlgorithmObservations(){
       if(item.key===focus?.observationKey) focusTarget=control.firstElementChild;
       if(item.key===focus?.algorithmSummary) focusTarget=summary;
       row.append(details,control);
-      section.append(row);
+      body.append(row);
     }
     fragment.append(section);
   }
@@ -2034,7 +2078,9 @@ function showSettingsPage(page){
     const selected=button.dataset.settings===page;
     button.setAttribute('aria-pressed',String(selected));
     document.getElementById(button.getAttribute('aria-controls')).hidden=!selected;
+    if(selected) settingsTitle.textContent=button.getAttribute('aria-label');
   }
+  observationFooter.hidden=page!=='hooks';
   document.querySelector('.set-main').scrollTop=0;
   renderSettingsScope();
   if(page==='hooks') showObservationView(true);
@@ -2301,7 +2347,7 @@ algorithmListTab.addEventListener('click', ()=>showObservationView(true));
 hookListTab.addEventListener('click', ()=>showObservationView(false));
 hookQuery.addEventListener('input',renderHookControls);
 hookCategory.addEventListener('change',renderHookControls);
-for(const reset of [hookReset,observationReset]) reset.addEventListener('click',()=>saveHookDisplay(new Set()));
+observationReset.addEventListener('click',()=>saveHookDisplay(new Set()));
 for(const list of [hookGroups,observationList]){
   list.addEventListener('change',e=>{
     const toggle=e.target;

@@ -121,6 +121,18 @@
     return [...items.values()].sort((a,b) => a.name.localeCompare(b.name) || a.source.localeCompare(b.source));
   }
 
+  function choiceGroups(items, labels, field, hidden, matches) {
+    const groups = new Map(Object.entries(labels).map(([id,name]) => [id,{id,name,selected:0,total:0,items:[]}]));
+    for (const item of items) {
+      const group = groups.get(item[field]);
+      if (!group) continue;
+      group.total++;
+      if (!hidden.has(item.key)) group.selected++;
+      if (matches(item,group.name)) group.items.push(item);
+    }
+    return [...groups.values()].filter(group => group.items.length);
+  }
+
   function hookDisplayPreferences(storage) {
     const keyFor = pkg => 'adh.panel.hidden-hooks.v1:' + pkg;
     const byPackage = new Map();
@@ -146,6 +158,6 @@
     };
   }
 
-  scope.AdhAlgorithmObservations = {families, summarize, hookGroups, summarizeHooks,
+  scope.AdhAlgorithmObservations = {families, summarize, hookGroups, summarizeHooks, choiceGroups,
     algorithmKey, hookKey, recordVisible, hookDisplayPreferences};
 })(globalThis);

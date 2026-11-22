@@ -93,6 +93,27 @@ test('an algorithm filter affects that algorithm across methods, and composes wi
   assert.equal(summarize([a,b,c],hidden).find(item=>item.name==='SHA-256')?.shown,1);
 });
 
+test('category headers count all loaded choices in a group even when search shows only one', () => {
+  const api=context.AdhAlgorithmObservations;
+  const rows=summarize([
+    {category:'crypto',algo:'SHA-256'},
+    {category:'crypto',algo:'SHA-512'},
+    {category:'crypto',algo:'HmacSHA256'},
+  ]);
+  const hidden=new Set([rows.find(row=>row.name==='SHA-512')!.key]);
+  const summarizeGroups=(include:(row:Observation)=>boolean)=>JSON.parse(JSON.stringify(
+    api.choiceGroups(rows,api.families,'family',hidden,include)
+  )) as {id:string;selected:number;total:number;items:Observation[]}[];
+  const [digest]=summarizeGroups(row=>row.name==='SHA-256');
+  assert.equal(digest.id,'digest');
+  assert.equal(digest.selected,1);
+  assert.equal(digest.total,2);
+  assert.deepEqual(digest.items.map(item=>item.name),['SHA-256']);
+  hidden.clear();
+  assert.equal(summarizeGroups(row=>row.family==='digest')[0].selected,2);
+  assert.deepEqual(summarizeGroups(()=>false),[]);
+});
+
 test('Hook inventory groups only symbolic record metadata and separates equal names by kind and source', () => {
   const api = context.AdhAlgorithmObservations;
   const record = {category:'crypto', source:'java', func:'Fixture.digest', ts:10, text:'not an observation field'};
