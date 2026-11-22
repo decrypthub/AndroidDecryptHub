@@ -32,7 +32,7 @@ test('the detect summary opts out of the flex:1 the list needs', () => {
 
 test('#sy-radar still sits above the banner and the list inside .list-pane', () => {
   assert.match(html,
-    /<div class="list-pane">\s*<div id="sy-radar"[^>]*>系统检测<\/div>\s*<div class="new-banner" id="sy-banner">[\s\S]{0,400}?<div id="sy-list"><\/div>/);
+    /<div class="list-pane">\s*<div class="capture-list-head">[\s\S]{0,160}?<\/div>\s*<div id="sy-radar"[^>]*>系统检测<\/div>\s*<div class="new-banner" id="sy-banner">[\s\S]{0,400}?<div id="sy-list"[^>]*><\/div>/);
 });
 
 test('the summary says what it is, and keeps the details in its tooltip', () => {
@@ -64,6 +64,12 @@ test('device and APP context are separate and do not claim a legacy session bind
   assert.match(app,/id="capStatePill"/);
   assert.match(app,/设备归属未核验/);
   assert.match(html,/readPanelJson\('\/api\/devices\?action=list'\)/);
+});
+
+test('capture workbench places search, APP context and list tools in one toolbar', () => {
+  assert.match(html,/<div class="filters" id="toolbar">[\s\S]*?id="tb-q"[\s\S]*?id="appContext"[\s\S]*?class="toolbar-actions capture-toolbar"/);
+  assert.match(declared('.filters:not(.show) .capture-toolbar,.filters:not(.show) .advanced-filters'),/display:none/);
+  assert.equal([...html.matchAll(/data-capture-back="(?:cc|sy|nt)"/g)].length,3);
 });
 
 test('the device display distinguishes verified connections, missing attribution data and a demo', () => {

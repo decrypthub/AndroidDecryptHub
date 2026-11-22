@@ -23,7 +23,7 @@
   body { display:flex; flex-direction:column; height:100vh; overflow:hidden; min-width:320px;
     background:var(--bg); color:var(--ink); line-height:1.5; font-size:13px; letter-spacing:0;
     font-family:Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,'PingFang SC','Microsoft YaHei',sans-serif; }
-  header, #nav, .app-context, .filters { flex-shrink:0; }
+  header, #nav, .filters { flex-shrink:0; }
   .muted { color:var(--muted); }
   .detect-radar { font-size:12px; line-height:1.55; color:var(--muted); padding:10px 14px 0; white-space:pre-wrap; }
   .spacer { flex:1; }
@@ -31,7 +31,7 @@
   code { background:var(--surface-2); border:1px solid var(--line); border-radius:4px; padding:1px 5px; color:var(--ink-2); font-family:ui-monospace,SFMono-Regular,Consolas,monospace; }
 
   /* ---- header / brand（对齐 iOS workbench：无第二进程条、按钮透明） ---- */
-  header { display:flex; align-items:center; gap:14px; min-height:60px; padding:9px 16px; background:var(--bg); border-bottom:1px solid var(--line-soft); }
+  header { display:flex; align-items:center; gap:14px; min-height:62px; padding:9px 16px; background:var(--chrome); border-bottom:1px solid var(--line-soft); }
   .brand-lockup { display:flex; align-items:center; gap:11px; flex-shrink:0; }
   header h1 { display:flex; align-items:center; margin:0; font-size:16px; font-weight:700; color:var(--ink); letter-spacing:0; }
   .hdr-mark { width:28px; height:28px; margin-right:9px; border-radius:5px; background:var(--ink); overflow:hidden; flex-shrink:0; }
@@ -42,10 +42,11 @@
   .status-dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--danger); flex-shrink:0; }
   .status-dot.ok { background:var(--green); animation:dh-pulse 2.4s ease-in-out infinite; }
   @keyframes dh-pulse { 0%,100%{opacity:1;} 50%{opacity:.5;} }
-  .app-context { position:relative; display:flex; align-items:center; flex-wrap:wrap; gap:7px 12px; padding:5px 14px; border-bottom:1px solid var(--line-soft); }
+  .app-context { position:relative; display:flex; align-items:center; flex-wrap:wrap; gap:6px 9px; padding-left:12px; border-left:1px solid var(--line-soft); min-width:0; }
+  .filters:not(.show) .app-context { border-left:0; padding-left:0; }
   .context-label { color:var(--muted); font-size:11px; white-space:nowrap; }
   .header-process { display:flex; align-items:center; gap:7px; min-width:0; }
-  .app-affiliation { margin-left:auto; color:var(--muted); font-size:11px; }
+  .app-affiliation { color:var(--muted); font-size:11px; }
   .app-switch { position:relative; min-width:0; }
   .process-trigger { display:grid; grid-template-columns:minmax(0,1fr) auto; grid-template-rows:auto auto; column-gap:10px; min-width:180px; max-width:280px; min-height:38px; padding:4px 10px; text-align:left; color:var(--ink-2); background:transparent; border:1px solid transparent; border-radius:4px; cursor:pointer; }
   .process-trigger:hover, .process-trigger[aria-expanded="true"] { border-color:transparent; background:rgba(255,255,255,.04); color:var(--ink); }
@@ -87,7 +88,7 @@
   .popover.show { display:block; }
   .popover::before { content:''; position:absolute; top:-5px; right:14px; width:8px; height:8px; background:#11151c; border-top:1px solid #4a5260; border-left:1px solid #4a5260; transform:rotate(45deg); }
   .app-context .menu-wrap { position:static; }
-  .app-context .popover { left:14px; right:auto; top:calc(100% + 5px); max-width:calc(100vw - 28px); }
+  .app-context .popover { left:0; right:auto; top:calc(100% + 6px); max-width:calc(100vw - 28px); }
   .app-context .popover::before { display:none; }
   .menu-popover a,.menu-popover button { box-sizing:border-box; display:flex; width:100%; min-height:35px; align-items:center; gap:9px; padding:0 10px; color:var(--ink-2); background:transparent; border:0; border-radius:3px; text-align:left; text-decoration:none; white-space:nowrap; cursor:pointer; }
   .menu-popover a:hover,.menu-popover button:hover { color:var(--ink); background:var(--surface-3); }
@@ -100,8 +101,8 @@
   .icon-button { display:inline-grid; width:34px; min-width:34px; padding:0; place-items:center; font-size:18px; line-height:1; }
 
   /* ---- tabbar（只绑 #nav，避免误伤设置里的 <nav class="set-nav">） ---- */
-  #nav { display:flex; gap:0; min-height:48px; padding:0 12px; background:var(--bg); border-bottom:1px solid var(--line-soft); overflow-x:auto; }
-  #nav button { position:relative; background:none; border:none; color:var(--muted); min-height:48px; padding:0 16px; font-size:12px; cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; white-space:nowrap; }
+  #nav { display:flex; gap:0; height:51px; padding:0 12px; background:var(--bg); border-bottom:1px solid var(--line-soft); overflow-x:auto; overflow-y:hidden; scrollbar-width:none; }
+  #nav button { position:relative; background:none; border:none; color:var(--muted); padding:0 16px; font-size:12px; cursor:pointer; border-bottom:2px solid transparent; white-space:nowrap; }
   #nav button:hover { color:var(--ink); background:transparent; }
   #nav button.active { color:var(--ink); background:transparent; border-bottom-color:var(--blue); font-weight:600; }
   #nav button .n { display:inline; min-width:0; height:auto; margin-left:6px; color:var(--muted); background:transparent; font-size:11px; font-variant-numeric:tabular-nums; }
@@ -109,13 +110,16 @@
   #nav button.active .n { color:var(--blue); background:transparent; }
 
   /* ---- filter toolbar ---- */
-  .filters { display:none; flex-direction:column; align-items:stretch; gap:8px; min-height:52px; padding:8px 14px; background:var(--bg); border-bottom:1px solid var(--line-soft); }
-  .filters.show { display:flex; }
-  .toolbar-main { display:flex; width:100%; align-items:center; gap:8px; }
+  .filters { display:flex; flex-direction:column; justify-content:center; gap:8px; min-height:61px; padding:8px 16px; background:var(--chrome); border-bottom:1px solid var(--line-soft); }
+  .filters:not(.show) .capture-toolbar,.filters:not(.show) .advanced-filters { display:none; }
+  .toolbar-main { display:flex; width:100%; align-items:center; gap:10px; }
+  .toolbar-search { display:flex; align-items:center; gap:8px; flex:0 1 350px; min-width:168px; }
+  .search-field { position:relative; flex:1; min-width:0; color:var(--muted); }
+  .search-field svg { position:absolute; top:50%; left:9px; transform:translateY(-50%); width:15px; height:15px; fill:none; stroke:currentColor; stroke-width:1.5; pointer-events:none; }
   .toolbar-actions { display:flex; gap:7px; align-items:center; flex-wrap:wrap; margin-left:auto; }
   .filters label { color:var(--muted); font-size:12px; }
   .filters input[type=search], .filters select { min-height:32px; color:var(--ink); background:transparent; border-color:var(--line); border-radius:4px; }
-  .filters input[type=search] { width:280px; }
+  .filters input[type=search] { width:100%; min-width:0; padding-left:30px; background:var(--surface); }
   .filter-toggle { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
   .filter-badge { display:inline-grid; min-width:17px; height:17px; padding:0 4px; place-items:center; color:#07101f; background:var(--blue); border-radius:3px; font-size:10px; }
   .filter-badge:empty { display:none; }
@@ -126,8 +130,10 @@
   .size-filter { display:flex; align-items:center; gap:7px; flex-wrap:wrap; }
   .size-filter input[type=number] { width:70px; }
   .size-filter .sep, .size-filter .unit { color:var(--muted); }
-  .filters button { min-height:32px; padding:0 11px; color:var(--ink-2); background:transparent; border:1px solid var(--line); border-radius:4px; font-size:12px; cursor:pointer; }
-  .filters button:hover { color:var(--ink); background:rgba(255,255,255,.04); border-color:#646e7d; }
+  .filters :where(.toolbar-search,.toolbar-actions,.advanced-filters) button:where(:not(.menu-popover button)) { min-height:32px; padding:0 11px; color:var(--ink-2); background:transparent; border:1px solid var(--line); border-radius:4px; font-size:12px; cursor:pointer; }
+  .filters :where(.toolbar-search,.toolbar-actions,.advanced-filters) button:hover:where(:not(.menu-popover button)) { color:var(--ink); background:rgba(255,255,255,.04); border-color:#646e7d; }
+  .toolbar-actions .icon-button { padding:0; }
+  .app-context .process-trigger { background:var(--surface); border-color:var(--line-soft); }
   .pause-btn.is-paused { color:#171007; background:var(--amber); border-color:var(--amber); font-weight:650; }
   .pause-btn.is-paused:hover { color:#171007; background:#ffd57d; border-color:#ffd57d; }
   #count { color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; }
@@ -141,12 +147,32 @@
   .workspace { flex:1; display:flex; min-height:0; min-width:0; overflow:hidden; background:var(--bg); }
   .list-pane { width:42%; min-width:220px; max-width:70%; flex-shrink:0; display:flex; flex-direction:column; min-height:0; background:var(--bg); }
   .list-pane > div { flex:1; overflow-y:auto; min-height:0; }
+  .capture-workspace .list-pane { width:clamp(280px,32vw,430px); }
+  .list-pane > :is(.capture-list-head,.capture-list-foot) { display:flex; align-items:center; justify-content:space-between; gap:8px; flex:0 0 auto; overflow:visible; padding:8px 13px; color:var(--muted); font-size:11px; font-variant-numeric:tabular-nums; }
+  .capture-list-head { min-height:45px; border-bottom:1px solid var(--line-soft); background:var(--chrome); }
+  .capture-list-head h2 { margin:0; color:var(--ink-2); font-size:12px; font-weight:600; }
+  .capture-list-foot { border-top:1px solid var(--line-soft); background:var(--chrome); }
   .list-pane > .new-banner { flex:0 0 auto; overflow:visible; }
   /* 检测摘要是一行标题，不是可拉伸的列表区：否则 flex:1 会把它撑成半屏，列表被挤到底部 */
   .list-pane > .detect-radar { flex:0 0 auto; overflow:visible; }
   .splitter { width:5px; flex-shrink:0; background:transparent; border-left:1px solid var(--line-soft); border-right:1px solid var(--line-soft); cursor:col-resize; transition:background .15s; }
   .splitter:hover, .splitter.dragging { background:var(--blue); }
   .detail-pane { flex:1; min-width:240px; overflow-y:auto; padding:0 20px 30px; background:var(--bg); }
+  .capture-detail-shell { display:flex; flex:1; flex-direction:column; min-width:0; min-height:0; background:var(--surface); }
+  .capture-detail-nav { display:none; }
+  .capture-workspace .detail-pane,.capture-workspace .detail-head { min-width:0; background:var(--surface); }
+  .capture-workspace .detail-head { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:start; gap:4px 12px; }
+  .capture-workspace .detail-head .sub { grid-column:1; margin-top:0; }
+  .capture-workspace .detail-head .detail-actions { grid-column:2; grid-row:1 / 3; margin-top:0; }
+  .capture-workspace .detail-empty { display:flex; align-items:center; flex-direction:column; gap:6px; }
+  .capture-workspace .detail-empty strong { color:var(--ink-2); font-size:15px; font-weight:600; }
+  .capture-workspace .io-section:is(.in-card,.out-card,.kv-card,.raw-card) { padding:12px; border:1px solid var(--line-soft); border-radius:7px; background:var(--bg); }
+  .capture-overview { margin:16px 0 0; }
+  .capture-overview h3 { margin:0 0 8px; color:var(--ink-2); font-size:12px; font-weight:650; letter-spacing:normal; }
+  .capture-facts { display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:8px; margin:0; }
+  .capture-facts > div { min-width:0; padding:9px 11px; border:1px solid var(--line-soft); border-radius:6px; background:var(--surface-2); }
+  .capture-facts dt { color:var(--muted); font-size:11px; }
+  .capture-facts dd { margin:3px 0 0; color:var(--ink-2); font-size:13px; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
 
   h2 { font-size:18px; color:var(--ink); margin:2px 0 12px; font-weight:600; }
   h3 { font-size:11px; color:var(--muted); margin:12px 0 5px; font-weight:500; text-transform:uppercase; letter-spacing:.05em; }
@@ -479,11 +505,24 @@
     .workspace-name { display:none; }
     .dump-cols { grid-template-columns:minmax(0,1fr); }
   }
+  @media (max-width:880px) {
+    .toolbar-main { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:7px 8px; }
+    .app-context { grid-column:1 / -1; grid-row:1; padding-left:0; border-left:0; }
+    .toolbar-search { min-width:0; grid-column:1; grid-row:2; }
+    .toolbar-actions { grid-column:2; grid-row:2; flex-wrap:nowrap; gap:5px; }
+    #count { display:none; }
+    .filters { padding-inline:12px; }
+  }
   @media (max-width:760px) {
     .workspace { flex-direction:column; }
     .list-pane { width:100% !important; height:42%; border-bottom:1px solid var(--line); }
     .splitter { display:none; }
-    .filters input[type=search] { flex:1; width:auto; }
+    .capture-workspace .list-pane { flex:1; height:auto; border-bottom:0; }
+    .capture-workspace .capture-detail-shell,.capture-workspace.detail-open .list-pane { display:none; }
+    .capture-workspace.detail-open .capture-detail-shell { display:flex; }
+    .capture-detail-nav { display:flex; align-items:center; padding:6px 12px; border-bottom:1px solid var(--line-soft); }
+    .capture-workspace .detail-pane { padding-inline:12px; }
+    .app-context .process-trigger { min-width:144px; }
   }
 </style>
 </head>
@@ -505,39 +544,42 @@
 
 <nav id="nav"></nav>
 
-<section class="app-context" id="appContext" aria-label="APP 与会话">
-  <strong class="context-label">APP</strong>
-  <div class="header-process">
-    <div class="menu-wrap app-switch">
-      <button type="button" class="process-trigger" id="appBtn" aria-expanded="false" aria-controls="appMenu" title="切换应用">
-        <span class="proc-primary" id="procPrimary">未选择应用</span>
-        <span class="proc-secondary" id="procSecondary">注入范围</span>
-        <span class="menu-chevron" aria-hidden="true">⌄</span>
-      </button>
-      <div class="popover app-menu" id="appMenu"></div>
-    </div>
-    <div class="menu-wrap">
-      <button type="button" class="compact-action" id="processBtn" aria-expanded="false" aria-controls="processPopover" title="查看当前 APP 的进程会话">会话</button>
-      <div class="popover process-popover" id="processPopover">
-        <div class="proc-title">APP 会话与摘要</div>
-        <dl class="procinfo" id="procinfo"></dl>
-        <label class="sess-lab"><input type="checkbox" id="sessShowOffline">显示离线会话 <span id="sessHidden" aria-live="polite"></span></label>
-        <div class="session-rows" id="sessRows" aria-label="当前应用会话"></div>
-        <div class="app-events" id="appEvents"></div>
-      </div>
-    </div>
-  </div>
-  <span class="cap-state-pill" id="capStatePill" hidden></span>
-  <span class="app-affiliation" id="appAffiliation">当前 Host 会话 · 设备归属未核验</span>
-</section>
-
-<div class="cap-unpack-hint" id="capUnpackHint" hidden></div>
-<!-- 加解密/系统/网络 三个实时捕获 tab 共用这条过滤工具栏 -->
+<!-- APP 与会话始终可选；只有观测记录页显示搜索、筛选和列表操作。 -->
 <div class="filters" id="toolbar">
   <div class="toolbar-main">
-    <input id="tb-q" type="search" placeholder="搜索本类: 算法/操作/明文/预览…">
-    <button type="button" class="filter-toggle" id="filterToggleBtn" aria-expanded="false" aria-controls="advancedFilters">筛选<span class="filter-badge" id="filterBadge"></span><span class="menu-chevron" aria-hidden="true">⌄</span></button>
-    <div class="toolbar-actions">
+    <div class="toolbar-search capture-toolbar">
+      <label class="search-field">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5"/><path d="m12.2 12.2 4.2 4.2"/></svg>
+        <input id="tb-q" type="search" aria-label="搜索当前类别记录" placeholder="搜索算法、操作、预览…">
+      </label>
+      <button type="button" class="filter-toggle" id="filterToggleBtn" aria-expanded="false" aria-controls="advancedFilters">筛选<span class="filter-badge" id="filterBadge"></span><span class="menu-chevron" aria-hidden="true">⌄</span></button>
+    </div>
+    <section class="app-context" id="appContext" aria-label="APP 与会话">
+      <strong class="context-label">APP</strong>
+      <div class="header-process">
+        <div class="menu-wrap app-switch">
+          <button type="button" class="process-trigger" id="appBtn" aria-expanded="false" aria-controls="appMenu" title="切换应用">
+            <span class="proc-primary" id="procPrimary">未选择应用</span>
+            <span class="proc-secondary" id="procSecondary">注入范围</span>
+            <span class="menu-chevron" aria-hidden="true">⌄</span>
+          </button>
+          <div class="popover app-menu" id="appMenu"></div>
+        </div>
+        <div class="menu-wrap">
+          <button type="button" class="compact-action" id="processBtn" aria-expanded="false" aria-controls="processPopover" title="查看当前 APP 的进程会话">会话</button>
+          <div class="popover process-popover" id="processPopover">
+            <div class="proc-title">APP 会话与摘要</div>
+            <dl class="procinfo" id="procinfo"></dl>
+            <label class="sess-lab"><input type="checkbox" id="sessShowOffline">显示离线会话 <span id="sessHidden" aria-live="polite"></span></label>
+            <div class="session-rows" id="sessRows" aria-label="当前应用会话"></div>
+            <div class="app-events" id="appEvents"></div>
+          </div>
+        </div>
+      </div>
+      <span class="cap-state-pill" id="capStatePill" hidden></span>
+      <span class="app-affiliation" id="appAffiliation">当前 Host 会话 · 设备归属未核验</span>
+    </section>
+    <div class="toolbar-actions capture-toolbar">
       <span id="count"></span>
       <button type="button" id="tb-pause" class="pause-btn" title="只停列表刷新">暂停刷新</button>
       <div class="menu-wrap">
@@ -570,47 +612,64 @@
   </div>
 </div>
 
+<div class="cap-unpack-hint" id="capUnpackHint" hidden></div>
+
 <main>
   <!-- 加解密（category=crypto） -->
   <div class="panel active" id="p-crypto">
-    <div class="workspace">
+    <div class="workspace capture-workspace" data-capture-key="cc">
       <div class="list-pane">
+        <div class="capture-list-head"><h2>加解密 · 事件记录</h2><span id="cc-list-count">0 条</span></div>
         <div class="new-banner" id="cc-banner"><span id="cc-banner-text"></span><button type="button" onclick="jumpLatest('cc')">跳到最新</button></div>
-        <div id="cc-list"></div>
+        <div id="cc-list" tabindex="0" aria-label="加解密记录列表"></div>
+        <div class="capture-list-foot"><span id="cc-list-mode">列表刷新中</span><span>最新优先</span></div>
       </div>
       <div class="splitter"></div>
-      <div class="detail-pane" id="cc-detail">
-        <div class="detail-empty">应用里的加解密会列在这里。每行是算法、明文大小和钩子。<br>点开看密钥、IV 和完整内容。</div>
-      </div>
+      <section class="capture-detail-shell" aria-label="记录详情">
+        <div class="capture-detail-nav"><button type="button" class="compact-action" data-capture-back="cc">‹ 返回列表</button></div>
+        <div class="detail-pane" id="cc-detail">
+          <div class="detail-empty"><strong>记录详情</strong><span>从列表选择一条记录，查看对应的调用详情。</span></div>
+        </div>
+      </section>
     </div>
   </div>
 
   <!-- 系统（category=system + file） -->
   <div class="panel" id="p-system">
-    <div class="workspace">
+    <div class="workspace capture-workspace" data-capture-key="sy">
       <div class="list-pane">
+        <div class="capture-list-head"><h2>系统 · 事件记录</h2><span id="sy-list-count">0 条</span></div>
         <div id="sy-radar" class="detect-radar">系统检测</div>
         <div class="new-banner" id="sy-banner"><span id="sy-banner-text"></span><button type="button" onclick="jumpLatest('sy')">跳到最新</button></div>
-        <div id="sy-list"></div>
+        <div id="sy-list" tabindex="0" aria-label="系统记录列表"></div>
+        <div class="capture-list-foot"><span id="sy-list-mode">列表刷新中</span><span>最新优先</span></div>
       </div>
       <div class="splitter"></div>
-      <div class="detail-pane" id="sy-detail">
-        <div class="detail-empty">系统与文件相关捕获。点左侧看详情。</div>
-      </div>
+      <section class="capture-detail-shell" aria-label="记录详情">
+        <div class="capture-detail-nav"><button type="button" class="compact-action" data-capture-back="sy">‹ 返回列表</button></div>
+        <div class="detail-pane" id="sy-detail">
+          <div class="detail-empty"><strong>记录详情</strong><span>从列表选择一条记录，查看对应的调用详情。</span></div>
+        </div>
+      </section>
     </div>
   </div>
 
   <!-- 网络（category=net） -->
   <div class="panel" id="p-net">
-    <div class="workspace">
+    <div class="workspace capture-workspace" data-capture-key="nt">
       <div class="list-pane">
+        <div class="capture-list-head"><h2>网络 · 事件记录</h2><span id="nt-list-count">0 条</span></div>
         <div class="new-banner" id="nt-banner"><span id="nt-banner-text"></span><button type="button" onclick="jumpLatest('nt')">跳到最新</button></div>
-        <div id="nt-list"></div>
+        <div id="nt-list" tabindex="0" aria-label="网络记录列表"></div>
+        <div class="capture-list-foot"><span id="nt-list-mode">列表刷新中</span><span>最新优先</span></div>
       </div>
       <div class="splitter"></div>
-      <div class="detail-pane" id="nt-detail">
-        <div class="detail-empty">同一条 SSL 连接上的 HTTP/1.1 和 HTTP/2 会还原成完整请求。点开左边是请求、右边是响应；gzip、deflate、br 已解开。没有连接号的记录仍按发送、接收分开。WebView 不在这里。</div>
-      </div>
+      <section class="capture-detail-shell" aria-label="记录详情">
+        <div class="capture-detail-nav"><button type="button" class="compact-action" data-capture-back="nt">‹ 返回列表</button></div>
+        <div class="detail-pane" id="nt-detail">
+          <div class="detail-empty"><strong>记录详情</strong><span>从列表选择一条记录，查看对应的请求和响应。</span></div>
+        </div>
+      </section>
     </div>
   </div>
 
@@ -1258,6 +1317,30 @@ function showBanner(key,n){ const b=document.getElementById(key+'-banner'), t=do
 function jumpLatest(key){ const p=CAPPANELS[key]; if(!p) return;
   p.filter.paused=false; updatePauseBtn(); p.render(true);
   const box=document.getElementById(key+'-list'); if(box) box.scrollTop=0; }
+function setCaptureDetailOpen(key,open){
+  const detail=document.getElementById(key+'-detail');
+  const workspace=detail?.closest('.capture-workspace');
+  workspace?.classList.toggle('detail-open',open);
+  if(open && detail){
+    detail.scrollTop=0;
+    const back=workspace?.querySelector('[data-capture-back]');
+    if(back?.offsetParent) back.focus({preventScroll:true});
+  }
+}
+function captureDetailNotice(key,title,description=''){
+  const detail=document.getElementById(key+'-detail');
+  if(!detail) return;
+  const state=document.createElement('div'), heading=document.createElement('strong');
+  state.className='detail-empty';
+  heading.textContent=title;
+  state.append(heading);
+  if(description){
+    const copy=document.createElement('span');
+    copy.textContent=description;
+    state.append(copy);
+  }
+  detail.replaceChildren(state);
+}
 function makeCapPanel(key,cats){
   const p={key,cats,sel:0,filter:{q:'',min:null,max:null,cat:-2,paused:false},lastShown:0};
   p.render=function(force){ const box=document.getElementById(key+'-list'); if(!box) return;
@@ -1271,9 +1354,22 @@ function makeCapPanel(key,cats){
     const shown=items.slice(-capDisplayCap).slice().reverse();
     box.innerHTML=shown.map(c=>rowHtml(key,p.sel,c)).join('')||'<div class="empty">'+(total?'没有符合筛选条件的记录。':emptyCapText())+'</div>';
     if(activeCapKey===key) updateCount(shown.length,total); };
-  p.select=async function(id){ const pkg=selectedPackage(); p.sel=id; p.render(true);
-    const c=await (await fetch('/api/captures/'+id)).json();
-    if(p.sel===id && selectedPackage()===pkg) renderCaptureDetail(key+'-detail',c); };
+  p.select=async function(id){
+    const pkg=selectedPackage();
+    p.sel=id;
+    p.render(true);
+    captureDetailNotice(key,'正在读取记录…');
+    setCaptureDetailOpen(key,true);
+    const isCurrent=()=>p.sel===id && selectedPackage()===pkg;
+    try{
+      const response=await fetch('/api/captures/'+id);
+      if(!response.ok) throw Error('读取失败');
+      const c=await response.json();
+      if(isCurrent()) renderCaptureDetail(key+'-detail',c);
+    }catch{
+      if(isCurrent()) captureDetailNotice(key,'无法读取这条记录','返回列表后可重试。');
+    }
+  };
   CAPPANELS[key]=p; return p;
 }
 makeCapPanel('cc',['crypto']);
@@ -1316,14 +1412,14 @@ async function loadExchanges(){
   if(!pkg){ httpAssembly={exchanges:[],noConn:0,http2:0,caveat:''}; return; }
   try{
     const r=await (await fetch('/api/http/exchanges?package='+encodeURIComponent(pkg))).json();
-    if(r && Array.isArray(r.exchanges)) httpAssembly=r;
+    if(selectedPackage()===pkg && r && Array.isArray(r.exchanges)) httpAssembly=r;
   }catch(e){}
 }
 function scheduleExchanges(){
   clearTimeout(exchangeTimer);
   exchangeTimer=setTimeout(()=>{ loadExchanges().then(()=>capRenderAll()); }, 250);
 }
-function exchangeSelect(id){ const p=CAPPANELS.nt; if(!p) return; p.sel=id; p.render(true); }
+function exchangeSelect(id){ CAPPANELS.nt?.select(id); }
 function renderExchangeDetail(detailId,ex){
   const d=document.getElementById(detailId); if(!d||!ex) return;
   const part=(title,cls,labelCls,p)=>{
@@ -1338,6 +1434,7 @@ function renderExchangeDetail(detailId,ex){
   };
   d.innerHTML='<div class="detail-head"><h2><span class="cat-dot net"></span>'+escapeHtml(ex.label||'')+'</h2>'
     +'<div class="sub">'+escapeHtml([ex.status?('HTTP '+ex.status):'', ex.conn||''].filter(Boolean).join(' · '))+'</div></div>'
+    +captureOverview([['请求大小',captureBytes(ex.request?.bodyBytes)],['响应大小',captureBytes(ex.response?.bodyBytes)],['HTTP 状态',ex.status || '未记录']])
     +part('请求','in-card','in',ex.request)+part('响应','out-card','out',ex.response)
     +(ex.note?'<p class="sub">'+escapeHtml(ex.note)+'</p>':'');
 }
@@ -1403,7 +1500,7 @@ function exchangeRow(sel,ex){
     }
   };
   nt.select=function(id){
-    if(typeof id==='string'){ nt.sel=id; nt.render(true); return; }
+    if(typeof id==='string'){ nt.sel=id; nt.render(true); setCaptureDetailOpen('nt',true); return; }
     return rawSelect(id);
   };
 })();
@@ -1428,7 +1525,8 @@ function capClearP(key){
     capItems.splice(i,1);
   }
   p.sel=0; capRenderAll();
-  const d=document.getElementById(key+'-detail'); if(d) d.innerHTML='<div class="detail-empty">已清空。</div>';
+  captureDetailNotice(key,'已清空。');
+  setCaptureDetailOpen(key,false);
   toast('已清空本页');
 }
 const capDetailCache={};
@@ -1456,6 +1554,11 @@ function ioBody(hex,utf8){ let b='';
   b+='<div class="io-block"><h3>Hex</h3>'+ioBlock('hex',hex||'')+'</div>';
   if(hex) b+='<div class="io-block"><h3>HexDump</h3>'+ioBlock('hex',hexdump(hex))+'</div>';
   return b; }
+function captureBytes(size){ return Number.isSafeInteger(size) && size>=0 ? size+' B' : '未记录'; }
+function captureOverview(facts){
+  return '<section class="capture-overview" aria-label="记录概览"><h3>记录概览</h3><dl class="capture-facts">'+
+    facts.map(([label,value])=>'<div><dt>'+escapeHtml(label)+'</dt><dd>'+escapeHtml(value)+'</dd></div>').join('')+'</dl></section>';
+}
 function renderCaptureDetail(detailId,c){ const d=document.getElementById(detailId); if(!d) return;
   capDetailCache[c.id]=c;
   const cc=catClass(c);
@@ -1472,6 +1575,12 @@ function renderCaptureDetail(detailId,c){ const d=document.getElementById(detail
     h='<div class="detail-head"><h2><span class="cat-dot '+cc+'"></span>#'+c.id+'  '+escapeHtml(c.algo||c.func||'')+'</h2>'+
       '<div class="sub">'+escapeHtml(c.op||c.func||'')+' · '+escapeHtml(new Date(c.ts).toLocaleString())+(c.tid?' · tid '+c.tid:'')+'</div>'+acts+'</div>';
   }
+  h+=captureOverview([
+    ['事件编号',c.id ? '#'+c.id : '未记录'],
+    ['输入大小',captureBytes(c.inl)],
+    ['输出大小',captureBytes(typeof c.outHex==='string' ? c.outHex.length/2 : undefined)],
+    ['线程 ID',c.tid>0 ? String(c.tid) : '未记录'],
+  ]);
   if(isFile && (c.text||c.preview||c.func))
     h+='<div class="io-section kv-card"><div class="io-label kv">详情</div>'+ioBlock('',[c.func,c.op,c.preview||c.text].filter(Boolean).join('\n'))+'</div>';
   if(c.keyHex) h+=ioKV('KEY',c.keyHex.length/2,c.keyHex);
@@ -1490,10 +1599,15 @@ async function capLoad(){ const pkg=selectedPackage(); if(!pkg) return;
   await loadExchanges(); capRenderAll(); }
 
 // ---- 过滤工具栏（加解密/系统/网络共用，作用于当前活动的捕获面板）----
-function updateCount(shown,total){ const el=document.getElementById('count'); if(el) el.textContent=`${shown} / ${total} 条`; }
+function updateCount(shown,total){
+  const el=document.getElementById('count'), listCount=document.getElementById(activeCapKey+'-list-count');
+  if(el) el.textContent=shown+' / '+total+' 条';
+  if(listCount) listCount.textContent=shown+' 条';
+}
 function updatePauseBtn(){ const b=document.getElementById('tb-pause'); const p=CAPPANELS[activeCapKey]; if(!b||!p) return;
   b.textContent=p.filter.paused?'继续刷新':'暂停刷新';
   b.title=p.filter.paused?'点此恢复列表刷新':'只停列表刷新';
+  document.getElementById(activeCapKey+'-list-mode').textContent=p.filter.paused?'列表已暂停':'列表刷新中';
   b.classList.toggle('is-paused',p.filter.paused); }
 function updateFilterBadge(){ const p=CAPPANELS[activeCapKey]; const b=document.getElementById('filterBadge'); if(!p||!b) return;
   const f=p.filter; let n=0; if(f.q) n++; if(f.min!=null||f.max!=null) n++; if(p.key==='cc'&&f.cat>=0) n++; b.textContent=n||''; }
@@ -1509,6 +1623,10 @@ function onTabSwitch(id){ const tb=document.getElementById('toolbar');
   refreshCapUnpackHint();
 }
 function bindToolbar(){
+  for(const back of document.querySelectorAll('[data-capture-back]')) back.addEventListener('click',()=>{
+    setCaptureDetailOpen(back.dataset.captureBack,false);
+    document.getElementById(back.dataset.captureBack+'-list')?.focus({preventScroll:true});
+  });
   const q=document.getElementById('tb-q'), mn=document.getElementById('tb-min'), mx=document.getElementById('tb-max'), cs=document.getElementById('tb-cat');
   const num=v=>{ v=String(v).trim(); return v===''?null:(Number.isFinite(+v)?+v:null); };
   const rerender=()=>{ updateFilterBadge(); CAPPANELS[activeCapKey].render(true); };
@@ -1539,7 +1657,20 @@ function bindToolbar(){
 function pinnedPackage(){ const seg=decodeURIComponent(location.pathname.replace(/^\//,'').split('/')[0]||''); return (seg && seg.indexOf('.')>=0) ? seg : ''; }
 function selectedAgent(){ return liveSession() || sessionsOf(selectedPackage()).slice(-1)[0] || null; }
 function curPkg(){ return selectedPackage(); }
-function capReset(){ capItems.length=0; capMaxId=0; capLoad(); }
+function capReset(){
+  capItems.length=0;
+  capMaxId=0;
+  httpAssembly={exchanges:[],noConn:0,http2:0,caveat:''};
+  for(const panel of Object.values(CAPPANELS)){
+    panel.sel=0;
+    panel.detailRev=null;
+    captureDetailNotice(panel.key,'记录详情','从列表选择一条记录查看详情。');
+    setCaptureDetailOpen(panel.key,false);
+    panel.render(true);
+  }
+  for(const id of Object.keys(capDetailCache)) delete capDetailCache[id];
+  capLoad();
+}
 /** Packages that skipped auto-arm after one-click unpack (client memory + server unpackProtected). */
 const unpackSkippedArm = new Set();
 let serverUnpackProtected = [];
@@ -1708,7 +1839,9 @@ function closeModal(id){ document.getElementById(id).classList.remove('show'); }
 
 function closePopovers(){
   document.querySelectorAll('.popover.show').forEach(el=>el.classList.remove('show'));
-  document.querySelectorAll('[aria-expanded="true"]').forEach(b=>b.setAttribute('aria-expanded','false'));
+  document.querySelectorAll('[aria-expanded="true"][aria-controls]').forEach(b=>{
+    if(document.getElementById(b.getAttribute('aria-controls'))?.classList.contains('popover')) b.setAttribute('aria-expanded','false');
+  });
 }
 function togglePopover(id, btnId){
   const pop=document.getElementById(id); const btn=document.getElementById(btnId);
@@ -1886,10 +2019,8 @@ function renderHookControls(){
 function clearHiddenSelection(panel){
   panel.sel=0;
   panel.detailRev=null;
-  const message=document.createElement('div');
-  message.className='detail-empty';
-  message.textContent='这条记录当前已隐藏。';
-  document.getElementById(panel.key+'-detail')?.replaceChildren(message);
+  captureDetailNotice(panel.key,'这条记录当前已隐藏。');
+  setCaptureDetailOpen(panel.key,false);
 }
 function saveHookDisplay(hidden){
   const pkg=selectedPackage();
