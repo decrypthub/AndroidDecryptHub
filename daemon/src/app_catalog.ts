@@ -97,6 +97,12 @@ async function refreshList(): Promise<void> {
 }
 
 async function resolveIdentity(row: Listed): Promise<void> {
+  // The Manager already named this app; the icon resolves lazily from the APK on request.
+  // Pulling every app's resources.arsc here just for a badging icon hint floods adb.
+  if (labels.has(row.package)) {
+    icons.set(row.package, '');
+    return;
+  }
   try {
     const text = await apkBadging(row.apk);
     if (!labels.has(row.package)) labels.set(row.package, applicationLabel(text) || row.package);
@@ -137,7 +143,11 @@ const identityJobs = new Map<string, Promise<void>>();
 
 /** Resolve this one package's label/icon now instead of waiting for the background queue. */
 export async function ensureCatalogIdentity(pkg: string): Promise<void> {
-  const row = listed.find(item => item.package === pkg);
+  let row = listed.find(item => item.package === pkg);
+  if (!row) {
+    await refreshList().catch(() => {});
+    row = listed.find(item => item.package === pkg);
+  }
   if (!row || icons.has(pkg)) return;
   let job = identityJobs.get(pkg);
   if (!job) {

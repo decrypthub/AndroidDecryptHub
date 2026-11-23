@@ -6,6 +6,7 @@ import { shQuote } from './sandbox_fs.ts';
 
 const execFileP = promisify(execFile);
 const cache = new Map<string, { at: number; v: { body: Buffer; type: string } | null }>();
+const inflight = new Map<string, Promise<{ body: Buffer; type: string } | null>>();
 const NEG_TTL = 30_000;
 
 function adbBase(): string[] {
@@ -453,7 +454,13 @@ async function resolveAdaptiveLayer(apk: string, xmlPath: string): Promise<strin
 export async function readPackageIcon(pkg: string): Promise<{ body: Buffer; type: string } | null> {
   const hit = cache.get(pkg);
   if (hit && (hit.v || Date.now() - hit.at < NEG_TTL)) return hit.v;
-  const result = await apkIcon(pkg);
-  cache.set(pkg, { at: Date.now(), v: result });
-  return result;
+  let job = inflight.get(pkg);
+  if (!job) {
+    job = apkIcon(pkg).then(result => {
+      cache.set(pkg, { at: Date.now(), v: result });
+      return result;
+    }).finally(() => inflight.delete(pkg));
+    inflight.set(pkg, job);
+  }
+  return job;
 }
