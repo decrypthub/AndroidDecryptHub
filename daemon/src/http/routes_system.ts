@@ -58,8 +58,10 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
     { path:'/operations.js',handler:servePublic('operations.js','text/javascript; charset=utf-8') },
     { method: 'GET', path: '/api/apps/icon', handler: async () => {
       const pkg = url.searchParams.get('package') || '';
+      const serial = url.searchParams.get('serial') || undefined;
+      if (serial && !/^[A-Za-z0-9_-]+$/.test(serial)) return send(400, { ok: false, error: '无效的设备序列号' });
       try {
-        const icon = await readPackageIcon(pkg);
+        const icon = await readPackageIcon(pkg, serial);
         if (!icon) return send(404, { ok: false, error: '没有图标' });
         res.writeHead(200, { 'content-type': icon.type, 'cache-control': 'private, max-age=60', 'access-control-allow-origin': '*' });
         res.end(icon.body);
@@ -82,8 +84,10 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       if (localObserver) {
         const pkg = localObserver.package;
         if(process.env.ADH_USB_APP_INVENTORY==='1'&&!localObserver.fileBrowserOnly&&!localObserver.demoApiSerial){
+          const serial=url.searchParams.get('serial')||'';
+          if(serial&&!/^[A-Za-z0-9_-]+$/.test(serial)) return send(400,{ok:false,error:'无效的设备序列号'});
           try{
-            const apps=await readAppCatalog();
+            const apps=await readAppCatalog(serial||undefined);
             return send(200,{apps,error:null,capture:false,localObservation:true,inventory:true});
           }catch{ return send(200,{apps:[],error:'读不到手机上的应用列表，请检查 USB 连接后重试。',capture:false,localObservation:true,inventory:true}); }
         }

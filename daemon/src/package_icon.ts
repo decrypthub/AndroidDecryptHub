@@ -10,13 +10,12 @@ const cache = new Map<string, { at: number; v: { body: Buffer; type: string } | 
 const inflight = new Map<string, Promise<{ body: Buffer; type: string } | null>>();
 const NEG_TTL = 30_000;
 
-function adbBase(): string[] {
-  const serial = process.env.ANDROID_SERIAL || process.env.ADH_SERIAL || '';
+function adbBase(serial = deviceSerial()): string[] {
   return serial ? ['-s', serial] : [];
 }
 
-async function adbOut(command: string): Promise<Buffer> {
-  const { stdout } = await execFileP('adb', [...adbBase(), 'exec-out', command], {
+async function adbOut(command: string, serial?: string): Promise<Buffer> {
+  const { stdout } = await execFileP('adb', [...adbBase(serial), 'exec-out', command], {
     timeout: 20000, windowsHide: true, maxBuffer: 4 * 1024 * 1024, encoding: 'buffer',
   });
   return stdout as Buffer;
@@ -460,8 +459,7 @@ async function resolveAdaptiveLayer(apk: string, xmlPath: string): Promise<strin
 /** Device-rendered PNG via adh.device/1; falls back to host APK parsing when the
  *  persistent channel is down. 'none' from the device is authoritative — the
  *  package genuinely has no renderable icon (no fake robot fallback). */
-async function resolveIcon(pkg: string): Promise<{ body: Buffer; type: string } | null> {
-  const serial = deviceSerial();
+async function resolveIcon(pkg: string, serial = deviceSerial()): Promise<{ body: Buffer; type: string } | null> {
   if (serial) {
     try {
       const icon = await deviceIcon(serial, pkg);
@@ -469,20 +467,24 @@ async function resolveIcon(pkg: string): Promise<{ body: Buffer; type: string } 
       if (icon) return { body: icon, type: imageType(icon) };
     } catch { /* channel error: fall back to host parsing */ }
   }
+  // Host-side APK parsing only knows the observed device's adb serial; a
+  // foreign serial relies on the device channel alone (no wrong-device reads).
+  if (serial !== deviceSerial()) return null;
   return apkIcon(pkg);
 }
 
 /** The launcher bitmap named by aapt, not a foreground or monochrome layer. */
-export async function readPackageIcon(pkg: string): Promise<{ body: Buffer; type: string } | null> {
-  const hit = cache.get(pkg);
+export async function readPackageIcon(pkg: string, serial?: string): Promise<{ body: Buffer; type: string } | null> {
+  const key = (serial || deviceSerial()) + ':' + pkg;
+  const hit = cache.get(key);
   if (hit && (hit.v || Date.now() - hit.at < NEG_TTL)) return hit.v;
-  let job = inflight.get(pkg);
+  let job = inflight.get(key);
   if (!job) {
-    job = resolveIcon(pkg).then(result => {
-      cache.set(pkg, { at: Date.now(), v: result });
+    job = resolveIcon(pkg, serial).then(result => {
+      cache.set(key, { at: Date.now(), v: result });
       return result;
-    }).finally(() => inflight.delete(pkg));
-    inflight.set(pkg, job);
+    }).finally(() => inflight.delete(key));
+    inflight.set(key, job);
   }
   return job;
 }

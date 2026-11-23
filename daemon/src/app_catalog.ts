@@ -22,13 +22,12 @@ const labels = new Map<string, string>();
 const icons = new Map<string, string>();
 let pumping = false;
 
-function adbBase(): string[] {
-  const serial = process.env.ANDROID_SERIAL || process.env.ADH_SERIAL || '';
+function adbBase(serial = deviceSerial()): string[] {
   return serial ? ['-s', serial] : [];
 }
 
-async function adbShell(command: string): Promise<string> {
-  const { stdout } = await execFileP('adb', [...adbBase(), 'shell', command], {
+async function adbShell(command: string, serial = deviceSerial()): Promise<string> {
+  const { stdout } = await execFileP('adb', [...adbBase(serial), 'shell', command], {
     timeout: 20000, windowsHide: true, maxBuffer: 8 * 1024 * 1024,
   });
   return String(stdout ?? '');
@@ -71,33 +70,32 @@ function runningPackages(ps: string, focus: string): Map<string, '' | 'backgroun
   return out;
 }
 
-async function refreshList(): Promise<void> {
-  const serial = deviceSerial();
+async function refreshList(serial = deviceSerial()): Promise<Listed[]> {
+  const active = serial === deviceSerial();
   const rpcApps = serial ? await deviceApplications(serial).catch(() => null) : null;
   if (rpcApps) {
     const [processes, activity] = await Promise.all([
-      adbShell('ps -A'),
-      adbShell('dumpsys activity activities'),
+      adbShell('ps -A', serial),
+      adbShell('dumpsys activity activities', serial),
     ]);
-    for (const app of rpcApps) if (app?.p && PKG_RE.test(app.p)) labels.set(app.p, app.l || app.p);
+    if (active) for (const app of rpcApps) if (app?.p && PKG_RE.test(app.p)) labels.set(app.p, app.l || app.p);
     const focus = /topResumedActivity=ActivityRecord\{[^\n]*\su\d+\s+([A-Za-z0-9_.]+)\//.exec(activity)?.[1] || '';
     const running = runningPackages(processes, focus);
-    listed = rpcApps
+    const rows = rpcApps
       .filter(app => app?.p && PKG_RE.test(app.p))
       .map(app => ({
-        package: app.p as string, apk: '', label: labels.get(app.p) || '',
-        system: !!app.s, running: running.get(app.p) || '', icon: icons.get(app.p) || '',
+        package: app.p as string, apk: '', label: (active ? labels.get(app.p) : '') || app.l || app.p,
+        system: !!app.s, running: running.get(app.p) || '', icon: active ? icons.get(app.p) || '' : '',
       }));
-    listedAt = Date.now();
-    void pumpIdentity();
-    return;
+    if (active) { listed = rows; listedAt = Date.now(); void pumpIdentity(); }
+    return rows;
   }
   const [user, system, processes, activity, manager] = await Promise.all([
-    adbShell('pm list packages -f -3'),
-    adbShell('pm list packages -f -s'),
-    adbShell('ps -A'),
-    adbShell('dumpsys activity activities'),
-    managerCatalog().catch(() => null),
+    adbShell('pm list packages -f -3', serial),
+    adbShell('pm list packages -f -s', serial),
+    adbShell('ps -A', serial),
+    adbShell('dumpsys activity activities', serial),
+    active ? managerCatalog().catch(() => null) : Promise.resolve(null),
   ]);
   if (manager) {
     for (const [pkg, info] of manager) labels.set(pkg, info.label);
@@ -107,14 +105,14 @@ async function refreshList(): Promise<void> {
   const byPackage = new Map<string, Listed>();
   for (const row of parsePackageLines(system, true)) byPackage.set(row.package, row);
   for (const row of parsePackageLines(user, false)) byPackage.set(row.package, row);
-  listed = [...byPackage.values()].map(row => ({
+  const rows: Listed[] = [...byPackage.values()].map(row => ({
     ...row,
-    label: labels.get(row.package) || '',
-    icon: icons.get(row.package) || '',
+    label: (active ? labels.get(row.package) : '') || row.label,
+    icon: active ? icons.get(row.package) || '' : '',
     running: running.get(row.package) || '',
   }));
-  listedAt = Date.now();
-  void pumpIdentity();
+  if (active) { listed = rows; listedAt = Date.now(); void pumpIdentity(); }
+  return rows;
 }
 
 async function resolveIdentity(row: Listed): Promise<void> {
@@ -149,7 +147,12 @@ async function pumpIdentity(): Promise<void> {
   }
 }
 
-export async function readAppCatalog(): Promise<CatalogApp[]> {
+export async function readAppCatalog(serial?: string): Promise<CatalogApp[]> {
+  // A foreign serial gets a one-shot read; the shared label/icon caches and
+  // the 8s list cache belong to the observed device only.
+  if (serial && serial !== deviceSerial()) {
+    return (await refreshList(serial)).map(({ icon: _icon, ...row }) => row);
+  }
   if (!listedAt || Date.now() - listedAt > 8000) await refreshList();
   return listed.map(row => ({
     package: row.package,

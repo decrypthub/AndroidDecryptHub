@@ -1,7 +1,10 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { readdirSync } from 'node:fs';
 import { AGENT_PORT, HTTP_PORT } from './config.ts';
 import { confineDevicePath } from './sandbox_fs.ts';
+import { setDeviceSerial } from './device_bridge.ts';
+import { parseAdbDevices } from './transport/adb_device.ts';
 
 /** Opt-in, bounded observation of a consenting app that loads its own reporter.
  * Leave the device's application scope and existing reverse routes alone.
@@ -61,7 +64,7 @@ function readLocalObserver(): LocalObserver | null {
     const m = /^(\S+)\s+device(?:\s|$)/.exec(line);
     return m ? [m[1]] : [];
   });
-  if (usb.length !== 1 || usb[0] !== serial) throw Error('Expected only the selected USB device online');
+  if (!usb.includes(serial)) throw Error('Expected the selected USB device online');
   const model = device('shell', 'getprop', 'ro.product.model');
   if (fileBrowserOnly || demoApi) {
     if (!model || (fileBrowserOnly && process.env.ADH_OBSERVE_OWN_FILES !== '1')) throw Error('Expected the selected USB Demo and explicit local scope');
@@ -110,7 +113,42 @@ export function allowedOwnedSave(observer:LocalObserver,root:string,path:string)
     typeof observer.editableText==='string'&&isEditableName(observer.editableText)&&path==='files/'+observer.editableText;
 }
 
-export const localObserver = readLocalObserver();
+export let localObserver = readLocalObserver();
+
+const execFileP = promisify(execFile);
+const OBSERVE_PKG_RE = /^[A-Za-z][\w]*(?:\.[A-Za-z][\w]*)+$/;
+const OBSERVE_SERIAL_RE = /^[A-Za-z0-9_-]+$/;
+
+/** Rebind the local observation target (panel device management). The same
+ * env-driven flags apply; the process keeps its original mode. */
+export async function retargetObserver(serial: string, pkg: string): Promise<LocalObserver> {
+  const current = localObserver;
+  if (!current) throw Error('此入口不是本机观察模式');
+  if (current.fileBrowserOnly || current.demoApiSerial) throw Error('此入口的观察目标是固定的');
+  if (!OBSERVE_SERIAL_RE.test(serial) || !OBSERVE_PKG_RE.test(pkg)) throw Error('需要有效的设备序列号和包名');
+  const adb = async (args: string[]) => String((await execFileP('adb', args, {
+    encoding: 'utf8', timeout: 8000, windowsHide: true, maxBuffer: 1024 * 1024,
+  })).stdout ?? '').trim();
+  const rows = parseAdbDevices(await adb(['devices', '-l']));
+  const device = rows.find(row => row.serial === serial && row.state === 'device');
+  if (!device) throw Error('这台手机不在线');
+  const model = (await adb(['-s', serial, 'shell', 'getprop', 'ro.product.model'])).slice(0, 64);
+  if (!model) throw Error('读不到手机型号');
+  // The agent dials its own device-side reverse; add ours if absent (never touch existing routes).
+  const port = 'tcp:' + AGENT_PORT;
+  const have = (await adb(['-s', serial, 'reverse', '--list'])).split(/\r?\n/)
+    .some(line => line.trim().split(/\s+/).slice(-2).join(' ') === port + ' ' + port);
+  if (!have) await adb(['-s', serial, 'reverse', port, port]);
+  const pidText = await adb(['-s', serial, 'shell', 'pidof', pkg]).catch(() => '');
+  const pid = /^[1-9]\d*$/.test(pidText) ? Number(pidText) : 0;
+  localObserver = {
+    package: pkg, pid, model, usbSerial: serial,
+    ownFilesSerial: process.env.ADH_OBSERVE_OWN_FILES === '1' ? serial : undefined,
+    declaredApiSerial: process.env.ADH_USB_APP_INVENTORY === '1' ? serial : undefined,
+  };
+  setDeviceSerial(serial);
+  return localObserver;
+}
 
 export function noteObservedPid(pkg: string, pid: number) {
   if (localObserver && localObserver.package === pkg && Number.isSafeInteger(pid) && pid >= 0) localObserver.pid = pid;
@@ -156,7 +194,7 @@ export function allowsAppControl(observer: LocalObserver, method: string | undef
   if (observer.fileBrowserOnly || observer.demoApiSerial || !observer.usbSerial) return false;
   if (url.pathname === '/api/apps/icon' && method === 'GET') {
     const packages = url.searchParams.getAll('package');
-    return packages.length === 1 && /^[\w]+(?:\.[\w]+)*$/.test(packages[0]) && [...url.searchParams.keys()].every(key => key === 'package' || key === 'v');
+    return packages.length === 1 && /^[\w]+(?:\.[\w]+)*$/.test(packages[0]) && [...url.searchParams.keys()].every(key => key === 'package' || key === 'v' || key === 'serial');
   }
   return url.pathname === '/api/apps/control' && method === 'POST' && url.search === '';
 }
@@ -213,7 +251,12 @@ export function localViewAllows(observer: LocalObserver, method: string | undefi
     if(method==='GET') return action==='list'||action==='preview';
     return method==='POST'&&action==='save'&&allowedOwnedSave(observer,root,query.get('path')??'');
   }
-  if (method !== 'GET') return false;
+  if (method !== 'GET' && method !== 'POST') return false;
+  if (method === 'POST') {
+    // Panel device management; the route enforces the same-origin Origin itself.
+    if (observer.fileBrowserOnly || observer.demoApiSerial) return false;
+    return path === '/api/devices' && url.search === '';
+  }
   if (VIEW_ROUTES.has(path) || path === '/' + observer.package) return true;
   if (path === '/api/devices') return url.searchParams.get('action') === 'list';
   if (observer.fileBrowserOnly || observer.demoApiSerial) return false;

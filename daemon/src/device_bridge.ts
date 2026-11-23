@@ -7,12 +7,41 @@ import type {DeviceConnection} from './transport/device_transport.ts';
 const transport=new AdbDeviceTransport();
 const pending=new Map<string,Promise<DeviceConnection|null>>();
 
-export function deviceSerial():string{return process.env.ANDROID_SERIAL||process.env.ADH_SERIAL||'';}
+// The panel's device management can re-point every read/write path at another
+// USB serial; env is only the boot default.
+let activeSerial=process.env.ANDROID_SERIAL||process.env.ADH_SERIAL||'';
+export function deviceSerial():string{return activeSerial;}
+export function setDeviceSerial(serial:string){activeSerial=serial;}
+
+// Explicit connect for the panel's device manager: surfaces the real
+// DeviceError (DEVICE_NOT_READY, missing bootstrap, ...) instead of the lazy
+// pool's silent null.
+export function connectDevice(serial:string):Promise<DeviceConnection>{
+  const job=transport.connect(serial,undefined,()=>pending.delete(serial));
+  pending.set(serial,job.catch(()=>null));
+  return job;
+}
+
+export function deviceRpcLive(serial:string):boolean{
+  const job=pending.get(serial);
+  return !!job; // presence means a live or in-flight channel; destroyed conns delete themselves
+}
+
+// Explicit disconnect: close the pooled channel (its owned forward included).
+export async function dropDevice(serial:string):Promise<boolean>{
+  const job=pending.get(serial);
+  if(!job)return false;
+  pending.delete(serial);
+  const c=await job.catch(()=>null);
+  if(!c)return false;
+  await c.close();
+  return true;
+}
 
 export function deviceRpc(serial:string):Promise<DeviceConnection|null>{
   let job=pending.get(serial);
   if(!job){
-    job=transport.connect(serial,undefined,()=>pending.delete(serial)).catch(()=>null);
+    job=connectDevice(serial).catch(()=>null);
     pending.set(serial,job);
   }
   return job.then(c=>{

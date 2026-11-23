@@ -50,8 +50,7 @@ let cache: { at: number; packages: string[]; error: string | null } | null = nul
 // The job's value is the label write, not the label: `resolveLabel` is consumed inside the .then.
 const labelJobs = new Map<string, Promise<void>>();
 
-function adbBase(): string[] {
-  const serial = process.env.ANDROID_SERIAL || process.env.ADH_SERIAL || '';
+function adbBase(serial = deviceSerial()): string[] {
   return serial ? ['-s', serial] : [];
 }
 
