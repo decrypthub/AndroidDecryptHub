@@ -56,6 +56,7 @@
   .process-trigger:hover, .process-trigger[aria-expanded="true"] { border-color:transparent; background:rgba(255,255,255,.04); color:var(--ink); }
   .process-trigger .proc-primary { display:flex; align-items:center; gap:8px; min-width:0; overflow:hidden; color:var(--ink); font-size:13px; font-weight:650; }
   .process-trigger .proc-face { width:22px; height:22px; flex:none; }
+  .process-trigger .proc-face img, .process-trigger .proc-face .app-dialog-letter { width:22px; height:22px; border-radius:6px; }
   .process-trigger .proc-face .app-dialog-letter { font-size:12px; }
   .process-trigger .proc-text { display:flex; flex-direction:column; min-width:0; line-height:1.25; }
   .process-trigger #procLabel { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -125,6 +126,7 @@
   .app-dialog-id span, .app-item .app-pkg { overflow:hidden; color:var(--muted); font:11px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace; text-overflow:ellipsis; white-space:nowrap; }
   .app-dialog-actions { display:flex; gap:8px; }
   .app-dialog-actions button, .app-dialog-card .set-close-x { min-height:32px; padding:0 12px; color:var(--ink-2); background:transparent; border:1px solid var(--line); border-radius:4px; cursor:pointer; }
+  .app-dialog-card .set-close-x { width:32px; padding:0; }
   .app-dialog .app-menu-search { width:auto; margin:10px 16px 0; }
   .app-dialog .app-choices { flex:1; max-height:none; overflow:auto; min-height:0; padding:8px 10px 12px 8px; }
   .app-dialog .app-item { flex-direction:row; align-items:center; gap:10px; min-height:52px; }
