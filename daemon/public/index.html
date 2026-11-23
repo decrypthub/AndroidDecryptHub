@@ -1147,7 +1147,7 @@
   </aside>
   <div class="app-dialog-main">
     <div class="app-dialog-card">
-      <span class="app-face"><img id="appDialogIcon" alt="" hidden><span id="appDialogLetter" class="app-dialog-letter">?</span></span>
+      <span class="app-face"><img id="appDialogIcon" data-app-icon alt="" hidden><span id="appDialogLetter" class="app-dialog-letter">?</span></span>
       <div class="app-dialog-id">
         <strong id="appDialogName">未选择</strong>
         <span id="appDialogPkg"></span>
@@ -3117,6 +3117,7 @@ function panelAppConnection(device){
 }
 function panelDeviceCatalog(data){
   if(data?.ok!==true||!Array.isArray(data.devices)) return [];
+  window.__adhLocalEntry=!!data.localUsb;
   if(data.localUsb){
     const model=typeof data.localUsb.model==='string'?data.localUsb.model.trim().slice(0,64):'';
     const fileBrowserOnly=data.localUsb.fileBrowserOnly===true;
@@ -3354,7 +3355,7 @@ function escapeHtml(s){ return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':
 // Icon fetch failures (404, aborted, undecodable) all surface as a neutral app tile,
 // never the browser's broken-image glyph or a missing tile.
 const ICON_FALLBACK='data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96"><rect width="96" height="96" rx="20" fill="#2a2f3a"/><rect x="26" y="26" width="18" height="18" rx="5" fill="#7f8ba3"/><rect x="52" y="26" width="18" height="18" rx="5" fill="#7f8ba3"/><rect x="26" y="52" width="18" height="18" rx="5" fill="#7f8ba3"/><rect x="52" y="52" width="18" height="18" rx="9" fill="#7f8ba3"/></svg>');
-document.addEventListener('error',e=>{const i=e.target;if(i instanceof HTMLImageElement&&i.src!==ICON_FALLBACK){i.src=ICON_FALLBACK;i.hidden=false;}},true);
+document.addEventListener('error',e=>{const i=e.target;if(i instanceof HTMLImageElement&&i.hasAttribute('data-app-icon')&&i.src!==ICON_FALLBACK){i.src=ICON_FALLBACK;i.hidden=false;e.stopPropagation();}},true);
 
 // ---- agents / 应用栏 / WS ----
 const agents=new Map();
@@ -3424,7 +3425,7 @@ function render(){
   const list=appRecords();
   const note=!device?'先选择设备':device.kind==='local'&&(device.online||device.linkState==='unknown')
     ?(scopeNote||(!list.length?panelAppConnection(device):'')):!device.online?panelDeviceLink(device):device.kind==='device'?registryScopeError:scopeNote;
-  const flag=a=>device.kind==='device'
+  const flag=a=>!device?'':device.kind==='device'
     ?(a.configured===true?'已在范围':a.configured===false?'未加入范围':'范围未知')
     :device.kind==='local'
     ?(a.injected?(a.running==='foreground'?'Hook 前台':a.running==='background'?'Hook 后台':'Hook 待启动'):a.running==='foreground'?'前台':a.running==='background'?'后台':'')
@@ -3472,14 +3473,14 @@ function render(){
     menu.dataset.sig=sig;
     const face=a=>{ const letter=escapeHtml((a.label||a.package||'?').slice(0,1).toUpperCase());
       return '<span class="app-face"><img data-app-icon alt="" src="/api/apps/icon?v=2&package='+encodeURIComponent(a.package)+'"><span class="app-dialog-letter">'+letter+'</span></span>'; };
-    const inject=a=>device.kind==='local'
+    const inject=a=>device?.kind==='local'
       ?'<button type="button" class="app-inject" data-inject="'+escapeHtml(a.package)+'" aria-pressed="'+String(!!a.injected)+'"'+
         (!scopeReadAt||scopeBusy?' disabled':'')+' title="注入"></button>':'';
     const row=a=>'<div class="app-row">'+inject(a)+'<button type="button" class="app-item" data-pkg="'+escapeHtml(a.package)+'">'+face(a)+
       '<span class="app-copy"><span class="app-name">'+escapeHtml(a.label||a.package)+'</span>'+
       (a.label?'<span class="app-pkg">'+escapeHtml(a.package)+'</span>':'')+'</span>'+
       '<span class="app-state'+(a.running?' on':'')+'">'+escapeHtml(flag(a))+'</span></button></div>';
-    if(device.kind==='local'){
+    if(device?.kind==='local'){
       const rank=a=>a.running==='foreground'?0:a.running==='background'?1:2;
       const shown=visible.filter(a=>appTab==='system'?a.system:!a.system).slice().sort((a,b)=>rank(a)-rank(b)||(a.label||a.package).localeCompare(b.label||b.package,'zh'));
       menu.innerHTML=shown.length?shown.map(row).join(''):'<div class="app-empty">'+escapeHtml(query?'没有匹配的应用':note||'没有可查看的应用')+'</div>';

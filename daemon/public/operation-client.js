@@ -37,7 +37,8 @@
       const active=new Set(['/api/trace/qbdi','/api/unpack/trigger','/api/hook/selftest','/api/java/probe','/api/compat/probe','/api/debug/frame_echo']);
       target.fetch=async(input,init={})=>{
         const url=new URL(typeof input==='string'?input:input.url,target.location.href);
-        if(url.origin!==target.location.origin||!url.pathname.startsWith('/api/')||url.pathname.startsWith('/api/operations'))return this.fetcher(input,init);
+        // Local-observer entry has no operations fence: its HTTP gate is the whole boundary.
+        if(url.origin!==target.location.origin||!url.pathname.startsWith('/api/')||url.pathname.startsWith('/api/operations')||target.__adhLocalEntry===true)return this.fetcher(input,init);
         const method=(init.method||input.method||'GET').toUpperCase(),outgoing={...init,headers:new Headers(init.headers||{})};
         outgoing.headers.set('X-Adh-Client-Id',this.clientId);if(this.key)outgoing.headers.set('X-Adh-Operator-Key',this.key);
         if(method!=='GET'||active.has(url.pathname)) {
