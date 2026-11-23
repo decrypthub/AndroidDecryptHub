@@ -151,8 +151,10 @@ async function resolveLabel(pkg: string): Promise<string> {
 export async function apkAaptDumps(apk: string, files: string[], dumps: string[][]): Promise<string[]> {
   const aapt = findAapt();
   if (!aapt || !apk.startsWith('/')) return dumps.map(() => '');
-  const manifest = await adbOut(`su -c ${shQuote(`unzip -p ${shQuote(apk)} AndroidManifest.xml`)}`);
-  const arsc = await adbOut(`su -c ${shQuote(`unzip -p ${shQuote(apk)} resources.arsc`)}`);
+  let manifest = await adbOut(`su -c ${shQuote(`unzip -p ${shQuote(apk)} AndroidManifest.xml`)}`);
+  if (manifest.length < 8) manifest = await adbOut(`su -c ${shQuote(`unzip -p ${shQuote(apk)} AndroidManifest.xml`)}`);
+  let arsc = await adbOut(`su -c ${shQuote(`unzip -p ${shQuote(apk)} resources.arsc`)}`);
+  if (arsc.length < 8) arsc = await adbOut(`su -c ${shQuote(`unzip -p ${shQuote(apk)} resources.arsc`)}`);
   if (manifest.length < 8 || arsc.length < 8) return dumps.map(() => '');
   const entries = [
     { name: 'AndroidManifest.xml', data: manifest },
