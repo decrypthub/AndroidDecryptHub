@@ -888,6 +888,26 @@ export async function applySelectedFamilies(scope: CaptureSettingsScope & { stop
   return { ok: out.every((row) => row.ok), targets: out };
 }
 
+/**
+ * The local USB sandbox arm: every crypto family plus system detection (y=1), then the
+ * same libc file/sys modules the local example arm uses. Only for com.adh.sandbox apps —
+ * other observed packages keep their companion-delivered policy and just take the arm.
+ */
+export async function armSandboxCapture(sid: string): Promise<CaptureToggle> {
+  const flags = 'd=1,h=1,s=1,a=1,t=1,e=1,y=1';
+  const policy = await agentCmd(sid, 'capture_policy', { families: flags });
+  if (policy?.ok !== true) {
+    return {
+      ok: false, on: false, session: sid, installed: 0, attempted: 0,
+      notInstalled: [], partial: false, complete: false,
+      error: String(policy?.error ?? 'agent refused family policy'), reply: policy,
+    };
+  }
+  const s = sessions.get(sid);
+  if (s) s.policy = flags;
+  return setCapture(sid, true, { fileModule: 'libc.so', sysModule: 'libc.so' });
+}
+
 // Apply the legacy capture.enabled toggle to sessions using the Host defaults.
 // enabled=false → force-stop hooks on sessions that are not in `held`. enabled=true → resume draining only.
 export async function applyCaptureEnabled(held: ReadonlySet<string> = new Set()): Promise<{

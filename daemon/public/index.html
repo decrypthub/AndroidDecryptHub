@@ -3125,7 +3125,7 @@ function panelAppConnection(device){
 }
 function panelDeviceCatalog(data){
   if(data?.ok!==true||!Array.isArray(data.devices)) return [];
-  window.__adhLocalEntry=!!data.localUsb;
+  globalThis.__adhLocalEntry=!!data.localUsb;
   usbTransports=Array.isArray(data.transports)?data.transports.filter(row=>typeof row?.serial==='string'):[];
   if(data.localUsb){
     const model=typeof data.localUsb.model==='string'?data.localUsb.model.trim().slice(0,64):'';

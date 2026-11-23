@@ -1,10 +1,14 @@
-import { execFileSync, execFile } from 'node:child_process';
+import { execFileSync, execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { readdirSync } from 'node:fs';
+import { connect } from 'node:net';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { AGENT_PORT, HTTP_PORT } from './config.ts';
 import { confineDevicePath } from './sandbox_fs.ts';
 import { setDeviceSerial } from './device_bridge.ts';
 import { parseAdbDevices } from './transport/adb_device.ts';
+import { log } from './state.ts';
 
 /** Opt-in, bounded observation of a consenting app that loads its own reporter.
  * Leave the device's application scope and existing reverse routes alone.
@@ -88,6 +92,7 @@ function readLocalObserver(): LocalObserver | null {
   if (!m) throw Error('Expected the existing matching USB reverse; no routes were changed');
   const ownFilesSerial = process.env.ADH_OBSERVE_OWN_FILES === '1' ? serial : undefined;
   const declaredApiSerial = process.env.ADH_USB_APP_INVENTORY === '1' ? serial : undefined;
+  ensureSandboxNetFixture(serial, pkg);
   return { package: pkg, pid, model: model.slice(0, 64), usbSerial:serial, ownFilesSerial, declaredApiSerial };
 }
 
@@ -111,6 +116,40 @@ export function allowedOwnedSave(observer:LocalObserver,root:string,path:string)
   if(usesDemoExternal(observer,root)) return observer.demoExternalEdit===true&&path===OWN_FILE_DEMO_NOTE;
   return !!observer.ownFilesSerial&&observer.fileBrowserOnly===true&&root==='app'&&
     typeof observer.editableText==='string'&&isEditableName(observer.editableText)&&path==='files/'+observer.editableText;
+}
+
+const SANDBOX_PKG_PREFIX = 'com.adh.sandbox';
+const TLS_TEST_PORT = 8762;
+
+let tlsChild: ReturnType<typeof spawn> | null = null;
+
+function spawnTlsTestServer() {
+  if (tlsChild && tlsChild.exitCode === null && !tlsChild.killed) return;
+  const script = join(dirname(fileURLToPath(import.meta.url)), '..', 'tls_test_server.mjs');
+  const child = spawn(process.execPath, [script], { stdio: 'ignore', windowsHide: true });
+  tlsChild = child;
+  child.once('exit', () => { if (tlsChild === child) tlsChild = null; });
+  process.once('exit', () => { try { child.kill(); } catch { /* already gone */ } });
+}
+
+/**
+ * The sandbox network probe dials device-side 127.0.0.1:8762, which must be reversed to
+ * the host TLS test server. Add our route only when absent (never touch existing routes)
+ * and start tls_test_server.mjs when nothing listens on the host port yet.
+ */
+export function ensureSandboxNetFixture(serial: string, pkg: string) {
+  if (!pkg.startsWith(SANDBOX_PKG_PREFIX)) return;
+  try {
+    const port = 'tcp:' + TLS_TEST_PORT;
+    const list = execFileSync('adb', ['-s', serial, 'reverse', '--list'], { encoding: 'utf8', timeout: 5000, windowsHide: true });
+    const have = list.split(/\r?\n/).some(line => line.trim().split(/\s+/).slice(-2).join(' ') === port + ' ' + port);
+    if (!have) execFileSync('adb', ['-s', serial, 'reverse', port, port], { timeout: 5000, windowsHide: true });
+  } catch (e) {
+    log(`[sandbox-net] adb reverse tcp:${TLS_TEST_PORT} 未建立:`, (e as Error).message);
+  }
+  const probe = connect(TLS_TEST_PORT, '127.0.0.1');
+  probe.once('connect', () => probe.destroy());
+  probe.once('error', () => spawnTlsTestServer());
 }
 
 export let localObserver = readLocalObserver();
@@ -147,6 +186,7 @@ export async function retargetObserver(serial: string, pkg: string): Promise<Loc
     declaredApiSerial: process.env.ADH_USB_APP_INVENTORY === '1' ? serial : undefined,
   };
   setDeviceSerial(serial);
+  ensureSandboxNetFixture(serial, pkg);
   return localObserver;
 }
 

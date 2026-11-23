@@ -7,7 +7,7 @@ import { acceptsLocalHello, localObserver, localObserverHost, localViewAllows } 
 import { handleHttp } from './http/router.ts';
 import { sendHttpError } from './http/response_error.ts';
 import { ensureAdbReverse } from './scope_list.ts';
-import { startCaptureLoop, forgetCaptureSession, clearCaptureArmProtect } from './service.ts';
+import { armSandboxCapture, setCapture, startCaptureLoop, forgetCaptureSession, clearCaptureArmProtect } from './service.ts';
 import { applyCaptureSettingsOnConnect } from './settings_service.ts';
 import { initializeHost } from './host_lifecycle.ts';
 import { initializeOperations } from './operation_host.ts';
@@ -87,6 +87,11 @@ const agentServer = net.createServer((sock) => {
       if (!localObserver) void applyCaptureSettingsOnConnect(id).then(result => {
         if (result?.ok === false) log(`[capture] family arm ${id}:`, result.error || 'capture settings not applied');
       }).catch(error => log(`[capture] family arm ${id}:`, (error as Error).message));
+      else if (session.package === localObserver.package) void (session.package.startsWith('com.adh.sandbox')
+        ? armSandboxCapture(id)
+        : setCapture(id, true, { fileModule: 'libc.so', sysModule: 'libc.so' }))
+        .then(result => log(`[capture] example arm ${id}: ok=${result.ok} installed=${result.installed}/${result.attempted}${result.error ? ' ' + result.error : ''}`))
+        .catch(error => log(`[capture] example arm ${id}:`, (error as Error).message));
     } else if (msg.t === 'caps' && session) {
       // Arrives right after the hello (before the maps sample). Stored on the session, never
       // merged from another session: two processes of the same app can run different builds.

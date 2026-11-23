@@ -51,6 +51,7 @@ class MainActivity : Activity() {
 
     private lateinit var logView: TextView
     private lateinit var liveBtn: MaterialButton
+    private lateinit var probeBtn: MaterialButton
     private val logLines = ArrayDeque<String>()
     private val seq = java.util.concurrent.atomic.AtomicInteger(1)
 
@@ -86,6 +87,8 @@ class MainActivity : Activity() {
 
         // 低频加解密流：让 hook/捕获始终有东西可看；需要安静目标时可在「加解密」页停掉。
         JavaCrypto.startLiveDriver()
+        // 系统/网络探针也自动跑：文件 I/O、native 检测、Java 检测、HTTPS、关联流，每 8 秒一轮。
+        AutoProbes.start(applicationContext)
 
         setContentView(buildRoot(pid, loadStatus))
     }
@@ -173,7 +176,7 @@ class MainActivity : Activity() {
             addView(body("pid = $pid"))
             addView(body(loadStatus, muted = true))
             addView(space(4))
-            addView(body("手动点击各标签页即可触发对应能力；控制台请看 Web UI / ADH Manager。", muted = true))
+            addView(body("加解密每 2 秒、文件/网络/检测每 8 秒自动触发；各标签页也可手动点击。控制台请看 Web UI / ADH Manager。", muted = true))
         })
         addView(card {
             addView(sectionTitle("AI 输入测试"))
@@ -244,6 +247,7 @@ class MainActivity : Activity() {
             ))
             addView(btnRow(
                 mbutton("文件读写(Hook)") { trigger("文件读写") { FileIO.run() } },
+                mbutton(probeLabel()) { toggleProbes() }.also { probeBtn = it },
             ))
         })
     }
@@ -375,6 +379,14 @@ class MainActivity : Activity() {
         if (JavaCrypto.liveRunning()) { JavaCrypto.stopLive(); logLine("自动加密流已停止") }
         else { JavaCrypto.startLiveDriver(); logLine("自动加密流已启动（每2秒一种算法）") }
         liveBtn.text = liveLabel()
+    }
+
+    private fun probeLabel(): String = if (AutoProbes.running()) "停止系统/网络自动流" else "开启系统/网络自动流"
+
+    private fun toggleProbes() {
+        if (AutoProbes.running()) { AutoProbes.stop(); logLine("系统/网络自动流已停止") }
+        else { AutoProbes.start(applicationContext); logLine("系统/网络自动流已启动（每8秒一轮）") }
+        probeBtn.text = probeLabel()
     }
 
     // Run a trigger off the UI thread; append start + result to the on-device log.
