@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { isDeepStrictEqual, promisify } from 'node:util';
 import { crc32 } from 'node:zlib';
 import { shQuote } from './sandbox_fs.ts';
+import { deviceScopeGet, deviceScopeReplace, deviceSerial } from './device_bridge.ts';
 
 const execFileP = promisify(execFile);
 const SCOPE_PATH = '/data/adb/adh/scope.json';
@@ -375,8 +376,25 @@ const scopeIO: ScopeIO = {
   },
 };
 
+// The adh.device/1 channel is primary; adb+su is the fallback when the device
+// daemon is unreachable. RPC failure replies surface real codes (STALE_SCOPE…).
+async function rpcScopeGet(): Promise<any | null> {
+  const serial = deviceSerial();
+  return serial ? deviceScopeGet(serial).catch(() => null) : null;
+}
+
 /** Full scope.json (packages + version/mode), read through root. Never throws: errors are reported. */
 export async function readScopeFile(): Promise<ScopeFile> {
+  const snap = await rpcScopeGet();
+  if (snap?.document && typeof snap.document === 'object') {
+    const doc = snap.document;
+    return {
+      packages: parseScopePackages(JSON.stringify(doc)),
+      version: Number(doc.version) || 2,
+      mode: typeof doc.mode === 'string' && doc.mode ? doc.mode : 'allowlist',
+      error: null,
+    };
+  }
   try {
     const raw = await adbShell(`su -c 'cat ${SCOPE_PATH}'`);
     const start = raw.indexOf('{');
@@ -440,6 +458,26 @@ export async function writeScopePackages(
   io: ScopeIO = scopeIO,
 ): Promise<{ ok: boolean; packages: string[]; error?: string }> {
   const clean = [...new Set(packages.map((p) => p.trim()).filter((p) => PKG_RE.test(p) && p !== MANAGER_PKG))];
+  const snap = io === scopeIO ? await rpcScopeGet() : null;
+  if (snap?.document && typeof snap.scopeRevision === 'string' && Number.isSafeInteger(snap.stateRevision)) {
+    try {
+      const next = scopeWithPackages(JSON.stringify(snap.document), clean, meta);
+      const reply = await deviceScopeReplace(deviceSerial(), next, snap.scopeRevision, snap.stateRevision);
+      const doc = reply?.result?.document;
+      if (!doc) return { ok: false, packages: clean, error: `device scope write failed: ${reply?.code || reply?.state || 'no result'}` };
+      const got = parseScopePackages(JSON.stringify(doc));
+      // The device normalizes the document on write (policy merge, key order), so compare the
+      // package set, not the bytes — the RPC write itself is atomic and CAS-checked.
+      const want = new Set(clean);
+      if (reply.state !== 'succeeded' || got.length !== want.size || got.some(p => !want.has(p))) {
+        return { ok: false, packages: got, error: `scope write did not stick (state=${reply?.state || 'unknown'})` };
+      }
+      cache = { at: Date.now(), packages: got, error: null };
+      return { ok: true, packages: got };
+    } catch (e) {
+      return { ok: false, packages: clean, error: (e instanceof Error ? e.message : String(e)).split('\n')[0].slice(0, 240) };
+    }
+  }
   try {
     // Re-read immediately before writing. Missing/corrupt/unreadable input refuses the update.
     const next = scopeWithPackages(await io.read(), clean, meta);

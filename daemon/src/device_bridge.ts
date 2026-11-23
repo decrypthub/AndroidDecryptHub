@@ -22,13 +22,16 @@ export function deviceRpc(serial:string):Promise<DeviceConnection|null>{
   });
 }
 
+import {randomUUID} from 'node:crypto';
+
+function peerTarget(c:DeviceConnection){return {deviceId:c.peer.deviceId,bootId:c.peer.bootId,daemonInstanceId:c.peer.daemonInstanceId};}
+
 // 'none' = channel answered and the package has no renderable icon;
 // null = channel unavailable (caller falls back to host APK parsing).
 export async function deviceIcon(serial:string,pkg:string):Promise<Buffer|'none'|null>{
   const c=await deviceRpc(serial);
   if(!c)return null;
-  const target={deviceId:c.peer.deviceId,bootId:c.peer.bootId,daemonInstanceId:c.peer.daemonInstanceId};
-  const reply=await c.rpc.request('legacy.icon',{package:pkg},target);
+  const reply=await c.rpc.request('legacy.icon',{package:pkg},peerTarget(c));
   const b64=typeof reply?.base64==='string'?reply.base64:'';
   return b64?Buffer.from(b64,'base64'):'none';
 }
@@ -36,7 +39,7 @@ export async function deviceIcon(serial:string,pkg:string):Promise<Buffer|'none'
 export async function deviceApplications(serial:string):Promise<any[]|null>{
   const c=await deviceRpc(serial);
   if(!c)return null;
-  const target={deviceId:c.peer.deviceId,bootId:c.peer.bootId,daemonInstanceId:c.peer.daemonInstanceId};
+  const target=peerTarget(c);
   const all:any[]=[];let offset=0;
   for(;;){
     const reply=await c.rpc.request('applications.list',{offset,limit:200},target);
@@ -47,4 +50,19 @@ export async function deviceApplications(serial:string):Promise<any[]|null>{
     offset=next;
   }
   return all;
+}
+
+export async function deviceScopeGet(serial:string):Promise<any|null>{
+  const c=await deviceRpc(serial);
+  if(!c)return null;
+  return c.rpc.request('scope.get',{},peerTarget(c));
+}
+
+// CAS'd by scopeRevision (document generation) and expectedRevision (device state).
+// Failure replies reject with DeviceError carrying the device-side code (STALE_SCOPE, ...).
+export async function deviceScopeReplace(serial:string,document:unknown,scopeRevision:string,expectedRevision:number):Promise<any|null>{
+  const c=await deviceRpc(serial);
+  if(!c)return null;
+  const meta={operationId:randomUUID(),expectedRevision,actor:'panel',budgetMs:15000};
+  return c.rpc.request('scope.replace',{document,scopeRevision},peerTarget(c),meta);
 }
