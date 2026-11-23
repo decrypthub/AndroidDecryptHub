@@ -35,7 +35,13 @@ async function apkIcon(pkg: string): Promise<{ body: Buffer; type: string } | nu
     await ensureCatalogIdentity(pkg);
     known = catalogIcon(pkg);
   }
-  if (!known || !known.apk) return null;
+  if (!known) return null;
+  if (!known.apk) {
+    const out = await adbOut(`pm path ${pkg}`).catch(() => Buffer.alloc(0));
+    const match = /^package:(.+\.apk)\s*$/m.exec(out.toString('utf8'));
+    if (!match) return null;
+    known = { ...known, apk: match[1].trim() };
+  }
   let path = known.path;
   if (!/\.(png|webp)$/i.test(path)) {
     const resolved = await resolveApkIcon(known.apk);

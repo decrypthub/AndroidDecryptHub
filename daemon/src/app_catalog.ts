@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { apkBadging, applicationLabel, pickBadgingIcon } from './scope_list.ts';
+import { deviceApplications, deviceSerial } from './device_bridge.ts';
 
 const execFileP = promisify(execFile);
 const PKG_RE = /^[a-zA-Z][a-zA-Z0-9_]*(?:\.[a-zA-Z0-9_]+)*$/;
@@ -71,6 +72,26 @@ function runningPackages(ps: string, focus: string): Map<string, '' | 'backgroun
 }
 
 async function refreshList(): Promise<void> {
+  const serial = deviceSerial();
+  const rpcApps = serial ? await deviceApplications(serial).catch(() => null) : null;
+  if (rpcApps) {
+    const [processes, activity] = await Promise.all([
+      adbShell('ps -A'),
+      adbShell('dumpsys activity activities'),
+    ]);
+    for (const app of rpcApps) if (app?.p && PKG_RE.test(app.p)) labels.set(app.p, app.l || app.p);
+    const focus = /topResumedActivity=ActivityRecord\{[^\n]*\su\d+\s+([A-Za-z0-9_.]+)\//.exec(activity)?.[1] || '';
+    const running = runningPackages(processes, focus);
+    listed = rpcApps
+      .filter(app => app?.p && PKG_RE.test(app.p))
+      .map(app => ({
+        package: app.p as string, apk: '', label: labels.get(app.p) || '',
+        system: !!app.s, running: running.get(app.p) || '', icon: icons.get(app.p) || '',
+      }));
+    listedAt = Date.now();
+    void pumpIdentity();
+    return;
+  }
   const [user, system, processes, activity, manager] = await Promise.all([
     adbShell('pm list packages -f -3'),
     adbShell('pm list packages -f -s'),
