@@ -18,7 +18,13 @@
     --cyan:#79d6e8; --pink:#ff9fbc; --green:#8bd6a8; --danger:#ff788c; --teal:#5ce1c9;
     color-scheme: dark;
   }
-  * { box-sizing:border-box; }
+  * { box-sizing:border-box; scrollbar-width:thin; scrollbar-color:#3c4452 transparent; }
+  *::-webkit-scrollbar { width:10px; height:10px; }
+  *::-webkit-scrollbar-track { background:transparent; }
+  *::-webkit-scrollbar-thumb { background:#3c4452; border:3px solid transparent; border-radius:8px; background-clip:padding-box; }
+  *::-webkit-scrollbar-thumb:hover { background:#5c6574; border:3px solid transparent; background-clip:padding-box; }
+  *::-webkit-scrollbar-corner { background:transparent; }
+  [hidden] { display:none !important; }
   html, body { margin:0; padding:0; height:100%; }
   body { display:flex; flex-direction:column; height:100vh; overflow:hidden; min-width:320px;
     background:var(--bg); color:var(--ink); line-height:1.5; font-size:13px; letter-spacing:0;
@@ -46,15 +52,19 @@
   .app-context { position:relative; min-width:0; }
   .context-label { color:var(--muted); font-size:11px; white-space:nowrap; }
   .app-affiliation { margin:0 0 9px; color:var(--muted); font-size:11px; }
-  .process-trigger { display:grid; grid-template-columns:minmax(0,1fr) auto; grid-template-rows:auto auto; column-gap:10px; min-width:180px; max-width:280px; min-height:38px; padding:4px 10px; text-align:left; color:var(--ink-2); background:transparent; border:1px solid transparent; border-radius:4px; cursor:pointer; }
+  .process-trigger { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; column-gap:10px; min-width:180px; max-width:280px; min-height:38px; padding:4px 10px; text-align:left; color:var(--ink-2); background:transparent; border:1px solid transparent; border-radius:4px; cursor:pointer; }
   .process-trigger:hover, .process-trigger[aria-expanded="true"] { border-color:transparent; background:rgba(255,255,255,.04); color:var(--ink); }
-  .process-trigger .proc-primary { overflow:hidden; color:var(--ink); font-size:13px; font-weight:650; text-overflow:ellipsis; white-space:nowrap; }
-  .process-trigger .proc-secondary { grid-column:1; overflow:hidden; color:var(--muted); font:10px/1.3 ui-monospace,SFMono-Regular,Consolas,monospace; text-overflow:ellipsis; white-space:nowrap; }
-  .process-trigger .menu-chevron { grid-column:2; grid-row:1 / 3; align-self:center; color:var(--muted); }
+  .process-trigger .proc-primary { display:flex; align-items:center; gap:8px; min-width:0; overflow:hidden; color:var(--ink); font-size:13px; font-weight:650; }
+  .process-trigger .proc-face { width:22px; height:22px; flex:none; }
+  .process-trigger .proc-face .app-dialog-letter { font-size:12px; }
+  .process-trigger .proc-text { display:flex; flex-direction:column; min-width:0; line-height:1.25; }
+  .process-trigger #procLabel { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .process-trigger .proc-pkg { overflow:hidden; color:var(--muted); font-size:10px; font-weight:400; text-overflow:ellipsis; white-space:nowrap; }
+  .process-trigger .menu-chevron { grid-column:2; align-self:center; color:var(--muted); }
   .app-choices { max-height:190px; overflow:auto; }
   .app-sessions { margin-top:8px; padding:9px 7px 4px; border-top:1px solid var(--line-soft); }
   .app-context .proc-title { margin:3px 7px 7px; color:var(--muted); font-size:11px; font-weight:600; }
-  .app-sessions .proc-title { margin-inline:0; }
+  .app-sessions summary { padding:3px 0 8px; color:var(--ink-2); font-size:12px; font-weight:600; }
   .app-sessions .cap-state-pill { display:inline-block; margin:0 0 8px; }
   .app-item { box-sizing:border-box; display:flex; flex-direction:column; align-items:flex-start; gap:2px; width:100%; min-height:44px; padding:7px 10px; color:var(--ink-2); background:transparent; border:0; border-radius:3px; text-align:left; cursor:pointer; }
   .app-item:hover, .app-item.active { color:var(--ink); background:var(--surface-3); }
@@ -63,6 +73,14 @@
   .app-item .app-state { flex:none; color:var(--muted); font-size:10px; }
   .app-item .app-state.on { color:var(--green); }
   .app-item .app-pkg { overflow:hidden; max-width:100%; color:var(--muted); font:10px/1.3 ui-monospace,SFMono-Regular,Consolas,monospace; text-overflow:ellipsis; white-space:nowrap; }
+  .app-section { margin:8px 8px 2px; color:var(--muted); font-size:11px; font-weight:600; }
+  .app-row { display:flex; align-items:stretch; gap:2px; }
+  .app-row .app-item { flex:1; width:auto; min-width:0; }
+  .app-inject { flex:none; width:32px; min-height:44px; padding:0; color:var(--muted); background:transparent; border:0; border-radius:3px; cursor:pointer; }
+  .app-inject::before { content:''; display:inline-block; width:13px; height:13px; border:1px solid var(--line); border-radius:2px; }
+  .app-inject[aria-pressed="true"]::before { background:var(--blue); border-color:var(--blue); box-shadow:inset 0 0 0 2px #11151c; }
+  .app-inject:disabled { opacity:.45; cursor:default; }
+  .app-load { width:calc(100% - 12px); margin:6px; }
   .app-empty { padding:8px 10px; color:var(--muted); font-size:12px; }
   .procinfo { display:grid; grid-template-columns:auto minmax(0,1fr); gap:8px 14px; margin:0; font:11px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace; }
   .procinfo dt { color:var(--muted); }
@@ -74,8 +92,6 @@
      blank. Give the popup an explicit opaque background/foreground pair. */
   select option { background:#11151c; color:var(--ink); }
   select option:checked { background:var(--surface-3); color:var(--ink); }
-  .app-events { margin-top:10px; max-height:132px; overflow:auto; color:var(--muted); font-size:11px; line-height:1.5; }
-  .app-events div { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .session-rows { margin-top:8px; max-height:150px; overflow:auto; color:var(--muted); font-size:11px; }
   .session-row { display:flex; justify-content:space-between; gap:8px; padding:4px 0; }
   .header-actions { display:flex; align-items:center; gap:8px; margin-left:auto; min-width:0; }
@@ -88,7 +104,31 @@
   .device-picker .device-menu { left:auto; right:0; width:310px; max-width:calc(100vw - 24px); max-height:50dvh; overflow:auto; }
   .device-picker .device-menu::before { display:none; }
   .device-menu-label { margin:4px 7px 7px; color:var(--muted); font-size:11px; font-weight:600; }
-  .app-menu-search { width:calc(100% - 12px); margin:0 6px 7px; background:var(--surface); }
+  .app-dialog { width:min(880px,96vw); height:min(640px,88dvh); padding:0; overflow:hidden; border:1px solid var(--line); border-radius:10px; background:var(--surface); color:var(--ink); }
+  .app-dialog[open] { display:flex; }
+  .app-dialog::backdrop { background:rgba(6,7,10,.78); }
+  .app-dialog-side { width:168px; flex:none; display:flex; flex-direction:column; gap:4px; padding:16px 10px; border-right:1px solid var(--line-soft); background:var(--bg); }
+  .app-dialog-side h2 { margin:0 8px 12px; font-size:16px; }
+  .app-dialog-side button { display:flex; align-items:center; min-height:36px; padding:0 10px; color:var(--muted); background:transparent; border:0; border-radius:6px; text-align:left; cursor:pointer; }
+  .app-dialog-side button[aria-pressed="true"] { color:var(--ink); background:var(--surface-2); }
+  .app-dialog-main { flex:1; min-width:0; min-height:0; display:flex; flex-direction:column; }
+  .app-dialog-card { display:flex; align-items:center; gap:12px; padding:14px 16px 10px; border-bottom:1px solid var(--line-soft); }
+  .app-face { position:relative; width:40px; height:40px; flex:none; }
+  .app-face img, .app-face .app-dialog-letter { width:40px; height:40px; border-radius:9px; }
+  .app-face img { position:absolute; inset:0; object-fit:cover; background:var(--surface-2); }
+  .app-dialog-letter { display:grid; place-items:center; color:var(--ink); background:var(--surface-2); font-size:16px; font-weight:650; }
+  .app-dialog-id { min-width:0; flex:1; display:flex; flex-direction:column; gap:2px; }
+  .app-dialog-id strong, .app-item .app-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .app-dialog-id strong { font-size:16px; }
+  .app-dialog-id span, .app-item .app-pkg { overflow:hidden; color:var(--muted); font:11px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace; text-overflow:ellipsis; white-space:nowrap; }
+  .app-dialog-actions { display:flex; gap:8px; }
+  .app-dialog-actions button, .app-dialog-card .set-close-x { min-height:32px; padding:0 12px; color:var(--ink-2); background:transparent; border:1px solid var(--line); border-radius:4px; cursor:pointer; }
+  .app-dialog .app-menu-search { width:auto; margin:10px 16px 0; }
+  .app-dialog .app-choices { flex:1; max-height:none; overflow:auto; min-height:0; padding:8px 10px 12px 8px; }
+  .app-dialog .app-item { flex-direction:row; align-items:center; gap:10px; min-height:52px; }
+  .app-dialog .app-copy { display:flex; flex-direction:column; min-width:0; flex:1; }
+  .app-item .app-face { width:32px; height:32px; }
+  .app-item .app-face img, .app-item .app-dialog-letter { width:32px; height:32px; border-radius:7px; font-size:13px; }
   .menu-wrap { position:relative; }
   .popover { display:none; position:absolute; top:calc(100% + 7px); right:0; z-index:80; min-width:210px; padding:6px; color:var(--ink-2); background:#11151c; border:1px solid #4a5260; border-radius:5px; box-shadow:0 18px 50px rgba(0,0,0,.58); }
   .popover.show { display:block; }
@@ -106,7 +146,10 @@
   .icon-button { display:inline-grid; width:34px; min-width:34px; padding:0; place-items:center; font-size:18px; line-height:1; }
 
   /* ---- tabbar（只绑 #nav，避免误伤设置里的 <nav class="set-nav">） ---- */
-  #nav { display:flex; gap:0; height:51px; padding:0 12px; background:var(--bg); border-bottom:1px solid var(--line-soft); overflow-x:auto; overflow-y:hidden; scrollbar-width:none; }
+  .workspace-nav { display:flex; flex:0 0 auto; flex-direction:row; align-items:center; gap:12px; position:relative; z-index:12; min-width:0; height:48px; padding:0 12px; background:var(--bg); border-bottom:1px solid var(--line-soft); }
+  #nav { display:flex; flex:0 1 auto; min-width:0; max-width:100%; gap:0; height:48px; padding:0; overflow-x:auto; overflow-y:hidden; scrollbar-width:none; }
+  #nav::-webkit-scrollbar { display:none; }
+  #nav button { flex:0 0 auto; }
   #nav button { position:relative; background:none; border:none; color:var(--muted); padding:0 16px; font-size:12px; cursor:pointer; border-bottom:2px solid transparent; white-space:nowrap; }
   #nav button:hover { color:var(--ink); background:transparent; }
   #nav button:disabled,.set-nav button:disabled { color:var(--muted); opacity:.5; cursor:default; }
@@ -117,10 +160,11 @@
   .module-icon { width:13px; height:13px; margin-right:7px; vertical-align:-2px; fill:none; stroke:currentColor; stroke-width:1.4; stroke-linecap:round; stroke-linejoin:round; }
 
   /* ---- filter toolbar ---- */
-  .filters { display:none; flex-direction:column; justify-content:center; gap:8px; min-height:61px; padding:8px 16px; background:var(--bg); border-bottom:1px solid var(--line-soft); }
+  .filters { display:none; flex:1 1 360px; width:auto; min-width:0; min-height:0; margin:0 0 0 auto; padding:0; align-items:center; }
   .filters.show { display:flex; }
   .toolbar-main { display:flex; width:100%; align-items:center; gap:10px; }
-  .toolbar-search { display:flex; align-items:center; gap:8px; flex:0 1 350px; min-width:168px; }
+  .toolbar-search { display:flex; align-items:center; gap:8px; flex:1 1 280px; min-width:150px; }
+  .filter-wrap { position:static; flex:none; }
   .search-field { position:relative; flex:1; min-width:0; color:var(--muted); }
   .search-field svg { position:absolute; top:50%; left:9px; transform:translateY(-50%); width:15px; height:15px; fill:none; stroke:currentColor; stroke-width:1.5; pointer-events:none; }
   .toolbar-actions { display:flex; gap:7px; align-items:center; flex-wrap:wrap; margin-left:auto; }
@@ -131,8 +175,13 @@
   .filter-badge { display:inline-grid; min-width:17px; height:17px; padding:0 4px; place-items:center; color:#07101f; background:var(--blue); border-radius:3px; font-size:10px; }
   .filter-badge:empty { display:none; }
   .filter-toggle[aria-expanded='true'] .menu-chevron { display:inline-block; transform:rotate(180deg); }
-  .advanced-filters { display:flex; align-items:center; gap:12px; min-height:39px; padding-top:8px; border-top:1px solid var(--line-soft); flex-wrap:wrap; }
-  .advanced-filters[hidden] { display:none; }
+  .advanced-filters { position:absolute; top:calc(100% + 6px); right:12px; z-index:80; display:grid; gap:10px; box-sizing:border-box; width:min(360px,calc(100% - 24px)); max-height:65dvh; padding:12px; overflow:auto; border:1px solid var(--line); border-radius:6px; background:var(--surface); box-shadow:0 14px 36px rgba(0,0,0,.35); }
+  .advanced-filters [hidden],.advanced-filters[hidden] { display:none !important; }
+  .advanced-filter-head { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+  .advanced-filter-head strong { color:var(--ink); font-size:12px; }
+  .system-filter { display:grid; gap:6px; min-width:0; margin:0; padding:0; border:0; }
+  .system-filter legend { padding:0; margin-bottom:5px; color:var(--muted); font-size:11px; }
+  .system-filter .detect-radar { padding:0; margin:0; font-size:11px; }
   .filter-field { display:inline-flex; align-items:center; gap:7px; }
   .size-filter { display:flex; align-items:center; gap:7px; flex-wrap:wrap; }
   .size-filter input[type=number] { width:70px; }
@@ -185,27 +234,41 @@
   .record-library .dump-table { margin-top:16px; }
   .record-library td { overflow-wrap:anywhere; }
   .record-library .empty { border:1px solid var(--line-soft); border-radius:6px; margin-top:16px; }
-  .app-directory { flex:1; min-width:0; overflow:auto; padding:20px; }
-  .app-directory-inner { max-width:1080px; margin:0 auto; }
-  .app-directory h2 { margin:0 0 4px; }
-  .directory-tools { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin:15px 0 10px; }
-  .directory-path { display:flex; min-width:0; flex:1; flex-wrap:wrap; align-items:center; gap:4px; overflow-wrap:anywhere; }
+  .app-directory { flex:1; min-width:0; min-height:0; display:flex; overflow:auto; padding:16px; }
+  .app-directory-inner { display:flex; flex:1; flex-direction:column; gap:12px; min-width:0; min-height:0; }
+  .directory-pane-head { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; }
+  .directory-unavailable { align-self:stretch; padding:12px; border:1px solid var(--line-soft); border-radius:6px; color:var(--muted); font-size:12px; }
+  .directory-path { display:flex; min-width:0; flex-wrap:wrap; align-items:center; gap:4px; overflow-wrap:anywhere; }
+  .directory-root { max-width:100%; min-height:30px; }
+  .directory-editor { flex:1; min-height:160px; min-width:0; resize:vertical; padding:10px; background:var(--bg); font:12px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace; }
   .directory-crumb { padding:3px 5px; border:0; background:none; color:var(--blue); font-size:12px; cursor:pointer; }
   .directory-crumb[aria-current] { color:var(--ink); font-weight:600; cursor:default; }
-  .directory-workspace { display:grid; grid-template-columns:minmax(0,1.05fr) minmax(0,1fr); border:1px solid var(--line-soft); border-radius:6px; min-height:280px; overflow:hidden; }
+  .directory-workspace { display:grid; flex:1; min-height:280px; grid-template-columns:minmax(300px,.83fr) minmax(0,1.17fr); border:1px solid var(--line-soft); border-radius:6px; overflow:hidden; }
   .directory-workspace[hidden] { display:none; }
-  .directory-list { min-width:0; background:var(--bg); }
+  .directory-list { display:flex; flex-direction:column; min-width:0; min-height:0; background:var(--bg); }
+  .directory-list-head { display:grid; gap:7px; padding:10px 12px 8px; border-bottom:1px solid var(--line-soft); }
+  .directory-pane-head h3 { margin:0; color:var(--ink-2); font-size:12px; font-weight:650; letter-spacing:normal; text-transform:none; overflow-wrap:anywhere; }
+  .directory-list-head .set-status { margin:0; }
+  .directory-rows { min-height:0; flex:1; overflow:auto; }
   .directory-list-table { width:100%; table-layout:fixed; font-variant-numeric:tabular-nums; }
+  .directory-list-table th { position:sticky; top:0; z-index:1; background:var(--chrome); }
   .directory-list-table th,.directory-list-table td { padding:7px 9px; border-bottom:1px solid var(--line-soft); text-align:left; }
   .directory-list-table tbody tr:hover { background:var(--surface); }
+  .directory-list-table tbody tr.selected { background:var(--surface-2); }
+  .directory-list-table tbody tr.selected .directory-entry { color:var(--blue); }
   .directory-list-table th:nth-child(2) { width:70px; }
   .directory-list-table th:nth-child(3) { width:126px; }
   .directory-entry { max-width:100%; border:none; padding:0; background:none; text-align:left; color:var(--ink); overflow-wrap:anywhere; cursor:pointer; }
   .directory-entry[data-directory="true"] { color:var(--blue); }
-  .directory-preview { min-width:0; padding:12px; border-left:1px solid var(--line-soft); background:var(--surface); }
-  .directory-preview h3 { margin:0 0 8px; overflow-wrap:anywhere; text-transform:none; letter-spacing:0; }
-  .directory-preview pre { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; min-width:0; }
-  .list-pane > .system-kinds { flex:none; display:flex; flex-wrap:wrap; gap:6px; padding:8px 12px; border-bottom:1px solid var(--line-soft); }
+  .directory-preview { display:flex; flex-direction:column; gap:8px; min-width:0; min-height:0; padding:12px; border-left:1px solid var(--line-soft); background:var(--surface); }
+  .directory-preview-actions { display:flex; align-items:center; flex-wrap:wrap; gap:7px; }
+  .directory-readonly { padding:2px 5px; color:var(--muted); border:1px solid var(--line-soft); border-radius:4px; font-size:11px; white-space:nowrap; }
+  #appPreviewSaveCopy:disabled { opacity:.5; cursor:default; }
+  .directory-preview .set-status { margin:0; overflow-wrap:anywhere; }
+  .directory-preview pre { flex:1; margin:0; min-width:0; min-height:0; white-space:pre-wrap; word-break:normal; overflow-wrap:anywhere; overflow:auto; }
+  .system-kinds { display:flex; flex-wrap:wrap; gap:6px; }
+  .system-list-empty { margin:12px; padding:11px 12px; display:grid; gap:3px; border:1px dashed var(--line-soft); border-radius:6px; color:var(--muted); font-size:12px; line-height:1.55; }
+  .system-list-empty strong { color:var(--ink-2); font-weight:600; }
   .system-kinds button { min-height:28px; padding:0 8px; border:1px solid var(--line-soft); border-radius:4px; background:var(--chrome); color:var(--muted); cursor:pointer; font-size:11px; }
   .system-kinds button[aria-pressed="true"] { color:var(--blue); border-color:var(--line); background:var(--surface-2); }
   .workspace-hidden[hidden] { display:none !important; }
@@ -213,6 +276,21 @@
   .capture-workspace .io-section.in-card { border-left-color:var(--blue); }
   .capture-workspace .io-section.out-card { border-left-color:var(--coral); }
   .capture-workspace .io-card-head { justify-content:space-between; margin:-12px -12px 8px; padding:8px 12px; background:var(--surface-2); }
+  .capture-payloads { display:grid; grid-template-columns:1fr; align-items:start; gap:12px; margin:16px 0 18px; }
+  .capture-workspace .capture-payload { margin:0; min-width:0; }
+  .capture-payload .io-card-head { border-bottom:1px solid var(--line-soft); margin-bottom:10px; }
+  .capture-payload .io-meta { font-size:11px; font-variant-numeric:tabular-nums; }
+  .payload-controls { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:6px; margin-bottom:8px; }
+  .payload-formats { display:flex; flex-wrap:wrap; gap:3px; }
+  .capture-payload .payload-formats button { border-color:transparent; padding:3px 7px; white-space:nowrap; color:var(--muted); }
+  .capture-payload .payload-formats button[aria-pressed="true"] { border-color:var(--line); background:var(--surface-2); color:var(--ink); font-weight:600; }
+  .capture-payload .payload-controls button:focus-visible { outline:2px solid var(--blue); outline-offset:2px; }
+  .capture-payload .payload-copy { margin-left:auto; display:inline-flex; align-items:center; gap:4px; }
+  .payload-copy svg { width:12px; height:12px; fill:none; stroke:currentColor; stroke-width:1.4; }
+  .capture-payload .payload-value { min-width:0; max-height:280px; padding:8px 9px; border-color:var(--line-soft); background:var(--surface); line-height:1.65; white-space:pre-wrap; word-break:normal; overflow-wrap:anywhere; }
+  .capture-payload .payload-value[data-format="dump"] { white-space:pre; overflow-wrap:normal; }
+  .payload-note { margin:7px 0 0; color:var(--muted); font-size:11px; line-height:1.5; }
+  #tb-clear:disabled { opacity:.5; cursor:default; }
   .capture-overview { margin:16px 0 0; }
   .capture-overview h3 { margin:0 0 8px; color:var(--ink-2); font-size:12px; font-weight:650; letter-spacing:normal; }
   .capture-facts { display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:8px; margin:0; }
@@ -242,7 +320,7 @@
   /* ---- capture rows（对齐 iOS workbench：左色条 + 透明胶囊，最新在上） ---- */
   .row { min-height:70px; padding:10px 14px; background:transparent; border-bottom:1px solid var(--line-soft); border-left:3px solid transparent; cursor:pointer; }
   .row:hover { background:rgba(255,255,255,.035); }
-  .row.selected { background:rgba(120,169,255,.08); border-left-color:var(--blue); box-shadow:none; }
+  .row.selected { background:rgba(120,169,255,.08); box-shadow:none; }
   .row .top { display:flex; gap:10px; align-items:center; font-size:12px; }
   .row .seq { color:var(--muted); min-width:42px; font-variant-numeric:tabular-nums; }
   .row .algo { font-weight:650; color:var(--ink); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -269,8 +347,14 @@
   .row.cat-aead { border-left-color:var(--teal); }
   .row.cat-file { border-left-color:var(--coral); }   .row.cat-sys { border-left-color:var(--lilac); }
   .row.cat-net { border-left-color:var(--cyan); }     .row.cat-other { border-left-color:#3a3a3a; }
-  .capture-workspace .row:not(.selected) { border-left-color:transparent; }
-  .row.selected { border-left-color:var(--blue); }
+  .row.cat-digest .algo { color:var(--green); }
+  .row.cat-hmac .algo { color:var(--blue); }
+  .row.cat-sym .algo { color:var(--amber); }
+  .row.cat-asym .algo { color:var(--lilac); }
+  .row.cat-aead .algo { color:var(--teal); }
+  .row.cat-file .algo { color:#e3d37c; }
+  .row.cat-sys .algo { color:#b8a5ff; }
+  .row.cat-net .algo { color:var(--cyan); }
   .caprow { cursor:pointer; }
   .row .pill { padding:0 2px; border:0; border-radius:0; background:transparent; font-size:11px; font-weight:600; }
   .row .pill.digest { color:var(--green); } .row .pill.hmac { color:var(--blue); }
@@ -326,18 +410,20 @@
   .files-head button:hover { color:var(--ink); background:rgba(255,255,255,.04); border-color:#646e7d; }
   .files-breadcrumb { flex:1; min-width:0; font-size:12px; color:var(--muted); word-break:break-all; }
   .files-breadcrumb a { color:var(--blue); text-decoration:none; }
+  .files-breadcrumb a + a::before { content:'/'; color:#484f58; margin:0 1px; }
   .files-breadcrumb a:hover { text-decoration:underline; }
   .files-breadcrumb .sep { color:#484f58; }
   .files-list { overflow-y:auto; flex:1; }
-  .files-row { min-height:0; }
-  .files-row .top { display:flex; gap:8px; align-items:center; font-size:12px; }
-  .files-row .files-icon { color:var(--muted); font-size:11px; flex-shrink:0; width:28px; font-variant:all-small-caps; letter-spacing:.04em; }
-  .files-row .files-icon.dir { color:#d4c95a; }
+  .files-row { display:flex; align-items:center; gap:10px; min-height:36px; padding:0 12px; border-bottom:1px solid var(--line-soft); }
+  .files-row:hover, .files-row.selected { background:rgba(255,255,255,.04); }
+  .files-row .top { display:flex; gap:8px; align-items:center; min-width:0; flex:1; flex-wrap:nowrap; font-size:12px; }
+  .files-row .files-glyph { width:18px; height:18px; flex:none; fill:none; stroke:var(--muted); stroke-width:1.4; stroke-linejoin:round; stroke-linecap:round; }
+  .files-row .files-glyph.dir { stroke:#e3d37c; }
   .files-row .name { font-weight:500; color:var(--ink-2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
   .files-row .files-actions { display:flex; gap:6px; flex-shrink:0; }
   .files-row .files-actions button, .files-row .files-actions a { min-height:24px; padding:2px 8px; color:var(--muted); background:transparent; border:1px solid var(--line); border-radius:3px; font-size:11px; cursor:pointer; text-decoration:none; display:inline-flex; align-items:center; }
   .files-row .files-actions button:hover, .files-row .files-actions a:hover { color:var(--ink); background:rgba(255,255,255,.04); }
-  .files-row .n { color:var(--muted); font-size:11px; margin-top:2px; padding-left:36px; }
+  .files-row .n { flex:none; color:var(--muted); font-size:11px; margin:0; padding:0; white-space:nowrap; }
   .files-preview-head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:14px 0 10px; position:sticky; top:0; background:var(--bg); z-index:1; border-bottom:1px solid var(--line-soft); margin-bottom:10px; }
   .files-preview-head .path { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:12px; color:var(--ink-2); word-break:break-all; flex:1; }
   #filesPreviewWrap { position:relative; }
@@ -446,7 +532,6 @@
   .set-footer[hidden] { display:none; }
   .set-footer-state { min-width:0; }
   .set-footer .set-status { min-height:0; margin:0; font-size:11px; }
-  .set-footer-count { margin:0 0 2px; color:var(--ink-2); font-size:12px; font-variant-numeric:tabular-nums; }
   .set-page[hidden] { display:none; }
   .set-page-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:10px; }
   .set-preferences { margin-top:12px; }
@@ -498,10 +583,10 @@
   .set-algorithm-entry summary strong { display:block; overflow-wrap:anywhere; font-weight:650; }
   .set-algorithm-meta { display:block; color:var(--muted); font-size:11px; }
   .set-algorithm-methods { list-style:none; margin:0 0 8px 15px; padding:0 9px; border-left:1px solid var(--line); }
-  .set-algorithm-methods li { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:6px; padding:6px 0; }
+  .set-algorithm-methods li { padding:6px 0; }
   .set-algorithm-methods li + li { border-top:1px solid var(--line-soft); }
   .set-algorithm-methods dl { display:grid; grid-template-columns:max-content minmax(0,1fr); gap:2px 8px; margin:0; }
-  .set-algorithm-methods dt,.set-algorithm-method-count { color:var(--muted); font-size:11px; white-space:nowrap; }
+  .set-algorithm-methods dt { color:var(--muted); font-size:11px; white-space:nowrap; }
   .set-algorithm-methods dd { margin:0; color:var(--ink-2); font:12px/1.45 ui-monospace,Consolas,monospace; overflow-wrap:anywhere; }
   .set-observation-empty { margin:18px 0; color:var(--muted); font-size:12px; }
   .set-section-title { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.06em; margin:20px 0 8px; padding-top:4px; border-top:1px solid var(--line); }
@@ -555,25 +640,35 @@
     .workspace-name { display:none; }
     .dump-cols { grid-template-columns:minmax(0,1fr); }
   }
-  @media (max-width:880px) {
+  @media (max-width:760px) {
+    .workspace-nav { flex-wrap:wrap; height:auto; align-items:stretch; gap:0; padding-bottom:8px; }
+    #nav { flex:1 0 100%; height:43px; }
+    .filters.show { flex:1 0 100%; min-height:46px; margin-left:0; }
+  }
+  @media (max-width:920px) {
     .toolbar-search { min-width:0; }
     .toolbar-actions { flex-wrap:nowrap; gap:5px; }
     #count { display:none; }
-    .filters { padding-inline:12px; }
+  }
+  @media (max-width:600px) {
+    #nav button { padding-inline:9px; }
+    #nav .module-icon { margin-right:4px; }
   }
   @media (max-width:760px) {
     header { gap:7px; padding:8px 12px; }
     .header-context { position:relative; flex:1 1 100%; }
     .device-picker { position:static; }
     .device-picker .device-menu { left:0; right:0; width:auto; max-width:none; }
-    .app-directory { padding:14px; }
-    .directory-workspace { grid-template-columns:minmax(0,1fr); }
+    .app-directory { display:block; padding:12px; }
+    .directory-workspace { grid-template-columns:minmax(0,1fr); min-height:0; }
+    .directory-rows { max-height:250px; }
+    .directory-list-table th:nth-child(3) { width:105px; }
     .directory-preview { border-left:0; border-top:1px solid var(--line-soft); }
-    .directory-tools .directory-path { flex-basis:100%; }
+    .directory-preview pre { min-height:90px; max-height:42dvh; }
     .header-actions { position:relative; flex:1 1 100%; justify-content:space-between; }
     .app-context { position:static; }
     .app-context .popover { left:0; right:0; width:auto; max-width:none; }
-    .workspace { flex-direction:column; }
+    .workspace, .files-workspace { flex-direction:column; }
     .list-pane { width:100% !important; height:42%; border-bottom:1px solid var(--line); }
     .splitter { display:none; }
     .capture-workspace .list-pane { flex:1; height:auto; border-bottom:0; }
@@ -606,73 +701,77 @@
     </section>
   </div>
   <div class="header-actions">
-    <section class="app-context" id="appContext" aria-label="APP 与会话">
-      <button type="button" class="process-trigger" id="appBtn" aria-expanded="false" aria-controls="appMenu" title="切换 APP、查看会话">
-        <span class="proc-primary" id="procPrimary">未选择 APP</span>
-        <span class="proc-secondary" id="procSecondary">APP 与会话</span>
+    <section class="app-context" id="appContext" aria-label="APP 选择">
+      <button type="button" class="process-trigger" id="appBtn" aria-haspopup="dialog" aria-controls="appDialog" title="应用">
+        <span class="proc-primary" id="procPrimary">
+          <span class="app-face proc-face"><img id="procIcon" data-app-icon alt="" hidden><span class="app-dialog-letter" id="procLetter">?</span></span>
+          <span class="proc-text"><span id="procLabel">未选择 APP</span><span class="proc-pkg" id="procPkg"></span></span>
+        </span>
         <span class="menu-chevron" aria-hidden="true">⌄</span>
       </button>
-      <div class="popover app-menu" id="appMenu">
-        <div class="proc-title">切换 APP</div>
-        <input class="app-menu-search" id="appSearch" type="search" placeholder="搜索 APP 或包名" aria-label="搜索当前设备的 APP">
-        <div class="app-choices" id="appChoices"></div>
-        <div class="app-sessions">
-          <div class="proc-title">当前 APP 会话</div>
-          <p class="app-affiliation" id="appAffiliation">当前 Host 会话 · 设备归属未核验</p>
-          <span class="cap-state-pill" id="capStatePill" hidden></span>
-          <dl class="procinfo" id="procinfo"></dl>
-          <label class="sess-lab"><input type="checkbox" id="sessShowOffline">显示离线会话 <span id="sessHidden" aria-live="polite"></span></label>
-          <div class="session-rows" id="sessRows" aria-label="当前应用会话"></div>
-          <div class="app-events" id="appEvents"></div>
-        </div>
-      </div>
     </section>
     <button type="button" class="compact-action" id="setBtn" aria-haspopup="dialog" aria-controls="setMask">设置</button>
   </div>
 </header>
 
-<nav id="nav"></nav>
-
-<!-- 顶栏的 APP 不参与筛选；此处只作用于当前记录列表。 -->
-<div class="filters" id="toolbar">
-  <div class="toolbar-main">
-    <div class="toolbar-search capture-toolbar">
-      <label class="search-field">
-        <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5"/><path d="m12.2 12.2 4.2 4.2"/></svg>
-        <input id="tb-q" type="search" aria-label="搜索当前类别记录" placeholder="搜索序号、算法、操作、预览…">
-      </label>
-      <button type="button" class="filter-toggle" id="filterToggleBtn" aria-expanded="false" aria-controls="advancedFilters">筛选<span class="filter-badge" id="filterBadge"></span><span class="menu-chevron" aria-hidden="true">⌄</span></button>
-    </div>
-    <div class="toolbar-actions capture-toolbar">
-      <span id="count"></span>
-      <button type="button" id="tb-pause" class="pause-btn" title="只停列表刷新">暂停刷新</button>
-      <div class="menu-wrap">
-        <button type="button" class="icon-button" id="toolbarMoreBtn" aria-label="当前板块更多操作" aria-expanded="false" aria-controls="toolbarMenu" title="更多">⋯</button>
-        <div class="popover menu-popover" id="toolbarMenu">
-          <button type="button" id="tb-download" title="当前筛选（内存）">下载本页</button>
-          <button type="button" id="tb-clearcat" class="menu-danger" title="不删磁盘">清空本页</button>
+<!-- APP 只负责切换查看对象；下方筛选只作用于当前模块的事件列表。 -->
+<div class="workspace-nav" id="workspaceNav">
+  <nav id="nav" aria-label="工作区页签"></nav>
+  <div class="filters" id="toolbar">
+    <div class="toolbar-main">
+      <div class="toolbar-search capture-toolbar">
+        <label class="search-field">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5"/><path d="m12.2 12.2 4.2 4.2"/></svg>
+          <input id="tb-q" type="search" aria-label="搜索当前类别记录" placeholder="搜索 #序号、算法、Hook 或预览">
+        </label>
+        <div class="menu-wrap filter-wrap">
+          <button type="button" class="filter-toggle" id="filterToggleBtn" aria-expanded="false" aria-controls="advancedFilters">筛选<span class="filter-badge" id="filterBadge"></span><span class="menu-chevron" aria-hidden="true">⌄</span></button>
+          <section class="advanced-filters" id="advancedFilters" aria-label="事件筛选" hidden>
+            <div class="advanced-filter-head">
+              <strong>事件筛选</strong>
+              <button type="button" id="tb-clear" title="只重置筛选，不删除记录" disabled>重置筛选</button>
+            </div>
+            <fieldset id="systemFilterWrap" class="system-filter" hidden>
+              <legend>活动类型</legend>
+              <div id="systemKinds" class="system-kinds" role="group" aria-label="系统活动类型">
+                <button type="button" data-system-kind="all" aria-pressed="true">全部活动</button>
+                <button type="button" data-system-kind="system" aria-pressed="false">系统调用</button>
+                <button type="button" data-system-kind="file" aria-pressed="false">文件读写</button>
+              </div>
+              <p id="sy-radar" class="detect-radar">系统检测摘要未读取</p>
+            </fieldset>
+            <label id="catWrap" class="filter-field">分类
+              <select id="tb-cat">
+                <option value="-2">全部</option>
+                <option value="0">摘要</option>
+                <option value="1">HMAC</option>
+                <option value="2">对称</option>
+                <option value="3">非对称</option>
+                <option value="4">AEAD</option>
+              </select>
+            </label>
+            <div class="size-filter">
+              <label>输入大小</label>
+              <input id="tb-min" type="number" min="0" step="1" placeholder="0" aria-label="最小输入字节数">
+              <span class="sep">—</span>
+              <input id="tb-max" type="number" min="0" step="1" placeholder="不限" aria-label="最大输入字节数，留空不限">
+              <span class="unit">B</span>
+            </div>
+          </section>
+        </div>
+      </div>
+      <div class="toolbar-actions capture-toolbar">
+        <span id="count"></span>
+        <button type="button" id="tb-pause" class="pause-btn" title="只停列表刷新">暂停刷新</button>
+        <div class="menu-wrap">
+          <button type="button" class="icon-button" id="toolbarMoreBtn" aria-label="当前板块更多操作" aria-expanded="false" aria-controls="toolbarMenu" title="更多">⋯</button>
+          <div class="popover menu-popover" id="toolbarMenu">
+            <button type="button" id="tb-download" title="当前筛选（内存）">下载本页</button>
+            <button type="button" id="tb-clearcat" class="menu-danger" title="不删磁盘">清空本页</button>
+          </div>
         </div>
       </div>
     </div>
-  </div>
-  <div class="advanced-filters" id="advancedFilters" hidden>
-    <span id="catWrap" class="filter-field"><label>分类</label>
-      <select id="tb-cat">
-        <option value="-2">全部</option>
-        <option value="0">摘要</option>
-        <option value="1">HMAC</option>
-        <option value="2">对称</option>
-        <option value="3">非对称</option>
-        <option value="4">AEAD</option>
-      </select></span>
-    <span class="size-filter">
-      <label>输入大小</label>
-      <input id="tb-min" type="number" min="0" step="1" placeholder="0" title="最小字节">
-      <span class="sep">—</span>
-      <input id="tb-max" type="number" min="0" step="1" placeholder="不限" title="最大字节（留空不限）">
-      <span class="unit">B</span>
-      <button type="button" id="tb-clear" title="清除过滤">清除</button>
-    </span>
   </div>
 </div>
 
@@ -683,7 +782,6 @@
   <div class="panel active" id="p-crypto">
     <div class="workspace capture-workspace" data-capture-key="cc">
       <div class="list-pane">
-        <div class="capture-list-head"><h2>加解密 · 事件记录</h2><span id="cc-list-count">0 条</span></div>
         <div class="new-banner" id="cc-banner"><span id="cc-banner-text"></span><button type="button" onclick="jumpLatest('cc')">跳到最新</button></div>
         <div id="cc-list" tabindex="0" aria-label="加解密记录列表"></div>
         <div class="capture-list-foot"><span id="cc-list-mode">列表刷新中</span><span>最新优先</span></div>
@@ -702,13 +800,6 @@
   <div class="panel" id="p-system">
     <div class="workspace capture-workspace" data-capture-key="sy">
       <div class="list-pane">
-        <div class="capture-list-head"><h2>系统 · 活动记录</h2><span id="sy-list-count">0 条</span></div>
-        <div id="sy-radar" class="detect-radar">系统检测</div>
-        <div id="systemKinds" class="system-kinds" role="group" aria-label="系统活动类型">
-          <button type="button" data-system-kind="all" aria-pressed="true">全部活动</button>
-          <button type="button" data-system-kind="system" aria-pressed="false">系统调用</button>
-          <button type="button" data-system-kind="file" aria-pressed="false">文件读写</button>
-        </div>
         <div class="new-banner" id="sy-banner"><span id="sy-banner-text"></span><button type="button" onclick="jumpLatest('sy')">跳到最新</button></div>
         <div id="sy-list" tabindex="0" aria-label="系统记录列表"></div>
         <div class="capture-list-foot"><span id="sy-list-mode">列表刷新中</span><span>最新优先</span></div>
@@ -717,7 +808,7 @@
       <section class="capture-detail-shell" aria-label="记录详情">
         <div class="capture-detail-nav"><button type="button" class="compact-action" data-capture-back="sy">‹ 返回列表</button></div>
         <div class="detail-pane" id="sy-detail">
-          <div class="detail-empty"><strong>记录详情</strong><span>从列表选择一条记录，查看对应的调用详情。</span></div>
+          <div class="detail-empty"><strong>系统活动详情</strong><span>从左侧选择一条系统调用或文件读写记录。</span></div>
         </div>
       </section>
     </div>
@@ -727,7 +818,6 @@
   <div class="panel" id="p-net">
     <div class="workspace capture-workspace" data-capture-key="nt">
       <div class="list-pane">
-        <div class="capture-list-head"><h2>网络 · 事件记录</h2><span id="nt-list-count">0 条</span></div>
         <div class="new-banner" id="nt-banner"><span id="nt-banner-text"></span><button type="button" onclick="jumpLatest('nt')">跳到最新</button></div>
         <div id="nt-list" tabindex="0" aria-label="网络记录列表"></div>
         <div class="capture-list-foot"><span id="nt-list-mode">列表刷新中</span><span>最新优先</span></div>
@@ -746,25 +836,36 @@
   <div class="panel" id="p-files">
     <section class="app-directory" aria-label="APP 文件浏览器">
       <div class="app-directory-inner">
-        <h2>文件 · APP 目录</h2>
-        <p class="set-lead"><strong id="directoryDevice">未选择设备</strong> · <strong id="directoryApp">未选择 APP</strong></p>
-        <div class="directory-tools">
-          <nav class="directory-path" id="appDirectoryPath" aria-label="当前文件目录"></nav>
-          <button type="button" class="compact-action" id="appDirectoryRefresh" disabled>刷新目录</button>
-          <button type="button" class="compact-action" id="viewFileActivity">在系统中查看文件读写</button>
-        </div>
-        <p class="set-status" id="directoryState" role="status">正在读取查看范围…</p>
+        <p class="directory-unavailable" id="directoryUnavailable" role="status">正在读取查看范围…</p>
         <div class="directory-workspace" id="appDirectoryWorkspace" hidden>
-          <div class="directory-list">
-            <table class="directory-list-table" aria-label="APP 文件和目录">
-              <thead><tr><th>名称</th><th>大小</th><th>修改时间</th></tr></thead>
-              <tbody id="appDirectoryEntries"></tbody>
-            </table>
-          </div>
-          <section class="directory-preview" aria-label="文件预览">
-            <h3 id="appPreviewTitle">文件预览</h3>
-            <p id="appPreviewStatus" class="set-status" role="status">选择文件后预览文本内容。</p>
-            <pre id="appPreviewText" hidden></pre>
+          <aside class="directory-list" aria-label="APP 目录">
+            <div class="directory-list-head">
+              <div class="directory-pane-head"><h3>目录</h3><button type="button" class="compact-action" id="appDirectoryRefresh" disabled>刷新</button></div>
+              <select id="appDirectoryRoot" class="directory-root" aria-label="目录范围" hidden></select>
+              <nav class="directory-path" id="appDirectoryPath" aria-label="当前文件目录"></nav>
+              <p class="set-status" id="directoryState" role="status">正在读取目录…</p>
+            </div>
+            <div class="directory-rows">
+              <table class="directory-list-table" aria-label="APP 文件和目录">
+                <thead><tr><th>名称</th><th>大小</th><th>修改时间</th></tr></thead>
+                <tbody id="appDirectoryEntries"></tbody>
+              </table>
+            </div>
+          </aside>
+          <section class="directory-preview" aria-label="文件内容">
+            <div class="directory-pane-head">
+              <h3 id="appPreviewTitle">文件内容</h3>
+              <div class="directory-preview-actions">
+                <span class="directory-readonly" id="appPreviewReadOnly" title="此文件未授权写回手机">只读</span>
+                <button type="button" class="compact-action" id="appPreviewEdit" hidden>编辑</button>
+                <button type="button" class="compact-action" id="appPreviewCancelEdit" hidden>取消</button>
+                <button type="button" class="compact-action" id="appPreviewSave" hidden>保存到手机</button>
+                <button type="button" class="compact-action" id="appPreviewSaveCopy" title="另存完整预览文本到电脑，不写回手机" disabled>另存文本到电脑</button>
+              </div>
+            </div>
+            <p id="appPreviewStatus" class="set-status" role="status">从左侧选择一个文件。</p>
+            <pre id="appPreviewText" tabindex="0" hidden></pre>
+            <textarea id="appPreviewEditor" class="directory-editor" aria-label="编辑当前文本文件" spellcheck="false" hidden></textarea>
           </section>
         </div>
       </div>
@@ -793,11 +894,10 @@
 
   <!-- dump 只展示已有会话产物的登记信息。打开页签不执行设备上的操作。 -->
   <div class="panel" id="p-dump">
-    <section class="record-library" aria-label="dump 产物记录">
+    <section class="record-library" aria-label="dump 产物记录" hidden>
       <div class="record-library-inner">
         <h2>dump · 运行时产物</h2>
-        <p class="set-lead">查看当前会话已登记的 DEX、SO 等运行时产物。这不是 APP 目录或日志导出。</p>
-        <p class="set-status">此连接仅能查看已登记产物，不能发起 dump。</p>
+        <p class="set-lead">下方操作由已注入该 APP 的进程读取内存。这里是已经登记的产物。</p>
         <p class="empty" id="artifactEmpty">正在读取当前会话的产物记录…</p>
         <table class="dump-table" id="artifactTable" hidden>
           <thead><tr><th>时间</th><th>类型</th><th>名称</th><th>大小</th><th>来源会话</th></tr></thead>
@@ -805,11 +905,10 @@
         </table>
       </div>
     </section>
-    <div class="dumppane workspace-hidden" hidden>
+    <div class="dumppane">
       <div class="dumpwrap">
         <h2>脱壳</h2>
-        <div class="note">未在跑会冷启动（可能丢登录）；已在跑直接扫。DEX 边抠边进记录，最后打 zip。<br><span class="warn-note">⚠ 仅限授权测试与自有 App。</span></div>
-        <div class="dump-callout" id="unpackCapPolicy">脱壳期间本包不装捕获钩；要继续捕，重启 App。</div>
+        <div class="dump-callout" id="unpackCapPolicy" hidden></div>
         <div class="dump-callout" id="unpackCapLive" hidden></div>
         <div class="dump-actions" style="margin:10px 0">
           <button type="button" class="primary" id="btnUnpack" onclick="runOneClickUnpack()">一键脱壳</button>
@@ -843,7 +942,6 @@
               <tbody id="loadedRows"></tbody></table>
             <div class="dump-sub">
               <h3>包内 / 私有目录 SO</h3>
-              <div class="note">来自 lib/arm64、files 等目录；可能仍是加密或未加载的副本。悬停可看完整路径。</div>
               <table class="dump-table pkg-so"><thead><tr><th>文件</th><th class="dump-size">大小</th><th>位置</th><th>操作</th></tr></thead>
                 <tbody id="pkgRows"></tbody></table>
             </div>
@@ -859,47 +957,75 @@
     <aside class="set-sidebar">
       <h2 id="setTitle">设置</h2>
       <nav class="set-nav" id="setNav" aria-label="设置分类">
-        <span class="set-nav-group">当前应用</span>
-        <button type="button" id="setScopeTab" data-settings="scope" aria-controls="setScopePage" aria-pressed="true" aria-label="分析范围" title="分析范围">
-          <svg class="set-nav-icon" viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3" width="14" height="14" rx="2"/><path d="m6 10 3 3 5-6"/></svg>
-          <span class="set-nav-label">分析范围</span><span class="set-nav-compact" aria-hidden="true">范围</span>
+        <button type="button" data-settings="crypto" aria-controls="setCryptoPage" aria-pressed="true" aria-label="加解密" title="加解密">
+          <svg class="set-nav-icon" viewBox="0 0 20 20" aria-hidden="true"><rect x="4" y="8" width="12" height="9" rx="2"/><path d="M7 8V6a3 3 0 0 1 6 0v2"/></svg>
+          <span class="set-nav-label">加解密</span>
         </button>
-        <button type="button" id="setCaptureTab" data-settings="capture" aria-controls="setCapturePage" aria-pressed="false" aria-label="功能与 Hook 状态" title="功能与 Hook 状态">
-          <svg class="set-nav-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="6.5"/><circle cx="10" cy="10" r="2.5"/></svg>
-          <span class="set-nav-label">功能与 Hook 状态</span><span class="set-nav-compact" aria-hidden="true">状态</span>
+        <button type="button" data-settings="system" aria-controls="setSystemPage" aria-pressed="false" aria-label="系统" title="系统">
+          <svg class="set-nav-icon" viewBox="0 0 20 20" aria-hidden="true"><rect x="4" y="4" width="12" height="12" rx="2"/><rect x="8" y="8" width="4" height="4"/></svg>
+          <span class="set-nav-label">系统</span>
         </button>
-        <button type="button" id="setHooksTab" data-settings="hooks" aria-controls="setHooksPage" aria-pressed="false" aria-label="记录显示" title="记录显示">
-          <svg class="set-nav-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M7 4 2.5 10 7 16m6-12 4.5 6-4.5 6m-2-12-2 12"/></svg>
-          <span class="set-nav-label">记录显示</span><span class="set-nav-compact" aria-hidden="true">记录</span>
-        </button>
-        <span class="set-nav-group">面板</span>
-        <button type="button" id="setDisplayTab" data-settings="display" aria-controls="setDisplayPage" aria-pressed="false" aria-label="显示" title="显示">
-          <svg class="set-nav-icon" viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4" width="14" height="10" rx="1.5"/><path d="M7 17h6m-3-3v3"/></svg>
-          <span class="set-nav-label">显示</span><span class="set-nav-compact" aria-hidden="true">显示</span>
-        </button>
-        <button type="button" id="setStatusTab" data-settings="status" aria-controls="setStatusPage" aria-pressed="false" aria-label="连接与数据" title="连接与数据">
-          <svg class="set-nav-icon" viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4" width="14" height="5" rx="1"/><rect x="3" y="11" width="14" height="5" rx="1"/><path d="M6 6.5h.5m-.5 7h.5"/></svg>
-          <span class="set-nav-label">连接与数据</span><span class="set-nav-compact" aria-hidden="true">连接</span>
+        <button type="button" data-settings="net" aria-controls="setNetPage" aria-pressed="false" aria-label="网络" title="网络">
+          <svg class="set-nav-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M3 7a11 11 0 0 1 14 0M5.5 10a7 7 0 0 1 9 0M8 13a3 3 0 0 1 4 0"/></svg>
+          <span class="set-nav-label">网络</span>
         </button>
       </nav>
     </aside>
     <div class="set-content">
       <div class="set-header">
         <div>
-          <h3 id="setPanelTitle">分析范围</h3>
-          <p class="set-app" id="setAppContext"><span>设备 <strong id="setActiveDevice">未选择</strong></span><span>APP <strong id="setActiveApp">未选择应用</strong></span></p>
+          <h3 id="setPanelTitle">加解密</h3>
+          <p class="set-app" id="setAppContext" hidden><span>设备 <strong id="setActiveDevice">未选择</strong></span><span>APP <strong id="setActiveApp">未选择应用</strong></span></p>
         </div>
         <button type="button" class="set-close-x" id="setClose" aria-label="关闭设置">×</button>
       </div>
     <div class="set-main">
-      <section id="setScopePage" class="set-page set-scope" aria-label="分析范围">
+      <section id="setCryptoPage" class="set-page" aria-label="加解密">
+        <section id="demoApiSection" aria-labelledby="demoApiHeading" hidden>
+          <div class="set-group-head"><h4 id="demoApiHeading">API 采集开关</h4><button type="button" class="set-small-button" id="demoApiReload">重新读取</button></div>
+          <p id="demoApiStatus" class="set-status" role="status"></p>
+          <div id="demoApiRows" hidden></div>
+        </section>
+        <div class="set-algorithm-group" role="group" aria-label="摘要与认证">
+          <label class="set-toggle-row"><span class="lab"><b>摘要</b><span>MessageDigest.digest · EVP_DigestUpdate</span></span><span class="set-switch"><input type="checkbox" data-fam="digest" disabled><span class="slider"></span></span></label>
+          <label class="set-toggle-row"><span class="lab"><b>HMAC</b><span>Mac.doFinal · HMAC_Update</span></span><span class="set-switch"><input type="checkbox" data-fam="hmac" disabled><span class="slider"></span></span></label>
+        </div>
+        <div class="set-algorithm-group" role="group" aria-label="加密与签名">
+          <label class="set-toggle-row"><span class="lab"><b>对称</b><span>Cipher.doFinal · EVP_CipherUpdate</span></span><span class="set-switch"><input type="checkbox" data-fam="symmetric" disabled><span class="slider"></span></span></label>
+          <label class="set-toggle-row"><span class="lab"><b>非对称</b><span>Signature.sign · EVP_DigestSign</span></span><span class="set-switch"><input type="checkbox" data-fam="asymmetric" disabled><span class="slider"></span></span></label>
+          <label class="set-toggle-row"><span class="lab"><b>AEAD</b><span>AES-GCM · EVP_AEAD</span></span><span class="set-switch"><input type="checkbox" data-fam="aead" disabled><span class="slider"></span></span></label>
+        </div>
+        <p class="set-status" id="setCaptureStatus" role="status"></p>
+      </section>
+      <section id="setSystemPage" class="set-page" aria-label="系统" hidden>
+        <div class="set-algorithm-group" role="group" aria-label="文件读写">
+          <label class="set-toggle-row"><span class="lab"><b>文件读写</b><span>open · read · write</span></span></label>
+        </div>
+        <div class="set-algorithm-group" role="group" aria-label="系统调用">
+          <label class="set-toggle-row"><span class="lab"><b>系统调用</b><span>access · ptrace · getprop</span></span></label>
+        </div>
+      </section>
+      <section id="setNetPage" class="set-page" aria-label="网络" hidden>
+        <div class="set-algorithm-group" role="group" aria-label="传输">
+          <label class="set-toggle-row"><span class="lab"><b>TLS</b><span>SSL_read · SSL_write</span></span><span class="set-switch"><input type="checkbox" data-fam="tls" disabled><span class="slider"></span></span></label>
+        </div>
+      </section>
+      <section id="setScopePage" class="set-page set-scope" aria-label="分析范围" hidden>
         <dl class="set-meta">
           <div><dt>当前设备</dt><dd id="scopeDevice">未选择</dd></div>
           <div><dt>当前 APP</dt><dd id="scopeApp">未选择</dd></div>
-          <div><dt>设备范围</dt><dd id="scopeMembership">未读取</dd></div>
+          <div><dt>允许注入</dt><dd id="scopeMembership">未读取</dd></div>
           <div><dt>观测会话</dt><dd id="scopeSession">未连接</dd></div>
         </dl>
-        <p class="set-lead">顶栏选设备及 APP 只切换查看对象，不会修改设备上的分析范围。</p>
+        <p class="set-lead">选择 APP 只是切换查看对象，不会打开注入，也不会重启 APP。</p>
+        <details class="app-sessions">
+          <summary>会话明细</summary>
+          <p class="app-affiliation" id="appAffiliation">当前 Host 会话 · 设备归属未核验</p>
+          <span class="cap-state-pill" id="capStatePill" hidden></span>
+          <dl class="procinfo" id="procinfo"></dl>
+          <label class="sess-lab"><input type="checkbox" id="sessShowOffline">显示离线会话</label>
+          <div class="session-rows" id="sessRows" aria-label="当前应用会话"></div>
+        </details>
       </section>
       <section id="setHooksPage" class="set-page" aria-label="记录显示" hidden>
         <p class="set-lead">按类别、算法或 Hook 筛选列表。这里不改手机上的采集策略。</p>
@@ -927,36 +1053,24 @@
         </section>
       </section>
       <section id="setCapturePage" class="set-page" aria-label="功能与 Hook 状态" hidden>
-        <p class="set-lead">收到记录不等于设备策略已生效。这里分别显示已上报的事件和已核验的配置状态。</p>
+        <div id="managedCaptureDetails">
         <dl class="set-meta">
           <div><dt>设备采集策略</dt><dd id="setPolicyState">未读取</dd></div>
-          <div><dt>Hook 生效状态</dt><dd id="setHookApplyState">未上报</dd></div>
-          <div><dt>加解密</dt><dd id="setFeature-crypto">—</dd></div>
-          <div><dt>系统调用</dt><dd id="setFeature-system">—</dd></div>
-          <div><dt>文件读写（系统）</dt><dd id="setFeature-file">—</dd></div>
-          <div><dt>网络</dt><dd id="setFeature-net">—</dd></div>
-          <div><dt>dump</dt><dd id="setFeature-dump">—</dd></div>
+          <div><dt>Hook 安装回执</dt><dd id="setHookApplyState">未上报</dd></div>
         </dl>
-        <p class="set-status">仅查看状态；列表筛选在「记录显示」。</p>
+        <div class="set-page-head">
+          <p class="set-lead" id="setFeatureContext">选择要查看配置的设备和 APP。</p>
+        </div>
+        <p class="set-lead">展开可核对类、方法或入口标签。会话识别到的入口不代表完整安装清单。</p>
+        <div id="setFeatureEvidence">
+          <div class="set-algorithm-entry"><details data-feature-evidence="crypto"><summary><span><strong>加解密</strong></span></summary><p class="set-lead" data-feature-note></p><ul class="set-algorithm-methods"></ul></details></div>
+          <div class="set-algorithm-entry"><details data-feature-evidence="system"><summary><span><strong>系统调用</strong></span></summary><p class="set-lead" data-feature-note></p><ul class="set-algorithm-methods"></ul></details></div>
+          <div class="set-algorithm-entry"><details data-feature-evidence="file"><summary><span><strong>文件读写（系统）</strong></span></summary><p class="set-lead" data-feature-note></p><ul class="set-algorithm-methods"></ul></details></div>
+          <div class="set-algorithm-entry"><details data-feature-evidence="net"><summary><span><strong>网络</strong></span></summary><p class="set-lead" data-feature-note></p><ul class="set-algorithm-methods"></ul></details></div>
+        </div>
+        <p class="set-status">上报入口详情只读。「记录显示」单独控制网页过滤，不会修改手机的采集策略。</p>
         <span id="setFamilyCount" hidden></span>
-        <p class="set-status" id="setCaptureStatus" role="status" hidden></p>
-        <fieldset id="setFamilies" class="workspace-hidden" aria-label="算法采集开关" hidden>
-          <div class="set-algorithm-group" role="group" aria-labelledby="setDigestGroup">
-            <h4 id="setDigestGroup">摘要与认证</h4>
-            <label class="set-toggle-row"><span class="lab"><b>摘要</b></span><span class="set-switch"><input type="checkbox" data-fam="digest" disabled><span class="slider"></span></span></label>
-            <label class="set-toggle-row"><span class="lab"><b>HMAC</b></span><span class="set-switch"><input type="checkbox" data-fam="hmac" disabled><span class="slider"></span></span></label>
-          </div>
-          <div class="set-algorithm-group" role="group" aria-labelledby="setEncryptionGroup">
-            <h4 id="setEncryptionGroup">加密与签名</h4>
-            <label class="set-toggle-row"><span class="lab"><b>对称</b></span><span class="set-switch"><input type="checkbox" data-fam="symmetric" disabled><span class="slider"></span></span></label>
-            <label class="set-toggle-row"><span class="lab"><b>非对称</b></span><span class="set-switch"><input type="checkbox" data-fam="asymmetric" disabled><span class="slider"></span></span></label>
-            <label class="set-toggle-row"><span class="lab"><b>AEAD</b></span><span class="set-switch"><input type="checkbox" data-fam="aead" disabled><span class="slider"></span></span></label>
-          </div>
-          <div class="set-algorithm-group" role="group" aria-labelledby="setTransportGroup">
-            <h4 id="setTransportGroup">传输</h4>
-            <label class="set-toggle-row"><span class="lab"><b>TLS</b></span><span class="set-switch"><input type="checkbox" data-fam="tls" disabled><span class="slider"></span></span></label>
-          </div>
-        </fieldset>
+        </div>
       </section>
       <section id="setDisplayPage" class="set-page" aria-label="显示" hidden>
         <p class="set-app">仅影响当前浏览器的采集列表。</p>
@@ -992,29 +1106,58 @@
       </section>
       <section id="setStatusPage" class="set-page" aria-label="连接与数据" hidden>
         <div class="set-page-head">
-          <p class="set-app">服务信息与当前应用的记录。</p>
+          <p class="set-app">电脑程序提供这个网页；手机 Agent 通过 USB 或局域网连接。MCP 是 AI 客户端的入口，与设备连接不是一回事。</p>
           <button type="button" id="setStatusRefresh" class="set-small-button">刷新</button>
         </div>
         <dl class="set-meta">
-          <div><dt>设备连接</dt><dd id="setDeviceStatus">读取中…</dd></div>
+          <div><dt>当前设备</dt><dd id="setDeviceStatus">读取中…</dd></div>
+          <div><dt>USB</dt><dd id="setUsbPath">未读取</dd></div>
+          <div><dt>局域网</dt><dd id="setLanPath">未读取</dd></div>
+          <div><dt>APP 采集会话</dt><dd id="setAppConnection">未读取</dd></div>
+          <div><dt>MCP 客户端</dt><dd id="setMcpPath">未核验</dd></div>
+          <div><dt>电脑服务</dt><dd id="setHostReachability">未读取</dd></div>
           <div><dt>面板地址</dt><dd id="setPanelAddress">—</dd></div>
           <div><dt>电脑服务版本</dt><dd id="setHostStatus">—</dd></div>
-          <div><dt>当前应用</dt><dd id="setStatusApp">—</dd></div>
-          <div><dt>已载入记录</dt><dd id="setLoadedRecords">—</dd></div>
           <div><dt>记录保留规则</dt><dd id="setRetention">—</dd></div>
-          <div><dt>Host 已登记文件</dt><dd id="setArtifactUsage">—</dd></div>
         </dl>
         <p id="setStatusMessage" class="set-status" role="status"></p>
+        <p class="set-lead">设备连接与 APP 会话分别核验。设备已连上时，APP 仍可能在等待 Agent 上报。刷新不会建立新连接。</p>
+        <div class="set-actions"><button type="button" id="setGoToDevices" class="set-small-button">选择设备</button></div>
       </section>
     </div>
       <footer class="set-footer" id="setObservationFooter" aria-label="显示设置状态">
         <div class="set-footer-state">
-          <p class="set-footer-count" id="setObservationCount"></p>
           <p class="set-status" id="setHookStatus" role="status">勾选后即时保存</p>
         </div>
         <button type="button" id="setObservationReset" class="set-small-button" disabled>恢复全部显示</button>
       </footer>
     </div>
+  </div>
+</dialog>
+
+<dialog id="appDialog" class="app-dialog" aria-labelledby="appDialogTitle">
+  <aside class="app-dialog-side">
+    <h2 id="appDialogTitle">应用</h2>
+    <button type="button" data-app-tab="user" aria-pressed="true">已安装应用</button>
+    <button type="button" data-app-tab="system" aria-pressed="false">系统应用</button>
+  </aside>
+  <div class="app-dialog-main">
+    <div class="app-dialog-card">
+      <span class="app-face"><img id="appDialogIcon" alt="" hidden><span id="appDialogLetter" class="app-dialog-letter">?</span></span>
+      <div class="app-dialog-id">
+        <strong id="appDialogName">未选择</strong>
+        <span id="appDialogPkg"></span>
+        <span id="appDialogState"></span>
+      </div>
+      <div class="app-dialog-actions">
+        <button type="button" data-app-action="open">打开</button>
+        <button type="button" data-app-action="stop">结束</button>
+        <button type="button" data-app-action="restart">重启</button>
+      </div>
+      <button type="button" class="set-close-x" id="appDialogClose" aria-label="关闭">×</button>
+    </div>
+    <input class="app-menu-search" id="appSearch" type="search" placeholder="搜索名称或包名" aria-label="搜索当前设备的 APP">
+    <div class="app-choices" id="appChoices"></div>
   </div>
 </dialog>
 
@@ -1059,7 +1202,7 @@ function mkTab([id,label,key],active){ const b=document.createElement('button');
     onTabSwitch(id);
     if(id==='p-system') scheduleDetect();
     if(id==='p-files') renderAppDirectory();
-    if(id==='p-dump') void loadArtifactLedger(); };
+    if(id==='p-dump') { void loadArtifactLedger(); void refreshDumpPage(); } };
   return b; }
 TABS_MAIN.forEach((t,i)=>nav.appendChild(mkTab(t,i===0)));
 const val=id=>document.getElementById(id).value.trim();
@@ -1070,8 +1213,13 @@ let appEventsState={key:'',loaded:false,failed:false,artifacts:[]};
 function currentDevice(){ return panelDevices.find(device=>device.key===panelDeviceKey)??null; }
 function usesHostSessions(){
   const device=currentDevice();
-  return !!device?.online && (device.kind==='local'||device.kind==='legacy');
+  return !!device?.online && (device.kind==='legacy'||device.kind==='local'&&device.appSession==='online'&&matchesLocalApp(device,chosenPkg));
 }
+function usesHostRoster(){
+  const device=currentDevice();
+  return usesHostSessions()||device?.kind==='local'&&(device.online||device.linkState==='unknown');
+}
+function matchesLocalApp(device,pkg){ return !device?.observedPackage||pkg===device.observedPackage; }
 function selectedPackage(){ return chosenPkg; }
 function appScopeKey(){ return JSON.stringify([panelDeviceKey,selectedPackage(),rosterGeneration]); }
 function sessionsOf(pkg){ return usesHostSessions() && pkg ? [...agents.values()].filter(a=>a.package===pkg).sort((a,b)=>(a.connectedAt||0)-(b.connectedAt||0)) : []; }
@@ -1309,7 +1457,7 @@ document.body.classList.toggle('compact-captures',panelDisplay.density==='compac
 // 分类色（对齐 IDH）：crypto 再按算法细分 digest/hmac/sym/asym；net/file/system 直接映射。
 function catClass(c){ if(!c) return 'other';
   if(c.category==='net') return 'net'; if(c.category==='file') return 'file'; if(c.category==='system') return 'sys';
-  const a=c.algo||''; if(/AEAD/i.test(a)) return 'aead';
+  const a=c.algo||''; if(/AEAD|GCM|CCM|ChaCha20-Poly1305/i.test(a)) return 'aead';
   if(/Hmac|HMAC/i.test(a)) return 'hmac'; if(/MD5|SHA|摘要|Digest/i.test(a)) return 'digest';
   if(/RSA|EC|DSA|非对称/i.test(a)) return 'asym'; return 'sym'; }
 const CATLABEL={digest:'摘要',hmac:'HMAC',sym:'对称',asym:'非对称',aead:'AEAD',file:'文件读写',sys:'系统',net:'网络',other:'其它'};
@@ -1353,7 +1501,7 @@ function defaultRecordFilter(){ return {q:'',min:null,max:null,cat:-2,paused:fal
 function applyFilter(p){ let items=visibleForHooks(capItems.filter(c=>matchesPanelKind(p,c.category)&&belongsToApp(c)&&listedCap(c)));
   const f=p.filter;
   if(f.q){ const q=f.q.toLowerCase(); items=items.filter(c=>{ if(/^#\d+$/.test(q)) return String(c.id)===q.slice(1); const v=c.view||{};
-    return ((c.algo||'')+' '+(c.op||'')+' '+(c.preview||'')+' '+(v.title||'')+' '+(v.hook||'')+' '+(v.direction||'')).toLowerCase().includes(q); }); }
+    return ((c.algo||'')+' '+(c.op||'')+' '+(c.func||'')+' '+(c.path||'')+' '+(c.preview||'')+' '+(v.title||'')+' '+(v.hook||'')+' '+(v.direction||'')).toLowerCase().includes(q); }); }
   if(f.min!=null) items=items.filter(c=>c.inl>=f.min);
   if(f.max!=null) items=items.filter(c=>c.inl<=f.max);
   if(p.key==='cc'&&f.cat>=0){ const want=CAT_BY_SEL[f.cat]; items=items.filter(c=>catClass(c)===want); }
@@ -1398,7 +1546,9 @@ function rowLens(c){
     if(!c._url && /^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|TRACE) \//.test(shown)) ensureNetUrl(c);
     return escapeHtml(shown||('in:'+(c.inl||0)+'B'));
   }
-  if(c.category==='file'||c.category==='system')
+  if(c.category==='file')
+    return escapeHtml(c.path||(c.preview&&c.preview.charAt(0)==='/'?c.preview:'')||((c.func==='open'||c.func==='openat')?c.preview:'')||('in:'+(c.inl||0)+'B'));
+  if(c.category==='system')
     return escapeHtml(c.preview||('in:'+(c.inl||0)+'B'));
   let meta='in:'+(c.inl||0)+'B';
   if(c.outl) meta+=' · out:'+c.outl+'B';
@@ -1498,6 +1648,7 @@ function captureDetailNotice(key,title,description=''){
   if(!detail) return;
   delete detail.dataset.detailRecord;
   delete detail.dataset.detailView;
+  delete detail.dataset.systemPrompt;
   const state=document.createElement('div'), heading=document.createElement('strong');
   state.className='detail-empty';
   heading.textContent=title;
@@ -1508,6 +1659,18 @@ function captureDetailNotice(key,title,description=''){
     state.append(copy);
   }
   detail.replaceChildren(state);
+}
+function renderSystemSelection(panel,kindTotal,visible){
+  if(panel.sel) return;
+  const detail=document.getElementById('sy-detail');
+  const title=visible?'选择一条系统活动':kindTotal?'当前筛选没有匹配':'没有可查看的系统活动';
+  const description=visible?'详情会按所选记录显示系统调用或文件读写信息。':kindTotal
+    ?'可检查记录显示设置或重置筛选；这不会删除记录。'
+    :liveSession()&&usesHostSessions()?'页签右侧「筛选」可切换活动类型，仅改变列表视图。':'连接并选择 APP 后，会在这里显示选中的活动详情。';
+  const signature=title+'\n'+description;
+  if(detail.dataset.systemPrompt===signature) return;
+  captureDetailNotice('sy',title,description);
+  detail.dataset.systemPrompt=signature;
 }
 function makeCapPanel(key,cats){
   const p={key,cats,sel:0,filter:defaultRecordFilter(),lastShown:0};
@@ -1522,7 +1685,11 @@ function makeCapPanel(key,cats){
       showBanner(key,n); if(activeCapKey===key) updateCount(box.querySelectorAll('.row').length,total); return; }
     p.lastShown=items.length; showBanner(key,0);
     const shown=items.slice(-capDisplayCap).slice().reverse();
-    box.innerHTML=shown.map(c=>rowHtml(key,p.sel,c)).join('')||'<div class="empty">'+(kindTotal?'没有符合筛选条件的记录。':escapeHtml(emptyCapText(key)))+'</div>';
+    const empty=escapeHtml(kindTotal?'没有符合筛选条件的记录。':emptyCapText(key));
+    box.innerHTML=shown.map(c=>rowHtml(key,p.sel,c)).join('')||(key==='sy'
+      ?'<div class="system-list-empty"><strong>'+(kindTotal?'筛选结果为空':'暂无可显示活动')+'</strong><span>'+empty+'</span></div>'
+      :'<div class="empty">'+empty+'</div>');
+    if(key==='sy') renderSystemSelection(p,kindTotal,items.length);
     if(activeCapKey===key) updateCount(shown.length,total); };
   p.select=async function(id){
     if(!usesHostSessions()||!capItems.some(c=>c.id===id&&belongsToApp(c)&&matchesPanelKind(p,c.category))) return;
@@ -1550,7 +1717,7 @@ let detectTimer=0;
 function formatRadar(r){
   if(!r) return '';
   if(r.armed===false) return '未开';
-  if(r.armed==null) return '—';
+  if(r.armed==null) return '';
   const hit=(r.kinds||[]).filter(k=>(k.count||0)>0).map(k=>k.label+' '+k.count);
   return hit.length ? ('已开 · '+hit.join(' · ')) : '已开 · 暂无';
 }
@@ -1568,14 +1735,16 @@ async function loadDetect(){
   const el=document.getElementById('sy-radar'); if(!el) return;
   const pkg=selectedPackage();
   const scope=appScopeKey();
-  if(!pkg||!usesHostSessions()){ el.textContent='系统检测：未上报'; el.title='只有当前观测会话的摘要会在此显示'; return; }
+  if(!pkg||!usesHostSessions()){ el.textContent='系统检测摘要未读取'; el.title='只有当前观测会话的摘要会在此显示'; return; }
   try{
-    const r=await (await fetch('/api/detect/summary?package='+encodeURIComponent(pkg))).json();
+    const response=await fetch('/api/detect/summary?package='+encodeURIComponent(pkg));
+    if(!response.ok) throw Error('摘要读取失败');
+    const r=await response.json();
     if(appScopeKey()!==scope) return;
     const state=formatRadar(r);
-    el.textContent=state?('系统检测：'+state):'系统检测';
+    el.textContent=state?('系统检测：'+state):'系统检测摘要未上报';
     el.title=radarDetail(r);
-  }catch(e){ if(appScopeKey()===scope){ el.textContent='系统检测：—'; el.title='摘要读取失败'; } }
+  }catch(e){ if(appScopeKey()===scope){ el.textContent='系统检测摘要读取失败'; el.title='不代表功能已开启或关闭'; } }
 }
 function scheduleDetect(){ clearTimeout(detectTimer); detectTimer=setTimeout(loadDetect, 300); }
 let httpAssembly={exchanges:[],noConn:0,http2:0,caveat:''};
@@ -1718,20 +1887,79 @@ function ioBlock(cls,text){
   return '<div class="io-block-body"><pre class="'+(cls||'')+'">'+escapeHtml(text||'')+'</pre>'+blockCopy()+'</div>'; }
 function ioKV(label,byteLen,hex){ if(!hex && !byteLen) return '';
   return '<div class="io-section kv-card"><div class="io-card-head"><div class="io-label kv">'+label+' ('+(byteLen||(hex||'').length/2)+' bytes)</div></div>'+ioBlock('hex',hex)+'</div>'; }
-function utf8FromHex(hex){
-  if(!hex) return '';
-  try{
-    const bytes=new Uint8Array(hex.length/2);
-    for(let i=0;i<bytes.length;i++) bytes[i]=parseInt(hex.substr(i*2,2),16);
-    const t=new TextDecoder('utf-8').decode(bytes);
-    return filesLooksBinary(t)?'':t;
-  }catch{ return ''; }
+// Input/output representations are derived from bytes already present in this record.
+function deriveCapturePayload(hex,reportedText,size,allowText){
+  const declared=Number.isSafeInteger(size)&&size>=0?size:null;
+  let bytes=null, text=null;
+  if(typeof hex==='string'&&hex.length>0&&hex.length%2===0&&/^[0-9a-f]+$/i.test(hex)){
+    bytes=new Uint8Array(hex.length/2);
+    for(let i=0;i<bytes.length;i++) bytes[i]=parseInt(hex.slice(i*2,i*2+2),16);
+  }
+  if(allowText){
+    if(bytes){
+      try{
+        const value=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(bytes);
+        if(!/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/u.test(value)) text=value;
+      }catch{ /* Non-text bytes remain available in the byte formats. */ }
+    }else if(typeof reportedText==='string'&&reportedText) text=reportedText;
+  }
+  const formats=[];
+  if(text!==null) formats.push({id:'text',label:bytes?'UTF-8':'上报文本'});
+  if(bytes) formats.push({id:'hex',label:'Hex'},{id:'base64',label:'Base64'},{id:'dump',label:'Hexdump'});
+  const length=bytes?.length;
+  const sizeLabel=bytes?(declared!==null&&declared!==length?('实录 '+length+' / 上报 '+declared+' B'):length+' B')
+    :declared!==null?'上报 '+declared+' B':'字节数未记录';
+  const note=!bytes?'未记录有效原始字节，不能由预览生成 Hex 或 Base64。'
+    :declared!==null&&declared>length?'已截断；以下格式只包含已记录的字节。'
+    :text===null&&allowText?'此段字节不适合按 UTF-8 文本显示。':'';
+  return {hex,bytes,text,formats,sizeLabel,note};
 }
-function ioBody(hex,utf8){ let b='';
-  if(utf8) b+='<div class="io-block"><h3>UTF-8</h3>'+ioBlock('',utf8)+'</div>';
-  b+='<div class="io-block"><h3>Hex</h3>'+ioBlock('hex',hex||'')+'</div>';
-  if(hex) b+='<div class="io-block"><h3>HexDump</h3>'+ioBlock('hex',hexdump(hex))+'</div>';
-  return b; }
+function payloadFormatText(model,mode){
+  if(mode==='text') return model.text??'';
+  if(!model.bytes) return '';
+  if(mode==='hex') return model.hex;
+  if(mode==='dump') return hexdump(model.hex);
+  if(mode!=='base64') return '';
+  const chunk=8192;
+  let binary='';
+  for(let i=0;i<model.bytes.length;i+=chunk) binary+=String.fromCharCode(...model.bytes.subarray(i,i+chunk));
+  return btoa(binary);
+}
+function capturePayloadCard(side,label,model){
+  const formatButtons=model.formats.map(format=>
+    '<button type="button" data-payload-choice="'+format.id+'" aria-pressed="false">'+format.label+'</button>').join('');
+  const tools=formatButtons?'<div class="payload-controls"><div class="payload-formats" role="group" aria-label="'+escapeHtml(label)+'格式">'+
+    formatButtons+'</div><button type="button" class="payload-copy" data-payload-copy>'+COPY_ICON+'复制</button></div>':'';
+  return '<section class="io-section capture-payload '+(side==='input'?'in-card':'out-card')+'" data-payload-card="'+side+'" aria-label="'+escapeHtml(label)+'数据">'+
+    '<div class="io-card-head"><span class="io-label '+(side==='input'?'in':'out')+'">'+escapeHtml(label)+'</span>'+
+    '<span class="io-meta">'+escapeHtml(model.sizeLabel)+'</span></div>'+tools+
+    (formatButtons?'<pre class="payload-value" tabindex="0"></pre>':'')+
+    (model.note?'<p class="payload-note">'+escapeHtml(model.note)+'</p>':'')+'</section>';
+}
+function mountCapturePayload(container,side,label,model){
+  const card=container.querySelector('[data-payload-card="'+side+'"]');
+  const value=card?.querySelector('.payload-value');
+  if(!value) return;
+  const copyButton=card.querySelector('[data-payload-copy]');
+  const setFormat=mode=>{
+    const format=model.formats.find(item=>item.id===mode);
+    if(!format) return;
+    value.dataset.format=mode;
+    value.textContent=payloadFormatText(model,mode);
+    value.setAttribute('aria-label',label+' '+format.label);
+    copyButton.setAttribute('aria-label','复制'+label+' '+format.label);
+    for(const button of card.querySelectorAll('[data-payload-choice]')){
+      button.setAttribute('aria-pressed',String(button.dataset.payloadChoice===mode));
+    }
+  };
+  setFormat(model.formats[0].id);
+  card.addEventListener('click',event=>{
+    const button=event.target.closest('[data-payload-choice],[data-payload-copy]');
+    if(!button) return;
+    if(button===copyButton) copyText(value.textContent);
+    else setFormat(button.dataset.payloadChoice);
+  });
+}
 function captureBytes(size){ return Number.isSafeInteger(size) && size>=0 ? size+' B' : '未记录'; }
 function captureOverview(facts){
   return '<section class="capture-overview" aria-label="记录概览"><h3>记录概览</h3><dl class="capture-facts">'+
@@ -1787,21 +2015,25 @@ function renderCaptureDetail(detailId,c){ const d=document.getElementById(detail
   const overview=captureOverview([
     ['事件编号',c.id ? '#'+c.id : '未记录'],
     ['输入大小',captureBytes(c.inl)],
-    ['输出大小',captureBytes(typeof c.outHex==='string' ? c.outHex.length/2 : undefined)],
+    ['输出大小',captureBytes(c.outl??(typeof c.outHex==='string' ? c.outHex.length/2 : undefined))],
     ['线程 ID',c.tid>0 ? String(c.tid) : '未记录'],
   ]);
   let data='';
-  if(isFile && (c.text||c.preview||c.func))
-    data+='<div class="io-section kv-card"><div class="io-label kv">详情</div>'+ioBlock('',[c.func,c.op,c.preview||c.text].filter(Boolean).join('\n'))+'</div>';
+  if(isFile && (c.text||c.preview||c.func||c.path))
+    data+='<div class="io-section kv-card"><div class="io-label kv">路径</div>'+ioBlock('',c.path||((c.func==='open'||c.func==='openat')?c.preview:'')||'未记录')+'</div>'
+      +'<div class="io-section kv-card"><div class="io-label kv">详情</div>'+ioBlock('',[c.func,c.op,c.path?c.preview:c.text].filter(Boolean).join('\n'))+'</div>';
   if(c.keyHex) data+=ioKV('KEY',c.keyHex.length/2,c.keyHex);
   if(c.ivHex) data+=ioKV('IV',c.ivHex.length/2,c.ivHex);
-  const inLabel=isNet?((/write/i.test(c.func||c.op||'')?'发送 / WRITE':'接收 / READ')):'输入 / INPUT';
-  const outLabel=isNet?'响应 / RESPONSE':'输出 / OUTPUT';
-  if(c.hex||c.text) data+='<div class="io-section in-card"><div class="io-card-head"><div class="io-label in">'+inLabel+'</div><div class="io-meta">'+(c.inl||0)+' bytes</div></div>'+ioBody(c.hex,isFile?null:c.text)+'</div>';
-  if(c.outHex) data+='<div class="io-section out-card"><div class="io-card-head"><div class="io-label out">'+outLabel+'</div><div class="io-meta">'+(c.outHex.length/2)+' bytes</div></div>'+ioBody(c.outHex,utf8FromHex(c.outHex))+'</div>';
+  const inLabel=isNet?(/write/i.test(c.func||c.op||'')?'发送':'接收'):'输入';
+  const outLabel=isNet?'响应':'输出';
+  const payloads=[];
+  if(c.hex||(!isFile&&c.text)||c.inl>0) payloads.push(['input',inLabel,deriveCapturePayload(c.hex,c.text,c.inl,!isFile)]);
+  if(c.outHex||c.outl>0) payloads.push(['output',outLabel,deriveCapturePayload(c.outHex,null,c.outl,!isFile)]);
+  if(payloads.length) data+='<div class="capture-payloads">'+payloads.map(args=>capturePayloadCard(...args)).join('')+'</div>';
   const views=[['data','数据详情',data||'<div class="detail-empty">这条记录没有可显示的数据。</div>'],['event','事件信息',overview]];
   if(c.callStack) views.push(['stack','调用栈','<div class="stack-section">'+ioBlock('',c.callStack)+'</div>']);
   renderRecordDetail(detailId,'capture:'+c.id,h,views);
+  for(const args of payloads) mountCapturePayload(d,...args);
 }
 async function capLoad(){ const pkg=selectedPackage(); if(!pkg||!usesHostSessions()) return;
   const scope=appScopeKey();
@@ -1824,7 +2056,11 @@ function updatePauseBtn(){ const b=document.getElementById('tb-pause'); const p=
   document.getElementById(activeCapKey+'-list-mode').textContent=p.filter.paused?'列表已暂停':'列表刷新中';
   b.classList.toggle('is-paused',p.filter.paused); }
 function updateFilterBadge(){ const p=CAPPANELS[activeCapKey]; const b=document.getElementById('filterBadge'); if(!p||!b) return;
-  const f=p.filter; let n=0; if(f.q) n++; if(f.min!=null||f.max!=null) n++; if(p.key==='cc'&&f.cat>=0) n++; b.textContent=n||''; }
+  const f=p.filter; let n=0; if(f.q) n++; if(f.min!=null||f.max!=null) n++; if(p.key==='cc'&&f.cat>=0) n++;
+  if(p.key==='sy'&&f.kind!=='all') n++;
+  b.textContent=n||'';
+  document.getElementById('tb-clear').disabled=!n;
+}
 function syncSystemKinds(){
   for(const btn of document.querySelectorAll('#systemKinds [data-system-kind]')){
     btn.setAttribute('aria-pressed',String(btn.dataset.systemKind===CAPPANELS.sy.filter.kind));
@@ -1842,11 +2078,19 @@ function chooseSystemKind(kind){
   }
   document.getElementById('sy-list').scrollTop=0;
   syncSystemKinds();
+  if(activeCapKey==='sy') updateFilterBadge();
   panel.render(true);
 }
+function setFilterPanel(open){
+  document.getElementById('advancedFilters').hidden=!open;
+  document.getElementById('filterToggleBtn').setAttribute('aria-expanded',String(open));
+}
 function onTabSwitch(id){ const tb=document.getElementById('toolbar');
+  setFilterPanel(false);
+  document.getElementById('systemFilterWrap').hidden=id!=='p-system';
   if(CAP_TABS[id]){ activeCapKey=CAP_TABS[id]; tb.classList.add('show'); const f=CAPPANELS[activeCapKey].filter;
     document.getElementById('tb-q').value=f.q||'';
+    document.getElementById('tb-q').placeholder=id==='p-crypto'?'搜索 #序号、算法、Hook 或预览':'搜索 #序号、操作、Hook 或预览';
     document.getElementById('tb-min').value=f.min==null?'':f.min;
     document.getElementById('tb-max').value=f.max==null?'':f.max;
     document.getElementById('tb-cat').value=String(f.cat);
@@ -1869,7 +2113,9 @@ function bindToolbar(){
   mx.addEventListener('input',()=>{ CAPPANELS[activeCapKey].filter.max=num(mx.value); rerender(); });
   cs.addEventListener('change',()=>{ CAPPANELS[activeCapKey].filter.cat=Number(cs.value); rerender(); });
   document.getElementById('tb-clear').addEventListener('click',()=>{ const f=CAPPANELS[activeCapKey].filter;
-    f.q='';f.min=null;f.max=null;f.cat=-2; q.value='';mn.value='';mx.value='';cs.value='-2'; rerender(); });
+    f.q='';f.min=null;f.max=null;f.cat=-2; q.value='';mn.value='';mx.value='';cs.value='-2';
+    if(activeCapKey==='sy') chooseSystemKind('all');
+    else rerender(); });
   document.getElementById('tb-pause').addEventListener('click',()=>{ const p=CAPPANELS[activeCapKey];
     p.filter.paused=!p.filter.paused; updatePauseBtn(); p.render(true); });
   document.getElementById('tb-clearcat').addEventListener('click',()=>capClearP(activeCapKey));
@@ -1879,10 +2125,11 @@ function bindToolbar(){
     const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`adh-${activeCapKey}-${pkg}-filtered.json`;
     document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href);
     toast(`已下载 ${items.length} 条`); });
-  document.getElementById('filterToggleBtn').addEventListener('click',()=>{
-    const adv=document.getElementById('advancedFilters'); const open=adv.hasAttribute('hidden');
-    if(open) adv.removeAttribute('hidden'); else adv.setAttribute('hidden','');
-    document.getElementById('filterToggleBtn').setAttribute('aria-expanded', open?'true':'false');
+  document.getElementById('filterToggleBtn').addEventListener('click',event=>{
+    event.stopPropagation();
+    const open=document.getElementById('advancedFilters').hidden;
+    closePopovers();
+    if(open) setFilterPanel(true);
   });
   document.getElementById('toolbarMoreBtn').addEventListener('click', e=>{ e.stopPropagation(); togglePopover('toolbarMenu','toolbarMoreBtn'); });
 }
@@ -1951,39 +2198,80 @@ function emptyCapText(key){
   return '当前会话尚未上报'+label+'记录。';
 }
 
-let appDirectoryView={scope:'',path:'',state:'idle',entries:[],limited:false,message:'',listVersion:0,preview:null};
+const APP_FILE_ROOT_NAMES={files:'files',app:'应用沙盒',external:'应用专属外部目录'};
+let appDirectoryView={scope:'',root:'files',path:'',state:'idle',entries:[],limited:false,message:'',listVersion:0,preview:null};
 let directorySequence=0;
+function usesDeviceSandbox(device,pkg){
+  return !!pkg&&device?.kind==='local'&&device.online&&device.rootSandbox===true;
+}
 function hasAppDirectory(device,pkg){
-  return !!pkg&&device?.kind==='local'&&device.online&&device.appFiles===true;
+  return !!pkg&&device?.kind==='local'&&device.online&&device.appFiles===true&&matchesLocalApp(device,pkg);
 }
 function appDirectoryStatus(device,pkg){
   if(!device) return '先在顶栏选择设备。';
-  if(!device.online) return '设备未连接，未读取 APP 目录。';
+  if(!device.online) return device.linkState==='unknown'?'电脑服务没有报告 USB 是否连上，暂时不能从这里打开目录。':'设备未连接，未读取 APP 目录。';
   if(!pkg) return '先选择要查看目录的 APP。';
+  if(device.kind==='local'&&!matchesLocalApp(device,pkg)) return '这个 APP 没有开放文件浏览。';
   if(device.kind==='legacy') return '无法核验此 APP 的设备归属，未读取目录。';
-  if(hasAppDirectory(device,pkg)) return '仅浏览经过授权的 APP files 目录。';
-  if(device.kind==='local') return '本次 USB 观测连接未接入目录读取。目录内容未知。';
+  if(hasAppDirectory(device,pkg)) return '选择一个已授权的目录。';
+  if(device.kind==='local') return '这个入口不能读取此 APP 的文件，不代表手机里没有文件。';
   return '当前连接未提供此 APP 的目录读取入口。目录内容未知。';
+}
+function directoryRoots(device){ return device?.fileBrowserOnly?device.appFileRoots:['files']; }
+function appDirectoryIsEditable(view){
+  return view.scope===appScopeKey()&&view.state==='ready'&&hasAppDirectory(currentDevice(),selectedPackage())&&
+    currentDevice()?.fileBrowserOnly===true&&view.preview?.editable===true&&typeof view.preview.text==='string'&&
+    typeof view.preview.revision==='string'&&Number.isSafeInteger(view.preview.editLimit);
 }
 function renderAppDirectory(){
   const device=currentDevice(), pkg=selectedPackage(), scope=appScopeKey();
+  const sandboxFiles=document.querySelector('#p-files .files-workspace');
+  const sandbox=usesDeviceSandbox(device,pkg);
+  if(sandboxFiles){
+    sandboxFiles.hidden=!sandbox;
+    if(sandbox){
+      document.querySelector('#p-files .app-directory').hidden=true;
+      if(sandboxFiles.dataset.pkg!==pkg){
+        sandboxFiles.dataset.pkg=pkg;
+        sandboxFiles.dataset.loaded='';
+        filesPath='';
+        filesResetPreview();
+      }
+      if(document.getElementById('p-files').classList.contains('active')&&sandboxFiles.dataset.loaded!==pkg){
+        sandboxFiles.dataset.loaded=pkg;
+        void loadFilesBrowser();
+      }
+      return;
+    }
+    sandboxFiles.dataset.pkg='';
+  }
+  const directory=document.querySelector('#p-files .app-directory');
+  if(directory) directory.hidden=false;
+  const roots=directoryRoots(device);
   if(appDirectoryView.scope!==scope){
-    appDirectoryView={scope,path:'',state:'idle',entries:[],limited:false,message:'',listVersion:++directorySequence,preview:null};
+    appDirectoryView={scope,root:roots[0]??'files',path:'',state:'idle',entries:[],limited:false,message:'',listVersion:++directorySequence,preview:null};
   }
   const view=appDirectoryView, ready=hasAppDirectory(device,pkg);
-  document.getElementById('directoryDevice').textContent=device?.name||'未选择设备';
-  document.getElementById('directoryApp').textContent=pkg||'未选择 APP';
-  document.getElementById('viewFileActivity').disabled=!pkg;
-  document.getElementById('appDirectoryRefresh').disabled=!ready||view.state==='loading';
+  const rootPicker=document.getElementById('appDirectoryRoot');
+  const rootKey=roots.join();
+  if(rootPicker.dataset.roots!==rootKey){
+    rootPicker.dataset.roots=rootKey;
+    rootPicker.replaceChildren(...roots.map(root=>new Option(APP_FILE_ROOT_NAMES[root],root)));
+  }
+  rootPicker.hidden=roots.length<2;
+  rootPicker.value=view.root;
+  const busy=view.state==='loading'||view.preview?.saving===true;
+  rootPicker.disabled=busy;
+  document.getElementById('appDirectoryRefresh').disabled=!ready||busy;
   document.getElementById('appDirectoryWorkspace').hidden=!ready;
+  const unavailable=document.getElementById('directoryUnavailable');
+  unavailable.hidden=ready;
+  unavailable.textContent=ready?'':appDirectoryStatus(device,pkg);
   const path=document.getElementById('appDirectoryPath');
-  path.hidden=!ready;
-  path.style.display=ready?'':'none';
   const note=document.getElementById('directoryState');
-  note.textContent=!ready?appDirectoryStatus(device,pkg):
-    view.state==='loading'?'正在读取 APP 目录…':
+  note.textContent=view.state==='loading'?'正在读取 APP 目录…':
     view.state==='error'?view.message:
-    view.state==='ready'?(view.entries.length?(view.entries.length+' 项'+(view.limited?' · 仅显示首批':'')+' · 只读'):'此目录为空。'):
+    view.state==='ready'?(view.entries.length?(view.entries.length+' 项'+(view.limited?' · 仅显示首批':'')):'此目录为空。'):
       appDirectoryStatus(device,pkg);
   if(!ready) return;
   const entries=document.getElementById('appDirectoryEntries');
@@ -1991,7 +2279,7 @@ function renderAppDirectory(){
   if(entries.dataset.version!==key){
     entries.dataset.version=key;
     const parts=view.path?view.path.split('/'):[];
-    const crumbs=['files',...parts].map((name,index)=>{
+    const crumbs=[APP_FILE_ROOT_NAMES[view.root],...parts].map((name,index)=>{
       const button=document.createElement('button');
       button.type='button'; button.className='directory-crumb'; button.textContent=name;
       button.dataset.path=parts.slice(0,index).join('/');
@@ -2014,28 +2302,61 @@ function renderAppDirectory(){
     }));
   }
   const preview=view.preview, text=document.getElementById('appPreviewText');
-  document.getElementById('appPreviewTitle').textContent=preview?.name||'文件预览';
-  document.getElementById('appPreviewStatus').textContent=preview?.message||'选择文件后预览文本内容。';
-  text.hidden=typeof preview?.text!=='string';
-  text.textContent=preview?.text??'';
-  if(view.state==='idle'&&document.getElementById('p-files').classList.contains('active')) void loadAppDirectory('');
+  const editable=appDirectoryIsEditable(view), editing=editable&&typeof preview?.draft==='string';
+  const control=document.getElementById('appPreviewEditor');
+  document.getElementById('appPreviewReadOnly').hidden=editable;
+  document.getElementById('appPreviewEdit').hidden=!editable||editing;
+  document.getElementById('appPreviewCancelEdit').hidden=!editing;
+  document.getElementById('appPreviewCancelEdit').disabled=busy;
+  document.getElementById('appPreviewSave').hidden=!editing;
+  document.getElementById('appPreviewSave').disabled=busy||preview?.text===preview?.draft;
+  control.hidden=!editing;
+  control.disabled=busy;
+  if(editing&&control.value!==preview.draft) control.value=preview.draft;
+  if(!editing&&control.value) control.value='';
+  const selected=preview?.name??'';
+  if(entries.dataset.selection!==selected){
+    entries.dataset.selection=selected;
+    for(const button of entries.querySelectorAll('[data-file]')){
+      const current=button.dataset.file===selected;
+      button.closest('tr').classList.toggle('selected',current);
+      if(current) button.setAttribute('aria-current','true');
+      else button.removeAttribute('aria-current');
+    }
+  }
+  document.getElementById('appPreviewTitle').textContent=selected||'文件内容';
+  document.getElementById('appPreviewStatus').textContent=preview?.message||'从左侧选择一个文件。';
+  document.getElementById('appPreviewSaveCopy').disabled=editing||!canSaveAppPreviewCopy(view);
+  text.hidden=editing||typeof preview?.text!=='string';
+  if(text.textContent!== (preview?.text??'')) text.textContent=preview?.text??'';
+  if(view.state==='idle'&&document.getElementById('p-files').classList.contains('active')) void loadAppDirectory('',view.root);
 }
-async function queryOwnedAppFile(action,path,packageName){
+async function queryOwnedAppFile(action,path,packageName,root,body){
   const query=new URLSearchParams({action,path});
-  const response=await fetch('/api/observer/app-files?'+query,{signal:AbortSignal.timeout(14000)});
+  if(root!=='files') query.set('root',root);
+  const signal=AbortSignal.timeout(18000);
+  if(body&&(!currentDevice()?.fileBrowserOnly||action!=='save'||!directoryRoots(currentDevice()).includes(root))) throw Error('当前入口未授权保存。');
+  const response=body?await window.adhOperations.saveOwnedText(path,body,signal,root):
+    await fetch('/api/observer/app-files?'+query,{signal});
   const payload=await response.json();
-  if(!response.ok||payload?.ok!==true) throw Error(typeof payload?.error==='string'?payload.error:'读取 APP 文件失败。');
-  if(payload.package!==packageName||payload.path!==path) throw Error('文件结果不属于当前 APP 或目录。');
+  if(!response.ok||payload?.ok!==true) throw Error(typeof payload?.error==='string'?payload.error:'APP 文件操作失败。');
+  if(payload.package!==packageName||payload.path!==path||(payload.root??'files')!==root) throw Error('结果不属于当前 APP 或目录。');
   return payload;
 }
-async function loadAppDirectory(path){
-  const pkg=selectedPackage(), scope=appScopeKey();
-  if(!hasAppDirectory(currentDevice(),pkg)) return;
-  const view={scope,path,state:'loading',entries:[],limited:false,message:'',listVersion:++directorySequence,preview:null};
+function mayLeaveAppFile(view){
+  const preview=view.preview;
+  if(preview?.saving) return false;
+  return typeof preview?.draft!=='string'||preview.draft===preview.text||window.confirm('放弃未保存的修改？');
+}
+async function loadAppDirectory(path,root=appDirectoryView.root){
+  const device=currentDevice(), pkg=selectedPackage(), scope=appScopeKey();
+  if(!hasAppDirectory(device,pkg)||!directoryRoots(device).includes(root)) return;
+  if(!mayLeaveAppFile(appDirectoryView)){ renderAppDirectory(); return; }
+  const view={scope,root,path,state:'loading',entries:[],limited:false,message:'',listVersion:++directorySequence,preview:null};
   appDirectoryView=view;
   renderAppDirectory();
   try{
-    const data=await queryOwnedAppFile('list',path,pkg);
+    const data=await queryOwnedAppFile('list',path,pkg,root);
     if(appDirectoryView!==view||appScopeKey()!==scope) return;
     if(!Array.isArray(data.entries)) throw Error('目录列表格式无效。');
     view.entries=data.entries.filter(e=>typeof e?.name==='string'&&e.name&&!e.name.includes('/')&&['directory','file'].includes(e.type));
@@ -2055,14 +2376,18 @@ async function selectAppDirectoryEntry(name){
   if(!entry) return;
   const path=[view.path,name].filter(Boolean).join('/');
   if(entry.type==='directory'){ await loadAppDirectory(path); return; }
-  const preview={name,message:'正在读取文本…'};
+  if(!mayLeaveAppFile(view)) return;
+  const preview={name,path,message:'正在读取文本…'};
   view.preview=preview;
   renderAppDirectory();
   try{
-    const data=await queryOwnedAppFile('preview',path,pkg);
+    const data=await queryOwnedAppFile('preview',path,pkg,view.root);
     if(appDirectoryView!==view||view.preview!==preview||appScopeKey()!==view.scope) return;
     if(typeof data.text!=='string') throw Error('文件不是可预览文本。');
-    view.preview={name,text:data.text,message:data.truncated?'仅预览前 32 KiB。':fmtSize(entry.size||0)+' · 只读'};
+    // A still-running files-only daemon may predate editLimit for the app sandbox.
+    const editLimit=Number.isSafeInteger(data.editLimit)&&data.editLimit>0?data.editLimit:(view.root==='app'?32*1024:undefined);
+    view.preview={name,path,text:data.text,truncated:data.truncated,editable:data.editable===true,revision:data.revision,editLimit,
+      message:data.truncated?'仅预览前 32 KiB，不能另存为完整文件。':fmtSize(entry.size||0)+' · UTF-8 文本'};
   }catch(e){
     if(appDirectoryView!==view||view.preview!==preview||appScopeKey()!==view.scope) return;
     view.preview={name,message:e?.message||'文件预览失败。'};
@@ -2070,52 +2395,119 @@ async function selectAppDirectoryEntry(name){
   renderAppDirectory();
 }
 
-// ---- 文件浏览器：沙盒目录按包名读，不看进程在不在 ----
+function startAppFileEdit(){
+  const view=appDirectoryView;
+  if(!appDirectoryIsEditable(view)) return;
+  view.preview.draft=view.preview.text;
+  view.preview.message='UTF-8 文本 · 最多 '+(view.preview.editLimit/1024)+' KiB · 保存会写回手机原文件';
+  renderAppDirectory();
+  document.getElementById('appPreviewEditor').focus({preventScroll:true});
+}
+function cancelAppFileEdit(){
+  const preview=appDirectoryView.preview;
+  if(!preview||preview.saving) return;
+  delete preview.draft;
+  preview.message='未保存的修改已取消。';
+  renderAppDirectory();
+}
+async function saveAppFileEdit(){
+  const view=appDirectoryView, preview=view.preview;
+  if(!appDirectoryIsEditable(view)||preview.saving||typeof preview.draft!=='string'||preview.draft===preview.text) return;
+  const text=preview.draft, pkg=selectedPackage();
+  if(new TextEncoder().encode(text).length>preview.editLimit){
+    preview.message='内容超过 '+(preview.editLimit/1024)+' KiB，未保存。';
+    renderAppDirectory();
+    return;
+  }
+  preview.saving=true;
+  preview.message='正在保存到手机…';
+  renderAppDirectory();
+  try{
+    const answer=await queryOwnedAppFile('save',preview.path,pkg,view.root,{text,revision:preview.revision});
+    if(appDirectoryView!==view||view.preview!==preview||appScopeKey()!==view.scope) return;
+    if(!/^[0-9a-f]{64}$/.test(answer.revision??'')) throw Error('手机未确认保存版本，请重新读取。');
+    preview.text=text;
+    preview.revision=answer.revision;
+    delete preview.draft;
+    preview.message='已保存到手机原文件。';
+  }catch(e){
+    preview.message=e?.message||'保存失败；未清除编辑内容。';
+  }finally{
+    preview.saving=false;
+    if(appDirectoryView===view&&view.preview===preview) renderAppDirectory();
+  }
+}
+function canSaveAppPreviewCopy(view){
+  return view.scope===appScopeKey()&&view.state==='ready'&&hasAppDirectory(currentDevice(),selectedPackage())&&
+    typeof view.preview?.text==='string'&&view.preview.truncated===false&&!!view.preview.name;
+}
+function saveAppPreviewCopy(){
+  const view=appDirectoryView;
+  if(!canSaveAppPreviewCopy(view)) return;
+  const file=new Blob([view.preview.text],{type:'text/plain;charset=utf-8'});
+  const url=URL.createObjectURL(file);
+  const a=document.createElement('a');
+  a.href=url;
+  a.download=view.preview.name.replace(/[\\/\u0000-\u001f\u007f]/g,'_');
+  a.hidden=true;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+  toast('已发起另存到电脑，未写回手机');
+}
+
+// ---- 文件浏览器：从应用目录开始，root 可以继续向上 ----
 let filesPath='';
 let filesSelected=null;
+const FILE_GLYPH={
+  dir:'<svg class="files-glyph dir" viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 6A1.5 1.5 0 0 1 4 4.5h4l2 2h6A1.5 1.5 0 0 1 17.5 8v6.5A1.5 1.5 0 0 1 16 16H4A1.5 1.5 0 0 1 2.5 14.5Z"/></svg>',
+  file:'<svg class="files-glyph" viewBox="0 0 20 20" aria-hidden="true"><path d="M6 3.5h5L14.5 7V16A1.5 1.5 0 0 1 13 17.5H6A1.5 1.5 0 0 1 4.5 16V5A1.5 1.5 0 0 1 6 3.5Z"/><path d="M11 3.5V7h3.5"/></svg>',
+};
 function sandboxHome(){ const pkg=curPkg(); return pkg?'/data/data/'+pkg:''; }
-function filesAbs(rel){ const home=sandboxHome(); if(!home) return '';
-  if(!rel) return home; return home.replace(/\/+$/,'')+'/'+String(rel).replace(/^\/+/,''); }
-function filesParentOf(rel){ if(!rel) return ''; const i=String(rel).replace(/\/+$/,'').lastIndexOf('/'); return i<0?'':rel.slice(0,i); }
-function renderFilesBreadcrumb(rel){
+function filesParentOf(abs){ if(!abs||abs==='/') return ''; const cut=String(abs).replace(/\/+$/,''); const i=cut.lastIndexOf('/'); return i<=0?'/':cut.slice(0,i); }
+function renderFilesBreadcrumb(abs){
   const el=document.getElementById('filesBreadcrumb'); if(!el) return;
-  let html='<a href="#" data-files-nav="">应用私有目录</a>';
-  const parts=rel?String(rel).split('/').filter(Boolean):[];
-  let acc='';
-  for(const p of parts){ acc=acc?acc+'/'+p:p;
-    html+=' <span class="sep">/</span> <a href="#" data-files-nav="'+escapeHtml(acc)+'">'+escapeHtml(p)+'</a>'; }
-  el.innerHTML=html; }
+  const parts=String(abs||'/').split('/').filter(Boolean);
+  let html='<a href="#" data-files-nav="/">/</a>', acc='';
+  for(const p of parts){ acc+='/'+p;
+    html+='<a href="#" data-files-nav="'+escapeHtml(acc)+'">'+escapeHtml(p)+'</a>'; }
+  el.innerHTML=html;
+  const up=document.getElementById('filesUp');
+  if(up) up.disabled=!abs||abs==='/';
+}
 function filesResetPreview(){ filesSelected=null;
   const head=document.getElementById('filesPreviewHead'), body=document.getElementById('filesPreviewBody');
   if(head) head.innerHTML='<span class="path">← 选择文件预览, 或点击「下载」</span>';
   if(body) body.textContent=''; }
-function filesRowHtml(name, rel, isDir, meta){
-  const abs=filesAbs(rel);
+function filesRowHtml(name, abs, isDir, meta){
   const actions=isDir?'':
     '<span class="files-actions"><button type="button" data-files-preview="'+escapeHtml(abs)+'">预览</button>'
     +'<a class="dl-link" href="#" data-files-download="'+escapeHtml(abs)+'">下载</a></span>';
-  return '<div class="row files-row'+(abs===filesSelected?' selected':'')+'" data-files-rel="'+escapeHtml(rel)+'" data-files-path="'+escapeHtml(abs)+'" data-files-type="'+(isDir?'dir':'file')+'">'
-    +'<div class="top"><span class="files-icon'+(isDir?' dir':'')+'">'+(isDir?'DIR':'FILE')+'</span>'
+  return '<div class="row files-row'+(abs===filesSelected?' selected':'')+'" data-files-path="'+escapeHtml(abs)+'" data-files-type="'+(isDir?'dir':'file')+'">'
+    +'<div class="top">'+(isDir?FILE_GLYPH.dir:FILE_GLYPH.file)
     +'<span class="name">'+escapeHtml(name)+'</span>'+actions+'</div>'
     +'<div class="n">'+escapeHtml(meta)+'</div></div>'; }
-function filesInit(){ filesPath=filesPath||''; loadFilesBrowser(); }
-function filesUpNav(){ navigateFiles(filesParentOf(filesPath)); }
-function navigateFiles(rel){ filesPath=rel||''; filesResetPreview(); loadFilesBrowser(); }
+function filesInit(){ if(!filesPath) filesPath=sandboxHome(); loadFilesBrowser(); }
+function filesUpNav(){ const parent=filesParentOf(filesPath); if(parent) navigateFiles(parent); }
+function navigateFiles(abs){ filesPath=abs||'/'; filesResetPreview(); loadFilesBrowser(); }
 async function loadFilesBrowser(){
   const list=document.getElementById('filesList'); if(!list) return;
+  if(!filesPath) filesPath=sandboxHome();
   renderFilesBreadcrumb(filesPath);
   const pkg=selectedPackage();
-  if(!pkg){ list.innerHTML='<div class="empty">注入范围里还没有勾选应用。</div>'; return; }
+  if(!pkg){ list.innerHTML='<div class="empty">先选择一个应用。</div>'; return; }
   list.innerHTML='<div class="empty">加载中…</div>';
-  try{ const r=await (await fetch('/api/fs/list?package='+encodeURIComponent(pkg)+'&path='+encodeURIComponent(filesAbs(filesPath)))).json();
+  try{ const r=await (await fetch('/api/fs/list?package='+encodeURIComponent(pkg)+'&path='+encodeURIComponent(filesPath))).json();
     if(!r.ok){ list.innerHTML='<div class="empty">'+escapeHtml(r.error||'读取失败')+'</div>'; return; }
     const ents=(r.entries||[]).slice().sort((a,b)=>(a.type==='d'?0:1)-(b.type==='d'?0:1)||String(a.name).localeCompare(String(b.name)));
     if(!ents.length){ list.innerHTML='<div class="empty">空目录</div>'; return; }
+    const base=filesPath==='/'?'':filesPath.replace(/\/+$/,'');
     list.innerHTML=ents.map(e=>{
       const isDir=e.type==='d';
-      const rel=filesPath?filesPath+'/'+e.name:e.name;
-      const meta=isDir?'目录':(e.type==='l'?'链接 · '+fmtSize(e.size||0):'文件 · '+fmtSize(e.size||0));
-      return filesRowHtml(e.name, rel, isDir, meta);
+      const abs=base+'/'+e.name;
+      const meta=isDir?'':(e.type==='l'?'链接 · '+fmtSize(e.size||0):fmtSize(e.size||0));
+      return filesRowHtml(e.name, abs, isDir, meta);
     }).join('');
   }catch(e){ list.innerHTML='<div class="empty">'+escapeHtml(String(e))+'</div>'; } }
 function filesLooksBinary(text){ if(!text) return true;
@@ -2156,7 +2548,7 @@ document.getElementById('p-files').addEventListener('click', ev=>{
   const prev=ev.target.closest('[data-files-preview]');
   if(prev){ ev.preventDefault(); previewFile(prev.getAttribute('data-files-preview')||''); return; }
   const row=ev.target.closest('.files-row');
-  if(row){ if(row.dataset.filesType==='dir') navigateFiles(row.dataset.filesRel||''); else previewFile(row.dataset.filesPath||''); }
+  if(row){ if(row.dataset.filesType==='dir') navigateFiles(row.dataset.filesPath||'/'); else previewFile(row.dataset.filesPath||''); }
 });
 document.getElementById('filesUp').addEventListener('click', filesUpNav);
 document.getElementById('filesRefresh').addEventListener('click', ()=>loadFilesBrowser());
@@ -2177,6 +2569,7 @@ document.addEventListener('click', ev=>{
 function closeModal(id){ document.getElementById(id).classList.remove('show'); }
 
 function closePopovers(){
+  setFilterPanel(false);
   document.querySelectorAll('.popover.show').forEach(el=>el.classList.remove('show'));
   document.querySelectorAll('[aria-expanded="true"][aria-controls]').forEach(b=>{
     if(document.getElementById(b.getAttribute('aria-controls'))?.classList.contains('popover')) b.setAttribute('aria-expanded','false');
@@ -2195,8 +2588,7 @@ const settingsNav=document.getElementById('setNav');
 const settingsTitle=document.getElementById('setPanelTitle');
 const hooksPage=document.getElementById('setHooksPage');
 const capturePage=document.getElementById('setCapturePage');
-const statusPage=document.getElementById('setStatusPage');
-const familyInputs=document.querySelectorAll('#setFamilies input[data-fam]');
+const familyInputs=document.querySelectorAll('input[data-fam]');
 const familyCount=document.getElementById('setFamilyCount');
 const hookListTab=document.getElementById('setHookListTab');
 const hookControls=document.getElementById('setHookControls');
@@ -2209,7 +2601,6 @@ const observationQuery=document.getElementById('setObservationQuery');
 const observationFamily=document.getElementById('setObservationFamily');
 const observationList=document.getElementById('setObservationList');
 const observationFooter=document.getElementById('setObservationFooter');
-const observationCount=document.getElementById('setObservationCount');
 const observationReset=document.getElementById('setObservationReset');
 const observationStatus=document.getElementById('setHookStatus');
 const displayCapSelect=document.getElementById('setDisplayCap');
@@ -2253,7 +2644,6 @@ async function openCaptureSettings(){
   const pkg=selectedPackage();
   const view={pkg, capture:null};
   familyView=view;
-  document.getElementById('setFamilies').hidden=!pkg;
   renderFamilies();
   setFamilyStatus(pkg ? '正在读取设置…' : '在主界面选中应用后，即可设置采集算法。');
   if(pkg && await loadAppFamilies(view) && familyView===view) setFamilyStatus('');
@@ -2270,39 +2660,157 @@ function renderSettingsScope(){
     delete observationStatus.dataset.error;
   }
   const entry=appRecords().find(item=>item.package===pkg);
-  const name=entry?.label && entry.label!==pkg ? entry.label+' · '+pkg : pkg||'未选择 APP';
+  const requested=device?.kind==='local'?pinnedPackage():'';
+  const name=entry?.label && entry.label!==pkg ? entry.label+' · '+pkg : pkg||requested||'未选择 APP';
   const online=sessionsOf(pkg).filter(a=>a.online);
   app.textContent=name;
   document.getElementById('setActiveDevice').textContent=device?.name||'未选择设备';
   document.getElementById('scopeDevice').textContent=device?.name||'未选择设备';
   document.getElementById('scopeApp').textContent=name;
-  document.getElementById('scopeMembership').textContent=!pkg?'未选择 APP':device?.kind==='local'
-    ? '本次 USB 观测目标；未读取手机的分析范围'
+  document.getElementById('scopeMembership').textContent=!pkg&&!requested?'未选择 APP':device?.kind==='local'
+    ? '这个入口不能查看或更改注入开关，请在手机上的 ADH Manager 中设置。'
     : device?.kind==='legacy'?'此 APP 在 Host 范围列表中，设备归属未核验'
     : entry?.configured===true?'已在此设备的分析范围':entry?.configured===false?'未加入此设备的分析范围':'设备范围未核验';
   document.getElementById('scopeSession').textContent=online.length
-    ? online.length+' 个在线 · '+online.map(a=>'PID '+a.pid).join(' / ')
+    ? '在线 · '+online.map(a=>'PID '+a.pid).join(' / ')
     :device?.kind==='device'?'未绑定观测会话':'暂无在线会话';
 }
 function renderAbilityValue(key,text){
   document.getElementById(key).textContent=text;
 }
-function renderCapabilityStatus(){
-  const pkg=selectedPackage(), device=currentDevice();
-  const haveSession=sessionsOf(pkg).some(a=>a.online);
-  renderAbilityValue('setPolicyState',!pkg?'未选择 APP':device?.kind==='legacy'
-    ?(captureOn?'Host 配置为开启；设备端未核验':'Host 配置未开启；不代表设备端状态')
-    :'未读取手机上的采集策略');
-  renderAbilityValue('setHookApplyState',haveSession?'会话在线，未上报 Hook 生效清单':device?.kind==='device'
-    ?'未绑定观测会话':'暂无在线会话');
-  const counts={crypto:0,system:0,net:0,file:0};
-  for(const c of capItems) if(belongsToApp(c)&&Object.hasOwn(counts,c.category)) counts[c.category]++;
-  for(const [key,count] of Object.entries(counts)){
-    renderAbilityValue('setFeature-'+key,count?count+' 条已载入记录':haveSession?'当前会话未上报':'没有可核验的会话记录');
+let demoApiView=null;
+const demoApiSection=document.getElementById('demoApiSection');
+const demoApiRows=document.getElementById('demoApiRows');
+const demoApiStatus=document.getElementById('demoApiStatus');
+const demoApiReload=document.getElementById('demoApiReload');
+function declaredDemoApiPackage(device,pkg){
+  return !!device&&device.kind==='local'&&device.online&&pkg==='com.adh.sandbox.apilab'&&
+    (device.demoApi===true||Array.isArray(device.declaredApiPackages)&&device.declaredApiPackages.includes(pkg));
+}
+function demoApiScope(){
+  return declaredDemoApiPackage(currentDevice(),selectedPackage())?appScopeKey():'';
+}
+function paintDemoApi(view){
+  if(demoApiView!==view||view.scope!==demoApiScope()) return;
+  demoApiReload.disabled=view.busy;
+  demoApiStatus.textContent=view.message;
+  demoApiStatus.dataset.error=String(view.error);
+  const entries=view.catalog?.apis||[];
+  demoApiRows.hidden=!entries.length;
+  const focus=document.activeElement?.dataset.apiId;
+  const group=observationGroup({id:'demo-java',name:'Java API',selected:entries.filter(row=>row.enabled).length,total:entries.length},'device-api');
+  let nextFocus;
+  for(const entry of entries){
+    const row=document.createElement('label');
+    row.className='set-toggle-row';
+    const text=document.createElement('span');
+    text.className='lab';
+    const title=document.createElement('b');
+    title.textContent=entry.method;
+    const clazz=document.createElement('span');
+    clazz.textContent=entry.className;
+    text.append(title,clazz);
+    const control=observationSwitch(entry.id,'采集 '+entry.className+'.'+entry.method,entry.enabled);
+    const toggle=control.firstElementChild;
+    toggle.dataset.apiId=entry.id;
+    toggle.disabled=view.busy||view.unknown;
+    if(focus===entry.id&&!toggle.disabled) nextFocus=toggle;
+    row.append(text,control);
+    group.body.append(row);
   }
-  const state=appEventsState.key===appScopeKey()?appEventsState:null;
-  renderAbilityValue('setFeature-dump',state?.artifacts.length?state.artifacts.length+' 条已上报的产物记录':
-    state?.loaded?'未上报产物':'未读取产物清单，可在 dump 页查看');
+  demoApiRows.replaceChildren(group.section);
+  nextFocus?.focus({preventScroll:true});
+}
+async function requestDemoApi(view,change){
+  const device=currentDevice();
+  if(view!==demoApiView||!declaredDemoApiPackage(device,view.pkg)||view.scope!==demoApiScope()) throw Error('当前 APP 已切换，已取消这次设置。');
+  const signal=AbortSignal.timeout(8000);
+  const scoped=device.demoApi!==true;
+  const query=scoped?'?package='+encodeURIComponent(view.pkg):'';
+  const response=change?await window.adhOperations.setDemoApi(change,signal,scoped?view.pkg:undefined):await fetch('/api/observer/demo-api'+query,{signal,cache:'no-store'});
+  const payload=await response.json();
+  if(view!==demoApiView||view.scope!==demoApiScope()) throw Error('当前 APP 已切换，未采用这次回执。');
+  if(!response.ok||!payload?.ok) throw Error(payload?.error||'未收到手机端回执。');
+  if(payload.package!==view.pkg||!Array.isArray(payload.apis)||typeof payload.revision!=='string') throw Error('设备回执不属于当前 APP。');
+  return payload;
+}
+async function syncDemoApi(force=false){
+  const scope=demoApiScope();
+  demoApiSection.hidden=!scope;
+  document.getElementById("managedCaptureDetails").hidden=!!scope;
+  if(!scope){
+    demoApiView=null;
+    demoApiRows.replaceChildren();
+    demoApiStatus.textContent='';
+    return;
+  }
+  if(demoApiView?.scope===scope&&(!force||demoApiView.busy)) return;
+  const view={scope,pkg:selectedPackage(),catalog:demoApiView?.scope===scope?demoApiView.catalog:null,
+    busy:true,error:false,unknown:false,message:'正在读取手机上的 API 设置…'};
+  demoApiView=view; paintDemoApi(view);
+  try{
+    view.catalog=await requestDemoApi(view);
+    view.message='当前设备 · 当前 APP。开关控制手机端采集，不影响 API 正常执行。';
+  }catch(error){
+    view.unknown=true; view.error=true; view.message=error.message;
+  }finally{ view.busy=false; paintDemoApi(view); }
+}
+settingsDialog.addEventListener('close',()=>{ demoApiView=null; });
+demoApiReload.addEventListener('click',()=>void syncDemoApi(true));
+demoApiRows.addEventListener('change',async event=>{
+  const input=event.target, view=demoApiView;
+  if(!input.matches('input[data-api-id]')||!view?.catalog||view.busy||view.unknown||view.scope!==demoApiScope()) return;
+  const change={id:input.dataset.apiId,enabled:input.checked,revision:view.catalog.revision};
+  view.busy=true; view.error=false; view.message='正在等待手机确认…'; paintDemoApi(view);
+  try{
+    view.catalog=await requestDemoApi(view,change);
+    view.message=change.enabled?'手机已确认开启采集。':'手机已确认关闭采集。';
+  }catch(error){
+    view.error=true; view.unknown=true; view.message=error.message+' 请重新读取以确认当前状态。';
+  }finally{ view.busy=false; paintDemoApi(view); }
+});
+
+function renderCapabilityStatus(){
+  void syncDemoApi();
+  const pkg=selectedPackage(), device=currentDevice(), session=liveSession();
+  const haveSession=!!session?.sessionId;
+  const scope=appScopeKey();
+  const saved=device?.kind==='legacy'&&pkg?serverCaptureByPackage[pkg]:undefined;
+  renderAbilityValue('setPolicyState',!pkg?'未选择 APP':typeof saved==='boolean'
+    ?'电脑已保存此 APP：'+(saved?'开启':'关闭')+'；尚未核验设备端生效':'未核验此 APP 的设备采集策略');
+  renderAbilityValue('setHookApplyState',haveSession?'会话在线；未上报预设或安装清单':device?.kind==='device'
+    ?'未绑定观测会话':'暂无在线会话');
+  renderAbilityValue('setFeatureContext',!pkg?'请先选择设备和 APP。':haveSession
+    ? '当前进程 · PID '+(Number.isSafeInteger(session.pid)?session.pid:'未报告')
+    : device?.demoApi?'本入口直接读取 Demo 的 API 配置，不依赖采集会话。':'等待关联观测会话，暂无法核对入口。');
+  const groups=haveSession?algorithmObservations?.sessionHookEvidence(capItems.filter(belongsToApp),pkg,session.sessionId):null;
+  const unavailable=haveSession?'未读取入口详情':'未关联观测会话';
+  renderSessionFeatureDetails(groups,JSON.stringify([scope,session?.sessionId,session?.connectedAt]),unavailable);
+}
+function settingsEntryMethods(methods){
+  return methods.map(({source,className,member,label})=>({source,className,member,label})).sort((a,b)=>
+    a.className.localeCompare(b.className)||a.member.localeCompare(b.member)||a.label.localeCompare(b.label)||a.source.localeCompare(b.source));
+}
+function renderSessionFeatureDetails(groups,scope,unavailable){
+  const list=document.getElementById('setFeatureEvidence');
+  const scopeChanged=list.dataset.scope!==scope;
+  list.dataset.scope=scope;
+  for(const details of list.querySelectorAll('details[data-feature-evidence]')){
+    if(scopeChanged) details.open=false;
+    const group=groups?.[details.dataset.featureEvidence];
+    const entries=settingsEntryMethods(group?.methods??[]);
+    const message=!group?unavailable:!entries.length?'暂无可识别的入口信息。':
+      group.uniqueEntries>entries.length?'仅列出部分已识别入口。':'';
+    const signature=JSON.stringify([entries,message]);
+    if(!scopeChanged && details.dataset.signature===signature) continue;
+    details.dataset.signature=signature;
+    const methods=details.querySelector('ul');
+    const note=details.querySelector('[data-feature-note]');
+    methods.replaceChildren(...entries.map(methodMarkup));
+    note.textContent=message;
+    note.hidden=!message;
+    methods.hidden=!entries.length;
+  }
 }
 function renderRecordCategories(){
   const field=document.getElementById('setRecordCategories'), pref=recordPreferenceKey();
@@ -2338,10 +2846,8 @@ function observationSwitch(key,label,checked,tag='span'){
   control.append(toggle,slider);
   return control;
 }
-function setObservationFooter(items,hidden,pkg){
-  const selected=items.filter(item=>!hidden.has(item.key)).length;
-  observationCount.textContent=items.length?'已选 '+selected+' / '+items.length+' 项':'无可勾选项';
-  observationReset.disabled=!pkg || !hidden.size;
+function updateObservationReset(hidden,scope){
+  observationReset.disabled=!scope || !hidden.size;
 }
 function observationGroup(group,view){
   const section=document.createElement('section');
@@ -2356,7 +2862,7 @@ function observationGroup(group,view){
   const count=document.createElement('span');
   count.className='set-group-count';
   count.textContent='已选 '+group.selected+' / '+group.total;
-  count.title='按该类别的全部项目计数';
+  count.title='已选开关 / 本组全部开关';
   header.append(heading,count);
   const body=document.createElement('div');
   body.className='set-group-items';
@@ -2373,11 +2879,12 @@ function renderHookControls(){
   const category=hookCategory.value;
   const groups=algorithmObservations?.choiceGroups(entries,algorithmObservations.hookGroups,'category',hidden,
     item=>(!category || category===item.category) && item.name.toLowerCase().includes(query)) ?? [];
-  setObservationFooter(entries,hidden,pref);
+  updateObservationReset(hidden,pref);
   const empty=document.getElementById('setHookEmpty');
   empty.hidden=groups.length>0;
   empty.textContent=!pkg?'请先在主界面选择应用。':!algorithmObservations?'暂时无法读取观测项。':entries.length?'没有符合条件的 Hook。':'当前应用暂无带 Hook 名称的记录。';
-  const signature=JSON.stringify([pref,pkg,panelDisplay.time,groups,[...hidden]]);
+  const choices=groups.map(group=>[group.id,group.selected,group.total,group.items.map(({key,name,source})=>[key,name,source])]);
+  const signature=JSON.stringify([pref,pkg,choices]);
   if(hookSignature===signature) return;
   hookSignature=signature;
   const focused=document.activeElement?.dataset.observationKey;
@@ -2392,11 +2899,13 @@ function renderHookControls(){
       lab.className='lab';
       const title=document.createElement('b');
       title.textContent=item.name;
-      const meta=document.createElement('span');
-      const time=fmtTime(item.latest);
       const source=item.source==='java'?'Java':item.source==='native'?'Native':'';
-      meta.textContent=[source,item.count+' 条',time&&'最近 '+time].filter(Boolean).join(' · ');
-      lab.append(title,meta);
+      lab.append(title);
+      if(source){
+        const meta=document.createElement('span');
+        meta.textContent=source;
+        lab.append(meta);
+      }
       const control=observationSwitch(item.key,'显示 '+item.name+' · '+group.name+(source?' · '+source:''),!hidden.has(item.key));
       if(item.key===focused) focusTarget=control.firstElementChild;
       row.append(lab,control);
@@ -2455,10 +2964,7 @@ function methodMarkup(method){
   }else{
     append('入口标签',method.label);
   }
-  const count=document.createElement('span');
-  count.className='set-algorithm-method-count';
-  count.textContent=method.count+' 条';
-  row.append(fields,count);
+  row.append(fields);
   return row;
 }
 function renderAlgorithmObservations(){
@@ -2474,20 +2980,22 @@ function renderAlgorithmObservations(){
       item.methods.some(method=>[method.className,method.member,method.label,method.className+'.'+method.member]
         .some(value=>searchText(value).includes(query))));
   }) ?? [];
-  setObservationFooter(observations,hidden,pref);
+  const choices=groups.map(group=>({...group,items:group.items.map(({key,name,methods})=>({
+    key,name,methods:settingsEntryMethods(methods),
+  })).sort((a,b)=>a.name.localeCompare(b.name,'zh-CN',{numeric:true}))}));
+  updateObservationReset(hidden,pref);
   const empty=document.getElementById('setObservationEmpty');
   empty.hidden=groups.length>0;
-  empty.textContent=!pkg?'请选择一个应用。':!algorithmObservations?'暂时无法读取算法统计。':observations.length?'没有匹配的算法、类或方法。':'当前应用暂无已载入的算法记录。';
-  const signature=JSON.stringify([pref,pkg,panelDisplay.time,query,groups,[...hidden]]);
+  empty.textContent=!pkg?'请选择一个应用。':!algorithmObservations?'暂时无法读取算法选项。':observations.length?'没有匹配的算法、类或方法。':'暂未识别出可选的算法。';
+  const signature=JSON.stringify([pref,pkg,query,choices,[...hidden]]);
   if(algorithmSignature===signature) return;
   algorithmSignature=signature;
   const focus=document.activeElement?.dataset;
   const fragment=document.createDocumentFragment();
   let first=true, focusTarget;
-  for(const group of groups){
-    const items=group.items.sort((a,b)=>a.name.localeCompare(b.name,'zh-CN',{numeric:true}));
+  for(const group of choices){
     const {section,body}=observationGroup(group,'algorithm');
-    for(const item of items){
+    for(const item of group.items){
       const row=document.createElement('div');
       row.className='set-algorithm-entry';
       row.dataset.algorithm=item.name;
@@ -2500,13 +3008,13 @@ function renderAlgorithmObservations(){
       const text=document.createElement('span');
       const name=document.createElement('strong');
       name.textContent=item.name;
-      const meta=document.createElement('span');
-      meta.className='set-algorithm-meta';
-      const methodCount=item.methods.filter(method=>method.member || method.label).length;
-      const time=fmtTime(item.latest);
-      meta.textContent=[item.count+' 条',methodCount ? methodCount+' 个入口' : '入口未记录',
-        item.shown<item.count && ('筛选后 '+item.shown+' 条'),time && ('最近 '+time)].filter(Boolean).join(' · ');
-      text.append(name,meta);
+      text.append(name);
+      if(!item.methods.some(method=>method.member||method.label)){
+        const meta=document.createElement('span');
+        meta.className='set-algorithm-meta';
+        meta.textContent='入口未记录';
+        text.append(meta);
+      }
       summary.append(text);
       const methods=document.createElement('ul');
       methods.className='set-algorithm-methods';
@@ -2577,36 +3085,50 @@ async function readPanelJson(path){
   if(!response.ok) throw Error('读取失败');
   return response.json();
 }
-function describePanelDevices(data){
-  if(data?.ok!==true || !Array.isArray(data.devices)) return {name:'设备状态未知',link:'读取失败'};
-  if(data.demo===true) return {name:'演示设备',link:'非真机',demo:true};
-  if(data.localUsb){
-    const model=data.localUsb.model;
-    if(data.localUsb.online===true && typeof model==='string' && model.trim()){
-      return {name:model.trim().slice(0,64),link:'USB · 只读',local:true};
-    }
-    return {name:'等待 USB 会话',link:'未连接',local:true};
+function gatewayTransportLabel(connection){
+  if(connection.transport==='lan') return '局域网';
+  if(connection.transport!=='adb') return '类型未核验';
+  if(connection.adbLink==='usb') return 'USB';
+  if(connection.adbLink==='adb-tcp'||typeof connection.serial==='string'&&connection.serial.includes(':')) return 'ADB 网络';
+  return 'ADB · 类型未核验';
+}
+function panelDeviceLink(device){
+  if(!device) return '';
+  if(device.kind!=='local') return device.online?(device.link||'在线'):'未连接';
+  return {
+    online:'USB · 已连接',offline:'USB · ADB 离线',unauthorized:'USB · 待授权',
+    disconnected:'USB · 未连接',unknown:'USB · 连接情况未知',
+  }[device.linkState]||'USB · 连接情况未知';
+}
+function panelAppConnection(device){
+  if(!device) return '未选择设备';
+  if(device.kind==='local'){
+    if(selectedPackage()&&!matchesLocalApp(device,selectedPackage())) return '这个 APP 没有连接采集';
+    if(device.appSession==='not-required') return '此入口不需要 APP 采集会话';
+    if(device.appSession==='online') return '已收到 APP 会话';
+    return '还没收到这个 APP 的采集连接';
   }
-  const connected=[];
-  for(const device of data.devices){
-    if(device?.online!==true || !Array.isArray(device.connections)) continue;
-    const verified=device.connections.filter(connection=>connection?.identityVerified===true && connection.online===true);
-    if(!verified.length) continue;
-    const model=device.lastKnown?.info?.model;
-    connected.push({
-      name:typeof model==='string' && model.trim() ? model.trim().slice(0,64) : '已核验设备',
-      link:[...new Set(verified.map(connection=>connection.transport==='adb'?'USB':connection.transport==='lan'?'LAN':'已核验'))].join(' / '),
-    });
-  }
-  if(connected.length===1) return connected[0];
-  if(connected.length>1) return {name:'已核验 '+connected.length+' 台',link:'在线'};
-  return data.devices.length ? {name:'无在线设备',link:'有登记记录'} : {name:'设备未核验',link:''};
+  if(!selectedPackage()) return '未选择 APP';
+  return liveSession()?.sessionId?'已收到 APP 会话':'暂无已绑定的 APP 会话';
 }
 function panelDeviceCatalog(data){
   if(data?.ok!==true||!Array.isArray(data.devices)) return [];
   if(data.localUsb){
     const model=typeof data.localUsb.model==='string'?data.localUsb.model.trim().slice(0,64):'';
-    return [{key:'local',kind:'local',name:model||'USB 设备',link:'USB',online:data.localUsb.online===true,appFiles:data.localUsb.appFiles===true}];
+    const fileBrowserOnly=data.localUsb.fileBrowserOnly===true;
+    const appFileRoots=fileBrowserOnly&&Array.isArray(data.localUsb.appFileRoots)
+      ?data.localUsb.appFileRoots.filter(root=>root==='app'||root==='external'):['files'];
+    // An older host used online for the APP session alone. A false there cannot prove USB disconnected.
+    const linkState=['online','offline','unauthorized','disconnected','unknown'].includes(data.localUsb.linkState)
+      ?data.localUsb.linkState:data.localUsb.online===true?'online':'unknown';
+    const demoApi=data.localUsb.demoApi===true;
+    const rootSandbox=data.localUsb.rootSandbox===true;
+    const declaredApiPackages=Array.isArray(data.localUsb.declaredApiPackages)
+      ?data.localUsb.declaredApiPackages.filter(pkg=>pkg==='com.adh.sandbox.apilab'):[];
+    const appSession=['online','waiting','not-required'].includes(data.localUsb.appSession)?data.localUsb.appSession
+      :fileBrowserOnly||demoApi?'not-required':data.localUsb.online===true?'online':'waiting';
+    return [{key:'local',kind:'local',name:model||'USB 设备',observedPackage:typeof data.localUsb.observedPackage==='string'?data.localUsb.observedPackage:'',link:'USB',linkState,appSession,online:linkState==='online',
+      appFiles:data.localUsb.appFiles===true&&(fileBrowserOnly||data.localUsb.independentFiles===true||appSession==='online'),fileBrowserOnly,appFileRoots,demoApi,declaredApiPackages,rootSandbox}];
   }
   const catalog=new Map();
   for(const record of data.devices){
@@ -2615,15 +3137,16 @@ function panelDeviceCatalog(data){
     const verified=record.online===true&&Array.isArray(record.connections)
       ?record.connections.filter(c=>c?.deviceId===id&&c.identityVerified===true&&c.online===true&&typeof c.connectionId==='string'&&c.connectionId):[];
     const name=String(record.lastKnown?.info?.model||'已登记设备').trim().slice(0,64)||'已登记设备';
-    const link=[...new Set(verified.map(c=>c.transport==='adb'?'USB':c.transport==='lan'?'LAN':'已核验'))].join(' / ');
-    catalog.set(id,{key:'device:'+id,kind:'device',id,name,link,online:verified.length>0,
+    const transports=[...new Set(verified.map(gatewayTransportLabel))];
+    const link=transports.join(' / ');
+    catalog.set(id,{key:'device:'+id,kind:'device',id,name,link,transports,online:verified.length>0,
       connectionId:verified.length===1?verified[0].connectionId:'',boot:verified.length===1?verified[0].bootId||'':''});
   }
   return [...catalog.values(),{key:'legacy',kind:'legacy',name:data.demo===true?'演示设备':'Host 旧会话',
     link:data.demo===true?'非真机':'设备归属未核验',online:true,demo:data.demo===true}];
 }
 function panelDeviceStamp(device){
-  return device ? JSON.stringify([device.key,device.online,device.connectionId,device.boot,device.appFiles]) : '';
+  return device ? JSON.stringify([device.key,device.online,device.linkState,device.appSession,device.link,device.observedPackage,device.connectionId,device.boot,device.appFiles,device.fileBrowserOnly,device.appFileRoots,device.demoApi,device.declaredApiPackages,device.rootSandbox]) : '';
 }
 function panelAppRoster(inventory,scope){
   const isPackage=name=>typeof name==='string'&&name.length<=240&&/^[\w]+(?:\.[\w]+)+$/.test(name);
@@ -2640,18 +3163,34 @@ function panelAppRoster(inventory,scope){
   return [...peers.values()].sort((a,b)=>(Number(b.configured===true)-Number(a.configured===true))||
     (a.label||a.package).localeCompare(b.label||b.package));
 }
+function renderConnectionReadout(){
+  const local=panelDevices.find(d=>d.kind==='local');
+  const verified=panelDevices.filter(d=>d.kind==='device'&&d.online);
+  const transportLabel=mode=>{
+    const count=verified.filter(d=>d.transports?.includes(mode)).length;
+    return count?'已核验 '+count+' 台在线设备':'没有发现已连接的设备';
+  };
+  const unknown=panelDeviceState==='failed'?'设备清单读取失败':'设备清单读取中…';
+  renderAbilityValue('setUsbPath',panelDeviceState!=='ready'?unknown:local
+    ?local.name+' · '+panelDeviceLink(local):transportLabel('USB'));
+  renderAbilityValue('setLanPath',panelDeviceState!=='ready'?unknown:local?'此 USB 入口不提供局域网接入':transportLabel('局域网'));
+  renderAbilityValue('setAppConnection',panelDeviceState!=='ready'?unknown:panelAppConnection(currentDevice()));
+  renderAbilityValue('setMcpPath',panelDeviceState==='ready' && local
+    ?'本地 USB 入口未开放 MCP':'客户端连接未核验（不等同电脑服务在线）');
+}
 function renderDeviceChrome(){
   const device=currentDevice();
   const name=device?.name||(panelDeviceState==='loading'?'读取中…':panelDeviceState==='failed'?'读取失败':'未选择');
-  const link=device?.online?device.link:device?'离线':'';
+  const link=panelDeviceLink(device);
   document.getElementById('deviceTitle').textContent=name;
   document.getElementById('deviceLink').textContent=link;
   document.getElementById('setDeviceStatus').textContent=[name,link].filter(Boolean).join(' · ');
+  renderConnectionReadout();
   const choices=document.getElementById('deviceChoices');
   const signature=JSON.stringify([panelDevices,panelDeviceKey,panelDeviceState]);
   if(choices.dataset.signature!==signature){
     choices.dataset.signature=signature;
-    choices.innerHTML=panelDevices.length?panelDevices.map(d=>`<button type="button" class="app-item${d.key===panelDeviceKey?' active':''}" data-device-key="${escapeHtml(d.key)}" aria-current="${d.key===panelDeviceKey}"><span class="app-name-row"><span class="app-name">${escapeHtml(d.name)}</span><span class="app-state${d.online?' on':''}">${escapeHtml(d.online?(d.link||'在线'):'离线')}</span></span>${d.id?'<span class="app-pkg">'+escapeHtml(d.id.slice(-12))+'</span>':''}</button>`).join('')
+    choices.innerHTML=panelDevices.length?panelDevices.map(d=>`<button type="button" class="app-item${d.key===panelDeviceKey?' active':''}" data-device-key="${escapeHtml(d.key)}" aria-current="${d.key===panelDeviceKey}"><span class="app-name-row"><span class="app-name">${escapeHtml(d.name)}</span><span class="app-state${d.online?' on':''}">${escapeHtml(panelDeviceLink(d))}</span></span>${d.id?'<span class="app-pkg">'+escapeHtml(d.id.slice(-12))+'</span>':''}</button>`).join('')
       :'<p class="app-empty">'+(panelDeviceState==='failed'?'设备清单读取失败。':'正在读取网关设备…')+'</p>';
   }
 }
@@ -2675,6 +3214,7 @@ async function readRegisteredRoster(device,generation){
     seen.nextOffset!=null?'设备只返回了首批应用，已补列分析范围内的应用':'';
   render();
 }
+let openedFileBrowser=false;
 function selectPanelDevice(key,force=false){
   if(!force&&panelDeviceKey===key) return;
   panelDeviceKey=key;
@@ -2687,7 +3227,11 @@ function selectPanelDevice(key,force=false){
     :'';
   renderDeviceChrome();
   render();
-  if(usesHostSessions()) void refreshApps();
+  if(usesHostRoster()) void refreshApps();
+  if(device?.fileBrowserOnly&&!openedFileBrowser){
+    openedFileBrowser=true;
+    document.querySelector('#nav [data-panel="p-files"]').click();
+  }
   if(device?.online&&device.kind==='device'&&device.connectionId) void readRegisteredRoster(device,generation);
 }
 let readingPanelDevices=false;
@@ -2698,7 +3242,7 @@ async function refreshPanelDevices(){
     const stamp=panelDeviceStamp(currentDevice());
     const data=await readPanelJson('/api/devices?action=list');
     panelDevices=panelDeviceCatalog(data);
-    panelDeviceState=data?.ok===true?'ready':'failed';
+    panelDeviceState=data?.ok===true&&Array.isArray(data.devices)?'ready':'failed';
     const current=currentDevice();
     const next=current?.key||(panelDevices.length===1?panelDevices[0].key:'');
     if(next!==panelDeviceKey||stamp!==panelDeviceStamp(current)) selectPanelDevice(next,true);
@@ -2717,39 +3261,27 @@ function updateHostDisplayCap(data){
   if(panelDisplay.limit===null && capDisplayCap!==hostDisplayCap) applyPanelDisplay();
   else renderDisplaySettings();
 }
-function renderStatusApp(){
-  const pkg=selectedPackage();
-  const label=serverApps.find(app=>app.package===pkg)?.label || pkg;
-  const live=sessionsOf(pkg).filter(session=>session.online).length;
-  document.getElementById('setStatusApp').textContent=pkg?`${label} · ${live} 个在线会话`:'未选择应用';
-  const loaded=capItems.filter(belongsToApp).length;
-  document.getElementById('setLoadedRecords').textContent=pkg?`${loaded.toLocaleString('zh-CN')} 条`:'—';
-}
 async function refreshPanelStatus(){
   const refresh=document.getElementById('setStatusRefresh');
   if(refresh.disabled) return;
   refresh.disabled=true;
   const status=document.getElementById('setStatusMessage');
-  status.textContent='正在读取连接和数据状态…';
+  status.textContent='正在读取连接和保留规则…';
   status.dataset.error='false';
   document.getElementById('setPanelAddress').textContent=location.origin;
   void refreshPanelDevices();
-  renderStatusApp();
   const [health,config]=await Promise.allSettled([readPanelJson('/health'),readPanelJson('/api/config')]);
   const service=health.status==='fulfilled' && health.value?.ok===true ? health.value : null;
   const data=config.status==='fulfilled' ? config.value : null;
   const capture=data?.settings?.capture;
-  const artifacts=data?.stats?.artifacts;
   const hasVersion=typeof service?.version==='string' && service.version.length>0;
   const hasRetention=Number.isSafeInteger(capture?.retain) && Number.isSafeInteger(capture?.maxAgeDays);
-  const hasArtifacts=Number.isSafeInteger(artifacts?.count) && Number.isFinite(artifacts?.bytes);
+  document.getElementById('setHostReachability').textContent=service?'已响应健康检查':'健康检查未通过';
   document.getElementById('setHostStatus').textContent=hasVersion?service.version:'未读取';
   document.getElementById('setRetention').textContent=hasRetention
-    ? `${capture.retain.toLocaleString('zh-CN')} 条 / 应用 · ${capture.maxAgeDays ? capture.maxAgeDays+' 天清理规则' : '不限天数'}` : '未读取';
-  document.getElementById('setArtifactUsage').textContent=hasArtifacts
-    ? `${artifacts.count.toLocaleString('zh-CN')} 个 · ${fmtSize(artifacts.bytes)}` : '未读取';
+    ? `每个 APP 最多 ${capture.retain.toLocaleString('zh-CN')} 条 · ${capture.maxAgeDays ? '保留 '+capture.maxAgeDays+' 天' : '不限天数'}` : '未读取';
   updateHostDisplayCap(data);
-  const complete=hasVersion && hasRetention && hasArtifacts;
+  const complete=hasVersion && hasRetention;
   status.textContent=complete?'':'部分信息读取失败，可点「刷新」重试。';
   status.dataset.error=String(!complete);
   refresh.disabled=false;
@@ -2761,16 +3293,13 @@ function showSettingsPage(page){
     document.getElementById(button.getAttribute('aria-controls')).hidden=!selected;
     if(selected) settingsTitle.textContent=button.getAttribute('aria-label');
   }
-  observationFooter.hidden=page!=='hooks';
-  document.getElementById('setAppContext').hidden=!['scope','hooks','capture'].includes(page);
+  observationFooter.hidden=true;
+  document.getElementById('setAppContext').hidden=true;
   document.querySelector('.set-main').scrollTop=0;
   renderSettingsScope();
-  if(page==='hooks'){ showObservationView(true); renderRecordCategories(); }
-  if(page==='capture') renderCapabilityStatus();
-  if(page==='display') renderDisplaySettings();
-  if(page==='status') void refreshPanelStatus();
+  if(page==='crypto'||page==='net') void openCaptureSettings();
 }
-function openSettings(page='scope'){
+function openSettings(page='crypto'){
   closePopovers();
   if(!settingsDialog.open) settingsDialog.showModal();
   showSettingsPage(page);
@@ -2822,6 +3351,7 @@ function escapeHtml(s){ return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':
 // ---- agents / 应用栏 / WS ----
 const agents=new Map();
 let serverApps=[]; let scopeNote=''; let lastFilterScope=''; let captureOn=false; let localObservation=false;
+let scopePackages=[]; let scopeError=''; let appTab='user'; let scopeBusy=''; let scopeReadAt=0;
 let readingHostRoster=-1;
 let serverCaptureDefault=false, serverCaptureByPackage={}, serverCaptureVersion=0;
 function appOnline(pkg){ return sessionsOf(pkg).some(a=>a.online); }
@@ -2829,71 +3359,123 @@ function renderSessions(){
   const all=sessionsOf(selectedPackage()).slice().reverse();
   const showOffline=document.getElementById('sessShowOffline').checked;
   const visible=showOffline?all:all.filter(a=>a.online);
-  document.getElementById('sessHidden').textContent=showOffline||!all.length?'':'已隐藏 '+(all.length-visible.length)+' 个';
   document.getElementById('sessRows').innerHTML=visible.length?visible.map(a=>
     '<div class="session-row"><span>PID '+escapeHtml(a.pid)+' · '+escapeHtml(a.sessionId)+'</span><span>'+(a.online?'在线':'离线')+'</span></div>'
   ).join(''):'<div>没有可显示的会话</div>';
+}
+function labelFor(pkg){
+  const row=serverApps.find(a=>a?.package===pkg);
+  const label=String(row?.label||'').trim();
+  return label&&label!==pkg?label:'';
+}
+function catalogMeta(pkg){
+  return serverApps.find(a=>a?.package===pkg)||{};
+}
+function injectionPackages(){
+  const device=currentDevice();
+  const out=[];
+  const push=pkg=>{ if(typeof pkg==='string'&&pkg&&!out.includes(pkg)) out.push(pkg); };
+  for(const pkg of scopePackages) push(pkg);
+  for(const agent of agents.values()) if(agent.online) push(agent.package);
+  if(device?.kind==='local') push(device.observedPackage);
+  return out;
 }
 function appRecords(){
   const device=currentDevice();
   if(!device) return [];
   if(device.kind==='device') return registryApps;
+  if(device.kind!=='local'){
+    const seen=new Set();
+    const list=[];
+    for(const a of serverApps){
+      const pkg=a?.package;
+      if(typeof pkg!=='string'||!/^[\w]+(?:\.[\w]+)*$/.test(pkg)||seen.has(pkg)) continue;
+      seen.add(pkg);
+      const label=String(a.label||'').trim();
+      list.push({package:pkg,label:label!==pkg?label:''});
+    }
+    return list;
+  }
+  const injected=new Set(injectionPackages());
   const seen=new Set();
   const list=[];
-  for(const a of serverApps){
-    const pkg=a?.package;
-    if(typeof pkg!=='string'||!/^[\w]+(?:\.[\w]+)+$/.test(pkg)||seen.has(pkg)) continue;
+  const push=pkg=>{
+    if(typeof pkg!=='string'||!/^[\w]+(?:\.[\w]+)*$/.test(pkg)||seen.has(pkg)) return;
     seen.add(pkg);
-    const label=String(a.label||'').trim();
-    list.push({package:pkg,label:label!==pkg?label:''});
-  }
+    const meta=catalogMeta(pkg);
+    const running=meta.running==='foreground'||meta.running==='background'?meta.running:(appOnline(pkg)?'foreground':'');
+    list.push({package:pkg,label:labelFor(pkg),system:meta.system===true,running,injected:scopePackages.includes(pkg),online:!!running,listed:true});
+  };
+  for(const a of serverApps) push(a?.package);
+  for(const pkg of injectionPackages()) push(pkg);
+  if(chosenPkg) push(chosenPkg);
   return list;
 }
 function render(){
   const device=currentDevice();
   const list=appRecords();
-  const note=!device?'先选择设备':!device.online?'设备未连接':device.kind==='device'?registryScopeError:scopeNote;
+  const note=!device?'先选择设备':device.kind==='local'&&(device.online||device.linkState==='unknown')
+    ?(scopeNote||(!list.length?panelAppConnection(device):'')):!device.online?panelDeviceLink(device):device.kind==='device'?registryScopeError:scopeNote;
   const flag=a=>device.kind==='device'
     ?(a.configured===true?'已在范围':a.configured===false?'未加入范围':'范围未知')
-    :(appOnline(a.package)?'在线':'无在线会话');
+    :device.kind==='local'
+    ?(a.injected?(a.running==='foreground'?'Hook 前台':a.running==='background'?'Hook 后台':'Hook 待启动'):a.running==='foreground'?'前台':a.running==='background'?'后台':'')
+    :(appOnline(a.package)?'在线':device?.observedPackage&&!matchesLocalApp(device,a.package)?'已安装':'无在线会话');
   const query=document.getElementById('appSearch').value.trim().toLowerCase();
-  const visible=query?list.filter(a=>(a.package+' '+a.label).toLowerCase().includes(query)):list;
-  const sig=JSON.stringify([panelDeviceKey,note,query,visible.map(a=>[a.package,a.label,flag(a)])]);
-  const pin=usesHostSessions()?pinnedPackage():'';
+  const matches=a=>(a.package+' '+a.label).toLowerCase().includes(query);
+  const visible=query?list.filter(matches):list;
+  const sig=JSON.stringify([panelDeviceKey,note,query,appTab,scopeBusy,scopeError,scopeReadAt>0,visible.map(a=>[a.package,a.label,flag(a),!!a.injected,!!a.system,a.running||''])]);
+  const requestedApp=device?.kind==='local'&&device.observedPackage?new URLSearchParams(location.search).get('app'):'';
+  const pin=usesHostRoster()?(requestedApp||pinnedPackage()):'';
   if(pin && list.some(a=>a.package===pin)) chosenPkg=pin;
-  else if(!list.some(a=>a.package===chosenPkg)) chosenPkg=usesHostSessions()?(list[0]?.package||''):'';
+  else if(!list.some(a=>a.package===chosenPkg)) chosenPkg=usesHostRoster()?(device?.observedPackage?(list.some(a=>a.package===device.observedPackage)?device.observedPackage:''):(list[0]?.package||'')):'';
   const pkg=selectedPackage();
   const scope=appScopeKey();
   const nextCaptureOn=usesHostSessions()&&!!pkg&&(Object.hasOwn(serverCaptureByPackage,pkg)?serverCaptureByPackage[pkg]:serverCaptureDefault);
   if(nextCaptureOn!==captureOn){ captureOn=nextCaptureOn; capRenderAll(); }
   if(scope!==lastFilterScope){
     lastFilterScope=scope;
+    filesPath='';
     appEventsState={key:scope,loaded:false,failed:false,artifacts:[]};
     capReset();
-    void loadAppEvents(true);
     scheduleDetect();
     if(document.getElementById('p-dump').classList.contains('active')) void loadArtifactLedger();
   }
   const cur=list.find(a=>a.package===pkg);
-  const primary=document.getElementById('procPrimary'), secondary=document.getElementById('procSecondary'), info=document.getElementById('procinfo');
+  const info=document.getElementById('procinfo');
+  const procIcon=document.getElementById('procIcon'), procLetter=document.getElementById('procLetter'),
+    procLabel=document.getElementById('procLabel'), procPkg=document.getElementById('procPkg');
   if(cur){
-    const online=sessionsOf(pkg).filter(a=>a.online).length;
-    primary.textContent=cur.label||cur.package;
-    secondary.textContent=(cur.label?cur.package+' · ':'')+(device.kind==='device'?'未绑定观测会话':online?online+' 个在线会话':'无在线会话');
+    procLabel.textContent=cur.label||cur.package;
+    procPkg.textContent=cur.label&&cur.label!==cur.package?cur.package:'';
+    procLetter.textContent=(cur.label||cur.package||'?').slice(0,1).toUpperCase();
+    procIcon.hidden=false; procIcon.src='/api/apps/icon?package='+encodeURIComponent(cur.package);
     info.innerHTML='<dt>应用</dt><dd>'+escapeHtml(cur.label||cur.package)+'</dd><dt>包名</dt><dd>'+escapeHtml(cur.package)+'</dd>';
   }else{
-    primary.textContent='未选择 APP';
-    secondary.textContent=note||(list.length?'点此选择 APP':'没有可查看的 APP');
-    info.innerHTML='<dt>状态</dt><dd>'+escapeHtml(secondary.textContent)+'</dd>';
+    const requested=device?.kind==='local'&&pinnedPackage();
+    procLabel.textContent=requested||'选择 APP';
+    procPkg.textContent=requested&&requested!==procLabel.textContent?requested:'';
+    procLetter.textContent='?';
+    procIcon.hidden=true; procIcon.removeAttribute('src');
+    info.innerHTML='<dt>状态</dt><dd>'+escapeHtml(note||(list.length?'点此选择 APP':'没有可查看的 APP'))+'</dd>';
   }
   const menu=document.getElementById('appChoices');
   if(menu.dataset.sig!==sig){
     menu.dataset.sig=sig;
-    menu.innerHTML=visible.length?visible.map(a=>
-      '<button type="button" class="app-item" data-pkg="'+escapeHtml(a.package)+'"><span class="app-name-row"><span class="app-name">'+
-      escapeHtml(a.label||a.package)+'</span><span class="app-state'+(appOnline(a.package)?' on':'')+'">'+escapeHtml(flag(a))+'</span></span>'+
-      (a.label?'<span class="app-pkg">'+escapeHtml(a.package)+'</span>':'')+'</button>'
-    ).join(''):'<div class="app-empty">'+escapeHtml(list.length?'没有匹配的 APP':note||'没有可查看的 APP')+'</div>';
+    const face=a=>{ const letter=escapeHtml((a.label||a.package||'?').slice(0,1).toUpperCase());
+      return '<span class="app-face"><img data-app-icon alt="" src="/api/apps/icon?package='+encodeURIComponent(a.package)+'"><span class="app-dialog-letter">'+letter+'</span></span>'; };
+    const inject=a=>device.kind==='local'
+      ?'<button type="button" class="app-inject" data-inject="'+escapeHtml(a.package)+'" aria-pressed="'+String(!!a.injected)+'"'+
+        (!scopeReadAt||scopeBusy?' disabled':'')+' title="注入"></button>':'';
+    const row=a=>'<div class="app-row">'+inject(a)+'<button type="button" class="app-item" data-pkg="'+escapeHtml(a.package)+'">'+face(a)+
+      '<span class="app-copy"><span class="app-name">'+escapeHtml(a.label||a.package)+'</span>'+
+      (a.label?'<span class="app-pkg">'+escapeHtml(a.package)+'</span>':'')+'</span>'+
+      '<span class="app-state'+(a.running?' on':'')+'">'+escapeHtml(flag(a))+'</span></button></div>';
+    if(device.kind==='local'){
+      const rank=a=>a.running==='foreground'?0:a.running==='background'?1:2;
+      const shown=visible.filter(a=>appTab==='system'?a.system:!a.system).slice().sort((a,b)=>rank(a)-rank(b)||(a.label||a.package).localeCompare(b.label||b.package,'zh'));
+      menu.innerHTML=shown.length?shown.map(row).join(''):'<div class="app-empty">'+escapeHtml(query?'没有匹配的应用':note||'没有可查看的应用')+'</div>';
+    }else menu.innerHTML=visible.length?visible.map(row).join(''):'<div class="app-empty">'+escapeHtml(list.length?'没有匹配的 APP':note||'没有可查看的 APP')+'</div>';
   }
   for(const button of menu.querySelectorAll('.app-item')){
     const current=button.dataset.pkg===pkg;
@@ -2902,26 +3484,51 @@ function render(){
   }
   renderSessions();
   renderAppDirectory();
-  document.getElementById('appAffiliation').textContent=device?.kind==='local'?'选定的本地 USB 会话':
+  document.getElementById('setAppConnection').textContent=panelDeviceState==='ready'?panelAppConnection(device):'正在读取设备连接情况';
+  document.getElementById('appAffiliation').textContent=device?.kind==='local'?panelAppConnection(device):
     device?.kind==='device'?(registryScopeError||'查看此设备的范围；不混入 Host 旧会话'):
     device?.kind==='legacy'?'当前 Host 会话 · 设备归属未核验':'未选择设备';
   updateCapStatePill();
   renderArtifactLedger();
-  if(settingsDialog.open && !statusPage.hidden) renderStatusApp();
+  if(document.getElementById('appDialog')?.open) paintAppDialog();
   if(settingsDialog.open){
     renderSettingsScope();
     if(!capturePage.hidden) renderCapabilityStatus();
     scheduleObservationRefresh();
   }
 }
+async function refreshScope(force){
+  if(currentDevice()?.kind!=='local') return;
+  if(!force && Date.now()-scopeReadAt<8000) return;
+  scopeReadAt=Date.now();
+  try{
+    const r=await readPanelJson('/api/scope');
+    if(Array.isArray(r.packages)&&r.ok!==false){ scopePackages=r.packages; scopeError=''; }
+    else if(!scopePackages.length) scopeError='注入范围读取失败';
+  }catch{ if(!scopePackages.length) scopeError='注入范围读取失败'; }
+  render();
+}
+async function toggleInjection(pkg, add){
+  if(!pkg||scopeBusy) return;
+  scopeBusy=pkg;
+  render();
+  try{
+    const response=await fetch('/api/scope',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(add?{add:[pkg]}:{remove:[pkg]})});
+    const result=await response.json().catch(()=>({}));
+    const confirmed=result.ok===true&&Array.isArray(result.packages)&&result.packages.includes(pkg)===add;
+    if(!confirmed) toast(result.error||'手机没有确认注入范围');
+    else scopePackages=result.packages;
+  }catch{ toast('手机没有确认注入范围'); }
+  finally{ scopeBusy=''; render(); }
+}
 async function refreshApps(){
-  if(!usesHostSessions()||readingHostRoster===rosterGeneration) return;
+  if(!usesHostRoster()||readingHostRoster===rosterGeneration) return;
   const generation=rosterGeneration;
   readingHostRoster=generation;
   const captureVersion=serverCaptureVersion;
   try{
     const r=await readPanelJson('/api/apps');
-    if(generation!==rosterGeneration||!usesHostSessions()) return;
+    if(generation!==rosterGeneration||!usesHostRoster()) return;
     if((r.localObservation===true)!==(currentDevice()?.kind==='local')) throw Error('APP 列表与设备来源不一致');
     if(!Array.isArray(r.apps)) throw Error('APP 列表无效');
     serverApps=r.apps;
@@ -2938,19 +3545,6 @@ async function refreshApps(){
     if(readingHostRoster===generation) readingHostRoster=-1;
   }
   render();
-}
-async function loadAppEvents(clear=false){
-  const el=document.getElementById('appEvents'), pkg=selectedPackage();
-  const scope=appScopeKey();
-  if(clear||!pkg) el.textContent='';
-  if(!pkg||!usesHostSessions()) return;
-  try{
-    const r=await readPanelJson('/api/events?package='+encodeURIComponent(pkg)+'&limit=80');
-    if(appScopeKey()!==scope) return;
-    const allowedSessions=new Set(sessionsOf(pkg).map(a=>a.sessionId));
-    const rows=(r.events||[]).filter(e=>['agent.hello','agent.close'].includes(e.type)&&allowedSessions.has(e.data?.sessionId)).slice(-8).reverse();
-    el.innerHTML=rows.map(e=>'<div>'+escapeHtml(fmtTime(e.ts))+' '+(e.type==='agent.hello'?'进程连上':'进程退出')+'</div>').join('');
-  }catch(e){ if(appScopeKey()===scope) el.textContent=''; }
 }
 function scopedArtifactRows(events,pkg,sessionIds){
   if(!pkg||!Array.isArray(events)) return [];
@@ -2975,7 +3569,6 @@ async function loadArtifactLedger(){
     appEventsState={key,loaded:false,failed:true,artifacts:[]};
   }
   renderArtifactLedger();
-  if(settingsDialog.open&&!capturePage.hidden) renderCapabilityStatus();
 }
 function renderArtifactLedger(){
   const empty=document.getElementById('artifactEmpty'), table=document.getElementById('artifactTable');
@@ -2999,9 +3592,9 @@ function connect(){ const ws=new WebSocket(`ws://${location.host}/ws`); const co
   ws.onclose=()=>{conn.className='status-dot';st.textContent='电脑服务重连中…';setWsPill('down','no');dbg('WS','close');setTimeout(connect,1500);};
   ws.onmessage=e=>{const m=JSON.parse(e.data);
     if(m.event==='snapshot'){agents.clear();(m.data||[]).forEach(a=>agents.set(a.sessionId,{...agents.get(a.sessionId),...a})); render();}
-    else if(m.event==='agent.hello'){ upsert(m.data); void loadAppEvents(); }
+    else if(m.event==='agent.hello'){ upsert(m.data); }
     else if(m.event==='agent.maps'){const a=agents.get(m.data.sessionId);if(a){a.mapsCount=m.data.count;upsert(a);}}
-    else if(m.event==='agent.close'){const a=agents.get(m.data.sessionId);if(a){a.online=false;upsert(a);void loadAppEvents();}}
+    else if(m.event==='agent.close'){const a=agents.get(m.data.sessionId);if(a){a.online=false;upsert(a);}}
     else if(m.event==='capture.new'&&m.data&&belongsToApp(m.data)){
       capPush(m.data); if(m.data.category==='net') scheduleExchanges(); else capRenderAll();
       if(m.data.category==='system') scheduleDetect();
@@ -3018,10 +3611,6 @@ document.getElementById('systemKinds').addEventListener('click',e=>{
   const kind=e.target.closest('[data-system-kind]')?.dataset.systemKind;
   if(kind) chooseSystemKind(kind);
 });
-document.getElementById('viewFileActivity').addEventListener('click',()=>{
-  document.querySelector('#nav [data-panel="p-system"]').click();
-  chooseSystemKind('file');
-});
 document.getElementById('appDirectoryPath').addEventListener('click',e=>{
   const path=e.target.closest('button[data-path]')?.dataset.path;
   if(typeof path==='string') void loadAppDirectory(path);
@@ -3029,21 +3618,87 @@ document.getElementById('appDirectoryPath').addEventListener('click',e=>{
 document.getElementById('appDirectoryRefresh').addEventListener('click',()=>{
   void loadAppDirectory(appDirectoryView.path);
 });
+document.getElementById('appDirectoryRoot').addEventListener('change',e=>{ void loadAppDirectory('',e.target.value); });
+document.getElementById('appPreviewEdit').addEventListener('click',startAppFileEdit);
+document.getElementById('appPreviewCancelEdit').addEventListener('click',cancelAppFileEdit);
+document.getElementById('appPreviewSave').addEventListener('click',saveAppFileEdit);
+document.getElementById('appPreviewEditor').addEventListener('input',e=>{
+  const preview=appDirectoryView.preview;
+  if(!preview||typeof preview.draft!=='string'||preview.saving) return;
+  preview.draft=e.target.value;
+  document.getElementById('appPreviewSave').disabled=preview.draft===preview.text;
+});
+document.getElementById('appPreviewSaveCopy').addEventListener('click',saveAppPreviewCopy);
 document.getElementById('appDirectoryEntries').addEventListener('click',e=>{
   const file=e.target.closest('button[data-file]')?.dataset.file;
   if(file) void selectAppDirectoryEntry(file);
 });
-document.getElementById('appMenu').addEventListener('click', e=>{
+function paintAppDialog(){
+  const pkg=selectedPackage();
+  const row=appRecords().find(a=>a.package===pkg);
+  const name=row?.label||pkg||'未选择';
+  document.getElementById('appDialogName').textContent=name;
+  document.getElementById('appDialogPkg').textContent=pkg||'';
+  const state=document.getElementById('appDialogState');
+  state.textContent=!pkg?'':row?.running==='foreground'?'前台':row?.running==='background'?'后台':'未运行';
+  const icon=document.getElementById('appDialogIcon');
+  const letter=document.getElementById('appDialogLetter');
+  letter.textContent=(name||'?').slice(0,1).toUpperCase();
+  letter.hidden=false;
+  icon.hidden=true;
+  if(!pkg) return;
+  const src='/api/apps/icon?package='+encodeURIComponent(pkg);
+  icon.onload=()=>{ if(icon.getAttribute('src')===src && icon.naturalWidth>0){ icon.hidden=false; letter.hidden=true; } };
+  if(icon.getAttribute('src')!==src) icon.src=src;
+  else if(icon.complete && icon.naturalWidth>0){ icon.hidden=false; letter.hidden=true; }
+}
+document.getElementById('appDialogIcon').addEventListener('error',()=>{
+  document.getElementById('appDialogIcon').hidden=true;
+  document.getElementById('appDialogLetter').hidden=false;
+});
+async function controlApp(action){
+  const pkg=selectedPackage();
+  if(!pkg) return;
+  const labels={open:'已打开',stop:'已结束',restart:'已重启'};
+  try{
+    const response=await fetch('/api/apps/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({package:pkg,action})});
+    const result=await response.json().catch(()=>({}));
+    if(!response.ok||result.ok===false) toast(result.error||'手机没有完成这个操作');
+    else toast(labels[action]||'已完成');
+  }catch{ toast('手机没有完成这个操作'); }
+}
+document.getElementById('appChoices').addEventListener('error', e=>{
+  if(e.target?.hasAttribute?.('data-app-icon')){ e.target.hidden=true; e.target.nextElementSibling.hidden=false; }
+}, true);
+document.getElementById('appDialog').addEventListener('click', e=>{
+  const tab=e.target.closest('[data-app-tab]');
+  if(tab){
+    appTab=tab.dataset.appTab==='system'?'system':'user';
+    for(const button of document.querySelectorAll('#appDialog [data-app-tab]')) button.setAttribute('aria-pressed', String(button===tab));
+    render();
+    return;
+  }
+  const action=e.target.closest('[data-app-action]')?.dataset.appAction;
+  if(action){ void controlApp(action); return; }
+  const inject=e.target.closest('[data-inject]');
+  if(inject){ void toggleInjection(inject.dataset.inject, inject.getAttribute('aria-pressed')!=='true'); return; }
   const btn=e.target.closest('[data-pkg]');
   if(!btn||!appRecords().some(a=>a.package===btn.dataset.pkg)) return;
   chosenPkg=btn.dataset.pkg;
-  const next='/'+encodeURIComponent(chosenPkg);
-  if(usesHostSessions()&&location.pathname!==next) history.pushState(null,'',next);
-  closePopovers();
+  const observer=currentDevice()?.observedPackage;
+  const next=observer?'/'+encodeURIComponent(observer)+(observer===chosenPkg?'':'?app='+encodeURIComponent(chosenPkg)):'/'+encodeURIComponent(chosenPkg);
+  if(usesHostRoster()&&location.pathname+location.search!==next) history.pushState(null,'',next);
   render();
 });
+document.getElementById('appDialogClose').addEventListener('click',()=>document.getElementById('appDialog').close());
 window.addEventListener('popstate', ()=>{
-  if(usesHostSessions()){ chosenPkg=pinnedPackage(); render(); }
+  if(usesHostRoster()){ chosenPkg=pinnedPackage(); render(); }
+});
+document.getElementById('setGoToDevices').addEventListener('click',event=>{
+  event.stopPropagation();
+  settingsDialog.close();
+  togglePopover('deviceMenu','deviceContext');
+  document.getElementById('deviceContext').focus();
 });
 document.getElementById('deviceContext').addEventListener('click',e=>{
   e.stopPropagation(); togglePopover('deviceMenu','deviceContext');
@@ -3057,7 +3712,7 @@ document.getElementById('deviceChoices').addEventListener('click',e=>{
 });
 bindToolbar();
 onTabSwitch('p-crypto');
-refreshApps(); setInterval(()=>{ refreshApps(); capLoad(); }, 2000);
+refreshApps(); void refreshScope(true); setInterval(()=>{ refreshApps(); void refreshScope(false); capLoad(); }, 2000);
 
 // ---- 分栏拖动（list-pane 宽度）----
 document.querySelectorAll('.splitter').forEach(sp=>{
@@ -3068,7 +3723,14 @@ document.querySelectorAll('.splitter').forEach(sp=>{
 });
 
 // ---- 头部按钮 / 模态 / 设置 事件绑定 ----
-document.getElementById('appBtn').addEventListener('click', e=>{ e.stopPropagation(); togglePopover('appMenu','appBtn'); });
+document.getElementById('appBtn').addEventListener('click',e=>{
+  e.stopPropagation();
+  closePopovers();
+  paintAppDialog();
+  document.getElementById('appDialog').showModal();
+  document.getElementById('appSearch').focus({preventScroll:true});
+  void refreshScope(true);
+});
 document.addEventListener('click', e=>{
   const recordTab=e.target.closest('.record-tabs [data-record-view]');
   if(recordTab) selectRecordView(recordTab);
@@ -3086,7 +3748,7 @@ document.addEventListener('keydown', e=>{
   selectRecordView(next);
   next.focus();
 });
-document.getElementById('setBtn').addEventListener('click', ()=>openSettings());
+document.getElementById('setBtn').addEventListener('click', ()=>openSettings('crypto'));
 document.getElementById('setClose').addEventListener('click', ()=>settingsDialog.close());
 settingsNav.addEventListener('click', e=>{
   const button=e.target.closest('button[data-settings]');
