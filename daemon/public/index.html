@@ -1144,6 +1144,7 @@
     <h2 id="appDialogTitle">应用</h2>
     <button type="button" data-app-tab="user" aria-pressed="true">已安装应用</button>
     <button type="button" data-app-tab="system" aria-pressed="false">系统应用</button>
+    <button type="button" data-app-tab="injected" aria-pressed="false">已勾选</button>
   </aside>
   <div class="app-dialog-main">
     <div class="app-dialog-card">
@@ -3482,7 +3483,7 @@ function render(){
       '<span class="app-state'+(a.running?' on':'')+'">'+escapeHtml(flag(a))+'</span></button></div>';
     if(device?.kind==='local'){
       const rank=a=>a.running==='foreground'?0:a.running==='background'?1:2;
-      const shown=visible.filter(a=>appTab==='system'?a.system:!a.system).slice().sort((a,b)=>rank(a)-rank(b)||(a.label||a.package).localeCompare(b.label||b.package,'zh'));
+      const shown=visible.filter(a=>appTab==='injected'?a.injected:appTab==='system'?a.system:!a.system).slice().sort((a,b)=>rank(a)-rank(b)||(a.label||a.package).localeCompare(b.label||b.package,'zh'));
       menu.innerHTML=shown.length?shown.map(row).join(''):'<div class="app-empty">'+escapeHtml(query?'没有匹配的应用':note||'没有可查看的应用')+'</div>';
     }else menu.innerHTML=visible.length?visible.map(row).join(''):'<div class="app-empty">'+escapeHtml(list.length?'没有匹配的 APP':note||'没有可查看的 APP')+'</div>';
   }
@@ -3685,7 +3686,7 @@ document.getElementById('appChoices').addEventListener('error', e=>{
 document.getElementById('appDialog').addEventListener('click', e=>{
   const tab=e.target.closest('[data-app-tab]');
   if(tab){
-    appTab=tab.dataset.appTab==='system'?'system':'user';
+    appTab=tab.dataset.appTab==='system'?'system':tab.dataset.appTab==='injected'?'injected':'user';
     for(const button of document.querySelectorAll('#appDialog [data-app-tab]')) button.setAttribute('aria-pressed', String(button===tab));
     render();
     return;
