@@ -53,7 +53,7 @@ object AdhDeviceDaemon {
         runCatching{earlyBroker=EarlyPlanBroker(cache)}.onFailure{Log.e(TAG,"early broker unavailable; cache delivery disabled",it)}
         val service = RootScopeBinder(ManagerCallerVerifier(context), operations)
         // RPC availability never tears down the pre-existing authenticated Binder service.
-        runCatching { rpc = LocalDeviceRpcServer(operations) }.onFailure { Log.e(TAG, "USB RPC unavailable; Binder remains available", it) }
+        runCatching { rpc = LocalDeviceRpcServer(operations, onError = { Log.e(TAG, "device rpc session ended", it) }) }.onFailure { Log.e(TAG, "USB RPC unavailable; Binder remains available", it) }
         File(AdhPaths.SCOPE_DIR).mkdirs()
         File(AdhPaths.DAEMON_PID_PATH).writeText(Process.myPid().toString())
         File(AdhPaths.DAEMON_READY_MARKER).writeText("1\n")

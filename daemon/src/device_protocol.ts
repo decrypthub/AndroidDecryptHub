@@ -7,7 +7,7 @@ import { OperationError } from './execution_context.ts';
 export const DEVICE_PROTOCOL='adh.device/1', DEVICE_SOCKET='adh_device_rpc_v1';
 export const DEVICE_BOOTSTRAP='/data/adb/adh/device-rpc/usb-access.json';
 export const DEVICE_FRAME_MAX=1024*1024;
-export const DEVICE_READ_METHODS=new Set(['device.info','device.capabilities','device.state','module.status','scope.get','applications.list','processes.list','certificates.list','host.get','operations.get','operations.reconcile','lan.status','pairings.list','early.prepare','early.status','hooks.migration.preview']);
+export const DEVICE_READ_METHODS=new Set(['device.info','device.capabilities','device.state','module.status','scope.get','applications.list','processes.list','certificates.list','host.get','operations.get','operations.reconcile','lan.status','pairings.list','early.prepare','early.status','hooks.migration.preview','legacy.icon']);
 export const DEVICE_WRITE_METHODS=new Set(['scope.patch','scope.replace','process.control','certificates.put','certificates.delete','host.set','operations.resolve','lan.configure','pairings.grant','pairings.revoke','early.stage','early.revoke','hooks.migration.apply','hooks.migration.rollback']);
 export const uuid=(value:unknown):value is string=>typeof value==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(value);
 export class DeviceError extends OperationError {}
