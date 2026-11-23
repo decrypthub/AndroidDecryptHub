@@ -3,6 +3,7 @@ import { promisify } from 'node:util';
 import { catalogIcon, ensureCatalogIdentity } from './app_catalog.ts';
 import { apkAaptDumps } from './scope_list.ts';
 import { shQuote } from './sandbox_fs.ts';
+import { deviceIcon, deviceSerial } from './device_bridge.ts';
 
 const execFileP = promisify(execFile);
 const cache = new Map<string, { at: number; v: { body: Buffer; type: string } | null }>();
@@ -450,13 +451,28 @@ async function resolveAdaptiveLayer(apk: string, xmlPath: string): Promise<strin
   return candidates[0]?.path || null;
 }
 
+/** Device-rendered PNG via adh.device/1; falls back to host APK parsing when the
+ *  persistent channel is down. 'none' from the device is authoritative — the
+ *  package genuinely has no renderable icon (no fake robot fallback). */
+async function resolveIcon(pkg: string): Promise<{ body: Buffer; type: string } | null> {
+  const serial = deviceSerial();
+  if (serial) {
+    try {
+      const icon = await deviceIcon(serial, pkg);
+      if (icon === 'none') return null;
+      if (icon) return { body: icon, type: imageType(icon) };
+    } catch { /* channel error: fall back to host parsing */ }
+  }
+  return apkIcon(pkg);
+}
+
 /** The launcher bitmap named by aapt, not a foreground or monochrome layer. */
 export async function readPackageIcon(pkg: string): Promise<{ body: Buffer; type: string } | null> {
   const hit = cache.get(pkg);
   if (hit && (hit.v || Date.now() - hit.at < NEG_TTL)) return hit.v;
   let job = inflight.get(pkg);
   if (!job) {
-    job = apkIcon(pkg).then(result => {
+    job = resolveIcon(pkg).then(result => {
       cache.set(pkg, { at: Date.now(), v: result });
       return result;
     }).finally(() => inflight.delete(pkg));
