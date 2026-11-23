@@ -9,6 +9,7 @@ import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
 import { isDeepStrictEqual, promisify } from 'node:util';
 import { crc32 } from 'node:zlib';
+import { shQuote } from './sandbox_fs.ts';
 
 const execFileP = promisify(execFile);
 const SCOPE_PATH = '/data/adb/adh/scope.json';
@@ -143,6 +144,83 @@ async function resolveLabel(pkg: string): Promise<string> {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+}
+
+/** Badging text for one installed APK. Callers pick the label and the real launcher icon from it. */
+export async function apkBadging(apk: string): Promise<string> {
+  const aapt = findAapt();
+  if (!aapt || !apk.startsWith('/')) return '';
+  const manifest = await adbOut(`su -c ${shQuote(`unzip -p ${shQuote(apk)} AndroidManifest.xml`)}`);
+  const arsc = await adbOut(`su -c ${shQuote(`unzip -p ${shQuote(apk)} resources.arsc`)}`);
+  if (manifest.length < 8 || arsc.length < 8) return '';
+  const dir = mkdtempSync(join(tmpdir(), 'adh-label-'));
+  try {
+    const zipPath = join(dir, 'base.apk');
+    writeFileSync(zipPath, storedZip([
+      { name: 'AndroidManifest.xml', data: manifest },
+      { name: 'resources.arsc', data: arsc },
+    ]));
+    try {
+      const { stdout } = await trackedEffect(() => execFileP(aapt, ['dump', 'badging', zipPath], {
+        timeout: 20000, windowsHide: true, maxBuffer: 4 * 1024 * 1024,
+      }));
+      return String(stdout ?? '');
+    } catch (e: any) {
+      const stdout = String(e?.stdout ?? '');
+      if (stdout.includes('package:')) return stdout;
+      return '';
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+export async function apkXmlTree(apk: string, xmlPath: string): Promise<string> {
+  const aapt = findAapt();
+  if (!aapt || !apk.startsWith('/') || !xmlPath || xmlPath.includes('..')) return '';
+  const xml = await adbOut(`su -c ${shQuote(`unzip -p ${shQuote(apk)} ${shQuote(xmlPath)}`)}`);
+  const arsc = await adbOut(`su -c ${shQuote(`unzip -p ${shQuote(apk)} resources.arsc`)}`);
+  if (xml.length < 8 || arsc.length < 8) return '';
+  const dir = mkdtempSync(join(tmpdir(), 'adh-xml-'));
+  try {
+    const zipPath = join(dir, 'base.apk');
+    writeFileSync(zipPath, storedZip([
+      { name: xmlPath, data: xml },
+      { name: 'resources.arsc', data: arsc },
+    ]));
+    const { stdout } = await trackedEffect(() => execFileP(aapt, ['dump', 'xmltree', zipPath, xmlPath], {
+      timeout: 20000, windowsHide: true, maxBuffer: 2 * 1024 * 1024,
+    }));
+    return String(stdout ?? '');
+  } catch {
+    return '';
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** Highest-density full launcher bitmap. Foreground-only and monochrome layers are not the icon. */
+export function pickBadgingIcon(badging: string): string {
+  const rows: { density: number; path: string; rank: number }[] = [];
+  let applicationIcon = '';
+  for (const line of badging.split(/\r?\n/)) {
+    const iconMatched = /^application:\s+label='[^']*'\s+icon='([^']+)'/i.exec(line);
+    if (iconMatched && !applicationIcon && /\.(png|webp|xml)$/i.test(iconMatched[1])) {
+      applicationIcon = iconMatched[1];
+    }
+    const matched = /^application-icon-(\d+):'([^']+)'/.exec(line);
+    if (!matched || !/\.(png|webp)$/i.test(matched[2])) continue;
+    const path = matched[2];
+    const rank = /monochrome|foreground|background/i.test(path) ? 0 : /round/i.test(path) ? 1 : 2;
+    rows.push({ density: Number(matched[1]) || 0, path, rank });
+  }
+  rows.sort((a, b) => b.rank - a.rank || b.density - a.density);
+  const full = rows.find(row => row.rank > 0);
+  if (full) return full.path;
+  // Some APKs only expose the application icon attribute (no density variants).
+  if (applicationIcon) return applicationIcon;
+  // Adaptive-only packages: show the foreground glyph rather than nothing.
+  return rows.find(row => /foreground/i.test(row.path))?.path || '';
 }
 
 const resolvedLabels = new Map<string, string>();
@@ -315,6 +393,20 @@ export async function readScopeFile(): Promise<ScopeFile> {
   } catch (e) {
     return { packages: [], version: 2, mode: 'allowlist', error: (e instanceof Error ? e.message : String(e)).split('\n')[0].slice(0, 240) };
   }
+}
+
+/** One package in, or one package out. A full replacement is not a panel click. */
+export function scopePanelOp(body: unknown): { package: string; add: boolean } | { error: string } {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return { error: '需要指定一个应用' };
+  const rec = body as Record<string, unknown>;
+  const keys = Object.keys(rec);
+  if (keys.some((key) => key !== 'add' && key !== 'remove')) return { error: '只能加入或移出一个应用' };
+  const add = Array.isArray(rec.add) ? rec.add : null;
+  const remove = Array.isArray(rec.remove) ? rec.remove : null;
+  if ((add && remove) || (!add && !remove) || (add ?? remove)!.length !== 1) return { error: '只能加入或移出一个应用' };
+  const pkg = String((add ?? remove)![0] ?? '').trim();
+  if (!PKG_RE.test(pkg) || pkg === MANAGER_PKG) return { error: '包名无效' };
+  return { package: pkg, add: add !== null };
 }
 
 /** Pure merge: `add` wins over `remove`? No — an explicit remove in the same call wins. */
