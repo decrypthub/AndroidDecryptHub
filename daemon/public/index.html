@@ -60,7 +60,9 @@
   .process-trigger .proc-text { display:flex; flex-direction:column; min-width:0; line-height:1.25; }
   .process-trigger #procLabel { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .process-trigger .proc-pkg { overflow:hidden; color:var(--muted); font-size:10px; font-weight:400; text-overflow:ellipsis; white-space:nowrap; }
-  .process-trigger .menu-chevron { grid-column:2; align-self:center; color:var(--muted); }
+  .menu-chevron { display:inline-flex; align-items:center; justify-content:center; color:var(--muted); line-height:0; }
+  .menu-chevron svg { display:block; }
+  .process-trigger .menu-chevron { grid-column:2; align-self:center; }
   .app-choices { max-height:190px; overflow:auto; }
   .app-sessions { margin-top:8px; padding:9px 7px 4px; border-top:1px solid var(--line-soft); }
   .app-context .proc-title { margin:3px 7px 7px; color:var(--muted); font-size:11px; font-weight:600; }
@@ -512,7 +514,7 @@
   .set-header > div { min-width:0; }
   .set-header .set-app { margin-top:4px; }
   .set-header .set-app[hidden] { display:none; }
-  .set-close-x { width:30px; height:30px; flex:none; border:0; background:transparent; color:var(--muted); font-size:22px; line-height:1; cursor:pointer; border-radius:4px; }
+  .set-close-x { display:grid; place-items:center; width:30px; height:30px; flex:none; padding:0; border:0; background:transparent; color:var(--muted); cursor:pointer; border-radius:4px; }
   .set-close-x:hover { background:var(--surface-3); color:var(--ink); }
   .set-shell :focus-visible { outline:2px solid var(--blue); outline-offset:2px; }
   .set-layout { display:flex; flex:1; min-height:0; }
@@ -692,7 +694,7 @@
         <span class="context-label">设备</span>
         <strong id="deviceTitle">读取中…</strong>
         <span class="device-link" id="deviceLink"></span>
-        <span class="menu-chevron" aria-hidden="true">⌄</span>
+        <span class="menu-chevron" aria-hidden="true"><svg viewBox="0 0 12 12" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4.5l3.5 3.5 3.5-3.5"/></svg></span>
       </button>
       <div class="popover device-menu" id="deviceMenu">
         <div class="device-menu-label">网关设备</div>
@@ -707,7 +709,7 @@
           <span class="app-face proc-face"><img id="procIcon" data-app-icon alt="" hidden><span class="app-dialog-letter" id="procLetter">?</span></span>
           <span class="proc-text"><span id="procLabel">未选择 APP</span><span class="proc-pkg" id="procPkg"></span></span>
         </span>
-        <span class="menu-chevron" aria-hidden="true">⌄</span>
+        <span class="menu-chevron" aria-hidden="true"><svg viewBox="0 0 12 12" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4.5l3.5 3.5 3.5-3.5"/></svg></span>
       </button>
     </section>
     <button type="button" class="compact-action" id="setBtn" aria-haspopup="dialog" aria-controls="setMask">设置</button>
@@ -725,7 +727,7 @@
           <input id="tb-q" type="search" aria-label="搜索当前类别记录" placeholder="搜索 #序号、算法、Hook 或预览">
         </label>
         <div class="menu-wrap filter-wrap">
-          <button type="button" class="filter-toggle" id="filterToggleBtn" aria-expanded="false" aria-controls="advancedFilters">筛选<span class="filter-badge" id="filterBadge"></span><span class="menu-chevron" aria-hidden="true">⌄</span></button>
+          <button type="button" class="filter-toggle" id="filterToggleBtn" aria-expanded="false" aria-controls="advancedFilters">筛选<span class="filter-badge" id="filterBadge"></span><span class="menu-chevron" aria-hidden="true"><svg viewBox="0 0 12 12" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4.5l3.5 3.5 3.5-3.5"/></svg></span></button>
           <section class="advanced-filters" id="advancedFilters" aria-label="事件筛选" hidden>
             <div class="advanced-filter-head">
               <strong>事件筛选</strong>
@@ -977,7 +979,7 @@
           <h3 id="setPanelTitle">加解密</h3>
           <p class="set-app" id="setAppContext" hidden><span>设备 <strong id="setActiveDevice">未选择</strong></span><span>APP <strong id="setActiveApp">未选择应用</strong></span></p>
         </div>
-        <button type="button" class="set-close-x" id="setClose" aria-label="关闭设置">×</button>
+        <button type="button" class="set-close-x" id="setClose" aria-label="关闭设置"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>
       </div>
     <div class="set-main">
       <section id="setCryptoPage" class="set-page" aria-label="加解密">
@@ -1154,7 +1156,7 @@
         <button type="button" data-app-action="stop">结束</button>
         <button type="button" data-app-action="restart">重启</button>
       </div>
-      <button type="button" class="set-close-x" id="appDialogClose" aria-label="关闭">×</button>
+      <button type="button" class="set-close-x" id="appDialogClose" aria-label="关闭"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>
     </div>
     <input class="app-menu-search" id="appSearch" type="search" placeholder="搜索名称或包名" aria-label="搜索当前设备的 APP">
     <div class="app-choices" id="appChoices"></div>
