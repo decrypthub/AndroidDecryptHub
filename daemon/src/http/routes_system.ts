@@ -14,10 +14,13 @@ import { assembleHttpExchanges, type TlsChunk } from '../http_exchange.ts';
 import { AGENT_PORT, webUrls } from '../config.ts';
 import { baseFromHost, isValidPackage, mcpOnboarding } from '../mcp_onboarding.ts';
 import { handleMcp, MCP_TOOLS } from '../mcp.ts';
-import { scopedApps, mergeScope, readScopeFile, writeScopePackages } from '../scope_list.ts';
+import { scopedApps, mergeScope, packageInstalled, readScopeFile, scopePanelOp, writeScopePackages } from '../scope_list.ts';
+import { coldStartPackage, runningPid, startPackage, stopPackage } from '../app_launch.ts';
+import { localObserver, noteObservedPid } from '../local_observer.ts';
+import { readPackageIcon } from '../package_icon.ts';
 import { analyzePackage } from '../app_analyze.ts';
 import { listCaptureArmProtected } from '../service.ts';
-import { localObserver } from '../local_observer.ts';
+import { readAppCatalog } from '../app_catalog.ts';
 import {
   broadcast, captureHealth, capturePackage, captures, captureSettingsForPackage, captureTimers,
   clearCaptureStore, clearPackageCaptureStore, configStats, cryptoIdentify, dumps, eventPackage,
@@ -53,13 +56,41 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
     { path:'/quick-start.js',handler:servePublic('quick-start.js','text/javascript; charset=utf-8') },
     { path:'/hook-plans-panel.js',handler:servePublic('hook-plans-panel.js','text/javascript; charset=utf-8') },
     { path:'/operations.js',handler:servePublic('operations.js','text/javascript; charset=utf-8') },
+    { method: 'GET', path: '/api/apps/icon', handler: async () => {
+      const pkg = url.searchParams.get('package') || '';
+      try {
+        const icon = await readPackageIcon(pkg);
+        if (!icon) return send(404, { ok: false, error: '没有图标' });
+        res.writeHead(200, { 'content-type': icon.type, 'cache-control': 'private, max-age=60', 'access-control-allow-origin': '*' });
+        res.end(icon.body);
+      } catch (e) { return send(502, { ok: false, error: (e as Error).message }); }
+    } },
+    { method: 'POST', path: '/api/apps/control', handler: async () => {
+      let body: { package?: string; action?: string };
+      try { body = JSON.parse((await readBody(req)) || '{}'); } catch { return send(400, { ok: false, error: 'JSON 格式错误' }); }
+      const pkg = String(body.package || '').trim();
+      const action = body.action;
+      if (!pkg || !['open', 'stop', 'restart'].includes(String(action))) return send(400, { ok: false, error: '需要应用和动作' });
+      if (!(await packageInstalled(pkg))) return send(404, { ok: false, error: '手机上没有这个应用' });
+      const result = action === 'stop' ? await stopPackage(pkg) : action === 'restart' ? await coldStartPackage(pkg) : await startPackage(pkg);
+      if (!result.ok) return send(502, result);
+      if (action === 'stop') noteObservedPid(pkg, 0);
+      else noteObservedPid(pkg, await runningPid(pkg));
+      return send(200, result);
+    } },
     { path: '/api/apps', handler: async () => {
       if (localObserver) {
         const pkg = localObserver.package;
-        const online = [...sessions.values()].some(s => s.online && s.package === pkg && s.pid === localObserver.pid);
+        if(process.env.ADH_USB_APP_INVENTORY==='1'&&!localObserver.fileBrowserOnly&&!localObserver.demoApiSerial){
+          try{
+            const apps=await readAppCatalog();
+            return send(200,{apps,error:null,capture:false,localObservation:true,inventory:true});
+          }catch{ return send(200,{apps:[],error:'读不到手机上的应用列表，请检查 USB 连接后重试。',capture:false,localObservation:true,inventory:true}); }
+        }
+        const online = localObserver.fileBrowserOnly===true || !!localObserver.demoApiSerial || [...sessions.values()].some(s => s.online && s.package === pkg && s.pid === localObserver.pid);
         return send(200, {
-          apps: online ? [{ package: pkg, label: pkg }] : [],
-          error: online ? null : '正在等待当前 USB 应用的会话',
+          apps: [{ package: pkg, label: localObserver.demoApiSerial?'ADH Demo API 采集':pkg }],
+          error: online ? null : '还没收到这个 APP 的采集连接',
           capture: false,
           localObservation: true,
         });
@@ -82,6 +113,12 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
     { method: 'POST', path: '/api/scope', handler: async () => {
       let body: any;
       try { body = JSON.parse((await readBody(req)) || '{}'); } catch { return send(400, { error: 'bad json' }); }
+      if (localObserver) {
+        const op = scopePanelOp(body);
+        if ('error' in op) return send(400, { ok: false, error: op.error });
+        if (!(await packageInstalled(op.package))) return send(404, { ok: false, error: '手机上没有这个应用' });
+        body = op.add ? { add: [op.package] } : { remove: [op.package] };
+      }
       const cur = await readScopeFile();
       if (cur.error) return send(503, { ok: false, error: cur.error });
       const before = cur.packages;
@@ -166,6 +203,7 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
           algo: c.algo, op: c.op, func: c.func, inl: c.inl, outl: c.outHex ? c.outHex.length / 2 : 0,
           hasKey: !!c.keyHex, tid: c.tid, ts: c.ts,
           preview: c.category === 'net' ? previewForCapture(c.func, c.hex) : c.preview,
+          ...(c.path ? { path: c.path } : {}),
           ...(c.category === 'crypto' ? { view: cryptoView(c) } : {}),
         })),
       });
