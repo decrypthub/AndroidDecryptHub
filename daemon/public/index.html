@@ -3508,8 +3508,8 @@ async function refreshScope(force){
   try{
     const r=await readPanelJson('/api/scope');
     if(Array.isArray(r.packages)&&r.ok!==false){ scopePackages=r.packages; scopeError=''; }
-    else if(!scopePackages.length) scopeError='注入范围读取失败';
-  }catch{ if(!scopePackages.length) scopeError='注入范围读取失败'; }
+    else if(!scopePackages.length) scopeError=r.error||'注入范围读取失败';
+  }catch{ if(!scopePackages.length) scopeError='注入范围读取失败：面板连接中断'; }
   render();
 }
 async function toggleInjection(pkg, add){
@@ -3518,11 +3518,14 @@ async function toggleInjection(pkg, add){
   render();
   try{
     const response=await fetch('/api/scope',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(add?{add:[pkg]}:{remove:[pkg]})});
-    const result=await response.json().catch(()=>({}));
-    const confirmed=result.ok===true&&Array.isArray(result.packages)&&result.packages.includes(pkg)===add;
-    if(!confirmed) toast(result.error||'手机没有确认注入范围');
-    else scopePackages=result.packages;
-  }catch{ toast('手机没有确认注入范围'); }
+    const result=await response.json().catch(()=>null);
+    const confirmed=result&&result.ok===true&&Array.isArray(result.packages)&&result.packages.includes(pkg)===add;
+    if(confirmed) scopePackages=result.packages;
+    else{
+      toast((result&&(result.error||result.message))||`注入范围服务返回异常（HTTP ${response.status}）`);
+      void refreshScope(true);
+    }
+  }catch{ toast('注入范围请求失败：面板连接中断'); }
   finally{ scopeBusy=''; render(); }
 }
 async function refreshApps(){
