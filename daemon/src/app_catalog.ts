@@ -99,10 +99,10 @@ async function refreshList(): Promise<void> {
 async function resolveIdentity(row: Listed): Promise<void> {
   try {
     const text = await apkBadging(row.apk);
-    labels.set(row.package, applicationLabel(text) || row.package);
+    if (!labels.has(row.package)) labels.set(row.package, applicationLabel(text) || row.package);
     icons.set(row.package, pickBadgingIcon(text));
   } catch {
-    labels.set(row.package, row.package);
+    if (!labels.has(row.package)) labels.set(row.package, row.package);
     icons.set(row.package, '');
   }
 }
@@ -111,7 +111,7 @@ async function pumpIdentity(): Promise<void> {
   if (pumping) return;
   pumping = true;
   try {
-    const pending = listed.filter(row => !labels.has(row.package)).sort((a, b) => Number(a.system) - Number(b.system));
+    const pending = listed.filter(row => !icons.has(row.package)).sort((a, b) => Number(a.system) - Number(b.system));
     let index = 0;
     const worker = async () => {
       while (index < pending.length) await resolveIdentity(pending[index++]);
@@ -138,7 +138,7 @@ const identityJobs = new Map<string, Promise<void>>();
 /** Resolve this one package's label/icon now instead of waiting for the background queue. */
 export async function ensureCatalogIdentity(pkg: string): Promise<void> {
   const row = listed.find(item => item.package === pkg);
-  if (!row || labels.has(pkg)) return;
+  if (!row || icons.has(pkg)) return;
   let job = identityJobs.get(pkg);
   if (!job) {
     job = resolveIdentity(row).finally(() => identityJobs.delete(pkg));

@@ -32,7 +32,14 @@ internal object PackageCatalog {
         val pkg = packageName?.trim().orEmpty()
         if (pkg.isEmpty() || HardExcludes.isExcluded(pkg) || pkg == AdhPaths.DAEMON_PKG) return ByteArray(0)
         val pm = context.packageManager
-        val drawable = runCatching { pm.getApplicationIcon(pkg) }.getOrNull() ?: return ByteArray(0)
+        // getApplicationIcon() never returns null: on any resource miss it hands back the
+        // system default icon, which would paint the same Android robot on every row.
+        // Resolve the drawable through the app's Resources directly so failures stay empty.
+        val info = runCatching { pm.getApplicationInfo(pkg, PackageManager.GET_META_DATA) }.getOrNull()
+            ?: return ByteArray(0)
+        if (info.icon == 0) return ByteArray(0)
+        val res = runCatching { pm.getResourcesForApplication(info) }.getOrNull() ?: return ByteArray(0)
+        val drawable = runCatching { res.getDrawable(info.icon, null) }.getOrNull() ?: return ByteArray(0)
         return runCatching { drawableToPng(drawable) }.getOrDefault(ByteArray(0))
     }
 

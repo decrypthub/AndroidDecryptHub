@@ -146,57 +146,54 @@ async function resolveLabel(pkg: string): Promise<string> {
   }
 }
 
-/** Badging text for one installed APK. Callers pick the label and the real launcher icon from it. */
-export async function apkBadging(apk: string): Promise<string> {
+/** Rebuild a minimal APK (manifest + resources.arsc + extra entries) and run each `aapt dump` pass.
+ *  Each dump entry is `[kind, ...files]`, e.g. `['badging']` or `['xmltree', 'r/a/a.xml']`. */
+export async function apkAaptDumps(apk: string, files: string[], dumps: string[][]): Promise<string[]> {
   const aapt = findAapt();
-  if (!aapt || !apk.startsWith('/')) return '';
+  if (!aapt || !apk.startsWith('/')) return dumps.map(() => '');
   const manifest = await adbOut(`su -c ${shQuote(`unzip -p ${shQuote(apk)} AndroidManifest.xml`)}`);
   const arsc = await adbOut(`su -c ${shQuote(`unzip -p ${shQuote(apk)} resources.arsc`)}`);
-  if (manifest.length < 8 || arsc.length < 8) return '';
-  const dir = mkdtempSync(join(tmpdir(), 'adh-label-'));
+  if (manifest.length < 8 || arsc.length < 8) return dumps.map(() => '');
+  const entries = [
+    { name: 'AndroidManifest.xml', data: manifest },
+    { name: 'resources.arsc', data: arsc },
+  ];
+  for (const name of files) {
+    if (name.startsWith('/') || name.includes('..') || entries.some(e => e.name === name)) continue;
+    const data = await adbOut(`su -c ${shQuote(`unzip -p ${shQuote(apk)} ${shQuote(name)}`)}`);
+    if (data.length >= 4) entries.push({ name, data });
+  }
+  const dir = mkdtempSync(join(tmpdir(), 'adh-aapt-'));
   try {
     const zipPath = join(dir, 'base.apk');
-    writeFileSync(zipPath, storedZip([
-      { name: 'AndroidManifest.xml', data: manifest },
-      { name: 'resources.arsc', data: arsc },
-    ]));
-    try {
-      const { stdout } = await trackedEffect(() => execFileP(aapt, ['dump', 'badging', zipPath], {
-        timeout: 20000, windowsHide: true, maxBuffer: 4 * 1024 * 1024,
-      }));
-      return String(stdout ?? '');
-    } catch (e: any) {
-      const stdout = String(e?.stdout ?? '');
-      if (stdout.includes('package:')) return stdout;
-      return '';
+    writeFileSync(zipPath, storedZip(entries));
+    const out: string[] = [];
+    for (const dump of dumps) {
+      try {
+        const { stdout } = await trackedEffect(() => execFileP(aapt, ['dump', dump[0], zipPath, ...dump.slice(1)], {
+          timeout: 30000, windowsHide: true, maxBuffer: 64 * 1024 * 1024,
+        }));
+        out.push(String(stdout ?? ''));
+      } catch (e) {
+        out.push(String((e as { stdout?: unknown })?.stdout ?? ''));
+      }
     }
+    return out;
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 }
 
+/** Badging text for one installed APK. Callers pick the label and the real launcher icon from it. */
+export async function apkBadging(apk: string): Promise<string> {
+  const [badging] = await apkAaptDumps(apk, [], [['badging']]);
+  return badging.includes('package:') ? badging : '';
+}
+
 export async function apkXmlTree(apk: string, xmlPath: string): Promise<string> {
-  const aapt = findAapt();
-  if (!aapt || !apk.startsWith('/') || !xmlPath || xmlPath.includes('..')) return '';
-  const xml = await adbOut(`su -c ${shQuote(`unzip -p ${shQuote(apk)} ${shQuote(xmlPath)}`)}`);
-  const arsc = await adbOut(`su -c ${shQuote(`unzip -p ${shQuote(apk)} resources.arsc`)}`);
-  if (xml.length < 8 || arsc.length < 8) return '';
-  const dir = mkdtempSync(join(tmpdir(), 'adh-xml-'));
-  try {
-    const zipPath = join(dir, 'base.apk');
-    writeFileSync(zipPath, storedZip([
-      { name: xmlPath, data: xml },
-      { name: 'resources.arsc', data: arsc },
-    ]));
-    const { stdout } = await trackedEffect(() => execFileP(aapt, ['dump', 'xmltree', zipPath, xmlPath], {
-      timeout: 20000, windowsHide: true, maxBuffer: 2 * 1024 * 1024,
-    }));
-    return String(stdout ?? '');
-  } catch {
-    return '';
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  if (!xmlPath || xmlPath.includes('..') || xmlPath.startsWith('/')) return '';
+  const [tree] = await apkAaptDumps(apk, [xmlPath], [['xmltree', xmlPath]]);
+  return tree;
 }
 
 /** Highest-density full launcher bitmap. Foreground-only and monochrome layers are not the icon. */
