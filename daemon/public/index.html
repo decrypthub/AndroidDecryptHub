@@ -3453,7 +3453,7 @@ function render(){
     procLabel.textContent=cur.label||cur.package;
     procPkg.textContent=cur.label&&cur.label!==cur.package?cur.package:'';
     procLetter.textContent=(cur.label||cur.package||'?').slice(0,1).toUpperCase();
-    procIcon.hidden=false; procIcon.src='/api/apps/icon?package='+encodeURIComponent(cur.package);
+    procIcon.hidden=false; procIcon.src='/api/apps/icon?v=2&package='+encodeURIComponent(cur.package);
     info.innerHTML='<dt>应用</dt><dd>'+escapeHtml(cur.label||cur.package)+'</dd><dt>包名</dt><dd>'+escapeHtml(cur.package)+'</dd>';
   }else{
     const requested=device?.kind==='local'&&pinnedPackage();
@@ -3467,7 +3467,7 @@ function render(){
   if(menu.dataset.sig!==sig){
     menu.dataset.sig=sig;
     const face=a=>{ const letter=escapeHtml((a.label||a.package||'?').slice(0,1).toUpperCase());
-      return '<span class="app-face"><img data-app-icon alt="" src="/api/apps/icon?package='+encodeURIComponent(a.package)+'"><span class="app-dialog-letter">'+letter+'</span></span>'; };
+      return '<span class="app-face"><img data-app-icon alt="" src="/api/apps/icon?v=2&package='+encodeURIComponent(a.package)+'"><span class="app-dialog-letter">'+letter+'</span></span>'; };
     const inject=a=>device.kind==='local'
       ?'<button type="button" class="app-inject" data-inject="'+escapeHtml(a.package)+'" aria-pressed="'+String(!!a.injected)+'"'+
         (!scopeReadAt||scopeBusy?' disabled':'')+' title="注入"></button>':'';
@@ -3651,7 +3651,7 @@ function paintAppDialog(){
   letter.hidden=false;
   icon.hidden=true;
   if(!pkg) return;
-  const src='/api/apps/icon?package='+encodeURIComponent(pkg);
+  const src='/api/apps/icon?v=2&package='+encodeURIComponent(pkg);
   icon.onload=()=>{ if(icon.getAttribute('src')===src && icon.naturalWidth>0){ icon.hidden=false; letter.hidden=true; } };
   if(icon.getAttribute('src')!==src) icon.src=src;
   else if(icon.complete && icon.naturalWidth>0){ icon.hidden=false; letter.hidden=true; }
