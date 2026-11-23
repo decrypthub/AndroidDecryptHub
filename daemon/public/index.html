@@ -3351,6 +3351,10 @@ async function saveFamilies(input){
 }
 
 function escapeHtml(s){ return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+// Icon fetch failures (404, aborted, undecodable) all surface as a neutral app tile,
+// never the browser's broken-image glyph or a missing tile.
+const ICON_FALLBACK='data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96"><rect width="96" height="96" rx="20" fill="#2a2f3a"/><rect x="26" y="26" width="18" height="18" rx="5" fill="#7f8ba3"/><rect x="52" y="26" width="18" height="18" rx="5" fill="#7f8ba3"/><rect x="26" y="52" width="18" height="18" rx="5" fill="#7f8ba3"/><rect x="52" y="52" width="18" height="18" rx="9" fill="#7f8ba3"/></svg>');
+document.addEventListener('error',e=>{const i=e.target;if(i instanceof HTMLImageElement&&i.src!==ICON_FALLBACK){i.src=ICON_FALLBACK;i.hidden=false;}},true);
 
 // ---- agents / 应用栏 / WS ----
 const agents=new Map();
