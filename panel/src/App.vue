@@ -34,6 +34,11 @@ const logoUrl = '/raven.svg'; // 运行期 URL，不走 vite 资源打包
 const wsText = computed(() =>
   store.wsState === 'live' ? '电脑服务在线' : store.wsState === 'fail' ? '连接异常' : '离线');
 const wsCls = computed(() => `status-dot ${store.wsState === 'live' ? 'ok' : 'bad'}`);
+const chosenAppLabel = computed(() => {
+  if (!store.chosenPkg) return '选择应用';
+  const label = store.apps.find(a => a.package === store.chosenPkg)?.label;
+  return label && label !== store.chosenPkg ? `${label} · ${store.chosenPkg}` : store.chosenPkg;
+});
 </script>
 
 <template>
@@ -48,7 +53,8 @@ const wsCls = computed(() => `status-dot ${store.wsState === 'live' ? 'ok' : 'ba
         @select="selectDevice" />
 
       <button class="btn app-picker" @click="store.appDialogOpen = true">
-        <span class="mono">{{ store.chosenPkg || '选择应用' }}</span>
+        <img v-if="store.chosenPkg" class="app-picker-icon" :src="'/api/apps/icon?v=2&package=' + encodeURIComponent(store.chosenPkg)" alt="" />
+        <span class="mono">{{ chosenAppLabel }}</span>
       </button>
 
       <nav class="view-tabs">

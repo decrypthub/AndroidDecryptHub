@@ -243,6 +243,15 @@ watch(() => store.chosenPkg, () => { void loadFamilies(); void loadRadar(); });
         <div><dt>允许注入</dt><dd>{{ store.chosenPkg ? (store.scope.has(store.chosenPkg) ? '已勾选' : '未勾选') : '未选择 APP' }}</dd></div>
         <div><dt>观测会话</dt><dd>{{ status.session || '未连接' }}</dd></div>
       </dl>
+      <div v-if="appSessions.length" class="sess-list">
+        <div v-for="s in appSessions" :key="s.sessionId" class="sess-row mono">
+          <span class="sess-dot" :class="{ on: s.online }"></span>
+          <span>pid {{ s.pid }}</span>
+          <span v-if="s.process" class="muted">{{ s.process }}</span>
+          <span v-if="s.mapsCount" class="muted">{{ s.mapsCount }} maps</span>
+          <span class="muted">{{ s.online ? '在线' : '离线' }}</span>
+        </div>
+      </div>
     </section>
 
     <section class="set-block">
@@ -325,4 +334,8 @@ watch(() => store.chosenPkg, () => { void loadFamilies(); void loadRadar(); });
 .set-meta > div:last-child { border-bottom: 0; }
 .set-meta dt { color: var(--muted); font-size: 12px; }
 .set-meta dd { margin: 0; color: var(--ink-2); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; font-size: 13px; }
+.sess-list { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; }
+.sess-row { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--ink-2); }
+.sess-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: none; }
+.sess-dot.on { background: var(--ok, #3fb950); }
 </style>
