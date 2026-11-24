@@ -31,7 +31,8 @@ test('browser task history is unmounted and old deep links lead back to the view
   assert.equal(legacy.headers.get('location'),'/');
   assert.equal(legacy.headers.get('cache-control'),'no-store');
   const landing=await (await fetch(base+'/workbench?taskId=fixture')).text();
-  assert.match(landing,/id="setHookControls"/);
+  assert.match(landing,/<div id="app"><\/div>/);
+  assert.match(landing,/<title>ADH 观察面板<\/title>/);
   assert.doesNotMatch(landing,/setRecordsTab|setRecordsPage|workbench(?:-model)?\.js/);
 });
 
