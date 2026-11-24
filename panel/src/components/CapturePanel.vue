@@ -303,6 +303,11 @@ function selectExchange(ex: Exchange) {
   sel.value = ex.id; selDetail.value = null; selExchange.value = ex;
 }
 function closeDetail() { sel.value = null; selDetail.value = null; selExchange.value = null; }
+function onCapDeleted(id: number) {
+  capRemoveWhere(c => c.id === id);
+  if (pagedItems.value) pagedItems.value = pagedItems.value.filter(c => c.id !== id);
+  closeDetail();
+}
 
 function onScroll(e: Event) {
   scrollTop.value = (e.target as HTMLElement).scrollTop;
@@ -597,7 +602,7 @@ const searchPlaceholder = computed(() =>
         </div>
         <div class="detail-pane">
           <ExchangeDetail v-if="selExchange" :ex="selExchange" />
-          <CapDetail v-else-if="selDetail" :detail="selDetail" />
+          <CapDetail v-else-if="selDetail" :detail="selDetail" @deleted="onCapDeleted" />
           <div v-else class="detail-empty">
             <strong>{{ PLACEHOLDER[kind][0] }}</strong><span>{{ PLACEHOLDER[kind][1] }}</span>
           </div>

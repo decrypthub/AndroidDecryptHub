@@ -108,6 +108,8 @@ export const getCaptures = (q: CapturesQuery | string, since = 0, limit = 1000) 
 };
 export const getCaptureDetail = (id: number, pkg?: string) =>
   api<Record<string, unknown>>(`/api/captures/${id}${pkg ? `?package=${encodeURIComponent(pkg)}` : ''}`);
+export const deleteCapture = (id: number, pkg?: string) =>
+  post<{ ok?: boolean; error?: string }>(`/api/captures/${id}${pkg ? `?package=${encodeURIComponent(pkg)}` : ''}`, { action: 'delete' });
 export const getExchanges = (pkg: string, range?: { fromTs?: number | null; toTs?: number | null }) => {
   const p = new URLSearchParams({ package: pkg });
   if (range?.fromTs != null) p.set('fromTs', String(range.fromTs));
