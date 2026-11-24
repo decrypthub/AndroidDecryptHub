@@ -113,7 +113,7 @@ export async function refreshDevices() {
       model: String(t.model ?? t.serial ?? ''),
       state: String(t.state ?? ''),
       link: String(t.link ?? ''),
-      observed: t.observed as string | undefined,
+      observed: t.observed === true ? (usb?.observedPackage as string | undefined) : (t.observed as string | undefined),
       online: t.online as boolean | null,
     }));
     store.localUsb = usb;
