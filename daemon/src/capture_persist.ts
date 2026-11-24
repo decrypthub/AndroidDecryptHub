@@ -2,8 +2,8 @@ import { atomicWriteText } from './storage.ts';
 // Package-scoped capture log on disk. Agent still only rings+drains; Host owns the durable store.
 // Layout: {dataDir}/packages/<package>/captures.jsonl — one JSON object per line.
 import {
-  appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync,
-  unlinkSync, writeFileSync, rmSync, statSync,
+  appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync,
+  readdirSync, renameSync, unlinkSync, writeFileSync, rmSync, statSync,
 } from 'node:fs';
 import { join } from 'node:path';
 
@@ -27,6 +27,8 @@ export interface PersistedCapture {
   keyHex?: string;
   ivHex?: string;
   outHex?: string;
+  path?: string;
+  callStack?: string;
 }
 
 const PKG_RE = /^[a-zA-Z0-9._-]+$/;
@@ -260,4 +262,165 @@ export function enforcePerPackageRetain<T extends { package?: string }>(list: T[
   const all: T[] = [];
   for (const pkg of pkgs) all.push(...evictPackageFromMemory(list, pkg, retain));
   return all;
+}
+
+export interface CapturePageQuery {
+  package?: string | null;
+  session?: string | null;
+  categories?: string[] | null;
+  since?: number;
+  beforeId?: number | null;
+  fromTs?: number | null;
+  toTs?: number | null;
+  q?: string | null;
+  limit: number;
+}
+
+const REV_CHUNK = 128 * 1024;
+
+function narrowUpperOffset(fd: number, size: number, beforeId: number | null, toTs: number | null): number {
+  if (size <= 512 * 1024 || (beforeId == null && toTs == null)) return size;
+  let lo = 0, hi = size;
+  const probe = Buffer.allocUnsafe(REV_CHUNK);
+  for (let step = 0; step < 22 && hi - lo > 256 * 1024; step++) {
+    const mid = Math.floor((lo + hi) / 2);
+    const n = readSync(fd, probe, 0, Math.min(REV_CHUNK, hi - mid), mid);
+    if (n <= 0) break;
+    const nl1 = probe.subarray(0, n).indexOf(10);
+    if (nl1 < 0 || nl1 + 1 >= n) break;
+    const nl2 = probe.subarray(nl1 + 1, n).indexOf(10);
+    if (nl2 < 0) break;
+    const line = probe.subarray(nl1 + 1, nl1 + 1 + nl2).toString('utf8');
+    let rec: { id?: number; ts?: number } | null = null;
+    try { rec = JSON.parse(line); } catch { break; }
+    if (!rec || typeof rec.id !== 'number') break;
+    const tooNew = (beforeId != null && rec.id >= beforeId) || (toTs != null && (rec.ts ?? 0) > toTs);
+    if (tooNew) hi = mid + nl1 + 1;
+    else lo = mid + nl1 + 1 + nl2 + 1;
+  }
+  return hi;
+}
+
+function scanOneFilePage(
+  filePath: string,
+  pkgName: string,
+  q: CapturePageQuery,
+  catSet: Set<string> | null,
+  needle: string,
+): { items: PersistedCapture[]; hasMore: boolean } {
+  const fd = openSync(filePath, 'r');
+  try {
+    const size = fstatSync(fd).size;
+    if (size <= 0) return { items: [], hasMore: false };
+    const beforeId = q.beforeId != null && Number.isFinite(q.beforeId) ? q.beforeId : null;
+    const fromTs = q.fromTs != null && Number.isFinite(q.fromTs) ? q.fromTs : null;
+    const toTs = q.toTs != null && Number.isFinite(q.toTs) ? q.toTs : null;
+    const since = q.since && q.since > 0 ? q.since : 0;
+    const want = Math.max(1, q.limit) + 1;
+
+    let pos = narrowUpperOffset(fd, size, beforeId, toTs);
+    let carry: Buffer = Buffer.alloc(0);
+    const buf = Buffer.allocUnsafe(REV_CHUNK);
+    const rev: PersistedCapture[] = [];
+    let stopEarly = false;
+
+    while (pos > 0 && !stopEarly) {
+      const readLen = Math.min(REV_CHUNK, pos);
+      pos -= readLen;
+      const got = readSync(fd, buf, 0, readLen, pos);
+      if (got <= 0) break;
+      const slice = buf.subarray(0, got);
+      const combined = carry.length ? Buffer.concat([slice, carry]) : slice;
+      let body: Buffer;
+      if (pos > 0) {
+        const firstNl = combined.indexOf(10);
+        if (firstNl < 0) { carry = Buffer.from(combined); continue; }
+        carry = Buffer.from(combined.subarray(0, firstNl));
+        body = combined.subarray(firstNl + 1);
+      } else {
+        body = combined;
+        carry = Buffer.alloc(0);
+      }
+      const lines = body.toString('utf8').split('\n');
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const line = lines[i];
+        if (!line) continue;
+        let c: PersistedCapture;
+        try { c = JSON.parse(line) as PersistedCapture; } catch { continue; }
+        if (!c || typeof c.id !== 'number') continue;
+        if (beforeId != null && c.id >= beforeId) continue;
+        if (toTs != null && c.ts > toTs) continue;
+        if (since > 0 && c.id <= since) { stopEarly = true; break; }
+        if (fromTs != null && c.ts < fromTs) { stopEarly = true; break; }
+        if (q.session && c.sessionId !== q.session) continue;
+        if (catSet && !catSet.has(c.category)) continue;
+        if (needle) {
+          const hay = `${c.algo || ''} ${c.op || ''} ${c.func || ''} ${c.path || ''} ${c.preview || ''}`.toLowerCase();
+          if (!hay.includes(needle)) continue;
+        }
+        if (!c.package) c.package = pkgName;
+        rev.push(c);
+        if (rev.length >= want) { stopEarly = true; break; }
+      }
+    }
+    const hasMore = rev.length > q.limit;
+    if (hasMore) rev.length = q.limit;
+    rev.reverse();
+    return { items: rev, hasMore };
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** Reverse-paged query over persisted captures.jsonl files (bounded I/O via binary-offset narrow + reverse chunks). */
+export function queryPersistedCapturesPage(
+  dataDir: string,
+  q: CapturePageQuery,
+): { items: PersistedCapture[]; hasMore: boolean } | null {
+  const catSet = q.categories && q.categories.length ? new Set(q.categories) : null;
+  const needle = (q.q ?? '').trim().toLowerCase();
+  if (q.package) {
+    const path = packageCapturesPath(dataDir, q.package);
+    if (!path || !existsSync(path)) return null;
+    return scanOneFilePage(path, q.package, q, catSet, needle);
+  }
+  const root = join(dataDir, 'packages');
+  if (!existsSync(root)) return null;
+  const merged: PersistedCapture[] = [];
+  let anyMore = false;
+  for (const name of readdirSync(root)) {
+    if (!safePackageDirName(name)) continue;
+    const path = join(root, name, 'captures.jsonl');
+    if (!existsSync(path)) continue;
+    const sub = scanOneFilePage(path, name, q, catSet, needle);
+    if (sub.hasMore) anyMore = true;
+    merged.push(...sub.items);
+  }
+  if (!merged.length && !anyMore) return null;
+  merged.sort((a, b) => a.id - b.id || a.ts - b.ts);
+  const hasMore = anyMore || merged.length > q.limit;
+  return { items: merged.slice(-q.limit), hasMore };
+}
+
+/** Lookup a single capture record by id on disk when it has been evicted from the bounded in-memory window. */
+export function findPersistedCaptureById(dataDir: string, id: number, pkg?: string): PersistedCapture | null {
+  if (!Number.isFinite(id) || id <= 0) return null;
+  const candidates: { name: string; path: string }[] = [];
+  if (pkg) {
+    const p = packageCapturesPath(dataDir, pkg);
+    if (p && existsSync(p)) candidates.push({ name: pkg, path: p });
+  }
+  const root = join(dataDir, 'packages');
+  if (existsSync(root)) {
+    for (const name of readdirSync(root)) {
+      if (name === pkg || !safePackageDirName(name)) continue;
+      const p = join(root, name, 'captures.jsonl');
+      if (existsSync(p)) candidates.push({ name, path: p });
+    }
+  }
+  for (const { name, path } of candidates) {
+    const page = scanOneFilePage(path, name, { beforeId: id + 1, since: id - 1, limit: 1 }, null, '');
+    if (page.items.length && page.items[0].id === id) return page.items[0];
+  }
+  return null;
 }
