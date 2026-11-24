@@ -53,6 +53,40 @@ export function appendCaptureLine(dataDir: string, entry: PersistedCapture): voi
   appendFileSync(path, JSON.stringify(entry) + '\n');
 }
 
+// 单条删除不重写主文件（可能几百 MB）：packages/<pkg>/captures.deleted.jsonl 追加墓碑，
+// 恢复、分页、详情、导出所有读取路径统一过滤。
+const deletedIdsCache = new Map<string, Set<number>>();
+
+export function deletedCaptureIds(dataDir: string, pkg: string): Set<number> {
+  const safe = safePackageDirName(pkg);
+  const empty = new Set<number>();
+  if (!safe) return empty;
+  const path = join(dataDir, 'packages', safe, 'captures.deleted.jsonl');
+  const cached = deletedIdsCache.get(path);
+  if (cached) return cached;
+  if (existsSync(path)) {
+    try {
+      for (const line of readFileSync(path, 'utf8').split('\n')) {
+        if (!line) continue;
+        try {
+          const id = Number((JSON.parse(line) as { id?: number }).id);
+          if (Number.isFinite(id)) empty.add(id);
+        } catch { /* skip corrupt line */ }
+      }
+    } catch { /* unreadable → treat as none */ }
+  }
+  deletedIdsCache.set(path, empty);
+  return empty;
+}
+
+export function markCaptureDeleted(dataDir: string, pkg: string, id: number): void {
+  const safe = safePackageDirName(pkg);
+  if (!safe || !Number.isFinite(id) || id <= 0) return;
+  mkdirSync(join(dataDir, 'packages', safe), { recursive: true });
+  appendFileSync(join(dataDir, 'packages', safe, 'captures.deleted.jsonl'), JSON.stringify({ id }) + '\n');
+  deletedCaptureIds(dataDir, safe).add(id);
+}
+
 // Keep the newest retain lines for one package file (rewrite). No-op if under budget.
 export function trimPackageCapturesFile(dataDir: string, pkg: string, retain: number): void {
   const path = packageCapturesPath(dataDir, pkg);
@@ -103,6 +137,7 @@ export function loadCapturesFromDisk(dataDir: string, retain: number): Persisted
     if (!safePackageDirName(name)) continue;
     const path = join(root, name, 'captures.jsonl');
     if (!existsSync(path)) continue;
+    const deleted = deletedCaptureIds(dataDir, name);
     let lines: string[];
     try { lines = readFileSync(path, 'utf8').split('\n').filter(Boolean); }
     catch { continue; }
@@ -111,6 +146,7 @@ export function loadCapturesFromDisk(dataDir: string, retain: number): Persisted
       try {
         const c = JSON.parse(line) as PersistedCapture;
         if (!c || typeof c.id !== 'number') continue;
+        if (deleted.size && deleted.has(c.id)) continue;
         if (!c.package) c.package = name;
         out.push(c);
       } catch {
@@ -307,6 +343,7 @@ function scanOneFilePage(
   q: CapturePageQuery,
   catSet: Set<string> | null,
   needle: string,
+  deleted: Set<number>,
 ): { items: PersistedCapture[]; hasMore: boolean } {
   const fd = openSync(filePath, 'r');
   try {
@@ -348,6 +385,7 @@ function scanOneFilePage(
         let c: PersistedCapture;
         try { c = JSON.parse(line) as PersistedCapture; } catch { continue; }
         if (!c || typeof c.id !== 'number') continue;
+        if (deleted.size && deleted.has(c.id)) continue;
         if (beforeId != null && c.id >= beforeId) continue;
         if (toTs != null && c.ts > toTs) continue;
         if (since > 0 && c.id <= since) { stopEarly = true; break; }
@@ -382,7 +420,7 @@ export function queryPersistedCapturesPage(
   if (q.package) {
     const path = packageCapturesPath(dataDir, q.package);
     if (!path || !existsSync(path)) return null;
-    return scanOneFilePage(path, q.package, q, catSet, needle);
+    return scanOneFilePage(path, q.package, q, catSet, needle, deletedCaptureIds(dataDir, q.package));
   }
   const root = join(dataDir, 'packages');
   if (!existsSync(root)) return null;
@@ -392,7 +430,7 @@ export function queryPersistedCapturesPage(
     if (!safePackageDirName(name)) continue;
     const path = join(root, name, 'captures.jsonl');
     if (!existsSync(path)) continue;
-    const sub = scanOneFilePage(path, name, q, catSet, needle);
+    const sub = scanOneFilePage(path, name, q, catSet, needle, deletedCaptureIds(dataDir, name));
     if (sub.hasMore) anyMore = true;
     merged.push(...sub.items);
   }
@@ -419,7 +457,9 @@ export function findPersistedCaptureById(dataDir: string, id: number, pkg?: stri
     }
   }
   for (const { name, path } of candidates) {
-    const page = scanOneFilePage(path, name, { beforeId: id + 1, since: id - 1, limit: 1 }, null, '');
+    const deleted = deletedCaptureIds(dataDir, name);
+    if (deleted.size && deleted.has(id)) continue;
+    const page = scanOneFilePage(path, name, { beforeId: id + 1, since: id - 1, limit: 1 }, null, '', deleted);
     if (page.items.length && page.items[0].id === id) return page.items[0];
   }
   return null;

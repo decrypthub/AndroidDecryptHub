@@ -21,7 +21,7 @@ import { readPackageIcon } from '../package_icon.ts';
 import { analyzePackage } from '../app_analyze.ts';
 import { listCaptureArmProtected } from '../service.ts';
 import { readAppCatalog } from '../app_catalog.ts';
-import { findPersistedCaptureById, queryPersistedCapturesPage } from '../capture_persist.ts';
+import { deletedCaptureIds, findPersistedCaptureById, markCaptureDeleted, queryPersistedCapturesPage } from '../capture_persist.ts';
 import {
   broadcast, captureHealth, capturePackage, captures, captureSettingsForPackage, captureTimers,
   clearCaptureStore, clearPackageCaptureStore, configStats, cryptoIdentify, DATA_DIR, dumps, eventPackage,
@@ -308,16 +308,36 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
     { path: '/api/captures/export', handler: () => {
       const pkg = String(url.searchParams.get('package') || '');
       if (!pkg) return send(400, { error: '需要 package' });
-      const body = exportPackageCapturesJsonl(pkg);
+      let body = exportPackageCapturesJsonl(pkg);
       if (body == null) return send(404, { error: '该包还没有落盘捕获' });
+      const deleted = deletedCaptureIds(DATA_DIR, pkg);
+      if (deleted.size) {
+        body = body.split('\n').filter(line => {
+          if (!line) return false;
+          const m = /"id"\s*:\s*(\d+)/.exec(line.slice(0, 64));
+          return !(m && deleted.has(Number(m[1])));
+        }).join('\n');
+      }
       res.writeHead(200, {
         'content-type': 'application/x-ndjson; charset=utf-8',
         'content-disposition': `attachment; filename="${pkg.replace(/[^\w.-]+/g, '_')}-captures.jsonl"`,
       });
       return res.end(body);
     } },
-    { path: '/api/captures/', prefix: true, handler: () => {
+    { path: '/api/captures/', prefix: true, handler: async () => {
       const id = Number(url.pathname.slice('/api/captures/'.length));
+      if (req.method === 'POST') {
+        let body: { action?: string };
+        try { body = JSON.parse(await readBody(req) || '{}'); } catch { return send(400, { ok: false, error: 'bad json' }); }
+        if (body?.action !== 'delete') return send(400, { ok: false, error: '未知操作' });
+        if (!Number.isFinite(id) || id <= 0) return send(400, { ok: false, error: '无效的记录编号' });
+        const idx = captures.findIndex(x => x.id === id);
+        const mem = idx >= 0 ? captures.splice(idx, 1)[0] : undefined;
+        let pkg = url.searchParams.get('package') || (mem ? capturePackage(mem) : '');
+        if (!pkg) pkg = findPersistedCaptureById(DATA_DIR, id)?.package ?? '';
+        if (pkg) markCaptureDeleted(DATA_DIR, pkg, id);
+        return send(200, { ok: true, id });
+      }
       const c = captures.find(x => x.id === id)
         ?? (findPersistedCaptureById(DATA_DIR, id, url.searchParams.get('package') || undefined) as unknown as Capture | null);
       if (!c) return send(404, { error: 'not found' });

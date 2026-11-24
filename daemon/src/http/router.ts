@@ -81,6 +81,11 @@ export async function handleHttp(req: http.IncomingMessage, res: http.ServerResp
         res.setHeader('cache-control','no-store');
         return await route.handler();
       }
+      // Panel record delete: same-origin click on the local observation store, not a managed Agent operation.
+      if(localObserver&&route.path==='/api/captures/'&&req.method==='POST'&&observerHost(req.headers.host)&&sameOrigin){
+        res.setHeader('cache-control','no-store');
+        return await route.handler();
+      }
       if(!url.pathname.startsWith('/api/') || url.pathname.startsWith('/api/operations')) {
         if(url.pathname==='/mcp') {
           try{return await handleMcp(await readRequestBody(req,'mcp'),res,{principal:requestPrincipal(req.headers,'mcp',operationsRoot)});}
