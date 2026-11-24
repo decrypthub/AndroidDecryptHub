@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onUnmounted } from 'vue';
-import { store, selectDevice } from './store';
+import { store, selectDevice, toasts } from './store';
 import { perfLast, perfStats } from './api';
 import DeviceMenu from './components/DeviceMenu.vue';
 import AppDialog from './components/AppDialog.vue';
@@ -74,5 +74,8 @@ const wsCls = computed(() => `status-dot ${store.wsState === 'live' ? 'ok' : 'ba
     </main>
 
     <AppDialog v-if="store.appDialogOpen" @close="store.appDialogOpen = false" />
+    <div class="toast-stack">
+      <div v-for="t in toasts" :key="t.id" class="toast">{{ t.text }}</div>
+    </div>
   </div>
 </template>

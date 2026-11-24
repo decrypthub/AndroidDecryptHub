@@ -707,6 +707,10 @@
 .btn.primary { background: var(--blue); border-color: var(--blue); color: #061020; font-weight: 600; }
 .btn.danger { color: var(--danger); border-color: var(--danger); }
 .btn.on { background: var(--surface-3); border-color: var(--blue); color: var(--blue); }
+.btn:disabled { opacity: .45; cursor: default; }
+.btn.sm.danger:hover { color: #17090c; background: var(--danger); }
+.toast-stack { position: fixed; right: 16px; bottom: 16px; z-index: 99; display: flex; flex-direction: column; gap: 8px; }
+.toast { padding: 8px 14px; background: var(--surface-3); border: 1px solid var(--line); border-radius: 8px; color: var(--ink); font-size: 13px; box-shadow: 0 6px 18px rgba(0,0,0,.4); }
 .btn:disabled { opacity: 0.5; cursor: default; }
 .app-picker { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 

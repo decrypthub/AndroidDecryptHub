@@ -2,8 +2,9 @@
 //  1. 记录归属按包名 stamp，不绑会话存活——会话剪枝后旧记录仍在。
 //  2. capItems 只在「设备+包身份」真变时清空——应用启停、轮询失败不触发。
 //  3. 读失败 ≠ 设备没了——catch 保旧数据标 failed，等下次成功轮判定生死。
-import { reactive, computed } from 'vue';
+import { reactive, computed, watch } from 'vue';
 import * as A from './api';
+import { recordVisible } from './observations';
 
 export interface DeviceView {
   key: string; serial: string; model: string; state: string;
@@ -59,6 +60,21 @@ export function capPush(c: A.Cap) {
   if (c.sessionId && c.package) store.sessionPkg.set(c.sessionId, c.package);
   store.capItems.push(c);
   if (store.capItems.length > CAP_BUFFER_LIMIT) store.capItems.splice(0, store.capItems.length - CAP_BUFFER_LIMIT);
+}
+/** 清空显示：只从内存列表移除匹配记录，不动 daemon/disk。 */
+export function capRemoveWhere(fn: (c: A.Cap) => boolean): number {
+  const before = store.capItems.length;
+  for (let i = store.capItems.length - 1; i >= 0; i--) if (fn(store.capItems[i])) store.capItems.splice(i, 1);
+  return before - store.capItems.length;
+}
+
+// ---- toast ----
+export const toasts = reactive<{ id: number; text: string }[]>([]);
+let toastSeq = 0;
+export function toast(text: string) {
+  const id = ++toastSeq;
+  toasts.push({ id, text });
+  setTimeout(() => { const i = toasts.findIndex(t => t.id === id); if (i >= 0) toasts.splice(i, 1); }, 2600);
 }
 export async function capLoad() {
   if (!store.chosenPkg) { store.capItems = []; return; }
@@ -211,3 +227,61 @@ export function startPolling() {
 export const appSessions = computed(() =>
   [...store.sessions.values()].filter(s => s.package === store.chosenPkg));
 export const liveSession = computed(() => appSessions.value.find(s => s.online) ?? null);
+
+// ---- 面板显示偏好（localStorage，仅当前浏览器）----
+export interface PanelDisplay { limit: number | null; time: 'time' | 'date'; density: 'standard' | 'compact' }
+const PANEL_DISPLAY_KEY = 'adh.panel.display';
+export const DISPLAY_CAPS = [100, 200, 300, 500, 800];
+function normalizePanelDisplay(v?: Partial<PanelDisplay> | null): PanelDisplay {
+  return {
+    limit: v?.limit != null && DISPLAY_CAPS.includes(v.limit) ? v.limit : null,
+    time: v?.time === 'date' ? 'date' : 'time',
+    density: v?.density === 'compact' ? 'compact' : 'standard',
+  };
+}
+function readPanelDisplay(): PanelDisplay {
+  try { return normalizePanelDisplay(JSON.parse(localStorage.getItem(PANEL_DISPLAY_KEY) ?? '')); }
+  catch { return normalizePanelDisplay(); }
+}
+export const panelDisplay = reactive<PanelDisplay>(readPanelDisplay());
+export const hostDisplayCap = reactive({ value: 300 });
+export const capDisplayCap = computed(() => panelDisplay.limit ?? hostDisplayCap.value);
+export function savePanelDisplay(v?: Partial<PanelDisplay>) {
+  Object.assign(panelDisplay, normalizePanelDisplay(v));
+  try { localStorage.setItem(PANEL_DISPLAY_KEY, JSON.stringify(panelDisplay)); return true; }
+  catch { return false; }
+}
+
+// ---- 记录显示：按包隐藏的 category/hook/算法 键（localStorage）----
+const hiddenKeyFor = (pkg: string) => `adh.panel.hidden-hooks.v1:${pkg}`;
+export const hiddenHooks = reactive(new Set<string>());
+let hiddenPkg = '';
+function loadHidden() {
+  const pkg = store.chosenPkg;
+  if (pkg === hiddenPkg) return;
+  hiddenPkg = pkg;
+  hiddenHooks.clear();
+  if (!pkg) return;
+  try {
+    const saved = JSON.parse(localStorage.getItem(hiddenKeyFor(pkg)) ?? '[]') as unknown;
+    if (Array.isArray(saved)) for (const k of saved) if (typeof k === 'string' && k.length < 160) hiddenHooks.add(k);
+  } catch { /* 损坏当空集 */ }
+}
+watch(() => store.chosenPkg, loadHidden, { immediate: true });
+export function setHidden(key: string, show: boolean) {
+  if (show) hiddenHooks.delete(key); else hiddenHooks.add(key);
+  saveHidden();
+}
+export function resetHidden() {
+  hiddenHooks.clear();
+  saveHidden();
+}
+function saveHidden(): boolean {
+  if (!store.chosenPkg) return false;
+  try {
+    if (hiddenHooks.size) localStorage.setItem(hiddenKeyFor(store.chosenPkg), JSON.stringify([...hiddenHooks]));
+    else localStorage.removeItem(hiddenKeyFor(store.chosenPkg));
+    return true;
+  } catch { return false; }
+}
+export const capVisible = (c: A.Cap) => recordVisible(c, hiddenHooks);

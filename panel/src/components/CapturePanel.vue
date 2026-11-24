@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch, onMounted, onUnmounted } from 'vue';
-import { store, belongsToApp } from '../store';
+import { store, belongsToApp, capRemoveWhere, capVisible, capDisplayCap, panelDisplay, toast } from '../store';
 import { getCaptures, getExchanges, getCaptureDetail, type Cap, perfMs } from '../api';
 import { catClass, cryptoView, rowLens, httpListPreview, fmtTime, CATLABEL, type CatKey } from '../capview';
 import CapDetail from './CapDetail.vue';
@@ -53,7 +53,7 @@ const scoped = computed(() => store.capItems.filter(c => matchesPanel(c) && belo
 
 // crypto 板块只显示有实体的（clientCryptoView.show）
 const visible = computed(() => {
-  let items = scoped.value;
+  let items = scoped.value.filter(capVisible);
   if (props.kind === 'crypto') items = items.filter(c => cryptoView(c).show !== false);
   const q = filter.q.trim().toLowerCase();
   if (q) {
@@ -117,7 +117,7 @@ const matchedExchanges = computed(() => {
   }).sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0));
 });
 
-const rows = computed(() => props.kind === 'net' ? [] : visible.value.slice().reverse());
+const rows = computed(() => props.kind === 'net' ? [] : visible.value.slice(-capDisplayCap.value).reverse());
 
 // 新记录横幅：暂停或滚离顶部时累计
 watch(rows, () => {
@@ -152,6 +152,28 @@ function onScroll(e: Event) {
   if (scrollTop.value <= 48) newCount.value = 0;
 }
 function jumpLatest() { filter.paused = false; scrollTop.value = 0; newCount.value = 0; }
+
+const filterActive = computed(() => !!(filter.q.trim() || filter.min != null || filter.max != null ||
+  (props.kind === 'crypto' && filter.cat >= 0) || (props.kind === 'system' && filter.kind !== 'all')));
+function resetFilter() {
+  filter.q = ''; filter.min = null; filter.max = null; filter.cat = -2; filter.kind = 'all';
+}
+function downloadView() {
+  const items = props.kind === 'net' ? matchedExchanges.value : rows.value;
+  const pkg = store.chosenPkg || 'all';
+  const blob = new Blob([JSON.stringify(items, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = `adh-${props.kind}-${pkg}-filtered.json`;
+  document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href);
+  toast(`已下载 ${items.length} 条`);
+}
+function clearView() {
+  const pkg = store.chosenPkg;
+  if (!confirm(`清空本页列表？（不删磁盘）\n${pkg ? '当前应用 ' + pkg : '全部应用'}`)) return;
+  const n = capRemoveWhere(c => matchesPanel(c) && belongsToApp(c));
+  closeDetail();
+  toast(`已清空本页 ${n} 条`);
+}
 
 let poll = 0;
 onMounted(() => {
@@ -197,6 +219,9 @@ function cryptoRow(c: Cap) {
         <button class="btn sm" :class="{ on: filter.paused }" @click="filter.paused = !filter.paused">
           {{ filter.paused ? '继续' : '暂停' }}
         </button>
+        <button class="btn sm" :disabled="!filterActive" @click="resetFilter">重置筛选</button>
+        <button class="btn sm" @click="downloadView">下载本页</button>
+        <button class="btn sm danger" @click="clearView">清空本页</button>
         <span class="cap-count muted">{{ countText }}</span>
       </div>
 
@@ -205,7 +230,7 @@ function cryptoRow(c: Cap) {
       </div>
       <div v-for="n in exNotes" :key="n" class="ex-note">{{ n }}</div>
 
-      <div class="cap-list" @scroll="onScroll">
+      <div class="cap-list" :class="{ compact: panelDisplay.density === 'compact' }" @scroll="onScroll">
         <div v-if="newCount > 0" class="new-banner show" @click="jumpLatest">{{ newCount }} 条新记录</div>
 
         <template v-if="kind === 'net'">
@@ -274,6 +299,8 @@ function cryptoRow(c: Cap) {
 .cap-warn { padding: 6px 14px; color: var(--amber); font-size: 12px; }
 .ex-note { padding: 4px 14px; color: var(--muted); font-size: 12px; }
 .cap-list { flex: 1; overflow: auto; position: relative; }
+.cap-list.compact :deep(.row) { min-height: 0; padding: 5px 12px; }
+.cap-list.compact :deep(.row .subline) { margin-top: 2px; }
 .new-banner { position: sticky; top: 8px; z-index: 5; margin: 8px auto; width: fit-content; padding: 5px 14px; background: var(--blue); color: #061020; border-radius: 999px; font-size: 12px; cursor: pointer; display: none; }
 .new-banner.show { display: block; }
 .cap-detail { flex: 1; min-width: 0; overflow: auto; padding: 12px 16px; }

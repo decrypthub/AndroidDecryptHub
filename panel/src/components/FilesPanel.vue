@@ -11,7 +11,7 @@ const limited = ref(false);
 const state = ref<'idle' | 'loading' | 'ready' | 'error'>('idle');
 const message = ref('');
 
-interface Preview { name: string; text?: string; truncated?: boolean; binary?: boolean; size?: number; message?: string }
+interface Preview { name: string; text?: string; truncated?: boolean; binary?: boolean; size?: number; message?: string; b64?: string; fullPath?: string }
 const preview = ref<Preview | null>(null);
 
 const crumbs = computed(() => {
@@ -52,11 +52,21 @@ async function openEntry(e: FsEntry) {
       name: e.name,
       text: r.text ?? (r.base64 ? `[base64] ${r.base64.slice(0, 4096)}` : undefined),
       truncated: r.truncated, binary: r.binary, size: r.size ?? e.size,
+      b64: r.base64, fullPath: p,
       message: r.truncated ? '仅预览前部，未读完整文件。' : `${fmtSize(r.size ?? e.size)}${r.binary ? ' · 二进制' : ''}`,
     };
   } catch (err) {
     preview.value = { name: e.name, message: '读取失败' };
   }
+}
+function downloadPreview() {
+  const pv = preview.value;
+  if (!pv?.b64) return;
+  const bin = Uint8Array.from(atob(pv.b64), ch => ch.charCodeAt(0));
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([bin]));
+  a.download = pv.name;
+  document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href);
 }
 function go(p: string) { void load(p); }
 function submitPath() { void load(pathInput.value.trim()); }
@@ -104,6 +114,7 @@ watch(() => store.chosenPkg, () => { path.value = ''; entries.value = []; previe
         <div class="files-preview-head">
           <span class="path mono">{{ preview.name }}</span>
           <span class="muted">{{ preview.message }}</span>
+          <button v-if="preview.b64" class="btn sm" @click="downloadPreview">下载</button>
           <button class="btn sm" @click="preview = null">✕</button>
         </div>
         <pre v-if="preview.text != null" class="preview-text mono">{{ preview.text }}</pre>

@@ -1,5 +1,6 @@
 // 记录 → 视图模型。从旧 index.html 逐行移植的纯函数层，不碰 DOM。
 import type { Cap } from './api';
+import { panelDisplay } from './store';
 
 export type CatKey = 'digest' | 'hmac' | 'sym' | 'asym' | 'aead' | 'file' | 'sys' | 'net' | 'other';
 export const CATLABEL: Record<CatKey, string> = {
@@ -131,7 +132,8 @@ export function fmtTime(ts?: number): string {
   if (!ts) return '';
   const d = new Date(ts);
   if (!Number.isFinite(d.getTime())) return '';
-  return d.toLocaleTimeString(undefined, { hour12: false });
+  const opts = { hour12: false } as const;
+  return panelDisplay.time === 'date' ? d.toLocaleString(undefined, opts) : d.toLocaleTimeString(undefined, opts);
 }
 
 export function fmtSize(n?: number): string {

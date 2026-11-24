@@ -58,6 +58,7 @@ const post = <T = unknown>(path: string, body: unknown) =>
 
 // ---- 端点 ----
 export const getDevices = () => api<{ ok: boolean; devices: unknown[]; transports: unknown[]; localUsb?: Record<string, unknown> }>('/api/devices?action=list');
+export const getHealth = () => api<{ ok: boolean; version?: string }>('/health');
 export const getApps = () => api<{ ok: boolean; apps: AppInfo[]; error?: string; capture?: { enabled: boolean }; captureByPackage?: Record<string, unknown>; localObservation?: Record<string, unknown> }>('/api/apps');
 export const getScope = () => api<{ ok: boolean; packages: string[] }>('/api/scope');
 export const scopeAdd = (pkg: string) => post('/api/scope', { add: [pkg] });
@@ -76,7 +77,7 @@ export const getExchanges = (pkg: string) =>
 export const getDetectSummary = (pkg: string) =>
   api<Record<string, unknown>>(`/api/detect/summary?package=${encodeURIComponent(pkg)}`);
 export const getDumpEvents = (pkg: string) =>
-  api<{ ok: boolean; items: unknown[] }>(`/api/events?type=dump.new&limit=80&package=${encodeURIComponent(pkg)}`);
+  api<{ ok: boolean; items: Array<Record<string, unknown>> }>(`/api/events?type=dump.new&limit=80&package=${encodeURIComponent(pkg)}`);
 
 export const fsList = (pkg: string, path: string) =>
   api<{ ok: boolean; entries: FsEntry[]; limited?: boolean; error?: string }>(
@@ -103,4 +104,4 @@ export const unpackDumpSoOne = (pkg: string, name: string) =>
   post('/api/unpack/dump-so-one', { package: pkg, name });
 export const dumpDownloadUrl = (sha: string) => `/api/dumps/download?sha=${encodeURIComponent(sha)}`;
 export const appIconUrl = (pkg: string) => `/api/apps/icon?package=${encodeURIComponent(pkg)}`;
-export const getConfig = () => api<Record<string, unknown>>('/api/config');
+export const getConfig = () => api<{ settings?: { capture?: { retain?: number; maxAgeDays?: number }; ui?: { displayCap?: number } } }>('/api/config');
