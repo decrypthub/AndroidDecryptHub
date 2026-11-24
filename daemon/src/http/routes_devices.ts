@@ -10,7 +10,7 @@ import type {Route,RouteContext} from './types.ts';
 /** Wrapped by the same router/operation registry as MCP; no privileged second execution path. */
 export function deviceRoutes({req,url,send}:RouteContext):Route[]{
   const online=()=>!!localObserver&&[...sessions.values()].some(s=>
-    s.online&&s.pid===localObserver.pid&&s.package===localObserver.package);
+    s.online&&s.package===localObserver.package);
   return [{path:'/api/devices',handler:async()=>{
   if(localObserver && req.method==='GET' && url.searchParams.get('action')==='list'){
     // This is one exact local USB device, not a paired Device identity or a proxy for the App session.

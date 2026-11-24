@@ -3,7 +3,7 @@
 import http from 'node:http';
 import net from 'node:net';
 import { AGENT_PORT, HTTP_PORT, webUrls } from './config.ts';
-import { acceptsLocalHello, localObserver, localObserverHost, localViewAllows } from './local_observer.ts';
+import { acceptsLocalHello, localObserver, localObserverHost, localViewAllows, noteObservedPid } from './local_observer.ts';
 import { handleHttp } from './http/router.ts';
 import { sendHttpError } from './http/response_error.ts';
 import { ensureAdbReverse } from './scope_list.ts';
@@ -87,11 +87,17 @@ const agentServer = net.createServer((sock) => {
       if (!localObserver) void applyCaptureSettingsOnConnect(id).then(result => {
         if (result?.ok === false) log(`[capture] family arm ${id}:`, result.error || 'capture settings not applied');
       }).catch(error => log(`[capture] family arm ${id}:`, (error as Error).message));
-      else if (session.package === localObserver.package) void (session.package.startsWith('com.adh.sandbox')
+      else if (session.package === localObserver.package) {
+        // The observer tracks the live generation: a restarted app arrives with a new pid and
+        // must update it or status/own-files checks keep pointing at the dead process. Only the
+        // main process counts — `pkg:remote` helper pids are still sessions, just not THE app.
+        if (!session.process || session.process === session.package) noteObservedPid(session.package, session.pid);
+        void (session.package.startsWith('com.adh.sandbox')
         ? armSandboxCapture(id)
         : setCapture(id, true, { fileModule: 'libc.so', sysModule: 'libc.so' }))
         .then(result => log(`[capture] example arm ${id}: ok=${result.ok} installed=${result.installed}/${result.attempted}${result.error ? ' ' + result.error : ''}`))
         .catch(error => log(`[capture] example arm ${id}:`, (error as Error).message));
+      }
     } else if (msg.t === 'caps' && session) {
       // Arrives right after the hello (before the maps sample). Stored on the session, never
       // merged from another session: two processes of the same app can run different builds.

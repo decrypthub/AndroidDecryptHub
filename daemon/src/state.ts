@@ -266,7 +266,7 @@ export const DEFAULT_SETTINGS: Settings = {
   // installs nothing without failing, so a wrong default reads as "6 hooks silently missing" —
   // which is exactly what the sandbox-only defaults below used to do on every real app. The
   // sandbox self-test passes its own module explicitly (verify_v20_file.sh, verify_v05_detect.sh).
-  capture: { enabled: false, autoDumpDex: false, retain: 1000, maxAgeDays: 14, families: { digest: true, hmac: true, symmetric: true, asymmetric: true, tls: true, aead: true }, familiesByPackage: {}, cryptoModule: '', fileModule: '', sysModule: '' },
+  capture: { enabled: false, autoDumpDex: false, retain: 5000, maxAgeDays: 14, families: { digest: true, hmac: true, symmetric: true, asymmetric: true, tls: true, aead: true }, familiesByPackage: {}, cryptoModule: '', fileModule: '', sysModule: '' },
   ui: { displayCap: 300 },
   artifacts: { maxBytes: 8 * 1024 ** 3, maxAgeDays: 14 },
   startup: { antiDebug: false, module: 'libc.so', extraTargets: [], packages: [], widenAfterMs: 0, widenTargets: ['access', 'faccessat'] },

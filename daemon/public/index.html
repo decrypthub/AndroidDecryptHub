@@ -1447,7 +1447,10 @@ async function pullPackagedSo(i){
 
 // ---- 实时捕获：单一 capItems，多面板按 category 分流（加解密 crypto / 系统 system+file / 网络 net） ----
 const capItems=[];
-const CAP_BUFFER_LIMIT=800;
+const CAP_BUFFER_LIMIT=5000;
+// sessionId -> 包名：页面存活期累积。会话被服务端剪枝（每包最多留 2 个离线会话、10 分钟）后，
+// 记录仍要按包归属显示——可见性不能绑死在会话存活上。
+const sessionPkg=new Map();
 const algorithmObservations=window.AdhAlgorithmObservations;
 const hookDisplay=algorithmObservations?.hookDisplayPreferences(()=>localStorage);
 const PANEL_DISPLAY_KEY='adh.panel.display';
@@ -1493,11 +1496,14 @@ const CAPPANELS={};
 let activeCapKey='cc';
 function belongsToApp(c){
   const pkg=selectedPackage(); if(!usesHostSessions()||!pkg) return false;
+  const stamped=c.package&&c.package!=='?'?c.package:'';
+  const owner=stamped||(c.sessionId?sessionPkg.get(c.sessionId)||'':'');
   if(currentDevice()?.kind==='local'){
-    return (!c.package||c.package===pkg)&&sessionsOf(pkg).some(a=>a.sessionId===c.sessionId);
+    if(owner) return owner===pkg;
+    return sessionsOf(pkg).some(a=>a.sessionId===c.sessionId);
   }
-  if(c.package) return c.package===pkg;
-  if(c.sessionId) return sessionsOf(pkg).some(a=>a.sessionId===c.sessionId);
+  if(stamped) return stamped===pkg;
+  if(c.sessionId) return owner===pkg||sessionsOf(pkg).some(a=>a.sessionId===c.sessionId);
   return false;
 }
 function listedCap(c){ if(c.category!=='crypto') return true; return clientCryptoView(c).show!==false; }
@@ -1868,6 +1874,7 @@ function capRenderAll(){
 }
 function capSelectP(key,id){ CAPPANELS[key].select(id); }
 function capPush(c){
+  if(c.sessionId&&c.package&&c.package!=='?') sessionPkg.set(c.sessionId,c.package);
   if(!belongsToApp(c)||capItems.some(row=>row.id===c.id)) return;
   capItems.push(c); if(capItems.length>CAP_BUFFER_LIMIT) capItems.shift(); if(c.id>capMaxId)capMaxId=c.id;
 }
@@ -3385,7 +3392,7 @@ document.addEventListener('error',e=>{const i=e.target;if(i instanceof HTMLImage
 
 // ---- agents / 应用栏 / WS ----
 const agents=new Map();
-let serverApps=[]; let scopeNote=''; let lastFilterScope=''; let captureOn=false; let localObservation=false;
+let serverApps=[]; let scopeNote=''; let lastCapScope=''; let captureOn=false; let localObservation=false;
 let scopePackages=[]; let scopeError=''; let appTab='user'; let scopeBusy=''; let scopeReadAt=0;
 let readingHostRoster=-1;
 let serverCaptureDefault=false, serverCaptureByPackage={}, serverCaptureVersion=0;
@@ -3468,8 +3475,11 @@ function render(){
   const scope=appScopeKey();
   const nextCaptureOn=usesHostSessions()&&!!pkg&&(Object.hasOwn(serverCaptureByPackage,pkg)?serverCaptureByPackage[pkg]:serverCaptureDefault);
   if(nextCaptureOn!==captureOn){ captureOn=nextCaptureOn; capRenderAll(); }
-  if(scope!==lastFilterScope){
-    lastFilterScope=scope;
+  // 记录重置只看「设备+应用」身份变化，不看 rosterGeneration——设备戳里的 appSession 随
+  // 应用每次启停翻转，按 scope 重置会让列表在每次应用重启时被整页清空。
+  const capScope=panelDeviceKey+'|'+pkg;
+  if(capScope!==lastCapScope){
+    lastCapScope=capScope;
     filesPath='';
     appEventsState={key:scope,loaded:false,failed:false,artifacts:[]};
     capReset();
@@ -3632,7 +3642,7 @@ function renderArtifactLedger(){
       scoped&&appEventsState.loaded?'当前 APP 会话没有已上报的 dump 产物。':'正在读取当前会话的产物记录…');
 }
 
-function upsert(a){ agents.set(a.sessionId,{...agents.get(a.sessionId),...a}); render(); }
+function upsert(a){ if(a.package&&a.package!=='?') sessionPkg.set(a.sessionId,a.package); agents.set(a.sessionId,{...agents.get(a.sessionId),...a}); render(); }
 function setWsPill(s,cls){ const p=document.getElementById('dbg-ws'); if(p){p.textContent='ws: '+s;p.className='pill '+cls;} }
 function connect(){ const ws=new WebSocket(`ws://${location.host}/ws`); const conn=document.getElementById('conn'), st=document.getElementById('status');
   ws.onopen=()=>{conn.className='status-dot ok';st.textContent='电脑服务在线';setWsPill('live','on');dbg('WS','open'); refreshApps();};

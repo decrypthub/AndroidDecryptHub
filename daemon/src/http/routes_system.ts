@@ -91,7 +91,7 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
             return send(200,{apps,error:null,capture:false,localObservation:true,inventory:true});
           }catch{ return send(200,{apps:[],error:'读不到手机上的应用列表，请检查 USB 连接后重试。',capture:false,localObservation:true,inventory:true}); }
         }
-        const online = localObserver.fileBrowserOnly===true || !!localObserver.demoApiSerial || [...sessions.values()].some(s => s.online && s.package === pkg && s.pid === localObserver.pid);
+        const online = localObserver.fileBrowserOnly===true || !!localObserver.demoApiSerial || [...sessions.values()].some(s => s.online && s.package === pkg);
         return send(200, {
           apps: [{ package: pkg, label: localObserver.demoApiSerial?'ADH Demo API 采集':pkg }],
           error: online ? null : '还没收到这个 APP 的采集连接',
@@ -187,7 +187,10 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
     // Live captures (auto-populated by the persistent hooks): GET /api/captures?since=&limit=
     { path: '/api/captures', handler: () => {
       const since = Number(url.searchParams.get('since') ?? 0);
-      const limit = Math.min(Number(url.searchParams.get('limit') ?? 200), 1000);
+      // The cap used to be 1000 — under the system-hook flood the retained window (5000) was
+      // unreachable through this route: the panel fetched the newest slice and everything older
+      // could never come back, which looked like records had vanished.
+      const limit = Math.min(Number(url.searchParams.get('limit') ?? 200), 10000);
       const session = url.searchParams.get('session');
       const pkg = url.searchParams.get('package');
       let list = captures.filter(c => c.id > since);

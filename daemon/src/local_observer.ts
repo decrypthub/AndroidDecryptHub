@@ -199,8 +199,13 @@ export const OWN_APP_FILES_ROUTE = '/api/observer/app-files';
 export function acceptsLocalHello(observer: LocalObserver, message: {
   t?: string; package?: string; pid?: number; entry?: string;
 }): boolean {
+  // Package + entry are the real boundary: other injected apps dial the same port and are kept
+  // out by package. Matching observer.pid exactly used to deadlock the panel — an app killed by
+  // the system or restarted outside the panel came back with a new pid and every hello was
+  // dropped, so the viewer looked like its data had vanished. Any pid of the observed package
+  // is the app itself, whatever generation.
   return !observer.fileBrowserOnly && !observer.demoApiSerial && message.t === 'hello' && message.package === observer.package &&
-    message.pid === observer.pid && (message.entry === 'jni_onload' || message.entry === 'start');
+    (message.entry === 'jni_onload' || message.entry === 'start');
 }
 
 /** Root listing of one selected app's own sandbox. Paths outside that sandbox are refused. */
