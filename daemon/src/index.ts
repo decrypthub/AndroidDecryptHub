@@ -7,12 +7,13 @@ import { acceptsLocalHello, initLocalObserver, localObserver, localObserverHost,
 import { handleHttp } from './http/router.ts';
 import { sendHttpError } from './http/response_error.ts';
 import { ensureAdbReverse } from './scope_list.ts';
+import { adbTrackDevices } from './adb_wire.ts';
 import { armSandboxCapture, setCapture, startCaptureLoop, forgetCaptureSession, clearCaptureArmProtect } from './service.ts';
 import { applyCaptureSettingsOnConnect } from './settings_service.ts';
 import { initializeHost } from './host_lifecycle.ts';
 import { initializeOperations } from './operation_host.ts';
 import {
-  agentSockets, broadcast, captureTimers, failPendingFor, frameJson, FRAME_JSON, FRAME_MAX,
+  agentSockets, broadcast, broadcastLive, captureTimers, failPendingFor, frameJson, FRAME_JSON, FRAME_MAX,
   log, nextId, pending, pruneSessions, sessions, wss,
 }
 from './state.ts';
@@ -213,4 +214,13 @@ const keepReverse = () => ensureAdbReverse([AGENT_PORT, HTTP_PORT], (line) => lo
 if (!localObserver) {
   keepReverse();
   setInterval(keepReverse, 15_000).unref();
+}
+
+// host:track-devices 常驻推送：设备插拔即时广播给面板，不必等 4s 轮询。
+{
+  let devTimer: ReturnType<typeof setTimeout> | undefined;
+  adbTrackDevices(() => {
+    clearTimeout(devTimer);
+    devTimer = setTimeout(() => broadcastLive('devices.changed', {}), 300);
+  });
 }

@@ -74,9 +74,14 @@ let poll = 0;
 onMounted(() => {
   void refreshRecords(); void refreshInventory();
   window.addEventListener('adh:dump-new', onDumpNew);
+  window.addEventListener('adh:unpack-done', onDumpNew);
   poll = window.setInterval(() => { void refreshInventory(); }, 10000);
 });
-onUnmounted(() => { window.removeEventListener('adh:dump-new', onDumpNew); clearInterval(poll); });
+onUnmounted(() => {
+  window.removeEventListener('adh:dump-new', onDumpNew);
+  window.removeEventListener('adh:unpack-done', onDumpNew);
+  clearInterval(poll);
+});
 watch(() => store.chosenPkg, () => { void refreshRecords(); void refreshInventory(); });
 watch(sid, () => void refreshInventory());
 </script>

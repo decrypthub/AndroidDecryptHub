@@ -182,10 +182,10 @@ export function connectWs() {
   };
   ws.onerror = () => { store.wsState = 'fail'; };
   ws.onmessage = ev => {
-    let m: { type?: string; data?: unknown };
+    let m: { type?: string; event?: string; data?: unknown };
     try { m = JSON.parse(String(ev.data)); } catch { return; }
     const d = m.data as Record<string, unknown> | undefined;
-    switch (m.type) {
+    switch (m.event ?? m.type) {
       case 'snapshot':
         store.sessions.clear();
         for (const s of (m.data as A.Session[]) ?? []) { store.sessions.set(s.sessionId, s); stampSession(s); }
@@ -208,8 +208,19 @@ export function connectWs() {
       case 'capture.new':
         if (d) capPush(d as unknown as A.Cap);
         break;
+      case 'data.cleared':
+        store.capItems = [];
+        store.capDropped = 0;
+        break;
+      case 'devices.changed':
+        void refreshDevices();
+        break;
       case 'dump.new':
         window.dispatchEvent(new CustomEvent('adh:dump-new', { detail: d }));
+        break;
+      case 'unpack.done':
+      case 'unpack.dex':
+        window.dispatchEvent(new CustomEvent('adh:unpack-done', { detail: d }));
         break;
     }
   };
