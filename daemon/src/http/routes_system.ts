@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { backendMatrix } from '../backends.ts';
 import { detectionReport } from '../detect.ts';
 import { cryptoView } from '../crypto_view.ts';
-import { assembleHttpExchanges, type TlsChunk } from '../http_exchange.ts';
+import { assembleHttpExchanges, type HttpAssembly, type TlsChunk } from '../http_exchange.ts';
 import { AGENT_PORT, webUrls } from '../config.ts';
 import { baseFromHost, isValidPackage, mcpOnboarding } from '../mcp_onboarding.ts';
 import { handleMcp, MCP_TOOLS } from '../mcp.ts';
@@ -30,6 +30,8 @@ import {
 import type { Route, RouteContext } from './types.ts';
 
 const publicDir = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'public');
+const exchangeCache = new Map<string, { stamp: string; value: HttpAssembly }>();
+
 export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
   const servePublic = (name: string, contentType: string) => async () => {
     const file = join(publicDir, name);
@@ -175,6 +177,14 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
     { path: '/api/http/exchanges', handler: () => {
       const session = url.searchParams.get('session');
       const pkg = url.searchParams.get('package');
+      // 全量重组一次要几秒（hex 解码 + 解压 + HPACK），面板每 5s 轮询一次。
+      // 记录只追加不可变：net 条数 + 最后一条 net id 没变就直接回缓存。
+      let netCount = 0, lastNetId = 0;
+      for (const c of captures) if (c.category === 'net') { netCount++; lastNetId = c.id; }
+      const stamp = `${netCount}:${lastNetId}`;
+      const key = `${session ?? ''}\n${pkg ?? ''}`;
+      const hit = exchangeCache.get(key);
+      if (hit && hit.stamp === stamp) return send(200, hit.value);
       let list = captures.filter(c => c.category === 'net');
       if (session) list = list.filter(c => c.sessionId === session);
       if (pkg) list = list.filter(c => capturePackage(c) === pkg);
@@ -182,7 +192,13 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
         id: c.id, sessionId: c.sessionId, func: c.func, hex: c.hex, inl: c.inl,
         tsNs: c.tsNs, ts: c.ts, conn: c.conn,
       }));
-      return send(200, assembleHttpExchanges(records));
+      const value = assembleHttpExchanges(records);
+      exchangeCache.set(key, { stamp, value });
+      if (exchangeCache.size > 8) {
+        const oldest = exchangeCache.keys().next().value;
+        if (oldest !== undefined) exchangeCache.delete(oldest);
+      }
+      return send(200, value);
     } },
     // Live captures (auto-populated by the persistent hooks): GET /api/captures?since=&limit=
     { path: '/api/captures', handler: () => {

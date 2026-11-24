@@ -156,7 +156,7 @@ test('push 发 sync 协议 SEND/DATA/DONE 帧序', async () => {
     sock.on('data', (c) => {
       frames.push(c);
       if (Buffer.concat(frames).includes(Buffer.from('DONE'))) {
-        sock.write(Buffer.from('OKAY') + Buffer.alloc(4));
+        sock.write(Buffer.concat([Buffer.from('OKAY'), Buffer.alloc(4)]));
         sock.end();
       }
     });
