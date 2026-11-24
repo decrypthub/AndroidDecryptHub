@@ -35,6 +35,12 @@ set(AGENT_SOURCES
     src/runtime/jni.c
     src/runtime/jni_hooks.c
     src/runtime/jni_env_hooks.c
+    src/runtime/jni_env_fixed.c
+    src/runtime/jni_env_calls.c
+    src/runtime/jni_env_fields.c
+    src/runtime/jni_env_string.c
+    src/runtime/jni_env_misc.c
+    src/runtime/jni_env_objects.c
     src/runtime/jni_method_names.c
     src/runtime/jni_onload.c
     src/runtime/dlopen_watch.c
