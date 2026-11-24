@@ -110,12 +110,17 @@ const isNet = computed(() => c.value.category === 'net');
 const cv = computed(() => (isCrypto.value ? cryptoView(c.value) : null));
 
 const inLabel = computed(() => (isNet.value ? (/write/i.test(String(c.value.func || c.value.op || '')) ? '发送' : '接收') : '输入'));
+const outLabel = computed(() => (isNet.value ? '响应' : '输出'));
 const hasStack = computed(() => !!c.value.callStack);
 const hasFileCards = computed(() => isFile.value && !!(c.value.text || c.value.preview || c.value.func || c.value.path));
 const hasInBlock = computed(() => !!(c.value.hex || (!isFile.value && c.value.text) || (c.value.inl ?? 0) > 0));
 const hasInput = computed(() => hasFileCards.value || hasInBlock.value || !!c.value.keyHex || !!c.value.ivHex);
 const hasOutput = computed(() => !!(c.value.outHex || (c.value.outl ?? 0) > 0));
+const curHasData = computed(() => (ioTab.value === 'in' ? hasInput.value : hasOutput.value));
+const activeFmt = computed(() => (ioTab.value === 'in' ? fmtIn.value : fmtOut.value));
+function setFmt(k: FmtMode) { if (ioTab.value === 'in') fmtIn.value = k; else fmtOut.value = k; }
 const bytes = (n?: number) => (n == null ? '未记录' : `${n} B`);
+const outBytes = computed(() => c.value.outl ?? (c.value.outHex ? c.value.outHex.length / 2 : undefined));
 
 watch(() => c.value.id, () => {
   menuOpen.value = false;
@@ -182,46 +187,45 @@ async function doDelete() {
         <div><dt>时间</dt><dd>{{ new Date(c.ts).toLocaleString() }}</dd></div>
         <div v-if="c.sessionId"><dt>会话</dt><dd class="mono">{{ c.sessionId }}</dd></div>
       </dl>
-      <div v-if="hasStack" class="io-section kv-card stack-section">
-        <div class="io-card-head"><span class="io-label kv">调用栈</span></div>
-        <div class="io-block-body">
-          <pre>{{ c.callStack }}</pre>
-          <button type="button" class="block-copy" title="复制" @click="copy(c.callStack || '')"><svg
-              viewBox="0 0 16 16">
-              <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
-              <path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5" /></svg></button>
-        </div>
+      <div v-if="hasStack" class="stack-box">
+        <pre>{{ c.callStack }}</pre>
+        <button type="button" class="blk-copy" title="复制" @click="copy(c.callStack || '')"><svg viewBox="0 0 16 16">
+            <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+            <path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5" /></svg></button>
       </div>
     </div>
 
-    <div class="record-tabs">
-      <button type="button" :aria-selected="ioTab === 'in'" @click="ioTab = 'in'">{{ inLabel }}</button>
-      <button type="button" :aria-selected="ioTab === 'out'" @click="ioTab = 'out'">{{ isNet ? '响应' : '输出' }}</button>
+    <div class="io-toolbar">
+      <div class="seg">
+        <button type="button" :class="{ on: ioTab === 'in' }" @click="ioTab = 'in'">
+          {{ inLabel }}<span v-if="c.inl != null" class="seg-meta"> {{ bytes(c.inl) }}</span></button>
+        <button type="button" :class="{ on: ioTab === 'out' }" @click="ioTab = 'out'">
+          {{ outLabel }}<span v-if="hasOutput" class="seg-meta"> {{ bytes(outBytes) }}</span></button>
+      </div>
+      <div v-if="curHasData" class="seg seg-fmt">
+        <button v-for="[k, lbl] in FMTS" :key="k" type="button"
+          :class="{ on: activeFmt === k }" @click="setFmt(k)">{{ lbl }}</button>
+      </div>
     </div>
 
-    <div v-if="ioTab === 'in'" class="record-tab-panel">
-      <div v-if="hasInput" class="fmt-bar">
-        <button v-for="[k, lbl] in FMTS" :key="k" type="button" class="fmt-chip"
-          :class="{ active: fmtIn === k }" @click="fmtIn = k">{{ lbl }}</button>
-      </div>
-
+    <div v-if="ioTab === 'in'" class="io-panel">
       <template v-if="hasFileCards">
-        <div class="io-section kv-card">
-          <div class="io-card-head"><span class="io-label kv">路径</span></div>
-          <div class="io-block-body">
+        <div class="io-field">
+          <div class="io-field-label">路径</div>
+          <div class="io-data">
             <pre>{{ c.path || ((c.func === 'open' || c.func === 'openat') ? c.preview : '') || '未记录' }}</pre>
-            <button type="button" class="block-copy" title="复制"
+            <button type="button" class="blk-copy" title="复制"
               @click="copy(c.path || ((c.func === 'open' || c.func === 'openat') ? c.preview || '' : '') || '')"><svg
                 viewBox="0 0 16 16">
                 <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
                 <path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5" /></svg></button>
           </div>
         </div>
-        <div class="io-section kv-card">
-          <div class="io-card-head"><span class="io-label kv">详情</span></div>
-          <div class="io-block-body">
+        <div class="io-field">
+          <div class="io-field-label">详情</div>
+          <div class="io-data">
             <pre>{{ [c.func, c.op, c.path ? c.preview : c.text].filter(Boolean).join('\n') }}</pre>
-            <button type="button" class="block-copy" title="复制"
+            <button type="button" class="blk-copy" title="复制"
               @click="copy([c.func, c.op, c.path ? c.preview : c.text].filter(Boolean).join('\n'))"><svg
                 viewBox="0 0 16 16">
                 <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
@@ -231,22 +235,22 @@ async function doDelete() {
       </template>
 
       <template v-if="c.keyHex">
-        <div class="io-section kv-card">
-          <div class="io-card-head"><span class="io-label kv">KEY</span><span class="io-meta">{{ c.keyHex.length / 2 }}B</span></div>
-          <div class="io-block-body">
-            <pre class="hex">{{ formatKey(fmtIn, c.keyHex).display }}</pre>
-            <button type="button" class="block-copy" title="复制" @click="copy(formatKey(fmtIn, c.keyHex).copyVal)"><svg viewBox="0 0 16 16">
+        <div class="io-field">
+          <div class="io-field-label">KEY · {{ c.keyHex.length / 2 }}B</div>
+          <div class="io-data">
+            <pre class="mono">{{ formatKey(fmtIn, c.keyHex).display }}</pre>
+            <button type="button" class="blk-copy" title="复制" @click="copy(formatKey(fmtIn, c.keyHex).copyVal)"><svg viewBox="0 0 16 16">
                 <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
                 <path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5" /></svg></button>
           </div>
         </div>
       </template>
       <template v-if="c.ivHex">
-        <div class="io-section kv-card">
-          <div class="io-card-head"><span class="io-label kv">IV</span><span class="io-meta">{{ c.ivHex.length / 2 }}B</span></div>
-          <div class="io-block-body">
-            <pre class="hex">{{ formatKey(fmtIn, c.ivHex).display }}</pre>
-            <button type="button" class="block-copy" title="复制" @click="copy(formatKey(fmtIn, c.ivHex).copyVal)"><svg viewBox="0 0 16 16">
+        <div class="io-field">
+          <div class="io-field-label">IV · {{ c.ivHex.length / 2 }}B</div>
+          <div class="io-data">
+            <pre class="mono">{{ formatKey(fmtIn, c.ivHex).display }}</pre>
+            <button type="button" class="blk-copy" title="复制" @click="copy(formatKey(fmtIn, c.ivHex).copyVal)"><svg viewBox="0 0 16 16">
                 <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
                 <path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5" /></svg></button>
           </div>
@@ -254,36 +258,25 @@ async function doDelete() {
       </template>
 
       <template v-if="hasInBlock">
-        <div class="io-section in-card">
-          <div class="io-card-head"><span class="io-label in">{{ inLabel }}</span><span class="io-meta">{{ bytes(c.inl) }}</span></div>
-          <div class="io-block-body">
-            <pre :class="{ hex: formatBlock(fmtIn, c.hex, c.text).mono }">{{ formatBlock(fmtIn, c.hex, c.text).display }}</pre>
-            <button type="button" class="block-copy" title="复制内容"
-              @click="copy(formatBlock(fmtIn, c.hex, c.text).copyVal)"><svg viewBox="0 0 16 16">
-                <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
-                <path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5" /></svg></button>
-          </div>
+        <div class="io-data main">
+          <pre :class="{ mono: formatBlock(fmtIn, c.hex, c.text).mono }">{{ formatBlock(fmtIn, c.hex, c.text).display }}</pre>
+          <button type="button" class="blk-copy" title="复制内容"
+            @click="copy(formatBlock(fmtIn, c.hex, c.text).copyVal)"><svg viewBox="0 0 16 16">
+              <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+              <path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5" /></svg></button>
         </div>
       </template>
       <div v-if="!hasInput" class="detail-empty">这条记录没有输入数据。</div>
     </div>
 
-    <div v-else class="record-tab-panel">
-      <div v-if="hasOutput" class="fmt-bar">
-        <button v-for="[k, lbl] in FMTS" :key="k" type="button" class="fmt-chip"
-          :class="{ active: fmtOut === k }" @click="fmtOut = k">{{ lbl }}</button>
-      </div>
+    <div v-else class="io-panel">
       <template v-if="hasOutput">
-        <div class="io-section out-card">
-          <div class="io-card-head"><span class="io-label out">{{ isNet ? '响应' : '输出' }}</span><span
-              class="io-meta">{{ bytes(c.outl ?? (c.outHex ? c.outHex.length / 2 : undefined)) }}</span></div>
-          <div class="io-block-body">
-            <pre :class="{ hex: formatBlock(fmtOut, c.outHex).mono }">{{ formatBlock(fmtOut, c.outHex).display }}</pre>
-            <button type="button" class="block-copy" title="复制内容"
-              @click="copy(formatBlock(fmtOut, c.outHex).copyVal)"><svg viewBox="0 0 16 16">
-                <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
-                <path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5" /></svg></button>
-          </div>
+        <div class="io-data main">
+          <pre :class="{ mono: formatBlock(fmtOut, c.outHex).mono }">{{ formatBlock(fmtOut, c.outHex).display }}</pre>
+          <button type="button" class="blk-copy" title="复制内容"
+            @click="copy(formatBlock(fmtOut, c.outHex).copyVal)"><svg viewBox="0 0 16 16">
+              <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+              <path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5" /></svg></button>
         </div>
       </template>
       <div v-else class="detail-empty">这条记录没有输出数据。</div>
@@ -326,27 +319,85 @@ async function doDelete() {
 .menu-pop button:hover { background: rgba(128, 128, 128, 0.14); }
 .menu-pop .danger { color: #f87171; }
 .menu-backdrop { position: fixed; inset: 0; z-index: 50; }
-.fmt-bar {
+
+/* 一条工具栏：输入/输出 段控件 + 格式 段控件 */
+.io-toolbar {
   display: flex;
-  gap: 6px;
-  margin-bottom: 10px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   flex-wrap: wrap;
+  margin: 14px 0 10px;
 }
-.fmt-chip {
-  padding: 2px 9px;
-  font-size: 12px;
-  border-radius: 6px;
-  border: 1px solid var(--border, rgba(128, 128, 128, 0.25));
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--border, rgba(128, 128, 128, 0.3));
+  border-radius: 7px;
+  overflow: hidden;
+}
+.seg button {
+  padding: 4px 12px;
+  border: 0;
   background: transparent;
   color: inherit;
-  opacity: 0.72;
+  font-size: 12.5px;
   cursor: pointer;
+  opacity: 0.68;
+  border-right: 1px solid var(--border, rgba(128, 128, 128, 0.3));
+  white-space: nowrap;
 }
-.fmt-chip.active {
+.seg button:last-child { border-right: 0; }
+.seg button.on {
   opacity: 1;
   font-weight: 600;
-  border-color: var(--accent, #3b82f6);
-  background: rgba(59, 130, 246, 0.12);
+  background: rgba(59, 130, 246, 0.14);
+  color: var(--accent, #6ea8fe);
 }
-.stack-section { margin-top: 12px; }
+.seg-fmt button { padding: 4px 9px; font-size: 12px; }
+.seg-meta { opacity: 0.65; font-weight: 400; font-size: 11px; }
+
+/* 数据区：小标签 + 单线框数据块，不再卡片套卡片 */
+.io-panel { display: flex; flex-direction: column; gap: 12px; }
+.io-field-label {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  opacity: 0.55;
+  margin-bottom: 4px;
+}
+.io-data {
+  position: relative;
+  border: 1px solid var(--border, rgba(128, 128, 128, 0.22));
+  border-radius: 8px;
+  background: rgba(128, 128, 128, 0.05);
+}
+.io-data pre {
+  margin: 0;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 46vh;
+  overflow: auto;
+}
+.io-data pre.mono { font-family: ui-monospace, Consolas, 'Cascadia Mono', monospace; }
+.blk-copy {
+  position: absolute; top: 6px; right: 6px;
+  width: 24px; height: 22px;
+  border: 0; border-radius: 5px;
+  background: transparent; color: inherit;
+  cursor: pointer; opacity: 0;
+  display: flex; align-items: center; justify-content: center;
+}
+.io-data:hover .blk-copy, .stack-box:hover .blk-copy { opacity: 0.6; }
+.blk-copy:hover { opacity: 1 !important; background: rgba(128, 128, 128, 0.18); }
+.blk-copy svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.4; }
+.stack-box {
+  position: relative;
+  margin-top: 10px;
+  border: 1px solid var(--border, rgba(128, 128, 128, 0.22));
+  border-radius: 8px;
+  background: rgba(128, 128, 128, 0.05);
+}
+.stack-box pre { margin: 0; padding: 10px 12px; font-size: 12px; max-height: 34vh; overflow: auto; }
 </style>
