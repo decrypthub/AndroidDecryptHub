@@ -29,13 +29,6 @@ export async function serveDashboard(send: SendResponse) {
   } catch { return send(500, { error: 'dashboard missing' }); }
 }
 
-export async function servePanel2(send: SendResponse) {
-  try {
-    const html = await readFile(join(__dirname, '..', '..', 'public', 'index2.html'), 'utf8');
-    return send(200, html, 'text/html; charset=utf-8');
-  } catch { return send(500, { error: 'panel build missing: run npm run build in panel/' }); }
-}
-
 export function analysisRoutes({ req, res, url, send }: RouteContext): Route[] {
   const routes: Route[] = [
     { method: 'POST', path: '/api/native/syscall_scan', handler: async () => {
@@ -271,7 +264,6 @@ export function analysisRoutes({ req, res, url, send }: RouteContext): Route[] {
     } },
     { path: '/', handler: () => serveDashboard(send) },
     { path: '/index.html', handler: () => serveDashboard(send) },
-    { path: '/index2.html', handler: () => servePanel2(send) },
   ];
 
   async function dexParseScanSearch() {

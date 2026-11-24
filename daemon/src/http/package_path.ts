@@ -2,7 +2,7 @@
 // Host stays one HTTP server; `/com.example.app` pins the Web UI / MCP to that app's session.
 
 const RESERVED = new Set([
-  'api', 'mcp', 'health', 'ws', 'index.html', 'index2.html', 'wechat-follow.png', 'favicon.ico',
+  'api', 'mcp', 'health', 'ws', 'index.html', 'wechat-follow.png', 'favicon.ico',
   'raven.svg', 'raven.png',
 ]);
 

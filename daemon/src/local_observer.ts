@@ -272,7 +272,7 @@ export function demoApiRequest(observer: LocalObserver, method: string | undefin
 }
 
 const VIEW_ROUTES = new Set([
-  '/', '/health', '/index2.html', '/raven.svg', '/raven.png', '/favicon.ico', '/operation-client.js',
+  '/', '/health', '/index.html', '/raven.svg', '/raven.png', '/favicon.ico', '/operation-client.js',
   '/algorithm-observations.js', '/operations.js', '/api/config', '/api/agents', '/api/apps',
 ]);
 const APP_READ_ROUTES = new Set([
