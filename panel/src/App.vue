@@ -1,6 +1,11 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onUnmounted } from 'vue';
 import { darkTheme, type GlobalThemeOverrides } from 'naive-ui';
+import type { Component } from 'vue';
+import {
+  LockClosedOutline, HardwareChipOutline, WifiOutline, FolderOutline, CubeOutline,
+  SettingsOutline, ChevronBackOutline, ChevronDownOutline,
+} from '@vicons/ionicons5';
 import { store, selectDevice, toasts, belongsToApp, capVisible, panelDisplay, savePanelDisplay } from './store';
 import { perfLast, perfStats } from './api';
 import DeviceMenu from './components/DeviceMenu.vue';
@@ -11,14 +16,10 @@ import DumpPanel from './components/DumpPanel.vue';
 import SettingsPanel from './components/SettingsPanel.vue';
 
 type ViewKey = 'cc' | 'sy' | 'nt' | 'files' | 'dump' | 'settings';
-const ICONS: Record<string, string> = {
-  cc: '<rect x="4" y="8" width="12" height="9" rx="2"/><path d="M7 8V6a3 3 0 0 1 6 0v2m-3 4v2"/>',
-  sy: '<rect x="4" y="4" width="12" height="12" rx="2"/><rect x="8" y="8" width="4" height="4"/><path d="M7 2v2m6-2v2M7 16v2m6-2v2M2 7h2m-2 6h2m12-6h2m-2 6h2"/>',
-  nt: '<path d="M3 7a11 11 0 0 1 14 0M5.5 10a7 7 0 0 1 9 0m-6.5 3a3 3 0 0 1 4 0m-2 3h.01"/>',
-  files: '<path d="M2.5 6A1.5 1.5 0 0 1 4 4.5h4l2 2h6A1.5 1.5 0 0 1 17.5 8v6.5A1.5 1.5 0 0 1 16 16H4a1.5 1.5 0 0 1-1.5-1.5Z"/>',
-  dump: '<path d="M4 4h12v4H4zM5.5 8v8h9V8m-6.5 3h4"/>',
-  settings: '<circle cx="10" cy="10" r="2.6"/><path d="M10 2.5v2.2M10 15.3v2.2M17.5 10h-2.2M4.7 10H2.5M15.3 4.7 14 6.1M6 13.9l-1.3 1.4M15.3 15.3 14 14M6 6.1 4.7 4.7"/>',
-  collapse: '<path d="M12.5 4.5 7 10l5.5 5.5"/>',
+const ICONS: Record<string, Component> = {
+  cc: LockClosedOutline, sy: HardwareChipOutline, nt: WifiOutline,
+  files: FolderOutline, dump: CubeOutline, settings: SettingsOutline,
+  collapse: ChevronBackOutline,
 };
 const NAV: Array<{ key: ViewKey; label: string; count?: 'cc' | 'sy' | 'nt' }> = [
   { key: 'cc', label: '加解密', count: 'cc' },
@@ -105,7 +106,7 @@ const themeOverrides: GlobalThemeOverrides = {
         <div class="side-group">观测</div>
         <button v-for="item in NAV" :key="item.key" class="side-item" :title="item.label"
           :class="{ active: store.view === item.key }" @click="store.view = item.key">
-          <svg class="side-icon" viewBox="0 0 20 20" v-html="ICONS[item.key]" />
+          <n-icon class="side-icon" size="16" :component="ICONS[item.key]" />
           <span class="side-label">{{ item.label }}</span>
           <span class="side-n">{{ navCount(item.count) }}</span>
         </button>
@@ -113,12 +114,12 @@ const themeOverrides: GlobalThemeOverrides = {
       <div class="side-foot">
         <button class="side-item" :class="{ active: store.view === 'settings' }" title="设置"
           @click="store.view = 'settings'">
-          <svg class="side-icon" viewBox="0 0 20 20" v-html="ICONS.settings" />
+          <n-icon class="side-icon" size="16" :component="ICONS.settings" />
           <span class="side-label">设置</span>
         </button>
         <button class="side-item side-collapse" :title="panelDisplay.rail ? '展开导航' : '收起导航'"
           @click="toggleRail">
-          <svg class="side-icon" viewBox="0 0 20 20" v-html="ICONS.collapse" />
+          <n-icon class="side-icon" size="16" :component="ICONS.collapse" />
           <span class="side-label">收起</span>
         </button>
       </div>
@@ -148,9 +149,7 @@ const themeOverrides: GlobalThemeOverrides = {
                   <span class="proc-pkg">{{ store.chosenPkg }}</span>
                 </span>
               </span>
-              <span class="menu-chevron"><svg viewBox="0 0 12 12" width="10" height="10" fill="none"
-                  stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M2.5 4.5l3.5 3.5 3.5-3.5" /></svg></span>
+              <span class="menu-chevron"><n-icon size="11" :component="ChevronDownOutline" /></span>
             </button>
           </section>
         </div>

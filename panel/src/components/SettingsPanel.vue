@@ -10,15 +10,16 @@ import {
   sessionHookEvidence, type AlgoEntry, type HookEntry,
 } from '../observations';
 
+import type { Component } from 'vue';
+import {
+  LockClosedOutline, EyeOutline, LocateOutline, ScanOutline, OptionsOutline, ServerOutline,
+} from '@vicons/ionicons5';
+
 // ---- 页内子导航 ----
 type PageKey = 'capture' | 'records' | 'hooks' | 'scope' | 'display' | 'conn';
-const PAGE_ICONS: Record<PageKey, string> = {
-  capture: '<rect x="4" y="8" width="12" height="9" rx="2"/><path d="M7 8V6a3 3 0 0 1 6 0v2m-3 4v2"/>',
-  records: '<path d="M2 10s3-5 8-5 8 5 8 5-3 5-8 5-8-5-8-5z"/><circle cx="10" cy="10" r="2.4"/>',
-  hooks: '<circle cx="10" cy="10" r="6.5"/><circle cx="10" cy="10" r="2"/><path d="M10 1.5v2M18.5 10h-2M10 18.5v-2M1.5 10h2"/>',
-  scope: '<circle cx="10" cy="10" r="7"/><circle cx="10" cy="10" r="3"/>',
-  display: '<path d="M4 6h5M13 6h3M4 14h3M11 14h5"/><circle cx="11" cy="6" r="1.8"/><circle cx="9" cy="14" r="1.8"/>',
-  conn: '<rect x="3" y="4" width="14" height="5" rx="1.5"/><rect x="3" y="11" width="14" height="5" rx="1.5"/><path d="M6 6.5h.01M6 13.5h.01"/>',
+const PAGE_ICONS: Record<PageKey, Component> = {
+  capture: LockClosedOutline, records: EyeOutline, hooks: LocateOutline,
+  scope: ScanOutline, display: OptionsOutline, conn: ServerOutline,
 };
 const PAGES: Array<{ key: PageKey; label: string }> = [
   { key: 'capture', label: '捕获' },
@@ -171,7 +172,7 @@ watch(() => store.chosenPkg, () => { void loadFamilies(); void loadRadar(); });
       <h2>设置</h2>
       <nav class="set-nav">
         <button v-for="p in PAGES" :key="p.key" type="button" :aria-pressed="page === p.key" @click="page = p.key">
-          <svg class="set-nav-icon" viewBox="0 0 20 20" v-html="PAGE_ICONS[p.key]" />
+          <n-icon class="set-nav-icon" size="16" :component="PAGE_ICONS[p.key]" />
           <span class="set-nav-label">{{ p.label }}</span>
         </button>
       </nav>

@@ -4,6 +4,7 @@ import type { Cap } from '../api';
 import { deleteCapture } from '../api';
 import { catClass, cryptoView, CATLABEL } from '../capview';
 import { store, toast } from '../store';
+import { CopyOutline } from '@vicons/ionicons5';
 
 const props = defineProps<{ detail: Record<string, unknown> }>();
 const emit = defineEmits<{ deleted: [id: number] }>();
@@ -208,9 +209,7 @@ async function doDelete() {
       </dl>
       <div v-if="hasStack" class="stack-box">
         <pre>{{ c.callStack }}</pre>
-        <button type="button" class="blk-copy" title="复制" @click="copy(c.callStack || '')"><svg viewBox="0 0 16 16">
-            <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
-            <path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5" /></svg></button>
+        <button type="button" class="blk-copy" title="复制" @click="copy(c.callStack || '')"><n-icon size="16" :component="CopyOutline" /></button>
       </div>
     </div>
 
@@ -231,10 +230,7 @@ async function doDelete() {
           <div class="io-data">
             <pre>{{ c.path || ((c.func === 'open' || c.func === 'openat') ? c.preview : '') || '未记录' }}</pre>
             <button type="button" class="blk-copy" title="复制"
-              @click="copy(c.path || ((c.func === 'open' || c.func === 'openat') ? c.preview || '' : '') || '')"><svg
-                viewBox="0 0 16 16">
-                <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
-                <path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5" /></svg></button>
+              @click="copy(c.path || ((c.func === 'open' || c.func === 'openat') ? c.preview || '' : '') || '')"><n-icon size="16" :component="CopyOutline" /></button>
           </div>
         </div>
         <div class="io-field">
@@ -242,10 +238,7 @@ async function doDelete() {
           <div class="io-data">
             <pre>{{ [c.func, c.op, c.path ? c.preview : c.text].filter(Boolean).join('\n') }}</pre>
             <button type="button" class="blk-copy" title="复制"
-              @click="copy([c.func, c.op, c.path ? c.preview : c.text].filter(Boolean).join('\n'))"><svg
-                viewBox="0 0 16 16">
-                <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
-                <path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5" /></svg></button>
+              @click="copy([c.func, c.op, c.path ? c.preview : c.text].filter(Boolean).join('\n'))"><n-icon size="16" :component="CopyOutline" /></button>
           </div>
         </div>
       </template>
@@ -255,9 +248,7 @@ async function doDelete() {
           <div class="io-field-label">KEY · {{ c.keyHex.length / 2 }}B</div>
           <div class="io-data">
             <pre class="mono">{{ formatKey(fmtIn, c.keyHex).display }}</pre>
-            <button type="button" class="blk-copy" title="复制" @click="copy(formatKey(fmtIn, c.keyHex).copyVal)"><svg viewBox="0 0 16 16">
-                <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
-                <path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5" /></svg></button>
+            <button type="button" class="blk-copy" title="复制" @click="copy(formatKey(fmtIn, c.keyHex).copyVal)"><n-icon size="16" :component="CopyOutline" /></button>
           </div>
         </div>
       </template>
@@ -266,9 +257,7 @@ async function doDelete() {
           <div class="io-field-label">IV · {{ c.ivHex.length / 2 }}B</div>
           <div class="io-data">
             <pre class="mono">{{ formatKey(fmtIn, c.ivHex).display }}</pre>
-            <button type="button" class="blk-copy" title="复制" @click="copy(formatKey(fmtIn, c.ivHex).copyVal)"><svg viewBox="0 0 16 16">
-                <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
-                <path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5" /></svg></button>
+            <button type="button" class="blk-copy" title="复制" @click="copy(formatKey(fmtIn, c.ivHex).copyVal)"><n-icon size="16" :component="CopyOutline" /></button>
           </div>
         </div>
       </template>
@@ -279,9 +268,7 @@ async function doDelete() {
           <div class="io-data main">
             <pre :class="{ mono: formatBlock(fmtIn, c.hex, c.text).mono }">{{ formatBlock(fmtIn, c.hex, c.text).display }}</pre>
             <button type="button" class="blk-copy" title="复制内容"
-              @click="copy(formatBlock(fmtIn, c.hex, c.text).copyVal)"><svg viewBox="0 0 16 16">
-                <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
-                <path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5" /></svg></button>
+              @click="copy(formatBlock(fmtIn, c.hex, c.text).copyVal)"><n-icon size="16" :component="CopyOutline" /></button>
           </div>
         </div>
       </template>
@@ -295,9 +282,7 @@ async function doDelete() {
           <div class="io-data main">
             <pre :class="{ mono: formatBlock(fmtOut, c.outHex).mono }">{{ formatBlock(fmtOut, c.outHex).display }}</pre>
             <button type="button" class="blk-copy" title="复制内容"
-              @click="copy(formatBlock(fmtOut, c.outHex).copyVal)"><svg viewBox="0 0 16 16">
-                <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
-                <path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5" /></svg></button>
+              @click="copy(formatBlock(fmtOut, c.outHex).copyVal)"><n-icon size="16" :component="CopyOutline" /></button>
           </div>
         </div>
       </template>
@@ -363,7 +348,7 @@ async function doDelete() {
 }
 .io-data:hover .blk-copy, .stack-box:hover .blk-copy { opacity: 0.65; }
 .blk-copy:hover { opacity: 1 !important; background: rgba(128, 128, 128, 0.18); }
-.blk-copy svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; }
+.blk-copy .n-icon { display: flex; align-items: center; }
 .stack-box {
   position: relative;
   margin-top: 10px;

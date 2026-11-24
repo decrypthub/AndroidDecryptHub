@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import { CopyOutline } from '@vicons/ionicons5';
 import { toast } from '../store';
 
 const props = defineProps<{ ex: Record<string, any> }>();
@@ -63,20 +64,14 @@ function copy(text: string) {
       <div class="io-card-head"><span class="io-label in">请求</span><span class="io-meta">{{ partMeta(req) }}</span></div>
       <div class="io-block-body">
         <pre>{{ partText(req) }}</pre>
-        <button v-if="req" type="button" class="block-copy" title="复制" @click="copy(partText(req))"><svg
-            viewBox="0 0 16 16">
-            <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
-            <path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5" /></svg></button>
+        <button v-if="req" type="button" class="block-copy" title="复制" @click="copy(partText(req))"><n-icon size="13" :component="CopyOutline" /></button>
       </div>
     </div>
     <div class="io-section out-card">
       <div class="io-card-head"><span class="io-label out">响应</span><span class="io-meta">{{ partMeta(res) }}</span></div>
       <div class="io-block-body">
         <pre>{{ partText(res) }}</pre>
-        <button v-if="res" type="button" class="block-copy" title="复制" @click="copy(partText(res))"><svg
-            viewBox="0 0 16 16">
-            <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
-            <path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5" /></svg></button>
+        <button v-if="res" type="button" class="block-copy" title="复制" @click="copy(partText(res))"><n-icon size="13" :component="CopyOutline" /></button>
       </div>
     </div>
   </div>

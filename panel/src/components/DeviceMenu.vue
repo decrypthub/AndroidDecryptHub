@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ChevronDownOutline } from '@vicons/ionicons5';
 import type { DeviceView } from '../store';
 
 const props = defineProps<{ devices: DeviceView[]; failed: boolean; selected: string }>();
@@ -22,9 +23,7 @@ onUnmounted(() => document.removeEventListener('click', onDocClick));
       <span class="context-label">设备</span>
       <strong>{{ cur?.model || '读取中…' }}</strong>
       <span class="device-link">{{ cur?.serial || '' }}</span>
-      <span class="menu-chevron"><svg viewBox="0 0 12 12" width="10" height="10" fill="none" stroke="currentColor"
-          stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M2.5 4.5l3.5 3.5 3.5-3.5" /></svg></span>
+      <span class="menu-chevron"><n-icon size="11" :component="ChevronDownOutline" /></span>
     </button>
     <div class="popover device-menu" :class="{ show: open }">
       <div class="device-menu-label">设备</div>

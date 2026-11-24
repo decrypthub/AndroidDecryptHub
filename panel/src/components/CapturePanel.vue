@@ -3,6 +3,7 @@ import { computed, reactive, ref, watch, onMounted, onUnmounted } from 'vue';
 import { store, belongsToApp, capRemoveWhere, capVisible, capDisplayCap, DISPLAY_CAPS, panelDisplay, savePanelDisplay, toast } from '../store';
 import { getCaptures, getExchanges, getCaptureDetail, getDetectSummary, type Cap, perfMs } from '../api';
 import { catClass, cryptoView, rowLens, fmtTime, CATLABEL, type CatKey } from '../capview';
+import { SearchOutline } from '@vicons/ionicons5';
 import CapDetail from './CapDetail.vue';
 import ExchangeDetail from './ExchangeDetail.vue';
 
@@ -440,7 +441,7 @@ const searchPlaceholder = computed(() =>
         <div class="toolbar-search">
           <n-input v-model:value="filter.q" size="small" clearable :placeholder="searchPlaceholder"
             class="toolbar-search-input">
-            <template #prefix><svg viewBox="0 0 20 20" class="search-ico"><circle cx="8.5" cy="8.5" r="5" /><path d="m12.2 12.2 4.2 4.2" /></svg></template>
+            <template #prefix><n-icon :component="SearchOutline" class="search-ico" /></template>
           </n-input>
           <div class="menu-wrap filter-wrap">
             <n-button size="small" :secondary="!advCount" :type="advCount ? 'primary' : 'default'"
@@ -598,7 +599,7 @@ const searchPlaceholder = computed(() =>
 <style scoped>
 .cap-list { outline: none; }
 .toolbar-search-input { flex: 1; min-width: 160px; }
-.search-ico { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.6; opacity: 0.6; }
+.search-ico { font-size: 14px; opacity: 0.55; }
 .pager-controls {
   display: flex;
   align-items: center;

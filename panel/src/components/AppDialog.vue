@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import { CloseOutline } from '@vicons/ionicons5';
 import { store, choosePackage } from '../store';
 import { appIconUrl, scopeAdd, scopeRemove, appControl, observePackage } from '../api';
 
@@ -77,9 +78,7 @@ const canControl = computed(() => store.scope.has(store.chosenPkg));
               <button type="button" @click="control('stop')">结束</button>
             </template>
             <button type="button" class="set-close-x" @click="emit('close')">
-              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"
-                stroke-linecap="round">
-                <path d="M4 4l8 8M12 4l-8 8" /></svg>
+              <n-icon size="14" :component="CloseOutline" />
             </button>
           </div>
         </div>
