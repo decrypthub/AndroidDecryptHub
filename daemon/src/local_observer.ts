@@ -5,7 +5,6 @@ import { adbExec } from './adb_wire.ts';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AGENT_PORT, HTTP_PORT } from './config.ts';
-import { confineDevicePath } from './sandbox_fs.ts';
 import { setDeviceSerial } from './device_bridge.ts';
 import { parseAdbDevices } from './transport/adb_device.ts';
 import { log } from './state.ts';
@@ -193,6 +192,9 @@ export function noteObservedPid(pkg: string, pid: number) {
   if (localObserver && localObserver.package === pkg && Number.isSafeInteger(pid) && pid >= 0) localObserver.pid = pid;
 }
 export const localObserverHost = '127.0.0.1:' + HTTP_PORT;
+/** 本机观察入口的合法 Host：127.0.0.1 与 localhost 都算本机，其余 Host 视为重绑定。 */
+export const observerHost = (host: string | undefined) =>
+  host === localObserverHost || host === 'localhost:' + HTTP_PORT;
 export const OWN_APP_FILES_ROUTE = '/api/observer/app-files';
 
 export function acceptsLocalHello(observer: LocalObserver, message: {
@@ -207,59 +209,6 @@ export function acceptsLocalHello(observer: LocalObserver, message: {
     (message.entry === 'jni_onload' || message.entry === 'start');
 }
 
-/** Root listing of one selected app's own sandbox. Paths outside that sandbox are refused. */
-export function allowsSelectedAppFiles(observer: LocalObserver, method: string | undefined, url: URL): boolean {
-  if (observer.fileBrowserOnly || observer.demoApiSerial || !observer.usbSerial) return false;
-  if (url.pathname === '/api/fs/list' && method === 'GET') {
-    const packages = url.searchParams.getAll('package');
-    const paths = url.searchParams.getAll('path');
-    if (packages.length !== 1 || paths.length !== 1 || [...url.searchParams.keys()].some(key => key !== 'package' && key !== 'path')) return false;
-    try { confineDevicePath(paths[0]); return /^[\w]+(?:\.[\w]+)*$/.test(packages[0]); } catch { return false; }
-  }
-  return url.pathname === '/api/fs/read' && method === 'POST' && url.search === '';
-}
-
-const DUMP_READ = new Set(['/api/unpack/history', '/api/unpack/inventory']);
-const DUMP_WRITE = new Set([
-  '/api/unpack/dump-one', '/api/unpack/dump-so-one', '/api/unpack/pull-so',
-  '/api/unpack/dump-all', '/api/unpack/dump-so', '/api/unpack/run',
-]);
-/** Memory dump stays on the injected process. These routes do not widen file access. */
-export function allowsInjectedDump(observer: LocalObserver, method: string | undefined, url: URL): boolean {
-  if (observer.fileBrowserOnly || observer.demoApiSerial || !observer.usbSerial) return false;
-  if (method === 'GET' && DUMP_READ.has(url.pathname)) {
-    return [...url.searchParams.keys()].every(key => key === 'package' || key === 'session');
-  }
-  return method === 'POST' && DUMP_WRITE.has(url.pathname) && url.search === '';
-}
-
-/** App icon is metadata. Open, stop and restart name one installed package in the body. */
-export function allowsAppControl(observer: LocalObserver, method: string | undefined, url: URL): boolean {
-  if (observer.fileBrowserOnly || observer.demoApiSerial || !observer.usbSerial) return false;
-  if (url.pathname === '/api/apps/icon' && method === 'GET') {
-    const packages = url.searchParams.getAll('package');
-    return packages.length === 1 && /^[\w]+(?:\.[\w]+)*$/.test(packages[0]) && [...url.searchParams.keys()].every(key => key === 'package' || key === 'v' || key === 'serial');
-  }
-  return url.pathname === '/api/apps/control' && method === 'POST' && url.search === '';
-}
-
-/** Hook presets for the selected app. One package on read; the write body is checked by the route. */
-export function allowsCaptureFamilies(observer: LocalObserver, method: string | undefined, url: URL): boolean {
-  if (observer.fileBrowserOnly || observer.demoApiSerial || !observer.usbSerial) return false;
-  if (url.pathname !== '/api/capture/families') return false;
-  if (method === 'GET') {
-    const packages = url.searchParams.getAll('package');
-    return packages.length === 1 && /^[\w]+(?:\.[\w]+)*$/.test(packages[0]) && [...url.searchParams.keys()].every(key => key === 'package');
-  }
-  return method === 'POST' && url.search === '';
-}
-
-/** Injection scope for the USB panel: read the phone file, or add/remove exactly one installed package. */
-export function allowsPanelScope(observer: LocalObserver, method: string | undefined, url: URL): boolean {
-  if (observer.fileBrowserOnly || observer.demoApiSerial || !observer.usbSerial) return false;
-  return url.pathname === '/api/scope' && url.search === '' && (method === 'GET' || method === 'POST');
-}
-
 /** The only phone-confirmed capture settings this entry may touch. Other packages are refused. */
 export function demoApiRequest(observer: LocalObserver, method: string | undefined, url: URL): { package: string } | null {
   if (url.pathname !== OWN_DEMO_API_ROUTE || (method !== 'GET' && method !== 'POST')) return null;
@@ -271,40 +220,3 @@ export function demoApiRequest(observer: LocalObserver, method: string | undefin
   return { package: OWN_API_DEMO_PACKAGE };
 }
 
-const VIEW_ROUTES = new Set([
-  '/', '/health', '/index.html', '/raven.svg', '/raven.png', '/favicon.ico', '/operation-client.js',
-  '/algorithm-observations.js', '/operations.js', '/api/config', '/api/agents', '/api/apps',
-]);
-const APP_READ_ROUTES = new Set([
-  '/api/captures', '/api/events', '/api/http/exchanges', '/api/detect/summary',
-]);
-
-/** File editing is absent by default; the separate file-only mode opts in one existing text path. */
-export function localViewAllows(observer: LocalObserver, method: string | undefined, url: URL): boolean {
-  const path = url.pathname;
-  if (path === OWN_DEMO_API_ROUTE) return demoApiRequest(observer, method, url)!==null;
-  if (allowsSelectedAppFiles(observer, method, url) || allowsInjectedDump(observer, method, url) || allowsPanelScope(observer, method, url) || allowsCaptureFamilies(observer, method, url) || allowsAppControl(observer, method, url)) return true;
-  if (path === OWN_APP_FILES_ROUTE) {
-    const query=url.searchParams;
-    const keys=observer.fileBrowserOnly?['action','path','root']:['action','path'];
-    if(query.getAll('action').length!==1 || query.getAll('path').length>1 ||
-       query.getAll('root').length>1 || ![...query.keys()].every(k=>keys.includes(k))) return false;
-    const root=query.get('root')??(observer.fileBrowserOnly?'app':'files');
-    if(!allowedOwnedRoot(observer,root)) return false;
-    const action=query.get('action');
-    if(method==='GET') return action==='list'||action==='preview';
-    return method==='POST'&&action==='save'&&allowedOwnedSave(observer,root,query.get('path')??'');
-  }
-  if (method !== 'GET' && method !== 'POST') return false;
-  if (method === 'POST') {
-    // Panel device management; the route enforces the same-origin Origin itself.
-    if (observer.fileBrowserOnly || observer.demoApiSerial) return false;
-    return path === '/api/devices' && url.search === '';
-  }
-  if (VIEW_ROUTES.has(path) || path === '/' + observer.package) return true;
-  if (path === '/api/devices') return url.searchParams.get('action') === 'list';
-  if (observer.fileBrowserOnly || observer.demoApiSerial) return false;
-  if (/^\/api\/captures\/[1-9]\d*$/.test(path)) return true;
-  return APP_READ_ROUTES.has(path) && url.searchParams.getAll('package').length === 1 &&
-    url.searchParams.get('package') === observer.package;
-}

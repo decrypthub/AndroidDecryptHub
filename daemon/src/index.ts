@@ -3,7 +3,7 @@
 import http from 'node:http';
 import net from 'node:net';
 import { AGENT_PORT, HTTP_PORT, webUrls } from './config.ts';
-import { acceptsLocalHello, initLocalObserver, localObserver, localObserverHost, localViewAllows, noteObservedPid } from './local_observer.ts';
+import { acceptsLocalHello, initLocalObserver, localObserver, localObserverHost, observerHost, noteObservedPid } from './local_observer.ts';
 import { handleHttp } from './http/router.ts';
 import { sendHttpError } from './http/response_error.ts';
 import { ensureAdbReverse } from './scope_list.ts';
@@ -152,10 +152,11 @@ const agentServer = net.createServer((sock) => {
 const httpServer = http.createServer((req, res) => {
   const requestTarget = req.url ?? '/';
   const originPath = requestTarget.startsWith('/') && !requestTarget.startsWith('//') && !requestTarget.includes('\\');
-  if (localObserver && (req.headers.host !== localObserverHost || !originPath ||
-      !localViewAllows(localObserver, req.method, new URL(requestTarget, 'http://127.0.0.1')))) {
+  const foreignBrowser=(localObserver?.fileBrowserOnly || localObserver?.demoApiSerial) && (
+    (req.headers.origin && req.headers.origin!=='http://'+localObserverHost) || req.headers['sec-fetch-site']==='cross-site');
+  if (localObserver && (!observerHost(req.headers.host) || !originPath || foreignBrowser)) {
     res.writeHead(403, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
-    res.end(JSON.stringify({ ok: false, error: '此入口仅浏览当前 USB 应用的记录。' }));
+    res.end(JSON.stringify({ ok: false, error: '当前本机入口未授权此操作。' }));
     return;
   }
   handleHttp(req, res).catch(error=>sendHttpError(req,res,error));
@@ -164,7 +165,7 @@ const httpServer = http.createServer((req, res) => {
 httpServer.on('upgrade', (req, socket, head) => {
   const { pathname } = new URL(req.url ?? '/', 'http://localhost');
   if (pathname === '/ws' && (!localObserver ||
-    (req.headers.host === localObserverHost && req.headers.origin === 'http://' + localObserverHost))) {
+    (observerHost(req.headers.host) && (!req.headers.origin || req.headers.origin === 'http://' + req.headers.host)))) {
     wss.handleUpgrade(req, socket, head, (ws) => {
       ws.send(JSON.stringify({ event: 'snapshot', data: [...sessions.values()], ts: Date.now() }));
     });
