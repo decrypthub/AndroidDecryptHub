@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, onUnmounted } from 'vue';
+import { useAppearance, isDark } from './appearance';
+useAppearance();
+import { computed } from 'vue';
 import { darkTheme, type GlobalThemeOverrides } from 'naive-ui';
 import type { Component } from 'vue';
 import {
@@ -7,7 +9,6 @@ import {
   SettingsOutline, ChevronBackOutline, ChevronDownOutline,
 } from '@vicons/ionicons5';
 import { store, selectDevice, toasts, belongsToApp, capVisible, panelDisplay, savePanelDisplay } from './store';
-import { perfLast, perfStats } from './api';
 import DeviceMenu from './components/DeviceMenu.vue';
 import AppDialog from './components/AppDialog.vue';
 import CapturePanel from './components/CapturePanel.vue';
@@ -42,22 +43,6 @@ const counts = computed(() => {
 });
 const navCount = (k?: 'cc' | 'sy' | 'nt') => (k ? counts.value[k] || '' : '');
 
-// 顶栏耗时显示：跟随 perfLast，1s 刷一次显示
-const perfText = ref('');
-const perfTitle = ref('');
-let perfTimer = 0;
-onMounted(() => {
-  perfTimer = window.setInterval(() => {
-    const l = perfLast();
-    perfText.value = l.label ? `${l.label} ${Math.round(l.ms)}ms` : '';
-    perfTitle.value = [...perfStats().entries()]
-      .sort((a, b) => b[1].total - a[1].total)
-      .map(([k, s]) => `${k}\t最近 ${Math.round(s.last)}ms\t均 ${Math.round(s.total / s.n)}ms\t峰 ${Math.round(s.peak)}ms\t×${s.n}`)
-      .join('\n');
-  }, 1000);
-});
-onUnmounted(() => clearInterval(perfTimer));
-
 const wsText = computed(() =>
   store.wsState === 'live' ? '电脑服务在线' : store.wsState === 'fail' ? '连接异常' : '正在连接…');
 const wsCls = computed(() =>
@@ -71,31 +56,24 @@ function toggleRail() {
   savePanelDisplay({ ...panelDisplay, rail: !panelDisplay.rail });
 }
 
-// Naive 主题对齐面板色板：蓝 #78a9ff、面 #0f1218、边 #343b48、13px 基础字号
-const themeOverrides: GlobalThemeOverrides = {
-  common: {
-    primaryColor: '#78a9ff',
-    primaryColorHover: '#95bcff',
-    primaryColorPressed: '#5d92f5',
-    primaryColorSuppl: '#78a9ff',
-    borderRadius: '6px',
-    borderRadiusSmall: '5px',
-    fontSize: '13px',
-    bodyColor: '#06070a',
-    cardColor: '#0f1218',
-    modalColor: '#0f1218',
-    popoverColor: '#151922',
-    inputColor: 'rgba(255,255,255,0.04)',
-    borderColor: '#343b48',
-    dividerColor: '#20252e',
-    textColorBase: '#e5e8ee',
-  },
-  Radio: { buttonBorderColor: '#343b48' },
-};
+// Use the same surface tokens for Naive's teleported menus, inputs and dialogs.
+const themeOverrides = computed<GlobalThemeOverrides>(() => {
+  const fg = isDark.value ? '#f4f6f8' : '#111315';
+  const paper = isDark.value ? '#141619' : '#ffffff';
+  const border = isDark.value ? '#383c42' : '#d3d6da';
+  return {
+    common: { primaryColor:fg, primaryColorSuppl:fg, primaryColorHover:isDark.value?'#d2d6db':'#393e42',
+      primaryColorPressed:isDark.value?'#c8cbd0':'#090b0d', textColorBase:fg, bodyColor:isDark.value?'#090b0d':'#fbfcfd',
+      cardColor:paper, modalColor:paper, popoverColor:paper, inputColor:paper, borderColor:border,
+      dividerColor:isDark.value?'#282d32':'#e7e8ea', borderRadius:'5px', fontSize:'13px' },
+    Button:{textColorPrimary:paper,textColorHoverPrimary:paper,textColorPressedPrimary:paper},
+    Radio:{buttonBorderColor:border}
+  };
+});
 </script>
 
 <template>
-  <n-config-provider :theme="darkTheme" :theme-overrides="themeOverrides">
+  <n-config-provider :theme="isDark ? darkTheme : null" :theme-overrides="themeOverrides">
   <div class="app-shell">
     <aside class="side" :class="{ rail: panelDisplay.rail }">
       <div class="side-brand">
@@ -103,8 +81,8 @@ const themeOverrides: GlobalThemeOverrides = {
         <span class="side-title">ADH</span>
       </div>
       <nav class="side-nav">
-        <div class="side-group">观测</div>
-        <button v-for="item in NAV" :key="item.key" class="side-item" :title="item.label"
+        
+        <button v-for="item in NAV" :key="item.key" class="side-item" :title="item.label" :aria-current="store.view === item.key ? 'page' : undefined"
           :class="{ active: store.view === item.key }" @click="store.view = item.key">
           <n-icon class="side-icon" size="16" :component="ICONS[item.key]" />
           <span class="side-label">{{ item.label }}</span>
@@ -127,11 +105,11 @@ const themeOverrides: GlobalThemeOverrides = {
 
     <div class="main-col">
       <header class="topbar">
+        <select class="mobile-board" aria-label="切换板块" v-model="store.view"><option v-for="item in NAV" :key="item.key" :value="item.key">{{ item.label }}</option><option value="settings">设置</option></select>
         <div class="stats">
           <span :class="wsCls"></span>
           <span>{{ wsText }}</span>
           <span v-if="store.devicesFailed" class="badge fail">读取失败</span>
-          <span class="perf-stat" :title="perfTitle">{{ perfText }}</span>
         </div>
         <DeviceMenu :devices="store.devices" :failed="store.devicesFailed" :selected="store.selectedDeviceKey"
           @select="selectDevice" />

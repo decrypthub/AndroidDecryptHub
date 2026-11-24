@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { appearance, setAppearance, type Appearance } from '../appearance';
 import { ref, computed, watch, onMounted } from 'vue';
 import {
   store, liveSession, appSessions, hiddenHooks, setHidden, resetHidden,
@@ -328,6 +329,9 @@ watch(() => store.chosenPkg, () => { void loadFamilies(); void loadRadar(); });
         </section>
 
         <section v-else-if="page === 'display'" class="set-page">
+          <label class="appearance-row"><span>外观</span><select aria-label="外观" :value="appearance" @change="setAppearance(($event.target as HTMLSelectElement).value as Appearance)">
+              <option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option>
+            </select></label>
           <div class="set-preferences">
             <label class="set-row"><span class="lab"><b>列表显示条数</b><span>每个板块保留在列表里的最近记录数</span></span>
               <select :value="panelDisplay.limit ?? ''"

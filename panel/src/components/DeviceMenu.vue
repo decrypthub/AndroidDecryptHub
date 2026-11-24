@@ -18,10 +18,10 @@ onUnmounted(() => document.removeEventListener('click', onDocClick));
 </script>
 
 <template>
-  <section class="device-picker">
+  <section class="device-picker" @keydown.esc.stop="open = false; ($event.currentTarget as HTMLElement).querySelector('button')?.focus()">
     <button type="button" class="device-context" :aria-expanded="open" title="切换设备" @click.stop="open = !open">
       <span class="context-label">设备</span>
-      <strong>{{ cur?.model || '读取中…' }}</strong>
+      <strong>{{ cur?.model || (failed ? '设备读取失败' : '选择设备') }}</strong>
       <span class="device-link">{{ cur?.serial || '' }}</span>
       <span class="menu-chevron"><n-icon size="11" :component="ChevronDownOutline" /></span>
     </button>

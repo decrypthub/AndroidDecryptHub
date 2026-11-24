@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch, onMounted, onUnmounted } from 'vue';
 import { store, belongsToApp, capRemoveWhere, capVisible, capDisplayCap, DISPLAY_CAPS, panelDisplay, savePanelDisplay, toast } from '../store';
-import { getCaptures, getExchanges, getCaptureDetail, getDetectSummary, type Cap, perfMs } from '../api';
+import { getCaptures, getExchanges, getCaptureDetail, getDetectSummary, type Cap } from '../api';
 import { catClass, cryptoView, rowLens, fmtTime, CATLABEL, type CatKey } from '../capview';
-import { SearchOutline, ReaderOutline } from '@vicons/ionicons5';
+import { SearchOutline } from '@vicons/ionicons5';
 import CapDetail from './CapDetail.vue';
 import ExchangeDetail from './ExchangeDetail.vue';
 
@@ -58,11 +58,6 @@ const CATS: Record<string, CatKey[]> = {
 const CAT_BY_SEL: Record<number, CatKey> = { 0: 'digest', 1: 'hmac', 2: 'sym', 3: 'asym', 4: 'aead' };
 const SYS_KINDS: Array<[string, string]> = [['all', '全部活动'], ['system', '系统调用'], ['file', '文件读写']];
 const LIST_ID: Record<string, string> = { crypto: 'cc-list', system: 'sy-list', net: 'nt-list' };
-const PLACEHOLDER: Record<string, [string, string]> = {
-  crypto: ['记录详情', '从列表选择一条记录，查看对应的调用详情。'],
-  system: ['系统活动详情', '从左侧选择一条系统调用或文件读写记录。'],
-  net: ['记录详情', '从列表选择一条记录，查看对应的请求和响应。'],
-};
 
 function panelCats(): string[] {
   if (props.kind === 'crypto') return ['crypto'];
@@ -275,9 +270,8 @@ watch(liveOrPagedRows, () => {
 
 const countText = computed(() => {
   const n = props.kind === 'net' ? matchedExchanges.value.length : rows.value.length;
-  const ms = perfMs(`GET /api/${props.kind === 'net' ? 'http/exchanges' : 'captures'}`);
   const pg = pageNumber.value > 1 ? ` · 第${pageNumber.value}页` : '';
-  return `${n} 条${pg}${ms ? ` · ${Math.round(ms)}ms` : ''}`;
+  return `${n} 条${pg}`;
 });
 
 async function selectRow(c: Cap) {
@@ -424,6 +418,7 @@ const emptyText = computed(() => {
   if (props.kind === 'net')
     return exchanges.value.length ? '没有符合筛选条件的网络记录。' :
       scoped.value.length ? `有 ${scoped.value.length} 条 TLS，尚未拼成 HTTP。` : '还没有网络记录。';
+  if (filterActive.value && scoped.value.length) return '没有符合筛选条件的记录。';
   if (props.kind === 'crypto') return '还没有加解密记录。';
   return '还没有系统事件。';
 });
@@ -444,6 +439,7 @@ const searchPlaceholder = computed(() =>
 
 <template>
   <div class="cap-view">
+    <h1 class="board-heading">{{ kind === 'crypto' ? '加解密' : kind === 'system' ? '系统' : '网络' }}</h1>
     <div class="filters">
       <div class="toolbar-main">
         <div class="toolbar-search">
@@ -512,13 +508,14 @@ const searchPlaceholder = computed(() =>
       </div>
     </div>
 
-    <div class="workspace capture-workspace" :class="{ 'compact-captures': panelDisplay.density === 'compact', 'detail-open': sel !== null }">
+    <div class="workspace capture-workspace" :class="{ 'compact-captures': panelDisplay.density === 'compact', 'detail-open': sel !== null, 'no-results': !showSkeleton && sel === null && !(kind === 'net' ? matchedExchanges.length : rows.length) }">
       <div class="list-pane" :style="listWidth ? { width: listWidth + 'px' } : undefined">
         <div class="new-banner" :class="{ show: newCount > 0 }">
           <span>{{ newCount }} 条新记录</span>
           <n-button text size="tiny" type="primary" @click="jumpLatest">跳到最新</n-button>
         </div>
 
+        <div v-if="kind === 'crypto' && sel === null && rows.length" class="ledger-head adh-grid" aria-hidden="true"><span>序号</span><span>算法</span><span>内容预览</span><span>输入 → 输出</span><span>时间</span></div>
         <div class="cap-list" :id="LIST_ID[kind]" tabindex="0" @scroll="onScroll">
           <template v-if="showSkeleton">
             <div v-for="i in 8" :key="'sk' + i" class="row sk-row" aria-hidden="true">
@@ -534,7 +531,7 @@ const searchPlaceholder = computed(() =>
           <div v-for="n in exNotes" :key="n" class="ex-note">{{ n }}</div>
           <template v-if="kind === 'net'">
             <div v-for="ex in matchedExchanges" :key="ex.id" class="row cat-net" :class="{ selected: sel === ex.id }"
-              @click="selectExchange(ex)">
+              role="button" tabindex="0" @keydown.enter.prevent="selectExchange(ex)" @keydown.space.prevent="selectExchange(ex)" @click="selectExchange(ex)">
               <div class="top">
                 <span class="pill net">网络</span>
                 <span class="algo">{{ ex.label }}</span>
@@ -543,13 +540,13 @@ const searchPlaceholder = computed(() =>
               </div>
               <div class="lens">{{ ex.response?.startLine || ex.request?.startLine || ex.note }}</div>
             </div>
-            <n-empty v-if="!matchedExchanges.length" class="cap-empty" size="small" :description="emptyText" />
+            <p v-if="!matchedExchanges.length" class="empty-row" role="status">{{ emptyText }}</p>
           </template>
 
           <template v-else>
             <div v-for="c in rows" :key="c.id" class="row"
               :class="[`cat-${catClass(c)}`, { selected: sel === c.id, 'crypto-row': c.category === 'crypto' }]"
-              @click="selectRow(c)">
+              role="button" tabindex="0" @keydown.enter.prevent="selectRow(c)" @keydown.space.prevent="selectRow(c)" @click="selectRow(c)">
               <template v-if="c.category === 'crypto'">
                 <div class="top">
                   <span class="seq">#{{ c.id }}</span>
@@ -577,18 +574,18 @@ const searchPlaceholder = computed(() =>
                   class="preview">{{ c.preview }}</div>
               </template>
             </div>
-            <n-empty v-if="!rows.length" class="cap-empty" size="small" :description="emptyText" />
+            <p v-if="!rows.length" class="empty-row" role="status">{{ emptyText }}</p>
           </template>
           </template>
         </div>
-        <div class="capture-list-foot">
+        <div v-if="canPrevPage || canNextPage || rows.length || matchedExchanges.length || isHistoricalMode" class="capture-list-foot">
           <span>{{ listFootLeft }}</span>
           <div class="pager-controls">
             <n-select :value="capDisplayCap" size="small" class="page-cap-select" title="单页返回条数上限"
               :options="DISPLAY_CAPS.map(cap => ({ label: `${cap} 条/页`, value: cap }))"
               @update:value="onPageCapChange" />
-            <n-button size="small" :disabled="!canPrevPage" title="读取更早一页" @click="prevPage">上一页</n-button>
-            <n-button size="small" :disabled="!canNextPage" title="读取更新一页" @click="nextPage">下一页</n-button>
+            <n-button v-if="canPrevPage || canNextPage" size="small" :disabled="!canPrevPage" title="读取更早一页" @click="prevPage">上一页</n-button>
+            <n-button v-if="canPrevPage || canNextPage" size="small" :disabled="!canNextPage" title="读取更新一页" @click="nextPage">下一页</n-button>
             <n-button v-if="isHistoricalMode || netPage > 1" size="small" tertiary @click="jumpLatest">最新</n-button>
           </div>
         </div>
@@ -604,13 +601,7 @@ const searchPlaceholder = computed(() =>
           <ExchangeDetail v-if="selExchange" :ex="selExchange" />
           <CapDetail v-else-if="selDetail" :detail="selDetail" @deleted="onCapDeleted" />
           <div v-else class="detail-empty detail-placeholder">
-            <n-empty size="large">
-              <template #icon><n-icon :component="ReaderOutline" size="44" /></template>
-              <template #default>
-                <div class="ph-title">{{ PLACEHOLDER[kind][0] }}</div>
-                <div class="ph-desc">{{ PLACEHOLDER[kind][1] }}</div>
-              </template>
-            </n-empty>
+            选择一条记录查看详情
           </div>
         </div>
       </section>
