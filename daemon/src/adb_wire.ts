@@ -95,6 +95,24 @@ export async function adbHostOk(service: string, timeout = READ_TIMEOUT): Promis
   } finally { sock.destroy(); }
 }
 
+// Windows 下 AOSP usb_windows.cpp GetDevicePath() 固定返回 "unknown"，导致 devices -l 不带 usb: 字段；
+// 而 TCP(ip:port)、mDNS(*._tcp) 与模拟器(emulator-*) 序列号格式固定，其余硬件序列号均为物理 USB 传输。
+function enrichWindowsUsbTag(raw: string): string {
+  if (process.platform !== 'win32' || !raw) return raw;
+  return raw.split(/\r?\n/).map((line) => {
+    const t = line.trim();
+    if (!t || t.startsWith('List of devices') || t.startsWith('*') || /\busb:/.test(t)) return line;
+    const parts = t.split(/\s+/);
+    if (parts.length < 2) return line;
+    const serial = parts[0];
+    if (serial.includes(':') || /^emulator-\d+$/i.test(serial) || serial.includes('._tcp')) return line;
+    return `${line} usb:win32`;
+  }).join('\n');
+}
+
+let trackedRoster: { raw: string; long: boolean } | null = null;
+let devicesInflight: Promise<string> | null = null;
+
 /** 设备花名册推送流 —— host:track-devices，server 主动推变更，零轮询。 */
 export function adbTrackDevices(onRoster: (raw: string) => void, onError?: (e: Error) => void, useLong = true): { close: () => void } {
   let sock: net.Socket | null = null; let closed = false; let buf = Buffer.alloc(0);
@@ -116,19 +134,23 @@ export function adbTrackDevices(onRoster: (raw: string) => void, onError?: (e: E
           while (buf.length >= 4) {
             const len = parseInt(buf.subarray(0, 4).toString('ascii'), 16);
             if (!Number.isFinite(len) || buf.length < 4 + len) break;
-            onRoster(buf.subarray(4, 4 + len).toString('utf8'));
+            const raw = enrichWindowsUsbTag(buf.subarray(4, 4 + len).toString('utf8'));
+            trackedRoster = { raw, long: longOk };
+            onRoster(raw);
             buf = buf.subarray(4 + len);
           }
         });
         await new Promise<void>((resolve) => { sock!.once('close', () => resolve()); sock!.once('error', () => resolve()); });
+        trackedRoster = null;
         if (!closed) await new Promise(r => setTimeout(r, 2000)); // 掉线重连退避
       } catch (e) {
+        trackedRoster = null;
         if (!closed) { onError?.(e as Error); await new Promise(r => setTimeout(r, 2000)); }
       }
     }
   };
   void open();
-  return { close: () => { closed = true; sock?.destroy(); } };
+  return { close: () => { closed = true; trackedRoster = null; sock?.destroy(); } };
 }
 
 // ---- 设备级 transport ----
@@ -362,15 +384,25 @@ export async function adbExec(args: string[], opts: { timeout?: number; maxBuffe
   const { sel, rest } = parseAdbArgs(args);
   const cmd = rest[0];
   if (cmd === 'devices') {
+    const wantLong = rest.includes('-l');
+    if (trackedRoster && (!wantLong || trackedRoster.long)) {
+      return { stdout: 'List of devices attached\n' + trackedRoster.raw, stderr: '' };
+    }
     let raw: string;
-    if (rest.includes('-l')) {
-      try { raw = await adbHostData('host:devices-l', timeout); }
-      catch (e) {
-        // 只有 adbd FAIL（老版本不认识 devices-l）才降级；超时/断连直接抛
-        if (e instanceof AdbWireError && e.message.startsWith('host:devices-l:')) raw = await adbHostData('host:devices', timeout);
-        else throw e;
+    if (wantLong) {
+      if (!devicesInflight) {
+        devicesInflight = (async () => {
+          try { return enrichWindowsUsbTag(await adbHostData('host:devices-l', timeout)); }
+          catch (e) {
+            if (e instanceof AdbWireError && e.message.startsWith('host:devices-l:')) {
+              return enrichWindowsUsbTag(await adbHostData('host:devices', timeout));
+            }
+            throw e;
+          }
+        })().finally(() => { devicesInflight = null; });
       }
-    } else raw = await adbHostData('host:devices', timeout);
+      raw = await devicesInflight;
+    } else raw = enrichWindowsUsbTag(await adbHostData('host:devices', timeout));
     return { stdout: 'List of devices attached\n' + raw, stderr: '' };
   }
   if (cmd === 'shell') {

@@ -20,8 +20,9 @@ export function deviceRoutes({req,url,send}:RouteContext):Route[]{
     // itself under contention (transports empty while localUsb said online, or vice versa).
     let devs='';
     if(!localObserver.fileBrowserOnly&&!localObserver.demoApiSerial){
-      try{ devs=await realAdbRunner(['devices','-l'],{timeout:2200}); }catch{ devs=''; }
-      if(devs) transports=parseAdbDevices(devs)
+      try{ devs=await realAdbRunner(['devices','-l'],{timeout:2200}); }
+      catch(e){ return send(502,{ok:false,error:(e as Error).message}); }
+      transports=parseAdbDevices(devs)
         .map(row=>({serial:row.serial,model:row.model||'',state:row.state,link:row.link,
           observed:row.serial===localObserver.usbSerial,rpc:deviceRpcLive(row.serial)}));
     }
