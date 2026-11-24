@@ -3,7 +3,7 @@ import { computed, reactive, ref, watch, onMounted, onUnmounted } from 'vue';
 import { store, belongsToApp, capRemoveWhere, capVisible, capDisplayCap, DISPLAY_CAPS, panelDisplay, savePanelDisplay, toast } from '../store';
 import { getCaptures, getExchanges, getCaptureDetail, getDetectSummary, type Cap, perfMs } from '../api';
 import { catClass, cryptoView, rowLens, fmtTime, CATLABEL, type CatKey } from '../capview';
-import { SearchOutline } from '@vicons/ionicons5';
+import { SearchOutline, ReaderOutline } from '@vicons/ionicons5';
 import CapDetail from './CapDetail.vue';
 import ExchangeDetail from './ExchangeDetail.vue';
 
@@ -142,6 +142,7 @@ async function loadServerPage(beforeId: number | null) {
 
 // ---- 网络板块：重组交换 ----
 const rawSkipped = ref(0);
+const exLoadedOnce = ref(false);
 async function loadExchanges() {
   if (props.kind !== 'net' || !store.chosenPkg) { exchanges.value = []; return; }
   const pkg = store.chosenPkg;
@@ -158,7 +159,7 @@ async function loadExchanges() {
     if (r.http2Idle) notes.push(`${r.http2Idle} 条 HTTP/2 连接还没有完整请求`);
     if (rawSkipped.value) notes.push(`${rawSkipped.value} 条 TLS 记录不是 HTTP 请求（连接控制帧或拼不回去），已略过`);
     exNotes.value = notes;
-  } catch { /* 保旧数据 */ }
+  } catch { /* 保旧数据 */ } finally { exLoadedOnce.value = true; }
 }
 let exTimer = 0;
 function scheduleExchanges() {
@@ -410,6 +411,13 @@ watch(() => store.chosenPkg, () => {
 });
 watch(() => store.capItems.length, () => { if (props.kind === 'net' && !hasTimeRange.value) scheduleExchanges(); });
 
+// 骨架屏开关：初次加载 / 切应用 / 翻历史页时，列表有行就保留旧行，没有才铺骨架
+const showSkeleton = computed(() => {
+  if (!store.chosenPkg) return false;
+  if (props.kind === 'net') return !exLoadedOnce.value && !matchedExchanges.value.length;
+  if (store.capLoading || pageLoading.value) return !rows.value.length;
+  return false;
+});
 const emptyText = computed(() => {
   if (!store.chosenPkg) return '先在顶部选择应用。';
   if (pageLoading.value) return '正在读取分页记录…';
@@ -512,6 +520,13 @@ const searchPlaceholder = computed(() =>
         </div>
 
         <div class="cap-list" :id="LIST_ID[kind]" tabindex="0" @scroll="onScroll">
+          <template v-if="showSkeleton">
+            <div v-for="i in 8" :key="'sk' + i" class="row sk-row" aria-hidden="true">
+              <div class="sk-line sk-a"></div>
+              <div class="sk-line sk-b"></div>
+            </div>
+          </template>
+          <template v-else>
           <div v-if="hasTimeRange" class="ex-note time-banner">
             <span>时间筛选已启用</span>
             <n-button text size="small" type="primary" @click="clearTimeRange">切回实时</n-button>
@@ -528,7 +543,7 @@ const searchPlaceholder = computed(() =>
               </div>
               <div class="lens">{{ ex.response?.startLine || ex.request?.startLine || ex.note }}</div>
             </div>
-            <div v-if="!matchedExchanges.length" class="empty">{{ emptyText }}</div>
+            <n-empty v-if="!matchedExchanges.length" class="cap-empty" size="small" :description="emptyText" />
           </template>
 
           <template v-else>
@@ -562,7 +577,8 @@ const searchPlaceholder = computed(() =>
                   class="preview">{{ c.preview }}</div>
               </template>
             </div>
-            <div v-if="!rows.length" class="empty">{{ emptyText }}</div>
+            <n-empty v-if="!rows.length" class="cap-empty" size="small" :description="emptyText" />
+          </template>
           </template>
         </div>
         <div class="capture-list-foot">
@@ -587,8 +603,14 @@ const searchPlaceholder = computed(() =>
         <div class="detail-pane">
           <ExchangeDetail v-if="selExchange" :ex="selExchange" />
           <CapDetail v-else-if="selDetail" :detail="selDetail" @deleted="onCapDeleted" />
-          <div v-else class="detail-empty">
-            <strong>{{ PLACEHOLDER[kind][0] }}</strong><span>{{ PLACEHOLDER[kind][1] }}</span>
+          <div v-else class="detail-empty detail-placeholder">
+            <n-empty size="large">
+              <template #icon><n-icon :component="ReaderOutline" size="44" /></template>
+              <template #default>
+                <div class="ph-title">{{ PLACEHOLDER[kind][0] }}</div>
+                <div class="ph-desc">{{ PLACEHOLDER[kind][1] }}</div>
+              </template>
+            </n-empty>
           </div>
         </div>
       </section>
@@ -598,6 +620,22 @@ const searchPlaceholder = computed(() =>
 
 <style scoped>
 .cap-list { outline: none; }
+.cap-empty { padding: 48px 16px; }
+/* 骨架行：形状对齐真实 .row（两行结构），不做内容也能先看到骨架 */
+.sk-row { pointer-events: none; }
+.sk-line {
+  height: 11px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, rgba(255,255,255,.05) 25%, rgba(255,255,255,.11) 50%, rgba(255,255,255,.05) 75%);
+  background-size: 200% 100%;
+  animation: sk-shimmer 1.25s ease-in-out infinite;
+}
+.sk-a { width: 62%; }
+.sk-b { width: 84%; margin-top: 10px; }
+@keyframes sk-shimmer { to { background-position: -200% 0; } }
+.detail-placeholder { min-height: 62vh; display: grid; place-items: center; padding: 0; }
+.ph-title { font-size: 15px; font-weight: 600; color: var(--ink-2); }
+.ph-desc { margin-top: 6px; font-size: 12.5px; color: var(--muted); }
 .toolbar-search-input { flex: 1; min-width: 160px; }
 .search-ico { font-size: 14px; opacity: 0.55; }
 .pager-controls {

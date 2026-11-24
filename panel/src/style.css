@@ -320,7 +320,7 @@
   /* ---- capture rows（对齐 iOS workbench：左色条 + 透明胶囊，最新在上） ---- */
   .row { min-height:70px; padding:10px 14px; background:transparent; border-bottom:1px solid var(--line-soft); border-left:3px solid transparent; cursor:pointer; }
   .row:hover { background:rgba(255,255,255,.035); }
-  .row.selected { background:rgba(120,169,255,.08); box-shadow:none; }
+  .row.selected { background:rgba(120,169,255,.10); box-shadow:inset 0 0 0 1px rgba(120,169,255,.35); }
   .row .top { display:flex; gap:10px; align-items:center; font-size:12px; }
   .row .seq { color:var(--muted); min-width:42px; font-variant-numeric:tabular-nums; }
   .row .algo { font-weight:650; color:var(--ink); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }

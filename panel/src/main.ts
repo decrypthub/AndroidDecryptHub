@@ -4,12 +4,12 @@ import './style.css';
 import { connectWs, startPolling } from './store';
 import {
   create, NButton, NCheckbox, NConfigProvider, NDatePicker, NDropdown, NEmpty, NIcon, NInput,
-  NInputNumber, NPopconfirm, NRadioButton, NRadioGroup, NSelect, NSwitch, NTag, NTooltip,
+  NInputNumber, NPopconfirm, NRadioButton, NRadioGroup, NSelect, NSpin, NSwitch, NTag, NTooltip,
 } from 'naive-ui';
 
 const naive = create({
   components: [NButton, NCheckbox, NConfigProvider, NDatePicker, NDropdown, NEmpty, NIcon, NInput,
-    NInputNumber, NPopconfirm, NRadioButton, NRadioGroup, NSelect, NSwitch, NTag, NTooltip],
+    NInputNumber, NPopconfirm, NRadioButton, NRadioGroup, NSelect, NSpin, NSwitch, NTag, NTooltip],
 });
 
 const app = createApp(App);

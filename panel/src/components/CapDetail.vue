@@ -167,9 +167,9 @@ async function doDelete() {
 </script>
 
 <template>
-  <div v-if="detail._loading" class="detail-empty"><strong>正在读取记录…</strong></div>
-  <div v-else-if="detail._error" class="detail-empty"><strong>{{ detail._error }}</strong></div>
-  <template v-else>
+  <div v-if="detail._loading" class="detail-empty detail-loading"><n-spin size="small" /></div>
+  <div v-else-if="detail._error" class="detail-empty"><n-empty size="small" :description="String(detail._error)" /></div>
+  <div v-else class="detail-anim" :key="String(c.id)">
     <div class="detail-head">
       <div class="detail-head-main">
         <h2>
@@ -288,7 +288,7 @@ async function doDelete() {
       </template>
       <div v-else class="detail-empty">这条记录没有输出数据。</div>
     </div>
-  </template>
+  </div>
 </template>
 
 <style scoped>
@@ -301,6 +301,11 @@ async function doDelete() {
 .detail-head-main { min-width: 0; }
 .detail-menu { position: relative; flex: none; }
 .pc-anchor { position: absolute; right: 0; top: 28px; }
+
+/* 记录切换入场：按 c.id 重建元素触发 */
+.detail-anim { animation: detail-in .14s ease-out; }
+@keyframes detail-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.detail-loading { min-height: 40vh; display: grid; place-items: center; padding: 0; }
 
 /* 一条工具栏：输入/输出 段控件 + 格式 段控件 */
 .io-toolbar {

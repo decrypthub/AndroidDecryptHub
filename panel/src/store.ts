@@ -24,6 +24,8 @@ function bucketOf(cat: string): 'crypto' | 'net' | 'system' {
 export const store = reactive({
   // 连接
   wsState: 'off' as 'off' | 'live' | 'fail',
+  // 列表初始加载中（骨架屏开关；分页加载走各自面板的 pageLoading）
+  capLoading: false,
   // 设备
   devices: [] as DeviceView[],
   localUsb: null as Record<string, unknown> | null,
@@ -96,6 +98,7 @@ export function toast(text: string) {
 export async function capLoad() {
   const pkg = store.chosenPkg;
   if (!pkg) { store.capItems = []; return; }
+  store.capLoading = true;
   try {
     const [rc, rs, rn] = await Promise.all([
       A.getCaptures({ package: pkg, category: 'crypto', limit: 600 }),
@@ -124,6 +127,8 @@ export async function capLoad() {
     store.capLatest = merged.at(-1)?.id ?? 0;
   } catch {
     // 网络瞬断保旧数据，绝不把已有列表洗成空数组
+  } finally {
+    if (store.chosenPkg === pkg) store.capLoading = false;
   }
 }
 
