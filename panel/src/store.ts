@@ -12,7 +12,14 @@ export interface DeviceView {
   appSession?: string | null;
 }
 
-export const CAP_BUFFER_LIMIT = 5000;
+export const CAP_BUFFER_LIMIT = 4500;
+const BUCKET_LIMIT = 1500;
+
+function bucketOf(cat: string): 'crypto' | 'net' | 'system' {
+  if (cat === 'crypto') return 'crypto';
+  if (cat === 'net') return 'net';
+  return 'system';
+}
 
 export const store = reactive({
   // 连接
@@ -39,6 +46,7 @@ export const store = reactive({
   capDropped: 0,
   capComplete: true,
   capLatest: 0,
+  capHasOlder: { crypto: false, system: false, net: false },
   // 视图
   view: 'cc' as 'cc' | 'sy' | 'nt' | 'files' | 'dump' | 'settings',
   appDialogOpen: false,
@@ -55,11 +63,20 @@ function stampSession(s: A.Session) {
   if (s.sessionId && s.package) store.sessionPkg.set(s.sessionId, s.package);
 }
 
-// ---- 记录 ----
+// ---- 记录（按板块独立限额淘汰，防止高频加解密把网络/系统记录挤空）----
 export function capPush(c: A.Cap) {
   if (c.sessionId && c.package) store.sessionPkg.set(c.sessionId, c.package);
   store.capItems.push(c);
-  if (store.capItems.length > CAP_BUFFER_LIMIT) store.capItems.splice(0, store.capItems.length - CAP_BUFFER_LIMIT);
+  const b = bucketOf(c.category);
+  let cnt = 0;
+  for (let i = store.capItems.length - 1; i >= 0; i--) {
+    if (bucketOf(store.capItems[i].category) !== b) continue;
+    cnt++;
+    if (cnt > BUCKET_LIMIT) {
+      store.capItems.splice(i, 1);
+      store.capHasOlder[b] = true;
+    }
+  }
 }
 /** 清空显示：只从内存列表移除匹配记录，不动 daemon/disk。 */
 export function capRemoveWhere(fn: (c: A.Cap) => boolean): number {
@@ -77,28 +94,46 @@ export function toast(text: string) {
   setTimeout(() => { const i = toasts.findIndex(t => t.id === id); if (i >= 0) toasts.splice(i, 1); }, 2600);
 }
 export async function capLoad() {
-  if (!store.chosenPkg) { store.capItems = []; return; }
-  const r = await A.getCaptures(store.chosenPkg, 0, CAP_BUFFER_LIMIT);
-  store.capItems = (r.items ?? []).slice(-CAP_BUFFER_LIMIT);
-  for (const c of store.capItems) if (c.sessionId && c.package) store.sessionPkg.set(c.sessionId, c.package);
-  store.capDropped = r.dropped ?? 0;
-  store.capComplete = r.complete !== false;
-  store.capLatest = r.latest ?? (store.capItems.at(-1)?.id ?? 0);
+  const pkg = store.chosenPkg;
+  if (!pkg) { store.capItems = []; return; }
+  try {
+    const [rc, rs, rn] = await Promise.all([
+      A.getCaptures({ package: pkg, category: 'crypto', limit: 600 }),
+      A.getCaptures({ package: pkg, category: 'system,file', limit: 600 }),
+      A.getCaptures({ package: pkg, category: 'net', limit: 400 }),
+    ]);
+    if (store.chosenPkg !== pkg) return;
+    const byId = new Map<number, A.Cap>();
+    for (const r of [rc, rs, rn]) {
+      for (const c of (r.captures ?? r.items ?? [])) {
+        byId.set(c.id, c);
+        if (c.sessionId && c.package) store.sessionPkg.set(c.sessionId, c.package);
+      }
+    }
+    // 合并这期间通过 WebSocket 新推上来的记录，避免初始请求往返期间丢尾部
+    for (const c of store.capItems) {
+      if (belongsToApp(c)) byId.set(c.id, c);
+    }
+    const merged = [...byId.values()].sort((a, b) => a.id - b.id);
+    store.capItems = merged;
+    store.capHasOlder.crypto = !!rc.hasMore;
+    store.capHasOlder.system = !!rs.hasMore;
+    store.capHasOlder.net = !!rn.hasMore;
+    store.capDropped = rc.dropped ?? rs.dropped ?? 0;
+    store.capComplete = rc.complete !== false;
+    store.capLatest = merged.at(-1)?.id ?? 0;
+  } catch {
+    // 网络瞬断保旧数据，绝不把已有列表洗成空数组
+  }
 }
 
-// 设备+包身份。应用 pid/session 变化不进来——重启不清列表。
-export function capScopeKey(): string {
-  return `${store.selectedDeviceKey}|${store.chosenPkg}`;
-}
-let lastCapScope = '';
-export function scopeChanged(): boolean {
-  const k = capScopeKey();
-  if (k === lastCapScope) return false;
-  lastCapScope = k;
-  return true;
-}
+// 只按包名切作用域：临时传输层 key 波动不清空当前应用已加载的数据。
+let lastLoadedPkg = '';
 export async function syncCapScope() {
-  if (scopeChanged()) await capLoad();
+  if (!store.chosenPkg || store.chosenPkg === lastLoadedPkg) return;
+  lastLoadedPkg = store.chosenPkg;
+  store.capItems = [];
+  await capLoad();
 }
 
 // ---- 设备轮询：失败保旧值 ----
@@ -151,7 +186,14 @@ export function choosePackage(pkg: string) {
   void syncCapScope();
 }
 
-// ---- 应用列表：失败保旧值 ----
+// ---- 应用列表：失败保旧值（scope 涉及手机 su 读盘，只在打开应用弹窗或设置页时拉取）----
+export async function refreshScope() {
+  try {
+    const s = await A.getScope();
+    if (s.ok) store.scope = new Set(s.packages);
+  } catch { /* scope 读取失败不遮罩主流程 */ }
+}
+
 export async function refreshApps() {
   try {
     const r = await A.getApps();
@@ -162,11 +204,10 @@ export async function refreshApps() {
   } catch {
     store.appsFailed = true;
   }
-  try {
-    const s = await A.getScope();
-    if (s.ok) store.scope = new Set(s.packages);
-  } catch { /* scope 读取失败不遮罩主流程 */ }
 }
+
+watch(() => store.appDialogOpen, open => { if (open) void refreshScope(); });
+watch(() => store.view, v => { if (v === 'settings') void refreshScope(); });
 
 // ---- WebSocket ----
 let ws: WebSocket | null = null;
@@ -226,13 +267,28 @@ export function connectWs() {
   };
 }
 
-// ---- 轮询 ----
+// ---- 轮询（设备变更已有 WS track-devices 实时推送，后台隐藏标签页停轮询，不打扰 USB）----
 export function startPolling() {
   void refreshDevices();
   void refreshApps();
+  void refreshScope();
   void capLoad();
-  setInterval(() => { void refreshDevices(); }, 4000);
-  setInterval(() => { void refreshApps(); }, 8000);
+  setInterval(() => {
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+    void refreshDevices();
+  }, 12000);
+  setInterval(() => {
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+    void refreshApps();
+  }, 15000);
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        void refreshDevices();
+        void refreshApps();
+      }
+    });
+  }
 }
 
 export const appSessions = computed(() =>

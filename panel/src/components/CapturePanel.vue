@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch, onMounted, onUnmounted } from 'vue';
-import { store, belongsToApp, capRemoveWhere, capVisible, capDisplayCap, panelDisplay, toast } from '../store';
+import { store, belongsToApp, capRemoveWhere, capVisible, capDisplayCap, DISPLAY_CAPS, panelDisplay, savePanelDisplay, toast } from '../store';
 import { getCaptures, getExchanges, getCaptureDetail, getDetectSummary, type Cap, perfMs } from '../api';
 import { catClass, cryptoView, rowLens, fmtTime, CATLABEL, type CatKey } from '../capview';
 import CapDetail from './CapDetail.vue';
@@ -18,7 +18,11 @@ interface Exchange {
   captureIds?: number[]; note?: string; request?: ExchangePart; response?: ExchangePart;
 }
 
-const filter = reactive({ q: '', min: null as number | null, max: null as number | null, cat: -2, paused: false, kind: 'all' });
+const filter = reactive({
+  q: '', min: null as number | null, max: null as number | null,
+  cat: -2, paused: false, kind: 'all',
+  fromStr: '', toStr: '',
+});
 const advOpen = ref(false);
 const moreOpen = ref(false);
 const sel = ref<number | string | null>(null);
@@ -30,6 +34,29 @@ const scrollTop = ref(0);
 const newCount = ref(0);
 const radarText = ref('');
 let lastShown = 0;
+
+// ---- 分页与时间窗口状态 ----
+const cursorStack = ref<Array<number | null>>([]);
+const currentBeforeId = ref<number | null>(null);
+const pagedItems = ref<Cap[] | null>(null);
+const pagedHasMore = ref(false);
+const pageLoading = ref(false);
+const netPage = ref(1);
+
+function parseTimeInput(s: string): number | null {
+  if (!s) return null;
+  const ms = new Date(s).getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
+function fmtLocalInput(ms: number): string {
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+const fromTs = computed(() => parseTimeInput(filter.fromStr));
+const toTs = computed(() => parseTimeInput(filter.toStr));
+const hasTimeRange = computed(() => fromTs.value !== null || toTs.value !== null);
+const isHistoricalMode = computed(() => pagedItems.value !== null);
 
 const CATS: Record<string, CatKey[]> = {
   crypto: ['digest', 'hmac', 'sym', 'asym', 'aead'],
@@ -56,12 +83,17 @@ function matchesPanel(c: Cap): boolean {
   return true;
 }
 
-// 本板块归属当前应用的记录（过滤前）
-const scoped = computed(() => store.capItems.filter(c => matchesPanel(c) && belongsToApp(c)));
+function serverCategory(): string {
+  if (props.kind === 'crypto') return 'crypto';
+  if (props.kind === 'system') return filter.kind === 'all' ? 'system,file' : filter.kind;
+  return 'net';
+}
 
-const visible = computed(() => {
-  let items = scoped.value.filter(capVisible);
+function applyClientFilter(source: Cap[]): Cap[] {
+  let items = source.filter(c => matchesPanel(c) && belongsToApp(c) && capVisible(c));
   if (props.kind === 'crypto') items = items.filter(c => cryptoView(c).show !== false);
+  if (fromTs.value != null) items = items.filter(c => c.ts >= fromTs.value!);
+  if (toTs.value != null) items = items.filter(c => c.ts <= toTs.value!);
   const q = filter.q.trim().toLowerCase();
   if (q) {
     items = items.filter(c => {
@@ -79,7 +111,42 @@ const visible = computed(() => {
     items = items.filter(c => catClass(c) === want);
   }
   return items;
-});
+}
+
+// 本板块归属当前应用的记录（过滤前）
+const scoped = computed(() => store.capItems.filter(c => matchesPanel(c) && belongsToApp(c)));
+
+const visible = computed(() => applyClientFilter(pagedItems.value ?? store.capItems));
+
+async function loadServerPage(beforeId: number | null) {
+  if (!store.chosenPkg || props.kind === 'net') return;
+  const pkg = store.chosenPkg;
+  pageLoading.value = true;
+  try {
+    const qTrim = filter.q.trim();
+    const r = await getCaptures({
+      package: pkg,
+      category: serverCategory(),
+      beforeId,
+      fromTs: fromTs.value,
+      toTs: toTs.value,
+      q: qTrim && !/^#\d+$/.test(qTrim) ? qTrim : undefined,
+      limit: capDisplayCap.value,
+    });
+    if (store.chosenPkg !== pkg) return;
+    const list = r.captures ?? r.items ?? [];
+    for (const c of list) if (c.sessionId && c.package) store.sessionPkg.set(c.sessionId, c.package);
+    pagedItems.value = list;
+    pagedHasMore.value = !!r.hasMore;
+    currentBeforeId.value = beforeId;
+    const el = document.getElementById(LIST_ID[props.kind]);
+    el?.scrollTo({ top: 0 });
+  } catch {
+    toast('读取分页记录失败');
+  } finally {
+    pageLoading.value = false;
+  }
+}
 
 // ---- 网络板块：重组交换 ----
 const rawSkipped = ref(0);
@@ -87,11 +154,12 @@ async function loadExchanges() {
   if (props.kind !== 'net' || !store.chosenPkg) { exchanges.value = []; return; }
   const pkg = store.chosenPkg;
   try {
-    const r = await getExchanges(pkg) as { exchanges?: Exchange[]; http2Idle?: number; consumedIds?: number[] };
+    const r = await getExchanges(pkg, { fromTs: fromTs.value, toTs: toTs.value }) as {
+      exchanges?: Exchange[]; http2Idle?: number; consumedIds?: number[];
+    };
     if (store.chosenPkg !== pkg) return; // 竞态：响应回来时包已换
     const all = r.exchanges ?? [];
-    const localIds = new Set(scoped.value.map(c => c.id));
-    exchanges.value = all.filter(ex => (ex.captureIds ?? []).some(id => localIds.has(id)));
+    exchanges.value = all;
     const used = new Set([...all.flatMap(ex => ex.captureIds ?? []), ...(r.consumedIds ?? [])]);
     rawSkipped.value = visible.value.filter(c => !used.has(c.id)).length;
     const notes: string[] = [];
@@ -106,10 +174,12 @@ function scheduleExchanges() {
   exTimer = window.setTimeout(() => void loadExchanges(), 250);
 }
 
-const matchedExchanges = computed(() => {
+const matchedExchangesAll = computed(() => {
   if (props.kind !== 'net') return [];
   const q = filter.q.trim().toLowerCase();
   return exchanges.value.filter(ex => {
+    if (fromTs.value != null && (ex.ts ?? 0) < fromTs.value) return false;
+    if (toTs.value != null && (ex.ts ?? 0) > toTs.value) return false;
     if (q) {
       const blob = [ex.label, ex.status, ex.note,
         ex.request?.startLine, ex.request?.headerText, ex.request?.bodyText,
@@ -124,26 +194,106 @@ const matchedExchanges = computed(() => {
   }).sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0));
 });
 
-const rows = computed(() => props.kind === 'net' ? [] : visible.value.slice(-capDisplayCap.value).reverse());
+const matchedExchanges = computed(() => {
+  const start = (netPage.value - 1) * capDisplayCap.value;
+  return matchedExchangesAll.value.slice(start, start + capDisplayCap.value);
+});
+
+const frozenRows = ref<Cap[]>([]);
+const liveOrPagedRows = computed(() => props.kind === 'net' ? [] : visible.value.slice(-capDisplayCap.value).reverse());
+const rows = computed(() => (filter.paused && !isHistoricalMode.value && frozenRows.value.length ? frozenRows.value : liveOrPagedRows.value));
+watch(() => filter.paused, p => {
+  frozenRows.value = p ? [...liveOrPagedRows.value] : [];
+});
+
+const pageNumber = computed(() => props.kind === 'net' ? netPage.value : cursorStack.value.length + 1);
+const canPrevPage = computed(() => {
+  if (pageLoading.value) return false;
+  if (props.kind === 'net') return netPage.value * capDisplayCap.value < matchedExchangesAll.value.length;
+  if (isHistoricalMode.value) return pagedHasMore.value && rows.value.length > 0;
+  const bucketKey = props.kind === 'crypto' ? 'crypto' : 'system';
+  return rows.value.length > 0 && (visible.value.length > capDisplayCap.value || store.capHasOlder[bucketKey]);
+});
+const canNextPage = computed(() => {
+  if (pageLoading.value) return false;
+  if (props.kind === 'net') return netPage.value > 1;
+  return cursorStack.value.length > 0;
+});
+
+async function prevPage() {
+  if (!canPrevPage.value) return;
+  if (props.kind === 'net') { netPage.value++; return; }
+  const oldestShown = rows.value.at(-1)?.id;
+  if (oldestShown == null) return;
+  cursorStack.value.push(currentBeforeId.value);
+  await loadServerPage(oldestShown);
+}
+async function nextPage() {
+  if (!canNextPage.value) return;
+  if (props.kind === 'net') { netPage.value = Math.max(1, netPage.value - 1); return; }
+  const prevCursor = cursorStack.value.pop() ?? null;
+  if (cursorStack.value.length === 0 && prevCursor === null && !hasTimeRange.value) {
+    currentBeforeId.value = null;
+    pagedItems.value = null;
+    const el = document.getElementById(LIST_ID[props.kind]);
+    el?.scrollTo({ top: 0 });
+    return;
+  }
+  await loadServerPage(prevCursor);
+}
+
+function setQuickMinutes(mins: number) {
+  const now = Date.now();
+  filter.fromStr = fmtLocalInput(now - mins * 60_000);
+  filter.toStr = '';
+  applyTimeRange();
+}
+function clearTimeRange() {
+  filter.fromStr = '';
+  filter.toStr = '';
+  cursorStack.value = [];
+  currentBeforeId.value = null;
+  pagedItems.value = null;
+  netPage.value = 1;
+  if (props.kind === 'net') void loadExchanges();
+}
+function applyTimeRange() {
+  cursorStack.value = [];
+  currentBeforeId.value = null;
+  netPage.value = 1;
+  if (props.kind === 'net') { void loadExchanges(); return; }
+  if (hasTimeRange.value) void loadServerPage(null);
+  else pagedItems.value = null;
+}
+function onPageCapChange(e: Event) {
+  const val = Number((e.target as HTMLSelectElement).value);
+  if (DISPLAY_CAPS.includes(val)) {
+    savePanelDisplay({ ...panelDisplay, limit: val });
+    if (isHistoricalMode.value) void loadServerPage(currentBeforeId.value);
+  }
+}
 
 // 新记录横幅：暂停或滚离顶部时累计
-watch(rows, () => {
-  if (filter.paused || scrollTop.value > 48) newCount.value += rows.value.length - lastShown;
-  else newCount.value = 0;
-  lastShown = rows.value.length;
+watch(liveOrPagedRows, () => {
+  if ((filter.paused || scrollTop.value > 48) && !isHistoricalMode.value) {
+    const diff = liveOrPagedRows.value.length - lastShown;
+    if (diff > 0) newCount.value += diff;
+  } else newCount.value = 0;
+  lastShown = liveOrPagedRows.value.length;
 });
 
 const countText = computed(() => {
   const n = props.kind === 'net' ? matchedExchanges.value.length : rows.value.length;
   const ms = perfMs(`GET /api/${props.kind === 'net' ? 'http/exchanges' : 'captures'}`);
-  return `${n} 条${ms ? ` · ${Math.round(ms)}ms` : ''}`;
+  const pg = pageNumber.value > 1 ? ` · 第${pageNumber.value}页` : '';
+  return `${n} 条${pg}${ms ? ` · ${Math.round(ms)}ms` : ''}`;
 });
 
 async function selectRow(c: Cap) {
   sel.value = c.id; selExchange.value = null;
   selDetail.value = { _loading: true };
   try {
-    const d = await getCaptureDetail(c.id);
+    const d = await getCaptureDetail(c.id, store.chosenPkg || undefined);
     if (sel.value === c.id) selDetail.value = d;
   } catch {
     if (sel.value === c.id) selDetail.value = { _error: '读取详情失败', cap: c };
@@ -158,7 +308,17 @@ function onScroll(e: Event) {
   scrollTop.value = (e.target as HTMLElement).scrollTop;
   if (scrollTop.value <= 48) newCount.value = 0;
 }
-function jumpLatest() { filter.paused = false; scrollTop.value = 0; newCount.value = 0; const el = document.getElementById(LIST_ID[props.kind]); el?.scrollTo({ top: 0 }); }
+function jumpLatest() {
+  filter.paused = false;
+  cursorStack.value = [];
+  currentBeforeId.value = null;
+  netPage.value = 1;
+  if (hasTimeRange.value) void loadServerPage(null);
+  else pagedItems.value = null;
+  scrollTop.value = 0; newCount.value = 0;
+  const el = document.getElementById(LIST_ID[props.kind]);
+  el?.scrollTo({ top: 0 });
+}
 
 // ---- 筛选徽标：只算高级筛选项（搜索词在框里可见）----
 const advCount = computed(() => {
@@ -166,11 +326,13 @@ const advCount = computed(() => {
   if (filter.min != null || filter.max != null) n++;
   if (props.kind === 'crypto' && filter.cat >= 0) n++;
   if (props.kind === 'system' && filter.kind !== 'all') n++;
+  if (hasTimeRange.value) n++;
   return n;
 });
 const filterActive = computed(() => !!(filter.q.trim() || advCount.value));
 function resetFilter() {
   filter.q = ''; filter.min = null; filter.max = null; filter.cat = -2; filter.kind = 'all';
+  clearTimeRange();
 }
 function downloadView() {
   moreOpen.value = false;
@@ -246,20 +408,26 @@ onUnmounted(() => {
 });
 watch(() => store.chosenPkg, () => {
   sel.value = null; selDetail.value = null; selExchange.value = null;
+  cursorStack.value = []; currentBeforeId.value = null; pagedItems.value = null; netPage.value = 1;
   void loadExchanges(); void loadRadar();
 });
-watch(() => store.capItems.length, () => { if (props.kind === 'net') scheduleExchanges(); });
+watch(() => store.capItems.length, () => { if (props.kind === 'net' && !hasTimeRange.value) scheduleExchanges(); });
 
 const emptyText = computed(() => {
   if (!store.chosenPkg) return '先在顶部选择应用。';
+  if (pageLoading.value) return '正在读取分页记录…';
   if (props.kind === 'net')
     return exchanges.value.length ? '没有符合筛选条件的网络记录。' :
       scoped.value.length ? `有 ${scoped.value.length} 条 TLS，尚未拼成 HTTP。` : '还没有网络记录。';
   if (props.kind === 'crypto') return '还没有加解密记录。';
   return '还没有系统事件。';
 });
-const listFootLeft = computed(() =>
-  filter.paused ? '已暂停刷新' : (store.wsState === 'live' ? '列表刷新中' : '等待连接'));
+const listFootLeft = computed(() => {
+  if (pageLoading.value) return '读取中…';
+  if (hasTimeRange.value) return '时间段筛选';
+  if (isHistoricalMode.value) return `历史记录 · 第 ${pageNumber.value} 页`;
+  return filter.paused ? '已暂停刷新' : (store.wsState === 'live' ? '实时刷新中' : '等待连接');
+});
 
 function cryptoRow(c: Cap) {
   const v = cryptoView(c);
@@ -313,6 +481,20 @@ const searchPlaceholder = computed(() =>
                 <input v-model.number="filter.max" type="number" min="0" step="1" placeholder="不限" />
                 <span class="unit">B</span>
               </div>
+              <fieldset class="time-filter">
+                <legend>时间范围</legend>
+                <div class="time-quick">
+                  <button type="button" @click="setQuickMinutes(1)">近 1 分钟</button>
+                  <button type="button" @click="setQuickMinutes(5)">近 5 分钟</button>
+                  <button type="button" @click="setQuickMinutes(30)">近 30 分钟</button>
+                  <button v-if="hasTimeRange" type="button" @click="clearTimeRange">清除</button>
+                </div>
+                <div class="time-inputs">
+                  <input v-model="filter.fromStr" type="datetime-local" step="1" @change="applyTimeRange" />
+                  <span class="sep">至</span>
+                  <input v-model="filter.toStr" type="datetime-local" step="1" @change="applyTimeRange" />
+                </div>
+              </fieldset>
             </section>
           </div>
         </div>
@@ -341,8 +523,9 @@ const searchPlaceholder = computed(() =>
         </div>
 
         <div class="cap-list" :id="LIST_ID[kind]" tabindex="0" @scroll="onScroll">
-          <div v-if="!store.capComplete || store.capDropped" class="dump-callout" style="margin:8px 12px">
-            环形缓冲有丢弃（dropped={{ store.capDropped }}），列表可能不完整。
+          <div v-if="hasTimeRange" class="ex-note time-banner">
+            <span>时间筛选已启用</span>
+            <button type="button" class="link-btn" @click="clearTimeRange">切回实时</button>
           </div>
           <div v-for="n in exNotes" :key="n" class="ex-note">{{ n }}</div>
           <template v-if="kind === 'net'">
@@ -393,7 +576,17 @@ const searchPlaceholder = computed(() =>
             <div v-if="!rows.length" class="empty">{{ emptyText }}</div>
           </template>
         </div>
-        <div class="capture-list-foot"><span>{{ listFootLeft }}</span><span>最新优先</span></div>
+        <div class="capture-list-foot">
+          <span>{{ listFootLeft }}</span>
+          <div class="pager-controls">
+            <select class="page-cap-select" :value="capDisplayCap" title="单页返回条数上限" @change="onPageCapChange">
+              <option v-for="cap in DISPLAY_CAPS" :key="cap" :value="cap">{{ cap }} 条/页</option>
+            </select>
+            <button type="button" class="pager-btn" :disabled="!canPrevPage" title="读取更早一页" @click="prevPage">上一页</button>
+            <button type="button" class="pager-btn" :disabled="!canNextPage" title="读取更新一页" @click="nextPage">下一页</button>
+            <button v-if="isHistoricalMode || netPage > 1" type="button" class="pager-btn" @click="jumpLatest">最新</button>
+          </div>
+        </div>
       </div>
 
       <div class="splitter" :class="{ dragging }" @mousedown="startDrag"></div>
@@ -416,4 +609,77 @@ const searchPlaceholder = computed(() =>
 
 <style scoped>
 .cap-list { outline: none; }
+.pager-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.pager-btn, .page-cap-select {
+  height: 24px;
+  padding: 0 8px;
+  font-size: 12px;
+  border-radius: 5px;
+  border: 1px solid var(--border, rgba(128, 128, 128, 0.28));
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.pager-btn:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+.time-filter {
+  border: 0;
+  padding: 0;
+  margin: 10px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.time-filter legend {
+  font-size: 12px;
+  opacity: 0.78;
+  margin-bottom: 2px;
+}
+.time-quick {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.time-quick button {
+  padding: 2px 8px;
+  font-size: 12px;
+  border-radius: 5px;
+  border: 1px solid var(--border, rgba(128, 128, 128, 0.28));
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.time-inputs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.time-inputs input {
+  font-size: 12px;
+  padding: 3px 6px;
+  border-radius: 5px;
+  border: 1px solid var(--border, rgba(128, 128, 128, 0.28));
+  background: transparent;
+  color: inherit;
+}
+.time-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.link-btn {
+  border: 0;
+  background: transparent;
+  color: var(--accent, #3b82f6);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0;
+}
 </style>

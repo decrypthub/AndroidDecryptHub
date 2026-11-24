@@ -68,16 +68,57 @@ export const observePackage = (serial: string, pkg: string) =>
   post('/api/devices', { action: 'observe', serial, package: pkg });
 export const disconnectDevice = (serial: string) => post('/api/devices', { action: 'disconnect', serial });
 
-export const getCaptures = (pkg: string, since = 0, limit = 5000) =>
-  api<{ ok: boolean; items: Cap[]; dropped?: number; complete?: boolean; latest?: number }>(
-    `/api/captures?package=${encodeURIComponent(pkg)}&since=${since}&limit=${limit}`);
-export const getCaptureDetail = (id: number) => api<Record<string, unknown>>(`/api/captures/${id}`);
-export const getExchanges = (pkg: string) =>
-  api<{ ok: boolean; items: unknown[] }>(`/api/http/exchanges?package=${encodeURIComponent(pkg)}`);
+export interface CapturesQuery {
+  package: string;
+  since?: number;
+  beforeId?: number | null;
+  fromTs?: number | null;
+  toTs?: number | null;
+  category?: string;
+  q?: string;
+  limit?: number;
+}
+export interface CapturesReply {
+  ok?: boolean;
+  captures?: Cap[];
+  items?: Cap[];
+  dropped?: number;
+  complete?: boolean;
+  latest?: number;
+  latestId?: number | null;
+  oldestId?: number | null;
+  nextBeforeId?: number | null;
+  hasMore?: boolean;
+  returned?: number;
+  total?: number;
+}
+
+export const getCaptures = (q: CapturesQuery | string, since = 0, limit = 1000) => {
+  const opts: CapturesQuery = typeof q === 'string' ? { package: q, since, limit } : q;
+  const p = new URLSearchParams();
+  if (opts.package) p.set('package', opts.package);
+  if (opts.since) p.set('since', String(opts.since));
+  if (opts.beforeId != null) p.set('beforeId', String(opts.beforeId));
+  if (opts.fromTs != null) p.set('fromTs', String(opts.fromTs));
+  if (opts.toTs != null) p.set('toTs', String(opts.toTs));
+  if (opts.category) p.set('category', opts.category);
+  if (opts.q) p.set('q', opts.q);
+  p.set('limit', String(opts.limit ?? 200));
+  return api<CapturesReply>(`/api/captures?${p.toString()}`);
+};
+export const getCaptureDetail = (id: number, pkg?: string) =>
+  api<Record<string, unknown>>(`/api/captures/${id}${pkg ? `?package=${encodeURIComponent(pkg)}` : ''}`);
+export const getExchanges = (pkg: string, range?: { fromTs?: number | null; toTs?: number | null }) => {
+  const p = new URLSearchParams({ package: pkg });
+  if (range?.fromTs != null) p.set('fromTs', String(range.fromTs));
+  if (range?.toTs != null) p.set('toTs', String(range.toTs));
+  return api<{ ok?: boolean; exchanges?: unknown[]; items?: unknown[]; http2Idle?: number; consumedIds?: number[] }>(`/api/http/exchanges?${p.toString()}`);
+};
 export const getDetectSummary = (pkg: string) =>
   api<Record<string, unknown>>(`/api/detect/summary?package=${encodeURIComponent(pkg)}`);
 export const getDumpEvents = (pkg: string) =>
-  api<{ ok: boolean; items: Array<Record<string, unknown>> }>(`/api/events?type=dump.new&limit=80&package=${encodeURIComponent(pkg)}`);
+  api<{ ok?: boolean; events?: Array<Record<string, unknown>>; items?: Array<Record<string, unknown>> }>(
+    `/api/events?type=dump.new&limit=80&package=${encodeURIComponent(pkg)}`);
 
 export const fsList = (pkg: string, path: string) =>
   api<{ ok: boolean; entries: FsEntry[]; limited?: boolean; error?: string }>(
@@ -97,7 +138,8 @@ export const unpackInventory = (session: string) =>
   api<{ ok: boolean; loaded?: Array<{ name?: string; size?: number; savedSize?: number; sha256?: string; path?: string }>; packaged?: Array<{ name?: string; path?: string; size?: number; sha256?: string }>; error?: string }>(
     `/api/unpack/inventory?session=${encodeURIComponent(session)}`);
 export const unpackHistory = (pkg: string) =>
-  api<{ ok: boolean; items?: Array<Record<string, unknown>> }>(`/api/unpack/history?package=${encodeURIComponent(pkg)}`);
+  api<{ ok?: boolean; runs?: Array<Record<string, unknown>>; records?: Array<Record<string, unknown>>; items?: Array<Record<string, unknown>> }>(
+    `/api/unpack/history?package=${encodeURIComponent(pkg)}`);
 export const unpackPullSo = (pkg: string, path: string) =>
   post('/api/unpack/pull-so', { package: pkg, path });
 export const unpackDumpSoOne = (pkg: string, name: string) =>

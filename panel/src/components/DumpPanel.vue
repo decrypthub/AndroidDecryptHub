@@ -36,8 +36,8 @@ async function refreshRecords() {
   if (!store.chosenPkg) { records.value = []; history.value = []; return; }
   try {
     const [ev, hi] = await Promise.all([getDumpEvents(store.chosenPkg), unpackHistory(store.chosenPkg)]);
-    records.value = ev.items ?? [];
-    history.value = hi.items ?? [];
+    records.value = (ev.events ?? ev.items ?? []).map(e => ((e as { data?: Record<string, unknown> }).data ?? e));
+    history.value = hi.runs ?? hi.records ?? hi.items ?? [];
   } catch { /* 保旧 */ }
 }
 async function run() {
