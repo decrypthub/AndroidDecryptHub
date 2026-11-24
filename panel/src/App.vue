@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onUnmounted } from 'vue';
+import { darkTheme, type GlobalThemeOverrides } from 'naive-ui';
 import { store, selectDevice, toasts, belongsToApp, capVisible, panelDisplay, savePanelDisplay } from './store';
 import { perfLast, perfStats } from './api';
 import DeviceMenu from './components/DeviceMenu.vue';
@@ -68,9 +69,32 @@ const appInitial = computed(() => (appLabel.value[0] ?? '?'));
 function toggleRail() {
   savePanelDisplay({ ...panelDisplay, rail: !panelDisplay.rail });
 }
+
+// Naive 主题对齐面板色板：蓝 #78a9ff、面 #0f1218、边 #343b48、13px 基础字号
+const themeOverrides: GlobalThemeOverrides = {
+  common: {
+    primaryColor: '#78a9ff',
+    primaryColorHover: '#95bcff',
+    primaryColorPressed: '#5d92f5',
+    primaryColorSuppl: '#78a9ff',
+    borderRadius: '6px',
+    borderRadiusSmall: '5px',
+    fontSize: '13px',
+    bodyColor: '#06070a',
+    cardColor: '#0f1218',
+    modalColor: '#0f1218',
+    popoverColor: '#151922',
+    inputColor: 'rgba(255,255,255,0.04)',
+    borderColor: '#343b48',
+    dividerColor: '#20252e',
+    textColorBase: '#e5e8ee',
+  },
+  Radio: { buttonBorderColor: '#343b48' },
+};
 </script>
 
 <template>
+  <n-config-provider :theme="darkTheme" :theme-overrides="themeOverrides">
   <div class="app-shell">
     <aside class="side" :class="{ rail: panelDisplay.rail }">
       <div class="side-brand">
@@ -147,4 +171,5 @@ function toggleRail() {
       <div v-for="t in toasts" :key="t.id" class="toast">{{ t.text }}</div>
     </div>
   </div>
+  </n-config-provider>
 </template>

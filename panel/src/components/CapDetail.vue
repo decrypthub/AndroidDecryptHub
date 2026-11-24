@@ -13,8 +13,7 @@ const FMTS: [FmtMode, string][] = [['auto', '自动'], ['utf8', 'UTF-8'], ['hex'
 const ioTab = ref<'in' | 'out'>('in');
 const fmtIn = ref<FmtMode>('auto');
 const fmtOut = ref<FmtMode>('auto');
-const menuOpen = ref(false);
-const confirming = ref(false);
+const confirmDelete = ref(false);
 const infoOpen = ref(false);
 
 function hexToBytes(h: string): Uint8Array {
@@ -143,8 +142,7 @@ const bytes = (n?: number) => (n == null ? '未记录' : `${n} B`);
 const outBytes = computed(() => c.value.outl ?? (c.value.outHex ? c.value.outHex.length / 2 : undefined));
 
 watch(() => c.value.id, () => {
-  menuOpen.value = false;
-  confirming.value = false;
+  confirmDelete.value = false;
   infoOpen.value = false;
   ioTab.value = hasInput.value ? 'in' : 'out';
 });
@@ -152,15 +150,12 @@ watch(() => c.value.id, () => {
 function copy(text: string) {
   void navigator.clipboard?.writeText(text).then(() => toast('已复制'), () => toast('复制失败'));
 }
-function closeMenu() { menuOpen.value = false; confirming.value = false; }
-function toggleInfo() { infoOpen.value = !infoOpen.value; closeMenu(); }
-function askDelete() {
-  if (!confirming.value) { confirming.value = true; return; }
-  void doDelete();
+function onMenuSelect(key: string) {
+  if (key === 'info') infoOpen.value = !infoOpen.value;
+  else if (key === 'delete') confirmDelete.value = true;
 }
 async function doDelete() {
   const id = Number(c.value.id);
-  closeMenu();
   try {
     const r = await deleteCapture(id, String(c.value.package || store.chosenPkg || '') || undefined);
     if (r?.ok === false) throw new Error(r.error || 'delete failed');
@@ -186,15 +181,19 @@ async function doDelete() {
         </div>
       </div>
       <div class="detail-menu">
-        <button type="button" class="menu-btn" :aria-expanded="menuOpen" title="记录操作"
-          @click="menuOpen = !menuOpen; confirming = false">⋯</button>
-        <div v-if="menuOpen" class="menu-pop">
-          <button type="button" @click="toggleInfo">事件信息</button>
-          <button type="button" class="danger" @click="askDelete">{{ confirming ? '确认删除这条记录？' : '删除记录' }}</button>
-        </div>
+        <n-dropdown trigger="click" :options="[
+            { label: '事件信息', key: 'info' },
+            { label: '删除记录', key: 'delete', props: { style: 'color:#f87171' } },
+          ]" @select="onMenuSelect">
+          <n-button quaternary size="small" class="menu-btn" title="记录操作">⋯</n-button>
+        </n-dropdown>
+        <n-popconfirm v-model:show="confirmDelete" positive-text="删除" negative-text="取消"
+          :positive-button-props="{ type: 'error' }" @positive-click="doDelete">
+          <template #trigger><span class="pc-anchor"></span></template>
+          删除这条捕获记录？磁盘上也会标记删除。
+        </n-popconfirm>
       </div>
     </div>
-    <div v-if="menuOpen" class="menu-backdrop" @click="closeMenu"></div>
 
     <div v-if="infoOpen" class="capture-overview">
       <h3>事件信息</h3>
@@ -216,16 +215,13 @@ async function doDelete() {
     </div>
 
     <div class="io-toolbar">
-      <div class="seg">
-        <button type="button" :class="{ on: ioTab === 'in' }" @click="ioTab = 'in'">
-          {{ inLabel }}<span v-if="c.inl != null" class="seg-meta"> {{ bytes(c.inl) }}</span></button>
-        <button type="button" :class="{ on: ioTab === 'out' }" @click="ioTab = 'out'">
-          {{ outLabel }}<span v-if="hasOutput" class="seg-meta"> {{ bytes(outBytes) }}</span></button>
-      </div>
-      <div v-if="curHasData" class="seg seg-fmt">
-        <button v-for="[k, lbl] in FMTS" :key="k" type="button"
-          :class="{ on: activeFmt === k }" @click="setFmt(k)">{{ lbl }}</button>
-      </div>
+      <n-radio-group v-model:value="ioTab" size="small">
+        <n-radio-button value="in">{{ inLabel }}<span v-if="c.inl != null" class="seg-meta"> {{ bytes(c.inl) }}</span></n-radio-button>
+        <n-radio-button value="out">{{ outLabel }}<span v-if="hasOutput" class="seg-meta"> {{ bytes(outBytes) }}</span></n-radio-button>
+      </n-radio-group>
+      <n-radio-group v-if="curHasData" :value="activeFmt" size="small" @update:value="setFmt">
+        <n-radio-button v-for="[k, lbl] in FMTS" :key="k" :value="k">{{ lbl }}</n-radio-button>
+      </n-radio-group>
     </div>
 
     <div v-if="ioTab === 'in'" class="io-panel">
@@ -319,32 +315,7 @@ async function doDelete() {
 }
 .detail-head-main { min-width: 0; }
 .detail-menu { position: relative; flex: none; }
-.menu-btn {
-  width: 28px; height: 26px;
-  border: 0; border-radius: 6px;
-  background: transparent; color: inherit;
-  font-size: 16px; line-height: 1;
-  cursor: pointer; opacity: 0.7;
-}
-.menu-btn:hover { opacity: 1; background: rgba(128, 128, 128, 0.14); }
-.menu-pop {
-  position: absolute; right: 0; top: 30px; z-index: 60;
-  min-width: 168px; padding: 4px;
-  display: flex; flex-direction: column; gap: 2px;
-  border: 1px solid var(--border, rgba(128, 128, 128, 0.3));
-  border-radius: 8px;
-  background: var(--panel, #1e2128);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-}
-.menu-pop button {
-  padding: 6px 10px; text-align: left;
-  border: 0; border-radius: 5px;
-  background: transparent; color: inherit;
-  font-size: 13px; cursor: pointer;
-}
-.menu-pop button:hover { background: rgba(128, 128, 128, 0.14); }
-.menu-pop .danger { color: #f87171; }
-.menu-backdrop { position: fixed; inset: 0; z-index: 50; }
+.pc-anchor { position: absolute; right: 0; top: 28px; }
 
 /* 一条工具栏：输入/输出 段控件 + 格式 段控件 */
 .io-toolbar {
@@ -355,32 +326,7 @@ async function doDelete() {
   flex-wrap: wrap;
   margin: 14px 0 10px;
 }
-.seg {
-  display: inline-flex;
-  border: 1px solid var(--border, rgba(128, 128, 128, 0.3));
-  border-radius: 7px;
-  overflow: hidden;
-}
-.seg button {
-  padding: 4px 12px;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font-size: 12.5px;
-  cursor: pointer;
-  opacity: 0.68;
-  border-right: 1px solid var(--border, rgba(128, 128, 128, 0.3));
-  white-space: nowrap;
-}
-.seg button:last-child { border-right: 0; }
-.seg button.on {
-  opacity: 1;
-  font-weight: 600;
-  background: rgba(59, 130, 246, 0.14);
-  color: var(--accent, #6ea8fe);
-}
-.seg-fmt button { padding: 4px 9px; font-size: 12px; }
-.seg-meta { opacity: 0.65; font-weight: 400; font-size: 11px; }
+.seg-meta { opacity: 0.6; font-weight: 400; font-size: 11px; }
 
 /* 数据区：小标签 + 单线框数据块，不再卡片套卡片 */
 .io-panel { display: flex; flex-direction: column; gap: 12px; }

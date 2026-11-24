@@ -21,10 +21,8 @@ interface Exchange {
 const filter = reactive({
   q: '', min: null as number | null, max: null as number | null,
   cat: -2, paused: false, kind: 'all',
-  fromStr: '', toStr: '',
 });
 const advOpen = ref(false);
-const moreOpen = ref(false);
 const sel = ref<number | string | null>(null);
 const selDetail = ref<Record<string, unknown> | null>(null);
 const selExchange = ref<Exchange | null>(null);
@@ -43,18 +41,11 @@ const pagedHasMore = ref(false);
 const pageLoading = ref(false);
 const netPage = ref(1);
 
-function parseTimeInput(s: string): number | null {
-  if (!s) return null;
-  const ms = new Date(s).getTime();
-  return Number.isFinite(ms) ? ms : null;
-}
-function fmtLocalInput(ms: number): string {
-  const d = new Date(ms);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-}
-const fromTs = computed(() => parseTimeInput(filter.fromStr));
-const toTs = computed(() => parseTimeInput(filter.toStr));
+// 时间范围：毫秒时间戳，n-date-picker 直接绑定
+const fromMs = ref<number | null>(null);
+const toMs = ref<number | null>(null);
+const fromTs = computed(() => fromMs.value);
+const toTs = computed(() => toMs.value);
 const hasTimeRange = computed(() => fromTs.value !== null || toTs.value !== null);
 const isHistoricalMode = computed(() => pagedItems.value !== null);
 
@@ -243,14 +234,13 @@ async function nextPage() {
 }
 
 function setQuickMinutes(mins: number) {
-  const now = Date.now();
-  filter.fromStr = fmtLocalInput(now - mins * 60_000);
-  filter.toStr = '';
+  fromMs.value = Date.now() - mins * 60_000;
+  toMs.value = null;
   applyTimeRange();
 }
 function clearTimeRange() {
-  filter.fromStr = '';
-  filter.toStr = '';
+  fromMs.value = null;
+  toMs.value = null;
   cursorStack.value = [];
   currentBeforeId.value = null;
   pagedItems.value = null;
@@ -265,8 +255,7 @@ function applyTimeRange() {
   if (hasTimeRange.value) void loadServerPage(null);
   else pagedItems.value = null;
 }
-function onPageCapChange(e: Event) {
-  const val = Number((e.target as HTMLSelectElement).value);
+function onPageCapChange(val: number) {
   if (DISPLAY_CAPS.includes(val)) {
     savePanelDisplay({ ...panelDisplay, limit: val });
     if (isHistoricalMode.value) void loadServerPage(currentBeforeId.value);
@@ -340,7 +329,6 @@ function resetFilter() {
   clearTimeRange();
 }
 function downloadView() {
-  moreOpen.value = false;
   const items = props.kind === 'net' ? matchedExchanges.value : rows.value;
   const pkg = store.chosenPkg || 'all';
   const blob = new Blob([JSON.stringify(items, null, 2)], { type: 'application/json' });
@@ -350,7 +338,6 @@ function downloadView() {
   toast(`已下载 ${items.length} 条`);
 }
 function clearView() {
-  moreOpen.value = false;
   const pkg = store.chosenPkg;
   if (!confirm(`清空本页列表？（不删磁盘）\n${pkg ? '当前应用 ' + pkg : '全部应用'}`)) return;
   const n = capRemoveWhere(c => matchesPanel(c) && belongsToApp(c));
@@ -361,8 +348,12 @@ function clearView() {
 // 弹层外部点击关闭
 function onDocClick(e: MouseEvent) {
   if (!(e.target as HTMLElement).closest('.filter-wrap')) advOpen.value = false;
-  if (!(e.target as HTMLElement).closest('.menu-wrap.more')) moreOpen.value = false;
 }
+const MORE_OPTS = [
+  { label: '下载本页', key: 'dl' },
+  { label: '清空本页', key: 'clear', props: { style: 'color:#f87171' } },
+];
+function onMoreSelect(k: string) { if (k === 'dl') downloadView(); else clearView(); }
 
 // ---- 系统板块：检测摘要（对齐旧 sy-radar）----
 async function loadRadar() {
@@ -447,57 +438,54 @@ const searchPlaceholder = computed(() =>
     <div class="filters">
       <div class="toolbar-main">
         <div class="toolbar-search">
-          <label class="search-field">
-            <svg viewBox="0 0 20 20"><circle cx="8.5" cy="8.5" r="5" /><path d="m12.2 12.2 4.2 4.2" /></svg>
-            <input v-model="filter.q" type="search" :placeholder="searchPlaceholder" />
-          </label>
+          <n-input v-model:value="filter.q" size="small" clearable :placeholder="searchPlaceholder"
+            class="toolbar-search-input">
+            <template #prefix><svg viewBox="0 0 20 20" class="search-ico"><circle cx="8.5" cy="8.5" r="5" /><path d="m12.2 12.2 4.2 4.2" /></svg></template>
+          </n-input>
           <div class="menu-wrap filter-wrap">
-            <button type="button" class="filter-toggle" :aria-expanded="advOpen" @click="advOpen = !advOpen">
-              筛选<span class="filter-badge">{{ advCount || '' }}</span>
-              <span class="menu-chevron"><svg viewBox="0 0 12 12" width="10" height="10" fill="none"
-                  stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M2.5 4.5l3.5 3.5 3.5-3.5" /></svg></span>
-            </button>
+            <n-button size="small" :secondary="!advCount" :type="advCount ? 'primary' : 'default'"
+              @click="advOpen = !advOpen">
+              筛选<template v-if="advCount"> · {{ advCount }}</template>
+            </n-button>
             <section class="advanced-filters" :hidden="!advOpen">
               <div class="advanced-filter-head">
                 <strong>事件筛选</strong>
-                <button type="button" :disabled="!filterActive" @click="resetFilter">重置筛选</button>
+                <n-button text size="small" type="primary" :disabled="!filterActive" @click="resetFilter">重置筛选</n-button>
               </div>
               <fieldset v-if="kind === 'system'" class="system-filter">
                 <legend>活动类型</legend>
-                <div class="system-kinds">
-                  <button v-for="[k, l] in SYS_KINDS" :key="k" type="button"
-                    :aria-pressed="filter.kind === k" @click="filter.kind = k">{{ l }}</button>
-                </div>
+                <n-radio-group v-model:value="filter.kind" size="small">
+                  <n-radio-button v-for="[k, l] in SYS_KINDS" :key="k" :value="k">{{ l }}</n-radio-button>
+                </n-radio-group>
                 <p v-if="radarText" class="detect-radar">{{ radarText }}</p>
               </fieldset>
               <label v-if="kind === 'crypto'" class="filter-field">分类
-                <select v-model.number="filter.cat">
-                  <option :value="-2">全部</option>
-                  <option :value="0">摘要</option><option :value="1">HMAC</option>
-                  <option :value="2">对称</option><option :value="3">非对称</option>
-                  <option :value="4">AEAD</option>
-                </select>
+                <n-select v-model:value="filter.cat" size="small" class="cat-select" :options="[
+                    { label: '全部', value: -2 }, { label: '摘要', value: 0 }, { label: 'HMAC', value: 1 },
+                    { label: '对称', value: 2 }, { label: '非对称', value: 3 }, { label: 'AEAD', value: 4 },
+                  ]" />
               </label>
               <div class="size-filter">
                 <label>输入大小</label>
-                <input v-model.number="filter.min" type="number" min="0" step="1" placeholder="0" />
+                <n-input-number v-model:value="filter.min" size="small" :min="0" placeholder="0" class="size-num" />
                 <span class="sep">—</span>
-                <input v-model.number="filter.max" type="number" min="0" step="1" placeholder="不限" />
+                <n-input-number v-model:value="filter.max" size="small" :min="0" placeholder="不限" class="size-num" />
                 <span class="unit">B</span>
               </div>
               <fieldset class="time-filter">
                 <legend>时间范围</legend>
                 <div class="time-quick">
-                  <button type="button" @click="setQuickMinutes(1)">近 1 分钟</button>
-                  <button type="button" @click="setQuickMinutes(5)">近 5 分钟</button>
-                  <button type="button" @click="setQuickMinutes(30)">近 30 分钟</button>
-                  <button v-if="hasTimeRange" type="button" @click="clearTimeRange">清除</button>
+                  <n-button size="tiny" @click="setQuickMinutes(1)">近 1 分钟</n-button>
+                  <n-button size="tiny" @click="setQuickMinutes(5)">近 5 分钟</n-button>
+                  <n-button size="tiny" @click="setQuickMinutes(30)">近 30 分钟</n-button>
+                  <n-button v-if="hasTimeRange" size="tiny" tertiary @click="clearTimeRange">清除</n-button>
                 </div>
                 <div class="time-inputs">
-                  <input v-model="filter.fromStr" type="datetime-local" step="1" @change="applyTimeRange" />
+                  <n-date-picker v-model:value="fromMs" type="datetime" size="small" clearable
+                    placeholder="开始时间" @update:value="applyTimeRange" />
                   <span class="sep">至</span>
-                  <input v-model="filter.toStr" type="datetime-local" step="1" @change="applyTimeRange" />
+                  <n-date-picker v-model:value="toMs" type="datetime" size="small" clearable
+                    placeholder="结束时间" @update:value="applyTimeRange" />
                 </div>
               </fieldset>
             </section>
@@ -505,17 +493,12 @@ const searchPlaceholder = computed(() =>
         </div>
         <div class="toolbar-actions">
           <span id="count">{{ countText }}</span>
-          <button type="button" class="pause-btn" :class="{ 'is-paused': filter.paused }"
+          <n-button size="small" :type="filter.paused ? 'warning' : 'default'" secondary
             :title="filter.paused ? '恢复列表刷新' : '只停列表刷新'"
-            @click="filter.paused = !filter.paused">{{ filter.paused ? '继续' : '暂停刷新' }}</button>
-          <div class="menu-wrap more">
-            <button type="button" class="icon-button" :aria-expanded="moreOpen" title="更多"
-              @click="moreOpen = !moreOpen">⋯</button>
-            <div class="popover menu-popover" :class="{ show: moreOpen }">
-              <button type="button" title="当前筛选（内存）" @click="downloadView">下载本页</button>
-              <button type="button" class="menu-danger" title="不删磁盘" @click="clearView">清空本页</button>
-            </div>
-          </div>
+            @click="filter.paused = !filter.paused">{{ filter.paused ? '继续' : '暂停刷新' }}</n-button>
+          <n-dropdown trigger="click" :options="MORE_OPTS" @select="onMoreSelect">
+            <n-button quaternary size="small" title="更多">⋯</n-button>
+          </n-dropdown>
         </div>
       </div>
     </div>
@@ -524,13 +507,13 @@ const searchPlaceholder = computed(() =>
       <div class="list-pane" :style="listWidth ? { width: listWidth + 'px' } : undefined">
         <div class="new-banner" :class="{ show: newCount > 0 }">
           <span>{{ newCount }} 条新记录</span>
-          <button type="button" @click="jumpLatest">跳到最新</button>
+          <n-button text size="tiny" type="primary" @click="jumpLatest">跳到最新</n-button>
         </div>
 
         <div class="cap-list" :id="LIST_ID[kind]" tabindex="0" @scroll="onScroll">
           <div v-if="hasTimeRange" class="ex-note time-banner">
             <span>时间筛选已启用</span>
-            <button type="button" class="link-btn" @click="clearTimeRange">切回实时</button>
+            <n-button text size="small" type="primary" @click="clearTimeRange">切回实时</n-button>
           </div>
           <div v-for="n in exNotes" :key="n" class="ex-note">{{ n }}</div>
           <template v-if="kind === 'net'">
@@ -584,12 +567,12 @@ const searchPlaceholder = computed(() =>
         <div class="capture-list-foot">
           <span>{{ listFootLeft }}</span>
           <div class="pager-controls">
-            <select class="page-cap-select" :value="capDisplayCap" title="单页返回条数上限" @change="onPageCapChange">
-              <option v-for="cap in DISPLAY_CAPS" :key="cap" :value="cap">{{ cap }} 条/页</option>
-            </select>
-            <button type="button" class="pager-btn" :disabled="!canPrevPage" title="读取更早一页" @click="prevPage">上一页</button>
-            <button type="button" class="pager-btn" :disabled="!canNextPage" title="读取更新一页" @click="nextPage">下一页</button>
-            <button v-if="isHistoricalMode || netPage > 1" type="button" class="pager-btn" @click="jumpLatest">最新</button>
+            <n-select :value="capDisplayCap" size="small" class="page-cap-select" title="单页返回条数上限"
+              :options="DISPLAY_CAPS.map(cap => ({ label: `${cap} 条/页`, value: cap }))"
+              @update:value="onPageCapChange" />
+            <n-button size="small" :disabled="!canPrevPage" title="读取更早一页" @click="prevPage">上一页</n-button>
+            <n-button size="small" :disabled="!canNextPage" title="读取更新一页" @click="nextPage">下一页</n-button>
+            <n-button v-if="isHistoricalMode || netPage > 1" size="small" tertiary @click="jumpLatest">最新</n-button>
           </div>
         </div>
       </div>
@@ -598,7 +581,7 @@ const searchPlaceholder = computed(() =>
 
       <section class="capture-detail-shell">
         <div class="capture-detail-nav">
-          <button type="button" class="compact-action" @click="closeDetail">‹ 返回列表</button>
+          <n-button quaternary size="small" @click="closeDetail">‹ 返回列表</n-button>
         </div>
         <div class="detail-pane">
           <ExchangeDetail v-if="selExchange" :ex="selExchange" />
@@ -614,25 +597,16 @@ const searchPlaceholder = computed(() =>
 
 <style scoped>
 .cap-list { outline: none; }
+.toolbar-search-input { flex: 1; min-width: 160px; }
+.search-ico { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.6; opacity: 0.6; }
 .pager-controls {
   display: flex;
   align-items: center;
   gap: 6px;
 }
-.pager-btn, .page-cap-select {
-  height: 24px;
-  padding: 0 8px;
-  font-size: 12px;
-  border-radius: 5px;
-  border: 1px solid var(--border, rgba(128, 128, 128, 0.28));
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-}
-.pager-btn:disabled {
-  opacity: 0.38;
-  cursor: default;
-}
+.page-cap-select { width: 96px; }
+.cat-select { width: 110px; }
+.size-num { width: 88px; }
 .time-filter {
   border: 0;
   padding: 0;
@@ -651,40 +625,16 @@ const searchPlaceholder = computed(() =>
   gap: 6px;
   flex-wrap: wrap;
 }
-.time-quick button {
-  padding: 2px 8px;
-  font-size: 12px;
-  border-radius: 5px;
-  border: 1px solid var(--border, rgba(128, 128, 128, 0.28));
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-}
 .time-inputs {
   display: flex;
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
 }
-.time-inputs input {
-  font-size: 12px;
-  padding: 3px 6px;
-  border-radius: 5px;
-  border: 1px solid var(--border, rgba(128, 128, 128, 0.28));
-  background: transparent;
-  color: inherit;
-}
+.time-inputs :deep(.n-date-picker) { flex: 1; min-width: 150px; }
 .time-banner {
   display: flex;
   justify-content: space-between;
   align-items: center;
-}
-.link-btn {
-  border: 0;
-  background: transparent;
-  color: var(--accent, #3b82f6);
-  cursor: pointer;
-  font-size: 12px;
-  padding: 0;
 }
 </style>
