@@ -355,15 +355,15 @@ async function doDelete() {
 .io-data pre.mono { font-family: ui-monospace, Consolas, 'Cascadia Mono', monospace; }
 .blk-copy {
   position: absolute; top: 6px; right: 6px;
-  width: 24px; height: 22px;
-  border: 0; border-radius: 5px;
+  width: 30px; height: 28px;
+  border: 0; border-radius: 6px;
   background: transparent; color: inherit;
   cursor: pointer; opacity: 0;
   display: flex; align-items: center; justify-content: center;
 }
-.io-data:hover .blk-copy, .stack-box:hover .blk-copy { opacity: 0.6; }
+.io-data:hover .blk-copy, .stack-box:hover .blk-copy { opacity: 0.65; }
 .blk-copy:hover { opacity: 1 !important; background: rgba(128, 128, 128, 0.18); }
-.blk-copy svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.4; }
+.blk-copy svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; }
 .stack-box {
   position: relative;
   margin-top: 10px;
