@@ -5,7 +5,7 @@ import {hasIndependentDemoFiles,localUsbLink,localUsbView} from '../local_usb_st
 import {changeDemoApi,DemoApiError} from '../demo_api_observer.ts';
 import {AppFilesError,readOwnedAppFiles,saveOwnedAppText} from '../owned_app_files.ts';
 import {connectDevice,deviceRpcLive,dropDevice} from '../device_bridge.ts';
-import {parseAdbDevices,realAdbRunner} from '../transport/adb_device.ts';
+import {parseAdbDevices,realAdbRunner,type AdbRunner} from '../transport/adb_device.ts';
 import type {Route,RouteContext} from './types.ts';
 /** Wrapped by the same router/operation registry as MCP; no privileged second execution path. */
 export function deviceRoutes({req,url,send}:RouteContext):Route[]{
@@ -15,14 +15,18 @@ export function deviceRoutes({req,url,send}:RouteContext):Route[]{
   if(localObserver && req.method==='GET' && url.searchParams.get('action')==='list'){
     // This is one exact local USB device, not a paired Device identity or a proxy for the App session.
     let transports:{serial:string;model:string;state:string;link:string;observed:boolean;rpc:boolean}[]=[];
+    // One `adb devices -l` per request: the panel polls this every few seconds and each extra
+    // spawn queues behind the serialized adb server — the double read used to disagree with
+    // itself under contention (transports empty while localUsb said online, or vice versa).
+    let devs='';
     if(!localObserver.fileBrowserOnly&&!localObserver.demoApiSerial){
-      try{
-        transports=parseAdbDevices(await realAdbRunner(['devices','-l'],{timeout:2200}))
-          .map(row=>({serial:row.serial,model:row.model||'',state:row.state,link:row.link,
-            observed:row.serial===localObserver.usbSerial,rpc:deviceRpcLive(row.serial)}));
-      }catch{ transports=[]; }
+      try{ devs=await realAdbRunner(['devices','-l'],{timeout:2200}); }catch{ devs=''; }
+      if(devs) transports=parseAdbDevices(devs)
+        .map(row=>({serial:row.serial,model:row.model||'',state:row.state,link:row.link,
+          observed:row.serial===localObserver.usbSerial,rpc:deviceRpcLive(row.serial)}));
     }
-    return send(200,{ok:true,devices:[],transports,localUsb:await localUsbView(localObserver,online())});
+    const run:AdbRunner=devs?(args,opts)=>args.join(' ')==='devices -l'?Promise.resolve(devs):realAdbRunner(args,opts):realAdbRunner;
+    return send(200,{ok:true,devices:[],transports,localUsb:await localUsbView(localObserver,online(),run)});
   }
   // Panel device management on the local USB entry: connect/disconnect the RPC
   // channel, or move the observation binding to another USB device+app.
