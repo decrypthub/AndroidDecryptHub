@@ -446,6 +446,8 @@
   .dumpwrap h3 { font-size:13px; color:var(--ink-2); margin:4px 0 8px; font-weight:600; text-transform:none; letter-spacing:0; }
   .dump-cols { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:28px; align-items:start; }
   .dump-col { min-width:0; }
+  .dump-subtabs { margin:2px 0 14px; }
+  .perf-stat { font-size:11px; color:var(--muted); font-variant-numeric:tabular-nums; white-space:nowrap; max-width:300px; overflow:hidden; text-overflow:ellipsis; }
   .dumpwrap .note { color:var(--muted); font-size:12px; line-height:1.7; margin-bottom:14px; }
   .dumpwrap .note b { color:var(--ink); }
   .dumpwrap .warn-note { color:var(--amber); }
@@ -696,7 +698,7 @@
     <div class="brand-lockup">
       <h1><span class="hdr-mark"><img src="/raven.svg" alt=""></span>ADH</h1>
     </div>
-    <div class="stats" id="stats"><span class="status-dot" id="conn"></span><span id="status">正在连接电脑服务…</span></div>
+    <div class="stats" id="stats"><span class="status-dot" id="conn"></span><span id="status">正在连接电脑服务…</span><span id="perfStat" class="perf-stat" title="接口耗时统计"></span></div>
     <section class="device-picker" aria-label="设备选择">
       <button type="button" class="device-context" id="deviceContext" aria-expanded="false" aria-controls="deviceMenu" title="切换设备">
         <span class="context-label">设备</span>
@@ -886,6 +888,7 @@
           <nav class="files-breadcrumb" id="filesBreadcrumb"><a href="#" data-files-nav="">应用私有目录</a></nav>
           <button type="button" id="filesUp" title="上一级">↑</button>
           <button type="button" id="filesRefresh">刷新</button>
+          <span id="filesPerf" class="perf-stat"></span>
         </div>
         <div id="filesList" class="files-list"><div class="empty">选择注入范围里的应用后浏览它的私有目录。</div></div>
       </aside>
@@ -925,10 +928,14 @@
           <button type="button" onclick="refreshDumpPage()">刷新</button>
           <span id="dexStat" class="muted"></span>
         </div>
-        <div class="dump-cols">
-          <section class="dump-col" id="unpackCol">
+        <div class="dump-subtabs system-kinds" role="group" aria-label="dump 视图切换">
+          <button type="button" data-dump-tab="records" aria-pressed="true">脱壳记录</button>
+          <button type="button" data-dump-tab="loaded" aria-pressed="false">已加载 SO</button>
+          <button type="button" data-dump-tab="pkg" aria-pressed="false">包内 / 私有目录 SO</button>
+        </div>
+        <div class="dump-views">
+          <section class="dump-col" id="unpackCol" data-dump-view="records">
             <div id="unpackListView">
-              <h3>脱壳记录</h3>
               <table class="dump-table"><thead><tr><th>时间</th><th>说明</th><th>大小</th><th></th></tr></thead>
                 <tbody id="unpackRows"></tbody></table>
             </div>
@@ -942,19 +949,17 @@
                 <tbody id="unpackDetailRows"></tbody></table>
             </div>
           </section>
-          <section class="dump-col">
-            <h3>已加载 SO</h3>
+          <section class="dump-col" data-dump-view="loaded" hidden>
             <div class="dump-actions">
               <button type="button" id="btnSo" onclick="exportLoadedSo()">导出已加载 SO</button>
               <span id="soStat" class="muted"></span>
             </div>
             <table class="dump-table"><thead><tr><th>状态</th><th>文件</th><th>大小</th><th>操作</th></tr></thead>
               <tbody id="loadedRows"></tbody></table>
-            <div class="dump-sub">
-              <h3>包内 / 私有目录 SO</h3>
-              <table class="dump-table pkg-so"><thead><tr><th>文件</th><th class="dump-size">大小</th><th>位置</th><th>操作</th></tr></thead>
-                <tbody id="pkgRows"></tbody></table>
-            </div>
+          </section>
+          <section class="dump-col" data-dump-view="pkg" hidden>
+            <table class="dump-table pkg-so"><thead><tr><th>文件</th><th class="dump-size">大小</th><th>位置</th><th>操作</th></tr></thead>
+              <tbody id="pkgRows"></tbody></table>
           </section>
         </div>
       </div>
@@ -1197,10 +1202,18 @@ function dbg(kind,msg){ const t=new Date().toISOString().slice(11,23); dbgLines.
   const el=document.getElementById('dbg-log'); if(!el) return; el.textContent=dbgLines.join('\n');
   if(document.getElementById('dbg-auto')?.checked) el.scrollTop=el.scrollHeight; }
 function dbgClear(){ dbgLines.length=0; const el=document.getElementById('dbg-log'); if(el) el.textContent=''; }
+// 每个面板接口调用的耗时统计：头部 perfStat 显示最近一次，perfReport() 出全表。
+const perfStats=new Map();
+function perfMark(key,ms){ const s=perfStats.get(key)||{n:0,last:0,sum:0,max:0}; s.n++;s.last=ms;s.sum+=ms;s.max=Math.max(s.max,ms);perfStats.set(key,s);
+  const el=document.getElementById('perfStat'); if(el){el.textContent=`${key} ${ms.toFixed(0)}ms`;el.title=perfReport();} }
+function perfMs(key){ return perfStats.get(key)?.last; }
+function perfReport(){ return [...perfStats.entries()].sort((a,b)=>b[1].sum-a[1].sum).map(([k,s])=>`${k}  最近 ${s.last|0}ms · 均 ${(s.sum/s.n)|0}ms · 峰 ${s.max|0}ms · ×${s.n}`).join('\n'); }
+window.perfReport=perfReport;
 const _fetch=window.fetch;
 window.fetch=async function(input,init){ const method=(init&&init.method)||'GET';
   const url=typeof input==='string'?input:(input&&input.url)||String(input); const path=url.replace(location.origin,''); const t0=performance.now();
-  try{ const r=await _fetch(input,init); dbgReqs++; dbg(r.ok?'RES':'RES!',`${r.status} ${method} ${path} (${(performance.now()-t0).toFixed(0)}ms)`); dbgStat(); return r; }
+  try{ const r=await _fetch(input,init); const ms=performance.now()-t0; dbgReqs++; perfMark(`${method} ${path.split('?')[0]}`,ms);
+    dbg(r.ok?'RES':'RES!',`${r.status} ${method} ${path} (${ms.toFixed(0)}ms)`); dbgStat(); return r; }
   catch(e){ dbgErrs++; dbg('ERR',`${method} ${path} — ${e}`); dbgStat(); throw e; } };
 
 const nav=document.getElementById('nav');
@@ -1350,6 +1363,10 @@ document.getElementById('unpackRows')?.addEventListener('click', e=>{
   const id=(btn&&btn.getAttribute('data-open-run'))||(tr&&tr.getAttribute('data-run'));
   if(id) openUnpackDetail(id);
 });
+function chooseDumpTab(id){
+  for(const b of document.querySelectorAll('[data-dump-tab]')) b.setAttribute('aria-pressed',String(b.dataset.dumpTab===id));
+  for(const sec of document.querySelectorAll('[data-dump-view]')) sec.hidden=sec.dataset.dumpView!==id;
+}
 async function loadInventory(){ return refreshDumpPage(); }
 async function refreshDumpPage(){
   const procs=onlineProcs();
@@ -1367,7 +1384,8 @@ async function refreshDumpPage(){
     const r=await (await fetch('/api/unpack/inventory?session='+encodeURIComponent(dumpSid))).json();
     if(r.error){ document.getElementById('dexStat').textContent=r.error; return; }
     dumpView=r; renderSoTables();
-    if(!dumpBusy) document.getElementById('dexStat').textContent=`在线 ${procs.length} 个进程 · 已加载 SO ${(r.loaded||[]).length} · 包内 ${(r.packaged||[]).length}`;
+    const invMs=perfMs('GET /api/unpack/inventory');
+    if(!dumpBusy) document.getElementById('dexStat').textContent=`在线 ${procs.length} 个进程 · 已加载 SO ${(r.loaded||[]).length} · 包内 ${(r.packaged||[]).length}`+(invMs!=null?` · 加载 ${invMs|0}ms`:'');
   }catch(e){ document.getElementById('dexStat').textContent='错误: '+e; }
 }
 let unpackLiveCount=0;
@@ -2067,7 +2085,8 @@ async function capLoad(){ const pkg=selectedPackage(); if(!pkg||!usesHostSession
 function updateCount(shown,total){
   const el=document.getElementById('count'), listCount=document.getElementById(activeCapKey+'-list-count');
   if(el) el.textContent=shown+' / '+total+' 条';
-  if(listCount) listCount.textContent=shown+' 条';
+  const ms=perfMs('GET /api/captures');
+  if(listCount) listCount.textContent=shown+' 条'+(ms!=null?` · ${ms|0}ms`:'');
 }
 function updatePauseBtn(){ const b=document.getElementById('tb-pause'); const p=CAPPANELS[activeCapKey]; if(!b||!p) return;
   b.textContent=p.filter.paused?'继续刷新':'暂停刷新';
@@ -2290,7 +2309,7 @@ function renderAppDirectory(){
   const note=document.getElementById('directoryState');
   note.textContent=view.state==='loading'?'正在读取 APP 目录…':
     view.state==='error'?view.message:
-    view.state==='ready'?(view.entries.length?(view.entries.length+' 项'+(view.limited?' · 仅显示首批':'')):'此目录为空。'):
+    view.state==='ready'?(view.entries.length?(view.entries.length+' 项'+(view.limited?' · 仅显示首批':'')+(view.ms!=null?` · ${view.ms|0}ms`:'')):'此目录为空。'):
       appDirectoryStatus(device,pkg);
   if(!ready) return;
   const entries=document.getElementById('appDirectoryEntries');
@@ -2374,8 +2393,10 @@ async function loadAppDirectory(path,root=appDirectoryView.root){
   const view={scope,root,path,state:'loading',entries:[],limited:false,message:'',listVersion:++directorySequence,preview:null};
   appDirectoryView=view;
   renderAppDirectory();
+  const t0=performance.now();
   try{
     const data=await queryOwnedAppFile('list',path,pkg,root);
+    view.ms=performance.now()-t0;
     if(appDirectoryView!==view||appScopeKey()!==scope) return;
     if(!Array.isArray(data.entries)) throw Error('目录列表格式无效。');
     view.entries=data.entries.filter(e=>typeof e?.name==='string'&&e.name&&!e.name.includes('/')&&['directory','file'].includes(e.type));
@@ -2520,6 +2541,7 @@ async function loadFilesBrowser(){
   try{ const r=await (await fetch('/api/fs/list?package='+encodeURIComponent(pkg)+'&path='+encodeURIComponent(filesPath))).json();
     if(!r.ok){ list.innerHTML='<div class="empty">'+escapeHtml(r.error||'读取失败')+'</div>'; return; }
     const ents=(r.entries||[]).slice().sort((a,b)=>(a.type==='d'?0:1)-(b.type==='d'?0:1)||String(a.name).localeCompare(String(b.name)));
+    const fsPerf=document.getElementById('filesPerf'); if(fsPerf){ const ms=perfMs('GET /api/fs/list'); fsPerf.textContent=(ms!=null?`${ms|0}ms · `:'')+ents.length+' 项'; }
     if(!ents.length){ list.innerHTML='<div class="empty">空目录</div>'; return; }
     const base=filesPath==='/'?'':filesPath.replace(/\/+$/,'');
     list.innerHTML=ents.map(e=>{
@@ -3829,6 +3851,9 @@ async function observeDevice(serial,pkg){
   }catch{ toast('切换观察目标失败'); browseBusy=false; }
 }
 bindToolbar();
+document.querySelector('.dump-subtabs')?.addEventListener('click',e=>{
+  const b=e.target.closest('[data-dump-tab]'); if(b) chooseDumpTab(b.dataset.dumpTab);
+});
 onTabSwitch('p-crypto');
 refreshApps(); void refreshScope(true); setInterval(()=>{ refreshApps(); void refreshScope(false); capLoad(); }, 2000);
 
