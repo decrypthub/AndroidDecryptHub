@@ -111,6 +111,26 @@ const cv = computed(() => (isCrypto.value ? cryptoView(c.value) : null));
 
 const inLabel = computed(() => (isNet.value ? (/write/i.test(String(c.value.func || c.value.op || '')) ? '发送' : '接收') : '输入'));
 const outLabel = computed(() => (isNet.value ? '响应' : '输出'));
+// 数据块语义标签：明文/密文/摘要/MAC/签名值 必须一眼分清，不笼统叫输入输出
+const inDataLabel = computed(() => {
+  if (!isCrypto.value) return inLabel.value;
+  const d = cv.value?.direction;
+  if (d === '加密') return '明文';
+  if (d === '解密') return '密文';
+  if (d === '签名') return '待签数据';
+  if (d === '验签') return '待验数据';
+  return '输入数据';
+});
+const outDataLabel = computed(() => {
+  if (!isCrypto.value) return outLabel.value;
+  const d = cv.value?.direction;
+  if (d === '加密') return '密文';
+  if (d === '解密') return '明文';
+  if (d === '哈希') return '摘要';
+  if (d === '认证') return 'MAC';
+  if (d === '签名' || d === '验签') return '签名值';
+  return '输出数据';
+});
 const hasStack = computed(() => !!c.value.callStack);
 const hasFileCards = computed(() => isFile.value && !!(c.value.text || c.value.preview || c.value.func || c.value.path));
 const hasInBlock = computed(() => !!(c.value.hex || (!isFile.value && c.value.text) || (c.value.inl ?? 0) > 0));
@@ -258,12 +278,15 @@ async function doDelete() {
       </template>
 
       <template v-if="hasInBlock">
-        <div class="io-data main">
-          <pre :class="{ mono: formatBlock(fmtIn, c.hex, c.text).mono }">{{ formatBlock(fmtIn, c.hex, c.text).display }}</pre>
-          <button type="button" class="blk-copy" title="复制内容"
-            @click="copy(formatBlock(fmtIn, c.hex, c.text).copyVal)"><svg viewBox="0 0 16 16">
-              <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
-              <path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5" /></svg></button>
+        <div class="io-field">
+          <div class="io-field-label">{{ inDataLabel }} · {{ bytes(c.inl ?? (c.hex ? c.hex.length / 2 : undefined)) }}</div>
+          <div class="io-data main">
+            <pre :class="{ mono: formatBlock(fmtIn, c.hex, c.text).mono }">{{ formatBlock(fmtIn, c.hex, c.text).display }}</pre>
+            <button type="button" class="blk-copy" title="复制内容"
+              @click="copy(formatBlock(fmtIn, c.hex, c.text).copyVal)"><svg viewBox="0 0 16 16">
+                <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+                <path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5" /></svg></button>
+          </div>
         </div>
       </template>
       <div v-if="!hasInput" class="detail-empty">这条记录没有输入数据。</div>
@@ -271,12 +294,15 @@ async function doDelete() {
 
     <div v-else class="io-panel">
       <template v-if="hasOutput">
-        <div class="io-data main">
-          <pre :class="{ mono: formatBlock(fmtOut, c.outHex).mono }">{{ formatBlock(fmtOut, c.outHex).display }}</pre>
-          <button type="button" class="blk-copy" title="复制内容"
-            @click="copy(formatBlock(fmtOut, c.outHex).copyVal)"><svg viewBox="0 0 16 16">
-              <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
-              <path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5" /></svg></button>
+        <div class="io-field">
+          <div class="io-field-label">{{ outDataLabel }} · {{ bytes(outBytes) }}</div>
+          <div class="io-data main">
+            <pre :class="{ mono: formatBlock(fmtOut, c.outHex).mono }">{{ formatBlock(fmtOut, c.outHex).display }}</pre>
+            <button type="button" class="blk-copy" title="复制内容"
+              @click="copy(formatBlock(fmtOut, c.outHex).copyVal)"><svg viewBox="0 0 16 16">
+                <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+                <path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5" /></svg></button>
+          </div>
         </div>
       </template>
       <div v-else class="detail-empty">这条记录没有输出数据。</div>
