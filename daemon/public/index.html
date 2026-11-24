@@ -3286,9 +3286,11 @@ async function refreshPanelDevices(){
     if(next!==panelDeviceKey||stamp!==panelDeviceStamp(current)) selectPanelDevice(next,true);
     else renderDeviceChrome();
   }catch{
+    // 读失败 ≠ 设备没了：清空身份会让 panelDeviceKey/chosenPkg 翻成空串，capScope 变化触发
+    // capReset 把已加载记录整页清掉——30s 周期的 adb 卡顿时数据就"隔一段消失一次"。
+    // 保留旧设备信息标 failed；设备真拔了会由下一次成功轮询的空清单走正常移除路径。
     panelDeviceState='failed';
-    panelDevices=[];
-    selectPanelDevice('',true);
+    renderDeviceChrome();
   }
   finally{ readingPanelDevices=false; }
 }
@@ -3596,7 +3598,6 @@ async function refreshApps(){
     scopeNote=r.error||'';
   }catch(e){
     if(generation!==rosterGeneration) return;
-    serverApps=[];
     scopeNote='当前 APP 列表读取失败';
   }finally{
     if(readingHostRoster===generation) readingHostRoster=-1;
