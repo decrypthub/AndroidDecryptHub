@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
-import { store } from '../store';
+import { computed, ref, watch, onMounted } from 'vue';
+import { store, toast } from '../store';
 import { fsList, fsRead, type FsEntry, perfMs } from '../api';
 import { fmtSize } from '../capview';
 
@@ -44,10 +44,10 @@ async function load(p: string) {
 async function openEntry(e: FsEntry) {
   const p = e.path ?? `${path.value}/${e.name}`;
   if (e.type === 'd') { void load(p); return; }
-  preview.value = { name: e.name, message: '正在读取…' };
+  preview.value = { name: e.name, fullPath: p, message: '正在读取…' };
   try {
     const r = await fsRead(store.chosenPkg, p);
-    if (r.error) { preview.value = { name: e.name, message: r.error }; return; }
+    if (r.error) { preview.value = { name: e.name, fullPath: p, message: r.error }; return; }
     preview.value = {
       name: e.name,
       text: r.text ?? (r.base64 ? `[base64] ${r.base64.slice(0, 4096)}` : undefined),
@@ -55,8 +55,8 @@ async function openEntry(e: FsEntry) {
       b64: r.base64, fullPath: p,
       message: r.truncated ? '仅预览前部，未读完整文件。' : `${fmtSize(r.size ?? e.size)}${r.binary ? ' · 二进制' : ''}`,
     };
-  } catch (err) {
-    preview.value = { name: e.name, message: '读取失败' };
+  } catch {
+    preview.value = { name: e.name, fullPath: p, message: '读取失败' };
   }
 }
 function downloadPreview() {
@@ -67,6 +67,12 @@ function downloadPreview() {
   a.href = URL.createObjectURL(new Blob([bin]));
   a.download = pv.name;
   document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href);
+  toast(`已下载 ${pv.name}`);
+}
+function copyPreview() {
+  const t = preview.value?.text;
+  if (t == null) return;
+  void navigator.clipboard?.writeText(t).then(() => toast('已复制'), () => toast('复制失败'));
 }
 function go(p: string) { void load(p); }
 function submitPath() { void load(pathInput.value.trim()); }
@@ -76,72 +82,79 @@ const statText = computed(() => {
   if (state.value === 'loading') return '正在读取目录…';
   if (state.value === 'error') return message.value;
   if (!store.chosenPkg) return '先选择应用。';
+  if (state.value === 'idle') return '输入路径或点击目录开始浏览。';
   return `${Math.round(ms)}ms · ${entries.value.length} 项${limited.value ? ' · 目录过大已截断' : ''}`;
 });
+const fmtMtime = (m?: number) => {
+  if (!m) return '';
+  const ms = m < 1e12 ? m * 1000 : m;
+  return new Date(ms).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+};
 
 watch(() => store.chosenPkg, () => { path.value = ''; entries.value = []; preview.value = null; state.value = 'idle'; void load(''); });
+onMounted(() => { if (store.chosenPkg) void load(''); });
 </script>
 
 <template>
-  <div class="files-panel">
-    <div class="files-head">
-      <input v-model="pathInput" class="path-input mono" placeholder="/data/data/<pkg>" @keyup.enter="submitPath" />
-      <button class="btn sm" @click="submitPath">前往</button>
-      <button class="btn sm" @click="load(path)">刷新</button>
-      <span class="muted fs-state">{{ statText }}</span>
-    </div>
-
-    <div class="crumbs">
-      <template v-for="(c, i) in crumbs" :key="c.p">
-        <span v-if="i" class="crumb-sep">/</span>
-        <button class="crumb" @click="go(c.p)">{{ c.name }}</button>
-      </template>
-    </div>
-
-    <div class="files-body">
-      <div class="files-list">
-        <button v-if="path" class="files-row" @click="go(path.replace(/\/[^/]*$/, ''))">
-          <span class="name">..</span>
-        </button>
-        <button v-for="e in entries" :key="e.name" class="files-row" :class="{ dir: e.type === 'd' }" @click="openEntry(e)">
-          <span class="fname">{{ e.name }}<span v-if="e.type === 'd'" class="muted">/</span></span>
-          <span class="fsize muted">{{ e.type === 'd' ? '' : fmtSize(e.size) }}</span>
-        </button>
-        <div v-if="state === 'ready' && !entries.length" class="empty">空目录。</div>
+  <section class="app-directory">
+    <div class="app-directory-inner">
+      <p v-if="!store.chosenPkg" class="directory-unavailable">选择注入范围里的应用后浏览它的私有目录。</p>
+      <div v-else class="directory-workspace">
+        <aside class="directory-list">
+          <div class="directory-list-head">
+            <div class="directory-pane-head">
+              <h3>目录</h3>
+              <button type="button" class="compact-action" @click="load(path)">刷新</button>
+            </div>
+            <input v-model="pathInput" class="directory-root mono" placeholder="/data/data/<pkg>"
+              @keyup.enter="submitPath" />
+            <nav class="directory-path">
+              <template v-for="(c, i) in crumbs" :key="c.p || 'root'">
+                <button type="button" class="directory-crumb" :aria-current="i === crumbs.length - 1 ? 'page' : undefined"
+                  @click="go(c.p)">{{ c.name }}</button>
+              </template>
+            </nav>
+            <p class="set-status">{{ statText }}</p>
+          </div>
+          <div class="directory-rows">
+            <table class="directory-list-table">
+              <thead>
+                <tr><th>名称</th><th>大小</th><th>修改时间</th></tr>
+              </thead>
+              <tbody>
+                <tr v-if="path && path !== '/'" @click="go(path.replace(/\/[^/]*$/, '') || '/')">
+                  <td colspan="3"><button type="button" class="directory-entry" data-directory="true">..</button></td>
+                </tr>
+                <tr v-for="e in entries" :key="e.name" :class="{ selected: preview?.fullPath === e.path }"
+                  @click="openEntry(e)">
+                  <td><button type="button" class="directory-entry" :data-directory="e.type === 'd'">
+                      {{ e.name }}{{ e.type === 'd' ? '/' : '' }}</button></td>
+                  <td>{{ e.type === 'd' ? '' : fmtSize(e.size) }}</td>
+                  <td class="muted">{{ fmtMtime(e.mtime) }}</td>
+                </tr>
+              </tbody>
+            </table>
+            <div v-if="state === 'ready' && !entries.length" class="empty">空目录。</div>
+          </div>
+        </aside>
+        <section class="directory-preview">
+          <div class="directory-pane-head">
+            <h3>{{ preview?.name || '文件内容' }}</h3>
+            <div class="directory-preview-actions">
+              <span class="directory-readonly">只读</span>
+              <button type="button" class="compact-action" :disabled="!preview?.b64" @click="downloadPreview">下载</button>
+              <button type="button" class="compact-action" :disabled="preview?.text == null" @click="copyPreview">复制</button>
+            </div>
+          </div>
+          <p class="set-status">{{ preview?.message || (preview ? '' : '从左侧选择一个文件。') }}</p>
+          <pre v-if="preview?.text != null">{{ preview.text }}</pre>
+        </section>
       </div>
-
-      <div v-if="preview" class="files-preview">
-        <div class="files-preview-head">
-          <span class="path mono">{{ preview.name }}</span>
-          <span class="muted">{{ preview.message }}</span>
-          <button v-if="preview.b64" class="btn sm" @click="downloadPreview">下载</button>
-          <button class="btn sm" @click="preview = null">✕</button>
-        </div>
-        <pre v-if="preview.text != null" class="preview-text mono">{{ preview.text }}</pre>
-      </div>
     </div>
-  </div>
+  </section>
 </template>
 
 <style scoped>
-.files-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; }
-.files-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line-soft); }
-.path-input { flex: 1; }
-.fs-state { font-size: 12px; }
-.crumbs { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; padding: 6px 14px; font-size: 12px; border-bottom: 1px solid var(--line-soft); }
-.crumb { border: 0; background: none; color: var(--blue); cursor: pointer; padding: 2px 3px; border-radius: 4px; }
-.crumb:hover { background: var(--surface-2); }
-.crumb-sep { color: var(--muted); }
-.files-body { flex: 1; display: flex; min-height: 0; }
-.files-list { flex: 1; overflow: auto; padding: 6px; }
-.files-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 10px; border: 0; background: none; border-radius: 7px; color: var(--ink-2); cursor: pointer; text-align: left; font-size: 13px; }
-.files-row:hover { background: var(--surface-2); }
-.fname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, monospace; font-size: 12.5px; }
-.dir .fname { color: var(--blue); }
-.fsize { font-size: 11px; font-variant-numeric: tabular-nums; }
-.files-preview { flex: 0 0 46%; border-left: 1px solid var(--line-soft); display: flex; flex-direction: column; min-width: 0; }
-.files-preview-head { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line-soft); }
-.files-preview-head .path { flex: 1; font-size: 12px; word-break: break-all; }
-.preview-text { flex: 1; overflow: auto; margin: 0; padding: 12px 14px; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
-.empty { padding: 24px; color: var(--muted); text-align: center; }
+.directory-rows tbody tr { cursor: pointer; }
+.directory-rows tbody tr td { font-size: 12px; }
 </style>

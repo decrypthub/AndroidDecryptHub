@@ -240,7 +240,7 @@ export const appSessions = computed(() =>
 export const liveSession = computed(() => appSessions.value.find(s => s.online) ?? null);
 
 // ---- 面板显示偏好（localStorage，仅当前浏览器）----
-export interface PanelDisplay { limit: number | null; time: 'time' | 'date'; density: 'standard' | 'compact' }
+export interface PanelDisplay { limit: number | null; time: 'time' | 'date'; density: 'standard' | 'compact'; rail: boolean }
 const PANEL_DISPLAY_KEY = 'adh.panel.display';
 export const DISPLAY_CAPS = [100, 200, 300, 500, 800];
 function normalizePanelDisplay(v?: Partial<PanelDisplay> | null): PanelDisplay {
@@ -248,6 +248,7 @@ function normalizePanelDisplay(v?: Partial<PanelDisplay> | null): PanelDisplay {
     limit: v?.limit != null && DISPLAY_CAPS.includes(v.limit) ? v.limit : null,
     time: v?.time === 'date' ? 'date' : 'time',
     density: v?.density === 'compact' ? 'compact' : 'standard',
+    rail: v?.rail === true,
   };
 }
 function readPanelDisplay(): PanelDisplay {

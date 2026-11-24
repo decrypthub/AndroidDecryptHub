@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import { toast } from '../store';
 
 const props = defineProps<{ ex: Record<string, any> }>();
 const view = ref<'data' | 'event'>('data');
@@ -37,9 +38,13 @@ function partText(p?: Part): string {
   let body = p.bodyText || '';
   if (p.binary) body = `二进制 ${p.bodyBytes ?? 0} 字节${p.bodyHex ? '\n' + hexdump(p.bodyHex) : ''}`;
   else if (!body) body = '（空）';
-  return (p.headerText ? p.headerText + '\n\n' : '') + body;
+  const head = [p.startLine, p.headerText].filter(Boolean).join('\n');
+  return (head ? head + '\n\n' : '') + body;
 }
 const bytes = (n?: number) => (n == null ? '未记录' : `${n} B`);
+function copy(text: string) {
+  void navigator.clipboard?.writeText(text).then(() => toast('已复制'), () => toast('复制失败'));
+}
 </script>
 
 <template>
@@ -48,53 +53,44 @@ const bytes = (n?: number) => (n == null ? '未记录' : `${n} B`);
     <div class="sub">{{ [ex.status ? `HTTP ${ex.status}` : '', ex.conn].filter(Boolean).join(' · ') }}</div>
   </div>
 
-  <div class="detail-tabs">
-    <button class="chip" :class="{ on: view === 'data' }" @click="view = 'data'">数据详情</button>
-    <button class="chip" :class="{ on: view === 'event' }" @click="view = 'event'">事件信息</button>
+  <div class="record-tabs">
+    <button type="button" :aria-selected="view === 'data'" @click="view = 'data'">数据详情</button>
+    <button type="button" :aria-selected="view === 'event'" @click="view = 'event'">事件信息</button>
   </div>
 
-  <div v-if="view === 'data'" class="detail-body">
+  <div v-if="view === 'data'" class="record-tab-panel">
     <div class="io-section in-card">
       <div class="io-card-head"><span class="io-label in">请求</span><span class="io-meta">{{ partMeta(req) }}</span></div>
-      <template v-if="req">
-        <h3>{{ req.startLine }}</h3>
-        <pre class="io-block">{{ partText(req) }}</pre>
-      </template>
-      <pre v-else class="io-block">（还没有）</pre>
+      <div class="io-block-body">
+        <pre>{{ partText(req) }}</pre>
+        <button v-if="req" type="button" class="block-copy" title="复制" @click="copy(partText(req))"><svg
+            viewBox="0 0 16 16">
+            <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+            <path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5" /></svg></button>
+      </div>
     </div>
     <div class="io-section out-card">
       <div class="io-card-head"><span class="io-label out">响应</span><span class="io-meta">{{ partMeta(res) }}</span></div>
-      <template v-if="res">
-        <h3>{{ res.startLine }}</h3>
-        <pre class="io-block">{{ partText(res) }}</pre>
-      </template>
-      <pre v-else class="io-block">（还没有）</pre>
+      <div class="io-block-body">
+        <pre>{{ partText(res) }}</pre>
+        <button v-if="res" type="button" class="block-copy" title="复制" @click="copy(partText(res))"><svg
+            viewBox="0 0 16 16">
+            <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+            <path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5" /></svg></button>
+      </div>
     </div>
   </div>
 
-  <div v-else class="detail-body">
-    <table class="kv-table">
-      <tr><td>请求大小</td><td>{{ bytes(req?.bodyBytes) }}</td></tr>
-      <tr><td>响应大小</td><td>{{ bytes(res?.bodyBytes) }}</td></tr>
-      <tr><td>HTTP 状态</td><td>{{ ex.status || '未记录' }}</td></tr>
-    </table>
-    <p v-if="ex.note" class="sub">{{ ex.note }}</p>
+  <div v-else class="record-tab-panel">
+    <div class="capture-overview">
+      <h3>事件信息</h3>
+      <dl class="capture-facts">
+        <div><dt>请求大小</dt><dd>{{ bytes(req?.bodyBytes) }}</dd></div>
+        <div><dt>响应大小</dt><dd>{{ bytes(res?.bodyBytes) }}</dd></div>
+        <div><dt>HTTP 状态</dt><dd>{{ ex.status || '未记录' }}</dd></div>
+        <div v-if="ex.conn"><dt>连接</dt><dd class="mono">{{ ex.conn }}</dd></div>
+      </dl>
+      <p v-if="ex.note" class="payload-note">{{ ex.note }}</p>
+    </div>
   </div>
 </template>
-
-<style scoped>
-.detail-head h2 { margin: 0 0 4px; font-size: 17px; }
-.sub { color: var(--muted); font-size: 12px; margin-bottom: 12px; }
-.detail-tabs { display: flex; gap: 6px; margin-bottom: 12px; }
-.io-section { margin-bottom: 14px; }
-.io-card-head { display: flex; gap: 10px; align-items: baseline; margin-bottom: 4px; }
-.io-label { font-size: 12px; font-weight: 600; }
-.io-label.in { color: var(--blue); } .io-label.out { color: var(--green); }
-.io-meta { color: var(--muted); font-size: 11px; }
-h3 { font-size: 13px; margin: 6px 0; font-family: ui-monospace, monospace; }
-.io-block { background: var(--surface-2); border: 1px solid var(--line-soft); border-radius: 8px; padding: 10px; font-size: 12px; white-space: pre-wrap; word-break: break-all; overflow: auto; max-height: 40dvh; }
-.kv-table { border-collapse: collapse; font-size: 13px; }
-.kv-table td { padding: 5px 14px 5px 0; color: var(--ink-2); }
-.kv-table td:first-child { color: var(--muted); }
-.cat-dot.net { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; background: var(--coral); }
-</style>

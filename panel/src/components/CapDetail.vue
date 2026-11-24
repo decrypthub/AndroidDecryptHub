@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue';
 import type { Cap } from '../api';
 import { catClass, cryptoView, CATLABEL } from '../capview';
+import { toast } from '../store';
 
 const props = defineProps<{ detail: Record<string, unknown> }>();
 const c = computed(() => props.detail as unknown as Cap & { text?: string; hex?: string; tid?: number; callStack?: string; hasKey?: boolean; source?: string });
@@ -31,9 +32,12 @@ const isNet = computed(() => c.value.category === 'net');
 const cv = computed(() => (isCrypto.value ? cryptoView(c.value) : null));
 
 const inLabel = computed(() => (isNet.value ? (/write/i.test(String(c.value.func || c.value.op || '')) ? '发送' : '接收') : '输入'));
-
 const hasStack = computed(() => !!c.value.callStack);
 const bytes = (n?: number) => (n == null ? '未记录' : `${n} B`);
+
+function copy(text: string) {
+  void navigator.clipboard?.writeText(text).then(() => toast('已复制'), () => toast('复制失败'));
+}
 </script>
 
 <template>
@@ -51,71 +55,117 @@ const bytes = (n?: number) => (n == null ? '未记录' : `${n} B`);
       </div>
     </div>
 
-    <div class="detail-tabs">
-      <button class="chip" :class="{ on: view === 'data' }" @click="view = 'data'">数据详情</button>
-      <button class="chip" :class="{ on: view === 'event' }" @click="view = 'event'">事件信息</button>
-      <button v-if="hasStack" class="chip" :class="{ on: view === 'stack' }" @click="view = 'stack'">调用栈</button>
+    <div class="record-tabs">
+      <button type="button" :aria-selected="view === 'data'" @click="view = 'data'">数据详情</button>
+      <button type="button" :aria-selected="view === 'event'" @click="view = 'event'">事件信息</button>
+      <button v-if="hasStack" type="button" :aria-selected="view === 'stack'" @click="view = 'stack'">调用栈</button>
     </div>
 
-    <div v-if="view === 'data'" class="detail-body">
+    <div v-if="view === 'data'" class="record-tab-panel">
       <template v-if="isFile && (c.text || c.preview || c.func || c.path)">
-        <div class="kv-label">路径</div>
-        <pre class="io-block">{{ c.path || ((c.func === 'open' || c.func === 'openat') ? c.preview : '') || '未记录' }}</pre>
-        <div class="kv-label">详情</div>
-        <pre class="io-block">{{ [c.func, c.op, c.path ? c.preview : c.text].filter(Boolean).join('\n') }}</pre>
+        <div class="io-section kv-card">
+          <div class="io-card-head"><span class="io-label kv">路径</span></div>
+          <div class="io-block-body">
+            <pre>{{ c.path || ((c.func === 'open' || c.func === 'openat') ? c.preview : '') || '未记录' }}</pre>
+            <button type="button" class="block-copy" title="复制"
+              @click="copy(c.path || ((c.func === 'open' || c.func === 'openat') ? c.preview || '' : '') || '')"><svg
+                viewBox="0 0 16 16">
+                <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+                <path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5" /></svg></button>
+          </div>
+        </div>
+        <div class="io-section kv-card">
+          <div class="io-card-head"><span class="io-label kv">详情</span></div>
+          <div class="io-block-body">
+            <pre>{{ [c.func, c.op, c.path ? c.preview : c.text].filter(Boolean).join('\n') }}</pre>
+            <button type="button" class="block-copy" title="复制"
+              @click="copy([c.func, c.op, c.path ? c.preview : c.text].filter(Boolean).join('\n'))"><svg
+                viewBox="0 0 16 16">
+                <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+                <path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5" /></svg></button>
+          </div>
+        </div>
       </template>
+
       <template v-if="c.keyHex">
-        <div class="kv-label">KEY · {{ c.keyHex.length / 2 }}B</div>
-        <pre class="io-block mono">{{ hex(c.keyHex) }}</pre>
+        <div class="io-section kv-card">
+          <div class="io-card-head"><span class="io-label kv">KEY</span><span class="io-meta">{{ c.keyHex.length / 2 }}B</span></div>
+          <div class="io-block-body">
+            <pre class="hex">{{ hex(c.keyHex) }}</pre>
+            <button type="button" class="block-copy" title="复制" @click="copy(c.keyHex)"><svg viewBox="0 0 16 16">
+                <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+                <path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5" /></svg></button>
+          </div>
+        </div>
       </template>
       <template v-if="c.ivHex">
-        <div class="kv-label">IV · {{ c.ivHex.length / 2 }}B</div>
-        <pre class="io-block mono">{{ hex(c.ivHex) }}</pre>
+        <div class="io-section kv-card">
+          <div class="io-card-head"><span class="io-label kv">IV</span><span class="io-meta">{{ c.ivHex.length / 2 }}B</span></div>
+          <div class="io-block-body">
+            <pre class="hex">{{ hex(c.ivHex) }}</pre>
+            <button type="button" class="block-copy" title="复制" @click="copy(c.ivHex)"><svg viewBox="0 0 16 16">
+                <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+                <path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5" /></svg></button>
+          </div>
+        </div>
       </template>
+
       <template v-if="c.hex || (!isFile && c.text) || (c.inl ?? 0) > 0">
-        <div class="kv-label">{{ inLabel }} · {{ bytes(c.inl) }}</div>
-        <pre class="io-block mono">{{ c.hex ? hex(c.hex) : c.text || '（未捕获字节）' }}</pre>
+        <div class="io-section in-card">
+          <div class="io-card-head"><span class="io-label in">{{ inLabel }}</span><span class="io-meta">{{ bytes(c.inl) }}</span></div>
+          <div class="io-block-body">
+            <pre :class="{ hex: !!c.hex }">{{ c.hex ? hex(c.hex) : c.text || '（未捕获字节）' }}</pre>
+            <button type="button" class="block-copy" title="复制"
+              @click="copy(c.hex ? hex(c.hex) : c.text || '')"><svg viewBox="0 0 16 16">
+                <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+                <path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5" /></svg></button>
+          </div>
+        </div>
       </template>
       <template v-if="c.outHex || (c.outl ?? 0) > 0">
-        <div class="kv-label">{{ isNet ? '响应' : '输出' }} · {{ bytes(c.outl ?? (c.outHex ? c.outHex.length / 2 : undefined)) }}</div>
-        <pre class="io-block mono">{{ c.outHex ? hex(c.outHex) : '（未捕获字节）' }}</pre>
+        <div class="io-section out-card">
+          <div class="io-card-head"><span class="io-label out">{{ isNet ? '响应' : '输出' }}</span><span
+              class="io-meta">{{ bytes(c.outl ?? (c.outHex ? c.outHex.length / 2 : undefined)) }}</span></div>
+          <div class="io-block-body">
+            <pre :class="{ hex: !!c.outHex }">{{ c.outHex ? hex(c.outHex) : '（未捕获字节）' }}</pre>
+            <button type="button" class="block-copy" title="复制"
+              @click="copy(c.outHex ? hex(c.outHex) : '')"><svg viewBox="0 0 16 16">
+                <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+                <path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5" /></svg></button>
+          </div>
+        </div>
       </template>
       <div v-if="!isFile && !c.hex && !c.keyHex && !c.outHex && !(c.inl ?? 0) && !c.text" class="detail-empty">
         这条记录没有可显示的数据。
       </div>
     </div>
 
-    <div v-else-if="view === 'event'" class="detail-body">
-      <table class="kv-table">
-        <tr><td>事件编号</td><td>#{{ c.id ?? '未记录' }}</td></tr>
-        <tr><td>类别</td><td>{{ CATLABEL[catClass(c)] }}</td></tr>
-        <tr><td>输入大小</td><td>{{ bytes(c.inl) }}</td></tr>
-        <tr><td>输出大小</td><td>{{ bytes(c.outl) }}</td></tr>
-        <tr><td>线程 ID</td><td>{{ c.tid ? String(c.tid) : '未记录' }}</td></tr>
-        <tr><td>时间</td><td>{{ new Date(c.ts).toLocaleString() }}</td></tr>
-        <tr v-if="c.sessionId"><td>会话</td><td class="mono">{{ c.sessionId }}</td></tr>
-      </table>
+    <div v-else-if="view === 'event'" class="record-tab-panel">
+      <div class="capture-overview">
+        <h3>事件信息</h3>
+        <dl class="capture-facts">
+          <div><dt>事件编号</dt><dd>#{{ c.id ?? '未记录' }}</dd></div>
+          <div><dt>类别</dt><dd>{{ CATLABEL[catClass(c)] }}</dd></div>
+          <div><dt>输入大小</dt><dd>{{ bytes(c.inl) }}</dd></div>
+          <div><dt>输出大小</dt><dd>{{ bytes(c.outl) }}</dd></div>
+          <div><dt>线程 ID</dt><dd>{{ c.tid ? String(c.tid) : '未记录' }}</dd></div>
+          <div><dt>时间</dt><dd>{{ new Date(c.ts).toLocaleString() }}</dd></div>
+          <div v-if="c.sessionId"><dt>会话</dt><dd class="mono">{{ c.sessionId }}</dd></div>
+        </dl>
+      </div>
     </div>
 
-    <div v-else class="detail-body">
-      <pre class="io-block mono">{{ c.callStack }}</pre>
+    <div v-else class="record-tab-panel">
+      <div class="io-section kv-card stack-section">
+        <div class="io-card-head"><span class="io-label kv">调用栈</span></div>
+        <div class="io-block-body">
+          <pre>{{ c.callStack }}</pre>
+          <button type="button" class="block-copy" title="复制" @click="copy(c.callStack || '')"><svg
+              viewBox="0 0 16 16">
+              <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+              <path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5" /></svg></button>
+        </div>
+      </div>
     </div>
   </template>
 </template>
-
-<style scoped>
-.detail-head h2 { margin: 0 0 4px; font-size: 17px; }
-.sub { color: var(--muted); font-size: 12px; margin-bottom: 12px; }
-.detail-tabs { display: flex; gap: 6px; margin-bottom: 12px; }
-.kv-label { color: var(--muted); font-size: 12px; margin: 10px 0 4px; }
-.io-block { background: var(--surface-2); border: 1px solid var(--line-soft); border-radius: 8px; padding: 10px; font-size: 12px; white-space: pre-wrap; word-break: break-all; overflow: auto; max-height: 40dvh; }
-.kv-table { border-collapse: collapse; font-size: 13px; }
-.kv-table td { padding: 5px 14px 5px 0; color: var(--ink-2); }
-.kv-table td:first-child { color: var(--muted); }
-.detail-empty { padding: 24px; color: var(--muted); }
-.cat-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; background: var(--muted); }
-.cat-dot.digest { background: var(--cyan); } .cat-dot.hmac { background: var(--lilac); }
-.cat-dot.sym { background: var(--blue); } .cat-dot.asym { background: var(--pink); }
-.cat-dot.aead { background: var(--teal); } .cat-dot.file { background: var(--amber); }
-.cat-dot.sys { background: var(--green); } .cat-dot.net { background: var(--coral); }
-</style>

@@ -10,10 +10,35 @@ import {
   sessionHookEvidence, type AlgoEntry, type HookEntry,
 } from '../observations';
 
-// 六个加密家族 + tls（键序对齐 daemon CRYPTO_FAMILY_KEYS）
+// ---- 页内子导航 ----
+type PageKey = 'capture' | 'records' | 'hooks' | 'scope' | 'display' | 'conn';
+const PAGE_ICONS: Record<PageKey, string> = {
+  capture: '<rect x="4" y="8" width="12" height="9" rx="2"/><path d="M7 8V6a3 3 0 0 1 6 0v2m-3 4v2"/>',
+  records: '<path d="M2 10s3-5 8-5 8 5 8 5-3 5-8 5-8-5-8-5z"/><circle cx="10" cy="10" r="2.4"/>',
+  hooks: '<circle cx="10" cy="10" r="6.5"/><circle cx="10" cy="10" r="2"/><path d="M10 1.5v2M18.5 10h-2M10 18.5v-2M1.5 10h2"/>',
+  scope: '<circle cx="10" cy="10" r="7"/><circle cx="10" cy="10" r="3"/>',
+  display: '<path d="M4 6h5M13 6h3M4 14h3M11 14h5"/><circle cx="11" cy="6" r="1.8"/><circle cx="9" cy="14" r="1.8"/>',
+  conn: '<rect x="3" y="4" width="14" height="5" rx="1.5"/><rect x="3" y="11" width="14" height="5" rx="1.5"/><path d="M6 6.5h.01M6 13.5h.01"/>',
+};
+const PAGES: Array<{ key: PageKey; label: string }> = [
+  { key: 'capture', label: '捕获' },
+  { key: 'records', label: '记录显示' },
+  { key: 'hooks', label: 'Hook 状态' },
+  { key: 'scope', label: '分析范围' },
+  { key: 'display', label: '显示' },
+  { key: 'conn', label: '连接与数据' },
+];
+const page = ref<PageKey>('capture');
+const pageTitle = computed(() => PAGES.find(p => p.key === page.value)?.label ?? '');
+
+// ---- 捕获家族（键序对齐 daemon CRYPTO_FAMILY_KEYS）----
 const FAMILIES = [
-  ['digest', '摘要'], ['hmac', 'HMAC'], ['symmetric', '对称'], ['asymmetric', '非对称'],
-  ['tls', 'TLS'], ['aead', 'AEAD'],
+  ['digest', '摘要', 'MessageDigest.digest · EVP_DigestUpdate'],
+  ['hmac', 'HMAC', 'Mac.doFinal · HMAC_Update'],
+  ['symmetric', '对称', 'Cipher.doFinal · EVP_CipherUpdate'],
+  ['asymmetric', '非对称', 'Signature.sign · EVP_DigestSign'],
+  ['tls', 'TLS', 'SSL_read · SSL_write'],
+  ['aead', 'AEAD', 'AES-GCM · EVP_AEAD'],
 ] as const;
 
 const famState = ref<Record<string, boolean>>({});
@@ -45,7 +70,7 @@ async function toggle(fam: string) {
   saving.value = '';
 }
 async function loadRadar() {
-  if (!store.chosenPkg) { radar.value = ''; return; }
+  if (!store.chosenPkg) { radar.value = '先选择应用'; return; }
   try {
     const r = await getDetectSummary(store.chosenPkg) as {
       armed?: boolean; kinds?: Array<{ label: string; count: number }>;
@@ -62,7 +87,7 @@ async function loadRadar() {
   } catch { radar.value = '系统检测：摘要读取失败'; radarTitle.value = '不代表功能已开启或关闭'; }
 }
 
-// ---- 记录显示（只筛本浏览器列表，不改手机采集策略）----
+// ---- 记录显示 ----
 const appRecords = computed(() => store.capItems.filter(belongsToApp));
 const obsView = ref<'algo' | 'hook'>('algo');
 const obsQuery = ref('');
@@ -91,7 +116,7 @@ function resetAll() {
   toast('已恢复此应用的全部显示');
 }
 
-// ---- 功能与 Hook 状态（会话内已观察入口，非安装清单）----
+// ---- 功能与 Hook 状态 ----
 const evidence = computed(() => {
   const s = liveSession.value;
   if (!s) return null;
@@ -141,201 +166,212 @@ watch(() => store.chosenPkg, () => { void loadFamilies(); void loadRadar(); });
 </script>
 
 <template>
-  <div class="settings-panel">
-    <section class="set-block">
-      <h3>捕获配置 <span class="mono muted">{{ store.chosenPkg }}</span></h3>
-      <div v-if="famError" class="set-error">{{ famError }}</div>
-      <div v-else-if="!store.chosenPkg" class="muted">先选择应用。</div>
-      <div v-else class="fam-grid">
-        <label v-for="[key, label] in FAMILIES" :key="key" class="fam-item" :class="{ saving: saving === key }">
-          <input type="checkbox" :checked="famState[key] !== false" :disabled="!!saving"
-            @change="toggle(key)" />
-          <span>{{ label }}</span>
-          <code class="muted">{{ key }}</code>
-        </label>
-        <div class="muted fam-master">总开关：{{ famEnabled ? '开' : '关' }}（全部家族关闭时自动关）</div>
-      </div>
-    </section>
-
-    <section class="set-block">
-      <h3>检测状态</h3>
-      <div class="radar" :title="radarTitle">{{ radar || '未读取' }}</div>
-      <button class="btn sm" @click="loadRadar">刷新</button>
-    </section>
-
-    <section class="set-block">
-      <h3>记录显示</h3>
-      <div class="cat-toggles">
-        <label v-for="(label, cat) in HOOK_GROUPS" :key="cat" class="fam-item">
-          <input type="checkbox" :checked="catShown(cat)" @change="toggleCategory(cat, !catShown(cat))" />
-          <span>{{ label }}</span>
-        </label>
-      </div>
-      <div class="obs-nav">
-        <button class="btn sm" :class="{ on: obsView === 'algo' }" @click="obsView = 'algo'">按算法</button>
-        <button class="btn sm" :class="{ on: obsView === 'hook' }" @click="obsView = 'hook'">按 Hook</button>
-      </div>
-      <template v-if="obsView === 'algo'">
-        <div class="obs-filters">
-          <input v-model="obsQuery" class="obs-search" placeholder="算法、类或方法" />
-          <select v-model="obsFamily" class="cap-cat">
-            <option value="">全部类别</option>
-            <option v-for="(label, key) in ALGO_FAMILIES" :key="key" :value="key">{{ label }}</option>
-          </select>
-        </div>
-        <div class="obs-list">
-          <label v-for="e in algoList" :key="e.key" class="obs-item">
-            <input type="checkbox" :checked="!hiddenHooks.has(e.key)" @change="setHidden(e.key, hiddenHooks.has(e.key))" />
-            <span class="obs-name">{{ e.name }}</span>
-            <span class="muted obs-fam">{{ ALGO_FAMILIES[e.family as keyof typeof ALGO_FAMILIES] ?? e.family }}</span>
-            <span class="muted obs-count">{{ e.count }} 条</span>
-          </label>
-          <div v-if="!algoList.length" class="muted obs-empty">{{ appRecords.length ? '没有匹配的已观察算法。' : '还没有记录可归纳。' }}</div>
-        </div>
-      </template>
-      <template v-else>
-        <div class="obs-filters">
-          <input v-model="hookQuery" class="obs-search" placeholder="按名称搜索 Hook" />
-          <select v-model="hookCategory" class="cap-cat">
-            <option value="">全部类别</option>
-            <option v-for="(label, key) in HOOK_GROUPS" :key="key" :value="key">{{ label }}</option>
-          </select>
-        </div>
-        <div class="obs-list">
-          <label v-for="h in hookList" :key="h.key" class="obs-item">
-            <input type="checkbox" :checked="!hiddenHooks.has(h.key)" @change="setHidden(h.key, hiddenHooks.has(h.key))" />
-            <span class="obs-name mono">{{ h.name }}</span>
-            <span class="muted obs-fam">{{ HOOK_GROUPS[h.category as keyof typeof HOOK_GROUPS] ?? h.category }}{{ h.source ? ' · ' + h.source : '' }}</span>
-            <span class="muted obs-count">{{ h.count }} 条</span>
-          </label>
-          <div v-if="!hookList.length" class="muted obs-empty">{{ appRecords.length ? '没有匹配的 Hook。' : '还没有记录可归纳。' }}</div>
-        </div>
-      </template>
-      <div class="obs-footer">
-        <span class="muted">勾选即时生效，按应用保存</span>
-        <button class="btn sm" :disabled="!hiddenHooks.size" @click="resetAll">恢复全部显示</button>
-      </div>
-    </section>
-
-    <section v-if="evidence" class="set-block">
-      <h3>功能与 Hook 状态</h3>
-      <details v-for="(label, key) in EVIDENCE_LABELS" :key="key" class="evidence">
-        <summary>
-          <strong>{{ label }}</strong>
-          <span class="muted">{{ evidence[key].records }} 条 · {{ evidence[key].uniqueEntries }} 个入口</span>
-        </summary>
-        <ul v-if="evidence[key].methods.length" class="evidence-methods">
-          <li v-for="(m, i) in evidence[key].methods" :key="i" class="mono">
-            {{ m.className ? m.className + '.' + m.member : (m.member || m.label) }}
-            <span class="muted">×{{ m.count }}</span>
-          </li>
-        </ul>
-        <div v-else class="muted">本会话暂无此类记录。</div>
-      </details>
-      <p class="muted ev-note">上报入口详情只读；会话识别到的入口不代表完整安装清单。</p>
-    </section>
-
-    <section class="set-block">
-      <h3>分析范围</h3>
-      <dl class="set-meta">
-        <div><dt>当前设备</dt><dd>{{ status.dev || '未连接' }}</dd></div>
-        <div><dt>当前 APP</dt><dd>{{ store.chosenPkg || '未选择' }}</dd></div>
-        <div><dt>允许注入</dt><dd>{{ store.chosenPkg ? (store.scope.has(store.chosenPkg) ? '已勾选' : '未勾选') : '未选择 APP' }}</dd></div>
-        <div><dt>观测会话</dt><dd>{{ status.session || '未连接' }}</dd></div>
-      </dl>
-      <div v-if="appSessions.length" class="sess-list">
-        <div v-for="s in appSessions" :key="s.sessionId" class="sess-row mono">
-          <span class="sess-dot" :class="{ on: s.online }"></span>
-          <span>pid {{ s.pid }}</span>
-          <span v-if="s.process" class="muted">{{ s.process }}</span>
-          <span v-if="s.mapsCount" class="muted">{{ s.mapsCount }} maps</span>
-          <span class="muted">{{ s.online ? '在线' : '离线' }}</span>
+  <div class="set-page-shell">
+    <aside class="set-sidebar">
+      <h2>设置</h2>
+      <nav class="set-nav">
+        <button v-for="p in PAGES" :key="p.key" type="button" :aria-pressed="page === p.key" @click="page = p.key">
+          <svg class="set-nav-icon" viewBox="0 0 20 20" v-html="PAGE_ICONS[p.key]" />
+          <span class="set-nav-label">{{ p.label }}</span>
+        </button>
+      </nav>
+    </aside>
+    <div class="set-content">
+      <div class="set-header">
+        <div>
+          <h3>{{ pageTitle }}</h3>
+          <p class="set-app"><span>APP <strong>{{ store.chosenPkg || '未选择应用' }}</strong></span></p>
         </div>
       </div>
-    </section>
+      <div class="set-main">
 
-    <section class="set-block">
-      <h3>显示</h3>
-      <div class="pref-rows">
-        <label class="pref-row"><span>列表显示条数</span>
-          <select :value="panelDisplay.limit ?? ''" class="cap-cat"
-            @change="saveDisplay({ ...panelDisplay, limit: Number(($event.target as HTMLSelectElement).value) || null })">
-            <option value="">跟随服务默认（{{ hostDisplayCap.value }}）</option>
-            <option v-for="n in DISPLAY_CAPS" :key="n" :value="n">{{ n }} 条</option>
-          </select>
-        </label>
-        <label class="pref-row"><span>时间格式</span>
-          <select :value="panelDisplay.time" class="cap-cat"
-            @change="saveDisplay({ ...panelDisplay, time: ($event.target as HTMLSelectElement).value as 'time' })">
-            <option value="time">只显示时间</option>
-            <option value="date">日期和时间</option>
-          </select>
-        </label>
-        <label class="pref-row"><span>列表间距</span>
-          <select :value="panelDisplay.density" class="cap-cat"
-            @change="saveDisplay({ ...panelDisplay, density: ($event.target as HTMLSelectElement).value as 'standard' })">
-            <option value="standard">标准</option>
-            <option value="compact">紧凑</option>
-          </select>
-        </label>
-      </div>
-      <div class="obs-footer">
-        <span class="muted">{{ displaySaved }}</span>
-        <button class="btn sm" :disabled="displayAtDefault" @click="saveDisplay()">恢复默认</button>
-      </div>
-    </section>
+        <section v-if="page === 'capture'" class="set-page">
+          <div class="set-choice-group">
+            <div class="set-group-head">
+              <h4>捕获家族</h4>
+              <span class="set-group-count">{{ famEnabled ? '已启用' : '已停用' }}</span>
+            </div>
+            <div class="set-group-items">
+              <label v-for="[key, label, members] in FAMILIES" :key="key" class="set-toggle-row">
+                <span class="lab"><b>{{ label }}</b><span>{{ members }}</span></span>
+                <span class="set-switch"><input type="checkbox" :checked="famState[key] !== false"
+                    :disabled="!!saving || !store.chosenPkg" @change="toggle(key)" /><span class="slider"></span></span>
+              </label>
+            </div>
+          </div>
+          <p v-if="famError" class="set-status" data-error="true">{{ famError }}</p>
+          <p v-else-if="!store.chosenPkg" class="set-status">先选择应用。</p>
+          <div class="set-choice-group">
+            <div class="set-group-head">
+              <h4>检测状态</h4>
+              <button type="button" class="set-small-button" @click="loadRadar">刷新</button>
+            </div>
+            <p class="detect-radar" style="padding:10px 13px" :title="radarTitle">{{ radar || '未读取' }}</p>
+          </div>
+        </section>
 
-    <section class="set-block">
-      <h3>连接与数据 <button class="btn sm" :disabled="statusBusy" @click="refreshStatus">刷新</button></h3>
-      <dl class="set-meta">
-        <div><dt>当前设备</dt><dd>{{ status.dev || '读取中…' }}</dd></div>
-        <div><dt>APP 采集会话</dt><dd>{{ status.session || '未读取' }}</dd></div>
-        <div><dt>电脑服务</dt><dd>{{ status.host || '未读取' }}</dd></div>
-        <div><dt>面板地址</dt><dd>{{ status.panel || '—' }}</dd></div>
-        <div><dt>电脑服务版本</dt><dd>{{ status.version || '—' }}</dd></div>
-        <div><dt>记录保留规则</dt><dd>{{ status.retention || '—' }}</dd></div>
-      </dl>
-      <p v-if="statusMsg" class="muted">{{ statusMsg }}</p>
-    </section>
+        <section v-else-if="page === 'records'" class="set-page">
+          <fieldset class="set-record-controls">
+            <legend>记录类别</legend>
+            <label v-for="(label, cat) in HOOK_GROUPS" :key="cat">
+              <input type="checkbox" :checked="catShown(cat)" @change="toggleCategory(cat, !catShown(cat))" />{{
+                label }}</label>
+          </fieldset>
+          <div class="set-observation-nav">
+            <button type="button" class="set-small-button" :aria-pressed="obsView === 'algo'"
+              @click="obsView = 'algo'">按算法</button>
+            <button type="button" class="set-small-button" :aria-pressed="obsView === 'hook'"
+              @click="obsView = 'hook'">按 Hook</button>
+            <span class="set-family-count">{{ obsView === 'algo' ? algoList.length : hookList.length }} 项</span>
+            <button type="button" class="set-small-button" :disabled="!hiddenHooks.size"
+              @click="resetAll">恢复全部显示</button>
+          </div>
+          <template v-if="obsView === 'algo'">
+            <div class="set-observation-filters">
+              <input v-model="obsQuery" placeholder="算法、类或方法" />
+              <select v-model="obsFamily">
+                <option value="">全部类别</option>
+                <option v-for="(label, key) in ALGO_FAMILIES" :key="key" :value="key">{{ label }}</option>
+              </select>
+            </div>
+            <div class="set-choice-group">
+              <div class="set-group-head">
+                <h4>已观察算法</h4><span class="set-group-count">{{ algoList.length }} 项</span>
+              </div>
+              <div class="set-group-items">
+                <label v-for="e in algoList" :key="e.key" class="set-toggle-row">
+                  <span class="lab"><b>{{ e.name }}</b><span>{{ ALGO_FAMILIES[e.family as keyof typeof ALGO_FAMILIES] ??
+                    e.family }} · {{ e.count }} 条</span></span>
+                  <span class="set-switch"><input type="checkbox" :checked="!hiddenHooks.has(e.key)"
+                      @change="setHidden(e.key, hiddenHooks.has(e.key))" /><span class="slider"></span></span>
+                </label>
+                <div v-if="!algoList.length" class="set-observation-empty">{{ appRecords.length ? '没有匹配的已观察算法。' :
+                  '还没有记录可归纳。' }}</div>
+              </div>
+            </div>
+          </template>
+          <template v-else>
+            <div class="set-observation-filters">
+              <input v-model="hookQuery" placeholder="按名称搜索 Hook" />
+              <select v-model="hookCategory">
+                <option value="">全部类别</option>
+                <option v-for="(label, key) in HOOK_GROUPS" :key="key" :value="key">{{ label }}</option>
+              </select>
+            </div>
+            <div class="set-choice-group">
+              <div class="set-group-head">
+                <h4>已观察 Hook</h4><span class="set-group-count">{{ hookList.length }} 项</span>
+              </div>
+              <div class="set-group-items">
+                <label v-for="h in hookList" :key="h.key" class="set-toggle-row">
+                  <span class="lab"><b class="mono">{{ h.name }}</b><span>{{ HOOK_GROUPS[h.category as keyof typeof
+                    HOOK_GROUPS] ?? h.category }}{{ h.source ? ' · ' + h.source : '' }} · {{ h.count }} 条</span></span>
+                  <span class="set-switch"><input type="checkbox" :checked="!hiddenHooks.has(h.key)"
+                      @change="setHidden(h.key, hiddenHooks.has(h.key))" /><span class="slider"></span></span>
+                </label>
+                <div v-if="!hookList.length" class="set-observation-empty">{{ appRecords.length ? '没有匹配的 Hook。' :
+                  '还没有记录可归纳。' }}</div>
+              </div>
+            </div>
+          </template>
+          <p class="set-status">勾选即时生效，按应用保存在此浏览器。</p>
+        </section>
+
+        <section v-else-if="page === 'hooks'" class="set-page">
+          <div v-if="!evidence" class="set-observation-empty">没有在线会话。Hook 状态按当前进程会话统计。</div>
+          <template v-else>
+            <div v-for="(label, key) in EVIDENCE_LABELS" :key="key" class="set-algorithm-entry">
+              <details>
+                <summary>
+                  <span>
+                    <strong>{{ label }}</strong>
+                    <span class="set-algorithm-meta">{{ evidence[key].records }} 条 · {{ evidence[key].uniqueEntries }}
+                      个入口</span>
+                  </span>
+                </summary>
+                <ul v-if="evidence[key].methods.length" class="set-algorithm-methods">
+                  <li v-for="(m, i) in evidence[key].methods" :key="i">
+                    <dl>
+                      <dt>×{{ m.count }}</dt>
+                      <dd>{{ m.className ? m.className + '.' + m.member : (m.member || m.label) }}</dd>
+                    </dl>
+                  </li>
+                </ul>
+                <p v-else class="set-lead" style="margin:0 0 10px 15px">本会话暂无此类记录。</p>
+              </details>
+            </div>
+            <p class="set-status">上报入口详情只读；会话识别到的入口不代表完整安装清单。</p>
+          </template>
+        </section>
+
+        <section v-else-if="page === 'scope'" class="set-page">
+          <dl class="set-meta">
+            <div><dt>当前设备</dt><dd>{{ status.dev || '未连接' }}</dd></div>
+            <div><dt>当前 APP</dt><dd>{{ store.chosenPkg || '未选择' }}</dd></div>
+            <div><dt>允许注入</dt><dd>{{ store.chosenPkg ? (store.scope.has(store.chosenPkg) ? '已勾选' : '未勾选') : '未选择 APP'
+                }}</dd></div>
+            <div><dt>观测会话</dt><dd>{{ status.session || '未连接' }}</dd></div>
+          </dl>
+          <div v-if="appSessions.length" class="set-choice-group" style="margin-top:14px">
+            <div class="set-group-head">
+              <h4>会话明细</h4><span class="set-group-count">{{ appSessions.length }} 个</span>
+            </div>
+            <div class="set-group-items">
+              <div v-for="s in appSessions" :key="s.sessionId" class="set-toggle-row" style="cursor:default">
+                <span class="lab"><b class="mono">pid {{ s.pid }}</b><span class="mono">{{ [s.process, s.mapsCount ?
+                  `${s.mapsCount} maps` : '', s.sessionId].filter(Boolean).join(' · ') }}</span></span>
+                <span class="pill" :class="s.online ? 'on' : 'no'">{{ s.online ? '在线' : '离线' }}</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section v-else-if="page === 'display'" class="set-page">
+          <div class="set-preferences">
+            <label class="set-row"><span class="lab"><b>列表显示条数</b><span>每个板块保留在列表里的最近记录数</span></span>
+              <select :value="panelDisplay.limit ?? ''"
+                @change="saveDisplay({ ...panelDisplay, limit: Number(($event.target as HTMLSelectElement).value) || null })">
+                <option value="">跟随服务默认（{{ hostDisplayCap.value }}）</option>
+                <option v-for="n in DISPLAY_CAPS" :key="n" :value="n">{{ n }} 条</option>
+              </select>
+            </label>
+            <label class="set-row"><span class="lab"><b>时间格式</b><span>记录时间戳显示到日期还是只到时间</span></span>
+              <select :value="panelDisplay.time"
+                @change="saveDisplay({ ...panelDisplay, time: ($event.target as HTMLSelectElement).value as 'time' })">
+                <option value="time">只显示时间</option>
+                <option value="date">日期和时间</option>
+              </select>
+            </label>
+            <label class="set-row"><span class="lab"><b>列表间距</b><span>紧凑模式每行更矮，一屏能看更多条</span></span>
+              <select :value="panelDisplay.density"
+                @change="saveDisplay({ ...panelDisplay, density: ($event.target as HTMLSelectElement).value as 'standard' })">
+                <option value="standard">标准</option>
+                <option value="compact">紧凑</option>
+              </select>
+            </label>
+          </div>
+          <div class="set-actions">
+            <button type="button" :disabled="displayAtDefault" @click="saveDisplay()">恢复默认</button>
+            <span class="set-status">{{ displaySaved }}</span>
+          </div>
+        </section>
+
+        <section v-else class="set-page">
+          <div class="set-page-head">
+            <span class="set-status">{{ statusMsg }}</span>
+            <button type="button" class="set-small-button" :disabled="statusBusy" @click="refreshStatus">刷新</button>
+          </div>
+          <dl class="set-meta">
+            <div><dt>当前设备</dt><dd>{{ status.dev || '读取中…' }}</dd></div>
+            <div><dt>APP 采集会话</dt><dd>{{ status.session || '未读取' }}</dd></div>
+            <div><dt>电脑服务</dt><dd>{{ status.host || '未读取' }}</dd></div>
+            <div><dt>面板地址</dt><dd>{{ status.panel || '—' }}</dd></div>
+            <div><dt>电脑服务版本</dt><dd>{{ status.version || '—' }}</dd></div>
+            <div><dt>记录保留规则</dt><dd>{{ status.retention || '—' }}</dd></div>
+          </dl>
+        </section>
+
+      </div>
+    </div>
   </div>
 </template>
-
-<style scoped>
-.settings-panel { flex: 1; overflow: auto; padding: 16px 20px; display: flex; flex-direction: column; gap: 18px; }
-.set-block { background: var(--surface); border: 1px solid var(--line-soft); border-radius: 12px; padding: 14px 16px; }
-.set-block h3 { margin: 0 0 10px; font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 10px; }
-.fam-grid { display: flex; flex-direction: column; gap: 8px; }
-.fam-item { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-2); }
-.fam-item.saving { opacity: 0.6; }
-.fam-master { margin-top: 6px; font-size: 12px; }
-.set-error { color: var(--danger); font-size: 13px; }
-.radar { font-size: 13px; color: var(--ink-2); margin-bottom: 8px; }
-.cat-toggles { display: flex; flex-wrap: wrap; gap: 10px 18px; padding: 4px 0 12px; }
-.obs-nav { display: flex; gap: 8px; margin-bottom: 10px; }
-.obs-filters { display: flex; gap: 8px; margin-bottom: 8px; }
-.obs-search { flex: 1; }
-.obs-list { max-height: 320px; overflow: auto; border: 1px solid var(--line-soft); border-radius: 8px; }
-.obs-item { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-bottom: 1px solid var(--line-soft); font-size: 13px; color: var(--ink-2); cursor: pointer; }
-.obs-item:last-child { border-bottom: 0; }
-.obs-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.obs-fam { font-size: 11px; flex: none; }
-.obs-count { font-size: 11px; flex: none; font-variant-numeric: tabular-nums; }
-.obs-empty { padding: 18px; text-align: center; font-size: 12px; }
-.obs-footer { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; font-size: 12px; }
-.evidence { border: 1px solid var(--line-soft); border-radius: 8px; padding: 8px 12px; margin-bottom: 8px; }
-.evidence summary { display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 13px; }
-.evidence-methods { margin: 8px 0 0; padding-left: 18px; font-size: 12px; color: var(--ink-2); max-height: 180px; overflow: auto; }
-.ev-note { font-size: 11px; margin: 6px 0 0; }
-.pref-rows { display: flex; flex-direction: column; gap: 10px; }
-.pref-row { display: flex; align-items: center; gap: 12px; font-size: 13px; color: var(--ink-2); }
-.pref-row > span { flex: 1; }
-.set-meta { margin: 0; }
-.set-meta > div { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(0, 2fr); column-gap: 12px; align-items: baseline; padding: 9px 0; border-bottom: 1px solid var(--line-soft); }
-.set-meta > div:last-child { border-bottom: 0; }
-.set-meta dt { color: var(--muted); font-size: 12px; }
-.set-meta dd { margin: 0; color: var(--ink-2); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; font-size: 13px; }
-.sess-list { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; }
-.sess-row { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--ink-2); }
-.sess-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: none; }
-.sess-dot.on { background: var(--ok, #3fb950); }
-</style>
