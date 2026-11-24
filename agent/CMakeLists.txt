@@ -48,6 +48,7 @@ set(AGENT_SOURCES
     src/runtime/jni_onload.c
     src/runtime/dlopen_watch.c
     src/runtime/java_enum.cpp
+    src/runtime/java_call.cpp
     src/trace/commands.c
     src/trace/qbdi_trace.c
 )
