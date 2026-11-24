@@ -1,7 +1,7 @@
-import { execFileSync, execFile, spawn } from 'node:child_process';
-import { promisify } from 'node:util';
+import { spawn } from 'node:child_process';
 import { readdirSync } from 'node:fs';
 import { connect } from 'node:net';
+import { adbExec } from './adb_wire.ts';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AGENT_PORT, HTTP_PORT } from './config.ts';
@@ -34,7 +34,7 @@ export const OWN_DEMO_API_ROUTE = '/api/observer/demo-api';
 export const OWN_FILE_DEMO_PACKAGE = 'com.adh.sandbox.filelab';
 export const OWN_FILE_DEMO_NOTE = 'adh-demo-external.txt';
 
-function readLocalObserver(): LocalObserver | null {
+async function readLocalObserver(): Promise<LocalObserver | null> {
   const pkg = process.env.ADH_OBSERVE_APP;
   const fileBrowserOnly = process.env.ADH_OWN_FILE_BROWSER === '1';
   const editableText = process.env.ADH_OWN_FILE_EDIT;
@@ -60,21 +60,19 @@ function readLocalObserver(): LocalObserver | null {
   if (readdirSync(process.env.ADH_DATA_DIR).length || process.env.ADH_CAPTURES_DIR) {
     throw Error('Local observation needs a new empty data directory and no capture-directory override');
   }
-  const adb = (args: string[]) => execFileSync('adb', args, {
-    encoding: 'utf8', timeout: 5000, windowsHide: true,
-  }).trim();
+  const adb = async (args: string[]) => (await adbExec(args, { timeout: 5000 })).stdout.trim();
   const device = (...args: string[]) => adb(['-s', serial, ...args]);
-  const usb = adb(['devices', '-l']).split(/\r?\n/).flatMap(line => {
+  const usb = (await adb(['devices', '-l'])).split(/\r?\n/).flatMap(line => {
     const m = /^(\S+)\s+device(?:\s|$)/.exec(line);
     return m ? [m[1]] : [];
   });
   if (!usb.includes(serial)) throw Error('Expected the selected USB device online');
-  const model = device('shell', 'getprop', 'ro.product.model');
+  const model = await device('shell', 'getprop', 'ro.product.model');
   if (fileBrowserOnly || demoApi) {
     if (!model || (fileBrowserOnly && process.env.ADH_OBSERVE_OWN_FILES !== '1')) throw Error('Expected the selected USB Demo and explicit local scope');
     if (editableText !== undefined && !isEditableName(editableText)) throw Error('Specify one ordinary .txt name under files only');
-    const user = device('shell', 'am', 'get-current-user');
-    const uid = device('shell', 'run-as', pkg, 'id', '-u');
+    const user = await device('shell', 'am', 'get-current-user');
+    const uid = await device('shell', 'run-as', pkg, 'id', '-u');
     if (user !== '0' || !/^\d+$/.test(uid) || Number(uid) < 10000) {
       throw Error('Expected a debuggable APP using its own application UID on the primary Android profile');
     }
@@ -82,12 +80,12 @@ function readLocalObserver(): LocalObserver | null {
     return { package:pkg, pid:0, model:model.slice(0,64), usbSerial:serial, ownFilesSerial:serial, fileBrowserOnly:true,
       externalUser:Number(user), editableText, demoExternal, demoExternalEdit };
   }
-  const pidText = device('shell', 'pidof', pkg);
+  const pidText = await device('shell', 'pidof', pkg);
   if (!model || !/^[1-9]\d*$/.test(pidText)) throw Error('Expected one running process for the chosen app');
   const pid = Number(pidText);
   if (!Number.isSafeInteger(pid)) throw Error('Invalid process ID');
   const port = 'tcp:' + AGENT_PORT;
-  const m = device('reverse', '--list').split(/\r?\n/)
+  const m = (await device('reverse', '--list')).split(/\r?\n/)
     .some(line => line.trim().split(/\s+/).slice(-2).join(' ') === port + ' ' + port);
   if (!m) throw Error('Expected the existing matching USB reverse; no routes were changed');
   const ownFilesSerial = process.env.ADH_OBSERVE_OWN_FILES === '1' ? serial : undefined;
@@ -139,22 +137,25 @@ function spawnTlsTestServer() {
  */
 export function ensureSandboxNetFixture(serial: string, pkg: string) {
   if (!pkg.startsWith(SANDBOX_PKG_PREFIX)) return;
-  try {
-    const port = 'tcp:' + TLS_TEST_PORT;
-    const list = execFileSync('adb', ['-s', serial, 'reverse', '--list'], { encoding: 'utf8', timeout: 5000, windowsHide: true });
-    const have = list.split(/\r?\n/).some(line => line.trim().split(/\s+/).slice(-2).join(' ') === port + ' ' + port);
-    if (!have) execFileSync('adb', ['-s', serial, 'reverse', port, port], { timeout: 5000, windowsHide: true });
-  } catch (e) {
-    log(`[sandbox-net] adb reverse tcp:${TLS_TEST_PORT} 未建立:`, (e as Error).message);
-  }
+  void (async () => {
+    try {
+      const port = 'tcp:' + TLS_TEST_PORT;
+      const { stdout: list } = await adbExec(['-s', serial, 'reverse', '--list'], { timeout: 5000 });
+      const have = list.split(/\r?\n/).some(line => line.trim().split(/\s+/).slice(-2).join(' ') === port + ' ' + port);
+      if (!have) await adbExec(['-s', serial, 'reverse', port, port], { timeout: 5000 });
+    } catch (e) {
+      log(`[sandbox-net] adb reverse tcp:${TLS_TEST_PORT} 未建立:`, (e as Error).message);
+    }
+  })();
   const probe = connect(TLS_TEST_PORT, '127.0.0.1');
   probe.once('connect', () => probe.destroy());
   probe.once('error', () => spawnTlsTestServer());
 }
 
-export let localObserver = readLocalObserver();
+export let localObserver: LocalObserver | null = null;
+/** index.ts 在 listen 前 await：USB 启动检查走 5037 协议，不起 adb 进程。 */
+export async function initLocalObserver(): Promise<void> { localObserver = await readLocalObserver(); }
 
-const execFileP = promisify(execFile);
 const OBSERVE_PKG_RE = /^[A-Za-z][\w]*(?:\.[A-Za-z][\w]*)+$/;
 const OBSERVE_SERIAL_RE = /^[A-Za-z0-9_-]+$/;
 
@@ -165,9 +166,7 @@ export async function retargetObserver(serial: string, pkg: string): Promise<Loc
   if (!current) throw Error('此入口不是本机观察模式');
   if (current.fileBrowserOnly || current.demoApiSerial) throw Error('此入口的观察目标是固定的');
   if (!OBSERVE_SERIAL_RE.test(serial) || !OBSERVE_PKG_RE.test(pkg)) throw Error('需要有效的设备序列号和包名');
-  const adb = async (args: string[]) => String((await execFileP('adb', args, {
-    encoding: 'utf8', timeout: 8000, windowsHide: true, maxBuffer: 1024 * 1024,
-  })).stdout ?? '').trim();
+  const adb = async (args: string[]) => String((await adbExec(args, { timeout: 8000, maxBuffer: 1024 * 1024 })).stdout ?? '').trim();
   const rows = parseAdbDevices(await adb(['devices', '-l']));
   const device = rows.find(row => row.serial === serial && row.state === 'device');
   if (!device) throw Error('这台手机不在线');

@@ -4,10 +4,7 @@ import { checkpoint, trackedEffect } from './execution_context.ts';
 // daemon lists and reads it through adb + su. The web file panel uses this.
 // The in-process agent path (fs_browse.ts) stays for MCP and the device checks,
 // which also want /proc/self.
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-
-const execFileP = promisify(execFile);
+import { adbExec, adbExecBuffer } from './adb_wire.ts';
 
 export const SANDBOX_LIST_CAP = 2000;
 export const SANDBOX_READ_CAP = 1024 * 1024;
@@ -237,17 +234,13 @@ function adbBase(): string[] {
 }
 
 async function adbShell(command: string): Promise<string> {
-  const { stdout } = await trackedEffect(() => execFileP('adb', [...adbBase(), 'shell', command], {
-    timeout: 45000, windowsHide: true, maxBuffer: 8 * 1024 * 1024,
-  }));
+  const { stdout } = await trackedEffect(() => adbExec([...adbBase(), 'shell', command], { timeout: 45000, maxBuffer: 8 * 1024 * 1024 }));
   return String(stdout ?? '');
 }
 
 async function adbOut(command: string, maxBuffer = 2 * 1024 * 1024): Promise<Buffer> {
-  const { stdout } = await trackedEffect(() => execFileP('adb', [...adbBase(), 'exec-out', command], {
-    timeout: 120_000, windowsHide: true, maxBuffer, encoding: 'buffer',
-  }));
-  return stdout as Buffer;
+  const { stdout } = await trackedEffect(() => adbExecBuffer([...adbBase(), 'exec-out', command], { timeout: 120_000, maxBuffer }));
+  return stdout;
 }
 
 /** Default deps: small reads for sandbox text; SO pulls bump the buffer in pullPackageFile. */

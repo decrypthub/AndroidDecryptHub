@@ -3,6 +3,7 @@ import { checkpoint, detached, trackedEffect } from './execution_context.ts';
 // (/data/adb/adh/scope.json). That file is root-only; adb is how the host reads it.
 // Display names come from each base APK's manifest (aapt), cached per package.
 import { execFile } from 'node:child_process';
+import { adbExec, adbExecBuffer } from './adb_wire.ts';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
@@ -55,17 +56,13 @@ function adbBase(serial = deviceSerial()): string[] {
 }
 
 async function adbShell(command: string): Promise<string> {
-  const { stdout } = await trackedEffect(() => execFileP('adb', [...adbBase(), 'shell', command], {
-    timeout: 15000, windowsHide: true, maxBuffer: 4 * 1024 * 1024,
-  }));
+  const { stdout } = await trackedEffect(() => adbExec([...adbBase(), 'shell', command], { timeout: 15000, maxBuffer: 4 * 1024 * 1024 }));
   return String(stdout ?? '');
 }
 
 async function adbOut(command: string): Promise<Buffer> {
-  const { stdout } = await trackedEffect(() => execFileP('adb', [...adbBase(), 'exec-out', command], {
-    timeout: 30000, windowsHide: true, maxBuffer: 80 * 1024 * 1024, encoding: 'buffer',
-  }));
-  return stdout as Buffer;
+  const { stdout } = await trackedEffect(() => adbExecBuffer([...adbBase(), 'exec-out', command], { timeout: 30000, maxBuffer: 80 * 1024 * 1024 }));
+  return stdout;
 }
 
 function findAapt(): string | null {
@@ -254,22 +251,24 @@ export function ensureAdbReverse(ports: number[], log: (line: string) => void): 
     }
     reverseBusy = false;
   };
-  execFile('adb', [...args, 'get-state'], { timeout: 4000, windowsHide: true }, (err, stdout) => {
-    if (err || String(stdout ?? '').trim() !== 'device') {
+  void (async () => {
+    try {
+      const { stdout } = await adbExec([...args, 'get-state'], { timeout: 4000 });
+      if (String(stdout ?? '').trim() !== 'device') {
+        finish('no-device', 'adb reverse: 没有在线设备，目标进程连不上本机');
+        return;
+      }
+      let failed = '';
+      await Promise.all(ports.map(async (port) => {
+        try { await adbExec([...args, 'reverse', `tcp:${port}`, `tcp:${port}`], { timeout: 8000 }); }
+        catch (e) { if (!failed) failed = e instanceof Error ? e.message.split('\n')[0] : String(e); }
+      }));
+      if (failed) finish('fail', `adb reverse 失败: ${failed.slice(0, 180)}`);
+      else finish('ok', `adb reverse: ${ports.map(p => 'tcp:' + p).join(' ')} → 本机`);
+    } catch {
       finish('no-device', 'adb reverse: 没有在线设备，目标进程连不上本机');
-      return;
     }
-    let left = ports.length;
-    let failed = '';
-    for (const port of ports) {
-      execFile('adb', [...args, 'reverse', `tcp:${port}`, `tcp:${port}`], { timeout: 8000, windowsHide: true }, (e) => {
-        if (e && !failed) failed = e instanceof Error ? e.message.split('\n')[0] : String(e);
-        if (--left > 0) return;
-        if (failed) finish('fail', `adb reverse 失败: ${failed.slice(0, 180)}`);
-        else finish('ok', `adb reverse: ${ports.map(p => 'tcp:' + p).join(' ')} → 本机`);
-      });
-    }
-  });
+  })();
 }
 
 /** Cached allowlist packages only — never merge capture-disk history into this list. */
@@ -363,9 +362,7 @@ const scopeIO: ScopeIO = {
     const staged = `/data/adb/adh/.scope-${token}.tmp`;
     try {
       writeFileSync(local, body, 'utf8');
-      await trackedEffect(() => execFileP('adb', [...adbBase(), 'push', local, uploaded], {
-        timeout: 20000, windowsHide: true, maxBuffer: 1024 * 1024,
-      }));
+      await trackedEffect(() => adbExec([...adbBase(), 'push', local, uploaded], { timeout: 20000 }));
       // Set ownership/label BEFORE the atomic rename; never expose a truncated scope file.
       await adbShell(`su -c 'cp ${uploaded} ${staged} && chown root:root ${staged} && chmod 644 ${staged} && chcon u:object_r:adb_data_file:s0 ${staged} && mv -f ${staged} ${SCOPE_PATH}'`);
     } finally {

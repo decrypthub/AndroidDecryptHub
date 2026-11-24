@@ -1,15 +1,12 @@
 import { checkpoint, trackedEffect } from './execution_context.ts';
 // Host orchestration for the optional root-side perf collector. This process owns
 // files and queries; the helper only collects kernel samples outside the app.
-import { execFile, spawn } from 'node:child_process';
+import { adbExec, adbExecStream } from './adb_wire.ts';
 import { randomUUID, createHash } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { promisify } from 'node:util';
 import { assertProcessGeneration } from './proc_identity.ts';
-
-const exec = promisify(execFile);
 const HELPER = '/data/local/tmp/adh-root-watch-v1';
 const VERSION = 'ADH_ROOT_WATCH_V1';
 const localHelper = fileURLToPath(new URL('../../agent/build/adh-root-watch', import.meta.url));
@@ -72,10 +69,10 @@ export function normalizeRootWatch(a: Record<string, any>) {
   return { tid, addr: '0x' + addr.toString(16), width, mode, durationMs, maxEvents, stackBytes, breakpoints, mem };
 }
 async function adb(serial: string, args: string[], timeout = 10000) {
-  return (await trackedEffect(() => exec('adb', ['-s', serial, ...args], { timeout, maxBuffer: 1024 * 1024, windowsHide: true }))).stdout;
+  return (await trackedEffect(() => adbExec(['-s', serial, ...args], { timeout, maxBuffer: 1024 * 1024 }))).stdout;
 }
 async function selectSerial(requested?: string) {
-  const devices = (await trackedEffect(() => exec('adb', ['devices'], { timeout: 10000, windowsHide: true }))).stdout
+  const devices = (await trackedEffect(() => adbExec(['devices'], { timeout: 10000 }))).stdout
     .split(/\r?\n/).map(line => /^(\S+)\s+device$/.exec(line.trim())?.[1]).filter((x): x is string => !!x);
   const serial = requested ?? process.env.ADH_SERIAL ?? process.env.ANDROID_SERIAL;
   if (serial) { if (!devices.includes(serial)) throw new Error(`ADB device ${serial} is not online`); return serial; }
@@ -120,11 +117,11 @@ export async function startRootWatch(target: Target, a: Record<string, any>, dat
     + spec.breakpoints.map((extra: string) => ` ${extra}`).join('')
     + spec.mem.map((window: string) => ` mem=${window}`).join('');
   checkpoint();
-  const child = spawn('adb', ['-s', serial, 'shell', 'su', '-c', command], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = adbExecStream(['-s', serial, 'shell', 'su', '-c', command]);
   let pending = '';
   await new Promise<void>((resolveReady, reject) => {
     const timer = setTimeout(() => reject(new Error(`Root collector did not become ready; run ${id} remains bounded by durationMs`)), 5000);
-    child.stdout.on('data', bytes => {
+    child.on('data', (bytes: Buffer) => {
       pending += bytes.toString('utf8');
       if (pending.length > 131072) { run.error = 'Collector emitted an oversized line'; pending = ''; }
       let end: number;
@@ -144,12 +141,15 @@ export async function startRootWatch(target: Target, a: Record<string, any>, dat
         } catch (e) { run.error = `Invalid collector record: ${String(e)}`; }
       }
     });
-    child.stderr.on('data', bytes => { run.stderr = (run.stderr + bytes.toString()).slice(-4096); });
-    child.on('error', error => { clearTimeout(timer); run.running = false; run.error = error.message; reject(error); });
-    child.on('close', code => {
+    (child as any).onStderr = (bytes: Buffer) => { run.stderr = (run.stderr + bytes.toString()).slice(-4096); };
+    (child as any).onExit = (code: number) => {
       clearTimeout(timer); run.running = false; run.exitCode = code;
       if (!run.summary) run.error ||= `Collector exited without a final accounting record (${code}): ${run.stderr}`;
       if (!run.ready) reject(new Error(run.error || 'Collector exited before readiness'));
+    };
+    child.on('error', error => { clearTimeout(timer); run.running = false; run.error = error.message; reject(error); });
+    child.on('end', () => {
+      if (run.running) { clearTimeout(timer); run.running = false; if (!run.ready) reject(new Error(run.error || 'Collector stream ended before readiness')); }
     });
   });
   try {

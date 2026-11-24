@@ -3,7 +3,7 @@
 import http from 'node:http';
 import net from 'node:net';
 import { AGENT_PORT, HTTP_PORT, webUrls } from './config.ts';
-import { acceptsLocalHello, localObserver, localObserverHost, localViewAllows, noteObservedPid } from './local_observer.ts';
+import { acceptsLocalHello, initLocalObserver, localObserver, localObserverHost, localViewAllows, noteObservedPid } from './local_observer.ts';
 import { handleHttp } from './http/router.ts';
 import { sendHttpError } from './http/response_error.ts';
 import { ensureAdbReverse } from './scope_list.ts';
@@ -174,6 +174,7 @@ httpServer.on('upgrade', (req, socket, head) => {
 
 initializeHost();
 initializeOperations();
+await initLocalObserver();
 const bindAddress = localObserver ? '127.0.0.1' : '0.0.0.0';
 agentServer.listen(AGENT_PORT, bindAddress, () => log(`ADH Daemon agent TCP listening on ${bindAddress}:${AGENT_PORT}`));
 httpServer.listen(HTTP_PORT, bindAddress, () => {

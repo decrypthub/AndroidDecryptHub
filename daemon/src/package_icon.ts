@@ -1,11 +1,8 @@
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { adbExecBuffer } from './adb_wire.ts';
 import { catalogIcon, ensureCatalogIdentity } from './app_catalog.ts';
 import { apkAaptDumps } from './scope_list.ts';
 import { shQuote } from './sandbox_fs.ts';
 import { deviceIcon, deviceSerial } from './device_bridge.ts';
-
-const execFileP = promisify(execFile);
 const cache = new Map<string, { at: number; v: { body: Buffer; type: string } | null }>();
 const inflight = new Map<string, Promise<{ body: Buffer; type: string } | null>>();
 const NEG_TTL = 30_000;
@@ -15,10 +12,8 @@ function adbBase(serial = deviceSerial()): string[] {
 }
 
 async function adbOut(command: string, serial?: string): Promise<Buffer> {
-  const { stdout } = await execFileP('adb', [...adbBase(serial), 'exec-out', command], {
-    timeout: 20000, windowsHide: true, maxBuffer: 4 * 1024 * 1024, encoding: 'buffer',
-  });
-  return stdout as Buffer;
+  const { stdout } = await adbExecBuffer([...adbBase(serial), 'exec-out', command], { timeout: 20000, maxBuffer: 4 * 1024 * 1024 });
+  return stdout;
 }
 
 function imageType(body: Buffer): string {

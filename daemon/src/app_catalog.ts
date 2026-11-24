@@ -1,9 +1,6 @@
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { adbExec } from './adb_wire.ts';
 import { apkBadging, applicationLabel, pickBadgingIcon } from './scope_list.ts';
 import { deviceApplications, deviceSerial } from './device_bridge.ts';
-
-const execFileP = promisify(execFile);
 const PKG_RE = /^[a-zA-Z][a-zA-Z0-9_]*(?:\.[a-zA-Z0-9_]+)*$/;
 
 export interface CatalogApp {
@@ -27,9 +24,7 @@ function adbBase(serial = deviceSerial()): string[] {
 }
 
 async function adbShell(command: string, serial = deviceSerial()): Promise<string> {
-  const { stdout } = await execFileP('adb', [...adbBase(serial), 'shell', command], {
-    timeout: 20000, windowsHide: true, maxBuffer: 8 * 1024 * 1024,
-  });
+  const { stdout } = await adbExec([...adbBase(serial), 'shell', command], { timeout: 20000, maxBuffer: 8 * 1024 * 1024 });
   return String(stdout ?? '');
 }
 

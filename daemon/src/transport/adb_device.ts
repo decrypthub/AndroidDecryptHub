@@ -1,9 +1,8 @@
 import {armoredStdio} from './stdio_armor.ts';
-import { execFile,spawn } from 'node:child_process';
 import { Duplex } from 'node:stream';
-import { promisify } from 'node:util';
 import net from 'node:net';
 import { randomBytes,randomUUID } from 'node:crypto';
+import { adbExec,adbExecStream } from '../adb_wire.ts';
 import { DEVICE_BOOTSTRAP,DEVICE_SOCKET,DEVICE_STDIO_COMMAND,DeviceRpcClient,parseBootstrap,verifyHello,deviceFail,DeviceError,type DevicePeer } from '../device_protocol.ts';
 import { checkpoint,executionContext } from '../execution_context.ts';
 import type {DeviceConnection} from './device_transport.ts';
@@ -13,13 +12,12 @@ export type AdbRunner=(args:string[],options?:{timeout?:number;maxBuffer?:number
 export type AdbStdio=(args:string[])=>Duplex;
 export const realAdbStdio:AdbStdio=args=>{
   if(process.env.ADH_SKIP_ARTIFACT_LOAD==='1')deviceFail('TEST_ADAPTER_REQUIRED','tests must inject a stdio adapter');
-  const child=spawn(process.env.ADH_ADB_PATH||'adb',args,{windowsHide:true,stdio:['pipe','pipe','pipe']});
-  const stream=Duplex.from({readable:child.stdout,writable:child.stdin});child.stderr.resume();child.on('error',()=>stream.destroy(new DeviceError('ADB_FAILED','USB stdio relay failed')));child.on('close',()=>stream.destroy());stream.on('close',()=>{if(child.exitCode===null)child.kill();});return stream;
+  // 5037 协议流，不起 adb 进程（shell,v2 stdin/stdout 分包）
+  return adbExecStream(args);
 };
-const exec=promisify(execFile);
 export const realAdbRunner:AdbRunner=async(args,options={})=>{
   if(process.env.ADH_SKIP_ARTIFACT_LOAD==='1')deviceFail('TEST_ADAPTER_REQUIRED','tests must inject an ADB adapter; real devices are forbidden');
-  try{return (await exec(process.env.ADH_ADB_PATH||'adb',args,{timeout:options.timeout||10000,maxBuffer:options.maxBuffer||65536,windowsHide:true})).stdout;}
+  try{return (await adbExec(args,{timeout:options.timeout||10000})).stdout;}
   catch(error){throw new DeviceError('ADB_FAILED','ADB request failed; command output and credentials are not logged',(error as any).killed===true);}
 };
 export function parseAdbDevices(raw:string):AdbDevice[]{
