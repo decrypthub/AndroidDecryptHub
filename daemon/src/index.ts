@@ -174,14 +174,16 @@ httpServer.on('upgrade', (req, socket, head) => {
 
 // ---- boot -----------------------------------------------------------------
 
+await initLocalObserver();
 initializeHost();
 initializeOperations();
-await initLocalObserver();
 const bindAddress = localObserver ? '127.0.0.1' : '0.0.0.0';
-agentServer.listen(AGENT_PORT, bindAddress, () => log(`ADH Daemon agent TCP listening on ${bindAddress}:${AGENT_PORT}`));
+if(!localObserver?.fileBrowserOnly&&!localObserver?.demoApiSerial) agentServer.listen(AGENT_PORT, bindAddress, () => log(`ADH Daemon agent TCP listening on ${bindAddress}:${AGENT_PORT}`));
 httpServer.listen(HTTP_PORT, bindAddress, () => {
   if (localObserver) {
-    log(`Local observation: ${localObserver.model} · ${localObserver.package} PID ${localObserver.pid}`);
+    log(localObserver.fileBrowserOnly ? `Owned USB file browser: ${localObserver.model} · ${localObserver.package} (no Agent listener)`
+      : localObserver.demoApiSerial ? `Owned USB Demo API observation: ${localObserver.model} · ${localObserver.package}`
+      : `Local observation: ${localObserver.model} · ${localObserver.package} PID ${localObserver.pid}`);
     log(`ADH web viewer http://${localObserverHost}/${localObserver.package}`);
     return;
   }

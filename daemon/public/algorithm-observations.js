@@ -123,6 +123,26 @@
     return [...items.values()].sort((a,b) => a.name.localeCompare(b.name) || a.source.localeCompare(b.source));
   }
 
+  // Describe only already loaded metadata for the proven live session, never a preset/install receipt.
+  function sessionHookEvidence(records, pkg, sessionId) {
+    const groups = Object.fromEntries(Object.keys(hookGroups).map(key=>[key,{records:0,methods:new Map()}]));
+    if (pkg && sessionId) for (const record of records) {
+      if (record?.sessionId !== sessionId || (record.package && record.package !== pkg) ||
+          !Object.hasOwn(groups,record.category)) continue;
+      const group = groups[record.category];
+      group.records++;
+      const method = recordedMethod(record);
+      if (!method.member && !method.label) continue;
+      const key = JSON.stringify(method);
+      group.methods.set(key,{...method,count:(group.methods.get(key)?.count ?? 0)+1});
+    }
+    return Object.fromEntries(Object.entries(groups).map(([key,group])=>[key,{
+      records:group.records, uniqueEntries:group.methods.size,
+      methods:[...group.methods.values()].sort((a,b)=>b.count-a.count ||
+        a.className.localeCompare(b.className) || a.member.localeCompare(b.member) || a.label.localeCompare(b.label)).slice(0,32),
+    }]));
+  }
+
   function choiceGroups(items, labels, field, hidden, matches) {
     const groups = new Map(Object.entries(labels).map(([id,name]) => [id,{id,name,selected:0,total:0,items:[]}]));
     for (const item of items) {
@@ -160,6 +180,6 @@
     };
   }
 
-  scope.AdhAlgorithmObservations = {families, summarize, hookGroups, summarizeHooks, choiceGroups,
+  scope.AdhAlgorithmObservations = {families, summarize, hookGroups, summarizeHooks, sessionHookEvidence, choiceGroups,
     algorithmKey, hookKey, categoryKey, recordVisible, hookDisplayPreferences};
 })(globalThis);

@@ -86,6 +86,12 @@ export function pathOwnedByPackage(pkg: string, abs: string): boolean {
   return new RegExp(`^/data/app/(?:~~[^/]+/)?${esc}(?:-[^/]+)?(?:/|$)`).test(abs);
 }
 
+/** Any absolute device path. `..` and control characters stay refused. */
+export function confineDevicePath(raw: string): string {
+  try { return normalizeAbs(raw); }
+  catch { throw new Error('路径无效'); }
+}
+
 export function confineSandboxPath(pkg: string, raw: string): string {
   const p = assertPackage(pkg);
   const abs = normalizeAbs(raw);
@@ -304,6 +310,37 @@ function requireReal(pkg: string, parsed: ParsedSandbox, rawText: string): strin
     throw new Error(hint ? `读沙盒失败：${hint}` : '读沙盒失败');
   }
   return confineSandboxPath(pkg, parsed.real);
+}
+
+export async function listDevicePath(raw: string, deps: SandboxDeps = defaultDeps): Promise<SandboxListing> {
+  const abs = confineDevicePath(raw);
+  let text: string;
+  try { text = await deps.shell(sandboxListCommand(abs)); }
+  catch (e) { throw explainAdb(e); }
+  const parsed = parseSandboxOutput(text);
+  if (parsed.code) throw failCode(parsed.code, abs, '', 'dir');
+  if (!parsed.real) throw new Error('读目录失败');
+  confineDevicePath(parsed.real);
+  return { ok: true, path: abs, count: parsed.entries.length, truncated: parsed.truncated, entries: parsed.entries };
+}
+
+export async function readDevicePath(raw: string, deps: SandboxDeps = defaultDeps): Promise<SandboxRead> {
+  const abs = confineDevicePath(raw);
+  let text: string;
+  try { text = await deps.shell(sandboxStatCommand(abs)); }
+  catch (e) { throw explainAdb(e); }
+  const parsed = parseSandboxOutput(text);
+  if (parsed.code) throw failCode(parsed.code, abs, '', 'file');
+  if (!parsed.real) throw new Error('读文件失败');
+  const real = confineDevicePath(parsed.real);
+  const fsize = parsed.size ?? 0;
+  let buf: Buffer = Buffer.alloc(0);
+  if (fsize > 0) {
+    try { buf = await deps.execOut(sandboxReadCommand(real)); }
+    catch (e) { throw explainAdb(e); }
+    if (buf.length === 0) throw new Error('文件没有读出来');
+  }
+  return { ok: true, path: abs, size: buf.length, fsize, truncated: fsize > buf.length, b64: buf.toString('base64') };
 }
 
 export async function listSandboxDir(pkg: string, raw: string, deps: SandboxDeps = defaultDeps): Promise<SandboxListing> {

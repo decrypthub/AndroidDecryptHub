@@ -626,6 +626,8 @@ export interface Capture {
   /** Target package. Stamped at ingest so the record stays with the app after the process exits and its session is pruned. */
   package?: string;
   keyHex?: string; ivHex?: string; outHex?: string;
+  /** Absolute path for a file open/read/write. Empty when the agent did not resolve the descriptor. */
+  path?: string;
   /**
    * Identity of a native-hook record, lifted out of its own payload at ingest (NATIVE_HOOK /
    * NATIVE_HOOK_MEM only). `seq` is numbered PER HOOK, so pairing a register event with its memory

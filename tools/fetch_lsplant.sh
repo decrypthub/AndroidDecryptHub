@@ -123,8 +123,11 @@ grep -q 'adh_jni_exception_clear(env);' "$JH" || { echo "!! LSPlant exception-cl
 # ROM that ships the original name unchanged, behaviour is identical to upstream.
 JIT="$LSP/lsplant/src/main/jni/art/runtime/jit/jit_code_cache.hpp"
 if ! grep -q 'JitCacheCollection' "$JIT"; then
-  perl -0777 -pi -e 's/\n(public:\n    static bool Available)/\n    CREATE_MEM_HOOK_STUB_ENTRY("_ZN3art3jit12JitCodeCache12DoCollectionEPNS_6ThreadE", void,\n                               JitCacheCollection, (JitCodeCache *thiz, Thread *self), {\n                                   auto movements = GetJitMovements();\n                                   for (auto [target, backup] : movements) MoveObsoleteMethod(thiz, target, backup);\n                                   backup(thiz, self);\n                               });\n\n$1/s' "$JIT"
+  perl -0777 -pi -e 's/\n(public:\n    static bool (?:Available|Init))/\n    CREATE_MEM_HOOK_STUB_ENTRY("_ZN3art3jit12JitCodeCache12DoCollectionEPNS_6ThreadE", void,\n                               JitCacheCollection, (JitCodeCache *thiz, Thread *self), {\n                                   auto movements = GetJitMovements();\n                                   for (auto [target, backup] : movements) MoveObsoleteMethod(thiz, target, backup);\n                                   backup(thiz, self);\n                               });\n\n$1/s' "$JIT"
   perl -0777 -pi -e 's/HookSyms\(handler, GarbageCollectCache\)/HookSyms(handler, GarbageCollectCache, JitCacheCollection)/' "$JIT"
+fi
+if ! grep -q 'static bool Available' "$JIT"; then
+  perl -0777 -pi -e 's/(public:\n)/$1    static bool Available() {\n        return static_cast<bool>(GarbageCollectCache.backup) || static_cast<bool>(JitCacheCollection.backup);\n    }\n\n/s' "$JIT"
 fi
 grep -q 'JitCacheCollection' "$JIT" || { echo "!! LSPlant renamed JIT-cache symbol patch did not apply"; exit 1; }
 

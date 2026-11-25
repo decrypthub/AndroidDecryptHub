@@ -5,5 +5,6 @@ export interface DeviceConnection {
   peer:DevicePeer;rpc:DeviceRpcClient;clientId?:string;grantId?:string;
   tlsVersion?:string;
   usbMode?:'forward'|'stdio';
+  adbLink?:'usb'|'adb-tcp'|'unknown';
   close():Promise<{removed:boolean;confirmed:boolean;reason?:string}>;
 }

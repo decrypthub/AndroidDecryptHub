@@ -41,6 +41,7 @@
 struct CapRec {
     char func[24]; int inl; int n; int tid; long long ts_ns;
     unsigned long long conn;   // SSL* for SSL_read/SSL_write; 0 for every other capture
+    char path[240];            // absolute path for open/read/write; empty otherwise
     int nkey; int niv; unsigned char key[CAP_KEY]; unsigned char iv[CAP_IV];
     unsigned char data[CAP_BYTES];
 };
@@ -58,7 +59,7 @@ static long long g_cap_first_drop_ns = 0, g_cap_last_drop_ns = 0;   // best-effo
 static pthread_mutex_t g_cap_lock = PTHREAD_MUTEX_INITIALIZER;
 static void capture_keyed(const char *func, const unsigned char *in, int inl,
                           const unsigned char *key, int nkey, const unsigned char *iv, int niv,
-                          unsigned long long conn) {
+                          unsigned long long conn, const char *path) {
     if (inl <= 0 || !in) return;
     // Runs on the target's own crypto/TLS thread — must NEVER block or sleep here (any
     // injected latency is an ANR risk and a timing-based anti-debug surface). Count every
@@ -77,6 +78,11 @@ static void capture_keyed(const char *func, const unsigned char *in, int inl,
         strncpy(r->func, func, sizeof(r->func) - 1); r->func[sizeof(r->func)-1]=0;
         r->inl = inl; r->n = inl < CAP_BYTES ? inl : CAP_BYTES;
         r->tid = (int)gettid(); r->ts_ns = ts; r->conn = conn;
+        r->path[0] = 0;
+        if (path && path[0]) {
+            snprintf(r->path, sizeof(r->path), "%s", path);
+            for (char *s = r->path; *s; s++) if (*s == '\t' || *s == '\n' || *s == '\r') *s = ' ';
+        }
         r->nkey = 0; r->niv = 0;
         if (key && nkey > 0) { r->nkey = nkey < CAP_KEY ? nkey : CAP_KEY; memcpy(r->key, key, r->nkey); }
         if (iv && niv > 0)   { r->niv  = niv  < CAP_IV  ? niv  : CAP_IV;  memcpy(r->iv,  iv,  r->niv); }
@@ -93,13 +99,13 @@ static void capture_keyed(const char *func, const unsigned char *in, int inl,
 
 // Keyless form — every pre-existing caller (digest/TLS/file/sys wrappers, push_text) keeps using it.
 static void capture(const char *func, const unsigned char *in, int inl) {
-    capture_keyed(func, in, inl, NULL, 0, NULL, 0, 0);
+    capture_keyed(func, in, inl, NULL, 0, NULL, 0, 0, NULL);
 }
 // TLS records carry the SSL* so the host can concatenate one connection's plaintext.
 // The pointer is the same value Conscrypt passes into SSL_read / SSL_write (socket and
 // SSLEngine direct paths both end there). It is not a stable id across process restart.
 static void capture_conn(const char *func, const unsigned char *in, int inl, const void *ssl) {
-    capture_keyed(func, in, inl, NULL, 0, NULL, 0, (unsigned long long)(uintptr_t)ssl);
+    capture_keyed(func, in, inl, NULL, 0, NULL, 0, (unsigned long long)(uintptr_t)ssl, NULL);
 }
 
 // Empty the ring (used by the one-shot probes in place of the old `g_ncaps = 0`). Discarded
@@ -139,6 +145,11 @@ static size_t emit_caprec(char *out, size_t len, size_t cap, const struct CapRec
     }
     if (r->conn)
         len += snprintf(out + len, cap > len ? cap - len : 0, ",\"conn\":\"0x%llx\"", r->conn);
+    if (r->path[0]) {
+        char esc[480];
+        json_escape(r->path, esc, sizeof(esc));
+        len += snprintf(out + len, cap > len ? cap - len : 0, ",\"path\":\"%s\"", esc);
+    }
     len += snprintf(out + len, cap > len ? cap - len : 0, "}");
     return len;
 }
@@ -213,7 +224,7 @@ static EVP_CipherUpdate_t g_evp_cipher_orig = NULL;
 // The key was seen at init, the payload is here: emit them on ONE record.
 static int my_EVP_CipherUpdate(void *ctx, unsigned char *out, int *outl, const unsigned char *in, int inl) {
     struct KeyBlob blob;
-    if (key_lookup(ctx, &blob)) capture_keyed("EVP_CipherUpdate", in, inl, blob.key, blob.nkey, blob.iv, blob.niv, 0);
+    if (key_lookup(ctx, &blob)) capture_keyed("EVP_CipherUpdate", in, inl, blob.key, blob.nkey, blob.iv, blob.niv, 0, NULL);
     else capture("EVP_CipherUpdate", in, inl);
     return g_evp_cipher_orig(ctx, out, outl, in, inl);
 }
@@ -497,23 +508,44 @@ static rw_t g_orig_fwrite_sys = NULL;
 
 // arm64 ABI always passes a 3rd arg in a register even when the call site omits it
 // (open()/openat() only read it when O_CREAT/O_TMPFILE is set) — always read+forward it.
+static void io_path(int fd, const char *fallback, char *out, size_t n) {
+    char link[32];
+    ssize_t got = -1;
+    if (n) out[0] = 0;
+    if (fd >= 0) {
+        snprintf(link, sizeof(link), "/proc/self/fd/%d", fd);
+        got = readlink(link, out, n - 1);
+    }
+    if (got > 0) { out[got] = 0; return; }
+    if (fallback && fallback[0]) snprintf(out, n, "%s", fallback);
+    else if (fd >= 0) snprintf(out, n, "fd %d", fd);
+}
+static void capture_io(const char *func, int fd, const char *fallback, const unsigned char *bytes, int n) {
+    char path[240];
+    if (n <= 0 || !bytes) return;
+    io_path(fd, fallback, path, sizeof(path));
+    if (strncmp(path, "socket:", 7) == 0) return;
+    capture_keyed(func, bytes, n, NULL, 0, NULL, 0, 0, path);
+}
 static int my_open(const char *pathname, int flags, ...) {
     va_list ap; va_start(ap, flags); mode_t mode = (mode_t)va_arg(ap, int); va_end(ap);
-    if (pathname) capture("open", (const unsigned char *)pathname, (int)strlen(pathname));
-    return g_orig_open(pathname, flags, mode);
+    int fd = g_orig_open(pathname, flags, mode);
+    if (fd >= 0 && pathname) capture_io("open", fd, pathname, (const unsigned char *)pathname, (int)strlen(pathname));
+    return fd;
 }
 static int my_openat(int dirfd, const char *pathname, int flags, ...) {
     va_list ap; va_start(ap, flags); mode_t mode = (mode_t)va_arg(ap, int); va_end(ap);
-    if (pathname) capture("openat", (const unsigned char *)pathname, (int)strlen(pathname));
-    return g_orig_openat(dirfd, pathname, flags, mode);
+    int fd = g_orig_openat(dirfd, pathname, flags, mode);
+    if (fd >= 0 && pathname) capture_io("openat", fd, pathname, (const unsigned char *)pathname, (int)strlen(pathname));
+    return fd;
 }
 static ssize_t my_read(int fd, void *buf, size_t count) {
     ssize_t ret = g_orig_read(fd, buf, count);
-    if (ret > 0) capture("read", (const unsigned char *)buf, (int)ret);
+    if (ret > 0) capture_io("read", fd, NULL, (const unsigned char *)buf, (int)ret);
     return ret;
 }
 static ssize_t my_write(int fd, const void *buf, size_t count) {
-    if (count > 0) capture("write", (const unsigned char *)buf, (int)count);
+    if (count > 0) capture_io("write", fd, NULL, (const unsigned char *)buf, (int)count);
     return g_orig_fwrite_sys(fd, (void *)buf, count);
 }
 
@@ -543,15 +575,14 @@ static long my_syscall(long number, ...) {
     long a1 = va_arg(ap, long), a2 = va_arg(ap, long), a3 = va_arg(ap, long);
     long a4 = va_arg(ap, long), a5 = va_arg(ap, long), a6 = va_arg(ap, long);
     va_end(ap);
+    long ret = g_orig_syscall(number, a1, a2, a3, a4, a5, a6);
     if (number == __NR_openat) {
         const char *path = (const char *)a2;
-        if (path) capture("openat", (const unsigned char *)path, (int)strlen(path));
+        if (ret >= 0 && path) capture_io("openat", (int)ret, path, (const unsigned char *)path, (int)strlen(path));
     } else if (number == __NR_write) {
-        if (a3 > 0) capture("write", (const unsigned char *)a2, (int)a3);
-    }
-    long ret = g_orig_syscall(number, a1, a2, a3, a4, a5, a6);
-    if (number == __NR_read && ret > 0) {
-        capture("read", (const unsigned char *)a2, (int)ret);
+        if (a3 > 0) capture_io("write", (int)a1, NULL, (const unsigned char *)a2, (int)a3);
+    } else if (number == __NR_read && ret > 0) {
+        capture_io("read", (int)a1, NULL, (const unsigned char *)a2, (int)ret);
     }
     return ret;
 }
@@ -572,11 +603,11 @@ static write_chk_t g_orig_write_chk = NULL;
 
 static ssize_t my_read_chk(int fd, void *buf, size_t count, size_t buflen) {
     ssize_t ret = g_orig_read_chk(fd, buf, count, buflen);
-    if (ret > 0) capture("read", (const unsigned char *)buf, (int)ret);
+    if (ret > 0) capture_io("read", fd, NULL, (const unsigned char *)buf, (int)ret);
     return ret;
 }
 static ssize_t my_write_chk(int fd, const void *buf, size_t count, size_t buflen) {
-    if (count > 0) capture("write", (const unsigned char *)buf, (int)count);
+    if (count > 0) capture_io("write", fd, NULL, (const unsigned char *)buf, (int)count);
     return g_orig_write_chk(fd, buf, count, buflen);
 }
 

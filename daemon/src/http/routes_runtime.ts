@@ -11,7 +11,8 @@ import { nativeHookAll, nativeUnhookAll } from '../native_hook_all.ts';
 import { normalizeThrottleMs, nativeObservationPayload, ensureNativeObservationSupport, parseMemWindows } from '../native_hook_args.ts';
 import { agentPing, hookEngineSelftest, protocolSelfTest } from '../agent_probe.ts';
 import { listDeviceDir, readDeviceFile } from '../fs_browse.ts';
-import { listSandboxDir, pathInSandbox, readSandboxFile, normalizeAbs } from '../sandbox_fs.ts';
+import { listDevicePath, listSandboxDir, pathInSandbox, readDevicePath, readSandboxFile, normalizeAbs } from '../sandbox_fs.ts';
+import { localObserver } from '../local_observer.ts';
 import { jniFieldDigest } from '../jni_field_digest.ts';
 import { syscallTraceStart, syscallTraceDigest, syscallTraceStop } from '../syscall_trace.ts';
 import { liveDisasm , assertCallableAddress } from '../memory.ts';
@@ -388,7 +389,7 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
           try { return send(200, await listDeviceDir(sid, path)); }
           catch (e) { return send(502, { ok: false, error: (e as Error).message }); }
         }
-        try { return send(200, await listSandboxDir(pkg, path)); }
+        try { return send(200, await (localObserver ? listDevicePath(path) : listSandboxDir(pkg, path))); }
         catch (e) { return send(502, { ok: false, error: (e as Error).message }); }
       }
       const sid = pickSid(url.searchParams.get('session'));
@@ -412,7 +413,7 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
           } catch (e) { return send(502, { ok: false, error: (e as Error).message }); }
         }
         try {
-          const r = await readSandboxFile(pkg, String(path));
+          const r = await (localObserver ? readDevicePath(String(path)) : readSandboxFile(pkg, String(path)));
           const text = Buffer.from(r.b64, 'base64').toString('utf8');
           return send(200, { ...r, text });
         } catch (e) { return send(502, { ok: false, error: (e as Error).message }); }

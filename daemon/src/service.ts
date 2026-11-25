@@ -1212,6 +1212,7 @@ export function startCaptureLoop(sid: string, opts?: { skipArm?: boolean }) {
         broadcast('capture.new', {
           id: entry.id, sessionId: sid, package: pkg, source: entry.source, category: entry.category,
           algo: entry.algo, op: entry.op, func: entry.func, preview: entry.preview, inl: entry.inl, outl,
+          ...(entry.path ? { path: entry.path } : {}),
           hasKey: !!entry.keyHex, tid: entry.tid, ts: entry.ts,
           ...(entry.category === 'crypto' ? { view: cryptoView(entry) } : {}),
         });
@@ -1233,11 +1234,14 @@ export function startCaptureLoop(sid: string, opts?: { skipArm?: boolean }) {
         if (c.hex && recentJavaIn.has(c.hex)) continue;   // already captured richly at the Java layer
         const { algo, op } = classify(c.func);
         const category = categoryOf(c.func);
+        const filePath = typeof c.path === 'string' && c.path ? c.path : '';
+        if (category === 'file' && filePath.startsWith('socket:')) continue;
         const entry: Capture = {
           id: ++capSeq, sessionId: sid, package: pkg, source: 'native', func: c.func, algo, op,
           category,
           inl: c.inl, tid: c.tid, tsNs: c.tsNs, ts: now,
-          hex: c.hex, preview: previewForCapture(c.func, c.hex),
+          hex: c.hex, preview: filePath && category === 'file' ? filePath : previewForCapture(c.func, c.hex),
+          ...(filePath ? { path: filePath } : {}),
           // Symmetric captures carry the key/IV the agent joined at EVP_CipherInit_ex; the Java
           // reporter path has always sent these, the native path only since that join exists.
           ...(c.key ? { keyHex: c.key } : {}), ...(c.iv ? { ivHex: c.iv } : {}),

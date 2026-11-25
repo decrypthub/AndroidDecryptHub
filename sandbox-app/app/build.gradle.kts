@@ -23,6 +23,16 @@ android {
         debug {
             isDebuggable = true
         }
+        create("apiLab") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".apilab"
+            matchingFallbacks += listOf("debug")
+        }
+        create("fileLab") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".filelab"
+            matchingFallbacks += listOf("debug")
+        }
     }
 
     compileOptions {

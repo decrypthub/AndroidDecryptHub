@@ -134,6 +134,41 @@ test('Hook inventory groups only symbolic record metadata and separates equal na
   assert.equal(api.hookKey({category:'net',func:'<script>alert(0)</script>'}),undefined);
 });
 
+test('function evidence isolates the exact live session and excludes payloads and other packages', () => {
+  const api = context.AdhAlgorithmObservations;
+  const a='com.adh.qa.alpha', b='com.adh.qa.beta';
+  const alpha={package:a,sessionId:'a-now', category:'crypto', source:'java', func:'qa.Alpha.digest'};
+  const records=[
+    alpha, {...alpha, detail:'do not expose payloads'},
+    {...alpha,sessionId:'a-old',func:'qa.Alpha.old'},
+    {...alpha,sessionId:undefined,func:'qa.Alpha.unverified'},
+    {...alpha,package:b,func:'qa.Beta.mismatched'},
+    {...alpha,category:'file',func:'qa.Alpha.read'},
+    {...alpha,category:'system',func:'not a symbol'},
+    {...alpha,package:b,sessionId:'b-now',func:'qa.Beta.digest'},
+  ];
+  const out=JSON.parse(JSON.stringify(api.sessionHookEvidence(records,a,'a-now')));
+  assert.deepEqual(out.crypto,{records:2,uniqueEntries:1,methods:[
+    {source:'java',className:'qa.Alpha',member:'digest',label:'',count:2},
+  ]});
+  assert.equal(out.file.methods[0].member,'read');
+  assert.deepEqual(out.system,{records:1,uniqueEntries:0,methods:[]});
+  assert.equal(out.net.records,0);
+  assert.equal(api.sessionHookEvidence(records,b,'b-now').crypto.methods[0].className,'qa.Beta');
+  assert.equal(api.sessionHookEvidence(records,a,'').crypto.records,0);
+});
+
+test('function evidence reports the full entry count and bounds the rendered list', () => {
+  const api = context.AdhAlgorithmObservations;
+  const rows=Array.from({length:36},(_,i)=>({
+    category:'system',sessionId:'s-main',source:'native',func:'routine_'+i,
+  }));
+  const group=api.sessionHookEvidence(rows,'com.adh.qa.alpha','s-main').system;
+  assert.equal(group.records,36);
+  assert.equal(group.uniqueEntries,36);
+  assert.equal(group.methods.length,32);
+});
+
 test('Hook display is default-on, persists per package, and resets only the selected package', () => {
   const api = context.AdhAlgorithmObservations;
   const entries = new Map<string,string>();
