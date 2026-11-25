@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { appearance, setAppearance, type Appearance } from '../appearance';
+import { appearance, setAppearance, isDark, type Appearance } from '../appearance';
 import { ref, computed, watch, onMounted } from 'vue';
 import {
   store, liveSession, appSessions, hiddenHooks, setHidden, resetHidden,
@@ -13,7 +13,7 @@ import {
 
 import type { Component } from 'vue';
 import {
-  LockClosedOutline, EyeOutline, LocateOutline, ScanOutline, OptionsOutline, ServerOutline,
+  SearchOutline, LockClosedOutline, EyeOutline, LocateOutline, ScanOutline, OptionsOutline, ServerOutline,
 } from '@vicons/ionicons5';
 
 // ---- 页内子导航 ----
@@ -110,6 +110,32 @@ const hookList = computed<HookEntry[]>(() => {
     (!hookCategory.value || h.category === hookCategory.value) &&
     (!q || h.name.toLowerCase().includes(q)));
 });
+// Display-only preferences: never change capture configuration.
+const grouping = computed(() => obsView.value === 'algo');
+const search = computed({
+  get: () => grouping.value ? obsQuery.value : hookQuery.value,
+  set: (v: string) => { if (grouping.value) obsQuery.value = v; else hookQuery.value = v; },
+});
+const family = computed({
+  get: () => grouping.value ? obsFamily.value : hookCategory.value,
+  set: (v: string) => { if (grouping.value) obsFamily.value = v; else hookCategory.value = v; },
+});
+const familyOptions = computed(() => [
+  { label: '全部类别', value: '' },
+  ...Object.entries(grouping.value ? ALGO_FAMILIES : HOOK_GROUPS).map(([value, label]) => ({ value, label })),
+]);
+const shownRows = computed(() => grouping.value
+  ? algoList.value.map(e => ({key:e.key, name:e.name, note:ALGO_FAMILIES[e.family as keyof typeof ALGO_FAMILIES] ?? e.family, count:e.count}))
+  : hookList.value.map(h => ({key:h.key, name:h.name, note:[HOOK_GROUPS[h.category as keyof typeof HOOK_GROUPS] ?? h.category,h.source].filter(Boolean).join(' · '), count:h.count})));
+const switchColors = computed(() => ({
+  railColor: isDark.value ? '#50565d' : '#b0b5bb', railColorActive: isDark.value ? '#417761' : '#346851',
+  buttonColor:'#fff', railBorderRadiusSmall:'12px', buttonBorderRadiusSmall:'50%',
+}));
+const radioColors = computed(() => ({
+  buttonColor:'var(--surface)', buttonColorActive:'var(--ink)', buttonTextColorActive:'var(--bg)',
+  buttonTextColorHover:'var(--muted)', buttonBorderColor:'var(--line)', buttonBorderColorActive:'var(--ink)',
+}));
+const checkColors = computed(() => ({ checkMarkColor: isDark.value ? '#111315' : '#fff' }));
 const catKey = (cat: string) => categoryKey(cat) ?? '';
 const catShown = (cat: string) => !hiddenHooks.has(catKey(cat));
 function toggleCategory(cat: string, show: boolean) { setHidden(catKey(cat), show); }
@@ -172,7 +198,7 @@ watch(() => store.chosenPkg, () => { void loadFamilies(); void loadRadar(); });
     <aside class="set-sidebar">
       <h2>设置</h2>
       <nav class="set-nav">
-        <button v-for="p in PAGES" :key="p.key" type="button" :aria-pressed="page === p.key" @click="page = p.key">
+        <button v-for="p in PAGES" :key="p.key" type="button" :aria-label="p.label" :title="p.label" :aria-pressed="page === p.key" @click="page = p.key">
           <n-icon class="set-nav-icon" size="16" :component="PAGE_ICONS[p.key]" />
           <span class="set-nav-label">{{ p.label }}</span>
         </button>
@@ -182,7 +208,7 @@ watch(() => store.chosenPkg, () => { void loadFamilies(); void loadRadar(); });
       <div class="set-header">
         <div>
           <h3>{{ pageTitle }}</h3>
-          <p class="set-app"><span>APP <strong>{{ store.chosenPkg || '未选择应用' }}</strong></span></p>
+          <p v-if="page === 'records'" class="rec-scope">仅调整当前应用在此浏览器中的显示，不影响采集。</p><p v-else class="set-app"><span>APP <strong>{{ store.chosenPkg || '未选择应用' }}</strong></span></p>
         </div>
       </div>
       <div class="set-main">
@@ -212,71 +238,41 @@ watch(() => store.chosenPkg, () => { void loadFamilies(); void loadRadar(); });
           </div>
         </section>
 
-        <section v-else-if="page === 'records'" class="set-page">
-          <fieldset class="set-record-controls">
-            <legend>记录类别</legend>
-            <label v-for="(label, cat) in HOOK_GROUPS" :key="cat">
-              <input type="checkbox" :checked="catShown(cat)" @change="toggleCategory(cat, !catShown(cat))" />{{
-                label }}</label>
-          </fieldset>
-          <div class="set-observation-nav">
-            <button type="button" class="set-small-button" :aria-pressed="obsView === 'algo'"
-              @click="obsView = 'algo'">按算法</button>
-            <button type="button" class="set-small-button" :aria-pressed="obsView === 'hook'"
-              @click="obsView = 'hook'">按 Hook</button>
-            <span class="set-family-count">{{ obsView === 'algo' ? algoList.length : hookList.length }} 项</span>
-            <button type="button" class="set-small-button" :disabled="!hiddenHooks.size"
-              @click="resetAll">恢复全部显示</button>
+        <section v-else-if="page === 'records'" class="record-prefs" aria-label="记录显示偏好">
+          <div class="rec-categories" role="group" aria-labelledby="categories-label">
+            <h4 id="categories-label">记录类别</h4>
+            <div class="rec-checks">
+              <n-checkbox v-for="(label, cat) in HOOK_GROUPS" :key="cat" :checked="catShown(cat)"
+                :theme-overrides="checkColors" @update:checked="toggleCategory(cat, $event)">{{ label }}</n-checkbox>
+            </div>
           </div>
-          <template v-if="obsView === 'algo'">
-            <div class="set-observation-filters">
-              <input v-model="obsQuery" placeholder="算法、类或方法" />
-              <select v-model="obsFamily">
-                <option value="">全部类别</option>
-                <option v-for="(label, key) in ALGO_FAMILIES" :key="key" :value="key">{{ label }}</option>
-              </select>
+          <div class="rec-heading">
+            <h4>显示规则</h4>
+            <n-button v-if="hiddenHooks.size" text size="small" @click="resetAll">恢复全部显示</n-button>
+          </div>
+          <div class="rec-tools">
+            <n-radio-group v-model:value="obsView" name="record-group" size="small" aria-label="显示规则分组" :theme-overrides="radioColors">
+              <n-radio-button value="algo">按算法</n-radio-button><n-radio-button value="hook">按 Hook</n-radio-button>
+            </n-radio-group>
+            <n-input v-model:value="search" size="small" clearable class="rec-search"
+              :input-props="{ 'aria-label': '搜索显示规则' }" :placeholder="grouping ? '搜索算法或方法' : '搜索 Hook'">
+              <template #prefix><n-icon :component="SearchOutline" /></template>
+            </n-input>
+            <n-select v-model:value="family" size="small" aria-label="筛选类别" class="rec-select" :options="familyOptions" />
+          </div>
+          <div class="rec-table">
+            <div class="rec-columns" aria-hidden="true"><span>{{ grouping ? '算法' : 'Hook' }}</span><span>记录数</span><span>显示</span></div>
+            <div v-for="row in shownRows" :key="row.key" class="rec-line">
+              <div class="rec-identity"><strong>{{ row.name }}</strong><small>{{ row.note }}</small></div>
+              <span class="rec-count" :aria-label="row.count + ' 条记录'">{{ row.count }}</span>
+              <n-switch size="small" :value="!hiddenHooks.has(row.key)" :theme-overrides="switchColors"
+                :aria-label="'显示 ' + row.name" @update:value="setHidden(row.key, $event)" />
             </div>
-            <div class="set-choice-group">
-              <div class="set-group-head">
-                <h4>已观察算法</h4><span class="set-group-count">{{ algoList.length }} 项</span>
-              </div>
-              <div class="set-group-items">
-                <label v-for="e in algoList" :key="e.key" class="set-toggle-row">
-                  <span class="lab"><b>{{ e.name }}</b><span>{{ ALGO_FAMILIES[e.family as keyof typeof ALGO_FAMILIES] ??
-                    e.family }} · {{ e.count }} 条</span></span>
-                  <span class="set-switch"><input type="checkbox" :checked="!hiddenHooks.has(e.key)"
-                      @change="setHidden(e.key, hiddenHooks.has(e.key))" /><span class="slider"></span></span>
-                </label>
-                <div v-if="!algoList.length" class="set-observation-empty">{{ appRecords.length ? '没有匹配的已观察算法。' :
-                  '还没有记录可归纳。' }}</div>
-              </div>
+            <div v-if="!shownRows.length" class="rec-empty" role="status">
+              <span>{{ search || family ? '没有匹配的记录' : '暂无已观察到的' + (grouping ? '算法' : 'Hook') }}</span>
+              <n-button v-if="search || family" text size="small" @click="search = ''; family = ''">清除筛选</n-button>
             </div>
-          </template>
-          <template v-else>
-            <div class="set-observation-filters">
-              <input v-model="hookQuery" placeholder="按名称搜索 Hook" />
-              <select v-model="hookCategory">
-                <option value="">全部类别</option>
-                <option v-for="(label, key) in HOOK_GROUPS" :key="key" :value="key">{{ label }}</option>
-              </select>
-            </div>
-            <div class="set-choice-group">
-              <div class="set-group-head">
-                <h4>已观察 Hook</h4><span class="set-group-count">{{ hookList.length }} 项</span>
-              </div>
-              <div class="set-group-items">
-                <label v-for="h in hookList" :key="h.key" class="set-toggle-row">
-                  <span class="lab"><b class="mono">{{ h.name }}</b><span>{{ HOOK_GROUPS[h.category as keyof typeof
-                    HOOK_GROUPS] ?? h.category }}{{ h.source ? ' · ' + h.source : '' }} · {{ h.count }} 条</span></span>
-                  <span class="set-switch"><input type="checkbox" :checked="!hiddenHooks.has(h.key)"
-                      @change="setHidden(h.key, hiddenHooks.has(h.key))" /><span class="slider"></span></span>
-                </label>
-                <div v-if="!hookList.length" class="set-observation-empty">{{ appRecords.length ? '没有匹配的 Hook。' :
-                  '还没有记录可归纳。' }}</div>
-              </div>
-            </div>
-          </template>
-          <p class="set-status">勾选即时生效，按应用保存在此浏览器。</p>
+          </div>
         </section>
 
         <section v-else-if="page === 'hooks'" class="set-page">
@@ -380,3 +376,29 @@ watch(() => store.chosenPkg, () => { void loadFamilies(); void loadRadar(); });
     </div>
   </div>
 </template>
+
+<style scoped>
+.rec-scope{margin:4px 0 0;color:var(--muted);font-size:12px;line-height:1.6}
+.record-prefs{width:100%;max-width:740px;container-type:inline-size;color:var(--ink);font-size:14px}
+.record-prefs h4{margin:0;font-size:14px;font-weight:620;line-height:1.5;color:var(--ink);letter-spacing:0}
+.rec-categories,.rec-heading,.rec-tools,.rec-checks{display:flex;align-items:center}
+.rec-categories{gap:24px;flex-wrap:wrap;padding:3px 0 22px;border-bottom:1px solid var(--line-soft)}
+.rec-checks{gap:8px 18px;flex-wrap:wrap}.rec-categories h4{white-space:nowrap}
+.rec-heading{min-height:36px;margin:14px 0 7px;justify-content:space-between}
+.rec-tools{gap:8px;margin-bottom:18px;flex-wrap:wrap}
+.rec-tools .n-radio-group{flex:none}.rec-search{margin-left:auto;max-width:245px;min-width:0;flex:1 1 120px}
+.rec-select{flex:0 0 124px;min-width:0}
+.rec-columns,.rec-line{display:grid;grid-template-columns:minmax(0,1fr) 60px 48px;gap:20px;align-items:center}
+.rec-columns{font-size:12px;color:var(--muted);padding:7px 4px 8px;border-bottom:1px solid var(--line)}
+.rec-line{padding:12px 4px;border-bottom:1px solid var(--line-soft)}
+.rec-columns>:not(:first-child),.rec-count,.rec-line>.n-switch{justify-self:end}
+.rec-identity{min-width:0;display:grid;gap:3px}.rec-identity strong{font-size:14px;font-weight:600;overflow-wrap:anywhere;line-height:1.5}
+.rec-identity small,.rec-count{color:var(--muted);font-size:12px}.rec-count{font-variant-numeric:tabular-nums}
+.rec-empty{display:flex;justify-content:center;align-items:center;gap:12px;padding:26px 0;color:var(--muted)}
+@container(max-width:510px){
+ .rec-categories{align-items:flex-start;flex-direction:column;gap:9px;padding-bottom:14px}
+ .rec-tools{display:grid;grid-template-columns:minmax(0,1fr) minmax(106px,38%);gap:8px}
+ .rec-tools .n-radio-group{grid-column:1/-1}.rec-search,.rec-select{width:100%;max-width:none}
+ .rec-checks{gap:8px 12px}.rec-columns,.rec-line{grid-template-columns:minmax(0,1fr) 42px 40px;gap:9px}
+}
+</style>
