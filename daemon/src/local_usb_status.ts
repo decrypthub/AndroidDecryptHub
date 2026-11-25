@@ -1,4 +1,4 @@
-import { OWN_API_DEMO_PACKAGE, usesDemoExternal, type LocalObserver } from './local_observer.ts';
+import { OWN_API_DEMO_PACKAGE, OWN_DEMO_PACKAGE, usesDemoExternal, type LocalObserver } from './local_observer.ts';
 import { checkAdbLink, parseAdbDevices, realAdbRunner, type AdbRunner } from './transport/adb_device.ts';
 
 export type UsbLinkState = 'online' | 'disconnected' | 'offline' | 'unauthorized' | 'unknown';
@@ -19,7 +19,7 @@ export async function localUsbLink(serial:string|undefined,run:AdbRunner=realAdb
 
 // Only the explicitly configured, self-owned Demo may browse files without an Agent session.
 export function hasIndependentDemoFiles(o:LocalObserver){
-  return o.package==='com.adh.sandbox'&&!!o.usbSerial&&o.ownFilesSerial===o.usbSerial;
+  return o.package===OWN_DEMO_PACKAGE&&!!o.usbSerial&&o.ownFilesSerial===o.usbSerial;
 }
 
 /** A package listing is metadata, not permission to open files or an Agent session. */

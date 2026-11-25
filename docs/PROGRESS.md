@@ -6,6 +6,12 @@
 - Host 现在按 crypto/file/sys 分族裁决：全模块 crypto 扫描缺 crypto 符号仍 fail-loud；显式 file/sys 模块缺单个符号是 `partial`，但该类一个都没装上仍失败。日志直接带 `missing=file.openat`，不再只给 `30/31`。
 - PGP110 / `aa165071` 实测重连后：`ok=true installed=30/31 missing=file.openat`。新增 4 条 verdict 单测（先红后绿）；该修复只改 Host 判定与展示，不改 agent 钩子行为。
 
+## 2026-11-25 host CI 恢复执行到真实门禁
+
+- `adb_wire` 假 adb server 测试改用系统临时目录并保证关闭，Linux runner 不再停在 Unit tests。
+- v4.49 门禁改读 `agent_cmds.c` 的 dispatch 与 `ADH_AGENT_OPS`，本机重跑识别 39 个 agent op 且 MCP 可达。自有 Demo 包名集中到 `local_observer.ts` 的 `OWN_DEMO_PACKAGE` 声明；其它产品源码出现同一包名仍按红线失败。
+- 验证：`daemon` typecheck、619 项 host 测试（599 pass / 20 skip）、`tools/verify_v87_mcp_operability.sh` PASS。未跑 device 验收，本轮不改设备行为。
+
 ## 2026-11-23 面板上直接选择、查看和注入应用
 
 - 应用菜单先列手机注入范围里的应用和当前已连上的进程。点「加载应用列表」才展开已安装应用。勾选只加入或移出一个应用，并以手机读回的范围为准；没连上的显示「待启动」，不在这里重启应用。
