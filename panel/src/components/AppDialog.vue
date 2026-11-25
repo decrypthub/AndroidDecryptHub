@@ -1,14 +1,19 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
-import { CloseOutline } from '@vicons/ionicons5';
+import { computed, ref, watch } from 'vue';
+import { NModal } from 'naive-ui';
+import { CloseOutline, SearchOutline } from '@vicons/ionicons5';
 import { store, choosePackage } from '../store';
 import { appIconUrl, scopeAdd, scopeRemove, appControl, observePackage } from '../api';
 
+const props = defineProps<{ show: boolean }>();
 const emit = defineEmits<{ close: [] }>();
 const tab = ref<'user' | 'system' | 'injected'>('user');
 const q = ref('');
 const toastMsg = ref('');
 
+watch(() => props.show, open => {
+  if (open) { q.value = ''; tab.value = 'user'; toastMsg.value = ''; }
+});
 const tabs = [['user', '应用'], ['system', '系统'], ['injected', '已注入']] as const;
 
 const apps = computed(() => {
@@ -53,8 +58,8 @@ const canControl = computed(() => store.scope.has(store.chosenPkg));
 </script>
 
 <template>
-  <div class="modal-mask show" @click.self="emit('close')">
-    <div class="app-dialog show">
+  <n-modal :show="show" @update:show="!$event && emit('close')">
+    <div class="app-dialog show" role="dialog" aria-modal="true" aria-label="应用">
       <aside class="app-dialog-side">
         <h2>应用</h2>
         <button v-for="[k, label] in tabs" :key="k" type="button" :aria-pressed="tab === k"
@@ -77,12 +82,14 @@ const canControl = computed(() => store.scope.has(store.chosenPkg));
               <button type="button" @click="control('restart')">重启</button>
               <button type="button" @click="control('stop')">结束</button>
             </template>
-            <button type="button" class="set-close-x" @click="emit('close')">
+            <n-button quaternary circle aria-label="关闭应用窗口" @click="emit('close')">
               <n-icon size="14" :component="CloseOutline" />
-            </button>
+            </n-button>
           </div>
         </div>
-        <input v-model="q" class="app-menu-search" placeholder="搜索包名 / 名称" />
+        <div class="dialog-search"><n-input v-model:value="q" clearable placeholder="搜索名称或包名" :input-props="{ 'aria-label': '搜索应用' }">
+          <template #prefix><n-icon :component="SearchOutline" /></template>
+        </n-input></div>
         <div class="app-choices">
           <div v-if="toastMsg" class="app-empty">{{ toastMsg }}</div>
           <div v-for="a in apps" :key="a.package" class="app-row">
@@ -109,5 +116,5 @@ const canControl = computed(() => store.scope.has(store.chosenPkg));
         </div>
       </div>
     </div>
-  </div>
+  </n-modal>
 </template>

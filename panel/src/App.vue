@@ -2,7 +2,7 @@
 import { useAppearance, isDark } from './appearance';
 useAppearance();
 import { computed } from 'vue';
-import { darkTheme, type GlobalThemeOverrides } from 'naive-ui';
+import { darkTheme, NAlert, type GlobalThemeOverrides } from 'naive-ui';
 import type { Component } from 'vue';
 import {
   LockClosedOutline, HardwareChipOutline, WifiOutline, FolderOutline, CubeOutline,
@@ -52,6 +52,8 @@ const chosenApp = computed(() => store.apps.find(a => a.package === store.chosen
 const appLabel = computed(() => chosenApp.value?.label || (store.chosenPkg ? '当前应用' : '未选择 APP'));
 const appInitial = computed(() => (appLabel.value[0] ?? '?'));
 
+const boardOptions = [...NAV.map(({ key: value, label }) => ({ value, label })), { value: 'settings', label: '设置' }];
+
 function toggleRail() {
   savePanelDisplay({ ...panelDisplay, rail: !panelDisplay.rail });
 }
@@ -67,7 +69,15 @@ const themeOverrides = computed<GlobalThemeOverrides>(() => {
       cardColor:paper, modalColor:paper, popoverColor:paper, inputColor:paper, borderColor:border,
       dividerColor:isDark.value?'#282d32':'#e7e8ea', borderRadius:'5px', fontSize:'13px' },
     Button:{textColorPrimary:paper,textColorHoverPrimary:paper,textColorPressedPrimary:paper},
-    Radio:{buttonBorderColor:border}
+    Radio: {
+      buttonColor:paper, buttonColorActive:fg, buttonTextColorActive:paper, buttonTextColorHover:fg,
+      buttonBorderColor:border, buttonBorderColorActive:fg,
+    },
+    Checkbox: { checkMarkColor:paper },
+    Switch: {
+      railColor:isDark.value?'#50565d':'#9bA1a7', railColorActive:isDark.value?'#417761':'#346851',
+      buttonColor:'#fff',
+    },
   };
 });
 </script>
@@ -80,32 +90,30 @@ const themeOverrides = computed<GlobalThemeOverrides>(() => {
         <span class="hdr-mark"><img src="/raven.svg" alt=""></span>
         <span class="side-title">ADH</span>
       </div>
-      <nav class="side-nav">
-        
-        <button v-for="item in NAV" :key="item.key" class="side-item" :title="item.label" :aria-current="store.view === item.key ? 'page' : undefined"
-          :class="{ active: store.view === item.key }" @click="store.view = item.key">
-          <n-icon class="side-icon" size="16" :component="ICONS[item.key]" />
-          <span class="side-label">{{ item.label }}</span>
-          <span class="side-n">{{ navCount(item.count) }}</span>
-        </button>
+      <nav class="side-nav" aria-label="主导航">
+        <n-button v-for="item in NAV" :key="item.key" quaternary block class="rail-action"
+          :class="{ selected: store.view === item.key }" :title="item.label" :aria-label="item.label"
+          :aria-current="store.view === item.key ? 'page' : undefined" @click="store.view = item.key">
+          <span class="rail-line"><n-icon size="17" :component="ICONS[item.key]" />
+            <span class="rail-caption">{{ item.label }}</span><small v-if="navCount(item.count)">{{ navCount(item.count) }}</small>
+          </span>
+        </n-button>
       </nav>
       <div class="side-foot">
-        <button class="side-item" :class="{ active: store.view === 'settings' }" title="设置"
-          @click="store.view = 'settings'">
-          <n-icon class="side-icon" size="16" :component="ICONS.settings" />
-          <span class="side-label">设置</span>
-        </button>
-        <button class="side-item side-collapse" :title="panelDisplay.rail ? '展开导航' : '收起导航'"
-          @click="toggleRail">
-          <n-icon class="side-icon" size="16" :component="ICONS.collapse" />
-          <span class="side-label">收起</span>
-        </button>
+        <n-button quaternary block class="rail-action" :class="{ selected: store.view === 'settings' }"
+          title="设置" aria-label="设置" :aria-current="store.view === 'settings' ? 'page' : undefined" @click="store.view = 'settings'">
+          <span class="rail-line"><n-icon size="17" :component="ICONS.settings" /><span class="rail-caption">设置</span></span>
+        </n-button>
+        <n-button quaternary block class="rail-action side-collapse" :aria-expanded="!panelDisplay.rail"
+          :title="panelDisplay.rail ? '展开导航' : '收起导航'" :aria-label="panelDisplay.rail ? '展开导航' : '收起导航'" @click="toggleRail">
+          <span class="rail-line"><n-icon size="17" :component="ICONS.collapse" /><span class="rail-caption">收起</span></span>
+        </n-button>
       </div>
     </aside>
 
     <div class="main-col">
       <header class="topbar">
-        <select class="mobile-board" aria-label="切换板块" v-model="store.view"><option v-for="item in NAV" :key="item.key" :value="item.key">{{ item.label }}</option><option value="settings">设置</option></select>
+        <div class="mobile-board-picker"><n-select v-model:value="store.view" size="small" aria-label="切换板块" :options="boardOptions" /></div>
         <div class="stats">
           <span :class="wsCls"></span>
           <span>{{ wsText }}</span>
@@ -143,9 +151,11 @@ const themeOverrides = computed<GlobalThemeOverrides>(() => {
       </main>
     </div>
 
-    <AppDialog v-if="store.appDialogOpen" @close="store.appDialogOpen = false" />
-    <div class="toast-stack">
-      <div v-for="t in toasts" :key="t.id" class="toast">{{ t.text }}</div>
+    <AppDialog :show="store.appDialogOpen" @close="store.appDialogOpen = false" />
+    <div class="panel-messages" role="status" aria-live="polite">
+      <TransitionGroup name="notice">
+        <n-alert v-for="t in toasts" :key="t.id" :show-icon="false">{{ t.text }}</n-alert>
+      </TransitionGroup>
     </div>
   </div>
   </n-config-provider>

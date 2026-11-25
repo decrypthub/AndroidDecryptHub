@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { appearance, setAppearance, isDark, type Appearance } from '../appearance';
+import { appearance, setAppearance } from '../appearance';
 import { ref, computed, watch, onMounted } from 'vue';
 import {
   store, liveSession, appSessions, hiddenHooks, setHidden, resetHidden,
@@ -13,7 +13,7 @@ import {
 
 import type { Component } from 'vue';
 import {
-  SearchOutline, LockClosedOutline, EyeOutline, LocateOutline, ScanOutline, OptionsOutline, ServerOutline,
+  SunnyOutline, MoonOutline, DesktopOutline, SearchOutline, LockClosedOutline, EyeOutline, LocateOutline, ScanOutline, OptionsOutline, ServerOutline,
 } from '@vicons/ionicons5';
 
 // ---- 页内子导航 ----
@@ -127,15 +127,6 @@ const familyOptions = computed(() => [
 const shownRows = computed(() => grouping.value
   ? algoList.value.map(e => ({key:e.key, name:e.name, note:ALGO_FAMILIES[e.family as keyof typeof ALGO_FAMILIES] ?? e.family, count:e.count}))
   : hookList.value.map(h => ({key:h.key, name:h.name, note:[HOOK_GROUPS[h.category as keyof typeof HOOK_GROUPS] ?? h.category,h.source].filter(Boolean).join(' · '), count:h.count})));
-const switchColors = computed(() => ({
-  railColor: isDark.value ? '#50565d' : '#b0b5bb', railColorActive: isDark.value ? '#417761' : '#346851',
-  buttonColor:'#fff', railBorderRadiusSmall:'12px', buttonBorderRadiusSmall:'50%',
-}));
-const radioColors = computed(() => ({
-  buttonColor:'var(--surface)', buttonColorActive:'var(--ink)', buttonTextColorActive:'var(--bg)',
-  buttonTextColorHover:'var(--muted)', buttonBorderColor:'var(--line)', buttonBorderColorActive:'var(--ink)',
-}));
-const checkColors = computed(() => ({ checkMarkColor: isDark.value ? '#111315' : '#fff' }));
 const catKey = (cat: string) => categoryKey(cat) ?? '';
 const catShown = (cat: string) => !hiddenHooks.has(catKey(cat));
 function toggleCategory(cat: string, show: boolean) { setHidden(catKey(cat), show); }
@@ -153,12 +144,20 @@ const evidence = computed(() => {
 const EVIDENCE_LABELS: Record<string, string> = { crypto: '加解密', system: '系统调用', file: '文件读写', net: '网络' };
 
 // ---- 显示偏好 ----
+const appearances = [
+  { value: 'system', label: '跟随系统', icon: DesktopOutline },
+  { value: 'light', label: '浅色', icon: SunnyOutline },
+  { value: 'dark', label: '深色', icon: MoonOutline },
+] as const;
+const pageOptions = PAGES.map(({ key: value, label }) => ({ value, label }));
+const limits = computed(() => [{ value: 0, label: `服务默认（${hostDisplayCap.value} 条）` },
+  ...DISPLAY_CAPS.map(value => ({ value, label: `${value} 条` }))]);
 const displaySaved = ref('');
 function saveDisplay(v?: Partial<typeof panelDisplay>) {
   displaySaved.value = savePanelDisplay(v) ? '已保存到当前浏览器。' : '浏览器无法保存偏好，当前页面已应用。';
 }
 const displayAtDefault = computed(() =>
-  panelDisplay.limit === null && panelDisplay.time === 'time' && panelDisplay.density === 'standard');
+  appearance.value === 'system' && panelDisplay.limit === null && panelDisplay.time === 'time' && panelDisplay.density === 'standard');
 
 // ---- 连接与数据 ----
 const status = ref<Record<string, string>>({});
@@ -197,18 +196,21 @@ watch(() => store.chosenPkg, () => { void loadFamilies(); void loadRadar(); });
   <div class="set-page-shell">
     <aside class="set-sidebar">
       <h2>设置</h2>
-      <nav class="set-nav">
-        <button v-for="p in PAGES" :key="p.key" type="button" :aria-label="p.label" :title="p.label" :aria-pressed="page === p.key" @click="page = p.key">
-          <n-icon class="set-nav-icon" size="16" :component="PAGE_ICONS[p.key]" />
-          <span class="set-nav-label">{{ p.label }}</span>
-        </button>
+      <nav class="settings-links" aria-label="设置分类">
+        <n-button v-for="p in PAGES" :key="p.key" quaternary block :aria-label="p.label" :title="p.label" :aria-pressed="page === p.key" @click="page = p.key">
+          <span class="settings-link"><n-icon class="set-nav-icon" size="16" :component="PAGE_ICONS[p.key]" />
+          <span>{{ p.label }}</span></span>
+        </n-button>
       </nav>
     </aside>
     <div class="set-content">
       <div class="set-header">
         <div>
-          <h3>{{ pageTitle }}</h3>
-          <p v-if="page === 'records'" class="rec-scope">仅调整当前应用在此浏览器中的显示，不影响采集。</p><p v-else class="set-app"><span>APP <strong>{{ store.chosenPkg || '未选择应用' }}</strong></span></p>
+          <h3 class="settings-title">{{ pageTitle }}</h3>
+          <div class="settings-picker"><n-select size="small" v-model:value="page" aria-label="设置分类" :options="pageOptions" /></div>
+          <p v-if="page === 'records'" class="rec-scope">仅调整当前应用在此浏览器中的显示，不影响采集。</p>
+          <p v-else-if="page === 'display'" class="rec-scope">外观与列表偏好仅保存在当前浏览器。</p>
+          <p v-else class="set-app"><span>APP <strong>{{ store.chosenPkg || '未选择应用' }}</strong></span></p>
         </div>
       </div>
       <div class="set-main">
@@ -220,11 +222,11 @@ watch(() => store.chosenPkg, () => { void loadFamilies(); void loadRadar(); });
               <span class="set-group-count">{{ famEnabled ? '已启用' : '已停用' }}</span>
             </div>
             <div class="set-group-items">
-              <label v-for="[key, label, members] in FAMILIES" :key="key" class="set-toggle-row">
+              <div v-for="[key, label, members] in FAMILIES" :key="key" class="set-toggle-row">
                 <span class="lab"><b>{{ label }}</b><span>{{ members }}</span></span>
-                <span class="set-switch"><input type="checkbox" :checked="famState[key] !== false"
-                    :disabled="!!saving || !store.chosenPkg" @change="toggle(key)" /><span class="slider"></span></span>
-              </label>
+                <n-switch size="small" :aria-label="label" :value="famState[key] !== false"
+                  :disabled="!!saving || !store.chosenPkg" @update:value="toggle(key)" />
+              </div>
             </div>
           </div>
           <p v-if="famError" class="set-status" data-error="true">{{ famError }}</p>
@@ -232,7 +234,7 @@ watch(() => store.chosenPkg, () => { void loadFamilies(); void loadRadar(); });
           <div class="set-choice-group">
             <div class="set-group-head">
               <h4>检测状态</h4>
-              <button type="button" class="set-small-button" @click="loadRadar">刷新</button>
+              <n-button size="small" secondary @click="loadRadar">刷新</n-button>
             </div>
             <p class="detect-radar" style="padding:10px 13px" :title="radarTitle">{{ radar || '未读取' }}</p>
           </div>
@@ -243,7 +245,7 @@ watch(() => store.chosenPkg, () => { void loadFamilies(); void loadRadar(); });
             <h4 id="categories-label">记录类别</h4>
             <div class="rec-checks">
               <n-checkbox v-for="(label, cat) in HOOK_GROUPS" :key="cat" :checked="catShown(cat)"
-                :theme-overrides="checkColors" @update:checked="toggleCategory(cat, $event)">{{ label }}</n-checkbox>
+                @update:checked="toggleCategory(cat, $event)">{{ label }}</n-checkbox>
             </div>
           </div>
           <div class="rec-heading">
@@ -251,7 +253,7 @@ watch(() => store.chosenPkg, () => { void loadFamilies(); void loadRadar(); });
             <n-button v-if="hiddenHooks.size" text size="small" @click="resetAll">恢复全部显示</n-button>
           </div>
           <div class="rec-tools">
-            <n-radio-group v-model:value="obsView" name="record-group" size="small" aria-label="显示规则分组" :theme-overrides="radioColors">
+            <n-radio-group v-model:value="obsView" name="record-group" size="small" aria-label="显示规则分组">
               <n-radio-button value="algo">按算法</n-radio-button><n-radio-button value="hook">按 Hook</n-radio-button>
             </n-radio-group>
             <n-input v-model:value="search" size="small" clearable class="rec-search"
@@ -265,7 +267,7 @@ watch(() => store.chosenPkg, () => { void loadFamilies(); void loadRadar(); });
             <div v-for="row in shownRows" :key="row.key" class="rec-line">
               <div class="rec-identity"><strong>{{ row.name }}</strong><small>{{ row.note }}</small></div>
               <span class="rec-count" :aria-label="row.count + ' 条记录'">{{ row.count }}</span>
-              <n-switch size="small" :value="!hiddenHooks.has(row.key)" :theme-overrides="switchColors"
+              <n-switch size="small" :value="!hiddenHooks.has(row.key)"
                 :aria-label="'显示 ' + row.name" @update:value="setHidden(row.key, $event)" />
             </div>
             <div v-if="!shownRows.length" class="rec-empty" role="status">
@@ -324,43 +326,44 @@ watch(() => store.chosenPkg, () => { void loadFamilies(); void loadRadar(); });
           </div>
         </section>
 
-        <section v-else-if="page === 'display'" class="set-page">
-          <label class="appearance-row"><span>外观</span><select aria-label="外观" :value="appearance" @change="setAppearance(($event.target as HTMLSelectElement).value as Appearance)">
-              <option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option>
-            </select></label>
-          <div class="set-preferences">
-            <label class="set-row"><span class="lab"><b>列表显示条数</b><span>每个板块保留在列表里的最近记录数</span></span>
-              <select :value="panelDisplay.limit ?? ''"
-                @change="saveDisplay({ ...panelDisplay, limit: Number(($event.target as HTMLSelectElement).value) || null })">
-                <option value="">跟随服务默认（{{ hostDisplayCap.value }}）</option>
-                <option v-for="n in DISPLAY_CAPS" :key="n" :value="n">{{ n }} 条</option>
-              </select>
-            </label>
-            <label class="set-row"><span class="lab"><b>时间格式</b><span>记录时间戳显示到日期还是只到时间</span></span>
-              <select :value="panelDisplay.time"
-                @change="saveDisplay({ ...panelDisplay, time: ($event.target as HTMLSelectElement).value as 'time' })">
-                <option value="time">只显示时间</option>
-                <option value="date">日期和时间</option>
-              </select>
-            </label>
-            <label class="set-row"><span class="lab"><b>列表间距</b><span>紧凑模式每行更矮，一屏能看更多条</span></span>
-              <select :value="panelDisplay.density"
-                @change="saveDisplay({ ...panelDisplay, density: ($event.target as HTMLSelectElement).value as 'standard' })">
-                <option value="standard">标准</option>
-                <option value="compact">紧凑</option>
-              </select>
-            </label>
+        <section v-else-if="page === 'display'" class="display-preferences" aria-label="显示偏好">
+          <div class="pref-block">
+            <h4>界面外观</h4>
+            <div class="pref-line">
+              <span id="theme-label">主题</span>
+              <n-radio-group :value="appearance" name="appearance" aria-labelledby="theme-label" @update:value="setAppearance">
+                <n-radio-button v-for="a in appearances" :key="a.value" :value="a.value">
+                  <span class="appearance-choice"><n-icon :component="a.icon" />{{ a.label }}</span>
+                </n-radio-button>
+              </n-radio-group>
+            </div>
           </div>
-          <div class="set-actions">
-            <button type="button" :disabled="displayAtDefault" @click="saveDisplay()">恢复默认</button>
-            <span class="set-status">{{ displaySaved }}</span>
+          <div class="pref-block">
+            <h4>记录列表</h4>
+            <div class="pref-line"><span id="limit-label">显示条数</span>
+              <n-select aria-labelledby="limit-label" class="pref-limit" :value="panelDisplay.limit ?? 0" :options="limits"
+                @update:value="saveDisplay({ ...panelDisplay, limit: $event || null })" />
+            </div>
+            <div class="pref-line"><span id="time-label">时间格式</span>
+              <n-radio-group name="time" aria-labelledby="time-label" :value="panelDisplay.time" @update:value="saveDisplay({ ...panelDisplay, time: $event })">
+                <n-radio-button value="time">仅时间</n-radio-button><n-radio-button value="date">日期和时间</n-radio-button>
+              </n-radio-group>
+            </div>
+            <div class="pref-line"><span id="density-label">行间距</span>
+              <n-radio-group name="density" aria-labelledby="density-label" :value="panelDisplay.density" @update:value="saveDisplay({ ...panelDisplay, density: $event })">
+                <n-radio-button value="standard">标准</n-radio-button><n-radio-button value="compact">紧凑</n-radio-button>
+              </n-radio-group>
+            </div>
           </div>
+          <footer class="pref-footer"><span role="status">{{ displaySaved }}</span>
+            <n-button v-if="!displayAtDefault" size="small" secondary @click="setAppearance('system'); saveDisplay({ rail: panelDisplay.rail })">恢复默认</n-button>
+          </footer>
         </section>
 
         <section v-else class="set-page">
           <div class="set-page-head">
             <span class="set-status">{{ statusMsg }}</span>
-            <button type="button" class="set-small-button" :disabled="statusBusy" @click="refreshStatus">刷新</button>
+            <n-button size="small" secondary :loading="statusBusy" @click="refreshStatus">刷新</n-button>
           </div>
           <dl class="set-meta">
             <div><dt>当前设备</dt><dd>{{ status.dev || '读取中…' }}</dd></div>
