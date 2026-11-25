@@ -40,7 +40,7 @@ adhd-data/
 # swept into a commit by `git add -A`; the rule keeps that from happening again.
 daemon/tmp_*.mjs
 
-# Third-party checkouts (use submodules)
+# Third-party build dependency caches (prepared by tools/fetch_*.sh; not product source)
 agent/third_party/*/
 !agent/third_party/.gitkeep
 
