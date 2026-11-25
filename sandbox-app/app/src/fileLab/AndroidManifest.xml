@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" tools:node="remove" />
+    <uses-permission android:name="android.permission.INTERNET" tools:node="remove" />
+    <application android:label="ADH Sandbox 文件验收" tools:replace="android:label">
+        <!-- This variant must not start a second capture or accept probe broadcasts. -->
+        <activity android:name=".MainActivity" android:enabled="false" />
+        <receiver android:name=".HookProbeReceiver" android:enabled="false" />
+        <receiver android:name=".NativeHookProbeReceiver" android:enabled="false" />
+        <receiver android:name=".InstanceHookProbeReceiver" android:enabled="false" />
+        <provider
+            android:name=".DemoFilesProvider"
+            android:authorities="${applicationId}.adh-demo-files"
+            android:exported="true"
+            android:grantUriPermissions="false"
+            android:permission="android.permission.DUMP"
+            android:process=":ownedFiles" />
+    </application>
+</manifest>

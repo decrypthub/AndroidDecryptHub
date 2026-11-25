@@ -15,7 +15,7 @@ import {
   frameJson, agentSockets, pending, nextCmdId, sessions, dumps, log, rememberDump,
   captureTimers, captureModules, settings, recentJavaIn, captures,
   pushCapture, broadcast, hexToPreview, previewForCapture, classify, categoryOf, capStats,
-  pruneArtifacts, DATA_DIR,
+  pruneArtifacts, DATA_DIR, captureSettingsForPackage, CRYPTO_FAMILY_KEYS, packageFamilies,
 } from './state.ts';
 import { shouldAutoArmPackage, scopedApps } from './scope_list.ts';
 import type { AgentSession, DumpMeta, MapsRegion, Capture } from './state.ts';
@@ -818,17 +818,105 @@ function recordCaptureHooks(sid: string, r: any) {
   s.captureHooks = r;
 }
 
-// Apply the capture.enabled toggle to already-connected sessions.
-// enabled=false → force-stop hooks everywhere. enabled=true → re-arm only packages that
-// should auto-arm (scope allowlist / sandbox), using setCapture for a clean drain→stop→start.
-export async function applyCaptureEnabled(): Promise<{
+const CRYPTO_FAMILY_FLAGS = ['d', 'h', 's', 'a', 't', 'e'] as const;
+
+/** The six crypto families a person can check, plus the session's existing system bit. */
+function selectedFamilyFlags(families: ReturnType<typeof captureSettingsForPackage>['families'], system: boolean): string {
+  const parts = CRYPTO_FAMILY_KEYS.map((key, index) => `${CRYPTO_FAMILY_FLAGS[index]}=${families[key] === false ? '0' : '1'}`);
+  parts.push(`y=${system ? '1' : '0'}`);
+  return parts.join(',');
+}
+
+interface CaptureSettingsScope {
+  packageName?: string;
+  sessionId?: string;
+  held?: ReadonlySet<string>;
+}
+
+function captureSettingsTargets({ packageName, sessionId }: CaptureSettingsScope) {
+  return [...sessions.values()].filter(session => session.online && (
+    sessionId !== undefined ? session.sessionId === sessionId :
+      packageName !== undefined ? session.package === packageName : !packageFamilies(session.package)
+  ));
+}
+
+/**
+ * Push the checked crypto families to online agents and, when capture is on, install that set.
+ * Sessions in `held` keep the policy already applied by an open Hook plan.
+ * An enable-only settings patch does not call this: checking an algorithm is the human action.
+ */
+export async function applySelectedFamilies(scope: CaptureSettingsScope & { stopIfDisabled?: boolean } = {}): Promise<{
+  ok: boolean; targets: { session: string; ok: boolean; armed?: boolean; skipped?: string; error?: string }[]; error?: string;
+}> {
+  const out: { session: string; ok: boolean; armed?: boolean; skipped?: string; error?: string }[] = [];
+  for (const s of captureSettingsTargets(scope)) {
+    if (scope.held?.has(s.sessionId)) {
+      out.push({ session: s.sessionId, ok: true, armed: false, skipped: 'hook-plan' });
+      continue;
+    }
+    const capture = captureSettingsForPackage(s.package);
+    const arm = capture.enabled && CRYPTO_FAMILY_KEYS.some(key => capture.families[key]);
+    const flags = selectedFamilyFlags(capture.families, policySystemOn(s.policy));
+    try {
+      if (!arm && scope.stopIfDisabled) {
+        const stopped = await setCapture(s.sessionId, false);
+        if (!stopped.ok) {
+          out.push({ session: s.sessionId, ok: false, error: stopped.reply?.error || 'capture stop failed' });
+          continue;
+        }
+      }
+      const policy = await agentCmd(s.sessionId, 'capture_policy', { families: flags });
+      if (policy?.ok !== true) {
+        out.push({ session: s.sessionId, ok: false, armed: false, error: String(policy?.error || 'agent refused family policy') });
+        continue;
+      }
+      s.policy = flags;
+      if (!arm) {
+        out.push({ session: s.sessionId, ok: true, armed: false });
+        continue;
+      }
+      const armed = await setCapture(s.sessionId, true);
+      if (armed.captureSuppressed || armed.captureProtected) {
+        out.push({ session: s.sessionId, ok: true, armed: false, skipped: armed.error });
+        continue;
+      }
+      out.push({ session: s.sessionId, ok: armed.ok, armed: armed.ok, ...(!armed.ok ? { error: armed.error || 'capture operation failed' } : {}) });
+    } catch (error) {
+      out.push({ session: s.sessionId, ok: false, armed: false, error: (error as Error).message });
+    }
+  }
+  return { ok: out.every((row) => row.ok), targets: out };
+}
+
+/**
+ * The local USB sandbox arm: every crypto family plus system detection (y=1), then the
+ * same libc file/sys modules the local example arm uses. Only for com.adh.sandbox apps —
+ * other observed packages keep their companion-delivered policy and just take the arm.
+ */
+export async function armSandboxCapture(sid: string): Promise<CaptureToggle> {
+  const flags = 'd=1,h=1,s=1,a=1,t=1,e=1,y=1';
+  const policy = await agentCmd(sid, 'capture_policy', { families: flags });
+  if (policy?.ok !== true) {
+    return {
+      ok: false, on: false, session: sid, installed: 0, attempted: 0,
+      notInstalled: [], partial: false, complete: false,
+      error: String(policy?.error ?? 'agent refused family policy'), reply: policy,
+    };
+  }
+  const s = sessions.get(sid);
+  if (s) s.policy = flags;
+  return setCapture(sid, true, { fileModule: 'libc.so', sysModule: 'libc.so' });
+}
+
+// Apply the legacy capture.enabled toggle to sessions using the Host defaults.
+// enabled=false → force-stop hooks on sessions that are not in `held`. enabled=true → resume draining only.
+export async function applyCaptureEnabled(held: ReadonlySet<string> = new Set()): Promise<{
   ok: boolean; targets: { session: string; ok: boolean; skipped?: string; error?: string }[]; error?: string;
 }> {
   const on = settings.capture.enabled;
-  const targets = await Promise.all([...sessions.values()].filter(s => s.online).map(async s => {
+  const targets = await Promise.all(captureSettingsTargets({}).map(async s => {
+    if (held.has(s.sessionId)) return { session: s.sessionId, ok: true, skipped: 'hook-plan' };
     if (on) { startCaptureLoop(s.sessionId,{skipArm:true});return {session:s.sessionId,ok:true,skipped:'drain-only; explicit hook plan required'}; }
-    const blocked = on ? captureArmBlockedReason(s.package) : null;
-    if (blocked) return { session: s.sessionId, ok: true, skipped: blocked };
     try {
       const result = await setCapture(s.sessionId, on);
       return { session: s.sessionId, ok: result.ok, ...(!result.ok ? { error: String((result as any).error || (result as any).reply?.error || 'capture operation failed') } : {}) };
@@ -1124,6 +1212,7 @@ export function startCaptureLoop(sid: string, opts?: { skipArm?: boolean }) {
         broadcast('capture.new', {
           id: entry.id, sessionId: sid, package: pkg, source: entry.source, category: entry.category,
           algo: entry.algo, op: entry.op, func: entry.func, preview: entry.preview, inl: entry.inl, outl,
+          ...(entry.path ? { path: entry.path } : {}),
           hasKey: !!entry.keyHex, tid: entry.tid, ts: entry.ts,
           ...(entry.category === 'crypto' ? { view: cryptoView(entry) } : {}),
         });
@@ -1145,11 +1234,14 @@ export function startCaptureLoop(sid: string, opts?: { skipArm?: boolean }) {
         if (c.hex && recentJavaIn.has(c.hex)) continue;   // already captured richly at the Java layer
         const { algo, op } = classify(c.func);
         const category = categoryOf(c.func);
+        const filePath = typeof c.path === 'string' && c.path ? c.path : '';
+        if (category === 'file' && filePath.startsWith('socket:')) continue;
         const entry: Capture = {
           id: ++capSeq, sessionId: sid, package: pkg, source: 'native', func: c.func, algo, op,
           category,
           inl: c.inl, tid: c.tid, tsNs: c.tsNs, ts: now,
-          hex: c.hex, preview: previewForCapture(c.func, c.hex),
+          hex: c.hex, preview: filePath && category === 'file' ? filePath : previewForCapture(c.func, c.hex),
+          ...(filePath ? { path: filePath } : {}),
           // Symmetric captures carry the key/IV the agent joined at EVP_CipherInit_ex; the Java
           // reporter path has always sent these, the native path only since that join exists.
           ...(c.key ? { keyHex: c.key } : {}), ...(c.iv ? { ivHex: c.iv } : {}),
@@ -1193,6 +1285,7 @@ export function startCaptureLoop(sid: string, opts?: { skipArm?: boolean }) {
             dropped: r.dropped ?? 0, jdropped: r.jdropped ?? 0, drained: r.drained ?? 0,
             backlog: r.backlog ?? 0, firstDropNs: r.firstDropNs ?? 0, lastDropNs: r.lastDropNs ?? 0,
             complete: r.complete === true, ring: r.ring ?? 0, ts: Date.now(), agentResidual: r.residual ?? null,
+            announcedDrop: prev?.announcedDrop,
             // The window this session can account for starts at its FIRST drain response: the
             // agent's seq/dropped are cumulative over its whole process (and keep counting across
             // a daemon restart), while `emitted` only ever counts what we ingested. The records

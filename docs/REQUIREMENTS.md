@@ -1,5 +1,7 @@
 # ADH (Android DecryptHub) — 功能需求说明
 
+> **2026-11-21 分析页范围**：电脑端提供应用与会话摘要、六类算法设置、五类记录及详情、一键脱壳和任务结果。任务窗口按标题、状态和时间展示持久记录，可读取已保存结果。细粒度 Hook、任务控制及执行细节使用 MCP / `adh`。当前页面范围见 [P2_WORKBENCH.md](P2_WORKBENCH.md)。
+
 > **2026-11-16 P4 传输/授权契约**：手机经显式配置才能监听 LAN TLS；首次 Host 配对经可信 USB，TLS 固定安装公钥，客户端挑战证明绑定设备/代际/流/grant。每次派发检查持久权限，撤销关闭既有流且重启不恢复。设备域已迁能力 USB/LAN 共用同一实现，未迁能力和旧路由选择明确拒绝。断线对账只读取实际结果并保存证据，保留 unknown、人工控制和无重放原则。范围与验收见 [P4_LAN_AUTH.md](P4_LAN_AUTH.md)，无当前服务或真机升级。
 
 > **2026-11-16 P3 设备契约**：稳定安装 UUID/密钥与 boot/daemon 代际，设备发现、信息/能力、作用域/进程/证书/Host 地址由同一设备域服务提供，Binder 与 USB RPC 共用持久 revision。所有远程写经过 Host 设备资源控制及设备 CAS，派发后未知不重试。新协议与现有 agent session 显式区分，未验证的归属不猜测；局域网 TLS、配对和旧 ADB 能力迁移留待后续。范围和验证边界见 [P3_DEVICE_DOMAIN.md](P3_DEVICE_DOMAIN.md)。本轮不部署、不改变当前分析现场。
@@ -1699,7 +1701,7 @@ Agent → TCP 8761 → ADH Daemon（host，经 adb reverse）
 - 验收：`tools/verify_v34_ecapture.sh`（真机：官方二进制 → 预检 → 对 sandbox 起 probe → **用 MCP `net_capture` 驱动一次真实 HTTPS** → 断言抓到 `ADH_NET_MARKER_v1` 请求明文与 `ADH_NET_RESPONSE_v1` 响应明文）；内核不支持时 SKIP 并给出原因。
 
 **控制面（注入中心）**
-- 注入中心（已落地，2026-09-15）：主机侧 `GET /api/backends` + Web 控制台"注入后端"页给出会话分类、Gadget 缓存/命令与设备侧后端入口（每个会话可一键判定 Zygisk/Gadget/自加载）；验收 `tools/verify_v33_backends.sh`。
+- 注入中心（已落地，2026-09-15；2026-11-21 起不进人用设置）：主机侧 `GET /api/backends` 给出会话分类与设备侧后端；人用设置只勾选算法。验收 `tools/verify_v33_backends.sh`。
 - MCP 面（2026-09-16）：`backends` 工具与 REST *同源*（`daemon/src/backends.ts`）；带 `session` 参数按 agent 自身 maps 判定该进程真实存在的注入路径（`zygisk`/`frida_gadget`/`self_load`）—— AI 客户端与控制台看到的是同一份真相；验收并入 `tools/verify_v33_backends.sh`。
 - Gadget 在控制台里只做"命令模板 + 检测"，一键下发仍走主机工具（daemon 无 adb）。
 ---

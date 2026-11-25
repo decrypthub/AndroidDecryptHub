@@ -15,6 +15,7 @@ import { requestPrincipal } from '../access_context.ts';
 import { operationFailure } from '../operations.ts';
 import {deviceRoutes} from './routes_devices.ts';
 import {hookPlanRoutes} from './routes_hook_plans.ts';
+import {localObserver,observerHost,OWN_APP_FILES_ROUTE,OWN_DEMO_API_ROUTE} from '../local_observer.ts';
 
 export async function handleHttp(req: http.IncomingMessage, res: http.ServerResponse) {
   const url = new URL(req.url ?? '/', 'http://localhost');
@@ -42,6 +43,49 @@ export async function handleHttp(req: http.IncomingMessage, res: http.ServerResp
       ? url.pathname.startsWith(route.path)
       : url.pathname === route.path;
     if (matches) {
+      const sameOrigin = !req.headers.origin || req.headers.origin === 'http://' + req.headers.host;
+      // Dedicated USB Demo, scoped to one app. Do not register generic device actions.
+      if(localObserver&&route.path===OWN_DEMO_API_ROUTE&&observerHost(req.headers.host)){
+        res.setHeader('cache-control','no-store');
+        return await route.handler();
+      }
+      if(localObserver&&route.path==='/api/apps/icon'&&req.method==='GET'&&observerHost(req.headers.host)){
+        res.setHeader('cache-control','private, max-age=3600');
+        return await route.handler();
+      }
+      if(localObserver&&route.path==='/api/apps/control'&&req.method==='POST'&&observerHost(req.headers.host)&&sameOrigin){
+        res.setHeader('cache-control','no-store');
+        return await route.handler();
+      }
+      if(localObserver&&route.path==='/api/capture/families'&&observerHost(req.headers.host)&&
+          (req.method==='GET'||req.method==='POST'&&sameOrigin)){
+        res.setHeader('cache-control','no-store');
+        return await route.handler();
+      }
+      // Panel device management (connect/disconnect/observe) is the panel's own
+      // control, not a managed operation; the route validates the action set.
+      if(localObserver&&route.path==='/api/devices'&&req.method==='POST'&&observerHost(req.headers.host)&&sameOrigin){
+        res.setHeader('cache-control','no-store');
+        return await route.handler();
+      }
+      // The USB panel writes one installed package into the phone scope file. The managed
+      // operation fence is for AI writes; this click is the panel's own injection control.
+      if(localObserver&&route.path==='/api/scope'&&observerHost(req.headers.host)&&
+          (req.method==='GET'||req.method==='POST'&&sameOrigin)){
+        res.setHeader('cache-control','no-store');
+        return await route.handler();
+      }
+      // Standalone local file browser: one explicitly granted text file, never a managed Agent action.
+      if(localObserver?.fileBrowserOnly&&route.path===OWN_APP_FILES_ROUTE&&req.method==='POST'&&
+          observerHost(req.headers.host)&&sameOrigin) {
+        res.setHeader('cache-control','no-store');
+        return await route.handler();
+      }
+      // Panel record delete: same-origin click on the local observation store, not a managed Agent operation.
+      if(localObserver&&route.path==='/api/captures/'&&req.method==='POST'&&observerHost(req.headers.host)&&sameOrigin){
+        res.setHeader('cache-control','no-store');
+        return await route.handler();
+      }
       if(!url.pathname.startsWith('/api/') || url.pathname.startsWith('/api/operations')) {
         if(url.pathname==='/mcp') {
           try{return await handleMcp(await readRequestBody(req,'mcp'),res,{principal:requestPrincipal(req.headers,'mcp',operationsRoot)});}

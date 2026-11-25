@@ -3,12 +3,15 @@ import { checkpoint, detached, trackedEffect } from './execution_context.ts';
 // (/data/adb/adh/scope.json). That file is root-only; adb is how the host reads it.
 // Display names come from each base APK's manifest (aapt), cached per package.
 import { execFile } from 'node:child_process';
+import { adbExec, adbExecBuffer } from './adb_wire.ts';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
 import { isDeepStrictEqual, promisify } from 'node:util';
 import { crc32 } from 'node:zlib';
+import { shQuote } from './sandbox_fs.ts';
+import { deviceScopeGet, deviceScopeReplace, deviceSerial } from './device_bridge.ts';
 
 const execFileP = promisify(execFile);
 const SCOPE_PATH = '/data/adb/adh/scope.json';
@@ -48,23 +51,18 @@ let cache: { at: number; packages: string[]; error: string | null } | null = nul
 // The job's value is the label write, not the label: `resolveLabel` is consumed inside the .then.
 const labelJobs = new Map<string, Promise<void>>();
 
-function adbBase(): string[] {
-  const serial = process.env.ANDROID_SERIAL || process.env.ADH_SERIAL || '';
+function adbBase(serial = deviceSerial()): string[] {
   return serial ? ['-s', serial] : [];
 }
 
 async function adbShell(command: string): Promise<string> {
-  const { stdout } = await trackedEffect(() => execFileP('adb', [...adbBase(), 'shell', command], {
-    timeout: 15000, windowsHide: true, maxBuffer: 4 * 1024 * 1024,
-  }));
+  const { stdout } = await trackedEffect(() => adbExec([...adbBase(), 'shell', command], { timeout: 15000, maxBuffer: 4 * 1024 * 1024 }));
   return String(stdout ?? '');
 }
 
 async function adbOut(command: string): Promise<Buffer> {
-  const { stdout } = await trackedEffect(() => execFileP('adb', [...adbBase(), 'exec-out', command], {
-    timeout: 30000, windowsHide: true, maxBuffer: 80 * 1024 * 1024, encoding: 'buffer',
-  }));
-  return stdout as Buffer;
+  const { stdout } = await trackedEffect(() => adbExecBuffer([...adbBase(), 'exec-out', command], { timeout: 30000, maxBuffer: 80 * 1024 * 1024 }));
+  return stdout;
 }
 
 function findAapt(): string | null {
@@ -145,6 +143,82 @@ async function resolveLabel(pkg: string): Promise<string> {
   }
 }
 
+/** Rebuild a minimal APK (manifest + resources.arsc + extra entries) and run each `aapt dump` pass.
+ *  Each dump entry is `[kind, ...files]`, e.g. `['badging']` or `['xmltree', 'r/a/a.xml']`. */
+export async function apkAaptDumps(apk: string, files: string[], dumps: string[][]): Promise<string[]> {
+  const aapt = findAapt();
+  if (!aapt || !apk.startsWith('/')) return dumps.map(() => '');
+  let manifest = await adbOut(`su -c ${shQuote(`unzip -p ${shQuote(apk)} AndroidManifest.xml`)}`);
+  if (manifest.length < 8) manifest = await adbOut(`su -c ${shQuote(`unzip -p ${shQuote(apk)} AndroidManifest.xml`)}`);
+  let arsc = await adbOut(`su -c ${shQuote(`unzip -p ${shQuote(apk)} resources.arsc`)}`);
+  if (arsc.length < 8) arsc = await adbOut(`su -c ${shQuote(`unzip -p ${shQuote(apk)} resources.arsc`)}`);
+  if (manifest.length < 8 || arsc.length < 8) return dumps.map(() => '');
+  const entries = [
+    { name: 'AndroidManifest.xml', data: manifest },
+    { name: 'resources.arsc', data: arsc },
+  ];
+  for (const name of files) {
+    if (name.startsWith('/') || name.includes('..') || entries.some(e => e.name === name)) continue;
+    const data = await adbOut(`su -c ${shQuote(`unzip -p ${shQuote(apk)} ${shQuote(name)}`)}`);
+    if (data.length >= 4) entries.push({ name, data });
+  }
+  const dir = mkdtempSync(join(tmpdir(), 'adh-aapt-'));
+  try {
+    const zipPath = join(dir, 'base.apk');
+    writeFileSync(zipPath, storedZip(entries));
+    const out: string[] = [];
+    for (const dump of dumps) {
+      try {
+        const { stdout } = await trackedEffect(() => execFileP(aapt, ['dump', dump[0], zipPath, ...dump.slice(1)], {
+          timeout: 30000, windowsHide: true, maxBuffer: 64 * 1024 * 1024,
+        }));
+        out.push(String(stdout ?? ''));
+      } catch (e) {
+        out.push(String((e as { stdout?: unknown })?.stdout ?? ''));
+      }
+    }
+    return out;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** Badging text for one installed APK. Callers pick the label and the real launcher icon from it. */
+export async function apkBadging(apk: string): Promise<string> {
+  const [badging] = await apkAaptDumps(apk, [], [['badging']]);
+  return badging.includes('package:') ? badging : '';
+}
+
+export async function apkXmlTree(apk: string, xmlPath: string): Promise<string> {
+  if (!xmlPath || xmlPath.includes('..') || xmlPath.startsWith('/')) return '';
+  const [tree] = await apkAaptDumps(apk, [xmlPath], [['xmltree', xmlPath]]);
+  return tree;
+}
+
+/** Highest-density full launcher bitmap. Foreground-only and monochrome layers are not the icon. */
+export function pickBadgingIcon(badging: string): string {
+  const rows: { density: number; path: string; rank: number }[] = [];
+  let applicationIcon = '';
+  for (const line of badging.split(/\r?\n/)) {
+    const iconMatched = /^application:\s+label='[^']*'\s+icon='([^']+)'/i.exec(line);
+    if (iconMatched && !applicationIcon && /\.(png|webp|xml)$/i.test(iconMatched[1])) {
+      applicationIcon = iconMatched[1];
+    }
+    const matched = /^application-icon-(\d+):'([^']+)'/.exec(line);
+    if (!matched || !/\.(png|webp)$/i.test(matched[2])) continue;
+    const path = matched[2];
+    const rank = /monochrome|foreground|background/i.test(path) ? 0 : /round/i.test(path) ? 1 : 2;
+    rows.push({ density: Number(matched[1]) || 0, path, rank });
+  }
+  rows.sort((a, b) => b.rank - a.rank || b.density - a.density);
+  const full = rows.find(row => row.rank > 0);
+  if (full) return full.path;
+  // Some APKs only expose the application icon attribute (no density variants).
+  if (applicationIcon) return applicationIcon;
+  // Adaptive-only packages: show the foreground glyph rather than nothing.
+  return rows.find(row => /foreground/i.test(row.path))?.path || '';
+}
+
 const resolvedLabels = new Map<string, string>();
 
 /** Names already known. A package with no name yet is still listed; the lookup fills in later. */
@@ -177,22 +251,24 @@ export function ensureAdbReverse(ports: number[], log: (line: string) => void): 
     }
     reverseBusy = false;
   };
-  execFile('adb', [...args, 'get-state'], { timeout: 4000, windowsHide: true }, (err, stdout) => {
-    if (err || String(stdout ?? '').trim() !== 'device') {
+  void (async () => {
+    try {
+      const { stdout } = await adbExec([...args, 'get-state'], { timeout: 4000 });
+      if (String(stdout ?? '').trim() !== 'device') {
+        finish('no-device', 'adb reverse: 没有在线设备，目标进程连不上本机');
+        return;
+      }
+      let failed = '';
+      await Promise.all(ports.map(async (port) => {
+        try { await adbExec([...args, 'reverse', `tcp:${port}`, `tcp:${port}`], { timeout: 8000 }); }
+        catch (e) { if (!failed) failed = e instanceof Error ? e.message.split('\n')[0] : String(e); }
+      }));
+      if (failed) finish('fail', `adb reverse 失败: ${failed.slice(0, 180)}`);
+      else finish('ok', `adb reverse: ${ports.map(p => 'tcp:' + p).join(' ')} → 本机`);
+    } catch {
       finish('no-device', 'adb reverse: 没有在线设备，目标进程连不上本机');
-      return;
     }
-    let left = ports.length;
-    let failed = '';
-    for (const port of ports) {
-      execFile('adb', [...args, 'reverse', `tcp:${port}`, `tcp:${port}`], { timeout: 8000, windowsHide: true }, (e) => {
-        if (e && !failed) failed = e instanceof Error ? e.message.split('\n')[0] : String(e);
-        if (--left > 0) return;
-        if (failed) finish('fail', `adb reverse 失败: ${failed.slice(0, 180)}`);
-        else finish('ok', `adb reverse: ${ports.map(p => 'tcp:' + p).join(' ')} → 本机`);
-      });
-    }
-  });
+  })();
 }
 
 /** Cached allowlist packages only — never merge capture-disk history into this list. */
@@ -286,9 +362,7 @@ const scopeIO: ScopeIO = {
     const staged = `/data/adb/adh/.scope-${token}.tmp`;
     try {
       writeFileSync(local, body, 'utf8');
-      await trackedEffect(() => execFileP('adb', [...adbBase(), 'push', local, uploaded], {
-        timeout: 20000, windowsHide: true, maxBuffer: 1024 * 1024,
-      }));
+      await trackedEffect(() => adbExec([...adbBase(), 'push', local, uploaded], { timeout: 20000 }));
       // Set ownership/label BEFORE the atomic rename; never expose a truncated scope file.
       await adbShell(`su -c 'cp ${uploaded} ${staged} && chown root:root ${staged} && chmod 644 ${staged} && chcon u:object_r:adb_data_file:s0 ${staged} && mv -f ${staged} ${SCOPE_PATH}'`);
     } finally {
@@ -298,8 +372,25 @@ const scopeIO: ScopeIO = {
   },
 };
 
+// The adh.device/1 channel is primary; adb+su is the fallback when the device
+// daemon is unreachable. RPC failure replies surface real codes (STALE_SCOPE…).
+async function rpcScopeGet(): Promise<any | null> {
+  const serial = deviceSerial();
+  return serial ? deviceScopeGet(serial).catch(() => null) : null;
+}
+
 /** Full scope.json (packages + version/mode), read through root. Never throws: errors are reported. */
 export async function readScopeFile(): Promise<ScopeFile> {
+  const snap = await rpcScopeGet();
+  if (snap?.document && typeof snap.document === 'object') {
+    const doc = snap.document;
+    return {
+      packages: parseScopePackages(JSON.stringify(doc)),
+      version: Number(doc.version) || 2,
+      mode: typeof doc.mode === 'string' && doc.mode ? doc.mode : 'allowlist',
+      error: null,
+    };
+  }
   try {
     const raw = await adbShell(`su -c 'cat ${SCOPE_PATH}'`);
     const start = raw.indexOf('{');
@@ -315,6 +406,20 @@ export async function readScopeFile(): Promise<ScopeFile> {
   } catch (e) {
     return { packages: [], version: 2, mode: 'allowlist', error: (e instanceof Error ? e.message : String(e)).split('\n')[0].slice(0, 240) };
   }
+}
+
+/** One package in, or one package out. A full replacement is not a panel click. */
+export function scopePanelOp(body: unknown): { package: string; add: boolean } | { error: string } {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return { error: '需要指定一个应用' };
+  const rec = body as Record<string, unknown>;
+  const keys = Object.keys(rec);
+  if (keys.some((key) => key !== 'add' && key !== 'remove')) return { error: '只能加入或移出一个应用' };
+  const add = Array.isArray(rec.add) ? rec.add : null;
+  const remove = Array.isArray(rec.remove) ? rec.remove : null;
+  if ((add && remove) || (!add && !remove) || (add ?? remove)!.length !== 1) return { error: '只能加入或移出一个应用' };
+  const pkg = String((add ?? remove)![0] ?? '').trim();
+  if (!PKG_RE.test(pkg) || pkg === MANAGER_PKG) return { error: '包名无效' };
+  return { package: pkg, add: add !== null };
 }
 
 /** Pure merge: `add` wins over `remove`? No — an explicit remove in the same call wins. */
@@ -349,6 +454,26 @@ export async function writeScopePackages(
   io: ScopeIO = scopeIO,
 ): Promise<{ ok: boolean; packages: string[]; error?: string }> {
   const clean = [...new Set(packages.map((p) => p.trim()).filter((p) => PKG_RE.test(p) && p !== MANAGER_PKG))];
+  const snap = io === scopeIO ? await rpcScopeGet() : null;
+  if (snap?.document && typeof snap.scopeRevision === 'string' && Number.isSafeInteger(snap.stateRevision)) {
+    try {
+      const next = scopeWithPackages(JSON.stringify(snap.document), clean, meta);
+      const reply = await deviceScopeReplace(deviceSerial(), next, snap.scopeRevision, snap.stateRevision);
+      const doc = reply?.result?.document;
+      if (!doc) return { ok: false, packages: clean, error: `device scope write failed: ${reply?.code || reply?.state || 'no result'}` };
+      const got = parseScopePackages(JSON.stringify(doc));
+      // The device normalizes the document on write (policy merge, key order), so compare the
+      // package set, not the bytes — the RPC write itself is atomic and CAS-checked.
+      const want = new Set(clean);
+      if (reply.state !== 'succeeded' || got.length !== want.size || got.some(p => !want.has(p))) {
+        return { ok: false, packages: got, error: `scope write did not stick (state=${reply?.state || 'unknown'})` };
+      }
+      cache = { at: Date.now(), packages: got, error: null };
+      return { ok: true, packages: got };
+    } catch (e) {
+      return { ok: false, packages: clean, error: (e instanceof Error ? e.message : String(e)).split('\n')[0].slice(0, 240) };
+    }
+  }
   try {
     // Re-read immediately before writing. Missing/corrupt/unreadable input refuses the update.
     const next = scopeWithPackages(await io.read(), clean, meta);

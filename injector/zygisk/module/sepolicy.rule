@@ -1,2 +1,3 @@
 allow zygote adb_data_file dir search
 allow zygote adb_data_file file { open read getattr }
+allow adbd su unix_stream_socket connectto

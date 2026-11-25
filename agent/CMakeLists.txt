@@ -16,6 +16,7 @@ set(CMAKE_C_VISIBILITY_PRESET hidden)
 set(AGENT_SOURCES
     src/capture/capture.c
     src/bootstrap/agent_main.c
+    src/bootstrap/agent_cmds.c
     src/bootstrap/early_plan.cpp
     src/bootstrap/util.c
     src/bootstrap/io.c
@@ -27,6 +28,9 @@ set(AGENT_SOURCES
     src/hook/slot_hooks.c
     src/hook/stealth_pool.c
     src/hook/native_hooks.cpp
+    src/hook/native_hooks_spec.cpp
+    src/hook/native_hooks_record.cpp
+    src/hook/native_hooks_stubs.cpp
     src/hook/hw_watch.cpp
     src/runtime/actions.c
     src/runtime/fp_call.S
@@ -35,10 +39,17 @@ set(AGENT_SOURCES
     src/runtime/jni.c
     src/runtime/jni_hooks.c
     src/runtime/jni_env_hooks.c
+    src/runtime/jni_env_fixed.c
+    src/runtime/jni_env_calls.c
+    src/runtime/jni_env_fields.c
+    src/runtime/jni_env_string.c
+    src/runtime/jni_env_misc.c
+    src/runtime/jni_env_objects.c
     src/runtime/jni_method_names.c
     src/runtime/jni_onload.c
     src/runtime/dlopen_watch.c
     src/runtime/java_enum.cpp
+    src/runtime/java_call.cpp
     src/trace/commands.c
     src/trace/qbdi_trace.c
 )

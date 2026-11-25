@@ -62,7 +62,7 @@ test('real Kotlin TLS and USB share identity, capabilities, scope/process/certif
     await assert.rejects(()=>f.one.devices.call({deviceId:usb.deviceId,method:'scope.get'}),(e:any)=>e.code==='CONNECTION_AMBIGUOUS');
     assert.equal((await f.one.execute({action:'disconnect',deviceId:usb.deviceId,connectionId:usb.connectionId})).state,'succeeded');
     f.disableAdb();
-    for(const method of ['device.info','device.capabilities','module.status','applications.list','processes.list','certificates.list','host.get','lan.status'])assert.equal((await f.one.read(lan,method)).ok,true);
+    for(const method of ['device.info','device.capabilities','module.status','applications.list','applications.icon','processes.list','certificates.list','host.get','lan.status'])assert.equal((await f.one.read(lan,method)).ok,true);
     const scope=await f.one.read(lan,'scope.get');assert.equal((await f.one.write(lan,'scope.patch',{scopeRevision:scope.result.scopeRevision,add:['com.fixture.lan']})).state,'succeeded');
     assert.equal((await f.one.write(lan,'host.set',{endpoint:'192.0.2.1:8761'})).state,'succeeded');assert.equal((await f.one.read(lan,'host.get')).result.endpoint,'192.0.2.1:8761');
     assert.equal((await f.one.write(lan,'certificates.put',{base64:'fixture'})).state,'succeeded');assert.equal((await f.one.read(lan,'certificates.list')).result.certificates.length,1);

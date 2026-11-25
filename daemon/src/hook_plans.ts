@@ -1,4 +1,4 @@
-import {existsSync,readFileSync} from 'node:fs';
+import {existsSync,readdirSync,readFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
 import {atomicWriteJson} from './storage.ts';
@@ -43,6 +43,10 @@ export class HookPlans {
   constructor(root:string){this.root=root;}
   private index(){const file=join(this.root,'library.json');if(!existsSync(file))return {schemaVersion:1,revision:0,heads:{}} as any;const data=JSON.parse(readFileSync(file,'utf8'));if(data.schemaVersion!==1||!Number.isSafeInteger(data.revision)||!data.heads||Array.isArray(data.heads))fail('PLAN_LIBRARY_CORRUPT','plan index cannot be rebuilt automatically');return data;}
   list(){const index=this.index();return {ok:true,revision:index.revision,plans:Object.entries(index.heads).map(([id,entry]:any)=>({id,...entry})),automaticApply:false};}
+  /** Sessions whose plan run is still in force. An undone run no longer owns the session. */
+  heldSessions(){const dir=join(this.root,'runs');if(!existsSync(dir))return new Set<string>();const held=new Set<string>();
+    for(const name of readdirSync(dir)){if(!name.endsWith('.json'))continue;let run:any;try{run=JSON.parse(readFileSync(join(dir,name),'utf8'));}catch{continue;}
+      if(run&&run.state!=='undone'&&typeof run.session==='string')held.add(run.session);}return held;}
   get(hash:string){if(!/^[a-f0-9]{64}$/.test(hash||''))fail('PLAN_VERSION_REQUIRED','select an immutable plan digest');const value=JSON.parse(readFileSync(join(this.root,'versions',hash+'.json'),'utf8'));if(digest(value)!==hash)fail('PLAN_LIBRARY_CORRUPT','plan body digest differs');return {ok:true,digest:hash,plan:validatePlan(value)};}
   put(value:any,expectedRevision:number,lookup?:Lookup){const plan=validatePlan(value,lookup),index=this.index();if(expectedRevision!==index.revision)fail('STALE_PLAN_LIBRARY','library changed; preserve draft and re-plan');
     const hash=digest(plan),file=join(this.root,'versions',hash+'.json');

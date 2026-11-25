@@ -17,13 +17,13 @@ version stays independent and includes `hostVersion`. `tools/check_release_versi
 - P5 real Android follow-up: explicit `devices connect usbMode=stdio` uses the same RPC/identity/ledger on a root byte stream when SELinux denies adbd-to-su UDS forward. `transport/adb_device.ts` negotiates raw transport before authentication, never falls back or replays. See [P5_ANDROID_ACCEPTANCE.md](../../docs/P5_ANDROID_ACCEPTANCE.md).
 
 - `hook_plans.ts` owns immutable JSON plan versions, library CAS, explicit target preflight, coordinated steps/receipts and ownership-checked undo. `hook_plan_host.ts` dispatches the same actions for MCP, REST and published Python CLI. No hello/settings auto-install.
-- `public/hook-plans-panel.js` mounts inside the shared workbench; drafts, frozen submit versions, persistent tasks and intent-key recovery use `operation-client.js`.
+- `public/hook-plans-panel.js` is not mounted in the viewer. Browser task history is temporarily hidden; existing task records and APIs are unchanged.
 - Device early cache and reversible scope migration use the P3/P4 verified device RPC, never legacy target identity inference or ADB fallback. See [P5_HOOK_PLANS.md](../../docs/P5_HOOK_PLANS.md).
 
 ## P2 human workbench details
 
-- `public/workbench.js`, `workbench.css`, `workbench.html`: the SAME task/configuration UI embedded in the live viewer and served at `/workbench`. `public/operations.js` is the thin live-view adapter; `operation-client.js` owns the shared credential/transport and legacy fetch guard. `workbench-model.js` isolates draft diff/validation/explicit rebase without DOM/I/O.
-- Task get includes revision, resources and operation counts; panel task changes use `_operation.expectedTaskRevision`. Filtered lists expose independent task/operation pagination. Intent-key get is read-only recovery, never replay.
+- The viewer groups loaded records by algorithm and shows recorded classes and methods in Settings. `public/algorithm-observations.js` summarizes metadata and remembers per-app algorithm and Hook display filters in the browser, without modifying collection. `/workbench` redirects to the viewer; the existing workbench sources are retained without a mounted task view. `public/operations.js` keeps the shared fetch guard.
+- Task get includes revision, resources and operation counts. CLI / MCP task controls can use `_operation.expectedTaskRevision`. Filtered lists expose independent task and operation pagination. Intent-key get looks up a previously submitted operation.
 - `execution_context.ts` assigns bounded effect IDs so concurrent dispatch/acknowledgement pairs remain correct; `operations.ts` persists up to 64 metadata-only effect rows and omission counts. New operation timestamps are factual; missing legacy data stays missing. Do not include payloads/keys or turn an acknowledgement into proof of target success.
 - UI is validated against a synthetic loopback Host, never the active service. Worktree isolation protects dynamically served static assets too. See [`docs/P2_WORKBENCH.md`](../../docs/P2_WORKBENCH.md).
 
@@ -38,7 +38,8 @@ version stays independent and includes `hostVersion`. `tools/check_release_versi
 
 - `storage.ts`: pure path resolution; explicit ADH_DATA_DIR isolates captures too; optional ADH_CAPTURES_DIR for legacy layouts. Atomic settings/text writes use temporary files, fsync and rename.
 - `host_lifecycle.ts`: index.ts explicitly initializes recovery before listening. state/MCP imports do not create directories, load history, clean data or open the DEX SQLite cache. Recovery is idempotent and does not rewrite provenance sidecars.
-- `settings_service.ts`: the SAME serialized save→publish→runtime-apply path for MCP settings, panel config and settings import. Persistence failure leaves memory/targets untouched; per-target errors are returned, not fire-and-forgotten. UI/retention patches do not re-arm hooks.
+- `settings_service.ts` serializes saving and applying Host defaults and per-app algorithm choices. The panel uses `GET` and `POST /api/capture/families` to read a package and change one switch. `settings.json` keeps complete selections by package, including all-off selections. The Host defaults apply to packages without a selection, and Host settings import/export retains the legacy shape.
+- App settings dispatch to sessions with the selected package. Reconnect uses the saved selection through the existing operation coordinator. Sessions with an open Hook plan retain its policy. Persistence failures leave memory and sessions untouched, and runtime failures include the per-session results.
 - `maintenance.ts`: explicit preview/confirmed retention. No age/size deletion at import, boot, periodic session sweep, settings save, dump write or capture append. Memory views remain bounded; disk maintenance is opt-in through settings(action=maintenance) or /api/maintenance.
 - `scope_list.ts`: re-read and preserve the COMPLETE scope document, replace only packages, stage/rename on device, verify full readback. ScopeIO enables host regression tests without ADB. This does not add cross-writer CAS or change the phone schema.
 

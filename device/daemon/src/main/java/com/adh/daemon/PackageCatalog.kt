@@ -2,6 +2,7 @@ package com.adh.daemon
 
 import android.content.Context
 import android.content.pm.ApplicationInfo
+import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -25,15 +26,64 @@ import java.util.concurrent.TimeUnit
 internal object PackageCatalog {
     private const val TAG = "AdhPackageCatalog"
     private const val ICON_PX = 96
+    internal data class Snapshot(val atMs: Long, val json: String, val revision: Long)
+    private var catalogCache: Snapshot? = null
+    private var catalogRevision = 0L
+    private val iconCache = LinkedHashMap<String, Pair<Long, ByteArray>>(256, 0.75f, true)
+    private val iconCacheLock = Any()
 
-    fun listJson(context: Context): String = InstalledAppsJson.encode(list(context))
+    private fun nowMs(): Long = System.nanoTime() / 1_000_000
 
-    fun iconPng(context: Context, packageName: String?): ByteArray {
+    @Synchronized fun snapshot(context: Context): Snapshot {
+        val now = nowMs()
+        catalogCache?.let { if (now - it.atMs < 10_000) return it }
+        val encoded = InstalledAppsJson.encode(list(context))
+        val snapshot = Snapshot(now, encoded, ++catalogRevision)
+        catalogCache = snapshot
+        return snapshot
+    }
+
+    fun listJson(context: Context): String = snapshot(context).json
+
+    fun iconPng(context: Context, packageName: String?, sizePx: Int = ICON_PX): ByteArray {
         val pkg = packageName?.trim().orEmpty()
         if (pkg.isEmpty() || HardExcludes.isExcluded(pkg) || pkg == AdhPaths.DAEMON_PKG) return ByteArray(0)
         val pm = context.packageManager
-        val drawable = runCatching { pm.getApplicationIcon(pkg) }.getOrNull() ?: return ByteArray(0)
-        return runCatching { drawableToPng(drawable) }.getOrDefault(ByteArray(0))
+        val packageInfo = runCatching {
+            if (Build.VERSION.SDK_INT >= 33) pm.getPackageInfo(pkg, PackageManager.PackageInfoFlags.of(0))
+            else {
+                @Suppress("DEPRECATION")
+                pm.getPackageInfo(pkg, 0)
+            }
+        }.getOrNull() ?: return ByteArray(0)
+        val version = if (Build.VERSION.SDK_INT >= 28) packageInfo.longVersionCode else {
+            @Suppress("DEPRECATION")
+            packageInfo.versionCode.toLong()
+        }
+        val key = pkg + '@' + version + ':' + packageInfo.lastUpdateTime + ':' + sizePx
+        val now = nowMs()
+        synchronized(iconCacheLock) { iconCache[key] }?.let {
+            if (now - it.first < 600_000) return it.second
+        }
+        val rendered = renderIcon(context, pkg, sizePx)
+        synchronized(iconCacheLock) {
+            iconCache[key] = now to rendered
+            while (iconCache.size > 256) iconCache.remove(iconCache.keys.first())
+        }
+        return rendered
+    }
+
+    private fun renderIcon(context: Context, pkg: String, sizePx: Int): ByteArray {
+        val pm = context.packageManager
+        // getApplicationIcon() never returns null: on any resource miss it hands back the
+        // system default icon, which would paint the same Android robot on every row.
+        // Resolve the drawable through the app's Resources directly so failures stay empty.
+        val info = runCatching { pm.getApplicationInfo(pkg, PackageManager.GET_META_DATA) }.getOrNull()
+            ?: return ByteArray(0)
+        if (info.icon == 0) return ByteArray(0)
+        val res = runCatching { pm.getResourcesForApplication(info) }.getOrNull() ?: return ByteArray(0)
+        val drawable = runCatching { res.getDrawable(info.icon, null) }.getOrNull() ?: return ByteArray(0)
+        return runCatching { drawableToPng(drawable, sizePx) }.getOrDefault(ByteArray(0))
     }
 
     fun list(context: Context): List<InstalledApp> {
@@ -53,12 +103,12 @@ internal object PackageCatalog {
     private fun listFromPackageManager(context: Context): List<InstalledApp> {
         val pm = context.packageManager
         val infos = if (Build.VERSION.SDK_INT >= 33) {
-            pm.getInstalledApplications(PackageManager.ApplicationInfoFlags.of(0))
+            pm.getInstalledPackages(PackageManager.PackageInfoFlags.of(0))
         } else {
             @Suppress("DEPRECATION")
-            pm.getInstalledApplications(0)
+            pm.getInstalledPackages(0)
         }
-        return infos.map { info -> toApp(pm, info) }
+        return infos.mapNotNull { info -> info.applicationInfo?.let { appInfo -> toApp(pm, appInfo, info) } }
     }
 
     private fun listFromCmd(pm: PackageManager): List<InstalledApp> {
@@ -72,15 +122,21 @@ internal object PackageCatalog {
         }
         return merged.map { (pkg, system) ->
             val info = runCatching { pm.getApplicationInfo(pkg, 0) }.getOrNull()
-            if (info != null) toApp(pm, info) else InstalledApp(pkg, pkg, system)
+            if (info != null) toApp(pm, info, null) else InstalledApp(pkg, pkg, system)
         }
     }
 
-    private fun toApp(pm: PackageManager, info: ApplicationInfo): InstalledApp {
+    private fun toApp(pm: PackageManager, info: ApplicationInfo, packageInfo: PackageInfo?): InstalledApp {
         val label = runCatching { pm.getApplicationLabel(info).toString() }
             .getOrDefault(info.packageName)
         val system = (info.flags and ApplicationInfo.FLAG_SYSTEM) != 0
-        return InstalledApp(info.packageName, label, system)
+        val version = packageInfo?.let {
+            if (Build.VERSION.SDK_INT >= 28) it.longVersionCode else {
+                @Suppress("DEPRECATION")
+                it.versionCode.toLong()
+            }
+        } ?: 0
+        return InstalledApp(info.packageName, label, system, version, packageInfo?.lastUpdateTime ?: 0, info.icon != 0)
     }
 
     private fun packagesFromCmd(flag: String? = null): List<String> {
@@ -109,15 +165,15 @@ internal object PackageCatalog {
         }
     }
 
-    private fun drawableToPng(drawable: Drawable): ByteArray {
+    private fun drawableToPng(drawable: Drawable, sizePx: Int): ByteArray {
         val bitmap = when {
             drawable is BitmapDrawable && drawable.bitmap != null &&
-                drawable.bitmap.width == ICON_PX && drawable.bitmap.height == ICON_PX ->
+                drawable.bitmap.width == sizePx && drawable.bitmap.height == sizePx ->
                 drawable.bitmap
             else -> {
-                val bmp = Bitmap.createBitmap(ICON_PX, ICON_PX, Bitmap.Config.ARGB_8888)
+                val bmp = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
                 val canvas = Canvas(bmp)
-                drawable.setBounds(0, 0, ICON_PX, ICON_PX)
+                drawable.setBounds(0, 0, sizePx, sizePx)
                 drawable.draw(canvas)
                 bmp
             }

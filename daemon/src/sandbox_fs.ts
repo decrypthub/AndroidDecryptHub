@@ -4,10 +4,7 @@ import { checkpoint, trackedEffect } from './execution_context.ts';
 // daemon lists and reads it through adb + su. The web file panel uses this.
 // The in-process agent path (fs_browse.ts) stays for MCP and the device checks,
 // which also want /proc/self.
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-
-const execFileP = promisify(execFile);
+import { adbExec, adbExecBuffer } from './adb_wire.ts';
 
 export const SANDBOX_LIST_CAP = 2000;
 export const SANDBOX_READ_CAP = 1024 * 1024;
@@ -89,6 +86,12 @@ export function pathOwnedByPackage(pkg: string, abs: string): boolean {
   return new RegExp(`^/data/app/(?:~~[^/]+/)?${esc}(?:-[^/]+)?(?:/|$)`).test(abs);
 }
 
+/** Any absolute device path. `..` and control characters stay refused. */
+export function confineDevicePath(raw: string): string {
+  try { return normalizeAbs(raw); }
+  catch { throw new Error('路径无效'); }
+}
+
 export function confineSandboxPath(pkg: string, raw: string): string {
   const p = assertPackage(pkg);
   const abs = normalizeAbs(raw);
@@ -110,7 +113,11 @@ function su(script: string): string {
   return `su -c ${shQuote(script)}`;
 }
 
-/** One-line remote script. Names are base64 so spaces and quotes stay data. */
+/** One-line remote script. Entries come from ONE `stat` call over the dir's globs — the old
+ * `ls | while read` loop forked a stat per entry and took ~35s on a 456-entry /data/data.
+ * `S <rawmode-hex> <size> <mtime> <mode-oct> <fullpath>`; the host derives type from the mode
+ * bits and the name from the path tail (a dir entry name cannot contain '/'). Unmatched globs
+ * (empty dir, no dotfiles) only cost stderr noise, which is dropped. */
 export function sandboxListCommand(abs: string): string {
   const q = shQuote(abs);
   const script = [
@@ -121,8 +128,10 @@ export function sandboxListCommand(abs: string): string {
     `echo "REAL $real"`,
     `if ! ls -1A "$p" >/dev/null 2>&1; then echo DENIED; exit 0; fi`,
     `echo OK`,
-    `n=0`,
-    `ls -1A "$p" | while IFS= read -r name; do [ -n "$name" ] || continue; n=$((n+1)); if [ "$n" -gt ${SANDBOX_LIST_CAP} ]; then echo TRUNC; break; fi; f="$p/$name"; if [ -d "$f" ]; then k=d; elif [ -L "$f" ]; then k=l; elif [ -f "$f" ]; then k=f; else k=o; fi; set -- $(stat -c '%s %Y %a' "$f" 2>/dev/null); printf 'E %s %s %s %s %s\\n' "$k" "\${1:-0}" "\${2:-0}" "\${3:-0}" "$(printf '%s' "$name" | base64 | tr -d '\\n')"; done`,
+    // Unmatched dotfile globs reach stat as literal names: the command exits nonzero even
+    // though the listing is complete. Trailing `true` keeps adb's exit code honest — real
+    // failures are already reported by the MISSING/NOTDIR/DENIED/NORESOLVE branches above.
+    `stat -c "S %f %s %Y %a %n" "$p"/* "$p"/.[!.]* "$p"/..?* 2>/dev/null; true`,
   ].join('; ');
   return su(script);
 }
@@ -167,6 +176,22 @@ export function parseSandboxOutput(text: string): ParsedSandbox {
     if (line.startsWith('REAL ')) { real = line.slice(5).trim(); continue; }
     if (line.startsWith('SIZE ')) { size = Number(line.slice(5).trim()); continue; }
     if (/^(MISSING|NOTDIR|DENIED|NORESOLVE|NOTFILE)$/.test(line)) { code = line; continue; }
+    if (line.startsWith('S ')) {
+      const parts = line.slice(2).split(' ');
+      if (parts.length < 5) continue;
+      const raw = Number.parseInt(parts[0], 16) || 0;
+      const name = parts.slice(4).join(' ').split('/').pop() || '';
+      if (!name || name === '.' || name === '..') continue;
+      const kind = raw & 0xF000;
+      entries.push({
+        name,
+        type: kind === 0x4000 ? 'd' : kind === 0x8000 ? 'f' : kind === 0xA000 ? 'l' : 'o',
+        size: Number(parts[1]) || 0,
+        mtime: Number(parts[2]) || 0,
+        mode: Number.parseInt(parts[3], 8) || 0,
+      });
+      continue;
+    }
     if (!line.startsWith('E ')) continue;
     const parts = line.slice(2).split(' ');
     if (parts.length !== 5) continue;
@@ -215,17 +240,13 @@ function adbBase(): string[] {
 }
 
 async function adbShell(command: string): Promise<string> {
-  const { stdout } = await trackedEffect(() => execFileP('adb', [...adbBase(), 'shell', command], {
-    timeout: 20000, windowsHide: true, maxBuffer: 8 * 1024 * 1024,
-  }));
+  const { stdout } = await trackedEffect(() => adbExec([...adbBase(), 'shell', command], { timeout: 45000, maxBuffer: 8 * 1024 * 1024 }));
   return String(stdout ?? '');
 }
 
 async function adbOut(command: string, maxBuffer = 2 * 1024 * 1024): Promise<Buffer> {
-  const { stdout } = await trackedEffect(() => execFileP('adb', [...adbBase(), 'exec-out', command], {
-    timeout: 120_000, windowsHide: true, maxBuffer, encoding: 'buffer',
-  }));
-  return stdout as Buffer;
+  const { stdout } = await trackedEffect(() => adbExecBuffer([...adbBase(), 'exec-out', command], { timeout: 120_000, maxBuffer }));
+  return stdout;
 }
 
 /** Default deps: small reads for sandbox text; SO pulls bump the buffer in pullPackageFile. */
@@ -289,6 +310,37 @@ function requireReal(pkg: string, parsed: ParsedSandbox, rawText: string): strin
     throw new Error(hint ? `读沙盒失败：${hint}` : '读沙盒失败');
   }
   return confineSandboxPath(pkg, parsed.real);
+}
+
+export async function listDevicePath(raw: string, deps: SandboxDeps = defaultDeps): Promise<SandboxListing> {
+  const abs = confineDevicePath(raw);
+  let text: string;
+  try { text = await deps.shell(sandboxListCommand(abs)); }
+  catch (e) { throw explainAdb(e); }
+  const parsed = parseSandboxOutput(text);
+  if (parsed.code) throw failCode(parsed.code, abs, '', 'dir');
+  if (!parsed.real) throw new Error('读目录失败');
+  confineDevicePath(parsed.real);
+  return { ok: true, path: abs, count: parsed.entries.length, truncated: parsed.truncated, entries: parsed.entries };
+}
+
+export async function readDevicePath(raw: string, deps: SandboxDeps = defaultDeps): Promise<SandboxRead> {
+  const abs = confineDevicePath(raw);
+  let text: string;
+  try { text = await deps.shell(sandboxStatCommand(abs)); }
+  catch (e) { throw explainAdb(e); }
+  const parsed = parseSandboxOutput(text);
+  if (parsed.code) throw failCode(parsed.code, abs, '', 'file');
+  if (!parsed.real) throw new Error('读文件失败');
+  const real = confineDevicePath(parsed.real);
+  const fsize = parsed.size ?? 0;
+  let buf: Buffer = Buffer.alloc(0);
+  if (fsize > 0) {
+    try { buf = await deps.execOut(sandboxReadCommand(real)); }
+    catch (e) { throw explainAdb(e); }
+    if (buf.length === 0) throw new Error('文件没有读出来');
+  }
+  return { ok: true, path: abs, size: buf.length, fsize, truncated: fsize > buf.length, b64: buf.toString('base64') };
 }
 
 export async function listSandboxDir(pkg: string, raw: string, deps: SandboxDeps = defaultDeps): Promise<SandboxListing> {

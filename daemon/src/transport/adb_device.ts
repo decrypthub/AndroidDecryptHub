@@ -1,9 +1,8 @@
 import {armoredStdio} from './stdio_armor.ts';
-import { execFile,spawn } from 'node:child_process';
 import { Duplex } from 'node:stream';
-import { promisify } from 'node:util';
 import net from 'node:net';
 import { randomBytes,randomUUID } from 'node:crypto';
+import { adbExec,adbExecStream } from '../adb_wire.ts';
 import { DEVICE_BOOTSTRAP,DEVICE_SOCKET,DEVICE_STDIO_COMMAND,DeviceRpcClient,parseBootstrap,verifyHello,deviceFail,DeviceError,type DevicePeer } from '../device_protocol.ts';
 import { checkpoint,executionContext } from '../execution_context.ts';
 import type {DeviceConnection} from './device_transport.ts';
@@ -13,13 +12,12 @@ export type AdbRunner=(args:string[],options?:{timeout?:number;maxBuffer?:number
 export type AdbStdio=(args:string[])=>Duplex;
 export const realAdbStdio:AdbStdio=args=>{
   if(process.env.ADH_SKIP_ARTIFACT_LOAD==='1')deviceFail('TEST_ADAPTER_REQUIRED','tests must inject a stdio adapter');
-  const child=spawn(process.env.ADH_ADB_PATH||'adb',args,{windowsHide:true,stdio:['pipe','pipe','pipe']});
-  const stream=Duplex.from({readable:child.stdout,writable:child.stdin});child.stderr.resume();child.on('error',()=>stream.destroy(new DeviceError('ADB_FAILED','USB stdio relay failed')));child.on('close',()=>stream.destroy());stream.on('close',()=>{if(child.exitCode===null)child.kill();});return stream;
+  // 5037 协议流，不起 adb 进程（shell,v2 stdin/stdout 分包）
+  return adbExecStream(args);
 };
-const exec=promisify(execFile);
 export const realAdbRunner:AdbRunner=async(args,options={})=>{
   if(process.env.ADH_SKIP_ARTIFACT_LOAD==='1')deviceFail('TEST_ADAPTER_REQUIRED','tests must inject an ADB adapter; real devices are forbidden');
-  try{return (await exec(process.env.ADH_ADB_PATH||'adb',args,{timeout:options.timeout||10000,maxBuffer:options.maxBuffer||65536,windowsHide:true})).stdout;}
+  try{return (await adbExec(args,{timeout:options.timeout||10000})).stdout;}
   catch(error){throw new DeviceError('ADB_FAILED','ADB request failed; command output and credentials are not logged',(error as any).killed===true);}
 };
 export function parseAdbDevices(raw:string):AdbDevice[]{
@@ -30,6 +28,14 @@ export function parseAdbDevices(raw:string):AdbDevice[]{
     rows.push({serial,state,transportId:/^\d+$/.test(props.transport_id||'')?props.transport_id:undefined,model:props.model,link:props.usb?'usb':serial.includes(':')?'adb-tcp':'unknown'});
   }return rows;
 }
+/** Windows ADB can omit usb: from devices -l. -d narrows to a physical USB device. */
+export async function checkAdbLink(row:AdbDevice,run:AdbRunner):Promise<AdbDevice['link']>{
+  if(row.link!=='unknown'||row.state!=='device') return row.link;
+  try{
+    return (await run(['-d','get-serialno'],{timeout:2000})).trim()===row.serial?'usb':'unknown';
+  }catch{ return 'unknown'; }
+}
+
 export interface AdbConnection extends DeviceConnection {transport:'adb';serial:string}
 export class AdbDeviceTransport {
   readonly run:AdbRunner;private dial:(port:number)=>Promise<net.Socket>;private stdio:AdbStdio;
@@ -42,6 +48,7 @@ export class AdbDeviceTransport {
     const devices=await this.discover(),matches=devices.filter(d=>d.serial===serial&&(!transportId||d.transportId===transportId));
     if(matches.length!==1)deviceFail('DEVICE_AMBIGUOUS','select one exact serial/transportId from discovery');const selected=matches[0];
     if(selected.state!=='device')deviceFail('DEVICE_NOT_READY','ADB transport is '+selected.state+'; no device RPC was attempted');
+    const adbLink=await checkAdbLink(selected,this.run);
     const prefix=selected.transportId?['-t',selected.transportId]:['-s',selected.serial];
     checkpoint();const bootstrap=parseBootstrap(await this.run([...prefix,'exec-out','su','-c',`cat ${DEVICE_BOOTSTRAP}`],{maxBuffer:8192}));
     if(usbMode==='stdio'){
@@ -50,7 +57,7 @@ export class AdbDeviceTransport {
       const help=await this.run([...prefix,'exec-out','su','--help']);const suFlags=help.includes('--no-wrapper')?['-W']:[];
       const ctx=executionContext.getStore();checkpoint();const effect=ctx?.dispatched({kind:'adb',action:'device.stdio.connect'});let rpc:DeviceRpcClient|undefined;
       try{rpc=new DeviceRpcClient(armoredStdio(this.stdio([...prefix,'shell','-T','su',...suFlags,'-c',"'"+DEVICE_STDIO_COMMAND+"'"])),onClose);const id=randomUUID(),nonce=randomBytes(32).toString('hex');const reply=await rpc.request('device.hello',{clientNonce:nonce,authentication:{type:'usb-token',credential:bootstrap.token}},undefined,undefined,5000,id);const peer=verifyHello(reply,bootstrap,id,nonce);ctx?.acknowledged(false,effect);
-        return {id:randomUUID(),transport:'adb',usbMode,serial:selected.serial,transportId:selected.transportId,port:0,peer,rpc,close:async()=>{rpc!.close();return {removed:true,confirmed:true,reason:'owned stdio stream closed; no forward created'};}};
+        return {id:randomUUID(),transport:'adb',usbMode,adbLink,serial:selected.serial,transportId:selected.transportId,port:0,peer,rpc,close:async()=>{rpc!.close();return {removed:true,confirmed:true,reason:'owned stdio stream closed; no forward created'};}};
       }catch(error){rpc?.close();ctx?.acknowledged(false,effect,true);throw error;}
     }
     const ctx=executionContext.getStore();checkpoint();const effect=ctx?.dispatched({kind:'adb',action:'device.forward.create'});
@@ -73,7 +80,7 @@ export class AdbDeviceTransport {
       const id=randomUUID(),nonce=randomBytes(32).toString('hex');
       const reply=await rpc.request('device.hello',{clientNonce:nonce,authentication:{type:'usb-token',credential:bootstrap.token}},undefined,undefined,5000,id);
       const peer=verifyHello(reply,bootstrap,id,nonce);
-      return {id:randomUUID(),transport:'adb',usbMode,serial:selected.serial,transportId:selected.transportId,port,peer,rpc,close:async()=>{rpc!.close();return remove();}};
+      return {id:randomUUID(),transport:'adb',usbMode,adbLink,serial:selected.serial,transportId:selected.transportId,port,peer,rpc,close:async()=>{rpc!.close();return remove();}};
     }catch(error){rpc?.close();try{if(!(await remove()).confirmed)throw Error();}catch{throw new DeviceError('FORWARD_CLEANUP_UNCONFIRMED','handshake failed and the owned forward cleanup was not confirmed',true);}throw error;}
   }
 }

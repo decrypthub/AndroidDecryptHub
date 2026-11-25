@@ -1,24 +1,21 @@
 import { checkpoint, trackedEffect } from './execution_context.ts';
+import { deviceSerial } from './device_bridge.ts';
+import { adbExec } from './adb_wire.ts';
 // Host-side cold start of a target package via adb (same path verify scripts use).
 // Device Daemon also has controlPackage(open|restart); the Host cannot speak AIDL, so adb is the
 // operator/AI channel — see REQUIREMENTS module W / retired module X.
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-
-const execFileP = promisify(execFile);
 
 const PKG_RE = /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$/;
 const BLOCKED = new Set(['com.adh.manager', 'com.adh.daemon', 'android', 'com.android.systemui']);
 
-function adbBase(): string[] {
-  const serial = process.env.ANDROID_SERIAL || process.env.ADH_SERIAL || '';
+function adbBase(serial = deviceSerial()): string[] {
   return serial ? ['-s', serial] : [];
 }
 
 async function adb(args: string[], timeoutMs = 20_000): Promise<{ ok: boolean; stdout: string; stderr: string }> {
   try {
-    const { stdout, stderr } = await trackedEffect(() => execFileP('adb', [...adbBase(), ...args], {
-      timeout: timeoutMs, windowsHide: true, maxBuffer: 4 * 1024 * 1024,
+    const { stdout, stderr } = await trackedEffect(() => adbExec([...adbBase(), ...args], {
+      timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024,
     }));
     return { ok: true, stdout: String(stdout ?? ''), stderr: String(stderr ?? '') };
   } catch (e: any) {
@@ -48,17 +45,24 @@ export type LaunchResult = {
   error?: string;
 };
 
-/** Force-stop then start the launcher activity (monkey fallback). */
-export async function coldStartPackage(pkg: string): Promise<LaunchResult> {
-  if (!mayLaunchPackage(pkg)) {
-    return { ok: false, package: pkg, mode: 'denied', error: '不允许启动该包名' };
-  }
+export async function stopPackage(pkg: string): Promise<LaunchResult> {
+  if (!mayLaunchPackage(pkg)) return { ok: false, package: pkg, mode: 'denied', error: '不允许结束该包名' };
   const stop = await adb(['shell', 'am', 'force-stop', pkg], 15_000);
   if (!stop.ok && /no devices|not found|device offline/i.test(stop.stderr)) {
     return { ok: false, package: pkg, mode: 'adb', error: `adb 不可用: ${stop.stderr.slice(0, 160)}` };
   }
-  await sleep(400);
+  return { ok: true, package: pkg, mode: 'force-stop' };
+}
 
+export async function runningPid(pkg: string): Promise<number> {
+  const out = await adb(['shell', 'pidof', pkg], 5_000);
+  const pid = Number(String(out.stdout).trim().split(/\s+/)[0]);
+  return Number.isSafeInteger(pid) && pid > 0 ? pid : 0;
+}
+
+/** Start the launcher activity. Does not stop a process that is already running. */
+export async function startPackage(pkg: string): Promise<LaunchResult> {
+  if (!mayLaunchPackage(pkg)) return { ok: false, package: pkg, mode: 'denied', error: '不允许启动该包名' };
   const resolved = await adb([
     'shell', 'cmd', 'package', 'resolve-activity', '--brief',
     '-c', 'android.intent.category.LAUNCHER', pkg,
@@ -80,6 +84,14 @@ export async function coldStartPackage(pkg: string): Promise<LaunchResult> {
     ok: false, package: pkg, mode: 'failed',
     error: `启动失败: ${(monkey.stderr || resolved.stderr || 'no launcher').slice(0, 200)}`,
   };
+}
+
+/** Force-stop then start the launcher activity (monkey fallback). */
+export async function coldStartPackage(pkg: string): Promise<LaunchResult> {
+  const stop = await stopPackage(pkg);
+  if (!stop.ok) return stop;
+  await sleep(400);
+  return startPackage(pkg);
 }
 
 function sleep(ms: number) {

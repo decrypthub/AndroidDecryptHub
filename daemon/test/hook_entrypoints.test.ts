@@ -21,6 +21,9 @@ test('MCP, panel REST and published CLI share immutable plans, CAS and durable w
     const intent={...meta(),idempotencyKey:'p5-shared-intent'},args={action:'put',plan,expectedLibraryRevision:0};const saved=await rpc('hook_plans',{...args,_operation:intent});assert.equal(saved.applied,false);assert.equal(saved.revision,1);
     const repeated=await(await fetch(base+'/api/hook-plans',{method:'POST',headers:{'Content-Type':'application/json','X-Adh-Operation':JSON.stringify(intent)},body:JSON.stringify(args)})).json() as any;assert.equal(repeated._operation.id,saved._operation.id);assert.equal(repeated.revision,1);
     const asset=await fetch(base+'/hook-plans-panel.js');assert.equal(asset.status,200);assert.match(await asset.text(),/tool:'hook_plans'/);
+    const workbenchJs=await (await fetch(base+'/workbench.js')).text();assert.doesNotMatch(workbenchJs,/awPlansTab|awConfigTab|AdhHookPlansPanel|配置编辑|Hook 方案|接管此范围|交还 AI|操作员连接|暂停任务|取消整项任务|请求取消此操作/);
+    const viewer=await (await fetch(base+'/workbench')).text();
+    assert.doesNotMatch(viewer,/<script\s+src="\/(?:hook-plans-panel|quick-start|workbench(?:-model)?)\.js"|id="(?:setRecordsPage|awPlansTab|awConfigTab)"/);
     const stale=await rpc('hook_plans',{...args,expectedLibraryRevision:0,_operation:meta()});assert.equal(stale.code,'STALE_PLAN_LIBRARY');
     const cliSource=process.env.ADH_CLI_SOURCE||resolve('../..','adh-cli','src');if(!existsSync(join(cliSource,'adh','__init__.py'))){t.diagnostic('CLI source absent; set ADH_CLI_SOURCE for public CLI check');return;}
     const execute=promisify(execFile),env={...process.env,PYTHONPATH:cliSource,ADH_CONFIG_PATH:join(DATA_DIR,'p5-cli.json'),ADH_OPERATOR_TOKEN:key,PYTHONIOENCODING:'utf-8'};

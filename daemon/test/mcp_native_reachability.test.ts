@@ -74,7 +74,7 @@ test('trace_session record closure reaches qbdi_read through its actual imported
   assert.equal(fn.parameters[3].name.getText(store), 'cmd');
   const ops = callNamed(fn, 'cmd').map(c => c.arguments[0]).filter(ts.isStringLiteral).map(n => n.text);
   assert.ok(ops.includes('qbdi_trace')); assert.ok(ops.includes('qbdi_read'), 'paged reads must use the supplied closure');
-  const agent = readFileSync(new URL('../../agent/src/bootstrap/agent_main.c', import.meta.url), 'utf8');
+  const agent = readFileSync(new URL('../../agent/src/bootstrap/agent_cmds.c', import.meta.url), 'utf8');
   assert.match(agent, /strcmp\(op,\s*"qbdi_read"\)/);
   const caps = /ADH_AGENT_OPS\[\]\s*=\s*\{([\s\S]*?)\};/.exec(agent)?.[1] ?? '';
   assert.match(caps, /"qbdi_read"/);

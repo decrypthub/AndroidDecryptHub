@@ -1,18 +1,22 @@
-// Live viewer and workbench share one credential and guarded operation transport.
+// Keep the live panel's guarded transport after unmounting task history.
 (() => {
   const client=new AdhOperationClient();
   client.installGuard(window);
-  const dialog=document.createElement('dialog');dialog.className='aw-overlay';dialog.id='operationsDialog';
-  const root=document.createElement('main');dialog.append(root);document.body.append(dialog);
-  let workspace;
-  function open(view='tasks') {
-    if(!dialog.open)dialog.showModal();
-    workspace??=AdhWorkbench.mount(root,client,{close:()=>dialog.close(),legacySettings:()=>{dialog.close();openSettings();}});
-    workspace.open(view);
-  }
-  dialog.addEventListener('close',()=>workspace?.pause());
-  document.getElementById('opBtn').textContent='任务工作台';
-  document.getElementById('opBtn').onclick=()=>open();
-  document.addEventListener('DOMContentLoaded',()=>{const settings=document.getElementById('setBtn');settings.removeEventListener('click',openSettings);settings.onclick=()=>open('configuration');});
-  window.adhOperations={open,refresh:()=>workspace?.refresh(),setOperatorKey:key=>client.connect(String(key||''))};
+  window.adhOperations={
+    setOperatorKey:key=>client.connect(String(key||'')),
+    setDemoApi:(body,signal,pkg)=>{
+      if(pkg!==undefined&&pkg!=='com.adh.sandbox.apilab') throw Error('当前 APP 没有声明可修改的采集点。');
+      const query=pkg?'?package='+encodeURIComponent(pkg):'';
+      return client.fetcher('/api/observer/demo-api'+query,{
+        method:'POST',mode:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal,
+      });
+    },
+    saveOwnedText:(path,body,signal,root='app')=>{
+      if(root!=='app'&&root!=='external') throw Error('当前目录不支持保存。');
+      const query=new URLSearchParams({action:'save',root,path});
+      return client.fetcher('/api/observer/app-files?'+query,{
+        method:'POST',mode:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal,
+      });
+    },
+  };
 })();

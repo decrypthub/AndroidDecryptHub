@@ -40,26 +40,34 @@ internal class DeviceOperations(val identity: DeviceIdentity, private val files:
         .put("unsupported", JSONObject().put("agent.route", "legacy target channel retained; not associated by serial").put("agent.hook", "target agent routing not migrated").put("agent.memory", "target agent routing not migrated").put("agent.trace", "target agent routing not migrated").put("diagnostics", "legacy ADB-only; no LAN fallback").put("fs", "not migrated").put("root.helper", "not migrated").put("shell", "no arbitrary remote root shell").put("reboot", "Manager-only").put("bulk", "not implemented"))
     private fun available(method: String) = if(method.startsWith("early.")||method.startsWith("hooks.migration."))hookCache!=null else method !in setOf("lan.status", "lan.configure", "pairings.list", "pairings.grant", "pairings.revoke") || network != null
     private fun execute(method: String, params: JSONObject,sourceGrant:String?=null): JSONObject = if(method in(hookCache?.methods?:emptySet()))hookCache!!.execute(method,params,sourceGrant)else if (method in (network?.methods ?: emptySet())) network!!.execute(method, params) else backend.execute(method, params)
-    fun read(method: String, params: JSONObject = JSONObject(), authorize: () -> Unit = {}): JSONObject = synchronized(lock) {
-        authorize()
-        when (method) {
-            "device.info" -> identity.descriptor().put("info", backend.execute(method, params)).put("stateRevision", revision())
-            "device.capabilities" -> capabilities().put("stateRevision", revision())
-            "device.state" -> identity.descriptor().put("stateRevision", revision())
-            "operations.get" -> {
-                val id = params.getString("operationId")
-                val record = records().optJSONObject(id) ?: throw DeviceFault("OPERATION_NOT_FOUND", "no recorded device operation")
-                JSONObject(record.toString()).put("stateRevision", revision())
-            }
-            "operations.reconcile" -> {
-                val ids = params.getJSONArray("operationIds"); require(ids.length() in 1..100)
-                val rows = org.json.JSONArray()
-                for (n in 0 until ids.length()) { val id = ids.getString(n); require(Regex("[A-Za-z0-9_-]{1,128}").matches(id))
-                    rows.put(records().optJSONObject(id)?.let { JSONObject(it.toString()).put("found", true) } ?: JSONObject().put("operationId", id).put("found", false))
+    fun read(method: String, params: JSONObject = JSONObject(), authorize: () -> Unit = {}): JSONObject {
+        // Bulk package metadata does not touch the operation ledger. Keep it out
+        // of the writer lock so icon/catalog traffic cannot block scope or control.
+        if (method in setOf("legacy.icon", "applications.icon", "applications.list")) {
+            authorize()
+            return execute(method, params).put("stateRevision", revision())
+        }
+        return synchronized(lock) {
+            authorize()
+            when (method) {
+                "device.info" -> identity.descriptor().put("info", backend.execute(method, params)).put("stateRevision", revision())
+                "device.capabilities" -> capabilities().put("stateRevision", revision())
+                "device.state" -> identity.descriptor().put("stateRevision", revision())
+                "operations.get" -> {
+                    val id = params.getString("operationId")
+                    val record = records().optJSONObject(id) ?: throw DeviceFault("OPERATION_NOT_FOUND", "no recorded device operation")
+                    JSONObject(record.toString()).put("stateRevision", revision())
                 }
-                JSONObject().put("operations", rows).put("notFoundDoesNotProveUnsent", true).put("replayed", false).put("stateRevision", revision())
+                "operations.reconcile" -> {
+                    val ids = params.getJSONArray("operationIds"); require(ids.length() in 1..100)
+                    val rows = org.json.JSONArray()
+                    for (n in 0 until ids.length()) { val id = ids.getString(n); require(Regex("[A-Za-z0-9_-]{1,128}").matches(id))
+                        rows.put(records().optJSONObject(id)?.let { JSONObject(it.toString()).put("found", true) } ?: JSONObject().put("operationId", id).put("found", false))
+                    }
+                    JSONObject().put("operations", rows).put("notFoundDoesNotProveUnsent", true).put("replayed", false).put("stateRevision", revision())
+                }
+                else -> execute(method, params).put("stateRevision", revision())
             }
-            else -> execute(method, params).put("stateRevision", revision())
         }
     }
     fun write(method: String, params: JSONObject, operationId: String, expectedRevision: Long, actor: String, budgetMs: Long, receivedAt: Long = System.nanoTime(), authorize: () -> Unit = {},sourceGrant:String?=null): JSONObject = synchronized(lock) {

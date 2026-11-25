@@ -12,10 +12,10 @@ import { fileURLToPath } from 'node:url';
 // This test is the gate. It parses the real source, so adding an op in one place and forgetting the
 // other fails `npm test` instead of shipping.
 const here = dirname(fileURLToPath(import.meta.url));
-const AGENT_MAIN = join(here, '..', '..', 'agent', 'src', 'bootstrap', 'agent_main.c');
+const AGENT_CMDS = join(here, '..', '..', 'agent', 'src', 'bootstrap', 'agent_cmds.c');
 
-function readAgentMain(): string {
-  return readFileSync(AGENT_MAIN, 'utf8');
+function readAgentCmds(): string {
+  return readFileSync(AGENT_CMDS, 'utf8');
 }
 
 /** Ops the dispatch chain actually answers (`strcmp(op, "name")`). */
@@ -28,12 +28,12 @@ export function dispatchedOps(source: string): string[] {
 /** Ops the caps manifest advertises (the ADH_AGENT_OPS initializer). */
 export function advertisedOps(source: string): string[] {
   const block = /ADH_AGENT_OPS\[\]\s*=\s*\{([\s\S]*?)\};/.exec(source);
-  assert.ok(block, 'ADH_AGENT_OPS initializer not found in agent_main.c');
+  assert.ok(block, 'ADH_AGENT_OPS initializer not found in agent_cmds.c');
   return [...block![1].matchAll(/"([a-z_0-9]+)"/g)].map((m) => m[1]).sort();
 }
 
 test('the caps manifest and the dispatch chain list the same ops', () => {
-  const src = readAgentMain();
+  const src = readAgentCmds();
   const dispatched = dispatchedOps(src);
   const advertised = advertisedOps(src);
   assert.ok(dispatched.length >= 30, `parsed only ${dispatched.length} dispatched ops - the parser broke`);
@@ -42,11 +42,11 @@ test('the caps manifest and the dispatch chain list the same ops', () => {
 });
 
 test('the caps manifest has no duplicate entries', () => {
-  const advertised = advertisedOps(readAgentMain());
+  const advertised = advertisedOps(readAgentCmds());
   assert.equal(new Set(advertised).size, advertised.length, 'duplicate op in ADH_AGENT_OPS');
 });
 
 test('write is advertised and dispatched (the primitive VMP/OLLVM work needs)', () => {
-  const advertised = advertisedOps(readAgentMain());
+  const advertised = advertisedOps(readAgentCmds());
   assert.ok(advertised.includes('write'), 'the agent must advertise write');
 });

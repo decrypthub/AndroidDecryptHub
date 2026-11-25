@@ -27,7 +27,8 @@ object DeviceRpcFixture {
                 "scope.patch" -> scopes.patch(params)
                 "scope.replace" -> scopes.replace(params.getJSONObject("document").toString(), params.getString("scopeRevision"))
                 "module.status" -> JSONObject().put("synthetic", true).put("calls", counter.get()).put("earlyEligible",params.optString("package").takeIf{it.isNotEmpty()}?.let{cache?.forProcess(it,params.optInt("uid"))!=null}?:false)
-                "applications.list" -> JSONObject().put("applications", org.json.JSONArray()).put("total", 0)
+                "applications.list" -> JSONObject().put("applications", org.json.JSONArray()).put("total", 0).put("revision", 1)
+                "applications.icon" -> JSONObject().put("missing", true).put("missingReason", "NO_RENDERABLE_ICON").put("format", "png").put("width", 96).put("height", 96)
                 "processes.list" -> JSONObject().put("processes", org.json.JSONArray()).put("complete", true).put("total", 0)
                 "host.get" -> JSONObject().put("endpoint", endpoint)
                 "host.set" -> { endpoint = params.getString("endpoint"); JSONObject().put("ok", true) }

@@ -218,13 +218,24 @@ export class Operations {
     return {...task,revision:task.revision ?? 0,operationCounts:counts,totalOperations:ops.length,
       resources:[...new Set(ops.map(op=>op.resource))],unresolved:ops.filter(op=>op.state==='unknown'&&!op.resolvedAt).length};
   }
-  list(taskId?: string, limit = 50, offset = 0, filters: {q?:string;state?:string;owner?:string} = {}) {
+  list(taskId?: string, limit = 50, offset = 0, filters: {q?:string;state?:string;owner?:string;hideSettingSaves?:boolean} = {}) {
     const data = this.store.read();
     const query=String(filters.q||'').slice(0,256).toLowerCase();
-    const tasks=Object.values(data.tasks).filter(t=>(!taskId||t.id===taskId)&&(!query||[t.title,t.id,t.source,t.createdBy].join(' ').toLowerCase().includes(query))&&(!filters.state||t.state===filters.state)&&(!filters.owner||t.owner===filters.owner))
+    const recorded=Object.values(data.operations);
+    const settingSaves=new Set<string>();
+    const otherOperations=new Set<string>();
+    if(filters.hideSettingSaves){
+      for(const op of recorded){
+        const saved=op.source==='panel' && op.name==='settings' && op.state==='succeeded';
+        (saved?settingSaves:otherOperations).add(op.taskId);
+      }
+    }
+    const tasks=Object.values(data.tasks)
+      .filter(t=>!t.implicit || !settingSaves.has(t.id) || otherOperations.has(t.id))
+      .filter(t=>(!taskId||t.id===taskId)&&(!query||[t.title,t.id,t.source,t.createdBy].join(' ').toLowerCase().includes(query))&&(!filters.state||t.state===filters.state)&&(!filters.owner||t.owner===filters.owner))
       .sort((a,b) => b.createdAt-a.createdAt || b.id.localeCompare(a.id)).map(t=>({...t,revision:t.revision ?? 0}));
     const selected=new Set(tasks.map(t=>t.id));
-    const operations=Object.values(data.operations).filter(op => selected.has(op.taskId)).sort((a,b) => b.createdAt-a.createdAt || b.id.localeCompare(a.id));
+    const operations=recorded.filter(op => selected.has(op.taskId)).sort((a,b) => b.createdAt-a.createdAt || b.id.localeCompare(a.id));
     return {tasks:tasks.slice(offset,offset+limit),operations:operations.slice(offset,offset+limit),totalTasks:tasks.length,totalOperations:operations.length,
       nextTaskOffset:offset+limit<tasks.length?offset+limit:null,nextOperationOffset:offset+limit<operations.length?offset+limit:null,
       nextOffset:offset+limit<Math.max(tasks.length,operations.length)?offset+limit:null};

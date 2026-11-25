@@ -14,7 +14,7 @@ object DeviceRpc {
     const val SOCKET_NAME = "adh_device_rpc_v1"
     const val MAX_FRAME = 1024 * 1024
     const val MAX_BUDGET_MS = 60_000L
-    val READ_METHODS = setOf("device.info", "device.capabilities", "device.state", "module.status", "scope.get", "applications.list", "processes.list", "certificates.list", "host.get", "operations.get", "operations.reconcile", "lan.status", "pairings.list", "early.prepare", "early.status", "hooks.migration.preview")
+    val READ_METHODS = setOf("device.info", "device.capabilities", "device.state", "module.status", "scope.get", "applications.list", "applications.icon", "processes.list", "certificates.list", "host.get", "operations.get", "operations.reconcile", "lan.status", "pairings.list", "early.prepare", "early.status", "hooks.migration.preview", "legacy.icon")
     val WRITE_METHODS = setOf("scope.patch", "scope.replace", "process.control", "certificates.put", "certificates.delete", "host.set", "operations.resolve", "lan.configure", "pairings.grant", "pairings.revoke", "early.stage", "early.revoke", "hooks.migration.apply", "hooks.migration.rollback")
     // Reboot and arbitrary shell/helper execution are NOT remote RPC capabilities in P3.
     fun read(input: InputStream): JSONObject? {

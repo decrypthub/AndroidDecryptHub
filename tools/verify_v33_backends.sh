@@ -3,7 +3,7 @@
 #
 # Checks that the console exposes the backend centre truthfully:
 #   * GET /api/backends returns sessions + Zygisk pointers (no Frida Gadget product surface)
-#   * the dashboard contains the 注入后端 settings page and its renderer
+#   * the human settings page is the algorithm checklist, not the injection-backend page
 #   * Frida Gadget UI / API fields are gone
 #   * every inline <script> block still parses
 #
@@ -63,9 +63,10 @@ if (matrix) {
 let html = '';
 try { html = (await get(`${base}/`)).text; } catch (e) { /* reported below */ }
 chk('dashboard served', html.length > 1000, `bytes=${html.length}`);
-for (const marker of ['data-setpage="backends"', 'setPageBackends', 'renderBackends', "fetch('/api/backends')", 'probeBackend']) {
+for (const marker of ['data-fam="digest"', 'data-fam="symmetric"', 'id="setFamilies"']) {
   chk(`dashboard contains ${marker}`, html.includes(marker));
 }
+chk('settings is the algorithm list', !html.includes('data-setpage="backends"') && !html.includes('data-setpage="rawcfg"') && !html.includes('配置 JSON'));
 chk('dashboard has no Frida Gadget panel', !html.includes('backendsGadget') && !html.includes('load_frida_gadget'));
 const blocks = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
 chk('inline scripts found', blocks.length > 0, `blocks=${blocks.length}`);

@@ -11,6 +11,8 @@ import java.io.File
 import java.nio.file.Files
 import java.util.UUID
 import java.util.Base64
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.security.KeyFactory
 import java.security.Signature
 import java.security.spec.X509EncodedKeySpec
@@ -121,5 +123,20 @@ class DeviceDomainTest {
         fail = false
         val restarted = DeviceOperations(identity(dir), files, backend)
         assertEquals("unknown", restarted.read("operations.get", JSONObject().put("operationId", "uncertain")).getString("state")); assertEquals(1, calls)
+    }
+    @Test fun bulkIconReadDoesNotHoldTheWriterLock() {
+        val dir = root(); val iconStarted = CountDownLatch(1); val finishIcon = CountDownLatch(1); val writeFinished = CountDownLatch(1)
+        val ops = DeviceOperations(identity(dir), DeviceFiles(dir), DeviceBackend { method, _ ->
+            if (method == "applications.icon") { iconStarted.countDown(); assertTrue(finishIcon.await(2, TimeUnit.SECONDS)) }
+            JSONObject().put("ok", true)
+        })
+        val iconThread = Thread { ops.read("applications.icon", JSONObject().put("package", "com.example.fixture")) }
+        iconThread.start(); assertTrue(iconStarted.await(1, TimeUnit.SECONDS))
+        val writeThread = Thread {
+            ops.write("host.set", JSONObject(), "during-bulk-read", 0, "ai", 10000)
+            writeFinished.countDown()
+        }
+        writeThread.start(); assertTrue(writeFinished.await(500, TimeUnit.MILLISECONDS))
+        finishIcon.countDown(); iconThread.join(1000); writeThread.join(1000)
     }
 }

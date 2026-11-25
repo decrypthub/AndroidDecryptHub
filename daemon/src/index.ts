@@ -3,14 +3,17 @@
 import http from 'node:http';
 import net from 'node:net';
 import { AGENT_PORT, HTTP_PORT, webUrls } from './config.ts';
+import { acceptsLocalHello, initLocalObserver, localObserver, localObserverHost, observerHost, noteObservedPid } from './local_observer.ts';
 import { handleHttp } from './http/router.ts';
 import { sendHttpError } from './http/response_error.ts';
 import { ensureAdbReverse } from './scope_list.ts';
-import { startCaptureLoop, forgetCaptureSession, clearCaptureArmProtect } from './service.ts';
+import { adbTrackDevices } from './adb_wire.ts';
+import { armSandboxCapture, setCapture, startCaptureLoop, forgetCaptureSession, clearCaptureArmProtect } from './service.ts';
+import { applyCaptureSettingsOnConnect } from './settings_service.ts';
 import { initializeHost } from './host_lifecycle.ts';
 import { initializeOperations } from './operation_host.ts';
 import {
-  agentSockets, broadcast, captureTimers, failPendingFor, frameJson, FRAME_JSON, FRAME_MAX,
+  agentSockets, broadcast, broadcastLive, captureTimers, failPendingFor, frameJson, FRAME_JSON, FRAME_MAX,
   log, nextId, pending, pruneSessions, sessions, wss,
 }
 from './state.ts';
@@ -37,6 +40,11 @@ const agentServer = net.createServer((sock) => {
       if (type !== FRAME_JSON) { log(`agent unknown frame type ${type} — skipping`); continue; }
       let msg: AgentMsg;
       try { msg = JSON.parse(payload.toString('utf8')); } catch { log('bad json frame from agent, bytes=', len); continue; }
+      if (!msg || typeof msg !== 'object' ||
+          (localObserver && (session ? msg.t === 'hello' : !acceptsLocalHello(localObserver, msg)))) {
+        sock.destroy();
+        return;
+      }
       handle(msg);
     }
   });
@@ -74,9 +82,23 @@ const agentServer = net.createServer((sock) => {
       // Fresh process after unpack: allow auto-arm again (protect only blocks the live post-unpack session).
       clearCaptureArmProtect(session.package);
       broadcast('agent.hello', session);
-      // Connection/reconnection observes only. Installs require an explicit plan/primitive;
-      // an authorized early cache already ran before this hello and reports its own receipts.
+      // Draining starts immediately. The algorithms checked in the panel are installed here,
+      // on this process, so a restarted app keeps the same hooks.
       startCaptureLoop(id,{skipArm:true});
+      if (!localObserver) void applyCaptureSettingsOnConnect(id).then(result => {
+        if (result?.ok === false) log(`[capture] family arm ${id}:`, result.error || 'capture settings not applied');
+      }).catch(error => log(`[capture] family arm ${id}:`, (error as Error).message));
+      else if (session.package === localObserver.package) {
+        // The observer tracks the live generation: a restarted app arrives with a new pid and
+        // must update it or status/own-files checks keep pointing at the dead process. Only the
+        // main process counts — `pkg:remote` helper pids are still sessions, just not THE app.
+        if (!session.process || session.process === session.package) noteObservedPid(session.package, session.pid);
+        void (session.package.startsWith('com.adh.sandbox')
+        ? armSandboxCapture(id)
+        : setCapture(id, true, { fileModule: 'libc.so', sysModule: 'libc.so' }))
+        .then(result => log(`[capture] example arm ${id}: ok=${result.ok} installed=${result.installed}/${result.attempted}${result.error ? ' ' + result.error : ''}`))
+        .catch(error => log(`[capture] example arm ${id}:`, (error as Error).message));
+      }
     } else if (msg.t === 'caps' && session) {
       // Arrives right after the hello (before the maps sample). Stored on the session, never
       // merged from another session: two processes of the same app can run different builds.
@@ -128,12 +150,22 @@ const agentServer = net.createServer((sock) => {
 // -> 400; typed errors carry their own status (e.g. readBody's 413, dumpBuf's 404/400); anything
 // else -> 500.
 const httpServer = http.createServer((req, res) => {
+  const requestTarget = req.url ?? '/';
+  const originPath = requestTarget.startsWith('/') && !requestTarget.startsWith('//') && !requestTarget.includes('\\');
+  const foreignBrowser=(localObserver?.fileBrowserOnly || localObserver?.demoApiSerial) && (
+    (req.headers.origin && req.headers.origin!=='http://'+localObserverHost) || req.headers['sec-fetch-site']==='cross-site');
+  if (localObserver && (!observerHost(req.headers.host) || !originPath || foreignBrowser)) {
+    res.writeHead(403, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+    res.end(JSON.stringify({ ok: false, error: '当前本机入口未授权此操作。' }));
+    return;
+  }
   handleHttp(req, res).catch(error=>sendHttpError(req,res,error));
 });
 
 httpServer.on('upgrade', (req, socket, head) => {
   const { pathname } = new URL(req.url ?? '/', 'http://localhost');
-  if (pathname === '/ws') {
+  if (pathname === '/ws' && (!localObserver ||
+    (observerHost(req.headers.host) && (!req.headers.origin || req.headers.origin === 'http://' + req.headers.host)))) {
     wss.handleUpgrade(req, socket, head, (ws) => {
       ws.send(JSON.stringify({ event: 'snapshot', data: [...sessions.values()], ts: Date.now() }));
     });
@@ -142,10 +174,19 @@ httpServer.on('upgrade', (req, socket, head) => {
 
 // ---- boot -----------------------------------------------------------------
 
+await initLocalObserver();
 initializeHost();
 initializeOperations();
-agentServer.listen(AGENT_PORT, '0.0.0.0', () => log(`ADH Daemon agent TCP listening on :${AGENT_PORT}`));
-httpServer.listen(HTTP_PORT, '0.0.0.0', () => {
+const bindAddress = localObserver ? '127.0.0.1' : '0.0.0.0';
+if(!localObserver?.fileBrowserOnly&&!localObserver?.demoApiSerial) agentServer.listen(AGENT_PORT, bindAddress, () => log(`ADH Daemon agent TCP listening on ${bindAddress}:${AGENT_PORT}`));
+httpServer.listen(HTTP_PORT, bindAddress, () => {
+  if (localObserver) {
+    log(localObserver.fileBrowserOnly ? `Owned USB file browser: ${localObserver.model} · ${localObserver.package} (no Agent listener)`
+      : localObserver.demoApiSerial ? `Owned USB Demo API observation: ${localObserver.model} · ${localObserver.package}`
+      : `Local observation: ${localObserver.model} · ${localObserver.package} PID ${localObserver.pid}`);
+    log(`ADH web viewer http://${localObserverHost}/${localObserver.package}`);
+    return;
+  }
   const w = webUrls();
   log(`ADH Daemon HTTP + WS listening on 0.0.0.0:${HTTP_PORT}`);
   log('┌─ ADH Daemon web console ────────────────────────────────────');
@@ -173,5 +214,16 @@ setInterval(() => {
 // The injected agent only reaches this process through adb reverse. Re-apply it on a
 // short interval so a USB reconnect does not leave the panel looking at a dead target.
 const keepReverse = () => ensureAdbReverse([AGENT_PORT, HTTP_PORT], (line) => log(line));
-keepReverse();
-setInterval(keepReverse, 15_000).unref();
+if (!localObserver) {
+  keepReverse();
+  setInterval(keepReverse, 15_000).unref();
+}
+
+// host:track-devices 常驻推送：设备插拔即时广播给面板，不必等 4s 轮询。
+{
+  let devTimer: ReturnType<typeof setTimeout> | undefined;
+  adbTrackDevices(() => {
+    clearTimeout(devTimer);
+    devTimer = setTimeout(() => broadcastLive('devices.changed', {}), 300);
+  });
+}

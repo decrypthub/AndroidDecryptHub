@@ -48,6 +48,28 @@ test('transport failure remains unconfirmed and never automatically retries a wr
   assert.equal(calls,1);
 });
 
+test('checking one algorithm for a specified app or unpacking does not require an operator key',async()=>{
+  const calls:any[]=[];
+  const client=new Client(async(path,init)=>{
+    calls.push(path);
+    if(path==='/api/operations/prepare'){
+      return new Response(JSON.stringify({ok:true,spec:{mode:'write',name:'settings',global:true},resource:'host',revision:1,epoch:1,hostEpoch:1}),{status:200});
+    }
+    return new Response(JSON.stringify({ok:true}),{status:200,headers:{'x-adh-control':JSON.stringify({resource:'host',revision:2,epoch:1,hostEpoch:1})}});
+  },webcrypto);
+  const page:any={location:{href:'http://127.0.0.1:8088/',origin:'http://127.0.0.1:8088'},fetch:null};
+  client.installGuard(page);
+  await page.fetch('/api/capture/families',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({package:'com.example.app',family:'symmetric',enabled:true})});
+  await page.fetch('/api/unpack/run',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({package:'com.example.app'})});
+  await assert.rejects(()=>page.fetch('/api/capture/families',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({family:'symmetric',enabled:true})}),(error:any)=>error.code==='OPERATOR_REQUIRED');
+  await assert.rejects(()=>page.fetch('/api/config',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({capture:{families:{symmetric:true}}})}),(error:any)=>error.code==='OPERATOR_REQUIRED');
+  await assert.rejects(()=>page.fetch('/api/config',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({ui:{displayCap:80}})}),(error:any)=>error.code==='OPERATOR_REQUIRED');
+  await assert.rejects(()=>page.fetch('/api/scope',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({package:'com.example.app'})}),(error:any)=>error.code==='OPERATOR_REQUIRED');
+  assert.ok(calls.includes('/api/capture/families'));
+  assert.ok(!calls.includes('/api/config'));
+  assert.ok(calls.includes('/api/unpack/run'));
+});
+
 test('config reads require a Host version header; credentials and task revisions stay explicit',async()=>{
   const calls:any[]=[],client=new Client(async(path,init)=>{calls.push({path,init});return new Response(JSON.stringify({ok:true,settings:baseline().settings}),{status:200});},webcrypto);
   await assert.rejects(()=>client.config(),(e:any)=>e.code==='CONTROL_REQUIRED');

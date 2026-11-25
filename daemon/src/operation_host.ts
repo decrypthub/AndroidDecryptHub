@@ -75,7 +75,7 @@ export async function manageOperations(a:any,principal:Principal,lookup?:ToolLoo
   }
   if(a.action==='create')return {ok:true,task:engine.createTask(a.title,principal)};
   const page=()=>({limit:Math.max(1,Math.min(100,Math.floor(Number(a.limit)||50))),offset:Math.max(0,Math.min(10000,Math.floor(Number(a.offset)||0)))});
-  if(a.action==='list')return {ok:true,...engine.list(a.taskId,page().limit,page().offset,{q:a.q,state:a.state,owner:a.owner})};
+  if(a.action==='list')return {ok:true,...engine.list(a.taskId,page().limit,page().offset,{q:a.q,state:a.state,owner:a.owner,hideSettingSaves:a.hideSettingSaves===true})};
   if(a.action==='get') {
     if(a.taskId) {
       return {ok:true,task:engine.getTask(a.taskId),...engine.list(a.taskId,page().limit,page().offset)};

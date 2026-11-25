@@ -1,4 +1,4 @@
-import { patchSettings, settingsHttpStatus } from '../settings_service.ts';
+import { patchAppCaptureFamily, patchSettings, settingsHttpStatus } from '../settings_service.ts';
 import { HOST_VERSION } from '../version.ts';
 import { maintainData } from '../maintenance.ts';
 import { localEffect } from '../execution_context.ts';
@@ -10,22 +10,29 @@ import { fileURLToPath } from 'node:url';
 import { backendMatrix } from '../backends.ts';
 import { detectionReport } from '../detect.ts';
 import { cryptoView } from '../crypto_view.ts';
-import { assembleHttpExchanges, type TlsChunk } from '../http_exchange.ts';
+import { assembleHttpExchanges, type HttpAssembly, type TlsChunk } from '../http_exchange.ts';
 import { AGENT_PORT, webUrls } from '../config.ts';
 import { baseFromHost, isValidPackage, mcpOnboarding } from '../mcp_onboarding.ts';
 import { handleMcp, MCP_TOOLS } from '../mcp.ts';
-import { scopedApps, mergeScope, readScopeFile, writeScopePackages } from '../scope_list.ts';
+import { scopedApps, mergeScope, packageInstalled, readScopeFile, scopePanelOp, writeScopePackages } from '../scope_list.ts';
+import { coldStartPackage, runningPid, startPackage, stopPackage } from '../app_launch.ts';
+import { localObserver, noteObservedPid } from '../local_observer.ts';
+import { readPackageIcon } from '../package_icon.ts';
 import { analyzePackage } from '../app_analyze.ts';
 import { listCaptureArmProtected } from '../service.ts';
+import { readAppCatalog } from '../app_catalog.ts';
+import { deletedCaptureIds, findPersistedCaptureById, markCaptureDeleted, queryPersistedCapturesPage } from '../capture_persist.ts';
 import {
-  broadcast, captureHealth, capturePackage, captures, captureTimers,
-  clearCaptureStore, clearPackageCaptureStore, configStats, cryptoIdentify, dumps, eventPackage,
-  events, EVENTS_FILE, exportPackageCapturesJsonl, hexToPreview, log, packageCaptureDiskStats,
-  previewForCapture, readBody, sessions, settings,
+  broadcast, captureHealth, capturePackage, captures, captureSettingsForPackage, captureTimers,
+  clearCaptureStore, clearPackageCaptureStore, configStats, cryptoIdentify, DATA_DIR, dumps, eventPackage,
+  events, EVENTS_FILE, exportPackageCapturesJsonl, hexToPreview, hostSettingsSnapshot, log, packageCaptureDiskStats,
+  previewForCapture, readBody, sessions, settings, type Capture,
 } from '../state.ts';
 import type { Route, RouteContext } from './types.ts';
 
 const publicDir = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'public');
+const exchangeCache = new Map<string, { stamp: string; value: HttpAssembly }>();
+
 export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
   const servePublic = (name: string, contentType: string) => async () => {
     const file = join(publicDir, name);
@@ -39,18 +46,77 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
     res.end(buf);
   };
   return [
-    { path:'/workbench',handler:servePublic('workbench.html','text/html; charset=utf-8') },
+    // Temporarily retire the browser history view without discarding stored operations.
+    { path:'/workbench',handler:() => {
+      res.writeHead(302, { location:'/', 'cache-control':'no-store' });
+      res.end();
+    } },
     { path:'/workbench.css',handler:servePublic('workbench.css','text/css; charset=utf-8') },
     { path:'/operation-client.js',handler:servePublic('operation-client.js','text/javascript; charset=utf-8') },
     { path:'/workbench-model.js',handler:servePublic('workbench-model.js','text/javascript; charset=utf-8') },
+    { path:'/algorithm-observations.js',handler:servePublic('algorithm-observations.js','text/javascript; charset=utf-8') },
     { path:'/workbench.js',handler:servePublic('workbench.js','text/javascript; charset=utf-8') },
     { path:'/quick-start.js',handler:servePublic('quick-start.js','text/javascript; charset=utf-8') },
     { path:'/hook-plans-panel.js',handler:servePublic('hook-plans-panel.js','text/javascript; charset=utf-8') },
     { path:'/operations.js',handler:servePublic('operations.js','text/javascript; charset=utf-8') },
+    { method: 'GET', path: '/api/apps/icon', handler: async () => {
+      const pkg = url.searchParams.get('package') || '';
+      const serial = url.searchParams.get('serial') || undefined;
+      const iconVersion = (url.searchParams.get('v') || '').slice(0, 80);
+      if (serial && !/^[A-Za-z0-9_-]+$/.test(serial)) return send(400, { ok: false, error: '无效的设备序列号' });
+      try {
+        const icon = await readPackageIcon(pkg, serial, iconVersion);
+        if (!icon) return send(404, { ok: false, error: '没有图标' });
+        const headers = { etag: icon.etag, 'cache-control': iconVersion ? 'private, max-age=86400, immutable' : 'private, max-age=60', 'access-control-allow-origin': '*' };
+        if (req.headers['if-none-match'] === icon.etag) {
+          res.writeHead(304, headers);
+          res.end();
+          return;
+        }
+        res.writeHead(200, { ...headers, 'content-type': icon.type });
+        res.end(icon.body);
+      } catch (e) {
+        const unavailable = (e as { code?: string }).code === 'DEVICE_ICON_UNAVAILABLE';
+        return send(unavailable ? 503 : 502, { ok: false, error: (e as Error).message });
+      }
+    } },
+    { method: 'POST', path: '/api/apps/control', handler: async () => {
+      let body: { package?: string; action?: string };
+      try { body = JSON.parse((await readBody(req)) || '{}'); } catch { return send(400, { ok: false, error: 'JSON 格式错误' }); }
+      const pkg = String(body.package || '').trim();
+      const action = body.action;
+      if (!pkg || !['open', 'stop', 'restart'].includes(String(action))) return send(400, { ok: false, error: '需要应用和动作' });
+      if (!(await packageInstalled(pkg))) return send(404, { ok: false, error: '手机上没有这个应用' });
+      const result = action === 'stop' ? await stopPackage(pkg) : action === 'restart' ? await coldStartPackage(pkg) : await startPackage(pkg);
+      if (!result.ok) return send(502, result);
+      if (action === 'stop') noteObservedPid(pkg, 0);
+      else noteObservedPid(pkg, await runningPid(pkg));
+      return send(200, result);
+    } },
     { path: '/api/apps', handler: async () => {
+      if (localObserver) {
+        const pkg = localObserver.package;
+        if(process.env.ADH_USB_APP_INVENTORY==='1'&&!localObserver.fileBrowserOnly&&!localObserver.demoApiSerial){
+          const serial=url.searchParams.get('serial')||'';
+          if(serial&&!/^[A-Za-z0-9_-]+$/.test(serial)) return send(400,{ok:false,error:'无效的设备序列号'});
+          try{
+            const apps=await readAppCatalog(serial||undefined);
+            return send(200,{apps,error:null,capture:false,localObservation:true,inventory:true});
+          }catch{ return send(200,{apps:[],error:'读不到手机上的应用列表，请检查 USB 连接后重试。',capture:false,localObservation:true,inventory:true}); }
+        }
+        const online = localObserver.fileBrowserOnly===true || !!localObserver.demoApiSerial || [...sessions.values()].some(s => s.online && s.package === pkg);
+        return send(200, {
+          apps: [{ package: pkg, label: localObserver.demoApiSerial?'ADH Demo API 采集':pkg }],
+          error: online ? null : '还没收到这个 APP 的采集连接',
+          capture: false,
+          localObservation: true,
+        });
+      }
       const scope = await scopedApps();
       return send(200, {
         apps: scope.apps, error: scope.error, capture: settings.capture.enabled,
+        captureByPackage: Object.fromEntries(Object.keys(settings.capture.familiesByPackage)
+          .map(pkg => [pkg, captureSettingsForPackage(pkg).enabled])),
         // Packages that finished one-click unpack and will not be re-armed until next hello.
         unpackProtected: listCaptureArmProtected(),
       });
@@ -64,6 +130,12 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
     { method: 'POST', path: '/api/scope', handler: async () => {
       let body: any;
       try { body = JSON.parse((await readBody(req)) || '{}'); } catch { return send(400, { error: 'bad json' }); }
+      if (localObserver) {
+        const op = scopePanelOp(body);
+        if ('error' in op) return send(400, { ok: false, error: op.error });
+        if (!(await packageInstalled(op.package))) return send(404, { ok: false, error: '手机上没有这个应用' });
+        body = op.add ? { add: [op.package] } : { remove: [op.package] };
+      }
       const cur = await readScopeFile();
       if (cur.error) return send(503, { ok: false, error: cur.error });
       const before = cur.packages;
@@ -116,45 +188,168 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
     { path: '/api/http/exchanges', handler: () => {
       const session = url.searchParams.get('session');
       const pkg = url.searchParams.get('package');
+      const fromTsRaw = url.searchParams.get('fromTs');
+      const toTsRaw = url.searchParams.get('toTs');
+      const fromTs = fromTsRaw ? Number(fromTsRaw) : null;
+      const toTs = toTsRaw ? Number(toTsRaw) : null;
+      // 全量重组一次要几秒（hex 解码 + 解压 + HPACK），面板每 5s 轮询一次。
+      // 记录只追加不可变：net 条数 + 最后一条 net id 没变就直接回缓存。
+      let netCount = 0, lastNetId = 0;
+      for (const c of captures) if (c.category === 'net') { netCount++; lastNetId = c.id; }
+      const stamp = `${netCount}:${lastNetId}`;
+      const key = `${session ?? ''}\n${pkg ?? ''}\n${fromTs ?? ''}\n${toTs ?? ''}`;
+      const hit = exchangeCache.get(key);
+      if (hit && hit.stamp === stamp) return send(200, hit.value);
+
       let list = captures.filter(c => c.category === 'net');
       if (session) list = list.filter(c => c.sessionId === session);
       if (pkg) list = list.filter(c => capturePackage(c) === pkg);
+      if (fromTs != null && Number.isFinite(fromTs)) list = list.filter(c => c.ts >= fromTs);
+      if (toTs != null && Number.isFinite(toTs)) list = list.filter(c => c.ts <= toTs);
+
+      // 内存环被高频 crypto 挤出时，从落盘 captures.jsonl 补齐该包的 net 记录
+      if (pkg) {
+        const disk = queryPersistedCapturesPage(DATA_DIR, {
+          package: pkg, session, categories: ['net'],
+          fromTs: fromTs != null && Number.isFinite(fromTs) ? fromTs : null,
+          toTs: toTs != null && Number.isFinite(toTs) ? toTs : null,
+          limit: 2000,
+        });
+        if (disk && disk.items.length) {
+          const byId = new Map<number, Capture>();
+          for (const d of disk.items) byId.set(d.id, d as unknown as Capture);
+          for (const m of list) byId.set(m.id, m);
+          list = [...byId.values()].sort((a, b) => a.id - b.id);
+        }
+      }
+
       const records: TlsChunk[] = list.map(c => ({
         id: c.id, sessionId: c.sessionId, func: c.func, hex: c.hex, inl: c.inl,
         tsNs: c.tsNs, ts: c.ts, conn: c.conn,
       }));
-      return send(200, assembleHttpExchanges(records));
+      const value = assembleHttpExchanges(records);
+      exchangeCache.set(key, { stamp, value });
+      if (exchangeCache.size > 8) {
+        const oldest = exchangeCache.keys().next().value;
+        if (oldest !== undefined) exchangeCache.delete(oldest);
+      }
+      return send(200, value);
     } },
-    // Live captures (auto-populated by the persistent hooks): GET /api/captures?since=&limit=
+    // Live + persisted captures with cursor/time pagination:
+    // GET /api/captures?package=&session=&category=&since=&beforeId=&fromTs=&toTs=&q=&limit=
     { path: '/api/captures', handler: () => {
       const since = Number(url.searchParams.get('since') ?? 0);
-      const limit = Math.min(Number(url.searchParams.get('limit') ?? 200), 1000);
+      const limit = Math.max(1, Math.min(Number(url.searchParams.get('limit') ?? 200), 10000));
+      const beforeIdRaw = url.searchParams.get('beforeId');
+      const fromTsRaw = url.searchParams.get('fromTs');
+      const toTsRaw = url.searchParams.get('toTs');
+      const beforeId = beforeIdRaw != null && beforeIdRaw !== '' ? Number(beforeIdRaw) : null;
+      const fromTs = fromTsRaw != null && fromTsRaw !== '' ? Number(fromTsRaw) : null;
+      const toTs = toTsRaw != null && toTsRaw !== '' ? Number(toTsRaw) : null;
+      const catRaw = url.searchParams.get('category');
+      const categories = catRaw ? catRaw.split(',').map(s => s.trim()).filter(Boolean) : null;
+      const catSet = categories && categories.length ? new Set(categories) : null;
+      const q = (url.searchParams.get('q') ?? '').trim().toLowerCase();
       const session = url.searchParams.get('session');
       const pkg = url.searchParams.get('package');
-      let list = captures.filter(c => c.id > since);
-      if (session) list = list.filter(c => c.sessionId === session);
-      if (pkg) list = list.filter(c => capturePackage(c) === pkg);
-      // WS-C: `health` carries honest ring accounting — complete:false + dropped>0 when the
-      // agent ring overflowed (no silent loss; the panel should show this in red). The health
-      // fields are ALSO mirrored at the top level by SPREADING them, not by hand-copying a subset:
-      // the hand-written mirror silently dropped the newer residual fields, so a script could
-      // assert on them and pass without ever seeing them.
+
+      const matchMem = (c: Capture) => {
+        if (c.id <= since) return false;
+        if (beforeId != null && Number.isFinite(beforeId) && c.id >= beforeId) return false;
+        if (fromTs != null && Number.isFinite(fromTs) && c.ts < fromTs) return false;
+        if (toTs != null && Number.isFinite(toTs) && c.ts > toTs) return false;
+        if (session && c.sessionId !== session) return false;
+        if (pkg && capturePackage(c) !== pkg) return false;
+        if (catSet && !catSet.has(c.category)) return false;
+        if (q) {
+          const hay = `${c.algo || ''} ${c.op || ''} ${c.func || ''} ${c.path || ''} ${c.preview || ''}`.toLowerCase();
+          if (!hay.includes(q)) return false;
+        }
+        return true;
+      };
+
+      let memList = captures.filter(matchMem);
+      let hasMore = memList.length > limit;
+      let pageList: Capture[];
+
+      // 内存窗口足够填满当前页 + 判断还有上一页时直接走内存（0 磁盘 IO）；否则穿透读落盘 captures.jsonl
+      if (beforeId == null && toTs == null && fromTs == null && memList.length > limit) {
+        pageList = memList.slice(-limit);
+      } else {
+        const disk = queryPersistedCapturesPage(DATA_DIR, {
+          package: pkg, session, categories, since,
+          beforeId: beforeId != null && Number.isFinite(beforeId) ? beforeId : null,
+          fromTs: fromTs != null && Number.isFinite(fromTs) ? fromTs : null,
+          toTs: toTs != null && Number.isFinite(toTs) ? toTs : null,
+          q, limit,
+        });
+        if (disk) {
+          const byId = new Map<number, Capture>();
+          for (const d of disk.items) byId.set(d.id, d as unknown as Capture);
+          for (const m of memList) byId.set(m.id, m);
+          const merged = [...byId.values()].sort((a, b) => a.id - b.id);
+          hasMore = disk.hasMore || merged.length > limit;
+          pageList = merged.slice(-limit);
+        } else {
+          pageList = memList.slice(-limit);
+        }
+      }
+
       const health = captureHealth();
       return send(200, {
         total: captures.length, on: captureTimers.size > 0,
+        returned: pageList.length,
+        hasMore,
+        nextBeforeId: hasMore && pageList.length ? pageList[0].id : null,
+        oldestId: pageList[0]?.id ?? null,
+        latestId: pageList.at(-1)?.id ?? null,
         ...health, health,
-        captures: list.slice(-limit).map(c => ({
+        captures: pageList.map(c => ({
           id: c.id, sessionId: c.sessionId, package: capturePackage(c), source: c.source, category: c.category,
           algo: c.algo, op: c.op, func: c.func, inl: c.inl, outl: c.outHex ? c.outHex.length / 2 : 0,
           hasKey: !!c.keyHex, tid: c.tid, ts: c.ts,
           preview: c.category === 'net' ? previewForCapture(c.func, c.hex) : c.preview,
+          ...(c.path ? { path: c.path } : {}),
           ...(c.category === 'crypto' ? { view: cryptoView(c) } : {}),
         })),
       });
     } },
-    { path: '/api/captures/', prefix: true, handler: () => {
+    { path: '/api/captures/packages', handler: () => send(200, { packages: packageCaptureDiskStats() }) },
+    { path: '/api/captures/export', handler: () => {
+      const pkg = String(url.searchParams.get('package') || '');
+      if (!pkg) return send(400, { error: '需要 package' });
+      let body = exportPackageCapturesJsonl(pkg);
+      if (body == null) return send(404, { error: '该包还没有落盘捕获' });
+      const deleted = deletedCaptureIds(DATA_DIR, pkg);
+      if (deleted.size) {
+        body = body.split('\n').filter(line => {
+          if (!line) return false;
+          const m = /"id"\s*:\s*(\d+)/.exec(line.slice(0, 64));
+          return !(m && deleted.has(Number(m[1])));
+        }).join('\n');
+      }
+      res.writeHead(200, {
+        'content-type': 'application/x-ndjson; charset=utf-8',
+        'content-disposition': `attachment; filename="${pkg.replace(/[^\w.-]+/g, '_')}-captures.jsonl"`,
+      });
+      return res.end(body);
+    } },
+    { path: '/api/captures/', prefix: true, handler: async () => {
       const id = Number(url.pathname.slice('/api/captures/'.length));
-      const c = captures.find(x => x.id === id);
+      if (req.method === 'POST') {
+        let body: { action?: string };
+        try { body = JSON.parse(await readBody(req) || '{}'); } catch { return send(400, { ok: false, error: 'bad json' }); }
+        if (body?.action !== 'delete') return send(400, { ok: false, error: '未知操作' });
+        if (!Number.isFinite(id) || id <= 0) return send(400, { ok: false, error: '无效的记录编号' });
+        const idx = captures.findIndex(x => x.id === id);
+        const mem = idx >= 0 ? captures.splice(idx, 1)[0] : undefined;
+        let pkg = url.searchParams.get('package') || (mem ? capturePackage(mem) : '');
+        if (!pkg) pkg = findPersistedCaptureById(DATA_DIR, id)?.package ?? '';
+        if (pkg) markCaptureDeleted(DATA_DIR, pkg, id);
+        return send(200, { ok: true, id });
+      }
+      const c = captures.find(x => x.id === id)
+        ?? (findPersistedCaptureById(DATA_DIR, id, url.searchParams.get('package') || undefined) as unknown as Capture | null);
       if (!c) return send(404, { error: 'not found' });
       // decode as UTF-8 so Chinese plaintext (gray-market payloads) is readable, not dotted
       let text = '';
@@ -179,7 +374,18 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       capabilities: { rest: true, websocket: true, mcp: true, mcpTools: MCP_TOOLS.length },
       note: 'metadata only — captured key/plaintext content is never in diagnostic reports',
     }) },
-    // ---- settings / config (web 设置面板；IDH 交互) ----
+    { method: 'GET', path: '/api/capture/families', handler: () => {
+      const pkg = url.searchParams.get('package') || '';
+      if (!isValidPackage(pkg)) return send(400, { ok: false, error: '需要有效的包名' });
+      return send(200, { ok: true, package: pkg, capture: captureSettingsForPackage(pkg) });
+    } },
+    { method: 'POST', path: '/api/capture/families', handler: async () => {
+      let patch: unknown;
+      try { patch = JSON.parse(await readBody(req)); } catch { return send(400, { ok: false, error: 'JSON 格式错误' }); }
+      const result = await patchAppCaptureFamily(patch);
+      return send(settingsHttpStatus(result), result);
+    } },
+    // ---- legacy settings / config ----
     { path: '/api/config', handler: async () => {
       if (req.method === 'POST') {
         let patch: any = {};
@@ -187,9 +393,9 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
         const result = await patchSettings(patch);
         return send(settingsHttpStatus(result), result);
       }
-      return send(200, { settings, stats: configStats() });
+      return send(200, { settings: hostSettingsSnapshot(), stats: configStats() });
     } },
-    { path: '/api/settings/export', handler: () => send(200, settings) },
+    { path: '/api/settings/export', handler: () => send(200, hostSettingsSnapshot()) },
     { method: 'POST', path: '/api/settings/import', handler: async () => {
       let obj: any;
       try { obj = JSON.parse((await readBody(req)) || '{}'); } catch { return send(400, { error: 'JSON 格式错误' }); }
@@ -204,18 +410,6 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       const result = maintainData(body ?? {});
       return send(result.ok ? 200 : 400, result);
     } },
-    { path: '/api/captures/packages', handler: () => send(200, { packages: packageCaptureDiskStats() }) },
-    { path: '/api/captures/export', handler: () => {
-      const pkg = String(url.searchParams.get('package') || '');
-      if (!pkg) return send(400, { error: '需要 package' });
-      const body = exportPackageCapturesJsonl(pkg);
-      if (body == null) return send(404, { error: '该包还没有落盘捕获' });
-      res.writeHead(200, {
-        'content-type': 'application/x-ndjson; charset=utf-8',
-        'content-disposition': `attachment; filename="${pkg.replace(/[^\w.-]+/g, '_')}-captures.jsonl"`,
-      });
-      return res.end(body);
-    } },
     { method: 'POST', path: '/api/data/clear', handler: async () => {
       let body: any;
       try { body = JSON.parse((await readBody(req)) || '{}'); } catch { return send(400, { error: 'bad json' }); }
@@ -225,6 +419,7 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       if (!['captures', 'events', 'dumps'].includes(what)) return send(400, { error: 'what 必须是 captures|events|dumps' });
       localEffect(() => {
         if (what === 'captures') {
+          exchangeCache.clear();
           if (pkg) errors.push(...clearPackageCaptureStore(pkg));
           else errors.push(...clearCaptureStore());
         }

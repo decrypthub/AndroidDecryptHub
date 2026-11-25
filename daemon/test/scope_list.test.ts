@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseScopePackages, applicationLabel, scopeSwitcherApps, autoArmAllowed } from '../src/scope_list.ts';
+import { parseScopePackages, applicationLabel, scopeSwitcherApps, autoArmAllowed, scopePanelOp } from '../src/scope_list.ts';
 
 test('self-load arms without being in scope; a Zygisk session must be listed', () => {
   const scope = { packages: ['com.example.target'], error: null };
@@ -19,6 +19,15 @@ test('a scope that was never read fails open; an empty-but-successful one does n
   assert.equal(autoArmAllowed('com.example.target', 'start', null), true);
   assert.equal(autoArmAllowed('com.example.target', 'start', { packages: [], error: 'permission denied' }), true);
   assert.equal(autoArmAllowed('com.example.target', 'start', { packages: [], error: null }), false);
+});
+
+test('the panel changes one installed package at a time', () => {
+  assert.deepEqual(scopePanelOp({ add: ['com.example.app'] }), { package: 'com.example.app', add: true });
+  assert.deepEqual(scopePanelOp({ remove: ['com.example.app'] }), { package: 'com.example.app', add: false });
+  assert.equal('error' in scopePanelOp({ set: ['com.example.app'] }), true);
+  assert.equal('error' in scopePanelOp({ add: ['com.example.app', 'com.example.other'] }), true);
+  assert.equal('error' in scopePanelOp({ add: ['com.adh.manager'] }), true);
+  assert.equal('error' in scopePanelOp({ add: ['not a package'] }), true);
 });
 
 test('the web switcher is the checked scope list, in file order', () => {

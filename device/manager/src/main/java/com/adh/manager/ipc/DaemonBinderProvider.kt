@@ -8,6 +8,7 @@ import android.os.Binder
 import android.os.Bundle
 import android.os.IBinder
 import android.os.Process
+import android.util.Base64
 import com.adh.daemon.IAdhScopeService
 import com.adh.manager.data.DaemonClient
 import java.util.concurrent.CountDownLatch
@@ -18,17 +19,38 @@ class DaemonBinderProvider : ContentProvider() {
     override fun onCreate(): Boolean = true
 
     override fun call(method: String, arg: String?, extras: Bundle?): Bundle? {
-        if (method != METHOD_PUBLISH) return super.call(method, arg, extras)
-        if (Binder.getCallingUid() != Process.ROOT_UID) {
-            throw SecurityException("only the root ADH Device Daemon may publish a binder")
+        if (method == METHOD_PUBLISH) {
+            if (Binder.getCallingUid() != Process.ROOT_UID) {
+                throw SecurityException("only the root ADH Device Daemon may publish a binder")
+            }
+            val binder = extras?.getBinder(EXTRA_BINDER)
+                ?: throw IllegalArgumentException("daemon binder is missing")
+            check(binder.interfaceDescriptor == IAdhScopeService.DESCRIPTOR) {
+                "unexpected daemon binder descriptor"
+            }
+            install(binder)
+            return Bundle().apply { putBoolean("accepted", true) }
         }
-        val binder = extras?.getBinder(EXTRA_BINDER)
-            ?: throw IllegalArgumentException("daemon binder is missing")
-        check(binder.interfaceDescriptor == IAdhScopeService.DESCRIPTOR) {
-            "unexpected daemon binder descriptor"
+        if (method == METHOD_APP_CATALOG || method == METHOD_APP_ICON) {
+            val caller = Binder.getCallingUid()
+            if (caller != Process.ROOT_UID && caller != Process.SHELL_UID) {
+                throw SecurityException("only the PC ADB shell may read the app catalog")
+            }
+            val client = awaitClient(CONNECT_TIMEOUT_MS)
+                ?: return Bundle().apply { putString("error", "ADH Device Daemon is unavailable") }
+            return when (method) {
+                METHOD_APP_CATALOG -> {
+                    val json = client.listApplicationsJson
+                    Bundle().apply { putString("base64", Base64.encodeToString(json.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)) }
+                }
+                else -> {
+                    val bytes = client.applicationIconPng(arg ?: "")
+                    if (bytes.isEmpty()) return Bundle().apply { putString("error", "no icon") }
+                    Bundle().apply { putString("base64", Base64.encodeToString(bytes, Base64.NO_WRAP)) }
+                }
+            }
         }
-        install(binder)
-        return Bundle().apply { putBoolean("accepted", true) }
+        return super.call(method, arg, extras)
     }
 
     override fun query(
@@ -51,7 +73,10 @@ class DaemonBinderProvider : ContentProvider() {
 
     companion object {
         private const val METHOD_PUBLISH = "publishDaemonBinder"
+        private const val METHOD_APP_CATALOG = "appCatalog"
+        private const val METHOD_APP_ICON = "appIcon"
         private const val EXTRA_BINDER = "daemonBinder"
+        private const val CONNECT_TIMEOUT_MS = 3_000L
         private val client = AtomicReference<DaemonClient?>()
         @Volatile private var ready = CountDownLatch(1)
 

@@ -61,7 +61,10 @@ export const FILE_TEXT_LIMIT = 262_144;
 export interface FileRead extends ReturnType<typeof summarizeFile> {
   ok: true;
   path: string;
+  /** Bytes actually returned (agent caps at 1 MB). */
   size: number;
+  /** Full size on the device, as reported by the agent's fstat. */
+  fsize: number;
   truncated: boolean;
   /** The whole file as UTF-8 text, when includeText was set and the file passed the guards. */
   text?: string;
@@ -83,6 +86,7 @@ export async function readDeviceFile(session: string, path: string, opts: { incl
     ok: true as const,
     path: String(r.path ?? p),
     size: Number(r.size ?? buf.length),
+    fsize: Number.isFinite(Number(r.fsize)) ? Number(r.fsize) : buf.length,
     truncated: r.truncated === true,
     ...summary,
     ...(opts.includeBase64 ? { b64: r.b64 } : {}),

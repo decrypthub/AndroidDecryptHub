@@ -11,7 +11,8 @@ import { nativeHookAll, nativeUnhookAll } from '../native_hook_all.ts';
 import { normalizeThrottleMs, nativeObservationPayload, ensureNativeObservationSupport, parseMemWindows } from '../native_hook_args.ts';
 import { agentPing, hookEngineSelftest, protocolSelfTest } from '../agent_probe.ts';
 import { listDeviceDir, readDeviceFile } from '../fs_browse.ts';
-import { listSandboxDir, readSandboxFile } from '../sandbox_fs.ts';
+import { listDevicePath, listSandboxDir, pathInSandbox, readDevicePath, readSandboxFile, normalizeAbs } from '../sandbox_fs.ts';
+import { localObserver } from '../local_observer.ts';
 import { jniFieldDigest } from '../jni_field_digest.ts';
 import { syscallTraceStart, syscallTraceDigest, syscallTraceStop } from '../syscall_trace.ts';
 import { liveDisasm , assertCallableAddress } from '../memory.ts';
@@ -27,6 +28,20 @@ function parseThrottleMs(value: unknown): { ms: number } | { error: string } {
 
 function parseMemSpec(value: unknown): { spec: string } | { error: string } {
   try { return { spec: parseMemWindows(value).spec }; } catch (e) { return { error: (e as Error).message }; }
+}
+
+// The file panel pays one adb spawn + `su` round trip per directory click (~0.4-1.3s on Windows).
+// When the target process is alive, the same listing/read travels over the agent socket in
+// milliseconds and sees the sandbox exactly as the app does. Deterministic transport: only
+// paths inside the app's own sandbox roots go through the agent (the app can always read
+// those); everything else keeps the su path, so /data/app listings and foreign dirs still
+// work and failures stay loud.
+function onlineSessionForPackage(pkg: string): string {
+  for (const s of sessions.values()) if (s.online && s.package === pkg) return s.sessionId;
+  return '';
+}
+function appSandboxPath(pkg: string, raw: string): boolean {
+  try { return pathInSandbox(pkg, normalizeAbs(raw)); } catch { return false; }
 }
 
 export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
@@ -369,7 +384,12 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
       if (!path) return send(400, { error: 'need path' });
       const pkg = String(url.searchParams.get('package') || '').trim();
       if (pkg) {
-        try { return send(200, await listSandboxDir(pkg, path)); }
+        const sid = onlineSessionForPackage(pkg);
+        if (sid && appSandboxPath(pkg, path)) {
+          try { return send(200, await listDeviceDir(sid, path)); }
+          catch (e) { return send(502, { ok: false, error: (e as Error).message }); }
+        }
+        try { return send(200, await (localObserver ? listDevicePath(path) : listSandboxDir(pkg, path))); }
         catch (e) { return send(502, { ok: false, error: (e as Error).message }); }
       }
       const sid = pickSid(url.searchParams.get('session'));
@@ -384,8 +404,16 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
       const pkg = String(parsed.package || '').trim();
       if (!path) return send(400, { error: 'need path' });
       if (pkg) {
+        const sid = onlineSessionForPackage(pkg);
+        if (sid && appSandboxPath(pkg, String(path))) {
+          try {
+            const r = await readDeviceFile(sid, String(path), { includeBase64: true, includeText: false });
+            const text = Buffer.from(r.b64 ?? '', 'base64').toString('utf8');
+            return send(200, { ok: true, path: r.path, size: r.size, fsize: r.fsize, truncated: r.truncated, b64: r.b64 ?? '', text });
+          } catch (e) { return send(502, { ok: false, error: (e as Error).message }); }
+        }
         try {
-          const r = await readSandboxFile(pkg, String(path));
+          const r = await (localObserver ? readDevicePath(String(path)) : readSandboxFile(pkg, String(path)));
           const text = Buffer.from(r.b64, 'base64').toString('utf8');
           return send(200, { ...r, text });
         } catch (e) { return send(502, { ok: false, error: (e as Error).message }); }

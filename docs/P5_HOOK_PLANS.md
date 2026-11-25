@@ -10,7 +10,7 @@
 | --- | --- |
 | `daemon/src/hook_plans.ts` | 严格方案校验、不可变版本、库 CAS、预检、顺序执行、逐步回执、观察和有限撤销 |
 | `hook_plan_host.ts`、`http/routes_hook_plans.ts`、MCP `hook_plans` | 统一 action dispatcher；复用 P1 持久任务、目标代次、幂等键、版本、控制权及 unknown |
-| `public/hook-plans-panel.js` | `/workbench` 和现场内嵌面板共用 JSON 编辑器、版本准备、任务提交及按意图键查询 |
+| `public/hook-plans-panel.js` | Host 仍提供该文件。2026-11-21 起人类工作台不再挂载方案编辑器；保存、应用与撤销走 MCP `hook_plans` 与 Python CLI |
 | `device/.../HookPlanCache.kt` | 持久缓存与迁移账本、APK/Agent 绑定、TTL、授权与 scope 再校验 |
 | `AndroidHookBinding.kt`、`EarlyPlanBroker.kt` | 包身份、Agent SHA/导出 ABI 检查；仅 root 可访问的本地有界缓存接口 |
 | `core/EarlyPlanWire.kt`、`agent/src/bootstrap/early_wire.h` | Kotlin 编码与 native 验证同一受限指令格式、内容 SHA、目标与过期检查 |
@@ -24,7 +24,7 @@ MCP：`hook_plans`。REST：`GET/POST /api/hook-plans`。发布版 Python CLI �
 - 查询：`list/get/validate/preflight/run/observe`、`early-prepare/early-status/migration-preview`。
 - 写入：`put/import-legacy/apply/undo`、`early-stage/early-revoke/migration-apply/migration-rollback`。
 
-写入一律要求 P1 `_operation` 的当前状态版本与控制代次，建议持久 `taskId` 和 `idempotencyKey`。AI 不自动夺取人类控制，也不刷新旧版本重发失败指令。面板“读取提交版本”冻结当前参数和状态，修改草稿后必须重新读取；未知 HTTP 提交保留意图键，只查询记录。
+写入一律要求 P1 `_operation` 的当前状态版本与控制代次，建议持久 `taskId` 和 `idempotencyKey`。AI 不自动夺取人类控制，也不刷新旧版本重发失败指令。调用方提交的是当次参数和当时读到的版本；参数变化后要重新读取再提交。未知 HTTP 提交保留意图键，只查询记录。人类工作台不提供这份编辑器。
 
 ## 方案与版本
 
