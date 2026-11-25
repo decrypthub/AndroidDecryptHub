@@ -9,7 +9,7 @@ export default defineConfig({
     viteSingleFile(),
     {
       name: 'emit-index',
-      closeBundle() {
+      writeBundle() {
         cpSync('dist/index.html', '../daemon/public/index.html');
       },
     },
