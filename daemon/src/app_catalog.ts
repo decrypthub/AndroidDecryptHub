@@ -9,6 +9,8 @@ export interface CatalogApp {
   label: string;
   system: boolean;
   running: '' | 'background' | 'foreground';
+  iconVersion?: string;
+  hasIcon?: boolean;
 }
 
 interface Listed extends CatalogApp { icon: string }
@@ -98,6 +100,8 @@ async function refreshList(serial = deviceSerial()): Promise<Listed[]> {
       .map(app => ({
         package: app.p as string, apk: '', label: (active ? labels.get(app.p) : '') || app.l || app.p,
         system: !!app.s, running: running.get(app.p) || '', icon: active ? icons.get(app.p) || '' : '',
+        iconVersion: app.u ? String(app.v || 0) + ':' + String(app.u) : app.v ? String(app.v) : '',
+        hasIcon: app.i === true,
       }));
     if (active) {
       listed = rows; listedAt = Date.now(); runningByPackage = running; runningAt = Date.now();
@@ -178,6 +182,8 @@ export async function readAppCatalog(serial?: string): Promise<CatalogApp[]> {
     label: labels.get(row.package) || row.label,
     system: row.system,
     running: runningByPackage.get(row.package) || row.running,
+    iconVersion: row.iconVersion,
+    hasIcon: row.hasIcon,
   }));
 }
 

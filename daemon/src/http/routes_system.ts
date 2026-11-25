@@ -62,11 +62,12 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
     { method: 'GET', path: '/api/apps/icon', handler: async () => {
       const pkg = url.searchParams.get('package') || '';
       const serial = url.searchParams.get('serial') || undefined;
+      const iconVersion = (url.searchParams.get('v') || '').slice(0, 80);
       if (serial && !/^[A-Za-z0-9_-]+$/.test(serial)) return send(400, { ok: false, error: '无效的设备序列号' });
       try {
-        const icon = await readPackageIcon(pkg, serial);
+        const icon = await readPackageIcon(pkg, serial, iconVersion);
         if (!icon) return send(404, { ok: false, error: '没有图标' });
-        const headers = { etag: icon.etag, 'cache-control': 'private, max-age=60', 'access-control-allow-origin': '*' };
+        const headers = { etag: icon.etag, 'cache-control': iconVersion ? 'private, max-age=86400, immutable' : 'private, max-age=60', 'access-control-allow-origin': '*' };
         if (req.headers['if-none-match'] === icon.etag) {
           res.writeHead(304, headers);
           res.end();

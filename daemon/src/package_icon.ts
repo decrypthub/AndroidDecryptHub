@@ -493,8 +493,8 @@ async function resolveIcon(pkg: string, serial = deviceSerial()): Promise<Packag
 }
 
 /** The launcher bitmap named by aapt, not a foreground or monochrome layer. */
-export async function readPackageIcon(pkg: string, serial?: string): Promise<PackageIcon | null> {
-  const key = (serial || deviceSerial()) + ':' + pkg;
+export async function readPackageIcon(pkg: string, serial?: string, version = ''): Promise<PackageIcon | null> {
+  const key = (serial || deviceSerial()) + ':' + pkg + ':' + version;
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < (hit.v ? POS_TTL : NEG_TTL)) return hit.v;
   let job = inflight.get(key);

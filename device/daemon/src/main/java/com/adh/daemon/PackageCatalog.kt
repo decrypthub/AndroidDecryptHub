@@ -2,6 +2,7 @@ package com.adh.daemon
 
 import android.content.Context
 import android.content.pm.ApplicationInfo
+import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -42,13 +43,26 @@ internal object PackageCatalog {
     fun iconPng(context: Context, packageName: String?): ByteArray {
         val pkg = packageName?.trim().orEmpty()
         if (pkg.isEmpty() || HardExcludes.isExcluded(pkg) || pkg == AdhPaths.DAEMON_PKG) return ByteArray(0)
+        val pm = context.packageManager
+        val packageInfo = runCatching {
+            if (Build.VERSION.SDK_INT >= 33) pm.getPackageInfo(pkg, PackageManager.PackageInfoFlags.of(0))
+            else {
+                @Suppress("DEPRECATION")
+                pm.getPackageInfo(pkg, 0)
+            }
+        }.getOrNull() ?: return ByteArray(0)
+        val version = if (Build.VERSION.SDK_INT >= 28) packageInfo.longVersionCode else {
+            @Suppress("DEPRECATION")
+            packageInfo.versionCode.toLong()
+        }
+        val key = pkg + '@' + version + ':' + packageInfo.lastUpdateTime
         val now = nowMs()
-        synchronized(iconCacheLock) { iconCache[pkg] }?.let {
+        synchronized(iconCacheLock) { iconCache[key] }?.let {
             if (now - it.first < 600_000) return it.second
         }
         val rendered = renderIcon(context, pkg)
         synchronized(iconCacheLock) {
-            iconCache[pkg] = now to rendered
+            iconCache[key] = now to rendered
             while (iconCache.size > 256) iconCache.remove(iconCache.keys.first())
         }
         return rendered
@@ -84,12 +98,12 @@ internal object PackageCatalog {
     private fun listFromPackageManager(context: Context): List<InstalledApp> {
         val pm = context.packageManager
         val infos = if (Build.VERSION.SDK_INT >= 33) {
-            pm.getInstalledApplications(PackageManager.ApplicationInfoFlags.of(0))
+            pm.getInstalledPackages(PackageManager.PackageInfoFlags.of(0))
         } else {
             @Suppress("DEPRECATION")
-            pm.getInstalledApplications(0)
+            pm.getInstalledPackages(0)
         }
-        return infos.map { info -> toApp(pm, info) }
+        return infos.mapNotNull { info -> info.applicationInfo?.let { appInfo -> toApp(pm, appInfo, info) } }
     }
 
     private fun listFromCmd(pm: PackageManager): List<InstalledApp> {
@@ -103,15 +117,21 @@ internal object PackageCatalog {
         }
         return merged.map { (pkg, system) ->
             val info = runCatching { pm.getApplicationInfo(pkg, 0) }.getOrNull()
-            if (info != null) toApp(pm, info) else InstalledApp(pkg, pkg, system)
+            if (info != null) toApp(pm, info, null) else InstalledApp(pkg, pkg, system)
         }
     }
 
-    private fun toApp(pm: PackageManager, info: ApplicationInfo): InstalledApp {
+    private fun toApp(pm: PackageManager, info: ApplicationInfo, packageInfo: PackageInfo?): InstalledApp {
         val label = runCatching { pm.getApplicationLabel(info).toString() }
             .getOrDefault(info.packageName)
         val system = (info.flags and ApplicationInfo.FLAG_SYSTEM) != 0
-        return InstalledApp(info.packageName, label, system)
+        val version = packageInfo?.let {
+            if (Build.VERSION.SDK_INT >= 28) it.longVersionCode else {
+                @Suppress("DEPRECATION")
+                it.versionCode.toLong()
+            }
+        } ?: 0
+        return InstalledApp(info.packageName, label, system, version, packageInfo?.lastUpdateTime ?: 0, info.icon != 0)
     }
 
     private fun packagesFromCmd(flag: String? = null): List<String> {

@@ -70,7 +70,7 @@ const canControl = computed(() => store.scope.has(store.chosenPkg));
         <div class="app-dialog-card">
           <span class="app-face">
             <span class="app-dialog-letter">{{ chosenInitial }}</span>
-            <img v-if="store.chosenPkg" :src="appIconUrl(store.chosenPkg, iconSerial)" alt=""
+            <img v-if="store.chosenPkg && chosen?.hasIcon !== false" :src="appIconUrl(store.chosenPkg, iconSerial, chosen?.iconVersion)" alt=""
               @error="($event.target as HTMLElement).style.display = 'none'" />
           </span>
           <div class="app-dialog-id">
@@ -100,7 +100,7 @@ const canControl = computed(() => store.scope.has(store.chosenPkg));
                   @click="pick(a.package)">
                   <span class="app-face">
                     <span class="app-dialog-letter">{{ itemInitial(a.label, a.package) }}</span>
-                    <img :src="appIconUrl(a.package, iconSerial)" alt="" loading="lazy"
+                    <img v-if="a.hasIcon !== false" :src="appIconUrl(a.package, iconSerial, a.iconVersion)" alt="" loading="lazy"
                       @error="($event.target as HTMLElement).style.display = 'none'" />
                   </span>
                   <span class="app-copy">

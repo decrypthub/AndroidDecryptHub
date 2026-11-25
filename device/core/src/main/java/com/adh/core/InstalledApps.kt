@@ -8,6 +8,9 @@ data class InstalledApp(
     val packageName: String,
     val label: String,
     val system: Boolean,
+    val versionCode: Long = 0,
+    val lastUpdateTime: Long = 0,
+    val hasIcon: Boolean = false,
 )
 
 /**
@@ -25,7 +28,10 @@ object InstalledAppsJson {
                 JSONObject()
                     .put("p", pkg)
                     .put("l", label)
-                    .put("s", app.system),
+                    .put("s", app.system)
+                    .put("v", app.versionCode)
+                    .put("u", app.lastUpdateTime)
+                    .put("i", app.hasIcon),
             )
         }
         return arr.toString()
@@ -47,7 +53,7 @@ object InstalledAppsJson {
             if (pkg.isEmpty() || HardExcludes.isExcluded(pkg) || !seen.add(pkg)) continue
             val label = obj.optString("l").ifBlank { obj.optString("label") }.trim().ifBlank { pkg }
             val system = obj.optBoolean("s", obj.optBoolean("system", false))
-            out.add(InstalledApp(pkg, label, system))
+            out.add(InstalledApp(pkg, label, system, obj.optLong("v"), obj.optLong("u"), obj.optBoolean("i")))
         }
         return out
     }
