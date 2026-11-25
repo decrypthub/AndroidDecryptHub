@@ -1285,6 +1285,7 @@ export function startCaptureLoop(sid: string, opts?: { skipArm?: boolean }) {
             dropped: r.dropped ?? 0, jdropped: r.jdropped ?? 0, drained: r.drained ?? 0,
             backlog: r.backlog ?? 0, firstDropNs: r.firstDropNs ?? 0, lastDropNs: r.lastDropNs ?? 0,
             complete: r.complete === true, ring: r.ring ?? 0, ts: Date.now(), agentResidual: r.residual ?? null,
+            announcedDrop: prev?.announcedDrop,
             // The window this session can account for starts at its FIRST drain response: the
             // agent's seq/dropped are cumulative over its whole process (and keep counting across
             // a daemon restart), while `emitted` only ever counts what we ingested. The records
