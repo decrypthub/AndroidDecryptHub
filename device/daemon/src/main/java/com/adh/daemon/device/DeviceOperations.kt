@@ -43,7 +43,7 @@ internal class DeviceOperations(val identity: DeviceIdentity, private val files:
     fun read(method: String, params: JSONObject = JSONObject(), authorize: () -> Unit = {}): JSONObject {
         // Bulk package metadata does not touch the operation ledger. Keep it out
         // of the writer lock so icon/catalog traffic cannot block scope or control.
-        if (method in setOf("legacy.icon", "applications.list")) {
+        if (method in setOf("legacy.icon", "applications.icon", "applications.list")) {
             authorize()
             return execute(method, params).put("stateRevision", revision())
         }

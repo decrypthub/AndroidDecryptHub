@@ -20,6 +20,7 @@ import java.util.Base64
 import java.io.File
 import java.io.StringReader
 import java.util.Properties
+import java.security.MessageDigest
 
 internal class AndroidDeviceBackend(
     private val context: Context,
@@ -43,8 +44,11 @@ internal class AndroidDeviceBackend(
         "scope.patch" -> scopes.patch(params)
         "scope.replace" -> scopes.replace(params.getJSONObject("document").toString(), params.optString("scopeRevision").takeIf { it.isNotEmpty() })
         "applications.list" -> {
-            val all = JSONArray(listApplications()); val offset = params.optInt("offset", 0).coerceIn(0, 100000); val limit = params.optInt("limit", 200).coerceIn(1, 500)
-            JSONObject().put("applications", JSONArray((offset until minOf(offset + limit, all.length())).map { all.get(it) })).put("total", all.length()).put("nextOffset", if (offset + limit < all.length()) offset + limit else JSONObject.NULL)
+            val snapshot = PackageCatalog.snapshot(context)
+            val requestedRevision = params.optLong("revision", 0)
+            if (requestedRevision != 0L && requestedRevision != snapshot.revision) throw DeviceFault("STALE_CATALOG", "application catalog changed during pagination; restart the listing")
+            val all = JSONArray(snapshot.json); val offset = params.optInt("offset", 0).coerceIn(0, 100000); val limit = params.optInt("limit", 200).coerceIn(1, 500)
+            JSONObject().put("applications", JSONArray((offset until minOf(offset + limit, all.length())).map { all.get(it) })).put("total", all.length()).put("revision", snapshot.revision).put("nextOffset", if (offset + limit < all.length()) offset + limit else JSONObject.NULL)
         }
         "processes.list" -> processes.list(params.optString("package"), params.optInt("offset").coerceIn(0, 100000), params.optInt("limit", 200).coerceIn(1, 500))
         "process.control" -> {
@@ -61,11 +65,34 @@ internal class AndroidDeviceBackend(
         "certificates.list" -> { val rows = JSONArray(listCaCerts()); JSONObject().put("certificates", rows).put("pendingReboot", (0 until rows.length()).any { !rows.getJSONObject(it).optBoolean("a") }) }
         "certificates.put" -> { val count = putCaCert(Base64.getDecoder().decode(params.getString("base64"))); JSONObject().put("ok", count >= 0).put("stored", count).put("pendingReboot", count > 0) }
         "certificates.delete" -> JSONObject().put("ok", deleteCaCert(params.getString("fileName"))).put("pendingReboot", true)
+        "applications.icon" -> applicationIcon(params)
         "legacy.icon" -> JSONObject().put("base64", Base64.getEncoder().encodeToString(getApplicationIconPng(params.getString("package"))))
         "legacy.applications" -> JSONObject().put("applications", JSONArray(listApplications()))
         "legacy.process" -> controlPackage(params.getString("package"), params.getString("action")).let { JSONObject().put("verdict", it).put("ok", it == "ok") }
         "legacy.reboot" -> JSONObject().put("ok", rebootDevice())
         else -> throw DeviceFault("UNSUPPORTED_METHOD", "device capability is not implemented")
+    }
+
+    private fun applicationIcon(params: JSONObject): JSONObject {
+        val pkg = params.getString("package")
+        val size = params.optInt("size", 96).coerceIn(24, 256)
+        val format = params.optString("format", "png").ifBlank { "png" }
+        if (format != "png") throw DeviceFault("UNSUPPORTED_FORMAT", "only png icons are currently supported")
+        val bytes = PackageCatalog.iconPng(context, pkg, size)
+        if (bytes.isEmpty()) return JSONObject()
+            .put("missing", true)
+            .put("missingReason", "NO_RENDERABLE_ICON")
+            .put("format", format)
+            .put("width", size)
+            .put("height", size)
+        val digest = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+        return JSONObject()
+            .put("missing", false)
+            .put("base64", Base64.getEncoder().encodeToString(bytes))
+            .put("format", format)
+            .put("width", size)
+            .put("height", size)
+            .put("sha256", digest)
     }
 
     fun isModulePresent(): Boolean {

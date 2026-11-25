@@ -127,10 +127,10 @@ class DeviceDomainTest {
     @Test fun bulkIconReadDoesNotHoldTheWriterLock() {
         val dir = root(); val iconStarted = CountDownLatch(1); val finishIcon = CountDownLatch(1); val writeFinished = CountDownLatch(1)
         val ops = DeviceOperations(identity(dir), DeviceFiles(dir), DeviceBackend { method, _ ->
-            if (method == "legacy.icon") { iconStarted.countDown(); assertTrue(finishIcon.await(2, TimeUnit.SECONDS)) }
+            if (method == "applications.icon") { iconStarted.countDown(); assertTrue(finishIcon.await(2, TimeUnit.SECONDS)) }
             JSONObject().put("ok", true)
         })
-        val iconThread = Thread { ops.read("legacy.icon", JSONObject().put("package", "com.example.fixture")) }
+        val iconThread = Thread { ops.read("applications.icon", JSONObject().put("package", "com.example.fixture")) }
         iconThread.start(); assertTrue(iconStarted.await(1, TimeUnit.SECONDS))
         val writeThread = Thread {
             ops.write("host.set", JSONObject(), "during-bulk-read", 0, "ai", 10000)

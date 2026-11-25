@@ -24,7 +24,7 @@ test('signed hello binds the root bootstrap key, device, nonce and capability ef
 });
 
 test('device methods are exact effect capabilities; arbitrary shell and disguised writes are rejected',()=>{
-  assert.equal(deviceMethodMode('scope.get'),'read');assert.equal(deviceMethodMode('scope.patch'),'write');
+  assert.equal(deviceMethodMode('scope.get'),'read');assert.equal(deviceMethodMode('applications.icon'),'read');assert.equal(deviceMethodMode('scope.patch'),'write');
   assert.equal(describeTool('devices',{action:'call',deviceId:'d',method:'process.control'}).mode,'write');
   assert.throws(()=>deviceMethodMode('shell'),(e:any)=>e.code==='UNSUPPORTED_METHOD');
   assert.throws(()=>describeTool('devices',{action:'call',method:'native_hook_all',status:'read'}));

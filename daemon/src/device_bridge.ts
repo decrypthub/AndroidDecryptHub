@@ -72,7 +72,7 @@ function deviceDataRpc(serial:string):Promise<DeviceConnection|null>{
   });
 }
 
-import {randomUUID} from 'node:crypto';
+import {createHash, randomUUID} from 'node:crypto';
 
 function peerTarget(c:DeviceConnection){return {deviceId:c.peer.deviceId,bootId:c.peer.bootId,daemonInstanceId:c.peer.daemonInstanceId};}
 
@@ -81,19 +81,33 @@ function peerTarget(c:DeviceConnection){return {deviceId:c.peer.deviceId,bootId:
 export async function deviceIcon(serial:string,pkg:string):Promise<Buffer|'none'|null>{
   const c=await deviceDataRpc(serial);
   if(!c)return null;
-  const reply=await c.rpc.request('legacy.icon',{package:pkg},peerTarget(c));
-  const b64=typeof reply?.base64==='string'?reply.base64:'';
-  return b64?Buffer.from(b64,'base64'):'none';
+  let reply:any;
+  try{
+    reply=await c.rpc.request('applications.icon',{package:pkg,size:96,format:'png'},peerTarget(c));
+  }catch(error){
+    if((error as {code?:string}).code!=='UNSUPPORTED_METHOD')throw error;
+    reply=await c.rpc.request('legacy.icon',{package:pkg},peerTarget(c));
+    const legacy=typeof reply?.base64==='string'?reply.base64:'';
+    return legacy?Buffer.from(legacy,'base64'):'none';
+  }
+  if(reply?.missing===true)return 'none';
+  if(reply?.missing!==false||reply.format!=='png'||typeof reply.base64!=='string')throw new Error('device returned an invalid applications.icon reply');
+  const body=Buffer.from(reply.base64,'base64');
+  const sha=createHash('sha256').update(body).digest('hex');
+  if(reply.sha256!==sha)throw new Error('device icon hash did not match the applications.icon payload');
+  return body;
 }
 
 export async function deviceApplications(serial:string):Promise<any[]|null>{
   const c=await deviceDataRpc(serial);
   if(!c)return null;
   const target=peerTarget(c);
-  const all:any[]=[];let offset=0;
+  const all:any[]=[];let offset=0;let revision=0;
   for(;;){
-    const reply=await c.rpc.request('applications.list',{offset,limit:500},target);
+    const reply=await c.rpc.request('applications.list',{offset,limit:500,...(revision?{revision}:{})},target);
     const page=Array.isArray(reply?.applications)?reply.applications:[];
+    if(!revision&&typeof reply?.revision==='number')revision=reply.revision;
+    if(typeof reply?.revision==='number'&&reply.revision!==revision)throw new Error('device application catalog revision changed during pagination');
     all.push(...page);
     const next=typeof reply?.nextOffset==='number'?reply.nextOffset:null;
     if(next===null||page.length===0)break;

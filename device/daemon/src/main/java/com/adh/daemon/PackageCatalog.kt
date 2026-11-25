@@ -26,21 +26,26 @@ import java.util.concurrent.TimeUnit
 internal object PackageCatalog {
     private const val TAG = "AdhPackageCatalog"
     private const val ICON_PX = 96
-    private var catalogCache: Pair<Long, String>? = null
+    internal data class Snapshot(val atMs: Long, val json: String, val revision: Long)
+    private var catalogCache: Snapshot? = null
+    private var catalogRevision = 0L
     private val iconCache = LinkedHashMap<String, Pair<Long, ByteArray>>(256, 0.75f, true)
     private val iconCacheLock = Any()
 
     private fun nowMs(): Long = System.nanoTime() / 1_000_000
 
-    @Synchronized fun listJson(context: Context): String {
+    @Synchronized fun snapshot(context: Context): Snapshot {
         val now = nowMs()
-        catalogCache?.let { if (now - it.first < 10_000) return it.second }
+        catalogCache?.let { if (now - it.atMs < 10_000) return it }
         val encoded = InstalledAppsJson.encode(list(context))
-        catalogCache = now to encoded
-        return encoded
+        val snapshot = Snapshot(now, encoded, ++catalogRevision)
+        catalogCache = snapshot
+        return snapshot
     }
 
-    fun iconPng(context: Context, packageName: String?): ByteArray {
+    fun listJson(context: Context): String = snapshot(context).json
+
+    fun iconPng(context: Context, packageName: String?, sizePx: Int = ICON_PX): ByteArray {
         val pkg = packageName?.trim().orEmpty()
         if (pkg.isEmpty() || HardExcludes.isExcluded(pkg) || pkg == AdhPaths.DAEMON_PKG) return ByteArray(0)
         val pm = context.packageManager
@@ -55,12 +60,12 @@ internal object PackageCatalog {
             @Suppress("DEPRECATION")
             packageInfo.versionCode.toLong()
         }
-        val key = pkg + '@' + version + ':' + packageInfo.lastUpdateTime
+        val key = pkg + '@' + version + ':' + packageInfo.lastUpdateTime + ':' + sizePx
         val now = nowMs()
         synchronized(iconCacheLock) { iconCache[key] }?.let {
             if (now - it.first < 600_000) return it.second
         }
-        val rendered = renderIcon(context, pkg)
+        val rendered = renderIcon(context, pkg, sizePx)
         synchronized(iconCacheLock) {
             iconCache[key] = now to rendered
             while (iconCache.size > 256) iconCache.remove(iconCache.keys.first())
@@ -68,7 +73,7 @@ internal object PackageCatalog {
         return rendered
     }
 
-    private fun renderIcon(context: Context, pkg: String): ByteArray {
+    private fun renderIcon(context: Context, pkg: String, sizePx: Int): ByteArray {
         val pm = context.packageManager
         // getApplicationIcon() never returns null: on any resource miss it hands back the
         // system default icon, which would paint the same Android robot on every row.
@@ -78,7 +83,7 @@ internal object PackageCatalog {
         if (info.icon == 0) return ByteArray(0)
         val res = runCatching { pm.getResourcesForApplication(info) }.getOrNull() ?: return ByteArray(0)
         val drawable = runCatching { res.getDrawable(info.icon, null) }.getOrNull() ?: return ByteArray(0)
-        return runCatching { drawableToPng(drawable) }.getOrDefault(ByteArray(0))
+        return runCatching { drawableToPng(drawable, sizePx) }.getOrDefault(ByteArray(0))
     }
 
     fun list(context: Context): List<InstalledApp> {
@@ -160,15 +165,15 @@ internal object PackageCatalog {
         }
     }
 
-    private fun drawableToPng(drawable: Drawable): ByteArray {
+    private fun drawableToPng(drawable: Drawable, sizePx: Int): ByteArray {
         val bitmap = when {
             drawable is BitmapDrawable && drawable.bitmap != null &&
-                drawable.bitmap.width == ICON_PX && drawable.bitmap.height == ICON_PX ->
+                drawable.bitmap.width == sizePx && drawable.bitmap.height == sizePx ->
                 drawable.bitmap
             else -> {
-                val bmp = Bitmap.createBitmap(ICON_PX, ICON_PX, Bitmap.Config.ARGB_8888)
+                val bmp = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
                 val canvas = Canvas(bmp)
-                drawable.setBounds(0, 0, ICON_PX, ICON_PX)
+                drawable.setBounds(0, 0, sizePx, sizePx)
                 drawable.draw(canvas)
                 bmp
             }
