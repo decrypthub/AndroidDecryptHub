@@ -28,10 +28,15 @@ export interface LocalObserver {
   declaredApiSerial?: string;
 }
 
-export const OWN_API_DEMO_PACKAGE = 'com.adh.sandbox.apilab';
+export const OWN_DEMO_PACKAGE = 'com.adh.sandbox';
+export const OWN_API_DEMO_PACKAGE = `${OWN_DEMO_PACKAGE}.apilab`;
 export const OWN_DEMO_API_ROUTE = '/api/observer/demo-api';
-export const OWN_FILE_DEMO_PACKAGE = 'com.adh.sandbox.filelab';
+export const OWN_FILE_DEMO_PACKAGE = `${OWN_DEMO_PACKAGE}.filelab`;
 export const OWN_FILE_DEMO_NOTE = 'adh-demo-external.txt';
+
+export function isOwnDemoPackage(pkg:string):boolean {
+  return pkg===OWN_DEMO_PACKAGE||pkg.startsWith(`${OWN_DEMO_PACKAGE}.`);
+}
 
 async function readLocalObserver(): Promise<LocalObserver | null> {
   const pkg = process.env.ADH_OBSERVE_APP;
@@ -115,7 +120,6 @@ export function allowedOwnedSave(observer:LocalObserver,root:string,path:string)
     typeof observer.editableText==='string'&&isEditableName(observer.editableText)&&path==='files/'+observer.editableText;
 }
 
-const SANDBOX_PKG_PREFIX = 'com.adh.sandbox';
 const TLS_TEST_PORT = 8762;
 
 let tlsChild: ReturnType<typeof spawn> | null = null;
@@ -135,7 +139,7 @@ function spawnTlsTestServer() {
  * and start tls_test_server.mjs when nothing listens on the host port yet.
  */
 export function ensureSandboxNetFixture(serial: string, pkg: string) {
-  if (!pkg.startsWith(SANDBOX_PKG_PREFIX)) return;
+  if (!isOwnDemoPackage(pkg)) return;
   void (async () => {
     try {
       const port = 'tcp:' + TLS_TEST_PORT;

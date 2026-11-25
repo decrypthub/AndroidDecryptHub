@@ -890,7 +890,7 @@ export async function applySelectedFamilies(scope: CaptureSettingsScope & { stop
 
 /**
  * The local USB sandbox arm: every crypto family plus system detection (y=1), then the
- * same libc file/sys modules the local example arm uses. Only for com.adh.sandbox apps —
+ * same libc file/sys modules the local example arm uses. Only for the self-owned sandbox family —
  * other observed packages keep their companion-delivered policy and just take the arm.
  */
 export async function armSandboxCapture(sid: string): Promise<CaptureToggle> {
