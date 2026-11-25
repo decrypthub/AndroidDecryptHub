@@ -96,7 +96,7 @@ const agentServer = net.createServer((sock) => {
         void (isOwnDemoPackage(session.package)
         ? armSandboxCapture(id)
         : setCapture(id, true, { fileModule: 'libc.so', sysModule: 'libc.so' }))
-        .then(result => log(`[capture] example arm ${id}: ok=${result.ok} installed=${result.installed}/${result.attempted}${result.error ? ' ' + result.error : ''}`))
+        .then(result => log(`[capture] example arm ${id}: ok=${result.ok} installed=${result.installed}/${result.attempted}${result.notInstalled.length ? ' missing=' + result.notInstalled.join(',') : ''}${result.error ? ' ' + result.error : ''}`))
         .catch(error => log(`[capture] example arm ${id}:`, (error as Error).message));
       }
     } else if (msg.t === 'caps' && session) {
