@@ -53,6 +53,13 @@ export function appendCaptureLine(dataDir: string, entry: PersistedCapture): voi
   appendFileSync(path, JSON.stringify(entry) + '\n');
 }
 
+export function appendCaptureLines(dataDir: string, pkg: string, entries: PersistedCapture[]): void {
+  const path = packageCapturesPath(dataDir, pkg);
+  if (!path || entries.length === 0) return;
+  mkdirSync(join(dataDir, 'packages', safePackageDirName(pkg)!), { recursive: true });
+  appendFileSync(path, entries.map((entry) => JSON.stringify(entry)).join('\n') + '\n');
+}
+
 // 单条删除不重写主文件（可能几百 MB）：packages/<pkg>/captures.deleted.jsonl 追加墓碑，
 // 恢复、分页、详情、导出所有读取路径统一过滤。
 const deletedIdsCache = new Map<string, Set<number>>();

@@ -3,12 +3,12 @@
 import http from 'node:http';
 import net from 'node:net';
 import { AGENT_PORT, HTTP_PORT, webUrls } from './config.ts';
-import { acceptsLocalHello, initLocalObserver, localObserver, localObserverHost, observerHost, noteObservedPid } from './local_observer.ts';
+import { acceptsLocalHello, initLocalObserver, isOwnDemoPackage, localObserver, localObserverHost, observerHost, noteObservedPid } from './local_observer.ts';
 import { handleHttp } from './http/router.ts';
 import { sendHttpError } from './http/response_error.ts';
 import { ensureAdbReverse } from './scope_list.ts';
 import { adbTrackDevices } from './adb_wire.ts';
-import { armSandboxCapture, setCapture, startCaptureLoop, forgetCaptureSession, clearCaptureArmProtect } from './service.ts';
+import { armSandboxCapture, setCapture, startCaptureLoop, forgetCaptureSession, clearCaptureArmProtect, ingestAgentCaptureFrame } from './service.ts';
 import { applyCaptureSettingsOnConnect } from './settings_service.ts';
 import { initializeHost } from './host_lifecycle.ts';
 import { initializeOperations } from './operation_host.ts';
@@ -93,10 +93,10 @@ const agentServer = net.createServer((sock) => {
         // must update it or status/own-files checks keep pointing at the dead process. Only the
         // main process counts — `pkg:remote` helper pids are still sessions, just not THE app.
         if (!session.process || session.process === session.package) noteObservedPid(session.package, session.pid);
-        void (session.package.startsWith('com.adh.sandbox')
+        void (isOwnDemoPackage(session.package)
         ? armSandboxCapture(id)
         : setCapture(id, true, { fileModule: 'libc.so', sysModule: 'libc.so' }))
-        .then(result => log(`[capture] example arm ${id}: ok=${result.ok} installed=${result.installed}/${result.attempted}${result.error ? ' ' + result.error : ''}`))
+        .then(result => log(`[capture] example arm ${id}: ok=${result.ok} installed=${result.installed}/${result.attempted}${result.notInstalled.length ? ' missing=' + result.notInstalled.join(',') : ''}${result.error ? ' ' + result.error : ''}`))
         .catch(error => log(`[capture] example arm ${id}:`, (error as Error).message));
       }
     } else if (msg.t === 'caps' && session) {
@@ -119,6 +119,9 @@ const agentServer = net.createServer((sock) => {
     } else if (msg.t === 'ping' && session) {
       session.lastSeen = Date.now();
       sock.write(frameJson({ t: 'pong' }));
+    } else if (msg.t === 'captureBatch' && session) {
+      ingestAgentCaptureFrame(session.sessionId, msg);
+      session.lastSeen = Date.now();
     } else if (msg.t === 'cmdResult') {
       const p = pending.get(msg.id);
       log(`cmdResult op=${msg.op} id=${msg.id} matched=${!!p} bytes=${JSON.stringify(msg).length}`);

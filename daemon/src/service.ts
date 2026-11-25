@@ -14,7 +14,7 @@ import { basename, join } from 'node:path';
 import {
   frameJson, agentSockets, pending, nextCmdId, sessions, dumps, log, rememberDump,
   captureTimers, captureModules, settings, recentJavaIn, captures,
-  pushCapture, broadcast, hexToPreview, previewForCapture, classify, categoryOf, capStats,
+  pushCapture, pushCaptureBatch, broadcast, hexToPreview, previewForCapture, classify, categoryOf, capStats,
   pruneArtifacts, DATA_DIR, captureSettingsForPackage, CRYPTO_FAMILY_KEYS, packageFamilies,
 } from './state.ts';
 import { shouldAutoArmPackage, scopedApps } from './scope_list.ts';
@@ -890,7 +890,7 @@ export async function applySelectedFamilies(scope: CaptureSettingsScope & { stop
 
 /**
  * The local USB sandbox arm: every crypto family plus system detection (y=1), then the
- * same libc file/sys modules the local example arm uses. Only for com.adh.sandbox apps —
+ * same libc file/sys modules the local example arm uses. Only for the self-owned sandbox family —
  * other observed packages keep their companion-delivered policy and just take the arm.
  */
 export async function armSandboxCapture(sid: string): Promise<CaptureToggle> {
@@ -971,6 +971,40 @@ export function captureInstallCounters(reply: any): { name: string; value: numbe
   return out;
 }
 
+/**
+ * Derive the arm verdict per hook family. File/system modules are always explicit target
+ * choices: a symbol that module simply does not import is partial coverage, not proof that
+ * the crypto scan failed. It is still a failure when a requested category installs nothing
+ * at all, because then the caller's module choice is useless.
+ */
+export function captureInstallVerdict(reply: any): {
+  ok: boolean; installed: number; attempted: number; notInstalled: string[]; partial: boolean; complete: boolean;
+} {
+  const counters = captureInstallCounters(reply);
+  const notInstalled = counters.filter((c) => c.value <= 0).map((c) => c.name);
+  const installed = counters.length - notInstalled.length;
+  const cryptoCounters = counters.filter((c) => !c.name.startsWith('file.') && !c.name.startsWith('sys.'));
+  const fileCounters = counters.filter((c) => c.name.startsWith('file.'));
+  const sysCounters = counters.filter((c) => c.name.startsWith('sys.'));
+  const noneLive = (rows: { value: number }[]) => rows.length > 0 && rows.every((c) => c.value <= 0);
+  const scannedAllCrypto = !String(reply?.cryptoModule ?? '');
+  const cryptoMissing = cryptoCounters.some((c) => c.value <= 0);
+  const failed =
+    noneLive(cryptoCounters) ||
+    (scannedAllCrypto && cryptoMissing) ||
+    noneLive(fileCounters) ||
+    noneLive(sysCounters);
+  const ok = installed > 0 && !failed;
+  return {
+    ok,
+    installed,
+    attempted: counters.length,
+    notInstalled,
+    partial: notInstalled.length > 0,
+    complete: ok && notInstalled.length === 0,
+  };
+}
+
 export interface CaptureToggle {
   ok: boolean; on: boolean; session: string;
   installed: number; attempted: number; notInstalled: string[]; partial: boolean;
@@ -990,9 +1024,10 @@ export interface CaptureToggle {
 
 /**
  * Install or remove the persistent hook set for one session.
- * `on`: install, then report installed/attempted/notInstalled and a real verdict - with the
- * module left empty (scan every file-backed module) a symbol that installed nowhere is a
- * failure, while a named module legitimately may not import every symbol (partial, not failed).
+ * `on`: install, then report installed/attempted/notInstalled and a real verdict - with
+ * cryptoModule left empty (scan every file-backed module) a crypto symbol that installed
+ * nowhere is a failure. Missing file/system symbols in their explicitly named modules are
+ * partial coverage; requesting one of those categories in a module that installs none is failed.
  * `off`: drain the ring FIRST (capture_stop resets it - stopping without draining destroys
  * whatever the target produced since the last tick), then stop.
  */
@@ -1099,16 +1134,12 @@ async function armCaptureHooks(sid: string, mods: { cryptoModule: string; fileMo
   const armedMods = { ...mods, sysModule };
   const reply = await sendCmd(sid, 'capture_start', armedMods, 15_000);
   recordCaptureHooks(sid, reply);
-  const counters = captureInstallCounters(reply);
-  const notInstalled = counters.filter((c) => c.value <= 0).map((c) => c.name);
-  const installed = counters.length - notInstalled.length;
-  const scannedAll = !String(armedMods.cryptoModule ?? '');
-  const ok = installed > 0 && (scannedAll ? notInstalled.length === 0 : true);
+  const verdict = captureInstallVerdict(reply);
   return {
-    ok, on: true, session: sid,
-    installed, attempted: counters.length, notInstalled,
-    partial: notInstalled.length > 0,
-    complete: ok && notInstalled.length === 0,
+    ok: verdict.ok, on: true, session: sid,
+    installed: verdict.installed, attempted: verdict.attempted, notInstalled: verdict.notInstalled,
+    partial: verdict.partial,
+    complete: verdict.complete,
     drainLoop: captureTimers.has(sid) ? 'armed' : 'started',
     rearmed: true, drainedBeforeRearm: Number(drained.response?.count ?? 0) || 0,
     reply,
@@ -1180,6 +1211,100 @@ function captureArmBlockedReason(pkg: string): string | null {
   return null;
 }
 
+// Shared ingest for command-driven capture_drain replies and agent-pushed captureBatch frames.
+// Bookkeeping happens before store processing for the same reason as the old drain path: the
+// records have already left the agent's ring, so a local processing failure must not erase the
+// fact that the agent delivered them.
+function processCaptureFrame(sid: string, r: any, now: number) {
+  const pkg = sessions.get(sid)?.package ?? '';
+  const announce = (entry: Capture) => {
+    const outl = entry.outHex ? entry.outHex.length / 2 : 0;
+    broadcast('capture.new', {
+      id: entry.id, sessionId: sid, package: pkg, source: entry.source, category: entry.category,
+      algo: entry.algo, op: entry.op, func: entry.func, preview: entry.preview, inl: entry.inl, outl,
+      ...(entry.path ? { path: entry.path } : {}),
+      hasKey: !!entry.keyHex, tid: entry.tid, ts: entry.ts,
+      ...(entry.category === 'crypto' ? { view: cryptoView(entry) } : {}),
+    });
+  };
+  const drainedEntries: Capture[] = [];
+  for (const c of (r.jcaptures ?? [])) {
+    if (c.in) recentJavaIn.set(c.in, now);
+    const hasBody = Number(c.inl) > 0 || Number(c.outl) > 0 || (typeof c.out === 'string' && c.out.length > 0);
+    const entry: Capture = {
+      id: ++capSeq, sessionId: sid, package: pkg, source: 'java', func: javaHook(String(c.op || ''), hasBody), algo: c.algo, op: c.op,
+      category: 'crypto',
+      inl: c.inl, tid: c.tid, tsNs: c.tsNs, ts: now,
+      hex: c.in, preview: hexToPreview(c.in),
+      keyHex: c.key || '', ivHex: c.iv || '', outHex: c.out || '',
+    };
+    drainedEntries.push(entry);
+  }
+  for (const [k, t] of recentJavaIn) if (now - t > 2000) recentJavaIn.delete(k);
+  for (const c of (r.captures ?? [])) {
+    if (c.hex && recentJavaIn.has(c.hex)) continue;
+    const { algo, op } = classify(c.func);
+    const category = categoryOf(c.func);
+    const filePath = typeof c.path === 'string' && c.path ? c.path : '';
+    if (category === 'file' && filePath.startsWith('socket:')) continue;
+    const entry: Capture = {
+      id: ++capSeq, sessionId: sid, package: pkg, source: 'native', func: c.func, algo, op,
+      category,
+      inl: c.inl, tid: c.tid, tsNs: c.tsNs, ts: now,
+      hex: c.hex, preview: filePath && category === 'file' ? filePath : previewForCapture(c.func, c.hex),
+      ...(filePath ? { path: filePath } : {}),
+      ...(c.key ? { keyHex: c.key } : {}), ...(c.iv ? { ivHex: c.iv } : {}),
+      ...(c.conn ? { conn: String(c.conn) } : {}),
+      ...nativeHookIdentity(c.func, c.hex ?? ''),
+    };
+    drainedEntries.push(entry);
+  }
+  for (const entry of pushCaptureBatch(drainedEntries)) announce(entry);
+}
+
+export function ingestAgentCaptureFrame(sid: string, r: any) {
+  const count = Number(r?.count ?? 0) || 0;
+  const frameSeq = Number(r?.frameSeq ?? 0) || 0;
+  const prev = capStats.get(sid);
+  const emittedAfter = (prev?.emitted ?? 0) + count;
+  const stale = !!prev?.frameSeq && !!frameSeq && frameSeq < prev.frameSeq;
+  const pushedSeq = Math.max(prev?.pushedSeq ?? 0, r?.t === 'captureBatch' ? frameSeq : 0);
+  if (stale && prev) {
+    // A pushed batch's health snapshot was taken before a later drain overtook it. Settle it
+    // only when that newer drain identified this exact batch in queuedSeq; a stale drain reply
+    // is already included in a newer pushed snapshot and only contributes records/emitted.
+    const settle = r?.t === 'captureBatch' && prev.queuedSeq === frameSeq ? count : 0;
+    capStats.set(sid, { ...prev, emitted: emittedAfter, ts: Date.now(), pushedSeq,
+      drained: prev.drained + settle,
+      backlog: Math.max(0, prev.backlog - settle),
+      queued: Math.max(0, (prev.queued ?? 0) - settle),
+      queuedSeq: settle ? 0 : prev.queuedSeq });
+  } else {
+    // A drain can snapshot a batch while it is queued but lose the send race to that batch. If
+    // the batch has already reached this daemon, settle it into drained instead of resurrecting
+    // stale backlog. If it has not arrived yet, keep queuedSeq so the later pushed frame can
+    // settle it without regressing the newer drain snapshot.
+    const queuedSeq = Number(r?.queuedSeq ?? 0) || 0;
+    const settle = queuedSeq && queuedSeq <= pushedSeq ? Number(r?.queued ?? 0) || 0 : 0;
+    capStats.set(sid, { seq: r.seq ?? 0, emitted: emittedAfter,
+      dropped: r.dropped ?? 0, jdropped: r.jdropped ?? 0,
+      drained: (r.drained ?? 0) + settle,
+      backlog: Math.max(0, (r.backlog ?? 0) - settle),
+      queued: Math.max(0, (r.queued ?? 0) - settle), queuedSeq: settle ? 0 : queuedSeq,
+      pushedSeq, frameSeq: Math.max(prev?.frameSeq ?? 0, frameSeq),
+      firstDropNs: r.firstDropNs ?? 0, lastDropNs: r.lastDropNs ?? 0,
+      complete: r.complete === true, ring: r.ring ?? 0, ts: Date.now(), agentResidual: r.residual ?? null,
+      announcedDrop: prev?.announcedDrop,
+      base: prev?.base ?? { seq: r.seq ?? 0, dropped: r.dropped ?? 0, jdropped: r.jdropped ?? 0, drained: r.drained ?? 0, emitted: emittedAfter } });
+  }
+  processCaptureFrame(sid, r, Date.now());
+  const now = capStats.get(sid);
+  if (now && now.dropped > 0 && !now.announcedDrop) {
+    now.announcedDrop = true;
+    log(`[capture] session ${sid} DROPPING — ring full: dropped=${now.dropped} seq=${now.seq} (complete:false)`);
+  }
+}
+
 export function startCaptureLoop(sid: string, opts?: { skipArm?: boolean }) {
   // Recovery now happens explicitly after module imports; resume above restored IDs.
   capSeq = captures.reduce((max, capture) => Math.max(max, Number(capture.id) || 0), capSeq);
@@ -1205,54 +1330,6 @@ export function startCaptureLoop(sid: string, opts?: { skipArm?: boolean }) {
     if (captureTimers.has(sid)) return;
     let busy = false;
     let drainErrLogged = false;   // fail-loud once per wedged-drain episode, not every 1.5s tick
-    const processDrain = (r: any, now: number) => {
-      const pkg = sessions.get(sid)?.package ?? '';
-      const announce = (entry: Capture) => {
-        const outl = entry.outHex ? entry.outHex.length / 2 : 0;
-        broadcast('capture.new', {
-          id: entry.id, sessionId: sid, package: pkg, source: entry.source, category: entry.category,
-          algo: entry.algo, op: entry.op, func: entry.func, preview: entry.preview, inl: entry.inl, outl,
-          ...(entry.path ? { path: entry.path } : {}),
-          hasKey: !!entry.keyHex, tid: entry.tid, ts: entry.ts,
-          ...(entry.category === 'crypto' ? { view: cryptoView(entry) } : {}),
-        });
-      };
-      for (const c of (r.jcaptures ?? [])) {
-        if (c.in) recentJavaIn.set(c.in, now);
-        const hasBody = Number(c.inl) > 0 || Number(c.outl) > 0 || (typeof c.out === 'string' && c.out.length > 0);
-        const entry: Capture = {
-          id: ++capSeq, sessionId: sid, package: pkg, source: 'java', func: javaHook(String(c.op || ''), hasBody), algo: c.algo, op: c.op,
-          category: 'crypto',
-          inl: c.inl, tid: c.tid, tsNs: c.tsNs, ts: now,
-          hex: c.in, preview: hexToPreview(c.in),
-          keyHex: c.key || '', ivHex: c.iv || '', outHex: c.out || '',
-        };
-        if (pushCapture(entry)) announce(entry);
-      }
-      for (const [k, t] of recentJavaIn) if (now - t > 2000) recentJavaIn.delete(k);
-      for (const c of (r.captures ?? [])) {
-        if (c.hex && recentJavaIn.has(c.hex)) continue;   // already captured richly at the Java layer
-        const { algo, op } = classify(c.func);
-        const category = categoryOf(c.func);
-        const filePath = typeof c.path === 'string' && c.path ? c.path : '';
-        if (category === 'file' && filePath.startsWith('socket:')) continue;
-        const entry: Capture = {
-          id: ++capSeq, sessionId: sid, package: pkg, source: 'native', func: c.func, algo, op,
-          category,
-          inl: c.inl, tid: c.tid, tsNs: c.tsNs, ts: now,
-          hex: c.hex, preview: filePath && category === 'file' ? filePath : previewForCapture(c.func, c.hex),
-          ...(filePath ? { path: filePath } : {}),
-          // Symmetric captures carry the key/IV the agent joined at EVP_CipherInit_ex; the Java
-          // reporter path has always sent these, the native path only since that join exists.
-          ...(c.key ? { keyHex: c.key } : {}), ...(c.iv ? { ivHex: c.iv } : {}),
-          ...(c.conn ? { conn: String(c.conn) } : {}),
-          // Which hook produced this record, and which of its three parts it is. Lifted at ingest so
-          // the caller can filter/join on it instead of parsing the payload itself.
-          ...nativeHookIdentity(c.func, c.hex ?? ''),
-        };
-        if (pushCapture(entry)) announce(entry);
-      }
-    };
     // One drain implementation for both the polling loop and explicit callers: concurrent requests
     // coalesce on the same promise so two drains can never interleave their processDrain calls.
     let inFlight: Promise<any> | null = null;
@@ -1276,32 +1353,10 @@ export function startCaptureLoop(sid: string, opts?: { skipArm?: boolean }) {
         let r: any, drains = 0;
         do {
           r = await sendCmd(sid, 'capture_drain', {}, 8_000);
-          const count = r?.count ?? 0;
-          // Bookkeeping FIRST: the agent has already popped these records, so our accounting must
-          // not depend on our own store-side processing succeeding.
-          const prev = capStats.get(sid);
-          const emittedAfter = (prev?.emitted ?? 0) + count;
-          capStats.set(sid, { seq: r.seq ?? 0, emitted: emittedAfter,
-            dropped: r.dropped ?? 0, jdropped: r.jdropped ?? 0, drained: r.drained ?? 0,
-            backlog: r.backlog ?? 0, firstDropNs: r.firstDropNs ?? 0, lastDropNs: r.lastDropNs ?? 0,
-            complete: r.complete === true, ring: r.ring ?? 0, ts: Date.now(), agentResidual: r.residual ?? null,
-            announcedDrop: prev?.announcedDrop,
-            // The window this session can account for starts at its FIRST drain response: the
-            // agent's seq/dropped are cumulative over its whole process (and keep counting across
-            // a daemon restart), while `emitted` only ever counts what we ingested. The records
-            // in that first response were already popped before this snapshot, so they are
-            // excluded on both sides - see captureHealth() for the identity that then holds.
-            base: prev?.base ?? { seq: r.seq ?? 0, dropped: r.dropped ?? 0, jdropped: r.jdropped ?? 0, drained: r.drained ?? 0, emitted: emittedAfter } });
-          processDrain(r, Date.now());
+          ingestAgentCaptureFrame(sid, r);
           drains++;
         } while (r && r.backlog > 0 && drains < 60);
         drainErrLogged = false;   // a drain succeeded — clear the failure episode
-        // fail-loud: announce the first time this session starts dropping (once per session)
-        const now = capStats.get(sid);
-        if (now && now.dropped > 0 && !now.announcedDrop) {
-          now.announcedDrop = true;
-          log(`[capture] session ${sid} DROPPING — ring full: dropped=${now.dropped} seq=${now.seq} (complete:false)`);
-        }
       } catch (e) {
         if (!drainErrLogged) { drainErrLogged = true; log(`[capture] drain ${sid} 失败 (静默重试直至恢复):`, (e as Error).message); }
         throw e;
@@ -1312,7 +1367,7 @@ export function startCaptureLoop(sid: string, opts?: { skipArm?: boolean }) {
     captureDrainers.set(sid, runDrain);
     const timer = detached(() => setInterval(async () => {
       if (busy || !sessions.get(sid)?.online) return;
-      await runDrain().catch(() => null);   // the loop never propagates: it retries next tick
+      await runDrain().catch(() => null);   // sender pushes bursts; this remains the compatibility sweep
     }, 1500));
     captureTimers.set(sid, timer);
   };

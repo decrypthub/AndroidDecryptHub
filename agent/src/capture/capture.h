@@ -11,6 +11,10 @@ void adh_cmd_file_probe(int fd, const char *id);
 void adh_cmd_capture_start(int fd, const char *id, const char *crypto_module, const char *file_module, const char *sys_module);
 void adh_cmd_capture_stop(int fd, const char *id);
 void adh_cmd_capture_drain(int fd, const char *id);
+// capture_start arms a bounded sender on the same agent socket; command-loop teardown and
+// capture_stop own its lifecycle so pushed records are either delivered or counted as dropped.
+void adh_capture_sender_start(int fd);
+void adh_capture_sender_stop(int terminate_io);
 int adh_capture_register_reporter(JNIEnv *env, const char *report_class);
 // Push a bounded, target-generated text event (for example a Java hook callback) into the existing capture ring.
 void adh_capture_push_text(const char *func, const char *text);

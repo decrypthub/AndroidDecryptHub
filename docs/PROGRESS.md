@@ -1,5 +1,24 @@
 # PROGRESS — 跨会话进度看板
 
+## 2026-11-25 capture 背压改为 agent 批量推送
+
+- Agent 在真实 stream socket 的 `capture_start` 上启动独立 sender 线程；生产者仍只做非阻塞入队，sender 在 `g_cap_lock` 内紧凑复制出有界批次，锁外序列化并通过同一条 framed socket 推 `captureBatch`。`capture_stop`、连接关闭和重连都会广播条件变量并 join sender；发送失败不回放不完整帧，未发出的批次如实计入 `dropped/jdropped`。
+- Java 富采集也改成有界 ring，JNI 字符串/数组复制移出 `g_cap_lock`；native/Java 入队只追加并唤醒 sender。兼容 `capture_drain` 仍在，但恢复 1.5s 兜底轮询，不再靠 100ms 控制通道拉突发流量。
+- `captureBatch` 与 `capture_drain` 都在锁外组帧，先后到达 Host 的顺序可能和 agent 出队顺序不同。Agent 为每次出队打 `frameSeq`，drain 额外报告自己看到的在途批 `queuedSeq`；Host 因此只把迟到帧的记录继续入库，并用 `queuedSeq` 精确结转 `queued/backlog -> drained`，不回退更新的健康快照。Host 侧批量入库按包一次写盘、一次 retention，`queued` 已包含在 agent `backlog` 中，不重复相加。
+- 本机验收：`tools/build_agent.sh` 生成 arm64 `libadh_agent.so`；`npm run typecheck` 通过；`npm test` 605 项通过、0 失败、20 项跳过。PGP110 / `aa165071` 的 `com.adh.sandbox`（pid 24804，会话 `s_11pg`）用受管 operation 跑 `capture_start`（`19/19`）和 `BurstProbe.run()` 20,000 次：稳定时 `seq=20010 emitted=19942 backlog=0 dropped=68 jdropped=99`，`accountedFor=20010 agentResidual=0 agentLost=0 daemonLost=0`，`complete:false` 如实表示仍有有界丢弃但没有静默丢失；`capture_stop` 确认 `drainedOk=true drainLoop=none`。
+
+## 2026-11-25 capture_start 按采集族裁决安装结果
+
+- 本机观察沙盒的 `30/31` 已定位：唯一未装的是 `file.openat`；`libc.so`、`libjavacore.so`、`libopenjdk.so` 的动态重定位表里都没有 `openat` 导入槽（用 `llvm-readelf -rW` 对真机库核对），所以它是该显式文件模块下的合法缺口，不是 crypto 扫描失败或重复装钩假象。
+- Host 现在按 crypto/file/sys 分族裁决：全模块 crypto 扫描缺 crypto 符号仍 fail-loud；显式 file/sys 模块缺单个符号是 `partial`，但该类一个都没装上仍失败。日志直接带 `missing=file.openat`，不再只给 `30/31`。
+- PGP110 / `aa165071` 实测重连后：`ok=true installed=30/31 missing=file.openat`。新增 4 条 verdict 单测（先红后绿）；该修复只改 Host 判定与展示，不改 agent 钩子行为。
+
+## 2026-11-25 host CI 恢复执行到真实门禁
+
+- `adb_wire` 假 adb server 测试改用系统临时目录并保证关闭，Linux runner 不再停在 Unit tests。
+- v4.49 门禁改读 `agent_cmds.c` 的 dispatch 与 `ADH_AGENT_OPS`，本机重跑识别 39 个 agent op 且 MCP 可达。自有 Demo 包名集中到 `local_observer.ts` 的 `OWN_DEMO_PACKAGE` 声明；其它产品源码出现同一包名仍按红线失败。
+- 验证：`daemon` typecheck、619 项 host 测试（599 pass / 20 skip）、`tools/verify_v87_mcp_operability.sh` PASS。未跑 device 验收，本轮不改设备行为。
+
 ## 2026-11-23 面板上直接选择、查看和注入应用
 
 - 应用菜单先列手机注入范围里的应用和当前已连上的进程。点「加载应用列表」才展开已安装应用。勾选只加入或移出一个应用，并以手机读回的范围为准；没连上的显示「待启动」，不在这里重启应用。
