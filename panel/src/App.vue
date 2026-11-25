@@ -9,6 +9,7 @@ import {
   SettingsOutline, ChevronBackOutline, ChevronDownOutline,
 } from '@vicons/ionicons5';
 import { store, selectDevice, toasts, belongsToApp, capVisible, panelDisplay, savePanelDisplay } from './store';
+import { appIconUrl } from './api';
 import DeviceMenu from './components/DeviceMenu.vue';
 import AppDialog from './components/AppDialog.vue';
 import CapturePanel from './components/CapturePanel.vue';
@@ -51,6 +52,7 @@ const wsCls = computed(() =>
 const chosenApp = computed(() => store.apps.find(a => a.package === store.chosenPkg));
 const appLabel = computed(() => chosenApp.value?.label || (store.chosenPkg ? '当前应用' : '未选择 APP'));
 const appInitial = computed(() => (appLabel.value[0] ?? '?'));
+const iconSerial = computed(() => store.devices.find(d => d.key === store.selectedDeviceKey)?.serial || '');
 
 const boardOptions = [...NAV.map(({ key: value, label }) => ({ value, label })), { value: 'settings', label: '设置' }];
 
@@ -127,7 +129,7 @@ const themeOverrides = computed<GlobalThemeOverrides>(() => {
               <span class="proc-primary">
                 <span class="app-face proc-face">
                   <span class="app-dialog-letter">{{ appInitial }}</span>
-                  <img v-if="store.chosenPkg" :src="'/api/apps/icon?v=2&package=' + encodeURIComponent(store.chosenPkg)"
+                  <img v-if="store.chosenPkg" :src="appIconUrl(store.chosenPkg, iconSerial)"
                     alt="" @error="($event.target as HTMLElement).style.display = 'none'" />
                 </span>
                 <span class="proc-text">

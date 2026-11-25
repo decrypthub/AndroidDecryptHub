@@ -66,9 +66,18 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       try {
         const icon = await readPackageIcon(pkg, serial);
         if (!icon) return send(404, { ok: false, error: '没有图标' });
-        res.writeHead(200, { 'content-type': icon.type, 'cache-control': 'private, max-age=60', 'access-control-allow-origin': '*' });
+        const headers = { etag: icon.etag, 'cache-control': 'private, max-age=60', 'access-control-allow-origin': '*' };
+        if (req.headers['if-none-match'] === icon.etag) {
+          res.writeHead(304, headers);
+          res.end();
+          return;
+        }
+        res.writeHead(200, { ...headers, 'content-type': icon.type });
         res.end(icon.body);
-      } catch (e) { return send(502, { ok: false, error: (e as Error).message }); }
+      } catch (e) {
+        const unavailable = (e as { code?: string }).code === 'DEVICE_ICON_UNAVAILABLE';
+        return send(unavailable ? 503 : 502, { ok: false, error: (e as Error).message });
+      }
     } },
     { method: 'POST', path: '/api/apps/control', handler: async () => {
       let body: { package?: string; action?: string };

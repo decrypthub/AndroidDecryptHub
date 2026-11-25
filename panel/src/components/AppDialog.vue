@@ -27,6 +27,7 @@ const apps = computed(() => {
   return list;
 });
 const chosen = computed(() => store.apps.find(a => a.package === store.chosenPkg));
+const iconSerial = computed(() => store.devices.find(d => d.key === store.selectedDeviceKey)?.serial || '');
 const chosenLabel = computed(() => chosen.value?.label || store.chosenPkg || '未选择应用');
 const chosenInitial = computed(() => (chosenLabel.value[0] ?? '?'));
 const itemInitial = (label?: string, pkg?: string) => ((label || pkg || '?')[0] ?? '?');
@@ -69,7 +70,7 @@ const canControl = computed(() => store.scope.has(store.chosenPkg));
         <div class="app-dialog-card">
           <span class="app-face">
             <span class="app-dialog-letter">{{ chosenInitial }}</span>
-            <img v-if="store.chosenPkg" :src="appIconUrl(store.chosenPkg)" alt=""
+            <img v-if="store.chosenPkg" :src="appIconUrl(store.chosenPkg, iconSerial)" alt=""
               @error="($event.target as HTMLElement).style.display = 'none'" />
           </span>
           <div class="app-dialog-id">
@@ -97,7 +98,7 @@ const canControl = computed(() => store.scope.has(store.chosenPkg));
               @click="pick(a.package)">
               <span class="app-face">
                 <span class="app-dialog-letter">{{ itemInitial(a.label, a.package) }}</span>
-                <img :src="appIconUrl(a.package)" alt="" loading="lazy"
+                <img :src="appIconUrl(a.package, iconSerial)" alt="" loading="lazy"
                   @error="($event.target as HTMLElement).style.display = 'none'" />
               </span>
               <span class="app-copy">

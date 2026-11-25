@@ -71,7 +71,7 @@ export async function deviceApplications(serial:string):Promise<any[]|null>{
   const target=peerTarget(c);
   const all:any[]=[];let offset=0;
   for(;;){
-    const reply=await c.rpc.request('applications.list',{offset,limit:200},target);
+    const reply=await c.rpc.request('applications.list',{offset,limit:500},target);
     const page=Array.isArray(reply?.applications)?reply.applications:[];
     all.push(...page);
     const next=typeof reply?.nextOffset==='number'?reply.nextOffset:null;

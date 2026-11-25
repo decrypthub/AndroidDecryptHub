@@ -1,11 +1,25 @@
+import { createHash } from 'node:crypto';
 import { adbExecBuffer } from './adb_wire.ts';
 import { catalogIcon, ensureCatalogIdentity } from './app_catalog.ts';
 import { apkAaptDumps } from './scope_list.ts';
 import { shQuote } from './sandbox_fs.ts';
 import { deviceIcon, deviceSerial } from './device_bridge.ts';
-const cache = new Map<string, { at: number; v: { body: Buffer; type: string } | null }>();
-const inflight = new Map<string, Promise<{ body: Buffer; type: string } | null>>();
-const NEG_TTL = 30_000;
+export interface PackageIcon { body: Buffer; type: string; etag: string }
+
+const cache = new Map<string, { at: number; v: PackageIcon | null }>();
+const inflight = new Map<string, Promise<PackageIcon | null>>();
+const POS_TTL = 600_000;
+const NEG_TTL = 300_000;
+
+function tagged(body: Buffer, type: string): PackageIcon {
+  return { body, type, etag: '"' + createHash('sha256').update(body).digest('hex') + '"' };
+}
+
+function iconUnavailable(): Error {
+  const error = new Error('设备图标服务不可用') as Error & { code?: string };
+  error.code = 'DEVICE_ICON_UNAVAILABLE';
+  return error;
+}
 
 function adbBase(serial = deviceSerial()): string[] {
   return serial ? ['-s', serial] : [];
@@ -23,7 +37,7 @@ function imageType(body: Buffer): string {
 }
 
 /** The device daemon icon can fall back to a shared system default; only trust a real APK bitmap. */
-async function apkIcon(pkg: string): Promise<{ body: Buffer; type: string } | null> {
+async function apkIcon(pkg: string): Promise<PackageIcon | null> {
   let known = catalogIcon(pkg);
   if (!known) {
     await ensureCatalogIdentity(pkg);
@@ -43,7 +57,7 @@ async function apkIcon(pkg: string): Promise<{ body: Buffer; type: string } | nu
       path = resolved.path;
     } else if (resolved) {
       const svg = await vectorIconSvg(known.apk, resolved.path);
-      if (svg) return { body: Buffer.from(svg, 'utf8'), type: 'image/svg+xml' };
+      if (svg) return tagged(Buffer.from(svg, 'utf8'), 'image/svg+xml');
       const layer = await resolveAdaptiveLayer(known.apk, path || resolved.path);
       if (!layer) return null;
       path = layer;
@@ -55,7 +69,7 @@ async function apkIcon(pkg: string): Promise<{ body: Buffer; type: string } | nu
   }
   const body = await adbOut(`su -c ${shQuote(`unzip -p ${shQuote(known.apk)} ${shQuote(path)}`)}`);
   const type = imageType(body);
-  return type ? { body, type } : null;
+  return type ? tagged(body, type) : null;
 }
 
 async function listApkEntries(apk: string): Promise<{ size: number; path: string }[]> {
@@ -451,16 +465,26 @@ async function resolveAdaptiveLayer(apk: string, xmlPath: string): Promise<strin
   return candidates[0]?.path || null;
 }
 
-/** Device-rendered PNG via adh.device/1; falls back to host APK parsing when the
- *  persistent channel is down. 'none' from the device is authoritative — the
- *  package genuinely has no renderable icon (no fake robot fallback). */
-async function resolveIcon(pkg: string, serial = deviceSerial()): Promise<{ body: Buffer; type: string } | null> {
+/** Device-rendered PNG via adh.device/1. 'none' from the device is authoritative —
+ *  the package genuinely has no renderable icon (no fake robot fallback). */
+async function resolveIcon(pkg: string, serial = deviceSerial()): Promise<PackageIcon | null> {
+  let channelDown = !serial;
   if (serial) {
     try {
       const icon = await deviceIcon(serial, pkg);
       if (icon === 'none') return null;
-      if (icon) return { body: icon, type: imageType(icon) };
-    } catch { /* channel error: fall back to host parsing */ }
+      if (icon) {
+        const type = imageType(icon);
+        return type ? tagged(icon, type) : null;
+      }
+      channelDown = true;
+    } catch { channelDown = true; }
+  }
+  // Host APK parsing is a diagnostic fallback, not the product path: it
+  // reimplements Android resource resolution through repeated adb+su reads.
+  if (process.env.ADH_ICON_HOST_FALLBACK !== '1') {
+    if (channelDown) throw iconUnavailable();
+    return null;
   }
   // Host-side APK parsing only knows the observed device's adb serial; a
   // foreign serial relies on the device channel alone (no wrong-device reads).
@@ -469,10 +493,10 @@ async function resolveIcon(pkg: string, serial = deviceSerial()): Promise<{ body
 }
 
 /** The launcher bitmap named by aapt, not a foreground or monochrome layer. */
-export async function readPackageIcon(pkg: string, serial?: string): Promise<{ body: Buffer; type: string } | null> {
+export async function readPackageIcon(pkg: string, serial?: string): Promise<PackageIcon | null> {
   const key = (serial || deviceSerial()) + ':' + pkg;
   const hit = cache.get(key);
-  if (hit && (hit.v || Date.now() - hit.at < NEG_TTL)) return hit.v;
+  if (hit && Date.now() - hit.at < (hit.v ? POS_TTL : NEG_TTL)) return hit.v;
   let job = inflight.get(key);
   if (!job) {
     job = resolveIcon(pkg, serial).then(result => {

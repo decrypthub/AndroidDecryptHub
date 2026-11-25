@@ -147,5 +147,6 @@ export const unpackPullSo = (pkg: string, path: string) =>
 export const unpackDumpSoOne = (pkg: string, name: string) =>
   post('/api/unpack/dump-so-one', { package: pkg, name });
 export const dumpDownloadUrl = (sha: string) => `/api/dumps/download?sha=${encodeURIComponent(sha)}`;
-export const appIconUrl = (pkg: string) => `/api/apps/icon?package=${encodeURIComponent(pkg)}`;
+export const appIconUrl = (pkg: string, serial?: string) =>
+  `/api/apps/icon?package=${encodeURIComponent(pkg)}${serial ? `&serial=${encodeURIComponent(serial)}` : ''}`;
 export const getConfig = () => api<{ settings?: { capture?: { retain?: number; maxAgeDays?: number }; ui?: { displayCap?: number } } }>('/api/config');
