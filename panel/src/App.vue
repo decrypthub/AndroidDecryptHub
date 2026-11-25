@@ -129,7 +129,7 @@ const themeOverrides = computed<GlobalThemeOverrides>(() => {
               <span class="proc-primary">
                 <span class="app-face proc-face">
                   <span class="app-dialog-letter">{{ appInitial }}</span>
-                  <img v-if="store.chosenPkg && chosenApp?.hasIcon !== false" :src="appIconUrl(store.chosenPkg, iconSerial, chosenApp?.iconVersion)"
+                  <img v-if="store.chosenPkg && chosenApp && chosenApp.hasIcon !== false" :src="appIconUrl(store.chosenPkg, iconSerial, chosenApp.iconVersion)"
                     alt="" @error="($event.target as HTMLElement).style.display = 'none'" />
                 </span>
                 <span class="proc-text">

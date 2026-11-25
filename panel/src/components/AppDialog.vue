@@ -70,7 +70,7 @@ const canControl = computed(() => store.scope.has(store.chosenPkg));
         <div class="app-dialog-card">
           <span class="app-face">
             <span class="app-dialog-letter">{{ chosenInitial }}</span>
-            <img v-if="store.chosenPkg && chosen?.hasIcon !== false" :src="appIconUrl(store.chosenPkg, iconSerial, chosen?.iconVersion)" alt=""
+            <img v-if="store.chosenPkg && chosen && chosen.hasIcon !== false" :src="appIconUrl(store.chosenPkg, iconSerial, chosen.iconVersion)" alt=""
               @error="($event.target as HTMLElement).style.display = 'none'" />
           </span>
           <div class="app-dialog-id">
