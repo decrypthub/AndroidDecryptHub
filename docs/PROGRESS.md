@@ -1,5 +1,11 @@
 # PROGRESS — 跨会话进度看板
 
+## 2026-11-25 capture_start 按采集族裁决安装结果
+
+- 本机观察沙盒的 `30/31` 已定位：唯一未装的是 `file.openat`；`libc.so`、`libjavacore.so`、`libopenjdk.so` 的动态重定位表里都没有 `openat` 导入槽（用 `llvm-readelf -rW` 对真机库核对），所以它是该显式文件模块下的合法缺口，不是 crypto 扫描失败或重复装钩假象。
+- Host 现在按 crypto/file/sys 分族裁决：全模块 crypto 扫描缺 crypto 符号仍 fail-loud；显式 file/sys 模块缺单个符号是 `partial`，但该类一个都没装上仍失败。日志直接带 `missing=file.openat`，不再只给 `30/31`。
+- PGP110 / `aa165071` 实测重连后：`ok=true installed=30/31 missing=file.openat`。新增 4 条 verdict 单测（先红后绿）；该修复只改 Host 判定与展示，不改 agent 钩子行为。
+
 ## 2026-11-23 面板上直接选择、查看和注入应用
 
 - 应用菜单先列手机注入范围里的应用和当前已连上的进程。点「加载应用列表」才展开已安装应用。勾选只加入或移出一个应用，并以手机读回的范围为准；没连上的显示「待启动」，不在这里重启应用。

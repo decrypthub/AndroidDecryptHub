@@ -971,6 +971,40 @@ export function captureInstallCounters(reply: any): { name: string; value: numbe
   return out;
 }
 
+/**
+ * Derive the arm verdict per hook family. File/system modules are always explicit target
+ * choices: a symbol that module simply does not import is partial coverage, not proof that
+ * the crypto scan failed. It is still a failure when a requested category installs nothing
+ * at all, because then the caller's module choice is useless.
+ */
+export function captureInstallVerdict(reply: any): {
+  ok: boolean; installed: number; attempted: number; notInstalled: string[]; partial: boolean; complete: boolean;
+} {
+  const counters = captureInstallCounters(reply);
+  const notInstalled = counters.filter((c) => c.value <= 0).map((c) => c.name);
+  const installed = counters.length - notInstalled.length;
+  const cryptoCounters = counters.filter((c) => !c.name.startsWith('file.') && !c.name.startsWith('sys.'));
+  const fileCounters = counters.filter((c) => c.name.startsWith('file.'));
+  const sysCounters = counters.filter((c) => c.name.startsWith('sys.'));
+  const noneLive = (rows: { value: number }[]) => rows.length > 0 && rows.every((c) => c.value <= 0);
+  const scannedAllCrypto = !String(reply?.cryptoModule ?? '');
+  const cryptoMissing = cryptoCounters.some((c) => c.value <= 0);
+  const failed =
+    noneLive(cryptoCounters) ||
+    (scannedAllCrypto && cryptoMissing) ||
+    noneLive(fileCounters) ||
+    noneLive(sysCounters);
+  const ok = installed > 0 && !failed;
+  return {
+    ok,
+    installed,
+    attempted: counters.length,
+    notInstalled,
+    partial: notInstalled.length > 0,
+    complete: ok && notInstalled.length === 0,
+  };
+}
+
 export interface CaptureToggle {
   ok: boolean; on: boolean; session: string;
   installed: number; attempted: number; notInstalled: string[]; partial: boolean;
@@ -990,9 +1024,10 @@ export interface CaptureToggle {
 
 /**
  * Install or remove the persistent hook set for one session.
- * `on`: install, then report installed/attempted/notInstalled and a real verdict - with the
- * module left empty (scan every file-backed module) a symbol that installed nowhere is a
- * failure, while a named module legitimately may not import every symbol (partial, not failed).
+ * `on`: install, then report installed/attempted/notInstalled and a real verdict - with
+ * cryptoModule left empty (scan every file-backed module) a crypto symbol that installed
+ * nowhere is a failure. Missing file/system symbols in their explicitly named modules are
+ * partial coverage; requesting one of those categories in a module that installs none is failed.
  * `off`: drain the ring FIRST (capture_stop resets it - stopping without draining destroys
  * whatever the target produced since the last tick), then stop.
  */
@@ -1099,16 +1134,12 @@ async function armCaptureHooks(sid: string, mods: { cryptoModule: string; fileMo
   const armedMods = { ...mods, sysModule };
   const reply = await sendCmd(sid, 'capture_start', armedMods, 15_000);
   recordCaptureHooks(sid, reply);
-  const counters = captureInstallCounters(reply);
-  const notInstalled = counters.filter((c) => c.value <= 0).map((c) => c.name);
-  const installed = counters.length - notInstalled.length;
-  const scannedAll = !String(armedMods.cryptoModule ?? '');
-  const ok = installed > 0 && (scannedAll ? notInstalled.length === 0 : true);
+  const verdict = captureInstallVerdict(reply);
   return {
-    ok, on: true, session: sid,
-    installed, attempted: counters.length, notInstalled,
-    partial: notInstalled.length > 0,
-    complete: ok && notInstalled.length === 0,
+    ok: verdict.ok, on: true, session: sid,
+    installed: verdict.installed, attempted: verdict.attempted, notInstalled: verdict.notInstalled,
+    partial: verdict.partial,
+    complete: verdict.complete,
     drainLoop: captureTimers.has(sid) ? 'armed' : 'started',
     rearmed: true, drainedBeforeRearm: Number(drained.response?.count ?? 0) || 0,
     reply,
