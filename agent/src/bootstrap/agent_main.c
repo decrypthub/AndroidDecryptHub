@@ -73,6 +73,7 @@ static void *agent_thread(void *arg) {
             failed = 0;
             report(fd);
             command_loop(fd);
+            adh_capture_sender_stop(1);
             close(fd);
             LOGI("host daemon connection closed; reconnecting");
             usleep(1000 * 1000);   // give a restarting daemon time to bind before re-dialling

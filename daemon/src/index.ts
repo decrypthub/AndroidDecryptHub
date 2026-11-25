@@ -8,7 +8,7 @@ import { handleHttp } from './http/router.ts';
 import { sendHttpError } from './http/response_error.ts';
 import { ensureAdbReverse } from './scope_list.ts';
 import { adbTrackDevices } from './adb_wire.ts';
-import { armSandboxCapture, setCapture, startCaptureLoop, forgetCaptureSession, clearCaptureArmProtect } from './service.ts';
+import { armSandboxCapture, setCapture, startCaptureLoop, forgetCaptureSession, clearCaptureArmProtect, ingestAgentCaptureFrame } from './service.ts';
 import { applyCaptureSettingsOnConnect } from './settings_service.ts';
 import { initializeHost } from './host_lifecycle.ts';
 import { initializeOperations } from './operation_host.ts';
@@ -119,6 +119,9 @@ const agentServer = net.createServer((sock) => {
     } else if (msg.t === 'ping' && session) {
       session.lastSeen = Date.now();
       sock.write(frameJson({ t: 'pong' }));
+    } else if (msg.t === 'captureBatch' && session) {
+      ingestAgentCaptureFrame(session.sessionId, msg);
+      session.lastSeen = Date.now();
     } else if (msg.t === 'cmdResult') {
       const p = pending.get(msg.id);
       log(`cmdResult op=${msg.op} id=${msg.id} matched=${!!p} bytes=${JSON.stringify(msg).length}`);

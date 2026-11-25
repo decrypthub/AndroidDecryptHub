@@ -15,7 +15,9 @@
 #include <pthread.h>
 #include <stdarg.h>
 #include <stdint.h>
+#include <stddef.h>
 #include <sys/system_properties.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 // ---- crypto plaintext capture (thread-safe; wrapper runs on the app's crypto thread) ----
@@ -29,7 +31,7 @@
 // always holds, and adhd surfaces dropped>0 as complete:false.
 #define CAP_BYTES 16384
 #define CAP_RING  128           // 128 * 16 KiB = 2 MiB; one record fits a TLS plaintext write.
-                                // 2048 cut HTTP/2 header blocks before the trailing signature headers.
+                                // The sender drains while the producer stays non-blocking.
 // Symmetric key/IV ride along with the plaintext record they belong to. The key exists only at
 // EVP_CipherInit_ex; the payload exists only at EVP_CipherUpdate. The two are joined by
 // key_store()/key_lookup() below — without that a native AES capture carries the plaintext and no
@@ -45,6 +47,19 @@ struct CapRec {
     int nkey; int niv; unsigned char key[CAP_KEY]; unsigned char iv[CAP_IV];
     unsigned char data[CAP_BYTES];
 };
+#define JCAP_MAX 1024
+#define JCAP_KEY 64
+#define JCAP_IV 32
+#define JCAP_DATA 1024
+struct JCapRec {
+    char algo[56], op[16]; int tid; long long ts_ns;
+    int nkey, niv, nin, nout;
+    unsigned char key[JCAP_KEY], iv[JCAP_IV], in[JCAP_DATA], out[JCAP_DATA];
+};
+static struct JCapRec g_jcaps[JCAP_MAX];
+static int g_jcap_head = 0, g_jcap_tail = 0, g_njcaps = 0;
+static unsigned long long g_jcap_dropped = 0;   // WS-C: honest drop accounting (Java rich path)
+static volatile int g_java_active = 0;
 static struct CapRec g_ring[CAP_RING];
 static int g_ring_head = 0, g_ring_tail = 0, g_ring_count = 0;   // ring: head=write, tail=read (under g_cap_lock)
 static unsigned long long g_cap_seq = 0;       // total capture() attempts — ATOMIC (read/written off-lock)
@@ -55,16 +70,26 @@ static unsigned long long g_cap_seq = 0;       // total capture() attempts — A
 // from the agent silently dropping records - and verify_v22 cannot tell which one it is.
 static unsigned long long g_cap_drained = 0;
 static unsigned long long g_cap_dropped = 0;   // total dropped (ring full or lock busy) — ATOMIC
+// Records the sender has popped into its in-flight batch but has not yet put on the wire.
+// They are no longer in the ring, so backlog accounting must include this queue.
+static unsigned long long g_cap_queued = 0;    // sender in-flight native records — ATOMIC
+static unsigned long long g_jcap_queued = 0;   // sender in-flight Java records — ATOMIC
+static unsigned long long g_cap_queued_seq = 0; // frame id of the one in-flight sender batch
+// Monotonic per-pop frame id under g_cap_lock. A push batch serializes off-lock, so a later
+// compatibility drain can legitimately reach the host first; the host uses this to ignore
+// stale health snapshots while still ingesting that batch's records.
+static unsigned long long g_cap_frame_seq = 0;
 static long long g_cap_first_drop_ns = 0, g_cap_last_drop_ns = 0;   // best-effort diagnostic ts
 static pthread_mutex_t g_cap_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_cap_cond = PTHREAD_COND_INITIALIZER;
 static void capture_keyed(const char *func, const unsigned char *in, int inl,
                           const unsigned char *key, int nkey, const unsigned char *iv, int niv,
                           unsigned long long conn, const char *path) {
     if (inl <= 0 || !in) return;
     // Runs on the target's own crypto/TLS thread — must NEVER block or sleep here (any
     // injected latency is an ANR risk and a timing-based anti-debug surface). Count every
-    // attempt atomically, then TRY the lock without waiting: if a drain or another producer
-    // holds it, account a drop and return immediately instead of stalling the target.
+    // attempt atomically, then TRY the lock without waiting: if a sender batch or another
+    // producer holds it, account a drop and return immediately instead of stalling the target.
     __atomic_add_fetch(&g_cap_seq, 1, __ATOMIC_RELAXED);
     long long ts = now_ns();
     if (pthread_mutex_trylock(&g_cap_lock) != 0) {
@@ -89,6 +114,7 @@ static void capture_keyed(const char *func, const unsigned char *in, int inl,
         memcpy(r->data, in, r->n);
         g_ring_head = (g_ring_head + 1) % CAP_RING;
         g_ring_count++;
+        if (g_ring_count == 1) pthread_cond_signal(&g_cap_cond);
     } else {
         __atomic_add_fetch(&g_cap_dropped, 1, __ATOMIC_RELAXED);
         if (!g_cap_first_drop_ns) g_cap_first_drop_ns = ts;
@@ -122,25 +148,37 @@ static void cap_reset(void) {
     // (WS-C: nothing vanishes silently). Without this, each reset-with-backlog leaks the
     // in-ring count from the accounting permanently (verify_v22 caught a stable off-by-N).
     if (g_ring_count > 0) __atomic_add_fetch(&g_cap_dropped, (unsigned long long)g_ring_count, __ATOMIC_RELAXED);
+    if (g_njcaps > 0) __atomic_add_fetch(&g_jcap_dropped, (unsigned long long)g_njcaps, __ATOMIC_RELAXED);
     g_ring_head = g_ring_tail = g_ring_count = 0;
+    g_jcap_head = g_jcap_tail = g_njcaps = 0;
     pthread_mutex_unlock(&g_cap_lock);
+}
+// Append hex without one snprintf per byte. TLS records are up to 16 KiB, so the old
+// per-byte snprintf loop dominated drain time and kept the producer-visible lock/window hot.
+static size_t emit_hex(char *out, size_t len, size_t cap, const unsigned char *data, int n) {
+    static const char h[] = "0123456789abcdef";
+    for (int b = 0; b < n && len + 2 <= cap; b++) {
+        out[len++] = h[(data[b] >> 4) & 15];
+        out[len++] = h[data[b] & 15];
+    }
+    return len;
 }
 // Emit one record as a JSON object into (out,len,cap); returns new len. Underflow-safe
 // (cap>len?cap-len:0 guards snprintf's would-be-length return that the old loops mishandled).
 static size_t emit_caprec(char *out, size_t len, size_t cap, const struct CapRec *r, int first) {
     len += snprintf(out + len, cap > len ? cap - len : 0,
         "%s{\"func\":\"%s\",\"inl\":%d,\"tid\":%d,\"tsNs\":%lld,\"hex\":\"", first ? "" : ",", r->func, r->inl, r->tid, r->ts_ns);
-    for (int b = 0; b < r->n && len + 3 < cap; b++) len += snprintf(out + len, cap > len ? cap - len : 0, "%02x", r->data[b]);
+    len = emit_hex(out, len, cap, r->data, r->n);
     len += snprintf(out + len, cap > len ? cap - len : 0, "\"");
     // key/iv are optional and only present for symmetric records whose key was seen at init.
     if (r->nkey > 0) {
         len += snprintf(out + len, cap > len ? cap - len : 0, ",\"key\":\"");
-        for (int b = 0; b < r->nkey && len + 3 < cap; b++) len += snprintf(out + len, cap > len ? cap - len : 0, "%02x", r->key[b]);
+        len = emit_hex(out, len, cap, r->key, r->nkey);
         len += snprintf(out + len, cap > len ? cap - len : 0, "\"");
     }
     if (r->niv > 0) {
         len += snprintf(out + len, cap > len ? cap - len : 0, ",\"iv\":\"");
-        for (int b = 0; b < r->niv && len + 3 < cap; b++) len += snprintf(out + len, cap > len ? cap - len : 0, "%02x", r->iv[b]);
+        len = emit_hex(out, len, cap, r->iv, r->niv);
         len += snprintf(out + len, cap > len ? cap - len : 0, "\"");
     }
     if (r->conn)
@@ -151,6 +189,22 @@ static size_t emit_caprec(char *out, size_t len, size_t cap, const struct CapRec
         len += snprintf(out + len, cap > len ? cap - len : 0, ",\"path\":\"%s\"", esc);
     }
     len += snprintf(out + len, cap > len ? cap - len : 0, "}");
+    return len;
+}
+static size_t emit_jcaprec(char *out, size_t len, size_t cap, const struct JCapRec *r, int first) {
+    char algoj[128], opj[64];
+    json_escape(r->algo, algoj, sizeof(algoj));
+    json_escape(r->op, opj, sizeof(opj));
+    len += snprintf(out + len, cap > len ? cap - len : 0,
+        "%s{\"algo\":\"%s\",\"op\":\"%s\",\"tid\":%d,\"tsNs\":%lld,\"key\":\"", first ? "" : ",", algoj, opj, r->tid, r->ts_ns);
+    len = emit_hex(out, len, cap, r->key, r->nkey);
+    len += snprintf(out + len, cap > len ? cap - len : 0, "\",\"iv\":\"");
+    len = emit_hex(out, len, cap, r->iv, r->niv);
+    len += snprintf(out + len, cap > len ? cap - len : 0, "\",\"in\":\"");
+    len = emit_hex(out, len, cap, r->in, r->nin);
+    len += snprintf(out + len, cap > len ? cap - len : 0, "\",\"out\":\"");
+    len = emit_hex(out, len, cap, r->out, r->nout);
+    len += snprintf(out + len, cap > len ? cap - len : 0, "\",\"inl\":%d,\"outl\":%d}", r->nin, r->nout);
     return len;
 }
 // ---- symmetric key/IV join -------------------------------------------------------------------
@@ -632,20 +686,6 @@ void adh_cmd_file_probe(int fd, const char *id) {
 //      app) reports every Cipher/Mac/MessageDigest op here with algorithm+op+key+iv+input+output.
 //      Bound at capture_start via RegisterNatives to the reporter class adhd names (target-agnostic;
 //      no sandbox-specific JNI symbol). ----------------------------------------------------------
-#define JCAP_MAX 96
-#define JCAP_KEY 64
-#define JCAP_IV 32
-#define JCAP_DATA 1024
-struct JCapRec {
-    char algo[56], op[16]; int tid; long long ts_ns;
-    int nkey, niv, nin, nout;
-    unsigned char key[JCAP_KEY], iv[JCAP_IV], in[JCAP_DATA], out[JCAP_DATA];
-};
-static struct JCapRec g_jcaps[JCAP_MAX];
-static int g_njcaps = 0;
-static unsigned long long g_jcap_dropped = 0;   // WS-C: honest drop accounting (Java rich path)
-static volatile int g_java_active = 0;
-
 static int copy_jba(JNIEnv *env, jbyteArray a, unsigned char *dst, int cap) {
     if (!a) return 0;
     jsize n = (*env)->GetArrayLength(env, a);
@@ -662,25 +702,29 @@ static void adh_nreport_impl(
         jbyteArray jkey, jbyteArray jiv, jbyteArray jin, jbyteArray jout) {
     (void)cls;
     g_java_active = 1;
-    // Runs on the target's crypto thread — non-blocking like capture(): try the lock, and on
-    // contention account a drop instead of stalling the target.
+    // Build the bounded Java record off-lock: the JNI string/array copies can take far longer
+    // than the queue append, and this callback runs on the target's crypto thread.
+    struct JCapRec rec;
+    memset(&rec, 0, sizeof(rec));
+    const char *a = jalgo ? (*env)->GetStringUTFChars(env, jalgo, NULL) : NULL;
+    const char *o = jop ? (*env)->GetStringUTFChars(env, jop, NULL) : NULL;
+    if (a) { strncpy(rec.algo, a, sizeof(rec.algo) - 1); (*env)->ReleaseStringUTFChars(env, jalgo, a); }
+    if (o) { strncpy(rec.op, o, sizeof(rec.op) - 1); (*env)->ReleaseStringUTFChars(env, jop, o); }
+    rec.tid = (int)gettid();
+    rec.ts_ns = now_ns();
+    rec.nkey = copy_jba(env, jkey, rec.key, JCAP_KEY);
+    rec.niv  = copy_jba(env, jiv,  rec.iv,  JCAP_IV);
+    rec.nin  = copy_jba(env, jin,  rec.in,  JCAP_DATA);
+    rec.nout = copy_jba(env, jout, rec.out, JCAP_DATA);
     if (pthread_mutex_trylock(&g_cap_lock) != 0) {
         __atomic_add_fetch(&g_jcap_dropped, 1, __ATOMIC_RELAXED);
         return;
     }
     if (g_njcaps < JCAP_MAX) {
-        struct JCapRec *r = &g_jcaps[g_njcaps++];
-        memset(r, 0, sizeof(*r));
-        const char *a = jalgo ? (*env)->GetStringUTFChars(env, jalgo, NULL) : NULL;
-        const char *o = jop ? (*env)->GetStringUTFChars(env, jop, NULL) : NULL;
-        if (a) { strncpy(r->algo, a, sizeof(r->algo) - 1); (*env)->ReleaseStringUTFChars(env, jalgo, a); }
-        if (o) { strncpy(r->op, o, sizeof(r->op) - 1); (*env)->ReleaseStringUTFChars(env, jop, o); }
-        r->tid = (int)gettid();
-        r->ts_ns = now_ns();
-        r->nkey = copy_jba(env, jkey, r->key, JCAP_KEY);
-        r->niv  = copy_jba(env, jiv,  r->iv,  JCAP_IV);
-        r->nin  = copy_jba(env, jin,  r->in,  JCAP_DATA);
-        r->nout = copy_jba(env, jout, r->out, JCAP_DATA);
+        g_jcaps[g_jcap_head] = rec;
+        g_jcap_head = (g_jcap_head + 1) % JCAP_MAX;
+        g_njcaps++;
+        if (g_njcaps == 1) pthread_cond_signal(&g_cap_cond);
     } else {
         __atomic_add_fetch(&g_jcap_dropped, 1, __ATOMIC_RELAXED);   // fail-loud, reported via drain
     }
@@ -698,6 +742,185 @@ int adh_capture_register_reporter(JNIEnv *env, const char *reportClass) {
     int r = (*env)->RegisterNatives(env, rc, &m, 1);
     if (adh_jni_exception_check(env)) adh_jni_exception_clear(env);
     return (r == 0) ? 1 : 0;
+}
+
+// ---- capture sender ---------------------------------------------------------
+// Host polling cannot keep up with a burst because every round trip first lets the bounded ring
+// fill. capture_start therefore arms this sender on the same framed socket: it pops a bounded
+// batch under the ring lock, serializes off-lock, and pushes a captureBatch frame. A send failure
+// means the byte stream is no longer trustworthy (send_all may have written a partial frame), so
+// the sender stops and the still-queued records are accounted as dropped rather than replayed.
+#define CAP_SEND_BATCH 128
+#define JCAP_SEND_BATCH 128
+static pthread_t g_sender_thread;
+static int g_sender_started = 0;
+static int g_sender_stop = 0;
+static int g_sender_fd = -1;
+static pthread_mutex_t g_sender_ctl = PTHREAD_MUTEX_INITIALIZER;
+
+static char *build_capture_batch(const struct CapRec *caps, int ncaps,
+                                 const struct JCapRec *jcaps, int njcaps,
+                                 unsigned long long frame_seq, unsigned long long backlog,
+                                 unsigned long long queued, unsigned long long drained,
+                                 unsigned long long seq, unsigned long long dropped,
+                                 unsigned long long jdropped, long long first_drop,
+                                 long long last_drop) {
+    size_t cap = 1 << 16, len = 0;
+    char *out = (char *)malloc(cap);
+    if (!out) return NULL;
+    len += snprintf(out + len, cap - len,
+        "{\"t\":\"captureBatch\",\"captures\":[");
+    for (int i = 0; i < ncaps; i++) {
+        if (len + (size_t)CAP_BYTES * 2 + 1024 > cap) {
+            size_t nc = cap * 2;
+            while (len + (size_t)CAP_BYTES * 2 + 1024 > nc) nc *= 2;
+            char *no = (char *)realloc(out, nc); if (!no) { free(out); return NULL; }
+            out = no; cap = nc;
+        }
+        len = emit_caprec(out, len, cap, &caps[i], i == 0);
+    }
+    len += snprintf(out + len, cap > len ? cap - len : 0, "],\"jcaptures\":[");
+    for (int i = 0; i < njcaps; i++) {
+        if (len + 9000 > cap) {
+            size_t nc = cap * 2;
+            char *no = (char *)realloc(out, nc); if (!no) { free(out); return NULL; }
+            out = no; cap = nc;
+        }
+        len = emit_jcaprec(out, len, cap, &jcaps[i], i == 0);
+    }
+    snprintf(out + len, cap > len ? cap - len : 0,
+        "],\"count\":%d,\"jcount\":%d,\"frameSeq\":%llu,\"backlog\":%llu,\"queued\":%llu,\"seq\":%llu,"
+        "\"dropped\":%llu,\"jdropped\":%llu,\"drained\":%llu,\"residual\":%lld,"
+        "\"firstDropNs\":%lld,\"lastDropNs\":%lld,\"ring\":%d,\"complete\":%s,\"javaActive\":%s}\n",
+        ncaps, njcaps, frame_seq, backlog, queued, seq, dropped, jdropped, drained,
+        (long long)seq - (long long)drained - (long long)backlog - (long long)dropped,
+        first_drop, last_drop, CAP_RING,
+        (dropped == 0 && jdropped == 0) ? "true" : "false", g_java_active ? "true" : "false");
+    return out;
+}
+
+static void sender_account_unsent(void) {
+    pthread_mutex_lock(&g_cap_lock);
+    unsigned long long n = __atomic_exchange_n(&g_cap_queued, 0, __ATOMIC_RELAXED);
+    unsigned long long j = __atomic_exchange_n(&g_jcap_queued, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&g_cap_queued_seq, 0, __ATOMIC_RELAXED);
+    if (n) __atomic_add_fetch(&g_cap_dropped, n, __ATOMIC_RELAXED);
+    if (j) __atomic_add_fetch(&g_jcap_dropped, j, __ATOMIC_RELAXED);
+    pthread_mutex_unlock(&g_cap_lock);
+}
+
+static void *capture_sender_thread(void *arg) {
+    int fd = (int)(intptr_t)arg;
+    struct CapRec *caps = (struct CapRec *)malloc(sizeof(*caps) * CAP_SEND_BATCH);
+    struct JCapRec *jcaps = (struct JCapRec *)malloc(sizeof(*jcaps) * JCAP_SEND_BATCH);
+    if (!caps || !jcaps) {
+        free(caps); free(jcaps);
+        LOGE("capture sender: allocation failed");
+        return NULL;
+    }
+    while (!__atomic_load_n(&g_sender_stop, __ATOMIC_RELAXED)) {
+        int ncaps = 0, njcaps = 0;
+        unsigned long long frame_seq = 0, backlog = 0, queued = 0, drained_after = 0;
+        unsigned long long seq = 0, dropped = 0, jdropped = 0;
+        long long first_drop = 0, last_drop = 0;
+        pthread_mutex_lock(&g_cap_lock);
+        while (!__atomic_load_n(&g_sender_stop, __ATOMIC_RELAXED) && !g_ring_count && !g_njcaps)
+            pthread_cond_wait(&g_cap_cond, &g_cap_lock);
+        if (__atomic_load_n(&g_sender_stop, __ATOMIC_RELAXED)) {
+            pthread_mutex_unlock(&g_cap_lock);
+            break;
+        }
+        while (g_ring_count > 0 && ncaps < CAP_SEND_BATCH) {
+            struct CapRec *src = &g_ring[g_ring_tail];
+            struct CapRec *dst = &caps[ncaps++];
+            memcpy(dst, src, offsetof(struct CapRec, data));
+            memcpy(dst->data, src->data, (size_t)src->n);
+            g_ring_tail = (g_ring_tail + 1) % CAP_RING;
+            g_ring_count--;
+        }
+        if (ncaps) __atomic_add_fetch(&g_cap_queued, (unsigned long long)ncaps, __ATOMIC_RELAXED);
+        while (g_njcaps > 0 && njcaps < JCAP_SEND_BATCH) {
+            struct JCapRec *src = &g_jcaps[g_jcap_tail];
+            struct JCapRec *dst = &jcaps[njcaps++];
+            memcpy(dst, src, offsetof(struct JCapRec, in));
+            memcpy(dst->in, src->in, (size_t)src->nin);
+            memcpy(dst->out, src->out, (size_t)src->nout);
+            g_jcap_tail = (g_jcap_tail + 1) % JCAP_MAX;
+            g_njcaps--;
+        }
+        if (njcaps) __atomic_add_fetch(&g_jcap_queued, (unsigned long long)njcaps, __ATOMIC_RELAXED);
+        frame_seq = ++g_cap_frame_seq;
+        if (ncaps) __atomic_store_n(&g_cap_queued_seq, frame_seq, __ATOMIC_RELAXED);
+        queued = __atomic_load_n(&g_cap_queued, __ATOMIC_RELAXED) - (unsigned long long)ncaps;
+        backlog = (unsigned long long)g_ring_count + queued;
+        drained_after = __atomic_load_n(&g_cap_drained, __ATOMIC_RELAXED) + (unsigned long long)ncaps;
+        seq = __atomic_load_n(&g_cap_seq, __ATOMIC_RELAXED);
+        dropped = __atomic_load_n(&g_cap_dropped, __ATOMIC_RELAXED);
+        jdropped = __atomic_load_n(&g_jcap_dropped, __ATOMIC_RELAXED);
+        first_drop = g_cap_first_drop_ns;
+        last_drop = g_cap_last_drop_ns;
+        pthread_mutex_unlock(&g_cap_lock);
+        char *out = build_capture_batch(caps, ncaps, jcaps, njcaps,
+                                        frame_seq, backlog, queued, drained_after, seq, dropped,
+                                        jdropped, first_drop, last_drop);
+        if (!out) break;
+        if (send_line(fd, out) == 0) {
+            pthread_mutex_lock(&g_cap_lock);
+            __atomic_sub_fetch(&g_cap_queued, (unsigned long long)ncaps, __ATOMIC_RELAXED);
+            __atomic_sub_fetch(&g_jcap_queued, (unsigned long long)njcaps, __ATOMIC_RELAXED);
+            __atomic_store_n(&g_cap_queued_seq, 0, __ATOMIC_RELAXED);
+            __atomic_add_fetch(&g_cap_drained, (unsigned long long)ncaps, __ATOMIC_RELAXED);
+            pthread_mutex_unlock(&g_cap_lock);
+        } else {
+            shutdown(fd, SHUT_RDWR);
+            break;
+        }
+        free(out);
+    }
+    sender_account_unsent();
+    free(caps);
+    free(jcaps);
+    return NULL;
+}
+
+void adh_capture_sender_start(int fd) {
+    adh_capture_sender_stop(0);
+    if (fd < 0) return;
+    pthread_mutex_lock(&g_sender_ctl);
+    g_sender_stop = 0;
+    g_sender_fd = fd;
+    if (pthread_create(&g_sender_thread, NULL, capture_sender_thread, (void *)(intptr_t)fd) == 0) {
+        g_sender_started = 1;
+    } else {
+        g_sender_fd = -1;
+        LOGE("capture sender: pthread_create failed");
+    }
+    pthread_mutex_unlock(&g_sender_ctl);
+}
+
+void adh_capture_sender_stop(int terminate_io) {
+    pthread_t thread;
+    int fd;
+    pthread_mutex_lock(&g_sender_ctl);
+    if (!g_sender_started) {
+        g_sender_fd = -1;
+        pthread_mutex_unlock(&g_sender_ctl);
+        return;
+    }
+    __atomic_store_n(&g_sender_stop, 1, __ATOMIC_RELAXED);
+    thread = g_sender_thread;
+    fd = g_sender_fd;
+    pthread_mutex_lock(&g_cap_lock);
+    pthread_cond_broadcast(&g_cap_cond);
+    pthread_mutex_unlock(&g_cap_lock);
+    if (terminate_io && fd >= 0) shutdown(fd, SHUT_RDWR);
+    pthread_mutex_unlock(&g_sender_ctl);
+    pthread_join(thread, NULL);
+    pthread_mutex_lock(&g_sender_ctl);
+    g_sender_started = 0;
+    g_sender_fd = -1;
+    g_sender_stop = 0;
+    pthread_mutex_unlock(&g_sender_ctl);
 }
 
 // ---- anti-analysis / system-info hooks (module V) — defined here (above capture_start)
@@ -1108,6 +1331,10 @@ void adh_cmd_capture_start(int fd, const char *id, const char *cryptoModule, con
         }
     }
     g_capture_on = 1;
+    int fd_type = 0;
+    socklen_t fd_type_len = sizeof(fd_type);
+    if (fd >= 0 && getsockopt(fd, SOL_SOCKET, SO_TYPE, &fd_type, &fd_type_len) == 0 && fd_type == SOCK_STREAM)
+        adh_capture_sender_start(fd);
     char cmj[80], fmj[80], smj[640];
     json_escape(g_crypto_mod, cmj, sizeof(cmj));
     json_escape(fileModule ? fileModule : "", fmj, sizeof(fmj));
@@ -1138,6 +1365,7 @@ void adh_cmd_capture_start(int fd, const char *id, const char *cryptoModule, con
 // why the tool drains.
 void adh_cmd_capture_stop(int fd, const char *id) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
+    adh_capture_sender_stop(0);
     int e = 0, w = 0, r = 0, dg = 0, hm = 0, ds = 0;
     int pks = 0, pkv = 0, pke = 0, pkd = 0, aes = 0, aeo = 0;
     int dsi = 0, dvi = 0, dsf = 0, dvu = 0, dvf = 0;
@@ -1197,14 +1425,62 @@ void adh_cmd_capture_stop(int fd, const char *id) {
 // complete:false. Buffer grows as needed (the old fixed 64KB could overflow with a full ring).
 void adh_cmd_capture_drain(int fd, const char *id) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
-    size_t cap = 1 << 16, len = 0; char *out = malloc(cap); if (!out) { send_oom(fd, idj, "capture_drain"); return; }
+    const int DRAIN_BATCH = 512;   // bound one response; adhd polls again to clear the backlog
+    const int maxBatch = CAP_RING < DRAIN_BATCH ? CAP_RING : DRAIN_BATCH;
+    struct CapRec *capcopy = malloc(sizeof(*capcopy) * (size_t)maxBatch);
+    struct JCapRec *jcopy = malloc(sizeof(*jcopy) * JCAP_MAX);
+    if (!capcopy || !jcopy) {
+        free(capcopy); free(jcopy);
+        send_oom(fd, idj, "capture_drain");
+        return;
+    }
+
+    // Pop/copy under the lock, serialize after releasing it. The producer path uses trylock
+    // and counts a busy lock as a drop; hex-formatting a full ring while holding g_cap_lock
+    // made the drain itself the dropout source. Copying the bounded ring is orders of
+    // magnitude cheaper than serializing it, and leaves the invariant unchanged.
+    pthread_mutex_lock(&g_cap_lock);
+    int ncaps = 0;
+    while (g_ring_count > 0 && ncaps < maxBatch) {
+        struct CapRec *src = &g_ring[g_ring_tail];
+        struct CapRec *dst = &capcopy[ncaps++];
+        memcpy(dst, src, offsetof(struct CapRec, data));
+        memcpy(dst->data, src->data, (size_t)src->n);
+        g_ring_tail = (g_ring_tail + 1) % CAP_RING;
+        g_ring_count--;
+    }
+    if (ncaps > 0) __atomic_add_fetch(&g_cap_drained, (unsigned long long)ncaps, __ATOMIC_RELAXED);
+    int backlog = g_ring_count + (int)__atomic_load_n(&g_cap_queued, __ATOMIC_RELAXED);
+    unsigned long long queued = __atomic_load_n(&g_cap_queued, __ATOMIC_RELAXED);
+    unsigned long long queued_seq = queued ? __atomic_load_n(&g_cap_queued_seq, __ATOMIC_RELAXED) : 0;
+    unsigned long long seq = __atomic_load_n(&g_cap_seq, __ATOMIC_RELAXED);
+    unsigned long long drained = __atomic_load_n(&g_cap_drained, __ATOMIC_RELAXED);
+    unsigned long long dropped = __atomic_load_n(&g_cap_dropped, __ATOMIC_RELAXED);
+    unsigned long long jdropped = __atomic_load_n(&g_jcap_dropped, __ATOMIC_RELAXED);
+    long long fdrop = g_cap_first_drop_ns, ldrop = g_cap_last_drop_ns;
+    int njcaps = 0;
+    while (g_njcaps > 0) {
+        struct JCapRec *src = &g_jcaps[g_jcap_tail];
+        struct JCapRec *dst = &jcopy[njcaps++];
+        memcpy(dst, src, offsetof(struct JCapRec, in));
+        memcpy(dst->in, src->in, (size_t)src->nin);
+        memcpy(dst->out, src->out, (size_t)src->nout);
+        g_jcap_tail = (g_jcap_tail + 1) % JCAP_MAX;
+        g_njcaps--;
+    }
+    unsigned long long frame_seq = ++g_cap_frame_seq;
+    pthread_mutex_unlock(&g_cap_lock);
+
+    size_t cap = 1 << 16, len = 0; char *out = malloc(cap);
+    if (!out) {
+        free(capcopy); free(jcopy);
+        send_oom(fd, idj, "capture_drain");
+        return;
+    }
     len += snprintf(out + len, cap - len,
         "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"capture_drain\",\"ok\":true,\"on\":%s,\"captures\":[",
         idj, g_capture_on ? "true" : "false");
-    const int DRAIN_BATCH = 512;   // bound one response; adhd polls again to clear the backlog
-    pthread_mutex_lock(&g_cap_lock);
-    int ncaps = 0;
-    while (g_ring_count > 0 && ncaps < DRAIN_BATCH) {
+    for (int i = 0; i < ncaps; i++) {
         // One record is up to CAP_BYTES of hex (two chars each) plus the JSON wrapper.
         // Growing by a flat 4200 truncated the second TLS record in a batch, which then
         // looked like a short body and broke HTTP reassembly on the host.
@@ -1213,46 +1489,25 @@ void adh_cmd_capture_drain(int fd, const char *id) {
             while (len + (size_t)CAP_BYTES * 2 + 1024 > nc) nc *= 2;
             char *no = realloc(out, nc); if (!no) break; out = no; cap = nc;
         }
-        struct CapRec *r = &g_ring[g_ring_tail];
-        len = emit_caprec(out, len, cap, r, ncaps == 0);
-        g_ring_tail = (g_ring_tail + 1) % CAP_RING;
-        g_ring_count--; ncaps++;
+        len = emit_caprec(out, len, cap, &capcopy[i], i == 0);
     }
-    if (ncaps > 0) __atomic_add_fetch(&g_cap_drained, (unsigned long long)ncaps, __ATOMIC_RELAXED);
-    int backlog = g_ring_count;
-    unsigned long long seq = __atomic_load_n(&g_cap_seq, __ATOMIC_RELAXED);
-    unsigned long long drained = __atomic_load_n(&g_cap_drained, __ATOMIC_RELAXED);
-    unsigned long long dropped = __atomic_load_n(&g_cap_dropped, __ATOMIC_RELAXED);
-    unsigned long long jdropped = __atomic_load_n(&g_jcap_dropped, __ATOMIC_RELAXED);
-    long long fdrop = g_cap_first_drop_ns, ldrop = g_cap_last_drop_ns;
     // rich Java-layer records: algorithm + op + key + iv + input + output
     len += snprintf(out + len, cap > len ? cap - len : 0, "],\"jcaptures\":[");
-    for (int k = 0; k < g_njcaps; k++) {
+    for (int k = 0; k < njcaps; k++) {
         if (len + 9000 > cap) { size_t nc = cap * 2; char *no = realloc(out, nc); if (!no) break; out = no; cap = nc; }
-        struct JCapRec *r = &g_jcaps[k];
-        len += snprintf(out + len, cap > len ? cap - len : 0,
-            "%s{\"algo\":\"%s\",\"op\":\"%s\",\"tid\":%d,\"tsNs\":%lld,\"key\":\"", k ? "," : "", r->algo, r->op, r->tid, r->ts_ns);
-        for (int b = 0; b < r->nkey && len + 3 < cap; b++) len += snprintf(out + len, cap > len ? cap - len : 0, "%02x", r->key[b]);
-        len += snprintf(out + len, cap > len ? cap - len : 0, "\",\"iv\":\"");
-        for (int b = 0; b < r->niv && len + 3 < cap; b++) len += snprintf(out + len, cap > len ? cap - len : 0, "%02x", r->iv[b]);
-        len += snprintf(out + len, cap > len ? cap - len : 0, "\",\"in\":\"");
-        for (int b = 0; b < r->nin && len + 3 < cap; b++) len += snprintf(out + len, cap > len ? cap - len : 0, "%02x", r->in[b]);
-        len += snprintf(out + len, cap > len ? cap - len : 0, "\",\"out\":\"");
-        for (int b = 0; b < r->nout && len + 3 < cap; b++) len += snprintf(out + len, cap > len ? cap - len : 0, "%02x", r->out[b]);
-        len += snprintf(out + len, cap > len ? cap - len : 0, "\",\"inl\":%d,\"outl\":%d}", r->nin, r->nout);
+        len = emit_jcaprec(out, len, cap, &jcopy[k], k == 0);
     }
-    int njcaps = g_njcaps;
-    g_njcaps = 0;
-    pthread_mutex_unlock(&g_cap_lock);
     snprintf(out + len, cap > len ? cap - len : 0,
-        "],\"count\":%d,\"jcount\":%d,\"backlog\":%d,\"seq\":%llu,\"dropped\":%llu,\"jdropped\":%llu,"
+        "],\"count\":%d,\"jcount\":%d,\"frameSeq\":%llu,\"backlog\":%d,\"queued\":%llu,\"queuedSeq\":%llu,\"seq\":%llu,\"dropped\":%llu,\"jdropped\":%llu,"
         "\"drained\":%llu,\"residual\":%lld,\"firstDropNs\":%lld,\"lastDropNs\":%lld,\"ring\":%d,\"complete\":%s,\"javaActive\":%s}\n",
-        ncaps, njcaps, backlog, seq, dropped, jdropped, drained,
+        ncaps, njcaps, frame_seq, backlog, queued, queued_seq, seq, dropped, jdropped, drained,
         (long long)seq - (long long)drained - (long long)backlog - (long long)dropped,
         fdrop, ldrop, CAP_RING,
         (dropped == 0 && jdropped == 0) ? "true" : "false", g_java_active ? "true" : "false");
     send_line(fd, out);
     free(out);
+    free(capcopy);
+    free(jcopy);
 }
 
 // The system/detection observation used to have a one-shot op (detect_watch). It is gone:

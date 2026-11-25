@@ -13,7 +13,7 @@ import { artifactKindOf, artifactSidecarPath, parseArtifactProvenance, planArtif
 import type { ArtifactProvenance } from './artifacts.ts';
 import type { ArtifactEntry } from './artifacts.ts';
 import {
-  appendCaptureLine, clearAllPersistedCaptures, clearPackagePersistedCaptures,
+  appendCaptureLine, appendCaptureLines, clearAllPersistedCaptures, clearPackagePersistedCaptures,
   enforcePerPackageRetain, evictPackageFromMemory, listPackageCaptureStats,
   loadCapturesFromDisk, readPackageCapturesJsonl,
 } from './capture_persist.ts';
@@ -90,6 +90,7 @@ export type AgentMsg =
   | { t: 'maps'; count: number; regions?: MapsRegion[] }
   | { t: 'ping'; ts?: number }
   | { t: 'caps'; ops?: string[]; limits?: Record<string, number>; error?: string }
+  | { t: 'captureBatch'; captures?: unknown[]; jcaptures?: unknown[]; [k: string]: unknown }
   | { t: 'cmdResult'; id: string; op: string; ok: boolean; [k: string]: unknown };
 
 export interface DumpMeta {
@@ -569,6 +570,36 @@ export function pushCapture(entry: Capture): boolean {
   return true;
 }
 
+/** Batch form used by capture drains: one disk append and one retention pass per package instead
+ *  of one of each per record. Filtering and ordering are identical to repeated pushCapture calls. */
+export function pushCaptureBatch(entries: Capture[]): Capture[] {
+  const accepted = entries.filter((entry) => !(entry.category === 'crypto' && !packageFamilies(entry.package ?? '')
+    && settings.capture.families[familyOf(entry.algo)] === false));
+  if (!accepted.length) return accepted;
+  captures.push(...accepted);
+  capturePushed += accepted.length;
+  for (const entry of accepted) bumpSession(entry.sessionId, 'pushed');
+  const byPackage = new Map<string, Capture[]>();
+  for (const entry of accepted) {
+    const pkg = entry.package && entry.package !== '?' ? entry.package : '';
+    if (!byPackage.has(pkg)) byPackage.set(pkg, []);
+    byPackage.get(pkg)!.push(entry);
+  }
+  const retain = settings.capture.retain;
+  for (const [pkg, rows] of byPackage) {
+    if (pkg) {
+      try { appendCaptureLines(DATA_DIR, pkg, rows); }
+      catch (err) { log(`[captures] 持久化失败 (${pkg}):`, (err as Error).message); }
+    }
+    const evicted = evictPackageFromMemory(captures, pkg, retain);
+    for (const dropped of evicted) {
+      captureEvicted++;
+      bumpSession(dropped.sessionId, 'evicted');
+    }
+  }
+  return accepted;
+}
+
 /** Drop in-memory captures and the on-disk packages/ tree. Returns disk errors (if any). */
 export function clearCaptureStore(): string[] {
   captures.length = 0;
@@ -751,6 +782,14 @@ export const captureTimers = new Map<string, ReturnType<typeof setInterval>>();
 // below is true. The raw agent counters are kept in `baseline` so nothing is hidden.
 export interface CapStat {
   seq: number; emitted: number; dropped: number; jdropped: number; backlog: number;
+  /** Native records the agent sender has popped into an in-flight push batch. */
+  queued?: number;
+  /** frameSeq of the pushed batch represented by queued, when the newest snapshot is a drain. */
+  queuedSeq?: number;
+  /** Highest pushed-batch frameSeq this daemon has already ingested. */
+  pushedSeq?: number;
+  /** Agent-side frame order. A drain can overtake a pushed batch while that batch serializes off-lock. */
+  frameSeq?: number;
   /** Cumulative records the AGENT has popped out of its ring (its own counter). */
   drained: number;
   /** The AGENT's own identity residual (seq - drained - backlog - dropped) as it reported it in
