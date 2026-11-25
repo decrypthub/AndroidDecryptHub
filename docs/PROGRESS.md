@@ -1,5 +1,12 @@
 # PROGRESS — 跨会话进度看板
 
+## 2026-11-25 capture 背压改为 agent 批量推送
+
+- Agent 在真实 stream socket 的 `capture_start` 上启动独立 sender 线程；生产者仍只做非阻塞入队，sender 在 `g_cap_lock` 内紧凑复制出有界批次，锁外序列化并通过同一条 framed socket 推 `captureBatch`。`capture_stop`、连接关闭和重连都会广播条件变量并 join sender；发送失败不回放不完整帧，未发出的批次如实计入 `dropped/jdropped`。
+- Java 富采集也改成有界 ring，JNI 字符串/数组复制移出 `g_cap_lock`；native/Java 入队只追加并唤醒 sender。兼容 `capture_drain` 仍在，但恢复 1.5s 兜底轮询，不再靠 100ms 控制通道拉突发流量。
+- `captureBatch` 与 `capture_drain` 都在锁外组帧，先后到达 Host 的顺序可能和 agent 出队顺序不同。Agent 为每次出队打 `frameSeq`，drain 额外报告自己看到的在途批 `queuedSeq`；Host 因此只把迟到帧的记录继续入库，并用 `queuedSeq` 精确结转 `queued/backlog -> drained`，不回退更新的健康快照。Host 侧批量入库按包一次写盘、一次 retention，`queued` 已包含在 agent `backlog` 中，不重复相加。
+- 本机验收：`tools/build_agent.sh` 生成 arm64 `libadh_agent.so`；`npm run typecheck` 通过；`npm test` 605 项通过、0 失败、20 项跳过。PGP110 / `aa165071` 的 `com.adh.sandbox`（pid 24804，会话 `s_11pg`）用受管 operation 跑 `capture_start`（`19/19`）和 `BurstProbe.run()` 20,000 次：稳定时 `seq=20010 emitted=19942 backlog=0 dropped=68 jdropped=99`，`accountedFor=20010 agentResidual=0 agentLost=0 daemonLost=0`，`complete:false` 如实表示仍有有界丢弃但没有静默丢失；`capture_stop` 确认 `drainedOk=true drainLoop=none`。
+
 ## 2026-11-25 capture_start 按采集族裁决安装结果
 
 - 本机观察沙盒的 `30/31` 已定位：唯一未装的是 `file.openat`；`libc.so`、`libjavacore.so`、`libopenjdk.so` 的动态重定位表里都没有 `openat` 导入槽（用 `llvm-readelf -rW` 对真机库核对），所以它是该显式文件模块下的合法缺口，不是 crypto 扫描失败或重复装钩假象。
