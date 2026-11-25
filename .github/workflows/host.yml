@@ -36,6 +36,6 @@ jobs:
         working-directory: daemon
         run: npm test
       # Host-only, no device: every agent op must remain reachable from the MCP import graph, and
-      # no target-specific name (com.adh.sandbox / libjavacrypto) may reappear in product code.
+      # no target-specific name may reappear in product code; the one owned-Demo declaration in local_observer.ts is the deliberate boundary.
       - name: Operability + red line
         run: bash tools/verify_v87_mcp_operability.sh

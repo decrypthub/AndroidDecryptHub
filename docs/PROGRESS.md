@@ -1,5 +1,11 @@
 # PROGRESS — 跨会话进度看板
 
+## 2026-11-25 仓库跟踪面清理
+
+- 从 git 跟踪中移除 v0.5.0 前后误入仓库的一次性 hook/QBDI 实验输出（根目录 `who_writes_x*.json`、`libc_writer.json`、空文件 `console.log(0))`）以及 `agent/build-linux/` 的 6 个本机构建产物；这些文件没有源码或脚本引用，构建产物仍可由 `tools/build_agent.sh` 重新生成。
+- 同步修正 `.gitignore` 的 third-party 说明和 host CI 红线注释：third-party 是 fetch 脚本准备的本地依赖缓存，不是 submodule；自有 Demo 包名只允许 `local_observer.ts` 的唯一边界声明。
+- 本项只清理仓库跟踪面和说明，不改产品代码、设备行为或本地运行数据。
+
 ## 2026-11-25 capture 背压改为 agent 批量推送
 
 - Agent 在真实 stream socket 的 `capture_start` 上启动独立 sender 线程；生产者仍只做非阻塞入队，sender 在 `g_cap_lock` 内紧凑复制出有界批次，锁外序列化并通过同一条 framed socket 推 `captureBatch`。`capture_stop`、连接关闭和重连都会广播条件变量并 join sender；发送失败不回放不完整帧，未发出的批次如实计入 `dropped/jdropped`。
