@@ -153,7 +153,7 @@ export async function refreshDevices() {
       model: String(t.model ?? t.serial ?? ''),
       state: String(t.state ?? ''),
       link: String(t.link ?? ''),
-      observed: t.observed === true ? (usb?.observedPackage as string | undefined) : (t.observed as string | undefined),
+      observed: t.observed === true ? (usb?.observedPackage as string | undefined) : (typeof t.observed === 'string' ? t.observed : undefined),
       online: t.online as boolean | null,
     }));
     store.localUsb = usb;
@@ -170,7 +170,7 @@ export async function refreshDevices() {
     }
     store.devicesFailed = false;
     store.devicesUpdated = Date.now();
-    if (!store.selectedDeviceKey && store.devices.length) selectDevice(store.devices[0].key);
+    if (!store.selectedDeviceKey && store.devices.length) selectDevice((store.devices.find(d => d.observed) ?? store.devices[0]).key);
   } catch {
     store.devicesFailed = true; // 保旧列表，只标失败
   }
