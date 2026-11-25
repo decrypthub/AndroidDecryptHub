@@ -147,6 +147,29 @@ test('reverse --list / 建立走正确服务名', async () => {
   srv.close();
 });
 
+test('forward tcp:0/norebind 解析双 OKAY 与已分配端口，remove 走 killforward', async () => {
+  const srv = await fakeAdb((svc, sock) => {
+    if (svc === 'host-serial:aa165071:forward:norebind:tcp:0;localabstract:adh.device') {
+      okayThen(sock, Buffer.from('OKAY'), lenPayload('19598'));
+      sock.end(); return;
+    }
+    if (svc === 'host-serial:aa165071:killforward:tcp:19598') {
+      okayThen(sock, Buffer.from('OKAY'));
+      sock.end(); return;
+    }
+    sock.destroy(new Error('unexpected ' + svc));
+  });
+  process.env.ADH_ADB_SERVER_PORT = String(srv.port); const reloaded = await import('../src/adb_wire.ts?port=' + srv.port);
+  const created = await reloaded.adbExec(['-s', 'aa165071', 'forward', '--no-rebind', 'tcp:0', 'localabstract:adh.device'], { timeout: 3000 });
+  assert.equal(created.stdout, '19598\n');
+  await reloaded.adbExec(['-s', 'aa165071', 'forward', '--remove', 'tcp:19598'], { timeout: 3000 });
+  assert.deepEqual(srv.requests, [
+    'host-serial:aa165071:forward:norebind:tcp:0;localabstract:adh.device',
+    'host-serial:aa165071:killforward:tcp:19598',
+  ]);
+  srv.close();
+});
+
 test('push 发 sync 协议 SEND/DATA/DONE 帧序', async () => {
   const frames: Buffer[] = [];
   const srv = await fakeAdb((svc, sock) => {

@@ -95,6 +95,35 @@ export async function adbHostOk(service: string, timeout = READ_TIMEOUT): Promis
   } finally { sock.destroy(); }
 }
 
+/** forward 创建后服务器可附加一个 len-prefixed 已分配端口；无附加时连接直接结束。 */
+async function adbHostOptionalData(service: string, timeout = READ_TIMEOUT): Promise<string> {
+  const sock = await connectServer(timeout);
+  try {
+    return await withTimeout(sock, timeout, (async () => {
+      sock.write(reqFrame(service));
+      await readStatus(sock, service);
+      await readStatus(sock, service);
+      try {
+        const len = parseInt((await readN(sock, 4)).toString('ascii'), 16);
+        return len > 0 ? (await readN(sock, len)).toString('utf8') : '';
+      } catch {
+        return '';
+      }
+    })());
+  } finally { sock.destroy(); }
+}
+
+async function adbHostForwardOk(service: string, timeout = READ_TIMEOUT): Promise<void> {
+  const sock = await connectServer(timeout);
+  try {
+    await withTimeout(sock, timeout, (async () => {
+      sock.write(reqFrame(service));
+      await readStatus(sock, service);
+      await readStatus(sock, service);
+    })());
+  } finally { sock.destroy(); }
+}
+
 // Windows 下 AOSP usb_windows.cpp GetDevicePath() 固定返回 "unknown"，导致 devices -l 不带 usb: 字段；
 // 而 TCP(ip:port)、mDNS(*._tcp) 与模拟器(emulator-*) 序列号格式固定，其余硬件序列号均为物理 USB 传输。
 function enrichWindowsUsbTag(raw: string): string {
@@ -164,7 +193,9 @@ async function openTransport(sel: Selector, timeout: number): Promise<net.Socket
   try {
     await withTimeout(sock, timeout, (async () => {
       const target = sel.kind === 'serial' ? `host:transport:${sel.value}`
-        : sel.kind === 'usb' ? 'host:transport-usb' : `host:transport-${sel.value}`;
+        : sel.kind === 'usb' ? 'host:transport-usb'
+        : sel.kind === 'transport' && sel.value !== 'any' ? `host:transport-id:${sel.value}`
+        : 'host:transport-any';
       sock.write(reqFrame(target));
       await readStatus(sock, target);
     })());
@@ -422,10 +453,17 @@ export async function adbExec(args: string[], opts: { timeout?: number; maxBuffe
     return { stdout: '', stderr: '' };
   }
   if (cmd === 'forward') {
-    const spec = `forward:${rest[1]};${rest[2]}`;
-    const svc = sel.kind === 'serial' ? `host-serial:${sel.value}:${spec}` : `host:${spec}`;
-    await adbHostOk(svc, timeout);
-    return { stdout: '', stderr: '' };
+    const prefix = sel.kind === 'serial' ? `host-serial:${sel.value}`
+      : sel.kind === 'transport' && sel.value !== 'any' ? `host-transport-id:${sel.value}`
+      : sel.kind === 'usb' ? 'host-usb' : 'host';
+    if (rest[1] === '--list') return { stdout: await adbHostData(`${prefix}:list-forward`, timeout), stderr: '' };
+    if (rest[1] === '--remove') { await adbHostForwardOk(`${prefix}:killforward:${rest[2]}`, timeout); return { stdout: '', stderr: '' }; }
+    let at = 1; let norebind = false;
+    if (rest[at] === '--no-rebind') { norebind = true; at++; }
+    const local = rest[at]; const remote = rest[at + 1];
+    if (!local || !remote) throw new AdbWireError(`adb_wire: forward 参数不完整 ${JSON.stringify(args)}`);
+    const resolved = await adbHostOptionalData(`${prefix}:forward:${norebind ? 'norebind:' : ''}${local};${remote}`, timeout);
+    return { stdout: resolved ? resolved + '\n' : '', stderr: '' };
   }
   if (cmd === 'push') {
     const { readFileSync } = await import('node:fs');

@@ -1,11 +1,12 @@
-// Persistent adh.device/1 channel (Frida-style): one authenticated USB connection
-// per serial, reused by panel read paths (icons, app list, scope). When the
-// device daemon is absent or the stream dies, callers fall back to adb.
+// Persistent adh.device/1 channels (Frida-style): one control connection and
+// one catalog/icon data connection per serial. When the device daemon is absent
+// or a stream dies, callers fall back to adb only where that fallback is explicit.
 import {AdbDeviceTransport} from './transport/adb_device.ts';
 import type {DeviceConnection} from './transport/device_transport.ts';
 
 const transport=new AdbDeviceTransport();
 const pending=new Map<string,Promise<DeviceConnection|null>>();
+const dataPending=new Map<string,Promise<DeviceConnection|null>>();
 
 // The panel's device management can re-point every read/write path at another
 // USB serial; env is only the boot default.
@@ -23,19 +24,20 @@ export function connectDevice(serial:string):Promise<DeviceConnection>{
 }
 
 export function deviceRpcLive(serial:string):boolean{
-  const job=pending.get(serial);
-  return !!job; // presence means a live or in-flight channel; destroyed conns delete themselves
+  return !!pending.get(serial)||!!dataPending.get(serial); // presence means a live or in-flight channel; destroyed conns delete themselves
 }
 
-// Explicit disconnect: close the pooled channel (its owned forward included).
+// Explicit disconnect: close the pooled channels (their owned forwards included).
 export async function dropDevice(serial:string):Promise<boolean>{
-  const job=pending.get(serial);
-  if(!job)return false;
-  pending.delete(serial);
-  const c=await job.catch(()=>null);
-  if(!c)return false;
-  await c.close();
-  return true;
+  const jobs=[pending.get(serial),dataPending.get(serial)].filter(Boolean) as Promise<DeviceConnection|null>[];
+  if(!jobs.length)return false;
+  pending.delete(serial);dataPending.delete(serial);
+  let closed=false;
+  for(const job of jobs){
+    const c=await job.catch(()=>null);
+    if(c){await c.close();closed=true;}
+  }
+  return closed;
 }
 
 export function deviceRpc(serial:string):Promise<DeviceConnection|null>{
@@ -51,6 +53,25 @@ export function deviceRpc(serial:string):Promise<DeviceConnection|null>{
   });
 }
 
+function connectDataDevice(serial:string):Promise<DeviceConnection>{
+  const job=transport.connect(serial,undefined,()=>dataPending.delete(serial));
+  dataPending.set(serial,job.catch(()=>null));
+  return job;
+}
+
+function deviceDataRpc(serial:string):Promise<DeviceConnection|null>{
+  let job=dataPending.get(serial);
+  if(!job){
+    job=connectDataDevice(serial).catch(()=>null);
+    dataPending.set(serial,job);
+  }
+  return job.then(c=>{
+    if(c&&!c.rpc.stream.destroyed)return c;
+    if(c)dataPending.delete(serial);
+    return null;
+  });
+}
+
 import {randomUUID} from 'node:crypto';
 
 function peerTarget(c:DeviceConnection){return {deviceId:c.peer.deviceId,bootId:c.peer.bootId,daemonInstanceId:c.peer.daemonInstanceId};}
@@ -58,7 +79,7 @@ function peerTarget(c:DeviceConnection){return {deviceId:c.peer.deviceId,bootId:
 // 'none' = channel answered and the package has no renderable icon;
 // null = channel unavailable (caller falls back to host APK parsing).
 export async function deviceIcon(serial:string,pkg:string):Promise<Buffer|'none'|null>{
-  const c=await deviceRpc(serial);
+  const c=await deviceDataRpc(serial);
   if(!c)return null;
   const reply=await c.rpc.request('legacy.icon',{package:pkg},peerTarget(c));
   const b64=typeof reply?.base64==='string'?reply.base64:'';
@@ -66,7 +87,7 @@ export async function deviceIcon(serial:string,pkg:string):Promise<Buffer|'none'
 }
 
 export async function deviceApplications(serial:string):Promise<any[]|null>{
-  const c=await deviceRpc(serial);
+  const c=await deviceDataRpc(serial);
   if(!c)return null;
   const target=peerTarget(c);
   const all:any[]=[];let offset=0;
