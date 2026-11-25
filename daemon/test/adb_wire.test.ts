@@ -186,14 +186,21 @@ test('push 发 sync 协议 SEND/DATA/DONE 帧序', async () => {
   });
   process.env.ADH_ADB_SERVER_PORT = String(srv.port); const reloaded = await import('../src/adb_wire.ts?port=' + srv.port);
   const fs = await import('node:fs');
-  const tmp = 'C:/Users/diiho/AppData/Local/Temp/push_test.bin';
-  fs.writeFileSync(tmp, Buffer.alloc(1024, 0xab));
-  await reloaded.adbExec(['-s', 'aa165071', 'push', tmp, '/data/local/tmp/x.bin'], { timeout: 3000 });
-  const all = Buffer.concat(frames);
-  assert.ok(all.includes(Buffer.from('SEND')), '要有 SEND 头');
-  assert.ok(all.includes(Buffer.from('/data/local/tmp/x.bin')), '要有目标路径');
-  assert.ok(all.includes(Buffer.from('DONE')), '要有 DONE 收尾');
-  srv.close();
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = fs.mkdtempSync(join(tmpdir(), 'adh-push-'));
+  try {
+    const tmp = join(dir, 'push_test.bin');
+    fs.writeFileSync(tmp, Buffer.alloc(1024, 0xab));
+    await reloaded.adbExec(['-s', 'aa165071', 'push', tmp, '/data/local/tmp/x.bin'], { timeout: 3000 });
+    const all = Buffer.concat(frames);
+    assert.ok(all.includes(Buffer.from('SEND')), '要有 SEND 头');
+    assert.ok(all.includes(Buffer.from('/data/local/tmp/x.bin')), '要有目标路径');
+    assert.ok(all.includes(Buffer.from('DONE')), '要有 DONE 收尾');
+  } finally {
+    srv.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 void reqFrame;
