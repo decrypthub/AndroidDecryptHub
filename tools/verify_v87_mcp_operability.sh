@@ -42,16 +42,29 @@ const closurePass = closureTest.status === 0 && Number(/fail (\d+)/.exec(closure
 if (!closurePass) problems.push('MCP callback/import reachability AST checks failed: ' + closureOutput.slice(-1200));
 
 // ---- agent ops ----
-const agentSrc = read('agent/src/bootstrap/agent_main.c');
-const agentOps = [...agentSrc.matchAll(/strcmp\(op, "([a-z0-9_]+)"\)/g)].map((m) => m[1]);
+// Phase 3 moved the command loop out of agent_main.c; audit the dispatch TU, not the bootstrap shell.
+let agentSrc = '';
+try { agentSrc = read('agent/src/bootstrap/agent_cmds.c'); }
+catch { problems.push('agent dispatch source missing: agent/src/bootstrap/agent_cmds.c'); }
+const agentOps = [...agentSrc.matchAll(/strcmp\(op,\s*"([a-z0-9_]+)"\)/g)].map((m) => m[1]);
+const manifestBlock = /ADH_AGENT_OPS\[\]\s*=\s*\{([\s\S]*?)\};/.exec(agentSrc)?.[1] ?? '';
+const manifestOps = [...manifestBlock.matchAll(/"([a-z0-9_]+)"/g)].map((m) => m[1]);
+if (!agentOps.length) problems.push('agent dispatch strcmp(op, ...) entries not found in agent_cmds.c');
+if (!manifestOps.length) problems.push('ADH_AGENT_OPS manifest not found in agent_cmds.c');
 if (new Set(agentOps).size !== agentOps.length) problems.push('the agent dispatch has a duplicate op');
+if (new Set(manifestOps).size !== manifestOps.length) problems.push('the agent caps manifest has a duplicate op');
+const manifestOnly = manifestOps.filter((o) => !agentOps.includes(o));
+const dispatchOnly = agentOps.filter((o) => !manifestOps.includes(o));
+if (manifestOnly.length || dispatchOnly.length) problems.push(`agent caps/dispatch drift: manifestOnly=${manifestOnly.join(',') || '-'} dispatchOnly=${dispatchOnly.join(',') || '-'}`);
 
 // ops the agent deliberately does NOT have to expose as tools
 const INTERNAL_OPS = {
   capture_drain: 'the shared drainSession owns the ring - a tool that drained it directly is the java_trace P0 (capture_start / capture_stop ARE tools: setCapture is their one implementation)',
 };
-for (const op of Object.keys(INTERNAL_OPS)) {
-  if (!agentOps.includes(op)) problems.push(`INTERNAL_OPS lists ${op}, which the agent no longer has (stale entry)`);
+if (agentOps.length) {
+  for (const op of Object.keys(INTERNAL_OPS)) {
+    if (!agentOps.includes(op)) problems.push(`INTERNAL_OPS lists ${op}, which the agent no longer has (stale entry)`);
+  }
 }
 
 // ---- walk the MCP import graph and collect every op it can send ----
@@ -96,9 +109,9 @@ const opsFromFiles = (files) => {
 
 const mcpClosure = closure('daemon/src/mcp.ts');
 const mcpOps = opsFromFiles(mcpClosure);
-const unreachable = agentOps.filter((o) => !mcpOps.has(o) && !(o in INTERNAL_OPS));
+const unreachable = agentOps.length ? agentOps.filter((o) => !mcpOps.has(o) && !(o in INTERNAL_OPS)) : [];
 if (unreachable.length) problems.push(`agent ops not reachable from MCP and not declared internal: ${unreachable.join(', ')}`);
-const ghosts = [...mcpOps].filter((o) => !agentOps.includes(o));
+const ghosts = agentOps.length ? [...mcpOps].filter((o) => !agentOps.includes(o)) : [];
 if (ghosts.length) problems.push(`MCP drives ops the agent does not know: ${ghosts.join(', ')}`);
 const internalReachable = Object.keys(INTERNAL_OPS).filter((o) => mcpOps.has(o));
 const internalBlocked = Object.keys(INTERNAL_OPS).filter((o) => !mcpOps.has(o));
@@ -151,17 +164,22 @@ const BANNED_OPS = ['crypto_hook_test', 'net_hook_test', 'file_hook_test', 'flow
 const backAgain = BANNED_OPS.filter((o) => agentOps.includes(o));
 if (backAgain.length) problems.push(`sandbox-coupled one-shot ops are back in the agent dispatch: ${backAgain.join(', ')}`);
 const nameHits = [];
+const OWN_DEMO_BOUNDARY = 'daemon/src/local_observer.ts';
+const OWN_DEMO_DECL = /\bexport\s+const\s+OWN_DEMO_PACKAGE\s*=\s*['"]com\.adh\.sandbox['"]/;
 let scanned = 0;
 for (const tree of SRC_TREES) {
   for (const rel of walkSrc(tree.dir, tree.re)) {
     scanned++;
     const src = read(rel.replace(`${root}/`, ''));
     const where = rel.replace(`${root}/`, '');
-    if (src.includes('com.adh.sandbox')) nameHits.push(`${where}: com.adh.sandbox`);
+    src.split(/\r?\n/).forEach((line, index) => {
+      if (!line.includes('com.adh.sandbox')) return;
+      if (!(where === OWN_DEMO_BOUNDARY && OWN_DEMO_DECL.test(line))) nameHits.push(`${where}:${index + 1}: com.adh.sandbox`);
+    });
     if (/\.(c|cpp|h)$/.test(where) && src.includes('libjavacrypto')) nameHits.push(`${where}: libjavacrypto`);
   }
 }
-if (nameHits.length) problems.push(`target-specific names in product code (red line, agent AND daemon): ${nameHits.join(', ')}`);
+if (nameHits.length) problems.push(`target-specific names outside the self-owned Demo boundary (red line, agent AND daemon): ${nameHits.join(', ')}`);
 // A gate that scanned nothing must not pass: both trees have to contribute files.
 if (scanned < 40) problems.push(`red-line scan covered only ${scanned} source files (expected >= 40 across daemon/src + agent/src) - the walker is broken again`);
 notes.push(`red line: scanned=${scanned} files, agent dispatch ops=${agentOps.length}, banned one-shot ops present=${backAgain.length}, target-name hits=${nameHits.length}`);
