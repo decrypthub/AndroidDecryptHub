@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { NModal } from 'naive-ui';
+import { NModal, NVirtualList } from 'naive-ui';
 import { CloseOutline, SearchOutline } from '@vicons/ionicons5';
 import { store, choosePackage } from '../store';
 import { appIconUrl, scopeAdd, scopeRemove, appControl, observePackage } from '../api';
@@ -93,25 +93,29 @@ const canControl = computed(() => store.scope.has(store.chosenPkg));
         </n-input></div>
         <div class="app-choices">
           <div v-if="toastMsg" class="app-empty">{{ toastMsg }}</div>
-          <div v-for="a in apps" :key="a.package" class="app-row">
-            <button type="button" class="app-item" :class="{ active: a.package === store.chosenPkg }"
-              @click="pick(a.package)">
-              <span class="app-face">
-                <span class="app-dialog-letter">{{ itemInitial(a.label, a.package) }}</span>
-                <img :src="appIconUrl(a.package, iconSerial)" alt="" loading="lazy"
-                  @error="($event.target as HTMLElement).style.display = 'none'" />
-              </span>
-              <span class="app-copy">
-                <span class="app-name">{{ a.label || a.package }}</span>
-                <span class="app-pkg">{{ a.package }}</span>
-              </span>
-              <span class="app-state" :class="{ on: store.scope.has(a.package) }">
-                {{ store.scope.has(a.package) ? '已注入' : '' }}</span>
-            </button>
-            <button type="button" class="app-inject" title="允许注入" :aria-pressed="store.scope.has(a.package)"
-              :disabled="a.package === store.chosenPkg && store.scope.has(a.package)"
-              @click="toggleInject(a.package, !store.scope.has(a.package))"></button>
-          </div>
+          <n-virtual-list v-if="apps.length" class="app-virtual" :items="apps" :item-size="52" key-field="package">
+            <template #default="{ item: a }">
+              <div class="app-row">
+                <button type="button" class="app-item" :class="{ active: a.package === store.chosenPkg }"
+                  @click="pick(a.package)">
+                  <span class="app-face">
+                    <span class="app-dialog-letter">{{ itemInitial(a.label, a.package) }}</span>
+                    <img :src="appIconUrl(a.package, iconSerial)" alt="" loading="lazy"
+                      @error="($event.target as HTMLElement).style.display = 'none'" />
+                  </span>
+                  <span class="app-copy">
+                    <span class="app-name">{{ a.label || a.package }}</span>
+                    <span class="app-pkg">{{ a.package }}</span>
+                  </span>
+                  <span class="app-state" :class="{ on: store.scope.has(a.package) }">
+                    {{ store.scope.has(a.package) ? '已注入' : '' }}</span>
+                </button>
+                <button type="button" class="app-inject" title="允许注入" :aria-pressed="store.scope.has(a.package)"
+                  :disabled="a.package === store.chosenPkg && store.scope.has(a.package)"
+                  @click="toggleInject(a.package, !store.scope.has(a.package))"></button>
+              </div>
+            </template>
+          </n-virtual-list>
           <div v-if="store.appsError" class="app-empty">{{ store.appsError }}</div>
           <div v-else-if="!apps.length" class="app-empty">{{ store.appsFailed ? '读取失败，保留上次清单' : '没有应用' }}</div>
         </div>

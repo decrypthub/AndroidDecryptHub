@@ -131,7 +131,9 @@
   .device-row-actions { flex:none; display:flex; gap:4px; }
   .device-row-actions .dl-link { min-height:28px; padding:0 8px; }
   .popover .app-item:disabled { opacity:.55; cursor:default; }
-  .app-dialog .app-choices { flex:1; max-height:none; overflow:auto; min-height:0; padding:8px 10px 12px 8px; }
+  .app-dialog .app-choices { flex:1; max-height:none; overflow:hidden; min-height:0; padding:8px 10px 12px 8px; display:flex; flex-direction:column; }
+  .app-dialog .app-virtual { flex:1; min-height:0; }
+  .app-dialog .app-virtual .app-row { height:52px; }
   .app-dialog .app-item { flex-direction:row; align-items:center; gap:10px; min-height:52px; }
   .app-dialog .app-copy { display:flex; flex-direction:column; min-width:0; flex:1; }
   .app-item .app-face { width:32px; height:32px; }
