@@ -25,12 +25,36 @@ import java.util.concurrent.TimeUnit
 internal object PackageCatalog {
     private const val TAG = "AdhPackageCatalog"
     private const val ICON_PX = 96
+    private var catalogCache: Pair<Long, String>? = null
+    private val iconCache = LinkedHashMap<String, Pair<Long, ByteArray>>(256, 0.75f, true)
+    private val iconCacheLock = Any()
 
-    fun listJson(context: Context): String = InstalledAppsJson.encode(list(context))
+    private fun nowMs(): Long = System.nanoTime() / 1_000_000
+
+    @Synchronized fun listJson(context: Context): String {
+        val now = nowMs()
+        catalogCache?.let { if (now - it.first < 10_000) return it.second }
+        val encoded = InstalledAppsJson.encode(list(context))
+        catalogCache = now to encoded
+        return encoded
+    }
 
     fun iconPng(context: Context, packageName: String?): ByteArray {
         val pkg = packageName?.trim().orEmpty()
         if (pkg.isEmpty() || HardExcludes.isExcluded(pkg) || pkg == AdhPaths.DAEMON_PKG) return ByteArray(0)
+        val now = nowMs()
+        synchronized(iconCacheLock) { iconCache[pkg] }?.let {
+            if (now - it.first < 600_000) return it.second
+        }
+        val rendered = renderIcon(context, pkg)
+        synchronized(iconCacheLock) {
+            iconCache[pkg] = now to rendered
+            while (iconCache.size > 256) iconCache.remove(iconCache.keys.first())
+        }
+        return rendered
+    }
+
+    private fun renderIcon(context: Context, pkg: String): ByteArray {
         val pm = context.packageManager
         // getApplicationIcon() never returns null: on any resource miss it hands back the
         // system default icon, which would paint the same Android robot on every row.
