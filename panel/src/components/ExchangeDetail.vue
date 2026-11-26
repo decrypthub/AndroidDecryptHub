@@ -43,6 +43,12 @@ function partText(p?: Part): string {
   return (head ? head + '\n\n' : '') + body;
 }
 const bytes = (n?: number) => (n == null ? '未记录' : `${n} B`);
+const when = computed(() => {
+  const ts = props.ex.ts as number | undefined;
+  if (!ts) return '未记录';
+  const d = new Date(ts);
+  return Number.isFinite(d.getTime()) ? d.toLocaleString() : '未记录';
+});
 function copy(text: string) {
   void navigator.clipboard?.writeText(text).then(() => toast('已复制'), () => toast('复制失败'));
 }
@@ -51,7 +57,7 @@ function copy(text: string) {
 <template>
   <div class="detail-head">
     <h2><span class="cat-dot net"></span>{{ ex.label }}</h2>
-    <div class="sub">{{ [ex.status ? `HTTP ${ex.status}` : '', ex.conn].filter(Boolean).join(' · ') }}</div>
+    <div class="sub">{{ [ex.seq ? `#${ex.seq}` : '', ex.status ? `HTTP ${ex.status}` : '', ex.conn].filter(Boolean).join(' · ') }}</div>
   </div>
 
   <div class="record-tabs">
@@ -80,6 +86,8 @@ function copy(text: string) {
     <div class="capture-overview">
       <h3>事件信息</h3>
       <dl class="capture-facts">
+        <div><dt>序号</dt><dd>{{ ex.seq ? `#${ex.seq}` : '未记录' }}</dd></div>
+        <div><dt>时间</dt><dd>{{ when }}</dd></div>
         <div><dt>请求大小</dt><dd>{{ bytes(req?.bodyBytes) }}</dd></div>
         <div><dt>响应大小</dt><dd>{{ bytes(res?.bodyBytes) }}</dd></div>
         <div><dt>HTTP 状态</dt><dd>{{ ex.status || '未记录' }}</dd></div>

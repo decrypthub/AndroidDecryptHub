@@ -5,6 +5,8 @@ import { createHpackDecoder, type HpackField } from './hpack.ts';
 
 export interface Http2Message {
   streamId: number;
+  /** Offset of this stream's first HEADERS frame in the parsed direction buffer. */
+  at: number;
   startLine: string;
   headerText: string;
   headers: Map<string, string>;
@@ -33,6 +35,8 @@ const PRIORITY = 0x20;
 
 interface StreamState {
   id: number;
+  /** Offset of the frame that opened this stream, used to report the request's time. */
+  firstAt: number;
   fields: HpackField[];
   body: Buffer[];
   end: boolean;
@@ -43,6 +47,8 @@ interface OpenBlock {
   streamId: number;
   kind: 'headers' | 'push';
   endStream: boolean;
+  /** Offset of the first frame of this header block. */
+  at: number;
   parts: Buffer[];
 }
 
@@ -103,6 +109,7 @@ function messageFrom(st: StreamState, role: 'client' | 'server'): Http2Message |
     if (pseudo.get(':authority')) lines.unshift(headerLine(':authority', pseudo.get(':authority')!));
     return {
       streamId: st.id,
+      at: st.firstAt,
       startLine: `${method} ${path} HTTP/2`,
       headerText: lines.join('\n'),
       headers,
@@ -116,6 +123,7 @@ function messageFrom(st: StreamState, role: 'client' | 'server'): Http2Message |
   const statusOk = Number.isInteger(status) && status >= 100 && status <= 599;
   return {
     streamId: st.id,
+    at: st.firstAt,
     startLine: statusOk ? `HTTP/2 ${status}` : 'HTTP/2',
     headerText: lines.join('\n'),
     headers,
@@ -145,11 +153,11 @@ export function parseHttp2(buf: Buffer, role: 'client' | 'server'): { messages: 
   let open: OpenBlock | null = null;
   let note: string | undefined;
 
-  const touch = (id: number): StreamState | null => {
+  const touch = (id: number, at: number): StreamState | null => {
     const have = streams.get(id);
     if (have) return have;
     if (streams.size >= MAX_STREAMS) { note = '流太多'; return null; }
-    const st: StreamState = { id, fields: [], body: [], end: false, reset: false };
+    const st: StreamState = { id, firstAt: at, fields: [], body: [], end: false, reset: false };
     streams.set(id, st);
     order.push(id);
     return st;
@@ -162,7 +170,7 @@ export function parseHttp2(buf: Buffer, role: 'client' | 'server'): { messages: 
     const decoded = dec.decode(blob);
     if (!decoded.ok) { note = decoded.error; return false; }
     if (block.kind === 'push') return true;
-    const st = touch(block.streamId);
+    const st = touch(block.streamId, block.at);
     if (!st) return false;
     st.fields.push(...decoded.fields);
     if (block.endStream) st.end = true;
@@ -170,6 +178,7 @@ export function parseHttp2(buf: Buffer, role: 'client' | 'server'): { messages: 
   };
 
   while (off + 9 <= buf.length) {
+    const frameAt = off;
     const len = buf.readUIntBE(off, 3);
     const type = buf[off + 3];
     const flags = buf[off + 4];
@@ -196,6 +205,7 @@ export function parseHttp2(buf: Buffer, role: 'client' | 'server'): { messages: 
         streamId: type === PUSH ? (got.promised ?? sid) : sid,
         kind: type === PUSH ? 'push' : 'headers',
         endStream: type === HEADERS && (flags & END_STREAM) !== 0,
+        at: frameAt,
         parts: [got.frag],
       };
       if (flags & END_HEADERS) { if (!finish(open)) break; }

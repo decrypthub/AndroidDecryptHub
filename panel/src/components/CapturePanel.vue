@@ -15,7 +15,7 @@ interface ExchangePart {
   contentEncoding?: string; note?: string;
 }
 interface Exchange {
-  id: string; label?: string; status?: string; conn?: string; ts?: number;
+  id: string; seq?: number; label?: string; status?: string; conn?: string; ts?: number; tsNs?: number;
   captureIds?: number[]; note?: string; request?: ExchangePart; response?: ExchangePart;
 }
 
@@ -169,10 +169,13 @@ function scheduleExchanges() {
 const matchedExchangesAll = computed(() => {
   if (props.kind !== 'net') return [];
   const q = filter.q.trim().toLowerCase();
+  const bySeq = /^#\d+$/.test(q) ? q.slice(1) : '';
   return exchanges.value.filter(ex => {
     if (fromTs.value != null && (ex.ts ?? 0) < fromTs.value) return false;
     if (toTs.value != null && (ex.ts ?? 0) > toTs.value) return false;
-    if (q) {
+    if (bySeq) {
+      if (String(ex.seq ?? '') !== bySeq) return false;
+    } else if (q) {
       const blob = [ex.label, ex.status, ex.note,
         ex.request?.startLine, ex.request?.headerText, ex.request?.bodyText,
         ex.response?.startLine, ex.response?.headerText, ex.response?.bodyText]
@@ -183,7 +186,10 @@ const matchedExchangesAll = computed(() => {
     if (filter.min != null && n < filter.min) return false;
     if (filter.max != null && n > filter.max) return false;
     return true;
-  }).sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0));
+  }).sort((a, b) =>
+    // 主键用 host 墙钟 ts（跨会话/设备/重启可比）；tsNs 是设备开机相对时钟，只在
+    // 同一批次内当精度用，跨基准排序会错。同一记录上的多条请求再按 seq 保持原顺序。
+    ((b.ts ?? 0) - (a.ts ?? 0)) || ((b.tsNs ?? 0) - (a.tsNs ?? 0)) || ((b.seq ?? 0) - (a.seq ?? 0)));
 });
 
 const matchedExchanges = computed(() => {
@@ -602,6 +608,7 @@ const searchPlaceholder = computed(() =>
             <div v-for="ex in matchedExchanges" :key="ex.id" class="row cat-net" :class="{ selected: sel === ex.id }"
               role="button" tabindex="0" @keydown.enter.prevent="selectExchange(ex)" @keydown.space.prevent="selectExchange(ex)" @click="selectExchange(ex)">
               <div class="top">
+                <span class="seq">#{{ ex.seq ?? '—' }}</span>
                 <span class="pill net">网络</span>
                 <span class="algo">{{ ex.label }}</span>
                 <span v-if="ex.status" class="op">{{ ex.status }}</span>
