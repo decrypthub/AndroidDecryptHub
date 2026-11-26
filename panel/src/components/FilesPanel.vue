@@ -1,8 +1,47 @@
 <script setup lang="ts">
-import { computed, ref, watch, onMounted } from 'vue';
+import { computed, onMounted, ref, shallowRef, watch, type Component } from 'vue';
+import {
+  AlertCircleOutline,
+  ArchiveOutline,
+  ArrowUpOutline,
+  ChevronDownOutline,
+  ChevronUpOutline,
+  CopyOutline,
+  CubeOutline,
+  DocumentOutline,
+  DocumentTextOutline,
+  DownloadOutline,
+  FolderOpenOutline,
+  FolderOutline,
+  ImageOutline,
+  KeyOutline,
+  LinkOutline,
+  OpenOutline,
+  RefreshOutline,
+  SearchOutline,
+} from '@vicons/ionicons5';
 import { store, toast } from '../store';
 import { fsList, fsRead, type FsEntry, perfMs } from '../api';
 import { fmtSize } from '../capview';
+
+type SortKey = 'name' | 'size' | 'mtime';
+type PreviewMode = 'text' | 'hex';
+type EntryKind = 'dir' | 'link' | 'text' | 'image' | 'key' | 'db' | 'binary' | 'file';
+
+interface Preview {
+  name: string;
+  text?: string;
+  truncated?: boolean;
+  binary?: boolean;
+  size?: number;
+  fsize?: number;
+  message?: string;
+  b64?: string;
+  bytes?: Uint8Array;
+  fullPath?: string;
+  loading?: boolean;
+  error?: boolean;
+}
 
 const path = ref('');
 const pathInput = ref('');
@@ -10,144 +49,457 @@ const entries = ref<FsEntry[]>([]);
 const limited = ref(false);
 const state = ref<'idle' | 'loading' | 'ready' | 'error'>('idle');
 const message = ref('');
+const filter = ref('');
+const sortKey = ref<SortKey>('name');
+const sortDir = ref<1 | -1>(1);
+const preview = shallowRef<Preview | null>(null);
+const previewMode = ref<PreviewMode>('text');
 
-interface Preview { name: string; text?: string; truncated?: boolean; binary?: boolean; size?: number; message?: string; b64?: string; fullPath?: string }
-const preview = ref<Preview | null>(null);
+let listSeq = 0;
+let readSeq = 0;
+const collator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' });
+const utf8 = new TextDecoder('utf-8');
+
+const sandboxRoot = computed(() => store.chosenPkg ? `/data/data/${store.chosenPkg}` : '');
 
 const crumbs = computed(() => {
+  const root = sandboxRoot.value;
+  if (root && (path.value === root || path.value.startsWith(`${root}/`))) {
+    const out: Array<{ name: string; p: string }> = [{ name: '沙盒', p: root }];
+    const rel = path.value.slice(root.length).split('/').filter(Boolean);
+    rel.forEach((name, i) => out.push({ name, p: `${root}/${rel.slice(0, i + 1).join('/')}` }));
+    return out;
+  }
   const parts = path.value.split('/').filter(Boolean);
-  const out: Array<{ name: string; p: string }> = [{ name: '/', p: '' }];
-  parts.forEach((n, i) => out.push({ name: n, p: '/' + parts.slice(0, i + 1).join('/') }));
+  const out: Array<{ name: string; p: string }> = [{ name: '/', p: '/' }];
+  parts.forEach((name, i) => out.push({ name, p: '/' + parts.slice(0, i + 1).join('/') }));
   return out;
 });
+
+const currentDirName = computed(() => {
+  if (!path.value) return '应用文件';
+  if (path.value === sandboxRoot.value) return '应用沙盒';
+  const clean = path.value.replace(/\/+$/, '');
+  return clean.split('/').pop() || '应用文件';
+});
+
+const parentPath = computed(() => {
+  if (!path.value || path.value === '/' || path.value === sandboxRoot.value) return '';
+  const clean = path.value.replace(/\/+$/, '');
+  return clean.replace(/\/[^/]+$/, '') || '/';
+});
+
+const filteredEntries = computed(() => {
+  const q = filter.value.trim().toLowerCase();
+  const list = (q ? entries.value.filter(e => e.name.toLowerCase().includes(q)) : entries.value).slice();
+  return list.sort((a, b) => {
+    const rank = (a.type === 'd' ? 0 : 1) - (b.type === 'd' ? 0 : 1);
+    if (rank) return rank;
+    let cmp = 0;
+    if (sortKey.value === 'name') cmp = collator.compare(a.name, b.name);
+    else if (sortKey.value === 'size') cmp = (a.size ?? 0) - (b.size ?? 0);
+    else cmp = (a.mtime ?? 0) - (b.mtime ?? 0);
+    return cmp * sortDir.value || collator.compare(a.name, b.name);
+  });
+});
+
+const dirCount = computed(() => entries.value.filter(e => e.type === 'd').length);
+const fileCount = computed(() => entries.value.length - dirCount.value);
+const countText = computed(() => `${dirCount.value} 个目录 · ${fileCount.value} 个文件`);
+const statText = computed(() => {
+  const ms = perfMs('GET /api/fs/list');
+  if (state.value === 'loading') return '正在读取目录';
+  if (state.value === 'error') return message.value;
+  if (!store.chosenPkg) return '未选择应用';
+  if (state.value === 'idle') return '等待读取';
+  return `${countText.value} · ${Math.round(ms)}ms${limited.value ? ' · 已截断' : ''}`;
+});
+
+function joinPath(parent: string, name: string) {
+  const base = parent.replace(/\/+$/, '');
+  return `${base}/${name}` || '/';
+}
+
+function entryPath(e: FsEntry) {
+  return e.path || joinPath(path.value, e.name);
+}
+
+function extension(name: string) {
+  if (!name.includes('.') || name.startsWith('.') && name.indexOf('.') === name.lastIndexOf('.')) return '';
+  return name.split('.').pop()?.toLowerCase() ?? '';
+}
+
+function entryKind(e: FsEntry): EntryKind {
+  if (e.type === 'd') return 'dir';
+  if (e.type === 'l') return 'link';
+  const ext = extension(e.name);
+  if (['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg'].includes(ext)) return 'image';
+  if (['key', 'pem', 'crt', 'cer', 'der', 'p12', 'pfx', 'keystore', 'jks'].includes(ext)) return 'key';
+  if (['db', 'sqlite', 'sqlite3', 'realm'].includes(ext)) return 'db';
+  if (['txt', 'log', 'xml', 'json', 'js', 'ts', 'java', 'kt', 'c', 'h', 'cc', 'cpp', 'md', 'properties', 'conf', 'cfg', 'ini', 'yaml', 'yml', 'html', 'css', 'sh', 'proto'].includes(ext)) return 'text';
+  if (['so', 'dex', 'odex', 'vdex', 'apk', 'aar', 'jar', 'bin', 'dat', 'elf'].includes(ext)) return 'binary';
+  return 'file';
+}
+
+function iconFor(e: FsEntry): Component {
+  const kind = entryKind(e);
+  if (kind === 'dir') return FolderOutline;
+  if (kind === 'link') return LinkOutline;
+  if (kind === 'text') return DocumentTextOutline;
+  if (kind === 'image') return ImageOutline;
+  if (kind === 'key') return KeyOutline;
+  if (kind === 'db') return ArchiveOutline;
+  if (kind === 'binary') return CubeOutline;
+  return DocumentOutline;
+}
+
+function kindLabel(e: FsEntry) {
+  const kind = entryKind(e);
+  if (kind === 'dir') return '目录';
+  if (kind === 'link') return '链接';
+  if (kind === 'text') return '文本';
+  if (kind === 'image') return '图片';
+  if (kind === 'key') return '证书';
+  if (kind === 'db') return '数据库';
+  if (kind === 'binary') return '二进制';
+  return '文件';
+}
 
 async function load(p: string) {
   const pkg = store.chosenPkg;
   if (!pkg) { message.value = '先选择应用。'; return; }
+  const token = ++listSeq;
   state.value = 'loading';
-  const norm = p || `/data/data/${pkg}`;
+  message.value = '';
+  const norm = (p || sandboxRoot.value).trim() || sandboxRoot.value;
   try {
     const r = await fsList(pkg, norm);
-    if (r.error) { state.value = 'error'; message.value = r.error; return; }
-    entries.value = (r.entries ?? []).slice().sort((a, b) =>
-      (a.type === 'd' ? 0 : 1) - (b.type === 'd' ? 0 : 1) || a.name.localeCompare(b.name));
+    if (token !== listSeq) return;
+    if (r.error) {
+      state.value = 'error';
+      message.value = r.error;
+      return;
+    }
+    entries.value = (r.entries ?? []).map(e => ({ ...e, path: e.path || joinPath(norm, e.name) }));
     limited.value = !!r.limited;
     path.value = norm;
     pathInput.value = norm;
+    filter.value = '';
     preview.value = null;
     state.value = 'ready';
   } catch (e) {
+    if (token !== listSeq) return;
     state.value = 'error';
     message.value = e instanceof Error ? e.message : '读取目录失败';
   }
 }
-async function openEntry(e: FsEntry) {
-  const p = e.path ?? `${path.value}/${e.name}`;
-  if (e.type === 'd') { void load(p); return; }
-  preview.value = { name: e.name, fullPath: p, message: '正在读取…' };
+
+function decodeBase64(b64: string) {
   try {
-    const r = await fsRead(store.chosenPkg, p);
-    if (r.error) { preview.value = { name: e.name, fullPath: p, message: r.error }; return; }
-    preview.value = {
-      name: e.name,
-      text: r.text ?? (r.base64 ? `[base64] ${r.base64.slice(0, 4096)}` : undefined),
-      truncated: r.truncated, binary: r.binary, size: r.size ?? e.size,
-      b64: r.base64, fullPath: p,
-      message: r.truncated ? '仅预览前部，未读完整文件。' : `${fmtSize(r.size ?? e.size)}${r.binary ? ' · 二进制' : ''}`,
-    };
+    return Uint8Array.from(atob(b64), ch => ch.charCodeAt(0));
   } catch {
-    preview.value = { name: e.name, fullPath: p, message: '读取失败' };
+    throw new Error('文件字节不是有效的 base64');
   }
 }
+
+function detectBinary(bytes: Uint8Array) {
+  const len = Math.min(bytes.length, 4096);
+  if (!len) return false;
+  let control = 0;
+  for (let i = 0; i < len; i++) {
+    const b = bytes[i];
+    if (b === 0) return true;
+    if (b < 32 && b !== 9 && b !== 10 && b !== 13) control++;
+  }
+  return control / len > 0.08;
+}
+
+async function openEntry(e: FsEntry) {
+  const p = entryPath(e);
+  if (e.type === 'd') { void load(p); return; }
+  const token = ++readSeq;
+  preview.value = { name: e.name, fullPath: p, loading: true, message: '正在读取文件' };
+  try {
+    const r = await fsRead(store.chosenPkg, p);
+    if (token !== readSeq) return;
+    if (r.error) {
+      preview.value = { name: e.name, fullPath: p, error: true, message: r.error };
+      return;
+    }
+    const b64 = r.b64 ?? r.base64 ?? '';
+    const bytes = decodeBase64(b64);
+    const binary = r.binary ?? detectBinary(bytes);
+    const text = r.text ?? utf8.decode(bytes);
+    previewMode.value = binary ? 'hex' : 'text';
+    preview.value = {
+      name: e.name,
+      text,
+      truncated: r.truncated,
+      binary,
+      size: r.size ?? e.size,
+      fsize: r.fsize,
+      b64,
+      bytes,
+      fullPath: p,
+      message: r.truncated ? '只读到文件前部' : undefined,
+    };
+  } catch (err) {
+    if (token !== readSeq) return;
+    preview.value = {
+      name: e.name,
+      fullPath: p,
+      error: true,
+      message: err instanceof Error ? err.message : '读取失败',
+    };
+  }
+}
+
+function hexDump(bytes: Uint8Array, maxBytes = 32768) {
+  const len = Math.min(bytes.length, maxBytes);
+  const lines: string[] = [];
+  for (let off = 0; off < len; off += 16) {
+    const slice = bytes.subarray(off, Math.min(off + 16, len));
+    const hex = Array.from(slice, b => b.toString(16).padStart(2, '0')).join(' ').padEnd(47, ' ');
+    const ascii = Array.from(slice, b => b >= 32 && b <= 126 ? String.fromCharCode(b) : '.').join('');
+    lines.push(`${off.toString(16).padStart(8, '0')}  ${hex}  |${ascii}|`);
+  }
+  if (bytes.length > len) lines.push(`… 已省略 ${fmtSize(bytes.length - len)}，下载可取得本次读取的完整内容`);
+  return lines.join('\n');
+}
+
+const previewText = computed(() => {
+  const pv = preview.value;
+  if (!pv) return '';
+  if (pv.text != null) return pv.text;
+  return pv.bytes ? utf8.decode(pv.bytes) : '';
+});
+const previewHex = computed(() => preview.value?.bytes ? hexDump(preview.value.bytes) : '');
+const currentPreviewContent = computed(() => previewMode.value === 'hex' ? previewHex.value : previewText.value);
+const canDownload = computed(() => typeof preview.value?.b64 === 'string' && !preview.value.loading && !preview.value.error);
+const canCopy = computed(() => !!currentPreviewContent.value && !preview.value?.loading && !preview.value?.error);
+const previewSizeText = computed(() => {
+  const pv = preview.value;
+  if (!pv) return '';
+  const full = pv.fsize ?? pv.size;
+  if (pv.truncated && pv.size != null && full != null) return `${fmtSize(full)} · 已读 ${fmtSize(pv.size)}`;
+  return fmtSize(full);
+});
+const previewTypeText = computed(() => {
+  const pv = preview.value;
+  if (!pv) return '';
+  return pv.binary ? '二进制' : '文本';
+});
+
 function downloadPreview() {
   const pv = preview.value;
-  if (!pv?.b64) return;
-  const bin = Uint8Array.from(atob(pv.b64), ch => ch.charCodeAt(0));
+  if (!pv || typeof pv.b64 !== 'string') return;
+  const bytes = pv.bytes ?? decodeBase64(pv.b64);
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([bin]));
+  a.href = URL.createObjectURL(new Blob([bytes]));
   a.download = pv.name;
-  document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href);
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(a.href);
   toast(`已下载 ${pv.name}`);
 }
+
 function copyPreview() {
-  const t = preview.value?.text;
-  if (t == null) return;
-  void navigator.clipboard?.writeText(t).then(() => toast('已复制'), () => toast('复制失败'));
+  const text = currentPreviewContent.value;
+  if (!text) return;
+  void navigator.clipboard?.writeText(text).then(() => toast('已复制'), () => toast('复制失败'));
+}
+
+function toggleSort(key: SortKey) {
+  if (sortKey.value === key) sortDir.value = sortDir.value === 1 ? -1 : 1;
+  else {
+    sortKey.value = key;
+    sortDir.value = key === 'name' ? 1 : -1;
+  }
+}
+
+function sortIcon(key: SortKey) {
+  if (sortKey.value !== key) return null;
+  return sortDir.value === 1 ? ChevronUpOutline : ChevronDownOutline;
+}
+
+function retryLoad() {
+  void load(pathInput.value.trim() || path.value);
 }
 function go(p: string) { void load(p); }
+function goUp() { if (parentPath.value) void load(parentPath.value); }
 function submitPath() { void load(pathInput.value.trim()); }
 
-const statText = computed(() => {
-  const ms = perfMs('GET /api/fs/list');
-  if (state.value === 'loading') return '正在读取目录…';
-  if (state.value === 'error') return message.value;
-  if (!store.chosenPkg) return '先选择应用。';
-  if (state.value === 'idle') return '输入路径或点击目录开始浏览。';
-  return `${Math.round(ms)}ms · ${entries.value.length} 项${limited.value ? ' · 目录过大已截断' : ''}`;
-});
 const fmtMtime = (m?: number) => {
   if (!m) return '';
   const ms = m < 1e12 ? m * 1000 : m;
   return new Date(ms).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 };
 
-watch(() => store.chosenPkg, () => { path.value = ''; entries.value = []; preview.value = null; state.value = 'idle'; void load(''); });
+watch(() => store.chosenPkg, () => {
+  path.value = '';
+  pathInput.value = '';
+  entries.value = [];
+  preview.value = null;
+  filter.value = '';
+  state.value = 'idle';
+  void load('');
+});
 onMounted(() => { if (store.chosenPkg) void load(''); });
 </script>
 
 <template>
-  <section class="app-directory">
-    <div class="app-directory-inner">
-      <p v-if="!store.chosenPkg" class="directory-unavailable">选择注入范围里的应用后浏览它的私有目录。</p>
-      <div v-else class="directory-workspace">
-        <aside class="directory-list">
-          <div class="directory-list-head">
-            <div class="directory-pane-head">
-              <h3>目录</h3>
-              <button type="button" class="compact-action" @click="load(path)">刷新</button>
-            </div>
-            <input v-model="pathInput" class="directory-root mono" placeholder="/data/data/<pkg>"
-              @keyup.enter="submitPath" />
-            <nav class="directory-path">
-              <template v-for="(c, i) in crumbs" :key="c.p || 'root'">
-                <button type="button" class="directory-crumb" :aria-current="i === crumbs.length - 1 ? 'page' : undefined"
-                  @click="go(c.p)">{{ c.name }}</button>
-              </template>
-            </nav>
-            <p class="set-status">{{ statText }}</p>
+  <section class="fs-board">
+    <div v-if="!store.chosenPkg" class="fs-unavailable">
+      <n-icon size="34" :component="FolderOpenOutline" />
+      <strong>选择一个应用后浏览文件</strong>
+    </div>
+
+    <div v-else class="fs-shell">
+      <header class="fs-top">
+        <div class="fs-location">
+          <span class="fs-kicker">文件</span>
+          <h2>{{ currentDirName }}</h2>
+          <nav class="fs-crumbs" aria-label="当前路径">
+            <template v-for="(c, i) in crumbs" :key="c.p || 'root'">
+              <button type="button" class="fs-crumb" :aria-current="i === crumbs.length - 1 ? 'page' : undefined"
+                @click="go(c.p)">{{ c.name }}</button>
+              <span v-if="i < crumbs.length - 1" class="fs-crumb-sep">/</span>
+            </template>
+          </nav>
+        </div>
+        <div class="fs-command">
+          <button type="button" class="fs-icon-btn" title="上一级" aria-label="上一级" :disabled="!parentPath" @click="goUp">
+            <n-icon size="17" :component="ArrowUpOutline" />
+          </button>
+          <input v-model="pathInput" class="fs-path-input mono" placeholder="/data/data/<pkg>" aria-label="文件路径"
+            @keyup.enter="submitPath" />
+          <button type="button" class="fs-command-btn" title="打开路径" aria-label="打开路径" @click="submitPath">
+            <n-icon size="16" :component="OpenOutline" />
+            <span>打开</span>
+          </button>
+          <button type="button" class="fs-command-btn" title="刷新目录" aria-label="刷新目录" @click="load(path)">
+            <n-icon size="16" :component="RefreshOutline" />
+            <span>刷新</span>
+          </button>
+        </div>
+      </header>
+
+      <div class="fs-split">
+        <aside class="fs-list-pane">
+          <div class="fs-list-tools">
+            <label class="fs-filter">
+              <n-icon size="15" :component="SearchOutline" />
+              <input v-model="filter" type="search" placeholder="筛选当前目录" aria-label="筛选当前目录" />
+            </label>
+            <span class="fs-list-stat" :title="statText">{{ statText }}</span>
           </div>
-          <div class="directory-rows">
-            <table class="directory-list-table">
-              <thead>
-                <tr><th>名称</th><th>大小</th><th>修改时间</th></tr>
-              </thead>
-              <tbody>
-                <tr v-if="path && path !== '/'" @click="go(path.replace(/\/[^/]*$/, '') || '/')">
-                  <td colspan="3"><button type="button" class="directory-entry" data-directory="true">..</button></td>
-                </tr>
-                <tr v-for="e in entries" :key="e.name" :class="{ selected: preview?.fullPath === e.path }"
-                  @click="openEntry(e)">
-                  <td><button type="button" class="directory-entry" :data-directory="e.type === 'd'">
-                      {{ e.name }}{{ e.type === 'd' ? '/' : '' }}</button></td>
-                  <td>{{ e.type === 'd' ? '' : fmtSize(e.size) }}</td>
-                  <td class="muted">{{ fmtMtime(e.mtime) }}</td>
-                </tr>
-              </tbody>
-            </table>
-            <div v-if="state === 'ready' && !entries.length" class="empty">空目录。</div>
+
+          <div class="fs-column-head" aria-label="排序方式">
+            <button type="button" @click="toggleSort('name')">
+              <span>名称</span><n-icon v-if="sortIcon('name')" size="12" :component="sortIcon('name')" />
+            </button>
+            <button type="button" @click="toggleSort('size')">
+              <span>大小</span><n-icon v-if="sortIcon('size')" size="12" :component="sortIcon('size')" />
+            </button>
+            <button type="button" @click="toggleSort('mtime')">
+              <span>修改时间</span><n-icon v-if="sortIcon('mtime')" size="12" :component="sortIcon('mtime')" />
+            </button>
+          </div>
+
+          <div class="fs-rows">
+            <button v-if="parentPath && state === 'ready'" type="button" class="fs-row fs-parent" @click="goUp">
+              <span class="fs-file">
+                <span class="fs-kind dir"><n-icon size="17" :component="ArrowUpOutline" /></span>
+                <span class="fs-name"><strong>..</strong><small>上一级</small></span>
+              </span>
+              <span class="fs-size"></span>
+              <span class="fs-time"></span>
+            </button>
+
+            <button v-for="e in filteredEntries" :key="entryPath(e)" type="button" class="fs-row"
+              :class="{ selected: preview?.fullPath === entryPath(e) }" :title="entryPath(e)" @click="openEntry(e)">
+              <span class="fs-file">
+                <span class="fs-kind" :class="entryKind(e)"><n-icon size="17" :component="iconFor(e)" /></span>
+                <span class="fs-name">
+                  <strong>{{ e.name }}{{ e.type === 'd' ? '/' : '' }}</strong>
+                  <small>{{ kindLabel(e) }}</small>
+                </span>
+              </span>
+              <span class="fs-size">{{ e.type === 'd' ? '' : fmtSize(e.size) }}</span>
+              <span class="fs-time">{{ fmtMtime(e.mtime) }}</span>
+            </button>
+
+            <div v-if="state === 'loading'" class="fs-skeletons" aria-label="正在读取目录">
+              <div v-for="i in 8" :key="i" class="fs-skeleton-row">
+                <span></span><b></b><em></em>
+              </div>
+            </div>
+
+            <div v-else-if="state === 'error'" class="fs-state error">
+              <n-icon size="28" :component="AlertCircleOutline" />
+              <strong>目录读取失败</strong>
+              <span>{{ message }}</span>
+              <button type="button" @click="retryLoad">重试</button>
+            </div>
+
+            <div v-else-if="state === 'ready' && !filteredEntries.length" class="fs-state">
+              <n-icon size="28" :component="FolderOpenOutline" />
+              <strong>{{ filter ? '当前目录没有匹配项' : '空目录' }}</strong>
+            </div>
           </div>
         </aside>
-        <section class="directory-preview">
-          <div class="directory-pane-head">
-            <h3>{{ preview?.name || '文件内容' }}</h3>
-            <div class="directory-preview-actions">
-              <span class="directory-readonly">只读</span>
-              <button type="button" class="compact-action" :disabled="!preview?.b64" @click="downloadPreview">下载</button>
-              <button type="button" class="compact-action" :disabled="preview?.text == null" @click="copyPreview">复制</button>
+
+        <section class="fs-preview-pane">
+          <template v-if="preview">
+            <header class="fs-preview-head">
+              <span class="fs-preview-icon" :class="{ binary: preview.binary }">
+                <n-icon size="22" :component="preview.binary ? CubeOutline : DocumentTextOutline" />
+              </span>
+              <div class="fs-preview-id">
+                <h3>{{ preview.name }}</h3>
+                <p class="mono">{{ preview.fullPath }}</p>
+              </div>
+              <div class="fs-preview-actions">
+                <button type="button" class="fs-action" :disabled="!canDownload" @click="downloadPreview">
+                  <n-icon size="15" :component="DownloadOutline" /><span>下载</span>
+                </button>
+                <button type="button" class="fs-action" :disabled="!canCopy" @click="copyPreview">
+                  <n-icon size="15" :component="CopyOutline" /><span>复制</span>
+                </button>
+              </div>
+            </header>
+
+            <div v-if="preview.loading" class="fs-preview-state">
+              <span class="fs-spinner"></span>
+              <span>正在读取文件</span>
             </div>
+            <div v-else-if="preview.error" class="fs-preview-state error">
+              <n-icon size="25" :component="AlertCircleOutline" />
+              <strong>文件读取失败</strong>
+              <span>{{ preview.message }}</span>
+            </div>
+            <template v-else>
+              <div class="fs-preview-meta">
+                <span>{{ previewSizeText }}</span>
+                <span>{{ previewTypeText }}</span>
+                <span v-if="preview.truncated" class="warn">截断</span>
+                <span v-if="preview.message">{{ preview.message }}</span>
+              </div>
+              <div class="fs-viewbar">
+                <div class="fs-view-toggle" role="group" aria-label="预览格式">
+                  <button type="button" :aria-pressed="previewMode === 'text'" @click="previewMode = 'text'">文本</button>
+                  <button type="button" :aria-pressed="previewMode === 'hex'" @click="previewMode = 'hex'">Hex</button>
+                </div>
+              </div>
+              <pre class="fs-content" :class="{ hex: previewMode === 'hex' }">{{ currentPreviewContent }}</pre>
+            </template>
+          </template>
+
+          <div v-else class="fs-preview-empty">
+            <n-icon size="44" :component="DocumentOutline" />
+            <strong>选择文件查看内容</strong>
           </div>
-          <p class="set-status">{{ preview?.message || (preview ? '' : '从左侧选择一个文件。') }}</p>
-          <pre v-if="preview?.text != null">{{ preview.text }}</pre>
         </section>
       </div>
     </div>
@@ -155,6 +507,125 @@ onMounted(() => { if (store.chosenPkg) void load(''); });
 </template>
 
 <style scoped>
-.directory-rows tbody tr { cursor: pointer; }
-.directory-rows tbody tr td { font-size: 12px; }
+.fs-board { flex: 1; min-width: 0; min-height: 0; display: flex; overflow: auto; padding: 16px; background: var(--bg); }
+.fs-unavailable { flex: 1; display: grid; place-content: center; justify-items: center; gap: 10px; color: var(--muted); border: 1px dashed var(--line); border-radius: 12px; background: var(--surface); }
+.fs-unavailable strong { color: var(--ink-2); font-size: 14px; font-weight: 600; }
+.fs-shell { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--line-soft); border-radius: 12px; background: var(--surface); box-shadow: 0 1px 2px rgba(17, 19, 21, .025); }
+.fs-top { display: grid; grid-template-columns: minmax(220px, .8fr) minmax(360px, 1.2fr); gap: 14px; align-items: end; padding: 16px 18px 13px; border-bottom: 1px solid var(--line-soft); background: var(--surface); }
+.fs-location { min-width: 0; }
+.fs-kicker { display: block; margin-bottom: 3px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .08em; }
+.fs-location h2 { margin: 0 0 7px; color: var(--ink); font-size: 21px; line-height: 1.15; font-weight: 650; letter-spacing: -.025em; overflow-wrap: anywhere; }
+.fs-crumbs { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 2px; color: var(--muted); }
+.fs-crumb { max-width: 180px; overflow: hidden; padding: 2px 4px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.fs-crumb:hover { color: var(--ink); background: var(--surface-2); }
+.fs-crumb[aria-current] { color: var(--ink); font-weight: 650; cursor: default; }
+.fs-crumb-sep { color: var(--line); font-size: 11px; }
+.fs-command { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto auto; gap: 7px; align-items: center; }
+.fs-icon-btn, .fs-command-btn, .fs-action { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 34px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink-2); background: var(--surface); cursor: pointer; transition: background .16s ease, border-color .16s ease, color .16s ease, transform .08s ease; }
+.fs-icon-btn { width: 34px; padding: 0; }
+.fs-command-btn { padding: 0 11px; font-size: 12px; white-space: nowrap; }
+.fs-action { padding: 0 10px; font-size: 12px; }
+.fs-icon-btn:hover, .fs-command-btn:hover, .fs-action:hover { color: var(--ink); background: var(--surface-2); border-color: var(--muted); }
+.fs-icon-btn:active, .fs-command-btn:active, .fs-action:active { transform: translateY(1px); }
+.fs-icon-btn:disabled, .fs-action:disabled { opacity: .42; cursor: default; transform: none; }
+.fs-path-input { width: 100%; min-width: 0; min-height: 34px; padding: 5px 10px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); background: var(--bg); font-size: 12px; }
+.fs-path-input:focus { border-color: var(--ink); outline: 2px solid rgba(17, 19, 21, .08); outline-offset: 0; }
+.fs-split { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(320px, .88fr) minmax(0, 1.12fr); }
+.fs-list-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: 1px solid var(--line-soft); background: var(--bg); }
+.fs-list-tools { display: grid; grid-template-columns: minmax(150px, 1fr) auto; gap: 10px; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--line-soft); }
+.fs-filter { position: relative; display: flex; align-items: center; min-width: 0; color: var(--muted); }
+.fs-filter > .n-icon { position: absolute; left: 9px; z-index: 1; }
+.fs-filter input { width: 100%; min-width: 0; min-height: 32px; padding: 5px 9px 5px 29px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); background: var(--surface); font-size: 12px; }
+.fs-filter input:focus { border-color: var(--ink); outline: 2px solid rgba(17, 19, 21, .08); }
+.fs-list-stat { max-width: 210px; overflow: hidden; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
+.fs-column-head { display: grid; grid-template-columns: minmax(0, 1fr) 76px 112px; gap: 10px; align-items: center; min-height: 34px; padding: 0 12px; border-bottom: 1px solid var(--line-soft); color: var(--muted); background: var(--chrome); font-size: 11px; }
+.fs-column-head button { display: inline-flex; align-items: center; gap: 3px; min-width: 0; padding: 0; border: 0; color: inherit; background: transparent; font-size: inherit; font-weight: 600; text-align: left; cursor: pointer; }
+.fs-column-head button:first-child { padding-left: 39px; }
+.fs-column-head button:nth-child(2), .fs-column-head button:nth-child(3) { justify-content: flex-end; text-align: right; }
+.fs-column-head button:hover { color: var(--ink); }
+.fs-rows { flex: 1; min-height: 0; overflow: auto; padding: 4px 0; }
+.fs-row { display: grid; grid-template-columns: minmax(0, 1fr) 76px 112px; gap: 10px; align-items: center; width: 100%; min-height: 43px; padding: 3px 12px; border: 0; border-bottom: 1px solid var(--line-soft); color: var(--ink); background: transparent; text-align: left; cursor: pointer; transition: background .14s ease, box-shadow .14s ease; }
+.fs-row:hover { background: var(--surface-2); }
+.fs-row.selected { background: var(--surface-2); box-shadow: inset 2px 0 0 var(--ink); }
+.fs-file { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.fs-kind { display: inline-grid; width: 30px; height: 30px; place-items: center; flex: none; border-radius: 7px; color: var(--muted); background: var(--surface-2); }
+.fs-kind.dir { color: var(--ink); background: var(--surface-3); }
+.fs-kind.link { color: var(--cyan); }
+.fs-kind.text { color: var(--teal); }
+.fs-kind.image { color: var(--lilac); }
+.fs-kind.key { color: var(--amber); }
+.fs-kind.db { color: var(--coral); }
+.fs-kind.binary { color: var(--ink-2); }
+.fs-name { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
+.fs-name strong { min-width: 0; overflow: hidden; color: var(--ink); font-size: 13px; font-weight: 560; text-overflow: ellipsis; white-space: nowrap; }
+.fs-name small { flex: none; color: var(--muted); font-size: 10px; }
+.fs-parent .fs-name strong { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.fs-size, .fs-time { overflow: hidden; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
+.fs-size { color: var(--ink-2); text-align: right; }
+.fs-skeletons { padding: 6px 12px; }
+.fs-skeleton-row { display: grid; grid-template-columns: 30px minmax(0, 1fr) 62px; gap: 10px; align-items: center; min-height: 42px; border-bottom: 1px solid var(--line-soft); }
+.fs-skeleton-row span, .fs-skeleton-row b, .fs-skeleton-row em { display: block; height: 12px; border-radius: 4px; background: var(--surface-3); animation: fs-pulse 1.4s ease-in-out infinite; }
+.fs-skeleton-row span { width: 30px; height: 30px; border-radius: 7px; }
+.fs-skeleton-row em { width: 62px; }
+@keyframes fs-pulse { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }
+.fs-state { display: grid; place-content: center; justify-items: center; gap: 8px; min-height: 220px; padding: 24px; color: var(--muted); text-align: center; }
+.fs-state strong { color: var(--ink-2); font-size: 14px; font-weight: 600; }
+.fs-state span { max-width: 420px; overflow-wrap: anywhere; font-size: 12px; line-height: 1.55; }
+.fs-state button { min-height: 30px; padding: 0 12px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink-2); background: var(--surface); cursor: pointer; }
+.fs-state.error { color: var(--danger); }
+.fs-preview-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--surface); }
+.fs-preview-head { display: flex; align-items: center; gap: 11px; padding: 14px 16px 12px; border-bottom: 1px solid var(--line-soft); }
+.fs-preview-icon { display: grid; width: 42px; height: 42px; place-items: center; flex: none; border-radius: 10px; color: var(--teal); background: var(--surface-2); }
+.fs-preview-icon.binary { color: var(--ink); }
+.fs-preview-id { min-width: 0; flex: 1; }
+.fs-preview-id h3 { margin: 0; overflow: hidden; color: var(--ink); font-size: 16px; font-weight: 650; letter-spacing: -.012em; text-overflow: ellipsis; white-space: nowrap; }
+.fs-preview-id p { margin: 3px 0 0; overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.fs-preview-actions { display: flex; gap: 7px; flex: none; }
+.fs-preview-meta { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 16px 0; color: var(--muted); font-size: 11px; }
+.fs-preview-meta span { padding: 3px 7px; border: 1px solid var(--line-soft); border-radius: 5px; background: var(--bg); font-variant-numeric: tabular-nums; }
+.fs-preview-meta .warn { color: var(--amber); border-color: var(--amber); }
+.fs-viewbar { display: flex; justify-content: flex-end; padding: 10px 16px 8px; }
+.fs-view-toggle { display: inline-flex; padding: 2px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); }
+.fs-view-toggle button { min-width: 62px; min-height: 27px; padding: 0 10px; border: 0; border-radius: 5px; color: var(--muted); background: transparent; font-size: 12px; cursor: pointer; }
+.fs-view-toggle button[aria-pressed="true"] { color: var(--ink); background: var(--surface); box-shadow: 0 1px 3px rgba(17, 19, 21, .12); font-weight: 650; }
+.fs-content { flex: 1; min-height: 0; margin: 0 16px 16px; padding: 13px 14px; overflow: auto; border: 1px solid var(--line-soft); border-radius: 8px; color: var(--ink-2); background: var(--bg); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; line-height: 1.68; white-space: pre-wrap; word-break: normal; overflow-wrap: anywhere; }
+.fs-content.hex { white-space: pre; overflow-wrap: normal; }
+.fs-preview-empty, .fs-preview-state { flex: 1; display: grid; place-content: center; justify-items: center; gap: 10px; padding: 30px; color: var(--muted); text-align: center; }
+.fs-preview-empty strong, .fs-preview-state strong { color: var(--ink-2); font-size: 14px; font-weight: 600; }
+.fs-preview-state.error { color: var(--danger); }
+.fs-preview-state span { max-width: 520px; overflow-wrap: anywhere; }
+.fs-spinner { width: 22px; height: 22px; border: 2px solid var(--line); border-top-color: var(--ink); border-radius: 50%; animation: fs-spin .8s linear infinite; }
+@keyframes fs-spin { to { transform: rotate(360deg); } }
+.mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+
+@media (max-width: 980px) {
+  .fs-top { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
+  .fs-command { grid-template-columns: 34px minmax(0, 1fr) auto auto; }
+  .fs-split { grid-template-columns: minmax(280px, .95fr) minmax(0, 1.05fr); }
+  .fs-time, .fs-column-head button:nth-child(3) { display: none; }
+  .fs-column-head, .fs-row { grid-template-columns: minmax(0, 1fr) 76px; }
+}
+
+@media (max-width: 700px) {
+  .fs-board { display: block; padding: 10px; }
+  .fs-shell { min-height: calc(100dvh - 96px); }
+  .fs-top { padding: 13px 12px 10px; }
+  .fs-location h2 { font-size: 18px; }
+  .fs-command { grid-template-columns: 34px minmax(0, 1fr) 34px 34px; gap: 5px; }
+  .fs-command-btn span { display: none; }
+  .fs-command-btn { width: 34px; padding: 0; }
+  .fs-split { display: flex; flex-direction: column; }
+  .fs-list-pane { flex: 0 0 auto; max-height: 45dvh; border-right: 0; border-bottom: 1px solid var(--line-soft); }
+  .fs-rows { min-height: 150px; }
+  .fs-preview-pane { flex: 1; min-height: 360px; }
+  .fs-preview-head { flex-wrap: wrap; }
+  .fs-preview-actions { margin-left: auto; }
+  .fs-list-tools { grid-template-columns: minmax(0, 1fr); }
+  .fs-list-stat { max-width: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fs-skeleton-row span, .fs-skeleton-row b, .fs-skeleton-row em, .fs-spinner { animation: none; }
+  .fs-icon-btn, .fs-command-btn, .fs-action, .fs-row { transition: none; }
+}
 </style>

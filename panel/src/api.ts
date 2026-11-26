@@ -126,7 +126,7 @@ export const fsList = (pkg: string, path: string) =>
   api<{ ok: boolean; entries: FsEntry[]; limited?: boolean; error?: string }>(
     `/api/fs/list?package=${encodeURIComponent(pkg)}&path=${encodeURIComponent(path)}`);
 export const fsRead = (pkg: string, path: string) =>
-  post<{ ok: boolean; text?: string; base64?: string; size?: number; truncated?: boolean; binary?: boolean; error?: string }>(
+  post<{ ok: boolean; text?: string; b64?: string; base64?: string; size?: number; fsize?: number; truncated?: boolean; binary?: boolean; error?: string }>(
     '/api/fs/read', { package: pkg, path });
 
 export const getFamilies = (pkg: string) =>

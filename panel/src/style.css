@@ -245,38 +245,6 @@
   .record-library .dump-table { margin-top:16px; }
   .record-library td { overflow-wrap:anywhere; }
   .record-library .empty { border:1px solid var(--line-soft); border-radius:6px; margin-top:16px; }
-  .app-directory { flex:1; min-width:0; min-height:0; display:flex; overflow:auto; padding:16px; }
-  .app-directory-inner { display:flex; flex:1; flex-direction:column; gap:12px; min-width:0; min-height:0; }
-  .directory-pane-head { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; }
-  .directory-unavailable { align-self:stretch; padding:12px; border:1px solid var(--line-soft); border-radius:6px; color:var(--muted); font-size:12px; }
-  .directory-path { display:flex; min-width:0; flex-wrap:wrap; align-items:center; gap:4px; overflow-wrap:anywhere; }
-  .directory-root { max-width:100%; min-height:30px; }
-  .directory-editor { flex:1; min-height:160px; min-width:0; resize:vertical; padding:10px; background:var(--bg); font:12px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace; }
-  .directory-crumb { padding:3px 5px; border:0; background:none; color:var(--blue); font-size:12px; cursor:pointer; }
-  .directory-crumb[aria-current] { color:var(--ink); font-weight:600; cursor:default; }
-  .directory-workspace { display:grid; flex:1; min-height:280px; grid-template-columns:minmax(300px,.83fr) minmax(0,1.17fr); border:1px solid var(--line-soft); border-radius:6px; overflow:hidden; }
-  .directory-workspace[hidden] { display:none; }
-  .directory-list { display:flex; flex-direction:column; min-width:0; min-height:0; background:var(--bg); }
-  .directory-list-head { display:grid; gap:7px; padding:10px 12px 8px; border-bottom:1px solid var(--line-soft); }
-  .directory-pane-head h3 { margin:0; color:var(--ink-2); font-size:12px; font-weight:650; letter-spacing:normal; text-transform:none; overflow-wrap:anywhere; }
-  .directory-list-head .set-status { margin:0; }
-  .directory-rows { min-height:0; flex:1; overflow:auto; }
-  .directory-list-table { width:100%; table-layout:fixed; font-variant-numeric:tabular-nums; }
-  .directory-list-table th { position:sticky; top:0; z-index:1; background:var(--chrome); }
-  .directory-list-table th,.directory-list-table td { padding:7px 9px; border-bottom:1px solid var(--line-soft); text-align:left; }
-  .directory-list-table tbody tr:hover { background:var(--surface); }
-  .directory-list-table tbody tr.selected { background:var(--surface-2); }
-  .directory-list-table tbody tr.selected .directory-entry { color:var(--blue); }
-  .directory-list-table th:nth-child(2) { width:70px; }
-  .directory-list-table th:nth-child(3) { width:126px; }
-  .directory-entry { max-width:100%; border:none; padding:0; background:none; text-align:left; color:var(--ink); overflow-wrap:anywhere; cursor:pointer; }
-  .directory-entry[data-directory="true"] { color:var(--blue); }
-  .directory-preview { display:flex; flex-direction:column; gap:8px; min-width:0; min-height:0; padding:12px; border-left:1px solid var(--line-soft); background:var(--surface); }
-  .directory-preview-actions { display:flex; align-items:center; flex-wrap:wrap; gap:7px; }
-  .directory-readonly { padding:2px 5px; color:var(--muted); border:1px solid var(--line-soft); border-radius:4px; font-size:11px; white-space:nowrap; }
-  #appPreviewSaveCopy:disabled { opacity:.5; cursor:default; }
-  .directory-preview .set-status { margin:0; overflow-wrap:anywhere; }
-  .directory-preview pre { flex:1; margin:0; min-width:0; min-height:0; white-space:pre-wrap; word-break:normal; overflow-wrap:anywhere; overflow:auto; }
   .system-kinds { display:flex; flex-wrap:wrap; gap:6px; }
   .system-list-empty { margin:12px; padding:11px 12px; display:grid; gap:3px; border:1px dashed var(--line-soft); border-radius:6px; color:var(--muted); font-size:12px; line-height:1.55; }
   .system-list-empty strong { color:var(--ink-2); font-weight:600; }
@@ -672,12 +640,6 @@
     .header-context { position:relative; flex:1 1 100%; }
     .device-picker { position:static; }
     .device-picker .device-menu { left:0; right:0; width:auto; max-width:none; }
-    .app-directory { display:block; padding:12px; }
-    .directory-workspace { grid-template-columns:minmax(0,1fr); min-height:0; }
-    .directory-rows { max-height:250px; }
-    .directory-list-table th:nth-child(3) { width:105px; }
-    .directory-preview { border-left:0; border-top:1px solid var(--line-soft); }
-    .directory-preview pre { min-height:90px; max-height:42dvh; }
     .header-actions { position:relative; flex:1 1 100%; justify-content:space-between; }
     .app-context { position:static; }
     .app-context .popover { left:0; right:0; width:auto; max-width:none; }
