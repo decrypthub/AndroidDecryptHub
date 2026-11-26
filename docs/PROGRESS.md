@@ -1,5 +1,13 @@
 # PROGRESS — 跨会话进度看板
 
+## 2026-11-26 目标应用启停走设备域，proc 扫描不再把退出的进程当未知
+
+- 应用控制（打开 / 结束 / 重启）不再只有 adb：`app_launch` 先走 `adh.device/1` 的 `process.control`——设备侧拒绝系统应用、核对即将替换的 `(pid, uid, starttimeTicks)` 集合与设备状态代次，然后才派发。结果新增 `via`（`device` / `adb`）标明实际通道，回退 adb 时把原因写进 `fallback`，所以绿结果不会被读成「设备域跑过了」。重启变成一个设备调用（`restart`），不再是两条 adb 命令拼的 stop+start。
+- 前提不符只重读一次（`TARGET_CHANGED` / `STALE_DEVICE_STATE` / `IDENTITY_UNVERIFIED` 都按「重新观察再下发」处理，不是重放旧意图）；已下发但没有回执的写超时既不重试也不回退 adb，如实报「未确认」；系统包在通道被触碰之前就拒绝。`runningPid` 也优先用 `processes.list`，认主进程而不是最小 pid。
+- 设备侧根因（本轮实测定位）：`ProcessCatalog` 把「扫描期间退出的进程」计入 `inaccessible`，`complete` 随机翻 `false`，`process.control` 的前置校验于是随机抛 `IDENTITY_UNVERIFIED`——手机 12 次 `processes.list` 里 1 次 `complete:false`，6 次控制里 2 次失败，且与目标包无关。改为 `FileNotFoundException` / `NoSuchFileException` 视为进程已退出并跳过，`verify` 在扫描不完整时重读一次；只有仍然读不全才报 `IDENTITY_UNVERIFIED`（宿主侧对老模块构建保留一次重试，之后如实回退 adb 并记录原因）。
+- 验证：设备 JVM `ProcessCatalogTest` 6/6（把 `vanished()` 去掉立即变红，已复现）；宿主 `app_launch_channel` 12/12（把「未确认不回退」改回回退立即变红，已复现）；`aa165071` 重刷 daemon.apk 后 `processes.list` 连续 60 次 `complete:true`（修复前 1/12 为假），应用控制 9/9 走设备通道，`open` / `stop` / `restart` 真的换了 pid（31980→32048），伪造 `expectedProcesses` 仍被设备以 `TARGET_CHANGED` 拒绝；新增门禁 `verify_v134_app_control_device.sh`（无设备时 SKIP，不 FAIL）；`verify_v87_mcp_operability.sh` PASS；daemon 全量 664 项 645 pass / 0 fail / 19 skip。
+- 部署边界：本轮把重建的 `daemon.apk` 热更到 `aa165071`（`/data/adb/modules/adh/daemon.apk`，备份 `daemon.apk.bak-20261126`，`device-daemon` 以 setsid 重启为 pid 31308）。**模块 zip 未重打、版本号未升**——下次 `build_bundle.sh` 才会把这个修复带进发布物；不要用当前手机状态推断模块包内容。
+
 ## 2026-11-26 网络记录补序号并按请求时间排序
 
 - 网络板块宽屏表格的「序号」列一直是空的：加解密/系统行都渲染 `#id`，网络行只渲染了 pill/请求/状态/时间，模板里少了 `.seq`。现在同样显示捕获号。
