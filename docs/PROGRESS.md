@@ -7,6 +7,11 @@
 - 设备写操作改用专用封装 postDevice：服务器把失败原因（DEVICE_NOT_READY、缺 bootstrap、手机不在线）放在错误响应体 error 字段，通用 api() 只抛 HTTP 状态会丢真实原因；observe/connect/disconnect 三个动作共用。失败 toast 如实显示服务器错误，成功后刷新设备列表。
 - 顺手修既有排版缺陷：设备菜单里 `.app-copy` 没有 column 布局（该样式只挂在 `.app-dialog` 下），型号与序列号粘连成一行；菜单宽度 310→340px 容纳动作按钮。
 - 验证：vite 构建通过（TEMP 指项目内避 Windows esbuild 锁）；本机起静态+WS 代理把新面板架在 127.0.0.1:8088 的在跑验收 daemon 前，CDP 驱动无头 Chrome 实测——两台 PGP110（aa165071 观察中/rpc、 a22fecdd 未连接）分组、按钮、状态点、选中高亮全部断言通过，行点击切换设备行为不变，明暗主题截图核对；daemon 重启后 rpc 未重建时 aa165071 如实落入「可发现」组。全程未向 8088 发任何 connect/disconnect 写请求，未动在跑 daemon。
+## 2026-11-26 文件页改为文件管理器工具栏并展示权限
+
+- 文件页去掉重复的「文件 / 应用沙盒」标题块，把上一级、路径、打开、刷新、当前目录筛选和统计合并到顶部一条完整工具栏；未选文件时目录列表占满宽度，选中文件后才打开右侧预览。
+- 目录列表按正常文件管理器补齐权限列，直接显示后端返回的真实 mode（如 `drwxrws--x` / `drwxrwx--x` / `-rw-------`），悬停可见八进制权限；只改前端展示与类型，不改 `/api/fs/list` 契约或设备行为。
+- 验证：`panel` vite 构建通过；`node tools/verify_pick.mjs --run` 2/2 通过；PGP110 / `com.adh.sandbox` 实测目录权限、全宽列表、进入目录、选中文本文件后的分栏预览与 `ADH_FILE_MARKER` 内容。
 
 ## 2026-11-26 应用列表注入开关改为胶囊开关
 

@@ -15,7 +15,7 @@ export interface Session {
 }
 export interface FsEntry {
   name: string; path: string; type: 'd' | 'f' | 'l' | string;
-  size?: number; mtime?: number; mode?: string;
+  size?: number; mtime?: number; mode?: number;
 }
 export interface AppInfo { package: string; label?: string; system?: boolean; [k: string]: unknown }
 
