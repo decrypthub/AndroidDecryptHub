@@ -5318,3 +5318,13 @@ Host **561/561**、JVM **73/73** 无skip，类型、默认/隔离构建、94项M
 
 ## 2026-11-23 — 设备应用列表
 本地 USB 管理入口启用 ADH_USB_APP_INVENTORY 后读取指定设备当前用户的应用列表。切换是查看操作，不写入手机上的注入范围。
+
+## 2026-11-26 — PR #20 合并、面板重建与最新 main 部署验收
+
+收尾 `feat/system-fingerprint-v2`（系统页设备指纹观测摘要）。在 PR 分支并入 main 时唯一冲突是构建产物 `daemon/public/index.html`，按「先取 main 版、再由合并后的 panel 源码重建」消解；重建产物与提交字节一致（928,339 B / md5 `d3523c9658f51ad33425279de0e45b20`，二次构建同哈希），合并提交 `9958d3f`。
+
+- 门禁：`tsc -p` rc=0；daemon 全量 **631 tests / 611 pass / 0 fail / 20 skipped**；`tools/verify_v105_detect_summary.sh` RESULT:PASS（20 unit pass，floor 12）；GitHub host check SUCCESS 后合并。
+- 真机（aa165071 / SDK 35 / KernelSU）：沙盒 APK 由合并后源码重建并重装（`app-debug.apk`，18:50:45）。`detect_java families:[fingerprint]` 安装 **18/20**；失败两条为预期——不存在的 `getInstalledApplications(PackageInfoFlags)` 重载、无 GMS 的 `AdvertisingIdClient`（optional）。`/api/detect/summary` 得到 **4 项标识符 + 2 项设备信息**：android_id 取到真实值 `b1375c588ac4d2f7`，deviceId/IMSI/MAC 权限拒绝「未取到」，已安装应用与传感器列表行为可见但无值。
+- 面板（ego-browser 实测，非单测）：系统页顶部「设备指纹 · 采集到 4 项标识符 + 2 项设备信息」+ 6 个芯片（android_id 带值，其余明示未取到）；下方系统调用与文件读写事件流保持原样（access `/system/bin/su`、文件读写 `adh_file_test.txt` 等）。
+- 部署：worktree `.tmp/daemon-main` 置于 `9958d3f`，`ADH_OBSERVE_APP=com.adh.sandbox ANDROID_SERIAL=aa165071 ADH_USB_APP_INVENTORY=1 ADH_HTTP_PORT=8088 ADH_AGENT_PORT=18761 ADH_DATA_DIR=<新空目录>` 启动；所服务 `/` 的 index.html 与目标构建 md5 **MATCH**。注意 `ADH_AGENT_PORT` 必须显式给 `18761`：默认 `8761` 时启动期 local_observer 的 reverse 校验会失败（`Expected the existing matching USB reverse`）。
+- 采集窗口口径：验收期间 `/api/captures` 为 `complete:false`、`dropped` 29655（沙盒探针持续产生）；分类统计只覆盖窗口内记录（limit 2000 抽样：crypto 1046 / file 327 / system 122 / net 80）。
