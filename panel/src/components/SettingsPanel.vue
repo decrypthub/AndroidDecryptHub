@@ -212,12 +212,10 @@ watch(page, p => { if (p === 'records' || p === 'hooks') takeSnap(); });
       </nav>
     </aside>
     <div class="set-content">
-      <div class="set-header">
+      <div class="set-header" :class="{ 'settings-mobile-only': page === 'records' || page === 'display' }">
         <div class="set-context">
           <div class="settings-picker"><n-select size="small" v-model:value="page" aria-label="设置分类" :options="pageOptions" /></div>
-          <p v-if="page === 'records'" class="rec-scope">仅调整当前应用在此浏览器中的显示，不影响采集。</p>
-          <p v-else-if="page === 'display'" class="rec-scope">外观与列表偏好仅保存在当前浏览器。</p>
-          <p v-else class="set-app"><span>APP <strong>{{ store.chosenPkg || '未选择应用' }}</strong></span></p>
+          <p v-if="page !== 'records' && page !== 'display'" class="set-app"><span>APP <strong>{{ store.chosenPkg || '未选择应用' }}</strong></span></p>
         </div>
       </div>
       <div class="set-main">
@@ -396,6 +394,9 @@ watch(page, p => { if (p === 'records' || p === 'hooks') takeSnap(); });
 </template>
 
 <style scoped>
+@media (min-width:701px) {
+  .settings-mobile-only { display:none; }
+}
 .set-header{flex:none;padding:12px 24px;border-bottom:1px solid var(--line-soft)}
 .set-context{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0;min-height:24px}
 @media(max-width:700px){.set-header{padding:10px 16px}}

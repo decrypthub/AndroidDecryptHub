@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { NModal, NVirtualList } from 'naive-ui';
-import { CloseOutline, SearchOutline } from '@vicons/ionicons5';
+import { NAlert, NModal, NVirtualList } from 'naive-ui';
+import { SearchOutline } from '@vicons/ionicons5';
 import { store, choosePackage } from '../store';
 import { appIconUrl, scopeAdd, scopeRemove, appControl, observePackage } from '../api';
 
@@ -10,11 +10,16 @@ const emit = defineEmits<{ close: [] }>();
 const tab = ref<'user' | 'system' | 'injected'>('user');
 const q = ref('');
 const toastMsg = ref('');
+const messageType = ref<'success' | 'error'>('error');
+const picking = ref('');
+const scopePending = ref('');
+const controlling = ref('');
+const busy = computed(() => !!(picking.value || scopePending.value || controlling.value));
 
 watch(() => props.show, open => {
   if (open) { q.value = ''; tab.value = 'user'; toastMsg.value = ''; }
 });
-const tabs = [['user', '应用'], ['system', '系统'], ['injected', '已注入']] as const;
+const tabs = [['user', '应用'], ['system', '系统'], ['injected', '注入范围']] as const;
 
 const apps = computed(() => {
   let list = store.apps;
@@ -31,40 +36,79 @@ const iconSerial = computed(() => store.devices.find(d => d.key === store.select
 const chosenLabel = computed(() => chosen.value?.label || store.chosenPkg || '未选择应用');
 const chosenInitial = computed(() => (chosenLabel.value[0] ?? '?'));
 const itemInitial = (label?: string, pkg?: string) => ((label || pkg || '?')[0] ?? '?');
-
-function pick(pkg: string) {
-  choosePackage(pkg);
-  // 本地观察设备：选包即 observe
+const onlinePackages = computed(() => {
   const dev = store.devices.find(d => d.key === store.selectedDeviceKey);
-  if (dev?.serial && store.localUsb) void observePackage(dev.serial, pkg);
-  emit('close');
+  const sessionId = dev?.agent?.sessionId || dev?.appSession;
+  return new Set([...store.sessions.values()].filter(s => s.online && s.sessionId === sessionId).map(s => s.package));
+});
+const canControl = computed(() => store.scope.has(store.chosenPkg));
+const emptyText = computed(() => q.value.trim() ? '没有匹配的应用' : tab.value === 'injected' ? '尚未允许任何应用注入' : '没有应用');
+
+function reportError(e: unknown, fallback: string) {
+  messageType.value = 'error';
+  toastMsg.value = e instanceof Error && e.message ? e.message : fallback;
+}
+function close() {
+  if (!busy.value) emit('close');
+}
+function scopeDisabled(pkg: string) {
+  return busy.value || pkg === store.chosenPkg && store.scope.has(pkg);
+}
+async function pick(pkg: string) {
+  if (busy.value) return;
+  picking.value = pkg;
+  toastMsg.value = '';
+  const dev = store.devices.find(d => d.key === store.selectedDeviceKey);
+  const deviceKey = store.selectedDeviceKey;
+  try {
+    // 先确认观察请求，失败保留原应用/窗口；不能把未完成的切换显示成成功。
+    if (store.localUsb) {
+      if (!dev?.serial) throw new Error('设备不可用，请先选择设备');
+      await observePackage(dev.serial, pkg);
+    }
+    if (store.selectedDeviceKey !== deviceKey) throw new Error('设备已切换，请重新选择应用');
+    choosePackage(pkg);
+    emit('close');
+  } catch (e) { reportError(e, '切换应用失败'); }
+  finally { picking.value = ''; }
 }
 async function toggleInject(pkg: string, on: boolean) {
+  if (scopeDisabled(pkg)) return;
+  scopePending.value = pkg;
+  toastMsg.value = '';
   try {
     const r = await (on ? scopeAdd(pkg) : scopeRemove(pkg)) as { ok?: boolean; error?: string };
-    if (r?.ok === false) { toastMsg.value = r.error ?? '写入失败'; return; }
+    if (r?.ok !== true) throw new Error(r?.error || '写入未确认');
     if (on) store.scope.add(pkg); else store.scope.delete(pkg);
-  } catch { toastMsg.value = '写入失败'; }
+  } catch (e) { reportError(e, '写入失败'); }
+  finally { scopePending.value = ''; }
 }
 async function control(action: 'open' | 'stop' | 'restart') {
   const pkg = store.chosenPkg;
-  if (!pkg) return;
+  if (!pkg || busy.value || !canControl.value) return;
+  controlling.value = action;
+  toastMsg.value = '';
   const labels = { open: '已打开', stop: '已结束', restart: '已重启' };
   try {
     const r = await appControl(pkg, action) as { ok?: boolean; error?: string };
-    toastMsg.value = r?.ok === false ? (r.error ?? '手机没有完成这个操作') : labels[action];
-  } catch { toastMsg.value = '手机没有完成这个操作'; }
+    if (r?.ok !== true) throw new Error(r?.error || '手机没有确认这个操作');
+    messageType.value = 'success';
+    toastMsg.value = labels[action];
+  } catch (e) { reportError(e, '手机没有完成这个操作'); }
+  finally { controlling.value = ''; }
 }
-const canControl = computed(() => store.scope.has(store.chosenPkg));
 </script>
 
 <template>
-  <n-modal :show="show" @update:show="!$event && emit('close')">
-    <div class="app-dialog show" role="dialog" aria-modal="true" aria-label="应用">
-      <aside class="app-dialog-side">
-        <h2>应用</h2>
-        <button v-for="[k, label] in tabs" :key="k" type="button" :aria-pressed="tab === k"
-          @click="tab = k">{{ label }}</button>
+  <n-modal :show="show" preset="card" title="应用" aria-label="应用" :bordered="false"
+    :style="{ width: 'min(880px, calc(100vw - 24px))', height: 'min(640px, calc(100dvh - 32px))' }"
+    :content-style="{ padding: '0', display: 'flex', minHeight: '0', overflow: 'hidden' }"
+    :closable="!busy" :mask-closable="!busy" :close-on-esc="!busy"
+    @update:show="!$event && close()">
+    <div class="app-dialog show app-picker-layout" :aria-busy="busy">
+      <aside class="app-dialog-side" aria-label="应用分类">
+        <n-button v-for="[k, label] in tabs" :key="k" quaternary block :aria-pressed="tab === k"
+          :disabled="busy" @click="tab = k">{{ label }}</n-button>
       </aside>
       <div class="app-dialog-main">
         <div class="app-dialog-card">
@@ -74,30 +118,30 @@ const canControl = computed(() => store.scope.has(store.chosenPkg));
               @error="($event.target as HTMLElement).style.display = 'none'" />
           </span>
           <div class="app-dialog-id">
-            <strong>{{ chosenLabel }}</strong>
-            <span>{{ store.chosenPkg || '从下方列表选择要观测的应用' }}</span>
+            <strong :title="chosenLabel">{{ chosenLabel }}</strong>
+            <span :title="store.chosenPkg">{{ store.chosenPkg || '从下方列表选择要观测的应用' }}</span>
           </div>
           <div class="app-dialog-actions">
             <template v-if="canControl">
-              <n-button size="small" @click="control('open')">打开</n-button>
-              <n-button size="small" @click="control('restart')">重启</n-button>
-              <n-button size="small" @click="control('stop')">结束</n-button>
+              <n-button size="small" :loading="controlling === 'open'" :disabled="busy" @click="control('open')">打开</n-button>
+              <n-button size="small" :loading="controlling === 'restart'" :disabled="busy" @click="control('restart')">重启</n-button>
+              <n-button size="small" :loading="controlling === 'stop'" :disabled="busy" @click="control('stop')">结束</n-button>
             </template>
-            <n-button text aria-label="关闭应用窗口" class="app-close" @click="emit('close')">
-              <n-icon size="18" :component="CloseOutline" />
-            </n-button>
           </div>
         </div>
         <div class="dialog-search"><n-input v-model:value="q" clearable placeholder="搜索名称或包名" :input-props="{ 'aria-label': '搜索应用' }">
           <template #prefix><n-icon :component="SearchOutline" /></template>
         </n-input></div>
         <div class="app-choices">
-          <div v-if="toastMsg" class="app-empty">{{ toastMsg }}</div>
+          <n-alert v-if="toastMsg && messageType === 'error'" type="error" :show-icon="false"
+            class="app-picker-message">{{ toastMsg }}</n-alert>
+          <p v-else-if="toastMsg" class="app-picker-message app-picker-success" role="status">{{ toastMsg }}</p>
           <n-virtual-list v-if="apps.length" class="app-virtual" :items="apps" :item-size="52" key-field="package">
             <template #default="{ item: a }">
               <div class="app-row">
-                <button type="button" class="app-item" :class="{ active: a.package === store.chosenPkg }"
-                  @click="pick(a.package)">
+                <n-button quaternary class="app-item" :class="{ active: a.package === store.chosenPkg }"
+                  :aria-pressed="a.package === store.chosenPkg" :title="`${a.label || a.package} · ${a.package}`"
+                  :loading="picking === a.package" :disabled="busy" @click="pick(a.package)">
                   <span class="app-face">
                     <span class="app-dialog-letter">{{ itemInitial(a.label, a.package) }}</span>
                     <img v-if="a.hasIcon !== false" :src="appIconUrl(a.package, iconSerial, a.iconVersion)" alt="" loading="lazy"
@@ -107,19 +151,41 @@ const canControl = computed(() => store.scope.has(store.chosenPkg));
                     <span class="app-name">{{ a.label || a.package }}</span>
                     <span class="app-pkg">{{ a.package }}</span>
                   </span>
-                  <span class="app-state" :class="{ on: store.scope.has(a.package) }">
-                    {{ store.scope.has(a.package) ? '已注入' : '' }}</span>
-                </button>
-                <n-switch size="small" class="app-inject-sw" aria-label="允许注入" :value="store.scope.has(a.package)"
-                  :disabled="a.package === store.chosenPkg && store.scope.has(a.package)"
+                  <span v-if="onlinePackages.has(a.package)" class="app-state on">采集在线</span>
+                </n-button>
+                <n-switch size="small" class="app-inject-sw" :aria-label="`允许注入 ${a.label || a.package}`" :value="store.scope.has(a.package)"
+                  :loading="scopePending === a.package" :disabled="scopeDisabled(a.package)" :aria-disabled="scopeDisabled(a.package)"
+                  :title="a.package === store.chosenPkg && store.scope.has(a.package) ? '当前观察应用不能移出注入范围' : '允许下次启动时注入'"
                   @update:value="on => toggleInject(a.package, !!on)" />
               </div>
             </template>
           </n-virtual-list>
-          <div v-if="store.appsError" class="app-empty">{{ store.appsError }}</div>
-          <div v-else-if="!apps.length" class="app-empty">{{ store.appsFailed ? '读取失败，保留上次清单' : '没有应用' }}</div>
+          <div v-if="store.appsError" class="app-empty" role="alert">{{ store.appsError }}</div>
+          <div v-else-if="!apps.length" class="app-empty" role="status">{{ store.appsFailed ? '读取失败，保留上次清单' : emptyText }}</div>
         </div>
       </div>
     </div>
   </n-modal>
 </template>
+
+<style scoped>
+.app-picker-layout { width:100%; height:100%; border:0; border-radius:0; }
+.app-dialog-side .n-button { justify-content:flex-start; }
+.app-dialog-side .n-button[aria-pressed="true"] { background:var(--surface-2); color:var(--ink); }
+.app-dialog-card { flex:none; }
+.app-dialog-id { overflow:hidden; }
+.app-dialog-actions { flex:none; flex-wrap:wrap; }
+.app-item { height:52px; }
+.app-item :deep(.n-button__content) { display:flex; align-items:center; gap:10px; width:100%; min-width:0; }
+.app-item .app-copy { text-align:left; overflow:hidden; }
+.app-picker-message { flex:none; margin:0 6px 8px; overflow-wrap:anywhere; }
+.app-picker-success { padding:8px 12px; color:var(--green); }
+@media (max-width:700px) {
+  .app-picker-layout { width:100%; height:100%; }
+  .app-dialog-side .n-button { flex:1; width:auto; justify-content:center; }
+  .app-dialog-actions { width:100%; justify-content:flex-end; }
+  .app-item :deep(.n-button__content) { gap:8px; }
+  .app-inject-sw { margin-right:8px; }
+  .app-state { font-size:10px; }
+}
+</style>

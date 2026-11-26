@@ -44,13 +44,16 @@ export async function api<T = unknown>(path: string, init?: RequestInit, timeout
   const t0 = performance.now();
   try {
     const res = await fetch(path, { ...init, signal: AbortSignal.timeout(timeoutMs), cache: 'no-store' });
+    if (!res.ok) {
+      const data = await res.json().catch(() => null) as { error?: unknown } | null;
+      const reason = typeof data?.error === 'string' ? data.error : '';
+      throw new Error(reason || `${res.status} ${res.statusText}`);
+    }
+    return (await res.json()) as T;
+  } finally {
+    // HTTP 错误也只记一次；耗时覆盖响应体读取，失败时保留最近请求信息。
     const ms = performance.now() - t0;
     notePerf(label, ms); lastPerf = { label, ms, at: Date.now() };
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-    return (await res.json()) as T;
-  } catch (e) {
-    notePerf(label, performance.now() - t0);
-    throw e;
   }
 }
 const post = <T = unknown>(path: string, body: unknown, timeoutMs?: number) =>
