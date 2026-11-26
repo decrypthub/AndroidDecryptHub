@@ -62,11 +62,7 @@ function adbText(d: DeviceView) {
   if (d.state === 'online') return '在线';
   return STATE_TEXT[d.state] ?? d.state ?? '未知';
 }
-function agentText(d: DeviceView) {
-  if (!d.observed) return '不适用';
-  if (!d.agent) return '离线';
-  return d.agent.online ? `${d.agent.sessionId} · 在线` : '离线';
-}
+
 function timeAgo(ts: number) {
   const diff = Date.now() - ts;
   if (diff < 60_000) return '刚刚';
@@ -221,9 +217,29 @@ async function saveAdd() {
   }
 }
 
+function rowTitle(d: DeviceView) {
+  const bits = [deviceLabel(d), d.serial];
+  bits.push(adbText(d));
+  if (d.rpc) bits.push('设备通道已连接');
+  if (d.observed && d.agent) bits.push(d.agent.online ? `agent ${d.agent.sessionId} 在线` : 'agent 离线');
+  return bits.join(' · ');
+}
+
+function detailMenu(d: DeviceView) {
+  const items: Array<{ label: string; key: string; disabled?: boolean }> = [];
+  if (d.rpc) items.push({ label: '断开设备通道', key: 'disconnect' });
+  else if (d.state === 'device' || d.state === 'online') items.push({ label: '连接设备通道', key: 'connect' });
+  if (!d.isDefault) items.push({ label: '设为默认设备', key: 'default' });
+  items.push({ label: '重命名', key: 'rename' });
+  items.push(d.remembered ? { label: '忘记这台设备', key: 'forget' } : { label: '记住这台设备', key: 'remember' });
+  return items;
+}
+
 function onDetailAction(key: string) {
   const d = detail.value;
   if (!d) return;
+  if (key === 'connect') { void connect(d); return; }
+  if (key === 'disconnect') { void disconnect(d); return; }
   if (key === 'default') { setDefaultDevice(d.key); toast(`默认设备设为 ${deviceLabel(d)}`); }
   else if (key === 'rename') startRename(d);
   else if (key === 'remember') { rememberDevice(d.key); toast(`已记住 ${deviceLabel(d)}`); }
@@ -249,13 +265,12 @@ function forget(d: DeviceView) {
     <n-modal :show="show" @update:show="!$event && (show = false)">
       <div class="app-dialog device-dialog show" role="dialog" aria-modal="true" aria-label="设备">
         <aside class="app-dialog-side">
-          <h2>设备</h2>
+          <h2 title="显示名与默认设备只存在本浏览器">设备</h2>
           <button v-for="item in tabs" :key="item.key" type="button" :aria-pressed="tab === item.key" @click="tab = item.key">
             {{ item.label }}<small>{{ item.count }}</small>
           </button>
-          <div class="device-side-foot">
+          <div v-if="rememberedCount" class="device-side-foot">
             <span>{{ rememberedCount }} 台已记住</span>
-            <span>名字只存在本浏览器</span>
           </div>
         </aside>
 
@@ -275,7 +290,11 @@ function forget(d: DeviceView) {
                   <span v-if="detail.isDefault" class="device-badge">默认</span>
                   <span v-if="detail.observed" class="device-badge accent" title="本机观察：面板只从这台手机上的观察 APP 接收数据，其它手机只能查看和管理，不产生记录">本机观察</span>
                 </strong>
-                <span>{{ detail.serial }} · {{ detail.net ? '无线' : 'USB' }} · {{ adbText(detail) }}</span>
+                <span>
+                  {{ detail.serial }}<template v-if="detail.net"> · 无线</template>
+                  <template v-if="detail.observed && detail.agent"> · agent {{ detail.agent.sessionId }}</template>
+                  <template v-if="!isOnline(detail)"> · 未连接</template>
+                </span>
               </template>
             </div>
             <div class="app-dialog-actions">
@@ -286,14 +305,7 @@ function forget(d: DeviceView) {
               <template v-else>
                 <n-button v-if="!isCurrent" size="small" type="primary" @click="switchTo(detail)">切换到此设备</n-button>
                 <n-button size="small" :loading="busy === detail.key" :disabled="!!busy" @click="reconnect(detail)">重连</n-button>
-                <n-button v-if="detail.rpc" size="small" quaternary :disabled="!!busy" @click="disconnect(detail)">断开</n-button>
-                <n-button v-else-if="detail.state === 'device' || detail.state === 'online'" size="small" quaternary
-                  :disabled="!!busy" @click="connect(detail)">连接设备通道</n-button>
-                <n-dropdown trigger="click" :options="[
-                  { label: detail.isDefault ? '已是默认设备' : '设为默认设备', key: 'default', disabled: !!detail.isDefault },
-                  { label: '重命名', key: 'rename' },
-                  detail.remembered ? { label: '忘记这台设备', key: 'forget' } : { label: '记住这台设备', key: 'remember' },
-                ]" @select="onDetailAction">
+                <n-dropdown trigger="click" :options="detailMenu(detail)" @select="onDetailAction">
                   <n-button size="small" quaternary aria-label="更多设备操作">
                     <n-icon size="16" :component="EllipsisHorizontalOutline" />
                   </n-button>
@@ -305,21 +317,14 @@ function forget(d: DeviceView) {
             </div>
           </div>
 
-          <div v-if="detail" class="device-facts">
-            <div v-if="detail.name && detail.name !== detail.model && detail.model"><span>型号</span><strong>{{ detail.model }}</strong></div>
-            <div v-if="detail.observed"><span>Agent 会话</span><strong>{{ agentText(detail) }}</strong></div>
-            <div><span>设备服务</span><strong>{{ detail.rpc ? '已连接' : '未连接' }}</strong></div>
-            <div v-if="!isOnline(detail)"><span>上次在线</span><strong>{{ detail.seenAt ? timeAgo(detail.seenAt) : '没有记录' }}</strong></div>
-          </div>
-
           <div class="device-toolbar">
             <n-button size="small" type="primary" @click="openAdd">
               <template #icon><n-icon :component="AddOutline" /></template>添加设备
             </n-button>
-            <n-button size="small" @click="refreshDevices()">
-              <template #icon><n-icon :component="RefreshOutline" /></template>重新扫描
-            </n-button>
             <n-button size="small" :loading="bulkRunning" title="只重连已记住的设备，不动只是可发现的手机" @click="reconnectAll">全部重连</n-button>
+            <n-button size="small" quaternary circle aria-label="重新扫描" title="重新扫描" @click="refreshDevices()">
+              <template #icon><n-icon :component="RefreshOutline" /></template>
+            </n-button>
           </div>
 
           <div v-if="addOpen" class="device-add-panel">
@@ -344,7 +349,7 @@ function forget(d: DeviceView) {
 
           <div class="app-choices device-choices">
             <button v-for="d in visible" :key="d.key" type="button" class="app-item device-item"
-              :class="{ active: d.key === focusKey, current: d.key === selected }" @click="focus(d)">
+              :class="{ active: d.key === focusKey, current: d.key === selected }" :title="rowTitle(d)" @click="focus(d)">
               <span class="status-dot" :class="dotClass(d)"></span>
               <span class="app-copy">
                 <span class="app-name">
@@ -352,7 +357,7 @@ function forget(d: DeviceView) {
                   <span v-if="d.isDefault" class="device-badge">默认</span>
                   <span v-if="d.observed" class="device-badge accent" title="本机观察：面板只从这台手机上的观察 APP 接收数据">本机观察</span>
                 </span>
-                <span class="app-pkg">{{ d.serial }}<template v-if="d.net"> · 无线</template> · {{ isOnline(d) ? '已连接' : '未连接' }}<template v-if="d.observed && d.agent && !d.agent.online"> · agent 离线</template></span>
+                <span class="app-pkg">{{ d.serial }}<template v-if="d.net"> · 无线</template><template v-if="!isOnline(d) && d.seenAt"> · {{ timeAgo(d.seenAt) }}</template></span>
               </span>
               <span v-if="d.key === selected" class="device-current-tag">当前</span>
               <span v-else-if="!isOnline(d) && d.seenAt" class="device-seen">{{ timeAgo(d.seenAt) }}</span>
