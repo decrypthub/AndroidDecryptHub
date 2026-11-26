@@ -13,10 +13,12 @@ import type {Route,RouteContext} from './types.ts';
 function observedAgentView(){
   const pkg=localObserver?.package;
   if(!pkg) return null;
-  let best:{online:boolean;pid:number;sessionId:string;lastSeen:number}|null=null;
+  let best:{online:boolean;pid:number;sessionId:string;lastSeen:number;version:string}|null=null;
   for(const session of sessions.values()){
     if(session.package!==pkg) continue;
-    const row={online:session.online===true,pid:session.pid,sessionId:session.sessionId,lastSeen:session.lastSeen};
+    // 插件版本就是 agent .so 自报的版本（AGENT_VER，与 module.prop 同步升）。面板设备页直接展示。
+    const row={online:session.online===true,pid:session.pid,sessionId:session.sessionId,lastSeen:session.lastSeen,
+      version:String(session.agentVer??'')};
     if(row.online) return row;
     if(!best||row.lastSeen>best.lastSeen) best=row;
   }
@@ -31,7 +33,7 @@ export function deviceRoutes({req,url,send}:RouteContext):Route[]{
   if(localObserver && req.method==='GET' && url.searchParams.get('action')==='list'){
     // This is one exact local USB device, not a paired Device identity or a proxy for the App session.
     let transports:{serial:string;model:string;state:string;link:string;observed:boolean;rpc:boolean;
-      net:boolean;agent:{online:boolean;pid:number;sessionId:string;lastSeen:number}|null}[]=[];
+      net:boolean;agent:{online:boolean;pid:number;sessionId:string;lastSeen:number;version:string}|null}[]=[];
     // One `adb devices -l` per request: the panel polls this every few seconds and each extra
     // spawn queues behind the serialized adb server — the double read used to disagree with
     // itself under contention (transports empty while localUsb said online, or vice versa).

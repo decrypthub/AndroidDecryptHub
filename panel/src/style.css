@@ -891,7 +891,11 @@ select option{color:var(--ink);background:var(--surface)}
 .fp-chip .fp-reads { opacity:.6; font-size:10.5px; margin-left:5px; }
 
 /* ---- 设备窗口：沿用应用窗口的两栏壳（.app-dialog），这里是设备专有的行/详情 ---- */
-.device-dialog { height:min(640px,88dvh); }
+.device-dialog { flex-direction:column; height:min(640px,88dvh); }
+.device-head { display:flex; align-items:center; gap:10px; padding:14px 16px 10px; border-bottom:1px solid var(--line-soft); }
+.device-head h2 { margin:0; font-size:16px; }
+.device-count { color:var(--muted); font-size:12px; }
+.device-head .app-close { margin-left:auto; }
 .device-dialog .app-dialog-side small { margin-left:auto; color:var(--muted); font-size:11px; }
 .device-side-foot { margin-top:auto; display:flex; flex-direction:column; gap:4px; padding:10px 8px 2px;
   border-top:1px solid var(--line-soft); color:var(--muted); font-size:11px; line-height:1.45; }

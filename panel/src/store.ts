@@ -6,7 +6,7 @@ import { reactive, computed, watch } from 'vue';
 import * as A from './api';
 import { recordVisible } from './observations';
 
-export interface DeviceAgent { online: boolean; pid: number; sessionId: string }
+export interface DeviceAgent { online: boolean; pid: number; sessionId: string; lastSeen?: number; version?: string }
 
 export interface DeviceView {
   key: string; serial: string; model: string; state: string;
