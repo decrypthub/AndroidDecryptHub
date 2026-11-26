@@ -127,12 +127,12 @@ const recRows = computed<RecRow[]>(() => {
     const kind = String(r.kind ?? '');
     const path = String(r.path ?? '');
     const size = Number(r.size) || undefined;
-    // 面板的「转储」和模型的 memory_dump 都带 tag=panel，记成「内存」并把地址放进副标题，
-    // 否则一行 .bin 文件名看不出它是从哪个地址范围来的。
+    // 面板的「转储」带 tag=panel，所以它的产物记成「内存」并把地址放进副标题；
+    // 模型的 memory_dump 带 tag=mcp，走下面的一般分支（不同来源不混成一类）。
     if (tag === 'panel') {
       const addr = String(r.addr ?? '').replace(/^0x/i, '');
       rows.push({
-        key: `ev_${sha}`, at: Number(r.capturedAt ?? r.ts ?? 0) || 0, kind: '内存',
+        key: `ev_${sha}_${Number(r.capturedAt ?? r.ts ?? 0) || 0}`, at: Number(r.capturedAt ?? r.ts ?? 0) || 0, kind: '内存',
         label: `内存转储 ${size ? fmtSize(size) : ''}`.trim() + (addr ? ` @ 0x${addr}` : ''),
         sub: base(path).replace(/\.bin$/i, '') || undefined,
         size, sha, name: base(path) ? `${base(path).replace(/\.bin$/, '')}-${sha.slice(0, 8)}.bin` : undefined,
@@ -141,7 +141,7 @@ const recRows = computed<RecRow[]>(() => {
     }
     const label = String(r.note ?? '') || base(path) || `${sha.slice(0, 8)}`;
     rows.push({
-      key: `ev_${sha}`, at: Number(r.capturedAt ?? r.ts ?? 0) || 0,
+      key: `ev_${sha}_${Number(r.capturedAt ?? r.ts ?? 0) || 0}`, at: Number(r.capturedAt ?? r.ts ?? 0) || 0,
       kind: kind === 'so' ? 'SO' : kind === 'dex' ? 'DEX' : kind === 'zip' ? 'ZIP' : (kind || '转储').toUpperCase(),
       label, size, sha,
       name: `${sha.slice(0, 12)}.${kind || 'bin'}`,

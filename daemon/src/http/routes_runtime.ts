@@ -79,7 +79,7 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
     // would otherwise recompute (and get subtly wrong) from thousands of raw lines. The browser
     // filters/sorts/pages locally, so one load is the whole interaction budget. The model-facing
     // equivalent stays maps_query (filtered + paged for context); both read the same maps.
-    { path: '/api/memory/maps', handler: async () => {
+    { method: 'GET', path: '/api/memory/maps', handler: async () => {
       const sid = pickSid(url.searchParams.get('session'));
       if (!sid) return send(400, { error: 'no session' });
       try {
@@ -91,7 +91,12 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
           count: typeof r.count === 'number' ? r.count : view.total,
           truncated: r.truncated === true,
         });
-      } catch (e) { return send(504, { error: (e as Error).message }); }
+      } catch (e) {
+        const msg = (e as Error).message;
+        // "agent not connected" is not a timeout: the session is gone or the target restarted.
+        // Reported as 502 so the panel can say that instead of "网关超时".
+        return send(msg.includes('agent not connected') ? 502 : 504, { error: msg });
+      }
     } },
     { path: '/api/java/probe', handler: async () => {
       const sid = pickSid(url.searchParams.get('session'));
@@ -670,8 +675,10 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
       const sid = pickSid(session);
       if (!sid || !addr || !size) return send(400, { error: 'need session, addr(hex), size' });
       try {
-        const { meta, dedup } = await dumpRegion(sid, String(addr).replace(/^0x/, ''), Number(size), String(tag ?? ''));
-        return send(200, { ...meta, dedup });
+        const r = await dumpRegion(sid, String(addr).replace(/^0x/, ''), Number(size), String(tag ?? ''));
+        // recorded=false means content dedup: the bytes are already in the store, so no new record
+        // was written. The caller must not promise "written to the record list" in that case.
+        return send(200, { ...r.meta, dedup: r.dedup, recorded: r.recorded !== false });
       } catch (e) { return send(502, { error: (e as Error).message }); }
     } },
   ];

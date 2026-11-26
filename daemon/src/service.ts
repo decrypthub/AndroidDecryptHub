@@ -757,7 +757,7 @@ export async function persistArtifact(
 }
 
 // Dump [addr, addr+size) by orchestrating chunked agent reads, then sha256 + dedup + persist.
-export async function dumpRegion(sid: string, addrHex: string, size: number, tag: string): Promise<{ meta: DumpMeta; dedup: boolean }> {
+export async function dumpRegion(sid: string, addrHex: string, size: number, tag: string): Promise<{ meta: DumpMeta; dedup: boolean; recorded?: boolean }> {
   // Validate before doing anything: Number(undefined) is NaN, and `while (remaining > 0)` with NaN
   // does nothing - the old code then hashed an empty buffer and reported a successful 0-byte dump.
   if (!Number.isSafeInteger(size) || size <= 0) throw new Error(`dump size must be a positive integer (got ${size})`);
@@ -786,7 +786,28 @@ export async function dumpRegion(sid: string, addrHex: string, size: number, tag
   // that artifact meta (complete:true, a smaller requestedSize), so a truncated dump came back
   // looking whole.
   if (existing) {
-    return { meta: { ...existing, size: buf.length, requestedSize: size, complete: buf.length === size }, dedup: true };
+    // Two different things must not be confused here:
+    //  - the BYTES are the old artifact (that is the point of dedup, and no new record is written
+    //    and no dump.new is broadcast — the store's entry is unchanged);
+    //  - the REQUEST is this one (who asked, for which range, in which session). Returning the old
+    //    meta verbatim made a panel dump of an already-known range look like a `mcp` artifact from
+    //    a previous session, while the caller still promised "written to the record list".
+    const s = sessions.get(sid);
+    return {
+      meta: {
+        ...existing,
+        size: buf.length,
+        requestedSize: size,
+        complete: buf.length === size,
+        tag: tag || existing.tag,
+        addr: addrHex,
+        sessionId: sid,
+        package: s?.package ?? existing.package,
+      },
+      dedup: true,
+      // Explicit for callers: nothing was added to the record list for this call.
+      recorded: false,
+    };
   }
   const s = sessions.get(sid);
   const kind = inferKind(buf);

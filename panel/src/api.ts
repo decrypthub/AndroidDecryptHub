@@ -75,6 +75,24 @@ async function postDetail<T extends { error?: string }>(path: string, body: unkn
   return data;
 }
 
+// GET 版 postDetail：daemon 把原因放在 error 字段里（400/502/504 都带），
+// api() 只抛状态码会把「agent 已断开」说成「502 Bad Gateway」。
+async function getDetail<T extends { error?: string }>(path: string, timeoutMs = 12000): Promise<T> {
+  const label = `GET ${path.split('?')[0]}`;
+  const t0 = performance.now();
+  let res: Response;
+  try {
+    res = await fetch(path, { signal: AbortSignal.timeout(timeoutMs), cache: 'no-store' });
+  } catch (e) {
+    notePerf(label, performance.now() - t0);
+    throw e;
+  }
+  notePerf(label, performance.now() - t0);
+  const data = await res.json().catch(() => null) as T | null;
+  if (!data || typeof data !== 'object') throw new Error(`${res.status} ${res.statusText}`);
+  return data;
+}
+
 // ---- 端点 ----
 export const getDevices = () => api<{ ok: boolean; devices: unknown[]; transports: unknown[]; localUsb?: Record<string, unknown> }>('/api/devices?action=list');
 export interface DeviceInfo {
@@ -231,7 +249,7 @@ export interface MapsView {
   count?: number; truncated?: boolean; error?: string;
 }
 export const memoryMaps = (session: string) =>
-  api<MapsView>(`/api/memory/maps?session=${encodeURIComponent(session)}`, undefined, 20000);
+  getDetail<MapsView>(`/api/memory/maps?session=${encodeURIComponent(session)}`, 20000);
 
 export interface MemoryReadReply {
   ok: boolean; addr?: string; size?: number; requested?: number;
@@ -242,7 +260,9 @@ export const memoryRead = (session: string, addr: string, size: number) =>
 
 export interface MemoryDumpReply {
   ok?: boolean; sha256?: string; size?: number; requestedSize?: number; complete?: boolean;
-  kind?: string; tag?: string; addr?: string; capturedAt?: number; dedup?: boolean; error?: string;
+  kind?: string; tag?: string; addr?: string; capturedAt?: number; dedup?: boolean;
+  /** false = 内容与已有产物相同，没有新增「脱壳记录」行 */
+  recorded?: boolean; error?: string;
 }
 export const memoryDump = (session: string, addr: string, size: number) => {
   // 转储按 1MB 分块读，超时要跟着大小走：默认 8s 会让 64MB 的转储先在客户端失败，
