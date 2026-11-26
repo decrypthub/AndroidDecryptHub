@@ -890,18 +890,43 @@ select option{color:var(--ink);background:var(--surface)}
 .fp-chip .fp-value.none { font-family:inherit; opacity:.65; }
 .fp-chip .fp-reads { opacity:.6; font-size:10.5px; margin-left:5px; }
 
-/* ---- 设备管理（设备菜单 + 添加/重命名弹窗） ---- */
-.device-picker .device-menu { width: 420px; }
-.device-menu-head { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:2px 7px 4px; }
-.device-menu-head .device-menu-label { margin:0; }
-.device-menu-tools { display:flex; align-items:center; gap:2px; }
+/* ---- 设备窗口：沿用应用窗口的两栏壳（.app-dialog），这里是设备专有的行/详情 ---- */
+.device-dialog .app-dialog-side small { margin-left:auto; color:var(--muted); font-size:11px; }
+.device-side-foot { margin-top:auto; display:flex; flex-direction:column; gap:4px; padding:10px 8px 2px;
+  border-top:1px solid var(--line-soft); color:var(--muted); font-size:11px; line-height:1.45; }
+.device-face { flex:none; display:grid; place-items:center; width:40px; height:40px; border-radius:9px;
+  color:var(--ink-2); background:var(--surface-2); border:1px solid var(--line-soft); }
+.device-face.ok { color:var(--ok, #2f7d4f); }
+.device-face.bad { color:var(--danger); }
 .device-badge { margin-left:6px; padding:0 5px; border-radius:3px; font-size:10px; line-height:16px; font-weight:600;
-  color:var(--muted); background:var(--surface-2, var(--surface)); border:1px solid var(--line-soft); }
+  color:var(--muted); background:var(--surface-2); border:1px solid var(--line-soft); vertical-align:1px; }
 .device-badge.accent { color:var(--ink); border-color:var(--line); }
-.device-menu-foot { margin:6px 8px 4px; padding-top:6px; border-top:1px solid var(--line-soft); color:var(--muted); font-size:11px; }
-.device-modal { width:420px; max-width:calc(100vw - 32px); }
-.device-add-kind { margin-bottom:10px; }
-.device-add-hint { margin:0 0 8px; color:var(--muted); font-size:12px; line-height:1.5; }
-.device-add-name { margin-top:8px; }
-.device-add-error { margin:8px 0 0; color:var(--bad, #b42318); font-size:12px; }
-.device-modal-actions { display:flex; justify-content:flex-end; gap:8px; }
+.device-facts { display:grid; grid-template-columns:repeat(auto-fit,minmax(148px,1fr)); gap:10px 14px;
+  padding:12px 16px; border-bottom:1px solid var(--line-soft); }
+.device-facts div { display:flex; flex-direction:column; gap:2px; min-width:0; }
+.device-facts span { color:var(--muted); font-size:11px; }
+.device-facts strong { font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.device-toolbar { display:flex; align-items:center; gap:8px; padding:10px 16px; border-bottom:1px solid var(--line-soft); }
+.device-toolbar-hint { margin-left:auto; color:var(--muted); font-size:11px; text-align:right; }
+.device-add-panel { display:flex; flex-direction:column; gap:8px; padding:12px 16px;
+  border-bottom:1px solid var(--line-soft); background:var(--bg); }
+.device-add-row { display:flex; align-items:center; gap:8px; }
+.device-add-row .n-select, .device-add-row .n-input { flex:1; min-width:0; }
+.device-add-hint { margin:0; color:var(--muted); font-size:11px; line-height:1.5; }
+.device-add-error { margin:0; color:var(--danger); font-size:12px; }
+.device-choices { overflow:auto; }
+.device-item { display:flex; align-items:center; gap:10px; width:100%; min-height:52px; padding:8px 10px;
+  color:var(--ink); background:transparent; border:1px solid transparent; border-radius:6px;
+  text-align:left; cursor:pointer; }
+.device-item:hover { background:var(--surface-2); }
+.device-item.active { background:var(--surface-2); border-color:var(--line-soft); }
+.device-item .status-dot { flex:none; }
+.device-current-tag, .device-seen { flex:none; margin-left:auto; color:var(--muted); font-size:11px; }
+.device-current-tag { padding:0 7px; color:var(--ink-2); line-height:18px; border:1px solid var(--line-soft); border-radius:999px; }
+@media(max-width:700px){
+  .device-dialog .app-dialog-side { flex-wrap:wrap; }
+  .device-side-foot { width:100%; margin-top:0; border-top:0; }
+  .device-toolbar { flex-wrap:wrap; }
+  .device-toolbar-hint { margin-left:0; width:100%; text-align:left; }
+  .device-add-row { flex-wrap:wrap; }
+}

@@ -10,7 +10,7 @@ import {
 } from '@vicons/ionicons5';
 import { store, selectDevice, toasts, belongsToApp, capVisible, panelDisplay, savePanelDisplay } from './store';
 import { appIconUrl } from './api';
-import DeviceMenu from './components/DeviceMenu.vue';
+import DeviceDialog from './components/DeviceDialog.vue';
 import AppDialog from './components/AppDialog.vue';
 import CapturePanel from './components/CapturePanel.vue';
 import FilesPanel from './components/FilesPanel.vue';
@@ -121,7 +121,7 @@ const themeOverrides = computed<GlobalThemeOverrides>(() => {
           <span>{{ wsText }}</span>
           <span v-if="store.devicesFailed" class="badge fail">读取失败</span>
         </div>
-        <DeviceMenu :devices="store.devices" :failed="store.devicesFailed" :selected="store.selectedDeviceKey"
+        <DeviceDialog :devices="store.devices" :failed="store.devicesFailed" :selected="store.selectedDeviceKey"
           @select="selectDevice" />
         <div class="header-actions">
           <section class="app-context">
