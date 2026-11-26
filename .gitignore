@@ -74,3 +74,5 @@ injector/zygisk/.stage/
 
 # Local website screenshot/build cache (holds a full Edge profile: cookies, login data, history)
 website/.cache/
+# panel vite/esbuild 的临时缓存（TEMP 指到项目内时生成）
+panel/.tmp_esbuild/

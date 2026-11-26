@@ -181,8 +181,23 @@ export function loadDevicePrefs(): Record<string, DevicePref> {
     return out;
   } catch { return {}; }
 }
-function persistDevicePrefs() {
-  try { localStorage.setItem(DEVICE_PREFS_KEY, JSON.stringify(store.devicePrefs)); } catch { /* 仅本会话 */ }
+// 多标签同时开会各持一份内存快照；整份覆盖写回会把另一个标签新加的设备冲掉
+// （实测：A 页添加设备后，B 页下一次轮询把 localStorage 写回旧清单）。
+// 所以写盘前先读磁盘合并；忘记设备则显式从磁盘删除。
+function persistDevicePrefs(mode: 'merge' | 'remove' = 'merge', removedKey?: string) {
+  try {
+    const disk = loadDevicePrefs();
+    let next: Record<string, DevicePref>;
+    if (mode === 'remove' && removedKey) {
+      delete disk[removedKey];
+      next = { ...disk };
+      for (const [key, pref] of Object.entries(store.devicePrefs)) if (key !== removedKey) next[key] = pref;
+    } else {
+      next = { ...disk, ...store.devicePrefs };
+    }
+    store.devicePrefs = next;
+    localStorage.setItem(DEVICE_PREFS_KEY, JSON.stringify(next));
+  } catch { /* 仅本会话 */ }
 }
 export function devicePref(key: string): DevicePref { return store.devicePrefs[key] ?? {}; }
 /** 显示名：用户命名优先，其次型号，最后串号。 */
@@ -203,7 +218,7 @@ export function renameDevice(key: string, name: string) {
 }
 export function forgetDevice(key: string) {
   delete store.devicePrefs[key];
-  persistDevicePrefs();
+  persistDevicePrefs('remove', key);
   void refreshDevices();
 }
 export function setDefaultDevice(key: string) {
