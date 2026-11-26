@@ -70,13 +70,23 @@ async function toggle(fam: string) {
   } catch { famError.value = '保存失败'; }
   saving.value = '';
 }
-async function loadRadar() {
-  if (!store.chosenPkg) { radar.value = '先选择应用'; return; }
+// 捕获页的两块内容（检测状态、设备指纹）来自同一个 /api/detect/summary：
+// 一次请求同时更新，避免同一份摘要被打两遍。
+async function loadObservation() {
+  if (!store.chosenPkg) {
+    radar.value = '先选择应用'; radarTitle.value = '';
+    fpArmed.value = null; fpItems.value = [];
+    return;
+  }
+  const pkg = store.chosenPkg;
   try {
-    const r = await getDetectSummary(store.chosenPkg) as {
-      armed?: boolean; kinds?: Array<{ label: string; count: number }>;
-      caveat?: string; unchecked?: string[];
+    const r = await getDetectSummary(pkg) as {
+      armed?: boolean | null; kinds?: Array<{ label: string; count: number }>;
+      caveat?: string; unchecked?: string[]; fingerprint?: { items?: FpItem[] };
     };
+    if (store.chosenPkg !== pkg) return;
+    fpArmed.value = r.armed ?? null;
+    fpItems.value = r.fingerprint?.items ?? [];
     if (r.armed === false) { radar.value = '系统检测：未开'; radarTitle.value = '在 Manager → 应用 → Hook 配置 → 系统检测 里打开'; return; }
     if (r.armed == null) { radar.value = '系统检测：摘要未上报'; return; }
     const hit = (r.kinds ?? []).filter(k => (k.count ?? 0) > 0).map(k => `${k.label} ${k.count}`);
@@ -85,7 +95,11 @@ async function loadRadar() {
     if (r.caveat) parts.push(r.caveat);
     if (r.unchecked?.length) parts.push('未覆盖：' + r.unchecked.join('、'));
     radarTitle.value = parts.join('\n');
-  } catch { radar.value = '系统检测：摘要读取失败'; radarTitle.value = '不代表功能已开启或关闭'; }
+  } catch {
+    if (store.chosenPkg !== pkg) return;
+    radar.value = '系统检测：摘要读取失败'; radarTitle.value = '不代表功能已开启或关闭';
+    fpArmed.value = null; fpItems.value = [];
+  }
 }
 
 // ---- 记录显示 ----
@@ -147,22 +161,6 @@ interface FpItem {
 const fpItems = ref<FpItem[]>([]);
 const fpArmed = ref<boolean | null>(null);
 const fpExpanded = ref(false);
-
-async function loadFp() {
-  if (!store.chosenPkg) { fpItems.value = []; fpArmed.value = null; return; }
-  const pkg = store.chosenPkg;
-  try {
-    const r = await getDetectSummary(pkg) as {
-      armed?: boolean | null;
-      fingerprint?: { items?: FpItem[]; identifiers?: number; info?: number };
-    };
-    if (store.chosenPkg !== pkg) return;
-    fpArmed.value = r.armed ?? null;
-    fpItems.value = r.fingerprint?.items ?? [];
-  } catch {
-    if (store.chosenPkg === pkg) { fpArmed.value = null; fpItems.value = []; }
-  }
-}
 
 const fpVisible = computed(() => {
   if (fpExpanded.value) return fpItems.value;
@@ -242,9 +240,8 @@ async function refreshStatus() {
   statusMsg.value = (service && data) ? '' : '部分信息读取失败，可点「刷新」重试。';
   statusBusy.value = false;
 }
-async function refreshObservation() { await Promise.all([loadRadar(), loadFp()]); }
-onMounted(() => { void loadFamilies(); void loadRadar(); void loadFp(); void refreshStatus(); });
-watch(() => store.chosenPkg, () => { fpExpanded.value = false; void loadFamilies(); void loadRadar(); void loadFp(); });
+onMounted(() => { void loadFamilies(); void loadObservation(); void refreshStatus(); });
+watch(() => store.chosenPkg, () => { fpExpanded.value = false; void loadFamilies(); void loadObservation(); });
 </script>
 
 <template>
@@ -258,13 +255,16 @@ watch(() => store.chosenPkg, () => { fpExpanded.value = false; void loadFamilies
       </nav>
     </aside>
     <div class="set-content">
-      <div class="set-main">
+      <div class="set-header">
         <div class="set-context">
           <div class="settings-picker"><n-select size="small" v-model:value="page" aria-label="设置分类" :options="pageOptions" /></div>
           <p v-if="page === 'records'" class="rec-scope">仅调整当前应用在此浏览器中的显示，不影响采集。</p>
           <p v-else-if="page === 'display'" class="rec-scope">外观与列表偏好仅保存在当前浏览器。</p>
           <p v-else class="set-app"><span>APP <strong>{{ store.chosenPkg || '未选择应用' }}</strong></span></p>
         </div>
+      </div>
+      <div class="set-main">
+        <h1 class="sr-only">设置</h1>
 
         <section v-if="page === 'capture'" class="set-page">
           <div class="set-choice-group">
@@ -285,7 +285,7 @@ watch(() => store.chosenPkg, () => { fpExpanded.value = false; void loadFamilies
           <div class="set-choice-group">
             <div class="set-group-head">
               <h4>检测状态</h4>
-              <n-button size="small" secondary @click="refreshObservation">刷新</n-button>
+              <n-button size="small" secondary @click="loadObservation">刷新</n-button>
             </div>
             <p class="detect-radar" style="padding:10px 13px" :title="radarTitle">{{ radar || '未读取' }}</p>
           </div>
@@ -307,7 +307,8 @@ watch(() => store.chosenPkg, () => { fpExpanded.value = false; void loadFamilies
                   <span v-if="it.reads > 1" class="fp-reads">×{{ it.reads }}</span>
                 </n-tag>
               </div>
-              <p v-else class="set-status fp-empty">没有指纹采集记录。两类指纹 hook 都没装时这里为空，不代表应用没有采集。</p>
+              <p v-else-if="store.chosenPkg" class="set-status fp-empty">没有指纹采集记录。两类指纹 hook 都没装时这里为空，不代表应用没有采集。</p>
+              <p v-else class="set-status fp-empty">先选择应用。</p>
             </div>
           </div>
         </section>
@@ -453,16 +454,18 @@ watch(() => store.chosenPkg, () => { fpExpanded.value = false; void loadFamilies
 </template>
 
 <style scoped>
-.set-context{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 14px;min-height:24px}
+.set-header{flex:none;padding:12px 24px;border-bottom:1px solid var(--line-soft)}
+.set-context{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0;min-height:24px}
+@media(max-width:700px){.set-header{padding:10px 16px}}
 .set-context .rec-scope,.set-context .set-app{margin:0}
 .set-group-head .set-group-count{margin-left:auto}
-.fp-items{display:flex;flex-wrap:wrap;gap:6px;padding:11px 13px}
+.fp-items{display:flex;flex-wrap:wrap;gap:6px;padding:11px 0}
 .fp-chip{max-width:100%}
 .fp-chip .fp-label{font-weight:600;white-space:nowrap;margin-right:6px}
 .fp-chip .fp-value{font-family:ui-monospace,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:280px;display:inline-block;vertical-align:bottom}
 .fp-chip .fp-value.none{font-family:inherit;opacity:.65}
 .fp-chip .fp-reads{opacity:.6;font-size:10.5px;margin-left:5px}
-.fp-empty{margin:0;padding:11px 13px}
+.fp-empty{margin:0;padding:11px 0}
 .rec-scope{margin:4px 0 0;color:var(--muted);font-size:12px;line-height:1.6}
 .record-prefs{width:100%;max-width:740px;container-type:inline-size;color:var(--ink);font-size:14px}
 .record-prefs h4{margin:0;font-size:14px;font-weight:620;line-height:1.5;color:var(--ink);letter-spacing:0}

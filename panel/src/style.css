@@ -792,6 +792,7 @@ select option{color:var(--ink);background:var(--surface)}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:0s!important}}
 
 
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 .ledger-head{display:none}.cap-view>.filters,.board-wrap>.toolbar{padding:14px 20px 13px}
 .cap-view .toolbar-search{flex:1;max-width:560px}.toolbar-left .btn,.toolbar-right .btn{white-space:nowrap}
 .capture-workspace:not(.detail-open)>.list-pane,.workarea:not(.reading)>.events-panel{width:100%!important;max-width:none;flex:1}
