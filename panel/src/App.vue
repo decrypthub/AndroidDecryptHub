@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useAppearance, isDark } from './appearance';
 useAppearance();
-import { computed } from 'vue';
+import { computed, watch } from 'vue';
 import { darkTheme, NAlert, type GlobalThemeOverrides } from 'naive-ui';
 import type { Component } from 'vue';
 import {
@@ -30,6 +30,13 @@ const NAV: Array<{ key: ViewKey; label: string; count?: 'cc' | 'sy' | 'nt' }> = 
   { key: 'files', label: '文件' },
   { key: 'dump', label: '脱壳' },
 ];
+
+// 页面内部不再画标题（侧栏高亮已经说明当前板块），板块名留在标签页/Tab 标题上，
+// 这样多开几个面板时仍能分清谁是谁，读屏也还能拿到页面名。
+const VIEW_TITLES: Record<ViewKey, string> = {
+  cc: '加解密', sy: '系统', nt: '网络', files: '文件', dump: '脱壳', settings: '设置',
+};
+watch(() => store.view, (v) => { document.title = `ADH · ${VIEW_TITLES[v] ?? ''}`; }, { immediate: true });
 
 // 侧栏计数：当前应用下各类别的可见记录数
 const counts = computed(() => {

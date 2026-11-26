@@ -31,7 +31,6 @@ const PAGES: Array<{ key: PageKey; label: string }> = [
   { key: 'conn', label: '连接与数据' },
 ];
 const page = ref<PageKey>('capture');
-const pageTitle = computed(() => PAGES.find(p => p.key === page.value)?.label ?? '');
 
 // ---- 捕获家族（键序对齐 daemon CRYPTO_FAMILY_KEYS）----
 const FAMILIES = [
@@ -135,6 +134,61 @@ function resetAll() {
   toast('已恢复此应用的全部显示');
 }
 
+// ---- 设备指纹 ----
+// 原先是系统事件列表顶上的一条摘要，会盖住列表且多数是「未取到」的噪音；挪到这里，
+// 和「检测状态」放在一起回答同一个问题：这个 App 被观测到读了哪些指纹。
+// 摘要按信号去重（android_id、IMEI、MAC、ro.product.*、/proc/cpuinfo……），值是应用
+// 真正读到的内容；读取失败也算采集证据，只是没有值。两类 hook 都没装时这里为空，
+// 不代表应用清白。
+interface FpItem {
+  key: string; label: string; kind: 'identifier' | 'deviceinfo';
+  value?: string; reads: number; sources?: string[];
+}
+const fpItems = ref<FpItem[]>([]);
+const fpArmed = ref<boolean | null>(null);
+const fpExpanded = ref(false);
+
+async function loadFp() {
+  if (!store.chosenPkg) { fpItems.value = []; fpArmed.value = null; return; }
+  const pkg = store.chosenPkg;
+  try {
+    const r = await getDetectSummary(pkg) as {
+      armed?: boolean | null;
+      fingerprint?: { items?: FpItem[]; identifiers?: number; info?: number };
+    };
+    if (store.chosenPkg !== pkg) return;
+    fpArmed.value = r.armed ?? null;
+    fpItems.value = r.fingerprint?.items ?? [];
+  } catch {
+    if (store.chosenPkg === pkg) { fpArmed.value = null; fpItems.value = []; }
+  }
+}
+
+const fpVisible = computed(() => {
+  if (fpExpanded.value) return fpItems.value;
+  const ids = fpItems.value.filter(i => i.kind === 'identifier');
+  const info = fpItems.value.filter(i => i.kind === 'deviceinfo');
+  return [...ids.slice(0, 8), ...info.slice(0, Math.max(0, 8 - ids.length))].slice(0, 8);
+});
+const fpHiddenCount = computed(() => fpItems.value.length - fpVisible.value.length);
+const fpHeadText = computed(() => {
+  if (!fpItems.value.length) {
+    if (fpArmed.value === false) return '系统检测未开——布防后可观测指纹采集';
+    if (fpArmed.value === null) return '暂无指纹采集记录';
+    return '已布防，尚未观测到指纹采集';
+  }
+  const ids = fpItems.value.filter(i => i.kind === 'identifier').length;
+  const info = fpItems.value.filter(i => i.kind === 'deviceinfo').length;
+  const parts: string[] = [];
+  if (ids) parts.push(`${ids} 项标识符`);
+  if (info) parts.push(`${info} 项设备信息`);
+  return `采集到 ${parts.join(' + ') || '0 项'}`;
+});
+function fpChipTitle(it: FpItem): string {
+  const src = (it.sources ?? []).join(' / ');
+  return `${it.label}${it.value ? `：${it.value}` : '：未取到值'} · ${it.reads} 次读取${src ? ` · ${src}` : ''}`;
+}
+
 // ---- 功能与 Hook 状态 ----
 const evidence = computed(() => {
   const s = liveSession.value;
@@ -188,14 +242,14 @@ async function refreshStatus() {
   statusMsg.value = (service && data) ? '' : '部分信息读取失败，可点「刷新」重试。';
   statusBusy.value = false;
 }
-onMounted(() => { void loadFamilies(); void loadRadar(); void refreshStatus(); });
-watch(() => store.chosenPkg, () => { void loadFamilies(); void loadRadar(); });
+async function refreshObservation() { await Promise.all([loadRadar(), loadFp()]); }
+onMounted(() => { void loadFamilies(); void loadRadar(); void loadFp(); void refreshStatus(); });
+watch(() => store.chosenPkg, () => { fpExpanded.value = false; void loadFamilies(); void loadRadar(); void loadFp(); });
 </script>
 
 <template>
   <div class="set-page-shell">
     <aside class="set-sidebar">
-      <h2>设置</h2>
       <nav class="settings-links" aria-label="设置分类">
         <n-button v-for="p in PAGES" :key="p.key" quaternary block :aria-label="p.label" :title="p.label" :aria-pressed="page === p.key" @click="page = p.key">
           <span class="settings-link"><n-icon class="set-nav-icon" size="16" :component="PAGE_ICONS[p.key]" />
@@ -204,16 +258,13 @@ watch(() => store.chosenPkg, () => { void loadFamilies(); void loadRadar(); });
       </nav>
     </aside>
     <div class="set-content">
-      <div class="set-header">
-        <div>
-          <h3 class="settings-title">{{ pageTitle }}</h3>
+      <div class="set-main">
+        <div class="set-context">
           <div class="settings-picker"><n-select size="small" v-model:value="page" aria-label="设置分类" :options="pageOptions" /></div>
           <p v-if="page === 'records'" class="rec-scope">仅调整当前应用在此浏览器中的显示，不影响采集。</p>
           <p v-else-if="page === 'display'" class="rec-scope">外观与列表偏好仅保存在当前浏览器。</p>
           <p v-else class="set-app"><span>APP <strong>{{ store.chosenPkg || '未选择应用' }}</strong></span></p>
         </div>
-      </div>
-      <div class="set-main">
 
         <section v-if="page === 'capture'" class="set-page">
           <div class="set-choice-group">
@@ -234,9 +285,30 @@ watch(() => store.chosenPkg, () => { void loadFamilies(); void loadRadar(); });
           <div class="set-choice-group">
             <div class="set-group-head">
               <h4>检测状态</h4>
-              <n-button size="small" secondary @click="loadRadar">刷新</n-button>
+              <n-button size="small" secondary @click="refreshObservation">刷新</n-button>
             </div>
             <p class="detect-radar" style="padding:10px 13px" :title="radarTitle">{{ radar || '未读取' }}</p>
+          </div>
+          <div class="set-choice-group">
+            <div class="set-group-head">
+              <h4>设备指纹</h4>
+              <span class="set-group-count">{{ fpHeadText }}</span>
+              <n-button v-if="fpHiddenCount > 0 || fpExpanded" text size="small"
+                @click="fpExpanded = !fpExpanded">{{ fpExpanded ? '收起' : '展开全部' }}</n-button>
+            </div>
+            <div class="set-group-items">
+              <div v-if="fpItems.length" class="fp-items">
+                <n-tag v-for="it in fpVisible" :key="it.key" size="small" :bordered="false"
+                  :type="it.kind === 'identifier' ? 'warning' : 'default'" class="fp-chip"
+                  :title="fpChipTitle(it)">
+                  <span class="fp-label">{{ it.label }}</span>
+                  <span v-if="it.value" class="fp-value">{{ it.value }}</span>
+                  <span v-else class="fp-value none">未取到</span>
+                  <span v-if="it.reads > 1" class="fp-reads">×{{ it.reads }}</span>
+                </n-tag>
+              </div>
+              <p v-else class="set-status fp-empty">没有指纹采集记录。两类指纹 hook 都没装时这里为空，不代表应用没有采集。</p>
+            </div>
           </div>
         </section>
 
@@ -381,6 +453,16 @@ watch(() => store.chosenPkg, () => { void loadFamilies(); void loadRadar(); });
 </template>
 
 <style scoped>
+.set-context{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 14px;min-height:24px}
+.set-context .rec-scope,.set-context .set-app{margin:0}
+.set-group-head .set-group-count{margin-left:auto}
+.fp-items{display:flex;flex-wrap:wrap;gap:6px;padding:11px 13px}
+.fp-chip{max-width:100%}
+.fp-chip .fp-label{font-weight:600;white-space:nowrap;margin-right:6px}
+.fp-chip .fp-value{font-family:ui-monospace,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:280px;display:inline-block;vertical-align:bottom}
+.fp-chip .fp-value.none{font-family:inherit;opacity:.65}
+.fp-chip .fp-reads{opacity:.6;font-size:10.5px;margin-left:5px}
+.fp-empty{margin:0;padding:11px 13px}
 .rec-scope{margin:4px 0 0;color:var(--muted);font-size:12px;line-height:1.6}
 .record-prefs{width:100%;max-width:740px;container-type:inline-size;color:var(--ink);font-size:14px}
 .record-prefs h4{margin:0;font-size:14px;font-weight:620;line-height:1.5;color:var(--ink);letter-spacing:0}

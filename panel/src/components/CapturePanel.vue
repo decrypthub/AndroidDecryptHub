@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch, onMounted, onUnmounted } from 'vue';
 import { store, belongsToApp, capRemoveWhere, capVisible, capDisplayCap, DISPLAY_CAPS, panelDisplay, savePanelDisplay, toast } from '../store';
-import { getCaptures, getExchanges, getCaptureDetail, getDetectSummary, type Cap } from '../api';
+import { getCaptures, getExchanges, getCaptureDetail, type Cap } from '../api';
 import { catClass, cryptoView, rowLens, fmtTime, CATLABEL, type CatKey } from '../capview';
 import { SearchOutline } from '@vicons/ionicons5';
 import CapDetail from './CapDetail.vue';
@@ -140,23 +140,18 @@ async function loadServerPage(beforeId: number | null) {
 }
 
 // ---- 网络板块：重组交换 ----
-const rawSkipped = ref(0);
 const exLoadedOnce = ref(false);
 async function loadExchanges() {
   if (props.kind !== 'net' || !store.chosenPkg) { exchanges.value = []; return; }
   const pkg = store.chosenPkg;
   try {
     const r = await getExchanges(pkg, { fromTs: fromTs.value, toTs: toTs.value }) as {
-      exchanges?: Exchange[]; http2Idle?: number; consumedIds?: number[];
+      exchanges?: Exchange[]; http2Idle?: number;
     };
     if (store.chosenPkg !== pkg) return; // 竞态：响应回来时包已换
-    const all = r.exchanges ?? [];
-    exchanges.value = all;
-    const used = new Set([...all.flatMap(ex => ex.captureIds ?? []), ...(r.consumedIds ?? [])]);
-    rawSkipped.value = visible.value.filter(c => !used.has(c.id)).length;
+    exchanges.value = r.exchanges ?? [];
     const notes: string[] = [];
     if (r.http2Idle) notes.push(`${r.http2Idle} 条 HTTP/2 连接还没有完整请求`);
-    if (rawSkipped.value) notes.push(`${rawSkipped.value} 条 TLS 记录不是 HTTP 请求（连接控制帧或拼不回去），已略过`);
     exNotes.value = notes;
   } catch { /* 保旧数据 */ } finally { exLoadedOnce.value = true; }
 }
@@ -361,62 +356,7 @@ const MORE_OPTS = [
 ];
 function onMoreSelect(k: string) { if (k === 'dl') downloadView(); else clearView(); }
 
-// ---- 系统板块：设备指纹摘要 ----
-// 这个页签回答的问题是「这个 App 采集了哪些设备指纹」。摘要按信号去重（android_id、IMEI、
-// MAC、ro.product.*、/proc/cpuinfo……），值是应用真正读到的内容；读取失败也算采集证据，
-// 只是没有值。native 属性/路径归并来自 sysModule 捕获，Java API 归并来自 detect_java 的
-// fingerprint 家族——两类 hook 都没装时这里只是空，不代表应用清白。
-interface FpItem {
-  key: string; label: string; kind: 'identifier' | 'deviceinfo';
-  value?: string; reads: number; sources?: string[];
-}
-const fpItems = ref<FpItem[]>([]);
-const fpArmed = ref<boolean | null>(null);
-const fpExpanded = ref(false);
-
-async function loadFp() {
-  if (props.kind !== 'system' || !store.chosenPkg) { fpItems.value = []; fpArmed.value = null; return; }
-  const pkg = store.chosenPkg;
-  try {
-    const r = await getDetectSummary(pkg) as {
-      armed?: boolean | null;
-      fingerprint?: { items?: FpItem[]; identifiers?: number; info?: number };
-    };
-    if (store.chosenPkg !== pkg) return;
-    fpArmed.value = r.armed ?? null;
-    fpItems.value = r.fingerprint?.items ?? [];
-  } catch {
-    if (store.chosenPkg === pkg) { fpArmed.value = null; fpItems.value = []; }
-  }
-}
-
-const fpCounts = computed(() => ({
-  ids: fpItems.value.filter(i => i.kind === 'identifier').length,
-  info: fpItems.value.filter(i => i.kind === 'deviceinfo').length,
-}));
-const fpVisible = computed(() => {
-  if (fpExpanded.value) return fpItems.value;
-  const ids = fpItems.value.filter(i => i.kind === 'identifier');
-  const info = fpItems.value.filter(i => i.kind === 'deviceinfo');
-  return [...ids.slice(0, 8), ...info.slice(0, Math.max(0, 8 - ids.length))].slice(0, 8);
-});
-const fpHiddenCount = computed(() => fpItems.value.length - fpVisible.value.length);
-const fpHeadText = computed(() => {
-  if (!fpItems.value.length) {
-    if (fpArmed.value === false) return '系统检测未开——布防后可观测指纹采集';
-    if (fpArmed.value === null) return '暂无指纹采集记录';
-    return '已布防，尚未观测到指纹采集';
-  }
-  const c = fpCounts.value;
-  const parts: string[] = [];
-  if (c.ids) parts.push(`${c.ids} 项标识符`);
-  if (c.info) parts.push(`${c.info} 项设备信息`);
-  return `采集到 ${parts.join(' + ') || '0 项'}`;
-});
-function fpChipTitle(it: FpItem): string {
-  const src = (it.sources ?? []).join(' / ');
-  return `${it.label}${it.value ? `：${it.value}` : '：未取到值'} · ${it.reads} 次读取${src ? ` · ${src}` : ''}`;
-}
+// 系统页只留事件列表；指纹摘要在 设置 → 捕获 → 设备指纹 里。
 
 // ---- 分栏拖动 ----
 const listWidth = ref(0); // 0 = CSS 默认宽度
@@ -443,11 +383,9 @@ function startDrag(e: MouseEvent) {
 let poll = 0;
 onMounted(() => {
   if (props.kind === 'net') void loadExchanges();
-  if (props.kind === 'system') void loadFp();
   document.addEventListener('click', onDocClick);
   poll = window.setInterval(() => {
     if (props.kind === 'net') scheduleExchanges();
-    if (props.kind === 'system') void loadFp();
   }, 5000);
 });
 onUnmounted(() => {
@@ -457,13 +395,13 @@ onUnmounted(() => {
 watch(() => store.chosenPkg, () => {
   sel.value = null; selDetail.value = null; selExchange.value = null;
   cursorStack.value = []; currentBeforeId.value = null; pagedItems.value = null; netPage.value = 1;
-  fpExpanded.value = false;
-  void loadExchanges(); void loadFp();
+  void loadExchanges();
 });
 watch(() => store.capItems.length, () => { if (props.kind === 'net' && !hasTimeRange.value) scheduleExchanges(); });
 
-// 骨架屏开关：初次加载 / 切应用 / 翻历史页时，列表有行就保留旧行，没有才铺骨架
-const showSkeleton = computed(() => {
+// 列表加载中（不铺骨架）：只用来把列表区光标切成加载态、压住空态文案。
+// 列表里已经有行时一律保留旧行，不做任何占位，避免每次刷新整块闪一下。
+const listLoading = computed(() => {
   if (!store.chosenPkg) return false;
   if (props.kind === 'net') return !exLoadedOnce.value && !matchedExchanges.value.length;
   if (store.capLoading || pageLoading.value) return !rows.value.length;
@@ -513,7 +451,6 @@ const searchPlaceholder = computed(() =>
 
 <template>
   <div class="cap-view">
-    <h1 class="board-heading">{{ kind === 'crypto' ? '加解密' : kind === 'system' ? '系统' : '网络' }}</h1>
     <div class="filters">
       <div class="toolbar-main">
         <div class="toolbar-search">
@@ -581,26 +518,7 @@ const searchPlaceholder = computed(() =>
       </div>
     </div>
 
-    <section v-if="kind === 'system' && store.chosenPkg" class="fp-strip" aria-label="设备指纹摘要">
-      <div class="fp-head">
-        <strong class="fp-title">设备指纹</strong>
-        <span class="fp-meta" :class="{ dim: !fpItems.length }">{{ fpHeadText }}</span>
-        <n-button v-if="fpHiddenCount > 0 || fpExpanded" text size="tiny" class="fp-toggle"
-          @click="fpExpanded = !fpExpanded">{{ fpExpanded ? '收起' : `其余 ${fpHiddenCount} 项` }}</n-button>
-      </div>
-      <div v-if="fpItems.length" class="fp-items">
-        <n-tag v-for="it in fpVisible" :key="it.key" size="small" :bordered="false"
-          :type="it.kind === 'identifier' ? 'warning' : 'default'" class="fp-chip"
-          :title="fpChipTitle(it)">
-          <span class="fp-label">{{ it.label }}</span>
-          <span v-if="it.value" class="fp-value">{{ it.value }}</span>
-          <span v-else class="fp-value none">未取到</span>
-          <span v-if="it.reads > 1" class="fp-reads">×{{ it.reads }}</span>
-        </n-tag>
-      </div>
-    </section>
-
-    <div class="workspace capture-workspace" :class="{ 'compact-captures': panelDisplay.density === 'compact', 'detail-open': sel !== null, 'no-results': !showSkeleton && sel === null && !(kind === 'net' ? matchedExchanges.length : rows.length) }">
+    <div class="workspace capture-workspace" :class="{ 'compact-captures': panelDisplay.density === 'compact', 'detail-open': sel !== null, 'no-results': !listLoading && sel === null && !(kind === 'net' ? matchedExchanges.length : rows.length) }">
       <div class="list-pane" :style="listWidth ? { width: listWidth + 'px' } : undefined">
         <div class="new-banner" :class="{ show: newCount > 0 }">
           <span>{{ newCount }} 条新记录</span>
@@ -608,14 +526,7 @@ const searchPlaceholder = computed(() =>
         </div>
 
         <div v-if="sel === null && (kind === 'net' ? matchedExchanges.length : rows.length)" class="ledger-head adh-grid" aria-hidden="true"><span>序号</span><span>{{ HEAD_LABELS[kind][0] }}</span><span>{{ HEAD_LABELS[kind][1] }}</span><span>{{ HEAD_LABELS[kind][2] }}</span><span>时间</span></div>
-        <div class="cap-list" :id="LIST_ID[kind]" tabindex="0" @scroll="onScroll">
-          <template v-if="showSkeleton">
-            <div v-for="i in 8" :key="'sk' + i" class="row sk-row" aria-hidden="true">
-              <div class="sk-line sk-a"></div>
-              <div class="sk-line sk-b"></div>
-            </div>
-          </template>
-          <template v-else>
+        <div class="cap-list" :class="{ loading: listLoading }" :id="LIST_ID[kind]" tabindex="0" :aria-busy="listLoading" @scroll="onScroll">
           <div v-if="hasTimeRange" class="ex-note time-banner">
             <span>时间筛选已启用</span>
             <n-button text size="small" type="primary" @click="clearTimeRange">切回实时</n-button>
@@ -633,7 +544,7 @@ const searchPlaceholder = computed(() =>
               </div>
               <div class="lens">{{ ex.response?.startLine || ex.request?.startLine || ex.note }}</div>
             </div>
-            <p v-if="!matchedExchanges.length" class="empty-row" role="status">{{ emptyText }}</p>
+            <p v-if="!matchedExchanges.length && !listLoading" class="empty-row" role="status">{{ emptyText }}</p>
           </template>
 
           <template v-else>
@@ -667,8 +578,7 @@ const searchPlaceholder = computed(() =>
                   class="preview">{{ c.preview }}</div>
               </template>
             </div>
-            <p v-if="!rows.length" class="empty-row" role="status">{{ emptyText }}</p>
-          </template>
+            <p v-if="!rows.length && !listLoading" class="empty-row" role="status">{{ emptyText }}</p>
           </template>
         </div>
         <div v-if="canPrevPage || canNextPage || rows.length || matchedExchanges.length || isHistoricalMode" class="capture-list-foot">
@@ -705,18 +615,8 @@ const searchPlaceholder = computed(() =>
 <style scoped>
 .cap-list { outline: none; }
 .cap-empty { padding: 48px 16px; }
-/* 骨架行：形状对齐真实 .row（两行结构），不做内容也能先看到骨架 */
-.sk-row { pointer-events: none; }
-.sk-line {
-  height: 11px;
-  border-radius: 4px;
-  background: linear-gradient(90deg, rgba(255,255,255,.05) 25%, rgba(255,255,255,.11) 50%, rgba(255,255,255,.05) 75%);
-  background-size: 200% 100%;
-  animation: sk-shimmer 1.25s ease-in-out infinite;
-}
-.sk-a { width: 62%; }
-.sk-b { width: 84%; margin-top: 10px; }
-@keyframes sk-shimmer { to { background-position: -200% 0; } }
+/* 加载中不铺骨架：列表为空时只把光标切成加载态，数据来了直接出现，不再有骨架→内容的跳动。 */
+.cap-list.loading, .cap-list.loading .row { cursor: progress; }
 .detail-placeholder { min-height: 62vh; display: grid; place-items: center; padding: 0; }
 .ph-title { font-size: 15px; font-weight: 600; color: var(--ink-2); }
 .ph-desc { margin-top: 6px; font-size: 12.5px; color: var(--muted); }
