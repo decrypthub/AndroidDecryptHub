@@ -204,3 +204,28 @@ test('push 发 sync 协议 SEND/DATA/DONE 帧序', async () => {
 });
 
 void reqFrame;
+
+test('adb connect/disconnect 映射 host:connect/disconnect 并回传服务器原话', async () => {
+  const srv = await fakeAdb((svc, sock) => {
+    if (svc === 'host:connect:192.168.1.50:5555') { okayThen(sock, lenPayload('connected to 192.168.1.50:5555')); sock.end(); return; }
+    if (svc === 'host:disconnect:192.168.1.50:5555') { okayThen(sock, lenPayload('disconnected 192.168.1.50:5555')); sock.end(); return; }
+    assert.fail('unexpected service ' + svc);
+  });
+  process.env.ADH_ADB_SERVER_PORT = String(srv.port);
+  const reloaded = await import('../src/adb_wire.ts?port=' + srv.port + '-net');
+  const connected = await reloaded.adbExec(['connect', '192.168.1.50:5555'], { timeout: 3000 });
+  assert.equal(connected.stdout.trim(), 'connected to 192.168.1.50:5555');
+  const dropped = await reloaded.adbExec(['disconnect', '192.168.1.50:5555'], { timeout: 3000 });
+  assert.equal(dropped.stdout.trim(), 'disconnected 192.168.1.50:5555');
+  assert.deepEqual(srv.requests, ['host:connect:192.168.1.50:5555', 'host:disconnect:192.168.1.50:5555']);
+  srv.close();
+});
+
+test('非法网络设备地址在发请求前就拒绝', async () => {
+  const srv = await fakeAdb((svc) => { assert.fail('should not reach ' + svc); });
+  process.env.ADH_ADB_SERVER_PORT = String(srv.port);
+  const reloaded = await import('../src/adb_wire.ts?port=' + srv.port + '-bad');
+  await assert.rejects(() => reloaded.adbExec(['connect', '192.168.1.50'], { timeout: 2000 }), /无效的网络设备地址/);
+  assert.deepEqual(srv.requests, []);
+  srv.close();
+});

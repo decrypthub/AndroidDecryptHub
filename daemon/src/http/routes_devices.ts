@@ -5,8 +5,24 @@ import {hasIndependentDemoFiles,localUsbLink,localUsbView} from '../local_usb_st
 import {changeDemoApi,DemoApiError} from '../demo_api_observer.ts';
 import {AppFilesError,readOwnedAppFiles,saveOwnedAppText} from '../owned_app_files.ts';
 import {connectDevice,deviceRpcLive,dropDevice} from '../device_bridge.ts';
+import {connectNetDevice,reconnectDevice} from '../device_actions.ts';
 import {parseAdbDevices,realAdbRunner,type AdbRunner} from '../transport/adb_device.ts';
 import type {Route,RouteContext} from './types.ts';
+
+/** The observed app's agent session, for the device manager: online first, else the newest dead one. */
+function observedAgentView(){
+  const pkg=localObserver?.package;
+  if(!pkg) return null;
+  let best:{online:boolean;pid:number;sessionId:string;lastSeen:number}|null=null;
+  for(const session of sessions.values()){
+    if(session.package!==pkg) continue;
+    const row={online:session.online===true,pid:session.pid,sessionId:session.sessionId,lastSeen:session.lastSeen};
+    if(row.online) return row;
+    if(!best||row.lastSeen>best.lastSeen) best=row;
+  }
+  return best;
+}
+
 /** Wrapped by the same router/operation registry as MCP; no privileged second execution path. */
 export function deviceRoutes({req,url,send}:RouteContext):Route[]{
   const online=()=>!!localObserver&&[...sessions.values()].some(s=>
@@ -14,7 +30,8 @@ export function deviceRoutes({req,url,send}:RouteContext):Route[]{
   return [{path:'/api/devices',handler:async()=>{
   if(localObserver && req.method==='GET' && url.searchParams.get('action')==='list'){
     // This is one exact local USB device, not a paired Device identity or a proxy for the App session.
-    let transports:{serial:string;model:string;state:string;link:string;observed:boolean;rpc:boolean}[]=[];
+    let transports:{serial:string;model:string;state:string;link:string;observed:boolean;rpc:boolean;
+      net:boolean;agent:{online:boolean;pid:number;sessionId:string;lastSeen:number}|null}[]=[];
     // One `adb devices -l` per request: the panel polls this every few seconds and each extra
     // spawn queues behind the serialized adb server — the double read used to disagree with
     // itself under contention (transports empty while localUsb said online, or vice versa).
@@ -24,7 +41,9 @@ export function deviceRoutes({req,url,send}:RouteContext):Route[]{
       catch(e){ return send(502,{ok:false,error:(e as Error).message}); }
       transports=parseAdbDevices(devs)
         .map(row=>({serial:row.serial,model:row.model||'',state:row.state,link:row.link,
-          observed:row.serial===localObserver.usbSerial,rpc:deviceRpcLive(row.serial)}));
+          observed:row.serial===localObserver.usbSerial,rpc:deviceRpcLive(row.serial),
+          net:row.link==='adb-tcp'||row.serial.includes(':'),
+          agent:row.serial===localObserver.usbSerial?observedAgentView():null}));
     }
     const run:AdbRunner=devs?(args,opts)=>args.join(' ')==='devices -l'?Promise.resolve(devs):realAdbRunner(args,opts):realAdbRunner;
     return send(200,{ok:true,devices:[],transports,localUsb:await localUsbView(localObserver,online(),run)});
@@ -46,6 +65,17 @@ export function deviceRoutes({req,url,send}:RouteContext):Route[]{
       if(action==='disconnect'){
         const dropped=await dropDevice(serial);
         return send(200,{ok:true,serial,dropped});
+      }
+      // 重连：ADB 链路 → reverse 隧道 → 设备域通道 → （观察设备）强制 agent 重拨。
+      // 三层结果各自返回，面板据此说清楚是哪一层没通。
+      if(action==='reconnect'){
+        const result=await reconnectDevice(serial);
+        return send(result.ok?200:502,result);
+      }
+      // 无线调试添加：校验 host:port 后 adb connect，并回读这台设备的真实状态。
+      if(action==='adb-connect'){
+        const result=await connectNetDevice(String(body?.address||''));
+        return send(result.ok?200:502,result);
       }
       if(action==='observe'){
         const pkg=String(body?.package||'');

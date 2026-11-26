@@ -6,13 +6,31 @@ import { reactive, computed, watch } from 'vue';
 import * as A from './api';
 import { recordVisible } from './observations';
 
+export interface DeviceAgent { online: boolean; pid: number; sessionId: string }
+
 export interface DeviceView {
   key: string; serial: string; model: string; state: string;
   link: string; observed?: string; online: boolean | null; failed?: boolean;
   appSession?: string | null;
   // adh.device/1 RPC 通道在线（或有建立中的连接），只有真实 transport 行才带这个字段
   rpc?: boolean;
+  // 网络串号（host:port，无线调试）；USB 序列号没有这个标志
+  net?: boolean;
+  // 只有观察设备有 agent 会话，其它设备如实为空
+  agent?: DeviceAgent | null;
+  // 面板本地清单：显示名 / 是否记住 / 是否默认 / 上次见到的时间
+  name?: string;
+  remembered?: boolean;
+  isDefault?: boolean;
+  seenAt?: number;
 }
+
+/** 面板本地设备清单（localStorage）：只存显示名/默认/记住时间，权威状态一律来自 daemon。 */
+export interface DevicePref { name?: string; default?: boolean; rememberedAt?: number; lastSeenAt?: number }
+
+// 本地设备清单的存储键必须早于 store 初始化：loadDevicePrefs 在 reactive(store) 里同步调用，
+// 键放在后面会落进 TDZ，被 catch 吞成空对象（命名/默认在刷新后丢失）。
+const DEVICE_PREFS_KEY = 'adh.devices.v1';
 
 export const CAP_BUFFER_LIMIT = 4500;
 const BUCKET_LIMIT = 1500;
@@ -30,6 +48,7 @@ export const store = reactive({
   capLoading: false,
   // 设备
   devices: [] as DeviceView[],
+  devicePrefs: loadDevicePrefs() as Record<string, DevicePref>,
   localUsb: null as Record<string, unknown> | null,
   devicesFailed: false,
   devicesUpdated: 0,
@@ -143,13 +162,71 @@ export async function syncCapScope() {
   await capLoad();
 }
 
+// ---- 设备清单（localStorage，仅当前浏览器）：命名、默认设备、记住但暂时没插的设备 ----
+export function loadDevicePrefs(): Record<string, DevicePref> {
+  try {
+    const raw = JSON.parse(localStorage.getItem(DEVICE_PREFS_KEY) ?? '{}') as unknown;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+    const out: Record<string, DevicePref> = {};
+    for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+      if (!key || typeof value !== 'object' || value === null) continue;
+      const row = value as Record<string, unknown>;
+      out[key] = {
+        ...(typeof row.name === 'string' && row.name.trim() ? { name: row.name.trim().slice(0, 40) } : {}),
+        ...(row.default === true ? { default: true } : {}),
+        ...(typeof row.rememberedAt === 'number' && Number.isFinite(row.rememberedAt) ? { rememberedAt: row.rememberedAt } : {}),
+        ...(typeof row.lastSeenAt === 'number' && Number.isFinite(row.lastSeenAt) ? { lastSeenAt: row.lastSeenAt } : {}),
+      };
+    }
+    return out;
+  } catch { return {}; }
+}
+function persistDevicePrefs() {
+  try { localStorage.setItem(DEVICE_PREFS_KEY, JSON.stringify(store.devicePrefs)); } catch { /* 仅本会话 */ }
+}
+export function devicePref(key: string): DevicePref { return store.devicePrefs[key] ?? {}; }
+/** 显示名：用户命名优先，其次型号，最后串号。 */
+export function deviceLabel(d: DeviceView): string { return d.name || d.model || d.serial; }
+export function rememberDevice(key: string, name?: string) {
+  const current = devicePref(key);
+  const clean = (name ?? '').trim().slice(0, 40);
+  store.devicePrefs[key] = { ...current, ...(clean ? { name: clean } : {}), rememberedAt: current.rememberedAt ?? Date.now() };
+  persistDevicePrefs();
+  void refreshDevices();
+}
+export function renameDevice(key: string, name: string) {
+  const current = devicePref(key);
+  const clean = name.trim().slice(0, 40);
+  store.devicePrefs[key] = { ...current, name: clean, rememberedAt: current.rememberedAt ?? Date.now() };
+  persistDevicePrefs();
+  void refreshDevices();
+}
+export function forgetDevice(key: string) {
+  delete store.devicePrefs[key];
+  persistDevicePrefs();
+  void refreshDevices();
+}
+export function setDefaultDevice(key: string) {
+  for (const [other, pref] of Object.entries(store.devicePrefs)) {
+    if (pref.default) store.devicePrefs[other] = { ...pref, default: false };
+  }
+  const current = devicePref(key);
+  store.devicePrefs[key] = { ...current, default: true, rememberedAt: current.rememberedAt ?? Date.now() };
+  persistDevicePrefs();
+  void refreshDevices();
+}
+export function defaultDeviceKey(): string {
+  for (const [key, pref] of Object.entries(store.devicePrefs)) if (pref.default) return key;
+  return '';
+}
+
 // ---- 设备轮询：失败保旧值 ----
 export async function refreshDevices() {
   try {
     const r = await A.getDevices();
     const transports = (r.transports ?? []) as Array<Record<string, unknown>>;
     const usb = r.localUsb ?? null;
-    store.devices = transports.map(t => ({
+    const live: DeviceView[] = transports.map(t => ({
       key: String(t.serial ?? ''),
       serial: String(t.serial ?? ''),
       model: String(t.model ?? t.serial ?? ''),
@@ -158,22 +235,50 @@ export async function refreshDevices() {
       observed: t.observed === true ? (usb?.observedPackage as string | undefined) : (typeof t.observed === 'string' ? t.observed : undefined),
       online: t.online as boolean | null,
       rpc: t.rpc === true,
+      net: t.net === true || String(t.serial ?? '').includes(':'),
+      agent: t.agent && typeof t.agent === 'object' ? (t.agent as DeviceAgent) : null,
     }));
     store.localUsb = usb;
     // 本地观察模式：transports 为空时 localUsb 自己当设备行
-    if (usb && !store.devices.length) {
-      store.devices = [{
+    if (usb && !live.length) {
+      live.push({
         key: String(usb.transport ?? 'usb'), serial: String(usb.transport ?? 'usb'),
         model: String(usb.model ?? '本地设备'), state: String(usb.linkState ?? ''),
         link: String(usb.transport ?? 'usb'),
         observed: usb.observedPackage as string | undefined,
         online: usb.online as boolean | null,
         appSession: usb.appSession as string | null,
-      }];
+      });
     }
+    // 合并本地清单：命名/默认/上次在线，以及「记住但现在没插」的设备
+    const now = Date.now();
+    let prefsDirty = false;
+    for (const device of live) {
+      const pref = store.devicePrefs[device.key];
+      if (!pref) continue;
+      device.name = pref.name;
+      device.remembered = true;
+      device.seenAt = pref.lastSeenAt;
+      // 见到即刷新，但每分钟最多写一次，避免每次轮询都写 localStorage
+      if (!pref.lastSeenAt || now - pref.lastSeenAt > 60_000) {
+        store.devicePrefs[device.key] = { ...pref, lastSeenAt: now };
+        prefsDirty = true;
+      }
+    }
+    for (const [key, pref] of Object.entries(store.devicePrefs)) {
+      if (!pref.rememberedAt || live.some(d => d.key === key)) continue;
+      live.push({ key, serial: key, model: '', state: 'disconnected', link: '', online: false, rpc: false,
+        net: key.includes(':'), name: pref.name, remembered: true, seenAt: pref.lastSeenAt });
+    }
+    const preferred = defaultDeviceKey();
+    store.devices = live.map(d => ({ ...d, isDefault: d.key === preferred }));
+    if (prefsDirty) persistDevicePrefs();
     store.devicesFailed = false;
-    store.devicesUpdated = Date.now();
-    if (!store.selectedDeviceKey && store.devices.length) selectDevice((store.devices.find(d => d.observed) ?? store.devices[0]).key);
+    store.devicesUpdated = now;
+    if (!store.selectedDeviceKey || !store.devices.some(d => d.key === store.selectedDeviceKey)) {
+      const pick = store.devices.find(d => d.key === preferred) ?? store.devices.find(d => d.observed) ?? store.devices[0];
+      if (pick) selectDevice(pick.key);
+    }
   } catch {
     store.devicesFailed = true; // 保旧列表，只标失败
   }

@@ -389,6 +389,9 @@ export async function adbPush(sel: Selector, local: Buffer, remotePath: string, 
 
 // ---- argv 兼容层：execFile('adb', argv) 的整组映射 ----
 
+// host:connect / host:disconnect 的网络串号：host:port（无线调试、TCP 转发）。
+const NET_TARGET_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*:\d{1,5}$/;
+
 // `adb shell -T cmd` 的 PTY 标志由 CLI 剥离；shell,v2,raw 本就无 PTY，等价丢弃。
 function stripShellFlags(tokens: string[]): string[] {
   const out = [...tokens];
@@ -464,6 +467,16 @@ export async function adbExec(args: string[], opts: { timeout?: number; maxBuffe
     if (!local || !remote) throw new AdbWireError(`adb_wire: forward 参数不完整 ${JSON.stringify(args)}`);
     const resolved = await adbHostOptionalData(`${prefix}:forward:${norebind ? 'norebind:' : ''}${local};${remote}`, timeout);
     return { stdout: resolved ? resolved + '\n' : '', stderr: '' };
+  }
+  // 无线调试：adb connect/disconnect 是 host 级服务，回复是 OKAY + 一句可读结果
+  // （连不上时也是 OKAY + "failed to connect..."，不能只看状态字）。
+  if (cmd === 'connect' || cmd === 'disconnect') {
+    const target = String(rest[1] ?? '').trim();
+    if (!NET_TARGET_RE.test(target)) throw new AdbWireError(`adb_wire: 无效的网络设备地址 ${JSON.stringify(target)}`);
+    const port = Number(target.slice(target.lastIndexOf(':') + 1));
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new AdbWireError(`adb_wire: 端口超出范围 ${target}`);
+    const message = (await adbHostData(`host:${cmd}:${target}`, timeout)).trim();
+    return { stdout: message ? message + '\n' : '', stderr: '' };
   }
   if (cmd === 'push') {
     const { readFileSync } = await import('node:fs');
