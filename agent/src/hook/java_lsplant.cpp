@@ -334,6 +334,7 @@ extern "C" const char *adh_compute_shorty(JNIEnv *env, jobject method) {
 
 struct JavaHookContext {
     int id;
+    int owner;
     int active;                 // 0 free, 1 active, 2 reserved
     int used;                   // retired slots are never reused
     int patched;                // LSPlant hook remains installed (soft unhook / reuse)
@@ -390,6 +391,15 @@ static jfieldID g_bridge_active = nullptr;static jfieldID g_bridge_arg_index = n
 static jfieldID g_bridge_arg_value = nullptr;
 static jfieldID g_bridge_silent = nullptr;
 static jfieldID g_bridge_crypto = nullptr;
+static jmethodID g_bridge_set_enabled = nullptr;
+static jmethodID g_bridge_clear_crypto = nullptr;
+
+static int set_bridge_enabled(JNIEnv *env, jobject bridge, int enabled) {
+    if (!env || !bridge || !g_bridge_set_enabled) return 0;
+    env->CallVoidMethod(bridge, g_bridge_set_enabled, enabled ? JNI_TRUE : JNI_FALSE);
+    if (adh_jni_exception_check(env)) { adh_jni_exception_clear(env); return 0; }
+    return 1;
+}
 
 static std::string jstring_to_utf(JNIEnv *env, jstring value) {
     if (!env || !value) return "";
@@ -589,13 +599,15 @@ static jclass load_bridge_class(JNIEnv *env, std::string &error) {
     g_bridge_arg_value = env->GetFieldID(bridge_class, "argValue", "Ljava/lang/String;");
     g_bridge_silent = env->GetFieldID(bridge_class, "silent", "Z");
     g_bridge_crypto = env->GetFieldID(bridge_class, "cryptoMode", "I");
+    g_bridge_set_enabled = env->GetMethodID(bridge_class, "setEnabled", "(Z)V");
+    g_bridge_clear_crypto = env->GetStaticMethodID(bridge_class, "clearCryptoMemo", "()V");
     g_bridge_class = (jclass)env->NewGlobalRef(bridge_class);
     g_bridge_loader = env->NewGlobalRef(bridge_loader);
 
     if (!g_bridge_class || !g_bridge_backup || !g_bridge_is_static || !g_bridge_is_ctor || !g_bridge_hook_id ||
         !g_bridge_hits || !g_bridge_last_arg || !g_bridge_last_return || !g_bridge_last_error ||
         !g_bridge_capture_stack || !g_bridge_last_stack ||
-        !g_bridge_target || !g_bridge_skip_original || !g_bridge_override_return || !g_bridge_arg_index || !g_bridge_arg_value || !g_bridge_silent || !g_bridge_crypto || !g_bridge_ready || !g_bridge_active) {
+        !g_bridge_target || !g_bridge_skip_original || !g_bridge_override_return || !g_bridge_arg_index || !g_bridge_arg_value || !g_bridge_silent || !g_bridge_crypto || !g_bridge_ready || !g_bridge_active || !g_bridge_set_enabled || !g_bridge_clear_crypto) {
         error = "AdhJavaHookBridge fields are missing";
         return nullptr;
     }
@@ -899,6 +911,7 @@ static int find_hook_slot_locked(int id) {
 
 static void reset_hook_slot(JavaHookContext &hook) {
     hook.id = 0;
+    hook.owner = ADH_JAVA_OWNER_MANUAL;
     hook.active = 0;
     hook.used = 0;
     hook.patched = 0;
@@ -917,12 +930,12 @@ static void release_hook_slot(JNIEnv *env, JavaHookContext &hook) {
     reset_hook_slot(hook);
 }
 
-extern "C" int adh_javahook_hook_method(JNIEnv *env, const char *class_name, const char *method_name,
+extern "C" int adh_javahook_hook_method_owned(JNIEnv *env, int owner, const char *class_name, const char *method_name,
                                          const char *params, int skip_original, const char *override_return,
                                          int arg_index, const char *arg_value, int capture_stack, int quiet,
                                          int *hook_id_out, char *error, size_t error_size) {
     if (hook_id_out) *hook_id_out = 0;
-    if (!env || !class_name || !method_name) {
+    if (!env || !class_name || !method_name || (owner != ADH_JAVA_OWNER_MANUAL && owner != ADH_JAVA_OWNER_CAPTURE)) {
         set_error(error, error_size, "missing class/method");
         return 0;
     }
@@ -945,6 +958,7 @@ extern "C" int adh_javahook_hook_method(JNIEnv *env, const char *class_name, con
         if (g_next_java_hook_id <= 0) g_next_java_hook_id = 1;
         g_java_hooks[slot].active = 2;      // reserve while resolving/installing
         g_java_hooks[slot].id = hook_id;
+        g_java_hooks[slot].owner = owner;
     }
     pthread_mutex_unlock(&g_java_hooks_lock);
     if (slot < 0) {
@@ -960,7 +974,10 @@ extern "C" int adh_javahook_hook_method(JNIEnv *env, const char *class_name, con
         return 0;
     };
 
-    jclass target_class = load_app_class(env, class_name, problem);
+    std::string bootstrap_name=class_name;
+    for(char &c:bootstrap_name)if(c=='.')c='/';
+    jclass target_class = owner == ADH_JAVA_OWNER_CAPTURE ? env->FindClass(bootstrap_name.c_str()) : load_app_class(env, class_name, problem);
+    if (!target_class && adh_jni_exception_check(env)) { adh_jni_exception_clear(env); problem="capture bootstrap class unavailable"; }
     if (!target_class) return fail_hook(problem.c_str());
     std::string signature;
     jobject target = find_target_method(env, target_class, class_name, method_name, params ? params : "", signature, problem);
@@ -982,9 +999,19 @@ extern "C" int adh_javahook_hook_method(JNIEnv *env, const char *class_name, con
     // calling lsplant::Hook again (which cannot safely re-hook a patched method).
     pthread_mutex_lock(&g_java_hooks_lock);
     for (int i = 0; i < ADH_JAVA_MAX_HOOKS; i++) {
+        const JavaHookContext &old = g_java_hooks[i];
+        if (i != slot && old.patched && old.target_name == signature &&
+                (old.active != 0 || old.owner != owner)) {
+            pthread_mutex_unlock(&g_java_hooks_lock);
+            env->DeleteLocalRef(target);
+            return fail_hook("Java method already owned; stop it through its owning controller");
+        }
+    }
+
+    for (int i = 0; i < ADH_JAVA_MAX_HOOKS; i++) {
         JavaHookContext &old = g_java_hooks[i];
         if (i == slot || !old.patched || old.active != 0 || !old.bridge ||
-            old.target_name != signature) continue;
+            old.target_name != signature || old.owner != owner) continue;
         jobject old_bridge = old.bridge;
         jstring empty = env->NewStringUTF("");
         env->SetIntField(old_bridge, g_bridge_hook_id, hook_id);
@@ -1003,21 +1030,27 @@ extern "C" int adh_javahook_hook_method(JNIEnv *env, const char *class_name, con
         jstring arg_value_string = env->NewStringUTF(arg_value ? arg_value : "");
         env->SetObjectField(old_bridge, g_bridge_arg_value, arg_value_string);
         env->SetBooleanField(old_bridge, g_bridge_capture_stack, capture_stack ? JNI_TRUE : JNI_FALSE);
+        env->SetBooleanField(old_bridge, g_bridge_silent, quiet ? JNI_TRUE : JNI_FALSE);
+        env->SetIntField(old_bridge, g_bridge_crypto, 0);
         env->SetBooleanField(old_bridge, g_bridge_ready, JNI_TRUE);
-        env->SetBooleanField(old_bridge, g_bridge_active, JNI_TRUE);
+        if (!set_bridge_enabled(env, old_bridge, owner == ADH_JAVA_OWNER_MANUAL)) {
+            pthread_mutex_unlock(&g_java_hooks_lock); env->DeleteLocalRef(target);
+            return fail_hook("failed to reactivate Java bridge epoch");
+        }
         if (empty) env->DeleteLocalRef(empty);
         if (target_string) env->DeleteLocalRef(target_string);
         if (override_string) env->DeleteLocalRef(override_string);
         if (arg_value_string) env->DeleteLocalRef(arg_value_string);
 
         old.id = hook_id;
-        old.active = 1;
+        old.active = owner == ADH_JAVA_OWNER_MANUAL ? 1 : 0;
         old.used = 1;
         old.patched = 1;
         old.is_static = is_static;
         reset_hook_slot(g_java_hooks[slot]);   // release the newly reserved spare slot
         pthread_mutex_unlock(&g_java_hooks_lock);
         if (hook_id_out) *hook_id_out = hook_id;
+        env->DeleteLocalRef(target);
         LLOGI("java_hook reactivated id=%d target=%s", hook_id, signature.c_str());
         return 1;
     }
@@ -1038,7 +1071,7 @@ extern "C" int adh_javahook_hook_method(JNIEnv *env, const char *class_name, con
     env->SetBooleanField(bridge, g_bridge_is_static, is_static ? JNI_TRUE : JNI_FALSE);
     env->SetBooleanField(bridge, g_bridge_is_ctor, is_ctor ? JNI_TRUE : JNI_FALSE);
     env->SetObjectField(bridge, g_bridge_backup, nullptr);
-    env->SetBooleanField(bridge, g_bridge_active, JNI_FALSE);
+    if (!set_bridge_enabled(env, bridge, 0)) { env->DeleteGlobalRef(bridge); env->DeleteLocalRef(target); return fail_hook("failed to disable new Java bridge"); }
     env->SetBooleanField(bridge, g_bridge_skip_original, skip_original ? JNI_TRUE : JNI_FALSE);
     jstring override_string = env->NewStringUTF(override_return ? override_return : "");
     env->SetObjectField(bridge, g_bridge_override_return, override_string);
@@ -1104,7 +1137,6 @@ extern "C" int adh_javahook_hook_method(JNIEnv *env, const char *class_name, con
     }
     env->SetObjectField(bridge, g_bridge_backup, adh_backup);
     env->SetBooleanField(bridge, g_bridge_ready, JNI_TRUE);
-    env->SetBooleanField(bridge, g_bridge_active, JNI_TRUE);
 
     jobject target_global = env->NewGlobalRef(target);
     if (!target_global) {
@@ -1117,7 +1149,8 @@ extern "C" int adh_javahook_hook_method(JNIEnv *env, const char *class_name, con
     pthread_mutex_lock(&g_java_hooks_lock);
     JavaHookContext &ctx = g_java_hooks[slot];
     ctx.id = hook_id;
-    ctx.active = 1;
+    ctx.owner = owner;
+    ctx.active = 0;
     ctx.used = 1;
     ctx.target_method = target_global;
     ctx.backup_method = adh_backup;
@@ -1129,7 +1162,54 @@ extern "C" int adh_javahook_hook_method(JNIEnv *env, const char *class_name, con
     pthread_mutex_unlock(&g_java_hooks_lock);
 
     if (hook_id_out) *hook_id_out = hook_id;
+    if (owner == ADH_JAVA_OWNER_MANUAL && !adh_javahook_set_enabled(env,hook_id,owner,1)) {
+        // Keep the patched bridge and its undo metadata; do not reset a live LSPlant slot.
+        set_error(error,error_size,"Java bridge retained inactive: activation failed");return 0;
+    }
     LLOGI("java_hook installed id=%d target=%s", hook_id, signature.c_str());
+    return 1;
+}
+
+extern "C" int adh_javahook_hook_method(JNIEnv *env, const char *cls, const char *method,
+        const char *params, int skip, const char *ret, int arg, const char *value,
+        int stack, int quiet, int *id, char *error, size_t cap) {
+    return adh_javahook_hook_method_owned(env, ADH_JAVA_OWNER_MANUAL, cls, method, params,
+        skip, ret, arg, value, stack, quiet, id, error, cap);
+}
+extern "C" int adh_javahook_set_enabled(JNIEnv *env, int id, int owner, int enabled) {
+    if (!env || id <= 0) return 0;
+    int ok = 0;
+    pthread_mutex_lock(&g_java_hooks_lock);
+    for (JavaHookContext &hook : g_java_hooks) {
+        if (hook.id != id || hook.owner != owner || !hook.patched || !hook.bridge || hook.active == 2) continue;
+        int observed = env->GetBooleanField(hook.bridge,g_bridge_active) == JNI_TRUE;
+        if(adh_jni_exception_check(env)){adh_jni_exception_clear(env);break;}
+        if (observed == !!enabled) { hook.active = observed ? 1 : 0; ok = 1; break; }
+        if (set_bridge_enabled(env, hook.bridge, enabled)) { hook.active = enabled ? 1 : 0; ok = 1; }
+        break;
+    }
+    pthread_mutex_unlock(&g_java_hooks_lock);
+    return ok;
+}
+extern "C" int adh_javahook_get_enabled(JNIEnv *env, int id, int owner) {
+    if (!env || id <= 0) return -1;
+    int result = -1;
+    pthread_mutex_lock(&g_java_hooks_lock);
+    for (JavaHookContext &hook : g_java_hooks) {
+        if (hook.id != id || hook.owner != owner || !hook.patched || !hook.bridge || hook.active == 2) continue;
+        if (!g_bridge_active) break;
+        result = env->GetBooleanField(hook.bridge, g_bridge_active) == JNI_TRUE ? 1 : 0;
+        if (adh_jni_exception_check(env)) { adh_jni_exception_clear(env); result = -1; }
+        break;
+    }
+    pthread_mutex_unlock(&g_java_hooks_lock);
+    return result;
+}
+extern "C" int adh_javahook_clear_crypto(JNIEnv *env) {
+    if (!g_bridge_class) return 1;
+    if (!env || !g_bridge_clear_crypto) return 0;
+    env->CallStaticVoidMethod(g_bridge_class, g_bridge_clear_crypto);
+    if (adh_jni_exception_check(env)) { adh_jni_exception_clear(env); return 0; }
     return 1;
 }
 
@@ -1248,12 +1328,13 @@ extern "C" int adh_javahook_hook_all(JNIEnv *env, const char *class_name, const 
 }
 
 extern "C" int adh_javahook_set_crypto_mode(JNIEnv *env, int hook_id, int mode) {
-    if (!env || hook_id <= 0 || !g_bridge_crypto) return 0;
+    if (!env || hook_id <= 0) return 0;
     int ok = 0;
     pthread_mutex_lock(&g_java_hooks_lock);
     for (int i = 0; i < ADH_JAVA_MAX_HOOKS; i++) {
         JavaHookContext &hook = g_java_hooks[i];
-        if (hook.active == 1 && hook.id == hook_id && hook.bridge) {
+        if (hook.active != 2 && hook.patched && hook.id == hook_id && hook.bridge) {
+            if (!g_bridge_crypto) break;
             env->SetIntField(hook.bridge, g_bridge_crypto, mode);
             ok = 1;
             break;
@@ -1268,16 +1349,17 @@ extern "C" int adh_javahook_unhook_id(JNIEnv *env, int hook_id, char *error, siz
         set_error(error, error_size, "no JavaVM/JNIEnv available");
         return 0;
     }
-    int removed = 0, failed = 0;
+    int removed = 0, failed = 0, protected_hooks = 0;
     pthread_mutex_lock(&g_java_hooks_lock);
     for (int i = 0; i < ADH_JAVA_MAX_HOOKS; i++) {
         JavaHookContext &hook = g_java_hooks[i];
         if (hook.active != 1 || (hook_id != 0 && hook.id != hook_id)) continue;
+        if (hook.owner != ADH_JAVA_OWNER_MANUAL) { protected_hooks++; continue; }
         if (hook.bridge && g_bridge_active) {
             // Soft-unhook: keep the LSPlant hook and all refs installed, but make the bridge
             // forward straight to the backup. This avoids LSPlant UnHook races and lets a
             // later install reactivate the same target without consuming a new slot.
-            env->SetBooleanField(hook.bridge, g_bridge_active, JNI_FALSE);
+            if (!set_bridge_enabled(env, hook.bridge, 0)) { failed++; continue; }
             hook.active = 0;
             hook.id = 0;
             hook.patched = 1;
@@ -1288,7 +1370,7 @@ extern "C" int adh_javahook_unhook_id(JNIEnv *env, int hook_id, char *error, siz
     }
     pthread_mutex_unlock(&g_java_hooks_lock);
     if (removed == 0 && failed == 0) {
-        set_error(error, error_size, hook_id ? "no matching active Java hook" : "no active Java hooks");
+        set_error(error, error_size, protected_hooks ? "capture-owned Java hooks require capture settings" : (hook_id ? "no matching active Java hook" : "no active Java hooks"));
         return 0;
     }
     if (failed) {
@@ -1328,6 +1410,7 @@ extern "C" int adh_javahook_status_json(JNIEnv *env, char *out, size_t out_size)
         }
         if (active_count) hooks += ",";
         hooks += "{\"id\":" + std::to_string(hook.id) +
+                 ",\"owner\":\"" + std::string(hook.owner == ADH_JAVA_OWNER_CAPTURE ? "capture" : "manual") + "\"" +
                  ",\"target\":\"" + json_escape(hook.target_name) + "\"" +
                  ",\"hits\":" + std::to_string(hits) +
                  ",\"lastArg\":\"" + json_escape(last_arg) + "\"" +

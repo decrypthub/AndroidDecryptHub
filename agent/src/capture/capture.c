@@ -7,6 +7,7 @@
 #include "../runtime/jni.h"
 
 #include "../runtime/jni_env_hooks.h"
+#include "../hook/java_crypto.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -1116,6 +1117,11 @@ void adh_capture_set_families(int digest, int hmac, int symmetric, int asymmetri
     g_families.tls = tls ? 1 : 0;
     g_families.aead = aead ? 1 : 0;
     g_families.system = system ? 1 : 0;
+#ifdef ADH_HAVE_LSPLANT
+    adh_java_crypto_set_families((digest ? ADH_CF_DIGEST : 0) | (hmac ? ADH_CF_HMAC : 0) |
+        (symmetric ? ADH_CF_SYMMETRIC : 0) | (asymmetric ? ADH_CF_ASYMMETRIC : 0) |
+        (tls ? ADH_CF_TLS : 0) | (aead ? ADH_CF_AEAD : 0) | (system ? ADH_CF_SYSTEM : 0));
+#endif
 }
 
 void adh_capture_get_families(int *digest, int *hmac, int *symmetric, int *asymmetric, int *tls, int *aead, int *system) {
@@ -1561,6 +1567,10 @@ void adh_cmd_capture_start(int fd, const char *id, const char *cryptoModule, con
 void adh_cmd_capture_stop(int fd, const char *id) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
     adh_capture_sender_stop(0);
+    int java_pending = 0;
+#ifdef ADH_HAVE_LSPLANT
+    java_pending = adh_java_crypto_stop();
+#endif
     int restored[17]; capture_native_restore(restored);
     int e = restored[0];
     int w = restored[1];
@@ -1580,7 +1590,7 @@ void adh_cmd_capture_stop(int fd, const char *id) {
     int dvu = restored[15];
     int dvf = restored[16];
     unsigned pending_slots = adh_capture_got_pending();
-    g_capture_on = pending_slots ? 1 : 0;
+    g_capture_on = (pending_slots || java_pending) ? 1 : 0;
     if (!pending_slots) capture_method_results_reset();
     cap_reset();
     // Keys outlive a single Cipher only until capture stops; drop the table so a later capture_start
@@ -1591,10 +1601,10 @@ void adh_cmd_capture_stop(int fd, const char *id) {
         pthread_mutex_unlock(&g_key_lock);
     }
     char out[700];
-    snprintf(out, sizeof(out), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"capture_stop\",\"ok\":%s,\"on\":%s,\"pendingSlots\":%u,\"restored\":{\"evp\":%d,\"digest\":%d,\"hmac\":%d,\"digestSign\":%d,\"sslWrite\":%d,\"sslRead\":%d,"
+    snprintf(out, sizeof(out), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"capture_stop\",\"ok\":%s,\"on\":%s,\"pendingSlots\":%u,\"javaPending\":%d,\"restored\":{\"evp\":%d,\"digest\":%d,\"hmac\":%d,\"digestSign\":%d,\"sslWrite\":%d,\"sslRead\":%d,"
         "\"pkeySign\":%d,\"pkeyVerify\":%d,\"pkeyEncrypt\":%d,\"pkeyDecrypt\":%d,\"aeadSeal\":%d,\"aeadOpen\":%d,"
         "\"digestSignInit\":%d,\"digestVerifyInit\":%d,\"digestSignFinal\":%d,\"digestVerifyUpdate\":%d,\"digestVerifyFinal\":%d}}\n",
-        idj, pending_slots ? "false" : "true", pending_slots ? "true" : "false", pending_slots, e, dg, hm, ds, w, r, pks, pkv, pke, pkd, aes, aeo, dsi, dvi, dsf, dvu, dvf);
+        idj, g_capture_on ? "false" : "true", g_capture_on ? "true" : "false", pending_slots, java_pending, e, dg, hm, ds, w, r, pks, pkv, pke, pkd, aes, aeo, dsi, dvi, dsf, dvu, dvf);
     if (fd >= 0) send_line(fd, out);
     LOGI("capture_stop: restored evp=%d sslw=%d sslr=%d", e, w, r);
 }

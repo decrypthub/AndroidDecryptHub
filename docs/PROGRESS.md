@@ -1,5 +1,14 @@
 # PROGRESS — 跨会话进度看板
 
+## 2026-11-27 通宵优化进行中：Java 精确重载、稳定开关与统一停止
+
+- Java 采集不再丢弃一次性 jobs：按 bootstrap JCA 类实际反射的完整参数签名生成有界目录（最多 40，超限/缺类明确报告），排序后绑定目录版本与 revision；保留每个重载的 Hook ID、采集 owner、选择、依赖、错误和真实 active 读回。Cipher/Mac 的 doFinal 及签名 sign/verify 明确依赖各自 init 重载，缺依赖的项不可冒充有效。
+- 安装先保持 inactive、设置采集模式，再按当前策略 generation 启用；反复关闭/开启复用原 ID 和已补丁槽。手动 Hook 与采集 owner 隔离，同签名冲突明确拒绝，通用 unhook 不清除采集 Hook。Java 停用为 **soft-disabled**，方法补丁仍在，不能称物理卸载；总计仍受 64 个已补丁槽限制。
+- 新增 `java_capture` 的 discover/status/set/start/stop，配置要求目录及 revision，活动/settling 状态不能直接改选择。修复 worker 退出时的丢唤醒；`capture_stop` 同时停 Java，保留失败并通过 javaPending 返回未完成，清除旧密钥 memo，后续可重试。
+- Java bridge 用同步 observation epoch 隔离关闭再开启前的旧调用；不在原方法执行期间持有观察锁，保持原返回/异常身份；参数、栈和返回值按单次调用传递，避免并发调用拼错参数与结果。重新使用旧 bridge 同步重置 quiet/crypto 配置。
+- 实际 JVM bridge/字节码 **28/28**，生产目录/reconcile/owner/stop/command C++ 夹具 **21/21**，生产 Native start/stop C 夹具 **53/53**。本阶段源码基线分别 **20/28、0/21、51/53**；累计初始恢复点与真实 rollback 分别 **5/28、0/21、1/53**，原始文件逐字节恢复，补丁实际重建候选。JNI/ART 安装与调度适配为 mock，不能当作手机 LSPlant 实测。
+- DEX/header 已重新生成，NDK 构建及类型检查通过；Host 官方 runner **778 pass / 0 fail / 0 skip**。正在准备隔离 Sandbox 的真机验证；Host 两级事务、可信双机作用域、Web/Manager 设置、全功能矩阵、最终无上下文体验和最后收尾仍未完成。
+
 ## 2026-11-27 通宵优化进行中：逐槽恢复与真实所有权回读
 
 - 持久采集改走独立的有界 GOT 账本：保存每个槽原来的指针和页面保护，支持不同模块的 PLT/既有 Hook 原值；不混用通用 Native Hook 槽。恢复用比较交换，后来被其他 Hook 接管的槽保留对方值并记录冲突，不以符号名强行覆盖。

@@ -1,6 +1,7 @@
 // The test generator places this around the shipping capture policy/start/stop functions.
 // GOT slots, symbol resolution and sender I/O are deterministic mocks; no Android is claimed.
 #ifdef ADH_FIXTURE_PRELUDE
+#define ADH_HAVE_LSPLANT 1
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -14,6 +15,10 @@ typedef int socklen_t;
 static int getsockopt(int a,int b,int c,int*d,socklen_t*e) { return -1; }
 static void adh_capture_sender_start(int fd) {}
 static void adh_capture_sender_stop(int fd) {}
+static int java_pending_fixture, java_stop_calls;
+static unsigned java_family_fixture;
+static int adh_java_crypto_stop(void) { java_stop_calls++; return java_pending_fixture; }
+static void adh_java_crypto_set_families(unsigned mask) { java_family_fixture = mask; }
 static int g_key_lock, g_key_next;
 static char g_keys[4];
 static int pthread_mutex_trylock(int *lock) { return 1; }
@@ -107,7 +112,13 @@ static void select_bits(uint32_t bits,const char *expected) {
 int main(int argc,char**argv) {
  CHECK(argc==2);const char*name=argv[1];
  for(int b=0;b<2;b++)for(int i=0;i<31;i++)slots[b][i]=&originals[i];
- if(!strcmp(name,"exact-prior")||!strcmp(name,"multi-prior")) {
+ if(!strcmp(name,"java-stop")) {
+   adh_cmd_capture_start(-1,"f","cryptoA","fileA","");java_pending_fixture=2;
+   adh_cmd_capture_stop(1,"f");CHECK(java_stop_calls==1);CHECK(strstr(reply,"\"ok\":false"));CHECK(strstr(reply,"\"javaPending\":2"));CHECK(g_capture_on);
+   java_pending_fixture=0;adh_cmd_capture_stop(1,"f");CHECK(java_stop_calls==2);CHECK(strstr(reply,"\"ok\":true"));CHECK(!g_capture_on);
+ } else if(!strcmp(name,"java-family-policy")) {
+   adh_capture_set_families(0,1,0,0,0,0,0);CHECK(java_family_fixture==2);
+ } else if(!strcmp(name,"exact-prior")||!strcmp(name,"multi-prior")) {
    static char priorA,priorB;slots[0][8]=&priorA;slots[1][8]=&priorB;
    select_bits(UINT32_C(1)<<8,NULL);
    adh_cmd_capture_start(-1,"f",!strcmp(name,"multi-prior")?"":"cryptoA","","");

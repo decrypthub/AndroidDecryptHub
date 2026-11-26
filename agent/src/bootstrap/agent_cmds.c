@@ -48,7 +48,7 @@ static const char *ADH_AGENT_OPS[] = {
     "native_call", "got_enum", "stealth", "javahook_probe", "gothook_selftest", "capture_start",
     "capture_drain", "capture_stop", "trigger", "load_so", "file_probe", "qbdi_trace", "qbdi_read",
     "compat_probe", "object_inspect", "object_set", "object_invoke", "art_dexfiles", "list_dir",
-    "read_file", "scan_magic", "mem_backend", "search", "frame_echo", "ping", "module_watch", "capture_policy", "capture_methods",
+    "read_file", "scan_magic", "mem_backend", "search", "frame_echo", "ping", "module_watch", "capture_policy", "capture_methods", "java_capture",
 };
 
 static void send_caps(int fd) {
@@ -807,6 +807,13 @@ static void cmd_got_enum(int fd, const char *id, const char *module, const char 
                     char waction[16] = "";
                     json_get_str(line, "action", waction, sizeof(waction));
                     adh_cmd_module_watch(fd, id, waction);
+                } else if (strcmp(op, "java_capture") == 0) {
+#ifdef ADH_HAVE_LSPLANT
+                    adh_cmd_java_capture(fd, id, line);
+#else
+                    char idj[128], out[256]; json_escape(id,idj,sizeof(idj));
+                    snprintf(out,sizeof(out),"{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"java_capture\",\"ok\":false,\"error\":\"JAVA_BACKEND_UNAVAILABLE\"}",idj);send_line(fd,out);
+#endif
                 } else if (strcmp(op, "capture_methods") == 0) {
                     adh_cmd_capture_methods(fd, id, line);
                 } else if (strcmp(op, "capture_policy") == 0) {

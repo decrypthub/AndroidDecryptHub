@@ -42,6 +42,17 @@ public final class AdhJavaHookBridge extends X509ExtendedTrustManager implements
     public String target;
     public volatile boolean ready;
     public volatile boolean active;
+    public volatile long observationEpoch;
+
+    // Native controllers MUST use this method, not assign active directly. The monitor
+    // is held only for observations/configuration, never while invoking the original.
+    public synchronized void setEnabled(boolean enabled) {
+        active = false;
+        if (observationEpoch == Long.MAX_VALUE) throw new IllegalStateException("hook observation epoch exhausted");
+        observationEpoch++;
+        active = enabled;
+    }
+    private boolean observing(long epoch) { return active && observationEpoch == epoch; }
     public boolean skipOriginal;
     public String overrideReturn;
     public int argIndex = -1;
@@ -62,6 +73,10 @@ public final class AdhJavaHookBridge extends X509ExtendedTrustManager implements
     private static final HashMap<Integer, byte[]> KEYS = new HashMap<Integer, byte[]>();
     private static final HashMap<Integer, byte[]> IVS = new HashMap<Integer, byte[]>();
 
+    public static void clearCryptoMemo() {
+        synchronized (MEM) { OPS.clear(); KEYS.clear(); IVS.clear(); }
+    }
+
     private static native void nativeReport(int hookId, String target, String arg, String ret, String error, String stack);
     private static native void nativeCrypto(String algo, String op, byte[] key, byte[] iv, byte[] in, byte[] out);
 
@@ -74,10 +89,10 @@ public final class AdhJavaHookBridge extends X509ExtendedTrustManager implements
         }
     }
 
-    private void report(String arg, String ret, String error) {
-        if (!active) return;
+    private void report(long epoch, String arg, String ret, String error, String stack) {
+        if (!observing(epoch)) return;
         if (silent) return;
-        nativeReport(hookId, target, arg, ret, error, lastStack);
+        nativeReport(hookId, target, arg, ret, error, stack);
     }
 
     /** One trust-all manager. Conscrypt and TrustManagerFactory both accept this instance. */
@@ -101,119 +116,95 @@ public final class AdhJavaHookBridge extends X509ExtendedTrustManager implements
     @Override public boolean verify(String hostname, SSLSession session) { return true; }
 
     public Object callback(Object[] args) throws Throwable {
-        if (!active) return originalUnobserved(args);
-        hits++;
-        if (silent && cryptoMode == 0 && hits == 1) noteHit();
-        if (captureStack) {
-            try {
-                lastStack = stackTrace();
-            } catch (Throwable t) {
-                lastStack = "<stack capture failed: " + t + ">";
+        final long epoch;
+        final boolean observe;
+        String argText = "", stackText = "";
+        synchronized (this) {
+            epoch = observationEpoch;
+            observe = observing(epoch);
+            if (observe) {
+                hits++;
+                if (silent && cryptoMode == 0 && hits == 1) noteHit();
+                String stack = "";
+                if (captureStack) {
+                    try { stack = stackTrace(); } catch (Throwable t) { stack = "<stack capture failed>"; }
+                }
+                String arg;
+                try { arg = renderArgs(args, isStatic ? 0 : 1); } catch (Throwable t) { arg = "<toString failed>"; }
+                // toString/getEncoded can themselves call a controller on this same thread.
+                argText = arg; stackText = stack;
+                if (observing(epoch)) { lastStack = stackText; lastArg = argText; }
             }
-        } else {
-            lastStack = "";
         }
-        int first = isStatic ? 0 : 1;
-        try {
-            lastArg = renderArgs(args, first);
-        } catch (Throwable t) {
-            lastArg = "<toString failed>";
-        }
+        if (!observe) return originalUnobserved(args);
         if (!ready) {
             long deadline = System.nanoTime() + 50_000_000L;
             while (!ready && System.nanoTime() < deadline) Thread.yield();
         }
         if (!ready || backup == null) {
-            if (active) {
-                lastError = "hook backup not ready";
-                report(lastArg, "", lastError);
-            }
+            observedError(epoch, argText, stackText, "hook backup not ready");
             throw new IllegalStateException("hook backup not ready");
         }
         Object receiver = isStatic ? null : (args != null && args.length > 0 ? args[0] : null);
         Object[] params = isStatic
             ? (args != null ? args : new Object[0])
             : (args != null && args.length > 1 ? Arrays.copyOfRange(args, 1, args.length) : new Object[0]);
-        if (active && argIndex >= 0 && argIndex < params.length) {
-            try {
-                Object rewritten;
-                if ("@trust".equals(argValue)) {
-                    rewritten = trustManagers();
-                    lastArg = "trust-all";
-                } else {
-                    Class<?>[] types = backup.getParameterTypes();
-                    rewritten = convertReturn(argValue, types[argIndex]);
-                    lastArg = rewritten == null ? "null" : String.valueOf(rewritten);
+        synchronized (this) {
+            if (observing(epoch) && argIndex >= 0 && argIndex < params.length) {
+                try {
+                    Object rewritten;
+                    if ("@trust".equals(argValue)) rewritten = trustManagers();
+                    else rewritten = convertReturn(argValue, backup.getParameterTypes()[argIndex]);
+                    String rendered = rewritten == null ? "null" : String.valueOf(rewritten);
+                    if (observing(epoch)) { params[argIndex] = rewritten; argText = "@trust".equals(argValue) ? "trust-all" : rendered; lastArg = argText; }
+                } catch (Throwable t) {
+                    observedError(epoch, argText, stackText, "argument rewrite failed: " + t); throw t;
                 }
-                params[argIndex] = rewritten;
-            } catch (Throwable t) {
-                if (active) {
-                    lastError = "argument rewrite failed: " + t;
-                    report(lastArg, "", lastError);
-                }
-                throw t;
             }
         }
         if (isConstructor) {
             try {
                 backup.invoke(receiver, params);
-                if (!active) return receiver;
-                lastReturn = bounded(receiver);
-                lastError = "";
-                report(lastArg, lastReturn, lastError);
+                observedReturn(epoch, argText, stackText, receiver, params, receiver, false);
                 return receiver;
             } catch (InvocationTargetException e) {
                 Throwable cause = e.getCause() != null ? e.getCause() : e;
-                if (active) {
-                    lastError = String.valueOf(cause);
-                    report(lastArg, "", lastError);
-                }
-                throw cause;
-            } catch (Throwable t) {
-                if (active) {
-                    lastError = String.valueOf(t);
-                    report(lastArg, "", lastError);
-                }
-                throw t;
-            }
+                observedError(epoch, argText, stackText, cause); throw cause;
+            } catch (Throwable t) { observedError(epoch, argText, stackText, t); throw t; }
         }
-        if (active && skipOriginal) {
-            try {
-                Object replaced = skippedReturn(params);
-                lastReturn = bounded(replaced);
-                lastError = "";
-                report(lastArg, lastReturn, lastError);
-                return replaced;
-            } catch (Throwable t) {
-                if (active) {
-                    lastError = "return override failed: " + t;
-                    report(lastArg, "", lastError);
-                }
-                throw t;
+        synchronized (this) {
+            if (observing(epoch) && skipOriginal) {
+                try {
+                    Object replaced = skippedReturn(params);
+                    observedReturn(epoch, argText, stackText, receiver, params, replaced, false);
+                    return replaced;
+                } catch (Throwable t) { observedError(epoch, argText, stackText, "return override failed: " + t); throw t; }
             }
         }
         try {
             Object result = backup.invoke(receiver, params);
-            if (!active) return result;
-            lastReturn = bounded(result);
-            lastError = "";
-            report(lastArg, lastReturn, lastError);
-            if (cryptoMode != 0) recordCrypto(receiver, params, result);
+            observedReturn(epoch, argText, stackText, receiver, params, result, true);
             return result;
         } catch (InvocationTargetException e) {
             Throwable cause = e.getCause() != null ? e.getCause() : e;
-            if (active) {
-                lastError = String.valueOf(cause);
-                report(lastArg, "", lastError);
-            }
-            throw cause;
-        } catch (Throwable t) {
-            if (active) {
-                lastError = String.valueOf(t);
-                report(lastArg, "", lastError);
-            }
-            throw t;
-        }
+            observedError(epoch, argText, stackText, cause); throw cause;
+        } catch (Throwable t) { observedError(epoch, argText, stackText, t); throw t; }
+    }
+
+    private synchronized void observedReturn(long epoch, String arg, String stack, Object receiver, Object[] params, Object result, boolean crypto) {
+        if (!observing(epoch)) return;
+        String rendered = bounded(result);
+        if (!observing(epoch)) return;
+        lastArg = arg; lastStack = stack; lastReturn = rendered; lastError = "";
+        report(epoch, arg, lastReturn, lastError, stack);
+        if (crypto && cryptoMode != 0 && observing(epoch)) recordCrypto(epoch, receiver, params, result);
+    }
+    private synchronized void observedError(long epoch, String arg, String stack, Object error) {
+        if (!observing(epoch)) return;
+        String rendered = String.valueOf(error);
+        if (!observing(epoch)) return;
+        lastArg = arg; lastStack = stack; lastError = rendered;
+        report(epoch, arg, "", lastError, stack);
     }
 
     /** Soft-disabled hooks must call the original without observing or rewriting it. */
@@ -413,8 +404,8 @@ public final class AdhJavaHookBridge extends X509ExtendedTrustManager implements
         throw new IllegalArgumentException("unsupported return override type " + type.getName());
     }
 
-    private void recordCrypto(Object receiver, Object[] params, Object result) {
-        if (!active) return;
+    private void recordCrypto(long epoch, Object receiver, Object[] params, Object result) {
+        if (!observing(epoch)) return;
         try {
             int id = receiver == null ? 0 : System.identityHashCode(receiver);
             String algo = algorithm(receiver);
@@ -422,6 +413,7 @@ public final class AdhJavaHookBridge extends X509ExtendedTrustManager implements
                 String op = cryptoMode == 1 ? opMode(params) : (cryptoMode == 3 ? "mac" : sigOp());
                 byte[] key = encodedKey(params);
                 byte[] iv = parameterIv(params);
+                if (!observing(epoch)) return;
                 remember(id, op, key, iv);
                 nativeCrypto(algo, op, key, iv, null, null);
                 return;
@@ -436,7 +428,7 @@ public final class AdhJavaHookBridge extends X509ExtendedTrustManager implements
             }
             byte[] in = inputBytes(params);
             byte[] out = result instanceof byte[] ? (byte[]) result : null;
-            nativeCrypto(algo, op, key, iv, in, out);
+            if (observing(epoch)) nativeCrypto(algo, op, key, iv, in, out);
         } catch (Throwable ignored) {
         }
     }

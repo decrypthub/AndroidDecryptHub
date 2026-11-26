@@ -37,7 +37,7 @@ test('embedded Java bridge declares the exact source hash, preventing forgotten 
   assert.equal(declared,expected,'Java bridge changed without regenerating DEX/header');
 });
 
-for(const name of ['inactive-static','inactive-crypto','inactive-nonsilent','inactive-instance','inactive-constructor','inactive-exception','inactive-void','inactive-null-args','inactive-not-ready','inactive-argument-observation','inactive-return-observation','deactivate-during-return','deactivate-during-exception','active-positive-control','active-crypto-positive-control','active-argument-rewrite','active-return-override','reactivate-positive-control']) {
+for(const name of ['inactive-static','inactive-crypto','inactive-nonsilent','inactive-instance','inactive-constructor','inactive-exception','inactive-void','inactive-null-args','inactive-not-ready','inactive-argument-observation','inactive-return-observation','deactivate-during-return','deactivate-during-exception','active-positive-control','active-crypto-positive-control','active-argument-rewrite','active-return-override','reactivate-positive-control','epoch-return','epoch-exception','epoch-argument-render','epoch-return-render','epoch-original-unlocked','clear-crypto-memo','epoch-exhaustion','concurrent-call-provenance']) {
   test(`real compiled Java bridge: ${name}`,{skip:available?false:'JDK unavailable; this compiled-source regression requires javac and java'},()=>{
     assert.equal(compilation!.status,0,`javac failed: ${compilation!.stderr}`);
     const result=spawnSync(java,['-cp',dir!,'HookBridgeLifecycleFixture',name],{encoding:'utf8',windowsHide:true,timeout:10000});

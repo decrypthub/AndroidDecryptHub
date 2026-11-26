@@ -45,7 +45,7 @@ test('shipping capture installers and stop are wired to the exact-prior ownershi
  assert.match(got,/capture_owned \? adh_capture_slot_publish/);
  assert.match(got,/adh_capture_slot_restore\(&g_capture_slots/);
 });
-for(const name of ['defaults','none','single-tls','cipher-dependencies','shared-hmac','family-off','repeat-retarget','stop-ownership','revision','active-reject','catalog-status','malformed','exact-prior','multi-prior','unreadable-stop','capacity','publish-failure','live-ownership',...Array.from({length:31},(_,i)=>`method-${i}`)]) {
+for(const name of ['defaults','none','single-tls','cipher-dependencies','shared-hmac','family-off','repeat-retarget','stop-ownership','revision','active-reject','catalog-status','malformed','exact-prior','multi-prior','unreadable-stop','capacity','publish-failure','live-ownership','java-stop','java-family-policy',...Array.from({length:31},(_,i)=>`method-${i}`)]) {
  test(`compiled shipping Native policy/start/stop: ${name}`,{skip:available?false:'C compiler absent; deterministic mocked-GOT fixture requires cc'},()=>{
    assert.equal(compiled!.status,0,`fixture C compile failed:\n${compiled!.stdout}\n${compiled!.stderr}`);
    const r=spawnSync(join(dir!,process.platform==='win32'?'fixture.exe':'fixture'),[name],{encoding:'utf8',windowsHide:true,timeout:10000});

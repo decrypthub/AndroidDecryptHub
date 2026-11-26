@@ -58,6 +58,15 @@ int adh_javahook_unhook_id(JNIEnv *env, int hook_id, char *error, size_t error_s
 // Mark one installed hook as a Java algorithm probe. The bridge still calls the original,
 // then records algorithm/op/key/iv/input/output into the rich-capture buffer.
 int adh_javahook_set_crypto_mode(JNIEnv *env, int hook_id, int mode);
+#define ADH_JAVA_OWNER_MANUAL 0
+#define ADH_JAVA_OWNER_CAPTURE 1
+// Capture owners retain their id while soft-disabled; generic unhook cannot hijack them.
+int adh_javahook_hook_method_owned(JNIEnv *env, int owner, const char *class_name, const char *method_name,
+    const char *params, int skip_original, const char *override_return, int arg_index, const char *arg_value,
+    int capture_stack, int quiet, int *hook_id_out, char *error, size_t error_size);
+int adh_javahook_set_enabled(JNIEnv *env, int hook_id, int owner, int enabled);
+int adh_javahook_get_enabled(JNIEnv *env, int hook_id, int owner); // 1 on, 0 off, -1 missing/wrong owner/error
+int adh_javahook_clear_crypto(JNIEnv *env);
 int adh_javahook_status_json(JNIEnv *env, char *out, size_t out_size);            // 1 ok, 0 fail
 // Capability report, not a guess: 1 = LSPlant initialized its JIT movement tracking, 0 = it did
 // not. With 0, a hooked method's backup can be left pointing at code the JIT later frees, so
