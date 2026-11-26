@@ -78,13 +78,13 @@ test('each exchange is anchored to the capture record that carried its own reque
   // 一条请求只认自己那几条记录；两条响应落在同一个 SSL_read 里，所以 12 在两条里都出现。
   assert.deepEqual(out.exchanges[0].captureIds, [10, 12]);
   assert.deepEqual(out.exchanges[1].captureIds, [11, 12]);
-  // 面板用「所有 captureIds ∪ consumedIds」判断哪些 TLS 记录没拼成 HTTP；这里两侧都完整，
-  // 合并后必须覆盖全部记录（不完整消息的场景见下一个测试）。
+  // captureIds ∪ consumedIds 必须覆盖这条连接的全部记录。面板已不再显示「未拼成 HTTP」条数，
+  // 这个契约仍由 API/MCP 消费者使用（不完整消息的场景见下一个测试）。
   assert.deepEqual([...new Set(out.exchanges.flatMap((e) => e.captureIds))].sort((a, b) => a - b), [10, 11, 12]);
   assert.deepEqual(out.consumedIds, []);
 });
 
-test('records of a parsed connection that no row names are consumed, not reported as non-HTTP', () => {
+test('records of a parsed connection that no row names are consumed, not counted as non-HTTP', () => {
   seq = 1;
   const out = assembleHttpExchanges([
     chunk('SSL_write', 'GET /a HTTP/1.1\r\nHost: h\r\n\r\n', { id: 10 }),
@@ -95,7 +95,7 @@ test('records of a parsed connection that no row names are consumed, not reporte
   assert.equal(out.exchanges[0].label, 'GET https://h/a');
   assert.deepEqual(out.exchanges[0].captureIds, [10]);
   assert.deepEqual(out.consumedIds, [11]);
-  // 面板的 used 集合（captureIds ∪ consumedIds）仍然覆盖这条连接的全部记录。
+  // captureIds ∪ consumedIds 仍然覆盖这条连接的全部记录（这条断言守的是数据契约，不是面板显示）。
   const used = new Set([...out.exchanges.flatMap((e) => e.captureIds), ...out.consumedIds]);
   assert.deepEqual([...used].sort((a, b) => a - b), [10, 11]);
 });

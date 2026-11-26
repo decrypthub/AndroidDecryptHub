@@ -485,8 +485,8 @@ export function assembleHttpExchanges(records: TlsChunk[]): HttpAssembly {
     const n = Math.max(requests.messages.length, responses.messages.length);
     // Records this connection used but no row owns (a half-written message, a tail chunk that
     // precedes the first request) still belong to a parsed HTTP connection. They go to
-    // consumedIds so the panel's "not HTTP" count only covers records that really were not
-    // folded into any exchange.
+    // consumedIds so a client can separate "folded into this connection, just not into a row"
+    // from "not HTTP at all". The panel no longer renders that count; the API still exposes it.
     const claimed = new Set<number>();
     for (let i = 0; i < n; i++) {
       const req = requests.messages[i];
