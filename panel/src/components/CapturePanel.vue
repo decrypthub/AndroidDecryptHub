@@ -346,10 +346,6 @@ function clearView() {
   toast(`已清空本页 ${n} 条`);
 }
 
-// 弹层外部点击关闭
-function onDocClick(e: MouseEvent) {
-  if (!(e.target as HTMLElement).closest('.filter-wrap')) advOpen.value = false;
-}
 const MORE_OPTS = [
   { label: '下载本页', key: 'dl' },
   { label: '清空本页', key: 'clear', props: { style: 'color:#f87171' } },
@@ -383,14 +379,12 @@ function startDrag(e: MouseEvent) {
 let poll = 0;
 onMounted(() => {
   if (props.kind === 'net') void loadExchanges();
-  document.addEventListener('click', onDocClick);
   poll = window.setInterval(() => {
     if (props.kind === 'net') scheduleExchanges();
   }, 5000);
 });
 onUnmounted(() => {
   clearInterval(poll);
-  document.removeEventListener('click', onDocClick);
 });
 watch(() => store.chosenPkg, () => {
   sel.value = null; selDetail.value = null; selExchange.value = null;
@@ -466,55 +460,12 @@ const searchPlaceholder = computed(() =>
             class="toolbar-search-input">
             <template #prefix><n-icon :component="SearchOutline" class="search-ico" /></template>
           </n-input>
-          <div class="menu-wrap filter-wrap">
-            <n-button size="small" :secondary="!advCount" :type="advCount ? 'primary' : 'default'"
-              @click="advOpen = !advOpen">
-              筛选<template v-if="advCount"> · {{ advCount }}</template>
-            </n-button>
-            <section class="advanced-filters" :hidden="!advOpen">
-              <div class="advanced-filter-head">
-                <strong>事件筛选</strong>
-                <n-button text size="small" type="primary" :disabled="!filterActive" @click="resetFilter">重置筛选</n-button>
-              </div>
-              <fieldset v-if="kind === 'system'" class="system-filter">
-                <legend>活动类型</legend>
-                <n-radio-group v-model:value="filter.kind" size="small">
-                  <n-radio-button v-for="[k, l] in SYS_KINDS" :key="k" :value="k">{{ l }}</n-radio-button>
-                </n-radio-group>
-              </fieldset>
-              <label v-if="kind === 'crypto'" class="filter-field">分类
-                <n-select v-model:value="filter.cat" size="small" class="cat-select" :options="[
-                    { label: '全部', value: -2 }, { label: '摘要', value: 0 }, { label: 'HMAC', value: 1 },
-                    { label: '对称', value: 2 }, { label: '非对称', value: 3 }, { label: 'AEAD', value: 4 },
-                  ]" />
-              </label>
-              <div class="size-filter">
-                <label>输入大小</label>
-                <n-input-number v-model:value="filter.min" size="small" :min="0" placeholder="0" class="size-num" />
-                <span class="sep">—</span>
-                <n-input-number v-model:value="filter.max" size="small" :min="0" placeholder="不限" class="size-num" />
-                <span class="unit">B</span>
-              </div>
-              <fieldset class="time-filter">
-                <legend>时间范围</legend>
-                <div class="time-quick">
-                  <n-button size="tiny" @click="setQuickMinutes(1)">近 1 分钟</n-button>
-                  <n-button size="tiny" @click="setQuickMinutes(5)">近 5 分钟</n-button>
-                  <n-button size="tiny" @click="setQuickMinutes(30)">近 30 分钟</n-button>
-                  <n-button v-if="hasTimeRange" size="tiny" tertiary @click="clearTimeRange">清除</n-button>
-                </div>
-                <div class="time-inputs">
-                  <n-date-picker v-model:value="fromMs" type="datetime" size="small" clearable
-                    placeholder="开始时间" @update:value="applyTimeRange" />
-                  <span class="sep">至</span>
-                  <n-date-picker v-model:value="toMs" type="datetime" size="small" clearable
-                    placeholder="结束时间" @update:value="applyTimeRange" />
-                </div>
-              </fieldset>
-            </section>
-          </div>
         </div>
         <div class="toolbar-actions">
+          <n-button size="small" :secondary="!advCount" :type="advCount ? 'primary' : 'default'"
+            :aria-expanded="advOpen" @click="advOpen = true">
+            筛选<template v-if="advCount"> · {{ advCount }}</template>
+          </n-button>
           <span id="count">{{ countText }}</span>
           <n-button size="small" :type="filter.paused ? 'warning' : 'default'" secondary
             :title="filter.paused ? '恢复列表刷新' : '只停列表刷新'"
@@ -525,6 +476,53 @@ const searchPlaceholder = computed(() =>
         </div>
       </div>
     </div>
+
+    <n-modal v-model:show="advOpen" preset="card" title="筛选" size="small" content-scrollable
+      style="width:min(430px, calc(100vw - 28px))">
+      <div class="filter-modal-body">
+        <fieldset v-if="kind === 'system'" class="system-filter">
+          <legend>活动类型</legend>
+          <n-radio-group v-model:value="filter.kind" size="small">
+            <n-radio-button v-for="[k, l] in SYS_KINDS" :key="k" :value="k">{{ l }}</n-radio-button>
+          </n-radio-group>
+        </fieldset>
+        <label v-if="kind === 'crypto'" class="filter-field">分类
+          <n-select v-model:value="filter.cat" size="small" class="cat-select" :options="[
+              { label: '全部', value: -2 }, { label: '摘要', value: 0 }, { label: 'HMAC', value: 1 },
+              { label: '对称', value: 2 }, { label: '非对称', value: 3 }, { label: 'AEAD', value: 4 },
+            ]" />
+        </label>
+        <div class="size-filter">
+          <label>输入大小</label>
+          <n-input-number v-model:value="filter.min" size="small" :min="0" placeholder="0" class="size-num" />
+          <span class="sep">—</span>
+          <n-input-number v-model:value="filter.max" size="small" :min="0" placeholder="不限" class="size-num" />
+          <span class="unit">B</span>
+        </div>
+        <fieldset class="time-filter">
+          <legend>时间范围</legend>
+          <div class="time-quick">
+            <n-button size="tiny" @click="setQuickMinutes(1)">近 1 分钟</n-button>
+            <n-button size="tiny" @click="setQuickMinutes(5)">近 5 分钟</n-button>
+            <n-button size="tiny" @click="setQuickMinutes(30)">近 30 分钟</n-button>
+            <n-button v-if="hasTimeRange" size="tiny" tertiary @click="clearTimeRange">清除</n-button>
+          </div>
+          <div class="time-inputs">
+            <n-date-picker v-model:value="fromMs" type="datetime" size="small" clearable
+              placeholder="开始时间" @update:value="applyTimeRange" />
+            <span class="sep">至</span>
+            <n-date-picker v-model:value="toMs" type="datetime" size="small" clearable
+              placeholder="结束时间" @update:value="applyTimeRange" />
+          </div>
+        </fieldset>
+      </div>
+      <template #footer>
+        <div class="filter-modal-footer">
+          <n-button text size="small" type="primary" :disabled="!filterActive" @click="resetFilter">重置筛选</n-button>
+          <n-button size="small" type="primary" @click="advOpen = false">完成</n-button>
+        </div>
+      </template>
+    </n-modal>
 
     <div class="workspace capture-workspace" :class="{ 'compact-captures': panelDisplay.density === 'compact', 'detail-open': sel !== null, 'no-results': !listLoading && sel === null && !(kind === 'net' ? matchedExchanges.length : rows.length) }">
       <div class="list-pane" :style="listWidth ? { width: listWidth + 'px' } : undefined">
@@ -636,6 +634,8 @@ const searchPlaceholder = computed(() =>
   gap: 6px;
 }
 .page-cap-select { width: 96px; }
+.filter-modal-body { display: grid; gap: 12px; }
+.filter-modal-footer { width: 100%; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .cat-select { width: 110px; }
 .size-num { width: 88px; }
 .time-filter {
