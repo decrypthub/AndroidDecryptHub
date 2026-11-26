@@ -1,5 +1,13 @@
 # PROGRESS — 跨会话进度看板
 
+## 2026-11-27 面板各页顶部不再画标题，系统页去掉指纹摘要条
+
+- 六个板块顶部的大标题（加解密 / 系统 / 网络 / 文件 / 脱壳 / 设置）全部去掉：侧栏高亮已经标出当前板块，标题白占一行高度。板块名改由浏览器 Tab 标题承载（`ADH · 系统`），多开面板或读屏时仍分得清——`panel/src/App.vue` 里 watch `store.view` 更新 `document.title`。
+- 系统页顶部的「设备指纹」摘要条（`采集到 4 项标识符 + 2 项设备信息` 加 android id / deviceId / IMSI / MAC / 已安装应用列表 / 传感器列表 chips）会盖住事件列表，且多数 chip 是「未取到 ×36」这类噪音。摘要挪进 设置 → 捕获 → 设备指纹，与「检测状态」同页回答同一个问题；系统页不再轮询 `/api/detect/summary`，回到干净的纯事件列表。空摘要仍写明「两类指纹 hook 都没装时为空，不代表应用没有采集」。
+- 设置页同时去掉侧栏「设置」标题与内容区副标题（捕获 / 记录显示 / …），改由侧栏选中态和窄屏下拉表达，`APP com.xxx` 提示保留。脱壳页的标题在其改版里已不存在，本轮不动。
+- 残留样式清理：`board-heading`、`fp-strip` / `fp-*`（改为设置页 scoped）、`set-header` 系列选择器与对应的移动端覆盖规则。
+- 验证：vite 构建；构建产物配桩数据（`ADH/_live/render-check-titles.mjs`，不在仓内）用无头 Chrome 逐板块渲染，断言六个板块都没有 `.board-heading` / `.settings-title` 元素、Tab 标题为 `ADH · <板块>`，系统页正文既无 `.fp-strip` 也无「设备指纹 / 未取到」文案，而设置 → 捕获 仍能看到指纹 group 与 chip 值。在跑的 daemon（8088）刷新后实测：加解密页首行即工具栏、无标题，601 条记录分页正常。
+
 ## 2026-11-26 记录页脚给出总量与页码，翻页按页读保留窗口
 
 - 加解密 / 系统 / 网络的页脚原来只写「实时刷新中」，页数只在历史记录模式下出现，用户看不出「一共多少条、现在是第几页」，容易把当前页当成全部。现在固定是 `共 N 条 · 第 k 页 · 状态`。
@@ -5442,3 +5450,13 @@ Host **561/561**、JVM **73/73** 无skip，类型、默认/隔离构建、94项M
 - 去掉之前的名片行、工具行、chips 行与重命名入口。
 
 验证：daemon `tsc` 0 错误；面板构建 971.56 kB（md5 `8f5929a3a4703c368fd35fea70538b0c`），`tsc` 只剩既有 `./App.vue` shim 报错；ego-browser 实测窗口 880×640、上块左右分栏、三个进度环、四格规格、下方列表三行、点行切换生效。
+
+## 2026-11-26 — 内容加载不铺骨架，改显示加载光标
+
+用户要求：内容加载不要骨架屏，显示加载光标就行。改为「保留上一屏内容 + 光标变加载态」，两条加载路径统一：
+
+- 文件面板（`FilesPanel.vue`）：删掉 8 行骨架占位（`.fs-skeletons`/`.fs-skeleton-row`/`fs-pulse` 动画全删）；`.fs-rows` 在 `state === 'loading'` 时加 `loading` 类与 `aria-busy`，CSS 为 `cursor: progress`。切目录/刷新时旧行保持可见，不再出现「旧行 + 骨架」叠在一起，也没有骨架→内容的跳动。空目录与失败态的 `v-else-if` 相应改回独立 `v-if`。
+- 记录列表（`CapturePanel.vue`）：骨架行（`.sk-row`/`.sk-line`/`sk-shimmer`）删除，`showSkeleton` 改名 `listLoading`，只用于给 `.cap-list` 挂 `loading`（`cursor: progress`）和压住空态文案；列表为空且首次加载/翻页时不再先报「还没有网络记录」，数据到了直接渲染。`style.css` 里 10 处 `.row:not(.sk-row)` 的死选择器一并收敛成 `.row`。
+- 保留的加载提示：文件面板工具栏右侧仍在加载时写「正在读取目录」，记录列表页脚在翻页时写「读取中…」；它们不是占位块，不参与本次改造。
+
+验证：`panel/` 下 `vite build` 通过（947.23 kB）；新增 `ADH/_live/render-loading.mjs` 做 headless Chrome 渲染断言（桩掉 `/api/*`，用 2.4s 延迟的 `/api/fs/list`、`/api/http/exchanges` 制造加载窗口），12 项全绿：文件面板加载中骨架节点 0、`cursor=progress`、`aria-busy=true`；刷新期间 3 行旧内容保留；记录列表 `sk-row` 0、加载中不显示空态文案、加载结束后才出现「还没有网络记录」。同一脚本反向验证：用 HEAD 源码（仍带骨架）构建的产物跑同一套断言 8 项失败（`skeletons=9`、`skRows=24`、`cursor=auto`），确认断言能区分新旧行为。
