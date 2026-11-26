@@ -1,3 +1,5 @@
+import {deviceSerial,deviceAdbPrefix} from './device_bridge.ts';
+import {assertRequestedTarget} from './agent_scope.ts';
 import { checkpoint, trackedEffect } from './execution_context.ts';
 // Host orchestration for the optional root-side perf collector. This process owns
 // files and queries; the helper only collects kernel samples outside the app.
@@ -69,12 +71,13 @@ export function normalizeRootWatch(a: Record<string, any>) {
   return { tid, addr: '0x' + addr.toString(16), width, mode, durationMs, maxEvents, stackBytes, breakpoints, mem };
 }
 async function adb(serial: string, args: string[], timeout = 10000) {
-  return (await trackedEffect(() => adbExec(['-s', serial, ...args], { timeout, maxBuffer: 1024 * 1024 }))).stdout;
+  return (await trackedEffect(() => adbExec([...deviceAdbPrefix(serial), ...args], { timeout, maxBuffer: 1024 * 1024 }))).stdout;
 }
 async function selectSerial(requested?: string) {
   const devices = (await trackedEffect(() => adbExec(['devices'], { timeout: 10000 }))).stdout
     .split(/\r?\n/).map(line => /^(\S+)\s+device$/.exec(line.trim())?.[1]).filter((x): x is string => !!x);
-  const serial = requested ?? process.env.ADH_SERIAL ?? process.env.ANDROID_SERIAL;
+  assertRequestedTarget(requested);
+  const serial = requested ?? (deviceSerial()||undefined);
   if (serial) { if (!devices.includes(serial)) throw new Error(`ADB device ${serial} is not online`); return serial; }
   if (devices.length !== 1) throw new Error('root_watch needs serial when ADB does not have exactly one online device');
   return devices[0];
@@ -117,7 +120,7 @@ export async function startRootWatch(target: Target, a: Record<string, any>, dat
     + spec.breakpoints.map((extra: string) => ` ${extra}`).join('')
     + spec.mem.map((window: string) => ` mem=${window}`).join('');
   checkpoint();
-  const child = adbExecStream(['-s', serial, 'shell', 'su', '-c', command]);
+  const child = adbExecStream([...deviceAdbPrefix(serial), 'shell', 'su', '-c', command]);
   let pending = '';
   await new Promise<void>((resolveReady, reject) => {
     const timer = setTimeout(() => reject(new Error(`Root collector did not become ready; run ${id} remains bounded by durationMs`)), 5000);

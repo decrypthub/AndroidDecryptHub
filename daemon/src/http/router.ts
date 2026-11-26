@@ -15,9 +15,10 @@ import { requestPrincipal } from '../access_context.ts';
 import { operationFailure } from '../operations.ts';
 import {deviceRoutes} from './routes_devices.ts';
 import {hookPlanRoutes} from './routes_hook_plans.ts';
-import {localObserver,observerHost,OWN_APP_FILES_ROUTE,OWN_DEMO_API_ROUTE} from '../local_observer.ts';
+import {currentLocalObserver,observerHost,OWN_APP_FILES_ROUTE,OWN_DEMO_API_ROUTE} from '../local_observer.ts';
 
 export async function handleHttp(req: http.IncomingMessage, res: http.ServerResponse) {
+  const localObserver=currentLocalObserver();
   const url = new URL(req.url ?? '/', 'http://localhost');
   let buffered=false;
   let output:{httpStatus:number;body:any;contentType:string}|undefined;

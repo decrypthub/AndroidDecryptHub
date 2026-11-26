@@ -1,5 +1,5 @@
 import { trackedEffect } from './execution_context.ts';
-import { deviceProcessControl, deviceProcesses, deviceSerial, deviceState } from './device_bridge.ts';
+import { deviceProcessControl, deviceProcesses, deviceSerial, deviceState ,deviceAdbPrefix} from './device_bridge.ts';
 import { adbExec } from './adb_wire.ts';
 // Target app control: one policy, two channels.
 //   1. adh.device/1 `process.control` — the Device Daemon refuses system packages, checks the
@@ -45,7 +45,7 @@ export interface ControlDeps {
 }
 
 function adbBase(serial = deviceSerial()): string[] {
-  return serial ? ['-s', serial] : [];
+  return deviceAdbPrefix(serial);
 }
 
 async function adb(args: string[], timeoutMs = 20_000): Promise<{ ok: boolean; stdout: string; stderr: string }> {

@@ -3,9 +3,10 @@
 // 面板必须能分别说清楚，不能把「设备域连不上」显示成「设备离线」。
 import { AGENT_PORT } from './config.ts';
 import { adbExec } from './adb_wire.ts';
-import { connectDevice } from './device_bridge.ts';
+import { connectDevice,deviceSerial } from './device_bridge.ts';
+import {usbAgentRoutes} from './usb_agent_routes.ts';
 import { agentSockets, sessions } from './state.ts';
-import { localObserver } from './local_observer.ts';
+import { currentLocalObserver } from './local_observer.ts';
 import { parseAdbDevices } from './transport/adb_device.ts';
 
 /** adb 网络设备串号固定是 host:port（无线调试 / TCP 转发），与 USB 序列号区分开。 */
@@ -50,7 +51,7 @@ export interface ReconnectResult {
 }
 
 function observedTarget(): { serial: string; pkg: string } | null {
-  const observer = localObserver;
+  const observer = currentLocalObserver();
   if (!observer || !observer.usbSerial || !observer.package) return null;
   return { serial: observer.usbSerial, pkg: observer.package };
 }
@@ -59,7 +60,7 @@ function liveAgents(pkg: string): AgentView[] {
   const out: AgentView[] = [];
   for (const socket of agentSockets.keys()) {
     const session = sessions.get(socket);
-    if (!session || session.package !== pkg) continue;
+    if (!session || session.package !== pkg||session.deviceBinding?.serial!==deviceSerial()) continue;
     out.push({ online: session.online === true, pid: session.pid, sessionId: session.sessionId, connectedAt: session.connectedAt });
   }
   return out;
@@ -79,7 +80,7 @@ export function defaultReconnectDeps(): ReconnectDeps {
       let dropped = 0;
       for (const [sessionId, socket] of [...agentSockets]) {
         const session = sessions.get(sessionId);
-        if (!session || session.package !== pkg) continue;
+        if (!session || session.package !== pkg||session.deviceBinding?.serial!==deviceSerial()) continue;
         dropped++;
         socket.destroy();
       }
@@ -108,6 +109,7 @@ async function waitForAgent(pkg: string, deps: ReconnectDeps, since: number, tim
 }
 
 async function ensureReverse(serial: string, deps: ReconnectDeps): Promise<'present' | 'added'> {
+  const routes=usbAgentRoutes();if(routes){const had=!!routes.get(serial);await routes.ensure(serial);return had?'present':'added';}
   const port = 'tcp:' + AGENT_PORT;
   const list = (await deps.adb(['-s', serial, 'reverse', '--list'], { timeout: 8000 })).stdout;
   const have = list.split(/\r?\n/)

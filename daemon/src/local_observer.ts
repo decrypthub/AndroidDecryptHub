@@ -4,10 +4,11 @@ import { connect } from 'node:net';
 import { adbExec } from './adb_wire.ts';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { AGENT_PORT, HTTP_PORT } from './config.ts';
-import { setDeviceSerial } from './device_bridge.ts';
+import { AGENT_PORT, DEVICE_AGENT_PORT, HTTP_PORT } from './config.ts';
+import {deviceRequestScope} from './agent_scope.ts';
+import {usbAgentRoutes} from './usb_agent_routes.ts';
 import { parseAdbDevices } from './transport/adb_device.ts';
-import { log } from './state.ts';
+import { log,sessions } from './state.ts';
 
 /** Opt-in, bounded observation of a consenting app that loads its own reporter.
  * Leave the device's application scope and existing reverse routes alone.
@@ -88,10 +89,10 @@ async function readLocalObserver(): Promise<LocalObserver | null> {
   if (!model || !/^[1-9]\d*$/.test(pidText)) throw Error('Expected one running process for the chosen app');
   const pid = Number(pidText);
   if (!Number.isSafeInteger(pid)) throw Error('Invalid process ID');
-  const port = 'tcp:' + AGENT_PORT;
+  const port = 'tcp:' + DEVICE_AGENT_PORT;
   const m = (await device('reverse', '--list')).split(/\r?\n/)
     .some(line => line.trim().split(/\s+/).slice(-2).join(' ') === port + ' ' + port);
-  if (!m) throw Error('Expected the existing matching USB reverse; no routes were changed');
+  if (!m&&process.env.ADH_LEGACY_AGENT_ONLY==='1') throw Error('Expected the existing matching USB reverse; no routes were changed');
   const ownFilesSerial = process.env.ADH_OBSERVE_OWN_FILES === '1' ? serial : undefined;
   const declaredApiSerial = process.env.ADH_USB_APP_INVENTORY === '1' ? serial : undefined;
   ensureSandboxNetFixture(serial, pkg);
@@ -162,38 +163,33 @@ export async function initLocalObserver(): Promise<void> { localObserver = await
 const OBSERVE_PKG_RE = /^[A-Za-z][\w]*(?:\.[A-Za-z][\w]*)+$/;
 const OBSERVE_SERIAL_RE = /^[A-Za-z0-9_-]+$/;
 
-/** Rebind the local observation target (panel device management). The same
- * env-driven flags apply; the process keeps its original mode. */
-export async function retargetObserver(serial: string, pkg: string): Promise<LocalObserver> {
-  const current = localObserver;
-  if (!current) throw Error('此入口不是本机观察模式');
-  if (current.fileBrowserOnly || current.demoApiSerial) throw Error('此入口的观察目标是固定的');
-  if (!OBSERVE_SERIAL_RE.test(serial) || !OBSERVE_PKG_RE.test(pkg)) throw Error('需要有效的设备序列号和包名');
-  const adb = async (args: string[]) => String((await adbExec(args, { timeout: 8000, maxBuffer: 1024 * 1024 })).stdout ?? '').trim();
-  const rows = parseAdbDevices(await adb(['devices', '-l']));
-  const device = rows.find(row => row.serial === serial && row.state === 'device');
-  if (!device) throw Error('这台手机不在线');
-  const model = (await adb(['-s', serial, 'shell', 'getprop', 'ro.product.model'])).slice(0, 64);
-  if (!model) throw Error('读不到手机型号');
-  // The agent dials its own device-side reverse; add ours if absent (never touch existing routes).
-  const port = 'tcp:' + AGENT_PORT;
-  const have = (await adb(['-s', serial, 'reverse', '--list'])).split(/\r?\n/)
-    .some(line => line.trim().split(/\s+/).slice(-2).join(' ') === port + ' ' + port);
-  if (!have) await adb(['-s', serial, 'reverse', port, port]);
-  const pidText = await adb(['-s', serial, 'shell', 'pidof', pkg]).catch(() => '');
-  const pid = /^[1-9]\d*$/.test(pidText) ? Number(pidText) : 0;
-  localObserver = {
-    package: pkg, pid, model, usbSerial: serial,
-    ownFilesSerial: process.env.ADH_OBSERVE_OWN_FILES === '1' ? serial : undefined,
-    declaredApiSerial: process.env.ADH_USB_APP_INVENTORY === '1' ? serial : undefined,
-  };
-  setDeviceSerial(serial);
-  ensureSandboxNetFixture(serial, pkg);
-  return localObserver;
+/** Read the browser's immutable request target, never another tab's selection. */
+export function currentLocalObserver():LocalObserver|null {
+  const root=localObserver;if(!root)return null;const scope=deviceRequestScope();
+  const serial=scope?.serial??root.usbSerial,pkg=scope?.package??root.package;
+  if((root.fileBrowserOnly||root.demoApiSerial)&&(serial!==root.usbSerial||pkg!==root.package))
+    throw Object.assign(new Error('此隔离入口的设备和应用是固定的'),{status:403,code:'OBSERVATION_SCOPE_FIXED'});
+  if(serial===root.usbSerial&&pkg===root.package)return root;
+  return observerForTarget(serial??'',pkg);
 }
-
-export function noteObservedPid(pkg: string, pid: number) {
-  if (localObserver && localObserver.package === pkg && Number.isSafeInteger(pid) && pid >= 0) localObserver.pid = pid;
+function observerForTarget(serial:string,pkg:string):LocalObserver {
+  const root=localObserver!;
+  const rows=[...sessions.values()].filter(s=>s.online&&s.package===pkg&&s.deviceBinding?.serial===serial&&s.process===pkg);
+  return {package:pkg,pid:rows.length===1?rows[0].pid:0,model:serial===root.usbSerial?root.model:'已选设备',usbSerial:serial,
+    ownFilesSerial:process.env.ADH_OBSERVE_OWN_FILES==='1'?serial:undefined,
+    declaredApiSerial:process.env.ADH_USB_APP_INVENTORY==='1'?serial:undefined};
+}
+/** Selection authorizes/ensures this device route and returns metadata. It does not mutate
+ * the boot target, redirect any other request, or destroy another device's sessions. */
+export async function retargetObserver(serial:string,pkg:string):Promise<LocalObserver>{
+  const current=localObserver;if(!current)throw Error('此入口不是本机观察模式');
+  if(current.fileBrowserOnly||current.demoApiSerial)throw Error('此入口的观察目标是固定的');
+  if(!OBSERVE_SERIAL_RE.test(serial)||!OBSERVE_PKG_RE.test(pkg))throw Error('需要有效的设备序列号和包名');
+  const routes=usbAgentRoutes();if(!routes)throw Error('设备路由尚未就绪');await routes.ensure(serial);
+  const next=observerForTarget(serial,pkg);ensureSandboxNetFixture(serial,pkg);return next;
+}
+export function noteObservedPid(pkg:string,pid:number,serial?:string){
+  if(localObserver&&localObserver.package===pkg&&localObserver.usbSerial===serial&&Number.isSafeInteger(pid)&&pid>=0)localObserver.pid=pid;
 }
 export const localObserverHost = '127.0.0.1:' + HTTP_PORT;
 /** 本机观察入口的合法 Host：127.0.0.1 与 localhost 都算本机，其余 Host 视为重绑定。 */

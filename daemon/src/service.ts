@@ -1,3 +1,5 @@
+import {captureMatchesScope,scopeSessionRows} from './agent_scope.ts';
+import {assertSessionScope,selectAgentSession,verifyAgentBinding,deviceRequestScope} from './agent_scope.ts';
 import { checkpoint, detached, localEffect, trackedEffect } from './execution_context.ts';
 import { automaticSnapshot, runAutomatic } from './operation_host.ts';
 import { captureFile } from './storage.ts';
@@ -42,7 +44,11 @@ import { buildStoredZip } from './zip_store.ts';
 // terminal `cmd.done`. The heartbeat carries elapsed time and the caller's own deadline, never a
 // fabricated percentage: the daemon cannot know how far into a trace the agent is, and inventing
 // progress is worse than reporting none.
-export function sendCmd(sessionId: string, op: string, args: Record<string, unknown> = {}, timeoutMs = 10_000): Promise<any> {
+export async function sendCmd(sessionId: string, op: string, args: Record<string, unknown> = {}, timeoutMs = 10_000): Promise<any> {
+  checkpoint(sessionId);
+  const target=sessions.get(sessionId);
+  if(target)await verifyAgentBinding(target);
+  else if(deviceRequestScope()?.serial)throw Object.assign(new Error('设备会话不存在'),{code:'TARGET_OFFLINE'});
   checkpoint(sessionId);
   const sock = agentSockets.get(sessionId);
   if (!sock || sock.destroyed) return Promise.reject(new Error('agent not connected'));
@@ -88,20 +94,11 @@ export function sendCmd(sessionId: string, op: string, args: Record<string, unkn
   }),sessionId,{kind:'agent',action:op,session:sessionId});
 }
 
-export const pickSid = (sid?: string) => {
-  if (sid) return sid;
-  const online = [...sessions.values()].filter((s) => s.online);
-  if (!online.length) return undefined;
-  // The main process wins. The previous `.pop()` took whichever session was inserted last, which on a
-  // multi-process target can be a renderer/push child: the tool then fails with an empty result and
-  // no hint that the wrong process was chosen (field report: ClassNotFound in :normal_render_proc0
-  // while the main process was online). A child is used only when it is the only thing online.
-  return (online.find((s) => !s.process.includes(':')) ?? online[online.length - 1]).sessionId;
+export const pickSid=(sid?:string)=>{
+  if(sid){const target=sessions.get(sid);if(target)assertSessionScope(target);else if(deviceRequestScope()?.serial)throw new Error('设备会话不存在');return sid;}
+  return selectAgentSession([...sessions.values()])?.sessionId;
 };
-export const sessionForPackage = (pkg: string) => {
-  const rows = [...sessions.values()].filter((s) => s.online && s.package === pkg);
-  return (rows.find((s) => !s.process.includes(':')) ?? rows[rows.length - 1])?.sessionId;
-};
+export const sessionForPackage=(pkg:string)=>selectAgentSession([...sessions.values()],{package:pkg})?.sessionId;
 export async function agentCmd(sid: string | undefined, op: string, args: Record<string, unknown> = {}, timeout = 15_000) {
   const s = pickSid(sid); if (!s) throw new Error('no online agent session');
   return sendCmd(s, op, args, timeout);
@@ -855,7 +852,7 @@ interface CaptureSettingsScope {
 }
 
 function captureSettingsTargets({ packageName, sessionId }: CaptureSettingsScope) {
-  return [...sessions.values()].filter(session => session.online && (
+  return [...sessions.values()].filter(session => session.online && captureMatchesScope(session) && (
     sessionId !== undefined ? session.sessionId === sessionId :
       packageName !== undefined ? session.package === packageName : !packageFamilies(session.package)
   ));
@@ -1203,27 +1200,28 @@ const unpackSuppressArm = new Set<string>();
  *  until the package hellos again (user restarted the app). Global toggle must not silently
  *  re-arm a just-unpacked SecNeo target. */
 const unpackProtectArm = new Set<string>();
+const armScopeKey=(pkg:string)=>(deviceRequestScope()?.serial??'legacy-unverified')+'\n'+pkg;
 export function suppressCaptureArmForUnpack(pkg: string) {
-  if (pkg && pkg !== '?') unpackSuppressArm.add(pkg);
+  if (pkg && pkg !== '?') unpackSuppressArm.add(armScopeKey(pkg));
 }
 export function resumeCaptureArmAfterUnpack(pkg: string) {
-  if (pkg) unpackSuppressArm.delete(pkg);
+  if (pkg) unpackSuppressArm.delete(armScopeKey(pkg));
 }
 export function isCaptureArmSuppressed(pkg: string) {
-  return !!pkg && unpackSuppressArm.has(pkg);
+  return !!pkg && unpackSuppressArm.has(armScopeKey(pkg));
 }
 export function protectCaptureArmAfterUnpack(pkg: string) {
-  if (pkg && pkg !== '?') unpackProtectArm.add(pkg);
+  if (pkg && pkg !== '?') unpackProtectArm.add(armScopeKey(pkg));
 }
 /** Call on agent.hello so a fresh process can auto-arm again. */
 export function clearCaptureArmProtect(pkg: string) {
-  if (pkg) unpackProtectArm.delete(pkg);
+  if (pkg) unpackProtectArm.delete(armScopeKey(pkg));
 }
 export function isCaptureArmProtected(pkg: string) {
-  return !!pkg && unpackProtectArm.has(pkg);
+  return !!pkg && unpackProtectArm.has(armScopeKey(pkg));
 }
 export function listCaptureArmProtected(): string[] {
-  return [...unpackProtectArm];
+  const prefix=(deviceRequestScope()?.serial??'legacy-unverified')+'\n';return [...unpackProtectArm].filter(k=>k.startsWith(prefix)).map(k=>k.slice(prefix.length));
 }
 const CAPTURE_ARM_BLOCKED = '本包脱壳后未装钩，请先重启 App（或 force:true）';
 function captureArmBlockedReason(pkg: string): string | null {
@@ -1250,7 +1248,7 @@ function processCaptureFrame(sid: string, r: any, now: number) {
   };
   const drainedEntries: Capture[] = [];
   for (const c of (r.jcaptures ?? [])) {
-    if (c.in) recentJavaIn.set(c.in, now);
+    if (c.in) recentJavaIn.set(`${sid}:${c.in}`, now);
     const hasBody = Number(c.inl) > 0 || Number(c.outl) > 0 || (typeof c.out === 'string' && c.out.length > 0);
     const entry: Capture = {
       id: ++capSeq, sessionId: sid, package: pkg, source: 'java', func: javaHook(String(c.op || ''), hasBody), algo: c.algo, op: c.op,
@@ -1263,7 +1261,7 @@ function processCaptureFrame(sid: string, r: any, now: number) {
   }
   for (const [k, t] of recentJavaIn) if (now - t > 2000) recentJavaIn.delete(k);
   for (const c of (r.captures ?? [])) {
-    if (c.hex && recentJavaIn.has(c.hex)) continue;
+    if (c.hex && recentJavaIn.has(`${sid}:${c.hex}`)) continue;
     const { algo, op } = classify(c.func);
     const category = categoryOf(c.func);
     const filePath = typeof c.path === 'string' && c.path ? c.path : '';
@@ -1483,7 +1481,7 @@ export async function autoDumpDex(sid: string) {
 
 /** Online agent sessions for one package (main process first). */
 export function onlineSessionsForPackage(pkg: string): AgentSession[] {
-  const rows = [...sessions.values()].filter((s) => s.online && s.package === pkg);
+  const rows = scopeSessionRows([...sessions.values()].filter((s) => s.online && s.package === pkg));
   const main = preferMainProcess(rows);
   if (!main) return rows;
   return [main, ...rows.filter((s) => s.sessionId !== main.sessionId)];

@@ -76,12 +76,13 @@ export const store = reactive({
   appDialogOpen: false,
 });
 
-// ---- 包名归属（stamp 制，不看会话死活）----
-export function belongsToApp(c: A.Cap): boolean {
-  if (!store.chosenPkg) return false;
-  const stamped = c.package || (c.sessionId ? store.sessionPkg.get(c.sessionId) : undefined);
-  if (stamped) return stamped === store.chosenPkg;
-  return !c.sessionId; // 无会话信息的服务端记录按当前包算
+// Target selection belongs to this tab. Historical captures carry their own immutable proof.
+export function selectedSerial():string{return store.devices.find(d=>d.key===store.selectedDeviceKey)?.serial??'';}
+export function targetKey():string{return selectedSerial()+'\n'+store.chosenPkg;}
+A.setApiScopeProvider(()=>({serial:selectedSerial()||undefined,package:store.chosenPkg||undefined}));
+export function belongsToApp(c:A.Cap):boolean{
+  const serial=selectedSerial();
+  return !!serial&&!!store.chosenPkg&&c.deviceBinding?.serial===serial&&c.package===store.chosenPkg;
 }
 function stampSession(s: A.Session) {
   if (s.sessionId && s.package) store.sessionPkg.set(s.sessionId, s.package);
@@ -89,6 +90,7 @@ function stampSession(s: A.Session) {
 
 // ---- 记录（按板块独立限额淘汰，防止高频加解密把网络/系统记录挤空）----
 export function capPush(c: A.Cap) {
+  if(!belongsToApp(c))return;
   if (c.sessionId && c.package) store.sessionPkg.set(c.sessionId, c.package);
   store.capItems.push(c);
   const b = bucketOf(c.category);
@@ -118,7 +120,7 @@ export function toast(text: string) {
   setTimeout(() => { const i = toasts.findIndex(t => t.id === id); if (i >= 0) toasts.splice(i, 1); }, 2600);
 }
 export async function capLoad() {
-  const pkg = store.chosenPkg;
+  const pkg = store.chosenPkg,key=targetKey();
   if (!pkg) { store.capItems = []; return; }
   store.capLoading = true;
   try {
@@ -127,11 +129,11 @@ export async function capLoad() {
       A.getCaptures({ package: pkg, category: 'system,file', limit: 600 }),
       A.getCaptures({ package: pkg, category: 'net', limit: 400 }),
     ]);
-    if (store.chosenPkg !== pkg) return;
+    if (targetKey() !== key) return;
     const byId = new Map<number, A.Cap>();
     for (const r of [rc, rs, rn]) {
       for (const c of (r.captures ?? r.items ?? [])) {
-        byId.set(c.id, c);
+        if(belongsToApp(c))byId.set(c.id, c);
         if (c.sessionId && c.package) store.sessionPkg.set(c.sessionId, c.package);
       }
     }
@@ -155,16 +157,18 @@ export async function capLoad() {
   } catch {
     // 网络瞬断保旧数据，绝不把已有列表洗成空数组
   } finally {
-    if (store.chosenPkg === pkg) store.capLoading = false;
+    if (targetKey() === key) store.capLoading = false;
   }
 }
 
 // 只按包名切作用域：临时传输层 key 波动不清空当前应用已加载的数据。
 let lastLoadedPkg = '';
 export async function syncCapScope() {
-  if (!store.chosenPkg || store.chosenPkg === lastLoadedPkg) return;
-  lastLoadedPkg = store.chosenPkg;
-  store.capItems = [];
+  const key=targetKey();if(key===lastLoadedPkg)return;
+  lastLoadedPkg=key;
+  store.capItems=[];store.capLatest=0;store.capDropped=0;store.capComplete=true;
+  store.capTotal={crypto:0,system:0,net:0};store.capHasOlder={crypto:false,system:false,net:false};
+  if(!selectedSerial()||!store.chosenPkg){store.capLoading=false;return;}
   await capLoad();
 }
 
@@ -292,12 +296,15 @@ export async function refreshDevices() {
   }
 }
 
+const chosenByDevice=new Map<string,string>();
 export function selectDevice(key: string) {
   if (store.selectedDeviceKey === key) return;
+  if(store.selectedDeviceKey)chosenByDevice.set(store.selectedDeviceKey,store.chosenPkg);
   store.selectedDeviceKey = key;
   const dev = store.devices.find(d => d.key === key);
-  const observed = dev?.observed ?? (store.localUsb?.observedPackage as string | undefined);
-  if (observed) store.chosenPkg = observed;
+  store.chosenPkg=chosenByDevice.get(key)??dev?.observed??'';
+  store.apps=[];store.appsError='';store.scope=new Set();
+  void refreshApps();void refreshScope();
   void syncCapScope();
 }
 
@@ -309,21 +316,25 @@ export function choosePackage(pkg: string) {
 
 // ---- 应用列表：失败保旧值（scope 涉及手机 su 读盘，只在打开应用弹窗或设置页时拉取）----
 export async function refreshScope() {
+  const key=targetKey();if(!selectedSerial())return;
   try {
     const s = await A.getScope();
+    if (targetKey()!==key)return;
     if (s.ok) store.scope = new Set(s.packages);
   } catch { /* scope 读取失败不遮罩主流程 */ }
 }
 
 export async function refreshApps() {
+  const key=targetKey();if(!selectedSerial())return;
   try {
     const r = await A.getApps();
+    if(targetKey()!==key)return;
     store.apps = r.apps ?? [];
     store.appsError = r.error ?? '';
     store.captureEnabled = r.capture?.enabled !== false;
     store.appsFailed = false;
   } catch {
-    store.appsFailed = true;
+    if(targetKey()===key)store.appsFailed = true;
   }
 }
 
@@ -371,6 +382,9 @@ export function connectWs() {
         if (d) capPush(d as unknown as A.Cap);
         break;
       case 'data.cleared':
+        if(d?.serial&&d.serial!==selectedSerial())break;
+        if(d?.package&&d.package!==store.chosenPkg)break;
+        if(d?.what&&d.what!=='captures')break;
         store.capItems = [];
         store.capDropped = 0;
         break;
@@ -413,8 +427,14 @@ export function startPolling() {
 }
 
 export const appSessions = computed(() =>
-  [...store.sessions.values()].filter(s => s.package === store.chosenPkg));
-export const liveSession = computed(() => appSessions.value.find(s => s.online) ?? null);
+  [...store.sessions.values()].filter(s => s.package === store.chosenPkg&&s.deviceBinding?.serial===selectedSerial()));
+export const liveSession = computed(()=>{
+  const online=appSessions.value.filter(s=>s.online),main=online.filter(s=>s.process===s.package);
+  const rows=main.length?main:online;
+  // No arbitrary process when multiple generations/subprocesses remain.
+  const generations=new Set(rows.map(s=>s.pid+':'+(s.deviceBinding?.process.starttimeTicks??'')));
+  return generations.size===1?rows.sort((a,b)=>Number(b.connectedAt??0)-Number(a.connectedAt??0))[0]??null:null;
+});
 
 // ---- 面板显示偏好（localStorage，仅当前浏览器）----
 export interface PanelDisplay { limit: number | null; time: 'time' | 'date'; density: 'standard' | 'compact'; rail: boolean }

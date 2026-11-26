@@ -1,6 +1,6 @@
 import { adbExec } from './adb_wire.ts';
 import { apkBadging, applicationLabel, pickBadgingIcon } from './scope_list.ts';
-import { deviceApplications, deviceSerial } from './device_bridge.ts';
+import { deviceApplications, deviceSerial ,deviceAdbPrefix} from './device_bridge.ts';
 const PKG_RE = /^[a-zA-Z][a-zA-Z0-9_]*(?:\.[a-zA-Z0-9_]+)*$/;
 
 export interface CatalogApp {
@@ -25,7 +25,7 @@ const icons = new Map<string, string>();
 let pumping = false;
 
 function adbBase(serial = deviceSerial()): string[] {
-  return serial ? ['-s', serial] : [];
+  return deviceAdbPrefix(serial);
 }
 
 async function adbShell(command: string, serial = deviceSerial()): Promise<string> {

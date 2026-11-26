@@ -1,15 +1,28 @@
+export interface DeviceBinding {serial:string;transportId:string;leaseId:string;process:{pid:number;uid:number;starttimeTicks:string;name:string}}
+let scopeProvider:()=>{serial?:string;package?:string}=()=>({});
+export function setApiScopeProvider(provider:typeof scopeProvider){scopeProvider=provider;}
+export function scopeHeaders(path:string,headers?:HeadersInit,explicit?:{serial?:string;package?:string}):Headers{
+  const h=new Headers(headers);
+  // Global inventory must remain reachable when the selected phone has gone away.
+  if(path==='/health'||path.startsWith('/api/devices?action='))return h;
+  const scope=explicit??scopeProvider();
+  if(scope.serial)h.set('x-adh-device-serial',scope.serial);
+  if(scope.package)h.set('x-adh-package',scope.package);
+  return h;
+}
 // 端点封装 + 统一耗时统计。面板所有请求走 api()，自动进 perfStat。
 
 export interface Cap {
   id: number; ts: number; category: string;
   algo?: string; op?: string; func?: string; hook?: string; path?: string;
   preview?: string; inl?: number; outl?: number; out?: number;
-  package?: string; sessionId?: string;
+  package?: string; sessionId?: string; deviceBinding?:DeviceBinding;
   keyHex?: string; ivHex?: string; outHex?: string;
   [k: string]: unknown;
 }
 export interface Session {
   sessionId: string; package: string; pid: number; online: boolean;
+  deviceBinding?:DeviceBinding;
   process?: string; mapsCount?: number; hello?: number; close?: number;
   [k: string]: unknown;
 }
@@ -43,7 +56,7 @@ export async function api<T = unknown>(path: string, init?: RequestInit, timeout
   const label = `${init?.method ?? 'GET'} ${path.split('?')[0]}`;
   const t0 = performance.now();
   try {
-    const res = await fetch(path, { ...init, signal: AbortSignal.timeout(timeoutMs), cache: 'no-store' });
+    const res = await fetch(path, { ...init, headers:scopeHeaders(path,init?.headers), signal: AbortSignal.timeout(timeoutMs), cache: 'no-store' });
     if (!res.ok) {
       const data = await res.json().catch(() => null) as { error?: unknown } | null;
       const reason = typeof data?.error === 'string' ? data.error : '';
@@ -65,7 +78,7 @@ async function postDetail<T extends { error?: string }>(path: string, body: unkn
   let res: Response;
   try {
     res = await fetch(path, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
+      method: 'POST', headers: scopeHeaders(path,{'content-type':'application/json'}),
       body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs), cache: 'no-store',
     });
   } catch (e) {
@@ -85,7 +98,7 @@ async function getDetail<T extends { error?: string }>(path: string, timeoutMs =
   const t0 = performance.now();
   let res: Response;
   try {
-    res = await fetch(path, { signal: AbortSignal.timeout(timeoutMs), cache: 'no-store' });
+    res = await fetch(path, { headers:scopeHeaders(path), signal: AbortSignal.timeout(timeoutMs), cache: 'no-store' });
   } catch (e) {
     notePerf(label, performance.now() - t0);
     throw e;
@@ -117,7 +130,7 @@ async function postDevice<T = unknown>(body: unknown, timeoutMs = 20000): Promis
   let res: Response;
   try {
     res = await fetch('/api/devices', {
-      method: 'POST', headers: { 'content-type': 'application/json' },
+      method: 'POST', headers: scopeHeaders('/api/devices',{'content-type':'application/json'},body as {serial?:string;package?:string}),
       body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs), cache: 'no-store',
     });
   } catch (e) {
@@ -146,7 +159,7 @@ export interface ReconnectReply {
 // 让调用方能显示完整原因；真正的网络错误仍然抛。
 async function deviceActionRaw(body: unknown, timeoutMs = 25000): Promise<ReconnectReply> {
   const res = await fetch('/api/devices', {
-    method: 'POST', headers: { 'content-type': 'application/json' },
+    method: 'POST', headers: scopeHeaders('/api/devices',{'content-type':'application/json'},body as {serial?:string;package?:string}),
     body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs), cache: 'no-store',
   });
   const data = await res.json().catch(() => null) as ReconnectReply | null;

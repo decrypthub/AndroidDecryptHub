@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { isDeepStrictEqual, promisify } from 'node:util';
 import { crc32 } from 'node:zlib';
 import { shQuote } from './sandbox_fs.ts';
-import { deviceScopeGet, deviceScopeReplace, deviceSerial } from './device_bridge.ts';
+import { deviceScopeGet, deviceScopeReplace, deviceSerial ,deviceAdbPrefix} from './device_bridge.ts';
 
 const execFileP = promisify(execFile);
 const SCOPE_PATH = '/data/adb/adh/scope.json';
@@ -47,12 +47,15 @@ export function applicationLabel(badging: string): string {
   return pick('application-label-zh') || pick('application-label:') || '';
 }
 
-let cache: { at: number; packages: string[]; error: string | null } | null = null;
+type ScopeCache={at:number;packages:string[];error:string|null};
+const caches=new Map<string,ScopeCache>();
+const getCache=()=>caches.get(deviceSerial())??null;
+const setCache=(value:ScopeCache)=>caches.set(deviceSerial(),value);
 // The job's value is the label write, not the label: `resolveLabel` is consumed inside the .then.
 const labelJobs = new Map<string, Promise<void>>();
 
 function adbBase(serial = deviceSerial()): string[] {
-  return serial ? ['-s', serial] : [];
+  return deviceAdbPrefix(serial);
 }
 
 async function adbShell(command: string): Promise<string> {
@@ -219,21 +222,23 @@ export function pickBadgingIcon(badging: string): string {
   return rows.find(row => /foreground/i.test(row.path))?.path || '';
 }
 
-const resolvedLabels = new Map<string, string>();
+const labelsByDevice=new Map<string,Map<string,string>>();
+function deviceLabels(){const k=deviceSerial();let v=labelsByDevice.get(k);if(!v){v=new Map();labelsByDevice.set(k,v);}return v;}
 
 /** Names already known. A package with no name yet is still listed; the lookup fills in later. */
-export function scopeSwitcherApps(packages: string[], labels: ReadonlyMap<string, string> = resolvedLabels): ScopedApp[] {
+export function scopeSwitcherApps(packages: string[], labels: ReadonlyMap<string, string> = deviceLabels()): ScopedApp[] {
   return packages.map(pkg => ({ package: pkg, label: labels.get(pkg) || pkg }));
 }
 
 function startLabel(pkg: string): void {
-  if (resolvedLabels.has(pkg) || labelJobs.has(pkg)) return;
+  const resolvedLabels=deviceLabels(),jobKey=deviceSerial()+'\n'+pkg;
+  if (resolvedLabels.has(pkg) || labelJobs.has(jobKey)) return;
   const job = detached(()=>resolveLabel(pkg)).then(label => {
     resolvedLabels.set(pkg, label || pkg);
   }).catch(() => {
     resolvedLabels.set(pkg, pkg);
   });
-  labelJobs.set(pkg, job);
+  labelJobs.set(jobKey, job);
 }
 
 // The agent dials 127.0.0.1 on the phone. That only reaches this daemon while
@@ -273,7 +278,7 @@ export function ensureAdbReverse(ports: number[], log: (line: string) => void): 
 
 /** Cached allowlist packages only — never merge capture-disk history into this list. */
 export function cachedScopePackages(): string[] {
-  return cache?.packages ? [...cache.packages] : [];
+  const cache=getCache();return cache?.packages ? [...cache.packages] : [];
 }
 
 /**
@@ -303,11 +308,12 @@ export function autoArmAllowed(
 
 /** Whether Host should auto-arm capture for this package. */
 export function shouldAutoArmPackage(pkg: string, entry?: string): boolean {
-  return autoArmAllowed(pkg, entry, cache);
+  return autoArmAllowed(pkg, entry, getCache());
 }
 
 /** Packages currently checked on the attached phone, with launcher names. */
 export async function scopedApps(now = Date.now()): Promise<{ apps: ScopedApp[]; error: string | null }> {
+  let cache=getCache();
   if (!cache || now - cache.at >= CACHE_MS) {
     try {
       const stdout = await adbShell(`su -c 'cat ${SCOPE_PATH}'`);
@@ -318,6 +324,7 @@ export async function scopedApps(now = Date.now()): Promise<{ apps: ScopedApp[];
       cache = { at: now, packages: cache?.packages ?? [], error: message.split('\n')[0].slice(0, 240) };
     }
   }
+  setCache(cache);
   for (const pkg of cache.packages) startLabel(pkg);
   // Switcher truth = scope.json only. Capture history on disk must not invent checked apps.
   return { apps: scopeSwitcherApps(cache.packages), error: cache.error };
@@ -468,7 +475,7 @@ export async function writeScopePackages(
       if (reply.state !== 'succeeded' || got.length !== want.size || got.some(p => !want.has(p))) {
         return { ok: false, packages: got, error: `scope write did not stick (state=${reply?.state || 'unknown'})` };
       }
-      cache = { at: Date.now(), packages: got, error: null };
+      setCache({ at: Date.now(), packages: got, error: null });
       return { ok: true, packages: got };
     } catch (e) {
       return { ok: false, packages: clean, error: (e instanceof Error ? e.message : String(e)).split('\n')[0].slice(0, 240) };
@@ -483,7 +490,7 @@ export async function writeScopePackages(
     if (!isDeepStrictEqual(parseScopeDocument(back), next)) {
       return { ok: false, packages: got, error: 'scope write did not stick: complete document differs (including hook policy)' };
     }
-    cache = { at: Date.now(), packages: got, error: null };
+    setCache({ at: Date.now(), packages: got, error: null });
     return { ok: true, packages: got };
   } catch (e) {
     return { ok: false, packages: clean, error: (e instanceof Error ? e.message : String(e)).split('\n')[0].slice(0, 240) };

@@ -1,6 +1,6 @@
 import {deviceAction} from '../device_host.ts';
-import {agentSockets,readBody,sessions} from '../state.ts';
-import {demoApiRequest,localObserver,localObserverHost,OWN_APP_FILES_ROUTE,OWN_DEMO_API_ROUTE,retargetObserver} from '../local_observer.ts';
+import {readBody,sessions} from '../state.ts';
+import {demoApiRequest,currentLocalObserver,localObserverHost,OWN_APP_FILES_ROUTE,OWN_DEMO_API_ROUTE,retargetObserver} from '../local_observer.ts';
 import {hasIndependentDemoFiles,localUsbLink,localUsbView} from '../local_usb_status.ts';
 import {changeDemoApi,DemoApiError} from '../demo_api_observer.ts';
 import {AppFilesError,readOwnedAppFiles,saveOwnedAppText} from '../owned_app_files.ts';
@@ -10,12 +10,12 @@ import {parseAdbDevices,realAdbRunner,type AdbRunner} from '../transport/adb_dev
 import type {Route,RouteContext} from './types.ts';
 
 /** The observed app's agent session, for the device manager: online first, else the newest dead one. */
-function observedAgentView(){
-  const pkg=localObserver?.package;
+function observedAgentView(serial:string){
+  const pkg=currentLocalObserver()?.package;
   if(!pkg) return null;
   let best:{online:boolean;pid:number;sessionId:string;lastSeen:number;version:string}|null=null;
   for(const session of sessions.values()){
-    if(session.package!==pkg) continue;
+    if(session.package!==pkg||session.deviceBinding?.serial!==serial) continue;
     // 插件版本就是 agent .so 自报的版本（AGENT_VER，与 module.prop 同步升）。面板设备页直接展示。
     const row={online:session.online===true,pid:session.pid,sessionId:session.sessionId,lastSeen:session.lastSeen,
       version:String(session.agentVer??'')};
@@ -73,8 +73,9 @@ async function readDeviceInfo(serial:string,run:AdbRunner):Promise<DeviceInfo>{
 
 /** Wrapped by the same router/operation registry as MCP; no privileged second execution path. */
 export function deviceRoutes({req,url,send}:RouteContext):Route[]{
+  const localObserver=currentLocalObserver();
   const online=()=>!!localObserver&&[...sessions.values()].some(s=>
-    s.online&&s.package===localObserver.package);
+    s.online&&s.package===localObserver.package&&s.deviceBinding?.serial===localObserver.usbSerial);
   return [{path:'/api/devices',handler:async()=>{
   if(localObserver && req.method==='GET' && url.searchParams.get('action')==='info'){
     const serial=String(url.searchParams.get('serial')||'').trim();
@@ -100,7 +101,7 @@ export function deviceRoutes({req,url,send}:RouteContext):Route[]{
         .map(row=>({serial:row.serial,model:row.model||'',state:row.state,link:row.link,
           observed:row.serial===localObserver.usbSerial,rpc:deviceRpcLive(row.serial),
           net:row.link==='adb-tcp'||row.serial.includes(':'),
-          agent:row.serial===localObserver.usbSerial?observedAgentView():null}));
+          agent:observedAgentView(row.serial)}));
     }
     const run:AdbRunner=devs?(args,opts)=>args.join(' ')==='devices -l'?Promise.resolve(devs):realAdbRunner(args,opts):realAdbRunner;
     return send(200,{ok:true,devices:[],transports,localUsb:await localUsbView(localObserver,online(),run)});
@@ -137,11 +138,6 @@ export function deviceRoutes({req,url,send}:RouteContext):Route[]{
       if(action==='observe'){
         const pkg=String(body?.package||'');
         const next=await retargetObserver(serial,pkg);
-        // Agent sessions belong to the previous device; sever them so a
-        // same-named package on the old phone cannot keep feeding the panel.
-        for(const sock of agentSockets.values()) sock.destroy();
-        agentSockets.clear();
-        for(const s of sessions.values()) s.online=false;
         return send(200,{ok:true,serial,package:next.package,pid:next.pid,model:next.model,
           localUsb:await localUsbView(next,false)});
       }

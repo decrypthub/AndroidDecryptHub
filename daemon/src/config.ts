@@ -2,6 +2,7 @@ import { networkInterfaces } from 'node:os';
 
 export const HTTP_PORT = Number(process.env.ADH_HTTP_PORT ?? 8088);
 export const AGENT_PORT = Number(process.env.ADH_AGENT_PORT ?? 8761);
+export const DEVICE_AGENT_PORT = Number(process.env.ADH_DEVICE_AGENT_PORT ?? AGENT_PORT);
 
 const VIRTUAL_NIC = /^(vEthernet|Loopback|WSL|Hyper-V|docker|veth|utun|tun|tap|vmware|virtualbox|vbox|bluetooth|蓝牙|tailscale|zerotier|npcap|wireguard|wintun|hamachi|radmin)/i;
 

@@ -1,3 +1,4 @@
+import {captureMatchesScope,deviceRequestScope,type AgentDeviceBinding} from './agent_scope.ts';
 import { atomicWriteText } from './storage.ts';
 // Package-scoped capture log on disk. Agent still only rings+drains; Host owns the durable store.
 // Layout: {dataDir}/packages/<package>/captures.jsonl — one JSON object per line.
@@ -11,6 +12,7 @@ import { join } from 'node:path';
 export interface PersistedCapture {
   id: number;
   sessionId: string;
+  deviceBinding?:Readonly<AgentDeviceBinding>;
   source: string;
   func: string;
   algo: string;
@@ -31,6 +33,11 @@ export interface PersistedCapture {
   callStack?: string;
 }
 
+function retentionKey(c:{deviceBinding?:Readonly<AgentDeviceBinding>}){return c.deviceBinding?.serial??'legacy-unverified';}
+function retainedLines(lines:string[],retain:number):string[]{
+  if(retain<1)return lines;const counts=new Map<string,number>();
+  return lines.filter(()=>true).reverse().filter(line=>{try{const c=JSON.parse(line);const k=retentionKey(c);const n=(counts.get(k)??0)+1;counts.set(k,n);return n<=retain;}catch{return true;}}).reverse();
+}
 const PKG_RE = /^[a-zA-Z0-9._-]+$/;
 
 // Reject path traversal and junk so a package name never escapes packages/.
@@ -100,7 +107,7 @@ export function trimPackageCapturesFile(dataDir: string, pkg: string, retain: nu
   if (!path || !existsSync(path) || retain < 1) return;
   const lines = readFileSync(path, 'utf8').split('\n').filter(Boolean);
   if (lines.length <= retain) return;
-  const kept = lines.slice(-retain);
+  const kept = retainedLines(lines,retain);
   const tmp = path + '.tmp';
   writeFileSync(tmp, kept.join('\n') + '\n');
   renameSync(tmp, path);
@@ -123,7 +130,7 @@ export function retainCaptureFiles(dataDir: string, policy: { retain: number; ma
         try { const ts = Number(JSON.parse(line).ts) || 0; return !cutoff || !ts || ts >= cutoff; }
         catch { return true; }
       });
-      if (policy.retain > 0) kept = kept.slice(-policy.retain);
+      if (policy.retain > 0) kept = retainedLines(kept,policy.retain);
       const removed = lines.length - kept.length;
       if (!dryRun && removed) {
         if (kept.length) atomicWriteText(path, kept.join('\n') + '\n');
@@ -148,14 +155,14 @@ export function loadCapturesFromDisk(dataDir: string, retain: number): Persisted
     let lines: string[];
     try { lines = readFileSync(path, 'utf8').split('\n').filter(Boolean); }
     catch { continue; }
-    if (retain > 0 && lines.length > retain) lines = lines.slice(-retain);
+    if (retain > 0) lines = retainedLines(lines,retain);
     for (const line of lines) {
       try {
         const c = JSON.parse(line) as PersistedCapture;
         if (!c || typeof c.id !== 'number') continue;
         if (deleted.size && deleted.has(c.id)) continue;
         if (!c.package) c.package = name;
-        out.push(c);
+        if (captureMatchesScope(c)) out.push(c);
       } catch {
         // skip corrupt line
       }
@@ -207,6 +214,11 @@ export function clearPackagePersistedCaptures(dataDir: string, pkg: string): str
   if (!safe) return [`包名不正确: ${pkg}`];
   const dir = join(dataDir, 'packages', safe);
   const path = join(dir, 'captures.jsonl');
+  if(deviceRequestScope()?.serial){
+    // Tombstones preserve other phones, unknown history and malformed rows byte-for-byte.
+    if(existsSync(path))try{for(const line of readFileSync(path,'utf8').split('\n')){try{const c=JSON.parse(line);if(captureMatchesScope({...c,package:c.package||pkg}))markCaptureDeleted(dataDir,pkg,c.id);}catch{}}}catch(e){errors.push((e as Error).message);}
+    return errors;
+  }
   try { if (existsSync(path)) unlinkSync(path); } catch (e) { errors.push(`${path}: ${(e as Error).message}`); }
   try {
     if (existsSync(dir) && readdirSync(dir).length === 0) rmSync(dir, { recursive: true, force: true });
@@ -252,7 +264,9 @@ export function pruneCapturesOlderThan(dataDir: string, maxAgeDays: number, now 
 export function readPackageCapturesJsonl(dataDir: string, pkg: string): string | null {
   const path = packageCapturesPath(dataDir, pkg);
   if (!path || !existsSync(path)) return null;
-  return readFileSync(path, 'utf8');
+  const text=readFileSync(path,'utf8');
+  if(!deviceRequestScope()?.serial&&!deviceRequestScope()?.package)return text;
+  return text.split('\n').filter(line=>{try{const c=JSON.parse(line);return captureMatchesScope({...c,package:c.package||pkg});}catch{return false;}}).join('\n');
 }
 
 // Drop the entire packages/ tree under dataDir.
@@ -260,6 +274,7 @@ export function clearAllPersistedCaptures(dataDir: string): string[] {
   const errors: string[] = [];
   const root = join(dataDir, 'packages');
   if (!existsSync(root)) return errors;
+  if(deviceRequestScope()?.serial){for(const name of readdirSync(root))if(safePackageDirName(name))errors.push(...clearPackagePersistedCaptures(dataDir,name));return errors;}
   try {
     rmSync(root, { recursive: true, force: true });
   } catch (e) {
@@ -279,16 +294,12 @@ export function clearAllPersistedCaptures(dataDir: string): string[] {
 
 // Evict oldest records of pkg from the in-memory list until that package has at most retain.
 // Returns how many were removed (oldest first).
-export function evictPackageFromMemory<T extends { package?: string }>(list: T[], pkg: string, retain: number): T[] {
+export function evictPackageFromMemory<T extends { package?: string;deviceBinding?:Readonly<AgentDeviceBinding> }>(list: T[], pkg: string, retain: number): T[] {
   if (retain < 1) return [];
-  const idxs: number[] = [];
-  for (let i = 0; i < list.length; i++) {
-    const p = list[i].package && list[i].package !== '?' ? list[i].package! : '';
-    if (p === pkg) idxs.push(i);
-  }
-  const drop = idxs.length - retain;
-  if (drop <= 0) return [];
-  const removeAt = new Set(idxs.slice(0, drop));
+  const buckets=new Map<string,number[]>();
+  for(let i=0;i<list.length;i++)if((list[i].package&&list[i].package!=='?'?list[i].package:'')===pkg){const k=retentionKey(list[i]);if(!buckets.has(k))buckets.set(k,[]);buckets.get(k)!.push(i);}
+  const removeAt=new Set<number>();
+  for(const bucket of buckets.values())for(const i of bucket.slice(0,Math.max(0,bucket.length-retain)))removeAt.add(i);
   const evicted: T[] = [];
   for (let i = list.length - 1; i >= 0; i--) {
     if (!removeAt.has(i)) continue;
@@ -299,7 +310,7 @@ export function evictPackageFromMemory<T extends { package?: string }>(list: T[]
 }
 
 // Re-apply per-package retain across the whole in-memory list (e.g. after settings change).
-export function enforcePerPackageRetain<T extends { package?: string }>(list: T[], retain: number): T[] {
+export function enforcePerPackageRetain<T extends { package?: string;deviceBinding?:Readonly<AgentDeviceBinding> }>(list: T[], retain: number): T[] {
   const pkgs = new Set<string>();
   for (const c of list) pkgs.add(c.package && c.package !== '?' ? c.package : '');
   const all: T[] = [];
@@ -404,6 +415,7 @@ function scanOneFilePage(
           if (!hay.includes(needle)) continue;
         }
         if (!c.package) c.package = pkgName;
+        if (!captureMatchesScope(c)) continue;
         rev.push(c);
         if (rev.length >= want) { stopEarly = true; break; }
       }

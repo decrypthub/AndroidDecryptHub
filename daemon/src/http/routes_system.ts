@@ -1,3 +1,4 @@
+import {captureMatchesScope,deviceRequestScope,assertRequestedTarget} from '../agent_scope.ts';
 ﻿import { patchAppCaptureFamily, patchSettings, settingsHttpStatus } from '../settings_service.ts';
 import { HOST_VERSION } from '../version.ts';
 import { maintainData } from '../maintenance.ts';
@@ -16,7 +17,7 @@ import { baseFromHost, isValidPackage, mcpOnboarding } from '../mcp_onboarding.t
 import { handleMcp, MCP_TOOLS } from '../mcp.ts';
 import { scopedApps, mergeScope, packageInstalled, readScopeFile, scopePanelOp, writeScopePackages } from '../scope_list.ts';
 import { coldStartPackage, runningPid, startPackage, stopPackage } from '../app_launch.ts';
-import { localObserver, noteObservedPid } from '../local_observer.ts';
+import { currentLocalObserver, noteObservedPid } from '../local_observer.ts';
 import { readPackageIcon } from '../package_icon.ts';
 import { analyzePackage } from '../app_analyze.ts';
 import { listCaptureArmProtected } from '../service.ts';
@@ -34,6 +35,7 @@ const publicDir = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'pub
 const exchangeCache = new Map<string, { stamp: string; value: HttpAssembly }>();
 
 export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
+  const localObserver=currentLocalObserver();
   const servePublic = (name: string, contentType: string) => async () => {
     const file = join(publicDir, name);
     if (!existsSync(file)) return send(404, { error: 'missing' });
@@ -85,6 +87,7 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       try { body = JSON.parse((await readBody(req)) || '{}'); } catch { return send(400, { ok: false, error: 'JSON 格式错误' }); }
       const pkg = String(body.package || '').trim();
       const action = body.action;
+      assertRequestedTarget(undefined,pkg);
       if (!pkg || !['open', 'stop', 'restart'].includes(String(action))) return send(400, { ok: false, error: '需要应用和动作' });
       if (!(await packageInstalled(pkg))) return send(404, { ok: false, error: '手机上没有这个应用' });
       const result = action === 'stop' ? await stopPackage(pkg) : action === 'restart' ? await coldStartPackage(pkg) : await startPackage(pkg);
@@ -197,11 +200,11 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       let netCount = 0, lastNetId = 0;
       for (const c of captures) if (c.category === 'net') { netCount++; lastNetId = c.id; }
       const stamp = `${netCount}:${lastNetId}`;
-      const key = `${session ?? ''}\n${pkg ?? ''}\n${fromTs ?? ''}\n${toTs ?? ''}`;
+      const key = `${deviceRequestScope()?.serial??''}\n${deviceRequestScope()?.package??''}\n${session ?? ''}\n${pkg ?? ''}\n${fromTs ?? ''}\n${toTs ?? ''}`;
       const hit = exchangeCache.get(key);
       if (hit && hit.stamp === stamp) return send(200, hit.value);
 
-      let list = captures.filter(c => c.category === 'net');
+      let list = captures.filter(c => captureMatchesScope(c)&&c.category === 'net');
       if (session) list = list.filter(c => c.sessionId === session);
       if (pkg) list = list.filter(c => capturePackage(c) === pkg);
       if (fromTs != null && Number.isFinite(fromTs)) list = list.filter(c => c.ts >= fromTs);
@@ -256,6 +259,7 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       // `applyWindow` keeps the cursor/id window out of the predicate: the page count must
       // describe how many records exist, not how many are left after the cursor.
       const matchesFilters = (c: Capture, applyWindow: boolean) => {
+        if(!captureMatchesScope(c))return false;
         if (applyWindow) {
           if (c.id <= since) return false;
           if (beforeId != null && Number.isFinite(beforeId) && c.id >= beforeId) return false;
@@ -305,7 +309,7 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
 
       const health = captureHealth();
       return send(200, {
-        total: captures.length, on: captureTimers.size > 0,
+        total: captures.filter(c=>captureMatchesScope(c)).length, on: [...captureTimers.keys()].some(id=>{const target=sessions.get(id);return target&&captureMatchesScope(target);}),
         // Records matching the current package/category/query in the retained window.
         // `total` stays the whole per-package store; `matched` is what this page is a slice of.
         matched,
@@ -316,7 +320,7 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
         latestId: pageList.at(-1)?.id ?? null,
         ...health, health,
         captures: pageList.map(c => ({
-          id: c.id, sessionId: c.sessionId, package: capturePackage(c), source: c.source, category: c.category,
+          id: c.id, sessionId: c.sessionId, deviceBinding:c.deviceBinding, package: capturePackage(c), source: c.source, category: c.category,
           algo: c.algo, op: c.op, func: c.func, inl: c.inl, outl: c.outHex ? c.outHex.length / 2 : 0,
           hasKey: !!c.keyHex, tid: c.tid, ts: c.ts,
           preview: c.category === 'net' ? previewForCapture(c.func, c.hex) : c.preview,
@@ -352,7 +356,9 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
         try { body = JSON.parse(await readBody(req) || '{}'); } catch { return send(400, { ok: false, error: 'bad json' }); }
         if (body?.action !== 'delete') return send(400, { ok: false, error: '未知操作' });
         if (!Number.isFinite(id) || id <= 0) return send(400, { ok: false, error: '无效的记录编号' });
-        const idx = captures.findIndex(x => x.id === id);
+        const found=captures.find(x=>x.id===id)??findPersistedCaptureById(DATA_DIR,id,url.searchParams.get('package')||undefined);
+        if(!found||!captureMatchesScope(found))return send(404,{error:'not found'});
+        const idx = captures.findIndex(x => x.id === id&&captureMatchesScope(x));
         const mem = idx >= 0 ? captures.splice(idx, 1)[0] : undefined;
         let pkg = url.searchParams.get('package') || (mem ? capturePackage(mem) : '');
         if (!pkg) pkg = findPersistedCaptureById(DATA_DIR, id)?.package ?? '';
@@ -361,7 +367,7 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       }
       const c = captures.find(x => x.id === id)
         ?? (findPersistedCaptureById(DATA_DIR, id, url.searchParams.get('package') || undefined) as unknown as Capture | null);
-      if (!c) return send(404, { error: 'not found' });
+      if (!c||!captureMatchesScope(c)) return send(404, { error: 'not found' });
       // decode as UTF-8 so Chinese plaintext (gray-market payloads) is readable, not dotted
       let text = '';
       try { text = Buffer.from(c.hex, 'hex').toString('utf8'); } catch { text = hexToPreview(c.hex, 4096); }
@@ -373,14 +379,14 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       const since = Number(url.searchParams.get('since') ?? 0);
       const limit = Math.min(Number(url.searchParams.get('limit') ?? 500), 5000);
       const pkg = url.searchParams.get('package');
-      let list = events.filter(e => e.seq > since && (!type || e.type === type));
+      let list = events.filter(e => captureMatchesScope((e.data??{}) as any)&&e.seq > since && (!type || e.type === type));
       if (pkg) list = list.filter(e => eventPackage(e.data) === pkg);
       return send(200, { total: events.length, returned: Math.min(list.length, limit), events: list.slice(-limit) });
     } },
     // Diagnostic report / export (P/R) — metadata only, no captured keys/plaintext.
     { path: '/api/export/report', handler: () => send(200, {
       report: 'adh-diagnostic', version: '0.1.0', hostVersion: HOST_VERSION, generatedAt: new Date().toISOString(), uptime: process.uptime(),
-      agents: [...sessions.values()].map(s => ({ sessionId: s.sessionId, package: s.package, pid: s.pid, abi: s.abi, android: s.android, sdk: s.sdk, entry: s.entry, online: s.online, mapsCount: s.mapsCount })),
+      agents: [...sessions.values()].filter(captureMatchesScope).map(s => ({ sessionId: s.sessionId, package: s.package, pid: s.pid, abi: s.abi, android: s.android, sdk: s.sdk, entry: s.entry, online: s.online, mapsCount: s.mapsCount })),
       dumps: [...dumps.values()].map(d => ({ sha256: d.sha256, kind: d.kind, size: d.size, source: d.source, tag: d.tag, capturedAt: d.capturedAt })),
       capabilities: { rest: true, websocket: true, mcp: true, mcpTools: MCP_TOOLS.length },
       note: 'metadata only — captured key/plaintext content is never in diagnostic reports',
@@ -427,6 +433,8 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       const what = String(body.what || '');
       const pkg = String(body.package || '').trim();
       const errors: string[] = [];
+      assertRequestedTarget(undefined,pkg);
+      if(deviceRequestScope()?.serial&&what!=='captures')return send(409,{error:'事件和产物尚不支持按设备安全清理，请使用明确的全局维护入口'});
       if (!['captures', 'events', 'dumps'].includes(what)) return send(400, { error: 'what 必须是 captures|events|dumps' });
       localEffect(() => {
         if (what === 'captures') {
@@ -446,7 +454,7 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
           }
         }
       });
-      broadcast('data.cleared', { what, package: pkg || undefined });
+      broadcast('data.cleared', { what, package: pkg || undefined, serial:deviceRequestScope()?.serial });
       if (errors.length) { log(`[data/clear] ${what} 部分磁盘删除失败:`, errors.join('; ')); return send(500, { error: `内存索引已清，但磁盘删除失败(${errors.length}项)`, cleared: what, errors, stats: configStats() }); }
       return send(200, { ok: true, cleared: what, package: pkg || undefined, stats: configStats() });
     } },

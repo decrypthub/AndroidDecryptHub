@@ -3,7 +3,7 @@ import { adbExecBuffer } from './adb_wire.ts';
 import { catalogIcon, ensureCatalogIdentity } from './app_catalog.ts';
 import { apkAaptDumps } from './scope_list.ts';
 import { shQuote } from './sandbox_fs.ts';
-import { deviceIcon, deviceSerial } from './device_bridge.ts';
+import { deviceIcon, deviceSerial ,deviceAdbPrefix} from './device_bridge.ts';
 export interface PackageIcon { body: Buffer; type: string; etag: string }
 
 const cache = new Map<string, { at: number; v: PackageIcon | null }>();
@@ -22,7 +22,7 @@ function iconUnavailable(): Error {
 }
 
 function adbBase(serial = deviceSerial()): string[] {
-  return serial ? ['-s', serial] : [];
+  return deviceAdbPrefix(serial);
 }
 
 async function adbOut(command: string, serial?: string): Promise<Buffer> {

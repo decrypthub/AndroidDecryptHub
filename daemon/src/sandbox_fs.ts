@@ -1,3 +1,4 @@
+import {deviceAdbPrefix} from './device_bridge.ts';
 import { checkpoint, trackedEffect } from './execution_context.ts';
 // The app sandbox lives on the phone at /data/data/<package> (often a symlink to
 // /data/user/0/<package>). Reading it does not need the app process: the host
@@ -235,8 +236,7 @@ function explainAdb(e: unknown): Error {
 }
 
 function adbBase(): string[] {
-  const serial = process.env.ANDROID_SERIAL || process.env.ADH_SERIAL || '';
-  return serial ? ['-s', serial] : [];
+  return deviceAdbPrefix();
 }
 
 async function adbShell(command: string): Promise<string> {

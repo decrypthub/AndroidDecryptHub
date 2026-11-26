@@ -1,3 +1,4 @@
+import {captureMatchesScope,deviceRequestScope,captureMatchesDevice,freezeDeviceBinding,type AgentDeviceBinding} from './agent_scope.ts';
 // state.ts — ADH Daemon shared state + leaf mutators.
 // Pure state holder: imports NOTHING from service.ts/mcp.ts/index.ts (no circular refs).
 // Imported by everyone. Everything that holds runtime state or is a leaf helper lives here;
@@ -43,6 +44,7 @@ export interface MapsRegion {
 }
 export interface AgentSession {
   sessionId: string;
+  readonly deviceBinding?:Readonly<AgentDeviceBinding>;
   pid: number;
   uid: number;
   // Decimal /proc/self/stat field 22, supplied by current agents at hello.
@@ -548,7 +550,14 @@ export function familyOf(algo: string): 'tls' | 'asymmetric' | 'hmac' | 'digest'
 // (their algo doesn't map to a crypto family, so familyOf would misclassify them).
 // Durable truth: when the entry has a package, append the full record under
 // adhd-data/packages/<pkg>/captures.jsonl so a daemon restart can replay it.
+function stampCaptureDevice(entry:Capture):Capture {
+  const session=sessions.get(entry.sessionId);
+  // Only new live ingestion is stamped. Disk recovery bypasses this function, so legacy
+  // records are never retroactively attributed to whichever device is selected today.
+  return session?.deviceBinding?{...entry,deviceBinding:freezeDeviceBinding(session.deviceBinding)}:entry;
+}
 export function pushCapture(entry: Capture): boolean {
+  entry=stampCaptureDevice(entry);
   // Explicit app selections are applied at the agent. Keep observations produced by a Hook
   // plan even when the app's panel selection is different.
   if (entry.category === 'crypto' && !packageFamilies(entry.package ?? '')
@@ -573,7 +582,7 @@ export function pushCapture(entry: Capture): boolean {
 /** Batch form used by capture drains: one disk append and one retention pass per package instead
  *  of one of each per record. Filtering and ordering are identical to repeated pushCapture calls. */
 export function pushCaptureBatch(entries: Capture[]): Capture[] {
-  const accepted = entries.filter((entry) => !(entry.category === 'crypto' && !packageFamilies(entry.package ?? '')
+  const accepted = entries.map(stampCaptureDevice).filter((entry) => !(entry.category === 'crypto' && !packageFamilies(entry.package ?? '')
     && settings.capture.families[familyOf(entry.algo)] === false));
   if (!accepted.length) return accepted;
   captures.push(...accepted);
@@ -602,6 +611,7 @@ export function pushCaptureBatch(entries: Capture[]): Capture[] {
 
 /** Drop in-memory captures and the on-disk packages/ tree. Returns disk errors (if any). */
 export function clearCaptureStore(): string[] {
+  if(deviceRequestScope()?.serial){for(let i=captures.length-1;i>=0;i--)if(captureMatchesScope(captures[i]))captures.splice(i,1);return clearAllPersistedCaptures(DATA_DIR);}
   captures.length = 0;
   recentJavaIn.clear();
   return clearAllPersistedCaptures(DATA_DIR);
@@ -610,7 +620,7 @@ export function clearCaptureStore(): string[] {
 /** Drop one package from memory and disk. */
 export function clearPackageCaptureStore(pkg: string): string[] {
   for (let i = captures.length - 1; i >= 0; i--) {
-    if (capturePackage(captures[i]) === pkg) captures.splice(i, 1);
+    if (capturePackage(captures[i]) === pkg && captureMatchesScope(captures[i])) captures.splice(i, 1);
   }
   return clearPackagePersistedCaptures(DATA_DIR, pkg);
 }
@@ -649,7 +659,7 @@ export function captureModules() { return { cryptoModule: settings.capture.crypt
 //      加解密 list reads this; it auto-populates without any button click) -------------
 export type CapCategory = 'crypto' | 'net' | 'file' | 'system';
 export interface Capture {
-  id: number; sessionId: string; source: 'java' | 'native'; func: string; algo: string; op: string;
+  id: number; sessionId: string; deviceBinding?:Readonly<AgentDeviceBinding>; source: 'java' | 'native'; func: string; algo: string; op: string;
   category: CapCategory;
   inl: number; tid: number; tsNs: number; ts: number; hex: string; preview: string;
   /** SSL* for a TLS record (`0x…`). The host pairs HTTP/1.1 on this, per session. */
@@ -709,7 +719,7 @@ export function capturePackage(c: { package?: string; sessionId?: string }): str
 export function filterLiveCaptures<T extends { category: string; package?: string; sessionId: string; hookId?: number }>(
   list: readonly T[], opts: { category?: string; session?: string; package?: string; hookId?: number },
 ): T[] {
-  let out = list as readonly T[];
+  let out = list.filter(entry=>captureMatchesDevice(entry as {deviceBinding?:Readonly<AgentDeviceBinding>})) as readonly T[];
   if (opts.category) out = out.filter((c) => c.category === opts.category);
   if (opts.session) out = out.filter((c) => c.sessionId === opts.session);
   if (opts.package) out = out.filter((c) => capturePackage(c) === opts.package);
@@ -734,6 +744,7 @@ export function knownApps(): KnownApp[] {
     return cur;
   };
   for (const s of sessions.values()) {
+    if(!captureMatchesScope(s))continue;
     const cur = touch(s.package);
     if (!cur) continue;
     cur.sessions++;
@@ -742,11 +753,13 @@ export function knownApps(): KnownApp[] {
     if (s.online) cur.online = true;
   }
   for (const c of captures) {
+    if(!captureMatchesScope(c))continue;
     const cur = touch(capturePackage(c));
     if (!cur) continue;
     cur.lastSeen = Math.max(cur.lastSeen, c.ts || 0);
   }
   for (const e of events) {
+    if(!captureMatchesScope((e.data??{}) as any))continue;
     const cur = touch(eventPackage(e.data));
     if (!cur) continue;
     cur.lastSeen = Math.max(cur.lastSeen, e.ts || 0);
@@ -771,7 +784,7 @@ function bumpSession(sessionId: string | undefined, field: 'pushed' | 'evicted')
 // capSeq lives in service.ts — it's ++'d inside startCaptureLoop there, and ESM imported
 // bindings are read-only for the importer (can't reassign from another module). It's only
 // used by the capture loop, so it's a service-local counter, not shared state.
-export const recentJavaIn = new Map<string, number>();   // input-hex -> ts, to dedup native echoes
+export const recentJavaIn = new Map<string, number>();   // session:input-hex -> ts; never dedup another phone
 export const captureTimers = new Map<string, ReturnType<typeof setInterval>>();
 // WS-C: per-session honest capture accounting from the agent ring's capture_drain stats.
 // seq/dropped/jdropped are CUMULATIVE IN THE AGENT PROCESS, while emitted counts only what THIS
@@ -811,10 +824,11 @@ export function captureHealth() {
   // handful of in-flight records into thousands and made verify_v22 read as a silent loss.
   // The health object answers "how is the ring doing RIGHT NOW"; the stale side is reported
   // separately instead of being folded in or hidden.
-  const liveIds = new Set([...sessions.values()].filter((s) => s.online).map((s) => s.sessionId));
+  const liveIds = new Set([...sessions.values()].filter((s) => s.online&&captureMatchesScope(s)).map((s) => s.sessionId));
   let seq = 0, emitted = 0, dropped = 0, jdropped = 0, backlog = 0; let complete = true;
   let baseSeq = 0, baseDropped = 0, agentResidual = 0, staleResidual = 0, staleSessions = 0;
   for (const [sid, s] of capStats.entries()) {
+    if((deviceRequestScope()?.serial||deviceRequestScope()?.package)&&!captureMatchesScope(sessions.get(sid)??{}))continue;
     const b = s.base ?? { seq: s.seq, dropped: s.dropped, jdropped: s.jdropped, drained: s.drained, emitted: s.emitted };
     if (!liveIds.has(sid)) {
       staleSessions++;
@@ -838,6 +852,7 @@ export function captureHealth() {
   //                them: a drain response that never reached processDrain (timeout/socket error).
   let agentLost = 0, daemonLost = 0;
   for (const [sid, s] of capStats.entries()) {
+    if((deviceRequestScope()?.serial||deviceRequestScope()?.package)&&!captureMatchesScope(sessions.get(sid)??{}))continue;
     if (!liveIds.has(sid)) continue;
     const b = s.base ?? { seq: s.seq, dropped: s.dropped, jdropped: s.jdropped, drained: s.drained, emitted: s.emitted };
     const dSeq = Math.max(0, s.seq - b.seq), dDropped = Math.max(0, s.dropped - b.dropped);
@@ -989,6 +1004,7 @@ export function classify(func: string): { algo: string; op: string } {
 export function cryptoIdentify() {
   const byAlgo = new Map<string, { algo: string; op: string; count: number; source: string; keyHex?: string; ivHex?: string; sampleId?: number; samplePlain?: string }>();
   for (const c of captures) {
+    if(!captureMatchesScope(c))continue;
     const key = c.algo + '|' + c.op;
     const e = byAlgo.get(key) ?? { algo: c.algo, op: c.op, count: 0, source: c.source };
     e.count++;
@@ -1026,12 +1042,11 @@ export function eventPackage(data: unknown): string {
   }
   return '';
 }
-function stampPackage(data: unknown): unknown {
-  if (!data || typeof data !== 'object' || Array.isArray(data)) return data;
-  const d = data as Record<string, unknown>;
-  if (typeof d.package === 'string' && d.package) return data;
-  const pkg = eventPackage(d);
-  return pkg ? { ...d, package: pkg } : data;
+function stampPackage(data: unknown):unknown {
+  if(!data||typeof data!=='object'||Array.isArray(data))return data;
+  const d=data as Record<string,unknown>,pkg=eventPackage(d);
+  const target=typeof d.sessionId==='string'?sessions.get(d.sessionId):undefined;
+  return {...d,...(pkg?{package:pkg}:{}),...(target?.deviceBinding?{deviceBinding:target.deviceBinding}:{})};
 }
 export function broadcast(event: string, data: unknown) {
   const stamped = stampPackage(data);

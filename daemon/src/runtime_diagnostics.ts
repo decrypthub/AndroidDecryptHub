@@ -1,3 +1,5 @@
+import {deviceSerial} from './device_bridge.ts';
+import {assertRequestedTarget} from './agent_scope.ts';
 // Read-only procfs diagnostics independent of agent transport. A frozen agent
 // cannot answer commands; it must not be diagnosed by sending it another RPC.
 import { posix } from 'node:path';
@@ -176,7 +178,8 @@ function procFromWire(values: Record<string, string | undefined>): ProcSnapshot 
 }
 
 export async function diagnoseRuntime(target: RuntimeTarget, a: Record<string, any> = {}, deps: DiagnosticDeps = defaults) {
-  const spec = normalizeRuntimeDiagnostics(target, a), serial = await deps.selectSerial(a.serial);
+  assertRequestedTarget(a.serial);
+  const spec = normalizeRuntimeDiagnostics(target, a), serial = await deps.selectSerial(a.serial??(deviceSerial()||undefined));
   const observedAt = new Date().toISOString();
   // adb shell rebuilds a remote shell command from argv. Quote the complete
   // script for that shell so metacharacters/functions reach su -c as ONE arg.

@@ -2,6 +2,11 @@
 // Boot + agent-TCP frame decode live here. REST route domains live under src/http/.
 import http from 'node:http';
 import net from 'node:net';
+import {acceptAgentSocket} from './agent_transport.ts';
+import {UsbAgentRoutes,setUsbAgentRoutes} from './usb_agent_routes.ts';
+import {withDeviceScope,httpDeviceScope} from './agent_scope.ts';
+import {DEVICE_AGENT_PORT} from './config.ts';
+import {parseAdbDevices,realAdbRunner} from './transport/adb_device.ts';
 import { AGENT_PORT, HTTP_PORT, webUrls } from './config.ts';
 import { acceptsLocalHello, initLocalObserver, isOwnDemoPackage, localObserver, localObserverHost, observerHost, noteObservedPid } from './local_observer.ts';
 import { handleHttp } from './http/router.ts';
@@ -22,132 +27,11 @@ import { normalizeStarttimeTicks } from './proc_identity.ts';
 
 // ---- Agent TCP server (NDJSON) -------------------------------------------
 
-const agentServer = net.createServer((sock) => {
-  let session: AgentSession | null = null;
-  let acc: Buffer = Buffer.alloc(0);
-  sock.setNoDelay(true);
-
-  sock.on('data', (chunk: Buffer) => {
-    acc = acc.length ? Buffer.concat([acc, chunk]) : chunk;
-    for (;;) {
-      if (acc.length < 5) break;
-      const len = acc.readUInt32BE(0);
-      const type = acc.readUInt8(4);
-      if (len > FRAME_MAX) { log(`agent frame too large ${len} type=${type} — closing`); sock.destroy(); return; }
-      if (acc.length < 5 + len) break;                 // wait for the rest of the frame
-      const payload = acc.subarray(5, 5 + len);
-      acc = acc.subarray(5 + len);
-      if (type !== FRAME_JSON) { log(`agent unknown frame type ${type} — skipping`); continue; }
-      let msg: AgentMsg;
-      try { msg = JSON.parse(payload.toString('utf8')); } catch { log('bad json frame from agent, bytes=', len); continue; }
-      if (!msg || typeof msg !== 'object' ||
-          (localObserver && (session ? msg.t === 'hello' : !acceptsLocalHello(localObserver, msg)))) {
-        sock.destroy();
-        return;
-      }
-      handle(msg);
-    }
-  });
-
-  function handle(msg: AgentMsg) {
-    if (msg.t === 'hello') {
-      const id = nextId();
-      session = {
-        sessionId: id,
-        pid: msg.pid ?? 0,
-        uid: msg.uid ?? 0,
-        starttimeTicks: normalizeStarttimeTicks(msg.starttimeTicks),
-        package: msg.package ?? '?',
-        process: msg.process ?? msg.package ?? '?',
-        abi: msg.abi ?? '?',
-        android: msg.android ?? '?',
-        sdk: msg.sdk ?? 0,
-        entry: msg.entry ?? '?',
-        agentVer: msg.agentVer ?? '?',
-        selfModule: msg.selfModule ?? '',
-        selfBase: msg.selfBase ?? '',
-        policy: msg.policy ?? '',
-        earlyPlan: msg.earlyPlan ?? null,
-        connectedAt: Date.now(),
-        lastSeen: Date.now(),
-        online: true,
-        mapsCount: 0,
-        regionsSample: [],
-      };
-      sessions.set(id, session);
-      pruneSessions();   // a new dial-in is the natural moment to drop stale dead sessions
-      agentSockets.set(id, sock);
-      log(`agent HELLO ${session.package} pid=${session.pid} abi=${session.abi} entry=${session.entry} self=${session.selfModule || '?'} -> ${id}`);
-      sock.write(frameJson({ t: 'ack', sessionId: id }));
-      // Fresh process after unpack: allow auto-arm again (protect only blocks the live post-unpack session).
-      clearCaptureArmProtect(session.package);
-      broadcast('agent.hello', session);
-      // Draining starts immediately. The algorithms checked in the panel are installed here,
-      // on this process, so a restarted app keeps the same hooks.
-      startCaptureLoop(id,{skipArm:true});
-      if (!localObserver) void applyCaptureSettingsOnConnect(id).then(result => {
-        if (result?.ok === false) log(`[capture] family arm ${id}:`, result.error || 'capture settings not applied');
-      }).catch(error => log(`[capture] family arm ${id}:`, (error as Error).message));
-      else if (session.package === localObserver.package) {
-        // The observer tracks the live generation: a restarted app arrives with a new pid and
-        // must update it or status/own-files checks keep pointing at the dead process. Only the
-        // main process counts — `pkg:remote` helper pids are still sessions, just not THE app.
-        if (!session.process || session.process === session.package) noteObservedPid(session.package, session.pid);
-        void (isOwnDemoPackage(session.package)
-        ? armSandboxCapture(id)
-        : setCapture(id, true, { fileModule: 'libc.so', sysModule: 'libc.so' }))
-        .then(result => log(`[capture] example arm ${id}: ok=${result.ok} installed=${result.installed}/${result.attempted}${result.notInstalled.length ? ' missing=' + result.notInstalled.join(',') : ''}${result.error ? ' ' + result.error : ''}`))
-        .catch(error => log(`[capture] example arm ${id}:`, (error as Error).message));
-      }
-    } else if (msg.t === 'caps' && session) {
-      // Arrives right after the hello (before the maps sample). Stored on the session, never
-      // merged from another session: two processes of the same app can run different builds.
-      session.caps = {
-        ops: Array.isArray(msg.ops) ? msg.ops : [],
-        limits: (msg.limits && typeof msg.limits === 'object') ? msg.limits : {},
-        ...(msg.error ? { error: msg.error } : {}),
-      };
-      session.lastSeen = Date.now();
-      log(`agent CAPS ${session.package} ops=${session.caps.ops?.length ?? 0}${msg.error ? ` error=${msg.error}` : ''}`);
-      broadcast('agent.caps', { sessionId: session.sessionId, caps: session.caps });
-    } else if (msg.t === 'maps' && session) {
-      session.mapsCount = msg.count;
-      session.regionsSample = (msg.regions ?? []).slice(0, 50);
-      session.lastSeen = Date.now();
-      log(`agent MAPS ${session.package} count=${msg.count}`);
-      broadcast('agent.maps', { sessionId: session.sessionId, count: msg.count });
-    } else if (msg.t === 'ping' && session) {
-      session.lastSeen = Date.now();
-      sock.write(frameJson({ t: 'pong' }));
-    } else if (msg.t === 'captureBatch' && session) {
-      ingestAgentCaptureFrame(session.sessionId, msg);
-      session.lastSeen = Date.now();
-    } else if (msg.t === 'cmdResult') {
-      const p = pending.get(msg.id);
-      log(`cmdResult op=${msg.op} id=${msg.id} matched=${!!p} bytes=${JSON.stringify(msg).length}`);
-      if (p) { clearTimeout(p.timer); pending.delete(msg.id); p.resolve(msg); }
-      if (session) session.lastSeen = Date.now();
-    }
-  }
-
-  sock.on('close', () => {
-    if (session) {
-      session.online = false;
-      session.lastSeen = Date.now();
-      agentSockets.delete(session.sessionId);
-      // Commands still waiting on this session can never be answered: fail them NOW with a reason, so a
-      // caller sees "the target disconnected while this command was running" instead of a timeout that
-      // looks like a slow target.
-      const failed = failPendingFor(session.sessionId, 'the target disconnected while this command was running (it may have crashed)');
-      if (failed) log(`agent CLOSE ${session.package} ${session.sessionId}: failed ${failed} pending command(s)`);
-      const t = captureTimers.get(session.sessionId);
-      if (t) { clearInterval(t); captureTimers.delete(session.sessionId); forgetCaptureSession(session.sessionId); }
-      log(`agent CLOSE ${session.package} ${session.sessionId}`);
-      broadcast('agent.close', { sessionId: session.sessionId, package: session.package, pid: session.pid });
-      pruneSessions();
-    }
-  });
-  sock.on('error', (e) => log('agent sock error:', (e as Error).message));
+let routesReady=false;
+const startupSockets=new Set<net.Socket>();
+const agentServer=net.createServer(sock=>{
+  if(!routesReady){if(startupSockets.size>=32){sock.destroy();return;}startupSockets.add(sock);sock.once('close',()=>startupSockets.delete(sock));return;}
+  acceptAgentSocket(sock);
 });
 // Top-level error net: no request may crash the daemon. An uncaught JSON.parse throws SyntaxError
 // -> 400; typed errors carry their own status (e.g. readBody's 413, dumpBuf's 404/400); anything
@@ -162,7 +46,8 @@ const httpServer = http.createServer((req, res) => {
     res.end(JSON.stringify({ ok: false, error: '当前本机入口未授权此操作。' }));
     return;
   }
-  handleHttp(req, res).catch(error=>sendHttpError(req,res,error));
+  try { withDeviceScope(httpDeviceScope(req.headers),()=>handleHttp(req,res)).catch(error=>sendHttpError(req,res,error)); }
+  catch(error){void sendHttpError(req,res,error); }
 });
 
 httpServer.on('upgrade', (req, socket, head) => {
@@ -181,7 +66,25 @@ await initLocalObserver();
 initializeHost();
 initializeOperations();
 const bindAddress = localObserver ? '127.0.0.1' : '0.0.0.0';
-if(!localObserver?.fileBrowserOnly&&!localObserver?.demoApiSerial) agentServer.listen(AGENT_PORT, bindAddress, () => log(`ADH Daemon agent TCP listening on ${bindAddress}:${AGENT_PORT}`));
+const usbRoutes=new UsbAgentRoutes({deviceAgentPort:DEVICE_AGENT_PORT,legacyHostPort:AGENT_PORT,
+  ownsLegacyListener:()=>agentServer.listening,onConnection:(sock,lease)=>acceptAgentSocket(sock,lease)});
+setUsbAgentRoutes(usbRoutes);
+if(!localObserver?.fileBrowserOnly&&!localObserver?.demoApiSerial){
+  await new Promise<void>((resolve,reject)=>{agentServer.once('error',reject);agentServer.listen(AGENT_PORT,bindAddress,()=>{agentServer.off('error',reject);resolve();});});
+  if(process.env.ADH_SKIP_ARTIFACT_LOAD!=='1'){
+    try{
+      const rows=parseAdbDevices(await realAdbRunner(['devices','-l']));
+      const selected=localObserver?.usbSerial||process.env.ANDROID_SERIAL||process.env.ADH_SERIAL;
+      for(const row of rows.filter(r=>r.state==='device'&&(!selected||r.serial===selected))){
+        try{await usbRoutes.ensure(row.serial);}catch(e){log('[agent-route]',row.serial,(e as Error).message);}
+      }
+    }catch(e){log('[agent-route]',(e as Error).message);}
+  }
+}
+routesReady=true;
+// These connections arrived during route publication and have no immutable provenance.
+// Redial into the new listener; never relabel an existing unverified connection.
+for(const sock of startupSockets)sock.destroy();startupSockets.clear();
 httpServer.listen(HTTP_PORT, bindAddress, () => {
   if (localObserver) {
     log(localObserver.fileBrowserOnly ? `Owned USB file browser: ${localObserver.model} · ${localObserver.package} (no Agent listener)`
@@ -205,7 +108,12 @@ httpServer.listen(HTTP_PORT, bindAddress, () => {
   log('└─────────────────────────────────────────────────────────────');
 });
 
-process.on('SIGINT', () => { log('shutting down'); process.exit(0); });
+let shuttingDown=false;
+async function shutdown(){if(shuttingDown)return;shuttingDown=true;log('shutting down');
+  const timer=setTimeout(()=>process.exit(1),10000);timer.unref();
+  await usbRoutes.closeAll();clearTimeout(timer);process.exit(0);
+}
+process.on('SIGINT',()=>void shutdown());process.on('SIGTERM',()=>void shutdown());
 
 // Periodic session sweep: closes can be missed (kill -9, lost sockets), so bound the map anyway.
 // Data retention is an explicit maintenance operation, never part of startup/session sweeps.
@@ -216,7 +124,7 @@ setInterval(() => {
 
 // The injected agent only reaches this process through adb reverse. Re-apply it on a
 // short interval so a USB reconnect does not leave the panel looking at a dead target.
-const keepReverse = () => ensureAdbReverse([AGENT_PORT, HTTP_PORT], (line) => log(line));
+const keepReverse = () => ensureAdbReverse([HTTP_PORT], (line) => log(line));
 if (!localObserver) {
   keepReverse();
   setInterval(keepReverse, 15_000).unref();

@@ -1,3 +1,4 @@
+import {sessionForPackage} from '../service.ts';
 import {
   dumpAllDex, dumpAppSo, dumpOneAppSo, dumpRegion, inventoryUnpack, listUnpackBundles, listUnpackRuns,
   pickSid, pullPackageSo, runUnpackBundle, sendCmd, unpackOneDex, writeMem, restoreMem, listWriteUndo, moduleLoads, autoAntiDebugEnabled,
@@ -12,7 +13,7 @@ import { normalizeThrottleMs, nativeObservationPayload, ensureNativeObservationS
 import { agentPing, hookEngineSelftest, protocolSelfTest } from '../agent_probe.ts';
 import { listDeviceDir, readDeviceFile } from '../fs_browse.ts';
 import { listDevicePath, listSandboxDir, pathInSandbox, readDevicePath, readSandboxFile, normalizeAbs } from '../sandbox_fs.ts';
-import { localObserver } from '../local_observer.ts';
+import { currentLocalObserver } from '../local_observer.ts';
 import { jniFieldDigest } from '../jni_field_digest.ts';
 import { syscallTraceStart, syscallTraceDigest, syscallTraceStop } from '../syscall_trace.ts';
 import { liveDisasm , assertCallableAddress } from '../memory.ts';
@@ -38,14 +39,14 @@ function parseMemSpec(value: unknown): { spec: string } | { error: string } {
 // those); everything else keeps the su path, so /data/app listings and foreign dirs still
 // work and failures stay loud.
 function onlineSessionForPackage(pkg: string): string {
-  for (const s of sessions.values()) if (s.online && s.package === pkg) return s.sessionId;
-  return '';
+  return sessionForPackage(pkg)??'';
 }
 function appSandboxPath(pkg: string, raw: string): boolean {
   try { return pathInSandbox(pkg, normalizeAbs(raw)); } catch { return false; }
 }
 
 export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
+  const localObserver=currentLocalObserver();
   return [
     // WS-D protocol self-test: GET /api/debug/frame_echo?session=ID&kb=N
     // Shares protocolSelfTest with the MCP tool protocol_selftest, so the two surfaces cannot drift.

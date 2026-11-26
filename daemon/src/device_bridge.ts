@@ -1,3 +1,4 @@
+import {usbAgentRoutes} from './usb_agent_routes.ts';
 // Persistent adh.device/1 channels (Frida-style): one control connection and
 // one catalog/icon data connection per serial. When the device daemon is absent
 // or a stream dies, callers fall back to adb only where that fallback is explicit.
@@ -8,11 +9,15 @@ const transport=new AdbDeviceTransport();
 const pending=new Map<string,Promise<DeviceConnection|null>>();
 const dataPending=new Map<string,Promise<DeviceConnection|null>>();
 
-// The panel's device management can re-point every read/write path at another
-// USB serial; env is only the boot default.
-let activeSerial=process.env.ANDROID_SERIAL||process.env.ADH_SERIAL||'';
-export function deviceSerial():string{return activeSerial;}
-export function setDeviceSerial(serial:string){activeSerial=serial;}
+import {deviceRequestScope} from './agent_scope.ts';
+// A boot default is not a mutable cross-tab selection. Every browser/operation pins its
+// own AsyncLocalStorage scope before any await, including callbacks and delayed work.
+const bootSerial=process.env.ANDROID_SERIAL||process.env.ADH_SERIAL||'';
+export function deviceSerial():string{return deviceRequestScope()?.serial??bootSerial;}
+export function deviceAdbPrefix(serial=deviceSerial()):string[]{
+  const route=serial?usbAgentRoutes()?.get(serial):undefined;
+  return route?['-t',route.transportId]:serial?['-s',serial]:[];
+}
 
 // Explicit connect for the panel's device manager: surfaces the real
 // DeviceError (DEVICE_NOT_READY, missing bootstrap, ...) instead of the lazy

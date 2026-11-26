@@ -446,13 +446,19 @@ export async function adbExec(args: string[], opts: { timeout?: number; maxBuffe
     return { stdout: r.stdout, stderr: r.stderr };
   }
   if (cmd === 'exec-out') return { stdout: await adbExecOut(sel, rest.slice(1).join(' '), opts), stderr: '' };
-  if (cmd === 'get-state') return { stdout: await adbDeviceData(sel, 'get-state', timeout), stderr: '' };
-  if (cmd === 'get-serialno') return { stdout: await adbDeviceData(sel, 'get-serialno', timeout), stderr: '' };
-  if (cmd === 'get-devpath') return { stdout: await adbDeviceData(sel, 'get-devpath', timeout), stderr: '' };
+  if (cmd === 'get-state'||cmd === 'get-serialno'||cmd === 'get-devpath') {
+    // These are server-side transport queries, not services implemented by adbd.
+    const prefix=sel.kind==='serial'?`host-serial:${sel.value}`:
+      sel.kind==='transport'&&sel.value!=='any'?`host-transport-id:${sel.value}`:
+      sel.kind==='usb'?'host-usb':'host';
+    return {stdout:await adbHostData(`${prefix}:${cmd}`,timeout),stderr:''};
+  }
   if (cmd === 'reverse') {
     if (rest[1] === '--list') return { stdout: await adbDeviceData(sel, 'reverse:list-forward', timeout), stderr: '' };
     if (rest[1] === '--remove') { await adbDeviceOk(sel, `reverse:killforward:${rest[2]}`, timeout); return { stdout: '', stderr: '' }; }
-    await adbDeviceOk(sel, `reverse:forward:${rest[1]};${rest[2]}`, timeout);
+    let at=1;const norebind=rest[at]==='--no-rebind';if(norebind)at++;
+    if(!rest[at]||!rest[at+1])throw new AdbWireError('adb_wire: reverse 参数不完整');
+    await adbDeviceOk(sel, `reverse:forward:${norebind?'norebind:':''}${rest[at]};${rest[at+1]}`, timeout);
     return { stdout: '', stderr: '' };
   }
   if (cmd === 'forward') {

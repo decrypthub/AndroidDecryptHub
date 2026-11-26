@@ -1,9 +1,18 @@
+import {assertSessionScope,withDeviceScope,verifyAgentBinding,deviceRequestScope} from './agent_scope.ts';
 import { join } from 'node:path';
 import { DATA_DIR, sessions } from './state.ts';
 import { Operations, operationFailure, type OperationMeta, type Principal } from './operations.ts';
 import { describeTool, type OperationSpec } from './operation_registry.ts';
 import { initializeOperatorAccess } from './access_context.ts';
 import { OperationError } from './execution_context.ts';
+
+function scopedCallback(spec:OperationSpec,fn:()=>Promise<any>):()=>Promise<any>{
+  const target=spec.session?sessions.get(spec.session):undefined;
+  if(target)assertSessionScope(target);
+  const inherited=deviceRequestScope();
+  const scope=target?.deviceBinding?{...inherited,serial:target.deviceBinding.serial,package:target.package,session:target.sessionId}:{...inherited};
+  return ()=>withDeviceScope(scope,async()=>{if(target&&spec.mode==='write')await verifyAgentBinding(target);return fn();});
+}
 
 export const operationsRoot=join(DATA_DIR,'operations');
 let coordinator: Operations | undefined;
@@ -19,9 +28,10 @@ export async function runAutomatic(session: string, name: string, meta: ReturnTy
   try {
     const engine=getOperations(),current=engine.snapshot(targetResource(session));
     if(current.epoch!==meta.epoch || current.hostEpoch!==meta.hostEpoch)throw new OperationError('STALE_CONTROL','automatic policy was invalidated by a control change');
-    const op=await engine.execute({name,mode:'write',session},{session},
+    const spec={name,mode:'write' as const,session};
+    const op=await engine.execute(spec,{session},
       {role:'ai',id:'host-automatic',source:'automatic'},
-      {expectedRevision:current.revision,controlEpoch:meta.epoch,hostEpoch:meta.hostEpoch},fn);
+      {expectedRevision:current.revision,controlEpoch:meta.epoch,hostEpoch:meta.hostEpoch},scopedCallback(spec,fn));
     return responseForOperation(op);
   } catch(error) { return operationFailure(error); }
 }
@@ -60,6 +70,7 @@ export function responseForOperation(op: any,transport:'mcp'|'http'='mcp') {
 }
 export async function executeManaged(spec: OperationSpec,args:any,principal:Principal,fn:()=>Promise<any>,transport:'mcp'|'http'='mcp') {
   spec=resolveSpec(spec,args);
+  fn=scopedCallback(spec,fn);
   if(spec.mode==='read' && !args._operation?.taskId)return fn();
   const op=await getOperations().execute(spec,args,principal,args._operation || {},fn);
   return responseForOperation(op,transport);
@@ -94,7 +105,7 @@ export async function manageOperations(a:any,principal:Principal,lookup?:ToolLoo
     if(a.tool==='operations')throw new OperationError('INVALID_OPERATION','cannot recursively submit operation management');
     const tool=lookup?.(a.tool);if(!tool)throw new OperationError('UNKNOWN_TOOL','unknown operation tool');
     const args={...(a.arguments || {})},spec=resolveSpec(describeTool(a.tool,args),args);
-    const operation=engine.submit(spec,args,principal,a._operation || {},()=>tool.handler(args));
+    const operation=engine.submit(spec,args,principal,a._operation || {},scopedCallback(spec,()=>tool.handler(args)));
     return {ok:true,operation};
   }
   return operationFailure(new OperationError('INVALID_ACTION','unknown operations action'));
