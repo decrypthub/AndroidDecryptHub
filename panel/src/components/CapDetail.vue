@@ -10,7 +10,7 @@ const props = defineProps<{ detail: Record<string, unknown> }>();
 const emit = defineEmits<{ deleted: [id: number] }>();
 const c = computed(() => props.detail as unknown as Cap & { text?: string; hex?: string; tid?: number; callStack?: string; hasKey?: boolean; source?: string });
 type FmtMode = 'auto' | 'utf8' | 'hex' | 'b64' | 'hexdump';
-const FMTS: [FmtMode, string][] = [['auto', '自动'], ['utf8', 'UTF-8'], ['hex', 'Hex'], ['b64', 'Base64'], ['hexdump', 'Hexdump']];
+const FMTS: [FmtMode, string][] = [['auto', 'Raw'], ['utf8', 'UTF-8'], ['hex', 'Hex'], ['b64', 'Base64'], ['hexdump', 'Hexdump']];
 const ioTab = ref<'in' | 'out'>('in');
 const fmtIn = ref<FmtMode>('auto');
 const fmtOut = ref<FmtMode>('auto');
@@ -68,6 +68,12 @@ function hexdump(hexStr: string): string {
 function resolveMode(mode: FmtMode, rawHex?: string): Exclude<FmtMode, 'auto'> {
   if (mode !== 'auto') return mode;
   return tryUtf8(rawHex).readable ? 'utf8' : 'hexdump';
+}
+
+// 原始格式标注：捕获的字节本身是合法 UTF-8 文本就是字符串，否则是二进制 bytes
+function rawKind(rawHex?: string, fallbackText?: string): string {
+  if (!rawHex) return fallbackText ? '字符串' : '';
+  return tryUtf8(rawHex).readable ? '字符串' : 'bytes';
 }
 
 function formatBlock(mode: FmtMode, rawHex?: string, fallbackText?: string): { display: string; copyVal: string; mono: boolean } {
@@ -141,6 +147,8 @@ const activeFmt = computed(() => (ioTab.value === 'in' ? fmtIn.value : fmtOut.va
 function setFmt(k: FmtMode) { if (ioTab.value === 'in') fmtIn.value = k; else fmtOut.value = k; }
 const bytes = (n?: number) => (n == null ? '未记录' : `${n} B`);
 const outBytes = computed(() => c.value.outl ?? (c.value.outHex ? c.value.outHex.length / 2 : undefined));
+const inRawKind = computed(() => rawKind(c.value.hex, c.value.text));
+const outRawKind = computed(() => rawKind(c.value.outHex));
 
 watch(() => c.value.id, () => {
   confirmDelete.value = false;
@@ -215,8 +223,8 @@ async function doDelete() {
 
     <div class="io-toolbar">
       <n-radio-group v-model:value="ioTab" size="small">
-        <n-radio-button value="in">{{ inLabel }}<span v-if="c.inl != null" class="seg-meta"> {{ bytes(c.inl) }}</span></n-radio-button>
-        <n-radio-button value="out">{{ outLabel }}<span v-if="hasOutput" class="seg-meta"> {{ bytes(outBytes) }}</span></n-radio-button>
+        <n-radio-button value="in">{{ inLabel }}</n-radio-button>
+        <n-radio-button value="out">{{ outLabel }}</n-radio-button>
       </n-radio-group>
       <n-radio-group v-if="curHasData" :value="activeFmt" size="small" @update:value="setFmt">
         <n-radio-button v-for="[k, lbl] in FMTS" :key="k" :value="k">{{ lbl }}</n-radio-button>
@@ -264,7 +272,7 @@ async function doDelete() {
 
       <template v-if="hasInBlock">
         <div class="io-field">
-          <div class="io-field-label">{{ inDataLabel }} · {{ bytes(c.inl ?? (c.hex ? c.hex.length / 2 : undefined)) }}</div>
+          <div class="io-field-label">{{ inDataLabel }} · {{ bytes(c.inl ?? (c.hex ? c.hex.length / 2 : undefined)) }}{{ inRawKind ? ' · ' + inRawKind : '' }}</div>
           <div class="io-data main">
             <pre :class="{ mono: formatBlock(fmtIn, c.hex, c.text).mono }">{{ formatBlock(fmtIn, c.hex, c.text).display }}</pre>
             <button type="button" class="blk-copy" title="复制内容"
@@ -278,7 +286,7 @@ async function doDelete() {
     <div v-else class="io-panel">
       <template v-if="hasOutput">
         <div class="io-field">
-          <div class="io-field-label">{{ outDataLabel }} · {{ bytes(outBytes) }}</div>
+          <div class="io-field-label">{{ outDataLabel }} · {{ bytes(outBytes) }}{{ outRawKind ? ' · ' + outRawKind : '' }}</div>
           <div class="io-data main">
             <pre :class="{ mono: formatBlock(fmtOut, c.outHex).mono }">{{ formatBlock(fmtOut, c.outHex).display }}</pre>
             <button type="button" class="blk-copy" title="复制内容"
@@ -316,7 +324,11 @@ async function doDelete() {
   flex-wrap: wrap;
   margin: 14px 0 10px;
 }
-.seg-meta { opacity: 0.6; font-weight: 400; font-size: 11px; }
+/* 工具栏文字层级不能盖过正文数据（正文 12px） */
+.io-toolbar :deep(.n-radio-button) {
+  font-size: 12px;
+  padding-inline: 10px;
+}
 
 /* 数据区：小标签 + 单线框数据块，不再卡片套卡片 */
 .io-panel { display: flex; flex-direction: column; gap: 12px; }
