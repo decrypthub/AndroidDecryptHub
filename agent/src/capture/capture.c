@@ -1034,15 +1034,11 @@ static char g_sys_mods[SYS_MOD_MAX][64];
 static int g_sys_nmods = 0;
 
 static void sys_restore(void) {
-    for (int i = 0; i < g_sys_nmods; i++) {
-        const char *m = g_sys_mods[i];
-        if (!m[0]) continue;
-        if (g_orig_ptrace) adh_got_replace(m, (void *)my_ptrace, (void *)g_orig_ptrace);
-        if (g_orig_access) adh_got_replace(m, (void *)my_access, (void *)g_orig_access);
-        if (g_orig_faccessat) adh_got_replace(m, (void *)my_faccessat, (void *)g_orig_faccessat);
-        if (g_orig_prop) adh_got_replace(m, (void *)my_prop, (void *)g_orig_prop);
-        if (g_orig_prop_read) adh_got_replace(m, (void *)my_prop_read, (void *)g_orig_prop_read);
-    }
+    adh_capture_got_restore((void *)my_ptrace);
+    adh_capture_got_restore((void *)my_access);
+    adh_capture_got_restore((void *)my_faccessat);
+    adh_capture_got_restore((void *)my_prop);
+    adh_capture_got_restore((void *)my_prop_read);
     g_sys_nmods = 0;
 }
 
@@ -1133,6 +1129,43 @@ void adh_capture_get_families(int *digest, int *hmac, int *symmetric, int *asymm
 }
 
 
+static void *capture_method_wrapper(int i) {
+    static void *const wrappers[ADH_CM_COUNT] = {
+        [ADH_CM_CIPHER_UPDATE] = (void *)my_EVP_CipherUpdate,
+        [ADH_CM_DIGEST_UPDATE] = (void *)my_EVP_DigestUpdate,
+        [ADH_CM_HMAC_UPDATE] = (void *)my_HMAC_Update,
+        [ADH_CM_SIGN_UPDATE] = (void *)my_EVP_DigestSignUpdate,
+        [ADH_CM_SSL_WRITE] = (void *)my_SSL_write,
+        [ADH_CM_SSL_READ] = (void *)my_SSL_read,
+        [ADH_CM_CIPHER_INIT] = (void *)my_EVP_CipherInit_ex,
+        [ADH_CM_CIPHER_FREE] = (void *)my_EVP_CIPHER_CTX_free,
+        [ADH_CM_ECDSA_SIGN] = (void *)my_ECDSA_sign,
+        [ADH_CM_ECDSA_VERIFY] = (void *)my_ECDSA_verify,
+        [ADH_CM_PKEY_ENCRYPT] = (void *)my_EVP_PKEY_encrypt,
+        [ADH_CM_PKEY_DECRYPT] = (void *)my_EVP_PKEY_decrypt,
+        [ADH_CM_AEAD_SEAL] = (void *)my_EVP_AEAD_CTX_seal,
+        [ADH_CM_AEAD_OPEN] = (void *)my_EVP_AEAD_CTX_open,
+        [ADH_CM_SIGN_INIT] = (void *)my_EVP_DigestSignInit,
+        [ADH_CM_VERIFY_INIT] = (void *)my_EVP_DigestVerifyInit,
+        [ADH_CM_SIGN_FINAL] = (void *)my_EVP_DigestSignFinal,
+        [ADH_CM_VERIFY_UPDATE] = (void *)my_EVP_DigestVerifyUpdate,
+        [ADH_CM_VERIFY_FINAL] = (void *)my_EVP_DigestVerifyFinal,
+        [ADH_CM_OPEN] = (void *)my_open,
+        [ADH_CM_OPENAT] = (void *)my_openat,
+        [ADH_CM_READ] = (void *)my_read,
+        [ADH_CM_WRITE] = (void *)my_write,
+        [ADH_CM_SYSCALL] = (void *)my_syscall,
+        [ADH_CM_READ_CHK] = (void *)my_read_chk,
+        [ADH_CM_WRITE_CHK] = (void *)my_write_chk,
+        [ADH_CM_PTRACE] = (void *)my_ptrace,
+        [ADH_CM_ACCESS] = (void *)my_access,
+        [ADH_CM_FACCESSAT] = (void *)my_faccessat,
+        [ADH_CM_PROP_GET] = (void *)my_prop,
+        [ADH_CM_PROP_READ] = (void *)my_prop_read,
+    };
+    return i >= 0 && i < ADH_CM_COUNT ? wrappers[i] : NULL;
+}
+
 static uint32_t capture_family_bits(void) {
     return (g_families.digest ? ADH_CF_DIGEST : 0) | (g_families.hmac ? ADH_CF_HMAC : 0) |
         (g_families.symmetric ? ADH_CF_SYMMETRIC : 0) | (g_families.asymmetric ? ADH_CF_ASYMMETRIC : 0) |
@@ -1156,18 +1189,20 @@ void adh_cmd_capture_methods(int fd, const char *id, const char *request) {
     uint32_t effective = adh_capture_method_effective(g_method_selected, capture_family_bits());
     char idj[128]; json_escape(id, idj, sizeof(idj));
     char out[16384];
-    int n = snprintf(out, sizeof(out), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"capture_methods\",\"ok\":%s,\"error\":%s%s%s,\"catalog\":\"%s\",\"revision\":\"%u\",\"on\":%s,\"installationEvidence\":\"last-attempt\",\"methods\":[",
+    int n = snprintf(out, sizeof(out), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"capture_methods\",\"ok\":%s,\"error\":%s%s%s,\"catalog\":\"%s\",\"revision\":\"%u\",\"on\":%s,\"installationEvidence\":\"live-slot-read\",\"methods\":[",
         idj, error ? "false" : "true", error ? "\"" : "", error ? error : "null", error ? "\"" : "",
         ADH_CAPTURE_CATALOG, g_method_revision, g_capture_on ? "true" : "false");
     for (int i = 0; i < ADH_CM_COUNT && n > 0 && (size_t)n < sizeof(out); i++) {
         const struct AdhCaptureMethod *m = &adh_capture_methods[i];
+        struct AdhCaptureSlotState ownership; adh_capture_got_state(capture_method_wrapper(i), &ownership);
         int result = g_method_results[i];
-        const char *state = result == -2 ? "not-armed" : result == -4 ? "no-module" : result == -1 ? "disabled" :
+        const char *state = ownership.unreadable ? "ownership-unknown" : ownership.changed ? "ownership-lost" :
+            ownership.owned ? "installed" : (g_capture_on && result > 0) ? "not-owned" : result == -2 ? "not-armed" : result == -4 ? "no-module" : result == -1 ? "disabled" :
             result == -3 ? "install-error" : result == 0 ? "not-found" : "installed-at-last-attempt";
-        int w = snprintf(out+n, sizeof(out)-(size_t)n, "%s{\"id\":\"native.%s\",\"symbol\":\"%s\",\"families\":%u,\"requested\":%s,\"effective\":%s,\"dependency\":%s,\"state\":\"%s\",\"lastAttemptSlots\":%d,\"requires\":[",
+        int w = snprintf(out+n, sizeof(out)-(size_t)n, "%s{\"id\":\"native.%s\",\"symbol\":\"%s\",\"families\":%u,\"requested\":%s,\"effective\":%s,\"dependency\":%s,\"state\":\"%s\",\"lastAttemptSlots\":%d,\"ownedSlots\":%u,\"changedSlots\":%u,\"unreadableSlots\":%u,\"restoreConflicts\":%u,\"restoreFailures\":%u,\"capacityFailures\":%u,\"requires\":[",
             i ? "," : "", m->symbol, m->symbol, m->families,
             (g_method_selected & (UINT32_C(1)<<i)) ? "true" : "false", (effective & (UINT32_C(1)<<i)) ? "true" : "false",
-            ((effective & ~g_method_selected) & (UINT32_C(1)<<i)) ? "true" : "false", state, result > 0 ? result : 0);
+            ((effective & ~g_method_selected) & (UINT32_C(1)<<i)) ? "true" : "false", state, result > 0 ? result : 0, ownership.owned, ownership.changed, ownership.unreadable, ownership.restoreConflicts, ownership.restoreFailures, ownership.capacityFailures);
         if (w < 0 || (size_t)w >= sizeof(out)-(size_t)n) { n = -1; break; } n += w;
         int first = 1;
         for (int j = 0; j < ADH_CM_COUNT; j++) if (m->dependencies & (UINT32_C(1)<<j)) {
@@ -1226,36 +1261,34 @@ static void capture_native_restore(int *results) {
     int e = 0, w = 0, r = 0, dg = 0, hm = 0, ds = 0;
     int pks = 0, pkv = 0, pke = 0, pkd = 0, aes = 0, aeo = 0;
     int dsi = 0, dvi = 0, dsf = 0, dvu = 0, dvf = 0;
-    if (g_evp_cipher_orig) e  = adh_got_replace(g_crypto_mod, (void *)my_EVP_CipherUpdate, (void *)g_evp_cipher_orig);
-    if (g_orig_evp_digest) dg = adh_got_replace(g_crypto_mod, (void *)my_EVP_DigestUpdate, (void *)g_orig_evp_digest);
-    if (g_orig_hmac)       hm = adh_got_replace(g_crypto_mod, (void *)my_HMAC_Update, (void *)g_orig_hmac);
-    if (g_orig_digest_sign)ds = adh_got_replace(g_crypto_mod, (void *)my_EVP_DigestSignUpdate, (void *)g_orig_digest_sign);
-    if (g_orig_ssl_write)  w  = adh_got_replace(g_crypto_mod, (void *)my_SSL_write, (void *)g_orig_ssl_write);
-    if (g_orig_ssl_read)   r  = adh_got_replace(g_crypto_mod, (void *)my_SSL_read, (void *)g_orig_ssl_read);
-    if (g_evp_cipher_init_orig)     adh_got_replace(g_crypto_mod, (void *)my_EVP_CipherInit_ex, (void *)g_evp_cipher_init_orig);
-    if (g_evp_cipher_ctx_free_orig) adh_got_replace(g_crypto_mod, (void *)my_EVP_CIPHER_CTX_free, (void *)g_evp_cipher_ctx_free_orig);
-    if (g_ecdsa_sign_orig)   pks = adh_got_replace(g_crypto_mod, (void *)my_ECDSA_sign, (void *)g_ecdsa_sign_orig);
-    if (g_ecdsa_verify_orig) pkv = adh_got_replace(g_crypto_mod, (void *)my_ECDSA_verify, (void *)g_ecdsa_verify_orig);
-    if (g_pkey_encrypt_orig) pke = adh_got_replace(g_crypto_mod, (void *)my_EVP_PKEY_encrypt, (void *)g_pkey_encrypt_orig);
-    if (g_pkey_decrypt_orig) pkd = adh_got_replace(g_crypto_mod, (void *)my_EVP_PKEY_decrypt, (void *)g_pkey_decrypt_orig);
-    if (g_aead_seal_orig)    aes = adh_got_replace(g_crypto_mod, (void *)my_EVP_AEAD_CTX_seal, (void *)g_aead_seal_orig);
-    if (g_aead_open_orig)    aeo = adh_got_replace(g_crypto_mod, (void *)my_EVP_AEAD_CTX_open, (void *)g_aead_open_orig);
-    if (g_orig_dsign_init)   dsi = adh_got_replace(g_crypto_mod, (void *)my_EVP_DigestSignInit, (void *)g_orig_dsign_init);
-    if (g_orig_dverify_init) dvi = adh_got_replace(g_crypto_mod, (void *)my_EVP_DigestVerifyInit, (void *)g_orig_dverify_init);
-    if (g_orig_dsign_final)  dsf = adh_got_replace(g_crypto_mod, (void *)my_EVP_DigestSignFinal, (void *)g_orig_dsign_final);
-    if (g_orig_digest_verify)dvu = adh_got_replace(g_crypto_mod, (void *)my_EVP_DigestVerifyUpdate, (void *)g_orig_digest_verify);
-    if (g_orig_dverify_final)dvf = adh_got_replace(g_crypto_mod, (void *)my_EVP_DigestVerifyFinal, (void *)g_orig_dverify_final);
-    // restore persistent file hooks in the module capture_start patched
-    if (g_file_mod[0]) {
-        if (g_orig_open)       adh_got_replace(g_file_mod, (void *)my_open,       (void *)g_orig_open);
-        if (g_orig_openat)     adh_got_replace(g_file_mod, (void *)my_openat,     (void *)g_orig_openat);
-        if (g_orig_read)       adh_got_replace(g_file_mod, (void *)my_read,       (void *)g_orig_read);
-        if (g_orig_fwrite_sys) adh_got_replace(g_file_mod, (void *)my_write,      (void *)g_orig_fwrite_sys);
-        if (g_orig_syscall)    adh_got_replace(g_file_mod, (void *)my_syscall,    (void *)g_orig_syscall);
-        if (g_orig_read_chk)   adh_got_replace(g_file_mod, (void *)my_read_chk,   (void *)g_orig_read_chk);
-        if (g_orig_write_chk)  adh_got_replace(g_file_mod, (void *)my_write_chk,  (void *)g_orig_write_chk);
-        g_file_mod[0] = 0;
-    }
+    if (g_evp_cipher_orig) e  = adh_capture_got_restore((void *)my_EVP_CipherUpdate);
+    if (g_orig_evp_digest) dg = adh_capture_got_restore((void *)my_EVP_DigestUpdate);
+    if (g_orig_hmac)       hm = adh_capture_got_restore((void *)my_HMAC_Update);
+    if (g_orig_digest_sign)ds = adh_capture_got_restore((void *)my_EVP_DigestSignUpdate);
+    if (g_orig_ssl_write)  w  = adh_capture_got_restore((void *)my_SSL_write);
+    if (g_orig_ssl_read)   r  = adh_capture_got_restore((void *)my_SSL_read);
+    if (g_evp_cipher_init_orig)     adh_capture_got_restore((void *)my_EVP_CipherInit_ex);
+    if (g_evp_cipher_ctx_free_orig) adh_capture_got_restore((void *)my_EVP_CIPHER_CTX_free);
+    if (g_ecdsa_sign_orig)   pks = adh_capture_got_restore((void *)my_ECDSA_sign);
+    if (g_ecdsa_verify_orig) pkv = adh_capture_got_restore((void *)my_ECDSA_verify);
+    if (g_pkey_encrypt_orig) pke = adh_capture_got_restore((void *)my_EVP_PKEY_encrypt);
+    if (g_pkey_decrypt_orig) pkd = adh_capture_got_restore((void *)my_EVP_PKEY_decrypt);
+    if (g_aead_seal_orig)    aes = adh_capture_got_restore((void *)my_EVP_AEAD_CTX_seal);
+    if (g_aead_open_orig)    aeo = adh_capture_got_restore((void *)my_EVP_AEAD_CTX_open);
+    if (g_orig_dsign_init)   dsi = adh_capture_got_restore((void *)my_EVP_DigestSignInit);
+    if (g_orig_dverify_init) dvi = adh_capture_got_restore((void *)my_EVP_DigestVerifyInit);
+    if (g_orig_dsign_final)  dsf = adh_capture_got_restore((void *)my_EVP_DigestSignFinal);
+    if (g_orig_digest_verify)dvu = adh_capture_got_restore((void *)my_EVP_DigestVerifyUpdate);
+    if (g_orig_dverify_final)dvf = adh_capture_got_restore((void *)my_EVP_DigestVerifyFinal);
+    // Retry pending slot restoration even after a previous stop cleared its module label.
+    adh_capture_got_restore((void *)my_open);
+    adh_capture_got_restore((void *)my_openat);
+    adh_capture_got_restore((void *)my_read);
+    adh_capture_got_restore((void *)my_write);
+    adh_capture_got_restore((void *)my_syscall);
+    adh_capture_got_restore((void *)my_read_chk);
+    adh_capture_got_restore((void *)my_write_chk);
+    g_file_mod[0] = 0;
     // restore persistent system/detection hooks
     sys_restore();
     results[0] = e;
@@ -1280,6 +1313,10 @@ static void capture_native_restore(int *results) {
 void adh_cmd_capture_start(int fd, const char *id, const char *cryptoModule, const char *fileModule, const char *sysModule) {
     char idj[64]; json_escape(id, idj, sizeof(idj));
     if (g_capture_on) { int previous[17]; capture_native_restore(previous); }
+    if (adh_capture_got_pending()) {
+        char failed[256]; snprintf(failed, sizeof(failed), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"capture_start\",\"ok\":false,\"error\":\"RESTORE_INCOMPLETE\",\"pendingSlots\":%u}", idj, adh_capture_got_pending());
+        send_line(fd, failed); return;
+    }
     capture_method_results_reset();
     g_method_effective = adh_capture_method_effective(g_method_selected, capture_family_bits());
     void *evp = adh_resolve_sym("libcrypto.so", "EVP_CipherUpdate");
@@ -1356,51 +1393,51 @@ void adh_cmd_capture_start(int fd, const char *id, const char *cryptoModule, con
     if (!on_tls)   skip_add(skipped, sizeof(skipped), "sslWrite,sslRead");
     if (!on_aead)  skip_add(skipped, sizeof(skipped), "aead");
     if (!on_sys)   skip_add(skipped, sizeof(skipped), "sys");
-    int re = (evp && capture_method_wanted(ADH_CM_CIPHER_UPDATE))   ? adh_got_replace(g_crypto_mod, evp, (void *)my_EVP_CipherUpdate) : -1;
-    int rd = (dig && capture_method_wanted(ADH_CM_DIGEST_UPDATE))   ? adh_got_replace(g_crypto_mod, dig, (void *)my_EVP_DigestUpdate) : -1;
-    int rh = (hm  && capture_method_wanted(ADH_CM_HMAC_UPDATE))   ? adh_got_replace(g_crypto_mod, hm,  (void *)my_HMAC_Update) : -1;
-    int rs = (dsu && capture_method_wanted(ADH_CM_SIGN_UPDATE)) ? adh_got_replace(g_crypto_mod, dsu, (void *)my_EVP_DigestSignUpdate) : -1;
+    int re = (evp && capture_method_wanted(ADH_CM_CIPHER_UPDATE))   ? adh_capture_got_replace(g_crypto_mod, evp, (void *)my_EVP_CipherUpdate) : -1;
+    int rd = (dig && capture_method_wanted(ADH_CM_DIGEST_UPDATE))   ? adh_capture_got_replace(g_crypto_mod, dig, (void *)my_EVP_DigestUpdate) : -1;
+    int rh = (hm  && capture_method_wanted(ADH_CM_HMAC_UPDATE))   ? adh_capture_got_replace(g_crypto_mod, hm,  (void *)my_HMAC_Update) : -1;
+    int rs = (dsu && capture_method_wanted(ADH_CM_SIGN_UPDATE)) ? adh_capture_got_replace(g_crypto_mod, dsu, (void *)my_EVP_DigestSignUpdate) : -1;
     // A named module often imports SSL_write from its own BoringSSL, not from system
     // libssl.so. Value-match only sees the system address, so the slot looks missing.
     // Name-match and call the pointer that was already in that slot.
     int rw = -1, rr = -1;
     if (on_tls && g_crypto_mod[0]) {
         void *old_w = NULL, *old_r = NULL;
-        int nw = capture_method_wanted(ADH_CM_SSL_WRITE) ? adh_got_replace_by_name_ex(g_crypto_mod, "SSL_write", (void *)my_SSL_write, NULL, &old_w, NULL, 0) : -1;
-        int nr = capture_method_wanted(ADH_CM_SSL_READ) ? adh_got_replace_by_name_ex(g_crypto_mod, "SSL_read", (void *)my_SSL_read, NULL, &old_r, NULL, 0) : -1;
+        int nw = capture_method_wanted(ADH_CM_SSL_WRITE) ? adh_capture_got_replace_by_name_ex(g_crypto_mod, "SSL_write", (void *)my_SSL_write, NULL, &old_w, NULL, 0) : -1;
+        int nr = capture_method_wanted(ADH_CM_SSL_READ) ? adh_capture_got_replace_by_name_ex(g_crypto_mod, "SSL_read", (void *)my_SSL_read, NULL, &old_r, NULL, 0) : -1;
         int w_ok = nw == 1 && old_w && old_w != (void *)my_SSL_write;
         int r_ok = nr == 1 && old_r && old_r != (void *)my_SSL_read;
-        if (!w_ok && nw > 0) adh_got_replace(g_crypto_mod, (void *)my_SSL_write, old_w ? old_w : ow);
-        if (!r_ok && nr > 0) adh_got_replace(g_crypto_mod, (void *)my_SSL_read, old_r ? old_r : orr);
+        if (!w_ok && nw > 0) adh_capture_got_restore((void *)my_SSL_write);
+        if (!r_ok && nr > 0) adh_capture_got_restore((void *)my_SSL_read);
         if (w_ok) { g_orig_ssl_write = (SSL_rw_t)old_w; rw = nw; }
-        else if (ow && capture_method_wanted(ADH_CM_SSL_WRITE)) rw = adh_got_replace(g_crypto_mod, ow, (void *)my_SSL_write);
+        else if (ow && capture_method_wanted(ADH_CM_SSL_WRITE)) rw = adh_capture_got_replace(g_crypto_mod, ow, (void *)my_SSL_write);
         if (r_ok) { g_orig_ssl_read = (SSL_rw_t)old_r; rr = nr; }
-        else if (orr && capture_method_wanted(ADH_CM_SSL_READ)) rr = adh_got_replace(g_crypto_mod, orr, (void *)my_SSL_read);
+        else if (orr && capture_method_wanted(ADH_CM_SSL_READ)) rr = adh_capture_got_replace(g_crypto_mod, orr, (void *)my_SSL_read);
     } else {
-        rw = (ow && capture_method_wanted(ADH_CM_SSL_WRITE)) ? adh_got_replace(g_crypto_mod, ow, (void *)my_SSL_write) : -1;
-        rr = (orr && capture_method_wanted(ADH_CM_SSL_READ)) ? adh_got_replace(g_crypto_mod, orr, (void *)my_SSL_read) : -1;
+        rw = (ow && capture_method_wanted(ADH_CM_SSL_WRITE)) ? adh_capture_got_replace(g_crypto_mod, ow, (void *)my_SSL_write) : -1;
+        rr = (orr && capture_method_wanted(ADH_CM_SSL_READ)) ? adh_capture_got_replace(g_crypto_mod, orr, (void *)my_SSL_read) : -1;
     }
     // Name-based, like the one-shot APIs below: a Cipher.init()/free() the app has not reached yet
     // leaves the PLT slot unbound, so value-match would silently report 0 for a genuinely imported
     // symbol.
-    int rci = (cin && capture_method_wanted(ADH_CM_CIPHER_INIT))  ? adh_got_replace_by_name(g_crypto_mod, "EVP_CipherInit_ex", (void *)my_EVP_CipherInit_ex) : -1;
-    int rcf = (cfr && capture_method_wanted(ADH_CM_CIPHER_FREE))  ? adh_got_replace_by_name(g_crypto_mod, "EVP_CIPHER_CTX_free", (void *)my_EVP_CIPHER_CTX_free) : -1;
+    int rci = (cin && capture_method_wanted(ADH_CM_CIPHER_INIT))  ? adh_capture_got_replace_by_name(g_crypto_mod, "EVP_CipherInit_ex", (void *)my_EVP_CipherInit_ex) : -1;
+    int rcf = (cfr && capture_method_wanted(ADH_CM_CIPHER_FREE))  ? adh_capture_got_replace_by_name(g_crypto_mod, "EVP_CIPHER_CTX_free", (void *)my_EVP_CIPHER_CTX_free) : -1;
     // Name-based install (see adh_got_replace_by_name): these 7 are one-shot BoringSSL APIs the
     // app may never have called before capture_start runs, so their PLT slot is typically
     // still unbound — value-match (adh_got_replace) would silently find 0 matching slots even
     // though the symbol is genuinely imported. Matching by the reloc entry's own symbol name
     // works regardless of bind state.
-    int rpks = (pks && capture_method_wanted(ADH_CM_ECDSA_SIGN)) ? adh_got_replace_by_name(g_crypto_mod, "ECDSA_sign", (void*)my_ECDSA_sign) : -1;
-    int rpkv = (pkv && capture_method_wanted(ADH_CM_ECDSA_VERIFY)) ? adh_got_replace_by_name(g_crypto_mod, "ECDSA_verify", (void*)my_ECDSA_verify) : -1;
-    int rpke = (pke && capture_method_wanted(ADH_CM_PKEY_ENCRYPT)) ? adh_got_replace_by_name(g_crypto_mod, "EVP_PKEY_encrypt", (void*)my_EVP_PKEY_encrypt) : -1;
-    int rpkd = (pkd && capture_method_wanted(ADH_CM_PKEY_DECRYPT)) ? adh_got_replace_by_name(g_crypto_mod, "EVP_PKEY_decrypt", (void*)my_EVP_PKEY_decrypt) : -1;
-    int raes = (aes && capture_method_wanted(ADH_CM_AEAD_SEAL)) ? adh_got_replace_by_name(g_crypto_mod, "EVP_AEAD_CTX_seal", (void*)my_EVP_AEAD_CTX_seal) : -1;
-    int raeo = (aeo && capture_method_wanted(ADH_CM_AEAD_OPEN)) ? adh_got_replace_by_name(g_crypto_mod, "EVP_AEAD_CTX_open", (void*)my_EVP_AEAD_CTX_open) : -1;
-    int rdsi = (dsi && capture_method_wanted(ADH_CM_SIGN_INIT)) ? adh_got_replace_by_name(g_crypto_mod, "EVP_DigestSignInit", (void*)my_EVP_DigestSignInit) : -1;
-    int rdvi = (dvi && capture_method_wanted(ADH_CM_VERIFY_INIT)) ? adh_got_replace_by_name(g_crypto_mod, "EVP_DigestVerifyInit", (void*)my_EVP_DigestVerifyInit) : -1;
-    int rdsf = (dsf && capture_method_wanted(ADH_CM_SIGN_FINAL)) ? adh_got_replace_by_name(g_crypto_mod, "EVP_DigestSignFinal", (void*)my_EVP_DigestSignFinal) : -1;
-    int rdvu = (dvu && capture_method_wanted(ADH_CM_VERIFY_UPDATE)) ? adh_got_replace_by_name(g_crypto_mod, "EVP_DigestVerifyUpdate", (void*)my_EVP_DigestVerifyUpdate) : -1;
-    int rdvf = (dvf && capture_method_wanted(ADH_CM_VERIFY_FINAL)) ? adh_got_replace_by_name(g_crypto_mod, "EVP_DigestVerifyFinal", (void*)my_EVP_DigestVerifyFinal) : -1;
+    int rpks = (pks && capture_method_wanted(ADH_CM_ECDSA_SIGN)) ? adh_capture_got_replace_by_name(g_crypto_mod, "ECDSA_sign", (void*)my_ECDSA_sign) : -1;
+    int rpkv = (pkv && capture_method_wanted(ADH_CM_ECDSA_VERIFY)) ? adh_capture_got_replace_by_name(g_crypto_mod, "ECDSA_verify", (void*)my_ECDSA_verify) : -1;
+    int rpke = (pke && capture_method_wanted(ADH_CM_PKEY_ENCRYPT)) ? adh_capture_got_replace_by_name(g_crypto_mod, "EVP_PKEY_encrypt", (void*)my_EVP_PKEY_encrypt) : -1;
+    int rpkd = (pkd && capture_method_wanted(ADH_CM_PKEY_DECRYPT)) ? adh_capture_got_replace_by_name(g_crypto_mod, "EVP_PKEY_decrypt", (void*)my_EVP_PKEY_decrypt) : -1;
+    int raes = (aes && capture_method_wanted(ADH_CM_AEAD_SEAL)) ? adh_capture_got_replace_by_name(g_crypto_mod, "EVP_AEAD_CTX_seal", (void*)my_EVP_AEAD_CTX_seal) : -1;
+    int raeo = (aeo && capture_method_wanted(ADH_CM_AEAD_OPEN)) ? adh_capture_got_replace_by_name(g_crypto_mod, "EVP_AEAD_CTX_open", (void*)my_EVP_AEAD_CTX_open) : -1;
+    int rdsi = (dsi && capture_method_wanted(ADH_CM_SIGN_INIT)) ? adh_capture_got_replace_by_name(g_crypto_mod, "EVP_DigestSignInit", (void*)my_EVP_DigestSignInit) : -1;
+    int rdvi = (dvi && capture_method_wanted(ADH_CM_VERIFY_INIT)) ? adh_capture_got_replace_by_name(g_crypto_mod, "EVP_DigestVerifyInit", (void*)my_EVP_DigestVerifyInit) : -1;
+    int rdsf = (dsf && capture_method_wanted(ADH_CM_SIGN_FINAL)) ? adh_capture_got_replace_by_name(g_crypto_mod, "EVP_DigestSignFinal", (void*)my_EVP_DigestSignFinal) : -1;
+    int rdvu = (dvu && capture_method_wanted(ADH_CM_VERIFY_UPDATE)) ? adh_capture_got_replace_by_name(g_crypto_mod, "EVP_DigestVerifyUpdate", (void*)my_EVP_DigestVerifyUpdate) : -1;
+    int rdvf = (dvf && capture_method_wanted(ADH_CM_VERIFY_FINAL)) ? adh_capture_got_replace_by_name(g_crypto_mod, "EVP_DigestVerifyFinal", (void*)my_EVP_DigestVerifyFinal) : -1;
     // The per-family verdict travels in the reply below (and in `skipped`), which is where the
     // caller reads it: -1 = skipped by policy, 0 = asked for but absent from this module, 1 = installed.
 
@@ -1418,13 +1455,13 @@ void adh_cmd_capture_start(int fd, const char *id, const char *cryptoModule, con
         if (ord) g_orig_read       = (rw_t)ord;     if (owr) g_orig_fwrite_sys = (rw_t)owr;
         if (osc) g_orig_syscall    = (syscall_t)osc;
         if (orc) g_orig_read_chk   = (read_chk_t)orc; if (owv) g_orig_write_chk = (write_chk_t)owv;
-        fo  = (oo && capture_method_wanted(ADH_CM_OPEN))  ? adh_got_replace(g_file_mod, oo,  (void *)my_open)     : -1;
-        foa = (ooa && capture_method_wanted(ADH_CM_OPENAT)) ? adh_got_replace(g_file_mod, ooa, (void *)my_openat)   : -1;
-        frd = (ord && capture_method_wanted(ADH_CM_READ)) ? adh_got_replace(g_file_mod, ord, (void *)my_read)     : -1;
-        fwr = (owr && capture_method_wanted(ADH_CM_WRITE)) ? adh_got_replace(g_file_mod, owr, (void *)my_write)    : -1;
-        fsc = (osc && capture_method_wanted(ADH_CM_SYSCALL)) ? adh_got_replace(g_file_mod, osc, (void *)my_syscall)  : -1;
-        frc = (orc && capture_method_wanted(ADH_CM_READ_CHK)) ? adh_got_replace(g_file_mod, orc, (void *)my_read_chk) : -1;
-        fwc = (owv && capture_method_wanted(ADH_CM_WRITE_CHK)) ? adh_got_replace(g_file_mod, owv, (void *)my_write_chk): -1;
+        fo  = (oo && capture_method_wanted(ADH_CM_OPEN))  ? adh_capture_got_replace(g_file_mod, oo,  (void *)my_open)     : -1;
+        foa = (ooa && capture_method_wanted(ADH_CM_OPENAT)) ? adh_capture_got_replace(g_file_mod, ooa, (void *)my_openat)   : -1;
+        frd = (ord && capture_method_wanted(ADH_CM_READ)) ? adh_capture_got_replace(g_file_mod, ord, (void *)my_read)     : -1;
+        fwr = (owr && capture_method_wanted(ADH_CM_WRITE)) ? adh_capture_got_replace(g_file_mod, owr, (void *)my_write)    : -1;
+        fsc = (osc && capture_method_wanted(ADH_CM_SYSCALL)) ? adh_capture_got_replace(g_file_mod, osc, (void *)my_syscall)  : -1;
+        frc = (orc && capture_method_wanted(ADH_CM_READ_CHK)) ? adh_capture_got_replace(g_file_mod, orc, (void *)my_read_chk) : -1;
+        fwc = (owv && capture_method_wanted(ADH_CM_WRITE_CHK)) ? adh_capture_got_replace(g_file_mod, owv, (void *)my_write_chk): -1;
     }
     // -- 系统: persistent detection/system-query hooks in each module named by sysModule
     //    (comma-separated, up to SYS_MOD_MAX). Observe-only. A repeat start restores the
@@ -1450,11 +1487,11 @@ void adh_cmd_capture_start(int fd, const char *id, const char *cryptoModule, con
         sp = op ? 0 : -1; sa = oa ? 0 : -1; sf = ofa ? 0 : -1; sg = og ? 0 : -1; sr = ogr ? 0 : -1;
         for (int i = 0; i < g_sys_nmods; i++) {
             const char *m = g_sys_mods[i];
-            if (op && capture_method_wanted(ADH_CM_PTRACE)) sp = sys_sum(sp, adh_got_replace_by_name(m, "ptrace", (void *)my_ptrace));
-            if (oa && capture_method_wanted(ADH_CM_ACCESS)) sa = sys_sum(sa, adh_got_replace_by_name(m, "access", (void *)my_access));
-            if (ofa && capture_method_wanted(ADH_CM_FACCESSAT)) sf = sys_sum(sf, adh_got_replace_by_name(m, "faccessat", (void *)my_faccessat));
-            if (og && capture_method_wanted(ADH_CM_PROP_GET)) sg = sys_sum(sg, adh_got_replace_by_name(m, "__system_property_get", (void *)my_prop));
-            if (ogr && capture_method_wanted(ADH_CM_PROP_READ)) sr = sys_sum(sr, adh_got_replace_by_name(m, "__system_property_read_callback", (void *)my_prop_read));
+            if (op && capture_method_wanted(ADH_CM_PTRACE)) sp = sys_sum(sp, adh_capture_got_replace_by_name(m, "ptrace", (void *)my_ptrace));
+            if (oa && capture_method_wanted(ADH_CM_ACCESS)) sa = sys_sum(sa, adh_capture_got_replace_by_name(m, "access", (void *)my_access));
+            if (ofa && capture_method_wanted(ADH_CM_FACCESSAT)) sf = sys_sum(sf, adh_capture_got_replace_by_name(m, "faccessat", (void *)my_faccessat));
+            if (og && capture_method_wanted(ADH_CM_PROP_GET)) sg = sys_sum(sg, adh_capture_got_replace_by_name(m, "__system_property_get", (void *)my_prop));
+            if (ogr && capture_method_wanted(ADH_CM_PROP_READ)) sr = sys_sum(sr, adh_capture_got_replace_by_name(m, "__system_property_read_callback", (void *)my_prop_read));
         }
     }
     g_method_results[ADH_CM_CIPHER_UPDATE] = !capture_method_wanted(ADH_CM_CIPHER_UPDATE) ? -1 : re < 0 ? -3 : re;
@@ -1542,8 +1579,9 @@ void adh_cmd_capture_stop(int fd, const char *id) {
     int dsf = restored[14];
     int dvu = restored[15];
     int dvf = restored[16];
-    g_capture_on = 0;
-    capture_method_results_reset();
+    unsigned pending_slots = adh_capture_got_pending();
+    g_capture_on = pending_slots ? 1 : 0;
+    if (!pending_slots) capture_method_results_reset();
     cap_reset();
     // Keys outlive a single Cipher only until capture stops; drop the table so a later capture_start
     // cannot stamp a stale key onto a fresh ctx that reused the same address.
@@ -1553,10 +1591,10 @@ void adh_cmd_capture_stop(int fd, const char *id) {
         pthread_mutex_unlock(&g_key_lock);
     }
     char out[700];
-    snprintf(out, sizeof(out), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"capture_stop\",\"ok\":true,\"restored\":{\"evp\":%d,\"digest\":%d,\"hmac\":%d,\"digestSign\":%d,\"sslWrite\":%d,\"sslRead\":%d,"
+    snprintf(out, sizeof(out), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"capture_stop\",\"ok\":%s,\"on\":%s,\"pendingSlots\":%u,\"restored\":{\"evp\":%d,\"digest\":%d,\"hmac\":%d,\"digestSign\":%d,\"sslWrite\":%d,\"sslRead\":%d,"
         "\"pkeySign\":%d,\"pkeyVerify\":%d,\"pkeyEncrypt\":%d,\"pkeyDecrypt\":%d,\"aeadSeal\":%d,\"aeadOpen\":%d,"
         "\"digestSignInit\":%d,\"digestVerifyInit\":%d,\"digestSignFinal\":%d,\"digestVerifyUpdate\":%d,\"digestVerifyFinal\":%d}}\n",
-        idj, e, dg, hm, ds, w, r, pks, pkv, pke, pkd, aes, aeo, dsi, dvi, dsf, dvu, dvf);
+        idj, pending_slots ? "false" : "true", pending_slots ? "true" : "false", pending_slots, e, dg, hm, ds, w, r, pks, pkv, pke, pkd, aes, aeo, dsi, dvi, dsf, dvu, dvf);
     if (fd >= 0) send_line(fd, out);
     LOGI("capture_stop: restored evp=%d sslw=%d sslr=%d", e, w, r);
 }

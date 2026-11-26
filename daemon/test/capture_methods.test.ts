@@ -11,6 +11,7 @@ const capture=readFileSync(join(root,'agent/src/capture/capture.c'),'utf8').repl
 const cmds=readFileSync(join(root,'agent/src/bootstrap/agent_cmds.c'),'utf8');
 const header=join(root,'agent/src/capture/capture_methods.h');
 const hasMethods=existsSync(header);
+const hasSlots=existsSync(join(root,'agent/src/hook/capture_slots.h'));
 const fixture=readFileSync(new URL('./fixtures/capture_methods_fixture.c',import.meta.url),'utf8');
 const compiler=process.env.CC||(process.platform==='win32'&&existsSync('C:/Strawberry/c/bin/gcc.exe')?'C:/Strawberry/c/bin/gcc.exe':'cc');
 const available=spawnSync(compiler,['--version'],{encoding:'utf8',windowsHide:true,timeout:10000}).status===0;
@@ -27,7 +28,7 @@ const globals=[...new Set([...source.matchAll(/\bg_(?:orig_[A-Za-z_0-9]+|evp_[A-
 const wrappers=[...new Set([...source.matchAll(/\bmy_[A-Za-z_0-9]+\b/g)].map(m=>m[0]))];
 let compiled:ReturnType<typeof spawnSync>|undefined;
 if(dir){
- const program=`#define ADH_FIXTURE_PRELUDE\n${fixture}\n#undef ADH_FIXTURE_PRELUDE\n#define ADH_HAS_METHODS ${hasMethods?1:0}\n${hasMethods?'#include "capture_methods.h"':''}\n${types.map(x=>`typedef void *${x};`).join('\n')}\n${globals.map(x=>`static void *${x};`).join('\n')}\n${wrappers.map(x=>`static void ${x}(void) {}`).join('\n')}\n${source}\n${fixture}`;
+ const program=`#define ADH_HAS_SLOTS ${hasSlots?1:0}\n${hasSlots?'#include "../hook/capture_slots.h"':''}\n#define ADH_FIXTURE_PRELUDE\n${fixture}\n#undef ADH_FIXTURE_PRELUDE\n#define ADH_HAS_METHODS ${hasMethods?1:0}\n${hasMethods?'#include "capture_methods.h"':''}\n${types.map(x=>`typedef void *${x};`).join('\n')}\n${globals.map(x=>`static void *${x};`).join('\n')}\n${wrappers.map(x=>`static void ${x}(void) {}`).join('\n')}\n${source}\n${fixture}`;
  writeFileSync(join(dir,'shipping_capture_fixture.c'),program,'utf8');
  compiled=spawnSync(compiler,['-std=c11','-O0','-Werror=implicit-function-declaration','-Werror=return-type','-I',resolve(root,'agent/src/capture'),join(dir,'shipping_capture_fixture.c'),'-o',join(dir,process.platform==='win32'?'fixture.exe':'fixture')],{encoding:'utf8',windowsHide:true,timeout:30000});
 }
@@ -37,7 +38,14 @@ test('persistent method command is actually advertised and dispatched',()=>{
  assert.match(cmds,/"capture_methods"/);
  assert.match(cmds,/strcmp\(op, "capture_methods"\) == 0\) \{\s*adh_cmd_capture_methods\(fd, id, line\)/);
 });
-for(const name of ['defaults','none','single-tls','cipher-dependencies','shared-hmac','family-off','repeat-retarget','stop-ownership','revision','active-reject','catalog-status','malformed',...Array.from({length:31},(_,i)=>`method-${i}`)]) {
+test('shipping capture installers and stop are wired to the exact-prior ownership ledger',()=>{
+ const got=readFileSync(join(root,'agent/src/hook/got.c'),'utf8');
+ assert.match(capture,/adh_capture_got_replace_by_name_ex/);assert.match(capture,/adh_capture_got_restore/);
+ assert.doesNotMatch(capture,/\badh_got_replace(?:_by_name(?:_ex)?)?\(/);
+ assert.match(got,/capture_owned \? adh_capture_slot_publish/);
+ assert.match(got,/adh_capture_slot_restore\(&g_capture_slots/);
+});
+for(const name of ['defaults','none','single-tls','cipher-dependencies','shared-hmac','family-off','repeat-retarget','stop-ownership','revision','active-reject','catalog-status','malformed','exact-prior','multi-prior','unreadable-stop','capacity','publish-failure','live-ownership',...Array.from({length:31},(_,i)=>`method-${i}`)]) {
  test(`compiled shipping Native policy/start/stop: ${name}`,{skip:available?false:'C compiler absent; deterministic mocked-GOT fixture requires cc'},()=>{
    assert.equal(compiled!.status,0,`fixture C compile failed:\n${compiled!.stdout}\n${compiled!.stderr}`);
    const r=spawnSync(join(dir!,process.platform==='win32'?'fixture.exe':'fixture'),[name],{encoding:'utf8',windowsHide:true,timeout:10000});

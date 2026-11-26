@@ -102,6 +102,35 @@ int adh_restore_pointer_if_owned(void **slot, void *replacement, void *original)
     return swapped || expected == original ? 1 : -1;
 }
 
+
+static struct AdhCaptureSlots g_capture_slots;
+static int capture_slot_read(void **slot, void **value) {
+    return adh_mem_read_direct(value, sizeof(*value), (unsigned long long)(uintptr_t)slot) == sizeof(*value);
+}
+static int capture_slot_swap(void **slot, void *expected, void *value) {
+    int result = adh_restore_pointer_if_owned(slot, expected, value);
+    if (result < 0) return result;
+    const struct AdhCaptureSlot *saved = NULL;
+    for (int i = 0; i < ADH_CAPTURE_SLOT_MAX; i++)
+        if (g_capture_slots.slots[i].slot == slot) { saved = &g_capture_slots.slots[i]; break; }
+    if (!saved) return 0;
+    void *current = NULL;
+    char perms[8]; perms_of_addr((unsigned long long)(uintptr_t)slot, perms, sizeof(perms));
+    if (perms[0] != 'r' || !capture_slot_read(slot, &current) || current != value) return 0;
+    if (perms_to_prot(perms) == saved->protection) return 1;
+    long pagesz = sysconf(_SC_PAGESIZE);
+    if (pagesz <= 0 || pagesz > 65536) return 0;
+    void *page = (void *)((uintptr_t)slot - (uintptr_t)slot % (uintptr_t)pagesz);
+    return mprotect(page, (size_t)pagesz, saved->protection) == 0 ? 1 : 0;
+}
+int adh_capture_got_restore(void *wrapper) {
+    return adh_capture_slot_restore(&g_capture_slots, wrapper, capture_slot_read, capture_slot_swap);
+}
+void adh_capture_got_state(void *wrapper, struct AdhCaptureSlotState *out) {
+    adh_capture_slot_state(&g_capture_slots, wrapper, capture_slot_read, out);
+}
+unsigned adh_capture_got_pending(void) { return adh_capture_slots_pending(&g_capture_slots); }
+
 // Patch raw code bytes in place: make every page covering [addr, addr+len) writable (keeping X),
 // memcpy, flush the instruction cache and restore the original protection. Used to write a saved
 // original prologue back over an inline hook without asking Dobby to free its trampoline pool
@@ -259,7 +288,7 @@ static unsigned long long mapped_image_base(unsigned long long address) {
 // module's other data segments would corrupt that module's own call path and deadlock
 // the trampoline. Returns total slots replaced. Generalizes over multiple callers; for
 // a filter that matches a single module it reduces to hooking that one slot.
-int adh_got_replace(const char *module_substr, void *orig, void *wrapper) {
+static int got_replace_impl(const char *module_substr, void *orig, void *wrapper, int capture_owned) {
     FILE *m = fopen("/proc/self/maps", "r");
     if (!m) return -1;
     char line[512];
@@ -328,7 +357,8 @@ int adh_got_replace(const char *module_substr, void *orig, void *wrapper) {
             if (cached_size < 0 || offset + sizeof(current) > (size_t)cached_size) continue;
             memcpy(&current, page_bytes + offset, sizeof(current));
             if (current != orig) continue;
-            if (adh_restore_pointer_if_owned(slot, orig, wrapper) == 1) {
+            int published = capture_owned ? adh_capture_slot_publish(&g_capture_slots, slot, orig, wrapper, perms_to_prot(perms), capture_slot_read, capture_slot_swap) : adh_restore_pointer_if_owned(slot, orig, wrapper);
+            if (published == 1) {
                 replaced++; hooked_this_mod = 1;
                 g_dbg_slot = a; snprintf(g_dbg_orig_perms, sizeof(g_dbg_orig_perms), "%s", perms);
             }
@@ -340,6 +370,9 @@ int adh_got_replace(const char *module_substr, void *orig, void *wrapper) {
     adh_mem_fd_release();
     return replaced;
 }
+
+int adh_got_replace(const char *module, void *orig, void *wrapper) { return got_replace_impl(module, orig, wrapper, 0); }
+int adh_capture_got_replace(const char *module, void *orig, void *wrapper) { return got_replace_impl(module, orig, wrapper, 1); }
 
 // got_replace matches a reloc slot by its CURRENTLY-BOUND VALUE (slot == orig). That only
 // works once the dynamic linker has lazily bound the slot, i.e. after the app has already
@@ -623,9 +656,9 @@ int adh_got_unique_slot(const char *module, const char *symbol, void **slot_out,
 // value — works for symbols whose PLT slot hasn't been lazily bound yet. Returns the number
 // of matching modules actually replaced; the first replaced slot's address and previous value
 // are returned through slot_out/value_out so callers can keep a matching trampoline.
-int adh_got_replace_by_name_ex(const char *module_name, const char *sym_name, void *wrapper,
+static int got_replace_by_name_impl(const char *module_name, const char *sym_name, void *wrapper,
                                void **slot_out, void **value_out,
-                               char *perms_before_out, size_t perms_before_size) {
+                               char *perms_before_out, size_t perms_before_size, int capture_owned) {
     if (slot_out) *slot_out = NULL;
     if (value_out) *value_out = NULL;
     if (perms_before_out && perms_before_size) perms_before_out[0] = 0;
@@ -656,8 +689,10 @@ int adh_got_replace_by_name_ex(const char *module_name, const char *sym_name, vo
         char permsOf[8]; perms_of_addr((unsigned long long)slot_addr, permsOf, sizeof(permsOf));
         if (permsOf[0] == '?') continue;   // slot address not actually mapped — refuse to touch it
         int orig_prot = perms_to_prot(permsOf);
-        void *old_value = *(void **)slot_addr;
-        if (got_write_slot((void **)slot_addr, wrapper, orig_prot, pagesz)) {
+        void *old_value = NULL;
+        if (!capture_slot_read((void **)slot_addr, &old_value)) continue;
+        int published = capture_owned ? adh_capture_slot_publish(&g_capture_slots, (void **)slot_addr, old_value, wrapper, orig_prot, capture_slot_read, capture_slot_swap) : got_write_slot((void **)slot_addr, wrapper, orig_prot, pagesz);
+        if (published == 1) {
             if (replaced == 0) {
                 if (slot_out) *slot_out = slot_addr;
                 if (value_out) *value_out = old_value;
@@ -671,6 +706,18 @@ int adh_got_replace_by_name_ex(const char *module_name, const char *sym_name, vo
     }
     fclose(m);
     return replaced;
+}
+
+int adh_got_replace_by_name_ex(const char *module, const char *symbol, void *wrapper,
+        void **slot, void **previous, char *perms, size_t cap) {
+    return got_replace_by_name_impl(module, symbol, wrapper, slot, previous, perms, cap, 0);
+}
+int adh_capture_got_replace_by_name_ex(const char *module, const char *symbol, void *wrapper,
+        void **slot, void **previous, char *perms, size_t cap) {
+    return got_replace_by_name_impl(module, symbol, wrapper, slot, previous, perms, cap, 1);
+}
+int adh_capture_got_replace_by_name(const char *module, const char *symbol, void *wrapper) {
+    return got_replace_by_name_impl(module, symbol, wrapper, NULL, NULL, NULL, 0, 1);
 }
 
 int adh_got_replace_by_name(const char *module_name, const char *sym_name, void *wrapper) {

@@ -2,10 +2,20 @@
 #define ADH_AGENT_GOT_H
 #include <link.h>
 #include <stddef.h>
+#include "capture_slots.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+// Dedicated persistent-capture ownership; generic native_hook remains independent.
+int adh_capture_got_replace(const char *module, void *original, void *wrapper);
+int adh_capture_got_replace_by_name(const char *module, const char *symbol, void *wrapper);
+int adh_capture_got_replace_by_name_ex(const char *module, const char *symbol, void *wrapper,
+    void **slot, void **previous, char *perms, size_t perms_size);
+int adh_capture_got_restore(void *wrapper);
+void adh_capture_got_state(void *wrapper, struct AdhCaptureSlotState *out);
+unsigned adh_capture_got_pending(void);
 
 int adh_got_replace(const char *module_substr, void *orig, void *wrapper);
 // Our own module name as it shows up in /proc/self/maps (works for a memfd-loaded agent too).
