@@ -25,11 +25,64 @@ function observedAgentView(){
   return best;
 }
 
+/** 设备静态信息：一次 adb shell 往返，按串号缓存 60s；面板设备页显示型号/RAM/存储/分辨率/电量。 */
+const DEVICE_INFO_TTL_MS=60_000;
+interface DeviceInfo{model:string;android:string;sdk:number;abi:string;ramBytes:number;storageFreeBytes:number;storageTotalBytes:number;screen:string;battery:number|null;}
+const deviceInfoCache=new Map<string,{at:number;info:DeviceInfo}>();
+
+function parseDeviceInfo(out:string):DeviceInfo{
+  const lines=out.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+  const info:DeviceInfo={model:'',android:'',sdk:0,abi:'',ramBytes:0,storageFreeBytes:0,storageTotalBytes:0,screen:'',battery:null};
+  info.model=lines[0]??'';
+  info.android=lines[1]??'';
+  info.sdk=Number(lines[2]??0)||0;
+  info.abi=lines[3]??'';
+  const mem=/MemTotal:\s*(\d+) kB/.exec(out);
+  if(mem) info.ramBytes=Number(mem[1])*1024;
+  // df -k /data 的最后一行：Filesystem 1K-blocks Used Available Use% Mounted
+  const dfLine=lines.find(l=>/\/data$/.test(l)&&/\s\d+\s+\d+\s+\d+\s+\d+%/.test(l));
+  if(dfLine){
+    const cols=dfLine.split(/\s+/);
+    if(cols.length>=4){
+      info.storageTotalBytes=(Number(cols[1])||0)*1024;
+      info.storageFreeBytes=(Number(cols[3])||0)*1024;
+    }
+  }
+  const size=/Physical size:\s*(\d+x\d+)/.exec(out);
+  if(size) info.screen=size[1];
+  const level=/level:\s*(\d+)/.exec(out);
+  if(level) info.battery=Number(level[1]);
+  return info;
+}
+
+async function readDeviceInfo(serial:string,run:AdbRunner):Promise<DeviceInfo>{
+  const hit=deviceInfoCache.get(serial);
+  if(hit&&Date.now()-hit.at<DEVICE_INFO_TTL_MS) return hit.info;
+  const script=[
+    'getprop ro.product.model','getprop ro.build.version.release','getprop ro.build.version.sdk',
+    'getprop ro.product.cpu.abi','head -1 /proc/meminfo','df -k /data 2>/dev/null | tail -1',
+    'wm size 2>/dev/null | head -1','dumpsys battery 2>/dev/null | grep -m1 level',
+  ].join('; ');
+  const out=await run(['-s',serial,'shell',script],{timeout:6000});
+  const info=parseDeviceInfo(out);
+  deviceInfoCache.set(serial,{at:Date.now(),info});
+  return info;
+}
+
 /** Wrapped by the same router/operation registry as MCP; no privileged second execution path. */
 export function deviceRoutes({req,url,send}:RouteContext):Route[]{
   const online=()=>!!localObserver&&[...sessions.values()].some(s=>
     s.online&&s.package===localObserver.package);
   return [{path:'/api/devices',handler:async()=>{
+  if(localObserver && req.method==='GET' && url.searchParams.get('action')==='info'){
+    const serial=String(url.searchParams.get('serial')||'').trim();
+    if(!serial) return send(400,{ok:false,error:'缺少设备串号。'});
+    try{
+      return send(200,{ok:true,info:await readDeviceInfo(serial,realAdbRunner)});
+    }catch(e){
+      return send(502,{ok:false,error:(e as Error).message});
+    }
+  }
   if(localObserver && req.method==='GET' && url.searchParams.get('action')==='list'){
     // This is one exact local USB device, not a paired Device identity or a proxy for the App session.
     let transports:{serial:string;model:string;state:string;link:string;observed:boolean;rpc:boolean;

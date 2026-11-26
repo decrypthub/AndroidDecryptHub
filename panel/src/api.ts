@@ -58,7 +58,13 @@ const post = <T = unknown>(path: string, body: unknown, timeoutMs?: number) =>
 
 // ---- 端点 ----
 export const getDevices = () => api<{ ok: boolean; devices: unknown[]; transports: unknown[]; localUsb?: Record<string, unknown> }>('/api/devices?action=list');
-export const getHealth = () => api<{ ok: boolean; version?: string }>('/health');
+export interface DeviceInfo {
+  model: string; android: string; sdk: number; abi: string;
+  ramBytes: number; storageFreeBytes: number; storageTotalBytes: number;
+  screen: string; battery: number | null;
+}
+export const getDeviceInfo = (serial: string) =>
+  api<{ ok: boolean; info?: DeviceInfo; error?: string }>(`/api/devices?action=info&serial=${encodeURIComponent(serial)}`);export const getHealth = () => api<{ ok: boolean; version?: string }>('/health');
 export const getApps = () => api<{ ok: boolean; apps: AppInfo[]; error?: string; capture?: { enabled: boolean }; captureByPackage?: Record<string, unknown>; localObservation?: Record<string, unknown> }>('/api/apps');
 export const getScope = () => api<{ ok: boolean; packages: string[] }>('/api/scope');
 export const scopeAdd = (pkg: string) => post('/api/scope', { add: [pkg] });

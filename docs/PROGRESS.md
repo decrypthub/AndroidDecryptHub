@@ -5420,3 +5420,13 @@ Host **561/561**、JVM **73/73** 无skip，类型、默认/隔离构建、94项M
 - 顺带去掉面板里已无用的 `connect/disconnect` 前端调用与「设备服务」概念残留。
 
 验证：`tsc --noEmit` 面板只剩既有 `./App.vue` shim 报错、daemon 0 错误；`node --test device_actions + adb_wire` 22/22 通过；ego-browser 深色主题实测单栏窗口、名片「aa165071 · USB · 插件 v1.0.0」、列表行「串号 · USB/局域网」。构建 942.04 kB（md5 `aa2f5479f7671671ec02dcb16bc3df83`）。
+## 2026-11-26 — 设备窗口：单行头 + 列表切换，补设备硬件信息
+
+用户要求：不要重命名；窗口顶部左边只放设备信息，右边放操作（添加 / 重连 / 刷新）；下面列表点击即切换设备；设备信息再丰富些（RAM、型号等）。
+
+- **顶部改成一行**：左（状态点 + 显示名 + 「串号 · 连接方式 · 插件版本」+ 硬件 chips），右（添加设备 / 重连 / 刷新 / ⋯(仅已记住设备显示「从列表移除」)/ 关闭）。原来「名片 + 工具行」两行合并成这一行。
+- **列表点击即切换设备**：点任意一行就 `selectDevice`，窗口关闭，面板换到该设备；去掉行内「选中查看」与名片联动，也去掉重命名（`renameDevice` 前端不再调用，store 里的函数保留给添加流程复用）。
+- **硬件信息**：daemon 新增 `GET /api/devices?action=info&serial=…`，用**一次** `adb -s <serial> shell` 往返读 `getprop`（型号/Android 版本/SDK/ABI）、`/proc/meminfo`（RAM）、`df -k /data`（存储可用/总量）、`wm size`（分辨率）、`dumpsys battery`（电量），按串号缓存 60s（面板轮询不会反复拉）。面板在这行显示：型号（与显示名不同时）、Android 版本、内存、可用存储、分辨率、电量；读取中显示「读取设备信息…」，失败显示原因。
+- 顺带修掉上一版 `gbText/ramText` 里被 shell 插值吃掉的模板字符串（曾生成空字符串并导致构建失败）。
+
+验证：daemon `tsc` 0 错误；面板 `tsc` 只剩既有 `./App.vue` shim 报错、构建通过；`curl /api/devices?action=info&serial=aa165071` 返回型号/Android/RAM/存储/分辨率/电量；ego-browser 深色主题实测顶部一行、列表切换与 chips 渲染。
