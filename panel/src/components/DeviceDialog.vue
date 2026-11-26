@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, ref, watch, onBeforeUnmount } from 'vue';
 import { NModal } from 'naive-ui';
 import {
   ChevronDownOutline, CloseOutline, EllipsisHorizontalOutline, RefreshOutline, AddOutline, PhonePortraitOutline,
+  TrashOutline, LinkOutline,
 } from '@vicons/ionicons5';
 import type { DeviceView } from '../store';
 import { toast, refreshDevices, deviceLabel, rememberDevice, forgetDevice } from '../store';
@@ -19,33 +20,18 @@ const addSerial = ref('');
 const addAddress = ref('');
 const addName = ref('');
 const addBusy = ref(false);
+const addError = ref('');
 
-// 设备静态信息（型号/系统/RAM/存储/分辨率/电量）：打开窗口或换设备时读一次，daemon 侧缓存 60s
+// 硬件信息：打开窗口或换设备时读一次（daemon 侧缓存 60s）
 const info = ref<DeviceInfo | null>(null);
 const infoLoading = ref(false);
 const infoFailed = ref('');
+const painted = ref(false);
 let infoToken = 0;
-async function loadInfo(d: DeviceView | null) {
-  const token = ++infoToken;
-  if (!d) { info.value = null; infoFailed.value = ''; return; }
-  infoLoading.value = true;
-  try {
-    const r = await getDeviceInfo(d.serial);
-    if (token !== infoToken) return;
-    info.value = r.ok && r.info ? r.info : null;
-    infoFailed.value = r.ok ? '' : (r.error ?? '读取失败');
-  } catch (e) {
-    if (token === infoToken) { info.value = null; infoFailed.value = (e as Error).message; }
-  } finally {
-    if (token === infoToken) infoLoading.value = false;
-  }
-}
-const addError = ref('');
 
 function isOnline(d: DeviceView) {
   return d.rpc || d.state === 'device' || d.state === 'online' || d.agent?.online === true;
 }
-/** 上面这块只描述「当前选中」的那台：点列表里的任意一行就换它。 */
 const current = computed(() => props.devices.find(d => d.key === props.selected) ?? null);
 const usbOptions = computed(() => props.devices
   .filter(d => !d.remembered && !d.net)
@@ -64,24 +50,12 @@ function adbText(d: DeviceView) {
   if (d.state === 'online') return '在线';
   return STATE_TEXT[d.state] ?? d.state ?? '未知';
 }
-/** 连接方式：USB 还是局域网（无线调试）。 */
 function linkText(d: DeviceView) {
   return d.net ? '局域网' : 'USB';
 }
-/** 手机端插件（ADH 模块）版本，来自 agent HELLO 的 agentVer。 */
 function pluginText(d: DeviceView) {
   const v = d.agent?.version?.trim();
   return v ? `插件 v${v}` : '';
-}
-function gbText(bytes: number) {
-  if (!bytes) return '';
-  const gb = bytes / 1024 / 1024 / 1024;
-  return `${gb >= 10 ? Math.round(gb) : gb.toFixed(1)} GB`;
-}
-function ramText(bytes: number) {
-  if (!bytes) return '';
-  const gb = bytes / 1024 / 1024 / 1024;
-  return `${gb >= 10 ? Math.round(gb) : gb.toFixed(1)} GB`;
 }
 function timeAgo(ts: number) {
   const diff = Date.now() - ts;
@@ -90,6 +64,64 @@ function timeAgo(ts: number) {
   if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
   const date = new Date(ts);
   return `${date.getMonth() + 1}-${date.getDate()}`;
+}
+
+// ---- 进度环需要的百分比 ----
+function pct(used: number, total: number) {
+  if (!total) return 0;
+  return Math.max(0, Math.min(100, Math.round((used / total) * 100)));
+}
+const ramPct = computed(() => {
+  const i = info.value;
+  if (!i || !i.ramBytes) return 0;
+  const used = i.ramBytes - (i.ramFreeBytes || 0);
+  return pct(used, i.ramBytes);
+});
+const ramUsedText = computed(() => {
+  const i = info.value;
+  if (!i || !i.ramBytes) return '';
+  const used = (i.ramBytes - (i.ramFreeBytes || 0)) / 1024 / 1024 / 1024;
+  const total = i.ramBytes / 1024 / 1024 / 1024;
+  return `${used.toFixed(1)} / ${total.toFixed(0)} GB`;
+});
+const storagePct = computed(() => {
+  const i = info.value;
+  if (!i || !i.storageTotalBytes) return 0;
+  return pct(i.storageTotalBytes - (i.storageFreeBytes || 0), i.storageTotalBytes);
+});
+const storageText = computed(() => {
+  const i = info.value;
+  if (!i || !i.storageTotalBytes) return '';
+  const free = i.storageFreeBytes / 1024 / 1024 / 1024;
+  const total = i.storageTotalBytes / 1024 / 1024 / 1024;
+  return `${free.toFixed(0)} / ${total.toFixed(0)} GB 可用`;
+});
+const batteryPct = computed(() => info.value?.battery ?? null);
+
+// 环形进度：周长固定的圆环，用 stroke-dasharray 过渡
+const RING = 2 * Math.PI * 26;
+function ringDash(p: number) {
+  return `${(RING * p) / 100} ${RING}`;
+}
+
+async function loadInfo(d: DeviceView | null) {
+  const token = ++infoToken;
+  painted.value = false;
+  if (!d) { info.value = null; infoFailed.value = ''; return; }
+  infoLoading.value = true;
+  try {
+    const r = await getDeviceInfo(d.serial);
+    if (token !== infoToken) return;
+    info.value = r.ok && r.info ? r.info : null;
+    infoFailed.value = r.ok ? '' : (r.error ?? '读取失败');
+  } catch (e) {
+    if (token === infoToken) { info.value = null; infoFailed.value = (e as Error).message; }
+  } finally {
+    if (token !== infoToken) return;
+    infoLoading.value = false;
+    // 先渲染 0%，下一帧再给真值，进度环/条才有生长动画
+    requestAnimationFrame(() => { if (token === infoToken) painted.value = true; });
+  }
 }
 
 function openDialog() {
@@ -103,13 +135,12 @@ watch(() => [props.selected, show.value] as const, () => {
   void loadInfo(current.value);
 });
 
-/** 点列表 = 切换设备（面板立即换到这台）。 */
+/** 点列表 = 切换设备 */
 function pick(d: DeviceView) {
   emit('select', d.key);
   show.value = false;
 }
 
-/** 重连：ADB → reverse → 设备域通道 → agent 重拨，四层原因分别回显。 */
 async function reconnect(d: DeviceView) {
   if (busy.value) return;
   busy.value = d.key;
@@ -130,10 +161,10 @@ async function reconnect(d: DeviceView) {
   } finally {
     busy.value = '';
     void refreshDevices();
+    void loadInfo(current.value);
   }
 }
 
-// ---- 添加设备（窗口内面板） ----
 function openAdd() {
   addOpen.value = true;
   addKind.value = 'usb';
@@ -182,6 +213,8 @@ function rowTitle(d: DeviceView) {
   if (!isOnline(d) && d.seenAt) bits.push(`上次在线 ${timeAgo(d.seenAt)}`);
   return bits.join(' · ');
 }
+
+onBeforeUnmount(() => { infoToken++; });
 </script>
 
 <template>
@@ -195,54 +228,107 @@ function rowTitle(d: DeviceView) {
 
     <n-modal :show="show" @update:show="!$event && (show = false)">
       <div class="app-dialog device-dialog show" role="dialog" aria-modal="true" aria-label="设备">
-        <div class="device-head">
-          <span v-if="current" class="device-face" :class="dotClass(current)">
-            <n-icon size="20" :component="PhonePortraitOutline" />
-          </span>
-          <div class="app-dialog-id">
-            <template v-if="current">
-              <strong>{{ deviceLabel(current) }}</strong>
-              <span>
-                {{ current.serial }} · {{ linkText(current) }}<template v-if="pluginText(current)"> · {{ pluginText(current) }}</template>
+        <!-- 上面一整块：左信息面板 / 右操作面板 -->
+        <section class="device-top">
+          <div class="device-info">
+            <div class="device-hero">
+              <span class="device-face" :class="dotClass(current || devices[0])">
+                <n-icon size="22" :component="PhonePortraitOutline" />
               </span>
-              <div class="device-chips">
-                <span v-if="infoLoading && !info">读取设备信息…</span>
-                <template v-else-if="info">
-                  <span v-if="info.model && deviceLabel(current) !== info.model">{{ info.model }}</span>
-                  <span v-if="info.android">Android {{ info.android }}</span>
-                  <span v-if="info.ramBytes">{{ ramText(info.ramBytes) }} 内存</span>
-                  <span v-if="info.storageFreeBytes">可用 {{ gbText(info.storageFreeBytes) }}</span>
-                  <span v-if="info.screen">{{ info.screen }}</span>
-                  <span v-if="info.battery != null">电量 {{ info.battery }}%</span>
-                </template>
-                <span v-else-if="infoFailed">{{ infoFailed }}</span>
+              <div class="device-hero-text">
+                <strong>{{ current ? deviceLabel(current) : '没有设备' }}</strong>
+                <span v-if="current" class="device-tags">
+                  <em class="tag" :class="dotClass(current)">{{ adbText(current) }}</em>
+                  <em class="tag"><n-icon size="11" :component="LinkOutline" />{{ linkText(current) }}</em>
+                  <em v-if="pluginText(current)" class="tag">{{ pluginText(current) }}</em>
+                </span>
+                <span v-else class="device-muted">{{ props.failed ? '设备读取失败，保留上次清册' : '插上手机，或用右边的「添加设备」登记' }}</span>
               </div>
-            </template>
-            <template v-else>
-              <strong>没有设备</strong>
-              <span>{{ props.failed ? '设备读取失败' : '插上手机，或用「添加设备」登记' }}</span>
-            </template>
+            </div>
+
+            <div class="device-gauges">
+              <div class="gauge">
+                <svg viewBox="0 0 64 64" class="gauge-ring" :class="{ bad: ramPct >= 88, warn: ramPct >= 70 && ramPct < 88 }">
+                  <circle cx="32" cy="32" r="26" class="ring-track" />
+                  <circle cx="32" cy="32" r="26" class="ring-value" :style="{ strokeDasharray: ringDash(painted ? ramPct : 0) }" />
+                </svg>
+                <span class="gauge-num">{{ ramPct }}<i>%</i></span>
+                <span class="gauge-label">内存</span>
+                <span class="gauge-sub">{{ ramUsedText || '—' }}</span>
+              </div>
+
+              <div class="gauge">
+                <svg viewBox="0 0 64 64" class="gauge-ring" :class="{ warn: storagePct >= 80, bad: storagePct >= 92 }">
+                  <circle cx="32" cy="32" r="26" class="ring-track" />
+                  <circle cx="32" cy="32" r="26" class="ring-value" :style="{ strokeDasharray: ringDash(painted ? storagePct : 0) }" />
+                </svg>
+                <span class="gauge-num">{{ storagePct }}<i>%</i></span>
+                <span class="gauge-label">存储占用</span>
+                <span class="gauge-sub">{{ storageText || '—' }}</span>
+              </div>
+
+              <div class="gauge">
+                <svg viewBox="0 0 64 64" class="gauge-ring" :class="{ bad: (batteryPct ?? 100) <= 15, warn: (batteryPct ?? 100) <= 30 }">
+                  <circle cx="32" cy="32" r="26" class="ring-track" />
+                  <circle cx="32" cy="32" r="26" class="ring-value" :style="{ strokeDasharray: ringDash(painted && batteryPct != null ? batteryPct : 0) }" />
+                </svg>
+                <span class="gauge-num">{{ batteryPct == null ? '—' : batteryPct }}<i v-if="batteryPct != null">%</i></span>
+                <span class="gauge-label">电量</span>
+                <span class="gauge-sub">{{ batteryPct == null ? '读取中' : '当前电量' }}</span>
+              </div>
+            </div>
+
+            <div class="device-specs">
+              <div><span>型号</span><strong>{{ info?.model || current?.model || '—' }}</strong></div>
+              <div><span>系统</span><strong>{{ info ? `Android ${info.android}` : '—' }}</strong></div>
+              <div><span>分辨率</span><strong>{{ info?.screen || '—' }}</strong></div>
+              <div><span>ABI</span><strong>{{ info?.abi || '—' }}</strong></div>
+            </div>
+            <p v-if="infoLoading && !info" class="device-info-hint">读取设备信息…</p>
+            <p v-else-if="infoFailed" class="device-info-hint bad">{{ infoFailed }}</p>
           </div>
-          <div class="app-dialog-actions">
-            <n-button size="small" type="primary" @click="openAdd">
-              <template #icon><n-icon :component="AddOutline" /></template>添加设备
-            </n-button>
-            <n-button v-if="current" size="small" :loading="busy === current.key" :disabled="!!busy"
-              @click="reconnect(current)">重连</n-button>
-            <n-button size="small" quaternary circle aria-label="刷新" title="重新扫描" @click="refreshDevices()">
-              <template #icon><n-icon :component="RefreshOutline" /></template>
-            </n-button>
-            <n-dropdown v-if="current?.remembered" trigger="click" :options="[{ label: '从列表移除', key: 'forget' }]"
-              @select="() => current && forget(current)">
-              <n-button size="small" quaternary aria-label="更多设备操作">
-                <n-icon size="16" :component="EllipsisHorizontalOutline" />
-              </n-button>
-            </n-dropdown>
-            <n-button text class="app-close" aria-label="关闭设备窗口" @click="show = false">
-              <n-icon size="18" :component="CloseOutline" />
-            </n-button>
+
+          <aside class="device-actions">
+            <button type="button" class="device-action primary" @click="openAdd">
+              <n-icon size="16" :component="AddOutline" /><span>添加设备</span>
+            </button>
+            <button v-if="current" type="button" class="device-action" :disabled="!!busy" @click="reconnect(current)">
+              <n-icon size="16" :component="RefreshOutline" />
+              <span>{{ busy === current.key ? '重连中…' : '重连' }}</span>
+            </button>
+            <button type="button" class="device-action" @click="refreshDevices()">
+              <n-icon size="16" :component="RefreshOutline" /><span>刷新列表</span>
+            </button>
+            <button v-if="current?.remembered" type="button" class="device-action danger" @click="forget(current)">
+              <n-icon size="16" :component="TrashOutline" /><span>从列表移除</span>
+            </button>
+            <button type="button" class="device-action quiet" @click="show = false">
+              <n-icon size="16" :component="CloseOutline" /><span>关闭</span>
+            </button>
+          </aside>
+        </section>
+
+        <!-- 下面一整块：只有设备列表 -->
+        <section class="device-list">
+          <header class="device-list-head">
+            <h3>设备列表</h3>
+            <span class="device-muted">{{ devices.length }} 台 · 点一行切换</span>
+          </header>
+          <div class="device-rows">
+            <button v-for="d in devices" :key="d.key" type="button" class="device-row-item"
+              :class="{ current: d.key === selected }" :title="rowTitle(d)" @click="pick(d)">
+              <span class="status-dot" :class="dotClass(d)"></span>
+              <span class="device-row-copy">
+                <strong>{{ deviceLabel(d) }}</strong>
+                <span>{{ d.serial }} · {{ linkText(d) }}</span>
+              </span>
+              <span v-if="d.key === selected" class="device-row-state">使用中</span>
+              <span v-else-if="!isOnline(d) && d.seenAt" class="device-row-state muted">{{ timeAgo(d.seenAt) }}在线过</span>
+              <span v-else class="device-row-state muted">{{ adbText(d) }}</span>
+            </button>
+            <div v-if="!devices.length" class="app-empty">没有设备；用上面的「添加设备」登记串号。</div>
           </div>
-        </div>
+        </section>
 
         <div v-if="addOpen" class="device-add-panel">
           <n-radio-group v-model:value="addKind" size="small">
@@ -262,24 +348,6 @@ function rowTitle(d: DeviceView) {
               : '局域网需要手机和电脑在同一网络，且手机上已打开无线调试。' }}
           </p>
           <p v-if="addError" class="device-add-error">{{ addError }}</p>
-        </div>
-
-        <div class="app-choices device-choices">
-          <button v-for="d in devices" :key="d.key" type="button" class="app-item device-item"
-            :class="{ current: d.key === selected }" :title="rowTitle(d)" @click="pick(d)">
-            <span class="status-dot" :class="dotClass(d)"></span>
-            <span class="app-copy">
-              <span class="app-name">
-                {{ deviceLabel(d) }}
-                <span v-if="d.key === selected" class="device-badge accent">当前选中</span>
-              </span>
-              <span class="app-pkg">{{ d.serial }} · {{ linkText(d) }}</span>
-            </span>
-            <span v-if="!isOnline(d) && d.seenAt" class="device-seen">{{ timeAgo(d.seenAt) }}</span>
-          </button>
-          <div v-if="!devices.length" class="app-empty">
-            {{ props.failed ? '设备读取失败，保留上次清册' : '没有设备；用上面的「添加设备」登记串号。' }}
-          </div>
         </div>
       </div>
     </n-modal>

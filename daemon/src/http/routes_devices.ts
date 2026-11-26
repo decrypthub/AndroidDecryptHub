@@ -27,18 +27,20 @@ function observedAgentView(){
 
 /** 设备静态信息：一次 adb shell 往返，按串号缓存 60s；面板设备页显示型号/RAM/存储/分辨率/电量。 */
 const DEVICE_INFO_TTL_MS=60_000;
-interface DeviceInfo{model:string;android:string;sdk:number;abi:string;ramBytes:number;storageFreeBytes:number;storageTotalBytes:number;screen:string;battery:number|null;}
+interface DeviceInfo{model:string;android:string;sdk:number;abi:string;ramBytes:number;ramFreeBytes:number;storageFreeBytes:number;storageTotalBytes:number;screen:string;battery:number|null;}
 const deviceInfoCache=new Map<string,{at:number;info:DeviceInfo}>();
 
 function parseDeviceInfo(out:string):DeviceInfo{
   const lines=out.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
-  const info:DeviceInfo={model:'',android:'',sdk:0,abi:'',ramBytes:0,storageFreeBytes:0,storageTotalBytes:0,screen:'',battery:null};
+  const info:DeviceInfo={model:'',android:'',sdk:0,abi:'',ramBytes:0,ramFreeBytes:0,storageFreeBytes:0,storageTotalBytes:0,screen:'',battery:null};
   info.model=lines[0]??'';
   info.android=lines[1]??'';
   info.sdk=Number(lines[2]??0)||0;
   info.abi=lines[3]??'';
   const mem=/MemTotal:\s*(\d+) kB/.exec(out);
   if(mem) info.ramBytes=Number(mem[1])*1024;
+  const memFree=/MemAvailable:\s*(\d+) kB/.exec(out);
+  if(memFree) info.ramFreeBytes=Number(memFree[1])*1024;
   // df -k /data 的最后一行：Filesystem 1K-blocks Used Available Use% Mounted
   const dfLine=[...lines].reverse().find(l=>/^\S+\s+\d+\s+\d+\s+\d+\s+\d+%/.test(l));
   if(dfLine){
@@ -60,7 +62,7 @@ async function readDeviceInfo(serial:string,run:AdbRunner):Promise<DeviceInfo>{
   if(hit&&Date.now()-hit.at<DEVICE_INFO_TTL_MS) return hit.info;
   const script=[
     'getprop ro.product.model','getprop ro.build.version.release','getprop ro.build.version.sdk',
-    'getprop ro.product.cpu.abi','head -1 /proc/meminfo','df -k /data 2>/dev/null | tail -1',
+    'getprop ro.product.cpu.abi','grep -E "MemTotal|MemAvailable" /proc/meminfo','df -k /data 2>/dev/null | tail -1',
     'wm size 2>/dev/null | head -1','dumpsys battery 2>/dev/null | grep -m1 level',
   ].join('; ');
   const out=await run(['-s',serial,'shell',script],{timeout:6000});
