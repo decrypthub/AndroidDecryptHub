@@ -10,6 +10,7 @@ extern "C" {
 void adh_cmd_file_probe(int fd, const char *id);
 void adh_cmd_capture_start(int fd, const char *id, const char *crypto_module, const char *file_module, const char *sys_module);
 void adh_cmd_capture_stop(int fd, const char *id);
+void adh_cmd_capture_methods(int fd, const char *id, const char *request);
 void adh_cmd_capture_drain(int fd, const char *id);
 // capture_start arms a bounded sender on the same agent socket; command-loop teardown and
 // capture_stop own its lifecycle so pushed records are either delivered or counted as dropped.

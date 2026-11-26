@@ -48,7 +48,7 @@ static const char *ADH_AGENT_OPS[] = {
     "native_call", "got_enum", "stealth", "javahook_probe", "gothook_selftest", "capture_start",
     "capture_drain", "capture_stop", "trigger", "load_so", "file_probe", "qbdi_trace", "qbdi_read",
     "compat_probe", "object_inspect", "object_set", "object_invoke", "art_dexfiles", "list_dir",
-    "read_file", "scan_magic", "mem_backend", "search", "frame_echo", "ping", "module_watch", "capture_policy",
+    "read_file", "scan_magic", "mem_backend", "search", "frame_echo", "ping", "module_watch", "capture_policy", "capture_methods",
 };
 
 static void send_caps(int fd) {
@@ -807,6 +807,8 @@ static void cmd_got_enum(int fd, const char *id, const char *module, const char 
                     char waction[16] = "";
                     json_get_str(line, "action", waction, sizeof(waction));
                     adh_cmd_module_watch(fd, id, waction);
+                } else if (strcmp(op, "capture_methods") == 0) {
+                    adh_cmd_capture_methods(fd, id, line);
                 } else if (strcmp(op, "capture_policy") == 0) {
                     char flags[64]="",action[16]="",idj[128];json_get_str(line,"families",flags,sizeof(flags));json_get_str(line,"action",action,sizeof(action));json_escape(id,idj,sizeof(idj));
                     int valid=strlen(flags)==27;
