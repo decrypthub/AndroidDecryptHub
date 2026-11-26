@@ -31,6 +31,11 @@ const { startPackage, stopPackage, coldStartPackage, runningPid } = await load('
 const { deviceProcessControl, deviceProcesses, deviceState } = await load('device_bridge.ts');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+// Probe the channel BEFORE touching the target: skipping after a stop would leave the app in a
+// state this gate caused.
+const probe = await deviceProcesses(serial, pkg).catch(() => null);
+if (!probe) skip('device channel unavailable (no device daemon / no usb access)');
+
 const stopped = await stopPackage(pkg);
 if (stopped.via === 'adb') skip('device daemon predates process.control; reflash the module to exercise this path');
 assert.equal(stopped.ok, true, JSON.stringify(stopped));

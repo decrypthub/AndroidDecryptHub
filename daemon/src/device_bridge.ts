@@ -141,18 +141,21 @@ export async function deviceState(serial:string):Promise<any|null>{
 
 // One package can legitimately own several processes (:core, :player). Pagination is the
 // device's, so a partial page is a partial answer: `complete` says whether /proc was readable.
+// The page count is bounded: a peer that keeps returning a page must not spin the Host forever.
+const PROCESS_PAGE_LIMIT = 50;
 export async function deviceProcesses(serial:string,pkg:string):Promise<{rows:any[];complete:boolean;total:number}|null>{
   const c=await deviceRpc(serial);
   if(!c)return null;
   const target=peerTarget(c);const rows:any[]=[];let offset=0;let complete=true;let total=0;
-  for(;;){
+  for(let page=0;;page++){
+    if(page>=PROCESS_PAGE_LIMIT)throw new Error(`processes.list did not finish after ${PROCESS_PAGE_LIMIT} pages`);
     const reply=await c.rpc.request('processes.list',{package:pkg,offset,limit:200},target);
-    const page=Array.isArray(reply?.processes)?reply.processes:[];
-    rows.push(...page);
+    const page_rows=Array.isArray(reply?.processes)?reply.processes:[];
+    rows.push(...page_rows);
     if(typeof reply?.total==='number')total=reply.total;
     if(reply?.complete===false)complete=false;
     const next=typeof reply?.nextOffset==='number'?reply.nextOffset:null;
-    if(next===null||page.length===0)break;
+    if(next===null||page_rows.length===0)break;
     offset=next;
   }
   return {rows,complete,total:total||rows.length};

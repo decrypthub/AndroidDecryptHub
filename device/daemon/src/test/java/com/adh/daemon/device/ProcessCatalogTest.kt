@@ -9,6 +9,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
+import java.io.FileNotFoundException
 
 class ProcessCatalogTest {
     @get:Rule val temp = TemporaryFolder()
@@ -97,5 +98,16 @@ class ProcessCatalogTest {
         val error = runCatching { ProcessCatalog(File(temp.root, "absent")).list(pkg) }.exceptionOrNull()
         assertTrue(error is DeviceFault)
         assertEquals("PROC_UNAVAILABLE", (error as DeviceFault).code)
+    }
+
+    @Test
+    fun `only a really vanished pid counts as exited, a denied read stays unknown`() {
+        // Android throws FileNotFoundException for both cases; the message is what differs.
+        assertTrue(processVanished(FileNotFoundException("/proc/4242/cmdline")))
+        assertTrue(processVanished(FileNotFoundException("/proc/4242/cmdline (No such file or directory)")))
+        assertFalse(processVanished(FileNotFoundException("/proc/4242/cmdline (Permission denied)")))
+        assertFalse(processVanished(FileNotFoundException("/proc/4242/status: EACCES")))
+        assertFalse(processVanished(java.io.IOException("I/O error")))
+        assertTrue(processVanished(java.nio.file.NoSuchFileException("/proc/4242/stat")))
     }
 }

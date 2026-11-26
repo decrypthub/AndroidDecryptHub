@@ -251,3 +251,7 @@ event-limit accounting, explicit stop and wrong-TID refusal. It does not run the
 ## P5 真实 Zygisk 显式入口（2026-11-16）
 
 `build_p5_zygisk.sh NONCE PRIVATE_OUTPUT` 无ADB；`verify_p5_zygisk.ts SERIAL PRIVATE_ASSETS NEW_PRIVATE_OUTPUT --allow-device-reboot` 在专用授权手机安装仅自身包作用域的临时模块，加载/卸载各重启一次，验证6项真实链路并检查原Host/文件/映射和自身清理。缺少重启opt-in/日常机在任何状态或ADB前被拒绝。该入口不注册到verify_all自动执行。原始产物和报告不提交；详情见 docs/P5_ZYGISK_ACCEPTANCE.md。
+
+### 目标应用启停的设备域通道（2026-11-26）
+
+`verify_v134_app_control_device.sh`（device）先跑宿主单测 `app_launch_channel.test.ts`，再用自有 Demo 包（默认 `com.adh.sandbox.apilab`，可用 `ADH_APP_CONTROL_PKG` 换）断言：open / stop / restart 都经 `adh.device/1` 的 `process.control` 生效（进程真的换 pid）、`via` 报的通道与实际一致、伪造 `expectedProcesses` 仍被设备 `TARGET_CHANGED` 拒绝。没有 root 设备、包未安装或包没有 launcher 时 **先探测再 SKIP**（在改目标状态之前），老模块构建没有该能力也 SKIP，不谎报通过。故它也只停自家 Demo，不碰第三方 App 和观察目标。

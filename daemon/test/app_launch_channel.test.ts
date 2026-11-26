@@ -168,6 +168,78 @@ test('a device verdict is final: denied does not become an adb attempt', async (
   assert.equal(adb.calls.length, 0);
 });
 
+test('a class the device domain refuses (system app) uses the operator channel and says why', async () => {
+  const channel: ControlChannel = {
+    async state() { return { stateRevision: 17 }; },
+    async processes() { return { rows: ROWS, complete: true, total: ROWS.length }; },
+    async control() { throw new DeviceError('TARGET_DENIED', 'remote process control is third-party only'); },
+  };
+  const result = await stopPackage('com.android.settings', {
+    channel, adbRun: async () => ({ ok: true, stdout: '', stderr: '' }),
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.via, 'adb');
+  assert.match(String(result.fallback), /TARGET_DENIED/);
+});
+
+test('an unidentified failure never reads as "channel cannot serve"', async () => {
+  const adb = failAdb();
+  const channel: ControlChannel = {
+    async state() { return { stateRevision: 17 }; },
+    async processes() { return { rows: ROWS, complete: true, total: ROWS.length }; },
+    async control() { throw new TypeError('boom'); },
+  };
+  const result = await stopPackage(PKG, { channel, adbRun: adb.run });
+  assert.equal(result.ok, false);
+  assert.equal(result.via, 'device');
+  assert.match(String(result.error), /DEVICE_ERROR/);
+  assert.equal(adb.calls.length, 0, 'an unknown failure must not trigger a second, uncontrolled attempt');
+});
+
+test('a dispatched-but-unconfirmed reply is reported as unconfirmed, not as a plain failure', async () => {
+  const adb = failAdb();
+  const channel: ControlChannel = {
+    async state() { return { stateRevision: 17 }; },
+    async processes() { return { rows: ROWS, complete: true, total: ROWS.length }; },
+    async control() { return { state: 'unknown', uncertain: true, code: 'DEVICE_EFFECT_UNCONFIRMED', result: {} }; },
+  };
+  const result = await coldStartPackage(PKG, { channel, adbRun: adb.run });
+  assert.equal(result.ok, false);
+  assert.equal(result.via, 'device');
+  assert.match(String(result.error), /未确认/);
+  assert.match(String(result.error), /DEVICE_EFFECT_UNCONFIRMED/);
+  assert.equal(adb.calls.length, 0);
+});
+
+test('a failed record still carries its precondition code and is re-observed once', async () => {
+  let calls = 0;
+  const channel: ControlChannel = {
+    async state() { return { stateRevision: 17 }; },
+    async processes() { return { rows: ROWS, complete: true, total: ROWS.length }; },
+    async control() {
+      calls++;
+      return calls === 1
+        ? { state: 'failed', code: 'TARGET_CHANGED', result: { ok: false, verdict: 'failed' } }
+        : { state: 'succeeded', result: { ok: true, verdict: 'ok' } };
+    },
+  };
+  const result = await stopPackage(PKG, { channel, adbRun: failAdb().run });
+  assert.equal(calls, 2);
+  assert.equal(result.ok, true);
+  assert.equal(result.via, 'device');
+});
+
+test('a no-launcher verdict keeps its own wording instead of "failed"', async () => {
+  const channel: ControlChannel = {
+    async state() { return { stateRevision: 17 }; },
+    async processes() { return { rows: [], complete: true, total: 0 }; },
+    async control() { return { state: 'failed', result: { ok: false, verdict: 'no_launcher' } }; },
+  };
+  const result = await startPackage(PKG, { channel, adbRun: failAdb().run });
+  assert.equal(result.ok, false);
+  assert.match(String(result.error), /没有可启动的入口/);
+});
+
 test('an unsupported method on an older module build falls back to adb', async () => {
   const channel: ControlChannel = {
     async state() { return { stateRevision: 17 }; },
@@ -221,4 +293,15 @@ test('running pid prefers the main process over a lower secondary pid', async ()
     async control() { return null; },
   };
   assert.equal(await runningPid(PKG, { channel, adbRun: failAdb().run }), 4210);
+});
+
+test('a device answer of "no process" is not overruled by adb', async () => {
+  const adb = failAdb();
+  const channel: ControlChannel = {
+    async state() { return { stateRevision: 1 }; },
+    async processes() { return { rows: [], complete: true, total: 0 }; },
+    async control() { return null; },
+  };
+  assert.equal(await runningPid(PKG, { channel, adbRun: adb.run }), 0);
+  assert.equal(adb.calls.length, 0);
 });

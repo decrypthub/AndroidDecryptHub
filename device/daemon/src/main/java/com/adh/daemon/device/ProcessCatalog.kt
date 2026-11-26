@@ -6,6 +6,18 @@ import java.io.File
 import java.io.FileNotFoundException
 import java.nio.file.NoSuchFileException
 
+/**
+ * True only when the pid entry really left /proc. Android's FileInputStream throws the same
+ * FileNotFoundException for EACCES, so the message decides: a denied read is an unknown
+ * process, not an exited one.
+ */
+internal fun processVanished(error: Exception): Boolean {
+    if (error is NoSuchFileException) return true
+    if (error !is FileNotFoundException) return false
+    val message = error.message?.lowercase().orEmpty()
+    return !(message.contains("permission denied") || message.contains("eacces") || message.contains("denied"))
+}
+
 internal class ProcessCatalog(private val proc: File = File("/proc")) {
     fun list(packageName: String, offset: Int = 0, limit: Int = 200): JSONObject {
         val rows = mutableListOf<JSONObject>()
@@ -33,9 +45,11 @@ internal class ProcessCatalog(private val proc: File = File("/proc")) {
      * A process exiting between listFiles() and the per-pid reads is normal, not an unknown:
      * counting it made `complete` flip at random and every write then failed its precondition
      * (IDENTITY_UNVERIFIED) even though nothing had changed for the target package.
+     *
+     * Android reports EACCES through the same FileNotFoundException type, so the type alone is
+     * not enough: treating a denied read as "gone" would hide a process the fence never saw.
      */
-    private fun vanished(error: Exception): Boolean =
-        error is FileNotFoundException || error is NoSuchFileException
+    private fun vanished(error: Exception): Boolean = processVanished(error)
 
     fun verify(packageName: String, expected: JSONArray) {
         require(expected.length() <= 128)
