@@ -133,6 +133,8 @@ export interface CapturesReply {
   hasMore?: boolean;
   returned?: number;
   total?: number;
+  /** 当前筛选在保留窗口内命中的总条数（分页游标不影响它），用于「共 N 条」 */
+  matched?: number;
 }
 
 export const getCaptures = (q: CapturesQuery | string, since = 0, limit = 1000) => {

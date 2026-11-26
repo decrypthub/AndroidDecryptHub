@@ -69,6 +69,8 @@ export const store = reactive({
   capComplete: true,
   capLatest: 0,
   capHasOlder: { crypto: false, system: false, net: false },
+  // 服务端「保留窗口内命中多少条」——页脚显示共 N 条，而不是把当前页当全部
+  capTotal: { crypto: 0, system: 0, net: 0 },
   // 视图
   view: 'cc' as 'cc' | 'sy' | 'nt' | 'files' | 'dump' | 'settings',
   appDialogOpen: false,
@@ -142,6 +144,11 @@ export async function capLoad() {
     store.capHasOlder.crypto = !!rc.hasMore;
     store.capHasOlder.system = !!rs.hasMore;
     store.capHasOlder.net = !!rn.hasMore;
+    // 共 N 条 = 服务端按同一筛选算出的命中数（分页游标不影响），拿不到时退回本页长度
+    const pageCount = (r: A.CapturesReply) => (r.captures ?? r.items ?? []).length;
+    store.capTotal.crypto = rc.matched ?? rc.total ?? pageCount(rc);
+    store.capTotal.system = rs.matched ?? rs.total ?? pageCount(rs);
+    store.capTotal.net = rn.matched ?? rn.total ?? pageCount(rn);
     store.capDropped = rc.dropped ?? rs.dropped ?? 0;
     store.capComplete = rc.complete !== false;
     store.capLatest = merged.at(-1)?.id ?? 0;

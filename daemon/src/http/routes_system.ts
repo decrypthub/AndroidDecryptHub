@@ -1,4 +1,4 @@
-import { patchAppCaptureFamily, patchSettings, settingsHttpStatus } from '../settings_service.ts';
+﻿import { patchAppCaptureFamily, patchSettings, settingsHttpStatus } from '../settings_service.ts';
 import { HOST_VERSION } from '../version.ts';
 import { maintainData } from '../maintenance.ts';
 import { localEffect } from '../execution_context.ts';
@@ -253,9 +253,13 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       const session = url.searchParams.get('session');
       const pkg = url.searchParams.get('package');
 
-      const matchMem = (c: Capture) => {
-        if (c.id <= since) return false;
-        if (beforeId != null && Number.isFinite(beforeId) && c.id >= beforeId) return false;
+      // `applyWindow` keeps the cursor/id window out of the predicate: the page count must
+      // describe how many records exist, not how many are left after the cursor.
+      const matchesFilters = (c: Capture, applyWindow: boolean) => {
+        if (applyWindow) {
+          if (c.id <= since) return false;
+          if (beforeId != null && Number.isFinite(beforeId) && c.id >= beforeId) return false;
+        }
         if (fromTs != null && Number.isFinite(fromTs) && c.ts < fromTs) return false;
         if (toTs != null && Number.isFinite(toTs) && c.ts > toTs) return false;
         if (session && c.sessionId !== session) return false;
@@ -267,6 +271,10 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
         }
         return true;
       };
+      const matchMem = (c: Capture) => matchesFilters(c, true);
+      // How many records the current selection has in total (retained window), independent of the
+      // page cursor — the panel shows this instead of pretending the page is the whole story.
+      const matched = captures.filter(c => matchesFilters(c, false)).length;
 
       let memList = captures.filter(matchMem);
       let hasMore = memList.length > limit;
@@ -298,6 +306,9 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       const health = captureHealth();
       return send(200, {
         total: captures.length, on: captureTimers.size > 0,
+        // Records matching the current package/category/query in the retained window.
+        // `total` stays the whole per-package store; `matched` is what this page is a slice of.
+        matched,
         returned: pageList.length,
         hasMore,
         nextBeforeId: hasMore && pageList.length ? pageList[0].id : null,

@@ -479,11 +479,28 @@ const emptyText = computed(() => {
   if (props.kind === 'crypto') return '还没有加解密记录。';
   return '还没有系统事件。';
 });
+// 页脚回答两个问题：一共多少条、现在是第几页。原来只说「实时刷新中」，把当前页当成了全部。
+// 数字来自服务端按同一筛选算出的命中数（`matched`，分页游标不影响），保留窗口之外的记录
+// 已被淘汰，采集期丢弃另计——这些都要在提示里说清楚，不能用一个数字暗示「全部都在这里」。
+const bucketTotal = computed(() => {
+  if (props.kind === 'net') return matchedExchangesAll.value.length;
+  const key = props.kind === 'crypto' ? 'crypto' : 'system';
+  return Math.max(store.capTotal[key] || 0, visible.value.length);
+});
+const footHint = computed(() => {
+  const bits = [`保留窗口内共 ${bucketTotal.value} 条（更早的已按保留上限淘汰）`, '上一页/下一页按页向更早读取'];
+  if (store.capDropped > 0) bits.push(`采集期丢弃 ${store.capDropped} 条`);
+  if (!store.capComplete) bits.push('最近一次采集不完整');
+  return bits.join(' · ');
+});
 const listFootLeft = computed(() => {
   if (pageLoading.value) return '读取中…';
-  if (hasTimeRange.value) return '时间段筛选';
-  if (isHistoricalMode.value) return `历史记录 · 第 ${pageNumber.value} 页`;
-  return filter.paused ? '已暂停刷新' : (store.wsState === 'live' ? '实时刷新中' : '等待连接');
+  const parts = [`共 ${bucketTotal.value.toLocaleString('zh-CN')} 条`, `第 ${pageNumber.value} 页`];
+  if (hasTimeRange.value) parts.push('时间段筛选');
+  else if (isHistoricalMode.value) parts.push('历史记录');
+  else if (filter.paused) parts.push('已暂停刷新');
+  else parts.push(store.wsState === 'live' ? '实时刷新中' : '等待连接');
+  return parts.join(' · ');
 });
 
 function cryptoRow(c: Cap) {
@@ -655,7 +672,7 @@ const searchPlaceholder = computed(() =>
           </template>
         </div>
         <div v-if="canPrevPage || canNextPage || rows.length || matchedExchanges.length || isHistoricalMode" class="capture-list-foot">
-          <span>{{ listFootLeft }}</span>
+          <span :title="footHint">{{ listFootLeft }}</span>
           <div class="pager-controls">
             <n-select :value="capDisplayCap" size="small" class="page-cap-select" title="单页返回条数上限"
               :options="DISPLAY_CAPS.map(cap => ({ label: `${cap} 条/页`, value: cap }))"
