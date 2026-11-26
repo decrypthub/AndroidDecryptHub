@@ -11,6 +11,16 @@
 - 顺带：映射总量 ≥1G 按 G 显示；maps 的定宽偏移在表格里收敛成 `0x0`；转储超时按大小放宽（1MB 一块，默认 8s 会让 64MB 的转储在客户端先失败）。
 - 验证：daemon `tsc` 0 错误；`node test/run.mjs "test/*.test.ts"` **675 tests / 656 pass / 0 fail / 19 skip**（新增 `maps_view.test.ts` 3 条）；panel `vite build` 通过（970.30 kB，用 HEAD 源码 + 本提交改动的隔离树构建，不裹入他人未提交文件）。渲染验收两轮：①桩数据（真实沙盒 maps 快照 2773 段）**39/39**——菜单三段、统计卡、100 行分页、地址筛选出 5 个匿名可执行段、选中带出地址、hexdump 首行是 ELF 头、转储出下载链接、记录出现「内存」行；②真实 daemon（8088，`com.adh.sandbox` 在线）**20/20**——真实 2773 段、预览读到真实字节、转储 4K 产物 `sha=58779bff…` 且下载 200。验收脚本在 `ADH/AndroidDecryptHub/.tmp/ui-check/`（`drive.mjs` 桩数据 / `real-check.mjs` 真实 daemon，均不进仓）。
 
+## 2026-11-27 内容加载不铺骨架，改显示加载光标
+
+用户要求：内容加载不要骨架屏，显示加载光标就行。两处列表统一成「保留上一屏内容 + 光标变加载态」：
+
+- 文件面板（`FilesPanel.vue`）：删掉 8 行骨架占位；`state === 'loading'` 时给 `.fs-rows` 加 `loading` 类与 `aria-busy`，CSS 只留 `cursor: progress`。顺带修两处会露馅的地方：①「上一级」行原来只在 `state === 'ready'` 出现，刷新时整行消失、列表上移一行，现在按当前展示的路径显示（读新目录期间仍按旧路径，不伪造目标目录的上一级）；②切应用时让在途的文件读取失效（`readSeq++`），避免上一个应用的文件内容落进新应用预览区。工具栏右侧状态文本补 `role="status"`，找回删掉骨架后丢失的读屏播报。
+- 记录列表（`CapturePanel.vue`）：删掉骨架行，`showSkeleton` 改名 `listLoading`，只用于给 `.cap-list` 挂 `loading`（`cursor: progress`）、`:aria-busy` 和压住空态文案；列表为空且首屏/翻页时不再先报「还没有网络记录」。另修切应用：`watch(chosenPkg)` 清空 `exchanges`/`exNotes` 并复位 `exLoadedOnce`，否则网络板块会继续显示上一个应用的请求且没有加载光标。
+- 一并收敛 `style.css` 里 10 处 `.row:not(.sk-row)` 死选择器为 `.row`。
+
+验证：隔离树构建（`git archive HEAD panel` + 只覆盖本次两个 `.vue`）产物 947260 字节；`ADH/_live/render-loading.mjs`（无头 Chrome，桩掉 `/api/*`，`/api/fs/list` 与 `/api/http/exchanges` 各延迟 1.2s）20 项全绿：文件面板加载中骨架节点 0、`cursor=progress`、`aria-busy=true`、状态文本 `role=status`；刷新时 2 行旧内容与「上一级」行都保留；网络面板首屏与切应用都在加载态（不显示上一个应用的数据、不误报空态），读完才出空态文案。反向对照：同一脚本跑 HEAD 源码构建的产物恰好 4 项失败（读屏播报、刷新时「上一级」、切应用加载态 2 项），确认断言能区分新旧行为。脚本在仓外 `ADH/_live/`，不进版本控制。
+
 ## 2026-11-27 网络列表去掉「TLS 记录不是 HTTP 请求」提示
 
 - 网络板块列表上方原先常驻一行「N 条 TLS 记录不是 HTTP 请求（连接控制帧或拼不回去），已略过」（截图反馈时是 540 条）。这些是 HTTP/2 控制帧、跨连接拼不回去的零散记录——网络板块本来就不展示它们，这个条数不改变任何操作，纯噪音，按用户要求删掉。
@@ -5468,13 +5478,3 @@ Host **561/561**、JVM **73/73** 无skip，类型、默认/隔离构建、94项M
 - 去掉之前的名片行、工具行、chips 行与重命名入口。
 
 验证：daemon `tsc` 0 错误；面板构建 971.56 kB（md5 `8f5929a3a4703c368fd35fea70538b0c`），`tsc` 只剩既有 `./App.vue` shim 报错；ego-browser 实测窗口 880×640、上块左右分栏、三个进度环、四格规格、下方列表三行、点行切换生效。
-
-## 2026-11-26 — 内容加载不铺骨架，改显示加载光标
-
-用户要求：内容加载不要骨架屏，显示加载光标就行。改为「保留上一屏内容 + 光标变加载态」，两条加载路径统一：
-
-- 文件面板（`FilesPanel.vue`）：删掉 8 行骨架占位（`.fs-skeletons`/`.fs-skeleton-row`/`fs-pulse` 动画全删）；`.fs-rows` 在 `state === 'loading'` 时加 `loading` 类与 `aria-busy`，CSS 为 `cursor: progress`。切目录/刷新时旧行保持可见，不再出现「旧行 + 骨架」叠在一起，也没有骨架→内容的跳动。空目录与失败态的 `v-else-if` 相应改回独立 `v-if`。
-- 记录列表（`CapturePanel.vue`）：骨架行（`.sk-row`/`.sk-line`/`sk-shimmer`）删除，`showSkeleton` 改名 `listLoading`，只用于给 `.cap-list` 挂 `loading`（`cursor: progress`）和压住空态文案；列表为空且首次加载/翻页时不再先报「还没有网络记录」，数据到了直接渲染。`style.css` 里 10 处 `.row:not(.sk-row)` 的死选择器一并收敛成 `.row`。
-- 保留的加载提示：文件面板工具栏右侧仍在加载时写「正在读取目录」，记录列表页脚在翻页时写「读取中…」；它们不是占位块，不参与本次改造。
-
-验证：`panel/` 下 `vite build` 通过（947.23 kB）；新增 `ADH/_live/render-loading.mjs` 做 headless Chrome 渲染断言（桩掉 `/api/*`，用 2.4s 延迟的 `/api/fs/list`、`/api/http/exchanges` 制造加载窗口），12 项全绿：文件面板加载中骨架节点 0、`cursor=progress`、`aria-busy=true`；刷新期间 3 行旧内容保留；记录列表 `sk-row` 0、加载中不显示空态文案、加载结束后才出现「还没有网络记录」。同一脚本反向验证：用 HEAD 源码（仍带骨架）构建的产物跑同一套断言 8 项失败（`skeletons=9`、`skRows=24`、`cursor=auto`），确认断言能区分新旧行为。
