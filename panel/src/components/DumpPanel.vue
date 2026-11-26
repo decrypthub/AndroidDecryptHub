@@ -196,7 +196,6 @@ watch(sid, () => { void refreshInventory(); void refreshWatch(); });
 <template>
   <div class="dumppane">
     <div class="dumpwrap">
-      <h2>脱壳</h2>
       <div v-if="invError" class="dump-callout">{{ invError }}</div>
       <div class="dump-actions">
         <button type="button" class="primary" :disabled="running || !store.chosenPkg" @click="run">一键脱壳</button>
