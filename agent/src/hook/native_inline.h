@@ -10,6 +10,8 @@ extern "C" {
 // success, so callers can fail loud instead of claiming a zero-replacement hook succeeded.
 int adh_inline_hook(void *target, void *replacement, void **original);
 int adh_inline_unhook(void *target);
+// ART callbacks use a full absolute redirect, not the optional short near-branch island.
+int adh_inline_hook_art(void *target, void *replacement, void **original);
 
 #ifdef __cplusplus
 }

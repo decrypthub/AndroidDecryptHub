@@ -18,8 +18,6 @@
 
 #include <android/api-level.h>
 #include <android/log.h>
-#include <csetjmp>
-#include <csignal>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -34,23 +32,10 @@
 #define LLOGI(...) __android_log_print(ANDROID_LOG_INFO,  LTAG, __VA_ARGS__)
 #define LLOGE(...) __android_log_print(ANDROID_LOG_ERROR, LTAG, __VA_ARGS__)
 
-// lsplant::Hook can fault on a method the app is already inside. That used to kill the
-// installer thread and drop every hook after it. Catch the fault, skip that one method.
-static thread_local sigjmp_buf g_hook_jmp;
-static thread_local struct sigaction g_hook_prev_segv;
-static thread_local struct sigaction g_hook_prev_bus;
-static thread_local volatile sig_atomic_t g_hook_guard = 0;
-
-static void hook_fault_handler(int sig, siginfo_t *info, void *ctx) {
-    if (g_hook_guard) {
-        g_hook_guard = 0;
-        siglongjmp(g_hook_jmp, 1);
-    }
-    struct sigaction *prev = (sig == SIGBUS) ? &g_hook_prev_bus : &g_hook_prev_segv;
-    if ((prev->sa_flags & SA_SIGINFO) && prev->sa_sigaction) prev->sa_sigaction(sig, info, ctx);
-    else if (prev->sa_handler == SIG_IGN) return;
-    else if (prev->sa_handler != SIG_DFL && prev->sa_handler) prev->sa_handler(sig);
-}
+// ART owns SIGSEGV/SIGBUS, including implicit managed exceptions during JNI.
+// Never siglongjmp out of lsplant::Hook: it crosses ART/JNI frames and skips
+// their local-reference/C++ cleanup. Only normal JNI failures or C++ exceptions
+// may be converted to an install error here.
 
 // ---- small helpers --------------------------------------------------------------------
 
@@ -174,7 +159,7 @@ static std::string get_string_field(JNIEnv *env, jobject object, jfieldID field)
 // ---- Dobby adapter (LSPlant inline_hooker/unhooker contract) -------------------------
 static void *dobby_hooker(void *target, void *hooker) {
     void *origin = nullptr;
-    if (!adh_inline_hook(target, hooker, &origin)) {
+    if (!adh_inline_hook_art(target, hooker, &origin)) {
         LLOGE("inline hook failed target=%p", target);
         return nullptr;
     }
@@ -1092,34 +1077,16 @@ extern "C" int adh_javahook_hook_method_owned(JNIEnv *env, int owner, const char
         return fail_hook("failed to reflect AdhJavaHookBridge.callback");
     }
 
-    struct sigaction act;
-    memset(&act, 0, sizeof(act));
-    act.sa_sigaction = hook_fault_handler;
-    act.sa_flags = SA_SIGINFO | SA_NODEFER;
-    sigemptyset(&act.sa_mask);
-    struct sigaction prev_segv, prev_bus;
-    sigaction(SIGSEGV, &act, &prev_segv);
-    sigaction(SIGBUS, &act, &prev_bus);
-    g_hook_prev_segv = prev_segv;
-    g_hook_prev_bus = prev_bus;
-    g_hook_guard = 1;
     jobject backup = nullptr;
-    int faulted = 0;
-    if (sigsetjmp(g_hook_jmp, 1) == 0) {
+    try {
         backup = lsplant::Hook(env, target, bridge, callback);
-    } else {
-        faulted = 1;
-    }
-    g_hook_guard = 0;
-    sigaction(SIGSEGV, &prev_segv, nullptr);
-    sigaction(SIGBUS, &prev_bus, nullptr);
-    env->DeleteLocalRef(callback);
-    if (faulted) {
-        LLOGE("java_hook faulted target=%s", signature.c_str());
+    } catch (...) {
+        env->DeleteLocalRef(callback);
         env->DeleteGlobalRef(bridge);
         env->DeleteLocalRef(target);
-        return fail_hook("hook faulted");
+        return fail_hook("LSPlant threw during installation");
     }
+    env->DeleteLocalRef(callback);
     if (!backup) {
         env->DeleteGlobalRef(bridge);
         env->DeleteLocalRef(target);

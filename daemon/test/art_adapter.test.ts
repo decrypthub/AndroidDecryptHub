@@ -1,0 +1,13 @@
+import test,{after}from'node:test';import assert from'node:assert/strict';import{existsSync,readFileSync,mkdtempSync,mkdirSync,writeFileSync,rmSync}from'node:fs';import{join}from'node:path';import{tmpdir}from'node:os';import{spawnSync}from'node:child_process';import{fileURLToPath}from'node:url';
+const root=process.env.ADH_ART_ADAPTER_ROOT??fileURLToPath(new URL('../../',import.meta.url)),owner=readFileSync(join(root,'agent/src/hook/java_lsplant.cpp'),'utf8');
+test('ART installation preserves process signal handlers and never longjmps across JNI',()=>{assert.doesNotMatch(owner,/sigaction\s*\(\s*SIG(?:SEGV|BUS)|sigsetjmp\s*\(|siglongjmp\s*\(/);assert.match(owner,/backup = lsplant::Hook\(env, target, bridge, callback\)/);assert.match(owner,/catch\s*\(\.\.\.\)/);});
+test('LSPlant uses the dedicated full-redirect adapter rather than generic near preference',()=>{const from=owner.indexOf('static void *dobby_hooker('),to=owner.indexOf('static bool dobby_unhooker(',from);assert.match(owner.slice(from,to),/adh_inline_hook_art\(target, hooker, &origin\)/);});
+const compiler=process.env.CXX??(process.platform==='win32'?'C:/Strawberry/c/bin/g++.exe':'c++'),available=spawnSync(compiler,['--version'],{windowsHide:true}).status===0;
+const dir=available?mkdtempSync(join(tmpdir(),'adh-art-adapter-')):null;after(()=>{if(dir)rmSync(dir,{recursive:true,force:true});});
+test('compiled production adapter serializes Dobby options and restores state after exceptions',{skip:!available?'C++ fixture compiler unavailable':false},()=>{
+ assert.ok(dir);mkdirSync(join(dir,'android'));writeFileSync(join(dir,'android/log.h'),'#pragma once\n#define ANDROID_LOG_ERROR 6\ninline int __android_log_print(int,const char*,const char*,...){return 0;}\n');
+ writeFileSync(join(dir,'dobby.h'),'#pragma once\n#define RS_SUCCESS 0\n#define RT_SUCCESS 0\nvoid dobby_enable_near_branch_trampoline();\nvoid dobby_disable_near_branch_trampoline();\nint DobbyHook(void*,void*,void**);\nint DobbyDestroy(void*);\n');
+ const fixture=readFileSync(new URL('./fixtures/art_adapter_fixture.cpp',import.meta.url),'utf8');writeFileSync(join(dir,'fixture.cpp'),fixture);
+ const exe=join(dir,process.platform==='win32'?'adapter.exe':'adapter');const r=spawnSync(compiler,['-std=c++20','-pthread','-I',dir,'-I',join(root,'agent/src/hook'),'-I',join(root,'agent/src/runtime'),join(root,'agent/src/hook/native_inline_dobby.cpp'),join(dir,'fixture.cpp'),'-o',exe],{encoding:'utf8',windowsHide:true,timeout:30000});assert.equal(r.status,0,r.stderr);
+ const ran=spawnSync(exe,[],{encoding:'utf8',windowsHide:true,timeout:15000});assert.equal(ran.status,0,ran.stderr);assert.match(ran.stdout,/PASS full\/near option isolation, throw cleanup and 800 concurrent calls/);
+});

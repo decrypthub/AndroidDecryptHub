@@ -1,3 +1,5 @@
+import {captureControlAction} from '../capture_controls.ts';
+import {getOperations} from '../operation_host.ts';
 import {captureMatchesScope,deviceRequestScope,assertRequestedTarget} from '../agent_scope.ts';
 ﻿import { patchAppCaptureFamily, patchSettings, settingsHttpStatus } from '../settings_service.ts';
 import { HOST_VERSION } from '../version.ts';
@@ -48,6 +50,13 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
     res.end(buf);
   };
   return [
+    {path:'/api/capture/controls',handler:async()=>{
+      const args=req.method==='GET'?Object.fromEntries(url.searchParams):JSON.parse(await readBody(req)||'{}');
+      const result=await captureControlAction(args);
+      const target=args.session?sessions.get(args.session):undefined;
+      const resource=target?.online?getOperations().resource({name:'capture_controls',mode:'read',session:args.session}):'host';
+      return send(result.ok===false?409:200,{...result,control:getOperations().snapshot(resource),saveControl:getOperations().snapshot('host')});
+    }},
     // Temporarily retire the browser history view without discarding stored operations.
     { path:'/workbench',handler:() => {
       res.writeHead(302, { location:'/', 'cache-control':'no-store' });
@@ -97,6 +106,10 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       return send(200, result);
     } },
     { path: '/api/apps', handler: async () => {
+      if(!localObserver&&deviceRequestScope()?.serial){
+        try{return send(200,{apps:await readAppCatalog(deviceRequestScope()!.serial),error:null,inventory:true,capture:false});}
+        catch(e){return send(502,{apps:[],error:(e as Error).message});}
+      }
       if (localObserver) {
         const pkg = localObserver.package;
         if(process.env.ADH_USB_APP_INVENTORY==='1'&&!localObserver.fileBrowserOnly&&!localObserver.demoApiSerial){

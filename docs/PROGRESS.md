@@ -1,5 +1,13 @@
 # PROGRESS — 跨会话进度看板
 
+## 2026-11-27 通宵优化进行中：共享两级 Hook 协调与 Web 设置实测
+
+- Host 新增 device+package 独立保存的 capture_controls，共用 HTTP/MCP 受版本围栏操作层；指定进程、目录及运行版本，执行 drain → stop → 精确选择/依赖闭包 → start → 逐项读回。离线只保存待应用，不重连自动执行；未知/部分失败保留回执，不盲重试。
+- Web 设置收敛四个顶部分类，真实功能/方法两级开关、固定目录、搜索、草稿及应用栏；父级关保留子项，停用观测与隐藏记录分清。普通 Host 的双机库存和请求目标冲突拒绝已接通，原 DeviceDialog 布局未改。
+- 实际界面发现第二 Java 重载安装崩溃；移除跨 JNI 的信号 longjmp，并为 ART 单独使用完整 Dobby 跳转，保护进程全局 near 选项。修正版在两台同 SDK35 手机验证，A 机双重载三轮启停、B 机持续独立采集；不宣称所有 ROM 或所有算法已验证。
+- 修正版双机非浏览器实测 9/9 严格现场不变；真实 Web 再验重载独立性、父闸/子项、跨功能搜索、完整签名详情、390px 无横向溢出。浏览器预览的 9 个功能检查通过，但原采集 session ID 重连，PID/starttime 和模块/范围/端点/原 reverse 未变，故该报告严格现场检查保留 FAIL。
+- 证据目录：X:/Project/github/DecryptHub-all/ADH/_live/overnight-20261127/hook-ui-transaction。Host/面板最终回归与四角色回滚数字以本轮 GATES/RESULT 为准。本阶段不是全部功能矩阵、Manager 设备域、真实注入、最终独立冷体验或最终项目收尾，这些继续执行。
+
 ## 2026-11-27 通宵优化进行中：独立手机 Agent/ART/GOT 基础实测
 
 - 在用户授权的第一台手机使用原先不存在的 `com.adh.p5sandbox` 自有测试包和独立 USB 路由，不替换系统模块，不重启 8088/18761。APK 内 Agent 与实际加载文件 SHA-256 相同，hello 的 PID/UID/starttime 与手机进程核对；这仅是显式 USB 路由，不称 DeviceRpc 密钥认证。

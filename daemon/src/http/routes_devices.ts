@@ -1,3 +1,4 @@
+import {assertRequestedTarget} from '../agent_scope.ts';
 import {deviceAction} from '../device_host.ts';
 import {readBody,sessions} from '../state.ts';
 import {demoApiRequest,currentLocalObserver,localObserverHost,OWN_APP_FILES_ROUTE,OWN_DEMO_API_ROUTE,retargetObserver} from '../local_observer.ts';
@@ -10,9 +11,10 @@ import {parseAdbDevices,realAdbRunner,type AdbRunner} from '../transport/adb_dev
 import type {Route,RouteContext} from './types.ts';
 
 /** The observed app's agent session, for the device manager: online first, else the newest dead one. */
-function observedAgentView(serial:string){
-  const pkg=currentLocalObserver()?.package;
-  if(!pkg) return null;
+export function observedAgentView(serial:string,pkg?:string){
+  const candidates=[...sessions.values()].filter(s=>s.deviceBinding?.serial===serial&&s.online&&(!pkg||s.package===pkg));
+  if(!pkg){const apps=new Set(candidates.map(s=>s.package));if(apps.size!==1)return null;pkg=candidates[0]?.package;}
+  if(!pkg)return null;
   let best:{online:boolean;pid:number;sessionId:string;lastSeen:number;version:string}|null=null;
   for(const session of sessions.values()){
     if(session.package!==pkg||session.deviceBinding?.serial!==serial) continue;
@@ -72,39 +74,41 @@ async function readDeviceInfo(serial:string,run:AdbRunner):Promise<DeviceInfo>{
 }
 
 /** Wrapped by the same router/operation registry as MCP; no privileged second execution path. */
-export function deviceRoutes({req,url,send}:RouteContext):Route[]{
-  const localObserver=currentLocalObserver();
+export function deviceRoutes({req,url,send}:RouteContext,deps:{run?:AdbRunner;observer?:ReturnType<typeof currentLocalObserver>;list?:()=>any}={}):Route[]{
+  const localObserver=Object.hasOwn(deps,'observer')?deps.observer:currentLocalObserver();
+  const runAdb=deps.run??realAdbRunner;
   const online=()=>!!localObserver&&[...sessions.values()].some(s=>
     s.online&&s.package===localObserver.package&&s.deviceBinding?.serial===localObserver.usbSerial);
   return [{path:'/api/devices',handler:async()=>{
-  if(localObserver && req.method==='GET' && url.searchParams.get('action')==='info'){
+  if(req.method==='GET' && url.searchParams.get('action')==='info'&&url.searchParams.has('serial')){
     const serial=String(url.searchParams.get('serial')||'').trim();
     if(!serial) return send(400,{ok:false,error:'缺少设备串号。'});
     try{
-      return send(200,{ok:true,info:await readDeviceInfo(serial,realAdbRunner)});
+      return send(200,{ok:true,info:await readDeviceInfo(serial,runAdb)});
     }catch(e){
       return send(502,{ok:false,error:(e as Error).message});
     }
   }
-  if(localObserver && req.method==='GET' && url.searchParams.get('action')==='list'){
+  if(req.method==='GET' && url.searchParams.get('action')==='list'){
     // This is one exact local USB device, not a paired Device identity or a proxy for the App session.
-    let transports:{serial:string;model:string;state:string;link:string;observed:boolean;rpc:boolean;
+    let transports:{serial:string;model:string;state:string;link:string;observed:string|false;rpc:boolean;
       net:boolean;agent:{online:boolean;pid:number;sessionId:string;lastSeen:number;version:string}|null}[]=[];
     // One `adb devices -l` per request: the panel polls this every few seconds and each extra
     // spawn queues behind the serialized adb server — the double read used to disagree with
     // itself under contention (transports empty while localUsb said online, or vice versa).
     let devs='';
-    if(!localObserver.fileBrowserOnly&&!localObserver.demoApiSerial){
-      try{ devs=await realAdbRunner(['devices','-l'],{timeout:2200}); }
+    if(!localObserver?.fileBrowserOnly&&!localObserver?.demoApiSerial){
+      try{ devs=await runAdb(['devices','-l'],{timeout:2200}); }
       catch(e){ return send(502,{ok:false,error:(e as Error).message}); }
       transports=parseAdbDevices(devs)
         .map(row=>({serial:row.serial,model:row.model||'',state:row.state,link:row.link,
-          observed:row.serial===localObserver.usbSerial,rpc:deviceRpcLive(row.serial),
+          observed:(()=>{const online=[...sessions.values()].filter(s=>s.online&&s.deviceBinding?.serial===row.serial);const pkgs=new Set(online.map(s=>s.package));return pkgs.size===1?online[0].package:row.serial===localObserver?.usbSerial?localObserver.package:false;})(),rpc:deviceRpcLive(row.serial),
           net:row.link==='adb-tcp'||row.serial.includes(':'),
-          agent:observedAgentView(row.serial)}));
+          agent:observedAgentView(row.serial,row.serial===localObserver?.usbSerial?localObserver.package:undefined)}));
     }
-    const run:AdbRunner=devs?(args,opts)=>args.join(' ')==='devices -l'?Promise.resolve(devs):realAdbRunner(args,opts):realAdbRunner;
-    return send(200,{ok:true,devices:[],transports,localUsb:await localUsbView(localObserver,online(),run)});
+    const run:AdbRunner=devs?(args,opts)=>args.join(' ')==='devices -l'?Promise.resolve(devs):runAdb(args,opts):runAdb;
+    const registered=localObserver?{devices:[]}:await(deps.list??(()=>deviceAction({action:'list'})))();
+    return send(200,{...registered,ok:true,transports,localUsb:localObserver?await localUsbView(localObserver,online(),run):null});
   }
   // Panel device management on the local USB entry: connect/disconnect the RPC
   // channel, or move the observation binding to another USB device+app.
@@ -115,6 +119,7 @@ export function deviceRoutes({req,url,send}:RouteContext):Route[]{
     try{body=JSON.parse(await readBody(req)||'{}');}catch{return send(400,{ok:false,error:'缺少有效的请求。'});}
     const action=String(body?.action||'');
     const serial=String(body?.serial||'');
+    assertRequestedTarget(serial,typeof body?.package==='string'?body.package:undefined);
     try{
       if(action==='connect'){
         const c=await connectDevice(serial);

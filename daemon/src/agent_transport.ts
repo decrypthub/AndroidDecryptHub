@@ -1,3 +1,4 @@
+import {getCaptureControls} from './capture_controls.ts';
 import {independentDeviceScope} from './agent_scope.ts';
 import net from 'node:net';
 import {acceptsLocalHello,isOwnDemoPackage,localObserver,noteObservedPid} from './local_observer.ts';
@@ -79,10 +80,11 @@ export function acceptAgentSocket(sock:net.Socket,lease?:UsbAgentLease) {
       independentDeviceScope(binding?{serial:binding.serial,package:session.package,session:id}:{},()=>{
       clearCaptureArmProtect(session!.package);
       startCaptureLoop(id,{skipArm:true});
-      if (binding&&!localObserver) void applyCaptureSettingsOnConnect(id).then(result => {
+      const explicitControls=binding&&getCaptureControls().has(binding.serial,session!.package);
+      if (binding&&!localObserver&&!explicitControls) void applyCaptureSettingsOnConnect(id).then(result => {
         if (result?.ok === false) log(`[capture] family arm ${id}:`, result.error || 'capture settings not applied');
       }).catch(error => log(`[capture] family arm ${id}:`, (error as Error).message));
-      else if (binding&&localObserver&&binding.serial===localObserver.usbSerial&&session.package === localObserver.package) {
+      else if (binding&&!explicitControls&&localObserver&&binding.serial===localObserver.usbSerial&&session.package === localObserver.package) {
         // The observer tracks the live generation: a restarted app arrives with a new pid and
         // must update it or status/own-files checks keep pointing at the dead process. Only the
         // main process counts — `pkg:remote` helper pids are still sessions, just not THE app.

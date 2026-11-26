@@ -1,3 +1,4 @@
+import {assertRequestedTarget} from '../agent_scope.ts';
 import type http from 'node:http';
 
 import { handleMcp } from '../mcp.ts';
@@ -18,8 +19,15 @@ import {hookPlanRoutes} from './routes_hook_plans.ts';
 import {currentLocalObserver,observerHost,OWN_APP_FILES_ROUTE,OWN_DEMO_API_ROUTE} from '../local_observer.ts';
 
 export async function handleHttp(req: http.IncomingMessage, res: http.ServerResponse) {
-  const localObserver=currentLocalObserver();
   const url = new URL(req.url ?? '/', 'http://localhost');
+  if(['POST','PUT','PATCH','DELETE'].includes(req.method??'')){
+    const validate=(args:any)=>{if(!args||typeof args!=='object'||Array.isArray(args))return;
+      assertRequestedTarget(typeof args.serial==='string'?args.serial:undefined,typeof args.package==='string'?args.package:undefined);
+      if(url.pathname==='/api/scope')for(const key of ['add','remove','set'])if(Array.isArray(args[key]))for(const pkg of args[key])if(typeof pkg==='string')assertRequestedTarget(undefined,pkg);
+    };
+    validate(Object.fromEntries(url.searchParams));const text=await readRequestBody(req,url.pathname==='/mcp'||url.pathname.endsWith('/mcp')?'mcp':undefined);if(text)validate(JSON.parse(text));
+  }
+  const localObserver=currentLocalObserver();
   let buffered=false;
   let output:{httpStatus:number;body:any;contentType:string}|undefined;
   const send = (code: number, body: unknown, contentType = 'application/json') => {

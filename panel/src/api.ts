@@ -6,8 +6,8 @@ export function scopeHeaders(path:string,headers?:HeadersInit,explicit?:{serial?
   // Global inventory must remain reachable when the selected phone has gone away.
   if(path==='/health'||path.startsWith('/api/devices?action='))return h;
   const scope=explicit??scopeProvider();
-  if(scope.serial)h.set('x-adh-device-serial',scope.serial);
-  if(scope.package)h.set('x-adh-package',scope.package);
+  if(scope.serial&&!h.has('x-adh-device-serial'))h.set('x-adh-device-serial',scope.serial);
+  if(scope.package&&!h.has('x-adh-package'))h.set('x-adh-package',scope.package);
   return h;
 }
 // 端点封装 + 统一耗时统计。面板所有请求走 api()，自动进 perfStat。
@@ -73,12 +73,13 @@ const post = <T = unknown>(path: string, body: unknown, timeoutMs?: number) =>
   api<T>(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }, timeoutMs);
 // POST where a non-2xx reply still carries the useful answer (the daemon puts the reason in
 // `error`). api() throws on the status and loses it, which turns "unreadable at 0x…" into "502".
-async function postDetail<T extends { error?: string }>(path: string, body: unknown, timeoutMs = 20000): Promise<T> {
+async function postDetail<T extends { error?: string }>(path: string, body: unknown, timeoutMs = 20000,extraHeaders?:HeadersInit): Promise<T> {
+  const requestHeaders=new Headers(extraHeaders);requestHeaders.set('content-type','application/json');
   const t0 = performance.now();
   let res: Response;
   try {
     res = await fetch(path, {
-      method: 'POST', headers: scopeHeaders(path,{'content-type':'application/json'}),
+      method: 'POST', headers: scopeHeaders(path,requestHeaders),
       body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs), cache: 'no-store',
     });
   } catch (e) {
@@ -120,8 +121,9 @@ export const getDeviceInfo = (serial: string) =>
   api<{ ok: boolean; info?: DeviceInfo; error?: string }>(`/api/devices?action=info&serial=${encodeURIComponent(serial)}`);export const getHealth = () => api<{ ok: boolean; version?: string }>('/health');
 export const getApps = () => api<{ ok: boolean; apps: AppInfo[]; error?: string; capture?: { enabled: boolean }; captureByPackage?: Record<string, unknown>; localObservation?: Record<string, unknown> }>('/api/apps');
 export const getScope = () => api<{ ok: boolean; packages: string[] }>('/api/scope');
-export const scopeAdd = (pkg: string) => post('/api/scope', { add: [pkg] });
-export const scopeRemove = (pkg: string) => post('/api/scope', { remove: [pkg] });
+const scopeChange=(pkg:string,add:boolean)=>api('/api/scope',{method:'POST',headers:{'content-type':'application/json','x-adh-package':pkg},body:JSON.stringify(add?{add:[pkg]}:{remove:[pkg]})});
+export const scopeAdd = (pkg: string) => scopeChange(pkg,true);
+export const scopeRemove = (pkg: string) => scopeChange(pkg,false);
 export const appControl = (pkg: string, action: string) => post('/api/apps/control', { package: pkg, action });
 // 设备写操作走专用封装：服务器把失败原因（DEVICE_NOT_READY、缺少 bootstrap、手机不在线）
 // 放在错误响应体的 error 字段，通用 api() 只抛 HTTP 状态会丢掉真实原因，toast 必须拿到它。
@@ -296,3 +298,13 @@ export interface ModuleLoadRec {
 export const appIconUrl = (pkg: string, serial?: string, version?: unknown) =>
   `/api/apps/icon?package=${encodeURIComponent(pkg)}${serial ? `&serial=${encodeURIComponent(serial)}` : ''}${version ? `&v=${encodeURIComponent(String(version))}` : ''}`;
 export const getConfig = () => api<{ settings?: { capture?: { retain?: number; maxAgeDays?: number }; ui?: { displayCap?: number } } }>('/api/config');
+
+export interface CaptureControlsView {ok:boolean;serial:string;package:string;session:string|null;revision:number;config:any;history:any[];lastApplied:any;pending:boolean;foreignOwner:boolean;runtime:any;catalogs:any;control:{revision:number;epoch:number;hostEpoch:number;resource:string};saveControl?:{revision:number;epoch:number;hostEpoch:number;resource:string};lastIntent?:any}
+export const getCaptureControls=(serial:string,pkg:string,session?:string)=>api<CaptureControlsView>('/api/capture/controls?'+new URLSearchParams({serial,package:pkg,...(session?{session}:{})}),{headers:{'x-adh-device-serial':serial,'x-adh-package':pkg}});
+export async function writeCaptureControls(view:CaptureControlsView,action:'discover'|'save'|'apply',config?:unknown,confirmRisk=false){
+ const control=action==='save'?(view.saveControl??view.control):view.control;
+ const body={action,serial:view.serial,package:view.package,...(view.session?{session:view.session}:{}),expectedRevision:view.revision,runtimeToken:view.runtime?.token,config,confirmRisk,
+ _operation:{expectedRevision:control.revision,controlEpoch:control.epoch,hostEpoch:control.hostEpoch,idempotencyKey:crypto.randomUUID(),timeoutMs:45000}};
+ // Use the frozen view's target even if the user changes tabs before the request begins.
+ return postDetail<any>('/api/capture/controls',body,50000,{'x-adh-device-serial':view.serial,'x-adh-package':view.package});
+}

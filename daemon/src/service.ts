@@ -1174,6 +1174,10 @@ let capSeq = captures.reduce((m, c) => Math.max(m, Number(c.id) || 0), 0);
 // same batch). Every drainer registers itself here, and readers (java_trace, syscall_digest, ...) go
 // through drainSession().
 const captureDrainers = new Map<string, () => Promise<any>>();
+const captureDrainPauses=new Set<string>();
+export const pauseCaptureDrains=(sid:string)=>{captureDrainPauses.add(sid);};
+export const resumeCaptureDrains=(sid:string)=>{captureDrainPauses.delete(sid);};
+export function clearCaptureEchoMemo(sid:string){for(const key of recentJavaIn.keys())if(key.startsWith(sid+':'))recentJavaIn.delete(key);}
 
 /**
  * Drain the agent capture ring into the local store for this session.
@@ -1385,7 +1389,7 @@ export function startCaptureLoop(sid: string, opts?: { skipArm?: boolean }) {
     };
     captureDrainers.set(sid, runDrain);
     const timer = detached(() => setInterval(async () => {
-      if (busy || !sessions.get(sid)?.online) return;
+      if (busy || captureDrainPauses.has(sid) || !sessions.get(sid)?.online) return;
       await runDrain().catch(() => null);   // sender pushes bursts; this remains the compatibility sweep
     }, 1500));
     captureTimers.set(sid, timer);

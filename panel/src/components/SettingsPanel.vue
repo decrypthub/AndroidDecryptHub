@@ -1,11 +1,12 @@
 <script setup lang="ts">
+import HookManager from './HookManager.vue';
 import { appearance, setAppearance } from '../appearance';
 import { ref, computed, watch, onMounted } from 'vue';
 import {
   store, liveSession, appSessions, hiddenHooks, setHidden, resetHidden,
   panelDisplay, savePanelDisplay, DISPLAY_CAPS, hostDisplayCap, belongsToApp, toast,
 } from '../store';
-import { getFamilies, setFamily, getDetectSummary, getHealth, getConfig, type Cap } from '../api';
+import { getHealth, getConfig, type Cap } from '../api';
 import {
   FAMILIES as ALGO_FAMILIES, HOOK_GROUPS, categoryKey, summarize, summarizeHooks,
   sessionHookEvidence, type AlgoEntry, type HookEntry,
@@ -17,82 +18,10 @@ import {
 } from '@vicons/ionicons5';
 
 // ---- 页内子导航 ----
-type PageKey = 'capture' | 'records' | 'hooks' | 'scope' | 'display' | 'conn';
-const PAGE_ICONS: Record<PageKey, Component> = {
-  capture: LockClosedOutline, records: EyeOutline, hooks: LocateOutline,
-  scope: ScanOutline, display: OptionsOutline, conn: ServerOutline,
-};
-const PAGES: Array<{ key: PageKey; label: string }> = [
-  { key: 'capture', label: '捕获' },
-  { key: 'records', label: '记录显示' },
-  { key: 'hooks', label: 'Hook 状态' },
-  { key: 'scope', label: '分析范围' },
-  { key: 'display', label: '显示' },
-  { key: 'conn', label: '连接与数据' },
-];
-const page = ref<PageKey>('capture');
-
-// ---- 捕获家族（键序对齐 daemon CRYPTO_FAMILY_KEYS）----
-const FAMILIES = [
-  ['digest', '摘要', 'MessageDigest.digest · EVP_DigestUpdate'],
-  ['hmac', 'HMAC', 'Mac.doFinal · HMAC_Update'],
-  ['symmetric', '对称', 'Cipher.doFinal · EVP_CipherUpdate'],
-  ['asymmetric', '非对称', 'Signature.sign · EVP_DigestSign'],
-  ['tls', 'TLS', 'SSL_read · SSL_write'],
-  ['aead', 'AEAD', 'AES-GCM · EVP_AEAD'],
-] as const;
-
-const famState = ref<Record<string, boolean>>({});
-const famEnabled = ref(false);
-const famError = ref('');
-const saving = ref('');
-const radar = ref('');
-const radarTitle = ref('');
-
-async function loadFamilies() {
-  if (!store.chosenPkg) return;
-  try {
-    const r = await getFamilies(store.chosenPkg);
-    if (!r.ok || !r.capture) { famError.value = '读取配置失败'; return; }
-    famEnabled.value = r.capture.enabled !== false;
-    famState.value = { ...(r.capture.families ?? {}) };
-    famError.value = '';
-  } catch { famError.value = '读取配置失败'; }
-}
-async function toggle(fam: string) {
-  if (!store.chosenPkg || saving.value) return;
-  const next = !famState.value[fam];
-  saving.value = fam;
-  try {
-    const r = await setFamily(store.chosenPkg, fam, next) as { ok?: boolean; error?: string };
-    if (r?.ok === false) { famError.value = r.error ?? '保存失败'; return; }
-    famState.value[fam] = next;
-  } catch { famError.value = '保存失败'; }
-  saving.value = '';
-}
-// 检测状态：只报「系统检测开没开、各类命中多少」，不在这里罗列采集到的指纹值。
-async function loadRadar() {
-  if (!store.chosenPkg) { radar.value = '先选择应用'; radarTitle.value = ''; return; }
-  const pkg = store.chosenPkg;
-  try {
-    const r = await getDetectSummary(pkg) as {
-      armed?: boolean | null; kinds?: Array<{ label: string; count: number }>;
-      caveat?: string; unchecked?: string[];
-    };
-    if (store.chosenPkg !== pkg) return;
-    if (r.armed === false) { radar.value = '系统检测：未开'; radarTitle.value = '在 Manager → 应用 → Hook 配置 → 系统检测 里打开'; return; }
-    if (r.armed == null) { radar.value = '系统检测：摘要未上报'; return; }
-    const hit = (r.kinds ?? []).filter(k => (k.count ?? 0) > 0).map(k => `${k.label} ${k.count}`);
-    radar.value = '系统检测：' + (hit.length ? `已开 · ${hit.join(' · ')}` : '已开 · 暂无');
-    const parts: string[] = [];
-    if (r.caveat) parts.push(r.caveat);
-    if (r.unchecked?.length) parts.push('未覆盖：' + r.unchecked.join('、'));
-    radarTitle.value = parts.join('\n');
-  } catch {
-    if (store.chosenPkg !== pkg) return;
-    radar.value = '系统检测：摘要读取失败'; radarTitle.value = '不代表功能已开启或关闭';
-  }
-}
+type PageKey = 'capture' | 'records' | 'display' | 'conn';
+const PAGE_ICONS:Record<PageKey,Component>={capture:LockClosedOutline,records:EyeOutline,display:OptionsOutline,conn:ServerOutline};
+const PAGES:Array<{key:PageKey;label:string}>=[{key:'capture',label:'Hook 管理'},{key:'records',label:'显示过滤'},{key:'display',label:'界面偏好'},{key:'conn',label:'高级'}];
+const page=ref<PageKey>('capture');
 
 // ---- 记录显示 ----
 // 设置页用快照：进入页面、切换应用、手动刷新时取一次，此后列表稳定不动。
@@ -143,14 +72,6 @@ function resetAll() {
   toast('已恢复此应用的全部显示');
 }
 
-// ---- 功能与 Hook 状态（同为设置页统计，也用快照）----
-const evidence = computed(() => {
-  const s = liveSession.value;
-  if (!s) return null;
-  return sessionHookEvidence(recordsSnap.value, store.chosenPkg, s.sessionId);
-});
-const EVIDENCE_LABELS: Record<string, string> = { crypto: '加解密', system: '系统调用', file: '文件读写', net: '网络' };
-
 // ---- 显示偏好 ----
 const appearances = [
   { value: 'system', label: '跟随系统', icon: DesktopOutline },
@@ -196,55 +117,22 @@ async function refreshStatus() {
   statusMsg.value = (service && data) ? '' : '部分信息读取失败，可点「刷新」重试。';
   statusBusy.value = false;
 }
-onMounted(() => { void loadFamilies(); void loadRadar(); void refreshStatus(); takeSnap(); });
-watch(() => store.chosenPkg, () => { void loadFamilies(); void loadRadar(); takeSnap(); });
-watch(page, p => { if (p === 'records' || p === 'hooks') takeSnap(); });
+onMounted(() => { void refreshStatus(); takeSnap(); });
+watch(() => store.selectedDeviceKey+'\n'+store.chosenPkg, () => { takeSnap(); if(page.value==='conn')void refreshStatus(); });
+watch(page,p=>{if(p==='records')takeSnap();if(p==='conn')void refreshStatus();});
 </script>
 
 <template>
   <div class="set-page-shell">
-    <aside class="set-sidebar">
-      <nav class="settings-links" aria-label="设置分类">
-        <n-button v-for="p in PAGES" :key="p.key" quaternary block :aria-label="p.label" :title="p.label" :aria-pressed="page === p.key" @click="page = p.key">
-          <span class="settings-link"><n-icon class="set-nav-icon" size="16" :component="PAGE_ICONS[p.key]" />
-          <span>{{ p.label }}</span></span>
-        </n-button>
-      </nav>
-    </aside>
+    <nav class="settings-top-tabs" aria-label="设置分类">
+      <div class="settings-picker"><n-select v-model:value="page" aria-label="设置分类" :options="pageOptions" /></div>
+      <n-button v-for="p in PAGES" :key="p.key" quaternary :aria-pressed="page===p.key" :class="{active:page===p.key}" @click="page=p.key">{{ p.label }}</n-button>
+    </nav>
     <div class="set-content">
-      <div class="set-header" :class="{ 'settings-mobile-only': page === 'records' || page === 'display' }">
-        <div class="set-context">
-          <div class="settings-picker"><n-select size="small" v-model:value="page" aria-label="设置分类" :options="pageOptions" /></div>
-          <p v-if="page !== 'records' && page !== 'display'" class="set-app"><span>APP <strong>{{ store.chosenPkg || '未选择应用' }}</strong></span></p>
-        </div>
-      </div>
       <div class="set-main">
         <h1 class="sr-only">设置</h1>
 
-        <section v-if="page === 'capture'" class="set-page">
-          <div class="set-choice-group">
-            <div class="set-group-head">
-              <h4>捕获家族</h4>
-              <span class="set-group-count">{{ famEnabled ? '已启用' : '已停用' }}</span>
-            </div>
-            <div class="set-group-items">
-              <div v-for="[key, label, members] in FAMILIES" :key="key" class="set-toggle-row">
-                <span class="lab"><b>{{ label }}</b><span>{{ members }}</span></span>
-                <n-switch size="small" :aria-label="label" :value="famState[key] !== false"
-                  :disabled="!!saving || !store.chosenPkg" @update:value="toggle(key)" />
-              </div>
-            </div>
-          </div>
-          <p v-if="famError" class="set-status" data-error="true">{{ famError }}</p>
-          <p v-else-if="!store.chosenPkg" class="set-status">先选择应用。</p>
-          <div class="set-choice-group">
-            <div class="set-group-head">
-              <h4>检测状态</h4>
-              <n-button size="small" secondary @click="loadRadar">刷新</n-button>
-            </div>
-            <p class="detect-radar" style="padding:10px 13px" :title="radarTitle">{{ radar || '未读取' }}</p>
-          </div>
-        </section>
+        <HookManager v-if="page==='capture'" />
 
         <section v-else-if="page === 'records'" class="record-prefs" aria-label="记录显示偏好">
           <div class="rec-categories" role="group" aria-labelledby="categories-label">
@@ -272,69 +160,15 @@ watch(page, p => { if (p === 'records' || p === 'hooks') takeSnap(); });
             <n-select v-model:value="family" size="small" aria-label="筛选类别" class="rec-select" :options="familyOptions" />
           </div>
           <div class="rec-table">
-            <div class="rec-columns" aria-hidden="true"><span>{{ grouping ? '算法' : 'Hook' }}</span><span>记录数</span><span>显示</span></div>
+            <div class="rec-columns" aria-hidden="true"><span>{{ grouping ? '算法' : 'Hook' }}</span><span>显示</span></div>
             <div v-for="row in shownRows" :key="row.key" class="rec-line">
               <div class="rec-identity"><strong>{{ row.name }}</strong><small>{{ row.note }}</small></div>
-              <span class="rec-count" :aria-label="row.count + ' 条记录'">{{ row.count }}</span>
               <n-switch size="small" :value="!hiddenHooks.has(row.key)"
                 :aria-label="'显示 ' + row.name" @update:value="setHidden(row.key, $event)" />
             </div>
             <div v-if="!shownRows.length" class="rec-empty" role="status">
               <span>{{ search || family ? '没有匹配的记录' : '暂无已观察到的' + (grouping ? '算法' : 'Hook') }}</span>
               <n-button v-if="search || family" text size="small" @click="search = ''; family = ''">清除筛选</n-button>
-            </div>
-          </div>
-        </section>
-
-        <section v-else-if="page === 'hooks'" class="set-page">
-          <div class="set-page-head">
-            <span></span>
-            <n-button size="small" secondary @click="takeSnap">刷新</n-button>
-          </div>
-          <div v-if="!evidence" class="set-observation-empty">没有在线会话。Hook 状态按当前进程会话统计。</div>
-          <template v-else>
-            <div v-for="(label, key) in EVIDENCE_LABELS" :key="key" class="set-algorithm-entry">
-              <details>
-                <summary>
-                  <span>
-                    <strong>{{ label }}</strong>
-                    <span class="set-algorithm-meta">{{ evidence[key].records }} 条 · {{ evidence[key].uniqueEntries }}
-                      个入口</span>
-                  </span>
-                </summary>
-                <ul v-if="evidence[key].methods.length" class="set-algorithm-methods">
-                  <li v-for="(m, i) in evidence[key].methods" :key="i">
-                    <dl>
-                      <dt>×{{ m.count }}</dt>
-                      <dd>{{ m.className ? m.className + '.' + m.member : (m.member || m.label) }}</dd>
-                    </dl>
-                  </li>
-                </ul>
-                <p v-else class="set-lead" style="margin:0 0 10px 15px">本会话暂无此类记录。</p>
-              </details>
-            </div>
-            <p class="set-status">上报入口详情只读；会话识别到的入口不代表完整安装清单。</p>
-          </template>
-        </section>
-
-        <section v-else-if="page === 'scope'" class="set-page">
-          <dl class="set-meta">
-            <div><dt>当前设备</dt><dd>{{ status.dev || '未连接' }}</dd></div>
-            <div><dt>当前 APP</dt><dd>{{ store.chosenPkg || '未选择' }}</dd></div>
-            <div><dt>允许注入</dt><dd>{{ store.chosenPkg ? (store.scope.has(store.chosenPkg) ? '已勾选' : '未勾选') : '未选择 APP'
-                }}</dd></div>
-            <div><dt>观测会话</dt><dd>{{ status.session || '未连接' }}</dd></div>
-          </dl>
-          <div v-if="appSessions.length" class="set-choice-group" style="margin-top:14px">
-            <div class="set-group-head">
-              <h4>会话明细</h4><span class="set-group-count">{{ appSessions.length }} 个</span>
-            </div>
-            <div class="set-group-items">
-              <div v-for="s in appSessions" :key="s.sessionId" class="set-toggle-row" style="cursor:default">
-                <span class="lab"><b class="mono">pid {{ s.pid }}</b><span class="mono">{{ [s.process, s.mapsCount ?
-                  `${s.mapsCount} maps` : '', s.sessionId].filter(Boolean).join(' · ') }}</span></span>
-                <span class="pill" :class="s.online ? 'on' : 'no'">{{ s.online ? '在线' : '离线' }}</span>
-              </div>
             </div>
           </div>
         </section>
@@ -386,6 +220,25 @@ watch(page, p => { if (p === 'records' || p === 'hooks') takeSnap(); });
             <div><dt>电脑服务版本</dt><dd>{{ status.version || '—' }}</dd></div>
             <div><dt>记录保留规则</dt><dd>{{ status.retention || '—' }}</dd></div>
           </dl>
+          <details class="settings-advanced-scope"><summary>分析范围与注入设置</summary>          <dl class="set-meta">
+            <div><dt>当前设备</dt><dd>{{ status.dev || '未连接' }}</dd></div>
+            <div><dt>当前 APP</dt><dd>{{ store.chosenPkg || '未选择' }}</dd></div>
+            <div><dt>允许注入</dt><dd>{{ store.chosenPkg ? (store.scope.has(store.chosenPkg) ? '已勾选' : '未勾选') : '未选择 APP'
+                }}</dd></div>
+            <div><dt>观测会话</dt><dd>{{ status.session || '未连接' }}</dd></div>
+          </dl>
+          <div v-if="appSessions.length" class="set-choice-group" style="margin-top:14px">
+            <div class="set-group-head">
+              <h4>会话明细</h4><span class="set-group-count">{{ appSessions.length }} 个</span>
+            </div>
+            <div class="set-group-items">
+              <div v-for="s in appSessions" :key="s.sessionId" class="set-toggle-row" style="cursor:default">
+                <span class="lab"><b class="mono">pid {{ s.pid }}</b><span class="mono">{{ [s.process, s.mapsCount ?
+                  `${s.mapsCount} maps` : '', s.sessionId].filter(Boolean).join(' · ') }}</span></span>
+                <span class="pill" :class="s.online ? 'on' : 'no'">{{ s.online ? '在线' : '离线' }}</span>
+              </div>
+            </div>
+          </div></details>
         </section>
 
       </div>
@@ -394,6 +247,8 @@ watch(page, p => { if (p === 'records' || p === 'hooks') takeSnap(); });
 </template>
 
 <style scoped>
+.settings-top-tabs .settings-picker{display:none}@media(max-width:400px){.settings-top-tabs .settings-picker{display:block;width:100%}.settings-top-tabs>.n-button{display:none}}
+.set-page-shell{display:flex;flex-direction:column;min-width:0}.settings-top-tabs{display:flex;gap:8px;align-items:center;padding:14px 24px;border-bottom:1px solid var(--line-soft);flex:none}.settings-top-tabs .active{background:var(--line-soft);font-weight:620}.set-content{min-width:0;width:100%}.set-main{padding:22px 26px}.settings-advanced-scope{margin-top:26px;border-top:1px solid var(--line-soft);padding-top:12px}.settings-advanced-scope summary{cursor:pointer;font-size:13px;margin-bottom:16px}@media(max-width:700px){.settings-top-tabs{padding:10px 12px;gap:2px;overflow-x:auto}.settings-top-tabs .n-button{font-size:12px;padding-inline:10px}.set-main{padding:16px}}
 @media (min-width:701px) {
   .settings-mobile-only { display:none; }
 }
@@ -413,7 +268,7 @@ watch(page, p => { if (p === 'records' || p === 'hooks') takeSnap(); });
 .rec-tools{gap:8px;margin-bottom:18px;flex-wrap:wrap}
 .rec-tools .n-radio-group{flex:none}.rec-search{margin-left:auto;max-width:245px;min-width:0;flex:1 1 120px}
 .rec-select{flex:0 0 124px;min-width:0}
-.rec-columns,.rec-line{display:grid;grid-template-columns:minmax(0,1fr) 60px 48px;gap:20px;align-items:center}
+.rec-columns,.rec-line{display:grid;grid-template-columns:minmax(0,1fr) 48px;gap:20px;align-items:center}
 .rec-columns{font-size:12px;color:var(--muted);padding:7px 4px 8px;border-bottom:1px solid var(--line)}
 .rec-line{padding:12px 4px;border-bottom:1px solid var(--line-soft)}
 .rec-columns>:not(:first-child),.rec-count,.rec-line>.n-switch{justify-self:end}
@@ -424,6 +279,6 @@ watch(page, p => { if (p === 'records' || p === 'hooks') takeSnap(); });
  .rec-categories{align-items:flex-start;flex-direction:column;gap:9px;padding-bottom:14px}
  .rec-tools{display:grid;grid-template-columns:minmax(0,1fr) minmax(106px,38%);gap:8px}
  .rec-tools .n-radio-group{grid-column:1/-1}.rec-search,.rec-select{width:100%;max-width:none}
- .rec-checks{gap:8px 12px}.rec-columns,.rec-line{grid-template-columns:minmax(0,1fr) 42px 40px;gap:9px}
+ .rec-checks{gap:8px 12px}.rec-columns,.rec-line{grid-template-columns:minmax(0,1fr) 40px;gap:9px}
 }
 </style>
