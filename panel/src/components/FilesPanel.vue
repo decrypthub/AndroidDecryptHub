@@ -395,7 +395,8 @@ onMounted(() => { if (store.chosenPkg) void load(''); });
             </button>
           </div>
 
-          <div class="fs-rows">
+          <!-- 读取目录时不铺骨架：保留上一屏内容，只把光标切成加载态（见 .fs-rows.loading）。 -->
+          <div class="fs-rows" :class="{ loading: state === 'loading' }" :aria-busy="state === 'loading'">
             <button v-if="parentPath && state === 'ready'" type="button" class="fs-row fs-parent" @click="goUp">
               <span class="fs-file">
                 <span class="fs-kind dir"><n-icon size="17" :component="ArrowUpOutline" /></span>
@@ -420,20 +421,14 @@ onMounted(() => { if (store.chosenPkg) void load(''); });
               <span class="fs-time">{{ fmtMtime(e.mtime) }}</span>
             </button>
 
-            <div v-if="state === 'loading'" class="fs-skeletons" aria-label="正在读取目录">
-              <div v-for="i in 8" :key="i" class="fs-skeleton-row">
-                <span></span><b></b><em></em>
-              </div>
-            </div>
-
-            <div v-else-if="state === 'error'" class="fs-state error">
+            <div v-if="state === 'error'" class="fs-state error">
               <n-icon size="28" :component="AlertCircleOutline" />
               <strong>目录读取失败</strong>
               <span>{{ message }}</span>
               <button type="button" @click="retryLoad">重试</button>
             </div>
 
-            <div v-else-if="state === 'ready' && !filteredEntries.length" class="fs-state">
+            <div v-if="state === 'ready' && !filteredEntries.length" class="fs-state">
               <n-icon size="28" :component="FolderOpenOutline" />
               <strong>{{ filter ? '当前目录没有匹配项' : '空目录' }}</strong>
             </div>
@@ -541,12 +536,10 @@ onMounted(() => { if (store.chosenPkg) void load(''); });
 .fs-size { color: var(--ink-2); text-align: right; }
 .fs-perm { color: var(--ink-2); font-size: 10px; letter-spacing: -.015em; }
 .fs-time { text-align: right; }
-.fs-skeletons { padding: 6px 12px; }
-.fs-skeleton-row { display: grid; grid-template-columns: 30px minmax(0, 1fr) 62px; gap: 10px; align-items: center; min-height: 42px; border-bottom: 1px solid var(--line-soft); }
-.fs-skeleton-row span, .fs-skeleton-row b, .fs-skeleton-row em { display: block; height: 12px; border-radius: 4px; background: var(--surface-3); animation: fs-pulse 1.4s ease-in-out infinite; }
-.fs-skeleton-row span { width: 30px; height: 30px; border-radius: 7px; }
-.fs-skeleton-row em { width: 62px; }
-@keyframes fs-pulse { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }
+/* 读取中不铺骨架：上一屏的行保持可见，只把列表区光标换成加载态（cursor: progress）。
+   这样目录内容不会在每次刷新/切目录时整块闪掉，也不会出现“骨架消失→内容出现”的跳动。 */
+.fs-rows.loading { cursor: progress; }
+.fs-rows.loading .fs-row { cursor: progress; }
 .fs-state { display: grid; place-content: center; justify-items: center; gap: 8px; min-height: 220px; padding: 24px; color: var(--muted); text-align: center; }
 .fs-state strong { color: var(--ink-2); font-size: 14px; font-weight: 600; }
 .fs-state span { max-width: 420px; overflow-wrap: anywhere; font-size: 12px; line-height: 1.55; }
@@ -601,7 +594,7 @@ onMounted(() => { if (store.chosenPkg) void load(''); });
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .fs-skeleton-row span, .fs-skeleton-row b, .fs-skeleton-row em, .fs-spinner { animation: none; }
+  .fs-spinner { animation: none; }
   .fs-icon-btn, .fs-command-btn, .fs-action, .fs-row { transition: none; }
 }
 </style>

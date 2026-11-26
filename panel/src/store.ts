@@ -43,7 +43,7 @@ function bucketOf(cat: string): 'crypto' | 'net' | 'system' {
 export const store = reactive({
   // 连接
   wsState: 'off' as 'off' | 'live' | 'fail',
-  // 列表初始加载中（骨架屏开关；分页加载走各自面板的 pageLoading）
+  // 列表初始加载中（列表只切加载光标、不铺骨架；分页加载走各自面板的 pageLoading）
   capLoading: false,
   // 设备
   devices: [] as DeviceView[],
