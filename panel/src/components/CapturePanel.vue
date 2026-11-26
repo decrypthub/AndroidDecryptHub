@@ -445,12 +445,16 @@ function cryptoRow(c: Cap) {
   const v = cryptoView(c);
   return { ...v, cc: catClass(c) };
 }
+// 页面内不再画标题（侧栏高亮 + Tab 标题表达当前板块），但保留一个视觉隐藏的 h1：
+// 读屏和大纲仍能拿到板块名。
+const BOARD_LABEL: Record<string, string> = { crypto: '加解密', system: '系统', net: '网络' };
 const searchPlaceholder = computed(() =>
   props.kind === 'crypto' ? '搜索 #序号、算法、Hook 或预览' : '搜索 #序号、操作、Hook 或预览');
 </script>
 
 <template>
   <div class="cap-view">
+    <h1 class="sr-only">{{ BOARD_LABEL[kind] }}</h1>
     <div class="filters">
       <div class="toolbar-main">
         <div class="toolbar-search">
