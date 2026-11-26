@@ -40,7 +40,7 @@ function parseDeviceInfo(out:string):DeviceInfo{
   const mem=/MemTotal:\s*(\d+) kB/.exec(out);
   if(mem) info.ramBytes=Number(mem[1])*1024;
   // df -k /data 的最后一行：Filesystem 1K-blocks Used Available Use% Mounted
-  const dfLine=lines.find(l=>/\/data$/.test(l)&&/\s\d+\s+\d+\s+\d+\s+\d+%/.test(l));
+  const dfLine=[...lines].reverse().find(l=>/^\S+\s+\d+\s+\d+\s+\d+\s+\d+%/.test(l));
   if(dfLine){
     const cols=dfLine.split(/\s+/);
     if(cols.length>=4){
