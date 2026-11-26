@@ -875,3 +875,17 @@ select option{color:var(--ink);background:var(--surface)}
   .app-dialog-side h2{margin:0 auto 0 4px}.app-dialog-side button{min-height:32px}
   .app-dialog-card{flex-wrap:wrap;padding:10px}.dialog-search{padding:10px 10px 0}
 }
+
+/* ---- 系统页指纹摘要条 ---- */
+.fp-strip { margin:0 0 8px; padding:8px 10px 9px; border:1px solid var(--line-soft); border-radius:8px; background:var(--surface); }
+.fp-head { display:flex; align-items:baseline; gap:10px; }
+.fp-title { font-size:12.5px; font-weight:600; }
+.fp-meta { font-size:12px; color:var(--ink-2); }
+.fp-meta.dim { color:var(--muted); }
+.fp-toggle { margin-left:auto; }
+.fp-items { display:flex; flex-wrap:wrap; gap:5px; margin-top:7px; }
+.fp-chip { max-width:100%; }
+.fp-chip .fp-label { font-weight:600; white-space:nowrap; margin-right:6px; }
+.fp-chip .fp-value { font-family:ui-monospace,monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:280px; display:inline-block; vertical-align:bottom; }
+.fp-chip .fp-value.none { font-family:inherit; opacity:.65; }
+.fp-chip .fp-reads { opacity:.6; font-size:10.5px; margin-left:5px; }
