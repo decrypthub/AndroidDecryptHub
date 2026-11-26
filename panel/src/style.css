@@ -411,7 +411,6 @@
   /* ---- Dump（对齐 iOS dumppane：说明 + 两个主按钮 + 一张表） ---- */
   .dumppane { flex:1; overflow-y:auto; padding:24px; background:var(--bg); }
   .dumpwrap { max-width:none; }
-  .dumpwrap h2 { font-size:18px; margin:2px 0 10px; color:var(--ink); }
   .dumpwrap h3 { font-size:13px; color:var(--ink-2); margin:4px 0 8px; font-weight:600; text-transform:none; letter-spacing:0; }
   .dump-cols { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:28px; align-items:start; }
   .dump-col { min-width:0; }
@@ -788,8 +787,7 @@ select option{color:var(--ink);background:var(--surface)}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:0s!important}}
 
 
-.board-heading{margin:0;padding:20px 22px 9px;background:var(--surface);font-size:24px;line-height:1.25;font-weight:620;letter-spacing:-.035em}
-.ledger-head{display:none}.cap-view>.filters,.board-wrap>.toolbar{padding:6px 20px 12px}
+.ledger-head{display:none}.cap-view>.filters,.board-wrap>.toolbar{padding:14px 20px 13px}
 .cap-view .toolbar-search{flex:1;max-width:560px}.toolbar-left .btn,.toolbar-right .btn{white-space:nowrap}
 .capture-workspace:not(.detail-open)>.list-pane,.workarea:not(.reading)>.events-panel{width:100%!important;max-width:none;flex:1}
 .capture-workspace:not(.detail-open)>:is(.splitter,.capture-detail-shell),.workarea:not(.reading)>:is(.splitter,.detail-pane){display:none}
@@ -815,7 +813,7 @@ select option{color:var(--ink);background:var(--surface)}
  .workarea:not(.reading) .events-header .hstack{position:absolute;top:2px;right:94px;z-index:1}
 }
 @media(max-width:700px){
- .board-heading{display:none}.board-wrap>.toolbar,.cap-view>.filters{padding:6px 10px}
+ .board-wrap>.toolbar,.cap-view>.filters{padding:8px 10px}
  .cap-view .toolbar-main{display:flex}.cap-view .toolbar-search{flex:1 1 145px;max-width:none}.cap-view .toolbar-actions{flex:none}
  .toolbar-right .toolbar-stat{display:none}.board-wrap>.toolbar{display:flex;gap:5px}.board-wrap .toolbar-left{flex:1 1 145px}.board-wrap .toolbar-right{flex:0 0 auto;width:auto}
  .capture-workspace .list-pane{height:auto}.topbar .app-context{min-width:0}.topbar .menu-chevron{flex:none}
@@ -876,22 +874,11 @@ select option{color:var(--ink);background:var(--surface)}
   .app-dialog-card{flex-wrap:wrap;padding:10px}.dialog-search{padding:10px 10px 0}
 }
 
-/* ---- 系统页指纹摘要条 ---- */
-.fp-strip { margin:0 0 8px; padding:8px 10px 9px; border:1px solid var(--line-soft); border-radius:8px; background:var(--surface); }
-.fp-head { display:flex; align-items:baseline; gap:10px; }
-.fp-title { font-size:12.5px; font-weight:600; }
-.fp-meta { font-size:12px; color:var(--ink-2); }
-.fp-meta.dim { color:var(--muted); }
-.fp-toggle { margin-left:auto; }
-.fp-items { display:flex; flex-wrap:wrap; gap:5px; margin-top:7px; }
-.fp-chip { max-width:100%; }
-.fp-chip .fp-label { font-weight:600; white-space:nowrap; margin-right:6px; }
-.fp-chip .fp-value { font-family:ui-monospace,monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:280px; display:inline-block; vertical-align:bottom; }
-.fp-chip .fp-value.none { font-family:inherit; opacity:.65; }
-.fp-chip .fp-reads { opacity:.6; font-size:10.5px; margin-left:5px; }
 
 /* ---- 设备窗口：沿用应用窗口的两栏壳（.app-dialog），这里是设备专有的行/详情 ---- */
 .device-dialog { flex-direction:column; height:min(640px,88dvh); }
+.device-chips { display:flex; flex-wrap:wrap; align-items:center; gap:4px 10px; margin-top:3px; color:var(--muted); font-size:11px; }
+.device-chips span + span::before { content:'·'; margin-right:10px; color:var(--line); }
 .device-head { display:flex; align-items:center; gap:10px; padding:14px 16px 10px; border-bottom:1px solid var(--line-soft); }
 .device-head h2 { margin:0; font-size:16px; }
 .device-count { color:var(--muted); font-size:12px; }
