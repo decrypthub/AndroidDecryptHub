@@ -60,6 +60,99 @@ test('chunked response bytes split across SSL_read calls reassemble', () => {
   assert.equal(out.exchanges[0].response?.complete, true);
 });
 
+test('each exchange is anchored to the capture record that carried its own request', () => {
+  seq = 1;
+  const out = assembleHttpExchanges([
+    chunk('SSL_write', 'GET /a HTTP/1.1\r\nHost: h\r\n\r\n', { id: 10, tsNs: 1_000, ts: 100 }),
+    chunk('SSL_write', 'POST /b HTTP/1.1\r\nHost: h\r\nContent-Length: 1\r\n\r\nZ', { id: 11, tsNs: 4_000, ts: 400 }),
+    chunk('SSL_read', 'HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\nHTTP/1.1 201 Created\r\nContent-Length: 0\r\n\r\n',
+      { id: 12, tsNs: 5_000, ts: 500 }),
+  ]);
+  assert.deepEqual(
+    out.exchanges.map((e) => ({ label: e.label, seq: e.seq, ts: e.ts, tsNs: e.tsNs })),
+    [
+      { label: 'GET https://h/a', seq: 10, ts: 100, tsNs: 1_000 },
+      { label: 'POST https://h/b', seq: 11, ts: 400, tsNs: 4_000 },
+    ],
+  );
+  // 一条请求只认自己那几条记录；两条响应落在同一个 SSL_read 里，所以 12 在两条里都出现。
+  assert.deepEqual(out.exchanges[0].captureIds, [10, 12]);
+  assert.deepEqual(out.exchanges[1].captureIds, [11, 12]);
+  // 面板用「所有 captureIds ∪ consumedIds」判断哪些 TLS 记录没拼成 HTTP；这里两侧都完整，
+  // 合并后必须覆盖全部记录（不完整消息的场景见下一个测试）。
+  assert.deepEqual([...new Set(out.exchanges.flatMap((e) => e.captureIds))].sort((a, b) => a - b), [10, 11, 12]);
+  assert.deepEqual(out.consumedIds, []);
+});
+
+test('records of a parsed connection that no row names are consumed, not reported as non-HTTP', () => {
+  seq = 1;
+  const out = assembleHttpExchanges([
+    chunk('SSL_write', 'GET /a HTTP/1.1\r\nHost: h\r\n\r\n', { id: 10 }),
+    // 响应头还没写完：读侧一条消息都解析不出，记录 11 不属于任何一行。
+    chunk('SSL_read', 'HTTP/1.1 200 OK\r\nContent-Le', { id: 11 }),
+  ]);
+  assert.equal(out.exchanges.length, 1);
+  assert.equal(out.exchanges[0].label, 'GET https://h/a');
+  assert.deepEqual(out.exchanges[0].captureIds, [10]);
+  assert.deepEqual(out.consumedIds, [11]);
+  // 面板的 used 集合（captureIds ∪ consumedIds）仍然覆盖这条连接的全部记录。
+  const used = new Set([...out.exchanges.flatMap((e) => e.captureIds), ...out.consumedIds]);
+  assert.deepEqual([...used].sort((a, b) => a - b), [10, 11]);
+});
+
+test('a tail chunk ahead of the first request is consumed, not reported as non-HTTP', () => {
+  seq = 1;
+  const out = assembleHttpExchanges([
+    // 上一条响应的尾巴：读侧从这里开始解析，头部不是 HTTP/1.1。
+    chunk('SSL_read', 'XY', { id: 40 }),
+    chunk('SSL_write', 'GET /a HTTP/1.1\r\nHost: h\r\n\r\n', { id: 41 }),
+    chunk('SSL_read', 'HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n', { id: 42 }),
+  ]);
+  assert.equal(out.exchanges.length, 1);
+  assert.deepEqual(out.exchanges[0].captureIds, [41]);
+  assert.deepEqual(out.consumedIds, [40, 42]);
+});
+
+test('eleven requests carried by one record keep their order and a sortable id', () => {
+  seq = 1;
+  const reqs = Array.from({ length: 11 }, (_, i) => `GET /p${i} HTTP/1.1\r\nHost: h\r\n\r\n`).join('');
+  const resps = Array.from({ length: 11 }, () => 'HTTP/1.1 204 No Content\r\n\r\n').join('');
+  const out = assembleHttpExchanges([
+    chunk('SSL_write', reqs, { id: 50, tsNs: 1, ts: 100 }),
+    chunk('SSL_read', resps, { id: 51, tsNs: 2, ts: 200 }),
+  ]);
+  const ps = Array.from({ length: 11 }, (_, i) => i);
+  assert.deepEqual(out.exchanges.map((e) => e.label), ps.map((i) => `GET https://h/p${i}`));
+  assert.deepEqual(out.exchanges.map((e) => e.seq), ps.map(() => 50));
+  // id 的尾段是排序 tie-break，必须补零，否则 :10 会排在 :2 前面。
+  assert.deepEqual(out.exchanges.map((e) => e.id.split(':').pop()), ps.map((i) => String(i).padStart(6, '0')));
+  assert.deepEqual([...out.exchanges].sort((a, b) => a.id.localeCompare(b.id)).map((e) => e.label),
+    ps.map((i) => `GET https://h/p${i}`));
+});
+
+test('ordering trusts the host timestamp first and uses tsNs only inside one batch', () => {
+  seq = 1;
+  // 设备重启后 CLOCK_MONOTONIC 归零：旧记录 host 时间早但设备时间戳更大。排序必须以 host ts
+  // 为准，否则「显示时间新、却排在旧记录下面」。
+  const out = assembleHttpExchanges([
+    chunk('SSL_write', 'GET /old HTTP/1.1\r\nHost: h\r\n\r\n', { conn: '0x1', id: 1, ts: 100, tsNs: 9_000_000 }),
+    chunk('SSL_read', 'HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n', { conn: '0x1', id: 2, ts: 150, tsNs: 9_000_100 }),
+    chunk('SSL_write', 'GET /new HTTP/1.1\r\nHost: h\r\n\r\n', { conn: '0x2', id: 3, ts: 2_000, tsNs: 5 }),
+    chunk('SSL_read', 'HTTP/1.1 204 No Content\r\n\r\n', { conn: '0x2', id: 4, ts: 2_050, tsNs: 6 }),
+  ]);
+  assert.deepEqual(out.exchanges.map((e) => e.label), ['GET https://h/old', 'GET https://h/new']);
+  assert.deepEqual(out.exchanges.map((e) => e.ts), [100, 2_000]);
+
+  // 同一 drain 批次里 host ts 相同，tsNs 仍要能分先后。
+  const batch = assembleHttpExchanges([
+    chunk('SSL_write', 'GET /a HTTP/1.1\r\nHost: h\r\n\r\n', { conn: '0x3', id: 5, ts: 5_000, tsNs: 1_000 }),
+    chunk('SSL_read', 'HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n', { conn: '0x3', id: 6, ts: 5_000, tsNs: 1_100 }),
+    chunk('SSL_write', 'GET /b HTTP/1.1\r\nHost: h\r\n\r\n', { conn: '0x4', id: 7, ts: 5_000, tsNs: 2_000 }),
+    chunk('SSL_read', 'HTTP/1.1 204 No Content\r\n\r\n', { conn: '0x4', id: 8, ts: 5_000, tsNs: 2_100 }),
+  ]);
+  assert.deepEqual(batch.exchanges.map((e) => e.label), ['GET https://h/a', 'GET https://h/b']);
+});
+
 test('two exchanges on one connection stay in order, and a second connection stays apart', () => {
   seq = 1;
   const out = assembleHttpExchanges([
@@ -172,6 +265,11 @@ test('HTTP/2 streams split across SSL records become whole requests, paired by s
   assert.equal(second.status, '200');
   assert.equal(second.request?.complete, true);
   assert.equal(second.response?.bodyBytes, 0);
+  // 每条流锚在自己的 HEADERS 记录上：POST 的头部跨了记录 1→2，GET 整条在记录 2 里。
+  assert.equal(first.seq, 1);
+  assert.equal(first.tsNs, 1);
+  assert.equal(second.seq, 2);
+  assert.equal(second.tsNs, 2);
   assert.equal(out.consumedIds.length, 0);
 });
 

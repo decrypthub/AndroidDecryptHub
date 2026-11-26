@@ -1,5 +1,12 @@
 # PROGRESS — 跨会话进度看板
 
+## 2026-11-26 网络记录补序号并按请求时间排序
+
+- 网络板块宽屏表格的「序号」列一直是空的：加解密/系统行都渲染 `#id`，网络行只渲染了 pill/请求/状态/时间，模板里少了 `.seq`。现在同样显示捕获号。
+- 序号取「承载该请求首字节的捕获记录 id」，与加解密/系统页的 `#id` 同一套编号，可跨页对照；单条请求的 `captureIds` 收窄为自己那几条记录（同一条 SSL_read 里的多条响应仍共享），连接里没归到任何一行的记录（半条消息、上一条响应的尾巴）计入 `consumedIds`，所以面板的「未拼成 HTTP」计数不变。exchange id 的尾段补零到 6 位，否则 `:10` 会按字典序排到 `:2` 前面。
+- 修数据层根因：原来同一条连接上所有请求都继承连接首条 SSL_write 的 `ts/tsNs`，列表既排不出先后也没有可用序号。`assembleHttpExchanges` 现在按每条请求自己的首字节定位到记录（HTTP/1.1 用消息偏移，HTTP/2 用 HEADERS 帧偏移），`ts/tsNs/seq` 都取该记录；面板按 host 墙钟 `ts` 倒序，同批次用 `tsNs` 提精度（设备侧是开机相对时钟，跨会话/设备不可比），搜索框可直接搜 `#序号`。
+- 验证：`daemon` typecheck；`node --test-isolation=none --test test/http_exchange.test.ts` 16/16（每条请求各锚各的记录、HTTP/2 流锚在 HEADERS 记录、不完整消息/尾部记录仍被 consumed、11 条 pipelined 请求 id 可排序、host ts 序与设备 tsNs 相反时仍按 ts 排而同批次内 tsNs 分先后）；vite 构建通过；把构建产物配桩数据用无头 Chrome 渲染，断言 3 行依次为 #103/#102/#101 且表头有「序号」，详情「事件信息」显示序号与时间；`docs/mcp-tools.md` 的 `http_exchanges` 行同步更新。
+
 ## 2026-11-26 应用弹窗控件换用组件库标准件
 
 - 关闭按钮改为 text 形态 ×（naive 标准外观），打开/重启/结束换真正的 n-button

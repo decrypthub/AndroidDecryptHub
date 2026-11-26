@@ -49,10 +49,19 @@ export interface HttpPart {
 
 export interface HttpExchange {
   id: string;
+  /**
+   * The capture record that carried this exchange's first parsed byte (the request line, or the
+   * response when only that side parsed) - the same numbering the crypto and system lists print
+   * as `#id`, so the network row shows it as 序号. Requests are not separate captures; this is
+   * the closest stable identity. It is stable while the connection's earlier records stay in the
+   * store: once the memory ring evicts them the row itself disappears.
+   */
+  seq: number;
   sessionId: string;
   conn: string;
   label: string;
   status: string;
+  /** Time of that same record, not of the connection's first write. */
   ts: number;
   tsNs: number;
   captureIds: number[];
@@ -70,14 +79,20 @@ export interface HttpAssembly {
   /** HTTP/2 connections that did not contain a request or a response yet. */
   http2Idle: number;
   /**
-   * Capture ids folded into an exchange, or belonging to an HTTP/2 connection that has no
-   * message yet. The network list uses this so a SETTINGS frame is not shown as its own row.
+   * Records the network list must not show as its own row even though no exchange names them:
+   * a connection with no parsable message at all, a half-written message, or a tail chunk that
+   * belongs to a parsed connection but to no single request. Together with each exchange's
+   * captureIds this covers every record of a connection the assembler looked at.
    */
   consumedIds: number[];
   caveat: string;
 }
 
 interface RawMsg {
+  /** Offset of this message's first byte in the direction buffer it was parsed from. */
+  at: number;
+  /** Exclusive end offset of this message in that buffer. */
+  end: number;
   startLine: string;
   headerText: string;
   headers: Map<string, string>;
@@ -88,9 +103,22 @@ interface RawMsg {
   status?: number;
 }
 
+/** Where one SSL record's plaintext sits inside the concatenated direction buffer. */
+interface ChunkSpan {
+  /** Inclusive start offset in the direction buffer. */
+  at: number;
+  /** Exclusive end offset in the direction buffer. */
+  end: number;
+  id: number;
+  ts: number;
+  tsNs: number;
+}
+
 interface BuiltSide {
   buf: Buffer;
   ids: number[];
+  /** One entry per accepted record, in buffer order. Maps a byte offset back to its record. */
+  spans: ChunkSpan[];
   hole: string | null;
   ts: number;
   tsNs: number;
@@ -194,12 +222,14 @@ function parseSide(buf: Buffer, kind: 'request' | 'response', methods: (string |
     if (body === 'bad') return { messages, note: '正文分块格式不对' };
     if (body === 'need') {
       messages.push({
+        at, end: buf.length,
         startLine: head.startLine, headerText: head.headerText, headers: head.headers,
         body: buf.subarray(head.next), complete: false, note: '正文还不完整', method, status,
       });
       return { messages };
     }
     messages.push({
+      at, end: body.end,
       startLine: head.startLine, headerText: head.headerText, headers: head.headers,
       body: body.body, complete: body.complete, note: body.note, method, status,
     });
@@ -288,6 +318,8 @@ function buildSide(chunks: TlsChunk[], func: string): BuiltSide {
   const mine = chunks.filter((c) => c.func === func);
   const parts: Buffer[] = [];
   const ids: number[] = [];
+  const spans: ChunkSpan[] = [];
+  let cursor = 0;
   let hole: string | null = null;
   let ts = mine.length ? (mine[0].ts ?? Math.floor(mine[0].tsNs / 1e6)) : 0;
   let tsNs = mine.length ? mine[0].tsNs : 0;
@@ -299,6 +331,11 @@ function buildSide(chunks: TlsChunk[], func: string): BuiltSide {
     }
     parts.push(bytes);
     ids.push(c.id);
+    spans.push({
+      at: cursor, end: cursor + bytes.length, id: c.id,
+      ts: c.ts ?? Math.floor(c.tsNs / 1e6), tsNs: c.tsNs,
+    });
+    cursor += bytes.length;
     const at = c.ts ?? Math.floor(c.tsNs / 1e6);
     if (at && (ts === 0 || at < ts)) ts = at;
     if (c.tsNs && (tsNs === 0 || c.tsNs < tsNs)) tsNs = c.tsNs;
@@ -309,7 +346,36 @@ function buildSide(chunks: TlsChunk[], func: string): BuiltSide {
       break;
     }
   }
-  return { buf: Buffer.concat(parts), ids, hole, ts, tsNs };
+  return { buf: Buffer.concat(parts), ids, spans, hole, ts, tsNs };
+}
+
+/** The record whose plaintext contains `off`. Falls back to the nearest end so a message that
+ *  starts on a boundary still resolves to a real record instead of 0. */
+function spanAt(spans: ChunkSpan[], off: number): ChunkSpan | null {
+  if (!spans.length) return null;
+  let lo = 0, hi = spans.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const span = spans[mid];
+    if (off < span.at) hi = mid - 1;
+    else if (off >= span.end) lo = mid + 1;
+    else return span;
+  }
+  return off >= spans[spans.length - 1].end ? spans[spans.length - 1] : spans[0];
+}
+
+/** Ids of the records whose plaintext overlaps one parsed message. */
+function idsFor(spans: ChunkSpan[], msg: RawMsg | undefined): number[] {
+  if (!msg || !spans.length) return [];
+  let lo = 0, hi = spans.length - 1, start = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (spans[mid].end > msg.at) { start = mid; hi = mid - 1; } else lo = mid + 1;
+  }
+  if (start < 0) return [];
+  const out: number[] = [];
+  for (let i = start; i < spans.length && spans[i].at < msg.end; i++) out.push(spans[i].id);
+  return out;
 }
 
 function hasConn(conn: string | undefined): conn is string {
@@ -318,6 +384,10 @@ function hasConn(conn: string | undefined): conn is string {
 
 function rawFromHttp2(msg: Http2Message): RawMsg {
   return {
+    // HTTP/2 frames of many streams interleave in one buffer, so a message has no contiguous
+    // byte range: only `at` (its HEADERS frame) is meaningful. `end` stays empty on purpose and
+    // must not be handed to idsFor/span math.
+    at: msg.at, end: msg.at,
     startLine: msg.startLine,
     headerText: msg.headerText,
     headers: msg.headers,
@@ -383,14 +453,20 @@ export function assembleHttpExchanges(records: TlsChunk[]): HttpAssembly {
         const res = row.res ? rawFromHttp2(row.res) : undefined;
         const notes = [i === rows.length - 1 ? hole : ''].filter(Boolean);
         const sid = row.req?.streamId ?? row.res?.streamId ?? i;
+        const anchor = (row.req ? spanAt(write.spans, row.req.at) : null)
+          ?? (row.res ? spanAt(read.spans, row.res.at) : null)
+          ?? write.spans[0] ?? read.spans[0] ?? null;
         exchanges.push({
           id: `${sessionId}:${conn}:s${String(sid).padStart(8, '0')}`,
+          seq: anchor?.id ?? 0,
           sessionId,
           conn,
           label: req ? requestLabel(req.startLine, req.headerText) : (res?.startLine ?? 'HTTP/2'),
           status: res?.status != null ? String(res.status) : '',
-          ts: write.ts || read.ts,
-          tsNs: write.tsNs || read.tsNs,
+          // HTTP/2 frames interleave on one buffer, so the exchange is anchored to the record
+          // that carried its HEADERS rather than to the connection's first write.
+          ts: (anchor && anchor.ts) || write.ts || read.ts,
+          tsNs: (anchor && anchor.tsNs) || write.tsNs || read.tsNs,
           captureIds,
           request: req ? toPart(req) : null,
           response: res ? toPart(res) : null,
@@ -405,9 +481,13 @@ export function assembleHttpExchanges(records: TlsChunk[]): HttpAssembly {
       consumedIds.push(...write.ids, ...read.ids);
       continue;
     }
-    const captureIds = [...write.ids, ...read.ids];
     const hole = [write.hole, read.hole].filter(Boolean).join('；');
     const n = Math.max(requests.messages.length, responses.messages.length);
+    // Records this connection used but no row owns (a half-written message, a tail chunk that
+    // precedes the first request) still belong to a parsed HTTP connection. They go to
+    // consumedIds so the panel's "not HTTP" count only covers records that really were not
+    // folded into any exchange.
+    const claimed = new Set<number>();
     for (let i = 0; i < n; i++) {
       const req = requests.messages[i];
       const res = responses.messages[i];
@@ -416,21 +496,35 @@ export function assembleHttpExchanges(records: TlsChunk[]): HttpAssembly {
         i === n - 1 ? requests.note : '',
         i === n - 1 ? responses.note : '',
       ].filter(Boolean);
+      // Anchor each exchange to the record that carried its own request line. Previously every
+      // exchange on one connection inherited the first write's stamp, so the list could neither
+      // order nor number them.
+      const anchor = (req ? spanAt(write.spans, req.at) : null)
+        ?? (res ? spanAt(read.spans, res.at) : null)
+        ?? write.spans[0] ?? read.spans[0] ?? null;
+      const ownIds = [...new Set([...idsFor(write.spans, req), ...idsFor(read.spans, res)])];
+      const captureIds = ownIds.length ? ownIds : [...write.ids, ...read.ids];
+      for (const id of captureIds) claimed.add(id);
       exchanges.push({
-        id: `${sessionId}:${conn}:${i}`,
+        // Padded: the id is a sort tie-break, and an unpadded index orders :10 before :2.
+        id: `${sessionId}:${conn}:${String(i).padStart(6, '0')}`,
+        seq: anchor?.id ?? 0,
         sessionId,
         conn,
         label: req ? requestLabel(req.startLine, req.headerText) : (res?.startLine ?? 'HTTP'),
         status: res?.status != null ? String(res.status) : '',
-        ts: write.ts || read.ts,
-        tsNs: write.tsNs || read.tsNs,
+        ts: (anchor && anchor.ts) || write.ts || read.ts,
+        tsNs: (anchor && anchor.tsNs) || write.tsNs || read.tsNs,
         captureIds,
         request: req ? toPart(req) : null,
         response: res ? toPart(res) : null,
         ...(notes.length ? { note: notes.join('；') } : {}),
       });
     }
+    for (const id of [...write.ids, ...read.ids]) if (!claimed.has(id)) consumedIds.push(id);
   }
-  exchanges.sort((a, b) => (a.tsNs - b.tsNs) || a.id.localeCompare(b.id));
+  // ts is the host wall clock (comparable across sessions, devices and reboots); tsNs is the
+  // device's monotonic clock and is only a precision tie-break inside one drain batch.
+  exchanges.sort((a, b) => (a.ts - b.ts) || (a.tsNs - b.tsNs) || (a.seq - b.seq) || a.id.localeCompare(b.id));
   return { exchanges, noConn, http2, http2Idle, consumedIds, caveat: HTTP_EXCHANGE_CAVEAT };
 }
