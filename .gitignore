@@ -76,3 +76,6 @@ injector/zygisk/.stage/
 website/.cache/
 # panel vite/esbuild 的临时缓存（TEMP 指到项目内时生成）
 panel/.tmp_esbuild/
+
+# Local scratch: ad-hoc probes, logs, temp worktrees (e.g. .tmp/daemon-main)
+.tmp/
