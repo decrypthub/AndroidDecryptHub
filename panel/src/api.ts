@@ -147,7 +147,15 @@ export const unpackPullSo = (pkg: string, path: string) =>
   post('/api/unpack/pull-so', { package: pkg, path });
 export const unpackDumpSoOne = (session: string, base: string, name: string) =>
   post('/api/unpack/dump-so-one', { session, base, name });
-export const dumpDownloadUrl = (sha: string) => `/api/dumps/download?sha=${encodeURIComponent(sha)}`;
+export const dumpDownloadUrl = (sha: string, name?: string) =>
+  `/api/dumps/download?sha=${encodeURIComponent(sha)}${name ? `&name=${encodeURIComponent(name)}` : ''}`;
+export const moduleWatch = (session: string, action: 'start' | 'stop' | 'status' | 'list', limit = 100) =>
+  post<{ ok?: boolean; watching?: boolean; installed?: boolean; error?: string; count?: number; modules?: ModuleLoadRec[] }>(
+    '/api/module/watch', { session, action, limit });
+export interface ModuleLoadRec {
+  path?: string; handle?: string; base?: string; size?: number; mapped?: boolean;
+  at?: number; captureId?: number; unparsed?: string;
+}
 export const appIconUrl = (pkg: string, serial?: string, version?: unknown) =>
   `/api/apps/icon?package=${encodeURIComponent(pkg)}${serial ? `&serial=${encodeURIComponent(serial)}` : ''}${version ? `&v=${encodeURIComponent(String(version))}` : ''}`;
 export const getConfig = () => api<{ settings?: { capture?: { retain?: number; maxAgeDays?: number }; ui?: { displayCap?: number } } }>('/api/config');

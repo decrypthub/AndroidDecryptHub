@@ -369,8 +369,8 @@ export function moduleLoads(sid: string, limit = 50) {
     .filter((c) => c.func === 'MODULE_LOAD' && c.sessionId === sid)
     .slice(-Math.max(1, Math.min(500, limit)))
     .map((c) => {
-      try { return JSON.parse(Buffer.from(c.hex, 'hex').toString('utf8')); }
-      catch { return { unparsed: c.hex.slice(0, 120) }; }
+      try { return { ...JSON.parse(Buffer.from(c.hex, 'hex').toString('utf8')), at: c.ts, captureId: c.id }; }
+      catch { return { unparsed: c.hex.slice(0, 120), at: c.ts, captureId: c.id }; }
     });
 }
 
