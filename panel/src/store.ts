@@ -15,9 +15,10 @@ export interface DeviceView {
 export const CAP_BUFFER_LIMIT = 4500;
 const BUCKET_LIMIT = 1500;
 
-function bucketOf(cat: string): 'crypto' | 'net' | 'system' {
+function bucketOf(cat: string): 'crypto' | 'net' | 'system' | 'file' {
   if (cat === 'crypto') return 'crypto';
   if (cat === 'net') return 'net';
+  if (cat === 'file') return 'file';
   return 'system';
 }
 
@@ -48,7 +49,7 @@ export const store = reactive({
   capDropped: 0,
   capComplete: true,
   capLatest: 0,
-  capHasOlder: { crypto: false, system: false, net: false },
+  capHasOlder: { crypto: false, system: false, net: false, file: false },
   // 视图
   view: 'cc' as 'cc' | 'sy' | 'nt' | 'files' | 'dump' | 'settings',
   appDialogOpen: false,
@@ -100,14 +101,15 @@ export async function capLoad() {
   if (!pkg) { store.capItems = []; return; }
   store.capLoading = true;
   try {
-    const [rc, rs, rn] = await Promise.all([
+    const [rc, rs, rn, rf] = await Promise.all([
       A.getCaptures({ package: pkg, category: 'crypto', limit: 600 }),
-      A.getCaptures({ package: pkg, category: 'system,file', limit: 600 }),
+      A.getCaptures({ package: pkg, category: 'system', limit: 600 }),
       A.getCaptures({ package: pkg, category: 'net', limit: 400 }),
+      A.getCaptures({ package: pkg, category: 'file', limit: 600 }),
     ]);
     if (store.chosenPkg !== pkg) return;
     const byId = new Map<number, A.Cap>();
-    for (const r of [rc, rs, rn]) {
+    for (const r of [rc, rs, rn, rf]) {
       for (const c of (r.captures ?? r.items ?? [])) {
         byId.set(c.id, c);
         if (c.sessionId && c.package) store.sessionPkg.set(c.sessionId, c.package);
@@ -122,6 +124,7 @@ export async function capLoad() {
     store.capHasOlder.crypto = !!rc.hasMore;
     store.capHasOlder.system = !!rs.hasMore;
     store.capHasOlder.net = !!rn.hasMore;
+    store.capHasOlder.file = !!rf.hasMore;
     store.capDropped = rc.dropped ?? rs.dropped ?? 0;
     store.capComplete = rc.complete !== false;
     store.capLatest = merged.at(-1)?.id ?? 0;

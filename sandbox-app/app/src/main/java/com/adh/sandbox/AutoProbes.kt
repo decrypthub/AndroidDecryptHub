@@ -40,6 +40,7 @@ object AutoProbes {
         "file" to { FileIO.run() },
         "detect" to { "rc=${Detection.run()}" },
         "java-detect" to { JavaDetect.run(it) },
+        "fingerprint" to { Fingerprint.run(it) },
         "net" to { Network.run() },
         "correlated" to { CorrelatedFlow.run() },
     )

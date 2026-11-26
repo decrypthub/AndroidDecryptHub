@@ -7,7 +7,7 @@ import { SearchOutline } from '@vicons/ionicons5';
 import CapDetail from './CapDetail.vue';
 import ExchangeDetail from './ExchangeDetail.vue';
 
-const props = defineProps<{ kind: 'crypto' | 'system' | 'net' }>();
+const props = defineProps<{ kind: 'crypto' | 'system' | 'net' | 'file' }>();
 
 interface ExchangePart {
   startLine?: string; headerText?: string; bodyText?: string; bodyBytes?: number;
@@ -21,7 +21,7 @@ interface Exchange {
 
 const filter = reactive({
   q: '', min: null as number | null, max: null as number | null,
-  cat: -2, paused: false, kind: 'all',
+  cat: -2, paused: false,
 });
 const advOpen = ref(false);
 const sel = ref<number | string | null>(null);
@@ -31,7 +31,6 @@ const exchanges = ref<Exchange[]>([]);
 const exNotes = ref<string[]>([]);
 const scrollTop = ref(0);
 const newCount = ref(0);
-const radarText = ref('');
 let lastShown = 0;
 
 // ---- 分页与时间窗口状态 ----
@@ -50,35 +49,24 @@ const toTs = computed(() => toMs.value);
 const hasTimeRange = computed(() => fromTs.value !== null || toTs.value !== null);
 const isHistoricalMode = computed(() => pagedItems.value !== null);
 
-const CATS: Record<string, CatKey[]> = {
-  crypto: ['digest', 'hmac', 'sym', 'asym', 'aead'],
-  system: ['sys', 'file'],
-  net: ['net'],
-};
 const CAT_BY_SEL: Record<number, CatKey> = { 0: 'digest', 1: 'hmac', 2: 'sym', 3: 'asym', 4: 'aead' };
-const SYS_KINDS: Array<[string, string]> = [['all', '全部活动'], ['system', '系统调用'], ['file', '文件读写']];
-const LIST_ID: Record<string, string> = { crypto: 'cc-list', system: 'sy-list', net: 'nt-list' };
+const LIST_ID: Record<string, string> = { crypto: 'cc-list', system: 'sy-list', net: 'nt-list', file: 'ff-list' };
 const HEAD_LABELS: Record<string, [string, string, string]> = {
   crypto: ['算法', '内容预览', '输入 → 输出'],
   system: ['函数', '内容预览', '操作'],
   net: ['请求', '响应', '状态'],
+  file: ['操作', '内容预览', '路径'],
 };
 
 function panelCats(): string[] {
-  if (props.kind === 'crypto') return ['crypto'];
-  if (props.kind === 'system') return ['system', 'file'];
-  return ['net'];
+  return [props.kind];
 }
 function matchesPanel(c: Cap): boolean {
-  if (!panelCats().includes(c.category)) return false;
-  if (props.kind === 'system' && filter.kind !== 'all') return c.category === filter.kind;
-  return true;
+  return panelCats().includes(c.category);
 }
 
 function serverCategory(): string {
-  if (props.kind === 'crypto') return 'crypto';
-  if (props.kind === 'system') return filter.kind === 'all' ? 'system,file' : filter.kind;
-  return 'net';
+  return props.kind;
 }
 
 function applyClientFilter(source: Cap[]): Cap[] {
@@ -204,8 +192,7 @@ const canPrevPage = computed(() => {
   if (pageLoading.value) return false;
   if (props.kind === 'net') return netPage.value * capDisplayCap.value < matchedExchangesAll.value.length;
   if (isHistoricalMode.value) return pagedHasMore.value && rows.value.length > 0;
-  const bucketKey = props.kind === 'crypto' ? 'crypto' : 'system';
-  return rows.value.length > 0 && (visible.value.length > capDisplayCap.value || store.capHasOlder[bucketKey]);
+  return rows.value.length > 0 && (visible.value.length > capDisplayCap.value || store.capHasOlder[props.kind]);
 });
 const canNextPage = computed(() => {
   if (pageLoading.value) return false;
@@ -320,13 +307,12 @@ const advCount = computed(() => {
   let n = 0;
   if (filter.min != null || filter.max != null) n++;
   if (props.kind === 'crypto' && filter.cat >= 0) n++;
-  if (props.kind === 'system' && filter.kind !== 'all') n++;
   if (hasTimeRange.value) n++;
   return n;
 });
 const filterActive = computed(() => !!(filter.q.trim() || advCount.value));
 function resetFilter() {
-  filter.q = ''; filter.min = null; filter.max = null; filter.cat = -2; filter.kind = 'all';
+  filter.q = ''; filter.min = null; filter.max = null; filter.cat = -2;
   clearTimeRange();
 }
 function downloadView() {
@@ -356,18 +342,62 @@ const MORE_OPTS = [
 ];
 function onMoreSelect(k: string) { if (k === 'dl') downloadView(); else clearView(); }
 
-// ---- 系统板块：检测摘要（对齐旧 sy-radar）----
-async function loadRadar() {
-  if (props.kind !== 'system' || !store.chosenPkg) { radarText.value = ''; return; }
+// ---- 系统板块：设备指纹摘要 ----
+// 这个页签回答的问题是「这个 App 采集了哪些设备指纹」。摘要按信号去重（android_id、IMEI、
+// MAC、ro.product.*、/proc/cpuinfo……），值是应用真正读到的内容；读取失败也算采集证据，
+// 只是没有值。native 属性/路径归并来自 sysModule 捕获，Java API 归并来自 detect_java 的
+// fingerprint 家族——两类 hook 都没装时这里只是空，不代表应用清白。
+interface FpItem {
+  key: string; label: string; kind: 'identifier' | 'deviceinfo';
+  value?: string; reads: number; sources?: string[];
+}
+const fpItems = ref<FpItem[]>([]);
+const fpArmed = ref<boolean | null>(null);
+const fpFailed = ref(false);
+const fpExpanded = ref(false);
+
+async function loadFp() {
+  if (props.kind !== 'system' || !store.chosenPkg) { fpItems.value = []; fpArmed.value = null; return; }
+  const pkg = store.chosenPkg;
   try {
-    const r = await getDetectSummary(store.chosenPkg) as {
-      armed?: boolean; kinds?: Array<{ label: string; count: number }>;
+    const r = await getDetectSummary(pkg) as {
+      armed?: boolean | null;
+      fingerprint?: { items?: FpItem[]; identifiers?: number; info?: number };
     };
-    if (r.armed === false) { radarText.value = '系统检测：未开'; return; }
-    if (r.armed == null) { radarText.value = '系统检测：摘要未上报'; return; }
-    const hit = (r.kinds ?? []).filter(k => (k.count ?? 0) > 0).map(k => `${k.label} ${k.count}`);
-    radarText.value = '系统检测：' + (hit.length ? `已开 · ${hit.join(' · ')}` : '已开 · 暂无');
-  } catch { radarText.value = '系统检测：摘要读取失败'; }
+    if (store.chosenPkg !== pkg) return;
+    fpArmed.value = r.armed ?? null;
+    fpItems.value = r.fingerprint?.items ?? [];
+    fpFailed.value = false;
+  } catch { fpFailed.value = true; }
+}
+
+const fpCounts = computed(() => ({
+  ids: fpItems.value.filter(i => i.kind === 'identifier').length,
+  info: fpItems.value.filter(i => i.kind === 'deviceinfo').length,
+}));
+const fpVisible = computed(() => {
+  if (fpExpanded.value) return fpItems.value;
+  const ids = fpItems.value.filter(i => i.kind === 'identifier');
+  const info = fpItems.value.filter(i => i.kind === 'deviceinfo');
+  return [...ids, ...info.slice(0, 8)];
+});
+const fpHiddenCount = computed(() => fpItems.value.length - fpVisible.value.length);
+const fpHeadText = computed(() => {
+  if (!fpItems.value.length) {
+    if (fpFailed.value) return '摘要读取失败';
+    if (fpArmed.value === false) return '系统采集未开';
+    return '暂无指纹采集记录';
+  }
+  const { ids, info } = fpCounts.value;
+  return [ids ? `标识符 ${ids}` : '', info ? `设备信息 ${info}` : ''].filter(Boolean).join(' · ');
+});
+
+function fpChipTitle(it: FpItem): string {
+  const parts = [it.label];
+  if (it.value) parts.push(it.value);
+  parts.push(`读取 ${it.reads} 次`);
+  if (it.sources?.length) parts.push(it.sources.join('/'));
+  return parts.join('\n');
 }
 
 // ---- 分栏拖动 ----
@@ -395,9 +425,12 @@ function startDrag(e: MouseEvent) {
 let poll = 0;
 onMounted(() => {
   if (props.kind === 'net') void loadExchanges();
-  if (props.kind === 'system') void loadRadar();
+  if (props.kind === 'system') void loadFp();
   document.addEventListener('click', onDocClick);
-  poll = window.setInterval(() => { if (props.kind === 'net') scheduleExchanges(); }, 5000);
+  poll = window.setInterval(() => {
+    if (props.kind === 'net') scheduleExchanges();
+    if (props.kind === 'system') void loadFp();
+  }, 5000);
 });
 onUnmounted(() => {
   clearInterval(poll);
@@ -406,7 +439,8 @@ onUnmounted(() => {
 watch(() => store.chosenPkg, () => {
   sel.value = null; selDetail.value = null; selExchange.value = null;
   cursorStack.value = []; currentBeforeId.value = null; pagedItems.value = null; netPage.value = 1;
-  void loadExchanges(); void loadRadar();
+  fpExpanded.value = false;
+  void loadExchanges(); void loadFp();
 });
 watch(() => store.capItems.length, () => { if (props.kind === 'net' && !hasTimeRange.value) scheduleExchanges(); });
 
@@ -425,6 +459,7 @@ const emptyText = computed(() => {
       scoped.value.length ? `有 ${scoped.value.length} 条 TLS，尚未拼成 HTTP。` : '还没有网络记录。';
   if (filterActive.value && scoped.value.length) return '没有符合筛选条件的记录。';
   if (props.kind === 'crypto') return '还没有加解密记录。';
+  if (props.kind === 'file') return '还没有文件读写记录。';
   return '还没有系统事件。';
 });
 const listFootLeft = computed(() => {
@@ -444,7 +479,7 @@ const searchPlaceholder = computed(() =>
 
 <template>
   <div class="cap-view">
-    <h1 class="board-heading">{{ kind === 'crypto' ? '加解密' : kind === 'system' ? '系统' : '网络' }}</h1>
+    <h1 class="board-heading">{{ kind === 'crypto' ? '加解密' : kind === 'system' ? '系统' : kind === 'file' ? '文件读写' : '网络' }}</h1>
     <div class="filters">
       <div class="toolbar-main">
         <div class="toolbar-search">
@@ -462,13 +497,6 @@ const searchPlaceholder = computed(() =>
                 <strong>事件筛选</strong>
                 <n-button text size="small" type="primary" :disabled="!filterActive" @click="resetFilter">重置筛选</n-button>
               </div>
-              <fieldset v-if="kind === 'system'" class="system-filter">
-                <legend>活动类型</legend>
-                <n-radio-group v-model:value="filter.kind" size="small">
-                  <n-radio-button v-for="[k, l] in SYS_KINDS" :key="k" :value="k">{{ l }}</n-radio-button>
-                </n-radio-group>
-                <p v-if="radarText" class="detect-radar">{{ radarText }}</p>
-              </fieldset>
               <label v-if="kind === 'crypto'" class="filter-field">分类
                 <n-select v-model:value="filter.cat" size="small" class="cat-select" :options="[
                     { label: '全部', value: -2 }, { label: '摘要', value: 0 }, { label: 'HMAC', value: 1 },
@@ -512,6 +540,24 @@ const searchPlaceholder = computed(() =>
         </div>
       </div>
     </div>
+
+    <section v-if="kind === 'system' && store.chosenPkg" class="fp-strip" aria-label="设备指纹摘要">
+      <div class="fp-head">
+        <strong class="fp-title">设备指纹</strong>
+        <span class="fp-meta" :class="{ dim: !fpItems.length }">{{ fpHeadText }}</span>
+        <button v-if="fpHiddenCount > 0 || fpExpanded" type="button" class="fp-toggle"
+          @click="fpExpanded = !fpExpanded">{{ fpExpanded ? '收起' : `其余 ${fpHiddenCount} 项` }}</button>
+      </div>
+      <div v-if="fpItems.length" class="fp-items">
+        <span v-for="it in fpVisible" :key="it.key" class="fp-chip" :class="[it.kind, { novalue: !it.value }]"
+          :title="fpChipTitle(it)">
+          <span class="fp-label">{{ it.label }}</span>
+          <span v-if="it.value" class="fp-value">{{ it.value }}</span>
+          <span v-else class="fp-value none">未取到</span>
+          <span v-if="it.reads > 1" class="fp-reads">×{{ it.reads }}</span>
+        </span>
+      </div>
+    </section>
 
     <div class="workspace capture-workspace" :class="{ 'compact-captures': panelDisplay.density === 'compact', 'detail-open': sel !== null, 'no-results': !showSkeleton && sel === null && !(kind === 'net' ? matchedExchanges.length : rows.length) }">
       <div class="list-pane" :style="listWidth ? { width: listWidth + 'px' } : undefined">

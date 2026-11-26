@@ -23,26 +23,27 @@ const ICONS: Record<string, Component> = {
   files: FolderOutline, dump: CubeOutline, settings: SettingsOutline,
   collapse: ChevronBackOutline,
 };
-const NAV: Array<{ key: ViewKey; label: string; count?: 'cc' | 'sy' | 'nt' }> = [
+const NAV: Array<{ key: ViewKey; label: string; count?: 'cc' | 'sy' | 'nt' | 'ff' }> = [
   { key: 'cc', label: '加解密', count: 'cc' },
   { key: 'sy', label: '系统', count: 'sy' },
   { key: 'nt', label: '网络', count: 'nt' },
-  { key: 'files', label: '文件' },
+  { key: 'files', label: '文件', count: 'ff' },
   { key: 'dump', label: '脱壳' },
 ];
 
 // 侧栏计数：当前应用下各类别的可见记录数
 const counts = computed(() => {
-  const c = { cc: 0, sy: 0, nt: 0 };
+  const c = { cc: 0, sy: 0, nt: 0, ff: 0 };
   for (const it of store.capItems) {
     if (!belongsToApp(it) || !capVisible(it)) continue;
     if (it.category === 'crypto') c.cc++;
     else if (it.category === 'net') c.nt++;
+    else if (it.category === 'file') c.ff++;
     else c.sy++;
   }
   return c;
 });
-const navCount = (k?: 'cc' | 'sy' | 'nt') => (k ? counts.value[k] || '' : '');
+const navCount = (k?: 'cc' | 'sy' | 'nt' | 'ff') => (k ? counts.value[k] || '' : '');
 
 const wsText = computed(() =>
   store.wsState === 'live' ? '电脑服务在线' : store.wsState === 'fail' ? '连接异常' : '正在连接…');

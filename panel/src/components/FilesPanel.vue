@@ -23,10 +23,19 @@ import {
 import { store, toast } from '../store';
 import { fsList, fsRead, type FsEntry, perfMs } from '../api';
 import { fmtSize } from '../capview';
+import CapturePanel from './CapturePanel.vue';
 
 type SortKey = 'name' | 'size' | 'mtime';
 type PreviewMode = 'text' | 'hex';
 type EntryKind = 'dir' | 'link' | 'text' | 'image' | 'key' | 'db' | 'binary' | 'file';
+
+// 「文件」页签承载两个文件视角：浏览 = 设备文件管理器；读写 = 应用文件读写行为时间线
+// （2026-11-27 起从「系统」页签拆出）。选择在浏览器本地记忆。
+const MODE_KEY = 'adh.files.mode';
+const mode = ref<'browse' | 'io'>((() => {
+  try { return localStorage.getItem(MODE_KEY) === 'io' ? 'io' : 'browse'; } catch { return 'browse'; }
+})());
+watch(mode, v => { try { localStorage.setItem(MODE_KEY, v); } catch { /* noop */ } });
 
 interface Preview {
   name: string;
@@ -350,12 +359,19 @@ onMounted(() => { if (store.chosenPkg) void load(''); });
 
 <template>
   <section class="fs-board">
+    <div class="fs-mode-bar" role="tablist" aria-label="文件视图切换">
+      <n-radio-group v-model:value="mode" size="small">
+        <n-radio-button value="browse">浏览</n-radio-button>
+        <n-radio-button value="io">读写</n-radio-button>
+      </n-radio-group>
+    </div>
+    <CapturePanel v-if="mode === 'io' && store.chosenPkg" kind="file" />
     <div v-if="!store.chosenPkg" class="fs-unavailable">
       <n-icon size="34" :component="FolderOpenOutline" />
       <strong>选择一个应用后浏览文件</strong>
     </div>
 
-    <div v-else class="fs-shell">
+    <div v-else v-show="mode === 'browse'" class="fs-shell">
       <header class="fs-top">
         <div class="fs-location">
           <span class="fs-kicker">文件</span>
