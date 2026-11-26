@@ -86,6 +86,12 @@ export async function handleHttp(req: http.IncomingMessage, res: http.ServerResp
         res.setHeader('cache-control','no-store');
         return await route.handler();
       }
+      // One-click unpack is the panel's own analysis button on the observed app, same class of
+      // human control as scope/app control above; the managed operation fence is for AI writes.
+      if(localObserver&&route.path==='/api/unpack/run'&&req.method==='POST'&&observerHost(req.headers.host)&&sameOrigin){
+        res.setHeader('cache-control','no-store');
+        return await route.handler();
+      }
       if(!url.pathname.startsWith('/api/') || url.pathname.startsWith('/api/operations')) {
         if(url.pathname==='/mcp') {
           try{return await handleMcp(await readRequestBody(req,'mcp'),res,{principal:requestPrincipal(req.headers,'mcp',operationsRoot)});}
