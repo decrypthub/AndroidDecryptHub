@@ -130,6 +130,29 @@ test('eleven requests carried by one record keep their order and a sortable id',
     ps.map((i) => `GET https://h/p${i}`));
 });
 
+test('ordering trusts the host timestamp first and uses tsNs only inside one batch', () => {
+  seq = 1;
+  // 设备重启后 CLOCK_MONOTONIC 归零：旧记录 host 时间早但设备时间戳更大。排序必须以 host ts
+  // 为准，否则「显示时间新、却排在旧记录下面」。
+  const out = assembleHttpExchanges([
+    chunk('SSL_write', 'GET /old HTTP/1.1\r\nHost: h\r\n\r\n', { conn: '0x1', id: 1, ts: 100, tsNs: 9_000_000 }),
+    chunk('SSL_read', 'HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n', { conn: '0x1', id: 2, ts: 150, tsNs: 9_000_100 }),
+    chunk('SSL_write', 'GET /new HTTP/1.1\r\nHost: h\r\n\r\n', { conn: '0x2', id: 3, ts: 2_000, tsNs: 5 }),
+    chunk('SSL_read', 'HTTP/1.1 204 No Content\r\n\r\n', { conn: '0x2', id: 4, ts: 2_050, tsNs: 6 }),
+  ]);
+  assert.deepEqual(out.exchanges.map((e) => e.label), ['GET https://h/old', 'GET https://h/new']);
+  assert.deepEqual(out.exchanges.map((e) => e.ts), [100, 2_000]);
+
+  // 同一 drain 批次里 host ts 相同，tsNs 仍要能分先后。
+  const batch = assembleHttpExchanges([
+    chunk('SSL_write', 'GET /a HTTP/1.1\r\nHost: h\r\n\r\n', { conn: '0x3', id: 5, ts: 5_000, tsNs: 1_000 }),
+    chunk('SSL_read', 'HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n', { conn: '0x3', id: 6, ts: 5_000, tsNs: 1_100 }),
+    chunk('SSL_write', 'GET /b HTTP/1.1\r\nHost: h\r\n\r\n', { conn: '0x4', id: 7, ts: 5_000, tsNs: 2_000 }),
+    chunk('SSL_read', 'HTTP/1.1 204 No Content\r\n\r\n', { conn: '0x4', id: 8, ts: 5_000, tsNs: 2_100 }),
+  ]);
+  assert.deepEqual(batch.exchanges.map((e) => e.label), ['GET https://h/a', 'GET https://h/b']);
+});
+
 test('two exchanges on one connection stay in order, and a second connection stays apart', () => {
   seq = 1;
   const out = assembleHttpExchanges([
