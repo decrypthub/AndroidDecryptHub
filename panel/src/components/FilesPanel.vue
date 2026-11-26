@@ -338,6 +338,8 @@ const fmtMtime = (m?: number) => {
 };
 
 watch(() => store.chosenPkg, () => {
+  // 切应用时让在途的文件读取失效，否则上一个应用的文件内容会落进新应用的预览区。
+  readSeq++;
   path.value = '';
   pathInput.value = '';
   entries.value = [];
@@ -377,7 +379,7 @@ onMounted(() => { if (store.chosenPkg) void load(''); });
           <n-icon size="15" :component="SearchOutline" />
           <input v-model="filter" type="search" placeholder="筛选当前目录" aria-label="筛选当前目录" />
         </label>
-        <span class="fs-list-stat" :title="statText">{{ statText }}</span>
+        <span class="fs-list-stat" role="status" :title="statText">{{ statText }}</span>
       </header>
 
       <div class="fs-split" :class="{ 'with-preview': !!preview }">
@@ -397,7 +399,7 @@ onMounted(() => { if (store.chosenPkg) void load(''); });
 
           <!-- 读取目录时不铺骨架：保留上一屏内容，只把光标切成加载态（见 .fs-rows.loading）。 -->
           <div class="fs-rows" :class="{ loading: state === 'loading' }" :aria-busy="state === 'loading'">
-            <button v-if="parentPath && state === 'ready'" type="button" class="fs-row fs-parent" @click="goUp">
+            <button v-if="parentPath" type="button" class="fs-row fs-parent" @click="goUp">
               <span class="fs-file">
                 <span class="fs-kind dir"><n-icon size="17" :component="ArrowUpOutline" /></span>
                 <span class="fs-name"><strong>..</strong><small>上一级</small></span>

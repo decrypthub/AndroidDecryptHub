@@ -395,6 +395,10 @@ onUnmounted(() => {
 watch(() => store.chosenPkg, () => {
   sel.value = null; selDetail.value = null; selExchange.value = null;
   cursorStack.value = []; currentBeforeId.value = null; pagedItems.value = null; netPage.value = 1;
+  // 切应用必须清掉上一个应用的交换并重新进入加载态：否则列表会继续显示别人的请求，也不会有加载光标。
+  exLoadedOnce.value = false;
+  exchanges.value = [];
+  exNotes.value = [];
   void loadExchanges();
 });
 watch(() => store.capItems.length, () => { if (props.kind === 'net' && !hasTimeRange.value) scheduleExchanges(); });
