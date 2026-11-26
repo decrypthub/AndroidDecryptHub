@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue';
 import type { Cap } from '../api';
 import { deleteCapture } from '../api';
-import { catClass, cryptoView, CATLABEL } from '../capview';
+import { catClass, cryptoView, captureLengths, captureLengthText, CATLABEL } from '../capview';
 import { store, toast } from '../store';
 import { CopyOutline } from '@vicons/ionicons5';
 
@@ -77,6 +77,7 @@ function rawKind(rawHex?: string, fallbackText?: string): string {
 }
 
 function formatBlock(mode: FmtMode, rawHex?: string, fallbackText?: string): { display: string; copyVal: string; mono: boolean } {
+  if (rawHex === '') return { display: '（空字节）', copyVal: '', mono: true };
   if (!rawHex) {
     const t = fallbackText || '';
     return { display: t || '（未捕获字节）', copyVal: t, mono: false };
@@ -139,14 +140,16 @@ const outDataLabel = computed(() => {
 });
 const hasStack = computed(() => !!c.value.callStack);
 const hasFileCards = computed(() => isFile.value && !!(c.value.text || c.value.preview || c.value.func || c.value.path));
-const hasInBlock = computed(() => !!(c.value.hex || (!isFile.value && c.value.text) || (c.value.inl ?? 0) > 0));
+const hasInBlock = computed(() => typeof c.value.hex === 'string' || !!((!isFile.value && c.value.text) || (c.value.inl ?? 0) > 0));
 const hasInput = computed(() => hasFileCards.value || hasInBlock.value || !!c.value.keyHex || !!c.value.ivHex);
-const hasOutput = computed(() => !!(c.value.outHex || (c.value.outl ?? 0) > 0));
+const hasOutput = computed(() => typeof c.value.outHex === 'string' || (c.value.outl ?? 0) > 0);
 const curHasData = computed(() => (ioTab.value === 'in' ? hasInput.value : hasOutput.value));
 const activeFmt = computed(() => (ioTab.value === 'in' ? fmtIn.value : fmtOut.value));
 function setFmt(k: FmtMode) { if (ioTab.value === 'in') fmtIn.value = k; else fmtOut.value = k; }
 const bytes = (n?: number) => (n == null ? '未记录' : `${n} B`);
-const outBytes = computed(() => c.value.outl ?? (c.value.outHex ? c.value.outHex.length / 2 : undefined));
+const lengths = computed(() => captureLengths(c.value));
+const inBytes = computed(() => lengths.value.input.captured ?? lengths.value.input.bytes);
+const outBytes = computed(() => lengths.value.output.captured ?? lengths.value.output.bytes);
 const inRawKind = computed(() => rawKind(c.value.hex, c.value.text));
 const outRawKind = computed(() => rawKind(c.value.outHex));
 
@@ -186,7 +189,7 @@ async function doDelete() {
           <template v-else>#{{ c.id }} {{ c.algo || c.func }}</template>
         </h2>
         <div class="sub">
-          {{ [cv?.hook, new Date(c.ts).toLocaleString(), c.tid ? `tid ${c.tid}` : '', cv?.truncated ? '输入已截断' : ''].filter(Boolean).join(' · ') }}
+          {{ [cv?.hook, new Date(c.ts).toLocaleString(), c.tid ? `tid ${c.tid}` : '', cv?.truncated ? '输入已截断' : '', cv?.outputTruncated ? '输出已截断' : ''].filter(Boolean).join(' · ') }}
         </div>
       </div>
       <div class="detail-menu">
@@ -209,15 +212,15 @@ async function doDelete() {
       <dl class="capture-facts">
         <div><dt>事件编号</dt><dd>#{{ c.id ?? '未记录' }}</dd></div>
         <div><dt>类别</dt><dd>{{ CATLABEL[catClass(c)] }}</dd></div>
-        <div><dt>输入大小</dt><dd>{{ bytes(c.inl) }}</dd></div>
-        <div><dt>输出大小</dt><dd>{{ bytes(c.outl) }}</dd></div>
+        <div><dt>输入大小</dt><dd>{{ captureLengthText(lengths.input) }}</dd></div>
+        <div><dt>输出大小</dt><dd>{{ captureLengthText(lengths.output) }}</dd></div>
         <div><dt>线程 ID</dt><dd>{{ c.tid ? String(c.tid) : '未记录' }}</dd></div>
         <div><dt>时间</dt><dd>{{ new Date(c.ts).toLocaleString() }}</dd></div>
         <div v-if="c.sessionId"><dt>会话</dt><dd class="mono">{{ c.sessionId }}</dd></div>
       </dl>
       <div v-if="hasStack" class="stack-box">
         <pre>{{ c.callStack }}</pre>
-        <n-button quaternary circle size="small" class="blk-copy" title="复制"
+        <n-button quaternary circle size="small" class="blk-copy" title="复制调用栈" aria-label="复制调用栈"
           @click="copy(c.callStack || '')">
           <n-icon size="15" :component="CopyOutline" />
         </n-button>
@@ -240,7 +243,7 @@ async function doDelete() {
           <div class="io-field-label">路径</div>
           <div class="io-data">
             <pre>{{ c.path || ((c.func === 'open' || c.func === 'openat') ? c.preview : '') || '未记录' }}</pre>
-            <n-button quaternary circle size="small" class="blk-copy" title="复制"
+            <n-button quaternary circle size="small" class="blk-copy" title="复制路径" aria-label="复制路径"
               @click="copy(c.path || ((c.func === 'open' || c.func === 'openat') ? c.preview || '' : '') || '')">
               <n-icon size="15" :component="CopyOutline" />
             </n-button>
@@ -250,7 +253,7 @@ async function doDelete() {
           <div class="io-field-label">详情</div>
           <div class="io-data">
             <pre>{{ [c.func, c.op, c.path ? c.preview : c.text].filter(Boolean).join('\n') }}</pre>
-            <n-button quaternary circle size="small" class="blk-copy" title="复制"
+            <n-button quaternary circle size="small" class="blk-copy" title="复制详情" aria-label="复制详情"
               @click="copy([c.func, c.op, c.path ? c.preview : c.text].filter(Boolean).join('\n'))">
               <n-icon size="15" :component="CopyOutline" />
             </n-button>
@@ -263,7 +266,7 @@ async function doDelete() {
           <div class="io-field-label">KEY · {{ c.keyHex.length / 2 }}B</div>
           <div class="io-data">
             <pre class="mono">{{ formatKey(fmtIn, c.keyHex).display }}</pre>
-            <n-button quaternary circle size="small" class="blk-copy" title="复制"
+            <n-button quaternary circle size="small" class="blk-copy" title="复制密钥" aria-label="复制密钥"
               @click="copy(formatKey(fmtIn, c.keyHex).copyVal)">
               <n-icon size="15" :component="CopyOutline" />
             </n-button>
@@ -275,7 +278,7 @@ async function doDelete() {
           <div class="io-field-label">IV · {{ c.ivHex.length / 2 }}B</div>
           <div class="io-data">
             <pre class="mono">{{ formatKey(fmtIn, c.ivHex).display }}</pre>
-            <n-button quaternary circle size="small" class="blk-copy" title="复制"
+            <n-button quaternary circle size="small" class="blk-copy" title="复制 IV" aria-label="复制 IV"
               @click="copy(formatKey(fmtIn, c.ivHex).copyVal)">
               <n-icon size="15" :component="CopyOutline" />
             </n-button>
@@ -285,10 +288,10 @@ async function doDelete() {
 
       <template v-if="hasInBlock">
         <div class="io-field">
-          <div class="io-field-label">{{ inDataLabel }} · {{ bytes(c.inl ?? (c.hex ? c.hex.length / 2 : undefined)) }}{{ inRawKind ? ' · ' + inRawKind : '' }}</div>
+          <div class="io-field-label">{{ inDataLabel }} · {{ bytes(inBytes) }}{{ inRawKind ? ' · ' + inRawKind : '' }}</div>
           <div class="io-data main">
             <pre :class="{ mono: formatBlock(fmtIn, c.hex, c.text).mono }">{{ formatBlock(fmtIn, c.hex, c.text).display }}</pre>
-            <n-button quaternary circle size="small" class="blk-copy" title="复制内容"
+            <n-button quaternary circle size="small" class="blk-copy" :title="'复制' + inDataLabel" :aria-label="'复制' + inDataLabel"
               @click="copy(formatBlock(fmtIn, c.hex, c.text).copyVal)">
               <n-icon size="15" :component="CopyOutline" />
             </n-button>
@@ -304,7 +307,7 @@ async function doDelete() {
           <div class="io-field-label">{{ outDataLabel }} · {{ bytes(outBytes) }}{{ outRawKind ? ' · ' + outRawKind : '' }}</div>
           <div class="io-data main">
             <pre :class="{ mono: formatBlock(fmtOut, c.outHex).mono }">{{ formatBlock(fmtOut, c.outHex).display }}</pre>
-            <n-button quaternary circle size="small" class="blk-copy" title="复制内容"
+            <n-button quaternary circle size="small" class="blk-copy" :title="'复制' + outDataLabel" :aria-label="'复制' + outDataLabel"
               @click="copy(formatBlock(fmtOut, c.outHex).copyVal)">
               <n-icon size="15" :component="CopyOutline" />
             </n-button>

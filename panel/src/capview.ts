@@ -63,16 +63,37 @@ function clientNativeView(func: string): { title: string; direction: string } {
   return { title: func || '未识别', direction: '' };
 }
 
+export interface CaptureLength {
+  reported?: number; captured?: number; bytes?: number;
+  truncated: boolean; inconsistent: boolean;
+}
+function captureLength(reported: unknown, hex: unknown): CaptureLength {
+  const declared = typeof reported === 'number' && Number.isSafeInteger(reported) && reported >= 0 ? reported : undefined;
+  const captured = typeof hex === 'string' && /^(?:[a-f\d]{2})*$/i.test(hex) ? hex.length / 2 : undefined;
+  return { reported: declared, captured, bytes: declared ?? captured,
+    truncated: declared != null && captured != null && captured < declared,
+    inconsistent: declared != null && captured != null && captured > declared };
+}
+export function captureLengths(c: Cap): { input: CaptureLength; output: CaptureLength } {
+  return { input: captureLength(c.inl, c.hex), output: captureLength(c.outl, c.outHex) };
+}
+export function captureLengthText(length: CaptureLength): string {
+  if (length.bytes == null) return '未记录';
+  if (length.reported == null) return `${length.bytes} B（已捕获）`;
+  const extra = length.captured != null && length.captured !== length.reported
+    ? ` · 已捕获 ${length.captured} B${length.inconsistent ? '（长度不一致）' : ''}` : '';
+  return `${length.reported} B${extra}`;
+}
 export interface CryptoView {
   title: string; direction: string; hook: string; sizeLabel: string;
-  truncated: boolean; hasKey: boolean; preview: string; show: boolean;
+  truncated: boolean; outputTruncated: boolean; hasKey: boolean; preview: string; show: boolean;
 }
 export function cryptoView(c: Cap): CryptoView {
-  const stored = c.hex && (c.hex as string).length % 2 === 0 ? (c.hex as string).length / 2 : 0;
-  const inBytes = (c.inl ?? 0) > 0 ? c.inl! : stored;
-  const outBytes = c.outHex && c.outHex.length % 2 === 0 ? c.outHex.length / 2 : (typeof c.outl === 'number' ? c.outl : 0);
-  const truncated = !!((c.inl ?? 0) > 0 && c.hex && inBytes > stored);
-  const hasBody = inBytes > 0 || outBytes > 0;
+  const lengths = captureLengths(c);
+  const inBytes = lengths.input.bytes ?? 0;
+  const outBytes = lengths.output.bytes ?? 0;
+  const truncated = lengths.input.truncated;
+  const hasBody = inBytes > 0 || outBytes > 0 || (lengths.input.captured ?? 0) > 0 || (lengths.output.captured ?? 0) > 0;
   const algo = (c.algo || '').trim();
   const concrete = algo && !VAGUE_ALGO.test(algo) ? algo : '';
   const func = c.func || '';
@@ -83,13 +104,15 @@ export function cryptoView(c: Cap): CryptoView {
   const direction = java ? clientJavaDirection(op) : native.direction;
   const preview = (c.preview || '').trim();
   const readable = preview.replace(/[.\s]/g, '') ? preview : '';
-  const input = inBytes > 0 ? `${inBytes} B${truncated ? ' 截断' : ''}` : '';
-  const output = outBytes > 0 ? `${outBytes} B` : '';
+  const compact = (length: CaptureLength) => length.bytes == null ? '' :
+    `${length.bytes} B${length.truncated ? ' 截断' : length.inconsistent ? `（捕获 ${length.captured} B，长度不一致）` : ''}`;
+  const input = compact(lengths.input);
+  const output = compact(lengths.output);
   return {
     title: concrete || (java ? '未识别' : native.title),
     direction, hook,
     sizeLabel: input && output ? `${input} → ${output}` : input || output,
-    truncated, hasKey: !!(c.hasKey || c.keyHex), preview: readable, show: hasBody,
+    truncated, outputTruncated: lengths.output.truncated, hasKey: !!(c.hasKey || c.keyHex), preview: readable, show: hasBody,
   };
 }
 

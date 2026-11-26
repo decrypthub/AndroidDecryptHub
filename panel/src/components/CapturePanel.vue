@@ -2,7 +2,7 @@
 import { computed, reactive, ref, watch, onMounted, onUnmounted } from 'vue';
 import { store, belongsToApp, capRemoveWhere, capVisible, capDisplayCap, DISPLAY_CAPS, panelDisplay, savePanelDisplay, toast } from '../store';
 import { getCaptures, getExchanges, getCaptureDetail, type Cap } from '../api';
-import { catClass, cryptoView, rowLens, fmtTime, CATLABEL, type CatKey } from '../capview';
+import { catClass, cryptoView, captureLengths, rowLens, fmtTime, CATLABEL, type CatKey } from '../capview';
 import { SearchOutline } from '@vicons/ionicons5';
 import CapDetail from './CapDetail.vue';
 import ExchangeDetail from './ExchangeDetail.vue';
@@ -31,7 +31,9 @@ const exchanges = ref<Exchange[]>([]);
 const exNotes = ref<string[]>([]);
 const scrollTop = ref(0);
 const newCount = ref(0);
-let lastShown = 0;
+// null means live; an empty snapshot is still a valid paused view.
+const frozenCaptures = ref<Cap[] | null>(null);
+const frozenExchanges = ref<Exchange[] | null>(null);
 
 // ---- 分页与时间窗口状态 ----
 const cursorStack = ref<Array<number | null>>([]);
@@ -95,8 +97,12 @@ function applyClientFilter(source: Cap[]): Cap[] {
         .toLowerCase().includes(q);
     });
   }
-  if (filter.min != null) items = items.filter(c => (c.inl ?? 0) >= filter.min!);
-  if (filter.max != null) items = items.filter(c => (c.inl ?? 0) <= filter.max!);
+  if (filter.min != null) items = items.filter(c => {
+    const n = captureLengths(c).input.bytes; return n != null && n >= filter.min!;
+  });
+  if (filter.max != null) items = items.filter(c => {
+    const n = captureLengths(c).input.bytes; return n != null && n <= filter.max!;
+  });
   if (props.kind === 'crypto' && filter.cat >= 0) {
     const want = CAT_BY_SEL[filter.cat];
     items = items.filter(c => catClass(c) === want);
@@ -107,7 +113,8 @@ function applyClientFilter(source: Cap[]): Cap[] {
 // 本板块归属当前应用的记录（过滤前）
 const scoped = computed(() => store.capItems.filter(c => matchesPanel(c) && belongsToApp(c)));
 
-const visible = computed(() => applyClientFilter(pagedItems.value ?? store.capItems));
+const visible = computed(() => applyClientFilter(pagedItems.value ??
+  (filter.paused ? frozenCaptures.value ?? [] : store.capItems)));
 
 async function loadServerPage(beforeId: number | null) {
   if (!store.chosenPkg || props.kind === 'net') return;
@@ -165,7 +172,7 @@ const matchedExchangesAll = computed(() => {
   if (props.kind !== 'net') return [];
   const q = filter.q.trim().toLowerCase();
   const bySeq = /^#\d+$/.test(q) ? q.slice(1) : '';
-  return exchanges.value.filter(ex => {
+  return (filter.paused ? frozenExchanges.value ?? [] : exchanges.value).filter(ex => {
     if (fromTs.value != null && (ex.ts ?? 0) < fromTs.value) return false;
     if (toTs.value != null && (ex.ts ?? 0) > toTs.value) return false;
     if (bySeq) {
@@ -192,12 +199,18 @@ const matchedExchanges = computed(() => {
   return matchedExchangesAll.value.slice(start, start + capDisplayCap.value);
 });
 
-const frozenRows = ref<Cap[]>([]);
 const liveOrPagedRows = computed(() => props.kind === 'net' ? [] : visible.value.slice(-capDisplayCap.value).reverse());
-const rows = computed(() => (filter.paused && !isHistoricalMode.value && frozenRows.value.length ? frozenRows.value : liveOrPagedRows.value));
+const rows = liveOrPagedRows;
 watch(() => filter.paused, p => {
-  frozenRows.value = p ? [...liveOrPagedRows.value] : [];
-});
+  // Freeze the input, not an already-filtered page. Search, filters and page size remain usable.
+  frozenCaptures.value = p ? store.capItems.filter(belongsToApp).map(c => ({ ...c })) : null;
+  frozenExchanges.value = p ? exchanges.value.map(ex => ({
+    ...ex, captureIds: ex.captureIds ? [...ex.captureIds] : undefined,
+    request: ex.request ? { ...ex.request } : undefined,
+    response: ex.response ? { ...ex.response } : undefined,
+  })) : null;
+  if (!p) newCount.value = 0;
+}, { flush: 'sync' });
 
 const pageNumber = computed(() => props.kind === 'net' ? netPage.value : cursorStack.value.length + 1);
 const canPrevPage = computed(() => {
@@ -265,12 +278,12 @@ function onPageCapChange(val: number) {
 }
 
 // 新记录横幅：暂停或滚离顶部时累计
-watch(liveOrPagedRows, () => {
+watch(() => props.kind === 'net' ? exchanges.value.map(ex => ex.id) :
+  store.capItems.filter(c => panelCats().includes(c.category) && belongsToApp(c)).map(c => c.id), (ids, previous = []) => {
   if ((filter.paused || scrollTop.value > 48) && !isHistoricalMode.value) {
-    const diff = liveOrPagedRows.value.length - lastShown;
-    if (diff > 0) newCount.value += diff;
+    const seen = new Set<string | number>(previous);
+    newCount.value += ids.filter(id => !seen.has(id)).length;
   } else newCount.value = 0;
-  lastShown = liveOrPagedRows.value.length;
 });
 
 const countText = computed(() => {
@@ -295,6 +308,7 @@ function selectExchange(ex: Exchange) {
 function closeDetail() { sel.value = null; selDetail.value = null; selExchange.value = null; }
 function onCapDeleted(id: number) {
   capRemoveWhere(c => c.id === id);
+  if (frozenCaptures.value) frozenCaptures.value = frozenCaptures.value.filter(c => c.id !== id);
   if (pagedItems.value) pagedItems.value = pagedItems.value.filter(c => c.id !== id);
   closeDetail();
 }
@@ -342,6 +356,7 @@ function clearView() {
   const pkg = store.chosenPkg;
   if (!confirm(`清空本页列表？（不删磁盘）\n${pkg ? '当前应用 ' + pkg : '全部应用'}`)) return;
   const n = capRemoveWhere(c => matchesPanel(c) && belongsToApp(c));
+  if (frozenCaptures.value) frozenCaptures.value = frozenCaptures.value.filter(c => !matchesPanel(c));
   closeDetail();
   toast(`已清空本页 ${n} 条`);
 }
@@ -352,7 +367,7 @@ const MORE_OPTS = [
 ];
 function onMoreSelect(k: string) { if (k === 'dl') downloadView(); else clearView(); }
 
-// 系统页只留事件列表；指纹摘要在 设置 → 捕获 → 设备指纹 里。
+// 系统页只留事件列表；指纹摘要不在面板展示。
 
 // ---- 分栏拖动 ----
 const listWidth = ref(0); // 0 = CSS 默认宽度
@@ -386,7 +401,9 @@ onMounted(() => {
 onUnmounted(() => {
   clearInterval(poll);
 });
-watch(() => store.chosenPkg, () => {
+watch([() => store.selectedDeviceKey, () => store.chosenPkg, () => props.kind], () => {
+  filter.paused = false;
+  newCount.value = 0;
   sel.value = null; selDetail.value = null; selExchange.value = null;
   cursorStack.value = []; currentBeforeId.value = null; pagedItems.value = null; netPage.value = 1;
   // 切应用必须清掉上一个应用的交换并重新进入加载态：否则列表会继续显示别人的请求，也不会有加载光标。
