@@ -15,7 +15,7 @@ export interface Session {
 }
 export interface FsEntry {
   name: string; path: string; type: 'd' | 'f' | 'l' | string;
-  size?: number; mtime?: number; mode?: string;
+  size?: number; mtime?: number; mode?: number;
 }
 export interface AppInfo { package: string; label?: string; system?: boolean; [k: string]: unknown }
 
@@ -64,9 +64,31 @@ export const getScope = () => api<{ ok: boolean; packages: string[] }>('/api/sco
 export const scopeAdd = (pkg: string) => post('/api/scope', { add: [pkg] });
 export const scopeRemove = (pkg: string) => post('/api/scope', { remove: [pkg] });
 export const appControl = (pkg: string, action: string) => post('/api/apps/control', { package: pkg, action });
+// 设备写操作走专用封装：服务器把失败原因（DEVICE_NOT_READY、缺少 bootstrap、手机不在线）
+// 放在错误响应体的 error 字段，通用 api() 只抛 HTTP 状态会丢掉真实原因，toast 必须拿到它。
+async function postDevice<T = unknown>(body: unknown, timeoutMs = 20000): Promise<T> {
+  const t0 = performance.now();
+  let res: Response;
+  try {
+    res = await fetch('/api/devices', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs), cache: 'no-store',
+    });
+  } catch (e) {
+    notePerf('POST /api/devices', performance.now() - t0);
+    throw e;
+  }
+  notePerf('POST /api/devices', performance.now() - t0);
+  const data = await res.json().catch(() => null) as ({ ok?: boolean; error?: string } & T) | null;
+  if (!res.ok || data?.ok === false) throw new Error(data?.error || `${res.status} ${res.statusText}`);
+  return data as T;
+}
 export const observePackage = (serial: string, pkg: string) =>
-  post('/api/devices', { action: 'observe', serial, package: pkg });
-export const disconnectDevice = (serial: string) => post('/api/devices', { action: 'disconnect', serial });
+  postDevice({ action: 'observe', serial, package: pkg });
+export const connectDevice = (serial: string) =>
+  postDevice<{ ok: boolean; serial: string; deviceId?: string }>({ action: 'connect', serial });
+export const disconnectDevice = (serial: string) =>
+  postDevice<{ ok: boolean; serial: string; dropped?: boolean }>({ action: 'disconnect', serial });
 
 export interface CapturesQuery {
   package: string;
@@ -147,7 +169,15 @@ export const unpackPullSo = (pkg: string, path: string) =>
   post('/api/unpack/pull-so', { package: pkg, path });
 export const unpackDumpSoOne = (session: string, base: string, name: string) =>
   post('/api/unpack/dump-so-one', { session, base, name });
-export const dumpDownloadUrl = (sha: string) => `/api/dumps/download?sha=${encodeURIComponent(sha)}`;
+export const dumpDownloadUrl = (sha: string, name?: string) =>
+  `/api/dumps/download?sha=${encodeURIComponent(sha)}${name ? `&name=${encodeURIComponent(name)}` : ''}`;
+export const moduleWatch = (session: string, action: 'start' | 'stop' | 'status' | 'list', limit = 100) =>
+  post<{ ok?: boolean; watching?: boolean; installed?: boolean; error?: string; count?: number; modules?: ModuleLoadRec[] }>(
+    '/api/module/watch', { session, action, limit });
+export interface ModuleLoadRec {
+  path?: string; handle?: string; base?: string; size?: number; mapped?: boolean;
+  at?: number; captureId?: number; unparsed?: string;
+}
 export const appIconUrl = (pkg: string, serial?: string, version?: unknown) =>
   `/api/apps/icon?package=${encodeURIComponent(pkg)}${serial ? `&serial=${encodeURIComponent(serial)}` : ''}${version ? `&v=${encodeURIComponent(String(version))}` : ''}`;
 export const getConfig = () => api<{ settings?: { capture?: { retain?: number; maxAgeDays?: number }; ui?: { displayCap?: number } } }>('/api/config');

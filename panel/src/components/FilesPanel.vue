@@ -62,26 +62,6 @@ const utf8 = new TextDecoder('utf-8');
 
 const sandboxRoot = computed(() => store.chosenPkg ? `/data/data/${store.chosenPkg}` : '');
 
-const crumbs = computed(() => {
-  const root = sandboxRoot.value;
-  if (root && (path.value === root || path.value.startsWith(`${root}/`))) {
-    const out: Array<{ name: string; p: string }> = [{ name: '沙盒', p: root }];
-    const rel = path.value.slice(root.length).split('/').filter(Boolean);
-    rel.forEach((name, i) => out.push({ name, p: `${root}/${rel.slice(0, i + 1).join('/')}` }));
-    return out;
-  }
-  const parts = path.value.split('/').filter(Boolean);
-  const out: Array<{ name: string; p: string }> = [{ name: '/', p: '/' }];
-  parts.forEach((name, i) => out.push({ name, p: '/' + parts.slice(0, i + 1).join('/') }));
-  return out;
-});
-
-const currentDirName = computed(() => {
-  if (!path.value) return '应用文件';
-  if (path.value === sandboxRoot.value) return '应用沙盒';
-  const clean = path.value.replace(/\/+$/, '');
-  return clean.split('/').pop() || '应用文件';
-});
 
 const parentPath = computed(() => {
   if (!path.value || path.value === '/' || path.value === sandboxRoot.value) return '';
@@ -163,6 +143,27 @@ function kindLabel(e: FsEntry) {
   if (kind === 'db') return '数据库';
   if (kind === 'binary') return '二进制';
   return '文件';
+}
+
+function modeText(e: FsEntry) {
+  if (e.mode == null || !Number.isFinite(Number(e.mode))) return '';
+  const m = Number(e.mode);
+  const chars: string[] = [];
+  for (const shift of [6, 3, 0]) {
+    const bits = (m >> shift) & 7;
+    chars.push(bits & 4 ? 'r' : '-', bits & 2 ? 'w' : '-', bits & 1 ? 'x' : '-');
+  }
+  if (m & 0o4000) chars[2] = m & 0o100 ? 's' : 'S';
+  if (m & 0o2000) chars[5] = m & 0o010 ? 's' : 'S';
+  if (m & 0o1000) chars[8] = m & 0o001 ? 't' : 'T';
+  const type = e.type === 'd' ? 'd' : e.type === 'l' ? 'l' : '-';
+  return type + chars.join('');
+}
+
+function modeTitle(e: FsEntry) {
+  if (e.mode == null || !Number.isFinite(Number(e.mode))) return '权限未知';
+  const octal = (Number(e.mode) & 0o7777).toString(8).padStart(4, '0');
+  return `${modeText(e)} · ${octal}`;
 }
 
 async function load(p: string) {
@@ -356,19 +357,8 @@ onMounted(() => { if (store.chosenPkg) void load(''); });
     </div>
 
     <div v-else class="fs-shell">
-      <header class="fs-top">
-        <div class="fs-location">
-          <span class="fs-kicker">文件</span>
-          <h2>{{ currentDirName }}</h2>
-          <nav class="fs-crumbs" aria-label="当前路径">
-            <template v-for="(c, i) in crumbs" :key="c.p || 'root'">
-              <button type="button" class="fs-crumb" :aria-current="i === crumbs.length - 1 ? 'page' : undefined"
-                @click="go(c.p)">{{ c.name }}</button>
-              <span v-if="i < crumbs.length - 1" class="fs-crumb-sep">/</span>
-            </template>
-          </nav>
-        </div>
-        <div class="fs-command">
+      <header class="fs-toolbar">
+        <div class="fs-path-control">
           <button type="button" class="fs-icon-btn" title="上一级" aria-label="上一级" :disabled="!parentPath" @click="goUp">
             <n-icon size="17" :component="ArrowUpOutline" />
           </button>
@@ -383,18 +373,15 @@ onMounted(() => { if (store.chosenPkg) void load(''); });
             <span>刷新</span>
           </button>
         </div>
+        <label class="fs-filter">
+          <n-icon size="15" :component="SearchOutline" />
+          <input v-model="filter" type="search" placeholder="筛选当前目录" aria-label="筛选当前目录" />
+        </label>
+        <span class="fs-list-stat" :title="statText">{{ statText }}</span>
       </header>
 
-      <div class="fs-split">
+      <div class="fs-split" :class="{ 'with-preview': !!preview }">
         <aside class="fs-list-pane">
-          <div class="fs-list-tools">
-            <label class="fs-filter">
-              <n-icon size="15" :component="SearchOutline" />
-              <input v-model="filter" type="search" placeholder="筛选当前目录" aria-label="筛选当前目录" />
-            </label>
-            <span class="fs-list-stat" :title="statText">{{ statText }}</span>
-          </div>
-
           <div class="fs-column-head" aria-label="排序方式">
             <button type="button" @click="toggleSort('name')">
               <span>名称</span><n-icon v-if="sortIcon('name')" size="12" :component="sortIcon('name')" />
@@ -402,7 +389,8 @@ onMounted(() => { if (store.chosenPkg) void load(''); });
             <button type="button" @click="toggleSort('size')">
               <span>大小</span><n-icon v-if="sortIcon('size')" size="12" :component="sortIcon('size')" />
             </button>
-            <button type="button" @click="toggleSort('mtime')">
+            <span class="fs-static-head">权限</span>
+            <button type="button" class="fs-time-head" @click="toggleSort('mtime')">
               <span>修改时间</span><n-icon v-if="sortIcon('mtime')" size="12" :component="sortIcon('mtime')" />
             </button>
           </div>
@@ -414,6 +402,7 @@ onMounted(() => { if (store.chosenPkg) void load(''); });
                 <span class="fs-name"><strong>..</strong><small>上一级</small></span>
               </span>
               <span class="fs-size"></span>
+              <span class="fs-perm"></span>
               <span class="fs-time"></span>
             </button>
 
@@ -427,6 +416,7 @@ onMounted(() => { if (store.chosenPkg) void load(''); });
                 </span>
               </span>
               <span class="fs-size">{{ e.type === 'd' ? '' : fmtSize(e.size) }}</span>
+              <span class="fs-perm mono" :title="modeTitle(e)">{{ modeText(e) }}</span>
               <span class="fs-time">{{ fmtMtime(e.mtime) }}</span>
             </button>
 
@@ -450,9 +440,8 @@ onMounted(() => { if (store.chosenPkg) void load(''); });
           </div>
         </aside>
 
-        <section class="fs-preview-pane">
-          <template v-if="preview">
-            <header class="fs-preview-head">
+        <section v-if="preview" class="fs-preview-pane">
+          <header class="fs-preview-head">
               <span class="fs-preview-icon" :class="{ binary: preview.binary }">
                 <n-icon size="22" :component="preview.binary ? CubeOutline : DocumentTextOutline" />
               </span>
@@ -494,12 +483,6 @@ onMounted(() => { if (store.chosenPkg) void load(''); });
               </div>
               <pre class="fs-content" :class="{ hex: previewMode === 'hex' }">{{ currentPreviewContent }}</pre>
             </template>
-          </template>
-
-          <div v-else class="fs-preview-empty">
-            <n-icon size="44" :component="DocumentOutline" />
-            <strong>选择文件查看内容</strong>
-          </div>
         </section>
       </div>
     </div>
@@ -511,16 +494,8 @@ onMounted(() => { if (store.chosenPkg) void load(''); });
 .fs-unavailable { flex: 1; display: grid; place-content: center; justify-items: center; gap: 10px; color: var(--muted); border: 1px dashed var(--line); border-radius: 12px; background: var(--surface); }
 .fs-unavailable strong { color: var(--ink-2); font-size: 14px; font-weight: 600; }
 .fs-shell { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--line-soft); border-radius: 12px; background: var(--surface); box-shadow: 0 1px 2px rgba(17, 19, 21, .025); }
-.fs-top { display: grid; grid-template-columns: minmax(220px, .8fr) minmax(360px, 1.2fr); gap: 14px; align-items: end; padding: 16px 18px 13px; border-bottom: 1px solid var(--line-soft); background: var(--surface); }
-.fs-location { min-width: 0; }
-.fs-kicker { display: block; margin-bottom: 3px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .08em; }
-.fs-location h2 { margin: 0 0 7px; color: var(--ink); font-size: 21px; line-height: 1.15; font-weight: 650; letter-spacing: -.025em; overflow-wrap: anywhere; }
-.fs-crumbs { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 2px; color: var(--muted); }
-.fs-crumb { max-width: 180px; overflow: hidden; padding: 2px 4px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
-.fs-crumb:hover { color: var(--ink); background: var(--surface-2); }
-.fs-crumb[aria-current] { color: var(--ink); font-weight: 650; cursor: default; }
-.fs-crumb-sep { color: var(--line); font-size: 11px; }
-.fs-command { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto auto; gap: 7px; align-items: center; }
+.fs-toolbar { display: grid; grid-template-columns: minmax(420px, 1fr) minmax(170px, 250px) auto; gap: 10px; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--line-soft); background: var(--surface); }
+.fs-path-control { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto auto; gap: 7px; align-items: center; min-width: 0; }
 .fs-icon-btn, .fs-command-btn, .fs-action { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 34px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink-2); background: var(--surface); cursor: pointer; transition: background .16s ease, border-color .16s ease, color .16s ease, transform .08s ease; }
 .fs-icon-btn { width: 34px; padding: 0; }
 .fs-command-btn { padding: 0 11px; font-size: 12px; white-space: nowrap; }
@@ -530,21 +505,23 @@ onMounted(() => { if (store.chosenPkg) void load(''); });
 .fs-icon-btn:disabled, .fs-action:disabled { opacity: .42; cursor: default; transform: none; }
 .fs-path-input { width: 100%; min-width: 0; min-height: 34px; padding: 5px 10px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); background: var(--bg); font-size: 12px; }
 .fs-path-input:focus { border-color: var(--ink); outline: 2px solid rgba(17, 19, 21, .08); outline-offset: 0; }
-.fs-split { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(320px, .88fr) minmax(0, 1.12fr); }
-.fs-list-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: 1px solid var(--line-soft); background: var(--bg); }
-.fs-list-tools { display: grid; grid-template-columns: minmax(150px, 1fr) auto; gap: 10px; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--line-soft); }
+.fs-split { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr); }
+.fs-split.with-preview { grid-template-columns: minmax(430px, 1.08fr) minmax(0, .92fr); }
+.fs-list-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); }
+.fs-split.with-preview .fs-list-pane { border-right: 1px solid var(--line-soft); }
 .fs-filter { position: relative; display: flex; align-items: center; min-width: 0; color: var(--muted); }
 .fs-filter > .n-icon { position: absolute; left: 9px; z-index: 1; }
-.fs-filter input { width: 100%; min-width: 0; min-height: 32px; padding: 5px 9px 5px 29px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); background: var(--surface); font-size: 12px; }
+.fs-filter input { width: 100%; min-width: 0; min-height: 34px; padding: 5px 9px 5px 29px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); background: var(--bg); font-size: 12px; }
 .fs-filter input:focus { border-color: var(--ink); outline: 2px solid rgba(17, 19, 21, .08); }
-.fs-list-stat { max-width: 210px; overflow: hidden; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
-.fs-column-head { display: grid; grid-template-columns: minmax(0, 1fr) 76px 112px; gap: 10px; align-items: center; min-height: 34px; padding: 0 12px; border-bottom: 1px solid var(--line-soft); color: var(--muted); background: var(--chrome); font-size: 11px; }
+.fs-list-stat { justify-self: end; max-width: 220px; overflow: hidden; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
+.fs-column-head { display: grid; grid-template-columns: minmax(0, 1fr) 68px 102px 106px; gap: 8px; align-items: center; min-height: 34px; padding: 0 12px; border-bottom: 1px solid var(--line-soft); color: var(--muted); background: var(--chrome); font-size: 11px; }
 .fs-column-head button { display: inline-flex; align-items: center; gap: 3px; min-width: 0; padding: 0; border: 0; color: inherit; background: transparent; font-size: inherit; font-weight: 600; text-align: left; cursor: pointer; }
 .fs-column-head button:first-child { padding-left: 39px; }
-.fs-column-head button:nth-child(2), .fs-column-head button:nth-child(3) { justify-content: flex-end; text-align: right; }
+.fs-column-head button:nth-child(2), .fs-column-head .fs-time-head { justify-content: flex-end; text-align: right; }
+.fs-static-head { overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .fs-column-head button:hover { color: var(--ink); }
 .fs-rows { flex: 1; min-height: 0; overflow: auto; padding: 4px 0; }
-.fs-row { display: grid; grid-template-columns: minmax(0, 1fr) 76px 112px; gap: 10px; align-items: center; width: 100%; min-height: 43px; padding: 3px 12px; border: 0; border-bottom: 1px solid var(--line-soft); color: var(--ink); background: transparent; text-align: left; cursor: pointer; transition: background .14s ease, box-shadow .14s ease; }
+.fs-row { display: grid; grid-template-columns: minmax(0, 1fr) 68px 102px 106px; gap: 8px; align-items: center; width: 100%; min-height: 40px; padding: 3px 12px; border: 0; border-bottom: 1px solid var(--line-soft); color: var(--ink); background: transparent; text-align: left; cursor: pointer; transition: background .14s ease, box-shadow .14s ease; }
 .fs-row:hover { background: var(--surface-2); }
 .fs-row.selected { background: var(--surface-2); box-shadow: inset 2px 0 0 var(--ink); }
 .fs-file { display: flex; align-items: center; gap: 9px; min-width: 0; }
@@ -560,8 +537,10 @@ onMounted(() => { if (store.chosenPkg) void load(''); });
 .fs-name strong { min-width: 0; overflow: hidden; color: var(--ink); font-size: 13px; font-weight: 560; text-overflow: ellipsis; white-space: nowrap; }
 .fs-name small { flex: none; color: var(--muted); font-size: 10px; }
 .fs-parent .fs-name strong { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
-.fs-size, .fs-time { overflow: hidden; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
+.fs-size, .fs-perm, .fs-time { overflow: hidden; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
 .fs-size { color: var(--ink-2); text-align: right; }
+.fs-perm { color: var(--ink-2); font-size: 10px; letter-spacing: -.015em; }
+.fs-time { text-align: right; }
 .fs-skeletons { padding: 6px 12px; }
 .fs-skeleton-row { display: grid; grid-template-columns: 30px minmax(0, 1fr) 62px; gap: 10px; align-items: center; min-height: 42px; border-bottom: 1px solid var(--line-soft); }
 .fs-skeleton-row span, .fs-skeleton-row b, .fs-skeleton-row em { display: block; height: 12px; border-radius: 4px; background: var(--surface-3); animation: fs-pulse 1.4s ease-in-out infinite; }
@@ -590,8 +569,8 @@ onMounted(() => { if (store.chosenPkg) void load(''); });
 .fs-view-toggle button[aria-pressed="true"] { color: var(--ink); background: var(--surface); box-shadow: 0 1px 3px rgba(17, 19, 21, .12); font-weight: 650; }
 .fs-content { flex: 1; min-height: 0; margin: 0 16px 16px; padding: 13px 14px; overflow: auto; border: 1px solid var(--line-soft); border-radius: 8px; color: var(--ink-2); background: var(--bg); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; line-height: 1.68; white-space: pre-wrap; word-break: normal; overflow-wrap: anywhere; }
 .fs-content.hex { white-space: pre; overflow-wrap: normal; }
-.fs-preview-empty, .fs-preview-state { flex: 1; display: grid; place-content: center; justify-items: center; gap: 10px; padding: 30px; color: var(--muted); text-align: center; }
-.fs-preview-empty strong, .fs-preview-state strong { color: var(--ink-2); font-size: 14px; font-weight: 600; }
+.fs-preview-state { flex: 1; display: grid; place-content: center; justify-items: center; gap: 10px; padding: 30px; color: var(--muted); text-align: center; }
+.fs-preview-state strong { color: var(--ink-2); font-size: 14px; font-weight: 600; }
 .fs-preview-state.error { color: var(--danger); }
 .fs-preview-state span { max-width: 520px; overflow-wrap: anywhere; }
 .fs-spinner { width: 22px; height: 22px; border: 2px solid var(--line); border-top-color: var(--ink); border-radius: 50%; animation: fs-spin .8s linear infinite; }
@@ -599,19 +578,18 @@ onMounted(() => { if (store.chosenPkg) void load(''); });
 .mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 
 @media (max-width: 980px) {
-  .fs-top { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
-  .fs-command { grid-template-columns: 34px minmax(0, 1fr) auto auto; }
-  .fs-split { grid-template-columns: minmax(280px, .95fr) minmax(0, 1.05fr); }
-  .fs-time, .fs-column-head button:nth-child(3) { display: none; }
-  .fs-column-head, .fs-row { grid-template-columns: minmax(0, 1fr) 76px; }
+  .fs-toolbar { grid-template-columns: minmax(0, 1fr) minmax(150px, 220px); padding: 9px 10px; }
+  .fs-list-stat { display: none; }
+  .fs-split.with-preview { grid-template-columns: minmax(350px, 1.04fr) minmax(0, .96fr); }
+  .fs-time, .fs-column-head .fs-time-head { display: none; }
+  .fs-column-head, .fs-row { grid-template-columns: minmax(0, 1fr) 64px 92px; }
 }
 
 @media (max-width: 700px) {
   .fs-board { display: block; padding: 10px; }
   .fs-shell { min-height: calc(100dvh - 96px); }
-  .fs-top { padding: 13px 12px 10px; }
-  .fs-location h2 { font-size: 18px; }
-  .fs-command { grid-template-columns: 34px minmax(0, 1fr) 34px 34px; gap: 5px; }
+  .fs-toolbar { grid-template-columns: minmax(0, 1fr); gap: 7px; padding: 8px; }
+  .fs-path-control { grid-template-columns: 34px minmax(0, 1fr) 34px 34px; gap: 5px; }
   .fs-command-btn span { display: none; }
   .fs-command-btn { width: 34px; padding: 0; }
   .fs-split { display: flex; flex-direction: column; }
@@ -620,8 +598,6 @@ onMounted(() => { if (store.chosenPkg) void load(''); });
   .fs-preview-pane { flex: 1; min-height: 360px; }
   .fs-preview-head { flex-wrap: wrap; }
   .fs-preview-actions { margin-left: auto; }
-  .fs-list-tools { grid-template-columns: minmax(0, 1fr); }
-  .fs-list-stat { max-width: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
