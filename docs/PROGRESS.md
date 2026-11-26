@@ -1,5 +1,13 @@
 # PROGRESS — 跨会话进度看板
 
+## 2026-11-27 通宵优化进行中：独立手机 Agent/ART/GOT 基础实测
+
+- 在用户授权的第一台手机使用原先不存在的 `com.adh.p5sandbox` 自有测试包和独立 USB 路由，不替换系统模块，不重启 8088/18761。APK 内 Agent 与实际加载文件 SHA-256 相同，hello 的 PID/UID/starttime 与手机进程核对；这仅是显式 USB 路由，不称 DeviceRpc 密钥认证。
+- **9/9 实测通过**：反射出实际 31 个 JCA 重载且 discovery 不安装；拒绝错误目录/陈旧 revision/活动态修改；只开 byte-array digest 重载，捕获输入及 SHA-256 输出逐字节匹配；拒绝手动抢占及通用 unhook；全局停止后仍执行正常算法但不再产生 Java 记录；六轮重新启用始终同一 ID、一个已补丁槽。五种自有算法探针的原功能结果也逐项为 true，但本次仅验证 digest 的完整采集内容，不能据此称其他算法采集已全验。
+- Native 单选 `access` 也经真实 GOT 安装/触发/停止验证：仅该方法 ownedSlots=1，收到指定路径与原返回值，安装后及恢复后 RELRO 权限相同，停止后槽指针逐字节值与原始一致，原方法仍返回 -1 且不再有该记录。
+- 完成后卸载本次新装测试包、删除自己的上传和 reverse；原服务在线会话、设备 scope/endpoint/module 哈希及原 reverse 前后完全一致。首次普通 `adb install` 超时的失败记录保留；改为显式 root 安装已核 SHA 的自有 APK 后通过，不把环境安装超时当成产品失败。
+- 证据：`X:/Project/github/DecryptHub-all/ADH/_live/overnight-20261127/java-art-physical/REPORT.json`。本次是单机 self-load 基础验证，**不是 Zygisk、双机同 Host、Web/Manager、94 工具全量或最终无上下文体验验收**；这些仍须继续完成。
+
 ## 2026-11-27 通宵优化进行中：Java 精确重载、稳定开关与统一停止
 
 - Java 采集不再丢弃一次性 jobs：按 bootstrap JCA 类实际反射的完整参数签名生成有界目录（最多 40，超限/缺类明确报告），排序后绑定目录版本与 revision；保留每个重载的 Hook ID、采集 owner、选择、依赖、错误和真实 active 读回。Cipher/Mac 的 doFinal 及签名 sign/verify 明确依赖各自 init 重载，缺依赖的项不可冒充有效。
