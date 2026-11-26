@@ -100,7 +100,7 @@
   .device-picker { position:relative; min-width:0; }
   .device-picker > .device-context { padding:5px 8px; min-height:30px; background:var(--surface); border-color:var(--line-soft); text-align:left; }
   .device-picker > .device-context:hover, .device-picker > .device-context[aria-expanded="true"] { border-color:var(--line); }
-  .device-picker .device-menu { left:auto; right:0; width:310px; max-width:calc(100vw - 24px); max-height:50dvh; overflow:auto; }
+  .device-picker .device-menu { left:auto; right:0; width:340px; max-width:calc(100vw - 24px); max-height:50dvh; overflow:auto; }
   .device-picker .device-menu::before { display:none; }
   .device-menu-label { margin:4px 7px 7px; color:var(--muted); font-size:11px; font-weight:600; }
   .app-dialog { width:min(880px,96vw); height:min(640px,88dvh); padding:0; overflow:hidden; border:1px solid var(--line); border-radius:10px; background:var(--surface); color:var(--ink); }
@@ -129,12 +129,15 @@
   .device-row .app-item { flex:1; min-width:0; }
   .device-row-actions { flex:none; display:flex; gap:4px; }
   .device-row-actions .dl-link { min-height:28px; padding:0 8px; }
+  .device-row-actions .dev-action { min-height:26px; padding:0 9px; color:var(--ink-2); background:transparent; border:1px solid var(--line); border-radius:4px; font-size:11px; white-space:nowrap; cursor:pointer; }
+  .device-row-actions .dev-action:hover:not(:disabled) { color:var(--ink); border-color:var(--muted); }
+  .device-row-actions .dev-action:disabled { opacity:.55; cursor:default; }
   .popover .app-item:disabled { opacity:.55; cursor:default; }
   .app-dialog .app-choices { flex:1; max-height:none; overflow:hidden; min-height:0; padding:8px 10px 12px 8px; display:flex; flex-direction:column; }
   .app-dialog .app-virtual { flex:1; min-height:0; }
   .app-dialog .app-virtual .app-row { height:52px; }
   .app-dialog .app-item { flex-direction:row; align-items:center; gap:10px; min-height:52px; }
-  .app-dialog .app-copy { display:flex; flex-direction:column; min-width:0; flex:1; }
+  .app-dialog .app-copy, .device-menu .app-copy { display:flex; flex-direction:column; min-width:0; flex:1; }
   .app-item .app-face { width:32px; height:32px; }
   .app-item .app-face img, .app-item .app-dialog-letter { width:32px; height:32px; border-radius:7px; font-size:13px; }
   .menu-wrap { position:relative; }
