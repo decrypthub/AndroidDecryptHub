@@ -1,7 +1,9 @@
 <script setup lang="ts">
+import {copyText} from '../user_actions';
 import { computed, ref, watch } from 'vue';
 import type { Cap } from '../api';
-import { deleteCapture } from '../api';
+import { captureHookMethod } from '../capture_hook_link';
+import { getCaptureControls, deleteCapture } from '../api';
 import { catClass, cryptoView, captureLengths, captureLengthText, CATLABEL } from '../capview';
 import { store, toast } from '../store';
 import { CopyOutline } from '@vicons/ionicons5';
@@ -14,6 +16,18 @@ const FMTS: [FmtMode, string][] = [['auto', 'Raw'], ['utf8', 'UTF-8'], ['hex', '
 const ioTab = ref<'in' | 'out'>('in');
 const fmtIn = ref<FmtMode>('auto');
 const fmtOut = ref<FmtMode>('auto');
+const sourceBusy=ref(false);
+const hasHookSource=computed(()=>c.value.source==='native'&&!!c.value.deviceBinding?.serial&&!!c.value.package&&!String(c.value.func).startsWith('NATIVE_HOOK'));
+async function openHookSource(){
+ if(sourceBusy.value||!hasHookSource.value)return;
+ const record=c.value,serial=record.deviceBinding!.serial,pkg=record.package!,deviceKey=store.selectedDeviceKey;
+ sourceBusy.value=true;
+ try{const control=await getCaptureControls(serial,pkg);if(store.selectedDeviceKey!==deviceKey||store.chosenPkg!==pkg)return;
+  const method=captureHookMethod(record,control.catalogs?.methods??[]);if(!method){toast('此记录没有可精确定位的受控方法；未猜测来源');return;}
+  const returnView=store.view==='sy'?'sy':store.view==='nt'?'nt':'cc';
+  store.hookSource={serial,package:pkg,methodId:method.id,recordId:record.id,returnView};store.view='settings';
+ }catch(error){toast('无法读取 Hook 目录：'+(error as Error).message);}finally{sourceBusy.value=false;}
+}
 const confirmDelete = ref(false);
 const infoOpen = ref(false);
 
@@ -160,7 +174,7 @@ watch(() => c.value.id, () => {
 });
 
 function copy(text: string) {
-  void navigator.clipboard?.writeText(text).then(() => toast('已复制'), () => toast('复制失败'));
+  void copyText(text).then(() => toast('已复制'), (error:Error) => toast('复制失败：'+error.message));
 }
 function onMenuSelect(key: string) {
   if (key === 'info') infoOpen.value = !infoOpen.value;
@@ -193,11 +207,12 @@ async function doDelete() {
         </div>
       </div>
       <div class="detail-menu">
+        <n-button v-if="hasHookSource" quaternary size="small" :loading="sourceBusy" @click="openHookSource">来源 Hook</n-button>
         <n-dropdown trigger="click" :options="[
             { label: '事件信息', key: 'info' },
             { label: '删除记录', key: 'delete', props: { style: 'color:#f87171' } },
           ]" @select="onMenuSelect">
-          <n-button quaternary size="small" class="menu-btn" title="记录操作">⋯</n-button>
+          <n-button quaternary size="small" class="menu-btn" title="记录操作" aria-label="记录操作">⋯</n-button>
         </n-dropdown>
         <n-popconfirm v-model:show="confirmDelete" positive-text="删除" negative-text="取消"
           :positive-button-props="{ type: 'error' }" @positive-click="doDelete">

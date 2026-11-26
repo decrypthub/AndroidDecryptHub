@@ -39,9 +39,11 @@ async function load(preserve=false){
  const id=++request,t=copy(target.value);if(!t.serial||!t.package){view.value=null;draft.value=null;return;}loading.value=true;error.value='';
  try{const data=await getCaptureControls(t.serial,t.package,t.session||undefined);if(id!==request||key(t)!==key(target.value))return;
   if(preserve&&changed.value){review.value=data;return;}
-  view.value=data;const saved=drafts.get(key(t));draft.value=copy(saved?.config??data.config);notice.value=saved?'已恢复此目标的未应用草稿':'';
+  view.value=data;const saved=drafts.get(key(t));draft.value=copy(saved?.config??data.config);notice.value=saved?'已恢复此目标的未应用草稿':'';focusSource();
  }catch(e){if(id===request)error.value=(e as Error).message;}finally{if(id===request)loading.value=false;}
 }
+function focusSource(){const source=store.hookSource;if(!source||source.serial!==target.value.serial||source.package!==target.value.package)return;const m=methods.value.find(m=>m.id===source.methodId);if(!m)return;feature.value=FEATURES.find(([, ,bit])=>m.families&bit)![0];query.value=m.id;detail.value=m.id;}
+function returnToRecord(){const source=store.hookSource;if(source)store.view=source.returnView;store.hookSource=null;}
 function switchTarget(t:typeof target.value){if(key(t)===key(target.value))return;if(changed.value){pendingTarget.value=t;return;}target.value=t;sid.value=t.session;view.value=null;draft.value=null;review.value=null;notice.value='';void load();}
 function finishSwitch(keep:boolean){const t=pendingTarget.value;if(!t)return;if(keep)retain();else drafts.delete(key(target.value));pendingTarget.value=null;target.value=t;sid.value=t.session;view.value=null;draft.value=null;review.value=null;notice.value='';void load();}
 function useRefresh(keep:boolean){if(!review.value)return;const old=copy(draft.value);view.value=review.value;draft.value=keep?old:copy(review.value.config);review.value=null;notice.value=keep?'已采用新状态；请核对变更后再应用':'';}
@@ -66,6 +68,7 @@ onBeforeUnmount(retain);
  <section class="hook-manager" aria-label="两级 Hook 管理" :aria-busy="loading||busy">
   <div v-if="!target.serial||!target.package" class="hook-empty"><h2>先选择设备和 APP</h2><n-button secondary @click="store.appDialogOpen=true">选择 APP</n-button></div>
   <template v-else>
+   <div v-if="store.hookSource?.serial===target.serial&&store.hookSource?.package===target.package" class="hook-hint"><n-button text @click="returnToRecord">‹ 返回记录 #{{ store.hookSource.recordId }}</n-button><span> · 来源符号定位；此处显示当前配置，不代表历史安装状态</span></div>
    <header class="hook-context"><div><strong>{{ deviceName }}</strong><span :title="target.package">{{ target.package }}</span></div><n-select class="hook-process" :value="sid" :options="processOptions" aria-label="应用配置的目标进程" :disabled="busy" @update:value="(value:string)=>switchTarget({...target,session:value})" /></header>
    <div class="hook-tools"><n-input v-model:value="query" clearable placeholder="搜索功能、类或方法" aria-label="搜索 Hook 方法"><template #prefix><n-icon :component="SearchOutline" /></template></n-input><n-select v-model:value="backend" aria-label="方法后端" :options="[{label:'全部后端',value:'all'},{label:'Java',value:'java'},{label:'Native',value:'native'}]"/><n-select v-model:value="stateFilter" aria-label="方法运行状态筛选" :options="[{label:'全部状态',value:'all'},{label:'观测中',value:'active'},{label:'未启用',value:'inactive'},{label:'需处理',value:'error'}]"/><n-button quaternary :loading="loading" :disabled="busy" aria-label="刷新 Hook 快照" @click="load(true)"><template #icon><n-icon :component="RefreshOutline"/></template></n-button></div>
    <p v-if="error" class="hook-message error" role="alert">{{ error }}</p>

@@ -8,7 +8,7 @@ import {
   LockClosedOutline, HardwareChipOutline, WifiOutline, FolderOutline, CubeOutline,
   SettingsOutline, ChevronBackOutline, ChevronDownOutline,
 } from '@vicons/ionicons5';
-import { store, selectDevice, toasts, belongsToApp, capVisible, panelDisplay, savePanelDisplay } from './store';
+import { store, selectDevice, toasts, panelDisplay, savePanelDisplay } from './store';
 import { appIconUrl } from './api';
 import DeviceDialog from './components/DeviceDialog.vue';
 import AppDialog from './components/AppDialog.vue';
@@ -23,10 +23,10 @@ const ICONS: Record<string, Component> = {
   files: FolderOutline, dump: CubeOutline, settings: SettingsOutline,
   collapse: ChevronBackOutline,
 };
-const NAV: Array<{ key: ViewKey; label: string; count?: 'cc' | 'sy' | 'nt' }> = [
-  { key: 'cc', label: '加解密', count: 'cc' },
-  { key: 'sy', label: '系统', count: 'sy' },
-  { key: 'nt', label: '网络', count: 'nt' },
+const NAV: Array<{ key: ViewKey; label: string }> = [
+  { key: 'cc', label: '加解密' },
+  { key: 'sy', label: '系统' },
+  { key: 'nt', label: '网络' },
   { key: 'files', label: '文件' },
   { key: 'dump', label: '脱壳' },
 ];
@@ -38,19 +38,6 @@ const VIEW_TITLES: Record<ViewKey, string> = {
 };
 watch(() => store.view, (v) => { document.title = `ADH · ${VIEW_TITLES[v] ?? ''}`; }, { immediate: true });
 
-// 侧栏计数：当前应用下各类别的可见记录数
-const counts = computed(() => {
-  const c = { cc: 0, sy: 0, nt: 0 };
-  for (const it of store.capItems) {
-    if (!belongsToApp(it) || !capVisible(it)) continue;
-    if (it.category === 'crypto') c.cc++;
-    else if (it.category === 'net') c.nt++;
-    else c.sy++;
-  }
-  return c;
-});
-const navCount = (k?: 'cc' | 'sy' | 'nt') => (k ? counts.value[k] || '' : '');
-
 const wsText = computed(() =>
   store.wsState === 'live' ? '电脑服务在线' : store.wsState === 'fail' ? '连接异常' : '正在连接…');
 const wsCls = computed(() =>
@@ -61,6 +48,9 @@ const appLabel = computed(() => chosenApp.value?.label || (store.chosenPkg ? '�
 const appInitial = computed(() => (appLabel.value[0] ?? '?'));
 const iconSerial = computed(() => store.devices.find(d => d.key === store.selectedDeviceKey)?.serial || '');
 
+const panels = {cc:CapturePanel,sy:CapturePanel,nt:CapturePanel,files:FilesPanel,dump:DumpPanel,settings:SettingsPanel};
+const activePanel = computed(() => panels[store.view]);
+const captureKind = computed(() => ({cc:'crypto',sy:'system',nt:'net'} as Record<string,string>)[store.view]);
 const boardOptions = [...NAV.map(({ key: value, label }) => ({ value, label })), { value: 'settings', label: '设置' }];
 
 function toggleRail() {
@@ -104,7 +94,7 @@ const themeOverrides = computed<GlobalThemeOverrides>(() => {
           :class="{ selected: store.view === item.key }" :title="item.label" :aria-label="item.label"
           :aria-current="store.view === item.key ? 'page' : undefined" @click="store.view = item.key">
           <span class="rail-line"><n-icon size="17" :component="ICONS[item.key]" />
-            <span class="rail-caption">{{ item.label }}</span><small v-if="navCount(item.count)">{{ navCount(item.count) }}</small>
+            <span class="rail-caption">{{ item.label }}</span>
           </span>
         </n-button>
       </nav>
@@ -132,7 +122,7 @@ const themeOverrides = computed<GlobalThemeOverrides>(() => {
           @select="selectDevice" />
         <div class="header-actions">
           <section class="app-context">
-            <button type="button" class="process-trigger" title="应用" @click="store.appDialogOpen = true">
+            <button type="button" class="process-trigger" title="选择应用" aria-label="选择应用" @click="store.appDialogOpen = true">
               <span class="proc-primary">
                 <span class="app-face proc-face">
                   <span class="app-dialog-letter">{{ appInitial }}</span>
@@ -141,7 +131,7 @@ const themeOverrides = computed<GlobalThemeOverrides>(() => {
                 </span>
                 <span class="proc-text">
                   <span id="procLabel">{{ appLabel }}</span>
-                  <span class="proc-pkg">{{ store.chosenPkg }}</span>
+                  <span v-if="store.chosenPkg && appLabel !== store.chosenPkg" class="proc-pkg">{{ store.chosenPkg }}</span>
                 </span>
               </span>
               <span class="menu-chevron"><n-icon size="11" :component="ChevronDownOutline" /></span>
@@ -151,12 +141,9 @@ const themeOverrides = computed<GlobalThemeOverrides>(() => {
       </header>
 
       <main class="panel-body">
-        <CapturePanel v-if="store.view === 'cc'" kind="crypto" />
-        <CapturePanel v-else-if="store.view === 'sy'" kind="system" />
-        <CapturePanel v-else-if="store.view === 'nt'" kind="net" />
-        <FilesPanel v-else-if="store.view === 'files'" />
-        <DumpPanel v-else-if="store.view === 'dump'" />
-        <SettingsPanel v-else-if="store.view === 'settings'" />
+        <KeepAlive include="CapturePanel" :max="3">
+          <component :is="activePanel" :key="store.view" v-bind="captureKind ? {kind:captureKind} : {}" />
+        </KeepAlive>
       </main>
     </div>
 

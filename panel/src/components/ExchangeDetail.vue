@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import {copyText} from '../user_actions';
 import { computed, ref } from 'vue';
 import { CopyOutline } from '@vicons/ionicons5';
 import { toast } from '../store';
@@ -50,7 +51,7 @@ const when = computed(() => {
   return Number.isFinite(d.getTime()) ? d.toLocaleString() : '未记录';
 });
 function copy(text: string) {
-  void navigator.clipboard?.writeText(text).then(() => toast('已复制'), () => toast('复制失败'));
+  void copyText(text).then(() => toast('已复制'), (error:Error) => toast('复制失败：'+error.message));
 }
 </script>
 
@@ -70,7 +71,7 @@ function copy(text: string) {
       <div class="io-card-head"><span class="io-label in">请求</span><span class="io-meta">{{ partMeta(req) }}</span></div>
       <div class="io-block-body">
         <pre>{{ partText(req) }}</pre>
-        <n-button v-if="req" quaternary circle size="small" class="block-copy" title="复制" @click="copy(partText(req))">
+        <n-button v-if="req" quaternary circle size="small" class="block-copy" title="复制请求" aria-label="复制请求" @click="copy(partText(req))">
           <n-icon size="14" :component="CopyOutline" />
         </n-button>
       </div>
@@ -79,7 +80,7 @@ function copy(text: string) {
       <div class="io-card-head"><span class="io-label out">响应</span><span class="io-meta">{{ partMeta(res) }}</span></div>
       <div class="io-block-body">
         <pre>{{ partText(res) }}</pre>
-        <n-button v-if="res" quaternary circle size="small" class="block-copy" title="复制" @click="copy(partText(res))">
+        <n-button v-if="res" quaternary circle size="small" class="block-copy" title="复制响应" aria-label="复制响应" @click="copy(partText(res))">
           <n-icon size="14" :component="CopyOutline" />
         </n-button>
       </div>

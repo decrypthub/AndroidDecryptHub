@@ -914,6 +914,23 @@ export function httpCapturePreview(text: string): string {
 }
 
 /** Preview stored on a capture. TLS records prefer the URL / status line over a raw header dump. */
+export function captureDisplayFields(c: {category:string;func:string;path?:string;hex?:string}): {activity?:{method:string;object:string;result:string}} {
+  if(c.category!=='system'&&c.category!=='file')return {};
+  let fields:Record<string,unknown>={};
+  if(typeof c.hex==='string'&&c.hex.length<=32768&&/^(?:[a-f\d]{2})*$/i.test(c.hex)){
+    try{
+      const raw=new TextDecoder('utf-8',{fatal:true}).decode(Buffer.from(c.hex,'hex'));
+      if(raw.startsWith('{')){const value=JSON.parse(raw);if(value&&typeof value==='object'&&!Array.isArray(value))fields=value;}
+      else for(const field of raw.split('\t')){const i=field.indexOf('=');if(i>0)fields[field.slice(0,i)]=field.slice(i+1);}
+    }catch{/* Unknown/binary/truncated shapes retain the original preview and raw detail. */}
+  }
+  const text=(v:unknown)=>typeof v==='string'||typeof v==='number'?String(v):'';
+  const object=c.path||text(fields.path)||text(fields.arg)||(text(fields.name)?text(fields.name)+(text(fields.value)?' = '+text(fields.value):''):'');
+  const result=text(fields.error)?'异常：'+text(fields.error):fields.ret!==undefined?'返回 '+text(fields.ret):fields.result!==undefined?'结果 '+text(fields.result):'';
+  if(!object&&!result&&!text(fields.target))return {};
+  return {activity:{method:(text(fields.target)||c.func).slice(0,240),object:object.slice(0,400),result:result.slice(0,160)}};
+}
+
 export function previewForCapture(func: string, hex: string): string {
   if (func === 'SSL_write' || func === 'SSL_read') {
     const url = httpCapturePreview(hexHead(hex, 4096));

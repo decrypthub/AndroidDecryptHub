@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch, onMounted, onUnmounted } from 'vue';
+import { computed, reactive, ref, watch, onMounted, onUnmounted, onActivated, onDeactivated, nextTick } from 'vue';
 import { store, belongsToApp, capRemoveWhere, capVisible, capDisplayCap, DISPLAY_CAPS, panelDisplay, savePanelDisplay, toast } from '../store';
+import { downloadBlob } from '../user_actions';
 import { getCaptures, getExchanges, getCaptureDetail, type Cap } from '../api';
-import { catClass, cryptoView, captureLengths, rowLens, fmtTime, CATLABEL, type CatKey } from '../capview';
+import { catClass, cryptoView, captureLengths, rowLens, systemRow, fmtTime, CATLABEL, type CatKey } from '../capview';
 import { SearchOutline } from '@vicons/ionicons5';
 import CapDetail from './CapDetail.vue';
 import ExchangeDetail from './ExchangeDetail.vue';
@@ -19,6 +20,9 @@ interface Exchange {
   captureIds?: number[]; note?: string; request?: ExchangePart; response?: ExchangePart;
 }
 
+const active = ref(true);
+let pageRequest=0,exchangeRequest=0;
+const identity=()=>store.selectedDeviceKey+'\n'+store.chosenPkg+'\n'+props.kind;
 const filter = reactive({
   q: '', min: null as number | null, max: null as number | null,
   cat: -2, paused: false, kind: 'all',
@@ -118,7 +122,7 @@ const visible = computed(() => applyClientFilter(pagedItems.value ??
 
 async function loadServerPage(beforeId: number | null) {
   if (!store.chosenPkg || props.kind === 'net') return;
-  const pkg = store.chosenPkg;
+  const pkg = store.chosenPkg, target=identity(), token=++pageRequest;
   pageLoading.value = true;
   try {
     const qTrim = filter.q.trim();
@@ -131,7 +135,7 @@ async function loadServerPage(beforeId: number | null) {
       q: qTrim && !/^#\d+$/.test(qTrim) ? qTrim : undefined,
       limit: capDisplayCap.value,
     });
-    if (store.chosenPkg !== pkg) return;
+    if (identity() !== target || token !== pageRequest) return;
     const list = r.captures ?? r.items ?? [];
     for (const c of list) if (c.sessionId && c.package) store.sessionPkg.set(c.sessionId, c.package);
     pagedItems.value = list;
@@ -140,9 +144,10 @@ async function loadServerPage(beforeId: number | null) {
     const el = document.getElementById(LIST_ID[props.kind]);
     el?.scrollTo({ top: 0 });
   } catch {
+    if(identity() !== target || token !== pageRequest)return;
     toast('读取分页记录失败');
   } finally {
-    pageLoading.value = false;
+    if(identity() === target && token === pageRequest)pageLoading.value = false;
   }
 }
 
@@ -150,20 +155,21 @@ async function loadServerPage(beforeId: number | null) {
 const exLoadedOnce = ref(false);
 async function loadExchanges() {
   if (props.kind !== 'net' || !store.chosenPkg) { exchanges.value = []; return; }
-  const pkg = store.chosenPkg;
+  const pkg = store.chosenPkg, target=identity(), token=++exchangeRequest;
   try {
     const r = await getExchanges(pkg, { fromTs: fromTs.value, toTs: toTs.value }) as {
       exchanges?: Exchange[]; http2Idle?: number;
     };
-    if (store.chosenPkg !== pkg) return; // 竞态：响应回来时包已换
+    if(identity() !== target || token !== exchangeRequest)return;
     exchanges.value = r.exchanges ?? [];
     const notes: string[] = [];
     if (r.http2Idle) notes.push(`${r.http2Idle} 条 HTTP/2 连接还没有完整请求`);
     exNotes.value = notes;
-  } catch { /* 保旧数据 */ } finally { exLoadedOnce.value = true; }
+  } catch { /* 保旧数据 */ } finally { if(identity() === target && token === exchangeRequest)exLoadedOnce.value = true; }
 }
 let exTimer = 0;
 function scheduleExchanges() {
+  if(!active.value)return;
   clearTimeout(exTimer);
   exTimer = window.setTimeout(() => void loadExchanges(), 250);
 }
@@ -293,13 +299,14 @@ const countText = computed(() => {
 });
 
 async function selectRow(c: Cap) {
+  const target=identity();
   sel.value = c.id; selExchange.value = null;
   selDetail.value = { _loading: true };
   try {
     const d = await getCaptureDetail(c.id, store.chosenPkg || undefined);
-    if (sel.value === c.id) selDetail.value = d;
+    if (identity() === target && sel.value === c.id) selDetail.value = d;
   } catch {
-    if (sel.value === c.id) selDetail.value = { _error: '读取详情失败', cap: c };
+    if (identity() === target && sel.value === c.id) selDetail.value = { _error: '读取详情失败', cap: c };
   }
 }
 function selectExchange(ex: Exchange) {
@@ -347,10 +354,8 @@ function downloadView() {
   const items = props.kind === 'net' ? matchedExchanges.value : rows.value;
   const pkg = store.chosenPkg || 'all';
   const blob = new Blob([JSON.stringify(items, null, 2)], { type: 'application/json' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob); a.download = `adh-${props.kind}-${pkg}-filtered.json`;
-  document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href);
-  toast(`已下载 ${items.length} 条`);
+  try { downloadBlob(blob, `adh-${props.kind}-${pkg}-filtered.json`); toast(`已发起下载 ${items.length} 条；请查看浏览器下载`); }
+  catch { toast('下载未能发起'); }
 }
 function clearView() {
   const pkg = store.chosenPkg;
@@ -392,27 +397,22 @@ function startDrag(e: MouseEvent) {
 }
 
 let poll = 0;
-onMounted(() => {
-  if (props.kind === 'net') void loadExchanges();
-  poll = window.setInterval(() => {
-    if (props.kind === 'net') scheduleExchanges();
-  }, 5000);
+function stopPolling(){clearInterval(poll);poll=0;clearTimeout(exTimer);pageRequest++;exchangeRequest++;pageLoading.value=false;}
+function startPolling(){if(poll)return;poll=window.setInterval(()=>{if(props.kind==='net')scheduleExchanges();},5000);}
+onMounted(()=>{if(props.kind==='net')void loadExchanges();startPolling();});
+onActivated(()=>{active.value=true;startPolling();if(props.kind==='net'&&!filter.paused)void loadExchanges();void nextTick(()=>{document.getElementById(LIST_ID[props.kind])?.scrollTo({top:scrollTop.value});});});
+onDeactivated(()=>{active.value=false;stopPolling();});
+onUnmounted(stopPolling);
+watch([()=>store.selectedDeviceKey,()=>store.chosenPkg,()=>props.kind],()=>{
+  pageRequest++;exchangeRequest++;pageLoading.value=false;
+  filter.paused=false;filter.q='';filter.min=null;filter.max=null;filter.cat=-2;filter.kind='all';
+  fromMs.value=null;toMs.value=null;advOpen.value=false;scrollTop.value=0;newCount.value=0;
+  sel.value=null;selDetail.value=null;selExchange.value=null;
+  cursorStack.value=[];currentBeforeId.value=null;pagedItems.value=null;netPage.value=1;
+  exLoadedOnce.value=false;exchanges.value=[];exNotes.value=[];
+  if(active.value)void loadExchanges();
 });
-onUnmounted(() => {
-  clearInterval(poll);
-});
-watch([() => store.selectedDeviceKey, () => store.chosenPkg, () => props.kind], () => {
-  filter.paused = false;
-  newCount.value = 0;
-  sel.value = null; selDetail.value = null; selExchange.value = null;
-  cursorStack.value = []; currentBeforeId.value = null; pagedItems.value = null; netPage.value = 1;
-  // 切应用必须清掉上一个应用的交换并重新进入加载态：否则列表会继续显示别人的请求，也不会有加载光标。
-  exLoadedOnce.value = false;
-  exchanges.value = [];
-  exNotes.value = [];
-  void loadExchanges();
-});
-watch(() => store.capItems.length, () => { if (props.kind === 'net' && !hasTimeRange.value) scheduleExchanges(); });
+watch(()=>store.capItems.length,()=>{if(active.value&&props.kind==='net'&&!hasTimeRange.value)scheduleExchanges();});
 
 // 列表加载中（不铺骨架）：只用来把列表区光标切成加载态、压住空态文案。
 // 列表里已经有行时一律保留旧行，不做任何占位，避免每次刷新整块闪一下。
@@ -448,7 +448,11 @@ const footHint = computed(() => {
 });
 const listFootLeft = computed(() => {
   if (pageLoading.value) return '读取中…';
-  const parts = [`共 ${bucketTotal.value.toLocaleString('zh-CN')} 条`, `第 ${pageNumber.value} 页`];
+  const matched=props.kind==='net'?matchedExchangesAll.value.length:visible.value.length;
+  const totalLabel=filterActive.value||isHistoricalMode.value
+    ? `${isHistoricalMode.value?'本页':'当前窗口'}匹配 ${matched.toLocaleString('zh-CN')} 条`
+    : `保留窗口共 ${bucketTotal.value.toLocaleString('zh-CN')} 条`;
+  const parts = [totalLabel, `第 ${pageNumber.value} 页`];
   if (hasTimeRange.value) parts.push('时间段筛选');
   else if (isHistoricalMode.value) parts.push('历史记录');
   else if (filter.paused) parts.push('已暂停刷新');
@@ -488,7 +492,7 @@ const searchPlaceholder = computed(() =>
             :title="filter.paused ? '恢复列表刷新' : '只停列表刷新'"
             @click="filter.paused = !filter.paused">{{ filter.paused ? '继续' : '暂停刷新' }}</n-button>
           <n-dropdown trigger="click" :options="MORE_OPTS" @select="onMoreSelect">
-            <n-button quaternary size="small" title="更多">⋯</n-button>
+            <n-button quaternary size="small" title="记录列表操作" aria-label="记录列表操作">⋯</n-button>
           </n-dropdown>
         </div>
       </div>
@@ -592,11 +596,11 @@ const searchPlaceholder = computed(() =>
                 <div class="top">
                   <span class="seq">#{{ c.id }}</span>
                   <span class="pill" :class="catClass(c)">{{ CATLABEL[catClass(c)] }}</span>
-                  <span class="algo">{{ c.algo }}</span>
-                  <span class="op">{{ c.op }}</span>
+                  <span class="algo" :title="systemRow(c).method">{{ systemRow(c).method }}</span>
+                  <span class="op">{{ systemRow(c).result }}</span>
                   <span class="ts">{{ fmtTime(c.ts) }}</span>
                 </div>
-                <div class="lens">{{ rowLens(c) }}</div>
+                <div class="lens" :title="rowLens(c)">{{ rowLens(c) }}</div>
                 <div v-if="c.preview && c.category !== 'net' && c.category !== 'file' && c.category !== 'system'"
                   class="preview">{{ c.preview }}</div>
               </template>

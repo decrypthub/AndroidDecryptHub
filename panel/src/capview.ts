@@ -84,6 +84,14 @@ export function captureLengthText(length: CaptureLength): string {
     ? ` · 已捕获 ${length.captured} B${length.inconsistent ? '（长度不一致）' : ''}` : '';
   return `${length.reported} B${extra}`;
 }
+function compactContentPreview(c:Cap,fallback:string,length:CaptureLength):string {
+  const binary=()=>`二进制${length.bytes!=null?' · '+length.bytes+' B':''}`;
+  if(typeof c.hex==='string'&&c.hex.length&&/^(?:[a-f\d]{2})*$/i.test(c.hex)){
+    try{const text=new TextDecoder('utf-8',{fatal:true}).decode(Uint8Array.from(c.hex.slice(0,512).match(/../g)??[],p=>parseInt(p,16)),{stream:c.hex.length>512});if(/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(text))return binary();return text.slice(0,100);}
+    catch{return binary();}
+  }
+  return fallback&&((fallback.match(/\./g)?.length??0)/fallback.length)<0.3?fallback.slice(0,100):length.bytes?binary():fallback;
+}
 export interface CryptoView {
   title: string; direction: string; hook: string; sizeLabel: string;
   truncated: boolean; outputTruncated: boolean; hasKey: boolean; preview: string; show: boolean;
@@ -112,7 +120,7 @@ export function cryptoView(c: Cap): CryptoView {
     title: concrete || (java ? '未识别' : native.title),
     direction, hook,
     sizeLabel: input && output ? `${input} → ${output}` : input || output,
-    truncated, outputTruncated: lengths.output.truncated, hasKey: !!(c.hasKey || c.keyHex), preview: readable, show: hasBody,
+    truncated, outputTruncated: lengths.output.truncated, hasKey: !!(c.hasKey || c.keyHex), preview: compactContentPreview(c, readable, lengths.input), show: hasBody,
   };
 }
 
@@ -136,16 +144,27 @@ export function httpListPreview(text: string | undefined): string {
   return line || raw.slice(0, 120);
 }
 
+export function systemRow(c: Cap): {method:string;object:string;result:string} {
+  const activity=c.activity as Record<string,unknown>|undefined;
+  if(activity&&typeof activity.method==='string'&&typeof activity.object==='string'&&typeof activity.result==='string')return activity as {method:string;object:string;result:string};
+  let raw=String(c.preview??''),fields:Record<string,unknown>={};
+  if(typeof c.hex==='string'&&c.hex.length<=32768&&/^(?:[a-f\d]{2})*$/i.test(c.hex)){
+    try{raw=new TextDecoder('utf-8',{fatal:true}).decode(Uint8Array.from(c.hex.match(/../g)??[],p=>parseInt(p,16)));}catch{/* use the recorded preview */}
+  }
+  if(raw.startsWith('{')){try{const parsed=JSON.parse(raw);if(parsed&&typeof parsed==='object'&&!Array.isArray(parsed))fields=parsed;}catch{/* incomplete JSON stays visible */}}
+  else for(const part of raw.split('\t')){const i=part.indexOf('=');if(i>0)fields[part.slice(0,i)]=part.slice(i+1);}
+  const text=(value:unknown)=>typeof value==='string'||typeof value==='number'?String(value):'';
+  const object=c.path||text(fields.path)||text(fields.arg)||(text(fields.name)?text(fields.name)+(text(fields.value)?' = '+text(fields.value):''):'')||raw;
+  const result=text(fields.error)?'异常：'+text(fields.error):fields.ret!==undefined?'返回 '+text(fields.ret):fields.result!==undefined?'结果 '+text(fields.result):'';
+  return {method:text(fields.target)||String(c.func||c.algo||'未知调用'),object,result};
+}
+
 export function rowLens(c: Cap): string {
   if (c.category === 'net') {
     const shown = httpListPreview(c.preview);
     return shown || `in:${c.inl ?? 0}B`;
   }
-  if (c.category === 'file')
-    return c.path || (c.preview?.charAt(0) === '/' ? c.preview : '') ||
-      ((c.func === 'open' || c.func === 'openat') ? c.preview : '') || `in:${c.inl ?? 0}B`;
-  if (c.category === 'system')
-    return c.preview || `in:${c.inl ?? 0}B`;
+  if(c.category==='file'||c.category==='system')return systemRow(c).object||'未记录对象';
   let meta = `in:${c.inl ?? 0}B`;
   if (c.outl) meta += ` · out:${c.outl}B`;
   return meta;

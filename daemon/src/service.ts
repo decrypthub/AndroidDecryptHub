@@ -16,7 +16,7 @@ import { basename, join } from 'node:path';
 import {
   frameJson, agentSockets, pending, nextCmdId, sessions, dumps, log, rememberDump,
   captureTimers, captureModules, settings, recentJavaIn, captures,
-  pushCapture, pushCaptureBatch, broadcast, hexToPreview, previewForCapture, classify, categoryOf, capStats,
+  pushCapture, pushCaptureBatch, broadcast, hexToPreview, previewForCapture, captureDisplayFields, classify, categoryOf, capStats,
   pruneArtifacts, DATA_DIR, captureSettingsForPackage, CRYPTO_FAMILY_KEYS, packageFamilies,
 } from './state.ts';
 import { shouldAutoArmPackage, scopedApps } from './scope_list.ts';
@@ -1247,6 +1247,7 @@ function processCaptureFrame(sid: string, r: any, now: number) {
       algo: entry.algo, op: entry.op, func: entry.func, preview: entry.preview, inl: entry.inl, outl,
       ...(entry.path ? { path: entry.path } : {}),
       hasKey: !!entry.keyHex, tid: entry.tid, ts: entry.ts,
+      ...captureDisplayFields(entry),
       ...(entry.category === 'crypto' ? { view: cryptoView(entry) } : {}),
     });
   };

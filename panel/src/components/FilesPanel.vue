@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import {copyText, downloadBlob} from '../user_actions';
 import { computed, onMounted, ref, shallowRef, watch, type Component } from 'vue';
 import {
   AlertCircleOutline,
@@ -295,20 +296,14 @@ function downloadPreview() {
   const pv = preview.value;
   if (!pv || typeof pv.b64 !== 'string') return;
   const bytes = pv.bytes ?? decodeBase64(pv.b64);
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([bytes]));
-  a.download = pv.name;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(a.href);
-  toast(`已下载 ${pv.name}`);
+  try {downloadBlob(new Blob([bytes]),pv.name);toast(`已发起下载 ${pv.name}；请查看浏览器下载`);}
+  catch{toast('下载未能发起');}
 }
 
 function copyPreview() {
   const text = currentPreviewContent.value;
-  if (!text) return;
-  void navigator.clipboard?.writeText(text).then(() => toast('已复制'), () => toast('复制失败'));
+  if (text == null) return;
+  void copyText(text).then(() => toast('已复制'), (error:Error) => toast('复制失败：'+error.message));
 }
 
 function toggleSort(key: SortKey) {
@@ -337,7 +332,8 @@ const fmtMtime = (m?: number) => {
   return new Date(ms).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 };
 
-watch(() => store.chosenPkg, () => {
+watch([() => store.selectedDeviceKey, () => store.chosenPkg], () => {
+  listSeq++;
   // 切应用时让在途的文件读取失效，否则上一个应用的文件内容会落进新应用的预览区。
   readSeq++;
   path.value = '';

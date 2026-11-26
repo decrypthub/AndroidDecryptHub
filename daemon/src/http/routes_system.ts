@@ -29,7 +29,7 @@ import {
   broadcast, captureHealth, capturePackage, captures, captureSettingsForPackage, captureTimers,
   clearCaptureStore, clearPackageCaptureStore, configStats, cryptoIdentify, DATA_DIR, dumps, eventPackage,
   events, EVENTS_FILE, exportPackageCapturesJsonl, hexToPreview, hostSettingsSnapshot, log, packageCaptureDiskStats,
-  previewForCapture, readBody, sessions, settings, type Capture,
+  previewForCapture, captureDisplayFields, readBody, sessions, settings, type Capture,
 } from '../state.ts';
 import type { Route, RouteContext } from './types.ts';
 
@@ -336,6 +336,7 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
           id: c.id, sessionId: c.sessionId, deviceBinding:c.deviceBinding, package: capturePackage(c), source: c.source, category: c.category,
           algo: c.algo, op: c.op, func: c.func, inl: c.inl, outl: c.outHex ? c.outHex.length / 2 : 0,
           hasKey: !!c.keyHex, tid: c.tid, ts: c.ts,
+          ...captureDisplayFields(c),
           preview: c.category === 'net' ? previewForCapture(c.func, c.hex) : c.preview,
           ...(c.path ? { path: c.path } : {}),
           ...(c.category === 'crypto' ? { view: cryptoView(c) } : {}),

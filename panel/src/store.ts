@@ -74,6 +74,7 @@ export const store = reactive({
   // 视图
   view: 'cc' as 'cc' | 'sy' | 'nt' | 'files' | 'dump' | 'settings',
   appDialogOpen: false,
+  hookSource: null as null | {serial:string;package:string;methodId:string;recordId:number;returnView:'cc'|'sy'|'nt'},
 });
 
 // Target selection belongs to this tab. Historical captures carry their own immutable proof.
@@ -211,7 +212,13 @@ function persistDevicePrefs(mode: 'merge' | 'remove' = 'merge', removedKey?: str
 }
 export function devicePref(key: string): DevicePref { return store.devicePrefs[key] ?? {}; }
 /** 显示名：用户命名优先，其次型号，最后串号。 */
-export function deviceLabel(d: DeviceView): string { return d.name || d.model || d.serial; }
+export function deviceLabel(d: DeviceView): string {
+  const label=d.name||d.model||d.serial;
+  const duplicates=store.devices.filter(other=>(other.name||other.model||other.serial)===label&&other.serial!==d.serial);
+  if(!duplicates.length)return label;
+  const tail=d.serial.slice(-4),suffix=duplicates.some(other=>other.serial.slice(-4)===tail)?d.serial:tail;
+  return `${label} · ${suffix}`;
+}
 export function rememberDevice(key: string, name?: string) {
   const current = devicePref(key);
   const clean = (name ?? '').trim().slice(0, 40);
