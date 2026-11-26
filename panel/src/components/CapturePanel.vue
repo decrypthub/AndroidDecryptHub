@@ -31,7 +31,6 @@ const exchanges = ref<Exchange[]>([]);
 const exNotes = ref<string[]>([]);
 const scrollTop = ref(0);
 const newCount = ref(0);
-const radarText = ref('');
 let lastShown = 0;
 
 // ---- 分页与时间窗口状态 ----
@@ -356,18 +355,61 @@ const MORE_OPTS = [
 ];
 function onMoreSelect(k: string) { if (k === 'dl') downloadView(); else clearView(); }
 
-// ---- 系统板块：检测摘要（对齐旧 sy-radar）----
-async function loadRadar() {
-  if (props.kind !== 'system' || !store.chosenPkg) { radarText.value = ''; return; }
+// ---- 系统板块：设备指纹摘要 ----
+// 这个页签回答的问题是「这个 App 采集了哪些设备指纹」。摘要按信号去重（android_id、IMEI、
+// MAC、ro.product.*、/proc/cpuinfo……），值是应用真正读到的内容；读取失败也算采集证据，
+// 只是没有值。native 属性/路径归并来自 sysModule 捕获，Java API 归并来自 detect_java 的
+// fingerprint 家族——两类 hook 都没装时这里只是空，不代表应用清白。
+interface FpItem {
+  key: string; label: string; kind: 'identifier' | 'deviceinfo';
+  value?: string; reads: number; sources?: string[];
+}
+const fpItems = ref<FpItem[]>([]);
+const fpArmed = ref<boolean | null>(null);
+const fpExpanded = ref(false);
+
+async function loadFp() {
+  if (props.kind !== 'system' || !store.chosenPkg) { fpItems.value = []; fpArmed.value = null; return; }
+  const pkg = store.chosenPkg;
   try {
-    const r = await getDetectSummary(store.chosenPkg) as {
-      armed?: boolean; kinds?: Array<{ label: string; count: number }>;
+    const r = await getDetectSummary(pkg) as {
+      armed?: boolean | null;
+      fingerprint?: { items?: FpItem[]; identifiers?: number; info?: number };
     };
-    if (r.armed === false) { radarText.value = '系统检测：未开'; return; }
-    if (r.armed == null) { radarText.value = '系统检测：摘要未上报'; return; }
-    const hit = (r.kinds ?? []).filter(k => (k.count ?? 0) > 0).map(k => `${k.label} ${k.count}`);
-    radarText.value = '系统检测：' + (hit.length ? `已开 · ${hit.join(' · ')}` : '已开 · 暂无');
-  } catch { radarText.value = '系统检测：摘要读取失败'; }
+    if (store.chosenPkg !== pkg) return;
+    fpArmed.value = r.armed ?? null;
+    fpItems.value = r.fingerprint?.items ?? [];
+  } catch {
+    if (store.chosenPkg === pkg) { fpArmed.value = null; fpItems.value = []; }
+  }
+}
+
+const fpCounts = computed(() => ({
+  ids: fpItems.value.filter(i => i.kind === 'identifier').length,
+  info: fpItems.value.filter(i => i.kind === 'deviceinfo').length,
+}));
+const fpVisible = computed(() => {
+  if (fpExpanded.value) return fpItems.value;
+  const ids = fpItems.value.filter(i => i.kind === 'identifier');
+  const info = fpItems.value.filter(i => i.kind === 'deviceinfo');
+  return [...ids.slice(0, 8), ...info.slice(0, Math.max(0, 8 - ids.length))].slice(0, 8);
+});
+const fpHiddenCount = computed(() => fpItems.value.length - fpVisible.value.length);
+const fpHeadText = computed(() => {
+  if (!fpItems.value.length) {
+    if (fpArmed.value === false) return '系统检测未开——布防后可观测指纹采集';
+    if (fpArmed.value === null) return '暂无指纹采集记录';
+    return '已布防，尚未观测到指纹采集';
+  }
+  const c = fpCounts.value;
+  const parts: string[] = [];
+  if (c.ids) parts.push(`${c.ids} 项标识符`);
+  if (c.info) parts.push(`${c.info} 项设备信息`);
+  return `采集到 ${parts.join(' + ') || '0 项'}`;
+});
+function fpChipTitle(it: FpItem): string {
+  const src = (it.sources ?? []).join(' / ');
+  return `${it.label}${it.value ? `：${it.value}` : '：未取到值'} · ${it.reads} 次读取${src ? ` · ${src}` : ''}`;
 }
 
 // ---- 分栏拖动 ----
@@ -395,9 +437,12 @@ function startDrag(e: MouseEvent) {
 let poll = 0;
 onMounted(() => {
   if (props.kind === 'net') void loadExchanges();
-  if (props.kind === 'system') void loadRadar();
+  if (props.kind === 'system') void loadFp();
   document.addEventListener('click', onDocClick);
-  poll = window.setInterval(() => { if (props.kind === 'net') scheduleExchanges(); }, 5000);
+  poll = window.setInterval(() => {
+    if (props.kind === 'net') scheduleExchanges();
+    if (props.kind === 'system') void loadFp();
+  }, 5000);
 });
 onUnmounted(() => {
   clearInterval(poll);
@@ -406,7 +451,8 @@ onUnmounted(() => {
 watch(() => store.chosenPkg, () => {
   sel.value = null; selDetail.value = null; selExchange.value = null;
   cursorStack.value = []; currentBeforeId.value = null; pagedItems.value = null; netPage.value = 1;
-  void loadExchanges(); void loadRadar();
+  fpExpanded.value = false;
+  void loadExchanges(); void loadFp();
 });
 watch(() => store.capItems.length, () => { if (props.kind === 'net' && !hasTimeRange.value) scheduleExchanges(); });
 
@@ -467,7 +513,6 @@ const searchPlaceholder = computed(() =>
                 <n-radio-group v-model:value="filter.kind" size="small">
                   <n-radio-button v-for="[k, l] in SYS_KINDS" :key="k" :value="k">{{ l }}</n-radio-button>
                 </n-radio-group>
-                <p v-if="radarText" class="detect-radar">{{ radarText }}</p>
               </fieldset>
               <label v-if="kind === 'crypto'" class="filter-field">分类
                 <n-select v-model:value="filter.cat" size="small" class="cat-select" :options="[
@@ -512,6 +557,25 @@ const searchPlaceholder = computed(() =>
         </div>
       </div>
     </div>
+
+    <section v-if="kind === 'system' && store.chosenPkg" class="fp-strip" aria-label="设备指纹摘要">
+      <div class="fp-head">
+        <strong class="fp-title">设备指纹</strong>
+        <span class="fp-meta" :class="{ dim: !fpItems.length }">{{ fpHeadText }}</span>
+        <n-button v-if="fpHiddenCount > 0 || fpExpanded" text size="tiny" class="fp-toggle"
+          @click="fpExpanded = !fpExpanded">{{ fpExpanded ? '收起' : `其余 ${fpHiddenCount} 项` }}</n-button>
+      </div>
+      <div v-if="fpItems.length" class="fp-items">
+        <n-tag v-for="it in fpVisible" :key="it.key" size="small" :bordered="false"
+          :type="it.kind === 'identifier' ? 'warning' : 'default'" class="fp-chip"
+          :title="fpChipTitle(it)">
+          <span class="fp-label">{{ it.label }}</span>
+          <span v-if="it.value" class="fp-value">{{ it.value }}</span>
+          <span v-else class="fp-value none">未取到</span>
+          <span v-if="it.reads > 1" class="fp-reads">×{{ it.reads }}</span>
+        </n-tag>
+      </div>
+    </section>
 
     <div class="workspace capture-workspace" :class="{ 'compact-captures': panelDisplay.density === 'compact', 'detail-open': sel !== null, 'no-results': !showSkeleton && sel === null && !(kind === 'net' ? matchedExchanges.length : rows.length) }">
       <div class="list-pane" :style="listWidth ? { width: listWidth + 'px' } : undefined">

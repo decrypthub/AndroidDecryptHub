@@ -61,13 +61,89 @@ test('property name and value pick the checklist row', () => {
     { func: 'sysprop', text: 'ret=1\tlr=0x4\tname=ro.debuggable\tvalue=1' },
     { func: 'propread', text: 'lr=0x5\tname=ro.kernel.qemu\tvalue=1' },
     { func: 'sysprop', text: 'ret=2\tlr=0x6\tname=ro.build.tags\tvalue=test-keys' },
-    { func: 'sysprop', text: 'ret=4\tlr=0x7\tname=persist.sys.locale\tvalue=zh-CN' },
+    { func: 'sysprop', text: 'ret=4\tlr=0x7\tname=ro.opengles.version\tvalue=196610' },
   ], true);
   assert.equal(s.kinds.find((k) => k.kind === 'debug')?.count, 1);
   assert.equal(s.kinds.find((k) => k.kind === 'emulator')?.count, 1);
   assert.equal(s.kinds.find((k) => k.kind === 'root')?.count, 1);
   assert.equal(s.kinds.find((k) => k.kind === 'prop')?.count, 1);
   assert.match(s.kinds.find((k) => k.kind === 'debug')?.examples[0] ?? '', /ro\.debuggable=1/);
+});
+
+test('fingerprint props sort into identifier/deviceinfo instead of emulator', () => {
+  const s = summarizeDetection([
+    { func: 'sysprop', text: 'ret=12\tlr=0x8\tname=ro.serialno\tvalue=abc123' },
+    { func: 'sysprop', text: 'ret=6\tlr=0x9\tname=ro.product.model\tvalue=PGZ110' },
+    { func: 'sysprop', text: 'ret=40\tlr=0xa\tname=ro.build.fingerprint\tvalue=OnePlus/x' },
+    { func: 'propread', text: 'lr=0xb\tname=ro.hardware\tvalue=qcom' },
+    { func: 'propread', text: 'lr=0xc\tname=ro.hardware\tvalue=goldfish' },
+  ], true);
+  assert.equal(s.kinds.find((k) => k.kind === 'identifier')?.count, 1);
+  assert.equal(s.kinds.find((k) => k.kind === 'deviceinfo')?.count, 3);
+  // goldfish-valued hardware is the emulator signal; qcom hardware is fingerprint data.
+  assert.equal(s.kinds.find((k) => k.kind === 'emulator')?.count, 1);
+  const model = s.fingerprint.items.find((i) => i.key === 'prop:ro.product.model');
+  assert.equal(model?.value, 'PGZ110');
+  assert.equal(model?.kind, 'deviceinfo');
+  const serial = s.fingerprint.items.find((i) => i.key === 'prop:ro.serialno');
+  assert.equal(serial?.kind, 'identifier');
+  assert.equal(serial?.value, 'abc123');
+});
+
+test('fingerprint paths classify: NIC address is an identifier, cpuinfo is device info', () => {
+  assert.equal(pathKind('/sys/class/net/wlan0/address'), 'identifier');
+  assert.equal(pathKind('/proc/cpuinfo'), 'deviceinfo');
+  assert.equal(pathKind('/proc/meminfo'), 'deviceinfo');
+  assert.equal(pathKind('/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq'), 'deviceinfo');
+  assert.equal(pathKind('/data/data/com.example.app/files/x'), null);
+  const s = summarizeDetection([
+    { func: 'openat', text: 'ret=9\tlr=0x1\tpath=/sys/class/net/wlan0/address' },
+    { func: 'openat', text: 'ret=9\tlr=0x1\tpath=/proc/cpuinfo' },
+  ], true);
+  assert.equal(s.fingerprint.identifiers, 1);
+  assert.equal(s.fingerprint.info, 1);
+  assert.equal(s.fingerprint.items.find((i) => i.key === 'path:/proc/cpuinfo')?.reads, 1);
+});
+
+test('java fingerprint hits carry the collected value, errors still count as evidence', () => {
+  const s = summarizeDetection([
+    { func: 'JAVA_HOOK', text: JSON.stringify({
+      target: 'android.provider.Settings$Secure.getString(android.content.ContentResolver,java.lang.String)',
+      arg: '0=android.content.ContentResolver@abc, 1=android_id', ret: '9774d56d682e549c', error: '' }) },
+    { func: 'JAVA_HOOK', text: JSON.stringify({
+      target: 'android.telephony.TelephonyManager.getImei(int)',
+      arg: '0', ret: 'null', error: 'java.lang.SecurityException: no permission' }) },
+    { func: 'JAVA_HOOK', text: JSON.stringify({
+      target: 'android.telephony.TelephonyManager.getSubscriberId()', arg: '', ret: '460011234567890', error: '' }) },
+    { func: 'JAVA_HOOK', text: JSON.stringify({
+      target: 'java.net.NetworkInterface.getHardwareAddress()', arg: '', ret: '020000000000(6B)', error: '' }) },
+    { func: 'JAVA_HOOK', text: JSON.stringify({
+      target: 'android.provider.Settings$Secure.getString(android.content.ContentResolver,java.lang.String)',
+      arg: '0=android.content.ContentResolver@abc, 1=screen_brightness', ret: '120', error: '' }) },
+    { func: 'JAVA_HOOK', text: JSON.stringify({
+      target: 'android.app.ApplicationPackageManager.getInstalledPackages(int)', arg: '0', ret: '[...]', error: '' }) },
+    { func: 'JAVA_HOOK', text: JSON.stringify({
+      target: 'android.hardware.SensorManager.getSensorList(int)', arg: '-1', ret: '[...]', error: '' }) },
+  ], true);
+  const ids = s.fingerprint.items.filter((i) => i.kind === 'identifier');
+  assert.equal(ids.length, 4);   // android_id + imei + imsi + mac（screen_brightness 不算）
+  assert.equal(ids.find((i) => i.key === 'android_id')?.value, '9774d56d682e549c');
+  // SecurityException 也是采集证据：imei 条目存在但没有 value。
+  const imei = ids.find((i) => i.key === 'imei');
+  assert.ok(imei);
+  assert.equal(imei?.value, undefined);
+  assert.match(s.hits.find((h) => h.fp?.key === 'imei')?.detail ?? '', /SecurityException/);
+  assert.equal(s.fingerprint.info, 2);   // 应用列表 + 传感器
+  assert.equal(s.kinds.find((k) => k.kind === 'identifier')?.count, 4);
+});
+
+test('fingerprint dedupe: repeated reads count once per signal with read totals', () => {
+  const rec = (ts: number) => ({ func: 'sysprop', text: 'ret=6\tlr=0x9\tname=ro.product.model\tvalue=PGZ110', ts });
+  const s = summarizeDetection([rec(100), rec(200), rec(300)], true);
+  const model = s.fingerprint.items.find((i) => i.key === 'prop:ro.product.model');
+  assert.equal(model?.reads, 3);
+  assert.equal(model?.firstTs, 100);
+  assert.equal(model?.lastTs, 300);
 });
 
 test('only the named Java detection methods join the checklist', () => {
@@ -95,7 +171,7 @@ test('an empty store says whether the hooks were armed', () => {
   // fallthrough rendered an unknown state as nothing at all.
   const unknown = summarizeDetection([], null);
   assert.match(unknown.reason, /^状态未知$/);
-  assert.match(on.caveat, /直接读手机型号/);
+  assert.match(on.caveat, /Build\.MODEL/);
 });
 
 test('install reply: a positive system counter is armed, negatives are not', () => {
@@ -148,6 +224,41 @@ test('the java plan refuses an unknown family and leaves File.exists out unless 
   assert.equal(detectJavaPlan(['file']).hooks[0].hot, true);
   assert.equal(detectJavaPlan(['nope']).ok, false);
   assert.equal(detectJavaPlan([]).ok, false);
+});
+
+test('the fingerprint family covers identifiers and inventory, ad-id stays optional', () => {
+  const fp = detectJavaPlan(['fingerprint']);
+  assert.equal(fp.ok, true);
+  const methods = fp.hooks.map((h) => `${h.className}.${h.method}`);
+  for (const want of [
+    'android.provider.Settings$Secure.getString',
+    'android.telephony.TelephonyManager.getImei',
+    'android.telephony.TelephonyManager.getSubscriberId',
+    'android.net.wifi.WifiInfo.getMacAddress',
+    'java.net.NetworkInterface.getHardwareAddress',
+    'android.app.ApplicationPackageManager.getInstalledPackages',
+    'android.hardware.SensorManager.getSensorList',
+  ]) assert.ok(methods.includes(want), `missing ${want}`);
+  const adid = fp.hooks.find((h) => h.className.includes('AdvertisingIdClient'));
+  assert.equal(adid?.optional, true);
+  assert.equal(fp.hooks.filter((h) => !h.optional).length, fp.hooks.length - 1);
+});
+
+test('an optional ad-id failure does not flip the arm verdict, a required failure does', async () => {
+  const armed = await armDetectJava('sid', ['fingerprint'], true, async (_s, _op, args) => {
+    if (String(args?.className).includes('AdvertisingIdClient')) return { ok: false, error: 'class not found' };
+    return { ok: true, hookId: 1 };
+  });
+  assert.equal(armed.ok, true);
+  assert.equal(armed.partial, true);
+  assert.equal(armed.failed.length, 1);
+  const broken = await armDetectJava('sid', ['fingerprint'], true, async (_s, _op, args) => {
+    if (String(args?.method) === 'getImei') return { ok: false, error: 'no such method' };
+    if (String(args?.className).includes('AdvertisingIdClient')) return { ok: false, error: 'class not found' };
+    return { ok: true, hookId: 1 };
+  });
+  assert.equal(broken.ok, false);
+  assert.equal(broken.failed.length, 3);
 });
 
 test('detect_java installs only after confirm, and a refused call does not touch the agent', async () => {
