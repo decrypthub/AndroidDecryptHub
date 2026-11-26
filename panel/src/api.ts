@@ -55,6 +55,25 @@ export async function api<T = unknown>(path: string, init?: RequestInit, timeout
 }
 const post = <T = unknown>(path: string, body: unknown, timeoutMs?: number) =>
   api<T>(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }, timeoutMs);
+// POST where a non-2xx reply still carries the useful answer (the daemon puts the reason in
+// `error`). api() throws on the status and loses it, which turns "unreadable at 0x…" into "502".
+async function postDetail<T extends { error?: string }>(path: string, body: unknown, timeoutMs = 20000): Promise<T> {
+  const t0 = performance.now();
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs), cache: 'no-store',
+    });
+  } catch (e) {
+    notePerf(`POST ${path}`, performance.now() - t0);
+    throw e;
+  }
+  notePerf(`POST ${path}`, performance.now() - t0);
+  const data = await res.json().catch(() => null) as T | null;
+  if (!data || typeof data !== 'object') throw new Error(`${res.status} ${res.statusText}`);
+  return data;
+}
 
 // ---- 端点 ----
 export const getDevices = () => api<{ ok: boolean; devices: unknown[]; transports: unknown[]; localUsb?: Record<string, unknown> }>('/api/devices?action=list');
@@ -199,6 +218,38 @@ export const unpackDumpSoOne = (session: string, base: string, name: string) =>
   post('/api/unpack/dump-so-one', { session, base, name });
 export const dumpDownloadUrl = (sha: string, name?: string) =>
   `/api/dumps/download?sha=${encodeURIComponent(sha)}${name ? `&name=${encodeURIComponent(name)}` : ''}`;
+
+// ---- 内存映射：一次取全部区域 + 统计，筛选/排序/分页在面板本地做 ----
+export interface MapsRegion { start: string; end: string; size: number; perms: string; offset: string; path: string }
+export interface MapsStats {
+  total: number; readable: number; writable: number; executable: number; writableExecutable: number;
+  anonymous: number; anonymousExecutable: number; fileBacked: number;
+  mappedBytes: number; executableBytes: number; anonymousExecutableBytes: number;
+}
+export interface MapsView {
+  ok: boolean; total: number; regions: MapsRegion[]; stats: MapsStats;
+  count?: number; truncated?: boolean; error?: string;
+}
+export const memoryMaps = (session: string) =>
+  api<MapsView>(`/api/memory/maps?session=${encodeURIComponent(session)}`, undefined, 20000);
+
+export interface MemoryReadReply {
+  ok: boolean; addr?: string; size?: number; requested?: number;
+  short?: boolean; via?: string; b64?: string; error?: string;
+}
+export const memoryRead = (session: string, addr: string, size: number) =>
+  postDetail<MemoryReadReply>('/api/memory/read', { session, addr, size }, 25000);
+
+export interface MemoryDumpReply {
+  ok?: boolean; sha256?: string; size?: number; requestedSize?: number; complete?: boolean;
+  kind?: string; tag?: string; addr?: string; capturedAt?: number; dedup?: boolean; error?: string;
+}
+export const memoryDump = (session: string, addr: string, size: number) => {
+  // 转储按 1MB 分块读，超时要跟着大小走：默认 8s 会让 64MB 的转储先在客户端失败，
+  // 而服务端其实还在正常读。tag=panel 让记录列表能把「面板转储」和模型的 memory_dump 分开。
+  const budget = Math.min(600_000, 30_000 + Math.ceil(size / (1024 * 1024)) * 4_000);
+  return postDetail<MemoryDumpReply>('/api/memory/dump', { session, addr, size, tag: 'panel' }, budget);
+};
 export const moduleWatch = (session: string, action: 'start' | 'stop' | 'status' | 'list', limit = 100) =>
   post<{ ok?: boolean; watching?: boolean; installed?: boolean; error?: string; count?: number; modules?: ModuleLoadRec[] }>(
     '/api/module/watch', { session, action, limit });

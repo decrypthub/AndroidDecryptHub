@@ -16,6 +16,7 @@ import { localObserver } from '../local_observer.ts';
 import { jniFieldDigest } from '../jni_field_digest.ts';
 import { syscallTraceStart, syscallTraceDigest, syscallTraceStop } from '../syscall_trace.ts';
 import { liveDisasm , assertCallableAddress } from '../memory.ts';
+import { mapsView } from '../maps_view.ts';
 import { listRecipes, runRecipe } from '../recipes.ts';
 import { readBody, sessions, settings, MAX_BODY_BYTES } from '../state.ts';
 import type { Route, RouteContext } from './types.ts';
@@ -72,6 +73,24 @@ export function runtimeRoutes({ req, url, send }: RouteContext): Route[] {
         const r = await sendCmd(sid, 'maps');
         if (r.ok) { const s = sessions.get(sid); if (s) s.mapsCount = r.count; }
         return send(r.ok ? 200 : 502, r);
+      } catch (e) { return send(504, { error: (e as Error).message }); }
+    } },
+    // Panel view of the address space: every region normalized once, plus the aggregates a client
+    // would otherwise recompute (and get subtly wrong) from thousands of raw lines. The browser
+    // filters/sorts/pages locally, so one load is the whole interaction budget. The model-facing
+    // equivalent stays maps_query (filtered + paged for context); both read the same maps.
+    { path: '/api/memory/maps', handler: async () => {
+      const sid = pickSid(url.searchParams.get('session'));
+      if (!sid) return send(400, { error: 'no session' });
+      try {
+        const r = await sendCmd(sid, 'maps');
+        if (!r?.ok) return send(502, r ?? { error: 'maps failed' });
+        const view = mapsView(Array.isArray(r.regions) ? r.regions : []);
+        return send(200, {
+          ...view,
+          count: typeof r.count === 'number' ? r.count : view.total,
+          truncated: r.truncated === true,
+        });
       } catch (e) { return send(504, { error: (e as Error).message }); }
     } },
     { path: '/api/java/probe', handler: async () => {
