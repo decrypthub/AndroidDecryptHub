@@ -92,6 +92,10 @@ export async function handleHttp(req: http.IncomingMessage, res: http.ServerResp
         res.setHeader('cache-control','no-store');
         return await route.handler();
       }
+      if(localObserver&&route.path==='/api/module/watch'&&req.method==='POST'&&observerHost(req.headers.host)&&sameOrigin){
+        res.setHeader('cache-control','no-store');
+        return await route.handler();
+      }
       if(!url.pathname.startsWith('/api/') || url.pathname.startsWith('/api/operations')) {
         if(url.pathname==='/mcp') {
           try{return await handleMcp(await readRequestBody(req,'mcp'),res,{principal:requestPrincipal(req.headers,'mcp',operationsRoot)});}

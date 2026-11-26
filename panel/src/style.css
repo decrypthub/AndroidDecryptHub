@@ -461,9 +461,19 @@
   /* Filenames must NOT use break-all — in a squeezed column it wraps one glyph per line. */
   .dump-table td.symname { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; color:var(--ink); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .dump-table td.dump-path { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--muted); font:11px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace; }
+  .dump-table td.dump-path.full { white-space:normal; overflow:visible; text-overflow:clip; overflow-wrap:anywhere; color:var(--ink-2); }
+  .dump-table td.dump-time { white-space:nowrap; font-variant-numeric:tabular-nums; color:var(--muted); font-size:11px; width:64px; }
+  .dump-table td .rec-sub { display:block; color:var(--muted); font-size:10px; line-height:1.5; overflow-wrap:anywhere; }
+  .dump-table .mono { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:11px; }
+  .rec-kind { font-size:10px; padding:1px 6px; border-radius:3px; border:1px solid var(--line); color:var(--ink-2); white-space:nowrap; }
+  .rec-kind[data-k="脱壳包"] { color:var(--green); border-color:var(--green); }
+  .watch-bar { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
+  .watch-state { font-size:12px; }
+  .watch-state.on { color:var(--green); }
+  .dump-table.watch-events { margin-bottom:16px; }
   .dump-table td.dump-size { width:72px; white-space:nowrap; font-variant-numeric:tabular-nums; }
   .dump-table th.dump-size, .dump-table td.dump-size { width:72px; }
-  .dump-table.pkg-so th:nth-child(1), .dump-table.pkg-so td:nth-child(1) { width:30%; }
+  .dump-table.pkg-so th:nth-child(1), .dump-table.pkg-so td:nth-child(1) { width:auto; }
   .dump-table.pkg-so th:nth-child(2), .dump-table.pkg-so td:nth-child(2) { width:72px; }
   .dump-table.pkg-so th:nth-child(3), .dump-table.pkg-so td:nth-child(3) { width:auto; }
   .dump-table.pkg-so th:nth-child(4), .dump-table.pkg-so td:nth-child(4) { width:64px; text-align:right; white-space:nowrap; }

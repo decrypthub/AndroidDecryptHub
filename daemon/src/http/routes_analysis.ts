@@ -259,7 +259,11 @@ export function analysisRoutes({ req, res, url, send }: RouteContext): Route[] {
       const sha = url.searchParams.get('sha') ?? '';
       const m = dumps.get(sha);
       if (!m) return send(404, { error: 'no such dump' });
-      res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-disposition': `attachment; filename="${sha.slice(0, 16)}.${m.kind}.bin"` });
+      const wanted = (url.searchParams.get('name') ?? '').split(/[\/]/).pop() ?? '';
+      const safe = /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/.test(wanted) ? wanted : '';
+      const fallback = `${sha.slice(0, 16)}.${m.kind}.bin`;
+      const filename = safe || fallback;
+      res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-disposition': `attachment; filename="${filename}"` });
       return createReadStream(m.path).pipe(res);
     } },
     { path: '/', handler: () => serveDashboard(send) },
