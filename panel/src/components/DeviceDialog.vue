@@ -273,7 +273,7 @@ function forget(d: DeviceView) {
                 <strong>
                   {{ deviceLabel(detail) }}
                   <span v-if="detail.isDefault" class="device-badge">默认</span>
-                  <span v-if="detail.observed" class="device-badge accent">观察中</span>
+                  <span v-if="detail.observed" class="device-badge accent" title="本机观察：面板只从这台手机上的观察 APP 接收数据，其它手机只能查看和管理，不产生记录">本机观察</span>
                 </strong>
                 <span>{{ detail.serial }} · {{ detail.net ? '无线' : 'USB' }} · {{ adbText(detail) }}</span>
               </template>
@@ -350,7 +350,7 @@ function forget(d: DeviceView) {
                 <span class="app-name">
                   {{ deviceLabel(d) }}
                   <span v-if="d.isDefault" class="device-badge">默认</span>
-                  <span v-if="d.observed" class="device-badge accent">观察中</span>
+                  <span v-if="d.observed" class="device-badge accent" title="本机观察：面板只从这台手机上的观察 APP 接收数据">本机观察</span>
                 </span>
                 <span class="app-pkg">{{ d.serial }}<template v-if="d.net"> · 无线</template> · {{ isOnline(d) ? '已连接' : '未连接' }}<template v-if="d.observed && d.agent && !d.agent.online"> · agent 离线</template></span>
               </span>
