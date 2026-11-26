@@ -316,6 +316,9 @@ SCRIPTS=(
   "verify_v130_scope_analyze.sh:host"
   "verify_v132_p5_stdio.sh:host"
   "verify_v133_qbdi_stack.sh:device"
+  # v134: app open/stop/restart through adh.device/1 process.control on a real phone (the process
+  # really changes, the reply names the channel, and the device refuses a forged identity set).
+  "verify_v134_app_control_device.sh:device"
 )
 
 pass=0; fail=0; skip=0; FAILED=""

@@ -130,3 +130,40 @@ export async function deviceScopeReplace(serial:string,document:unknown,scopeRev
   const meta={operationId:randomUUID(),expectedRevision,actor:'panel',budgetMs:15000};
   return c.rpc.request('scope.replace',{document,scopeRevision},peerTarget(c),meta);
 }
+
+// Device state generation. A write whose expectedRevision is not this value is refused
+// device-side (STALE_DEVICE_STATE), so control calls re-read it instead of retrying blindly.
+export async function deviceState(serial:string):Promise<any|null>{
+  const c=await deviceRpc(serial);
+  if(!c)return null;
+  return c.rpc.request('device.state',{},peerTarget(c));
+}
+
+// One package can legitimately own several processes (:core, :player). Pagination is the
+// device's, so a partial page is a partial answer: `complete` says whether /proc was readable.
+export async function deviceProcesses(serial:string,pkg:string):Promise<{rows:any[];complete:boolean;total:number}|null>{
+  const c=await deviceRpc(serial);
+  if(!c)return null;
+  const target=peerTarget(c);const rows:any[]=[];let offset=0;let complete=true;let total=0;
+  for(;;){
+    const reply=await c.rpc.request('processes.list',{package:pkg,offset,limit:200},target);
+    const page=Array.isArray(reply?.processes)?reply.processes:[];
+    rows.push(...page);
+    if(typeof reply?.total==='number')total=reply.total;
+    if(reply?.complete===false)complete=false;
+    const next=typeof reply?.nextOffset==='number'?reply.nextOffset:null;
+    if(next===null||page.length===0)break;
+    offset=next;
+  }
+  return {rows,complete,total:total||rows.length};
+}
+
+// Two fences, both device-side: expectedProcesses must still be the live
+// (pid,uid,starttimeTicks) set (TARGET_CHANGED) and expectedRevision the current state
+// generation. The reply is the operation record; the verdict lives in .result.
+export async function deviceProcessControl(serial:string,pkg:string,action:'open'|'stop'|'restart',expected:unknown[],expectedRevision:number):Promise<any|null>{
+  const c=await deviceRpc(serial);
+  if(!c)return null;
+  const meta={operationId:randomUUID(),expectedRevision,actor:'panel',budgetMs:20000};
+  return c.rpc.request('process.control',{package:pkg,action,expectedProcesses:expected},peerTarget(c),meta,20000);
+}
