@@ -217,7 +217,10 @@ async function doDelete() {
       </dl>
       <div v-if="hasStack" class="stack-box">
         <pre>{{ c.callStack }}</pre>
-        <button type="button" class="blk-copy" title="复制" @click="copy(c.callStack || '')"><n-icon size="16" :component="CopyOutline" /></button>
+        <n-button quaternary circle size="small" class="blk-copy" title="复制"
+          @click="copy(c.callStack || '')">
+          <n-icon size="15" :component="CopyOutline" />
+        </n-button>
       </div>
     </div>
 
@@ -237,16 +240,20 @@ async function doDelete() {
           <div class="io-field-label">路径</div>
           <div class="io-data">
             <pre>{{ c.path || ((c.func === 'open' || c.func === 'openat') ? c.preview : '') || '未记录' }}</pre>
-            <button type="button" class="blk-copy" title="复制"
-              @click="copy(c.path || ((c.func === 'open' || c.func === 'openat') ? c.preview || '' : '') || '')"><n-icon size="16" :component="CopyOutline" /></button>
+            <n-button quaternary circle size="small" class="blk-copy" title="复制"
+              @click="copy(c.path || ((c.func === 'open' || c.func === 'openat') ? c.preview || '' : '') || '')">
+              <n-icon size="15" :component="CopyOutline" />
+            </n-button>
           </div>
         </div>
         <div class="io-field">
           <div class="io-field-label">详情</div>
           <div class="io-data">
             <pre>{{ [c.func, c.op, c.path ? c.preview : c.text].filter(Boolean).join('\n') }}</pre>
-            <button type="button" class="blk-copy" title="复制"
-              @click="copy([c.func, c.op, c.path ? c.preview : c.text].filter(Boolean).join('\n'))"><n-icon size="16" :component="CopyOutline" /></button>
+            <n-button quaternary circle size="small" class="blk-copy" title="复制"
+              @click="copy([c.func, c.op, c.path ? c.preview : c.text].filter(Boolean).join('\n'))">
+              <n-icon size="15" :component="CopyOutline" />
+            </n-button>
           </div>
         </div>
       </template>
@@ -256,7 +263,10 @@ async function doDelete() {
           <div class="io-field-label">KEY · {{ c.keyHex.length / 2 }}B</div>
           <div class="io-data">
             <pre class="mono">{{ formatKey(fmtIn, c.keyHex).display }}</pre>
-            <button type="button" class="blk-copy" title="复制" @click="copy(formatKey(fmtIn, c.keyHex).copyVal)"><n-icon size="16" :component="CopyOutline" /></button>
+            <n-button quaternary circle size="small" class="blk-copy" title="复制"
+              @click="copy(formatKey(fmtIn, c.keyHex).copyVal)">
+              <n-icon size="15" :component="CopyOutline" />
+            </n-button>
           </div>
         </div>
       </template>
@@ -265,7 +275,10 @@ async function doDelete() {
           <div class="io-field-label">IV · {{ c.ivHex.length / 2 }}B</div>
           <div class="io-data">
             <pre class="mono">{{ formatKey(fmtIn, c.ivHex).display }}</pre>
-            <button type="button" class="blk-copy" title="复制" @click="copy(formatKey(fmtIn, c.ivHex).copyVal)"><n-icon size="16" :component="CopyOutline" /></button>
+            <n-button quaternary circle size="small" class="blk-copy" title="复制"
+              @click="copy(formatKey(fmtIn, c.ivHex).copyVal)">
+              <n-icon size="15" :component="CopyOutline" />
+            </n-button>
           </div>
         </div>
       </template>
@@ -275,8 +288,10 @@ async function doDelete() {
           <div class="io-field-label">{{ inDataLabel }} · {{ bytes(c.inl ?? (c.hex ? c.hex.length / 2 : undefined)) }}{{ inRawKind ? ' · ' + inRawKind : '' }}</div>
           <div class="io-data main">
             <pre :class="{ mono: formatBlock(fmtIn, c.hex, c.text).mono }">{{ formatBlock(fmtIn, c.hex, c.text).display }}</pre>
-            <button type="button" class="blk-copy" title="复制内容"
-              @click="copy(formatBlock(fmtIn, c.hex, c.text).copyVal)"><n-icon size="16" :component="CopyOutline" /></button>
+            <n-button quaternary circle size="small" class="blk-copy" title="复制内容"
+              @click="copy(formatBlock(fmtIn, c.hex, c.text).copyVal)">
+              <n-icon size="15" :component="CopyOutline" />
+            </n-button>
           </div>
         </div>
       </template>
@@ -289,8 +304,10 @@ async function doDelete() {
           <div class="io-field-label">{{ outDataLabel }} · {{ bytes(outBytes) }}{{ outRawKind ? ' · ' + outRawKind : '' }}</div>
           <div class="io-data main">
             <pre :class="{ mono: formatBlock(fmtOut, c.outHex).mono }">{{ formatBlock(fmtOut, c.outHex).display }}</pre>
-            <button type="button" class="blk-copy" title="复制内容"
-              @click="copy(formatBlock(fmtOut, c.outHex).copyVal)"><n-icon size="16" :component="CopyOutline" /></button>
+            <n-button quaternary circle size="small" class="blk-copy" title="复制内容"
+              @click="copy(formatBlock(fmtOut, c.outHex).copyVal)">
+              <n-icon size="15" :component="CopyOutline" />
+            </n-button>
           </div>
         </div>
       </template>
@@ -355,17 +372,14 @@ async function doDelete() {
   overflow: auto;
 }
 .io-data pre.mono { font-family: ui-monospace, Consolas, 'Cascadia Mono', monospace; }
+/* 复制按钮：naive-ui 圆形图标按钮，悬停/聚焦数据块才显现，定位不变 */
 .blk-copy {
   position: absolute; top: 6px; right: 6px;
-  width: 30px; height: 28px;
-  border: 0; border-radius: 6px;
-  background: transparent; color: inherit;
-  cursor: pointer; opacity: 0;
-  display: flex; align-items: center; justify-content: center;
+  opacity: 0;
+  transition: opacity .12s;
 }
-.io-data:hover .blk-copy, .stack-box:hover .blk-copy { opacity: 0.65; }
-.blk-copy:hover { opacity: 1 !important; background: rgba(128, 128, 128, 0.18); }
-.blk-copy .n-icon { display: flex; align-items: center; }
+.io-data:hover .blk-copy, .stack-box:hover .blk-copy,
+.io-data:focus-within .blk-copy, .stack-box:focus-within .blk-copy { opacity: 1; }
 .stack-box {
   position: relative;
   margin-top: 10px;

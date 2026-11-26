@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { computed, ref, watch, onBeforeUnmount } from 'vue';
-import { NModal } from 'naive-ui';
+import { computed, ref, watch, onBeforeUnmount, nextTick } from 'vue';
+import { NModal, NButton, NInput, NIcon, NEmpty } from 'naive-ui';
 import {
-  ChevronDownOutline, CloseOutline, EllipsisHorizontalOutline, RefreshOutline, AddOutline, PhonePortraitOutline,
-  TrashOutline, LinkOutline,
+  ChevronDownOutline, RefreshOutline, AddOutline, PhonePortraitOutline,
+  TrashOutline, CreateOutline, CheckmarkOutline,
 } from '@vicons/ionicons5';
 import type { DeviceView } from '../store';
-import { toast, refreshDevices, deviceLabel, rememberDevice, forgetDevice } from '../store';
+import { toast, refreshDevices, deviceLabel, rememberDevice, forgetDevice, renameDevice } from '../store';
 import { reconnectDevice, adbConnectDevice, getDeviceInfo, type DeviceInfo } from '../api';
 
 const props = defineProps<{ devices: DeviceView[]; failed: boolean; selected: string }>();
@@ -14,33 +14,39 @@ const emit = defineEmits<{ select: [key: string] }>();
 
 const show = ref(false);
 const busy = ref('');
-const addOpen = ref(false);
-const addKind = ref<'usb' | 'net'>('usb');
-const addSerial = ref('');
+
+// 重命名：行内改当前设备名
+const renaming = ref(false);
+const renameText = ref('');
+const renameInput = ref<InstanceType<typeof NInput> | null>(null);
+
+// 底栏添加网络设备
+const adding = ref(false);
 const addAddress = ref('');
-const addName = ref('');
 const addBusy = ref(false);
 const addError = ref('');
 
-// 硬件信息：打开窗口或换设备时读一次（daemon 侧缓存 60s）
+// 只读当前设备的硬件信息（daemon 侧缓存 60s）
 const info = ref<DeviceInfo | null>(null);
-const infoLoading = ref(false);
-const infoFailed = ref('');
-const painted = ref(false);
 let infoToken = 0;
 
 function isOnline(d: DeviceView) {
   return d.rpc || d.state === 'device' || d.state === 'online' || d.agent?.online === true;
 }
-const current = computed(() => props.devices.find(d => d.key === props.selected) ?? null);
-const usbOptions = computed(() => props.devices
-  .filter(d => !d.remembered && !d.net)
-  .map(d => ({ label: `${d.model || d.serial} · ${d.serial}`, value: d.serial })));
+const current = computed(() => props.devices.find(d => d.key === props.selected) ?? props.devices[0] ?? null);
+
+// 在线排前，其他排后
+const sortedDevices = computed(() => {
+  const on = props.devices.filter(isOnline);
+  const off = props.devices.filter(d => !isOnline(d));
+  return [...on, ...off];
+});
 
 const STATE_TEXT: Record<string, string> = {
   unauthorized: '未授权', offline: '离线', disconnected: '未连接', unknown: '状态未知',
 };
-function dotClass(d: DeviceView) {
+function dotClass(d: DeviceView | null | undefined) {
+  if (!d) return '';
   if (isOnline(d)) return 'ok';
   if (d.state === 'unauthorized' || d.state === 'offline' || d.state === 'disconnected') return 'bad';
   return '';
@@ -53,10 +59,6 @@ function adbText(d: DeviceView) {
 function linkText(d: DeviceView) {
   return d.net ? '局域网' : 'USB';
 }
-function pluginText(d: DeviceView) {
-  const v = d.agent?.version?.trim();
-  return v ? `插件 v${v}` : '';
-}
 function timeAgo(ts: number) {
   const diff = Date.now() - ts;
   if (diff < 60_000) return '刚刚';
@@ -65,80 +67,88 @@ function timeAgo(ts: number) {
   const date = new Date(ts);
   return `${date.getMonth() + 1}-${date.getDate()}`;
 }
+function rowMeta(d: DeviceView) {
+  const bits = [d.serial, linkText(d)];
+  if (!isOnline(d) && d.seenAt) bits.push(`${timeAgo(d.seenAt)}在线过`);
+  else bits.push(adbText(d));
+  if (d.agent?.online) bits.push('Agent 在线');
+  else if (d.observed) bits.push(`观察 ${d.observed}`);
+  return bits.join(' · ');
+}
 
-// ---- 进度环需要的百分比 ----
+// 当前设备状态一句话
+const currentStatus = computed(() => {
+  const d = current.value;
+  if (!d) return '';
+  const bits = [linkText(d), adbText(d)];
+  if (d.agent?.online) bits.push(`Agent 在线${d.agent.version ? ` v${d.agent.version}` : ''}`);
+  if (d.observed) bits.push('观察中');
+  return bits.join(' · ');
+});
+
+// 当前设备硬件一句话 + 两条细进度条
+const specLine = computed(() => {
+  const i = info.value;
+  if (!i) return '';
+  const bits: string[] = [];
+  if (i.android) bits.push(`Android ${i.android}`);
+  if (i.abi) bits.push(i.abi);
+  if (i.screen) bits.push(i.screen);
+  if (i.battery != null) bits.push(`电量 ${i.battery}%`);
+  return bits.join(' · ');
+});
 function pct(used: number, total: number) {
   if (!total) return 0;
   return Math.max(0, Math.min(100, Math.round((used / total) * 100)));
 }
-const ramPct = computed(() => {
+const ramBar = computed(() => {
   const i = info.value;
-  if (!i || !i.ramBytes) return 0;
+  if (!i || !i.ramBytes) return null;
   const used = i.ramBytes - (i.ramFreeBytes || 0);
-  return pct(used, i.ramBytes);
+  return {
+    pct: pct(used, i.ramBytes),
+    text: `${(used / 1073741824).toFixed(1)} / ${(i.ramBytes / 1073741824).toFixed(0)} GB`,
+  };
 });
-const ramUsedText = computed(() => {
+const storageBar = computed(() => {
   const i = info.value;
-  if (!i || !i.ramBytes) return '';
-  const used = (i.ramBytes - (i.ramFreeBytes || 0)) / 1024 / 1024 / 1024;
-  const total = i.ramBytes / 1024 / 1024 / 1024;
-  return `${used.toFixed(1)} / ${total.toFixed(0)} GB`;
+  if (!i || !i.storageTotalBytes) return null;
+  const used = i.storageTotalBytes - (i.storageFreeBytes || 0);
+  return {
+    pct: pct(used, i.storageTotalBytes),
+    text: `${(used / 1073741824).toFixed(0)} / ${(i.storageTotalBytes / 1073741824).toFixed(0)} GB`,
+  };
 });
-const storagePct = computed(() => {
-  const i = info.value;
-  if (!i || !i.storageTotalBytes) return 0;
-  return pct(i.storageTotalBytes - (i.storageFreeBytes || 0), i.storageTotalBytes);
-});
-const storageText = computed(() => {
-  const i = info.value;
-  if (!i || !i.storageTotalBytes) return '';
-  const free = i.storageFreeBytes / 1024 / 1024 / 1024;
-  const total = i.storageTotalBytes / 1024 / 1024 / 1024;
-  return `${free.toFixed(0)} / ${total.toFixed(0)} GB 可用`;
-});
-const batteryPct = computed(() => info.value?.battery ?? null);
-
-// 环形进度：周长固定的圆环，用 stroke-dasharray 过渡
-const RING = 2 * Math.PI * 26;
-function ringDash(p: number) {
-  return `${(RING * p) / 100} ${RING}`;
-}
 
 async function loadInfo(d: DeviceView | null) {
   const token = ++infoToken;
-  painted.value = false;
-  if (!d) { info.value = null; infoFailed.value = ''; return; }
-  infoLoading.value = true;
+  if (!d || !isOnline(d)) { info.value = null; return; }
   try {
     const r = await getDeviceInfo(d.serial);
-    if (token !== infoToken) return;
-    info.value = r.ok && r.info ? r.info : null;
-    infoFailed.value = r.ok ? '' : (r.error ?? '读取失败');
-  } catch (e) {
-    if (token === infoToken) { info.value = null; infoFailed.value = (e as Error).message; }
-  } finally {
-    if (token !== infoToken) return;
-    infoLoading.value = false;
-    // 先渲染 0%，下一帧再给真值，进度环/条才有生长动画
-    requestAnimationFrame(() => { if (token === infoToken) painted.value = true; });
+    if (token === infoToken) info.value = r.ok && r.info ? r.info : null;
+  } catch {
+    if (token === infoToken) info.value = null;
   }
 }
 
 function openDialog() {
   show.value = true;
-  addOpen.value = false;
+  renaming.value = false;
+  adding.value = false;
+  addError.value = '';
   void refreshDevices();
   void loadInfo(current.value);
 }
-watch(() => [props.selected, show.value] as const, () => {
+watch(() => current.value?.key, () => {
   if (!show.value) return;
+  renaming.value = false;
   void loadInfo(current.value);
 });
 
-/** 点列表 = 切换设备 */
+// 点列表行 = 切换设备
 function pick(d: DeviceView) {
+  if (d.key === props.selected) return;
   emit('select', d.key);
-  show.value = false;
 }
 
 async function reconnect(d: DeviceView) {
@@ -165,35 +175,42 @@ async function reconnect(d: DeviceView) {
   }
 }
 
+function startRename() {
+  if (!current.value) return;
+  renaming.value = true;
+  renameText.value = current.value.name ?? '';
+  void nextTick(() => renameInput.value?.focus());
+}
+function saveRename() {
+  const d = current.value;
+  if (!d) { renaming.value = false; return; }
+  const clean = renameText.value.trim();
+  if (clean !== (d.name ?? '')) {
+    renameDevice(d.key, clean);
+    toast(clean ? `已命名为 ${clean}` : '已恢复默认名称');
+  }
+  renaming.value = false;
+}
+
 function openAdd() {
-  addOpen.value = true;
-  addKind.value = 'usb';
-  addSerial.value = '';
+  adding.value = true;
   addAddress.value = '';
-  addName.value = '';
   addError.value = '';
 }
-const USABLE_SERIAL = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/;
 const NET_ADDRESS = /^[A-Za-z0-9][A-Za-z0-9._-]*:\d{1,5}$/;
 async function saveAdd() {
   addError.value = '';
-  if (addKind.value === 'usb') {
-    const serial = addSerial.value.trim();
-    if (!USABLE_SERIAL.test(serial)) { addError.value = '串号格式不对；手机开发者选项的 USB 调试里能看到。'; return; }
-    rememberDevice(serial, addName.value);
-    toast(`已添加 ${addName.value.trim() || serial}`);
-    addOpen.value = false;
-    return;
-  }
   const address = addAddress.value.trim();
-  if (!NET_ADDRESS.test(address)) { addError.value = '地址要写成 IP:端口，例如 192.168.1.50:5555'; return; }
+  if (!NET_ADDRESS.test(address)) { addError.value = '格式：IP:端口，例如 192.168.1.50:5555'; return; }
   addBusy.value = true;
   try {
     const r = await adbConnectDevice(address);
     if (!r.ok) { addError.value = r.error ?? '连不上这个地址'; return; }
-    rememberDevice(address, addName.value);
-    toast(`已添加网络设备 ${addName.value.trim() || address}`);
-    addOpen.value = false;
+    rememberDevice(address);
+    toast(`已添加 ${address}`);
+    adding.value = false;
+    emit('select', address);
+    void refreshDevices();
   } catch (e) {
     addError.value = (e as Error).message;
   } finally {
@@ -203,15 +220,7 @@ async function saveAdd() {
 
 function forget(d: DeviceView) {
   forgetDevice(d.key);
-  toast(`已从列表移除 ${deviceLabel(d)}`);
-}
-
-function rowTitle(d: DeviceView) {
-  const bits = [deviceLabel(d), d.serial, linkText(d), adbText(d)];
-  if (d.rpc) bits.push('设备通道已连接');
-  if (d.agent?.online) bits.push(`agent ${d.agent.sessionId} 在线`);
-  if (!isOnline(d) && d.seenAt) bits.push(`上次在线 ${timeAgo(d.seenAt)}`);
-  return bits.join(' · ');
+  toast(`已移除 ${deviceLabel(d)}`);
 }
 
 onBeforeUnmount(() => { infoToken++; });
@@ -226,130 +235,97 @@ onBeforeUnmount(() => { infoToken++; });
       <span class="menu-chevron"><n-icon size="11" :component="ChevronDownOutline" /></span>
     </button>
 
-    <n-modal :show="show" @update:show="!$event && (show = false)">
-      <div class="app-dialog device-dialog show" role="dialog" aria-modal="true" aria-label="设备">
-        <!-- 上面一整块：左信息面板 / 右操作面板 -->
-        <section class="device-top">
-          <div class="device-info">
-            <div class="device-hero">
-              <span class="device-face" :class="dotClass(current || devices[0])">
-                <n-icon size="22" :component="PhonePortraitOutline" />
-              </span>
-              <div class="device-hero-text">
-                <strong>{{ current ? deviceLabel(current) : '没有设备' }}</strong>
-                <span v-if="current" class="device-tags">
-                  <em class="tag" :class="dotClass(current)">{{ adbText(current) }}</em>
-                  <em class="tag"><n-icon size="11" :component="LinkOutline" />{{ linkText(current) }}</em>
-                  <em v-if="pluginText(current)" class="tag">{{ pluginText(current) }}</em>
-                </span>
-                <span v-else class="device-muted">{{ props.failed ? '设备读取失败，保留上次清册' : '插上手机，或用右边的「添加设备」登记' }}</span>
-              </div>
+    <n-modal :show="show" preset="card" class="device-modal" title="设备" closable
+      :segmented="{ content: true }" @update:show="!$event && (show = false)">
+      <template #header>
+        <span class="device-head">设备 <span v-if="devices.length" class="device-muted">{{ devices.length }}</span></span>
+      </template>
+      <template #header-extra>
+        <n-button size="small" quaternary circle title="刷新" aria-label="刷新" class="device-refresh"
+          @click="refreshDevices()">
+          <template #icon><n-icon :component="RefreshOutline" /></template>
+        </n-button>
+      </template>
+
+      <!-- 上半：当前设备摘要（和 AppDialog 顶部卡同构） -->
+      <section v-if="current" class="dev-summary">
+        <div class="dev-summary-row">
+          <span class="device-face" :class="dotClass(current)">
+            <n-icon size="20" :component="PhonePortraitOutline" />
+          </span>
+          <div class="dev-summary-id">
+            <n-input v-if="renaming" ref="renameInput" v-model:value="renameText" size="small"
+              :placeholder="current.model || current.serial" maxlength="40"
+              :input-props="{ 'aria-label': '设备名称' }"
+              @keyup.enter="saveRename" @keyup.esc="renaming = false" @blur="saveRename" />
+            <div v-else class="dev-summary-title">
+              <strong>{{ deviceLabel(current) }}</strong>
+              <span class="dev-serial">{{ current.serial }}</span>
             </div>
-
-            <div class="device-gauges">
-              <div class="gauge">
-                <svg viewBox="0 0 64 64" class="gauge-ring" :class="{ bad: ramPct >= 88, warn: ramPct >= 70 && ramPct < 88 }">
-                  <circle cx="32" cy="32" r="26" class="ring-track" />
-                  <circle cx="32" cy="32" r="26" class="ring-value" :style="{ strokeDasharray: ringDash(painted ? ramPct : 0) }" />
-                </svg>
-                <span class="gauge-num">{{ ramPct }}<i>%</i></span>
-                <span class="gauge-label">内存</span>
-                <span class="gauge-sub">{{ ramUsedText || '—' }}</span>
-              </div>
-
-              <div class="gauge">
-                <svg viewBox="0 0 64 64" class="gauge-ring" :class="{ warn: storagePct >= 80, bad: storagePct >= 92 }">
-                  <circle cx="32" cy="32" r="26" class="ring-track" />
-                  <circle cx="32" cy="32" r="26" class="ring-value" :style="{ strokeDasharray: ringDash(painted ? storagePct : 0) }" />
-                </svg>
-                <span class="gauge-num">{{ storagePct }}<i>%</i></span>
-                <span class="gauge-label">存储占用</span>
-                <span class="gauge-sub">{{ storageText || '—' }}</span>
-              </div>
-
-              <div class="gauge">
-                <svg viewBox="0 0 64 64" class="gauge-ring" :class="{ bad: (batteryPct ?? 100) <= 15, warn: (batteryPct ?? 100) <= 30 }">
-                  <circle cx="32" cy="32" r="26" class="ring-track" />
-                  <circle cx="32" cy="32" r="26" class="ring-value" :style="{ strokeDasharray: ringDash(painted && batteryPct != null ? batteryPct : 0) }" />
-                </svg>
-                <span class="gauge-num">{{ batteryPct == null ? '—' : batteryPct }}<i v-if="batteryPct != null">%</i></span>
-                <span class="gauge-label">电量</span>
-                <span class="gauge-sub">{{ batteryPct == null ? '读取中' : '当前电量' }}</span>
-              </div>
-            </div>
-
-            <div class="device-specs">
-              <div><span>型号</span><strong>{{ info?.model || current?.model || '—' }}</strong></div>
-              <div><span>系统</span><strong>{{ info ? `Android ${info.android}` : '—' }}</strong></div>
-              <div><span>分辨率</span><strong>{{ info?.screen || '—' }}</strong></div>
-              <div><span>ABI</span><strong>{{ info?.abi || '—' }}</strong></div>
-            </div>
-            <p v-if="infoLoading && !info" class="device-info-hint">读取设备信息…</p>
-            <p v-else-if="infoFailed" class="device-info-hint bad">{{ infoFailed }}</p>
+            <span class="dev-summary-sub">{{ currentStatus }}</span>
           </div>
-
-          <aside class="device-actions">
-            <button type="button" class="device-action primary" @click="openAdd">
-              <n-icon size="16" :component="AddOutline" /><span>添加设备</span>
-            </button>
-            <button v-if="current" type="button" class="device-action" :disabled="!!busy" @click="reconnect(current)">
-              <n-icon size="16" :component="RefreshOutline" />
-              <span>{{ busy === current.key ? '重连中…' : '重连' }}</span>
-            </button>
-            <button type="button" class="device-action" @click="refreshDevices()">
-              <n-icon size="16" :component="RefreshOutline" /><span>刷新列表</span>
-            </button>
-            <button v-if="current?.remembered" type="button" class="device-action danger" @click="forget(current)">
-              <n-icon size="16" :component="TrashOutline" /><span>从列表移除</span>
-            </button>
-            <button type="button" class="device-action quiet" @click="show = false">
-              <n-icon size="16" :component="CloseOutline" /><span>关闭</span>
-            </button>
-          </aside>
-        </section>
-
-        <!-- 下面一整块：只有设备列表 -->
-        <section class="device-list">
-          <header class="device-list-head">
-            <h3>设备列表</h3>
-            <span class="device-muted">{{ devices.length }} 台 · 点一行切换</span>
-          </header>
-          <div class="device-rows">
-            <button v-for="d in devices" :key="d.key" type="button" class="device-row-item"
-              :class="{ current: d.key === selected }" :title="rowTitle(d)" @click="pick(d)">
-              <span class="status-dot" :class="dotClass(d)"></span>
-              <span class="device-row-copy">
-                <strong>{{ deviceLabel(d) }}</strong>
-                <span>{{ d.serial }} · {{ linkText(d) }}</span>
-              </span>
-              <span v-if="d.key === selected" class="device-row-state">使用中</span>
-              <span v-else-if="!isOnline(d) && d.seenAt" class="device-row-state muted">{{ timeAgo(d.seenAt) }}在线过</span>
-              <span v-else class="device-row-state muted">{{ adbText(d) }}</span>
-            </button>
-            <div v-if="!devices.length" class="app-empty">没有设备；用上面的「添加设备」登记串号。</div>
+          <div class="dev-summary-actions">
+            <n-button size="small" :loading="busy === current.key" :disabled="!!busy"
+              @click="reconnect(current)">重连</n-button>
+            <n-button size="small" quaternary circle title="重命名" aria-label="重命名" @click="startRename">
+              <template #icon><n-icon :component="CreateOutline" /></template>
+            </n-button>
           </div>
-        </section>
-
-        <div v-if="addOpen" class="device-add-panel">
-          <n-radio-group v-model:value="addKind" size="small">
-            <n-radio-button value="usb">USB 设备</n-radio-button>
-            <n-radio-button value="net">局域网</n-radio-button>
-          </n-radio-group>
-          <div class="device-add-row">
-            <n-select v-if="addKind === 'usb'" v-model:value="addSerial" size="small" filterable tag :options="usbOptions"
-              placeholder="选择或输入设备串号，例如 aa165071" />
-            <n-input v-else v-model:value="addAddress" size="small" placeholder="IP:端口，例如 192.168.1.50:5555" />
-            <n-input v-model:value="addName" size="small" maxlength="40" placeholder="换个好记的名字（可选）" />
-            <n-button size="small" type="primary" :loading="addBusy" @click="saveAdd">添加</n-button>
-            <n-button size="small" quaternary @click="addOpen = false">取消</n-button>
-          </div>
-          <p class="device-add-hint">
-            {{ addKind === 'usb' ? 'USB 设备直接登记串号；插拔不影响它留在列表里。'
-              : '局域网需要手机和电脑在同一网络，且手机上已打开无线调试。' }}
-          </p>
-          <p v-if="addError" class="device-add-error">{{ addError }}</p>
         </div>
+
+        <p v-if="specLine" class="dev-spec-line">{{ specLine }}</p>
+        <div v-if="ramBar || storageBar" class="dev-bars">
+          <div v-if="ramBar" class="dev-bar">
+            <span>内存</span>
+            <i class="dev-bar-track"><b :style="{ width: `${ramBar.pct}%` }" :class="{ warn: ramBar.pct >= 75, bad: ramBar.pct >= 90 }"></b></i>
+            <em>{{ ramBar.text }}</em>
+          </div>
+          <div v-if="storageBar" class="dev-bar">
+            <span>存储</span>
+            <i class="dev-bar-track"><b :style="{ width: `${storageBar.pct}%` }" :class="{ warn: storageBar.pct >= 80, bad: storageBar.pct >= 92 }"></b></i>
+            <em>{{ storageBar.text }}</em>
+          </div>
+        </div>
+      </section>
+
+      <!-- 下半：切换列表 -->
+      <div class="dev-list">
+        <div v-for="d in sortedDevices" :key="d.key" class="dev-item"
+          :class="{ active: d.key === current?.key }" @click="pick(d)">
+          <span class="status-dot" :class="dotClass(d)"></span>
+          <div class="dev-item-copy">
+            <strong>{{ deviceLabel(d) }}</strong>
+            <span>{{ rowMeta(d) }}</span>
+          </div>
+          <n-button v-if="d.remembered && d.key !== current?.key" size="tiny" quaternary circle
+            class="device-danger" title="移除" aria-label="移除" @click.stop="forget(d)">
+            <template #icon><n-icon size="13" :component="TrashOutline" /></template>
+          </n-button>
+          <span v-if="d.key === current?.key" class="dev-check" aria-label="当前使用">
+            <n-icon size="15" :component="CheckmarkOutline" />
+          </span>
+        </div>
+
+        <n-empty v-if="!devices.length" :description="failed ? '设备读取失败' : '没有设备'" size="small"
+          class="dev-empty" />
       </div>
+
+      <!-- 底栏：一行添加网络设备 -->
+      <footer class="dev-foot">
+        <template v-if="adding">
+          <div class="dev-add-row">
+            <n-input v-model:value="addAddress" size="small" placeholder="IP:端口，如 192.168.1.50:5555" autofocus
+              :input-props="{ 'aria-label': '设备地址' }" @keyup.enter="saveAdd" @keyup.esc="adding = false" />
+            <n-button size="small" type="primary" :loading="addBusy" @click="saveAdd">连接</n-button>
+            <n-button size="small" quaternary @click="adding = false">取消</n-button>
+          </div>
+          <p v-if="addError" class="dev-add-err">{{ addError }}</p>
+        </template>
+        <n-button v-else size="small" quaternary class="dev-add-trigger" @click="openAdd">
+          <template #icon><n-icon :component="AddOutline" /></template>
+          添加网络设备
+        </n-button>
+      </footer>
     </n-modal>
   </section>
 </template>

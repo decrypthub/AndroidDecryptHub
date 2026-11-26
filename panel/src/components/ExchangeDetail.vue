@@ -70,14 +70,18 @@ function copy(text: string) {
       <div class="io-card-head"><span class="io-label in">请求</span><span class="io-meta">{{ partMeta(req) }}</span></div>
       <div class="io-block-body">
         <pre>{{ partText(req) }}</pre>
-        <button v-if="req" type="button" class="block-copy" title="复制" @click="copy(partText(req))"><n-icon size="13" :component="CopyOutline" /></button>
+        <n-button v-if="req" quaternary circle size="small" class="block-copy" title="复制" @click="copy(partText(req))">
+          <n-icon size="14" :component="CopyOutline" />
+        </n-button>
       </div>
     </div>
     <div class="io-section out-card">
       <div class="io-card-head"><span class="io-label out">响应</span><span class="io-meta">{{ partMeta(res) }}</span></div>
       <div class="io-block-body">
         <pre>{{ partText(res) }}</pre>
-        <button v-if="res" type="button" class="block-copy" title="复制" @click="copy(partText(res))"><n-icon size="13" :component="CopyOutline" /></button>
+        <n-button v-if="res" quaternary circle size="small" class="block-copy" title="复制" @click="copy(partText(res))">
+          <n-icon size="14" :component="CopyOutline" />
+        </n-button>
       </div>
     </div>
   </div>
@@ -97,3 +101,16 @@ function copy(text: string) {
     </div>
   </div>
 </template>
+
+<style scoped>
+/* 复制按钮：naive-ui 圆形图标按钮，悬停数据块才显现，定位不变 */
+.block-copy {
+  position: absolute;
+  top: 4px;
+  right: 0;
+  opacity: 0;
+  transition: opacity .12s;
+}
+.io-block-body:hover .block-copy,
+.io-block-body:focus-within .block-copy { opacity: 1; }
+</style>
