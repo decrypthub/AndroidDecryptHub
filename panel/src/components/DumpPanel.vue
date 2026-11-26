@@ -8,7 +8,7 @@ const tab = ref<'records' | 'loaded' | 'pkg'>('records');
 const status = ref('');
 const running = ref(false);
 
-interface SoItem { name?: string; path?: string; size?: number; savedSize?: number; sha256?: string }
+interface SoItem { name?: string; path?: string; base?: string; size?: number; savedSize?: number; sha256?: string }
 const loaded = ref<SoItem[]>([]);
 const packaged = ref<SoItem[]>([]);
 const invError = ref('');
@@ -46,30 +46,44 @@ async function run() {
   status.value = '正在脱壳…';
   try {
     const r = await unpackRun(store.chosenPkg);
-    status.value = r.ok === false ? (r.error ?? '脱壳失败') : '已提交脱壳任务。';
-  } catch { status.value = '脱壳请求失败。'; }
-  running.value = false;
+    running.value = false;
+    status.value = r.ok === false ? (r.error ?? '脱壳失败') : `脱壳完成：${r.included?.length ?? 0} 个 DEX 已打包。`;
+  } catch {
+    status.value = '脱壳请求未确认，结果以脱壳记录为准。';
+    running.value = false;
+  }
 }
 async function pullSo(item: SoItem) {
   if (!item.path) return;
   status.value = `正在提取 ${item.name || item.path}…`;
   try {
-    const r = await unpackPullSo(store.chosenPkg, item.path) as { ok?: boolean; error?: string };
-    status.value = r?.ok === false ? (r.error ?? '提取失败') : `已提取 ${item.name || item.path}`;
+    const r = await unpackPullSo(store.chosenPkg, item.path) as { saved?: boolean; error?: string };
+    status.value = r?.saved === false ? (r.error ?? '提取失败') : `已提取 ${item.name || item.path}`;
     void refreshInventory();
   } catch { status.value = '提取失败。'; }
 }
 async function dumpOne(item: SoItem) {
-  if (!item.name) return;
+  if (!item.name || !item.base || !sid.value) return;
   status.value = `正在转储 ${item.name}…`;
   try {
-    const r = await unpackDumpSoOne(store.chosenPkg, item.name) as { ok?: boolean; error?: string };
-    status.value = r?.ok === false ? (r.error ?? '转储失败') : `已转储 ${item.name}`;
+    const r = await unpackDumpSoOne(sid.value, item.base, item.name) as { saved?: boolean; error?: string };
+    status.value = r?.saved === false ? (r.error ?? '转储失败') : `已转储 ${item.name}`;
     void refreshInventory();
   } catch { status.value = '转储失败。'; }
 }
 
-function onDumpNew() { void refreshRecords(); void refreshInventory(); }
+function onDumpNew(ev?: Event) {
+  void refreshRecords(); void refreshInventory();
+  const d = (ev as CustomEvent | undefined)?.detail as Record<string, unknown> | undefined;
+  if (!d || typeof d.runId !== 'string') return;
+  if (typeof d.dexCount === 'number') {
+    status.value = `脱壳完成：${d.dexCount} 个 DEX 已打包。`;
+    running.value = false;
+  } else if (d.ok === false && d.error) {
+    status.value = `脱壳失败：${String(d.error)}`;
+    running.value = false;
+  }
+}
 let poll = 0;
 onMounted(() => {
   void refreshRecords(); void refreshInventory();

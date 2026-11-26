@@ -53,8 +53,8 @@ export async function api<T = unknown>(path: string, init?: RequestInit, timeout
     throw e;
   }
 }
-const post = <T = unknown>(path: string, body: unknown) =>
-  api<T>(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+const post = <T = unknown>(path: string, body: unknown, timeoutMs?: number) =>
+  api<T>(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }, timeoutMs);
 
 // ---- 端点 ----
 export const getDevices = () => api<{ ok: boolean; devices: unknown[]; transports: unknown[]; localUsb?: Record<string, unknown> }>('/api/devices?action=list');
@@ -135,17 +135,18 @@ export const getFamilies = (pkg: string) =>
 export const setFamily = (pkg: string, family: string, enabled: boolean) =>
   post('/api/capture/families', { package: pkg, family, enabled });
 
-export const unpackRun = (pkg: string) => post<{ ok: boolean; error?: string }>('/api/unpack/run', { package: pkg });
+export const unpackRun = (pkg: string) =>
+  post<{ ok: boolean; error?: string; included?: unknown[]; runId?: string }>('/api/unpack/run', { package: pkg }, 150_000);
 export const unpackInventory = (session: string) =>
-  api<{ ok: boolean; loaded?: Array<{ name?: string; size?: number; savedSize?: number; sha256?: string; path?: string }>; packaged?: Array<{ name?: string; path?: string; size?: number; sha256?: string }>; error?: string }>(
+  api<{ ok: boolean; loaded?: Array<{ name?: string; size?: number; savedSize?: number; sha256?: string; path?: string; base?: string }>; packaged?: Array<{ name?: string; path?: string; size?: number; sha256?: string }>; error?: string }>(
     `/api/unpack/inventory?session=${encodeURIComponent(session)}`);
 export const unpackHistory = (pkg: string) =>
   api<{ ok?: boolean; runs?: Array<Record<string, unknown>>; records?: Array<Record<string, unknown>>; items?: Array<Record<string, unknown>> }>(
     `/api/unpack/history?package=${encodeURIComponent(pkg)}`);
 export const unpackPullSo = (pkg: string, path: string) =>
   post('/api/unpack/pull-so', { package: pkg, path });
-export const unpackDumpSoOne = (pkg: string, name: string) =>
-  post('/api/unpack/dump-so-one', { package: pkg, name });
+export const unpackDumpSoOne = (session: string, base: string, name: string) =>
+  post('/api/unpack/dump-so-one', { session, base, name });
 export const dumpDownloadUrl = (sha: string) => `/api/dumps/download?sha=${encodeURIComponent(sha)}`;
 export const appIconUrl = (pkg: string, serial?: string, version?: unknown) =>
   `/api/apps/icon?package=${encodeURIComponent(pkg)}${serial ? `&serial=${encodeURIComponent(serial)}` : ''}${version ? `&v=${encodeURIComponent(String(version))}` : ''}`;
