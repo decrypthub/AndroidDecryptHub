@@ -1,5 +1,13 @@
 # PROGRESS — 跨会话进度看板
 
+## 2026-11-27 通宵优化进行中：Java Hook 真实停用与字节码一致性
+
+- 修复 `AdhJavaHookBridge.callback`：inactive 直接执行原方法，不改参数、不替换返回值，不增加 hits、不渲染参数/返回值/栈、不上报、不写加密 memo；保留静态/实例/构造器返回和原异常身份。原函数执行期间停用时，也不在完成后继续写结果或异常观测。
+- 新增实际 javac 编译 shipping Java 源的生命周期夹具，覆盖停用、异常、缺失 backup、空参数、构造器 receiver、参数/返回值 toString 副作用、执行中停用、重启用，并用 active 加密记账/参数改写/返回替换作正向对照。另校验 DEX 与嵌入 header 字节一致、header 绑定源 SHA-256，防止只改 Java 却忘记重建。
+- 同一 20 项检查：原始 **5 pass / 15 fail**，修改后 **20/20 pass**，独立副本执行真实 rollback 后恢复 **5 pass / 15 fail**；累计补丁含 DEX 二进制并已实际重建，原始 7 个文件逐字节恢复。沿用同一四角色证据路径，旧阶段证据另行保留。
+- `build_java_hook_bridge.sh` 和独立 NDK Agent 构建均通过，当前 `.so` 1,127,200 bytes、SHA-256 `ca16c30638bb0420199646ce61a8bc83596f26c3df1ca1ddeee8033dbc79777f`。本阶段没有安装/重启手机，不能把 JVM/构建信号当成 Android LSPlant 真机验收。
+- 首轮 Host 全量为 673 pass / 19 skip；已真实构建 libadhdetect 及 `:daemon:writeDeviceRpcFixtureClasspath`，补齐依赖后官方 runner **696 pass / 0 fail / 0 skip**，类型检查通过。后续方法策略、双机绑定、两级 UI、真机全量、候选冷体验与最后收尾仍未完成。
+
 ## 2026-11-27 通宵优化进行中：恢复点、暂停分析与长度一致性
 
 - 用户要求先保存现有代码；已将原有五个未提交面板文件保存为恢复点 `260b57f` 并推送 main，另保留原始字节与 SHA-256。该恢复点不等于对旧功能的正确性认证。

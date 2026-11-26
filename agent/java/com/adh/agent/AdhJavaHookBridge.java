@@ -75,6 +75,7 @@ public final class AdhJavaHookBridge extends X509ExtendedTrustManager implements
     }
 
     private void report(String arg, String ret, String error) {
+        if (!active) return;
         if (silent) return;
         nativeReport(hookId, target, arg, ret, error, lastStack);
     }
@@ -100,6 +101,7 @@ public final class AdhJavaHookBridge extends X509ExtendedTrustManager implements
     @Override public boolean verify(String hostname, SSLSession session) { return true; }
 
     public Object callback(Object[] args) throws Throwable {
+        if (!active) return originalUnobserved(args);
         hits++;
         if (silent && cryptoMode == 0 && hits == 1) noteHit();
         if (captureStack) {
@@ -122,9 +124,11 @@ public final class AdhJavaHookBridge extends X509ExtendedTrustManager implements
             while (!ready && System.nanoTime() < deadline) Thread.yield();
         }
         if (!ready || backup == null) {
-            lastError = "hook backup not ready";
-            report(lastArg, "", lastError);
-            throw new IllegalStateException(lastError);
+            if (active) {
+                lastError = "hook backup not ready";
+                report(lastArg, "", lastError);
+            }
+            throw new IllegalStateException("hook backup not ready");
         }
         Object receiver = isStatic ? null : (args != null && args.length > 0 ? args[0] : null);
         Object[] params = isStatic
@@ -143,26 +147,33 @@ public final class AdhJavaHookBridge extends X509ExtendedTrustManager implements
                 }
                 params[argIndex] = rewritten;
             } catch (Throwable t) {
-                lastError = "argument rewrite failed: " + t;
-                report(lastArg, "", lastError);
+                if (active) {
+                    lastError = "argument rewrite failed: " + t;
+                    report(lastArg, "", lastError);
+                }
                 throw t;
             }
         }
         if (isConstructor) {
             try {
                 backup.invoke(receiver, params);
+                if (!active) return receiver;
                 lastReturn = bounded(receiver);
                 lastError = "";
                 report(lastArg, lastReturn, lastError);
                 return receiver;
             } catch (InvocationTargetException e) {
                 Throwable cause = e.getCause() != null ? e.getCause() : e;
-                lastError = String.valueOf(cause);
-                report(lastArg, "", lastError);
+                if (active) {
+                    lastError = String.valueOf(cause);
+                    report(lastArg, "", lastError);
+                }
                 throw cause;
             } catch (Throwable t) {
-                lastError = String.valueOf(t);
-                report(lastArg, "", lastError);
+                if (active) {
+                    lastError = String.valueOf(t);
+                    report(lastArg, "", lastError);
+                }
                 throw t;
             }
         }
@@ -174,13 +185,16 @@ public final class AdhJavaHookBridge extends X509ExtendedTrustManager implements
                 report(lastArg, lastReturn, lastError);
                 return replaced;
             } catch (Throwable t) {
-                lastError = "return override failed: " + t;
-                report(lastArg, "", lastError);
+                if (active) {
+                    lastError = "return override failed: " + t;
+                    report(lastArg, "", lastError);
+                }
                 throw t;
             }
         }
         try {
             Object result = backup.invoke(receiver, params);
+            if (!active) return result;
             lastReturn = bounded(result);
             lastError = "";
             report(lastArg, lastReturn, lastError);
@@ -188,13 +202,36 @@ public final class AdhJavaHookBridge extends X509ExtendedTrustManager implements
             return result;
         } catch (InvocationTargetException e) {
             Throwable cause = e.getCause() != null ? e.getCause() : e;
-            lastError = String.valueOf(cause);
-            report(lastArg, "", lastError);
+            if (active) {
+                lastError = String.valueOf(cause);
+                report(lastArg, "", lastError);
+            }
             throw cause;
         } catch (Throwable t) {
-            lastError = String.valueOf(t);
-            report(lastArg, "", lastError);
+            if (active) {
+                lastError = String.valueOf(t);
+                report(lastArg, "", lastError);
+            }
             throw t;
+        }
+    }
+
+    /** Soft-disabled hooks must call the original without observing or rewriting it. */
+    private Object originalUnobserved(Object[] args) throws Throwable {
+        if (!ready) {
+            long deadline = System.nanoTime() + 50_000_000L;
+            while (!ready && System.nanoTime() < deadline) Thread.yield();
+        }
+        if (!ready || backup == null) throw new IllegalStateException("hook backup not ready");
+        Object receiver = isStatic ? null : (args != null && args.length > 0 ? args[0] : null);
+        Object[] params = isStatic
+            ? (args != null ? args : new Object[0])
+            : (args != null && args.length > 1 ? Arrays.copyOfRange(args, 1, args.length) : new Object[0]);
+        try {
+            Object result = backup.invoke(receiver, params);
+            return isConstructor ? receiver : result;
+        } catch (InvocationTargetException e) {
+            throw e.getCause() != null ? e.getCause() : e;
         }
     }
 
@@ -377,6 +414,7 @@ public final class AdhJavaHookBridge extends X509ExtendedTrustManager implements
     }
 
     private void recordCrypto(Object receiver, Object[] params, Object result) {
+        if (!active) return;
         try {
             int id = receiver == null ? 0 : System.identityHashCode(receiver);
             String algo = algorithm(receiver);

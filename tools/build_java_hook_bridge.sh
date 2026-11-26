@@ -42,11 +42,13 @@ mapfile -t CLASSES < <(find "$TMP/com/adh/agent" -maxdepth 1 -name '*.class' | s
 [ -f "$TMP/classes.dex" ] || { echo "!! d8 did not produce classes.dex"; exit 1; }
 cp "$TMP/classes.dex" "$DEXOUT"
 
-node - "$DEXOUT" "$HDR" <<'EOF'
+node - "$DEXOUT" "$HDR" "$SRC" <<'EOF'
 const fs = require('fs');
-const [dexPath, headerPath] = process.argv.slice(2);
+const crypto = require('crypto');
+const [dexPath, headerPath, sourcePath] = process.argv.slice(2);
 const bytes = fs.readFileSync(dexPath);
 let out = '// Generated from agent/java/com/adh/agent/AdhJavaHookBridge.java via d8 --min-api 26.\n';
+out += '// Source SHA-256: ' + crypto.createHash('sha256').update(fs.readFileSync(sourcePath)).digest('hex') + '\n';
 out += '// Keep this class target-agnostic: it only stores the LSPlant backup and callback state.\n';
 out += '#ifndef ADH_AGENT_JAVA_HOOK_BRIDGE_DEX_H\n#define ADH_AGENT_JAVA_HOOK_BRIDGE_DEX_H\n';
 out += '#include <stddef.h>\nstatic const unsigned char ADH_JAVA_HOOK_BRIDGE_DEX[] = {\n';
