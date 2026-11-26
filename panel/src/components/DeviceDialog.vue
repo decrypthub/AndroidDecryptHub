@@ -41,8 +41,8 @@ const tabs = computed(() => ([
   { key: 'offline' as const, label: '未连接', count: offlineRows.value.length },
 ]));
 const visible = computed(() => (tab.value === 'online' ? onlineRows.value : tab.value === 'offline' ? offlineRows.value : props.devices));
-const detail = computed(() =>
-  props.devices.find(d => d.key === focusKey.value) ?? visible.value[0] ?? props.devices[0] ?? null);
+// 名片只描述当前分组里选中的那台：切到「未连接」且没有设备时，不该还挂着在线设备的名片。
+const detail = computed(() => visible.value.find(d => d.key === focusKey.value) ?? visible.value[0] ?? null);
 const isCurrent = computed(() => !!detail.value && detail.value.key === props.selected);
 const rememberedCount = computed(() => props.devices.filter(d => d.remembered).length);
 const usbOptions = computed(() => props.devices
@@ -255,7 +255,7 @@ function forget(d: DeviceView) {
           </button>
           <div class="device-side-foot">
             <span>{{ rememberedCount }} 台已记住</span>
-            <span>名字与默认设备只存在这台电脑的浏览器里</span>
+            <span>名字只存在本浏览器</span>
           </div>
         </aside>
 
@@ -275,7 +275,7 @@ function forget(d: DeviceView) {
                   <span v-if="detail.isDefault" class="device-badge">默认</span>
                   <span v-if="detail.observed" class="device-badge accent">观察中</span>
                 </strong>
-                <span>{{ detail.serial }}<template v-if="detail.net"> · 无线</template> · {{ detail.state === 'device' ? 'ADB 已连接' : (STATE_TEXT[detail.state] ?? detail.state) }}</span>
+                <span>{{ detail.serial }} · {{ detail.net ? '无线' : 'USB' }} · {{ adbText(detail) }}</span>
               </template>
             </div>
             <div class="app-dialog-actions">
@@ -306,11 +306,9 @@ function forget(d: DeviceView) {
           </div>
 
           <div v-if="detail" class="device-facts">
-            <div v-if="detail.model"><span>型号</span><strong>{{ detail.model }}</strong></div>
-            <div><span>连接方式</span><strong>{{ detail.net ? '无线调试' : 'USB' }}</strong></div>
-            <div><span>ADB</span><strong>{{ adbText(detail) }}</strong></div>
-            <div><span>Agent 会话</span><strong>{{ agentText(detail) }}</strong></div>
-            <div><span>设备通道</span><strong>{{ detail.rpc ? '已连接' : '未连接' }}</strong></div>
+            <div v-if="detail.name && detail.name !== detail.model && detail.model"><span>型号</span><strong>{{ detail.model }}</strong></div>
+            <div v-if="detail.observed"><span>Agent 会话</span><strong>{{ agentText(detail) }}</strong></div>
+            <div><span>设备服务</span><strong>{{ detail.rpc ? '已连接' : '未连接' }}</strong></div>
             <div v-if="!isOnline(detail)"><span>上次在线</span><strong>{{ detail.seenAt ? timeAgo(detail.seenAt) : '没有记录' }}</strong></div>
           </div>
 
@@ -321,8 +319,7 @@ function forget(d: DeviceView) {
             <n-button size="small" @click="refreshDevices()">
               <template #icon><n-icon :component="RefreshOutline" /></template>重新扫描
             </n-button>
-            <n-button size="small" :loading="bulkRunning" @click="reconnectAll">全部重连</n-button>
-            <span class="device-toolbar-hint">全部重连只覆盖已记住的设备；不会动只是可发现的手机。</span>
+            <n-button size="small" :loading="bulkRunning" title="只重连已记住的设备，不动只是可发现的手机" @click="reconnectAll">全部重连</n-button>
           </div>
 
           <div v-if="addOpen" class="device-add-panel">
@@ -355,7 +352,7 @@ function forget(d: DeviceView) {
                   <span v-if="d.isDefault" class="device-badge">默认</span>
                   <span v-if="d.observed" class="device-badge accent">观察中</span>
                 </span>
-                <span class="app-pkg">{{ d.serial }}<template v-if="d.net"> · 无线</template> · {{ d.rpc ? '设备通道已连接' : adbText(d) }}<template v-if="d.observed && d.agent"> · agent {{ d.agent.online ? '在线' : '离线' }}</template></span>
+                <span class="app-pkg">{{ d.serial }}<template v-if="d.net"> · 无线</template> · {{ isOnline(d) ? '已连接' : '未连接' }}<template v-if="d.observed && d.agent && !d.agent.online"> · agent 离线</template></span>
               </span>
               <span v-if="d.key === selected" class="device-current-tag">当前</span>
               <span v-else-if="!isOnline(d) && d.seenAt" class="device-seen">{{ timeAgo(d.seenAt) }}</span>
