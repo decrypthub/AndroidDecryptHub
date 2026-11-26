@@ -79,12 +79,12 @@ const canControl = computed(() => store.scope.has(store.chosenPkg));
           </div>
           <div class="app-dialog-actions">
             <template v-if="canControl">
-              <button type="button" @click="control('open')">打开</button>
-              <button type="button" @click="control('restart')">重启</button>
-              <button type="button" @click="control('stop')">结束</button>
+              <n-button size="small" @click="control('open')">打开</n-button>
+              <n-button size="small" @click="control('restart')">重启</n-button>
+              <n-button size="small" @click="control('stop')">结束</n-button>
             </template>
-            <n-button quaternary circle aria-label="关闭应用窗口" @click="emit('close')">
-              <n-icon size="14" :component="CloseOutline" />
+            <n-button text aria-label="关闭应用窗口" class="app-close" @click="emit('close')">
+              <n-icon size="18" :component="CloseOutline" />
             </n-button>
           </div>
         </div>

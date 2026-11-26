@@ -121,7 +121,7 @@
   .app-dialog-id strong { font-size:16px; }
   .app-dialog-id span, .app-item .app-pkg { overflow:hidden; color:var(--muted); font:11px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace; text-overflow:ellipsis; white-space:nowrap; }
   .app-dialog-actions { display:flex; gap:8px; }
-  .app-dialog-actions button, .app-dialog-card .set-close-x { min-height:32px; padding:0 12px; color:var(--ink-2); background:transparent; border:1px solid var(--line); border-radius:4px; cursor:pointer; }
+  .app-dialog-card .set-close-x { width:32px; padding:0; min-height:32px; color:var(--ink-2); background:transparent; border:1px solid var(--line); border-radius:4px; cursor:pointer; }
   .app-dialog-card .set-close-x { width:32px; padding:0; }
   .app-dialog .app-menu-search { width:auto; margin:10px 16px 0; }
   .app-dialog.browse-mode .app-dialog-actions, .app-dialog.browse-mode [data-app-tab="injected"] { display:none; }
