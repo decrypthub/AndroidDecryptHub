@@ -110,9 +110,9 @@ const canControl = computed(() => store.scope.has(store.chosenPkg));
                   <span class="app-state" :class="{ on: store.scope.has(a.package) }">
                     {{ store.scope.has(a.package) ? '已注入' : '' }}</span>
                 </button>
-                <button type="button" class="app-inject" title="允许注入" :aria-pressed="store.scope.has(a.package)"
+                <n-switch size="small" class="app-inject-sw" aria-label="允许注入" :value="store.scope.has(a.package)"
                   :disabled="a.package === store.chosenPkg && store.scope.has(a.package)"
-                  @click="toggleInject(a.package, !store.scope.has(a.package))"></button>
+                  @update:value="on => toggleInject(a.package, !!on)" />
               </div>
             </template>
           </n-virtual-list>
