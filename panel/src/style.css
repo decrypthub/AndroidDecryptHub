@@ -891,7 +891,7 @@ select option{color:var(--ink);background:var(--surface)}
 .fp-chip .fp-reads { opacity:.6; font-size:10.5px; margin-left:5px; }
 
 /* ---- 设备窗口：沿用应用窗口的两栏壳（.app-dialog），这里是设备专有的行/详情 ---- */
-.device-dialog { height:auto; max-height:min(560px,88dvh); }
+.device-dialog { height:min(640px,88dvh); }
 .device-dialog .app-dialog-side small { margin-left:auto; color:var(--muted); font-size:11px; }
 .device-side-foot { margin-top:auto; display:flex; flex-direction:column; gap:4px; padding:10px 8px 2px;
   border-top:1px solid var(--line-soft); color:var(--muted); font-size:11px; line-height:1.45; }
@@ -910,7 +910,7 @@ select option{color:var(--ink);background:var(--surface)}
 .device-add-row .n-select, .device-add-row .n-input { flex:1; min-width:0; }
 .device-add-hint { margin:0; color:var(--muted); font-size:11px; line-height:1.5; }
 .device-add-error { margin:0; color:var(--danger); font-size:12px; }
-.device-choices { flex:0 1 auto; max-height:300px; overflow:auto; }
+.device-choices { flex:1 1 auto; min-height:0; overflow:auto; }
 .device-item { display:flex; align-items:center; gap:10px; width:100%; min-height:52px; padding:8px 10px;
   color:var(--ink); background:transparent; border:1px solid transparent; border-radius:6px;
   text-align:left; cursor:pointer; }
