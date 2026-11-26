@@ -5,7 +5,7 @@ import {
   store, liveSession, appSessions, hiddenHooks, setHidden, resetHidden,
   panelDisplay, savePanelDisplay, DISPLAY_CAPS, hostDisplayCap, belongsToApp, toast,
 } from '../store';
-import { getFamilies, setFamily, getDetectSummary, getHealth, getConfig } from '../api';
+import { getFamilies, setFamily, getDetectSummary, getHealth, getConfig, type Cap } from '../api';
 import {
   FAMILIES as ALGO_FAMILIES, HOOK_GROUPS, categoryKey, summarize, summarizeHooks,
   sessionHookEvidence, type AlgoEntry, type HookEntry,
@@ -95,7 +95,10 @@ async function loadRadar() {
 }
 
 // ---- 记录显示 ----
-const appRecords = computed(() => store.capItems.filter(belongsToApp));
+// 设置页用快照：进入页面、切换应用、手动刷新时取一次，此后列表稳定不动。
+// 实时记录只属于捕获主面板；设置里行和计数都不随采集跳动，否则开关点不中。
+const recordsSnap = ref<Cap[]>([]);
+function takeSnap() { recordsSnap.value = store.capItems.filter(belongsToApp); }
 const obsView = ref<'algo' | 'hook'>('algo');
 const obsQuery = ref('');
 const obsFamily = ref('');
@@ -104,14 +107,14 @@ const hookCategory = ref('');
 
 const algoList = computed<AlgoEntry[]>(() => {
   const q = obsQuery.value.trim().toLowerCase();
-  return summarize(appRecords.value, hiddenHooks).filter(e =>
+  return summarize(recordsSnap.value, hiddenHooks).filter(e =>
     (!obsFamily.value || e.family === obsFamily.value) &&
     (!q || e.name.toLowerCase().includes(q) ||
       e.methods.some(m => `${m.className}.${m.member} ${m.label}`.toLowerCase().includes(q))));
 });
 const hookList = computed<HookEntry[]>(() => {
   const q = hookQuery.value.trim().toLowerCase();
-  return summarizeHooks(appRecords.value).filter(h =>
+  return summarizeHooks(recordsSnap.value).filter(h =>
     (!hookCategory.value || h.category === hookCategory.value) &&
     (!q || h.name.toLowerCase().includes(q)));
 });
@@ -140,11 +143,11 @@ function resetAll() {
   toast('已恢复此应用的全部显示');
 }
 
-// ---- 功能与 Hook 状态 ----
+// ---- 功能与 Hook 状态（同为设置页统计，也用快照）----
 const evidence = computed(() => {
   const s = liveSession.value;
   if (!s) return null;
-  return sessionHookEvidence(appRecords.value, store.chosenPkg, s.sessionId);
+  return sessionHookEvidence(recordsSnap.value, store.chosenPkg, s.sessionId);
 });
 const EVIDENCE_LABELS: Record<string, string> = { crypto: '加解密', system: '系统调用', file: '文件读写', net: '网络' };
 
@@ -193,8 +196,9 @@ async function refreshStatus() {
   statusMsg.value = (service && data) ? '' : '部分信息读取失败，可点「刷新」重试。';
   statusBusy.value = false;
 }
-onMounted(() => { void loadFamilies(); void loadRadar(); void refreshStatus(); });
-watch(() => store.chosenPkg, () => { void loadFamilies(); void loadRadar(); });
+onMounted(() => { void loadFamilies(); void loadRadar(); void refreshStatus(); takeSnap(); });
+watch(() => store.chosenPkg, () => { void loadFamilies(); void loadRadar(); takeSnap(); });
+watch(page, p => { if (p === 'records' || p === 'hooks') takeSnap(); });
 </script>
 
 <template>
@@ -254,7 +258,10 @@ watch(() => store.chosenPkg, () => { void loadFamilies(); void loadRadar(); });
           </div>
           <div class="rec-heading">
             <h4>显示规则</h4>
-            <n-button v-if="hiddenHooks.size" text size="small" @click="resetAll">恢复全部显示</n-button>
+            <span class="rec-heading-actions">
+              <n-button text size="small" @click="takeSnap">刷新</n-button>
+              <n-button v-if="hiddenHooks.size" text size="small" @click="resetAll">恢复全部显示</n-button>
+            </span>
           </div>
           <div class="rec-tools">
             <n-radio-group v-model:value="obsView" name="record-group" size="small" aria-label="显示规则分组">
@@ -282,6 +289,10 @@ watch(() => store.chosenPkg, () => { void loadFamilies(); void loadRadar(); });
         </section>
 
         <section v-else-if="page === 'hooks'" class="set-page">
+          <div class="set-page-head">
+            <span></span>
+            <n-button size="small" secondary @click="takeSnap">刷新</n-button>
+          </div>
           <div v-if="!evidence" class="set-observation-empty">没有在线会话。Hook 状态按当前进程会话统计。</div>
           <template v-else>
             <div v-for="(label, key) in EVIDENCE_LABELS" :key="key" class="set-algorithm-entry">
@@ -397,6 +408,7 @@ watch(() => store.chosenPkg, () => { void loadFamilies(); void loadRadar(); });
 .rec-categories{gap:24px;flex-wrap:wrap;padding:3px 0 22px;border-bottom:1px solid var(--line-soft)}
 .rec-checks{gap:8px 18px;flex-wrap:wrap}.rec-categories h4{white-space:nowrap}
 .rec-heading{min-height:36px;margin:14px 0 7px;justify-content:space-between}
+.rec-heading-actions{display:flex;align-items:center;gap:14px}
 .rec-tools{gap:8px;margin-bottom:18px;flex-wrap:wrap}
 .rec-tools .n-radio-group{flex:none}.rec-search{margin-left:auto;max-width:245px;min-width:0;flex:1 1 120px}
 .rec-select{flex:0 0 124px;min-width:0}

@@ -84,10 +84,11 @@ export function summarize(records: Cap[], hidden = new Set<string>()): AlgoEntry
     const previous = entry.methods.get(methodKey);
     entry.methods.set(methodKey, { ...method, count: (previous?.count ?? 0) + 1 });
   }
+  // 设置页语义：固定名称序。不能按 latest/count 排——采集是实时的，行序会跟着跳，开关点不中。
   return [...entries.values()]
     .map(entry => ({ ...entry, methods: [...entry.methods.values()].sort((a, b) =>
       a.className.localeCompare(b.className) || a.member.localeCompare(b.member) || a.label.localeCompare(b.label)) }))
-    .sort((a, b) => b.latest - a.latest || b.count - a.count || a.name.localeCompare(b.name));
+    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 const symbol = (value: unknown) => typeof value === 'string' && /^[\p{L}\p{N}_.$:@+<>-]{1,120}$/u.test(value) ? value : '';
