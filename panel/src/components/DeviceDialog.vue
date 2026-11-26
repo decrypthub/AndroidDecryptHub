@@ -6,7 +6,7 @@ import {
 } from '@vicons/ionicons5';
 import type { DeviceView } from '../store';
 import {
-  toast, refreshDevices, deviceLabel, rememberDevice, renameDevice, forgetDevice, setDefaultDevice,
+  toast, refreshDevices, deviceLabel, rememberDevice, renameDevice, forgetDevice,
 } from '../store';
 import { connectDevice, disconnectDevice, reconnectDevice, adbConnectDevice } from '../api';
 
@@ -226,23 +226,15 @@ function rowTitle(d: DeviceView) {
 }
 
 function detailMenu(d: DeviceView) {
-  const items: Array<{ label: string; key: string; disabled?: boolean }> = [];
-  if (d.rpc) items.push({ label: '断开设备通道', key: 'disconnect' });
-  else if (d.state === 'device' || d.state === 'online') items.push({ label: '连接设备通道', key: 'connect' });
-  if (!d.isDefault) items.push({ label: '设为默认设备', key: 'default' });
-  items.push({ label: '重命名', key: 'rename' });
-  items.push(d.remembered ? { label: '忘记这台设备', key: 'forget' } : { label: '记住这台设备', key: 'remember' });
+  const items: Array<{ label: string; key: string; disabled?: boolean }> = [{ label: '重命名', key: 'rename' }];
+  if (d.remembered) items.push({ label: '从列表移除', key: 'forget' });
   return items;
 }
 
 function onDetailAction(key: string) {
   const d = detail.value;
   if (!d) return;
-  if (key === 'connect') { void connect(d); return; }
-  if (key === 'disconnect') { void disconnect(d); return; }
-  if (key === 'default') { setDefaultDevice(d.key); toast(`默认设备设为 ${deviceLabel(d)}`); }
-  else if (key === 'rename') startRename(d);
-  else if (key === 'remember') { rememberDevice(d.key); toast(`已记住 ${deviceLabel(d)}`); }
+  if (key === 'rename') startRename(d);
   else if (key === 'forget') forget(d);
 }
 
@@ -287,7 +279,6 @@ function forget(d: DeviceView) {
               <template v-else>
                 <strong>
                   {{ deviceLabel(detail) }}
-                  <span v-if="detail.isDefault" class="device-badge">默认</span>
                   <span v-if="detail.observed" class="device-badge accent" title="本机观察：面板只从这台手机上的观察 APP 接收数据，其它手机只能查看和管理，不产生记录">本机观察</span>
                 </strong>
                 <span>
@@ -354,7 +345,6 @@ function forget(d: DeviceView) {
               <span class="app-copy">
                 <span class="app-name">
                   {{ deviceLabel(d) }}
-                  <span v-if="d.isDefault" class="device-badge">默认</span>
                   <span v-if="d.observed" class="device-badge accent" title="本机观察：面板只从这台手机上的观察 APP 接收数据">本机观察</span>
                 </span>
                 <span class="app-pkg">{{ d.serial }}<template v-if="d.net"> · 无线</template><template v-if="!isOnline(d) && d.seenAt"> · {{ timeAgo(d.seenAt) }}</template></span>

@@ -21,7 +21,6 @@ export interface DeviceView {
   // 面板本地清单：显示名 / 是否记住 / 是否默认 / 上次见到的时间
   name?: string;
   remembered?: boolean;
-  isDefault?: boolean;
   seenAt?: number;
 }
 
@@ -221,19 +220,6 @@ export function forgetDevice(key: string) {
   persistDevicePrefs('remove', key);
   void refreshDevices();
 }
-export function setDefaultDevice(key: string) {
-  for (const [other, pref] of Object.entries(store.devicePrefs)) {
-    if (pref.default) store.devicePrefs[other] = { ...pref, default: false };
-  }
-  const current = devicePref(key);
-  store.devicePrefs[key] = { ...current, default: true, rememberedAt: current.rememberedAt ?? Date.now() };
-  persistDevicePrefs();
-  void refreshDevices();
-}
-export function defaultDeviceKey(): string {
-  for (const [key, pref] of Object.entries(store.devicePrefs)) if (pref.default) return key;
-  return '';
-}
 
 // ---- 设备轮询：失败保旧值 ----
 export async function refreshDevices() {
@@ -285,13 +271,13 @@ export async function refreshDevices() {
       live.push({ key, serial: key, model: '', state: 'disconnected', link: '', online: false, rpc: false,
         net: key.includes(':'), name: pref.name, remembered: true, seenAt: pref.lastSeenAt });
     }
-    const preferred = defaultDeviceKey();
-    store.devices = live.map(d => ({ ...d, isDefault: d.key === preferred }));
+    store.devices = live;
     if (prefsDirty) persistDevicePrefs();
     store.devicesFailed = false;
     store.devicesUpdated = now;
     if (!store.selectedDeviceKey || !store.devices.some(d => d.key === store.selectedDeviceKey)) {
-      const pick = store.devices.find(d => d.key === preferred) ?? store.devices.find(d => d.observed) ?? store.devices[0];
+      // 默认选中本机观察的那台；没有就取第一台（不再维护单独的「默认设备」偏好）
+      const pick = store.devices.find(d => d.observed) ?? store.devices[0];
       if (pick) selectDevice(pick.key);
     }
   } catch {
