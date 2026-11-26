@@ -10,6 +10,8 @@ export interface DeviceView {
   key: string; serial: string; model: string; state: string;
   link: string; observed?: string; online: boolean | null; failed?: boolean;
   appSession?: string | null;
+  // adh.device/1 RPC 通道在线（或有建立中的连接），只有真实 transport 行才带这个字段
+  rpc?: boolean;
 }
 
 export const CAP_BUFFER_LIMIT = 4500;
@@ -155,6 +157,7 @@ export async function refreshDevices() {
       link: String(t.link ?? ''),
       observed: t.observed === true ? (usb?.observedPackage as string | undefined) : (typeof t.observed === 'string' ? t.observed : undefined),
       online: t.online as boolean | null,
+      rpc: t.rpc === true,
     }));
     store.localUsb = usb;
     // 本地观察模式：transports 为空时 localUsb 自己当设备行
