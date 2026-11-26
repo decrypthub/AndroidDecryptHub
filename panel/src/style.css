@@ -4,6 +4,7 @@
     --line:#d3d6da; --line-soft:#e7e8ea; --ink:#111315; --ink-2:#34383d; --muted:#656a71;
     --blue:var(--ink); --green:#286948; --danger:#a7363e; --amber:#815714;
     --teal:#37685e; --cyan:#346674; --lilac:#645571; --pink:#855569; --coral:#8c5645;
+    --cat-digest:#2c7a4b; --cat-hmac:#2b5fc7; --cat-sym:#8a5f14; --cat-asym:#7a4fa3; --cat-aead:#1f7d6e;
     --float-shadow:0 8px 28px rgba(20,25,32,.12);
   }
   :root[data-appearance=dark] {
@@ -12,6 +13,7 @@
     --line:#383c42; --line-soft:#282d32; --ink:#f4f6f8; --ink-2:#d2d6db; --muted:#a3a9b1;
     --green:#94c8a4; --danger:#eea0a5; --amber:#dbbc85; --teal:#9ac5b9; --cyan:#a0c7d0;
     --lilac:#c6b6d5; --pink:#ddbac8; --coral:#dbb0a4; --float-shadow:0 10px 32px rgba(0,0,0,.32);
+    --cat-digest:#7fd695; --cat-hmac:#82a9ff; --cat-sym:#e0b96f; --cat-asym:#c9a2e8; --cat-aead:#5bcfc2;
   }
 
   * { box-sizing:border-box; scrollbar-width:thin; scrollbar-color:var(--line) transparent; }
@@ -351,30 +353,30 @@
   .io-section.raw-card { padding:0 0 2px 12px; background:transparent; border:0; border-radius:0; border-left:2px solid var(--cyan); }
   .io-label.raw { color:var(--cyan); background:transparent; }
   .stack-section { margin-top:16px; }
-  .row.cat-digest { border-left-color:var(--green); } .row.cat-hmac { border-left-color:var(--blue); }
-  .row.cat-sym { border-left-color:var(--amber); }    .row.cat-asym { border-left-color:var(--lilac); }
-  .row.cat-aead { border-left-color:var(--teal); }
+  .row.cat-digest { border-left-color:var(--cat-digest); } .row.cat-hmac { border-left-color:var(--cat-hmac); }
+  .row.cat-sym { border-left-color:var(--cat-sym); }    .row.cat-asym { border-left-color:var(--cat-asym); }
+  .row.cat-aead { border-left-color:var(--cat-aead); }
   .row.cat-file { border-left-color:var(--coral); }   .row.cat-sys { border-left-color:var(--lilac); }
   .row.cat-net { border-left-color:var(--cyan); }     .row.cat-other { border-left-color:#3a3a3a; }
-  .row.cat-digest .algo { color:var(--green); }
-  .row.cat-hmac .algo { color:var(--blue); }
-  .row.cat-sym .algo { color:var(--amber); }
-  .row.cat-asym .algo { color:var(--lilac); }
-  .row.cat-aead .algo { color:var(--teal); }
-  .row.cat-file .algo { color:var(--amber); }
+  .row.cat-digest .algo { color:var(--cat-digest); }
+  .row.cat-hmac .algo { color:var(--cat-hmac); }
+  .row.cat-sym .algo { color:var(--cat-sym); }
+  .row.cat-asym .algo { color:var(--cat-asym); }
+  .row.cat-aead .algo { color:var(--cat-aead); }
+  .row.cat-file .algo { color:var(--coral); }
   .row.cat-sys .algo { color:var(--lilac); }
   .row.cat-net .algo { color:var(--cyan); }
   .caprow { cursor:pointer; }
   .row .pill { padding:0 2px; border:0; border-radius:0; background:transparent; font-size:11px; font-weight:600; }
-  .row .pill.digest { color:var(--green); } .row .pill.hmac { color:var(--blue); }
-  .row .pill.sym { color:var(--amber); }    .row .pill.asym { color:var(--lilac); }
-  .row .pill.aead { color:var(--teal); }
+  .row .pill.digest { color:var(--cat-digest); } .row .pill.hmac { color:var(--cat-hmac); }
+  .row .pill.sym { color:var(--cat-sym); }    .row .pill.asym { color:var(--cat-asym); }
+  .row .pill.aead { color:var(--cat-aead); }
   .row .pill.file { color:var(--coral); }   .row .pill.sys { color:var(--lilac); }
   .row .pill.net { color:var(--cyan); }     .row .pill.other { color:var(--muted); }
   .cat-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:8px; vertical-align:middle; }
-  .cat-dot.digest { background:var(--green); } .cat-dot.hmac { background:var(--blue); }
-  .cat-dot.sym { background:var(--amber); } .cat-dot.asym { background:var(--lilac); }
-  .cat-dot.aead { background:var(--teal); }
+  .cat-dot.digest { background:var(--cat-digest); } .cat-dot.hmac { background:var(--cat-hmac); }
+  .cat-dot.sym { background:var(--cat-sym); } .cat-dot.asym { background:var(--cat-asym); }
+  .cat-dot.aead { background:var(--cat-aead); }
   .cat-dot.file { background:var(--coral); } .cat-dot.sys { background:var(--lilac); }
   .cat-dot.net { background:var(--cyan); } .cat-dot.other { background:var(--muted); }
   .empty, .detail-empty { color:var(--muted); text-align:center; padding:60px 20px; line-height:1.7; }
@@ -824,18 +826,19 @@ select option{color:var(--ink);background:var(--surface)}
 .cap-view .capture-list-foot{min-height:32px}.cap-view .page-cap-select{width:112px}
 .topbar .process-trigger{width:auto}.topbar .proc-text{flex:0 1 auto}
 @media(min-width:900px){
- .capture-workspace:not(.detail-open) .crypto-row,.workarea:not(.reading) .event-row,.ledger-head{display:grid;grid-template-columns:54px minmax(130px,1.1fr) minmax(160px,1.5fr) minmax(150px,1fr) 85px;align-items:center;gap:14px;padding:0 22px}
+ .capture-workspace:not(.detail-open) .row:not(.sk-row),.workarea:not(.reading) .event-row,.ledger-head{display:grid;grid-template-columns:54px minmax(130px,1.1fr) minmax(160px,1.5fr) minmax(150px,1fr) 85px;align-items:center;gap:14px;padding:0 22px}
  .ledger-head{min-height:34px!important;flex:none!important;font-size:12px;color:var(--muted);background:var(--chrome);border-bottom:1px solid var(--line-soft)}
  .ledger-head span:last-child{text-align:right}
- .capture-workspace:not(.detail-open) .crypto-row,.workarea:not(.reading) .event-row{min-height:46px;background:var(--surface);border-left:0;font-size:13px}
- .capture-workspace:not(.detail-open) .crypto-row:hover,.workarea:not(.reading) .event-row:hover{background:var(--surface-2)}
- .capture-workspace:not(.detail-open) .crypto-row :is(.top,.subline),.workarea:not(.reading) .event-row :is(.event-body,.event-top){display:contents}
- .capture-workspace:not(.detail-open) .crypto-row :is(.seq,.algo,.preview,.sizes,.ts),.workarea:not(.reading) .event-row :is(.event-index,.event-name,.event-preview,.event-sub,.event-time){grid-row:1;min-width:0;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
- .capture-workspace:not(.detail-open) .crypto-row .algo,.workarea:not(.reading) .event-row .event-name{grid-column:2;font-size:14px;font-weight:550;color:var(--ink)}
- .capture-workspace:not(.detail-open) .crypto-row .preview,.workarea:not(.reading) .event-row .event-preview{grid-column:3;color:var(--ink-2);font-size:12px}
- .capture-workspace:not(.detail-open) .crypto-row .sizes,.workarea:not(.reading) .event-row .event-sub{grid-column:4;color:var(--muted)}
- .capture-workspace:not(.detail-open) .crypto-row .ts,.workarea:not(.reading) .event-row .event-time{grid-column:5;text-align:right;color:var(--muted)}
- .capture-workspace:not(.detail-open) .crypto-row :is(.hook,.op,.mark){display:none}
+ .capture-workspace:not(.detail-open) .row:not(.sk-row),.workarea:not(.reading) .event-row{min-height:46px;background:var(--surface);border-left:0;font-size:13px}
+ .capture-workspace:not(.detail-open) .row:not(.sk-row):hover,.workarea:not(.reading) .event-row:hover{background:var(--surface-2)}
+ .capture-workspace:not(.detail-open) .row:not(.sk-row) :is(.top,.subline),.workarea:not(.reading) .event-row :is(.event-body,.event-top){display:contents}
+ .capture-workspace:not(.detail-open) .row:not(.sk-row) :is(.seq,.algo,.preview,.sizes,.ts,.lens,.op),.workarea:not(.reading) .event-row :is(.event-index,.event-name,.event-preview,.event-sub,.event-time){grid-row:1;min-width:0;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+ .capture-workspace:not(.detail-open) .row:not(.sk-row) .algo,.workarea:not(.reading) .event-row .event-name{grid-column:2;font-size:14px;font-weight:550}
+ .capture-workspace:not(.detail-open) .row:not(.sk-row) :is(.preview,.lens),.workarea:not(.reading) .event-row .event-preview{grid-column:3;color:var(--ink-2);font-size:12px}
+ .capture-workspace:not(.detail-open) .row:not(.sk-row) :is(.sizes,.op),.workarea:not(.reading) .event-row .event-sub{grid-column:4;color:var(--muted)}
+ .capture-workspace:not(.detail-open) .row:not(.sk-row) .ts,.workarea:not(.reading) .event-row .event-time{grid-column:5;text-align:right;color:var(--muted)}
+ .capture-workspace:not(.detail-open) .row:not(.sk-row) :is(.hook,.mark,.pill){display:none}
+ .capture-workspace:not(.detail-open) .crypto-row .op{display:none}
  .workarea:not(.reading) .events-header{min-height:0;padding:0;border:0;position:relative}.workarea:not(.reading) .events-header>strong,.workarea:not(.reading) .small-stat{display:none}
  .workarea:not(.reading) .events-header .hstack{position:absolute;top:2px;right:94px;z-index:1}
 }

@@ -58,6 +58,11 @@ const CATS: Record<string, CatKey[]> = {
 const CAT_BY_SEL: Record<number, CatKey> = { 0: 'digest', 1: 'hmac', 2: 'sym', 3: 'asym', 4: 'aead' };
 const SYS_KINDS: Array<[string, string]> = [['all', '全部活动'], ['system', '系统调用'], ['file', '文件读写']];
 const LIST_ID: Record<string, string> = { crypto: 'cc-list', system: 'sy-list', net: 'nt-list' };
+const HEAD_LABELS: Record<string, [string, string, string]> = {
+  crypto: ['算法', '内容预览', '输入 → 输出'],
+  system: ['函数', '内容预览', '操作'],
+  net: ['请求', '响应', '状态'],
+};
 
 function panelCats(): string[] {
   if (props.kind === 'crypto') return ['crypto'];
@@ -515,7 +520,7 @@ const searchPlaceholder = computed(() =>
           <n-button text size="tiny" type="primary" @click="jumpLatest">跳到最新</n-button>
         </div>
 
-        <div v-if="kind === 'crypto' && sel === null && rows.length" class="ledger-head adh-grid" aria-hidden="true"><span>序号</span><span>算法</span><span>内容预览</span><span>输入 → 输出</span><span>时间</span></div>
+        <div v-if="sel === null && (kind === 'net' ? matchedExchanges.length : rows.length)" class="ledger-head adh-grid" aria-hidden="true"><span>序号</span><span>{{ HEAD_LABELS[kind][0] }}</span><span>{{ HEAD_LABELS[kind][1] }}</span><span>{{ HEAD_LABELS[kind][2] }}</span><span>时间</span></div>
         <div class="cap-list" :id="LIST_ID[kind]" tabindex="0" @scroll="onScroll">
           <template v-if="showSkeleton">
             <div v-for="i in 8" :key="'sk' + i" class="row sk-row" aria-hidden="true">
