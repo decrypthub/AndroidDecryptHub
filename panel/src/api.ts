@@ -90,6 +90,26 @@ export const connectDevice = (serial: string) =>
 export const disconnectDevice = (serial: string) =>
   postDevice<{ ok: boolean; serial: string; dropped?: boolean }>({ action: 'disconnect', serial });
 
+export interface ReconnectReply {
+  ok: boolean; serial: string; link: 'usb' | 'adb-tcp' | null; reverse: 'present' | 'added' | 'skipped';
+  rpc: boolean; deviceId?: string;
+  agent?: { online: boolean; pid: number; sessionId: string; waitedMs: number };
+  warnings: string[]; code?: string; error?: string; elapsedMs: number;
+}
+// 重连失败也带着分层的诊断（哪一层没通、为什么），所以这里不按 HTTP 状态抛错，
+// 让调用方能显示完整原因；真正的网络错误仍然抛。
+async function deviceActionRaw(body: unknown, timeoutMs = 25000): Promise<ReconnectReply> {
+  const res = await fetch('/api/devices', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs), cache: 'no-store',
+  });
+  const data = await res.json().catch(() => null) as ReconnectReply | null;
+  if (!data || typeof data !== 'object') throw new Error(`${res.status} ${res.statusText}`);
+  return { ...data, ok: data.ok === true && res.ok };
+}
+export const reconnectDevice = (serial: string) => deviceActionRaw({ action: 'reconnect', serial });
+export const adbConnectDevice = (address: string) => deviceActionRaw({ action: 'adb-connect', address });
+
 export interface CapturesQuery {
   package: string;
   since?: number;

@@ -5328,3 +5328,13 @@ Host **561/561**、JVM **73/73** 无skip，类型、默认/隔离构建、94项M
 - 面板（ego-browser 实测，非单测）：系统页顶部「设备指纹 · 采集到 4 项标识符 + 2 项设备信息」+ 6 个芯片（android_id 带值，其余明示未取到）；下方系统调用与文件读写事件流保持原样（access `/system/bin/su`、文件读写 `adh_file_test.txt` 等）。
 - 部署：worktree `.tmp/daemon-main` 置于 `9958d3f`，`ADH_OBSERVE_APP=com.adh.sandbox ANDROID_SERIAL=aa165071 ADH_USB_APP_INVENTORY=1 ADH_HTTP_PORT=8088 ADH_AGENT_PORT=18761 ADH_DATA_DIR=<新空目录>` 启动；所服务 `/` 的 index.html 与目标构建 md5 **MATCH**。注意 `ADH_AGENT_PORT` 必须显式给 `18761`：默认 `8761` 时启动期 local_observer 的 reverse 校验会失败（`Expected the existing matching USB reverse`）。
 - 采集窗口口径：验收期间 `/api/captures` 为 `complete:false`、`dropped` 29655（沙盒探针持续产生）；分类统计只覆盖窗口内记录（limit 2000 抽样：crypto 1046 / file 327 / system 122 / net 80）。
+## 2026-11-26 — 设备管理：添加/命名/默认/重连/忘记
+
+把顶栏设备选择器做成设备管理器，并给「重连」一个分层结果（ADB 链路 / reverse 隧道 / 设备域通道 / agent 重拨），不再用一句 succeeded 盖住没通的层。
+
+- Host：新增 `device_actions.ts`（`reconnectDevice` / `connectNetDevice`）。USB 串号先查花名册，状态不是 `device` 时按未授权/离线分别报错；agent 端口 reverse 缺失时补（只加不删既有映射）；设备域 `connectDevice` 失败如实写进 warnings。网络串号（`host:port`）先用 `host:connect` 拉回，连不上保留 adb 原话，超时翻译成「确认无线调试/同网络/地址端口」。观察设备以 agent 回到在线判成功（强制断开旧 socket 等重拨，最多 6 秒），其它设备以设备域通道判成功。`adb_wire` 补 `connect`/`disconnect` 的 argv 映射（仍是 5037 协议帧，不 spawn adb）。
+- 接口：`GET /api/devices?action=list` 的 transports 增 `net` 与观察设备的 `agent`（online/pid/sessionId/lastSeen）；`POST /api/devices` 增 `reconnect` 与 `adb-connect`，失败返回 502 + 结构化 `code`/`error`/`warnings`。
+- 面板：设备菜单重做为管理器——显示名、默认设备、记住/忘记、添加设备（USB 串号选择或手输；无线调试 IP:端口走 adb connect）、单台重连与全部重连（只覆盖已记住的设备，不碰只是「可发现」的手机）。清单存 localStorage（`adh.devices.v1`），daemon 重启或换数据目录不影响；权威在线状态仍来自 daemon。用 naive-ui 标准件（n-modal/n-select/n-radio-group/n-dropdown），新增 NModal 注册。
+- 真机与界面验收（aa165071 / com.adh.sandbox，ego-browser 真页面）：添加离线串号并跨刷新保留；重命名「沙盒测试机」、设默认（徽标 + 顶栏同步 + 刷新后仍是默认）；单台重连 toast「重连成功：agent 已连上 · 1027ms」，daemon 侧 agent 会话确实换新（s_1bbe→s_2o7f→…）；离线设备重连 toast「重连失败：这台手机现在不在 USB 上」；全部重连 toast「重连 2 台：成功 1，失败 1 — 离线测试机（DEVICE_ABSENT）」；忘记有确认弹窗，确认后从列表与 localStorage 移除且不断开手机。
+- 界面测试抓到两个真 bug 并修掉：①`DEVICE_PREFS_KEY` 声明在 `store` 之后，`loadDevicePrefs()` 在 store 初始化时同步调用落进 TDZ，被 catch 吞成空对象 —→ 刷新后命名/默认/已记住设备全部丢失（把常量提前到 store 之前）；②行菜单与弹窗由 naive-ui teleport 到 body，点它们会命中「点到面板外面就关菜单」的监听 —→ 选一个操作就把设备菜单收起（改为忽略 `.n-dropdown-menu`/`.n-modal`/`.v-binder-follower-container` 内的点击）。
+- 门禁：daemon `tsc -p` rc=0；全量 **643 tests / 623 pass / 0 fail / 20 skipped**（新增 device_actions 10 项 + adb_wire connect 2 项）；panel `vite build` 通过（940.75 kB，md5 `839caf2d641b1568def532a1579bcfc3`）。未改 agent 与设备 APK，未动截断/注入范围。

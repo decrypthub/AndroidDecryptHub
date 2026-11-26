@@ -889,3 +889,19 @@ select option{color:var(--ink);background:var(--surface)}
 .fp-chip .fp-value { font-family:ui-monospace,monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:280px; display:inline-block; vertical-align:bottom; }
 .fp-chip .fp-value.none { font-family:inherit; opacity:.65; }
 .fp-chip .fp-reads { opacity:.6; font-size:10.5px; margin-left:5px; }
+
+/* ---- 设备管理（设备菜单 + 添加/重命名弹窗） ---- */
+.device-picker .device-menu { width: 420px; }
+.device-menu-head { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:2px 7px 4px; }
+.device-menu-head .device-menu-label { margin:0; }
+.device-menu-tools { display:flex; align-items:center; gap:2px; }
+.device-badge { margin-left:6px; padding:0 5px; border-radius:3px; font-size:10px; line-height:16px; font-weight:600;
+  color:var(--muted); background:var(--surface-2, var(--surface)); border:1px solid var(--line-soft); }
+.device-badge.accent { color:var(--ink); border-color:var(--line); }
+.device-menu-foot { margin:6px 8px 4px; padding-top:6px; border-top:1px solid var(--line-soft); color:var(--muted); font-size:11px; }
+.device-modal { width:420px; max-width:calc(100vw - 32px); }
+.device-add-kind { margin-bottom:10px; }
+.device-add-hint { margin:0 0 8px; color:var(--muted); font-size:12px; line-height:1.5; }
+.device-add-name { margin-top:8px; }
+.device-add-error { margin:8px 0 0; color:var(--bad, #b42318); font-size:12px; }
+.device-modal-actions { display:flex; justify-content:flex-end; gap:8px; }
