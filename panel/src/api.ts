@@ -126,7 +126,7 @@ export const getScope = () => api<{ ok: boolean; packages: string[];error?:strin
 const scopeChange=(pkg:string,add:boolean,serial?:string)=>api('/api/scope',{method:'POST',headers:scopeHeaders('/api/scope',{'content-type':'application/json','x-adh-package':pkg},serial?{serial,package:pkg}:undefined),body:JSON.stringify(add?{add:[pkg]}:{remove:[pkg]})});
 export const scopeAdd = (pkg: string,serial?:string) => scopeChange(pkg,true,serial);
 export const scopeRemove = (pkg: string,serial?:string) => scopeChange(pkg,false,serial);
-export const appControl = (pkg: string, action: string) => post('/api/apps/control', { package: pkg, action });
+export const appControl = (pkg: string, action: string,serial?:string) => api('/api/apps/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({package:pkg,action})},20000,serial?{serial,package:pkg}:undefined);
 // 设备写操作走专用封装：服务器把失败原因（DEVICE_NOT_READY、缺少 bootstrap、手机不在线）
 // 放在错误响应体的 error 字段，通用 api() 只抛 HTTP 状态会丢掉真实原因，toast 必须拿到它。
 async function postDevice<T = unknown>(body: unknown, timeoutMs = 20000): Promise<T> {

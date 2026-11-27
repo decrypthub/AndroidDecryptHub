@@ -12,6 +12,7 @@ import { store, selectDevice, toasts, panelDisplay, savePanelDisplay } from './s
 import { appIconUrl } from './api';
 import DeviceDialog from './components/DeviceDialog.vue';
 import AppDialog from './components/AppDialog.vue';
+import AppLifecycleControl from './components/AppLifecycleControl.vue';
 import CapturePanel from './components/CapturePanel.vue';
 import FilesPanel from './components/FilesPanel.vue';
 import DumpPanel from './components/DumpPanel.vue';
@@ -39,7 +40,7 @@ const VIEW_TITLES: Record<ViewKey, string> = {
 watch(() => store.view, (v,previous) => { if(v==='settings'){store.view=previous&&previous!=='settings'?previous:'cc';store.settingsOpen=true;return;}document.title=`ADH · ${VIEW_TITLES[v]??''}`; }, { immediate: true });
 
 const wsText = computed(() =>
-  store.wsState === 'live' ? '电脑服务在线' : store.wsState === 'fail' ? '连接异常' : '正在连接…');
+  (store.wsState === 'live' ? '电脑服务在线' : store.wsState === 'fail' ? '连接异常' : '正在连接…')+(store.devicesFailed?' · 设备列表读取失败':''));
 const wsCls = computed(() =>
   `status-dot ${store.wsState === 'live' ? 'ok' : store.wsState === 'fail' ? 'bad' : ''}`);
 
@@ -97,7 +98,7 @@ const themeOverrides = computed<GlobalThemeOverrides>(() => {
   <div class="app-shell">
     <aside class="side" :class="{ rail: panelDisplay.rail }">
       <div class="side-brand">
-        <span class="hdr-mark"><img src="/raven.svg" alt=""></span>
+        <span class="hdr-mark brand-mark"><img src="/raven.svg" alt=""><n-tooltip trigger="hover" placement="right"><template #trigger><span :class="['brand-service-status',wsCls]" role="status" tabindex="0" :aria-label="wsText"></span></template>{{ wsText }}</n-tooltip></span>
         <span class="side-title">ADH</span>
       </div>
       <nav class="side-nav ui-nav" aria-label="主导航">
@@ -124,11 +125,6 @@ const themeOverrides = computed<GlobalThemeOverrides>(() => {
     <div class="main-col">
       <header class="topbar">
         <div class="mobile-board-picker"><n-select v-model:value="store.view" size="small" aria-label="切换板块" :options="boardOptions" /></div>
-        <div class="stats">
-          <span :class="wsCls"></span>
-          <span>{{ wsText }}</span>
-          <span v-if="store.devicesFailed" class="badge fail">读取失败</span>
-        </div>
         <DeviceDialog :devices="store.devices" :failed="store.devicesFailed" :selected="store.selectedDeviceKey"
           @select="selectDevice" @visibility="store.deviceDialogOpen=$event" />
         <div class="header-actions">
@@ -147,6 +143,7 @@ const themeOverrides = computed<GlobalThemeOverrides>(() => {
               </span>
               <span class="menu-chevron"><n-icon size="11" :component="ChevronDownOutline" /></span>
             </button>
+            <AppLifecycleControl :serial="iconSerial" :package="store.chosenPkg" :app="chosenApp" />
           </section>
         </div>
       </header>

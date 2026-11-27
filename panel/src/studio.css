@@ -289,3 +289,9 @@ body{background:var(--canvas);font-family:var(--sans);font-synthesis:none;-webki
 
 .settings-modal .hook-tools.java-only{grid-template-columns:minmax(180px,1fr) 118px 34px}
 @media(max-width:700px){.settings-modal .hook-tools.java-only{grid-template-columns:minmax(0,1fr) 34px}}
+
+/* Compact app actions and service signal, aligned with the existing website theme. */
+.app-shell .brand-mark{position:relative;overflow:visible}.app-shell .brand-service-status{position:absolute;right:-3px;bottom:-2px;width:9px;height:9px;box-sizing:content-box;border:2px solid var(--canvas);border-radius:50%;cursor:help;flex:none}.app-shell .brand-service-status:focus-visible{outline:2px solid var(--focus);outline-offset:3px}
+.app-shell .topbar .app-context{display:flex;align-items:center;gap:8px}.app-shell .topbar .process-trigger{min-width:0}.app-shell .topbar .header-actions{min-width:0}
+@media(max-width:700px){.app-shell .topbar .app-context{gap:3px}.app-shell .topbar .proc-text{max-width:130px}}
+.app-shell .brand-mark>img{border-radius:inherit}.app-shell .capture-workspace .row .pill{white-space:nowrap;flex:none}
