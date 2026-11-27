@@ -74,7 +74,7 @@ export const store = reactive({
   // 视图
   view: 'cc' as 'cc' | 'sy' | 'nt' | 'files' | 'dump' | 'settings',
   appDialogOpen: false,
-  hookSource: null as null | {serial:string;package:string;methodId:string;recordId:number;returnView:'cc'|'sy'|'nt'},
+  hookSource: null as null | {serial:string;package:string;methodId?:string;recordId?:number;session?:string;feature?:string;returnView:'cc'|'sy'|'nt'},
 });
 
 // Target selection belongs to this tab. Historical captures carry their own immutable proof.

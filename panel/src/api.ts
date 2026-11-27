@@ -18,6 +18,8 @@ export interface Cap {
   preview?: string; inl?: number; outl?: number; out?: number;
   package?: string; sessionId?: string; deviceBinding?:DeviceBinding;
   keyHex?: string; ivHex?: string; outHex?: string;
+  javaTarget?:string; javaTargetTruncated?:boolean; javaHookId?:number; captureMethodId?:string;
+  inputBytesPresent?:boolean; inputScope?:string; recordSchema?:string; keyl?:number; ivl?:number;
   [k: string]: unknown;
 }
 export interface Session {
@@ -121,9 +123,9 @@ export const getDeviceInfo = (serial: string) =>
   api<{ ok: boolean; info?: DeviceInfo; error?: string }>(`/api/devices?action=info&serial=${encodeURIComponent(serial)}`);export const getHealth = () => api<{ ok: boolean; version?: string }>('/health');
 export const getApps = () => api<{ ok: boolean; apps: AppInfo[]; error?: string; capture?: { enabled: boolean }; captureByPackage?: Record<string, unknown>; localObservation?: Record<string, unknown> }>('/api/apps');
 export const getScope = () => api<{ ok: boolean; packages: string[] }>('/api/scope');
-const scopeChange=(pkg:string,add:boolean)=>api('/api/scope',{method:'POST',headers:{'content-type':'application/json','x-adh-package':pkg},body:JSON.stringify(add?{add:[pkg]}:{remove:[pkg]})});
-export const scopeAdd = (pkg: string) => scopeChange(pkg,true);
-export const scopeRemove = (pkg: string) => scopeChange(pkg,false);
+const scopeChange=(pkg:string,add:boolean,serial?:string)=>api('/api/scope',{method:'POST',headers:scopeHeaders('/api/scope',{'content-type':'application/json','x-adh-package':pkg},serial?{serial,package:pkg}:undefined),body:JSON.stringify(add?{add:[pkg]}:{remove:[pkg]})});
+export const scopeAdd = (pkg: string,serial?:string) => scopeChange(pkg,true,serial);
+export const scopeRemove = (pkg: string,serial?:string) => scopeChange(pkg,false,serial);
 export const appControl = (pkg: string, action: string) => post('/api/apps/control', { package: pkg, action });
 // 设备写操作走专用封装：服务器把失败原因（DEVICE_NOT_READY、缺少 bootstrap、手机不在线）
 // 放在错误响应体的 error 字段，通用 api() 只抛 HTTP 状态会丢掉真实原因，toast 必须拿到它。
@@ -211,8 +213,8 @@ export const getCaptures = (q: CapturesQuery | string, since = 0, limit = 1000) 
   p.set('limit', String(opts.limit ?? 200));
   return api<CapturesReply>(`/api/captures?${p.toString()}`);
 };
-export const getCaptureDetail = (id: number, pkg?: string) =>
-  api<Record<string, unknown>>(`/api/captures/${id}${pkg ? `?package=${encodeURIComponent(pkg)}` : ''}`);
+export const getCaptureDetail = (id: number, pkg?: string, serial?:string) =>
+  api<Record<string, unknown>>(`/api/captures/${id}${pkg ? `?package=${encodeURIComponent(pkg)}` : ''}`,serial?{headers:scopeHeaders('/api/captures',undefined,{serial,package:pkg})}:undefined);
 export const deleteCapture = (id: number, pkg?: string) =>
   post<{ ok?: boolean; error?: string }>(`/api/captures/${id}${pkg ? `?package=${encodeURIComponent(pkg)}` : ''}`, { action: 'delete' });
 export const getExchanges = (pkg: string, range?: { fromTs?: number | null; toTs?: number | null }) => {

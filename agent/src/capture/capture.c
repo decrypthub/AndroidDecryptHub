@@ -53,9 +53,17 @@ struct CapRec {
 #define JCAP_KEY 64
 #define JCAP_IV 32
 #define JCAP_DATA 1024
+#define JCAP_ORIGIN 256
+#define JCAP_RECORD_RESERVE 9000
+#if (2 * (2 * JCAP_DATA + JCAP_KEY + JCAP_IV) + 6 * JCAP_ORIGIN + 1024) > JCAP_RECORD_RESERVE
+#error "Java record serializer reserve must cover all bounded fields"
+#endif
 struct JCapRec {
     char algo[56], op[16]; int tid; long long ts_ns;
     int nkey, niv, nin, nout;
+    int key_total, iv_total, in_total, out_total;
+    int origin_hook_id, origin_truncated, input_known, input_present;
+    char origin[JCAP_ORIGIN];
     unsigned char key[JCAP_KEY], iv[JCAP_IV], in[JCAP_DATA], out[JCAP_DATA];
 };
 static struct JCapRec g_jcaps[JCAP_MAX];
@@ -194,11 +202,17 @@ static size_t emit_caprec(char *out, size_t len, size_t cap, const struct CapRec
     return len;
 }
 static size_t emit_jcaprec(char *out, size_t len, size_t cap, const struct JCapRec *r, int first) {
-    char algoj[128], opj[64];
+    char algoj[128], opj[64], originj[JCAP_ORIGIN * 6 + 1];
     json_escape(r->algo, algoj, sizeof(algoj));
     json_escape(r->op, opj, sizeof(opj));
+    json_escape(r->origin, originj, sizeof(originj));
     len += snprintf(out + len, cap > len ? cap - len : 0,
-        "%s{\"algo\":\"%s\",\"op\":\"%s\",\"tid\":%d,\"tsNs\":%lld,\"key\":\"", first ? "" : ",", algoj, opj, r->tid, r->ts_ns);
+        "%s{\"recordSchema\":\"java-rich/2\",\"algo\":\"%s\",\"op\":\"%s\",\"tid\":%d,\"tsNs\":%lld", first ? "" : ",", algoj, opj, r->tid, r->ts_ns);
+    if (r->input_known) len += snprintf(out + len, cap > len ? cap - len : 0,
+        ",\"inputBytesPresent\":%s,\"inputScope\":\"call-argument-snapshot-after-return\"", r->input_present ? "true" : "false");
+    if (r->origin[0] || r->origin_truncated) len += snprintf(out + len, cap > len ? cap - len : 0,
+        ",\"javaTarget\":\"%s\",\"javaHookId\":%d,\"javaTargetTruncated\":%s", originj, r->origin_hook_id, r->origin_truncated ? "true" : "false");
+    len += snprintf(out + len, cap > len ? cap - len : 0, ",\"key\":\"");
     len = emit_hex(out, len, cap, r->key, r->nkey);
     len += snprintf(out + len, cap > len ? cap - len : 0, "\",\"iv\":\"");
     len = emit_hex(out, len, cap, r->iv, r->niv);
@@ -206,7 +220,7 @@ static size_t emit_jcaprec(char *out, size_t len, size_t cap, const struct JCapR
     len = emit_hex(out, len, cap, r->in, r->nin);
     len += snprintf(out + len, cap > len ? cap - len : 0, "\",\"out\":\"");
     len = emit_hex(out, len, cap, r->out, r->nout);
-    len += snprintf(out + len, cap > len ? cap - len : 0, "\",\"inl\":%d,\"outl\":%d}", r->nin, r->nout);
+    len += snprintf(out + len, cap > len ? cap - len : 0, "\",\"inl\":%d,\"outl\":%d,\"keyl\":%d,\"ivl\":%d}", r->in_total, r->out_total, r->key_total, r->iv_total);
     return len;
 }
 // ---- symmetric key/IV join -------------------------------------------------------------------
@@ -688,10 +702,12 @@ void adh_cmd_file_probe(int fd, const char *id) {
 //      app) reports every Cipher/Mac/MessageDigest op here with algorithm+op+key+iv+input+output.
 //      Bound at capture_start via RegisterNatives to the reporter class adhd names (target-agnostic;
 //      no sandbox-specific JNI symbol). ----------------------------------------------------------
-static int copy_jba(JNIEnv *env, jbyteArray a, unsigned char *dst, int cap) {
+static int copy_jba(JNIEnv *env, jbyteArray a, unsigned char *dst, int cap, int *total) {
+    if (total) *total = 0;
     if (!a) return 0;
     jsize n = (*env)->GetArrayLength(env, a);
     if (n <= 0) return 0;
+    if (total) *total = (int)n;
     if (n > cap) n = cap;
     (*env)->GetByteArrayRegion(env, a, 0, n, (jbyte *)dst);
     return (int)n;
@@ -699,25 +715,29 @@ static int copy_jba(JNIEnv *env, jbyteArray a, unsigned char *dst, int cap) {
 
 // nReport implementation. Registered onto the target's reporter class at capture_start
 // (adh_capture_register_reporter) — no hardcoded JNI symbol ties the agent to any package.
-static void adh_nreport_impl(
-        JNIEnv *env, jclass cls, jstring jalgo, jstring jop,
-        jbyteArray jkey, jbyteArray jiv, jbyteArray jin, jbyteArray jout) {
-    (void)cls;
+static void report_java_capture(
+        JNIEnv *env, jstring jalgo, jstring jop, jbyteArray jkey, jbyteArray jiv,
+        jbyteArray jin, jbyteArray jout, const char *origin, int hook_id, int metadata_known, int origin_truncated) {
     g_java_active = 1;
     // Build the bounded Java record off-lock: the JNI string/array copies can take far longer
     // than the queue append, and this callback runs on the target's crypto thread.
     struct JCapRec rec;
     memset(&rec, 0, sizeof(rec));
+    rec.input_known = metadata_known;
+    rec.input_present = jin != NULL;
+    rec.origin_hook_id = hook_id > 0 ? hook_id : 0;
+    rec.origin_truncated = origin_truncated || (origin && strlen(origin) >= sizeof(rec.origin));
+    if (origin) snprintf(rec.origin, sizeof(rec.origin), "%s", origin);
     const char *a = jalgo ? (*env)->GetStringUTFChars(env, jalgo, NULL) : NULL;
     const char *o = jop ? (*env)->GetStringUTFChars(env, jop, NULL) : NULL;
     if (a) { strncpy(rec.algo, a, sizeof(rec.algo) - 1); (*env)->ReleaseStringUTFChars(env, jalgo, a); }
     if (o) { strncpy(rec.op, o, sizeof(rec.op) - 1); (*env)->ReleaseStringUTFChars(env, jop, o); }
     rec.tid = (int)gettid();
     rec.ts_ns = now_ns();
-    rec.nkey = copy_jba(env, jkey, rec.key, JCAP_KEY);
-    rec.niv  = copy_jba(env, jiv,  rec.iv,  JCAP_IV);
-    rec.nin  = copy_jba(env, jin,  rec.in,  JCAP_DATA);
-    rec.nout = copy_jba(env, jout, rec.out, JCAP_DATA);
+    rec.nkey = copy_jba(env, jkey, rec.key, JCAP_KEY, &rec.key_total);
+    rec.niv  = copy_jba(env, jiv, rec.iv, JCAP_IV, &rec.iv_total);
+    rec.nin  = copy_jba(env, jin, rec.in, JCAP_DATA, &rec.in_total);
+    rec.nout = copy_jba(env, jout, rec.out, JCAP_DATA, &rec.out_total);
     if (pthread_mutex_trylock(&g_cap_lock) != 0) {
         __atomic_add_fetch(&g_jcap_dropped, 1, __ATOMIC_RELAXED);
         return;
@@ -731,6 +751,16 @@ static void adh_nreport_impl(
         __atomic_add_fetch(&g_jcap_dropped, 1, __ATOMIC_RELAXED);   // fail-loud, reported via drain
     }
     pthread_mutex_unlock(&g_cap_lock);
+}
+
+static void adh_nreport_impl(JNIEnv *env, jclass cls, jstring algo, jstring op,
+                              jbyteArray key, jbyteArray iv, jbyteArray in, jbyteArray out) {
+    (void)cls;
+    report_java_capture(env, algo, op, key, iv, in, out, NULL, 0, 0, 0);
+}
+void adh_capture_java_origin(JNIEnv *env, jstring algo, jstring op, jbyteArray key, jbyteArray iv,
+                             jbyteArray in, jbyteArray out, const char *target, int hook_id, int target_truncated) {
+    report_java_capture(env, algo, op, key, iv, in, out, target, hook_id, 1, target_truncated);
 }
 
 // Register adh_nreport_impl as the target reporter class's `nReport`. Called at capture_start
@@ -783,7 +813,7 @@ static char *build_capture_batch(const struct CapRec *caps, int ncaps,
     }
     len += snprintf(out + len, cap > len ? cap - len : 0, "],\"jcaptures\":[");
     for (int i = 0; i < njcaps; i++) {
-        if (len + 9000 > cap) {
+        if (len + JCAP_RECORD_RESERVE > cap) {
             size_t nc = cap * 2;
             char *no = (char *)realloc(out, nc); if (!no) { free(out); return NULL; }
             out = no; cap = nc;
@@ -1684,7 +1714,7 @@ void adh_cmd_capture_drain(int fd, const char *id) {
     // rich Java-layer records: algorithm + op + key + iv + input + output
     len += snprintf(out + len, cap > len ? cap - len : 0, "],\"jcaptures\":[");
     for (int k = 0; k < njcaps; k++) {
-        if (len + 9000 > cap) { size_t nc = cap * 2; char *no = realloc(out, nc); if (!no) break; out = no; cap = nc; }
+        if (len + JCAP_RECORD_RESERVE > cap) { size_t nc = cap * 2; char *no = realloc(out, nc); if (!no) break; out = no; cap = nc; }
         len = emit_jcaprec(out, len, cap, &jcopy[k], k == 0);
     }
     snprintf(out + len, cap > len ? cap - len : 0,

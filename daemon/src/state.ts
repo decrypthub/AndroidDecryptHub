@@ -667,6 +667,9 @@ export interface Capture {
   /** Target package. Stamped at ingest so the record stays with the app after the process exits and its session is pruned. */
   package?: string;
   keyHex?: string; ivHex?: string; outHex?: string;
+  outl?:number; keyl?:number; ivl?:number;
+  recordSchema?:string; javaTarget?:string; javaTargetTruncated?:boolean; javaHookId?:number;
+  captureMethodId?:string; inputBytesPresent?:boolean; inputScope?:string;
   /** Absolute path for a file open/read/write. Empty when the agent did not resolve the descriptor. */
   path?: string;
   /**

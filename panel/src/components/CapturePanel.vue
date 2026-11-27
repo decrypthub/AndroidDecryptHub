@@ -2,6 +2,7 @@
 import { computed, reactive, ref, watch, onMounted, onUnmounted, onActivated, onDeactivated, nextTick } from 'vue';
 import { store, belongsToApp, capRemoveWhere, capVisible, capDisplayCap, DISPLAY_CAPS, panelDisplay, savePanelDisplay, toast } from '../store';
 import { downloadBlob } from '../user_actions';
+import { createCaptureExport, metadataExport } from '../capture_export';
 import { getCaptures, getExchanges, getCaptureDetail, type Cap } from '../api';
 import { catClass, cryptoView, captureLengths, rowLens, systemRow, fmtTime, CATLABEL, type CatKey } from '../capview';
 import { SearchOutline } from '@vicons/ionicons5';
@@ -97,7 +98,7 @@ function applyClientFilter(source: Cap[]): Cap[] {
       if (/^#\d+$/.test(q)) return String(c.id) === q.slice(1);
       const v = c.category === 'crypto' ? cryptoView(c) : null;
       return ((c.algo || '') + ' ' + (c.op || '') + ' ' + (c.func || '') + ' ' + (c.path || '') + ' ' +
-        (c.preview || '') + ' ' + (v?.title || '') + ' ' + (v?.hook || '') + ' ' + (v?.direction || ''))
+        (c.preview || '') + ' ' + (c.javaTarget || '') + ' ' + (c.captureMethodId || '') + ' ' + (v?.title || '') + ' ' + (v?.hook || '') + ' ' + (v?.direction || ''))
         .toLowerCase().includes(q);
     });
   }
@@ -350,13 +351,21 @@ function resetFilter() {
   filter.q = ''; filter.min = null; filter.max = null; filter.cat = -2; filter.kind = 'all';
   clearTimeRange();
 }
-function downloadView() {
-  const items = props.kind === 'net' ? matchedExchanges.value : rows.value;
-  const pkg = store.chosenPkg || 'all';
-  const blob = new Blob([JSON.stringify(items, null, 2)], { type: 'application/json' });
-  try { downloadBlob(blob, `adh-${props.kind}-${pkg}-filtered.json`); toast(`已发起下载 ${items.length} 条；请查看浏览器下载`); }
-  catch { toast('下载未能发起'); }
+const exportBusy=ref(false);
+async function downloadView(bytes=false) {
+ if(exportBusy.value)return;
+ const items=JSON.parse(JSON.stringify(props.kind==='net'?matchedExchanges.value:rows.value)),pkg=store.chosenPkg,serial=store.devices.find(d=>d.key===store.selectedDeviceKey)?.serial||'',target=identity();
+ if(!items.length){toast('当前页没有可导出的记录');return;}
+ if(bytes&&!confirm('导出包含已保留的输入、输出、密钥或 IV，可能有敏感数据。仅包含本页，已截断或未采集的字节无法补回。继续？'))return;
+ exportBusy.value=true;
+ const check=()=>{if(identity()!==target)throw new Error('设备或应用已切换，导出已取消');};
+ try{
+  const data=props.kind==='net'?{schema:'adh.exchange-export/1',mode:'reassembled-exchanges',package:pkg,serial,note:'本页已重组的请求/响应，可能含敏感内容；不是完整原始流。',records:items}:
+   bytes?await createCaptureExport({serial,package:pkg,kind:props.kind,ids:items.map((c:Cap)=>c.id)},(id)=>getCaptureDetail(id,pkg,serial),check):metadataExport({serial,package:pkg,kind:props.kind},items);
+  check();downloadBlob(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}),`adh-${props.kind}-${pkg}-${props.kind==='net'?'exchanges':bytes?'retained-bytes':'metadata'}.json`);toast(`已发起下载 ${items.length} 条；请查看浏览器下载`);
+ }catch(e){toast('未导出：'+(e as Error).message);}finally{exportBusy.value=false;}
 }
+function openNetworkHooks(){const serial=store.devices.find(d=>d.key===store.selectedDeviceKey)?.serial;if(!serial||!store.chosenPkg){toast('请先选择设备和应用');return;}store.hookSource={serial,package:store.chosenPkg,feature:'tls',session:'',returnView:'nt'};store.view='settings';}
 function clearView() {
   const pkg = store.chosenPkg;
   if (!confirm(`清空本页列表？（不删磁盘）\n${pkg ? '当前应用 ' + pkg : '全部应用'}`)) return;
@@ -367,10 +376,11 @@ function clearView() {
 }
 
 const MORE_OPTS = [
-  { label: '下载本页', key: 'dl' },
+  { label: props.kind==='net'?'导出本页重组内容…':'导出本页元数据（不含字节）', key: 'dl' },
+  ...(props.kind==='net'?[]:[{label:'导出本页已保留字节…',key:'bytes'}]),
   { label: '清空本页', key: 'clear', props: { style: 'color:#f87171' } },
 ];
-function onMoreSelect(k: string) { if (k === 'dl') downloadView(); else clearView(); }
+function onMoreSelect(k: string) { if(k==='dl')void downloadView(props.kind==='net');else if(k==='bytes')void downloadView(true);else if(!exportBusy.value)clearView(); }
 
 // 系统页只留事件列表；指纹摘要不在面板展示。
 
@@ -571,7 +581,7 @@ const searchPlaceholder = computed(() =>
               </div>
               <div class="lens">{{ ex.response?.startLine || ex.request?.startLine || ex.note }}</div>
             </div>
-            <p v-if="!matchedExchanges.length && !listLoading" class="empty-row" role="status">{{ emptyText }}</p>
+            <div v-if="!matchedExchanges.length && !listLoading" class="empty-row" role="status"><p>{{ emptyText }}</p><template v-if="store.chosenPkg"><n-button text type="primary" @click="openNetworkHooks">查看 TLS Hook 配置</n-button><n-button text @click="advOpen=true">检查显示筛选</n-button><p class="muted">配置不代表进程已启用。确认后在目标应用触发请求；自定义网络栈可能不受当前 Hook 覆盖。</p></template></div>
           </template>
 
           <template v-else>

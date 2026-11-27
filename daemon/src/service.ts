@@ -1,3 +1,4 @@
+import {richCaptureEvidence} from './capture_origin.ts';
 import {captureMatchesScope,scopeSessionRows} from './agent_scope.ts';
 import {assertSessionScope,selectAgentSession,verifyAgentBinding,deviceRequestScope} from './agent_scope.ts';
 import { checkpoint, detached, localEffect, trackedEffect } from './execution_context.ts';
@@ -1241,13 +1242,14 @@ function captureArmBlockedReason(pkg: string): string | null {
 function processCaptureFrame(sid: string, r: any, now: number) {
   const pkg = sessions.get(sid)?.package ?? '';
   const announce = (entry: Capture) => {
-    const outl = entry.outHex ? entry.outHex.length / 2 : 0;
+    const outl = entry.outl ?? (entry.outHex ? entry.outHex.length / 2 : 0);
     broadcast('capture.new', {
       id: entry.id, sessionId: sid, package: pkg, source: entry.source, category: entry.category,
       algo: entry.algo, op: entry.op, func: entry.func, preview: entry.preview, inl: entry.inl, outl,
       ...(entry.path ? { path: entry.path } : {}),
       hasKey: !!entry.keyHex, tid: entry.tid, ts: entry.ts,
       ...captureDisplayFields(entry),
+      ...richCaptureEvidence(entry as unknown as Record<string,unknown>),
       ...(entry.category === 'crypto' ? { view: cryptoView(entry) } : {}),
     });
   };
@@ -1258,6 +1260,7 @@ function processCaptureFrame(sid: string, r: any, now: number) {
     const entry: Capture = {
       id: ++capSeq, sessionId: sid, package: pkg, source: 'java', func: javaHook(String(c.op || ''), hasBody), algo: c.algo, op: c.op,
       category: 'crypto',
+      ...richCaptureEvidence(c),
       inl: c.inl, tid: c.tid, tsNs: c.tsNs, ts: now,
       hex: c.in, preview: hexToPreview(c.in),
       keyHex: c.key || '', ivHex: c.iv || '', outHex: c.out || '',

@@ -421,9 +421,13 @@ static void JNICALL adh_java_hook_native_report(JNIEnv *env, jclass, jint hook_i
     adh_capture_push_text("JAVA_HOOK", json.c_str());
 }
 
-static void JNICALL adh_java_crypto_native(JNIEnv *env, jclass, jstring algo, jstring op,
-                                           jbyteArray key, jbyteArray iv, jbyteArray in, jbyteArray out) {
-    adh_capture_java(env, algo, op, key, iv, in, out);
+static void JNICALL adh_java_crypto_native(JNIEnv *env, jclass, jint hook_id, jstring target,
+                                           jstring algo, jstring op, jbyteArray key, jbyteArray iv,
+                                           jbyteArray in, jbyteArray out) {
+    // Never copy an unbounded mutable bridge target. Long/absent origin stays explicitly unknown.
+    const bool too_long = !target || env->GetStringLength(target) > 768;
+    const std::string origin = too_long ? std::string() : jstring_to_utf(env, target);
+    adh_capture_java_origin(env, algo, op, key, iv, in, out, origin.c_str(), hook_id, too_long ? 1 : 0);
 }
 
 static std::string pending_exception_text(JNIEnv *env) {
@@ -556,7 +560,7 @@ static jclass load_bridge_class(JNIEnv *env, std::string &error) {
         },
         {
             const_cast<char *>("nativeCrypto"),
-            const_cast<char *>("(Ljava/lang/String;Ljava/lang/String;[B[B[B[B)V"),
+            const_cast<char *>("(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;[B[B[B[B)V"),
             reinterpret_cast<void *>(adh_java_crypto_native),
         },
     };

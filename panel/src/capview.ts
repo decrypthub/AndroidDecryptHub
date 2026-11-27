@@ -84,6 +84,17 @@ export function captureLengthText(length: CaptureLength): string {
     ? ` · 已捕获 ${length.captured} B${length.inconsistent ? '（长度不一致）' : ''}` : '';
   return `${length.reported} B${extra}`;
 }
+/** A rich Java observation is a call sample, not a reconstruction of accumulated state.
+ * Old records do not tell an absent byte argument from an explicitly empty one. */
+export function inputEvidence(c: Cap): { fragment:boolean; emptyText:string; note:string; lengthText:string } {
+  const length=captureLengths(c).input,fragment=c.source==='java'&&c.category==='crypto';
+  if(!fragment)return {fragment:false,emptyText:'（空字节）',note:'',lengthText:captureLengthText(length)};
+  const present=c.inputBytesPresent,nonempty=(length.captured??length.bytes??0)>0;
+  return {fragment:true,
+    emptyText:present===true?'（本次参数字节为空）':'（本次未捕获输入参数字节）',
+    note:nonempty?'仅显示本次调用返回后的参数采样，可能包含输出缓冲区；完整/累积运算输入未记录。':present===true?'本次参数字节为空，不代表整个运算输入为空；累积输入未记录。':'无直接输入的调用或未采集到参数均可能出现此状态；累积输入未记录。',
+    lengthText:captureLengthText(length)+'（本次捕获）'};
+}
 function compactContentPreview(c:Cap,fallback:string,length:CaptureLength):string {
   const binary=()=>`二进制${length.bytes!=null?' · '+length.bytes+' B':''}`;
   if(typeof c.hex==='string'&&c.hex.length&&/^(?:[a-f\d]{2})*$/i.test(c.hex)){
@@ -108,13 +119,13 @@ export function cryptoView(c: Cap): CryptoView {
   const native = clientNativeView(func);
   const java = c.source === 'java' || (!!func && !func.includes('_') && !func.includes('.'));
   const op = c.op || '';
-  const hook = java ? (func.includes('.') ? func : clientJavaHook(op, hasBody)) : func;
+  const hook = java ? (typeof c.javaTarget==='string'&&c.javaTarget?c.javaTarget:(func.includes('.') ? func : clientJavaHook(op, hasBody))) : func;
   const direction = java ? clientJavaDirection(op) : native.direction;
   const preview = (c.preview || '').trim();
   const readable = preview.replace(/[.\s]/g, '') ? preview : '';
   const compact = (length: CaptureLength) => length.bytes == null ? '' :
     `${length.bytes} B${length.truncated ? ' 截断' : length.inconsistent ? `（捕获 ${length.captured} B，长度不一致）` : ''}`;
-  const input = compact(lengths.input);
+  const input = c.source==='java'&&lengths.input.bytes===0?'本次 0 B':compact(lengths.input);
   const output = compact(lengths.output);
   return {
     title: concrete || (java ? '未识别' : native.title),

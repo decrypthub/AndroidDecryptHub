@@ -27,6 +27,10 @@ void adh_capture_get_families(int *digest, int *hmac, int *symmetric, int *asymm
 // Java Cipher/Mac/MessageDigest/Signature hooks report through the same rich-capture records
 // as a target-supplied nReport. Observe-only: the caller already ran the original method.
 void adh_capture_java(JNIEnv *env, jstring algo, jstring op, jbyteArray key, jbyteArray iv, jbyteArray in, jbyteArray out);
+// Exact bridge call identity is observation metadata, never a runtime authorization handle.
+// The six-argument target-supplied nReport registration remains unchanged.
+void adh_capture_java_origin(JNIEnv *env, jstring algo, jstring op, jbyteArray key, jbyteArray iv,
+                             jbyteArray in, jbyteArray out, const char *target, int hook_id, int target_truncated);
 
 #ifdef __cplusplus
 }

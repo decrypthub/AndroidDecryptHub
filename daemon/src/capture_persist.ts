@@ -31,6 +31,9 @@ export interface PersistedCapture {
   outHex?: string;
   path?: string;
   callStack?: string;
+  outl?:number; keyl?:number; ivl?:number;
+  recordSchema?:string; javaTarget?:string; javaTargetTruncated?:boolean; javaHookId?:number;
+  captureMethodId?:string; inputBytesPresent?:boolean; inputScope?:string;
 }
 
 function retentionKey(c:{deviceBinding?:Readonly<AgentDeviceBinding>}){return c.deviceBinding?.serial??'legacy-unverified';}
@@ -411,7 +414,7 @@ function scanOneFilePage(
         if (q.session && c.sessionId !== q.session) continue;
         if (catSet && !catSet.has(c.category)) continue;
         if (needle) {
-          const hay = `${c.algo || ''} ${c.op || ''} ${c.func || ''} ${c.path || ''} ${c.preview || ''}`.toLowerCase();
+          const hay = `${c.algo || ''} ${c.op || ''} ${c.func || ''} ${c.javaTarget || ''} ${c.captureMethodId || ''} ${c.path || ''} ${c.preview || ''}`.toLowerCase();
           if (!hay.includes(needle)) continue;
         }
         if (!c.package) c.package = pkgName;

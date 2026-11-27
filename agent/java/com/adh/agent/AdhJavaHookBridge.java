@@ -78,7 +78,7 @@ public final class AdhJavaHookBridge extends X509ExtendedTrustManager implements
     }
 
     private static native void nativeReport(int hookId, String target, String arg, String ret, String error, String stack);
-    private static native void nativeCrypto(String algo, String op, byte[] key, byte[] iv, byte[] in, byte[] out);
+    private static native void nativeCrypto(int hookId, String target, String algo, String op, byte[] key, byte[] iv, byte[] in, byte[] out);
 
     private void noteHit() {
         try {
@@ -415,7 +415,7 @@ public final class AdhJavaHookBridge extends X509ExtendedTrustManager implements
                 byte[] iv = parameterIv(params);
                 if (!observing(epoch)) return;
                 remember(id, op, key, iv);
-                nativeCrypto(algo, op, key, iv, null, null);
+                nativeCrypto(hookId, target, algo, op, key, iv, null, null);
                 return;
             }
             String op;
@@ -428,7 +428,7 @@ public final class AdhJavaHookBridge extends X509ExtendedTrustManager implements
             }
             byte[] in = inputBytes(params);
             byte[] out = result instanceof byte[] ? (byte[]) result : null;
-            if (observing(epoch)) nativeCrypto(algo, op, key, iv, in, out);
+            if (observing(epoch)) nativeCrypto(hookId, target, algo, op, key, iv, in, out);
         } catch (Throwable ignored) {
         }
     }

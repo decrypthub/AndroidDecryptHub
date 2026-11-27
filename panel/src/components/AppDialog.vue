@@ -25,7 +25,7 @@ const apps = computed(() => {
   let list = store.apps;
   if (tab.value === 'user') list = list.filter(a => !a.system);
   else if (tab.value === 'system') list = list.filter(a => a.system);
-  else list = list.filter(a => store.scope.has(a.package));
+  else list = [...list].sort((a,b)=>Number(store.scope.has(b.package))-Number(store.scope.has(a.package))||(a.label||a.package).localeCompare(b.label||b.package));
   const s = q.value.trim().toLowerCase();
   if (s) list = list.filter(a =>
     (a.package + ' ' + (a.label ?? '')).toLowerCase().includes(s));
@@ -39,10 +39,10 @@ const itemInitial = (label?: string, pkg?: string) => ((label || pkg || '?')[0] 
 const onlinePackages = computed(() => {
   const dev = store.devices.find(d => d.key === store.selectedDeviceKey);
   const sessionId = dev?.agent?.sessionId || dev?.appSession;
-  return new Set([...store.sessions.values()].filter(s => s.online && s.sessionId === sessionId).map(s => s.package));
+  return new Set([...store.sessions.values()].filter(s => s.online && (s.deviceBinding?.serial ? s.deviceBinding.serial===dev?.serial : s.sessionId===sessionId)).map(s => s.package));
 });
 const canControl = computed(() => store.scope.has(store.chosenPkg));
-const emptyText = computed(() => q.value.trim() ? '没有匹配的应用' : tab.value === 'injected' ? '尚未允许任何应用注入' : '没有应用');
+const emptyText = computed(() => q.value.trim() ? '没有匹配的应用' : '没有应用');
 
 function reportError(e: unknown, fallback: string) {
   messageType.value = 'error';
@@ -75,10 +75,12 @@ async function pick(pkg: string) {
 async function toggleInject(pkg: string, on: boolean) {
   if (scopeDisabled(pkg)) return;
   scopePending.value = pkg;
+  const deviceKey=store.selectedDeviceKey,serial=iconSerial.value;
   toastMsg.value = '';
   try {
-    const r = await (on ? scopeAdd(pkg) : scopeRemove(pkg)) as { ok?: boolean; error?: string };
+    const r = await (on ? scopeAdd(pkg,serial) : scopeRemove(pkg,serial)) as { ok?: boolean; error?: string };
     if (r?.ok !== true) throw new Error(r?.error || '写入未确认');
+    if(store.selectedDeviceKey!==deviceKey)return;
     if (on) store.scope.add(pkg); else store.scope.delete(pkg);
   } catch (e) { reportError(e, '写入失败'); }
   finally { scopePending.value = ''; }
@@ -153,7 +155,8 @@ async function control(action: 'open' | 'stop' | 'restart') {
                   </span>
                   <span v-if="onlinePackages.has(a.package)" class="app-state on">采集在线</span>
                 </n-button>
-                <n-switch size="small" class="app-inject-sw" :aria-label="`允许注入 ${a.label || a.package}`" :value="store.scope.has(a.package)"
+                <span v-if="tab!=='injected' && store.scope.has(a.package)" class="app-state">允许注入</span>
+                <n-switch v-if="tab==='injected'" size="small" class="app-inject-sw" :aria-label="`允许注入 ${a.label || a.package}`" :value="store.scope.has(a.package)"
                   :loading="scopePending === a.package" :disabled="scopeDisabled(a.package)" :aria-disabled="scopeDisabled(a.package)"
                   :title="a.package === store.chosenPkg && store.scope.has(a.package) ? '当前观察应用不能移出注入范围' : '允许下次启动时注入'"
                   @update:value="on => toggleInject(a.package, !!on)" />

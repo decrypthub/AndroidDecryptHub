@@ -1,3 +1,4 @@
+import {richCaptureEvidence,retainedByteEvidence} from '../capture_origin.ts';
 import {captureControlAction} from '../capture_controls.ts';
 import {getOperations} from '../operation_host.ts';
 import {captureMatchesScope,deviceRequestScope,assertRequestedTarget} from '../agent_scope.ts';
@@ -283,7 +284,7 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
         if (pkg && capturePackage(c) !== pkg) return false;
         if (catSet && !catSet.has(c.category)) return false;
         if (q) {
-          const hay = `${c.algo || ''} ${c.op || ''} ${c.func || ''} ${c.path || ''} ${c.preview || ''}`.toLowerCase();
+          const hay = `${c.algo || ''} ${c.op || ''} ${c.func || ''} ${c.javaTarget || ''} ${c.captureMethodId || ''} ${c.path || ''} ${c.preview || ''}`.toLowerCase();
           if (!hay.includes(q)) return false;
         }
         return true;
@@ -334,9 +335,10 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
         ...health, health,
         captures: pageList.map(c => ({
           id: c.id, sessionId: c.sessionId, deviceBinding:c.deviceBinding, package: capturePackage(c), source: c.source, category: c.category,
-          algo: c.algo, op: c.op, func: c.func, inl: c.inl, outl: c.outHex ? c.outHex.length / 2 : 0,
+          algo: c.algo, op: c.op, func: c.func, inl: c.inl, outl: c.outl ?? (c.outHex ? c.outHex.length / 2 : 0),
           hasKey: !!c.keyHex, tid: c.tid, ts: c.ts,
           ...captureDisplayFields(c),
+          ...richCaptureEvidence(c as unknown as Record<string,unknown>),
           preview: c.category === 'net' ? previewForCapture(c.func, c.hex) : c.preview,
           ...(c.path ? { path: c.path } : {}),
           ...(c.category === 'crypto' ? { view: cryptoView(c) } : {}),
@@ -385,7 +387,7 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       // decode as UTF-8 so Chinese plaintext (gray-market payloads) is readable, not dotted
       let text = '';
       try { text = Buffer.from(c.hex, 'hex').toString('utf8'); } catch { text = hexToPreview(c.hex, 4096); }
-      return send(200, { ...c, text, ...(c.category === 'crypto' ? { view: cryptoView(c) } : {}) });
+      return send(200, { ...c, text, byteEvidence:retainedByteEvidence(c as unknown as Record<string,unknown>), ...(c.category === 'crypto' ? { view: cryptoView(c) } : {}) });
     } },
     // Session events (record/replay): GET /api/events?type=&limit=&since=
     { path: '/api/events', handler: () => {

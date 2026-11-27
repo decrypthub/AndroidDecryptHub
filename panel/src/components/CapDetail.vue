@@ -2,9 +2,9 @@
 import {copyText} from '../user_actions';
 import { computed, ref, watch } from 'vue';
 import type { Cap } from '../api';
-import { captureHookMethod } from '../capture_hook_link';
+import { captureHookMethod, captureHookSession } from '../capture_hook_link';
 import { getCaptureControls, deleteCapture } from '../api';
-import { catClass, cryptoView, captureLengths, captureLengthText, CATLABEL } from '../capview';
+import { catClass, cryptoView, captureLengths, captureLengthText, inputEvidence, CATLABEL } from '../capview';
 import { store, toast } from '../store';
 import { CopyOutline } from '@vicons/ionicons5';
 
@@ -17,15 +17,15 @@ const ioTab = ref<'in' | 'out'>('in');
 const fmtIn = ref<FmtMode>('auto');
 const fmtOut = ref<FmtMode>('auto');
 const sourceBusy=ref(false);
-const hasHookSource=computed(()=>c.value.source==='native'&&!!c.value.deviceBinding?.serial&&!!c.value.package&&!String(c.value.func).startsWith('NATIVE_HOOK'));
+const hasHookSource=computed(()=>(c.value.source==='native'||c.value.source==='java'&&!!c.value.captureMethodId&&c.value.javaTargetTruncated===false)&&!!c.value.deviceBinding?.serial&&!!c.value.package&&!String(c.value.func).startsWith('NATIVE_HOOK'));
 async function openHookSource(){
  if(sourceBusy.value||!hasHookSource.value)return;
  const record=c.value,serial=record.deviceBinding!.serial,pkg=record.package!,deviceKey=store.selectedDeviceKey;
  sourceBusy.value=true;
- try{const control=await getCaptureControls(serial,pkg);if(store.selectedDeviceKey!==deviceKey||store.chosenPkg!==pkg)return;
+ try{const session=captureHookSession(record,[...store.sessions.values()]);const control=await getCaptureControls(serial,pkg,session||undefined);if(store.selectedDeviceKey!==deviceKey||store.chosenPkg!==pkg)return;
   const method=captureHookMethod(record,control.catalogs?.methods??[]);if(!method){toast('此记录没有可精确定位的受控方法；未猜测来源');return;}
   const returnView=store.view==='sy'?'sy':store.view==='nt'?'nt':'cc';
-  store.hookSource={serial,package:pkg,methodId:method.id,recordId:record.id,returnView};store.view='settings';
+  store.hookSource={serial,package:pkg,methodId:method.id,recordId:record.id,session,returnView};store.view='settings';
  }catch(error){toast('无法读取 Hook 目录：'+(error as Error).message);}finally{sourceBusy.value=false;}
 }
 const confirmDelete = ref(false);
@@ -162,6 +162,12 @@ const activeFmt = computed(() => (ioTab.value === 'in' ? fmtIn.value : fmtOut.va
 function setFmt(k: FmtMode) { if (ioTab.value === 'in') fmtIn.value = k; else fmtOut.value = k; }
 const bytes = (n?: number) => (n == null ? '未记录' : `${n} B`);
 const lengths = computed(() => captureLengths(c.value));
+const inputInfo = computed(() => inputEvidence(c.value));
+const inputBlock = computed(() => {
+  const block=formatBlock(fmtIn.value,c.value.hex,c.value.text);
+  if(inputInfo.value.fragment&&(c.value.hex===''||c.value.hex==null&&(c.value.inl??0)===0))return {...block,display:inputInfo.value.emptyText};
+  return block;
+});
 const inBytes = computed(() => lengths.value.input.captured ?? lengths.value.input.bytes);
 const outBytes = computed(() => lengths.value.output.captured ?? lengths.value.output.bytes);
 const inRawKind = computed(() => rawKind(c.value.hex, c.value.text));
@@ -227,7 +233,9 @@ async function doDelete() {
       <dl class="capture-facts">
         <div><dt>事件编号</dt><dd>#{{ c.id ?? '未记录' }}</dd></div>
         <div><dt>类别</dt><dd>{{ CATLABEL[catClass(c)] }}</dd></div>
-        <div><dt>输入大小</dt><dd>{{ captureLengthText(lengths.input) }}</dd></div>
+        <div v-if="c.source==='java'"><dt>方法重载</dt><dd class="mono">{{ c.javaTarget || '旧记录未提供完整签名' }}{{ c.javaTargetTruncated ? '（来源已截断，无法精确定位）' : '' }}</dd></div>
+        <div v-if="c.inputScope"><dt>采样时点</dt><dd>调用返回后的参数采样；不等同完整输入</dd></div>
+        <div><dt>{{ inputInfo.fragment ? '本次捕获输入' : '输入大小' }}</dt><dd>{{ inputInfo.lengthText }}</dd></div>
         <div><dt>输出大小</dt><dd>{{ captureLengthText(lengths.output) }}</dd></div>
         <div><dt>线程 ID</dt><dd>{{ c.tid ? String(c.tid) : '未记录' }}</dd></div>
         <div><dt>时间</dt><dd>{{ new Date(c.ts).toLocaleString() }}</dd></div>
@@ -305,12 +313,13 @@ async function doDelete() {
         <div class="io-field">
           <div class="io-field-label">{{ inDataLabel }} · {{ bytes(inBytes) }}{{ inRawKind ? ' · ' + inRawKind : '' }}</div>
           <div class="io-data main">
-            <pre :class="{ mono: formatBlock(fmtIn, c.hex, c.text).mono }">{{ formatBlock(fmtIn, c.hex, c.text).display }}</pre>
+            <pre :class="{ mono: inputBlock.mono }">{{ inputBlock.display }}</pre>
             <n-button quaternary circle size="small" class="blk-copy" :title="'复制' + inDataLabel" :aria-label="'复制' + inDataLabel"
-              @click="copy(formatBlock(fmtIn, c.hex, c.text).copyVal)">
+              @click="copy(inputBlock.copyVal)">
               <n-icon size="15" :component="CopyOutline" />
             </n-button>
           </div>
+          <p v-if="inputInfo.fragment" class="payload-note">{{ inputInfo.note }}</p>
         </div>
       </template>
       <div v-if="!hasInput" class="detail-empty">这条记录没有输入数据。</div>
