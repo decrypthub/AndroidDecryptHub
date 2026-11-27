@@ -237,7 +237,7 @@ onBeforeUnmount(() => { infoToken++; });
       <span class="menu-chevron"><n-icon size="11" :component="ChevronDownOutline" /></span>
     </button>
 
-    <n-modal :show="show" preset="card" class="device-modal" aria-label="设备" closable
+    <n-modal :show="show" preset="card" class="device-modal ui-window" aria-label="设备" closable
       :style="{width:'min(680px, calc(100vw - 32px))',height:'min(560px, calc(100dvh - 48px))',maxHeight:'calc(100dvh - 48px)'}"
       :content-style="{padding:'0',display:'flex',minHeight:'0',overflow:'hidden'}"
       :segmented="{ content: true }" @update:show="!$event && (show = false)">
@@ -253,10 +253,10 @@ onBeforeUnmount(() => { infoToken++; });
 
       <div class="device-dialog-layout"><aside class="device-dialog-nav">
       <!-- 下半：切换列表 -->
-      <div class="dev-list">
+      <div class="dev-list ui-nav">
         <div v-for="d in sortedDevices" :key="d.key" class="dev-item"
           :class="{ active: d.key === current?.key }">
-          <button type="button" class="dev-pick" :aria-pressed="d.key === current?.key"
+          <button type="button" class="dev-pick ui-nav-item ui-nav-metadata" :aria-pressed="d.key === current?.key"
             :aria-label="'选择设备 '+deviceLabel(d)+' '+d.serial" @click="pick(d)">
           <span class="status-dot" :class="dotClass(d)"></span>
           <div class="dev-item-copy">

@@ -100,8 +100,8 @@ const themeOverrides = computed<GlobalThemeOverrides>(() => {
         <span class="hdr-mark"><img src="/raven.svg" alt=""></span>
         <span class="side-title">ADH</span>
       </div>
-      <nav class="side-nav" aria-label="主导航">
-        <n-button v-for="item in NAV" :key="item.key" quaternary block class="rail-action"
+      <nav class="side-nav ui-nav" aria-label="主导航">
+        <n-button v-for="item in NAV" :key="item.key" quaternary block class="rail-action ui-nav-item"
           :class="{ selected: store.view === item.key }" :title="item.label" :aria-label="item.label"
           :aria-current="store.view === item.key ? 'page' : undefined" @click="store.view = item.key">
           <span class="rail-line"><n-icon size="17" :component="ICONS[item.key]" />
@@ -159,7 +159,7 @@ const themeOverrides = computed<GlobalThemeOverrides>(() => {
       </main>
     </div>
 
-    <n-modal v-model:show="store.settingsOpen" preset="card" aria-label="设置" class="settings-modal" :style="{width:'min(1040px, calc(100vw - 24px))',height:'min(740px, calc(100dvh - 48px))'}" :content-style="{padding:'0',overflow:'hidden',display:'flex',minHeight:'0'}"><template #header><div class="settings-dialog-title"><span>设置</span><span v-if="store.chosenPkg" class="settings-dialog-target" :title="store.chosenPkg+' · '+iconSerial" :aria-label="'当前应用 '+appLabel+'，设备 '+iconSerial">{{ appLabel }}<small v-if="iconSerial"> · {{ iconSerial.slice(-4) }}</small></span></div></template><SettingsPanel /></n-modal>
+    <n-modal v-model:show="store.settingsOpen" preset="card" aria-label="设置" class="settings-modal ui-window" :style="{width:'min(1040px, calc(100vw - 24px))',height:'min(740px, calc(100dvh - 48px))'}" :content-style="{padding:'0',overflow:'hidden',display:'flex',minHeight:'0'}"><template #header><div class="settings-dialog-title"><span>设置</span><span v-if="store.chosenPkg" class="settings-dialog-target" :title="store.chosenPkg+' · '+iconSerial" :aria-label="'当前应用 '+appLabel+'，设备 '+iconSerial">{{ appLabel }}<small v-if="iconSerial"> · {{ iconSerial.slice(-4) }}</small></span></div></template><SettingsPanel /></n-modal>
     <AppDialog :show="store.appDialogOpen" @close="store.appDialogOpen = false" />
     <div class="panel-messages" role="status" aria-live="polite">
       <TransitionGroup name="notice">

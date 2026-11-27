@@ -61,9 +61,9 @@ function copy(text: string) {
     <div class="sub">{{ [ex.seq ? `#${ex.seq}` : '', ex.status ? `HTTP ${ex.status}` : '', ex.conn].filter(Boolean).join(' · ') }}</div>
   </div>
 
-  <div class="record-tabs">
-    <button type="button" :aria-selected="view === 'data'" @click="view = 'data'">数据详情</button>
-    <button type="button" :aria-selected="view === 'event'" @click="view = 'event'">事件信息</button>
+  <div class="record-tabs ui-nav ui-nav-row">
+    <button type="button" class="ui-nav-item" :aria-selected="view === 'data'" @click="view = 'data'">数据详情</button>
+    <button type="button" class="ui-nav-item" :aria-selected="view === 'event'" @click="view = 'event'">事件信息</button>
   </div>
 
   <div v-if="view === 'data'" class="record-tab-panel">

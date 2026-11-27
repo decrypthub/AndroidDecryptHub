@@ -128,8 +128,8 @@ watch(page,p=>{if(p==='records')takeSnap();if(p==='conn')void refreshStatus();})
 
 <template>
   <div class="set-page-shell">
-    <nav class="settings-side-tabs" aria-label="设置分类">
-      <n-button v-for="p in [...PAGES,...EXTRA_PAGES]" :key="p.key" quaternary :aria-pressed="page===p.key" :class="{active:page===p.key,secondary:p.key==='records'}" @click="page=p.key">{{ p.label }}</n-button>
+    <nav class="settings-side-tabs ui-nav" aria-label="设置分类">
+      <n-button v-for="p in [...PAGES,...EXTRA_PAGES]" :key="p.key" quaternary class="ui-nav-item" :aria-pressed="page===p.key" :class="{active:page===p.key,secondary:p.key==='records'}" @click="page=p.key">{{ p.label }}</n-button>
     </nav>
     <div class="set-content">
       <div class="set-main">

@@ -226,17 +226,17 @@ watch(section, (s) => {
 <template>
   <div ref="paneEl" class="dumppane">
     <div class="dumpwrap">
-      <div class="dump-menu" role="tablist" aria-label="脱壳、SO 与内存">
-        <button type="button" role="tab" :aria-selected="section === 'unpack'" @click="section = 'unpack'">
+      <nav class="dump-menu ui-nav" aria-label="脱壳、SO 与内存">
+        <button type="button" class="ui-nav-item" :aria-pressed="section === 'unpack'" @click="section = 'unpack'">
           <span class="dump-menu-main">脱壳</span><span class="dump-menu-sub">记录与产物</span>
         </button>
-        <button type="button" role="tab" :aria-selected="section === 'so'" @click="section = 'so'">
+        <button type="button" class="ui-nav-item" :aria-pressed="section === 'so'" @click="section = 'so'">
           <span class="dump-menu-main">SO</span><span class="dump-menu-sub">已加载 / 包内</span>
         </button>
-        <button type="button" role="tab" :aria-selected="section === 'mem'" @click="section = 'mem'">
+        <button type="button" class="ui-nav-item" :aria-pressed="section === 'mem'" @click="section = 'mem'">
           <span class="dump-menu-main">内存映射</span><span class="dump-menu-sub">maps 与范围转储</span>
         </button>
-      </div>
+      </nav>
 
       <section v-if="section === 'unpack'" class="dump-col">
         <div v-if="invError" class="dump-callout">{{ invError }}</div>
@@ -269,11 +269,11 @@ watch(section, (s) => {
           <button type="button" @click="refreshInventory(); refreshWatch()">刷新</button>
           <span class="muted">{{ status || (invMs ? `SO 清单 ${Math.round(invMs)}ms` : '') }}</span>
         </div>
-        <div class="dump-subtabs system-kinds">
-          <button type="button" :aria-pressed="soTab === 'loaded'" @click="soTab = 'loaded'">
+        <div class="dump-subtabs system-kinds ui-nav ui-nav-row">
+          <button type="button" class="ui-nav-item" :aria-pressed="soTab === 'loaded'" @click="soTab = 'loaded'">
             已加载 SO<span v-if="loaded.length" class="muted"> {{ loaded.length }}</span>
           </button>
-          <button type="button" :aria-pressed="soTab === 'pkg'" @click="soTab = 'pkg'">
+          <button type="button" class="ui-nav-item" :aria-pressed="soTab === 'pkg'" @click="soTab = 'pkg'">
             包内 / 私有目录 SO<span v-if="packaged.length" class="muted"> {{ packaged.length }}</span>
           </button>
         </div>
