@@ -120,7 +120,7 @@ test('control: open/restart/stop share one in-flight operation lock', async () =
 });
 
 test('labels: injection permission is not described as a running injected session', () => {
-  assert.doesNotMatch(source, /已注入/);
+  assert.match(source, /\['injected', '已注入'\]/);assert.match(source,/s\.deviceBinding\?\.serial===serial/);
   assert.match(source, /允许注入/);
   assert.match(source, /采集在线/);
 });
@@ -163,8 +163,8 @@ test('settings: display pages do not repeat preference-storage rules', () => {
 test('status: online collection only uses the selected device session', () => {
   const d = dialog();
   d.store.devices[0].agent = {sessionId:'current'};
-  d.store.sessions.set('current',{sessionId:'current',package:'com.adh.sandbox',online:true});
-  d.store.sessions.set('foreign',{sessionId:'foreign',package:'com.example.other',online:true});
+  d.store.sessions.set('current',{sessionId:'current',package:'com.adh.sandbox',online:true,deviceBinding:{serial:'TEST'}});
+  d.store.sessions.set('foreign',{sessionId:'foreign',package:'com.example.other',online:true,deviceBinding:{serial:'OTHER'}});
   assert.ok(d.onlinePackages,'online state must be derived from sessions, not the injection scope');
   assert.equal(d.onlinePackages.value.has('com.adh.sandbox'),true);
   assert.equal(d.onlinePackages.value.has('com.example.other'),false);

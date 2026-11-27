@@ -7,7 +7,7 @@ import { appIconUrl, scopeAdd, scopeRemove, appControl, observePackage, type App
 
 const props = defineProps<{ show: boolean }>();
 const emit = defineEmits<{ close: [] }>();
-const tab = ref<'user' | 'system'>('user');
+const tab = ref<'injected' | 'user' | 'system'>('user');
 const q = ref('');
 const toastMsg = ref('');
 const messageType = ref<'success' | 'error'>('error');
@@ -16,14 +16,12 @@ const scopePending = ref('');
 const controlling = ref('');
 const busy = computed(() => !!(picking.value || scopePending.value || controlling.value));
 
-watch(() => props.show, open => {
-  if (open) { q.value = ''; tab.value = 'user'; toastMsg.value = ''; }
-});
-const tabs = [['user', '个人应用'], ['system', '系统应用']] as const;
+const tabs = [['injected', '已注入'], ['user', '个人应用'], ['system', '系统应用']] as const;
 
 const apps = computed(() => {
   let list:AppInfo[] = store.apps;
-  if (tab.value === 'user') list = list.filter(a => !a.system);
+  if (tab.value === 'injected') { const known=new Map(list.map(a=>[a.package,a]));list=[...onlinePackages.value].map(pkg=>known.get(pkg)??{package:pkg,label:pkg,hasIcon:false}); }
+  else if (tab.value === 'user') list = list.filter(a => !a.system);
   else if (tab.value === 'system') list = list.filter(a => a.system);
   const s = q.value.trim().toLowerCase();
   if (s) list = list.filter(a =>
@@ -36,12 +34,14 @@ const chosenLabel = computed(() => chosen.value?.label || store.chosenPkg || '�
 const chosenInitial = computed(() => (chosenLabel.value[0] ?? '?'));
 const itemInitial = (label?: string, pkg?: string) => ((label || pkg || '?')[0] ?? '?');
 const onlinePackages = computed(() => {
-  const dev = store.devices.find(d => d.key === store.selectedDeviceKey);
-  const sessionId = dev?.agent?.sessionId || dev?.appSession;
-  return new Set([...store.sessions.values()].filter(s => s.online && (s.deviceBinding?.serial ? s.deviceBinding.serial===dev?.serial : s.sessionId===sessionId)).map(s => s.package));
+  const serial=iconSerial.value;
+  return new Set([...store.sessions.values()].filter(s=>s.online&&!!serial&&s.deviceBinding?.serial===serial).map(s=>s.package));
 });
+watch(() => props.show, open => {
+  if(open){q.value='';tab.value=onlinePackages.value.size?'injected':'user';toastMsg.value='';}
+},{immediate:true});
 const canControl = computed(() => store.scope.has(store.chosenPkg)&&store.apps.some(a=>a.package===store.chosenPkg));
-const emptyText = computed(() => q.value.trim() ? '没有匹配的应用' : '没有应用');
+const emptyText = computed(() => q.value.trim() ? '没有匹配的应用' : tab.value==='injected'?'当前设备暂无在线注入应用':'没有应用');
 
 watch(()=>store.selectedDeviceKey,()=>{q.value='';toastMsg.value='';});
 function reportError(e: unknown, fallback: string) {
@@ -107,7 +107,7 @@ async function control(action: 'open' | 'stop' | 'restart') {
     :content-style="{padding:'0',display:'flex',minHeight:'0',overflow:'hidden'}"
     :closable="!busy" :mask-closable="!busy" :close-on-esc="!busy" @update:show="!$event && close()">
     <div class="app-picker-simple" :aria-busy="busy">
-      <nav class="app-picker-tabs" aria-label="应用分类"><n-button v-for="[k,label] in tabs" :key="k" quaternary :aria-pressed="tab===k" :disabled="busy" @click="tab=k">{{ label }}</n-button></nav>
+      <nav class="app-picker-tabs" aria-label="应用分类"><n-button v-for="[k,label] in tabs" :key="k" quaternary :aria-pressed="tab===k" :title="k==='injected'?'当前设备已连接的注入应用':undefined" :disabled="busy" @click="tab=k">{{ label }}</n-button></nav>
       <div class="dialog-search"><n-input v-model:value="q" clearable placeholder="搜索名称或包名" :input-props="{'aria-label':'搜索应用'}"><template #prefix><n-icon :component="SearchOutline" /></template></n-input></div>
       <n-alert v-if="store.scopeError" type="warning" :show-icon="false" class="app-picker-message">注入状态读取失败：{{ store.scopeError }} <n-button text size="small" @click="refreshScope">重试</n-button></n-alert><p v-else-if="store.scopeReady===false" class="app-picker-message" role="status">读取注入状态…</p>
       <div class="app-list-heading"><span></span><span>允许注入</span></div>

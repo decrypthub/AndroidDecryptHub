@@ -69,7 +69,7 @@ body{background:var(--canvas);font-family:var(--sans);font-synthesis:none;-webki
 :is(.app-shell,.settings-modal) .settings-top-tabs>.n-button.active:after{content:"";position:absolute;bottom:0;left:2px;right:2px;height:2px;border-radius:2px;background:var(--accent)}
 :is(.app-shell,.settings-modal) .set-main{padding:22px 24px 24px}
 :is(.app-shell,.settings-modal) .hook-manager{--feature-width:208px;min-height:100%;font-size:13px}
-:is(.app-shell,.settings-modal) .hook-command-bar{display:grid;grid-template-columns:minmax(0,1fr) 245px;align-items:center;gap:18px;margin-bottom:22px}
+:is(.app-shell,.settings-modal) .hook-command-bar{display:grid;grid-template-columns:minmax(0,1fr);align-items:center;gap:18px;margin-bottom:22px}
 :is(.app-shell,.settings-modal) .hook-context{display:block;padding:0;min-height:0;background:transparent;border:0}
 :is(.app-shell,.settings-modal) .hook-context .hook-process{min-width:0;max-width:none;width:100%}
 :is(.app-shell,.settings-modal) .hook-tools{grid-template-columns:minmax(170px,1fr) 108px 108px 34px;margin:0;gap:8px}
@@ -153,7 +153,7 @@ body{background:var(--canvas);font-family:var(--sans);font-synthesis:none;-webki
 :is(.app-shell,.settings-modal) .capture-workspace.detail-open .crypto-row .subline .preview{display:block;width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:1.6}
 :is(.app-shell,.settings-modal) .capture-workspace.detail-open .crypto-row .subline:has(.preview) .hook{display:none}
 :is(.app-shell,.settings-modal) .capture-workspace.detail-open .crypto-row .subline:not(:has(.preview)) .hook{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}
-:is(.app-shell,.settings-modal) .detail-head{background:transparent;padding:0 0 18px;border:0;border-bottom:1px solid var(--line);margin-bottom:18px;align-items:flex-start}
+:is(.app-shell,.settings-modal) .detail-head{position:static;z-index:auto;background:transparent;padding:0 0 18px;border:0;border-bottom:1px solid var(--line);margin-bottom:18px;align-items:flex-start}
 :is(.app-shell,.settings-modal) .detail-head h2{margin:0 0 6px}:is(.app-shell,.settings-modal) .detail-head .sub{color:var(--muted);font-size:11px;line-height:1.6}
 @media(max-width:700px){:is(.app-shell,.settings-modal) .capture-workspace.detail-open .crypto-row .subline{padding-left:0}:is(.app-shell,.settings-modal) .detail-head{padding-bottom:15px;margin-bottom:15px}}
 /* Independent visual review: legible metadata, explicit gates, compact mobile hierarchy. */
@@ -231,3 +231,8 @@ body{background:var(--canvas);font-family:var(--sans);font-synthesis:none;-webki
 :is(.app-shell,.settings-modal) :is(.row.cat-asym,h2[data-algorithm-family="asym"]){--algorithm-ink:var(--cat-asym)}
 :is(.app-shell,.settings-modal) :is(.row.cat-aead,h2[data-algorithm-family="aead"]){--algorithm-ink:var(--cat-aead)}
 :is(.app-shell,.settings-modal) h2[data-algorithm-family]{color:var(--algorithm-ink,var(--ink))}
+
+.settings-dialog-title{display:flex;align-items:baseline;gap:16px;min-width:0;padding-right:12px}.settings-dialog-target{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:12px;font-weight:400}.settings-dialog-target small{font:inherit}
+
+/* Split panes need an intrinsic two-row footer, not a squeezed summary beside fixed controls. */
+:is(.app-shell,.settings-modal) .capture-workspace.detail-open .capture-list-foot{display:grid;grid-template-columns:minmax(0,1fr);align-items:start;gap:8px}:is(.app-shell,.settings-modal) .capture-workspace.detail-open .capture-list-foot>span{min-width:0;word-break:normal;overflow-wrap:normal;line-height:1.5}:is(.app-shell,.settings-modal) .capture-workspace.detail-open .pager-controls{justify-content:flex-end;flex-wrap:wrap}

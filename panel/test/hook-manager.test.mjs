@@ -5,7 +5,7 @@ function snapshot(serial='phoneA',session='a',revision=1){const methods=[{id:'ja
 function model(overrides={}){
  const store=Vue.reactive({chosenPkg:pkg,selectedDeviceKey:'phoneA',devices:[{key:'phoneA',serial:'phoneA',model:'Phone A'},{key:'phoneB',serial:'phoneB',model:'Phone B'}],appDialogOpen:false,capItems:[]});
  const writes=[],drafts=new Map();const get=async(serial,pkg,session)=>snapshot(serial,session??'');
- const context={store,appSessions:Vue.computed(()=>[{sessionId:store.selectedDeviceKey==='phoneA'?'a':'b',package:pkg,process:pkg,pid:1,online:true}]),selectedSerial:()=>store.selectedDeviceKey,deviceLabel:d=>d.model,drafts,onBeforeUnmount:()=>{},SearchOutline:{},RefreshOutline:{},ChevronDownOutline:{},getCaptureControls:get,writeCaptureControls:async(view,action,c)=>{writes.push({view,action,config:c});return {ok:true,persisted:true};},...overrides};
+ const context={store,appSessions:Vue.computed(()=>[{sessionId:store.selectedDeviceKey==='phoneA'?'a':'b',package:pkg,process:pkg,pid:1,online:true,deviceBinding:{serial:store.selectedDeviceKey,process:{starttimeTicks:'1'}}}]),selectedSerial:()=>store.selectedDeviceKey,deviceLabel:d=>d.model,drafts,onBeforeUnmount:()=>{},SearchOutline:{},RefreshOutline:{},ChevronDownOutline:{},getCaptureControls:get,writeCaptureControls:async(view,action,c)=>{writes.push({view,action,config:c});return {ok:true,persisted:true};},...overrides};
  return {...setupComponent('HookManager.vue',{},context),store,writes,drafts};
 }
 async function ready(h){await h.load();await Vue.nextTick();return h;}

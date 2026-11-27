@@ -19,6 +19,7 @@ const feature=ref(props.group==='network'?'tls':props.group==='system'?'system':
 const target=ref({serial:'',package:'',session:''}),pendingTarget=ref<any>(null),confirmApply=ref(false),review=ref<CaptureControlsView|null>(null);
 let request=0;
 const key=(t:typeof target.value)=>t.serial+'\n'+t.package+'\n'+t.session;
+const appDraftKey=(t:{serial:string;package:string})=>t.serial+'\n'+t.package+'\n@automatic-generation';
 const methods=computed<any[]>(()=>view.value?.catalogs?.methods??[]);
 const activeFeature=computed(()=>FEATURES.find(([k])=>k===feature.value)!);
 const currentChoices=computed(()=>draft.value?.features[feature.value]??{enabled:false,methods:[]});
@@ -27,7 +28,16 @@ const changed=computed(()=>{
 });
 const chosen=computed(()=>new Set<string>(FEATURES.flatMap(([k])=>draft.value?.features[k]?.enabled?draft.value.features[k].methods:[])));
 const dependencies=computed(()=>{const out=new Map<string,string[]>(),by=new Map(methods.value.map(m=>[m.id,m])),all=new Set(chosen.value);for(let i=0;i<methods.value.length;i++){let add=false;for(const id of [...all])for(const dep of by.get(id)?.requires??[]){const rows=out.get(dep)??[];if(!rows.includes(id))rows.push(id);out.set(dep,rows);if(!all.has(dep)){all.add(dep);add=true;}}if(!add)break;}return out;});
-const processOptions=computed(()=>[{label:'离线配置（不操作进程）',value:''},...appSessions.value.filter(s=>s.online).map(s=>({label:(s.process===s.package?'主进程':s.process??'进程')+' · PID '+s.pid,value:s.sessionId}))]);
+const appOnline=computed(()=>appSessions.value.filter(s=>s.online&&s.package===store.chosenPkg&&s.deviceBinding?.serial===selectedSerial()));
+const autoSession=computed(()=>{
+ const source=store.hookSource;
+ if(source&&source.serial===selectedSerial()&&source.package===store.chosenPkg&&typeof source.session==='string'&&appOnline.value.some(s=>s.sessionId===source.session))return source.session;
+ const main=appOnline.value.filter(s=>s.process===s.package),pool=main.length?main:appOnline.value;
+ const generations=new Set(pool.map(s=>s.pid+':'+(s.deviceBinding?.process?.starttimeTicks??s.sessionId)));
+ return generations.size===1?[...pool].sort((a,b)=>Number(b.connectedAt??0)-Number(a.connectedAt??0))[0]?.sessionId??'':'';
+});
+const targetLabel=computed(()=>{const p=appOnline.value.find(s=>s.sessionId===sid.value);return p?(p.process===p.package?'主进程':'应用进程')+' · PID '+p.pid:'离线配置';});
+const appConnectionHint=computed(()=>autoSession.value?'':appOnline.value.length?'当前 APP 尚未确认唯一主进程，连接稳定后会自动加载；不会随机操作子进程。':'当前 APP 尚未注入或已断开。配置可仅保存，连接后自动加载。');
 const controlsDisabled=computed(()=>busy.value||!!pendingTarget.value||!!review.value);
 const unconfirmed=computed(()=>view.value?.lastIntent?.state==='unknown'||((view.value?.control as any)?.uncertainOperations?.length??0)>0);
 const rows=computed(()=>methods.value.filter(m=>(m.families&groupMask.value)&&(!!query.value||(m.families&activeFeature.value[2]))&&(backend.value==='all'||m.backend===backend.value)&&(!query.value||`${m.id} ${m.class??''} ${m.symbol??''} ${m.params??''}`.toLowerCase().includes(query.value.trim().toLowerCase()))&&(stateFilter.value==='all'||stateFilter.value==='active'&&isActive(m)||stateFilter.value==='inactive'&&!isActive(m)||stateFilter.value==='error'&&isProblem(m))).sort((a,b)=>a.id.localeCompare(b.id)));
@@ -43,15 +53,25 @@ async function load(preserve=false){
  const id=++request,t=copy(target.value);if(!t.serial||!t.package){view.value=null;draft.value=null;return;}loading.value=true;error.value='';
  try{const data=await getCaptureControls(t.serial,t.package,t.session||undefined);if(id!==request||key(t)!==key(target.value))return;
   if(preserve&&changed.value){review.value=data;return;}
-  view.value=data;const saved=drafts.get(key(t));draft.value=copy(saved?.config??data.config);notice.value=saved?'已恢复此目标的未应用草稿':'';focusSource();
+  view.value=data;const saved=drafts.get(key(t))??drafts.get(appDraftKey(t));draft.value=copy(saved?.config??data.config);notice.value=saved?'已恢复此目标的未应用草稿':'';focusSource();
  }catch(e){if(id===request)error.value=(e as Error).message;}finally{if(id===request)loading.value=false;}
 }
 function focusSource(){const source=store.hookSource;if(!source||source.serial!==target.value.serial||source.package!==target.value.package)return;if(source.feature&&FEATURES.some(([k])=>k===source.feature)){feature.value=source.feature;query.value='';detail.value='';return;}const m=methods.value.find(m=>m.id===source.methodId);if(!m)return;feature.value=FEATURES.find(([, ,bit])=>m.families&bit)![0];query.value=m.id;detail.value=m.id;}
 function returnToRecord(){const source=store.hookSource;if(source)store.view=source.returnView;store.settingsOpen=false;store.hookSource=null;}
-function switchTarget(t:typeof target.value){if(key(t)===key(target.value))return;if(changed.value){pendingTarget.value=t;return;}target.value=t;sid.value=t.session;view.value=null;draft.value=null;review.value=null;notice.value='';void load();}
-function finishSwitch(keep:boolean){const t=pendingTarget.value;if(!t)return;if(keep)retain();else drafts.delete(key(target.value));pendingTarget.value=null;target.value=t;sid.value=t.session;view.value=null;draft.value=null;review.value=null;notice.value='';void load();}
+function switchTarget(t:typeof target.value){
+ if(key(t)===key(target.value))return;
+ const sameApp=t.serial===target.value.serial&&t.package===target.value.package;
+ if(sameApp){
+  const carry=changed.value&&draft.value?copy(draft.value):null;retain();if(carry)drafts.set(appDraftKey(t),{config:copy(carry),revision:view.value!.revision});
+  target.value=t;sid.value=t.session;view.value=null;draft.value=null;review.value=null;pendingTarget.value=null;notice.value='';
+  const boundKey=key(t),expectedRequest=request+1;void load().then(()=>{if(carry&&request===expectedRequest&&boundKey===key(target.value)){draft.value=carry;notice.value='进程已变更，草稿已保留；应用前请核对当前目录。';}});return;
+ }
+ if(changed.value){pendingTarget.value=t;return;}
+ target.value=t;sid.value=t.session;view.value=null;draft.value=null;review.value=null;notice.value='';void load();
+}
+function finishSwitch(keep:boolean){const t=pendingTarget.value;if(!t)return;if(keep)retain();else {drafts.delete(key(target.value));drafts.delete(appDraftKey(target.value));}pendingTarget.value=null;target.value=t;sid.value=t.session;view.value=null;draft.value=null;review.value=null;notice.value='';void load();}
 function useRefresh(keep:boolean){if(!review.value)return;const old=copy(draft.value);view.value=review.value;draft.value=keep?old:copy(review.value.config);review.value=null;notice.value=keep?'已采用新状态；请核对变更后再应用':'';}
-function discard(){drafts.delete(key(target.value));if(view.value)draft.value=copy(view.value.config);error.value='';notice.value='';}
+function discard(){drafts.delete(key(target.value));drafts.delete(appDraftKey(target.value));if(view.value)draft.value=copy(view.value.config);error.value='';notice.value='';}
 function restore(){if(view.value?.lastApplied)draft.value=copy(view.value.lastApplied.config);}
 async function submit(action:'discover'|'save'|'apply',confirmed=false){
  if(!view.value||busy.value)return;
@@ -59,12 +79,12 @@ async function submit(action:'discover'|'save'|'apply',confirmed=false){
  const frozen=copy(view.value),config=copy(draft.value),targetKey=key(target.value);busy.value=true;error.value='';notice.value='';confirmApply.value=false;
  try{const result=await writeCaptureControls(frozen,action,config,confirmed);if(targetKey!==key(target.value))return;
   if(result.ok===false){error.value=result.error??'操作未确认，请只读刷新状态';notice.value=result.state==='unknown'?'结果未知；未自动重试':'';}
-  if(result.persisted||result.ok){drafts.delete(targetKey);const next=await getCaptureControls(frozen.serial,frozen.package,frozen.session||undefined);if(targetKey===key(target.value)){view.value=next;draft.value=config;}}
+  if(result.persisted||result.ok){drafts.delete(targetKey);drafts.delete(appDraftKey(frozen));const next=await getCaptureControls(frozen.serial,frozen.package,frozen.session||undefined);if(targetKey===key(target.value)){view.value=next;draft.value=config;}}
   if(result.ok!==false)notice.value=action==='discover'?'Java 方法目录已读取':action==='save'?'已保存，待应用；重连不会自动启用':'已应用并读回确认';
  }catch(e){if(targetKey===key(target.value)){error.value=(e as Error).message;notice.value='请求结果未确认；请只读刷新，不要直接重复写入';}}
  finally{busy.value=false;}
 }
-watch(()=>selectedSerial()+'\n'+store.chosenPkg,()=>{const online=appSessions.value.filter(s=>s.online);switchTarget({serial:selectedSerial(),package:store.chosenPkg,session:store.hookSource?.serial===selectedSerial()&&store.hookSource?.package===store.chosenPkg?store.hookSource.session??'':online.length===1?online[0].sessionId:''});},{immediate:true});
+watch(()=>selectedSerial()+'\n'+store.chosenPkg+'\n'+autoSession.value,()=>switchTarget({serial:selectedSerial(),package:store.chosenPkg,session:autoSession.value}),{immediate:true});
 onBeforeUnmount(retain);
 </script>
 
@@ -75,8 +95,8 @@ onBeforeUnmount(retain);
    <div v-if="store.hookSource?.serial===target.serial&&store.hookSource?.package===target.package" class="hook-hint"><n-button text @click="returnToRecord">‹ {{ store.hookSource.recordId!=null ? '返回记录 #'+store.hookSource.recordId : '返回网络' }}</n-button><span> · 来源符号定位；此处显示当前配置，不代表历史安装状态</span></div>
    <div class="hook-command-bar">
    <div class="hook-tools"><n-input v-model:value="query" clearable placeholder="搜索功能、类或方法" aria-label="搜索 Hook 方法"><template #prefix><n-icon :component="SearchOutline" /></template></n-input><n-select v-model:value="backend" aria-label="方法后端" :options="[{label:'全部后端',value:'all'},{label:'Java',value:'java'},{label:'Native',value:'native'}]"/><n-select v-model:value="stateFilter" aria-label="方法运行状态筛选" :options="[{label:'全部状态',value:'all'},{label:'观测中',value:'active'},{label:'未启用',value:'inactive'},{label:'需处理',value:'error'}]"/><n-button quaternary :loading="loading" :disabled="busy" aria-label="刷新 Hook 快照" @click="load(true)"><template #icon><n-icon :component="RefreshOutline"/></template></n-button></div>
-    <div class="hook-context"><n-select class="hook-process" :value="sid" :options="processOptions" aria-label="应用配置的目标进程" :disabled="busy" @update:value="(value:string)=>switchTarget({...target,session:value})" /></div>
    </div>
+   <p v-if="appConnectionHint&&!loading" class="hook-message" role="status">{{ appConnectionHint }}</p>
    <p v-if="error" class="hook-message error" role="alert">{{ error }}</p>
    <p v-if="notice" class="hook-message" role="status">{{ notice }}</p>
    <div v-if="review" class="hook-review" role="alert"><span>检测到新状态。草稿仍保留，请选择如何继续。</span><n-button size="small" @click="useRefresh(true)">采用新状态，保留草稿</n-button><n-button size="small" @click="useRefresh(false)">采用新状态，放弃草稿</n-button></div>
@@ -113,7 +133,7 @@ onBeforeUnmount(retain);
    <footer v-if="draft&&view&&(changed||view.pending)" class="hook-apply-bar"><span>{{ changed?changed+' 项待应用':view.runtime?'配置与运行时尚未确认一致':'已保存配置，当前离线' }}</span><div><n-button v-if="view.lastApplied" text size="small" :disabled="controlsDisabled" @click="restore">恢复上次生效选择</n-button><n-button :disabled="controlsDisabled||!changed" @click="discard">放弃更改</n-button><n-button :disabled="controlsDisabled||!changed" @click="submit('save')">仅保存</n-button><n-button type="primary" :loading="busy" :disabled="controlsDisabled||unconfirmed||!sid||!view.runtime||!view.runtime.native.supported||view.foreignOwner" @click="submit('apply')">应用更改</n-button></div></footer>
   </template>
   <n-modal :show="!!pendingTarget" :mask-closable="false" :close-on-esc="false" preset="card" title="保留当前目标的草稿？" class="hook-confirm"><p>当前更改尚未应用。切换目标不会把这些更改发到另一台手机。</p><div class="hook-confirm-actions"><n-button @click="finishSwitch(false)">放弃草稿并切换</n-button><n-button type="primary" @click="finishSwitch(true)">保留草稿并切换</n-button></div></n-modal>
-  <n-modal v-model:show="confirmApply" :mask-closable="false" preset="card" title="确认应用到当前进程" class="hook-confirm"><p>{{ target.package }} · {{ processOptions.find(o=>o.value===sid)?.label }}</p><p>将先排空旧记录，再停用和重新配置观测。Native Hook 会改变进程；Java 停用后可能保留底层补丁。失败或结果未知时不会自动重试。</p><div class="hook-confirm-actions"><n-button @click="confirmApply=false">取消</n-button><n-button type="primary" @click="submit('apply',true)">确认应用</n-button></div></n-modal>
+  <n-modal v-model:show="confirmApply" :mask-closable="false" preset="card" title="确认应用到当前进程" class="hook-confirm"><p>{{ target.package }} · {{ targetLabel }}</p><p>将先排空旧记录，再停用和重新配置观测。Native Hook 会改变进程；Java 停用后可能保留底层补丁。失败或结果未知时不会自动重试。</p><div class="hook-confirm-actions"><n-button @click="confirmApply=false">取消</n-button><n-button type="primary" @click="submit('apply',true)">确认应用</n-button></div></n-modal>
  </section>
 </template>
 
