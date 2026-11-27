@@ -399,6 +399,21 @@ const EMPTY_HINT = computed(() => {
 
     <div class="mem-main">
       <div class="mem-left">
+        <div class="mem-pager" role="group" aria-label="内存映射分页">
+          <span class="muted">共 {{ filtered.length }} 段<template v-if="filtered.length !== regions.length"> / {{ regions.length }}</template></span>
+          <span class="mem-pager-nav">
+            <button type="button" :disabled="page <= 1" aria-label="第一页" @click="page = 1">«</button>
+            <button type="button" :disabled="page <= 1" aria-label="上一页" @click="page--">‹</button>
+            <span class="mono">{{ page }} / {{ pageCount }}</span>
+            <button type="button" :disabled="page >= pageCount" aria-label="下一页" @click="page++">›</button>
+            <button type="button" :disabled="page >= pageCount" aria-label="最后一页" @click="page = pageCount">»</button>
+          </span>
+          <select v-model.number="pageSize" class="mem-select" aria-label="每页条数">
+            <option :value="50">50 行</option>
+            <option :value="100">100 行</option>
+            <option :value="200">200 行</option>
+          </select>
+        </div>
         <div class="mem-scroll">
           <table class="mem-table">
             <thead>
@@ -425,21 +440,7 @@ const EMPTY_HINT = computed(() => {
         </div>
         <div v-if="!pageRows.length && !loading" class="empty">{{ EMPTY_HINT }}</div>
 
-        <div class="mem-pager">
-          <span class="muted">共 {{ filtered.length }} 段<template v-if="filtered.length !== regions.length"> / {{ regions.length }}</template></span>
-          <span class="mem-pager-nav">
-            <button type="button" :disabled="page <= 1" aria-label="第一页" @click="page = 1">«</button>
-            <button type="button" :disabled="page <= 1" aria-label="上一页" @click="page--">‹</button>
-            <span class="mono">{{ page }} / {{ pageCount }}</span>
-            <button type="button" :disabled="page >= pageCount" aria-label="下一页" @click="page++">›</button>
-            <button type="button" :disabled="page >= pageCount" aria-label="最后一页" @click="page = pageCount">»</button>
-          </span>
-          <select v-model.number="pageSize" class="mem-select" aria-label="每页条数">
-            <option :value="50">50 行</option>
-            <option :value="100">100 行</option>
-            <option :value="200">200 行</option>
-          </select>
-        </div>
+
       </div>
 
       <aside ref="detailEl" class="mem-right" aria-label="选中区域与转储">

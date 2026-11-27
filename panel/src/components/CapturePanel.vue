@@ -513,6 +513,17 @@ const searchPlaceholder = computed(() =>
           </n-dropdown>
         </div>
       </div>
+      <div v-if="canPrevPage || canNextPage || rows.length || matchedExchanges.length || isHistoricalMode" class="capture-list-head" role="group" aria-label="记录分页">
+        <span :title="footHint">{{ listFootLeft }}</span>
+        <div class="pager-controls">
+          <n-select :value="capDisplayCap" size="small" class="page-cap-select" title="单页返回条数上限"
+            :options="DISPLAY_CAPS.map(cap => ({ label: `${cap} 条/页`, value: cap }))"
+            @update:value="onPageCapChange" />
+          <n-button v-if="canPrevPage || canNextPage" size="small" :disabled="!canPrevPage" title="读取更早一页" @click="prevPage">上一页</n-button>
+          <n-button v-if="canPrevPage || canNextPage" size="small" :disabled="!canNextPage" title="读取更新一页" @click="nextPage">下一页</n-button>
+          <n-button v-if="isHistoricalMode || netPage > 1" size="small" tertiary @click="jumpLatest">最新</n-button>
+        </div>
+      </div>
     </div>
 
     <n-modal v-model:show="advOpen" preset="card" title="筛选" size="small" content-scrollable
@@ -625,17 +636,7 @@ const searchPlaceholder = computed(() =>
             <p v-if="!rows.length && !listLoading" class="empty-row" role="status">{{ emptyText }}</p>
           </template>
         </div>
-        <div v-if="canPrevPage || canNextPage || rows.length || matchedExchanges.length || isHistoricalMode" class="capture-list-foot">
-          <span :title="footHint">{{ listFootLeft }}</span>
-          <div class="pager-controls">
-            <n-select :value="capDisplayCap" size="small" class="page-cap-select" title="单页返回条数上限"
-              :options="DISPLAY_CAPS.map(cap => ({ label: `${cap} 条/页`, value: cap }))"
-              @update:value="onPageCapChange" />
-            <n-button v-if="canPrevPage || canNextPage" size="small" :disabled="!canPrevPage" title="读取更早一页" @click="prevPage">上一页</n-button>
-            <n-button v-if="canPrevPage || canNextPage" size="small" :disabled="!canNextPage" title="读取更新一页" @click="nextPage">下一页</n-button>
-            <n-button v-if="isHistoricalMode || netPage > 1" size="small" tertiary @click="jumpLatest">最新</n-button>
-          </div>
-        </div>
+
       </div>
 
       <div class="splitter" :class="{ dragging }" @mousedown="startDrag"></div>

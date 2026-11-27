@@ -43,7 +43,7 @@ body{background:var(--canvas);font-family:var(--sans);font-synthesis:none;-webki
 :is(.app-shell,.settings-modal) .toolbar-actions #count{display:none}
 :is(.app-shell,.settings-modal) .toolbar-actions .n-button{height:32px;padding-inline:12px}
 :is(.app-shell,.settings-modal) .ledger-head{padding-inline:22px;min-height:36px!important;background:var(--bg);color:var(--muted);font-size:11px;font-weight:550}
-:is(.app-shell,.settings-modal) .capture-list-foot{padding:10px 16px;min-height:48px;background:var(--surface);border-color:var(--line-soft);font-size:11px;color:var(--muted)}
+
 :is(.app-shell,.settings-modal) .page-cap-select{width:118px}
 :is(.app-shell,.settings-modal) .row{transition:background .12s;cursor:pointer}
 :is(.app-shell,.settings-modal) .row.selected{background:var(--accent-soft);border-left-color:var(--accent)}
@@ -126,7 +126,7 @@ body{background:var(--canvas);font-family:var(--sans);font-synthesis:none;-webki
  :is(.app-shell,.settings-modal) .topbar .proc-primary{font-size:12px}:is(.app-shell,.settings-modal) .topbar .proc-pkg{font-size:9px}:is(.app-shell,.settings-modal) .topbar .proc-face{display:none}
  :is(.app-shell,.settings-modal) .topbar .stats{grid-column:1/-1;grid-row:2;margin:2px 4px 0;font-size:10px;min-height:14px;order:0}
  :is(.app-shell,.settings-modal) .cap-view>.filters{min-height:54px;padding:10px}:is(.app-shell,.settings-modal) .cap-view .toolbar-search{max-width:none;min-width:0}:is(.app-shell,.settings-modal) .toolbar-main{gap:6px}
- :is(.app-shell,.settings-modal) .toolbar-actions{gap:4px}:is(.app-shell,.settings-modal) .toolbar-actions .n-button{padding-inline:8px;height:30px}:is(.app-shell,.settings-modal) .capture-list-foot{padding:9px 12px}
+ :is(.app-shell,.settings-modal) .toolbar-actions{gap:4px}:is(.app-shell,.settings-modal) .toolbar-actions .n-button{padding-inline:8px;height:30px}
  :is(.app-shell,.settings-modal) .settings-top-tabs{min-height:50px;padding-inline:14px;gap:0}:is(.app-shell,.settings-modal) .settings-top-tabs>.n-button{min-height:50px;height:50px;margin-right:17px;font-size:12px;padding-inline:1px}
  :is(.app-shell,.settings-modal) .set-main{padding:16px 12px}:is(.app-shell,.settings-modal) .hook-command-bar{grid-template-columns:minmax(0,1fr);gap:10px;margin-bottom:16px}
  :is(.app-shell,.settings-modal) .hook-context{grid-row:1}:is(.app-shell,.settings-modal) .hook-tools{grid-template-columns:minmax(0,1fr) minmax(0,1fr) 32px;gap:7px}:is(.app-shell,.settings-modal) .hook-tools>.n-input{grid-column:1/-1}
@@ -234,8 +234,8 @@ body{background:var(--canvas);font-family:var(--sans);font-synthesis:none;-webki
 
 .settings-dialog-title{display:flex;align-items:baseline;gap:16px;min-width:0;padding-right:12px}.settings-dialog-target{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:12px;font-weight:400}.settings-dialog-target small{font:inherit}
 
-/* Split panes need an intrinsic two-row footer, not a squeezed summary beside fixed controls. */
-:is(.app-shell,.settings-modal) .capture-workspace.detail-open .capture-list-foot{display:grid;grid-template-columns:minmax(0,1fr);align-items:start;gap:8px}:is(.app-shell,.settings-modal) .capture-workspace.detail-open .capture-list-foot>span{min-width:0;word-break:normal;overflow-wrap:normal;line-height:1.5}:is(.app-shell,.settings-modal) .capture-workspace.detail-open .pager-controls{justify-content:flex-end;flex-wrap:wrap}
+
+
 
 /* Device picker: left device tabs, right details; no change to capture controls. */
 .device-dialog-layout{display:flex;flex:1;min-height:0;min-width:0;width:100%}.device-dialog-nav{display:flex;flex-direction:column;flex:0 0 190px;min-width:0;background:var(--bg);border-right:1px solid var(--line)}.device-dialog-nav .dev-list{flex:1;min-height:0;overflow:auto;margin:0;padding:8px;border:0}.device-dialog-nav .dev-item{padding:10px 6px}.device-dialog-nav .dev-foot{flex:none;padding:10px;margin:0;border-top:1px solid var(--line)}.device-dialog-nav .dev-add-row{flex-wrap:wrap}.device-dialog-nav .dev-add-row>.n-input{width:100%;flex-basis:100%}.device-dialog-nav .dev-add-trigger{width:100%;height:auto;min-height:34px;padding:8px}.device-dialog-nav .dev-add-trigger .n-button__content{white-space:normal;text-align:left}.device-dialog-main{flex:1;min-width:0;overflow:auto;padding:20px}.device-dialog-main .dev-summary{margin:0;padding:0;border:0}.device-dialog-main .dev-bars{grid-template-columns:minmax(0,1fr)}
@@ -262,3 +262,8 @@ body{background:var(--canvas);font-family:var(--sans);font-synthesis:none;-webki
 @media(prefers-reduced-motion:reduce){.ui-nav button.ui-nav-item{transition:none}.ui-nav button.ui-nav-item:active:not(:disabled){transform:none}}
 
 .device-dialog-nav .dev-pick.ui-nav-item{flex:1;min-width:0;width:auto}
+
+/* Pagination belongs above the content, never over the last visible records. */
+.cap-view>.filters{display:flex;flex-direction:column;flex-wrap:nowrap;align-items:stretch;gap:10px}.cap-view .capture-list-head{display:flex;flex:none;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px 16px;min-height:32px;padding:0;border:0;background:transparent;color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}.capture-list-head>span{min-width:0;line-height:1.5}.capture-list-head .pager-controls{display:flex;flex-wrap:wrap;justify-content:flex-end;margin-left:auto;gap:6px}
+.app-shell .mem-pager{position:static;flex:none;flex-wrap:wrap;border-top:0;border-bottom:1px solid var(--line-soft)}
+@media(max-width:620px){.cap-view .capture-list-head{gap:6px}.capture-list-head>span{flex-basis:100%}.capture-list-head .pager-controls{margin-left:0;justify-content:flex-start}}
