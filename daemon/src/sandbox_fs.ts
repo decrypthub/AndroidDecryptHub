@@ -230,7 +230,7 @@ function failCode(code: string, abs: string, pkg: string, kind: 'dir' | 'file'):
 function explainAdb(e: unknown): Error {
   const msg = e instanceof Error ? e.message : String(e);
   const line = msg.split('\n')[0].replace(/\s+/g, ' ').trim().slice(0, 200);
-  if (/no devices|device offline|device not found/i.test(line)) return new Error('手机没有连上，读不了沙盒');
+  if (/no devices|device offline|device not found|no device with transport id|device .* not found/i.test(line)) return new Error('所选手机连接已断开或已变化，请重新连接这台设备；无需清空沙盒数据');
   if (/\bsu:|inaccessible or not found|Permission denied/i.test(line)) return new Error(`读沙盒需要手机上的 root（su）。${line}`);
   return new Error(line ? `读沙盒失败：${line}` : '读沙盒失败');
 }

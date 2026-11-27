@@ -21,6 +21,8 @@ const remoteFor=(raw:string,port:number)=>raw.split(/\r?\n/).filter(Boolean).fla
 });
 export class UsbAgentRoutes {
   private leases=new Map<string,OwnedLease>();private jobs=new Map<string,Promise<UsbAgentLease>>();
+  private known=new Set<string>();private nextRoster:AdbDevice[]|undefined;
+  private reconcileJob:Promise<{serial:string;action:string;error?:string}[]>|undefined;
   private readonly options:RouteOptions;
   constructor(options:RouteOptions){
     this.options=options;
@@ -49,11 +51,24 @@ export class UsbAgentRoutes {
     if(mapping.length!==1||mapping[0]!==lease.hostAgentPort)fail('DEVICE_ROUTE_CHANGED','USB 路由已改变，未发送目标命令');
     // A second phone routed into this listener would defeat source attribution. Never
     // infer its identity from package/PID coincidence or from a globally selected phone.
-    for(const other of await this.roster())if(other.state==='device'&&other.serial!==lease.serial&&other.transportId){
-      const rows=await this.run(['-t',other.transportId,'reverse','--list']);
-      if(rows.split(/\r?\n/).some(line=>new RegExp(`\\btcp:\\d+\\s+tcp:${lease.hostAgentPort}\\s*$`).test(line)))
-        fail('DEVICE_ROUTE_ALIASED','其他设备也映射到此监听端口，不能证明会话归属');
+    for(let pass=0;pass<2;pass++){
+      let changed=false;
+      for(const other of await this.roster())if(other.state==='device'&&other.serial!==lease.serial&&other.transportId){
+        let rows:string;
+        try{rows=await this.run(['-t',other.transportId,'reverse','--list']);}
+        catch(error){
+          // Another phone may disappear between discovery and probing. Re-check the
+          // roster, not the error text; a still-present or aliased peer stays fail-closed.
+          const live=await this.roster();
+          if(live.some(d=>d.serial===other.serial&&d.transportId===other.transportId&&d.state==='device'))throw error;
+          changed=true;break;
+        }
+        if(rows.split(/\r?\n/).some(line=>new RegExp(`\\btcp:\\d+\\s+tcp:${lease.hostAgentPort}\\s*$`).test(line)))
+          fail('DEVICE_ROUTE_ALIASED','其他设备也映射到此监听端口，不能证明会话归属');
+      }
+      if(!changed)return;
     }
+    fail('DEVICE_ROSTER_UNSTABLE','设备连接持续变化，请稍后重试；未发送目标命令');
   }
   private async prove(lease:UsbAgentLease,hello:AgentHello,checkPackage:boolean):Promise<Readonly<AgentDeviceBinding>>{
     const pkg=hello.package??'',name=hello.process??pkg,pid=hello.pid,uid=hello.uid,start=normalizeStarttimeTicks(hello.starttimeTicks);
@@ -82,10 +97,11 @@ export class UsbAgentRoutes {
       assurance:'explicit-usb-route',linkEvidence:lease.linkEvidence,process:{pid:pid!,uid:uid!,starttimeTicks:start,name}});
   }
   ensure(serial:string):Promise<UsbAgentLease>{
+    if(!validDeviceSerial(serial))fail('INVALID_DEVICE_SCOPE','无效的设备串号');this.known.add(serial);
     let job=this.jobs.get(serial);if(!job){job=this.open(serial).finally(()=>this.jobs.delete(serial));this.jobs.set(serial,job);}return job;
   }
   private async open(serial:string):Promise<UsbAgentLease>{
-    const existing=this.leases.get(serial);if(existing){try{await this.checkRoute(existing);return existing;}catch{await this.close(serial);}}
+    const existing=this.leases.get(serial);if(existing){try{await this.checkRoute(existing);return existing;}catch{await this.close(serial,false);}}
     const row=await this.select(serial),bootId=await this.boot(row.transportId);
     const old=remoteFor(await this.run(['-t',row.transportId,'reverse','--list']),this.options.deviceAgentPort);
     if(old.length>1||old.length===1&&(old[0]!==this.options.legacyHostPort||!this.options.ownsLegacyListener?.()))fail('DEVICE_ROUTE_OCCUPIED','现有 USB 路由属于其他入口，未覆盖');
@@ -110,11 +126,31 @@ export class UsbAgentRoutes {
       if(JSON.stringify(current)!==JSON.stringify(old))fail('DEVICE_ROUTE_CHANGED','USB 路由在建立期间改变');
       await this.run(['-t',row.transportId,'reverse',...(old.length?[]:['--no-rebind']),`tcp:${lease.deviceAgentPort}`,`tcp:${hostPort}`]);
       await this.checkRoute(lease);return lease;
-    }catch(e){await this.close(serial);throw e;}
+    }catch(e){await this.close(serial,false);throw e;}
+  }
+  /** Reconcile only previously selected devices; never auto-enroll a newly plugged phone. */
+  reconcileKnown(rows:AdbDevice[]):Promise<{serial:string;action:string;error?:string}[]>{
+    this.nextRoster=rows.map(row=>({...row}));
+    if(!this.reconcileJob)this.reconcileJob=this.reconcileLoop().finally(()=>{this.reconcileJob=undefined;});
+    return this.reconcileJob;
+  }
+  private async reconcileLoop(){
+    const results:{serial:string;action:string;error?:string}[]=[];
+    while(this.nextRoster){const rows=this.nextRoster;this.nextRoster=undefined;
+      for(const serial of [...this.known]){
+        const online=rows.filter(r=>r.serial===serial&&r.state==='device'),lease=this.leases.get(serial);
+        try{
+          if(online.length!==1){if(lease){await this.close(serial,false);results.push({serial,action:'offline'});}continue;}
+          if(lease&&online[0].transportId&&lease.transportId===online[0].transportId)continue;
+          await this.ensure(serial);results.push({serial,action:'reconnected'});
+        }catch(error){results.push({serial,action:'failed',error:(error as Error).message});}
+      }
+    }return results;
   }
   get(serial:string):UsbAgentLease|undefined{return this.leases.get(serial);}
   list():UsbAgentLease[]{return [...this.leases.values()];}
-  async close(serial:string):Promise<{removed:boolean;restoredPrevious:boolean;conflict:boolean}>{
+  async close(serial:string,forget=true):Promise<{removed:boolean;restoredPrevious:boolean;conflict:boolean}>{
+    if(forget)this.known.delete(serial);
     const lease=this.leases.get(serial);if(!lease)return {removed:false,restoredPrevious:false,conflict:false};
     this.leases.delete(serial);lease.removeValidator();for(const sock of lease.sockets)sock.destroy();
     await new Promise<void>(resolve=>lease.server.close(()=>resolve()));

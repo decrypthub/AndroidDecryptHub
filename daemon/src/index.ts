@@ -133,8 +133,13 @@ if (!localObserver) {
 // host:track-devices 常驻推送：设备插拔即时广播给面板，不必等 4s 轮询。
 {
   let devTimer: ReturnType<typeof setTimeout> | undefined;
-  adbTrackDevices(() => {
-    clearTimeout(devTimer);
-    devTimer = setTimeout(() => broadcastLive('devices.changed', {}), 300);
+  let roster='';
+  adbTrackDevices(raw => {
+    roster=raw;clearTimeout(devTimer);
+    devTimer = setTimeout(() => {
+      void usbRoutes.reconcileKnown(parseAdbDevices(roster)).then(results=>{
+        for(const r of results)if(r.error)log('[agent-route]',r.serial,r.error);
+      }).catch(e=>log('[agent-route]',(e as Error).message)).finally(()=>broadcastLive('devices.changed', {}));
+    }, 300);
   });
 }
