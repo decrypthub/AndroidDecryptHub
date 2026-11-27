@@ -4,12 +4,13 @@ const drafts=new Map<string,{config:any;revision:number}>();
 </script>
 <script setup lang="ts">
 import {ref,computed,watch,onBeforeUnmount} from 'vue';
-import {store,appSessions,selectedSerial,deviceLabel} from '../store';
+import {store,appSessions,selectedSerial} from '../store';
 import {getCaptureControls,writeCaptureControls,type CaptureControlsView} from '../api';
 import {SearchOutline,RefreshOutline,ChevronDownOutline} from '@vicons/ionicons5';
 const FEATURES=[['digest','摘要',1],['hmac','HMAC',2],['symmetric','对称加密',4],['asymmetric','非对称签名',8],['tls','TLS 明文',16],['aead','AEAD',32],['system','系统检测',64],['file','文件访问',128]] as const;
 const copy=(x:any)=>JSON.parse(JSON.stringify(x));
 const view=ref<CaptureControlsView|null>(null),draft=ref<any>(null),busy=ref(false),loading=ref(false),error=ref(''),notice=ref('');
+const featuresExpanded=ref(false);
 const feature=ref('digest'),query=ref(''),backend=ref('all'),stateFilter=ref('all'),detail=ref(''),sid=ref('');
 const target=ref({serial:'',package:'',session:''}),pendingTarget=ref<any>(null),confirmApply=ref(false),review=ref<CaptureControlsView|null>(null);
 let request=0;
@@ -23,7 +24,6 @@ const changed=computed(()=>{
 const chosen=computed(()=>new Set<string>(FEATURES.flatMap(([k])=>draft.value?.features[k]?.enabled?draft.value.features[k].methods:[])));
 const dependencies=computed(()=>{const out=new Map<string,string[]>(),by=new Map(methods.value.map(m=>[m.id,m])),all=new Set(chosen.value);for(let i=0;i<methods.value.length;i++){let add=false;for(const id of [...all])for(const dep of by.get(id)?.requires??[]){const rows=out.get(dep)??[];if(!rows.includes(id))rows.push(id);out.set(dep,rows);if(!all.has(dep)){all.add(dep);add=true;}}if(!add)break;}return out;});
 const processOptions=computed(()=>[{label:'离线配置（不操作进程）',value:''},...appSessions.value.filter(s=>s.online).map(s=>({label:(s.process===s.package?'主进程':s.process??'进程')+' · PID '+s.pid,value:s.sessionId}))]);
-const deviceName=computed(()=>{const d=store.devices.find(d=>d.serial===target.value.serial);return d?deviceLabel(d):target.value.serial;});
 const controlsDisabled=computed(()=>busy.value||!!pendingTarget.value||!!review.value);
 const unconfirmed=computed(()=>view.value?.lastIntent?.state==='unknown'||((view.value?.control as any)?.uncertainOperations?.length??0)>0);
 const rows=computed(()=>methods.value.filter(m=>(!!query.value||(m.families&activeFeature.value[2]))&&(backend.value==='all'||m.backend===backend.value)&&(!query.value||`${m.id} ${m.class??''} ${m.symbol??''} ${m.params??''}`.toLowerCase().includes(query.value.trim().toLowerCase()))&&(stateFilter.value==='all'||stateFilter.value==='active'&&isActive(m)||stateFilter.value==='inactive'&&!isActive(m)||stateFilter.value==='error'&&isProblem(m))).sort((a,b)=>a.id.localeCompare(b.id)));
@@ -69,8 +69,10 @@ onBeforeUnmount(retain);
   <div v-if="!target.serial||!target.package" class="hook-empty"><h2>先选择设备和 APP</h2><n-button secondary @click="store.appDialogOpen=true">选择 APP</n-button></div>
   <template v-else>
    <div v-if="store.hookSource?.serial===target.serial&&store.hookSource?.package===target.package" class="hook-hint"><n-button text @click="returnToRecord">‹ {{ store.hookSource.recordId!=null ? '返回记录 #'+store.hookSource.recordId : '返回网络' }}</n-button><span> · 来源符号定位；此处显示当前配置，不代表历史安装状态</span></div>
-   <header class="hook-context"><div><strong>{{ deviceName }}</strong><span :title="target.package">{{ target.package }}</span></div><n-select class="hook-process" :value="sid" :options="processOptions" aria-label="应用配置的目标进程" :disabled="busy" @update:value="(value:string)=>switchTarget({...target,session:value})" /></header>
+   <div class="hook-command-bar">
    <div class="hook-tools"><n-input v-model:value="query" clearable placeholder="搜索功能、类或方法" aria-label="搜索 Hook 方法"><template #prefix><n-icon :component="SearchOutline" /></template></n-input><n-select v-model:value="backend" aria-label="方法后端" :options="[{label:'全部后端',value:'all'},{label:'Java',value:'java'},{label:'Native',value:'native'}]"/><n-select v-model:value="stateFilter" aria-label="方法运行状态筛选" :options="[{label:'全部状态',value:'all'},{label:'观测中',value:'active'},{label:'未启用',value:'inactive'},{label:'需处理',value:'error'}]"/><n-button quaternary :loading="loading" :disabled="busy" aria-label="刷新 Hook 快照" @click="load(true)"><template #icon><n-icon :component="RefreshOutline"/></template></n-button></div>
+    <div class="hook-context"><n-select class="hook-process" :value="sid" :options="processOptions" aria-label="应用配置的目标进程" :disabled="busy" @update:value="(value:string)=>switchTarget({...target,session:value})" /></div>
+   </div>
    <p v-if="error" class="hook-message error" role="alert">{{ error }}</p>
    <p v-if="notice" class="hook-message" role="status">{{ notice }}</p>
    <div v-if="review" class="hook-review" role="alert"><span>检测到新状态。草稿仍保留，请选择如何继续。</span><n-button size="small" @click="useRefresh(true)">采用新状态，保留草稿</n-button><n-button size="small" @click="useRefresh(false)">采用新状态，放弃草稿</n-button></div>
@@ -80,8 +82,13 @@ onBeforeUnmount(retain);
    <n-spin :show="loading&&!view">
     <div v-if="loading&&!view" class="hook-empty">正在读取 Hook 配置…</div>
     <div v-if="draft&&view" class="hook-workspace">
-     <div class="hook-features" aria-label="功能总开关">
-      <div v-for="[id,label,bit] in FEATURES" :key="id" class="hook-feature" :class="{selected:feature===id}"><button class="hook-feature-label" :aria-pressed="feature===id" @click="feature=id"><span>{{ label }}</span><small>已选 {{ draft.features[id].methods.length }} / {{ methods.filter(m=>m.families&bit).length }}</small></button><n-switch size="small" :value="draft.features[id].enabled" :aria-label="label+'功能总开关'" :disabled="controlsDisabled" :aria-disabled="controlsDisabled" @update:value="(value:boolean)=>draft.features[id].enabled=value" /></div>
+     <div class="hook-feature-mobile-bar">
+      <button class="hook-feature-picker" :aria-expanded="featuresExpanded" aria-controls="hook-feature-list" @click="featuresExpanded=!featuresExpanded"><span>{{ activeFeature[1] }}<small>已选方法 {{ currentChoices.methods.length }} / {{ methods.filter(m=>m.families&activeFeature[2]).length }}</small></span><n-icon :component="ChevronDownOutline" /></button>
+      <label v-if="!featuresExpanded" class="hook-current-gate"><span>总开关</span><n-switch size="small" :value="currentChoices.enabled" :aria-label="activeFeature[1]+'功能总开关'" :disabled="controlsDisabled" @update:value="(value:boolean)=>currentChoices.enabled=value" /></label>
+     </div>
+     <div id="hook-feature-list" class="hook-features" :class="{expanded:featuresExpanded}" aria-label="功能总开关">
+      <div class="hook-feature-caption" aria-hidden="true"><span>功能</span><span>总开关</span></div>
+      <div v-for="[id,label,bit] in FEATURES" :key="id" class="hook-feature" :class="{selected:feature===id}"><button class="hook-feature-label" :aria-pressed="feature===id" @click="feature=id;featuresExpanded=false"><span>{{ label }}</span><small>已选方法 {{ draft.features[id].methods.length }} / {{ methods.filter(m=>m.families&bit).length }}</small></button><n-switch size="small" :value="draft.features[id].enabled" :aria-label="label+'功能总开关'" :disabled="controlsDisabled" :aria-disabled="controlsDisabled" @update:value="(value:boolean)=>draft.features[id].enabled=value" /></div>
      </div>
      <div class="hook-methods">
       <div class="hook-method-head"><div><h2>{{ activeFeature[1] }}</h2><span v-if="!currentChoices.enabled">功能已停用，子项选择保留</span><span v-else-if="!currentChoices.methods.length">未选择方法</span></div><n-dropdown :options="more" :disabled="controlsDisabled||!currentChoices.enabled" @select="menu"><n-button quaternary size="small" aria-label="当前功能的更多操作">更多<n-icon :component="ChevronDownOutline" /></n-button></n-dropdown></div>

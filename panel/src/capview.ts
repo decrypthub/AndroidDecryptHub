@@ -103,6 +103,12 @@ function compactContentPreview(c:Cap,fallback:string,length:CaptureLength):strin
   }
   return fallback&&((fallback.match(/\./g)?.length??0)/fallback.length)<0.3?fallback.slice(0,100):length.bytes?binary():fallback;
 }
+/** Missing capture evidence must never be presented as a proven empty operation. */
+export function capturePreviewPlaceholder(c: Cap): string {
+  const input=captureLengths(c).input;
+  if(c.source==='java'&&c.category==='crypto')return c.inputBytesPresent===true?'本次参数为空':c.inputBytesPresent===false?'未记录输入参数':'输入参数未确认';
+  return input.bytes===0&&input.captured===0?'空输入':'无可用预览';
+}
 export interface CryptoView {
   title: string; direction: string; hook: string; sizeLabel: string;
   truncated: boolean; outputTruncated: boolean; hasKey: boolean; preview: string; show: boolean;

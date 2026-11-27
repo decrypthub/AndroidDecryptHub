@@ -4,7 +4,7 @@ import { store, belongsToApp, capRemoveWhere, capVisible, capDisplayCap, DISPLAY
 import { downloadBlob } from '../user_actions';
 import { createCaptureExport, metadataExport } from '../capture_export';
 import { getCaptures, getExchanges, getCaptureDetail, type Cap } from '../api';
-import { catClass, cryptoView, captureLengths, rowLens, systemRow, fmtTime, CATLABEL, type CatKey } from '../capview';
+import { catClass, cryptoView, capturePreviewPlaceholder, captureLengths, rowLens, systemRow, fmtTime, CATLABEL, type CatKey } from '../capview';
 import { SearchOutline } from '@vicons/ionicons5';
 import CapDetail from './CapDetail.vue';
 import ExchangeDetail from './ExchangeDetail.vue';
@@ -597,8 +597,8 @@ const searchPlaceholder = computed(() =>
                   <span v-if="cryptoRow(c).hasKey" class="mark">有密钥</span>
                   <span class="ts">{{ fmtTime(c.ts) }}</span>
                 </div>
-                <div v-if="cryptoRow(c).preview || cryptoRow(c).hook" class="subline">
-                  <span v-if="cryptoRow(c).preview" class="preview">{{ cryptoRow(c).preview }}</span>
+                <div class="subline">
+                  <span class="preview" :class="{'preview-absent':!cryptoRow(c).preview}">{{ cryptoRow(c).preview || capturePreviewPlaceholder(c) }}</span>
                   <span v-if="cryptoRow(c).hook" class="hook">{{ cryptoRow(c).hook }}</span>
                 </div>
               </template>

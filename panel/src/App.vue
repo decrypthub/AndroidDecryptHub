@@ -44,7 +44,7 @@ const wsCls = computed(() =>
   `status-dot ${store.wsState === 'live' ? 'ok' : store.wsState === 'fail' ? 'bad' : ''}`);
 
 const chosenApp = computed(() => store.apps.find(a => a.package === store.chosenPkg));
-const appLabel = computed(() => chosenApp.value?.label || (store.chosenPkg ? '当前应用' : '未选择 APP'));
+const appLabel = computed(() => chosenApp.value?.label || (store.chosenPkg ? store.chosenPkg.split('.').pop() || store.chosenPkg : '未选择 APP'));
 const appInitial = computed(() => (appLabel.value[0] ?? '?'));
 const iconSerial = computed(() => store.devices.find(d => d.key === store.selectedDeviceKey)?.serial || '');
 
@@ -61,16 +61,23 @@ function toggleRail() {
 const themeOverrides = computed<GlobalThemeOverrides>(() => {
   const fg = isDark.value ? '#f4f6f8' : '#111315';
   const paper = isDark.value ? '#141619' : '#ffffff';
-  const border = isDark.value ? '#383c42' : '#d3d6da';
+  const border = isDark.value ? '#353e46' : '#dce3e4';
+  const accent = isDark.value ? '#8acdb6' : '#216b56';
   return {
-    common: { primaryColor:fg, primaryColorSuppl:fg, primaryColorHover:isDark.value?'#d2d6db':'#393e42',
-      primaryColorPressed:isDark.value?'#c8cbd0':'#090b0d', textColorBase:fg, bodyColor:isDark.value?'#090b0d':'#fbfcfd',
+    common: { primaryColor:accent, primaryColorSuppl:accent, primaryColorHover:isDark.value?'#a9dec9':'#185b48',
+      primaryColorPressed:isDark.value?'#70b59c':'#164e40', textColorBase:fg, bodyColor:isDark.value?'#0e1216':'#f1f4f5',
       cardColor:paper, modalColor:paper, popoverColor:paper, inputColor:paper, borderColor:border,
-      dividerColor:isDark.value?'#282d32':'#e7e8ea', borderRadius:'5px', fontSize:'13px' },
+      dividerColor:isDark.value?'#282d32':'#e7e8ea', borderRadius:'7px', fontSize:'13px' },
+    Input:{color:paper,colorHover:paper,colorFocus:paper,textColor:fg,placeholderColor:isDark.value?'#81939d':'#7c8a91',
+      border:'1px solid '+border,borderHover:'1px solid '+accent,borderFocus:'1px solid '+accent,
+      boxShadowFocus:'0 0 0 3px '+(isDark.value?'#203e32':'#e8f3ed'),heightSmall:'32px',heightMedium:'34px'},
+    Select:{peers:{InternalSelection:{color:paper,colorActive:paper,textColor:fg,
+      border:'1px solid '+border,borderHover:'1px solid '+accent,borderActive:'1px solid '+accent,borderFocus:'1px solid '+accent,
+      heightSmall:'32px',heightMedium:'34px',borderRadius:'7px'}}},
     Button:{textColorPrimary:paper,textColorHoverPrimary:paper,textColorPressedPrimary:paper},
     Radio: {
-      buttonColor:paper, buttonColorActive:fg, buttonTextColorActive:paper, buttonTextColorHover:fg,
-      buttonBorderColor:border, buttonBorderColorActive:fg,
+      buttonColor:paper, buttonColorActive:accent, buttonTextColorActive:paper, buttonTextColorHover:fg,
+      buttonBorderColor:border, buttonBorderColorActive:accent,
     },
     Checkbox: { checkMarkColor:paper },
     Switch: {

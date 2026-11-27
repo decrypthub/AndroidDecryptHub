@@ -1,6 +1,7 @@
 import { createApp } from 'vue';
 import App from './App.vue';
 import './style.css';
+import './studio.css';
 import { connectWs, startPolling } from './store';
 import {
   create, NButton, NCheckbox, NConfigProvider, NDatePicker, NDropdown, NEmpty, NIcon, NInput,
