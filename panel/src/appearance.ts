@@ -17,7 +17,7 @@ export function useAppearance() {
   const onStorage = (e: StorageEvent) => { if (e.key === key || e.key === null) appearance.value = read(); };
   watchEffect(() => {
     document.documentElement.dataset.appearance = isDark.value ? 'dark' : 'light';
-    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', isDark.value ? '#090b0d' : '#fbfcfd');
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', isDark.value ? '#0d0d0d' : '#ffffff');
   });
   onMounted(() => { onMedia(); media.addEventListener('change', onMedia); window.addEventListener('storage', onStorage); });
   onUnmounted(() => { media.removeEventListener('change', onMedia); window.removeEventListener('storage', onStorage); });

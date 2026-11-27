@@ -1,11 +1,15 @@
-/* ADH studio: precision over decoration. Interaction and target fencing stay in Vue. */
-:root{--canvas:#f1f4f5;--bg:#f7f9f9;--chrome:#f1f4f5;--surface:#fff;--surface-raised:#fff;--surface-2:#f3f6f6;--surface-3:#e8eeee;--line:#dce3e4;--line-soft:#edf1f2;--ink:#18252b;--ink-2:#34474e;--muted:#667880;--accent:#216b56;--accent-soft:#e8f3ed;--accent-line:#b5d5c4;--blue:var(--accent);--green:#216b56;--float-shadow:0 12px 36px #192d3820;--reading-columns:56px 154px minmax(160px,1fr) 158px 86px}
-:root[data-appearance=dark]{--canvas:#0e1216;--bg:#10161b;--chrome:#0e1216;--surface:#141619;--surface-raised:#1b2228;--surface-2:#1d272d;--surface-3:#29353d;--line:#353e46;--line-soft:#263037;--ink:#edf3f4;--ink-2:#c6d3d8;--muted:#9caeb7;--accent:#8acdb6;--accent-soft:#1a322b;--accent-line:#365e50;--blue:var(--accent);--green:#8acdb6;--float-shadow:0 14px 42px #0005}
-body{background:var(--canvas);font-family:system-ui,-apple-system,"Segoe UI Variable","Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;-webkit-font-smoothing:antialiased}
+/* ADH panel: official website theme, with product-specific density and layout. */
+@font-face{font-family:"ADH Sans";src:url('../../website/assets/fonts/sans-400.woff2') format('woff2');font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:"ADH Sans";src:url('../../website/assets/fonts/sans-500.woff2') format('woff2');font-weight:500;font-style:normal;font-display:swap}
+@font-face{font-family:"ADH Sans";src:url('../../website/assets/fonts/sans-600.woff2') format('woff2');font-weight:600;font-style:normal;font-display:swap}
+@font-face{font-family:"ADH Mono";src:url('../../website/assets/fonts/mono-400.woff2') format('woff2');font-weight:400;font-style:normal;font-display:swap}
+:root{--canvas:#ffffff;--bg:#f7f7f8;--chrome:#ffffff;--surface:#ffffff;--surface-raised:#ffffff;--surface-2:#f7f7f8;--surface-3:#ececf1;--line:#e5e5e5;--line-soft:#ececf1;--ink:#0d0d0d;--ink-2:#353740;--muted:#6e6e80;--accent:var(--ink);--accent-soft:var(--surface-2);--accent-line:var(--line);--blue:var(--ink);--green:#10a37f;--focus:#0b7a5f;--primary-hover:#333333;--float-shadow:0 12px 36px #0d0d0d14;--reading-columns:56px 154px minmax(160px,1fr) 158px 86px;--sans:"ADH Sans","Noto Sans SC",-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;--mono:"ADH Mono","JetBrains Mono",ui-monospace,"SFMono-Regular",Consolas,monospace}
+:root[data-appearance=dark]{--canvas:#0d0d0d;--bg:#0d0d0d;--chrome:#0d0d0d;--surface:#171717;--surface-raised:#171717;--surface-2:#2a2a2a;--surface-3:#353740;--line:#2a2a2a;--line-soft:#2a2a2a;--ink:#ececf1;--ink-2:#ececf1;--muted:#8e8ea0;--accent:var(--ink);--accent-soft:var(--surface-2);--accent-line:var(--line);--blue:var(--ink);--green:#10a37f;--focus:#10a37f;--primary-hover:#ffffff;--float-shadow:0 14px 42px #0005}
+body{background:var(--canvas);font-family:var(--sans);font-synthesis:none;-webkit-font-smoothing:antialiased}
 .app-shell{background:var(--canvas);font-variant-numeric:tabular-nums}
 .app-shell .side{width:190px;background:var(--canvas);border:0;padding:0 10px}
 .app-shell .side-brand{height:76px;min-height:76px;padding:0 14px;border:0;gap:10px}
-.app-shell .side-title{font-size:21px;font-weight:720;letter-spacing:-.045em}
+.app-shell .side-title{font-size:21px;font-weight:600;letter-spacing:-.045em}
 .app-shell .side-brand .hdr-mark{width:30px;height:30px;border:1px solid var(--line);border-radius:9px;background:var(--surface);box-shadow:0 2px 3px #18352b08}
 .app-shell .side-nav{padding:1px 0;gap:5px}
 .app-shell .rail-action{height:41px;padding:0 15px;border-radius:8px;color:var(--muted);font-weight:500;transition:background .14s,color .14s}
@@ -30,7 +34,7 @@ body{background:var(--canvas);font-family:system-ui,-apple-system,"Segoe UI Vari
 .app-shell .topbar .proc-pkg{font-size:10px;color:var(--muted);font-family:ui-monospace,"Cascadia Mono",Consolas,monospace}
 .app-shell .topbar .stats{font-size:11px;color:var(--muted);gap:7px;margin-left:auto;order:8}
 .app-shell .status-dot{width:6px;height:6px}
-.app-shell .status-dot.ok{animation:none;background:var(--accent)}
+.app-shell .status-dot.ok{animation:none;background:var(--green)}
 .app-shell .panel-body{margin:0 20px 20px 0;background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow:hidden;box-shadow:0 2px 5px #233c4605}
 .app-shell .cap-view>.filters{padding:16px 20px;min-height:68px;background:var(--surface);border-bottom:1px solid var(--line-soft)}
 .app-shell .toolbar-main{gap:16px}
@@ -95,7 +99,7 @@ body{background:var(--canvas);font-family:system-ui,-apple-system,"Segoe UI Vari
 .app-shell .advanced-host-settings{margin-top:28px;padding-top:22px}.app-shell .set-meta{font-size:12px}
 .app-shell .files-workspace,.app-shell .workarea{background:var(--surface)}
 .app-shell .io-tabs .n-button,.app-shell .pref-line .n-radio-button{font-size:12px}
-.app-shell :is(button,[role=button],input,select,textarea,a):focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.app-shell :is(button,[role=button],input,select,textarea,a):focus-visible{outline:2px solid var(--focus);outline-offset:3px}
 .n-modal{border:1px solid var(--line);box-shadow:var(--float-shadow)}
 @media(min-width:900px){
  .app-shell .capture-workspace:not(.detail-open) .row,.app-shell .capture-workspace:not(.detail-open) .ledger-head{grid-template-columns:var(--reading-columns);gap:16px;padding-inline:22px}
@@ -177,7 +181,7 @@ body{background:var(--canvas);font-family:system-ui,-apple-system,"Segoe UI Vari
 }
 
 /* Native library selects expose focus on tabindex rather than a button role. */
-.app-shell [tabindex]:focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:5px}
+.app-shell [tabindex]:focus-visible{outline:2px solid var(--focus);outline-offset:3px;border-radius:5px}
 
 .app-shell .dump-menu button{justify-content:center}.app-shell .dump-menu-main{font-size:13px;font-weight:500}
 
@@ -187,3 +191,25 @@ body{background:var(--canvas);font-family:system-ui,-apple-system,"Segoe UI Vari
 
 /* Prevent flex-column wrapping after a footer is compressed by its parent. */
 @media(max-width:700px){.app-shell .hook-apply-bar{display:grid;grid-template-columns:minmax(0,1fr);flex:none;height:auto;align-content:start;justify-content:stretch}.app-shell .hook-apply-bar>div{min-width:0;max-width:100%;grid-template-columns:repeat(2,minmax(0,1fr))}.app-shell .hook-apply-bar .n-button{min-width:0}}
+
+/* Same site control language: neutral emphasis, green signals/focus, 4/8/12 radii. */
+.app-shell .n-button,.app-shell .rail-action,.app-shell .hook-feature-label{transition:background .2s,border-color .2s,color .2s,transform .15s}
+.app-shell .row{transition:background .2s,color .2s}
+.app-shell .n-button:not(:disabled):not(.n-button--disabled):not(.n-button--loading):active,.app-shell .rail-action:not(:disabled):active{transform:translateY(1px)}
+.app-shell .n-button,.app-shell .hook-modules input{border-radius:4px}
+.app-shell .hook-workspace,.app-shell .hook-method-detail,.app-shell .hook-modules,.app-shell .io-data{border-radius:8px}
+.app-shell .hook-method-name,.app-shell .io-data pre.mono,.app-shell .row .seq,.app-shell .row .sizes,.app-shell .topbar .proc-pkg{font-family:var(--mono)}
+.app-shell .topbar .proc-face .app-dialog-letter{background:var(--surface-2);color:var(--ink);border-color:var(--line)}
+.app-shell .side-brand .hdr-mark,.app-shell .panel-body{box-shadow:none}
+@media(prefers-reduced-motion:reduce){.app-shell *{transition:none!important;animation:none!important;scroll-behavior:auto!important}.app-shell .n-button:active,.app-shell .rail-action:active{transform:none!important}}
+
+/* Native file/dump actions share the same control states as the component library. */
+.app-shell button{font-family:var(--sans);transition:background .2s,border-color .2s,color .2s,transform .15s}
+.app-shell :is(button.primary,button.act.primary,button.btn.primary){background:var(--ink);border-color:var(--ink);color:var(--canvas);font-weight:500}
+.app-shell :is(button.primary,button.act.primary,button.btn.primary):hover:not(:disabled){background:var(--primary-hover);border-color:var(--primary-hover)}
+.app-shell :is(button.primary,button.act,button.btn,.dump-actions button,.compact-action):not(:disabled):active{transform:translateY(1px)}
+.app-shell .dump-col :is(input,button){border-radius:4px}
+@media(prefers-reduced-motion:reduce){.app-shell button:active{transform:none!important}}
+
+/* Cold review: readable inactive controls and sampling/offline caveats. */
+.app-shell .hook-hint,.app-shell .payload-note{font-size:13px;line-height:1.75}

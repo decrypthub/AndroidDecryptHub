@@ -59,21 +59,24 @@ function toggleRail() {
 
 // Use the same surface tokens for Naive's teleported menus, inputs and dialogs.
 const themeOverrides = computed<GlobalThemeOverrides>(() => {
-  const fg = isDark.value ? '#f4f6f8' : '#111315';
-  const paper = isDark.value ? '#141619' : '#ffffff';
-  const border = isDark.value ? '#353e46' : '#dce3e4';
-  const accent = isDark.value ? '#8acdb6' : '#216b56';
+  const fg = isDark.value ? '#ececf1' : '#0d0d0d';
+  const paper = isDark.value ? '#171717' : '#ffffff';
+  const border = isDark.value ? '#2a2a2a' : '#e5e5e5';
+  // Official site: monochrome controls; green is a signal/link/focus color.
+  const accent = fg;
+  const focus = isDark.value ? '#10a37f' : '#0b7a5f';
   return {
-    common: { primaryColor:accent, primaryColorSuppl:accent, primaryColorHover:isDark.value?'#a9dec9':'#185b48',
-      primaryColorPressed:isDark.value?'#70b59c':'#164e40', textColorBase:fg, bodyColor:isDark.value?'#0e1216':'#f1f4f5',
+    common: { primaryColor:accent, primaryColorSuppl:accent, primaryColorHover:isDark.value?'#ffffff':'#333333',
+      primaryColorPressed:fg, textColorBase:fg, bodyColor:isDark.value?'#0d0d0d':'#ffffff',
       cardColor:paper, modalColor:paper, popoverColor:paper, inputColor:paper, borderColor:border,
-      dividerColor:isDark.value?'#282d32':'#e7e8ea', borderRadius:'7px', fontSize:'13px' },
-    Input:{color:paper,colorHover:paper,colorFocus:paper,textColor:fg,placeholderColor:isDark.value?'#81939d':'#7c8a91',
-      border:'1px solid '+border,borderHover:'1px solid '+accent,borderFocus:'1px solid '+accent,
-      boxShadowFocus:'0 0 0 3px '+(isDark.value?'#203e32':'#e8f3ed'),heightSmall:'32px',heightMedium:'34px'},
+      dividerColor:isDark.value?'#2a2a2a':'#ececf1', borderRadius:'4px', fontSize:'13px',
+      fontFamily:'"ADH Sans","Noto Sans SC",-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif' },
+    Input:{color:paper,colorHover:paper,colorFocus:paper,textColor:fg,placeholderColor:isDark.value?'#8e8ea0':'#6e6e80',
+      border:'1px solid '+border,borderHover:'1px solid '+accent,borderFocus:'1px solid '+focus,
+      boxShadowFocus:'none',heightSmall:'32px',heightMedium:'34px'},
     Select:{peers:{InternalSelection:{color:paper,colorActive:paper,textColor:fg,
-      border:'1px solid '+border,borderHover:'1px solid '+accent,borderActive:'1px solid '+accent,borderFocus:'1px solid '+accent,
-      heightSmall:'32px',heightMedium:'34px',borderRadius:'7px'}}},
+      border:'1px solid '+border,borderHover:'1px solid '+accent,borderActive:'1px solid '+accent,borderFocus:'1px solid '+focus,
+      heightSmall:'32px',heightMedium:'34px',borderRadius:'4px'}}},
     Button:{textColorPrimary:paper,textColorHoverPrimary:paper,textColorPressedPrimary:paper},
     Radio: {
       buttonColor:paper, buttonColorActive:accent, buttonTextColorActive:paper, buttonTextColorHover:fg,
@@ -81,8 +84,8 @@ const themeOverrides = computed<GlobalThemeOverrides>(() => {
     },
     Checkbox: { checkMarkColor:paper },
     Switch: {
-      railColor:isDark.value?'#50565d':'#9bA1a7', railColorActive:isDark.value?'#417761':'#346851',
-      buttonColor:'#fff',
+      railColor:isDark.value?'#8e8ea0':'#6e6e80', railColorActive:fg,
+      buttonColor:isDark.value?'#0d0d0d':'#ffffff',
     },
   };
 });
