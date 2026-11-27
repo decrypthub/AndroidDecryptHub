@@ -5592,4 +5592,4 @@ Host **561/561**、JVM **73/73** 无skip，类型、默认/隔离构建、94项M
 - 仍保留2项P3：缺失输入在byteEvidence内仍编码retained-empty，消费者需组合inputBytesPresent判断；网络空态文本按钮视觉间距弱。后续UI精修/最终冷体验继续检查。
 - 严格现场检查仍FAIL：规范Host中的com.adh.sandbox会话ID发生重连，原PID28885/start53704094相同；两机原模块/范围/endpoint哈希和原reverse在清理后相同。没有命令重启8088/18761、重写这些全局文件。不能把9项功能通过写成现场完全未变化，也不在此猜测ROM原因。自有P5包、上传文件和20761路由已按所有权清理。
 - 全部产品验收尚未完成：43条Host脚本最近22PASS/11FAIL/10SKIP仍需修复核验，99条设备脚本、95工具语义/18用户域、真实注入/Manager与故障矩阵未闭环；之后才进入旧逻辑收尾、最终回归、新fork-none首次体验和晨间交付。此提交不是发版、刷机或重启在用服务的授权。
-- 本机证据位于工作区外部cold-fixes-transaction（完整命令/输出、真实下载、独立报告、实机报告）；同一analysis-view-transaction四角色累计原始49文件哈希恢复，新增33文件回滚移除。新增19用例相同输入：BASELINE0/19 exit1 → MODIFIED19/19 exit0 → ROLLBACK0/19 exit1；生产C新增7例同样全负→全正→全负。
+- 本机证据位于工作区外部cold-fixes-transaction（完整命令/输出、真实下载、独立报告、实机报告）；同一analysis-view-transaction四角色累计原始50文件哈希恢复，新增33文件回滚移除。新增19用例相同输入：BASELINE0/19 exit1 → MODIFIED19/19 exit0 → ROLLBACK0/19 exit1；生产C新增7例同样全负→全正→全负。
