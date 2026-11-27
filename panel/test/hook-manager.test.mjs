@@ -9,7 +9,8 @@ function model(overrides={}){
  return {...setupComponent('HookManager.vue',{},context),store,writes,drafts};
 }
 async function ready(h){await h.load();await Vue.nextTick();return h;}
-test('settings exposes four top-level categories instead of a second wide sidebar',()=>{const source=fs.readFileSync(path.join(panel,'src/components/SettingsPanel.vue'),'utf8');assert.match(source,/settings-top-tabs/);assert.doesNotMatch(source,/<aside class="set-sidebar">/);for(const label of ['Hook 管理','显示过滤','界面偏好','高级'])assert.ok(source.includes(label));assert.match(source,/<HookManager v-if/);});
+test('settings is function-first with secondary display/advanced options',()=>{const source=fs.readFileSync(path.join(panel,'src/components/SettingsPanel.vue'),'utf8');assert.match(source,/settings-top-tabs/);assert.doesNotMatch(source,/<aside class="set-sidebar">/);for(const label of ['加解密','系统','网络','显示过滤','界面偏好','高级'])assert.ok(source.includes(label));assert.match(source,/<HookManager v-if/);assert.match(source,/:group="captureGroup"/);});
+
 test('actual HookManager parent-off preserves children and refuses queued child toggles',async()=>{const h=await ready(model());try{h.draft.value.features.digest.enabled=false;h.toggleMethod(h.methods.value[0],false);assert.deepEqual(h.draft.value.features.digest.methods,['java.digest([B)']);assert.equal(h.writes.length,0);}finally{h.dispose();}});
 test('method changes are drafts, never one write per switch',async()=>{const h=await ready(model());try{h.toggleMethod(h.methods.value[0],false);assert.equal(h.changed.value,1);assert.equal(h.writes.length,0);h.discard();assert.equal(h.changed.value,0);}finally{h.dispose();}});
 test('search crosses functions while preserving method identity and ownership',async()=>{const h=await ready(model());try{h.query.value='SSL_read';assert.deepEqual(h.rows.value.map(m=>m.id),['native.SSL_read']);assert.equal(h.feature.value,'digest');}finally{h.dispose();}});

@@ -120,9 +120,9 @@ export interface DeviceInfo {
   screen: string; battery: number | null;
 }
 export const getDeviceInfo = (serial: string) =>
-  api<{ ok: boolean; info?: DeviceInfo; error?: string }>(`/api/devices?action=info&serial=${encodeURIComponent(serial)}`);export const getHealth = () => api<{ ok: boolean; version?: string }>('/health');
+  api<{ ok: boolean; info?: DeviceInfo; error?: string }>(`/api/devices?action=info&serial=${encodeURIComponent(serial)}`);export const getHealth = () => api<{ ok: boolean; version?: string; panelProtocol?:number }>('/health');
 export const getApps = () => api<{ ok: boolean; apps: AppInfo[]; error?: string; capture?: { enabled: boolean }; captureByPackage?: Record<string, unknown>; localObservation?: Record<string, unknown> }>('/api/apps');
-export const getScope = () => api<{ ok: boolean; packages: string[] }>('/api/scope');
+export const getScope = () => api<{ ok: boolean; packages: string[];error?:string }>('/api/scope');
 const scopeChange=(pkg:string,add:boolean,serial?:string)=>api('/api/scope',{method:'POST',headers:scopeHeaders('/api/scope',{'content-type':'application/json','x-adh-package':pkg},serial?{serial,package:pkg}:undefined),body:JSON.stringify(add?{add:[pkg]}:{remove:[pkg]})});
 export const scopeAdd = (pkg: string,serial?:string) => scopeChange(pkg,true,serial);
 export const scopeRemove = (pkg: string,serial?:string) => scopeChange(pkg,false,serial);
@@ -221,7 +221,7 @@ export const getExchanges = (pkg: string, range?: { fromTs?: number | null; toTs
   const p = new URLSearchParams({ package: pkg });
   if (range?.fromTs != null) p.set('fromTs', String(range.fromTs));
   if (range?.toTs != null) p.set('toTs', String(range.toTs));
-  return api<{ ok?: boolean; exchanges?: unknown[]; items?: unknown[]; http2Idle?: number; consumedIds?: number[] }>(`/api/http/exchanges?${p.toString()}`);
+  return api<{ ok?: boolean; scope?:{serial:string|null;package:string|null};panelProtocol?:number;exchanges?: unknown[]; items?: unknown[]; http2Idle?: number; consumedIds?: number[] }>(`/api/http/exchanges?${p.toString()}`);
 };
 export const getDetectSummary = (pkg: string) =>
   api<Record<string, unknown>>(`/api/detect/summary?package=${encodeURIComponent(pkg)}`);

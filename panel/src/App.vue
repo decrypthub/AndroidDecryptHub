@@ -2,7 +2,7 @@
 import { useAppearance, isDark } from './appearance';
 useAppearance();
 import { computed, watch } from 'vue';
-import { darkTheme, NAlert, type GlobalThemeOverrides } from 'naive-ui';
+import { darkTheme, NAlert, NModal, type GlobalThemeOverrides } from 'naive-ui';
 import type { Component } from 'vue';
 import {
   LockClosedOutline, HardwareChipOutline, WifiOutline, FolderOutline, CubeOutline,
@@ -36,7 +36,7 @@ const NAV: Array<{ key: ViewKey; label: string }> = [
 const VIEW_TITLES: Record<ViewKey, string> = {
   cc: '加解密', sy: '系统', nt: '网络', files: '文件', dump: '脱壳', settings: '设置',
 };
-watch(() => store.view, (v) => { document.title = `ADH · ${VIEW_TITLES[v] ?? ''}`; }, { immediate: true });
+watch(() => store.view, (v,previous) => { if(v==='settings'){store.view=previous&&previous!=='settings'?previous:'cc';store.settingsOpen=true;return;}document.title=`ADH · ${VIEW_TITLES[v]??''}`; }, { immediate: true });
 
 const wsText = computed(() =>
   store.wsState === 'live' ? '电脑服务在线' : store.wsState === 'fail' ? '连接异常' : '正在连接…');
@@ -53,6 +53,7 @@ const activePanel = computed(() => panels[store.view]);
 const captureKind = computed(() => ({cc:'crypto',sy:'system',nt:'net'} as Record<string,string>)[store.view]);
 const boardOptions = [...NAV.map(({ key: value, label }) => ({ value, label })), { value: 'settings', label: '设置' }];
 
+function countKey(key:string):'crypto'|'system'|'net'|null{return ({cc:'crypto',sy:'system',nt:'net'} as const)[key as 'cc'|'sy'|'nt']??null;}
 function toggleRail() {
   savePanelDisplay({ ...panelDisplay, rail: !panelDisplay.rail });
 }
@@ -104,13 +105,13 @@ const themeOverrides = computed<GlobalThemeOverrides>(() => {
           :class="{ selected: store.view === item.key }" :title="item.label" :aria-label="item.label"
           :aria-current="store.view === item.key ? 'page' : undefined" @click="store.view = item.key">
           <span class="rail-line"><n-icon size="17" :component="ICONS[item.key]" />
-            <span class="rail-caption">{{ item.label }}</span>
+            <span class="rail-caption">{{ item.label }}</span><span v-if="countKey(item.key)" class="nav-event-count" :aria-label="item.label+'事件数量'">{{ store.capTotal[countKey(item.key)!].toLocaleString('zh-CN') }}</span>
           </span>
         </n-button>
       </nav>
       <div class="side-foot">
-        <n-button quaternary block class="rail-action" :class="{ selected: store.view === 'settings' }"
-          title="设置" aria-label="设置" :aria-current="store.view === 'settings' ? 'page' : undefined" @click="store.view = 'settings'">
+        <n-button quaternary block class="rail-action" :class="{ selected: store.settingsOpen }"
+          title="设置" aria-label="设置" :aria-expanded="store.settingsOpen" @click="store.settingsOpen = true">
           <span class="rail-line"><n-icon size="17" :component="ICONS.settings" /><span class="rail-caption">设置</span></span>
         </n-button>
         <n-button quaternary block class="rail-action side-collapse" :aria-expanded="!panelDisplay.rail"
@@ -129,7 +130,7 @@ const themeOverrides = computed<GlobalThemeOverrides>(() => {
           <span v-if="store.devicesFailed" class="badge fail">读取失败</span>
         </div>
         <DeviceDialog :devices="store.devices" :failed="store.devicesFailed" :selected="store.selectedDeviceKey"
-          @select="selectDevice" />
+          @select="selectDevice" @visibility="store.deviceDialogOpen=$event" />
         <div class="header-actions">
           <section class="app-context">
             <button type="button" class="process-trigger" title="选择应用" aria-label="选择应用" @click="store.appDialogOpen = true">
@@ -150,6 +151,7 @@ const themeOverrides = computed<GlobalThemeOverrides>(() => {
         </div>
       </header>
 
+      <n-alert v-if="store.backendStatus==='incompatible'" type="warning" class="backend-version-warning">页面与电脑服务版本不一致；请更新并重启电脑服务后再采集，旧记录不会被补写为当前设备。</n-alert>
       <main class="panel-body">
         <KeepAlive include="CapturePanel" :max="3">
           <component :is="activePanel" :key="store.view" v-bind="captureKind ? {kind:captureKind} : {}" />
@@ -157,6 +159,7 @@ const themeOverrides = computed<GlobalThemeOverrides>(() => {
       </main>
     </div>
 
+    <n-modal v-model:show="store.settingsOpen" preset="card" title="设置" aria-label="设置" class="settings-modal" :style="{width:'min(1040px, calc(100vw - 24px))',height:'min(740px, calc(100dvh - 48px))'}" :content-style="{padding:'0',overflow:'hidden',display:'flex',minHeight:'0'}"><SettingsPanel /></n-modal>
     <AppDialog :show="store.appDialogOpen" @close="store.appDialogOpen = false" />
     <div class="panel-messages" role="status" aria-live="polite">
       <TransitionGroup name="notice">

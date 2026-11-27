@@ -7,209 +7,219 @@
 :root[data-appearance=dark]{--canvas:#0d0d0d;--bg:#0d0d0d;--chrome:#0d0d0d;--surface:#171717;--surface-raised:#171717;--surface-2:#2a2a2a;--surface-3:#353740;--line:#2a2a2a;--line-soft:#2a2a2a;--ink:#ececf1;--ink-2:#ececf1;--muted:#8e8ea0;--accent:var(--ink);--accent-soft:var(--surface-2);--accent-line:var(--line);--blue:var(--ink);--green:#10a37f;--focus:#10a37f;--primary-hover:#ffffff;--float-shadow:0 14px 42px #0005}
 body{background:var(--canvas);font-family:var(--sans);font-synthesis:none;-webkit-font-smoothing:antialiased}
 .app-shell{background:var(--canvas);font-variant-numeric:tabular-nums}
-.app-shell .side{width:190px;background:var(--canvas);border:0;padding:0 10px}
-.app-shell .side-brand{height:76px;min-height:76px;padding:0 14px;border:0;gap:10px}
-.app-shell .side-title{font-size:21px;font-weight:600;letter-spacing:-.045em}
-.app-shell .side-brand .hdr-mark{width:30px;height:30px;border:1px solid var(--line);border-radius:9px;background:var(--surface);box-shadow:0 2px 3px #18352b08}
-.app-shell .side-nav{padding:1px 0;gap:5px}
-.app-shell .rail-action{height:41px;padding:0 15px;border-radius:8px;color:var(--muted);font-weight:500;transition:background .14s,color .14s}
-.app-shell .rail-line{gap:12px;font-size:13px;letter-spacing:.01em}
-.app-shell .rail-action:hover{color:var(--ink);background:var(--surface-3)}
-.app-shell .rail-action[aria-current=page]{color:var(--accent);background:var(--accent-soft);font-weight:650;box-shadow:inset 0 0 0 1px var(--accent-line)}
-.app-shell .side-foot{border:0;padding:10px 0 18px;gap:4px}
-.app-shell .side-collapse{color:var(--muted)}
-.app-shell .side.rail{width:70px;padding-inline:8px}
-.app-shell .side.rail .side-brand{padding:0;justify-content:center}
-.app-shell .side.rail .rail-action{padding:0;justify-content:center}
-.app-shell .topbar{height:76px;min-height:76px;flex-wrap:nowrap;padding:12px 23px 12px 14px;gap:16px;background:var(--canvas);border:0}
-.app-shell .topbar .device-context{min-height:38px;padding:6px 10px;border-radius:8px;background:transparent;border:1px solid transparent;gap:8px}
-.app-shell .topbar .device-context:hover,.app-shell .topbar .process-trigger:hover{background:var(--surface);border-color:var(--line)}
-.app-shell .topbar .context-label{color:var(--muted);font-size:11px}
-.app-shell .topbar .device-context strong{font-weight:620;font-size:12px;color:var(--ink)}
-.app-shell .topbar .header-actions{position:relative;padding-left:17px;margin:0;border-left:1px solid var(--line);min-width:0}
-.app-shell .topbar .process-trigger{min-height:42px;min-width:180px;max-width:330px;padding:5px 9px;border-radius:8px;border:1px solid transparent;gap:16px}
-.app-shell .topbar .proc-face,.app-shell .topbar .proc-face img,.app-shell .topbar .proc-face .app-dialog-letter{width:28px;height:28px;border-radius:8px}
-.app-shell .topbar .proc-text{gap:3px;line-height:1.2}
-.app-shell .topbar .proc-primary{font-size:13px;font-weight:620;gap:10px}
-.app-shell .topbar .proc-pkg{font-size:10px;color:var(--muted);font-family:ui-monospace,"Cascadia Mono",Consolas,monospace}
-.app-shell .topbar .stats{font-size:11px;color:var(--muted);gap:7px;margin-left:auto;order:8}
-.app-shell .status-dot{width:6px;height:6px}
-.app-shell .status-dot.ok{animation:none;background:var(--green)}
-.app-shell .panel-body{margin:0 20px 20px 0;background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow:hidden;box-shadow:0 2px 5px #233c4605}
-.app-shell .cap-view>.filters{padding:16px 20px;min-height:68px;background:var(--surface);border-bottom:1px solid var(--line-soft)}
-.app-shell .toolbar-main{gap:16px}
-.app-shell .cap-view .toolbar-search{max-width:430px}
-.app-shell .toolbar-actions{gap:8px}
-.app-shell .toolbar-actions #count{display:none}
-.app-shell .toolbar-actions .n-button{height:32px;padding-inline:12px}
-.app-shell .ledger-head{padding-inline:22px;min-height:36px!important;background:var(--bg);color:var(--muted);font-size:11px;font-weight:550}
-.app-shell .capture-list-foot{padding:10px 16px;min-height:48px;background:var(--surface);border-color:var(--line-soft);font-size:11px;color:var(--muted)}
-.app-shell .page-cap-select{width:118px}
-.app-shell .row{transition:background .12s;cursor:pointer}
-.app-shell .row.selected{background:var(--accent-soft);border-left-color:var(--accent)}
-.app-shell .row:not(.selected):hover{background:var(--surface-2)}
-.app-shell .row .seq{font-size:11px;color:var(--muted)}
-.app-shell .row .algo{color:var(--ink);font-weight:610}
-.app-shell .row .preview,.app-shell .row .lens{font-size:13px;color:var(--ink-2)}
-.app-shell .row .ts,.app-shell .row .sizes{font-size:11px;color:var(--muted)}
-.app-shell .capture-detail-nav{padding:10px 15px!important;background:var(--surface)}
-.app-shell .capture-detail-shell{background:var(--bg)}
-.app-shell .capture-workspace .detail-pane{padding:20px 22px 30px;background:var(--bg)}
-.app-shell .detail-pane h2{font-size:20px;letter-spacing:-.025em;line-height:1.4;font-weight:650}
-.app-shell .detail-pane h3{font-size:14px;font-weight:620}
-.app-shell .io-field-label{opacity:1;color:var(--muted);font-size:11px;letter-spacing:.015em;margin-bottom:7px}
-.app-shell .io-data,.app-shell .stack-box{background:var(--surface);border-color:var(--line);border-radius:8px}
-.app-shell .io-data pre{padding:14px 16px;line-height:1.75;font-size:12px;color:var(--ink-2)}
-.app-shell .empty-row{max-width:540px;margin:0 auto;padding:clamp(55px,12vh,120px) 28px;line-height:1.8;color:var(--muted);text-wrap:pretty}
-.app-shell .empty-row p:first-child{font-size:15px;font-weight:550;color:var(--ink);margin-bottom:12px}
-.app-shell .network-empty-actions{gap:18px;margin:12px 0}
-.app-shell .settings-top-tabs{min-height:58px;gap:12px;padding-inline:24px;background:var(--surface);border-bottom:1px solid var(--line-soft)}
-.app-shell .settings-top-tabs>.n-button{position:relative;min-height:58px;height:58px;border-radius:0;padding-inline:3px;margin-right:15px;background:transparent;color:var(--muted);font-weight:500;font-size:13px}
-.app-shell .settings-top-tabs>.n-button.active{background:transparent;color:var(--accent);font-weight:650}
-.app-shell .settings-top-tabs>.n-button.active:after{content:"";position:absolute;bottom:0;left:2px;right:2px;height:2px;border-radius:2px;background:var(--accent)}
-.app-shell .set-main{padding:22px 24px 24px}
-.app-shell .hook-manager{--feature-width:208px;min-height:100%;font-size:13px}
-.app-shell .hook-command-bar{display:grid;grid-template-columns:minmax(0,1fr) 245px;align-items:center;gap:18px;margin-bottom:22px}
-.app-shell .hook-context{display:block;padding:0;min-height:0;background:transparent;border:0}
-.app-shell .hook-context .hook-process{min-width:0;max-width:none;width:100%}
-.app-shell .hook-tools{grid-template-columns:minmax(170px,1fr) 108px 108px 34px;margin:0;gap:8px}
-.app-shell .hook-workspace{grid-template-columns:var(--feature-width) minmax(0,1fr);border:1px solid var(--line);border-radius:10px;overflow:hidden;min-height:460px;background:var(--surface)}
-.app-shell .hook-features{padding:10px;background:var(--bg);border-right:1px solid var(--line-soft)}
-.app-shell .hook-feature{min-height:52px;padding:6px 10px;gap:14px;margin:3px 0;border:1px solid transparent;border-radius:7px}
-.app-shell .hook-feature.selected{background:var(--surface);border-color:var(--line);box-shadow:0 2px 4px #142b3406}
-.app-shell .hook-feature.selected .hook-feature-label>span{color:var(--accent);font-weight:650}
-.app-shell .hook-feature-label{gap:3px;padding:0;font-size:13px;font-weight:520}
-.app-shell .hook-feature-label small{font-size:10px;font-weight:450;color:var(--muted)}
-.app-shell .hook-methods{padding:17px 22px 20px;min-width:0}
-.app-shell .hook-method-head{min-height:36px;margin:0 0 14px}
-.app-shell .hook-method-head h2{font-size:19px;font-weight:650;letter-spacing:-.02em}
-.app-shell .hook-hint{font-size:11px;line-height:1.7;margin-bottom:12px;color:var(--muted)}
-.app-shell .hook-method-row{min-height:54px;padding:13px 0;border-bottom:1px solid var(--line-soft);gap:14px;grid-template-columns:minmax(0,1fr) 58px 36px}
-.app-shell .hook-method-title{gap:12px}
-.app-shell .hook-method-name{font-size:12px;font-weight:500;line-height:1.7;font-family:ui-monospace,"Cascadia Mono",Consolas,monospace;color:var(--ink)}
-.app-shell .hook-method-title small{padding:2px 5px;border-radius:4px;background:var(--bg);font-size:9px;color:var(--muted)}
-.app-shell .hook-runtime{font-size:10px;color:var(--muted)}
-.app-shell .hook-runtime.problem{color:var(--danger)}
-.app-shell .hook-method-detail{padding:14px 16px;border-radius:7px;background:var(--bg);border:1px solid var(--line-soft);font-size:12px}
-.app-shell .hook-modules{margin-top:20px;border:1px solid var(--line-soft);border-radius:7px;padding:0 12px}
-.app-shell .hook-modules summary{padding:11px 0;font-size:11px;color:var(--muted)}
-.app-shell .hook-apply-bar{min-height:64px;padding:14px 0 0;background:var(--surface);border-color:var(--line-soft);margin-top:22px;font-size:11px}
-.app-shell .pref-block{padding-bottom:24px}.app-shell .pref-block+.pref-block{padding-top:22px;border-color:var(--line-soft)}
-.app-shell .pref-block h4{font-size:15px;letter-spacing:-.01em}.app-shell .pref-line{font-size:13px;min-height:64px}
-.app-shell .advanced-host-settings{margin-top:28px;padding-top:22px}.app-shell .set-meta{font-size:12px}
-.app-shell .files-workspace,.app-shell .workarea{background:var(--surface)}
-.app-shell .io-tabs .n-button,.app-shell .pref-line .n-radio-button{font-size:12px}
-.app-shell :is(button,[role=button],input,select,textarea,a):focus-visible{outline:2px solid var(--focus);outline-offset:3px}
+:is(.app-shell,.settings-modal) .side{width:190px;background:var(--canvas);border:0;padding:0 10px}
+:is(.app-shell,.settings-modal) .side-brand{height:76px;min-height:76px;padding:0 14px;border:0;gap:10px}
+:is(.app-shell,.settings-modal) .side-title{font-size:21px;font-weight:600;letter-spacing:-.045em}
+:is(.app-shell,.settings-modal) .side-brand .hdr-mark{width:30px;height:30px;border:1px solid var(--line);border-radius:9px;background:var(--surface);box-shadow:0 2px 3px #18352b08}
+:is(.app-shell,.settings-modal) .side-nav{padding:1px 0;gap:5px}
+:is(.app-shell,.settings-modal) .rail-action{height:41px;padding:0 15px;border-radius:8px;color:var(--muted);font-weight:500;transition:background .14s,color .14s}
+:is(.app-shell,.settings-modal) .rail-line{gap:12px;font-size:13px;letter-spacing:.01em}
+:is(.app-shell,.settings-modal) .rail-action:hover{color:var(--ink);background:var(--surface-3)}
+:is(.app-shell,.settings-modal) .rail-action[aria-current=page]{color:var(--accent);background:var(--accent-soft);font-weight:650;box-shadow:inset 0 0 0 1px var(--accent-line)}
+:is(.app-shell,.settings-modal) .side-foot{border:0;padding:10px 0 18px;gap:4px}
+:is(.app-shell,.settings-modal) .side-collapse{color:var(--muted)}
+:is(.app-shell,.settings-modal) .side.rail{width:70px;padding-inline:8px}
+:is(.app-shell,.settings-modal) .side.rail .side-brand{padding:0;justify-content:center}
+:is(.app-shell,.settings-modal) .side.rail .rail-action{padding:0;justify-content:center}
+:is(.app-shell,.settings-modal) .topbar{height:76px;min-height:76px;flex-wrap:nowrap;padding:12px 23px 12px 14px;gap:16px;background:var(--canvas);border:0}
+:is(.app-shell,.settings-modal) .topbar .device-context{min-height:38px;padding:6px 10px;border-radius:8px;background:transparent;border:1px solid transparent;gap:8px}
+:is(.app-shell,.settings-modal) .topbar .device-context:hover,:is(.app-shell,.settings-modal) .topbar .process-trigger:hover{background:var(--surface);border-color:var(--line)}
+:is(.app-shell,.settings-modal) .topbar .context-label{color:var(--muted);font-size:11px}
+:is(.app-shell,.settings-modal) .topbar .device-context strong{font-weight:620;font-size:12px;color:var(--ink)}
+:is(.app-shell,.settings-modal) .topbar .header-actions{position:relative;padding-left:17px;margin:0;border-left:1px solid var(--line);min-width:0}
+:is(.app-shell,.settings-modal) .topbar .process-trigger{min-height:42px;min-width:180px;max-width:330px;padding:5px 9px;border-radius:8px;border:1px solid transparent;gap:16px}
+:is(.app-shell,.settings-modal) .topbar .proc-face,:is(.app-shell,.settings-modal) .topbar .proc-face img,:is(.app-shell,.settings-modal) .topbar .proc-face .app-dialog-letter{width:28px;height:28px;border-radius:8px}
+:is(.app-shell,.settings-modal) .topbar .proc-text{gap:3px;line-height:1.2}
+:is(.app-shell,.settings-modal) .topbar .proc-primary{font-size:13px;font-weight:620;gap:10px}
+:is(.app-shell,.settings-modal) .topbar .proc-pkg{font-size:10px;color:var(--muted);font-family:ui-monospace,"Cascadia Mono",Consolas,monospace}
+:is(.app-shell,.settings-modal) .topbar .stats{font-size:11px;color:var(--muted);gap:7px;margin-left:auto;order:8}
+:is(.app-shell,.settings-modal) .status-dot{width:6px;height:6px}
+:is(.app-shell,.settings-modal) .status-dot.ok{animation:none;background:var(--green)}
+:is(.app-shell,.settings-modal) .panel-body{margin:0 20px 20px 0;background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow:hidden;box-shadow:0 2px 5px #233c4605}
+:is(.app-shell,.settings-modal) .cap-view>.filters{padding:16px 20px;min-height:68px;background:var(--surface);border-bottom:1px solid var(--line-soft)}
+:is(.app-shell,.settings-modal) .toolbar-main{gap:16px}
+:is(.app-shell,.settings-modal) .cap-view .toolbar-search{max-width:430px}
+:is(.app-shell,.settings-modal) .toolbar-actions{gap:8px}
+:is(.app-shell,.settings-modal) .toolbar-actions #count{display:none}
+:is(.app-shell,.settings-modal) .toolbar-actions .n-button{height:32px;padding-inline:12px}
+:is(.app-shell,.settings-modal) .ledger-head{padding-inline:22px;min-height:36px!important;background:var(--bg);color:var(--muted);font-size:11px;font-weight:550}
+:is(.app-shell,.settings-modal) .capture-list-foot{padding:10px 16px;min-height:48px;background:var(--surface);border-color:var(--line-soft);font-size:11px;color:var(--muted)}
+:is(.app-shell,.settings-modal) .page-cap-select{width:118px}
+:is(.app-shell,.settings-modal) .row{transition:background .12s;cursor:pointer}
+:is(.app-shell,.settings-modal) .row.selected{background:var(--accent-soft);border-left-color:var(--accent)}
+:is(.app-shell,.settings-modal) .row:not(.selected):hover{background:var(--surface-2)}
+:is(.app-shell,.settings-modal) .row .seq{font-size:11px;color:var(--muted)}
+:is(.app-shell,.settings-modal) .row .algo{color:var(--ink);font-weight:610}
+:is(.app-shell,.settings-modal) .row .preview,:is(.app-shell,.settings-modal) .row .lens{font-size:13px;color:var(--ink-2)}
+:is(.app-shell,.settings-modal) .row .ts,:is(.app-shell,.settings-modal) .row .sizes{font-size:11px;color:var(--muted)}
+:is(.app-shell,.settings-modal) .capture-detail-nav{padding:10px 15px!important;background:var(--surface)}
+:is(.app-shell,.settings-modal) .capture-detail-shell{background:var(--bg)}
+:is(.app-shell,.settings-modal) .capture-workspace .detail-pane{padding:20px 22px 30px;background:var(--bg)}
+:is(.app-shell,.settings-modal) .detail-pane h2{font-size:20px;letter-spacing:-.025em;line-height:1.4;font-weight:650}
+:is(.app-shell,.settings-modal) .detail-pane h3{font-size:14px;font-weight:620}
+:is(.app-shell,.settings-modal) .io-field-label{opacity:1;color:var(--muted);font-size:11px;letter-spacing:.015em;margin-bottom:7px}
+:is(.app-shell,.settings-modal) .io-data,:is(.app-shell,.settings-modal) .stack-box{background:var(--surface);border-color:var(--line);border-radius:8px}
+:is(.app-shell,.settings-modal) .io-data pre{padding:14px 16px;line-height:1.75;font-size:12px;color:var(--ink-2)}
+:is(.app-shell,.settings-modal) .empty-row{max-width:540px;margin:0 auto;padding:clamp(55px,12vh,120px) 28px;line-height:1.8;color:var(--muted);text-wrap:pretty}
+:is(.app-shell,.settings-modal) .empty-row p:first-child{font-size:15px;font-weight:550;color:var(--ink);margin-bottom:12px}
+:is(.app-shell,.settings-modal) .network-empty-actions{gap:18px;margin:12px 0}
+:is(.app-shell,.settings-modal) .settings-top-tabs{min-height:58px;gap:12px;padding-inline:24px;background:var(--surface);border-bottom:1px solid var(--line-soft)}
+:is(.app-shell,.settings-modal) .settings-top-tabs>.n-button{position:relative;min-height:58px;height:58px;border-radius:0;padding-inline:3px;margin-right:15px;background:transparent;color:var(--muted);font-weight:500;font-size:13px}
+:is(.app-shell,.settings-modal) .settings-top-tabs>.n-button.active{background:transparent;color:var(--accent);font-weight:650}
+:is(.app-shell,.settings-modal) .settings-top-tabs>.n-button.active:after{content:"";position:absolute;bottom:0;left:2px;right:2px;height:2px;border-radius:2px;background:var(--accent)}
+:is(.app-shell,.settings-modal) .set-main{padding:22px 24px 24px}
+:is(.app-shell,.settings-modal) .hook-manager{--feature-width:208px;min-height:100%;font-size:13px}
+:is(.app-shell,.settings-modal) .hook-command-bar{display:grid;grid-template-columns:minmax(0,1fr) 245px;align-items:center;gap:18px;margin-bottom:22px}
+:is(.app-shell,.settings-modal) .hook-context{display:block;padding:0;min-height:0;background:transparent;border:0}
+:is(.app-shell,.settings-modal) .hook-context .hook-process{min-width:0;max-width:none;width:100%}
+:is(.app-shell,.settings-modal) .hook-tools{grid-template-columns:minmax(170px,1fr) 108px 108px 34px;margin:0;gap:8px}
+:is(.app-shell,.settings-modal) .hook-workspace{grid-template-columns:var(--feature-width) minmax(0,1fr);border:1px solid var(--line);border-radius:10px;overflow:hidden;min-height:460px;background:var(--surface)}
+:is(.app-shell,.settings-modal) .hook-features{padding:10px;background:var(--bg);border-right:1px solid var(--line-soft)}
+:is(.app-shell,.settings-modal) .hook-feature{min-height:52px;padding:6px 10px;gap:14px;margin:3px 0;border:1px solid transparent;border-radius:7px}
+:is(.app-shell,.settings-modal) .hook-feature.selected{background:var(--surface);border-color:var(--line);box-shadow:0 2px 4px #142b3406}
+:is(.app-shell,.settings-modal) .hook-feature.selected .hook-feature-label>span{color:var(--accent);font-weight:650}
+:is(.app-shell,.settings-modal) .hook-feature-label{gap:3px;padding:0;font-size:13px;font-weight:520}
+:is(.app-shell,.settings-modal) .hook-feature-label small{font-size:10px;font-weight:450;color:var(--muted)}
+:is(.app-shell,.settings-modal) .hook-methods{padding:17px 22px 20px;min-width:0}
+:is(.app-shell,.settings-modal) .hook-method-head{min-height:36px;margin:0 0 14px}
+:is(.app-shell,.settings-modal) .hook-method-head h2{font-size:19px;font-weight:650;letter-spacing:-.02em}
+:is(.app-shell,.settings-modal) .hook-hint{font-size:11px;line-height:1.7;margin-bottom:12px;color:var(--muted)}
+:is(.app-shell,.settings-modal) .hook-method-row{min-height:54px;padding:13px 0;border-bottom:1px solid var(--line-soft);gap:14px;grid-template-columns:minmax(0,1fr) 58px 36px}
+:is(.app-shell,.settings-modal) .hook-method-title{gap:12px}
+:is(.app-shell,.settings-modal) .hook-method-name{font-size:12px;font-weight:500;line-height:1.7;font-family:ui-monospace,"Cascadia Mono",Consolas,monospace;color:var(--ink)}
+:is(.app-shell,.settings-modal) .hook-method-title small{padding:2px 5px;border-radius:4px;background:var(--bg);font-size:9px;color:var(--muted)}
+:is(.app-shell,.settings-modal) .hook-runtime{font-size:10px;color:var(--muted)}
+:is(.app-shell,.settings-modal) .hook-runtime.problem{color:var(--danger)}
+:is(.app-shell,.settings-modal) .hook-method-detail{padding:14px 16px;border-radius:7px;background:var(--bg);border:1px solid var(--line-soft);font-size:12px}
+:is(.app-shell,.settings-modal) .hook-modules{margin-top:20px;border:1px solid var(--line-soft);border-radius:7px;padding:0 12px}
+:is(.app-shell,.settings-modal) .hook-modules summary{padding:11px 0;font-size:11px;color:var(--muted)}
+:is(.app-shell,.settings-modal) .hook-apply-bar{min-height:64px;padding:14px 0 0;background:var(--surface);border-color:var(--line-soft);margin-top:22px;font-size:11px}
+:is(.app-shell,.settings-modal) .pref-block{padding-bottom:24px}:is(.app-shell,.settings-modal) .pref-block+.pref-block{padding-top:22px;border-color:var(--line-soft)}
+:is(.app-shell,.settings-modal) .pref-block h4{font-size:15px;letter-spacing:-.01em}:is(.app-shell,.settings-modal) .pref-line{font-size:13px;min-height:64px}
+:is(.app-shell,.settings-modal) .advanced-host-settings{margin-top:28px;padding-top:22px}:is(.app-shell,.settings-modal) .set-meta{font-size:12px}
+:is(.app-shell,.settings-modal) .files-workspace,:is(.app-shell,.settings-modal) .workarea{background:var(--surface)}
+:is(.app-shell,.settings-modal) .io-tabs .n-button,:is(.app-shell,.settings-modal) .pref-line .n-radio-button{font-size:12px}
+:is(.app-shell,.settings-modal) :is(button,[role=button],input,select,textarea,a):focus-visible{outline:2px solid var(--focus);outline-offset:3px}
 .n-modal{border:1px solid var(--line);box-shadow:var(--float-shadow)}
 @media(min-width:900px){
- .app-shell .capture-workspace:not(.detail-open) .row,.app-shell .capture-workspace:not(.detail-open) .ledger-head{grid-template-columns:var(--reading-columns);gap:16px;padding-inline:22px}
- .app-shell .capture-workspace:not(.detail-open) .row{min-height:52px;border-bottom-color:var(--line-soft)}
- .app-shell .capture-workspace:not(.detail-open) .row .algo{font-size:13px;font-weight:600;color:var(--ink)}
- .app-shell .capture-workspace:not(.detail-open) .row .preview{font-size:12px;letter-spacing:0}
- .app-shell .capture-workspace:not(.detail-open) .row .sizes{font-size:11px}
+ :is(.app-shell,.settings-modal) .capture-workspace:not(.detail-open) .row,:is(.app-shell,.settings-modal) .capture-workspace:not(.detail-open) .ledger-head{grid-template-columns:var(--reading-columns);gap:16px;padding-inline:22px}
+ :is(.app-shell,.settings-modal) .capture-workspace:not(.detail-open) .row{min-height:52px;border-bottom-color:var(--line-soft)}
+ :is(.app-shell,.settings-modal) .capture-workspace:not(.detail-open) .row .algo{font-size:13px;font-weight:600;color:var(--ink)}
+ :is(.app-shell,.settings-modal) .capture-workspace:not(.detail-open) .row .preview{font-size:12px;letter-spacing:0}
+ :is(.app-shell,.settings-modal) .capture-workspace:not(.detail-open) .row .sizes{font-size:11px}
 }
 @media(max-width:1120px){
- .app-shell .side{width:164px;padding-inline:8px}.app-shell .topbar{padding-right:16px;gap:8px}.app-shell .panel-body{margin-right:14px}
- .app-shell .hook-command-bar{grid-template-columns:minmax(0,1fr) 210px;gap:12px}.app-shell .hook-tools{grid-template-columns:minmax(130px,1fr) 94px 94px 32px;gap:6px}
- .app-shell .hook-manager{--feature-width:180px}.app-shell .hook-methods{padding-inline:18px}
+ :is(.app-shell,.settings-modal) .side{width:164px;padding-inline:8px}:is(.app-shell,.settings-modal) .topbar{padding-right:16px;gap:8px}:is(.app-shell,.settings-modal) .panel-body{margin-right:14px}
+ :is(.app-shell,.settings-modal) .hook-command-bar{grid-template-columns:minmax(0,1fr) 210px;gap:12px}:is(.app-shell,.settings-modal) .hook-tools{grid-template-columns:minmax(130px,1fr) 94px 94px 32px;gap:6px}
+ :is(.app-shell,.settings-modal) .hook-manager{--feature-width:180px}:is(.app-shell,.settings-modal) .hook-methods{padding-inline:18px}
 }
 @media(min-width:701px) and (max-width:900px){
- .app-shell .side:not(.rail){width:70px}.app-shell .rail-caption,.app-shell .side-title{display:none}.app-shell .side-brand{justify-content:center;padding:0}
- .app-shell .rail-action{justify-content:center;padding:0}.app-shell .hook-command-bar{grid-template-columns:minmax(0,1fr)}
- .app-shell .hook-context{grid-row:1;justify-self:end;width:245px}.app-shell .set-main{padding:18px}
+ :is(.app-shell,.settings-modal) .side:not(.rail){width:70px}:is(.app-shell,.settings-modal) .rail-caption,:is(.app-shell,.settings-modal) .side-title{display:none}:is(.app-shell,.settings-modal) .side-brand{justify-content:center;padding:0}
+ :is(.app-shell,.settings-modal) .rail-action{justify-content:center;padding:0}:is(.app-shell,.settings-modal) .hook-command-bar{grid-template-columns:minmax(0,1fr)}
+ :is(.app-shell,.settings-modal) .hook-context{grid-row:1;justify-self:end;width:245px}:is(.app-shell,.settings-modal) .set-main{padding:18px}
 }
 @media(max-width:700px){
- .app-shell .side,.app-shell .side.rail{display:none}.app-shell .panel-body{margin:0;border:0;border-radius:0;box-shadow:none}
- .app-shell .topbar{height:auto;min-height:70px;display:grid;grid-template-columns:86px minmax(0,1fr) minmax(0,1fr);padding:8px 10px;gap:4px;background:var(--surface);border-bottom:1px solid var(--line-soft)}
- .app-shell .topbar .header-actions{display:contents;border:0;padding:0}.app-shell .topbar .device-context{padding:5px;min-height:32px;gap:4px}.app-shell .topbar .context-label{display:none}
- .app-shell .topbar .app-context{min-width:0;max-width:none}.app-shell .topbar .process-trigger{min-width:0;max-width:100%;min-height:32px;padding:2px 3px;gap:5px}
- .app-shell .topbar .proc-primary{font-size:12px}.app-shell .topbar .proc-pkg{font-size:9px}.app-shell .topbar .proc-face{display:none}
- .app-shell .topbar .stats{grid-column:1/-1;grid-row:2;margin:2px 4px 0;font-size:10px;min-height:14px;order:0}
- .app-shell .cap-view>.filters{min-height:54px;padding:10px}.app-shell .cap-view .toolbar-search{max-width:none;min-width:0}.app-shell .toolbar-main{gap:6px}
- .app-shell .toolbar-actions{gap:4px}.app-shell .toolbar-actions .n-button{padding-inline:8px;height:30px}.app-shell .capture-list-foot{padding:9px 12px}
- .app-shell .settings-top-tabs{min-height:50px;padding-inline:14px;gap:0}.app-shell .settings-top-tabs>.n-button{min-height:50px;height:50px;margin-right:17px;font-size:12px;padding-inline:1px}
- .app-shell .set-main{padding:16px 12px}.app-shell .hook-command-bar{grid-template-columns:minmax(0,1fr);gap:10px;margin-bottom:16px}
- .app-shell .hook-context{grid-row:1}.app-shell .hook-tools{grid-template-columns:minmax(0,1fr) minmax(0,1fr) 32px;gap:7px}.app-shell .hook-tools>.n-input{grid-column:1/-1}
- .app-shell .hook-workspace{grid-template-columns:minmax(0,1fr);min-height:0;border-radius:8px}.app-shell .hook-features{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:3px;border:0;border-bottom:1px solid var(--line-soft);padding:7px}
- .app-shell .hook-feature{min-height:51px;margin:0;padding:7px;gap:7px}.app-shell .hook-feature-label{font-size:12px}
- .app-shell .hook-methods{padding:16px 13px}.app-shell .hook-method-head h2{font-size:17px}.app-shell .hook-method-row{grid-template-columns:minmax(0,1fr) 42px 32px;gap:7px}
- .app-shell .hook-method-name{font-size:11px}.app-shell .hook-method-title small{display:none}.app-shell .hook-apply-bar{position:static;gap:9px;min-height:0;padding-top:14px;margin-top:16px;align-items:flex-start}
- .app-shell .hook-apply-bar>div{gap:5px}.app-shell .hook-apply-bar .n-button{font-size:11px;padding-inline:8px}.app-shell .capture-workspace .detail-pane{padding:16px 14px}
- .app-shell .empty-row{padding:65px 22px}.app-shell .pref-line{min-height:58px}.app-shell .hook-method-detail>div{grid-template-columns:62px minmax(0,1fr);gap:8px}
+ :is(.app-shell,.settings-modal) .side,:is(.app-shell,.settings-modal) .side.rail{display:none}:is(.app-shell,.settings-modal) .panel-body{margin:0;border:0;border-radius:0;box-shadow:none}
+ :is(.app-shell,.settings-modal) .topbar{height:auto;min-height:70px;display:grid;grid-template-columns:86px minmax(0,1fr) minmax(0,1fr);padding:8px 10px;gap:4px;background:var(--surface);border-bottom:1px solid var(--line-soft)}
+ :is(.app-shell,.settings-modal) .topbar .header-actions{display:contents;border:0;padding:0}:is(.app-shell,.settings-modal) .topbar .device-context{padding:5px;min-height:32px;gap:4px}:is(.app-shell,.settings-modal) .topbar .context-label{display:none}
+ :is(.app-shell,.settings-modal) .topbar .app-context{min-width:0;max-width:none}:is(.app-shell,.settings-modal) .topbar .process-trigger{min-width:0;max-width:100%;min-height:32px;padding:2px 3px;gap:5px}
+ :is(.app-shell,.settings-modal) .topbar .proc-primary{font-size:12px}:is(.app-shell,.settings-modal) .topbar .proc-pkg{font-size:9px}:is(.app-shell,.settings-modal) .topbar .proc-face{display:none}
+ :is(.app-shell,.settings-modal) .topbar .stats{grid-column:1/-1;grid-row:2;margin:2px 4px 0;font-size:10px;min-height:14px;order:0}
+ :is(.app-shell,.settings-modal) .cap-view>.filters{min-height:54px;padding:10px}:is(.app-shell,.settings-modal) .cap-view .toolbar-search{max-width:none;min-width:0}:is(.app-shell,.settings-modal) .toolbar-main{gap:6px}
+ :is(.app-shell,.settings-modal) .toolbar-actions{gap:4px}:is(.app-shell,.settings-modal) .toolbar-actions .n-button{padding-inline:8px;height:30px}:is(.app-shell,.settings-modal) .capture-list-foot{padding:9px 12px}
+ :is(.app-shell,.settings-modal) .settings-top-tabs{min-height:50px;padding-inline:14px;gap:0}:is(.app-shell,.settings-modal) .settings-top-tabs>.n-button{min-height:50px;height:50px;margin-right:17px;font-size:12px;padding-inline:1px}
+ :is(.app-shell,.settings-modal) .set-main{padding:16px 12px}:is(.app-shell,.settings-modal) .hook-command-bar{grid-template-columns:minmax(0,1fr);gap:10px;margin-bottom:16px}
+ :is(.app-shell,.settings-modal) .hook-context{grid-row:1}:is(.app-shell,.settings-modal) .hook-tools{grid-template-columns:minmax(0,1fr) minmax(0,1fr) 32px;gap:7px}:is(.app-shell,.settings-modal) .hook-tools>.n-input{grid-column:1/-1}
+ :is(.app-shell,.settings-modal) .hook-workspace{grid-template-columns:minmax(0,1fr);min-height:0;border-radius:8px}:is(.app-shell,.settings-modal) .hook-features{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:3px;border:0;border-bottom:1px solid var(--line-soft);padding:7px}
+ :is(.app-shell,.settings-modal) .hook-feature{min-height:51px;margin:0;padding:7px;gap:7px}:is(.app-shell,.settings-modal) .hook-feature-label{font-size:12px}
+ :is(.app-shell,.settings-modal) .hook-methods{padding:16px 13px}:is(.app-shell,.settings-modal) .hook-method-head h2{font-size:17px}:is(.app-shell,.settings-modal) .hook-method-row{grid-template-columns:minmax(0,1fr) 42px 32px;gap:7px}
+ :is(.app-shell,.settings-modal) .hook-method-name{font-size:11px}:is(.app-shell,.settings-modal) .hook-method-title small{display:none}:is(.app-shell,.settings-modal) .hook-apply-bar{position:static;gap:9px;min-height:0;padding-top:14px;margin-top:16px;align-items:flex-start}
+ :is(.app-shell,.settings-modal) .hook-apply-bar>div{gap:5px}:is(.app-shell,.settings-modal) .hook-apply-bar .n-button{font-size:11px;padding-inline:8px}:is(.app-shell,.settings-modal) .capture-workspace .detail-pane{padding:16px 14px}
+ :is(.app-shell,.settings-modal) .empty-row{padding:65px 22px}:is(.app-shell,.settings-modal) .pref-line{min-height:58px}:is(.app-shell,.settings-modal) .hook-method-detail>div{grid-template-columns:62px minmax(0,1fr);gap:8px}
 }
-@media(prefers-reduced-motion:reduce){.app-shell *{transition:none!important;animation:none!important;scroll-behavior:auto!important}}
+@media(prefers-reduced-motion:reduce){:is(.app-shell,.settings-modal) *{transition:none!important;animation:none!important;scroll-behavior:auto!important}}
 
 /* Optical QA correction: remove inherited tab padding; anchor the draft bar to its workspace. */
-.app-shell .settings-top-tabs{height:58px;min-height:58px;padding-block:0;align-items:stretch;flex:none}
-.app-shell .set-main:has(.hook-manager){display:flex;flex-direction:column}
-.app-shell .hook-manager{flex:1;min-height:0}
-.app-shell .hook-apply-bar{margin-top:auto;padding-top:16px}
-.app-shell .topbar .proc-face .app-dialog-letter{background:var(--accent-soft);color:var(--accent);border:1px solid var(--accent-line);font-weight:650;font-size:13px}
-.app-shell .hook-method-name{font-size:13px;font-weight:400}
-.app-shell .hook-method-title small{font-size:10px}
-@media(max-width:700px){.app-shell .settings-top-tabs{height:50px;min-height:50px}.app-shell .hook-method-name{font-size:11px}.app-shell .hook-apply-bar{margin-top:16px}}
+:is(.app-shell,.settings-modal) .settings-top-tabs{height:58px;min-height:58px;padding-block:0;align-items:stretch;flex:none}
+:is(.app-shell,.settings-modal) .set-main:has(.hook-manager){display:flex;flex-direction:column}
+:is(.app-shell,.settings-modal) .hook-manager{flex:1;min-height:0}
+:is(.app-shell,.settings-modal) .hook-apply-bar{margin-top:auto;padding-top:16px}
+:is(.app-shell,.settings-modal) .topbar .proc-face .app-dialog-letter{background:var(--accent-soft);color:var(--accent);border:1px solid var(--accent-line);font-weight:650;font-size:13px}
+:is(.app-shell,.settings-modal) .hook-method-name{font-size:13px;font-weight:400}
+:is(.app-shell,.settings-modal) .hook-method-title small{font-size:10px}
+@media(max-width:700px){:is(.app-shell,.settings-modal) .settings-top-tabs{height:50px;min-height:50px}:is(.app-shell,.settings-modal) .hook-method-name{font-size:11px}:is(.app-shell,.settings-modal) .hook-apply-bar{margin-top:16px}}
 /* Master/detail reading: original content wins over repeated long provenance. */
-.app-shell .capture-workspace.detail-open .crypto-row .subline{display:block;padding-left:52px;margin-top:6px}
-.app-shell .capture-workspace.detail-open .crypto-row .subline .preview{display:block;width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:1.6}
-.app-shell .capture-workspace.detail-open .crypto-row .subline:has(.preview) .hook{display:none}
-.app-shell .capture-workspace.detail-open .crypto-row .subline:not(:has(.preview)) .hook{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}
-.app-shell .detail-head{background:transparent;padding:0 0 18px;border:0;border-bottom:1px solid var(--line);margin-bottom:18px;align-items:flex-start}
-.app-shell .detail-head h2{margin:0 0 6px}.app-shell .detail-head .sub{color:var(--muted);font-size:11px;line-height:1.6}
-@media(max-width:700px){.app-shell .capture-workspace.detail-open .crypto-row .subline{padding-left:0}.app-shell .detail-head{padding-bottom:15px;margin-bottom:15px}}
+:is(.app-shell,.settings-modal) .capture-workspace.detail-open .crypto-row .subline{display:block;padding-left:52px;margin-top:6px}
+:is(.app-shell,.settings-modal) .capture-workspace.detail-open .crypto-row .subline .preview{display:block;width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:1.6}
+:is(.app-shell,.settings-modal) .capture-workspace.detail-open .crypto-row .subline:has(.preview) .hook{display:none}
+:is(.app-shell,.settings-modal) .capture-workspace.detail-open .crypto-row .subline:not(:has(.preview)) .hook{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}
+:is(.app-shell,.settings-modal) .detail-head{background:transparent;padding:0 0 18px;border:0;border-bottom:1px solid var(--line);margin-bottom:18px;align-items:flex-start}
+:is(.app-shell,.settings-modal) .detail-head h2{margin:0 0 6px}:is(.app-shell,.settings-modal) .detail-head .sub{color:var(--muted);font-size:11px;line-height:1.6}
+@media(max-width:700px){:is(.app-shell,.settings-modal) .capture-workspace.detail-open .crypto-row .subline{padding-left:0}:is(.app-shell,.settings-modal) .detail-head{padding-bottom:15px;margin-bottom:15px}}
 /* Independent visual review: legible metadata, explicit gates, compact mobile hierarchy. */
-.app-shell :is(.sizes,.ts,.seq,.list-foot,.detail-head .sub,.hook-runtime,.hook-feature-label small,.hook-modules summary,.hook-apply-bar){font-size:12px}
-.app-shell .capture-workspace:not(.detail-open) .row .sizes{font-size:12px}
-.app-shell .hook-feature-label{font-size:14px}.app-shell .hook-feature-label small{font-size:12px;line-height:1.5}
-.app-shell .hook-method-title small{font-size:11px}.app-shell .hook-method-name{font-size:13px}
-.app-shell .hook-feature-caption{display:flex;justify-content:space-between;padding:3px 10px 9px;color:var(--muted);font-size:12px}
-.app-shell .hook-feature-mobile-bar{display:none}.app-shell .preview-absent{color:var(--muted);font-family:inherit;font-style:normal}
-.app-shell .fs-board{padding:0;background:var(--surface)}.app-shell .fs-shell{border:0;border-radius:0;box-shadow:none;background:var(--surface)}
-.app-shell .fs-shell:has(.fs-state.error) .fs-list-stat{visibility:hidden}
-.app-shell .dumppane{padding:0;background:var(--surface)}.app-shell .dump-menu{display:flex;width:100%;height:58px;align-items:stretch;margin:0;padding:0 22px;gap:24px;background:transparent;border:0;border-bottom:1px solid var(--line);border-radius:0}
-.app-shell .dump-menu button{background:transparent;color:var(--muted);border:0;border-bottom:2px solid transparent;border-radius:0;padding:0 2px;font-size:13px}
-.app-shell .dump-menu button[aria-selected="true"]{color:var(--accent);background:transparent;border-bottom-color:var(--accent)}.app-shell .dump-menu .dump-menu-sub{display:none}
-.app-shell .dump-col{padding:22px 24px}.app-shell .dump-col :is(input,button){border-radius:7px}.app-shell .dump-col :is(td,th){font-size:12px}
+:is(.app-shell,.settings-modal) :is(.sizes,.ts,.seq,.list-foot,.detail-head .sub,.hook-runtime,.hook-feature-label small,.hook-modules summary,.hook-apply-bar){font-size:12px}
+:is(.app-shell,.settings-modal) .capture-workspace:not(.detail-open) .row .sizes{font-size:12px}
+:is(.app-shell,.settings-modal) .hook-feature-label{font-size:14px}:is(.app-shell,.settings-modal) .hook-feature-label small{font-size:12px;line-height:1.5}
+:is(.app-shell,.settings-modal) .hook-method-title small{font-size:11px}:is(.app-shell,.settings-modal) .hook-method-name{font-size:13px}
+:is(.app-shell,.settings-modal) .hook-feature-caption{display:flex;justify-content:space-between;padding:3px 10px 9px;color:var(--muted);font-size:12px}
+:is(.app-shell,.settings-modal) .hook-feature-mobile-bar{display:none}:is(.app-shell,.settings-modal) .preview-absent{color:var(--muted);font-family:inherit;font-style:normal}
+:is(.app-shell,.settings-modal) .fs-board{padding:0;background:var(--surface)}:is(.app-shell,.settings-modal) .fs-shell{border:0;border-radius:0;box-shadow:none;background:var(--surface)}
+:is(.app-shell,.settings-modal) .fs-shell:has(.fs-state.error) .fs-list-stat{visibility:hidden}
+:is(.app-shell,.settings-modal) .dumppane{padding:0;background:var(--surface)}:is(.app-shell,.settings-modal) .dump-menu{display:flex;width:100%;height:58px;align-items:stretch;margin:0;padding:0 22px;gap:24px;background:transparent;border:0;border-bottom:1px solid var(--line);border-radius:0}
+:is(.app-shell,.settings-modal) .dump-menu button{background:transparent;color:var(--muted);border:0;border-bottom:2px solid transparent;border-radius:0;padding:0 2px;font-size:13px}
+:is(.app-shell,.settings-modal) .dump-menu button[aria-selected="true"]{color:var(--accent);background:transparent;border-bottom-color:var(--accent)}:is(.app-shell,.settings-modal) .dump-menu .dump-menu-sub{display:none}
+:is(.app-shell,.settings-modal) .dump-col{padding:22px 24px}:is(.app-shell,.settings-modal) .dump-col :is(input,button){border-radius:7px}:is(.app-shell,.settings-modal) .dump-col :is(td,th){font-size:12px}
 @media(max-width:700px){
- .app-shell .hook-feature-mobile-bar{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:13px;border-bottom:1px solid var(--line-soft)}
- .app-shell .hook-feature-picker{display:flex;align-items:center;gap:12px;background:none;border:0;color:var(--ink);text-align:left;padding:0;font-family:inherit;font-size:14px;font-weight:600;line-height:1.5;cursor:pointer}
- .app-shell .hook-feature-picker small{display:block;font-size:12px;font-weight:400;color:var(--muted);margin-top:3px}
- .app-shell .hook-feature-picker[aria-expanded=true] .n-icon{transform:rotate(180deg)}
- .app-shell .hook-current-gate{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
- .app-shell .hook-features{display:none}.app-shell .hook-features.expanded{display:grid}.app-shell .hook-feature-caption{display:none}
- .app-shell .hook-feature-label{font-size:13px}.app-shell .hook-method-name{font-size:12px}.app-shell .hook-runtime{font-size:12px}
- .app-shell .hook-method-row{grid-template-columns:minmax(0,1fr) 42px 32px}.app-shell .dump-menu{height:50px;padding-inline:14px}.app-shell .dump-col{padding:16px 14px}
+ :is(.app-shell,.settings-modal) .hook-feature-mobile-bar{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:13px;border-bottom:1px solid var(--line-soft)}
+ :is(.app-shell,.settings-modal) .hook-feature-picker{display:flex;align-items:center;gap:12px;background:none;border:0;color:var(--ink);text-align:left;padding:0;font-family:inherit;font-size:14px;font-weight:600;line-height:1.5;cursor:pointer}
+ :is(.app-shell,.settings-modal) .hook-feature-picker small{display:block;font-size:12px;font-weight:400;color:var(--muted);margin-top:3px}
+ :is(.app-shell,.settings-modal) .hook-feature-picker[aria-expanded=true] .n-icon{transform:rotate(180deg)}
+ :is(.app-shell,.settings-modal) .hook-current-gate{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
+ :is(.app-shell,.settings-modal) .hook-features{display:none}:is(.app-shell,.settings-modal) .hook-features.expanded{display:grid}:is(.app-shell,.settings-modal) .hook-feature-caption{display:none}
+ :is(.app-shell,.settings-modal) .hook-feature-label{font-size:13px}:is(.app-shell,.settings-modal) .hook-method-name{font-size:12px}:is(.app-shell,.settings-modal) .hook-runtime{font-size:12px}
+ :is(.app-shell,.settings-modal) .hook-method-row{grid-template-columns:minmax(0,1fr) 42px 32px}:is(.app-shell,.settings-modal) .dump-menu{height:50px;padding-inline:14px}:is(.app-shell,.settings-modal) .dump-col{padding:16px 14px}
 }
 
 /* Native library selects expose focus on tabindex rather than a button role. */
-.app-shell [tabindex]:focus-visible{outline:2px solid var(--focus);outline-offset:3px;border-radius:5px}
+:is(.app-shell,.settings-modal) [tabindex]:focus-visible{outline:2px solid var(--focus);outline-offset:3px;border-radius:5px}
 
-.app-shell .dump-menu button{justify-content:center}.app-shell .dump-menu-main{font-size:13px;font-weight:500}
+:is(.app-shell,.settings-modal) .dump-menu button{justify-content:center}:is(.app-shell,.settings-modal) .dump-menu-main{font-size:13px;font-weight:500}
 
 /* Final cold-review correction: data is primary, provenance is secondary. */
-.app-shell .io-data pre{font-size:13px;color:var(--ink);font-weight:500}.app-shell .io-field-label{font-size:12px}.app-shell .payload-note{font-size:12px;color:var(--muted);line-height:1.75}
-@media(max-width:700px){.app-shell .hook-apply-bar{flex-direction:column;align-items:stretch}.app-shell .hook-apply-bar>div{display:grid;grid-template-columns:1fr 1fr;gap:8px}.app-shell .hook-apply-bar .n-button{width:100%;min-height:36px;font-size:12px;padding-inline:10px}}
+:is(.app-shell,.settings-modal) .io-data pre{font-size:13px;color:var(--ink);font-weight:500}:is(.app-shell,.settings-modal) .io-field-label{font-size:12px}:is(.app-shell,.settings-modal) .payload-note{font-size:12px;color:var(--muted);line-height:1.75}
+@media(max-width:700px){:is(.app-shell,.settings-modal) .hook-apply-bar{flex-direction:column;align-items:stretch}:is(.app-shell,.settings-modal) .hook-apply-bar>div{display:grid;grid-template-columns:1fr 1fr;gap:8px}:is(.app-shell,.settings-modal) .hook-apply-bar .n-button{width:100%;min-height:36px;font-size:12px;padding-inline:10px}}
 
 /* Prevent flex-column wrapping after a footer is compressed by its parent. */
-@media(max-width:700px){.app-shell .hook-apply-bar{display:grid;grid-template-columns:minmax(0,1fr);flex:none;height:auto;align-content:start;justify-content:stretch}.app-shell .hook-apply-bar>div{min-width:0;max-width:100%;grid-template-columns:repeat(2,minmax(0,1fr))}.app-shell .hook-apply-bar .n-button{min-width:0}}
+@media(max-width:700px){:is(.app-shell,.settings-modal) .hook-apply-bar{display:grid;grid-template-columns:minmax(0,1fr);flex:none;height:auto;align-content:start;justify-content:stretch}:is(.app-shell,.settings-modal) .hook-apply-bar>div{min-width:0;max-width:100%;grid-template-columns:repeat(2,minmax(0,1fr))}:is(.app-shell,.settings-modal) .hook-apply-bar .n-button{min-width:0}}
 
 /* Same site control language: neutral emphasis, green signals/focus, 4/8/12 radii. */
-.app-shell .n-button,.app-shell .rail-action,.app-shell .hook-feature-label{transition:background .2s,border-color .2s,color .2s,transform .15s}
-.app-shell .row{transition:background .2s,color .2s}
-.app-shell .n-button:not(:disabled):not(.n-button--disabled):not(.n-button--loading):active,.app-shell .rail-action:not(:disabled):active{transform:translateY(1px)}
-.app-shell .n-button,.app-shell .hook-modules input{border-radius:4px}
-.app-shell .hook-workspace,.app-shell .hook-method-detail,.app-shell .hook-modules,.app-shell .io-data{border-radius:8px}
-.app-shell .hook-method-name,.app-shell .io-data pre.mono,.app-shell .row .seq,.app-shell .row .sizes,.app-shell .topbar .proc-pkg{font-family:var(--mono)}
-.app-shell .topbar .proc-face .app-dialog-letter{background:var(--surface-2);color:var(--ink);border-color:var(--line)}
-.app-shell .side-brand .hdr-mark,.app-shell .panel-body{box-shadow:none}
-@media(prefers-reduced-motion:reduce){.app-shell *{transition:none!important;animation:none!important;scroll-behavior:auto!important}.app-shell .n-button:active,.app-shell .rail-action:active{transform:none!important}}
+:is(.app-shell,.settings-modal) .n-button,:is(.app-shell,.settings-modal) .rail-action,:is(.app-shell,.settings-modal) .hook-feature-label{transition:background .2s,border-color .2s,color .2s,transform .15s}
+:is(.app-shell,.settings-modal) .row{transition:background .2s,color .2s}
+:is(.app-shell,.settings-modal) .n-button:not(:disabled):not(.n-button--disabled):not(.n-button--loading):active,:is(.app-shell,.settings-modal) .rail-action:not(:disabled):active{transform:translateY(1px)}
+:is(.app-shell,.settings-modal) .n-button,:is(.app-shell,.settings-modal) .hook-modules input{border-radius:4px}
+:is(.app-shell,.settings-modal) .hook-workspace,:is(.app-shell,.settings-modal) .hook-method-detail,:is(.app-shell,.settings-modal) .hook-modules,:is(.app-shell,.settings-modal) .io-data{border-radius:8px}
+:is(.app-shell,.settings-modal) .hook-method-name,:is(.app-shell,.settings-modal) .io-data pre.mono,:is(.app-shell,.settings-modal) .row .seq,:is(.app-shell,.settings-modal) .row .sizes,:is(.app-shell,.settings-modal) .topbar .proc-pkg{font-family:var(--mono)}
+:is(.app-shell,.settings-modal) .topbar .proc-face .app-dialog-letter{background:var(--surface-2);color:var(--ink);border-color:var(--line)}
+:is(.app-shell,.settings-modal) .side-brand .hdr-mark,:is(.app-shell,.settings-modal) .panel-body{box-shadow:none}
+@media(prefers-reduced-motion:reduce){:is(.app-shell,.settings-modal) *{transition:none!important;animation:none!important;scroll-behavior:auto!important}:is(.app-shell,.settings-modal) .n-button:active,:is(.app-shell,.settings-modal) .rail-action:active{transform:none!important}}
 
 /* Native file/dump actions share the same control states as the component library. */
-.app-shell button{font-family:var(--sans);transition:background .2s,border-color .2s,color .2s,transform .15s}
-.app-shell :is(button.primary,button.act.primary,button.btn.primary){background:var(--ink);border-color:var(--ink);color:var(--canvas);font-weight:500}
-.app-shell :is(button.primary,button.act.primary,button.btn.primary):hover:not(:disabled){background:var(--primary-hover);border-color:var(--primary-hover)}
-.app-shell :is(button.primary,button.act,button.btn,.dump-actions button,.compact-action):not(:disabled):active{transform:translateY(1px)}
-.app-shell .dump-col :is(input,button){border-radius:4px}
-@media(prefers-reduced-motion:reduce){.app-shell button:active{transform:none!important}}
+:is(.app-shell,.settings-modal) button{font-family:var(--sans);transition:background .2s,border-color .2s,color .2s,transform .15s}
+:is(.app-shell,.settings-modal) :is(button.primary,button.act.primary,button.btn.primary){background:var(--ink);border-color:var(--ink);color:var(--canvas);font-weight:500}
+:is(.app-shell,.settings-modal) :is(button.primary,button.act.primary,button.btn.primary):hover:not(:disabled){background:var(--primary-hover);border-color:var(--primary-hover)}
+:is(.app-shell,.settings-modal) :is(button.primary,button.act,button.btn,.dump-actions button,.compact-action):not(:disabled):active{transform:translateY(1px)}
+:is(.app-shell,.settings-modal) .dump-col :is(input,button){border-radius:4px}
+@media(prefers-reduced-motion:reduce){:is(.app-shell,.settings-modal) button:active{transform:none!important}}
 
 /* Cold review: readable inactive controls and sampling/offline caveats. */
-.app-shell .hook-hint,.app-shell .payload-note{font-size:13px;line-height:1.75}
+:is(.app-shell,.settings-modal) .hook-hint,:is(.app-shell,.settings-modal) .payload-note{font-size:13px;line-height:1.75}
+
+/* User feedback: bounded dialogs and function-first settings, same official theme. */
+:is(.app-shell,.settings-modal) .rail-line{width:100%;min-width:0}:is(.app-shell,.settings-modal) .nav-event-count{margin-left:auto;font-family:var(--mono);font-size:12px;font-weight:400;color:var(--muted)}:is(.app-shell,.settings-modal) .side.rail .nav-event-count{display:none}
+.settings-modal>.n-card-header{padding:18px 24px;border-bottom:1px solid var(--line)}.settings-modal .set-page-shell{width:100%;height:100%;min-height:0}.settings-modal .settings-top-tabs{height:54px;min-height:54px;padding:0 24px;gap:20px}.settings-modal .settings-top-tabs .n-button{height:54px;border-radius:0;padding:0 2px}.settings-modal .settings-top-tabs .active{border-bottom:2px solid var(--ink);color:var(--ink)}.settings-modal .settings-more{margin-left:auto}.settings-modal .settings-picker{display:none}.settings-modal .set-content{flex:1;min-height:0}.settings-modal .set-main{padding:18px 24px;min-height:0}.settings-modal .hook-manager{height:100%;min-height:0}.settings-modal .hook-workspace{min-height:320px}.settings-modal .hook-feature-mobile-bar{display:none}.settings-modal .hook-feature-caption{display:flex;justify-content:space-between}.settings-modal .hook-apply-bar{flex:none;background:var(--surface);padding-block:12px 0}.backend-version-warning{margin:0 20px 12px 0}
+@media(max-width:700px){.settings-modal .settings-top-tabs{padding-inline:12px;gap:16px}.settings-modal .set-main{padding:12px}.settings-modal .hook-workspace{grid-template-columns:minmax(0,1fr)}.settings-modal .hook-feature-mobile-bar{display:flex}.settings-modal .hook-features{display:none}.settings-modal .hook-features.expanded{display:grid}.settings-modal .hook-feature-caption{display:none}.settings-modal .settings-top-tabs>.n-button{font-size:12px}.settings-modal .hook-apply-bar>div{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.settings-modal .settings-more{font-size:12px}}
+
+/* Device selection is a native keyboard control; auxiliary actions stay siblings. */
+.device-modal .dev-pick{display:flex;align-items:center;gap:12px;flex:1;min-width:0;width:100%;border:0;background:none;padding:0;color:inherit;font:inherit;text-align:left;cursor:pointer}.device-modal .dev-pick:focus-visible{outline:2px solid var(--accent);outline-offset:5px;border-radius:4px}.device-modal .dev-pick .dev-check{margin-left:auto}
+
+@media(max-width:620px){:is(.app-shell,.settings-modal) .capture-workspace .detail-head{grid-template-columns:minmax(0,1fr)}:is(.app-shell,.settings-modal) .detail-head-main{grid-column:1;width:100%}:is(.app-shell,.settings-modal) .detail-menu{grid-column:1;justify-self:end}:is(.app-shell,.settings-modal) .detail-head h2{word-break:normal;overflow-wrap:break-word}}

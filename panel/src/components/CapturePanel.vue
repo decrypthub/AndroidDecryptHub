@@ -22,6 +22,10 @@ interface Exchange {
 }
 
 const active = ref(true);
+const modalOpen=computed(()=>!!(store.settingsOpen||store.appDialogOpen||store.deviceDialogOpen));
+const modalCaptures=ref<Cap[]|null>(null),modalTotals=ref<typeof store.capTotal|null>(null);
+watch(modalOpen,open=>{modalCaptures.value=open?(store.capItems??[]).slice():null;modalTotals.value=open?{...store.capTotal}:null;},{flush:'sync',immediate:true});
+const displayCaptures=computed(()=>modalCaptures.value??store.capItems);
 let pageRequest=0,exchangeRequest=0;
 const identity=()=>store.selectedDeviceKey+'\n'+store.chosenPkg+'\n'+props.kind;
 const filter = reactive({
@@ -116,10 +120,10 @@ function applyClientFilter(source: Cap[]): Cap[] {
 }
 
 // 本板块归属当前应用的记录（过滤前）
-const scoped = computed(() => store.capItems.filter(c => matchesPanel(c) && belongsToApp(c)));
+const scoped = computed(() => displayCaptures.value.filter(c => matchesPanel(c) && belongsToApp(c)));
 
 const visible = computed(() => applyClientFilter(pagedItems.value ??
-  (filter.paused ? frozenCaptures.value ?? [] : store.capItems)));
+  (filter.paused ? frozenCaptures.value ?? [] : displayCaptures.value)));
 
 async function loadServerPage(beforeId: number | null) {
   if (!store.chosenPkg || props.kind === 'net') return;
@@ -156,18 +160,21 @@ async function loadServerPage(beforeId: number | null) {
 const exLoadedOnce = ref(false);
 async function loadExchanges() {
   if (props.kind !== 'net' || !store.chosenPkg) { exchanges.value = []; return; }
+  if(store.backendStatus&&store.backendStatus!=='ready'){exchanges.value=[];return;}
   const pkg = store.chosenPkg, target=identity(), token=++exchangeRequest;
   try {
     const r = await getExchanges(pkg, { fromTs: fromTs.value, toTs: toTs.value }) as {
-      exchanges?: Exchange[]; http2Idle?: number;
+      exchanges?: Exchange[]; http2Idle?: number;scope?:{serial:string|null;package:string|null};panelProtocol?:number;
     };
     if(identity() !== target || token !== exchangeRequest)return;
+    if(store.backendStatus==='ready'&&(r.panelProtocol!==1||r.scope?.serial!==store.devices.find(d=>d.key===store.selectedDeviceKey)?.serial||r.scope?.package!==pkg))throw new Error('网络记录设备归属未确认');
     exchanges.value = r.exchanges ?? [];
     const notes: string[] = [];
     if (r.http2Idle) notes.push(`${r.http2Idle} 条 HTTP/2 连接还没有完整请求`);
     exNotes.value = notes;
   } catch { /* 保旧数据 */ } finally { if(identity() === target && token === exchangeRequest)exLoadedOnce.value = true; }
 }
+watch(()=>store.backendStatus,status=>{if(status==='ready'&&active.value)void loadExchanges();});
 let exTimer = 0;
 function scheduleExchanges() {
   if(!active.value)return;
@@ -448,7 +455,7 @@ const emptyText = computed(() => {
 const bucketTotal = computed(() => {
   if (props.kind === 'net') return matchedExchangesAll.value.length;
   const key = props.kind === 'crypto' ? 'crypto' : 'system';
-  return Math.max(store.capTotal[key] || 0, visible.value.length);
+  return Math.max((modalTotals.value??store.capTotal)[key] || 0, visible.value.length);
 });
 const footHint = computed(() => {
   const bits = [`保留窗口内共 ${bucketTotal.value} 条（更早的已按保留上限淘汰）`, '上一页/下一页按页向更早读取'];

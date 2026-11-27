@@ -10,9 +10,11 @@ import { toast, refreshDevices, deviceLabel, rememberDevice, forgetDevice, renam
 import { reconnectDevice, adbConnectDevice, getDeviceInfo, type DeviceInfo } from '../api';
 
 const props = defineProps<{ devices: DeviceView[]; failed: boolean; selected: string }>();
-const emit = defineEmits<{ select: [key: string] }>();
+const emit = defineEmits<{ select: [key: string]; visibility:[open:boolean] }>();
 
 const show = ref(false);
+watch(show,value=>emit('visibility',value));
+onBeforeUnmount(()=>emit('visibility',false));
 const busy = ref('');
 
 // 重命名：行内改当前设备名
@@ -236,6 +238,8 @@ onBeforeUnmount(() => { infoToken++; });
     </button>
 
     <n-modal :show="show" preset="card" class="device-modal" title="设备" closable
+      :style="{width:'min(680px, calc(100vw - 32px))',maxHeight:'calc(100dvh - 48px)'}"
+      :content-style="{maxHeight:'calc(100dvh - 150px)',overflowY:'auto'}"
       :segmented="{ content: true }" @update:show="!$event && (show = false)">
       <template #header>
         <span class="device-head">设备 <span v-if="devices.length" class="device-muted">{{ devices.length }}</span></span>
@@ -291,19 +295,20 @@ onBeforeUnmount(() => { infoToken++; });
       <!-- 下半：切换列表 -->
       <div class="dev-list">
         <div v-for="d in sortedDevices" :key="d.key" class="dev-item"
-          :class="{ active: d.key === current?.key }" @click="pick(d)">
+          :class="{ active: d.key === current?.key }">
+          <button type="button" class="dev-pick" :aria-pressed="d.key === current?.key"
+            :aria-label="'选择设备 '+deviceLabel(d)+' '+d.serial" @click="pick(d)">
           <span class="status-dot" :class="dotClass(d)"></span>
           <div class="dev-item-copy">
             <strong>{{ deviceLabel(d) }}</strong>
             <span>{{ rowMeta(d) }}</span>
           </div>
+          <span v-if="d.key === current?.key" class="dev-check" aria-label="当前使用"><n-icon size="15" :component="CheckmarkOutline" /></span>
+          </button>
           <n-button v-if="d.remembered && d.key !== current?.key" size="tiny" quaternary circle
             class="device-danger" title="移除" aria-label="移除" @click.stop="forget(d)">
             <template #icon><n-icon size="13" :component="TrashOutline" /></template>
           </n-button>
-          <span v-if="d.key === current?.key" class="dev-check" aria-label="当前使用">
-            <n-icon size="15" :component="CheckmarkOutline" />
-          </span>
         </div>
 
         <n-empty v-if="!devices.length" :description="failed ? '设备读取失败' : '没有设备'" size="small"

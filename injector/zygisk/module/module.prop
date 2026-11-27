@@ -1,7 +1,7 @@
 id=adh
 name=AndroidDecryptHub
-version=v1.0.0
-versionCode=31
+version=v1.1.0
+versionCode=32
 author=decrypthub.com
 description=状态：等待重启
 updateJson=https://raw.githubusercontent.com/decrypthub/AndroidDecryptHub/main/injector/zygisk/update.json

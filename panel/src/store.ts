@@ -57,6 +57,7 @@ export const store = reactive({
   appsFailed: false,
   captureEnabled: false,
   scope: new Set<string>(),
+  scopeReady:false,scopeError:'',
   // 会话
   sessions: new Map<string, A.Session>(),
   sessionPkg: new Map<string, string>(),
@@ -74,6 +75,9 @@ export const store = reactive({
   // 视图
   view: 'cc' as 'cc' | 'sy' | 'nt' | 'files' | 'dump' | 'settings',
   appDialogOpen: false,
+  settingsOpen:false,
+  deviceDialogOpen:false,
+  backendStatus:'checking' as 'checking'|'ready'|'incompatible'|'unavailable',
   hookSource: null as null | {serial:string;package:string;methodId?:string;recordId?:number;session?:string;feature?:string;returnView:'cc'|'sy'|'nt'},
 });
 
@@ -90,10 +94,15 @@ function stampSession(s: A.Session) {
 }
 
 // ---- 记录（按板块独立限额淘汰，防止高频加解密把网络/系统记录挤空）----
+const queuedCaptures=new Map<number,A.Cap>();let queuedFlush:ReturnType<typeof setTimeout>|null=null;
+/** Batch WS notifications; collection/persistence continue independently of DOM refresh. */
+export function queueCapture(c:A.Cap){if(!belongsToApp(c))return;queuedCaptures.set(c.id,c);if(queuedFlush!==null)return;queuedFlush=setTimeout(()=>{queuedFlush=null;const byId=new Map(store.capItems.map(c=>[c.id,c])),added={crypto:0,system:0,net:0};for(const c of queuedCaptures.values()){if(!belongsToApp(c))continue;if(!byId.has(c.id))added[bucketOf(c.category)]++;byId.set(c.id,c);}queuedCaptures.clear();const counts={crypto:0,system:0,net:0},kept:A.Cap[]=[];for(const c of [...byId.values()].sort((a,b)=>b.id-a.id)){const key=bucketOf(c.category);if(++counts[key]<=BUCKET_LIMIT)kept.push(c);else store.capHasOlder[key]=true;}store.capItems=kept.reverse();for(const k of ['crypto','system','net'] as const)store.capTotal[k]+=added[k];},100);}
 export function capPush(c: A.Cap) {
   if(!belongsToApp(c))return;
   if (c.sessionId && c.package) store.sessionPkg.set(c.sessionId, c.package);
-  store.capItems.push(c);
+  const fresh=!store.capItems.some(x=>x.id===c.id);
+  if(!fresh)return;store.capItems.push(c);
+  store.capTotal[bucketOf(c.category)]++;
   const b = bucketOf(c.category);
   let cnt = 0;
   for (let i = store.capItems.length - 1; i >= 0; i--) {
@@ -120,7 +129,10 @@ export function toast(text: string) {
   toasts.push({ id, text });
   setTimeout(() => { const i = toasts.findIndex(t => t.id === id); if (i >= 0) toasts.splice(i, 1); }, 2600);
 }
+export async function checkPanelProtocol(){try{const r=await A.getHealth();store.backendStatus=r.panelProtocol===1?'ready':'incompatible';if(store.backendStatus==='ready')void capLoad();}catch{store.backendStatus='unavailable';}}
+export async function refreshNavCounts(){const key=targetKey(),pkg=store.chosenPkg;if(!pkg||store.backendStatus!=='ready')return;try{const rows=await Promise.all(['crypto','system,file','net'].map(category=>A.getCaptures({package:pkg,category,limit:1})));if(targetKey()!==key)return;for(const [i,k] of ['crypto','system','net'].entries())store.capTotal[k as keyof typeof store.capTotal]=rows[i].matched??0;}catch{/* keep the last confirmed count */}}
 export async function capLoad() {
+  if(store.backendStatus==='incompatible')return;
   const pkg = store.chosenPkg,key=targetKey();
   if (!pkg) { store.capItems = []; return; }
   store.capLoading = true;
@@ -148,10 +160,10 @@ export async function capLoad() {
     store.capHasOlder.system = !!rs.hasMore;
     store.capHasOlder.net = !!rn.hasMore;
     // 共 N 条 = 服务端按同一筛选算出的命中数（分页游标不影响），拿不到时退回本页长度
-    const pageCount = (r: A.CapturesReply) => (r.captures ?? r.items ?? []).length;
-    store.capTotal.crypto = rc.matched ?? rc.total ?? pageCount(rc);
-    store.capTotal.system = rs.matched ?? rs.total ?? pageCount(rs);
-    store.capTotal.net = rn.matched ?? rn.total ?? pageCount(rn);
+    const pageCount = (r: A.CapturesReply) => (r.captures ?? r.items ?? []).filter(belongsToApp).length;
+    store.capTotal.crypto = store.backendStatus==='ready'?(rc.matched ?? rc.total ?? pageCount(rc)):pageCount(rc);
+    store.capTotal.system = store.backendStatus==='ready'?(rs.matched ?? rs.total ?? pageCount(rs)):pageCount(rs);
+    store.capTotal.net = store.backendStatus==='ready'?(rn.matched ?? rn.total ?? pageCount(rn)):pageCount(rn);
     store.capDropped = rc.dropped ?? rs.dropped ?? 0;
     store.capComplete = rc.complete !== false;
     store.capLatest = merged.at(-1)?.id ?? 0;
@@ -323,12 +335,9 @@ export function choosePackage(pkg: string) {
 
 // ---- 应用列表：失败保旧值（scope 涉及手机 su 读盘，只在打开应用弹窗或设置页时拉取）----
 export async function refreshScope() {
-  const key=targetKey();if(!selectedSerial())return;
-  try {
-    const s = await A.getScope();
-    if (targetKey()!==key)return;
-    if (s.ok) store.scope = new Set(s.packages);
-  } catch { /* scope 读取失败不遮罩主流程 */ }
+  const key=targetKey();store.scopeReady=false;store.scopeError='';if(!selectedSerial())return;
+  try{const s=await A.getScope();if(targetKey()!==key)return;if(!s.ok)throw new Error(s.error||'设备未确认注入范围');store.scope=new Set(s.packages);store.scopeReady=true;}
+  catch(e){if(targetKey()===key)store.scopeError=(e as Error).message||'注入范围读取失败';}
 }
 
 export async function refreshApps() {
@@ -346,7 +355,7 @@ export async function refreshApps() {
 }
 
 watch(() => store.appDialogOpen, open => { if (open) void refreshScope(); });
-watch(() => store.view, v => { if (v === 'settings') void refreshScope(); });
+watch(() => store.settingsOpen, open => { if (open) void refreshScope(); });
 
 // ---- WebSocket ----
 let ws: WebSocket | null = null;
@@ -386,7 +395,7 @@ export function connectWs() {
         }
         break;
       case 'capture.new':
-        if (d) capPush(d as unknown as A.Cap);
+        if (d) queueCapture(d as unknown as A.Cap);
         break;
       case 'data.cleared':
         if(d?.serial&&d.serial!==selectedSerial())break;
@@ -411,13 +420,15 @@ export function connectWs() {
 
 // ---- 轮询（设备变更已有 WS track-devices 实时推送，后台隐藏标签页停轮询，不打扰 USB）----
 export function startPolling() {
+  void checkPanelProtocol();
   void refreshDevices();
   void refreshApps();
   void refreshScope();
   void capLoad();
   setInterval(() => {
     if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
-    void refreshDevices();
+    void refreshDevices();void refreshNavCounts();
+    if(store.backendStatus!=='ready')void checkPanelProtocol();
   }, 12000);
   setInterval(() => {
     if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;

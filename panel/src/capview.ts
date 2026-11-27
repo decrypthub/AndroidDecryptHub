@@ -161,16 +161,24 @@ export function httpListPreview(text: string | undefined): string {
   return line || raw.slice(0, 120);
 }
 
+function systemFields(c:Cap):{raw:string;fields:Record<string,unknown>} {
+  let raw=String(c.text??c.preview??''),fields:Record<string,unknown>={};
+  if(typeof c.hex==='string'&&c.hex.length<=32768&&/^(?:[a-f\d]{2})*$/i.test(c.hex)){
+    try{raw=new TextDecoder('utf-8',{fatal:true}).decode(Uint8Array.from(c.hex.match(/../g)??[],p=>parseInt(p,16)));}catch{/* keep recorded text */}
+  }
+  if(raw.startsWith('{')){try{const parsed=JSON.parse(raw);if(parsed&&typeof parsed==='object'&&!Array.isArray(parsed))fields=parsed;}catch{/* incomplete JSON remains visible */}}
+  else for(const part of raw.split('\t')){const i=part.indexOf('=');if(i>0)fields[part.slice(0,i)]=part.slice(i+1);}
+  return {raw,fields};
+}
+const evidenceText=(v:unknown)=>typeof v==='string'||typeof v==='number'?String(v):'';
+export function systemPath(c:Cap):string {
+  const {fields}=systemFields(c);
+  return c.path||evidenceText(fields.path)||((c.func==='open'||c.func==='openat')&&String(c.preview??'').startsWith('/')?String(c.preview):'');
+}
 export function systemRow(c: Cap): {method:string;object:string;result:string} {
   const activity=c.activity as Record<string,unknown>|undefined;
   if(activity&&typeof activity.method==='string'&&typeof activity.object==='string'&&typeof activity.result==='string')return activity as {method:string;object:string;result:string};
-  let raw=String(c.preview??''),fields:Record<string,unknown>={};
-  if(typeof c.hex==='string'&&c.hex.length<=32768&&/^(?:[a-f\d]{2})*$/i.test(c.hex)){
-    try{raw=new TextDecoder('utf-8',{fatal:true}).decode(Uint8Array.from(c.hex.match(/../g)??[],p=>parseInt(p,16)));}catch{/* use the recorded preview */}
-  }
-  if(raw.startsWith('{')){try{const parsed=JSON.parse(raw);if(parsed&&typeof parsed==='object'&&!Array.isArray(parsed))fields=parsed;}catch{/* incomplete JSON stays visible */}}
-  else for(const part of raw.split('\t')){const i=part.indexOf('=');if(i>0)fields[part.slice(0,i)]=part.slice(i+1);}
-  const text=(value:unknown)=>typeof value==='string'||typeof value==='number'?String(value):'';
+  const {raw,fields}=systemFields(c),text=evidenceText;
   const object=c.path||text(fields.path)||text(fields.arg)||(text(fields.name)?text(fields.name)+(text(fields.value)?' = '+text(fields.value):''):'')||raw;
   const result=text(fields.error)?'异常：'+text(fields.error):fields.ret!==undefined?'返回 '+text(fields.ret):fields.result!==undefined?'结果 '+text(fields.result):'';
   return {method:text(fields.target)||String(c.func||c.algo||'未知调用'),object,result};

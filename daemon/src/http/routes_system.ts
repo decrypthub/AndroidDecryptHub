@@ -188,7 +188,7 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       } catch (e) { return send(500, { ok: false, error: (e as Error).message }); }
     } },
     { path: '/health', handler: () => send(200, {
-      ok: true, service: 'adhd', name: 'ADH Daemon', version: HOST_VERSION,
+      ok: true, service: 'adhd', name: 'ADH Daemon', version: HOST_VERSION, panelProtocol:1,
       agents: sessions.size, uptime: process.uptime(), mcpTools: MCP_TOOLS.length, web: webUrls(),
       agent: { port: AGENT_PORT },
       apps: [...sessions.values()].map(s => ({
@@ -234,7 +234,7 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
         });
         if (disk && disk.items.length) {
           const byId = new Map<number, Capture>();
-          for (const d of disk.items) byId.set(d.id, d as unknown as Capture);
+          for (const d of disk.items) if(captureMatchesScope(d)) byId.set(d.id, d as unknown as Capture);
           for (const m of list) byId.set(m.id, m);
           list = [...byId.values()].sort((a, b) => a.id - b.id);
         }
@@ -244,7 +244,7 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
         id: c.id, sessionId: c.sessionId, func: c.func, hex: c.hex, inl: c.inl,
         tsNs: c.tsNs, ts: c.ts, conn: c.conn,
       }));
-      const value = assembleHttpExchanges(records);
+      const value = {...assembleHttpExchanges(records),scope:{serial:deviceRequestScope()?.serial??null,package:pkg??deviceRequestScope()?.package??null},panelProtocol:1};
       exchangeCache.set(key, { stamp, value });
       if (exchangeCache.size > 8) {
         const oldest = exchangeCache.keys().next().value;
@@ -311,7 +311,7 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
         });
         if (disk) {
           const byId = new Map<number, Capture>();
-          for (const d of disk.items) byId.set(d.id, d as unknown as Capture);
+          for (const d of disk.items) if(matchesFilters(d as unknown as Capture,true)) byId.set(d.id, d as unknown as Capture);
           for (const m of memList) byId.set(m.id, m);
           const merged = [...byId.values()].sort((a, b) => a.id - b.id);
           hasMore = disk.hasMore || merged.length > limit;

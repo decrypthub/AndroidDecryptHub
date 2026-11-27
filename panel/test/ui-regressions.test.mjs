@@ -121,7 +121,7 @@ test('control: open/restart/stop share one in-flight operation lock', async () =
 
 test('labels: injection permission is not described as a running injected session', () => {
   assert.doesNotMatch(source, /已注入/);
-  assert.match(source, /注入范围/);
+  assert.match(source, /允许注入/);
   assert.match(source, /采集在线/);
 });
 

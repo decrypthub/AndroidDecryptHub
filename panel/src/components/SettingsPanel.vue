@@ -19,10 +19,14 @@ import {
 } from '@vicons/ionicons5';
 
 // ---- 页内子导航 ----
-type PageKey = 'capture' | 'records' | 'display' | 'conn';
-const PAGE_ICONS:Record<PageKey,Component>={capture:LockClosedOutline,records:EyeOutline,display:OptionsOutline,conn:ServerOutline};
-const PAGES:Array<{key:PageKey;label:string}>=[{key:'capture',label:'Hook 管理'},{key:'records',label:'显示过滤'},{key:'display',label:'界面偏好'},{key:'conn',label:'高级'}];
+type PageKey = 'capture' | 'system' | 'network' | 'records' | 'display' | 'conn';
+const PAGE_ICONS:Partial<Record<PageKey,Component>>={capture:LockClosedOutline,records:EyeOutline,display:OptionsOutline,conn:ServerOutline};
+const PAGES:Array<{key:PageKey;label:string}>=[{key:'capture',label:'加解密'},{key:'system',label:'系统'},{key:'network',label:'网络'}];
+const EXTRA_PAGES:Array<{key:PageKey;label:string}>=[{key:'records',label:'显示过滤'},{key:'display',label:'界面偏好'},{key:'conn',label:'高级'}];
+const captureGroup=computed(()=>page.value==='system'?'system':page.value==='network'?'network':'crypto');
+const functionalPage=computed(()=>['capture','system','network'].includes(page.value));
 const page=ref<PageKey>('capture');
+watch(()=>store.hookSource?.feature,feature=>{if(feature)page.value=feature==='tls'?'network':['system','file'].includes(feature)?'system':'capture';},{immediate:true});
 
 // ---- 记录显示 ----
 // 设置页用快照：进入页面、切换应用、手动刷新时取一次，此后列表稳定不动。
@@ -79,7 +83,7 @@ const appearances = [
   { value: 'light', label: '浅色', icon: SunnyOutline },
   { value: 'dark', label: '深色', icon: MoonOutline },
 ] as const;
-const pageOptions = PAGES.map(({ key: value, label }) => ({ value, label }));
+const pageOptions = [...PAGES,...EXTRA_PAGES].map(({ key: value, label }) => ({ value, label }));
 const limits = computed(() => [{ value: 0, label: `服务默认（${hostDisplayCap.value} 条）` },
   ...DISPLAY_CAPS.map(value => ({ value, label: `${value} 条` }))]);
 const displaySaved = ref('');
@@ -128,12 +132,13 @@ watch(page,p=>{if(p==='records')takeSnap();if(p==='conn')void refreshStatus();})
     <nav class="settings-top-tabs" aria-label="设置分类">
       <div class="settings-picker"><n-select v-model:value="page" aria-label="设置分类" :options="pageOptions" /></div>
       <n-button v-for="p in PAGES" :key="p.key" quaternary :aria-pressed="page===p.key" :class="{active:page===p.key}" @click="page=p.key">{{ p.label }}</n-button>
+    <n-dropdown trigger="click" :options="EXTRA_PAGES.map(p=>({key:p.key,label:p.label}))" @select="page=$event"><n-button quaternary class="settings-more">{{ EXTRA_PAGES.find(p=>p.key===page)?.label||'其他设置' }}</n-button></n-dropdown>
     </nav>
     <div class="set-content">
       <div class="set-main">
         <h1 class="sr-only">设置</h1>
 
-        <HookManager v-if="page==='capture'" />
+        <HookManager v-if="functionalPage" :group="captureGroup" />
 
         <section v-else-if="page === 'records'" class="record-prefs" aria-label="记录显示偏好">
           <div class="rec-categories" role="group" aria-labelledby="categories-label">

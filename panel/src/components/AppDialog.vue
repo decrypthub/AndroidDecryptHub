@@ -2,14 +2,13 @@
 import { computed, ref, watch } from 'vue';
 import { NAlert, NModal, NVirtualList } from 'naive-ui';
 import { SearchOutline } from '@vicons/ionicons5';
-import { store, choosePackage } from '../store';
-import { appIconUrl, scopeAdd, scopeRemove, appControl, observePackage, getCapturePackages, type AppInfo } from '../api';
+import { store, choosePackage, refreshScope } from '../store';
+import { appIconUrl, scopeAdd, scopeRemove, appControl, observePackage, type AppInfo } from '../api';
 
 const props = defineProps<{ show: boolean }>();
 const emit = defineEmits<{ close: [] }>();
-const tab = ref<'user' | 'system' | 'injected' | 'history'>('user');
+const tab = ref<'user' | 'system'>('user');
 const q = ref('');
-const historyApps=ref<Array<AppInfo&{history:true}>>([]),historyLoading=ref(false),historyError=ref('');let historyRequest=0;
 const toastMsg = ref('');
 const messageType = ref<'success' | 'error'>('error');
 const picking = ref('');
@@ -20,13 +19,12 @@ const busy = computed(() => !!(picking.value || scopePending.value || controllin
 watch(() => props.show, open => {
   if (open) { q.value = ''; tab.value = 'user'; toastMsg.value = ''; }
 });
-const tabs = [['user', '应用'], ['system', '系统'], ['injected', '注入范围'], ['history','历史']] as const;
+const tabs = [['user', '个人应用'], ['system', '系统应用']] as const;
 
 const apps = computed(() => {
-  let list:Array<AppInfo&{history?:boolean}> = tab.value==='history'?historyApps.value:store.apps;
+  let list:AppInfo[] = store.apps;
   if (tab.value === 'user') list = list.filter(a => !a.system);
   else if (tab.value === 'system') list = list.filter(a => a.system);
-  else if(tab.value==='injected') list = [...list].sort((a,b)=>Number(store.scope.has(b.package))-Number(store.scope.has(a.package))||(a.label||a.package).localeCompare(b.label||b.package));
   const s = q.value.trim().toLowerCase();
   if (s) list = list.filter(a =>
     (a.package + ' ' + (a.label ?? '')).toLowerCase().includes(s));
@@ -45,16 +43,7 @@ const onlinePackages = computed(() => {
 const canControl = computed(() => store.scope.has(store.chosenPkg)&&store.apps.some(a=>a.package===store.chosenPkg));
 const emptyText = computed(() => q.value.trim() ? '没有匹配的应用' : '没有应用');
 
-async function loadHistory(){
- const token=++historyRequest,key=store.selectedDeviceKey,serial=iconSerial.value;historyError.value='';historyApps.value=[];
- if(!serial){historyError.value='请先选择设备';return;}historyLoading.value=true;
- try{const reply=await getCapturePackages(serial);if(token!==historyRequest||key!==store.selectedDeviceKey)return;
-  historyApps.value=reply.packages.filter(p=>p.lines>0).sort((a,b)=>b.newestTs-a.newestTs).map(p=>{const installed=store.apps.find(a=>a.package===p.package);return{...installed,package:p.package,label:installed?.label||p.package,system:installed?.system??false,hasIcon:installed?.hasIcon??false,history:true};});
- }catch(e){if(token===historyRequest)historyError.value=(e as Error).message||'读取历史应用失败';}
- finally{if(token===historyRequest)historyLoading.value=false;}
-}
-watch(()=>props.show,open=>{if(open)void loadHistory();else{historyRequest++;historyLoading.value=false;}});
-watch(()=>store.selectedDeviceKey,()=>{q.value='';historyApps.value=[];if(props.show)void loadHistory();else historyRequest++;});
+watch(()=>store.selectedDeviceKey,()=>{q.value='';toastMsg.value='';});
 function reportError(e: unknown, fallback: string) {
   messageType.value = 'error';
   toastMsg.value = e instanceof Error && e.message ? e.message : fallback;
@@ -63,7 +52,7 @@ function close() {
   if (!busy.value) emit('close');
 }
 function scopeDisabled(pkg: string) {
-  return busy.value || pkg === store.chosenPkg && store.scope.has(pkg);
+  return busy.value || store.scopeReady===false;
 }
 async function pick(pkg: string) {
   if (busy.value) return;
@@ -73,7 +62,7 @@ async function pick(pkg: string) {
   const deviceKey = store.selectedDeviceKey;
   try {
     // 先确认观察请求，失败保留原应用/窗口；不能把未完成的切换显示成成功。
-    if (store.localUsb && tab.value!=='history') {
+    if (store.localUsb) {
       if (!dev?.serial) throw new Error('设备不可用，请先选择设备');
       await observePackage(dev.serial, pkg);
     }
@@ -113,96 +102,26 @@ async function control(action: 'open' | 'stop' | 'restart') {
 </script>
 
 <template>
-  <n-modal :show="show" preset="card" title="应用" aria-label="应用" :bordered="false"
-    :style="{ width: 'min(880px, calc(100vw - 24px))', height: 'min(640px, calc(100dvh - 32px))' }"
-    :content-style="{ padding: '0', display: 'flex', minHeight: '0', overflow: 'hidden' }"
-    :closable="!busy" :mask-closable="!busy" :close-on-esc="!busy"
-    @update:show="!$event && close()">
-    <div class="app-dialog show app-picker-layout" :aria-busy="busy">
-      <aside class="app-dialog-side" aria-label="应用分类">
-        <n-button v-for="[k, label] in tabs" :key="k" quaternary block :aria-pressed="tab === k"
-          :disabled="busy" @click="tab = k">{{ label }}</n-button>
-      </aside>
-      <div class="app-dialog-main">
-        <div class="app-dialog-card">
-          <span class="app-face">
-            <span class="app-dialog-letter">{{ chosenInitial }}</span>
-            <img v-if="store.chosenPkg && chosen && chosen.hasIcon !== false" :src="appIconUrl(store.chosenPkg, iconSerial, chosen.iconVersion)" alt=""
-              @error="($event.target as HTMLElement).style.display = 'none'" />
-          </span>
-          <div class="app-dialog-id">
-            <strong :title="chosenLabel">{{ chosenLabel }}</strong>
-            <span v-if="chosenLabel!==store.chosenPkg || !store.chosenPkg" :title="store.chosenPkg">{{ store.chosenPkg || '从下方列表选择要观测的应用' }}</span>
-          </div>
-          <div class="app-dialog-actions">
-            <template v-if="canControl">
-              <n-button size="small" :loading="controlling === 'open'" :disabled="busy" @click="control('open')">打开</n-button>
-              <n-button size="small" :loading="controlling === 'restart'" :disabled="busy" @click="control('restart')">重启</n-button>
-              <n-button size="small" :loading="controlling === 'stop'" :disabled="busy" @click="control('stop')">结束</n-button>
-            </template>
-          </div>
-        </div>
-        <div class="dialog-search"><n-input v-model:value="q" clearable placeholder="搜索名称或包名" :input-props="{ 'aria-label': '搜索应用' }">
-          <template #prefix><n-icon :component="SearchOutline" /></template>
-        </n-input></div>
-        <div class="app-choices">
-          <n-alert v-if="toastMsg && messageType === 'error'" type="error" :show-icon="false"
-            class="app-picker-message">{{ toastMsg }}</n-alert>
-          <p v-else-if="toastMsg" class="app-picker-message app-picker-success" role="status">{{ toastMsg }}</p>
-          <n-virtual-list v-if="apps.length" class="app-virtual" :items="apps" :item-size="52" key-field="package">
-            <template #default="{ item: a }">
-              <div class="app-row">
-                <n-button quaternary class="app-item" :class="{ active: a.package === store.chosenPkg }"
-                  :aria-pressed="a.package === store.chosenPkg" :title="`${a.label || a.package} · ${a.package}`"
-                  :loading="picking === a.package" :disabled="busy" @click="pick(a.package)">
-                  <span class="app-face">
-                    <span class="app-dialog-letter">{{ itemInitial(a.label, a.package) }}</span>
-                    <img v-if="a.hasIcon !== false" :src="appIconUrl(a.package, iconSerial, a.iconVersion)" alt="" loading="lazy"
-                      @error="($event.target as HTMLElement).style.display = 'none'" />
-                  </span>
-                  <span class="app-copy">
-                    <span class="app-name">{{ a.label || a.package }}</span>
-                    <span v-if="a.label && a.label!==a.package" class="app-pkg">{{ a.package }}</span>
-                  </span>
-                  <span v-if="a.history" class="app-state">历史记录</span>
-                  <span v-else-if="onlinePackages.has(a.package)" class="app-state on">采集在线</span>
-                </n-button>
-                <span v-if="tab!=='injected' && tab!=='history' && store.scope.has(a.package)" class="app-state">允许注入</span>
-                <n-switch v-if="tab==='injected'" size="small" class="app-inject-sw" :aria-label="`允许注入 ${a.label || a.package}`" :value="store.scope.has(a.package)"
-                  :loading="scopePending === a.package" :disabled="scopeDisabled(a.package)" :aria-disabled="scopeDisabled(a.package)"
-                  :title="a.package === store.chosenPkg && store.scope.has(a.package) ? '当前观察应用不能移出注入范围' : '允许下次启动时注入'"
-                  @update:value="on => toggleInject(a.package, !!on)" />
-              </div>
-            </template>
-          </n-virtual-list>
-          <div v-if="tab==='history' && historyLoading" class="app-empty" role="status">读取历史应用…</div>
-          <div v-else-if="tab==='history' && historyError" class="app-empty" role="alert">{{ historyError }}</div>
-          <div v-else-if="store.appsError && tab!=='history'" class="app-empty" role="alert">{{ store.appsError }}</div>
-          <div v-else-if="!apps.length" class="app-empty" role="status">{{ tab==='history'&&!q.trim() ? '此设备没有已保留的历史记录' : store.appsFailed&&tab!=='history' ? '读取失败，保留上次清单' : emptyText }}</div>
-        </div>
-      </div>
+  <n-modal :show="show" preset="card" title="选择应用" aria-label="应用" :bordered="false"
+    :style="{width:'min(760px, calc(100vw - 24px))',height:'min(640px, calc(100dvh - 48px))'}"
+    :content-style="{padding:'0',display:'flex',minHeight:'0',overflow:'hidden'}"
+    :closable="!busy" :mask-closable="!busy" :close-on-esc="!busy" @update:show="!$event && close()">
+    <div class="app-picker-simple" :aria-busy="busy">
+      <nav class="app-picker-tabs" aria-label="应用分类"><n-button v-for="[k,label] in tabs" :key="k" quaternary :aria-pressed="tab===k" :disabled="busy" @click="tab=k">{{ label }}</n-button></nav>
+      <div class="dialog-search"><n-input v-model:value="q" clearable placeholder="搜索名称或包名" :input-props="{'aria-label':'搜索应用'}"><template #prefix><n-icon :component="SearchOutline" /></template></n-input></div>
+      <n-alert v-if="store.scopeError" type="warning" :show-icon="false" class="app-picker-message">注入状态读取失败：{{ store.scopeError }} <n-button text size="small" @click="refreshScope">重试</n-button></n-alert><p v-else-if="store.scopeReady===false" class="app-picker-message" role="status">读取注入状态…</p>
+      <div class="app-list-heading"><span></span><span>允许注入</span></div>
+      <n-alert v-if="toastMsg && messageType==='error'" type="error" :show-icon="false" class="app-picker-message">{{ toastMsg }}</n-alert><p v-else-if="toastMsg" class="app-picker-message app-picker-success" role="status">{{ toastMsg }}</p>
+      <n-virtual-list v-if="apps.length" class="app-virtual" :items="apps" :item-size="64" key-field="package"><template #default="{item:a}">
+        <div class="app-row"><n-button quaternary class="app-item" :class="{active:a.package===store.chosenPkg}" :aria-pressed="a.package===store.chosenPkg" :title="a.label||a.package" :loading="picking===a.package" :disabled="busy" @click="pick(a.package)">
+          <span class="app-face"><span class="app-dialog-letter">{{ itemInitial(a.label,a.package) }}</span><img v-if="a.hasIcon!==false" :src="appIconUrl(a.package,iconSerial,a.iconVersion)" alt="" loading="lazy" @error="($event.target as HTMLElement).style.display='none'" /></span>
+          <span class="app-copy"><span class="app-name">{{ a.label||a.package }}</span><span v-if="a.label&&a.label!==a.package" class="app-pkg">{{ a.package }}</span></span><span v-if="onlinePackages.has(a.package)" class="app-state on">采集在线</span>
+        </n-button><n-switch class="app-inject-sw" size="small" :aria-label="'允许注入 '+(a.label||a.package)" :value="store.scope.has(a.package)" :loading="scopePending===a.package" :disabled="scopeDisabled(a.package)" :aria-disabled="scopeDisabled(a.package)" :title="store.scopeReady===false?'注入状态尚未确认':'允许下次启动时注入'" @update:value="on=>toggleInject(a.package,!!on)" /></div>
+      </template></n-virtual-list><div v-else class="app-empty" :role="store.appsError?'alert':'status'">{{ store.appsError||emptyText }}</div>
     </div>
   </n-modal>
 </template>
-
 <style scoped>
-.app-picker-layout { width:100%; height:100%; border:0; border-radius:0; }
-.app-dialog-side .n-button { justify-content:flex-start; }
-.app-dialog-side .n-button[aria-pressed="true"] { background:var(--surface-2); color:var(--ink); }
-.app-dialog-card { flex:none; }
-.app-dialog-id { overflow:hidden; }
-.app-dialog-actions { flex:none; flex-wrap:wrap; }
-.app-item { height:52px; }
-.app-item :deep(.n-button__content) { display:flex; align-items:center; gap:10px; width:100%; min-width:0; }
-.app-item .app-copy { text-align:left; overflow:hidden; }
-.app-picker-message { flex:none; margin:0 6px 8px; overflow-wrap:anywhere; }
-.app-picker-success { padding:8px 12px; color:var(--green); }
-@media (max-width:700px) {
-  .app-picker-layout { width:100%; height:100%; }
-  .app-dialog-side .n-button { flex:1; width:auto; justify-content:center; }
-  .app-dialog-actions { width:100%; justify-content:flex-end; }
-  .app-item :deep(.n-button__content) { gap:8px; }
-  .app-inject-sw { margin-right:8px; }
-  .app-state { font-size:10px; }
-}
+.app-picker-simple{display:flex;flex-direction:column;width:100%;min-height:0;color:var(--ink)}.app-picker-tabs{display:flex;gap:14px;padding:0 18px;border-bottom:1px solid var(--line)}.app-picker-tabs .n-button{height:46px;border-bottom:2px solid transparent;border-radius:0;font-size:13px}.app-picker-tabs .n-button[aria-pressed=true]{border-bottom-color:var(--ink);font-weight:600}.dialog-search{padding:16px 18px 10px}.app-list-heading{display:flex;justify-content:space-between;padding:0 22px 6px;color:var(--muted);font-size:12px}.app-virtual{flex:1;min-height:0;padding:0 10px 10px}.app-row{display:flex;align-items:center;gap:14px;min-height:64px;padding-right:14px}.app-item{flex:1;min-width:0;height:64px;padding:8px 10px}.app-item :deep(.n-button__content){display:flex;align-items:center;gap:12px;width:100%;min-width:0}.app-face{width:36px;height:36px;flex:none}.app-face img,.app-dialog-letter{width:36px;height:36px;border-radius:8px}.app-copy{display:flex;flex-direction:column;gap:3px;min-width:0;text-align:left;flex:1}.app-name,.app-pkg{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.app-name{font-size:13px;font-weight:500}.app-pkg{font-size:11px;color:var(--muted)}.app-state{font-size:12px;flex:none;color:var(--green)}.app-inject-sw{flex:none}.app-picker-message{margin:0 18px 10px}.app-empty{padding:60px 20px;text-align:center;color:var(--muted)}
+@media(max-width:500px){.app-row{gap:8px;padding-right:8px}.app-state{display:none}.app-picker-tabs{padding-inline:12px}.dialog-search{padding-inline:12px}.app-name{font-size:13px}}
 </style>

@@ -4,7 +4,7 @@ import { computed, ref, watch } from 'vue';
 import type { Cap } from '../api';
 import { captureHookMethod, captureHookSession } from '../capture_hook_link';
 import { getCaptureControls, deleteCapture } from '../api';
-import { catClass, cryptoView, captureLengths, captureLengthText, inputEvidence, CATLABEL } from '../capview';
+import { catClass, cryptoView, captureLengths, captureLengthText, inputEvidence, systemRow, systemPath, CATLABEL } from '../capview';
 import { store, toast } from '../store';
 import { CopyOutline } from '@vicons/ionicons5';
 
@@ -206,7 +206,7 @@ async function doDelete() {
         <h2>
           <span class="cat-dot" :class="catClass(c)"></span>
           <template v-if="isCrypto">{{ cv?.title }}<template v-if="cv?.direction"> · {{ cv.direction }}</template></template>
-          <template v-else>#{{ c.id }} {{ c.algo || c.func }}</template>
+          <template v-else>#{{ c.id }} {{ isFile ? systemRow(c).method : c.algo || c.func }}</template>
         </h2>
         <div class="sub">
           {{ [cv?.hook, new Date(c.ts).toLocaleString(), c.tid ? `tid ${c.tid}` : '', cv?.truncated ? '输入已截断' : '', cv?.outputTruncated ? '输出已截断' : ''].filter(Boolean).join(' · ') }}
@@ -265,9 +265,9 @@ async function doDelete() {
         <div class="io-field">
           <div class="io-field-label">路径</div>
           <div class="io-data">
-            <pre>{{ c.path || ((c.func === 'open' || c.func === 'openat') ? c.preview : '') || '未记录' }}</pre>
+            <pre>{{ systemPath(c) || '未记录' }}</pre>
             <n-button quaternary circle size="small" class="blk-copy" title="复制路径" aria-label="复制路径"
-              @click="copy(c.path || ((c.func === 'open' || c.func === 'openat') ? c.preview || '' : '') || '')">
+              @click="copy(systemPath(c))">
               <n-icon size="15" :component="CopyOutline" />
             </n-button>
           </div>
@@ -398,7 +398,7 @@ async function doDelete() {
   max-height: 46vh;
   overflow: auto;
 }
-.io-data pre.mono { font-family: ui-monospace, Consolas, 'Cascadia Mono', monospace; }
+.io-data pre.mono { white-space:pre; word-break:normal; overflow-wrap:normal; max-width:100%; font-family: ui-monospace, Consolas, 'Cascadia Mono', monospace; }
 /* 复制按钮：naive-ui 圆形图标按钮，悬停/聚焦数据块才显现，定位不变 */
 .blk-copy {
   position: absolute; top: 6px; right: 6px;
@@ -415,4 +415,5 @@ async function doDelete() {
   background: rgba(128, 128, 128, 0.05);
 }
 .stack-box pre { margin: 0; padding: 10px 12px; font-size: 12px; max-height: 34vh; overflow: auto; }
+@media(max-width:620px){.detail-head-main{width:100%}.detail-menu{margin-left:auto}.detail-head-main .sub{word-break:normal;overflow-wrap:break-word}}
 </style>
