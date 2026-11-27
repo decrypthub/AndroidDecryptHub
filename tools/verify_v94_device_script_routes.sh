@@ -19,6 +19,12 @@ const fs = await import('node:fs');
 const path = await import('node:path');
 const problems = [];
 const notes = [];
+const {createRequire}=await import('node:module');
+const ts=createRequire(path.join(root,'daemon/package.json'))('typescript');
+const prefixPaths=new Set();
+function declarations(text){const source=ts.createSourceFile('routes.ts',text,ts.ScriptTarget.Latest,true),out=[];const walk=n=>{if(ts.isObjectLiteralExpression(n)){const props=new Map(n.properties.filter(ts.isPropertyAssignment).map(p=>[p.name.getText(source).replaceAll(/['\"]/g,''),p.initializer]));const p=props.get('path');if(p&&ts.isStringLiteral(p)&&props.has('handler'))out.push({path:p.text,prefix:props.get('prefix')?.kind===ts.SyntaxKind.TrueKeyword});}n.forEachChild(walk);};walk(source);return out;}
+const proof=declarations("[{path:'/api/operations',prefix:true,handler:async()=>{}},{path:'/api/ghost',prefix:true},{path:'/',prefix:true,handler:()=>{}}]");
+if(proof.length!==2||!proof.find(p=>p.path==='/api/operations')?.prefix||proof.some(p=>p.path==='/api/ghost'))problems.push('route declaration AST negative controls failed');
 
 // ---- every path the daemon declares ----
 const routePaths = new Set();
@@ -28,7 +34,7 @@ const walk = (dir) => {
     if (e.isDirectory()) walk(p);
     else if (e.name.endsWith('.ts')) {
       const src = fs.readFileSync(p, 'utf8');
-      for (const m of src.matchAll(/path:\s*'([^']+)'/g)) routePaths.add(m[1]);
+      for(const r of declarations(src)){routePaths.add(r.path);if(r.prefix&&r.path.startsWith('/api/'))prefixPaths.add(r.path);}
     }
   }
 };
@@ -39,7 +45,7 @@ if (routePaths.size < 50) problems.push(`only ${routePaths.size} route paths fou
 // Only /api/... routes are comparable with what the scripts call, and a prefix of '/' (the static
 // file / SPA route) would 'serve' every path - which would make this check pass no matter what.
 const apiRoutes = new Set([...routePaths].filter((p) => p.startsWith('/api/')));
-const prefixes = [...apiRoutes].filter((p) => p.endsWith('/') && p !== '/');
+const prefixes = [...prefixPaths];
 
 // ---- every /api/... the acceptance scripts reference ----
 const referenced = new Map();
@@ -80,9 +86,11 @@ if (problems.length) {
 }
 EOF
 )"
+rc=$?
 set -e
 echo "$OUT"
-if grep -q '^RESULT:FAIL' <<<"$OUT"; then
+if [ "$rc" -ne 0 ]; then echo "RESULT:FAIL route scanner exited $rc"; exit "$rc"; fi
+if ! grep -q '^RESULT:PASS' <<<"$OUT" || grep -q '^RESULT:FAIL' <<<"$OUT"; then
   echo "❌ v4.87 device-script routes FAIL"
   exit 1
 fi

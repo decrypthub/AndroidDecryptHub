@@ -20,6 +20,7 @@ verify_resolve_env_host
 set +e
 OUT="$(node - "$ROOT" "$BASE" <<'EOF'
 import { readFile } from 'node:fs/promises';
+import {spawnSync} from 'node:child_process';
 
 const [root, base] = process.argv.slice(2);
 const checks = [];
@@ -50,14 +51,12 @@ const droppedAged = mod.pruneSessions(now);
 chk('pruner drops offline sessions past retention', droppedAged.includes('stale'));
 mod.sessions.clear();
 
-// --- picker markup / CSS ------------------------------------------------------------------
-const html = await readFile(`${root}/daemon/public/index.html`, 'utf8');
-chk('picker hides offline sessions by default', /showOffline\?all:all\.filter\(a=>a\.online\)/.test(html.replace(/\s+/g, '')));
-chk('picker has an offline toggle', html.includes('id="sessShowOffline"'));
-chk('picker reports how many are hidden', html.includes('已隐藏'));
-chk('option popup has an explicit background', /select option \{ background:#11151c; color:var\(--ink\); \}/.test(html));
-chk('session select is opaque (not background:transparent)', /\.sess-lab select \{[^}]*background:var\(--surface-2\)/.test(html));
-
+// The process picker is now a themed Vue select with an explicit non-executing offline config.
+// Capture history is package+device-scoped and outlives pruned sessions, including uninstalled apps.
+const ui=spawnSync(process.execPath,['--test','--test-reporter=tap',root+'/panel/test/offline-history.test.mjs',root+'/panel/test/hook-manager.test.mjs',root+'/panel/test/product-surface.test.mjs'],{encoding:'utf8',env:{...process.env,ADH_PANEL_ROOT:root+'/panel'}});
+chk('Vue online-only process picker, offline config/history and opaque popup theme',ui.status===0&&Number(/# pass (\d+)/.exec(ui.stdout??'')?.[1]??0)>=21&&Number(/# fail (\d+)/.exec(ui.stdout??'')?.[1]??-1)===0);if(ui.status!==0)console.log(ui.stdout,ui.stderr);
+const history=spawnSync(process.execPath,[root+'/daemon/test/run.mjs','--test-reporter=tap',root+'/daemon/test/offline_history.test.ts'],{encoding:'utf8'});
+chk('actual scoped disk stats and HTTP history/list/detail survive session pruning',history.status===0&&Number(/# pass (\d+)/.exec(history.stdout??'')?.[1]??0)>=3&&Number(/# fail (\d+)/.exec(history.stdout??'')?.[1]??-1)===0);if(history.status!==0)console.log(history.stdout,history.stderr);
 // --- live bound (only when a daemon is up) ------------------------------------------------
 let live = null;
 try {

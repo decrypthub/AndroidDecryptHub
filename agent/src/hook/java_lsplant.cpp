@@ -177,7 +177,7 @@ static pthread_once_t g_init_once = PTHREAD_ONCE_INIT;
 static JNIEnv *g_init_env = nullptr;
 
 static void set_init_error(const char *message) {
-    if (!message) message = "unknown LSPlant initialization failure";
+    if (!message) message = "unknown ART hook initialization failure";
     std::strncpy(g_init_error, message, sizeof(g_init_error) - 1);
     g_init_error[sizeof(g_init_error) - 1] = 0;
 }
@@ -1088,7 +1088,7 @@ extern "C" int adh_javahook_hook_method_owned(JNIEnv *env, int owner, const char
         env->DeleteLocalRef(callback);
         env->DeleteGlobalRef(bridge);
         env->DeleteLocalRef(target);
-        return fail_hook("LSPlant threw during installation");
+        return fail_hook("ART hook threw during installation");
     }
     env->DeleteLocalRef(callback);
     if (!backup) {

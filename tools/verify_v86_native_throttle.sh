@@ -63,7 +63,9 @@ has(hdr, 'int throttle_ms', 'native_hooks.h has the throttle argument');
 has(hdr, 'int *hook_id_out', 'native_hooks.h install returns the hook id');
 has(hdr, 'suppresses EVENTS ONLY', 'native_hooks.h must state that only the event is suppressed');
 
-const hooks = read('agent/src/hook/native_hooks.cpp');
+const callback = read('agent/src/hook/native_hooks_record.cpp');
+const hooks = read('agent/src/hook/native_hooks.cpp')+'\n'+callback;
+if(!read('agent/CMakeLists.txt').includes('src/hook/native_hooks_record.cpp'))problems.push('shipping CMake must compile native callback owner');
 has(hooks, 'ADH_NATIVE_THROTTLE_MAX_MS', 'native_hooks.cpp must clamp with the shared ceiling');
 has(hooks, 'g_native_hook_throttled_total', 'native_hooks.cpp suppressed-hit total');
 has(hooks, '\\"throttled\\":%llu', 'native_hooks.cpp event must carry the suppressed delta');
@@ -74,29 +76,29 @@ has(hooks, '\\"throttleMs\\":%d,\\"throttled\\":%llu', 'native_hooks.cpp status 
 has(hooks, 'ctx.throttle_ms = 0;', 'native_hooks.cpp must clear the window on slot reuse');
 // Ordering is the honesty invariant: the arg/return rewrite first, then the throttle gate, and the
 // suppressed path returns BEFORE any JSON is built (no event, but the rewrite already happened).
-before(hooks, 'if (arg_index >= 0 && arg_index < 8) regs[arg_index] = arg_value;',
+before(callback, 'if (arg_index >= 0 && arg_index < 8) regs[arg_index] = arg_value;',
        'const int throttle_ms = __atomic_load_n(&ctx.throttle_ms', 'throttle gate placement');
 // The event buffer is sized from the caps, so its declaration carries the trace allowance now. Match the
 // prefix instead of the old literal: the ORDERING is what matters, not the buffer size.
-before(hooks, 'const int throttle_ms = __atomic_load_n(&ctx.throttle_ms', 'char json[3072', 'throttle gate must precede the event build');
+before(callback, 'const int throttle_ms = __atomic_load_n(&ctx.throttle_ms', 'char json[3072', 'throttle gate must precede the event build');
 const gate = hooks.slice(hooks.indexOf('const int throttle_ms = __atomic_load_n(&ctx.throttle_ms'), hooks.indexOf('char json[3072'));
 if (!/return \(?skip_original \|\| return_set\)? \? 1 : 0;/.test(gate)) problems.push('a suppressed hit must return either the configured replacement or the original-skip result for the site backend');
 if (!/fetch_add\(1, std::memory_order_relaxed\)/.test(gate)) problems.push('a suppressed hit must be counted, not dropped silently');
 // And the in-hook trace (which EXECUTES the traced function) must also sit behind the gate: a suppressed
 // hit must not pay for a run, let alone emit one.
-before(hooks, 'const int throttle_ms = __atomic_load_n(&ctx.throttle_ms', 'adh_qbdi_run_from_watch', 'a suppressed hit must not trace');
+before(callback, 'const int throttle_ms = __atomic_load_n(&ctx.throttle_ms', 'adh_qbdi_run_from_watch', 'a suppressed hit must not trace');
 // The per-event delta is the one subtle piece: load+store would let two concurrent emitters both
 // claim the same suppressed hits (the totals would still add up, the deltas would lie).
 has(hooks, 'exchange(total, std::memory_order_relaxed)', 'the suppressed delta must be taken with exchange');
 if (/g_native_hook_throttled_reported\[hook_id\]\.load/.test(hooks)) problems.push('the reported counter must never be read with a plain load');
 notes.push('agent: rewrite before gate, suppressed hits counted and answered');
 
-const main = read('agent/src/bootstrap/agent_main.c');
-has(main, 'json_get_num(line, "throttleMs")', 'agent_main.c must parse throttleMs');
-has(main, 'ADH_NATIVE_THROTTLE_MAX_MS', 'agent_main.c must clamp with the shared ceiling');
-if (/nthrottle > 60000/.test(main)) problems.push('agent_main.c must not hardcode 60000 (it would drift from the header)');
+const main = read('agent/src/bootstrap/agent_cmds.c');
+has(main, 'json_get_num(line, "throttleMs")', 'agent_cmds.c must parse throttleMs');
+has(main, 'ADH_NATIVE_THROTTLE_MAX_MS', 'agent_cmds.c must clamp with the shared ceiling');
+if (/nthrottle > 60000/.test(main)) problems.push('agent_cmds.c must not hardcode 60000 (it would drift from the header)');
 has(read('agent/src/hook/native_hooks.h'), '#define ADH_NATIVE_THROTTLE_MAX_MS 60000', 'the ceiling must be defined once, in the header');
-has(main, 'backtrace_flag, nthrottle_ms', 'agent_main.c must pass the window into cmd_native_hook');
+has(main, 'backtrace_flag, nthrottle_ms', 'agent_cmds.c must pass the window into cmd_native_hook');
 
 // ---- 3. host tools really send it ----
 has(read('daemon/src/native_hook_all.ts'), 'nativeHookInstallPayload(', 'native_hook_all must use the shared payload');

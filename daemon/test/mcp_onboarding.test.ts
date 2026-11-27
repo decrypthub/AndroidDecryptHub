@@ -51,9 +51,14 @@ test('the connect target drops the scheme and any trailing slash', () => {
   assert.equal(adhConnectTarget('http://[::1]:8088'), '[::1]:8088');
 });
 
-test('the analysis page does not render or fetch MCP onboarding', () => {
-  const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
-  assert.doesNotMatch(html, /\bmcp(?:Btn|Mask|Install|Connect|Config)\b|\/api\/mcp\/config/);
+test('analysis chrome has no onboarding; the opt-in advanced settings link is present in the built product', () => {
+  const read=(file:string)=>readFileSync(new URL(file,import.meta.url),'utf8');
+  const html=read('../public/index.html'),app=read('../../panel/src/App.vue'),advanced=read('../../panel/src/components/AdvancedHostSettings.vue');
+  assert.doesNotMatch(html,/\bmcp(?:Btn|Mask|Install|Connect|Config)\b/);
+  assert.doesNotMatch(app,/\/api\/mcp\/config|mcpOnboarding|McpOnboarding/);
+  assert.match(advanced,/href="\/api\/mcp\/config" target="_blank"/);
+  assert.doesNotMatch(advanced.split('</script>')[0],/\/api\/mcp\/config/);
+  assert.ok(html.includes('/api/mcp/config'),'advanced action absent from built artifact');
 });
 
 test('package names are validated before they reach a URL path', () => {

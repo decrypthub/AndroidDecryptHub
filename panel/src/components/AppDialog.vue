@@ -3,12 +3,13 @@ import { computed, ref, watch } from 'vue';
 import { NAlert, NModal, NVirtualList } from 'naive-ui';
 import { SearchOutline } from '@vicons/ionicons5';
 import { store, choosePackage } from '../store';
-import { appIconUrl, scopeAdd, scopeRemove, appControl, observePackage } from '../api';
+import { appIconUrl, scopeAdd, scopeRemove, appControl, observePackage, getCapturePackages, type AppInfo } from '../api';
 
 const props = defineProps<{ show: boolean }>();
 const emit = defineEmits<{ close: [] }>();
-const tab = ref<'user' | 'system' | 'injected'>('user');
+const tab = ref<'user' | 'system' | 'injected' | 'history'>('user');
 const q = ref('');
+const historyApps=ref<Array<AppInfo&{history:true}>>([]),historyLoading=ref(false),historyError=ref('');let historyRequest=0;
 const toastMsg = ref('');
 const messageType = ref<'success' | 'error'>('error');
 const picking = ref('');
@@ -19,13 +20,13 @@ const busy = computed(() => !!(picking.value || scopePending.value || controllin
 watch(() => props.show, open => {
   if (open) { q.value = ''; tab.value = 'user'; toastMsg.value = ''; }
 });
-const tabs = [['user', '应用'], ['system', '系统'], ['injected', '注入范围']] as const;
+const tabs = [['user', '应用'], ['system', '系统'], ['injected', '注入范围'], ['history','历史']] as const;
 
 const apps = computed(() => {
-  let list = store.apps;
+  let list:Array<AppInfo&{history?:boolean}> = tab.value==='history'?historyApps.value:store.apps;
   if (tab.value === 'user') list = list.filter(a => !a.system);
   else if (tab.value === 'system') list = list.filter(a => a.system);
-  else list = [...list].sort((a,b)=>Number(store.scope.has(b.package))-Number(store.scope.has(a.package))||(a.label||a.package).localeCompare(b.label||b.package));
+  else if(tab.value==='injected') list = [...list].sort((a,b)=>Number(store.scope.has(b.package))-Number(store.scope.has(a.package))||(a.label||a.package).localeCompare(b.label||b.package));
   const s = q.value.trim().toLowerCase();
   if (s) list = list.filter(a =>
     (a.package + ' ' + (a.label ?? '')).toLowerCase().includes(s));
@@ -41,9 +42,19 @@ const onlinePackages = computed(() => {
   const sessionId = dev?.agent?.sessionId || dev?.appSession;
   return new Set([...store.sessions.values()].filter(s => s.online && (s.deviceBinding?.serial ? s.deviceBinding.serial===dev?.serial : s.sessionId===sessionId)).map(s => s.package));
 });
-const canControl = computed(() => store.scope.has(store.chosenPkg));
+const canControl = computed(() => store.scope.has(store.chosenPkg)&&store.apps.some(a=>a.package===store.chosenPkg));
 const emptyText = computed(() => q.value.trim() ? '没有匹配的应用' : '没有应用');
 
+async function loadHistory(){
+ const token=++historyRequest,key=store.selectedDeviceKey,serial=iconSerial.value;historyError.value='';historyApps.value=[];
+ if(!serial){historyError.value='请先选择设备';return;}historyLoading.value=true;
+ try{const reply=await getCapturePackages(serial);if(token!==historyRequest||key!==store.selectedDeviceKey)return;
+  historyApps.value=reply.packages.filter(p=>p.lines>0).sort((a,b)=>b.newestTs-a.newestTs).map(p=>{const installed=store.apps.find(a=>a.package===p.package);return{...installed,package:p.package,label:installed?.label||p.package,system:installed?.system??false,hasIcon:installed?.hasIcon??false,history:true};});
+ }catch(e){if(token===historyRequest)historyError.value=(e as Error).message||'读取历史应用失败';}
+ finally{if(token===historyRequest)historyLoading.value=false;}
+}
+watch(()=>props.show,open=>{if(open)void loadHistory();else{historyRequest++;historyLoading.value=false;}});
+watch(()=>store.selectedDeviceKey,()=>{q.value='';historyApps.value=[];if(props.show)void loadHistory();else historyRequest++;});
 function reportError(e: unknown, fallback: string) {
   messageType.value = 'error';
   toastMsg.value = e instanceof Error && e.message ? e.message : fallback;
@@ -62,7 +73,7 @@ async function pick(pkg: string) {
   const deviceKey = store.selectedDeviceKey;
   try {
     // 先确认观察请求，失败保留原应用/窗口；不能把未完成的切换显示成成功。
-    if (store.localUsb) {
+    if (store.localUsb && tab.value!=='history') {
       if (!dev?.serial) throw new Error('设备不可用，请先选择设备');
       await observePackage(dev.serial, pkg);
     }
@@ -121,7 +132,7 @@ async function control(action: 'open' | 'stop' | 'restart') {
           </span>
           <div class="app-dialog-id">
             <strong :title="chosenLabel">{{ chosenLabel }}</strong>
-            <span :title="store.chosenPkg">{{ store.chosenPkg || '从下方列表选择要观测的应用' }}</span>
+            <span v-if="chosenLabel!==store.chosenPkg || !store.chosenPkg" :title="store.chosenPkg">{{ store.chosenPkg || '从下方列表选择要观测的应用' }}</span>
           </div>
           <div class="app-dialog-actions">
             <template v-if="canControl">
@@ -151,11 +162,12 @@ async function control(action: 'open' | 'stop' | 'restart') {
                   </span>
                   <span class="app-copy">
                     <span class="app-name">{{ a.label || a.package }}</span>
-                    <span class="app-pkg">{{ a.package }}</span>
+                    <span v-if="a.label && a.label!==a.package" class="app-pkg">{{ a.package }}</span>
                   </span>
-                  <span v-if="onlinePackages.has(a.package)" class="app-state on">采集在线</span>
+                  <span v-if="a.history" class="app-state">历史记录</span>
+                  <span v-else-if="onlinePackages.has(a.package)" class="app-state on">采集在线</span>
                 </n-button>
-                <span v-if="tab!=='injected' && store.scope.has(a.package)" class="app-state">允许注入</span>
+                <span v-if="tab!=='injected' && tab!=='history' && store.scope.has(a.package)" class="app-state">允许注入</span>
                 <n-switch v-if="tab==='injected'" size="small" class="app-inject-sw" :aria-label="`允许注入 ${a.label || a.package}`" :value="store.scope.has(a.package)"
                   :loading="scopePending === a.package" :disabled="scopeDisabled(a.package)" :aria-disabled="scopeDisabled(a.package)"
                   :title="a.package === store.chosenPkg && store.scope.has(a.package) ? '当前观察应用不能移出注入范围' : '允许下次启动时注入'"
@@ -163,8 +175,10 @@ async function control(action: 'open' | 'stop' | 'restart') {
               </div>
             </template>
           </n-virtual-list>
-          <div v-if="store.appsError" class="app-empty" role="alert">{{ store.appsError }}</div>
-          <div v-else-if="!apps.length" class="app-empty" role="status">{{ store.appsFailed ? '读取失败，保留上次清单' : emptyText }}</div>
+          <div v-if="tab==='history' && historyLoading" class="app-empty" role="status">读取历史应用…</div>
+          <div v-else-if="tab==='history' && historyError" class="app-empty" role="alert">{{ historyError }}</div>
+          <div v-else-if="store.appsError && tab!=='history'" class="app-empty" role="alert">{{ store.appsError }}</div>
+          <div v-else-if="!apps.length" class="app-empty" role="status">{{ tab==='history'&&!q.trim() ? '此设备没有已保留的历史记录' : store.appsFailed&&tab!=='history' ? '读取失败，保留上次清单' : emptyText }}</div>
         </div>
       </div>
     </div>

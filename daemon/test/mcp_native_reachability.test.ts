@@ -86,3 +86,10 @@ test('root_watch retains the selected agent generation across its MCP adapter',(
   const ticks=property(target,'starttimeTicks');
   assert.equal(ticks.getText(mcp),'s.starttimeTicks');
 });
+
+const {captureControlReachability}=await import('../../tools/lib/mcp_capture_reachability.mjs');
+const root=fileURLToPath(new URL('../../',import.meta.url)),ownerText=readFileSync(new URL('../src/capture_controls.ts',import.meta.url),'utf8'),mcpText=readFileSync(new URL('../src/mcp.ts',import.meta.url),'utf8');
+test('capture_controls has a proven action/factory/constructor-bound transport closure, not an internal-op bypass',()=>{const r=captureControlReachability(root);assert.equal(r.ok,true,r.problems.join(';'));for(const op of ['capture_methods','java_capture','capture_policy','capture_start','capture_stop'])assert.ok(r.ops.includes(op),op);});
+test('closure rejects a detached MCP handler or unrelated factory transport',()=>{for(const mutation of [{mcp:mcpText.replace('handler:captureControlAction','handler:unrelatedAction')},{owner:ownerText.replace('command:sendCmd','command:unrelatedTransport')}]){const r=captureControlReachability(root,mutation);assert.equal(r.ok,false);assert.deepEqual(r.ops,[]);}});
+test('closure cannot count local command literals when the forwarder substitutes its operation',()=>{const r=captureControlReachability(root,{owner:ownerText.replace('this.deps.command(a.session,op,args)',"this.deps.command(a.session,wrongOp,args)")});assert.equal(r.ok,false);assert.deepEqual(r.ops,[]);});
+test('closure cannot invent dynamic catalog reachability when the domain reader drops its op',()=>{const r=captureControlReachability(root,{owner:ownerText.replace("this.deps.command(a.session,op,{action:'status'})","this.deps.command(a.session,unrelated,{action:'status'})")});assert.equal(r.ok,false);assert.deepEqual(r.ops,[]);});

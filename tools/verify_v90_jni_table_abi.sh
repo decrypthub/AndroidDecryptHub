@@ -54,7 +54,13 @@ fns.forEach((f, i) => abi.set(f, reserved.length + i));
 notes.push(`jni.h: ${reserved.length} reserved + ${fns.length} functions = ${abi.size} slots`);
 
 // ---- 2. what the agent claims: slot name -> spec index ----
-const src = fs.readFileSync(agentPath, 'utf8');
+const path = require('path'), runtime = path.dirname(agentPath);
+const cmake=fs.readFileSync(path.join(runtime,'../../CMakeLists.txt'),'utf8');
+const units=[...cmake.matchAll(/src\/runtime\/(jni_env_[a-z_]+\.c)/g)].map(m=>m[1]);
+if(!units.includes('jni_env_hooks.c')||!units.includes('jni_env_calls.c')||!units.includes('jni_env_fixed.c'))problems.push('shipping JNI translation units absent from CMake');
+const dispatcher=fs.readFileSync(agentPath,'utf8');
+if(!dispatcher.includes('#include \"jni_env_hooks_internal.h\"'))problems.push('JNI dispatcher no longer includes its slot registry');
+const src=[fs.readFileSync(path.join(runtime,'jni_env_hooks_internal.h'),'utf8'),...units.map(f=>fs.readFileSync(path.join(runtime,f),'utf8'))].join('\n');
 const claimed = new Map();
 for (const m of src.matchAll(/case ENV_SLOT_([A-Za-z0-9_]+):\s*return (\d+);/g)) claimed.set(m[1], Number(m[2]));
 

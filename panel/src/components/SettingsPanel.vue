@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import HookManager from './HookManager.vue';
+import AdvancedHostSettings from './AdvancedHostSettings.vue';
 import { appearance, setAppearance } from '../appearance';
 import { ref, computed, watch, onMounted } from 'vue';
 import {
@@ -239,6 +240,7 @@ watch(page,p=>{if(p==='records')takeSnap();if(p==='conn')void refreshStatus();})
               </div>
             </div>
           </div></details>
+          <AdvancedHostSettings />
         </section>
 
       </div>

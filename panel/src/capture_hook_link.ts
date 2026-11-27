@@ -9,5 +9,5 @@ export function captureHookMethod(c:Cap,methods:any[]):any|null {
 /** A historical record defaults to offline config unless its full immutable process proof survives. */
 export function captureHookSession(c:Cap,sessions:Session[]):string {
  const b=c.deviceBinding,s=sessions.find(s=>s.sessionId===c.sessionId),p=s?.deviceBinding?.process;
- return b&&s?.online&&s.package===c.package&&s.deviceBinding?.serial===b.serial&&p&&p.pid===b.process.pid&&p.uid===b.process.uid&&p.starttimeTicks===b.process.starttimeTicks?s.sessionId:'';
+ return b&&!!b.leaseId&&!!b.transportId&&s?.deviceBinding?.leaseId===b.leaseId&&s.deviceBinding.transportId===b.transportId&&s?.online&&s.package===c.package&&s.deviceBinding?.serial===b.serial&&p&&p.pid===b.process.pid&&p.uid===b.process.uid&&p.starttimeTicks===b.process.starttimeTicks?s.sessionId:'';
 }

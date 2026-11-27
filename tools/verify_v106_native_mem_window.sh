@@ -28,16 +28,18 @@ const has = (text, needle, label) => {
 };
 const mcp = read('daemon/src/mcp.ts');
 const routes = read('daemon/src/http/routes_runtime.ts');
-const agent = read('agent/src/hook/native_hooks.cpp');
+const record = read('agent/src/hook/native_hooks_record.cpp'), spec = read('agent/src/hook/native_hooks_spec.cpp');
+for(const unit of ['record','spec'])if(!read('agent/CMakeLists.txt').includes('src/hook/native_hooks_'+unit+'.cpp'))problems.push('shipping native memory owner missing '+unit);
 const header = read('agent/src/hook/native_hooks.h');
 const state = read('daemon/src/state.ts');
 has(mcp, 'parseMemWindows', 'mcp');
 has(mcp, 'mem: memSpec', 'mcp payload');
 has(routes, 'parseMemSpec', 'rest');
 has(routes, 'mem: memSpec', 'rest payload');
-has(agent, 'process_vm_readv', 'agent copy');
-has(agent, 'NATIVE_HOOK_MEM', 'agent companion event');
-has(agent, 'memcmp(spec, "auto", 4)', 'agent auto spec');
+has(spec, 'process_vm_readv', 'agent copy');
+has(record, 'NATIVE_HOOK_MEM', 'agent companion event');
+has(record, 'hook_mem_copy(', 'agent callback uses bounded copy implementation');
+has(spec, 'memcmp(spec, "auto", 4)', 'agent auto spec');
 has(state, "func === 'NATIVE_HOOK_MEM'", 'capture category');
 has(state, 'memCapturePreview', 'capture preview');
 // The caps are asserted as a CROSS-CHECK, not as literals: the agent header and the daemon constant

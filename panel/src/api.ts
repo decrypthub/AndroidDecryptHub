@@ -54,11 +54,11 @@ function notePerf(label: string, ms: number) {
 let lastPerf = { label: '', ms: 0, at: 0 };
 export function perfLast() { return lastPerf; }
 
-export async function api<T = unknown>(path: string, init?: RequestInit, timeoutMs = 8000): Promise<T> {
+export async function api<T = unknown>(path: string, init?: RequestInit, timeoutMs = 8000, explicitScope?:{serial?:string;package?:string}): Promise<T> {
   const label = `${init?.method ?? 'GET'} ${path.split('?')[0]}`;
   const t0 = performance.now();
   try {
-    const res = await fetch(path, { ...init, headers:scopeHeaders(path,init?.headers), signal: AbortSignal.timeout(timeoutMs), cache: 'no-store' });
+    const res = await fetch(path, { ...init, headers:scopeHeaders(path,init?.headers,explicitScope), signal: AbortSignal.timeout(timeoutMs), cache: 'no-store' });
     if (!res.ok) {
       const data = await res.json().catch(() => null) as { error?: unknown } | null;
       const reason = typeof data?.error === 'string' ? data.error : '';
@@ -306,7 +306,43 @@ export const getCaptureControls=(serial:string,pkg:string,session?:string)=>api<
 export async function writeCaptureControls(view:CaptureControlsView,action:'discover'|'save'|'apply',config?:unknown,confirmRisk=false){
  const control=action==='save'?(view.saveControl??view.control):view.control;
  const body={action,serial:view.serial,package:view.package,...(view.session?{session:view.session}:{}),expectedRevision:view.revision,runtimeToken:view.runtime?.token,config,confirmRisk,
- _operation:{expectedRevision:control.revision,controlEpoch:control.epoch,hostEpoch:control.hostEpoch,idempotencyKey:crypto.randomUUID(),timeoutMs:45000}};
+ _operation:{expectedRevision:control.revision,controlEpoch:control.epoch,hostEpoch:control.hostEpoch,idempotencyKey:operationId(),timeoutMs:45000}};
  // Use the frozen view's target even if the user changes tabs before the request begins.
  return postDetail<any>('/api/capture/controls',body,50000,{'x-adh-device-serial':view.serial,'x-adh-package':view.package});
 }
+
+// randomUUID is secure-context-only in browsers; LAN HTTP still supports getRandomValues.
+export function operationId():string {
+ if(typeof globalThis.crypto?.randomUUID==='function')return crypto.randomUUID();
+ if(typeof globalThis.crypto?.getRandomValues!=='function')throw new Error('浏览器缺少安全随机数，未提交操作');
+ const b=crypto.getRandomValues(new Uint8Array(16));b[6]=(b[6]&15)|64;b[8]=(b[8]&63)|128;
+ const h=Array.from(b,n=>n.toString(16).padStart(2,'0')).join('');return h.slice(0,8)+'-'+h.slice(8,12)+'-'+h.slice(12,16)+'-'+h.slice(16,20)+'-'+h.slice(20);
+}
+export interface HostSettingsControl {resource:string;revision:number;epoch:number;hostEpoch:number}
+export interface HostSettingsView {settings:Record<string,unknown>;control:HostSettingsControl}
+let hostSettingsClient='';
+async function hostSettingsRequest(path:string,init?:RequestInit) {
+ if(!hostSettingsClient)hostSettingsClient=operationId();
+ const headers=new Headers(init?.headers);headers.set('x-adh-client-id',hostSettingsClient);
+ let response:Response,body:any;
+ try{response=await fetch(path,{...init,headers,cache:'no-store',signal:AbortSignal.timeout(12000)});body=await response.json();}
+ catch{throw Object.assign(new Error(init?.method==='POST'?'结果未确认；请刷新核查，不要直接重发导入。':'读取电脑端设置失败'),{uncertain:init?.method==='POST',code:'TRANSPORT_UNCONFIRMED'});}
+ if(!response.ok||body?.ok===false)throw Object.assign(new Error(body?.error||'电脑端拒绝操作'),{code:body?.code??'REQUEST_FAILED',uncertain:body?.state==='unknown'});
+ let control:any;try{control=JSON.parse(response.headers.get('x-adh-control')||'null');}catch{}
+ return{body,control};
+}
+export async function getHostSettingsSnapshot():Promise<HostSettingsView>{
+ const {body,control}=await hostSettingsRequest('/api/config');
+ if(!control||control.resource!=='host'||!['revision','epoch','hostEpoch'].every(k=>Number.isSafeInteger(control[k])&&control[k]>=0))throw new Error('Host 未提供有效状态版本，不能安全导入');
+ return{settings:body.settings,control:Object.freeze({...control})};
+}
+export async function exportHostSettings(){return(await hostSettingsRequest('/api/settings/export')).body;}
+export async function importHostSettings(view:HostSettingsView,patch:Record<string,unknown>){
+ const c=view.control;if(c.resource!=='host')throw new Error('设置目标不是电脑端，未导入');
+ const operation={expectedRevision:c.revision,controlEpoch:c.epoch,hostEpoch:c.hostEpoch,idempotencyKey:operationId()};
+ // Use the version observed when the file was selected; never prepare/rebase/retry behind the user.
+ return(await hostSettingsRequest('/api/settings/import',{method:'POST',headers:{'content-type':'application/json','x-adh-operation':JSON.stringify(operation)},body:JSON.stringify(patch)})).body;
+}
+
+export interface CapturePackage {package:string;lines:number;bytes:number;oldestTs:number;newestTs:number}
+export const getCapturePackages=(serial:string)=>api<{packages:CapturePackage[]}>('/api/captures/packages',undefined,8000,{serial});

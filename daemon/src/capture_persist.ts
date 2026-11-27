@@ -185,29 +185,24 @@ export interface PackageCaptureStat {
 
 /** Per-package disk stats for the packages/<pkg>/captures.jsonl logs. */
 export function listPackageCaptureStats(dataDir: string): PackageCaptureStat[] {
-  const root = join(dataDir, 'packages');
-  if (!existsSync(root)) return [];
-  const out: PackageCaptureStat[] = [];
-  for (const name of readdirSync(root)) {
-    if (!safePackageDirName(name)) continue;
-    const path = join(root, name, 'captures.jsonl');
-    if (!existsSync(path)) continue;
-    let bytes = 0, lines = 0, oldestTs = 0, newestTs = 0;
-    try {
-      bytes = statSync(path).size;
-      const raw = readFileSync(path, 'utf8').split('\n').filter(Boolean);
-      lines = raw.length;
-      for (const line of raw) {
-        try {
-          const ts = Number((JSON.parse(line) as { ts?: number }).ts) || 0;
-          if (!oldestTs || (ts && ts < oldestTs)) oldestTs = ts;
-          if (ts > newestTs) newestTs = ts;
-        } catch { /* skip */ }
-      }
-    } catch { continue; }
-    out.push({ package: name, lines, bytes, oldestTs, newestTs });
+  const root=join(dataDir,'packages');if(!existsSync(root))return [];
+  const scoped=!!(deviceRequestScope()?.serial||deviceRequestScope()?.package),out:PackageCaptureStat[]=[];
+  for(const name of readdirSync(root)){
+    if(!safePackageDirName(name))continue;const path=join(root,name,'captures.jsonl');if(!existsSync(path))continue;
+    let bytes=0,lines=0,oldestTs=0,newestTs=0;
+    try{
+      const raw=readFileSync(path,'utf8').split('\n').filter(Boolean),deleted=scoped?deletedCaptureIds(dataDir,name):null;
+      if(!scoped){bytes=statSync(path).size;lines=raw.length;}
+      for(const line of raw){try{const c=JSON.parse(line);
+        if(scoped){if(deleted!.has(c.id)||!captureMatchesScope({...c,package:c.package||name}))continue;lines++;bytes+=Buffer.byteLength(line+'\n','utf8');}
+        const ts=Number(c.ts)||0;if(!oldestTs||(ts&&ts<oldestTs))oldestTs=ts;if(ts>newestTs)newestTs=ts;
+      }catch{/* Unproven/corrupt lines remain global disk metadata only, never attributed to a phone. */}}
+    }catch{continue;}
+    if(scoped&&!lines)continue;
+    // Scoped bytes describe retained serialized records, not the physical shared-file allocation.
+    out.push({package:name,lines,bytes,oldestTs,newestTs});
   }
-  return out.sort((a, b) => a.package.localeCompare(b.package));
+  return out.sort((a,b)=>a.package.localeCompare(b.package));
 }
 
 /** Delete one package's captures.jsonl (and its directory if empty). */

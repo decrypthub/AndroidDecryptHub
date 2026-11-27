@@ -7,6 +7,9 @@ import { promisify } from 'node:util';
 import { mkdirSync, existsSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+const sourceRoot=process.env.ADH_REFINEMENT_ROOT ? pathToFileURL(process.env.ADH_REFINEMENT_ROOT.replace(/\/$/,'')+'/daemon/src/') : new URL('../src/',import.meta.url);
+const loadSource=(name:string)=>import(new URL(name,sourceRoot).href);
 const realExec = cp.execFile;
 const realSpawn = cp.spawn;
 cp.execFile = (() => { throw Error('ADB/device calls forbidden in settings fixture'); }) as unknown as typeof cp.execFile;
@@ -19,15 +22,15 @@ Object.defineProperty(cp.execFile, promisify.custom, { value: async (file: strin
 cp.spawn = (() => { throw Error('child execution forbidden in settings fixture'); }) as unknown as typeof cp.spawn;
 syncBuiltinESMExports();
 // Block subprocesses BEFORE service modules capture/promisify the builtin bindings.
-const { handleHttp } = await import('../src/http/router.ts');
-const { handleMcp } = await import('../src/mcp.ts');
-const { applyCaptureSettingsOnConnect, patchSettings } = await import('../src/settings_service.ts');
-const { getOperations, operationsRoot } = await import('../src/operation_host.ts');
-const { initializeOperatorAccess } = await import('../src/access_context.ts');
+const { handleHttp } = await loadSource('http/router.ts');
+const { handleMcp } = await loadSource('mcp.ts');
+const { applyCaptureSettingsOnConnect, patchSettings } = await loadSource('settings_service.ts');
+const { getOperations, operationsRoot } = await loadSource('operation_host.ts');
+const { initializeOperatorAccess } = await loadSource('access_context.ts');
 const operatorKey=initializeOperatorAccess(operationsRoot);
-const { drainSession, forgetCaptureSession, startCaptureLoop } = await import('../src/service.ts');
-const { appendCaptureLine } = await import('../src/capture_persist.ts');
-const { agentSockets, captureTimers, captures, DATA_DIR, DEFAULT_SETTINGS, pending, restoreHostState, sessions, SETTINGS_FILE, settings } = await import('../src/state.ts');
+const { drainSession, forgetCaptureSession, startCaptureLoop } = await loadSource('service.ts');
+const { appendCaptureLine } = await loadSource('capture_persist.ts');
+const { agentSockets, captureTimers, captures, DATA_DIR, DEFAULT_SETTINGS, pending, restoreHostState, sessions, SETTINGS_FILE, settings } = await loadSource('state.ts');
 
 const server = http.createServer((req, res) => { handleHttp(req, res).catch(error => { res.writeHead(500); res.end(String(error)); }); });
 let address: string;
@@ -376,3 +379,14 @@ test('app selections restore before reconnect and retain an explicit all-off cho
   assert.equal((await readAppFamilies(appB)).enabled, false);
   assert.equal((await readAppFamilies('com.example.legacy')).enabled, true);
 });
+
+for(const entry of ['mcp','/api/config','/api/settings/import']){
+ test(entry+': explicit disabled full snapshot preserves choices without starting capture',async()=>{
+  reset();const calls=fakeAgent();const snapshot=structuredClone(DEFAULT_SETTINGS);snapshot.capture.enabled=false;
+  const result=await via(entry,snapshot);
+  assert.equal(result.body.ok,true);assert.equal(settings.capture.enabled,false);
+  assert.deepEqual(settings.capture.families,DEFAULT_SETTINGS.capture.families);
+  assert.equal(JSON.parse(readFileSync(SETTINGS_FILE,'utf8')).capture.enabled,false);
+  assert.ok(calls.includes('capture_stop'));assert.equal(calls.includes('capture_start'),false);
+ });
+}

@@ -27,8 +27,9 @@ if (failed !== 0) problems.push(`digest unit tests report ${failed} failures`);
 notes.push(`digest unit tests: pass=${passed} fail=${failed}`);
 
 // the agent must hand out the id, otherwise nothing can ever be resolved
-const agentSrc = fs.readFileSync(`${root}/agent/src/runtime/jni_env_hooks.c`, 'utf8');
+const agentSrc = fs.readFileSync(`${root}/agent/src/runtime/jni_env_fixed.c`, 'utf8');
 if (!agentSrc.includes('" -> %p"')) problems.push('GetFieldID/GetStaticFieldID events must carry the returned jfieldID (" -> %p")');
+if(!fs.readFileSync(`${root}/agent/CMakeLists.txt`,'utf8').includes('src/runtime/jni_env_fixed.c'))problems.push('GetFieldID owner not compiled in shipping CMake');
 const digestSrc = fs.readFileSync(`${root}/daemon/src/jni_field_digest.ts`, 'utf8');
 if (!digestSrc.includes('drainSession(')) problems.push('the live digest must drain through the shared drainSession');
 if (!digestSrc.includes('rewrittenSamples')) problems.push('the digest must surface rewritten writes (setValue) separately');

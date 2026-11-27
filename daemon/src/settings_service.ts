@@ -81,7 +81,7 @@ export function patchSettings(patch: unknown, applyCapture = applyCaptureEnabled
     if (postedFamilies.length === 1 && (CRYPTO_FAMILY_KEYS as readonly string[]).includes(postedFamilies[0][0]) && postedFamilies[0][1] === true && !beforeEnabled && Object.keys(capturePatch).length === 1) {
       for (const key of CRYPTO_FAMILY_KEYS) if (key !== postedFamilies[0][0]) candidate.capture.families[key] = false;
     }
-    if (postedFamilies.length) candidate.capture.enabled = CRYPTO_FAMILY_KEYS.some((key) => candidate.capture.families[key] !== false);
+    if (postedFamilies.length && typeof capturePatch?.enabled !== 'boolean') candidate.capture.enabled = CRYPTO_FAMILY_KEYS.some((key) => candidate.capture.families[key] !== false);
     if (!applied.length) return { ok: false, code: 'INVALID_SETTINGS', error: 'no supported settings sections', persisted: false, applied };
     const persistError = persistSettings(candidate);
     if (persistError) {

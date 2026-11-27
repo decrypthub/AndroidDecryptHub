@@ -34,7 +34,11 @@ export async function createCaptureExport(snapshot:ExportSnapshot,load:(id:numbe
     const hostHash=host?.capturedBytes===data.length&&typeof host.sha256==='string'&&/^[a-f\d]{64}$/.test(host.sha256)?host.sha256:null;
     const hash=digest?await digest(data):hostHash;if(!hash)throw new Error('此记录缺少字节校验信息，请更新 Host 后重试');
     if(digest&&hostHash&&hash!==hostHash)throw new Error(`记录 #${ids[i]} 的 ${field} 校验不一致`);
-    bytes[field]={state:'retained',capturedBytes:data.length,reportedBytes:length,truncated:length!==null&&length>data.length,inconsistent:length!==null&&length<data.length,sha256:hash,checksumSource:digest?'browser-retained-bytes':'host-retained-bytes'};
+    const javaInput=field==='hex'&&c.source==='java';
+    const presence=typeof c.inputBytesPresent==='boolean'?(c.inputBytesPresent?'present':'absent'):'unknown';
+    if(javaInput&&presence==='absent'&&(data.length>0||(length??0)>0))throw new Error('输入参数状态与字节不一致，未导出');
+    const state=javaInput&&data.length===0?(presence==='absent'?'not-captured':presence==='present'?'retained-empty':'unknown-input'):'retained';
+    bytes[field]={state,...(javaInput?{inputPresence:presence,inputScope:c.inputScope??'call-sample-scope-not-recorded',sha256Scope:'retained-container-only'}:{}),capturedBytes:data.length,reportedBytes:length,truncated:length!==null&&length>data.length,inconsistent:length!==null&&length<data.length,sha256:hash,checksumSource:digest?'browser-retained-bytes':'host-retained-bytes'};
    }
    check();records[i]={...c,byteEvidence:bytes};
   }catch(e){stopped=true;throw e;}

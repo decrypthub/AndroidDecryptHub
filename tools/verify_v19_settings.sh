@@ -13,6 +13,7 @@ import {readFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {randomUUID} from 'node:crypto';
+import {spawnSync} from 'node:child_process';
 const [root,base]=process.argv.slice(2),client=randomUUID(),failures=[];
 const chk=(label,ok)=>{console.log((ok?'PASS ':'FAIL ')+label);if(!ok)failures.push(label);};
 async function get(path){return (await fetch(base+path,{headers:{'x-adh-client-id':client}})).json();}
@@ -47,7 +48,9 @@ try{
   const guide=await (await fetch(base+'/api/mcp/config')).text();
   chk('MCP config uses the published CLI guide',['pip install android-decrypt-hub','adh connect','mcpServers'].every(s=>guide.includes(s)));
   const html=await (await fetch(base+'/')).text();
-  chk('web keeps settings/MCP/import-export entries',['set-shell','set-switch','mcpMask','settings/export','settings/import'].every(s=>html.includes(s)));
+  chk('web keeps compact advanced Host settings and MCP/import-export entries',['advanced-host-settings','/api/mcp/config','settings/export','settings/import'].every(s=>html.includes(s)));
+  const ui=spawnSync(process.execPath,['--test','--test-reporter=tap',root+'/panel/test/host-settings.test.mjs'],{encoding:'utf8',env:{...process.env,ADH_PANEL_ROOT:root+'/panel'}});
+  chk('actual Vue/API import confirmation, observed versions, no replay and LAN-safe ID',ui.status===0&&Number(/# pass (\d+)/.exec(ui.stdout??'')?.[1]??0)>=7&&Number(/# fail (\d+)/.exec(ui.stdout??'')?.[1]??-1)===0);if(ui.status!==0)console.log(ui.stdout,ui.stderr);
 }catch(error){chk('settings roundtrip threw: '+error.message,false);}
 finally{
   // Restore only fields still holding our values; never replace a later human edit.

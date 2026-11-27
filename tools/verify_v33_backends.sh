@@ -18,11 +18,11 @@ set +e
 OUT="$(node --input-type=module - "$HTTP" "$ROOT" <<'EOF'
 import { writeFileSync, mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { request as httpRequest } from 'node:http';
 
-const [httpPort] = process.argv.slice(2);
+const [httpPort, root] = process.argv.slice(2);
 const base = `http://127.0.0.1:${httpPort}`;
 const checks = [];
 const chk = (label, ok, detail = '') => { checks.push([label, !!ok]); console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}${detail ? ' — ' + detail : ''}`); };
@@ -63,17 +63,17 @@ if (matrix) {
 let html = '';
 try { html = (await get(`${base}/`)).text; } catch (e) { /* reported below */ }
 chk('dashboard served', html.length > 1000, `bytes=${html.length}`);
-for (const marker of ['data-fam="digest"', 'data-fam="symmetric"', 'id="setFamilies"']) {
-  chk(`dashboard contains ${marker}`, html.includes(marker));
-}
-chk('settings is the algorithm list', !html.includes('data-setpage="backends"') && !html.includes('data-setpage="rawcfg"') && !html.includes('配置 JSON'));
+const ui=spawnSync(process.execPath,['--test','--test-reporter=tap',root+'/panel/test/hook-manager.test.mjs'],{encoding:'utf8',env:{...process.env,ADH_PANEL_ROOT:root+'/panel'}});
+const pass=Number(/# pass (\d+)/.exec(ui.stdout??'')?.[1]??0),fail=Number(/# fail (\d+)/.exec(ui.stdout??'')?.[1]??-1);
+chk('actual Vue two-level controls: parent/child draft/apply/readback/ownership',ui.status===0&&pass>=13&&fail===0,'pass='+pass+' fail='+fail);if(ui.status!==0)console.log(ui.stdout,ui.stderr);
+chk('settings separates control, record filtering, display and advanced', ['Hook 管理','显示过滤','界面偏好','高级'].every(s=>html.includes(s)));
 chk('dashboard has no Frida Gadget panel', !html.includes('backendsGadget') && !html.includes('load_frida_gadget'));
-const blocks = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+const blocks = [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
 chk('inline scripts found', blocks.length > 0, `blocks=${blocks.length}`);
 const dir = mkdtempSync(join(tmpdir(), 'adh-js-'));
 let syntaxOk = true;
 blocks.forEach((code, i) => {
-  const file = join(dir, `block-${i}.js`);
+  const file = join(dir, `block-${i}.mjs`);
   writeFileSync(file, code);
   try { execFileSync(process.execPath, ['--check', file], { stdio: 'pipe' }); }
   catch (e) { syntaxOk = false; console.log(`FAIL  inline script #${i} syntax — ${String(e.stderr || e).slice(0, 200)}`); }

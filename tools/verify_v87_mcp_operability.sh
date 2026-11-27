@@ -109,6 +109,11 @@ const opsFromFiles = (files) => {
 
 const mcpClosure = closure('daemon/src/mcp.ts');
 const mcpOps = opsFromFiles(mcpClosure);
+const {captureControlReachability}=await import(`${base}/tools/lib/mcp_capture_reachability.mjs`);
+const captureClosure=captureControlReachability(root);
+if(!captureClosure.ok)problems.push('CaptureControls closure: '+captureClosure.problems.join('; '));
+else for(const op of captureClosure.ops)mcpOps.add(op);
+notes.push('AST-proven CaptureControls operations: '+captureClosure.ops.join(', '));
 const unreachable = agentOps.length ? agentOps.filter((o) => !mcpOps.has(o) && !(o in INTERNAL_OPS)) : [];
 if (unreachable.length) problems.push(`agent ops not reachable from MCP and not declared internal: ${unreachable.join(', ')}`);
 const ghosts = agentOps.length ? [...mcpOps].filter((o) => !agentOps.includes(o)) : [];

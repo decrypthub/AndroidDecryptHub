@@ -581,7 +581,7 @@ const searchPlaceholder = computed(() =>
               </div>
               <div class="lens">{{ ex.response?.startLine || ex.request?.startLine || ex.note }}</div>
             </div>
-            <div v-if="!matchedExchanges.length && !listLoading" class="empty-row" role="status"><p>{{ emptyText }}</p><template v-if="store.chosenPkg"><n-button text type="primary" @click="openNetworkHooks">查看 TLS Hook 配置</n-button><n-button text @click="advOpen=true">检查显示筛选</n-button><p class="muted">配置不代表进程已启用。确认后在目标应用触发请求；自定义网络栈可能不受当前 Hook 覆盖。</p></template></div>
+            <div v-if="!matchedExchanges.length && !listLoading" class="empty-row" role="status"><p>{{ emptyText }}</p><template v-if="store.chosenPkg"><div class="network-empty-actions" role="group" aria-label="网络记录后续操作"><n-button text type="primary" @click="openNetworkHooks">查看 TLS Hook 配置</n-button><n-button text @click="advOpen=true">检查显示筛选</n-button></div><p class="muted">配置不代表进程已启用。确认后在目标应用触发请求；自定义网络栈可能不受当前 Hook 覆盖。</p></template></div>
           </template>
 
           <template v-else>
@@ -699,4 +699,5 @@ const searchPlaceholder = computed(() =>
   justify-content: space-between;
   align-items: center;
 }
+.network-empty-actions { display:flex; flex-wrap:wrap; align-items:center; justify-content:center; gap:12px; }
 </style>
