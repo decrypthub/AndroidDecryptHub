@@ -157,7 +157,7 @@ test('settings: display pages do not repeat preference-storage rules', () => {
   const settings = readFileSync(join(panel,'src/components/SettingsPanel.vue'),'utf8');
   assert.ok(!settings.includes('外观与列表偏好仅保存在当前浏览器。'));
   assert.ok(!settings.includes('仅调整当前应用在此浏览器中的显示，不影响采集。'));
-  assert.ok(settings.includes('settings-picker'),'mobile settings navigation is retained');
+  assert.ok(settings.includes('settings-side-tabs'),'left settings navigation is retained on mobile');
 });
 
 test('status: online collection only uses the selected device session', () => {

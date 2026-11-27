@@ -83,7 +83,6 @@ const appearances = [
   { value: 'light', label: '浅色', icon: SunnyOutline },
   { value: 'dark', label: '深色', icon: MoonOutline },
 ] as const;
-const pageOptions = [...PAGES,...EXTRA_PAGES].map(({ key: value, label }) => ({ value, label }));
 const limits = computed(() => [{ value: 0, label: `服务默认（${hostDisplayCap.value} 条）` },
   ...DISPLAY_CAPS.map(value => ({ value, label: `${value} 条` }))]);
 const displaySaved = ref('');
@@ -129,10 +128,8 @@ watch(page,p=>{if(p==='records')takeSnap();if(p==='conn')void refreshStatus();})
 
 <template>
   <div class="set-page-shell">
-    <nav class="settings-top-tabs" aria-label="设置分类">
-      <div class="settings-picker"><n-select v-model:value="page" aria-label="设置分类" :options="pageOptions" /></div>
-      <n-button v-for="p in PAGES" :key="p.key" quaternary :aria-pressed="page===p.key" :class="{active:page===p.key}" @click="page=p.key">{{ p.label }}</n-button>
-    <n-dropdown trigger="click" :options="EXTRA_PAGES.map(p=>({key:p.key,label:p.label}))" @select="page=$event"><n-button quaternary class="settings-more">{{ EXTRA_PAGES.find(p=>p.key===page)?.label||'其他设置' }}</n-button></n-dropdown>
+    <nav class="settings-side-tabs" aria-label="设置分类">
+      <n-button v-for="p in [...PAGES,...EXTRA_PAGES]" :key="p.key" quaternary :aria-pressed="page===p.key" :class="{active:page===p.key,secondary:p.key==='records'}" @click="page=p.key">{{ p.label }}</n-button>
     </nav>
     <div class="set-content">
       <div class="set-main">
@@ -254,8 +251,7 @@ watch(page,p=>{if(p==='records')takeSnap();if(p==='conn')void refreshStatus();})
 </template>
 
 <style scoped>
-.settings-top-tabs .settings-picker{display:none}@media(max-width:400px){.settings-top-tabs .settings-picker{display:block;width:100%}.settings-top-tabs>.n-button{display:none}}
-.set-page-shell{display:flex;flex-direction:column;min-width:0}.settings-top-tabs{display:flex;gap:8px;align-items:center;padding:14px 24px;border-bottom:1px solid var(--line-soft);flex:none}.settings-top-tabs .active{background:var(--line-soft);font-weight:620}.set-content{min-width:0;width:100%}.set-main{padding:22px 26px}.settings-advanced-scope{margin-top:26px;border-top:1px solid var(--line-soft);padding-top:12px}.settings-advanced-scope summary{cursor:pointer;font-size:13px;margin-bottom:16px}@media(max-width:700px){.settings-top-tabs{padding:10px 12px;gap:2px;overflow-x:auto}.settings-top-tabs .n-button{font-size:12px;padding-inline:10px}.set-main{padding:16px}}
+.set-page-shell{display:flex;flex-direction:row;min-width:0}.set-content{min-width:0;flex:1;width:auto}.set-main{padding:22px 26px}.settings-advanced-scope{margin-top:26px;border-top:1px solid var(--line-soft);padding-top:12px}.settings-advanced-scope summary{cursor:pointer;font-size:13px;margin-bottom:16px}@media(max-width:700px){.set-main{padding:16px}}
 @media (min-width:701px) {
   .settings-mobile-only { display:none; }
 }
