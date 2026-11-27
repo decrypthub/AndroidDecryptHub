@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import {NPopover} from 'naive-ui';
 import {computed,reactive,ref,shallowRef,watch,onMounted,onUnmounted,onActivated,onDeactivated,nextTick,onScopeDispose} from 'vue';
 import {store,belongsToApp,capRemoveWhere,capDisplayCap,DISPLAY_CAPS,panelDisplay,savePanelDisplay,toast} from '../store';
 import {downloadBlob} from '../user_actions';
@@ -7,11 +8,11 @@ import {getCaptures,getExchanges,getCaptureDetail,clearCaptureBoard,type Cap} fr
 import {LogTimeline,virtualWindow} from '../log_timeline';
 import {cacheLogRows,confirmCacheGeneration,clearCachedScope,cachedGeneration,cachedCount,readCachedRows,saveCachedPage,readCachedPage,saveCachedDetail,readCachedDetail,cacheWarning,refreshPreference,removeCachedRow} from '../log_cache';
 import {catClass,cryptoView,capturePreviewPlaceholder,exchangeInputPreview,captureLengths,rowLens,systemRow,fmtTime,CATLABEL,type CatKey} from '../capview';
-import {SearchOutline} from '@vicons/ionicons5';
+import {SearchOutline,FilterOutline,ArrowDownOutline} from '@vicons/ionicons5';
 import CapDetail from './CapDetail.vue';import ExchangeDetail from './ExchangeDetail.vue';
 const props=defineProps<{kind:'crypto'|'system'|'net'}>();
 interface Exchange {id:string;order?:number;seq?:number;displayId?:number;captureGeneration?:string;label?:string;status?:string;conn?:string;ts?:number;tsNs?:number;captureIds?:number[];note?:string;request?:any;response?:any;[key:string]:unknown}
-const active=ref(true),filter=reactive({q:'',min:null as number|null,max:null as number|null,cat:-2,paused:false,kind:'all'}),advOpen=ref(false);
+const active=ref(true),filter=reactive({q:'',min:null as number|null,max:null as number|null,cat:-2,paused:false,kind:'all'}),advOpen=ref(false),moreOpen=ref(false),searchInput=ref<{focus:()=>void}|null>(null);
 const sel=ref<number|string|null>(null),selDetail=ref<Record<string,unknown>|null>(null),selExchange=ref<Exchange|null>(null);
 const listWidth=ref(0),dragging=ref(false),scrollTop=ref(0),viewportHeight=ref(700),newCount=ref(0),followBottom=ref(true),positioned=ref(false);
 const pauseCeiling=ref<number|null>(null);
@@ -22,7 +23,7 @@ const modalOpen=computed(()=>!!(store.settingsOpen||store.appDialogOpen||store.d
 const fromMs=ref<number|null>(null),toMs=ref<number|null>(null),fromTs=computed(()=>fromMs.value),toTs=computed(()=>toMs.value),hasTimeRange=computed(()=>fromTs.value!==null||toTs.value!==null);
 const LIST_ID:Record<string,string>={crypto:'cc-list',system:'sy-list',net:'nt-list'},BOARD_LABEL:Record<string,string>={crypto:'加解密',system:'系统',net:'网络'},HEAD_LABELS:Record<string,[string,string,string]>={crypto:['算法','输入预览','输入 → 输出'],system:['函数','输入对象','操作'],net:['请求','请求预览','状态']};
 const CAT_BY_SEL:Record<number,CatKey>={0:'digest',1:'hmac',2:'sym',3:'asym',4:'aead'},SYS_KINDS:Array<[string,string]>=[['all','全部活动'],['system','系统调用'],['file','文件读写']];
-const searchPlaceholder=computed(()=>props.kind==='crypto'?'搜索 #序号、算法、Hook 或预览':'搜索 #序号、操作、Hook 或预览');
+const searchPlaceholder=computed(()=>props.kind==='crypto'?'搜索 #序号、算法、Hook 或输入内容':'搜索 #序号、操作、Hook 或输入内容');
 const identity=()=>store.selectedDeviceKey+'\n'+store.chosenPkg+'\n'+props.kind;
 const scope=()=>({serial:store.devices.find(d=>d.key===store.selectedDeviceKey)?.serial||'',package:store.chosenPkg,kind:props.kind});
 const panelCats=()=>props.kind==='crypto'?['crypto']:props.kind==='net'?['net']:['system','file'];
@@ -39,7 +40,7 @@ const renderedRows=computed(()=>rows.value.slice(windowed.value.start,windowed.v
 const isHistoricalMode=computed(()=>!followBottom.value),canPrevPage=computed(()=>hasOlder.value&&!pageLoading.value),canNextPage=computed(()=>!followBottom.value),pageNumber=computed(()=>Math.max(1,Math.ceil(allRows.value.length/capDisplayCap.value))),countText=computed(()=>`${allRows.value.length} 条`);
 const advCount=computed(()=>Number(filter.min!=null||filter.max!=null)+Number(props.kind==='crypto'&&filter.cat>=0)+Number(props.kind==='system'&&filter.kind!=='all')+Number(hasTimeRange.value));
 const filterActive=computed(()=>!!(filter.q.trim()||advCount.value));
-const listFootLeft=computed(()=>`当前列表 ${allRows.value.length.toLocaleString('zh-CN')} 条`);
+const listFootLeft=computed(()=>`已加载 ${allRows.value.length.toLocaleString('zh-CN')} 条`);
 const footHint=computed(()=>[listFootLeft.value,`浏览器缓存 ${cacheCount.value.toLocaleString('zh-CN')} 条`,`Host归档 ${archiveCount.value.toLocaleString('zh-CN')} 条${props.kind==='net'?'原始TLS':''}`,filter.paused?'持续刷新已关闭；采集与缓存继续':'持续刷新已开启',hasOlder.value?'向上滚动继续加载更早记录':'已到最早记录',loadError.value,cacheNote.value,'浏览器缓存不会主动淘汰；配额、浏览器清理仍可能影响，不代替备份'].filter(Boolean).join(' · '));
 const listLoading=computed(()=>pageLoading.value&&!allRows.value.length),emptyText=computed(()=>!store.chosenPkg?'先在顶部选择应用。':loadError.value||((pageLoading.value)?'正在读取日志…':filterActive.value?'没有符合筛选条件的记录。':'还没有记录。'));
 function listElement(){return document.getElementById(LIST_ID[props.kind]);}
@@ -76,6 +77,14 @@ function resetLoaded(){request++;pageLoading.value=false;capModel.clear();netMod
 async function refreshFilter(){const ceiling=pauseCeiling.value;resetLoaded();pauseCeiling.value=ceiling;await loadServerPage(null,true);}
 function setQuickMinutes(mins:number){fromMs.value=Date.now()-mins*60000;toMs.value=null;void refreshFilter();}function clearTimeRange(){fromMs.value=null;toMs.value=null;void refreshFilter();}function applyTimeRange(){void refreshFilter();}
 function resetFilter(){filter.q='';filter.min=null;filter.max=null;filter.cat=-2;filter.kind='all';fromMs.value=null;toMs.value=null;void refreshFilter();}
+const canJumpLatest=computed(()=>!!store.chosenPkg&&!pageLoading.value&&(filter.paused||!followBottom.value||newCount.value>0));
+function focusSearch(){searchInput.value?.focus();}
+function searchShortcut(e:KeyboardEvent){
+ if(e.key!=='/'||e.defaultPrevented||e.ctrlKey||e.metaKey||e.altKey||!active.value||modalOpen.value||advOpen.value||moreOpen.value)return;
+ if((e.target as HTMLElement|null)?.closest?.('input,textarea,select,[contenteditable="true"],[role="textbox"]'))return;
+ e.preventDefault();focusSearch();
+}
+async function loadEarlier(){moreOpen.value=false;await prevPage();}
 function onPageCapChange(value:number){if(DISPLAY_CAPS.includes(value)){savePanelDisplay({...panelDisplay,limit:value});}}
 async function selectRow(c:Cap){const target=identity(),g=generation.value,cacheScope=scope();sel.value=c.id;selExchange.value=null;selDetail.value={_loading:true};try{let d:any;try{d=await getCaptureDetail(c.id,store.chosenPkg);if(d.id!==c.id||d.deviceBinding?.serial!==cacheScope.serial||d.package!==cacheScope.package)throw new Error('详情归属不一致');void saveCachedDetail(cacheScope,g,c.id,d);}catch(e){d=await readCachedDetail(cacheScope,g,c.id);if(!d)throw e;}if(target===identity()&&g===generation.value&&sel.value===c.id)selDetail.value=d;}catch{if(target===identity()&&sel.value===c.id)selDetail.value={_error:'Host和浏览器均没有此记录的已保留详情',cap:c};}}
 function selectExchange(ex:Exchange){sel.value=ex.id;selDetail.value=null;selExchange.value=ex;}
@@ -85,7 +94,7 @@ async function downloadView(){if(exportBusy.value)return;const target=identity()
 async function applyClear(data:any){if(data.serial&&data.serial!==scope().serial||data.package&&data.package!==store.chosenPkg||data.kind&&data.kind!==props.kind)return;if(data.generation&&data.generation===generation.value)return;const g=data.generation||'';resetLoaded();generation.value=g;if(g)await clearCachedScope(scope(),g);frozenCaptures.value=[];frozenExchanges.value=[];cacheCount.value=0;archiveCount.value=0;}
 async function clearView(){if(!store.chosenPkg||!confirm('清空当前设备、当前APP的本板块日志及其浏览器缓存？\n显示序号将从1重新开始，内部唯一ID不复用；其它设备、APP和板块不受影响。'))return;const target=identity();try{const r=await clearCaptureBoard(store.chosenPkg,props.kind);if(target!==identity())return;await applyClear({...r,...scope(),what:'captures'});await loadServerPage(null,true);toast('已清空本板块，显示序号从1重新计数');}catch(e){toast('未确认清理：'+(e as Error).message);}}
 const MORE_OPTS=computed(()=>[{label:'导出',key:'export',disabled:exportBusy.value},{label:'清空',key:'clear',disabled:exportBusy.value}]);
-function onMoreSelect(key:string){if(key==='export')void downloadView();else if(key==='clear'&&!exportBusy.value)void clearView();}
+function onMoreSelect(key:string){moreOpen.value=false;if(key==='export')void downloadView();else if(key==='clear'&&!exportBusy.value)void clearView();}
 function openNetworkHooks(){const serial=scope().serial;if(!serial||!store.chosenPkg)return;store.hookSource={serial,package:store.chosenPkg,feature:'tls',session:'',returnView:'nt'};store.view='settings';}
 function startDrag(e:MouseEvent){e.preventDefault();const ws=(e.target as HTMLElement).parentElement!,rect=ws.getBoundingClientRect();const move=(ev:MouseEvent)=>{dragging.value=true;listWidth.value=Math.max(220,Math.min(rect.width*.7,rect.width-260,ev.clientX-rect.left));};const up=()=>{document.removeEventListener('mousemove',move);document.removeEventListener('mouseup',up);dragging.value=false;};document.addEventListener('mousemove',move);document.addEventListener('mouseup',up);}
 function cryptoRow(c:Cap){return{...cryptoView(c),cc:catClass(c)};}
@@ -96,8 +105,8 @@ let debounce:ReturnType<typeof setTimeout>|undefined;watch([()=>filter.q,()=>fil
 watch([()=>store.selectedDeviceKey,()=>store.chosenPkg,()=>props.kind],()=>{resetLoaded();filter.paused=!refreshPreference(scope());filter.q='';filter.kind='all';filter.cat=-2;filter.min=null;filter.max=null;fromMs.value=null;toMs.value=null;if(active.value)void loadServerPage(null,true);});
 const clearListener=(e:Event)=>{void applyClear((e as CustomEvent).detail);};
 function startPolling(){if(poll)return;poll=window.setInterval(()=>{if(active.value&&!filter.paused&&!modalOpen.value&&store.wsState!=='live')void loadServerPage(null,true);cacheNote.value=cacheWarning()||cacheNote.value;},3000);}function stopPolling(){if(poll)clearInterval(poll);poll=0;clearTimeout(networkDebounce);networkDebounce=0;}
-onMounted(()=>{filter.paused=!refreshPreference(scope());window.addEventListener('adh:capture-clear',clearListener);startPolling();void loadServerPage(null,true);if(typeof ResizeObserver!=='undefined'){resize=new ResizeObserver(entries=>{viewportHeight.value=entries[0]?.contentRect.height||700;});const el=listElement();if(el)resize.observe(el);}});
-onActivated(()=>{active.value=true;startPolling();if(!filter.paused||!loaded.value.length&&!exchanges.value.length)void loadServerPage(null,true);});onDeactivated(()=>{active.value=false;stopPolling();});onUnmounted(()=>{request++;stopPolling();resize?.disconnect();clearTimeout(debounce);window.removeEventListener('adh:capture-clear',clearListener);});
+onMounted(()=>{filter.paused=!refreshPreference(scope());window.addEventListener('adh:capture-clear',clearListener);window.addEventListener('keydown',searchShortcut);startPolling();void loadServerPage(null,true);if(typeof ResizeObserver!=='undefined'){resize=new ResizeObserver(entries=>{viewportHeight.value=entries[0]?.contentRect.height||700;});const el=listElement();if(el)resize.observe(el);}});
+onActivated(()=>{active.value=true;startPolling();if(!filter.paused||!loaded.value.length&&!exchanges.value.length)void loadServerPage(null,true);});onDeactivated(()=>{active.value=false;stopPolling();});onUnmounted(()=>{request++;stopPolling();resize?.disconnect();clearTimeout(debounce);window.removeEventListener('adh:capture-clear',clearListener);window.removeEventListener('keydown',searchShortcut);});
 
 
 onScopeDispose(()=>{request++;clearTimeout(debounce);});
@@ -108,13 +117,24 @@ onScopeDispose(()=>{request++;clearTimeout(debounce);});
     <h1 class="sr-only">{{ BOARD_LABEL[kind] }}</h1>
     <div class="filters">
       <div class="toolbar-main capture-list-head" role="group" aria-label="日志浏览工具栏">
-        <n-input v-model:value="filter.q" size="small" clearable :placeholder="searchPlaceholder" class="toolbar-search-input"><template #prefix><n-icon :component="SearchOutline" /></template></n-input>
-        <span class="log-summary" :title="footHint">{{ listFootLeft }}</span>
-        <n-select :value="capDisplayCap" size="small" class="page-cap-select" aria-label="每批加载条数" :options="DISPLAY_CAPS.map(cap=>({label:cap+' 条/批',value:cap}))" @update:value="onPageCapChange" />
-        <n-checkbox :checked="!filter.paused" aria-label="持续刷新列表" @update:checked="filter.paused=!$event">持续刷新</n-checkbox>
-        <n-button size="small" :type="advCount?'primary':'default'" :aria-expanded="advOpen" @click="advOpen=true">筛选<template v-if="advCount"> · {{ advCount }}</template></n-button>
-        <n-button size="small" @click="jumpLatest">最新</n-button>
-        <n-dropdown trigger="click" :options="MORE_OPTS" @select="onMoreSelect"><n-button quaternary size="small" aria-label="记录列表操作">⋯</n-button></n-dropdown>
+        <div class="capture-toolbar-left">
+          <n-input ref="searchInput" v-model:value="filter.q" size="small" clearable :placeholder="searchPlaceholder" :aria-label="searchPlaceholder" class="toolbar-search-input"><template #prefix><n-icon :component="SearchOutline" /></template><template #suffix><kbd class="search-key" aria-hidden="true">/</kbd></template></n-input>
+          <n-button size="small" :type="advCount?'primary':'default'" :aria-expanded="advOpen" @click="advOpen=true"><template #icon><n-icon :component="FilterOutline" /></template>筛选<template v-if="advCount"> · {{ advCount }}</template></n-button>
+          <span class="log-summary" :title="footHint">{{ listFootLeft }}</span>
+        </div>
+        <div class="capture-toolbar-right">
+          <label class="capture-refresh" title="只更新列表，不控制采集"><n-switch size="small" :value="!filter.paused" aria-label="实时更新列表" @update:value="filter.paused=!$event" /><span>实时更新</span></label>
+          <span class="capture-toolbar-divider" aria-hidden="true"></span>
+          <n-button size="small" :disabled="!canJumpLatest" @click="jumpLatest"><template #icon><n-icon :component="ArrowDownOutline" /></template>跳到最新</n-button>
+          <n-popover v-model:show="moreOpen" trigger="click" placement="bottom-end" :show-arrow="false" class="capture-more-menu">
+            <template #trigger><n-button size="small" class="capture-more-trigger" aria-label="记录列表操作" :aria-expanded="moreOpen">⋯</n-button></template>
+            <div class="capture-more-body">
+              <label class="capture-batch-field"><span>每批加载条数</span><n-select :value="capDisplayCap" size="small" aria-label="每批加载条数" :options="DISPLAY_CAPS.map(cap=>({label:cap+' 条/批',value:cap}))" @update:value="onPageCapChange" /></label>
+              <n-button size="small" :disabled="!canPrevPage" @click="loadEarlier">{{ pageLoading?'正在加载…':hasOlder?'加载更早记录':'已到最早记录' }}</n-button>
+              <div class="capture-more-actions"><n-button v-for="item in MORE_OPTS" :key="item.key" size="small" text :disabled="item.disabled" :type="item.key==='clear'?'error':'default'" @click="onMoreSelect(item.key)">{{ item.label }}</n-button></div>
+            </div>
+          </n-popover>
+        </div>
       </div>
       <span v-if="loadError||cacheNote" class="log-storage-note" role="status">{{ loadError||cacheNote }}</span>
     </div>
