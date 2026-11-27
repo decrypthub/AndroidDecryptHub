@@ -1,3 +1,4 @@
+import {cryptoView as coreCryptoView,inputContentPreview,outputOnlyCapture} from '../../daemon/src/crypto_view';
 // 记录 → 视图模型。从旧 index.html 逐行移植的纯函数层，不碰 DOM。
 import type { Cap } from './api';
 import { panelDisplay } from './store';
@@ -21,8 +22,6 @@ export function catClass(c: Cap): CatKey {
   return 'sym';
 }
 
-const VAGUE_ALGO = /^(摘要 Digest|对称加解密|HMAC|RSA\/EC 签名|RSA\/EC 验签|RSA 非对称加密|RSA 非对称解密|AEAD 加密\(GCM\/ChaCha20-Poly1305\)|AEAD 解密\(GCM\/ChaCha20-Poly1305\)|TLS|Java Hook|Native Hook)$/;
-
 function clientJavaHook(op: string, hasBody: boolean): string {
   if (op === 'digest') return 'MessageDigest.digest';
   if (op === 'mac') return hasBody ? 'Mac.doFinal' : 'Mac.init';
@@ -42,27 +41,6 @@ function clientJavaDirection(op: string): string {
   if (op === 'mac') return '认证';
   return '';
 }
-function clientNativeView(func: string): { title: string; direction: string } {
-  const known: Record<string, [string, string]> = {
-    EVP_DigestUpdate: ['摘要 · 未识别', '哈希'], HMAC_Update: ['HMAC · 未识别', '认证'],
-    EVP_DigestSignUpdate: ['HMAC · 未识别', '认证'], EVP_DigestVerifyUpdate: ['HMAC · 未识别', '认证'],
-    EVP_DSignUpdate_asym: ['签名 · 未识别', '签名'], EVP_DSignFinal_sig: ['签名 · 未识别', '签名'],
-    EVP_DVerifyUpdate_asym: ['验签 · 未识别', '验签'], EVP_DVerifyFinal_sig: ['验签 · 未识别', '验签'],
-    ECDSA_sign_digest: ['签名 · 未识别', '签名'], ECDSA_sign_sig: ['签名 · 未识别', '签名'],
-    ECDSA_verify_digest: ['验签 · 未识别', '验签'], ECDSA_verify_sig: ['验签 · 未识别', '验签'],
-    EVP_PKEY_encrypt_in: ['RSA · 未识别', '加密'], EVP_PKEY_encrypt_out: ['RSA · 未识别', '加密'],
-    EVP_PKEY_decrypt_in: ['RSA · 未识别', '解密'], EVP_PKEY_decrypt_out: ['RSA · 未识别', '解密'],
-    EVP_AEAD_seal_pt: ['AEAD · 未识别', '加密'], EVP_AEAD_seal_ct: ['AEAD · 未识别', '加密'],
-    EVP_AEAD_open_ct: ['AEAD · 未识别', '解密'], EVP_AEAD_open_pt: ['AEAD · 未识别', '解密'],
-  };
-  if (known[func]) return { title: known[func][0], direction: known[func][1] };
-  if (func.startsWith('EVP_Encrypt')) return { title: '对称 · 未识别', direction: '加密' };
-  if (func.startsWith('EVP_Decrypt')) return { title: '对称 · 未识别', direction: '解密' };
-  if (func.startsWith('EVP_Cipher')) return { title: '对称 · 未识别', direction: '' };
-  if (func.startsWith('EVP_Digest')) return { title: '摘要 · 未识别', direction: '哈希' };
-  return { title: func || '未识别', direction: '' };
-}
-
 export interface CaptureLength {
   reported?: number; captured?: number; bytes?: number;
   truncated: boolean; inconsistent: boolean;
@@ -95,14 +73,6 @@ export function inputEvidence(c: Cap): { fragment:boolean; emptyText:string; not
     note:nonempty?'仅显示本次调用返回后的参数采样，可能包含输出缓冲区；完整/累积运算输入未记录。':present===true?'本次参数字节为空，不代表整个运算输入为空；累积输入未记录。':'无直接输入的调用或未采集到参数均可能出现此状态；累积输入未记录。',
     lengthText:captureLengthText(length)+'（本次捕获）'};
 }
-function compactContentPreview(c:Cap,fallback:string,length:CaptureLength):string {
-  const binary=()=>`二进制${length.bytes!=null?' · '+length.bytes+' B':''}`;
-  if(typeof c.hex==='string'&&c.hex.length&&/^(?:[a-f\d]{2})*$/i.test(c.hex)){
-    try{const text=new TextDecoder('utf-8',{fatal:true}).decode(Uint8Array.from(c.hex.slice(0,512).match(/../g)??[],p=>parseInt(p,16)),{stream:c.hex.length>512});if(/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(text))return binary();return text.slice(0,100);}
-    catch{return binary();}
-  }
-  return fallback&&((fallback.match(/\./g)?.length??0)/fallback.length)<0.3?fallback.slice(0,100):length.bytes?binary():fallback;
-}
 /** Missing capture evidence must never be presented as a proven empty operation. */
 export function capturePreviewPlaceholder(c: Cap): string {
   const input=captureLengths(c).input;
@@ -119,26 +89,30 @@ export function cryptoView(c: Cap): CryptoView {
   const outBytes = lengths.output.bytes ?? 0;
   const truncated = lengths.input.truncated;
   const hasBody = inBytes > 0 || outBytes > 0 || (lengths.input.captured ?? 0) > 0 || (lengths.output.captured ?? 0) > 0;
-  const algo = (c.algo || '').trim();
-  const concrete = algo && !VAGUE_ALGO.test(algo) ? algo : '';
   const func = c.func || '';
-  const native = clientNativeView(func);
+  const native = coreCryptoView(c);
   const java = c.source === 'java' || (!!func && !func.includes('_') && !func.includes('.'));
   const op = c.op || '';
   const hook = java ? (typeof c.javaTarget==='string'&&c.javaTarget?c.javaTarget:(func.includes('.') ? func : clientJavaHook(op, hasBody))) : func;
   const direction = java ? clientJavaDirection(op) : native.direction;
-  const preview = (c.preview || '').trim();
-  const readable = preview.replace(/[.\s]/g, '') ? preview : '';
   const compact = (length: CaptureLength) => length.bytes == null ? '' :
     `${length.bytes} B${length.truncated ? ' 截断' : length.inconsistent ? `（捕获 ${length.captured} B，长度不一致）` : ''}`;
   const input = c.source==='java'&&lengths.input.bytes===0?'本次 0 B':compact(lengths.input);
   const output = compact(lengths.output);
   return {
-    title: concrete || (java ? '未识别' : native.title),
+    title: native.title,
     direction, hook,
     sizeLabel: input && output ? `${input} → ${output}` : input || output,
-    truncated, outputTruncated: lengths.output.truncated, hasKey: !!(c.hasKey || c.keyHex), preview: compactContentPreview(c, readable, lengths.input), show: hasBody,
+    truncated, outputTruncated: lengths.output.truncated, hasKey: !!(c.hasKey || c.keyHex), preview: inputContentPreview(c), show: hasBody && !outputOnlyCapture(c),
   };
+}
+
+/** A request preview never falls back to response data or a diagnostic note. */
+export function exchangeInputPreview(ex:{request?:{bodyText?:string;bodyHex?:string;startLine?:string;binary?:boolean}}):string {
+  const request=ex.request;if(!request)return '未捕获请求';
+  if(request.binary)return request.bodyHex?inputContentPreview({hex:request.bodyHex}):'未捕获请求内容';
+  const text=request.bodyText||request.startLine||'';
+  return text?inputContentPreview({hex:Array.from(new TextEncoder().encode(text.slice(0,512)),b=>b.toString(16).padStart(2,'0')).join('')}):'未捕获请求内容';
 }
 
 export function httpListPreview(text: string | undefined): string {

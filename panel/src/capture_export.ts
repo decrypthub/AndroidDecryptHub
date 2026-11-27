@@ -6,7 +6,7 @@ const LENGTH_FIELDS=['inl','outl','keyl','ivl'] as const;
 /** Metadata still contains previews; it is not a sanitized/public report. */
 export function metadataExport(scope:ExportScope,items:Cap[]) {
  return {schema:'adh.capture-export/1',mode:'metadata-only',...scope,
-  note:'所选或已加载记录元数据与预览；不含输入、输出、密钥或 IV 的字节内容。预览仍可能含敏感信息。',
+  note:'所选或已加载记录元数据与预览；不包含完整输入、输出、密钥或 IV 的原始字节字段。预览可能包含输入片段（含 HEX），仍可能含敏感信息。',
   records:items.map(c=>{const record={...c};for(const field of [...BYTE_FIELDS,'text'])delete record[field];return record;})};
 }
 /** Fail closed: a missing/foreign record or target switch never becomes a silent partial export. */

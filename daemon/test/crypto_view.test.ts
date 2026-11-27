@@ -46,7 +46,7 @@ test('native digest does not pretend Digest is the algorithm', () => {
     source: 'native', func: 'EVP_DigestUpdate', algo: '摘要 Digest', op: '输入',
     inl: 48, hex: hex(input), preview: input,
   });
-  assert.equal(view.title, '摘要 · 未识别');
+  assert.equal(view.title, '—');
   assert.equal(view.direction, '哈希');
   assert.equal(view.hook, 'EVP_DigestUpdate');
   assert.equal(view.sizeLabel, '48 B');
@@ -59,12 +59,12 @@ test('a clipped native buffer keeps the real length and says it was cut', () => 
     source: 'native', func: 'EVP_CipherUpdate', algo: '对称加解密', op: '明文',
     inl: 20000, hex: '0011', keyHex: 'ff', preview: '..',
   });
-  assert.equal(view.title, '对称 · 未识别');
+  assert.equal(view.title, '—');
   assert.equal(view.direction, '');
   assert.equal(view.truncated, true);
   assert.equal(view.sizeLabel, '20000 B 截断');
   assert.equal(view.hasKey, true);
-  assert.equal(view.preview, '');
+  assert.equal(view.preview, 'HEX 00 11…');
 });
 
 test('a concrete algorithm on a native record replaces the vague title', () => {

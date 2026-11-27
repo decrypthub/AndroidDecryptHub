@@ -1,3 +1,4 @@
+import {inputContentPreview} from './crypto_view.ts';
 import {captureHistoryFor} from './capture_history.ts';
 import {captureMatchesScope,deviceRequestScope,captureMatchesDevice,freezeDeviceBinding,type AgentDeviceBinding} from './agent_scope.ts';
 // state.ts — ADH Daemon shared state + leaf mutators.
@@ -924,7 +925,8 @@ export function httpCapturePreview(text: string): string {
 }
 
 /** Preview stored on a capture. TLS records prefer the URL / status line over a raw header dump. */
-export function captureDisplayFields(c: {category:string;func:string;path?:string;hex?:string}): {activity?:{method:string;object:string;result:string}} {
+export function captureDisplayFields(c: {category:string;func:string;path?:string;hex?:string;inl?:number;source?:string}): {inputPreview?:string;activity?:{method:string;object:string;result:string}} {
+  if(c.category==='crypto')return {inputPreview:inputContentPreview(c)};
   if(c.category!=='system'&&c.category!=='file')return {};
   let fields:Record<string,unknown>={};
   if(typeof c.hex==='string'&&c.hex.length<=32768&&/^(?:[a-f\d]{2})*$/i.test(c.hex)){

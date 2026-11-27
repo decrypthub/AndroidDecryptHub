@@ -2,9 +2,9 @@
 //
 // The stored record keeps the raw algo/op/func the hooks produced. This module only
 // decides the row: a concrete algorithm name when the hook recorded one, otherwise an
-// honest "未识别" plus the hook that fired. Native EVP_DigestUpdate cannot tell MD5
+// an empty algorithm label plus the hook that fired. Native EVP_DigestUpdate cannot tell MD5
 // from SHA-256 — the name lives on Init, which this capture path does not record — so
-// the row says so instead of calling the event "Digest".
+// do not fabricate an algorithm name from a generic native symbol.
 //
 // Pure: no store, no I/O. The list route and the live broadcast both call cryptoView.
 
@@ -18,6 +18,8 @@ export interface CryptoCaptureLike {
   outHex?: string;
   keyHex?: string;
   preview?: string;
+  inputPreview?: string;
+  inputBytesPresent?: boolean;
 }
 
 export interface CryptoView {
@@ -31,7 +33,7 @@ export interface CryptoView {
   sizeLabel: string;
   truncated: boolean;
   hasKey: boolean;
-  /** Printable preview. Empty when the payload is binary or blank, so the row does not fill with dots. */
+  /** Actual input as readable UTF-8 or a bounded hex prefix; blank when input is not captured. */
   preview: string;
   /** Init-only records (no input, no output) stay in the store but stay off the list. The later doFinal carries the key. */
   show: boolean;
@@ -39,29 +41,6 @@ export interface CryptoView {
 
 const VAGUE_ALGO =
   /^(摘要 Digest|对称加解密|HMAC|RSA\/EC 签名|RSA\/EC 验签|RSA 非对称加密|RSA 非对称解密|AEAD 加密\(GCM\/ChaCha20-Poly1305\)|AEAD 解密\(GCM\/ChaCha20-Poly1305\)|TLS|Java Hook|Native Hook)$/;
-
-const NATIVE: Record<string, { title: string; direction: string }> = {
-  EVP_DigestUpdate: { title: '摘要 · 未识别', direction: '哈希' },
-  HMAC_Update: { title: 'HMAC · 未识别', direction: '认证' },
-  EVP_DigestSignUpdate: { title: 'HMAC · 未识别', direction: '认证' },
-  EVP_DigestVerifyUpdate: { title: 'HMAC · 未识别', direction: '认证' },
-  EVP_DSignUpdate_asym: { title: '签名 · 未识别', direction: '签名' },
-  EVP_DSignFinal_sig: { title: '签名 · 未识别', direction: '签名' },
-  EVP_DVerifyUpdate_asym: { title: '验签 · 未识别', direction: '验签' },
-  EVP_DVerifyFinal_sig: { title: '验签 · 未识别', direction: '验签' },
-  ECDSA_sign_digest: { title: '签名 · 未识别', direction: '签名' },
-  ECDSA_sign_sig: { title: '签名 · 未识别', direction: '签名' },
-  ECDSA_verify_digest: { title: '验签 · 未识别', direction: '验签' },
-  ECDSA_verify_sig: { title: '验签 · 未识别', direction: '验签' },
-  EVP_PKEY_encrypt_in: { title: 'RSA · 未识别', direction: '加密' },
-  EVP_PKEY_encrypt_out: { title: 'RSA · 未识别', direction: '加密' },
-  EVP_PKEY_decrypt_in: { title: 'RSA · 未识别', direction: '解密' },
-  EVP_PKEY_decrypt_out: { title: 'RSA · 未识别', direction: '解密' },
-  EVP_AEAD_seal_pt: { title: 'AEAD · 未识别', direction: '加密' },
-  EVP_AEAD_seal_ct: { title: 'AEAD · 未识别', direction: '加密' },
-  EVP_AEAD_open_ct: { title: 'AEAD · 未识别', direction: '解密' },
-  EVP_AEAD_open_pt: { title: 'AEAD · 未识别', direction: '解密' },
-};
 
 /** Java hook label. hasBody distinguishes Cipher.doFinal from the init that only stored the key. */
 export function javaHook(op: string, hasBody: boolean): string {
@@ -92,19 +71,39 @@ function javaDirection(op: string): string {
   return '';
 }
 
-function nativeView(func: string): { title: string; direction: string } {
-  const known = NATIVE[func];
-  if (known) return known;
-  if (func.startsWith('EVP_Encrypt')) return { title: '对称 · 未识别', direction: '加密' };
-  if (func.startsWith('EVP_Decrypt')) return { title: '对称 · 未识别', direction: '解密' };
-  if (func.startsWith('EVP_Cipher')) return { title: '对称 · 未识别', direction: '' };
-  if (func.startsWith('EVP_Digest')) return { title: '摘要 · 未识别', direction: '哈希' };
-  return { title: func || '未识别', direction: '' };
+function nativeDirection(func: string): string {
+  if (/^(?:HMAC_|EVP_Digest(?:Sign|Verify)Update$)/.test(func)) return '认证';
+  if (/^(?:EVP_DSign|ECDSA_sign)/.test(func)) return '签名';
+  if (/^(?:EVP_DVerify|ECDSA_verify)/.test(func)) return '验签';
+  if (/^EVP_(?:Encrypt|PKEY_encrypt|AEAD_seal)/.test(func)) return '加密';
+  if (/^EVP_(?:Decrypt|PKEY_decrypt|AEAD_open)/.test(func)) return '解密';
+  if (/^EVP_Digest/.test(func)) return '哈希';
+  return '';
+}
+
+/** These hooks sampled an output buffer, not a second operation input. Keep raw records, not fake input rows. */
+export function outputOnlyCapture(c: CryptoCaptureLike): boolean {
+  return c.source!=='java' && /(?:_out$|^EVP_AEAD_(?:seal_ct|open_pt)$|^(?:ECDSA_sign_sig|EVP_DSignFinal_sig)$)/.test(c.func||'');
+}
+
+/** One pure formatter for Host metadata and browser fallback. Never substitutes algorithm/output for input. */
+export function inputContentPreview(c: CryptoCaptureLike): string {
+  if(outputOnlyCapture(c))return '';
+  if(c.hex===undefined)return typeof c.inputPreview==='string'?c.inputPreview.slice(0,120):'';
+  if(typeof c.hex!=='string'||!c.hex.length||!/^(?:[a-f\d]{2})*$/i.test(c.hex))return '';
+  const clipped=c.hex.length>512,missing=typeof c.inl==='number'&&c.inl>c.hex.length/2;
+  try {
+    const text=new TextDecoder('utf-8',{fatal:true}).decode(Uint8Array.from(c.hex.slice(0,512).match(/../g)??[],p=>parseInt(p,16)),{stream:clipped});
+    if(text.trim()&&!/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/.test(text)){
+      const chars=Array.from(text.replace(/\s+/g,' '));return chars.slice(0,100).join('')+(clipped||missing||chars.length>100?'…':'');
+    }
+  } catch {/* Actual binary input is shown as bytes, not a placeholder or replacement characters. */}
+  return 'HEX '+(c.hex.slice(0,64).match(/../g)??[]).join(' ').toLowerCase()+(c.hex.length>64||missing?'…':'');
 }
 
 function concreteAlgo(algo: string): string {
   const name = algo.trim();
-  if (!name || VAGUE_ALGO.test(name)) return '';
+  if (!name || VAGUE_ALGO.test(name) || /未识别|^unknown$/i.test(name)) return '';
   return name;
 }
 
@@ -136,13 +135,12 @@ export function cryptoView(c: CryptoCaptureLike): CryptoView {
   const truncated = !!(c.inl && c.inl > 0 && c.hex && inBytes > stored);
   const hasBody = inBytes > 0 || outBytes > 0;
   const concrete = concreteAlgo(c.algo || '');
-  const fromNative = nativeView(c.func || '');
   const java = c.source === 'java';
   const namedHook = c.func && c.func.includes('.') ? c.func : '';
   const hook = java ? (namedHook || javaHook(c.op || '', hasBody)) : (c.func || '');
-  const direction = java ? javaDirection(c.op || '') : fromNative.direction;
+  const direction = java ? javaDirection(c.op || '') : nativeDirection(c.func || '');
   return {
-    title: concrete || (java ? '未识别' : fromNative.title),
+    title: concrete || '—',
     direction,
     hook,
     inBytes,
@@ -150,7 +148,7 @@ export function cryptoView(c: CryptoCaptureLike): CryptoView {
     sizeLabel: sizeLabel(inBytes, outBytes, truncated),
     truncated,
     hasKey: !!(c.keyHex && c.keyHex.length > 0),
-    preview: readablePreview(c.preview),
-    show: hasBody,
+    preview: inputContentPreview(c),
+    show: hasBody && !outputOnlyCapture(c),
   };
 }

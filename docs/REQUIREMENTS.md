@@ -1,5 +1,7 @@
 # ADH (Android DecryptHub) — 功能需求说明
 
+> 2026-11-27 用户范围收敛：移除 Native `EVP_AEAD_CTX_seal/open` 持续采集及方法目录（native-capture/2）；下文旧版“AEAD覆盖”不再表示Native采集。Java `Cipher` 的 AES/GCM等常用认证加密与Native TLS明文采集继续保留。历史记录不删除。
+
 > **2026-11-21 分析页范围**：电脑端提供应用与会话摘要、六类算法设置、五类记录及详情、一键脱壳和任务结果。任务窗口按标题、状态和时间展示持久记录，可读取已保存结果。细粒度 Hook、任务控制及执行细节使用 MCP / `adh`。当前页面范围见 [P2_WORKBENCH.md](P2_WORKBENCH.md)。
 
 > **2026-11-16 P4 传输/授权契约**：手机经显式配置才能监听 LAN TLS；首次 Host 配对经可信 USB，TLS 固定安装公钥，客户端挑战证明绑定设备/代际/流/grant。每次派发检查持久权限，撤销关闭既有流且重启不恢复。设备域已迁能力 USB/LAN 共用同一实现，未迁能力和旧路由选择明确拒绝。断线对账只读取实际结果并保存证据，保留 unknown、人工控制和无重放原则。范围与验收见 [P4_LAN_AUTH.md](P4_LAN_AUTH.md)，无当前服务或真机升级。

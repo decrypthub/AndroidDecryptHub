@@ -1,7 +1,7 @@
 import {readFileSync} from 'node:fs';
 import {createRequire} from 'node:module';
 import {resolve, join} from 'node:path';
-import {fileURLToPath} from 'node:url';
+import {fileURLToPath,pathToFileURL} from 'node:url';
 
 export const panel = resolve(process.env.ADH_PANEL_ROOT || fileURLToPath(new URL('../../', import.meta.url)));
 const require = createRequire(new URL('../../package.json', import.meta.url));
@@ -30,8 +30,9 @@ function evaluate(source, context) {
   return new Function(...Object.keys(context),'exports',`${js}\nreturn {${declarations.join(',')}};`)(...Object.values(context),{});
 }
 
+const {cryptoView:coreCryptoView,inputContentPreview,outputOnlyCapture}=await import(pathToFileURL(join(panel,'../daemon/src/crypto_view.ts')));
 export function viewModel() {
-  return evaluate(readFileSync(join(panel,'src/capview.ts'),'utf8'), {panelDisplay:{time:'time'}});
+  return evaluate(readFileSync(join(panel,'src/capview.ts'),'utf8'), {panelDisplay:{time:'time'},coreCryptoView,inputContentPreview,outputOnlyCapture});
 }
 
 export function setupComponent(file, props = {}, bindings = {}) {

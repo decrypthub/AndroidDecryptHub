@@ -1,5 +1,7 @@
 # ADH 功能状态（2026-10-24 更新：通用原生分析与证据核验；各轮实测范围见 §2）
 
+> 2026-11-27 用户范围收敛：移除 Native `EVP_AEAD_CTX_seal/open` 持续采集及方法目录（native-capture/2）；下文旧版“AEAD覆盖”不再表示Native采集。Java `Cipher` 的 AES/GCM等常用认证加密与Native TLS明文采集继续保留。历史记录不删除。
+
 > 2026-11-17发布准备：源码1.0.0尚未发布/默认升级，完整回归仍有失败，不能据旧门禁对外承诺。
 > Host复核566/566，后续定向6/6；原生GOT9/9、v01装载通过，但全模块capture_start仍超时/unknown。
 > 收尾和发布阻塞见[RELEASE_PREPARATION_CLOSEOUT_2026-11-17.md](RELEASE_PREPARATION_CLOSEOUT_2026-11-17.md)。

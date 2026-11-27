@@ -12,6 +12,9 @@ export const CAPTURE_FEATURES=[['digest','摘要',1],['hmac','HMAC',2],['symmetr
 const hash=(s:string)=>createHash('sha256').update(s).digest('hex');
 const canonical=(x:any):string=>Array.isArray(x)?'['+x.map(canonical).join(',')+']':x&&typeof x==='object'?'{'+Object.keys(x).sort().map(k=>JSON.stringify(k)+':'+canonical(x[k])).join(',')+'}':JSON.stringify(x);
 function fail(code:string,message:string):never{throw new OperationError(code,message);}
+// Explicitly retired native methods; Java Cipher/GCM and TLS remain supported.
+const RETIRED_NATIVE_METHODS=new Set(['native.EVP_AEAD_CTX_seal','native.EVP_AEAD_CTX_open']);
+export function pruneRetiredNativeMethods(config:any){return {...config,features:Object.fromEntries(Object.entries(config.features).map(([key,value]:[string,any])=>[key,{...value,methods:value.methods.filter((id:string)=>!RETIRED_NATIVE_METHODS.has(id))}]))};}
 export function emptyCaptureConfig(){return {schemaVersion:1,features:Object.fromEntries(CAPTURE_FEATURES.map(([key])=>[key,{enabled:false,methods:[] as string[]}])),modules:{crypto:'',file:'',system:''}};}
 function exact(value:any,keys:string[]){if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(k=>!keys.includes(k)))fail('INVALID_CAPTURE_CONFIG','配置包含未知字段或不是对象');}
 export function validateCaptureConfig(value:any,methods:any[]){
@@ -42,7 +45,7 @@ export class CaptureControls {
  constructor(root:string,deps:Dependencies){this.root=root;this.deps=deps;}
  private identity(a:any){assertRequestedTarget(a.serial,a.package);if(!validDeviceSerial(a.serial??'')||!validPackage(a.package??''))fail('TARGET_REQUIRED','需要明确设备串号和应用');return {serial:a.serial as string,package:a.package as string};}
  private file(a:any){const id=this.identity(a);return join(this.root,hash(id.serial+'\n'+id.package)+'.json');}
- private read(a:any){const file=this.file(a);if(!existsSync(file))return {schemaVersion:1,...this.identity(a),revision:0,config:emptyCaptureConfig(),catalogs:null,lastApplied:null,history:[],pending:true};const r=JSON.parse(readFileSync(file,'utf8'));if(r.schemaVersion!==1||r.serial!==a.serial||r.package!==a.package||!Number.isSafeInteger(r.revision)||r.revision<1)fail('CAPTURE_STORE_CORRUPT','配置文件损坏；未覆盖已有记录');return r;}
+ private read(a:any){const file=this.file(a);if(!existsSync(file))return {schemaVersion:1,...this.identity(a),revision:0,config:emptyCaptureConfig(),catalogs:null,lastApplied:null,history:[],pending:true};const r=JSON.parse(readFileSync(file,'utf8'));if(r.schemaVersion!==1||r.serial!==a.serial||r.package!==a.package||!Number.isSafeInteger(r.revision)||r.revision<1)fail('CAPTURE_STORE_CORRUPT','配置文件损坏；未覆盖已有记录');const projected=pruneRetiredNativeMethods(r.config);if(JSON.stringify(projected)!==JSON.stringify(r.config)){r.config=projected;r.pending=true;}return r;}
  private write(a:any,value:any){localEffect(()=>atomicWriteJson(this.file(a),value));}
  private target(a:any){if(!a.session)return null;const target=this.deps.target(a.session);if(!target?.online)fail('TARGET_OFFLINE','所选进程已离线，未执行');assertSessionScope(target);if(target.package!==a.package||target.deviceBinding?.serial!==a.serial)fail('TARGET_SCOPE_CONFLICT','会话不属于所选设备和应用');return target;}
  private async runtime(a:any,target:any){

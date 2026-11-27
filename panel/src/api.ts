@@ -15,7 +15,7 @@ export function scopeHeaders(path:string,headers?:HeadersInit,explicit?:{serial?
 export interface Cap {
   id: number; ts: number; category: string;displayId?:number;captureGeneration?:string;
   algo?: string; op?: string; func?: string; hook?: string; path?: string;
-  preview?: string; inl?: number; outl?: number; out?: number;
+  preview?: string; inputPreview?:string; inl?: number; outl?: number; out?: number;
   package?: string; sessionId?: string; deviceBinding?:DeviceBinding;
   keyHex?: string; ivHex?: string; outHex?: string;
   javaTarget?:string; javaTargetTruncated?:boolean; javaHookId?:number; captureMethodId?:string;
@@ -175,6 +175,7 @@ export const adbConnectDevice = (address: string) => deviceActionRaw({ action: '
 
 export interface CapturesQuery {
   history?:boolean;
+  maxId?:number|null;
   package: string;
   since?: number;
   beforeId?: number | null;

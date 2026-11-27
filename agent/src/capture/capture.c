@@ -418,7 +418,7 @@ static int my_EVP_DigestVerifyFinal(void *ctx, const unsigned char *sig, size_t 
     return g_orig_dverify_final(ctx, sig, sig_len);
 }
 
-// ---- Signature (RSA/ECDSA) + AEAD (GCM/ChaCha20-Poly1305) ----
+// ---- Signature (RSA/ECDSA) ----
 // 原生 GOT hook，标准 BoringSSL 导出符号；这些是当前能跨设备工作的原生可 hook 子集。
 
 // EVP_PKEY_sign/verify are NOT imported by the JCE provider's native library at all
@@ -456,27 +456,6 @@ static int my_EVP_PKEY_decrypt(void *ctx, unsigned char *out, size_t *outlen, co
     capture("EVP_PKEY_decrypt_in", in, (int)inlen);
     int rc = g_pkey_decrypt_orig(ctx, out, outlen, in, inlen);
     if (rc == 1 && out && outlen) capture("EVP_PKEY_decrypt_out", out, (int)*outlen);
-    return rc;
-}
-
-typedef int (*aead_crypt_t)(const void *ctx, unsigned char *out, size_t *out_len, size_t max_out_len,
-                             const unsigned char *nonce, size_t nonce_len, const unsigned char *in, size_t in_len,
-                             const unsigned char *ad, size_t ad_len);
-static aead_crypt_t g_aead_seal_orig = NULL, g_aead_open_orig = NULL;
-static int my_EVP_AEAD_CTX_seal(const void *ctx, unsigned char *out, size_t *out_len, size_t max_out_len,
-                                 const unsigned char *nonce, size_t nonce_len, const unsigned char *in, size_t in_len,
-                                 const unsigned char *ad, size_t ad_len) {
-    if (in && in_len) capture("EVP_AEAD_seal_pt", in, (int)in_len);
-    int rc = g_aead_seal_orig(ctx, out, out_len, max_out_len, nonce, nonce_len, in, in_len, ad, ad_len);
-    if (rc == 1 && out && out_len) capture("EVP_AEAD_seal_ct", out, (int)*out_len);
-    return rc;
-}
-static int my_EVP_AEAD_CTX_open(const void *ctx, unsigned char *out, size_t *out_len, size_t max_out_len,
-                                 const unsigned char *nonce, size_t nonce_len, const unsigned char *in, size_t in_len,
-                                 const unsigned char *ad, size_t ad_len) {
-    if (in && in_len) capture("EVP_AEAD_open_ct", in, (int)in_len);
-    int rc = g_aead_open_orig(ctx, out, out_len, max_out_len, nonce, nonce_len, in, in_len, ad, ad_len);
-    if (rc == 1 && out && out_len) capture("EVP_AEAD_open_pt", out, (int)*out_len);
     return rc;
 }
 
@@ -1179,8 +1158,6 @@ static void *capture_method_wrapper(int i) {
         [ADH_CM_ECDSA_VERIFY] = (void *)my_ECDSA_verify,
         [ADH_CM_PKEY_ENCRYPT] = (void *)my_EVP_PKEY_encrypt,
         [ADH_CM_PKEY_DECRYPT] = (void *)my_EVP_PKEY_decrypt,
-        [ADH_CM_AEAD_SEAL] = (void *)my_EVP_AEAD_CTX_seal,
-        [ADH_CM_AEAD_OPEN] = (void *)my_EVP_AEAD_CTX_open,
         [ADH_CM_SIGN_INIT] = (void *)my_EVP_DigestSignInit,
         [ADH_CM_VERIFY_INIT] = (void *)my_EVP_DigestVerifyInit,
         [ADH_CM_SIGN_FINAL] = (void *)my_EVP_DigestSignFinal,
@@ -1295,7 +1272,7 @@ static void skip_add(char *buf, size_t cap, const char *names) {
 
 static void capture_native_restore(int *results) {
     int e = 0, w = 0, r = 0, dg = 0, hm = 0, ds = 0;
-    int pks = 0, pkv = 0, pke = 0, pkd = 0, aes = 0, aeo = 0;
+    int pks = 0, pkv = 0, pke = 0, pkd = 0;
     int dsi = 0, dvi = 0, dsf = 0, dvu = 0, dvf = 0;
     if (g_evp_cipher_orig) e  = adh_capture_got_restore((void *)my_EVP_CipherUpdate);
     if (g_orig_evp_digest) dg = adh_capture_got_restore((void *)my_EVP_DigestUpdate);
@@ -1309,8 +1286,6 @@ static void capture_native_restore(int *results) {
     if (g_ecdsa_verify_orig) pkv = adh_capture_got_restore((void *)my_ECDSA_verify);
     if (g_pkey_encrypt_orig) pke = adh_capture_got_restore((void *)my_EVP_PKEY_encrypt);
     if (g_pkey_decrypt_orig) pkd = adh_capture_got_restore((void *)my_EVP_PKEY_decrypt);
-    if (g_aead_seal_orig)    aes = adh_capture_got_restore((void *)my_EVP_AEAD_CTX_seal);
-    if (g_aead_open_orig)    aeo = adh_capture_got_restore((void *)my_EVP_AEAD_CTX_open);
     if (g_orig_dsign_init)   dsi = adh_capture_got_restore((void *)my_EVP_DigestSignInit);
     if (g_orig_dverify_init) dvi = adh_capture_got_restore((void *)my_EVP_DigestVerifyInit);
     if (g_orig_dsign_final)  dsf = adh_capture_got_restore((void *)my_EVP_DigestSignFinal);
@@ -1337,13 +1312,11 @@ static void capture_native_restore(int *results) {
     results[7] = pkv;
     results[8] = pke;
     results[9] = pkd;
-    results[10] = aes;
-    results[11] = aeo;
-    results[12] = dsi;
-    results[13] = dvi;
-    results[14] = dsf;
-    results[15] = dvu;
-    results[16] = dvf;
+    results[10] = dsi;
+    results[11] = dvi;
+    results[12] = dsf;
+    results[13] = dvu;
+    results[14] = dvf;
 }
 
 void adh_cmd_capture_start(int fd, const char *id, const char *cryptoModule, const char *fileModule, const char *sysModule) {
@@ -1378,13 +1351,11 @@ void adh_cmd_capture_start(int fd, const char *id, const char *cryptoModule, con
     if (dsu) g_orig_digest_sign= (update3_t)dsu;
     if (ow)  g_orig_ssl_write  = (SSL_rw_t)ow;
     if (orr) g_orig_ssl_read   = (SSL_rw_t)orr;
-    // Signature/AEAD native GOT hooks (WS-A P0 coverage)
+    // Signature native GOT hooks (WS-A P0 coverage)
     void *pks = adh_resolve_sym("libcrypto.so", "ECDSA_sign");
     void *pkv = adh_resolve_sym("libcrypto.so", "ECDSA_verify");
     void *pke = adh_resolve_sym("libcrypto.so", "EVP_PKEY_encrypt");
     void *pkd = adh_resolve_sym("libcrypto.so", "EVP_PKEY_decrypt");
-    void *aes = adh_resolve_sym("libcrypto.so", "EVP_AEAD_CTX_seal");
-    void *aeo = adh_resolve_sym("libcrypto.so", "EVP_AEAD_CTX_open");
     // EVP_DigestSign/VerifyInit+Final (the actual Conscrypt SHA256withECDSA/RSA call path on
     // this device — see the dsign_ctx_* comment above); EVP_PKEY_id is a plain accessor, never hooked.
     void *dsi = adh_resolve_sym("libcrypto.so", "EVP_DigestSignInit");
@@ -1397,8 +1368,6 @@ void adh_cmd_capture_start(int fd, const char *id, const char *cryptoModule, con
     if (pkv) g_ecdsa_verify_orig = (ECDSA_verify_t)pkv;
     if (pke) g_pkey_encrypt_orig = (EVP_PKEY_crypt_t)pke;
     if (pkd) g_pkey_decrypt_orig = (EVP_PKEY_crypt_t)pkd;
-    if (aes) g_aead_seal_orig = (aead_crypt_t)aes;
-    if (aeo) g_aead_open_orig = (aead_crypt_t)aeo;
     if (dsi) g_orig_dsign_init   = (digest_sign_init_t)dsi;
     if (dvi) g_orig_dverify_init = (digest_sign_init_t)dvi;
     if (dsf) g_orig_dsign_final  = (digest_sign_final_t)dsf;
@@ -1417,7 +1386,7 @@ void adh_cmd_capture_start(int fd, const char *id, const char *cryptoModule, con
     // EVP_DigestSign* serves BOTH the JCA Mac (HMAC) and the PKEY signing path, so it belongs to
     // either family — it is installed when at least one of them is on.
     const int on_dig = g_families.digest, on_mac = g_families.hmac, on_sym = g_families.symmetric;
-    const int on_asym = g_families.asymmetric, on_tls = g_families.tls, on_aead = g_families.aead;
+    const int on_asym = g_families.asymmetric, on_tls = g_families.tls;
     const int on_sys = g_families.system;
     const int on_dsign = (on_mac || on_asym) ? 1 : 0;
     char skipped[160]; skipped[0] = 0;
@@ -1427,7 +1396,6 @@ void adh_cmd_capture_start(int fd, const char *id, const char *cryptoModule, con
     if (!on_dsign) skip_add(skipped, sizeof(skipped), "digestSign,digestSignVerify");
     if (!on_asym)  skip_add(skipped, sizeof(skipped), "pkey");
     if (!on_tls)   skip_add(skipped, sizeof(skipped), "sslWrite,sslRead");
-    if (!on_aead)  skip_add(skipped, sizeof(skipped), "aead");
     if (!on_sys)   skip_add(skipped, sizeof(skipped), "sys");
     int re = (evp && capture_method_wanted(ADH_CM_CIPHER_UPDATE))   ? adh_capture_got_replace(g_crypto_mod, evp, (void *)my_EVP_CipherUpdate) : -1;
     int rd = (dig && capture_method_wanted(ADH_CM_DIGEST_UPDATE))   ? adh_capture_got_replace(g_crypto_mod, dig, (void *)my_EVP_DigestUpdate) : -1;
@@ -1458,7 +1426,7 @@ void adh_cmd_capture_start(int fd, const char *id, const char *cryptoModule, con
     // symbol.
     int rci = (cin && capture_method_wanted(ADH_CM_CIPHER_INIT))  ? adh_capture_got_replace_by_name(g_crypto_mod, "EVP_CipherInit_ex", (void *)my_EVP_CipherInit_ex) : -1;
     int rcf = (cfr && capture_method_wanted(ADH_CM_CIPHER_FREE))  ? adh_capture_got_replace_by_name(g_crypto_mod, "EVP_CIPHER_CTX_free", (void *)my_EVP_CIPHER_CTX_free) : -1;
-    // Name-based install (see adh_got_replace_by_name): these 7 are one-shot BoringSSL APIs the
+    // Name-based install (see adh_got_replace_by_name): these are one-shot BoringSSL APIs the
     // app may never have called before capture_start runs, so their PLT slot is typically
     // still unbound — value-match (adh_got_replace) would silently find 0 matching slots even
     // though the symbol is genuinely imported. Matching by the reloc entry's own symbol name
@@ -1467,8 +1435,6 @@ void adh_cmd_capture_start(int fd, const char *id, const char *cryptoModule, con
     int rpkv = (pkv && capture_method_wanted(ADH_CM_ECDSA_VERIFY)) ? adh_capture_got_replace_by_name(g_crypto_mod, "ECDSA_verify", (void*)my_ECDSA_verify) : -1;
     int rpke = (pke && capture_method_wanted(ADH_CM_PKEY_ENCRYPT)) ? adh_capture_got_replace_by_name(g_crypto_mod, "EVP_PKEY_encrypt", (void*)my_EVP_PKEY_encrypt) : -1;
     int rpkd = (pkd && capture_method_wanted(ADH_CM_PKEY_DECRYPT)) ? adh_capture_got_replace_by_name(g_crypto_mod, "EVP_PKEY_decrypt", (void*)my_EVP_PKEY_decrypt) : -1;
-    int raes = (aes && capture_method_wanted(ADH_CM_AEAD_SEAL)) ? adh_capture_got_replace_by_name(g_crypto_mod, "EVP_AEAD_CTX_seal", (void*)my_EVP_AEAD_CTX_seal) : -1;
-    int raeo = (aeo && capture_method_wanted(ADH_CM_AEAD_OPEN)) ? adh_capture_got_replace_by_name(g_crypto_mod, "EVP_AEAD_CTX_open", (void*)my_EVP_AEAD_CTX_open) : -1;
     int rdsi = (dsi && capture_method_wanted(ADH_CM_SIGN_INIT)) ? adh_capture_got_replace_by_name(g_crypto_mod, "EVP_DigestSignInit", (void*)my_EVP_DigestSignInit) : -1;
     int rdvi = (dvi && capture_method_wanted(ADH_CM_VERIFY_INIT)) ? adh_capture_got_replace_by_name(g_crypto_mod, "EVP_DigestVerifyInit", (void*)my_EVP_DigestVerifyInit) : -1;
     int rdsf = (dsf && capture_method_wanted(ADH_CM_SIGN_FINAL)) ? adh_capture_got_replace_by_name(g_crypto_mod, "EVP_DigestSignFinal", (void*)my_EVP_DigestSignFinal) : -1;
@@ -1542,8 +1508,6 @@ void adh_cmd_capture_start(int fd, const char *id, const char *cryptoModule, con
     g_method_results[ADH_CM_ECDSA_VERIFY] = !capture_method_wanted(ADH_CM_ECDSA_VERIFY) ? -1 : rpkv < 0 ? -3 : rpkv;
     g_method_results[ADH_CM_PKEY_ENCRYPT] = !capture_method_wanted(ADH_CM_PKEY_ENCRYPT) ? -1 : rpke < 0 ? -3 : rpke;
     g_method_results[ADH_CM_PKEY_DECRYPT] = !capture_method_wanted(ADH_CM_PKEY_DECRYPT) ? -1 : rpkd < 0 ? -3 : rpkd;
-    g_method_results[ADH_CM_AEAD_SEAL] = !capture_method_wanted(ADH_CM_AEAD_SEAL) ? -1 : raes < 0 ? -3 : raes;
-    g_method_results[ADH_CM_AEAD_OPEN] = !capture_method_wanted(ADH_CM_AEAD_OPEN) ? -1 : raeo < 0 ? -3 : raeo;
     g_method_results[ADH_CM_SIGN_INIT] = !capture_method_wanted(ADH_CM_SIGN_INIT) ? -1 : rdsi < 0 ? -3 : rdsi;
     g_method_results[ADH_CM_VERIFY_INIT] = !capture_method_wanted(ADH_CM_VERIFY_INIT) ? -1 : rdvi < 0 ? -3 : rdvi;
     g_method_results[ADH_CM_SIGN_FINAL] = !capture_method_wanted(ADH_CM_SIGN_FINAL) ? -1 : rdsf < 0 ? -3 : rdsf;
@@ -1574,13 +1538,12 @@ void adh_cmd_capture_start(int fd, const char *id, const char *cryptoModule, con
     snprintf(out, sizeof(out),
         "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"capture_start\",\"ok\":true,\"cryptoModule\":\"%s\",\"evp\":%d,\"cipherInit\":%d,\"cipherCtxFree\":%d,\"digest\":%d,\"hmac\":%d,\"digestSign\":%d,\"sslWrite\":%d,\"sslRead\":%d,"
         "\"pkey\":{\"sign\":%d,\"verify\":%d,\"encrypt\":%d,\"decrypt\":%d},"
-        "\"aead\":{\"seal\":%d,\"open\":%d},"
         "\"digestSignVerify\":{\"signInit\":%d,\"verifyInit\":%d,\"signFinal\":%d,\"verifyUpdate\":%d,\"verifyFinal\":%d},"
         "\"fileModule\":\"%s\",\"file\":{\"open\":%d,\"openat\":%d,\"read\":%d,\"write\":%d,\"syscall\":%d,\"readChk\":%d,\"writeChk\":%d},"
         "\"sysModule\":\"%s\",\"sysModules\":%d,\"sysTruncated\":%s,\"sys\":{\"ptrace\":%d,\"access\":%d,\"faccessat\":%d,\"prop\":%d,\"propread\":%d},"
         "\"skipped\":\"%s\",\"on\":true}\n",
         idj, cmj, re, rci, rcf, rd, rh, rs, rw, rr,
-        rpks, rpkv, rpke, rpkd, raes, raeo,
+        rpks, rpkv, rpke, rpkd,
         rdsi, rdvi, rdsf, rdvu, rdvf,
         fmj, fo, foa, frd, fwr, fsc, frc, fwc, smj, g_sys_nmods, sys_truncated ? "true" : "false", sp, sa, sf, sg, sr, skipped);
     // fd < 0 would mean a caller with nobody waiting for the answer; no such caller exists today
@@ -1601,7 +1564,7 @@ void adh_cmd_capture_stop(int fd, const char *id) {
 #ifdef ADH_HAVE_LSPLANT
     java_pending = adh_java_crypto_stop();
 #endif
-    int restored[17]; capture_native_restore(restored);
+    int restored[15]; capture_native_restore(restored);
     int e = restored[0];
     int w = restored[1];
     int r = restored[2];
@@ -1612,13 +1575,11 @@ void adh_cmd_capture_stop(int fd, const char *id) {
     int pkv = restored[7];
     int pke = restored[8];
     int pkd = restored[9];
-    int aes = restored[10];
-    int aeo = restored[11];
-    int dsi = restored[12];
-    int dvi = restored[13];
-    int dsf = restored[14];
-    int dvu = restored[15];
-    int dvf = restored[16];
+    int dsi = restored[10];
+    int dvi = restored[11];
+    int dsf = restored[12];
+    int dvu = restored[13];
+    int dvf = restored[14];
     unsigned pending_slots = adh_capture_got_pending();
     g_capture_on = (pending_slots || java_pending) ? 1 : 0;
     if (!pending_slots) capture_method_results_reset();
@@ -1632,9 +1593,9 @@ void adh_cmd_capture_stop(int fd, const char *id) {
     }
     char out[700];
     snprintf(out, sizeof(out), "{\"t\":\"cmdResult\",\"id\":\"%s\",\"op\":\"capture_stop\",\"ok\":%s,\"on\":%s,\"pendingSlots\":%u,\"javaPending\":%d,\"restored\":{\"evp\":%d,\"digest\":%d,\"hmac\":%d,\"digestSign\":%d,\"sslWrite\":%d,\"sslRead\":%d,"
-        "\"pkeySign\":%d,\"pkeyVerify\":%d,\"pkeyEncrypt\":%d,\"pkeyDecrypt\":%d,\"aeadSeal\":%d,\"aeadOpen\":%d,"
+        "\"pkeySign\":%d,\"pkeyVerify\":%d,\"pkeyEncrypt\":%d,\"pkeyDecrypt\":%d,"
         "\"digestSignInit\":%d,\"digestVerifyInit\":%d,\"digestSignFinal\":%d,\"digestVerifyUpdate\":%d,\"digestVerifyFinal\":%d}}\n",
-        idj, g_capture_on ? "false" : "true", g_capture_on ? "true" : "false", pending_slots, java_pending, e, dg, hm, ds, w, r, pks, pkv, pke, pkd, aes, aeo, dsi, dvi, dsf, dvu, dvf);
+        idj, g_capture_on ? "false" : "true", g_capture_on ? "true" : "false", pending_slots, java_pending, e, dg, hm, ds, w, r, pks, pkv, pke, pkd, dsi, dvi, dsf, dvu, dvf);
     if (fd >= 0) send_line(fd, out);
     LOGI("capture_stop: restored evp=%d sslw=%d sslr=%d", e, w, r);
 }

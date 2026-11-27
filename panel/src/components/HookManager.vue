@@ -47,7 +47,7 @@ function isProblem(m:any){return !!m.error||Number(m.changedSlots)>0||Number(m.u
 function methodName(m:any){return m.backend==='java'?`${String(m.class??'').split('.').at(-1)}.${m.method}(${m.params??''})`:m.symbol;}
 function stateLabel(m:any){if(!view.value?.runtime)return '离线';if(isProblem(m))return '需处理';if(isActive(m))return '观测中';return m.patched?'已停用观测':'未启用';}
 function toggleMethod(m:any,value:boolean){if(controlsDisabled.value||!currentChoices.value.enabled||dependencies.value.has(m.id))return;const f=draft.value.features[feature.value];f.methods=value?[...new Set([...f.methods,m.id])]:f.methods.filter((x:string)=>x!==m.id);}
-function menu(action:string){if(!draft.value)return;const f=draft.value.features[feature.value];if(action==='all')f.methods=methods.value.filter(m=>m.families&activeFeature.value[2]).map(m=>m.id);if(action==='none')f.methods=[];if(action==='restore'&&view.value?.lastApplied)f.methods=copy(view.value.lastApplied.config.features[feature.value].methods);}
+function menu(action:string){if(!draft.value)return;const f=draft.value.features[feature.value];if(action==='all')f.methods=methods.value.filter(m=>m.families&activeFeature.value[2]).map(m=>m.id);if(action==='none')f.methods=[];if(action==='restore'&&view.value?.lastApplied){f.methods=copy(view.value.lastApplied.config.features[feature.value].methods).filter((id:string)=>methods.value.some(m=>m.id===id));notice.value='已恢复当前目录仍支持的选择';}}
 function retain(){if(changed.value&&draft.value)drafts.set(key(target.value),{config:copy(draft.value),revision:view.value!.revision});}
 async function load(preserve=false){
  const id=++request,t=copy(target.value);if(!t.serial||!t.package){view.value=null;draft.value=null;return;}loading.value=true;error.value='';

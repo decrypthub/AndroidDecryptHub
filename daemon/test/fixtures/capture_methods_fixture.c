@@ -43,28 +43,28 @@ static unsigned adh_capture_got_pending(void);
 static const char *symbols[] = {
  "EVP_CipherUpdate","EVP_DigestUpdate","HMAC_Update","EVP_DigestSignUpdate","SSL_write","SSL_read",
  "EVP_CipherInit_ex","EVP_CIPHER_CTX_free","ECDSA_sign","ECDSA_verify","EVP_PKEY_encrypt","EVP_PKEY_decrypt",
- "EVP_AEAD_CTX_seal","EVP_AEAD_CTX_open","EVP_DigestSignInit","EVP_DigestVerifyInit","EVP_DigestSignFinal",
+ "EVP_DigestSignInit","EVP_DigestVerifyInit","EVP_DigestSignFinal",
  "EVP_DigestVerifyUpdate","EVP_DigestVerifyFinal","open","openat","read","write","syscall","__read_chk",
  "__write_chk","ptrace","access","faccessat","__system_property_get","__system_property_read_callback"
 };
 static void *wrappers[] = {
  my_EVP_CipherUpdate,my_EVP_DigestUpdate,my_HMAC_Update,my_EVP_DigestSignUpdate,my_SSL_write,my_SSL_read,
  my_EVP_CipherInit_ex,my_EVP_CIPHER_CTX_free,my_ECDSA_sign,my_ECDSA_verify,my_EVP_PKEY_encrypt,my_EVP_PKEY_decrypt,
- my_EVP_AEAD_CTX_seal,my_EVP_AEAD_CTX_open,my_EVP_DigestSignInit,my_EVP_DigestVerifyInit,my_EVP_DigestSignFinal,
+ my_EVP_DigestSignInit,my_EVP_DigestVerifyInit,my_EVP_DigestSignFinal,
  my_EVP_DigestVerifyUpdate,my_EVP_DigestVerifyFinal,my_open,my_openat,my_read,my_write,my_syscall,my_read_chk,
  my_write_chk,my_ptrace,my_access,my_faccessat,my_prop,my_prop_read
 };
-static char originals[31];
-static void *slots[2][31];
-static int index_of(const char *s) { for(int i=0;i<31;i++)if(!strcmp(s,symbols[i]))return i;return -1; }
+static char originals[ADH_CM_COUNT];
+static void *slots[2][ADH_CM_COUNT];
+static int index_of(const char *s) { for(int i=0;i<ADH_CM_COUNT;i++)if(!strcmp(s,symbols[i]))return i;return -1; }
 static void *adh_resolve_sym(const char *m,const char*s) { int i=index_of(s);return i<0?NULL:&originals[i]; }
 static int belongs(const char *m,int bank,int i) {
- if(!m||!m[0])return i<19;
- const char *expected = i<19?(bank?"cryptoB":"cryptoA"):i<26?(bank?"fileB":"fileA"):(bank?"sysB":"sysA");
+ if(!m||!m[0])return i<17;
+ const char *expected = i<17?(bank?"cryptoB":"cryptoA"):i<24?(bank?"fileB":"fileA"):(bank?"sysB":"sysA");
  return !strcmp(m,expected);
 }
 static int adh_got_replace(const char*m,void*orig,void*wrapper) {
- int n=0;for(int b=0;b<2;b++)for(int i=0;i<31;i++)if(belongs(m,b,i)&&slots[b][i]==orig){slots[b][i]=wrapper;n++;}return n;
+ int n=0;for(int b=0;b<2;b++)for(int i=0;i<ADH_CM_COUNT;i++)if(belongs(m,b,i)&&slots[b][i]==orig){slots[b][i]=wrapper;n++;}return n;
 }
 static int adh_got_replace_by_name_ex(const char*m,const char*s,void*w,void**slot,void**old,char*p,size_t cap) {
  int i=index_of(s),n=0;if(i<0)return 0;
@@ -81,7 +81,7 @@ static int slot_swap(void **slot,void *expected,void *value) {
  if(*slot!=expected)return -1;*slot=value;return publish_failure?0:1;
 }
 static int adh_capture_got_replace(const char*m,void*orig,void*w) {
- int n=0;for(int b=0;b<2;b++)for(int i=0;i<31;i++)if(belongs(m,b,i)&&slots[b][i]==orig)
+ int n=0;for(int b=0;b<2;b++)for(int i=0;i<ADH_CM_COUNT;i++)if(belongs(m,b,i)&&slots[b][i]==orig)
  if(adh_capture_slot_publish(&ledger,&slots[b][i],orig,w,0,slot_read,slot_swap)==1)n++;return n;
 }
 static int adh_capture_got_replace_by_name_ex(const char*m,const char*s,void*w,void**slot,void**old,char*p,size_t cap) {
@@ -96,13 +96,13 @@ static int adh_capture_got_restore(void*w) {return adh_capture_slot_restore(&led
 static void adh_capture_got_state(void*w,struct AdhCaptureSlotState*out) {adh_capture_slot_state(&ledger,w,slot_read,out);}
 static unsigned adh_capture_got_pending(void) {return adh_capture_slots_pending(&ledger);}
 #endif
-static int owned(int bank) {int n=0;for(int i=0;i<31;i++)if(slots[bank][i]==wrappers[i])n++;return n;}
+static int owned(int bank) {int n=0;for(int i=0;i<ADH_CM_COUNT;i++)if(slots[bank][i]==wrappers[i])n++;return n;}
 static void fail(const char*msg){fprintf(stderr,"FAIL %s\n",msg);exit(1);}
 #define CHECK(x) do{if(!(x))fail(#x);}while(0)
 static void select_bits(uint32_t bits,const char *expected) {
 #if ADH_HAS_METHODS
- char selection[32],req[256];for(int i=0;i<31;i++)selection[i]=(bits&(UINT32_C(1)<<i))?'1':'0';selection[31]=0;
- snprintf(req,sizeof(req),"{\"t\":\"cmd\",\"op\":\"capture_methods\",\"id\":\"fixture\",\"action\":\"set\",\"catalog\":\"native-capture/1\",\"revision\":\"%u\",\"selection\":\"%s\"}",g_method_revision,selection);
+ char selection[ADH_CM_COUNT+1],req[256];for(int i=0;i<ADH_CM_COUNT;i++)selection[i]=(bits&(UINT32_C(1)<<i))?'1':'0';selection[ADH_CM_COUNT]=0;
+ snprintf(req,sizeof(req),"{\"t\":\"cmd\",\"op\":\"capture_methods\",\"id\":\"fixture\",\"action\":\"set\",\"catalog\":\"native-capture/2\",\"revision\":\"%u\",\"selection\":\"%s\"}",g_method_revision,selection);
  adh_cmd_capture_methods(-1,"fixture",req);
  if(expected)CHECK(strstr(reply,expected));else CHECK(strstr(reply,"\"ok\":true"));
 #else
@@ -111,7 +111,7 @@ static void select_bits(uint32_t bits,const char *expected) {
 }
 int main(int argc,char**argv) {
  CHECK(argc==2);const char*name=argv[1];
- for(int b=0;b<2;b++)for(int i=0;i<31;i++)slots[b][i]=&originals[i];
+ for(int b=0;b<2;b++)for(int i=0;i<ADH_CM_COUNT;i++)slots[b][i]=&originals[i];
  if(!strcmp(name,"java-stop")) {
    adh_cmd_capture_start(-1,"f","cryptoA","fileA","");java_pending_fixture=2;
    adh_cmd_capture_stop(1,"f");CHECK(java_stop_calls==1);CHECK(strstr(reply,"\"ok\":false"));CHECK(strstr(reply,"\"javaPending\":2"));CHECK(g_capture_on);
@@ -126,10 +126,10 @@ int main(int argc,char**argv) {
  } else if(!strcmp(name,"unreadable-stop")||!strcmp(name,"capacity")||!strcmp(name,"publish-failure")||!strcmp(name,"live-ownership")) {
 #if ADH_HAS_SLOTS
    if(!strcmp(name,"unreadable-stop")) {
-     adh_capture_set_families(1,1,1,1,1,1,1);select_bits((UINT32_C(1)<<20)|(UINT32_C(1)<<27),NULL);
+     adh_capture_set_families(1,1,1,1,1,1,1);select_bits((UINT32_C(1)<<ADH_CM_OPENAT)|(UINT32_C(1)<<ADH_CM_ACCESS),NULL);
      adh_cmd_capture_start(-1,"f","cryptoA","fileA","sysA");CHECK(owned(0)==2);
-     unreadable_slot=&slots[0][20];adh_cmd_capture_stop(1,"f");CHECK(strstr(reply,"\"ok\":false"));CHECK(adh_capture_got_pending()==1);CHECK(g_capture_on);
-     unreadable_slot=NULL;adh_cmd_capture_stop(1,"f");CHECK(strstr(reply,"\"ok\":true"));CHECK(adh_capture_got_pending()==0);CHECK(!g_capture_on);CHECK(slots[0][20]==&originals[20]);
+     unreadable_slot=&slots[0][ADH_CM_OPENAT];adh_cmd_capture_stop(1,"f");CHECK(strstr(reply,"\"ok\":false"));CHECK(adh_capture_got_pending()==1);CHECK(g_capture_on);
+     unreadable_slot=NULL;adh_cmd_capture_stop(1,"f");CHECK(strstr(reply,"\"ok\":true"));CHECK(adh_capture_got_pending()==0);CHECK(!g_capture_on);CHECK(slots[0][ADH_CM_OPENAT]==&originals[ADH_CM_OPENAT]);
    } else if(!strcmp(name,"capacity")) {
      struct AdhCaptureSlots local={0};void *values[ADH_CAPTURE_SLOT_MAX+1];static char p,w;
      for(int i=0;i<=ADH_CAPTURE_SLOT_MAX;i++)values[i]=&p;
@@ -151,17 +151,17 @@ int main(int argc,char**argv) {
    fail("exact-prior capture ledger unsupported by baseline source");
 #endif
  } else if(!strncmp(name,"method-",7)) {
-   int i=atoi(name+7);CHECK(i>=0&&i<31);uint32_t expected=UINT32_C(1)<<i;
+   int i=atoi(name+7);CHECK(i>=0&&i<ADH_CM_COUNT);uint32_t expected=UINT32_C(1)<<i;
    if(i==0)expected|=(UINT32_C(1)<<6)|(UINT32_C(1)<<7);
    if(i==6)expected|=UINT32_C(1)<<7;
-   if(i==3||i==16)expected|=UINT32_C(1)<<14;
-   if(i==17||i==18)expected|=UINT32_C(1)<<15;
+   if(i==3||i==ADH_CM_SIGN_FINAL)expected|=UINT32_C(1)<<ADH_CM_SIGN_INIT;
+   if(i==ADH_CM_VERIFY_UPDATE||i==ADH_CM_VERIFY_FINAL)expected|=UINT32_C(1)<<ADH_CM_VERIFY_INIT;
    adh_capture_set_families(1,1,1,1,1,1,1);select_bits(UINT32_C(1)<<i,NULL);
    adh_cmd_capture_start(-1,"f","cryptoA","fileA","sysA");
-   for(int j=0;j<31;j++)CHECK((slots[0][j]==wrappers[j])==!!(expected&(UINT32_C(1)<<j)));
+   for(int j=0;j<ADH_CM_COUNT;j++)CHECK((slots[0][j]==wrappers[j])==!!(expected&(UINT32_C(1)<<j)));
    CHECK(owned(1)==0);
  } else if(!strcmp(name,"defaults")) {
-   adh_cmd_capture_start(-1,"f","cryptoA","fileA","sysA");CHECK(owned(0)==26);CHECK(owned(1)==0);
+   adh_cmd_capture_start(-1,"f","cryptoA","fileA","sysA");CHECK(owned(0)==ADH_CM_COUNT-5);CHECK(owned(1)==0);
  } else if(!strcmp(name,"none")) {
    adh_capture_set_families(1,1,1,1,1,1,1);select_bits(0,NULL);
    adh_cmd_capture_start(-1,"f","cryptoA","fileA","sysA");CHECK(owned(0)==0);
@@ -172,18 +172,18 @@ int main(int argc,char**argv) {
    select_bits(1,NULL);adh_cmd_capture_start(-1,"f","cryptoA","fileA","");CHECK(owned(0)==3);
    CHECK(slots[0][0]==wrappers[0]);CHECK(slots[0][6]==wrappers[6]);CHECK(slots[0][7]==wrappers[7]);
  } else if(!strcmp(name,"shared-hmac")) {
-   adh_capture_set_families(0,1,0,0,0,0,0);select_bits(UINT32_C(1)<<16,NULL);
-   adh_cmd_capture_start(-1,"f","cryptoA","","");CHECK(owned(0)==2);CHECK(slots[0][14]==wrappers[14]);CHECK(slots[0][16]==wrappers[16]);
+   adh_capture_set_families(0,1,0,0,0,0,0);select_bits(UINT32_C(1)<<ADH_CM_SIGN_FINAL,NULL);
+   adh_cmd_capture_start(-1,"f","cryptoA","","");CHECK(owned(0)==2);CHECK(slots[0][ADH_CM_SIGN_INIT]==wrappers[ADH_CM_SIGN_INIT]);CHECK(slots[0][ADH_CM_SIGN_FINAL]==wrappers[ADH_CM_SIGN_FINAL]);
  } else if(!strcmp(name,"family-off")) {
    adh_capture_set_families(0,0,0,0,0,0,0);select_bits(1,NULL);
    adh_cmd_capture_start(-1,"f","cryptoA","fileA","sysA");CHECK(owned(0)==0);
  } else if(!strcmp(name,"repeat-retarget")) {
-   adh_capture_set_families(1,1,1,1,1,1,1);adh_cmd_capture_start(-1,"f","cryptoA","fileA","sysA");CHECK(owned(0)==31);
-   adh_cmd_capture_start(-1,"f","cryptoB","fileB","sysB");CHECK(owned(0)==0);CHECK(owned(1)==31);
+   adh_capture_set_families(1,1,1,1,1,1,1);adh_cmd_capture_start(-1,"f","cryptoA","fileA","sysA");CHECK(owned(0)==ADH_CM_COUNT);
+   adh_cmd_capture_start(-1,"f","cryptoB","fileB","sysB");CHECK(owned(0)==0);CHECK(owned(1)==ADH_CM_COUNT);
  } else if(!strcmp(name,"stop-ownership")) {
    adh_capture_set_families(1,1,1,1,1,1,1);adh_cmd_capture_start(-1,"f","cryptoA","fileA","sysA");
-   static char third;slots[0][8]=&third;slots[0][27]=&third;
-   adh_cmd_capture_stop(-1,"f");CHECK(slots[0][8]==&third);CHECK(slots[0][27]==&third);CHECK(owned(0)==0);
+   static char third;slots[0][8]=&third;slots[0][ADH_CM_ACCESS]=&third;
+   adh_cmd_capture_stop(-1,"f");CHECK(slots[0][8]==&third);CHECK(slots[0][ADH_CM_ACCESS]==&third);CHECK(owned(0)==0);
  } else {
 #if ADH_HAS_METHODS
    if(!strcmp(name,"revision")) {
@@ -192,7 +192,7 @@ int main(int argc,char**argv) {
      adh_capture_set_families(0,1,1,1,1,1,0);CHECK(g_method_revision==rev+2);
    } else if(!strcmp(name,"active-reject")) {
      adh_cmd_capture_start(-1,"f","cryptoA","fileA","");uint32_t before=g_method_revision;
-     select_bits(0,"CAPTURE_ACTIVE");CHECK(g_method_revision==before);CHECK(g_method_selected==ADH_CM_ALL);CHECK(owned(0)==26);
+     select_bits(0,"CAPTURE_ACTIVE");CHECK(g_method_revision==before);CHECK(g_method_selected==ADH_CM_ALL);CHECK(owned(0)==ADH_CM_COUNT-5);
    } else if(!strcmp(name,"catalog-status")) {
      select_bits(1,NULL);adh_cmd_capture_methods(-1,"f","{\"action\":\"status\"}");
      puts(reply);CHECK(strstr(reply,"native.EVP_CipherUpdate"));CHECK(strstr(reply,"\"dependency\":true"));

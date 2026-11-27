@@ -8,7 +8,7 @@
 #include <stddef.h>
 #include <string.h>
 
-#define ADH_CAPTURE_CATALOG "native-capture/1"
+#define ADH_CAPTURE_CATALOG "native-capture/2"
 #define ADH_CF_DIGEST 1u
 #define ADH_CF_HMAC 2u
 #define ADH_CF_SYMMETRIC 4u
@@ -31,8 +31,6 @@
  X(ECDSA_VERIFY, "ECDSA_verify", ADH_CF_ASYMMETRIC, 0) \
  X(PKEY_ENCRYPT, "EVP_PKEY_encrypt", ADH_CF_ASYMMETRIC, 0) \
  X(PKEY_DECRYPT, "EVP_PKEY_decrypt", ADH_CF_ASYMMETRIC, 0) \
- X(AEAD_SEAL, "EVP_AEAD_CTX_seal", ADH_CF_AEAD, 0) \
- X(AEAD_OPEN, "EVP_AEAD_CTX_open", ADH_CF_AEAD, 0) \
  X(SIGN_INIT, "EVP_DigestSignInit", ADH_CF_HMAC|ADH_CF_ASYMMETRIC, 0) \
  X(VERIFY_INIT, "EVP_DigestVerifyInit", ADH_CF_ASYMMETRIC, 0) \
  X(SIGN_FINAL, "EVP_DigestSignFinal", ADH_CF_HMAC|ADH_CF_ASYMMETRIC, ADH_CM_BIT(SIGN_INIT)) \

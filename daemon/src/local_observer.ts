@@ -71,6 +71,16 @@ async function readLocalObserver(): Promise<LocalObserver | null> {
     throw Error('Local observation needs an exact USB serial, package and isolated ADH_DATA_DIR');
   }
   assertObserverDataDirectory(process.env.ADH_DATA_DIR,serial,pkg,process.env.ADH_RESUME_OBSERVER_DATA==='1',!!process.env.ADH_CAPTURES_DIR);
+  // An explicitly owned resume restores the local archive even when ADB is unavailable.
+  // Live routes and every device operation still require fresh USB/process proof later.
+  if(process.env.ADH_RESUME_OBSERVER_DATA==='1'&&!fileBrowserOnly&&!demoApi){
+    const owner=JSON.parse(readFileSync(join(process.env.ADH_DATA_DIR,'.adh-local-observer.json'),'utf8'));
+    if(owner.version!==1||owner.serial!==serial||owner.package!==pkg)throw Error('Resume ownership mismatch');
+    return {package:pkg,pid:0,model:'已记住的设备',usbSerial:serial,
+      ownFilesSerial:process.env.ADH_OBSERVE_OWN_FILES==='1'?serial:undefined,
+      declaredApiSerial:process.env.ADH_USB_APP_INVENTORY==='1'?serial:undefined};
+  }
+
   const adb = async (args: string[]) => (await adbExec(args, { timeout: 5000 })).stdout.trim();
   const device = (...args: string[]) => adb(['-s', serial, ...args]);
   const usb = (await adb(['devices', '-l'])).split(/\r?\n/).flatMap(line => {
