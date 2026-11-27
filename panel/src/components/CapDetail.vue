@@ -30,7 +30,7 @@ async function openHookSource(){
 }
 const confirmDelete = ref(false);
 const infoOpen = ref(false);
-const wrapLines=ref(true);
+
 
 function hexToBytes(h: string): Uint8Array {
   const clean = h.length % 2 === 0 ? h : h.slice(0, -1);
@@ -229,8 +229,8 @@ async function doDelete() {
       </div>
     </div>
 
-    <div v-if="infoOpen" class="capture-overview">
-      <h3>事件信息</h3>
+    <n-modal v-model:show="infoOpen" preset="card" title="事件信息" class="event-info-modal ui-window" :style="{width:'min(680px, calc(100vw - 24px))',maxHeight:'calc(100dvh - 48px)'}" :content-style="{overflow:'auto'}">
+    <div class="capture-overview">
       <dl class="capture-facts">
         <div><dt>事件编号</dt><dd>#{{ c.id ?? '未记录' }}</dd></div>
         <div><dt>类别</dt><dd>{{ CATLABEL[catClass(c)] }}</dd></div>
@@ -243,16 +243,16 @@ async function doDelete() {
         <div v-if="c.sessionId"><dt>会话</dt><dd class="mono">{{ c.sessionId }}</dd></div>
       </dl>
       <div v-if="hasStack" class="stack-box">
-        <pre :data-wrap="wrapLines">{{ c.callStack }}</pre>
+        <pre >{{ c.callStack }}</pre>
         <n-button quaternary circle size="small" class="blk-copy" title="复制调用栈" aria-label="复制调用栈"
           @click="copy(c.callStack || '')">
           <n-icon size="15" :component="CopyOutline" />
         </n-button>
       </div>
     </div>
+    </n-modal>
 
     <div class="io-toolbar">
-      <n-checkbox v-model:checked="wrapLines" aria-label="长内容自动换行">自动换行</n-checkbox>
       <n-radio-group v-model:value="ioTab" size="small">
         <n-radio-button value="in">{{ inLabel }}</n-radio-button>
         <n-radio-button value="out">{{ outLabel }}</n-radio-button>
@@ -267,7 +267,7 @@ async function doDelete() {
         <div class="io-field">
           <div class="io-field-label">路径</div>
           <div class="io-data">
-            <pre :data-wrap="wrapLines">{{ systemPath(c) || '未记录' }}</pre>
+            <pre >{{ systemPath(c) || '未记录' }}</pre>
             <n-button quaternary circle size="small" class="blk-copy" title="复制路径" aria-label="复制路径"
               @click="copy(systemPath(c))">
               <n-icon size="15" :component="CopyOutline" />
@@ -277,7 +277,7 @@ async function doDelete() {
         <div class="io-field">
           <div class="io-field-label">详情</div>
           <div class="io-data">
-            <pre :data-wrap="wrapLines">{{ [c.func, c.op, c.path ? c.preview : c.text].filter(Boolean).join('\n') }}</pre>
+            <pre >{{ [c.func, c.op, c.path ? c.preview : c.text].filter(Boolean).join('\n') }}</pre>
             <n-button quaternary circle size="small" class="blk-copy" title="复制详情" aria-label="复制详情"
               @click="copy([c.func, c.op, c.path ? c.preview : c.text].filter(Boolean).join('\n'))">
               <n-icon size="15" :component="CopyOutline" />
@@ -290,7 +290,7 @@ async function doDelete() {
         <div class="io-field">
           <div class="io-field-label">KEY · {{ c.keyHex.length / 2 }}B</div>
           <div class="io-data">
-            <pre :data-wrap="wrapLines" class="mono">{{ formatKey(fmtIn, c.keyHex).display }}</pre>
+            <pre  class="mono">{{ formatKey(fmtIn, c.keyHex).display }}</pre>
             <n-button quaternary circle size="small" class="blk-copy" title="复制密钥" aria-label="复制密钥"
               @click="copy(formatKey(fmtIn, c.keyHex).copyVal)">
               <n-icon size="15" :component="CopyOutline" />
@@ -302,7 +302,7 @@ async function doDelete() {
         <div class="io-field">
           <div class="io-field-label">IV · {{ c.ivHex.length / 2 }}B</div>
           <div class="io-data">
-            <pre :data-wrap="wrapLines" class="mono">{{ formatKey(fmtIn, c.ivHex).display }}</pre>
+            <pre  class="mono">{{ formatKey(fmtIn, c.ivHex).display }}</pre>
             <n-button quaternary circle size="small" class="blk-copy" title="复制 IV" aria-label="复制 IV"
               @click="copy(formatKey(fmtIn, c.ivHex).copyVal)">
               <n-icon size="15" :component="CopyOutline" />
@@ -315,7 +315,7 @@ async function doDelete() {
         <div class="io-field">
           <div class="io-field-label">{{ inDataLabel }} · {{ bytes(inBytes) }}{{ inRawKind ? ' · ' + inRawKind : '' }}</div>
           <div class="io-data main">
-            <pre :data-wrap="wrapLines" :class="{ mono: inputBlock.mono }">{{ inputBlock.display }}</pre>
+            <pre  :class="{ mono: inputBlock.mono }">{{ inputBlock.display }}</pre>
             <n-button quaternary circle size="small" class="blk-copy" :title="'复制' + inDataLabel" :aria-label="'复制' + inDataLabel"
               @click="copy(inputBlock.copyVal)">
               <n-icon size="15" :component="CopyOutline" />
@@ -332,7 +332,7 @@ async function doDelete() {
         <div class="io-field">
           <div class="io-field-label">{{ outDataLabel }} · {{ bytes(outBytes) }}{{ outRawKind ? ' · ' + outRawKind : '' }}</div>
           <div class="io-data main">
-            <pre :data-wrap="wrapLines" :class="{ mono: formatBlock(fmtOut, c.outHex).mono }">{{ formatBlock(fmtOut, c.outHex).display }}</pre>
+            <pre  :class="{ mono: formatBlock(fmtOut, c.outHex).mono }">{{ formatBlock(fmtOut, c.outHex).display }}</pre>
             <n-button quaternary circle size="small" class="blk-copy" :title="'复制' + outDataLabel" :aria-label="'复制' + outDataLabel"
               @click="copy(formatBlock(fmtOut, c.outHex).copyVal)">
               <n-icon size="15" :component="CopyOutline" />
@@ -400,7 +400,7 @@ async function doDelete() {
   max-height: 46vh;
   overflow: auto;
 }
-.io-data pre.mono { white-space:pre; word-break:normal; overflow-wrap:normal; max-width:100%; font-family: ui-monospace, Consolas, 'Cascadia Mono', monospace; }
+.io-data pre.mono { white-space:pre-wrap; word-break:normal; overflow-wrap:anywhere; max-width:100%; font-family: ui-monospace, Consolas, 'Cascadia Mono', monospace; }
 /* 复制按钮：naive-ui 圆形图标按钮，悬停/聚焦数据块才显现，定位不变 */
 .blk-copy {
   position: absolute; top: 6px; right: 6px;

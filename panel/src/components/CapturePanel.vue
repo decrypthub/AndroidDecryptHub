@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import {computed,reactive,ref,shallowRef,watch,onMounted,onUnmounted,onActivated,onDeactivated,nextTick,onScopeDispose} from 'vue';
-import {store,belongsToApp,capRemoveWhere,capVisible,capDisplayCap,DISPLAY_CAPS,panelDisplay,savePanelDisplay,toast} from '../store';
+import {store,belongsToApp,capRemoveWhere,capDisplayCap,DISPLAY_CAPS,panelDisplay,savePanelDisplay,toast} from '../store';
 import {downloadBlob} from '../user_actions';
 import {createCaptureExport,metadataExport} from '../capture_export';
 import {getCaptures,getExchanges,getCaptureDetail,clearCaptureBoard,type Cap} from '../api';
-import {LogTimeline,virtualWindow,rangeSelection} from '../log_timeline';
+import {LogTimeline,virtualWindow} from '../log_timeline';
 import {cacheLogRows,confirmCacheGeneration,clearCachedScope,cachedGeneration,cachedCount,readCachedRows,saveCachedPage,readCachedPage,saveCachedDetail,readCachedDetail,cacheWarning,refreshPreference,removeCachedRow} from '../log_cache';
 import {catClass,cryptoView,capturePreviewPlaceholder,exchangeInputPreview,captureLengths,rowLens,systemRow,fmtTime,CATLABEL,type CatKey} from '../capview';
 import {SearchOutline} from '@vicons/ionicons5';
@@ -15,9 +15,9 @@ const active=ref(true),filter=reactive({q:'',min:null as number|null,max:null as
 const sel=ref<number|string|null>(null),selDetail=ref<Record<string,unknown>|null>(null),selExchange=ref<Exchange|null>(null);
 const listWidth=ref(0),dragging=ref(false),scrollTop=ref(0),viewportHeight=ref(700),newCount=ref(0),followBottom=ref(true),positioned=ref(false);
 const pauseCeiling=ref<number|null>(null);
-const pageLoading=ref(false),generation=ref(''),hasOlder=ref(true),oldestCursor=ref<number|null>(null),cacheCount=ref(0),loadError=ref(''),cacheNote=ref(''),archiveCount=ref(0),selectionMode=ref(false),selectedIds=ref(new Set<string|number>());
+const pageLoading=ref(false),generation=ref(''),hasOlder=ref(true),oldestCursor=ref<number|null>(null),cacheCount=ref(0),loadError=ref(''),cacheNote=ref(''),archiveCount=ref(0);
 const loaded=shallowRef<Cap[]>([]),exchanges=shallowRef<Exchange[]>([]),frozenCaptures=shallowRef<Cap[]|null>(null),frozenExchanges=shallowRef<Exchange[]|null>(null);
-const capModel=new LogTimeline<any>(),netModel=new LogTimeline<any>();let request=0,poll=0,lastAnchor=-1,resize:ResizeObserver|null=null,suppressScroll=false;
+const capModel=new LogTimeline<any>(),netModel=new LogTimeline<any>();let request=0,poll=0,resize:ResizeObserver|null=null,suppressScroll=false;
 const modalOpen=computed(()=>!!(store.settingsOpen||store.appDialogOpen||store.deviceDialogOpen));
 const fromMs=ref<number|null>(null),toMs=ref<number|null>(null),fromTs=computed(()=>fromMs.value),toTs=computed(()=>toMs.value),hasTimeRange=computed(()=>fromTs.value!==null||toTs.value!==null);
 const LIST_ID:Record<string,string>={crypto:'cc-list',system:'sy-list',net:'nt-list'},BOARD_LABEL:Record<string,string>={crypto:'加解密',system:'系统',net:'网络'},HEAD_LABELS:Record<string,[string,string,string]>={crypto:['算法','输入预览','输入 → 输出'],system:['函数','输入对象','操作'],net:['请求','请求预览','状态']};
@@ -29,7 +29,7 @@ const panelCats=()=>props.kind==='crypto'?['crypto']:props.kind==='net'?['net']:
 const serverCategory=()=>props.kind==='crypto'?'crypto':props.kind==='net'?'net':filter.kind==='all'?'system,file':filter.kind;
 const matchesPanel=(c:Cap)=>panelCats().includes(c.category)&&(props.kind!=='system'||filter.kind==='all'||c.category===filter.kind);
 const scoped=computed(()=>store.capItems.filter(c=>matchesPanel(c)&&belongsToApp(c)));
-function applyClientFilter(source:Cap[]){return source.filter(c=>{if(!matchesPanel(c)||!belongsToApp(c)||!capVisible(c))return false;if(c.category==='crypto'&&cryptoView(c).show===false)return false;if(fromTs.value!=null&&c.ts<fromTs.value||toTs.value!=null&&c.ts>toTs.value)return false;const q=filter.q.trim().toLowerCase();if(/^#\d+$/.test(q)){if(String(c.displayId??c.id)!==q.slice(1))return false;}else if(q&&![(c.algo||''),(c.op||''),(c.func||''),(c.path||''),(c.preview||''),(c.javaTarget||''),(c.captureMethodId||''),cryptoView(c).title].join(' ').toLowerCase().includes(q))return false;const n=captureLengths(c).input.bytes;if(filter.min!=null&&(n==null||n<filter.min)||filter.max!=null&&(n==null||n>filter.max))return false;if(props.kind==='crypto'&&filter.cat>=0&&catClass(c)!==CAT_BY_SEL[filter.cat])return false;return true;});}
+function applyClientFilter(source:Cap[]){return source.filter(c=>{if(!matchesPanel(c)||!belongsToApp(c))return false;if(c.category==='crypto'&&cryptoView(c).show===false)return false;if(fromTs.value!=null&&c.ts<fromTs.value||toTs.value!=null&&c.ts>toTs.value)return false;const q=filter.q.trim().toLowerCase();if(/^#\d+$/.test(q)){if(String(c.displayId??c.id)!==q.slice(1))return false;}else if(q&&![(c.algo||''),(c.op||''),(c.func||''),(c.path||''),(c.preview||''),(c.javaTarget||''),(c.captureMethodId||''),cryptoView(c).title].join(' ').toLowerCase().includes(q))return false;const n=captureLengths(c).input.bytes;if(filter.min!=null&&(n==null||n<filter.min)||filter.max!=null&&(n==null||n>filter.max))return false;if(props.kind==='crypto'&&filter.cat>=0&&catClass(c)!==CAT_BY_SEL[filter.cat])return false;return true;});}
 const rows=computed(()=>props.kind==='net'?[]:applyClientFilter(filter.paused?frozenCaptures.value??[]:loaded.value));
 const matchedExchanges=computed(()=>(filter.paused?frozenExchanges.value??[]:exchanges.value).filter(ex=>{if(fromTs.value!=null&&(ex.ts??0)<fromTs.value||toTs.value!=null&&(ex.ts??0)>toTs.value)return false;const q=filter.q.trim().toLowerCase();if(/^#\d+$/.test(q))return String(ex.displayId??ex.seq??'')===q.slice(1);const size=(ex.request?.bodyBytes??0)+(ex.response?.bodyBytes??0);return (!q||[ex.label,ex.status,ex.note,ex.request?.startLine,ex.request?.headerText,ex.request?.bodyText,ex.response?.startLine,ex.response?.bodyText].join(' ').toLowerCase().includes(q))&&(filter.min==null||size>=filter.min)&&(filter.max==null||size<=filter.max);}));
 const matchedExchangesAll=matchedExchanges;
@@ -52,7 +52,7 @@ async function loadServerPage(beforeId:number|null,force=false){
   let reply:any=!force&&beforeId!==null&&generation.value?await readCachedPage(cacheScope,generation.value,sig):null;
   if(!reply)reply=props.kind==='net'?await getExchanges(store.chosenPkg,{history:true,maxId:filter.paused?pauseCeiling.value:null,beforeId,limit:capDisplayCap.value,fromTs:fromTs.value,toTs:toTs.value}):await getCaptures({history:true,maxId:filter.paused?pauseCeiling.value:null,package:store.chosenPkg,category:serverCategory(),beforeId,fromTs:fromTs.value,toTs:toTs.value,q:filter.q.trim()||undefined,limit:capDisplayCap.value});
   if(target!==identity()||token!==request)return;if(reply.historyVersion!==1||!reply.generation||reply.scope?.serial!==cacheScope.serial||reply.scope?.package!==cacheScope.package)throw new Error('请更新Host以启用设备隔离的日志归档');
-  if(generation.value&&generation.value!==reply.generation){capModel.clear();netModel.clear();loaded.value=[];exchanges.value=[];selectedIds.value=new Set();await clearCachedScope(cacheScope,reply.generation);oldestCursor.value=null;}
+  if(generation.value&&generation.value!==reply.generation){capModel.clear();netModel.clear();loaded.value=[];exchanges.value=[];await clearCachedScope(cacheScope,reply.generation);oldestCursor.value=null;}
   generation.value=reply.generation;await confirmCacheGeneration(cacheScope,reply.generation);if(target!==identity()||token!==request)return;
   const items=props.kind==='net'?reply.exchanges??[]:reply.captures??[];mergeRecords(items,props.kind==='net');
   if(!positioned.value&&!filterActive.value&&props.kind!=='net'&&capModel.items.length){const source=capModel.items;let first=source.length-1;while(first>0&&Number(source[first-1].displayId)+1===Number(source[first].displayId))first--;const tail=source.slice(first);capModel.clear();mergeRecords(tail);}
@@ -72,22 +72,20 @@ async function prevPage(){if(canPrevPage.value&&oldestCursor.value!==null)await 
 async function nextPage(){await jumpLatest();}
 async function jumpLatest(){pauseCeiling.value=null;await loadServerPage(null,true);if(filter.paused){frozenCaptures.value=[...loaded.value];frozenExchanges.value=[...exchanges.value];}await bottom();}
 function onScroll(e:Event){const el=e.target as HTMLElement;scrollTop.value=el.scrollTop;viewportHeight.value=el.clientHeight;followBottom.value=el.scrollHeight-el.clientHeight-el.scrollTop<48;if(followBottom.value)newCount.value=0;if(!suppressScroll&&positioned.value&&el.scrollTop<72&&canPrevPage.value)void prevPage();}
-function resetLoaded(){request++;pageLoading.value=false;capModel.clear();netModel.clear();loaded.value=[];exchanges.value=[];oldestCursor.value=null;hasOlder.value=true;selectedIds.value=new Set();sel.value=null;selDetail.value=null;selExchange.value=null;followBottom.value=true;positioned.value=false;newCount.value=0;scrollTop.value=0;generation.value='';pauseCeiling.value=null;}
+function resetLoaded(){request++;pageLoading.value=false;capModel.clear();netModel.clear();loaded.value=[];exchanges.value=[];oldestCursor.value=null;hasOlder.value=true;sel.value=null;selDetail.value=null;selExchange.value=null;followBottom.value=true;positioned.value=false;newCount.value=0;scrollTop.value=0;generation.value='';pauseCeiling.value=null;}
 async function refreshFilter(){const ceiling=pauseCeiling.value;resetLoaded();pauseCeiling.value=ceiling;await loadServerPage(null,true);}
 function setQuickMinutes(mins:number){fromMs.value=Date.now()-mins*60000;toMs.value=null;void refreshFilter();}function clearTimeRange(){fromMs.value=null;toMs.value=null;void refreshFilter();}function applyTimeRange(){void refreshFilter();}
 function resetFilter(){filter.q='';filter.min=null;filter.max=null;filter.cat=-2;filter.kind='all';fromMs.value=null;toMs.value=null;void refreshFilter();}
 function onPageCapChange(value:number){if(DISPLAY_CAPS.includes(value)){savePanelDisplay({...panelDisplay,limit:value});}}
-function selectItem(id:string|number,event?:MouseEvent){const ids=allRows.value.map(r=>r.id),index=ids.indexOf(id),on=!selectedIds.value.has(id);selectedIds.value=event?.shiftKey&&lastAnchor>=0?rangeSelection(ids,lastAnchor,index,selectedIds.value,on):new Set([...selectedIds.value].filter(x=>x!==id).concat(on?[id]:[]));lastAnchor=index;}
-function toggleSelection(){selectionMode.value=!selectionMode.value;if(!selectionMode.value)selectedIds.value=new Set();}
-async function selectRow(c:Cap,event?:MouseEvent){if(selectionMode.value){selectItem(c.id,event);return;}const target=identity(),g=generation.value,cacheScope=scope();sel.value=c.id;selExchange.value=null;selDetail.value={_loading:true};try{let d:any;try{d=await getCaptureDetail(c.id,store.chosenPkg);if(d.id!==c.id||d.deviceBinding?.serial!==cacheScope.serial||d.package!==cacheScope.package)throw new Error('详情归属不一致');void saveCachedDetail(cacheScope,g,c.id,d);}catch(e){d=await readCachedDetail(cacheScope,g,c.id);if(!d)throw e;}if(target===identity()&&g===generation.value&&sel.value===c.id)selDetail.value=d;}catch{if(target===identity()&&sel.value===c.id)selDetail.value={_error:'Host和浏览器均没有此记录的已保留详情',cap:c};}}
-function selectExchange(ex:Exchange,event?:MouseEvent){if(selectionMode.value){selectItem(ex.id,event);return;}sel.value=ex.id;selDetail.value=null;selExchange.value=ex;}
-function closeDetail(){sel.value=null;selDetail.value=null;selExchange.value=null;}async function onCapDeleted(id:number){request++;pageLoading.value=false;const pending=removeCachedRow(scope(),generation.value,id);capRemoveWhere(c=>c.id===id);capModel.remove(id);loaded.value=[...capModel.items];selectedIds.value.delete(id);if(frozenCaptures.value)frozenCaptures.value=frozenCaptures.value.filter(c=>c.id!==id);closeDetail();await pending;}
+async function selectRow(c:Cap){const target=identity(),g=generation.value,cacheScope=scope();sel.value=c.id;selExchange.value=null;selDetail.value={_loading:true};try{let d:any;try{d=await getCaptureDetail(c.id,store.chosenPkg);if(d.id!==c.id||d.deviceBinding?.serial!==cacheScope.serial||d.package!==cacheScope.package)throw new Error('详情归属不一致');void saveCachedDetail(cacheScope,g,c.id,d);}catch(e){d=await readCachedDetail(cacheScope,g,c.id);if(!d)throw e;}if(target===identity()&&g===generation.value&&sel.value===c.id)selDetail.value=d;}catch{if(target===identity()&&sel.value===c.id)selDetail.value={_error:'Host和浏览器均没有此记录的已保留详情',cap:c};}}
+function selectExchange(ex:Exchange){sel.value=ex.id;selDetail.value=null;selExchange.value=ex;}
+function closeDetail(){sel.value=null;selDetail.value=null;selExchange.value=null;}async function onCapDeleted(id:number){request++;pageLoading.value=false;const pending=removeCachedRow(scope(),generation.value,id);capRemoveWhere(c=>c.id===id);capModel.remove(id);loaded.value=[...capModel.items];if(frozenCaptures.value)frozenCaptures.value=frozenCaptures.value.filter(c=>c.id!==id);closeDetail();await pending;}
 const exportBusy=ref(false);
-async function downloadView(bytes=false,selected=false){if(exportBusy.value)return;const target=identity(),g=generation.value,cacheScope=scope(),items=JSON.parse(JSON.stringify(allRows.value.filter(r=>!selected||selectedIds.value.has(r.id))));if(!items.length){toast(selected?'先选择要导出的记录':'没有可导出的记录');return;}if((bytes||props.kind==='net')&&!confirm('导出可能包含密钥、明文或网络内容；只包含所选或当前已加载的记录。继续？'))return;exportBusy.value=true;const check=()=>{if(target!==identity()||g!==generation.value)throw new Error('设备、应用或清理代次改变，导出取消');};try{let data:any;if(props.kind==='net')data={schema:'adh.exchange-export/1',serial:cacheScope.serial,package:cacheScope.package,generation:g,mode:'selected-reassembled-exchanges',records:items};else if(bytes)data=await createCaptureExport({...cacheScope,ids:items.map(r=>Number(r.id))},async id=>{try{return await getCaptureDetail(id,cacheScope.package,cacheScope.serial);}catch(e){const cached=await readCachedDetail(cacheScope,g,id);if(!cached)throw e;return cached;}},check);else data=metadataExport(cacheScope,items as Cap[]);check();downloadBlob(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}),`adh-${props.kind}-${selected?'selected':'loaded'}-${Date.now()}.json`);toast('已发起导出 '+items.length+' 条');}catch(e){toast('未导出：'+(e as Error).message);}finally{exportBusy.value=false;}}
+async function downloadView(bytes=false){if(exportBusy.value)return;const target=identity(),g=generation.value,cacheScope=scope(),items=JSON.parse(JSON.stringify(allRows.value));if(!items.length){toast('没有可导出的记录');return;}if((bytes||props.kind==='net')&&!confirm('导出可能包含密钥、明文或网络内容；只包含当前筛选后已加载的记录。继续？'))return;exportBusy.value=true;const check=()=>{if(target!==identity()||g!==generation.value)throw new Error('设备、应用或清理代次改变，导出取消');};try{let data:any;if(props.kind==='net')data={schema:'adh.exchange-export/1',serial:cacheScope.serial,package:cacheScope.package,generation:g,mode:'loaded-reassembled-exchanges',records:items};else if(bytes)data=await createCaptureExport({...cacheScope,ids:items.map(r=>Number(r.id))},async id=>{try{return await getCaptureDetail(id,cacheScope.package,cacheScope.serial);}catch(e){const cached=await readCachedDetail(cacheScope,g,id);if(!cached)throw e;return cached;}},check);else data=metadataExport(cacheScope,items as Cap[]);check();downloadBlob(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}),`adh-${props.kind}-loaded-${Date.now()}.json`);toast('已发起导出 '+items.length+' 条');}catch(e){toast('未导出：'+(e as Error).message);}finally{exportBusy.value=false;}}
 async function applyClear(data:any){if(data.serial&&data.serial!==scope().serial||data.package&&data.package!==store.chosenPkg||data.kind&&data.kind!==props.kind)return;if(data.generation&&data.generation===generation.value)return;const g=data.generation||'';resetLoaded();generation.value=g;if(g)await clearCachedScope(scope(),g);frozenCaptures.value=[];frozenExchanges.value=[];cacheCount.value=0;archiveCount.value=0;}
 async function clearView(){if(!store.chosenPkg||!confirm('清空当前设备、当前APP的本板块日志及其浏览器缓存？\n显示序号将从1重新开始，内部唯一ID不复用；其它设备、APP和板块不受影响。'))return;const target=identity();try{const r=await clearCaptureBoard(store.chosenPkg,props.kind);if(target!==identity())return;await applyClear({...r,...scope(),what:'captures'});await loadServerPage(null,true);toast('已清空本板块，显示序号从1重新计数');}catch(e){toast('未确认清理：'+(e as Error).message);}}
-const MORE_OPTS=computed(()=>[{label:'加载更早记录',key:'older',disabled:!canPrevPage.value},{label:'导出已加载元数据',key:'dl'},...(props.kind==='net'?[]:[{label:'导出已加载的保留字节…',key:'bytes'}]),...(selectedIds.value.size?[{label:'导出所选元数据',key:'selected'},...(props.kind==='net'?[]:[{label:'导出所选保留字节…',key:'selected-bytes'}])]:[]),{label:'清空本板块…',key:'clear'}]);
-function onMoreSelect(key:string){if(key==='older')void prevPage();else if(key==='dl')void downloadView();else if(key==='bytes')void downloadView(true);else if(key==='selected')void downloadView(false,true);else if(key==='selected-bytes')void downloadView(true,true);else if(key==='clear'&&!exportBusy.value)void clearView();}
+const MORE_OPTS=computed(()=>[{label:'加载更早记录',key:'older',disabled:!canPrevPage.value},{label:'导出已加载元数据',key:'dl'},...(props.kind==='net'?[]:[{label:'导出已加载的保留字节…',key:'bytes'}]),{label:'清空本板块…',key:'clear'}]);
+function onMoreSelect(key:string){if(key==='older')void prevPage();else if(key==='dl')void downloadView();else if(key==='bytes')void downloadView(true);else if(key==='clear'&&!exportBusy.value)void clearView();}
 function openNetworkHooks(){const serial=scope().serial;if(!serial||!store.chosenPkg)return;store.hookSource={serial,package:store.chosenPkg,feature:'tls',session:'',returnView:'nt'};store.view='settings';}
 function startDrag(e:MouseEvent){e.preventDefault();const ws=(e.target as HTMLElement).parentElement!,rect=ws.getBoundingClientRect();const move=(ev:MouseEvent)=>{dragging.value=true;listWidth.value=Math.max(220,Math.min(rect.width*.7,rect.width-260,ev.clientX-rect.left));};const up=()=>{document.removeEventListener('mousemove',move);document.removeEventListener('mouseup',up);dragging.value=false;};document.addEventListener('mousemove',move);document.addEventListener('mouseup',up);}
 function cryptoRow(c:Cap){return{...cryptoView(c),cc:catClass(c)};}
@@ -116,8 +114,6 @@ onScopeDispose(()=>{request++;clearTimeout(debounce);});
         <n-checkbox :checked="!filter.paused" aria-label="持续刷新列表" @update:checked="filter.paused=!$event">持续刷新</n-checkbox>
         <n-button size="small" :type="advCount?'primary':'default'" :aria-expanded="advOpen" @click="advOpen=true">筛选<template v-if="advCount"> · {{ advCount }}</template></n-button>
         <n-button size="small" @click="jumpLatest">最新</n-button>
-        <n-button size="small" :aria-pressed="selectionMode" @click="toggleSelection">{{ selectionMode?'已选 '+selectedIds.size:'选择导出' }}</n-button>
-        <n-button v-if="selectedIds.size" size="small" :loading="exportBusy" @click="downloadView(false,true)">导出所选</n-button>
         <n-dropdown trigger="click" :options="MORE_OPTS" @select="onMoreSelect"><n-button quaternary size="small" aria-label="记录列表操作">⋯</n-button></n-dropdown>
       </div>
       <span v-if="loadError||cacheNote" class="log-storage-note" role="status">{{ loadError||cacheNote }}</span>
@@ -170,7 +166,7 @@ onScopeDispose(()=>{request++;clearTimeout(debounce);});
       </template>
     </n-modal>
 
-    <div class="workspace capture-workspace" :class="{ 'compact-captures': panelDisplay.density === 'compact', 'detail-open': sel !== null,'selection-on':selectionMode, 'no-results': !listLoading && sel === null && !(kind === 'net' ? matchedExchanges.length : rows.length) }">
+    <div class="workspace capture-workspace" :class="{ 'compact-captures': panelDisplay.density === 'compact', 'detail-open': sel !== null, 'no-results': !listLoading && sel === null && !(kind === 'net' ? matchedExchanges.length : rows.length) }">
       <div class="list-pane" :style="listWidth ? { width: listWidth + 'px' } : undefined">
         <div class="new-banner" :class="{ show: newCount > 0 }">
           <span>{{ newCount }} 条新记录</span>
@@ -182,8 +178,7 @@ onScopeDispose(()=>{request++;clearTimeout(debounce);});
           <div class="timeline-spacer" :style="{height:windowed.top+'px'}" aria-hidden="true"></div>
           <template v-if="kind === 'net'">
             <div v-for="ex in renderedExchanges" :key="ex.id" class="row cat-net" :class="{ selected: sel === ex.id }"
-              role="button" tabindex="0" @keydown.enter.prevent="selectExchange(ex)" @keydown.space.prevent="selectExchange(ex)" @click="selectExchange(ex,$event)">
-              <input v-if="selectionMode" class="row-check" type="checkbox" :checked="selectedIds.has(ex.id)" :aria-label="'选择网络记录 '+(ex.displayId??ex.seq)" @click.stop="selectItem(ex.id,$event)" />
+              role="button" tabindex="0" @keydown.enter.prevent="selectExchange(ex)" @keydown.space.prevent="selectExchange(ex)" @click="selectExchange(ex)">
               <div class="top">
                 <span class="seq">#{{ ex.displayId??ex.seq??'—' }}</span>
                 <span class="pill net">网络</span>
@@ -199,8 +194,7 @@ onScopeDispose(()=>{request++;clearTimeout(debounce);});
           <template v-else>
             <div v-for="c in renderedRows" :key="c.id" class="row"
               :class="[`cat-${catClass(c)}`, { selected: sel === c.id, 'crypto-row': c.category === 'crypto' }]"
-              role="button" tabindex="0" @keydown.enter.prevent="selectRow(c)" @keydown.space.prevent="selectRow(c)" @click="selectRow(c,$event)">
-              <input v-if="selectionMode" class="row-check" type="checkbox" :checked="selectedIds.has(c.id)" :aria-label="'选择记录 '+(c.displayId??c.id)" @click.stop="selectItem(c.id,$event)" />
+              role="button" tabindex="0" @keydown.enter.prevent="selectRow(c)" @keydown.space.prevent="selectRow(c)" @click="selectRow(c)">
               <template v-if="c.category === 'crypto'">
                 <div class="top">
                   <span class="seq">#{{ c.displayId??c.id }}</span>

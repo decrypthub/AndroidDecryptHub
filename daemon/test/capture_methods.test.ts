@@ -45,16 +45,16 @@ test('shipping capture installers and stop are wired to the exact-prior ownershi
  assert.match(got,/capture_owned \? adh_capture_slot_publish/);
  assert.match(got,/adh_capture_slot_restore\(&g_capture_slots/);
 });
-for(const name of ['defaults','none','single-tls','cipher-dependencies','shared-hmac','family-off','repeat-retarget','stop-ownership','revision','active-reject','catalog-status','malformed','exact-prior','multi-prior','unreadable-stop','capacity','publish-failure','live-ownership','java-stop','java-family-policy',...Array.from({length:29},(_,i)=>`method-${i}`)]) {
+for(const name of ['defaults','none','single-tls','java-only-crypto','family-off','repeat-retarget','stop-ownership','revision','active-reject','catalog-status','malformed','exact-prior','multi-prior','unreadable-stop','capacity','publish-failure','live-ownership','java-stop','java-family-policy',...Array.from({length:14},(_,i)=>`method-${i}`)]) {
  test(`compiled shipping Native policy/start/stop: ${name}`,{skip:available?false:'C compiler absent; deterministic mocked-GOT fixture requires cc'},()=>{
    assert.equal(compiled!.status,0,`fixture C compile failed:\n${compiled!.stdout}\n${compiled!.stderr}`);
    const r=spawnSync(join(dir!,process.platform==='win32'?'fixture.exe':'fixture'),[name],{encoding:'utf8',windowsHide:true,timeout:10000});
    assert.equal(r.status,0,`${r.stdout}\n${r.stderr}`);assert.match(String(r.stdout),new RegExp(`PASS ${name}\\s*$`));
    if(name==='catalog-status') {
-     const status=JSON.parse(String(r.stdout).split('\n')[0]);assert.equal(status.methods.length,29);
-     assert.equal(new Set(status.methods.map((x:any)=>x.id)).size,29);assert.equal(status.ok,true);
-     assert.equal(status.methods.filter((x:any)=>x.requested).length,1);assert.equal(status.methods.filter((x:any)=>x.effective).length,3);
-     assert.equal(status.methods.filter((x:any)=>x.dependency).length,2);
+     const status=JSON.parse(String(r.stdout).split('\n')[0]);assert.equal(status.methods.length,14);
+     assert.equal(new Set(status.methods.map((x:any)=>x.id )).size,14);assert.equal(status.ok,true);
+     assert.equal(status.methods.filter((x:any)=>x.requested).length,1);assert.equal(status.methods.filter((x:any)=>x.effective).length,1);
+     assert.equal(status.methods.filter((x:any)=>x.dependency).length,0);
    }
  });
 }

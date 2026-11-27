@@ -20,7 +20,6 @@ static unsigned java_family_fixture;
 static int adh_java_crypto_stop(void) { java_stop_calls++; return java_pending_fixture; }
 static void adh_java_crypto_set_families(unsigned mask) { java_family_fixture = mask; }
 static int g_key_lock, g_key_next;
-static char g_keys[4];
 static int pthread_mutex_trylock(int *lock) { return 1; }
 static int pthread_mutex_unlock(int *lock) { return 0; }
 static void cap_reset(void) {}
@@ -40,27 +39,17 @@ static void adh_capture_got_state(void*,struct AdhCaptureSlotState*);
 static unsigned adh_capture_got_pending(void);
 #endif
 #else
-static const char *symbols[] = {
- "EVP_CipherUpdate","EVP_DigestUpdate","HMAC_Update","EVP_DigestSignUpdate","SSL_write","SSL_read",
- "EVP_CipherInit_ex","EVP_CIPHER_CTX_free","ECDSA_sign","ECDSA_verify","EVP_PKEY_encrypt","EVP_PKEY_decrypt",
- "EVP_DigestSignInit","EVP_DigestVerifyInit","EVP_DigestSignFinal",
- "EVP_DigestVerifyUpdate","EVP_DigestVerifyFinal","open","openat","read","write","syscall","__read_chk",
- "__write_chk","ptrace","access","faccessat","__system_property_get","__system_property_read_callback"
-};
-static void *wrappers[] = {
- my_EVP_CipherUpdate,my_EVP_DigestUpdate,my_HMAC_Update,my_EVP_DigestSignUpdate,my_SSL_write,my_SSL_read,
- my_EVP_CipherInit_ex,my_EVP_CIPHER_CTX_free,my_ECDSA_sign,my_ECDSA_verify,my_EVP_PKEY_encrypt,my_EVP_PKEY_decrypt,
- my_EVP_DigestSignInit,my_EVP_DigestVerifyInit,my_EVP_DigestSignFinal,
- my_EVP_DigestVerifyUpdate,my_EVP_DigestVerifyFinal,my_open,my_openat,my_read,my_write,my_syscall,my_read_chk,
- my_write_chk,my_ptrace,my_access,my_faccessat,my_prop,my_prop_read
-};
+#define FIXTURE_SYMBOL(id,symbol,families,deps) symbol,
+static const char *symbols[] = { ADH_CAPTURE_METHODS(FIXTURE_SYMBOL) };
+#undef FIXTURE_SYMBOL
+static void *wrappers[ADH_CM_COUNT];
 static char originals[ADH_CM_COUNT];
 static void *slots[2][ADH_CM_COUNT];
 static int index_of(const char *s) { for(int i=0;i<ADH_CM_COUNT;i++)if(!strcmp(s,symbols[i]))return i;return -1; }
 static void *adh_resolve_sym(const char *m,const char*s) { int i=index_of(s);return i<0?NULL:&originals[i]; }
 static int belongs(const char *m,int bank,int i) {
- if(!m||!m[0])return i<17;
- const char *expected = i<17?(bank?"cryptoB":"cryptoA"):i<24?(bank?"fileB":"fileA"):(bank?"sysB":"sysA");
+ if(!m||!m[0])return i<2;
+ const char *expected = i<2?(bank?"cryptoB":"cryptoA"):i<9?(bank?"fileB":"fileA"):(bank?"sysB":"sysA");
  return !strcmp(m,expected);
 }
 static int adh_got_replace(const char*m,void*orig,void*wrapper) {
@@ -102,7 +91,7 @@ static void fail(const char*msg){fprintf(stderr,"FAIL %s\n",msg);exit(1);}
 static void select_bits(uint32_t bits,const char *expected) {
 #if ADH_HAS_METHODS
  char selection[ADH_CM_COUNT+1],req[256];for(int i=0;i<ADH_CM_COUNT;i++)selection[i]=(bits&(UINT32_C(1)<<i))?'1':'0';selection[ADH_CM_COUNT]=0;
- snprintf(req,sizeof(req),"{\"t\":\"cmd\",\"op\":\"capture_methods\",\"id\":\"fixture\",\"action\":\"set\",\"catalog\":\"native-capture/2\",\"revision\":\"%u\",\"selection\":\"%s\"}",g_method_revision,selection);
+ snprintf(req,sizeof(req),"{\"t\":\"cmd\",\"op\":\"capture_methods\",\"id\":\"fixture\",\"action\":\"set\",\"catalog\":\"native-capture/3\",\"revision\":\"%u\",\"selection\":\"%s\"}",g_method_revision,selection);
  adh_cmd_capture_methods(-1,"fixture",req);
  if(expected)CHECK(strstr(reply,expected));else CHECK(strstr(reply,"\"ok\":true"));
 #else
@@ -110,7 +99,7 @@ static void select_bits(uint32_t bits,const char *expected) {
 #endif
 }
 int main(int argc,char**argv) {
- CHECK(argc==2);const char*name=argv[1];
+ CHECK(argc==2);const char*name=argv[1];for(int i=0;i<ADH_CM_COUNT;i++)wrappers[i]=capture_method_wrapper(i);
  for(int b=0;b<2;b++)for(int i=0;i<ADH_CM_COUNT;i++)slots[b][i]=&originals[i];
  if(!strcmp(name,"java-stop")) {
    adh_cmd_capture_start(-1,"f","cryptoA","fileA","");java_pending_fixture=2;
@@ -119,10 +108,11 @@ int main(int argc,char**argv) {
  } else if(!strcmp(name,"java-family-policy")) {
    adh_capture_set_families(0,1,0,0,0,0,0);CHECK(java_family_fixture==2);
  } else if(!strcmp(name,"exact-prior")||!strcmp(name,"multi-prior")) {
-   static char priorA,priorB;slots[0][8]=&priorA;slots[1][8]=&priorB;
-   select_bits(UINT32_C(1)<<8,NULL);
-   adh_cmd_capture_start(-1,"f",!strcmp(name,"multi-prior")?"":"cryptoA","","");
-   CHECK(slots[0][8]==wrappers[8]);adh_cmd_capture_stop(-1,"f");CHECK(slots[0][8]==&priorA);CHECK(slots[1][8]==&priorB);
+   static char priorA,priorB;slots[0][ADH_CM_SSL_WRITE]=&priorA;slots[1][ADH_CM_SSL_WRITE]=&priorB;
+   select_bits(UINT32_C(1)<<ADH_CM_SSL_WRITE,NULL);
+   if(!strcmp(name,"multi-prior")){g_orig_ssl_write=&originals[ADH_CM_SSL_WRITE];adh_capture_got_replace_by_name_ex("","SSL_write",wrappers[ADH_CM_SSL_WRITE],NULL,NULL,NULL,0);}
+   else adh_cmd_capture_start(-1,"f","cryptoA","","");
+   CHECK(slots[0][ADH_CM_SSL_WRITE]==wrappers[ADH_CM_SSL_WRITE]);adh_cmd_capture_stop(-1,"f");CHECK(slots[0][ADH_CM_SSL_WRITE]==&priorA);CHECK(slots[1][ADH_CM_SSL_WRITE]==&priorB);
  } else if(!strcmp(name,"unreadable-stop")||!strcmp(name,"capacity")||!strcmp(name,"publish-failure")||!strcmp(name,"live-ownership")) {
 #if ADH_HAS_SLOTS
    if(!strcmp(name,"unreadable-stop")) {
@@ -142,20 +132,16 @@ int main(int argc,char**argv) {
      CHECK(adh_capture_got_restore(&w)<0);CHECK(value==&p);CHECK(adh_capture_got_pending()==1);
      publish_failure=0;CHECK(adh_capture_got_restore(&w)==1);CHECK(value==&p);CHECK(!adh_capture_got_pending());
    } else {
-     select_bits(UINT32_C(1)<<8,NULL);adh_cmd_capture_start(-1,"f","cryptoA","","");struct AdhCaptureSlotState st;
-     adh_capture_got_state(wrappers[8],&st);CHECK(st.owned==1);static char third;slots[0][8]=&third;
-     adh_capture_got_state(wrappers[8],&st);CHECK(st.owned==0&&st.changed==1);
-     adh_cmd_capture_stop(-1,"f");CHECK(slots[0][8]==&third);adh_capture_got_state(wrappers[8],&st);CHECK(st.restoreConflicts==1);
+     select_bits(UINT32_C(1)<<ADH_CM_SSL_WRITE,NULL);adh_cmd_capture_start(-1,"f","cryptoA","","");struct AdhCaptureSlotState st;
+     adh_capture_got_state(wrappers[ADH_CM_SSL_WRITE],&st);CHECK(st.owned==1);static char third;slots[0][ADH_CM_SSL_WRITE]=&third;
+     adh_capture_got_state(wrappers[ADH_CM_SSL_WRITE],&st);CHECK(st.owned==0&&st.changed==1);
+     adh_cmd_capture_stop(-1,"f");CHECK(slots[0][ADH_CM_SSL_WRITE]==&third);adh_capture_got_state(wrappers[ADH_CM_SSL_WRITE],&st);CHECK(st.restoreConflicts==1);
    }
 #else
    fail("exact-prior capture ledger unsupported by baseline source");
 #endif
  } else if(!strncmp(name,"method-",7)) {
    int i=atoi(name+7);CHECK(i>=0&&i<ADH_CM_COUNT);uint32_t expected=UINT32_C(1)<<i;
-   if(i==0)expected|=(UINT32_C(1)<<6)|(UINT32_C(1)<<7);
-   if(i==6)expected|=UINT32_C(1)<<7;
-   if(i==3||i==ADH_CM_SIGN_FINAL)expected|=UINT32_C(1)<<ADH_CM_SIGN_INIT;
-   if(i==ADH_CM_VERIFY_UPDATE||i==ADH_CM_VERIFY_FINAL)expected|=UINT32_C(1)<<ADH_CM_VERIFY_INIT;
    adh_capture_set_families(1,1,1,1,1,1,1);select_bits(UINT32_C(1)<<i,NULL);
    adh_cmd_capture_start(-1,"f","cryptoA","fileA","sysA");
    for(int j=0;j<ADH_CM_COUNT;j++)CHECK((slots[0][j]==wrappers[j])==!!(expected&(UINT32_C(1)<<j)));
@@ -166,14 +152,11 @@ int main(int argc,char**argv) {
    adh_capture_set_families(1,1,1,1,1,1,1);select_bits(0,NULL);
    adh_cmd_capture_start(-1,"f","cryptoA","fileA","sysA");CHECK(owned(0)==0);
  } else if(!strcmp(name,"single-tls")) {
-   adh_capture_set_families(1,1,1,1,1,1,1);select_bits(UINT32_C(1)<<5,NULL);
-   adh_cmd_capture_start(-1,"f","cryptoA","fileA","sysA");CHECK(owned(0)==1);CHECK(slots[0][5]==wrappers[5]);CHECK(slots[0][4]==&originals[4]);
- } else if(!strcmp(name,"cipher-dependencies")) {
-   select_bits(1,NULL);adh_cmd_capture_start(-1,"f","cryptoA","fileA","");CHECK(owned(0)==3);
-   CHECK(slots[0][0]==wrappers[0]);CHECK(slots[0][6]==wrappers[6]);CHECK(slots[0][7]==wrappers[7]);
- } else if(!strcmp(name,"shared-hmac")) {
-   adh_capture_set_families(0,1,0,0,0,0,0);select_bits(UINT32_C(1)<<ADH_CM_SIGN_FINAL,NULL);
-   adh_cmd_capture_start(-1,"f","cryptoA","","");CHECK(owned(0)==2);CHECK(slots[0][ADH_CM_SIGN_INIT]==wrappers[ADH_CM_SIGN_INIT]);CHECK(slots[0][ADH_CM_SIGN_FINAL]==wrappers[ADH_CM_SIGN_FINAL]);
+   adh_capture_set_families(1,1,1,1,1,1,1);select_bits(UINT32_C(1)<<ADH_CM_SSL_READ,NULL);
+   adh_cmd_capture_start(-1,"f","cryptoA","fileA","sysA");CHECK(owned(0)==1);CHECK(slots[0][ADH_CM_SSL_READ]==wrappers[ADH_CM_SSL_READ]);CHECK(slots[0][ADH_CM_SSL_WRITE]==&originals[ADH_CM_SSL_WRITE]);
+ } else if(!strcmp(name,"java-only-crypto")) {
+   adh_capture_set_families(1,1,1,1,0,1,0);select_bits(ADH_CM_ALL,NULL);
+   adh_cmd_capture_start(-1,"f","cryptoA","","");CHECK(owned(0)==0);CHECK(java_family_fixture==47);
  } else if(!strcmp(name,"family-off")) {
    adh_capture_set_families(0,0,0,0,0,0,0);select_bits(1,NULL);
    adh_cmd_capture_start(-1,"f","cryptoA","fileA","sysA");CHECK(owned(0)==0);
@@ -182,8 +165,8 @@ int main(int argc,char**argv) {
    adh_cmd_capture_start(-1,"f","cryptoB","fileB","sysB");CHECK(owned(0)==0);CHECK(owned(1)==ADH_CM_COUNT);
  } else if(!strcmp(name,"stop-ownership")) {
    adh_capture_set_families(1,1,1,1,1,1,1);adh_cmd_capture_start(-1,"f","cryptoA","fileA","sysA");
-   static char third;slots[0][8]=&third;slots[0][ADH_CM_ACCESS]=&third;
-   adh_cmd_capture_stop(-1,"f");CHECK(slots[0][8]==&third);CHECK(slots[0][ADH_CM_ACCESS]==&third);CHECK(owned(0)==0);
+   static char third;slots[0][ADH_CM_SSL_WRITE]=&third;slots[0][ADH_CM_ACCESS]=&third;
+   adh_cmd_capture_stop(-1,"f");CHECK(slots[0][ADH_CM_SSL_WRITE]==&third);CHECK(slots[0][ADH_CM_ACCESS]==&third);CHECK(owned(0)==0);
  } else {
 #if ADH_HAS_METHODS
    if(!strcmp(name,"revision")) {
@@ -195,7 +178,7 @@ int main(int argc,char**argv) {
      select_bits(0,"CAPTURE_ACTIVE");CHECK(g_method_revision==before);CHECK(g_method_selected==ADH_CM_ALL);CHECK(owned(0)==ADH_CM_COUNT-5);
    } else if(!strcmp(name,"catalog-status")) {
      select_bits(1,NULL);adh_cmd_capture_methods(-1,"f","{\"action\":\"status\"}");
-     puts(reply);CHECK(strstr(reply,"native.EVP_CipherUpdate"));CHECK(strstr(reply,"\"dependency\":true"));
+     puts(reply);CHECK(strstr(reply,"native.SSL_write"));CHECK(!strstr(reply,"native.EVP_"));
    } else if(!strcmp(name,"malformed")) {
      char out[40];uint32_t bits=0,rev=0;
      CHECK(!adh_capture_revision("4294967296",&rev));CHECK(!adh_capture_revision("01",&rev));CHECK(!adh_capture_revision("1x",&rev));

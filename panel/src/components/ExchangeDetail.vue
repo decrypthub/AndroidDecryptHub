@@ -5,7 +5,7 @@ import { CopyOutline } from '@vicons/ionicons5';
 import { toast } from '../store';
 
 const props = defineProps<{ ex: Record<string, any> }>();
-const view = ref<'data' | 'event'>('data');
+const infoOpen = ref(false);
 
 interface Part { startLine?: string; headerText?: string; bodyText?: string; bodyBytes?: number; bodyHex?: string; binary?: boolean; complete?: boolean; decoded?: boolean; contentEncoding?: string; note?: string }
 const req = computed<Part | undefined>(() => props.ex.request);
@@ -61,12 +61,9 @@ function copy(text: string) {
     <div class="sub">{{ [ex.seq ? `#${ex.seq}` : '', ex.status ? `HTTP ${ex.status}` : '', ex.conn].filter(Boolean).join(' · ') }}</div>
   </div>
 
-  <div class="record-tabs ui-nav ui-nav-row">
-    <button type="button" class="ui-nav-item" :aria-selected="view === 'data'" @click="view = 'data'">数据详情</button>
-    <button type="button" class="ui-nav-item" :aria-selected="view === 'event'" @click="view = 'event'">事件信息</button>
-  </div>
+  <div class="exchange-actions"><n-button text size="small" @click="infoOpen=true">事件信息</n-button></div>
 
-  <div v-if="view === 'data'" class="record-tab-panel">
+  <div class="record-tab-panel">
     <div class="io-section in-card">
       <div class="io-card-head"><span class="io-label in">请求</span><span class="io-meta">{{ partMeta(req) }}</span></div>
       <div class="io-block-body">
@@ -87,9 +84,8 @@ function copy(text: string) {
     </div>
   </div>
 
-  <div v-else class="record-tab-panel">
+  <n-modal v-model:show="infoOpen" preset="card" title="事件信息" class="event-info-modal ui-window" :style="{width:'min(680px, calc(100vw - 24px))',maxHeight:'calc(100dvh - 48px)'}" :content-style="{overflow:'auto'}">
     <div class="capture-overview">
-      <h3>事件信息</h3>
       <dl class="capture-facts">
         <div><dt>序号</dt><dd>{{ ex.seq ? `#${ex.seq}` : '未记录' }}</dd></div>
         <div><dt>时间</dt><dd>{{ when }}</dd></div>
@@ -100,10 +96,11 @@ function copy(text: string) {
       </dl>
       <p v-if="ex.note" class="payload-note">{{ ex.note }}</p>
     </div>
-  </div>
+  </n-modal>
 </template>
 
 <style scoped>
+.exchange-actions{display:flex;justify-content:flex-end;margin:-6px 0 14px}
 /* 复制按钮：naive-ui 圆形图标按钮，悬停数据块才显现，定位不变 */
 .block-copy {
   position: absolute;

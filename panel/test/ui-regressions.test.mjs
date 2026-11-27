@@ -120,9 +120,9 @@ test('control: open/restart/stop share one in-flight operation lock', async () =
 });
 
 test('labels: injection permission is not described as a running injected session', () => {
-  assert.match(source, /\['injected', '已注入'\]/);assert.match(source,/s\.deviceBinding\?\.serial===serial/);
+  assert.match(source, /\['injected', '已开启'\]/);assert.match(source,/s\.deviceBinding\?\.serial===serial/);
   assert.match(source, /允许注入/);
-  assert.match(source, /采集在线/);
+  assert.match(source, /runningLabel\(a\)/);assert.doesNotMatch(source,/采集在线/);
 });
 
 test('controls: uses the component-library modal close and buttons', () => {
