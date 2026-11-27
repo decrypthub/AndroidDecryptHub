@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { readdirSync } from 'node:fs';
+import { readdirSync,readFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { adbExec } from './adb_wire.ts';
 import { dirname, join } from 'node:path';
@@ -39,6 +39,14 @@ export function isOwnDemoPackage(pkg:string):boolean {
   return pkg===OWN_DEMO_PACKAGE||pkg.startsWith(`${OWN_DEMO_PACKAGE}.`);
 }
 
+/** Explicit restart of the same owned data root; never silently adopt another device/app. */
+export function assertObserverDataDirectory(dataDir:string,serial:string,pkg:string,resume=false,captureOverride=false){
+  if(captureOverride)throw Error('Local observation refuses a capture-directory override');
+  if(!readdirSync(dataDir).length)return;
+  let owner:any;try{if(resume)owner=JSON.parse(readFileSync(join(dataDir,'.adh-local-observer.json'),'utf8'));}catch{/* invalid ownership is rejected below */}
+  if(!resume||owner?.version!==1||owner?.serial!==serial||owner?.package!==pkg)throw Error('Local observation needs an empty data directory, or explicit resume with matching device/app ownership');
+}
+
 async function readLocalObserver(): Promise<LocalObserver | null> {
   const pkg = process.env.ADH_OBSERVE_APP;
   const fileBrowserOnly = process.env.ADH_OWN_FILE_BROWSER === '1';
@@ -62,9 +70,7 @@ async function readLocalObserver(): Promise<LocalObserver | null> {
       !/^[A-Za-z0-9_-]+$/.test(serial) || !process.env.ADH_DATA_DIR) {
     throw Error('Local observation needs an exact USB serial, package and isolated ADH_DATA_DIR');
   }
-  if (readdirSync(process.env.ADH_DATA_DIR).length || process.env.ADH_CAPTURES_DIR) {
-    throw Error('Local observation needs a new empty data directory and no capture-directory override');
-  }
+  assertObserverDataDirectory(process.env.ADH_DATA_DIR,serial,pkg,process.env.ADH_RESUME_OBSERVER_DATA==='1',!!process.env.ADH_CAPTURES_DIR);
   const adb = async (args: string[]) => (await adbExec(args, { timeout: 5000 })).stdout.trim();
   const device = (...args: string[]) => adb(['-s', serial, ...args]);
   const usb = (await adb(['devices', '-l'])).split(/\r?\n/).flatMap(line => {

@@ -1,3 +1,4 @@
+import {captureHistory} from './state.ts';
 import {richCaptureEvidence} from './capture_origin.ts';
 import {captureMatchesScope,scopeSessionRows} from './agent_scope.ts';
 import {assertSessionScope,selectAgentSession,verifyAgentBinding,deviceRequestScope} from './agent_scope.ts';
@@ -1167,7 +1168,7 @@ async function armCaptureHooks(sid: string, mods: { cryptoModule: string; fileMo
 
 // Connect only starts draining. Installation/dumps require explicit Host operations.
 // Seed from durable captures so ids stay unique across daemon restarts.
-let capSeq = captures.reduce((m, c) => Math.max(m, Number(c.id) || 0), 0);
+let capSeq = 0;
 
 // The agent's capture_drain is POP semantics: whatever the response holds leaves the agent ring for
 // good. Only the code that puts it into the local store may therefore send it - a bare
@@ -1243,7 +1244,7 @@ function processCaptureFrame(sid: string, r: any, now: number) {
   const pkg = sessions.get(sid)?.package ?? '';
   const announce = (entry: Capture) => {
     const outl = entry.outl ?? (entry.outHex ? entry.outHex.length / 2 : 0);
-    broadcast('capture.new', {
+    broadcast('capture.new', {displayId: entry.displayId,captureGeneration:entry.captureGeneration,
       id: entry.id, sessionId: sid, package: pkg, source: entry.source, category: entry.category,
       algo: entry.algo, op: entry.op, func: entry.func, preview: entry.preview, inl: entry.inl, outl,
       ...(entry.path ? { path: entry.path } : {}),
@@ -1290,6 +1291,7 @@ function processCaptureFrame(sid: string, r: any, now: number) {
 }
 
 export function ingestAgentCaptureFrame(sid: string, r: any) {
+  capSeq=captures.reduce((max,c)=>Math.max(max,Number(c.id)||0),Math.max(capSeq,captureHistory.highWater));
   const count = Number(r?.count ?? 0) || 0;
   const frameSeq = Number(r?.frameSeq ?? 0) || 0;
   const prev = capStats.get(sid);
@@ -1334,7 +1336,7 @@ export function ingestAgentCaptureFrame(sid: string, r: any) {
 
 export function startCaptureLoop(sid: string, opts?: { skipArm?: boolean }) {
   // Recovery now happens explicitly after module imports; resume above restored IDs.
-  capSeq = captures.reduce((max, capture) => Math.max(max, Number(capture.id) || 0), capSeq);
+  capSeq = captures.reduce((max, capture) => Math.max(max, Number(capture.id) || 0), Math.max(capSeq,captureHistory.highWater));
   if (captureTimers.has(sid)) return; // already streaming
   if (!opts?.skipArm && captureLoopPending.has(sid)) return;
   const pkgNow = sessions.get(sid)?.package ?? '';

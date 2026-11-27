@@ -13,7 +13,7 @@ export function scopeHeaders(path:string,headers?:HeadersInit,explicit?:{serial?
 // 端点封装 + 统一耗时统计。面板所有请求走 api()，自动进 perfStat。
 
 export interface Cap {
-  id: number; ts: number; category: string;
+  id: number; ts: number; category: string;displayId?:number;captureGeneration?:string;
   algo?: string; op?: string; func?: string; hook?: string; path?: string;
   preview?: string; inl?: number; outl?: number; out?: number;
   package?: string; sessionId?: string; deviceBinding?:DeviceBinding;
@@ -174,6 +174,7 @@ export const reconnectDevice = (serial: string) => deviceActionRaw({ action: 're
 export const adbConnectDevice = (address: string) => deviceActionRaw({ action: 'adb-connect', address });
 
 export interface CapturesQuery {
+  history?:boolean;
   package: string;
   since?: number;
   beforeId?: number | null;
@@ -184,6 +185,7 @@ export interface CapturesQuery {
   limit?: number;
 }
 export interface CapturesReply {
+  historyVersion?:number;generation?:string;scope?:{serial:string;package:string};archiveError?:string;
   ok?: boolean;
   captures?: Cap[];
   items?: Cap[];
@@ -203,6 +205,7 @@ export interface CapturesReply {
 export const getCaptures = (q: CapturesQuery | string, since = 0, limit = 1000) => {
   const opts: CapturesQuery = typeof q === 'string' ? { package: q, since, limit } : q;
   const p = new URLSearchParams();
+  if(opts.history)p.set('history','1');if(opts.maxId!=null)p.set('maxId',String(opts.maxId));
   if (opts.package) p.set('package', opts.package);
   if (opts.since) p.set('since', String(opts.since));
   if (opts.beforeId != null) p.set('beforeId', String(opts.beforeId));
@@ -217,11 +220,13 @@ export const getCaptureDetail = (id: number, pkg?: string, serial?:string) =>
   api<Record<string, unknown>>(`/api/captures/${id}${pkg ? `?package=${encodeURIComponent(pkg)}` : ''}`,serial?{headers:scopeHeaders('/api/captures',undefined,{serial,package:pkg})}:undefined);
 export const deleteCapture = (id: number, pkg?: string) =>
   post<{ ok?: boolean; error?: string }>(`/api/captures/${id}${pkg ? `?package=${encodeURIComponent(pkg)}` : ''}`, { action: 'delete' });
-export const getExchanges = (pkg: string, range?: { fromTs?: number | null; toTs?: number | null }) => {
+export const getExchanges = (pkg: string, range?: { history?:boolean;maxId?:number|null;beforeId?:number|null;limit?:number;fromTs?: number | null; toTs?: number | null }) => {
   const p = new URLSearchParams({ package: pkg });
+  if(range?.history)p.set('history','1');
+  for(const key of ['maxId','beforeId','limit'] as const)if(range?.[key]!=null)p.set(key,String(range[key]));
   if (range?.fromTs != null) p.set('fromTs', String(range.fromTs));
   if (range?.toTs != null) p.set('toTs', String(range.toTs));
-  return api<{ ok?: boolean; scope?:{serial:string|null;package:string|null};panelProtocol?:number;exchanges?: unknown[]; items?: unknown[]; http2Idle?: number; consumedIds?: number[] }>(`/api/http/exchanges?${p.toString()}`);
+  return api<{historyVersion?:number;generation?:string;nextBeforeId?:number|null;hasMore?:boolean;matched?:number;archiveError?:string; ok?: boolean; scope?:{serial:string|null;package:string|null};panelProtocol?:number;exchanges?: unknown[]; items?: unknown[]; http2Idle?: number; consumedIds?: number[] }>(`/api/http/exchanges?${p.toString()}`);
 };
 export const getDetectSummary = (pkg: string) =>
   api<Record<string, unknown>>(`/api/detect/summary?package=${encodeURIComponent(pkg)}`);
@@ -346,3 +351,5 @@ export async function importHostSettings(view:HostSettingsView,patch:Record<stri
 
 export interface CapturePackage {package:string;lines:number;bytes:number;oldestTs:number;newestTs:number}
 export const getCapturePackages=(serial:string)=>api<{packages:CapturePackage[]}>('/api/captures/packages',undefined,8000,{serial});
+
+export const clearCaptureBoard=(pkg:string,kind:'crypto'|'system'|'net')=>post<{ok:boolean;generation:string;removed:number;kind:string}>('/api/captures/clear?package='+encodeURIComponent(pkg),{action:'clear-board',kind});

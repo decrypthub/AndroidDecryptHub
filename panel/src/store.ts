@@ -1,3 +1,4 @@
+import {cacheLogRows,confirmCacheGeneration,clearCachedScope} from './log_cache';
 // 全局响应式状态。防丢语义（历史三修，勿回退）：
 //  1. 记录归属按包名 stamp，不绑会话存活——会话剪枝后旧记录仍在。
 //  2. capItems 只在「设备+包身份」真变时清空——应用启停、轮询失败不触发。
@@ -94,10 +95,13 @@ function stampSession(s: A.Session) {
 }
 
 // ---- 记录（按板块独立限额淘汰，防止高频加解密把网络/系统记录挤空）----
+function cacheCaptureBatch(rows:A.Cap[]){const groups=new Map<string,{scope:{serial:string;package:string;kind:string};generation:string;rows:any[]}>();for(const c of rows){if(!c.captureGeneration||!c.deviceBinding?.serial||!c.package)continue;const scope={serial:c.deviceBinding.serial,package:c.package,kind:c.category==='net'?'net-raw':bucketOf(c.category)},key=JSON.stringify([scope,c.captureGeneration]);let g=groups.get(key);if(!g){g={scope,generation:c.captureGeneration,rows:[]};groups.set(key,g);}g.rows.push({...c,order:c.id});}for(const g of groups.values())void cacheLogRows(g.scope,g.generation,g.rows);}
+let captureReadEpoch=0;
 const queuedCaptures=new Map<number,A.Cap>();let queuedFlush:ReturnType<typeof setTimeout>|null=null;
 /** Batch WS notifications; collection/persistence continue independently of DOM refresh. */
-export function queueCapture(c:A.Cap){if(!belongsToApp(c))return;queuedCaptures.set(c.id,c);if(queuedFlush!==null)return;queuedFlush=setTimeout(()=>{queuedFlush=null;const byId=new Map(store.capItems.map(c=>[c.id,c])),added={crypto:0,system:0,net:0};for(const c of queuedCaptures.values()){if(!belongsToApp(c))continue;if(!byId.has(c.id))added[bucketOf(c.category)]++;byId.set(c.id,c);}queuedCaptures.clear();const counts={crypto:0,system:0,net:0},kept:A.Cap[]=[];for(const c of [...byId.values()].sort((a,b)=>b.id-a.id)){const key=bucketOf(c.category);if(++counts[key]<=BUCKET_LIMIT)kept.push(c);else store.capHasOlder[key]=true;}store.capItems=kept.reverse();for(const k of ['crypto','system','net'] as const)store.capTotal[k]+=added[k];},100);}
+export function queueCapture(c:A.Cap){if(!belongsToApp(c))return;queuedCaptures.set(c.id,c);if(queuedFlush!==null)return;queuedFlush=setTimeout(()=>{queuedFlush=null;const byId=new Map(store.capItems.map(c=>[c.id,c])),added={crypto:0,system:0,net:0};for(const c of queuedCaptures.values()){if(!belongsToApp(c))continue;if(!byId.has(c.id))added[bucketOf(c.category)]++;byId.set(c.id,c);}cacheCaptureBatch([...queuedCaptures.values()]);queuedCaptures.clear();const counts={crypto:0,system:0,net:0},kept:A.Cap[]=[];for(const c of [...byId.values()].sort((a,b)=>b.id-a.id)){const key=bucketOf(c.category);if(++counts[key]<=BUCKET_LIMIT)kept.push(c);else store.capHasOlder[key]=true;}store.capItems=kept.reverse();for(const k of ['crypto','system','net'] as const)store.capTotal[k]+=added[k];},100);}
 export function capPush(c: A.Cap) {
+  if(belongsToApp(c)&&c.captureGeneration)void cacheLogRows({serial:selectedSerial(),package:store.chosenPkg,kind:c.category==='net'?'net-raw':bucketOf(c.category)},c.captureGeneration,[{...c,order:c.id}]);
   if(!belongsToApp(c))return;
   if (c.sessionId && c.package) store.sessionPkg.set(c.sessionId, c.package);
   const fresh=!store.capItems.some(x=>x.id===c.id);
@@ -130,19 +134,20 @@ export function toast(text: string) {
   setTimeout(() => { const i = toasts.findIndex(t => t.id === id); if (i >= 0) toasts.splice(i, 1); }, 2600);
 }
 export async function checkPanelProtocol(){try{const r=await A.getHealth();store.backendStatus=r.panelProtocol===1?'ready':'incompatible';if(store.backendStatus==='ready')void capLoad();}catch{store.backendStatus='unavailable';}}
-export async function refreshNavCounts(){const key=targetKey(),pkg=store.chosenPkg;if(!pkg||store.backendStatus!=='ready')return;try{const rows=await Promise.all(['crypto','system,file','net'].map(category=>A.getCaptures({package:pkg,category,limit:1})));if(targetKey()!==key)return;for(const [i,k] of ['crypto','system','net'].entries())store.capTotal[k as keyof typeof store.capTotal]=rows[i].matched??0;}catch{/* keep the last confirmed count */}}
+export async function refreshNavCounts(){const key=targetKey(),pkg=store.chosenPkg;if(!pkg||store.backendStatus!=='ready')return;try{const rows=await Promise.all(['crypto','system,file','net'].map(category=>A.getCaptures({history:true,package:pkg,category,limit:1})));if(targetKey()!==key)return;for(const [i,k] of ['crypto','system','net'].entries())store.capTotal[k as keyof typeof store.capTotal]=rows[i].matched??0;}catch{/* keep the last confirmed count */}}
 export async function capLoad() {
   if(store.backendStatus==='incompatible')return;
-  const pkg = store.chosenPkg,key=targetKey();
+  const pkg = store.chosenPkg,key=targetKey(),readEpoch=captureReadEpoch;
   if (!pkg) { store.capItems = []; return; }
   store.capLoading = true;
   try {
     const [rc, rs, rn] = await Promise.all([
-      A.getCaptures({ package: pkg, category: 'crypto', limit: 600 }),
-      A.getCaptures({ package: pkg, category: 'system,file', limit: 600 }),
-      A.getCaptures({ package: pkg, category: 'net', limit: 400 }),
+      A.getCaptures({ history:true,package: pkg, category: 'crypto', limit: 600 }),
+      A.getCaptures({ history:true,package: pkg, category: 'system,file', limit: 600 }),
+      A.getCaptures({ history:true,package: pkg, category: 'net', limit: 400 }),
     ]);
-    if (targetKey() !== key) return;
+    if (targetKey() !== key||readEpoch!==captureReadEpoch) return;
+    cacheCaptureBatch([...(rc.captures??rc.items??[]),...(rs.captures??rs.items??[]),...(rn.captures??rn.items??[])]);
     const byId = new Map<number, A.Cap>();
     for (const r of [rc, rs, rn]) {
       for (const c of (r.captures ?? r.items ?? [])) {
@@ -170,7 +175,7 @@ export async function capLoad() {
   } catch {
     // 网络瞬断保旧数据，绝不把已有列表洗成空数组
   } finally {
-    if (targetKey() === key) store.capLoading = false;
+    if (targetKey() === key&&readEpoch===captureReadEpoch) store.capLoading = false;
   }
 }
 
@@ -401,8 +406,11 @@ export function connectWs() {
         if(d?.serial&&d.serial!==selectedSerial())break;
         if(d?.package&&d.package!==store.chosenPkg)break;
         if(d?.what&&d.what!=='captures')break;
-        store.capItems = [];
-        store.capDropped = 0;
+        captureReadEpoch++;store.capLoading=false;for(const kind of ['crypto','system','net'] as const)if(!d?.kind||d.kind===kind){store.capTotal[kind]=0;store.capHasOlder[kind]=false;}
+        for(const [id,c]of queuedCaptures)if(!d?.kind||bucketOf(c.category)===d.kind)queuedCaptures.delete(id);
+        store.capItems=store.capItems.filter(c=>d?.kind&&bucketOf(c.category)!==d.kind);store.capDropped=0;
+        if(d?.generation)for(const kind of d.kind?[String(d.kind),...(d.kind==='net'?['net-raw']:[])]:['crypto','system','net','net-raw'])void clearCachedScope({serial:selectedSerial(),package:store.chosenPkg,kind},String(d.generation));
+        window.dispatchEvent(new CustomEvent('adh:capture-clear',{detail:d}));
         break;
       case 'devices.changed':
         void refreshDevices();

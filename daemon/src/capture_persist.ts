@@ -1,3 +1,4 @@
+import {captureHistoryIfOpen} from './capture_history.ts';
 import {captureMatchesScope,deviceRequestScope,type AgentDeviceBinding} from './agent_scope.ts';
 import { atomicWriteText } from './storage.ts';
 // Package-scoped capture log on disk. Agent still only rings+drains; Host owns the durable store.
@@ -102,6 +103,7 @@ export function markCaptureDeleted(dataDir: string, pkg: string, id: number): vo
   mkdirSync(join(dataDir, 'packages', safe), { recursive: true });
   appendFileSync(join(dataDir, 'packages', safe, 'captures.deleted.jsonl'), JSON.stringify({ id }) + '\n');
   deletedCaptureIds(dataDir, safe).add(id);
+  captureHistoryIfOpen(dataDir)?.deleteMany([id]);
 }
 
 // Keep the newest retain lines for one package file (rewrite). No-op if under budget.
@@ -207,6 +209,7 @@ export function listPackageCaptureStats(dataDir: string): PackageCaptureStat[] {
 
 /** Delete one package's captures.jsonl (and its directory if empty). */
 export function clearPackagePersistedCaptures(dataDir: string, pkg: string): string[] {
+  captureHistoryIfOpen(dataDir)?.clearWhere(deviceRequestScope()?.serial,pkg);
   const errors: string[] = [];
   const safe = safePackageDirName(pkg);
   if (!safe) return [`包名不正确: ${pkg}`];
@@ -269,6 +272,7 @@ export function readPackageCapturesJsonl(dataDir: string, pkg: string): string |
 
 // Drop the entire packages/ tree under dataDir.
 export function clearAllPersistedCaptures(dataDir: string): string[] {
+  captureHistoryIfOpen(dataDir)?.clearWhere(deviceRequestScope()?.serial,deviceRequestScope()?.package);
   const errors: string[] = [];
   const root = join(dataDir, 'packages');
   if (!existsSync(root)) return errors;
@@ -481,3 +485,5 @@ export function findPersistedCaptureById(dataDir: string, id: number, pkg?: stri
   }
   return null;
 }
+
+export function markCaptureIdsDeleted(dataDir:string,pkg:string,ids:number[]){const safe=safePackageDirName(pkg);if(!safe)throw new Error('invalid package');if(!ids.length)return;mkdirSync(join(dataDir,'packages',safe),{recursive:true});appendFileSync(join(dataDir,'packages',safe,'captures.deleted.jsonl'),ids.map(id=>JSON.stringify({id})).join('\n')+'\n');const deleted=deletedCaptureIds(dataDir,safe);for(const id of ids)deleted.add(id);}

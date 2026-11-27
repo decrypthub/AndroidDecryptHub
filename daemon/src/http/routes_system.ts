@@ -1,3 +1,6 @@
+import {captureHistory,captureArchiveError} from '../state.ts';
+import {historyKind} from '../capture_history.ts';
+import {markCaptureIdsDeleted} from '../capture_persist.ts';
 import {richCaptureEvidence,retainedByteEvidence} from '../capture_origin.ts';
 import {captureControlAction} from '../capture_controls.ts';
 import {getOperations} from '../operation_host.ts';
@@ -209,6 +212,16 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       const toTsRaw = url.searchParams.get('toTs');
       const fromTs = fromTsRaw ? Number(fromTsRaw) : null;
       const toTs = toTsRaw ? Number(toTsRaw) : null;
+      if(url.searchParams.get('history')==='1'){
+        const scope=deviceRequestScope();if(!scope?.serial||!pkg||(scope.package&&scope.package!==pkg))return send(409,{error:'日志归档需要明确设备与应用'});
+        const beforeRaw=url.searchParams.get('beforeId'),before=beforeRaw?Number(beforeRaw):null,limit=Math.max(1,Math.min(Number(url.searchParams.get('limit'))||300,1000));
+        const page=captureHistory.page({serial:scope.serial,package:pkg,kind:'net',beforeId:before,maxId:url.searchParams.has('maxId')?Number(url.searchParams.get('maxId')):null,fromTs,toTs,limit:Math.min(10000,limit*4)}),ids=new Set(page.items.map(c=>c.id));
+        const context=page.items.length?captureHistory.neighbors(scope.serial,pkg,'net',page.items[0].id,page.items.at(-1)!.id,url.searchParams.has('maxId')?Number(url.searchParams.get('maxId')):undefined):[];
+        const chunks=[...context,...page.items].sort((a,b)=>a.id-b.id).map(c=>({id:c.id,sessionId:c.sessionId,func:c.func,hex:c.hex,inl:c.inl,tsNs:c.tsNs,ts:c.ts,conn:c.conn}));
+        const assembled=assembleHttpExchanges(chunks),sub=new Map<number,number>();
+        const exchanges=assembled.exchanges.filter(ex=>ids.has(Math.min(...ex.captureIds))).map(ex=>{const anchor=Math.min(...ex.captureIds),i=sub.get(anchor)??0;sub.set(anchor,i+1);return {...ex,id:ex.sessionId+':'+ex.conn+':'+anchor+':'+i,order:anchor,displayId:captureHistory.find(anchor)?.displayId??anchor,captureGeneration:page.generation};});
+        return send(200,{...assembled,exchanges,historyVersion:1,generation:page.generation,hasMore:page.hasMore,nextBeforeId:page.nextBeforeId,matched:page.matched,archiveError:captureArchiveError,scope:{serial:scope.serial,package:pkg},panelProtocol:1,note:'分页边界的未配对片段按实际状态显示，原始TLS仍保存在归档。'});
+      }
       // 全量重组一次要几秒（hex 解码 + 解压 + HPACK），面板每 5s 轮询一次。
       // 记录只追加不可变：net 条数 + 最后一条 net id 没变就直接回缓存。
       let netCount = 0, lastNetId = 0;
@@ -255,6 +268,12 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
     // Live + persisted captures with cursor/time pagination:
     // GET /api/captures?package=&session=&category=&since=&beforeId=&fromTs=&toTs=&q=&limit=
     { path: '/api/captures', handler: () => {
+      if(url.searchParams.get('history')==='1'){
+        const scope=deviceRequestScope(),pkg=url.searchParams.get('package');if(!scope?.serial||!pkg||(scope.package&&scope.package!==pkg))return send(409,{error:'日志归档需要明确设备与应用'});
+        const cat=url.searchParams.get('category')||'crypto',kind=cat==='net'?'net':cat==='crypto'?'crypto':'system';
+        const page=captureHistory.page({serial:scope.serial,package:pkg,kind,maxId:url.searchParams.has('maxId')?Number(url.searchParams.get('maxId')):null,beforeId:url.searchParams.has('beforeId')?Number(url.searchParams.get('beforeId')):null,since:Number(url.searchParams.get('since'))||0,fromTs:url.searchParams.has('fromTs')?Number(url.searchParams.get('fromTs')):null,toTs:url.searchParams.has('toTs')?Number(url.searchParams.get('toTs')):null,q:url.searchParams.get('q')||'',category:cat==='file'||cat==='system'?cat:undefined,limit:Number(url.searchParams.get('limit'))||300});
+        return send(200,{historyVersion:1,generation:page.generation,scope:{serial:scope.serial,package:pkg},panelProtocol:1,matched:page.matched,total:page.matched,returned:page.items.length,hasMore:page.hasMore,nextBeforeId:page.nextBeforeId,archiveError:captureArchiveError,captures:page.items.map(c=>{const{hex,outHex,keyHex,ivHex,callStack,...metadata}=c;return {...metadata,hasKey:!!keyHex,...captureDisplayFields(c),...(c.category==='crypto'?{view:cryptoView(c)}:{})};})});
+      }
       const since = Number(url.searchParams.get('since') ?? 0);
       const limit = Math.max(1, Math.min(Number(url.searchParams.get('limit') ?? 200), 10000));
       const beforeIdRaw = url.searchParams.get('beforeId');
@@ -370,9 +389,18 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
       if (req.method === 'POST') {
         let body: { action?: string };
         try { body = JSON.parse(await readBody(req) || '{}'); } catch { return send(400, { ok: false, error: 'bad json' }); }
+        if(url.pathname==='/api/captures/clear'&&body?.action==='clear-board'){
+          const scope=deviceRequestScope(),pkg=url.searchParams.get('package')||'',kind=(body as any).kind;
+          if(!scope?.serial||!pkg||scope.package!==pkg||!['crypto','system','net'].includes(kind))return send(409,{error:'清理需要明确的设备、应用与板块'});
+          if(captureArchiveError)return send(503,{error:'归档写入异常，先修复存储后再清理：'+captureArchiveError});
+          const cleared=captureHistory.clear(scope.serial,pkg,kind);markCaptureIdsDeleted(DATA_DIR,pkg,cleared.ids);
+          for(let i=captures.length-1;i>=0;i--)if(captureMatchesScope(captures[i])&&historyKind(captures[i].category)===kind)captures.splice(i,1);
+          exchangeCache.clear();broadcast('data.cleared',{what:'captures',serial:scope.serial,package:pkg,kind,generation:cleared.generation});
+          return send(200,{ok:true,generation:cleared.generation,removed:cleared.ids.length,kind});
+        }
         if (body?.action !== 'delete') return send(400, { ok: false, error: '未知操作' });
         if (!Number.isFinite(id) || id <= 0) return send(400, { ok: false, error: '无效的记录编号' });
-        const found=captures.find(x=>x.id===id)??findPersistedCaptureById(DATA_DIR,id,url.searchParams.get('package')||undefined);
+        const found=captures.find(x=>x.id===id)??captureHistory.find(id)??findPersistedCaptureById(DATA_DIR,id,url.searchParams.get('package')||undefined);
         if(!found||!captureMatchesScope(found))return send(404,{error:'not found'});
         const idx = captures.findIndex(x => x.id === id&&captureMatchesScope(x));
         const mem = idx >= 0 ? captures.splice(idx, 1)[0] : undefined;
@@ -382,6 +410,7 @@ export function systemRoutes({ req, res, url, send }: RouteContext): Route[] {
         return send(200, { ok: true, id });
       }
       const c = captures.find(x => x.id === id)
+        ?? (captureHistory.find(id) as Capture | null)
         ?? (findPersistedCaptureById(DATA_DIR, id, url.searchParams.get('package') || undefined) as unknown as Capture | null);
       if (!c||!captureMatchesScope(c)) return send(404, { error: 'not found' });
       // decode as UTF-8 so Chinese plaintext (gray-market payloads) is readable, not dotted

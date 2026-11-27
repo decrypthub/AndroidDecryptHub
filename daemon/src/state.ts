@@ -1,3 +1,4 @@
+import {captureHistoryFor} from './capture_history.ts';
 import {captureMatchesScope,deviceRequestScope,captureMatchesDevice,freezeDeviceBinding,type AgentDeviceBinding} from './agent_scope.ts';
 // state.ts — ADH Daemon shared state + leaf mutators.
 // Pure state holder: imports NOTHING from service.ts/mcp.ts/index.ts (no circular refs).
@@ -219,6 +220,9 @@ export const nextCmdId = () => `c${(++cmdSeq).toString(36)}`;
 
 // ---- event store (session record/replay) ---------------------------------
 export const DATA_DIR = storagePaths.dataDir;
+// Imports remain pure: local USB observation validates its data root before host recovery.
+export const captureHistory=new Proxy({} as ReturnType<typeof captureHistoryFor>,{get(_target,key){const history=captureHistoryFor(DATA_DIR),value=Reflect.get(history,key,history);return typeof value==='function'?value.bind(history):value;}});
+export let captureArchiveError='';
 export const EVENTS_FILE = join(DATA_DIR, 'events.jsonl');
 interface Ev { seq: number; ts: number; type: string; data: any }
 export const events: Ev[] = [];
@@ -562,6 +566,7 @@ export function pushCapture(entry: Capture): boolean {
   // plan even when the app's panel selection is different.
   if (entry.category === 'crypto' && !packageFamilies(entry.package ?? '')
     && settings.capture.families[familyOf(entry.algo)] === false) return false;
+  try{captureHistory.append([entry as any]);}catch(e){captureArchiveError=(e as Error).message;log('[capture-history]',captureArchiveError);}
   captures.push(entry);
   capturePushed++;
   bumpSession(entry.sessionId, 'pushed');
@@ -585,6 +590,7 @@ export function pushCaptureBatch(entries: Capture[]): Capture[] {
   const accepted = entries.map(stampCaptureDevice).filter((entry) => !(entry.category === 'crypto' && !packageFamilies(entry.package ?? '')
     && settings.capture.families[familyOf(entry.algo)] === false));
   if (!accepted.length) return accepted;
+  try{captureHistory.append(accepted as any[]);}catch(e){captureArchiveError=(e as Error).message;log('[capture-history]',captureArchiveError);}
   captures.push(...accepted);
   capturePushed += accepted.length;
   for (const entry of accepted) bumpSession(entry.sessionId, 'pushed');
@@ -659,6 +665,7 @@ export function captureModules() { return { cryptoModule: settings.capture.crypt
 //      加解密 list reads this; it auto-populates without any button click) -------------
 export type CapCategory = 'crypto' | 'net' | 'file' | 'system';
 export interface Capture {
+  displayId?:number;captureGeneration?:string;
   id: number; sessionId: string; deviceBinding?:Readonly<AgentDeviceBinding>; source: 'java' | 'native'; func: string; algo: string; op: string;
   category: CapCategory;
   inl: number; tid: number; tsNs: number; ts: number; hex: string; preview: string;
@@ -1171,6 +1178,7 @@ export function restoreHostState() {
     backfillUnlabeledDumps();
   }
   captures.push(...loadCapturesFromDisk(DATA_DIR, settings.capture.retain) as Capture[]);
+  try{captureHistory.append(captures as any[]);}catch(e){captureArchiveError=(e as Error).message;log('[capture-history] import',captureArchiveError);}
   restored = { events: events.length, captures: captures.length, artifacts: dumps.size };
   return { ...restored, alreadyInitialized: false };
 }

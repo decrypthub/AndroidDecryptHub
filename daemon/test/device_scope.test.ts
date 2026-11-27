@@ -51,7 +51,8 @@ function panelStore(){
  const a:any={getCaptures:async()=>({captures:[]}),getApps:async()=>({apps:[]}),getScope:async()=>({ok:true,packages:[]}),setApiScopeProvider(fn:any){a.provider=fn;}};
  const source=fs.readFileSync(new URL('panel/src/store.ts',root),'utf8');
  const compiled=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
- const module={exports:{}};vm.runInNewContext(compiled,{module,exports:module.exports,require:(name:string)=>name==='vue'?panelRequire('vue'):name==='./api'?a:name==='./observations'?{recordVisible:()=>true}:panelRequire(name),console,setTimeout:()=>0,clearTimeout,localStorage:{getItem:()=>null,setItem:()=>{}},window:undefined});
+ const cacheSource=fs.readFileSync(new URL('panel/src/log_cache.ts',root),'utf8'),cacheModule={exports:{}};vm.runInNewContext(ts.transpileModule(cacheSource,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{module:cacheModule,exports:cacheModule.exports,console,localStorage:{getItem:()=>null,setItem:()=>{}}});
+ const module={exports:{}};vm.runInNewContext(compiled,{module,exports:module.exports,require:(name:string)=>name==='vue'?panelRequire('vue'):name==='./log_cache'?cacheModule.exports:name==='./api'?a:name==='./observations'?{recordVisible:()=>true}:panelRequire(name),console,setTimeout:()=>0,clearTimeout,localStorage:{getItem:()=>null,setItem:()=>{}},window:undefined});
  return {s:module.exports as any,a};
 }
 function select(s:any){s.store.devices=[{key:'a',serial:'phoneA',observed:pkg},{key:'b',serial:'phoneB',observed:pkg}];s.store.selectedDeviceKey='a';s.store.chosenPkg=pkg;}

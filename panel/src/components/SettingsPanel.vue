@@ -115,7 +115,7 @@ async function refreshStatus() {
     panel: location.origin,
     version: typeof service?.version === 'string' ? service.version : '未读取',
     retention: Number.isSafeInteger(cap?.retain) && Number.isSafeInteger(cap?.maxAgeDays)
-      ? `每个 APP 最多 ${cap!.retain!.toLocaleString('zh-CN')} 条 · ${cap!.maxAgeDays ? '保留 ' + cap!.maxAgeDays + ' 天' : '不限天数'}`
+      ? `热窗口每设备／APP ${cap!.retain!.toLocaleString('zh-CN')} 条；浏览归档不按此淘汰，需手动清理`
       : '未读取',
   };
   statusMsg.value = (service && data) ? '' : '部分信息读取失败，可点「刷新」重试。';
@@ -221,7 +221,7 @@ watch(page,p=>{if(p==='records')takeSnap();if(p==='conn')void refreshStatus();})
             <div><dt>电脑服务</dt><dd>{{ status.host || '未读取' }}</dd></div>
             <div><dt>面板地址</dt><dd>{{ status.panel || '—' }}</dd></div>
             <div><dt>电脑服务版本</dt><dd>{{ status.version || '—' }}</dd></div>
-            <div><dt>记录保留规则</dt><dd>{{ status.retention || '—' }}</dd></div>
+            <div><dt>热窗口与归档</dt><dd>{{ status.retention || '—' }}</dd></div>
           </dl>
           <details class="settings-advanced-scope"><summary>分析范围与注入设置</summary>          <dl class="set-meta">
             <div><dt>当前设备</dt><dd>{{ status.dev || '未连接' }}</dd></div>

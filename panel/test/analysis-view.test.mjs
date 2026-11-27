@@ -28,7 +28,7 @@ test('paused capture searches and filters the frozen input rather than freezing 
     v.store.capItems.push(cap(3,'AES-CBC'));await Vue.nextTick();
     assert.deepEqual(v.rows.value.map(c=>c.id),[2]);
     v.filter.paused=false;await Vue.nextTick();
-    assert.deepEqual(v.rows.value.map(c=>c.id),[3,2]);
+    assert.deepEqual(v.rows.value.map(c=>c.id),[2,3]);
   } finally {v.dispose();}
 });
 
@@ -59,7 +59,7 @@ test('network pause freezes exchanges including incomplete responses, while sear
     v.filter.paused=true;await Vue.nextTick();
     v.exchanges.value=[{id:'a',seq:1,label:'GET /first',ts:1000,response:{bodyText:'arrived later'}},{id:'b',seq:2,label:'GET /second',ts:2000},{id:'c',seq:3,label:'GET /third',ts:3000}];
     await Vue.nextTick();
-    assert.deepEqual(v.matchedExchangesAll.value.map(e=>e.id),['b','a']);
+    assert.deepEqual(v.matchedExchangesAll.value.map(e=>e.id),['a','b']);
     assert.equal(v.matchedExchangesAll.value.find(e=>e.id==='a').response,undefined);
     v.filter.q='first';await Vue.nextTick();
     assert.deepEqual(v.matchedExchangesAll.value.map(e=>e.id),['a']);
@@ -83,7 +83,7 @@ test('deleting a record also removes it from the paused snapshot',async()=>{
   const v=capture();
   try {
     v.filter.paused=true;await Vue.nextTick();
-    v.onCapDeleted(1);await Vue.nextTick();
+    await v.onCapDeleted(1);await Vue.nextTick();
     assert.deepEqual(v.rows.value.map(c=>c.id),[2]);
   } finally {v.dispose();}
 });
@@ -106,7 +106,7 @@ test('paused filtering does not invent new arrivals and a full-size buffer still
     assert.equal(v.newCount.value,0);
     v.store.capItems=[cap(2,'AES-CBC'),cap(3)];await Vue.nextTick();
     assert.equal(v.newCount.value,1);
-    assert.deepEqual(v.rows.value.map(c=>c.id),[2,1]);
+    assert.deepEqual(v.rows.value.map(c=>c.id),[1,2]);
   } finally {v.dispose();}
 });
 

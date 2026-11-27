@@ -6,7 +6,7 @@ const LENGTH_FIELDS=['inl','outl','keyl','ivl'] as const;
 /** Metadata still contains previews; it is not a sanitized/public report. */
 export function metadataExport(scope:ExportScope,items:Cap[]) {
  return {schema:'adh.capture-export/1',mode:'metadata-only',...scope,
-  note:'本页元数据与预览；不含输入、输出、密钥或 IV 的字节内容。预览仍可能含敏感信息。',
+  note:'所选或已加载记录元数据与预览；不含输入、输出、密钥或 IV 的字节内容。预览仍可能含敏感信息。',
   records:items.map(c=>{const record={...c};for(const field of [...BYTE_FIELDS,'text'])delete record[field];return record;})};
 }
 /** Fail closed: a missing/foreign record or target switch never becomes a silent partial export. */
@@ -48,5 +48,5 @@ export async function createCaptureExport(snapshot:ExportSnapshot,load:(id:numbe
  const error=results.find(r=>r.status==='rejected');if(error?.status==='rejected')throw error.reason;
  check();
  return {schema:'adh.capture-export/1',mode:'retained-bytes',...scope,ids,
-  note:'只含本页服务端仍保留的字节。SHA-256 校验这些已保留字节，不证明原始完整输入；未采集或截断内容无法补回。Java 参数采样可能包含输出缓冲区。',records};
+  note:'只含所选或已加载记录服务端仍保留的字节。SHA-256 校验这些已保留字节，不证明原始完整输入；未采集或截断内容无法补回。Java 参数采样可能包含输出缓冲区。',records};
 }

@@ -18,7 +18,7 @@ function evaluate(source, context) {
   const ast = ts.createSourceFile('setup.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const declarations = ast.statements.flatMap(node => {
     if (ts.isVariableStatement(node)) return node.declarationList.declarations.flatMap(d => names(d.name));
-    if (ts.isFunctionDeclaration(node) && node.name) return [node.name.text];
+    if ((ts.isFunctionDeclaration(node)||ts.isClassDeclaration(node)) && node.name) return [node.name.text];
     return [];
   });
   let code = source;
@@ -36,7 +36,11 @@ export function viewModel() {
 
 export function setupComponent(file, props = {}, bindings = {}) {
   const descriptor = parse(readFileSync(join(panel,'src/components',file),'utf8')).descriptor;
+  if(file==='CapturePanel.vue'&&bindings.store){bindings.store.devices??=[];bindings.store.selectedDeviceKey??='';}
+  const timeline=readFileSync(join(panel,'src/log_timeline.ts'),'utf8');const cache=readFileSync(join(panel,'src/log_cache.ts'),'utf8');
+  if(bindings.window)bindings.window={addEventListener:()=>{},removeEventListener:()=>{},...bindings.window};
   const context = {
+    ...evaluate(timeline,{}),...evaluate(cache,{}),
     ...Vue,
     defineProps:() => props,
     defineEmits:() => () => {},
