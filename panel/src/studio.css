@@ -49,7 +49,7 @@ body{background:var(--canvas);font-family:var(--sans);font-synthesis:none;-webki
 :is(.app-shell,.settings-modal) .row.selected{background:var(--accent-soft);border-left-color:var(--accent)}
 :is(.app-shell,.settings-modal) .row:not(.selected):hover{background:var(--surface-2)}
 :is(.app-shell,.settings-modal) .row .seq{font-size:11px;color:var(--muted)}
-:is(.app-shell,.settings-modal) .row .algo{color:var(--ink);font-weight:610}
+:is(.app-shell,.settings-modal) .row .algo{color:var(--algorithm-ink,var(--ink));font-weight:610}
 :is(.app-shell,.settings-modal) .row .preview,:is(.app-shell,.settings-modal) .row .lens{font-size:13px;color:var(--ink-2)}
 :is(.app-shell,.settings-modal) .row .ts,:is(.app-shell,.settings-modal) .row .sizes{font-size:11px;color:var(--muted)}
 :is(.app-shell,.settings-modal) .capture-detail-nav{padding:10px 15px!important;background:var(--surface)}
@@ -104,7 +104,7 @@ body{background:var(--canvas);font-family:var(--sans);font-synthesis:none;-webki
 @media(min-width:900px){
  :is(.app-shell,.settings-modal) .capture-workspace:not(.detail-open) .row,:is(.app-shell,.settings-modal) .capture-workspace:not(.detail-open) .ledger-head{grid-template-columns:var(--reading-columns);gap:16px;padding-inline:22px}
  :is(.app-shell,.settings-modal) .capture-workspace:not(.detail-open) .row{min-height:52px;border-bottom-color:var(--line-soft)}
- :is(.app-shell,.settings-modal) .capture-workspace:not(.detail-open) .row .algo{font-size:13px;font-weight:600;color:var(--ink)}
+ :is(.app-shell,.settings-modal) .capture-workspace:not(.detail-open) .row .algo{font-size:13px;font-weight:600;color:var(--algorithm-ink,var(--ink))}
  :is(.app-shell,.settings-modal) .capture-workspace:not(.detail-open) .row .preview{font-size:12px;letter-spacing:0}
  :is(.app-shell,.settings-modal) .capture-workspace:not(.detail-open) .row .sizes{font-size:11px}
 }
@@ -223,3 +223,11 @@ body{background:var(--canvas);font-family:var(--sans);font-synthesis:none;-webki
 .device-modal .dev-pick{display:flex;align-items:center;gap:12px;flex:1;min-width:0;width:100%;border:0;background:none;padding:0;color:inherit;font:inherit;text-align:left;cursor:pointer}.device-modal .dev-pick:focus-visible{outline:2px solid var(--accent);outline-offset:5px;border-radius:4px}.device-modal .dev-pick .dev-check{margin-left:auto}
 
 @media(max-width:620px){:is(.app-shell,.settings-modal) .capture-workspace .detail-head{grid-template-columns:minmax(0,1fr)}:is(.app-shell,.settings-modal) .detail-head-main{grid-column:1;width:100%}:is(.app-shell,.settings-modal) .detail-menu{grid-column:1;justify-self:end}:is(.app-shell,.settings-modal) .detail-head h2{word-break:normal;overflow-wrap:break-word}}
+
+/* Algorithm colors encode category, not app chrome or operation success. */
+:is(.app-shell,.settings-modal) :is(.row.cat-digest,h2[data-algorithm-family="digest"]){--algorithm-ink:var(--cat-digest)}
+:is(.app-shell,.settings-modal) :is(.row.cat-hmac,h2[data-algorithm-family="hmac"]){--algorithm-ink:var(--cat-hmac)}
+:is(.app-shell,.settings-modal) :is(.row.cat-sym,h2[data-algorithm-family="sym"]){--algorithm-ink:var(--cat-sym)}
+:is(.app-shell,.settings-modal) :is(.row.cat-asym,h2[data-algorithm-family="asym"]){--algorithm-ink:var(--cat-asym)}
+:is(.app-shell,.settings-modal) :is(.row.cat-aead,h2[data-algorithm-family="aead"]){--algorithm-ink:var(--cat-aead)}
+:is(.app-shell,.settings-modal) h2[data-algorithm-family]{color:var(--algorithm-ink,var(--ink))}

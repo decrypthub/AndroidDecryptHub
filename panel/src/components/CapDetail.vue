@@ -203,7 +203,7 @@ async function doDelete() {
   <div v-else class="detail-anim" :key="String(c.id)">
     <div class="detail-head">
       <div class="detail-head-main">
-        <h2>
+        <h2 :data-algorithm-family="isCrypto ? catClass(c) : undefined">
           <span class="cat-dot" :class="catClass(c)"></span>
           <template v-if="isCrypto">{{ cv?.title }}<template v-if="cv?.direction"> · {{ cv.direction }}</template></template>
           <template v-else>#{{ c.id }} {{ isFile ? systemRow(c).method : c.algo || c.func }}</template>

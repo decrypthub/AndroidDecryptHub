@@ -16,8 +16,8 @@ export function catClass(c: Cap): CatKey {
   const a = c.algo || '';
   if (/AEAD|GCM|CCM|ChaCha20-Poly1305/i.test(a)) return 'aead';
   if (/Hmac|HMAC/i.test(a)) return 'hmac';
-  if (/MD5|SHA|摘要|Digest/i.test(a)) return 'digest';
   if (/RSA|EC|DSA|非对称/i.test(a)) return 'asym';
+  if (/MD5|SHA|摘要|Digest/i.test(a)) return 'digest';
   return 'sym';
 }
 
