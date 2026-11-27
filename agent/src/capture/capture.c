@@ -456,6 +456,10 @@ static int copy_jba(JNIEnv *env, jbyteArray a, unsigned char *dst, int cap, int 
 static void report_java_capture(
         JNIEnv *env, jstring jalgo, jstring jop, jbyteArray jkey, jbyteArray jiv,
         jbyteArray jin, jbyteArray jout, const char *origin, int hook_id, int metadata_known, int origin_truncated) {
+#ifdef ADH_HAVE_LSPLANT
+    // Self-reporting providers and in-flight Java callbacks obey the same stop gate.
+    if (!adh_java_crypto_running()) return;
+#endif
     g_java_active = 1;
     // Build the bounded Java record off-lock: the JNI string/array copies can take far longer
     // than the queue append, and this callback runs on the target's crypto thread.

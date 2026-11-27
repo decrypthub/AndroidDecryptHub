@@ -295,3 +295,6 @@ body{background:var(--canvas);font-family:var(--sans);font-synthesis:none;-webki
 .app-shell .topbar .app-context{display:flex;align-items:center;gap:8px}.app-shell .topbar .process-trigger{min-width:0}.app-shell .topbar .header-actions{min-width:0}
 @media(max-width:700px){.app-shell .topbar .app-context{gap:3px}.app-shell .topbar .proc-text{max-width:130px}}
 .app-shell .brand-mark>img{border-radius:inherit}.app-shell .capture-workspace .row .pill{white-space:nowrap;flex:none}
+
+.app-shell .topbar-tools{display:flex;align-items:center;gap:20px;margin-left:auto;padding-left:16px;flex:none}.help-modal .n-card-header{border-bottom:1px solid var(--line)}
+@media(max-width:700px){.app-shell .topbar-tools{grid-column:1/-1;justify-content:flex-end;gap:12px;padding:2px 2px 0}.app-shell .topbar{row-gap:6px}}

@@ -27,7 +27,8 @@ if(dir){
    block(crypto,'extern "C" void adh_java_crypto_arm(','extern "C" void adh_java_crypto_set_families(')+
    crypto.slice(crypto.indexOf('extern "C" int adh_java_crypto_stop(')):
    crypto.slice(crypto.indexOf('extern "C" void adh_java_crypto_arm('));
- const program=`#define ADH_HAS_REGISTRY ${has?1:0}\n${has?'#include "java_crypto_registry.h"':''}\n#define ADH_FIXTURE_PRELUDE\n${fixture}\n#undef ADH_FIXTURE_PRELUDE\n${ownerFunctions}\n${unhook}\n${mode}\n${core}\n${fixture}`;
+ const gate=crypto.includes("static std::atomic<bool> g_observing")?"#include <atomic>\n"+block(crypto,"static std::atomic<bool> g_observing","static bool g_started")+block(crypto,'extern "C" int adh_java_crypto_running(','extern "C" int adh_java_crypto_started('):"";
+ const program=`${gate}\n#define ADH_HAS_REGISTRY ${has?1:0}\n${has?'#include "java_crypto_registry.h"':''}\n#define ADH_FIXTURE_PRELUDE\n${fixture}\n#undef ADH_FIXTURE_PRELUDE\n${ownerFunctions}\n${unhook}\n${mode}\n${core}\n${fixture}`;
  writeFileSync(join(dir,'shipping_control.cpp'),program,'utf8');
  compiled=spawnSync(compiler,['-std=c++20','-O0','-I',resolve(root,'agent/src/hook'),join(dir,'shipping_control.cpp'),'-o',join(dir,process.platform==='win32'?'fixture.exe':'fixture')],{encoding:'utf8',windowsHide:true,timeout:30000});
 }
@@ -37,7 +38,7 @@ test('Java capture command and owner/inactive-first bootstrap are wired in shipp
  assert.match(owner,/old\.owner != owner/);assert.match(owner,/ctx\.owner = owner/);assert.match(owner,/ctx\.active = 0/);
  assert.match(owner,/owner == ADH_JAVA_OWNER_CAPTURE \? env->FindClass/);
 });
-for(const name of ['arm-again','generic-unhook-ownership','catalog','cipher-dependencies','signature-dependencies','shared-family','missing-dependency','revision','bounded-40','owned-toggle','worker-id-reuse','worker-stop-race','worker-family-race','worker-retry','worker-control-retry','worker-wrong-owner','stop-memo','stop-no-jni','worker-exit-wakeup','status-json']){
+for(const name of ['producer-gate','arm-again','generic-unhook-ownership','catalog','cipher-dependencies','signature-dependencies','shared-family','missing-dependency','revision','bounded-40','owned-toggle','worker-id-reuse','worker-stop-race','worker-family-race','worker-retry','worker-control-retry','worker-wrong-owner','stop-memo','stop-no-jni','worker-exit-wakeup','status-json']){
  test(`compiled production Java control: ${name}`,{skip:available?false:'C++ compiler unavailable; production registry/reconcile/owner fixture requires c++'},()=>{
    assert.equal(compiled!.status,0,`fixture compile:\n${compiled!.stdout}\n${compiled!.stderr}`);
    const r=spawnSync(join(dir!,process.platform==='win32'?'fixture.exe':'fixture'),[name],{encoding:'utf8',windowsHide:true,timeout:15000});

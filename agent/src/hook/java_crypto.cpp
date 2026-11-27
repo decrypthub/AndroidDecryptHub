@@ -8,11 +8,14 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include <atomic>
 extern "C" int send_line(int fd, const char *line);
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "rt.agent", __VA_ARGS__)
 
 static pthread_mutex_t g_crypto_lock = PTHREAD_MUTEX_INITIALIZER;
 static AdhCryptoRegistry g_registry;
+// Reporter callbacks run on target crypto threads; never take the controller mutex here.
+static std::atomic<bool> g_observing{false};
 static bool g_started = false, g_worker_running = false;
 static std::string g_missing_classes;
 
@@ -211,13 +214,15 @@ static bool kick_locked(void) {
     g_worker_running=false;g_registry.error="JAVA_WORKER_FAILED";return false;
 }
 
+extern "C" int adh_java_crypto_running(void) {return g_observing.load(std::memory_order_acquire);}
 extern "C" int adh_java_crypto_started(void) {pthread_mutex_lock(&g_crypto_lock);int value=g_started;pthread_mutex_unlock(&g_crypto_lock);return value;}
 extern "C" int adh_java_crypto_finished(void) {pthread_mutex_lock(&g_crypto_lock);int value=!g_worker_running;pthread_mutex_unlock(&g_crypto_lock);return value;}
-extern "C" void adh_java_crypto_arm(void) {pthread_mutex_lock(&g_crypto_lock);g_registry.set_running(true);kick_locked();pthread_mutex_unlock(&g_crypto_lock);}
+extern "C" void adh_java_crypto_arm(void) {pthread_mutex_lock(&g_crypto_lock);g_registry.set_running(true);g_observing.store(true,std::memory_order_release);kick_locked();pthread_mutex_unlock(&g_crypto_lock);}
 extern "C" void adh_java_crypto_set_families(unsigned families) {
     pthread_mutex_lock(&g_crypto_lock);g_registry.set_families(families);if(g_registry.running)kick_locked();pthread_mutex_unlock(&g_crypto_lock);
 }
 extern "C" int adh_java_crypto_stop(void) {
+    g_observing.store(false,std::memory_order_release);
     int attached=0;JNIEnv *env=adh_jni_attach(&attached);int pending=0;
     pthread_mutex_lock(&g_crypto_lock);g_registry.set_running(false);
     bool retained_hooks=false;
@@ -241,7 +246,7 @@ extern "C" void adh_cmd_java_capture(int fd,const char *id,const char *request) 
     pthread_mutex_lock(&g_crypto_lock);
     if(failure.empty()) {
         if(!std::strcmp(action,"discover")){if(!kick_locked())failure=g_registry.error;}
-        else if(!std::strcmp(action,"start")){g_registry.set_running(true);if(!kick_locked())failure=g_registry.error;}
+        else if(!std::strcmp(action,"start")){g_registry.set_running(true);g_observing.store(true,std::memory_order_release);if(!kick_locked())failure=g_registry.error;}
         else if(!std::strcmp(action,"set")) {
             if(!adh_capture_string_field(request,"catalog",version,sizeof(version))||!adh_capture_string_field(request,"revision",revision,sizeof(revision))||
                !adh_capture_string_field(request,"selection",selection,sizeof(selection)))failure="INVALID_REQUEST";

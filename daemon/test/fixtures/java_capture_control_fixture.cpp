@@ -100,7 +100,11 @@ static int active_count() {int n=0;for(auto&h:g_java_hooks)if(h.bridge&&h.bridge
 #endif
 int main(int argc,char**argv) {
  CHECK(argc==2);std::string name=argv[1];char error[256];
- if(name=="arm-again") {
+ if(name=="producer-gate") {
+   CHECK(!adh_java_crypto_running());adh_java_crypto_arm();CHECK(adh_java_crypto_running());
+   CHECK(!adh_java_crypto_stop());CHECK(!adh_java_crypto_running());
+   adh_java_crypto_arm();CHECK(adh_java_crypto_running());
+ } else if(name=="arm-again") {
    adh_java_crypto_arm();
 #if ADH_HAS_REGISTRY
    g_worker_running=false;

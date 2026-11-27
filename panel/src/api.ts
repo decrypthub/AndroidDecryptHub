@@ -309,7 +309,7 @@ export const getConfig = () => api<{ settings?: { capture?: { retain?: number; m
 
 export interface CaptureControlsView {ok:boolean;serial:string;package:string;session:string|null;revision:number;config:any;history:any[];lastApplied:any;pending:boolean;foreignOwner:boolean;runtime:any;catalogs:any;control:{revision:number;epoch:number;hostEpoch:number;resource:string};saveControl?:{revision:number;epoch:number;hostEpoch:number;resource:string};lastIntent?:any}
 export const getCaptureControls=(serial:string,pkg:string,session?:string)=>api<CaptureControlsView>('/api/capture/controls?'+new URLSearchParams({serial,package:pkg,...(session?{session}:{})}),{headers:{'x-adh-device-serial':serial,'x-adh-package':pkg}});
-export async function writeCaptureControls(view:CaptureControlsView,action:'discover'|'save'|'apply',config?:unknown,confirmRisk=false){
+export async function writeCaptureControls(view:CaptureControlsView,action:'discover'|'save'|'apply'|'board',config?:unknown,confirmRisk=false){
  const control=action==='save'?(view.saveControl??view.control):view.control;
  const body={action,serial:view.serial,package:view.package,...(view.session?{session:view.session}:{}),expectedRevision:view.revision,runtimeToken:view.runtime?.token,config,confirmRisk,
  _operation:{expectedRevision:control.revision,controlEpoch:control.epoch,hostEpoch:control.hostEpoch,idempotencyKey:operationId(),timeoutMs:45000}};

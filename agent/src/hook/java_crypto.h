@@ -13,6 +13,7 @@ void adh_java_crypto_arm(void);
 void adh_java_crypto_set_families(unsigned families);
 int adh_java_crypto_stop(void); // 0 = all owned observation disabled and memo cleared
 void adh_cmd_java_capture(int fd, const char *id, const char *request);
+int adh_java_crypto_running(void); // lock-free producer gate, includes target-provided reporters
 int adh_java_crypto_started(void);
 int adh_java_crypto_finished(void);
 

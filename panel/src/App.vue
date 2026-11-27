@@ -13,6 +13,9 @@ import { appIconUrl } from './api';
 import DeviceDialog from './components/DeviceDialog.vue';
 import AppDialog from './components/AppDialog.vue';
 import AppLifecycleControl from './components/AppLifecycleControl.vue';
+import BoardCaptureControl from './components/BoardCaptureControl.vue';
+import HelpDialog from './components/HelpDialog.vue';
+import type {CaptureBoard} from '../../daemon/src/capture_boards';
 import CapturePanel from './components/CapturePanel.vue';
 import FilesPanel from './components/FilesPanel.vue';
 import DumpPanel from './components/DumpPanel.vue';
@@ -51,7 +54,7 @@ const iconSerial = computed(() => store.devices.find(d => d.key === store.select
 
 const panels = {cc:CapturePanel,sy:CapturePanel,nt:CapturePanel,files:FilesPanel,dump:DumpPanel,settings:SettingsPanel};
 const activePanel = computed(() => panels[store.view]);
-const captureKind = computed(() => ({cc:'crypto',sy:'system',nt:'net'} as Record<string,string>)[store.view]);
+const captureKind = computed(() => ({cc:'crypto',sy:'system',nt:'net'} as Record<string,CaptureBoard>)[store.view]);
 const boardOptions = [...NAV.map(({ key: value, label }) => ({ value, label })), { value: 'settings', label: '设置' }];
 
 function countKey(key:string):'crypto'|'system'|'net'|null{return ({cc:'crypto',sy:'system',nt:'net'} as const)[key as 'cc'|'sy'|'nt']??null;}
@@ -146,6 +149,7 @@ const themeOverrides = computed<GlobalThemeOverrides>(() => {
             <AppLifecycleControl :serial="iconSerial" :package="store.chosenPkg" :app="chosenApp" />
           </section>
         </div>
+        <div class="topbar-tools"><BoardCaptureControl v-if="captureKind" :kind="captureKind" /><HelpDialog /></div>
       </header>
 
       <n-alert v-if="store.backendStatus==='incompatible'" type="warning" class="backend-version-warning">页面与电脑服务版本不一致；请更新并重启电脑服务后再采集，旧记录不会被补写为当前设备。</n-alert>

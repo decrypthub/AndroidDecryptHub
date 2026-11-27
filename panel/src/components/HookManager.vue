@@ -92,6 +92,7 @@ onBeforeUnmount(retain);
   <div v-if="!target.serial||!target.package" class="hook-empty"><h2>先选择设备和 APP</h2><n-button secondary @click="store.appDialogOpen=true">选择 APP</n-button></div>
   <template v-else>
    <div v-if="store.hookSource?.serial===target.serial&&store.hookSource?.package===target.package" class="hook-hint"><n-button text @click="returnToRecord">‹ {{ store.hookSource.recordId!=null ? '返回记录 #'+store.hookSource.recordId : '返回网络' }}</n-button><span> · 来源符号定位；此处显示当前配置，不代表历史安装状态</span></div>
+   <p v-if="draft&&props.group&&props.group!=='all'&&draft.boards?.[props.group==='network'?'net':props.group]===false" class="hook-message" role="status">本板块采集总开关已关闭，细分选择仍然保留。</p>
    <div class="hook-command-bar">
    <div class="hook-tools" :class="{'java-only':props.group==='crypto'}"><n-input v-model:value="query" clearable placeholder="搜索功能、类或方法" aria-label="搜索 Hook 方法"><template #prefix><n-icon :component="SearchOutline" /></template></n-input><n-select v-if="props.group!=='crypto'" v-model:value="backend" aria-label="方法后端" :options="[{label:'全部后端',value:'all'},{label:'Java',value:'java'},{label:'Native',value:'native'}]"/><n-select v-model:value="stateFilter" aria-label="方法运行状态筛选" :options="[{label:'全部状态',value:'all'},{label:'观测中',value:'active'},{label:'未启用',value:'inactive'},{label:'需处理',value:'error'}]"/><n-button quaternary :loading="loading" :disabled="busy" aria-label="刷新 Hook 快照" @click="load(true)"><template #icon><n-icon :component="RefreshOutline"/></template></n-button></div>
    </div>
